@@ -10,7 +10,12 @@ const TOOLS: { id: ToolId; label: string; title: string }[] = [
   { id: "delete", label: "削除", title: "削除: クリックした線を消す" },
 ];
 
-export function ToolRail() {
+interface Props {
+  /** 「全体表示」ボタン: 展開図の表示を紙全体が収まる位置に戻す */
+  onFitView: () => void;
+}
+
+export function ToolRail({ onFitView }: Props) {
   const activeTool = useAppStore((s) => s.activeTool);
   const setTool = useAppStore((s) => s.setTool);
 
@@ -27,6 +32,14 @@ export function ToolRail() {
           {t.label}
         </button>
       ))}
+      <button
+        type="button"
+        title="全体表示: 紙全体が見える位置まで表示を戻す"
+        className="tool-button"
+        onClick={onFitView}
+      >
+        全体
+      </button>
     </nav>
   );
 }

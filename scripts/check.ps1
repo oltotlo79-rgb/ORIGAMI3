@@ -1,9 +1,10 @@
 ﻿# ORIGAMI3 一括検査スクリプト(Windows PowerShell 5.1 対応)
-# 4つの検査を順に実行し、いずれかが失敗したら非0で終了する。
+# 5つの検査を順に実行し、いずれかが失敗したら非0で終了する。
 #   (1) cargo test --workspace
 #   (2) cargo clippy --workspace --all-targets -- -D warnings
 #   (3) apps/desktop で npm run build
 #   (4) apps/desktop で npm run lint
+#   (5) apps/desktop で npm run test (vitest)
 
 $root = Split-Path -Parent $PSScriptRoot
 
@@ -30,13 +31,14 @@ function Invoke-Check {
 
 Push-Location $root
 try {
-    Invoke-Check "(1/4) cargo test --workspace" cargo @("test", "--workspace")
-    Invoke-Check "(2/4) cargo clippy --workspace --all-targets -- -D warnings" cargo @("clippy", "--workspace", "--all-targets", "--", "-D", "warnings")
+    Invoke-Check "(1/5) cargo test --workspace" cargo @("test", "--workspace")
+    Invoke-Check "(2/5) cargo clippy --workspace --all-targets -- -D warnings" cargo @("clippy", "--workspace", "--all-targets", "--", "-D", "warnings")
 
     Set-Location (Join-Path $root "apps\desktop")
 
-    Invoke-Check "(3/4) npm run build (apps/desktop)" npm @("run", "build")
-    Invoke-Check "(4/4) npm run lint (apps/desktop)" npm @("run", "lint")
+    Invoke-Check "(3/5) npm run build (apps/desktop)" npm @("run", "build")
+    Invoke-Check "(4/5) npm run lint (apps/desktop)" npm @("run", "lint")
+    Invoke-Check "(5/5) npm run test (apps/desktop)" npm @("run", "test")
 
     Write-Host ""
     Write-Host "[OK] 全ての検査に合格しました" -ForegroundColor Green

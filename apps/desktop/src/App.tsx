@@ -1,11 +1,12 @@
 // 4区画レイアウト: 上部ツールバー / 左ツールレール / 中央(2D+3D) / 下部コンテキストパネル。
 // このファイルはレイアウト構成のみ(200行以内を維持)。
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useAppStore } from "./store/appStore";
 import { ToolRail } from "./components/ToolRail";
 import { ContextPanel } from "./components/ContextPanel";
+import { CpEditor } from "./components/CpEditor/CpEditor";
 import "./App.css";
 
 const DEFAULT_PAPER = { width_mm: 150, height_mm: 150 };
@@ -19,6 +20,7 @@ function App() {
   const redo = useAppStore((s) => s.redo);
   const warningCount = useAppStore((s) => s.warnings.length);
   const hasError = useAppStore((s) => s.errorMessage !== null);
+  const fitViewRef = useRef<(() => void) | null>(null);
 
   // 起動時に150×150mmの新規作品を開く
   useEffect(() => {
@@ -60,9 +62,9 @@ function App() {
         </button>
       </header>
       <div className="main-row">
-        <ToolRail />
+        <ToolRail onFitView={() => fitViewRef.current?.()} />
         <section className="pane pane-2d">
-          <div className="placeholder">展開図エディタ(Task 1-6で実装)</div>
+          <CpEditor fitRef={fitViewRef} />
         </section>
         <section className="pane pane-3d">
           <div className="placeholder">3Dビュー(Task 1-9で実装)</div>

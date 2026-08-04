@@ -35,7 +35,7 @@
 ```powershell
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cd apps/desktop; npm run build; npm run lint; cd ../..
+cd apps/desktop; npm run build; npm run lint; npm run test; cd ../..
 ```
 
 上記をまとめた `scripts/check.ps1` をM0で作成する。**検査が通らない状態でコミットしない。**
@@ -365,12 +365,12 @@ pub struct DocumentView {
 
 **Files:** `apps/desktop/src/components/CpEditor/{CpEditor.tsx, renderer.ts, interaction.ts, snap.ts}`
 
-- [ ] スナップはフロントエンド(TypeScript)側で実装する: `snap(doc, cursorPos, radius): SnapResult | null`。優先順: 既存頂点 > グリッド交点 > 線分上(交点は挿入時に自動で頂点化されるため「既存頂点」に含まれる)。`SnapResult { pos: [x,y], kind: "vertex" | "grid" | "edge" }`
+- [x] スナップはフロントエンド(TypeScript)側で実装する: `snap(doc, cursorPos, radius): SnapResult | null`。優先順: 既存頂点 > グリッド交点 > 線分上(交点は挿入時に自動で頂点化されるため「既存頂点」に含まれる)。`SnapResult { pos: [x,y], kind: "vertex" | "grid" | "edge" }`
   - 理由: IPCコマンド13個にスナップ用はなく、マウス移動のたびのIPC往復は応答性が悪い。展開図データはフロントのストアに常にあるため、フロント側の純関数として実装しユニットテスト(vitest等)を付ける
-- [ ] Canvas描画(`renderer.ts`): 紙(白)・グリッド(薄灰)・輪郭(黒実線)・山(赤)・谷(青)・補助(灰)・選択強調(太線)・スナップ候補(丸マーカー)。線種の色分けは定数モジュールに集約
-- [ ] 操作(`interaction.ts`): ツール=選択/山/谷/補助/削除。2クリックで線分確定(スナップ適用)、Escでキャンセル、矩形選択、Delete削除、ホイールズーム、中ボタンパン
-- [ ] ツールレール接続(ボタン: 選択・山・谷・補助・削除・全体表示の6個)
-- [ ] 手動確認: グリッド8分割で鶴の基本形の展開図が描ける → コミット `展開図を描く画面(方眼・吸着・線の描画)を追加` → プッシュ
+- [x] Canvas描画(`renderer.ts`): 紙(白)・グリッド(薄灰)・輪郭(黒実線)・山(赤)・谷(青)・補助(灰)・選択強調(太線)・スナップ候補(丸マーカー)。線種の色分けは定数モジュールに集約
+- [x] 操作(`interaction.ts`): ツール=選択/山/谷/補助/削除。2クリックで線分確定(スナップ適用)、Escでキャンセル、矩形選択、Delete削除、ホイールズーム、中ボタンパン
+- [x] ツールレール接続(ボタン: 選択・山・谷・補助・削除・全体表示の6個)
+- [x] 手動確認: グリッド8分割で鶴の基本形の展開図が描ける → コミット `展開図を描く画面(方眼・吸着・線の描画)を追加` → プッシュ
 
 ### Task 1-7: ori3-rigid 全域木の角度伝播(ループなしCP)
 
