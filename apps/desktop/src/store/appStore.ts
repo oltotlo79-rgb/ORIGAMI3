@@ -86,16 +86,17 @@ export const useAppStore = create<AppState>((set, get) => {
   };
 
   /** DocumentViewを返すコマンドを直列化キュー経由で実行し、結果を反映する。
-   * 完了時点で最新でない応答は捨てる(最新の応答は必ず後から届く) */
+   * 直列化により適用順の逆転は起きないため、成功したviewは完了順に全て適用する
+   * (途中の成功を捨てると、後続が失敗したときにバックエンドと画面が食い違う)。
+   * 失敗の報告だけは最新要求に限る(古い失敗の直後には必ず新しい結果が続く) */
   const runViewCommand = async (
     task: () => Promise<DocumentView>,
     isNewDocument: boolean,
   ): Promise<void> => {
     const r = await queue.run(task);
-    if (!r.isLatest) return;
     if (r.ok) {
       applyView(r.value, isNewDocument);
-    } else {
+    } else if (r.isLatest) {
       fail(r.error);
     }
   };

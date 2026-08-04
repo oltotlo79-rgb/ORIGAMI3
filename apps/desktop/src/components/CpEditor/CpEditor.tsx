@@ -177,6 +177,15 @@ export function CpEditor({ fitRef }: Props) {
         stateRef.current.cursorWorld = null;
         draw();
       }}
+      onPointerCancel={() => {
+        // 捕捉が中断されたらドラッグ系の一時状態を破棄する
+        const st = stateRef.current;
+        st.downScreen = null;
+        st.panLast = null;
+        st.marqueeStart = null;
+        st.marqueeEnd = null;
+        draw();
+      }}
       onWheel={(e) => withCtx((ctx) => onWheel(ctx, screenPos(e), e.deltaY))}
       onContextMenu={(e) => e.preventDefault()}
     />
