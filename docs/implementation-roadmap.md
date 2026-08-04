@@ -263,9 +263,9 @@ pub struct Frame3D { pub faces: Vec<Face3D>, pub warnings: Vec<String> }
 
 **Files:** `crates/ori3-model/src/lib.rs`, `tests/serde_roundtrip.rs`
 
-- [ ] テスト: `Document`を構築→JSONへserialize→deserializeで往復一致(`test_document_json_roundtrip`)。実行して失敗確認
-- [ ] §2の型定義を実装。`Document::new(paper: Paper) -> Document`(輪郭4辺入りのCP初期化)も実装
-- [ ] テスト成功確認 → コミット `作品データ(紙・展開図・折り手順)の保存形式を定義` → プッシュ
+- [x] テスト: `Document`を構築→JSONへserialize→deserializeで往復一致(`test_document_json_roundtrip`)。実行して失敗確認
+- [x] §2の型定義を実装。`Document::new(paper: Paper) -> Document`(輪郭4辺入りのCP初期化)も実装
+- [x] テスト成功確認 → コミット `作品データ(紙・展開図・折り手順)の保存形式を定義` → プッシュ
 
 ### Task 1-2: ori3-geometry 幾何プリミティブ
 
