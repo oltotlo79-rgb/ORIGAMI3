@@ -298,10 +298,10 @@ impl Isometry2 {
 
 **Files:** `crates/ori3-cp/src/{lib,graph,faces}.rs`, `tests/{graph,faces}.rs`
 
-- [ ] テストを先に書く:
+- [x] テストを先に書く:
   - `insert_segment`: 正方形に対角線1本→辺数5・頂点数4。交差する2本目→両線が交点で分割され頂点数5・辺数8。既存線と同一線分の重複挿入→変化なし
   - `extract_faces`: 正方形のみ→面1。対角線1本→面2。米字(対角線2本+十字)→面8
-- [ ] 実装:
+- [x] 実装:
 
 ```rust
 /// 線分を挿入し、既存辺との交点で双方を自動分割する。追加された辺IDを返す。
@@ -315,7 +315,7 @@ pub struct Face { pub id: FaceId, pub vertices: Vec<VertexId>, pub edges: Vec<Ed
 pub fn extract_faces(cp: &CreasePattern) -> Vec<Face>;
 ```
 
-- [ ] テスト成功確認 → コミット `展開図の線の管理と、線で囲まれた面の検出を追加` → プッシュ
+- [x] テスト成功確認 → コミット `展開図の線の管理と、線で囲まれた面の検出を追加` → プッシュ
 
 ### Task 1-4: DocumentStore とIPCコマンド(編集系)
 
