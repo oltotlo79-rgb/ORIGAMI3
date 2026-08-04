@@ -6,7 +6,7 @@ use glam::DVec2;
 use ori3_model::{CreasePattern, EPS, EdgeId, EdgeKind, FaceId, VertexId};
 
 /// 展開図の面。IDは抽出のたびに0から再採番される導出値。
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Face {
     pub id: FaceId,
     /// 面の境界を反時計回りに一周する頂点列。

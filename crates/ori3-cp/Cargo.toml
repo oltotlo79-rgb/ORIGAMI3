@@ -7,3 +7,4 @@ edition.workspace = true
 ori3-model.workspace = true
 ori3-geometry.workspace = true
 glam.workspace = true
+serde.workspace = true

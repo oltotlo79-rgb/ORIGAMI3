@@ -715,6 +715,8 @@ dependencies = [
 name = "desktop"
 version = "0.1.0"
 dependencies = [
+ "ori3-cp",
+ "ori3-model",
  "serde",
  "serde_json",
  "tauri",
@@ -2336,6 +2338,7 @@ dependencies = [
  "glam",
  "ori3-geometry",
  "ori3-model",
+ "serde",
 ]
 
 [[package]]

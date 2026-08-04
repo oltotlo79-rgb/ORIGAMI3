@@ -321,8 +321,8 @@ pub fn extract_faces(cp: &CreasePattern) -> Vec<Face>;
 
 **Files:** `apps/desktop/src-tauri/src/{lib,store,commands}.rs`, `store.rs`のユニットテスト
 
-- [ ] テスト(storeはTauri非依存の純Rustとして書く): `apply_edit`でAddSegment→undo→redoの状態一致、Undo100段制限、`document_save`/`document_open`の往復一致
-- [ ] 実装:
+- [x] テスト(storeはTauri非依存の純Rustとして書く): `apply_edit`でAddSegment→undo→redoの状態一致、Undo100段制限、`document_save`/`document_open`の往復一致
+- [x] 実装:
 
 ```rust
 pub struct DocumentStore {
@@ -340,11 +340,16 @@ impl DocumentStore {
 }
 /// フロントへ返す表示用ビュー(Document全体 + 導出情報)
 #[derive(serde::Serialize)]
-pub struct DocumentView { pub doc: Document, pub faces: Vec<Face>, pub violations: Vec<VertexId> }
+pub struct DocumentView {
+    pub doc: Document,
+    pub faces: Vec<Face>,
+    pub warnings: Vec<String>,      // 操作固有の警告 + ori3_cp::validate の結果(「止めずに警告」原則)
+    pub violations: Vec<VertexId>,  // 局所平坦折り判定(Task 2-7)。今は常に空
+}
 ```
 
-- [ ] Tauriコマンド `document_new/open/save`, `edit_apply`, `edit_undo`, `edit_redo`, `sequence_apply` を`commands.rs`に登録(各3〜10行、storeへ委譲)。panic捕捉ラッパー`fn guard<T>(f: impl FnOnce() -> Result<T, String>) -> Result<T, String>`を全コマンドに適用
-- [ ] テスト成功確認 → コミット `作品データの保管と、編集・元に戻す・やり直しの機能を追加` → プッシュ
+- [x] Tauriコマンド `document_new/open/save`, `edit_apply`, `edit_undo`, `edit_redo`, `sequence_apply` を`commands.rs`に登録(各3〜10行、storeへ委譲)。panic捕捉ラッパー`fn guard<T>(f: impl FnOnce() -> Result<T, String>) -> Result<T, String>`を全コマンドに適用
+- [x] テスト成功確認 → コミット `作品データの保管と、編集・元に戻す・やり直しの機能を追加` → プッシュ
 
 ### Task 1-5: フロント基盤(ストア・IPCクライアント・4区画レイアウト)
 
