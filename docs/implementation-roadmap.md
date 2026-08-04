@@ -395,11 +395,11 @@ pub fn to_frame3d(cp: &CreasePattern, faces: &[Face], frame: &FoldedFrame) -> Fr
 
 **Files:** `crates/ori3-rigid/src/solver.rs`, `tests/solver.rs`
 
-- [ ] テストを先に書く:
+- [x] テストを先に書く:
   - 次数4の内部頂点1個のCP(鳥の基本形の1頂点相当)で、driver1本を90°にしたとき、残り3ヒンジの角が閉包条件(ループ一周の回転合成=恒等、残差フロベニウスノルム<1e-6)を満たす
   - driverを±180°にすると全ヒンジが±180°に達し平坦になる
   - 不能な指定(矛盾するdriver2本)でも`converged: false`と直前解を返しpanicしない
-- [ ] 実装:
+- [x] 実装:
 
 ```rust
 pub struct SolveResult { pub frame: Frame3D, pub converged: bool, pub angles: HashMap<EdgeId, f64> }
@@ -410,8 +410,8 @@ pub fn solve(cp: &CreasePattern, faces: &[Face], drivers: &[Driver],
              warm_start: Option<&HashMap<EdgeId, f64>>) -> SolveResult;
 ```
 
-- [ ] `pose_solve`コマンドをcommands.rsに追加(warm_startはstoreが保持)
-- [ ] テスト成功確認 → コミット `複雑な展開図でも折り角度のつじつまを自動で合わせる計算を追加` → プッシュ
+- [x] `pose_solve`コマンドをcommands.rsに追加(warm_startはstoreが保持)
+- [x] テスト成功確認 → コミット `複雑な展開図でも折り角度のつじつまを自動で合わせる計算を追加` → プッシュ
 
 ### Task 1-9: 3Dビュー(Three.js)と角度操作
 

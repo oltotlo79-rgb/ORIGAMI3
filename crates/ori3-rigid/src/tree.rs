@@ -48,14 +48,35 @@ pub(crate) struct TreeStep {
     pub axis_u: DVec3,
 }
 
+/// 非木辺(全域木に入らなかったヒンジ)。ループ閉包の残差計算に使う:
+/// from面の姿勢からこのヒンジで折って予測したto面の姿勢と、木経路で伝播した
+/// to面の姿勢の差がループ一周の閉包残差に相当する。
+pub(crate) struct LoopClosure {
+    /// `Forest::hinges` 内の添字
+    pub hinge: usize,
+    /// faces内の添字。この面からヒンジ折りで相手面の姿勢を予測する
+    pub from: usize,
+    pub to: usize,
+    /// 回転軸上の1点(from面のCCW境界での辺の始点、z=0)
+    pub axis_a: DVec3,
+    /// 回転軸の単位方向(from面のCCW境界での向き)
+    pub axis_u: DVec3,
+}
+
 /// 面隣接グラフのBFS全域木(森)。ヒンジ=ちょうど2つの異なる面が共有する辺。
 pub(crate) struct Forest {
     /// ヒンジ添字→辺ID
     pub hinges: Vec<EdgeId>,
+    /// 各ヒンジが接続する2面(faces内の添字)
+    pub hinge_faces: Vec<(usize, usize)>,
     /// BFS順の木辺(親の姿勢は必ず子より先に決まる)
     pub steps: Vec<TreeStep>,
+    /// 非木辺(ループを作るヒンジ)
+    pub loops: Vec<LoopClosure>,
     /// 各連結成分の根面(faces内の添字)。姿勢は恒等変換に固定される。
     pub roots: Vec<usize>,
+    /// 面ごとの連結成分番号(rootsの添字)
+    pub comp: Vec<usize>,
 }
 
 /// 親姿勢(r, t)にヒンジ回転(軸上の点a・単位方向u・角theta_rad)を合成した
@@ -123,14 +144,17 @@ pub(crate) fn build_forest(cp: &CreasePattern, faces: &[Face]) -> Forest {
     }
 
     let mut visited = vec![false; faces.len()];
+    let mut comp = vec![0usize; faces.len()];
     let mut roots = Vec::new();
     let mut steps = Vec::new();
+    let mut tree_edge = vec![false; hinges.len()];
     let mut queue = VecDeque::new();
     for start in 0..faces.len() {
         if visited[start] {
             continue;
         }
         visited[start] = true;
+        comp[start] = roots.len();
         roots.push(start);
         queue.push_back(start);
         while let Some(cur) = queue.pop_front() {
@@ -141,6 +165,8 @@ pub(crate) fn build_forest(cp: &CreasePattern, faces: &[Face]) -> Forest {
                     continue;
                 }
                 visited[nb] = true;
+                comp[nb] = comp[cur];
+                tree_edge[hi] = true;
                 // 回転軸は親(cur)側のCCW境界での向きを使う(冒頭の規約)
                 let (a, u) = axis_for(&hinge_occ[hi], cur);
                 steps.push(TreeStep {
@@ -155,10 +181,29 @@ pub(crate) fn build_forest(cp: &CreasePattern, faces: &[Face]) -> Forest {
         }
     }
 
+    // 木に入らなかったヒンジ = 非木辺(ループ)。from側の向き付き軸で残差を計算する
+    let loops = (0..hinges.len())
+        .filter(|&hi| !tree_edge[hi])
+        .map(|hi| {
+            let (f, g) = hinge_faces[hi];
+            let (a, u) = axis_for(&hinge_occ[hi], f);
+            LoopClosure {
+                hinge: hi,
+                from: f,
+                to: g,
+                axis_a: a,
+                axis_u: u,
+            }
+        })
+        .collect();
+
     Forest {
         hinges,
+        hinge_faces,
         steps,
+        loops,
         roots,
+        comp,
     }
 }
 

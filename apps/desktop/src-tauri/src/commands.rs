@@ -10,7 +10,7 @@ use std::sync::{Mutex, MutexGuard};
 use tauri::State;
 
 use crate::store::{DocumentStore, DocumentView};
-use ori3_model::{EditOp, Paper, SeqOp};
+use ori3_model::{Driver, EditOp, Paper, SeqOp};
 
 /// panicをErr文字列に変換する(SYS-005: アプリを落とさない)。
 fn guard<T>(f: impl FnOnce() -> Result<T, String> + std::panic::UnwindSafe) -> Result<T, String> {
@@ -82,6 +82,26 @@ pub fn sequence_apply(
     op: SeqOp,
 ) -> Result<DocumentView, String> {
     guard(AssertUnwindSafe(|| lock(&state).apply_seq(op)))
+}
+
+/// 折り角度の追従計算(Task 1-8)。driver角を固定して残りのヒンジ角を解き、
+/// 3D表示用フレームを返す。前回解はstoreが保持し、warm startとして使う。
+///
+/// 設計規約: ロック中に重い計算をしない(将来の自動保存スレッドとの共存のため)。
+/// ロック下ではCPの複製と前回解の取得だけを行って即ロックを解放し、
+/// solveはロックの外で実行し、結果の角度だけを短いロックで書き戻す。
+#[tauri::command(async)]
+pub fn pose_solve(
+    state: State<'_, Mutex<DocumentStore>>,
+    drivers: Vec<Driver>,
+) -> Result<ori3_rigid::SolveResult, String> {
+    guard(AssertUnwindSafe(|| {
+        let (cp, warm) = lock(&state).pose_inputs(); // 複製のみ、即ロック解放
+        let faces = ori3_cp::extract_faces(&cp);
+        let result = ori3_rigid::solve(&cp, &faces, &drivers, warm.as_ref());
+        lock(&state).store_pose_angles(result.angles.clone()); // 短いロックで書き戻し
+        Ok(result)
+    }))
 }
 
 #[cfg(test)]

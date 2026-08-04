@@ -115,3 +115,13 @@ export interface Frame3D {
   faces: Face3D[];
   warnings: string[];
 }
+
+/** pose_solve の戻り値(ori3-rigid::SolveResult) */
+export interface SolveResult {
+  frame: Frame3D;
+  converged: boolean;
+  /** 全ヒンジの角度(度)。キーは辺ID(JSONでは文字列になる) */
+  angles: Record<string, number>;
+  /** 実行した反復回数(warm start効果の確認用) */
+  iterations: number;
+}

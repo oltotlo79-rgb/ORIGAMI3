@@ -14,11 +14,12 @@
 //! 導出(validate/extract_faces)は候補Documentに対して先に実行し、成功した場合のみ
 //! 状態を確定する。導出がpanicしてもstoreは直前の整合状態を保つ(guardがErr化する)。
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use ori3_cp::Face;
 use ori3_model::{
-    CreasePattern, Document, EdgeKind, EditOp, Paper, SCHEMA_VERSION, SeqOp, VertexId,
+    CreasePattern, Document, EdgeId, EdgeKind, EditOp, Paper, SCHEMA_VERSION, SeqOp, VertexId,
 };
 
 /// undo履歴の最大件数。超過時は最古をFIFOで破棄する。
@@ -42,6 +43,9 @@ pub struct DocumentStore {
     redo_stack: Vec<Document>,
     dirty: bool,
     path: Option<PathBuf>,
+    /// pose_solveの前回解(次回のwarm start用)。ソルバーは知らない辺IDを
+    /// 無視するため、CP編集後に古い解が残っていても安全
+    pose_angles: Option<HashMap<EdgeId, f64>>,
 }
 
 impl Default for DocumentStore {
@@ -56,6 +60,7 @@ impl Default for DocumentStore {
             redo_stack: Vec::new(),
             dirty: false,
             path: None,
+            pose_angles: None,
         }
     }
 }
@@ -71,6 +76,7 @@ impl DocumentStore {
         self.redo_stack.clear();
         self.dirty = false;
         self.path = None;
+        self.pose_angles = None;
         Ok(view)
     }
 
@@ -102,6 +108,7 @@ impl DocumentStore {
         self.redo_stack.clear();
         self.dirty = false;
         self.path = Some(path.to_path_buf());
+        self.pose_angles = None;
         Ok(view)
     }
 
@@ -249,6 +256,18 @@ impl DocumentStore {
     /// 未保存の変更があるか。
     pub fn is_dirty(&self) -> bool {
         self.dirty
+    }
+
+    /// pose_solveの入力(CPの複製と前回解)を取り出す。
+    /// 設計規約: ロック中に重い計算をしないため、コマンド層はこの複製を取って
+    /// 即ロックを解放し、solveはロックの外で実行する。
+    pub fn pose_inputs(&self) -> (CreasePattern, Option<HashMap<EdgeId, f64>>) {
+        (self.doc.cp.clone(), self.pose_angles.clone())
+    }
+
+    /// pose_solveの結果角度を保存する(次回のwarm start用)。
+    pub fn store_pose_angles(&mut self, angles: HashMap<EdgeId, f64>) {
+        self.pose_angles = Some(angles);
     }
 
     /// 変更後Documentを確定する。変更が実際に起きた場合のみundo履歴に積む。
@@ -674,6 +693,26 @@ mod tests {
         );
         // 無変更なのでundo履歴に積まれない
         assert!(store.undo_stack.is_empty());
+    }
+
+    #[test]
+    fn pose_angles_roundtrip_and_cleared_on_new() {
+        let mut store = square_store();
+        assert_eq!(store.pose_inputs().1, None);
+
+        store.store_pose_angles(HashMap::from([(6u32, 90.0f64)]));
+        let (cp, warm) = store.pose_inputs();
+        assert_eq!(cp, store.doc.cp);
+        assert_eq!(warm, Some(HashMap::from([(6u32, 90.0f64)])));
+
+        // 新規作成で前回解は破棄される(別のCPに古い解を引き継がない)
+        store
+            .new_document(Paper {
+                width_mm: 100.0,
+                height_mm: 100.0,
+            })
+            .unwrap();
+        assert_eq!(store.pose_inputs().1, None);
     }
 
     #[test]

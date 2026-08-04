@@ -717,6 +717,7 @@ version = "0.1.0"
 dependencies = [
  "ori3-cp",
  "ori3-model",
+ "ori3-rigid",
  "serde",
  "serde_json",
  "tauri",
@@ -2387,7 +2388,10 @@ dependencies = [
 name = "ori3-rigid"
 version = "0.1.0"
 dependencies = [
+ "glam",
  "ori3-cp",
+ "ori3-model",
+ "serde",
 ]
 
 [[package]]
