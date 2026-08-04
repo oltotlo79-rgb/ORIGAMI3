@@ -1,5 +1,7 @@
 //! IPCコマンド層: 各コマンドはDocumentStoreへ委譲するだけの薄いラッパー。
 //! 全コマンドをpanic捕捉ラッパー`guard`で包み、アプリを落とさない(SYS-005)。
+//! 全コマンドを`#[tauri::command(async)]`にしてスレッドプールで実行する
+//! (同期fnはメインスレッド実行になり、validate等の計算でUIが引っかかるため)。
 
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
@@ -30,7 +32,7 @@ fn lock<'a>(state: &'a State<'_, Mutex<DocumentStore>>) -> MutexGuard<'a, Docume
     state.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn document_new(
     state: State<'_, Mutex<DocumentStore>>,
     paper: Paper,
@@ -38,7 +40,7 @@ pub fn document_new(
     guard(AssertUnwindSafe(|| lock(&state).new_document(paper)))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn document_open(
     state: State<'_, Mutex<DocumentStore>>,
     path: String,
@@ -46,7 +48,7 @@ pub fn document_open(
     guard(AssertUnwindSafe(|| lock(&state).open(Path::new(&path))))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn document_save(
     state: State<'_, Mutex<DocumentStore>>,
     path: Option<String>,
@@ -56,7 +58,7 @@ pub fn document_save(
     }))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn edit_apply(
     state: State<'_, Mutex<DocumentStore>>,
     op: EditOp,
@@ -64,17 +66,17 @@ pub fn edit_apply(
     guard(AssertUnwindSafe(|| lock(&state).apply_edit(op)))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn edit_undo(state: State<'_, Mutex<DocumentStore>>) -> Result<DocumentView, String> {
     guard(AssertUnwindSafe(|| lock(&state).undo()))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn edit_redo(state: State<'_, Mutex<DocumentStore>>) -> Result<DocumentView, String> {
     guard(AssertUnwindSafe(|| lock(&state).redo()))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn sequence_apply(
     state: State<'_, Mutex<DocumentStore>>,
     op: SeqOp,

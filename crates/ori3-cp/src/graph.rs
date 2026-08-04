@@ -17,6 +17,14 @@ fn pos(cp: &CreasePattern, id: VertexId) -> DVec2 {
     DVec2::from(v.pos)
 }
 
+/// 頂点IDから座標を引く(不在ならNone。参照切れ辺の許容用)。
+fn try_pos(cp: &CreasePattern, id: VertexId) -> Option<DVec2> {
+    cp.vertices
+        .iter()
+        .find(|v| v.id == id)
+        .map(|v| DVec2::from(v.pos))
+}
+
 /// 点からEPS以内にある最近傍の既存頂点を探す。
 fn find_vertex_within_eps(cp: &CreasePattern, p: DVec2) -> Option<VertexId> {
     let mut best: Option<(f64, VertexId)> = None;
@@ -168,10 +176,12 @@ pub fn insert_segment(
     let param = |q: DVec2| (q - pa).dot(dirn).clamp(0.0, len);
 
     // この後の分割で辺リストが変わるため、交差判定は挿入前の辺のスナップショットで行う。
+    // 存在しない頂点を参照する辺(参照切れ)はpanicさせず判定対象外にする
+    // (validate/extract_facesと同じ基準。壊れたCPでも編集を続けられるようにする)。
     let snapshot: Vec<(EdgeId, DVec2, DVec2)> = cp
         .edges
         .iter()
-        .map(|e| (e.id, pos(cp, e.v0), pos(cp, e.v1)))
+        .filter_map(|e| Some((e.id, try_pos(cp, e.v0)?, try_pos(cp, e.v1)?)))
         .collect();
 
     let mut cut_ts: Vec<f64> = vec![0.0, len]; // 新線分上の分割位置(弧長パラメータ)

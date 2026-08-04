@@ -124,6 +124,21 @@ fn faces_are_counter_clockwise() {
 }
 
 #[test]
+fn dangling_reference_edge_does_not_panic() {
+    let mut cp = square_cp();
+    // 存在しない頂点を参照する辺(参照切れ)を直接混入させる
+    cp.edges.push(ori3_model::Edge {
+        id: cp.next_edge_id,
+        v0: 0,
+        v1: 999,
+        kind: EdgeKind::Mountain,
+    });
+    cp.next_edge_id += 1;
+    let faces = extract_faces(&cp);
+    assert_eq!(faces.len(), 1, "参照切れ辺は面抽出の対象外(panicしない)");
+}
+
+#[test]
 fn extraction_is_deterministic() {
     let cp1 = kome_cp();
     let cp2 = kome_cp();

@@ -144,3 +144,19 @@ fn move_vertex_updates_position_only() {
     assert_eq!(v.pos, [0.4, 0.55]);
     assert_eq!(cp.edges, edges_before, "辺の接続やkindは変わらない");
 }
+
+#[test]
+fn insert_segment_tolerates_dangling_reference_edge() {
+    let mut cp = square_cp();
+    // 存在しない頂点を参照する辺(参照切れ)を直接混入させる
+    cp.edges.push(ori3_model::Edge {
+        id: cp.next_edge_id,
+        v0: 0,
+        v1: 999,
+        kind: EdgeKind::Mountain,
+    });
+    cp.next_edge_id += 1;
+    // 参照切れ辺があってもpanicせず、通常どおり挿入できる
+    let added = insert_segment(&mut cp, [0.0, 0.0], [1.0, 1.0], EdgeKind::Valley);
+    assert_eq!(added.len(), 1);
+}

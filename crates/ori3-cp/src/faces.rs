@@ -20,7 +20,8 @@ pub struct Face {
 /// 境界を両側から辿るスリットとして面の境界に現れる。
 ///
 /// 補助線(`EdgeKind::Aux`)は折りに関与しないため面の境界には使わず、
-/// Border/Mountain/Valley のみを対象とする。
+/// Border/Mountain/Valley のみを対象とする。存在しない頂点を参照する辺
+/// (参照切れ)と退化辺は面抽出から除外し、panicしない(validateで警告される)。
 ///
 /// 既知の制限: 外周と連結していない閉ループ(入れ子・穴)は面の穴として扱われず、
 /// 領域が重複した面が返る(内側のループが囲む面と、それを含む外側の面の両方が
@@ -35,12 +36,15 @@ pub fn extract_faces(cp: &CreasePattern) -> Vec<Face> {
         .map(|v| (v.id, DVec2::from(v.pos)))
         .collect();
 
-    // 対象辺: Aux・退化辺を除外し、辺ID順に整列(決定性のため)。
+    // 対象辺: Aux・参照切れ・退化辺を除外し、辺ID順に整列(決定性のため)。
     let mut edges: Vec<(EdgeId, VertexId, VertexId)> = cp
         .edges
         .iter()
         .filter(|e| e.kind != EdgeKind::Aux && e.v0 != e.v1)
-        .filter(|e| (vpos[&e.v1] - vpos[&e.v0]).length() >= EPS)
+        .filter(|e| match (vpos.get(&e.v0), vpos.get(&e.v1)) {
+            (Some(&p0), Some(&p1)) => (p1 - p0).length() >= EPS,
+            _ => false, // 参照切れ辺はpanicさせず面抽出の対象外にする
+        })
         .map(|e| (e.id, e.v0, e.v1))
         .collect();
     edges.sort_by_key(|&(id, _, _)| id);

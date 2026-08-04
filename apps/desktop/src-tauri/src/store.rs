@@ -3,6 +3,16 @@
 //! Tauriに依存しない純Rustとして実装し、コマンド層(commands.rs)から委譲される。
 //! undo/redoは「編集前スナップショット」方式(v1は単純さ優先)。
 //! 変更が実際に起きた場合のみundo履歴に積み、100件を超えたら最古を破棄する。
+//!
+//! エラーと警告の使い分け規則:
+//! - 複数対象の操作(RemoveEdges/SetEdgeKind)は部分成功+警告(できる分だけ行う)
+//! - 単一対象の不能(SetPaperの折り線あり、SeqOpのID不在など)はErr(何も変更しない)
+//! - 幾何的な壊れ(交差・参照切れなど)は警告(「止めずに警告」原則)。
+//!   例外としてMoveVertexの頂点ID不在は、SetEdgeKindのID不在との整合を優先し
+//!   Errではなく警告+無変更とする
+//!
+//! 導出(validate/extract_faces)は候補Documentに対して先に実行し、成功した場合のみ
+//! 状態を確定する。導出がpanicしてもstoreは直前の整合状態を保つ(guardがErr化する)。
 
 use std::path::{Path, PathBuf};
 
@@ -54,12 +64,14 @@ impl DocumentStore {
     /// 新規作品を作る。undo/redo履歴・保存先パスは破棄される。
     pub fn new_document(&mut self, paper: Paper) -> Result<DocumentView, String> {
         check_paper(&paper)?;
-        self.doc = Document::new(paper);
+        let doc = Document::new(paper);
+        let view = build_view(&doc, Vec::new());
+        self.doc = doc;
         self.undo_stack.clear();
         self.redo_stack.clear();
         self.dirty = false;
         self.path = None;
-        Ok(self.view(Vec::new()))
+        Ok(view)
     }
 
     /// `.ori3`ファイル(pretty JSON)を読み込む。schema_version不一致はErr。
@@ -83,12 +95,14 @@ impl DocumentStore {
         }
         let doc: Document = serde_json::from_value(value)
             .map_err(|e| format!("ファイルの内容を読み取れませんでした: {e}"))?;
+        // 導出を先に済ませ、成功した場合のみ状態を確定する
+        let view = build_view(&doc, Vec::new());
         self.doc = doc;
         self.undo_stack.clear();
         self.redo_stack.clear();
         self.dirty = false;
         self.path = Some(path.to_path_buf());
-        Ok(self.view(Vec::new()))
+        Ok(view)
     }
 
     /// `.ori3`ファイル(pretty JSON)へ保存する。`None`なら前回のパスへ上書き。
@@ -152,8 +166,12 @@ impl DocumentStore {
                 }
             }
             EditOp::MoveVertex { id, to } => {
-                // 移動によりCPが壊れても止めない(validateの警告で知らせる)
-                ori3_cp::move_vertex(&mut doc.cp, id, to);
+                if doc.cp.vertices.iter().any(|v| v.id == id) {
+                    // 移動によりCPが壊れても止めない(validateの警告で知らせる)
+                    ori3_cp::move_vertex(&mut doc.cp, id, to);
+                } else {
+                    warnings.push(format!("頂点ID {id} が存在しません"));
+                }
             }
             EditOp::SetPaper { paper } => {
                 check_paper(&paper)?;
@@ -203,24 +221,29 @@ impl DocumentStore {
 
     /// 直前の変更を取り消す。
     pub fn undo(&mut self) -> Result<DocumentView, String> {
+        // 導出を先に済ませてからpop・swapする(導出panic時にstoreを変えない)
         let prev = self
             .undo_stack
-            .pop()
+            .last()
             .ok_or_else(|| "これ以上元に戻せません".to_string())?;
+        let view = build_view(prev, Vec::new());
+        let prev = self.undo_stack.pop().expect("直前にlastで確認済み");
         self.redo_stack.push(std::mem::replace(&mut self.doc, prev));
         self.dirty = true;
-        Ok(self.view(Vec::new()))
+        Ok(view)
     }
 
     /// 取り消した変更をやり直す。
     pub fn redo(&mut self) -> Result<DocumentView, String> {
         let next = self
             .redo_stack
-            .pop()
+            .last()
             .ok_or_else(|| "これ以上やり直せません".to_string())?;
+        let view = build_view(next, Vec::new());
+        let next = self.redo_stack.pop().expect("直前にlastで確認済み");
         self.undo_stack.push(std::mem::replace(&mut self.doc, next));
         self.dirty = true;
-        Ok(self.view(Vec::new()))
+        Ok(view)
     }
 
     /// 未保存の変更があるか。
@@ -229,7 +252,12 @@ impl DocumentStore {
     }
 
     /// 変更後Documentを確定する。変更が実際に起きた場合のみundo履歴に積む。
+    ///
+    /// 導出(validate/extract_faces)を候補docに対して先に実行し、成功した場合のみ
+    /// 状態を入れ替える。導出がpanicしてもstoreは無変更のまま(guardがErr化し、
+    /// 「Err⇒無変更」の不変条件を保つ)。
     fn commit(&mut self, doc: Document, warnings: Vec<String>) -> DocumentView {
+        let view = build_view(&doc, warnings);
         if doc != self.doc {
             if self.undo_stack.len() >= MAX_UNDO {
                 self.undo_stack.remove(0);
@@ -238,18 +266,18 @@ impl DocumentStore {
             self.redo_stack.clear();
             self.dirty = true;
         }
-        self.view(warnings)
+        view
     }
+}
 
-    /// 現在のDocumentから表示用ビューを作る(faces/warningsは毎回導出)。
-    fn view(&self, mut warnings: Vec<String>) -> DocumentView {
-        warnings.extend(ori3_cp::validate(&self.doc.cp));
-        DocumentView {
-            doc: self.doc.clone(),
-            faces: ori3_cp::extract_faces(&self.doc.cp),
-            warnings,
-            violations: Vec::new(),
-        }
+/// Documentから表示用ビューを作る(faces/warningsは毎回導出)。
+fn build_view(doc: &Document, mut warnings: Vec<String>) -> DocumentView {
+    warnings.extend(ori3_cp::validate(&doc.cp));
+    DocumentView {
+        doc: doc.clone(),
+        faces: ori3_cp::extract_faces(&doc.cp),
+        warnings,
+        violations: Vec::new(),
     }
 }
 
@@ -566,6 +594,86 @@ mod tests {
         store.undo().unwrap();
         let view = store.undo().unwrap();
         assert!(view.doc.sequence.is_empty());
+    }
+
+    #[test]
+    fn broken_cp_replace_does_not_poison_store_or_file() {
+        let mut store = square_store();
+        // 参照切れ辺(存在しない頂点999を参照)を含むCPを流し込む
+        let mut broken = store.doc.cp.clone();
+        broken.edges.push(ori3_model::Edge {
+            id: broken.next_edge_id,
+            v0: 0,
+            v1: 999,
+            kind: EdgeKind::Mountain,
+        });
+        broken.next_edge_id += 1;
+
+        // 成功し、参照切れの警告が返る(panicしない)
+        let view = store
+            .apply_edit(EditOp::ReplaceCreasePattern { cp: broken })
+            .unwrap();
+        assert!(
+            view.warnings.iter().any(|w| w.contains("存在しない点")),
+            "warnings={:?}",
+            view.warnings
+        );
+
+        // 続けて別の編集も成功する
+        store.apply_edit(diagonal()).unwrap();
+
+        // save→openの往復も成功する(二度と開けないファイルを作らない)
+        let path = std::env::temp_dir().join(format!(
+            "ori3_store_test_{}_broken.ori3",
+            std::process::id()
+        ));
+        store.save(Some(&path)).unwrap();
+        let mut other = DocumentStore::default();
+        let view = other.open(&path).unwrap();
+        assert_eq!(view.doc, store.doc);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn open_reports_clear_errors_for_bad_input() {
+        let mut store = square_store();
+        let before = store.doc.clone();
+
+        // ファイル不在
+        let missing = std::env::temp_dir().join("ori3_store_test_no_such_file.ori3");
+        let err = store.open(&missing).unwrap_err();
+        assert!(err.contains("ファイルを開けませんでした"), "err={err}");
+
+        // 不正JSON
+        let path = std::env::temp_dir().join(format!(
+            "ori3_store_test_{}_badjson.ori3",
+            std::process::id()
+        ));
+        std::fs::write(&path, "これはJSONではない{{{").unwrap();
+        let err = store.open(&path).unwrap_err();
+        assert!(err.contains("読み取れませんでした"), "err={err}");
+
+        // 失敗したopenはstoreを変えない
+        assert_eq!(store.doc, before);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn move_vertex_missing_id_warns_without_change() {
+        let mut store = square_store();
+        let view = store
+            .apply_edit(EditOp::MoveVertex {
+                id: 999,
+                to: [0.5, 0.5],
+            })
+            .unwrap();
+        assert!(
+            view.warnings.iter().any(|w| w.contains("頂点ID 999")),
+            "warnings={:?}",
+            view.warnings
+        );
+        // 無変更なのでundo履歴に積まれない
+        assert!(store.undo_stack.is_empty());
     }
 
     #[test]
