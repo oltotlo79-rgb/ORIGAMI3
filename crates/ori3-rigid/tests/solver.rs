@@ -251,6 +251,43 @@ fn loop_free_cp_converges_immediately() {
 }
 
 #[test]
+fn pendant_hinge_off_loop_stays_flat() {
+    // ループを含むCPに、ループへ関与しないペンダント折り線(左下隅を切る1本、
+    // 辺ID16)を足す。driverで他を折っても、この辺には閉包拘束がない=解の途中で
+    // 動く理由がないため、正確に0度のまま残らなければならない
+    // (回帰テスト: かつて初期値バイアスが成分単位で掛かり、触っていない辺が
+    // 45度のままconverged:true・警告なしで出力されるバグがあった)。
+    let mut cp = degree4_cp();
+    cp.vertices.push(v(9, 0.0, 0.3));
+    cp.vertices.push(v(10, 0.15, 0.0));
+    // 左辺 e7(v7→v0) を v9 で、下辺 e0(v0→v1) を v10 で分割し、v9-v10 を折り線に
+    cp.edges.retain(|edge| edge.id != 0 && edge.id != 7);
+    cp.edges.push(e(12, 7, 9, EdgeKind::Border));
+    cp.edges.push(e(13, 9, 0, EdgeKind::Border));
+    cp.edges.push(e(14, 0, 10, EdgeKind::Border));
+    cp.edges.push(e(15, 10, 1, EdgeKind::Border));
+    cp.edges.push(e(16, 9, 10, EdgeKind::Mountain));
+    cp.next_vertex_id = 11;
+    cp.next_edge_id = 17;
+
+    let faces = extract_faces(&cp);
+    assert_eq!(faces.len(), 5, "4扇形のうち1つが隅の三角形と分かれて5面");
+
+    let result = solve(&cp, &faces, &[d(8, 90.0)], None);
+    assert!(result.converged, "angles={:?}", result.angles);
+    assert_eq!(
+        result.angles[&16], 0.0,
+        "触っていないペンダント辺が動いた: {:?}",
+        result.angles
+    );
+    // ループ側は従来どおり解けている
+    for id in [9u32, 10, 11] {
+        assert!(result.angles[&id].abs() > 1.0, "angles={:?}", result.angles);
+    }
+    assert_edges_closed(&cp, &result.frame, 1e-6);
+}
+
+#[test]
 fn driver_on_non_hinge_edge_is_ignored_with_warning() {
     let cp = degree4_cp();
     let faces = extract_faces(&cp);

@@ -40,11 +40,12 @@ pub struct SolveResult {
 /// - `warm_start`: 前回解(度)を初期値にする(スライダー連続操作の安定用)。
 ///   知らない辺IDの項目は無視されるので、CP編集後の古い解を渡しても安全
 /// - 初期値の選び方: warm_startがあればそれを最優先。なければ、ループに関与する
-///   自由ヒンジはdriver角の平均の大きさの半分に山谷の符号(山=+、谷=−)を
-///   付けた値、それ以外は0度。全部0度(平坦)は山にも谷にも折れ始められる
-///   分岐点で勾配がほぼ消え収束が不安定になるため、描かれた山谷の向きへ
-///   少し寄せた点から始める。ループのない自由ヒンジは拘束がなく初期値のまま
-///   残るので0度にする
+///   自由ヒンジ(非木辺と、その基本ループを構成する木経路上のヒンジ)は
+///   driver角の平均の大きさの半分に山谷の符号(山=+、谷=−)を付けた値、
+///   それ以外は0度。全部0度(平坦)は山にも谷にも折れ始められる分岐点で
+///   勾配がほぼ消え収束が不安定になるため、描かれた山谷の向きへ少し寄せた
+///   点から始める。ループに乗らない自由ヒンジは拘束がなく初期値のまま
+///   残るので、必ず0度にする
 /// - 不収束時はpanicせず、反復中の最良解で `converged: false` のFrame3Dを返し、
 ///   warningsに「追従計算が収束していません」を追加する
 pub fn solve(
@@ -75,10 +76,40 @@ pub fn solve(
         }
     }
 
-    // ループに関与する連結成分(初期値バイアスの適用範囲)
-    let mut comp_has_loop = vec![false; forest.roots.len()];
+    // ループに関与するヒンジ(初期値バイアスの適用範囲)をヒンジ単位で調べる:
+    // 各非木辺と、その基本ループ(非木辺の両端の面を結ぶ木経路)上の木辺だけが対象。
+    // 同じ連結成分でもループに乗らないヒンジ(ぶら下がりの面へ向かう木辺など)は
+    // 残差に影響しない=初期値がそのまま解として残るため、バイアスを掛けてはいけない。
+    let mut parent_step: Vec<Option<(usize, usize)>> = vec![None; faces.len()];
+    let mut depth = vec![0usize; faces.len()];
+    for s in &forest.steps {
+        // stepsはBFS順なので親のdepthは確定済み
+        parent_step[s.child] = Some((s.parent, s.hinge));
+        depth[s.child] = depth[s.parent] + 1;
+    }
+    let mut on_loop = vec![false; n];
     for l in &forest.loops {
-        comp_has_loop[forest.comp[l.from]] = true;
+        on_loop[l.hinge] = true;
+        // 両端から共通の祖先(LCA)まで木を昇り、経路上のヒンジを印付けする
+        let (mut a, mut b) = (l.from, l.to);
+        while depth[a] > depth[b] {
+            let (p, h) = parent_step[a].expect("depth>0の面には親がある");
+            on_loop[h] = true;
+            a = p;
+        }
+        while depth[b] > depth[a] {
+            let (p, h) = parent_step[b].expect("depth>0の面には親がある");
+            on_loop[h] = true;
+            b = p;
+        }
+        while a != b {
+            let (pa, ha) = parent_step[a].expect("LCA到達前の面には親がある");
+            on_loop[ha] = true;
+            a = pa;
+            let (pb, hb) = parent_step[b].expect("LCA到達前の面には親がある");
+            on_loop[hb] = true;
+            b = pb;
+        }
     }
 
     // driver角の平均の大きさ(ラジアン)と山谷符号による初期値バイアス
@@ -104,8 +135,7 @@ pub fn solve(
             if let Some(w) = warm_start.and_then(|m| m.get(&forest.hinges[i])) {
                 return w.to_radians();
             }
-            let on_loop = comp_has_loop[forest.comp[forest.hinge_faces[i].0]];
-            if on_loop {
+            if on_loop[i] {
                 kind_sign(forest.hinges[i]) * mean_drive * 0.5
             } else {
                 0.0
@@ -230,15 +260,11 @@ fn sq_sum(v: &[f64]) -> f64 {
     v.iter().map(|x| x * x).sum()
 }
 
-/// 角度(度)を[−180, 180]へ折り返す。±180ちょうどは符号を保つ。
-fn wrap_deg(mut d: f64) -> f64 {
-    while d > 180.0 {
-        d -= 360.0;
-    }
-    while d < -180.0 {
-        d += 360.0;
-    }
-    d
+/// 角度(度)を[−180, 180]へ折り返す。+180ちょうど(および+180と同値の正の角)は
+/// −180ではなく+180を返し、符号を保つ。
+fn wrap_deg(d: f64) -> f64 {
+    let w = (d + 180.0).rem_euclid(360.0) - 180.0;
+    if w == -180.0 && d > 0.0 { 180.0 } else { w }
 }
 
 /// 連立一次方程式 A・x = b を部分ピボット付きガウス消去で解く(bへ上書き)。

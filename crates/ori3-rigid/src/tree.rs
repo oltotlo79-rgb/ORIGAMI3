@@ -67,16 +67,12 @@ pub(crate) struct LoopClosure {
 pub(crate) struct Forest {
     /// ヒンジ添字→辺ID
     pub hinges: Vec<EdgeId>,
-    /// 各ヒンジが接続する2面(faces内の添字)
-    pub hinge_faces: Vec<(usize, usize)>,
     /// BFS順の木辺(親の姿勢は必ず子より先に決まる)
     pub steps: Vec<TreeStep>,
     /// 非木辺(ループを作るヒンジ)
     pub loops: Vec<LoopClosure>,
     /// 各連結成分の根面(faces内の添字)。姿勢は恒等変換に固定される。
     pub roots: Vec<usize>,
-    /// 面ごとの連結成分番号(rootsの添字)
-    pub comp: Vec<usize>,
 }
 
 /// 親姿勢(r, t)にヒンジ回転(軸上の点a・単位方向u・角theta_rad)を合成した
@@ -144,7 +140,6 @@ pub(crate) fn build_forest(cp: &CreasePattern, faces: &[Face]) -> Forest {
     }
 
     let mut visited = vec![false; faces.len()];
-    let mut comp = vec![0usize; faces.len()];
     let mut roots = Vec::new();
     let mut steps = Vec::new();
     let mut tree_edge = vec![false; hinges.len()];
@@ -154,7 +149,6 @@ pub(crate) fn build_forest(cp: &CreasePattern, faces: &[Face]) -> Forest {
             continue;
         }
         visited[start] = true;
-        comp[start] = roots.len();
         roots.push(start);
         queue.push_back(start);
         while let Some(cur) = queue.pop_front() {
@@ -165,7 +159,6 @@ pub(crate) fn build_forest(cp: &CreasePattern, faces: &[Face]) -> Forest {
                     continue;
                 }
                 visited[nb] = true;
-                comp[nb] = comp[cur];
                 tree_edge[hi] = true;
                 // 回転軸は親(cur)側のCCW境界での向きを使う(冒頭の規約)
                 let (a, u) = axis_for(&hinge_occ[hi], cur);
@@ -199,11 +192,9 @@ pub(crate) fn build_forest(cp: &CreasePattern, faces: &[Face]) -> Forest {
 
     Forest {
         hinges,
-        hinge_faces,
         steps,
         loops,
         roots,
-        comp,
     }
 }
 
