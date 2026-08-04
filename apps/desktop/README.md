@@ -1,7 +1,22 @@
-# Tauri + React + Typescript
+# ORIGAMI3 デスクトップアプリ
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+折り紙設計アプリ ORIGAMI3 の画面部分(Tauri 2 + React + TypeScript + Vite)。
 
-## Recommended IDE Setup
+## 起動方法(開発時)
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+このフォルダ(`apps/desktop`)で実行する:
+
+```powershell
+npm install        # 初回のみ
+npm run tauri dev  # アプリのウィンドウが起動する
+```
+
+## 検査
+
+リポジトリ全体の一括検査はリポジトリのルートで実行する:
+
+```powershell
+powershell -File scripts/check.ps1
+```
+
+(計算部分のテスト・静的検査、画面部分のビルド・文法検査の4つをまとめて実行する)
