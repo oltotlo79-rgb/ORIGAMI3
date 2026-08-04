@@ -126,16 +126,19 @@ fn resolve_endpoint(cp: &mut CreasePattern, p: DVec2) -> VertexId {
     if let Some(v) = find_vertex_within_eps(cp, p) {
         return v;
     }
-    let mut best: Option<(f64, EdgeId)> = None;
+    let mut best: Option<(f64, EdgeId, DVec2, DVec2)> = None;
     for e in &cp.edges {
-        let d = dist_point_segment(p, pos(cp, e.v0), pos(cp, e.v1));
-        if d <= EPS && best.is_none_or(|(bd, _)| d < bd) {
-            best = Some((d, e.id));
+        // 参照切れ辺は吸着対象にしない(validate/extract_facesと同じ基準。panicさせない)
+        let (Some(p0), Some(p1)) = (try_pos(cp, e.v0), try_pos(cp, e.v1)) else {
+            continue;
+        };
+        let d = dist_point_segment(p, p0, p1);
+        if d <= EPS && best.is_none_or(|(bd, ..)| d < bd) {
+            best = Some((d, e.id, p0, p1));
         }
     }
-    if let Some((_, eid)) = best {
-        let e = cp.edges.iter().find(|e| e.id == eid).unwrap();
-        let q = project_to_segment(p, pos(cp, e.v0), pos(cp, e.v1));
+    if let Some((_, eid, p0, p1)) = best {
+        let q = project_to_segment(p, p0, p1);
         split_edge_at_points(cp, eid, &[q]);
         return get_or_create_vertex(cp, q);
     }

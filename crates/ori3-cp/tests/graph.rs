@@ -156,7 +156,8 @@ fn insert_segment_tolerates_dangling_reference_edge() {
         kind: EdgeKind::Mountain,
     });
     cp.next_edge_id += 1;
-    // 参照切れ辺があってもpanicせず、通常どおり挿入できる
-    let added = insert_segment(&mut cp, [0.0, 0.0], [1.0, 1.0], EdgeKind::Valley);
+    // 参照切れ辺があってもpanicせず、通常どおり挿入できる。
+    // 端点は既存頂点に吸着しない自由点にして、端点解決の辺ループも実際に通す
+    let added = insert_segment(&mut cp, [0.3, 0.2], [0.7, 0.8], EdgeKind::Valley);
     assert_eq!(added.len(), 1);
 }
