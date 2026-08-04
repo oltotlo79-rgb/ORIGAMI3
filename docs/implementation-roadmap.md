@@ -363,9 +363,10 @@ pub struct DocumentView {
 
 ### Task 1-6: 2D展開図エディタ
 
-**Files:** `apps/desktop/src/components/CpEditor/{CpEditor.tsx, renderer.ts, interaction.ts}`, `crates/ori3-cp/src/snap.rs`
+**Files:** `apps/desktop/src/components/CpEditor/{CpEditor.tsx, renderer.ts, interaction.ts, snap.ts}`
 
-- [ ] Rust側スナップ(テスト先行): `snap(cp, cursor, grid_divisions, radius) -> Option<SnapResult>`。優先順: 既存頂点 > 交点 > グリッド交点 > 線分上。`SnapResult { pos: [f64;2], kind: SnapKind }`
+- [ ] スナップはフロントエンド(TypeScript)側で実装する: `snap(doc, cursorPos, radius): SnapResult | null`。優先順: 既存頂点 > グリッド交点 > 線分上(交点は挿入時に自動で頂点化されるため「既存頂点」に含まれる)。`SnapResult { pos: [x,y], kind: "vertex" | "grid" | "edge" }`
+  - 理由: IPCコマンド13個にスナップ用はなく、マウス移動のたびのIPC往復は応答性が悪い。展開図データはフロントのストアに常にあるため、フロント側の純関数として実装しユニットテスト(vitest等)を付ける
 - [ ] Canvas描画(`renderer.ts`): 紙(白)・グリッド(薄灰)・輪郭(黒実線)・山(赤)・谷(青)・補助(灰)・選択強調(太線)・スナップ候補(丸マーカー)。線種の色分けは定数モジュールに集約
 - [ ] 操作(`interaction.ts`): ツール=選択/山/谷/補助/削除。2クリックで線分確定(スナップ適用)、Escでキャンセル、矩形選択、Delete削除、ホイールズーム、中ボタンパン
 - [ ] ツールレール接続(ボタン: 選択・山・谷・補助・削除・全体表示の6個)
