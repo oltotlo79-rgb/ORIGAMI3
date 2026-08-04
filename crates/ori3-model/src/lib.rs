@@ -101,7 +101,17 @@ impl Document {
     /// 座標系は「紙の長辺 = 1.0」に正規化する
     /// (例: 150×100mm なら 幅1.0×高さ2/3、正方形なら1.0×1.0)。
     /// 頂点は左下(0,0)起点の反時計回り、辺は4本すべて `EdgeKind::Border`。
+    ///
+    /// # Panics
+    ///
+    /// 紙の幅・高さが正の値でない場合はパニックする。
     pub fn new(paper: Paper) -> Document {
+        assert!(
+            paper.width_mm > 0.0 && paper.height_mm > 0.0,
+            "紙のサイズは正の値でなければならない: width_mm={}, height_mm={}",
+            paper.width_mm,
+            paper.height_mm
+        );
         let long_edge = paper.width_mm.max(paper.height_mm);
         let w = paper.width_mm / long_edge;
         let h = paper.height_mm / long_edge;

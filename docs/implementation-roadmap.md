@@ -276,6 +276,7 @@ pub struct Frame3D { pub faces: Vec<Face3D>, pub warnings: Vec<String> }
 
 ```rust
 pub fn seg_intersection(a0: DVec2, a1: DVec2, b0: DVec2, b1: DVec2) -> Option<DVec2>;
+pub fn collinear_overlap(a0: DVec2, a1: DVec2, b0: DVec2, b1: DVec2) -> Option<(DVec2, DVec2)>; // 同一直線上の重なり区間(点接触は同一点ペア)
 pub fn point_on_segment(p: DVec2, a: DVec2, b: DVec2) -> bool;      // EPS許容
 pub fn reflect_across_line(p: DVec2, l0: DVec2, l1: DVec2) -> DVec2;
 pub fn dist_point_segment(p: DVec2, a: DVec2, b: DVec2) -> f64;

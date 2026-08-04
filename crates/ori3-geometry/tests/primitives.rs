@@ -2,7 +2,8 @@
 
 use glam::DVec2;
 use ori3_geometry::{
-    Isometry2, dist_point_segment, point_on_segment, reflect_across_line, seg_intersection,
+    Isometry2, collinear_overlap, dist_point_segment, point_on_segment, reflect_across_line,
+    seg_intersection,
 };
 use ori3_model::EPS;
 
@@ -78,6 +79,106 @@ fn test_seg_intersection_endpoint_touch() {
     )
     .expect("shared endpoint must count");
     assert!(approx(p, DVec2::new(1.0, 0.0)), "got {p:?}");
+}
+
+#[test]
+fn test_seg_intersection_short_segments_small_angle() {
+    // 長さ1e-4程度の短い線分同士の小角度交差。平行判定が絶対閾値だと
+    // 「平行」と誤判定されるケース(denomが線分長の2乗でスケールするため)。
+    for angle_deg in [10.0_f64, 3.0] {
+        let half = 5e-5;
+        let a0 = DVec2::new(-half, 0.0);
+        let a1 = DVec2::new(half, 0.0);
+        let (sin, cos) = angle_deg.to_radians().sin_cos();
+        let b0 = DVec2::new(-half * cos, -half * sin);
+        let b1 = DVec2::new(half * cos, half * sin);
+        let p = seg_intersection(a0, a1, b0, b1)
+            .unwrap_or_else(|| panic!("{angle_deg}度の交差が平行と誤判定された"));
+        assert!(approx(p, DVec2::ZERO), "angle={angle_deg}: got {p:?}");
+    }
+}
+
+// ---- collinear_overlap ----
+
+#[test]
+fn test_collinear_overlap_partial() {
+    // 部分的な重なり: [0,2]と[1,3] → [1,2]。
+    let (p0, p1) = collinear_overlap(
+        DVec2::new(0.0, 0.0),
+        DVec2::new(2.0, 0.0),
+        DVec2::new(1.0, 0.0),
+        DVec2::new(3.0, 0.0),
+    )
+    .expect("must overlap");
+    assert!(approx(p0, DVec2::new(1.0, 0.0)), "got {p0:?}");
+    assert!(approx(p1, DVec2::new(2.0, 0.0)), "got {p1:?}");
+
+    // 斜めの線分でも同様。
+    let (p0, p1) = collinear_overlap(
+        DVec2::new(0.0, 0.0),
+        DVec2::new(1.0, 1.0),
+        DVec2::new(2.0, 2.0),
+        DVec2::new(0.5, 0.5),
+    )
+    .expect("must overlap");
+    assert!(approx(p0, DVec2::new(0.5, 0.5)), "got {p0:?}");
+    assert!(approx(p1, DVec2::new(1.0, 1.0)), "got {p1:?}");
+}
+
+#[test]
+fn test_collinear_overlap_containment() {
+    // 包含: [0,2]の中に[0.5,1.5]が丸ごと入る。
+    let (p0, p1) = collinear_overlap(
+        DVec2::new(0.0, 0.0),
+        DVec2::new(2.0, 0.0),
+        DVec2::new(0.5, 0.0),
+        DVec2::new(1.5, 0.0),
+    )
+    .expect("must overlap");
+    assert!(approx(p0, DVec2::new(0.5, 0.0)), "got {p0:?}");
+    assert!(approx(p1, DVec2::new(1.5, 0.0)), "got {p1:?}");
+}
+
+#[test]
+fn test_collinear_overlap_endpoint_touch() {
+    // 端点のみ共有 → 同一点のペア。
+    let (p0, p1) = collinear_overlap(
+        DVec2::new(0.0, 0.0),
+        DVec2::new(2.0, 0.0),
+        DVec2::new(2.0, 0.0),
+        DVec2::new(3.0, 0.0),
+    )
+    .expect("point touch must count");
+    assert!(approx(p0, DVec2::new(2.0, 0.0)), "got {p0:?}");
+    assert!(approx(p0, p1), "point touch must return the same point pair");
+}
+
+#[test]
+fn test_collinear_overlap_none() {
+    // 同一直線上だが離れている。
+    let r = collinear_overlap(
+        DVec2::new(0.0, 0.0),
+        DVec2::new(2.0, 0.0),
+        DVec2::new(3.0, 0.0),
+        DVec2::new(4.0, 0.0),
+    );
+    assert!(r.is_none(), "got {r:?}");
+    // 平行だが同一直線上にない。
+    let r = collinear_overlap(
+        DVec2::new(0.0, 0.0),
+        DVec2::new(2.0, 0.0),
+        DVec2::new(1.0, 0.5),
+        DVec2::new(3.0, 0.5),
+    );
+    assert!(r.is_none(), "got {r:?}");
+    // 同一直線上ですらない(交差する向き)。
+    let r = collinear_overlap(
+        DVec2::new(0.0, 0.0),
+        DVec2::new(2.0, 0.0),
+        DVec2::new(1.0, -1.0),
+        DVec2::new(1.0, 1.0),
+    );
+    assert!(r.is_none(), "got {r:?}");
 }
 
 // ---- point_on_segment / dist_point_segment ----
@@ -173,9 +274,55 @@ fn test_isometry_reflection_matches_reflect_across_line() {
 }
 
 #[test]
+fn test_isometry_approx_eq() {
+    use std::f64::consts::TAU;
+    let iso = Isometry2 {
+        rotation: 1.25,
+        translation: DVec2::new(0.5, -0.25),
+        mirrored: false,
+    };
+    // θとθ+2πは同一変換。derive(PartialEq)では不等だがapprox_eqでは等しい。
+    let shifted = Isometry2 {
+        rotation: 1.25 + TAU,
+        ..iso
+    };
+    assert!(iso != shifted);
+    assert!(iso.approx_eq(&shifted, 1e-9));
+    // 0付近と2π付近も同一視される。
+    let a = Isometry2 {
+        rotation: 1e-12,
+        translation: DVec2::ZERO,
+        mirrored: false,
+    };
+    let b = Isometry2 {
+        rotation: TAU - 1e-12,
+        translation: DVec2::ZERO,
+        mirrored: false,
+    };
+    assert!(a.approx_eq(&b, 1e-9));
+    // mirroredが違えば不一致、並進がepsを超えても不一致。
+    let mirrored = Isometry2 {
+        mirrored: true,
+        ..iso
+    };
+    assert!(!iso.approx_eq(&mirrored, 1e-9));
+    let moved = Isometry2 {
+        translation: iso.translation + DVec2::new(1e-3, 0.0),
+        ..iso
+    };
+    assert!(!iso.approx_eq(&moved, 1e-9));
+}
+
+/// 再現可能な乱数列(固定シード)。
+fn seeded_rng() -> impl rand::RngExt {
+    use rand::SeedableRng;
+    rand::rngs::StdRng::seed_from_u64(0x0119_A311)
+}
+
+#[test]
 fn test_isometry_compose_matches_sequential_apply() {
     use rand::RngExt;
-    let mut rng = rand::rng();
+    let mut rng = seeded_rng();
     for _ in 0..100 {
         let a = Isometry2 {
             rotation: rng.random_range(-6.0..6.0),
@@ -201,7 +348,7 @@ fn test_isometry_compose_matches_sequential_apply() {
 #[test]
 fn test_isometry_inverse_roundtrip() {
     use rand::RngExt;
-    let mut rng = rand::rng();
+    let mut rng = seeded_rng();
     for _ in 0..100 {
         let iso = Isometry2 {
             rotation: rng.random_range(-6.0..6.0),

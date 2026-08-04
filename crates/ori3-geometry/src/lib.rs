@@ -4,4 +4,6 @@ pub mod isometry;
 pub mod primitives;
 
 pub use isometry::Isometry2;
-pub use primitives::{dist_point_segment, point_on_segment, reflect_across_line, seg_intersection};
+pub use primitives::{
+    collinear_overlap, dist_point_segment, point_on_segment, reflect_across_line, seg_intersection,
+};

@@ -161,6 +161,24 @@ fn test_document_new_landscape() {
 }
 
 #[test]
+#[should_panic(expected = "紙のサイズは正の値でなければならない")]
+fn test_document_new_rejects_zero_size() {
+    let _ = Document::new(Paper {
+        width_mm: 0.0,
+        height_mm: 100.0,
+    });
+}
+
+#[test]
+#[should_panic(expected = "紙のサイズは正の値でなければならない")]
+fn test_document_new_rejects_negative_size() {
+    let _ = Document::new(Paper {
+        width_mm: 150.0,
+        height_mm: -10.0,
+    });
+}
+
+#[test]
 fn test_document_new_portrait_and_square() {
     // 縦長: 長辺=高さが1.0、幅は 100/150 = 2/3。
     let doc = Document::new(Paper {
