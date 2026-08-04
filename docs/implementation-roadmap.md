@@ -446,6 +446,16 @@ M1の品質レビューで「面400・辺1,000でsolve 33ms以内(NFR-002)」に
 - [ ] 軽微: kind_signの線形走査をマップ化 / solve内のbuild_forest二重実行除去 / pose_solveのextract_faces毎回実行をstoreのキャッシュ流用に / driverを外した自由ヒンジがwarm start値のまま残る挙動をdocに明文化
 - [ ] コミット `折りの計算を大きな作品でも間に合う速さに改良` → プッシュ
 
+あわせてフロント側もアニメーション(手順再生)に耐える構造へ改修する(M1品質レビューの引き継ぎ):
+
+- [ ] Viewer3D: トポロジとジオメトリの分離 — doc/faces変化時のみ三角形分割(スリット面の凹形状はShapeUtils.triangulateShape)とヒンジ集合を確定し、frame3d変化時はposition属性のin-place更新(DynamicDrawUsage)のみ。表裏は1ジオメトリ+addGroup+マテリアル配列。三角形index→面IDの対応表も作る(Task 2-5のraycastで必要)
+- [ ] 作り替え前にsceneBuilderのdispose回帰テストを1本追加(偽geometry/materialでdispose回数を数える)
+- [ ] pose_solve系のIPCをcoalescing方式に変更 — 実行中は保留1件を最新値で上書きし完了時に発行(FIFO積み上げによる表示遅延の防止)。編集系は従来のFIFOのまま
+- [ ] 軽微: hingeEdgeIdsのuseMemo化 / AngleNumberInputのdirtyフラグ(未編集blurでdriver化しない)+Escape取り消し / スロットルのテスト順序依存解消(リセット手段のexport) / コンテキストロスト復帰時の再描画 / setPixelRatioの追従 / render呼び出しのrAF集約 / ヒンジ選択の手前優先タイブレーク修正 / 3Dカメラのリセット手段
+- [ ] コミット `3D表示を手順再生に耐える作りに改良` → プッシュ
+
+### Task 2-1: ori3-layers 平坦状態
+
 **Files:** `crates/ori3-layers/src/{lib,flat_state}.rs`, `tests/flat_state.rs`
 
 - [ ] テスト: 正方形を半分に折った状態→2面の配置が鏡映関係、層順序が[下面, 上面]。層順序の代表点参照(layer_orderの[f64;2]→FaceId解決)が面の再抽出後も正しく対応する
