@@ -310,6 +310,27 @@ describe("appStore 折り角度の指定", () => {
     expect([...useAppStore.getState().drivers]).toEqual([[5, 90]]);
   });
 
+  it("編集で角度指定が全て無くなったら、全ての折り線へ0度を送って平らに戻す", async () => {
+    const view = makeHingeView(900);
+    useAppStore.setState({
+      doc: view.doc,
+      faces: view.faces,
+      drivers: new Map([[9, 45]]), // 編集後のviewには残らない辺
+      frame3d: { faces: [], warnings: [] }, // すでに折った状態
+    });
+    vi.mocked(ipc.editApply).mockResolvedValueOnce(makeHingeView(901));
+
+    await useAppStore.getState().applyEdit({
+      type: "SetEdgeKind",
+      ids: [9],
+      kind: "Aux",
+    });
+
+    // 空のまま送ると前回の計算結果を引き継いで折れたまま残るため0度を明示する
+    expect(poseCalls()).toEqual([[{ hinge: 5, target_angle_deg: 0 }]]);
+    expect(useAppStore.getState().drivers.size).toBe(0);
+  });
+
   it("収束しなかった結果は警告と収束フラグに反映される", async () => {
     const result = makeSolveResult({ "5": 90 });
     result.converged = false;

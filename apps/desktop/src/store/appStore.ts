@@ -167,6 +167,17 @@ export const useAppStore = create<AppState>((set, get) => {
   const driverList = (drivers: Map<number, number>): Driver[] =>
     [...drivers].map(([hinge, deg]) => ({ hinge, target_angle_deg: deg }));
 
+  /** 全ての折り線に0度(平ら)を指定したdriver列。
+   * 何も指定せずに送るとRust側が前回解(warm start)を引き継ぎ、折れたままの
+   * 形が返る。平らに戻したいときは必ず0度を明示する必要がある */
+  const flatDrivers = (doc: Document | null, faces: Face[]): Driver[] =>
+    doc
+      ? [...hingeEdgeIds(doc, faces)].map((hinge) => ({
+          hinge,
+          target_angle_deg: 0,
+        }))
+      : [];
+
   /** 追従計算を直列化キュー経由で実行し、3D表示へ反映する。
    * 成功応答は完了順に全て適用する(runViewCommandと同じ規約)。
    * 成功時にerrorMessageは触らない(編集側のエラー報告を消さないため) */
@@ -196,6 +207,13 @@ export const useAppStore = create<AppState>((set, get) => {
     if (kept.size !== before.size) set({ drivers: kept });
     // 平らのまま(指定も立体形状も無い)なら計算する必要はない
     if (kept.size === 0 && get().frame3d === null) return;
+    if (kept.size === 0) {
+      // 指定が全て無くなった(線の種類変更などで折り線でなくなった)場合、
+      // 空のまま送ると前回の計算結果を引き継いで折れたまま残り、画面には
+      // 平らへ戻す操作も出なくなる。全ての折り線へ0度を明示して平らに戻す
+      await runPoseSolve(flatDrivers(view.doc, view.faces));
+      return;
+    }
     await runPoseSolve(driverList(kept));
   };
 
@@ -274,15 +292,7 @@ export const useAppStore = create<AppState>((set, get) => {
     clearDrivers: () => {
       const { doc, faces } = get();
       set({ drivers: new Map() });
-      // 平らに戻す: 何も指定せずに送ると前回の計算結果が引き継がれてしまうため、
-      // 全ての折り線に0度(平ら)を明示して送る
-      const flat = doc
-        ? [...hingeEdgeIds(doc, faces)].map((hinge) => ({
-            hinge,
-            target_angle_deg: 0,
-          }))
-        : [];
-      void runPoseSolve(flat);
+      void runPoseSolve(flatDrivers(doc, faces));
     },
   };
 });
