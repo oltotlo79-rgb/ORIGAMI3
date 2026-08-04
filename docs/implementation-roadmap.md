@@ -376,10 +376,10 @@ pub struct DocumentView {
 
 **Files:** `crates/ori3-rigid/src/{lib,tree}.rs`, `tests/tree.rs`
 
-- [ ] テストを先に書く:
+- [x] テストを先に書く:
   - 正方形+中央縦1本、ヒンジ角180°→2面が重なる(左面の頂点が右面へ鏡映された位置、z差はEPS以内)
   - ヒンジ角90°→2面のなす二面角が90°(法線の内積で検証)
-- [ ] 実装:
+- [x] 実装:
 
 ```rust
 /// 面隣接グラフのBFS全域木を作り、根面をxy平面に固定、
@@ -389,7 +389,7 @@ pub fn propagate(cp: &CreasePattern, faces: &[Face], angles: &HashMap<EdgeId, f6
 pub fn to_frame3d(cp: &CreasePattern, faces: &[Face], frame: &FoldedFrame) -> Frame3D;
 ```
 
-- [ ] テスト成功確認 → コミット `折り線の角度から紙の立体的な形を計算する機能を追加` → プッシュ
+- [x] テスト成功確認 → コミット `折り線の角度から紙の立体的な形を計算する機能を追加` → プッシュ
 
 ### Task 1-8: ori3-rigid ループ閉包ソルバー(内部頂点対応)
 
