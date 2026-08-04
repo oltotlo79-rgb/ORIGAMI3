@@ -115,14 +115,6 @@ body,
   touch-action: none; /* ドラッグでの視点操作を優先する */
 }
 
-.placeholder {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  color: #888;
-}
-
 /* 3D区画右上の警告/エラーバッジ */
 .status-badge {
   position: absolute;

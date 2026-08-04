@@ -262,7 +262,13 @@ export const useAppStore = create<AppState>((set, get) => {
       const drivers = new Map(get().drivers);
       if (!drivers.delete(hinge)) return;
       set({ drivers });
-      void runPoseSolve(driverList(drivers));
+      // 指定を消しただけだと、この折り線は前回の計算結果(warm start)を
+      // 引き継いで折れたまま残る。1回だけ0度(平ら)を明示して送り、
+      // 次回以降は残りの指定だけで計算する(「全て平らに戻す」と同じ考え方)
+      void runPoseSolve([
+        ...driverList(drivers),
+        { hinge, target_angle_deg: 0 },
+      ]);
     },
 
     clearDrivers: () => {

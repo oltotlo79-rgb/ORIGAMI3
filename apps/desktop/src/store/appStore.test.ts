@@ -22,6 +22,9 @@ import { useAppStore } from "./appStore";
 
 /** 角度の間引き間隔(appStore.tsのPOSE_THROTTLE_MS)より少し長く待つ時間(ms) */
 const POSE_WAIT_MS = 100;
+/** 本物の時間で間引きを待つ時間(ms)。偽タイマーを使ったテストの直後は
+ * 間引きの基準時刻が先へ進んでいることがあるため、間隔よりかなり長く待つ */
+const REAL_WAIT_MS = 400;
 
 /** 手動でresolve/rejectできるPromise */
 function deferred<T>() {
@@ -191,9 +194,35 @@ function flush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/** 偽タイマーを使うテストの準備。
+ * 間引きの基準時刻はストア(1個だけ)が持ち続けるため、前のテストで進めた
+ * 時刻が残っていると待ち時間がずれる。十分に時計を進めて基準を追い越す。 */
+async function primeFakeTimers(): Promise<void> {
+  vi.useFakeTimers();
+  await vi.advanceTimersByTimeAsync(5000);
+  vi.mocked(ipc.poseSolve).mockClear();
+}
+
 describe("appStore 折り角度の指定", () => {
+  // 注意: 本物の時間で待つこのテストは、偽タイマーのテストより前に置く
+  // (偽タイマーで進めた時刻が残っていると、本物の待ち時間では追いつけない)
+  it("実際に待っても、連続変更は1回にまとまり最後の角度が送られる", async () => {
+    const store = useAppStore.getState();
+    store.setDriverAngle(5, 10);
+    store.setDriverAngle(5, 20);
+    store.setDriverAngle(5, 30);
+
+    await vi.waitFor(
+      () => expect(poseCalls()).toEqual([[{ hinge: 5, target_angle_deg: 30 }]]),
+      { timeout: 2000, interval: 10 },
+    );
+    // その後しばらく待っても、間引かれた分が追加で飛ぶことはない
+    await new Promise((resolve) => setTimeout(resolve, REAL_WAIT_MS));
+    expect(poseCalls()).toHaveLength(1);
+  });
+
   it("連続操作は60msで間引かれ、最後の角度が必ず送られる", async () => {
-    vi.useFakeTimers();
+    await primeFakeTimers();
     try {
       const store = useAppStore.getState();
       store.setDriverAngle(5, 10);
@@ -203,6 +232,23 @@ describe("appStore 折り角度の指定", () => {
       await vi.advanceTimersByTimeAsync(POSE_WAIT_MS);
       expect(poseCalls()).toEqual([[{ hinge: 5, target_angle_deg: 30 }]]);
       expect(useAppStore.getState().drivers.get(5)).toBe(30);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("間隔を空けた変更はまとめられず、それぞれ送られる", async () => {
+    await primeFakeTimers();
+    try {
+      const store = useAppStore.getState();
+      store.setDriverAngle(5, 10);
+      await vi.advanceTimersByTimeAsync(70);
+      store.setDriverAngle(5, 20);
+      await vi.advanceTimersByTimeAsync(70);
+      expect(poseCalls()).toEqual([
+        [{ hinge: 5, target_angle_deg: 10 }],
+        [{ hinge: 5, target_angle_deg: 20 }],
+      ]);
     } finally {
       vi.useRealTimers();
     }
@@ -220,6 +266,30 @@ describe("appStore 折り角度の指定", () => {
     // 間引き中の分は送られず、平ら指定だけが1回送られる
     expect(poseCalls()).toEqual([[{ hinge: 5, target_angle_deg: 0 }]]);
     expect(useAppStore.getState().drivers.size).toBe(0);
+  });
+
+  it("1本だけ解除したときは、その折り線に0度を明示して1回送る", async () => {
+    const view = makeHingeView(800);
+    useAppStore.setState({
+      doc: view.doc,
+      faces: view.faces,
+      drivers: new Map([
+        [5, 90],
+        [7, 30],
+      ]),
+    });
+
+    useAppStore.getState().clearDriver(5);
+    await flush();
+
+    // 解除した5は0度(平ら)を明示。残りの7はそのまま
+    expect(poseCalls()).toEqual([
+      [
+        { hinge: 7, target_angle_deg: 30 },
+        { hinge: 5, target_angle_deg: 0 },
+      ],
+    ]);
+    expect([...useAppStore.getState().drivers]).toEqual([[7, 30]]);
   });
 
   it("展開図を編集すると残った指定で計算し直し、折り線でなくなった指定は捨てる", async () => {

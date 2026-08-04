@@ -72,7 +72,7 @@ function App() {
         </section>
         <section className="pane pane-3d">
           <Viewer3D />
-          {(hasError || warningCount > 0) && (
+          {(hasError || !poseConverged || warningCount > 0) && (
             <div
               className={hasError ? "status-badge error" : "status-badge"}
               title="詳細は下のパネルに表示されます"

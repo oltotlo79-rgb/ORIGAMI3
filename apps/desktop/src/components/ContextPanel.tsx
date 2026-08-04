@@ -1,6 +1,7 @@
 // 下部コンテキストパネル(160px)。選択状態に応じて内容を切り替える。
 // 警告・エラーの詳細もここに表示する(常設パネルを増やさない)。
 
+import { useEffect, useRef } from "react";
 import { useAppStore } from "../store/appStore";
 import { hingeEdgeIds } from "../lib/hinges";
 import type { EdgeKind } from "../lib/types";
@@ -18,6 +19,51 @@ const ANGLE_MAX = 180;
 
 function clampAngle(deg: number): number {
   return Math.max(ANGLE_MIN, Math.min(ANGLE_MAX, deg));
+}
+
+/**
+ * 角度の数値入力。入力途中の「−」だけ・空文字といった状態を打てるように、
+ * 入力欄の表示は制御せず(値をストアで固定せず)、確定(Enter・入力欄から
+ * 離れたとき)にストアへ反映する。表示専用の一時状態なのでrefで扱う。
+ */
+function AngleNumberInput({ hinge, value }: { hinge: number; value: number }) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const setDriverAngle = useAppStore((s) => s.setDriverAngle);
+
+  // 入力中でなければ、スライダー操作や計算結果に表示を追従させる
+  useEffect(() => {
+    const el = inputRef.current;
+    if (el && document.activeElement !== el) el.value = String(value);
+  }, [value]);
+
+  const commit = () => {
+    const el = inputRef.current;
+    if (!el) return;
+    const entered = Number(el.value);
+    if (el.value.trim() === "" || !Number.isFinite(entered)) {
+      el.value = String(value); // 数字になっていない入力は捨てて現在値へ戻す
+      return;
+    }
+    const angle = clampAngle(Math.round(entered));
+    el.value = String(angle);
+    setDriverAngle(hinge, angle);
+  };
+
+  return (
+    <input
+      ref={inputRef}
+      type="number"
+      className="angle-number"
+      min={ANGLE_MIN}
+      max={ANGLE_MAX}
+      step={1}
+      defaultValue={value}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") commit();
+      }}
+    />
+  );
 }
 
 /** 選択中の折り線1本の角度操作(スライダー+数値入力+解除) */
@@ -43,24 +89,13 @@ function HingeAngle({ hinge }: { hinge: number }) {
         value={value}
         onChange={(e) => setDriverAngle(hinge, Number(e.target.value))}
       />
-      <input
-        type="number"
-        className="angle-number"
-        min={ANGLE_MIN}
-        max={ANGLE_MAX}
-        step={1}
-        value={value}
-        onChange={(e) => {
-          const v = Number(e.target.value);
-          if (e.target.value !== "" && Number.isFinite(v)) {
-            setDriverAngle(hinge, clampAngle(v));
-          }
-        }}
-      />
-      <span className="hint">度(+は山折り、−は谷折り、±180で完全に折る)</span>
+      <AngleNumberInput key={hinge} hinge={hinge} value={value} />
+      <span className="hint">
+        度(+は山折り、−は谷折り、±180で完全に折る。数値はEnterで確定)
+      </span>
       <button
         type="button"
-        title="この折り線の角度指定をやめます(形は他の折り線に合わせて計算されます)"
+        title="この折り線の角度指定をやめます(この線は平らに戻り、形は残りの指定から計算し直します)"
         disabled={specified === undefined}
         onClick={() => clearDriver(hinge)}
       >
