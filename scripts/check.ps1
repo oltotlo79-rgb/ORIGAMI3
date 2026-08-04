@@ -13,16 +13,18 @@ function Invoke-Check {
     Write-Host "=== $Name ===" -ForegroundColor Cyan
     # 直前のコマンドの終了コードが残って偽の合格にならないよう必ずリセットする
     $global:LASTEXITCODE = 0
-    # 注意: スクリプトブロック経由(& { ... })だと起動失敗時に $? が真のまま残るため、
-    # コマンドと引数を直接 & で呼び出す形にしている
-    & $Command @CommandArgs
-    $started = $?
-    if (-not $started -or $LASTEXITCODE -ne 0) {
-        $code = $LASTEXITCODE
-        if ($code -eq 0) { $code = 1 }  # コマンドが起動すらできなかった場合など
+    # 注意: コマンド不在などの起動失敗は文終了エラーになり、外側のtry/finally配下では
+    # 後続の判定行に制御が届かない。ここでcatchして確実に失敗終了させる。
+    try {
+        & $Command @CommandArgs
+    } catch {
+        Write-Host "[NG] $Name を起動できませんでした: $($_.Exception.Message)" -ForegroundColor Red
+        exit 1
+    }
+    if ($LASTEXITCODE -ne 0) {
         Write-Host ""
-        Write-Host "[NG] $Name が失敗しました(終了コード: $code)" -ForegroundColor Red
-        exit $code
+        Write-Host "[NG] $Name が失敗しました(終了コード: $LASTEXITCODE)" -ForegroundColor Red
+        exit $LASTEXITCODE
     }
 }
 
