@@ -6,3 +6,6 @@ edition.workspace = true
 [dependencies]
 ori3-model.workspace = true
 glam.workspace = true
+
+[dev-dependencies]
+rand.workspace = true

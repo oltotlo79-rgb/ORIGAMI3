@@ -271,8 +271,8 @@ pub struct Frame3D { pub faces: Vec<Face3D>, pub warnings: Vec<String> }
 
 **Files:** `crates/ori3-geometry/src/{lib,primitives,isometry}.rs`, `tests/primitives.rs`
 
-- [ ] テストを先に書く: 交差あり/なし/平行/端点接触の`seg_intersection`、`point_on_segment`、`reflect_across_line`(点(1,0)を直線x=0で鏡映→(-1,0))
-- [ ] 実装:
+- [x] テストを先に書く: 交差あり/なし/平行/端点接触の`seg_intersection`、`point_on_segment`、`reflect_across_line`(点(1,0)を直線x=0で鏡映→(-1,0))
+- [x] 実装:
 
 ```rust
 pub fn seg_intersection(a0: DVec2, a1: DVec2, b0: DVec2, b1: DVec2) -> Option<DVec2>;
@@ -291,7 +291,7 @@ impl Isometry2 {
 }
 ```
 
-- [ ] テスト成功確認 → コミット `線の交わりや折り返し位置を計算する基本部品を追加` → プッシュ
+- [x] テスト成功確認 → コミット `線の交わりや折り返し位置を計算する基本部品を追加` → プッシュ
 
 ### Task 1-3: ori3-cp 平面グラフと面抽出
 

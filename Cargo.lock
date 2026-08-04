@@ -2350,6 +2350,7 @@ version = "0.1.0"
 dependencies = [
  "glam",
  "ori3-model",
+ "rand",
 ]
 
 [[package]]
