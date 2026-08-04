@@ -245,10 +245,10 @@ pub struct Frame3D { pub faces: Vec<Face3D>, pub warnings: Vec<String> }
 
 **Files:** `apps/desktop/` 一式(Tauri 2 + React + TS + Viteテンプレート)
 
-- [ ] `npm create tauri-app@latest`(react-tsテンプレート)で`apps/desktop`を作成し、`three` `@types/three` `zustand` を追加
-- [ ] `src-tauri/Cargo.toml` をworkspaceメンバーに追加し、空の`greet`系サンプルコマンドを削除
-- [ ] `npm run tauri dev` でウィンドウが起動することを確認(タイトル: ORIGAMI3)
-- [ ] コミット `アプリの画面が起動する最小の土台を作成` → プッシュ
+- [x] `npm create tauri-app@latest`(react-tsテンプレート)で`apps/desktop`を作成し、`three` `@types/three` `zustand` を追加
+- [x] `src-tauri/Cargo.toml` をworkspaceメンバーに追加し、空の`greet`系サンプルコマンドを削除
+- [x] `npm run tauri dev` でウィンドウが起動することを確認(タイトル: ORIGAMI3)
+- [x] コミット `アプリの画面が起動する最小の土台を作成` → プッシュ
 
 ### Task 0-3: 検査スクリプト
 

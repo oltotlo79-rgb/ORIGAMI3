@@ -8,6 +8,7 @@ members = [
     "crates/ori3-layers",
     "crates/ori3-propose",
     "crates/ori3-export",
+    "apps/desktop/src-tauri",
 ]
 
 [workspace.package]
