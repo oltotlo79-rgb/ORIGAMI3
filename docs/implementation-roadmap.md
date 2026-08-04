@@ -16,7 +16,19 @@
 
 - リモート: `https://github.com/oltotlo79-rgb/ORIGAMI3.git`、ブランチ `main`
 - **タスク完了ごとにコミットし、必ず `git push origin main` する**(ユーザー指示。プッシュ忘れ禁止)
-- コミットメッセージは `feat:` / `fix:` / `test:` / `docs:` / `chore:` プレフィックス + 日本語要約
+- **コミットメッセージは日本語で、内容が具体的に分かるように書く(ユーザー指示)**
+  - 1行目: 何を追加・変更したかの要約(体言止め可)
+  - 本文: 「これで何ができるようになったか」「主な変更点」を箇条書きで2〜5行
+  - 専門用語(クレート名・型名・アルゴリズム名・英語の略語)は極力使わない。避けられない場合は日本語の言い換えを添える
+  - 例:
+
+```
+畳んだ紙に線を引いてまとめて折る操作を追加
+
+- 折り紙を畳んだ状態の上に折り線を引くと、重なっている紙をまとめて折れるようになった
+- 折った結果の折り線は展開図にも自動で書き加えられる
+- 紙の重なり順も折った後の正しい順番に更新される
+```
 
 ### 0.2 検査(タスク完了条件に常に含む)
 
@@ -227,7 +239,7 @@ pub struct Frame3D { pub faces: Vec<Face3D>, pub warnings: Vec<String> }
 - [ ] 各クレートを`cargo new --lib`で作成。依存: model(なし) / geometry(model, glam) / cp(geometry) / rigid(cp) / layers(cp) / propose(cp, rand) / export(layers, rigid, resvg, svg2pdf)
 - [ ] 共通依存(serde, serde_json, thiserror, glam)はworkspace.dependenciesで一元管理。バージョンは最新安定版を選び`Cargo.lock`で固定
 - [ ] `cargo test --workspace` と `cargo clippy --workspace --all-targets -- -D warnings` が通ることを確認
-- [ ] コミット `chore: cargo workspaceとクレート雛形を作成` → プッシュ
+- [ ] コミット `計算部品を置くためのフォルダ構成と空の部品一式を作成` → プッシュ
 
 ### Task 0-2: Tauriアプリ雛形
 
@@ -236,14 +248,14 @@ pub struct Frame3D { pub faces: Vec<Face3D>, pub warnings: Vec<String> }
 - [ ] `npm create tauri-app@latest`(react-tsテンプレート)で`apps/desktop`を作成し、`three` `@types/three` `zustand` を追加
 - [ ] `src-tauri/Cargo.toml` をworkspaceメンバーに追加し、空の`greet`系サンプルコマンドを削除
 - [ ] `npm run tauri dev` でウィンドウが起動することを確認(タイトル: ORIGAMI3)
-- [ ] コミット `chore: Tauri 2 + React + TS アプリ雛形` → プッシュ
+- [ ] コミット `アプリの画面が起動する最小の土台を作成` → プッシュ
 
 ### Task 0-3: 検査スクリプト
 
 **Files:** `scripts/check.ps1`
 
 - [ ] §0.2の4検査を順に実行し、いずれか失敗で非0終了するスクリプトを作成。手動実行で成功を確認
-- [ ] コミット `chore: 一括検査スクリプト` → プッシュ
+- [ ] コミット `全ての自動チェックを一度に実行できる仕組みを追加` → プッシュ
 
 ## M1: 展開図エディタ + 剛体折り(受け入れ: やっこさん)
 
@@ -253,7 +265,7 @@ pub struct Frame3D { pub faces: Vec<Face3D>, pub warnings: Vec<String> }
 
 - [ ] テスト: `Document`を構築→JSONへserialize→deserializeで往復一致(`test_document_json_roundtrip`)。実行して失敗確認
 - [ ] §2の型定義を実装。`Document::new(paper: Paper) -> Document`(輪郭4辺入りのCP初期化)も実装
-- [ ] テスト成功確認 → コミット `feat: ori3-model データ型` → プッシュ
+- [ ] テスト成功確認 → コミット `作品データ(紙・展開図・折り手順)の保存形式を定義` → プッシュ
 
 ### Task 1-2: ori3-geometry 幾何プリミティブ
 
@@ -279,7 +291,7 @@ impl Isometry2 {
 }
 ```
 
-- [ ] テスト成功確認 → コミット `feat: ori3-geometry プリミティブ` → プッシュ
+- [ ] テスト成功確認 → コミット `線の交わりや折り返し位置を計算する基本部品を追加` → プッシュ
 
 ### Task 1-3: ori3-cp 平面グラフと面抽出
 
@@ -302,7 +314,7 @@ pub struct Face { pub id: FaceId, pub vertices: Vec<VertexId>, pub edges: Vec<Ed
 pub fn extract_faces(cp: &CreasePattern) -> Vec<Face>;
 ```
 
-- [ ] テスト成功確認 → コミット `feat: ori3-cp 平面グラフ・面抽出` → プッシュ
+- [ ] テスト成功確認 → コミット `展開図の線の管理と、線で囲まれた面の検出を追加` → プッシュ
 
 ### Task 1-4: DocumentStore とIPCコマンド(編集系)
 
@@ -331,7 +343,7 @@ pub struct DocumentView { pub doc: Document, pub faces: Vec<Face>, pub violation
 ```
 
 - [ ] Tauriコマンド `document_new/open/save`, `edit_apply`, `edit_undo`, `edit_redo`, `sequence_apply` を`commands.rs`に登録(各3〜10行、storeへ委譲)。panic捕捉ラッパー`fn guard<T>(f: impl FnOnce() -> Result<T, String>) -> Result<T, String>`を全コマンドに適用
-- [ ] テスト成功確認 → コミット `feat: DocumentStoreとIPC編集コマンド` → プッシュ
+- [ ] テスト成功確認 → コミット `作品データの保管と、編集・元に戻す・やり直しの機能を追加` → プッシュ
 
 ### Task 1-5: フロント基盤(ストア・IPCクライアント・4区画レイアウト)
 
@@ -341,7 +353,7 @@ pub struct DocumentView { pub doc: Document, pub faces: Vec<Face>, pub violation
 - [ ] `ipc/client.ts`: 13コマンドそれぞれの型付きラッパー関数のみ(1関数5行以内)
 - [ ] `store/appStore.ts`(Zustand): 状態は `doc / faces / violations / selection / activeTool / frame3d / currentStep / warnings` と各action。IPC呼び出しはactionの中で行う
 - [ ] `App.tsx`: 4区画CSSグリッド(ツールレール64px / 2Dと3Dは1:1で可変 / 下部コンテキストパネル160px)。200行以内
-- [ ] `npm run build`成功 → コミット `feat: フロント基盤(Zustand+IPC+4区画)` → プッシュ
+- [ ] `npm run build`成功 → コミット `画面の基本レイアウト(4区画)と画面側の土台を追加` → プッシュ
 
 ### Task 1-6: 2D展開図エディタ
 
@@ -351,7 +363,7 @@ pub struct DocumentView { pub doc: Document, pub faces: Vec<Face>, pub violation
 - [ ] Canvas描画(`renderer.ts`): 紙(白)・グリッド(薄灰)・輪郭(黒実線)・山(赤)・谷(青)・補助(灰)・選択強調(太線)・スナップ候補(丸マーカー)。線種の色分けは定数モジュールに集約
 - [ ] 操作(`interaction.ts`): ツール=選択/山/谷/補助/削除。2クリックで線分確定(スナップ適用)、Escでキャンセル、矩形選択、Delete削除、ホイールズーム、中ボタンパン
 - [ ] ツールレール接続(ボタン: 選択・山・谷・補助・削除・全体表示の6個)
-- [ ] 手動確認: グリッド8分割で鶴の基本形の展開図が描ける → コミット `feat: 2D展開図エディタ` → プッシュ
+- [ ] 手動確認: グリッド8分割で鶴の基本形の展開図が描ける → コミット `展開図を描く画面(方眼・吸着・線の描画)を追加` → プッシュ
 
 ### Task 1-7: ori3-rigid 全域木の角度伝播(ループなしCP)
 
@@ -370,7 +382,7 @@ pub fn propagate(cp: &CreasePattern, faces: &[Face], angles: &HashMap<EdgeId, f6
 pub fn to_frame3d(cp: &CreasePattern, faces: &[Face], frame: &FoldedFrame) -> Frame3D;
 ```
 
-- [ ] テスト成功確認 → コミット `feat: ori3-rigid 角度伝播` → プッシュ
+- [ ] テスト成功確認 → コミット `折り線の角度から紙の立体的な形を計算する機能を追加` → プッシュ
 
 ### Task 1-8: ori3-rigid ループ閉包ソルバー(内部頂点対応)
 
@@ -392,7 +404,7 @@ pub fn solve(cp: &CreasePattern, faces: &[Face], drivers: &[Driver],
 ```
 
 - [ ] `pose_solve`コマンドをcommands.rsに追加(warm_startはstoreが保持)
-- [ ] テスト成功確認 → コミット `feat: ori3-rigid ループ閉包ソルバー` → プッシュ
+- [ ] テスト成功確認 → コミット `複雑な展開図でも折り角度のつじつまを自動で合わせる計算を追加` → プッシュ
 
 ### Task 1-9: 3Dビュー(Three.js)と角度操作
 
@@ -402,7 +414,7 @@ pub fn solve(cp: &CreasePattern, faces: &[Face], drivers: &[Driver],
 - [ ] `hingePicker.ts`: 3D上の辺クリックでヒンジ選択(raycast、選択中は黄色強調)
 - [ ] コンテキストパネル(ヒンジ選択時): 角度スライダー(−180〜+180)+数値入力。変更のたび`pose_solve`を呼びFrame3D更新(60ms間引き)
 - [ ] 不収束時: 3Dビュー右上に警告バッジ「⚠ 追従計算が収束していません」を表示(操作は継続)
-- [ ] 手動確認 → コミット `feat: 3Dビューとヒンジ角度操作` → プッシュ
+- [ ] 手動確認 → コミット `3D表示画面と、折り線ごとの角度操作を追加` → プッシュ
 
 ### Task 1-10: M1受け入れ(やっこさん)
 
@@ -410,7 +422,7 @@ pub fn solve(cp: &CreasePattern, faces: &[Face], drivers: &[Driver],
 
 - [ ] やっこさんの展開図(座布団折り2回相当の折り線)をコードで構築し、全driverを±180°でsolve→全面が同一平面(|z|<1e-6)に畳まれることを検証する回帰テスト
 - [ ] 手動確認: アプリでやっこさんを描いて折る。操作上の問題は`docs/progress.md`に記録
-- [ ] コミット `test: M1受け入れ(やっこさん)` → プッシュ
+- [ ] コミット `やっこさんが折れることを確認する自動テストを追加` → プッシュ
 
 ## M2: 層順序 + 折り操作 + 手順(受け入れ: 折り鶴)
 
@@ -435,7 +447,7 @@ impl FlatState {
 }
 ```
 
-- [ ] テスト成功確認 → コミット `feat: ori3-layers 平坦状態` → プッシュ
+- [ ] テスト成功確認 → コミット `平らに畳んだときの紙の重なり順を管理する機能を追加` → プッシュ
 
 ### Task 2-2: 折り操作プリミティブ(fold_through)
 
@@ -466,7 +478,7 @@ pub fn fold_through(cp: &mut CreasePattern, faces: &[Face], state: &FlatState,
                     input: &FoldThroughInput) -> Result<FoldThroughResult, String>;
 ```
 
-- [ ] テスト成功確認 → コミット `feat: 折り操作プリミティブ(重ね折り)` → プッシュ
+- [ ] テスト成功確認 → コミット `畳んだ紙に線を引いてまとめて折る操作を追加` → プッシュ
 
 ### Task 2-3: 手順エンジン(記録・再生・決定性)
 
@@ -487,7 +499,7 @@ pub struct ReplayResult { pub frame: Frame3D, pub skipped: Vec<StepId>, pub warn
 ```
 
 - [ ] `sequence_replay`コマンド追加。`edit_apply`成功時にstoreが自動で最新ステップまでreplayし直しDocumentViewに含める
-- [ ] テスト成功確認 → コミット `feat: 手順エンジン(記録・再生・決定性)` → プッシュ
+- [ ] テスト成功確認 → コミット `折り手順の記録と再生(展開図を直したら自動で折り直す)を追加` → プッシュ
 
 ### Task 2-4: タイムラインUI
 
@@ -496,7 +508,7 @@ pub struct ReplayResult { pub frame: Frame3D, pub skipped: Vec<StepId>, pub warn
 - [ ] ステップ一覧(番号+技法名+警告アイコン)、クリックで選択→その時点の3D表示、◀▶コマ送り、▶再生(driver角補間アニメーション、320ms/ステップ)
 - [ ] ステップ選択時のコンテキストパネル: 技法種別変更・注記編集・削除ボタン(`sequence_apply`)
 - [ ] スキップされたステップは赤表示+ツールチップで理由
-- [ ] 手動確認 → コミット `feat: 手順タイムライン` → プッシュ
+- [ ] 手動確認 → コミット `折り手順の一覧表示と再生・コマ送りの画面を追加` → プッシュ
 
 ### Task 2-5: 3Dビュー上の折り線描画と折り操作(SIM-005)
 
@@ -505,7 +517,7 @@ pub struct ReplayResult { pub frame: Frame3D, pub skipped: Vec<StepId>, pub warn
 - [ ] 3Dビューに「折る」ツールを追加: 平坦状態の紙の上でドラッグ→raycastで畳み平面上の2点を取得→端点を紙の輪郭・既存頂点へスナップ→折り線プレビュー表示
 - [ ] 確定UI(コンテキストパネル): 方向(手前へ/向こうへ)、対象層(全層/上から1枚/選択)→`fold_through`実行(sequence_apply PushStep経由)→2D展開図に追記された折り線が即時反映されることを確認
 - [ ] 2D側でも同じ折り操作を出せるようにする(折り線を2Dで描き、同じ確定UIを使用)
-- [ ] 手動確認: 座布団折り→観音折りを3D側の線描画だけで完成できる → コミット `feat: 3D上の折り線描画による重ね折り` → プッシュ
+- [ ] 手動確認: 座布団折り→観音折りを3D側の線描画だけで完成できる → コミット `3D画面に直接線を引いて折る操作を追加(展開図へ自動反映)` → プッシュ
 
 ### Task 2-6: 技法マクロ(中割り・かぶせ・花弁・段・開いてつぶす)
 
@@ -526,7 +538,7 @@ pub fn pleat(...) -> Result<FoldThroughResult, String>;
 
   引数は共通で `(cp, faces, state, flap: Vec<FaceId>, line: [[f64;2];2])`。生成不能な形状ではErrを返し、UI側は「手動の折り操作で代替してください」と案内(要件§12)
 - [ ] ツールレールに「技法」ボタン(サブメニュー5種)を追加し、フラップクリック→線指定→適用の流れを実装
-- [ ] テスト成功確認 → コミット `feat: 基本技法マクロ` → プッシュ
+- [ ] テスト成功確認 → コミット `中割り折りなど基本の折り方5種を選ぶだけで折れる機能を追加` → プッシュ
 
 ### Task 2-7: 作図補助・局所平坦判定・めり込み警告
 
@@ -535,7 +547,7 @@ pub fn pleat(...) -> Result<FoldThroughResult, String>;
 - [ ] 作図補助(テスト先行): `bisector(角の3点)` / `perpendicular(点, 辺)` / `divide_points(辺, n)` / `direction_lines(点, 22.5°刻み)`。ツールレールのサブメニューから利用
 - [ ] 局所平坦判定: 内部頂点ごとに前川(山−谷=±2)・川崎(交互角和=180°)を検査し違反頂点を返す→2Dで橙色表示(CPE-009)
 - [ ] めり込み簡易警告: Frame3Dの面ペアの三角形交差を総当たり検査(面数400まで想定、rayonで並列化)→交差ありなら3Dビューに警告バッジ(SIM-007)
-- [ ] テスト成功確認 → コミット `feat: 作図補助・平坦判定・めり込み警告` → プッシュ
+- [ ] テスト成功確認 → コミット `作図の補助線・折りたたみ可否の注意表示・紙のめり込み警告を追加` → プッシュ
 
 ### Task 2-8: 自動保存と復旧
 
@@ -543,7 +555,7 @@ pub fn pleat(...) -> Result<FoldThroughResult, String>;
 
 - [ ] 30秒間隔+dirty時のみ`<保存先>.ori3.autosave`へ保存。正常終了時に削除
 - [ ] 起動時`recovery_check`でautosaveの有無を返し、あれば復旧ダイアログ(復元する/破棄する)
-- [ ] storeユニットテスト+手動確認(プロセスkill→再起動→復元) → コミット `feat: 自動保存とクラッシュ復旧` → プッシュ
+- [ ] storeユニットテスト+手動確認(プロセスkill→再起動→復元) → コミット `30秒ごとの自動保存と、異常終了後の復元機能を追加` → プッシュ
 
 ### Task 2-9: M2受け入れ(折り鶴)
 
@@ -551,7 +563,7 @@ pub fn pleat(...) -> Result<FoldThroughResult, String>;
 
 - [ ] 折り鶴を「fold_through+技法マクロの列」でスクリプト構築し、最終状態の層数・外形寸法・決定性を検証する回帰テスト
 - [ ] 手動確認: アプリで鶴を1折りずつ折って完成→展開図の一部を修正→自動再生で形が追従
-- [ ] コミット `test: M2受け入れ(折り鶴)` → プッシュ
+- [ ] コミット `折り鶴が折れることを確認する自動テストを追加` → プッシュ
 
 ## M3: 展開図自動提案(受け入れ: 頭1・尾1・足4の骨格)
 
@@ -568,7 +580,7 @@ impl Skeleton {
 }
 ```
 
-- [ ] テスト(validate正常系/異常系)→実装→コミット `feat: 骨格モデル` → プッシュ
+- [ ] テスト(validate正常系/異常系)→実装→コミット `頭・尾・足などの骨格を指定するためのデータ形式を追加` → プッシュ
 
 ### Task 3-2: 円・川充填の数値最適化
 
@@ -576,7 +588,7 @@ impl Skeleton {
 
 - [ ] テスト: (a)葉2(長さ1,1)を1×1紙に充填→縮尺≥0.5に到達 (b)葉5の充填で全制約(円非重複・紙内)違反がEPS以内 (c)同一シード→同一結果(決定性)
 - [ ] 実装: 変数=各葉の円中心+縮尺s。目的=s最大化。制約=|ci−cj| ≥ s·(li+lj+川幅), 円中心は紙内。射影勾配法(制約違反を射影で戻す)×乱数シード別マルチスタート(既定8スタート、上位4候補を返す)。`rand::rngs::StdRng::seed_from_u64`で決定的に
-- [ ] テスト成功確認 → コミット `feat: 円・川充填最適化` → プッシュ
+- [ ] テスト成功確認 → コミット `骨格に合わせて紙の上に必要な領域を自動配置する計算を追加` → プッシュ
 
 ### Task 3-3: 展開図生成(充填→分子→折り線)
 
@@ -585,7 +597,7 @@ impl Skeleton {
 - [ ] テスト: 葉4+胴1の充填結果から生成したCPが (a)妥当な平面グラフ(extract_faces成功) (b)軸線・稜線が揃い、局所平坦判定の違反頂点数を結果として返す
 - [ ] 実装手順: 円中心のドロネー三角形分割→各三角形をウサギ耳分子(3辺の二等分線+垂線)で充填→四角形以上は扇状分割→山谷割り当て(軸線=谷基調、稜線=山基調の既定則)→`ProposalResult { cp: CreasePattern, violations: usize }`
 - [ ] `proposal_generate`コマンド追加(Skeleton→候補最大4件のVec<ProposalResult>)
-- [ ] テスト成功確認 → コミット `feat: 展開図生成` → プッシュ
+- [ ] テスト成功確認 → コミット `自動配置の結果から展開図を組み立てる機能を追加` → プッシュ
 
 ### Task 3-4: 提案ウィザードUI
 
@@ -593,7 +605,7 @@ impl Skeleton {
 
 - [ ] 3画面構成: ①骨格編集(角の追加/削除ボタン+各角の長さ・太さスライダー+2D骨格プレビュー) ②候補選択(生成4候補の展開図サムネイル+違反数表示) ③確認→`edit_apply ReplaceCreasePattern`で流し込み、ダイアログを閉じる
 - [ ] ツールバーの「提案ウィザード」ボタンから起動。メイン画面に常設UIを追加しない(PRO-004)
-- [ ] 手動確認: 頭1・尾1・足4で鶴系の基本形が得られ、そのまま編集・折りに進める(M3受け入れ) → コミット `feat: 提案ウィザード` → プッシュ
+- [ ] 手動確認: 頭1・尾1・足4で鶴系の基本形が得られ、そのまま編集・折りに進める(M3受け入れ) → コミット `骨格を指定して展開図を提案してもらう画面を追加` → プッシュ
 
 ## M4: 複雑技法 + 書き出し(受け入れ: 伝承のカエル)
 
@@ -603,7 +615,7 @@ impl Skeleton {
 
 - [ ] テスト: 鶴の基本形の頂点を沈める→対象領域の全層で山谷が反転し、層順序が沈め込み後の入れ子順になる
 - [ ] 実装: `pub fn open_sink(cp, faces, state, region_line: [[f64;2];2]) -> Result<FoldThroughResult, String>`。折り線より先端側の全層について、(a)折り線で各層を分割 (b)先端側の山谷を反転 (c)層順序を内外反転して再挿入
-- [ ] テスト成功確認 → コミット `feat: 沈め折り` → プッシュ
+- [ ] テスト成功確認 → コミット `沈め折りを選ぶだけで折れる機能を追加` → プッシュ
 
 ### Task 4-2: ひだ寄せ・ねじり折り
 
@@ -611,7 +623,7 @@ impl Skeleton {
 
 - [ ] `pub fn swivel(...)`: 基準線+寄せ線の2線指定でひだを寄せる(fold_through2回+層併合)
 - [ ] `pub fn twist(...)`: 多角形領域+周辺ひだ線の指定でねじる(領域回転配置+周辺ひだのfold_through列)
-- [ ] 各テスト(層数・順序・CP追加線の検証)→実装→コミット `feat: ひだ寄せ・ねじり折り` → プッシュ
+- [ ] 各テスト(層数・順序・CP追加線の検証)→実装→コミット `ひだ寄せとねじり折りを選ぶだけで折れる機能を追加` → プッシュ
 
 ### Task 4-3: 展開図SVG/PNG書き出し
 
@@ -619,7 +631,7 @@ impl Skeleton {
 
 - [ ] テスト: 生成SVGに線種別スタイル(山=一点鎖線/谷=破線/輪郭=実線)が含まれ、viewBoxが実寸mm。PNGが指定解像度で非空
 - [ ] 実装: SVGは文字列組み立て(`svg`クレート可)。PNGはresvgでSVGをラスタライズ。`document_export`コマンド追加(種別enum: CpSvg/CpPng/DiagramPdf/DiagramSvg)+書き出しダイアログ(補助線含む/含まない、PNG解像度)
-- [ ] テスト成功確認 → コミット `feat: 展開図SVG/PNG書き出し` → プッシュ
+- [ ] テスト成功確認 → コミット `展開図を画像ファイルとして保存する機能を追加` → プッシュ
 
 ### Task 4-4: 折り図レンダラ(ステップ図)
 
@@ -627,7 +639,7 @@ impl Skeleton {
 
 - [ ] テスト: 3ステップの手順から3コマのSVGが生成され、各コマに(a)折る前の平坦状態の正射影(可視輪郭+可視折線) (b)今回の折り線(山=一点鎖線/谷=破線) (c)技法別矢印(TechniqueKindごとに固定の記号パス)が含まれる
 - [ ] 実装: `pub fn render_step(doc: &Document, step_index: usize) -> String /* SVG */`。投影は該当ステップ直前のFlatStateの最上層から可視面を層順に描画。矢印記号はTechniqueKind→固定SVGパスのテーブル(谷矢印/山矢印/中割り/かぶせ/花弁/つぶし/沈め/ひだ/ねじり/ポーズの10種)
-- [ ] テスト成功確認 → コミット `feat: 折り図ステップレンダラ` → プッシュ
+- [ ] テスト成功確認 → コミット `折り手順を1コマずつ図にする機能を追加` → プッシュ
 
 ### Task 4-5: 折り図PDF/SVG組版
 
@@ -636,7 +648,7 @@ impl Skeleton {
 - [ ] テスト: 7ステップの手順→A4・2列×3コマで2ページのPDFが生成される(ページ数・非空を検証)。SVG版はページ単位のファイル群
 - [ ] 実装: render_stepのSVGをA4(210×297mm)グリッドに配置(コマ番号+注記付き)、svg2pdfでPDF化。表紙(タイトル+完成図)を1ページ目に付ける
 - [ ] 書き出しダイアログにDiagramPdf/DiagramSvgを接続
-- [ ] テスト成功確認 → コミット `feat: 折り図PDF/SVG書き出し` → プッシュ
+- [ ] テスト成功確認 → コミット `折り図をPDFとして保存する機能を追加` → プッシュ
 
 ### Task 4-6: M4受け入れ(伝承のカエル)
 
@@ -644,7 +656,7 @@ impl Skeleton {
 
 - [ ] 伝承のカエル(花弁折り・中割り折り・段折りを含む)をスクリプト構築する回帰テスト(最終層数・決定性)
 - [ ] 手動確認: アプリでカエルを折って完成→折り図PDFを書き出し、内容を目視確認
-- [ ] コミット `test: M4受け入れ(カエル)` → プッシュ
+- [ ] コミット `伝承のカエルが折れて折り図を出せることを確認する自動テストを追加` → プッシュ
 
 ## 3. マイルストーン完了時の共通チェック
 
