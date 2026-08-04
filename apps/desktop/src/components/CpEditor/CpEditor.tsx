@@ -30,6 +30,7 @@ export function CpEditor({ fitRef }: Props) {
   const doc = useAppStore((s) => s.doc);
   const selection = useAppStore((s) => s.selection);
   const activeTool = useAppStore((s) => s.activeTool);
+  const docEpoch = useAppStore((s) => s.docEpoch);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -83,6 +84,23 @@ export function CpEditor({ fitRef }: Props) {
   useEffect(() => {
     draw();
   }, [doc, selection, activeTool, draw]);
+
+  // 新規作成・ファイルを開いた直後は紙全体が見える表示に戻す
+  useEffect(() => {
+    viewRef.current = null; // 次のdrawが全体表示から作り直す
+    draw();
+  }, [docEpoch, draw]);
+
+  // ツール切替時は描画途中・選択途中の一時状態を破棄する
+  // (山折りの1点目を谷折りに引き継ぐ、といった取り違えを防ぐ)
+  useEffect(() => {
+    const st = stateRef.current;
+    st.pendingStart = null;
+    st.downScreen = null;
+    st.marqueeStart = null;
+    st.marqueeEnd = null;
+    draw();
+  }, [activeTool, draw]);
 
   // 区画サイズの変化に追従
   useEffect(() => {
@@ -145,16 +163,18 @@ export function CpEditor({ fitRef }: Props) {
             ? "crosshair"
             : "default",
       }}
-      onMouseDown={(e) => {
+      onPointerDown={(e) => {
         e.preventDefault();
+        // ポインタ捕捉: canvas外へ出てもmove/upが届き、ドラッグ状態が残留しない
+        e.currentTarget.setPointerCapture(e.pointerId);
         withCtx((ctx) => onMouseDown(ctx, screenPos(e), e.button));
       }}
-      onMouseMove={(e) => withCtx((ctx) => onMouseMove(ctx, screenPos(e)))}
-      onMouseUp={(e) => withCtx((ctx) => onMouseUp(ctx, screenPos(e), e.button))}
-      onMouseLeave={() => {
+      onPointerMove={(e) => withCtx((ctx) => onMouseMove(ctx, screenPos(e)))}
+      onPointerUp={(e) => withCtx((ctx) => onMouseUp(ctx, screenPos(e), e.button))}
+      onPointerLeave={() => {
+        // 捕捉中はleaveが飛ばないため、ここに来るのはドラッグしていない時だけ
         stateRef.current.hoverSnap = null;
         stateRef.current.cursorWorld = null;
-        stateRef.current.panLast = null;
         draw();
       }}
       onWheel={(e) => withCtx((ctx) => onWheel(ctx, screenPos(e), e.deltaY))}

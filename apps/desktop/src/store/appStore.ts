@@ -1,9 +1,12 @@
 // アプリ全体の状態を1本で管理するZustandストア(要件§2: フロント状態はストア1本)。
 // IPC呼び出しはactionの中で行い、成功したらDocumentViewの内容を一括反映、
 // 失敗(reject)はerrorMessageへ入れる(「止めずに警告」原則)。
+// 全IPC要求は直列化キュー(ipcQueue.ts)を通し、連続操作でも適用順を発行順に
+// 固定する。最新でない応答は破棄する(古いdocによる上書きを防ぐ)。
 
 import { create } from "zustand";
 import * as ipc from "../ipc/client";
+import { createSerialQueue } from "./ipcQueue";
 import type {
   Document,
   DocumentView,
@@ -33,6 +36,8 @@ interface AppState {
   /** 表示中の折り手順番号(Task 1-9以降で使用) */
   currentStep: number | null;
   errorMessage: string | null;
+  /** 作品の世代番号。新規/開くの成功で増える(エディタの表示リセット合図) */
+  docEpoch: number;
 
   newDocument: (paper: Paper) => Promise<void>;
   openDocument: (path: string) => Promise<void>;
@@ -57,23 +62,42 @@ function pruneSelection(selection: Selection, doc: Document): Selection {
 }
 
 export const useAppStore = create<AppState>((set, get) => {
-  /** DocumentViewの内容で状態を一括更新する(成功時共通処理) */
-  const applyView = (view: DocumentView, clearSelection: boolean) => {
+  const queue = createSerialQueue();
+
+  /** DocumentViewの内容で状態を一括更新する(成功時共通処理)。
+   * isNewDocument=true(新規/開く)なら選択を解除しdocEpochを進める */
+  const applyView = (view: DocumentView, isNewDocument: boolean) => {
     set((s) => ({
       doc: view.doc,
       faces: view.faces,
       warnings: view.warnings,
       violations: view.violations,
-      selection: clearSelection
+      selection: isNewDocument
         ? EMPTY_SELECTION
         : pruneSelection(s.selection, view.doc),
       errorMessage: null,
+      docEpoch: isNewDocument ? s.docEpoch + 1 : s.docEpoch,
     }));
   };
 
   /** IPC失敗(reject)をerrorMessageへ反映する */
   const fail = (e: unknown) => {
     set({ errorMessage: typeof e === "string" ? e : String(e) });
+  };
+
+  /** DocumentViewを返すコマンドを直列化キュー経由で実行し、結果を反映する。
+   * 完了時点で最新でない応答は捨てる(最新の応答は必ず後から届く) */
+  const runViewCommand = async (
+    task: () => Promise<DocumentView>,
+    isNewDocument: boolean,
+  ): Promise<void> => {
+    const r = await queue.run(task);
+    if (!r.isLatest) return;
+    if (r.ok) {
+      applyView(r.value, isNewDocument);
+    } else {
+      fail(r.error);
+    }
   };
 
   return {
@@ -86,55 +110,28 @@ export const useAppStore = create<AppState>((set, get) => {
     frame3d: null,
     currentStep: null,
     errorMessage: null,
+    docEpoch: 0,
 
-    newDocument: async (paper) => {
-      try {
-        applyView(await ipc.documentNew(paper), true);
-      } catch (e) {
-        fail(e);
-      }
-    },
+    newDocument: (paper) => runViewCommand(() => ipc.documentNew(paper), true),
 
-    openDocument: async (path) => {
-      try {
-        applyView(await ipc.documentOpen(path), true);
-      } catch (e) {
-        fail(e);
-      }
-    },
+    openDocument: (path) => runViewCommand(() => ipc.documentOpen(path), true),
 
     saveDocument: async (path) => {
-      try {
-        await ipc.documentSave(path);
+      // 保存も直列化する(直前の編集が確定してから保存されることを保証)。
+      // 状態の更新はないので、応答の新旧に関わらず結果を報告する
+      const r = await queue.run(() => ipc.documentSave(path));
+      if (r.ok) {
         set({ errorMessage: null });
-      } catch (e) {
-        fail(e);
+      } else {
+        fail(r.error);
       }
     },
 
-    applyEdit: async (op) => {
-      try {
-        applyView(await ipc.editApply(op), false);
-      } catch (e) {
-        fail(e);
-      }
-    },
+    applyEdit: (op) => runViewCommand(() => ipc.editApply(op), false),
 
-    undo: async () => {
-      try {
-        applyView(await ipc.editUndo(), false);
-      } catch (e) {
-        fail(e);
-      }
-    },
+    undo: () => runViewCommand(() => ipc.editUndo(), false),
 
-    redo: async () => {
-      try {
-        applyView(await ipc.editRedo(), false);
-      } catch (e) {
-        fail(e);
-      }
-    },
+    redo: () => runViewCommand(() => ipc.editRedo(), false),
 
     setTool: (tool) => {
       // ツール切替時は選択を保つ必要がないので解除する
