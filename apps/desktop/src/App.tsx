@@ -7,6 +7,7 @@ import { useAppStore } from "./store/appStore";
 import { ToolRail } from "./components/ToolRail";
 import { ContextPanel } from "./components/ContextPanel";
 import { CpEditor } from "./components/CpEditor/CpEditor";
+import { Viewer3D } from "./components/Viewer3D/Viewer3D";
 import "./App.css";
 
 const DEFAULT_PAPER = { width_mm: 150, height_mm: 150 };
@@ -18,7 +19,10 @@ function App() {
   const saveDocument = useAppStore((s) => s.saveDocument);
   const undo = useAppStore((s) => s.undo);
   const redo = useAppStore((s) => s.redo);
-  const warningCount = useAppStore((s) => s.warnings.length);
+  const warningCount = useAppStore(
+    (s) => s.warnings.length + s.poseWarnings.length,
+  );
+  const poseConverged = useAppStore((s) => s.poseConverged);
   const hasError = useAppStore((s) => s.errorMessage !== null);
   const fitViewRef = useRef<(() => void) | null>(null);
 
@@ -67,13 +71,17 @@ function App() {
           <CpEditor fitRef={fitViewRef} />
         </section>
         <section className="pane pane-3d">
-          <div className="placeholder">3Dビュー(Task 1-9で実装)</div>
+          <Viewer3D />
           {(hasError || warningCount > 0) && (
             <div
               className={hasError ? "status-badge error" : "status-badge"}
               title="詳細は下のパネルに表示されます"
             >
-              {hasError ? "エラー" : `警告 ${warningCount}`}
+              {hasError
+                ? "エラー"
+                : poseConverged
+                  ? `警告 ${warningCount}`
+                  : "⚠ 追従計算が収束していません"}
             </div>
           )}
         </section>

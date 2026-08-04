@@ -1,8 +1,10 @@
-// appStoreの直列化まわりのテスト: 「成功したviewはisLatestに関わらず破棄されない」
-// ことを固定する(A成功→B失敗でも、画面はAのdocを保持しバックエンドと一致する)。
+// appStoreのテスト:
+//  - 直列化まわり:「成功したviewはisLatestに関わらず破棄されない」
+//    (A成功→B失敗でも、画面はAのdocを保持しバックエンドと一致する)
+//  - 折り角度の指定: 60ms間引き・全解除・展開図編集後の追従
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DocumentView } from "../lib/types";
+import type { DocumentView, Driver, SolveResult } from "../lib/types";
 
 vi.mock("../ipc/client", () => ({
   documentNew: vi.fn(),
@@ -12,10 +14,14 @@ vi.mock("../ipc/client", () => ({
   editUndo: vi.fn(),
   editRedo: vi.fn(),
   sequenceApply: vi.fn(),
+  poseSolve: vi.fn(),
 }));
 
 import * as ipc from "../ipc/client";
 import { useAppStore } from "./appStore";
+
+/** 角度の間引き間隔(appStore.tsのPOSE_THROTTLE_MS)より少し長く待つ時間(ms) */
+const POSE_WAIT_MS = 100;
 
 /** 手動でresolve/rejectできるPromise */
 function deferred<T>() {
@@ -63,8 +69,35 @@ function makeView(mark: number): DocumentView {
   };
 }
 
+/** 対角線(辺ID 5、山折り)で2つの面に分かれた正方形のview */
+function makeHingeView(mark: number): DocumentView {
+  const view = makeView(mark);
+  view.doc.cp.edges.push({ id: 5, v0: 0, v1: 2, kind: "Mountain" });
+  view.faces = [
+    { id: 0, vertices: [0, 1, 2], edges: [0, 1, 5] },
+    { id: 1, vertices: [0, 2, 3], edges: [5, 2, 3] },
+  ];
+  return view;
+}
+
+/** 平らなSolveResult(角度だけ差し替えられる) */
+function makeSolveResult(angles: Record<string, number> = {}): SolveResult {
+  return {
+    frame: { faces: [], warnings: [] },
+    converged: true,
+    angles,
+    iterations: 1,
+  };
+}
+
+/** poseSolveへ渡された引数(呼び出し番号ごと) */
+function poseCalls(): Driver[][] {
+  return vi.mocked(ipc.poseSolve).mock.calls.map(([drivers]) => drivers);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(ipc.poseSolve).mockResolvedValue(makeSolveResult());
   useAppStore.setState({
     doc: null,
     faces: [],
@@ -73,6 +106,11 @@ beforeEach(() => {
     selection: { edgeIds: [], vertexIds: [] },
     errorMessage: null,
     docEpoch: 0,
+    drivers: new Map(),
+    poseAngles: new Map(),
+    poseWarnings: [],
+    poseConverged: true,
+    frame3d: null,
   });
 });
 
@@ -145,5 +183,78 @@ describe("appStore 直列化と応答の反映", () => {
     const s = useAppStore.getState();
     expect(s.doc?.cp.next_edge_id).toBe(400); // Bの成功が反映される
     expect(s.errorMessage).toBeNull(); // 古い失敗は報告されない
+  });
+});
+
+/** 次のマクロタスクまで待ち、溜まっているPromiseの続きを流し切る */
+function flush(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+describe("appStore 折り角度の指定", () => {
+  it("連続操作は60msで間引かれ、最後の角度が必ず送られる", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = useAppStore.getState();
+      store.setDriverAngle(5, 10);
+      store.setDriverAngle(5, 20);
+      store.setDriverAngle(5, 30);
+      expect(ipc.poseSolve).not.toHaveBeenCalled(); // まだ送っていない
+      await vi.advanceTimersByTimeAsync(POSE_WAIT_MS);
+      expect(poseCalls()).toEqual([[{ hinge: 5, target_angle_deg: 30 }]]);
+      expect(useAppStore.getState().drivers.get(5)).toBe(30);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("「全て平らに戻す」は全ての折り線へ0度を指定して送る", async () => {
+    const view = makeHingeView(500);
+    useAppStore.setState({ doc: view.doc, faces: view.faces });
+
+    const store = useAppStore.getState();
+    store.setDriverAngle(5, 90);
+    store.clearDrivers();
+    await flush();
+
+    // 間引き中の分は送られず、平ら指定だけが1回送られる
+    expect(poseCalls()).toEqual([[{ hinge: 5, target_angle_deg: 0 }]]);
+    expect(useAppStore.getState().drivers.size).toBe(0);
+  });
+
+  it("展開図を編集すると残った指定で計算し直し、折り線でなくなった指定は捨てる", async () => {
+    const view = makeHingeView(600);
+    useAppStore.setState({
+      doc: view.doc,
+      faces: view.faces,
+      drivers: new Map([
+        [5, 90],
+        [9, 45], // この辺は編集後のviewに存在しない
+      ]),
+    });
+    vi.mocked(ipc.editApply).mockResolvedValueOnce(makeHingeView(601));
+
+    await useAppStore.getState().applyEdit({ type: "RemoveEdges", ids: [9] });
+
+    expect(poseCalls()).toEqual([[{ hinge: 5, target_angle_deg: 90 }]]);
+    expect([...useAppStore.getState().drivers]).toEqual([[5, 90]]);
+  });
+
+  it("収束しなかった結果は警告と収束フラグに反映される", async () => {
+    const result = makeSolveResult({ "5": 90 });
+    result.converged = false;
+    result.frame.warnings = ["追従計算が収束していません"];
+    vi.mocked(ipc.poseSolve).mockResolvedValueOnce(result);
+    const view = makeHingeView(700);
+    useAppStore.setState({ doc: view.doc, faces: view.faces });
+
+    useAppStore.getState().clearDrivers();
+    await flush();
+
+    const s = useAppStore.getState();
+    expect(s.poseConverged).toBe(false);
+    expect(s.poseWarnings).toEqual(["追従計算が収束していません"]);
+    expect(s.poseAngles.get(5)).toBe(90);
+    expect(s.errorMessage).toBeNull(); // 追従計算の警告はエラーにしない
   });
 });

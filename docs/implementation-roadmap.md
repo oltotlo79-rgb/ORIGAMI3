@@ -417,11 +417,11 @@ pub fn solve(cp: &CreasePattern, faces: &[Face], drivers: &[Driver],
 
 **Files:** `apps/desktop/src/components/Viewer3D/{Viewer3D.tsx, sceneBuilder.ts, hingePicker.ts}`, `ContextPanel.tsx`(ヒンジ選択時の内容)
 
-- [ ] `sceneBuilder.ts`: Frame3Dから面メッシュ生成(表=front_color/裏=back_color、DoubleSide不使用で2枚描き)、辺のライン表示、OrbitControls
-- [ ] `hingePicker.ts`: 3D上の辺クリックでヒンジ選択(raycast、選択中は黄色強調)
-- [ ] コンテキストパネル(ヒンジ選択時): 角度スライダー(−180〜+180)+数値入力。変更のたび`pose_solve`を呼びFrame3D更新(60ms間引き)
-- [ ] 不収束時: 3Dビュー右上に警告バッジ「⚠ 追従計算が収束していません」を表示(操作は継続)
-- [ ] 手動確認 → コミット `3D表示画面と、折り線ごとの角度操作を追加` → プッシュ
+- [x] `sceneBuilder.ts`: Frame3Dから面メッシュ生成(表=front_color/裏=back_color、DoubleSide不使用で2枚描き)、辺のライン表示、OrbitControls
+- [x] `hingePicker.ts`: 3D上の辺クリックでヒンジ選択(画面距離しきい値で判定、選択中は黄色強調)
+- [x] コンテキストパネル(ヒンジ選択時): 角度スライダー(−180〜+180)+数値入力。変更のたび`pose_solve`を呼びFrame3D更新(60ms間引き)
+- [x] 不収束時: 3Dビュー右上に警告バッジ「⚠ 追従計算が収束していません」を表示(操作は継続)
+- [x] 手動確認 → コミット `3D表示画面と、折り線ごとの角度操作を追加` → プッシュ
 
 ### Task 1-10: M1受け入れ(やっこさん)
 
