@@ -433,7 +433,18 @@ pub fn solve(cp: &CreasePattern, faces: &[Face], drivers: &[Driver],
 
 ## M2: 層順序 + 折り操作 + 手順(受け入れ: 折り鶴)
 
-### Task 2-1: ori3-layers 平坦状態
+### Task 2-0: 剛体折りソルバーの性能・数値改修(M1品質レビューからの必須引き継ぎ)
+
+**Files:** `crates/ori3-rigid/src/{tree,solver}.rs`, `apps/desktop/src-tauri/src/commands.rs`
+
+M1の品質レビューで「面400・辺1,000でsolve 33ms以内(NFR-002)」に対し現行の密行列Gauss-Newtonは約30倍超過と判定された。M2の手順再生(毎ステップ±180°平坦到達の連続solve)に入る前に以下を改修する:
+
+- [ ] 疎ヤコビアン化: ヒンジhの列は「hを含む基本ループの残差12成分」のみ非零。ループ局所性を使いJtJ構築と数値微分の全域再伝播を排除(可能なら回転微分の解析式化)。目標: 面400でsolve 33ms以内をベンチテストで確認
+- [ ] 収束判定を残差本数でスケールするRMS基準に変更(現行の絶対値1e-12は大規模でf64ノイズ床と衝突し、厳密解でもconverged=falseになり得る)
+- [ ] ±180°近傍の縮退対策: 前進差分h=1e-6を中心差分またはh適応に(平坦到達の収束減速防止)
+- [ ] ±180°またぎのwrapで山谷符号が反転する問題: wrap前にwarm start前回値へ近い側を選ぶunwrap処理
+- [ ] 軽微: kind_signの線形走査をマップ化 / solve内のbuild_forest二重実行除去 / pose_solveのextract_faces毎回実行をstoreのキャッシュ流用に / driverを外した自由ヒンジがwarm start値のまま残る挙動をdocに明文化
+- [ ] コミット `折りの計算を大きな作品でも間に合う速さに改良` → プッシュ
 
 **Files:** `crates/ori3-layers/src/{lib,flat_state}.rs`, `tests/flat_state.rs`
 
