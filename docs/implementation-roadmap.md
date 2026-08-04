@@ -235,11 +235,11 @@ pub struct Frame3D { pub faces: Vec<Face3D>, pub warnings: Vec<String> }
 
 **Files:** `Cargo.toml`, `crates/ori3-{model,geometry,cp,rigid,layers,propose,export}/Cargo.toml`, 各 `src/lib.rs`, `.gitignore`
 
-- [ ] ルート`Cargo.toml`にworkspace(members = crates/* と apps/desktop/src-tauri)を定義
-- [ ] 各クレートを`cargo new --lib`で作成。依存: model(なし) / geometry(model, glam) / cp(geometry) / rigid(cp) / layers(cp) / propose(cp, rand) / export(layers, rigid, resvg, svg2pdf)
-- [ ] 共通依存(serde, serde_json, thiserror, glam)はworkspace.dependenciesで一元管理。バージョンは最新安定版を選び`Cargo.lock`で固定
-- [ ] `cargo test --workspace` と `cargo clippy --workspace --all-targets -- -D warnings` が通ることを確認
-- [ ] コミット `計算部品を置くためのフォルダ構成と空の部品一式を作成` → プッシュ
+- [x] ルート`Cargo.toml`にworkspace(members = crates/* と apps/desktop/src-tauri)を定義
+- [x] 各クレートを`cargo new --lib`で作成。依存: model(なし) / geometry(model, glam) / cp(geometry) / rigid(cp) / layers(cp) / propose(cp, rand) / export(layers, rigid, resvg, svg2pdf)
+- [x] 共通依存(serde, serde_json, thiserror, glam)はworkspace.dependenciesで一元管理。バージョンは最新安定版を選び`Cargo.lock`で固定
+- [x] `cargo test --workspace` と `cargo clippy --workspace --all-targets -- -D warnings` が通ることを確認
+- [x] コミット `計算部品を置くためのフォルダ構成と空の部品一式を作成` → プッシュ
 
 ### Task 0-2: Tauriアプリ雛形
 

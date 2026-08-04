@@ -1,0 +1,6 @@
+[package]
+name = "ori3-model"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

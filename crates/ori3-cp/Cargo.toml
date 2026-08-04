@@ -1,0 +1,7 @@
+[package]
+name = "ori3-cp"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ori3-geometry.workspace = true

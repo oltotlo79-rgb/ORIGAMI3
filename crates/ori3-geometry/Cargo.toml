@@ -1,0 +1,8 @@
+[package]
+name = "ori3-geometry"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ori3-model.workspace = true
+glam.workspace = true
