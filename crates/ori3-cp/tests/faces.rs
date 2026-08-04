@@ -79,6 +79,31 @@ fn floating_segment_keeps_one_face() {
 }
 
 #[test]
+fn dangling_slit_is_traversed_on_both_sides() {
+    let mut cp = square_cp();
+    // 下辺の中点から内部へ伸びるぶら下がり線(スリット)
+    insert_segment(&mut cp, [0.5, 0.0], [0.5, 0.5], EdgeKind::Mountain);
+    let faces = extract_faces(&cp);
+    assert_eq!(faces.len(), 1, "スリットは面を増やさない");
+    let f = &faces[0];
+    let base = cp.vertices.iter().find(|v| v.pos == [0.5, 0.0]).unwrap().id;
+    let tip = cp.vertices.iter().find(|v| v.pos == [0.5, 0.5]).unwrap().id;
+    // 境界を両側から辿るため、付け根の頂点は2回・先端は1回現れる
+    assert_eq!(f.vertices.iter().filter(|&&v| v == base).count(), 2);
+    assert_eq!(f.vertices.iter().filter(|&&v| v == tip).count(), 1);
+    // スリット辺は境界辺列に2回(往復で)現れる
+    let slit = cp
+        .edges
+        .iter()
+        .find(|e| e.kind == EdgeKind::Mountain)
+        .unwrap()
+        .id;
+    assert_eq!(f.edges.iter().filter(|&&e| e == slit).count(), 2);
+    // 往復が相殺され、面積は紙全体のまま
+    assert!((signed_area(&cp, &f.vertices) - 1.0).abs() < 1e-9);
+}
+
+#[test]
 fn aux_edges_are_ignored() {
     let mut cp = square_cp();
     insert_segment(&mut cp, [0.0, 0.0], [1.0, 1.0], EdgeKind::Aux);

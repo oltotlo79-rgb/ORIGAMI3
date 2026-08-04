@@ -22,6 +22,11 @@ pub struct Face {
 /// 補助線(`EdgeKind::Aux`)は折りに関与しないため面の境界には使わず、
 /// Border/Mountain/Valley のみを対象とする。
 ///
+/// 既知の制限: 外周と連結していない閉ループ(入れ子・穴)は面の穴として扱われず、
+/// 領域が重複した面が返る(内側のループが囲む面と、それを含む外側の面の両方が
+/// 返る)。Aux辺のみで外周に繋がるCPでも、面抽出はAuxを無視するため折り辺だけを
+/// 見ると非連結になり同じ現象が発生し得る。この状態は validate 関数で検出できる。
+///
 /// 結果の面の順序とID採番は入力CPに対して決定的(辺ID順の走査に基づく)。
 pub fn extract_faces(cp: &CreasePattern) -> Vec<Face> {
     let vpos: BTreeMap<VertexId, DVec2> = cp
