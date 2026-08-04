@@ -2,7 +2,7 @@
 
 use ori3_cp::graph::{insert_segment, move_vertex};
 use ori3_cp::validate::validate;
-use ori3_model::{CreasePattern, Document, EdgeKind, Paper, VertexId};
+use ori3_model::{CreasePattern, Document, Edge, EdgeKind, Paper, Vertex, VertexId};
 
 /// 正方形(輪郭4辺のみ)のCPを作る。
 fn square_cp() -> CreasePattern {
@@ -63,6 +63,85 @@ fn crossing_after_move_vertex_is_reported() {
         "対角線の断片2本が右辺と交差する: {warnings:?}"
     );
     assert!(warnings.iter().all(|w| w.contains("交差")));
+}
+
+#[test]
+fn crushed_bridge_edge_is_reported_as_degenerate_and_disconnected() {
+    let mut cp = square_cp();
+    // 下辺から内部へ伸びる橋辺と、その先端に付く三角形ループ
+    insert_segment(&mut cp, [0.5, 0.0], [0.5, 0.2], EdgeKind::Mountain);
+    insert_segment(&mut cp, [0.5, 0.2], [0.7, 0.5], EdgeKind::Mountain);
+    insert_segment(&mut cp, [0.7, 0.5], [0.3, 0.5], EdgeKind::Mountain);
+    insert_segment(&mut cp, [0.3, 0.5], [0.5, 0.2], EdgeKind::Mountain);
+    assert!(validate(&cp).is_empty(), "移動前は警告なし");
+    // 先端を付け根の真上まで動かして橋辺を長さゼロに潰す。
+    // 頂点IDのグラフとしては繋がったままだが、面抽出視点ではループが浮く
+    let tip = vertex_at(&cp, 0.5, 0.2).unwrap();
+    move_vertex(&mut cp, tip, [0.5, 0.0]);
+    let warnings = validate(&cp);
+    assert_eq!(warnings.len(), 2, "退化辺と連結性の警告: {warnings:?}");
+    assert!(warnings.iter().any(|w| w.contains("ほぼゼロ")));
+    assert!(warnings.iter().any(|w| w.contains("分かれている")));
+}
+
+#[test]
+fn degenerate_edge_is_reported() {
+    // v0==v1 の退化辺を直接組んだCP
+    let cp = CreasePattern {
+        vertices: vec![
+            Vertex {
+                id: 0,
+                pos: [0.0, 0.0],
+            },
+            Vertex {
+                id: 1,
+                pos: [1.0, 0.0],
+            },
+        ],
+        edges: vec![
+            Edge {
+                id: 0,
+                v0: 0,
+                v1: 1,
+                kind: EdgeKind::Border,
+            },
+            Edge {
+                id: 1,
+                v0: 0,
+                v1: 0,
+                kind: EdgeKind::Mountain,
+            },
+        ],
+        next_vertex_id: 2,
+        next_edge_id: 2,
+    };
+    let warnings = validate(&cp);
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("ほぼゼロ"), "{}", warnings[0]);
+    assert!(warnings[0].contains("辺1"));
+}
+
+#[test]
+fn edge_with_missing_vertex_is_reported() {
+    // 存在しない頂点ID(99)を参照する辺を直接組んだCP
+    let cp = CreasePattern {
+        vertices: vec![Vertex {
+            id: 0,
+            pos: [0.0, 0.0],
+        }],
+        edges: vec![Edge {
+            id: 0,
+            v0: 0,
+            v1: 99,
+            kind: EdgeKind::Mountain,
+        }],
+        next_vertex_id: 1,
+        next_edge_id: 1,
+    };
+    let warnings = validate(&cp);
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("存在しない"), "{}", warnings[0]);
+    assert!(warnings[0].contains("辺0"));
 }
 
 #[test]
