@@ -1,0 +1,191 @@
+/* ORIGAMI3 4区画レイアウトと基本部品のスタイル */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  font-family: "Yu Gothic UI", "Meiryo", sans-serif;
+  font-size: 13px;
+  color: #222;
+  background: #f0f0f2;
+  overflow: hidden;
+}
+
+.app {
+  display: grid;
+  grid-template-rows: auto 1fr 160px;
+  height: 100%;
+}
+
+/* 上部ツールバー */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: #e4e4e8;
+  border-bottom: 1px solid #c8c8cc;
+}
+
+.toolbar button {
+  padding: 4px 12px;
+  border: 1px solid #b4b4b8;
+  border-radius: 4px;
+  background: #fafafa;
+  cursor: pointer;
+}
+
+.toolbar button:hover {
+  background: #fff;
+}
+
+.toolbar-separator {
+  width: 1px;
+  height: 20px;
+  background: #c0c0c4;
+  margin: 0 4px;
+}
+
+/* 中央行: ツールレール + 2D + 3D */
+.main-row {
+  display: grid;
+  grid-template-columns: 64px 1fr 1fr;
+  min-height: 0;
+}
+
+.tool-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 6px;
+  background: #e4e4e8;
+  border-right: 1px solid #c8c8cc;
+}
+
+.tool-button {
+  padding: 8px 0;
+  border: 1px solid #b4b4b8;
+  border-radius: 4px;
+  background: #fafafa;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.tool-button:hover {
+  background: #fff;
+}
+
+.tool-button.active {
+  background: #3b6fc9;
+  border-color: #2d5aa8;
+  color: #fff;
+}
+
+.pane {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pane-2d {
+  background: #d8d8dc;
+  border-right: 1px solid #c8c8cc;
+}
+
+.pane-3d {
+  background: #caccd4;
+}
+
+.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #888;
+}
+
+/* 3D区画右上の警告/エラーバッジ */
+.status-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 3px 10px;
+  border-radius: 10px;
+  background: #e6a817;
+  color: #fff;
+  font-weight: bold;
+}
+
+.status-badge.error {
+  background: #d43c3c;
+}
+
+/* 下部コンテキストパネル */
+.context-panel {
+  display: flex;
+  gap: 16px;
+  padding: 8px 12px;
+  background: #e4e4e8;
+  border-top: 1px solid #c8c8cc;
+  overflow-y: auto;
+}
+
+.context-panel p {
+  margin: 2px 0;
+}
+
+.context-selection {
+  flex: 1;
+  min-width: 0;
+}
+
+.context-messages {
+  flex: 1;
+  min-width: 0;
+  border-left: 1px solid #c8c8cc;
+  padding-left: 16px;
+  overflow-y: auto;
+}
+
+.button-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.button-row button {
+  padding: 3px 10px;
+  border: 1px solid #b4b4b8;
+  border-radius: 4px;
+  background: #fafafa;
+  cursor: pointer;
+}
+
+.button-row button:hover {
+  background: #fff;
+}
+
+.vertex-list {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.hint {
+  color: #666;
+}
+
+.error-text {
+  color: #b42424;
+  font-weight: bold;
+}
+
+.warning-text {
+  color: #8a6100;
+}

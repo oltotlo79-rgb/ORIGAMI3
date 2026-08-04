@@ -355,11 +355,11 @@ pub struct DocumentView {
 
 **Files:** `apps/desktop/src/{App.tsx, store/appStore.ts, ipc/client.ts, lib/types.ts, components/{ToolRail,ContextPanel}.tsx}`
 
-- [ ] `lib/types.ts`: §2のRust型に対応するTS型を手書きで定義(Document, EditOp, SeqOp, Frame3D等。フィールド名はserde出力と一致させる)
-- [ ] `ipc/client.ts`: 13コマンドそれぞれの型付きラッパー関数のみ(1関数5行以内)
-- [ ] `store/appStore.ts`(Zustand): 状態は `doc / faces / violations / selection / activeTool / frame3d / currentStep / warnings` と各action。IPC呼び出しはactionの中で行う
-- [ ] `App.tsx`: 4区画CSSグリッド(ツールレール64px / 2Dと3Dは1:1で可変 / 下部コンテキストパネル160px)。200行以内
-- [ ] `npm run build`成功 → コミット `画面の基本レイアウト(4区画)と画面側の土台を追加` → プッシュ
+- [x] `lib/types.ts`: §2のRust型に対応するTS型を手書きで定義(Document, EditOp, SeqOp, Frame3D等。フィールド名はserde出力と一致させる)
+- [x] `ipc/client.ts`: 型付きラッパー関数のみ(1関数5行以内)。実装済み7コマンド分を定義し、残り6コマンドは各実装タスクで追加する
+- [x] `store/appStore.ts`(Zustand): 状態は `doc / faces / violations / selection / activeTool / frame3d / currentStep / warnings` と各action。IPC呼び出しはactionの中で行う
+- [x] `App.tsx`: 4区画CSSグリッド(ツールレール64px / 2Dと3Dは1:1で可変 / 下部コンテキストパネル160px)。200行以内
+- [x] `npm run build`成功 → コミット `画面の基本レイアウト(4区画)と画面側の土台を追加` → プッシュ
 
 ### Task 1-6: 2D展開図エディタ
 

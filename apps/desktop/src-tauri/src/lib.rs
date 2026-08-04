@@ -9,6 +9,7 @@ use store::DocumentStore;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(Mutex::new(DocumentStore::default()))
         .invoke_handler(tauri::generate_handler![
             commands::document_new,
