@@ -39,7 +39,8 @@ impl FlatState {
 
     /// 永続化された代表点リスト(下→上)を現在の面IDへ解決する。
     ///
-    /// 各点は、それを含む面のうち未使用で最も面IDが小さいものへ解決する。
+    /// 各点は、それを含む面のうち未使用で `faces` の並び順で最初のものへ解決する
+    /// (`extract_faces` は面ID昇順で返すため、実質は最も面IDが小さいもの)。
     /// どの面にも入らない点と、既に使われた面しか指さない点はその層を飛ばし、
     /// 警告(日本語)として返す。解決されなかった面は元の相対順(`faces` の順)
     /// を保って末尾側に補うため、戻り値には常に全ての面がちょうど1回ずつ含まれる。
@@ -186,15 +187,7 @@ fn face_polygon(pos: &HashMap<VertexId, DVec2>, face: &Face) -> Vec<DVec2> {
 /// 尖り(前後の点が一致する頂点)を無くなるまで取り除く。
 /// 念のため反時計回りに揃える。
 fn simple_polygon(boundary: &[DVec2]) -> Vec<DVec2> {
-    let mut pts: Vec<DVec2> = Vec::with_capacity(boundary.len());
-    for &p in boundary {
-        if pts.last().is_none_or(|&q| (q - p).length() > EPS) {
-            pts.push(p);
-        }
-    }
-    while pts.len() > 1 && (pts[0] - pts[pts.len() - 1]).length() <= EPS {
-        pts.pop();
-    }
+    let mut pts = dedup_consecutive(boundary);
     loop {
         let n = pts.len();
         if n < 3 {
@@ -212,11 +205,28 @@ fn simple_polygon(boundary: &[DVec2]) -> Vec<DVec2> {
             .filter(|&(i, _)| i != tip && i != dup)
             .map(|(_, &p)| p)
             .collect();
+        // 枝分かれしたスリットでは尖りを取り除いた跡で重複点が隣り合うことがあるので、
+        // 長さ0の辺を残さないよう毎回潰し直す(点数は必ず減るので必ず止まる)。
+        pts = dedup_consecutive(&pts);
     }
     if signed_area(&pts) < 0.0 {
         pts.reverse();
     }
     pts
+}
+
+/// 連続した重複点(一周して隣り合う始点と終点の重複を含む)を潰す。
+fn dedup_consecutive(pts: &[DVec2]) -> Vec<DVec2> {
+    let mut out: Vec<DVec2> = Vec::with_capacity(pts.len());
+    for &p in pts {
+        if out.last().is_none_or(|&q| (q - p).length() > EPS) {
+            out.push(p);
+        }
+    }
+    while out.len() > 1 && (out[0] - out[out.len() - 1]).length() <= EPS {
+        out.pop();
+    }
+    out
 }
 
 fn signed_area(poly: &[DVec2]) -> f64 {

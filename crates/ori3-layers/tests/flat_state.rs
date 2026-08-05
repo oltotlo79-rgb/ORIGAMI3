@@ -154,6 +154,29 @@ fn representative_point_of_concave_slit_face_is_inside() {
 }
 
 #[test]
+fn representative_point_of_branched_slit_face_is_inside() {
+    let mut cp = square_cp();
+    // 下辺から伸びてY字に枝分かれするスリット(尖りを潰す処理が入れ子になる)。
+    insert_segment(&mut cp, [0.5, 0.0], [0.5, 0.4], EdgeKind::Mountain);
+    insert_segment(&mut cp, [0.5, 0.4], [0.35, 0.6], EdgeKind::Mountain);
+    insert_segment(&mut cp, [0.5, 0.4], [0.65, 0.6], EdgeKind::Mountain);
+    let faces = extract_faces(&cp);
+    assert_eq!(faces.len(), 1, "枝分かれしたスリットも面を増やさない");
+
+    let p = representative_point(&cp, &faces[0]);
+    assert!(point_in_face(&cp, &faces[0], p), "代表点 {p:?} は面の内部");
+    // どの切り込みの線上にも乗らない。
+    for (a, b) in [
+        ([0.5, 0.0], [0.5, 0.4]),
+        ([0.5, 0.4], [0.35, 0.6]),
+        ([0.5, 0.4], [0.65, 0.6]),
+    ] {
+        let d = ori3_geometry::dist_point_segment(DVec2::from(p), DVec2::from(a), DVec2::from(b));
+        assert!(d > 1e-9, "代表点 {p:?} は切り込み {a:?}-{b:?} 上にない");
+    }
+}
+
+#[test]
 fn point_in_face_handles_boundary_and_outside() {
     let cp = half_folded_cp();
     let faces = extract_faces(&cp);
