@@ -34,7 +34,8 @@ pub struct DocumentView {
     pub faces: Vec<Face>,
     /// 操作固有の警告 + `ori3_cp::validate` + 手順再生の警告(「止めずに警告」原則)
     pub warnings: Vec<String>,
-    /// 局所平坦折り判定の違反頂点(Task 2-7で実装)。今は常に空
+    /// 平らに畳めない疑いのある点(前川定理・川崎定理を満たさない内部頂点)。
+    /// 操作は止めず、2D画面で色を変えて知らせるだけ(CPE-009)
     pub violations: Vec<VertexId>,
     /// 最新ステップまで自動再生した立体(SEQ-004)。手順が空ならNone
     pub frame: Option<Frame3D>,
@@ -411,7 +412,7 @@ fn build_view(doc: &Document, mut warnings: Vec<String>) -> DocumentView {
         doc: doc.clone(),
         faces: ori3_cp::extract_faces(&doc.cp),
         warnings,
-        violations: Vec::new(),
+        violations: ori3_cp::local_violations(&doc.cp),
         frame: None,
         skipped: Vec::new(),
     }
@@ -430,10 +431,30 @@ pub fn attach_replay(view: &mut DocumentView) {
         return;
     }
     let up_to = view.doc.sequence.len();
-    let replayed = ori3_layers::replay_with_faces(&view.doc, &view.faces, up_to, 1.0);
+    let mut replayed = ori3_layers::replay_with_faces(&view.doc, &view.faces, up_to, 1.0);
+    // 紙のめり込み(SIM-007)。折り上がりは平ら(z≒0)なので通常は出ないが、
+    // 平らに畳みきれない形では立体のまま返るため、そのときに知らせる
+    if add_penetration_warning(&mut replayed.frame) {
+        replayed
+            .warnings
+            .push(ori3_rigid::PENETRATION_WARNING.to_string());
+    }
     view.warnings.extend(replayed.warnings);
     view.skipped = replayed.skipped;
     view.frame = Some(replayed.frame);
+}
+
+/// 立体の面同士が食い込んでいれば、フレームの警告に一文を足す(SIM-007)。
+/// 厳密な防止はせず、気づけるようにするだけ(「止めずに警告」原則)。
+/// 平らに畳んだ状態(z≒0)では層が同一平面に重なるのが正常なので何もしない。
+pub fn add_penetration_warning(frame: &mut Frame3D) -> bool {
+    if ori3_rigid::self_intersects(frame) {
+        frame
+            .warnings
+            .push(ori3_rigid::PENETRATION_WARNING.to_string());
+        return true;
+    }
+    false
 }
 
 fn check_paper(paper: &Paper) -> Result<(), String> {
@@ -1365,6 +1386,44 @@ mod tests {
             target_layers: None,
             direction: ori3_model::FoldDirection::Up,
         }
+    }
+
+    /// CPE-009: 平らに畳めない点がビューに載る(操作は止めない)。
+    #[test]
+    fn view_reports_flat_fold_violations_without_blocking() {
+        let mut store = square_store();
+        // 2本の対角線を山で引くと、中心は山4本(山−谷=4)で前川定理を満たさない
+        let view = store.apply_edit(diagonal()).unwrap();
+        assert!(view.violations.is_empty(), "対角線1本だけなら違反なし");
+        let view = store
+            .apply_edit(EditOp::AddSegment {
+                a: [1.0, 0.0],
+                b: [0.0, 1.0],
+                kind: EdgeKind::Mountain,
+            })
+            .unwrap();
+        // 操作は成功したうえで、中心の1点が「畳めない点」として返る
+        assert_eq!(view.violations.len(), 1, "violations={:?}", view.violations);
+        let id = view.violations[0];
+        let pos = view.doc.cp.vertices.iter().find(|v| v.id == id).unwrap().pos;
+        assert!((pos[0] - 0.5).abs() < 1e-9 && (pos[1] - 0.5).abs() < 1e-9);
+
+        // 1本を谷に変えれば違反は消える(山3・谷1)
+        let mountain = view
+            .doc
+            .cp
+            .edges
+            .iter()
+            .find(|e| e.kind == EdgeKind::Mountain && (e.v0 == id || e.v1 == id))
+            .unwrap()
+            .id;
+        let view = store
+            .apply_edit(EditOp::SetEdgeKind {
+                ids: vec![mountain],
+                kind: EdgeKind::Valley,
+            })
+            .unwrap();
+        assert!(view.violations.is_empty(), "violations={:?}", view.violations);
     }
 
     #[test]

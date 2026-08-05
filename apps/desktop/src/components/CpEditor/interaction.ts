@@ -6,7 +6,8 @@
 import type { Document, EdgeKind, EditOp, Vec2 } from "../../lib/types";
 import type { Selection, ToolId } from "../../store/appStore";
 import { screenToWorld, type ViewTransform } from "./renderer";
-import { snap, type SnapResult } from "./snap";
+import { paperExtent, snap, type SnapResult } from "./snap";
+import { CONSTRUCT_STEPS, constructLines, type ConstructOptions } from "../../lib/construct";
 
 /** 吸着半径(px) */
 export const SNAP_RADIUS_PX = 12;
@@ -32,6 +33,12 @@ export interface EphemeralState {
   downScreen: Vec2 | null;
   /** パン中の直前カーソル位置(px) */
   panLast: Vec2 | null;
+  /** 作図補助でクリック済みの点(正規化座標) */
+  constructPoints: Vec2[];
+  /** 作図補助でクリック済みの線(両端の座標) */
+  constructSeg: [Vec2, Vec2] | null;
+  /** カーソルが乗っている「平らに畳めない点」のID(なければnull) */
+  hoverViolation: number | null;
 }
 
 export function initialEphemeralState(): EphemeralState {
@@ -43,7 +50,44 @@ export function initialEphemeralState(): EphemeralState {
     marqueeEnd: null,
     downScreen: null,
     panLast: null,
+    constructPoints: [],
+    constructSeg: null,
+    hoverViolation: null,
   };
+}
+
+/** 作図補助で集め終えたクリックの数 */
+export function constructDone(state: EphemeralState): number {
+  return state.constructPoints.length + (state.constructSeg ? 1 : 0);
+}
+
+/** 作図補助のクリックを1回分受け取る。必要な数がそろったら補助線を引く */
+function onConstructClick(ctx: InteractionCtx, world: Vec2, snapRadius: number): void {
+  const st = ctx.state;
+  const steps = CONSTRUCT_STEPS[ctx.construct.kind];
+  const need = steps[Math.min(constructDone(st), steps.length - 1)];
+  if (need === "line") {
+    const id = pickEdge(ctx.doc, world, PICK_TOLERANCE_PX / ctx.view.scale);
+    const edge = ctx.doc.cp.edges.find((e) => e.id === id);
+    const byId = new Map(ctx.doc.cp.vertices.map((v) => [v.id, v.pos]));
+    const a = edge && byId.get(edge.v0);
+    const b = edge && byId.get(edge.v1);
+    if (!a || !b) return; // 線に当たらなければ何もしない(案内は出したまま)
+    st.constructSeg = [a, b];
+  } else {
+    st.constructPoints.push(snap(ctx.doc, world, snapRadius)?.pos ?? world);
+  }
+  if (constructDone(st) < steps.length) return;
+  const lines = constructLines(ctx.construct.kind, st.constructPoints, st.constructSeg, {
+    divisions: ctx.construct.divisions,
+    stepDeg: ctx.construct.stepDeg,
+    paper: paperExtent(ctx.doc),
+  });
+  for (const [a, b] of lines) {
+    ctx.applyEdit({ type: "AddSegment", a, b, kind: "Aux" });
+  }
+  st.constructPoints = [];
+  st.constructSeg = null;
 }
 
 /** 操作ハンドラが必要とする文脈(CpEditorが毎イベント渡す) */
@@ -52,6 +96,10 @@ export interface InteractionCtx {
   view: ViewTransform;
   tool: ToolId;
   selection: Selection;
+  /** 作図補助の選び方(どの作図か・等分数・角度の刻み) */
+  construct: ConstructOptions;
+  /** 平らに畳めない点のID(Rust側の判定結果)。橙色の丸で知らせる */
+  violations: number[];
   state: EphemeralState; // その場で書き換える
   setView: (view: ViewTransform) => void;
   applyEdit: (op: EditOp) => void;
@@ -179,6 +227,10 @@ export function onMouseDown(ctx: InteractionCtx, screen: Vec2, button: number): 
     }
     return;
   }
+  if (ctx.tool === "construct") {
+    onConstructClick(ctx, world, snapRadius);
+    return;
+  }
   if (ctx.tool === "delete") {
     const id = pickEdge(ctx.doc, world, pickTol);
     if (id !== null) {
@@ -208,6 +260,11 @@ export function onMouseMove(ctx: InteractionCtx, screen: Vec2): void {
   const world = screenToWorld(ctx.view, screen);
   ctx.state.cursorWorld = world;
 
+  // 「平らに畳めない点」に近づいたら、その点を覚えて理由を出せるようにする
+  const near = pickVertex(ctx.doc, world, SNAP_RADIUS_PX / ctx.view.scale);
+  ctx.state.hoverViolation =
+    near !== null && ctx.violations.includes(near) ? near : null;
+
   // 矩形選択のドラッグ更新
   if (ctx.tool === "select" && ctx.state.downScreen) {
     if (
@@ -219,8 +276,8 @@ export function onMouseMove(ctx: InteractionCtx, screen: Vec2): void {
     return;
   }
 
-  // 線ツール・折るツールのスナップ候補表示
-  if (previewKind(ctx.tool)) {
+  // 線ツール・折るツール・作図補助のスナップ候補表示
+  if (previewKind(ctx.tool) || ctx.tool === "construct") {
     ctx.state.hoverSnap = snap(ctx.doc, world, SNAP_RADIUS_PX / ctx.view.scale);
   } else {
     ctx.state.hoverSnap = null;
@@ -262,6 +319,8 @@ export function onKeyDown(ctx: InteractionCtx, key: string): void {
     ctx.state.downScreen = null;
     ctx.state.marqueeStart = null;
     ctx.state.marqueeEnd = null;
+    ctx.state.constructPoints = [];
+    ctx.state.constructSeg = null;
     return;
   }
   if (key === "Delete" && ctx.selection.edgeIds.length > 0) {

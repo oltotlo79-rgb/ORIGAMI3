@@ -17,6 +17,7 @@ import {
 } from "../components/Viewer3D/foldDraw";
 import { planGrabFold, type GrabMode } from "../components/Viewer3D/grabFold";
 import { foldBlockReason } from "../lib/viewerHint";
+import { DEFAULT_CONSTRUCT, type ConstructOptions } from "../lib/construct";
 import type {
   Document,
   DocumentView,
@@ -44,7 +45,8 @@ export type ToolId =
   | "aux"
   | "delete"
   | "fold"
-  | "technique";
+  | "technique"
+  | "construct";
 
 /** 選択中の線・頂点(ID)。DOMのSelectionと紛れないよう注意 */
 export interface Selection {
@@ -126,6 +128,8 @@ interface AppState {
   foldDraft: FoldDraft | null;
   /** 選んだ技法と、その下ごしらえ(フラップ・折り線)。nullなら技法を選んでいない */
   techniqueDraft: TechniqueDraft | null;
+  /** 作図補助の選択(どの作図か・等分数・角度の刻み)。CpEditorが使う */
+  construct: ConstructOptions;
   /** 3D表示フレーム。nullなら平ら(展開図から直接描く) */
   frame3d: Frame3D | null;
   /** 折り角度を指定できる辺(ヒンジ)のID集合。doc/faces更新時に1度だけ導出する */
@@ -200,6 +204,8 @@ interface AppState {
   setTechniqueLine: (line: [Vec2, Vec2]) => void;
   /** 技法の設定(動かす側・段の幅)を変える */
   updateTechniqueDraft: (patch: Partial<TechniqueDraft>) => void;
+  /** 作図補助(CPE-005)の選び方を変える(どの作図か・等分数・角度の刻み) */
+  setConstruct: (patch: Partial<ConstructOptions>) => void;
   /** 技法の下ごしらえを捨てる */
   cancelTechnique: () => void;
   /** 選んだ技法を実際に適用する(sequence_apply Technique) */
@@ -521,6 +527,7 @@ export const useAppStore = create<AppState>((set, get) => {
     activeTool: "select",
     foldDraft: null,
     techniqueDraft: null,
+    construct: DEFAULT_CONSTRUCT,
     frame3d: null,
     currentStep: null,
     playT: 1,
@@ -784,6 +791,9 @@ export const useAppStore = create<AppState>((set, get) => {
       const draft = get().techniqueDraft;
       if (draft) set({ techniqueDraft: { ...draft, ...patch } });
     },
+
+    setConstruct: (patch) =>
+      set((s) => ({ construct: { ...s.construct, ...patch } })),
 
     cancelTechnique: () => {
       if (get().techniqueDraft) set({ techniqueDraft: null });

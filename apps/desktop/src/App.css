@@ -102,6 +102,13 @@ body,
   font-size: 11px;
 }
 
+/* サブメニューの中の数選び(等分の数・角度の刻み) */
+.tool-select {
+  margin-top: 2px;
+  width: 100%;
+  font-size: 11px;
+}
+
 .pane {
   position: relative;
   min-width: 0;

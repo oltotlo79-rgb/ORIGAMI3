@@ -4,7 +4,11 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { Vec2 } from "../../lib/types";
 import { useAppStore } from "../../store/appStore";
+import { constructHint } from "../../lib/construct";
+import { violationReason } from "../../lib/flatFoldHint";
+import type { Document } from "../../lib/types";
 import {
+  constructDone,
   initialEphemeralState,
   onKeyDown,
   onMouseDown,
@@ -21,6 +25,13 @@ interface Props {
   fitRef: React.RefObject<(() => void) | null>;
 }
 
+/** ホバー中の「平らに畳めない点」に添える説明(カーソルの近くに出す) */
+function violationTooltip(doc: Document, vertexId: number | null) {
+  if (vertexId === null) return null;
+  const v = doc.cp.vertices.find((x) => x.id === vertexId);
+  return v ? { pos: v.pos, text: violationReason(doc, vertexId) } : null;
+}
+
 export function CpEditor({ fitRef }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewRef = useRef<ViewTransform | null>(null);
@@ -31,10 +42,12 @@ export function CpEditor({ fitRef }: Props) {
   const selection = useAppStore((s) => s.selection);
   const activeTool = useAppStore((s) => s.activeTool);
   const docEpoch = useAppStore((s) => s.docEpoch);
+  const violations = useAppStore((s) => s.violations);
+  const construct = useAppStore((s) => s.construct);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
-    const { doc, selection, activeTool } = useAppStore.getState();
+    const { doc, selection, activeTool, violations, construct } = useAppStore.getState();
     if (!canvas || !doc) return;
     const w = canvas.clientWidth;
     const h = canvas.clientHeight;
@@ -55,6 +68,14 @@ export function CpEditor({ fitRef }: Props) {
           : null,
       marquee:
         st.marqueeStart && st.marqueeEnd ? { a: st.marqueeStart, b: st.marqueeEnd } : null,
+      violations,
+      constructPoints: activeTool === "construct" ? st.constructPoints : [],
+      // 作図補助では次にすることを常に1行で出す(設計原則3b)
+      hint:
+        activeTool === "construct"
+          ? constructHint(construct.kind, constructDone(st), construct.divisions)
+          : null,
+      tooltip: violationTooltip(doc, st.hoverViolation),
     };
     const ctx2d = canvas.getContext("2d");
     if (ctx2d) {
@@ -71,6 +92,8 @@ export function CpEditor({ fitRef }: Props) {
       view: viewRef.current,
       tool: s.activeTool,
       selection: s.selection,
+      construct: s.construct,
+      violations: s.violations,
       state: stateRef.current,
       setView: (v) => {
         viewRef.current = v;
@@ -81,10 +104,10 @@ export function CpEditor({ fitRef }: Props) {
     };
   }, []);
 
-  // ストアの変化(線の追加・選択・ツール切替)で再描画
+  // ストアの変化(線の追加・選択・ツール切替・畳めない点・作図の選び方)で再描画
   useEffect(() => {
     draw();
-  }, [doc, selection, activeTool, draw]);
+  }, [doc, selection, activeTool, violations, construct, draw]);
 
   // 新規作成・ファイルを開いた直後は紙全体が見える表示に戻す
   useEffect(() => {
@@ -100,6 +123,8 @@ export function CpEditor({ fitRef }: Props) {
     st.downScreen = null;
     st.marqueeStart = null;
     st.marqueeEnd = null;
+    st.constructPoints = [];
+    st.constructSeg = null;
     draw();
   }, [activeTool, draw]);
 
@@ -160,7 +185,9 @@ export function CpEditor({ fitRef }: Props) {
       className="cp-canvas"
       style={{
         cursor:
-          previewKind(activeTool) !== undefined || activeTool === "delete"
+          previewKind(activeTool) !== undefined ||
+          activeTool === "delete" ||
+          activeTool === "construct"
             ? "crosshair"
             : "default",
       }}
@@ -176,6 +203,7 @@ export function CpEditor({ fitRef }: Props) {
         // 捕捉中はleaveが飛ばないため、ここに来るのはドラッグしていない時だけ
         stateRef.current.hoverSnap = null;
         stateRef.current.cursorWorld = null;
+        stateRef.current.hoverViolation = null;
         draw();
       }}
       onPointerCancel={() => {

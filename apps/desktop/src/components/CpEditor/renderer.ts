@@ -20,6 +20,10 @@ export const COLORS = {
   grid: "#dcdcdc",
   selection: "#ff9500",
   snapMarker: "#2aa02a",
+  /** 平らに畳めない点(CPE-009)。操作は止めず色で知らせるだけ */
+  violation: "#ff8c00",
+  hintBackground: "rgba(20, 20, 24, 0.78)",
+  hintText: "#ffffff",
   marqueeFill: "rgba(59, 111, 201, 0.12)",
   marqueeStroke: "#3b6fc9",
 } as const;
@@ -75,6 +79,51 @@ export interface RenderOverlay {
   preview: { a: Vec2; b: Vec2; kind: EdgeKind } | null;
   /** 矩形選択ドラッグ中の範囲(正規化座標) */
   marquee: { a: Vec2; b: Vec2 } | null;
+  /** 平らに畳めない点のID(Rust側の判定結果。橙色の丸で知らせる) */
+  violations: number[];
+  /** 作図補助でクリック済みの点 */
+  constructPoints: Vec2[];
+  /** 画面の上に出す案内(次に何をすればよいか) */
+  hint: string | null;
+  /** カーソルの近くに出す説明(平らに畳めない理由) */
+  tooltip: { pos: Vec2; text: string } | null;
+}
+
+/** 案内・説明の文字サイズ(px) */
+const HINT_FONT = "13px sans-serif";
+/** 平らに畳めない点の丸の半径(px) */
+const VIOLATION_RADIUS = 8;
+
+/** 平らに畳めない点を橙色の丸で示す(操作は止めない) */
+function drawViolations(
+  ctx: CanvasRenderingContext2D,
+  doc: Document,
+  view: ViewTransform,
+  violations: number[],
+): void {
+  if (violations.length === 0) return;
+  const ids = new Set(violations);
+  ctx.strokeStyle = COLORS.violation;
+  ctx.lineWidth = 2.5;
+  ctx.setLineDash([]);
+  for (const v of doc.cp.vertices) {
+    if (!ids.has(v.id)) continue;
+    const [sx, sy] = worldToScreen(view, v.pos);
+    ctx.beginPath();
+    ctx.arc(sx, sy, VIOLATION_RADIUS, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+}
+
+/** 黒地に白文字の小さな札を描く(左上が(x, y)) */
+function drawLabel(ctx: CanvasRenderingContext2D, x: number, y: number, text: string): void {
+  ctx.font = HINT_FONT;
+  ctx.textBaseline = "top";
+  const w = ctx.measureText(text).width;
+  ctx.fillStyle = COLORS.hintBackground;
+  ctx.fillRect(x, y, w + 12, 22);
+  ctx.fillStyle = COLORS.hintText;
+  ctx.fillText(text, x + 6, y + 5);
 }
 
 function strokeSegment(
@@ -192,6 +241,21 @@ function drawOverlay(
     ctx.lineWidth = 2;
     ctx.stroke();
   }
+  // 作図補助でクリック済みの点(あと何点必要かが見て分かる)
+  ctx.fillStyle = COLORS.snapMarker;
+  for (const p of overlay.constructPoints) {
+    const [sx, sy] = worldToScreen(view, p);
+    ctx.beginPath();
+    ctx.arc(sx, sy, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  if (overlay.tooltip) {
+    const [sx, sy] = worldToScreen(view, overlay.tooltip.pos);
+    drawLabel(ctx, sx + 12, sy + 12, overlay.tooltip.text);
+  }
+  if (overlay.hint) {
+    drawLabel(ctx, 8, 8, overlay.hint);
+  }
 }
 
 /**
@@ -225,5 +289,6 @@ export function render(
   drawGrid(ctx, doc, view);
   drawEdges(ctx, doc, view, selection);
   drawSelectedVertices(ctx, doc, view, selection);
+  drawViolations(ctx, doc, view, overlay.violations);
   drawOverlay(ctx, view, overlay);
 }

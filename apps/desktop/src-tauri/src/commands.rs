@@ -13,7 +13,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use tauri::State;
 
-use crate::store::{DocumentStore, DocumentView, attach_replay};
+use crate::store::{DocumentStore, DocumentView, add_penetration_warning, attach_replay};
 use ori3_model::{Driver, EditOp, Paper, SeqOp};
 
 /// panicをErr文字列に変換する(SYS-005: アプリを落とさない)。
@@ -121,7 +121,8 @@ pub fn pose_solve(
 ) -> Result<ori3_rigid::SolveResult, String> {
     guard(AssertUnwindSafe(|| {
         let (cp, faces, warm) = lock(&state).pose_inputs(); // 複製のみ、即ロック解放
-        let result = ori3_rigid::solve(&cp, &faces, &drivers, warm.as_ref());
+        let mut result = ori3_rigid::solve(&cp, &faces, &drivers, warm.as_ref());
+        add_penetration_warning(&mut result.frame); // 紙のめり込み(SIM-007)
         lock(&state).store_pose_angles(result.angles.clone()); // 短いロックで書き戻し
         Ok(result)
     }))
@@ -140,7 +141,15 @@ pub fn sequence_replay(
 ) -> Result<ori3_layers::ReplayResult, String> {
     guard(AssertUnwindSafe(|| {
         let (doc, faces) = lock(&state).replay_inputs(); // 複製のみ、即ロック解放
-        Ok(ori3_layers::replay_with_faces(&doc, &faces, up_to, t))
+        let mut result = ori3_layers::replay_with_faces(&doc, &faces, up_to, t);
+        // 折る途中(t<1)は立体になるので、紙が食い込んでいないかを見る(SIM-007)。
+        // 画面のバッジは ReplayResult.warnings を見るので両方へ同じ文言を載せる
+        if add_penetration_warning(&mut result.frame) {
+            result
+                .warnings
+                .push(ori3_rigid::PENETRATION_WARNING.to_string());
+        }
+        Ok(result)
     }))
 }
 
