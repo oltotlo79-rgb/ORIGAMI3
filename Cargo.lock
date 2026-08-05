@@ -2388,6 +2388,8 @@ version = "0.1.0"
 dependencies = [
  "ori3-cp",
  "rand",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

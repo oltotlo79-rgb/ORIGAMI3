@@ -6,3 +6,7 @@ edition.workspace = true
 [dependencies]
 ori3-cp.workspace = true
 rand.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
