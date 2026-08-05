@@ -22,7 +22,9 @@
 //! # 既知の制限
 //!
 //! - 層順序は [`fold_through`] の近似(動いた層を山全体の上/下へまとめる)の上に、
-//!   技法ごとの並べ替え(中割り=内側へ、かぶせ=外側へ)を重ねて決める
+//!   先端をもとの層の隣へ置き直して決める([`Session::reorder_tips`])
+//! - 重なりの一部だけを選んだフラップなど、紙が裂ける指定・折り上がりの山谷と
+//!   重なり順が食い違う指定は、断らずに警告して続ける(「止めずに警告」原則)
 //! - 開いてつぶす(squash)・花弁折り(petal)は、既存の折り目を**開く**操作が要る。
 //!   [`fold_through`] は折り線を足すことしかできず(角度を0°へ戻せない)、
 //!   この2種は現在の部品では合成できないため未実装
@@ -33,7 +35,7 @@ use glam::DVec2;
 use ori3_cp::{Face, extract_faces};
 use ori3_geometry::Isometry2;
 use ori3_model::{
-    CreasePattern, DriverLine, EPS, EdgeId, EdgeKind, FaceId, FoldStep, TechniqueKind,
+    CreasePattern, DriverLine, EPS, EdgeId, EdgeKind, FaceId, FoldStep, TechniqueKind, VertexId,
 };
 
 use crate::flat_state::{FlatState, point_in_face, representative_point};
@@ -116,7 +118,7 @@ pub fn pleat(
         line2,
         [keep2.x, keep2.y],
         targets2.as_deref(),
-        turn_over(FoldDirection::Up, &m1),
+        turn_direction(FoldDirection::Up, m1.mirrored),
     )?;
 
     // 段の中の折り目を、動いた後の重なり順に合わせ直す
@@ -129,10 +131,13 @@ pub fn pleat(
 /// `reference_point` は折り込む先(先端が向かう側)を示す点で、その側は動かない。
 /// フラップは2層以上で、折り線が全ての層を横切っている必要がある。
 ///
-/// 手前(上)の層の先端は層の内側=下へ回り、奥(下)の層の先端は上へ回るので、
-/// [`fold_through`] を「手前の層=Down」「奥の層=Up」の2回に分けて呼ぶ。
+/// 折り線が横切る折り目(背)でつながった2つの層は、先端どうしがつながったまま
+/// 裏返るので必ず反対向きに回る。この関係で層を2群に塗り分け
+/// ([`Session::split_flap_by_connection`])、「下へ回す層」「上へ回す層」の
+/// 2回に分けて [`fold_through`] を呼ぶ。層の数が奇数でも、重なりの一部だけを
+/// 選んだ場合でも、紙のつながりどおりに折れる。
 /// 展開図には同じ線種の折り線が2本(背を挟んでV字に)入る。
-/// そのあと層順序を並べ替えて先端をフラップの層の**内側**へ挟み込み、
+/// そのあと先端をもとの層の隣(中割りでは層の**内側**)へ置き直し、
 /// 先端の中の背の山谷を新しい重なり順に合わせ直す
 /// (中割り折りで背の向きが入れ替わるのはこのため)。
 pub fn inside_reverse(
@@ -147,8 +152,8 @@ pub fn inside_reverse(
 /// かぶせ折り(フラップの先端を外側へかぶせる)。中割り折りの逆。
 ///
 /// `reference_point` はかぶせる先(先端が向かう側)を示す点で、その側は動かない。
-/// 手前(上)の層の先端は上へ、奥(下)の層の先端は下へ回り、先端はフラップの層の
-/// **外側**を包む。折り線と層の追い方は [`inside_reverse`] と同じ。
+/// いちばん手前(上)の層の先端が上へ回り、つながった層はその反対向きに回るので、
+/// 先端はフラップの層の**外側**を包む。層の追い方は [`inside_reverse`] と同じ。
 pub fn outside_reverse(
     cp: &mut CreasePattern,
     faces: &[Face],
@@ -185,15 +190,6 @@ fn reverse_fold(
             "{name}にはフラップが2層以上必要です。重なった層をまとめて選んでください"
         ));
     }
-    // 奥と手前を半分ずつに分けるので、層の数は偶数でなければならない。
-    // 奇数のまま進めると、折り上がりの山谷と重なり順が食い違う紙(展開図から
-    // 折り直すと違う形になる紙)ができてしまう。
-    if flap.len() % 2 != 0 {
-        return Err(format!(
-            "フラップの層の数が奇数です({}層)。{name}は表と裏が対になった層にしか使えません。重なった層を選び直すか、手動の折り操作で代替してください",
-            flap.len()
-        ));
-    }
     for &id in &flap {
         if !s.crosses(id, input.line) {
             return Err(format!(
@@ -202,34 +198,44 @@ fn reverse_fold(
         }
     }
 
-    // 層順の下半分=奥、上半分=手前。中割りでは手前の先端が下(内側)へ、
-    // 奥の先端が上(内側)へ回る。かぶせ折りはその逆。
-    let half = flap.len() / 2;
-    let (back, front) = flap.split_at(half);
-    let (front_dir, back_dir) = if inside {
-        (FoldDirection::Down, FoldDirection::Up)
-    } else {
-        (FoldDirection::Up, FoldDirection::Down)
-    };
+    // 紙のつながりから、先端を上へ回す層と下へ回す層に塗り分ける。
+    // 折り線が横切る折り目(背)でつながった2層は、先端どうしがつながったまま
+    // 裏返るので、必ず反対向きに回る。層の数を機械的に半分に割ると、奇数層や
+    // 一部だけを選んだフラップで紙のつながりと食い違ってしまう。
+    let up = s.split_flap_by_connection(&flap, input.line, inside, name)?;
+    let (up_faces, down_faces): (Vec<FaceId>, Vec<FaceId>) =
+        flap.iter().partition(|id| up[id]);
 
+    // 下へ回す層と上へ回す層をそれぞれ1回の折りにまとめる(どちらかが空になる
+    // 指定=つながっていない層だけを選んだ場合は、その回を飛ばす)。
     let keep_point = [keep.x, keep.y];
-    let m1 = s.fold(input.line, keep_point, Some(front), front_dir)?;
-    // 折り線と動かさない側の点は動かない側の幾何なので、平面座標のずれだけを打ち消す
-    let line2 = [m1.apply(l0), m1.apply(l1)];
-    let line2 = [[line2[0].x, line2[0].y], [line2[1].x, line2[1].y]];
-    let keep2 = m1.apply(keep);
-    let back_now = s.descendants(back);
-    s.fold(
-        line2,
-        [keep2.x, keep2.y],
-        Some(&back_now),
-        turn_over(back_dir, &m1),
-    )?;
+    let mut line_now = input.line;
+    let mut keep_now = keep_point;
+    let mut turned = false;
+    for (targets, direction) in [
+        (&down_faces, FoldDirection::Down),
+        (&up_faces, FoldDirection::Up),
+    ] {
+        let now = s.descendants(targets);
+        if now.is_empty() {
+            continue;
+        }
+        let m = s.fold(line_now, keep_now, Some(&now), turn_direction(direction, turned))?;
+        // 折り線と動かさない側の点は動かない側の幾何なので、平面座標のずれだけを打ち消す
+        let a = m.apply(DVec2::from(line_now[0]));
+        let b = m.apply(DVec2::from(line_now[1]));
+        line_now = [[a.x, a.y], [b.x, b.y]];
+        let k = m.apply(DVec2::from(keep_now));
+        keep_now = [k.x, k.y];
+        turned = turned != m.mirrored;
+    }
 
-    // 先端をフラップの層の内側(中割り)/外側(かぶせ)へ入れ、
-    // 先端の中の折り目(層と層をつなぐ背)の山谷をその重なり順に合わせ直す
-    let flap_origins: HashSet<FaceId> = flap.iter().copied().collect();
-    s.reorder_reversed(&flap_origins, inside);
+    // 先端を、それぞれが回った向きの側(上へ回った層は元の層のすぐ上、
+    // 下へ回った層はすぐ下)へ置き直し、先端の中の折り目(層と層をつなぐ背)の
+    // 山谷を新しい重なり順に合わせ直す。
+    // 折るたびに畳み平面ごと裏返ることがあり、そのときは重なり順の上下も
+    // 入れ替わっているので、置く側も入れ替える(turn_directionと同じ事情)。
+    s.reorder_tips(&up, turned);
     s.fix_reversed_creases();
 
     let kind = if inside {
@@ -440,6 +446,99 @@ impl Session {
         )
     }
 
+    /// フラップの層を「先端を上へ回す層」と「下へ回す層」に塗り分ける。
+    ///
+    /// 折り線が横切る折り目(背)でつながった2つの層は、先端どうしがつながったまま
+    /// 裏返る(これが「裏返して差し込む」形になる理由)。つながった相手とは必ず
+    /// 反対向きに回るので、つながりの図を2色で塗り分ければ向きが決まる。
+    /// 層の数を機械的に半分に割る方法と違い、奇数層のフラップや、重なりの一部だけを
+    /// 選んだフラップでも紙のつながりどおりに折れる。
+    ///
+    /// 塗り分けの向きは、つながりのかたまりごとに「いちばん手前(上)の層」で決める:
+    /// 中割り折りではその層の先端が下(層の内側)へ、かぶせ折りでは上(外側)へ回る。
+    /// つながりの図が2色で塗り分けられない(奇数の輪になる)場合は、紙として
+    /// 成り立たない指定なのでErr。
+    fn split_flap_by_connection(
+        &self,
+        flap: &[FaceId],
+        line: [[f64; 2]; 2],
+        inside: bool,
+        name: &str,
+    ) -> Result<HashMap<FaceId, bool>, String> {
+        let members: HashSet<FaceId> = flap.iter().copied().collect();
+        // つながりの図: 折り線が横切る折り目を共有する層の組
+        let mut adj: HashMap<FaceId, Vec<FaceId>> = flap.iter().map(|&id| (id, Vec::new())).collect();
+        for (eid, fs) in faces_by_edge(&self.faces) {
+            if fs.len() != 2 || !fs.iter().all(|id| members.contains(id)) {
+                continue;
+            }
+            let Some(e) = self.cp.edges.iter().find(|e| e.id == eid) else {
+                continue;
+            };
+            if !matches!(e.kind, EdgeKind::Mountain | EdgeKind::Valley) {
+                continue;
+            }
+            if !self.edge_crosses_line(e.v0, e.v1, fs[0], line) {
+                continue;
+            }
+            adj.get_mut(&fs[0]).expect("フラップの面").push(fs[1]);
+            adj.get_mut(&fs[1]).expect("フラップの面").push(fs[0]);
+        }
+
+        // かたまりごとに2色で塗り分ける(層順で後ろ=手前の層から始める)
+        let mut up: HashMap<FaceId, bool> = HashMap::with_capacity(flap.len());
+        // 手前の層の先端は、中割りなら下(内側)・かぶせなら上(外側)へ回る
+        let front_up = !inside;
+        for &start in flap.iter().rev() {
+            if up.contains_key(&start) {
+                continue;
+            }
+            up.insert(start, front_up);
+            let mut queue = vec![start];
+            while let Some(cur) = queue.pop() {
+                let cur_up = up[&cur];
+                for &next in &adj[&cur] {
+                    match up.get(&next) {
+                        Some(&v) if v == cur_up => {
+                            return Err(format!(
+                                "この重なり方には{name}ができません(層のつながりが輪になっていて、先端の向きが決められません)。フラップの選び方か折り線を変えるか、手動の折り操作で代替してください"
+                            ));
+                        }
+                        Some(_) => {}
+                        None => {
+                            up.insert(next, !cur_up);
+                            queue.push(next);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(up)
+    }
+
+    /// 辺(CP座標)が畳み平面の折り線に横切られているか(両端が線の反対側にあるか)。
+    /// `on` はこの辺を境界に持つ面(その配置で畳み平面へ写す)。
+    fn edge_crosses_line(
+        &self,
+        v0: VertexId,
+        v1: VertexId,
+        on: FaceId,
+        line: [[f64; 2]; 2],
+    ) -> bool {
+        let Ok((l0, l1)) = line_points(line) else {
+            return false;
+        };
+        let u = (l1 - l0).normalize();
+        let pos = vertex_positions(&self.cp);
+        let (Some(&p0), Some(&p1)) = (pos.get(&v0), pos.get(&v1)) else {
+            return false;
+        };
+        let pl = self.state.placements[&on];
+        let d0 = u.perp_dot(pl.apply(p0) - l0);
+        let d1 = u.perp_dot(pl.apply(p1) - l0);
+        (d0 > EPS && d1 < -EPS) || (d0 < -EPS && d1 > EPS)
+    }
+
     /// 面が折り線の両側に掛かっている(折り線が面を横切っている)か。
     fn crosses(&self, id: FaceId, line: [[f64; 2]; 2]) -> bool {
         let Ok((l0, l1)) = line_points(line) else {
@@ -532,13 +631,17 @@ impl Session {
         }
     }
 
-    /// 裏返った先端を、フラップの層の内側(`inside`)/外側へ並べ替える。
+    /// 裏返った先端を、それぞれが回った向きの側へ置き直す。
     ///
     /// [`fold_through`] は動いた層を山全体のいちばん上(Up)/いちばん下(Down)へ
-    /// まとめる近似なので、そのままでは先端が紙の外側に出てしまう。中割り折りでは
-    /// 先端がフラップの層の間へ入り、かぶせ折りではフラップを外から包む。
-    /// もとの層(同じ面から分かれた残りの部分)の隣へ移すことで、この違いを表す。
-    fn reorder_reversed(&mut self, flap_origins: &HashSet<FaceId>, inside: bool) {
+    /// まとめる近似なので、そのままでは先端が紙の外側に出てしまう。実際には、
+    /// 先端はもとの層(同じ面から分かれた残りの部分)のすぐ隣へ入る:
+    /// 上へ回った先端はすぐ上、下へ回った先端はすぐ下。折り目の向き(山谷)と
+    /// 重なり順の関係もこれで満たされる。
+    ///
+    /// `up` は面ID(技法開始時)→ 先端を上へ回すか(技法を始めた時点の畳み平面での向き)。
+    /// `turned` は折りの途中で畳み平面ごと裏返った(重なり順の上下が入れ替わった)場合にtrue。
+    fn reorder_tips(&mut self, up: &HashMap<FaceId, bool>, turned: bool) {
         let is_tip = |id: &FaceId| self.flipped.get(id).copied() == Some(true);
         // 先端を除いた並び(下→上)
         let base: Vec<FaceId> = self
@@ -548,50 +651,27 @@ impl Session {
             .copied()
             .filter(|id| !is_tip(id))
             .collect();
-        // フラップの残り部分の並び。前半(下半分)が奥、後半が手前
-        let rest: Vec<FaceId> = base
-            .iter()
-            .copied()
-            .filter(|id| {
-                self.origin
-                    .get(id)
-                    .is_some_and(|o| flap_origins.contains(o))
-            })
-            .collect();
-        if rest.is_empty() {
+        let tips: Vec<FaceId> = self.state.order.iter().copied().filter(is_tip).collect();
+        if tips.is_empty() {
             return;
         }
-        let lower: HashMap<FaceId, bool> = rest
-            .iter()
-            .enumerate()
-            .map(|(i, &id)| (id, i * 2 < rest.len()))
-            .collect();
-
-        let tips: Vec<FaceId> = self
-            .state
-            .order
-            .iter()
-            .copied()
-            .filter(is_tip)
-            .collect();
         let mut placed: HashSet<FaceId> = HashSet::new();
         let mut out: Vec<FaceId> = Vec::with_capacity(self.state.order.len());
         for &id in &base {
-            let Some(&is_lower) = lower.get(&id) else {
+            let origin = self.origin[&id];
+            let Some(&up_at_start) = up.get(&origin) else {
                 out.push(id);
                 continue;
             };
-            // 同じ面から分かれた先端を、この層の内側/外側の隣へ挟む
-            let origin = self.origin[&id];
+            let goes_up = up_at_start != turned;
+            // 同じ面から分かれた先端を、回った向きの側の隣へ挟む
             let group: Vec<FaceId> = tips
                 .iter()
                 .copied()
                 .filter(|t| !placed.contains(t) && self.origin[t] == origin)
                 .collect();
             placed.extend(group.iter().copied());
-            // 内側=下半分の層なら上へ、上半分の層なら下へ(かぶせ折りはその逆)
-            let above = if inside { is_lower } else { !is_lower };
-            if above {
+            if goes_up {
                 out.push(id);
                 out.extend(group);
             } else {
@@ -599,7 +679,7 @@ impl Session {
                 out.push(id);
             }
         }
-        // 相手が見つからなかった先端は、もとの並びの位置関係を保って戻す
+        // 相手が見つからなかった先端(面が丸ごと動いた場合)は、もとの並びの位置へ戻す
         for &t in &tips {
             if !placed.contains(&t) {
                 let at = self
@@ -650,16 +730,20 @@ impl Session {
         out
     }
 
-    /// 折り上がりが紙の重なりとして成り立っているかを確かめる。
+    /// 折り上がりが紙の重なりとして成り立っているかを調べ、食い違いを警告にする。
     ///
     /// 折り目でつながった2面の上下は、その折り目を表から見たときの山谷で決まる
     /// (表向きの面から見て谷なら相手は上、山なら下)。技法で動いた紙に接する
     /// 折り目がこの関係を満たさないなら、展開図の山谷と記録した重なり順が食い違う
-    /// = 展開図から折り直すと別の形になる紙ができている。作ってしまう前に断る。
+    /// = 展開図から折り直すと別の形になる。
+    ///
+    /// 断らずに警告にするのは「実際に折れるものを断らない」ため(「止めずに警告」原則。
+    /// 紙が裂ける指定を [`fold_through`] が警告で通すのと同じ扱い)。多くは、重なりの
+    /// 一部だけを選んだために紙が裂ける指定と一緒に出る。
     ///
     /// 技法で動いた面に接する折り目だけを見る(技法より前の手順で入った食い違いまで
-    /// 断ると、一部の層だけを折る手順のあとで技法が一切使えなくなるため)。
-    fn check_layer_consistency(&self, name: &str) -> Result<(), String> {
+    /// 数えない)。
+    fn layer_consistency_warnings(&self, name: &str) -> Vec<String> {
         let rank: HashMap<FaceId, usize> = self
             .state
             .order
@@ -702,24 +786,26 @@ impl Session {
             }
         }
         if bad > 0 {
-            return Err(format!(
-                "この形には{name}ができません(折り目{bad}本の山谷と紙の重なり順が食い違います)。フラップの選び方か折り線を変えるか、手動の折り操作で代替してください"
-            ));
+            return vec![format!(
+                "この{name}では、折り目{bad}本の山谷と紙の重なり順が食い違います。このままでは展開図から折り直したときに形が変わります(指定のまま続行します)"
+            )];
         }
-        Ok(())
+        Vec::new()
     }
 
-    /// 技法の結果をまとめ、成功したCPを呼び出し側へ書き戻す。
-    /// 折り上がりが紙として成り立たない場合はErr(CPは変更しない)。
+    /// 技法の結果をまとめ、CPを呼び出し側へ書き戻す。
+    /// 紙が裂ける・山谷と重なり順が食い違うといった危うい折り上がりは警告にする
+    /// (「止めずに警告」原則)。
     fn finish(
         mut self,
         kind: TechniqueKind,
         name: &str,
         cp: &mut CreasePattern,
     ) -> Result<FoldThroughResult, String> {
-        self.check_layer_consistency(name)?;
         let tears = self.tear_warnings();
         self.warnings.extend(tears);
+        let inconsistent = self.layer_consistency_warnings(name);
+        self.warnings.extend(inconsistent);
         let mut added = self.added;
         added.sort_unstable();
         added.dedup();
@@ -756,15 +842,15 @@ fn line_points(line: [[f64; 2]; 2]) -> Result<(DVec2, DVec2), String> {
     Ok((l0, l1))
 }
 
-/// 直前の折りで畳み平面が裏返っていたら、折る向きを反対にする。
+/// ここまでの折りで畳み平面が裏返っているなら、折る向きを反対にする。
 ///
 /// [`fold_through`] は結果を「根面(最小面ID)が恒等」の座標系へそろえ直すため、
 /// 動いた側に根面があると畳み平面ごと裏返る(層順序も上下が入れ替わる)。
-/// 技法の2回目以降の折りは1回目と同じ紙の側へ重ねたいので、裏返った場合は
+/// 技法の2回目以降の折りは1回目と同じ紙の側へ重ねたいので、裏返っている場合は
 /// Up/Downを入れ替えて指定する(これをしないと、どの面が最小IDだったかという
 /// 内部の事情で技法の結果が変わってしまう)。
-fn turn_over(direction: FoldDirection, plane_map: &Isometry2) -> FoldDirection {
-    if !plane_map.mirrored {
+fn turn_direction(direction: FoldDirection, turned: bool) -> FoldDirection {
+    if !turned {
         return direction;
     }
     match direction {

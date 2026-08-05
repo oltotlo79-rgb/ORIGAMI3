@@ -424,8 +424,8 @@ function TechniqueDraftContent({ draft }: { draft: TechniqueDraft }) {
   const scale = paper ? Math.max(paper.width_mm, paper.height_mm) : 1;
   const mm = (v: number) => (v * scale).toFixed(1);
   const needsFlap = draft.kind !== "Pleat";
-  // 中割り折り・かぶせ折りは層を奥と手前へ半分ずつ分けるので、偶数枚の層が要る
-  const flapOk = draft.flap.length >= 2 && draft.flap.length % 2 === 0;
+  // 中割り折り・かぶせ折りには重なった層が要る(枚数は奇数でもよい)
+  const flapOk = draft.flap.length >= 2;
   const ready = draft.line !== null && (!needsFlap || flapOk);
 
   return (
@@ -479,7 +479,7 @@ function TechniqueDraftContent({ draft }: { draft: TechniqueDraft }) {
             ready
               ? "選んだ技法で折ります"
               : needsFlap && !flapOk
-                ? "表と裏が対になった偶数枚の層を選んでください(立体表示で紙をクリック)"
+                ? "立体表示で紙をクリックして、重なった層を選んでください"
                 : "立体表示で紙の上をドラッグして折り線を引いてください"
           }
           onClick={() => void commitTechnique()}

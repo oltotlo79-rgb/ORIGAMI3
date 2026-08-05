@@ -620,8 +620,16 @@ fn inside_and_outside_reverse_differ_only_in_layer_order() {
     let i = apply(&mut inside_doc, inside_reverse, flap.clone(), line, reference).unwrap();
     let o = apply(&mut outside_doc, outside_reverse, flap, line, reference).unwrap();
 
-    // 展開図の頂点は同じ(線種だけが違う)
-    assert_eq!(inside_doc.cp.vertices, outside_doc.cp.vertices);
+    // 展開図に入る点の位置は同じ(IDの付き方は折る順で変わるので位置で比べる)
+    let sorted_positions = |doc: &Document| {
+        let mut v: Vec<[f64; 2]> = doc.cp.vertices.iter().map(|v| v.pos).collect();
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        v
+    };
+    assert_eq!(
+        sorted_positions(&inside_doc),
+        sorted_positions(&outside_doc)
+    );
     for f in &i.faces {
         assert!(
             (i.at[&f.id] - o.at[&f.id]).length() < 1e-9,
@@ -809,29 +817,84 @@ fn four_layer_stack() -> Document {
     doc
 }
 
-/// 層の数が奇数のフラップは断る(そのまま折ると、折り上がりの山谷と重なり順が
-/// 食い違う紙=展開図から折り直すと別の形になる紙ができてしまうため)。
+/// 層の数が奇数のフラップでも、紙のつながりどおりに中割り折りできる。
+///
+/// 段折りでできた3層(もとの紙・段の中・その先が、2本の折り目でつながっている)を
+/// まとめて中割り折りする。層の数を機械的に半分に割る決め方では扱えないが、
+/// 「折り線が横切る折り目でつながった層は反対向きに回る」という紙のつながりから
+/// 決めれば、奇数層でもそのまま折れる。
 #[test]
-fn reverse_fold_rejects_an_odd_number_of_layers() {
+fn inside_reverse_on_odd_number_of_layers() {
+    let mut doc = square_doc();
+    // 下ごしらえ: 段折りで3層にする(折り目は x=0.6 と x=0.7 の縦線)
+    apply(
+        &mut doc,
+        pleat,
+        Vec::new(),
+        [[0.6, 0.0], [0.6, 1.0]],
+        [0.7, 0.5],
+    )
+    .expect("段折りで3層にする");
+    let faces = extract_faces(&doc.cp);
+    assert_eq!(faces.len(), 3);
+    let (state, _) = flat_state_at(&doc, &faces, doc.sequence.len()).unwrap();
+    let flap: Vec<FaceId> = state.order.clone();
+
+    // 3層が重なっている帯を、段の折り目2本を横切る横線で中割り折りする
+    let a = apply(
+        &mut doc,
+        inside_reverse,
+        flap,
+        [[0.0, 0.5], [1.0, 0.5]],
+        [0.5, 0.9],
+    )
+    .expect("3層のフラップも中割り折りできる");
+    assert!(a.warnings.is_empty(), "紙は裂けない: {:?}", a.warnings);
+    assert_eq!(a.faces.len(), 6, "3層それぞれが2つに分かれる");
+    assert_fold_senses(&doc, "3層フラップの中割り折り");
+
+    // 展開図と手順だけから同じ形に折り直せる
+    let new_faces = extract_faces(&doc.cp);
+    let (replayed, warnings) =
+        flat_state_at(&doc, &new_faces, doc.sequence.len()).expect("平らに畳める");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(replayed.order, a.order, "層順序が再生結果と一致する");
+    for f in &new_faces {
+        assert!(
+            a.at[&f.id]
+                .abs_diff_eq(replayed.placements[&f.id].apply(DVec2::from(a.rep[&f.id])), 1e-6),
+            "面 {} の位置が再生結果と一致する",
+            f.id
+        );
+    }
+}
+
+/// 重なりの一部だけを選ぶと(選んだ層の先端が、選ばなかった層の先端と折り目で
+/// つながっている場合)、そのままでは紙が裂ける。断らずに警告して続ける
+/// (「止めずに警告」原則。実際に折れる指定を断らないため)。
+#[test]
+fn reverse_fold_warns_when_the_selected_layers_are_not_a_whole_flap() {
     let mut doc = four_layer_stack();
     let faces = extract_faces(&doc.cp);
     let (state, _) = flat_state_at(&doc, &faces, doc.sequence.len()).unwrap();
     assert_eq!(state.order.len(), 4);
-    let before = doc.clone();
 
-    // 4層のうち下3層だけを選ぶ(3D画面のクリックでも起こり得る選び方)
+    // 4層のうち下3層だけを選ぶ。この重なりでは4層が輪のようにつながっているため、
+    // 3層だけを折り返すと、残した層とのつながりが切れる
     let flap: Vec<FaceId> = state.order[..3].to_vec();
-    let err = apply(
+    let a = apply(
         &mut doc,
         inside_reverse,
         flap,
         [[0.35, 0.5], [0.15, 0.0]],
         [0.05, 0.25],
     )
-    .expect_err("奇数層のフラップはエラー");
-    assert!(err.contains("奇数"), "{err}");
-    assert!(err.contains("手動の折り操作"), "{err}");
-    assert_eq!(doc, before, "失敗時は文書を変更しない");
+    .expect("紙が裂ける指定でも、折り自体は続行する");
+    assert!(
+        a.warnings.iter().any(|w| w.contains("裂けます")),
+        "裂けることを知らせる: {:?}",
+        a.warnings
+    );
 }
 
 /// 4層のフラップ(奥2枚・手前2枚)でも中割り折りできる。

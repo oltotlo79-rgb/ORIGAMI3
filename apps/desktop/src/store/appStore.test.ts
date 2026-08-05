@@ -1014,12 +1014,13 @@ describe("技法(選ぶだけで折る)", () => {
     expect(useAppStore.getState().errorMessage).toContain("層");
     expect(useAppStore.getState().techniqueDraft).not.toBeNull();
 
-    // 層の数が奇数(表と裏が対になっていない)ときも送らない
+    // 層が2枚以上あれば送る(枚数が奇数でも、先端の向きは紙のつながりから決まる)
+    vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(makeStepView(4030, 2));
     useAppStore.getState().setTechniqueFlap([0, 1, 2]);
     await useAppStore.getState().commitTechnique();
-    expect(vi.mocked(ipc.sequenceApply)).not.toHaveBeenCalled();
-    expect(useAppStore.getState().errorMessage).toContain("奇数");
-    expect(useAppStore.getState().errorMessage).toContain("手動の折り操作で代替");
+    const op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
+    if (op.type !== "Technique") throw new Error("Techniqueでない");
+    expect(op.flap).toEqual([0, 1, 2]);
   });
 
   it("折れなかったときは手動の折り操作への案内を添え、下ごしらえを残す", async () => {
