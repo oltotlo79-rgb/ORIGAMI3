@@ -14,4 +14,4 @@ pub use fold_through::{
     FoldDirection, FoldThroughInput, FoldThroughResult, fold_through, resolve_driver_edges,
 };
 pub use replay::{ReplayResult, flat_state_at, replay, replay_with_faces};
-pub use techniques::{TechniqueInput, inside_reverse, outside_reverse, pleat, squash};
+pub use techniques::{TechniqueInput, inside_reverse, outside_reverse, petal, pleat, squash};

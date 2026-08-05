@@ -46,8 +46,9 @@
 //!
 //! # 既知の制限
 //!
-//! - 領域に掛かるかどうかの判定は面の頂点で行う(半平面1本なら厳密。
-//!   複数の半平面で囲んだ細い領域では、頂点が1つも入らない面を取りこぼす)
+//! - 領域に掛かるかどうかは面を領域で切り取った面積で判定する
+//!   ([`overlaps_region`])。面積が [`REGION_AREA_EPS`] 以下の細い掛かり方は
+//!   掛かっていない扱いになる
 //! - 重なり順は各部分の `turn` から構成的に決める。物理的に成り立たない
 //!   入れ方を指定しても断らない(山谷と重なり順の食い違いは警告になる)
 
@@ -69,6 +70,9 @@ use crate::fold_through::{
 /// 面のつながり(同じ点に写るか)を見る許容誤差。等長変換の積み重ねと
 /// 剛体折りソルバー由来の誤差(1e-7程度)より十分大きく取る。
 const JOIN_EPS: f64 = 1e-6;
+
+/// 面が領域に掛かっているとみなす最小面積(紙は1辺1の正方形として扱う)。
+const REGION_AREA_EPS: f64 = 1e-12;
 
 /// 畳み平面の半平面。`inside_point` のある側が内側(動かす側)。
 #[derive(Clone, Debug)]
@@ -401,27 +405,23 @@ pub(crate) fn run_motion(
         let ppl = state.placements[&pf.id];
         let q = ppl.apply(DVec2::from(r));
         // 防御: 領域の境界が面を横切っているのに面が分かれていない場合、
-        // このまま進めると面全体が誤って動く。
+        // このまま進めると面全体が誤って動く。領域の一部にだけ掛かる面
+        // (=領域で切ると面積が減る面)がそれにあたる。
+        let poly: Vec<DVec2> = nf
+            .vertices
+            .iter()
+            .filter_map(|vid| wpos.get(vid))
+            .map(|&p| ppl.apply(p))
+            .collect();
         for part in parts.iter().filter(|p| p.layers.contains(&pf.id)) {
-            for plane in &part.region {
-                let mut inside = false;
-                let mut outside = false;
-                for vid in &nf.vertices {
-                    if let Some(&p) = wpos.get(vid) {
-                        let d = plane.signed(ppl.apply(p));
-                        if d > EPS {
-                            inside = true;
-                        } else if d < -EPS {
-                            outside = true;
-                        }
-                    }
-                }
-                if inside && outside {
-                    return Err(
-                        "折り線が面を横切っているのに面を分割できませんでした。折り線と重なる線の近くの展開図を確認してください"
-                            .to_string(),
-                    );
-                }
+            let all_in = poly
+                .iter()
+                .all(|&q| part.region.iter().all(|plane| plane.signed(q) >= -EPS));
+            if !all_in && overlaps_region(&poly, &part.region) {
+                return Err(
+                    "折り線が面を横切っているのに面を分割できませんでした。折り線と重なる線の近くの展開図を確認してください"
+                        .to_string(),
+                );
             }
         }
         let hit = parts
@@ -556,15 +556,13 @@ fn resolve_part(
         out
     };
 
-    // 領域に掛からない面は除く(頂点が1つも内側に無い面)。
+    // 領域に掛からない面は除く(切り取っても面積が残らない面)。
     let mut layers: Vec<FaceId> = Vec::with_capacity(listed.len());
     for id in listed {
         let f = faces.iter().find(|f| f.id == id).expect("検証済みの面ID");
         let pl = state.placements[&id];
-        let hit = region.is_empty()
-            || polygon(f)
-                .iter()
-                .any(|&p| region.iter().all(|q| q.signed(pl.apply(p)) > EPS));
+        let poly: Vec<DVec2> = polygon(f).into_iter().map(|p| pl.apply(p)).collect();
+        let hit = overlaps_region(&poly, &region);
         if hit {
             layers.push(id);
         } else if !spec.layers.is_empty() {
@@ -587,6 +585,43 @@ fn resolve_part(
         turn: spec.turn,
         reverse: spec.reverse_layers,
     })
+}
+
+/// 面(畳み平面の多角形)が領域(凸=半平面の共通部分)に掛かるか。
+///
+/// 多角形を半平面で順に切り取り(Sutherland–Hodgman)、面積が残るかで判定する。
+/// 頂点が内側にあるかだけを見ると、3本以上の半平面で囲んだ細い領域(花弁折りの
+/// 先端の三角形など、頂点が全て領域の境界に乗る形)を取りこぼす。
+fn overlaps_region(poly: &[DVec2], region: &[Plane]) -> bool {
+    if region.is_empty() {
+        return true;
+    }
+    let mut cur: Vec<DVec2> = poly.to_vec();
+    for plane in region {
+        if cur.len() < 3 {
+            return false;
+        }
+        let mut next: Vec<DVec2> = Vec::with_capacity(cur.len() + 1);
+        for i in 0..cur.len() {
+            let (a, b) = (cur[i], cur[(i + 1) % cur.len()]);
+            let (da, db) = (plane.signed(a), plane.signed(b));
+            if da >= 0.0 {
+                next.push(a);
+            }
+            if (da > 0.0 && db < 0.0) || (da < 0.0 && db > 0.0) {
+                next.push(a + (b - a) * (da / (da - db)));
+            }
+        }
+        cur = next;
+    }
+    if cur.len() < 3 {
+        return false;
+    }
+    let area: f64 = (0..cur.len())
+        .map(|i| cur[i].perp_dot(cur[(i + 1) % cur.len()]))
+        .sum::<f64>()
+        * 0.5;
+    area.abs() > REGION_AREA_EPS
 }
 
 // ---------------------------------------------------------------------------

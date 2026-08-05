@@ -30,8 +30,8 @@
 //! - 開いてつぶす([`squash`])は既存の折り目を**開く**動きが要るので
 //!   [`fold_through`] では組めず、汎用の折り操作([`crate::flat_motion`])を
 //!   1回呼ぶマクロとして書いてある(開く動き・回転をそのまま表せる)
-//! - 花弁折り(petal)はまだマクロにしていない。同じく [`crate::flat_motion`] の
-//!   上に書ける(開く動き+左右をたたむ動きの組み合わせ)
+//! - 花弁折り([`petal`])も同じく [`crate::flat_motion`] を1回呼ぶマクロ
+//!   (左右の羽と中央のくさびに別々の等長変換を与える)
 
 use std::collections::{HashMap, HashSet};
 
@@ -288,29 +288,7 @@ pub fn squash(
     let (l0, l1) = line_points(input.line)?;
     let u = (l1 - l0).normalize();
 
-    let mut chosen: Vec<FaceId> = Vec::with_capacity(input.flap.len());
-    for &id in &input.flap {
-        if !faces.iter().any(|f| f.id == id) {
-            return Err(format!(
-                "{name}の対象に指定された層 {id} が見つかりません。層を選び直してください"
-            ));
-        }
-        if !chosen.contains(&id) {
-            chosen.push(id);
-        }
-    }
-    if chosen.is_empty() {
-        return Err(format!(
-            "{name}にはフラップ(重なった層)の指定が必要です。開きたい重なりを選んでください"
-        ));
-    }
-    // フラップを層順(下→上)に並べる
-    let flap: Vec<FaceId> = state
-        .order
-        .iter()
-        .copied()
-        .filter(|id| chosen.contains(id))
-        .collect();
+    let flap = flap_in_layer_order(faces, state, &input.flap, name)?;
 
     let mut warnings: Vec<String> = Vec::new();
     let (span, pairs) = spine_along(cp, faces, state, &flap, l0, u);
@@ -366,6 +344,114 @@ pub fn squash(
         &FlatMotionInput {
             parts,
             kind: TechniqueKind::Squash,
+        },
+    )?;
+    warnings.append(&mut res.warnings);
+    res.warnings = warnings;
+    Ok(res)
+}
+
+/// 花弁折り(フラップの先端を持ち上げ、両側の縁を中心線に沿わせる)。
+///
+/// `line` は**中心線**: 持ち上げる先端と、その行き先が乗る畳み平面の直線。
+/// `reference_point` は**持ち上げる先端の位置**: フラップが中心線の向きに占める
+/// 範囲の両端のうち、この点に近いほうを先端とする(先端は反対の端の側へ回る)。
+///
+/// 動きは1回の [`flat_motion`] で表す。折り線は3本:
+///
+/// - 先端から出る**斜め2本**: 先端で「中心線」と「フラップの縁」がなす角の
+///   二等分線。ここで折ると両側の縁が中心線にぴったり重なる(花弁折りの要)
+/// - 中心線に直交する**ちょうつがい1本**: 先端から「縁の長さ」だけ離れた位置を通る。
+///   ここで先端側が折り返り、先端が反対の端へ持ち上がる。位置がこう決まるのは、
+///   縁を中心線へ寄せたときに縁の端がちょうどこの線へ届くため(この一致が
+///   花弁折りが平らに畳める理由)
+///
+/// 紙の動き(3つの [`MotionPart`]):
+///
+/// - 両側の羽(斜め線の外側でちょうつがいの手前): 斜め線→ちょうつがいの鏡映2回
+///   =回転。縁が中心線へ寄りながら持ち上がる
+/// - 中央のくさび(斜め2本の間でちょうつがいの手前): ちょうつがいでの鏡映
+/// - ちょうつがいの向こう側の紙は動かない
+///
+/// 持ち上げた紙は重なりのいちばん上へ回し、中央のくさびを羽の上に置く
+/// (羽は先に中心へ折られてから一緒に裏返るので、上下が入れ替わる)。
+///
+/// 層の数の偶奇やフラップの形は仮定せず、選んだ層すべてが同じように動く。
+/// Errにするのは幾何的に決められない入力(退化した中心線・見つからない層・
+/// 中心線の向きに広がりの無いフラップ・両側に紙の無いフラップ)だけで、
+/// 左右の縁の長さが食い違う・紙が裂けるといった指定は警告して続ける。
+pub fn petal(
+    cp: &mut CreasePattern,
+    faces: &[Face],
+    state: &FlatState,
+    input: &TechniqueInput,
+) -> Result<FoldThroughResult, String> {
+    let name = "花弁折り";
+    let (l0, l1) = line_points(input.line)?;
+    let u = (l1 - l0).normalize();
+    let flap = flap_in_layer_order(faces, state, &input.flap, name)?;
+
+    let mut warnings: Vec<String> = Vec::new();
+    let span = flap_span_along(cp, faces, state, &flap, l0, u).ok_or_else(|| {
+        format!("{name}のフラップが中心線の向きに広がっていません。中心線を引き直してください")
+    })?;
+    let p = DVec2::from(input.reference_point);
+    let (e0, e1) = (l0 + u * span.0, l0 + u * span.1);
+    let (tip, far) = if (p - e0).length() <= (p - e1).length() {
+        (e0, e1)
+    } else {
+        (e1, e0)
+    };
+    if (far - tip).length() <= EPS {
+        return Err(format!(
+            "{name}の先端と行き先が同じ位置です。中心線を引き直してください"
+        ));
+    }
+    let d = (far - tip).normalize();
+
+    // 先端から見た両側の縁(中心線となす角と、その縁の長さ)
+    let (right, left) = flap_sides(cp, faces, state, &flap, tip, d);
+    let reaches: Vec<f64> = [right, left].iter().filter_map(|s| s.map(|(_, r)| r)).collect();
+    if reaches.is_empty() {
+        return Err(format!(
+            "{name}の先端の両側に紙がありません。中心線と先端の位置を確かめてください"
+        ));
+    }
+    let reach = reaches.iter().sum::<f64>() / reaches.len() as f64;
+    if reaches.len() == 2 && (reaches[0] - reaches[1]).abs() > JOIN_EPS {
+        warnings.push(format!(
+            "この{name}では先端の左右の縁の長さが違います。ちょうつがいの位置を平均で決めるため、このままでは紙が裂けます(指定のまま続行します)"
+        ));
+    }
+    if [right, left]
+        .iter()
+        .filter_map(|s| s.map(|(a, _)| a))
+        .any(|a| a.abs() >= std::f64::consts::FRAC_PI_2 - ANGLE_EPS)
+    {
+        warnings.push(format!(
+            "この{name}では、先端の紙が中心線の横まで広がっています。折り上がりが平らにならないことがあります(指定のまま続行します)"
+        ));
+    }
+
+    // 羽のところでフラップとつながっている「フラップ外の層」。その折り目は
+    // 花弁折りで開く(角0°)ので、相手の羽も中心線へ寄せないと紙が裂ける。
+    let sides: Vec<(f64, Vec<FaceId>)> = [right, left]
+        .into_iter()
+        .flatten()
+        .map(|(ang, _)| {
+            let ns = wing_neighbors(cp, faces, state, &flap, tip, d, reach, ang);
+            (ang, ns)
+        })
+        .collect();
+
+    let parts = petal_parts(&flap, tip, d, reach, &sides);
+    let mut res = flat_motion(
+        cp,
+        faces,
+        state,
+        &FlatMotionInput {
+            parts,
+            kind: TechniqueKind::Petal,
         },
     )?;
     warnings.append(&mut res.warnings);
@@ -959,6 +1045,38 @@ impl Session {
 // 小さな道具
 // ---------------------------------------------------------------------------
 
+/// 入力のフラップ指定を検証し、層順(下→上)に並べる([`flat_motion`]の上に書いた
+/// 技法の共通処理。指定が空・見つからない層はErrで断る)。
+fn flap_in_layer_order(
+    faces: &[Face],
+    state: &FlatState,
+    flap: &[FaceId],
+    name: &str,
+) -> Result<Vec<FaceId>, String> {
+    let mut chosen: Vec<FaceId> = Vec::with_capacity(flap.len());
+    for &id in flap {
+        if !faces.iter().any(|f| f.id == id) {
+            return Err(format!(
+                "{name}の対象に指定された層 {id} が見つかりません。層を選び直してください"
+            ));
+        }
+        if !chosen.contains(&id) {
+            chosen.push(id);
+        }
+    }
+    if chosen.is_empty() {
+        return Err(format!(
+            "{name}にはフラップ(重なった層)の指定が必要です。動かしたい重なりを選んでください"
+        ));
+    }
+    Ok(state
+        .order
+        .iter()
+        .copied()
+        .filter(|id| chosen.contains(id))
+        .collect())
+}
+
 /// 中心線に重なっている折り目(開く背)を探す。
 ///
 /// 戻り値は「背が中心線上で占める範囲(l0からの符号付き距離)」と
@@ -1123,6 +1241,205 @@ fn squash_parts(
             reverse_layers: None,
         });
     }
+    parts
+}
+
+/// 花弁折りの、先端から見たフラップの片側の縁: (中心線となす角(rad), 縁の長さ)。
+/// 紙の無い側は `None`。
+type FlapSide = Option<(f64, f64)>;
+
+/// 先端から見たフラップの両側の縁。戻り値は(右回り側, 左回り側)。
+///
+/// 縁は「先端から見て中心線から最も開いた向きにある頂点」で決める(同じ角なら遠いほう)。
+/// フラップの形も層の数も仮定しないための決め方。
+fn flap_sides(
+    cp: &CreasePattern,
+    faces: &[Face],
+    state: &FlatState,
+    flap: &[FaceId],
+    tip: DVec2,
+    d: DVec2,
+) -> (FlapSide, FlapSide) {
+    let pos = vertex_positions(cp);
+    let (mut right, mut left): (FlapSide, FlapSide) = (None, None);
+    for f in faces.iter().filter(|f| flap.contains(&f.id)) {
+        let Some(pl) = state.placements.get(&f.id) else {
+            continue;
+        };
+        for v in f.vertices.iter().filter_map(|v| pos.get(v)) {
+            let q = pl.apply(*v) - tip;
+            let r = q.length();
+            if r <= EPS {
+                continue;
+            }
+            let ang = d.perp_dot(q).atan2(d.dot(q));
+            let slot = if ang > ANGLE_EPS {
+                &mut left
+            } else if ang < -ANGLE_EPS {
+                &mut right
+            } else {
+                continue;
+            };
+            let better = match slot {
+                None => true,
+                Some((a0, r0)) => {
+                    let (w, w0) = (ang.abs(), a0.abs());
+                    w > w0 + ANGLE_EPS || ((w - w0).abs() <= ANGLE_EPS && r > *r0)
+                }
+            };
+            if better {
+                *slot = Some((ang, r));
+            }
+        }
+    }
+    (right, left)
+}
+
+/// 羽の領域で、フラップの層と折り目でつながっている「フラップ外の層」。
+///
+/// 花弁折りでは、羽の外側の縁(フラップの層と隣の層をつないでいる折り目)が
+/// **開く**。相手の層の羽も一緒に中心線へ寄せないと、そこで紙が裂ける。
+#[allow(clippy::too_many_arguments)]
+fn wing_neighbors(
+    cp: &CreasePattern,
+    faces: &[Face],
+    state: &FlatState,
+    flap: &[FaceId],
+    tip: DVec2,
+    d: DVec2,
+    reach: f64,
+    ang: f64,
+) -> Vec<FaceId> {
+    let pos = vertex_positions(cp);
+    let k = rotate(d, ang * 0.5);
+    let planes: [&dyn Fn(DVec2) -> f64; 2] = [
+        &|q: DVec2| reach - d.dot(q - tip),
+        &|q: DVec2| ang.signum() * k.perp_dot(q - tip),
+    ];
+    let mut out: Vec<FaceId> = Vec::new();
+    for (eid, fs) in faces_by_edge(faces) {
+        if fs.len() != 2 {
+            continue;
+        }
+        let (mine, other) = match (flap.contains(&fs[0]), flap.contains(&fs[1])) {
+            (true, false) => (fs[0], fs[1]),
+            (false, true) => (fs[1], fs[0]),
+            _ => continue,
+        };
+        if out.contains(&other) {
+            continue;
+        }
+        let Some(e) = cp.edges.iter().find(|e| e.id == eid) else {
+            continue;
+        };
+        if !matches!(e.kind, EdgeKind::Mountain | EdgeKind::Valley) {
+            continue;
+        }
+        let (Some(pl), Some(&p0), Some(&p1)) =
+            (state.placements.get(&mine), pos.get(&e.v0), pos.get(&e.v1))
+        else {
+            continue;
+        };
+        if segment_enters(pl.apply(p0), pl.apply(p1), &planes) {
+            out.push(other);
+        }
+    }
+    out
+}
+
+/// 線分が凸領域(符号付き距離の列。全て正なら内側)の内部を通るか。
+fn segment_enters(p0: DVec2, p1: DVec2, planes: &[&dyn Fn(DVec2) -> f64]) -> bool {
+    let (mut lo, mut hi) = (0.0_f64, 1.0_f64);
+    for plane in planes {
+        let (a, b) = (plane(p0), plane(p1));
+        let diff = b - a;
+        if diff.abs() <= EPS {
+            if a <= EPS {
+                return false;
+            }
+            continue;
+        }
+        let t = -a / diff;
+        if diff > 0.0 {
+            lo = lo.max(t);
+        } else {
+            hi = hi.min(t);
+        }
+    }
+    hi - lo > EPS
+}
+
+/// 中心線の向き `d` を角 `a` だけ回した向き。
+fn rotate(d: DVec2, a: f64) -> DVec2 {
+    let (s, c) = a.sin_cos();
+    DVec2::new(d.x * c - d.y * s, d.x * s + d.y * c)
+}
+
+/// 花弁折りの動き。`sides` は側ごとの(中心線となす角, 一緒に開く隣の層)。
+///
+/// - フラップの羽(斜め線の外側・ちょうつがいの手前): 斜め線→ちょうつがいの鏡映2回
+/// - 隣の層の羽: 斜め線の鏡映1回(縁を中心線へ寄せるだけ)。フラップの羽との
+///   折り目はこれで開き、2枚が本のように平らに並ぶ
+/// - 中央のくさび: ちょうつがいの鏡映
+///
+/// 部分の順に意味がある: [`flat_motion`] は後の部分ほど上に重ねるので、
+/// 羽を先・中央を後に並べて中央のくさびを羽の上に置く。
+fn petal_parts(
+    flap: &[FaceId],
+    tip: DVec2,
+    d: DVec2,
+    reach: f64,
+    sides: &[(f64, Vec<FaceId>)],
+) -> Vec<MotionPart> {
+    let seg = |from: DVec2, dir: DVec2| [[from.x, from.y], [from.x + dir.x, from.y + dir.y]];
+    let hinge_at = tip + d * reach;
+    let hinge = seg(hinge_at, DVec2::new(-d.y, d.x));
+    let near_side = HalfPlane {
+        line: hinge,
+        inside_point: [tip.x, tip.y],
+    };
+    let mut parts: Vec<MotionPart> = Vec::new();
+    let mut middle = vec![near_side.clone()];
+    for (ang, neighbors) in sides {
+        let bisector = seg(tip, rotate(d, ang * 0.5));
+        let outside = tip + rotate(d, *ang) * reach;
+        let inside = tip + d * (reach * 0.5);
+        let wing = vec![
+            near_side.clone(),
+            HalfPlane {
+                line: bisector,
+                inside_point: [outside.x, outside.y],
+            },
+        ];
+        middle.push(HalfPlane {
+            line: bisector,
+            inside_point: [inside.x, inside.y],
+        });
+        if !neighbors.is_empty() {
+            // 隣の層の羽は中心線へ寄せるだけ(もとの層のすぐ上へ入る)
+            parts.push(MotionPart {
+                layers: neighbors.clone(),
+                region: wing.clone(),
+                transform: MotionTransform::Reflect(vec![bisector]),
+                turn: LayerTurn::Inside(FoldDirection::Up),
+                reverse_layers: None,
+            });
+        }
+        parts.push(MotionPart {
+            layers: flap.to_vec(),
+            region: wing,
+            transform: MotionTransform::Reflect(vec![bisector, hinge]),
+            turn: LayerTurn::Outside(FoldDirection::Up),
+            reverse_layers: None,
+        });
+    }
+    parts.push(MotionPart {
+        layers: flap.to_vec(),
+        region: middle,
+        transform: MotionTransform::Reflect(vec![hinge]),
+        turn: LayerTurn::Outside(FoldDirection::Up),
+        reverse_layers: None,
+    });
     parts
 }
 

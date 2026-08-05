@@ -22,7 +22,7 @@ export const TECHNIQUE_KINDS = Object.keys(TECHNIQUE_LABEL) as TechniqueKind[];
 
 /**
  * 「技法」ツールのサブメニューに出す、選ぶだけで折れる技法。
- * ここに無い技法(花弁折り・沈め折りなど)はまだ自動で折れないので出さない
+ * ここに無い技法(沈め折り・ひだ寄せなど)はまだ自動で折れないので出さない
  * (手動の折り操作で作る)。Rust側 `ori3-layers::techniques` の実装と対応する。
  */
 export const SUPPORTED_TECHNIQUES: {
@@ -54,6 +54,12 @@ export const SUPPORTED_TECHNIQUES: {
     short: "つぶす",
     title:
       "開いてつぶす: フラップを開いて平らにつぶします。重なった層をクリックして選び、開く折り目(背)に重なる中心線をドラッグしてください。基準点はつぶす方向を指します",
+  },
+  {
+    kind: "Petal",
+    short: "花弁",
+    title:
+      "花弁折り: フラップの先端を持ち上げ、両側の縁を中心線に沿わせます。重なった層をクリックして選び、先端と行き先を通る中心線をドラッグしてください。基準点は持ち上げる先端の位置を指します",
   },
 ];
 

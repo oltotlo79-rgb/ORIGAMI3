@@ -1,4 +1,4 @@
-//! 基本技法のマクロ(段折り・中割り折り・かぶせ折り・開いてつぶす)のテスト。
+//! 基本技法のマクロ(段折り・中割り折り・かぶせ折り・開いてつぶす・花弁折り)のテスト。
 //!
 //! 検証の方針:
 //! - 形と層: 面の数・畳んだ位置・層順序
@@ -27,7 +27,9 @@ use ori3_cp::{Face, extract_faces};
 use ori3_layers::flat_state::representative_point;
 use ori3_layers::fold_through::{FoldDirection, FoldThroughInput, fold_through};
 use ori3_layers::techniques::TechniqueInput;
-use ori3_layers::{flat_state_at, inside_reverse, outside_reverse, pleat, replay, squash};
+use ori3_layers::{
+    flat_state_at, inside_reverse, outside_reverse, petal, pleat, replay, squash,
+};
 use ori3_model::{CreasePattern, Document, EdgeKind, FaceId, Paper, TechniqueKind};
 
 /// 技法1回ぶんの結果(検証しやすいようにまとめた)。
@@ -690,7 +692,7 @@ fn reverse_fold_rejects_a_line_that_does_not_cross_the_flap() {
 fn techniques_replay_from_the_crease_pattern() {
     // 段折りの基準点は2本目の折り線の位置、中割り・かぶせは先端が向かう側
     let d = 0.5 * std::f64::consts::SQRT_2;
-    let cases: [ReplayCase; 4] = [
+    let cases: [ReplayCase; 5] = [
         ("段折り", pleat as Technique, [[0.6, 0.0], [0.6, 1.0]], [0.7, 0.25]),
         // つぶし折りは背(y=0.5)を開いて右端まわりに45°回す
         (
@@ -711,6 +713,8 @@ fn techniques_replay_from_the_crease_pattern() {
             [[0.7, 0.5], [0.5, 0.0]],
             [0.2, 0.25],
         ),
+        // 花弁折りは背(y=0.5)を中心線に、右端の先端を持ち上げる
+        ("花弁折り", petal as Technique, [[0.0, 0.5], [1.0, 0.5]], [1.0, 0.5]),
     ];
     for (label, technique, line, reference) in cases {
         let mut doc = two_layer_flap();
@@ -1118,4 +1122,149 @@ fn squash_rejects_undefined_input_without_touching_document() {
         "背が見つからない警告が出る: {:?}",
         a.warnings
     );
+}
+
+/// 予備基本形(4層。層のつながりが輪になっていて、どの向きにも開ける)。
+fn preliminary_base() -> Document {
+    let mut doc = four_layer_stack();
+    let faces = extract_faces(&doc.cp);
+    let (state, _) = flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
+    let bottom = state.order[0];
+    let a = apply(&mut doc, squash, vec![bottom], [[0.5, 0.0], [0.5, 1.0]], [0.5, 0.1])
+        .expect("1回目の組み替え");
+    apply(&mut doc, squash, vec![a.order[0]], [[0.0, 0.5], [1.0, 0.5]], [0.1, 0.5])
+        .expect("2回目の組み替え");
+    doc
+}
+
+// ---------------------------------------------------------------------------
+// 花弁折り
+// ---------------------------------------------------------------------------
+
+/// M2の受け入れ条件(折り鶴の前提): 予備基本形の前面を花弁折りすると、
+/// 先端が持ち上がって鶴の基本形の細い先(首・尾になる部分)ができる。
+///
+/// 予備基本形は footprint が [0,0.5]x[0.5,1.0] で、紙の4隅が (0,1)(開いた先端)、
+/// 紙の中心が (0.5,0.5)(閉じた角)に来る。中心線はその2点を結ぶ線。
+#[test]
+fn petal_lifts_the_front_of_the_bird_base() {
+    let mut doc = preliminary_base();
+    let faces = extract_faces(&doc.cp);
+    let (before, _) = flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
+    let front = *before.order.last().expect("最前面");
+    let edges_before = doc.cp.edges.len();
+
+    let a = apply(&mut doc, petal, vec![front], [[0.0, 1.0], [0.5, 0.5]], [0.0, 1.0])
+        .expect("前面を花弁折りできる");
+    assert!(a.warnings.is_empty(), "紙は裂けない: {:?}", a.warnings);
+
+    // 前面が「羽2枚・中央のくさび・動かない部分」の4面に、
+    // 一緒に開く隣の2層がそれぞれ2面に分かれる(4+2+2+1=9面)
+    assert_eq!(a.faces.len(), 9, "前面4面・隣の層2面ずつ・残り1層");
+    assert_eq!(a.order.len(), 9);
+    assert_eq!(doc.cp.edges.len(), edges_before + 7, "折り線5本と輪郭の分割2本");
+
+    let step = &doc.sequence[doc.sequence.len() - 1];
+    assert_eq!(step.kind, TechniqueKind::Petal);
+    // 動かす折り線は7本: 前面の3本(斜め2本+ちょうつがい)、隣の層の斜め2本、
+    // そして開く折り目2本(前面の羽と隣の層の羽をつないでいた縁)
+    assert_eq!(step.drivers.len(), 7, "駆動する折り線: {:?}", step.drivers);
+    let opened = step
+        .drivers
+        .iter()
+        .filter(|dr| dr.target_angle_deg == 0.0)
+        .count();
+    assert_eq!(opened, 2, "開く折り目は0°で記録される: {:?}", step.drivers);
+    assert_eq!(
+        step.drivers
+            .iter()
+            .filter(|dr| dr.target_angle_deg.abs() == 180.0)
+            .count(),
+        5,
+        "残りの5本は折り上がり180°: {:?}",
+        step.drivers
+    );
+
+    // 先端(紙の4隅が来ていた (0,1))が中心線に沿って持ち上がり、
+    // 閉じた角 (0.5,0.5) を越えて外へ出る(鶴の細い先)
+    let tip = DVec2::new(0.0, 1.0);
+    let apex = DVec2::new(0.5, 0.5);
+    let axis = (apex - tip).normalize();
+    let faces = extract_faces(&doc.cp);
+    let (after, warnings) =
+        flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let pos: HashMap<u32, DVec2> =
+        doc.cp.vertices.iter().map(|v| (v.id, DVec2::from(v.pos))).collect();
+    let reach_of = |f: &Face| -> f64 {
+        f.vertices
+            .iter()
+            .filter_map(|v| pos.get(v))
+            .map(|&p| axis.dot(after.placements[&f.id].apply(p) - tip))
+            .fold(f64::NEG_INFINITY, f64::max)
+    };
+    let far = faces.iter().map(reach_of).fold(f64::NEG_INFINITY, f64::max);
+    assert!(
+        (far - 1.0).abs() < 1e-6,
+        "先端が中心線に沿って1.0まで持ち上がる(閉じた角は{}): {far}",
+        (apex - tip).length()
+    );
+    // 持ち上がった紙は重なりのいちばん上に来る(鶴の基本形の前面)
+    let top = *a.order.last().expect("最上層");
+    let top_face = faces.iter().find(|f| f.id == top).expect("最上層の面");
+    assert!(
+        reach_of(top_face) > 0.5 + 1e-9,
+        "最前面がちょうつがい(先端から0.5)より先へ出ている"
+    );
+
+    // 記録した手順から同じ形に折り直せる
+    assert_eq!(after.order, a.order, "層順序が再生結果と一致する");
+    for f in &faces {
+        assert!(
+            a.at[&f.id].abs_diff_eq(after.placements[&f.id].apply(DVec2::from(a.rep[&f.id])), 1e-6),
+            "面 {} の位置が再生結果と一致する",
+            f.id
+        );
+    }
+    assert_fold_senses(&doc, "花弁折り");
+}
+
+/// 花弁折りが断るのは幾何的に決められない入力だけ。断ったときは文書を変えない。
+#[test]
+fn petal_rejects_undefined_input_without_touching_document() {
+    let mut doc = preliminary_base();
+    let before = doc.clone();
+    let faces = extract_faces(&doc.cp);
+    let (state, _) = flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
+    let front = *state.order.last().expect("最前面");
+
+    // 中心線が退化(2点が一致)
+    let err = apply(&mut doc, petal, vec![front], [[0.5, 0.5], [0.5, 0.5]], [0.0, 1.0])
+        .expect_err("退化した中心線はエラー");
+    assert!(err.contains("2点が一致"), "{err}");
+    assert_eq!(doc, before, "失敗時は文書を変更しない");
+
+    // フラップの指定が無い
+    let err = apply(&mut doc, petal, Vec::new(), [[0.0, 1.0], [0.5, 0.5]], [0.0, 1.0])
+        .expect_err("フラップ未指定はエラー");
+    assert!(err.contains("フラップ"), "{err}");
+    assert_eq!(doc, before);
+
+    // 無い層を指定した
+    let missing = faces.iter().map(|f| f.id).max().unwrap_or(0) + 99;
+    let err = apply(&mut doc, petal, vec![missing], [[0.0, 1.0], [0.5, 0.5]], [0.0, 1.0])
+        .expect_err("無い層はエラー");
+    assert!(err.contains("見つかりません"), "{err}");
+    assert_eq!(doc, before);
+
+    // 中心線がフラップの縁に重なっていて片側にしか紙が無い指定は、断らずに
+    // 警告して続ける(「止めずに警告」原則)
+    let a = apply(&mut doc, petal, vec![front], [[0.0, 0.5], [0.5, 0.5]], [0.0, 0.5])
+        .expect("片側だけでも折れる");
+    assert!(
+        a.warnings.iter().any(|w| w.contains("中心線の横まで広がって")),
+        "無理のある指定は警告になる: {:?}",
+        a.warnings
+    );
+    assert_ne!(doc, before, "警告付きでも折りは適用される");
 }

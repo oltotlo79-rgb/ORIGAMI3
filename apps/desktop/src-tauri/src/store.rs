@@ -291,6 +291,7 @@ impl DocumentStore {
                     TechniqueKind::InsideReverse => ori3_layers::inside_reverse,
                     TechniqueKind::OutsideReverse => ori3_layers::outside_reverse,
                     TechniqueKind::Squash => ori3_layers::squash,
+                    TechniqueKind::Petal => ori3_layers::petal,
                     _ => {
                         return Err(
                             "この折り方はまだ選べません。手動の折り操作で代替してください"
@@ -1118,6 +1119,36 @@ mod tests {
         );
     }
 
+    /// 花弁折りは畳んだ状態(2層のフラップ)に対して適用できる。
+    #[test]
+    fn technique_petal_lifts_the_tip_of_a_two_layer_flap() {
+        let mut store = square_store();
+        // 下ごしらえ: 半分に折って2層にする(背は y=0.5 = 中心線)
+        store
+            .apply_seq(fold_op(0, [[0.0, 0.5], [1.0, 0.5]], [0.5, 0.25]))
+            .unwrap();
+        let flap: Vec<u32> = store.faces.iter().map(|f| f.id).collect();
+        assert_eq!(flap.len(), 2);
+
+        // 中心線 y=0.5 の右端 (1,0.5) の先端を持ち上げる
+        let view = store
+            .apply_seq(SeqOp::Technique {
+                up_to: 1,
+                kind: TechniqueKind::Petal,
+                flap,
+                line: [[0.0, 0.5], [1.0, 0.5]],
+                reference_point: [1.0, 0.5],
+            })
+            .unwrap();
+        assert!(view.faces.len() > 2, "羽と中央のくさびに分かれる");
+        assert_eq!(view.doc.sequence.len(), 2);
+        assert_eq!(view.doc.sequence[1].kind, TechniqueKind::Petal);
+        assert!(
+            !view.doc.sequence[1].drivers.is_empty(),
+            "動かす折り線が手順に記録される"
+        );
+    }
+
     /// 未実装の技法・折れない指定・手順の途中への挿入はErr(文書は無変更)。
     #[test]
     fn technique_rejects_unsupported_kind_and_bad_input() {
@@ -1127,7 +1158,7 @@ mod tests {
         let err = store
             .apply_seq(SeqOp::Technique {
                 up_to: 0,
-                kind: TechniqueKind::Petal,
+                kind: TechniqueKind::OpenSink,
                 flap: Vec::new(),
                 line: [[0.4, 0.0], [0.4, 1.0]],
                 reference_point: [0.5, 0.5],
