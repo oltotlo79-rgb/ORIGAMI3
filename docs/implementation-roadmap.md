@@ -159,14 +159,23 @@ pub enum TechniqueKind {
 }
 
 /// ヒンジ角: 0=平ら, +180=完全な山折り, -180=完全な谷折り(度)
+/// 注: EdgeId参照のDriverは pose_solve(スライダー操作)専用の一時指定。
+/// 手順の永続化には使わない(辺IDは後続の折りの分割で無効化されるため)。
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Driver { pub hinge: EdgeId, pub target_angle_deg: f64 }
+
+/// 手順永続化用のdriver: 折り線をCP座標の線分で指定する。
+/// 再生時は「この線分上に乗る折り辺すべて」(同一直線上・区間内・EPS許容)を
+/// 対象角へ駆動する。後続の折りで辺が分割されても全断片が駆動されるため
+/// ID無効化に耐える(層順序の代表点方式と同じ思想)。
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct DriverLine { pub a: [f64; 2], pub b: [f64; 2], pub target_angle_deg: f64 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FoldStep {
     pub id: StepId,
     pub kind: TechniqueKind,
-    pub drivers: Vec<Driver>,
+    pub drivers: Vec<DriverLine>,
     /// 平坦到達時の層順序(下→上)。面IDは不安定なので、
     /// 各面を「CP座標系におけるその面の内部代表点」で参照する。
     /// 平坦にならないステップ(Pose)ではNone。
