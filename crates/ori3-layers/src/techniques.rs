@@ -67,10 +67,11 @@ pub struct TechniqueInput {
     pub line: [[f64; 2]; 2],
     /// 技法ごとに意味の変わる基準点(各関数のdocを参照)
     pub reference_point: [f64; 2],
-    /// つぶし折りで、つぶした紙を重なりのどちら側へ回すか。
+    /// つぶし折り・花弁折りで、動かした紙を重なりのどちら側へ回すか。
     /// `None`/`Some(false)` は手前(いちばん上)、`Some(true)` は向こう(いちばん下)。
-    /// 実際の紙ではどちらへも開けるので、両方を表せるようにしてある。
-    /// 他の技法では見ない(向きは紙のつながりから決まるため)。
+    /// 実際の紙ではどちらへも開ける(鶴の基本形は前後に1回ずつ花弁折りする)ので、
+    /// 両方を表せるようにしてある。
+    /// 段折り・中割り折り・かぶせ折りでは見ない(向きは紙のつながりから決まるため)。
     pub open_to_back: Option<bool>,
 }
 
@@ -387,6 +388,9 @@ pub fn squash(
 ///
 /// 持ち上げた紙は重なりのいちばん上へ回し、中央のくさびを羽の上に置く
 /// (羽は先に中心へ折られてから一緒に裏返るので、上下が入れ替わる)。
+/// `open_to_back` が `Some(true)` なら向こう側(いちばん下)へ回す。実際の紙では
+/// どちらへも折れる(鶴の基本形は前面と背面に1回ずつ花弁折りする)ため、
+/// 手前に決め打ちしない。
 ///
 /// 層の数の偶奇やフラップの形は仮定せず、選んだ層すべてが同じように動く。
 /// Errにするのは幾何的に決められない入力(退化した中心線・見つからない層・
@@ -453,7 +457,12 @@ pub fn petal(
         })
         .collect();
 
-    let parts = petal_parts(&flap, tip, d, hinge, &sides);
+    let open = if input.open_to_back.unwrap_or(false) {
+        FoldDirection::Down
+    } else {
+        FoldDirection::Up
+    };
+    let parts = petal_parts(&flap, tip, d, hinge, &sides, open);
     let mut res = flat_motion(
         cp,
         faces,
@@ -1424,14 +1433,16 @@ fn rotate(d: DVec2, a: f64) -> DVec2 {
 ///   折り目はこれで開き、2枚が本のように平らに並ぶ
 /// - 中央のくさび: ちょうつがいの鏡映
 ///
-/// 部分の順に意味がある: [`flat_motion`] は後の部分ほど上に重ねるので、
-/// 羽を先・中央を後に並べて中央のくさびを羽の上に置く。
+/// 部分の順に意味がある: [`flat_motion`] は後の部分ほど `open` の側へ重ねるので、
+/// 羽を先・中央を後に並べて中央のくさびを羽の外側に置く。
+/// `open` は持ち上げた紙を回す側(手前=Up / 向こう=Down)。
 fn petal_parts(
     flap: &[FaceId],
     tip: DVec2,
     d: DVec2,
     hinge: [[f64; 2]; 2],
     sides: &[(f64, f64, Vec<FaceId>)],
+    open: FoldDirection,
 ) -> Vec<MotionPart> {
     let seg = |from: DVec2, dir: DVec2| [[from.x, from.y], [from.x + dir.x, from.y + dir.y]];
     let near_side = HalfPlane {
@@ -1464,7 +1475,7 @@ fn petal_parts(
                 layers: neighbors.clone(),
                 region: wing.clone(),
                 transform: MotionTransform::Reflect(vec![bisector]),
-                turn: LayerTurn::Inside(FoldDirection::Up),
+                turn: LayerTurn::Inside(open),
                 reverse_layers: None,
             });
         }
@@ -1472,7 +1483,7 @@ fn petal_parts(
             layers: flap.to_vec(),
             region: wing,
             transform: MotionTransform::Reflect(vec![bisector, hinge]),
-            turn: LayerTurn::Outside(FoldDirection::Up),
+            turn: LayerTurn::Outside(open),
             reverse_layers: None,
         });
     }
@@ -1480,7 +1491,7 @@ fn petal_parts(
         layers: flap.to_vec(),
         region: middle,
         transform: MotionTransform::Reflect(vec![hinge]),
-        turn: LayerTurn::Outside(FoldDirection::Up),
+        turn: LayerTurn::Outside(open),
         reverse_layers: None,
     });
     parts
