@@ -94,20 +94,29 @@ fn apply(
     line: [[f64; 2]; 2],
     reference_point: [f64; 2],
 ) -> Result<Applied, String> {
+    apply_input(
+        doc,
+        technique,
+        TechniqueInput {
+            flap,
+            line,
+            reference_point,
+            open_to_back: None,
+        },
+    )
+}
+
+/// 入力をそのまま渡す版([`apply`] は既定の入力を組み立ててこれを呼ぶ)。
+fn apply_input(
+    doc: &mut Document,
+    technique: Technique,
+    input: TechniqueInput,
+) -> Result<Applied, String> {
     let faces = extract_faces(&doc.cp);
     let up_to = doc.sequence.len();
     let (state, _) = flat_state_at(doc, &faces, up_to)?;
     let mut cp = doc.cp.clone();
-    let res = technique(
-        &mut cp,
-        &faces,
-        &state,
-        &TechniqueInput {
-            flap,
-            line,
-            reference_point,
-        },
-    )?;
+    let res = technique(&mut cp, &faces, &state, &input)?;
     let mut step = res.step;
     step.id = u32::try_from(up_to).unwrap();
     doc.cp = cp;
@@ -1011,6 +1020,47 @@ fn squash_opens_the_spine_and_spreads_the_flap() {
     assert_fold_senses(&doc, "つぶし折り");
 }
 
+/// つぶし折りは「向こう側へ開く」指定もできる(実際の紙で奥へ開く動き)。
+/// 紙の行き先は手前へ開いたときと同じで、つぶした紙が入る重なりの側だけが変わる。
+#[test]
+fn squash_can_open_the_flap_to_the_back() {
+    let d = 0.5 * std::f64::consts::SQRT_2;
+    let line = [[0.0, 0.5], [1.0, 0.5]];
+    let reference_point = [1.0 - d, 0.5 - d];
+
+    let mut front_doc = two_layer_flap();
+    let flap: Vec<FaceId> = extract_faces(&front_doc.cp).iter().map(|f| f.id).collect();
+    let front = apply(&mut front_doc, squash, flap.clone(), line, reference_point)
+        .expect("手前へ開ける");
+
+    let mut back_doc = two_layer_flap();
+    let back = apply_input(
+        &mut back_doc,
+        squash,
+        TechniqueInput {
+            flap,
+            line,
+            reference_point,
+            open_to_back: Some(true),
+        },
+    )
+    .expect("向こうへ開ける");
+
+    assert!(back.warnings.is_empty(), "紙は裂けない: {:?}", back.warnings);
+    assert_eq!(back.faces.len(), front.faces.len(), "分かれる面の数は同じ");
+    for f in &back.faces {
+        assert!(
+            back.at[&f.id].abs_diff_eq(front.at[&f.id], 1e-12),
+            "面 {} の行き先は開く向きによらず同じ",
+            f.id
+        );
+    }
+    let reversed: Vec<FaceId> = front.order.iter().rev().copied().collect();
+    assert_eq!(back.order, reversed, "重なりの上下だけが入れ替わる");
+    assert_display_order(&back_doc, "向こうへ開くつぶし折り");
+    assert_fold_senses(&back_doc, "向こうへ開くつぶし折り");
+}
+
 /// 退化ケース: 2回半分に折った正方形(4層)を、2回のつぶし折りで
 /// 予備基本形の重なりへ組み替える。
 ///
@@ -1229,6 +1279,48 @@ fn petal_lifts_the_front_of_the_bird_base() {
     assert_fold_senses(&doc, "花弁折り");
 }
 
+/// 左右の縁の長さが違うフラップでも花弁折りできる。
+///
+/// 長方形の紙(2:1)を1回折った2層。畳んだ形は [0,1]x[0,0.25] の長方形で、
+/// 背(開く折り目)は y=0.25、残りの3辺は紙の縁。
+fn rectangular_two_layer_flap() -> Document {
+    let mut doc = Document::new(Paper {
+        width_mm: 100.0,
+        height_mm: 50.0,
+    });
+    fold(&mut doc, [[0.0, 0.25], [1.0, 0.25]], [0.5, 0.125], FoldDirection::Up);
+    doc
+}
+
+/// 先端から見た左右の縁の長さが違うフラップでも花弁折りできる。
+///
+/// 先端は角 (0,0)、中心線はそこから対角の (1,0.25) へ引く。先端から見た縁は
+/// 片側が長さ 1.0(y=0 の辺)、もう片側が 0.25(x=0 の辺)と違う。
+/// 実際の紙では左右で別の折り線(中心線に直交しない1本の斜めのちょうつがい)に
+/// なるだけで平らに畳めるので、裂ける警告は出ない。
+#[test]
+fn petal_on_a_flap_with_different_edge_lengths() {
+    let mut doc = rectangular_two_layer_flap();
+    let flap: Vec<FaceId> = extract_faces(&doc.cp).iter().map(|f| f.id).collect();
+    let a = apply(&mut doc, petal, flap, [[0.0, 0.0], [1.0, 0.25]], [0.0, 0.0])
+        .expect("非対称なフラップでも花弁折りできる");
+    assert!(a.warnings.is_empty(), "紙は裂けない: {:?}", a.warnings);
+
+    let faces = extract_faces(&doc.cp);
+    let (after, warnings) =
+        flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(after.order, a.order, "層順序が再生結果と一致する");
+    for f in &faces {
+        assert!(
+            a.at[&f.id].abs_diff_eq(after.placements[&f.id].apply(DVec2::from(a.rep[&f.id])), 1e-6),
+            "面 {} の位置が再生結果と一致する",
+            f.id
+        );
+    }
+    assert_fold_senses(&doc, "非対称な花弁折り");
+}
+
 /// 花弁折りが断るのは幾何的に決められない入力だけ。断ったときは文書を変えない。
 #[test]
 fn petal_rejects_undefined_input_without_touching_document() {
@@ -1268,3 +1360,5 @@ fn petal_rejects_undefined_input_without_touching_document() {
     );
     assert_ne!(doc, before, "警告付きでも折りは適用される");
 }
+
+

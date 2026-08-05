@@ -278,6 +278,7 @@ impl DocumentStore {
                 flap,
                 line,
                 reference_point,
+                open_to_back,
             } => {
                 // FoldThroughと同じ規約: 末尾への追加のみ(途中へ挟むと後続手順が壊れ得る)
                 if up_to != doc.sequence.len() {
@@ -309,6 +310,7 @@ impl DocumentStore {
                         flap,
                         line,
                         reference_point,
+                        open_to_back,
                     },
                 )?;
                 let mut step = result.step;
@@ -1030,6 +1032,7 @@ mod tests {
                 flap: Vec::new(),
                 line: [[0.4, 0.0], [0.4, 1.0]],
                 reference_point: [0.5, 0.5],
+                open_to_back: None,
             })
             .unwrap();
         // 折り線2本で面が3つに分かれ、手順が1つ増える
@@ -1077,6 +1080,7 @@ mod tests {
                 flap,
                 line: [[0.7, 0.5], [0.5, 0.0]],
                 reference_point: [0.2, 0.25],
+                open_to_back: None,
             })
             .unwrap();
         assert_eq!(view.faces.len(), 4, "2層が4層になる");
@@ -1105,6 +1109,7 @@ mod tests {
                 flap,
                 line: [[0.0, 0.5], [1.0, 0.5]],
                 reference_point: [1.0 - d, 0.5 - d],
+                open_to_back: None,
             })
             .unwrap();
         assert_eq!(view.faces.len(), 3, "手前の層が分かれて3層になる");
@@ -1138,6 +1143,7 @@ mod tests {
                 flap,
                 line: [[0.0, 0.5], [1.0, 0.5]],
                 reference_point: [1.0, 0.5],
+                open_to_back: None,
             })
             .unwrap();
         assert!(view.faces.len() > 2, "羽と中央のくさびに分かれる");
@@ -1162,6 +1168,7 @@ mod tests {
                 flap: Vec::new(),
                 line: [[0.4, 0.0], [0.4, 1.0]],
                 reference_point: [0.5, 0.5],
+                open_to_back: None,
             })
             .unwrap_err();
         assert!(err.contains("まだ選べません"), "err={err}");
@@ -1175,6 +1182,7 @@ mod tests {
                 flap: Vec::new(),
                 line: [[0.4, 0.0], [0.4, 1.0]],
                 reference_point: [0.4, 0.5],
+                open_to_back: None,
             })
             .unwrap_err();
         assert!(err.contains("段の幅"), "err={err}");
@@ -1192,6 +1200,7 @@ mod tests {
                 flap: Vec::new(),
                 line: [[0.4, 0.0], [0.4, 1.0]],
                 reference_point: [0.5, 0.5],
+                open_to_back: None,
             })
             .unwrap_err();
         assert!(err.contains("手順の途中には"), "err={err}");

@@ -67,6 +67,11 @@ pub struct TechniqueInput {
     pub line: [[f64; 2]; 2],
     /// 技法ごとに意味の変わる基準点(各関数のdocを参照)
     pub reference_point: [f64; 2],
+    /// つぶし折りで、つぶした紙を重なりのどちら側へ回すか。
+    /// `None`/`Some(false)` は手前(いちばん上)、`Some(true)` は向こう(いちばん下)。
+    /// 実際の紙ではどちらへも開けるので、両方を表せるようにしてある。
+    /// 他の技法では見ない(向きは紙のつながりから決まるため)。
+    pub open_to_back: Option<bool>,
 }
 
 /// 段折り(平行な2本の折り線で山・谷を交互に折る)。
@@ -274,7 +279,9 @@ fn reverse_fold(
 ///   背の山谷だけが変わる(2回半分に折った正方形を予備基本形の重なりへ組み替える
 ///   ときの動き)
 ///
-/// つぶした紙は重なりのいちばん上へ回す(手前へ開く向き)。
+/// つぶした紙を入れる重なりの側は `open_to_back` で選ぶ。既定は手前
+/// (いちばん上)、`Some(true)` なら向こう(いちばん下)。実際の紙では
+/// どちらへも開けるので、片方に決め打ちしない。
 /// 層の数の偶奇やフラップの形は仮定しない。Errにするのは幾何的に決められない
 /// 入力(退化した中心線・支点と重なる基準点・見つからない層)だけで、
 /// 紙が裂ける・山谷と重なり順が食い違う指定は警告して続ける。
@@ -335,6 +342,11 @@ pub fn squash(
         c_dir,
         alpha,
         (tip - pivot).length(),
+        if input.open_to_back.unwrap_or(false) {
+            FoldDirection::Down
+        } else {
+            FoldDirection::Up
+        },
     );
 
     let mut res = flat_motion(
@@ -361,10 +373,10 @@ pub fn squash(
 ///
 /// - 先端から出る**斜め2本**: 先端で「中心線」と「フラップの縁」がなす角の
 ///   二等分線。ここで折ると両側の縁が中心線にぴったり重なる(花弁折りの要)
-/// - 中心線に直交する**ちょうつがい1本**: 先端から「縁の長さ」だけ離れた位置を通る。
-///   ここで先端側が折り返り、先端が反対の端へ持ち上がる。位置がこう決まるのは、
-///   縁を中心線へ寄せたときに縁の端がちょうどこの線へ届くため(この一致が
-///   花弁折りが平らに畳める理由)
+/// - **ちょうつがい1本**: ここで先端側が折り返り、先端が反対の端へ持ち上がる。
+///   位置は左右それぞれの縁の長さから決める([`petal_hinge`])。左右が同じ長さなら
+///   中心線に直交する線、違えば斜めの線になる(左右の縁の長さが違うフラップでも
+///   実際の紙では折れるので、平均で1本に丸めない)
 ///
 /// 紙の動き(3つの [`MotionPart`]):
 ///
@@ -379,7 +391,7 @@ pub fn squash(
 /// 層の数の偶奇やフラップの形は仮定せず、選んだ層すべてが同じように動く。
 /// Errにするのは幾何的に決められない入力(退化した中心線・見つからない層・
 /// 中心線の向きに広がりの無いフラップ・両側に紙の無いフラップ)だけで、
-/// 左右の縁の長さが食い違う・紙が裂けるといった指定は警告して続ける。
+/// 紙が裂ける指定は警告して続ける。
 pub fn petal(
     cp: &mut CreasePattern,
     faces: &[Face],
@@ -411,18 +423,14 @@ pub fn petal(
 
     // 先端から見た両側の縁(中心線となす角と、その縁の長さ)
     let (right, left) = flap_sides(cp, faces, state, &flap, tip, d);
-    let reaches: Vec<f64> = [right, left].iter().filter_map(|s| s.map(|(_, r)| r)).collect();
-    if reaches.is_empty() {
+    if right.is_none() && left.is_none() {
         return Err(format!(
             "{name}の先端の両側に紙がありません。中心線と先端の位置を確かめてください"
         ));
     }
-    let reach = reaches.iter().sum::<f64>() / reaches.len() as f64;
-    if reaches.len() == 2 && (reaches[0] - reaches[1]).abs() > JOIN_EPS {
-        warnings.push(format!(
-            "この{name}では先端の左右の縁の長さが違います。ちょうつがいの位置を平均で決めるため、このままでは紙が裂けます(指定のまま続行します)"
-        ));
-    }
+    // 左右の縁の長さが違っても折れる(ちょうつがいが斜めになるだけ)。
+    // 平らに畳めないのは、縁が中心線の横まで倒れて二等分線とちょうつがいの
+    // 交点が先端から無限に遠ざかる場合(角が直角に近づくと cos が0に近づく)
     if [right, left]
         .iter()
         .filter_map(|s| s.map(|(a, _)| a))
@@ -435,16 +443,17 @@ pub fn petal(
 
     // 羽のところでフラップとつながっている「フラップ外の層」。その折り目は
     // 花弁折りで開く(角0°)ので、相手の羽も中心線へ寄せないと紙が裂ける。
-    let sides: Vec<(f64, Vec<FaceId>)> = [right, left]
+    let hinge = petal_hinge(tip, d, right, left);
+    let sides: Vec<(f64, f64, Vec<FaceId>)> = [right, left]
         .into_iter()
         .flatten()
-        .map(|(ang, _)| {
-            let ns = wing_neighbors(cp, faces, state, &flap, tip, d, reach, ang);
-            (ang, ns)
+        .map(|(ang, reach)| {
+            let ns = wing_neighbors(cp, faces, state, &flap, tip, d, hinge, ang);
+            (ang, reach, ns)
         })
         .collect();
 
-    let parts = petal_parts(&flap, tip, d, reach, &sides);
+    let parts = petal_parts(&flap, tip, d, hinge, &sides);
     let mut res = flat_motion(
         cp,
         faces,
@@ -1204,13 +1213,11 @@ fn squash_parts(
     c_dir: DVec2,
     alpha: f64,
     reach: f64,
+    open: FoldDirection,
 ) -> Vec<MotionPart> {
     // 退化ケース: 背が向きを変えないので紙は動かない(重なり順と山谷だけが変わる)
     if alpha.abs() <= ANGLE_EPS {
-        return vec![MotionPart::restack(
-            flap.to_vec(),
-            LayerTurn::Outside(FoldDirection::Up),
-        )];
+        return vec![MotionPart::restack(flap.to_vec(), LayerTurn::Outside(open))];
     }
     let seg = |dir: DVec2| [[pivot.x, pivot.y], [pivot.x + dir.x, pivot.y + dir.y]];
     // 新しい折り線: 背の今の向きと行き先の角の二等分線(ここで折ると背が行き先へ向く)
@@ -1227,7 +1234,7 @@ fn squash_parts(
                 inside_point: [inside.x, inside.y],
             }],
             transform: MotionTransform::Reflect(vec![m_line]),
-            turn: LayerTurn::Outside(FoldDirection::Up),
+            turn: LayerTurn::Outside(open),
             reverse_layers: None,
         });
     }
@@ -1237,7 +1244,7 @@ fn squash_parts(
             layers: far.to_vec(),
             region: Vec::new(),
             transform: MotionTransform::Reflect(vec![m_line, seg(c_dir)]),
-            turn: LayerTurn::Outside(FoldDirection::Up),
+            turn: LayerTurn::Outside(open),
             reverse_layers: None,
         });
     }
@@ -1295,6 +1302,40 @@ fn flap_sides(
     (right, left)
 }
 
+/// 花弁折りのちょうつがい線を、左右それぞれの縁の長さから求める。
+///
+/// 縁を中心線へ寄せると、その縁の端は先端から「その縁の長さ」だけ離れた中心線上の
+/// 点へ来る。ちょうつがいはそこで折り返す線なので、側sの二等分線とは
+/// 「中心線に沿った距離が縁の長さ `reach_s` になる点」で交わらなければならない
+/// (交点は先端から `reach_s / cos(角/2)` の位置)。左右で長さが違えば交点も
+/// 別々の位置になり、ちょうつがいは中心線に直交しない1本の斜めの線になる。
+/// 左右が同じ長さなら従来どおり中心線に直交する線に戻る。
+///
+/// 片側にしか紙がない(または2つの交点が重なる)ときは、その点を通る直交線とする。
+fn petal_hinge(tip: DVec2, d: DVec2, right: FlapSide, left: FlapSide) -> [[f64; 2]; 2] {
+    let cross = |(ang, reach): (f64, f64)| {
+        let c = (ang * 0.5).cos();
+        // 角が180°に近いと交点が無限遠へ飛ぶ。呼び出し側で警告済みなので、
+        // ここでは縁の長さそのものを使って線を引けるところに置く
+        tip + rotate(d, ang * 0.5) * (reach / c.max(EPS))
+    };
+    let perpendicular = |q: DVec2| [[q.x, q.y], [q.x - d.y, q.y + d.x]];
+    match (right.map(cross), left.map(cross)) {
+        (Some(a), Some(b)) if (b - a).length() > EPS => [[a.x, a.y], [b.x, b.y]],
+        (Some(a), _) => perpendicular(a),
+        (None, Some(b)) => perpendicular(b),
+        (None, None) => perpendicular(tip),
+    }
+}
+
+/// 直線 `line` の `inside` 側を正とする符号付き距離(半平面の内外判定用)。
+fn half_plane(line: [[f64; 2]; 2], inside: DVec2) -> impl Fn(DVec2) -> f64 {
+    let l0 = DVec2::from(line[0]);
+    let u = (DVec2::from(line[1]) - l0).normalize();
+    let sign = u.perp_dot(inside - l0).signum();
+    move |q: DVec2| sign * u.perp_dot(q - l0)
+}
+
 /// 羽の領域で、フラップの層と折り目でつながっている「フラップ外の層」。
 ///
 /// 花弁折りでは、羽の外側の縁(フラップの層と隣の層をつないでいる折り目)が
@@ -1307,13 +1348,14 @@ fn wing_neighbors(
     flap: &[FaceId],
     tip: DVec2,
     d: DVec2,
-    reach: f64,
+    hinge: [[f64; 2]; 2],
     ang: f64,
 ) -> Vec<FaceId> {
     let pos = vertex_positions(cp);
     let k = rotate(d, ang * 0.5);
+    let near = half_plane(hinge, tip);
     let planes: [&dyn Fn(DVec2) -> f64; 2] = [
-        &|q: DVec2| reach - d.dot(q - tip),
+        &near,
         &|q: DVec2| ang.signum() * k.perp_dot(q - tip),
     ];
     let mut out: Vec<FaceId> = Vec::new();
@@ -1388,22 +1430,23 @@ fn petal_parts(
     flap: &[FaceId],
     tip: DVec2,
     d: DVec2,
-    reach: f64,
-    sides: &[(f64, Vec<FaceId>)],
+    hinge: [[f64; 2]; 2],
+    sides: &[(f64, f64, Vec<FaceId>)],
 ) -> Vec<MotionPart> {
     let seg = |from: DVec2, dir: DVec2| [[from.x, from.y], [from.x + dir.x, from.y + dir.y]];
-    let hinge_at = tip + d * reach;
-    let hinge = seg(hinge_at, DVec2::new(-d.y, d.x));
     let near_side = HalfPlane {
         line: hinge,
         inside_point: [tip.x, tip.y],
     };
+    // 領域の内側を示す点は、左右のうち短いほうの縁を基準に取る
+    // (長いほうで取るとちょうつがいの向こう側へはみ出すことがある)
+    let inner = sides.iter().map(|(_, r, _)| *r).fold(f64::INFINITY, f64::min);
     let mut parts: Vec<MotionPart> = Vec::new();
     let mut middle = vec![near_side.clone()];
-    for (ang, neighbors) in sides {
+    for (ang, reach, neighbors) in sides {
         let bisector = seg(tip, rotate(d, ang * 0.5));
-        let outside = tip + rotate(d, *ang) * reach;
-        let inside = tip + d * (reach * 0.5);
+        let outside = tip + rotate(d, *ang) * (reach.min(inner) * 0.5);
+        let inside = tip + d * (inner * 0.5);
         let wing = vec![
             near_side.clone(),
             HalfPlane {
