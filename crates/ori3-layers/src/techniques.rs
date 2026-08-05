@@ -27,10 +27,11 @@
 //!   先端をもとの層の隣へ置き直して決める([`Session::reorder_tips`])
 //! - 重なりの一部だけを選んだフラップなど、紙が裂ける指定・折り上がりの山谷と
 //!   重なり順が食い違う指定は、断らずに警告して続ける(「止めずに警告」原則)
-//! - 開いてつぶす(squash)・花弁折り(petal)はまだマクロにしていない。既存の
-//!   折り目を**開く**動きが要るため [`fold_through`] だけでは組めないが、
-//!   汎用の折り操作([`crate::flat_motion`])は開く動き・回転・層ごとに逆向きの
-//!   回し方をすべて表せるので、その上のマクロとして書ける
+//! - 開いてつぶす([`squash`])は既存の折り目を**開く**動きが要るので
+//!   [`fold_through`] では組めず、汎用の折り操作([`crate::flat_motion`])を
+//!   1回呼ぶマクロとして書いてある(開く動き・回転をそのまま表せる)
+//! - 花弁折り(petal)はまだマクロにしていない。同じく [`crate::flat_motion`] の
+//!   上に書ける(開く動き+左右をたたむ動きの組み合わせ)
 
 use std::collections::{HashMap, HashSet};
 
@@ -41,6 +42,9 @@ use ori3_model::{
     CreasePattern, DriverLine, EPS, EdgeId, EdgeKind, FaceId, FoldStep, TechniqueKind, VertexId,
 };
 
+use crate::flat_motion::{
+    FlatMotionInput, HalfPlane, LayerTurn, MotionPart, MotionTransform, flat_motion,
+};
 use crate::flat_state::{FlatState, point_in_face, representative_point};
 use crate::fold_through::{
     FoldDirection, FoldThroughInput, FoldThroughResult, TEAR_MARK, angle_of, faces_by_edge,
@@ -49,6 +53,9 @@ use crate::fold_through::{
 
 /// 面の配置の一致を見る許容誤差(等長変換の積み重ねで出る誤差より十分大きく取る)。
 const JOIN_EPS: f64 = 1e-6;
+
+/// 「向きが同じ」とみなす角度の許容誤差(rad)。つぶし折りの退化ケースの判定に使う。
+const ANGLE_EPS: f64 = 1e-9;
 
 /// 技法の共通入力。座標は全て「畳んだ平面座標」(3D表示のxy)。
 #[derive(Clone, Debug)]
@@ -247,6 +254,123 @@ fn reverse_fold(
         TechniqueKind::OutsideReverse
     };
     s.finish(kind, name, cp)
+}
+
+/// 開いてつぶす折り(フラップを開いて平らにつぶす)。
+///
+/// `line` は**開く中心線**: フラップの背(開く折り目)が乗っている畳み平面の直線。
+/// `reference_point` は**つぶす方向を示す点**: 背の自由端が向かう先。
+/// 背の一方の端(基準点から遠いほう)が支点になり、背は支点まわりに
+/// 「支点→もう一方の端」から「支点→基準点」へ回る(その回転角をαとする)。
+///
+/// 動きは1回の [`flat_motion`] で表す(要件§12: 専用のデータ構造を持たない):
+///
+/// - 手前寄りの半分(背でつながった層を2色に塗り分けた、下の層を含むほうの色)は
+///   支点を通る**新しい折り線**(背と行き先の角の二等分線M)で折り返す。
+///   本体とつながったまま動くのはこちら
+/// - 奥の半分は層まるごと回る。鏡映2回(M→行き先の直線)= 角αの回転で、
+///   これが「背が開く」動き(背の両側の向きがそろって折り目の角が0°になる)
+/// - α=0(基準点が背の延長上)は**退化ケース**: 紙は1mmも動かず、重なり順と
+///   背の山谷だけが変わる(2回半分に折った正方形を予備基本形の重なりへ組み替える
+///   ときの動き)
+///
+/// つぶした紙は重なりのいちばん上へ回す(手前へ開く向き)。
+/// 層の数の偶奇やフラップの形は仮定しない。Errにするのは幾何的に決められない
+/// 入力(退化した中心線・支点と重なる基準点・見つからない層)だけで、
+/// 紙が裂ける・山谷と重なり順が食い違う指定は警告して続ける。
+pub fn squash(
+    cp: &mut CreasePattern,
+    faces: &[Face],
+    state: &FlatState,
+    input: &TechniqueInput,
+) -> Result<FoldThroughResult, String> {
+    let name = "開いてつぶす折り";
+    let (l0, l1) = line_points(input.line)?;
+    let u = (l1 - l0).normalize();
+
+    let mut chosen: Vec<FaceId> = Vec::with_capacity(input.flap.len());
+    for &id in &input.flap {
+        if !faces.iter().any(|f| f.id == id) {
+            return Err(format!(
+                "{name}の対象に指定された層 {id} が見つかりません。層を選び直してください"
+            ));
+        }
+        if !chosen.contains(&id) {
+            chosen.push(id);
+        }
+    }
+    if chosen.is_empty() {
+        return Err(format!(
+            "{name}にはフラップ(重なった層)の指定が必要です。開きたい重なりを選んでください"
+        ));
+    }
+    // フラップを層順(下→上)に並べる
+    let flap: Vec<FaceId> = state
+        .order
+        .iter()
+        .copied()
+        .filter(|id| chosen.contains(id))
+        .collect();
+
+    let mut warnings: Vec<String> = Vec::new();
+    let (span, pairs) = spine_along(cp, faces, state, &flap, l0, u);
+    let span = match span {
+        Some(s) => s,
+        None => {
+            warnings.push(format!(
+                "この{name}では、中心線の上に開ける折り目が見つかりません。中心線がフラップの背に重なっているか確かめてください(指定のまま続行します)"
+            ));
+            flap_span_along(cp, faces, state, &flap, l0, u)
+                .ok_or_else(|| format!("{name}の支点が決められません。中心線を引き直してください"))?
+        }
+    };
+
+    let p = DVec2::from(input.reference_point);
+    let (ends0, ends1) = (l0 + u * span.0, l0 + u * span.1);
+    // 支点は基準点から遠いほうの端(背は支点まわりに回り、自由端が基準点へ向かう)
+    let (pivot, tip) = if (p - ends0).length() >= (p - ends1).length() {
+        (ends0, ends1)
+    } else {
+        (ends1, ends0)
+    };
+    if (tip - pivot).length() <= EPS {
+        return Err(format!(
+            "{name}の開く折り目の長さが0です。中心線を引き直してください"
+        ));
+    }
+    if (p - pivot).length() <= EPS {
+        return Err(format!(
+            "{name}のつぶす方向を示す点が支点と同じ位置です。つぶす先の点を指してください"
+        ));
+    }
+    let s_dir = (tip - pivot).normalize();
+    let c_dir = (p - pivot).normalize();
+    let alpha = s_dir.perp_dot(c_dir).atan2(s_dir.dot(c_dir));
+
+    let (near, far) = split_by_spine(&flap, &pairs, name, &mut warnings);
+    let parts = squash_parts(
+        &flap,
+        &near,
+        &far,
+        pivot,
+        s_dir,
+        c_dir,
+        alpha,
+        (tip - pivot).length(),
+    );
+
+    let mut res = flat_motion(
+        cp,
+        faces,
+        state,
+        &FlatMotionInput {
+            parts,
+            kind: TechniqueKind::Squash,
+        },
+    )?;
+    warnings.append(&mut res.warnings);
+    res.warnings = warnings;
+    Ok(res)
 }
 
 // ---------------------------------------------------------------------------
@@ -834,6 +958,173 @@ impl Session {
 // ---------------------------------------------------------------------------
 // 小さな道具
 // ---------------------------------------------------------------------------
+
+/// 中心線に重なっている折り目(開く背)を探す。
+///
+/// 戻り値は「背が中心線上で占める範囲(l0からの符号付き距離)」と
+/// 「フラップの中で背でつながっている面の組」。範囲はフラップの外の面と
+/// つながる背も含める(フラップが1層でも支点を決められるように)。
+fn spine_along(
+    cp: &CreasePattern,
+    faces: &[Face],
+    state: &FlatState,
+    flap: &[FaceId],
+    l0: DVec2,
+    u: DVec2,
+) -> (Option<(f64, f64)>, Vec<[FaceId; 2]>) {
+    let pos = vertex_positions(cp);
+    let mut span: Option<(f64, f64)> = None;
+    let mut pairs: Vec<[FaceId; 2]> = Vec::new();
+    for (eid, fs) in faces_by_edge(faces) {
+        if fs.len() != 2 || !fs.iter().any(|id| flap.contains(id)) {
+            continue;
+        }
+        let Some(e) = cp.edges.iter().find(|e| e.id == eid) else {
+            continue;
+        };
+        if !matches!(e.kind, EdgeKind::Mountain | EdgeKind::Valley) {
+            continue;
+        }
+        let on = if flap.contains(&fs[0]) { fs[0] } else { fs[1] };
+        let (Some(pl), Some(&p0), Some(&p1)) =
+            (state.placements.get(&on), pos.get(&e.v0), pos.get(&e.v1))
+        else {
+            continue;
+        };
+        let (a, b) = (pl.apply(p0), pl.apply(p1));
+        if u.perp_dot(a - l0).abs() > JOIN_EPS || u.perp_dot(b - l0).abs() > JOIN_EPS {
+            continue;
+        }
+        let (ta, tb) = (u.dot(a - l0), u.dot(b - l0));
+        span = Some(match span {
+            None => (ta.min(tb), ta.max(tb)),
+            Some((lo, hi)) => (lo.min(ta.min(tb)), hi.max(ta.max(tb))),
+        });
+        if fs.iter().all(|id| flap.contains(id)) {
+            pairs.push([fs[0], fs[1]]);
+        }
+    }
+    (span, pairs)
+}
+
+/// 中心線に背が見つからないときの支点の当て(フラップが中心線の向きに占める範囲)。
+fn flap_span_along(
+    cp: &CreasePattern,
+    faces: &[Face],
+    state: &FlatState,
+    flap: &[FaceId],
+    l0: DVec2,
+    u: DVec2,
+) -> Option<(f64, f64)> {
+    let pos = vertex_positions(cp);
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    for f in faces.iter().filter(|f| flap.contains(&f.id)) {
+        let pl = state.placements.get(&f.id)?;
+        for t in f.vertices.iter().filter_map(|v| pos.get(v)).map(|&q| u.dot(pl.apply(q) - l0)) {
+            lo = lo.min(t);
+            hi = hi.max(t);
+        }
+    }
+    (lo < hi).then_some((lo, hi))
+}
+
+/// フラップを背で2色に塗り分ける。戻り値は(手前寄り=下の層を含む側, 奥側)。
+///
+/// 背でつながった2層は開くと反対側へ分かれるので、つながりの図を2色で塗り分ければ
+/// どちらの側へ行くかが決まる(層の数を機械的に半分に割らないのは中割り折りと同じ)。
+/// 塗り分けられない(奇数の輪になる)場合は、断らずに警告して続ける。
+fn split_by_spine(
+    flap: &[FaceId],
+    pairs: &[[FaceId; 2]],
+    name: &str,
+    warnings: &mut Vec<String>,
+) -> (Vec<FaceId>, Vec<FaceId>) {
+    let mut color: HashMap<FaceId, bool> = HashMap::with_capacity(flap.len());
+    let mut odd = false;
+    for &start in flap {
+        if color.contains_key(&start) {
+            continue;
+        }
+        color.insert(start, false);
+        let mut queue = vec![start];
+        while let Some(cur) = queue.pop() {
+            let cur_color = color[&cur];
+            for pr in pairs {
+                let next = if pr[0] == cur {
+                    pr[1]
+                } else if pr[1] == cur {
+                    pr[0]
+                } else {
+                    continue;
+                };
+                match color.get(&next) {
+                    Some(&v) => odd |= v == cur_color,
+                    None => {
+                        color.insert(next, !cur_color);
+                        queue.push(next);
+                    }
+                }
+            }
+        }
+    }
+    if odd {
+        warnings.push(format!(
+            "この{name}では、層のつながりが輪になっていて開く側を決めきれません(指定のまま続行します)"
+        ));
+    }
+    flap.iter().partition(|id| !color[id])
+}
+
+/// つぶし折りの動き(手前側=新しい折り線で折り返す / 奥側=層まるごと回る)。
+#[allow(clippy::too_many_arguments)]
+fn squash_parts(
+    flap: &[FaceId],
+    near: &[FaceId],
+    far: &[FaceId],
+    pivot: DVec2,
+    s_dir: DVec2,
+    c_dir: DVec2,
+    alpha: f64,
+    reach: f64,
+) -> Vec<MotionPart> {
+    // 退化ケース: 背が向きを変えないので紙は動かない(重なり順と山谷だけが変わる)
+    if alpha.abs() <= ANGLE_EPS {
+        return vec![MotionPart::restack(
+            flap.to_vec(),
+            LayerTurn::Outside(FoldDirection::Up),
+        )];
+    }
+    let seg = |dir: DVec2| [[pivot.x, pivot.y], [pivot.x + dir.x, pivot.y + dir.y]];
+    // 新しい折り線: 背の今の向きと行き先の角の二等分線(ここで折ると背が行き先へ向く)
+    let (sn, cs) = (alpha * 0.5).sin_cos();
+    let m_dir = DVec2::new(s_dir.x * cs - s_dir.y * sn, s_dir.x * sn + s_dir.y * cs);
+    let m_line = seg(m_dir);
+    let mut parts: Vec<MotionPart> = Vec::new();
+    if !near.is_empty() {
+        let inside = pivot + s_dir * reach;
+        parts.push(MotionPart {
+            layers: near.to_vec(),
+            region: vec![HalfPlane {
+                line: m_line,
+                inside_point: [inside.x, inside.y],
+            }],
+            transform: MotionTransform::Reflect(vec![m_line]),
+            turn: LayerTurn::Outside(FoldDirection::Up),
+            reverse_layers: None,
+        });
+    }
+    if !far.is_empty() {
+        // 鏡映2回=角αの回転。背が開いて(角0°になって)行き先へ向く
+        parts.push(MotionPart {
+            layers: far.to_vec(),
+            region: Vec::new(),
+            transform: MotionTransform::Reflect(vec![m_line, seg(c_dir)]),
+            turn: LayerTurn::Outside(FoldDirection::Up),
+            reverse_layers: None,
+        });
+    }
+    parts
+}
 
 /// 折り線の2点。退化(2点が一致)しているときはErr。
 fn line_points(line: [[f64; 2]; 2]) -> Result<(DVec2, DVec2), String> {

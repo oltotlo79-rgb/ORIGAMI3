@@ -290,6 +290,7 @@ impl DocumentStore {
                     TechniqueKind::Pleat => ori3_layers::pleat,
                     TechniqueKind::InsideReverse => ori3_layers::inside_reverse,
                     TechniqueKind::OutsideReverse => ori3_layers::outside_reverse,
+                    TechniqueKind::Squash => ori3_layers::squash,
                     _ => {
                         return Err(
                             "この折り方はまだ選べません。手動の折り操作で代替してください"
@@ -1081,6 +1082,40 @@ mod tests {
         assert_eq!(view.doc.sequence.len(), 2);
         assert_eq!(view.doc.sequence[1].kind, TechniqueKind::InsideReverse);
         assert_eq!(view.doc.sequence[1].drivers.len(), 3);
+    }
+
+    /// 開いてつぶす折りは畳んだ状態(2層のフラップ)に対して適用できる。
+    #[test]
+    fn technique_squash_opens_and_flattens_a_two_layer_flap() {
+        let mut store = square_store();
+        // 下ごしらえ: 半分に折って2層にする(背は y=0.5)
+        store
+            .apply_seq(fold_op(0, [[0.0, 0.5], [1.0, 0.5]], [0.5, 0.25]))
+            .unwrap();
+        let flap: Vec<u32> = store.faces.iter().map(|f| f.id).collect();
+        assert_eq!(flap.len(), 2);
+
+        // 背の右端(1,0.5)を支点に、背を左から左下へ45°回してつぶす
+        let d = 0.5 * std::f64::consts::SQRT_2;
+        let view = store
+            .apply_seq(SeqOp::Technique {
+                up_to: 1,
+                kind: TechniqueKind::Squash,
+                flap,
+                line: [[0.0, 0.5], [1.0, 0.5]],
+                reference_point: [1.0 - d, 0.5 - d],
+            })
+            .unwrap();
+        assert_eq!(view.faces.len(), 3, "手前の層が分かれて3層になる");
+        assert_eq!(view.doc.sequence.len(), 2);
+        assert_eq!(view.doc.sequence[1].kind, TechniqueKind::Squash);
+        assert!(
+            view.doc.sequence[1]
+                .drivers
+                .iter()
+                .any(|d| d.target_angle_deg == 0.0),
+            "開いた背が0°で記録される"
+        );
     }
 
     /// 未実装の技法・折れない指定・手順の途中への挿入はErr(文書は無変更)。

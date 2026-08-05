@@ -1,4 +1,4 @@
-//! 基本技法のマクロ(段折り・中割り折り・かぶせ折り)のテスト。
+//! 基本技法のマクロ(段折り・中割り折り・かぶせ折り・開いてつぶす)のテスト。
 //!
 //! 検証の方針:
 //! - 形と層: 面の数・畳んだ位置・層順序
@@ -27,7 +27,7 @@ use ori3_cp::{Face, extract_faces};
 use ori3_layers::flat_state::representative_point;
 use ori3_layers::fold_through::{FoldDirection, FoldThroughInput, fold_through};
 use ori3_layers::techniques::TechniqueInput;
-use ori3_layers::{flat_state_at, inside_reverse, outside_reverse, pleat, replay};
+use ori3_layers::{flat_state_at, inside_reverse, outside_reverse, pleat, replay, squash};
 use ori3_model::{CreasePattern, Document, EdgeKind, FaceId, Paper, TechniqueKind};
 
 /// 技法1回ぶんの結果(検証しやすいようにまとめた)。
@@ -689,8 +689,16 @@ fn reverse_fold_rejects_a_line_that_does_not_cross_the_flap() {
 #[test]
 fn techniques_replay_from_the_crease_pattern() {
     // 段折りの基準点は2本目の折り線の位置、中割り・かぶせは先端が向かう側
-    let cases: [ReplayCase; 3] = [
+    let d = 0.5 * std::f64::consts::SQRT_2;
+    let cases: [ReplayCase; 4] = [
         ("段折り", pleat as Technique, [[0.6, 0.0], [0.6, 1.0]], [0.7, 0.25]),
+        // つぶし折りは背(y=0.5)を開いて右端まわりに45°回す
+        (
+            "つぶし折り",
+            squash as Technique,
+            [[0.0, 0.5], [1.0, 0.5]],
+            [1.0 - d, 0.5 - d],
+        ),
         (
             "中割り折り",
             inside_reverse as Technique,
@@ -923,4 +931,191 @@ fn inside_reverse_on_four_layer_flap() {
         flat_state_at(&doc, &new_faces, doc.sequence.len()).expect("平らに畳める");
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_eq!(replayed.order, a.order);
+}
+
+// ---------------------------------------------------------------------------
+// 開いてつぶす折り
+// ---------------------------------------------------------------------------
+
+/// つぶし折り: 背が開いて(角0°)、手前の層は新しい折り線で折り返し、
+/// 奥の層は鏡映2回=回転で丸ごと回る。
+#[test]
+fn squash_opens_the_spine_and_spreads_the_flap() {
+    let mut doc = two_layer_flap(); // 2層。背(開く折り目)は y=0.5
+    let flap: Vec<FaceId> = extract_faces(&doc.cp).iter().map(|f| f.id).collect();
+    let edges_before = doc.cp.edges.len();
+    // 背の右端(1,0.5)を支点に、背を左(180°)から左下(225°)へ45°回す
+    let d = 0.5 * std::f64::consts::SQRT_2;
+    let a = apply(
+        &mut doc,
+        squash,
+        flap,
+        [[0.0, 0.5], [1.0, 0.5]],
+        [1.0 - d, 0.5 - d],
+    )
+    .expect("つぶし折りできる");
+
+    assert!(a.warnings.is_empty(), "紙は裂けない: {:?}", a.warnings);
+    assert_eq!(a.faces.len(), 3, "手前の層が新しい折り線で2つに分かれて3面");
+    assert_eq!(
+        doc.cp.edges.len(),
+        edges_before + 2,
+        "追加線は1本(紙の縁が交点で2本に分かれるぶんを含めて+2)"
+    );
+
+    let step = &doc.sequence[doc.sequence.len() - 1];
+    assert_eq!(step.kind, TechniqueKind::Squash);
+    assert!(
+        step.drivers.iter().any(|dr| dr.target_angle_deg == 0.0),
+        "開いた背は0°で記録される: {:?}",
+        step.drivers
+    );
+    assert!(
+        step.drivers.iter().any(|dr| dr.target_angle_deg.abs() == 180.0),
+        "新しい折り線は±180°で記録される: {:?}",
+        step.drivers
+    );
+
+    // 背でつながる2面の向きがそろう(=背が開いて平ら)
+    let faces = extract_faces(&doc.cp);
+    let (state, _) = flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
+    let pos: HashMap<u32, DVec2> =
+        doc.cp.vertices.iter().map(|v| (v.id, DVec2::from(v.pos))).collect();
+    let spine = doc
+        .cp
+        .edges
+        .iter()
+        .find(|e| {
+            let (Some(&p0), Some(&p1)) = (pos.get(&e.v0), pos.get(&e.v1)) else {
+                return false;
+            };
+            (p0.y - 0.5).abs() < 1e-9 && (p1.y - 0.5).abs() < 1e-9
+        })
+        .expect("背の辺がある");
+    let across: Vec<FaceId> = faces
+        .iter()
+        .filter(|f| f.edges.contains(&spine.id))
+        .map(|f| f.id)
+        .collect();
+    assert_eq!(across.len(), 2, "背は2面をつなぐ");
+    assert_eq!(
+        state.placements[&across[0]].mirrored, state.placements[&across[1]].mirrored,
+        "背が開いて2面の向きがそろう"
+    );
+    assert_eq!(a.order.len(), 3, "層は3枚");
+    assert_eq!(state.order, a.order, "層順序が再生と一致する");
+    assert_fold_senses(&doc, "つぶし折り");
+}
+
+/// 退化ケース: 2回半分に折った正方形(4層)を、2回のつぶし折りで
+/// 予備基本形の重なりへ組み替える。
+///
+/// つぶす方向が背の延長上にある(回転角0)ので紙は1mmも動かない。変わるのは
+/// 層順序(いちばん下の層が上へ回る)と、その層に接する1組の折り目の山谷だけ。
+/// 実際の紙で「畳んだ正方形を開いて反対側から畳み直す」動きにあたる。
+#[test]
+fn squash_reorders_layers_without_moving_paper() {
+    let mut doc = four_layer_stack();
+    let faces = extract_faces(&doc.cp);
+    let (before, _) = flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
+    let start_order = before.order.clone();
+    assert_eq!(start_order.len(), 4, "2回半分に折って4層");
+    let kinds_before = kinds(&doc.cp);
+
+    // 1回目: いちばん下の層を、右端(x=0.5)の背を開いて上へ回す
+    let bottom = start_order[0];
+    let a = apply(&mut doc, squash, vec![bottom], [[0.5, 0.0], [0.5, 1.0]], [0.5, 0.1])
+        .expect("つぶし折りできる");
+    assert!(a.warnings.is_empty(), "{:?}", a.warnings);
+    assert_eq!(a.faces.len(), 4, "面は分かれない(新しい折り線が要らない)");
+    for f in &a.faces {
+        assert!(
+            a.at[&f.id].abs_diff_eq(
+                before.placements[&f.id].apply(DVec2::from(a.rep[&f.id])),
+                1e-12
+            ),
+            "面 {} は1mmも動かない",
+            f.id
+        );
+    }
+    let mut rotated: Vec<FaceId> = start_order[1..].to_vec();
+    rotated.push(bottom);
+    assert_eq!(a.order, rotated, "いちばん下の層が上へ回る");
+    let changed = changed_kinds(&kinds_before, &kinds(&doc.cp));
+    assert_eq!(changed, 2, "山谷が変わるのは1組(2本)の折り目だけ");
+    let step = &doc.sequence[doc.sequence.len() - 1];
+    assert_eq!(step.kind, TechniqueKind::Squash);
+    assert_eq!(step.drivers.len(), 2, "その2本ぶんだけ手順に記録される");
+
+    // 2回目: 新しくいちばん下になった層を、上端(y=0.5)の背を開いて上へ回す
+    let kinds_mid = kinds(&doc.cp);
+    let bottom2 = a.order[0];
+    let b = apply(&mut doc, squash, vec![bottom2], [[0.0, 0.5], [1.0, 0.5]], [0.1, 0.5])
+        .expect("2回目もつぶし折りできる");
+    assert!(b.warnings.is_empty(), "{:?}", b.warnings);
+    for f in &b.faces {
+        assert!(
+            b.at[&f.id].abs_diff_eq(
+                before.placements[&f.id].apply(DVec2::from(b.rep[&f.id])),
+                1e-12
+            ),
+            "面 {} は2回目も動かない",
+            f.id
+        );
+    }
+    assert_eq!(changed_kinds(&kinds_mid, &kinds(&doc.cp)), 2, "2回目も1組だけ");
+    // 4層の並びは元の並びを2つずらしたもの(=予備基本形と同じつながり方)
+    let expected: Vec<FaceId> = start_order[2..]
+        .iter()
+        .chain(start_order[..2].iter())
+        .copied()
+        .collect();
+    assert_eq!(b.order, expected, "層順序が2つずれる");
+    assert_fold_senses(&doc, "つぶし折り(退化)");
+}
+
+/// 展開図の折り目の線種(辺ID→線種)。
+fn kinds(cp: &CreasePattern) -> HashMap<u32, EdgeKind> {
+    cp.edges.iter().map(|e| (e.id, e.kind)).collect()
+}
+
+/// 線種が変わった辺の本数。
+fn changed_kinds(before: &HashMap<u32, EdgeKind>, after: &HashMap<u32, EdgeKind>) -> usize {
+    after.iter().filter(|(id, k)| before.get(id) != Some(k)).count()
+}
+
+/// つぶし折りが断るのは幾何的に決められない入力だけ。断ったときは文書を変えない。
+#[test]
+fn squash_rejects_undefined_input_without_touching_document() {
+    let mut doc = two_layer_flap();
+    let before = doc.clone();
+    let flap: Vec<FaceId> = extract_faces(&doc.cp).iter().map(|f| f.id).collect();
+
+    // 中心線が退化(2点が一致)
+    let err = apply(&mut doc, squash, flap.clone(), [[0.5, 0.5], [0.5, 0.5]], [0.2, 0.2])
+        .expect_err("退化した中心線はエラー");
+    assert!(err.contains("2点が一致"), "{err}");
+    assert_eq!(doc, before, "失敗時は文書を変更しない");
+
+    // フラップの指定が無い
+    let err = apply(&mut doc, squash, Vec::new(), [[0.0, 0.5], [1.0, 0.5]], [0.2, 0.2])
+        .expect_err("フラップ未指定はエラー");
+    assert!(err.contains("フラップ"), "{err}");
+    assert_eq!(doc, before);
+
+    // 無い層を指定した
+    let missing = flap.iter().max().copied().unwrap_or(0) + 99;
+    let err = apply(&mut doc, squash, vec![missing], [[0.0, 0.5], [1.0, 0.5]], [0.2, 0.2])
+        .expect_err("無い層はエラー");
+    assert!(err.contains("見つかりません"), "{err}");
+    assert_eq!(doc, before);
+
+    // 中心線に背が無い指定は、断らずに警告して続ける(「止めずに警告」原則)
+    let a = apply(&mut doc, squash, flap, [[0.0, 0.2], [1.0, 0.2]], [0.2, 0.1])
+        .expect("背が無くても折れる");
+    assert!(
+        a.warnings.iter().any(|w| w.contains("開ける折り目")),
+        "背が見つからない警告が出る: {:?}",
+        a.warnings
+    );
 }

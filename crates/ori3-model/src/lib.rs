@@ -248,7 +248,7 @@ pub enum SeqOp {
         target_layers: Option<Vec<FaceId>>,
         direction: FoldDirection,
     },
-    /// 基本技法(段折り・中割り折り・かぶせ折り)をまとめて折る。
+    /// 基本技法(段折り・中割り折り・かぶせ折り・開いてつぶす)をまとめて折る。
     ///
     /// 座標は [`SeqOp::FoldThrough`] と同じ「畳んだ平面座標」。技法は
     /// 折り操作の合成として実装され(`ori3-layers`)、生成された折り線を
@@ -256,14 +256,14 @@ pub enum SeqOp {
     Technique {
         /// この折りの直前までの手順数(通常は現在の手順数)
         up_to: usize,
-        /// 技法の種類。Pleat/InsideReverse/OutsideReverse のみ受け付ける
+        /// 技法の種類。Pleat/InsideReverse/OutsideReverse/Squash のみ受け付ける
         kind: TechniqueKind,
         /// 対象フラップ(畳み平面で選んだ層の面ID)。段折りでは空を許す
         flap: Vec<FaceId>,
         /// 折り線(2点。無限直線として扱う)
         line: [[f64; 2]; 2],
         /// 技法ごとに意味の変わる基準点(段折り=2本目の折り線の位置、
-        /// 中割り・かぶせ=先端が向かう側)
+        /// 中割り・かぶせ=先端が向かう側、開いてつぶす=つぶす方向)
         reference_point: [f64; 2],
     },
 }

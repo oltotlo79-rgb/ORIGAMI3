@@ -2,6 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  SUPPORTED_TECHNIQUES,
   TECHNIQUE_KINDS,
   TECHNIQUE_LABEL,
   uniqueWarnings,
@@ -26,6 +27,21 @@ describe("技法の表示名", () => {
     expect(TECHNIQUE_KINDS).toEqual(kinds);
     for (const k of kinds) {
       expect(TECHNIQUE_LABEL[k]).toMatch(/^[^A-Za-z]+$/); // 英字が残っていない
+    }
+  });
+});
+
+describe("サブメニューに出す技法", () => {
+  it("自動で折れる4種(段・中割り・かぶせ・開いてつぶす)が並ぶ", () => {
+    expect(SUPPORTED_TECHNIQUES.map((t) => t.kind)).toEqual([
+      "Pleat",
+      "InsideReverse",
+      "OutsideReverse",
+      "Squash",
+    ]);
+    for (const t of SUPPORTED_TECHNIQUES) {
+      expect(t.short).toMatch(/^[^A-Za-z]+$/);
+      expect(t.title.length).toBeGreaterThan(10);
     }
   });
 });
