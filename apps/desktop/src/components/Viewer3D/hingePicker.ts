@@ -2,48 +2,19 @@
 // カメラで辺を画面へ投影し、クリック位置との画面距離がしきい値以内で
 // 最も近い辺を選ぶ(Raycasterの当たり判定は太さが世界座標基準になり、
 // ズーム倍率によって拾いやすさが変わってしまうため画面距離で判定する)。
+// 線分そのもの(edgeId・両端の座標)はsceneBuilderが立体形状から作って持つ。
 
 import * as THREE from "three";
-import { hingeEdgeIds } from "../../lib/hinges";
-import type { Document, Face, Frame3D } from "../../lib/types";
 
 /** クリック位置から辺までの許容距離(px) */
 export const PICK_THRESHOLD_PX = 10;
+/** 「同じくらい近い」とみなす刻み(px)。この刻みで並べた上で手前を優先する */
+const DISTANCE_BUCKET_PX = 0.5;
 
 export interface HingeSegment {
   edgeId: number;
   a: THREE.Vector3;
   b: THREE.Vector3;
-}
-
-/** 現在の立体形状におけるヒンジの線分一覧(辺IDごとに1本) */
-export function collectHingeSegments(
-  doc: Document,
-  faces: Face[],
-  frame: Frame3D,
-): HingeSegment[] {
-  const hinges = hingeEdgeIds(doc, faces);
-  const faceById = new Map(faces.map((f) => [f.id, f]));
-  const found = new Map<number, HingeSegment>();
-  for (const f3 of frame.faces) {
-    const face = faceById.get(f3.face);
-    if (!face) continue;
-    const n = face.vertices.length;
-    // 参照切れで頂点が欠けた面は境界と対応が取れないので拾わない
-    if (f3.polygon.length !== n) continue;
-    for (let i = 0; i < n; i++) {
-      const edgeId = face.edges[i];
-      if (!hinges.has(edgeId) || found.has(edgeId)) continue;
-      const p = f3.polygon[i];
-      const q = f3.polygon[(i + 1) % n];
-      found.set(edgeId, {
-        edgeId,
-        a: new THREE.Vector3(p[0], p[1], p[2]),
-        b: new THREE.Vector3(q[0], q[1], q[2]),
-      });
-    }
-  }
-  return [...found.values()];
 }
 
 /** 世界座標を画面座標(px)へ。カメラの後ろ側ならnull */
@@ -80,7 +51,9 @@ function distanceToSegment(
 
 /**
  * クリック位置(canvas左上基準のpx)に最も近いヒンジの辺IDを返す。
- * しきい値より遠ければnull(=選択解除)。同じくらい近い辺は手前のものを選ぶ。
+ * しきい値より遠ければnull(=選択解除)。
+ * しきい値内の候補を全て集めてから「距離(0.5px刻み)→手前」の順に並べ替えて
+ * 先頭を選ぶ(1本ずつ比べると、並び順によって奥の線が残ることがあるため)。
  */
 export function pickHinge(
   segments: HingeSegment[],
@@ -91,21 +64,20 @@ export function pickHinge(
   y: number,
   thresholdPx: number = PICK_THRESHOLD_PX,
 ): number | null {
-  let bestId: number | null = null;
-  let bestDist = thresholdPx;
-  let bestDepth = Infinity;
+  const candidates: { edgeId: number; bucket: number; depth: number }[] = [];
   for (const seg of segments) {
     const a = project(seg.a, camera, widthPx, heightPx);
     const b = project(seg.b, camera, widthPx, heightPx);
     if (!a || !b) continue;
     const dist = distanceToSegment(x, y, a.x, a.y, b.x, b.y);
-    const depth = (a.depth + b.depth) / 2;
-    if (dist > bestDist) continue;
-    // ほぼ同じ距離なら手前(depthが小さい)を優先する
-    if (dist > bestDist - 0.5 && depth >= bestDepth) continue;
-    bestId = seg.edgeId;
-    bestDist = dist;
-    bestDepth = depth;
+    if (dist > thresholdPx) continue;
+    candidates.push({
+      edgeId: seg.edgeId,
+      bucket: Math.round(dist / DISTANCE_BUCKET_PX),
+      depth: (a.depth + b.depth) / 2,
+    });
   }
-  return bestId;
+  if (candidates.length === 0) return null;
+  candidates.sort((p, q) => p.bucket - q.bucket || p.depth - q.depth);
+  return candidates[0].edgeId;
 }

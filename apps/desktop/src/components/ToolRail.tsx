@@ -11,7 +11,7 @@ const TOOLS: { id: ToolId; label: string; title: string }[] = [
 ];
 
 interface Props {
-  /** 「全体表示」ボタン: 展開図の表示を紙全体が収まる位置に戻す */
+  /** 「全体表示」ボタン: 展開図と立体表示を紙全体が収まる位置に戻す */
   onFitView: () => void;
 }
 
@@ -34,7 +34,7 @@ export function ToolRail({ onFitView }: Props) {
       ))}
       <button
         type="button"
-        title="全体表示: 紙全体が見える位置まで表示を戻す"
+        title="全体表示: 展開図と立体表示の両方を、紙全体が見える位置まで戻す"
         className="tool-button"
         onClick={onFitView}
       >

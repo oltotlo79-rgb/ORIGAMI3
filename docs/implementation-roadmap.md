@@ -448,11 +448,11 @@ M1の品質レビューで「面400・辺1,000でsolve 33ms以内(NFR-002)」に
 
 あわせてフロント側もアニメーション(手順再生)に耐える構造へ改修する(M1品質レビューの引き継ぎ):
 
-- [ ] Viewer3D: トポロジとジオメトリの分離 — doc/faces変化時のみ三角形分割(スリット面の凹形状はShapeUtils.triangulateShape)とヒンジ集合を確定し、frame3d変化時はposition属性のin-place更新(DynamicDrawUsage)のみ。表裏は1ジオメトリ+addGroup+マテリアル配列。三角形index→面IDの対応表も作る(Task 2-5のraycastで必要)
-- [ ] 作り替え前にsceneBuilderのdispose回帰テストを1本追加(偽geometry/materialでdispose回数を数える)
-- [ ] pose_solve系のIPCをcoalescing方式に変更 — 実行中は保留1件を最新値で上書きし完了時に発行(FIFO積み上げによる表示遅延の防止)。編集系は従来のFIFOのまま
-- [ ] 軽微: hingeEdgeIdsのuseMemo化 / AngleNumberInputのdirtyフラグ(未編集blurでdriver化しない)+Escape取り消し / スロットルのテスト順序依存解消(リセット手段のexport) / コンテキストロスト復帰時の再描画 / setPixelRatioの追従 / render呼び出しのrAF集約 / ヒンジ選択の手前優先タイブレーク修正 / 3Dカメラのリセット手段
-- [ ] コミット `3D表示を手順再生に耐える作りに改良` → プッシュ
+- [x] Viewer3D: トポロジとジオメトリの分離 — doc/faces変化時のみ三角形分割(スリット面の凹形状はShapeUtils.triangulateShape)とヒンジ集合を確定し、frame3d変化時はposition属性のin-place更新(DynamicDrawUsage)のみ。表裏は1ジオメトリ+addGroup+マテリアル配列。三角形index→面IDの対応表も作る(Task 2-5のraycastで必要)(実装: `buildTopology`(slots/indices/triangleFaceIds/lineIndices/hingeSlots/flatPositions)+ `createContent` + `updateFrame`。表裏は同じ三角形範囲へaddGroup×2、裏はBackSide指定でThree.jsが法線を反転。境界線はposition属性を面と共有)
+- [x] 作り替え前にsceneBuilderのdispose回帰テストを1本追加(偽geometry/materialでdispose回数を数える)(`sceneBuilder.test.ts`のclearGroup 3件。マテリアル配列と非対象の子も確認)
+- [x] pose_solve系のIPCをcoalescing方式に変更 — 実行中は保留1件を最新値で上書きし完了時に発行(FIFO積み上げによる表示遅延の防止)。編集系は従来のFIFOのまま(実装: `SerialQueue.runLatest`。追い越された要求は`{ok:false, error:SUPERSEDED, isLatest:false}`で返り、既存の破棄規約にそのまま乗る。ただし「その1回だけ0度を明示する」意味を持つ解除系pose_solveは追い越されると意味が失われるためFIFOのまま。runの後ろに積まれたrunLatestは追い越しの対象にならず順序も逆転しない)
+- [x] 軽微: hingeEdgeIdsのuseMemo化(ストアの`hinges`としてdoc/faces更新時に1度だけ導出) / AngleNumberInputのdirtyフラグ(未編集blurでdriver化しない)+Escape取り消し / スロットルのテスト順序依存解消(`resetPoseThrottle`をexport) / コンテキストロスト復帰時の再描画 / setPixelRatioの追従 / render呼び出しのrAF集約 / ヒンジ選択の手前優先タイブレーク修正(0.5px刻み→手前の順で整列) / 3Dカメラのリセット手段(ツールレールの「全体」で2D・3D両方)
+- [x] コミット `3D表示を手順再生に耐える作りに改良` → プッシュ
 
 ### Task 2-1: ori3-layers 平坦状態
 

@@ -18,13 +18,12 @@ vi.mock("../ipc/client", () => ({
 }));
 
 import * as ipc from "../ipc/client";
-import { useAppStore } from "./appStore";
+import { resetPoseThrottle, useAppStore } from "./appStore";
 
 /** 角度の間引き間隔(appStore.tsのPOSE_THROTTLE_MS)より少し長く待つ時間(ms) */
 const POSE_WAIT_MS = 100;
-/** 本物の時間で間引きを待つ時間(ms)。偽タイマーを使ったテストの直後は
- * 間引きの基準時刻が先へ進んでいることがあるため、間隔よりかなり長く待つ */
-const REAL_WAIT_MS = 400;
+/** 間引きが追加で飛ばないことを確かめるために待つ時間(ms) */
+const REAL_WAIT_MS = 200;
 
 /** 手動でresolve/rejectできるPromise */
 function deferred<T>() {
@@ -100,10 +99,14 @@ function poseCalls(): Driver[][] {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // 間引きの基準時刻はストア(アプリ全体で1個)が持ち続けるため、
+  // テストごとに初期化して前のテストの時計を持ち込まない
+  resetPoseThrottle();
   vi.mocked(ipc.poseSolve).mockResolvedValue(makeSolveResult());
   useAppStore.setState({
     doc: null,
     faces: [],
+    hinges: new Set<number>(),
     warnings: [],
     violations: [],
     selection: { edgeIds: [], vertexIds: [] },
@@ -195,17 +198,13 @@ function flush(): Promise<void> {
 }
 
 /** 偽タイマーを使うテストの準備。
- * 間引きの基準時刻はストア(1個だけ)が持ち続けるため、前のテストで進めた
- * 時刻が残っていると待ち時間がずれる。十分に時計を進めて基準を追い越す。 */
-async function primeFakeTimers(): Promise<void> {
+ * 間引きの基準時刻はbeforeEachのresetPoseThrottle()で初期化済みなので、
+ * ここでは偽タイマーへ切り替えるだけでよい(テストの並び順に依存しない)。 */
+function primeFakeTimers(): void {
   vi.useFakeTimers();
-  await vi.advanceTimersByTimeAsync(5000);
-  vi.mocked(ipc.poseSolve).mockClear();
 }
 
 describe("appStore 折り角度の指定", () => {
-  // 注意: 本物の時間で待つこのテストは、偽タイマーのテストより前に置く
-  // (偽タイマーで進めた時刻が残っていると、本物の待ち時間では追いつけない)
   it("実際に待っても、連続変更は1回にまとまり最後の角度が送られる", async () => {
     const store = useAppStore.getState();
     store.setDriverAngle(5, 10);
@@ -222,7 +221,7 @@ describe("appStore 折り角度の指定", () => {
   });
 
   it("連続操作は60msで間引かれ、最後の角度が必ず送られる", async () => {
-    await primeFakeTimers();
+    primeFakeTimers();
     try {
       const store = useAppStore.getState();
       store.setDriverAngle(5, 10);
@@ -238,7 +237,7 @@ describe("appStore 折り角度の指定", () => {
   });
 
   it("間隔を空けた変更はまとめられず、それぞれ送られる", async () => {
-    await primeFakeTimers();
+    primeFakeTimers();
     try {
       const store = useAppStore.getState();
       store.setDriverAngle(5, 10);
@@ -254,9 +253,39 @@ describe("appStore 折り角度の指定", () => {
     }
   });
 
+  it("計算中に角度が変わり続けても、待たせるのは最新の1件だけ", async () => {
+    primeFakeTimers();
+    try {
+      const slow = deferred<SolveResult>();
+      vi.mocked(ipc.poseSolve).mockReturnValueOnce(slow.promise);
+      const store = useAppStore.getState();
+
+      store.setDriverAngle(5, 10);
+      await vi.advanceTimersByTimeAsync(POSE_WAIT_MS); // 1件目が実行中になる
+      expect(poseCalls()).toEqual([[{ hinge: 5, target_angle_deg: 10 }]]);
+
+      for (const deg of [20, 30, 40]) {
+        store.setDriverAngle(5, deg);
+        await vi.advanceTimersByTimeAsync(POSE_WAIT_MS);
+      }
+      expect(poseCalls()).toHaveLength(1); // 1件目が終わるまで次は送られない
+
+      slow.resolve(makeSolveResult());
+      await vi.advanceTimersByTimeAsync(POSE_WAIT_MS);
+
+      // 待っていた3件は最新の1件にまとまる(20と30は送られない)
+      expect(poseCalls()).toEqual([
+        [{ hinge: 5, target_angle_deg: 10 }],
+        [{ hinge: 5, target_angle_deg: 40 }],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("「全て平らに戻す」は全ての折り線へ0度を指定して送る", async () => {
     const view = makeHingeView(500);
-    useAppStore.setState({ doc: view.doc, faces: view.faces });
+    useAppStore.setState({ doc: view.doc, faces: view.faces, hinges: new Set([5]) });
 
     const store = useAppStore.getState();
     store.setDriverAngle(5, 90);
@@ -273,6 +302,7 @@ describe("appStore 折り角度の指定", () => {
     useAppStore.setState({
       doc: view.doc,
       faces: view.faces,
+      hinges: new Set([5]),
       drivers: new Map([
         [5, 90],
         [7, 30],
@@ -297,6 +327,7 @@ describe("appStore 折り角度の指定", () => {
     useAppStore.setState({
       doc: view.doc,
       faces: view.faces,
+      hinges: new Set([5]),
       drivers: new Map([
         [5, 90],
         [9, 45], // この辺は編集後のviewに存在しない
@@ -315,6 +346,7 @@ describe("appStore 折り角度の指定", () => {
     useAppStore.setState({
       doc: view.doc,
       faces: view.faces,
+      hinges: new Set([5]),
       drivers: new Map([[9, 45]]), // 編集後のviewには残らない辺
       frame3d: { faces: [], warnings: [] }, // すでに折った状態
     });
@@ -337,7 +369,7 @@ describe("appStore 折り角度の指定", () => {
     result.frame.warnings = ["追従計算が収束していません"];
     vi.mocked(ipc.poseSolve).mockResolvedValueOnce(result);
     const view = makeHingeView(700);
-    useAppStore.setState({ doc: view.doc, faces: view.faces });
+    useAppStore.setState({ doc: view.doc, faces: view.faces, hinges: new Set([5]) });
 
     useAppStore.getState().clearDrivers();
     await flush();

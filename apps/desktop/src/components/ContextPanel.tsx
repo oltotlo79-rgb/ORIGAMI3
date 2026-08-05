@@ -3,7 +3,6 @@
 
 import { useEffect, useRef } from "react";
 import { useAppStore } from "../store/appStore";
-import { hingeEdgeIds } from "../lib/hinges";
 import type { EdgeKind } from "../lib/types";
 
 const KIND_LABEL: Record<EdgeKind, string> = {
@@ -25,9 +24,13 @@ function clampAngle(deg: number): number {
  * 角度の数値入力。入力途中の「−」だけ・空文字といった状態を打てるように、
  * 入力欄の表示は制御せず(値をストアで固定せず)、確定(Enter・入力欄から
  * 離れたとき)にストアへ反映する。表示専用の一時状態なのでrefで扱う。
+ * 書き換えていない入力欄から離れただけでは角度を指定しない(選んだだけの
+ * 折り線が勝手に指定済みになるのを防ぐ)。Escapeで書きかけを取り消す。
  */
 function AngleNumberInput({ hinge, value }: { hinge: number; value: number }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  /** 利用者がこの入力欄を書き換えたか(未編集なら確定しない) */
+  const editedRef = useRef(false);
   const setDriverAngle = useAppStore((s) => s.setDriverAngle);
 
   // 入力中でなければ、スライダー操作や計算結果に表示を追従させる
@@ -36,16 +39,25 @@ function AngleNumberInput({ hinge, value }: { hinge: number; value: number }) {
     if (el && document.activeElement !== el) el.value = String(value);
   }, [value]);
 
+  /** 書きかけを捨てて現在値の表示に戻す */
+  const revert = () => {
+    const el = inputRef.current;
+    if (el) el.value = String(value);
+    editedRef.current = false;
+  };
+
   const commit = () => {
     const el = inputRef.current;
     if (!el) return;
+    if (!editedRef.current) return; // 書き換えていないので何もしない
     const entered = Number(el.value);
     if (el.value.trim() === "" || !Number.isFinite(entered)) {
-      el.value = String(value); // 数字になっていない入力は捨てて現在値へ戻す
+      revert(); // 数字になっていない入力は捨てて現在値へ戻す
       return;
     }
     const angle = clampAngle(Math.round(entered));
     el.value = String(angle);
+    editedRef.current = false;
     setDriverAngle(hinge, angle);
   };
 
@@ -58,9 +70,17 @@ function AngleNumberInput({ hinge, value }: { hinge: number; value: number }) {
       max={ANGLE_MAX}
       step={1}
       defaultValue={value}
+      onChange={() => {
+        editedRef.current = true;
+      }}
       onBlur={commit}
       onKeyDown={(e) => {
-        if (e.key === "Enter") commit();
+        if (e.key === "Enter") {
+          commit();
+        } else if (e.key === "Escape") {
+          revert();
+          e.currentTarget.blur();
+        }
       }}
     />
   );
@@ -107,8 +127,7 @@ function HingeAngle({ hinge }: { hinge: number }) {
 
 /** 折り角度の操作(折り線を1本だけ選んでいるとき)と、全解除ボタン */
 function FoldControls() {
-  const doc = useAppStore((s) => s.doc);
-  const faces = useAppStore((s) => s.faces);
+  const hinges = useAppStore((s) => s.hinges);
   const selection = useAppStore((s) => s.selection);
   const drivers = useAppStore((s) => s.drivers);
   const clearDrivers = useAppStore((s) => s.clearDrivers);
@@ -118,10 +137,8 @@ function FoldControls() {
       ? selection.edgeIds[0]
       : null;
   // 折り線(山折り・谷折りで、両側に面がある辺)だけが角度を指定できる
-  const hinge =
-    doc !== null && selected !== null && hingeEdgeIds(doc, faces).has(selected)
-      ? selected
-      : null;
+  // ヒンジ集合はストアが展開図の更新時に1度だけ導出したものを使う
+  const hinge = selected !== null && hinges.has(selected) ? selected : null;
 
   if (hinge === null && drivers.size === 0) return null;
 

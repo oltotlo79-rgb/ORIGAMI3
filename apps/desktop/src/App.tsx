@@ -24,7 +24,9 @@ function App() {
   );
   const poseConverged = useAppStore((s) => s.poseConverged);
   const hasError = useAppStore((s) => s.errorMessage !== null);
-  const fitViewRef = useRef<(() => void) | null>(null);
+  // 「全体表示」は2D・3D両方を紙全体が収まる表示に戻す(ボタンは増やさない)
+  const fit2dRef = useRef<(() => void) | null>(null);
+  const fit3dRef = useRef<(() => void) | null>(null);
 
   // 起動時に150×150mmの新規作品を開く
   useEffect(() => {
@@ -66,12 +68,17 @@ function App() {
         </button>
       </header>
       <div className="main-row">
-        <ToolRail onFitView={() => fitViewRef.current?.()} />
+        <ToolRail
+          onFitView={() => {
+            fit2dRef.current?.();
+            fit3dRef.current?.();
+          }}
+        />
         <section className="pane pane-2d">
-          <CpEditor fitRef={fitViewRef} />
+          <CpEditor fitRef={fit2dRef} />
         </section>
         <section className="pane pane-3d">
-          <Viewer3D />
+          <Viewer3D fitRef={fit3dRef} />
           {(hasError || !poseConverged || warningCount > 0) && (
             <div
               className={hasError ? "status-badge error" : "status-badge"}

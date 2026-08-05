@@ -1,8 +1,9 @@
 // ipcQueue.tsのユニットテスト: 直列実行の順序保証と、要求番号による
-// 「最新でない応答の破棄判定(isLatest)」を検証する。
+// 「最新でない応答の破棄判定(isLatest)」、および追従計算用の
+// 「待ちは最新1件だけ(runLatest)」を検証する。
 
 import { describe, expect, it } from "vitest";
-import { createSerialQueue } from "./ipcQueue";
+import { createSerialQueue, SUPERSEDED } from "./ipcQueue";
 
 /** 手動でresolve/rejectできるPromise */
 function deferred<T>() {
@@ -104,5 +105,118 @@ describe("createSerialQueue", () => {
     ]);
     expect(order).toEqual([1, 2, 3]);
     expect(results.map((r) => r.isLatest)).toEqual([false, false, true]);
+  });
+});
+
+describe("createSerialQueue.runLatest(待ちは最新1件だけ)", () => {
+  it("実行中に3件積んだら、最後の1件だけが実行される", async () => {
+    const q = createSerialQueue();
+    const running = deferred<string>();
+    const started: string[] = [];
+
+    const p0 = q.runLatest(() => {
+      started.push("実行中");
+      return running.promise;
+    });
+    await flushMicrotasks();
+    expect(started).toEqual(["実行中"]);
+
+    const p1 = q.runLatest(() => {
+      started.push("1");
+      return Promise.resolve("1");
+    });
+    const p2 = q.runLatest(() => {
+      started.push("2");
+      return Promise.resolve("2");
+    });
+    const p3 = q.runLatest(() => {
+      started.push("3");
+      return Promise.resolve("3");
+    });
+
+    // 追い越された2件は実行されずに返る(呼び出し側は何もしない)
+    expect(await p1).toEqual({ ok: false, error: SUPERSEDED, isLatest: false });
+    expect(await p2).toEqual({ ok: false, error: SUPERSEDED, isLatest: false });
+
+    running.resolve("実行中の結果");
+    expect(await p0).toEqual({ ok: true, value: "実行中の結果", isLatest: false });
+    expect(await p3).toEqual({ ok: true, value: "3", isLatest: true });
+    expect(started).toEqual(["実行中", "3"]); // 1と2は動いていない
+  });
+
+  it("待ちが無ければ通常どおり順番に実行する", async () => {
+    const q = createSerialQueue();
+    const order: string[] = [];
+    const r1 = await q.runLatest(async () => {
+      order.push("a");
+      return "a";
+    });
+    const r2 = await q.runLatest(async () => {
+      order.push("b");
+      return "b";
+    });
+    expect(order).toEqual(["a", "b"]);
+    expect(r1.ok && r1.value).toBe("a");
+    expect(r2.ok && r2.value).toBe("b");
+  });
+
+  it("編集系(run)の後ろに積まれ、順番は入れ替わらない", async () => {
+    const q = createSerialQueue();
+    const edit = deferred<string>();
+    const order: string[] = [];
+
+    const pEdit = q.run(() => {
+      order.push("編集");
+      return edit.promise;
+    });
+    const pPose = q.runLatest(() => {
+      order.push("追従");
+      return Promise.resolve("追従の結果");
+    });
+
+    await flushMicrotasks();
+    expect(order).toEqual(["編集"]); // 編集が終わるまで追従は始まらない
+
+    edit.resolve("編集の結果");
+    await Promise.all([pEdit, pPose]);
+    expect(order).toEqual(["編集", "追従"]);
+  });
+
+  it("待っている間に編集が積まれたら、その後の最新1件は編集の後ろに回る", async () => {
+    const q = createSerialQueue();
+    const running = deferred<string>();
+    const order: string[] = [];
+
+    const p0 = q.run(() => {
+      order.push("実行中");
+      return running.promise;
+    });
+    await flushMicrotasks();
+
+    const p1 = q.runLatest(async () => {
+      order.push("追従1");
+      return "追従1";
+    });
+    const p2 = q.run(async () => {
+      order.push("編集");
+      return "編集";
+    });
+    const p3 = q.runLatest(async () => {
+      order.push("追従2");
+      return "追従2";
+    });
+
+    running.resolve("済");
+    await Promise.all([p0, p1, p2, p3]);
+    // 追従1は編集より前に積まれているので追い越されず、そのまま実行される
+    expect(order).toEqual(["実行中", "追従1", "編集", "追従2"]);
+  });
+
+  it("失敗してもキューは止まらず、次の要求が実行される", async () => {
+    const q = createSerialQueue();
+    const r1 = await q.runLatest(() => Promise.reject("だめでした"));
+    expect(r1).toEqual({ ok: false, error: "だめでした", isLatest: true });
+    const r2 = await q.runLatest(() => Promise.resolve("続行"));
+    expect(r2).toEqual({ ok: true, value: "続行", isLatest: true });
   });
 });

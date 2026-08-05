@@ -38,6 +38,8 @@ interface AppState {
   activeTool: ToolId;
   /** 3D表示フレーム。nullなら平ら(展開図から直接描く) */
   frame3d: Frame3D | null;
+  /** 折り角度を指定できる辺(ヒンジ)のID集合。doc/faces更新時に1度だけ導出する */
+  hinges: ReadonlySet<number>;
   /** 表示中の折り手順番号(Task 1-9以降で使用) */
   currentStep: number | null;
   errorMessage: string | null;
@@ -97,7 +99,20 @@ function createTrailingThrottle(intervalMs: number, fn: () => void) {
       clear();
       lastRun = Date.now();
     },
+    /** 予約と間隔の基準を完全に初期化する(テストの前処理用) */
+    clearAll: () => {
+      clear();
+      lastRun = 0;
+    },
   };
+}
+
+/** テスト用: 角度計算の間引き状態を初期化する。
+ * 間引きの基準時刻はストア(アプリ全体で1個)が持ち続けるため、初期化できないと
+ * 前のテストで進めた時計が次のテストの待ち時間に響く(テストの順序依存の原因)。*/
+let resetThrottle: () => void = () => {};
+export function resetPoseThrottle(): void {
+  resetThrottle();
 }
 
 /** ドキュメント更新後、存在しなくなったIDを選択から取り除く */
@@ -119,6 +134,7 @@ export const useAppStore = create<AppState>((set, get) => {
     set((s) => ({
       doc: view.doc,
       faces: view.faces,
+      hinges: hingeEdgeIds(view.doc, view.faces),
       warnings: view.warnings,
       violations: view.violations,
       selection: isNewDocument
@@ -156,7 +172,7 @@ export const useAppStore = create<AppState>((set, get) => {
           frame3d: null,
         });
       } else {
-        await syncPose(r.value);
+        await syncPose();
       }
     } else if (r.isLatest) {
       fail(r.error);
@@ -170,20 +186,23 @@ export const useAppStore = create<AppState>((set, get) => {
   /** 全ての折り線に0度(平ら)を指定したdriver列。
    * 何も指定せずに送るとRust側が前回解(warm start)を引き継ぎ、折れたままの
    * 形が返る。平らに戻したいときは必ず0度を明示する必要がある */
-  const flatDrivers = (doc: Document | null, faces: Face[]): Driver[] =>
-    doc
-      ? [...hingeEdgeIds(doc, faces)].map((hinge) => ({
-          hinge,
-          target_angle_deg: 0,
-        }))
-      : [];
+  const flatDrivers = (hinges: ReadonlySet<number>): Driver[] =>
+    [...hinges].map((hinge) => ({ hinge, target_angle_deg: 0 }));
 
   /** 追従計算を直列化キュー経由で実行し、3D表示へ反映する。
-   * 成功応答は完了順に全て適用する(runViewCommandと同じ規約)。
+   * coalesce=true(スライダーの連続操作・手順再生)は「最新の形が出れば良い」
+   * ので待ち行列に最新1件だけを置く(runLatest)。追い越された要求は実行されない。
+   * 一方、解除操作のように「その1回だけ0度を明示する」意味を持つ要求は、
+   * 追い越されると意味が失われるのでFIFO(run)で必ず送る。
+   * 実行された成功応答は完了順に全て適用する(runViewCommandと同じ規約)。
    * 成功時にerrorMessageは触らない(編集側のエラー報告を消さないため) */
-  const runPoseSolve = async (drivers: Driver[]): Promise<void> => {
+  const runPoseSolve = async (
+    drivers: Driver[],
+    coalesce = false,
+  ): Promise<void> => {
     pose.reset();
-    const r = await queue.run(() => ipc.poseSolve(drivers));
+    const call = () => ipc.poseSolve(drivers);
+    const r = await (coalesce ? queue.runLatest(call) : queue.run(call));
     if (r.ok) {
       set({
         frame3d: r.value.frame,
@@ -200,8 +219,9 @@ export const useAppStore = create<AppState>((set, get) => {
 
   /** 展開図の更新後、残っている角度指定で立体形状を計算し直す。
    * 折り線でなくなった辺の指定は捨てる */
-  const syncPose = async (view: DocumentView): Promise<void> => {
-    const hinges = hingeEdgeIds(view.doc, view.faces);
+  const syncPose = async (): Promise<void> => {
+    // applyViewの直後に呼ばれるので、hingesは更新後の展開図から導出済み
+    const hinges = get().hinges;
     const before = get().drivers;
     const kept = new Map([...before].filter(([hinge]) => hinges.has(hinge)));
     if (kept.size !== before.size) set({ drivers: kept });
@@ -211,20 +231,23 @@ export const useAppStore = create<AppState>((set, get) => {
       // 指定が全て無くなった(線の種類変更などで折り線でなくなった)場合、
       // 空のまま送ると前回の計算結果を引き継いで折れたまま残り、画面には
       // 平らへ戻す操作も出なくなる。全ての折り線へ0度を明示して平らに戻す
-      await runPoseSolve(flatDrivers(view.doc, view.faces));
+      await runPoseSolve(flatDrivers(hinges));
       return;
     }
     await runPoseSolve(driverList(kept));
   };
 
-  // スライダーの連続操作を間引く(実行時点の最新driversを送る)
+  // スライダーの連続操作を間引く(実行時点の最新driversを送る)。
+  // 間引いてもなお計算が追いつかない場合に備え、待ち行列は最新1件だけにする
   const pose = createTrailingThrottle(POSE_THROTTLE_MS, () => {
-    void runPoseSolve(driverList(get().drivers));
+    void runPoseSolve(driverList(get().drivers), true);
   });
+  resetThrottle = pose.clearAll;
 
   return {
     doc: null,
     faces: [],
+    hinges: new Set<number>(),
     warnings: [],
     violations: [],
     selection: EMPTY_SELECTION,
@@ -290,9 +313,9 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     clearDrivers: () => {
-      const { doc, faces } = get();
+      const hinges = get().hinges;
       set({ drivers: new Map() });
-      void runPoseSolve(flatDrivers(doc, faces));
+      void runPoseSolve(flatDrivers(hinges));
     },
   };
 });
