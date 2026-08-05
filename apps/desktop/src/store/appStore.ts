@@ -15,6 +15,8 @@ import {
   offsetPoint,
   topMovingFace,
 } from "../components/Viewer3D/foldDraw";
+import { planGrabFold, type GrabMode } from "../components/Viewer3D/grabFold";
+import { foldBlockReason } from "../lib/viewerHint";
 import type {
   Document,
   DocumentView,
@@ -179,6 +181,17 @@ interface AppState {
   cancelFoldDraft: () => void;
   /** 引いた折り線で実際に折る(sequence_apply FoldThrough)。成功したら折り線を捨てる */
   commitFoldDraft: () => Promise<void>;
+  /**
+   * 紙をつかんで動かす折り操作(UI-007)。つかんだ点fromから離した点toへの
+   * ドラッグを折り線・対象の層に翻訳して、そのまま折る(パネル操作は要らない)。
+   * grabFaceは立体表示で実際につかんだ面(raycastで拾えなければnull)
+   */
+  foldByDrag: (
+    from: Vec2,
+    to: Vec2,
+    mode: GrabMode,
+    grabFace?: number | null,
+  ) => Promise<void>;
   /** 技法を選ぶ(ツールレールのサブメニュー)。下ごしらえを作り直す */
   beginTechnique: (kind: TechniqueKind) => void;
   /** 3D表示でクリックした場所の層をフラップとして選ぶ */
@@ -694,6 +707,47 @@ export const useAppStore = create<AppState>((set, get) => {
       });
       // 失敗したときは設定を変えてやり直せるよう、折り線を残す
       if (get().errorMessage === null) set({ foldDraft: null });
+    },
+
+    foldByDrag: async (from, to, mode, grabFace = null) => {
+      const s = get();
+      if (!s.doc) return;
+      // 折れない状態は「なぜできないか」を短い日本語で伝える(要件UI-009)
+      const reason = foldBlockReason({
+        hasDoc: true,
+        playing: s.playing,
+        playT: s.playT,
+        driverCount: s.drivers.size,
+        currentStep: s.currentStep,
+        stepCount: s.doc.sequence.length,
+      });
+      if (reason) {
+        set({ errorMessage: reason });
+        return;
+      }
+      const result = planGrabFold(
+        foldLayers(s.frame3d, s.doc, s.faces),
+        s.faces,
+        from,
+        to,
+        mode,
+        grabFace,
+      );
+      if (!result.ok) {
+        set({ errorMessage: result.error });
+        return;
+      }
+      // つかんだ紙は離した位置へ倒れてくる(=手前へ折る)。
+      // 引きかけの折り線が残っていても、この操作で決着させる
+      set({ currentStep: null, foldDraft: null });
+      await get().applySequenceOp({
+        type: "FoldThrough",
+        up_to: s.doc.sequence.length,
+        line: result.plan.line,
+        keep_side_point: result.plan.keepSidePoint,
+        target_layers: result.plan.targetLayers,
+        direction: "Up",
+      });
     },
 
     beginTechnique: (kind) => {

@@ -33,6 +33,34 @@ function project(
   };
 }
 
+/**
+ * クリック位置の真下にある面のうち、いちばん手前(視点に近い)のものの面ID。
+ * 紙をつかむ操作で「どの層をつかんだか」を決めるのに使う。
+ * 層のずらし表示で紙が持ち上がっていても、実際に描かれている三角形を当てるので
+ * 平面へ投影する方法(最大で長辺の3%ずれる)より正確に拾える。
+ */
+export function pickFace(
+  mesh: THREE.Mesh,
+  triangleFaceIds: number[],
+  camera: THREE.Camera,
+  widthPx: number,
+  heightPx: number,
+  x: number,
+  y: number,
+): number | null {
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(
+    new THREE.Vector2((x / widthPx) * 2 - 1, 1 - (y / heightPx) * 2),
+    camera,
+  );
+  // 最初の交点がいちばん手前(Raycasterは距離順に返す)
+  for (const hit of raycaster.intersectObject(mesh, false)) {
+    const id = hit.faceIndex == null ? undefined : triangleFaceIds[hit.faceIndex];
+    if (id !== undefined) return id;
+  }
+  return null;
+}
+
 /** 点(px, py)から線分(ax,ay)-(bx,by)までの距離(px) */
 function distanceToSegment(
   px: number,

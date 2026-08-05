@@ -19,6 +19,10 @@ import type { HingeSegment } from "./hingePicker";
 const OUTLINE_COLOR = 0x1a1a1a;
 /** 選択中ヒンジの強調色(黄色) */
 const HIGHLIGHT_COLOR = 0xffd400;
+/** 折った結果の下見(実行前プレビュー)の色。動く紙と分かるよう青系にする */
+const PREVIEW_COLOR = 0x2f8fff;
+/** 下見の透け具合(下の紙が見える程度) */
+const PREVIEW_OPACITY = 0.45;
 /** 背景色(2D区画と揃える) */
 const BACKGROUND_COLOR = 0xcaccd4;
 /** 選択中ヒンジの太さ(紙の長辺=1.0を基準にした半径) */
@@ -352,6 +356,12 @@ export interface Viewer3DScene {
   setContent(content: Viewer3DContent): void;
   /** 選択中ヒンジの強調を更新する(形と材質は使い回す) */
   setHighlight(segments: HingeSegment[]): void;
+  /**
+   * 折った結果の下見を半透明の面で重ねる(UI-008)。
+   * 多角形は畳み平面(z=0)の座標で、liftだけ持ち上げて描く。
+   * 空配列を渡すと消える。
+   */
+  setPreview(polygons: Vec2[][], lift: number): void;
   /** 折り線の描画中は左ドラッグの視点回転を止める(拡大縮小・平行移動は残す) */
   setDrawMode(enabled: boolean): void;
   dispose(): void;
@@ -395,7 +405,19 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
 
   const contentGroup = new THREE.Group();
   const highlightGroup = new THREE.Group();
-  scene.add(contentGroup, highlightGroup);
+  // 折った結果の下見。紙に隠れず常に見えるよう深度判定を切って最後に描く
+  const previewMaterial = new THREE.MeshBasicMaterial({
+    color: PREVIEW_COLOR,
+    transparent: true,
+    opacity: PREVIEW_OPACITY,
+    side: THREE.DoubleSide,
+    depthTest: false,
+  });
+  const previewMesh = new THREE.Mesh(new THREE.BufferGeometry(), previewMaterial);
+  previewMesh.renderOrder = 2;
+  previewMesh.frustumCulled = false;
+  previewMesh.visible = false;
+  scene.add(contentGroup, highlightGroup, previewMesh);
 
   const controls = new OrbitControls(camera, canvas);
   controls.enableDamping = false; // 常時描画ループを持たない(変化時だけ描く)
@@ -484,10 +506,35 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
       for (let i = used; i < pool.length; i++) pool[i].visible = false;
       render();
     },
+    setPreview(polygons, lift) {
+      const points: number[] = [];
+      const indices: number[] = [];
+      for (const poly of polygons) {
+        if (poly.length < 3) continue;
+        const base = points.length / 3;
+        for (const p of poly) points.push(p[0], p[1], lift);
+        for (const t of triangulate(poly)) {
+          indices.push(base + t[0], base + t[1], base + t[2]);
+        }
+      }
+      // 形は毎回変わるので作り直す(前の形は必ず捨てる)
+      previewMesh.geometry.dispose();
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute(
+        "position",
+        new THREE.BufferAttribute(new Float32Array(points), 3),
+      );
+      geometry.setIndex(indices);
+      previewMesh.geometry = geometry;
+      previewMesh.visible = indices.length > 0;
+      render();
+    },
     setDrawMode(enabled) {
       controls.mouseButtons.LEFT = enabled ? null : THREE.MOUSE.ROTATE;
     },
     dispose() {
+      previewMesh.geometry.dispose();
+      previewMaterial.dispose();
       if (frameHandle !== null) cancelAnimationFrame(frameHandle);
       canvas.removeEventListener("webglcontextrestored", onContextRestored);
       controls.removeEventListener("change", render);

@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import * as THREE from "three";
 import { canFoldNow, useAppStore } from "../../store/appStore";
+import { viewerHint } from "../../lib/viewerHint";
 import { paperExtent } from "../CpEditor/snap";
 import { planeRadius, screenToPlane } from "../../lib/planeProject";
 import type { Vec2 } from "../../lib/types";
@@ -26,7 +27,24 @@ import {
   updateFrame,
   type Viewer3DScene,
 } from "./sceneBuilder";
-import { pickHinge } from "./hingePicker";
+import { planGrabFold, type GrabMode } from "./grabFold";
+import { pickFace, pickHinge, type HingeSegment } from "./hingePicker";
+
+/** 畳み平面の線分列を強調表示用の線分へ(紙より少しだけ浮かせる) */
+function toHighlight(segments: [Vec2, Vec2][]): HingeSegment[] {
+  return segments.map(([a, b]) => ({
+    edgeId: -1,
+    a: new THREE.Vector3(a[0], a[1], PREVIEW_LIFT),
+    b: new THREE.Vector3(b[0], b[1], PREVIEW_LIFT),
+  }));
+}
+
+/** 修飾キーから「何枚の紙を動かすか」を決める(説明は常にヒント行に出す) */
+function grabMode(e: { shiftKey: boolean; altKey: boolean }): GrabMode {
+  if (e.shiftKey) return "all";
+  if (e.altKey) return "single";
+  return "flap";
+}
 
 /** これ以上動かしたら「クリック」ではなく視点操作とみなす(px) */
 const CLICK_MOVE_PX = 4;
@@ -41,6 +59,8 @@ const MIN_FOLD_LENGTH = 1e-4;
 const FLAP_PICK_EPS = 1e-3;
 /** プレビュー線を紙より少しだけ上に浮かせる高さ(重なりのちらつき防止) */
 const PREVIEW_LIFT = 0.002;
+/** 折った結果の下見(半透明の面)を浮かせる高さ。層のずらし表示より上に置く */
+const PREVIEW_FILL_LIFT = 0.045;
 
 interface Props {
   /** 「全体表示」用: 親が current を呼ぶと紙全体が見える位置にカメラを戻す */
@@ -53,6 +73,13 @@ export function Viewer3D({ fitRef }: Props) {
   const downPosRef = useRef<{ x: number; y: number } | null>(null);
   /** 折り線を引いている最中の2点(表示専用の一時状態なのでrefで持つ) */
   const drawingRef = useRef<{ a: Vec2; b: Vec2 } | null>(null);
+  /** 紙をつかんで動かしている最中のつかんだ点・今の点・つかんだ面・対象の枚数 */
+  const grabRef = useRef<{
+    a: Vec2;
+    b: Vec2;
+    face: number | null;
+    mode: GrabMode;
+  } | null>(null);
 
   // 購読は更新の合図として使う(値の読み出しはgetStateで行う)
   const doc = useAppStore((s) => s.doc);
@@ -65,6 +92,23 @@ export function Viewer3D({ fitRef }: Props) {
   const foldDraft = useAppStore((s) => s.foldDraft);
   const techniqueDraft = useAppStore((s) => s.techniqueDraft);
   const foldReady = useAppStore(canFoldNow);
+  // 「今どのモードで何ができるか」を1行で常に出す(UI-009)。
+  // 文字列を返す選択なので、内容が変わらない限り再描画は起きない
+  const hint = useAppStore((s) =>
+    viewerHint({
+      hasDoc: s.doc !== null,
+      playing: s.playing,
+      playT: s.playT,
+      driverCount: s.drivers.size,
+      currentStep: s.currentStep,
+      stepCount: s.doc?.sequence.length ?? 0,
+      tool: s.activeTool,
+      hasFoldDraft: s.foldDraft !== null,
+      hasTechnique: s.techniqueDraft !== null,
+      techniqueFlapCount: s.techniqueDraft?.flap.length ?? 0,
+      hasTechniqueLine: s.techniqueDraft?.line != null,
+    }),
+  );
   // 「折る」と「技法」はどちらも紙の上に折り線を引く(左ドラッグを線引きに使う)
   const foldMode = activeTool === "fold" || activeTool === "technique";
 
@@ -105,6 +149,22 @@ export function Viewer3D({ fitRef }: Props) {
     if (!scene?.content) return;
     const s = useAppStore.getState();
     const drawing = drawingRef.current;
+    // つかんで動かしている間は「折った結果の形」を半透明で重ねて見せる(UI-008)
+    const grab = grabRef.current;
+    if (grab && s.doc) {
+      const plan = planGrabFold(
+        foldLayers(s.frame3d, s.doc, s.faces),
+        s.faces,
+        grab.a,
+        grab.b,
+        grab.mode,
+        grab.face,
+      );
+      scene.setPreview(plan.ok ? plan.plan.preview : [], PREVIEW_FILL_LIFT);
+      scene.setHighlight(plan.ok ? toHighlight(plan.plan.segments) : []);
+      return;
+    }
+    scene.setPreview([], PREVIEW_FILL_LIFT);
     // 技法では、選んだフラップ(重なった層)の輪郭も光らせる
     if (s.activeTool === "technique" && s.techniqueDraft && s.doc) {
       const draft = s.techniqueDraft;
@@ -117,13 +177,7 @@ export function Viewer3D({ fitRef }: Props) {
           segments.push([l.polygon[i], l.polygon[(i + 1) % l.polygon.length]]);
         }
       }
-      scene.setHighlight(
-        segments.map(([a, b]) => ({
-          edgeId: -1,
-          a: new THREE.Vector3(a[0], a[1], PREVIEW_LIFT),
-          b: new THREE.Vector3(b[0], b[1], PREVIEW_LIFT),
-        })),
-      );
+      scene.setHighlight(toHighlight(segments));
       return;
     }
     const line: [Vec2, Vec2] | null = drawing
@@ -143,13 +197,7 @@ export function Viewer3D({ fitRef }: Props) {
         keep,
         s.foldDraft?.target === "top",
       );
-      scene.setHighlight(
-        segments.map(([a, b]) => ({
-          edgeId: -1,
-          a: new THREE.Vector3(a[0], a[1], PREVIEW_LIFT),
-          b: new THREE.Vector3(b[0], b[1], PREVIEW_LIFT),
-        })),
-      );
+      scene.setHighlight(toHighlight(segments));
       return;
     }
     const selected = new Set(s.selection.edgeIds);
@@ -178,9 +226,12 @@ export function Viewer3D({ fitRef }: Props) {
     sceneRef.current?.setDrawMode(foldMode && foldReady);
   }, [foldMode, foldReady]);
 
-  // 折るツールから離れたら引きかけの線を捨てる
+  // 折るツールから離れたら、引きかけの線とつかみかけの紙を捨てる
   useEffect(() => {
-    if (!foldMode) drawingRef.current = null;
+    if (!foldMode) {
+      drawingRef.current = null;
+      grabRef.current = null;
+    }
   }, [foldMode]);
 
   /** 紙全体が見える斜め上の位置へカメラを戻す */
@@ -238,6 +289,16 @@ export function Viewer3D({ fitRef }: Props) {
     [],
   );
 
+  /** canvas上の位置を畳み平面の点へ直すだけ(吸着しない)。つかむ操作に使う */
+  const rawPoint = useCallback(
+    (rect: DOMRect, x: number, y: number): Vec2 | null => {
+      const scene = sceneRef.current;
+      if (!scene) return null;
+      return screenToPlane(scene.camera, rect.width, rect.height, x, y);
+    },
+    [],
+  );
+
   const handlePointerDown = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
       const rect = e.currentTarget.getBoundingClientRect();
@@ -245,6 +306,37 @@ export function Viewer3D({ fitRef }: Props) {
       const y = e.clientY - rect.top;
       const s = useAppStore.getState();
       const drawTool = s.activeTool === "fold" || s.activeTool === "technique";
+      // 「折る」の主操作は紙をつかんで動かすこと(UI-007)。
+      // 位置をきっちり指定したいときだけ、Ctrl+ドラッグで折り線を引く(補助操作)
+      const scene = sceneRef.current;
+      if (
+        e.button === 0 &&
+        s.activeTool === "fold" &&
+        !e.ctrlKey &&
+        canFoldNow(s) &&
+        scene?.content
+      ) {
+        const p = rawPoint(rect, x, y);
+        if (p) {
+          e.currentTarget.setPointerCapture(e.pointerId);
+          grabRef.current = {
+            a: p,
+            b: p,
+            face: pickFace(
+              scene.content.mesh,
+              scene.content.topology.triangleFaceIds,
+              scene.camera,
+              rect.width,
+              rect.height,
+              x,
+              y,
+            ),
+            mode: grabMode(e),
+          };
+          drawHighlight();
+        }
+        return;
+      }
       if (e.button === 0 && drawTool && canFoldNow(s)) {
         const p = planePoint(rect, x, y);
         if (p) {
@@ -256,25 +348,43 @@ export function Viewer3D({ fitRef }: Props) {
       }
       downPosRef.current = { x, y };
     },
-    [planePoint, drawHighlight],
+    [planePoint, rawPoint, drawHighlight],
   );
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const grab = grabRef.current;
+      if (grab) {
+        const p = rawPoint(rect, e.clientX - rect.left, e.clientY - rect.top);
+        if (!p) return;
+        grab.b = p;
+        grab.mode = grabMode(e); // 途中で修飾キーを押しても下見に反映する
+        drawHighlight();
+        return;
+      }
       const drawing = drawingRef.current;
       if (!drawing) return;
-      const rect = e.currentTarget.getBoundingClientRect();
       const p = planePoint(rect, e.clientX - rect.left, e.clientY - rect.top);
       if (!p) return;
       drawing.b = p;
       drawHighlight();
     },
-    [planePoint, drawHighlight],
+    [planePoint, rawPoint, drawHighlight],
   );
 
   /** クリック(視点操作でない)なら最寄りのヒンジを選ぶ。折り線を引いていたら確定する */
   const handlePointerUp = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
+      const grab = grabRef.current;
+      if (grab) {
+        grabRef.current = null;
+        drawHighlight(); // 下見を消してから、実際に折る
+        void useAppStore
+          .getState()
+          .foldByDrag(grab.a, grab.b, grabMode(e), grab.face);
+        return;
+      }
       const drawing = drawingRef.current;
       if (drawing) {
         drawingRef.current = null;
@@ -329,12 +439,14 @@ export function Viewer3D({ fitRef }: Props) {
       <canvas
         ref={canvasRef}
         className="viewer3d-canvas"
-        style={{ cursor: foldMode && foldReady ? "crosshair" : "default" }}
+        style={{
+          cursor: !foldMode || !foldReady ? "default" : activeTool === "fold" ? "grab" : "crosshair",
+        }}
         title={
           activeTool === "technique"
             ? "紙をクリックして層を選び、ドラッグして折り線を引く(平らに畳んだ状態で使える)"
             : foldMode
-              ? "紙の上をドラッグして折り線を引く(平らに畳んだ状態で使える)"
+              ? "紙をつかんでドラッグすると折れる。Shiftで重なった紙を全部、Altで1枚だけ、Ctrl+ドラッグで折り線を引く(平らに畳んだ状態で使える)"
               : "ドラッグで回転、ホイールで拡大縮小、折り線をクリックで選択"
         }
         onPointerDown={handlePointerDown}
@@ -343,13 +455,19 @@ export function Viewer3D({ fitRef }: Props) {
         onPointerCancel={() => {
           downPosRef.current = null;
           drawingRef.current = null;
+          grabRef.current = null;
           drawHighlight();
         }}
         onContextMenu={(e) => e.preventDefault()}
       />
-      {foldMode && !foldReady && (
-        <div className="viewer-notice">平らに畳んだ状態で使えます</div>
-      )}
+      <div
+        className={
+          foldMode && !foldReady ? "viewer-hint blocked" : "viewer-hint"
+        }
+        role="status"
+      >
+        {hint}
+      </div>
     </>
   );
 }
