@@ -440,8 +440,10 @@ function TechniqueDraftContent({ draft }: { draft: TechniqueDraft }) {
           " / 折り線はまだ引かれていません"
         )}
       </p>
+      {/* どちらの技法でも「動く側」を選ぶ。中割り・かぶせでは折り返される先端の側、
+          段折りでは段になって送られる側にあたる(反対側の紙はその場に残る) */}
       <div className="button-row">
-        <span>{needsFlap ? "先端が向かう側" : "段になる側"}</span>
+        <span>{needsFlap ? "先端(動く側)" : "段になる側"}</span>
         <label>
           <input
             type="radio"
