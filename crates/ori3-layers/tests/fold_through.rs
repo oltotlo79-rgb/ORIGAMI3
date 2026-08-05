@@ -38,6 +38,11 @@ fn edge_midpoint(cp: &CreasePattern, id: u32) -> DVec2 {
 
 /// 正方形を x=0.5(Up)→ y=0.5(Up)の2回で4層に畳む。
 /// 戻り値は(CP, 1回目の結果, 2回目の結果)。
+///
+/// 2回目の折り線は「1回目の結果の座標系」で書く。fold_throughが返す状態は
+/// 表示と同じ「根面(最小面ID)が恒等」の座標系なので、1回目で根面が動く側に
+/// あった場合は畳んだ紙の見える位置が動く(ここでは x∈[0.5,1.0] に見える)。
+/// 画面から折り線を引く操作と同じ流れになる。
 fn four_layer_fixture() -> (CreasePattern, FoldThroughResult, FoldThroughResult) {
     let mut cp = square_cp();
     let faces = extract_faces(&cp);
@@ -60,8 +65,8 @@ fn four_layer_fixture() -> (CreasePattern, FoldThroughResult, FoldThroughResult)
         &faces,
         &r1.state,
         &FoldThroughInput {
-            line: [[0.0, 0.5], [0.5, 0.5]],
-            keep_side_point: [0.25, 0.25],
+            line: [[0.5, 0.5], [1.0, 0.5]],
+            keep_side_point: [0.75, 0.25],
             target_layers: None,
             direction: FoldDirection::Up,
         },
@@ -93,23 +98,27 @@ fn half_fold_up_makes_two_layers_with_one_valley() {
     assert_eq!(res.added_edges.len(), 1, "追加される折り線は1本");
     assert_eq!(edge_kind(&cp, res.added_edges[0]), EdgeKind::Valley);
 
-    // 層2枚で、元の右半面が上
+    // 層2枚。表示座標系は根面(最小面ID=動かした右半面)を固定するので、画面では
+    // 紙全体を裏側から見た姿勢になり、動かさなかった左半面が上に重なって見える。
     let new_faces = extract_faces(&cp);
     assert_eq!(new_faces.len(), 2);
     assert_eq!(res.state.order.len(), 2);
     let top = *res.state.order.last().unwrap();
     let r = representative_point(&cp, face_by_id(&new_faces, top));
-    assert!(r[0] > 0.5, "上の層は元の右半面(代表点 {r:?})");
+    assert!(r[0] < 0.5, "上に見える層は元の左半面(代表点 {r:?})");
     let q = res.state.placements[&top].apply(DVec2::from(r));
     assert!(
         (q.x - (1.0 - r[0])).abs() < 1e-9 && (q.y - r[1]).abs() < 1e-9,
-        "右半面は x=0.5 の鏡映で左側に重なる(実際: {q:?})"
+        "重なりは x=0.5 の鏡映で表される(実際: {q:?})"
     );
-    assert!(res.state.placements[&top].mirrored, "折り返した層は裏返る");
+    assert!(
+        res.state.placements[&top].mirrored,
+        "根面と重ね合わない側は裏返る"
+    );
     let bottom = res.state.order[0];
     assert!(
         res.state.placements[&bottom].approx_eq(&Isometry2::identity(), 1e-12),
-        "動かさない側は恒等変換のまま"
+        "根面(最小面ID)は恒等変換にそろえられる"
     );
 
     // FoldStep: driverは折り線のCP線分1本(谷=-180)で、追加した辺へ解決できる
@@ -138,11 +147,12 @@ fn second_fold_pulls_back_two_lines_with_opposite_kinds() {
     assert_eq!(r2.step.drivers.len(), 2);
     for &eid in &r2.added_edges {
         let mid = edge_midpoint(&cp, eid);
-        // CP左半分は表向きの層由来なので谷、右半分は裏返った層由来なので山
+        // 山谷は「画面で見えている面の向き」で決まる。1回目で根面(最小面ID)が
+        // CP右半分になったため、画面ではCP右半分が表向き(谷)・左半分が裏返り(山)。
         let expected = if mid.x < 0.5 {
-            EdgeKind::Valley
-        } else {
             EdgeKind::Mountain
+        } else {
+            EdgeKind::Valley
         };
         assert_eq!(
             edge_kind(&cp, eid),
@@ -164,15 +174,17 @@ fn second_fold_pulls_back_two_lines_with_opposite_kinds() {
         assert_eq!(d.target_angle_deg, expected_angle);
     }
 
-    // 層順序: 下から 左下→右下→右上→左上 の象限
+    // 層順序(画面で見える下→上): 右上→左上→左下→右下 の象限。
+    // 紙そのものの重なりは 左下→右下→右上→左上 だが、根面(最小面ID)を固定する
+    // 表示座標系では紙を裏側から見た姿勢になるため、上下が入れ替わって見える。
     let quad = |id: FaceId| {
         let r = representative_point(&cp, face_by_id(&faces, id));
         (r[0] > 0.5, r[1] > 0.5)
     };
-    assert_eq!(quad(r2.state.order[0]), (false, false), "最下層は左下象限");
-    assert_eq!(quad(r2.state.order[1]), (true, false), "2層目は右下象限");
-    assert_eq!(quad(r2.state.order[2]), (true, true), "3層目は右上象限");
-    assert_eq!(quad(r2.state.order[3]), (false, true), "最上層は左上象限");
+    assert_eq!(quad(r2.state.order[0]), (true, true), "最下層は右上象限");
+    assert_eq!(quad(r2.state.order[1]), (false, true), "2層目は左上象限");
+    assert_eq!(quad(r2.state.order[2]), (false, false), "3層目は左下象限");
+    assert_eq!(quad(r2.state.order[3]), (true, false), "最上層は右下象限");
 
     // 全ての面が左下の1/4領域に写る
     for f in &faces {
@@ -206,15 +218,18 @@ fn pleat_with_up_and_down_makes_three_layers_in_order() {
     assert_eq!(edge_kind(&cp, r1.added_edges[0]), EdgeKind::Valley);
     assert_eq!(r1.step.drivers[0].target_angle_deg, -180.0);
 
-    // 2本目: x=0.5 で左側を下へ(Down=山)。フラップは可動側に掛からないので対象は元の左面のみ
+    // 2本目: 折った紙の1/3の位置で端側を下へ(Down=山)。フラップは可動側に
+    // 掛からないので対象は元の左面のみ。
+    // 1本目で根面(最小面ID)がフラップ側になったため、畳んだ紙は x∈[0.75,1.5] に
+    // 見えている(表示座標系=根面が恒等)。その座標で折り線を引く。
     let faces = extract_faces(&cp);
     let r2 = fold_through(
         &mut cp,
         &faces,
         &r1.state,
         &FoldThroughInput {
-            line: [[0.5, 0.0], [0.5, 1.0]],
-            keep_side_point: [0.6, 0.5],
+            line: [[1.0, 0.0], [1.0, 1.0]],
+            keep_side_point: [0.9, 0.5],
             target_layers: None,
             direction: FoldDirection::Down,
         },
@@ -222,20 +237,27 @@ fn pleat_with_up_and_down_makes_three_layers_in_order() {
     .expect("2本目の折り");
     assert!(r2.warnings.is_empty(), "{:?}", r2.warnings);
     assert_eq!(r2.added_edges.len(), 1);
-    assert_eq!(edge_kind(&cp, r2.added_edges[0]), EdgeKind::Mountain);
-    assert_eq!(r2.step.drivers[0].target_angle_deg, 180.0);
+    // 対象の層は画面では裏返って見えている(1本目で根面がフラップ側になったため)
+    // ので、向こうへ折る指定でも展開図には谷が入る
+    assert_eq!(edge_kind(&cp, r2.added_edges[0]), EdgeKind::Valley);
+    assert_eq!(r2.step.drivers[0].target_angle_deg, -180.0);
 
-    // 層3枚: 下から[動いた左側(x<0.5), 中央(0.5..0.75), 右端フラップ(x>0.75)]
+    // 層3枚。画面で見える下→上は[動いた側(x<0.5), 右端フラップ(x>0.75), 中央(0.5..0.75)]。
+    // 1本目で根面がフラップ側になったため、紙そのものでは中央の上に乗っている
+    // フラップが、画面では中央の下に見える。
     let new_faces = extract_faces(&cp);
     assert_eq!(new_faces.len(), 3);
     assert_eq!(r2.state.order.len(), 3);
     let rep_x = |id: FaceId| representative_point(&cp, face_by_id(&new_faces, id))[0];
     assert!(rep_x(r2.state.order[0]) < 0.5, "Downで動いた面が最下層");
     assert!(
-        (0.5..0.75).contains(&rep_x(r2.state.order[1])),
-        "中央は動かない"
+        rep_x(r2.state.order[1]) > 0.75,
+        "先に折ったフラップは中央より下に見える"
     );
-    assert!(rep_x(r2.state.order[2]) > 0.75, "先に折ったフラップが最上層");
+    assert!(
+        (0.5..0.75).contains(&rep_x(r2.state.order[2])),
+        "中央が最上層に見える"
+    );
 }
 
 #[test]
@@ -500,23 +522,23 @@ fn overlapping_aux_line_is_promoted_and_fold_stays_consistent() {
         assert_eq!(edge_kind(&cp, eid), EdgeKind::Valley);
     }
 
-    // 折った後の状態は普通の半分折りと同じ: 左面は不動、右面が鏡映で上
+    // 折った後の状態は普通の半分折りと同じ: 根面(右半面)が恒等で、左半面が鏡映で上
     let bottom = res.state.order[0];
     let top = *res.state.order.last().unwrap();
     assert!(
-        representative_point(&cp, face_by_id(&new_faces, top))[0] > 0.5,
-        "上の層は元の右半面"
+        representative_point(&cp, face_by_id(&new_faces, top))[0] < 0.5,
+        "上に見える層は元の左半面"
     );
     assert!(
         res.state.placements[&bottom].approx_eq(&Isometry2::identity(), 1e-12),
-        "左面は動かない"
+        "根面は恒等変換"
     );
     assert!(
         res.state.placements[&top].approx_eq(
             &Isometry2::reflection(DVec2::new(0.5, 0.0), DVec2::new(0.5, 1.0)),
             1e-9
         ),
-        "右面は折り線の鏡映で重なる"
+        "重なりは折り線の鏡映で表される"
     );
 
     // DriverLineは折り線区間1本(谷=-180)で、昇格した断片も含む3辺を駆動する

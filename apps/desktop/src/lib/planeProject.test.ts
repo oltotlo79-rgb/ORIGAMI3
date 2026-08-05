@@ -50,6 +50,39 @@ describe("screenToPlane", () => {
     const camera = makeCamera();
     expect(screenToPlane(camera, 0, 0, 0, 0)).toBeNull();
   });
+
+  it("紙を裏側(下)から見ても同じ位置が返る", () => {
+    const camera = new THREE.PerspectiveCamera(45, WIDTH / HEIGHT, 0.01, 100);
+    camera.position.set(0.5, -1.2, -1.4); // 平面の下から見上げる
+    camera.lookAt(0.5, 0.5, 0);
+    camera.updateMatrixWorld(true);
+    camera.updateProjectionMatrix();
+    for (const [x, y] of [
+      [0.5, 0.5],
+      [0.0, 1.0],
+    ]) {
+      const [sx, sy] = toScreen(camera, new THREE.Vector3(x, y, 0));
+      const back = screenToPlane(camera, WIDTH, HEIGHT, sx, sy);
+      expect(back?.[0]).toBeCloseTo(x, 6);
+      expect(back?.[1]).toBeCloseTo(y, 6);
+    }
+  });
+
+  it("平面とほぼ平行なカメラでは、遠すぎる交点を返さずnullにする", () => {
+    // ほぼ水平に見る(奥行きを深く取り、遠い交点が視錐台の中に入る状況にする)
+    const camera = new THREE.PerspectiveCamera(45, WIDTH / HEIGHT, 0.01, 5000);
+    camera.position.set(0.5, -1.2, 1.0);
+    camera.lookAt(0.5, 1000, 1.0);
+    camera.updateMatrixWorld(true);
+    camera.updateProjectionMatrix();
+    // 画面のわずかに下寄り=ほぼ水平の光線。交点は紙からかけ離れて遠くなる
+    const p = screenToPlane(camera, WIDTH, HEIGHT, WIDTH / 2, HEIGHT / 2 + 1);
+    expect(p).toBeNull();
+    // 手前(画面下端寄り)の光線は紙の近くを捉えるので、これは返る
+    const near = screenToPlane(camera, WIDTH, HEIGHT, WIDTH / 2, HEIGHT - 1);
+    expect(near).not.toBeNull();
+    expect(Math.hypot(near![0], near![1])).toBeLessThan(50);
+  });
 });
 
 describe("planeRadius", () => {

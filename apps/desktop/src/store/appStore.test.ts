@@ -795,6 +795,9 @@ describe("3D画面での折り操作(折り線を引いて折る)", () => {
       direction: "Up",
       target: "all",
       movingSide: "right",
+      // 線を引いた時点の形を覚えておく(折るときに食い違いを見つけるため)
+      docEpoch: useAppStore.getState().docEpoch,
+      stepCount: 1,
     });
     store.updateFoldDraft({ direction: "Down" });
     await useAppStore.getState().commitFoldDraft();
@@ -857,6 +860,58 @@ describe("3D画面での折り操作(折り線を引いて折る)", () => {
     seedFolded();
     useAppStore.getState().beginFoldDraft(LINE, "3d");
     useAppStore.getState().setTool("select");
+    expect(useAppStore.getState().foldDraft).toBeNull();
+  });
+
+  it("元に戻すと引きかけの折り線を捨てる(別の形の上の線を折らない)", async () => {
+    seedFolded();
+    useAppStore.getState().beginFoldDraft(LINE, "3d");
+    // 元に戻して手順が1つ減る = 線を引いた形とは別の形になる
+    vi.mocked(ipc.editUndo).mockResolvedValueOnce(makeStepView(3030, 0));
+    await useAppStore.getState().undo();
+
+    expect(useAppStore.getState().foldDraft).toBeNull();
+    // 折る要求は送られない
+    await useAppStore.getState().commitFoldDraft();
+    expect(vi.mocked(ipc.sequenceApply)).not.toHaveBeenCalled();
+  });
+
+  it("線を引いた後に手順が変わっていたら、折らずに捨てて知らせる", async () => {
+    seedFolded();
+    useAppStore.getState().beginFoldDraft(LINE, "3d");
+    // ストアの外(応答の反映以外の経路)で形が変わった状況を作る
+    useAppStore.setState({ doc: makeStepView(3040, 2).doc });
+
+    await useAppStore.getState().commitFoldDraft();
+
+    expect(vi.mocked(ipc.sequenceApply)).not.toHaveBeenCalled();
+    expect(useAppStore.getState().foldDraft).toBeNull();
+    expect(useAppStore.getState().errorMessage).toContain("もう一度線を引いて");
+  });
+
+  it("折れる状態でなくなったら(途中の手順を表示中)、折らずに捨てる", async () => {
+    seedFolded();
+    useAppStore.getState().beginFoldDraft(LINE, "3d");
+    // 途中の手順を選ぶと畳み平面の座標と画面の形が食い違う
+    useAppStore.setState({ currentStep: 0 });
+
+    await useAppStore.getState().commitFoldDraft();
+
+    expect(vi.mocked(ipc.sequenceApply)).not.toHaveBeenCalled();
+    expect(useAppStore.getState().foldDraft).toBeNull();
+    expect(useAppStore.getState().errorMessage).toContain("もう一度線を引いて");
+  });
+
+  it("手順を選ぶ・再生を始めると引きかけの折り線を捨てる", async () => {
+    seedFolded();
+    useAppStore.getState().beginFoldDraft(LINE, "3d");
+    useAppStore.getState().selectStep(0);
+    expect(useAppStore.getState().foldDraft).toBeNull();
+    await Promise.resolve();
+
+    seedFolded();
+    useAppStore.getState().beginFoldDraft(LINE, "3d");
+    useAppStore.getState().togglePlay();
     expect(useAppStore.getState().foldDraft).toBeNull();
   });
 });

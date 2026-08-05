@@ -507,16 +507,16 @@ fn accordion_cp(strips: usize) -> CreasePattern {
 // ---------------------------------------------------------------------------
 
 /// 手順を折り重ねた文書から導出した平坦状態が、fold_throughが返した状態と
-/// (根面を恒等に揃えれば)一致する。1〜4手順(裏返った層を含む)で確かめる。
+/// そのまま一致する。1〜4手順(裏返った層を含む)で確かめる。
 ///
-/// 導出は3D表示と同じ座標系なので、根面(最小面ID)が恒等変換になる。
-/// fold_throughの状態で根面が動いていた場合は、その分だけ全体がずれる。
+/// 導出も fold_through の出力も3D表示と同じ座標系(根面=最小面IDが恒等変換)に
+/// そろえてあるので、全体のずれは残らない。
 #[test]
 fn flat_state_at_matches_fold_through_state() {
     for steps in 1..=4usize {
         let (doc, expected) = folded_document_with_state(steps);
         let faces = extract_faces(&doc.cp);
-        let state = flat_state_at(&doc, &faces, steps).expect("平坦なのでErrにならない");
+        let (state, _) = flat_state_at(&doc, &faces, steps).expect("平坦なのでErrにならない");
 
         assert_eq!(state.order, expected.order, "{steps}手順目の層順序");
         assert_eq!(
@@ -533,12 +533,14 @@ fn flat_state_at_matches_fold_through_state() {
             state.placements[&root].approx_eq(&Isometry2::identity(), 1e-12),
             "{steps}手順目: 根面(最小面ID)は恒等変換"
         );
-        let g = expected.placements[&root].inverse();
+        assert!(
+            expected.placements[&root].approx_eq(&Isometry2::identity(), 1e-12),
+            "{steps}手順目: fold_throughの出力も根面が恒等変換にそろっている"
+        );
         for (id, want) in &expected.placements {
-            let want = g.compose(want);
             let got = state.placements.get(id).expect("同じ面IDが揃う");
             assert!(
-                got.approx_eq(&want, 1e-9),
+                got.approx_eq(want, 1e-9),
                 "{steps}手順目の面{id}の配置が違う: got={got:?}, want={want:?}"
             );
         }
@@ -573,7 +575,7 @@ fn flat_state_at_matches_exactly_when_root_face_is_kept() {
     doc.sequence.push(step);
 
     let faces = extract_faces(&doc.cp);
-    let state = flat_state_at(&doc, &faces, 1).expect("平坦なのでErrにならない");
+    let (state, _) = flat_state_at(&doc, &faces, 1).expect("平坦なのでErrにならない");
     let root = *state.order.iter().min().expect("面がある");
     assert!(
         res.state.placements[&root].approx_eq(&Isometry2::identity(), 1e-12),
@@ -602,7 +604,7 @@ fn flat_state_at_rejects_unfolded_state() {
     assert!(err.contains("折り途中"), "err={err}");
 
     // 手順0(まだ折っていない平らな紙)は平坦状態として扱える
-    let state = flat_state_at(&doc, &faces, 0).expect("平らな紙は平坦");
+    let (state, _) = flat_state_at(&doc, &faces, 0).expect("平らな紙は平坦");
     assert!(
         state
             .placements
@@ -617,7 +619,7 @@ fn flat_state_at_rejects_unfolded_state() {
 fn flat_state_at_feeds_next_fold_through() {
     let (mut doc, _) = folded_document_with_state(2);
     let faces = extract_faces(&doc.cp);
-    let state = flat_state_at(&doc, &faces, 2).expect("平坦");
+    let (state, _) = flat_state_at(&doc, &faces, 2).expect("平坦");
     let before_edges = doc.cp.edges.len();
     let res = fold_through(
         &mut doc.cp,

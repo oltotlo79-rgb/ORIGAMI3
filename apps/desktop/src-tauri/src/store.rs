@@ -251,7 +251,8 @@ impl DocumentStore {
                     );
                 }
                 // facesは現docから導出済みのキャッシュ(docはまだ複製したまま無変更)
-                let state = ori3_layers::flat_state_at(&doc, &self.faces, up_to)?;
+                // 現在の状態を求め直すときの警告(飛ばした手順など)も利用者へ返す
+                let (state, state_warnings) = ori3_layers::flat_state_at(&doc, &self.faces, up_to)?;
                 let mut cp = doc.cp.clone();
                 let result = ori3_layers::fold_through(
                     &mut cp,
@@ -268,7 +269,8 @@ impl DocumentStore {
                 step.id = next_step_id(&doc);
                 doc.cp = cp;
                 doc.sequence.push(step);
-                warnings = result.warnings;
+                warnings = state_warnings;
+                warnings.extend(result.warnings);
             }
         }
         Ok(self.commit(doc, warnings))
@@ -897,6 +899,8 @@ mod tests {
         let view = store
             .apply_seq(fold_op(0, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5]))
             .unwrap();
+        // 層番号(下から0)が画面の重なりと一致している(根面が動く1手目)
+        assert_display_layers(&store, "1手目");
 
         // 展開図に谷折り線が1本増え、面が2つに分かれる
         // (横切られた輪郭線2本も分割されるので、辺の総数は4→7)
@@ -930,8 +934,9 @@ mod tests {
         let frame = view.frame.clone().expect("手順があるので立体が返る");
         let mut layers: Vec<u32> = frame.faces.iter().map(|f| f.layer).collect();
         layers.sort_unstable();
-        assert_eq!(layers, vec![0, 1, 2, 3]);
+        assert_eq!(layers, vec![0, 1, 2, 3], "層番号は下から0,1,2,3");
         assert!(view.skipped.is_empty(), "warnings={:?}", view.warnings);
+        assert_display_layers(&store, "2手目");
 
         // undoで折る前(手順1つ・面2つ)へ戻る
         let view = store.undo().unwrap();
@@ -990,6 +995,8 @@ mod tests {
                 k + 1,
                 view.warnings
             );
+            // 折るたびに層番号(下から0)が画面の重なりと一致している
+            assert_display_layers(&store, &format!("座布団折り{}回目", k + 1));
         }
         assert_eq!(store.doc.sequence.len(), 4);
         // 外形は辺の中点を結ぶ正方形(対角線=1.0)になる
@@ -1009,6 +1016,7 @@ mod tests {
                     [cx, cy],
                 ))
                 .unwrap_or_else(|e| panic!("観音折り(x={x})が折れない: {e}"));
+            assert_display_layers(&store, &format!("観音折り(x={x})"));
         }
         assert_eq!(store.doc.sequence.len(), 6);
         // 幅は半分になり、紙は平らに畳まれたまま
@@ -1033,6 +1041,65 @@ mod tests {
                 .iter()
                 .all(|f| f.polygon.iter().all(|p| p[2].abs() < 1e-6)),
             "折り上がりは平ら"
+        );
+    }
+
+    /// `Frame3D.layer`(「下から0」)が本当に画面の重なりと一致するか確かめる。
+    ///
+    /// 完全に畳んだ状態(t=1)では全ての面がz=0に重なって上下を読めないので、
+    /// 折り終わる直前(t=0.99)の高さ(z)から本当の重なりを読み取る。そのとき
+    /// 浮いている(動いている)層は、折り上がりでは高さの符号の側=上か下の端に
+    /// まとまって並ぶはず。ここが食い違うと、層ずらし表示・書き出し順・
+    /// 「いちばん上の1枚」の指定がすべて逆さまになる。
+    fn assert_display_layers(store: &DocumentStore, label: &str) {
+        let up_to = store.doc.sequence.len();
+        let mid = ori3_layers::replay(&store.doc, up_to, 0.99).frame;
+        let mut lifted: Vec<u32> = Vec::new();
+        let mut sign = 0.0f64;
+        for f in &mid.faces {
+            let z = f
+                .polygon
+                .iter()
+                .map(|p| p[2])
+                .max_by(|a, b| a.abs().total_cmp(&b.abs()))
+                .unwrap_or(0.0);
+            if z.abs() > 1e-3 {
+                lifted.push(f.face);
+                if sign == 0.0 {
+                    sign = z.signum();
+                }
+                assert_eq!(z.signum(), sign, "{label}: 動いた層は同じ向きへ浮く");
+            }
+        }
+        assert!(!lifted.is_empty(), "{label}: 折る直前には動いた層が浮いている");
+
+        let frame = ori3_layers::replay(&store.doc, up_to, 1.0).frame;
+        let total = frame.faces.len();
+        let mut want: Vec<u32> = lifted.clone();
+        want.sort_unstable();
+        // 上へ浮いたなら層番号の大きい方、下へ潜ったなら小さい方にまとまる
+        let mut got: Vec<u32> = frame
+            .faces
+            .iter()
+            .filter(|f| {
+                let l = usize::try_from(f.layer).unwrap();
+                if sign > 0.0 {
+                    l >= total - lifted.len()
+                } else {
+                    l < lifted.len()
+                }
+            })
+            .map(|f| f.face)
+            .collect();
+        got.sort_unstable();
+        assert_eq!(
+            got, want,
+            "{label}: 浮いた層が層番号の端にまとまっていない(layer={:?})",
+            frame
+                .faces
+                .iter()
+                .map(|f| (f.face, f.layer))
+                .collect::<Vec<_>>()
         );
     }
 

@@ -47,6 +47,9 @@ pub struct FoldThroughInput {
 #[derive(Clone, Debug)]
 pub struct FoldThroughResult {
     /// 折った後の平坦状態(新しい面ID体系)。
+    ///
+    /// 座標系は表示・[`crate::flat_state_at`] と同じ「根面(最小面ID)が恒等」に
+    /// そろえてある(層順序もこの座標系での下→上)。
     pub state: FlatState,
     /// CPへ追記された折り線の辺ID(折りの線種へ昇格させた既存の補助線の断片を含む)。
     pub added_edges: Vec<EdgeId>,
@@ -63,6 +66,9 @@ pub struct FoldThroughResult {
 /// 3. 挿入する線種は Up=谷 / Down=山。裏返っている層(mirrored)では反転する。
 ///    重なった補助線は折りの線種へ昇格し、既存の山/谷線は線種を維持したまま駆動対象になる
 /// 4. 面を再抽出し、可動側の新しい面へ折り線の鏡映を重ね、層順序を更新する
+/// 5. 出力する平坦状態を「根面(最小面ID)が恒等」の座標系へそろえる
+///    (表示・[`crate::flat_state_at`] と同じ座標系にする。裏返しになる折りでは
+///    上下が入れ替わるため層順序も反転する)
 ///
 /// CPの更新は複製上で行い、成功した場合のみ元の `cp` に反映する(原子性)。
 /// 折り線が横切ったのに面を分割できなかった場合は状態を壊す前にErrで止める。
@@ -412,6 +418,15 @@ pub fn fold_through(
         }
     }
 
+    // 9. 出力の座標系そろえ。ここまでの配置は「入力状態の座標系に折りを重ねた」もので、
+    //    折るたびに全体の等長変換(裏返しを含む)が積み上がる。一方、表示と
+    //    [`crate::flat_state_at`] は常に「根面(最小面ID)が恒等」の座標系で姿勢を出す。
+    //    両者がずれたまま層順序を記録すると、全体変換が裏返しのときに記録した上下と
+    //    画面の上下が逆になる(折るたびに反転するので手順の偶奇で食い違う)。
+    //    そこで根面の配置の逆変換を全体へ掛けて根面を恒等にそろえ、裏返しなら
+    //    上下が入れ替わるので層順序も反転する。
+    let (placements, order) = normalize_to_root(placements, order);
+
     // 7. FoldStepの生成。driversは折り線のCP座標区間ごとのDriverLine
     //    (辺IDに依存しないため、後続の折りで辺が分割されても再生できる)。
     let new_state = FlatState { placements, order };
@@ -456,6 +471,32 @@ pub fn resolve_driver_edges(cp: &CreasePattern, line: &DriverLine) -> Vec<EdgeId
         })
         .map(|e| e.id)
         .collect()
+}
+
+/// 平坦状態を「根面(最小面ID)が恒等変換」の座標系へそろえる。
+///
+/// 根面の配置を n とすると、全ての配置へ左から n⁻¹ を掛ける
+/// (`compose` は self∘other = otherが先なので `n_inv.compose(&p)` = p を先に適用)。
+/// n が裏返し(`mirrored`)のときは紙全体をひっくり返して見ることになるので、
+/// 層順序(下→上)も反転する。面が1つも無い場合はそのまま返す。
+fn normalize_to_root(
+    placements: HashMap<FaceId, Isometry2>,
+    order: Vec<FaceId>,
+) -> (HashMap<FaceId, Isometry2>, Vec<FaceId>) {
+    let Some(root) = placements.keys().copied().min() else {
+        return (placements, order);
+    };
+    let n = placements[&root];
+    let n_inv = n.inverse();
+    let placements = placements
+        .into_iter()
+        .map(|(id, p)| (id, n_inv.compose(&p)))
+        .collect();
+    let mut order = order;
+    if n.mirrored {
+        order.reverse();
+    }
+    (placements, order)
 }
 
 fn vertex_positions(cp: &CreasePattern) -> HashMap<VertexId, DVec2> {

@@ -118,11 +118,20 @@ pub fn replay_with_faces(doc: &Document, faces: &[Face], up_to: usize, t: f64) -
 /// [`FlatState::resolve_order`] で現在の面IDへ解決する(無ければ面ID昇順)。
 ///
 /// 座標系は3D表示と同じ(根面=最小面IDの面が恒等変換)。畳んだ紙の上に画面から
-/// 引いた折り線をそのまま渡せる。連続した [`crate::fold_through`] が返す状態とは
-/// 全体の等長変換の分だけ違うことがある(根面が動く側にあった場合)。
+/// 引いた折り線をそのまま渡せる。[`crate::fold_through`] が返す状態も同じ座標系へ
+/// そろえてあるので、層順序(下→上)の向きは常に一致する。
 ///
 /// 平坦でない(折り途中の角度が残る)場合はErrを返す。
-pub fn flat_state_at(doc: &Document, faces: &[Face], up_to: usize) -> Result<FlatState, String> {
+///
+/// 戻り値には手順を読み直したときの警告(折り線が見つからない手順・解決できない
+/// 層順序の代表点など)を添える。折れなくなるほどの問題ではないので止めはしないが、
+/// 捨てると「知らないうちに一部の手順が無視された状態の上に折る」ことになるため、
+/// 呼び出し側へ渡して利用者に見せること(「止めずに警告」原則)。
+pub fn flat_state_at(
+    doc: &Document,
+    faces: &[Face],
+    up_to: usize,
+) -> Result<(FlatState, Vec<String>), String> {
     let up_to = up_to.min(doc.sequence.len());
     let plan = plan_steps(doc, faces, up_to, 1.0);
     // 後から積んだ指定が優先(HashMapへの順次挿入で後勝ちになる)
@@ -158,10 +167,13 @@ pub fn flat_state_at(doc: &Document, faces: &[Face], up_to: usize) -> Result<Fla
             },
         );
     }
-    Ok(FlatState {
-        placements,
-        order: plan.order,
-    })
+    Ok((
+        FlatState {
+            placements,
+            order: plan.order,
+        },
+        plan.warnings,
+    ))
 }
 
 /// `up_to` ステップまでの角度指定・層順序・警告(replayとflat_state_atの共通処理)。

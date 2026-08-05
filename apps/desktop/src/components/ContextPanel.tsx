@@ -269,16 +269,19 @@ function StepContent({ number }: { number: number }) {
 
 /** 引いた折り線の確定UI(向き・対象の層・動かす側を決めて折る) */
 function FoldDraftContent({ draft }: { draft: FoldDraft }) {
+  const paper = useAppStore((s) => s.doc?.paper ?? null);
   const updateFoldDraft = useAppStore((s) => s.updateFoldDraft);
   const cancelFoldDraft = useAppStore((s) => s.cancelFoldDraft);
   const commitFoldDraft = useAppStore((s) => s.commitFoldDraft);
   const [a, b] = draft.line;
+  // 座標は「紙の長辺=1」に正規化された値なので、紙の寸法を掛けてmmで見せる
+  const scale = paper ? Math.max(paper.width_mm, paper.height_mm) : 1;
+  const mm = (v: number) => (v * scale).toFixed(1);
 
   return (
     <div>
       <p>
-        折り線: ({a[0].toFixed(3)}, {a[1].toFixed(3)}) →({b[0].toFixed(3)},{" "}
-        {b[1].toFixed(3)})
+        折り線: ({mm(a[0])}, {mm(a[1])}) →({mm(b[0])}, {mm(b[1])}) mm
       </p>
       <div className="button-row">
         <span>向き</span>
@@ -320,17 +323,11 @@ function FoldDraftContent({ draft }: { draft: FoldDraft }) {
           いちばん上の1枚
         </label>
       </div>
+      {/* 「左/右」は畳み平面の向きで決まるため、カメラを回すと画面の左右と
+          食い違う。画面に合わせるにはカメラの向きが要るので、言葉では側を
+          言い当てず、動く側は立体表示のハイライトで見てもらう */}
       <div className="button-row">
         <span>動かす側</span>
-        <label>
-          <input
-            type="radio"
-            name="fold-side"
-            checked={draft.movingSide === "left"}
-            onChange={() => updateFoldDraft({ movingSide: "left" })}
-          />
-          左側を動かす
-        </label>
         <label>
           <input
             type="radio"
@@ -338,10 +335,20 @@ function FoldDraftContent({ draft }: { draft: FoldDraft }) {
             checked={draft.movingSide === "right"}
             onChange={() => updateFoldDraft({ movingSide: "right" })}
           />
-          右側を動かす
+          こちら側
+        </label>
+        <label>
+          <input
+            type="radio"
+            name="fold-side"
+            checked={draft.movingSide === "left"}
+            onChange={() => updateFoldDraft({ movingSide: "left" })}
+          />
+          反対側
         </label>
         <span className="hint">
-          (折り線を引いた向きに対する左右。動く側は立体表示で黄色く光ります)
+          (立体表示で黄色く光っている方が動きます。違う方を動かしたいときは
+          もう一方を選んでください)
         </span>
       </div>
       <div className="button-row">
@@ -437,10 +444,12 @@ export function ContextPanel() {
   return (
     <footer className="context-panel">
       <div className="context-selection">
-        {foldDraft ? (
-          <FoldDraftContent draft={foldDraft} />
-        ) : stepSelected ? (
+        {/* 手順を選んでいるときはその設定を優先する。折り線は「今見えている形」の
+            上に引くものなので、手順を選んだ時点でストアが捨てている(ここは念のため) */}
+        {stepSelected ? (
           <StepContent number={currentStep} />
+        ) : foldDraft ? (
+          <FoldDraftContent draft={foldDraft} />
         ) : (
           <>
             <SelectionContent />

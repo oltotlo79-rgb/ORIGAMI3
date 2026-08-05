@@ -59,7 +59,16 @@ export interface FoldDraft {
   target: FoldTarget;
   /** 折り線のどちら側を動かすか(線の進行方向に対する左右) */
   movingSide: "left" | "right";
+  /** 線を引いた時点の作品の世代番号(新規・開くで変わる) */
+  docEpoch: number;
+  /** 線を引いた時点の手順の数。線は「その形の上」で引いたものなので、
+   * 手順が増減していたら別の形に対する線になってしまう */
+  stepCount: number;
 }
+
+/** 引きかけの折り線が今の形に合わなくなったときの案内 */
+const STALE_DRAFT_MESSAGE =
+  "引いた折り線は今の紙の形に合わなくなったため取り消しました。もう一度線を引いてください";
 
 /**
  * 折る操作ができる状態か(平らに畳んだ状態を表示しているか)。
@@ -226,11 +235,17 @@ export const useAppStore = create<AppState>((set, get) => {
 
   /** DocumentViewの内容で状態を一括更新する(成功時共通処理)。
    * isNewDocument=true(新規/開く)なら選択を解除しdocEpochを進める。
-   * 手順が減ったときは表示中の手順番号を手順数まで詰める */
+   * 手順が減ったときは表示中の手順番号を手順数まで詰める。
+   *
+   * 引きかけの折り線はここで必ず捨てる。線は「引いた時点の形」の上の座標なので、
+   * 展開図の編集・元に戻す・やり直し・手順の増減があった後に使うと、別の形の上で
+   * 引いた線が黙って今の形へ適用されてしまう(折る操作自体の成功時も同じ経路を
+   * 通るので、折り終わった線がそのまま残ることもない) */
   const applyView = (view: DocumentView, isNewDocument: boolean) => {
     const total = view.doc.sequence.length;
     set((s) => ({
       doc: view.doc,
+      foldDraft: null,
       faces: view.faces,
       hinges: hingeEdgeIds(view.doc, view.faces),
       warnings: view.warnings,
@@ -503,6 +518,9 @@ export const useAppStore = create<AppState>((set, get) => {
 
     selectStep: (step) => {
       stopPlayback();
+      // 別の手順の形を見せる操作なので、その前の形の上に引いた折り線は捨てる
+      // (残すとコンテキストパネルに折りUIが出たままになり、手順の設定も出せない)
+      if (get().foldDraft) set({ foldDraft: null });
       const s = get();
       const total = s.doc?.sequence.length ?? 0;
       if (total === 0) {
@@ -538,6 +556,8 @@ export const useAppStore = create<AppState>((set, get) => {
       const total = s.doc?.sequence.length ?? 0;
       const next = startPlayback(s.currentStep, s.playT, total);
       if (!next.playing) return;
+      // 再生中は形が刻々と変わるので、引きかけの折り線は捨てる
+      set({ foldDraft: null });
       set({ currentStep: next.step, playT: next.t, playing: true });
       lastTs = 0; // 止めていた間の時間は進めない(1コマ目の経過時間は0)
       cancelFrame = scheduleFrame(tick);
@@ -570,6 +590,9 @@ export const useAppStore = create<AppState>((set, get) => {
           direction: "Up",
           target: "all",
           movingSide: "right",
+          // 線を引いた時点の形を覚えておき、折るときに食い違いを見つける
+          docEpoch: s.docEpoch,
+          stepCount: s.doc.sequence.length,
         },
         errorMessage: null,
       });
@@ -588,6 +611,16 @@ export const useAppStore = create<AppState>((set, get) => {
       const s = get();
       const draft = s.foldDraft;
       if (!draft || !s.doc) return;
+      // 線を引いた時点と今とで形が違えば、そのまま折ると黙って違う位置に折り目が
+      // 入る。折らずに捨てて、引き直してもらう
+      if (
+        !canFoldNow(s) ||
+        draft.docEpoch !== s.docEpoch ||
+        draft.stepCount !== s.doc.sequence.length
+      ) {
+        set({ foldDraft: null, errorMessage: STALE_DRAFT_MESSAGE });
+        return;
+      }
       const keep = keepSidePoint(draft.line, draft.movingSide);
       let targetLayers: number[] | null = null;
       if (draft.target === "top") {

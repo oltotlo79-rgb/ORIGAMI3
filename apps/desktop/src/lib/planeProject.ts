@@ -7,13 +7,24 @@ import type { Vec2 } from "./types";
 /** 光線が平面と平行とみなす向きの閾値 */
 const PARALLEL_EPS = 1e-9;
 
+/**
+ * 畳み平面の原点から交点までの距離の上限(座標の単位は「紙の長辺=1」)。
+ * カメラが平面とほぼ平行になると交点は際限なく遠ざかる。そのまま採用すると
+ * 紙から大きく外れた位置に折り線が引かれるため、この距離を超えたら
+ * 「平面を捉えていない」として弾く。紙は畳んでも数単位の範囲に収まるので、
+ * 50は実用上あり得ない遠さ。
+ */
+const MAX_PLANE_DISTANCE = 50;
+
 /** 使い回す作業用ベクトル(毎フレーム呼ばれるので割り当てを増やさない) */
 const NEAR = new THREE.Vector3();
 const FAR = new THREE.Vector3();
 
 /**
  * 画面座標(canvasの左上基準・px)から見た光線と畳み平面(z=0)の交点を返す。
- * 平面と平行な向き、または交点が描画範囲(手前面〜奥面)の外にある場合はnull。
+ * 平面と平行な向き、交点が描画範囲(手前面〜奥面)の外にある場合、
+ * および交点が紙からかけ離れて遠い場合はnull。
+ * 平面を裏側(z<0)から見ていても交点は同じように求まる。
  */
 export function screenToPlane(
   camera: THREE.Camera,
@@ -31,7 +42,11 @@ export function screenToPlane(
   if (Math.abs(dz) < PARALLEL_EPS) return null;
   const t = -NEAR.z / dz;
   if (!(t >= 0 && t <= 1)) return null;
-  return [NEAR.x + (FAR.x - NEAR.x) * t, NEAR.y + (FAR.y - NEAR.y) * t];
+  const hitX = NEAR.x + (FAR.x - NEAR.x) * t;
+  const hitY = NEAR.y + (FAR.y - NEAR.y) * t;
+  if (!Number.isFinite(hitX) || !Number.isFinite(hitY)) return null;
+  if (Math.hypot(hitX, hitY) > MAX_PLANE_DISTANCE) return null;
+  return [hitX, hitY];
 }
 
 /**
