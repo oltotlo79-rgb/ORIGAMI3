@@ -458,8 +458,8 @@ M1の品質レビューで「面400・辺1,000でsolve 33ms以内(NFR-002)」に
 
 **Files:** `crates/ori3-layers/src/{lib,flat_state}.rs`, `tests/flat_state.rs`
 
-- [ ] テスト: 正方形を半分に折った状態→2面の配置が鏡映関係、層順序が[下面, 上面]。層順序の代表点参照(layer_orderの[f64;2]→FaceId解決)が面の再抽出後も正しく対応する
-- [ ] 実装:
+- [x] テスト: 正方形を半分に折った状態→2面の配置が鏡映関係、層順序が[下面, 上面]。層順序の代表点参照(layer_orderの[f64;2]→FaceId解決)が面の再抽出後も正しく対応する(テスト11件。境界・凹面(スリット)・解決不能点の警告・重複点も網羅)
+- [x] 実装(代表点は耳刈りで得た最初の三角形の重心、点の内外判定は境界EPS許容+交差数の偶奇):
 
 ```rust
 pub struct FlatState {
@@ -473,9 +473,13 @@ impl FlatState {
         -> (Vec<FaceId>, Vec<String>);
     pub fn to_layer_points(&self, cp: &CreasePattern, faces: &[Face]) -> Vec<[f64; 2]>;
 }
+/// 面の内部代表点(凹面でも内部に落ちる。決定的)
+pub fn representative_point(cp: &CreasePattern, face: &Face) -> [f64; 2];
+/// 点が面の内部(境界EPS以内を含む)にあるか
+pub fn point_in_face(cp: &CreasePattern, face: &Face, p: [f64; 2]) -> bool;
 ```
 
-- [ ] テスト成功確認 → コミット `平らに畳んだときの紙の重なり順を管理する機能を追加` → プッシュ
+- [x] テスト成功確認 → コミット `平らに畳んだときの紙の重なり順を管理する機能を追加` → プッシュ
 
 ### Task 2-2: 折り操作プリミティブ(fold_through)
 
