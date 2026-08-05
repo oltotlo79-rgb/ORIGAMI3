@@ -485,32 +485,39 @@ pub fn point_in_face(cp: &CreasePattern, face: &Face, p: [f64; 2]) -> bool;
 
 **Files:** `crates/ori3-layers/src/fold_through.rs`, `tests/fold_through.rs`
 
-- [ ] テストを先に書く:
-  - 正方形を1回半分折り→層2枚。さらに直交方向に重ね折り→層4枚、CPに折り線が各層分(引き戻しで2本)追加され、山谷が層の向きに応じて正しく付く
-  - 段折り(同方向に2本)で層3枚・順序正しい
+- [x] テストを先に書く(9件):
+  - 正方形を1回半分折り→層2枚。さらに直交方向に重ね折り→層4枚、CPに折り線が各層分(引き戻しで2本)追加され、山谷が層の向きに応じて正しく付く(mirrored反転の検証)
+  - 段折り(同方向に2本、UpとDown)で層3枚・順序正しい
   - 対象層を「上1枚のみ」に指定した折りで、下層が動かない
-- [ ] 実装:
+  - 原子性(不正入力4種でErr・cpが完全無変更)/ layer_orderのresolve_order往復一致と決定性 / 紙が裂ける指定の警告 / 既存辺と重なる区間の警告
+- [x] 実装:
 
 ```rust
+/// 折る向き: Up=動く側の層を反転して山の一番上に載せる(表から見て谷折りに相当)
+///           Down=一番下に入れる(山折りに相当)
+pub enum FoldDirection { Up, Down }
 pub struct FoldThroughInput {
-    pub line: [[f64; 2]; 2],          // 畳んだ平面座標での折り線
+    pub line: [[f64; 2]; 2],          // 畳んだ平面座標での折り線(無限直線として扱う)
     pub keep_side_point: [f64; 2],    // 動かさない側を示す点(畳んだ平面座標)
-    pub target_layers: Option<Vec<FaceId>>, // None=線が跨る全層の可動側
-    pub direction: FoldDirection,     // MountainTop(手前へ) / ValleyTop(向こうへ)
+    pub target_layers: Option<Vec<FaceId>>, // None=可動側に幾何が乗る全ての層
+    pub direction: FoldDirection,
 }
 pub struct FoldThroughResult {
-    pub state: FlatState,
+    pub state: FlatState,             // 折った後の平坦状態(新しい面ID体系)
     pub added_edges: Vec<EdgeId>,     // CPへ追記された折り線
-    pub step: FoldStep,               // 記録用(drivers+layer_order生成済み)
+    pub step: FoldStep,               // 記録用(kind=Simple、drivers+layer_order設定済み、id=0)
     pub warnings: Vec<String>,
 }
-/// 折り線を各対象面へ逆変換で引き戻してCPに挿入し、対象面群を鏡映、
-/// 層順序を折り返しで更新する。CPの更新まで含めて原子的に行う。
+/// 折り線を各対象面へplacement逆変換で引き戻してCPに挿入し(横切らない対象面は
+/// 丸ごと動く)、可動側の面へ折り線の鏡映を重ね、層順序を「動いた面を旧順の逆順で
+/// 山全体の上(Up)/下(Down)へ」で更新する。山谷はUp=谷/Down=山を基準に
+/// mirroredな層で反転。CPの更新は複製上で行い、成功時のみ反映(原子性)。
 pub fn fold_through(cp: &mut CreasePattern, faces: &[Face], state: &FlatState,
                     input: &FoldThroughInput) -> Result<FoldThroughResult, String>;
 ```
 
-- [ ] テスト成功確認 → コミット `畳んだ紙に線を引いてまとめて折る操作を追加` → プッシュ
+  既知の制限(v1、docコメントに明記): 部分的な折りの層順序は近似(物理的に厳密な挟み込み順にならないことがある)。折り線がどの面も横切らない指定(既存折り線での再折りを含む)はErr
+- [x] テスト成功確認 → コミット `畳んだ紙に線を引いてまとめて折る操作を追加` → プッシュ
 
 ### Task 2-3: 手順エンジン(記録・再生・決定性)
 

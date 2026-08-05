@@ -1,0 +1,384 @@
+//! 折り操作プリミティブ: 畳んだ状態の上に折り線を引き、対象の層をまとめて折る。
+//!
+//! 折り線は「畳んだ平面座標」で無限直線として与え、各対象面のplacement逆変換で
+//! 展開図(CP)座標へ引き戻し、面と交わる区間だけを挿入する。CPへの折り線追記・
+//! 新しい平坦状態の構築・FoldStep生成を原子的に行い、途中で失敗した場合は
+//! CPを一切変更しない。
+//!
+//! 既知の制限(v1):
+//! - 新しい層順序は「動いた面を旧順序の逆順でまとめて山全体の一番上(Up)または
+//!   一番下(Down)に入れる」近似で決める。折り線が一部の層しか跨がない部分的な
+//!   折りでは、物理的に厳密な挟み込み順にならないことがある。
+//! - 折り線がどの面も横切らない指定はエラーにする。既存の折り線と完全に一致する
+//!   「再折り」(新しい線を1本も引かない折り)もこの条件に該当し、未対応。
+
+use std::collections::{BTreeMap, HashMap};
+
+use glam::DVec2;
+use ori3_cp::{Face, extract_faces, insert_segment};
+use ori3_geometry::{Isometry2, collinear_overlap, dist_point_segment};
+use ori3_model::{
+    CreasePattern, Driver, EPS, EdgeId, EdgeKind, FaceId, FoldStep, TechniqueKind, VertexId,
+};
+
+use crate::flat_state::{FlatState, point_in_face, representative_point};
+
+/// 折る向き。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FoldDirection {
+    /// 動く側の層を反転して山の一番上に載せる(紙の表から見て谷折りに相当)。
+    Up,
+    /// 動く側の層を反転して山の一番下に入れる(山折りに相当)。
+    Down,
+}
+
+/// fold_throughの入力。座標は全て「畳んだ平面座標」。
+#[derive(Clone, Debug)]
+pub struct FoldThroughInput {
+    /// 折り線(2点。無限直線として扱う)。
+    pub line: [[f64; 2]; 2],
+    /// 動かさない側を示す点。
+    pub keep_side_point: [f64; 2],
+    /// 折る対象の層。None = 折り線の可動側に幾何(面の一部でも)が乗る全ての層。
+    pub target_layers: Option<Vec<FaceId>>,
+    pub direction: FoldDirection,
+}
+
+/// fold_throughの結果。
+#[derive(Clone, Debug)]
+pub struct FoldThroughResult {
+    /// 折った後の平坦状態(新しい面ID体系)。
+    pub state: FlatState,
+    /// CPへ追記された折り線の辺ID。
+    pub added_edges: Vec<EdgeId>,
+    /// 記録用のステップ(kind=Simple、drivers+layer_order設定済み。idは呼び出し側で振り直す前提の0)。
+    pub step: FoldStep,
+    pub warnings: Vec<String>,
+}
+
+/// 畳んだ状態の上に折り線を引き、対象の層をまとめて折る。
+///
+/// 1. 折り線を挟んで `keep_side_point` と反対の側を可動側とし、対象面を決める
+/// 2. 各対象面へ折り線をplacement逆変換で引き戻し、面と交わる区間をCPへ挿入する
+///    (面を横切らない対象面は線を引かず丸ごと動く)
+/// 3. 挿入する線種は Up=谷 / Down=山。裏返っている層(mirrored)では反転する
+/// 4. 面を再抽出し、可動側の新しい面へ折り線の鏡映を重ね、層順序を更新する
+///
+/// CPの更新は複製上で行い、成功した場合のみ元の `cp` に反映する(原子性)。
+/// 危うい指定(既存辺との重なり・紙が裂ける接続)は警告を付けて続行する。
+pub fn fold_through(
+    cp: &mut CreasePattern,
+    faces: &[Face],
+    state: &FlatState,
+    input: &FoldThroughInput,
+) -> Result<FoldThroughResult, String> {
+    let mut warnings: Vec<String> = Vec::new();
+
+    let l0 = DVec2::from(input.line[0]);
+    let l1 = DVec2::from(input.line[1]);
+    if (l1 - l0).length() < EPS {
+        return Err("折り線の2点が一致しています".to_string());
+    }
+    let u = (l1 - l0).normalize();
+    let keep_side = u.perp_dot(DVec2::from(input.keep_side_point) - l0);
+    if keep_side.abs() <= EPS {
+        return Err("動かさない側を示す点が折り線上にあります".to_string());
+    }
+    let keep_sign = keep_side.signum();
+    // 折り線に対する符号付き距離(畳んだ平面座標)。正=動かさない側、負=可動側。
+    let signed_dist = |q: DVec2| keep_sign * u.perp_dot(q - l0);
+
+    for f in faces {
+        if !state.placements.contains_key(&f.id) {
+            return Err(format!("面 {} の配置が平坦状態に見つかりません", f.id));
+        }
+    }
+
+    let vpos: HashMap<VertexId, DVec2> = cp
+        .vertices
+        .iter()
+        .map(|v| (v.id, DVec2::from(v.pos)))
+        .collect();
+    // 面の境界多角形(CP座標)。存在しない頂点は飛ばす(flat_stateと同じ方針)。
+    let polygon = |f: &Face| -> Vec<DVec2> {
+        f.vertices
+            .iter()
+            .filter_map(|id| vpos.get(id).copied())
+            .collect()
+    };
+    // 面の一部でも可動側に乗るか。直線から最も離れた点は必ず頂点に現れるので頂点だけ見る。
+    let has_movable_part = |f: &Face| -> bool {
+        let pl = &state.placements[&f.id];
+        polygon(f).iter().any(|&p| signed_dist(pl.apply(p)) < -EPS)
+    };
+
+    // 1. 対象面の決定
+    let target_ids: Vec<FaceId> = match &input.target_layers {
+        None => faces
+            .iter()
+            .filter(|f| has_movable_part(f))
+            .map(|f| f.id)
+            .collect(),
+        Some(list) => {
+            let mut out: Vec<FaceId> = Vec::new();
+            for &id in list {
+                if out.contains(&id) {
+                    continue;
+                }
+                match faces.iter().find(|f| f.id == id) {
+                    None => warnings
+                        .push(format!("対象層 {id} は現在の面に存在しないため除外しました")),
+                    Some(f) if !has_movable_part(f) => warnings.push(format!(
+                        "対象層 {id} は折り線の可動側に掛かっていないため除外しました"
+                    )),
+                    Some(_) => out.push(id),
+                }
+            }
+            out
+        }
+    };
+    if target_ids.is_empty() {
+        return Err("折り線の可動側に折る対象の層がありません".to_string());
+    }
+
+    // 2〜3. 複製したCPへ折り線を引き戻して挿入する(原子性: 成功するまで元のcpは触らない)
+    let mut work = cp.clone();
+    let mut added: Vec<EdgeId> = Vec::new();
+    let mut crossed_any = false;
+    for f in faces.iter().filter(|f| target_ids.contains(&f.id)) {
+        let pl = &state.placements[&f.id];
+        let inv = pl.inverse();
+        let a = inv.apply(l0);
+        let b = inv.apply(l1);
+        let dir = (b - a).normalize(); // 等長変換なので長さは保たれ、正規化できる
+        let poly = polygon(f);
+        let n = poly.len();
+        if n < 3 {
+            continue;
+        }
+
+        // 引き戻した無限直線と面境界の交点を、直線上の弧長パラメータとして集める。
+        let t_of = |q: DVec2| (q - a).dot(dir);
+        let mut ts: Vec<f64> = Vec::new();
+        for i in 0..n {
+            let p0 = poly[i];
+            let p1 = poly[(i + 1) % n];
+            let s0 = dir.perp_dot(p0 - a);
+            let s1 = dir.perp_dot(p1 - a);
+            if s0.abs() <= EPS && s1.abs() <= EPS {
+                // 境界辺が直線に沿っている: 両端が区切りになる
+                ts.push(t_of(p0));
+                ts.push(t_of(p1));
+            } else if s0.abs() <= EPS {
+                ts.push(t_of(p0));
+            } else if s1.abs() <= EPS {
+                ts.push(t_of(p1));
+            } else if s0 * s1 < 0.0 {
+                ts.push(t_of(p0 + (p1 - p0) * (s0 / (s0 - s1))));
+            }
+        }
+        ts.sort_by(f64::total_cmp);
+        ts.dedup_by(|x, y| (*x - *y).abs() <= EPS);
+
+        // 3. 山谷の決定: Up=谷 / Down=山を基準に、裏返っている層では反転する。
+        let base = match input.direction {
+            FoldDirection::Up => EdgeKind::Valley,
+            FoldDirection::Down => EdgeKind::Mountain,
+        };
+        let kind = if pl.mirrored { flip(base) } else { base };
+
+        for w in ts.windows(2) {
+            let (t0, t1) = (w[0], w[1]);
+            if t1 - t0 <= EPS {
+                continue;
+            }
+            let mid = a + dir * (0.5 * (t0 + t1));
+            // 面の縁に沿う区間は面を横切らないので挿入しない。
+            let on_boundary =
+                (0..n).any(|i| dist_point_segment(mid, poly[i], poly[(i + 1) % n]) <= EPS);
+            if on_boundary || !point_in_face(cp, f, [mid.x, mid.y]) {
+                continue;
+            }
+            let q0 = a + dir * t0;
+            let q1 = a + dir * t1;
+            crossed_any = true;
+            // 既存辺(補助線など)と重なる区間は insert_segment が既存の線種を維持する。警告して続行。
+            {
+                let wp = |id: VertexId| {
+                    work.vertices
+                        .iter()
+                        .find(|v| v.id == id)
+                        .map(|v| DVec2::from(v.pos))
+                };
+                for e in &work.edges {
+                    if let (Some(e0), Some(e1)) = (wp(e.v0), wp(e.v1))
+                        && let Some((o0, o1)) = collinear_overlap(q0, q1, e0, e1)
+                        && (o1 - o0).length() > EPS
+                    {
+                        warnings.push(format!(
+                            "折り線が既存の辺(ID {})と重なる区間があります。線種は変えず、折り角度の指定も作りません",
+                            e.id
+                        ));
+                    }
+                }
+            }
+            added.extend(insert_segment(&mut work, [q0.x, q0.y], [q1.x, q1.y], kind));
+        }
+    }
+    if !crossed_any {
+        return Err(
+            "折り線がどの層の面も横切っていません(既存の折り線での再折りには対応していません)"
+                .to_string(),
+        );
+    }
+
+    added.sort_unstable();
+    added.dedup();
+    // 後続の挿入で分割されて消えた辺IDを取り除く(通常は起きない防御)。
+    added.retain(|id| work.edges.iter().any(|e| e.id == *id));
+
+    // 4〜5. 面を再抽出し、代表点で親面を特定して新しい配置を決める。
+    let new_faces = extract_faces(&work);
+    let refl = Isometry2::reflection(l0, l1);
+    let order_index: HashMap<FaceId, usize> = state
+        .order
+        .iter()
+        .enumerate()
+        .map(|(i, &id)| (id, i))
+        .collect();
+
+    let mut placements: HashMap<FaceId, Isometry2> = HashMap::with_capacity(new_faces.len());
+    // (旧orderでの親の位置, 新しい面ID, 動くか)
+    let mut infos: Vec<(usize, FaceId, bool)> = Vec::with_capacity(new_faces.len());
+    for nf in &new_faces {
+        let r = representative_point(&work, nf);
+        let parent = faces.iter().find(|f| point_in_face(cp, f, r));
+        let (parent_pl, parent_order, moving) = match parent {
+            Some(pf) => {
+                let ppl = state.placements[&pf.id];
+                let idx = order_index.get(&pf.id).copied().unwrap_or(usize::MAX);
+                let moving = target_ids.contains(&pf.id)
+                    && signed_dist(ppl.apply(DVec2::from(r))) < -EPS;
+                (ppl, idx, moving)
+            }
+            None => {
+                warnings.push(format!(
+                    "新しい面 {} の親面が特定できないため、動かさず元の配置のままにします",
+                    nf.id
+                ));
+                (Isometry2::identity(), usize::MAX, false)
+            }
+        };
+        placements.insert(nf.id, if moving { refl.compose(&parent_pl) } else { parent_pl });
+        infos.push((parent_order, nf.id, moving));
+    }
+
+    // 6. 新しい層順序: 動かない面は親の順序を維持。動いた面は親の順序を保って取り出し、
+    //    反転して山全体の上(Up)または下(Down)に入れる。
+    let mut keep_faces: Vec<(usize, FaceId)> = infos
+        .iter()
+        .filter(|&&(_, _, m)| !m)
+        .map(|&(i, id, _)| (i, id))
+        .collect();
+    keep_faces.sort_unstable();
+    let mut moving_faces: Vec<(usize, FaceId)> = infos
+        .iter()
+        .filter(|&&(_, _, m)| m)
+        .map(|&(i, id, _)| (i, id))
+        .collect();
+    moving_faces.sort_unstable();
+    moving_faces.reverse();
+    let order: Vec<FaceId> = match input.direction {
+        FoldDirection::Up => keep_faces
+            .iter()
+            .chain(moving_faces.iter())
+            .map(|&(_, id)| id)
+            .collect(),
+        FoldDirection::Down => moving_faces
+            .iter()
+            .chain(keep_faces.iter())
+            .map(|&(_, id)| id)
+            .collect(),
+    };
+
+    // 8. 紙が裂ける指定の検出: 動く面と動かない面をつなぐ辺が折り線上に無い場合は警告。
+    let moving_of: HashMap<FaceId, bool> = infos.iter().map(|&(_, id, m)| (id, m)).collect();
+    let mut edge_faces: BTreeMap<EdgeId, Vec<FaceId>> = BTreeMap::new();
+    for nf in &new_faces {
+        let mut ids: Vec<EdgeId> = nf.edges.clone();
+        ids.sort_unstable();
+        ids.dedup();
+        for eid in ids {
+            edge_faces.entry(eid).or_default().push(nf.id);
+        }
+    }
+    let wpos: HashMap<VertexId, DVec2> = work
+        .vertices
+        .iter()
+        .map(|v| (v.id, DVec2::from(v.pos)))
+        .collect();
+    for (eid, fs) in &edge_faces {
+        if fs.len() != 2 || moving_of[&fs[0]] == moving_of[&fs[1]] {
+            continue;
+        }
+        let keep_id = if moving_of[&fs[0]] { fs[1] } else { fs[0] };
+        let pl = placements[&keep_id];
+        let Some(e) = work.edges.iter().find(|e| e.id == *eid) else {
+            continue;
+        };
+        let (Some(&p0), Some(&p1)) = (wpos.get(&e.v0), wpos.get(&e.v1)) else {
+            continue;
+        };
+        // 動かない側の配置で畳んだ平面へ写し、両端とも折り線上にあればヒンジとして正常。
+        let d0 = u.perp_dot(pl.apply(p0) - l0).abs();
+        let d1 = u.perp_dot(pl.apply(p1) - l0).abs();
+        if d0 > EPS || d1 > EPS {
+            warnings.push(format!(
+                "動く面と動かない面をつなぐ辺(ID {eid})が折り線上に無いため、このままでは紙が裂けます(指定のまま続行します)"
+            ));
+        }
+    }
+
+    // 7. FoldStepの生成。driversは新規挿入辺(=動く側と動かない側の境界)へ±180°。
+    let new_state = FlatState { placements, order };
+    let layer_points = new_state.to_layer_points(&work, &new_faces);
+    let drivers: Vec<Driver> = added
+        .iter()
+        .filter_map(|&id| {
+            let e = work.edges.iter().find(|e| e.id == id)?;
+            let target_angle_deg = match e.kind {
+                EdgeKind::Valley => -180.0,
+                EdgeKind::Mountain => 180.0,
+                _ => return None,
+            };
+            Some(Driver {
+                hinge: id,
+                target_angle_deg,
+            })
+        })
+        .collect();
+    let step = FoldStep {
+        id: 0,
+        kind: TechniqueKind::Simple,
+        drivers,
+        layer_order: Some(layer_points),
+        note: String::new(),
+    };
+
+    *cp = work;
+    Ok(FoldThroughResult {
+        state: new_state,
+        added_edges: added,
+        step,
+        warnings,
+    })
+}
+
+/// 山谷の反転(Border/Auxはそのまま)。
+fn flip(kind: EdgeKind) -> EdgeKind {
+    match kind {
+        EdgeKind::Valley => EdgeKind::Mountain,
+        EdgeKind::Mountain => EdgeKind::Valley,
+        k => k,
+    }
+}
