@@ -1,11 +1,13 @@
-//! fold_through(折り操作プリミティブ)のテスト。
+//! fold_through(折り操作プリミティブ)とresolve_driver_edgesのテスト。
 
 use glam::DVec2;
 use ori3_cp::{Face, extract_faces, insert_segment};
 use ori3_geometry::Isometry2;
 use ori3_layers::flat_state::{FlatState, point_in_face, representative_point};
-use ori3_layers::fold_through::{FoldDirection, FoldThroughInput, FoldThroughResult, fold_through};
-use ori3_model::{CreasePattern, Document, EdgeKind, FaceId, Paper};
+use ori3_layers::fold_through::{
+    FoldDirection, FoldThroughInput, FoldThroughResult, fold_through, resolve_driver_edges,
+};
+use ori3_model::{CreasePattern, Document, Driver, EdgeKind, FaceId, Paper};
 
 /// 正方形(輪郭4辺のみ)のCPを作る。
 fn square_cp() -> CreasePattern {
@@ -24,15 +26,19 @@ fn edge_kind(cp: &CreasePattern, id: u32) -> EdgeKind {
     cp.edges.iter().find(|e| e.id == id).expect("辺が存在する").kind
 }
 
+fn vertex_pos(cp: &CreasePattern, id: u32) -> DVec2 {
+    DVec2::from(cp.vertices.iter().find(|v| v.id == id).unwrap().pos)
+}
+
 /// 辺の中点(CP座標)。
 fn edge_midpoint(cp: &CreasePattern, id: u32) -> DVec2 {
     let e = cp.edges.iter().find(|e| e.id == id).expect("辺が存在する");
-    let p = |vid: u32| DVec2::from(cp.vertices.iter().find(|v| v.id == vid).unwrap().pos);
-    (p(e.v0) + p(e.v1)) * 0.5
+    (vertex_pos(cp, e.v0) + vertex_pos(cp, e.v1)) * 0.5
 }
 
-/// 正方形を x=0.5(Up)→ y=0.5(Up)の2回で4層に畳む。戻り値は(CP, 2回目の結果)。
-fn four_layer_fixture() -> (CreasePattern, FoldThroughResult) {
+/// 正方形を x=0.5(Up)→ y=0.5(Up)の2回で4層に畳む。
+/// 戻り値は(CP, 1回目の結果, 2回目の結果)。
+fn four_layer_fixture() -> (CreasePattern, FoldThroughResult, FoldThroughResult) {
     let mut cp = square_cp();
     let faces = extract_faces(&cp);
     let state = FlatState::initial(&cp, &faces);
@@ -61,7 +67,7 @@ fn four_layer_fixture() -> (CreasePattern, FoldThroughResult) {
         },
     )
     .expect("2回目の折り");
-    (cp, r2)
+    (cp, r1, r2)
 }
 
 #[test]
@@ -106,17 +112,22 @@ fn half_fold_up_makes_two_layers_with_one_valley() {
         "動かさない側は恒等変換のまま"
     );
 
-    // FoldStep: drivers=谷なので-180が1本、layer_orderあり
+    // FoldStep: driverは折り線のCP線分1本(谷=-180)で、追加した辺へ解決できる
     assert_eq!(res.step.kind, ori3_model::TechniqueKind::Simple);
     assert_eq!(res.step.drivers.len(), 1);
-    assert_eq!(res.step.drivers[0].hinge, res.added_edges[0]);
-    assert_eq!(res.step.drivers[0].target_angle_deg, -180.0);
+    let d = &res.step.drivers[0];
+    assert_eq!(d.target_angle_deg, -180.0);
+    assert!(
+        (d.a[0] - 0.5).abs() < 1e-9 && (d.b[0] - 0.5).abs() < 1e-9,
+        "driver線分はCP座標の折り線区間: {d:?}"
+    );
+    assert_eq!(resolve_driver_edges(&cp, d), res.added_edges);
     assert_eq!(res.step.layer_order.as_ref().map(Vec::len), Some(2));
 }
 
 #[test]
 fn second_fold_pulls_back_two_lines_with_opposite_kinds() {
-    let (cp, r2) = four_layer_fixture();
+    let (cp, _r1, r2) = four_layer_fixture();
     let faces = extract_faces(&cp);
     assert_eq!(faces.len(), 4, "面は4つに分かれる");
     assert_eq!(r2.state.order.len(), 4, "層は4枚");
@@ -124,6 +135,7 @@ fn second_fold_pulls_back_two_lines_with_opposite_kinds() {
 
     // 2枚の層それぞれへの引き戻しで折り線は2本追加される
     assert_eq!(r2.added_edges.len(), 2);
+    assert_eq!(r2.step.drivers.len(), 2);
     for &eid in &r2.added_edges {
         let mid = edge_midpoint(&cp, eid);
         // CP左半分は表向きの層由来なので谷、右半分は裏返った層由来なので山
@@ -137,12 +149,13 @@ fn second_fold_pulls_back_two_lines_with_opposite_kinds() {
             expected,
             "mirroredな層では山谷が反転する(辺 {eid}, 中点 {mid:?})"
         );
+        // 追加辺ごとに、それを解決するDriverLineが正しい角度で存在する
         let d = r2
             .step
             .drivers
             .iter()
-            .find(|d| d.hinge == eid)
-            .expect("追加辺ごとにdriverが付く");
+            .find(|d| resolve_driver_edges(&cp, d).contains(&eid))
+            .expect("追加辺を駆動するDriverLineがある");
         let expected_angle = if expected == EdgeKind::Valley {
             -180.0
         } else {
@@ -150,7 +163,6 @@ fn second_fold_pulls_back_two_lines_with_opposite_kinds() {
         };
         assert_eq!(d.target_angle_deg, expected_angle);
     }
-    assert_eq!(r2.step.drivers.len(), 2);
 
     // 層順序: 下から 左下→右下→右上→左上 の象限
     let quad = |id: FaceId| {
@@ -228,7 +240,7 @@ fn pleat_with_up_and_down_makes_three_layers_in_order() {
 
 #[test]
 fn folding_only_top_layer_keeps_lower_layers_in_place() {
-    let (mut cp, r2) = four_layer_fixture();
+    let (mut cp, _r1, r2) = four_layer_fixture();
     let cp_before = cp.clone();
     let faces = extract_faces(&cp);
     let top = *r2.state.order.last().unwrap();
@@ -257,6 +269,11 @@ fn folding_only_top_layer_keeps_lower_layers_in_place() {
     assert_eq!(edge_kind(&cp, res.added_edges[0]), EdgeKind::Mountain);
     assert_eq!(res.step.drivers.len(), 1);
     assert_eq!(res.step.drivers[0].target_angle_deg, 180.0);
+    assert_eq!(
+        resolve_driver_edges(&cp, &res.step.drivers[0]),
+        res.added_edges,
+        "driver線分は追加した辺へ解決できる"
+    );
 
     // 動いたのは上1枚由来の面だけで、他の層の配置は変わらない
     let refl = Isometry2::reflection(DVec2::new(0.0, 0.5), DVec2::new(0.5, 0.0));
@@ -357,8 +374,8 @@ fn invalid_inputs_error_without_touching_cp() {
 
 #[test]
 fn layer_order_round_trips_and_is_deterministic() {
-    let (cp_a, r_a) = four_layer_fixture();
-    let (cp_b, r_b) = four_layer_fixture();
+    let (cp_a, _r1a, r_a) = four_layer_fixture();
+    let (cp_b, _r1b, r_b) = four_layer_fixture();
 
     // 決定性: 同じ操作列からビット一致の結果が得られる
     assert_eq!(cp_a, cp_b);
@@ -421,7 +438,7 @@ fn target_layer_without_movable_part_is_excluded_then_errors() {
 fn warns_when_fold_tears_paper() {
     // 4層の上1枚は、畳んだ平面の上端(y=0.5)と右端(x=0.5)の折り目で下の層とつながっている。
     // その上1枚だけを縦線で折ると、折り線を跨がない接続辺が残り紙が裂ける指定になる。
-    let (mut cp, r2) = four_layer_fixture();
+    let (mut cp, _r1, r2) = four_layer_fixture();
     let faces = extract_faces(&cp);
     let top = *r2.state.order.last().unwrap();
     let res = fold_through(
@@ -444,7 +461,7 @@ fn warns_when_fold_tears_paper() {
 }
 
 #[test]
-fn warns_when_line_overlaps_existing_edge_and_keeps_its_kind() {
+fn overlapping_aux_line_is_promoted_and_fold_stays_consistent() {
     let mut cp = square_cp();
     insert_segment(&mut cp, [0.5, 0.3], [0.5, 0.7], EdgeKind::Aux);
     let faces = extract_faces(&cp);
@@ -462,20 +479,96 @@ fn warns_when_line_overlaps_existing_edge_and_keeps_its_kind() {
             direction: FoldDirection::Up,
         },
     )
-    .expect("既存辺との重なりは警告して続行する");
+    .expect("補助線と重なっていても折れる");
     assert!(
-        res.warnings.iter().any(|w| w.contains("重な")),
+        res.warnings.iter().any(|w| w.contains("補助線")),
         "{:?}",
         res.warnings
     );
-    // 重なった区間はAuxのまま、それ以外の区間に谷線が入る
-    assert_eq!(res.added_edges.len(), 2);
+
+    // 補助線は折り線(谷)へ昇格し、面はきちんと2つに分かれる
+    assert!(
+        cp.edges.iter().all(|e| e.kind != EdgeKind::Aux),
+        "重なった補助線は補助線のまま残らない"
+    );
+    let new_faces = extract_faces(&cp);
+    assert_eq!(new_faces.len(), 2, "面が折り線で分割される");
+    assert_eq!(res.state.order.len(), 2);
+    // 追加辺: 新規の谷2本+昇格した断片1本
+    assert_eq!(res.added_edges.len(), 3);
     for &eid in &res.added_edges {
         assert_eq!(edge_kind(&cp, eid), EdgeKind::Valley);
     }
+
+    // 折った後の状態は普通の半分折りと同じ: 左面は不動、右面が鏡映で上
+    let bottom = res.state.order[0];
+    let top = *res.state.order.last().unwrap();
     assert!(
-        cp.edges.iter().any(|e| e.kind == EdgeKind::Aux),
-        "既存の補助線の線種は維持される"
+        representative_point(&cp, face_by_id(&new_faces, top))[0] > 0.5,
+        "上の層は元の右半面"
     );
-    assert_eq!(res.step.drivers.len(), 2, "新しく引かれた区間だけにdriverが付く");
+    assert!(
+        res.state.placements[&bottom].approx_eq(&Isometry2::identity(), 1e-12),
+        "左面は動かない"
+    );
+    assert!(
+        res.state.placements[&top].approx_eq(
+            &Isometry2::reflection(DVec2::new(0.5, 0.0), DVec2::new(0.5, 1.0)),
+            1e-9
+        ),
+        "右面は折り線の鏡映で重なる"
+    );
+
+    // DriverLineは折り線区間1本(谷=-180)で、昇格した断片も含む3辺を駆動する
+    assert_eq!(res.step.drivers.len(), 1);
+    assert_eq!(res.step.drivers[0].target_angle_deg, -180.0);
+    let resolved = resolve_driver_edges(&cp, &res.step.drivers[0]);
+    assert_eq!(resolved.len(), 3, "昇格断片を含む全ての断片が駆動対象");
+}
+
+#[test]
+fn driver_lines_survive_edge_splits_and_replay_matches_flat_state() {
+    // レビューシナリオ: ステップ1の折り線(x=0.5)は2回目の折りの引き戻し挿入で
+    // 中点(0.5,0.5)で2辺に分割され、辺IDが変わる。線分参照なら両断片へ解決できる。
+    let (cp, r1, r2) = four_layer_fixture();
+    assert_eq!(r1.step.drivers.len(), 1);
+    let split = resolve_driver_edges(&cp, &r1.step.drivers[0]);
+    assert_eq!(split.len(), 2, "分割後の両断片が解決される");
+    for &eid in &split {
+        assert_eq!(edge_kind(&cp, eid), EdgeKind::Valley);
+    }
+
+    // 全ステップのDriverLineを現在の辺へ解決し、solveに与える
+    let faces = extract_faces(&cp);
+    let mut drivers: Vec<Driver> = Vec::new();
+    for dl in r1.step.drivers.iter().chain(r2.step.drivers.iter()) {
+        for eid in resolve_driver_edges(&cp, dl) {
+            drivers.push(Driver {
+                hinge: eid,
+                target_angle_deg: dl.target_angle_deg,
+            });
+        }
+    }
+    assert_eq!(drivers.len(), 4, "ステップ1の断片2本+ステップ2の2本");
+    let result = ori3_rigid::solve(&cp, &faces, &drivers, None);
+    assert!(result.converged, "±180°で収束する");
+
+    // 畳んだ位置がFlatStateの配置と一致する(solveが固定する根の面との相対で比較)
+    let root = faces[0].id;
+    let align = r2.state.placements[&root].inverse();
+    for f3 in &result.frame.faces {
+        let face = face_by_id(&faces, f3.face);
+        let pl = align.compose(&r2.state.placements[&f3.face]);
+        assert_eq!(face.vertices.len(), f3.polygon.len());
+        for (vid, p3) in face.vertices.iter().zip(&f3.polygon) {
+            let q = pl.apply(vertex_pos(&cp, *vid));
+            assert!(
+                (p3[0] - q.x).abs() < 1e-6 && (p3[1] - q.y).abs() < 1e-6 && p3[2].abs() < 1e-6,
+                "面 {} の頂点 {vid}: solve={p3:?} 期待=({}, {}, 0)",
+                f3.face,
+                q.x,
+                q.y
+            );
+        }
+    }
 }

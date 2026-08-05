@@ -5,6 +5,11 @@
 //! 新しい平坦状態の構築・FoldStep生成を原子的に行い、途中で失敗した場合は
 //! CPを一切変更しない。
 //!
+//! 手順の記録([`FoldStep`]の`drivers`)は辺IDではなく「CP座標の線分+角度」
+//! ([`DriverLine`])で持つ。後続の折りで辺が分割されてIDが変わっても、
+//! 再生時に [`resolve_driver_edges`] で線分上の全断片へ解決できる
+//! (層順序の代表点方式と同じ思想)。
+//!
 //! 既知の制限(v1):
 //! - 新しい層順序は「動いた面を旧順序の逆順でまとめて山全体の一番上(Up)または
 //!   一番下(Down)に入れる」近似で決める。折り線が一部の層しか跨がない部分的な
@@ -12,13 +17,13 @@
 //! - 折り線がどの面も横切らない指定はエラーにする。既存の折り線と完全に一致する
 //!   「再折り」(新しい線を1本も引かない折り)もこの条件に該当し、未対応。
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use glam::DVec2;
 use ori3_cp::{Face, extract_faces, insert_segment};
-use ori3_geometry::{Isometry2, collinear_overlap, dist_point_segment};
+use ori3_geometry::{Isometry2, collinear_overlap, dist_point_segment, point_on_segment};
 use ori3_model::{
-    CreasePattern, Driver, EPS, EdgeId, EdgeKind, FaceId, FoldStep, TechniqueKind, VertexId,
+    CreasePattern, DriverLine, EPS, EdgeId, EdgeKind, FaceId, FoldStep, TechniqueKind, VertexId,
 };
 
 use crate::flat_state::{FlatState, point_in_face, representative_point};
@@ -49,7 +54,7 @@ pub struct FoldThroughInput {
 pub struct FoldThroughResult {
     /// 折った後の平坦状態(新しい面ID体系)。
     pub state: FlatState,
-    /// CPへ追記された折り線の辺ID。
+    /// CPへ追記された折り線の辺ID(折りの線種へ昇格させた既存の補助線の断片を含む)。
     pub added_edges: Vec<EdgeId>,
     /// 記録用のステップ(kind=Simple、drivers+layer_order設定済み。idは呼び出し側で振り直す前提の0)。
     pub step: FoldStep,
@@ -61,11 +66,13 @@ pub struct FoldThroughResult {
 /// 1. 折り線を挟んで `keep_side_point` と反対の側を可動側とし、対象面を決める
 /// 2. 各対象面へ折り線をplacement逆変換で引き戻し、面と交わる区間をCPへ挿入する
 ///    (面を横切らない対象面は線を引かず丸ごと動く)
-/// 3. 挿入する線種は Up=谷 / Down=山。裏返っている層(mirrored)では反転する
+/// 3. 挿入する線種は Up=谷 / Down=山。裏返っている層(mirrored)では反転する。
+///    重なった補助線は折りの線種へ昇格し、既存の山/谷線は線種を維持したまま駆動対象になる
 /// 4. 面を再抽出し、可動側の新しい面へ折り線の鏡映を重ね、層順序を更新する
 ///
 /// CPの更新は複製上で行い、成功した場合のみ元の `cp` に反映する(原子性)。
-/// 危うい指定(既存辺との重なり・紙が裂ける接続)は警告を付けて続行する。
+/// 折り線が横切ったのに面を分割できなかった場合は状態を壊す前にErrで止める。
+/// 危うい指定(山谷が食い違う重なり・紙が裂ける接続)は警告を付けて続行する。
 pub fn fold_through(
     cp: &mut CreasePattern,
     faces: &[Face],
@@ -144,6 +151,9 @@ pub fn fold_through(
     // 2〜3. 複製したCPへ折り線を引き戻して挿入する(原子性: 成功するまで元のcpは触らない)
     let mut work = cp.clone();
     let mut added: Vec<EdgeId> = Vec::new();
+    let mut driver_lines: Vec<DriverLine> = Vec::new();
+    let mut warned_overlap: HashSet<EdgeId> = HashSet::new();
+    let mut promoted_aux = 0usize;
     let mut crossed_any = false;
     for f in faces.iter().filter(|f| target_ids.contains(&f.id)) {
         let pl = &state.placements[&f.id];
@@ -193,36 +203,76 @@ pub fn fold_through(
                 continue;
             }
             let mid = a + dir * (0.5 * (t0 + t1));
-            // 面の縁に沿う区間は面を横切らないので挿入しない。
-            let on_boundary =
-                (0..n).any(|i| dist_point_segment(mid, poly[i], poly[(i + 1) % n]) <= EPS);
-            if on_boundary || !point_in_face(cp, f, [mid.x, mid.y]) {
+            if !point_in_face(cp, f, [mid.x, mid.y]) {
                 continue;
             }
             let q0 = a + dir * t0;
             let q1 = a + dir * t1;
+            let on_boundary =
+                (0..n).any(|i| dist_point_segment(mid, poly[i], poly[(i + 1) % n]) <= EPS);
+            if on_boundary {
+                // 面の縁に沿う区間は面を横切らないので線は引かない。ただし既存の
+                // 山/谷線(スリット含む)に沿っている場合は、再生時にその断片群を
+                // 駆動できるようDriverLineだけ生成する(角度は既存の線種に従う)。
+                let wvpos = vertex_positions(&work);
+                let kind_on_line = work.edges.iter().find_map(|e| {
+                    if !matches!(e.kind, EdgeKind::Mountain | EdgeKind::Valley) {
+                        return None;
+                    }
+                    let (p0, p1) = (wvpos.get(&e.v0)?, wvpos.get(&e.v1)?);
+                    let (o0, o1) = collinear_overlap(q0, q1, *p0, *p1)?;
+                    ((o1 - o0).length() > EPS).then_some(e.kind)
+                });
+                if let Some(k) = kind_on_line {
+                    push_driver_line(&mut driver_lines, q0, q1, angle_of(k));
+                }
+                continue;
+            }
             crossed_any = true;
-            // 既存辺(補助線など)と重なる区間は insert_segment が既存の線種を維持する。警告して続行。
+            push_driver_line(&mut driver_lines, q0, q1, angle_of(kind));
+            // 既存辺と重なる区間の扱い: 補助線は挿入後に折りの線種へ昇格させる。
+            // 既存の山/谷線はinsert_segmentが線種を維持する(食い違いは警告)。
+            let mut has_aux_overlap = false;
             {
-                let wp = |id: VertexId| {
-                    work.vertices
-                        .iter()
-                        .find(|v| v.id == id)
-                        .map(|v| DVec2::from(v.pos))
-                };
+                let wvpos = vertex_positions(&work);
                 for e in &work.edges {
-                    if let (Some(e0), Some(e1)) = (wp(e.v0), wp(e.v1))
-                        && let Some((o0, o1)) = collinear_overlap(q0, q1, e0, e1)
-                        && (o1 - o0).length() > EPS
-                    {
+                    let (Some(&p0), Some(&p1)) = (wvpos.get(&e.v0), wvpos.get(&e.v1)) else {
+                        continue;
+                    };
+                    let Some((o0, o1)) = collinear_overlap(q0, q1, p0, p1) else {
+                        continue;
+                    };
+                    if (o1 - o0).length() <= EPS {
+                        continue;
+                    }
+                    if e.kind == EdgeKind::Aux {
+                        has_aux_overlap = true;
+                    } else if e.kind != kind && warned_overlap.insert(e.id) {
                         warnings.push(format!(
-                            "折り線が既存の辺(ID {})と重なる区間があります。線種は変えず、折り角度の指定も作りません",
+                            "折り線が既存の折り線(ID {})と重なっていますが、山谷は既存のままにします",
                             e.id
                         ));
                     }
                 }
             }
             added.extend(insert_segment(&mut work, [q0.x, q0.y], [q1.x, q1.y], kind));
+            // 重なった補助線はinsert_segmentが重なりの端で分割済みなので、
+            // 区間内に収まる断片を折りの線種へ昇格させる(面が正しく分割されるようにする)。
+            if has_aux_overlap {
+                let wvpos = vertex_positions(&work);
+                for e in work.edges.iter_mut() {
+                    if e.kind == EdgeKind::Aux
+                        && let (Some(&p0), Some(&p1)) = (wvpos.get(&e.v0), wvpos.get(&e.v1))
+                        && (p1 - p0).length() >= EPS
+                        && point_on_segment(p0, q0, q1)
+                        && point_on_segment(p1, q0, q1)
+                    {
+                        e.kind = kind;
+                        added.push(e.id);
+                        promoted_aux += 1;
+                    }
+                }
+            }
         }
     }
     if !crossed_any {
@@ -230,6 +280,11 @@ pub fn fold_through(
             "折り線がどの層の面も横切っていません(既存の折り線での再折りには対応していません)"
                 .to_string(),
         );
+    }
+    if promoted_aux > 0 {
+        warnings.push(format!(
+            "折り線と重なっていた補助線{promoted_aux}本を折り線に変更しました"
+        ));
     }
 
     added.sort_unstable();
@@ -239,6 +294,7 @@ pub fn fold_through(
 
     // 4〜5. 面を再抽出し、代表点で親面を特定して新しい配置を決める。
     let new_faces = extract_faces(&work);
+    let wpos = vertex_positions(&work);
     let refl = Isometry2::reflection(l0, l1);
     let order_index: HashMap<FaceId, usize> = state
         .order
@@ -257,8 +313,30 @@ pub fn fold_through(
             Some(pf) => {
                 let ppl = state.placements[&pf.id];
                 let idx = order_index.get(&pf.id).copied().unwrap_or(usize::MAX);
-                let moving = target_ids.contains(&pf.id)
-                    && signed_dist(ppl.apply(DVec2::from(r))) < -EPS;
+                let is_target = target_ids.contains(&pf.id);
+                if is_target {
+                    // 防御: 対象面の子が折り線を挟んで両側に頂点を持つ場合、面の分割に
+                    // 失敗している(このまま進めると面全体が誤って反転し得る)。
+                    let mut on_keep = false;
+                    let mut on_move = false;
+                    for vid in &nf.vertices {
+                        if let Some(&p) = wpos.get(vid) {
+                            let d = signed_dist(ppl.apply(p));
+                            if d > EPS {
+                                on_keep = true;
+                            } else if d < -EPS {
+                                on_move = true;
+                            }
+                        }
+                    }
+                    if on_keep && on_move {
+                        return Err(
+                            "折り線が面を横切っているのに面を分割できませんでした。折り線と重なる線の近くの展開図を確認してください"
+                                .to_string(),
+                        );
+                    }
+                }
+                let moving = is_target && signed_dist(ppl.apply(DVec2::from(r))) < -EPS;
                 (ppl, idx, moving)
             }
             None => {
@@ -312,11 +390,6 @@ pub fn fold_through(
             edge_faces.entry(eid).or_default().push(nf.id);
         }
     }
-    let wpos: HashMap<VertexId, DVec2> = work
-        .vertices
-        .iter()
-        .map(|v| (v.id, DVec2::from(v.pos)))
-        .collect();
     for (eid, fs) in &edge_faces {
         if fs.len() != 2 || moving_of[&fs[0]] == moving_of[&fs[1]] {
             continue;
@@ -339,28 +412,14 @@ pub fn fold_through(
         }
     }
 
-    // 7. FoldStepの生成。driversは新規挿入辺(=動く側と動かない側の境界)へ±180°。
+    // 7. FoldStepの生成。driversは折り線のCP座標区間ごとのDriverLine
+    //    (辺IDに依存しないため、後続の折りで辺が分割されても再生できる)。
     let new_state = FlatState { placements, order };
     let layer_points = new_state.to_layer_points(&work, &new_faces);
-    let drivers: Vec<Driver> = added
-        .iter()
-        .filter_map(|&id| {
-            let e = work.edges.iter().find(|e| e.id == id)?;
-            let target_angle_deg = match e.kind {
-                EdgeKind::Valley => -180.0,
-                EdgeKind::Mountain => 180.0,
-                _ => return None,
-            };
-            Some(Driver {
-                hinge: id,
-                target_angle_deg,
-            })
-        })
-        .collect();
     let step = FoldStep {
         id: 0,
         kind: TechniqueKind::Simple,
-        drivers,
+        drivers: driver_lines,
         layer_order: Some(layer_points),
         note: String::new(),
     };
@@ -372,6 +431,65 @@ pub fn fold_through(
         step,
         warnings,
     })
+}
+
+/// DriverLineの線分上に乗る折り辺(山/谷)を現在のCPから解決する。
+///
+/// 「乗る」= 辺の両端点が線分から EPS 以内(同一直線上かつ区間内)。
+/// 後続の折りで辺が分割されていても全ての断片が返る。
+/// 順序は `cp.edges` の並び順で決定的。線分が退化している場合は空。
+pub fn resolve_driver_edges(cp: &CreasePattern, line: &DriverLine) -> Vec<EdgeId> {
+    let a = DVec2::from(line.a);
+    let b = DVec2::from(line.b);
+    if (b - a).length() < EPS {
+        return Vec::new();
+    }
+    let vpos = vertex_positions(cp);
+    cp.edges
+        .iter()
+        .filter(|e| matches!(e.kind, EdgeKind::Mountain | EdgeKind::Valley))
+        .filter(|e| {
+            let (Some(&p0), Some(&p1)) = (vpos.get(&e.v0), vpos.get(&e.v1)) else {
+                return false;
+            };
+            (p1 - p0).length() >= EPS && point_on_segment(p0, a, b) && point_on_segment(p1, a, b)
+        })
+        .map(|e| e.id)
+        .collect()
+}
+
+fn vertex_positions(cp: &CreasePattern) -> HashMap<VertexId, DVec2> {
+    cp.vertices
+        .iter()
+        .map(|v| (v.id, DVec2::from(v.pos)))
+        .collect()
+}
+
+/// 同じ線分(向きの違いは同一視)+同じ角度のDriverLineを重複させずに追加する。
+/// 既存の折り目に沿う区間は、隣接する2面の引き戻しから同じ線分が2回出るため。
+fn push_driver_line(lines: &mut Vec<DriverLine>, q0: DVec2, q1: DVec2, angle: f64) {
+    let dup = lines.iter().any(|x| {
+        let xa = DVec2::from(x.a);
+        let xb = DVec2::from(x.b);
+        x.target_angle_deg == angle
+            && (((xa - q0).length() <= EPS && (xb - q1).length() <= EPS)
+                || ((xa - q1).length() <= EPS && (xb - q0).length() <= EPS))
+    });
+    if !dup {
+        lines.push(DriverLine {
+            a: [q0.x, q0.y],
+            b: [q1.x, q1.y],
+            target_angle_deg: angle,
+        });
+    }
+}
+
+/// 線種に対応する完全折りの角度(+180=山, -180=谷)。
+fn angle_of(kind: EdgeKind) -> f64 {
+    match kind {
+        EdgeKind::Mountain => 180.0,
+        _ => -180.0,
+    }
 }
 
 /// 山谷の反転(Border/Auxはそのまま)。

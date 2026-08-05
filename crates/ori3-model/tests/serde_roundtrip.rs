@@ -52,8 +52,9 @@ fn sample_document() -> Document {
             FoldStep {
                 id: 0,
                 kind: TechniqueKind::Simple,
-                drivers: vec![Driver {
-                    hinge: 1,
+                drivers: vec![DriverLine {
+                    a: [0.5, 0.0],
+                    b: [0.5, 1.0],
                     target_angle_deg: 180.0,
                 }],
                 layer_order: Some(vec![[0.25, 0.25], [0.75, 0.25]]),
@@ -62,8 +63,9 @@ fn sample_document() -> Document {
             FoldStep {
                 id: 1,
                 kind: TechniqueKind::Pose,
-                drivers: vec![Driver {
-                    hinge: 2,
+                drivers: vec![DriverLine {
+                    a: [0.0, 0.0],
+                    b: [0.5, 0.5],
                     target_angle_deg: -90.0,
                 }],
                 layer_order: None,

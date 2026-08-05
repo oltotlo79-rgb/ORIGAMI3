@@ -2369,6 +2369,7 @@ dependencies = [
  "ori3-cp",
  "ori3-geometry",
  "ori3-model",
+ "ori3-rigid",
 ]
 
 [[package]]

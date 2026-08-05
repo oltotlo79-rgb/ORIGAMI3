@@ -4,4 +4,6 @@ pub mod flat_state;
 pub mod fold_through;
 
 pub use flat_state::{FlatState, point_in_face, representative_point};
-pub use fold_through::{FoldDirection, FoldThroughInput, FoldThroughResult, fold_through};
+pub use fold_through::{
+    FoldDirection, FoldThroughInput, FoldThroughResult, fold_through, resolve_driver_edges,
+};

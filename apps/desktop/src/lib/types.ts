@@ -42,16 +42,29 @@ export type TechniqueKind =
   | "Twist"
   | "Pose";
 
-/** ヒンジ角: 0=平ら, +180=完全な山折り, -180=完全な谷折り(度) */
+/**
+ * ヒンジ角: 0=平ら, +180=完全な山折り, -180=完全な谷折り(度)
+ * pose_solve(スライダー操作)専用の一時指定。手順の永続化には使わない
+ */
 export interface Driver {
   hinge: number;
+  target_angle_deg: number;
+}
+
+/**
+ * 手順永続化用のdriver: 折り線をCP座標の線分で指定する。
+ * 再生時は線分上に乗る折り辺すべて(分割後の断片を含む)を対象角へ駆動する
+ */
+export interface DriverLine {
+  a: Vec2;
+  b: Vec2;
   target_angle_deg: number;
 }
 
 export interface FoldStep {
   id: number;
   kind: TechniqueKind;
-  drivers: Driver[];
+  drivers: DriverLine[];
   /** 平坦到達時の層順序(下→上)。各面は内部代表点で参照。平坦にならない場合null */
   layer_order: Vec2[] | null;
   note: string;

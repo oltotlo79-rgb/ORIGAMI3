@@ -494,11 +494,13 @@ pub fn point_in_face(cp: &CreasePattern, face: &Face, p: [f64; 2]) -> bool;
 
 **Files:** `crates/ori3-layers/src/fold_through.rs`, `tests/fold_through.rs`
 
-- [x] テストを先に書く(9件):
+- [x] テストを先に書く(10件):
   - 正方形を1回半分折り→層2枚。さらに直交方向に重ね折り→層4枚、CPに折り線が各層分(引き戻しで2本)追加され、山谷が層の向きに応じて正しく付く(mirrored反転の検証)
   - 段折り(同方向に2本、UpとDown)で層3枚・順序正しい
   - 対象層を「上1枚のみ」に指定した折りで、下層が動かない
-  - 原子性(不正入力4種でErr・cpが完全無変更)/ layer_orderのresolve_order往復一致と決定性 / 紙が裂ける指定の警告 / 既存辺と重なる区間の警告
+  - 原子性(不正入力4種でErr・cpが完全無変更)/ layer_orderのresolve_order往復一致と決定性 / 紙が裂ける指定の警告
+  - 折り線と重なる補助線が折り線へ昇格し、面が正しく分割され配置・層順序も半分折りと一致する(レビュー指摘の状態破壊の回帰テスト)
+  - DriverLineの辺分割耐性: ステップ1の折り線が2回目の折りで2辺に分割された後も`resolve_driver_edges`が両断片を返し、全ステップのdriverをsolveに与えると畳んだ位置がFlatStateと一致する
 - [x] 実装:
 
 ```rust
@@ -513,20 +515,28 @@ pub struct FoldThroughInput {
 }
 pub struct FoldThroughResult {
     pub state: FlatState,             // 折った後の平坦状態(新しい面ID体系)
-    pub added_edges: Vec<EdgeId>,     // CPへ追記された折り線
-    pub step: FoldStep,               // 記録用(kind=Simple、drivers+layer_order設定済み、id=0)
+    pub added_edges: Vec<EdgeId>,     // CPへ追記された折り線(昇格させた補助線の断片を含む)
+    pub step: FoldStep,               // 記録用(kind=Simple、drivers(DriverLine)+layer_order設定済み、id=0)
     pub warnings: Vec<String>,
 }
 /// 折り線を各対象面へplacement逆変換で引き戻してCPに挿入し(横切らない対象面は
 /// 丸ごと動く)、可動側の面へ折り線の鏡映を重ね、層順序を「動いた面を旧順の逆順で
 /// 山全体の上(Up)/下(Down)へ」で更新する。山谷はUp=谷/Down=山を基準に
-/// mirroredな層で反転。CPの更新は複製上で行い、成功時のみ反映(原子性)。
+/// mirroredな層で反転。重なった補助線は折りの線種へ昇格させ(面が分割されるように)、
+/// 既存の山/谷線は線種を維持したままDriverLineの駆動対象にする。
+/// CPの更新は複製上で行い、成功時のみ反映(原子性)。折り線が横切ったのに面を
+/// 分割できなかった場合は状態を壊す前にErrで止める。
 pub fn fold_through(cp: &mut CreasePattern, faces: &[Face], state: &FlatState,
                     input: &FoldThroughInput) -> Result<FoldThroughResult, String>;
+/// DriverLineの線分上に乗る折り辺(両端点が線分からEPS以内)を解決する。
+/// 後続の折りで辺が分割されていても全断片が返る(手順再生で使う)
+pub fn resolve_driver_edges(cp: &CreasePattern, line: &DriverLine) -> Vec<EdgeId>;
 ```
 
+  DriverLineは「対象面ごとの引き戻し区間」単位で生成する(同一線分は重複排除)。既存の山/谷線と重なる区間・面の縁に沿う既存折り目の区間にも、既存の線種に従った角度でDriverLineを作る。
   既知の制限(v1、docコメントに明記): 部分的な折りの層順序は近似(物理的に厳密な挟み込み順にならないことがある)。折り線がどの面も横切らない指定(既存折り線での再折りを含む)はErr
 - [x] テスト成功確認 → コミット `畳んだ紙に線を引いてまとめて折る操作を追加` → プッシュ
+- [x] レビュー指摘の修正 → コミット `補助線の上で折れない・手順が再生できなくなる2つの欠陥を修正` → プッシュ
 
 ### Task 2-3: 手順エンジン(記録・再生・決定性)
 

@@ -8,3 +8,6 @@ ori3-model.workspace = true
 ori3-geometry.workspace = true
 ori3-cp.workspace = true
 glam.workspace = true
+
+[dev-dependencies]
+ori3-rigid.workspace = true
