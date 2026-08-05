@@ -67,6 +67,9 @@ pub(crate) struct LoopClosure {
 pub(crate) struct Forest {
     /// ヒンジ添字→辺ID
     pub hinges: Vec<EdgeId>,
+    /// ヒンジ添字→2つの向き付き軸(面添字, 軸始点, 軸単位方向)。
+    /// ソルバーが面隣接グラフを任意の向きに渡り歩くために使う。
+    pub hinge_occ: Vec<[(usize, DVec3, DVec3); 2]>,
     /// BFS順の木辺(親の姿勢は必ず子より先に決まる)
     pub steps: Vec<TreeStep>,
     /// 非木辺(ループを作るヒンジ)
@@ -192,6 +195,7 @@ pub(crate) fn build_forest(cp: &CreasePattern, faces: &[Face]) -> Forest {
 
     Forest {
         hinges,
+        hinge_occ,
         steps,
         loops,
         roots,
@@ -218,20 +222,11 @@ pub(crate) fn propagate_with(
     tf
 }
 
-/// 面隣接グラフのBFS全域木を作り、根面をxy平面に固定して、木辺のヒンジ角
-/// (`angles`は度。載っていないヒンジは0度=平ら)で子面の姿勢を伝播する。
-///
-/// - 根面は決定的に選ぶ(連結成分ごとに最小のFaceId)
-/// - 折り線で繋がっていない部分は警告を載せ、各部分の根を恒等変換のまま
-///   その場で伝播する(処理は止めない)
-pub fn propagate(cp: &CreasePattern, faces: &[Face], angles: &HashMap<EdgeId, f64>) -> FoldedFrame {
-    let forest = build_forest(cp, faces);
-    let rad: Vec<f64> = forest
-        .hinges
-        .iter()
-        .map(|e| angles.get(e).copied().unwrap_or(0.0).to_radians())
-        .collect();
-    let tf = propagate_with(&forest, faces.len(), &rad);
+/// 構築済みの森でヒンジ角(ラジアン、`Forest::hinges` と同順)を伝播し、
+/// FoldedFrameを組み立てる(非連結の警告付与を含む)。solveが最終フレームの
+/// 生成で `build_forest` を再実行しないための入口。
+pub(crate) fn fold_frame(forest: &Forest, faces: &[Face], angles_rad: &[f64]) -> FoldedFrame {
+    let tf = propagate_with(forest, faces.len(), angles_rad);
     let mut warnings = Vec::new();
     if forest.roots.len() > 1 {
         warnings.push(
@@ -247,6 +242,22 @@ pub fn propagate(cp: &CreasePattern, faces: &[Face], angles: &HashMap<EdgeId, f6
             .collect(),
         warnings,
     }
+}
+
+/// 面隣接グラフのBFS全域木を作り、根面をxy平面に固定して、木辺のヒンジ角
+/// (`angles`は度。載っていないヒンジは0度=平ら)で子面の姿勢を伝播する。
+///
+/// - 根面は決定的に選ぶ(連結成分ごとに最小のFaceId)
+/// - 折り線で繋がっていない部分は警告を載せ、各部分の根を恒等変換のまま
+///   その場で伝播する(処理は止めない)
+pub fn propagate(cp: &CreasePattern, faces: &[Face], angles: &HashMap<EdgeId, f64>) -> FoldedFrame {
+    let forest = build_forest(cp, faces);
+    let rad: Vec<f64> = forest
+        .hinges
+        .iter()
+        .map(|e| angles.get(e).copied().unwrap_or(0.0).to_radians())
+        .collect();
+    fold_frame(&forest, faces, &rad)
 }
 
 /// FoldedFrameを表示用のFrame3Dへ変換する。層順序はM2(ori3-layers)で

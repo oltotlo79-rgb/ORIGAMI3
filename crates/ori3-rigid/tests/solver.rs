@@ -218,10 +218,9 @@ fn warm_start_converges_faster_to_same_solution() {
     }
 }
 
-#[test]
-fn loop_free_cp_converges_immediately() {
-    // ループのないCP(正方形+中央縦1本)はそのまま伝播して即収束する
-    let cp = CreasePattern {
+/// ループのないCP(正方形+中央縦1本、辺ID6が折り線)。
+fn loop_free_cp() -> CreasePattern {
+    CreasePattern {
         vertices: vec![
             v(0, 0.0, 0.0),
             v(1, 0.5, 0.0),
@@ -241,13 +240,38 @@ fn loop_free_cp_converges_immediately() {
         ],
         next_vertex_id: 6,
         next_edge_id: 7,
-    };
+    }
+}
+
+#[test]
+fn loop_free_cp_converges_immediately() {
+    // ループのないCPはそのまま伝播して即収束する
+    let cp = loop_free_cp();
     let faces = extract_faces(&cp);
     let result = solve(&cp, &faces, &[d(6, 90.0)], None);
     assert!(result.converged);
     assert_eq!(result.iterations, 0);
     assert!((result.angles[&6] - 90.0).abs() < 1e-9);
     assert_edges_closed(&cp, &result.frame, 1e-9);
+}
+
+#[test]
+fn free_hinge_without_driver_keeps_warm_start_value() {
+    // driverを外した自由ヒンジには拘束が働かないため、warm startの値がそのまま
+    // 解として残る(solveのdocに明文化された仕様)。さらに、結果の角度は
+    // ±180°の単純な折り返しではなく前回値に近い同値角を選ぶため、
+    // 350°(=−10°と同じ回転)は−10°へ符号反転せず350°のまま返る
+    let cp = loop_free_cp();
+    let faces = extract_faces(&cp);
+    let warm = HashMap::from([(6u32, 350.0f64)]);
+    let result = solve(&cp, &faces, &[], Some(&warm));
+    assert!(result.converged);
+    assert_eq!(result.iterations, 0);
+    assert!(
+        (result.angles[&6] - 350.0).abs() < 1e-9,
+        "angles={:?}",
+        result.angles
+    );
 }
 
 #[test]

@@ -39,6 +39,10 @@ pub struct DocumentView {
 
 pub struct DocumentStore {
     doc: Document,
+    /// 現docに対応する導出faces(pose_solveが毎回extract_facesを再実行しない
+    /// ためのキャッシュ)。docの変更経路はstore内(new_document/open/commit/
+    /// undo/redo)に閉じているため、その全箇所で更新すれば整合が保たれる
+    faces: Vec<Face>,
     undo_stack: Vec<Document>,
     redo_stack: Vec<Document>,
     dirty: bool,
@@ -51,11 +55,13 @@ pub struct DocumentStore {
 impl Default for DocumentStore {
     /// 起動直後の初期状態(150mm正方形の新規作品)。
     fn default() -> Self {
+        let doc = Document::new(Paper {
+            width_mm: 150.0,
+            height_mm: 150.0,
+        });
         DocumentStore {
-            doc: Document::new(Paper {
-                width_mm: 150.0,
-                height_mm: 150.0,
-            }),
+            faces: ori3_cp::extract_faces(&doc.cp),
+            doc,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             dirty: false,
@@ -72,6 +78,7 @@ impl DocumentStore {
         let doc = Document::new(paper);
         let view = build_view(&doc, Vec::new());
         self.doc = doc;
+        self.faces = view.faces.clone();
         self.undo_stack.clear();
         self.redo_stack.clear();
         self.dirty = false;
@@ -104,6 +111,7 @@ impl DocumentStore {
         // 導出を先に済ませ、成功した場合のみ状態を確定する
         let view = build_view(&doc, Vec::new());
         self.doc = doc;
+        self.faces = view.faces.clone();
         self.undo_stack.clear();
         self.redo_stack.clear();
         self.dirty = false;
@@ -236,6 +244,7 @@ impl DocumentStore {
         let view = build_view(prev, Vec::new());
         let prev = self.undo_stack.pop().expect("直前にlastで確認済み");
         self.redo_stack.push(std::mem::replace(&mut self.doc, prev));
+        self.faces = view.faces.clone();
         self.dirty = true;
         Ok(view)
     }
@@ -249,6 +258,7 @@ impl DocumentStore {
         let view = build_view(next, Vec::new());
         let next = self.redo_stack.pop().expect("直前にlastで確認済み");
         self.undo_stack.push(std::mem::replace(&mut self.doc, next));
+        self.faces = view.faces.clone();
         self.dirty = true;
         Ok(view)
     }
@@ -258,11 +268,16 @@ impl DocumentStore {
         self.dirty
     }
 
-    /// pose_solveの入力(CPの複製と前回解)を取り出す。
+    /// pose_solveの入力(CPの複製・導出済みfacesの複製・前回解)を取り出す。
+    /// facesは編集時に導出済みのキャッシュの流用で、extract_facesを再実行しない。
     /// 設計規約: ロック中に重い計算をしないため、コマンド層はこの複製を取って
     /// 即ロックを解放し、solveはロックの外で実行する。
-    pub fn pose_inputs(&self) -> (CreasePattern, Option<HashMap<EdgeId, f64>>) {
-        (self.doc.cp.clone(), self.pose_angles.clone())
+    pub fn pose_inputs(&self) -> (CreasePattern, Vec<Face>, Option<HashMap<EdgeId, f64>>) {
+        (
+            self.doc.cp.clone(),
+            self.faces.clone(),
+            self.pose_angles.clone(),
+        )
     }
 
     /// pose_solveの結果角度を保存する(次回のwarm start用)。
@@ -282,6 +297,7 @@ impl DocumentStore {
                 self.undo_stack.remove(0);
             }
             self.undo_stack.push(std::mem::replace(&mut self.doc, doc));
+            self.faces = view.faces.clone();
             self.redo_stack.clear();
             self.dirty = true;
         }
@@ -698,11 +714,12 @@ mod tests {
     #[test]
     fn pose_angles_roundtrip_and_cleared_on_new() {
         let mut store = square_store();
-        assert_eq!(store.pose_inputs().1, None);
+        assert_eq!(store.pose_inputs().2, None);
 
         store.store_pose_angles(HashMap::from([(6u32, 90.0f64)]));
-        let (cp, warm) = store.pose_inputs();
+        let (cp, faces, warm) = store.pose_inputs();
         assert_eq!(cp, store.doc.cp);
+        assert_eq!(faces.len(), 1, "正方形1面のはず");
         assert_eq!(warm, Some(HashMap::from([(6u32, 90.0f64)])));
 
         // 新規作成で前回解は破棄される(別のCPに古い解を引き継がない)
@@ -712,7 +729,32 @@ mod tests {
                 height_mm: 100.0,
             })
             .unwrap();
-        assert_eq!(store.pose_inputs().1, None);
+        assert_eq!(store.pose_inputs().2, None);
+    }
+
+    /// facesキャッシュがdocの全変更経路(編集・undo・redo)で追従することの検証。
+    /// pose_inputsの返すfacesは常に現doc由来のextract_faces結果と一致する。
+    #[test]
+    fn pose_inputs_faces_cache_follows_all_doc_changes() {
+        let mut store = square_store();
+        let fresh = |s: &DocumentStore| ori3_cp::extract_faces(&s.doc.cp);
+
+        store.apply_edit(diagonal()).unwrap();
+        assert_eq!(store.pose_inputs().1, fresh(&store), "編集後");
+
+        store.undo().unwrap();
+        assert_eq!(store.pose_inputs().1, fresh(&store), "undo後");
+
+        store.redo().unwrap();
+        assert_eq!(store.pose_inputs().1, fresh(&store), "redo後");
+
+        store
+            .new_document(Paper {
+                width_mm: 100.0,
+                height_mm: 100.0,
+            })
+            .unwrap();
+        assert_eq!(store.pose_inputs().1, fresh(&store), "新規作成後");
     }
 
     #[test]

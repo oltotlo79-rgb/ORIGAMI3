@@ -1,0 +1,144 @@
+//! Task 2-0: 大規模CPでの性能回帰テスト(NFR-002: 面400・辺1,000規模で
+//! solve 33ms以内)。
+//!
+//! 20×20のミウラ折りパターン(面400・頂点441・辺840・ヒンジ760・基本ループ361)
+//! を構築し、スライダー操作相当の使い方(前回解をwarm startにdriver角を2°ずつ
+//! 進める)でのsolve 1回あたりの時間を測る。
+//!
+//! # 計測方法と結果の記録
+//!
+//! - `#[ignore]`なしの通常テストとして、debugビルドでの実測に上限を課す方式。
+//!   release相当の実力値は手元で `cargo test -p ori3-rigid --release --test
+//!   perf_miura -- --nocapture` を実行し、printされる実測値で確認した
+//! - 実測(2026-08-05, 開発機 Windows 11 / Task 2-0改修後):
+//!   warm start 1回あたり debug 約85〜95ms / release 約2.7〜6.2ms
+//!   (NFR-002の33msに対し5倍以上の余裕。反復は4〜5回)
+//! - 改修前(M1時点のソルバー)を同一条件・releaseで実測すると1回あたり
+//!   約27〜37秒(目標の約1,000倍)。律速は数値微分の全域再伝播を含む
+//!   密ヤコビアン(m=4332×k=759)と、その正規方程式の密ガウス消去だった
+//! - debug/releaseの速度比は約20倍。debug上限は改修後debug実測の約4倍
+//!   (=release目標33msの10倍)の330msとし、機材やCIのばらつきを吸収しつつ
+//!   大きな性能後退(閉路の疎性やヤコビアンの解析式が壊れた場合など)を検出する
+
+use std::time::{Duration, Instant};
+
+use ori3_cp::extract_faces;
+use ori3_model::{CreasePattern, Driver, Edge, EdgeKind, Vertex};
+use ori3_rigid::solve;
+
+/// debugビルドでのsolve 1回あたりの上限(モジュールコメントの計測記録を参照)。
+const DEBUG_BUDGET: Duration = Duration::from_millis(330);
+
+/// nc×nr面のミウラ折りCP。頂点(i,j)は x=i·dx、y=(j+奇数列なら振れ幅s)·dy。
+/// 縦線はまっすぐ(内部の山谷は列+行のパリティで交互)、横線はジグザグ
+/// (内部は行ごとに山谷が交互)。各内部頂点は次数4で、縦2辺が一直線のため
+/// 川崎の定理を自動的に満たし、山谷3:1で前川の定理も満たす(平坦折り可能)。
+fn miura_cp(nc: usize, nr: usize) -> CreasePattern {
+    let s = 0.35; // ジグザグの振れ幅(dy比)
+    let dx = 1.0 / nc as f64;
+    let dy = 1.0 / (nr as f64 + s);
+    let vid = |i: usize, j: usize| (j * (nc + 1) + i) as u32;
+    let mut vertices = Vec::new();
+    for j in 0..=nr {
+        for i in 0..=nc {
+            vertices.push(Vertex {
+                id: vid(i, j),
+                pos: [
+                    i as f64 * dx,
+                    (j as f64 + if i % 2 == 1 { s } else { 0.0 }) * dy,
+                ],
+            });
+        }
+    }
+    let mut edges: Vec<Edge> = Vec::new();
+    // 縦の線分(辺ID = j*(nc+1)+i の順で採番される)
+    for j in 0..nr {
+        for i in 0..=nc {
+            let kind = if i == 0 || i == nc {
+                EdgeKind::Border
+            } else if (i + j) % 2 == 0 {
+                EdgeKind::Mountain
+            } else {
+                EdgeKind::Valley
+            };
+            edges.push(Edge {
+                id: edges.len() as u32,
+                v0: vid(i, j),
+                v1: vid(i, j + 1),
+                kind,
+            });
+        }
+    }
+    // 横のジグザグ線分
+    for j in 0..=nr {
+        for i in 0..nc {
+            let kind = if j == 0 || j == nr {
+                EdgeKind::Border
+            } else if j % 2 == 1 {
+                EdgeKind::Mountain
+            } else {
+                EdgeKind::Valley
+            };
+            edges.push(Edge {
+                id: edges.len() as u32,
+                v0: vid(i, j),
+                v1: vid(i + 1, j),
+                kind,
+            });
+        }
+    }
+    CreasePattern {
+        next_vertex_id: vertices.len() as u32,
+        next_edge_id: edges.len() as u32,
+        vertices,
+        edges,
+    }
+}
+
+#[test]
+fn miura_20x20_solve_stays_within_frame_budget() {
+    let (nc, nr) = (20, 20);
+    let cp = miura_cp(nc, nr);
+    let faces = extract_faces(&cp);
+    assert_eq!(faces.len(), 400);
+    assert_eq!(cp.edges.len(), 840);
+
+    // 中央付近の縦ヒンジ(山)をdriverにする。縦線分の辺IDは j*(nc+1)+i
+    let hinge = (nr / 2 * (nc + 1) + nc / 2) as u32;
+    assert_eq!(
+        cp.edges[hinge as usize].kind,
+        EdgeKind::Mountain,
+        "駆動ヒンジは山折りのはず"
+    );
+    let drv = |deg: f64| {
+        vec![Driver {
+            hinge,
+            target_angle_deg: deg,
+        }]
+    };
+
+    // 冷間の初回solve(時間制限の対象外。収束は必須)
+    let cold = solve(&cp, &faces, &drv(20.0), None);
+    assert!(cold.converged, "iterations={}", cold.iterations);
+
+    // スライダー操作相当: warm startで2°ずつ進め、1回ごとの時間を測る
+    let mut prev = cold.angles;
+    let mut worst = Duration::ZERO;
+    for step in 1..=5 {
+        let deg = 20.0 + 2.0 * f64::from(step);
+        let t0 = Instant::now();
+        let res = solve(&cp, &faces, &drv(deg), Some(&prev));
+        let dt = t0.elapsed();
+        assert!(res.converged, "step={step} iterations={}", res.iterations);
+        println!(
+            "step={step} deg={deg} iterations={} time={dt:?}",
+            res.iterations
+        );
+        worst = worst.max(dt);
+        prev = res.angles;
+    }
+    assert!(
+        worst < DEBUG_BUDGET,
+        "warm start solveが遅すぎます: worst={worst:?}(モジュールコメントの計測記録を参照)"
+    );
+}
