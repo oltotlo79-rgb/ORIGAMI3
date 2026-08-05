@@ -3,7 +3,7 @@
 // 3D表示への反映と再生の進行はストアが行う(要件§2: 状態はストア1本)。
 // サムネイル画像は作らない(1手順ごとの再生費用が大きいため、v1は文字表示)。
 
-import { useAppStore } from "../store/appStore";
+import { isStepSkipped, useAppStore } from "../store/appStore";
 import {
   TECHNIQUE_LABEL,
   uniqueWarnings,
@@ -27,14 +27,15 @@ function chipClass(selected: boolean, skipped = false): string {
 /** 手順1つぶんのチップ。number は利用者向けの手順番号(1始まり) */
 function StepChip({ step, number }: { step: FoldStep; number: number }) {
   const currentStep = useAppStore((s) => s.currentStep);
-  const skipped = useAppStore((s) => s.skipped);
+  // 飛ばされたかどうかは作品全体の再生結果で決める(途中の手順を選んでいる間も、
+  // その先の手順の赤表示を消さない)
+  const isSkipped = useAppStore((s) => isStepSkipped(s, step.id));
   // 自動再生の警告は展開図の検査結果へ合流している。途中の手順を再生し直した
   // ときの警告と合わせて見る(同じ文言は1回だけ)
   const warnings = useAppStore((s) => s.warnings);
   const replayWarnings = useAppStore((s) => s.replayWarnings);
   const selectStep = useAppStore((s) => s.selectStep);
 
-  const isSkipped = skipped.includes(step.id);
   const reasons = warningsForStep(
     uniqueWarnings(warnings, replayWarnings),
     number,

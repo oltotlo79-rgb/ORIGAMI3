@@ -69,6 +69,14 @@ describe("advancePlayback", () => {
     expect(next).toEqual({ step: 2, t: 0.4, playing: true });
   });
 
+  it("経過時間が数として壊れていても進み具合を壊さない", () => {
+    const state = { step: 2, t: 0.4, playing: true };
+    expect(advancePlayback(state, Number.NaN, TOTAL)).toEqual(state);
+    expect(advancePlayback(state, Number.POSITIVE_INFINITY, TOTAL)).toEqual(
+      state,
+    );
+  });
+
   it("手順が1つも無ければ止まる", () => {
     const next = advancePlayback({ step: 0, t: 0, playing: true }, 16, 0);
     expect(next).toEqual({ step: 0, t: 1, playing: false });

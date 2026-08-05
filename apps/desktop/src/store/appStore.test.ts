@@ -28,7 +28,7 @@ vi.mock("../ipc/client", () => ({
 }));
 
 import * as ipc from "../ipc/client";
-import { resetPoseThrottle, useAppStore } from "./appStore";
+import { isStepSkipped, resetPoseThrottle, useAppStore } from "./appStore";
 
 /** 角度の間引き間隔(appStore.tsのPOSE_THROTTLE_MS)より少し長く待つ時間(ms) */
 const POSE_WAIT_MS = 100;
@@ -182,6 +182,7 @@ beforeEach(() => {
     playT: 1,
     playing: false,
     skipped: [],
+    replaySkipped: [],
     replayWarnings: [],
   });
 });
@@ -463,8 +464,24 @@ describe("appStore 手順の表示と再生", () => {
     expect(replayCalls()).toEqual([[2, 1]]);
     const s = useAppStore.getState();
     expect(s.currentStep).toBe(2);
-    expect(s.skipped).toEqual([2]);
+    expect(s.replaySkipped).toEqual([2]);
     expect(s.replayWarnings).toHaveLength(1);
+  });
+
+  it("途中の手順を選んでも、その先の手順の飛ばした印は消えない", async () => {
+    seedSequence(3);
+    // 作品全体の再生では手順3が飛ばされている(DocumentView由来)
+    useAppStore.setState({ skipped: [3] });
+    // 手順1までの再生からは、手順3のことは分からない
+    vi.mocked(ipc.sequenceReplay).mockResolvedValueOnce(makeReplayResult());
+
+    useAppStore.getState().selectStep(1);
+    await flush();
+
+    const s = useAppStore.getState();
+    expect(s.skipped).toEqual([3]); // タイムラインの赤表示は保たれる
+    expect(s.replaySkipped).toEqual([]);
+    expect(isStepSkipped(s, 3)).toBe(true);
   });
 
   it("最新を選ぶと全ての手順まで折った形を表示する", async () => {
@@ -495,12 +512,12 @@ describe("appStore 手順の表示と再生", () => {
     useAppStore.getState().stepBy(1); // 手順数を超えない
     await flush();
     expect(useAppStore.getState().currentStep).toBe(2);
+    // 端で行き止まりになったぶん(0での「前へ」・2での「次へ」)は同じ形なので
+    // 描き直しを頼まない
     expect(replayCalls()).toEqual([
       [1, 1],
       [0, 1],
-      [0, 1],
       [1, 1],
-      [2, 1],
       [2, 1],
     ]);
   });
@@ -538,21 +555,23 @@ describe("appStore 手順の表示と再生", () => {
   it("再生中に計算が追いつかなくても、待たせるのは最新の1件だけ", async () => {
     primeFakeTimers();
     try {
-      seedSequence(3);
+      const total = 3;
+      seedSequence(total);
       const slow = deferred<ReplayResult>();
       vi.mocked(ipc.sequenceReplay).mockReturnValueOnce(slow.promise);
 
       useAppStore.getState().togglePlay();
-      await vi.advanceTimersByTimeAsync(STEP_DURATION_MS); // 20コマぶん
+      // 1件目が返らないまま、最後の手順まで再生しきる(60コマ以上進む)
+      await vi.advanceTimersByTimeAsync(STEP_DURATION_MS * (total + 1));
       expect(replayCalls()).toHaveLength(1); // 1件目が終わるまで次は送らない
+      expect(useAppStore.getState().playing).toBe(false); // 最後まで進んで停止
 
       slow.resolve(makeReplayResult());
       await vi.advanceTimersByTimeAsync(32);
-      // 待っていた分は最新1件にまとまる(コマ数ぶんは送られない)
-      expect(replayCalls().length).toBeLessThan(5);
 
-      useAppStore.getState().togglePlay(); // 後片付け
-      expect(useAppStore.getState().playing).toBe(false);
+      // 待っていた数十コマぶんは最新の1件にまとまり、最後の形だけが送られる
+      expect(replayCalls()).toHaveLength(2);
+      expect(lastReplayCall()).toEqual([total, 1]);
     } finally {
       vi.useRealTimers();
     }
@@ -575,7 +594,7 @@ describe("appStore 手順の表示と再生", () => {
     const second = useAppStore.getState();
 
     // 内容が同じなら同じ配列を返す(毎コマの再描画を防ぐ)
-    expect(second.skipped).toBe(first.skipped);
+    expect(second.replaySkipped).toBe(first.replaySkipped);
     expect(second.replayWarnings).toBe(first.replayWarnings);
   });
 
@@ -648,8 +667,46 @@ describe("appStore 手順の表示と再生", () => {
 
     expect(replayCalls()).toEqual([[2, 1]]);
     const s = useAppStore.getState();
-    expect(s.skipped).toEqual([2]);
+    expect(s.replaySkipped).toEqual([2]);
     expect(s.replayWarnings).toHaveLength(1);
+  });
+
+  it("一時停止中に展開図を編集しても、再生位置は折り終わりに揃う", async () => {
+    // 手順2を途中(50%)まで折って一時停止している状態
+    seedSequence(3, 2);
+    useAppStore.setState({ playT: 0.5 });
+    vi.mocked(ipc.editApply).mockResolvedValueOnce(makeStepView(2060, 3));
+
+    await useAppStore.getState().applyEdit({ type: "RemoveEdges", ids: [9] });
+
+    // 折り終わりの形(t=1)を描いたので、再生位置も折り終わりに合わせる。
+    // 0.5のままだと、次に再生を押したとき表示が一度巻き戻ってしまう
+    expect(replayCalls()).toEqual([[2, 1]]);
+    expect(useAppStore.getState().playT).toBe(1);
+  });
+
+  it("再生中の編集・元に戻すは再生を止める", async () => {
+    primeFakeTimers();
+    try {
+      seedSequence(3);
+      vi.mocked(ipc.editUndo).mockResolvedValueOnce(makeStepView(2070, 3));
+
+      useAppStore.getState().togglePlay();
+      await vi.advanceTimersByTimeAsync(STEP_DURATION_MS / 2);
+      expect(useAppStore.getState().playing).toBe(true);
+
+      const p = useAppStore.getState().undo();
+      expect(useAppStore.getState().playing).toBe(false); // 送る前に止まる
+      await vi.advanceTimersByTimeAsync(0);
+      await p;
+
+      // 予約されていたコマも取り消されている(折り直した形が上書きされない)
+      const count = replayCalls().length;
+      await vi.advanceTimersByTimeAsync(STEP_DURATION_MS);
+      expect(replayCalls()).toHaveLength(count);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("手順が減ったら、表示中の手順番号を手順数まで詰める", async () => {

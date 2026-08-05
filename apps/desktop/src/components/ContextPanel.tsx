@@ -2,7 +2,7 @@
 // 警告・エラーの詳細もここに表示する(常設パネルを増やさない)。
 
 import { useEffect, useRef } from "react";
-import { useAppStore } from "../store/appStore";
+import { isStepSkipped, useAppStore } from "../store/appStore";
 import {
   TECHNIQUE_KINDS,
   TECHNIQUE_LABEL,
@@ -216,7 +216,9 @@ function NoteInput({ step }: { step: FoldStep }) {
 /** 手順を選んでいるときの内容: 技法の変更・注記・削除 */
 function StepContent({ number }: { number: number }) {
   const doc = useAppStore((s) => s.doc);
+  // 飛ばされたかどうかは作品全体の再生結果で決める(タイムラインの札と同じ判断)
   const skipped = useAppStore((s) => s.skipped);
+  const replaySkipped = useAppStore((s) => s.replaySkipped);
   const applySequenceOp = useAppStore((s) => s.applySequenceOp);
 
   const step = doc?.sequence[number - 1];
@@ -230,7 +232,7 @@ function StepContent({ number }: { number: number }) {
       <p>
         手順{number}: {TECHNIQUE_LABEL[step.kind]}(折り線
         {step.drivers.length}本)
-        {skipped.includes(step.id) && (
+        {isStepSkipped({ skipped, replaySkipped }, step.id) && (
           <span className="error-text">
             {" "}
             ※折り線が見つからないため飛ばされています

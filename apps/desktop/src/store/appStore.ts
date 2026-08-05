@@ -51,8 +51,13 @@ interface AppState {
   playT: number;
   /** 手順を自動再生中か */
   playing: boolean;
-  /** 再生で飛ばされた手順のID(タイムラインの赤表示に使う) */
+  /** 全手順を通した再生で飛ばされた手順のID(DocumentView由来。作品全体の結果)。
+   * タイムラインの赤表示はこちらを見る */
   skipped: number[];
+  /** 途中の手順までを再生し直したときに飛ばされた手順のID。
+   * その手順までのことしか分からないので、全体のskippedとは別に持つ
+   * (混ぜると、途中の手順を選んだだけで後ろの手順の赤表示が消えてしまう) */
+  replaySkipped: number[];
   /** 手順再生からの警告(飛ばした理由など)。展開図・追従計算の警告とは別に持つ */
   replayWarnings: string[];
   errorMessage: string | null;
@@ -143,6 +148,16 @@ function keepIfSame<T>(prev: T[], next: T[]): T[] {
   return same ? prev : next;
 }
 
+/** その手順が再生で飛ばされているか。作品全体の再生結果(DocumentView由来)を見て、
+ * 途中まで再生し直したときの結果もあわせて見る。
+ * 部分再生の結果だけで判断すると、途中の手順を選んだ瞬間に後ろの手順の印が消える */
+export function isStepSkipped(
+  s: { skipped: number[]; replaySkipped: number[] },
+  stepId: number,
+): boolean {
+  return s.skipped.includes(stepId) || s.replaySkipped.includes(stepId);
+}
+
 /** ドキュメント更新後、存在しなくなったIDを選択から取り除く */
 function pruneSelection(selection: Selection, doc: Document): Selection {
   const edgeIds = new Set(doc.cp.edges.map((e) => e.id));
@@ -208,6 +223,7 @@ export const useAppStore = create<AppState>((set, get) => {
           frame3d: r.value.frame,
           currentStep: null,
           playT: 1,
+          replaySkipped: [],
           replayWarnings: [],
         });
       }
@@ -300,7 +316,8 @@ export const useAppStore = create<AppState>((set, get) => {
       const s = get();
       set({
         frame3d: r.value.frame,
-        skipped: keepIfSame(s.skipped, r.value.skipped),
+        // upToまでの再生結果なので、作品全体のskippedは上書きしない
+        replaySkipped: keepIfSame(s.replaySkipped, r.value.skipped),
         replayWarnings: keepIfSame(s.replayWarnings, r.value.warnings),
       });
     } else if (r.isLatest) {
@@ -319,9 +336,12 @@ export const useAppStore = create<AppState>((set, get) => {
     // 表示中の手順番号はapplyViewで手順数まで詰めてある
     const step = get().currentStep;
     if (step === null) {
-      set({ frame3d: view.frame, replayWarnings: [] });
+      set({ frame3d: view.frame, replaySkipped: [], replayWarnings: [] });
       return;
     }
+    // 描き直すのはその手順を折り終えた形(t=1)。一時停止していた途中の進み具合を
+    // 残すと、次に再生したとき表示が一度巻き戻ってから折り直される
+    set({ playT: 1 });
     await runReplay(step, 1, true);
   };
 
@@ -379,6 +399,7 @@ export const useAppStore = create<AppState>((set, get) => {
     playT: 1,
     playing: false,
     skipped: [],
+    replaySkipped: [],
     replayWarnings: [],
     errorMessage: null,
     docEpoch: 0,
@@ -402,11 +423,22 @@ export const useAppStore = create<AppState>((set, get) => {
       }
     },
 
-    applyEdit: (op) => runViewCommand(() => ipc.editApply(op), false),
+    // 展開図が変わると再生中の形も変わるので、編集系はいずれも先に再生を止める
+    // (止めないと、折り直した形が次のコマですぐ上書きされて一瞬跳ねて見える)
+    applyEdit: (op) => {
+      stopPlayback();
+      return runViewCommand(() => ipc.editApply(op), false);
+    },
 
-    undo: () => runViewCommand(() => ipc.editUndo(), false),
+    undo: () => {
+      stopPlayback();
+      return runViewCommand(() => ipc.editUndo(), false);
+    },
 
-    redo: () => runViewCommand(() => ipc.editRedo(), false),
+    redo: () => {
+      stopPlayback();
+      return runViewCommand(() => ipc.editRedo(), false);
+    },
 
     applySequenceOp: (op) => {
       // 手順が入れ替わると再生位置の意味が変わるので、先に止める
@@ -416,13 +448,18 @@ export const useAppStore = create<AppState>((set, get) => {
 
     selectStep: (step) => {
       stopPlayback();
-      const total = get().doc?.sequence.length ?? 0;
+      const s = get();
+      const total = s.doc?.sequence.length ?? 0;
       if (total === 0) {
         set({ currentStep: null, playT: 1 });
         return;
       }
       const upTo = step === null ? total : Math.max(0, Math.min(step, total));
-      set({ currentStep: step === null ? null : upTo, playT: 1 });
+      const next = step === null ? null : upTo;
+      // すでに同じ形を表示しているなら描き直しを頼まない
+      // (端で「次へ」を連打したときに、同じ要求が何度も飛ぶのを防ぐ)
+      if (s.currentStep === next && s.playT === 1) return;
+      set({ currentStep: next, playT: 1 });
       // 最新(null)の形も再生で作る(DocumentViewのframeと同じ内容になる)。
       // 途中まで折った表示から戻すときに、必ず最新の形へ描き直すため
       void runReplay(upTo, 1);

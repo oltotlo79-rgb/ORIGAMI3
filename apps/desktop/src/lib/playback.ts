@@ -28,7 +28,11 @@ export function advancePlayback(
   if (state.step >= totalSteps && state.t >= 1) {
     return { step: totalSteps, t: 1, playing: false };
   }
-  const dt = Math.min(Math.max(dtMs, 0), STEP_DURATION_MS);
+  // 数として壊れた経過時間(NaN・無限大)は0として扱う。
+  // そのまま足すと進み具合が数でなくなり、以後どのコマも先へ進めなくなる
+  const dt = Number.isFinite(dtMs)
+    ? Math.min(Math.max(dtMs, 0), STEP_DURATION_MS)
+    : 0;
   const step = Math.max(0, state.step);
   const t = state.t + dt / STEP_DURATION_MS;
   if (t < 1) return { step, t, playing: true };
