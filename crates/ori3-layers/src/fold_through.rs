@@ -28,14 +28,8 @@ use ori3_model::{
 
 use crate::flat_state::{FlatState, point_in_face, representative_point};
 
-/// 折る向き。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FoldDirection {
-    /// 動く側の層を反転して山の一番上に載せる(紙の表から見て谷折りに相当)。
-    Up,
-    /// 動く側の層を反転して山の一番下に入れる(山折りに相当)。
-    Down,
-}
+/// 折る向き(型定義は手順操作の引数として使うため [`ori3_model`] にある)。
+pub use ori3_model::FoldDirection;
 
 /// fold_throughの入力。座標は全て「畳んだ平面座標」。
 #[derive(Clone, Debug)]

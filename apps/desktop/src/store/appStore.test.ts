@@ -12,6 +12,7 @@ import type {
   FoldStep,
   ReplayResult,
   SolveResult,
+  Vec2,
 } from "../lib/types";
 import { STEP_DURATION_MS } from "../lib/playback";
 
@@ -28,7 +29,12 @@ vi.mock("../ipc/client", () => ({
 }));
 
 import * as ipc from "../ipc/client";
-import { isStepSkipped, resetPoseThrottle, useAppStore } from "./appStore";
+import {
+  canFoldNow,
+  isStepSkipped,
+  resetPoseThrottle,
+  useAppStore,
+} from "./appStore";
 
 /** 角度の間引き間隔(appStore.tsのPOSE_THROTTLE_MS)より少し長く待つ時間(ms) */
 const POSE_WAIT_MS = 100;
@@ -184,6 +190,8 @@ beforeEach(() => {
     skipped: [],
     replaySkipped: [],
     replayWarnings: [],
+    activeTool: "select",
+    foldDraft: null,
   });
 });
 
@@ -727,5 +735,128 @@ describe("appStore 手順の表示と再生", () => {
 
     expect(useAppStore.getState().currentStep).toBeNull();
     expect(replayCalls()).toEqual([]);
+  });
+});
+
+describe("3D画面での折り操作(折り線を引いて折る)", () => {
+  /** 同じ位置に2枚重なった平らな状態(下=面0、上=面1) */
+  function stackedFrame() {
+    const quad: [number, number, number][] = [
+      [0, 0, 0],
+      [1, 0, 0],
+      [1, 1, 0],
+      [0, 1, 0],
+    ];
+    return {
+      faces: [
+        { face: 0, polygon: quad, layer: 0 },
+        { face: 1, polygon: quad, layer: 1 },
+      ],
+      warnings: [],
+    };
+  }
+
+  /** 手順1つ・2層の畳んだ状態を表示中にする */
+  function seedFolded(): void {
+    seedSequence(1);
+    useAppStore.setState({ activeTool: "fold", frame3d: stackedFrame() });
+  }
+
+  const LINE: [Vec2, Vec2] = [
+    [0.5, 0],
+    [0.5, 1],
+  ];
+
+  it("平らに畳んだ状態のときだけ折れる", () => {
+    seedFolded();
+    expect(canFoldNow(useAppStore.getState())).toBe(true);
+
+    useAppStore.setState({ playT: 0.5 });
+    expect(canFoldNow(useAppStore.getState())).toBe(false);
+
+    useAppStore.setState({ playT: 1, currentStep: 0 });
+    expect(canFoldNow(useAppStore.getState())).toBe(false); // 折る前の途中表示
+
+    useAppStore.setState({ currentStep: 1 });
+    expect(canFoldNow(useAppStore.getState())).toBe(true); // 最終手順=最新の形
+
+    useAppStore.setState({ drivers: new Map([[5, 90]]) });
+    expect(canFoldNow(useAppStore.getState())).toBe(false); // 角度スライダーで変形中
+  });
+
+  it("引いた折り線の設定どおりにFoldThroughを送る(全ての層・向こうへ折る)", async () => {
+    seedFolded();
+    vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(makeStepView(3000, 2));
+
+    const store = useAppStore.getState();
+    store.beginFoldDraft(LINE, "3d");
+    expect(useAppStore.getState().foldDraft).toEqual({
+      line: LINE,
+      direction: "Up",
+      target: "all",
+      movingSide: "right",
+    });
+    store.updateFoldDraft({ direction: "Down" });
+    await useAppStore.getState().commitFoldDraft();
+
+    const op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
+    expect(op.type).toBe("FoldThrough");
+    if (op.type !== "FoldThrough") throw new Error("FoldThroughでない");
+    expect(op.up_to).toBe(1); // 手順の数(末尾へ足す)
+    expect(op.line).toEqual(LINE);
+    expect(op.direction).toBe("Down");
+    expect(op.target_layers).toBeNull(); // 全ての層
+    // 右側を動かすので、動かさない側の点は左(x<0.5)
+    expect(op.keep_side_point[0]).toBeLessThan(0.5);
+    // 折り終えたら折り線は捨て、最新の形を表示する
+    expect(useAppStore.getState().foldDraft).toBeNull();
+    expect(useAppStore.getState().currentStep).toBeNull();
+  });
+
+  it("「いちばん上の1枚」ではその層の面IDだけを対象にする", async () => {
+    seedFolded();
+    vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(makeStepView(3010, 2));
+
+    useAppStore.getState().beginFoldDraft(LINE, "3d");
+    useAppStore.getState().updateFoldDraft({ target: "top", movingSide: "left" });
+    await useAppStore.getState().commitFoldDraft();
+
+    const op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
+    if (op.type !== "FoldThrough") throw new Error("FoldThroughでない");
+    expect(op.target_layers).toEqual([1]); // 重なり順がいちばん上の面
+    expect(op.keep_side_point[0]).toBeGreaterThan(0.5); // 左を動かすので右が残る
+  });
+
+  it("折れなかったときは折り線を残し、やめると捨てる", async () => {
+    seedFolded();
+    vi.mocked(ipc.sequenceApply).mockRejectedValueOnce("折り線がどの層の面も横切っていません");
+
+    useAppStore.getState().beginFoldDraft(LINE, "3d");
+    await useAppStore.getState().commitFoldDraft();
+
+    expect(useAppStore.getState().errorMessage).toContain("横切っていません");
+    expect(useAppStore.getState().foldDraft).not.toBeNull();
+
+    useAppStore.getState().cancelFoldDraft();
+    expect(useAppStore.getState().foldDraft).toBeNull();
+  });
+
+  it("手順がある作品では展開図側から折れない(3D画面へ案内する)", () => {
+    seedFolded();
+    useAppStore.getState().beginFoldDraft(LINE, "2d");
+    expect(useAppStore.getState().foldDraft).toBeNull();
+    expect(useAppStore.getState().errorMessage).toContain("3D画面から");
+
+    // まだ1度も折っていない作品なら展開図側からも折れる
+    useAppStore.setState({ doc: makeView(3020).doc, errorMessage: null });
+    useAppStore.getState().beginFoldDraft(LINE, "2d");
+    expect(useAppStore.getState().foldDraft?.line).toEqual(LINE);
+  });
+
+  it("ツールを切り替えると引きかけの折り線を捨てる", () => {
+    seedFolded();
+    useAppStore.getState().beginFoldDraft(LINE, "3d");
+    useAppStore.getState().setTool("select");
+    expect(useAppStore.getState().foldDraft).toBeNull();
   });
 });

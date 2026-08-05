@@ -588,12 +588,15 @@ pub struct ReplayResult { pub frame: Frame3D, pub skipped: Vec<StepId>, pub warn
 
 ### Task 2-5: 3Dビュー上の折り線描画と折り操作(SIM-005)
 
-**Files:** `apps/desktop/src/components/Viewer3D/foldDraw.ts`, `ContextPanel.tsx`(折りツール時), `store/appStore.ts`(拡張)
+**Files:** `apps/desktop/src/components/Viewer3D/foldDraw.ts`, `apps/desktop/src/lib/planeProject.ts`, `ContextPanel.tsx`(折りツール時), `store/appStore.ts`(拡張), `crates/ori3-layers/src/replay.rs`(`flat_state_at`), `crates/ori3-model/src/lib.rs`(`SeqOp::FoldThrough`)
 
-- [ ] 3Dビューに「折る」ツールを追加: 平坦状態の紙の上でドラッグ→raycastで畳み平面上の2点を取得→端点を紙の輪郭・既存頂点へスナップ→折り線プレビュー表示
-- [ ] 確定UI(コンテキストパネル): 方向(手前へ/向こうへ)、対象層(全層/上から1枚/選択)→`fold_through`実行(sequence_apply PushStep経由)→2D展開図に追記された折り線が即時反映されることを確認
-- [ ] 2D側でも同じ折り操作を出せるようにする(折り線を2Dで描き、同じ確定UIを使用)
-- [ ] 手動確認: 座布団折り→観音折りを3D側の線描画だけで完成できる → コミット `3D画面に直接線を引いて折る操作を追加(展開図へ自動反映)` → プッシュ
+- [x] 手順から現在の平坦状態を導出する `flat_state_at(doc, faces, up_to) -> Result<FlatState, String>`(3D状態は保存しない設計のため、再生結果の3D姿勢からxy平面の等長変換を取り出す。平坦でなければErr)。座標系は3D表示と同じ(根面=最小面IDが恒等変換)
+- [x] Tauriコマンドは増やさず、`SeqOp::FoldThrough { up_to, line, keep_side_point, target_layers, direction }` を追加して `sequence_apply` で実現(`FoldDirection`はori3-modelへ移動しserde対応、ori3-layersは再エクスポート)。v1は末尾(`up_to == sequence.len()`)のみ許可し、途中への挿入はErr
+- [x] 3Dビューに「折る」ツールを追加(ツールレール7個目): 平坦状態の紙の上でドラッグ→画面座標をz=0平面へ投影(`lib/planeProject.ts`)→端点を紙の輪郭・既存頂点へスナップ(`foldDraw.ts`)→折り線と動く側のプレビュー表示(既存のハイライト機構を流用、動く側は半平面で切り取った輪郭)
+- [x] 平坦でないとき(折り途中の手順・再生中・角度スライダー使用中)は3Dビュー右上に「平らに畳んだ状態で使えます」と出して描画させない
+- [x] 確定UI(コンテキストパネル): 方向(手前へ折る(谷)/向こうへ折る(山))、対象層(全ての層/いちばん上の1枚)、動かす側(左/右)→「折る」で`SeqOp::FoldThrough`を送信→2D展開図に折り線が追記され、タイムラインに手順が1つ増える。「やめる」で破棄(v1では「選択した層」は出さない)
+- [x] 2D側でも同じ折り操作を出せるようにする(2回クリックで線を引き、同じ確定UIを使用)。手順が1つ以上ある作品では展開図座標と畳み平面座標が食い違うため2D側からの折りは断り、「折る操作は3D画面から行ってください」と案内する
+- [x] 手動確認: 座布団折り→観音折り(6手順)を3D側の線描画だけで完成できることを実機のスクリーンショットで確認。同じ手順の自動テストも追加(`cushion_then_cupboard_fold_only_with_fold_through`) → コミット `3D画面に直接線を引いて折る操作を追加(展開図へ自動反映)` → プッシュ
 
 ### Task 2-6: 技法マクロ(中割り・かぶせ・花弁・段・開いてつぶす)
 

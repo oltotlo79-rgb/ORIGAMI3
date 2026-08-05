@@ -121,6 +121,52 @@ fn test_seq_op_tagged_roundtrip() {
     }
 }
 
+/// 畳んだ状態への折り操作は画面(TypeScript)から送られてくるので、
+/// JSONの形(内部タグ・snake_caseのフィールド名・向きの表記)を固定する。
+#[test]
+fn test_seq_op_fold_through_json_shape() {
+    let op = SeqOp::FoldThrough {
+        up_to: 2,
+        line: [[0.0, 0.5], [1.0, 0.5]],
+        keep_side_point: [0.5, 0.25],
+        target_layers: Some(vec![3]),
+        direction: FoldDirection::Down,
+    };
+    let json = serde_json::to_string(&op).expect("serialize");
+    assert_eq!(
+        json,
+        r#"{"type":"FoldThrough","up_to":2,"line":[[0.0,0.5],[1.0,0.5]],"keep_side_point":[0.5,0.25],"target_layers":[3],"direction":"Down"}"#
+    );
+    let back: SeqOp = serde_json::from_str(&json).expect("deserialize");
+    match back {
+        SeqOp::FoldThrough {
+            up_to,
+            line,
+            keep_side_point,
+            target_layers,
+            direction,
+        } => {
+            assert_eq!(up_to, 2);
+            assert_eq!(line, [[0.0, 0.5], [1.0, 0.5]]);
+            assert_eq!(keep_side_point, [0.5, 0.25]);
+            assert_eq!(target_layers, Some(vec![3]));
+            assert_eq!(direction, FoldDirection::Down);
+        }
+        other => panic!("unexpected variant: {other:?}"),
+    }
+    // 対象層の指定なし(全層)はnullで往復する
+    let json = serde_json::to_string(&SeqOp::FoldThrough {
+        up_to: 0,
+        line: [[0.0, 0.0], [1.0, 1.0]],
+        keep_side_point: [1.0, 0.0],
+        target_layers: None,
+        direction: FoldDirection::Up,
+    })
+    .expect("serialize");
+    assert!(json.contains(r#""target_layers":null"#), "json = {json}");
+    assert!(json.contains(r#""direction":"Up""#), "json = {json}");
+}
+
 #[test]
 fn test_document_new_landscape() {
     // 150×100mm: 長辺=幅が1.0、高さは 100/150 = 2/3 に正規化される。

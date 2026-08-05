@@ -70,6 +70,13 @@ export interface FoldStep {
   note: string;
 }
 
+/**
+ * 折る向き。
+ * Up = 動く側を反転して山の一番上に載せる(手前へ折る=谷折り)、
+ * Down = 一番下に入れる(向こうへ折る=山折り)
+ */
+export type FoldDirection = "Up" | "Down";
+
 export interface DisplaySettings {
   front_color: [number, number, number];
   back_color: [number, number, number];
@@ -119,7 +126,20 @@ export type SeqOp =
   | { type: "PushStep"; step: FoldStep }
   | { type: "InsertStep"; index: number; step: FoldStep }
   | { type: "RemoveStep"; id: number }
-  | { type: "UpdateStep"; step: FoldStep };
+  | { type: "UpdateStep"; step: FoldStep }
+  /**
+   * 畳んだ状態の上に折り線を引いてまとめて折る。座標は畳み平面(3D表示のxy)。
+   * up_toはこの折りの直前までの手順数(v1は末尾=現在の手順数のみ)。
+   * target_layersがnullなら可動側に掛かる全ての層を折る
+   */
+  | {
+      type: "FoldThrough";
+      up_to: number;
+      line: [Vec2, Vec2];
+      keep_side_point: Vec2;
+      target_layers: number[] | null;
+      direction: FoldDirection;
+    };
 
 /** 3D表示用フレーム(Task 1-9で使用) */
 export interface Face3D {

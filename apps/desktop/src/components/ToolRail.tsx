@@ -8,6 +8,12 @@ const TOOLS: { id: ToolId; label: string; title: string }[] = [
   { id: "valley", label: "谷", title: "谷折り線: 2回クリックで線を引く(Escで中止)" },
   { id: "aux", label: "補助", title: "補助線: 2回クリックで線を引く(Escで中止)" },
   { id: "delete", label: "削除", title: "削除: クリックした線を消す" },
+  {
+    id: "fold",
+    label: "折る",
+    title:
+      "折る: 立体表示の紙の上をドラッグして折り線を引き、下のパネルで向きと対象の層を選んで折る(平らに畳んだ状態で使える)",
+  },
 ];
 
 interface Props {

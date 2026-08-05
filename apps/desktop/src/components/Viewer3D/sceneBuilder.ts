@@ -340,6 +340,8 @@ export interface Viewer3DScene {
   setContent(content: Viewer3DContent): void;
   /** 選択中ヒンジの強調を更新する(形と材質は使い回す) */
   setHighlight(segments: HingeSegment[]): void;
+  /** 折り線の描画中は左ドラッグの視点回転を止める(拡大縮小・平行移動は残す) */
+  setDrawMode(enabled: boolean): void;
   dispose(): void;
 }
 
@@ -469,6 +471,9 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
       }
       for (let i = used; i < pool.length; i++) pool[i].visible = false;
       render();
+    },
+    setDrawMode(enabled) {
+      controls.mouseButtons.LEFT = enabled ? null : THREE.MOUSE.ROTATE;
     },
     dispose() {
       if (frameHandle !== null) cancelAnimationFrame(frameHandle);

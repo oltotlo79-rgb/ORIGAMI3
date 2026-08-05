@@ -11,7 +11,7 @@ import {
   onMouseMove,
   onMouseUp,
   onWheel,
-  TOOL_KIND,
+  previewKind,
   type InteractionCtx,
 } from "./interaction";
 import { fitView, render, type RenderOverlay, type ViewTransform } from "./renderer";
@@ -46,7 +46,7 @@ export function CpEditor({ fitRef }: Props) {
     }
     viewRef.current ??= fitView(doc, w, h);
     const st = stateRef.current;
-    const kind = TOOL_KIND[activeTool];
+    const kind = previewKind(activeTool);
     const overlay: RenderOverlay = {
       hoverSnap: kind ? st.hoverSnap : null,
       preview:
@@ -77,6 +77,7 @@ export function CpEditor({ fitRef }: Props) {
       },
       applyEdit: s.applyEdit,
       setSelection: s.setSelection,
+      beginFoldDraft: s.beginFoldDraft,
     };
   }, []);
 
@@ -159,7 +160,7 @@ export function CpEditor({ fitRef }: Props) {
       className="cp-canvas"
       style={{
         cursor:
-          TOOL_KIND[activeTool] !== undefined || activeTool === "delete"
+          previewKind(activeTool) !== undefined || activeTool === "delete"
             ? "crosshair"
             : "default",
       }}

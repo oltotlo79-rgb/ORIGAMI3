@@ -56,6 +56,8 @@ export interface InteractionCtx {
   setView: (view: ViewTransform) => void;
   applyEdit: (op: EditOp) => void;
   setSelection: (selection: Selection) => void;
+  /** 折るツールで引いた線を確定前の状態としてストアへ渡す */
+  beginFoldDraft: (line: [Vec2, Vec2], source: "2d" | "3d") => void;
 }
 
 /** 線ツール → 引く線の種類(それ以外のツールは未定義) */
@@ -64,6 +66,14 @@ export const TOOL_KIND: Partial<Record<ToolId, EdgeKind>> = {
   valley: "Valley",
   aux: "Aux",
 };
+
+/**
+ * 2回のクリックで線を引くツールか(折るツールを含む)。
+ * 折るツールのプレビューは谷折りの色で描く。
+ */
+export function previewKind(tool: ToolId): EdgeKind | undefined {
+  return tool === "fold" ? "Valley" : TOOL_KIND[tool];
+}
 
 function dist(a: Vec2, b: Vec2): number {
   return Math.hypot(a[0] - b[0], a[1] - b[1]);
@@ -151,14 +161,19 @@ export function onMouseDown(ctx: InteractionCtx, screen: Vec2, button: number): 
   const pickTol = PICK_TOLERANCE_PX / ctx.view.scale;
 
   const kind = TOOL_KIND[ctx.tool];
-  if (kind) {
-    // 線ツール: 1クリック目=始点、2クリック目=確定
+  if (kind || ctx.tool === "fold") {
+    // 線ツール・折るツール: 1クリック目=始点、2クリック目=確定
     const pos = snap(ctx.doc, world, snapRadius)?.pos ?? world;
-    if (ctx.state.pendingStart === null) {
+    const start = ctx.state.pendingStart;
+    if (start === null) {
       ctx.state.pendingStart = pos;
     } else {
-      if (dist(ctx.state.pendingStart, pos) > 1e-9) {
-        ctx.applyEdit({ type: "AddSegment", a: ctx.state.pendingStart, b: pos, kind });
+      if (dist(start, pos) > 1e-9) {
+        if (kind) {
+          ctx.applyEdit({ type: "AddSegment", a: start, b: pos, kind });
+        } else {
+          ctx.beginFoldDraft([start, pos], "2d");
+        }
       }
       ctx.state.pendingStart = null;
     }
@@ -204,8 +219,8 @@ export function onMouseMove(ctx: InteractionCtx, screen: Vec2): void {
     return;
   }
 
-  // 線ツールのスナップ候補表示
-  if (TOOL_KIND[ctx.tool]) {
+  // 線ツール・折るツールのスナップ候補表示
+  if (previewKind(ctx.tool)) {
     ctx.state.hoverSnap = snap(ctx.doc, world, SNAP_RADIUS_PX / ctx.view.scale);
   } else {
     ctx.state.hoverSnap = null;

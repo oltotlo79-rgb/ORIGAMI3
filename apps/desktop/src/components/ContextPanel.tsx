@@ -2,7 +2,7 @@
 // 警告・エラーの詳細もここに表示する(常設パネルを増やさない)。
 
 import { useEffect, useRef } from "react";
-import { isStepSkipped, useAppStore } from "../store/appStore";
+import { isStepSkipped, useAppStore, type FoldDraft } from "../store/appStore";
 import {
   TECHNIQUE_KINDS,
   TECHNIQUE_LABEL,
@@ -267,6 +267,95 @@ function StepContent({ number }: { number: number }) {
   );
 }
 
+/** 引いた折り線の確定UI(向き・対象の層・動かす側を決めて折る) */
+function FoldDraftContent({ draft }: { draft: FoldDraft }) {
+  const updateFoldDraft = useAppStore((s) => s.updateFoldDraft);
+  const cancelFoldDraft = useAppStore((s) => s.cancelFoldDraft);
+  const commitFoldDraft = useAppStore((s) => s.commitFoldDraft);
+  const [a, b] = draft.line;
+
+  return (
+    <div>
+      <p>
+        折り線: ({a[0].toFixed(3)}, {a[1].toFixed(3)}) →({b[0].toFixed(3)},{" "}
+        {b[1].toFixed(3)})
+      </p>
+      <div className="button-row">
+        <span>向き</span>
+        <label>
+          <input
+            type="radio"
+            name="fold-direction"
+            checked={draft.direction === "Up"}
+            onChange={() => updateFoldDraft({ direction: "Up" })}
+          />
+          手前へ折る(谷)
+        </label>
+        <label>
+          <input
+            type="radio"
+            name="fold-direction"
+            checked={draft.direction === "Down"}
+            onChange={() => updateFoldDraft({ direction: "Down" })}
+          />
+          向こうへ折る(山)
+        </label>
+        <span>対象の層</span>
+        <label>
+          <input
+            type="radio"
+            name="fold-target"
+            checked={draft.target === "all"}
+            onChange={() => updateFoldDraft({ target: "all" })}
+          />
+          全ての層
+        </label>
+        <label>
+          <input
+            type="radio"
+            name="fold-target"
+            checked={draft.target === "top"}
+            onChange={() => updateFoldDraft({ target: "top" })}
+          />
+          いちばん上の1枚
+        </label>
+      </div>
+      <div className="button-row">
+        <span>動かす側</span>
+        <label>
+          <input
+            type="radio"
+            name="fold-side"
+            checked={draft.movingSide === "left"}
+            onChange={() => updateFoldDraft({ movingSide: "left" })}
+          />
+          左側を動かす
+        </label>
+        <label>
+          <input
+            type="radio"
+            name="fold-side"
+            checked={draft.movingSide === "right"}
+            onChange={() => updateFoldDraft({ movingSide: "right" })}
+          />
+          右側を動かす
+        </label>
+        <span className="hint">
+          (折り線を引いた向きに対する左右。動く側は立体表示で黄色く光ります)
+        </span>
+      </div>
+      <div className="button-row">
+        <button type="button" onClick={() => void commitFoldDraft()}>
+          折る
+        </button>
+        <button type="button" onClick={() => cancelFoldDraft()}>
+          やめる
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function SelectionContent() {
   const doc = useAppStore((s) => s.doc);
   const selection = useAppStore((s) => s.selection);
@@ -339,6 +428,7 @@ export function ContextPanel() {
   const replayWarnings = useAppStore((s) => s.replayWarnings);
   const errorMessage = useAppStore((s) => s.errorMessage);
   const currentStep = useAppStore((s) => s.currentStep);
+  const foldDraft = useAppStore((s) => s.foldDraft);
   // 同じ文言は1回だけ出す(展開図の検査結果には自動再生の警告も合流している)
   const allWarnings = uniqueWarnings(warnings, poseWarnings, replayWarnings);
   // 手順を選んでいる間はその手順の設定を出す(「折る前」「最新」は選択なし扱い)
@@ -347,7 +437,9 @@ export function ContextPanel() {
   return (
     <footer className="context-panel">
       <div className="context-selection">
-        {stepSelected ? (
+        {foldDraft ? (
+          <FoldDraftContent draft={foldDraft} />
+        ) : stepSelected ? (
           <StepContent number={currentStep} />
         ) : (
           <>

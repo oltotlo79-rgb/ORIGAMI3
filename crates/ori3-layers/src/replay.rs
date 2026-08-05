@@ -38,11 +38,17 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use glam::DVec2;
 use ori3_cp::{Face, extract_faces};
+use ori3_geometry::Isometry2;
 use ori3_model::{Document, Driver, EdgeId, FaceId, Frame3D, StepId};
 
 use crate::flat_state::FlatState;
 use crate::fold_through::resolve_driver_edges;
+
+/// 平坦判定の許容誤差。ソルバーの表示精度(座標誤差 1e-6 程度)に合わせる。
+/// [`ori3_model::EPS`](1e-9)では厳しすぎて、正しく畳めた状態を弾いてしまう。
+const FLAT_EPS: f64 = 1e-6;
 
 /// [`replay`] の結果。
 #[derive(Clone, Debug, serde::Serialize)]
@@ -74,6 +80,103 @@ pub fn replay(doc: &Document, up_to: usize, t: f64) -> ReplayResult {
 /// (別のCP由来の面を渡すと結果は意味を持たない)。
 pub fn replay_with_faces(doc: &Document, faces: &[Face], up_to: usize, t: f64) -> ReplayResult {
     let up_to = up_to.min(doc.sequence.len());
+    let plan = plan_steps(doc, faces, up_to, t);
+    let mut warnings = plan.warnings;
+
+    let result = ori3_rigid::solve(&doc.cp, faces, &plan.drivers, None);
+    if !result.converged {
+        warnings.push(format!(
+            "手順{up_to}までの形が展開図から求まりませんでした(いちばん近い形で表示します)。一部の層だけを折る手順は、展開図からの折り直しでは正確に再現できないことがあります"
+        ));
+    }
+
+    let mut frame = result.frame;
+    let layer_of: HashMap<FaceId, u32> = plan
+        .order
+        .iter()
+        .enumerate()
+        .map(|(i, &id)| (id, u32::try_from(i).unwrap_or(u32::MAX)))
+        .collect();
+    for f in &mut frame.faces {
+        f.layer = layer_of.get(&f.face).copied().unwrap_or(0);
+    }
+
+    ReplayResult {
+        frame,
+        skipped: plan.skipped,
+        warnings,
+    }
+}
+
+/// 手順を `up_to` まで再生した結果が平坦(全ての面がz≈0の平面に乗る)なら、
+/// その平坦状態([`FlatState`])を返す。
+///
+/// 3D状態は保存しない設計なので、畳んだ状態の上に折る([`crate::fold_through`])ための
+/// 現在の平坦状態は手順から導出する。各面の3D姿勢(回転行列+並進)から
+/// xy平面内の等長変換を取り出す(回転角は線形部分の第1列の偏角、`mirrored`は
+/// xy成分の行列式が負かどうか、並進はxy成分)。層順序は手順の`layer_order`を
+/// [`FlatState::resolve_order`] で現在の面IDへ解決する(無ければ面ID昇順)。
+///
+/// 座標系は3D表示と同じ(根面=最小面IDの面が恒等変換)。畳んだ紙の上に画面から
+/// 引いた折り線をそのまま渡せる。連続した [`crate::fold_through`] が返す状態とは
+/// 全体の等長変換の分だけ違うことがある(根面が動く側にあった場合)。
+///
+/// 平坦でない(折り途中の角度が残る)場合はErrを返す。
+pub fn flat_state_at(doc: &Document, faces: &[Face], up_to: usize) -> Result<FlatState, String> {
+    let up_to = up_to.min(doc.sequence.len());
+    let plan = plan_steps(doc, faces, up_to, 1.0);
+    // 後から積んだ指定が優先(HashMapへの順次挿入で後勝ちになる)
+    let angles: HashMap<EdgeId, f64> = plan
+        .drivers
+        .iter()
+        .map(|d| (d.hinge, d.target_angle_deg))
+        .collect();
+    let folded = ori3_rigid::propagate(&doc.cp, faces, &angles);
+
+    let mut placements: HashMap<FaceId, Isometry2> = HashMap::with_capacity(faces.len());
+    for f in faces {
+        let (r, t) = folded
+            .transforms
+            .get(&f.id)
+            .ok_or_else(|| format!("面 {} の姿勢が求まりませんでした", f.id))?;
+        // 面が z=0 平面に乗るのは「線形部分がz成分を作らない」かつ「並進のzが0」のとき。
+        // 面上の点 (x, y) の高さは x_axis.z·x + y_axis.z·y + t.z で決まる。
+        if r.x_axis.z.abs() > FLAT_EPS || r.y_axis.z.abs() > FLAT_EPS || t.z.abs() > FLAT_EPS {
+            return Err(
+                "折り途中の状態では折れません。手順を完了した状態で折ってください".to_string(),
+            );
+        }
+        // xy成分の行列式が負なら裏返っている。回転角はどちらの場合も第1列の偏角
+        // (Isometry2は p' = R(θ)·M(mirrored)·p + t で、M は y の符号反転)。
+        let det = r.x_axis.x * r.y_axis.y - r.y_axis.x * r.x_axis.y;
+        placements.insert(
+            f.id,
+            Isometry2 {
+                rotation: r.x_axis.y.atan2(r.x_axis.x).rem_euclid(std::f64::consts::TAU),
+                translation: DVec2::new(t.x, t.y),
+                mirrored: det < 0.0,
+            },
+        );
+    }
+    Ok(FlatState {
+        placements,
+        order: plan.order,
+    })
+}
+
+/// `up_to` ステップまでの角度指定・層順序・警告(replayとflat_state_atの共通処理)。
+struct StepPlan {
+    /// 全ヒンジの角度指定(未駆動のヒンジは0°で明示的に固定済み)
+    drivers: Vec<Driver>,
+    /// 層順序(下→上)
+    order: Vec<FaceId>,
+    skipped: Vec<StepId>,
+    warnings: Vec<String>,
+}
+
+/// 手順を順に読み、角度指定と層順序を積み上げる。`up_to` は `doc.sequence` の
+/// 範囲に収まっていること(呼び出し側で丸める)。
+fn plan_steps(doc: &Document, faces: &[Face], up_to: usize, t: f64) -> StepPlan {
     let t = if t.is_finite() {
         t.clamp(0.0, 1.0)
     } else {
@@ -146,25 +249,9 @@ pub fn replay_with_faces(doc: &Document, faces: &[Face], up_to: usize, t: f64) -
         .collect();
     all.extend(drivers);
 
-    let result = ori3_rigid::solve(&doc.cp, faces, &all, None);
-    if !result.converged {
-        warnings.push(format!(
-            "手順{up_to}までの形が展開図から求まりませんでした(いちばん近い形で表示します)。一部の層だけを折る手順は、展開図からの折り直しでは正確に再現できないことがあります"
-        ));
-    }
-
-    let mut frame = result.frame;
-    let layer_of: HashMap<FaceId, u32> = order
-        .iter()
-        .enumerate()
-        .map(|(i, &id)| (id, u32::try_from(i).unwrap_or(u32::MAX)))
-        .collect();
-    for f in &mut frame.faces {
-        f.layer = layer_of.get(&f.face).copied().unwrap_or(0);
-    }
-
-    ReplayResult {
-        frame,
+    StepPlan {
+        drivers: all,
+        order,
         skipped,
         warnings,
     }

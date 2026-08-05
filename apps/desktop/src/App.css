@@ -217,6 +217,18 @@ body,
   background: #d43c3c;
 }
 
+/* 3D区画の案内(折るツールが使えないときなど)。警告バッジと重ならないよう1段下 */
+.viewer-notice {
+  position: absolute;
+  top: 36px;
+  right: 8px;
+  padding: 3px 10px;
+  border-radius: 10px;
+  background: rgba(40, 40, 48, 0.82);
+  color: #fff;
+  font-size: 12px;
+}
+
 /* 下部コンテキストパネル */
 .context-panel {
   display: flex;

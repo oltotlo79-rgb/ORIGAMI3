@@ -3,9 +3,10 @@
 use std::time::{Duration, Instant};
 
 use ori3_cp::extract_faces;
+use ori3_geometry::Isometry2;
 use ori3_layers::flat_state::FlatState;
 use ori3_layers::fold_through::{FoldDirection, FoldThroughInput, fold_through};
-use ori3_layers::replay::{ReplayResult, replay};
+use ori3_layers::replay::{ReplayResult, flat_state_at, replay};
 use ori3_layers::resolve_driver_edges;
 use ori3_model::{
     CreasePattern, Document, DriverLine, Edge, EdgeId, EdgeKind, FoldStep, Frame3D, Paper,
@@ -36,6 +37,11 @@ fn three_step_document() -> Document {
 }
 
 fn folded_document(steps: usize) -> Document {
+    folded_document_with_state(steps).0
+}
+
+/// `folded_document` と同じ手順を折り、折り終えた平坦状態も返す。
+fn folded_document_with_state(steps: usize) -> (Document, FlatState) {
     let mut doc = Document::new(Paper {
         width_mm: 100.0,
         height_mm: 100.0,
@@ -62,7 +68,7 @@ fn folded_document(steps: usize) -> Document {
         doc.sequence.push(step);
     }
     assert_eq!(doc.sequence.len(), steps);
-    doc
+    (doc, state)
 }
 
 /// Frame3Dをビット列へ落とす(浮動小数の完全一致を確かめるため)。
@@ -494,4 +500,139 @@ fn accordion_cp(strips: usize) -> CreasePattern {
         vertices,
         edges,
     }
+}
+
+// ---------------------------------------------------------------------------
+// flat_state_at(手順から現在の平坦状態を導出する)
+// ---------------------------------------------------------------------------
+
+/// 手順を折り重ねた文書から導出した平坦状態が、fold_throughが返した状態と
+/// (根面を恒等に揃えれば)一致する。1〜4手順(裏返った層を含む)で確かめる。
+///
+/// 導出は3D表示と同じ座標系なので、根面(最小面ID)が恒等変換になる。
+/// fold_throughの状態で根面が動いていた場合は、その分だけ全体がずれる。
+#[test]
+fn flat_state_at_matches_fold_through_state() {
+    for steps in 1..=4usize {
+        let (doc, expected) = folded_document_with_state(steps);
+        let faces = extract_faces(&doc.cp);
+        let state = flat_state_at(&doc, &faces, steps).expect("平坦なのでErrにならない");
+
+        assert_eq!(state.order, expected.order, "{steps}手順目の層順序");
+        assert_eq!(
+            state.placements.len(),
+            expected.placements.len(),
+            "{steps}手順目の面数"
+        );
+        assert!(
+            expected.placements.values().any(|p| p.mirrored),
+            "{steps}手順目には裏返った層がある"
+        );
+        let root = *expected.order.iter().min().expect("面がある");
+        assert!(
+            state.placements[&root].approx_eq(&Isometry2::identity(), 1e-12),
+            "{steps}手順目: 根面(最小面ID)は恒等変換"
+        );
+        let g = expected.placements[&root].inverse();
+        for (id, want) in &expected.placements {
+            let want = g.compose(want);
+            let got = state.placements.get(id).expect("同じ面IDが揃う");
+            assert!(
+                got.approx_eq(&want, 1e-9),
+                "{steps}手順目の面{id}の配置が違う: got={got:?}, want={want:?}"
+            );
+        }
+    }
+}
+
+/// 動かさない側に根面(最小面ID)がある折り方では、fold_throughの状態と完全に一致する
+/// (全体のずれが生じない)。
+#[test]
+fn flat_state_at_matches_exactly_when_root_face_is_kept() {
+    // 面0は右半分になるので、右を残して折ると根面は動かない
+    let mut doc = Document::new(Paper {
+        width_mm: 100.0,
+        height_mm: 100.0,
+    });
+    let faces = extract_faces(&doc.cp);
+    let initial = FlatState::initial(&doc.cp, &faces);
+    let res = fold_through(
+        &mut doc.cp,
+        &faces,
+        &initial,
+        &FoldThroughInput {
+            line: [[0.5, 0.0], [0.5, 1.0]],
+            keep_side_point: [0.75, 0.5],
+            target_layers: None,
+            direction: FoldDirection::Up,
+        },
+    )
+    .expect("半分折りは成功する");
+    let mut step = res.step;
+    step.id = 0;
+    doc.sequence.push(step);
+
+    let faces = extract_faces(&doc.cp);
+    let state = flat_state_at(&doc, &faces, 1).expect("平坦なのでErrにならない");
+    let root = *state.order.iter().min().expect("面がある");
+    assert!(
+        res.state.placements[&root].approx_eq(&Isometry2::identity(), 1e-12),
+        "この折り方では根面は動かない"
+    );
+    assert_eq!(state.order, res.state.order);
+    for (id, want) in &res.state.placements {
+        assert!(
+            state.placements[id].approx_eq(want, 1e-9),
+            "面{id}の配置が違う: got={:?}, want={want:?}",
+            state.placements[id]
+        );
+    }
+}
+
+/// 折り途中(平坦でない)状態からは折れない。
+#[test]
+fn flat_state_at_rejects_unfolded_state() {
+    let (mut doc, _) = folded_document_with_state(1);
+    // 目標角を±180°から90°へ書き換えると、再生しても平らにならない
+    for d in &mut doc.sequence[0].drivers {
+        d.target_angle_deg = 90.0;
+    }
+    let faces = extract_faces(&doc.cp);
+    let err = flat_state_at(&doc, &faces, 1).unwrap_err();
+    assert!(err.contains("折り途中"), "err={err}");
+
+    // 手順0(まだ折っていない平らな紙)は平坦状態として扱える
+    let state = flat_state_at(&doc, &faces, 0).expect("平らな紙は平坦");
+    assert!(
+        state
+            .placements
+            .values()
+            .all(|p| p.approx_eq(&Isometry2::identity(), 1e-12)),
+        "折る前は全ての面が恒等変換"
+    );
+}
+
+/// 導出した平坦状態の上に、さらに折り操作を重ねられる。
+#[test]
+fn flat_state_at_feeds_next_fold_through() {
+    let (mut doc, _) = folded_document_with_state(2);
+    let faces = extract_faces(&doc.cp);
+    let state = flat_state_at(&doc, &faces, 2).expect("平坦");
+    let before_edges = doc.cp.edges.len();
+    let res = fold_through(
+        &mut doc.cp,
+        &faces,
+        &state,
+        &FoldThroughInput {
+            line: [[0.25, 0.0], [0.25, 0.5]],
+            keep_side_point: [0.1, 0.25],
+            target_layers: None,
+            direction: FoldDirection::Up,
+        },
+    )
+    .expect("畳んだ状態の上に折れる");
+    assert!(doc.cp.edges.len() > before_edges, "展開図に折り線が増える");
+    assert!(!res.step.drivers.is_empty(), "手順に折り線が記録される");
+    // 4層すべてを折るので、折り上がりは8層
+    assert_eq!(res.state.order.len(), 8);
 }

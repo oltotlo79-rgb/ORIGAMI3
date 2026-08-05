@@ -214,6 +214,7 @@ impl DocumentStore {
     /// 折り手順操作を適用する。実際に変更が起きた場合のみundo履歴に積む。
     pub fn apply_seq(&mut self, op: SeqOp) -> Result<DocumentView, String> {
         let mut doc = self.doc.clone();
+        let mut warnings: Vec<String> = Vec::new();
         match op {
             SeqOp::PushStep { step } => doc.sequence.push(step),
             SeqOp::InsertStep { index, step } => {
@@ -235,8 +236,42 @@ impl DocumentStore {
                 };
                 *slot = step;
             }
+            SeqOp::FoldThrough {
+                up_to,
+                line,
+                keep_side_point,
+                target_layers,
+                direction,
+            } => {
+                // v1は末尾への追加のみ。途中へ挟むと後続手順の再生が壊れ得る
+                if up_to != doc.sequence.len() {
+                    return Err(
+                        "手順の途中には折り操作を挿入できません。最新の状態に戻してから折ってください"
+                            .to_string(),
+                    );
+                }
+                // facesは現docから導出済みのキャッシュ(docはまだ複製したまま無変更)
+                let state = ori3_layers::flat_state_at(&doc, &self.faces, up_to)?;
+                let mut cp = doc.cp.clone();
+                let result = ori3_layers::fold_through(
+                    &mut cp,
+                    &self.faces,
+                    &state,
+                    &ori3_layers::FoldThroughInput {
+                        line,
+                        keep_side_point,
+                        target_layers,
+                        direction,
+                    },
+                )?;
+                let mut step = result.step;
+                step.id = next_step_id(&doc);
+                doc.cp = cp;
+                doc.sequence.push(step);
+                warnings = result.warnings;
+            }
         }
-        Ok(self.commit(doc, Vec::new()))
+        Ok(self.commit(doc, warnings))
     }
 
     /// 直前の変更を取り消す。
@@ -357,6 +392,15 @@ fn check_paper(paper: &Paper) -> Result<(), String> {
     } else {
         Err("紙のサイズは正の値で指定してください".to_string())
     }
+}
+
+/// 新しい手順に振るID(既存の最大+1)。手順を消しても再利用しない。
+fn next_step_id(doc: &Document) -> StepId {
+    doc.sequence
+        .iter()
+        .map(|s| s.id)
+        .max()
+        .map_or(0, |m| m.saturating_add(1))
 }
 
 fn is_border(cp: &CreasePattern, id: u32) -> bool {
@@ -843,6 +887,184 @@ mod tests {
             view.warnings
         );
         assert!(view.frame.is_some(), "飛ばしても平らな立体は返す");
+    }
+
+    /// 畳んだ状態への折り操作(SeqOp::FoldThrough)で、展開図・手順・層が更新される。
+    /// 2回目は1回目の結果(畳み平面)の上に折る。
+    #[test]
+    fn fold_through_updates_cp_sequence_and_layers() {
+        let mut store = square_store();
+        let view = store
+            .apply_seq(fold_op(0, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5]))
+            .unwrap();
+
+        // 展開図に谷折り線が1本増え、面が2つに分かれる
+        // (横切られた輪郭線2本も分割されるので、辺の総数は4→7)
+        assert_eq!(view.doc.cp.edges.len(), 7);
+        assert_eq!(
+            view.doc
+                .cp
+                .edges
+                .iter()
+                .filter(|e| e.kind == EdgeKind::Valley)
+                .count(),
+            1
+        );
+        assert_eq!(view.faces.len(), 2);
+        // 手順が1つ増え、折り線と層順序が記録されている
+        assert_eq!(view.doc.sequence.len(), 1);
+        let step = &view.doc.sequence[0];
+        assert_eq!(step.id, 0);
+        assert_eq!(step.kind, TechniqueKind::Simple);
+        assert!(!step.drivers.is_empty());
+        assert_eq!(step.layer_order.as_ref().map(Vec::len), Some(2));
+
+        // 2回目: 畳んだ紙(半分の大きさ)を横線で折ると4層になる
+        let mut view = store
+            .apply_seq(fold_op(1, [[0.0, 0.5], [1.0, 0.5]], [0.5, 0.25]))
+            .unwrap();
+        assert_eq!(view.doc.sequence.len(), 2);
+        assert_eq!(view.doc.sequence[1].id, 1, "手順IDは既存の最大+1");
+        assert_eq!(view.faces.len(), 4);
+        attach_replay(&mut view);
+        let frame = view.frame.clone().expect("手順があるので立体が返る");
+        let mut layers: Vec<u32> = frame.faces.iter().map(|f| f.layer).collect();
+        layers.sort_unstable();
+        assert_eq!(layers, vec![0, 1, 2, 3]);
+        assert!(view.skipped.is_empty(), "warnings={:?}", view.warnings);
+
+        // undoで折る前(手順1つ・面2つ)へ戻る
+        let view = store.undo().unwrap();
+        assert_eq!(view.doc.sequence.len(), 1);
+        assert_eq!(view.faces.len(), 2);
+    }
+
+    /// 末尾以外(手順の途中)への折り操作は断る。
+    #[test]
+    fn fold_through_rejects_insertion_in_the_middle() {
+        let mut store = square_store();
+        store
+            .apply_seq(fold_op(0, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5]))
+            .unwrap();
+        let before = store.doc.clone();
+
+        let err = store
+            .apply_seq(fold_op(0, [[0.0, 0.5], [1.0, 0.5]], [0.5, 0.25]))
+            .unwrap_err();
+        assert!(err.contains("手順の途中には"), "err={err}");
+        assert_eq!(store.doc, before, "Errのとき文書は変わらない");
+    }
+
+    /// 折れない指定(どの層も横切らない線)は理由を返し、展開図も手順も変えない。
+    #[test]
+    fn fold_through_failure_leaves_document_unchanged() {
+        let mut store = square_store();
+        let before = store.doc.clone();
+        let err = store
+            .apply_seq(fold_op(0, [[2.0, 0.0], [2.0, 1.0]], [1.5, 0.5]))
+            .unwrap_err();
+        assert!(err.contains("折り線"), "err={err}");
+        assert_eq!(store.doc, before);
+        assert!(store.undo_stack.is_empty(), "Errはundo履歴に積まれない");
+    }
+
+    /// 受け入れ確認(Task 2-5): 座布団折り(4隅を中心へ)→観音折り(左右を中心線へ)を
+    /// 画面の折り操作(SeqOp::FoldThrough)だけで作れる。
+    /// 折り線は画面に見えている外形(立体表示の外接矩形)から決める=画面で線を引くのと同じ。
+    #[test]
+    fn cushion_then_cupboard_fold_only_with_fold_through() {
+        let mut store = square_store();
+
+        // 座布団折り: 隣り合う辺の中点を結ぶ線で4隅を中心へ折る(いずれも谷=手前へ)
+        for k in 0..4 {
+            let ([x0, y0], [x1, y1]) = outline_bbox(&store);
+            let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+            let mids = [[cx, y0], [x1, cy], [cx, y1], [x0, cy]];
+            let line = [mids[k], mids[(k + 1) % 4]];
+            let view = store
+                .apply_seq(fold_op(store.doc.sequence.len(), line, [cx, cy]))
+                .unwrap_or_else(|e| panic!("座布団折り{}回目が折れない: {e}", k + 1));
+            assert!(
+                view.warnings.iter().all(|w| !w.contains("裂けます")),
+                "座布団折り{}回目の警告: {:?}",
+                k + 1,
+                view.warnings
+            );
+        }
+        assert_eq!(store.doc.sequence.len(), 4);
+        // 外形は辺の中点を結ぶ正方形(対角線=1.0)になる
+        let ([x0, y0], [x1, y1]) = outline_bbox(&store);
+        assert!((x1 - x0 - 1.0).abs() < 1e-6 && (y1 - y0 - 1.0).abs() < 1e-6);
+        assert_eq!(layer_count(&store), 5, "中央1枚+4隅のフラップ");
+
+        // 観音折り: 左右を中心の縦線へ折る(全ての層をまとめて折る)
+        let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+        let quarter = (x1 - x0) / 4.0;
+        for dx in [-quarter, quarter] {
+            let x = cx + dx;
+            store
+                .apply_seq(fold_op(
+                    store.doc.sequence.len(),
+                    [[x, y0], [x, y1]],
+                    [cx, cy],
+                ))
+                .unwrap_or_else(|e| panic!("観音折り(x={x})が折れない: {e}"));
+        }
+        assert_eq!(store.doc.sequence.len(), 6);
+        // 幅は半分になり、紙は平らに畳まれたまま
+        let ([nx0, _], [nx1, _]) = outline_bbox(&store);
+        assert!(
+            (nx1 - nx0 - 0.5).abs() < 1e-6,
+            "観音折り後の横幅={}",
+            nx1 - nx0
+        );
+        // 手順を最初から再生し直しても同じ形になる(3D状態を保存しない設計の確認)
+        let replayed = ori3_layers::replay(&store.doc, 6, 1.0);
+        assert!(
+            replayed.skipped.is_empty(),
+            "警告={:?}",
+            replayed.warnings
+        );
+        assert!(replayed.warnings.is_empty(), "警告={:?}", replayed.warnings);
+        assert!(
+            replayed
+                .frame
+                .faces
+                .iter()
+                .all(|f| f.polygon.iter().all(|p| p[2].abs() < 1e-6)),
+            "折り上がりは平ら"
+        );
+    }
+
+    /// 現在の手順まで折った立体の外接矩形(x,y)。画面に見えている外形にあたる。
+    fn outline_bbox(store: &DocumentStore) -> ([f64; 2], [f64; 2]) {
+        let frame = ori3_layers::replay(&store.doc, store.doc.sequence.len(), 1.0).frame;
+        let mut lo = [f64::MAX; 2];
+        let mut hi = [f64::MIN; 2];
+        for f in &frame.faces {
+            for p in &f.polygon {
+                for i in 0..2 {
+                    lo[i] = lo[i].min(p[i]);
+                    hi[i] = hi[i].max(p[i]);
+                }
+            }
+        }
+        (lo, hi)
+    }
+
+    /// 重なりの枚数(層の数)。
+    fn layer_count(store: &DocumentStore) -> usize {
+        ori3_cp::extract_faces(&store.doc.cp).len()
+    }
+
+    fn fold_op(up_to: usize, line: [[f64; 2]; 2], keep_side_point: [f64; 2]) -> SeqOp {
+        SeqOp::FoldThrough {
+            up_to,
+            line,
+            keep_side_point,
+            target_layers: None,
+            direction: ori3_model::FoldDirection::Up,
+        }
     }
 
     #[test]

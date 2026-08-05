@@ -94,6 +94,18 @@ pub struct FoldStep {
     pub note: String,
 }
 
+/// 折る向き(畳んだ状態の上に折り線を引いてまとめて折るときの向き)。
+///
+/// 折り操作の実装は `ori3-layers` にあるが、手順操作([`SeqOp::FoldThrough`])の
+/// 引数として画面から送られてくるため、serde対応の型定義はここに置く。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum FoldDirection {
+    /// 動く側の層を反転して山の一番上に載せる(紙の表から見て谷折りに相当)。
+    Up,
+    /// 動く側の層を反転して山の一番下に入れる(山折りに相当)。
+    Down,
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DisplaySettings {
     pub front_color: [u8; 3],
@@ -208,10 +220,34 @@ pub enum EditOp {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type")]
 pub enum SeqOp {
-    PushStep { step: FoldStep },
-    InsertStep { index: usize, step: FoldStep },
-    RemoveStep { id: StepId },
-    UpdateStep { step: FoldStep },
+    PushStep {
+        step: FoldStep,
+    },
+    InsertStep {
+        index: usize,
+        step: FoldStep,
+    },
+    RemoveStep {
+        id: StepId,
+    },
+    UpdateStep {
+        step: FoldStep,
+    },
+    /// 畳んだ状態の上に折り線を引いてまとめて折る(3D画面・展開図画面のどちらからも使う)。
+    ///
+    /// 座標は全て「畳んだ平面座標」(手順を `up_to` まで再生した3D表示の座標系)。
+    /// 折り線はCPへ引き戻して追記され、生成された手順が末尾に足される。
+    FoldThrough {
+        /// この折りの直前までの手順数(通常は現在の手順数)
+        up_to: usize,
+        /// 折り線(2点。無限直線として扱う)
+        line: [[f64; 2]; 2],
+        /// 動かさない側を示す点
+        keep_side_point: [f64; 2],
+        /// 折る対象の層。None = 折り線の可動側に掛かる全ての層
+        target_layers: Option<Vec<FaceId>>,
+        direction: FoldDirection,
+    },
 }
 
 /// 3D表示用フレーム(IPC戻り値)

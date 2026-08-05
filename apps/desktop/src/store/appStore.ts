@@ -9,15 +9,22 @@ import * as ipc from "../ipc/client";
 import { createSerialQueue } from "./ipcQueue";
 import { hingeEdgeIds } from "../lib/hinges";
 import { advancePlayback, startPlayback } from "../lib/playback";
+import {
+  foldLayers,
+  keepSidePoint,
+  topMovingFace,
+} from "../components/Viewer3D/foldDraw";
 import type {
   Document,
   DocumentView,
   Driver,
   EditOp,
   Face,
+  FoldDirection,
   Frame3D,
   Paper,
   SeqOp,
+  Vec2,
 } from "../lib/types";
 
 /** ヒンジ角の連続操作(スライダー)を間引く間隔(ms) */
@@ -26,12 +33,48 @@ const POSE_THROTTLE_MS = 60;
 /** 画面更新の仕組みが無い環境(テスト)で1コマを送る間隔(ms) */
 const FALLBACK_FRAME_MS = 16;
 
-export type ToolId = "select" | "mountain" | "valley" | "aux" | "delete";
+export type ToolId =
+  | "select"
+  | "mountain"
+  | "valley"
+  | "aux"
+  | "delete"
+  | "fold";
 
 /** 選択中の線・頂点(ID)。DOMのSelectionと紛れないよう注意 */
 export interface Selection {
   edgeIds: number[];
   vertexIds: number[];
+}
+
+/** 折る対象の層: 全ての層 / いちばん上の1枚 */
+export type FoldTarget = "all" | "top";
+
+/** 引いた折り線と、確定前の設定(コンテキストパネルで変える) */
+export interface FoldDraft {
+  /** 折り線(畳み平面座標=3D表示のxy)。始点→終点の向きが左右の基準になる */
+  line: [Vec2, Vec2];
+  /** 折る向き(Up=手前へ折る/谷、Down=向こうへ折る/山) */
+  direction: FoldDirection;
+  target: FoldTarget;
+  /** 折り線のどちら側を動かすか(線の進行方向に対する左右) */
+  movingSide: "left" | "right";
+}
+
+/**
+ * 折る操作ができる状態か(平らに畳んだ状態を表示しているか)。
+ * 折り途中の手順・再生中・角度スライダーでの変形中は、画面の形と
+ * 畳み平面の座標が食い違うので折れない。
+ */
+export function canFoldNow(s: {
+  doc: Document | null;
+  currentStep: number | null;
+  playT: number;
+  playing: boolean;
+  drivers: Map<number, number>;
+}): boolean {
+  if (!s.doc || s.playing || s.playT !== 1 || s.drivers.size > 0) return false;
+  return s.currentStep === null || s.currentStep === s.doc.sequence.length;
 }
 
 interface AppState {
@@ -41,6 +84,8 @@ interface AppState {
   violations: number[];
   selection: Selection;
   activeTool: ToolId;
+  /** 引いたばかりの折り線と確定前の設定。nullなら折り線を引いていない */
+  foldDraft: FoldDraft | null;
   /** 3D表示フレーム。nullなら平ら(展開図から直接描く) */
   frame3d: Frame3D | null;
   /** 折り角度を指定できる辺(ヒンジ)のID集合。doc/faces更新時に1度だけ導出する */
@@ -88,6 +133,14 @@ interface AppState {
   togglePlay: () => void;
   setTool: (tool: ToolId) => void;
   setSelection: (selection: Selection) => void;
+  /** 引いた折り線を確定前の状態として置く(source="2d"は手順がある間は断る) */
+  beginFoldDraft: (line: [Vec2, Vec2], source: "2d" | "3d") => void;
+  /** 確定前の折りの設定(向き・対象層・動かす側)を変える */
+  updateFoldDraft: (patch: Partial<FoldDraft>) => void;
+  /** 引いた折り線を捨てる */
+  cancelFoldDraft: () => void;
+  /** 引いた折り線で実際に折る(sequence_apply FoldThrough)。成功したら折り線を捨てる */
+  commitFoldDraft: () => Promise<void>;
   /** ヒンジの折り角度を指定する(60ms間引きで追従計算を呼ぶ) */
   setDriverAngle: (hinge: number, deg: number) => void;
   /** 1本の角度指定を解除する(形は残りの指定から計算し直す) */
@@ -225,6 +278,7 @@ export const useAppStore = create<AppState>((set, get) => {
           playT: 1,
           replaySkipped: [],
           replayWarnings: [],
+          foldDraft: null,
         });
       }
       if (r.value.doc.sequence.length > 0) {
@@ -394,6 +448,7 @@ export const useAppStore = create<AppState>((set, get) => {
     violations: [],
     selection: EMPTY_SELECTION,
     activeTool: "select",
+    foldDraft: null,
     frame3d: null,
     currentStep: null,
     playT: 1,
@@ -489,13 +544,74 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     setTool: (tool) => {
-      // ツール切替時は選択を保つ必要がないので解除する
+      // ツール切替時は選択を保つ必要がないので解除する。
+      // 引きかけの折り線も、別のツールへ移った時点で意味を失うので捨てる
       if (get().activeTool !== tool) {
-        set({ activeTool: tool, selection: EMPTY_SELECTION });
+        set({ activeTool: tool, selection: EMPTY_SELECTION, foldDraft: null });
       }
     },
 
     setSelection: (selection) => set({ selection }),
+
+    beginFoldDraft: (line, source) => {
+      const s = get();
+      if (!s.doc) return;
+      // 展開図の座標と畳み平面の座標が一致するのは1回も折っていないときだけ
+      if (source === "2d" && s.doc.sequence.length > 0) {
+        set({
+          errorMessage:
+            "折る操作は3D画面から行ってください(展開図の位置と畳んだ紙の位置が食い違うため)",
+        });
+        return;
+      }
+      set({
+        foldDraft: {
+          line,
+          direction: "Up",
+          target: "all",
+          movingSide: "right",
+        },
+        errorMessage: null,
+      });
+    },
+
+    updateFoldDraft: (patch) => {
+      const draft = get().foldDraft;
+      if (draft) set({ foldDraft: { ...draft, ...patch } });
+    },
+
+    cancelFoldDraft: () => {
+      if (get().foldDraft) set({ foldDraft: null });
+    },
+
+    commitFoldDraft: async () => {
+      const s = get();
+      const draft = s.foldDraft;
+      if (!draft || !s.doc) return;
+      const keep = keepSidePoint(draft.line, draft.movingSide);
+      let targetLayers: number[] | null = null;
+      if (draft.target === "top") {
+        const layers = foldLayers(s.frame3d, s.doc, s.faces);
+        const top = topMovingFace(layers, draft.line, keep);
+        if (top === null) {
+          set({ errorMessage: "折り線の動く側に紙がありません" });
+          return;
+        }
+        targetLayers = [top];
+      }
+      // 折った結果(最新の状態)を見せる。途中の手順を選んだままだと折る前の形が残る
+      set({ currentStep: null });
+      await get().applySequenceOp({
+        type: "FoldThrough",
+        up_to: s.doc.sequence.length,
+        line: draft.line,
+        keep_side_point: keep,
+        target_layers: targetLayers,
+        direction: draft.direction,
+      });
+      // 失敗したときは設定を変えてやり直せるよう、折り線を残す
+      if (get().errorMessage === null) set({ foldDraft: null });
+    },
 
     setDriverAngle: (hinge, deg) => {
       // 画面の反応を優先し、指定はその場で反映してから計算を間引いて依頼する
