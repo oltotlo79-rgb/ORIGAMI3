@@ -8,6 +8,7 @@ import { create } from "zustand";
 import * as ipc from "../ipc/client";
 import { createSerialQueue } from "./ipcQueue";
 import { hingeEdgeIds } from "../lib/hinges";
+import { advancePlayback, startPlayback } from "../lib/playback";
 import type {
   Document,
   DocumentView,
@@ -16,10 +17,14 @@ import type {
   Face,
   Frame3D,
   Paper,
+  SeqOp,
 } from "../lib/types";
 
 /** ヒンジ角の連続操作(スライダー)を間引く間隔(ms) */
 const POSE_THROTTLE_MS = 60;
+
+/** 画面更新の仕組みが無い環境(テスト)で1コマを送る間隔(ms) */
+const FALLBACK_FRAME_MS = 16;
 
 export type ToolId = "select" | "mountain" | "valley" | "aux" | "delete";
 
@@ -40,8 +45,16 @@ interface AppState {
   frame3d: Frame3D | null;
   /** 折り角度を指定できる辺(ヒンジ)のID集合。doc/faces更新時に1度だけ導出する */
   hinges: ReadonlySet<number>;
-  /** 表示中の折り手順番号(Task 1-9以降で使用) */
+  /** 表示中の折り手順番号(1始まり。0は折る前、nullは全手順を折った最新の状態) */
   currentStep: number | null;
+  /** 表示中の手順の進み具合(0..1)。再生アニメーションの途中経過 */
+  playT: number;
+  /** 手順を自動再生中か */
+  playing: boolean;
+  /** 再生で飛ばされた手順のID(タイムラインの赤表示に使う) */
+  skipped: number[];
+  /** 手順再生からの警告(飛ばした理由など)。展開図・追従計算の警告とは別に持つ */
+  replayWarnings: string[];
   errorMessage: string | null;
   /** 作品の世代番号。新規/開くの成功で増える(エディタの表示リセット合図) */
   docEpoch: number;
@@ -60,6 +73,14 @@ interface AppState {
   applyEdit: (op: EditOp) => Promise<void>;
   undo: () => Promise<void>;
   redo: () => Promise<void>;
+  /** 手順の追加・変更・削除(sequence_apply)。再生中なら止めてから送る */
+  applySequenceOp: (op: SeqOp) => Promise<void>;
+  /** 表示する手順を選ぶ(0=折る前、null=最新)。再生中なら止める */
+  selectStep: (step: number | null) => void;
+  /** 表示する手順を前後に動かす(コマ送り) */
+  stepBy: (delta: number) => void;
+  /** 再生と一時停止を切り替える */
+  togglePlay: () => void;
   setTool: (tool: ToolId) => void;
   setSelection: (selection: Selection) => void;
   /** ヒンジの折り角度を指定する(60ms間引きで追従計算を呼ぶ) */
@@ -115,6 +136,13 @@ export function resetPoseThrottle(): void {
   resetThrottle();
 }
 
+/** 中身が同じなら前の配列を使い回す。再生中は毎コマ結果が届くので、
+ * 内容が変わらない限り同じ配列を返して画面の再描画を起こさない */
+function keepIfSame<T>(prev: T[], next: T[]): T[] {
+  const same = prev.length === next.length && prev.every((v, i) => v === next[i]);
+  return same ? prev : next;
+}
+
 /** ドキュメント更新後、存在しなくなったIDを選択から取り除く */
 function pruneSelection(selection: Selection, doc: Document): Selection {
   const edgeIds = new Set(doc.cp.edges.map((e) => e.id));
@@ -129,14 +157,21 @@ export const useAppStore = create<AppState>((set, get) => {
   const queue = createSerialQueue();
 
   /** DocumentViewの内容で状態を一括更新する(成功時共通処理)。
-   * isNewDocument=true(新規/開く)なら選択を解除しdocEpochを進める */
+   * isNewDocument=true(新規/開く)なら選択を解除しdocEpochを進める。
+   * 手順が減ったときは表示中の手順番号を手順数まで詰める */
   const applyView = (view: DocumentView, isNewDocument: boolean) => {
+    const total = view.doc.sequence.length;
     set((s) => ({
       doc: view.doc,
       faces: view.faces,
       hinges: hingeEdgeIds(view.doc, view.faces),
       warnings: view.warnings,
       violations: view.violations,
+      skipped: view.skipped,
+      currentStep:
+        total === 0 || s.currentStep === null
+          ? null
+          : Math.min(s.currentStep, total),
       selection: isNewDocument
         ? EMPTY_SELECTION
         : pruneSelection(s.selection, view.doc),
@@ -162,16 +197,23 @@ export const useAppStore = create<AppState>((set, get) => {
     if (r.ok) {
       applyView(r.value, isNewDocument);
       if (isNewDocument) {
-        // 別の作品になったので角度指定と立体形状は捨てる(平らから始める)
+        // 別の作品になったので角度指定・立体形状・再生位置は捨てる
+        stopPlayback();
         pose.reset();
         set({
           drivers: new Map(),
           poseAngles: new Map(),
           poseWarnings: [],
           poseConverged: true,
-          frame3d: null,
+          frame3d: r.value.frame,
+          currentStep: null,
+          playT: 1,
+          replayWarnings: [],
         });
-      } else {
+      }
+      if (r.value.doc.sequence.length > 0) {
+        await syncSequence(r.value);
+      } else if (!isNewDocument) {
         await syncPose();
       }
     } else if (r.isLatest) {
@@ -244,6 +286,86 @@ export const useAppStore = create<AppState>((set, get) => {
   });
   resetThrottle = pose.clearAll;
 
+  /** 手順の再生結果を3D表示へ反映する。
+   * coalesce=true(再生アニメーション)は「最新の形が出れば良い」ので
+   * 待ち行列に最新1件だけを置く(runLatest)。追い越された要求は実行されない */
+  const runReplay = async (
+    upTo: number,
+    t: number,
+    coalesce = false,
+  ): Promise<void> => {
+    const call = () => ipc.sequenceReplay(upTo, t);
+    const r = await (coalesce ? queue.runLatest(call) : queue.run(call));
+    if (r.ok) {
+      const s = get();
+      set({
+        frame3d: r.value.frame,
+        skipped: keepIfSame(s.skipped, r.value.skipped),
+        replayWarnings: keepIfSame(s.replayWarnings, r.value.warnings),
+      });
+    } else if (r.isLatest) {
+      // 再生できない状態のままでは毎コマ失敗するので、止めて理由を知らせる
+      stopPlayback();
+      fail(r.error);
+    }
+  };
+
+  /** 手順のある作品では、立体表示は手順の再生結果で表す(角度スライダーは
+   * 手順の無い作品の確認用)。
+   * 最新表示中(currentStep=null)はviewに自動再生の結果(立体・飛ばした手順・
+   * 警告はview.warningsへ合流済み)が載っているので、再生は呼ばない。
+   * 途中の手順を表示しているときだけ、その手順までを再生し直す */
+  const syncSequence = async (view: DocumentView): Promise<void> => {
+    // 表示中の手順番号はapplyViewで手順数まで詰めてある
+    const step = get().currentStep;
+    if (step === null) {
+      set({ frame3d: view.frame, replayWarnings: [] });
+      return;
+    }
+    await runReplay(step, 1, true);
+  };
+
+  /** 次のコマを予約し、取り消す手続きを返す。画面のある環境では画面更新に
+   * 合わせ、無い環境(テスト)ではタイマーで代用する */
+  const scheduleFrame = (cb: (ts: number) => void): (() => void) => {
+    if (typeof requestAnimationFrame === "function") {
+      const id = requestAnimationFrame(cb);
+      return () => cancelAnimationFrame(id);
+    }
+    const timer = setTimeout(() => cb(Date.now()), FALLBACK_FRAME_MS);
+    return () => clearTimeout(timer);
+  };
+
+  /** 予約中のコマの取り消し手続き(nullなら予約していない) */
+  let cancelFrame: (() => void) | null = null;
+  /** 前のコマの時刻(0なら1コマ目。経過時間0として扱う) */
+  let lastTs = 0;
+
+  /** 再生を止める(予約中のコマも取り消す) */
+  const stopPlayback = (): void => {
+    cancelFrame?.();
+    cancelFrame = null;
+    if (get().playing) set({ playing: false });
+  };
+
+  /** 再生の1コマ。進み具合を計算し、その時点の形を(最新1件だけの)要求で描く */
+  const tick = (ts: number): void => {
+    cancelFrame = null;
+    const s = get();
+    if (!s.playing) return;
+    const total = s.doc?.sequence.length ?? 0;
+    const dt = lastTs === 0 ? 0 : ts - lastTs;
+    lastTs = ts;
+    const next = advancePlayback(
+      { step: s.currentStep ?? 0, t: s.playT, playing: true },
+      dt,
+      total,
+    );
+    set({ currentStep: next.step, playT: next.t, playing: next.playing });
+    void runReplay(next.step, next.t, true);
+    if (next.playing) cancelFrame = scheduleFrame(tick);
+  };
+
   return {
     doc: null,
     faces: [],
@@ -254,6 +376,10 @@ export const useAppStore = create<AppState>((set, get) => {
     activeTool: "select",
     frame3d: null,
     currentStep: null,
+    playT: 1,
+    playing: false,
+    skipped: [],
+    replayWarnings: [],
     errorMessage: null,
     docEpoch: 0,
     drivers: new Map(),
@@ -281,6 +407,49 @@ export const useAppStore = create<AppState>((set, get) => {
     undo: () => runViewCommand(() => ipc.editUndo(), false),
 
     redo: () => runViewCommand(() => ipc.editRedo(), false),
+
+    applySequenceOp: (op) => {
+      // 手順が入れ替わると再生位置の意味が変わるので、先に止める
+      stopPlayback();
+      return runViewCommand(() => ipc.sequenceApply(op), false);
+    },
+
+    selectStep: (step) => {
+      stopPlayback();
+      const total = get().doc?.sequence.length ?? 0;
+      if (total === 0) {
+        set({ currentStep: null, playT: 1 });
+        return;
+      }
+      const upTo = step === null ? total : Math.max(0, Math.min(step, total));
+      set({ currentStep: step === null ? null : upTo, playT: 1 });
+      // 最新(null)の形も再生で作る(DocumentViewのframeと同じ内容になる)。
+      // 途中まで折った表示から戻すときに、必ず最新の形へ描き直すため
+      void runReplay(upTo, 1);
+    },
+
+    stepBy: (delta) => {
+      const s = get();
+      const total = s.doc?.sequence.length ?? 0;
+      if (total === 0) return;
+      // 最新表示(null)からのコマ送りは、最終手順を基準に数える
+      const from = s.currentStep ?? total;
+      s.selectStep(Math.max(0, Math.min(from + delta, total)));
+    },
+
+    togglePlay: () => {
+      const s = get();
+      if (s.playing) {
+        stopPlayback();
+        return;
+      }
+      const total = s.doc?.sequence.length ?? 0;
+      const next = startPlayback(s.currentStep, s.playT, total);
+      if (!next.playing) return;
+      set({ currentStep: next.step, playT: next.t, playing: true });
+      lastTs = 0; // 止めていた間の時間は進めない(1コマ目の経過時間は0)
+      cancelFrame = scheduleFrame(tick);
+    },
 
     setTool: (tool) => {
       // ツール切替時は選択を保つ必要がないので解除する

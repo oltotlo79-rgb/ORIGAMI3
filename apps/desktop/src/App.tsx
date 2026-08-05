@@ -1,4 +1,5 @@
 // 4区画レイアウト: 上部ツールバー / 左ツールレール / 中央(2D+3D) / 下部コンテキストパネル。
+// 手順タイムラインは3D区画の内側を上下に分けて置く(常設区画は増やさない)。
 // このファイルはレイアウト構成のみ(200行以内を維持)。
 
 import { useEffect, useRef } from "react";
@@ -8,6 +9,8 @@ import { ToolRail } from "./components/ToolRail";
 import { ContextPanel } from "./components/ContextPanel";
 import { CpEditor } from "./components/CpEditor/CpEditor";
 import { Viewer3D } from "./components/Viewer3D/Viewer3D";
+import { Timeline } from "./components/Timeline";
+import { uniqueWarnings } from "./lib/techniques";
 import "./App.css";
 
 const DEFAULT_PAPER = { width_mm: 150, height_mm: 150 };
@@ -20,7 +23,7 @@ function App() {
   const undo = useAppStore((s) => s.undo);
   const redo = useAppStore((s) => s.redo);
   const warningCount = useAppStore(
-    (s) => s.warnings.length + s.poseWarnings.length,
+    (s) => uniqueWarnings(s.warnings, s.poseWarnings, s.replayWarnings).length,
   );
   const poseConverged = useAppStore((s) => s.poseConverged);
   const hasError = useAppStore((s) => s.errorMessage !== null);
@@ -78,19 +81,22 @@ function App() {
           <CpEditor fitRef={fit2dRef} />
         </section>
         <section className="pane pane-3d">
-          <Viewer3D fitRef={fit3dRef} />
-          {(hasError || !poseConverged || warningCount > 0) && (
-            <div
-              className={hasError ? "status-badge error" : "status-badge"}
-              title="詳細は下のパネルに表示されます"
-            >
-              {hasError
-                ? "エラー"
-                : poseConverged
-                  ? `警告 ${warningCount}`
-                  : "⚠ 追従計算が収束していません"}
-            </div>
-          )}
+          <div className="pane-3d-view">
+            <Viewer3D fitRef={fit3dRef} />
+            {(hasError || !poseConverged || warningCount > 0) && (
+              <div
+                className={hasError ? "status-badge error" : "status-badge"}
+                title="詳細は下のパネルに表示されます"
+              >
+                {hasError
+                  ? "エラー"
+                  : poseConverged
+                    ? `警告 ${warningCount}`
+                    : "⚠ 追従計算が収束していません"}
+              </div>
+            )}
+          </div>
+          <Timeline />
         </section>
       </div>
       <ContextPanel />

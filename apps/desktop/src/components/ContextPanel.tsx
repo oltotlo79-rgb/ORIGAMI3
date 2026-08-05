@@ -3,7 +3,12 @@
 
 import { useEffect, useRef } from "react";
 import { useAppStore } from "../store/appStore";
-import type { EdgeKind } from "../lib/types";
+import {
+  TECHNIQUE_KINDS,
+  TECHNIQUE_LABEL,
+  uniqueWarnings,
+} from "../lib/techniques";
+import type { EdgeKind, FoldStep, TechniqueKind } from "../lib/types";
 
 const KIND_LABEL: Record<EdgeKind, string> = {
   Border: "輪郭",
@@ -156,6 +161,110 @@ function FoldControls() {
   );
 }
 
+/**
+ * 手順の注記の入力欄。書きかけの文字を打てるよう表示は制御せず(値をストアで
+ * 固定せず)、確定(Enter・入力欄から離れたとき)にストアへ送る。
+ * 表示専用の一時状態なのでrefで扱う(要件§2: 状態はストア1本)。
+ */
+function NoteInput({ step }: { step: FoldStep }) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  /** 利用者がこの入力欄を書き換えたか(未編集なら送らない) */
+  const editedRef = useRef(false);
+  const applySequenceOp = useAppStore((s) => s.applySequenceOp);
+
+  // 入力中でなければ、外からの変更(元に戻す等)に表示を追従させる
+  useEffect(() => {
+    const el = inputRef.current;
+    if (el && document.activeElement !== el) el.value = step.note;
+  }, [step.note]);
+
+  const commit = () => {
+    const el = inputRef.current;
+    if (!el || !editedRef.current) return;
+    editedRef.current = false;
+    if (el.value === step.note) return;
+    void applySequenceOp({
+      type: "UpdateStep",
+      step: { ...step, note: el.value },
+    });
+  };
+
+  return (
+    <input
+      ref={inputRef}
+      type="text"
+      className="note-input"
+      placeholder="この手順の覚え書き(Enterで確定)"
+      defaultValue={step.note}
+      onChange={() => {
+        editedRef.current = true;
+      }}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          commit();
+        } else if (e.key === "Escape") {
+          if (inputRef.current) inputRef.current.value = step.note;
+          editedRef.current = false;
+          e.currentTarget.blur();
+        }
+      }}
+    />
+  );
+}
+
+/** 手順を選んでいるときの内容: 技法の変更・注記・削除 */
+function StepContent({ number }: { number: number }) {
+  const doc = useAppStore((s) => s.doc);
+  const skipped = useAppStore((s) => s.skipped);
+  const applySequenceOp = useAppStore((s) => s.applySequenceOp);
+
+  const step = doc?.sequence[number - 1];
+  if (!step) return <p className="hint">この手順はもうありません</p>;
+
+  const setKind = (kind: TechniqueKind) =>
+    void applySequenceOp({ type: "UpdateStep", step: { ...step, kind } });
+
+  return (
+    <div>
+      <p>
+        手順{number}: {TECHNIQUE_LABEL[step.kind]}(折り線
+        {step.drivers.length}本)
+        {skipped.includes(step.id) && (
+          <span className="error-text">
+            {" "}
+            ※折り線が見つからないため飛ばされています
+          </span>
+        )}
+      </p>
+      <div className="button-row">
+        <label htmlFor="step-kind">折り方</label>
+        <select
+          id="step-kind"
+          value={step.kind}
+          onChange={(e) => setKind(e.target.value as TechniqueKind)}
+        >
+          {TECHNIQUE_KINDS.map((k) => (
+            <option key={k} value={k}>
+              {TECHNIQUE_LABEL[k]}
+            </option>
+          ))}
+        </select>
+        <NoteInput key={step.id} step={step} />
+        <button
+          type="button"
+          title="この手順を手順一覧から取り除きます(展開図の折り線は残ります)"
+          onClick={() =>
+            void applySequenceOp({ type: "RemoveStep", id: step.id })
+          }
+        >
+          この手順を削除
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function SelectionContent() {
   const doc = useAppStore((s) => s.doc);
   const selection = useAppStore((s) => s.selection);
@@ -225,14 +334,25 @@ function SelectionContent() {
 export function ContextPanel() {
   const warnings = useAppStore((s) => s.warnings);
   const poseWarnings = useAppStore((s) => s.poseWarnings);
+  const replayWarnings = useAppStore((s) => s.replayWarnings);
   const errorMessage = useAppStore((s) => s.errorMessage);
-  const allWarnings = [...warnings, ...poseWarnings];
+  const currentStep = useAppStore((s) => s.currentStep);
+  // 同じ文言は1回だけ出す(展開図の検査結果には自動再生の警告も合流している)
+  const allWarnings = uniqueWarnings(warnings, poseWarnings, replayWarnings);
+  // 手順を選んでいる間はその手順の設定を出す(「折る前」「最新」は選択なし扱い)
+  const stepSelected = currentStep !== null && currentStep >= 1;
 
   return (
     <footer className="context-panel">
       <div className="context-selection">
-        <SelectionContent />
-        <FoldControls />
+        {stepSelected ? (
+          <StepContent number={currentStep} />
+        ) : (
+          <>
+            <SelectionContent />
+            <FoldControls />
+          </>
+        )}
       </div>
       {(errorMessage !== null || allWarnings.length > 0) && (
         <div className="context-messages">

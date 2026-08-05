@@ -2,9 +2,18 @@
 //  - 直列化まわり:「成功したviewはisLatestに関わらず破棄されない」
 //    (A成功→B失敗でも、画面はAのdocを保持しバックエンドと一致する)
 //  - 折り角度の指定: 60ms間引き・全解除・展開図編集後の追従
+//  - 手順の表示と再生: 手順選択・コマ送り・アニメーションの進行と停止・
+//    最新1件だけを送る間引き(coalescing)
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DocumentView, Driver, SolveResult } from "../lib/types";
+import type {
+  DocumentView,
+  Driver,
+  FoldStep,
+  ReplayResult,
+  SolveResult,
+} from "../lib/types";
+import { STEP_DURATION_MS } from "../lib/playback";
 
 vi.mock("../ipc/client", () => ({
   documentNew: vi.fn(),
@@ -14,6 +23,7 @@ vi.mock("../ipc/client", () => ({
   editUndo: vi.fn(),
   editRedo: vi.fn(),
   sequenceApply: vi.fn(),
+  sequenceReplay: vi.fn(),
   poseSolve: vi.fn(),
 }));
 
@@ -99,12 +109,61 @@ function poseCalls(): Driver[][] {
   return vi.mocked(ipc.poseSolve).mock.calls.map(([drivers]) => drivers);
 }
 
+/** sequenceReplayへ渡された引数(呼び出し番号ごと) */
+function replayCalls(): [number, number][] {
+  return vi.mocked(ipc.sequenceReplay).mock.calls.map(([upTo, t]) => [upTo, t]);
+}
+
+/** 直近のsequenceReplay呼び出しの引数(まだ無ければundefined) */
+function lastReplayCall(): [number, number] | undefined {
+  const calls = replayCalls();
+  return calls[calls.length - 1];
+}
+
+/** 単純折りの手順を1つ作る */
+function makeStep(id: number): FoldStep {
+  return {
+    id,
+    kind: "Simple",
+    drivers: [{ a: [0, 0], b: [1, 1], target_angle_deg: 180 }],
+    layer_order: null,
+    note: "",
+  };
+}
+
+/** 手順をcount個持つview(手順IDは1始まり) */
+function makeStepView(mark: number, count: number): DocumentView {
+  const view = makeHingeView(mark);
+  view.doc.sequence = Array.from({ length: count }, (_, i) => makeStep(i + 1));
+  view.frame = { faces: [], warnings: [] };
+  return view;
+}
+
+/** 空のReplayResult(飛ばした手順・警告は差し替えられる) */
+function makeReplayResult(): ReplayResult {
+  return { frame: { faces: [], warnings: [] }, skipped: [], warnings: [] };
+}
+
+/** 手順count個の作品を表示中の状態にする(IPCは呼ばない) */
+function seedSequence(count: number, currentStep: number | null = null): void {
+  const view = makeStepView(1000, count);
+  useAppStore.setState({
+    doc: view.doc,
+    faces: view.faces,
+    hinges: new Set([5]),
+    currentStep,
+    playT: 1,
+    playing: false,
+  });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   // 間引きの基準時刻はストア(アプリ全体で1個)が持ち続けるため、
   // テストごとに初期化して前のテストの時計を持ち込まない
   resetPoseThrottle();
   vi.mocked(ipc.poseSolve).mockResolvedValue(makeSolveResult());
+  vi.mocked(ipc.sequenceReplay).mockResolvedValue(makeReplayResult());
   useAppStore.setState({
     doc: null,
     faces: [],
@@ -119,6 +178,11 @@ beforeEach(() => {
     poseWarnings: [],
     poseConverged: true,
     frame3d: null,
+    currentStep: null,
+    playT: 1,
+    playing: false,
+    skipped: [],
+    replayWarnings: [],
   });
 });
 
@@ -365,7 +429,7 @@ describe("appStore 折り角度の指定", () => {
     expect(useAppStore.getState().drivers.size).toBe(0);
   });
 
-  it("収束しなかった結果は警告と収束フラグに反映される", async () => {
+  it("収束しなかった結果は警告と収束フラグに反映される(角度指定)", async () => {
     const result = makeSolveResult({ "5": 90 });
     result.converged = false;
     result.frame.warnings = ["追従計算が収束していません"];
@@ -381,5 +445,230 @@ describe("appStore 折り角度の指定", () => {
     expect(s.poseWarnings).toEqual(["追従計算が収束していません"]);
     expect(s.poseAngles.get(5)).toBe(90);
     expect(s.errorMessage).toBeNull(); // 追従計算の警告はエラーにしない
+  });
+});
+
+describe("appStore 手順の表示と再生", () => {
+  it("手順を選ぶと、その手順まで折った形を表示する", async () => {
+    seedSequence(3);
+    vi.mocked(ipc.sequenceReplay).mockResolvedValueOnce({
+      ...makeReplayResult(),
+      skipped: [2],
+      warnings: ["手順2の折り線が見つからないため、この手順を飛ばしました"],
+    });
+
+    useAppStore.getState().selectStep(2);
+    await flush();
+
+    expect(replayCalls()).toEqual([[2, 1]]);
+    const s = useAppStore.getState();
+    expect(s.currentStep).toBe(2);
+    expect(s.skipped).toEqual([2]);
+    expect(s.replayWarnings).toHaveLength(1);
+  });
+
+  it("最新を選ぶと全ての手順まで折った形を表示する", async () => {
+    seedSequence(3, 1);
+
+    useAppStore.getState().selectStep(null);
+    await flush();
+
+    expect(replayCalls()).toEqual([[3, 1]]);
+    expect(useAppStore.getState().currentStep).toBeNull();
+  });
+
+  it("コマ送りは0(折る前)から手順数までの範囲に収まる", async () => {
+    seedSequence(2);
+
+    // 最新表示からの「前へ」は最終手順を基準に1つ戻る
+    useAppStore.getState().stepBy(-1);
+    await flush();
+    expect(useAppStore.getState().currentStep).toBe(1);
+
+    useAppStore.getState().stepBy(-1); // 0(折る前)
+    useAppStore.getState().stepBy(-1); // これ以上は戻らない
+    await flush();
+    expect(useAppStore.getState().currentStep).toBe(0);
+
+    useAppStore.getState().stepBy(1);
+    useAppStore.getState().stepBy(1);
+    useAppStore.getState().stepBy(1); // 手順数を超えない
+    await flush();
+    expect(useAppStore.getState().currentStep).toBe(2);
+    expect(replayCalls()).toEqual([
+      [1, 1],
+      [0, 1],
+      [0, 1],
+      [1, 1],
+      [2, 1],
+      [2, 1],
+    ]);
+  });
+
+  it("再生は手順を順に進み、最終手順で止まる", async () => {
+    primeFakeTimers();
+    try {
+      seedSequence(2);
+      useAppStore.getState().togglePlay();
+      expect(useAppStore.getState().playing).toBe(true);
+
+      // 1手順目の途中(320msの半分)では、まだ1手順目を補間している
+      await vi.advanceTimersByTimeAsync(STEP_DURATION_MS / 2);
+      const mid = lastReplayCall();
+      expect(mid?.[0]).toBe(1);
+      expect(mid?.[1]).toBeGreaterThan(0);
+      expect(mid?.[1]).toBeLessThan(1);
+
+      // 2手順ぶん進めれば最後まで折り終えて止まる
+      await vi.advanceTimersByTimeAsync(STEP_DURATION_MS * 3);
+      const s = useAppStore.getState();
+      expect(s.playing).toBe(false);
+      expect(s.currentStep).toBe(2);
+      expect(lastReplayCall()).toEqual([2, 1]);
+
+      // 止まった後は描き直しを頼まない
+      const count = replayCalls().length;
+      await vi.advanceTimersByTimeAsync(STEP_DURATION_MS);
+      expect(replayCalls()).toHaveLength(count);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("再生中に計算が追いつかなくても、待たせるのは最新の1件だけ", async () => {
+    primeFakeTimers();
+    try {
+      seedSequence(3);
+      const slow = deferred<ReplayResult>();
+      vi.mocked(ipc.sequenceReplay).mockReturnValueOnce(slow.promise);
+
+      useAppStore.getState().togglePlay();
+      await vi.advanceTimersByTimeAsync(STEP_DURATION_MS); // 20コマぶん
+      expect(replayCalls()).toHaveLength(1); // 1件目が終わるまで次は送らない
+
+      slow.resolve(makeReplayResult());
+      await vi.advanceTimersByTimeAsync(32);
+      // 待っていた分は最新1件にまとまる(コマ数ぶんは送られない)
+      expect(replayCalls().length).toBeLessThan(5);
+
+      useAppStore.getState().togglePlay(); // 後片付け
+      expect(useAppStore.getState().playing).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("再生中でも、飛ばした手順と警告の中身が同じなら配列を作り直さない", async () => {
+    seedSequence(2);
+    vi.mocked(ipc.sequenceReplay).mockResolvedValue({
+      ...makeReplayResult(),
+      skipped: [2],
+      warnings: ["手順2の折り線が見つからないため、この手順を飛ばしました"],
+    });
+
+    useAppStore.getState().selectStep(1);
+    await flush();
+    const first = useAppStore.getState();
+
+    useAppStore.getState().selectStep(2);
+    await flush();
+    const second = useAppStore.getState();
+
+    // 内容が同じなら同じ配列を返す(毎コマの再描画を防ぐ)
+    expect(second.skipped).toBe(first.skipped);
+    expect(second.replayWarnings).toBe(first.replayWarnings);
+  });
+
+  it("再生中に手順を選ぶと再生は止まる", async () => {
+    primeFakeTimers();
+    try {
+      seedSequence(3);
+      useAppStore.getState().togglePlay();
+      await vi.advanceTimersByTimeAsync(STEP_DURATION_MS / 2);
+
+      useAppStore.getState().selectStep(1);
+      expect(useAppStore.getState().playing).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(0); // 選んだ手順の描き直しを送り終える
+      const count = replayCalls().length;
+      await vi.advanceTimersByTimeAsync(STEP_DURATION_MS);
+      expect(replayCalls()).toHaveLength(count); // 予約されていたコマも取り消す
+      expect(useAppStore.getState().currentStep).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("再生に失敗したら止めて理由を知らせる", async () => {
+    primeFakeTimers();
+    try {
+      seedSequence(3);
+      vi.mocked(ipc.sequenceReplay).mockRejectedValue("再生に失敗しました");
+
+      useAppStore.getState().togglePlay();
+      await vi.advanceTimersByTimeAsync(64);
+
+      const s = useAppStore.getState();
+      expect(s.playing).toBe(false);
+      expect(s.errorMessage).toBe("再生に失敗しました");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("最新表示中の編集は、viewに載っている自動再生の結果をそのまま使う", async () => {
+    const view = makeStepView(2000, 2);
+    view.frame = { faces: [], warnings: [] };
+    view.skipped = [2];
+    vi.mocked(ipc.editApply).mockResolvedValueOnce(view);
+    useAppStore.setState({ hinges: new Set([5]), drivers: new Map([[5, 90]]) });
+
+    await useAppStore.getState().applyEdit({ type: "RemoveEdges", ids: [9] });
+
+    // 手順のある作品では、立体表示は角度指定ではなく手順の再生結果で作る
+    expect(ipc.poseSolve).not.toHaveBeenCalled();
+    // 自動再生済みの結果が載っているので、同じ内容を再生し直さない
+    expect(replayCalls()).toEqual([]);
+    const s = useAppStore.getState();
+    expect(s.frame3d).toEqual(view.frame);
+    expect(s.skipped).toEqual([2]);
+    expect(s.replayWarnings).toEqual([]); // 警告はview.warnings側に入っている
+  });
+
+  it("途中の手順を表示中に編集したら、その手順まで再生し直す", async () => {
+    seedSequence(3, 2);
+    vi.mocked(ipc.editApply).mockResolvedValueOnce(makeStepView(2050, 3));
+    vi.mocked(ipc.sequenceReplay).mockResolvedValueOnce({
+      ...makeReplayResult(),
+      skipped: [2],
+      warnings: ["手順2の折り線が見つからないため、この手順を飛ばしました"],
+    });
+
+    await useAppStore.getState().applyEdit({ type: "RemoveEdges", ids: [9] });
+
+    expect(replayCalls()).toEqual([[2, 1]]);
+    const s = useAppStore.getState();
+    expect(s.skipped).toEqual([2]);
+    expect(s.replayWarnings).toHaveLength(1);
+  });
+
+  it("手順が減ったら、表示中の手順番号を手順数まで詰める", async () => {
+    seedSequence(3, 3);
+    vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(makeStepView(2100, 2));
+
+    await useAppStore.getState().applySequenceOp({ type: "RemoveStep", id: 3 });
+
+    expect(useAppStore.getState().currentStep).toBe(2);
+    expect(replayCalls()).toEqual([[2, 1]]);
+  });
+
+  it("手順が全て無くなったら最新表示に戻り、再生は呼ばない", async () => {
+    seedSequence(1, 1);
+    vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(makeView(2200));
+
+    await useAppStore.getState().applySequenceOp({ type: "RemoveStep", id: 1 });
+
+    expect(useAppStore.getState().currentStep).toBeNull();
+    expect(replayCalls()).toEqual([]);
   });
 });

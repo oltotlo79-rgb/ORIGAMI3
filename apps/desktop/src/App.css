@@ -98,8 +98,94 @@ body,
   border-right: 1px solid #c8c8cc;
 }
 
+/* 3D区画は内側を上下に分ける(立体表示 + 手順タイムライン)。
+   常設区画は4つのままで、タイムラインは3D区画の一部として置く */
 .pane-3d {
+  display: grid;
+  grid-template-rows: 1fr 96px;
   background: #caccd4;
+}
+
+.pane-3d-view {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 手順タイムライン(3D区画の下側・96px) */
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  background: #e4e4e8;
+  border-top: 1px solid #c8c8cc;
+  min-height: 0;
+}
+
+.timeline-controls {
+  display: flex;
+  gap: 6px;
+}
+
+.timeline-controls button {
+  padding: 3px 10px;
+  border: 1px solid #b4b4b8;
+  border-radius: 4px;
+  background: #fafafa;
+  cursor: pointer;
+}
+
+.timeline-controls button:hover {
+  background: #fff;
+}
+
+.timeline-steps {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 4px;
+}
+
+.timeline-chip {
+  flex: none;
+  padding: 4px 8px;
+  border: 1px solid #b4b4b8;
+  border-radius: 4px;
+  background: #fafafa;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.timeline-chip:hover {
+  background: #fff;
+}
+
+.timeline-chip.selected {
+  background: #3b6fc9;
+  border-color: #2d5aa8;
+  color: #fff;
+}
+
+.timeline-chip.skipped {
+  background: #f7dede;
+  border-color: #d43c3c;
+  color: #b42424;
+}
+
+.timeline-chip.skipped.selected {
+  background: #d43c3c;
+  border-color: #a02a2a;
+  color: #fff;
+}
+
+.note-input {
+  min-width: 180px;
+  padding: 2px 6px;
+  border: 1px solid #b4b4b8;
+  border-radius: 4px;
 }
 
 .cp-canvas {
@@ -175,6 +261,17 @@ body,
 
 .button-row button:hover {
   background: #fff;
+}
+
+.button-row label {
+  align-self: center;
+}
+
+.button-row select {
+  padding: 2px 4px;
+  border: 1px solid #b4b4b8;
+  border-radius: 4px;
+  background: #fafafa;
 }
 
 /* 折り角度の操作(折り線を選んだとき) */
