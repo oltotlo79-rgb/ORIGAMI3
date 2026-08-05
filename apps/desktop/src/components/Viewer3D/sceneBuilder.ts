@@ -11,6 +11,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { DisplaySettings, Document, Face, Frame3D, Vec2 } from "../../lib/types";
+import { frameLayerCount, isFlatFrame, layerOffsets } from "../../lib/layerOffset";
 import { paperExtent } from "../CpEditor/snap";
 import type { HingeSegment } from "./hingePicker";
 
@@ -32,6 +33,8 @@ const CAMERA_MARGIN = 1.35;
 const HIGHLIGHT_SEGMENTS = 8;
 /** 円柱の伸ばす向き(強調表示の回転計算に使う) */
 const AXIS_Y = new THREE.Vector3(0, 1, 0);
+/** 紙の長辺(展開図は長辺=1.0の正規化座標。層のずらし量の基準にする) */
+const PAPER_LONG_SIDE = 1;
 
 // ---------------------------------------------------------------------------
 // トポロジ(展開図が変わったときだけ作り直す部分)
@@ -287,22 +290,31 @@ export function createContent(
  * 立体形状(Frame3D)を反映する。頂点座標をその場で書き換え、法線を計算し直す
  * だけで、ジオメトリ・マテリアルの生成も破棄もしない。
  * frameがnull(まだ折っていない)なら展開図どおりの平らな形に戻す。
+ *
+ * 平らに畳んだ状態(全ての面がz≒0)のときだけ、層ごとに微小な高さを足して
+ * 重なりを見せる(UI-010 / SIM-004)。折り途中や立体的な形は形が歪むので足さない。
+ * 足す高さは表示専用で、frameの値そのものは変えない。
  */
 export function updateFrame(content: Viewer3DContent, frame: Frame3D | null): void {
   const { positions, topology } = content;
   if (frame === null) {
     positions.set(topology.flatPositions);
   } else {
+    // 平らな状態では面の法線は揃って+z向きなので、ずらしはzへ足すだけでよい
+    const offsets = isFlatFrame(frame)
+      ? layerOffsets(frameLayerCount(frame), PAPER_LONG_SIDE)
+      : [];
     for (const f of frame.faces) {
       const slot = topology.slots.get(f.face);
       // 頂点数が合わない面は対応が取れないので前の座標のままにする
       // (展開図を編集した直後など、立体形状の計算が届くまでは平らのまま)
       if (!slot || slot.count !== f.polygon.length) continue;
+      const lift = offsets[f.layer] ?? 0;
       let k = slot.offset * 3;
       for (const p of f.polygon) {
         positions[k++] = p[0];
         positions[k++] = p[1];
-        positions[k++] = p[2];
+        positions[k++] = p[2] + lift;
       }
     }
   }

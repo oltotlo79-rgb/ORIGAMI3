@@ -4,6 +4,7 @@
 //     取りこぼすとGPU資源が積み上がるため、作り替えのたびに監視する。
 // (2) トポロジ(三角形分割・添字・ヒンジ対応・三角形→面IDの対応表)の確認。
 // (3) 立体形状の更新が「その場書き換え」で、資源を作り直さないことの確認。
+// (4) 平らに畳んだときだけ層をずらして描くこと(UI-010 / SIM-004)の確認。
 
 import { describe, expect, it, vi } from "vitest";
 import * as THREE from "three";
@@ -13,6 +14,7 @@ import {
   createContent,
   updateFrame,
 } from "./sceneBuilder";
+import { layerOffsets } from "../../lib/layerOffset";
 import type { Document, Face, Frame3D } from "../../lib/types";
 
 /** dispose回数を数える偽の資源(Three.jsの実体は使わない) */
@@ -271,6 +273,65 @@ describe("createContent / updateFrame(形の更新)", () => {
     expect(content.hingeSegments[0].edgeId).toBe(5);
     expect(content.hingeSegments[0].a.toArray()).toEqual([1, 1, 0]);
     expect(content.hingeSegments[0].b.toArray()).toEqual([0, 0, 0]);
+  });
+
+  it("平らに畳んだ状態では層ごとに高さを付けて重なりを見せる(表示専用)", () => {
+    const doc = makeDoc();
+    const content = createContent(buildTopology(doc, FACES, HINGES), doc.display);
+    const flat: Frame3D = {
+      faces: [
+        {
+          face: 0,
+          polygon: [
+            [0, 0, 0],
+            [1, 0, 0],
+            [1, 1, 0],
+          ],
+          layer: 0,
+        },
+        {
+          face: 1,
+          polygon: [
+            [0, 0, 0],
+            [1, 1, 0],
+            [0, 1, 0],
+          ],
+          layer: 1,
+        },
+      ],
+      warnings: [],
+    };
+    updateFrame(content, flat);
+
+    const step = layerOffsets(2, 1)[1];
+    expect(step).toBeGreaterThan(0);
+    // 下の層(面0)はz=0のまま、上の層(面1)だけ持ち上がる
+    for (let i = 0; i < 3; i++) expect(content.positions[i * 3 + 2]).toBe(0);
+    // 頂点座標は32bit実数なので比較は6桁で足りる
+    for (let i = 3; i < 6; i++) expect(content.positions[i * 3 + 2]).toBeCloseTo(step, 6);
+    // 元のFrame3Dの値は書き換えない
+    expect(flat.faces[1].polygon[0][2]).toBe(0);
+  });
+
+  it("折り途中(高さのある形)には層のずらしを掛けない", () => {
+    const doc = makeDoc();
+    const content = createContent(buildTopology(doc, FACES, HINGES), doc.display);
+    updateFrame(content, {
+      faces: [
+        {
+          face: 1,
+          polygon: [
+            [0, 0, 0],
+            [1, 1, 0],
+            [0, 1, 0.5],
+          ],
+          layer: 1,
+        },
+      ],
+      warnings: [],
+    });
+    expect(content.positions[3 * 3 + 2]).toBe(0); // 層1でも持ち上げない
+    expect(content.positions[5 * 3 + 2]).toBe(0.5);
   });
 
   it("頂点数が合わない面(参照切れ)は前の座標のままにする", () => {
