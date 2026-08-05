@@ -155,6 +155,8 @@ pub fn fold_through(
     let mut warned_overlap: HashSet<EdgeId> = HashSet::new();
     let mut promoted_aux = 0usize;
     let mut crossed_any = false;
+    // 頂点座標の引き当て表。workを書き換えた直後にだけ作り直す。
+    let mut wvpos = vertex_positions(&work);
     for f in faces.iter().filter(|f| target_ids.contains(&f.id)) {
         let pl = &state.placements[&f.id];
         let inv = pl.inverse();
@@ -214,17 +216,22 @@ pub fn fold_through(
                 // 面の縁に沿う区間は面を横切らないので線は引かない。ただし既存の
                 // 山/谷線(スリット含む)に沿っている場合は、再生時にその断片群を
                 // 駆動できるようDriverLineだけ生成する(角度は既存の線種に従う)。
-                let wvpos = vertex_positions(&work);
-                let kind_on_line = work.edges.iter().find_map(|e| {
+                let edge_on_line = work.edges.iter().find_map(|e| {
                     if !matches!(e.kind, EdgeKind::Mountain | EdgeKind::Valley) {
                         return None;
                     }
                     let (p0, p1) = (wvpos.get(&e.v0)?, wvpos.get(&e.v1)?);
                     let (o0, o1) = collinear_overlap(q0, q1, *p0, *p1)?;
-                    ((o1 - o0).length() > EPS).then_some(e.kind)
+                    ((o1 - o0).length() > EPS).then_some((e.id, e.kind))
                 });
-                if let Some(k) = kind_on_line {
+                if let Some((eid, k)) = edge_on_line {
                     push_driver_line(&mut driver_lines, q0, q1, angle_of(k));
+                    // 折り線の一部が反対向きの既存の折り目に乗っている状態。平坦
+                    // (±180°)では見分けが付かないが、折り途中の角度では山と谷が
+                    // 打ち消し合って形が求まらないため知らせる。
+                    if k != kind && warned_overlap.insert(eid) {
+                        warnings.push(opposite_crease_warning(eid));
+                    }
                 }
                 continue;
             }
@@ -232,9 +239,10 @@ pub fn fold_through(
             push_driver_line(&mut driver_lines, q0, q1, angle_of(kind));
             // 既存辺と重なる区間の扱い: 補助線は挿入後に折りの線種へ昇格させる。
             // 既存の山/谷線はinsert_segmentが線種を維持する(食い違いは警告)。
+            // 折り線と同一直線上の山/谷辺は必ず面の境界になるため、通常はこの分岐
+            // ではなく上のon_boundary分岐で検出される(ここは面が壊れた場合の防御)。
             let mut has_aux_overlap = false;
             {
-                let wvpos = vertex_positions(&work);
                 for e in &work.edges {
                     let (Some(&p0), Some(&p1)) = (wvpos.get(&e.v0), wvpos.get(&e.v1)) else {
                         continue;
@@ -248,18 +256,15 @@ pub fn fold_through(
                     if e.kind == EdgeKind::Aux {
                         has_aux_overlap = true;
                     } else if e.kind != kind && warned_overlap.insert(e.id) {
-                        warnings.push(format!(
-                            "折り線が既存の折り線(ID {})と重なっていますが、山谷は既存のままにします",
-                            e.id
-                        ));
+                        warnings.push(opposite_crease_warning(e.id));
                     }
                 }
             }
             added.extend(insert_segment(&mut work, [q0.x, q0.y], [q1.x, q1.y], kind));
+            wvpos = vertex_positions(&work); // 挿入で頂点が増えたので作り直す
             // 重なった補助線はinsert_segmentが重なりの端で分割済みなので、
             // 区間内に収まる断片を折りの線種へ昇格させる(面が正しく分割されるようにする)。
             if has_aux_overlap {
-                let wvpos = vertex_positions(&work);
                 for e in work.edges.iter_mut() {
                     if e.kind == EdgeKind::Aux
                         && let (Some(&p0), Some(&p1)) = (wvpos.get(&e.v0), wvpos.get(&e.v1))
@@ -294,7 +299,8 @@ pub fn fold_through(
 
     // 4〜5. 面を再抽出し、代表点で親面を特定して新しい配置を決める。
     let new_faces = extract_faces(&work);
-    let wpos = vertex_positions(&work);
+    // 昇格処理は線種しか変えないので、挿入直後に作り直した引き当て表をそのまま使える。
+    let wpos = wvpos;
     let refl = Isometry2::reflection(l0, l1);
     let order_index: HashMap<FaceId, usize> = state
         .order
@@ -482,6 +488,13 @@ fn push_driver_line(lines: &mut Vec<DriverLine>, q0: DVec2, q1: DVec2, angle: f6
             target_angle_deg: angle,
         });
     }
+}
+
+/// 折り線の一部が反対向きの既存の折り目に乗っている場合の警告文。
+fn opposite_crease_warning(eid: EdgeId) -> String {
+    format!(
+        "折り線の一部に反対向きの折り線(山/谷)が既にあります(辺ID {eid})。折り上がりは同じですが、そのままでは折り途中の形が正しく表示されません"
+    )
 }
 
 /// 線種に対応する完全折りの角度(+180=山, -180=谷)。

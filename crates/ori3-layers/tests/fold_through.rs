@@ -527,6 +527,48 @@ fn overlapping_aux_line_is_promoted_and_fold_stays_consistent() {
 }
 
 #[test]
+fn warns_when_existing_crease_on_the_line_has_the_opposite_kind() {
+    // 折り線の一部に逆向きの折り目(山)が既にある状態で谷折りすると、展開図は
+    // 山[0..0.4]+谷[0.4..1] になる。平坦(±180°)では折り上がるが折り途中の形が
+    // 求まらないため、警告で知らせる必要がある。
+    let mut cp = square_cp();
+    insert_segment(&mut cp, [0.5, 0.0], [0.5, 0.4], EdgeKind::Mountain);
+    let faces = extract_faces(&cp);
+    assert_eq!(faces.len(), 1, "切り込み状の折り目は面を分けない");
+    let state = FlatState::initial(&cp, &faces);
+
+    let res = fold_through(
+        &mut cp,
+        &faces,
+        &state,
+        &FoldThroughInput {
+            line: [[0.5, 0.0], [0.5, 1.0]],
+            keep_side_point: [0.25, 0.5],
+            target_layers: None,
+            direction: FoldDirection::Up,
+        },
+    )
+    .expect("逆向きの折り目があっても折り自体は続行する");
+    assert!(
+        res.warnings.iter().any(|w| w.contains("反対向き")),
+        "山谷の食い違いを警告する: {:?}",
+        res.warnings
+    );
+
+    // 既存の山はそのまま(上書きしない)、残りの区間に谷が入る
+    assert!(
+        cp.edges
+            .iter()
+            .any(|e| e.kind == EdgeKind::Mountain && edge_midpoint(&cp, e.id).y < 0.4),
+        "既存の山は線種を変えられない"
+    );
+    // 山の区間・谷の区間それぞれにDriverLineが付く
+    assert_eq!(res.step.drivers.len(), 2);
+    assert!(res.step.drivers.iter().any(|d| d.target_angle_deg == 180.0));
+    assert!(res.step.drivers.iter().any(|d| d.target_angle_deg == -180.0));
+}
+
+#[test]
 fn driver_lines_survive_edge_splits_and_replay_matches_flat_state() {
     // レビューシナリオ: ステップ1の折り線(x=0.5)は2回目の折りの引き戻し挿入で
     // 中点(0.5,0.5)で2辺に分割され、辺IDが変わる。線分参照なら両断片へ解決できる。
