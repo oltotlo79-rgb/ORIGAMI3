@@ -2,6 +2,10 @@
 //! 全コマンドをpanic捕捉ラッパー`guard`で包み、アプリを落とさない(SYS-005)。
 //! 全コマンドを`#[tauri::command(async)]`にしてスレッドプールで実行する
 //! (同期fnはメインスレッド実行になり、validate等の計算でUIが引っかかるため)。
+//!
+//! 設計規約: ロック中に重い計算をしない(pose_solveなど他コマンドを待たせないため)。
+//! ロック下ではstoreの状態更新と複製だけを行い、手順の再生や姿勢計算は
+//! ロックを解放してから実行する(`view_command` / `pose_solve` / `sequence_replay`)。
 
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
@@ -9,7 +13,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use tauri::State;
 
-use crate::store::{DocumentStore, DocumentView};
+use crate::store::{DocumentStore, DocumentView, attach_replay};
 use ori3_model::{Driver, EditOp, Paper, SeqOp};
 
 /// panicをErr文字列に変換する(SYS-005: アプリを落とさない)。
@@ -32,12 +36,25 @@ fn lock<'a>(state: &'a State<'_, Mutex<DocumentStore>>) -> MutexGuard<'a, Docume
     state.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// DocumentViewを返す操作の共通後処理: 手順を最新ステップまで自動再生して
+/// 立体・飛ばした手順・警告をビューへ載せる(SEQ-004)。
+///
+/// 設計規約: ロック中に重い計算をしない。`f` の中で取ったロックは `f` を抜けた時点で
+/// 解放されているので、再生(面400・10手順でrelease約23ms)はロックの外で走る。
+fn view_command(f: impl FnOnce() -> Result<DocumentView, String>) -> Result<DocumentView, String> {
+    let mut view = f()?; // ここでロックは解放済み
+    attach_replay(&mut view);
+    Ok(view)
+}
+
 #[tauri::command(async)]
 pub fn document_new(
     state: State<'_, Mutex<DocumentStore>>,
     paper: Paper,
 ) -> Result<DocumentView, String> {
-    guard(AssertUnwindSafe(|| lock(&state).new_document(paper)))
+    guard(AssertUnwindSafe(|| {
+        view_command(|| lock(&state).new_document(paper))
+    }))
 }
 
 #[tauri::command(async)]
@@ -45,7 +62,9 @@ pub fn document_open(
     state: State<'_, Mutex<DocumentStore>>,
     path: String,
 ) -> Result<DocumentView, String> {
-    guard(AssertUnwindSafe(|| lock(&state).open(Path::new(&path))))
+    guard(AssertUnwindSafe(|| {
+        view_command(|| lock(&state).open(Path::new(&path)))
+    }))
 }
 
 #[tauri::command(async)]
@@ -63,17 +82,19 @@ pub fn edit_apply(
     state: State<'_, Mutex<DocumentStore>>,
     op: EditOp,
 ) -> Result<DocumentView, String> {
-    guard(AssertUnwindSafe(|| lock(&state).apply_edit(op)))
+    guard(AssertUnwindSafe(|| {
+        view_command(|| lock(&state).apply_edit(op))
+    }))
 }
 
 #[tauri::command(async)]
 pub fn edit_undo(state: State<'_, Mutex<DocumentStore>>) -> Result<DocumentView, String> {
-    guard(AssertUnwindSafe(|| lock(&state).undo()))
+    guard(AssertUnwindSafe(|| view_command(|| lock(&state).undo())))
 }
 
 #[tauri::command(async)]
 pub fn edit_redo(state: State<'_, Mutex<DocumentStore>>) -> Result<DocumentView, String> {
-    guard(AssertUnwindSafe(|| lock(&state).redo()))
+    guard(AssertUnwindSafe(|| view_command(|| lock(&state).redo())))
 }
 
 #[tauri::command(async)]
@@ -81,7 +102,9 @@ pub fn sequence_apply(
     state: State<'_, Mutex<DocumentStore>>,
     op: SeqOp,
 ) -> Result<DocumentView, String> {
-    guard(AssertUnwindSafe(|| lock(&state).apply_seq(op)))
+    guard(AssertUnwindSafe(|| {
+        view_command(|| lock(&state).apply_seq(op))
+    }))
 }
 
 /// 折り角度の追従計算(Task 1-8)。driver角を固定して残りのヒンジ角を解き、
@@ -107,8 +130,8 @@ pub fn pose_solve(
 /// 手順の再生(Task 2-3)。展開図と手順列から `up_to` ステップ目(補間係数 `t`)の
 /// 立体を求め直す。3D状態は保存しないので、展開図を編集した後でも再生できる。
 ///
-/// 設計規約: ロック中に重い計算をしない。ロック下ではDocumentの複製だけを行って
-/// 即ロックを解放し、再生はロックの外で実行する(結果の書き戻しは不要)。
+/// 設計規約: ロック中に重い計算をしない。ロック下ではDocumentと導出済みfacesの複製
+/// だけを行って即ロックを解放し、再生はロックの外で実行する(結果の書き戻しは不要)。
 #[tauri::command(async)]
 pub fn sequence_replay(
     state: State<'_, Mutex<DocumentStore>>,
@@ -116,8 +139,8 @@ pub fn sequence_replay(
     t: f64,
 ) -> Result<ori3_layers::ReplayResult, String> {
     guard(AssertUnwindSafe(|| {
-        let doc = lock(&state).replay_input(); // 複製のみ、即ロック解放
-        Ok(ori3_layers::replay(&doc, up_to, t))
+        let (doc, faces) = lock(&state).replay_inputs(); // 複製のみ、即ロック解放
+        Ok(ori3_layers::replay_with_faces(&doc, &faces, up_to, t))
     }))
 }
 

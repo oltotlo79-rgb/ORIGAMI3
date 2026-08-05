@@ -285,11 +285,12 @@ impl DocumentStore {
         )
     }
 
-    /// sequence_replayの入力(Documentの複製)を取り出す。
+    /// sequence_replayの入力(Documentと導出済みfacesの複製)を取り出す。
+    /// facesは編集時に導出済みのキャッシュの流用で、extract_facesを再実行しない。
     /// 設計規約: pose_inputsと同じく、コマンド層はこの複製を取って即ロックを解放し、
     /// 再生(重い計算)はロックの外で実行する。
-    pub fn replay_input(&self) -> Document {
-        self.doc.clone()
+    pub fn replay_inputs(&self) -> (Document, Vec<Face>) {
+        (self.doc.clone(), self.faces.clone())
     }
 
     /// pose_solveの結果角度を保存する(次回のwarm start用)。
@@ -317,29 +318,37 @@ impl DocumentStore {
     }
 }
 
-/// Documentから表示用ビューを作る(faces/warnings/立体は毎回導出)。
-///
-/// 展開図や手順が変わったら最新ステップまで手順を再生し直し、その立体を含める
-/// (SEQ-004「展開図編集後、手順を自動再生して最新状態を表示」)。
-/// 手順が空のときは再生するものが無いので `frame: None`(平らな姿勢は
-/// フロントが展開図から直接描ける)。
+/// Documentから表示用ビューを作る(faces/warningsは毎回導出)。
+/// 立体(`frame`)は入れない。重い手順再生はロックの外で `attach_replay` が行う。
 fn build_view(doc: &Document, mut warnings: Vec<String>) -> DocumentView {
     warnings.extend(ori3_cp::validate(&doc.cp));
-    let (frame, skipped) = if doc.sequence.is_empty() {
-        (None, Vec::new())
-    } else {
-        let replayed = ori3_layers::replay(doc, doc.sequence.len(), 1.0);
-        warnings.extend(replayed.warnings);
-        (Some(replayed.frame), replayed.skipped)
-    };
     DocumentView {
         doc: doc.clone(),
         faces: ori3_cp::extract_faces(&doc.cp),
         warnings,
         violations: Vec::new(),
-        frame,
-        skipped,
+        frame: None,
+        skipped: Vec::new(),
     }
+}
+
+/// ビューへ手順の自動再生結果(立体・飛ばした手順・警告)を載せる
+/// (SEQ-004「展開図編集後、手順を自動再生して最新状態を表示」)。
+/// 手順が空のときは再生するものが無いので `frame: None` のまま
+/// (平らな姿勢はフロントが展開図から直接描ける)。
+///
+/// 設計規約: これは重い計算(面400・10手順でrelease約23ms)なので、
+/// storeのロックを取らないコマンド層から、ロック解放後に呼ぶ。
+/// 再生には `view.faces`(同じdocから導出済み)を渡し、面抽出を二重に行わない。
+pub fn attach_replay(view: &mut DocumentView) {
+    if view.doc.sequence.is_empty() {
+        return;
+    }
+    let up_to = view.doc.sequence.len();
+    let replayed = ori3_layers::replay_with_faces(&view.doc, &view.faces, up_to, 1.0);
+    view.warnings.extend(replayed.warnings);
+    view.skipped = replayed.skipped;
+    view.frame = Some(replayed.frame);
 }
 
 fn check_paper(paper: &Paper) -> Result<(), String> {
@@ -783,13 +792,14 @@ mod tests {
         assert_eq!(store.pose_inputs().1, fresh(&store), "新規作成後");
     }
 
-    /// SEQ-004: 展開図を編集したら手順が自動再生され、結果がDocumentViewに載る。
-    /// 手順が参照する折り線を消すと、そのステップは飛ばされて警告に載る。
+    /// SEQ-004: 編集後のビューに手順の自動再生結果が載る(コマンド層がロック解放後に
+    /// `attach_replay` を呼ぶ想定)。手順が参照する折り線を消すとそのステップは飛ばされる。
     #[test]
-    fn views_carry_auto_replayed_frame_and_skipped_steps() {
+    fn attach_replay_adds_frame_and_skipped_steps() {
         let mut store = square_store();
         // 手順が無いうちは再生するものが無い
-        let view = store.apply_edit(diagonal()).unwrap();
+        let mut view = store.apply_edit(diagonal()).unwrap();
+        attach_replay(&mut view);
         assert!(view.frame.is_none());
         assert!(view.skipped.is_empty());
 
@@ -800,11 +810,13 @@ mod tests {
             b: [1.0, 1.0],
             target_angle_deg: 180.0,
         }];
-        let view = store.apply_seq(SeqOp::PushStep { step: folding }).unwrap();
-        let frame = view.frame.expect("手順があれば自動再生される");
+        let mut view = store.apply_seq(SeqOp::PushStep { step: folding }).unwrap();
+        // storeはロック内で呼ばれるので立体を載せない(重い計算はロックの外)
+        assert!(view.frame.is_none(), "storeは再生しない");
+        attach_replay(&mut view);
+        let frame = view.frame.clone().expect("手順があれば自動再生される");
         assert_eq!(frame.faces.len(), 2);
         assert!(view.skipped.is_empty(), "warnings={:?}", view.warnings);
-        // 半分に折られている: 2面のどちらかがz方向へ持ち上がる、または重なる
         let mut layers: Vec<u32> = frame.faces.iter().map(|f| f.layer).collect();
         layers.sort_unstable();
         assert_eq!(layers, vec![0, 1]);
@@ -818,11 +830,12 @@ mod tests {
             .find(|e| e.kind == EdgeKind::Mountain)
             .unwrap()
             .id;
-        let view = store
+        let mut view = store
             .apply_edit(EditOp::RemoveEdges {
                 ids: vec![mountain],
             })
             .unwrap();
+        attach_replay(&mut view);
         assert_eq!(view.skipped, vec![0]);
         assert!(
             view.warnings.iter().any(|w| w.contains("飛ばしました")),

@@ -547,24 +547,35 @@ pub fn resolve_driver_edges(cp: &CreasePattern, line: &DriverLine) -> Vec<EdgeId
   - 展開図に無関係な補助線を追加後の再生→全ステップ成功(補助線が折り線を分割してもよい)
   - 手順が参照する折り線を削除後の再生→該当ステップがスキップされ警告リストに載り、以降のステップは続行(SEQ-004)
   - 一部だけ解決できない手順は残りで続行+警告 / 折り線を持たない手順(Pose)は飛ばさない / up_to・tの範囲外は丸める
-  - 性能(NFR-002): 10ステップ・面400の全再生が3秒以内(debug実測 約1.0秒 / release実測 約36ms)
+  - 途中ステップ(up_to=k)の外形が期待値どおり=まだ折っていない折り線が曲がっていない / `replay(k, t=0)` が `replay(k-1, t=1)` とビット一致(非縮退のk≥2を含む)
+  - 層順序の代表点が1点も解決できない手順は直前の層順序を保つ
+  - 性能(NFR-002): 10ステップ・面400の全再生が3秒以内(蛇腹400面・辺1,201・層順序400点/ステップで debug実測 約0.7秒 / release実測 約23ms)
 - [x] 実装:
 
 ```rust
 /// ステップ列を順に適用する。3D状態は保存せず、平らな展開図に「そこまでの全ステップの
-/// driver」を累積して与えて解く(折った状態の上に次を折るのではない)。
+/// driver」を累積して与えて1回で解く(折った状態の上に次を折るのではない)。
 /// 各ステップのDriverLineは resolve_driver_edges で現在の辺IDへ解決し、
 /// up_to未満は目標角そのまま、up_toステップ目だけ角度をt倍する。
-/// ステップを1つずつ進めながら解き、前ステップの解を次のwarm startへ渡す(決定的)。
+/// まだ折っていない折り線(=手順1..up_toが駆動しないヒンジ)は0°のdriverとして
+/// 明示的に固定する。自由変数のまま残すとソルバーの初期値バイアスから別の枝へ
+/// 収束し、警告なしで誤った形(後続の折り線まで曲がった形)が返るため。
+/// 結果として全ヒンジが固定値になるのでステップごとに解き直す必要はなく、
+/// warm startも使わない(決定的)。
 /// 層順序は各ステップのlayer_orderをresolve_orderで解決してFace3D.layerへ反映
-/// (up_toステップ目は完了時t=1のみ。Noneや飛ばした手順では直前の層順序を保つ)。
+/// (up_toステップ目は完了時t=1のみ。None・空・1点も解決できない・飛ばした手順では
+/// 直前の層順序を保つ)。
 /// up_to: 表示対象ステップ(0=初期状態)、t: 0..=1 の補間係数
 pub fn replay(doc: &Document, up_to: usize, t: f64) -> ReplayResult;
+/// 面抽出済みの呼び出し側(store等)向け。extract_facesの二重実行を避ける
+pub fn replay_with_faces(doc: &Document, faces: &[Face], up_to: usize, t: f64) -> ReplayResult;
 pub struct ReplayResult { pub frame: Frame3D, pub skipped: Vec<StepId>, pub warnings: Vec<String> }
 ```
 
-- [x] `sequence_replay`コマンド追加(9個目。引数`up_to: usize, t: f64`、ロック下はDocumentの複製のみ)。`edit_apply`等の成功時にstoreが自動で最新ステップまでreplayし直し、`DocumentView`の`frame: Option<Frame3D>`・`skipped: Vec<StepId>`・警告に含める(手順が空なら`frame: None`)
+- [x] `sequence_replay`コマンド追加(9個目。引数`up_to: usize, t: f64`)。`DocumentView`に`frame: Option<Frame3D>`・`skipped: Vec<StepId>`を追加し、ビューを返す全コマンドの成功後に最新ステップまで自動再生して載せる(手順が空なら`frame: None`)
+- [x] ロック規約の徹底: 自動再生はstore内(ロック保持中)ではなく、コマンド層の`view_command`がロック解放後に`store::attach_replay`で行う。`sequence_replay`もロック下はDocument+facesの複製のみ
 - [x] テスト成功確認 → コミット `折り手順の記録と再生(展開図を直したら自動で折り直す)を追加` → プッシュ
+- [x] レビュー指摘の修正 → コミット `折り途中の手順を選んだときに違う形が表示される問題を修正` → プッシュ
 
 ### Task 2-4: タイムラインUI
 

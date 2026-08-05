@@ -12,21 +12,37 @@ use ori3_model::{
     TechniqueKind, Vertex,
 };
 
-/// 正方形を3回折る手順(x=0.5 → y=0.5 → 畳んだ上でx=0.25)のDocument。
-/// 3ステップとも `fold_through` が生成した実物のFoldStep(DriverLine+layer_order)。
+/// 正方形を半分に折り続ける手順(x=0.5 → y=0.5 → x=0.25 → y=0.25)。
+/// 各ステップは `fold_through` が生成した実物のFoldStep(DriverLine+layer_order)。
+/// 手順kまで折った紙の外形は `FOLDED_SIZE[k]`。
+const FOLDS: [([[f64; 2]; 2], [f64; 2]); 4] = [
+    ([[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5]),
+    ([[0.0, 0.5], [0.5, 0.5]], [0.25, 0.25]),
+    ([[0.25, 0.0], [0.25, 0.5]], [0.1, 0.25]),
+    ([[0.0, 0.25], [0.25, 0.25]], [0.1, 0.1]),
+];
+
+/// 手順0..=4まで折ったときの外形(幅, 高さ)。
+const FOLDED_SIZE: [(f64, f64); 5] = [
+    (1.0, 1.0),
+    (0.5, 1.0),
+    (0.5, 0.5),
+    (0.25, 0.5),
+    (0.25, 0.25),
+];
+
 fn three_step_document() -> Document {
+    folded_document(3)
+}
+
+fn folded_document(steps: usize) -> Document {
     let mut doc = Document::new(Paper {
         width_mm: 100.0,
         height_mm: 100.0,
     });
     let faces = extract_faces(&doc.cp);
     let mut state = FlatState::initial(&doc.cp, &faces);
-    let folds: [([[f64; 2]; 2], [f64; 2]); 3] = [
-        ([[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5]),
-        ([[0.0, 0.5], [0.5, 0.5]], [0.25, 0.25]),
-        ([[0.25, 0.0], [0.25, 0.5]], [0.1, 0.25]),
-    ];
-    for (i, (line, keep_side_point)) in folds.into_iter().enumerate() {
+    for (i, (line, keep_side_point)) in FOLDS.into_iter().take(steps).enumerate() {
         let faces = extract_faces(&doc.cp);
         let res = fold_through(
             &mut doc.cp,
@@ -39,13 +55,13 @@ fn three_step_document() -> Document {
                 direction: FoldDirection::Up,
             },
         )
-        .expect("3回とも折れる");
+        .expect("指定した回数だけ折れる");
         state = res.state;
         let mut step = res.step;
         step.id = u32::try_from(i).unwrap();
         doc.sequence.push(step);
     }
-    assert_eq!(doc.sequence.len(), 3);
+    assert_eq!(doc.sequence.len(), steps);
     doc
 }
 
@@ -158,14 +174,53 @@ fn up_to_and_t_are_clamped() {
         frame_bits(&b.frame),
         "範囲外は丸められる"
     );
+}
 
-    let c = replay(&doc, 1, 0.0);
-    let d = replay(&doc, 0, 1.0);
-    assert_eq!(
-        frame_bits(&c.frame),
-        frame_bits(&d.frame),
-        "t=0は直前の状態と同じ"
-    );
+/// 途中のステップを選んだとき、まだ折っていない折り線が曲がっていないこと。
+/// 角度指定の無いヒンジをソルバーの自由変数のままにすると、初期値バイアスから
+/// 別の枝へ収束して「警告の出ない誤った形」が返るため、外形寸法で検証する。
+#[test]
+fn each_up_to_shows_only_the_folds_done_so_far() {
+    let doc = folded_document(4);
+    for (k, (w, h)) in FOLDED_SIZE.into_iter().enumerate() {
+        let res = replay(&doc, k, 1.0);
+        assert!(res.skipped.is_empty(), "up_to={k} 警告={:?}", res.warnings);
+        assert!(
+            !has_step_warning(&res, "求まりませんでした"),
+            "up_to={k} 警告={:?}",
+            res.warnings
+        );
+        assert!(
+            (extent(&res.frame, 0) - w).abs() < 1e-6,
+            "up_to={k} 横幅={} 期待={w}",
+            extent(&res.frame, 0)
+        );
+        assert!(
+            (extent(&res.frame, 1) - h).abs() < 1e-6,
+            "up_to={k} 縦幅={} 期待={h}",
+            extent(&res.frame, 1)
+        );
+        assert!(
+            extent(&res.frame, 2) < 1e-6,
+            "up_to={k} 厚み={}",
+            extent(&res.frame, 2)
+        );
+    }
+}
+
+/// 補間の下端(t=0)は「直前のステップまで折り終えた状態」と完全に一致する。
+/// 手順1・t=0は全ての角度が0になる縮退ケースなので、非縮退のk=2以降も確かめる。
+#[test]
+fn t_zero_matches_the_previous_step_completed() {
+    let doc = folded_document(4);
+    for k in 1..=4usize {
+        assert_eq!(
+            frame_bits(&replay(&doc, k, 0.0).frame),
+            frame_bits(&replay(&doc, k - 1, 1.0).frame),
+            "up_to={k} t=0 が up_to={} t=1 と一致しない",
+            k - 1
+        );
+    }
 }
 
 #[test]
@@ -266,6 +321,42 @@ fn step_with_partially_missing_fold_lines_continues_with_warning() {
     );
 }
 
+/// 層順序の代表点が1点も現在の面に解決できないステップは、直前の層順序を保つ
+/// (resolve_orderの補完結果=面ID順を採用してしまわない)。
+#[test]
+fn unresolvable_layer_order_keeps_the_previous_layers() {
+    let layers = |doc: &Document| -> Vec<(u32, u32)> {
+        let mut v: Vec<(u32, u32)> = replay(doc, 3, 1.0)
+            .frame
+            .faces
+            .iter()
+            .map(|f| (f.face, f.layer))
+            .collect();
+        v.sort_unstable();
+        v
+    };
+
+    // 最終ステップの層順序を「紙の外の点」だけにした文書と、層順序なしの文書
+    let mut broken = three_step_document();
+    broken.sequence[2].layer_order = Some(vec![[-1.0, -1.0], [2.0, 2.0]]);
+    let mut dropped = three_step_document();
+    dropped.sequence[2].layer_order = None;
+
+    let res = replay(&broken, 3, 1.0);
+    assert!(
+        res.warnings.iter().any(|w| w.contains("代表点")),
+        "解決できない代表点は警告に載る: {:?}",
+        res.warnings
+    );
+    assert_eq!(
+        layers(&broken),
+        layers(&dropped),
+        "1点も解決できない層順序は使わず、直前の層順序を保つ"
+    );
+    // 直前(手順2)の層順序は面ID昇順とは違うので、この検証には意味がある
+    assert_ne!(layers(&broken), layers(&three_step_document()));
+}
+
 #[test]
 fn steps_without_drivers_are_not_skipped() {
     let mut doc = three_step_document();
@@ -290,106 +381,112 @@ fn steps_without_drivers_are_not_skipped() {
 
 /// NFR-002: 10ステップ・面400の全再生が3秒以内。
 ///
-/// 20×20のミウラ折り(面400・辺840)に、中央の山ヒンジを2°ずつ深くする10ステップの
-/// 手順を与え、`replay(doc, 10, 1.0)` の実時間を測る(10回のsolveをwarm startで
-/// 連鎖する、いちばん重い使い方)。
-/// 実測(2026-08-05, 開発機 Windows 11): debug 約1.0〜1.1秒 / release 約36ms
+/// 400本の平行な折り線を交互に山谷にした蛇腹(面400・辺1,201)を、40本ずつ10ステップに
+/// 分けて完全に畳む手順を与え、`replay(doc, 10, 1.0)` の実時間を測る。
+/// 層順序は毎ステップ400点(=全面)を最も重い並び(現在の面の並びの逆順)で指定し、
+/// 代表点の解決も含めた全再生の実力を測る。
+/// 実測(2026-08-05, 開発機 Windows 11): debug 約0.7秒 / release 約23ms
 /// (release実測は `cargo test -p ori3-layers --release --test replay -- --nocapture`)。
 /// debugビルドにそのまま3秒の上限を課す(release目標に対し十分厳しい)。
 #[test]
 fn replay_of_ten_steps_on_400_faces_is_under_three_seconds() {
-    let cp = miura_cp(20, 20);
+    const STRIPS: usize = 400;
+    const STEPS: usize = 10;
+    let cp = accordion_cp(STRIPS);
     let faces = extract_faces(&cp);
-    assert_eq!(faces.len(), 400);
-    // 中央付近の縦ヒンジ(山)を線分で指定する
-    let hinge = 20 / 2 * (20 + 1) + 20 / 2;
-    let e = &cp.edges[hinge];
-    assert_eq!(e.kind, EdgeKind::Mountain);
-    let pos = |id: u32| cp.vertices.iter().find(|v| v.id == id).unwrap().pos;
-    let (a, b) = (pos(e.v0), pos(e.v1));
+    assert_eq!(faces.len(), STRIPS);
+    assert_eq!(cp.edges.len(), 3 * STRIPS + 1);
 
+    // 層順序: 全面の代表点を「現在の面の並びの逆順」で指定する(解決がいちばん重い形)
+    let mut layer_order = FlatState::initial(&cp, &faces).to_layer_points(&cp, &faces);
+    layer_order.reverse();
+
+    // 折り線i(i=1..STRIPS-1)は y=i/STRIPS の水平線。40本ずつ10ステップに分ける
+    let per_step = STRIPS.div_ceil(STEPS);
     let mut doc = Document::new(Paper {
         width_mm: 100.0,
         height_mm: 100.0,
     });
     doc.cp = cp;
-    doc.sequence = (1..=10u32)
-        .map(|i| FoldStep {
-            id: i,
+    doc.sequence = (0..STEPS)
+        .map(|s| FoldStep {
+            id: u32::try_from(s).unwrap(),
             kind: TechniqueKind::Simple,
-            drivers: vec![DriverLine {
-                a,
-                b,
-                target_angle_deg: 2.0 * f64::from(i),
-            }],
-            layer_order: None,
+            drivers: (s * per_step..(s + 1) * per_step)
+                .filter(|i| (1..STRIPS).contains(i))
+                .map(|i| {
+                    let y = i as f64 / STRIPS as f64;
+                    DriverLine {
+                        a: [0.0, y],
+                        b: [1.0, y],
+                        // 交互の山谷(accordion_cpと同じ規則)を目標角に写す
+                        target_angle_deg: if i % 2 == 1 { 180.0 } else { -180.0 },
+                    }
+                })
+                .collect(),
+            layer_order: Some(layer_order.clone()),
             note: String::new(),
         })
         .collect();
 
     let t0 = Instant::now();
-    let res = replay(&doc, 10, 1.0);
+    let res = replay(&doc, STEPS, 1.0);
     let dt = t0.elapsed();
     println!("replay(10ステップ・面400) = {dt:?} 警告={:?}", res.warnings);
     assert!(res.skipped.is_empty());
+    assert!(res.warnings.is_empty(), "警告={:?}", res.warnings);
+    // 蛇腹は完全に畳まれ、幅1・高さ1/400になる
+    assert!((extent(&res.frame, 0) - 1.0).abs() < 1e-6);
+    assert!(extent(&res.frame, 1) < 1.0 / STRIPS as f64 + 1e-6);
     assert!(
         dt < Duration::from_secs(3),
         "全再生が遅すぎます: {dt:?}(NFR-002: 3秒以内)"
     );
 }
 
-/// perf用: nc×nr面のミウラ折りCP(ori3-rigid の tests/perf_miura.rs と同じ構成)。
-fn miura_cp(nc: usize, nr: usize) -> CreasePattern {
-    let s = 0.35;
-    let dx = 1.0 / nc as f64;
-    let dy = 1.0 / (nr as f64 + s);
-    let vid = |i: usize, j: usize| u32::try_from(j * (nc + 1) + i).unwrap();
+/// perf用: 平行な折り線だけの蛇腹CP(面 `strips` 枚・辺 3*strips+1 本)。
+/// 内部頂点が無いのでループ拘束が生まれず、どの角度指定でも姿勢が一意に決まる。
+fn accordion_cp(strips: usize) -> CreasePattern {
+    let vid = |i: usize, right: bool| u32::try_from(2 * i + usize::from(right)).unwrap();
     let mut vertices = Vec::new();
-    for j in 0..=nr {
-        for i in 0..=nc {
-            vertices.push(Vertex {
-                id: vid(i, j),
-                pos: [
-                    i as f64 * dx,
-                    (j as f64 + if i % 2 == 1 { s } else { 0.0 }) * dy,
-                ],
-            });
-        }
+    for i in 0..=strips {
+        let y = i as f64 / strips as f64;
+        vertices.push(Vertex {
+            id: vid(i, false),
+            pos: [0.0, y],
+        });
+        vertices.push(Vertex {
+            id: vid(i, true),
+            pos: [1.0, y],
+        });
     }
     let mut edges: Vec<Edge> = Vec::new();
-    for j in 0..nr {
-        for i in 0..=nc {
-            let kind = if i == 0 || i == nc {
-                EdgeKind::Border
-            } else if (i + j) % 2 == 0 {
-                EdgeKind::Mountain
-            } else {
-                EdgeKind::Valley
-            };
-            edges.push(Edge {
-                id: u32::try_from(edges.len()).unwrap(),
-                v0: vid(i, j),
-                v1: vid(i, j + 1),
-                kind,
-            });
-        }
+    let push = |v0: u32, v1: u32, kind: EdgeKind, edges: &mut Vec<Edge>| {
+        edges.push(Edge {
+            id: u32::try_from(edges.len()).unwrap(),
+            v0,
+            v1,
+            kind,
+        });
+    };
+    for i in 0..=strips {
+        let kind = if i == 0 || i == strips {
+            EdgeKind::Border
+        } else if i % 2 == 1 {
+            EdgeKind::Mountain
+        } else {
+            EdgeKind::Valley
+        };
+        push(vid(i, false), vid(i, true), kind, &mut edges);
     }
-    for j in 0..=nr {
-        for i in 0..nc {
-            let kind = if j == 0 || j == nr {
-                EdgeKind::Border
-            } else if j % 2 == 1 {
-                EdgeKind::Mountain
-            } else {
-                EdgeKind::Valley
-            };
-            edges.push(Edge {
-                id: u32::try_from(edges.len()).unwrap(),
-                v0: vid(i, j),
-                v1: vid(i + 1, j),
-                kind,
-            });
-        }
+    for i in 0..strips {
+        push(
+            vid(i, false),
+            vid(i + 1, false),
+            EdgeKind::Border,
+            &mut edges,
+        );
+        push(vid(i, true), vid(i + 1, true), EdgeKind::Border, &mut edges);
     }
     CreasePattern {
         next_vertex_id: u32::try_from(vertices.len()).unwrap(),

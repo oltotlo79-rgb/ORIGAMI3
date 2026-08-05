@@ -8,13 +8,17 @@
 //! # 求め方
 //!
 //! 折り畳んだ状態の上に次の折りを重ねるのではなく、**平らな展開図に
-//! 「そこまでの全ステップのdriver」をまとめて与えて解く**。
+//! 「そこまでの全ステップのdriver」をまとめて与えて1回で解く**。
 //! `up_to` 未満のステップは目標角そのまま、`up_to` ステップ目だけ角度を `t` 倍する
 //! (0→目標への線形補間)。同じ辺を複数のステップが駆動する場合は後のステップが勝つ。
 //!
-//! ステップを1つずつ進めながら解き、前ステップの解を次のwarm startに渡す
-//! (途中の形からの連続変化になるため、山谷の分岐を取り違えにくい)。
-//! warm startの元は必ず同じ手順列から決まるので結果は決定的(SYS-004)。
+//! **まだ折っていない折り線は0°(平ら)のdriverとして明示的に固定する。**
+//! ソルバーは角度指定の無いヒンジを自由変数として扱い、初期値バイアス(山谷の向きへ
+//! driver角の平均の半分)から別の枝へ収束させてしまうため、これを省くと
+//! 「後続ステップの折り線まで曲がった、警告の出ない誤った形」が返る
+//! (`ori3-rigid` の `solve` のdocが書いているとおり、平らに戻すには0°の明示が要る)。
+//! 結果として全ヒンジが固定値になるので、ステップごとに解き直しても最後の1回と
+//! 同じ姿勢になる。無駄を避けて1回だけ解く(warm startを使わないので決定的)。
 //!
 //! # 見つからない折り線の扱い(SEQ-004)
 //!
@@ -22,11 +26,19 @@
 //!   飛ばしたステップの層順序も使わない(直前の層順序を保つ)
 //! - 一部だけ解決できた場合は解決できた分で続行し、警告だけ出す
 //! - 折り線を持たないステップ(Pose等)は「見つからない」ではないので飛ばさない
-//! - 姿勢計算が収束しない場合も止めず、最良解を返して警告に載せる
+//! - 層順序の代表点が1点も現在の面に解決できないときも直前の層順序を保つ
+//! - 姿勢が求まらない(閉じない)場合も止めず、最良解を返して警告に載せる
+//!
+//! # 既知の制限
+//!
+//! 一部の層だけを折る手順(`fold_through` の `target_layers` 指定)は、平らな1枚の
+//! 剛体折りとしては成立しない(折り線の端が紙の縁でも既存の折り線の交点でもない
+//! 位置で終わるため、±180°まで折ると閉じない)。再生すると収束せず、いちばん近い形と
+//! 警告を返す。
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
-use ori3_cp::extract_faces;
+use ori3_cp::{Face, extract_faces};
 use ori3_model::{Document, Driver, EdgeId, FaceId, Frame3D, StepId};
 
 use crate::flat_state::FlatState;
@@ -53,7 +65,14 @@ pub struct ReplayResult {
 /// `up_to` ステップ目の層順序は完了時(t=1)にだけ反映する
 /// (折っている途中の紙はまだ新しい重なり順になっていないため)。
 pub fn replay(doc: &Document, up_to: usize, t: f64) -> ReplayResult {
-    let faces = extract_faces(&doc.cp);
+    replay_with_faces(doc, &extract_faces(&doc.cp), up_to, t)
+}
+
+/// 面抽出済みの呼び出し側(store等)のための [`replay`]。
+///
+/// `faces` は `doc.cp` から `extract_faces` で導出したものでなければならない
+/// (別のCP由来の面を渡すと結果は意味を持たない)。
+pub fn replay_with_faces(doc: &Document, faces: &[Face], up_to: usize, t: f64) -> ReplayResult {
     let up_to = up_to.min(doc.sequence.len());
     let t = if t.is_finite() {
         t.clamp(0.0, 1.0)
@@ -63,13 +82,11 @@ pub fn replay(doc: &Document, up_to: usize, t: f64) -> ReplayResult {
 
     let mut warnings: Vec<String> = Vec::new();
     let mut skipped: Vec<StepId> = Vec::new();
-    let mut diverged: Vec<usize> = Vec::new();
     // 現在の層順序(下→上)。初期状態は面ID昇順。
-    let mut order = FlatState::initial(&doc.cp, &faces).order;
+    let mut order = FlatState::initial(&doc.cp, faces).order;
     // そこまでのステップの角度指定の累積(後から積んだものが優先される)
     let mut drivers: Vec<Driver> = Vec::new();
-    let mut warm: Option<HashMap<EdgeId, f64>> = None;
-    let mut frame: Option<Frame3D> = None;
+    let mut driven: HashSet<EdgeId> = HashSet::new();
 
     for (i, step) in doc.sequence.iter().take(up_to).enumerate() {
         let number = i + 1; // 利用者向けの手順番号は1始まり
@@ -98,41 +115,45 @@ pub fn replay(doc: &Document, up_to: usize, t: f64) -> ReplayResult {
         if resolved_lines < step.drivers.len() {
             warnings.push(format!("手順{number}の折り線の一部が見つかりません"));
         }
+        driven.extend(step_drivers.iter().map(|d| d.hinge));
         drivers.extend(step_drivers);
 
-        let result = ori3_rigid::solve(&doc.cp, &faces, &drivers, warm.as_ref());
-        if !result.converged {
-            diverged.push(number);
-        }
-        warm = Some(result.angles);
-        frame = Some(result.frame);
-
-        // 層順序はステップ完了時にだけ更新する(Poseなど層順序を持たないステップと
-        // 解決できる点が無いステップは直前の層順序を保つ)
+        // 層順序はステップ完了時にだけ更新する。層順序を持たないステップ(Pose)と、
+        // 代表点が1点も現在の面に解決できなかったステップは直前の層順序を保つ。
         if scale >= 1.0
             && let Some(points) = &step.layer_order
             && !points.is_empty()
         {
-            let (resolved, mut w) = FlatState::resolve_order(&doc.cp, &faces, points);
-            order = resolved;
+            let (resolved, mut w) = FlatState::resolve_order(&doc.cp, faces, points);
+            // resolve_orderは解決できなかった点ごとにちょうど1件の警告を返すので、
+            // 警告の数が点の数と同じなら1点も解決できていない
+            if w.len() < points.len() {
+                order = resolved;
+            }
             warnings.append(&mut w);
         }
     }
 
-    if !diverged.is_empty() {
-        let list = diverged
-            .iter()
-            .map(usize::to_string)
-            .collect::<Vec<_>>()
-            .join("・");
+    // まだ折っていない折り線は0°(平ら)に固定する。自由変数として残すと初期値
+    // バイアスから別の枝へ収束し、警告なしで誤った形が返る(モジュールdoc参照)。
+    let mut all: Vec<Driver> = hinge_edges(faces)
+        .into_iter()
+        .filter(|e| !driven.contains(e))
+        .map(|hinge| Driver {
+            hinge,
+            target_angle_deg: 0.0,
+        })
+        .collect();
+    all.extend(drivers);
+
+    let result = ori3_rigid::solve(&doc.cp, faces, &all, None);
+    if !result.converged {
         warnings.push(format!(
-            "手順{list}の折り具合の計算が収束しませんでした(いちばん近い形で表示します)"
+            "手順{up_to}までの形が展開図から求まりませんでした(いちばん近い形で表示します)。一部の層だけを折る手順は、展開図からの折り直しでは正確に再現できないことがあります"
         ));
     }
 
-    // 1ステップも適用しなかった場合(up_to=0・全ステップ飛ばし)は平らな姿勢
-    let mut frame =
-        frame.unwrap_or_else(|| ori3_rigid::solve(&doc.cp, &faces, &drivers, warm.as_ref()).frame);
+    let mut frame = result.frame;
     let layer_of: HashMap<FaceId, u32> = order
         .iter()
         .enumerate()
@@ -147,4 +168,20 @@ pub fn replay(doc: &Document, up_to: usize, t: f64) -> ReplayResult {
         skipped,
         warnings,
     }
+}
+
+/// ヒンジ(ちょうど2つの異なる面が共有する辺)を辺ID昇順で返す。
+/// `ori3-rigid` の `build_forest` と同じ定義。ここに載らない辺へ角度を指定すると
+/// ソルバーが「折り線(2面の境)ではない」警告を出すため、0°固定の対象も同じ集合に絞る。
+fn hinge_edges(faces: &[Face]) -> Vec<EdgeId> {
+    let mut occ: BTreeMap<EdgeId, Vec<usize>> = BTreeMap::new();
+    for (fi, f) in faces.iter().enumerate() {
+        for &eid in &f.edges {
+            occ.entry(eid).or_default().push(fi);
+        }
+    }
+    occ.into_iter()
+        .filter(|(_, list)| list.len() == 2 && list[0] != list[1])
+        .map(|(eid, _)| eid)
+        .collect()
 }
