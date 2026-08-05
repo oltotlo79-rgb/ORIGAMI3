@@ -13,6 +13,7 @@ import { paperExtent } from "../CpEditor/snap";
 import { planeRadius, screenToPlane } from "../../lib/planeProject";
 import type { Vec2 } from "../../lib/types";
 import {
+  facesAtPoint,
   foldLayers,
   foldPreviewSegments,
   keepSidePoint,
@@ -35,6 +36,9 @@ const FOLD_SNAP_PX = 14;
 const FOLD_SNAP_FALLBACK = 0.02;
 /** これ未満の長さの折り線は引かなかったことにする(正規化座標) */
 const MIN_FOLD_LENGTH = 1e-4;
+/** 技法のフラップ選択で、層の輪郭からこの距離以内なら「その場所にある」とみなす
+ * (クリック位置は紙の点・輪郭へ吸着するので、境界ちょうどを指しても拾えるようにする) */
+const FLAP_PICK_EPS = 1e-3;
 /** プレビュー線を紙より少しだけ上に浮かせる高さ(重なりのちらつき防止) */
 const PREVIEW_LIFT = 0.002;
 
@@ -59,8 +63,10 @@ export function Viewer3D({ fitRef }: Props) {
   const docEpoch = useAppStore((s) => s.docEpoch);
   const activeTool = useAppStore((s) => s.activeTool);
   const foldDraft = useAppStore((s) => s.foldDraft);
+  const techniqueDraft = useAppStore((s) => s.techniqueDraft);
   const foldReady = useAppStore(canFoldNow);
-  const foldMode = activeTool === "fold";
+  // 「折る」と「技法」はどちらも紙の上に折り線を引く(左ドラッグを線引きに使う)
+  const foldMode = activeTool === "fold" || activeTool === "technique";
 
   // シーンの初期化と破棄
   useEffect(() => {
@@ -99,6 +105,27 @@ export function Viewer3D({ fitRef }: Props) {
     if (!scene?.content) return;
     const s = useAppStore.getState();
     const drawing = drawingRef.current;
+    // 技法では、選んだフラップ(重なった層)の輪郭も光らせる
+    if (s.activeTool === "technique" && s.techniqueDraft && s.doc) {
+      const draft = s.techniqueDraft;
+      const layers = foldLayers(s.frame3d, s.doc, s.faces);
+      const segments: [Vec2, Vec2][] = [];
+      const shown = drawing ? [drawing.a, drawing.b] : draft.line;
+      if (shown) segments.push([shown[0], shown[1]]);
+      for (const l of layers.filter((l) => draft.flap.includes(l.face))) {
+        for (let i = 0; i < l.polygon.length; i++) {
+          segments.push([l.polygon[i], l.polygon[(i + 1) % l.polygon.length]]);
+        }
+      }
+      scene.setHighlight(
+        segments.map(([a, b]) => ({
+          edgeId: -1,
+          a: new THREE.Vector3(a[0], a[1], PREVIEW_LIFT),
+          b: new THREE.Vector3(b[0], b[1], PREVIEW_LIFT),
+        })),
+      );
+      return;
+    }
     const line: [Vec2, Vec2] | null = drawing
       ? [drawing.a, drawing.b]
       : s.activeTool === "fold" && s.foldDraft
@@ -134,7 +161,17 @@ export function Viewer3D({ fitRef }: Props) {
   // 選択・折り線プレビューの強調(上の効果で線分が更新された後に走る)
   useEffect(() => {
     drawHighlight();
-  }, [selection, doc, faces, hinges, frame3d, foldDraft, activeTool, drawHighlight]);
+  }, [
+    selection,
+    doc,
+    faces,
+    hinges,
+    frame3d,
+    foldDraft,
+    techniqueDraft,
+    activeTool,
+    drawHighlight,
+  ]);
 
   // 折るツールの間は左ドラッグを線引きに使うので、視点の回転を止める
   useEffect(() => {
@@ -207,7 +244,8 @@ export function Viewer3D({ fitRef }: Props) {
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
       const s = useAppStore.getState();
-      if (e.button === 0 && s.activeTool === "fold" && canFoldNow(s)) {
+      const drawTool = s.activeTool === "fold" || s.activeTool === "technique";
+      if (e.button === 0 && drawTool && canFoldNow(s)) {
         const p = planePoint(rect, x, y);
         if (p) {
           e.currentTarget.setPointerCapture(e.pointerId);
@@ -241,8 +279,23 @@ export function Viewer3D({ fitRef }: Props) {
       if (drawing) {
         drawingRef.current = null;
         const [a, b] = [drawing.a, drawing.b];
-        if (Math.hypot(b[0] - a[0], b[1] - a[1]) >= MIN_FOLD_LENGTH) {
-          useAppStore.getState().beginFoldDraft([a, b], "3d");
+        const s = useAppStore.getState();
+        const drawn = Math.hypot(b[0] - a[0], b[1] - a[1]) >= MIN_FOLD_LENGTH;
+        if (s.activeTool === "technique" && s.techniqueDraft && s.doc) {
+          if (drawn) {
+            s.setTechniqueLine([a, b]);
+          } else {
+            // ドラッグせずクリックしただけ: その場所に重なっている層を選ぶ
+            s.setTechniqueFlap(
+              facesAtPoint(
+                foldLayers(s.frame3d, s.doc, s.faces),
+                a,
+                FLAP_PICK_EPS,
+              ),
+            );
+          }
+        } else if (drawn) {
+          s.beginFoldDraft([a, b], "3d");
         }
         drawHighlight();
         return;
@@ -278,9 +331,11 @@ export function Viewer3D({ fitRef }: Props) {
         className="viewer3d-canvas"
         style={{ cursor: foldMode && foldReady ? "crosshair" : "default" }}
         title={
-          foldMode
-            ? "紙の上をドラッグして折り線を引く(平らに畳んだ状態で使える)"
-            : "ドラッグで回転、ホイールで拡大縮小、折り線をクリックで選択"
+          activeTool === "technique"
+            ? "紙をクリックして層を選び、ドラッグして折り線を引く(平らに畳んだ状態で使える)"
+            : foldMode
+              ? "紙の上をドラッグして折り線を引く(平らに畳んだ状態で使える)"
+              : "ドラッグで回転、ホイールで拡大縮小、折り線をクリックで選択"
         }
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}

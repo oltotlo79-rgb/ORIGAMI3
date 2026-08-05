@@ -3,9 +3,11 @@
 pub mod flat_state;
 pub mod fold_through;
 pub mod replay;
+pub mod techniques;
 
 pub use flat_state::{FlatState, point_in_face, representative_point};
 pub use fold_through::{
     FoldDirection, FoldThroughInput, FoldThroughResult, fold_through, resolve_driver_edges,
 };
 pub use replay::{ReplayResult, flat_state_at, replay, replay_with_faces};
+pub use techniques::{TechniqueInput, inside_reverse, outside_reverse, pleat};

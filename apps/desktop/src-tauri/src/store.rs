@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use ori3_cp::Face;
 use ori3_model::{
     CreasePattern, Document, EdgeId, EdgeKind, EditOp, Frame3D, Paper, SCHEMA_VERSION, SeqOp,
-    StepId, VertexId,
+    StepId, TechniqueKind, VertexId,
 };
 
 /// undo履歴の最大件数。超過時は最古をFIFOで破棄する。
@@ -263,6 +263,50 @@ impl DocumentStore {
                         keep_side_point,
                         target_layers,
                         direction,
+                    },
+                )?;
+                let mut step = result.step;
+                step.id = next_step_id(&doc);
+                doc.cp = cp;
+                doc.sequence.push(step);
+                warnings = state_warnings;
+                warnings.extend(result.warnings);
+            }
+            SeqOp::Technique {
+                up_to,
+                kind,
+                flap,
+                line,
+                reference_point,
+            } => {
+                // FoldThroughと同じ規約: 末尾への追加のみ(途中へ挟むと後続手順が壊れ得る)
+                if up_to != doc.sequence.len() {
+                    return Err(
+                        "手順の途中には折り操作を挿入できません。最新の状態に戻してから折ってください"
+                            .to_string(),
+                    );
+                }
+                let technique = match kind {
+                    TechniqueKind::Pleat => ori3_layers::pleat,
+                    TechniqueKind::InsideReverse => ori3_layers::inside_reverse,
+                    TechniqueKind::OutsideReverse => ori3_layers::outside_reverse,
+                    _ => {
+                        return Err(
+                            "この折り方はまだ選べません。手動の折り操作で代替してください"
+                                .to_string(),
+                        );
+                    }
+                };
+                let (state, state_warnings) = ori3_layers::flat_state_at(&doc, &self.faces, up_to)?;
+                let mut cp = doc.cp.clone();
+                let result = technique(
+                    &mut cp,
+                    &self.faces,
+                    &state,
+                    &ori3_layers::TechniqueInput {
+                        flap,
+                        line,
+                        reference_point,
                     },
                 )?;
                 let mut step = result.step;
@@ -971,6 +1015,120 @@ mod tests {
         assert!(err.contains("折り線"), "err={err}");
         assert_eq!(store.doc, before);
         assert!(store.undo_stack.is_empty(), "Errはundo履歴に積まれない");
+    }
+
+    /// 技法(SeqOp::Technique)で段折りができ、展開図・手順・層が更新される。
+    #[test]
+    fn technique_pleat_updates_cp_sequence_and_layers() {
+        let mut store = square_store();
+        let mut view = store
+            .apply_seq(SeqOp::Technique {
+                up_to: 0,
+                kind: TechniqueKind::Pleat,
+                flap: Vec::new(),
+                line: [[0.4, 0.0], [0.4, 1.0]],
+                reference_point: [0.5, 0.5],
+            })
+            .unwrap();
+        // 折り線2本で面が3つに分かれ、手順が1つ増える
+        assert_eq!(view.faces.len(), 3);
+        assert_eq!(view.doc.sequence.len(), 1);
+        let step = &view.doc.sequence[0];
+        assert_eq!(step.kind, TechniqueKind::Pleat);
+        assert_eq!(step.drivers.len(), 2);
+        assert_eq!(step.layer_order.as_ref().map(Vec::len), Some(3));
+        // 山と谷が1本ずつ(段折りは山谷が交互になる)
+        let kinds: Vec<EdgeKind> = view
+            .doc
+            .cp
+            .edges
+            .iter()
+            .map(|e| e.kind)
+            .filter(|k| *k != EdgeKind::Border)
+            .collect();
+        assert_eq!(kinds.iter().filter(|k| **k == EdgeKind::Mountain).count(), 1);
+        assert_eq!(kinds.iter().filter(|k| **k == EdgeKind::Valley).count(), 1);
+        attach_replay(&mut view);
+        assert!(view.skipped.is_empty(), "warnings={:?}", view.warnings);
+
+        // undoで折る前へ戻る
+        let view = store.undo().unwrap();
+        assert!(view.doc.sequence.is_empty());
+        assert_eq!(view.faces.len(), 1);
+    }
+
+    /// 中割り折りは畳んだ状態(2層のフラップ)に対して適用できる。
+    #[test]
+    fn technique_inside_reverse_folds_a_two_layer_flap() {
+        let mut store = square_store();
+        // 下ごしらえ: 半分に折って2層にする
+        store
+            .apply_seq(fold_op(0, [[0.0, 0.5], [1.0, 0.5]], [0.5, 0.25]))
+            .unwrap();
+        let flap: Vec<u32> = store.faces.iter().map(|f| f.id).collect();
+        assert_eq!(flap.len(), 2);
+
+        let view = store
+            .apply_seq(SeqOp::Technique {
+                up_to: 1,
+                kind: TechniqueKind::InsideReverse,
+                flap,
+                line: [[0.7, 0.5], [0.5, 0.0]],
+                reference_point: [0.2, 0.25],
+            })
+            .unwrap();
+        assert_eq!(view.faces.len(), 4, "2層が4層になる");
+        assert_eq!(view.doc.sequence.len(), 2);
+        assert_eq!(view.doc.sequence[1].kind, TechniqueKind::InsideReverse);
+        assert_eq!(view.doc.sequence[1].drivers.len(), 3);
+    }
+
+    /// 未実装の技法・折れない指定・手順の途中への挿入はErr(文書は無変更)。
+    #[test]
+    fn technique_rejects_unsupported_kind_and_bad_input() {
+        let mut store = square_store();
+        let before = store.doc.clone();
+
+        let err = store
+            .apply_seq(SeqOp::Technique {
+                up_to: 0,
+                kind: TechniqueKind::Petal,
+                flap: Vec::new(),
+                line: [[0.4, 0.0], [0.4, 1.0]],
+                reference_point: [0.5, 0.5],
+            })
+            .unwrap_err();
+        assert!(err.contains("まだ選べません"), "err={err}");
+        assert_eq!(store.doc, before);
+
+        // 段の幅0(基準点が折り線の上)
+        let err = store
+            .apply_seq(SeqOp::Technique {
+                up_to: 0,
+                kind: TechniqueKind::Pleat,
+                flap: Vec::new(),
+                line: [[0.4, 0.0], [0.4, 1.0]],
+                reference_point: [0.4, 0.5],
+            })
+            .unwrap_err();
+        assert!(err.contains("段の幅"), "err={err}");
+        assert_eq!(store.doc, before);
+        assert!(store.undo_stack.is_empty(), "Errはundo履歴に積まれない");
+
+        // 手順の途中への挿入
+        store
+            .apply_seq(fold_op(0, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5]))
+            .unwrap();
+        let err = store
+            .apply_seq(SeqOp::Technique {
+                up_to: 0,
+                kind: TechniqueKind::Pleat,
+                flap: Vec::new(),
+                line: [[0.4, 0.0], [0.4, 1.0]],
+                reference_point: [0.5, 0.5],
+            })
+            .unwrap_err();
+        assert!(err.contains("手順の途中には"), "err={err}");
     }
 
     /// 受け入れ確認(Task 2-5): 座布団折り(4隅を中心へ)→観音折り(左右を中心線へ)を

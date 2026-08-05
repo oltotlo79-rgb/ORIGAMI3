@@ -86,6 +86,22 @@ body,
   color: #fff;
 }
 
+/* 技法のサブメニュー(「技法」を選んでいる間だけ出る) */
+.tool-submenu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px 0 6px;
+  padding: 4px 2px;
+  border-left: 3px solid #3b6fc9;
+  background: #eeeef2;
+}
+
+.tool-button.small {
+  padding: 5px 0;
+  font-size: 11px;
+}
+
 .pane {
   position: relative;
   min-width: 0;

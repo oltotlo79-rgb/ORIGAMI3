@@ -4,10 +4,12 @@ import { describe, expect, it } from "vitest";
 import type { Document, Face, Frame3D, Vec2 } from "../../lib/types";
 import {
   clipToMovingSide,
+  facesAtPoint,
   foldLayers,
   foldPreviewSegments,
   keepSidePoint,
   movingLayers,
+  offsetPoint,
   snapFoldPoint,
   topMovingFace,
 } from "./foldDraw";
@@ -187,5 +189,40 @@ describe("snapFoldPoint", () => {
   it("半径内に候補が無ければそのままの位置を返す", () => {
     const layers = foldLayers(stackedFrame(), makeDoc(), SQUARE_FACE);
     expect(snapFoldPoint(layers, [0.5, 0.5], 0.1)).toEqual([0.5, 0.5]);
+  });
+});
+
+describe("facesAtPoint(技法のフラップ選択)", () => {
+  it("その場所に重なっている層を下から順に返す", () => {
+    const layers = foldLayers(stackedFrame(), makeDoc(), SQUARE_FACE);
+    expect(facesAtPoint(layers, [0.5, 0.5])).toEqual([0, 1]);
+  });
+
+  it("紙の外を指したときは何も返さない", () => {
+    const layers = foldLayers(stackedFrame(), makeDoc(), SQUARE_FACE);
+    expect(facesAtPoint(layers, [1.5, 0.5])).toEqual([]);
+  });
+
+  it("輪郭の上(わずかに外)も拾う", () => {
+    const layers = foldLayers(stackedFrame(), makeDoc(), SQUARE_FACE);
+    expect(facesAtPoint(layers, [1.0000001, 0.5], 1e-3)).toEqual([0, 1]);
+  });
+});
+
+describe("offsetPoint(技法の基準点)", () => {
+  const line: [Vec2, Vec2] = [
+    [0.5, 0],
+    [0.5, 1],
+  ];
+
+  it("線の進行方向に対する左右へ、指定した距離だけ離れた点を返す", () => {
+    // 上向きの線の左は x が小さい側
+    expect(offsetPoint(line, "left", 0.1)).toEqual([0.4, 0.5]);
+    expect(offsetPoint(line, "right", 0.1)).toEqual([0.6, 0.5]);
+  });
+
+  it("動かさない側を示す点は、動かす側の反対に出る", () => {
+    const keep = keepSidePoint(line, "right");
+    expect(keep[0]).toBeLessThan(0.5);
   });
 });

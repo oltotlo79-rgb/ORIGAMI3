@@ -12,6 +12,7 @@ import { advancePlayback, startPlayback } from "../lib/playback";
 import {
   foldLayers,
   keepSidePoint,
+  offsetPoint,
   topMovingFace,
 } from "../components/Viewer3D/foldDraw";
 import type {
@@ -24,6 +25,7 @@ import type {
   Frame3D,
   Paper,
   SeqOp,
+  TechniqueKind,
   Vec2,
 } from "../lib/types";
 
@@ -39,7 +41,8 @@ export type ToolId =
   | "valley"
   | "aux"
   | "delete"
-  | "fold";
+  | "fold"
+  | "technique";
 
 /** 選択中の線・頂点(ID)。DOMのSelectionと紛れないよう注意 */
 export interface Selection {
@@ -66,9 +69,33 @@ export interface FoldDraft {
   stepCount: number;
 }
 
+/** 技法の下ごしらえ(選んだ技法・フラップ・折り線)。確定するまで保持する */
+export interface TechniqueDraft {
+  /** 選んだ技法(実装済みのものだけ。lib/techniques.tsのSUPPORTED_TECHNIQUESを参照) */
+  kind: TechniqueKind;
+  /** 対象フラップ(3D表示でクリックした場所に重なっている層の面ID) */
+  flap: number[];
+  /** 折り線(畳み平面座標)。まだ引いていなければnull */
+  line: [Vec2, Vec2] | null;
+  /** 折り線のどちら側が動くか(線の進行方向に対する左右) */
+  movingSide: "left" | "right";
+  /** 段折りの段の幅(mm) */
+  widthMm: number;
+  /** 選んだ時点の作品の世代番号(新規・開くで変わる) */
+  docEpoch: number;
+  /** 選んだ時点の手順の数 */
+  stepCount: number;
+}
+
+/** 段折りの段の幅の初期値(mm) */
+const DEFAULT_PLEAT_WIDTH_MM = 10;
+
 /** 引きかけの折り線が今の形に合わなくなったときの案内 */
 const STALE_DRAFT_MESSAGE =
   "引いた折り線は今の紙の形に合わなくなったため取り消しました。もう一度線を引いてください";
+
+/** 技法が使えない形だったときに添える案内(要件§12) */
+const TECHNIQUE_FALLBACK_HINT = "手動の折り操作で代替してください";
 
 /**
  * 折る操作ができる状態か(平らに畳んだ状態を表示しているか)。
@@ -95,6 +122,8 @@ interface AppState {
   activeTool: ToolId;
   /** 引いたばかりの折り線と確定前の設定。nullなら折り線を引いていない */
   foldDraft: FoldDraft | null;
+  /** 選んだ技法と、その下ごしらえ(フラップ・折り線)。nullなら技法を選んでいない */
+  techniqueDraft: TechniqueDraft | null;
   /** 3D表示フレーム。nullなら平ら(展開図から直接描く) */
   frame3d: Frame3D | null;
   /** 折り角度を指定できる辺(ヒンジ)のID集合。doc/faces更新時に1度だけ導出する */
@@ -150,6 +179,18 @@ interface AppState {
   cancelFoldDraft: () => void;
   /** 引いた折り線で実際に折る(sequence_apply FoldThrough)。成功したら折り線を捨てる */
   commitFoldDraft: () => Promise<void>;
+  /** 技法を選ぶ(ツールレールのサブメニュー)。下ごしらえを作り直す */
+  beginTechnique: (kind: TechniqueKind) => void;
+  /** 3D表示でクリックした場所の層をフラップとして選ぶ */
+  setTechniqueFlap: (faces: number[]) => void;
+  /** 技法の折り線を引く */
+  setTechniqueLine: (line: [Vec2, Vec2]) => void;
+  /** 技法の設定(動かす側・段の幅)を変える */
+  updateTechniqueDraft: (patch: Partial<TechniqueDraft>) => void;
+  /** 技法の下ごしらえを捨てる */
+  cancelTechnique: () => void;
+  /** 選んだ技法を実際に適用する(sequence_apply Technique) */
+  commitTechnique: () => Promise<void>;
   /** ヒンジの折り角度を指定する(60ms間引きで追従計算を呼ぶ) */
   setDriverAngle: (hinge: number, deg: number) => void;
   /** 1本の角度指定を解除する(形は残りの指定から計算し直す) */
@@ -246,6 +287,7 @@ export const useAppStore = create<AppState>((set, get) => {
     set((s) => ({
       doc: view.doc,
       foldDraft: null,
+      techniqueDraft: null,
       faces: view.faces,
       hinges: hingeEdgeIds(view.doc, view.faces),
       warnings: view.warnings,
@@ -294,6 +336,7 @@ export const useAppStore = create<AppState>((set, get) => {
           replaySkipped: [],
           replayWarnings: [],
           foldDraft: null,
+          techniqueDraft: null,
         });
       }
       if (r.value.doc.sequence.length > 0) {
@@ -464,6 +507,7 @@ export const useAppStore = create<AppState>((set, get) => {
     selection: EMPTY_SELECTION,
     activeTool: "select",
     foldDraft: null,
+    techniqueDraft: null,
     frame3d: null,
     currentStep: null,
     playT: 1,
@@ -521,6 +565,7 @@ export const useAppStore = create<AppState>((set, get) => {
       // 別の手順の形を見せる操作なので、その前の形の上に引いた折り線は捨てる
       // (残すとコンテキストパネルに折りUIが出たままになり、手順の設定も出せない)
       if (get().foldDraft) set({ foldDraft: null });
+      if (get().techniqueDraft) set({ techniqueDraft: null });
       const s = get();
       const total = s.doc?.sequence.length ?? 0;
       if (total === 0) {
@@ -556,8 +601,8 @@ export const useAppStore = create<AppState>((set, get) => {
       const total = s.doc?.sequence.length ?? 0;
       const next = startPlayback(s.currentStep, s.playT, total);
       if (!next.playing) return;
-      // 再生中は形が刻々と変わるので、引きかけの折り線は捨てる
-      set({ foldDraft: null });
+      // 再生中は形が刻々と変わるので、引きかけの折り線・技法の下ごしらえは捨てる
+      set({ foldDraft: null, techniqueDraft: null });
       set({ currentStep: next.step, playT: next.t, playing: true });
       lastTs = 0; // 止めていた間の時間は進めない(1コマ目の経過時間は0)
       cancelFrame = scheduleFrame(tick);
@@ -567,7 +612,12 @@ export const useAppStore = create<AppState>((set, get) => {
       // ツール切替時は選択を保つ必要がないので解除する。
       // 引きかけの折り線も、別のツールへ移った時点で意味を失うので捨てる
       if (get().activeTool !== tool) {
-        set({ activeTool: tool, selection: EMPTY_SELECTION, foldDraft: null });
+        set({
+          activeTool: tool,
+          selection: EMPTY_SELECTION,
+          foldDraft: null,
+          techniqueDraft: null,
+        });
       }
     },
 
@@ -644,6 +694,98 @@ export const useAppStore = create<AppState>((set, get) => {
       });
       // 失敗したときは設定を変えてやり直せるよう、折り線を残す
       if (get().errorMessage === null) set({ foldDraft: null });
+    },
+
+    beginTechnique: (kind) => {
+      const s = get();
+      if (!s.doc) return;
+      set({
+        activeTool: "technique",
+        selection: EMPTY_SELECTION,
+        foldDraft: null,
+        techniqueDraft: {
+          kind,
+          flap: [],
+          line: null,
+          movingSide: "right",
+          widthMm: DEFAULT_PLEAT_WIDTH_MM,
+          docEpoch: s.docEpoch,
+          stepCount: s.doc.sequence.length,
+        },
+        errorMessage: null,
+      });
+    },
+
+    setTechniqueFlap: (faces) => {
+      const draft = get().techniqueDraft;
+      if (draft) set({ techniqueDraft: { ...draft, flap: faces } });
+    },
+
+    setTechniqueLine: (line) => {
+      const draft = get().techniqueDraft;
+      if (draft) set({ techniqueDraft: { ...draft, line } });
+    },
+
+    updateTechniqueDraft: (patch) => {
+      const draft = get().techniqueDraft;
+      if (draft) set({ techniqueDraft: { ...draft, ...patch } });
+    },
+
+    cancelTechnique: () => {
+      if (get().techniqueDraft) set({ techniqueDraft: null });
+    },
+
+    commitTechnique: async () => {
+      const s = get();
+      const draft = s.techniqueDraft;
+      if (!draft || !s.doc) return;
+      if (!draft.line) {
+        set({
+          errorMessage:
+            "折り線がありません。立体表示の紙の上をドラッグして折り線を引いてください",
+        });
+        return;
+      }
+      // 選んだ時点と今とで形が違えば、そのまま折ると違う位置に折り目が入る
+      if (
+        !canFoldNow(s) ||
+        draft.docEpoch !== s.docEpoch ||
+        draft.stepCount !== s.doc.sequence.length
+      ) {
+        set({ techniqueDraft: null, errorMessage: STALE_DRAFT_MESSAGE });
+        return;
+      }
+      if (draft.kind !== "Pleat" && draft.flap.length < 2) {
+        set({
+          errorMessage:
+            "先に立体表示で紙をクリックし、重なった層(フラップ)を選んでください",
+        });
+        return;
+      }
+      // 基準点の意味は技法ごとに違う。段折りは2本目の折り線の位置(段の幅ぶん
+      // 動く側へ離した点)、中割り・かぶせは先端が向かう側(動かない側)の点
+      const scale = Math.max(s.doc.paper.width_mm, s.doc.paper.height_mm);
+      const reference =
+        draft.kind === "Pleat"
+          ? offsetPoint(draft.line, draft.movingSide, draft.widthMm / scale)
+          : keepSidePoint(draft.line, draft.movingSide);
+      // 折った結果(最新の状態)を見せる
+      set({ currentStep: null });
+      await get().applySequenceOp({
+        type: "Technique",
+        up_to: s.doc.sequence.length,
+        kind: draft.kind,
+        flap: draft.flap,
+        line: draft.line,
+        reference_point: reference,
+      });
+      const error = get().errorMessage;
+      if (error === null) {
+        set({ techniqueDraft: null });
+      } else if (!error.includes(TECHNIQUE_FALLBACK_HINT)) {
+        // 技法が当てはまらない形だったときは代わりの手を案内する(要件§12)
+        set({ errorMessage: `${error}(${TECHNIQUE_FALLBACK_HINT})` });
+      }
     },
 
     setDriverAngle: (hinge, deg) => {

@@ -2,7 +2,12 @@
 // 警告・エラーの詳細もここに表示する(常設パネルを増やさない)。
 
 import { useEffect, useRef } from "react";
-import { isStepSkipped, useAppStore, type FoldDraft } from "../store/appStore";
+import {
+  isStepSkipped,
+  useAppStore,
+  type FoldDraft,
+  type TechniqueDraft,
+} from "../store/appStore";
 import {
   TECHNIQUE_KINDS,
   TECHNIQUE_LABEL,
@@ -363,6 +368,132 @@ function FoldDraftContent({ draft }: { draft: FoldDraft }) {
   );
 }
 
+/**
+ * 段の幅(mm)の入力欄。書きかけの文字を打てるよう表示は制御せず、確定
+ * (Enter・入力欄から離れたとき)にストアへ送る(要件§2: 状態はストア1本)。
+ */
+function PleatWidthInput({ value }: { value: number }) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const editedRef = useRef(false);
+  const updateTechniqueDraft = useAppStore((s) => s.updateTechniqueDraft);
+
+  useEffect(() => {
+    const el = inputRef.current;
+    if (el && document.activeElement !== el) el.value = String(value);
+  }, [value]);
+
+  const commit = () => {
+    const el = inputRef.current;
+    if (!el || !editedRef.current) return;
+    editedRef.current = false;
+    const entered = Number(el.value);
+    if (!Number.isFinite(entered) || entered <= 0) {
+      el.value = String(value); // 数字でない入力は捨てて現在値へ戻す
+      return;
+    }
+    el.value = String(entered);
+    updateTechniqueDraft({ widthMm: entered });
+  };
+
+  return (
+    <input
+      ref={inputRef}
+      id="pleat-width"
+      type="number"
+      className="angle-number"
+      min={0.1}
+      step={1}
+      defaultValue={value}
+      onChange={() => {
+        editedRef.current = true;
+      }}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") commit();
+      }}
+    />
+  );
+}
+
+/** 技法の確定UI(フラップ・折り線を選んでから適用する) */
+function TechniqueDraftContent({ draft }: { draft: TechniqueDraft }) {
+  const paper = useAppStore((s) => s.doc?.paper ?? null);
+  const updateTechniqueDraft = useAppStore((s) => s.updateTechniqueDraft);
+  const cancelTechnique = useAppStore((s) => s.cancelTechnique);
+  const commitTechnique = useAppStore((s) => s.commitTechnique);
+  const scale = paper ? Math.max(paper.width_mm, paper.height_mm) : 1;
+  const mm = (v: number) => (v * scale).toFixed(1);
+  const needsFlap = draft.kind !== "Pleat";
+  const ready = draft.line !== null && (!needsFlap || draft.flap.length >= 2);
+
+  return (
+    <div>
+      <p>
+        {TECHNIQUE_LABEL[draft.kind]}: 層を{draft.flap.length}枚選択中
+        {draft.line ? (
+          <>
+            {" "}
+            / 折り線 ({mm(draft.line[0][0])}, {mm(draft.line[0][1])}) →(
+            {mm(draft.line[1][0])}, {mm(draft.line[1][1])}) mm
+          </>
+        ) : (
+          " / 折り線はまだ引かれていません"
+        )}
+      </p>
+      <div className="button-row">
+        <span>{needsFlap ? "先端が向かう側" : "段になる側"}</span>
+        <label>
+          <input
+            type="radio"
+            name="technique-side"
+            checked={draft.movingSide === "right"}
+            onChange={() => updateTechniqueDraft({ movingSide: "right" })}
+          />
+          こちら側
+        </label>
+        <label>
+          <input
+            type="radio"
+            name="technique-side"
+            checked={draft.movingSide === "left"}
+            onChange={() => updateTechniqueDraft({ movingSide: "left" })}
+          />
+          反対側
+        </label>
+        {draft.kind === "Pleat" && (
+          <>
+            <label htmlFor="pleat-width">段の幅(mm)</label>
+            <PleatWidthInput value={draft.widthMm} />
+          </>
+        )}
+      </div>
+      <div className="button-row">
+        <button
+          type="button"
+          disabled={!ready}
+          title={
+            ready
+              ? "選んだ技法で折ります"
+              : needsFlap
+                ? "立体表示で紙をクリックして層を選び、折り線をドラッグしてください"
+                : "立体表示で折り線をドラッグしてください"
+          }
+          onClick={() => void commitTechnique()}
+        >
+          適用
+        </button>
+        <button type="button" onClick={() => cancelTechnique()}>
+          やめる
+        </button>
+        <span className="hint">
+          立体表示で紙をクリックすると、その場所に重なっている層をまとめて選びます。
+          そのままドラッグすると折り線を引けます(黄色く光っている層が対象です)
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function SelectionContent() {
   const doc = useAppStore((s) => s.doc);
   const selection = useAppStore((s) => s.selection);
@@ -436,6 +567,7 @@ export function ContextPanel() {
   const errorMessage = useAppStore((s) => s.errorMessage);
   const currentStep = useAppStore((s) => s.currentStep);
   const foldDraft = useAppStore((s) => s.foldDraft);
+  const techniqueDraft = useAppStore((s) => s.techniqueDraft);
   // 同じ文言は1回だけ出す(展開図の検査結果には自動再生の警告も合流している)
   const allWarnings = uniqueWarnings(warnings, poseWarnings, replayWarnings);
   // 手順を選んでいる間はその手順の設定を出す(「折る前」「最新」は選択なし扱い)
@@ -448,6 +580,8 @@ export function ContextPanel() {
             上に引くものなので、手順を選んだ時点でストアが捨てている(ここは念のため) */}
         {stepSelected ? (
           <StepContent number={currentStep} />
+        ) : techniqueDraft ? (
+          <TechniqueDraftContent draft={techniqueDraft} />
         ) : foldDraft ? (
           <FoldDraftContent draft={foldDraft} />
         ) : (

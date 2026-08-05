@@ -192,6 +192,7 @@ beforeEach(() => {
     replayWarnings: [],
     activeTool: "select",
     foldDraft: null,
+    techniqueDraft: null,
   });
 });
 
@@ -913,5 +914,149 @@ describe("3D画面での折り操作(折り線を引いて折る)", () => {
     useAppStore.getState().beginFoldDraft(LINE, "3d");
     useAppStore.getState().togglePlay();
     expect(useAppStore.getState().foldDraft).toBeNull();
+  });
+});
+
+describe("技法(選ぶだけで折る)", () => {
+  /** 同じ位置に2枚重なった平らな状態(下=面0、上=面1) */
+  function stackedFrame() {
+    const quad: [number, number, number][] = [
+      [0, 0, 0],
+      [1, 0, 0],
+      [1, 1, 0],
+      [0, 1, 0],
+    ];
+    return {
+      faces: [
+        { face: 0, polygon: quad, layer: 0 },
+        { face: 1, polygon: quad, layer: 1 },
+      ],
+      warnings: [],
+    };
+  }
+
+  /** 手順1つ・2層の畳んだ状態を表示中にする */
+  function seedFolded(): void {
+    seedSequence(1);
+    useAppStore.setState({ activeTool: "technique", frame3d: stackedFrame() });
+  }
+
+  const LINE: [Vec2, Vec2] = [
+    [0.5, 0],
+    [0.5, 1],
+  ];
+
+  it("中割り折り: フラップと折り線を選んでTechniqueを送る", async () => {
+    seedFolded();
+    vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(makeStepView(4000, 2));
+
+    const store = useAppStore.getState();
+    store.beginTechnique("InsideReverse");
+    expect(useAppStore.getState().techniqueDraft).toEqual({
+      kind: "InsideReverse",
+      flap: [],
+      line: null,
+      movingSide: "right",
+      widthMm: 10,
+      docEpoch: useAppStore.getState().docEpoch,
+      stepCount: 1,
+    });
+    useAppStore.getState().setTechniqueFlap([0, 1]);
+    useAppStore.getState().setTechniqueLine(LINE);
+    await useAppStore.getState().commitTechnique();
+
+    const op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
+    expect(op.type).toBe("Technique");
+    if (op.type !== "Technique") throw new Error("Techniqueでない");
+    expect(op.up_to).toBe(1); // 手順の数(末尾へ足す)
+    expect(op.kind).toBe("InsideReverse");
+    expect(op.flap).toEqual([0, 1]);
+    expect(op.line).toEqual(LINE);
+    // 「こちら側」が動くので、先端が向かう側(基準点)は反対側(x<0.5)
+    expect(op.reference_point[0]).toBeLessThan(0.5);
+    // 折り終えたら下ごしらえを捨て、最新の形を表示する
+    expect(useAppStore.getState().techniqueDraft).toBeNull();
+    expect(useAppStore.getState().currentStep).toBeNull();
+  });
+
+  it("段折り: フラップ指定なしで送れる。基準点は段の幅ぶん動く側へ離れる", async () => {
+    seedFolded();
+    vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(makeStepView(4010, 2));
+
+    useAppStore.getState().beginTechnique("Pleat");
+    useAppStore.getState().setTechniqueLine(LINE);
+    useAppStore.getState().updateTechniqueDraft({ widthMm: 15 });
+    await useAppStore.getState().commitTechnique();
+
+    const op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
+    if (op.type !== "Technique") throw new Error("Techniqueでない");
+    expect(op.kind).toBe("Pleat");
+    expect(op.flap).toEqual([]);
+    // 紙の長辺150mmに対して段の幅15mm = 正規化座標で0.1。動く側(こちら側=x>0.5)
+    expect(op.reference_point[0]).toBeCloseTo(0.6, 9);
+    expect(op.reference_point[1]).toBeCloseTo(0.5, 9);
+  });
+
+  it("フラップや折り線が足りないときは送らずに案内する", async () => {
+    seedFolded();
+    useAppStore.getState().beginTechnique("InsideReverse");
+
+    // 折り線がまだ無い
+    await useAppStore.getState().commitTechnique();
+    expect(vi.mocked(ipc.sequenceApply)).not.toHaveBeenCalled();
+    expect(useAppStore.getState().errorMessage).toContain("折り線");
+
+    // 層が1枚しか選ばれていない
+    useAppStore.getState().setTechniqueLine(LINE);
+    useAppStore.getState().setTechniqueFlap([1]);
+    await useAppStore.getState().commitTechnique();
+    expect(vi.mocked(ipc.sequenceApply)).not.toHaveBeenCalled();
+    expect(useAppStore.getState().errorMessage).toContain("層");
+    expect(useAppStore.getState().techniqueDraft).not.toBeNull();
+  });
+
+  it("折れなかったときは手動の折り操作への案内を添え、下ごしらえを残す", async () => {
+    seedFolded();
+    vi.mocked(ipc.sequenceApply).mockRejectedValueOnce(
+      "このフラップには中割り折りができません。折り線がフラップを横切っていないか確認してください",
+    );
+
+    useAppStore.getState().beginTechnique("InsideReverse");
+    useAppStore.getState().setTechniqueFlap([0, 1]);
+    useAppStore.getState().setTechniqueLine(LINE);
+    await useAppStore.getState().commitTechnique();
+
+    expect(useAppStore.getState().errorMessage).toContain("中割り折りができません");
+    expect(useAppStore.getState().errorMessage).toContain("手動の折り操作で代替");
+    expect(useAppStore.getState().techniqueDraft).not.toBeNull();
+
+    useAppStore.getState().cancelTechnique();
+    expect(useAppStore.getState().techniqueDraft).toBeNull();
+  });
+
+  it("形が変わったら折らずに捨てて知らせる", async () => {
+    seedFolded();
+    useAppStore.getState().beginTechnique("Pleat");
+    useAppStore.getState().setTechniqueLine(LINE);
+    // ストアの外(応答の反映以外の経路)で形が変わった状況を作る
+    useAppStore.setState({ doc: makeStepView(4020, 2).doc });
+
+    await useAppStore.getState().commitTechnique();
+
+    expect(vi.mocked(ipc.sequenceApply)).not.toHaveBeenCalled();
+    expect(useAppStore.getState().techniqueDraft).toBeNull();
+    expect(useAppStore.getState().errorMessage).toContain("もう一度線を引いて");
+  });
+
+  it("ツールの切り替え・手順の選択で下ごしらえを捨てる", () => {
+    seedFolded();
+    useAppStore.getState().beginTechnique("Pleat");
+    useAppStore.getState().setTool("select");
+    expect(useAppStore.getState().techniqueDraft).toBeNull();
+
+    seedFolded();
+    useAppStore.getState().beginTechnique("Pleat");
+    useAppStore.getState().selectStep(0);
+    expect(useAppStore.getState().techniqueDraft).toBeNull();
   });
 });

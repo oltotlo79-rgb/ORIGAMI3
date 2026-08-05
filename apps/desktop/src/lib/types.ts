@@ -139,6 +139,20 @@ export type SeqOp =
       keep_side_point: Vec2;
       target_layers: number[] | null;
       direction: FoldDirection;
+    }
+  /**
+   * 基本技法(段折り・中割り折り・かぶせ折り)をまとめて折る。
+   * 座標はFoldThroughと同じ畳み平面。flapは対象の層(段折りでは空を許す)。
+   * reference_pointの意味は技法ごとに違う(段折り=2本目の折り線の位置、
+   * 中割り・かぶせ=先端が向かう側)
+   */
+  | {
+      type: "Technique";
+      up_to: number;
+      kind: TechniqueKind;
+      flap: number[];
+      line: [Vec2, Vec2];
+      reference_point: Vec2;
     };
 
 /** 3D表示用フレーム(Task 1-9で使用) */

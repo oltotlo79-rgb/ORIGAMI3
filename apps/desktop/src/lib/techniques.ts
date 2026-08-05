@@ -21,6 +21,37 @@ export const TECHNIQUE_LABEL: Record<TechniqueKind, string> = {
 export const TECHNIQUE_KINDS = Object.keys(TECHNIQUE_LABEL) as TechniqueKind[];
 
 /**
+ * 「技法」ツールのサブメニューに出す、選ぶだけで折れる技法。
+ * ここに無い技法(花弁折り・開いてつぶすなど)はまだ自動で折れないので出さない
+ * (手動の折り操作で作る)。Rust側 `ori3-layers::techniques` の実装と対応する。
+ */
+export const SUPPORTED_TECHNIQUES: {
+  kind: TechniqueKind;
+  /** ツールレールのサブメニュー用の短い名前 */
+  short: string;
+  title: string;
+}[] = [
+  {
+    kind: "Pleat",
+    short: "段",
+    title:
+      "段折り: 平行な2本の折り線で山・谷を交互に折ります。紙の上をドラッグして1本目の折り線を引き、段の幅を指定してください",
+  },
+  {
+    kind: "InsideReverse",
+    short: "中割り",
+    title:
+      "中割り折り: フラップの先端を層の間へ折り込みます。重なった層をクリックして選び、先端を折り返す線をドラッグしてください",
+  },
+  {
+    kind: "OutsideReverse",
+    short: "かぶせ",
+    title:
+      "かぶせ折り: フラップの先端を外側からかぶせます。重なった層をクリックして選び、先端を折り返す線をドラッグしてください",
+  },
+];
+
+/**
  * 再生の警告文から、手順number(1始まり)に関するものだけを取り出す。
  * Rust側の警告は「手順3の折り線が…」のように手順番号で始まる。
  * 手順1と手順10を取り違えないよう、数字の直後が数字でないことを確かめる。

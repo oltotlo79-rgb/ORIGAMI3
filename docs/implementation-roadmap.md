@@ -598,26 +598,26 @@ pub struct ReplayResult { pub frame: Frame3D, pub skipped: Vec<StepId>, pub warn
 - [x] 2D側でも同じ折り操作を出せるようにする(2回クリックで線を引き、同じ確定UIを使用)。手順が1つ以上ある作品では展開図座標と畳み平面座標が食い違うため2D側からの折りは断り、「折る操作は3D画面から行ってください」と案内する
 - [x] 手動確認: 座布団折り→観音折り(6手順)を3D側の線描画だけで完成できることを実機のスクリーンショットで確認。同じ手順の自動テストも追加(`cushion_then_cupboard_fold_only_with_fold_through`) → コミット `3D画面に直接線を引いて折る操作を追加(展開図へ自動反映)` → プッシュ
 
-### Task 2-6: 技法マクロ(中割り・かぶせ・花弁・段・開いてつぶす)
+### Task 2-6: 技法マクロ(段・中割り・かぶせ / 花弁・開いてつぶすは残作業)
 
 **Files:** `crates/ori3-layers/src/techniques.rs`, `tests/techniques.rs`
 
-- [ ] テスト: 鶴の基本形をfold_throughの列で構築するフィクスチャを作り、(a)中割り折りで首を折る→層数・層順序・CPへの追加線が期待値どおり (b)花弁折りで鶴の基本形の前面が持ち上がる
-- [ ] 実装(全て「fold_throughと層順序操作の合成」として実装し、専用データ構造を持たない):
+- [x] テスト: 2層のフラップ(正方形を半分に折ったもの)を下ごしらえとして、(a)中割り折りで首を折る→層数・層順序・CPへの追加線が期待値どおり (b)続けてもう一度中割り折りして頭にできる(鶴の首と頭の流れ)。折り目の向き(山谷)と層順序の一致検証・t=0.99の高さからの重なり検証も追加
+- [x] 実装(全て「fold_throughと層順序操作の合成」として実装し、専用データ構造を持たない):
 
 ```rust
-/// 対象フラップ(面集合)と折り線を受け取り、技法に必要な折り線群・
+/// 対象フラップ(面集合)と折り線・基準点を受け取り、技法に必要な折り線群・
 /// driver群・層順序変化を生成してFoldStepを返す。
+pub fn pleat(cp, faces, state, input: &TechniqueInput) -> Result<FoldThroughResult, String>;
 pub fn inside_reverse(...) -> Result<FoldThroughResult, String>;
 pub fn outside_reverse(...) -> Result<FoldThroughResult, String>;
-pub fn petal(...) -> Result<FoldThroughResult, String>;
-pub fn squash(...) -> Result<FoldThroughResult, String>;
-pub fn pleat(...) -> Result<FoldThroughResult, String>;
 ```
 
-  引数は共通で `(cp, faces, state, flap: Vec<FaceId>, line: [[f64;2];2])`。生成不能な形状ではErrを返し、UI側は「手動の折り操作で代替してください」と案内(要件§12)
-- [ ] ツールレールに「技法」ボタン(サブメニュー5種)を追加し、フラップクリック→線指定→適用の流れを実装
-- [ ] テスト成功確認 → コミット `中割り折りなど基本の折り方5種を選ぶだけで折れる機能を追加` → プッシュ
+  引数は共通で `(cp, faces, state, &TechniqueInput { flap, line, reference_point })`。生成不能な形状ではErrを返し、UI側は「手動の折り操作で代替してください」と案内(要件§12)
+- [x] Tauriコマンドは増やさず、`SeqOp::Technique { up_to, kind, flap, line, reference_point }` を追加して `sequence_apply` で実現(末尾のみ許可)
+- [x] ツールレールに「技法」ボタン(8個目・サブメニュー3種)を追加し、フラップクリック→線指定→適用の流れを実装
+- [ ] **残作業: 花弁折り(petal)と開いてつぶす(squash)**。この2つは既存の折り目を**開く**(角度を0°へ戻す)操作を含むため、折り線を足すことしかできない `fold_through` の合成では作れない。実装には「畳んだ状態で指定した折り目を開く」プリミティブ(層順序の決定を含む)が要る。それまではサブメニューに出さず、手動の折り操作で作る
+- [x] テスト成功確認 → コミット `中割り折りなど基本の折り方を選ぶだけで折れる機能を追加` → プッシュ
 
 ### Task 2-7: 作図補助・局所平坦判定・めり込み警告
 

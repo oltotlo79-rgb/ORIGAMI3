@@ -86,17 +86,65 @@ export function keepSidePoint(
   line: [Vec2, Vec2],
   movingSide: "left" | "right",
 ): Vec2 {
+  const len = Math.hypot(line[1][0] - line[0][0], line[1][1] - line[0][1]);
+  // 折り線から十分離れた点にする(向きだけが意味を持つ)
+  const off = Math.max(0.01, len * 0.25);
+  return offsetPoint(line, movingSide === "left" ? "right" : "left", off);
+}
+
+/**
+ * 折り線の中点から、指定した側へ `distance` だけ離れた点。
+ * 側は [`keepSidePoint`] と同じ「線の進行方向(始点→終点)に対する左右」。
+ * 技法の基準点(段折りの2本目の折り線の位置など)を作るのに使う。
+ */
+export function offsetPoint(
+  line: [Vec2, Vec2],
+  side: "left" | "right",
+  distance: number,
+): Vec2 {
   const u = direction(line) ?? ([1, 0] as Vec2);
   const mid: Vec2 = [
     (line[0][0] + line[1][0]) / 2,
     (line[0][1] + line[1][1]) / 2,
   ];
-  const len = Math.hypot(line[1][0] - line[0][0], line[1][1] - line[0][1]);
-  // 折り線から十分離れた点にする(向きだけが意味を持つ)
-  const off = Math.max(0.01, len * 0.25);
-  // 左法線は(-uy, ux)。動かす側の反対へずらす
-  const sign = movingSide === "left" ? -1 : 1;
-  return [mid[0] - u[1] * off * sign, mid[1] + u[0] * off * sign];
+  // 左法線は(-uy, ux)
+  const sign = side === "left" ? 1 : -1;
+  return [mid[0] - u[1] * distance * sign, mid[1] + u[0] * distance * sign];
+}
+
+/**
+ * 畳み平面の点の上に重なっている層の面ID(下から順)。
+ * 3D表示で紙をクリックしたときに「その場所のフラップ(重なった層)」を選ぶために使う。
+ * 境界からわずかに外れたクリックも拾えるよう、少しの余裕を持たせる。
+ */
+export function facesAtPoint(
+  layers: FoldLayer[],
+  p: Vec2,
+  eps = 1e-6,
+): number[] {
+  return [...layers]
+    .sort((a, b) => a.layer - b.layer)
+    .filter((l) => pointInPolygon(l.polygon, p, eps))
+    .map((l) => l.face);
+}
+
+/** 多角形の内部(境界からeps以内を含む)に点があるか */
+function pointInPolygon(poly: Vec2[], p: Vec2, eps: number): boolean {
+  if (poly.length < 3) return false;
+  for (let i = 0; i < poly.length; i++) {
+    const q = closestOnSegment(p, poly[i], poly[(i + 1) % poly.length]);
+    if (Math.hypot(q[0] - p[0], q[1] - p[1]) <= eps) return true;
+  }
+  let inside = false;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i];
+    const b = poly[(i + 1) % poly.length];
+    if (a[1] > p[1] !== b[1] > p[1]) {
+      const t = (p[1] - a[1]) / (b[1] - a[1]);
+      if (p[0] < a[0] + t * (b[0] - a[0])) inside = !inside;
+    }
+  }
+  return inside;
 }
 
 /** 折り線の可動側(keep_side_pointの反対側)に一部でも掛かる層 */
