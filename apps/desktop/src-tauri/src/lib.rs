@@ -19,6 +19,7 @@ pub fn run() {
             commands::edit_undo,
             commands::edit_redo,
             commands::sequence_apply,
+            commands::sequence_replay,
             commands::pose_solve,
         ])
         .run(tauri::generate_context!())

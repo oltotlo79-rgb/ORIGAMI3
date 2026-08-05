@@ -104,6 +104,23 @@ pub fn pose_solve(
     }))
 }
 
+/// 手順の再生(Task 2-3)。展開図と手順列から `up_to` ステップ目(補間係数 `t`)の
+/// 立体を求め直す。3D状態は保存しないので、展開図を編集した後でも再生できる。
+///
+/// 設計規約: ロック中に重い計算をしない。ロック下ではDocumentの複製だけを行って
+/// 即ロックを解放し、再生はロックの外で実行する(結果の書き戻しは不要)。
+#[tauri::command(async)]
+pub fn sequence_replay(
+    state: State<'_, Mutex<DocumentStore>>,
+    up_to: usize,
+    t: f64,
+) -> Result<ori3_layers::ReplayResult, String> {
+    guard(AssertUnwindSafe(|| {
+        let doc = lock(&state).replay_input(); // 複製のみ、即ロック解放
+        Ok(ori3_layers::replay(&doc, up_to, t))
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::guard;

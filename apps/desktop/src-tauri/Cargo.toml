@@ -22,4 +22,5 @@ serde_json.workspace = true
 ori3-model.workspace = true
 ori3-cp.workspace = true
 ori3-rigid.workspace = true
+ori3-layers.workspace = true
 tauri-plugin-dialog = "2"

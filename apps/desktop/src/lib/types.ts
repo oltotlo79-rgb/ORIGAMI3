@@ -99,6 +99,10 @@ export interface DocumentView {
   faces: Face[];
   warnings: string[];
   violations: number[];
+  /** 最新ステップまで自動再生した立体(SEQ-004)。手順が空ならnull */
+  frame: Frame3D | null;
+  /** 自動再生で折り線が見つからず飛ばされたステップID */
+  skipped: number[];
 }
 
 /** edit_apply の操作(serde内部タグ形式: { "type": "..." }) */
@@ -126,6 +130,15 @@ export interface Face3D {
 
 export interface Frame3D {
   faces: Face3D[];
+  warnings: string[];
+}
+
+/** sequence_replay の戻り値(ori3-layers::ReplayResult) */
+export interface ReplayResult {
+  /** 3D表示用フレーム(Face3D.layerは下から0,1,2…) */
+  frame: Frame3D;
+  /** 折り線が見つからず飛ばされたステップID */
+  skipped: number[];
   warnings: string[];
 }
 

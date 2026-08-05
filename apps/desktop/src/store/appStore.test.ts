@@ -68,6 +68,8 @@ function makeView(mark: number): DocumentView {
     faces: [],
     warnings: [],
     violations: [],
+    frame: null,
+    skipped: [],
   };
 }
 

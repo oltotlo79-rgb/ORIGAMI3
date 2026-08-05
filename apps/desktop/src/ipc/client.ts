@@ -1,4 +1,4 @@
-// IPCクライアント: 実装済み8コマンドの型付きラッパー(1関数5行以内)。
+// IPCクライアント: 実装済み9コマンドの型付きラッパー(1関数5行以内)。
 // 失敗時はErr(string)がPromiseのrejectになる。
 // 未実装コマンド(document_export等)は実装タスクで追加する。
 
@@ -8,6 +8,7 @@ import type {
   Driver,
   EditOp,
   Paper,
+  ReplayResult,
   SeqOp,
   SolveResult,
 } from "../lib/types";
@@ -39,6 +40,11 @@ export function editRedo(): Promise<DocumentView> {
 
 export function sequenceApply(op: SeqOp): Promise<DocumentView> {
   return invoke("sequence_apply", { op });
+}
+
+/** 手順の再生。upTo=0は初期状態(平ら)、tは0..=1の補間係数(1で完了) */
+export function sequenceReplay(upTo: number, t: number): Promise<ReplayResult> {
+  return invoke("sequence_replay", { upTo, t });
 }
 
 /** 折り角度の追従計算。前回解(warm start)はRust側のstoreが保持する */

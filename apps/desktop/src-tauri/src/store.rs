@@ -19,7 +19,8 @@ use std::path::{Path, PathBuf};
 
 use ori3_cp::Face;
 use ori3_model::{
-    CreasePattern, Document, EdgeId, EdgeKind, EditOp, Paper, SCHEMA_VERSION, SeqOp, VertexId,
+    CreasePattern, Document, EdgeId, EdgeKind, EditOp, Frame3D, Paper, SCHEMA_VERSION, SeqOp,
+    StepId, VertexId,
 };
 
 /// undo履歴の最大件数。超過時は最古をFIFOで破棄する。
@@ -31,10 +32,14 @@ const MAX_UNDO: usize = 100;
 pub struct DocumentView {
     pub doc: Document,
     pub faces: Vec<Face>,
-    /// 操作固有の警告 + `ori3_cp::validate` の結果(「止めずに警告」原則)
+    /// 操作固有の警告 + `ori3_cp::validate` + 手順再生の警告(「止めずに警告」原則)
     pub warnings: Vec<String>,
     /// 局所平坦折り判定の違反頂点(Task 2-7で実装)。今は常に空
     pub violations: Vec<VertexId>,
+    /// 最新ステップまで自動再生した立体(SEQ-004)。手順が空ならNone
+    pub frame: Option<Frame3D>,
+    /// 自動再生で折り線が見つからず飛ばされたステップのID
+    pub skipped: Vec<StepId>,
 }
 
 pub struct DocumentStore {
@@ -280,6 +285,13 @@ impl DocumentStore {
         )
     }
 
+    /// sequence_replayの入力(Documentの複製)を取り出す。
+    /// 設計規約: pose_inputsと同じく、コマンド層はこの複製を取って即ロックを解放し、
+    /// 再生(重い計算)はロックの外で実行する。
+    pub fn replay_input(&self) -> Document {
+        self.doc.clone()
+    }
+
     /// pose_solveの結果角度を保存する(次回のwarm start用)。
     pub fn store_pose_angles(&mut self, angles: HashMap<EdgeId, f64>) {
         self.pose_angles = Some(angles);
@@ -305,14 +317,28 @@ impl DocumentStore {
     }
 }
 
-/// Documentから表示用ビューを作る(faces/warningsは毎回導出)。
+/// Documentから表示用ビューを作る(faces/warnings/立体は毎回導出)。
+///
+/// 展開図や手順が変わったら最新ステップまで手順を再生し直し、その立体を含める
+/// (SEQ-004「展開図編集後、手順を自動再生して最新状態を表示」)。
+/// 手順が空のときは再生するものが無いので `frame: None`(平らな姿勢は
+/// フロントが展開図から直接描ける)。
 fn build_view(doc: &Document, mut warnings: Vec<String>) -> DocumentView {
     warnings.extend(ori3_cp::validate(&doc.cp));
+    let (frame, skipped) = if doc.sequence.is_empty() {
+        (None, Vec::new())
+    } else {
+        let replayed = ori3_layers::replay(doc, doc.sequence.len(), 1.0);
+        warnings.extend(replayed.warnings);
+        (Some(replayed.frame), replayed.skipped)
+    };
     DocumentView {
         doc: doc.clone(),
         faces: ori3_cp::extract_faces(&doc.cp),
         warnings,
         violations: Vec::new(),
+        frame,
+        skipped,
     }
 }
 
@@ -755,6 +781,55 @@ mod tests {
             })
             .unwrap();
         assert_eq!(store.pose_inputs().1, fresh(&store), "新規作成後");
+    }
+
+    /// SEQ-004: 展開図を編集したら手順が自動再生され、結果がDocumentViewに載る。
+    /// 手順が参照する折り線を消すと、そのステップは飛ばされて警告に載る。
+    #[test]
+    fn views_carry_auto_replayed_frame_and_skipped_steps() {
+        let mut store = square_store();
+        // 手順が無いうちは再生するものが無い
+        let view = store.apply_edit(diagonal()).unwrap();
+        assert!(view.frame.is_none());
+        assert!(view.skipped.is_empty());
+
+        // 対角線(山)を±180°まで折る手順を1つ積む
+        let mut folding = step(0);
+        folding.drivers = vec![ori3_model::DriverLine {
+            a: [0.0, 0.0],
+            b: [1.0, 1.0],
+            target_angle_deg: 180.0,
+        }];
+        let view = store.apply_seq(SeqOp::PushStep { step: folding }).unwrap();
+        let frame = view.frame.expect("手順があれば自動再生される");
+        assert_eq!(frame.faces.len(), 2);
+        assert!(view.skipped.is_empty(), "warnings={:?}", view.warnings);
+        // 半分に折られている: 2面のどちらかがz方向へ持ち上がる、または重なる
+        let mut layers: Vec<u32> = frame.faces.iter().map(|f| f.layer).collect();
+        layers.sort_unstable();
+        assert_eq!(layers, vec![0, 1]);
+
+        // 手順が参照する折り線を消すと、そのステップは飛ばされる(以降も止めない)
+        let mountain = store
+            .doc
+            .cp
+            .edges
+            .iter()
+            .find(|e| e.kind == EdgeKind::Mountain)
+            .unwrap()
+            .id;
+        let view = store
+            .apply_edit(EditOp::RemoveEdges {
+                ids: vec![mountain],
+            })
+            .unwrap();
+        assert_eq!(view.skipped, vec![0]);
+        assert!(
+            view.warnings.iter().any(|w| w.contains("飛ばしました")),
+            "warnings={:?}",
+            view.warnings
+        );
+        assert!(view.frame.is_some(), "飛ばしても平らな立体は返す");
     }
 
     #[test]

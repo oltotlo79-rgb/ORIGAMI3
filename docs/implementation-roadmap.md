@@ -540,24 +540,31 @@ pub fn resolve_driver_edges(cp: &CreasePattern, line: &DriverLine) -> Vec<EdgeId
 
 ### Task 2-3: 手順エンジン(記録・再生・決定性)
 
-**Files:** `apps/desktop/src-tauri/src/store.rs`(拡張), `crates/ori3-layers/src/lib.rs`(replay関数), `tests/replay.rs`
+**Files:** `crates/ori3-layers/src/replay.rs`, `crates/ori3-layers/tests/replay.rs`, `apps/desktop/src-tauri/src/{commands,store}.rs`
 
-- [ ] テスト:
+- [x] テスト:
   - 手順3ステップの`Document`を`replay(doc, up_to, t)`で2回再生→Frame3Dがビット一致(SYS-004)
-  - 展開図に無関係な補助線を追加後の再生→全ステップ成功
-  - 手順が参照するヒンジを削除後の再生→該当ステップがスキップされ警告リストに載り、以降のステップは続行(SEQ-004)
-- [ ] 実装:
+  - 展開図に無関係な補助線を追加後の再生→全ステップ成功(補助線が折り線を分割してもよい)
+  - 手順が参照する折り線を削除後の再生→該当ステップがスキップされ警告リストに載り、以降のステップは続行(SEQ-004)
+  - 一部だけ解決できない手順は残りで続行+警告 / 折り線を持たない手順(Pose)は飛ばさない / up_to・tの範囲外は丸める
+  - 性能(NFR-002): 10ステップ・面400の全再生が3秒以内(debug実測 約1.0秒 / release実測 約36ms)
+- [x] 実装:
 
 ```rust
-/// ステップ列を順に適用する。各ステップ: driver角をtで線形補間してrigid::solve、
-/// ステップ末尾(t=1)でlayer_orderを解決してFlatState更新。
+/// ステップ列を順に適用する。3D状態は保存せず、平らな展開図に「そこまでの全ステップの
+/// driver」を累積して与えて解く(折った状態の上に次を折るのではない)。
+/// 各ステップのDriverLineは resolve_driver_edges で現在の辺IDへ解決し、
+/// up_to未満は目標角そのまま、up_toステップ目だけ角度をt倍する。
+/// ステップを1つずつ進めながら解き、前ステップの解を次のwarm startへ渡す(決定的)。
+/// 層順序は各ステップのlayer_orderをresolve_orderで解決してFace3D.layerへ反映
+/// (up_toステップ目は完了時t=1のみ。Noneや飛ばした手順では直前の層順序を保つ)。
 /// up_to: 表示対象ステップ(0=初期状態)、t: 0..=1 の補間係数
 pub fn replay(doc: &Document, up_to: usize, t: f64) -> ReplayResult;
 pub struct ReplayResult { pub frame: Frame3D, pub skipped: Vec<StepId>, pub warnings: Vec<String> }
 ```
 
-- [ ] `sequence_replay`コマンド追加。`edit_apply`成功時にstoreが自動で最新ステップまでreplayし直しDocumentViewに含める
-- [ ] テスト成功確認 → コミット `折り手順の記録と再生(展開図を直したら自動で折り直す)を追加` → プッシュ
+- [x] `sequence_replay`コマンド追加(9個目。引数`up_to: usize, t: f64`、ロック下はDocumentの複製のみ)。`edit_apply`等の成功時にstoreが自動で最新ステップまでreplayし直し、`DocumentView`の`frame: Option<Frame3D>`・`skipped: Vec<StepId>`・警告に含める(手順が空なら`frame: None`)
+- [x] テスト成功確認 → コミット `折り手順の記録と再生(展開図を直したら自動で折り直す)を追加` → プッシュ
 
 ### Task 2-4: タイムラインUI
 
