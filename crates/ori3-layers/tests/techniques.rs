@@ -11,12 +11,13 @@
 //!   見たときの山谷で決まる(谷なら相手は上、山なら下)。全ての折り目についてこれを
 //!   確かめる([`assert_fold_senses`])
 //!
-//! 中割り折り・かぶせ折りに t=0.99 の高さ読みを使えない理由:
-//! この2つは「フラップを開いて先端を層の間へ入れる/外へ回す」動きだが、
-//! 開くにはフラップの背をいったん平らに戻す必要がある。手順再生は前の手順の
-//! 折り目を180°に固定したまま補間するので、先端は紙全体の上か下を大回りして
-//! 目的の位置へ入る。折り上がり(t=1)の形と重なりは正しいが、途中の高さからは
-//! 「内側に入ったか外側を包んだか」を読めない。そこで折り目の向きとの一致
+//! 中割り折りにだけ t=0.99 の高さ読みを使えない理由:
+//! 中割り折りは「フラップを開いて先端を層の間へ入れる」動きだが、開くには
+//! フラップの背をいったん平らに戻す必要がある。手順再生は前の手順の折り目を
+//! 180°に固定したまま補間するので、先端は紙全体の外側を大回りして層の間へ入る。
+//! 折り上がり(t=1)の形と重なりは正しいが、途中の高さは「外側」を指してしまう。
+//! かぶせ折り(先端が外側を包む)と段折りは途中の高さと折り上がりが一致するので、
+//! そのまま t=0.99 の検証を使う。中割り折りは折り目の向きとの一致
 //! ([`assert_fold_senses`])で確かめる。
 
 use std::collections::HashMap;
@@ -72,6 +73,9 @@ fn fold(doc: &mut Document, line: [[f64; 2]; 2], keep: [f64; 2], direction: Fold
     doc.cp = cp;
     doc.sequence.push(step);
 }
+
+/// 再生一致テスト1件ぶんの指定(名前・技法・折り線・基準点)。
+type ReplayCase = (&'static str, Technique, [[f64; 2]; 2], [f64; 2]);
 
 type Technique = fn(
     &mut CreasePattern,
@@ -599,6 +603,8 @@ fn outside_reverse_wraps_the_tip_around_the_flap() {
         tip_layers.contains(&0) && tip_layers.contains(&3),
         "先端は外側(層0と層3)へ回る(実際 {tip_layers:?})"
     );
+    // 先端が外側を包むかぶせ折りは、折り終わる直前の高さも折り上がりと一致する
+    assert_display_order(&doc, "かぶせ折り");
     assert_fold_senses(&doc, "かぶせ折り");
 }
 
@@ -674,20 +680,27 @@ fn reverse_fold_rejects_a_line_that_does_not_cross_the_flap() {
 /// 技法で作った形は、展開図と手順だけから同じ形に折り直せる(3D状態を保存しない設計)。
 #[test]
 fn techniques_replay_from_the_crease_pattern() {
-    for (label, technique) in [
-        ("中割り折り", inside_reverse as Technique),
-        ("かぶせ折り", outside_reverse as Technique),
-    ] {
-        let mut doc = two_layer_flap();
-        let flap: Vec<FaceId> = extract_faces(&doc.cp).iter().map(|f| f.id).collect();
-        let a = apply(
-            &mut doc,
-            technique,
-            flap,
+    // 段折りの基準点は2本目の折り線の位置、中割り・かぶせは先端が向かう側
+    let cases: [ReplayCase; 3] = [
+        ("段折り", pleat as Technique, [[0.6, 0.0], [0.6, 1.0]], [0.7, 0.25]),
+        (
+            "中割り折り",
+            inside_reverse as Technique,
             [[0.7, 0.5], [0.5, 0.0]],
             [0.2, 0.25],
-        )
-        .unwrap_or_else(|e| panic!("{label}が折れない: {e}"));
+        ),
+        (
+            "かぶせ折り",
+            outside_reverse as Technique,
+            [[0.7, 0.5], [0.5, 0.0]],
+            [0.2, 0.25],
+        ),
+    ];
+    for (label, technique, line, reference) in cases {
+        let mut doc = two_layer_flap();
+        let flap: Vec<FaceId> = extract_faces(&doc.cp).iter().map(|f| f.id).collect();
+        let a = apply(&mut doc, technique, flap, line, reference)
+            .unwrap_or_else(|e| panic!("{label}が折れない: {e}"));
 
         let faces = extract_faces(&doc.cp);
         let (replayed, warnings) =
@@ -786,4 +799,65 @@ fn inside_reverse_twice_makes_a_neck_and_a_head() {
     assert_eq!(b.faces.len(), 6, "首の2層がさらに分かれて6層になる");
     assert_eq!(doc.sequence.len(), 3);
     assert_fold_senses(&doc, "鶴の首と頭");
+}
+
+/// 正方形を2回折った4層の紙(層順序は下→上)。
+fn four_layer_stack() -> Document {
+    let mut doc = square_doc();
+    fold(&mut doc, [[0.0, 0.5], [1.0, 0.5]], [0.5, 0.25], FoldDirection::Up);
+    fold(&mut doc, [[0.5, 0.0], [0.5, 0.5]], [0.25, 0.25], FoldDirection::Up);
+    doc
+}
+
+/// 層の数が奇数のフラップは断る(そのまま折ると、折り上がりの山谷と重なり順が
+/// 食い違う紙=展開図から折り直すと別の形になる紙ができてしまうため)。
+#[test]
+fn reverse_fold_rejects_an_odd_number_of_layers() {
+    let mut doc = four_layer_stack();
+    let faces = extract_faces(&doc.cp);
+    let (state, _) = flat_state_at(&doc, &faces, doc.sequence.len()).unwrap();
+    assert_eq!(state.order.len(), 4);
+    let before = doc.clone();
+
+    // 4層のうち下3層だけを選ぶ(3D画面のクリックでも起こり得る選び方)
+    let flap: Vec<FaceId> = state.order[..3].to_vec();
+    let err = apply(
+        &mut doc,
+        inside_reverse,
+        flap,
+        [[0.35, 0.5], [0.15, 0.0]],
+        [0.05, 0.25],
+    )
+    .expect_err("奇数層のフラップはエラー");
+    assert!(err.contains("奇数"), "{err}");
+    assert!(err.contains("手動の折り操作"), "{err}");
+    assert_eq!(doc, before, "失敗時は文書を変更しない");
+}
+
+/// 4層のフラップ(奥2枚・手前2枚)でも中割り折りできる。
+#[test]
+fn inside_reverse_on_four_layer_flap() {
+    let mut doc = four_layer_stack();
+    let faces = extract_faces(&doc.cp);
+    let (state, _) = flat_state_at(&doc, &faces, doc.sequence.len()).unwrap();
+    let flap: Vec<FaceId> = state.order.clone();
+
+    let a = apply(
+        &mut doc,
+        inside_reverse,
+        flap,
+        [[0.35, 0.5], [0.15, 0.0]],
+        [0.05, 0.25],
+    )
+    .expect("4層のフラップも中割り折りできる");
+    assert!(a.warnings.is_empty(), "{:?}", a.warnings);
+    assert_eq!(a.faces.len(), 8, "4層それぞれが2つに分かれる");
+    assert_fold_senses(&doc, "4層フラップの中割り折り");
+
+    // 展開図と手順だけから同じ形に折り直せる
+    let new_faces = extract_faces(&doc.cp);
+    let (replayed, warnings) =
+        flat_state_at(&doc, &new_faces, doc.sequence.len()).expect("平らに畳める");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(replayed.order, a.order);
 }

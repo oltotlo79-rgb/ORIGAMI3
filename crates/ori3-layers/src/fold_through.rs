@@ -387,16 +387,7 @@ pub fn fold_through(
 
     // 8. 紙が裂ける指定の検出: 動く面と動かない面をつなぐ辺が折り線上に無い場合は警告。
     let moving_of: HashMap<FaceId, bool> = infos.iter().map(|&(_, id, m)| (id, m)).collect();
-    let mut edge_faces: BTreeMap<EdgeId, Vec<FaceId>> = BTreeMap::new();
-    for nf in &new_faces {
-        let mut ids: Vec<EdgeId> = nf.edges.clone();
-        ids.sort_unstable();
-        ids.dedup();
-        for eid in ids {
-            edge_faces.entry(eid).or_default().push(nf.id);
-        }
-    }
-    for (eid, fs) in &edge_faces {
+    for (eid, fs) in &faces_by_edge(&new_faces) {
         if fs.len() != 2 || moving_of[&fs[0]] == moving_of[&fs[1]] {
             continue;
         }
@@ -413,7 +404,7 @@ pub fn fold_through(
         let d1 = u.perp_dot(pl.apply(p1) - l0).abs();
         if d0 > EPS || d1 > EPS {
             warnings.push(format!(
-                "動く面と動かない面をつなぐ辺(ID {eid})が折り線上に無いため、このままでは紙が裂けます(指定のまま続行します)"
+                "動く面と動かない面をつなぐ辺(ID {eid})が折り線上に無いため、このままでは{TEAR_MARK}(指定のまま続行します)"
             ));
         }
     }
@@ -499,7 +490,22 @@ fn normalize_to_root(
     (placements, order)
 }
 
-fn vertex_positions(cp: &CreasePattern) -> HashMap<VertexId, DVec2> {
+/// 辺ID → その辺を境界に持つ面ID(面ごとに重複を除く)。
+/// ちょうど2面を持つ辺が折り目(ヒンジ)にあたる。
+pub(crate) fn faces_by_edge(faces: &[Face]) -> BTreeMap<EdgeId, Vec<FaceId>> {
+    let mut out: BTreeMap<EdgeId, Vec<FaceId>> = BTreeMap::new();
+    for f in faces {
+        let mut ids: Vec<EdgeId> = f.edges.clone();
+        ids.sort_unstable();
+        ids.dedup();
+        for eid in ids {
+            out.entry(eid).or_default().push(f.id);
+        }
+    }
+    out
+}
+
+pub(crate) fn vertex_positions(cp: &CreasePattern) -> HashMap<VertexId, DVec2> {
     cp.vertices
         .iter()
         .map(|v| (v.id, DVec2::from(v.pos)))
@@ -508,7 +514,7 @@ fn vertex_positions(cp: &CreasePattern) -> HashMap<VertexId, DVec2> {
 
 /// 同じ線分(向きの違いは同一視)+同じ角度のDriverLineを重複させずに追加する。
 /// 既存の折り目に沿う区間は、隣接する2面の引き戻しから同じ線分が2回出るため。
-fn push_driver_line(lines: &mut Vec<DriverLine>, q0: DVec2, q1: DVec2, angle: f64) {
+pub(crate) fn push_driver_line(lines: &mut Vec<DriverLine>, q0: DVec2, q1: DVec2, angle: f64) {
     let dup = lines.iter().any(|x| {
         let xa = DVec2::from(x.a);
         let xb = DVec2::from(x.b);
@@ -525,6 +531,11 @@ fn push_driver_line(lines: &mut Vec<DriverLine>, q0: DVec2, q1: DVec2, angle: f6
     }
 }
 
+/// 「紙が裂ける」警告の目印。技法([`crate::techniques`])は複数回の折りで1つの形を
+/// 作るため、途中の折りで必ず出るこの警告を選り分けて捨てる。文言が離れないよう、
+/// 判定はこの定数を通して行う。
+pub(crate) const TEAR_MARK: &str = "紙が裂けます";
+
 /// 折り線の一部が反対向きの既存の折り目に乗っている場合の警告文。
 fn opposite_crease_warning(eid: EdgeId) -> String {
     format!(
@@ -533,7 +544,7 @@ fn opposite_crease_warning(eid: EdgeId) -> String {
 }
 
 /// 線種に対応する完全折りの角度(+180=山, -180=谷)。
-fn angle_of(kind: EdgeKind) -> f64 {
+pub(crate) fn angle_of(kind: EdgeKind) -> f64 {
     match kind {
         EdgeKind::Mountain => 180.0,
         _ => -180.0,

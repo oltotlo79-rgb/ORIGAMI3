@@ -1013,6 +1013,13 @@ describe("技法(選ぶだけで折る)", () => {
     expect(vi.mocked(ipc.sequenceApply)).not.toHaveBeenCalled();
     expect(useAppStore.getState().errorMessage).toContain("層");
     expect(useAppStore.getState().techniqueDraft).not.toBeNull();
+
+    // 層の数が奇数(表と裏が対になっていない)ときも送らない
+    useAppStore.getState().setTechniqueFlap([0, 1, 2]);
+    await useAppStore.getState().commitTechnique();
+    expect(vi.mocked(ipc.sequenceApply)).not.toHaveBeenCalled();
+    expect(useAppStore.getState().errorMessage).toContain("奇数");
+    expect(useAppStore.getState().errorMessage).toContain("手動の折り操作で代替");
   });
 
   it("折れなかったときは手動の折り操作への案内を添え、下ごしらえを残す", async () => {

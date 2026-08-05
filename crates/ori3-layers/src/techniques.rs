@@ -27,17 +27,20 @@
 //!   [`fold_through`] は折り線を足すことしかできず(角度を0°へ戻せない)、
 //!   この2種は現在の部品では合成できないため未実装
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use glam::DVec2;
 use ori3_cp::{Face, extract_faces};
 use ori3_geometry::Isometry2;
 use ori3_model::{
-    CreasePattern, DriverLine, EPS, EdgeId, EdgeKind, FaceId, FoldStep, TechniqueKind, VertexId,
+    CreasePattern, DriverLine, EPS, EdgeId, EdgeKind, FaceId, FoldStep, TechniqueKind,
 };
 
 use crate::flat_state::{FlatState, point_in_face, representative_point};
-use crate::fold_through::{FoldDirection, FoldThroughInput, FoldThroughResult, fold_through};
+use crate::fold_through::{
+    FoldDirection, FoldThroughInput, FoldThroughResult, TEAR_MARK, angle_of, faces_by_edge,
+    fold_through, push_driver_line, vertex_positions,
+};
 
 /// 面の配置の一致を見る許容誤差(等長変換の積み重ねで出る誤差より十分大きく取る)。
 const JOIN_EPS: f64 = 1e-6;
@@ -118,7 +121,7 @@ pub fn pleat(
 
     // 段の中の折り目を、動いた後の重なり順に合わせ直す
     s.fix_reversed_creases();
-    Ok(s.finish(TechniqueKind::Pleat, cp))
+    s.finish(TechniqueKind::Pleat, "段折り", cp)
 }
 
 /// 中割り折り(フラップの先端を内側へ折り込む)。
@@ -182,6 +185,15 @@ fn reverse_fold(
             "{name}にはフラップが2層以上必要です。重なった層をまとめて選んでください"
         ));
     }
+    // 奥と手前を半分ずつに分けるので、層の数は偶数でなければならない。
+    // 奇数のまま進めると、折り上がりの山谷と重なり順が食い違う紙(展開図から
+    // 折り直すと違う形になる紙)ができてしまう。
+    if flap.len() % 2 != 0 {
+        return Err(format!(
+            "フラップの層の数が奇数です({}層)。{name}は表と裏が対になった層にしか使えません。重なった層を選び直すか、手動の折り操作で代替してください",
+            flap.len()
+        ));
+    }
     for &id in &flap {
         if !s.crosses(id, input.line) {
             return Err(format!(
@@ -225,7 +237,7 @@ fn reverse_fold(
     } else {
         TechniqueKind::OutsideReverse
     };
-    Ok(s.finish(kind, cp))
+    s.finish(kind, name, cp)
 }
 
 // ---------------------------------------------------------------------------
@@ -336,7 +348,7 @@ impl Session {
         self.drivers.extend(res.step.drivers);
         self.added.extend(res.added_edges);
         self.warnings
-            .extend(res.warnings.into_iter().filter(|w| !w.contains("裂けます")));
+            .extend(res.warnings.into_iter().filter(|w| !w.contains(TEAR_MARK)));
         Ok(plane_map.unwrap_or_else(Isometry2::identity))
     }
 
@@ -468,15 +480,7 @@ impl Session {
     ///
     /// 層順序の並べ替え([`Session::reorder_reversed`])より後に呼ぶこと。
     fn fix_reversed_creases(&mut self) {
-        let mut edge_faces: BTreeMap<EdgeId, Vec<FaceId>> = BTreeMap::new();
-        for f in &self.faces {
-            let mut ids = f.edges.clone();
-            ids.sort_unstable();
-            ids.dedup();
-            for eid in ids {
-                edge_faces.entry(eid).or_default().push(f.id);
-            }
-        }
+        let edge_faces = faces_by_edge(&self.faces);
         let pos = vertex_positions(&self.cp);
         let rank: HashMap<FaceId, usize> = self
             .state
@@ -617,15 +621,7 @@ impl Session {
     /// 技法の中で動いた面に接する辺だけを見る(技法より前の手順で入った裂けを
     /// 二重に報告しないため)。
     fn tear_warnings(&self) -> Vec<String> {
-        let mut edge_faces: BTreeMap<EdgeId, Vec<FaceId>> = BTreeMap::new();
-        for f in &self.faces {
-            let mut ids = f.edges.clone();
-            ids.sort_unstable();
-            ids.dedup();
-            for eid in ids {
-                edge_faces.entry(eid).or_default().push(f.id);
-            }
-        }
+        let edge_faces = faces_by_edge(&self.faces);
         let pos = vertex_positions(&self.cp);
         let mut out: Vec<String> = Vec::new();
         for (eid, fs) in &edge_faces {
@@ -654,8 +650,74 @@ impl Session {
         out
     }
 
+    /// 折り上がりが紙の重なりとして成り立っているかを確かめる。
+    ///
+    /// 折り目でつながった2面の上下は、その折り目を表から見たときの山谷で決まる
+    /// (表向きの面から見て谷なら相手は上、山なら下)。技法で動いた紙に接する
+    /// 折り目がこの関係を満たさないなら、展開図の山谷と記録した重なり順が食い違う
+    /// = 展開図から折り直すと別の形になる紙ができている。作ってしまう前に断る。
+    ///
+    /// 技法で動いた面に接する折り目だけを見る(技法より前の手順で入った食い違いまで
+    /// 断ると、一部の層だけを折る手順のあとで技法が一切使えなくなるため)。
+    fn check_layer_consistency(&self, name: &str) -> Result<(), String> {
+        let rank: HashMap<FaceId, usize> = self
+            .state
+            .order
+            .iter()
+            .enumerate()
+            .map(|(i, &id)| (id, i))
+            .collect();
+        let mut bad = 0usize;
+        for (eid, fs) in faces_by_edge(&self.faces) {
+            if fs.len() != 2 {
+                continue;
+            }
+            let (a, b) = (fs[0], fs[1]);
+            if !self.flipped.get(&a).copied().unwrap_or(false)
+                && !self.flipped.get(&b).copied().unwrap_or(false)
+            {
+                continue;
+            }
+            let Some(e) = self.cp.edges.iter().find(|e| e.id == eid) else {
+                continue;
+            };
+            if !matches!(e.kind, EdgeKind::Mountain | EdgeKind::Valley) {
+                continue;
+            }
+            let (pa, pb) = (self.state.placements[&a], self.state.placements[&b]);
+            // 折られていない(平らにつながったまま)折り目は上下を決めない
+            if pa.mirrored == pb.mirrored {
+                continue;
+            }
+            let (Some(&ra), Some(&rb)) = (rank.get(&a), rank.get(&b)) else {
+                continue;
+            };
+            let want = if (rb > ra) == pa.mirrored {
+                EdgeKind::Mountain
+            } else {
+                EdgeKind::Valley
+            };
+            if e.kind != want {
+                bad += 1;
+            }
+        }
+        if bad > 0 {
+            return Err(format!(
+                "この形には{name}ができません(折り目{bad}本の山谷と紙の重なり順が食い違います)。フラップの選び方か折り線を変えるか、手動の折り操作で代替してください"
+            ));
+        }
+        Ok(())
+    }
+
     /// 技法の結果をまとめ、成功したCPを呼び出し側へ書き戻す。
-    fn finish(mut self, kind: TechniqueKind, cp: &mut CreasePattern) -> FoldThroughResult {
+    /// 折り上がりが紙として成り立たない場合はErr(CPは変更しない)。
+    fn finish(
+        mut self,
+        kind: TechniqueKind,
+        name: &str,
+        cp: &mut CreasePattern,
+    ) -> Result<FoldThroughResult, String> {
+        self.check_layer_consistency(name)?;
         let tears = self.tear_warnings();
         self.warnings.extend(tears);
         let mut added = self.added;
@@ -671,12 +733,12 @@ impl Session {
             note: String::new(),
         };
         *cp = self.cp;
-        FoldThroughResult {
+        Ok(FoldThroughResult {
             state: self.state,
             added_edges: added,
             step,
             warnings: self.warnings,
-        }
+        })
     }
 }
 
@@ -708,38 +770,5 @@ fn turn_over(direction: FoldDirection, plane_map: &Isometry2) -> FoldDirection {
     match direction {
         FoldDirection::Up => FoldDirection::Down,
         FoldDirection::Down => FoldDirection::Up,
-    }
-}
-
-fn vertex_positions(cp: &CreasePattern) -> HashMap<VertexId, DVec2> {
-    cp.vertices
-        .iter()
-        .map(|v| (v.id, DVec2::from(v.pos)))
-        .collect()
-}
-
-/// 同じ線分(向きの違いは同一視)+同じ角度のDriverLineを重複させずに追加する。
-fn push_driver_line(lines: &mut Vec<DriverLine>, q0: DVec2, q1: DVec2, angle: f64) {
-    let dup = lines.iter().any(|x| {
-        let xa = DVec2::from(x.a);
-        let xb = DVec2::from(x.b);
-        x.target_angle_deg == angle
-            && (((xa - q0).length() <= EPS && (xb - q1).length() <= EPS)
-                || ((xa - q1).length() <= EPS && (xb - q0).length() <= EPS))
-    });
-    if !dup {
-        lines.push(DriverLine {
-            a: [q0.x, q0.y],
-            b: [q1.x, q1.y],
-            target_angle_deg: angle,
-        });
-    }
-}
-
-/// 線種に対応する完全折りの角度(+180=山, -180=谷)。
-fn angle_of(kind: EdgeKind) -> f64 {
-    match kind {
-        EdgeKind::Mountain => 180.0,
-        _ => -180.0,
     }
 }

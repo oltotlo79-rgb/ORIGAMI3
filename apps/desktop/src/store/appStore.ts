@@ -8,6 +8,7 @@ import { create } from "zustand";
 import * as ipc from "../ipc/client";
 import { createSerialQueue } from "./ipcQueue";
 import { hingeEdgeIds } from "../lib/hinges";
+import { TECHNIQUE_LABEL } from "../lib/techniques";
 import { advancePlayback, startPlayback } from "../lib/playback";
 import {
   foldLayers,
@@ -755,12 +756,22 @@ export const useAppStore = create<AppState>((set, get) => {
         set({ techniqueDraft: null, errorMessage: STALE_DRAFT_MESSAGE });
         return;
       }
-      if (draft.kind !== "Pleat" && draft.flap.length < 2) {
-        set({
-          errorMessage:
-            "先に立体表示で紙をクリックし、重なった層(フラップ)を選んでください",
-        });
-        return;
+      if (draft.kind !== "Pleat") {
+        if (draft.flap.length < 2) {
+          set({
+            errorMessage:
+              "先に立体表示で紙をクリックし、重なった層(フラップ)を選んでください",
+          });
+          return;
+        }
+        // 中割り折り・かぶせ折りは層を奥と手前へ半分ずつ分けるので、
+        // 層の数が奇数のフラップには使えない(送っても断られる)
+        if (draft.flap.length % 2 !== 0) {
+          set({
+            errorMessage: `選んだ層が${draft.flap.length}枚(奇数)です。${TECHNIQUE_LABEL[draft.kind]}は表と裏が対になった層にしか使えません。別の場所をクリックして選び直すか、${TECHNIQUE_FALLBACK_HINT}`,
+          });
+          return;
+        }
       }
       // 基準点の意味は技法ごとに違う。段折りは2本目の折り線の位置(段の幅ぶん
       // 動く側へ離した点)、中割り・かぶせは先端が向かう側(動かない側)の点
