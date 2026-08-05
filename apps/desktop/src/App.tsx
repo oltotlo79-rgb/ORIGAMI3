@@ -10,6 +10,7 @@ import { ContextPanel } from "./components/ContextPanel";
 import { CpEditor } from "./components/CpEditor/CpEditor";
 import { Viewer3D } from "./components/Viewer3D/Viewer3D";
 import { Timeline } from "./components/Timeline";
+import { RecoveryDialog } from "./components/RecoveryDialog";
 import { uniqueWarnings } from "./lib/techniques";
 import "./App.css";
 
@@ -20,6 +21,7 @@ function App() {
   const newDocument = useAppStore((s) => s.newDocument);
   const openDocument = useAppStore((s) => s.openDocument);
   const saveDocument = useAppStore((s) => s.saveDocument);
+  const checkRecovery = useAppStore((s) => s.checkRecovery);
   const undo = useAppStore((s) => s.undo);
   const redo = useAppStore((s) => s.redo);
   const warningCount = useAppStore(
@@ -31,10 +33,11 @@ function App() {
   const fit2dRef = useRef<(() => void) | null>(null);
   const fit3dRef = useRef<(() => void) | null>(null);
 
-  // 起動時に150×150mmの新規作品を開く
+  // 起動時に150×150mmの新規作品を開き、続けて前回の異常終了の有無を調べる
+  // (残っていれば復旧ダイアログが出る。SYS-003)
   useEffect(() => {
-    void newDocument(DEFAULT_PAPER);
-  }, [newDocument]);
+    void newDocument(DEFAULT_PAPER).then(() => checkRecovery());
+  }, [newDocument, checkRecovery]);
 
   const handleOpen = async () => {
     const path = await open({ filters: ORI3_FILTERS, multiple: false });
@@ -100,6 +103,7 @@ function App() {
         </section>
       </div>
       <ContextPanel />
+      <RecoveryDialog />
     </div>
   );
 }

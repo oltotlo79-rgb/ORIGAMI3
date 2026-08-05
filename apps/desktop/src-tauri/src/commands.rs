@@ -13,6 +13,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use tauri::State;
 
+use crate::autosave;
 use crate::store::{DocumentStore, DocumentView, add_penetration_warning, attach_replay};
 use ori3_model::{Driver, EditOp, Paper, SeqOp};
 
@@ -69,11 +70,51 @@ pub fn document_open(
 
 #[tauri::command(async)]
 pub fn document_save(
+    app: tauri::AppHandle,
     state: State<'_, Mutex<DocumentStore>>,
     path: Option<String>,
 ) -> Result<(), String> {
     guard(AssertUnwindSafe(|| {
-        lock(&state).save(path.as_deref().map(Path::new))
+        lock(&state).save(path.as_deref().map(Path::new))?;
+        // 保存できた内容は自動保存から復元する必要がない(SYS-003)
+        if let Ok(dir) = autosave::app_data_dir(&app) {
+            autosave::discard(&dir);
+        }
+        Ok(())
+    }))
+}
+
+/// 前回の異常終了で残った自動保存があるか調べる(SYS-003)。
+/// あればその情報を返し、フロントが復旧ダイアログで復元するか尋ねる。
+#[tauri::command(async)]
+pub fn recovery_check(app: tauri::AppHandle) -> Result<Option<autosave::RecoveryInfo>, String> {
+    guard(AssertUnwindSafe(|| {
+        let dir = autosave::app_data_dir(&app)?;
+        Ok(autosave::check(&dir))
+    }))
+}
+
+/// 復旧ダイアログの答えを実行する。`accept`なら自動保存の内容を現在の作品にし、
+/// そうでなければ自動保存ファイルを消す(以後は提案しない)。
+///
+/// 設計規約: 読み込みとJSON解釈はロックの外、状態の入れ替えだけロック下で行う。
+#[tauri::command(async)]
+pub fn recovery_restore(
+    app: tauri::AppHandle,
+    state: State<'_, Mutex<DocumentStore>>,
+    accept: bool,
+) -> Result<Option<DocumentView>, String> {
+    guard(AssertUnwindSafe(|| {
+        let dir = autosave::app_data_dir(&app)?;
+        if !accept {
+            autosave::discard(&dir);
+            return Ok(None);
+        }
+        let Some(mut view) = autosave::restore(&state, &dir)? else {
+            return Ok(None);
+        };
+        attach_replay(&mut view); // 重い再生はロック解放後(view_commandと同じ規約)
+        Ok(Some(view))
     }))
 }
 

@@ -26,6 +26,8 @@ vi.mock("../ipc/client", () => ({
   sequenceApply: vi.fn(),
   sequenceReplay: vi.fn(),
   poseSolve: vi.fn(),
+  recoveryCheck: vi.fn(),
+  recoveryRestore: vi.fn(),
 }));
 
 import * as ipc from "../ipc/client";
@@ -193,7 +195,9 @@ beforeEach(() => {
     activeTool: "select",
     foldDraft: null,
     techniqueDraft: null,
+    recovery: null,
   });
+  vi.mocked(ipc.recoveryCheck).mockResolvedValue(null);
 });
 
 describe("appStore 直列化と応答の反映", () => {
@@ -1066,5 +1070,71 @@ describe("技法(選ぶだけで折る)", () => {
     useAppStore.getState().beginTechnique("Pleat");
     useAppStore.getState().selectStep(0);
     expect(useAppStore.getState().techniqueDraft).toBeNull();
+  });
+});
+
+describe("自動保存からの復旧(SYS-003)", () => {
+  const INFO = {
+    autosave_path: "C:/作品/鶴.ori3.autosave",
+    document_path: "C:/作品/鶴.ori3",
+    saved_at_ms: 1_700_000_000_000,
+  };
+
+  it("起動時に残っていればダイアログの材料を持つ。無ければ何も出さない", async () => {
+    await useAppStore.getState().checkRecovery();
+    expect(useAppStore.getState().recovery).toBeNull();
+
+    vi.mocked(ipc.recoveryCheck).mockResolvedValue(INFO);
+    await useAppStore.getState().checkRecovery();
+    expect(useAppStore.getState().recovery).toEqual(INFO);
+  });
+
+  it("復元すると作業中だった内容が画面に載り、提案は消える", async () => {
+    const view = makeView(700);
+    vi.mocked(ipc.recoveryRestore).mockResolvedValue(view);
+    useAppStore.setState({ recovery: INFO });
+
+    await useAppStore.getState().resolveRecovery(true);
+
+    expect(vi.mocked(ipc.recoveryRestore)).toHaveBeenCalledWith(true);
+    const s = useAppStore.getState();
+    expect(s.doc).toEqual(view.doc);
+    expect(s.recovery).toBeNull();
+    expect(s.docEpoch).toBe(1); // 別の作品になったので世代が進む
+    expect(s.errorMessage).toBeNull();
+  });
+
+  it("破棄すると内容は読み込まず、提案だけ消える", async () => {
+    vi.mocked(ipc.recoveryRestore).mockResolvedValue(null);
+    useAppStore.setState({ recovery: INFO, doc: makeView(701).doc });
+
+    await useAppStore.getState().resolveRecovery(false);
+
+    expect(vi.mocked(ipc.recoveryRestore)).toHaveBeenCalledWith(false);
+    const s = useAppStore.getState();
+    expect(s.recovery).toBeNull();
+    expect(s.doc).toEqual(makeView(701).doc); // 今開いている作品はそのまま
+    expect(s.errorMessage).toBeNull();
+  });
+
+  it("答えは1回きり(二度押しでも要求は1回)", async () => {
+    vi.mocked(ipc.recoveryRestore).mockResolvedValue(null);
+    useAppStore.setState({ recovery: INFO });
+
+    await Promise.all([
+      useAppStore.getState().resolveRecovery(false),
+      useAppStore.getState().resolveRecovery(false),
+    ]);
+
+    expect(vi.mocked(ipc.recoveryRestore)).toHaveBeenCalledTimes(1);
+  });
+
+  it("復元できなかったときは理由を出す", async () => {
+    vi.mocked(ipc.recoveryRestore).mockResolvedValue(null);
+    useAppStore.setState({ recovery: INFO });
+
+    await useAppStore.getState().resolveRecovery(true);
+
+    expect(useAppStore.getState().errorMessage).toContain("見つかりませんでした");
   });
 });

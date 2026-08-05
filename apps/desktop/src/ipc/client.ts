@@ -8,6 +8,7 @@ import type {
   Driver,
   EditOp,
   Paper,
+  RecoveryInfo,
   ReplayResult,
   SeqOp,
   SolveResult,
@@ -50,4 +51,14 @@ export function sequenceReplay(upTo: number, t: number): Promise<ReplayResult> {
 /** 折り角度の追従計算。前回解(warm start)はRust側のstoreが保持する */
 export function poseSolve(drivers: Driver[]): Promise<SolveResult> {
   return invoke("pose_solve", { drivers });
+}
+
+/** 前回の異常終了で残った自動保存を調べる。無ければnull */
+export function recoveryCheck(): Promise<RecoveryInfo | null> {
+  return invoke("recovery_check");
+}
+
+/** accept=trueなら自動保存の内容を復元、falseなら自動保存ファイルを捨てる */
+export function recoveryRestore(accept: boolean): Promise<DocumentView | null> {
+  return invoke("recovery_restore", { accept });
 }

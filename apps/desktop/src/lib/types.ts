@@ -185,3 +185,13 @@ export interface SolveResult {
   /** 実行した反復回数(warm start効果の確認用) */
   iterations: number;
 }
+
+/** recovery_check の戻り値。前回の異常終了で残った自動保存の情報(SYS-003) */
+export interface RecoveryInfo {
+  /** 自動保存ファイルの場所 */
+  autosave_path: string;
+  /** 元の保存先(保存したことがない作品ならnull) */
+  document_path: string | null;
+  /** 最後に自動保存した時刻(1970年からのミリ秒)。分からなければnull */
+  saved_at_ms: number | null;
+}

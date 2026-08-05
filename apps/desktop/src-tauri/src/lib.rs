@@ -1,3 +1,4 @@
+pub mod autosave;
 pub mod commands;
 pub mod store;
 
@@ -21,7 +22,22 @@ pub fn run() {
             commands::sequence_apply,
             commands::sequence_replay,
             commands::pose_solve,
+            commands::recovery_check,
+            commands::recovery_restore,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        // 30秒ごとの自動保存(SYS-003)。書き出しはこのスレッドの中だけで完結する
+        .setup(|app| {
+            autosave::spawn(app.handle().clone());
+            Ok(())
+        })
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        // 正常終了なら自動保存は要らない。残っていれば異常終了とみなして復元を提案する
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit)
+                && let Ok(dir) = autosave::app_data_dir(app)
+            {
+                autosave::discard(&dir);
+            }
+        });
 }

@@ -97,23 +97,7 @@ impl DocumentStore {
     pub fn open(&mut self, path: &Path) -> Result<DocumentView, String> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| format!("ファイルを開けませんでした: {e}"))?;
-        let value: serde_json::Value = serde_json::from_str(&text)
-            .map_err(|e| format!("ファイルの内容を読み取れませんでした: {e}"))?;
-        match value.get("schema_version").and_then(|v| v.as_u64()) {
-            None => return Err("作品ファイルの形式ではありません".to_string()),
-            Some(v) if v > u64::from(SCHEMA_VERSION) => {
-                return Err(
-                    "このファイルは新しい版のアプリで作られています。アプリを更新してください"
-                        .to_string(),
-                );
-            }
-            Some(v) if v < u64::from(SCHEMA_VERSION) => {
-                return Err(format!("このファイルの形式(版{v})には対応していません"));
-            }
-            Some(_) => {}
-        }
-        let doc: Document = serde_json::from_value(value)
-            .map_err(|e| format!("ファイルの内容を読み取れませんでした: {e}"))?;
+        let doc = parse_document(&text)?;
         // 導出を先に済ませ、成功した場合のみ状態を確定する
         let view = build_view(&doc, Vec::new());
         self.doc = doc;
@@ -359,6 +343,40 @@ impl DocumentStore {
         self.dirty
     }
 
+    /// 現在の保存先(未保存の新規作品ならNone)。
+    pub fn current_path(&self) -> Option<PathBuf> {
+        self.path.clone()
+    }
+
+    /// 自動保存の材料(保存先と現Documentの複製)を取り出す。未保存の変更が
+    /// 無ければNone(SYS-003: 変更が無いときは書かない)。
+    ///
+    /// 設計規約: `save` を自動保存に流用してはいけない。`save` は保存先パスと
+    /// 未保存フラグを書き換えるため、自動保存ファイルへ書くと本来の保存先が
+    /// 乗っ取られ、未保存の印も消えてしまう。ここは複製を返すだけで
+    /// `path`/`dirty` を触らず、書き出しはロックの外(autosave.rs)で行う。
+    pub fn autosave_snapshot(&self) -> Option<(Option<PathBuf>, Document)> {
+        if !self.dirty {
+            return None;
+        }
+        Some((self.path.clone(), self.doc.clone()))
+    }
+
+    /// 自動保存から読んだDocumentを現在の作品にする(復元)。
+    /// 元の保存先を引き継ぎ、まだ書き出していない内容なので未保存扱いにする。
+    pub fn restore(&mut self, doc: Document, path: Option<PathBuf>) -> DocumentView {
+        // 導出を先に済ませてから状態を確定する(openと同じ規約)
+        let view = build_view(&doc, Vec::new());
+        self.doc = doc;
+        self.faces = view.faces.clone();
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.dirty = true;
+        self.path = path;
+        self.pose_angles = None;
+        view
+    }
+
     /// pose_solveの入力(CPの複製・導出済みfacesの複製・前回解)を取り出す。
     /// facesは編集時に導出済みのキャッシュの流用で、extract_facesを再実行しない。
     /// 設計規約: ロック中に重い計算をしないため、コマンド層はこの複製を取って
@@ -402,6 +420,27 @@ impl DocumentStore {
         }
         view
     }
+}
+
+/// 保存されたJSONをDocumentへ戻す。schema_versionが合わなければErr。
+/// `open` と自動保存の復元(autosave.rs)で共通に使う。
+pub fn parse_document(text: &str) -> Result<Document, String> {
+    let value: serde_json::Value = serde_json::from_str(text)
+        .map_err(|e| format!("ファイルの内容を読み取れませんでした: {e}"))?;
+    match value.get("schema_version").and_then(|v| v.as_u64()) {
+        None => return Err("作品ファイルの形式ではありません".to_string()),
+        Some(v) if v > u64::from(SCHEMA_VERSION) => {
+            return Err(
+                "このファイルは新しい版のアプリで作られています。アプリを更新してください"
+                    .to_string(),
+            );
+        }
+        Some(v) if v < u64::from(SCHEMA_VERSION) => {
+            return Err(format!("このファイルの形式(版{v})には対応していません"));
+        }
+        Some(_) => {}
+    }
+    serde_json::from_value(value).map_err(|e| format!("ファイルの内容を読み取れませんでした: {e}"))
 }
 
 /// Documentから表示用ビューを作る(faces/warningsは毎回導出)。

@@ -27,6 +27,7 @@ import type {
   FoldDirection,
   Frame3D,
   Paper,
+  RecoveryInfo,
   SeqOp,
   TechniqueKind,
   Vec2,
@@ -160,6 +161,8 @@ interface AppState {
   poseWarnings: string[];
   /** 追従計算が収束したか(falseなら3D区画のバッジで知らせる) */
   poseConverged: boolean;
+  /** 前回の異常終了で残った作業中の内容。あれば復旧ダイアログを出す(SYS-003) */
+  recovery: RecoveryInfo | null;
 
   newDocument: (paper: Paper) => Promise<void>;
   openDocument: (path: string) => Promise<void>;
@@ -216,6 +219,10 @@ interface AppState {
   clearDriver: (hinge: number) => void;
   /** 全ての角度指定を解除して平らに戻す */
   clearDrivers: () => void;
+  /** 起動時に、前回の異常終了で残った作業中の内容があるか調べる */
+  checkRecovery: () => Promise<void>;
+  /** 復旧ダイアログの答えを実行する(true=復元する / false=破棄する) */
+  resolveRecovery: (accept: boolean) => Promise<void>;
 }
 
 const EMPTY_SELECTION: Selection = { edgeIds: [], vertexIds: [] };
@@ -541,6 +548,7 @@ export const useAppStore = create<AppState>((set, get) => {
     poseAngles: new Map(),
     poseWarnings: [],
     poseConverged: true,
+    recovery: null,
 
     newDocument: (paper) => runViewCommand(() => ipc.documentNew(paper), true),
 
@@ -879,6 +887,29 @@ export const useAppStore = create<AppState>((set, get) => {
       const hinges = get().hinges;
       set({ drivers: new Map() });
       void runPoseSolve(flatDrivers(hinges));
+    },
+
+    checkRecovery: async () => {
+      // 見つからなくても普通の起動なので、失敗しても利用者へ何も出さない
+      const r = await queue.run(() => ipc.recoveryCheck());
+      if (r.ok && r.value) set({ recovery: r.value });
+    },
+
+    resolveRecovery: async (accept) => {
+      if (get().recovery === null) return;
+      // 答えは1回きり。先に閉じてダイアログの二度押しを防ぐ
+      set({ recovery: null });
+      if (!accept) {
+        const r = await queue.run(() => ipc.recoveryRestore(false));
+        if (!r.ok) fail(r.error);
+        return;
+      }
+      // 別の作品に入れ替わるので、新規・開くと同じ扱いで反映する
+      await runViewCommand(async () => {
+        const view = await ipc.recoveryRestore(true);
+        if (!view) throw "作業中だった内容が見つかりませんでした";
+        return view;
+      }, true);
     },
   };
 });
