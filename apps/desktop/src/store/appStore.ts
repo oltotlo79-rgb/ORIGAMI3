@@ -17,6 +17,7 @@ import {
 } from "../components/Viewer3D/foldDraw";
 import { planGrabFold, type GrabMode } from "../components/Viewer3D/grabFold";
 import { foldBlockReason } from "../lib/viewerHint";
+import { buildPoseStep, currentAngles, hasPoseAngle } from "../lib/poseStep";
 import { DEFAULT_CONSTRUCT, type ConstructOptions } from "../lib/construct";
 import {
   clampDivisions,
@@ -155,6 +156,26 @@ export function canFoldNow(s: {
 }): boolean {
   if (!s.doc || s.playing || s.playT !== 1 || s.drivers.size > 0) return false;
   return s.currentStep === null || s.currentStep === s.doc.sequence.length;
+}
+
+/**
+ * 今の形を手順として残せない理由(残せるならnull)。SIM-009。
+ * 押せないときもボタンは消さず、この短い日本語を添えて理由を見せる。
+ */
+export function poseRecordReason(s: {
+  doc: Document | null;
+  playing: boolean;
+  hinges: ReadonlySet<number>;
+  drivers: ReadonlyMap<number, number>;
+  poseAngles: ReadonlyMap<number, number>;
+}): string | null {
+  if (!s.doc) return "まだ紙がありません";
+  if (s.playing) return "再生を止めてから残してください";
+  if (s.hinges.size === 0) return "折り線がまだありません";
+  if (!hasPoseAngle(currentAngles(s.hinges, s.drivers, s.poseAngles))) {
+    return "まだ角度が付いていません(折り線を選んで角度を変えてください)";
+  }
+  return null;
 }
 
 interface AppState {
@@ -298,6 +319,8 @@ interface AppState {
   clearDriver: (hinge: number) => void;
   /** 全ての角度指定を解除して平らに戻す */
   clearDrivers: () => void;
+  /** 今つけている立体的な形を「仕上げの角度」の手順として残す(SIM-009) */
+  recordPoseStep: () => Promise<void>;
   /** 起動時に、前回の異常終了で残った作業中の内容があるか調べる */
   checkRecovery: () => Promise<void>;
   /** 復旧ダイアログの答えを実行する(true=復元する / false=破棄する) */
@@ -1034,6 +1057,25 @@ export const useAppStore = create<AppState>((set, get) => {
       const hinges = get().hinges;
       set({ drivers: new Map() });
       void runPoseSolve(flatDrivers(hinges));
+    },
+
+    recordPoseStep: async () => {
+      const s = get();
+      const reason = poseRecordReason(s);
+      if (reason !== null || !s.doc) {
+        set({ errorMessage: reason });
+        return;
+      }
+      const angles = currentAngles(s.hinges, s.drivers, s.poseAngles);
+      // 記録した形をそのまま見せる(手順の再生結果が最新の表示になる)
+      set({ currentStep: null, errorMessage: null });
+      await get().applySequenceOp({
+        type: "PushStep",
+        step: buildPoseStep(s.doc, angles),
+      });
+      // 手順として残ったので、一時的な角度指定は役目を終える。
+      // ここで平らに戻す計算は送らない(再生結果の立体表示を消さないため)
+      if (get().errorMessage === null) set({ drivers: new Map() });
     },
 
     checkRecovery: async () => {

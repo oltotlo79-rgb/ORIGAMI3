@@ -4,6 +4,7 @@
 import { useEffect, useRef } from "react";
 import {
   isStepSkipped,
+  poseRecordReason,
   useAppStore,
   type FoldDraft,
   type TechniqueDraft,
@@ -136,6 +137,35 @@ function HingeAngle({ hinge }: { hinge: number }) {
   );
 }
 
+/**
+ * 今つけている立体的な形を手順として残すボタン(SIM-009)。
+ * 折り鶴の中央の膨らみのように、平らに畳まない仕上げの形をそのまま残す。
+ * 残せないときもボタンは消さず、短い理由を添えて押せなくする。
+ */
+function PoseRecordButton() {
+  const reason = useAppStore((s) => poseRecordReason(s));
+  const recordPoseStep = useAppStore((s) => s.recordPoseStep);
+
+  return (
+    <div className="button-row">
+      <button
+        type="button"
+        disabled={reason !== null}
+        title={
+          reason ??
+          "今の立体的な形を、折り角度の手順として手順一覧の最後に残します"
+        }
+        onClick={() => void recordPoseStep()}
+      >
+        この形で仕上げる
+      </button>
+      <span className="hint">
+        {reason ?? "今の形が手順一覧に残り、展開図を編集しても戻せます"}
+      </span>
+    </div>
+  );
+}
+
 /** 折り角度の操作(折り線を1本だけ選んでいるとき)と、全解除ボタン */
 function FoldControls() {
   const hinges = useAppStore((s) => s.hinges);
@@ -156,6 +186,7 @@ function FoldControls() {
   return (
     <div className="fold-controls">
       {hinge !== null && <HingeAngle hinge={hinge} />}
+      <PoseRecordButton />
       {drivers.size > 0 && (
         <div className="button-row">
           <button type="button" onClick={() => clearDrivers()}>

@@ -638,3 +638,83 @@ fn flat_state_at_feeds_next_fold_through() {
     // 4層すべてを折るので、折り上がりは8層
     assert_eq!(res.state.order.len(), 8);
 }
+
+/// SIM-009: 立体的な仕上げの形(Poseステップ)を手順として記録すると、
+/// 展開図を編集したあとでも再生でその立体形状が戻る。
+///
+/// 正方形をx=0.5で分け、その折り線を90°に立てた形を記録する。
+/// 記録後に別の折り線(x=0.25)を足して辺IDを変えても、DriverLineは展開図座標の
+/// 線分で折り線を指すため同じ辺へ解決でき、同じ立体(z方向の広がり0.5)が返る。
+#[test]
+fn pose_step_reproduces_folded_shape_after_cp_edit() {
+    let mut doc = Document::new(Paper {
+        width_mm: 100.0,
+        height_mm: 100.0,
+    });
+    ori3_cp::insert_segment(&mut doc.cp, [0.5, 0.0], [0.5, 1.0], EdgeKind::Mountain);
+    doc.sequence.push(FoldStep {
+        id: 0,
+        kind: TechniqueKind::Pose,
+        drivers: vec![DriverLine {
+            a: [0.5, 0.0],
+            b: [0.5, 1.0],
+            target_angle_deg: 90.0,
+        }],
+        layer_order: None,
+        note: String::new(),
+    });
+
+    let before = replay(&doc, 1, 1.0);
+    assert!(before.skipped.is_empty(), "警告={:?}", before.warnings);
+    let z_before = extent(&before.frame, 2);
+    assert!(
+        (z_before - 0.5).abs() < 1e-6,
+        "90°に立てた半分の高さは0.5になるはず: z幅={z_before}"
+    );
+
+    // 展開図を編集する(別の折り線を足す)。辺IDは付け替わる
+    let edges_before: Vec<EdgeId> = doc.cp.edges.iter().map(|e| e.id).collect();
+    ori3_cp::insert_segment(&mut doc.cp, [0.25, 0.0], [0.25, 1.0], EdgeKind::Valley);
+    assert_ne!(
+        edges_before,
+        doc.cp.edges.iter().map(|e| e.id).collect::<Vec<_>>(),
+        "編集で展開図の辺が変わっていること"
+    );
+
+    let after = replay(&doc, 1, 1.0);
+    assert!(after.skipped.is_empty(), "警告={:?}", after.warnings);
+    let z_after = extent(&after.frame, 2);
+    assert!(
+        (z_after - z_before).abs() < 1e-6,
+        "展開図を編集しても同じ立体形状に戻るはず: 前={z_before} 後={z_after}"
+    );
+}
+
+/// SIM-009: 平らに畳む手順のあとに「仕上げの角度」を積むと、その角度が勝って
+/// 立体のまま仕上がる(畳んだ形へ戻らない)。
+#[test]
+fn pose_step_after_flat_folds_keeps_the_solid_shape() {
+    let mut doc = folded_document(1); // x=0.5で二つ折り(180°)
+    let flat = replay(&doc, 1, 1.0);
+    assert!(extent(&flat.frame, 2) < 1e-6, "手順1だけなら平ら");
+
+    // 同じ折り線を90°にする仕上げの手順(記録した形)
+    doc.sequence.push(FoldStep {
+        id: 100,
+        kind: TechniqueKind::Pose,
+        drivers: vec![DriverLine {
+            a: [0.5, 0.0],
+            b: [0.5, 1.0],
+            target_angle_deg: 90.0,
+        }],
+        layer_order: None,
+        note: String::new(),
+    });
+    let posed = replay(&doc, 2, 1.0);
+    assert!(posed.skipped.is_empty(), "警告={:?}", posed.warnings);
+    assert!(
+        (extent(&posed.frame, 2) - 0.5).abs() < 1e-6,
+        "仕上げの角度が勝って立体になるはず: z幅={}",
+        extent(&posed.frame, 2)
+    );
+}

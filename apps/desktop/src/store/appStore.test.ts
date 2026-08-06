@@ -35,6 +35,7 @@ import * as ipc from "../ipc/client";
 import {
   canFoldNow,
   isStepSkipped,
+  poseRecordReason,
   resetPoseThrottle,
   useAppStore,
 } from "./appStore";
@@ -1137,5 +1138,110 @@ describe("自動保存からの復旧(SYS-003)", () => {
     await useAppStore.getState().resolveRecovery(true);
 
     expect(useAppStore.getState().errorMessage).toContain("見つかりませんでした");
+  });
+});
+
+describe("立体的な仕上げの形を手順として残す(SIM-009)", () => {
+  /** 対角線2本(辺ID 5・6)が折り線の正方形。どちらもヒンジ */
+  function makePoseView(mark: number): DocumentView {
+    const view = makeHingeView(mark);
+    view.doc.cp.edges.push({ id: 6, v0: 1, v1: 3, kind: "Valley" });
+    return view;
+  }
+
+  /** 角度のついた状態を作る(5は利用者指定、6はソルバーが求めた従属角度) */
+  function seedPose(): void {
+    const view = makePoseView(1200);
+    useAppStore.setState({
+      doc: view.doc,
+      faces: view.faces,
+      hinges: new Set([5, 6]),
+      drivers: new Map([[5, 90]]),
+      poseAngles: new Map([
+        [5, 89.9999],
+        [6, -30.5],
+      ]),
+    });
+  }
+
+  it("今の全ての折り線の角度を「仕上げの角度」の手順として送る", async () => {
+    seedPose();
+    // 応答は手順が1つ増えた作品(立体は手順の再生結果で表す)
+    const pushed = makePoseView(1201);
+    pushed.doc.sequence = [makeStep(0)];
+    pushed.frame = { faces: [], warnings: [] };
+    vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(pushed);
+
+    await useAppStore.getState().recordPoseStep();
+
+    expect(vi.mocked(ipc.sequenceApply)).toHaveBeenCalledTimes(1);
+    const op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
+    expect(op).toEqual({
+      type: "PushStep",
+      step: {
+        id: 0,
+        kind: "Pose",
+        // 折り線は展開図座標の線分で残す(辺IDは編集で変わるため)。
+        // 指定した5は指定値、指定していない6は計算結果の角度が入る
+        drivers: [
+          { a: [0, 0], b: [1, 1], target_angle_deg: 90 },
+          { a: [1, 0], b: [0, 1], target_angle_deg: -30.5 },
+        ],
+        layer_order: null,
+        note: "",
+      },
+    });
+    // 手順として残ったので一時的な角度指定は消える(平ら計算は送らない)
+    expect(useAppStore.getState().drivers.size).toBe(0);
+    expect(poseCalls()).toEqual([]);
+    expect(useAppStore.getState().errorMessage).toBeNull();
+  });
+
+  it("手順IDは既にある手順の続きになる", async () => {
+    seedPose();
+    useAppStore.setState({
+      doc: { ...useAppStore.getState().doc!, sequence: [makeStep(3)] },
+    });
+    const pushed2 = makePoseView(1202);
+    pushed2.doc.sequence = [makeStep(3), makeStep(4)];
+    vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(pushed2);
+
+    await useAppStore.getState().recordPoseStep();
+
+    const op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
+    expect(op.type === "PushStep" && op.step.id).toBe(4);
+  });
+
+  it("角度が全く付いていなければ残せず、理由を伝える", async () => {
+    const view = makePoseView(1203);
+    useAppStore.setState({
+      doc: view.doc,
+      faces: view.faces,
+      hinges: new Set([5, 6]),
+      drivers: new Map(),
+      poseAngles: new Map([[5, 0.0001]]),
+    });
+
+    expect(poseRecordReason(useAppStore.getState())).toContain(
+      "まだ角度が付いていません",
+    );
+    await useAppStore.getState().recordPoseStep();
+
+    expect(vi.mocked(ipc.sequenceApply)).not.toHaveBeenCalled();
+    expect(useAppStore.getState().errorMessage).toContain(
+      "まだ角度が付いていません",
+    );
+  });
+
+  it("折り線が1本も無いとき・再生中は残せない", () => {
+    expect(poseRecordReason(useAppStore.getState())).toBe("まだ紙がありません");
+    seedPose();
+    expect(poseRecordReason(useAppStore.getState())).toBeNull();
+    useAppStore.setState({ playing: true });
+    expect(poseRecordReason(useAppStore.getState())).toContain("再生を止めて");
+    useAppStore.setState({ playing: false, hinges: new Set<number>() });
+    expect(poseRecordReason(useAppStore.getState())).toBe(
+      "折り線がまだありません",
+    );
   });
 });
