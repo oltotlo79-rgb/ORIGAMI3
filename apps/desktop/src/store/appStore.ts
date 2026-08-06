@@ -23,6 +23,7 @@ import type {
   DocumentView,
   Driver,
   EditOp,
+  ExportKind,
   Face,
   FoldDirection,
   Frame3D,
@@ -188,6 +189,21 @@ interface AppState {
   /** 次に使う乱数の初期値。作り直すたびに増やして別の配置を出す */
   proposalSeed: number;
 
+  /** 書き出しダイアログを開いているか(常設UIは増やさない。EXP-001/EXP-002) */
+  exportOpen: boolean;
+  /** 書き出す種類 */
+  exportKind: ExportKind;
+  /** 補助線も含めるか */
+  exportIncludeAux: boolean;
+  /** PNGのときの長いほうの辺の点数 */
+  exportLongSide: number;
+  /** 書き出し中か(ボタンの二度押し防止) */
+  exportBusy: boolean;
+  /** 書き出しに失敗した理由(日本語)。成功したらnull */
+  exportError: string | null;
+  /** 保存できたファイルの場所。まだならnull(「保存しました」の表示用) */
+  exportSavedPath: string | null;
+
   newDocument: (paper: Paper) => Promise<void>;
   openDocument: (path: string) => Promise<void>;
   saveDocument: (path: string | null) => Promise<void>;
@@ -261,7 +277,25 @@ interface AppState {
   selectProposalCandidate: (index: number) => void;
   /** 選んだ候補を今の作品の展開図にしてウィザードを閉じる(PRO-003) */
   applyProposalCandidate: () => Promise<void>;
+  /** 書き出しダイアログを開く(前回の結果表示は消す) */
+  openExport: () => void;
+  /** 書き出しダイアログを閉じる */
+  closeExport: () => void;
+  /** 書き出しの指定を変える(種類・補助線・大きさ) */
+  setExportOption: (patch: Partial<ExportSettings>) => void;
+  /** 指定の場所へ書き出す。成功したらexportSavedPathに場所が入る */
+  runExport: (path: string) => Promise<void>;
 }
+
+/** 書き出しダイアログで変えられる指定 */
+export interface ExportSettings {
+  exportKind: ExportKind;
+  exportIncludeAux: boolean;
+  exportLongSide: number;
+}
+
+/** PNGの既定の長辺(点)。Rust側のDEFAULT_LONG_SIDE_PXと揃える(EXP-002) */
+export const DEFAULT_PNG_LONG_SIDE = 2048;
 
 const EMPTY_SELECTION: Selection = { edgeIds: [], vertexIds: [] };
 
@@ -594,6 +628,13 @@ export const useAppStore = create<AppState>((set, get) => {
     proposalBusy: false,
     proposalError: null,
     proposalSeed: 1,
+    exportOpen: false,
+    exportKind: "CpSvg",
+    exportIncludeAux: true,
+    exportLongSide: DEFAULT_PNG_LONG_SIDE,
+    exportBusy: false,
+    exportError: null,
+    exportSavedPath: null,
 
     newDocument: (paper) => runViewCommand(() => ipc.documentNew(paper), true),
 
@@ -1022,6 +1063,42 @@ export const useAppStore = create<AppState>((set, get) => {
       // 元に戻せる操作なので、通常の編集と同じ経路(edit_apply)で流し込む
       set({ proposalStep: null });
       await get().applyEdit({ type: "ReplaceCreasePattern", cp: chosen.cp });
+    },
+
+    openExport: () =>
+      set({ exportOpen: true, exportError: null, exportSavedPath: null }),
+
+    closeExport: () => set({ exportOpen: false, exportBusy: false }),
+
+    // 指定を変えたら前回の「保存しました」は別の話になるので消す
+    setExportOption: (patch) =>
+      set({ ...patch, exportError: null, exportSavedPath: null }),
+
+    runExport: async (path) => {
+      const s = get();
+      if (s.exportBusy) return;
+      if (s.exportKind === "CpPng" && !Number.isFinite(s.exportLongSide)) {
+        set({ exportError: "画像の大きさを数で入れてください" });
+        return;
+      }
+      set({ exportBusy: true, exportError: null, exportSavedPath: null });
+      // 書き出しは作品を書き換えないが、直前の編集が反映された内容を出したいので
+      // 直列化キューに載せる(編集 → 書き出しの順が守られる)
+      const r = await queue.run(() =>
+        ipc.documentExport(s.exportKind, path, {
+          include_aux: s.exportIncludeAux,
+          png_long_side: Math.round(s.exportLongSide),
+        }),
+      );
+      if (r.ok) {
+        set({ exportBusy: false, exportSavedPath: path });
+      } else {
+        const e = r.error;
+        set({
+          exportBusy: false,
+          exportError: typeof e === "string" ? e : String(e),
+        });
+      }
     },
   };
 });

@@ -4,5 +4,8 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+ori3-model.workspace = true
 ori3-layers.workspace = true
 ori3-rigid.workspace = true
+# SVGのラスタライズ(PNG書き出し)。文字は使わないのでtext機能は外す
+resvg = { version = "0.48.1", default-features = false }

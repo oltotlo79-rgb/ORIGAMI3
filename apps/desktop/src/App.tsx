@@ -12,6 +12,7 @@ import { Viewer3D } from "./components/Viewer3D/Viewer3D";
 import { Timeline } from "./components/Timeline";
 import { RecoveryDialog } from "./components/RecoveryDialog";
 import { ProposalWizard } from "./components/dialogs/ProposalWizard";
+import { ExportDialog } from "./components/dialogs/ExportDialog";
 import { uniqueWarnings } from "./lib/techniques";
 import "./App.css";
 
@@ -26,6 +27,7 @@ function App() {
   const undo = useAppStore((s) => s.undo);
   const redo = useAppStore((s) => s.redo);
   const openProposal = useAppStore((s) => s.openProposal);
+  const openExport = useAppStore((s) => s.openExport);
   const warningCount = useAppStore(
     (s) => uniqueWarnings(s.warnings, s.poseWarnings, s.replayWarnings).length,
   );
@@ -79,6 +81,10 @@ function App() {
         <button type="button" onClick={openProposal}>
           提案
         </button>
+        {/* 書き出しの入口。開くのは独立ダイアログで、常設区画は増やさない(EXP-001/002) */}
+        <button type="button" onClick={openExport}>
+          書き出し
+        </button>
       </header>
       <div className="main-row">
         <ToolRail
@@ -112,6 +118,7 @@ function App() {
       <ContextPanel />
       <RecoveryDialog />
       <ProposalWizard />
+      <ExportDialog />
     </div>
   );
 }

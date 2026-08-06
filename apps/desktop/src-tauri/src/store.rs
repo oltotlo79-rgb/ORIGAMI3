@@ -400,6 +400,13 @@ impl DocumentStore {
         (self.doc.clone(), self.faces.clone())
     }
 
+    /// document_exportの入力(現Documentの複製)を取り出す。
+    /// 設計規約: replay_inputsと同じく、コマンド層はこの複製を取って即ロックを解放し、
+    /// 図の組み立てとファイル書き出し(I/O)はロックの外で行う。
+    pub fn export_inputs(&self) -> Document {
+        self.doc.clone()
+    }
+
     /// pose_solveの結果角度を保存する(次回のwarm start用)。
     pub fn store_pose_angles(&mut self, angles: HashMap<EdgeId, f64>) {
         self.pose_angles = Some(angles);

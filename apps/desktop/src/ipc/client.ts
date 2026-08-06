@@ -1,12 +1,14 @@
-// IPCクライアント: 実装済み9コマンドの型付きラッパー(1関数5行以内)。
+// IPCクライアント: 実装済み13コマンドの型付きラッパー(1関数5行以内)。
 // 失敗時はErr(string)がPromiseのrejectになる。
-// 未実装コマンド(document_export等)は実装タスクで追加する。
+// コマンドは13個で打ち止め。折り図の書き出しはExportKindを増やして対応する。
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
   DocumentView,
   Driver,
   EditOp,
+  ExportKind,
+  ExportOptions,
   Paper,
   ProposalCandidate,
   RecoveryInfo,
@@ -72,4 +74,13 @@ export function proposalGenerate(
   seed: number,
 ): Promise<ProposalCandidate[]> {
   return invoke("proposal_generate", { skeleton, paper, seed });
+}
+
+/** 展開図を画像ファイルとして保存する(EXP-001 / EXP-002) */
+export function documentExport(
+  kind: ExportKind,
+  path: string,
+  options: ExportOptions,
+): Promise<void> {
+  return invoke("document_export", { kind, path, options });
 }

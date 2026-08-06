@@ -222,3 +222,15 @@ export interface RecoveryInfo {
   /** 最後に自動保存した時刻(1970年からのミリ秒)。分からなければnull */
   saved_at_ms: number | null;
 }
+
+/** document_export の書き出しの種類(commands.rs::ExportKind)。
+ * 展開図の画像はSVG(実寸mm)とPNGの2つ。折り図は後のタスクでここへ足す */
+export type ExportKind = "CpSvg" | "CpPng";
+
+/** document_export の細かい指定(commands.rs::ExportOptions) */
+export interface ExportOptions {
+  /** 補助線(下書きの線)も一緒に書き出すか */
+  include_aux: boolean;
+  /** PNGのときの長いほうの辺の点数 */
+  png_long_side: number;
+}

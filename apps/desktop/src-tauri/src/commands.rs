@@ -16,6 +16,7 @@ use tauri::State;
 
 use crate::autosave;
 use crate::store::{DocumentStore, DocumentView, add_penetration_warning, attach_replay};
+use ori3_export::{CpSvgOptions, cp_png, cp_svg};
 use ori3_model::{CreasePattern, Driver, EditOp, Paper, SeqOp};
 use ori3_propose::{Skeleton, generate, pack};
 
@@ -253,6 +254,59 @@ pub fn proposal_generate(
     }))
 }
 
+/// 書き出しの種類(EXP-001/EXP-002、Task 4-3)。
+/// 折り図の書き出し(Task 4-4/4-5)はコマンドを増やさずここへ足す。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExportKind {
+    /// 展開図の画像(SVG、実寸mm)
+    CpSvg,
+    /// 展開図の画像(PNG)
+    CpPng,
+}
+
+/// 書き出しの細かい指定。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportOptions {
+    /// 補助線(下書きの線)も一緒に書き出すか。
+    pub include_aux: bool,
+    /// PNGのときの長いほうの辺の点数。
+    pub png_long_side: u32,
+}
+
+/// 展開図を画像ファイルとして保存する(EXP-001 / EXP-002)。
+///
+/// 設計規約: ロック中に重い計算・I/Oをしない。ロック下ではDocumentの複製だけを行い、
+/// 図の組み立てとファイル書き出しはロックを解放してから実行する。
+#[tauri::command(async)]
+pub fn document_export(
+    state: State<'_, Mutex<DocumentStore>>,
+    kind: ExportKind,
+    path: String,
+    options: ExportOptions,
+) -> Result<(), String> {
+    guard(AssertUnwindSafe(move || {
+        let doc = lock(&state).export_inputs(); // 複製のみ、即ロック解放
+        let bytes = export_bytes(&doc, kind, options)?;
+        std::fs::write(Path::new(&path), &bytes)
+            .map_err(|e| format!("ファイルに書き出せませんでした: {e}"))
+    }))
+}
+
+/// 指定の種類でファイルの中身を組み立てる(ロックを取らない純粋な処理)。
+fn export_bytes(
+    doc: &ori3_model::Document,
+    kind: ExportKind,
+    options: ExportOptions,
+) -> Result<Vec<u8>, String> {
+    let opts = CpSvgOptions {
+        include_aux: options.include_aux,
+    };
+    match kind {
+        ExportKind::CpSvg => Ok(cp_svg(doc, &opts).into_bytes()),
+        ExportKind::CpPng => cp_png(doc, &opts, options.png_long_side),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{guard, proposal_generate};
@@ -305,6 +359,29 @@ mod tests {
             height_mm: 0.0,
         };
         assert!(proposal_generate(star(2), bad_paper, 1).is_err());
+    }
+
+    #[test]
+    fn export_bytes_makes_svg_and_png() {
+        use super::{ExportKind, ExportOptions, export_bytes};
+        let doc = ori3_model::Document::new(A4ISH);
+        let opts = ExportOptions {
+            include_aux: true,
+            png_long_side: 128,
+        };
+        let svg = export_bytes(&doc, ExportKind::CpSvg, opts).unwrap();
+        let text = String::from_utf8(svg).unwrap();
+        assert!(text.contains("viewBox=\"0 0 150 150\""), "{text}");
+
+        let png = export_bytes(&doc, ExportKind::CpPng, opts).unwrap();
+        assert_eq!(&png[0..8], b"\x89PNG\r\n\x1a\n");
+
+        // 点数が0など無理な指定は日本語のErr(パニックにしない)
+        let bad = ExportOptions {
+            include_aux: false,
+            png_long_side: 0,
+        };
+        assert!(export_bytes(&doc, ExportKind::CpPng, bad).is_err());
     }
 
     #[test]
