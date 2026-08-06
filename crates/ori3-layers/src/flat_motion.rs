@@ -844,7 +844,15 @@ fn build_order(
                     Some(k) => {
                         order.splice(k..k, block);
                     }
-                    None => order.extend(block),
+                    // 基準面の紙が全部動いて残りが無いときも、置く側は direction で決まる
+                    // (向こう側=Down なら重なりの下、手前側=Up なら上へ入る)
+                    None => match direction {
+                        FoldDirection::Up => order.extend(block),
+                        FoldDirection::Down => {
+                            block.extend(order.iter().copied());
+                            order = block;
+                        }
+                    },
                 }
             }
         }

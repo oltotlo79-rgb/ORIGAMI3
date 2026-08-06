@@ -369,6 +369,12 @@ pub fn squash(
             kind: TechniqueKind::Squash,
         },
     )?;
+    if anchored {
+        // 動きが変わったことを手順の注記で伝える(奥の紙の行き先が別物になる)
+        res.step.note = format!(
+            "{name}: 奥の紙が外の紙とつながっているため、奥側も手前と同じ折り線で折り返しました"
+        );
+    }
     warnings.append(&mut res.warnings);
     res.warnings = warnings;
     Ok(res)
@@ -469,14 +475,29 @@ pub fn petal(
     // ちょうつがいは、縁を中心線へ寄せる折り目(二等分線)がフラップの外へ出る点を
     // 通る。紙の外へ出る点が読めないときだけ、縁の長さからの当て(従来の値)を使う
     let polys = flap_polygons(cp, faces, state, &flap);
-    let stop = |s: FlapSide| {
-        s.map(|(ang, reach)| {
-            let along = ray_exit(&polys, tip, rotate(d, ang * 0.5))
-                .unwrap_or_else(|| reach / (ang * 0.5).cos().max(EPS));
-            (ang, along)
-        })
+    let (right_stop, left_stop, guessed) = {
+        let mut guessed = false;
+        let mut stop = |s: FlapSide| {
+            s.map(|(ang, reach)| {
+                let along = match ray_exit(&polys, tip, rotate(d, ang * 0.5)) {
+                    Some(t) => t,
+                    None => {
+                        guessed = true;
+                        reach / (ang * 0.5).cos().max(EPS)
+                    }
+                };
+                (ang, along)
+            })
+        };
+        let (r, l) = (stop(right), stop(left));
+        (r, l, guessed)
     };
-    let hinge = petal_hinge(tip, d, stop(right), stop(left));
+    if guessed {
+        warnings.push(format!(
+            "この{name}では、斜めの折り目がフラップの外へ出る点を読めませんでした。ちょうつがいの位置を縁の長さから見積もっています(指定のまま続行します)"
+        ));
+    }
+    let hinge = petal_hinge(tip, d, right_stop, left_stop);
     let sides: Vec<(f64, f64, Vec<FaceId>)> = [right, left]
         .into_iter()
         .flatten()
@@ -493,6 +514,22 @@ pub fn petal(
     };
     let pockets = petal_pockets(cp, faces, state, &flap, l0, u);
     let parts = petal_parts(&pockets, &polys, tip, d, hinge, &sides, open);
+    // どの部分にも入らなかった層は動かない。片側だけの層が反対の羽から外れるのは
+    // 普通のことだが、指定した層が1つの部分にも入らないのは指定の誤りなので伝える
+    // (層を選ぶ側で黙って落とすと、誤った指定が無反応になってしまう)
+    let mut idle: Vec<FaceId> = flap
+        .iter()
+        .copied()
+        .filter(|id| !parts.iter().any(|p| p.layers.contains(id)))
+        .collect();
+    if !idle.is_empty() {
+        idle.sort_unstable();
+        let list: Vec<String> = idle.iter().map(|id| id.to_string()).collect();
+        warnings.push(format!(
+            "この{name}では、指定した層 {} が折り線の手前側に掛かっていないため動きません(指定のまま続行します)",
+            list.join(", ")
+        ));
+    }
     let mut res = flat_motion(
         cp,
         faces,
@@ -1580,7 +1617,9 @@ fn anchored_outside(
         let Some(e) = cp.edges.iter().find(|e| e.id == eid) else {
             return false;
         };
-        if !matches!(e.kind, EdgeKind::Mountain | EdgeKind::Valley) {
+        // 山谷だけでなく Aux(平らに開いた折り目)でも紙は外とつながっている。
+        // 数えないと、そこで裂ける動きを選んでしまう
+        if matches!(e.kind, EdgeKind::Border) {
             return false;
         }
         let (Some(pl), Some(&p0), Some(&p1)) =
@@ -1594,7 +1633,7 @@ fn anchored_outside(
 }
 
 /// つぶし折りの動き(手前側=新しい折り線で折り返す / 奥側=層まるごと回る。
-/// ただし `anchored` なら奥側も同じ二等分線で折り返し、袋の中へ入れる)。
+/// ただし `anchored` なら奥側も手前と同じ二等分線で折り返す)。
 #[allow(clippy::too_many_arguments)]
 fn squash_parts(
     flap: &[FaceId],
@@ -1619,8 +1658,9 @@ fn squash_parts(
     let m_line = seg(m_dir);
     let inside = pivot + s_dir * reach;
     if anchored {
-        // 両側とも二等分線Mで折り返し、折り返した紙を開いた袋の中へ入れる
-        // (手前の紙は open の側へ、奥の紙はその反対側へ差し込む)
+        // 両側とも二等分線Mで折り返す。背は開かない(両側が同じように折り返るので
+        // 角度が変わらず、背は中心線に乗った折り目として残る)。折り返した紙は
+        // それぞれ元の層の隣へ入る(手前の紙は open の側、奥の紙はその反対側)
         let back = match open {
             FoldDirection::Up => FoldDirection::Down,
             FoldDirection::Down => FoldDirection::Up,
@@ -1777,6 +1817,8 @@ fn clip_polygon(poly: &[DVec2], inside: &dyn Fn(DVec2) -> f64) -> Vec<DVec2> {
 ///
 /// 花弁折りは左右の羽と中央のくさびを別々の部分にするので、片側にしか無い層は
 /// 反対側の羽に掛からない。それは指定の誤りではないので、警告を出さずに外す。
+/// どの部分にも入らなかった層(=まったく動かない層)は、部分を組み立てたあとに
+/// [`petal`] がまとめて警告するので、誤った層指定が無反応になることはない。
 fn layers_in_region(
     polys: &HashMap<FaceId, Vec<DVec2>>,
     layers: &[FaceId],
@@ -1818,6 +1860,33 @@ fn in_polygon(poly: &[DVec2], p: DVec2) -> bool {
     inside
 }
 
+/// 点が多角形の辺の上(EPS まで)にあるか。
+fn on_edge(poly: &[DVec2], p: DVec2) -> bool {
+    (0..poly.len()).any(|i| {
+        let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+        let e = b - a;
+        let len2 = e.length_squared();
+        if len2 <= EPS * EPS {
+            return false;
+        }
+        let t = (e.dot(p - a) / len2).clamp(0.0, 1.0);
+        (a + e * t).distance(p) <= EPS
+    })
+}
+
+/// その点にフラップの紙があるか。
+///
+/// 多角形の内部にあれば紙。内部でなくても2枚以上の面の辺に乗っていれば、
+/// そこは面と面の境目(折り目)なので紙があるとみなす。二等分線が既存の折り目に
+/// 完全に乗ると、内部判定(境界を含まない)だけでは紙の途中で止まってしまい、
+/// ちょうつがいが黙って旧式の当て値に落ちるため。
+fn on_paper(polys: &HashMap<FaceId, Vec<DVec2>>, p: DVec2) -> bool {
+    if polys.values().any(|poly| in_polygon(poly, p)) {
+        return true;
+    }
+    polys.values().filter(|poly| on_edge(poly, p)).count() >= 2
+}
+
 /// 先端 `tip` から向き `dir` へ伸びる半直線が、フラップの紙の外へ出るまでの距離。
 ///
 /// 二等分線の折り目が届く先(=ちょうつがいの通る点)。紙が無ければ `None`。
@@ -1845,7 +1914,7 @@ fn ray_exit(polys: &HashMap<FaceId, Vec<DVec2>>, tip: DVec2, dir: DVec2) -> Opti
             continue;
         }
         let mid = tip + dir * ((prev + t) * 0.5);
-        if !polys.values().any(|p| in_polygon(p, mid)) {
+        if !on_paper(polys, mid) {
             break;
         }
         prev = t;
@@ -1992,10 +2061,13 @@ fn petal_parts(
             line: bisector,
             inside_point: [inside.x, inside.y],
         });
-        if !neighbors.is_empty() {
-            // 隣の層の羽は中心線へ寄せるだけ(もとの層のすぐ上へ入る)
+        // 隣の層の羽は中心線へ寄せるだけ(もとの層のすぐ上へ入る)。
+        // 羽の領域から全部落ちたら部分を作らない(層の指定が空の [`MotionPart`] は
+        // 「全ての層」の意味になり、無関係な層まで動いてしまうため)
+        let near_layers = layers_in_region(polys, neighbors, &wing);
+        if !near_layers.is_empty() {
             parts.push(MotionPart {
-                layers: layers_in_region(polys, neighbors, &wing),
+                layers: near_layers,
                 region: wing.clone(),
                 transform: MotionTransform::Reflect(vec![bisector]),
                 turn: LayerTurn::Inside(open),
@@ -2104,7 +2176,14 @@ fn petal_pockets(
     for &id in flap {
         groups.entry(root(&parent, id)).or_default().push(id);
     }
-    let rank = |id: &FaceId| state.order.iter().position(|x| x == id).unwrap_or(usize::MAX);
+    // 層順序に無い面(重なりに現れない面)は rank が同じになるので、面IDで
+    // タイブレークして袋の並びを決定的にする
+    let rank = |id: &FaceId| {
+        (
+            state.order.iter().position(|x| x == id).unwrap_or(usize::MAX),
+            *id,
+        )
+    };
     let mut out: Vec<Vec<FaceId>> = groups.into_values().collect();
     for g in &mut out {
         g.sort_by_key(rank);
@@ -2293,5 +2372,50 @@ fn turn_direction(direction: FoldDirection, turned: bool) -> FoldDirection {
     match direction {
         FoldDirection::Up => FoldDirection::Down,
         FoldDirection::Down => FoldDirection::Up,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 花弁折りの部分は、層の指定が空のまま作られない。
+    ///
+    /// [`crate::flat_motion`] は層の指定が空の [`MotionPart`] を「全ての面」と読む。
+    /// 隣の層が羽の領域から全部落ちたときに空のまま渡すと、フラップと関係のない
+    /// 層まで動いてしまう。
+    #[test]
+    fn petal_parts_never_leaves_the_layers_empty() {
+        let (tip, d) = (DVec2::ZERO, DVec2::X);
+        let hinge = [[1.0, -1.0], [1.0, 1.0]];
+        let tri = |a: DVec2, b: DVec2, c: DVec2| vec![a, b, c];
+        let mut polys: HashMap<FaceId, Vec<DVec2>> = HashMap::new();
+        // フラップの層(先端を含む三角形)
+        polys.insert(1, tri(DVec2::ZERO, DVec2::new(1.0, -1.0), DVec2::new(1.0, 1.0)));
+        // 隣の層は羽の領域から遠く離れていて、どちらの羽にも掛からない
+        polys.insert(
+            7,
+            tri(DVec2::new(5.0, 5.0), DVec2::new(6.0, 5.0), DVec2::new(6.0, 6.0)),
+        );
+        let quarter = std::f64::consts::FRAC_PI_4;
+        let sides = vec![(quarter, 1.0, vec![7]), (-quarter, 1.0, vec![7])];
+
+        let parts = petal_parts(
+            &[vec![1]],
+            &polys,
+            tip,
+            d,
+            hinge,
+            &sides,
+            FoldDirection::Up,
+        );
+
+        assert!(!parts.is_empty(), "紙のある層は動く");
+        for p in &parts {
+            assert!(
+                !p.layers.is_empty(),
+                "層の指定が空の部分は作らない(全ての層が動いてしまう)"
+            );
+        }
     }
 }

@@ -324,6 +324,52 @@ fn restacking_without_moving_paper_only_changes_layers_and_creases() {
     assert_replay_matches(&doc, &res, "紙が動かない遷移");
 }
 
+/// `Beside` の置き場所が見つからないときも、入れる側は向きで決まる。
+///
+/// 基準面の紙が全部動くと「その隣」を指す層が1つも残らない。この場合でも
+/// 向こう側(Down)を指定した紙は重なりの下へ、手前側(Up)を指定した紙は上へ入る
+/// (向きを無視して常に最上へ入れると、Downの指定が効かない)。
+#[test]
+fn beside_without_a_neighbour_still_follows_the_direction() {
+    for direction in [FoldDirection::Up, FoldDirection::Down] {
+        let mut doc = square_doc();
+        fold(&mut doc, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5], FoldDirection::Up);
+        let (faces, state) = state_of(&doc);
+        let (lo, hi) = bbox(&doc.cp, &faces, &state);
+        let mid_y = 0.5 * (lo[1] + hi[1]);
+        fold(
+            &mut doc,
+            [[lo[0], mid_y], [hi[0], mid_y]],
+            [0.5 * (lo[0] + hi[0]), lo[1] + 0.25 * (hi[1] - lo[1])],
+            FoldDirection::Up,
+        );
+
+        let (_, state) = state_of(&doc);
+        assert_eq!(state.order.len(), 4, "4層になる");
+        let top = *state.order.last().expect("最前面");
+        let rest: Vec<FaceId> = state.order[..3].to_vec();
+        let expected: Vec<FaceId> = match direction {
+            FoldDirection::Up => state.order.clone(),
+            FoldDirection::Down => std::iter::once(top).chain(rest).collect(),
+        };
+
+        let res = motion(
+            &mut doc,
+            vec![MotionPart::restack(
+                vec![top],
+                LayerTurn::Beside {
+                    anchor: top,
+                    direction,
+                },
+            )],
+        );
+        assert_eq!(
+            res.state.order, expected,
+            "{direction:?} を指定した紙はその側へ入る"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 4. 層ごとに逆向きへ回す(中割り折り・かぶせ折りの中身)
 // ---------------------------------------------------------------------------

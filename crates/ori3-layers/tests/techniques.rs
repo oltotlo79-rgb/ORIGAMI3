@@ -1322,6 +1322,75 @@ fn petal_on_a_flap_with_different_edge_lengths() {
     assert_fold_senses(&doc, "非対称な花弁折り");
 }
 
+/// 展開図の点が畳み平面のどこに来るか(その点を含む面の配置で写す)。
+/// 折るたびに平面の座標系は変わるので、次の折り線はこれで指定する。
+fn plane_at(doc: &Document, p: [f64; 2]) -> [f64; 2] {
+    let faces = extract_faces(&doc.cp);
+    let (state, _) = flat_state_at(doc, &faces, doc.sequence.len()).expect("平らに畳める");
+    let pos: HashMap<u32, DVec2> =
+        doc.cp.vertices.iter().map(|v| (v.id, DVec2::from(v.pos))).collect();
+    let q = DVec2::from(p);
+    for f in &faces {
+        let poly: Vec<DVec2> = f.vertices.iter().filter_map(|v| pos.get(v)).copied().collect();
+        if inside_polygon(&poly, q, 1e-12) {
+            let at = state.placements[&f.id].apply(q);
+            return [at.x, at.y];
+        }
+    }
+    panic!("展開図の点 {p:?} を含む面がない");
+}
+
+/// 角が90°でないフラップ(たこ形)。正方形の隣り合う2辺を対角線に合わせて折った3層。
+/// 先端は紙の隅 (0,0) で、その角は45°。先端から見た両側の縁は対角線と±22.5°をなす。
+fn kite_base() -> Document {
+    let mut doc = square_doc();
+    let at = |deg: f64, r: f64| {
+        let (s, c) = deg.to_radians().sin_cos();
+        [c * r, s * r]
+    };
+    fold(&mut doc, [[0.0, 0.0], at(22.5, 1.0)], [0.1, 0.9], FoldDirection::Up);
+    let line = [plane_at(&doc, [0.0, 0.0]), plane_at(&doc, at(67.5, 0.5))];
+    let keep = plane_at(&doc, [0.9, 0.5]);
+    fold(&mut doc, line, keep, FoldDirection::Up);
+    doc
+}
+
+/// ちょうつがいは「斜めの折り目が紙の外へ出る点」を通る(角が90°でない例で固定)。
+///
+/// たこ形のフラップでは、先端の角(45°)が直角でないので旧規則
+/// (縁の端で縁に立てた垂線と二等分線の交点)とは別の位置になる。斜めの折り目は
+/// 対角線から±11.25°の向きで、紙の縁 x=1 / y=1 に当たって止まるので、
+/// 止まり点は (1, tan33.75°) と (tan33.75°, 1)。
+#[test]
+fn petal_hinge_stops_where_the_slant_leaves_the_paper() {
+    let mut doc = kite_base();
+    let flap: Vec<FaceId> = extract_faces(&doc.cp).iter().map(|f| f.id).collect();
+    // 中心線は先端(紙の隅)から対角線の向き。畳み平面の座標で指定する
+    let tip = plane_at(&doc, [0.0, 0.0]);
+    let along = plane_at(&doc, [0.8, 0.8]);
+    let a = apply(&mut doc, petal, flap, [tip, along], tip)
+        .expect("たこ形のフラップでも花弁折りできる");
+    assert!(a.warnings.is_empty(), "紙は裂けない: {:?}", a.warnings);
+
+    let has = |p: [f64; 2], eps: f64| {
+        doc.cp
+            .vertices
+            .iter()
+            .any(|v| (v.pos[0] - p[0]).abs() <= eps && (v.pos[1] - p[1]).abs() <= eps)
+    };
+    let stop = (33.75_f64).to_radians().tan();
+    assert!(has([1.0, stop], 1e-9), "ちょうつがいの端が (1, {stop}) にある");
+    assert!(has([stop, 1.0], 1e-9), "ちょうつがいの端が ({stop}, 1) にある");
+
+    // 旧規則なら止まり点は縁の長さ 1/cos22.5° から決まり、ちょうつがいは
+    // x+y = √2/cos22.5° の線になる(角が90°のときだけ上と一致する)
+    let old_stop = 2.0_f64.sqrt() / (22.5_f64).to_radians().cos() - 1.0;
+    assert!(
+        !has([1.0, old_stop], 1e-6) && !has([old_stop, 1.0], 1e-6),
+        "縁の長さから見積もった位置 ({old_stop}) にはちょうつがいが来ない"
+    );
+}
+
 /// 花弁折りが断るのは幾何的に決められない入力だけ。断ったときは文書を変えない。
 #[test]
 fn petal_rejects_undefined_input_without_touching_document() {
