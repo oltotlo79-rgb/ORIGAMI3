@@ -276,6 +276,12 @@ fn reverse_fold(
 ///   本体とつながったまま動くのはこちら
 /// - 奥の半分は層まるごと回る。鏡映2回(M→行き先の直線)= 角αの回転で、
 ///   これが「背が開く」動き(背の両側の向きがそろって折り目の角が0°になる)
+/// - ただし奥の半分がフラップの外の紙とつながっている(=向こう端が固定されている)
+///   ときは、層まるごと回すとそこで必ず紙が裂ける。実際の紙ではこの場合も
+///   **両側とも二等分線Mで折り返される**ので、そのように折る。折り返した紙は
+///   開いた袋の中(手前の半分と奥の半分の間)へ入り、`open_to_back` は袋の
+///   入れ子の向き(手前の紙が上か下か)を選ぶ。予備基本形の4つの袋を開いて
+///   つぶす動き(カエルの基本形の下ごしらえ)がこれにあたる
 /// - α=0(基準点が背の延長上)は**退化ケース**: 紙は1mmも動かず、重なり順と
 ///   背の山谷だけが変わる(2回半分に折った正方形を予備基本形の重なりへ組み替える
 ///   ときの動き)
@@ -334,6 +340,9 @@ pub fn squash(
     let alpha = s_dir.perp_dot(c_dir).atan2(s_dir.dot(c_dir));
 
     let (near, far) = split_by_spine(&flap, &pairs, name, &mut warnings);
+    // 奥の半分がフラップの外の紙とつながっていると、層まるごと回すと必ずそこで裂ける。
+    // 実際の紙では両側とも二等分線Mで折り返される(予備基本形の袋を開く動き)
+    let anchored = !far.is_empty() && anchored_outside(cp, faces, state, &far, &flap, l0, u);
     let parts = squash_parts(
         &flap,
         &near,
@@ -348,6 +357,7 @@ pub fn squash(
         } else {
             FoldDirection::Up
         },
+        anchored,
     );
 
     let mut res = flat_motion(
@@ -1522,7 +1532,49 @@ fn split_by_spine(
     flap.iter().partition(|id| !color[id])
 }
 
-/// つぶし折りの動き(手前側=新しい折り線で折り返す / 奥側=層まるごと回る)。
+/// 奥の半分が、フラップの外の紙と(中心線に乗っていない)折り目でつながっているか。
+///
+/// つながっていれば向こう端が固定されているので、層まるごと回すとそこで紙が裂ける
+/// (中心線に乗っている折り目=これから開く背は、固定とは数えない)。
+fn anchored_outside(
+    cp: &CreasePattern,
+    faces: &[Face],
+    state: &FlatState,
+    group: &[FaceId],
+    flap: &[FaceId],
+    l0: DVec2,
+    u: DVec2,
+) -> bool {
+    let pos = vertex_positions(cp);
+    faces_by_edge(faces).into_iter().any(|(eid, fs)| {
+        if fs.len() != 2 {
+            return false;
+        }
+        let on = if group.contains(&fs[0]) && !flap.contains(&fs[1]) {
+            fs[0]
+        } else if group.contains(&fs[1]) && !flap.contains(&fs[0]) {
+            fs[1]
+        } else {
+            return false;
+        };
+        let Some(e) = cp.edges.iter().find(|e| e.id == eid) else {
+            return false;
+        };
+        if !matches!(e.kind, EdgeKind::Mountain | EdgeKind::Valley) {
+            return false;
+        }
+        let (Some(pl), Some(&p0), Some(&p1)) =
+            (state.placements.get(&on), pos.get(&e.v0), pos.get(&e.v1))
+        else {
+            return false;
+        };
+        let (a, b) = (pl.apply(p0), pl.apply(p1));
+        u.perp_dot(a - l0).abs() > JOIN_EPS || u.perp_dot(b - l0).abs() > JOIN_EPS
+    })
+}
+
+/// つぶし折りの動き(手前側=新しい折り線で折り返す / 奥側=層まるごと回る。
+/// ただし `anchored` なら奥側も同じ二等分線で折り返し、袋の中へ入れる)。
 #[allow(clippy::too_many_arguments)]
 fn squash_parts(
     flap: &[FaceId],
@@ -1534,6 +1586,7 @@ fn squash_parts(
     alpha: f64,
     reach: f64,
     open: FoldDirection,
+    anchored: bool,
 ) -> Vec<MotionPart> {
     // 退化ケース: 背が向きを変えないので紙は動かない(重なり順と山谷だけが変わる)
     if alpha.abs() <= ANGLE_EPS {
@@ -1544,9 +1597,31 @@ fn squash_parts(
     let (sn, cs) = (alpha * 0.5).sin_cos();
     let m_dir = DVec2::new(s_dir.x * cs - s_dir.y * sn, s_dir.x * sn + s_dir.y * cs);
     let m_line = seg(m_dir);
+    let inside = pivot + s_dir * reach;
+    if anchored {
+        // 両側とも二等分線Mで折り返し、折り返した紙を開いた袋の中へ入れる
+        // (手前の紙は open の側へ、奥の紙はその反対側へ差し込む)
+        let back = match open {
+            FoldDirection::Up => FoldDirection::Down,
+            FoldDirection::Down => FoldDirection::Up,
+        };
+        return [(near, open), (far, back)]
+            .into_iter()
+            .filter(|(layers, _)| !layers.is_empty())
+            .map(|(layers, dir)| MotionPart {
+                layers: layers.to_vec(),
+                region: vec![HalfPlane {
+                    line: m_line,
+                    inside_point: [inside.x, inside.y],
+                }],
+                transform: MotionTransform::Reflect(vec![m_line]),
+                turn: LayerTurn::Inside(dir),
+                reverse_layers: None,
+            })
+            .collect();
+    }
     let mut parts: Vec<MotionPart> = Vec::new();
     if !near.is_empty() {
-        let inside = pivot + s_dir * reach;
         parts.push(MotionPart {
             layers: near.to_vec(),
             region: vec![HalfPlane {
