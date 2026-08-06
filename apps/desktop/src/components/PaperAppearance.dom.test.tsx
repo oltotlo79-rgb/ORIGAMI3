@@ -49,9 +49,11 @@ describe("左右対称に描く(CPE-010)", () => {
     render(<PaperAppearance />);
     const box = screen.getByLabelText("左右対称に描く");
     expect(box).toHaveProperty("checked", false);
-    // v1では線を引くときだけ効くことを言葉で伝える
-    expect(screen.getByText(/線を引くときだけ効きます/)).not.toBeNull();
-    expect(screen.getByText(/線を消す・種類を変えるときは片側ずつ/)).not.toBeNull();
+    // 消す・種類を変えるときにも効くこと(相手が無ければ片側だけ)を言葉で伝える
+    expect(
+      screen.getByText(/線を消すとき・種類を変えるときにも効き/),
+    ).not.toBeNull();
+    expect(screen.getByText(/対になる線が無いところは、その線だけが変わります/)).not.toBeNull();
   });
 
   it("入れると今その状態だと分かる案内が出る", () => {

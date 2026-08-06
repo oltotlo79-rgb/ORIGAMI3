@@ -27,6 +27,7 @@ import {
   savePrefs,
 } from "../lib/displayPrefs";
 import { mirrorAxisX, mirrorSegments } from "../lib/mirror";
+import { withMirrorEdges } from "../lib/mirrorEdit";
 import {
   DEFAULT_TWIST_DEG,
   addTwistVertex,
@@ -327,8 +328,9 @@ interface AppState {
   display: DisplaySettings;
   /** 中央の2D区画の幅の割合(残りが3D区画。UI-004) */
   splitRatio: number;
-  /** 左右対称に線を引くか(CPE-010)。紙の縦の中心線が対称軸。
-   * 効くのは線を引くときだけで、消す・種類を変えるときは片側ずつになる */
+  /** 左右対称に線を引くか(CPE-010)。線を引くときは紙の縦の中心線が対称軸。
+   * 消すとき・種類を変えるときにも効き、そちらは展開図から見つけた対称軸
+   * (lib/mirrorEdit.ts)で相手の線を探す。相手が無い線はその線だけが変わる */
   mirrorDraw: boolean;
   /** 3Dで紙を引くとき左右対称の相手も同時に動かすか(UI-007)。既定はオン。
    * 画面の使い方の好みなので端末に覚えておく(作品の中身には入れない) */
@@ -854,7 +856,17 @@ export const useAppStore = create<AppState>((set, get) => {
     // (止めないと、折り直した形が次のコマですぐ上書きされて一瞬跳ねて見える)
     applyEdit: (op) => {
       stopPlayback();
-      return runViewCommand(() => ipc.editApply(op), false);
+      // 左右対称のときは、消す・種類を変える相手にも同じ操作を効かせる(CPE-010)。
+      // ここで辺IDを増やしておけば、展開図の右クリック消し・Deleteキー・
+      // コンテキストパネルのどこから来ても左右そろって変わる
+      const s = get();
+      const mirrored =
+        s.mirrorDraw &&
+        s.doc &&
+        (op.type === "RemoveEdges" || op.type === "SetEdgeKind")
+          ? { ...op, ids: withMirrorEdges(s.doc, s.faces, op.ids) }
+          : op;
+      return runViewCommand(() => ipc.editApply(mirrored), false);
     },
 
     drawSegment: async (a, b, kind) => {
