@@ -721,3 +721,51 @@ fn crane_is_deterministic() {
     assert_eq!(frame(&a), frame(&b), "折り上がりの3D姿勢がビット一致する");
 }
 
+
+// ---------------------------------------------------------------------------
+// フロント側テスト用のフィクスチャ書き出し
+// ---------------------------------------------------------------------------
+
+/// 完成形の展開図と面を、フロント側(vitest)が読めるJSONとして書き出す。
+/// 対称軸の判定(`apps/desktop/src/lib/grabDrive.ts`)を**実データ**で検証するため。
+/// serde_jsonへ依存を増やさずに済むよう、必要な項目だけを手書きで出力する。
+/// f64は `{:?}` で往復可能な最短表記になる。
+pub fn write_fixture(doc: &Document, faces: &[Face], name: &str) {
+    let mut s = String::from("{\n");
+    let (w, h) = (doc.paper.width_mm, doc.paper.height_mm);
+    s.push_str(&format!("  \"paper\": {{ \"width_mm\": {w:?}, \"height_mm\": {h:?} }},\n"));
+    s.push_str("  \"vertices\": [\n");
+    for (i, v) in doc.cp.vertices.iter().enumerate() {
+        let (id, x, y) = (v.id, v.pos[0], v.pos[1]);
+        let comma = if i + 1 < doc.cp.vertices.len() { "," } else { "" };
+        s.push_str(&format!("    {{ \"id\": {id}, \"pos\": [{x:?}, {y:?}] }}{comma}\n"));
+    }
+    s.push_str("  ],\n  \"edges\": [\n");
+    for (i, e) in doc.cp.edges.iter().enumerate() {
+        let (id, v0, v1, kind) = (e.id, e.v0, e.v1, e.kind);
+        let comma = if i + 1 < doc.cp.edges.len() { "," } else { "" };
+        s.push_str(&format!(
+            "    {{ \"id\": {id}, \"v0\": {v0}, \"v1\": {v1}, \"kind\": \"{kind:?}\" }}{comma}\n"
+        ));
+    }
+    s.push_str("  ],\n  \"faces\": [\n");
+    for (i, f) in faces.iter().enumerate() {
+        let (id, vs, es) = (f.id, &f.vertices, &f.edges);
+        let comma = if i + 1 < faces.len() { "," } else { "" };
+        s.push_str(&format!(
+            "    {{ \"id\": {id}, \"vertices\": {vs:?}, \"edges\": {es:?} }}{comma}\n"
+        ));
+    }
+    s.push_str("  ]\n}\n");
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/desktop/src/lib/__fixtures__");
+    std::fs::create_dir_all(dir).expect("フィクスチャ置き場を作る");
+    std::fs::write(format!("{dir}/{name}.json"), s).expect("フィクスチャを書き出す");
+}
+
+/// 折り鶴の完成形をフィクスチャとして書き出す。
+#[test]
+fn crane_is_written_as_a_fixture() {
+    let (doc, _) = crane();
+    let faces = extract_faces(&doc.cp);
+    write_fixture(&doc, &faces, "crane");
+}

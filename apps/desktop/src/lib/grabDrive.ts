@@ -9,8 +9,16 @@
 // 折り上がった作品からも引けるように、今見えている立体の形から全ての折り線の
 // 角度を読み取る関数も置く(ソルバーの出発点=warm startをその形に合わせるため)。
 
-import { MIRROR_EPS, isSameSegment, mirrorAxisX, type Segment } from "./mirror";
-import type { Document, Face, Frame3D, Paper, Vec2 } from "./types";
+import { MIRROR_EPS, isSameSegment, type Segment } from "./mirror";
+import {
+  buildSegmentIndex,
+  findMirrorAxes,
+  findSegment,
+  reflectSegment,
+  type MirrorLine,
+  type SegmentIndex,
+} from "./symmetry";
+import type { Document, Face, Frame3D, Vec2 } from "./types";
 
 export type Vec3 = [number, number, number];
 
@@ -229,43 +237,59 @@ export function hingeAnglesFromFrame(
   return out;
 }
 
-/** 展開図の対称軸(点pを通り、単位ベクトルdの向きの直線) */
-interface MirrorLine {
-  p: Vec2;
-  d: Vec2;
+/**
+ * 対称軸を探すのに必要なものをまとめた索引(引き始めに1回だけ作る)。
+ * 折り線(両側に面がある辺)の位置と、そこから見つけた対称軸を効かせたい順に持つ。
+ */
+export interface MirrorIndex {
+  segs: SegmentIndex;
+  axes: MirrorLine[];
 }
 
-/** 直線axで折り返した点 */
-function reflectPoint(q: Vec2, ax: MirrorLine): Vec2 {
-  const w: Vec2 = [q[0] - ax.p[0], q[1] - ax.p[1]];
-  const t = w[0] * ax.d[0] + w[1] * ax.d[1];
-  return [ax.p[0] + 2 * t * ax.d[0] - w[0], ax.p[1] + 2 * t * ax.d[1] - w[1]];
+/** 面の全域木で親を持たない面(=ソルバーが固定する基準の面)の展開図上の多角形 */
+function rootPolygons(doc: Document, faces: Face[]): Vec2[] {
+  const pos = new Map(doc.cp.vertices.map((v) => [v.id, v.pos]));
+  const parents = faceParents(faces);
+  const out: Vec2[] = [];
+  for (const f of faces) {
+    if (parents.has(f.id)) continue;
+    for (const v of f.vertices) {
+      const p = pos.get(v);
+      if (p) out.push(p);
+    }
+  }
+  return out;
 }
 
 /**
- * 「左右」を折り返す軸の候補(効かせたい順)。
- *
- * まずは紙の縦の中心線(左右対称に線を引く CPE-010 と同じ軸)。ただし、この
- * アプリの折り操作で折った作品は紙の対角線が体の軸になることが多い(折り鶴は
- * 正方形を半分に2回折って組み立てるので、首と尾が向かい合う2隅、羽が残りの
- * 2隅から出る)。そこで正方形の紙では対角線も候補に入れる。
- * 縦・横に長い紙では対角線は対称軸になり得ないので入れない。
+ * 展開図から対称軸を見つけて索引にまとめる。引き始めに1回だけ呼べば足りるよう、
+ * 同じ展開図に対する結果は使い回す(大きな展開図でもドラッグ中は再計算しない)。
  */
-function mirrorLines(paper: Paper): MirrorLine[] {
-  const long = Math.max(paper.width_mm, paper.height_mm);
-  const w = long > 0 ? paper.width_mm / long : 0;
-  const h = long > 0 ? paper.height_mm / long : 0;
-  const lines: MirrorLine[] = [{ p: [mirrorAxisX(paper), 0], d: [0, 1] }];
-  if (Math.abs(w - h) <= MIRROR_EPS) {
-    lines.push({ p: [0, 0], d: [Math.SQRT1_2, Math.SQRT1_2] });
-    lines.push({ p: [0, h], d: [Math.SQRT1_2, -Math.SQRT1_2] });
+const mirrorCache = new WeakMap<Document, MirrorIndex>();
+
+export function buildMirrorIndex(doc: Document, faces: Face[]): MirrorIndex {
+  const cached = mirrorCache.get(doc);
+  if (cached) return cached;
+  const pos = new Map(doc.cp.vertices.map((v) => [v.id, v.pos]));
+  const owners = hingeOwners(faces);
+  const items: [number, Segment][] = [];
+  for (const e of doc.cp.edges) {
+    const a = pos.get(e.v0);
+    const b = pos.get(e.v1);
+    if (owners.has(e.id) && a && b) items.push([e.id, [a, b]]);
   }
-  return lines;
+  const segs = buildSegmentIndex(items);
+  const built = { segs, axes: findMirrorAxes(doc.paper, segs, rootPolygons(doc, faces)) };
+  mirrorCache.set(doc, built);
+  return built;
 }
 
 /**
  * 対称軸をはさんで、その折り線と対称の位置にある折り線を探す(UI-007)。
  * 鶴の羽のように左右対になった折り線を一緒に動かすために使う。
+ *
+ * 軸は紙の形から決め打ちせず、[`buildMirrorIndex`] が展開図そのものから見つける。
+ * 軸が複数見つかったときは、効かせたい順に当てて最初に相手が見つかった軸を使う。
  *
  * 次のときは「もう1本動かす意味がない」のでnullを返す(呼ぶ側は1本だけ動かす):
  *   - その折り線が軸の上に乗っている(折り返しても自分自身)
@@ -279,21 +303,16 @@ export function mirrorHingeOf(
   hinge: number,
   eps = MIRROR_EPS,
 ): number | null {
-  const pos = new Map(doc.cp.vertices.map((v) => [v.id, v.pos]));
-  const owners = hingeOwners(faces);
-  const segs: [number, Segment][] = [];
-  for (const e of doc.cp.edges) {
-    const a = pos.get(e.v0);
-    const b = pos.get(e.v1);
-    if (owners.has(e.id) && a && b) segs.push([e.id, [a, b]]);
-  }
-  const seg = segs.find(([id]) => id === hinge)?.[1];
+  const ix = buildMirrorIndex(doc, faces);
+  const seg = ix.segs.items.find(([id]) => id === hinge)?.[1];
   if (!seg) return null;
-  for (const ax of mirrorLines(doc.paper)) {
-    const other: Segment = [reflectPoint(seg[0], ax), reflectPoint(seg[1], ax)];
-    if (isSameSegment(seg, other, eps)) continue; // 軸の上・軸に対称な線
-    const found = segs.find(([, s]) => isSameSegment(s, other, eps));
-    if (found) return found[0];
+  for (const ax of ix.axes) {
+    const other = reflectSegment(seg, ax);
+    // 軸の上に乗っている(折り返しても自分自身)なら、そこが体の真ん中。
+    // 別の軸を当てると体の中心線を足の折り目と対にしてしまうので、ここで打ち切る
+    if (isSameSegment(seg, other, eps)) return null;
+    const found = findSegment(ix.segs, other, eps);
+    if (found !== null && found !== hinge) return found;
   }
   return null;
 }
