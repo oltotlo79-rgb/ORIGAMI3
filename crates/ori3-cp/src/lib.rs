@@ -4,6 +4,7 @@ pub mod construct;
 pub mod faces;
 pub mod flatfold;
 pub mod graph;
+mod spatial;
 pub mod validate;
 
 pub use construct::{bisector, direction_lines, divide_points, perpendicular};

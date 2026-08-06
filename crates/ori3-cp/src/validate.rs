@@ -19,7 +19,8 @@ use ori3_model::{CreasePattern, EPS, EdgeId, EdgeKind, VertexId};
 ///   (extract_facesも同じ辺を面抽出から除外するため、両者の判定基準は一致する。
 ///   潰れた橋辺で繋がって見える不一致もこれで防ぐ)。
 /// - 辺同士が端点以外で交差・重なりしていないか(move_vertex後の破れ検出。
-///   全辺ペアの総当たりで、重なり判定を交差判定より先に問い合わせる)。
+///   空間ハッシュで近傍の辺ペアだけに絞り、重なり判定を交差判定より先に
+///   問い合わせる。結果は総当たりと同一)。
 ///
 /// 結果の順序は入力CPに対して決定的(辺ID順の走査に基づく)。
 pub fn validate(cp: &CreasePattern) -> Vec<String> {
@@ -87,9 +88,23 @@ pub fn validate(cp: &CreasePattern) -> Vec<String> {
         .map(|&(id, v0, v1, _)| (id, vpos[&v0], vpos[&v1]))
         .collect();
     let at_end = |p: DVec2, a: DVec2, b: DVec2| (p - a).length() <= EPS || (p - b).length() <= EPS;
+    // 全ペア総当たりだと辺数の二乗で効くため、空間ハッシュで近傍だけに絞る。
+    // 候補は添字の昇順で返るので、総当たり(i<jの二重ループ)と同じ順序で
+    // 検査でき、警告の内容・順序は変わらない。
+    let boxes: Vec<(DVec2, DVec2)> = segs.iter().map(|&(_, a, b)| (a, b)).collect();
+    let grid = crate::spatial::Grid::build(&boxes);
+    let mut cand: Vec<u32> = Vec::new();
     for i in 0..segs.len() {
-        for j in (i + 1)..segs.len() {
-            let (id1, a0, a1) = segs[i];
+        let (id1, a0, a1) = segs[i];
+        match &grid {
+            Some(g) => g.near_into(a0, a1, &mut cand),
+            None => cand = ((i as u32 + 1)..segs.len() as u32).collect(),
+        }
+        for &j in &cand {
+            let j = j as usize;
+            if j <= i {
+                continue;
+            }
             let (id2, b0, b1) = segs[j];
             // ほぼ重なった2線分では両方がSomeを返し得るため、重なり判定を先に問い合わせる。
             if let Some((q0, q1)) = collinear_overlap(a0, a1, b0, b1) {
