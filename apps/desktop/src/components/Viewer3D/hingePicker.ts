@@ -61,6 +61,32 @@ export function pickFace(
   return null;
 }
 
+/**
+ * pickFaceと同じ拾い方で、当たった面IDと当たった位置(世界座標)を返す。
+ * 紙をつかんで引く操作では、つかんだ位置が回転のモーメントアームになるので
+ * 面だけでなく点も要る。
+ */
+export function pickPaper(
+  mesh: THREE.Mesh,
+  triangleFaceIds: number[],
+  camera: THREE.Camera,
+  widthPx: number,
+  heightPx: number,
+  x: number,
+  y: number,
+): { face: number; point: THREE.Vector3 } | null {
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(
+    new THREE.Vector2((x / widthPx) * 2 - 1, 1 - (y / heightPx) * 2),
+    camera,
+  );
+  for (const hit of raycaster.intersectObject(mesh, false)) {
+    const id = hit.faceIndex == null ? undefined : triangleFaceIds[hit.faceIndex];
+    if (id !== undefined) return { face: id, point: hit.point.clone() };
+  }
+  return null;
+}
+
 /** 点(px, py)から線分(ax,ay)-(bx,by)までの距離(px) */
 function distanceToSegment(
   px: number,

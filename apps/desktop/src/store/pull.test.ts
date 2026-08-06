@@ -1,0 +1,171 @@
+// 「3Dの紙をつかんで引く」操作(UI-007)のストア側テスト。
+//   - 引き始めに、今見えている形の全ての折り角をそのまま送る
+//     (ソルバーの出発点を今の形へ合わせる。折り上がった作品から引くのに要る)
+//   - 引いている間の角度は60ms間引きで、駆動する1本だけが送られる
+//   - 離しても形(角度指定)は残り、色付けだけ消える
+
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Document, Driver, Face, Frame3D, SolveResult } from "../lib/types";
+
+vi.mock("../ipc/client", () => ({
+  documentNew: vi.fn(),
+  documentOpen: vi.fn(),
+  documentSave: vi.fn(),
+  editApply: vi.fn(),
+  editUndo: vi.fn(),
+  editRedo: vi.fn(),
+  sequenceApply: vi.fn(),
+  sequenceReplay: vi.fn(),
+  poseSolve: vi.fn(),
+}));
+
+import * as ipc from "../ipc/client";
+import { pullBlockReason, resetPoseThrottle, useAppStore } from "./appStore";
+
+/** 対角線(辺5)で2つの面に分かれた正方形 */
+const DOC: Document = {
+  schema_version: 1,
+  paper: { width_mm: 150, height_mm: 150 },
+  cp: {
+    vertices: [
+      { id: 0, pos: [0, 0] },
+      { id: 1, pos: [1, 0] },
+      { id: 2, pos: [1, 1] },
+      { id: 3, pos: [0, 1] },
+    ],
+    edges: [
+      { id: 0, v0: 0, v1: 1, kind: "Border" },
+      { id: 1, v0: 1, v1: 2, kind: "Border" },
+      { id: 2, v0: 2, v1: 3, kind: "Border" },
+      { id: 3, v0: 3, v1: 0, kind: "Border" },
+      { id: 5, v0: 0, v1: 2, kind: "Mountain" },
+    ],
+    next_vertex_id: 4,
+    next_edge_id: 6,
+  },
+  sequence: [],
+  display: {
+    front_color: [237, 28, 36],
+    back_color: [255, 255, 255],
+    grid_divisions: 8,
+  },
+};
+const FACES: Face[] = [
+  { id: 0, vertices: [0, 1, 2], edges: [0, 1, 5] },
+  { id: 1, vertices: [0, 2, 3], edges: [5, 2, 3] },
+];
+
+const SOLVED: SolveResult = {
+  frame: { faces: [], warnings: [] },
+  converged: true,
+  angles: {},
+  iterations: 1,
+};
+
+/** 手順再生が作った立体表示(層の重なり付き)の代わり */
+const FOLDED: Frame3D = {
+  faces: [
+    { face: 0, polygon: [[0, 0, 0], [1, 0, 0], [1, 1, 0]], layer: 0 },
+    { face: 1, polygon: [[0, 0, 0], [1, 1, 0], [1, 0, 0]], layer: 1 },
+  ],
+  warnings: [],
+};
+
+function poseCalls(): Driver[][] {
+  return vi.mocked(ipc.poseSolve).mock.calls.map(([drivers]) => drivers);
+}
+
+describe("紙をつかんで引く", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetPoseThrottle();
+    vi.mocked(ipc.poseSolve).mockResolvedValue(SOLVED);
+    useAppStore.setState({
+      doc: DOC,
+      faces: FACES,
+      hinges: new Set([5]),
+      frame3d: FOLDED,
+      drivers: new Map(),
+      poseAngles: new Map(),
+      pullHinge: null,
+      currentStep: null,
+      playT: 1,
+      playing: false,
+      errorMessage: null,
+    });
+  });
+
+  it("引き始めに、今の形の折り角をそのまま送って出発点を合わせる", async () => {
+    // 手順で折り上げた形(辺5が-180°)からつかんだ場合
+    useAppStore.getState().beginPull(5, new Map([[5, -180]]));
+    expect(useAppStore.getState().pullHinge).toBe(5);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(poseCalls()).toEqual([[{ hinge: 5, target_angle_deg: -180 }]]);
+    // 出発点を合わせるだけなので、角度指定としては残さない
+    expect(useAppStore.getState().drivers.size).toBe(0);
+    // 形は変わらないので、手順再生が作った立体表示(層の重なり)は消さない
+    expect(useAppStore.getState().frame3d).toBe(FOLDED);
+  });
+
+  it("引いている間は60ms間引きで、駆動する1本だけが送られる", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = useAppStore.getState();
+      store.beginPull(5, new Map());
+      store.pullTo(-170);
+      store.pullTo(-160);
+      store.pullTo(-150);
+      expect(poseCalls()).toHaveLength(0); // まだ送っていない
+      await vi.advanceTimersByTimeAsync(100);
+      expect(poseCalls()).toEqual([[{ hinge: 5, target_angle_deg: -150 }]]);
+      expect(useAppStore.getState().drivers.get(5)).toBe(-150);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("離しても形は残り、色付けだけ消える", () => {
+    const store = useAppStore.getState();
+    store.beginPull(5, new Map());
+    store.pullTo(-150);
+    store.endPull();
+    expect(useAppStore.getState().pullHinge).toBeNull();
+    expect(useAppStore.getState().drivers.get(5)).toBe(-150);
+  });
+
+  it("つかんでいないときは角度を変えない", () => {
+    useAppStore.getState().pullTo(-150);
+    expect(useAppStore.getState().drivers.size).toBe(0);
+  });
+
+  it("紙が無ければ引き始められない", () => {
+    useAppStore.setState({ doc: null });
+    useAppStore.getState().beginPull(5, new Map([[5, 0]]));
+    expect(useAppStore.getState().pullHinge).toBeNull();
+  });
+});
+
+describe("pullBlockReason", () => {
+  const READY = {
+    doc: DOC,
+    playing: false,
+    playT: 1,
+    hingeCount: 1,
+    currentStep: null,
+    stepCount: 3,
+  };
+
+  it("折り上がった作品(最新の形)でも引ける", () => {
+    expect(pullBlockReason(READY)).toBeNull();
+    expect(pullBlockReason({ ...READY, currentStep: 3 })).toBeNull();
+  });
+
+  it("再生中・折り途中・前の手順・折り線なしは理由を返す", () => {
+    expect(pullBlockReason({ ...READY, playing: true })).toContain("再生中");
+    expect(pullBlockReason({ ...READY, playT: 0.5 })).toContain("折り途中");
+    expect(pullBlockReason({ ...READY, currentStep: 1 })).toContain("前の手順");
+    expect(pullBlockReason({ ...READY, hingeCount: 0 })).toContain("折り線");
+    expect(pullBlockReason({ ...READY, doc: null })).toContain("紙がありません");
+  });
+});

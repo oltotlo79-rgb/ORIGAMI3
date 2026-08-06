@@ -58,6 +58,7 @@ export type ToolId =
   | "aux"
   | "delete"
   | "fold"
+  | "pull"
   | "technique"
   | "construct";
 
@@ -159,6 +160,28 @@ export function canFoldNow(s: {
 }
 
 /**
+ * 3Dで紙をつかんで引けない理由(引けるならnull)。UI-007。
+ * 引く操作は「今見えている立体の形」を出発点にするので、平らに畳んだ状態でも
+ * 手順で折り上げた状態でも使える。形が動いている最中(再生・折り途中)だけ断る。
+ */
+export function pullBlockReason(s: {
+  doc: Document | null;
+  playing: boolean;
+  playT: number;
+  hingeCount: number;
+  currentStep: number | null;
+  stepCount: number;
+}): string | null {
+  if (!s.doc) return "紙がありません。上の「新規」で紙を出してください";
+  if (s.playing) return "再生中は引けません。下の再生ボタンで止めてください";
+  if (s.playT !== 1) return "折り途中の形では引けません。手順を最後まで進めてください";
+  if (s.hingeCount === 0) return "折り線がまだありません。先に折り線を引いてください";
+  if (s.currentStep !== null && s.currentStep !== s.stepCount)
+    return "前の手順の形を見ている間は引けません。手順をいちばん新しい形へ戻してください";
+  return null;
+}
+
+/**
  * 今の形を手順として残せない理由(残せるならnull)。SIM-009。
  * 押せないときもボタンは消さず、この短い日本語を添えて理由を見せる。
  */
@@ -221,6 +244,8 @@ interface AppState {
   poseWarnings: string[];
   /** 追従計算が収束したか(falseなら3D区画のバッジで知らせる) */
   poseConverged: boolean;
+  /** 今つかんで引いている折り線の辺ID(3D表示で色を付ける)。引いていなければnull */
+  pullHinge: number | null;
   /** 前回の異常終了で残った作業中の内容。あれば復旧ダイアログを出す(SYS-003) */
   recovery: RecoveryInfo | null;
 
@@ -313,6 +338,17 @@ interface AppState {
   cancelTechnique: () => void;
   /** 選んだ技法を実際に適用する(sequence_apply Technique) */
   commitTechnique: () => Promise<void>;
+  /**
+   * 3Dで紙をつかんで引く操作を始める(UI-007)。
+   * 今見えている形の全ヒンジ角(anglesは lib/grabDrive の読み取り結果)を
+   * そのまま送ってソルバーの出発点を今の形に合わせ、駆動する折り線を覚える。
+   * これがないと、手順で折り上げた作品を引いたとたん平らな解へ飛んでしまう
+   */
+  beginPull: (hinge: number, angles: ReadonlyMap<number, number>) => void;
+  /** 引いている間の角度(度)。60ms間引きで追従計算を呼ぶ */
+  pullTo: (deg: number) => void;
+  /** 引く操作を終える(角度指定は残る。色付けだけ消す) */
+  endPull: () => void;
   /** ヒンジの折り角度を指定する(60ms間引きで追従計算を呼ぶ) */
   setDriverAngle: (hinge: number, deg: number) => void;
   /** 1本の角度指定を解除する(形は残りの指定から計算し直す) */
@@ -508,6 +544,7 @@ export const useAppStore = create<AppState>((set, get) => {
           poseAngles: new Map(),
           poseWarnings: [],
           poseConverged: true,
+          pullHinge: null,
           frame3d: r.value.frame,
           currentStep: null,
           playT: 1,
@@ -547,13 +584,16 @@ export const useAppStore = create<AppState>((set, get) => {
   const runPoseSolve = async (
     drivers: Driver[],
     coalesce = false,
+    applyFrame = true,
   ): Promise<void> => {
     pose.reset();
     const call = () => ipc.poseSolve(drivers);
     const r = await (coalesce ? queue.runLatest(call) : queue.run(call));
     if (r.ok) {
       set({
-        frame3d: r.value.frame,
+        // 出発点合わせ(applyFrame=false)では形は変わらないので、手順再生が
+        // 持っていた層の重なり情報を消さないよう立体表示はそのままにする
+        ...(applyFrame ? { frame3d: r.value.frame } : {}),
         poseWarnings: r.value.frame.warnings,
         poseConverged: r.value.converged,
         poseAngles: new Map(
@@ -700,6 +740,7 @@ export const useAppStore = create<AppState>((set, get) => {
     poseAngles: new Map(),
     poseWarnings: [],
     poseConverged: true,
+    pullHinge: null,
     recovery: null,
     proposalStep: null,
     proposalSkeleton: defaultSkeleton(),
@@ -815,6 +856,7 @@ export const useAppStore = create<AppState>((set, get) => {
           selection: EMPTY_SELECTION,
           foldDraft: null,
           techniqueDraft: null,
+          pullHinge: null,
         });
       }
     },
@@ -1030,6 +1072,30 @@ export const useAppStore = create<AppState>((set, get) => {
         // 技法が当てはまらない形だったときは代わりの手を案内する(要件§12)
         set({ errorMessage: `${error}(${TECHNIQUE_FALLBACK_HINT})` });
       }
+    },
+
+    beginPull: (hinge, angles) => {
+      if (!get().doc) return;
+      set({ pullHinge: hinge, errorMessage: null });
+      // 今見えている形をそのまま角度指定として1回だけ送り、次からの計算の
+      // 出発点(warm start)を今の形に合わせる。全ヒンジを指定するので形は動かない
+      if (angles.size > 0) {
+        void runPoseSolve(
+          [...angles].map(([h, deg]) => ({ hinge: h, target_angle_deg: deg })),
+          false,
+          false, // 形は今のまま(層の重なり表示を保つ)
+        );
+      }
+    },
+
+    pullTo: (deg) => {
+      const hinge = get().pullHinge;
+      if (hinge === null) return;
+      get().setDriverAngle(hinge, deg);
+    },
+
+    endPull: () => {
+      if (get().pullHinge !== null) set({ pullHinge: null });
     },
 
     setDriverAngle: (hinge, deg) => {

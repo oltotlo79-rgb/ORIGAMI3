@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DRAG_FOLD_HINT,
+  PULL_HINT,
   foldBlockReason,
   viewerHint,
   type HintState,
@@ -18,6 +19,8 @@ const READY: HintState = {
   hasTechnique: false,
   techniqueFlapCount: 0,
   hasTechniqueLine: false,
+  pullBlocked: null,
+  pulling: false,
 };
 
 describe("foldBlockReason", () => {
@@ -73,6 +76,16 @@ describe("viewerHint", () => {
         hasTechniqueLine: true,
       }),
     ).toContain("適用");
+  });
+
+  it("引くツールでは、つじつまを合わせて全体が動くことを案内する", () => {
+    const p: HintState = { ...READY, tool: "pull" };
+    expect(viewerHint(p)).toBe(PULL_HINT);
+    expect(viewerHint(p)).toContain("つじつま");
+    expect(viewerHint({ ...p, pulling: true })).toContain("折り線");
+    expect(viewerHint({ ...p, pullBlocked: "再生中は引けません" })).toContain(
+      "今は引けません",
+    );
   });
 
   it("折る以外のツールでも空にならない", () => {

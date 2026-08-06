@@ -34,9 +34,17 @@ export function foldBlockReason(s: FoldReadiness): string | null {
   return null;
 }
 
+/** 紙をつかんで引く操作の説明(UI-007) */
+export const PULL_HINT =
+  "紙をドラッグすると、折り線のつじつまを合わせて全体が連動して動きます(右ドラッグで視点を回す)";
+
 /** ヒント1行を組み立てる材料 */
 export interface HintState extends FoldReadiness {
   tool: ToolId;
+  /** 引く操作ができない理由(できるならnull) */
+  pullBlocked: string | null;
+  /** 今つかんで引いている最中か */
+  pulling: boolean;
   /** 折り線を引いて確定待ちか */
   hasFoldDraft: boolean;
   /** 技法を選んでいるか */
@@ -55,6 +63,12 @@ export function viewerHint(s: HintState): string {
     if (s.hasFoldDraft)
       return "折り線を引きました。下のパネルで向きと動かす側を決めて「折る」を押してください(やり直すときは「やめる」)";
     return DRAG_FOLD_HINT;
+  }
+  if (s.tool === "pull") {
+    if (s.pullBlocked) return `今は引けません: ${s.pullBlocked}`;
+    if (s.pulling)
+      return "引いている折り線を黄色で示しています。離すとその形のまま残ります";
+    return PULL_HINT;
   }
   if (s.tool === "technique") {
     if (blocked) return `今は折れません: ${blocked}`;

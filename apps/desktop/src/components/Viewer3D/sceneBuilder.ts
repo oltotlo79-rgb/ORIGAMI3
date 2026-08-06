@@ -362,8 +362,13 @@ export interface Viewer3DScene {
    * 空配列を渡すと消える。
    */
   setPreview(polygons: Vec2[][], lift: number): void;
-  /** 折り線の描画中は左ドラッグの視点回転を止める(拡大縮小・平行移動は残す) */
-  setDrawMode(enabled: boolean): void;
+  /**
+   * 折り線の描画中・紙を引いている間は左ドラッグの視点回転を止める
+   * (拡大縮小・平行移動は残す)。
+   * rotateWithRightを立てると、代わりに右ドラッグで視点を回せる
+   * (立体を色々な向きから見ながら引くため。平行移動は中ボタンへ移る)
+   */
+  setDrawMode(enabled: boolean, rotateWithRight?: boolean): void;
   dispose(): void;
 }
 
@@ -529,8 +534,11 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
       previewMesh.visible = indices.length > 0;
       render();
     },
-    setDrawMode(enabled) {
+    setDrawMode(enabled, rotateWithRight = false) {
       controls.mouseButtons.LEFT = enabled ? null : THREE.MOUSE.ROTATE;
+      const swap = enabled && rotateWithRight;
+      controls.mouseButtons.RIGHT = swap ? THREE.MOUSE.ROTATE : THREE.MOUSE.PAN;
+      controls.mouseButtons.MIDDLE = swap ? THREE.MOUSE.PAN : THREE.MOUSE.DOLLY;
     },
     dispose() {
       previewMesh.geometry.dispose();

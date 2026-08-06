@@ -19,6 +19,12 @@ describe("ツールレール", () => {
     expect(screen.getAllByRole("button").length).toBeLessThanOrEqual(10);
   });
 
+  it("紙をつかんで引くツールを選べる", () => {
+    render(<ToolRail onFitView={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "引く" }));
+    expect(useAppStore.getState().activeTool).toBe("pull");
+  });
+
   it("作図を選ぶとサブメニューが出て、等分では数を選べる", () => {
     render(<ToolRail onFitView={() => {}} />);
     // 作図を選ぶまではサブメニューを出さない(常設のボタンを増やさないため)
