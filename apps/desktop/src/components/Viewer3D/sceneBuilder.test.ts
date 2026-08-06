@@ -9,6 +9,8 @@
 import { describe, expect, it, vi } from "vitest";
 import * as THREE from "three";
 import {
+  BACK_OFFSET_UNITS,
+  FACE_OFFSET_UNITS,
   buildTopology,
   clearGroup,
   createContent,
@@ -332,6 +334,80 @@ describe("createContent / updateFrame(形の更新)", () => {
     });
     expect(content.positions[3 * 3 + 2]).toBe(0); // 層1でも持ち上げない
     expect(content.positions[5 * 3 + 2]).toBe(0.5);
+  });
+
+  it("紙が完全に重なっても、表を向いた面が裏の色で塗りつぶされない", () => {
+    // 実機で見つかった不具合の再現。角度スライダー・紙を引く操作(pose_solve)の
+    // 結果は全ての面が層0なので、面を離して描くことができず深度が同値になる。
+    // 表と裏は同じ三角形を2回描き、Three.jsは必ず表→裏の順に描くため、深度が
+    // 同値だと後から描かれる裏面(白)が表の色(赤)を塗りつぶしていた。
+    const doc = makeDoc();
+    const content = createContent(buildTopology(doc, FACES, HINGES), doc.display);
+    // 山折りを180度まで折った形: 面1が面0の上に完全に重なり、裏返っている
+    updateFrame(content, {
+      faces: [
+        {
+          face: 0,
+          polygon: [
+            [0, 0, 0],
+            [1, 0, 0],
+            [1, 1, 0],
+          ],
+          layer: 0,
+        },
+        {
+          face: 1,
+          polygon: [
+            [0, 0, 0],
+            [1, 1, 0],
+            [1, 0, 0],
+          ],
+          layer: 0,
+        },
+      ],
+      warnings: [],
+    });
+
+    // 層が同じなので面は離れず、深度は同値のまま(離して隠すのではなく色で決める)
+    const normal = content.mesh.geometry.getAttribute("normal");
+    expect(normal.getZ(0)).toBeCloseTo(1, 6); // 面0は表(+z)向き=赤で描かれる
+    expect(normal.getZ(3)).toBeCloseTo(-1, 6); // 面1は裏返り=白で描かれる
+    expect(content.positions[2]).toBe(content.positions[3 * 3 + 2]);
+
+    // 深度が同値のときは表の色が残るよう、裏面だけ余分に奥へずらす
+    const materials = content.mesh.material as THREE.MeshLambertMaterial[];
+    expect(materials[0].side).toBe(THREE.FrontSide);
+    expect(materials[1].side).toBe(THREE.BackSide);
+    for (const m of materials) expect(m.polygonOffset).toBe(true);
+    expect(materials[0].polygonOffsetUnits).toBe(FACE_OFFSET_UNITS);
+    expect(materials[1].polygonOffsetUnits).toBe(BACK_OFFSET_UNITS);
+    expect(materials[1].polygonOffsetUnits).toBeGreaterThan(
+      materials[0].polygonOffsetUnits,
+    );
+  });
+
+  it("立体・折り途中で重なった面も層の上下を保って離れる", () => {
+    // x=0の平面に重なった2枚(平坦判定は偽)。zへ足しても離れないため
+    // 平面の法線(±x)方向へ離す
+    const doc = makeDoc();
+    const content = createContent(buildTopology(doc, FACES, HINGES), doc.display);
+    const wall = (face: number, layer: number): Frame3D["faces"][number] => ({
+      face,
+      polygon: [
+        [0, 0, 0],
+        [0, 1, 0],
+        [0, 1, 1],
+      ],
+      layer,
+    });
+    updateFrame(content, { faces: [wall(0, 0), wall(1, 1)], warnings: [] });
+
+    const step = layerOffsets(2, 1)[1];
+    // 下の層(面0、頂点0〜2)は動かず、上の層(面1、頂点3〜5)だけxへ離れる
+    for (let i = 0; i < 3; i++) expect(content.positions[i * 3]).toBeCloseTo(0, 6);
+    for (let i = 3; i < 6; i++) {
+      expect(Math.abs(content.positions[i * 3])).toBeCloseTo(step, 6);
+    }
   });
 
   it("頂点数が合わない面(参照切れ)は前の座標のままにする", () => {

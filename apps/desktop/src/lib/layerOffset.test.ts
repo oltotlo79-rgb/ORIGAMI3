@@ -9,6 +9,7 @@ import {
   frameLayerCount,
   isFlatFrame,
   layerOffsets,
+  stackLifts,
 } from "./layerOffset";
 
 /** 平らな三角形1枚(層を指定できる) */
@@ -110,5 +111,98 @@ describe("frameLayerCount(重なりの枚数)", () => {
 
   it("面が無いときは0", () => {
     expect(frameLayerCount({ faces: [], warnings: [] })).toBe(0);
+  });
+});
+
+describe("stackLifts(重なった面のずらし)", () => {
+  const step = layerOffsets(2, 1)[1];
+
+  it("平らに重なった面は層の順に+zへ離れる(これまでの平坦時と同じ)", () => {
+    const frame: Frame3D = {
+      faces: [flatFace(0, 0), flatFace(1, 1)],
+      warnings: [],
+    };
+    const lifts = stackLifts(frame, 1);
+    expect(lifts[0]).toEqual([0, 0, 0]);
+    expect(lifts[1][2]).toBeCloseTo(step, 12);
+    expect(lifts[1][0]).toBeCloseTo(0, 12);
+  });
+
+  it("層が同じ面は離さない(展開した1枚の紙がばらけない)", () => {
+    const frame: Frame3D = {
+      faces: [flatFace(0, 0), flatFace(1, 0), flatFace(2, 0)],
+      warnings: [],
+    };
+    expect(stackLifts(frame, 1)).toEqual([
+      [0, 0, 0],
+      [0, 0, 0],
+      [0, 0, 0],
+    ]);
+  });
+
+  it("裏返って重なった面(法線が逆向き)も同じ向きへ積み上げる", () => {
+    // 面1は頂点の並びが逆=法線が-z。同じ平面の仲間として+z側へ積む
+    const flipped = {
+      face: 1,
+      polygon: [
+        [0, 1, 0],
+        [1, 0, 0],
+        [0, 0, 0],
+      ] as [number, number, number][],
+      layer: 1,
+    };
+    const lifts = stackLifts({ faces: [flatFace(0, 0), flipped], warnings: [] }, 1);
+    expect(lifts[0]).toEqual([0, 0, 0]);
+    expect(lifts[1][2]).toBeCloseTo(step, 12);
+  });
+
+  it("折り途中・立体でも、重なった面はその平面の法線方向へ離れる", () => {
+    // x=0の平面(法線±x)に重なった2枚。zへ足しても離れないので法線方向へ離す
+    const wall = (face: number, layer: number) => ({
+      face,
+      polygon: [
+        [0, 0, 0],
+        [0, 1, 0],
+        [0, 1, 1],
+      ] as [number, number, number][],
+      layer,
+    });
+    const lifts = stackLifts({ faces: [wall(0, 0), wall(1, 1)], warnings: [] }, 1);
+    expect(lifts[0]).toEqual([0, 0, 0]);
+    expect(Math.abs(lifts[1][0])).toBeCloseTo(step, 12);
+    expect(lifts[1][1]).toBeCloseTo(0, 12);
+    expect(lifts[1][2]).toBeCloseTo(0, 12);
+  });
+
+  it("平面が違う面どうしは離さない(立体の形を歪ませない)", () => {
+    const frame: Frame3D = {
+      faces: [flatFace(0, 0), flatFace(1, 1, 0.5)],
+      warnings: [],
+    };
+    expect(stackLifts(frame, 1)).toEqual([
+      [0, 0, 0],
+      [0, 0, 0],
+    ]);
+  });
+
+  it("面積の無い面・面が無いフレームでも壊れない", () => {
+    const degenerate = {
+      face: 0,
+      polygon: [
+        [0, 0, 0],
+        [1, 1, 1],
+        [2, 2, 2],
+      ] as [number, number, number][],
+      layer: 3,
+    };
+    expect(stackLifts({ faces: [degenerate], warnings: [] }, 1)).toEqual([[0, 0, 0]]);
+    expect(stackLifts({ faces: [], warnings: [] }, 1)).toEqual([]);
+  });
+
+  it("重なりが厚くても全体の厚みは上限を超えない", () => {
+    const faces = Array.from({ length: 20 }, (_, i) => flatFace(i, i));
+    const lifts = stackLifts({ faces, warnings: [] }, 1);
+    expect(lifts[19][2]).toBeLessThanOrEqual(MAX_STACK_RATIO + 1e-12);
+    expect(lifts[19][2]).toBeGreaterThan(0);
   });
 });

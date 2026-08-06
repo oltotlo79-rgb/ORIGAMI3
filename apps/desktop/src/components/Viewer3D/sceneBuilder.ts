@@ -11,7 +11,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { DisplaySettings, Document, Face, Frame3D, Vec2 } from "../../lib/types";
-import { frameLayerCount, isFlatFrame, layerOffsets } from "../../lib/layerOffset";
+import { stackLifts } from "../../lib/layerOffset";
 import { paperExtent } from "../CpEditor/snap";
 import type { HingeSegment } from "./hingePicker";
 
@@ -224,6 +224,18 @@ function toColor(rgb: [number, number, number]): THREE.Color {
   return new THREE.Color(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255);
 }
 
+/** 面を奥へずらす量(境界線が面に埋もれないように) */
+export const FACE_OFFSET_UNITS = 1;
+/**
+ * 裏面を表面より更に奥へずらす量。
+ *
+ * 表と裏は同じ三角形を2回描くので、Three.jsは必ず表→裏の順に描く。深度判定は
+ * 「同値なら通す」なので、紙が完全に重なって深度が同値になると、後から描かれる
+ * 裏面が表の色を塗りつぶし、表を向いた面まで裏の白になってしまう(実機で発生)。
+ * 裏面だけ深度を余分に奥へずらし、同値のときは表の色が残るようにする。
+ */
+export const BACK_OFFSET_UNITS = 3;
+
 /** 面のマテリアル。境界線が面に埋もれないよう面を少しだけ奥へずらして描く */
 function faceMaterial(rgb: [number, number, number], side: THREE.Side) {
   return new THREE.MeshLambertMaterial({
@@ -231,7 +243,8 @@ function faceMaterial(rgb: [number, number, number], side: THREE.Side) {
     side,
     polygonOffset: true,
     polygonOffsetFactor: 1,
-    polygonOffsetUnits: 1,
+    polygonOffsetUnits:
+      side === THREE.BackSide ? BACK_OFFSET_UNITS : FACE_OFFSET_UNITS,
   });
 }
 
@@ -295,8 +308,10 @@ export function createContent(
  * だけで、ジオメトリ・マテリアルの生成も破棄もしない。
  * frameがnull(まだ折っていない)なら展開図どおりの平らな形に戻す。
  *
- * 平らに畳んだ状態(全ての面がz≒0)のときだけ、層ごとに微小な高さを足して
- * 重なりを見せる(UI-010 / SIM-004)。折り途中や立体的な形は形が歪むので足さない。
+ * 同じ平面に重なった面のかたまりには、層ごとに微小な高さを足して重なりを見せる
+ * (UI-010 / SIM-004)。平らに畳んだ状態に限らず、折り途中・立体・引っ張った状態でも
+ * その平面の法線方向へ離すので、完全に重なった面が深度の取り合いで裏の色に
+ * なることがない。層番号が同じ面は離さない(1枚の紙がばらけないように)。
  * 足す高さは表示専用で、frameの値そのものは変えない。
  */
 export function updateFrame(content: Viewer3DContent, frame: Frame3D | null): void {
@@ -304,21 +319,20 @@ export function updateFrame(content: Viewer3DContent, frame: Frame3D | null): vo
   if (frame === null) {
     positions.set(topology.flatPositions);
   } else {
-    // 平らな状態では面の法線は揃って+z向きなので、ずらしはzへ足すだけでよい
-    const offsets = isFlatFrame(frame)
-      ? layerOffsets(frameLayerCount(frame), PAPER_LONG_SIDE)
-      : [];
-    for (const f of frame.faces) {
+    // 重なった面はその平面の法線方向へ離す(向きが+zとは限らないのでベクトル)
+    const lifts = stackLifts(frame, PAPER_LONG_SIDE);
+    for (let i = 0; i < frame.faces.length; i++) {
+      const f = frame.faces[i];
       const slot = topology.slots.get(f.face);
       // 頂点数が合わない面は対応が取れないので前の座標のままにする
       // (展開図を編集した直後など、立体形状の計算が届くまでは平らのまま)
       if (!slot || slot.count !== f.polygon.length) continue;
-      const lift = offsets[f.layer] ?? 0;
+      const lift = lifts[i];
       let k = slot.offset * 3;
       for (const p of f.polygon) {
-        positions[k++] = p[0];
-        positions[k++] = p[1];
-        positions[k++] = p[2] + lift;
+        positions[k++] = p[0] + lift[0];
+        positions[k++] = p[1] + lift[1];
+        positions[k++] = p[2] + lift[2];
       }
     }
   }
