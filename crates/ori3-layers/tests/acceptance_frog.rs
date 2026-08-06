@@ -1,11 +1,13 @@
-//! Task 4-6: M4受け入れテスト — 伝承のカエル(カエルの基本形まで)。
+//! Task 4-6: M4受け入れテスト — 伝承のカエル(完成形まで)。
 //!
-//! **アプリが提供する折り操作の列だけ**でカエルを折り進め、回帰テストとして固定する。
+//! **アプリが提供する折り操作の列だけ**でカエルを完成させ、回帰テストとして固定する。
 //! 手作業の展開図編集は一切せず、次の操作だけを使う:
 //!
 //! - 重ね折り `fold_through`(半分に折る)
 //! - 開いてつぶす折り `squash`(予備基本形への組み替えと、4つの袋を開く工程)
 //! - 花弁折り `petal`(4つの袋を同時に→カエルの基本形)
+//! - 中割り折り `inside_reverse`(足4本を体の外へ出す)
+//! - 段折り `pleat`(体の根元)
 //!
 //! # 折り順
 //!
@@ -17,6 +19,10 @@
 //! 3. **花弁折り1回**でカエルの基本形。紙の4隅が紙の中心と同じ1点(先端)へ集まり、
 //!    4辺の中点は先端から (√2-1)/2、根元は先端から √2/4 になる。8本の先が
 //!    1つの先端へ集まった、無駄のない(3つの制約が全て等号で成り立つ)基本形
+//! 4. **足4本を中割り折り**。紙の隅から出た先を、中心線と45°をなす折り線で
+//!    体の外(基本形の開き角±22.5°の外)へ出す。前足2本は先端から0.10、
+//!    後ろ足2本は0.20のところで折る
+//! 5. **体の根元を段折り**して完成(140面)
 //!
 //! # 花弁折りが1回である理由
 //!
@@ -27,17 +33,10 @@
 //! 選ぶと必ずそこで紙が裂ける。4つの袋は畳み平面でぴったり重なっているので、
 //! 全層を選んだ1回の花弁折りが4回分の動きをそのまま表す。
 //!
-//! # ここで止めた理由(実装の不足)
-//!
-//! 続く工程(足の中割り折り→完成形)はこのテストに入っていない。
-//! カエルの基本形の4本の足(紙の隅から出る先)は、層順序の上で
-//! (1,19,26)(7,15,22)(4,16,25)(10,12,21) のように**飛び飛びの層**になる。
-//! 実際の紙では足1本は連続した重なりなので、このままでは足1本をつまんで
-//! 中割り折りできない。原因は、花弁折りが持ち上げた紙を
-//! [`ori3_layers::flat_motion`] の `LayerTurn::Outside` で
-//! 「重なりのいちばん上へまとめて」回していることで、袋ごとに
-//! 「もとの層の隣」へ置き直す指定(中割り折りが使っている置き直し)が
-//! 花弁折りには無い。近似では済ませられないので、ここで止めて報告する。
+//! ただし**持ち上げた紙の置き場所は袋ごとに別**で、`petal` は袋ごとに
+//! 「その袋のいちばん外側の層の隣」へ置き直す(`LayerTurn::Beside`)。
+//! 重なり全体の外側へまとめて回すと4つの袋の紙が入り混じり、足1本をつまんで
+//! 中割り折りできなくなる([`each_leg_is_a_bundle_of_neighbouring_layers`])。
 
 use std::collections::HashMap;
 
@@ -45,7 +44,9 @@ use glam::DVec2;
 use ori3_cp::{Face, extract_faces};
 use ori3_layers::fold_through::{FoldDirection, FoldThroughInput, fold_through};
 use ori3_layers::techniques::TechniqueInput;
-use ori3_layers::{FlatState, FoldThroughResult, flat_state_at, petal, replay, squash};
+use ori3_layers::{
+    FlatState, FoldThroughResult, flat_state_at, inside_reverse, petal, pleat, replay, squash,
+};
 use ori3_model::{CreasePattern, Document, EdgeKind, FaceId, Paper};
 
 /// 畳んだたこ形の半分の開き角(22.5°)の正接から決まる、袋を開いた後の外形の値。
@@ -604,6 +605,197 @@ fn the_frog_base_replays_from_the_crease_pattern() {
 fn the_frog_base_is_deterministic() {
     let (a, _) = frog_base();
     let (b, _) = frog_base();
+    assert_eq!(a.cp, b.cp, "展開図が一致する");
+    assert_eq!(a.sequence, b.sequence, "手順が一致する");
+    let frame = |doc: &Document| format!("{:?}", replay(doc, doc.sequence.len(), 1.0).frame);
+    assert_eq!(frame(&a), frame(&b), "折り上がりの3D姿勢がビット一致する");
+}
+
+
+
+// ---------------------------------------------------------------------------
+// 完成形(足4本と体の段折り)
+// ---------------------------------------------------------------------------
+
+/// 足4本の中割り折り: (紙の隅, 中心線のどちら側へ出すか, 先端からの距離)。
+/// 前足2本は先端寄り、後ろ足2本は根元寄りで折る。
+const LEGS: [([f64; 2], f64, f64); 4] = [
+    ([0.0, 0.0], 1.0, 0.10),
+    ([1.0, 0.0], -1.0, 0.10),
+    ([1.0, 1.0], 1.0, 0.20),
+    ([0.0, 1.0], -1.0, 0.20),
+];
+
+/// 体の段折りの位置(先端から)と段の幅。
+const PLEAT_AT: f64 = 0.30;
+const PLEAT_GAP: f64 = 0.02;
+
+/// 紙の隅から出た足1本の層(下から順)。
+///
+/// カエルの基本形では紙の4隅がどれも先端(紙の中心と同じ点)に集まっているので、
+/// 「その隅を持つ面」を集めれば足1本になる。花弁折りが持ち上げた紙を袋ごとに
+/// 置き直すようになって初めて、この3面が層順序の上でひとまとまりになり、
+/// 足1本をつまんで中割り折りできる。
+fn leg_layers(doc: &Document, corner: [f64; 2]) -> Vec<FaceId> {
+    let (faces, state) = state_of(doc);
+    let pos = vertex_pos(&doc.cp);
+    let t = DVec2::from(corner);
+    state
+        .order
+        .iter()
+        .copied()
+        .filter(|id| {
+            let f = faces.iter().find(|f| f.id == *id).expect("層順序の面");
+            f.vertices.iter().filter_map(|v| pos.get(v)).any(|p| (*p - t).length() < 1e-9)
+        })
+        .collect()
+}
+
+/// 伝承のカエル。カエルの基本形の足4本を中割り折りで体の外へ出し、
+/// 体の根元を段折りする。
+///
+/// 足の先は基本形の先端にあり、中心線と45°をなす折り線で中割り折りすると
+/// 中心線から45°の向き(基本形の開き角±22.5°の外)へ出る。畳み平面の座標は
+/// 1手ごとに全体の等長変換だけずれるので、折り線は毎回 [`frog_axis`] で
+/// 読み直してから渡す。
+/// 戻り値は文書と、最後の操作が返した平坦状態(再生一致の検証に使う)。
+fn frog() -> (Document, FlatState) {
+    let (mut doc, _) = frog_base();
+    for (corner, side, along) in LEGS {
+        let (apex, axis) = frog_axis(&doc);
+        let perp = DVec2::new(-axis.y, axis.x) * side;
+        let hinge = apex + axis * along;
+        let dir = (axis + perp).normalize();
+        let keep = apex + axis * (along + 0.05);
+        let leg = leg_layers(&doc, corner);
+        assert_eq!(leg.len(), 3, "足1本は3面(実際 {leg:?})");
+        apply(
+            &mut doc,
+            inside_reverse,
+            leg,
+            [[hinge.x, hinge.y], [hinge.x + dir.x, hinge.y + dir.y]],
+            [keep.x, keep.y],
+            None,
+        );
+    }
+    let (apex, axis) = frog_axis(&doc);
+    let perp = DVec2::new(-axis.y, axis.x);
+    let a = apex + axis * PLEAT_AT;
+    let r = apex + axis * (PLEAT_AT + PLEAT_GAP);
+    let last = apply(
+        &mut doc,
+        pleat,
+        Vec::new(),
+        [[a.x, a.y], [(a + perp).x, (a + perp).y]],
+        [r.x, r.y],
+        None,
+    );
+    (doc, last)
+}
+
+/// 完成形。足4本が体の外へ出て、体の根元に段が入る。
+#[test]
+fn the_frog_has_four_legs_sticking_out_of_the_body() {
+    let (doc, _) = frog();
+    let (faces, state) = state_of(&doc);
+    assert_eq!(doc.sequence.len(), 14, "折り操作は14手(基本形9手+足4手+段折り1手)");
+    assert_eq!(faces.len(), 140, "140面");
+    assert_eq!(state.order.len(), 140);
+
+    // 足4本の先は、中心線から±45°の向き(基本形の開き角±22.5°の外)に、
+    // 先端から along*√2 のところへ出る
+    let (apex, axis) = frog_axis(&doc);
+    let perp = DVec2::new(-axis.y, axis.x);
+    for (corner, side, along) in LEGS {
+        let v = only(&doc, corner, "足の先") - apex;
+        let want = axis * along - perp * (side * along);
+        assert!((v - want).length() < 1e-9, "{corner:?} の足の先(実際 {v:?} 期待 {want:?})");
+        let deg = axis.angle_to(v).to_degrees();
+        assert!((deg.abs() - 45.0).abs() < 1e-9, "足は中心線から45°(実際 {deg})");
+        assert!(
+            (v.length() - along * std::f64::consts::SQRT_2).abs() < 1e-9,
+            "足の先までの距離(実際 {})",
+            v.length()
+        );
+    }
+    // 4本は4つの別々の向き・距離に出る(重ならない)
+    let tips: Vec<DVec2> = LEGS.iter().map(|(c, _, _)| only(&doc, *c, "足の先")).collect();
+    for i in 0..tips.len() {
+        for j in (i + 1)..tips.len() {
+            assert!((tips[i] - tips[j]).length() > 1e-6, "足{i}と足{j}は別の位置");
+        }
+    }
+
+    // 体は段折りの分だけ短くなる(根元は √2/4 から段の幅の2倍だけ縮む)
+    let root = 0.25 * std::f64::consts::SQRT_2 - 2.0 * PLEAT_GAP;
+    let far = faces
+        .iter()
+        .flat_map(|f| plane_poly(&doc.cp, f, &state))
+        .map(|p| (p - apex).dot(axis))
+        .fold(f64::NEG_INFINITY, f64::max);
+    assert!((far - root).abs() < 1e-9, "段折りで体が縮む(実際 {far} 期待 {root})");
+
+    assert_fold_senses(&doc, "完成したカエル");
+    assert_flat(&doc, "完成したカエル");
+}
+
+/// 足1本は層順序の上でひとまとまりになっている(つまんで中割り折りできる)。
+/// カエルの基本形で足4本を確かめる。
+#[test]
+fn each_leg_is_a_bundle_of_neighbouring_layers() {
+    let (doc, _) = frog_base();
+    let (faces, state) = state_of(&doc);
+    let apex = only(&doc, [0.5, 0.5], "紙の中心");
+    for corner in [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]] {
+        let leg = leg_layers(&doc, corner);
+        assert_eq!(leg.len(), 3, "足1本は3面(実際 {leg:?})");
+        // 足の先の近くでは、足の層が続きになっている(間に別の紙が入らない)
+        let (_, axis) = frog_axis(&doc);
+        let perp = DVec2::new(-axis.y, axis.x);
+        for sign in [1.0_f64, -1.0] {
+            let probe = apex + axis * 0.05 + perp * (sign * 0.01);
+            let here: Vec<FaceId> = state
+                .order
+                .iter()
+                .copied()
+                .filter(|id| {
+                    let f = faces.iter().find(|f| f.id == *id).expect("層順序の面");
+                    inside_polygon(&plane_poly(&doc.cp, f, &state), probe)
+                })
+                .collect();
+            let at: Vec<usize> = (here.iter().enumerate())
+                .filter(|(_, id)| leg.contains(id))
+                .map(|(k, _)| k)
+                .collect();
+            assert_eq!(at.len(), 2, "先端の近くでは足は2層(実際 {at:?})");
+            assert_eq!(at[1], at[0] + 1, "足の2層は隣どうし(実際 {at:?} / {here:?})");
+        }
+    }
+}
+
+/// 完成形も展開図と手順だけから同じ形に折り直せる。
+#[test]
+fn the_frog_replays_from_the_crease_pattern() {
+    let (doc, built) = frog();
+    let faces = extract_faces(&doc.cp);
+    let (replayed, warnings) =
+        flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
+    assert!(warnings.is_empty(), "再生の警告: {warnings:?}");
+    assert_eq!(replayed.order, built.order, "層順序が構築時と一致する");
+    let pos = vertex_pos(&doc.cp);
+    for f in &faces {
+        let (b, r) = (built.placements[&f.id], replayed.placements[&f.id]);
+        for p in f.vertices.iter().filter_map(|v| pos.get(v)) {
+            assert!((b.apply(*p) - r.apply(*p)).length() < 1e-9, "面 {} の位置が一致する", f.id);
+        }
+    }
+}
+
+/// 完成形も何度実行しても同じ結果になる(決定性)。
+#[test]
+fn the_frog_is_deterministic() {
+    let (a, _) = frog();
+    let (b, _) = frog();
     assert_eq!(a.cp, b.cp, "展開図が一致する");
     assert_eq!(a.sequence, b.sequence, "手順が一致する");
     let frame = |doc: &Document| format!("{:?}", replay(doc, doc.sequence.len(), 1.0).frame);

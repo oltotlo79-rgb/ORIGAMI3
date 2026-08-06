@@ -399,11 +399,17 @@ pub fn squash(
 /// - 中央のくさび(斜め2本の間でちょうつがいの手前): ちょうつがいでの鏡映
 /// - ちょうつがいの向こう側の紙は動かない
 ///
-/// 持ち上げた紙は重なりのいちばん上へ回し、中央のくさびを羽の上に置く
+/// 持ち上げた紙は**袋ごと**に、その袋のいちばん外側の層の隣へ置き
+/// (`open_to_back` が `Some(true)` なら向こう側)、中央のくさびを羽の外側に置く
 /// (羽は先に中心へ折られてから一緒に裏返るので、上下が入れ替わる)。
-/// `open_to_back` が `Some(true)` なら向こう側(いちばん下)へ回す。実際の紙では
-/// どちらへも折れる(鶴の基本形は前面と背面に1回ずつ花弁折りする)ため、
-/// 手前に決め打ちしない。
+/// 実際の紙では袋を1つずつ折るので、持ち上げた紙はその袋の中に留まり、
+/// 別の袋の紙をまたがない。袋の切れ目は**中心線に乗った折り目**(袋の口を
+/// 閉じている背)で、そこを渡らずに層をたどったまとまりが1つの袋になる
+/// ([`petal_pockets`])。重なり全体の外側へまとめて回すと、袋がいくつも重なった
+/// フラップ(カエルの基本形)で袋の紙が入り混じり、出来上がった先を1本ずつ
+/// つまめなくなる。
+/// 回す側を手前に決め打ちしないのは、実際の紙ではどちらへも折れるため
+/// (鶴の基本形は前面と背面に1回ずつ花弁折りする)。
 ///
 /// 層の数の偶奇やフラップの形は仮定せず、選んだ層すべてが同じように動く。
 /// Errにするのは幾何的に決められない入力(退化した中心線・見つからない層・
@@ -485,7 +491,8 @@ pub fn petal(
     } else {
         FoldDirection::Up
     };
-    let parts = petal_parts(&flap, &polys, tip, d, hinge, &sides, open);
+    let pockets = petal_pockets(cp, faces, state, &flap, l0, u);
+    let parts = petal_parts(&pockets, &polys, tip, d, hinge, &sides, open);
     let mut res = flat_motion(
         cp,
         faces,
@@ -1945,9 +1952,14 @@ fn rotate(d: DVec2, a: f64) -> DVec2 {
 /// 部分の順に意味がある: [`flat_motion`] は後の部分ほど `open` の側へ重ねるので、
 /// 羽を先・中央を後に並べて中央のくさびを羽の外側に置く。
 /// `open` は持ち上げた紙を回す側(手前=Up / 向こう=Down)。
+///
+/// 持ち上げた紙は**袋ごと**(`pockets`)に、その袋のいちばん外側の層の隣へ置く
+/// ([`LayerTurn::Beside`])。重なり全体の外側へまとめて回すと、袋がいくつも
+/// 重なったフラップ(カエルの基本形など)で袋の紙が入り混じり、
+/// 出来上がった1本の先をつまめなくなる。
 #[allow(clippy::too_many_arguments)]
 fn petal_parts(
-    flap: &[FaceId],
+    pockets: &[Vec<FaceId>],
     polys: &HashMap<FaceId, Vec<DVec2>>,
     tip: DVec2,
     d: DVec2,
@@ -1990,22 +2002,115 @@ fn petal_parts(
                 reverse_layers: None,
             });
         }
+        push_by_pocket(
+            &mut parts,
+            polys,
+            pockets,
+            &wing,
+            MotionTransform::Reflect(vec![bisector, hinge]),
+            open,
+        );
+    }
+    push_by_pocket(
+        &mut parts,
+        polys,
+        pockets,
+        &middle,
+        MotionTransform::Reflect(vec![hinge]),
+        open,
+    );
+    parts
+}
+
+/// 持ち上げた紙を袋ごとに1つの部分にし、その袋のいちばん外側の層の隣へ置く。
+/// 紙の無い袋(片側にしか紙が無い袋など)は部分を作らない
+/// (層の指定が空の [`MotionPart`] は「全ての層」の意味になってしまうため)。
+fn push_by_pocket(
+    parts: &mut Vec<MotionPart>,
+    polys: &HashMap<FaceId, Vec<DVec2>>,
+    pockets: &[Vec<FaceId>],
+    region: &[HalfPlane],
+    transform: MotionTransform,
+    open: FoldDirection,
+) {
+    for pocket in pockets {
+        let layers = layers_in_region(polys, pocket, region);
+        if layers.is_empty() {
+            continue;
+        }
+        let anchor = match open {
+            FoldDirection::Up => *pocket.last().expect("袋には層がある"),
+            FoldDirection::Down => pocket[0],
+        };
         parts.push(MotionPart {
-            layers: layers_in_region(polys, flap, &wing),
-            region: wing,
-            transform: MotionTransform::Reflect(vec![bisector, hinge]),
-            turn: LayerTurn::Outside(open),
+            layers,
+            region: region.to_vec(),
+            transform: transform.clone(),
+            turn: LayerTurn::Beside {
+                anchor,
+                direction: open,
+            },
             reverse_layers: None,
         });
     }
-    parts.push(MotionPart {
-        layers: layers_in_region(polys, flap, &middle),
-        region: middle,
-        transform: MotionTransform::Reflect(vec![hinge]),
-        turn: LayerTurn::Outside(open),
-        reverse_layers: None,
-    });
-    parts
+}
+
+/// 花弁折りのフラップを**袋**ごとに分ける(戻り値は層順=下→上に並べた袋の一覧)。
+///
+/// 実際の紙の花弁折りは袋を1つずつ折る動きで、持ち上げた紙はその袋の中に留まる。
+/// 袋と袋は**中心線に乗った折り目**(袋の口を閉じている背)で背中合わせに
+/// つながっているので、その折り目だけを渡らずに層をたどると袋が求まる。
+fn petal_pockets(
+    cp: &CreasePattern,
+    faces: &[Face],
+    state: &FlatState,
+    flap: &[FaceId],
+    l0: DVec2,
+    u: DVec2,
+) -> Vec<Vec<FaceId>> {
+    let pos = vertex_positions(cp);
+    let by_edge = faces_by_edge(faces);
+    // union-find(袋の代表を親でたどる)
+    let mut parent: HashMap<FaceId, FaceId> = flap.iter().map(|&id| (id, id)).collect();
+    fn root(parent: &HashMap<FaceId, FaceId>, mut id: FaceId) -> FaceId {
+        while parent[&id] != id {
+            id = parent[&id];
+        }
+        id
+    }
+    for e in &cp.edges {
+        let Some(fs) = by_edge.get(&e.id) else {
+            continue;
+        };
+        if fs.len() != 2 || !fs.iter().all(|id| flap.contains(id)) {
+            continue;
+        }
+        let (Some(&p0), Some(&p1)) = (pos.get(&e.v0), pos.get(&e.v1)) else {
+            continue;
+        };
+        let Some(pl) = state.placements.get(&fs[0]) else {
+            continue;
+        };
+        let on_center = |p: DVec2| u.perp_dot(pl.apply(p) - l0).abs() <= JOIN_EPS;
+        if on_center(p0) && on_center(p1) {
+            continue;
+        }
+        let (a, b) = (root(&parent, fs[0]), root(&parent, fs[1]));
+        if a != b {
+            parent.insert(a, b);
+        }
+    }
+    let mut groups: HashMap<FaceId, Vec<FaceId>> = HashMap::new();
+    for &id in flap {
+        groups.entry(root(&parent, id)).or_default().push(id);
+    }
+    let rank = |id: &FaceId| state.order.iter().position(|x| x == id).unwrap_or(usize::MAX);
+    let mut out: Vec<Vec<FaceId>> = groups.into_values().collect();
+    for g in &mut out {
+        g.sort_by_key(rank);
+    }
+    out.sort_by_key(|g| rank(&g[0]));
+    out
 }
 
 /// 点 `c` のまわりの角 `angle` の回転(`c` を通る2直線での鏡映の合成)。

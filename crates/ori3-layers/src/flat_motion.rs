@@ -103,7 +103,9 @@ pub enum LayerTurn {
     Outside(FoldDirection),
     /// 分かれた元の紙のすぐ上(Up)/すぐ下(Down)へ差し込む(中割り・かぶせ)
     Inside(FoldDirection),
-    /// 指定した面のすぐ上/すぐ下へ入れる(重なり順を細かく決めたいとき)
+    /// 指定した面から分かれた紙のすぐ上(Up)/すぐ下(Down)へ入れる
+    /// (重なり順を細かく決めたいとき)。同じ基準面へ続けて置くと、
+    /// 先に置いた紙のさらに外側へ積まれる(花弁折りが袋ごとに使う)
     Beside {
         /// 基準にする面(この動きを始める時点の面ID)
         anchor: FaceId,
@@ -747,6 +749,10 @@ fn build_order(
         }
     }
 
+    // 既に `Beside` で置いた紙(面→基準面)。同じ基準面へ続けて置くとき、
+    // 先に置いた紙の外側へ重なっていく(1つの袋の中で紙が順に積まれる)。
+    let mut beside_of: HashMap<FaceId, FaceId> = HashMap::new();
+
     for (i, part) in parts.iter().enumerate() {
         let mut block: Vec<FaceId> = order
             .iter()
@@ -822,13 +828,18 @@ fn build_order(
                 let slots: Vec<usize> = order
                     .iter()
                     .enumerate()
-                    .filter(|(_, id)| parent_of.get(id) == Some(&anchor))
+                    .filter(|(_, id)| {
+                        parent_of.get(id) == Some(&anchor) || beside_of.get(id) == Some(&anchor)
+                    })
                     .map(|(k, _)| k)
                     .collect();
                 let at = match direction {
                     FoldDirection::Up => slots.last().map(|k| k + 1),
                     FoldDirection::Down => slots.first().copied(),
                 };
+                for &m in &block {
+                    beside_of.insert(m, anchor);
+                }
                 match at {
                     Some(k) => {
                         order.splice(k..k, block);
