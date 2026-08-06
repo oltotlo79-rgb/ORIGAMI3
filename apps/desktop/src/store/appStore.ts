@@ -80,6 +80,13 @@ const SOFT_SAVE_MS = 400;
 /** 画面更新の仕組みが無い環境(テスト)で1コマを送る間隔(ms) */
 const FALLBACK_FRAME_MS = 16;
 
+/** 折り角度の履歴に残す件数の上限。作品データではないので溜め込みすぎない */
+const ANGLE_HISTORY_LIMIT = 50;
+
+/** 同じ折り線への続けざまの角度変更(スライダーを動かしている間)を
+ * 1件にまとめる時間(ms)。ドラッグ1回=履歴1件にするための間隔 */
+const ANGLE_GROUP_MS = 700;
+
 export type ToolId =
   | "select"
   | "mountain"
@@ -348,6 +355,14 @@ interface AppState {
   docEpoch: number;
   /** 利用者が指定した折り角度(度)。キーは辺ID */
   drivers: Map<number, number>;
+  /** 折り角度を変える前のdriversの控え(古い順)。「元に戻す」はまずここを使う。
+   * 3Dの形は作品データではないので保存せず、作品を開く・新規作成で捨てる */
+  angleUndoStack: ReadonlyMap<number, number>[];
+  /** 「元に戻す」で戻した角度をやり直すための控え(古い順) */
+  angleRedoStack: ReadonlyMap<number, number>[];
+  /** 作品データ側(edit_undo)を戻した回数。「やり直し」はこちらを先に消化する
+   * (線の追加を戻した後は、まず線の追加をやり直すのが自然な順番) */
+  docUndoDepth: number;
   /** 直近のソルバー解(度)。キーは辺ID。未指定ヒンジの現在角の表示に使う */
   poseAngles: Map<number, number>;
   /** 追従計算からの警告(不収束など)。展開図の検査警告とは別に持つ */
@@ -703,6 +718,8 @@ export const useAppStore = create<AppState>((set, get) => {
         // 別の作品になったので角度指定・立体形状・再生位置は捨てる
         stopPlayback();
         pose.reset();
+        // 角度の履歴は作品データではないので、別の作品になったら捨てる
+        clearAngleHistory();
         set({
           drivers: new Map(),
           poseAngles: new Map(),
@@ -747,6 +764,59 @@ export const useAppStore = create<AppState>((set, get) => {
    * 形が閉じず面が離れる(=紙が切れて見える)。この1〜2本だけを固定し、
    * 以前の指定は「なるべく保ちたい目標」として追従させる */
   let activeHinges: number[] = [];
+
+  /** 今のドラッグで角度の履歴をもう積んだか(ドラッグ1回=履歴1件にする) */
+  let pullPushed = false;
+
+  /** 直前に履歴へ積んだ操作の目印と時刻(続けざまの操作を1件にまとめるため) */
+  let lastAngleKey: string | null = null;
+  let lastAngleAt = 0;
+
+  /**
+   * 角度を変える直前のdriversを履歴へ積む(角度を変える操作の入口で必ず呼ぶ)。
+   * keyが同じ操作の続き(スライダーを動かしている最中)なら積み直さないので、
+   * ドラッグ1回・スライダー1回の操作が履歴1件になる。keyがnullなら常に1件。
+   */
+  const pushAngleUndo = (key: string | null): void => {
+    const now = Date.now();
+    if (key !== null && key === lastAngleKey && now - lastAngleAt < ANGLE_GROUP_MS) {
+      lastAngleAt = now; // 同じ操作の続きなので履歴は増やさない
+      return;
+    }
+    lastAngleKey = key;
+    lastAngleAt = now;
+    const s = get();
+    set({
+      angleUndoStack: [...s.angleUndoStack, new Map(s.drivers)].slice(
+        -ANGLE_HISTORY_LIMIT,
+      ),
+      angleRedoStack: [], // 新しい操作をしたらやり直しの先は消える
+    });
+  };
+
+  /**
+   * 作品データを変える要求(展開図の編集・手順の変更)を送る。
+   * 成功したらそれが「直前にした操作」になるので、角度の履歴は捨てて
+   * 「元に戻す」を作品側(edit_undo)へ回す。断られたときは何も変わって
+   * いないので角度の履歴はそのまま残す(角度を戻せなくならないように)。
+   */
+  const applyDocChange = async (
+    task: () => Promise<DocumentView>,
+  ): Promise<void> => {
+    await runViewCommand(task, false);
+    if (get().errorMessage === null) clearAngleHistory();
+  };
+
+  /** 角度の履歴を捨てる(作品データを変えたとき・別の作品になったとき)。
+   * 作品データの変更のほうが新しい操作になるので、「元に戻す」はそちらへ回す */
+  const clearAngleHistory = (): void => {
+    lastAngleKey = null;
+    const s = get();
+    if (s.angleUndoStack.length === 0 && s.angleRedoStack.length === 0 && s.docUndoDepth === 0) {
+      return;
+    }
+    set({ angleUndoStack: [], angleRedoStack: [], docUndoDepth: 0 });
+  };
 
   /** 角度指定を「いま操作している分(固定)」と「以前の分(目標)」に分ける */
   const splitDrivers = (
@@ -836,6 +906,27 @@ export const useAppStore = create<AppState>((set, get) => {
     void runPoseSolve(hard, keep, true);
   });
 
+  /**
+   * 履歴から取り出したdriversへ戻し、その形を計算し直す(元に戻す/やり直し)。
+   * 指定が消えた折り線は前回の計算結果(warm start)を引き継いで折れたまま
+   * 残るので、その分だけ0度(平ら)を明示して送る(clearDriverと同じ考え方)。
+   */
+  const applyAngleSnapshot = (next: ReadonlyMap<number, number>): void => {
+    const before = get().drivers;
+    const drivers = new Map(next);
+    set({ drivers });
+    activeHinges = [];
+    pose.clearAll(); // 予約済みの間引き計算は古い指定なので捨てる
+    if (drivers.size === 0) {
+      void runPoseSolve(flatDrivers(get().hinges));
+      return;
+    }
+    const flattened = [...before.keys()]
+      .filter((hinge) => !drivers.has(hinge))
+      .map((hinge) => ({ hinge, target_angle_deg: 0 }));
+    void runPoseSolve(flattened, driverList(drivers));
+  };
+
   /** 今見えている形をもう一度作り直す(たわみの指定を変えたときに使う)。
    * 手順のある作品は再生、無い作品は角度の追従計算で作る(どちらも最新1件だけ) */
   const refreshShape = (): void => {
@@ -872,6 +963,11 @@ export const useAppStore = create<AppState>((set, get) => {
     pose.clearAll();
     softShape.clearAll();
     softSave.clearAll();
+    // 角度の履歴のまとめ判定も時計を持つので、一緒に初期化する
+    lastAngleKey = null;
+    lastAngleAt = 0;
+    pullPushed = false;
+    clearAngleHistory();
   };
 
   /** 手順の再生結果を3D表示へ反映する。
@@ -986,6 +1082,9 @@ export const useAppStore = create<AppState>((set, get) => {
     errorMessage: null,
     docEpoch: 0,
     drivers: new Map(),
+    angleUndoStack: [],
+    angleRedoStack: [],
+    docUndoDepth: 0,
     poseAngles: new Map(),
     poseWarnings: [],
     poseConverged: true,
@@ -1042,7 +1141,7 @@ export const useAppStore = create<AppState>((set, get) => {
         (op.type === "RemoveEdges" || op.type === "SetEdgeKind")
           ? { ...op, ids: withMirrorEdges(s.doc, s.faces, op.ids) }
           : op;
-      return runViewCommand(() => ipc.editApply(mirrored), false);
+      return applyDocChange(() => ipc.editApply(mirrored));
     },
 
     drawSegment: async (a, b, kind) => {
@@ -1072,20 +1171,61 @@ export const useAppStore = create<AppState>((set, get) => {
       persistPrefs();
     },
 
-    undo: () => {
+    // 「元に戻す」は“直前にした操作”を戻す。折り角度の変更は作品データでは
+    // ないので作品側の履歴(edit_undo)に載らない。そこで角度の履歴を先に見て、
+    // 残っていればそれを戻す(角度を変えた直後に線の追加が消えないように)
+    undo: async () => {
       stopPlayback();
-      return runViewCommand(() => ipc.editUndo(), false);
+      const s = get();
+      const prev = s.angleUndoStack[s.angleUndoStack.length - 1];
+      if (prev !== undefined) {
+        lastAngleKey = null; // 戻した後の操作は必ず新しい1件にする
+        set({
+          angleUndoStack: s.angleUndoStack.slice(0, -1),
+          angleRedoStack: [...s.angleRedoStack, new Map(s.drivers)].slice(
+            -ANGLE_HISTORY_LIMIT,
+          ),
+          errorMessage: null,
+        });
+        applyAngleSnapshot(prev);
+        return;
+      }
+      await runViewCommand(() => ipc.editUndo(), false);
+      // 戻せたぶんだけ「やり直し」は作品側を先に進める(操作と逆の順に戻す)
+      if (get().errorMessage === null) set({ docUndoDepth: get().docUndoDepth + 1 });
     },
 
-    redo: () => {
+    redo: async () => {
       stopPlayback();
-      return runViewCommand(() => ipc.editRedo(), false);
+      // 作品データを戻したぶんが残っていれば、そちらを先にやり直す
+      if (get().docUndoDepth > 0) {
+        await runViewCommand(() => ipc.editRedo(), false);
+        if (get().errorMessage === null) {
+          set({ docUndoDepth: Math.max(0, get().docUndoDepth - 1) });
+        }
+        return;
+      }
+      const s = get();
+      const next = s.angleRedoStack[s.angleRedoStack.length - 1];
+      if (next === undefined) {
+        await runViewCommand(() => ipc.editRedo(), false);
+        return;
+      }
+      lastAngleKey = null;
+      set({
+        angleRedoStack: s.angleRedoStack.slice(0, -1),
+        angleUndoStack: [...s.angleUndoStack, new Map(s.drivers)].slice(
+          -ANGLE_HISTORY_LIMIT,
+        ),
+        errorMessage: null,
+      });
+      applyAngleSnapshot(next);
     },
 
     applySequenceOp: (op) => {
       // 手順が入れ替わると再生位置の意味が変わるので、先に止める
       stopPlayback();
-      return runViewCommand(() => ipc.sequenceApply(op), false);
+      return applyDocChange(() => ipc.sequenceApply(op));
     },
 
     selectStep: (step) => {
@@ -1505,6 +1645,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
     beginPull: (hinge, angles, mirrorHinge = null) => {
       if (!get().doc) return;
+      pullPushed = false; // このドラッグではまだ履歴を積んでいない
       // 左右同時を切っている間は相手を覚えない(切替が次のドラッグから必ず効く)
       set({
         pullHinge: hinge,
@@ -1526,6 +1667,11 @@ export const useAppStore = create<AppState>((set, get) => {
     pullTo: (deg) => {
       const { pullHinge, pullMirrorHinge } = get();
       if (pullHinge === null) return;
+      // ドラッグ1回で履歴1件。つかんでから離すまでの最初の1回だけ積む
+      if (!pullPushed) {
+        pullPushed = true;
+        pushAngleUndo(null);
+      }
       // 左右対称の相手も同じ角度で動かす(鶴の両羽が一緒に開く)。
       // 2本まとめて1回の追従計算にするので、送る回数は片側だけのときと同じ
       const drivers = new Map(get().drivers);
@@ -1543,6 +1689,8 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     setDriverAngle: (hinge, deg) => {
+      // スライダーを動かしている間の細かい変更は1件にまとめる
+      pushAngleUndo(`angle:${hinge}`);
       // 画面の反応を優先し、指定はその場で反映してから計算を間引いて依頼する
       const drivers = new Map(get().drivers);
       drivers.set(hinge, deg);
@@ -1556,6 +1704,7 @@ export const useAppStore = create<AppState>((set, get) => {
     clearDriver: (hinge) => {
       const drivers = new Map(get().drivers);
       if (!drivers.delete(hinge)) return;
+      pushAngleUndo(null); // 1回押すごとに履歴1件
       set({ drivers });
       activeHinges = [];
       // 指定を消しただけだと、この折り線は前回の計算結果(warm start)を
@@ -1569,6 +1718,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
     clearDrivers: () => {
       const hinges = get().hinges;
+      if (get().drivers.size > 0) pushAngleUndo(null);
       set({ drivers: new Map() });
       activeHinges = [];
       // 全ての折り線を0度に固定する形は必ず閉じる(平ら)ので全部hardでよい

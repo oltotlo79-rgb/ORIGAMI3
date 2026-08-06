@@ -15,6 +15,7 @@ import { PaneSplitter } from "./components/PaneSplitter";
 import { NewDocumentDialog } from "./components/dialogs/NewDocumentDialog";
 import { ProposalWizard } from "./components/dialogs/ProposalWizard";
 import { ExportDialog } from "./components/dialogs/ExportDialog";
+import { HistoryButtons } from "./components/HistoryButtons";
 import { uniqueWarnings } from "./lib/techniques";
 import "./App.css";
 
@@ -26,8 +27,6 @@ function App() {
   const openDocument = useAppStore((s) => s.openDocument);
   const saveDocument = useAppStore((s) => s.saveDocument);
   const checkRecovery = useAppStore((s) => s.checkRecovery);
-  const undo = useAppStore((s) => s.undo);
-  const redo = useAppStore((s) => s.redo);
   const openProposal = useAppStore((s) => s.openProposal);
   const openExport = useAppStore((s) => s.openExport);
   const openNewDialog = useAppStore((s) => s.openNewDialog);
@@ -76,12 +75,9 @@ function App() {
           保存
         </button>
         <span className="toolbar-separator" />
-        <button type="button" onClick={() => void undo()}>
-          元に戻す
-        </button>
-        <button type="button" onClick={() => void redo()}>
-          やり直し
-        </button>
+        {/* 折り角度の変更と作品データの変更は別々の履歴なので、次の1回が
+            どちらに効くかを説明に出す(設計原則3b) */}
+        <HistoryButtons />
         <span className="toolbar-separator" />
         {/* 提案ウィザードの入口。開くのは独立ダイアログで、常設区画は増やさない(PRO-004) */}
         <button type="button" onClick={openProposal}>
