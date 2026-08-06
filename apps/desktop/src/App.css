@@ -220,6 +220,39 @@ body,
   padding-bottom: 4px;
 }
 
+/* 手順1つぶんの枠(「ここに挿入」ボタン+手順チップ) */
+.timeline-slot {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 2px;
+  flex: none;
+}
+
+/* 手順の前へ折りを挟む導線(SEQ-006)。細く控えめにして常設の区画を増やさない */
+.timeline-insert {
+  flex: none;
+  padding: 0 3px;
+  border: 1px dashed #b4b4b8;
+  border-radius: 4px;
+  background: transparent;
+  color: #6a6a70;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.timeline-insert:hover {
+  background: #eef3fc;
+  border-color: #3b6fc9;
+  color: #2d5aa8;
+}
+
+.timeline-insert.active {
+  border-style: solid;
+  border-color: #3b6fc9;
+  background: #dbe6f8;
+  color: #2d5aa8;
+}
+
 .timeline-chip {
   flex: none;
   padding: 4px 8px;

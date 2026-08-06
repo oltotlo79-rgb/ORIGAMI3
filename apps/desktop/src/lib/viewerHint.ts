@@ -29,9 +29,14 @@ export function foldBlockReason(s: FoldReadiness): string | null {
     return "折り途中の形では折れません。手順を最後まで進めてください";
   if (s.driverCount > 0)
     return "角度を動かして形を変えている間は折れません。下の「全て平らに戻す」で戻せます";
-  if (s.currentStep !== null && s.currentStep !== s.stepCount)
-    return "前の手順の形を見ている間は折れません。手順をいちばん新しい形へ戻してください";
+  // 途中の手順を見ている間も折れる(その手順の前へ挟まる。SEQ-006)
   return null;
+}
+
+/** 今どこへ折りが入るかの案内(手順の途中を見ているときだけ添える) */
+export function insertPositionHint(s: FoldReadiness): string {
+  if (s.currentStep === null || s.currentStep >= s.stepCount) return "";
+  return `(折ると手順${s.currentStep + 1}の前に挟まります)`;
 }
 
 /** 紙をつかんで引く操作の説明(UI-007) */
@@ -60,9 +65,10 @@ export function viewerHint(s: HintState): string {
   const blocked = foldBlockReason(s);
   if (s.tool === "fold") {
     if (blocked) return `今は折れません: ${blocked}`;
+    const where = insertPositionHint(s);
     if (s.hasFoldDraft)
-      return "折り線を引きました。下のパネルで向きと動かす側を決めて「折る」を押してください(やり直すときは「やめる」)";
-    return DRAG_FOLD_HINT;
+      return `折り線を引きました。下のパネルで向きと動かす側を決めて「折る」を押してください(やり直すときは「やめる」)${where}`;
+    return `${DRAG_FOLD_HINT}${where}`;
   }
   if (s.tool === "pull") {
     if (s.pullBlocked) return `今は引けません: ${s.pullBlocked}`;

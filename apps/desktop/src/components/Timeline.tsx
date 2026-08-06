@@ -49,16 +49,33 @@ function StepChip({ step, number }: { step: FoldStep; number: number }) {
         .join(" / ");
 
   return (
-    <button
-      type="button"
-      className={chipClass(currentStep === number, isSkipped)}
-      title={title}
-      onClick={() => selectStep(number)}
-    >
-      {number} {TECHNIQUE_LABEL[step.kind]}
-      {warned ? " ⚠" : ""}
-    </button>
+    <span className="timeline-slot">
+      {/* この手順の前に折りを挟む導線(SEQ-006)。押すと1つ前の形を表示し、
+          その状態で折ると新しい手順がここへ入る(後ろの手順は残る) */}
+      <button
+        type="button"
+        className={insertClass(currentStep === number - 1)}
+        title={`手順${number}の前に折りを挟みます。この形が出たら立体表示で折ってください`}
+        onClick={() => selectStep(number - 1)}
+      >
+        ＋
+      </button>
+      <button
+        type="button"
+        className={chipClass(currentStep === number, isSkipped)}
+        title={title}
+        onClick={() => selectStep(number)}
+      >
+        {number} {TECHNIQUE_LABEL[step.kind]}
+        {warned ? " ⚠" : ""}
+      </button>
+    </span>
   );
+}
+
+/** 「ここに挿入」ボタンの見た目(挿入位置を表示中なら目立たせる) */
+function insertClass(active: boolean): string {
+  return active ? "timeline-insert active" : "timeline-insert";
 }
 
 export function Timeline() {

@@ -3,6 +3,7 @@ import {
   DRAG_FOLD_HINT,
   PULL_HINT,
   foldBlockReason,
+  insertPositionHint,
   viewerHint,
   type HintState,
 } from "./viewerHint";
@@ -28,17 +29,24 @@ describe("foldBlockReason", () => {
     expect(foldBlockReason(READY)).toBeNull();
   });
 
-  it("再生中・角度操作中・途中の手順は理由を日本語で返す", () => {
+  it("再生中・角度操作中・折り途中は理由を日本語で返す", () => {
     expect(foldBlockReason({ ...READY, playing: true })).toContain("再生中");
     expect(foldBlockReason({ ...READY, driverCount: 1 })).toContain("角度");
     expect(foldBlockReason({ ...READY, playT: 0.5 })).toContain("折り途中");
-    expect(
-      foldBlockReason({ ...READY, currentStep: 1, stepCount: 3 }),
-    ).toContain("前の手順");
   });
 
-  it("最後の手順を表示しているときは折れる", () => {
+  it("最後の手順でも途中の手順でも折れる(途中なら手順が挟まる。SEQ-006)", () => {
     expect(foldBlockReason({ ...READY, currentStep: 3, stepCount: 3 })).toBeNull();
+    expect(foldBlockReason({ ...READY, currentStep: 1, stepCount: 3 })).toBeNull();
+  });
+
+  it("途中の手順を見ているときは、どこへ挟まるかを添える", () => {
+    expect(insertPositionHint({ ...READY, currentStep: 1, stepCount: 3 })).toContain(
+      "手順2の前",
+    );
+    // 最新(null)や最後の手順を見ているときは末尾へ足すので何も添えない
+    expect(insertPositionHint({ ...READY, currentStep: null, stepCount: 3 })).toBe("");
+    expect(insertPositionHint({ ...READY, currentStep: 3, stepCount: 3 })).toBe("");
   });
 });
 

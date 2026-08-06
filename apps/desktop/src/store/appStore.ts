@@ -116,6 +116,9 @@ export interface FoldDraft {
   /** 線を引いた時点の手順の数。線は「その形の上」で引いたものなので、
    * 手順が増減していたら別の形に対する線になってしまう */
   stepCount: number;
+  /** 線を引いた時点で見ていた位置(=折りが挟まる位置)。見る手順を移すと
+   * 別の形の上の線になってしまうので、ここが変わった線は捨てる */
+  upTo: number;
 }
 
 /** 技法の下ごしらえ(選んだ技法・フラップ・折り線)。確定するまで保持する */
@@ -134,6 +137,8 @@ export interface TechniqueDraft {
   docEpoch: number;
   /** 選んだ時点の手順の数 */
   stepCount: number;
+  /** 選んだ時点で見ていた位置(=技法が挟まる位置)。FoldDraftと同じ意味 */
+  upTo: number;
 }
 
 /** 段折りの段の幅の初期値(mm) */
@@ -148,8 +153,11 @@ const TECHNIQUE_FALLBACK_HINT = "手動の折り操作で代替してくださ�
 
 /**
  * 折る操作ができる状態か(平らに畳んだ状態を表示しているか)。
- * 折り途中の手順・再生中・角度スライダーでの変形中は、画面の形と
+ * 再生中・折り途中(playT≠1)・角度スライダーでの変形中は、画面の形と
  * 畳み平面の座標が食い違うので折れない。
+ *
+ * 途中の手順を選んでいる間も折れる(SEQ-006)。そこで折ると、その手順の前へ
+ * 折りが挟まり、後ろの手順はそのまま残って折り直される。
  */
 export function canFoldNow(s: {
   doc: Document | null;
@@ -158,8 +166,17 @@ export function canFoldNow(s: {
   playing: boolean;
   drivers: Map<number, number>;
 }): boolean {
-  if (!s.doc || s.playing || s.playT !== 1 || s.drivers.size > 0) return false;
-  return s.currentStep === null || s.currentStep === s.doc.sequence.length;
+  return !(!s.doc || s.playing || s.playT !== 1 || s.drivers.size > 0);
+}
+
+/** 折り操作を挟む位置(=この折りの直前までの手順数)。
+ * 「最新」を見ているなら末尾へ、途中の手順を見ているならその位置へ挟む */
+export function foldInsertAt(s: {
+  doc: Document | null;
+  currentStep: number | null;
+}): number {
+  const total = s.doc?.sequence.length ?? 0;
+  return s.currentStep === null ? total : Math.min(s.currentStep, total);
 }
 
 /**
@@ -917,6 +934,7 @@ export const useAppStore = create<AppState>((set, get) => {
           // 線を引いた時点の形を覚えておき、折るときに食い違いを見つける
           docEpoch: s.docEpoch,
           stepCount: s.doc.sequence.length,
+          upTo: foldInsertAt(s),
         },
         errorMessage: null,
       });
@@ -940,7 +958,8 @@ export const useAppStore = create<AppState>((set, get) => {
       if (
         !canFoldNow(s) ||
         draft.docEpoch !== s.docEpoch ||
-        draft.stepCount !== s.doc.sequence.length
+        draft.stepCount !== s.doc.sequence.length ||
+        draft.upTo !== foldInsertAt(s)
       ) {
         set({ foldDraft: null, errorMessage: STALE_DRAFT_MESSAGE });
         return;
@@ -956,11 +975,11 @@ export const useAppStore = create<AppState>((set, get) => {
         }
         targetLayers = [top];
       }
-      // 折った結果(最新の状態)を見せる。途中の手順を選んだままだと折る前の形が残る
-      set({ currentStep: null });
+      // 折った結果を見せる。末尾へ足したなら最新、途中へ挟んだなら挟んだ手順
+      set({ currentStep: draft.upTo === s.doc.sequence.length ? null : draft.upTo + 1 });
       await get().applySequenceOp({
         type: "FoldThrough",
-        up_to: s.doc.sequence.length,
+        up_to: draft.upTo,
         line: draft.line,
         keep_side_point: keep,
         target_layers: targetLayers,
@@ -1000,10 +1019,14 @@ export const useAppStore = create<AppState>((set, get) => {
       }
       // つかんだ紙は離した位置へ倒れてくる(=手前へ折る)。
       // 引きかけの折り線が残っていても、この操作で決着させる
-      set({ currentStep: null, foldDraft: null });
+      const upTo = foldInsertAt(s);
+      set({
+        currentStep: upTo === s.doc.sequence.length ? null : upTo + 1,
+        foldDraft: null,
+      });
       await get().applySequenceOp({
         type: "FoldThrough",
-        up_to: s.doc.sequence.length,
+        up_to: upTo,
         line: result.plan.line,
         keep_side_point: result.plan.keepSidePoint,
         target_layers: result.plan.targetLayers,
@@ -1026,6 +1049,7 @@ export const useAppStore = create<AppState>((set, get) => {
           widthMm: DEFAULT_PLEAT_WIDTH_MM,
           docEpoch: s.docEpoch,
           stepCount: s.doc.sequence.length,
+          upTo: foldInsertAt(s),
         },
         errorMessage: null,
       });
@@ -1068,7 +1092,8 @@ export const useAppStore = create<AppState>((set, get) => {
       if (
         !canFoldNow(s) ||
         draft.docEpoch !== s.docEpoch ||
-        draft.stepCount !== s.doc.sequence.length
+        draft.stepCount !== s.doc.sequence.length ||
+        draft.upTo !== foldInsertAt(s)
       ) {
         set({ techniqueDraft: null, errorMessage: STALE_DRAFT_MESSAGE });
         return;
@@ -1089,11 +1114,11 @@ export const useAppStore = create<AppState>((set, get) => {
         draft.kind === "Pleat"
           ? offsetPoint(draft.line, draft.movingSide, draft.widthMm / scale)
           : keepSidePoint(draft.line, draft.movingSide);
-      // 折った結果(最新の状態)を見せる
-      set({ currentStep: null });
+      // 折った結果を見せる。末尾へ足したなら最新、途中へ挟んだなら挟んだ手順
+      set({ currentStep: draft.upTo === s.doc.sequence.length ? null : draft.upTo + 1 });
       await get().applySequenceOp({
         type: "Technique",
-        up_to: s.doc.sequence.length,
+        up_to: draft.upTo,
         kind: draft.kind,
         flap: draft.flap,
         line: draft.line,

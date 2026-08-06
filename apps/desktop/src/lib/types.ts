@@ -133,11 +133,13 @@ export type SeqOp =
   | { type: "UpdateStep"; step: FoldStep }
   /**
    * 畳んだ状態の上に折り線を引いてまとめて折る。座標は畳み平面(3D表示のxy)。
-   * up_toはこの折りの直前までの手順数(v1は末尾=現在の手順数のみ)。
+   * up_toはこの折りの直前までの手順数(末尾でも途中でもよい)。
    * target_layersがnullなら可動側に掛かる全ての層を折る
    */
   | {
       type: "FoldThrough";
+      /** この折りの直前までの手順数。手順数と同じなら末尾へ足し、
+       * 途中の値ならその位置へ挟む(後続の手順はそのまま残る) */
       up_to: number;
       line: [Vec2, Vec2];
       keep_side_point: Vec2;

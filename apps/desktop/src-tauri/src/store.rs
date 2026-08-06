@@ -241,13 +241,7 @@ impl DocumentStore {
                 target_layers,
                 direction,
             } => {
-                // v1は末尾への追加のみ。途中へ挟むと後続手順の再生が壊れ得る
-                if up_to != doc.sequence.len() {
-                    return Err(
-                        "手順の途中には折り操作を挿入できません。最新の状態に戻してから折ってください"
-                            .to_string(),
-                    );
-                }
+                let mut insert_warnings = check_insert_point(&doc, up_to)?;
                 // facesは現docから導出済みのキャッシュ(docはまだ複製したまま無変更)
                 // 現在の状態を求め直すときの警告(飛ばした手順など)も利用者へ返す
                 let (state, state_warnings) = ori3_layers::flat_state_at(&doc, &self.faces, up_to)?;
@@ -266,8 +260,9 @@ impl DocumentStore {
                 let mut step = result.step;
                 step.id = next_step_id(&doc);
                 doc.cp = cp;
-                doc.sequence.push(step);
+                doc.sequence.insert(up_to, step);
                 warnings = state_warnings;
+                warnings.append(&mut insert_warnings);
                 warnings.extend(result.warnings);
             }
             SeqOp::Technique {
@@ -278,13 +273,8 @@ impl DocumentStore {
                 reference_point,
                 open_to_back,
             } => {
-                // FoldThroughと同じ規約: 末尾への追加のみ(途中へ挟むと後続手順が壊れ得る)
-                if up_to != doc.sequence.len() {
-                    return Err(
-                        "手順の途中には折り操作を挿入できません。最新の状態に戻してから折ってください"
-                            .to_string(),
-                    );
-                }
+                // FoldThroughと同じ規約(途中への挿入も可。後続手順は再生時に検査される)
+                let mut insert_warnings = check_insert_point(&doc, up_to)?;
                 let technique = match kind {
                     TechniqueKind::Pleat => ori3_layers::pleat,
                     TechniqueKind::InsideReverse => ori3_layers::inside_reverse,
@@ -317,8 +307,9 @@ impl DocumentStore {
                 let mut step = result.step;
                 step.id = next_step_id(&doc);
                 doc.cp = cp;
-                doc.sequence.push(step);
+                doc.sequence.insert(up_to, step);
                 warnings = state_warnings;
+                warnings.append(&mut insert_warnings);
                 warnings.extend(result.warnings);
             }
         }
@@ -525,6 +516,31 @@ fn check_paper(paper: &Paper) -> Result<(), String> {
     } else {
         Err("紙のサイズは正の値で指定してください".to_string())
     }
+}
+
+/// 折り操作([`SeqOp::FoldThrough`] / [`SeqOp::Technique`])の挿入位置を検査する。
+///
+/// `up_to` は「この折りの直前までの手順数」で、途中の値も許す(手順の途中へ折りを
+/// 挟める)。挟めるのは、手順の永続化が面IDや辺IDではなく幾何(折り線の線分・層順序の
+/// 代表点)で行われているため。挿入で既存の折り線が分割されても
+/// `resolve_driver_edges` が断片を全て拾い、層順序の代表点も現在の面へ解決し直される。
+/// それでも後続の手順が成り立たなくなることはあり得るが、その場合は再生側が
+/// 手順を飛ばして警告を出す(「止めずに警告」原則)。
+///
+/// 戻り値は利用者へ返す警告(末尾への追加なら空)。
+fn check_insert_point(doc: &Document, up_to: usize) -> Result<Vec<String>, String> {
+    let len = doc.sequence.len();
+    if up_to > len {
+        return Err(format!("挿入位置 {up_to} が手順の数を超えています"));
+    }
+    if up_to == len {
+        return Ok(Vec::new());
+    }
+    Ok(vec![format!(
+        "手順{}の前に折りを挟みました。後ろの手順{}個は折り直した形の上で再生し直しています(合わなくなった手順は飛ばして知らせます)",
+        up_to + 1,
+        len - up_to
+    )])
 }
 
 /// 新しい手順に振るID(既存の最大+1)。手順を消しても再利用しない。
@@ -1130,19 +1146,50 @@ mod tests {
         assert_eq!(view.faces.len(), 2);
     }
 
-    /// 末尾以外(手順の途中)への折り操作は断る。
+    /// 手順の途中(末尾以外)へも折り操作を挟める。挟んだ折りはその位置に入り、
+    /// 後続の手順は残ったまま再生し直される(SEQ-006)。
     #[test]
-    fn fold_through_rejects_insertion_in_the_middle() {
+    fn fold_through_inserts_in_the_middle_and_keeps_later_steps() {
         let mut store = square_store();
+        // 手順1: 縦半分に折る
         store
             .apply_seq(fold_op(0, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5]))
             .unwrap();
-        let before = store.doc.clone();
+        let first_id = store.doc.sequence[0].id;
 
-        let err = store
+        // 手順1の前(up_to=0)へ横半分の折りを挟む
+        let mut view = store
             .apply_seq(fold_op(0, [[0.0, 0.5], [1.0, 0.5]], [0.5, 0.25]))
+            .unwrap();
+        assert_eq!(view.doc.sequence.len(), 2, "手順が1つ増える");
+        assert_eq!(
+            view.doc.sequence[1].id, first_id,
+            "元の手順は後ろへ押し出される"
+        );
+        assert!(
+            view.warnings.iter().any(|w| w.contains("前に折りを挟みました")),
+            "途中挿入は警告で知らせる: {:?}",
+            view.warnings
+        );
+        // 後続の手順は消えない(再生できなければ飛ばして警告するだけ)
+        attach_replay(&mut view);
+        assert_eq!(view.doc.sequence.len(), 2);
+
+        // undoで挟む前へ戻る
+        let view = store.undo().unwrap();
+        assert_eq!(view.doc.sequence.len(), 1);
+        assert_eq!(view.doc.sequence[0].id, first_id);
+    }
+
+    /// 手順の数を超える挿入位置はErr(文書は無変更)。
+    #[test]
+    fn fold_through_rejects_out_of_range_insert_point() {
+        let mut store = square_store();
+        let before = store.doc.clone();
+        let err = store
+            .apply_seq(fold_op(3, [[0.0, 0.5], [1.0, 0.5]], [0.5, 0.25]))
             .unwrap_err();
-        assert!(err.contains("手順の途中には"), "err={err}");
+        assert!(err.contains("手順の数を超えています"), "err={err}");
         assert_eq!(store.doc, before, "Errのとき文書は変わらない");
     }
 
@@ -1355,7 +1402,7 @@ mod tests {
         assert!(!view.doc.sequence[0].drivers.is_empty());
     }
 
-    /// 未実装の技法・折れない指定・手順の途中への挿入はErr(文書は無変更)。
+    /// 未実装の技法・折れない指定・範囲外の挿入位置はErr(文書は無変更)。
     #[test]
     fn technique_rejects_unsupported_kind_and_bad_input() {
         let mut store = square_store();
@@ -1389,13 +1436,10 @@ mod tests {
         assert_eq!(store.doc, before);
         assert!(store.undo_stack.is_empty(), "Errはundo履歴に積まれない");
 
-        // 手順の途中への挿入
-        store
-            .apply_seq(fold_op(0, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5]))
-            .unwrap();
+        // 手順の数を超える挿入位置
         let err = store
             .apply_seq(SeqOp::Technique {
-                up_to: 0,
+                up_to: 2,
                 kind: TechniqueKind::Pleat,
                 flap: Vec::new(),
                 line: [[0.4, 0.0], [0.4, 1.0]],
@@ -1403,7 +1447,8 @@ mod tests {
                 open_to_back: None,
             })
             .unwrap_err();
-        assert!(err.contains("手順の途中には"), "err={err}");
+        assert!(err.contains("手順の数を超えています"), "err={err}");
+        assert_eq!(store.doc, before);
     }
 
     /// 受け入れ確認(Task 2-5): 座布団折り(4隅を中心へ)→観音折り(左右を中心線へ)を

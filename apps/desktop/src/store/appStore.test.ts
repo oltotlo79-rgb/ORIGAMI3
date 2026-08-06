@@ -34,6 +34,7 @@ vi.mock("../ipc/client", () => ({
 import * as ipc from "../ipc/client";
 import {
   canFoldNow,
+  foldInsertAt,
   isStepSkipped,
   poseRecordReason,
   resetPoseThrottle,
@@ -774,18 +775,22 @@ describe("3D画面での折り操作(折り線を引いて折る)", () => {
     [0.5, 1],
   ];
 
-  it("平らに畳んだ状態のときだけ折れる", () => {
+  it("平らに畳んだ状態なら、途中の手順を見ていても折れる", () => {
     seedFolded();
     expect(canFoldNow(useAppStore.getState())).toBe(true);
+    expect(foldInsertAt(useAppStore.getState())).toBe(1); // 最新=末尾へ足す
 
     useAppStore.setState({ playT: 0.5 });
     expect(canFoldNow(useAppStore.getState())).toBe(false);
 
+    // 折る前の形を見ている間も折れる。折ると手順1の前に挟まる(SEQ-006)
     useAppStore.setState({ playT: 1, currentStep: 0 });
-    expect(canFoldNow(useAppStore.getState())).toBe(false); // 折る前の途中表示
+    expect(canFoldNow(useAppStore.getState())).toBe(true);
+    expect(foldInsertAt(useAppStore.getState())).toBe(0);
 
     useAppStore.setState({ currentStep: 1 });
     expect(canFoldNow(useAppStore.getState())).toBe(true); // 最終手順=最新の形
+    expect(foldInsertAt(useAppStore.getState())).toBe(1);
 
     useAppStore.setState({ drivers: new Map([[5, 90]]) });
     expect(canFoldNow(useAppStore.getState())).toBe(false); // 角度スライダーで変形中
@@ -805,6 +810,7 @@ describe("3D画面での折り操作(折り線を引いて折る)", () => {
       // 線を引いた時点の形を覚えておく(折るときに食い違いを見つけるため)
       docEpoch: useAppStore.getState().docEpoch,
       stepCount: 1,
+      upTo: 1,
     });
     store.updateFoldDraft({ direction: "Down" });
     await useAppStore.getState().commitFoldDraft();
@@ -821,6 +827,36 @@ describe("3D画面での折り操作(折り線を引いて折る)", () => {
     // 折り終えたら折り線は捨て、最新の形を表示する
     expect(useAppStore.getState().foldDraft).toBeNull();
     expect(useAppStore.getState().currentStep).toBeNull();
+  });
+
+  it("途中の手順を見ているときは、その手順の前へ挟むFoldThroughを送る(SEQ-006)", async () => {
+    seedSequence(3, 1); // 手順3つのうち、手順1まで折った形を表示中
+    useAppStore.setState({ activeTool: "fold", frame3d: stackedFrame() });
+    vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(makeStepView(3020, 4));
+
+    useAppStore.getState().beginFoldDraft(LINE, "3d");
+    expect(useAppStore.getState().foldDraft?.upTo).toBe(1);
+    await useAppStore.getState().commitFoldDraft();
+
+    const op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
+    if (op.type !== "FoldThrough") throw new Error("FoldThroughでない");
+    expect(op.up_to).toBe(1); // 手順2の位置へ挟む(後ろの手順2・3は残る)
+    // 挟んだ手順(2番目)を表示したままにする。最新へ飛ばさない
+    expect(useAppStore.getState().currentStep).toBe(2);
+  });
+
+  it("線を引いた後に別の手順へ移ったら、その線は捨てる", async () => {
+    seedSequence(3, 1);
+    useAppStore.setState({ activeTool: "fold", frame3d: stackedFrame() });
+
+    useAppStore.getState().beginFoldDraft(LINE, "3d");
+    // 別の位置の形へ移ると、線は「別の形の上」で引いたものになる
+    useAppStore.setState({ currentStep: 2 });
+    await useAppStore.getState().commitFoldDraft();
+
+    expect(ipc.sequenceApply).not.toHaveBeenCalled();
+    expect(useAppStore.getState().foldDraft).toBeNull();
+    expect(useAppStore.getState().errorMessage).toContain("もう一度線を引いて");
   });
 
   it("「いちばん上の1枚」ではその層の面IDだけを対象にする", async () => {
@@ -966,6 +1002,7 @@ describe("技法(選ぶだけで折る)", () => {
       widthMm: 10,
       docEpoch: useAppStore.getState().docEpoch,
       stepCount: 1,
+      upTo: 1,
     });
     useAppStore.getState().setTechniqueFlap([0, 1]);
     useAppStore.getState().setTechniqueLine(LINE);
