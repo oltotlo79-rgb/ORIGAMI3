@@ -1133,6 +1133,86 @@ fn squash_reorders_layers_without_moving_paper() {
     assert_fold_senses(&doc, "つぶし折り(退化)");
 }
 
+/// 予備基本形(4層。畳んだ形は [0,0.5]x[0.5,1]、閉じた角が (0.5,0.5))。
+///
+/// 4層はどれも「中心から辺の中点への背」で隣の層とつながっているので、
+/// 袋(背でつながった2層)を開こうとすると**奥側の層は必ず本体につながっている**。
+fn preliminary_base_doc() -> Document {
+    let mut doc = four_layer_stack();
+    for (line, reference) in [
+        ([[0.5, 0.0], [0.5, 1.0]], [0.5, 0.1]),
+        ([[0.0, 0.5], [1.0, 0.5]], [0.1, 0.5]),
+    ] {
+        let faces = extract_faces(&doc.cp);
+        let (state, _) = flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
+        let bottom = vec![state.order[0]];
+        apply(&mut doc, squash, bottom, line, reference).expect("重なりを組み替える");
+    }
+    doc
+}
+
+/// 奥側の層が本体につながっている袋(予備基本形の袋)も、警告なしでつぶせる。
+///
+/// 背は中心 (0.5,0.5) から辺の中点 (0.5,1.0) へ伸びていて、袋の2層はどちらも
+/// 隣の袋と別の背でつながっている(=向こう端が固定されている)。層まるごと回すと
+/// 必ずそこで裂けるので、両側とも二等分線で折り返し、折り返した紙を袋の中へ入れる。
+/// つぶす向きは45°(紙の隅へ)に限らず、袋の広がりの中ならどの角度でも折れる。
+#[test]
+fn squash_opens_a_pocket_whose_far_layer_is_attached_to_the_body() {
+    for deg in [10.0_f64, 45.0, 80.0] {
+        let mut doc = preliminary_base_doc();
+        let faces = extract_faces(&doc.cp);
+        let (state, _) = flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
+        assert_eq!(state.order.len(), 4, "予備基本形は4層");
+        // 背 (0.5,0.5)-(0.5,1.0) でつながる袋(下から2枚目と3枚目)
+        let pocket = vec![state.order[1], state.order[2]];
+        let apex = DVec2::new(0.5, 0.5);
+        // つぶす向き: 背(真上)から袋の広がり(左まわり90°)の中へ deg だけ倒す
+        let dir = rotate2(DVec2::Y, deg.to_radians());
+        let target = apex + dir * 1.5;
+        let a = apply(
+            &mut doc,
+            squash,
+            pocket.clone(),
+            [[0.5, 0.5], [0.5, 1.0]],
+            [target.x, target.y],
+        )
+        .expect("袋をつぶせる");
+
+        assert!(a.warnings.is_empty(), "{deg}°: 紙は裂けない: {:?}", a.warnings);
+        assert_eq!(a.faces.len(), 6, "{deg}°: 袋の2層がそれぞれ2つに分かれて6面");
+        let step = doc.sequence.last().expect("手順が積まれる");
+        assert_eq!(step.kind, TechniqueKind::Squash);
+        assert!(
+            step.note.contains("奥の紙が外の紙とつながっている"),
+            "{deg}°: 奥側が固定されている動きだと注記される(実際 {:?})",
+            step.note
+        );
+        // 折り返した紙は袋の中(もとの2層の間)に入る
+        let at: Vec<usize> = pocket.iter().map(|id| layer_of(&a, *id)).collect();
+        let added: Vec<usize> = a
+            .faces
+            .iter()
+            .map(|f| f.id)
+            .filter(|id| !pocket.contains(id))
+            .map(|id| layer_of(&a, id))
+            .collect();
+        assert_eq!(added.len(), 4, "{deg}°: 折り返した紙2枚と動かない2層");
+        assert!(
+            added.iter().filter(|k| **k > at[0].min(at[1]) && **k < at[0].max(at[1])).count() == 2,
+            "{deg}°: 折り返した2枚が袋の中に入る(層 {at:?} / {added:?})"
+        );
+
+        // 展開図と手順だけから同じ形に折り直せる
+        let new_faces = extract_faces(&doc.cp);
+        let (replayed, warnings) =
+            flat_state_at(&doc, &new_faces, doc.sequence.len()).expect("平らに畳める");
+        assert!(warnings.is_empty(), "{deg}°: {warnings:?}");
+        assert_eq!(replayed.order, a.order, "{deg}°: 層順序が再生と一致する");
+        assert_fold_senses(&doc, "本体につながった袋のつぶし折り");
+    }
+}
+
 /// 展開図の折り目の線種(辺ID→線種)。
 fn kinds(cp: &CreasePattern) -> HashMap<u32, EdgeKind> {
     cp.edges.iter().map(|e| (e.id, e.kind)).collect()
