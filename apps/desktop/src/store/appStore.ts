@@ -25,11 +25,13 @@ import {
   loadPrefs,
   savePrefs,
 } from "../lib/displayPrefs";
+import { mirrorAxisX, mirrorSegments } from "../lib/mirror";
 import type {
   Document,
   DisplaySettings,
   DocumentView,
   Driver,
+  EdgeKind,
   EditOp,
   ExportKind,
   Face,
@@ -288,11 +290,19 @@ interface AppState {
   display: DisplaySettings;
   /** 中央の2D区画の幅の割合(残りが3D区画。UI-004) */
   splitRatio: number;
+  /** 左右対称に線を引くか(CPE-010)。紙の縦の中心線が対称軸。
+   * 効くのは線を引くときだけで、消す・種類を変えるときは片側ずつになる */
+  mirrorDraw: boolean;
 
   newDocument: (paper: Paper) => Promise<void>;
   openDocument: (path: string) => Promise<void>;
   saveDocument: (path: string | null) => Promise<void>;
   applyEdit: (op: EditOp) => Promise<void>;
+  /** 展開図に線を1本引く(CPE-010)。左右対称のときは中心線で折り返した線も
+   * 続けて引く(引いた順に直列化キューへ積むので適用順は変わらない) */
+  drawSegment: (a: Vec2, b: Vec2, kind: EdgeKind) => Promise<void>;
+  /** 左右対称に線を引くかを切り替える(次回起動時も同じ設定に戻る) */
+  setMirrorDraw: (on: boolean) => void;
   undo: () => Promise<void>;
   redo: () => Promise<void>;
   /** 手順の追加・変更・削除(sequence_apply)。再生中なら止めてから送る */
@@ -760,6 +770,7 @@ export const useAppStore = create<AppState>((set, get) => {
     newPaperDraft: DEFAULT_NEW_PAPER,
     display: prefs.display,
     splitRatio: prefs.splitRatio,
+    mirrorDraw: prefs.mirrorDraw,
 
     newDocument: (paper) => runViewCommand(() => ipc.documentNew(paper), true),
 
@@ -781,6 +792,30 @@ export const useAppStore = create<AppState>((set, get) => {
     applyEdit: (op) => {
       stopPlayback();
       return runViewCommand(() => ipc.editApply(op), false);
+    },
+
+    drawSegment: async (a, b, kind) => {
+      const s = get();
+      if (!s.doc) return;
+      // 左右対称のときは中心線の反対側にも同じ線を引く。中心線に重なる線や
+      // もともと左右対称な線は、同じ線が二重にならないよう1本だけにする
+      const segments = s.mirrorDraw
+        ? mirrorSegments([a, b], mirrorAxisX(s.doc.paper))
+        : [[a, b] as [Vec2, Vec2]];
+      for (const [p, q] of segments) {
+        await get().applyEdit({ type: "AddSegment", a: p, b: q, kind });
+        // 1本目で断られたら理由を残したまま止める(片側だけ引かれた形にしない)
+        if (get().errorMessage !== null) return;
+      }
+    },
+
+    setMirrorDraw: (on) => {
+      set({ mirrorDraw: on });
+      savePrefs({
+        display: get().display,
+        splitRatio: get().splitRatio,
+        mirrorDraw: on,
+      });
     },
 
     undo: () => {
@@ -1295,13 +1330,21 @@ export const useAppStore = create<AppState>((set, get) => {
       const doc = get().doc;
       // 表示中の作品にもすぐ反映する(結果をその場で見せる。設計原則3b)
       set(doc ? { display, doc: { ...doc, display } } : { display });
-      savePrefs({ display, splitRatio: get().splitRatio });
+      savePrefs({
+        display,
+        splitRatio: get().splitRatio,
+        mirrorDraw: get().mirrorDraw,
+      });
     },
 
     setSplitRatio: (ratio) => {
       const splitRatio = clampSplitRatio(ratio);
       set({ splitRatio });
-      savePrefs({ display: get().display, splitRatio });
+      savePrefs({
+        display: get().display,
+        splitRatio,
+        mirrorDraw: get().mirrorDraw,
+      });
     },
 
     moveStep: async (number, delta) => {

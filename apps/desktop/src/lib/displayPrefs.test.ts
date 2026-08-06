@@ -52,6 +52,7 @@ describe("見た目の好み", () => {
       {
         display: { ...DEFAULT_DISPLAY, front_color: [0, 128, 255], grid_divisions: 16 },
         splitRatio: 0.3,
+        mirrorDraw: true,
       },
       storage,
     );
@@ -59,6 +60,8 @@ describe("見た目の好み", () => {
     expect(loaded.display.front_color).toEqual([0, 128, 255]);
     expect(loaded.display.grid_divisions).toBe(16);
     expect(loaded.splitRatio).toBeCloseTo(0.3);
+    // 左右対称に描く指定も端末に覚えておく(CPE-010)
+    expect(loaded.mirrorDraw).toBe(true);
   });
 
   it("何も保存されていない・壊れている場合は既定値に戻す", () => {

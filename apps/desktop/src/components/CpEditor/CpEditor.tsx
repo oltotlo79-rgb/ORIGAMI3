@@ -6,6 +6,7 @@ import type { Vec2 } from "../../lib/types";
 import { useAppStore } from "../../store/appStore";
 import { constructHint } from "../../lib/construct";
 import { violationReason } from "../../lib/flatFoldHint";
+import { mirrorAxisX, mirrorPoint } from "../../lib/mirror";
 import type { Document } from "../../lib/types";
 import {
   constructDone,
@@ -44,10 +45,12 @@ export function CpEditor({ fitRef }: Props) {
   const docEpoch = useAppStore((s) => s.docEpoch);
   const violations = useAppStore((s) => s.violations);
   const construct = useAppStore((s) => s.construct);
+  const mirrorDraw = useAppStore((s) => s.mirrorDraw);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
-    const { doc, selection, activeTool, violations, construct } = useAppStore.getState();
+    const { doc, selection, activeTool, violations, construct, mirrorDraw } =
+      useAppStore.getState();
     if (!canvas || !doc) return;
     const w = canvas.clientWidth;
     const h = canvas.clientHeight;
@@ -60,11 +63,23 @@ export function CpEditor({ fitRef }: Props) {
     viewRef.current ??= fitView(doc, w, h);
     const st = stateRef.current;
     const kind = previewKind(activeTool);
+    // 左右対称のときは対称軸を薄く出し、引いている最中の線も反対側に見せる
+    const axisX = mirrorDraw ? mirrorAxisX(doc.paper) : null;
+    const preview =
+      kind && st.pendingStart && st.cursorWorld
+        ? { a: st.pendingStart, b: st.hoverSnap?.pos ?? st.cursorWorld, kind }
+        : null;
     const overlay: RenderOverlay = {
       hoverSnap: kind ? st.hoverSnap : null,
-      preview:
-        kind && st.pendingStart && st.cursorWorld
-          ? { a: st.pendingStart, b: st.hoverSnap?.pos ?? st.cursorWorld, kind }
+      preview,
+      mirrorAxis: axisX,
+      mirrorPreview:
+        axisX !== null && preview
+          ? {
+              a: mirrorPoint(preview.a, axisX),
+              b: mirrorPoint(preview.b, axisX),
+              kind: preview.kind,
+            }
           : null,
       marquee:
         st.marqueeStart && st.marqueeEnd ? { a: st.marqueeStart, b: st.marqueeEnd } : null,
@@ -75,7 +90,10 @@ export function CpEditor({ fitRef }: Props) {
         ? "点を動かしています(離すと決まります。Escでやめる)"
         : activeTool === "construct"
           ? constructHint(construct.kind, constructDone(st), construct.divisions)
-          : null,
+          : // 今どの描き方かが画面の上で分かるようにする(設計原則3b)
+            mirrorDraw
+            ? "左右対称に描いています(線を引くときだけ効きます)"
+            : null,
       tooltip: violationTooltip(doc, st.hoverViolation),
       vertexDrag: st.vertexDrag
         ? { id: st.vertexDrag.id, to: st.vertexDrag.to }
@@ -103,6 +121,7 @@ export function CpEditor({ fitRef }: Props) {
         viewRef.current = v;
       },
       applyEdit: s.applyEdit,
+      drawSegment: (a, b, kind) => void s.drawSegment(a, b, kind),
       setSelection: s.setSelection,
       beginFoldDraft: s.beginFoldDraft,
     };
@@ -111,7 +130,7 @@ export function CpEditor({ fitRef }: Props) {
   // ストアの変化(線の追加・選択・ツール切替・畳めない点・作図の選び方)で再描画
   useEffect(() => {
     draw();
-  }, [doc, selection, activeTool, violations, construct, draw]);
+  }, [doc, selection, activeTool, violations, construct, mirrorDraw, draw]);
 
   // 新規作成・ファイルを開いた直後は紙全体が見える表示に戻す
   useEffect(() => {

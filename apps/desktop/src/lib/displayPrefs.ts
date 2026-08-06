@@ -26,11 +26,14 @@ const STORAGE_KEY = "origami3.prefs";
 export interface Prefs {
   display: DisplaySettings;
   splitRatio: number;
+  /** 左右対称に線を引くか(CPE-010)。次に起動しても同じ描き方に戻る */
+  mirrorDraw: boolean;
 }
 
 export const DEFAULT_PREFS: Prefs = {
   display: DEFAULT_DISPLAY,
   splitRatio: DEFAULT_SPLIT_RATIO,
+  mirrorDraw: false,
 };
 
 /** 方眼の分割数を範囲内の整数に丸める(入力が数でなければ既定値) */
@@ -90,6 +93,7 @@ export function loadPrefs(storage: StorageLike | null = defaultStorage()): Prefs
         ),
       },
       splitRatio: clampSplitRatio(saved.splitRatio ?? DEFAULT_SPLIT_RATIO),
+      mirrorDraw: saved.mirrorDraw === true,
     };
   } catch {
     return DEFAULT_PREFS;

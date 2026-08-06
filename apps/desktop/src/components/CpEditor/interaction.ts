@@ -106,6 +106,8 @@ export interface InteractionCtx {
   state: EphemeralState; // その場で書き換える
   setView: (view: ViewTransform) => void;
   applyEdit: (op: EditOp) => void;
+  /** 線を1本引く(左右対称のときは反対側にも引かれる。CPE-010) */
+  drawSegment: (a: Vec2, b: Vec2, kind: EdgeKind) => void;
   setSelection: (selection: Selection) => void;
   /** 折るツールで引いた線を確定前の状態としてストアへ渡す */
   beginFoldDraft: (line: [Vec2, Vec2], source: "2d" | "3d") => void;
@@ -221,7 +223,7 @@ export function onMouseDown(ctx: InteractionCtx, screen: Vec2, button: number): 
     } else {
       if (dist(start, pos) > 1e-9) {
         if (kind) {
-          ctx.applyEdit({ type: "AddSegment", a: start, b: pos, kind });
+          ctx.drawSegment(start, pos, kind);
         } else {
           ctx.beginFoldDraft([start, pos], "2d");
         }

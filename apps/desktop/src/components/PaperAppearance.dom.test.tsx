@@ -9,7 +9,7 @@ import { DEFAULT_DISPLAY } from "../lib/displayPrefs";
 
 afterEach(() => {
   cleanup();
-  useAppStore.setState({ display: DEFAULT_DISPLAY, doc: null });
+  useAppStore.setState({ display: DEFAULT_DISPLAY, doc: null, mirrorDraw: false });
 });
 
 describe("紙の色と方眼", () => {
@@ -41,5 +41,24 @@ describe("紙の色と方眼", () => {
     expect(useAppStore.getState().display.grid_divisions).toBe(16);
     fireEvent.change(input, { target: { value: "1" } });
     expect(useAppStore.getState().display.grid_divisions).toBe(2);
+  });
+});
+
+describe("左右対称に描く(CPE-010)", () => {
+  it("切替が出ていて、はじめは切ってある", () => {
+    render(<PaperAppearance />);
+    const box = screen.getByLabelText("左右対称に描く");
+    expect(box).toHaveProperty("checked", false);
+    // v1では線を引くときだけ効くことを言葉で伝える
+    expect(screen.getByText(/線を引くときだけ効きます/)).not.toBeNull();
+    expect(screen.getByText(/線を消す・種類を変えるときは片側ずつ/)).not.toBeNull();
+  });
+
+  it("入れると今その状態だと分かる案内が出る", () => {
+    render(<PaperAppearance />);
+    fireEvent.click(screen.getByLabelText("左右対称に描く"));
+    expect(useAppStore.getState().mirrorDraw).toBe(true);
+    expect(screen.getByText(/左右対称に描いています/)).not.toBeNull();
+    expect(screen.getByText(/紙の縦の中心線/)).not.toBeNull();
   });
 });

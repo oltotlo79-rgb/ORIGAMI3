@@ -58,6 +58,7 @@ beforeEach(() => {
     splitRatio: 0.5,
     errorMessage: null,
     currentStep: null,
+    mirrorDraw: false,
   });
 });
 
@@ -110,6 +111,44 @@ describe("紙の色と方眼・分割比", () => {
     expect(useAppStore.getState().splitRatio).toBeCloseTo(0.2);
     useAppStore.getState().setSplitRatio(0.35);
     expect(useAppStore.getState().splitRatio).toBeCloseTo(0.35);
+  });
+});
+
+describe("左右対称に線を引く", () => {
+  /** 線を1本引く準備(正方形の紙・編集は毎回成功する) */
+  function ready(mirrorDraw: boolean) {
+    const doc = makeDoc([]);
+    useAppStore.setState({ doc, mirrorDraw });
+    vi.mocked(ipc.editApply).mockResolvedValue(makeView(doc));
+  }
+
+  const calls = () => vi.mocked(ipc.editApply).mock.calls.map((c) => c[0]);
+
+  it("入れておくと、中心線の反対側にも同じ線が引かれる", async () => {
+    ready(true);
+    await useAppStore.getState().drawSegment([0.25, 0], [0.375, 1], "Mountain");
+    expect(calls()).toEqual([
+      { type: "AddSegment", a: [0.25, 0], b: [0.375, 1], kind: "Mountain" },
+      { type: "AddSegment", a: [0.75, 0], b: [0.625, 1], kind: "Mountain" },
+    ]);
+  });
+
+  it("中心線に重なる線・もともと左右対称な線は1本だけになる", async () => {
+    ready(true);
+    await useAppStore.getState().drawSegment([0.5, 0], [0.5, 1], "Valley");
+    await useAppStore.getState().drawSegment([0.25, 0.5], [0.75, 0.5], "Valley");
+    expect(calls()).toEqual([
+      { type: "AddSegment", a: [0.5, 0], b: [0.5, 1], kind: "Valley" },
+      { type: "AddSegment", a: [0.25, 0.5], b: [0.75, 0.5], kind: "Valley" },
+    ]);
+  });
+
+  it("切ってあるときは引いた線だけを引く", async () => {
+    ready(false);
+    await useAppStore.getState().drawSegment([0.25, 0], [0.375, 1], "Aux");
+    expect(calls()).toEqual([
+      { type: "AddSegment", a: [0.25, 0], b: [0.375, 1], kind: "Aux" },
+    ]);
   });
 });
 

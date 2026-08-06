@@ -12,7 +12,7 @@ import {
   type InteractionCtx,
 } from "./interaction";
 import { DEFAULT_CONSTRUCT, type ConstructOptions } from "../../lib/construct";
-import type { Document, EditOp, Vec2 } from "../../lib/types";
+import type { Document, EdgeKind, EditOp, Vec2 } from "../../lib/types";
 
 /** 1辺1.0の正方形(輪郭だけ)の作品 */
 function squareDoc(): Document {
@@ -46,6 +46,7 @@ const toScreen = (p: Vec2): Vec2 => [p[0] * 500, 500 - p[1] * 500];
 
 function makeCtx(construct: Partial<ConstructOptions> = {}, violations: number[] = []) {
   const applyEdit = vi.fn<(op: EditOp) => void>();
+  const drawSegment = vi.fn<(a: Vec2, b: Vec2, kind: EdgeKind) => void>();
   const ctx: InteractionCtx = {
     doc: squareDoc(),
     view: { scale: 500, offsetX: 0, offsetY: 500 },
@@ -56,10 +57,11 @@ function makeCtx(construct: Partial<ConstructOptions> = {}, violations: number[]
     state: initialEphemeralState(),
     setView: vi.fn(),
     applyEdit,
+    drawSegment,
     setSelection: vi.fn(),
     beginFoldDraft: vi.fn(),
   };
-  return { ctx, applyEdit };
+  return { ctx, applyEdit, drawSegment };
 }
 
 describe("作図補助の操作", () => {
@@ -165,5 +167,18 @@ describe("点のドラッグ移動(選択ツール)", () => {
     expect(ctx.state.vertexDrag).toBeNull();
     onMouseMove(ctx, toScreen([0.8, 0.8]));
     expect(ctx.state.marqueeEnd).not.toBeNull();
+  });
+});
+
+describe("線ツール", () => {
+  it("2回クリックで線を引く(左右対称にするかはストアが決める)", () => {
+    const { ctx, drawSegment, applyEdit } = makeCtx();
+    ctx.tool = "mountain";
+    onMouseDown(ctx, toScreen([0.2, 0.2]), 0);
+    onMouseDown(ctx, toScreen([0.8, 0.6]), 0);
+    expect(drawSegment).toHaveBeenCalledTimes(1);
+    expect(drawSegment.mock.calls[0][2]).toBe("Mountain");
+    // 線の追加はdrawSegment経由に一本化する(直接の編集要求は出さない)
+    expect(applyEdit).not.toHaveBeenCalled();
   });
 });

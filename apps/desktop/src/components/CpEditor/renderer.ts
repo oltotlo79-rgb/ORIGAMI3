@@ -24,6 +24,8 @@ export const COLORS = {
   violation: "#ff8c00",
   hintBackground: "rgba(20, 20, 24, 0.78)",
   hintText: "#ffffff",
+  /** 左右対称に描くときの対称軸(CPE-010)。薄く出して邪魔をしない */
+  mirrorAxis: "rgba(59, 111, 201, 0.45)",
   marqueeFill: "rgba(59, 111, 201, 0.12)",
   marqueeStroke: "#3b6fc9",
 } as const;
@@ -77,6 +79,10 @@ export interface RenderOverlay {
   hoverSnap: SnapResult | null;
   /** 描画中のプレビュー線(始点確定後) */
   preview: { a: Vec2; b: Vec2; kind: EdgeKind } | null;
+  /** 左右対称に描いているときの対称軸のx座標(正規化座標)。使わないならnull */
+  mirrorAxis: number | null;
+  /** 対称軸の反対側に出るプレビュー線(左右対称のときだけ) */
+  mirrorPreview: { a: Vec2; b: Vec2; kind: EdgeKind } | null;
   /** 矩形選択ドラッグ中の範囲(正規化座標) */
   marquee: { a: Vec2; b: Vec2 } | null;
   /** 平らに畳めない点のID(Rust側の判定結果。橙色の丸で知らせる) */
@@ -240,16 +246,32 @@ function drawSelectedVertices(
   }
 }
 
+/** 左右対称に描いているときの対称軸(紙の縦の中心線)を薄い破線で示す */
+function drawMirrorAxis(
+  ctx: CanvasRenderingContext2D,
+  doc: Document,
+  view: ViewTransform,
+  axisX: number,
+): void {
+  const [, h] = paperExtent(doc);
+  ctx.strokeStyle = COLORS.mirrorAxis;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([...DASH_AUX]);
+  strokeSegment(ctx, view, [axisX, 0], [axisX, h]);
+  ctx.setLineDash([]);
+}
+
 function drawOverlay(
   ctx: CanvasRenderingContext2D,
   view: ViewTransform,
   overlay: RenderOverlay,
 ): void {
-  if (overlay.preview) {
-    ctx.strokeStyle = EDGE_COLORS[overlay.preview.kind];
+  for (const line of [overlay.preview, overlay.mirrorPreview]) {
+    if (!line) continue;
+    ctx.strokeStyle = EDGE_COLORS[line.kind];
     ctx.lineWidth = LINE_WIDTHS.preview;
     ctx.setLineDash([...DASH_PREVIEW]);
-    strokeSegment(ctx, view, overlay.preview.a, overlay.preview.b);
+    strokeSegment(ctx, view, line.a, line.b);
     ctx.setLineDash([]);
   }
   if (overlay.marquee) {
@@ -320,6 +342,7 @@ export function render(
   ctx.restore();
 
   drawGrid(ctx, doc, view);
+  if (overlay.mirrorAxis !== null) drawMirrorAxis(ctx, doc, view, overlay.mirrorAxis);
   drawEdges(ctx, doc, view, selection);
   drawSelectedVertices(ctx, doc, view, selection);
   drawViolations(ctx, doc, view, overlay.violations);
