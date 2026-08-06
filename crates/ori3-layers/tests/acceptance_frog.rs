@@ -1,30 +1,43 @@
-//! Task 4-6: M4受け入れテスト — 伝承のカエル(カエルの基本形の下ごしらえまで)。
+//! Task 4-6: M4受け入れテスト — 伝承のカエル(カエルの基本形まで)。
 //!
 //! **アプリが提供する折り操作の列だけ**でカエルを折り進め、回帰テストとして固定する。
 //! 手作業の展開図編集は一切せず、次の操作だけを使う:
 //!
 //! - 重ね折り `fold_through`(半分に折る)
 //! - 開いてつぶす折り `squash`(予備基本形への組み替えと、4つの袋を開く工程)
+//! - 花弁折り `petal`(4つの袋を同時に→カエルの基本形)
 //!
 //! # 折り順
 //!
 //! 1. 正方形を半分に2回折り、開いてつぶす折り2回で**予備基本形**(`acceptance_crane.rs`
 //!    と同じ手順)
 //! 2. 予備基本形の**4つの袋を開いてつぶす**。袋の背(紙の中心から辺の中点へ向かう
-//!    折り目)が紙の隅の向きへ倒れ、畳んだ形は90°の正方形から45°のたこ形になる。
-//!    これがカエルの基本形の下ごしらえ(紙の1/4がそれぞれ3面に分かれて12面・
-//!    どの向きにも8層)
+//!    折り目)が紙の隅の向きへ倒れ、畳んだ形は90°の正方形から45°のたこ形になる
+//!    (紙の1/4がそれぞれ3面に分かれて12面・どの向きにも8層)
+//! 3. **花弁折り1回**でカエルの基本形。紙の4隅が紙の中心と同じ1点(先端)へ集まり、
+//!    4辺の中点は先端から (√2-1)/2、根元は先端から √2/4 になる。8本の先が
+//!    1つの先端へ集まった、無駄のない(3つの制約が全て等号で成り立つ)基本形
+//!
+//! # 花弁折りが1回である理由
+//!
+//! 手順書では「花弁折り4回」だが、**畳んだ形の上では1回の動きと同じ**になる。
+//! 4つの袋は紙の中心から辺の中点へ向かう折り目でつながっていて、その折り目は
+//! たこ形の中心線にそのまま乗っている。花弁折りのちょうつがい(先端から√2/4)は
+//! この折り目(先端から√2/2−…、中心から0.5)の途中を横切るので、袋を1つだけ
+//! 選ぶと必ずそこで紙が裂ける。4つの袋は畳み平面でぴったり重なっているので、
+//! 全層を選んだ1回の花弁折りが4回分の動きをそのまま表す。
 //!
 //! # ここで止めた理由(実装の不足)
 //!
-//! 続く工程(**花弁折り4回 → カエルの基本形**)はこのテストに入っていない。
-//! 下ごしらえの状態で「紙の隅」を先端にした花弁折りを試すと、先端から見た縁の長さが
-//! 0.2929、紙の中心までの距離が 0.7071 なので、ちょうつがい(先端から0.2929)が
-//! 中心の手前に来る。持ち上げた先端は中心を越えられず、形の内側(中心から0.1213)へ
-//! 埋もれてしまい、突き出た足になる先端ができない。逆に「紙の中心」を先端にすると
-//! 先端は外へ出るが、中心では4つの袋が折り目でつながっているので4〜6本の折り目で
-//! 紙が裂ける(袋の中の紙も一緒に動かす指定ができない)。
-//! どちらも近似では済ませられないので、ここで止めて報告する。
+//! 続く工程(足の中割り折り→完成形)はこのテストに入っていない。
+//! カエルの基本形の4本の足(紙の隅から出る先)は、層順序の上で
+//! (1,19,26)(7,15,22)(4,16,25)(10,12,21) のように**飛び飛びの層**になる。
+//! 実際の紙では足1本は連続した重なりなので、このままでは足1本をつまんで
+//! 中割り折りできない。原因は、花弁折りが持ち上げた紙を
+//! [`ori3_layers::flat_motion`] の `LayerTurn::Outside` で
+//! 「重なりのいちばん上へまとめて」回していることで、袋ごとに
+//! 「もとの層の隣」へ置き直す指定(中割り折りが使っている置き直し)が
+//! 花弁折りには無い。近似では済ませられないので、ここで止めて報告する。
 
 use std::collections::HashMap;
 
@@ -32,7 +45,7 @@ use glam::DVec2;
 use ori3_cp::{Face, extract_faces};
 use ori3_layers::fold_through::{FoldDirection, FoldThroughInput, fold_through};
 use ori3_layers::techniques::TechniqueInput;
-use ori3_layers::{FlatState, FoldThroughResult, flat_state_at, replay, squash};
+use ori3_layers::{FlatState, FoldThroughResult, flat_state_at, petal, replay, squash};
 use ori3_model::{CreasePattern, Document, EdgeKind, FaceId, Paper};
 
 /// 畳んだたこ形の半分の開き角(22.5°)の正接から決まる、袋を開いた後の外形の値。
@@ -471,10 +484,102 @@ fn each_quarter_keeps_its_squashed_triangles_next_to_it() {
     }
 }
 
+/// カエルの基本形。下ごしらえのたこ形を**1回の花弁折り**で折る。
+///
+/// 4つの袋は紙の中心から辺の中点へ向かう折り目でつながっていて、その折り目は
+/// たこ形の中心線にそのまま乗っている。花弁折りのちょうつがい(0.3536)は
+/// この折り目(中心から0.5)の途中を横切るので、袋を1つだけ選ぶと必ずそこで
+/// 紙が裂ける。4つの袋は畳み平面でぴったり重なっているので、全層を選んだ
+/// 1回の花弁折りがそのまま「4つの袋を同時に花弁折りする」ことになる。
+fn frog_base() -> (Document, FlatState) {
+    let (mut doc, _) = squashed_base();
+    let apex = only(&doc, [0.5, 0.5], "紙の中心");
+    let corner = only(&doc, [0.0, 0.0], "紙の隅");
+    let (_, state) = state_of(&doc);
+    let all = state.order.clone();
+    let line = [[apex.x, apex.y], [corner.x, corner.y]];
+    let last = apply(&mut doc, petal, all, line, [corner.x, corner.y], None);
+    (doc, last)
+}
+
+/// カエルの基本形の畳み平面を測る道具。
+/// 戻り値は(先端の位置, 先端から根元へ向かう向き)。
+fn frog_axis(doc: &Document) -> (DVec2, DVec2) {
+    let apex = only(doc, [0.5, 0.5], "紙の中心");
+    let mid = only(doc, [0.5, 1.0], "辺の中点");
+    (apex, (mid - apex).normalize())
+}
+
+/// 花弁折り1回でカエルの基本形になる。8本の先が1つの先端へ集まる。
+#[test]
+fn petal_folding_the_kite_makes_the_frog_base() {
+    let (doc, _) = frog_base();
+    let (faces, _) = state_of(&doc);
+    assert_eq!(doc.sequence.len(), 9, "折り操作は9手(下ごしらえ8手+花弁折り1手)");
+    assert_eq!(faces.len(), 40, "40面");
+
+    // 紙の4隅は紙の中心と同じ1点(先端)に集まる = 隅から出る4本の足が最大長
+    let (apex, axis) = frog_axis(&doc);
+    for corner in [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]] {
+        let p = only(&doc, corner, "紙の隅");
+        assert!((p - apex).length() < 1e-9, "紙の隅は紙の中心と同じ先端へ来る(実際 {p:?})");
+    }
+    // 4つの辺の中点は先端から 0.2071、つぶし折りの角(隅から0.2929の点)は 0.2929
+    for (cp, want) in [
+        ([0.5, 1.0], 0.5 * std::f64::consts::SQRT_2 - 0.5),
+        ([0.0, 0.5], 0.5 * std::f64::consts::SQRT_2 - 0.5),
+        ([0.5, 0.0], 0.5 * std::f64::consts::SQRT_2 - 0.5),
+        ([1.0, 0.5], 0.5 * std::f64::consts::SQRT_2 - 0.5),
+        ([std::f64::consts::FRAC_1_SQRT_2, 1.0], 1.0 - std::f64::consts::FRAC_1_SQRT_2),
+        ([0.0, 1.0 - std::f64::consts::FRAC_1_SQRT_2], 1.0 - std::f64::consts::FRAC_1_SQRT_2),
+    ] {
+        let v = only(&doc, cp, "境界の点") - apex;
+        assert!((v.length() - want).abs() < 1e-9, "{cp:?} は先端から {want}(実際 {})", v.length());
+        assert!(axis.angle_to(v).abs() < 1e-9, "中心線の上に乗る");
+    }
+}
+
+/// カエルの基本形の外形: 先端から根元まで √2/4、根元の半幅はその tan(22.5°) 倍。
+#[test]
+fn the_frog_base_is_a_45_degree_kite_of_half_diagonal() {
+    let (doc, _) = frog_base();
+    let (faces, state) = state_of(&doc);
+    let (apex, axis) = frog_axis(&doc);
+    let perp = DVec2::new(-axis.y, axis.x);
+    let root = 0.25 * std::f64::consts::SQRT_2;
+    let (mut far, mut wide) = (0.0_f64, 0.0_f64);
+    for f in &faces {
+        for p in plane_poly(&doc.cp, f, &state) {
+            far = far.max((p - apex).dot(axis));
+            wide = wide.max((p - apex).dot(perp).abs());
+        }
+        assert!(
+            plane_poly(&doc.cp, f, &state).iter().all(|p| (*p - apex).dot(axis) >= -1e-9),
+            "先端より外へ出る紙は無い"
+        );
+    }
+    assert!((far - root).abs() < 1e-9, "先端から根元まで √2/4(実際 {far})");
+    assert!((wide - root * HALF.tan()).abs() < 1e-9, "根元の半幅(実際 {wide})");
+
+    // 中心線の左右どちらでも紙は16枚重なる(下ごしらえの8層+折り返した紙8層)
+    for deg in [11.25_f64, -11.25] {
+        let (s, c) = deg.to_radians().sin_cos();
+        let dir = DVec2::new(axis.x * c - axis.y * s, axis.x * s + axis.y * c);
+        let probe = apex + dir * (root * 0.5);
+        let layers = faces
+            .iter()
+            .filter(|f| inside_polygon(&plane_poly(&doc.cp, f, &state), probe))
+            .count();
+        assert_eq!(layers, 16, "中心線から{deg}°の向きでは16層(実際 {layers})");
+    }
+    assert_fold_senses(&doc, "カエルの基本形");
+    assert_flat(&doc, "カエルの基本形");
+}
+
 /// 展開図と手順だけから同じ形に折り直せる(3D状態を保存しない設計の検証)。
 #[test]
-fn squashed_base_replays_from_the_crease_pattern() {
-    let (doc, built) = squashed_base();
+fn the_frog_base_replays_from_the_crease_pattern() {
+    let (doc, built) = frog_base();
     let faces = extract_faces(&doc.cp);
     let (replayed, warnings) =
         flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
@@ -496,9 +601,9 @@ fn squashed_base_replays_from_the_crease_pattern() {
 
 /// 同じ操作列は何度実行しても同じ結果になる(決定性)。
 #[test]
-fn squashed_base_is_deterministic() {
-    let (a, _) = squashed_base();
-    let (b, _) = squashed_base();
+fn the_frog_base_is_deterministic() {
+    let (a, _) = frog_base();
+    let (b, _) = frog_base();
     assert_eq!(a.cp, b.cp, "展開図が一致する");
     assert_eq!(a.sequence, b.sequence, "手順が一致する");
     let frame = |doc: &Document| format!("{:?}", replay(doc, doc.sequence.len(), 1.0).frame);

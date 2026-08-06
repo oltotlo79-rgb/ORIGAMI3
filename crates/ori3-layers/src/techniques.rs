@@ -385,9 +385,12 @@ pub fn squash(
 /// - 先端から出る**斜め2本**: 先端で「中心線」と「フラップの縁」がなす角の
 ///   二等分線。ここで折ると両側の縁が中心線にぴったり重なる(花弁折りの要)
 /// - **ちょうつがい1本**: ここで先端側が折り返り、先端が反対の端へ持ち上がる。
-///   位置は左右それぞれの縁の長さから決める([`petal_hinge`])。左右が同じ長さなら
-///   中心線に直交する線、違えば斜めの線になる(左右の縁の長さが違うフラップでも
-///   実際の紙では折れるので、平均で1本に丸めない)
+///   位置は左右の斜め線が**フラップの外へ出る点**を結んで決める([`petal_hinge`])。
+///   実際の紙でも斜めの折り目はフラップの縁で止まり、そこを結んだ線がちょうつがいに
+///   なる。左右で止まり点までの距離が同じなら中心線に直交する線、違えば斜めの線に
+///   なる(左右の縁の長さが違うフラップでも実際の紙では折れるので、平均で1本に
+///   丸めない)。止まり点がフラップの境目に乗るので、そこで折り目が3本だけになって
+///   平らに畳めなくなることがない
 ///
 /// 紙の動き(3つの [`MotionPart`]):
 ///
@@ -457,7 +460,17 @@ pub fn petal(
 
     // 羽のところでフラップとつながっている「フラップ外の層」。その折り目は
     // 花弁折りで開く(角0°)ので、相手の羽も中心線へ寄せないと紙が裂ける。
-    let hinge = petal_hinge(tip, d, right, left);
+    // ちょうつがいは、縁を中心線へ寄せる折り目(二等分線)がフラップの外へ出る点を
+    // 通る。紙の外へ出る点が読めないときだけ、縁の長さからの当て(従来の値)を使う
+    let polys = flap_polygons(cp, faces, state, &flap);
+    let stop = |s: FlapSide| {
+        s.map(|(ang, reach)| {
+            let along = ray_exit(&polys, tip, rotate(d, ang * 0.5))
+                .unwrap_or_else(|| reach / (ang * 0.5).cos().max(EPS));
+            (ang, along)
+        })
+    };
+    let hinge = petal_hinge(tip, d, stop(right), stop(left));
     let sides: Vec<(f64, f64, Vec<FaceId>)> = [right, left]
         .into_iter()
         .flatten()
@@ -472,7 +485,7 @@ pub fn petal(
     } else {
         FoldDirection::Up
     };
-    let parts = petal_parts(&flap, tip, d, hinge, &sides, open);
+    let parts = petal_parts(&flap, &polys, tip, d, hinge, &sides, open);
     let mut res = flat_motion(
         cp,
         faces,
@@ -1697,23 +1710,18 @@ fn flap_sides(
     (right, left)
 }
 
-/// 花弁折りのちょうつがい線を、左右それぞれの縁の長さから求める。
+/// 花弁折りのちょうつがい線を、左右の二等分線が**フラップの外へ出る点**から求める。
 ///
-/// 縁を中心線へ寄せると、その縁の端は先端から「その縁の長さ」だけ離れた中心線上の
-/// 点へ来る。ちょうつがいはそこで折り返す線なので、側sの二等分線とは
-/// 「中心線に沿った距離が縁の長さ `reach_s` になる点」で交わらなければならない
-/// (交点は先端から `reach_s / cos(角/2)` の位置)。左右で長さが違えば交点も
-/// 別々の位置になり、ちょうつがいは中心線に直交しない1本の斜めの線になる。
-/// 左右が同じ長さなら従来どおり中心線に直交する線に戻る。
+/// 実際の紙では、縁を中心線へ寄せる折り目(二等分線)はフラップの縁で止まる。
+/// ちょうつがいはその2つの止まり点を結ぶ線で、ここで折ると縁がちょうど中心線へ
+/// 寄り、持ち上げた紙は止まり点のまわりに回る(止まり点はフラップの境目に乗るので、
+/// そこで折り目が3本になって畳めなくなることがない)。
+/// 左右で止まり点までの距離が違えば、ちょうつがいは中心線に直交しない斜めの線になる。
 ///
-/// 片側にしか紙がない(または2つの交点が重なる)ときは、その点を通る直交線とする。
+/// 引数の `right`/`left` は(中心線となす角, 先端から止まり点までの距離)。
+/// 片側にしか紙がない(または2つの点が重なる)ときは、その点を通る直交線とする。
 fn petal_hinge(tip: DVec2, d: DVec2, right: FlapSide, left: FlapSide) -> [[f64; 2]; 2] {
-    let cross = |(ang, reach): (f64, f64)| {
-        let c = (ang * 0.5).cos();
-        // 角が180°に近いと交点が無限遠へ飛ぶ。呼び出し側で警告済みなので、
-        // ここでは縁の長さそのものを使って線を引けるところに置く
-        tip + rotate(d, ang * 0.5) * (reach / c.max(EPS))
-    };
+    let cross = |(ang, along): (f64, f64)| tip + rotate(d, ang * 0.5) * along;
     let perpendicular = |q: DVec2| [[q.x, q.y], [q.x - d.y, q.y + d.x]];
     match (right.map(cross), left.map(cross)) {
         (Some(a), Some(b)) if (b - a).length() > EPS => [[a.x, a.y], [b.x, b.y]],
@@ -1721,6 +1729,121 @@ fn petal_hinge(tip: DVec2, d: DVec2, right: FlapSide, left: FlapSide) -> [[f64; 
         (None, Some(b)) => perpendicular(b),
         (None, None) => perpendicular(tip),
     }
+}
+
+/// フラップが畳み平面で占める多角形の一覧。
+fn flap_polygons(
+    cp: &CreasePattern,
+    faces: &[Face],
+    state: &FlatState,
+    flap: &[FaceId],
+) -> HashMap<FaceId, Vec<DVec2>> {
+    let pos = vertex_positions(cp);
+    faces
+        .iter()
+        .filter(|f| flap.contains(&f.id))
+        .filter_map(|f| {
+            let pl = state.placements.get(&f.id)?;
+            let poly = f.vertices.iter().filter_map(|v| pos.get(v)).map(|&q| pl.apply(q)).collect();
+            Some((f.id, poly))
+        })
+        .collect()
+}
+
+/// 多角形を半平面で切り取る(Sutherland–Hodgman)。
+fn clip_polygon(poly: &[DVec2], inside: &dyn Fn(DVec2) -> f64) -> Vec<DVec2> {
+    let mut out: Vec<DVec2> = Vec::with_capacity(poly.len() + 2);
+    for i in 0..poly.len() {
+        let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+        let (da, db) = (inside(a), inside(b));
+        if da >= 0.0 {
+            out.push(a);
+        }
+        if (da >= 0.0) != (db >= 0.0) && (db - da).abs() > f64::EPSILON {
+            out.push(a + (b - a) * (da / (da - db)));
+        }
+    }
+    out
+}
+
+/// 領域(半平面の積)に紙が残る層だけを選ぶ。
+///
+/// 花弁折りは左右の羽と中央のくさびを別々の部分にするので、片側にしか無い層は
+/// 反対側の羽に掛からない。それは指定の誤りではないので、警告を出さずに外す。
+fn layers_in_region(
+    polys: &HashMap<FaceId, Vec<DVec2>>,
+    layers: &[FaceId],
+    region: &[HalfPlane],
+) -> Vec<FaceId> {
+    layers
+        .iter()
+        .copied()
+        .filter(|id| {
+            let Some(poly) = polys.get(id) else {
+                return true;
+            };
+            let mut cur = poly.clone();
+            for hp in region {
+                let inside = half_plane(hp.line, DVec2::from(hp.inside_point));
+                cur = clip_polygon(&cur, &inside);
+                if cur.len() < 3 {
+                    return false;
+                }
+            }
+            let area: f64 = (0..cur.len())
+                .map(|i| cur[i].perp_dot(cur[(i + 1) % cur.len()]))
+                .sum::<f64>()
+                .abs();
+            area * 0.5 > EPS * EPS
+        })
+        .collect()
+}
+
+/// 多角形の内部(境界を含まない)に点があるか。
+fn in_polygon(poly: &[DVec2], p: DVec2) -> bool {
+    let mut inside = false;
+    for i in 0..poly.len() {
+        let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+        if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+/// 先端 `tip` から向き `dir` へ伸びる半直線が、フラップの紙の外へ出るまでの距離。
+///
+/// 二等分線の折り目が届く先(=ちょうつがいの通る点)。紙が無ければ `None`。
+fn ray_exit(polys: &HashMap<FaceId, Vec<DVec2>>, tip: DVec2, dir: DVec2) -> Option<f64> {
+    let mut ts: Vec<f64> = Vec::new();
+    for poly in polys.values() {
+        for i in 0..poly.len() {
+            let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+            let e = b - a;
+            let den = dir.perp_dot(e);
+            if den.abs() <= EPS {
+                continue;
+            }
+            let s = dir.perp_dot(tip - a) / den;
+            let t = e.perp_dot(tip - a) / den;
+            if (-EPS..=1.0 + EPS).contains(&s) && t > EPS {
+                ts.push(t);
+            }
+        }
+    }
+    ts.sort_by(|a, b| a.partial_cmp(b).expect("有限の距離"));
+    let mut prev = 0.0_f64;
+    for t in ts {
+        if t <= prev + EPS {
+            continue;
+        }
+        let mid = tip + dir * ((prev + t) * 0.5);
+        if !polys.values().any(|p| in_polygon(p, mid)) {
+            break;
+        }
+        prev = t;
+    }
+    (prev > EPS).then_some(prev)
 }
 
 /// 直線 `line` の `inside` 側を正とする符号付き距離(半平面の内外判定用)。
@@ -1822,8 +1945,10 @@ fn rotate(d: DVec2, a: f64) -> DVec2 {
 /// 部分の順に意味がある: [`flat_motion`] は後の部分ほど `open` の側へ重ねるので、
 /// 羽を先・中央を後に並べて中央のくさびを羽の外側に置く。
 /// `open` は持ち上げた紙を回す側(手前=Up / 向こう=Down)。
+#[allow(clippy::too_many_arguments)]
 fn petal_parts(
     flap: &[FaceId],
+    polys: &HashMap<FaceId, Vec<DVec2>>,
     tip: DVec2,
     d: DVec2,
     hinge: [[f64; 2]; 2],
@@ -1858,7 +1983,7 @@ fn petal_parts(
         if !neighbors.is_empty() {
             // 隣の層の羽は中心線へ寄せるだけ(もとの層のすぐ上へ入る)
             parts.push(MotionPart {
-                layers: neighbors.clone(),
+                layers: layers_in_region(polys, neighbors, &wing),
                 region: wing.clone(),
                 transform: MotionTransform::Reflect(vec![bisector]),
                 turn: LayerTurn::Inside(open),
@@ -1866,7 +1991,7 @@ fn petal_parts(
             });
         }
         parts.push(MotionPart {
-            layers: flap.to_vec(),
+            layers: layers_in_region(polys, flap, &wing),
             region: wing,
             transform: MotionTransform::Reflect(vec![bisector, hinge]),
             turn: LayerTurn::Outside(open),
@@ -1874,7 +1999,7 @@ fn petal_parts(
         });
     }
     parts.push(MotionPart {
-        layers: flap.to_vec(),
+        layers: layers_in_region(polys, flap, &middle),
         region: middle,
         transform: MotionTransform::Reflect(vec![hinge]),
         turn: LayerTurn::Outside(open),
