@@ -11,8 +11,9 @@ import {
 } from "../lib/techniques";
 import type { FoldStep } from "../lib/types";
 
-/** 飛ばされた手順の説明が再生の警告に無いときに出す文言 */
-const SKIPPED_FALLBACK = "折り線が見つからないため、この手順は飛ばされました";
+/** 飛ばされた手順の説明が再生の警告に無いときに出す文言(直し方まで書く) */
+const SKIPPED_FALLBACK =
+  "折り線が見つからないため、この手順は飛ばされました。展開図にその折り線を引き直すか、この手順を削除してください";
 
 function chipClass(selected: boolean, skipped = false): string {
   return [

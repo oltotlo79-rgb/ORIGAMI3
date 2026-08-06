@@ -100,8 +100,25 @@ describe("planPull / pullDeltaDeg", () => {
     expect(Math.abs(plan!.velocity[2])).toBeCloseTo(Math.SQRT1_2, 9);
   });
 
-  it("根の面をつかんだときは動かす折り線が無い", () => {
-    expect(planPull(makeDoc(), FACES, null, 0, [0.5, 0.2, 0], [0, 0, 1])).toBeNull();
+  // 実際の紙はどこをつかんでも動かせる。ソルバーが根の面をその場に固定する都合で
+  // 「根をつかむと動かない」となっていたのを、相手側を逆に動かす形で解消した
+  it("根の面をつかんでも、接する折り線を逆向きに駆動して動かせる", () => {
+    const grab: [number, number, number] = [0.5, 0.2, 0];
+    const root = planPull(makeDoc(), FACES, null, 0, grab, [0, 0, 1]);
+    expect(root?.hinge).toBe(5);
+    expect(root?.baseDeg).toBeCloseTo(0, 9);
+    expect(Math.hypot(...root!.velocity)).toBeGreaterThan(0.1);
+    // 同じ点を同じ向きへ引いても、根の側と相手側では角度の動く向きが逆になる
+    const child = planPull(makeDoc(), FACES, null, 1, grab, [0, 0, 1])!;
+    expect(pullDeltaDeg(root!.velocity, [0, 0, 0.1])).toBeCloseTo(
+      -pullDeltaDeg(child.velocity, [0, 0, 0.1]),
+      9,
+    );
+  });
+
+  it("折り線がまったく無い1枚きりの紙は動かしようがない", () => {
+    const solo = [{ id: 0, vertices: [0, 1, 2, 3], edges: [0, 1, 2, 3] }];
+    expect(planPull(makeDoc(), solo, null, 0, [0.5, 0.2, 0], [0, 0, 1])).toBeNull();
   });
 
   it("ドラッグ量は「つかんだ点が指に最も近づく回転量」に対応する", () => {

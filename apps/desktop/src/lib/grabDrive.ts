@@ -190,6 +190,37 @@ export function pathAxes(
   return out;
 }
 
+/**
+ * 根の面をつかんだときに動かせる折り線と、その回転軸(UI-007)。
+ *
+ * ソルバーは根の面をその場に固定するので、根の面をつかんでも「経路」が空になり、
+ * これまでは動かせなかった。しかし実際の紙は**どこをつかんでも動かせる**——
+ * 手で持った所が止まって見え、残りの紙が逆向きに動くだけである。
+ * そこで根の面をつかんだときは、その面に接する折り線を駆動し、
+ * 「相手側が逆に動く」ぶんをつかんだ点の見かけの速度として返す
+ * (速度の符号を反転する)。こうすると引いた向きへ紙が開いて見える。
+ */
+export function rootAxes(
+  doc: Document,
+  faces: Face[],
+  frame: Frame3D | null,
+  faceId: number,
+): DriveAxis[] {
+  const polys = facePolygons3D(doc, faces, frame);
+  const face = edgeIndex(faces).get(faceId);
+  const poly = polys.get(faceId);
+  if (!face || !poly || poly.length !== face.edges.length) return [];
+  const owners = hingeOwners(faces);
+  const out: DriveAxis[] = [];
+  for (let j = 0; j < face.edges.length; j++) {
+    const hinge = face.edges[j];
+    if (!owners.has(hinge)) continue; // 輪郭(片側にしか面が無い辺)は動かせない
+    const u = normalize(sub(poly[(j + 1) % poly.length], poly[j]));
+    if (u) out.push({ hinge, a: poly[j], u });
+  }
+  return out;
+}
+
 /** 面ID → 境界の辺IDの並び(頂点列と同順) */
 function edgeIndex(faces: Face[]): Map<number, Face> {
   return new Map(faces.map((f) => [f.id, f]));
@@ -336,7 +367,11 @@ export interface PullPlan {
  * (回転軸から遠い=モーメントアームが大きく、かつ向きも合うものが選ばれる)。
  * まだ向きが分からない(つかんだ瞬間)ときは dragDir を省くと、単純に
  * モーメントアームがいちばん大きい1本を選ぶ。
- * 経路が無い(つかんだ面が根そのもの)ときは null。
+ *
+ * つかんだ面が根そのもので経路が空になるときは [`rootAxes`] へ切り替え、
+ * その面に接する折り線を「相手側が逆に動く」向き(速度の符号を反転)で駆動する。
+ * 実際の紙はどこをつかんでも動かせるので、折り線が1本でもつながっていれば
+ * nullを返さない(まったく折り線の無い1枚きりの面のときだけnull)。
  * mirror=trueなら、選んだ折り線と左右対称の相手も一緒に動かす相手として返す。
  */
 export function planPull(
@@ -350,10 +385,15 @@ export function planPull(
 ): PullPlan | null {
   const angles = hingeAnglesFromFrame(doc, faces, frame);
   const dir = normalize(dragDir);
+  // 経路が空(=つかんだ面が根)なら、根に接する折り線を「逆向き」に駆動する
+  let axes = pathAxes(doc, faces, frame, faceId);
+  const sign = axes.length > 0 ? 1 : -1;
+  if (axes.length === 0) axes = rootAxes(doc, faces, frame, faceId);
   let best: PullPlan | null = null;
   let bestScore = 0;
-  for (const ax of pathAxes(doc, faces, frame, faceId)) {
-    const velocity = cross(ax.u, sub(grabPoint, ax.a));
+  for (const ax of axes) {
+    const v = cross(ax.u, sub(grabPoint, ax.a));
+    const velocity: Vec3 = [sign * v[0], sign * v[1], sign * v[2]];
     const score = dir ? Math.abs(dot(velocity, dir)) : length(velocity);
     if (score <= bestScore) continue;
     bestScore = score;

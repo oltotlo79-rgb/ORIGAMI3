@@ -718,3 +718,183 @@ fn pose_step_after_flat_folds_keeps_the_solid_shape() {
         extent(&posed.frame, 2)
     );
 }
+
+/// SIM-009: 記録する「仕上げの角度」を丸めてはいけない。
+///
+/// 頂点のまわりを1周する折り線の角度は互いに厳密な関係(ループ閉包)で結ばれて
+/// いるため、少しでも丸めると関係が崩れ、再生のたびに
+/// 「追従計算が収束していません」の警告が出る(形の見た目は変わらないので
+/// 気づきにくい)。ソルバーの収束判定は残差RMS 1e-13で、小数9桁に丸めても
+/// 桁が足りない。フロント側(poseStep.ts)はf64のまま書き出す。
+#[test]
+fn pose_step_angles_must_not_be_rounded() {
+    // 1点から出る4本の折り線 = 4次の頂点(1自由度の剛体折り。閉じたループを持つ)。
+    // 左右対称にすると角度がちょうど良い値になって丸めても変わらないため、
+    // わざと非対称な位置へ引いて端数のある角度にする
+    let mut doc = Document::new(Paper {
+        width_mm: 100.0,
+        height_mm: 100.0,
+    });
+    let center = [0.5, 0.5];
+    let halves: [[[f64; 2]; 2]; 4] = [
+        [center, [0.0, 0.0]],
+        [center, [1.0, 0.2]],
+        [center, [0.8, 1.0]],
+        [center, [0.1, 1.0]],
+    ];
+    for (i, seg) in halves.iter().enumerate() {
+        let kind = if i == 0 {
+            EdgeKind::Valley
+        } else {
+            EdgeKind::Mountain
+        };
+        ori3_cp::insert_segment(&mut doc.cp, seg[0], seg[1], kind);
+    }
+    let faces = extract_faces(&doc.cp);
+    assert_eq!(faces.len(), 4, "4次の頂点まわりに面が4つできること");
+    let hinge_of = |seg: [[f64; 2]; 2]| -> ori3_model::EdgeId {
+        let edges = resolve_driver_edges(
+            &doc.cp,
+            &DriverLine {
+                a: seg[0],
+                b: seg[1],
+                target_angle_deg: 0.0,
+            },
+        );
+        assert_eq!(edges.len(), 1, "半分の対角線はちょうど1本の辺 {seg:?}");
+        edges[0]
+    };
+    let solved = ori3_rigid::solve(
+        &doc.cp,
+        &faces,
+        &[ori3_model::Driver {
+            hinge: hinge_of(halves[0]),
+            target_angle_deg: 40.0,
+        }],
+        None,
+    );
+    assert!(solved.converged, "出発点となる形は収束しているはず");
+
+    // その形をPoseステップとして記録し、再生する。丸め幅ごとに警告の有無を見る
+    let record = |digits: Option<i32>| -> ReplayResult {
+        let mut doc = doc.clone();
+        doc.sequence.push(FoldStep {
+            id: 0,
+            kind: TechniqueKind::Pose,
+            drivers: halves
+                .iter()
+                .map(|&seg| {
+                    let deg = solved.angles[&hinge_of(seg)];
+                    let deg = match digits {
+                        None => deg,
+                        Some(d) => {
+                            let s = 10f64.powi(d);
+                            (deg * s).round() / s
+                        }
+                    };
+                    DriverLine {
+                        a: seg[0],
+                        b: seg[1],
+                        target_angle_deg: deg,
+                    }
+                })
+                .collect(),
+            layer_order: None,
+            note: String::new(),
+        });
+        replay(&doc, 1, 1.0)
+    };
+    let unconverged = |r: &ReplayResult| {
+        r.warnings
+            .iter()
+            .chain(r.frame.warnings.iter())
+            .any(|w| w.contains("収束"))
+    };
+
+    let exact = record(None);
+    assert!(
+        !unconverged(&exact),
+        "丸めずに記録すれば警告は出ない: {:?}",
+        exact.warnings
+    );
+    // 丸めると(かつては小数3桁だった)ループが閉じず、毎回の再生で警告が出る。
+    // 小数9桁でも収束判定(残差RMS 1e-13)には足りない
+    for digits in [3, 9] {
+        let rounded = record(Some(digits));
+        assert!(
+            unconverged(&rounded),
+            "小数{digits}桁に丸めると警告が出る(だから丸めない)"
+        );
+    }
+}
+
+
+/// 手順の途中へ折りを挟んだとき、後続の手順に何が起きるか(SEQ-005)。
+///
+/// 挟んだ折りはCPへ**辺を足す**だけで、既存の折り線は交点で分割されても
+/// [`resolve_driver_edges`] が断片を全部拾う。つまり**後続の手順が
+/// 「折り線が見つからない」で飛ばされる(タイムラインで赤くなる)ことはない**。
+/// 後続と幾何的に矛盾する折りを挟んだ場合も、止めずに最も近い形と警告を返す
+/// (設計原則: 止めずに警告。勝手に手順を書き換えると利用者の意図と違う形になる)。
+#[test]
+fn inserting_a_fold_never_skips_the_later_steps() {
+    // 手順1(x=0.5)・手順2(y=0.5)の間に折りを挟む
+    let inserted = |line: [[f64; 2]; 2], keep: [f64; 2]| -> (Document, ReplayResult) {
+        let (mut doc, _) = folded_document_with_state(2);
+        let faces = extract_faces(&doc.cp);
+        let (state, _) = flat_state_at(&doc, &faces, 1).expect("手順1までの形");
+        let mut cp = doc.cp.clone();
+        let res = fold_through(
+            &mut cp,
+            &faces,
+            &state,
+            &FoldThroughInput {
+                line,
+                keep_side_point: keep,
+                target_layers: None,
+                direction: FoldDirection::Up,
+            },
+        )
+        .expect("挟む折りそのものは成立する");
+        doc.cp = cp;
+        let mut step = res.step;
+        step.id = 100;
+        doc.sequence.insert(1, step);
+        let r = replay(&doc, 3, 1.0);
+        (doc, r)
+    };
+
+    // (a) 後続と両立する折り(x=0.25)を挟んだ場合: 警告なしで3手順とも成立する
+    let (_, ok) = inserted([[0.25, 0.0], [0.25, 1.0]], [0.4, 0.5]);
+    assert!(ok.skipped.is_empty(), "警告={:?}", ok.warnings);
+    assert!(ok.warnings.is_empty(), "警告={:?}", ok.warnings);
+    assert!(ok.frame.warnings.is_empty(), "警告={:?}", ok.frame.warnings);
+
+    // (b) 後続と矛盾する折り(斜めの折り)を挟んだ場合
+    let (doc, bad) = inserted([[0.0, 0.0], [0.5, 1.0]], [0.05, 0.9]);
+    // 後続(元の手順2 = 今の手順3)の折り線は展開図に残っているので飛ばされない
+    let later = &doc.sequence[2];
+    assert!(
+        later
+            .drivers
+            .iter()
+            .all(|d| !resolve_driver_edges(&doc.cp, d).is_empty()),
+        "挟んだ折りは辺を増やすだけなので、後続の折り線は必ず解決できる"
+    );
+    assert!(
+        bad.skipped.is_empty(),
+        "矛盾しても手順は飛ばされない(赤にならない): {:?}",
+        bad.skipped
+    );
+    // 止めずに、いちばん近い形と警告を返す
+    assert!(!bad.frame.faces.is_empty(), "形は返す");
+    assert!(
+        bad.warnings
+            .iter()
+            .chain(bad.frame.warnings.iter())
+            .any(|w| w.contains("求まりませんでした") || w.contains("収束")),
+        "矛盾は警告で知らせる: {:?} {:?}",
+        bad.warnings,
+        bad.frame.warnings
+    );
+}

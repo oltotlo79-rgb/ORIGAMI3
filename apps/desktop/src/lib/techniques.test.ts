@@ -7,6 +7,7 @@ import {
   TECHNIQUE_LABEL,
   uniqueWarnings,
   warningsForStep,
+  withFixHint,
 } from "./techniques";
 import type { TechniqueKind } from "./types";
 
@@ -78,5 +79,39 @@ describe("uniqueWarnings", () => {
       "手順3を飛ばしました",
       "頂点が孤立しています",
     ]);
+  });
+});
+
+// 途中に折りを挟んで後続と矛盾したとき、アプリは勝手に直さず警告して続ける
+// (設計原則: 止めずに警告)。代わりに「どう直せばよいか」を書き添える。
+describe("withFixHint", () => {
+  it("矛盾した手順の警告に、直し方を足す", () => {
+    const [out] = withFixHint([
+      "手順3までの形が展開図から求まりませんでした(いちばん近い形で表示します)",
+    ]);
+    expect(out).toContain("求まりませんでした");
+    expect(out).toContain("削除・移動");
+    // 手順番号で始まる形は保つ(タイムラインの手順ごとの絞り込みが効くように)
+    expect(warningsForStep([out], 3)).toEqual([out]);
+  });
+
+  it("折り線が見つからない手順には、引き直すか削除するよう伝える", () => {
+    const [out] = withFixHint([
+      "手順2の折り線が見つからないため、この手順を飛ばしました",
+    ]);
+    expect(out).toContain("引き直す");
+    expect(out).toContain("削除");
+  });
+
+  it("重なり順の警告と、心当たりの無い警告", () => {
+    expect(withFixHint(["層順序の代表点 (0.1, 0.2) …この層を飛ばしました"])[0]).toContain(
+      "折り直す",
+    );
+    expect(withFixHint(["よく分からない警告"])).toEqual(["よく分からない警告"]);
+  });
+
+  it("同じ案内を二重に足さない", () => {
+    const once = withFixHint(["手順2の折り線が見つからないため飛ばしました"]);
+    expect(withFixHint(once)).toEqual(once);
   });
 });

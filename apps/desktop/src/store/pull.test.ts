@@ -5,6 +5,7 @@
 //   - 離しても形(角度指定)は残り、色付けだけ消える
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { planPull, pullDeltaDeg } from "../lib/grabDrive";
 import type { Document, Driver, Face, Frame3D, SolveResult } from "../lib/types";
 
 vi.mock("../ipc/client", () => ({
@@ -190,6 +191,25 @@ describe("紙をつかんで引く", () => {
     expect(useAppStore.getState().pullMirrorHinge).toBeNull();
     useAppStore.getState().pullTo(-150);
     expect(useAppStore.getState().drivers.has(7)).toBe(false);
+  });
+
+  // 根の面(ソルバーが固定する基準の面)をつかんでも動かせること。
+  // planPullが根に接する折り線を選ぶので、ストアはふつうに角度を送れる
+  it("根の面をつかんでも、選ばれた折り線の角度が送られる", async () => {
+    vi.useFakeTimers();
+    try {
+      const plan = planPull(DOC, FACES, FOLDED, 0, [0.5, 0.2, 0], [0, 0, 1]);
+      expect(plan).not.toBeNull();
+      const store = useAppStore.getState();
+      store.beginPull(plan!.hinge, new Map());
+      store.pullTo(plan!.baseDeg + pullDeltaDeg(plan!.velocity, [0, 0, 0.2]));
+      await vi.advanceTimersByTimeAsync(100);
+      expect(poseCalls()).toHaveLength(1);
+      expect(poseCalls()[0][0].hinge).toBe(plan!.hinge);
+      expect(useAppStore.getState().drivers.get(plan!.hinge)).not.toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("紙が無ければ引き始められない", () => {

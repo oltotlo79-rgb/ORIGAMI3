@@ -11,9 +11,6 @@ import type { Document, DriverLine, FoldStep } from "./types";
 /** これ未満の角度は「平ら」とみなす(度)。計算誤差を立体と誤解しないため */
 export const POSE_MIN_DEG = 0.5;
 
-/** 記録する角度の小数桁(保存ファイルが無駄に長くならないよう丸める) */
-const ANGLE_DIGITS = 3;
-
 /**
  * 今の折り角度(折り線の辺ID → 度)。
  * 利用者の指定 → 追従計算の結果 → 0度(平ら)の順に決める。
@@ -44,6 +41,12 @@ export function hasPoseAngle(angles: ReadonlyMap<number, number>): boolean {
  * 今の形を表す「仕上げの角度」の手順を組み立てる。
  * 折り線の両端は展開図の頂点座標で書き出す(辺IDは編集で変わるため)。
  * 平坦にならない手順なので layer_order は null(直前の層の重なりを保つ)。
+ *
+ * 角度は**丸めずにそのまま**書き出す。角度どうしは頂点まわりのループが閉じる
+ * 関係で結ばれていて、少しでも丸めるとその関係が崩れ、再生のたびに
+ * 「追従計算が収束していません」の警告が出てしまう(ソルバーの収束判定は
+ * 残差RMS 1e-13。小数9桁に丸めても桁が足りない)。.ori3はJSONなので
+ * f64をそのまま書いてもファイルの大きさはほとんど変わらない。
  */
 export function buildPoseStep(
   doc: Document,
@@ -60,7 +63,7 @@ export function buildPoseStep(
     drivers.push({
       a: [a[0], a[1]],
       b: [b[0], b[1]],
-      target_angle_deg: Number(deg.toFixed(ANGLE_DIGITS)),
+      target_angle_deg: deg,
     });
   }
   return {
