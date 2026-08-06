@@ -274,7 +274,27 @@ pub struct ExportOptions {
     /// 補助線(下書きの線)も一緒に書き出すか。
     pub include_aux: bool,
     /// PNGのときの長いほうの辺の点数。
-    pub png_long_side: u32,
+    ///
+    /// 0以下の指定も受け取れるよう広めのi64にしてある。u32で受け取ると、たとえば
+    /// -5のような値はTauriがJSONを読む段階で弾かれ、英語のエラーが画面に出てしまう。
+    /// ここで受け取っておけば [`png_long_side`] が日本語で理由を返せる(設計原則3b)。
+    pub png_long_side: i64,
+}
+
+/// PNGの点数の指定を確かめて、使える値に直す。
+///
+/// 無理な指定(0以下・上限超え)はボタンを消さずに日本語で理由を伝える(設計原則3b)。
+fn png_long_side(value: i64) -> Result<u32, String> {
+    if value <= 0 {
+        return Err(format!("画像の大きさは1以上にしてください(指定: {value})"));
+    }
+    if value > ori3_export::MAX_LONG_SIDE_PX as i64 {
+        return Err(format!(
+            "画像の大きさは{}までにしてください(指定: {value})",
+            ori3_export::MAX_LONG_SIDE_PX
+        ));
+    }
+    Ok(value as u32)
 }
 
 /// 展開図を画像ファイルとして保存する(EXP-001 / EXP-002)。
@@ -290,23 +310,36 @@ pub fn document_export(
 ) -> Result<(), String> {
     guard(AssertUnwindSafe(move || {
         let doc = lock(&state).export_inputs(); // 複製のみ、即ロック解放
+        // 先に全ページぶんを作り切る。途中の手順で失敗しても、その時点では
+        // まだ1つもファイルを作っていないので中途半端な結果が残らない
         let files = export_files(&doc, kind, options)?;
         let path = Path::new(&path);
-        for (suffix, bytes) in files {
-            // 折り図の画像はページごとに別ファイルになるので、選ばれた場所を基準に
-            // 「鶴-01.svg」「鶴-02.svg」…と番号を足して並べる
-            let target = if suffix.is_empty() {
-                path.to_path_buf()
-            } else {
-                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("折り図");
-                let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("svg");
-                path.with_file_name(format!("{stem}{suffix}.{ext}"))
-            };
-            std::fs::write(&target, &bytes)
-                .map_err(|e| format!("ファイルに書き出せませんでした: {e}"))?;
+        let mut written: Vec<std::path::PathBuf> = Vec::new();
+        for (suffix, bytes) in &files {
+            let target = export_target(path, suffix);
+            if let Err(e) = std::fs::write(&target, bytes) {
+                // 書き込みの途中で失敗したら、そこまでに作ったファイルは片付ける
+                // (半分だけの折り図が完成品に見えてしまわないように)
+                for done in &written {
+                    let _ = std::fs::remove_file(done);
+                }
+                return Err(format!("ファイルに書き出せませんでした: {e}"));
+            }
+            written.push(target);
         }
         Ok(())
     }))
+}
+
+/// 書き出し先のファイル名を決める。折り図の画像はページごとに別ファイルになるので、
+/// 選ばれた場所を基準に「鶴-01.svg」「鶴-02.svg」…と番号を足して並べる。
+fn export_target(path: &Path, suffix: &str) -> std::path::PathBuf {
+    if suffix.is_empty() {
+        return path.to_path_buf();
+    }
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("折り図");
+    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("svg");
+    path.with_file_name(format!("{stem}{suffix}.{ext}"))
 }
 
 /// 指定の種類で書き出す中身を組み立てる(ロックを取らない純粋な処理)。
@@ -323,7 +356,10 @@ fn export_files(
     };
     Ok(match kind {
         ExportKind::CpSvg => vec![(String::new(), cp_svg(doc, &opts).into_bytes())],
-        ExportKind::CpPng => vec![(String::new(), cp_png(doc, &opts, options.png_long_side)?)],
+        ExportKind::CpPng => {
+            let px = png_long_side(options.png_long_side)?;
+            vec![(String::new(), cp_png(doc, &opts, px)?)]
+        }
         ExportKind::DiagramPdf => vec![(String::new(), diagram_pdf(doc)?)],
         ExportKind::DiagramSvg => diagram_svg_pages(doc)?
             .into_iter()
@@ -425,6 +461,44 @@ mod tests {
             let err = export_files(&doc, kind, opts).unwrap_err();
             assert!(err.contains("折り手順がまだありません"), "err={err}");
         }
+    }
+
+    /// 画像の大きさに負の数などを入れても、英語のエラーではなく日本語で理由が出る。
+    #[test]
+    fn a_bad_png_size_is_a_japanese_error() {
+        use super::{ExportKind, ExportOptions, export_files, png_long_side};
+        for bad in [-5, -1, 0] {
+            let err = png_long_side(bad).unwrap_err();
+            assert!(err.contains("1以上"), "err={err}");
+            assert!(err.contains(&bad.to_string()), "指定値が出ない: {err}");
+        }
+        let huge = ori3_export::MAX_LONG_SIDE_PX as i64 + 1;
+        let err = png_long_side(huge).unwrap_err();
+        assert!(err.contains("までにしてください"), "err={err}");
+        assert_eq!(png_long_side(1), Ok(1));
+        assert_eq!(png_long_side(2048), Ok(2048));
+
+        // 書き出し口から見ても同じ(パニックにならない)
+        let doc = ori3_model::Document::new(A4ISH);
+        let opts = ExportOptions {
+            include_aux: false,
+            png_long_side: -5,
+        };
+        let err = export_files(&doc, ExportKind::CpPng, opts).unwrap_err();
+        assert!(err.contains("1以上"), "err={err}");
+    }
+
+    /// 折り図の画像はページごとに番号を足した名前になる。
+    #[test]
+    fn diagram_pages_get_numbered_file_names() {
+        use super::export_target;
+        use std::path::Path;
+        let base = Path::new("C:/作品/鶴.svg");
+        assert_eq!(export_target(base, ""), base.to_path_buf());
+        assert_eq!(
+            export_target(base, "-02"),
+            Path::new("C:/作品/鶴-02.svg").to_path_buf()
+        );
     }
 
     #[test]

@@ -100,13 +100,25 @@ fn folded_polygons(
     Ok((out, state))
 }
 
-/// これから折る線を畳んだ絵の上へ写す。戻り値は(始点, 終点, 折り上がりの角度)。
+/// 畳んだ絵の上での折り線1本ぶん。
+struct Crease {
+    a: DVec2,
+    b: DVec2,
+    /// 折り上がりの角度(正なら山、負なら谷)。
+    angle_deg: f64,
+    /// 同じ指示(手順の`drivers`の何番目か)から出た線をまとめる番号。
+    driver: usize,
+}
+
+/// これから折る線を畳んだ絵の上へ写す。
+///
+/// 角度0の指示は「折らない」という意味なので線も矢印も出さない(ここで落とす)。
 fn folded_creases(
     doc: &Document,
     faces: &[Face],
     state: &FlatState,
     step_index: usize,
-) -> Vec<(DVec2, DVec2, f64)> {
+) -> Vec<Crease> {
     let pos = vertex_positions(doc);
     let ends: HashMap<_, _> = doc.cp.edges.iter().map(|e| (e.id, (e.v0, e.v1))).collect();
     // 折り目に面している面(最初に見つかったもの)の置き場所を使う。
@@ -118,7 +130,10 @@ fn folded_creases(
         }
     }
     let mut out = Vec::new();
-    for line in &doc.sequence[step_index].drivers {
+    for (driver, line) in doc.sequence[step_index].drivers.iter().enumerate() {
+        if line.target_angle_deg == 0.0 {
+            continue; // 折らない指示。線を描かないので矢印も出さない
+        }
         for id in resolve_driver_edges(&doc.cp, line) {
             let iso = face_of.get(&id).and_then(|f| state.placements.get(f));
             let (Some((v0, v1)), Some(iso)) = (ends.get(&id), iso) else {
@@ -127,10 +142,44 @@ fn folded_creases(
             let (Some(a), Some(b)) = (pos.get(v0), pos.get(v1)) else {
                 continue;
             };
-            out.push((iso.apply(*a), iso.apply(*b), line.target_angle_deg));
+            out.push(Crease {
+                a: iso.apply(*a),
+                b: iso.apply(*b),
+                angle_deg: line.target_angle_deg,
+                driver,
+            });
         }
     }
     out
+}
+
+/// 1コマに出す矢印の上限。コマは100×100で矢印は長さ約9なので、
+/// これ以上並べると絵が読めなくなる。
+const MAX_ARROWS: usize = 6;
+
+/// 矢印を付ける折り線を選ぶ。
+///
+/// 1つの指示は展開図の上で何本もの折り目に分かれることがあるため、指示ごとに
+/// 一番長い1本だけを代表にする(同じ直線上に矢印が何本も並ぶのを防ぐ)。
+/// それでも指示が多いときは、先頭から等間隔に間引いて最大 `MAX_ARROWS` 本にする。
+fn arrow_targets(creases: &[Crease]) -> Vec<(DVec2, DVec2)> {
+    let mut best: Vec<(usize, f64, DVec2, DVec2)> = Vec::new();
+    for c in creases {
+        let len = (c.b - c.a).length();
+        match best.iter_mut().find(|(d, ..)| *d == c.driver) {
+            Some(slot) => {
+                if len > slot.1 {
+                    *slot = (c.driver, len, c.a, c.b);
+                }
+            }
+            None => best.push((c.driver, len, c.a, c.b)),
+        }
+    }
+    let step = best.len().div_ceil(MAX_ARROWS).max(1);
+    best.iter()
+        .step_by(step)
+        .map(|(_, _, a, b)| (*a, *b))
+        .collect()
 }
 
 /// 折り紙の座標からコマの座標への当てはめ(縦横比はそのまま、中央にそろえる)。
@@ -187,7 +236,7 @@ fn shape_svg(polys: &[Vec<DVec2>], fit: &Fit) -> String {
 }
 
 /// これから折る線。山は一点鎖線(赤)、谷は破線(青)で描き分ける。
-fn creases_svg(creases: &[(DVec2, DVec2, f64)], fit: &Fit) -> String {
+fn creases_svg(creases: &[Crease], fit: &Fit) -> String {
     let mut out = String::new();
     for (mountain, color, dash) in [
         (true, "#c8321e", "2.4 0.8 0.5 0.8"),
@@ -195,7 +244,7 @@ fn creases_svg(creases: &[(DVec2, DVec2, f64)], fit: &Fit) -> String {
     ] {
         let lines: Vec<_> = creases
             .iter()
-            .filter(|(_, _, deg)| (*deg > 0.0) == mountain && *deg != 0.0)
+            .filter(|c| (c.angle_deg > 0.0) == mountain && c.angle_deg != 0.0)
             .collect();
         if lines.is_empty() {
             continue;
@@ -204,9 +253,9 @@ fn creases_svg(creases: &[(DVec2, DVec2, f64)], fit: &Fit) -> String {
             "  <g stroke=\"{color}\" stroke-width=\"0.5\" stroke-dasharray=\"{dash}\" \
              fill=\"none\" stroke-linecap=\"round\">\n"
         ));
-        for (a, b, _) in lines {
-            let (x1, y1) = fit.map(*a);
-            let (x2, y2) = fit.map(*b);
+        for c in lines {
+            let (x1, y1) = fit.map(c.a);
+            let (x2, y2) = fit.map(c.b);
             out.push_str(&format!(
                 "    <line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"/>\n",
                 num(x1),
@@ -220,10 +269,40 @@ fn creases_svg(creases: &[(DVec2, DVec2, f64)], fit: &Fit) -> String {
     out
 }
 
+/// 重心に寄っているかどうかを見分ける幅(コマの座標。コマは100×100)。
+/// これより近ければ「折り線が真ん中を通っている」とみなす。
+const TIE: f64 = 1e-3;
+
+/// 矢印を伸ばす向き(折り線と直角の2方向のうちどちらか)を決める。
+///
+/// ふつうは紙の重心のある側(残る側)へ向ける。ただし折り線が重心のちょうど上を
+/// 通る左右対称な半分折りでは重心を使った判定が0の近くになり、丸め誤差だけで
+/// 向きが決まってしまう。そこで差が `TIE` に満たないときは重心を見ずに、
+/// 折り線の向きだけから決める(画面の上側。それも決まらなければ右側)。
+/// こうすると同じ形からは必ず同じ絵になる。
+fn arrow_normal(dx: f64, dy: f64, mid: (f64, f64), toward: (f64, f64)) -> (f64, f64) {
+    let len = (dx * dx + dy * dy).sqrt().max(1e-9);
+    let (ux, uy) = (-dy / len, dx / len);
+    let d = ux * (toward.0 - mid.0) + uy * (toward.1 - mid.1);
+    let sign = if d > TIE {
+        1.0
+    } else if d < -TIE {
+        -1.0
+    } else if uy.abs() > TIE {
+        // 画面の上(yが小さいほう)へ
+        if uy < 0.0 { 1.0 } else { -1.0 }
+    } else if ux > 0.0 {
+        1.0
+    } else {
+        -1.0
+    };
+    (sign * ux, sign * uy)
+}
+
 /// 折り線をまたぐ矢印と、技法を表す小さな目印。
 ///
-/// 矢印は折り線の真ん中から線と直角に伸ばし、紙の重心のある側(残る側)へ
-/// 向ける。「はみ出している側をこちらへ倒す」という読み方になる。
+/// 矢印は折り線の真ん中から線と直角に伸ばし、[`arrow_normal`] が決めた側へ向ける。
+/// 「はみ出している側をこちらへ倒す」という読み方になる。
 /// 山折りか谷折りかは線の描き方(一点鎖線か破線か)のほうで示す。
 fn arrow_svg(crease: &(DVec2, DVec2), fit: &Fit, kind: TechniqueKind, toward: (f64, f64)) -> String {
     let (a, b) = *crease;
@@ -231,15 +310,7 @@ fn arrow_svg(crease: &(DVec2, DVec2), fit: &Fit, kind: TechniqueKind, toward: (f
     let (x2, y2) = fit.map(b);
     let (mx, my) = ((x1 + x2) / 2.0, (y1 + y2) / 2.0);
     let (dx, dy) = (x2 - x1, y2 - y1);
-    let len = (dx * dx + dy * dy).sqrt().max(1e-9);
-    // 折り線と直角の2方向のうち、紙の重心に近づくほうを選ぶ
-    let (ux, uy) = (-dy / len, dx / len);
-    let sign = if ux * (toward.0 - mx) + uy * (toward.1 - my) >= 0.0 {
-        1.0
-    } else {
-        -1.0
-    };
-    let (nx, ny) = (sign * ux, sign * uy);
+    let (nx, ny) = arrow_normal(dx, dy, (mx, my), toward);
     let reach = 9.0_f64;
     let (tx, ty) = (mx + nx * reach, my + ny * reach);
     let (px, py) = (-ny, nx); // 矢じりの横向き
@@ -309,9 +380,9 @@ pub(crate) fn cell_body(
     };
 
     let mut points: Vec<DVec2> = polys.iter().flatten().copied().collect();
-    for (a, b, _) in &creases {
-        points.push(*a);
-        points.push(*b);
+    for c in &creases {
+        points.push(c.a);
+        points.push(c.b);
     }
     let fit = fit_to_area(&points);
 
@@ -319,13 +390,15 @@ pub(crate) fn cell_body(
     out.push_str(&creases_svg(&creases, &fit));
     if show_step {
         let step = &doc.sequence[index];
-        if let Some((a, b, _)) = creases.first() {
-            // 紙の重心(コマの座標)を矢印の向きの手がかりにする
-            let n = points.len().max(1) as f64;
-            let toward = points.iter().map(|p| fit.map(*p)).fold((0.0, 0.0), |s, p| {
-                (s.0 + p.0 / n, s.1 + p.1 / n)
-            });
-            out.push_str(&arrow_svg(&(*a, *b), &fit, step.kind, toward));
+        // 紙の重心(コマの座標)を矢印の向きの手がかりにする
+        let n = points.len().max(1) as f64;
+        let toward = points
+            .iter()
+            .map(|p| fit.map(*p))
+            .fold((0.0, 0.0), |s, p| (s.0 + p.0 / n, s.1 + p.1 / n));
+        // 折り線ごとに矢印を出す(段折りのように1手順で何本も折る技法に対応)
+        for crease in arrow_targets(&creases) {
+            out.push_str(&arrow_svg(&crease, &fit, step.kind, toward));
         }
         out.push_str(&labels_svg(index + 1, step.kind, &step.note));
     }
@@ -419,9 +492,27 @@ pub(crate) fn strip_doc(creases: usize) -> Document {
     doc
 }
 
+/// 段折りやひだ寄せのように、1つの手順で何本もの折り目を同時に折る作品。
+/// [`strip_doc`] の折り目を全部まとめて1手順にしたもの。
+#[cfg(test)]
+pub(crate) fn multi_driver_doc(creases: usize) -> Document {
+    let mut doc = strip_doc(creases);
+    let drivers: Vec<_> = doc.sequence.iter().flat_map(|s| s.drivers.clone()).collect();
+    doc.sequence.truncate(1);
+    doc.sequence[0].kind = TechniqueKind::Pleat;
+    doc.sequence[0].drivers = drivers;
+    doc.sequence[0].note = format!("{creases}本の折り目を一度に折ります");
+    doc
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 1コマに出ている矢印の本数(矢印1本につき専用の`<g>`が1つ出る)。
+    fn arrow_count(svg: &str) -> usize {
+        svg.matches("stroke=\"#1a1a1a\" stroke-width=\"0.55\"").count()
+    }
 
     /// 3手順なら3コマぶんの図ができ、どのコマにも
     /// (a)折る前の形 (b)折り線 (c)技法の矢印 (d)手順番号 が入る。
@@ -494,5 +585,61 @@ mod tests {
     #[test]
     fn special_characters_in_notes_do_not_break_the_picture() {
         assert_eq!(esc("<a & b>"), "&lt;a &amp; b&gt;");
+    }
+
+    /// 段折りのように1手順で何本も折るときは、折り線の数だけ矢印が出る。
+    #[test]
+    fn every_crease_of_a_step_gets_its_own_arrow() {
+        for creases in 1..=4 {
+            let doc = multi_driver_doc(creases);
+            assert_eq!(doc.sequence[0].drivers.len(), creases);
+            let svg = render_step(&doc, 0).unwrap_or_else(|e| panic!("{creases}本: {e}"));
+            assert_eq!(arrow_count(&svg), creases, "矢印の本数が合わない: {svg}");
+        }
+    }
+
+    /// 折り目が多すぎるときは、絵が潰れないよう間引いて最大6本にする。
+    #[test]
+    fn too_many_creases_are_thinned_out() {
+        let doc = multi_driver_doc(9);
+        let svg = render_step(&doc, 0).unwrap();
+        // 9本 → 2本ごとに間引いて5本(上限6以下)
+        assert_eq!(arrow_count(&svg), 5, "{svg}");
+        assert!(arrow_count(&svg) <= MAX_ARROWS);
+    }
+
+    /// 角度0(折らない)の指示は折り線も矢印も出さない。
+    #[test]
+    fn a_zero_angle_driver_draws_neither_line_nor_arrow() {
+        let mut doc = multi_driver_doc(2);
+        doc.sequence[0].drivers[0].target_angle_deg = 0.0;
+        let svg = render_step(&doc, 0).unwrap();
+        assert_eq!(arrow_count(&svg), 1, "折る指示1本ぶんだけ残るはず: {svg}");
+        // 谷折り(角度が負)の線だけが残り、山折りの線は消える
+        assert_eq!(svg.matches("<line x1=").count(), 2, "{svg}");
+    }
+
+    /// 折り線が紙の重心をちょうど通る左右対称な半分折りでも、矢印の向きが揺れない。
+    #[test]
+    fn a_symmetric_half_fold_picks_a_stable_arrow_direction() {
+        // 重心との差がちょうど0/ごくわずかな正/ごくわずかな負、どれでも同じ向き
+        let mid = (50.0, 50.0);
+        let vertical = [
+            arrow_normal(0.0, -20.0, mid, mid),
+            arrow_normal(0.0, -20.0, mid, (50.0 + 1e-15, 50.0)),
+            arrow_normal(0.0, -20.0, mid, (50.0 - 1e-15, 50.0)),
+        ];
+        assert_eq!(vertical[0], (1.0, 0.0), "縦線なら右へ向ける");
+        assert!(vertical.iter().all(|n| *n == vertical[0]), "{vertical:?}");
+        // 横線なら画面の上へ
+        assert_eq!(arrow_normal(20.0, 0.0, mid, mid), (0.0, -1.0));
+        // 重心がはっきり片側にあるときは、これまでどおりそちらへ向く
+        assert_eq!(arrow_normal(0.0, -20.0, mid, (10.0, 50.0)), (-1.0, 0.0));
+
+        // 実際の作品(1本の折り目で半分に折る)でも毎回同じ絵になる
+        let doc = strip_doc(1);
+        let svg = render_step(&doc, 0).unwrap();
+        assert_eq!(svg, render_step(&doc, 0).unwrap());
+        assert_eq!(arrow_count(&svg), 1, "{svg}");
     }
 }

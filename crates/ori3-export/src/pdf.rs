@@ -8,7 +8,7 @@ use ori3_cp::extract_faces;
 use ori3_model::Document;
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
 
-use crate::diagram::{CELL, FONT, cell_body, esc};
+use crate::diagram::{CELL, FONT, cell_body};
 
 /// A4の大きさ(mm)。
 const A4_W: f64 = 210.0;
@@ -88,7 +88,7 @@ fn step_page(doc: &Document, faces: &[ori3_cp::Face], from: usize) -> Result<Str
         "  <text x=\"{}\" y=\"288\" text-anchor=\"middle\" font-family=\"{FONT}\" \
          font-size=\"3.6\" fill=\"#777777\">{}ページ</text>\n",
         A4_W / 2.0,
-        esc(&format!("{}", from / CELLS_PER_PAGE + 2))
+        from / CELLS_PER_PAGE + 2
     ));
     page.push_str("</svg>\n");
     Ok(page)
@@ -109,14 +109,41 @@ pub fn diagram_svg_pages(doc: &Document) -> Result<Vec<String>, String> {
     Ok(pages)
 }
 
+/// 折り図の文字に使える書体が機械に入っているか調べる。入っていなければ真。
+///
+/// [`FONT`] に並べた書体名のどれかが見つかればよい(`sans-serif` は書体名ではなく
+/// 「見つからなければ適当なものに任せる」という指定なので数に入れない)。
+fn japanese_font_missing(db: &svg2pdf::usvg::fontdb::Database) -> bool {
+    let wanted: Vec<String> = FONT
+        .split(',')
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| s != "sans-serif")
+        .collect();
+    !db.faces().any(|face| {
+        face.families
+            .iter()
+            .any(|(name, _)| wanted.contains(&name.to_lowercase()))
+    })
+}
+
 /// 折り図を1つのPDF(A4・複数ページ)にして返す(EXP-003)。
 ///
 /// ページごとのSVGをそれぞれPDFの図形に直し、A4のページへ貼り合わせる。
 /// 文字は形(線)に直してから埋めるので、読む人の機械に同じ書体が無くても崩れない。
+///
+/// 注意: 文字を形に直すには、書き出す側の機械に日本語の出せる書体が必要になる。
+/// 1つも見つからないと手順番号や注記が黙って消えてしまうため、そのときは
+/// 標準エラー出力に日本語で注意を出す(絵そのものは問題なく書き出せる)。
 pub fn diagram_pdf(doc: &Document) -> Result<Vec<u8>, String> {
     let pages = diagram_svg_pages(doc)?;
     let mut options = svg2pdf::usvg::Options::default();
     options.fontdb_mut().load_system_fonts();
+    if japanese_font_missing(&options.fontdb) {
+        eprintln!(
+            "注意: 日本語を出せる書体が見つかりませんでした。\
+             折り図の手順番号や説明の文字が出ないことがあります"
+        );
+    }
     let conv = svg2pdf::ConversionOptions {
         embed_text: false,
         ..Default::default()
@@ -211,6 +238,18 @@ mod tests {
     fn six_steps_fit_on_one_page() {
         assert_eq!(diagram_svg_pages(&strip_doc(6)).unwrap().len(), 2);
         assert_eq!(diagram_svg_pages(&strip_doc(1)).unwrap().len(), 2);
+    }
+
+    /// 書体が1つも無ければ「見つからない」と分かる(文字が黙って消えるのを防ぐ)。
+    #[test]
+    fn a_machine_without_fonts_is_detected() {
+        let empty = svg2pdf::usvg::fontdb::Database::new();
+        assert!(japanese_font_missing(&empty), "空なら見つからないはず");
+        let mut db = svg2pdf::usvg::fontdb::Database::new();
+        db.load_system_fonts();
+        // 見つかっても見つからなくても書き出し自体は通る(注意を出すだけ)
+        let _ = japanese_font_missing(&db);
+        assert!(diagram_pdf(&strip_doc(2)).is_ok());
     }
 
     #[test]
