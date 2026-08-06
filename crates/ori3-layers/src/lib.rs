@@ -15,5 +15,6 @@ pub use fold_through::{
 };
 pub use replay::{ReplayResult, flat_state_at, replay, replay_with_faces};
 pub use techniques::{
-    TechniqueInput, inside_reverse, open_sink, outside_reverse, petal, pleat, squash,
+    TechniqueInput, inside_reverse, open_sink, outside_reverse, petal, pleat, squash, swivel,
+    twist,
 };

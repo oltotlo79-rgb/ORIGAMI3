@@ -32,7 +32,7 @@ describe("技法の表示名", () => {
 });
 
 describe("サブメニューに出す技法", () => {
-  it("自動で折れる6種(段・中割り・かぶせ・開いてつぶす・花弁・沈め)が並ぶ", () => {
+  it("自動で折れる8種(段・中割り・かぶせ・つぶす・花弁・沈め・ひだ寄せ・ねじり)が並ぶ", () => {
     expect(SUPPORTED_TECHNIQUES.map((t) => t.kind)).toEqual([
       "Pleat",
       "InsideReverse",
@@ -40,6 +40,8 @@ describe("サブメニューに出す技法", () => {
       "Squash",
       "Petal",
       "OpenSink",
+      "Swivel",
+      "Twist",
     ]);
     for (const t of SUPPORTED_TECHNIQUES) {
       expect(t.short).toMatch(/^[^A-Za-z]+$/);

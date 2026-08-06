@@ -279,6 +279,8 @@ impl DocumentStore {
                     TechniqueKind::Squash => ori3_layers::squash,
                     TechniqueKind::Petal => ori3_layers::petal,
                     TechniqueKind::OpenSink => ori3_layers::open_sink,
+                    TechniqueKind::Swivel => ori3_layers::swivel,
+                    TechniqueKind::Twist => ori3_layers::twist,
                     _ => {
                         return Err(
                             "この折り方はまだ選べません。手動の折り操作で代替してください"
@@ -1243,6 +1245,39 @@ mod tests {
             !view.doc.sequence[1].drivers.is_empty(),
             "沈めた折り線が手順に記録される"
         );
+    }
+
+    /// ひだ寄せとねじり折りも1枚の紙に対して適用できる。
+    #[test]
+    fn technique_swivel_and_twist_apply_to_a_flat_sheet() {
+        let mut store = square_store();
+        let view = store
+            .apply_seq(SeqOp::Technique {
+                up_to: 0,
+                kind: TechniqueKind::Swivel,
+                flap: Vec::new(),
+                line: [[0.0, 0.5], [1.0, 0.5]],
+                reference_point: [1.0, 0.8],
+                open_to_back: None,
+            })
+            .unwrap();
+        assert_eq!(view.faces.len(), 3, "くさび・その先・基準線の向こう");
+        assert_eq!(view.doc.sequence[0].kind, TechniqueKind::Swivel);
+
+        let mut store = square_store();
+        let view = store
+            .apply_seq(SeqOp::Technique {
+                up_to: 0,
+                kind: TechniqueKind::Twist,
+                flap: Vec::new(),
+                line: [[0.4, 0.4], [0.6, 0.4]],
+                reference_point: [0.6, 0.327],
+                open_to_back: None,
+            })
+            .unwrap();
+        assert_eq!(view.faces.len(), 9, "中央1面+ひだ4面+腕4面");
+        assert_eq!(view.doc.sequence[0].kind, TechniqueKind::Twist);
+        assert!(!view.doc.sequence[0].drivers.is_empty());
     }
 
     /// 未実装の技法・折れない指定・手順の途中への挿入はErr(文書は無変更)。

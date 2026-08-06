@@ -37,7 +37,7 @@ use std::collections::{HashMap, HashSet};
 
 use glam::DVec2;
 use ori3_cp::{Face, extract_faces};
-use ori3_geometry::Isometry2;
+use ori3_geometry::{Isometry2, reflect_across_line};
 use ori3_model::{
     CreasePattern, DriverLine, EPS, EdgeId, EdgeKind, FaceId, FoldStep, TechniqueKind, VertexId,
 };
@@ -539,6 +539,239 @@ pub fn open_sink(
             kind: TechniqueKind::OpenSink,
         },
     )
+}
+
+/// ひだ寄せ(swivel fold)。フラップの縁を支点のまわりに寄せ、余った紙をひだにする。
+///
+/// `line` は**基準線**: 寄せる紙が今乗っている折り目(または紙の縁)の直線。
+/// `reference_point` は**寄せる先**: 基準線の自由端が向かう点。この2つで
+/// 「基準線」と「寄せ線(支点から寄せる先へ向かう直線)」の2本を指定したことになる。
+///
+/// 支点は、フラップが基準線の向きに占める範囲の両端のうち**寄せる先から遠いほう**。
+/// 支点から見た「基準線の向き」から「寄せる先の向き」までの角をαとすると、
+/// 動きは1回の [`flat_motion`] で表せる:
+///
+/// - **くさび**(基準線と二等分線Mに挟まれた領域)は、支点から角α/2の向きの直線Mで
+///   折り返す。基準線に乗っていた縁がちょうど寄せ線へ重なる
+/// - **基準線の向こう側の紙**(寄せる先と反対側)は、支点まわりに角αだけ回る
+///   (鏡映2回=回転)。くさびの縁と同じ場所へ写るので、基準線でつながったまま折れる
+/// - Mの向こう(寄せる先の側)の紙は動かない。折り返したくさびはその上(または下)へ
+///   回り、層が重なる(**層併合**)
+/// - 折り線は基準線とMの2本で、支点で出会う(単純な折りを2回するのと同じだけの
+///   折り線が、1回の動きで入る)
+///
+/// 折り返したくさびを重なりのどちら側へ入れるかは `open_to_back` で選ぶ
+/// (既定は手前=いちばん上)。`flap` が空なら領域に掛かる全ての層を寄せる。
+/// 層の数の偶奇やフラップの形は仮定しない。Errにするのは幾何的に決められない入力
+/// (退化した基準線・見つからない層・基準線の向きに広がりの無いフラップ・
+/// 支点と重なる寄せ先・基準線の上にある寄せ先)だけ。
+pub fn swivel(
+    cp: &mut CreasePattern,
+    faces: &[Face],
+    state: &FlatState,
+    input: &TechniqueInput,
+) -> Result<FoldThroughResult, String> {
+    let name = "ひだ寄せ";
+    let (l0, l1) = line_points(input.line)?;
+    let u = (l1 - l0).normalize();
+    let flap = flap_or_all(faces, state, &input.flap, name)?;
+    let span = flap_span_along(cp, faces, state, &flap, l0, u).ok_or_else(|| {
+        format!("{name}のフラップが基準線の向きに広がっていません。基準線を引き直してください")
+    })?;
+
+    let p = DVec2::from(input.reference_point);
+    let (e0, e1) = (l0 + u * span.0, l0 + u * span.1);
+    // 支点は寄せる先から遠いほうの端(自由端が寄せる先へ向かって回る)
+    let (pivot, tip) = if (p - e0).length() >= (p - e1).length() {
+        (e0, e1)
+    } else {
+        (e1, e0)
+    };
+    let reach = (tip - pivot).length();
+    if reach <= EPS {
+        return Err(format!(
+            "{name}のフラップが基準線の向きに広がっていません。基準線を引き直してください"
+        ));
+    }
+    if (p - pivot).length() <= EPS {
+        return Err(format!(
+            "{name}の寄せる先が支点と同じ位置です。寄せたい先の点を指してください"
+        ));
+    }
+    let s_dir = (tip - pivot).normalize();
+    let c_dir = (p - pivot).normalize();
+    let alpha = s_dir.perp_dot(c_dir).atan2(s_dir.dot(c_dir));
+    if alpha.abs() <= ANGLE_EPS {
+        return Err(format!(
+            "{name}の寄せる先が基準線の上にあります。基準線から離れた点を指してください"
+        ));
+    }
+
+    let m_dir = rotate(s_dir, alpha * 0.5);
+    let m_line = [
+        [pivot.x, pivot.y],
+        [pivot.x + m_dir.x, pivot.y + m_dir.y],
+    ];
+    // くさび(基準線とMの間)の内側を示す点と、その反対側(基準線の向こう)の点
+    let inside = pivot + rotate(s_dir, alpha * 0.25) * (reach * 0.5);
+    let beyond = reflect_across_line(inside, l0, l1);
+    let base_line = [
+        [pivot.x, pivot.y],
+        [pivot.x + s_dir.x, pivot.y + s_dir.y],
+    ];
+    // 空の指定は「領域に掛かる全ての層」。層を並べ直して渡すと、掛からない層に
+    // ついて余計な警告が出る
+    let layers = if input.flap.is_empty() {
+        Vec::new()
+    } else {
+        flap
+    };
+    let open = if input.open_to_back.unwrap_or(false) {
+        FoldDirection::Down
+    } else {
+        FoldDirection::Up
+    };
+    let mut res = flat_motion(
+        cp,
+        faces,
+        state,
+        &FlatMotionInput {
+            parts: vec![
+                MotionPart {
+                    layers: layers.clone(),
+                    region: vec![
+                        HalfPlane {
+                            line: input.line,
+                            inside_point: [inside.x, inside.y],
+                        },
+                        HalfPlane {
+                            line: m_line,
+                            inside_point: [inside.x, inside.y],
+                        },
+                    ],
+                    transform: MotionTransform::Reflect(vec![m_line]),
+                    turn: LayerTurn::Outside(open),
+                    reverse_layers: None,
+                },
+                MotionPart {
+                    layers,
+                    region: vec![HalfPlane {
+                        line: input.line,
+                        inside_point: [beyond.x, beyond.y],
+                    }],
+                    // 鏡映2回=支点まわりの角αの回転(基準線→M の順に掛ける)
+                    transform: MotionTransform::Reflect(vec![base_line, m_line]),
+                    turn: LayerTurn::Keep,
+                    reverse_layers: None,
+                },
+            ],
+            kind: TechniqueKind::Swivel,
+        },
+    )?;
+    if alpha.abs() >= std::f64::consts::PI - ANGLE_EPS {
+        res.warnings.insert(
+            0,
+            format!(
+                "この{name}では、寄せる先が基準線の真後ろにあります。くさびが紙の全体に広がるので、寄せ先の点を確かめてください(指定のまま続行します)"
+            ),
+        );
+    }
+    Ok(res)
+}
+
+/// ねじり折り(twist fold)。中央の多角形を回し、周りにひだを作る。
+///
+/// # 入力の決め方(設計)
+///
+/// [`TechniqueInput`] は「線1本+点1つ」しか運べないので、次のように決めてある。
+///
+/// - `line` = **中央多角形の1辺**。2点は辺の両端(ここだけ無限直線ではなく線分)
+/// - `reference_point` = **回転量を示す点**。中心から見た「辺の中点の向き」から
+///   「この点の向き」までの角が、ねじる角αになる
+/// - **中心**は、選んだ層が畳み平面で占める範囲の重心。辺が中心のまわりに張る角から
+///   辺の数 n = 2π/∠ を決め、その辺を中心のまわりに回して中央多角形を作る
+///
+/// つまり中央多角形は「1辺を中心のまわりに回してできる形」に限られる。辺ごとに
+/// 長さの違う多角形は、この入力(1辺+1点)では指し示せない
+/// ([`flat_motion`] 自体は半平面をいくつでも並べられるので表せる)。
+///
+/// # 紙の動き(2n+1個の [`MotionPart`])
+///
+/// - **中央**(多角形の内側): 中心まわりの角αの回転
+/// - **ひだ**(辺kの外側): 回転後の辺で折り返す(鏡映)。中央とは辺kでつながったまま
+/// - **腕**(頂点の外側): ひだと折り目でつながるように決まる等長変換。ひだが
+///   紙の縁まで伸びて腕どうしを切り離すので、腕は1つずつ別に動ける
+///
+/// 各頂点は「多角形の辺2本+ひだの折り線2本」の4本が集まる点になり、平らに畳める。
+/// 層の数の偶奇やフラップの形は仮定しない。Errにするのは幾何的に決められない入力
+/// (退化した辺・見つからない層・中心と重なる辺の端・中央多角形が作れない角・
+/// 回転量が0)だけで、紙が裂ける指定は警告して続ける。
+pub fn twist(
+    cp: &mut CreasePattern,
+    faces: &[Face],
+    state: &FlatState,
+    input: &TechniqueInput,
+) -> Result<FoldThroughResult, String> {
+    let name = "ねじり折り";
+    let (a, b) = line_points(input.line)?;
+    let flap = flap_or_all(faces, state, &input.flap, name)?;
+    let center = flap_centroid(cp, faces, state, &flap)
+        .ok_or_else(|| format!("{name}の中心が決められません。層を選び直してください"))?;
+
+    let (ra, rb) = (a - center, b - center);
+    if ra.length() <= EPS || rb.length() <= EPS {
+        return Err(format!(
+            "{name}の中央多角形の辺が中心を通っています。中心から離れた辺を指してください"
+        ));
+    }
+    let span = ra.perp_dot(rb).atan2(ra.dot(rb));
+    if span.abs() <= ANGLE_EPS {
+        return Err(format!(
+            "{name}の中央多角形が作れません。辺の両端が中心から見て同じ向きにあります"
+        ));
+    }
+    let n_f = std::f64::consts::TAU / span.abs();
+    let n = n_f.round().max(3.0) as usize;
+    let mut warnings: Vec<String> = Vec::new();
+    if (n_f - n as f64).abs() > 1e-6 {
+        warnings.push(format!(
+            "この{name}では、指定した辺から中央多角形をちょうど{n}角形に丸めました(指定のまま続行します)"
+        ));
+    }
+
+    let mid = (a + b) * 0.5;
+    let rp = DVec2::from(input.reference_point) - center;
+    let rm = mid - center;
+    if rp.length() <= EPS {
+        return Err(format!(
+            "{name}の回転量を示す点が中心と同じ位置です。中心から離れた点を指してください"
+        ));
+    }
+    let alpha = rm.perp_dot(rp).atan2(rm.dot(rp));
+    if alpha.abs() <= ANGLE_EPS {
+        return Err(format!(
+            "{name}のねじる角が0です。回転量を示す点をずらしてください"
+        ));
+    }
+
+    let open = if input.open_to_back.unwrap_or(false) {
+        FoldDirection::Down
+    } else {
+        FoldDirection::Up
+    };
+    let parts = twist_parts(&flap, &input.flap, center, ra, span.signum(), n, alpha, open);
+    let mut res = flat_motion(
+        cp,
+        faces,
+        state,
+        &FlatMotionInput {
+            parts,
+            kind: TechniqueKind::Twist,
+        },
+    )?;
+    warnings.append(&mut res.warnings);
+    res.warnings = warnings;
+    Ok(res)
 }
 
 // ---------------------------------------------------------------------------
@@ -1159,6 +1392,20 @@ fn flap_in_layer_order(
         .collect())
 }
 
+/// フラップ指定を検証する。空なら「全ての層」(どの層に掛かるかは
+/// [`flat_motion`] が領域との重なりで決める)。
+fn flap_or_all(
+    faces: &[Face],
+    state: &FlatState,
+    flap: &[FaceId],
+    name: &str,
+) -> Result<Vec<FaceId>, String> {
+    if flap.is_empty() {
+        return Ok(state.order.clone());
+    }
+    flap_in_layer_order(faces, state, flap, name)
+}
+
 /// 中心線に重なっている折り目(開く背)を探す。
 ///
 /// 戻り値は「背が中心線上で占める範囲(l0からの符号付き距離)」と
@@ -1555,6 +1802,162 @@ fn petal_parts(
         layers: flap.to_vec(),
         region: middle,
         transform: MotionTransform::Reflect(vec![hinge]),
+        turn: LayerTurn::Outside(open),
+        reverse_layers: None,
+    });
+    parts
+}
+
+/// 点 `c` のまわりの角 `angle` の回転(`c` を通る2直線での鏡映の合成)。
+fn rotation_about(c: DVec2, angle: f64) -> Isometry2 {
+    let half = rotate(DVec2::X, angle * 0.5);
+    Isometry2::reflection(c, c + half).compose(&Isometry2::reflection(c, c + DVec2::X))
+}
+
+/// 選んだ層が畳み平面で占める範囲(頂点)の重心。
+fn flap_centroid(
+    cp: &CreasePattern,
+    faces: &[Face],
+    state: &FlatState,
+    flap: &[FaceId],
+) -> Option<DVec2> {
+    let pos = vertex_positions(cp);
+    let (mut sum, mut count) = (DVec2::ZERO, 0usize);
+    for f in faces.iter().filter(|f| flap.contains(&f.id)) {
+        let pl = state.placements.get(&f.id)?;
+        for p in f.vertices.iter().filter_map(|v| pos.get(v)) {
+            sum += pl.apply(*p);
+            count += 1;
+        }
+    }
+    (count > 0).then(|| sum / count as f64)
+}
+
+/// 2点を通る直線(半平面や鏡映へ渡す形)。
+fn line_of(p: DVec2, q: DVec2) -> [[f64; 2]; 2] {
+    [[p.x, p.y], [q.x, q.y]]
+}
+
+/// ねじり折りの動き。中央の回転・辺ごとのひだ・頂点ごとの腕を組み立てる。
+///
+/// `ra` は中心から中央多角形の最初の頂点へのベクトル、`turn` は頂点を並べる向き
+/// (+1/-1)、`alpha` はねじる角。
+#[allow(clippy::too_many_arguments)]
+fn twist_parts(
+    flap: &[FaceId],
+    given: &[FaceId],
+    center: DVec2,
+    ra: DVec2,
+    turn: f64,
+    n: usize,
+    alpha: f64,
+    open: FoldDirection,
+) -> Vec<MotionPart> {
+    let layers = if given.is_empty() {
+        Vec::new()
+    } else {
+        flap.to_vec()
+    };
+    let step = turn * std::f64::consts::TAU / n as f64;
+    let v: Vec<DVec2> = (0..n)
+        .map(|k| center + rotate(ra, step * k as f64))
+        .collect();
+    let rot = rotation_about(center, alpha);
+    let vp: Vec<DVec2> = v.iter().map(|&p| rot.apply(p)).collect();
+    let at = |k: usize| k % n;
+    // 辺kの直線(回転前)と、ひだkの等長変換(回転後の辺で折り返す)
+    let edges: Vec<[[f64; 2]; 2]> = (0..n).map(|k| line_of(v[k], v[at(k + 1)])).collect();
+    let pleat: Vec<Isometry2> = (0..n)
+        .map(|k| {
+            Isometry2::reflection(vp[k], vp[at(k + 1)]).compose(&rot)
+        })
+        .collect();
+
+    // 頂点jから外へ出る2本の折り線: p_j(ひだ j-1 との境)と q_j(ひだ j との境)。
+    // p_j は中心から外へ向かう放射方向にとり、q_j は「腕がひだの両側と折り目で
+    // つながる」条件から決まる(頂点に4本が集まり、平らに畳める形になる)。
+    let p_dir: Vec<DVec2> = (0..n).map(|j| (v[j] - center).normalize()).collect();
+    let q_dir: Vec<DVec2> = (0..n)
+        .map(|j| {
+            let prev = &pleat[(j + n - 1) % n];
+            let inv = pleat[j].inverse();
+            let p_img = prev.apply(v[j] + p_dir[j]) - prev.apply(v[j]);
+            let q_img = rotate(p_img, step);
+            (inv.apply(vp[j] + q_img) - inv.apply(vp[j])).normalize()
+        })
+        .collect();
+
+    let radius = ra.length();
+    let mut parts: Vec<MotionPart> = Vec::with_capacity(2 * n + 1);
+    // 重なりは下から「ひだ → 腕 → 中央」。ひだは元の場所に残し、腕と中央を
+    // その上へ回す(どちらの側へ回すかは open_to_back で選べる)
+    // ひだ: 辺kの外側で、両端の折り線に挟まれた帯
+    for k in 0..n {
+        let mid = (v[k] + v[at(k + 1)]) * 0.5;
+        let inside = mid + (mid - center).normalize() * (radius * 0.02);
+        parts.push(MotionPart {
+            layers: layers.clone(),
+            region: vec![
+                HalfPlane {
+                    line: edges[k],
+                    inside_point: [inside.x, inside.y],
+                },
+                HalfPlane {
+                    line: line_of(v[k], v[k] + q_dir[k]),
+                    inside_point: [inside.x, inside.y],
+                },
+                HalfPlane {
+                    line: line_of(v[at(k + 1)], v[at(k + 1)] + p_dir[at(k + 1)]),
+                    inside_point: [inside.x, inside.y],
+                },
+            ],
+            transform: MotionTransform::Isometry(pleat[k]),
+            turn: LayerTurn::Keep,
+            reverse_layers: None,
+        });
+    }
+    // 腕: 頂点jから出る2本の折り線に挟まれた外側の紙
+    for j in 0..n {
+        let bis = p_dir[j] + q_dir[j];
+        let bis = if bis.length() > EPS {
+            bis.normalize()
+        } else {
+            DVec2::new(-p_dir[j].y, p_dir[j].x)
+        };
+        let inside = v[j] + bis * radius;
+        let prev = &pleat[(j + n - 1) % n];
+        let axis0 = prev.apply(v[j]);
+        let axis1 = prev.apply(v[j] + p_dir[j]);
+        parts.push(MotionPart {
+            layers: layers.clone(),
+            region: vec![
+                HalfPlane {
+                    line: line_of(v[j], v[j] + p_dir[j]),
+                    inside_point: [inside.x, inside.y],
+                },
+                HalfPlane {
+                    line: line_of(v[j], v[j] + q_dir[j]),
+                    inside_point: [inside.x, inside.y],
+                },
+            ],
+            transform: MotionTransform::Isometry(
+                Isometry2::reflection(axis0, axis1).compose(prev),
+            ),
+            turn: LayerTurn::Outside(open),
+            reverse_layers: None,
+        });
+    }
+    // 中央: 中心まわりの回転
+    parts.push(MotionPart {
+        layers: layers.clone(),
+        region: edges
+            .iter()
+            .map(|&line| HalfPlane {
+                line,
+                inside_point: [center.x, center.y],
+            })
+            .collect(),
+        transform: MotionTransform::Isometry(rot),
         turn: LayerTurn::Outside(open),
         reverse_layers: None,
     });

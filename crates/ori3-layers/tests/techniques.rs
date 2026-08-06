@@ -29,6 +29,7 @@ use ori3_layers::fold_through::{FoldDirection, FoldThroughInput, fold_through};
 use ori3_layers::techniques::TechniqueInput;
 use ori3_layers::{
     flat_state_at, inside_reverse, open_sink, outside_reverse, petal, pleat, replay, squash,
+    swivel, twist,
 };
 use ori3_model::{CreasePattern, Document, EdgeKind, FaceId, Paper, TechniqueKind};
 
@@ -1592,4 +1593,270 @@ fn open_sink_accepts_partial_flaps_and_rejects_only_undefined_input() {
         .expect("3層(奇数)だけでも沈められる");
     assert_eq!(a.faces.len(), 7, "選んだ3層だけが先端と胴に分かれる");
     assert_ne!(doc, before_doc, "折りは適用される");
+}
+
+// ---------------------------------------------------------------------------
+// ひだ寄せ
+// ---------------------------------------------------------------------------
+
+/// ひだ寄せの基本: 1枚の正方形の中ほどの線を支点まわりに寄せる。
+///
+/// 基準線 y=0.5(支点は左端 (0,0.5))の上側のくさびが二等分線Mで折り返され、
+/// 基準線の下の紙は支点まわりに角αだけ回る。基準線に乗っていた縁は
+/// ちょうど寄せ線(支点→寄せる先)へ重なる。折り線は基準線とMの2本。
+#[test]
+fn swivel_brings_the_edge_onto_the_target_line() {
+    let mut doc = square_doc();
+    let line = [[0.0, 0.5], [1.0, 0.5]];
+    let target = [1.0, 0.8];
+    let a = apply(&mut doc, swivel, Vec::new(), line, target).expect("寄せられる");
+    assert!(a.warnings.is_empty(), "紙は裂けない: {:?}", a.warnings);
+
+    // 基準線とMで3つに分かれる(下側・くさび・Mの向こう)
+    assert_eq!(a.faces.len(), 3, "基準線とMの2本で3つに分かれる");
+    assert_eq!(a.order.len(), 3);
+    assert_eq!(doc.cp.edges.len(), 9, "輪郭4本+折り線2本+輪郭の分割3本");
+    let step = &doc.sequence[doc.sequence.len() - 1];
+    assert_eq!(step.kind, TechniqueKind::Swivel);
+    assert_eq!(step.drivers.len(), 2, "支点で出会う2本を記録する: {:?}", step.drivers);
+    for d in &step.drivers {
+        assert_eq!(d.target_angle_deg.abs(), 180.0, "{d:?}");
+    }
+
+    // 基準線の自由端 (1,0.5) は、寄せ線(支点→寄せる先)の上へ来る
+    let pivot = DVec2::new(0.0, 0.5);
+    let want = pivot + (DVec2::from(target) - pivot).normalize() * 1.0;
+    let faces = extract_faces(&doc.cp);
+    let (after, _) = flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
+    let pos: HashMap<u32, DVec2> =
+        doc.cp.vertices.iter().map(|v| (v.id, DVec2::from(v.pos))).collect();
+    // 座標系は「動かなかった紙(Mの向こう)」を基準にそろえて比べる
+    // (畳み平面の全体の等長変換は折るたびに付け直されるため)
+    let stay = faces
+        .iter()
+        .find(|f| ori3_layers::point_in_face(&doc.cp, f, [0.1, 0.9]))
+        .expect("Mの向こうの面");
+    let base = after.placements[&stay.id].inverse();
+    let moved_to: Vec<DVec2> = faces
+        .iter()
+        .flat_map(|f| {
+            let pl = base.compose(&after.placements[&f.id]);
+            f.vertices
+                .iter()
+                .filter_map(|v| pos.get(v))
+                .filter(|&&q| (q - DVec2::new(1.0, 0.5)).length() < 1e-9)
+                .map(move |&q| pl.apply(q))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert!(!moved_to.is_empty(), "自由端を持つ面がある");
+    for q in &moved_to {
+        assert!(
+            (*q - want).length() < 1e-9,
+            "自由端が寄せ線の上へ来る(期待 {want:?}、実際 {q:?})"
+        );
+    }
+
+    // 寄せたくさびはいちばん上に来る(層併合)
+    let wedge = *a.order.last().expect("最上層");
+    assert!(
+        base.compose(&after.placements[&wedge]).mirrored,
+        "いちばん上に来るのは折り返されたくさび"
+    );
+
+    assert_fold_senses(&doc, "ひだ寄せ");
+    assert_display_order(&doc, "ひだ寄せ");
+    assert_eq!(after.order, a.order, "層順序が再生結果と一致する");
+}
+
+/// ひだ寄せは重なった層でも、重なりの一部だけを選んでもできる。
+/// 定義できない入力だけをErrで断り、そのとき文書は一切変わらない。
+#[test]
+fn swivel_works_on_stacked_layers_and_rejects_only_undefined_input() {
+    let mut doc = two_layer_flap();
+    let before_doc = doc.clone();
+    let faces = extract_faces(&doc.cp);
+    let (state, _) = flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
+    // 2層のフラップ(footprint [0,1]x[0,0.5]、背は y=0.5)
+    let line = [[0.0, 0.25], [1.0, 0.25]];
+
+    // 退化した基準線
+    let err = apply(&mut doc, swivel, Vec::new(), [[0.2, 0.25], [0.2, 0.25]], [1.0, 0.4])
+        .expect_err("退化した基準線はエラー");
+    assert!(err.contains("2点が一致"), "{err}");
+    assert_eq!(doc, before_doc, "失敗時は文書を変更しない");
+
+    // 寄せる先が基準線の上(寄せる角が決まらない)
+    let err = apply(&mut doc, swivel, Vec::new(), line, [1.0, 0.25])
+        .expect_err("基準線の上の寄せ先はエラー");
+    assert!(err.contains("基準線の上"), "{err}");
+    assert_eq!(doc, before_doc);
+
+    // 無い層
+    let missing = faces.iter().map(|f| f.id).max().unwrap_or(0) + 99;
+    let err = apply(&mut doc, swivel, vec![missing], line, [1.0, 0.4])
+        .expect_err("無い層はエラー");
+    assert!(err.contains("見つかりません"), "{err}");
+    assert_eq!(doc, before_doc);
+
+    // 重なりの一部(下の層)だけを寄せる: 断らずに折れる
+    let a = apply(&mut doc, swivel, vec![state.order[0]], line, [1.0, 0.4])
+        .expect("1層だけでも寄せられる");
+    assert_eq!(a.faces.len(), 4, "選んだ層だけが3つに分かれる(1+3)");
+    assert_ne!(doc, before_doc, "折りは適用される");
+    let step = &doc.sequence[doc.sequence.len() - 1];
+    assert_eq!(step.kind, TechniqueKind::Swivel);
+    assert_eq!(step.drivers.len(), 2, "折り線2本: {:?}", step.drivers);
+}
+
+// ---------------------------------------------------------------------------
+// ねじり折り
+// ---------------------------------------------------------------------------
+
+/// ねじり折りの基本: 1枚の正方形の中央に四角い領域をとって30°ねじる。
+///
+/// 中央の四角が回り、4辺それぞれにひだができて、4つの腕がそれぞれ動く
+/// (1+4+4=9面)。各頂点は「多角形の辺2本+ひだの折り線2本」の4本が集まる点に
+/// なるので、紙が裂けることも山谷と重なり順が食い違うこともない。
+#[test]
+fn twist_rotates_the_middle_square_and_makes_four_pleats() {
+    let mut doc = square_doc();
+    let edges_before = doc.cp.edges.len();
+    // 中心 (0.5,0.5) のまわりの正方形の1辺と、30°ねじる回転量の点
+    let line = [[0.4, 0.4], [0.6, 0.4]];
+    let a = apply(&mut doc, twist, Vec::new(), line, [0.6, 0.327]).expect("ねじれる");
+    assert!(a.warnings.is_empty(), "紙は裂けない: {:?}", a.warnings);
+
+    assert_eq!(a.faces.len(), 9, "中央1面+ひだ4面+腕4面");
+    assert_eq!(a.order.len(), 9);
+    let step = &doc.sequence[doc.sequence.len() - 1];
+    assert_eq!(step.kind, TechniqueKind::Twist);
+    assert_eq!(
+        step.drivers.len(),
+        12,
+        "多角形の辺4本+ひだの折り線8本: {:?}",
+        step.drivers
+    );
+    for d in &step.drivers {
+        assert_eq!(d.target_angle_deg.abs(), 180.0, "{d:?}");
+    }
+    assert!(doc.cp.edges.len() > edges_before + 12, "輪郭も分割される");
+
+    // 中央の四角は周りの紙に対して「裏返らずに回る」(=ねじれている)
+    let faces = extract_faces(&doc.cp);
+    let (after, _) = flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
+    let center = faces
+        .iter()
+        .find(|f| ori3_layers::point_in_face(&doc.cp, f, [0.5, 0.5]))
+        .expect("中央の面");
+    // 中央と同じ向き(裏返っていない)のは腕、裏返っているのはひだ
+    let same: Vec<FaceId> = faces
+        .iter()
+        .filter(|f| {
+            after.placements[&f.id].mirrored == after.placements[&center.id].mirrored
+        })
+        .map(|f| f.id)
+        .collect();
+    assert_eq!(same.len(), 5, "中央1面と腕4面が同じ向き(残り4面がひだ)");
+    let arm = *same.iter().find(|&&id| id != center.id).expect("腕");
+    let rel = after.placements[&center.id].compose(&after.placements[&arm].inverse());
+    assert!(!rel.mirrored, "中央は腕に対して裏返らない(回転)");
+    assert!(
+        rel.rotation.min(std::f64::consts::TAU - rel.rotation) > 1e-6,
+        "中央は周りに対して回っている(実際 {}rad)",
+        rel.rotation
+    );
+
+    // 折り終わる直前(t=0.99)の高さによる検証はねじり折りには使えない:
+    // 腕と中央は「腕→ひだ→中央」と2つの折り目を挟んで離れているため、補間の
+    // 途中の高さは各面の傾きの積み重ねになり、折り上がりの重なりを表さない
+    // (中割り折りに使えないのと同じ事情)。折り目の向きと層順序の一致
+    // `assert_fold_senses` と、下の「ひだ→腕→中央」の並びの確認で代わりに調べる。
+    assert_fold_senses(&doc, "ねじり折り");
+    let layer = |id: FaceId| a.order.iter().position(|&x| x == id).unwrap();
+    let pleats: Vec<FaceId> = faces
+        .iter()
+        .map(|f| f.id)
+        .filter(|id| !same.contains(id))
+        .collect();
+    assert_eq!(pleats.len(), 4);
+    for &p in &pleats {
+        for &q in &same {
+            assert!(layer(p) < layer(q), "ひだ{p}は腕・中央{q}より下にある");
+        }
+    }
+    assert_eq!(layer(center.id), 8, "中央がいちばん上に来る");
+    assert_eq!(after.order, a.order, "層順序が再生結果と一致する");
+    for f in &faces {
+        assert!(
+            a.at[&f.id].abs_diff_eq(after.placements[&f.id].apply(DVec2::from(a.rep[&f.id])), 1e-6),
+            "面 {} の位置が再生結果と一致する",
+            f.id
+        );
+    }
+}
+
+/// ねじり折りは三角形の中央領域でもできる(辺の数は指定した辺が中心に張る角で決まる)。
+/// 定義できない入力だけをErrで断り、そのとき文書は一切変わらない。
+#[test]
+fn twist_works_on_a_triangle_and_rejects_only_undefined_input() {
+    let mut doc = square_doc();
+    let before_doc = doc.clone();
+    // 中心 (0.5,0.5)・半径0.2 の正三角形の1辺(中心に張る角は120°→3辺)
+    let v0 = [0.5, 0.7];
+    let v1 = [0.5 - 0.2 * 0.8660254, 0.5 - 0.1];
+    let line = [v0, v1];
+
+    // 退化した辺
+    let err = apply(&mut doc, twist, Vec::new(), [v0, v0], [0.5, 0.2])
+        .expect_err("退化した辺はエラー");
+    assert!(err.contains("2点が一致"), "{err}");
+    assert_eq!(doc, before_doc, "失敗時は文書を変更しない");
+
+    // 回転量を示す点が中心と同じ
+    let err = apply(&mut doc, twist, Vec::new(), line, [0.5, 0.5])
+        .expect_err("中心と同じ点はエラー");
+    assert!(err.contains("中心と同じ"), "{err}");
+    assert_eq!(doc, before_doc);
+
+    // ねじる角が0(辺の中点の向きと同じ向きの点)
+    let mid = DVec2::new(
+        0.5 * (v0[0] + v1[0]),
+        0.5 * (v0[1] + v1[1]),
+    );
+    let out = DVec2::new(0.5, 0.5) + (mid - DVec2::new(0.5, 0.5)) * 2.0;
+    let err = apply(&mut doc, twist, Vec::new(), line, [out.x, out.y])
+        .expect_err("ねじる角0はエラー");
+    assert!(err.contains("ねじる角が0"), "{err}");
+    assert_eq!(doc, before_doc);
+
+    // 無い層
+    let faces = extract_faces(&doc.cp);
+    let missing = faces.iter().map(|f| f.id).max().unwrap_or(0) + 99;
+    let err = apply(&mut doc, twist, vec![missing], line, [0.5, 0.2])
+        .expect_err("無い層はエラー");
+    assert!(err.contains("見つかりません"), "{err}");
+    assert_eq!(doc, before_doc);
+
+    // 三角形の中央領域を25°ねじる
+    let dir = rotate2(mid - DVec2::new(0.5, 0.5), 25.0_f64.to_radians());
+    let target = DVec2::new(0.5, 0.5) + dir * 2.0;
+    let a = apply(&mut doc, twist, Vec::new(), line, [target.x, target.y])
+        .expect("三角形でもねじれる");
+    assert!(a.warnings.is_empty(), "紙は裂けない: {:?}", a.warnings);
+    assert_eq!(a.faces.len(), 7, "中央1面+ひだ3面+腕3面");
+    let step = &doc.sequence[doc.sequence.len() - 1];
+    assert_eq!(step.kind, TechniqueKind::Twist);
+    assert_eq!(step.drivers.len(), 9, "辺3本+ひだの折り線6本: {:?}", step.drivers);
+    assert_fold_senses(&doc, "三角形のねじり折り");
+
+    let faces = extract_faces(&doc.cp);
+    let (after, _) = flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
+    assert_eq!(after.order, a.order, "層順序が再生結果と一致する");
+}
+
+/// 中心線の向きを角 `a` だけ回した向き(テスト用の小道具)。
+fn rotate2(d: DVec2, a: f64) -> DVec2 {
+    let (s, c) = a.sin_cos();
+    DVec2::new(d.x * c - d.y * s, d.x * s + d.y * c)
 }
