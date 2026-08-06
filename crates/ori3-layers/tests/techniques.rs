@@ -28,7 +28,7 @@ use ori3_layers::flat_state::representative_point;
 use ori3_layers::fold_through::{FoldDirection, FoldThroughInput, fold_through};
 use ori3_layers::techniques::TechniqueInput;
 use ori3_layers::{
-    flat_state_at, inside_reverse, outside_reverse, petal, pleat, replay, squash,
+    flat_state_at, inside_reverse, open_sink, outside_reverse, petal, pleat, replay, squash,
 };
 use ori3_model::{CreasePattern, Document, EdgeKind, FaceId, Paper, TechniqueKind};
 
@@ -1362,3 +1362,234 @@ fn petal_rejects_undefined_input_without_touching_document() {
 }
 
 
+
+// ---------------------------------------------------------------------------
+// 沈め折り
+// ---------------------------------------------------------------------------
+
+/// 鶴の基本形。予備基本形の前面と背面を1回ずつ花弁折りする
+/// (`acceptance_crane.rs` の `bird_base` と同じ手順)。
+fn bird_base() -> Document {
+    let mut doc = preliminary_base();
+    let center_line = [[0.0, 1.0], [0.5, 0.5]];
+    let tip = [0.0, 1.0];
+    let faces = extract_faces(&doc.cp);
+    let (state, _) = flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
+    let front = vec![*state.order.last().expect("最前面")];
+    apply(&mut doc, petal, front, center_line, tip).expect("前面の花弁折り");
+
+    // 背面 = 前面の花弁折りで分かれなかった層(畳んだ正方形の両脇の角を両方持つ層)
+    let faces = extract_faces(&doc.cp);
+    let (state, _) = flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
+    let has = |f: &Face, p: DVec2| {
+        let pl = state.placements[&f.id];
+        let pos: HashMap<u32, DVec2> =
+            doc.cp.vertices.iter().map(|v| (v.id, DVec2::from(v.pos))).collect();
+        f.vertices
+            .iter()
+            .filter_map(|v| pos.get(v))
+            .any(|&q| (pl.apply(q) - p).length() < 1e-9)
+    };
+    let back: Vec<FaceId> = faces
+        .iter()
+        .filter(|f| has(f, DVec2::new(0.5, 1.0)) && has(f, DVec2::new(0.0, 0.5)))
+        .map(|f| f.id)
+        .collect();
+    assert_eq!(back.len(), 1, "背面はまだ1枚(実際 {back:?})");
+    apply_input(
+        &mut doc,
+        petal,
+        TechniqueInput {
+            flap: back,
+            line: center_line,
+            reference_point: tip,
+            open_to_back: Some(true),
+        },
+    )
+    .expect("背面の花弁折り");
+    doc
+}
+
+/// 沈め折りの基本: 予備基本形の閉じた角(紙の中心が来ている (0.5,0.5))を沈める。
+///
+/// 紙は1mmも動かず、折り線より先端側の4層が入れ子の内外を入れ替える。
+/// 先端側の折り目は山谷が反転し、外側の紙は元のまま。
+#[test]
+fn open_sink_turns_the_tip_of_the_preliminary_base_inside_out() {
+    let mut doc = preliminary_base();
+    let faces = extract_faces(&doc.cp);
+    let (before, _) = flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
+    let before_kinds = kinds(&doc.cp);
+    let edges_before = doc.cp.edges.len();
+
+    // 閉じた角 (0.5,0.5) を切り取る線(先端側は小さな三角形)
+    let line = [[0.5, 0.6], [0.4, 0.5]];
+    let a = apply(&mut doc, open_sink, Vec::new(), line, [0.47, 0.53])
+        .expect("閉じた角を沈められる");
+    assert!(a.warnings.is_empty(), "紙は裂けない: {:?}", a.warnings);
+
+    // 4層それぞれが先端の三角形と残りに分かれる
+    assert_eq!(a.faces.len(), 8, "4層が先端と胴に分かれる");
+    assert_eq!(a.order.len(), 8);
+    assert_eq!(doc.cp.edges.len(), edges_before + 8, "折り線4本と輪郭の分割4本");
+    let step = &doc.sequence[doc.sequence.len() - 1];
+    assert_eq!(step.kind, TechniqueKind::OpenSink);
+
+    // 紙は1mmも動かない(全ての新しい面が親の配置のまま)
+    let after_faces = extract_faces(&doc.cp);
+    for f in &after_faces {
+        let r = representative_point(&doc.cp, f);
+        let parent = faces
+            .iter()
+            .find(|p| ori3_layers::point_in_face(&doc.cp, p, r))
+            .map(|p| p.id);
+        if let Some(p) = parent {
+            assert!(
+                a.at[&f.id].abs_diff_eq(before.placements[&p].apply(DVec2::from(r)), 1e-12),
+                "面 {} は動かない",
+                f.id
+            );
+        }
+    }
+
+    // 先端側の4枚は重なり順が逆(沈め込み後の入れ子順)になり、胴側は元の順のまま
+    let parent_of = |id: FaceId| -> FaceId {
+        let f = after_faces.iter().find(|f| f.id == id).expect("面がある");
+        let r = representative_point(&doc.cp, f);
+        faces
+            .iter()
+            .find(|p| ori3_layers::point_in_face(&doc.cp, p, r))
+            .expect("親の面")
+            .id
+    };
+    let side = |id: FaceId| -> f64 {
+        let d = DVec2::from(line[1]) - DVec2::from(line[0]);
+        d.perp_dot(a.at[&id] - DVec2::from(line[0]))
+    };
+    let tip: Vec<FaceId> = a.order.iter().copied().filter(|&id| side(id) > 0.0).collect();
+    let body: Vec<FaceId> = a.order.iter().copied().filter(|&id| side(id) < 0.0).collect();
+    assert_eq!(tip.len(), 4, "先端側は4枚");
+    assert_eq!(body.len(), 4, "胴側は4枚");
+    let rank = |id: FaceId| before.order.iter().position(|&p| p == parent_of(id)).unwrap();
+    let tip_ranks: Vec<usize> = tip.iter().map(|&id| rank(id)).collect();
+    let body_ranks: Vec<usize> = body.iter().map(|&id| rank(id)).collect();
+    assert_eq!(body_ranks, vec![0, 1, 2, 3], "胴側は元の重なり順のまま");
+    assert_eq!(tip_ranks, vec![3, 2, 1, 0], "先端側は内外が入れ替わる");
+
+    // 山谷も反転する
+    let after_kinds = kinds(&doc.cp);
+    assert!(
+        changed_kinds(&before_kinds, &after_kinds) > 0,
+        "先端側の折り目の山谷が入れ替わる"
+    );
+    // 折り終わる直前(t=0.99)の高さによる検証は沈め折りには使えない:
+    // 沈め折りは紙が1mmも動かない遷移(重なり順と山谷だけが変わる)なので、
+    // 補間の途中でも層は浮かず、高さの差が読み取れない。代わりに、折り目の
+    // 向き(山谷)と層順序の一致 `assert_fold_senses` で重なりを確かめる。
+    assert_fold_senses(&doc, "沈め折り");
+
+    // 記録した手順から同じ形に折り直せる
+    let (again, warnings) =
+        flat_state_at(&doc, &after_faces, doc.sequence.len()).expect("平らに畳める");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(again.order, a.order, "層順序が再生結果と一致する");
+    for f in &after_faces {
+        assert!(
+            a.at[&f.id].abs_diff_eq(again.placements[&f.id].apply(DVec2::from(a.rep[&f.id])), 1e-6),
+            "面 {} の位置が再生結果と一致する",
+            f.id
+        );
+    }
+}
+
+/// 鶴の基本形の頂点(首・尾の付け根になる閉じた角)を沈める。
+///
+/// 層の数が予備基本形より多く、層のつながりも複雑だが、同じ1回の動きで沈む。
+#[test]
+fn open_sink_works_on_the_bird_base_apex() {
+    let mut doc = bird_base();
+    let faces = extract_faces(&doc.cp);
+    let (before, _) = flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
+    let layers_before = before.order.len();
+
+    // 閉じた角 (0.5,0.5) を切り取る線(鶴の基本形でも紙の中心はここにある)
+    let line = [[0.5, 0.6], [0.4, 0.5]];
+    let a = apply(&mut doc, open_sink, Vec::new(), line, [0.47, 0.53])
+        .expect("鶴の基本形の頂点を沈められる");
+
+    assert!(a.order.len() > layers_before, "先端側の層が分割される");
+    let step = &doc.sequence[doc.sequence.len() - 1];
+    assert_eq!(step.kind, TechniqueKind::OpenSink);
+    assert!(!step.drivers.is_empty(), "沈めた折り線が手順に記録される");
+
+    // 先端側は重なり順が逆(内外反転)になる
+    let side = |id: FaceId| -> f64 {
+        let d = DVec2::from(line[1]) - DVec2::from(line[0]);
+        d.perp_dot(a.at[&id] - DVec2::from(line[0]))
+    };
+    let parent_rank = |id: FaceId| -> usize {
+        let f = a.faces.iter().find(|f| f.id == id).expect("面がある");
+        let r = representative_point(&doc.cp, f);
+        let p = faces
+            .iter()
+            .find(|p| ori3_layers::point_in_face(&doc.cp, p, r))
+            .expect("親の面");
+        before.order.iter().position(|&q| q == p.id).unwrap()
+    };
+    let tip: Vec<usize> = a
+        .order
+        .iter()
+        .copied()
+        .filter(|&id| side(id) > 0.0)
+        .map(parent_rank)
+        .collect();
+    assert!(tip.len() >= 2, "先端側に複数の層がある");
+    let mut sorted = tip.clone();
+    sorted.sort_unstable();
+    sorted.reverse();
+    assert_eq!(tip, sorted, "先端側は内外が入れ替わる(実際 {tip:?})");
+    assert_fold_senses(&doc, "鶴の基本形の沈め折り");
+
+    // 記録した手順から同じ形に折り直せる
+    let after_faces = extract_faces(&doc.cp);
+    let (again, _) =
+        flat_state_at(&doc, &after_faces, doc.sequence.len()).expect("平らに畳める");
+    assert_eq!(again.order, a.order, "層順序が再生結果と一致する");
+}
+
+/// 沈め折りは重なりの一部の層だけでもできる(層の数の偶奇も問わない)。
+/// 定義できない入力だけをErrで断り、そのとき文書は一切変わらない。
+#[test]
+fn open_sink_accepts_partial_flaps_and_rejects_only_undefined_input() {
+    let mut doc = preliminary_base();
+    let before_doc = doc.clone();
+    let faces = extract_faces(&doc.cp);
+    let (state, _) = flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
+    let line = [[0.5, 0.6], [0.4, 0.5]];
+
+    // 退化した折り線
+    let err = apply(&mut doc, open_sink, Vec::new(), [[0.5, 0.5], [0.5, 0.5]], [0.47, 0.53])
+        .expect_err("退化した折り線はエラー");
+    assert!(err.contains("2点が一致"), "{err}");
+    assert_eq!(doc, before_doc, "失敗時は文書を変更しない");
+
+    // 基準点が折り線の上
+    let err = apply(&mut doc, open_sink, Vec::new(), line, [0.45, 0.55])
+        .expect_err("沈める側が決まらない指定はエラー");
+    assert!(err.contains("折り線の上"), "{err}");
+    assert_eq!(doc, before_doc);
+
+    // 無い層
+    let missing = faces.iter().map(|f| f.id).max().unwrap_or(0) + 99;
+    let err = apply(&mut doc, open_sink, vec![missing], line, [0.47, 0.53])
+        .expect_err("無い層はエラー");
+    assert!(err.contains("見つかりません"), "{err}");
+    assert_eq!(doc, before_doc);
+
+    // 一部の層(奇数枚)だけを沈める: 断らずに折れる
+    let some: Vec<FaceId> = state.order[..3].to_vec();
+    let a = apply(&mut doc, open_sink, some, line, [0.47, 0.53])
+        .expect("3層(奇数)だけでも沈められる");
+    assert_eq!(a.faces.len(), 7, "選んだ3層だけが先端と胴に分かれる");
+    assert_ne!(doc, before_doc, "折りは適用される");
+}

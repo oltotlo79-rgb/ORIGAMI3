@@ -22,8 +22,8 @@ export const TECHNIQUE_KINDS = Object.keys(TECHNIQUE_LABEL) as TechniqueKind[];
 
 /**
  * 「技法」ツールのサブメニューに出す、選ぶだけで折れる技法。
- * ここに無い技法(沈め折り・ひだ寄せなど)はまだ自動で折れないので出さない
- * (手動の折り操作で作る)。Rust側 `ori3-layers::techniques` の実装と対応する。
+ * ここに無い技法(単純折り・仕上げの角度)は技法ツールの対象外。
+ * Rust側 `ori3-layers::techniques` の実装と対応する。
  */
 export const SUPPORTED_TECHNIQUES: {
   kind: TechniqueKind;
@@ -60,6 +60,12 @@ export const SUPPORTED_TECHNIQUES: {
     short: "花弁",
     title:
       "花弁折り: フラップの先端を持ち上げ、両側の縁を中心線に沿わせます。重なった層をクリックして選び、先端と行き先を通る中心線をドラッグしてください。基準点は持ち上げる先端の位置を指します",
+  },
+  {
+    kind: "OpenSink",
+    short: "沈め",
+    title:
+      "沈め折り: フラップの先端(角)を袋の内側へ押し込みます。沈める折り線をドラッグし、基準点で押し込む先端側を指してください。層を選ばなければ先端側の全ての層が沈みます",
   },
 ];
 

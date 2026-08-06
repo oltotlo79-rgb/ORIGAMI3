@@ -477,6 +477,70 @@ pub fn petal(
     Ok(res)
 }
 
+/// 沈め折り(open sink)。フラップの先端(角)を内側へ押し込む。
+///
+/// `line` は**沈める折り線**、`reference_point` は**押し込む先端側**を示す点
+/// (この点のある側の紙が沈む)。
+///
+/// 動きは1回の [`flat_motion`] で表す。紙は1mmも動かない:
+///
+/// - 折り線の先端側を領域(半平面)にとる。境界線が各層のCPへ引き戻されて
+///   新しい折り線になる = **(a) 折り線で各層を分割**
+/// - 変換は [`MotionTransform::Stay`](紙は動かない)。沈め折りは畳んだ形を
+///   変えず、重なりの内と外を入れ替える遷移だから
+/// - `reverse_layers: Some(true)` で領域の中の重なり順だけを逆にする
+///   = **(c) 層順序を内外反転して再挿入**(先端が袋の中へ入れ子になる)
+/// - 山谷は [`flat_motion`] が新しい重なり順から決め直すので、先端側の
+///   折り目は自動的に反転する = **(b) 先端側の山谷を反転**
+///
+/// `flap` が空なら折り線の先端側に掛かる全ての層を沈める(普通の沈め折り)。
+/// 一部の層だけを選べば「部分的な沈め折り」になる。層の数の偶奇や先端の形は
+/// 仮定しない。Errにするのは幾何的に決められない入力(退化した折り線・
+/// 折り線の上にある基準点・見つからない層)だけで、紙が裂ける指定や
+/// 山谷と重なり順の食い違いは警告して続ける。
+pub fn open_sink(
+    cp: &mut CreasePattern,
+    faces: &[Face],
+    state: &FlatState,
+    input: &TechniqueInput,
+) -> Result<FoldThroughResult, String> {
+    let name = "沈め折り";
+    let (l0, l1) = line_points(input.line)?;
+    let u = (l1 - l0).normalize();
+    let p = DVec2::from(input.reference_point);
+    if u.perp_dot(p - l0).abs() <= EPS {
+        return Err(format!(
+            "{name}の沈める側を示す点が折り線の上にあります。押し込む先端側の点を指してください"
+        ));
+    }
+    // 空の指定は「先端側に掛かる全ての層」。flat_motion が領域に掛からない層を
+    // 自分で外すので、ここでは存在の検証だけしておく。
+    let layers = if input.flap.is_empty() {
+        Vec::new()
+    } else {
+        flap_in_layer_order(faces, state, &input.flap, name)?
+    };
+
+    flat_motion(
+        cp,
+        faces,
+        state,
+        &FlatMotionInput {
+            parts: vec![MotionPart {
+                layers,
+                region: vec![HalfPlane {
+                    line: input.line,
+                    inside_point: input.reference_point,
+                }],
+                transform: MotionTransform::Stay,
+                turn: LayerTurn::Keep,
+                reverse_layers: Some(true),
+            }],
+            kind: TechniqueKind::OpenSink,
+        },
+    )
+}
+
 // ---------------------------------------------------------------------------
 // 技法の作業場: fold_throughを繰り返しながら、面の由来・裏返りの偶奇を追う
 // ---------------------------------------------------------------------------

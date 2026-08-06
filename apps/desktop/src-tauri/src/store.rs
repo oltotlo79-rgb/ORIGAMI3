@@ -278,6 +278,7 @@ impl DocumentStore {
                     TechniqueKind::OutsideReverse => ori3_layers::outside_reverse,
                     TechniqueKind::Squash => ori3_layers::squash,
                     TechniqueKind::Petal => ori3_layers::petal,
+                    TechniqueKind::OpenSink => ori3_layers::open_sink,
                     _ => {
                         return Err(
                             "この折り方はまだ選べません。手動の折り操作で代替してください"
@@ -1215,6 +1216,35 @@ mod tests {
         );
     }
 
+    /// 沈め折りは畳んだ状態の先端(角)に対して適用できる。
+    #[test]
+    fn technique_open_sink_turns_the_tip_inside_out() {
+        let mut store = square_store();
+        // 下ごしらえ: 半分に折って2層にする
+        store
+            .apply_seq(fold_op(0, [[0.0, 0.5], [1.0, 0.5]], [0.5, 0.25]))
+            .unwrap();
+
+        // 右下の角 (1,0) を切り取る線の先端側を沈める
+        let view = store
+            .apply_seq(SeqOp::Technique {
+                up_to: 1,
+                kind: TechniqueKind::OpenSink,
+                flap: Vec::new(),
+                line: [[0.8, 0.0], [1.0, 0.2]],
+                reference_point: [0.97, 0.03],
+                open_to_back: None,
+            })
+            .unwrap();
+        assert!(view.faces.len() > 2, "先端側で各層が分かれる");
+        assert_eq!(view.doc.sequence.len(), 2);
+        assert_eq!(view.doc.sequence[1].kind, TechniqueKind::OpenSink);
+        assert!(
+            !view.doc.sequence[1].drivers.is_empty(),
+            "沈めた折り線が手順に記録される"
+        );
+    }
+
     /// 未実装の技法・折れない指定・手順の途中への挿入はErr(文書は無変更)。
     #[test]
     fn technique_rejects_unsupported_kind_and_bad_input() {
@@ -1224,7 +1254,7 @@ mod tests {
         let err = store
             .apply_seq(SeqOp::Technique {
                 up_to: 0,
-                kind: TechniqueKind::OpenSink,
+                kind: TechniqueKind::Pose,
                 flap: Vec::new(),
                 line: [[0.4, 0.0], [0.4, 1.0]],
                 reference_point: [0.5, 0.5],

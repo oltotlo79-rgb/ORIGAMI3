@@ -256,7 +256,8 @@ pub enum SeqOp {
     Technique {
         /// この折りの直前までの手順数(通常は現在の手順数)
         up_to: usize,
-        /// 技法の種類。Pleat/InsideReverse/OutsideReverse/Squash のみ受け付ける
+        /// 技法の種類。Pleat/InsideReverse/OutsideReverse/Squash/Petal/OpenSink/
+        /// Swivel/Twist のみ受け付ける
         kind: TechniqueKind,
         /// 対象フラップ(畳み平面で選んだ層の面ID)。段折りでは空を許す
         flap: Vec<FaceId>,
