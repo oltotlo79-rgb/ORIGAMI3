@@ -742,6 +742,25 @@ export const useAppStore = create<AppState>((set, get) => {
   const flatDrivers = (hinges: ReadonlySet<number>): Driver[] =>
     [...hinges].map((hinge) => ({ hinge, target_angle_deg: 0 }));
 
+  /** いま操作している折り線(角度スライダー・紙を引く操作)。
+   * 内部頂点のまわりでは折り角どうしに拘束があるので、指定済みを全部固定すると
+   * 形が閉じず面が離れる(=紙が切れて見える)。この1〜2本だけを固定し、
+   * 以前の指定は「なるべく保ちたい目標」として追従させる */
+  let activeHinges: number[] = [];
+
+  /** 角度指定を「いま操作している分(固定)」と「以前の分(目標)」に分ける */
+  const splitDrivers = (
+    drivers: Map<number, number>,
+  ): { hard: Driver[]; keep: Driver[] } => {
+    const active = new Set(activeHinges.filter((h) => drivers.has(h)));
+    const hard: Driver[] = [];
+    const keep: Driver[] = [];
+    for (const [hinge, deg] of drivers) {
+      (active.has(hinge) ? hard : keep).push({ hinge, target_angle_deg: deg });
+    }
+    return { hard, keep };
+  };
+
   /** 追従計算を直列化キュー経由で実行し、3D表示へ反映する。
    * coalesce=true(スライダーの連続操作・手順再生)は「最新の形が出れば良い」
    * ので待ち行列に最新1件だけを置く(runLatest)。追い越された要求は実行されない。
@@ -763,12 +782,13 @@ export const useAppStore = create<AppState>((set, get) => {
 
   const runPoseSolve = async (
     drivers: Driver[],
+    keep: Driver[] = [],
     coalesce = false,
     applyFrame = true,
   ): Promise<void> => {
     pose.reset();
     const soft = softArg();
-    const call = () => ipc.poseSolve(drivers, soft);
+    const call = () => ipc.poseSolve(drivers, keep, soft);
     const r = await (coalesce ? queue.runLatest(call) : queue.run(call));
     if (r.ok) {
       set({
@@ -804,13 +824,16 @@ export const useAppStore = create<AppState>((set, get) => {
       await runPoseSolve(flatDrivers(hinges));
       return;
     }
-    await runPoseSolve(driverList(kept));
+    // 展開図を編集した後は操作中の折り線がないので、全部を目標として
+    // 「閉包を満たす形のうち目標にいちばん近いもの」を解く(紙が切れない)
+    await runPoseSolve([], driverList(kept));
   };
 
   // スライダーの連続操作を間引く(実行時点の最新driversを送る)。
   // 間引いてもなお計算が追いつかない場合に備え、待ち行列は最新1件だけにする
   const pose = createTrailingThrottle(POSE_THROTTLE_MS, () => {
-    void runPoseSolve(driverList(get().drivers), true);
+    const { hard, keep } = splitDrivers(get().drivers);
+    void runPoseSolve(hard, keep, true);
   });
 
   /** 今見えている形をもう一度作り直す(たわみの指定を変えたときに使う)。
@@ -820,7 +843,7 @@ export const useAppStore = create<AppState>((set, get) => {
     if (!s.doc) return;
     const total = s.doc.sequence.length;
     if (total === 0) {
-      void runPoseSolve(driverList(s.drivers), true);
+      void runPoseSolve([], driverList(s.drivers), true);
       return;
     }
     void runReplay(s.currentStep ?? total, s.currentStep === null ? 1 : s.playT, true);
@@ -1493,6 +1516,7 @@ export const useAppStore = create<AppState>((set, get) => {
       if (angles.size > 0) {
         void runPoseSolve(
           [...angles].map(([h, deg]) => ({ hinge: h, target_angle_deg: deg })),
+          [],
           false,
           false, // 形は今のまま(層の重なり表示を保つ)
         );
@@ -1508,6 +1532,9 @@ export const useAppStore = create<AppState>((set, get) => {
       drivers.set(pullHinge, deg);
       if (pullMirrorHinge !== null) drivers.set(pullMirrorHinge, deg);
       set({ drivers });
+      // 引いている折り線(と対称の相手)だけを固定し、以前の指定は追従させる
+      activeHinges =
+        pullMirrorHinge === null ? [pullHinge] : [pullHinge, pullMirrorHinge];
       pose.schedule();
     },
 
@@ -1520,6 +1547,9 @@ export const useAppStore = create<AppState>((set, get) => {
       const drivers = new Map(get().drivers);
       drivers.set(hinge, deg);
       set({ drivers });
+      // いま動かしている1本だけを固定する。以前に指定した折り線まで固定すると
+      // 内部頂点まわりの拘束と両立せず、面が離れて紙が切れて見える
+      activeHinges = [hinge];
       pose.schedule();
     },
 
@@ -1527,18 +1557,21 @@ export const useAppStore = create<AppState>((set, get) => {
       const drivers = new Map(get().drivers);
       if (!drivers.delete(hinge)) return;
       set({ drivers });
+      activeHinges = [];
       // 指定を消しただけだと、この折り線は前回の計算結果(warm start)を
       // 引き継いで折れたまま残る。1回だけ0度(平ら)を明示して送り、
       // 次回以降は残りの指定だけで計算する(「全て平らに戻す」と同じ考え方)
-      void runPoseSolve([
-        ...driverList(drivers),
-        { hinge, target_angle_deg: 0 },
-      ]);
+      void runPoseSolve(
+        [{ hinge, target_angle_deg: 0 }],
+        driverList(drivers),
+      );
     },
 
     clearDrivers: () => {
       const hinges = get().hinges;
       set({ drivers: new Map() });
+      activeHinges = [];
+      // 全ての折り線を0度に固定する形は必ず閉じる(平ら)ので全部hardでよい
       void runPoseSolve(flatDrivers(hinges));
     },
 

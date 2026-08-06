@@ -7,6 +7,7 @@
 //! ロック下ではstoreの状態更新と複製だけを行い、手順の再生や姿勢計算は
 //! ロックを解放してから実行する(`view_command` / `pose_solve` / `sequence_replay`)。
 
+use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
@@ -17,7 +18,7 @@ use tauri::State;
 use crate::autosave;
 use crate::store::{DocumentStore, DocumentView, add_penetration_warning, attach_replay};
 use ori3_export::{CpSvgOptions, cp_png, cp_svg, diagram_pdf, diagram_svg_pages};
-use ori3_model::{CreasePattern, Driver, EditOp, Paper, SeqOp};
+use ori3_model::{CreasePattern, Driver, EdgeId, EditOp, Paper, SeqOp};
 use ori3_propose::{Skeleton, generate, pack};
 use ori3_soft::{SoftMesh, SoftSettings};
 
@@ -190,6 +191,13 @@ pub fn sequence_apply(
 /// 3D表示用フレームを返す。前回解はstoreが保持し、warm startとして使う。
 /// facesは編集時に導出済みのstoreのキャッシュを流用する(extract_faces再実行なし)。
 ///
+/// `drivers` は**厳密に固定**する折り線(いま操作しているヒンジ)、`keep` は
+/// **なるべく保ちたい目標**(以前に指定した折り線)。内部頂点のまわりでは折り角
+/// どうしに拘束があるので、指定済みを全部固定すると閉包が破れて面が離れる
+/// (=紙が切れて見える)。`keep` があるときは「閉包を満たす形のうち目標に
+/// いちばん近いもの」を解き([`ori3_rigid::solve_near`])、紙がつながったまま
+/// 以前の指定へ追従させる。`keep` を省くと従来どおり全部固定で解く。
+///
 /// 設計規約: ロック中に重い計算をしない(将来の自動保存スレッドとの共存のため)。
 /// ロック下ではCP・faces・前回解の複製だけを行って即ロックを解放し、
 /// solveはロックの外で実行し、結果の角度だけを短いロックで書き戻す。
@@ -197,11 +205,22 @@ pub fn sequence_apply(
 pub fn pose_solve(
     state: State<'_, Mutex<DocumentStore>>,
     drivers: Vec<Driver>,
+    keep: Option<Vec<Driver>>,
     soft: Option<SoftSettings>,
 ) -> Result<PoseOutcome, String> {
     guard(AssertUnwindSafe(|| {
         let (cp, faces, warm) = lock(&state).pose_inputs(); // 複製のみ、即ロック解放
-        let mut result = ori3_rigid::solve(&cp, &faces, &drivers, warm.as_ref());
+        let keep = keep.unwrap_or_default();
+        let mut result = if keep.is_empty() {
+            ori3_rigid::solve(&cp, &faces, &drivers, warm.as_ref())
+        } else {
+            let targets: HashMap<EdgeId, f64> = keep
+                .iter()
+                .map(|d| (d.hinge, d.target_angle_deg))
+                .chain(drivers.iter().map(|d| (d.hinge, d.target_angle_deg)))
+                .collect();
+            ori3_rigid::solve_near(&cp, &faces, &drivers, &targets, warm.as_ref())
+        };
         add_penetration_warning(&mut result.frame); // 紙のめり込み(SIM-007)
         // たわみもロックの外で計算する(規約どおり)
         let mesh = soft_mesh(&cp, &faces, &result.frame, soft.as_ref());

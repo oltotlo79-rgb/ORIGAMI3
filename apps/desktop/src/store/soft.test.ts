@@ -93,7 +93,7 @@ describe("紙のたわみ(SIM-012)", () => {
     expect(useAppStore.getState().display.soft_enabled).toBe(false);
     useAppStore.getState().setDriverAngle(1, 90);
     await wait(WAIT_MS);
-    expect(vi.mocked(ipc.poseSolve).mock.calls[0][1]).toBeNull();
+    expect(vi.mocked(ipc.poseSolve).mock.calls[0][2]).toBeNull();
     expect(useAppStore.getState().softMesh).toBeNull();
   });
 
@@ -101,7 +101,7 @@ describe("紙のたわみ(SIM-012)", () => {
     vi.mocked(ipc.poseSolve).mockResolvedValue(solveResult(MESH));
     useAppStore.getState().setSoft({ soft_enabled: true });
     await wait(WAIT_MS);
-    const sent = vi.mocked(ipc.poseSolve).mock.calls[0][1];
+    const sent = vi.mocked(ipc.poseSolve).mock.calls[0][2];
     expect(sent).toMatchObject({ enabled: true, stiffness: 0.5, pressure: 0 });
     expect(useAppStore.getState().softMesh).toEqual(MESH);
     // 計算からの注意書きは日本語のまま画面へ渡る
@@ -129,7 +129,7 @@ describe("膨らませる操作(SIM-013)", () => {
     // 途中の値(0.2〜0.6)は1回も送られず、最後の値だけが届く
     const sent = vi
       .mocked(ipc.poseSolve)
-      .mock.calls.map((c) => c[1]?.pressure)
+      .mock.calls.map((c) => c[2]?.pressure)
       .filter((p) => p !== undefined);
     expect(sent.length).toBeGreaterThan(0);
     expect(sent.every((p) => p === 0.8)).toBe(true);

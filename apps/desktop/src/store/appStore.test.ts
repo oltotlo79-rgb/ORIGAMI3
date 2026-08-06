@@ -115,9 +115,14 @@ function makeSolveResult(angles: Record<string, number> = {}): SolveResult {
   };
 }
 
-/** poseSolveへ渡された引数(呼び出し番号ごと) */
+/** poseSolveへ渡された「固定する折り線」(呼び出し番号ごと) */
 function poseCalls(): Driver[][] {
   return vi.mocked(ipc.poseSolve).mock.calls.map(([drivers]) => drivers);
+}
+
+/** poseSolveへ渡された「なるべく保ちたい折り線」(呼び出し番号ごと) */
+function poseKeeps(): Driver[][] {
+  return vi.mocked(ipc.poseSolve).mock.calls.map(([, keep]) => keep ?? []);
 }
 
 /** sequenceReplayへ渡された引数(呼び出し番号ごと) */
@@ -366,6 +371,37 @@ describe("appStore 折り角度の指定", () => {
     }
   });
 
+  it("角度を次々に指定しても、固定するのは操作中の1本だけ(紙が切れない)", async () => {
+    primeFakeTimers();
+    try {
+      const store = useAppStore.getState();
+      // 内部頂点のまわりでは折り角どうしに拘束があるので、指定済みを全部
+      // 固定すると形が閉じず面が離れる。以前の指定は「保ちたい目標」で送る
+      store.setDriverAngle(5, 30);
+      await vi.advanceTimersByTimeAsync(POSE_WAIT_MS);
+      store.setDriverAngle(7, 60);
+      await vi.advanceTimersByTimeAsync(POSE_WAIT_MS);
+      store.setDriverAngle(9, 90);
+      await vi.advanceTimersByTimeAsync(POSE_WAIT_MS);
+
+      expect(poseCalls()).toEqual([
+        [{ hinge: 5, target_angle_deg: 30 }],
+        [{ hinge: 7, target_angle_deg: 60 }],
+        [{ hinge: 9, target_angle_deg: 90 }],
+      ]);
+      expect(poseKeeps()).toEqual([
+        [],
+        [{ hinge: 5, target_angle_deg: 30 }],
+        [
+          { hinge: 5, target_angle_deg: 30 },
+          { hinge: 7, target_angle_deg: 60 },
+        ],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("「全て平らに戻す」は全ての折り線へ0度を指定して送る", async () => {
     const view = makeHingeView(500);
     useAppStore.setState({ doc: view.doc, faces: view.faces, hinges: new Set([5]) });
@@ -395,13 +431,10 @@ describe("appStore 折り角度の指定", () => {
     useAppStore.getState().clearDriver(5);
     await flush();
 
-    // 解除した5は0度(平ら)を明示。残りの7はそのまま
-    expect(poseCalls()).toEqual([
-      [
-        { hinge: 7, target_angle_deg: 30 },
-        { hinge: 5, target_angle_deg: 0 },
-      ],
-    ]);
+    // 解除した5は0度(平ら)を固定して明示。残りの7は「保ちたい目標」として送る
+    // (7まで固定すると内部頂点まわりの拘束と両立せず紙が切れて見える)
+    expect(poseCalls()).toEqual([[{ hinge: 5, target_angle_deg: 0 }]]);
+    expect(poseKeeps()).toEqual([[{ hinge: 7, target_angle_deg: 30 }]]);
     expect([...useAppStore.getState().drivers]).toEqual([[7, 30]]);
   });
 
@@ -420,7 +453,9 @@ describe("appStore 折り角度の指定", () => {
 
     await useAppStore.getState().applyEdit({ type: "RemoveEdges", ids: [9] });
 
-    expect(poseCalls()).toEqual([[{ hinge: 5, target_angle_deg: 90 }]]);
+    // 操作中の折り線が無いので、残った指定は全て「保ちたい目標」として送る
+    expect(poseCalls()).toEqual([[]]);
+    expect(poseKeeps()).toEqual([[{ hinge: 5, target_angle_deg: 90 }]]);
     expect([...useAppStore.getState().drivers]).toEqual([[5, 90]]);
   });
 

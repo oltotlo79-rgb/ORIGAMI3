@@ -44,7 +44,7 @@ use ori3_layers::techniques::TechniqueInput;
 use ori3_layers::{
     FlatState, FoldThroughResult, flat_state_at, inside_reverse, petal, replay, squash,
 };
-use ori3_model::{CreasePattern, Document, EdgeKind, FaceId, Paper};
+use ori3_model::{CreasePattern, Document, Driver, EdgeKind, FaceId, Paper};
 
 /// 紙の中心から細い先までの距離(鶴の基本形。1 - √2/2)。
 const CORE: f64 = 1.0 - 0.5 * std::f64::consts::SQRT_2;
@@ -838,6 +838,140 @@ fn crane_paper_stays_connected_while_folding() {
                 "折り鶴(手順{up_to}, t={t}): 面が {gap:.9} 離れている"
             );
         }
+    }
+}
+
+/// 内部頂点(まわりの辺がすべて折り線=紙の縁に触れない点)のうち、折り線が
+/// いちばん多く集まる点の折り線を辺ID順に返す。この点の折り角どうしには
+/// 拘束があるので、複数を勝手な値に固定するとループ閉包が破れる。
+fn hinges_at_inner_vertex(cp: &CreasePattern, faces: &[Face]) -> Vec<u32> {
+    let mut share: HashMap<u32, usize> = HashMap::new();
+    for f in faces {
+        let mut ids = f.edges.clone();
+        ids.sort_unstable();
+        ids.dedup();
+        for e in ids {
+            *share.entry(e).or_default() += 1;
+        }
+    }
+    let mut inc: HashMap<u32, Vec<u32>> = HashMap::new();
+    let mut on_border: HashMap<u32, bool> = HashMap::new();
+    for e in &cp.edges {
+        let hinge = share.get(&e.id).copied() == Some(2);
+        for v in [e.v0, e.v1] {
+            if hinge {
+                inc.entry(v).or_default().push(e.id);
+            } else {
+                on_border.insert(v, true);
+            }
+        }
+    }
+    let mut cand: Vec<(usize, u32, Vec<u32>)> = inc
+        .into_iter()
+        .filter(|(v, _)| !on_border.contains_key(v))
+        .map(|(v, mut es)| {
+            es.sort_unstable();
+            (es.len(), v, es)
+        })
+        .collect();
+    // 本数の多い順、同数なら頂点ID順(HashMapの走査順に依存しない決定的な選択)
+    cand.sort_by_key(|(n, v, _)| (std::cmp::Reverse(*n), *v));
+    cand.into_iter().next().map(|(_, _, es)| es).unwrap_or_default()
+}
+
+/// 角度スライダーで折り角を次々に指定していく操作の再現(実機で報告された不具合)。
+///
+/// 指定済みのヒンジを全部「固定」として渡すと、内部頂点まわりの拘束と両立せず
+/// ループ閉包が破れて面が離れる(=紙が切れて見える)。いま操作しているヒンジ
+/// だけを固定し、以前の指定は「なるべく保ちたい目標」として追従させると、
+/// 閉包を満たす形が返る。
+#[test]
+fn crane_paper_stays_connected_while_angles_are_set_one_by_one() {
+    let (doc, _) = crane();
+    let faces = extract_faces(&doc.cp);
+    let hinges = hinges_at_inner_vertex(&doc.cp, &faces);
+    assert!(hinges.len() >= 5, "内部頂点に折り線が5本以上ある: {hinges:?}");
+    let kinds: HashMap<u32, EdgeKind> = doc.cp.edges.iter().map(|e| (e.id, e.kind)).collect();
+    let want = |e: u32| if kinds[&e] == EdgeKind::Valley { -70.0 } else { 70.0 };
+    let picked: Vec<u32> = hinges.iter().copied().take(5).collect();
+
+    // (1) 指定済みを全部固定する古いやり方は面が離れる(不具合の再現)
+    let mut torn = 0.0f64;
+    for i in 1..=picked.len() {
+        let drivers: Vec<Driver> = picked[..i]
+            .iter()
+            .map(|&h| Driver {
+                hinge: h,
+                target_angle_deg: want(h),
+            })
+            .collect();
+        let res = ori3_rigid::solve(&doc.cp, &faces, &drivers, None);
+        torn = torn.max(tear_of(&doc, &faces, &res.frame));
+    }
+    assert!(torn > 1e-3, "全部固定だと面が離れるはず(実際 {torn:.9})");
+
+    // (2) いま操作している1本だけを固定し、以前の指定は目標として追従させる
+    let mut warm: Option<HashMap<u32, f64>> = None;
+    for i in 1..=picked.len() {
+        let h = picked[i - 1];
+        let hard = vec![Driver {
+            hinge: h,
+            target_angle_deg: want(h),
+        }];
+        let targets: HashMap<u32, f64> = picked[..i].iter().map(|&e| (e, want(e))).collect();
+        let res = ori3_rigid::solve_near(&doc.cp, &faces, &hard, &targets, warm.as_ref());
+        let gap = tear_of(&doc, &faces, &res.frame);
+        assert!(gap < 1e-6, "{i}本目まで指定: 面が {gap:.9} 離れている");
+        assert!(
+            (res.angles[&h] - want(h)).abs() < 1e-9,
+            "操作中の折り線は指定どおり({}度)",
+            res.angles[&h]
+        );
+        warm = Some(res.angles);
+    }
+}
+
+/// 以前に指定した角度が「なるべく保たれる」ことの確認。
+///
+/// 目標どうしが両立するとき(同時に満たせる形が存在するとき)は、次のヒンジを
+/// 指定しても前の指定がほとんど動かないこと。両立しない目標(上のテストの
+/// ±70°など)は幾何的に保てないので、ここでは実際に折れる形を目標に使う。
+#[test]
+fn crane_keeps_previously_set_angles_while_setting_more() {
+    let (doc, _) = crane();
+    let faces = extract_faces(&doc.cp);
+    let picked: Vec<u32> = hinges_at_inner_vertex(&doc.cp, &faces)
+        .into_iter()
+        .take(5)
+        .collect();
+    // 1本だけ固定して解いた形=5本すべてを同時に満たせる目標
+    let base = ori3_rigid::solve(
+        &doc.cp,
+        &faces,
+        &[Driver {
+            hinge: picked[0],
+            target_angle_deg: 70.0,
+        }],
+        None,
+    );
+    let goal = |e: u32| base.angles[&e];
+
+    let mut warm: Option<HashMap<u32, f64>> = None;
+    for i in 1..=picked.len() {
+        let h = picked[i - 1];
+        let hard = vec![Driver {
+            hinge: h,
+            target_angle_deg: goal(h),
+        }];
+        let targets: HashMap<u32, f64> = picked[..i].iter().map(|&e| (e, goal(e))).collect();
+        let res = ori3_rigid::solve_near(&doc.cp, &faces, &hard, &targets, warm.as_ref());
+        let gap = tear_of(&doc, &faces, &res.frame);
+        assert!(gap < 1e-6, "{i}本目まで指定: 面が {gap:.9} 離れている");
+        for &e in &picked[..i] {
+            let d = (res.angles[&e] - goal(e)).abs();
+            assert!(d < 0.01, "以前の指定(辺{e})が {d:.6}度ずれた");
+        }
+        warm = Some(res.angles);
     }
 }
 

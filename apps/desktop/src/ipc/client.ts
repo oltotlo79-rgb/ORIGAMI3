@@ -59,12 +59,22 @@ export function sequenceReplay(
 }
 
 /** 折り角度の追従計算。前回解(warm start)はRust側のstoreが保持する。
+ *
+ * `drivers` は厳密に固定する折り線(いま操作しているヒンジ)、`keep` は
+ * 「なるべく保ちたい目標」(以前に指定した折り線)。内部頂点のまわりでは
+ * 折り角どうしに拘束があるので、指定済みを全部固定すると紙が切れて見える。
+ * keepを渡すと閉包を満たす形のうち目標にいちばん近いものが返る。
  * softを渡すとたわみの網も一緒に返る(省略時は従来どおり) */
 export function poseSolve(
   drivers: Driver[],
+  keep?: Driver[] | null,
   soft?: SoftSettings | null,
 ): Promise<SolveResult> {
-  return invoke("pose_solve", { drivers, soft: soft ?? null });
+  return invoke("pose_solve", {
+    drivers,
+    keep: keep?.length ? keep : null,
+    soft: soft ?? null,
+  });
 }
 
 /** 前回の異常終了で残った自動保存を調べる。無ければnull */

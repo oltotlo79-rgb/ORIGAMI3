@@ -20,14 +20,20 @@
 //!   (=release目標33msの10倍)の330msとし、機材やCIのばらつきを吸収しつつ
 //!   大きな性能後退(閉路の疎性やヤコビアンの解析式が壊れた場合など)を検出する
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use ori3_cp::extract_faces;
 use ori3_model::{CreasePattern, Driver, Edge, EdgeKind, Vertex};
-use ori3_rigid::solve;
+use ori3_rigid::{solve, solve_near};
 
 /// debugビルドでのsolve 1回あたりの上限(モジュールコメントの計測記録を参照)。
 const DEBUG_BUDGET: Duration = Duration::from_millis(330);
+
+/// 同じくdebugビルドでの `solve_near`(角度を次々に指定する使い方)1回あたりの
+/// 上限。debug実測の最悪値516msの約3倍に取り、機材やCIのばらつきを吸収しつつ
+/// 大きな性能後退を検出する。
+const NEAR_DEBUG_BUDGET: Duration = Duration::from_millis(1500);
 
 /// nc×nr面のミウラ折りCP。頂点(i,j)は x=i·dx、y=(j+奇数列なら振れ幅s)·dy。
 /// 縦線はまっすぐ(内部の山谷は列+行のパリティで交互)、横線はジグザグ
@@ -140,5 +146,51 @@ fn miura_20x20_solve_stays_within_frame_budget() {
     assert!(
         worst < DEBUG_BUDGET,
         "warm start solveが遅すぎます: worst={worst:?}(モジュールコメントの計測記録を参照)"
+    );
+}
+
+/// 角度スライダーで折り角を次々に指定していく使い方の性能(NFR-002)。
+/// いま操作している1本だけを固定し、以前の指定は目標として `solve_near` で
+/// 追従させる。ばね付き→ばね無しの2段になるぶん通常solveより重い。
+///
+/// 実測(2026-08-07, 開発機 Windows 11): warm startありの1回あたり
+/// debug 約306〜516ms / release 約8.8〜12.7ms(NFR-002の33msに対し2.5倍以上の
+/// 余裕。反復は13〜16回)。warm startなしの初回は debug 720ms / release 20.5ms。
+#[test]
+fn miura_20x20_solve_near_stays_within_frame_budget() {
+    let (nc, nr) = (20, 20);
+    let cp = miura_cp(nc, nr);
+    let faces = extract_faces(&cp);
+    assert_eq!(faces.len(), 400);
+
+    // 中央付近の縦ヒンジを左から5本、1本ずつ指定していく
+    let picked: Vec<u32> = (0..5)
+        .map(|k| (nr / 2 * (nc + 1) + nc / 2 + k) as u32)
+        .collect();
+    let goal = |e: u32| if e.is_multiple_of(2) { 24.0 } else { -24.0 };
+
+    let mut warm: Option<HashMap<u32, f64>> = None;
+    let mut worst = Duration::ZERO;
+    for i in 1..=picked.len() {
+        let h = picked[i - 1];
+        let hard = vec![Driver {
+            hinge: h,
+            target_angle_deg: goal(h),
+        }];
+        let targets: HashMap<u32, f64> = picked[..i].iter().map(|&e| (e, goal(e))).collect();
+        let t0 = Instant::now();
+        let res = solve_near(&cp, &faces, &hard, &targets, warm.as_ref());
+        let dt = t0.elapsed();
+        println!("i={i} iterations={} time={dt:?}", res.iterations);
+        assert!(res.converged, "i={i} iterations={}", res.iterations);
+        // 1本目(warm startなし)は冷間なので時間制限の対象外
+        if i > 1 {
+            worst = worst.max(dt);
+        }
+        warm = Some(res.angles);
+    }
+    assert!(
+        worst < NEAR_DEBUG_BUDGET,
+        "角度を次々に指定する追従計算が遅すぎます: worst={worst:?}(このテストの計測記録を参照)"
     );
 }
