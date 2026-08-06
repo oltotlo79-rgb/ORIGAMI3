@@ -9,7 +9,12 @@ import { DEFAULT_DISPLAY } from "../lib/displayPrefs";
 
 afterEach(() => {
   cleanup();
-  useAppStore.setState({ display: DEFAULT_DISPLAY, doc: null, mirrorDraw: false });
+  useAppStore.setState({
+    display: DEFAULT_DISPLAY,
+    doc: null,
+    mirrorDraw: false,
+    softWarnings: [],
+  });
 });
 
 describe("紙の色と方眼", () => {
@@ -41,6 +46,42 @@ describe("紙の色と方眼", () => {
     expect(useAppStore.getState().display.grid_divisions).toBe(16);
     fireEvent.change(input, { target: { value: "1" } });
     expect(useAppStore.getState().display.grid_divisions).toBe(2);
+  });
+});
+
+describe("紙のたわみ(SIM-012 / SIM-013)", () => {
+  it("切替が出ていて、はじめは切ってある(つまみもまだ出ない)", () => {
+    render(<PaperAppearance />);
+    const box = screen.getByLabelText("紙のたわみを表現する");
+    expect(box).toHaveProperty("checked", false);
+    expect(screen.queryByLabelText("膨らみの強さ")).toBeNull();
+    // 説明を読まなくても何が起きるか分かる言葉を添える
+    expect(screen.getByText(/紙が丸く曲がった形/)).not.toBeNull();
+  });
+
+  it("入れると硬さと膨らみのつまみが出る", () => {
+    render(<PaperAppearance />);
+    fireEvent.click(screen.getByLabelText("紙のたわみを表現する"));
+    expect(useAppStore.getState().display.soft_enabled).toBe(true);
+    expect(screen.getByLabelText("紙の硬さ")).toHaveProperty("value", "0.5");
+    expect(screen.getByLabelText("膨らみの強さ")).toHaveProperty("value", "0");
+  });
+
+  it("膨らみを動かすとその場でストアに入る(見ながら調整できる)", () => {
+    useAppStore.setState({ display: { ...DEFAULT_DISPLAY, soft_enabled: true } });
+    render(<PaperAppearance />);
+    fireEvent.change(screen.getByLabelText("膨らみの強さ"), {
+      target: { value: "0.75" },
+    });
+    expect(useAppStore.getState().display.soft_pressure).toBe(0.75);
+    fireEvent.change(screen.getByLabelText("紙の硬さ"), { target: { value: "0.2" } });
+    expect(useAppStore.getState().display.soft_stiffness).toBe(0.2);
+  });
+
+  it("計算からの注意書きは日本語でそのまま出る", () => {
+    useAppStore.setState({ softWarnings: ["面の分割の細かさは4までに丸めました"] });
+    render(<PaperAppearance />);
+    expect(screen.getByText("面の分割の細かさは4までに丸めました")).not.toBeNull();
   });
 });
 

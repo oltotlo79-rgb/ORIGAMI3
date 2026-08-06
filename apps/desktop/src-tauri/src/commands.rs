@@ -19,6 +19,41 @@ use crate::store::{DocumentStore, DocumentView, add_penetration_warning, attach_
 use ori3_export::{CpSvgOptions, cp_png, cp_svg, diagram_pdf, diagram_svg_pages};
 use ori3_model::{CreasePattern, Driver, EditOp, Paper, SeqOp};
 use ori3_propose::{Skeleton, generate, pack};
+use ori3_soft::{SoftMesh, SoftSettings};
+
+/// たわみの計算結果を足した `pose_solve` の戻り値(SIM-012)。
+/// 既存の中身は `#[serde(flatten)]` でそのまま並べるので、たわみを使わない
+/// 画面から見ると今までと同じ形のまま(`soft` が `null` で増えるだけ)。
+#[derive(Serialize)]
+pub struct PoseOutcome {
+    #[serde(flatten)]
+    pub result: ori3_rigid::SolveResult,
+    pub soft: Option<SoftMesh>,
+}
+
+/// たわみの計算結果を足した `sequence_replay` の戻り値(SIM-012)。
+#[derive(Serialize)]
+pub struct ReplayOutcome {
+    #[serde(flatten)]
+    pub result: ori3_layers::ReplayResult,
+    pub soft: Option<SoftMesh>,
+}
+
+/// たわみの網を作る。指定が無い・切ってあるときは何もしない(従来どおりの動作)。
+///
+/// 設計規約: 重い計算なので必ずロックの外から呼ぶこと。
+fn soft_mesh(
+    cp: &CreasePattern,
+    faces: &[ori3_cp::Face],
+    frame: &ori3_model::Frame3D,
+    soft: Option<&SoftSettings>,
+) -> Option<SoftMesh> {
+    let settings = soft?;
+    if !settings.enabled {
+        return None;
+    }
+    Some(ori3_soft::relax(cp, faces, frame, settings))
+}
 
 /// panicをErr文字列に変換する(SYS-005: アプリを落とさない)。
 fn guard<T>(f: impl FnOnce() -> Result<T, String> + std::panic::UnwindSafe) -> Result<T, String> {
@@ -162,13 +197,16 @@ pub fn sequence_apply(
 pub fn pose_solve(
     state: State<'_, Mutex<DocumentStore>>,
     drivers: Vec<Driver>,
-) -> Result<ori3_rigid::SolveResult, String> {
+    soft: Option<SoftSettings>,
+) -> Result<PoseOutcome, String> {
     guard(AssertUnwindSafe(|| {
         let (cp, faces, warm) = lock(&state).pose_inputs(); // 複製のみ、即ロック解放
         let mut result = ori3_rigid::solve(&cp, &faces, &drivers, warm.as_ref());
         add_penetration_warning(&mut result.frame); // 紙のめり込み(SIM-007)
+        // たわみもロックの外で計算する(規約どおり)
+        let mesh = soft_mesh(&cp, &faces, &result.frame, soft.as_ref());
         lock(&state).store_pose_angles(result.angles.clone()); // 短いロックで書き戻し
-        Ok(result)
+        Ok(PoseOutcome { result, soft: mesh })
     }))
 }
 
@@ -182,7 +220,8 @@ pub fn sequence_replay(
     state: State<'_, Mutex<DocumentStore>>,
     up_to: usize,
     t: f64,
-) -> Result<ori3_layers::ReplayResult, String> {
+    soft: Option<SoftSettings>,
+) -> Result<ReplayOutcome, String> {
     guard(AssertUnwindSafe(|| {
         let (doc, faces) = lock(&state).replay_inputs(); // 複製のみ、即ロック解放
         let mut result = ori3_layers::replay_with_faces(&doc, &faces, up_to, t);
@@ -193,7 +232,9 @@ pub fn sequence_replay(
                 .warnings
                 .push(ori3_rigid::PENETRATION_WARNING.to_string());
         }
-        Ok(result)
+        // たわみもロックの外で計算する(規約どおり)
+        let mesh = soft_mesh(&doc.cp, &faces, &result.frame, soft.as_ref());
+        Ok(ReplayOutcome { result, soft: mesh })
     }))
 }
 
@@ -499,6 +540,33 @@ mod tests {
             export_target(base, "-02"),
             Path::new("C:/作品/鶴-02.svg").to_path_buf()
         );
+    }
+
+    /// たわみの指定が無い/切ってあるときは何も返さず、入れたときだけ網が返る
+    /// (SIM-012。既存の呼び出しの動きは変わらない)。
+    #[test]
+    fn soft_mesh_only_when_enabled() {
+        use super::soft_mesh;
+        use ori3_soft::SoftSettings;
+        let doc = ori3_model::Document::new(A4ISH);
+        let faces = ori3_cp::extract_faces(&doc.cp);
+        let frame = ori3_layers::replay_with_faces(&doc, &faces, 0, 1.0).frame;
+
+        assert!(soft_mesh(&doc.cp, &faces, &frame, None).is_none());
+        let off = SoftSettings::default();
+        assert!(!off.enabled, "たわみの既定はオフ");
+        assert!(soft_mesh(&doc.cp, &faces, &frame, Some(&off)).is_none());
+
+        let on = SoftSettings {
+            enabled: true,
+            ..SoftSettings::default()
+        };
+        let mesh = soft_mesh(&doc.cp, &faces, &frame, Some(&on)).expect("網が返るはず");
+        assert!(!mesh.triangles.is_empty(), "三角形が無い");
+        assert_eq!(mesh.triangles.len(), mesh.triangle_faces.len());
+        assert_eq!(mesh.triangles.len(), mesh.triangle_layers.len());
+        // 分割しているので、元の面(1枚=三角形2つ)より細かくなる
+        assert!(mesh.triangles.len() > 2, "分割されていない");
     }
 
     #[test]

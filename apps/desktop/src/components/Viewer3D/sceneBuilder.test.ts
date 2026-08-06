@@ -14,7 +14,9 @@ import {
   buildTopology,
   clearGroup,
   createContent,
+  createSoftContent,
   updateFrame,
+  updateSoftContent,
 } from "./sceneBuilder";
 import { layerOffsets } from "../../lib/layerOffset";
 import type { Document, Face, Frame3D } from "../../lib/types";
@@ -422,5 +424,50 @@ describe("createContent / updateFrame(形の更新)", () => {
       warnings: [],
     });
     expect([...content.positions.slice(0, 3)]).toEqual([0, 0, 0]);
+  });
+});
+
+describe("紙のたわみの表示(SIM-012)", () => {
+  /** 面0(三角形1枚)と面1(三角形1枚)が辺を共有する最小の網 */
+  const SOFT = {
+    positions: [
+      [0, 0, 0],
+      [1, 0, 0],
+      [1, 1, 0],
+      [0, 1, 0],
+    ] as [number, number, number][],
+    triangles: [
+      [0, 1, 2],
+      [0, 2, 3],
+    ] as [number, number, number][],
+    triangle_faces: [0, 1],
+    triangle_layers: [0, 1],
+    warnings: [],
+  };
+
+  it("表裏の色分け・境界線つきの網を作る(面ごとに頂点を分ける)", () => {
+    const content = createSoftContent(SOFT, makeDoc().display);
+    // 共有していた頂点0・2が面ごとに複製され、3+3=6頂点になる
+    expect(content.layout.vertexCount).toBe(6);
+    expect(Array.isArray(content.mesh.material)).toBe(true);
+    expect(content.mesh.geometry.groups.length).toBe(2); // 表と裏
+    expect(content.line.geometry.getIndex()?.count).toBe(3 * 2 * 2); // 三角形2枚の輪郭
+  });
+
+  it("層のずらし表示が三角形の網にも効く(重なった紙が見分けられる)", () => {
+    const content = createSoftContent(SOFT, makeDoc().display);
+    updateSoftContent(content, SOFT, {
+      faces: [
+        { face: 0, polygon: [[0, 0, 0], [1, 0, 0], [1, 1, 0]], layer: 0 },
+        { face: 1, polygon: [[0, 0, 0], [1, 1, 0], [0, 1, 0]], layer: 1 },
+      ],
+      warnings: [],
+    });
+    const step = layerOffsets(2, 1)[1];
+    // 面0の3頂点はz=0のまま、面1の3頂点だけ層のぶん持ち上がる
+    for (let i = 0; i < 3; i++) expect(content.positions[i * 3 + 2]).toBeCloseTo(0, 6);
+    for (let i = 3; i < 6; i++) {
+      expect(Math.abs(content.positions[i * 3 + 2])).toBeCloseTo(step, 6);
+    }
   });
 });

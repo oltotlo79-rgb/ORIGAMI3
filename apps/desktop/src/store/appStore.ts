@@ -23,8 +23,10 @@ import {
   DEFAULT_DISPLAY,
   clampDivisions,
   clampSplitRatio,
+  clampUnit,
   loadPrefs,
   savePrefs,
+  softOf,
 } from "../lib/displayPrefs";
 import {
   ALIGN_STEPS,
@@ -61,6 +63,8 @@ import type {
   RecoveryInfo,
   SeqOp,
   Skeleton,
+  SoftMesh,
+  SoftSettings,
   TechniqueKind,
   Vec2,
 } from "../lib/types";
@@ -68,6 +72,10 @@ import { defaultSkeleton } from "../lib/skeleton";
 
 /** ヒンジ角の連続操作(スライダー)を間引く間隔(ms) */
 const POSE_THROTTLE_MS = 60;
+
+/** たわみの指定を作品へ書き込むまでの待ち(ms)。つまみを動かしている間の
+ * 書き込みをまとめ、元に戻す履歴が細かく埋まらないようにする */
+const SOFT_SAVE_MS = 400;
 
 /** 画面更新の仕組みが無い環境(テスト)で1コマを送る間隔(ms) */
 const FALLBACK_FRAME_MS = 16;
@@ -314,6 +322,10 @@ interface AppState {
   construct: ConstructOptions;
   /** 3D表示フレーム。nullなら平ら(展開図から直接描く) */
   frame3d: Frame3D | null;
+  /** たわみの三角形の網(SIM-012)。たわみを切っているとnull(従来の描き方に戻る) */
+  softMesh: SoftMesh | null;
+  /** たわみの計算から返った注意書き(日本語)。設定パネルに出す */
+  softWarnings: string[];
   /** 折り角度を指定できる辺(ヒンジ)のID集合。doc/faces更新時に1度だけ導出する */
   hinges: ReadonlySet<number>;
   /** 表示中の折り手順番号(1始まり。0は折る前、nullは全手順を折った最新の状態) */
@@ -530,6 +542,13 @@ interface AppState {
   confirmNewDocument: () => Promise<void>;
   /** 紙の色・方眼の分割数を変える(作品ごとの設定として保存する) */
   setDisplay: (patch: Partial<DisplaySettings>) => Promise<void>;
+  /**
+   * 紙のたわみの指定を変える(SIM-012 / SIM-013)。
+   * 画面はその場で変え、3D表示の作り直しは60msに1回へ間引いて依頼する
+   * (膨らみのつまみを動かしながら形を見られるように)。
+   * 作品への保存は少し遅らせてまとめる(つまみ1回の操作で履歴が埋まらないように)
+   */
+  setSoft: (patch: Partial<DisplaySettings>) => void;
   /** 2D区画と3D区画の分割比を変える(次回起動時も同じ位置に戻る) */
   setSplitRatio: (ratio: number) => void;
   /** 手順の順番を入れ替える(numberは1始まり、deltaは-1で前へ/+1で後ろへ) */
@@ -692,6 +711,8 @@ export const useAppStore = create<AppState>((set, get) => {
           pullHinge: null,
           pullMirrorHinge: null,
           frame3d: r.value.frame,
+          softMesh: null,
+          softWarnings: [],
           currentStep: null,
           playT: 1,
           replaySkipped: [],
@@ -728,19 +749,33 @@ export const useAppStore = create<AppState>((set, get) => {
    * 追い越されると意味が失われるのでFIFO(run)で必ず送る。
    * 実行された成功応答は完了順に全て適用する(runViewCommandと同じ規約)。
    * 成功時にerrorMessageは触らない(編集側のエラー報告を消さないため) */
+  /** 今の作品の設定から、たわみ計算へ渡す指定を作る(切ってあればnull=送らない) */
+  const softArg = (): SoftSettings | null => {
+    const s = softOf(get().display);
+    return s.enabled ? s : null;
+  };
+
+  /** たわみの結果を画面の状態へ移す。切っているときはnullに戻して従来の描画へ */
+  const softResult = (mesh: SoftMesh | null | undefined) => ({
+    softMesh: mesh ?? null,
+    softWarnings: keepIfSame(get().softWarnings, mesh?.warnings ?? []),
+  });
+
   const runPoseSolve = async (
     drivers: Driver[],
     coalesce = false,
     applyFrame = true,
   ): Promise<void> => {
     pose.reset();
-    const call = () => ipc.poseSolve(drivers);
+    const soft = softArg();
+    const call = () => ipc.poseSolve(drivers, soft);
     const r = await (coalesce ? queue.runLatest(call) : queue.run(call));
     if (r.ok) {
       set({
         // 出発点合わせ(applyFrame=false)では形は変わらないので、手順再生が
         // 持っていた層の重なり情報を消さないよう立体表示はそのままにする
         ...(applyFrame ? { frame3d: r.value.frame } : {}),
+        ...(applyFrame ? softResult(r.value.soft) : {}),
         poseWarnings: r.value.frame.warnings,
         poseConverged: r.value.converged,
         poseAngles: new Map(
@@ -777,7 +812,44 @@ export const useAppStore = create<AppState>((set, get) => {
   const pose = createTrailingThrottle(POSE_THROTTLE_MS, () => {
     void runPoseSolve(driverList(get().drivers), true);
   });
-  resetThrottle = pose.clearAll;
+
+  /** 今見えている形をもう一度作り直す(たわみの指定を変えたときに使う)。
+   * 手順のある作品は再生、無い作品は角度の追従計算で作る(どちらも最新1件だけ) */
+  const refreshShape = (): void => {
+    const s = get();
+    if (!s.doc) return;
+    const total = s.doc.sequence.length;
+    if (total === 0) {
+      void runPoseSolve(driverList(s.drivers), true);
+      return;
+    }
+    void runReplay(s.currentStep ?? total, s.currentStep === null ? 1 : s.playT, true);
+  };
+
+  // つまみを動かしている間も形が付いてくるよう、角度と同じ60ms間引きに乗せる
+  const softShape = createTrailingThrottle(POSE_THROTTLE_MS, refreshShape);
+  // 作品への保存はもう少しまとめる(つまみ1回の操作で元に戻す履歴が埋まらないように)
+  /** たわみの指定にまだ作品へ書き込んでいないものがあるか */
+  let softPending = false;
+  const softSave = createTrailingThrottle(SOFT_SAVE_MS, () => {
+    softPending = false;
+    void get().setDisplay({});
+  });
+
+  /** 書き込み待ちのたわみの指定を今すぐ確定する(手順として残す前に呼ぶ) */
+  const flushSoftSave = async (): Promise<void> => {
+    if (!softPending) return;
+    softPending = false;
+    softSave.reset(); // 予約を取り消す(同じ内容を二度送らない)
+    await get().setDisplay({});
+  };
+
+  resetThrottle = () => {
+    softPending = false;
+    pose.clearAll();
+    softShape.clearAll();
+    softSave.clearAll();
+  };
 
   /** 手順の再生結果を3D表示へ反映する。
    * coalesce=true(再生アニメーション)は「最新の形が出れば良い」ので
@@ -787,12 +859,13 @@ export const useAppStore = create<AppState>((set, get) => {
     t: number,
     coalesce = false,
   ): Promise<void> => {
-    const call = () => ipc.sequenceReplay(upTo, t);
+    const call = () => ipc.sequenceReplay(upTo, t, softArg());
     const r = await (coalesce ? queue.runLatest(call) : queue.run(call));
     if (r.ok) {
       const s = get();
       set({
         frame3d: r.value.frame,
+        ...softResult(r.value.soft),
         // upToまでの再生結果なので、作品全体のskippedは上書きしない
         replaySkipped: keepIfSame(s.replaySkipped, r.value.skipped),
         replayWarnings: keepIfSame(s.replayWarnings, r.value.warnings),
@@ -814,6 +887,9 @@ export const useAppStore = create<AppState>((set, get) => {
     const step = get().currentStep;
     if (step === null) {
       set({ frame3d: view.frame, replaySkipped: [], replayWarnings: [] });
+      // 自動再生の結果にはたわみの網が入っていないので、たわみを使うときだけ
+      // 同じ形をもう一度たわませて描き直す(切っていれば今までどおり1往復のまま)
+      if (softArg()) await runReplay(view.doc.sequence.length, 1, true);
       return;
     }
     // 描き直すのはその手順を折り終えた形(t=1)。一時停止していた途中の進み具合を
@@ -876,6 +952,8 @@ export const useAppStore = create<AppState>((set, get) => {
     techniqueDraft: null,
     construct: DEFAULT_CONSTRUCT,
     frame3d: null,
+    softMesh: null,
+    softWarnings: [],
     currentStep: null,
     playT: 1,
     playing: false,
@@ -1472,6 +1550,11 @@ export const useAppStore = create<AppState>((set, get) => {
         return;
       }
       const angles = currentAngles(s.hinges, s.drivers, s.poseAngles);
+      // SIM-015: たわみは「硬さ・膨らみの強さ」というパラメータとしてだけ残す
+      // (頂点の位置は保存しない)。書き込み待ちの指定があればここで先に確定させ、
+      // 仕上げの手順と同じ作品ファイルへ必ず一緒に入るようにする
+      await flushSoftSave();
+      if (get().errorMessage !== null) return;
       // 記録した形をそのまま見せる(手順の再生結果が最新の表示になる)
       set({ currentStep: null, errorMessage: null });
       await get().applySequenceOp({
@@ -1638,6 +1721,26 @@ export const useAppStore = create<AppState>((set, get) => {
       // 作品ごとの設定として保存する(.ori3に入り、元に戻す/やり直しも効く)。
       // 作品をまだ開いていないときは画面の表示だけ変える
       if (doc) await get().applyEdit({ type: "SetDisplay", display });
+    },
+
+    setSoft: (patch) => {
+      const display = { ...get().display, ...patch };
+      if (patch.soft_stiffness !== undefined) {
+        display.soft_stiffness = clampUnit(patch.soft_stiffness, 0.5);
+      }
+      if (patch.soft_pressure !== undefined) {
+        display.soft_pressure = clampUnit(patch.soft_pressure, 0);
+      }
+      const doc = get().doc;
+      // つまみの位置はその場で映す(設計原則3b: 結果を見ながら調整できること)
+      set(doc ? { display, doc: { ...doc, display } } : { display });
+      // 切ったらすぐ従来の描き方へ戻す(次の計算を待たない)
+      if (display.soft_enabled !== true) set({ softMesh: null, softWarnings: [] });
+      softShape.schedule();
+      if (doc) {
+        softPending = true;
+        softSave.schedule();
+      }
     },
 
     setSplitRatio: (ratio) => {

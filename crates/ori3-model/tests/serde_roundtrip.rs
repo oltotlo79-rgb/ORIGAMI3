@@ -72,11 +72,7 @@ fn sample_document() -> Document {
                 note: String::new(),
             },
         ],
-        display: DisplaySettings {
-            front_color: [237, 28, 36],
-            back_color: [255, 255, 255],
-            grid_divisions: 8,
-        },
+        display: DisplaySettings::default(),
     }
 }
 
@@ -109,6 +105,16 @@ fn test_edit_op_tagged_roundtrip() {
     }
 }
 
+/// たわみの項目が無い古い作品ファイルも、既定(オフ)で読めること(SIM-012)。
+#[test]
+fn test_display_settings_defaults_for_old_files() {
+    let old = r#"{"front_color":[1,2,3],"back_color":[4,5,6],"grid_divisions":8}"#;
+    let d: ori3_model::DisplaySettings = serde_json::from_str(old).expect("deserialize");
+    assert!(!d.soft_enabled, "たわみの既定はオフ");
+    assert_eq!(d.soft_stiffness, 0.5);
+    assert_eq!(d.soft_pressure, 0.0);
+}
+
 #[test]
 fn test_edit_op_set_display_roundtrip() {
     // 紙の色・方眼の分割数の変更(PAP-003 / CPE-003)も内部タグ形式で往復できること。
@@ -117,6 +123,9 @@ fn test_edit_op_set_display_roundtrip() {
             front_color: [1, 2, 3],
             back_color: [4, 5, 6],
             grid_divisions: 12,
+            soft_enabled: true,
+            soft_stiffness: 0.25,
+            soft_pressure: 0.75,
         },
     };
     let json = serde_json::to_string(&op).expect("serialize");
@@ -127,6 +136,10 @@ fn test_edit_op_set_display_roundtrip() {
             assert_eq!(display.front_color, [1, 2, 3]);
             assert_eq!(display.back_color, [4, 5, 6]);
             assert_eq!(display.grid_divisions, 12);
+            // たわみの指定(SIM-015)もパラメータとして往復する
+            assert!(display.soft_enabled);
+            assert_eq!(display.soft_stiffness, 0.25);
+            assert_eq!(display.soft_pressure, 0.75);
         }
         other => panic!("unexpected variant: {other:?}"),
     }

@@ -15,6 +15,7 @@ import type {
   ReplayResult,
   SeqOp,
   Skeleton,
+  SoftSettings,
   SolveResult,
 } from "../lib/types";
 
@@ -47,14 +48,23 @@ export function sequenceApply(op: SeqOp): Promise<DocumentView> {
   return invoke("sequence_apply", { op });
 }
 
-/** 手順の再生。upTo=0は初期状態(平ら)、tは0..=1の補間係数(1で完了) */
-export function sequenceReplay(upTo: number, t: number): Promise<ReplayResult> {
-  return invoke("sequence_replay", { upTo, t });
+/** 手順の再生。upTo=0は初期状態(平ら)、tは0..=1の補間係数(1で完了)。
+ * softを渡すとたわみの網も一緒に返る(省略時は従来どおり) */
+export function sequenceReplay(
+  upTo: number,
+  t: number,
+  soft?: SoftSettings | null,
+): Promise<ReplayResult> {
+  return invoke("sequence_replay", { upTo, t, soft: soft ?? null });
 }
 
-/** 折り角度の追従計算。前回解(warm start)はRust側のstoreが保持する */
-export function poseSolve(drivers: Driver[]): Promise<SolveResult> {
-  return invoke("pose_solve", { drivers });
+/** 折り角度の追従計算。前回解(warm start)はRust側のstoreが保持する。
+ * softを渡すとたわみの網も一緒に返る(省略時は従来どおり) */
+export function poseSolve(
+  drivers: Driver[],
+  soft?: SoftSettings | null,
+): Promise<SolveResult> {
+  return invoke("pose_solve", { drivers, soft: soft ?? null });
 }
 
 /** 前回の異常終了で残った自動保存を調べる。無ければnull */

@@ -30,9 +30,13 @@ import {
   buildTopology,
   createContent,
   createScene,
+  createSoftContent,
   updateFrame,
+  updateSoftContent,
+  type SoftContent,
   type Viewer3DScene,
 } from "./sceneBuilder";
+import { softSignature } from "./softMesh";
 import { twistPreviewSegments } from "../../lib/twistPolygon";
 import { ALIGN_STEPS } from "../../lib/alignFold";
 import { nearestAlignLine, nearestAlignPoint } from "../../lib/alignPick";
@@ -109,6 +113,8 @@ function pullBlockedOf(s: ReturnType<typeof useAppStore.getState>): string | nul
 export function Viewer3D({ fitRef }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const sceneRef = useRef<Viewer3DScene | null>(null);
+  /** 表示中のたわみの網(Three.jsの資源なのでストアには入れずrefで持つ) */
+  const softRef = useRef<SoftContent | null>(null);
   const downPosRef = useRef<{ x: number; y: number } | null>(null);
   /** 折り線を引いている最中の2点(表示専用の一時状態なのでrefで持つ) */
   const drawingRef = useRef<{ a: Vec2; b: Vec2 } | null>(null);
@@ -134,6 +140,7 @@ export function Viewer3D({ fitRef }: Props) {
   const faces = useAppStore((s) => s.faces);
   const hinges = useAppStore((s) => s.hinges);
   const frame3d = useAppStore((s) => s.frame3d);
+  const softMesh = useAppStore((s) => s.softMesh);
   const selection = useAppStore((s) => s.selection);
   const docEpoch = useAppStore((s) => s.docEpoch);
   const activeTool = useAppStore((s) => s.activeTool);
@@ -194,6 +201,7 @@ export function Viewer3D({ fitRef }: Props) {
     const scene = sceneRef.current;
     if (!scene || !doc) return;
     const content = createContent(buildTopology(doc, faces, hinges), doc.display);
+    softRef.current = null; // setContentがたわみの表示物を捨てるので参照も外す
     scene.setContent(content);
     updateFrame(content, useAppStore.getState().frame3d);
     scene.render();
@@ -206,6 +214,28 @@ export function Viewer3D({ fitRef }: Props) {
     updateFrame(scene.content, frame3d);
     scene.render();
   }, [frame3d]);
+
+  // 紙のたわみ(SIM-012)。網が届いている間は細かい三角形の網を描き、
+  // 切ったら従来の描き方へ戻す。網の形が同じ間は座標の書き換えだけで済ませる
+  // (膨らみのつまみを動かしても毎回作り直さない)
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    const s = useAppStore.getState();
+    if (!softMesh || !s.doc) {
+      softRef.current = null;
+      scene.setSoft(null);
+      return;
+    }
+    let content = softRef.current;
+    if (!content || content.signature !== softSignature(softMesh)) {
+      content = createSoftContent(softMesh, s.doc.display);
+      softRef.current = content;
+      scene.setSoft(content);
+    }
+    updateSoftContent(content, softMesh, s.frame3d);
+    scene.render();
+  }, [softMesh, doc, faces, hinges]);
 
   /** 強調表示を描き直す: 折り線を引いている間はその線と動く層、それ以外は選択中の折り線 */
   const drawHighlight = useCallback(() => {

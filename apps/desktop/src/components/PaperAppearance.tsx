@@ -6,6 +6,10 @@
 // EditOp::SetDisplay を送る)。.ori3ファイルに入るので、作品を渡した相手にも
 // 同じ色・同じ方眼で見え、元に戻す/やり直しも効く。
 // 左右対称に描くかは作品の中身ではなく描き方の好みなので端末側に覚える。
+//
+// 紙のたわみ(SIM-012/013/015)もここに置く。硬さ・膨らみの強さは
+// 「パラメータだけを残して頂点の位置は保存しない」決まりなので、紙の色と同じく
+// DisplaySettings に入れて .ori3ファイルへ保存する。
 
 import { useAppStore } from "../store/appStore";
 import {
@@ -13,13 +17,17 @@ import {
   MIN_DIVISIONS,
   hexToRgb,
   rgbToHex,
+  softOf,
 } from "../lib/displayPrefs";
 
 export function PaperAppearance() {
   const display = useAppStore((s) => s.display);
   const setDisplay = useAppStore((s) => s.setDisplay);
+  const setSoft = useAppStore((s) => s.setSoft);
+  const softWarnings = useAppStore((s) => s.softWarnings);
   const mirrorDraw = useAppStore((s) => s.mirrorDraw);
   const setMirrorDraw = useAppStore((s) => s.setMirrorDraw);
+  const soft = softOf(display);
 
   return (
     <div className="paper-appearance">
@@ -62,6 +70,55 @@ export function PaperAppearance() {
         紙を{display.grid_divisions}等分した目盛りに線が吸い付きます({MIN_DIVISIONS}〜
         {MAX_DIVISIONS})
       </span>
+      {/* 紙のたわみ(SIM-012 / SIM-013)。既定はオフで、入れると折り目以外の
+          ところでも紙が丸く曲がった形になる。膨らみは動かすとすぐ3Dに映る */}
+      <label>
+        <input
+          type="checkbox"
+          aria-label="紙のたわみを表現する"
+          checked={soft.enabled}
+          onChange={(e) => setSoft({ soft_enabled: e.target.checked })}
+        />
+        紙のたわみを表現する
+      </label>
+      {soft.enabled && (
+        <>
+          <label>
+            紙の硬さ
+            <input
+              type="range"
+              aria-label="紙の硬さ"
+              min={0}
+              max={1}
+              step={0.05}
+              value={soft.stiffness}
+              onChange={(e) => setSoft({ soft_stiffness: Number(e.target.value) })}
+            />
+          </label>
+          <label>
+            膨らみの強さ
+            <input
+              type="range"
+              aria-label="膨らみの強さ"
+              min={0}
+              max={1}
+              step={0.05}
+              value={soft.pressure}
+              onChange={(e) => setSoft({ soft_pressure: Number(e.target.value) })}
+            />
+          </label>
+        </>
+      )}
+      <span className="hint">
+        {soft.enabled
+          ? "面を細かく分けて曲げ、紙の丸みを見せています。硬くすると面が平らに近づき、膨らませると袋になっているところに空気が入ります(動かすとその場で3Dに映ります)"
+          : "折り目以外のところでも紙が丸く曲がった形を見せます(見た目だけの表現で、折り手順や折り図は変わりません)"}
+      </span>
+      {softWarnings.map((w) => (
+        <span className="hint" key={w}>
+          {w}
+        </span>
+      ))}
       {/* 左右対称に描く(CPE-010)。作品は左右対称のものが多いので、片側を
           描くと反対側にも同じ線が引かれ、作業が半分で済む */}
       <label>

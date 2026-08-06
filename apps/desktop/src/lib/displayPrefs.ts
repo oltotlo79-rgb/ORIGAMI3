@@ -6,15 +6,44 @@
 // もらった作品を開いたときにその作品の色を黙って上書きしてしまうため。
 // localStorageに残すのは2D/3Dの分割比だけ(作品の中身ではなく画面の使い方の好み)。
 
-import type { DisplaySettings } from "./types";
+import type { DisplaySettings, SoftSettings } from "./types";
 
-/** Rust側 Document::new と同じ初期値(赤い表・白い裏・8分割)。
+/** Rust側 Document::new と同じ初期値(赤い表・白い裏・8分割・たわみはオフ)。
  * 作品をまだ開いていない間の表示に使う */
 export const DEFAULT_DISPLAY: DisplaySettings = {
   front_color: [237, 28, 36],
   back_color: [255, 255, 255],
   grid_divisions: 8,
+  soft_enabled: false,
+  soft_stiffness: 0.5,
+  soft_pressure: 0,
 };
+
+/** 面の分割の細かさ(1辺 2^2 = 4等分)。細かすぎると1コマ16msに入らないので
+ * 画面からは変えられない固定値にし、大きな展開図ではRust側が自動で落とす */
+export const SOFT_SUBDIVISION = 2;
+/** たわみの反復回数(決定性のため固定) */
+export const SOFT_ITERATIONS = 20;
+
+/** 0.0〜1.0に丸める(入力が数でなければ既定値) */
+export function clampUnit(v: number, fallback: number): number {
+  if (!Number.isFinite(v)) return fallback;
+  return Math.max(0, Math.min(1, v));
+}
+
+/**
+ * 作品の見た目の設定から、たわみ計算へ渡す指定を組み立てる(SIM-015)。
+ * 古い作品ファイルには項目が無いので既定値で埋める。
+ */
+export function softOf(display: DisplaySettings): SoftSettings {
+  return {
+    enabled: display.soft_enabled === true,
+    subdivision: SOFT_SUBDIVISION,
+    stiffness: clampUnit(display.soft_stiffness ?? 0.5, 0.5),
+    pressure: clampUnit(display.soft_pressure ?? 0, 0),
+    iterations: SOFT_ITERATIONS,
+  };
+}
 
 /** 方眼の分割数の下限・上限(CPE-003) */
 export const MIN_DIVISIONS = 2;

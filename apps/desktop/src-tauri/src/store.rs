@@ -838,6 +838,7 @@ mod tests {
                     front_color: [0, 128, 255],
                     back_color: [16, 16, 16],
                     grid_divisions: 16,
+                    ..Default::default()
                 },
             })
             .unwrap();

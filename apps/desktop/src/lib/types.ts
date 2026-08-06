@@ -81,6 +81,34 @@ export interface DisplaySettings {
   front_color: [number, number, number];
   back_color: [number, number, number];
   grid_divisions: number;
+  /** 紙のたわみを表現するか(SIM-012)。既定はオフ。
+   * 古い作品ファイルには無いのでRust側が既定値で埋める(省略可) */
+  soft_enabled?: boolean;
+  /** 紙の硬さ(0.0〜1.0)。大きいほど面の中が平らに保たれる */
+  soft_stiffness?: number;
+  /** 膨らみの強さ(0.0〜1.0、SIM-013)。0.0なら膨らませない */
+  soft_pressure?: number;
+}
+
+/** たわみ計算の指定(ori3-soft::SoftSettings)。
+ * SIM-015のとおり、たわみの状態はこの値だけで表す(頂点の位置は保存しない) */
+export interface SoftSettings {
+  enabled: boolean;
+  subdivision: number;
+  stiffness: number;
+  pressure: number;
+  iterations: number;
+}
+
+/** たわませた三角形の網(ori3-soft::SoftMesh)。表示専用 */
+export interface SoftMesh {
+  positions: [number, number, number][];
+  triangles: [number, number, number][];
+  /** 三角形→元の面ID(表裏の色分け・当たり判定用) */
+  triangle_faces: number[];
+  /** 三角形→層番号(下から0,1,2…) */
+  triangle_layers: number[];
+  warnings: string[];
 }
 
 export interface Document {
@@ -186,6 +214,8 @@ export interface ReplayResult {
   /** 折り線が見つからず飛ばされたステップID */
   skipped: number[];
   warnings: string[];
+  /** たわみを指定したときだけ入る三角形の網(SIM-012) */
+  soft?: SoftMesh | null;
 }
 
 /** pose_solve の戻り値(ori3-rigid::SolveResult) */
@@ -196,6 +226,8 @@ export interface SolveResult {
   angles: Record<string, number>;
   /** 実行した反復回数(warm start効果の確認用) */
   iterations: number;
+  /** たわみを指定したときだけ入る三角形の網(SIM-012) */
+  soft?: SoftMesh | null;
 }
 
 /**

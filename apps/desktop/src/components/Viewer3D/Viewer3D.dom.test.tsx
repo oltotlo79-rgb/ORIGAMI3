@@ -27,6 +27,7 @@ vi.mock("./sceneBuilder", async (importOriginal) => {
         contentGroup: new THREE.Group(),
         highlightGroup: new THREE.Group(),
         content: null as unknown,
+        soft: null as unknown,
         render: vi.fn(),
         resize: vi.fn(),
         resetCamera: vi.fn(),
@@ -35,6 +36,9 @@ vi.mock("./sceneBuilder", async (importOriginal) => {
         }),
         setHighlight: vi.fn(),
         setPreview: vi.fn(),
+        setSoft: vi.fn((c: unknown) => {
+          scene.soft = c;
+        }),
         setDrawMode: vi.fn(),
         dispose: vi.fn(),
       };
@@ -169,6 +173,35 @@ describe("Viewer3D(画面)", () => {
     expect(op.line[0][0]).toBeCloseTo(0.5, 2);
     expect(op.keep_side_point[0]).toBeGreaterThan(0.5);
     expect(op.target_layers).toEqual([0]);
+  });
+
+  // SIM-012: たわみは見た目だけの表現。当たり判定は剛体折りの多角形のままなので、
+  // 細かい網を描いている間も折る・つかむ操作がそのまま使える
+  it("たわみを入れても紙をつかんで折れる(当たり判定は元の面のまま)", async () => {
+    useAppStore.setState({
+      softMesh: {
+        positions: [
+          [0, 0, 0],
+          [1, 0, 0],
+          [1, 1, 0],
+        ],
+        triangles: [[0, 1, 2]],
+        triangle_faces: [0],
+        triangle_layers: [0],
+        warnings: [],
+      },
+    });
+    const canvas = renderViewer();
+    // たわみの網は別の表示物として渡り、元の面(当たり判定に使う)は残っている
+    expect(held.scene.soft).not.toBeNull();
+    expect(held.scene.content).not.toBeNull();
+
+    fireEvent.pointerDown(canvas, { button: 0, pointerId: 1, clientX: 150, clientY: 200 });
+    fireEvent.pointerMove(canvas, { pointerId: 1, clientX: 250, clientY: 200 });
+    fireEvent.pointerUp(canvas, { button: 0, pointerId: 1, clientX: 250, clientY: 200 });
+    await waitFor(() => expect(ipc.sequenceApply).toHaveBeenCalled());
+    expect(vi.mocked(ipc.sequenceApply).mock.calls[0][0].type).toBe("FoldThrough");
+    useAppStore.setState({ softMesh: null });
   });
 });
 

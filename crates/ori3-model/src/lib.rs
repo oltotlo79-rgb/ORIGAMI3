@@ -111,11 +111,41 @@ pub enum FoldDirection {
 pub const MIN_GRID_DIVISIONS: u32 = 2;
 pub const MAX_GRID_DIVISIONS: u32 = 64;
 
+/// 紙の硬さの既定値(SIM-012)。古い作品ファイルにはこの項目が無いので既定で読む。
+fn default_stiffness() -> f64 {
+    0.5
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DisplaySettings {
     pub front_color: [u8; 3],
     pub back_color: [u8; 3],
     pub grid_divisions: u32,
+    /// 紙のたわみを表現するか(SIM-012)。**既定はオフ**。
+    ///
+    /// たわみは「パラメータだけを残して、頂点の位置そのものは保存しない」決まり
+    /// (SIM-015)なので、作品ごとの見た目の設定としてここに置く。
+    #[serde(default)]
+    pub soft_enabled: bool,
+    /// 紙の硬さ(0.0〜1.0)。大きいほど面の中が平らに保たれる。
+    #[serde(default = "default_stiffness")]
+    pub soft_stiffness: f64,
+    /// 膨らみの強さ(0.0〜1.0、SIM-013)。0.0なら膨らませない。
+    #[serde(default)]
+    pub soft_pressure: f64,
+}
+
+impl Default for DisplaySettings {
+    fn default() -> Self {
+        DisplaySettings {
+            front_color: [237, 28, 36],
+            back_color: [255, 255, 255],
+            grid_divisions: 8,
+            soft_enabled: false,
+            soft_stiffness: default_stiffness(),
+            soft_pressure: 0.0,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -183,11 +213,7 @@ impl Document {
                 next_edge_id: 4,
             },
             sequence: Vec::new(),
-            display: DisplaySettings {
-                front_color: [237, 28, 36],
-                back_color: [255, 255, 255],
-                grid_divisions: 8,
-            },
+            display: DisplaySettings::default(),
         }
     }
 }

@@ -10,8 +10,21 @@
 
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import type { DisplaySettings, Document, Face, Frame3D, Vec2 } from "../../lib/types";
-import { stackLifts } from "../../lib/layerOffset";
+import type {
+  DisplaySettings,
+  Document,
+  Face,
+  Frame3D,
+  SoftMesh,
+  Vec2,
+} from "../../lib/types";
+import { stackLifts, type Vec3 } from "../../lib/layerOffset";
+import {
+  buildSoftLayout,
+  fillSoftPositions,
+  softSignature,
+  type SoftLayout,
+} from "./softMesh";
 import { paperExtent } from "../CpEditor/snap";
 import type { HingeSegment } from "./hingePicker";
 
@@ -350,6 +363,82 @@ export function updateFrame(content: Viewer3DContent, frame: Frame3D | null): vo
 }
 
 // ---------------------------------------------------------------------------
+// 紙のたわみ(SIM-012)。面ごとの多角形ではなく細かい三角形の網を描く
+// ---------------------------------------------------------------------------
+
+/** たわみの表示物。表裏の色分け・境界線は面の表示と同じ作りにそろえる */
+export interface SoftContent {
+  /** 網の形が同じかを見分ける文字列(同じなら座標だけ書き換える) */
+  signature: string;
+  layout: SoftLayout;
+  mesh: THREE.Mesh;
+  line: THREE.LineSegments;
+  positions: Float32Array;
+}
+
+/** たわみの網から表示物を作る(座標は updateSoftContent で入れる) */
+export function createSoftContent(
+  soft: SoftMesh,
+  display: DisplaySettings,
+): SoftContent {
+  const layout = buildSoftLayout(soft);
+  const positions = new Float32Array(layout.vertexCount * 3);
+  const position = new THREE.BufferAttribute(positions, 3);
+  position.setUsage(THREE.DynamicDrawUsage);
+  const normal = new THREE.BufferAttribute(
+    new Float32Array(layout.vertexCount * 3),
+    3,
+  );
+  normal.setUsage(THREE.DynamicDrawUsage);
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", position);
+  geometry.setAttribute("normal", normal);
+  geometry.setIndex(layout.indices);
+  geometry.addGroup(0, layout.indices.length, 0); // 表
+  geometry.addGroup(0, layout.indices.length, 1); // 裏
+
+  const lineGeometry = new THREE.BufferGeometry();
+  lineGeometry.setAttribute("position", position); // 座標は面と共有する
+  lineGeometry.setIndex(layout.lineIndices);
+
+  const mesh = new THREE.Mesh(geometry, [
+    faceMaterial(display.front_color, THREE.FrontSide),
+    faceMaterial(display.back_color, THREE.BackSide),
+  ]);
+  const line = new THREE.LineSegments(
+    lineGeometry,
+    new THREE.LineBasicMaterial({ color: OUTLINE_COLOR }),
+  );
+  mesh.frustumCulled = false;
+  line.frustumCulled = false;
+  return { signature: softSignature(soft), layout, mesh, line, positions };
+}
+
+/**
+ * たわみの網の座標を反映する。層のずらし表示(UI-010 / SIM-004)は剛体折りの
+ * 結果から面ごとに求め、その面に属する三角形の頂点へ同じだけ足す。
+ */
+export function updateSoftContent(
+  content: SoftContent,
+  soft: SoftMesh,
+  frame: Frame3D | null,
+): void {
+  const lifts = new Map<number, Vec3>();
+  if (frame) {
+    const values = stackLifts(frame, PAPER_LONG_SIDE);
+    for (let i = 0; i < frame.faces.length; i++) {
+      lifts.set(frame.faces[i].face, values[i]);
+    }
+  }
+  fillSoftPositions(soft, content.layout, lifts, content.positions);
+  const geometry = content.mesh.geometry;
+  geometry.getAttribute("position").needsUpdate = true;
+  geometry.computeVertexNormals();
+  geometry.computeBoundingSphere();
+}
+
+// ---------------------------------------------------------------------------
 // シーン(レンダラ・カメラ・照明・入れ物)
 // ---------------------------------------------------------------------------
 
@@ -368,6 +457,15 @@ export interface Viewer3DScene {
   resetCamera(paperWidth: number, paperHeight: number): void;
   /** 面と線を差し替える(古い資源は破棄する) */
   setContent(content: Viewer3DContent): void;
+  /**
+   * たわみの網を表示する(SIM-012)。渡している間は面ごとの多角形の代わりに
+   * 細かい三角形の網を描く。nullで従来の描き方へ戻る。
+   *
+   * 元の面(content.mesh)は入れ物から外すだけで捨てない。当たり判定(どの面を
+   * つかんだか・どの折り線を選んだか)は今までどおり剛体折りの多角形で行うので、
+   * たわみを入れても折る・つかむ操作がそのまま使える。
+   */
+  setSoft(soft: SoftContent | null): void;
   /** 選択中ヒンジの強調を更新する(形と材質は使い回す) */
   setHighlight(segments: HingeSegment[]): void;
   /**
@@ -386,19 +484,23 @@ export interface Viewer3DScene {
   dispose(): void;
 }
 
+/** 面・線1つ分の資源を破棄する */
+function disposeDrawable(child: THREE.Object3D): void {
+  if (!(child instanceof THREE.Mesh || child instanceof THREE.LineSegments)) return;
+  child.geometry.dispose();
+  const material = child.material;
+  if (Array.isArray(material)) {
+    for (const m of material) m.dispose();
+  } else {
+    material.dispose();
+  }
+}
+
 /** グループの中身を破棄して空にする(ジオメトリ・マテリアルのリーク防止) */
 export function clearGroup(group: THREE.Group): void {
   for (const child of [...group.children]) {
     group.remove(child);
-    if (child instanceof THREE.Mesh || child instanceof THREE.LineSegments) {
-      child.geometry.dispose();
-      const material = child.material;
-      if (Array.isArray(material)) {
-        for (const m of material) m.dispose();
-      } else {
-        material.dispose();
-      }
-    }
+    disposeDrawable(child);
   }
 }
 
@@ -471,6 +573,9 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
   });
   const dir = new THREE.Vector3();
 
+  /** 表示中のたわみの網(null なら従来の面の描き方) */
+  let soft: SoftContent | null = null;
+
   const api: Viewer3DScene = {
     camera,
     contentGroup,
@@ -497,9 +602,26 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
       render();
     },
     setContent(content) {
+      api.setSoft(null); // たわみの表示物を片付け、外していた面・線を入れ物へ戻す
       clearGroup(contentGroup);
       api.content = content;
       contentGroup.add(content.mesh, content.line);
+      render();
+    },
+    setSoft(next) {
+      if (soft !== null && soft !== next) {
+        contentGroup.remove(soft.mesh, soft.line);
+        disposeDrawable(soft.mesh);
+        disposeDrawable(soft.line);
+      }
+      soft = next;
+      const base = api.content;
+      if (next !== null) {
+        if (base) contentGroup.remove(base.mesh, base.line);
+        if (next.mesh.parent !== contentGroup) contentGroup.add(next.mesh, next.line);
+      } else if (base && base.mesh.parent !== contentGroup) {
+        contentGroup.add(base.mesh, base.line);
+      }
       render();
     },
     setHighlight(segments) {
@@ -561,6 +683,7 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
       canvas.removeEventListener("webglcontextrestored", onContextRestored);
       controls.removeEventListener("change", render);
       controls.dispose();
+      api.setSoft(null); // たわみの表示物も片付ける(外していた面・線が入れ物へ戻る)
       clearGroup(contentGroup);
       api.content = null;
       highlightGroup.clear(); // 形と材質は共有しているのでここでは壊さない

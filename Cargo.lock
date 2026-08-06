@@ -762,6 +762,7 @@ dependencies = [
  "ori3-model",
  "ori3-propose",
  "ori3-rigid",
+ "ori3-soft",
  "serde",
  "serde_json",
  "tauri",
