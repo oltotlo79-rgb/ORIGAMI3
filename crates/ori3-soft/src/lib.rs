@@ -28,8 +28,8 @@ const MAX_ITERATIONS: u32 = 200;
 /// 「大きな展開図では分割の細かさを自動で落として目標を保つ」)。
 ///
 /// 実測(2026-08-06・開発機 Windows 11・release・反復20回・層16枚)では
-/// 1フレームおよそ「三角形1,000枚あたり1.6ms」で、三角形12,800枚だと約20msと
-/// 目標の16msを超える。8,000枚なら約12msに収まるのでこの値にしている。
+/// 1フレームおよそ「三角形1,000枚あたり1.6ms」で、三角形12,800枚だと約21msと
+/// 目標の16msを超える。8,000枚なら約13msに収まるのでこの値にしている。
 const MAX_TRIANGLES: usize = 8_000;
 
 /// たわみの設定。SIM-015 のとおり、たわみの状態はこの値だけで表す。
@@ -124,7 +124,7 @@ pub fn relax(
     warnings.append(&mut raw.warnings);
     if settings.enabled {
         let c = solve::build(&raw, &raw.positions, stiffness, pressure, iterations);
-        let broken = solve::run(&mut raw.positions, &c, iterations);
+        let broken = solve::run(&mut raw.positions, &raw.triangles, &c, iterations);
         if broken > 0 {
             warnings.push(format!(
                 "たわみ計算で層の重なり順を{broken}箇所保てませんでした。いちばん近い形で表示します"

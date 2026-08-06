@@ -145,6 +145,18 @@ fn mean_height(mesh: &SoftMesh, layer: u32) -> f64 {
     zs.iter().sum::<f64>() / zs.len() as f64
 }
 
+/// 層ごとの三角形の重心の`axis`番目の座標の平均。
+fn mean_along(mesh: &SoftMesh, layer: u32, axis: usize) -> f64 {
+    let vs: Vec<f64> = mesh
+        .triangles
+        .iter()
+        .zip(&mesh.triangle_layers)
+        .filter(|&(_, &l)| l == layer)
+        .map(|(t, _)| t.iter().map(|&i| mesh.positions[i as usize][axis]).sum::<f64>() / 3.0)
+        .collect();
+    vs.iter().sum::<f64>() / vs.len() as f64
+}
+
 #[test]
 fn flat_paper_stays_flat_without_pressure() {
     let doc = square_doc();
@@ -283,3 +295,49 @@ fn layer_order_is_kept_while_inflating() {
     assert!(m.warnings.is_empty(), "層の警告は出ない: {:?}", m.warnings);
 }
 
+
+#[test]
+fn an_open_shape_is_not_a_bag_and_does_not_inflate() {
+    // 途中まで折った紙は2枚が開いていて袋になっていない。空気圧をいくら上げても
+    // 膨らませる先(閉じた空間)が無いので、1ビットも動いてはならない。
+    let (doc, faces, frame) = half_folded(0.5);
+    let a = relax(&doc.cp, &faces, &frame, &settings(true, 0.5, 0.0));
+    let b = relax(&doc.cp, &faces, &frame, &settings(true, 0.5, 1.0));
+    assert_eq!(a.positions, b.positions, "開いた紙は膨らまない");
+}
+
+#[test]
+fn a_layer_that_comes_close_during_the_iterations_is_still_separated() {
+    // いちばん上の層だけを持ち上げた姿勢(袋を少し開いた形)。持ち上げ量は
+    // 近傍探索の半径よりずっと大きいので、初期位置で一度しか探さないと、
+    // 膨らむ途中で下から近づいてきた層を見つけられず紙が突き抜ける。
+    let doc = preliminary_base();
+    let (faces, mut frame) = folded(&doc, 1.0);
+    for f in frame.faces.iter_mut().filter(|f| f.layer == 3) {
+        for p in &mut f.polygon {
+            p[2] += 0.05;
+        }
+    }
+    let m = relax(&doc.cp, &faces, &frame, &settings(true, 0.5, 0.9));
+    let (h2, h3) = (mean_height(&m, 2), mean_height(&m, 3));
+    assert!(h3 > h2 + 1e-4, "近づいた層も離される: 層2={h2} 層3={h3}");
+}
+
+#[test]
+fn stacks_in_different_planes_are_lifted_along_their_own_normal() {
+    // 重なりの一部を90°起こして、2つの重なりが別々の平面に乗った3Dの姿勢を作る。
+    // 積み上げ軸を全体でひとつに決めると、片方の重なりでは軸が面と平行になって
+    // しまい層が離れない。向きは場所ごとに決める必要がある。
+    let doc = preliminary_base();
+    let (faces, mut frame) = folded(&doc, 1.0);
+    for f in frame.faces.iter_mut().filter(|f| f.layer >= 2) {
+        for p in &mut f.polygon {
+            *p = [p[2] + 1.0, p[1], -p[0]]; // y軸まわりに90°回す
+        }
+    }
+    let m = relax(&doc.cp, &faces, &frame, &settings(true, 0.5, 0.9));
+    let (z0, z1) = (mean_height(&m, 0), mean_height(&m, 1));
+    let (x2, x3) = (mean_along(&m, 2, 0), mean_along(&m, 3, 0));
+    assert!(z1 > z0 + 1e-4, "z平面の重なりはzで離れる: {z0} < {z1}");
+    assert!(x3 > x2 + 1e-4, "x平面の重なりはxで離れる: {x2} < {x3}");
+}
