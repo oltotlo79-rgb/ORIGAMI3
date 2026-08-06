@@ -5,5 +5,5 @@ pub mod solver;
 pub mod tree;
 
 pub use intersect::{PENETRATION_WARNING, self_intersects};
-pub use solver::{SolveResult, solve};
+pub use solver::{SolveResult, solve, solve_near};
 pub use tree::{FoldedFrame, propagate, to_frame3d};

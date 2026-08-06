@@ -396,13 +396,55 @@ fn steps_without_drivers_are_not_skipped() {
 /// debugビルドにそのまま3秒の上限を課す(release目標に対し十分厳しい)。
 #[test]
 fn replay_of_ten_steps_on_400_faces_is_under_three_seconds() {
-    const STRIPS: usize = 400;
-    const STEPS: usize = 10;
+    let doc = accordion_document();
+    let faces = extract_faces(&doc.cp);
+    assert_eq!(faces.len(), STRIPS);
+    assert_eq!(doc.cp.edges.len(), 3 * STRIPS + 1);
+
+    let t0 = Instant::now();
+    let res = replay(&doc, STEPS, 1.0);
+    let dt = t0.elapsed();
+    println!("replay(10ステップ・面400) = {dt:?} 警告={:?}", res.warnings);
+    assert!(res.skipped.is_empty());
+    assert!(res.warnings.is_empty(), "警告={:?}", res.warnings);
+    // 蛇腹は完全に畳まれ、幅1・高さ1/400になる
+    assert!((extent(&res.frame, 0) - 1.0).abs() < 1e-6);
+    assert!(extent(&res.frame, 1) < 1.0 / STRIPS as f64 + 1e-6);
+    assert!(
+        dt < Duration::from_secs(3),
+        "全再生が遅すぎます: {dt:?}(NFR-002: 3秒以内)"
+    );
+}
+
+/// NFR-002: 折り途中(t<1)の再生も10ステップ・面400で3秒以内。
+///
+/// 折り途中は「閉包を満たしたまま補間した角度へ近づける」ため、目標を少しずつ
+/// 動かしながらソルバーを呼び直す(連続法)。t=1の一発解きより重いので別に測る。
+/// 実測(2026-08-06, 開発機 Windows 11): debug 約0.67秒 / release 約26ms。
+#[test]
+fn replay_mid_fold_of_ten_steps_on_400_faces_is_under_three_seconds() {
+    let doc = accordion_document();
+    let t0 = Instant::now();
+    let res = replay(&doc, STEPS, 0.5);
+    let dt = t0.elapsed();
+    println!(
+        "replay(10ステップ・面400, t=0.5) = {dt:?} 警告={:?}",
+        res.warnings
+    );
+    assert!(res.warnings.is_empty(), "警告={:?}", res.warnings);
+    assert!(
+        dt < Duration::from_secs(3),
+        "折り途中の再生が遅すぎます: {dt:?}(NFR-002: 3秒以内)"
+    );
+}
+
+const STRIPS: usize = 400;
+const STEPS: usize = 10;
+
+/// perf用: 面400の蛇腹を40本ずつ10ステップで完全に畳む文書。
+fn accordion_document() -> Document {
     let cp = accordion_cp(STRIPS);
     let faces = extract_faces(&cp);
-    assert_eq!(faces.len(), STRIPS);
-    assert_eq!(cp.edges.len(), 3 * STRIPS + 1);
-
     // 層順序: 全面の代表点を「現在の面の並びの逆順」で指定する(解決がいちばん重い形)
     let mut layer_order = FlatState::initial(&cp, &faces).to_layer_points(&cp, &faces);
     layer_order.reverse();
@@ -435,19 +477,7 @@ fn replay_of_ten_steps_on_400_faces_is_under_three_seconds() {
         })
         .collect();
 
-    let t0 = Instant::now();
-    let res = replay(&doc, STEPS, 1.0);
-    let dt = t0.elapsed();
-    println!("replay(10ステップ・面400) = {dt:?} 警告={:?}", res.warnings);
-    assert!(res.skipped.is_empty());
-    assert!(res.warnings.is_empty(), "警告={:?}", res.warnings);
-    // 蛇腹は完全に畳まれ、幅1・高さ1/400になる
-    assert!((extent(&res.frame, 0) - 1.0).abs() < 1e-6);
-    assert!(extent(&res.frame, 1) < 1.0 / STRIPS as f64 + 1e-6);
-    assert!(
-        dt < Duration::from_secs(3),
-        "全再生が遅すぎます: {dt:?}(NFR-002: 3秒以内)"
-    );
+    doc
 }
 
 /// perf用: 平行な折り線だけの蛇腹CP(面 `strips` 枚・辺 3*strips+1 本)。
@@ -827,7 +857,6 @@ fn pose_step_angles_must_not_be_rounded() {
         );
     }
 }
-
 
 /// 手順の途中へ折りを挟んだとき、後続の手順に何が起きるか(SEQ-005)。
 ///

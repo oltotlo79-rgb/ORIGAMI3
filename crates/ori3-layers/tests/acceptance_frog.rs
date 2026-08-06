@@ -40,7 +40,7 @@
 
 use std::collections::HashMap;
 
-use glam::DVec2;
+use glam::{DVec2, DVec3};
 use ori3_cp::{Face, extract_faces};
 use ori3_layers::fold_through::{FoldDirection, FoldThroughInput, fold_through};
 use ori3_layers::techniques::TechniqueInput;
@@ -85,7 +85,11 @@ fn fold(doc: &mut Document, line: [[f64; 2]; 2], keep: [f64; 2], direction: Fold
         },
     )
     .expect("折れる指定");
-    assert!(res.warnings.is_empty(), "警告なしで折れる: {:?}", res.warnings);
+    assert!(
+        res.warnings.is_empty(),
+        "警告なしで折れる: {:?}",
+        res.warnings
+    );
     let mut step = res.step;
     step.id = u32::try_from(up_to).unwrap();
     doc.cp = cp;
@@ -120,7 +124,11 @@ fn apply(
         },
     )
     .expect("折れる指定");
-    assert!(res.warnings.is_empty(), "警告なしで折れる: {:?}", res.warnings);
+    assert!(
+        res.warnings.is_empty(),
+        "警告なしで折れる: {:?}",
+        res.warnings
+    );
     let mut step = res.step;
     step.id = u32::try_from(up_to).unwrap();
     doc.cp = cp;
@@ -138,14 +146,21 @@ fn state_of(doc: &Document) -> (Vec<Face>, FlatState) {
 
 /// 展開図の頂点の位置(頂点ID→座標)。
 fn vertex_pos(cp: &CreasePattern) -> HashMap<u32, DVec2> {
-    cp.vertices.iter().map(|v| (v.id, DVec2::from(v.pos))).collect()
+    cp.vertices
+        .iter()
+        .map(|v| (v.id, DVec2::from(v.pos)))
+        .collect()
 }
 
 /// 面が畳み平面で占める多角形。
 fn plane_poly(cp: &CreasePattern, f: &Face, state: &FlatState) -> Vec<DVec2> {
     let pos = vertex_pos(cp);
     let pl = state.placements[&f.id];
-    f.vertices.iter().filter_map(|v| pos.get(v).copied()).map(|p| pl.apply(p)).collect()
+    f.vertices
+        .iter()
+        .filter_map(|v| pos.get(v).copied())
+        .map(|p| pl.apply(p))
+        .collect()
 }
 
 /// 展開図の点 `cp` が畳み平面のどこへ来たか(重なった同じ位置は1つにまとめる)。
@@ -252,10 +267,22 @@ fn assert_fold_senses(doc: &Document, label: &str) {
 /// 折り上がりが平ら(全ての面がz=0に乗る)ことを確かめる。
 fn assert_flat(doc: &Document, label: &str) {
     let result = replay(doc, doc.sequence.len(), 1.0);
-    assert!(result.warnings.is_empty(), "{label}: 再生の警告 {:?}", result.warnings);
-    assert!(result.skipped.is_empty(), "{label}: 飛ばした手順 {:?}", result.skipped);
     assert!(
-        result.frame.faces.iter().all(|f| f.polygon.iter().all(|p| p[2].abs() < 1e-6)),
+        result.warnings.is_empty(),
+        "{label}: 再生の警告 {:?}",
+        result.warnings
+    );
+    assert!(
+        result.skipped.is_empty(),
+        "{label}: 飛ばした手順 {:?}",
+        result.skipped
+    );
+    assert!(
+        result
+            .frame
+            .faces
+            .iter()
+            .all(|f| f.polygon.iter().all(|p| p[2].abs() < 1e-6)),
         "{label}: 折り上がりは平ら"
     );
 }
@@ -269,8 +296,18 @@ fn assert_flat(doc: &Document, label: &str) {
 /// 紙の中心が閉じた角 (0.5,0.5) に来る。
 fn preliminary_base() -> Document {
     let mut doc = square_doc();
-    fold(&mut doc, [[0.0, 0.5], [1.0, 0.5]], [0.5, 0.25], FoldDirection::Up);
-    fold(&mut doc, [[0.5, 0.0], [0.5, 0.5]], [0.25, 0.25], FoldDirection::Up);
+    fold(
+        &mut doc,
+        [[0.0, 0.5], [1.0, 0.5]],
+        [0.5, 0.25],
+        FoldDirection::Up,
+    );
+    fold(
+        &mut doc,
+        [[0.5, 0.0], [0.5, 0.5]],
+        [0.25, 0.25],
+        FoldDirection::Up,
+    );
     for (line, reference) in [
         ([[0.5, 0.0], [0.5, 1.0]], [0.5, 0.1]),
         ([[0.0, 0.5], [1.0, 0.5]], [0.1, 0.5]),
@@ -297,7 +334,13 @@ fn spine_to(doc: &Document, mid: [f64; 2]) -> ([[f64; 2]; 2], [FaceId; 2]) {
             edge_faces.entry(*e).or_default().push(f.id);
         }
     }
-    let rank = |id: &FaceId| state.order.iter().position(|x| x == id).expect("層順序の面");
+    let rank = |id: &FaceId| {
+        state
+            .order
+            .iter()
+            .position(|x| x == id)
+            .expect("層順序の面")
+    };
     for e in &doc.cp.edges {
         let (Some(&p0), Some(&p1)) = (pos.get(&e.v0), pos.get(&e.v1)) else {
             continue;
@@ -403,7 +446,11 @@ fn squashing_the_four_pockets_narrows_the_base_to_a_kite() {
     // 紙の1/4がそれぞれ「もとの紙+折り返した三角2枚」の3面に分かれる
     assert_eq!(faces.len(), 12, "12面");
     assert_eq!(state.order.len(), 12);
-    assert_eq!(doc.sequence.len(), 8, "折り操作は8手(半分2回・組み替え2回・つぶし4回)");
+    assert_eq!(
+        doc.sequence.len(),
+        8,
+        "折り操作は8手(半分2回・組み替え2回・つぶし4回)"
+    );
 
     // 紙の4隅は1点に、紙の中心も1点に集まったまま
     let apex = only(&doc, [0.5, 0.5], "紙の中心");
@@ -418,7 +465,11 @@ fn squashing_the_four_pockets_narrows_the_base_to_a_kite() {
     let axis = (only(&doc, [0.0, 0.0], "紙の隅") - apex).normalize();
     for mid in [[0.5, 0.0], [1.0, 0.5], [0.5, 1.0], [0.0, 0.5]] {
         let p = only(&doc, mid, "辺の中点") - apex;
-        assert!((p.length() - 0.5).abs() < 1e-9, "中心から0.5(実際 {})", p.length());
+        assert!(
+            (p.length() - 0.5).abs() < 1e-9,
+            "中心から0.5(実際 {})",
+            p.length()
+        );
         assert!(axis.angle_to(p).abs() < 1e-9, "中心線の上に乗る");
     }
 
@@ -437,7 +488,10 @@ fn squashing_the_four_pockets_narrows_the_base_to_a_kite() {
         .filter(|(_, a)| (a.abs() - 22.5).abs() < 1e-9)
         .map(|(r, _)| *r)
         .fold(0.0, f64::max);
-    assert!((side - 0.5 / HALF.cos()).abs() < 1e-9, "たこ形の角(実際 {side})");
+    assert!(
+        (side - 0.5 / HALF.cos()).abs() < 1e-9,
+        "たこ形の角(実際 {side})"
+    );
 
     // 表示上の重なりは折り目の向きとの一致で確かめる。開いてつぶす折りは既にある
     // 折り目を開く動きを含み、手順再生は前の手順の折り目を180°に固定したまま補間する
@@ -459,15 +513,32 @@ fn each_quarter_keeps_its_squashed_triangles_next_to_it() {
         assert_eq!(unit.len(), 3, "1/4は3面に分かれる(実際 {unit:?})");
         let at: Vec<usize> = unit
             .iter()
-            .map(|id| state.order.iter().position(|x| x == id).expect("層順序の面"))
+            .map(|id| {
+                state
+                    .order
+                    .iter()
+                    .position(|x| x == id)
+                    .expect("層順序の面")
+            })
             .collect();
         assert_eq!(at[1], at[0] + 1, "折り返した紙はもとの紙の隣(実際 {at:?})");
         assert_eq!(at[2], at[1] + 1, "折り返した紙はもとの紙の隣(実際 {at:?})");
         let corners: Vec<usize> = unit
             .iter()
-            .map(|id| faces.iter().find(|f| f.id == *id).expect("面").vertices.len())
+            .map(|id| {
+                faces
+                    .iter()
+                    .find(|f| f.id == *id)
+                    .expect("面")
+                    .vertices
+                    .len()
+            })
             .collect();
-        assert_eq!(corners, vec![3, 4, 3], "三角・もとの紙・三角の順(実際 {corners:?})");
+        assert_eq!(
+            corners,
+            vec![3, 4, 3],
+            "三角・もとの紙・三角の順(実際 {corners:?})"
+        );
         seen += 1;
     }
     assert_eq!(seen, 4, "1/4は4組");
@@ -518,14 +589,21 @@ fn frog_axis(doc: &Document) -> (DVec2, DVec2) {
 fn petal_folding_the_kite_makes_the_frog_base() {
     let (doc, _) = frog_base();
     let (faces, _) = state_of(&doc);
-    assert_eq!(doc.sequence.len(), 9, "折り操作は9手(下ごしらえ8手+花弁折り1手)");
+    assert_eq!(
+        doc.sequence.len(),
+        9,
+        "折り操作は9手(下ごしらえ8手+花弁折り1手)"
+    );
     assert_eq!(faces.len(), 40, "40面");
 
     // 紙の4隅は紙の中心と同じ1点(先端)に集まる = 隅から出る4本の足が最大長
     let (apex, axis) = frog_axis(&doc);
     for corner in [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]] {
         let p = only(&doc, corner, "紙の隅");
-        assert!((p - apex).length() < 1e-9, "紙の隅は紙の中心と同じ先端へ来る(実際 {p:?})");
+        assert!(
+            (p - apex).length() < 1e-9,
+            "紙の隅は紙の中心と同じ先端へ来る(実際 {p:?})"
+        );
     }
     // 4つの辺の中点は先端から 0.2071、つぶし折りの角(隅から0.2929の点)は 0.2929
     for (cp, want) in [
@@ -533,11 +611,21 @@ fn petal_folding_the_kite_makes_the_frog_base() {
         ([0.0, 0.5], 0.5 * std::f64::consts::SQRT_2 - 0.5),
         ([0.5, 0.0], 0.5 * std::f64::consts::SQRT_2 - 0.5),
         ([1.0, 0.5], 0.5 * std::f64::consts::SQRT_2 - 0.5),
-        ([std::f64::consts::FRAC_1_SQRT_2, 1.0], 1.0 - std::f64::consts::FRAC_1_SQRT_2),
-        ([0.0, 1.0 - std::f64::consts::FRAC_1_SQRT_2], 1.0 - std::f64::consts::FRAC_1_SQRT_2),
+        (
+            [std::f64::consts::FRAC_1_SQRT_2, 1.0],
+            1.0 - std::f64::consts::FRAC_1_SQRT_2,
+        ),
+        (
+            [0.0, 1.0 - std::f64::consts::FRAC_1_SQRT_2],
+            1.0 - std::f64::consts::FRAC_1_SQRT_2,
+        ),
     ] {
         let v = only(&doc, cp, "境界の点") - apex;
-        assert!((v.length() - want).abs() < 1e-9, "{cp:?} は先端から {want}(実際 {})", v.length());
+        assert!(
+            (v.length() - want).abs() < 1e-9,
+            "{cp:?} は先端から {want}(実際 {})",
+            v.length()
+        );
         assert!(axis.angle_to(v).abs() < 1e-9, "中心線の上に乗る");
     }
 }
@@ -557,12 +645,20 @@ fn the_frog_base_is_a_45_degree_kite_of_half_diagonal() {
             wide = wide.max((p - apex).dot(perp).abs());
         }
         assert!(
-            plane_poly(&doc.cp, f, &state).iter().all(|p| (*p - apex).dot(axis) >= -1e-9),
+            plane_poly(&doc.cp, f, &state)
+                .iter()
+                .all(|p| (*p - apex).dot(axis) >= -1e-9),
             "先端より外へ出る紙は無い"
         );
     }
-    assert!((far - root).abs() < 1e-9, "先端から根元まで √2/4(実際 {far})");
-    assert!((wide - root * HALF.tan()).abs() < 1e-9, "根元の半幅(実際 {wide})");
+    assert!(
+        (far - root).abs() < 1e-9,
+        "先端から根元まで √2/4(実際 {far})"
+    );
+    assert!(
+        (wide - root * HALF.tan()).abs() < 1e-9,
+        "根元の半幅(実際 {wide})"
+    );
 
     // 中心線の左右どちらでも紙は16枚重なる(下ごしらえの8層+折り返した紙8層)
     for deg in [11.25_f64, -11.25] {
@@ -613,8 +709,6 @@ fn the_frog_base_is_deterministic() {
     assert_eq!(frame(&a), frame(&b), "折り上がりの3D姿勢がビット一致する");
 }
 
-
-
 // ---------------------------------------------------------------------------
 // 完成形(足4本と体の段折り)
 // ---------------------------------------------------------------------------
@@ -648,7 +742,10 @@ fn leg_layers(doc: &Document, corner: [f64; 2]) -> Vec<FaceId> {
         .copied()
         .filter(|id| {
             let f = faces.iter().find(|f| f.id == *id).expect("層順序の面");
-            f.vertices.iter().filter_map(|v| pos.get(v)).any(|p| (*p - t).length() < 1e-9)
+            f.vertices
+                .iter()
+                .filter_map(|v| pos.get(v))
+                .any(|p| (*p - t).length() < 1e-9)
         })
         .collect()
 }
@@ -700,7 +797,11 @@ fn frog() -> (Document, FlatState) {
 fn the_frog_has_four_legs_sticking_out_of_the_body() {
     let (doc, _) = frog();
     let (faces, state) = state_of(&doc);
-    assert_eq!(doc.sequence.len(), 14, "折り操作は14手(基本形9手+足4手+段折り1手)");
+    assert_eq!(
+        doc.sequence.len(),
+        14,
+        "折り操作は14手(基本形9手+足4手+段折り1手)"
+    );
     assert_eq!(faces.len(), 140, "140面");
     assert_eq!(state.order.len(), 140);
 
@@ -711,9 +812,15 @@ fn the_frog_has_four_legs_sticking_out_of_the_body() {
     for (corner, side, along) in LEGS {
         let v = only(&doc, corner, "足の先") - apex;
         let want = axis * along - perp * (side * along);
-        assert!((v - want).length() < 1e-9, "{corner:?} の足の先(実際 {v:?} 期待 {want:?})");
+        assert!(
+            (v - want).length() < 1e-9,
+            "{corner:?} の足の先(実際 {v:?} 期待 {want:?})"
+        );
         let deg = axis.angle_to(v).to_degrees();
-        assert!((deg.abs() - 45.0).abs() < 1e-9, "足は中心線から45°(実際 {deg})");
+        assert!(
+            (deg.abs() - 45.0).abs() < 1e-9,
+            "足は中心線から45°(実際 {deg})"
+        );
         assert!(
             (v.length() - along * std::f64::consts::SQRT_2).abs() < 1e-9,
             "足の先までの距離(実際 {})",
@@ -721,10 +828,16 @@ fn the_frog_has_four_legs_sticking_out_of_the_body() {
         );
     }
     // 4本は4つの別々の向き・距離に出る(重ならない)
-    let tips: Vec<DVec2> = LEGS.iter().map(|(c, _, _)| only(&doc, *c, "足の先")).collect();
+    let tips: Vec<DVec2> = LEGS
+        .iter()
+        .map(|(c, _, _)| only(&doc, *c, "足の先"))
+        .collect();
     for i in 0..tips.len() {
         for j in (i + 1)..tips.len() {
-            assert!((tips[i] - tips[j]).length() > 1e-6, "足{i}と足{j}は別の位置");
+            assert!(
+                (tips[i] - tips[j]).length() > 1e-6,
+                "足{i}と足{j}は別の位置"
+            );
         }
     }
 
@@ -735,10 +848,67 @@ fn the_frog_has_four_legs_sticking_out_of_the_body() {
         .flat_map(|f| plane_poly(&doc.cp, f, &state))
         .map(|p| (p - apex).dot(axis))
         .fold(f64::NEG_INFINITY, f64::max);
-    assert!((far - root).abs() < 1e-9, "段折りで体が縮む(実際 {far} 期待 {root})");
+    assert!(
+        (far - root).abs() < 1e-9,
+        "段折りで体が縮む(実際 {far} 期待 {root})"
+    );
 
     assert_fold_senses(&doc, "完成したカエル");
     assert_flat(&doc, "完成したカエル");
+}
+
+/// 折っている最中も紙がつながったままであること(実機で報告された不具合の回帰)。
+///
+/// 折り目の両端の頂点を、その折り目を共有する2面それぞれの3D多角形から読み、
+/// 同じ位置に来ているかを見る。離れていたら紙がちぎれている。
+/// 全ヒンジ角を線形補間しただけの値は内部頂点まわりのループ閉包を満たさない。
+#[test]
+fn frog_paper_stays_connected_while_folding() {
+    let (doc, _) = frog();
+    let faces = extract_faces(&doc.cp);
+    let mut edge_faces: HashMap<u32, Vec<&Face>> = HashMap::new();
+    for f in &faces {
+        let mut ids = f.edges.clone();
+        ids.sort_unstable();
+        ids.dedup();
+        for eid in ids {
+            edge_faces.entry(eid).or_default().push(f);
+        }
+    }
+    // 全手順×全tは重いので、袋を開く工程(内部頂点が増える)と完成形を代表で見る
+    for up_to in [5, 9, doc.sequence.len()] {
+        for k in [1, 2, 3] {
+            let t = f64::from(k) / 4.0;
+            let frame = replay(&doc, up_to, t).frame;
+            let poly: HashMap<FaceId, &Vec<[f64; 3]>> =
+                frame.faces.iter().map(|f| (f.face, &f.polygon)).collect();
+            for e in &doc.cp.edges {
+                let Some(fs) = edge_faces.get(&e.id) else {
+                    continue;
+                };
+                if fs.len() != 2 || fs[0].id == fs[1].id {
+                    continue;
+                }
+                for v in [e.v0, e.v1] {
+                    let pts: Vec<DVec3> = fs
+                        .iter()
+                        .filter_map(|f| {
+                            let i = f.vertices.iter().position(|&x| x == v)?;
+                            Some(DVec3::from(poly.get(&f.id)?[i]))
+                        })
+                        .collect();
+                    if pts.len() == 2 {
+                        let gap = (pts[0] - pts[1]).length();
+                        assert!(
+                            gap < 1e-6,
+                            "カエル(手順{up_to}, t={t}): 折り目(辺{})でつながった面が {gap:.9} 離れている",
+                            e.id
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// 足1本は層順序の上でひとまとまりになっている(つまんで中割り折りできる)。
@@ -770,7 +940,11 @@ fn each_leg_is_a_bundle_of_neighbouring_layers() {
                 .map(|(k, _)| k)
                 .collect();
             assert_eq!(at.len(), 2, "先端の近くでは足は2層(実際 {at:?})");
-            assert_eq!(at[1], at[0] + 1, "足の2層は隣どうし(実際 {at:?} / {here:?})");
+            assert_eq!(
+                at[1],
+                at[0] + 1,
+                "足の2層は隣どうし(実際 {at:?} / {here:?})"
+            );
         }
     }
 }
@@ -788,7 +962,11 @@ fn the_frog_replays_from_the_crease_pattern() {
     for f in &faces {
         let (b, r) = (built.placements[&f.id], replayed.placements[&f.id]);
         for p in f.vertices.iter().filter_map(|v| pos.get(v)) {
-            assert!((b.apply(*p) - r.apply(*p)).length() < 1e-9, "面 {} の位置が一致する", f.id);
+            assert!(
+                (b.apply(*p) - r.apply(*p)).length() < 1e-9,
+                "面 {} の位置が一致する",
+                f.id
+            );
         }
     }
 }
@@ -814,12 +992,20 @@ fn the_frog_is_deterministic() {
 fn write_fixture(doc: &Document, faces: &[Face], name: &str) {
     let mut s = String::from("{\n");
     let (w, h) = (doc.paper.width_mm, doc.paper.height_mm);
-    s.push_str(&format!("  \"paper\": {{ \"width_mm\": {w:?}, \"height_mm\": {h:?} }},\n"));
+    s.push_str(&format!(
+        "  \"paper\": {{ \"width_mm\": {w:?}, \"height_mm\": {h:?} }},\n"
+    ));
     s.push_str("  \"vertices\": [\n");
     for (i, v) in doc.cp.vertices.iter().enumerate() {
         let (id, x, y) = (v.id, v.pos[0], v.pos[1]);
-        let comma = if i + 1 < doc.cp.vertices.len() { "," } else { "" };
-        s.push_str(&format!("    {{ \"id\": {id}, \"pos\": [{x:?}, {y:?}] }}{comma}\n"));
+        let comma = if i + 1 < doc.cp.vertices.len() {
+            ","
+        } else {
+            ""
+        };
+        s.push_str(&format!(
+            "    {{ \"id\": {id}, \"pos\": [{x:?}, {y:?}] }}{comma}\n"
+        ));
     }
     s.push_str("  ],\n  \"edges\": [\n");
     for (i, e) in doc.cp.edges.iter().enumerate() {
@@ -838,7 +1024,10 @@ fn write_fixture(doc: &Document, faces: &[Face], name: &str) {
         ));
     }
     s.push_str("  ]\n}\n");
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/desktop/src/lib/__fixtures__");
+    let dir = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../apps/desktop/src/lib/__fixtures__"
+    );
     std::fs::create_dir_all(dir).expect("フィクスチャ置き場を作る");
     std::fs::write(format!("{dir}/{name}.json"), s).expect("フィクスチャを書き出す");
 }

@@ -5,12 +5,11 @@
 //! 「CP座標の線分+角度」なので、後続の折りや編集で辺IDが変わっても
 //! [`resolve_driver_edges`] で現在の辺へ解決できる。
 //!
-//! # 求め方
+//! # 求め方(折り上がり `t=1`)
 //!
 //! 折り畳んだ状態の上に次の折りを重ねるのではなく、**平らな展開図に
 //! 「そこまでの全ステップのdriver」をまとめて与えて1回で解く**。
-//! `up_to` 未満のステップは目標角そのまま、`up_to` ステップ目だけ角度を `t` 倍する
-//! (0→目標への線形補間)。同じ辺を複数のステップが駆動する場合は後のステップが勝つ。
+//! 同じ辺を複数のステップが駆動する場合は後のステップが勝つ。
 //!
 //! **まだ折っていない折り線は0°(平ら)のdriverとして明示的に固定する。**
 //! ソルバーは角度指定の無いヒンジを自由変数として扱い、初期値バイアス(山谷の向きへ
@@ -19,6 +18,19 @@
 //! (`ori3-rigid` の `solve` のdocが書いているとおり、平らに戻すには0°の明示が要る)。
 //! 結果として全ヒンジが固定値になるので、ステップごとに解き直しても最後の1回と
 //! 同じ姿勢になる。無駄を避けて1回だけ解く(warm startを使わないので決定的)。
+//!
+//! # 折っている最中(`0 < t < 1`)
+//!
+//! **角度を線形補間した値をそのまま全ヒンジに固定してはいけない。** 内部頂点の
+//! まわりにはループ閉包の拘束があり(自由度1の四折り頂点で2本以上を勝手な値に
+//! すると閉じない)、破ると**面どうしが離れて紙がちぎれて見える**。
+//!
+//! そこで補間値は「目標」として扱い、[`ori3_rigid::solve_near`] で
+//! **閉包を満たす形のうち目標にいちばん近いもの**を求める。さらに一発で `t` まで
+//! 飛ばすと対称な解のあいだで解が飛び移って紙が瞬間移動するため、目標を
+//! [`SUBSTEPS`] 等分して少しずつ動かし、前の解を次の初期値にする(連続法)。
+//! 分割点は `t` だけで決まるので結果は決定的(SYS-004)。
+//! `t=0` は「直前の手順を折り終えた状態」として `t=1` と同じ厳密な道で解く。
 //!
 //! # 見つからない折り線の扱い(SEQ-004)
 //!
@@ -35,8 +47,13 @@
 //! 剛体折りとしては成立しない(折り線の端が紙の縁でも既存の折り線の交点でもない
 //! 位置で終わるため、±180°まで折ると閉じない)。再生すると収束せず、いちばん近い形と
 //! 警告を返す。
+//!
+//! つぶし折り・花弁折り・中割り折りのように**既にある折り目を開いて折り直す**手順は、
+//! 折り角の線形補間が剛体折りの道筋と一致しない(道の途中に分岐点がある)。紙は
+//! つながったままだが、折っている最中の姿勢が分岐点の前後で切り替わることがある。
+//! 折り上がり(`t=1`)の形は正しい。
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 
 use glam::DVec2;
 use ori3_cp::{Face, extract_faces};
@@ -80,10 +97,18 @@ pub fn replay(doc: &Document, up_to: usize, t: f64) -> ReplayResult {
 /// (別のCP由来の面を渡すと結果は意味を持たない)。
 pub fn replay_with_faces(doc: &Document, faces: &[Face], up_to: usize, t: f64) -> ReplayResult {
     let up_to = up_to.min(doc.sequence.len());
+    let t = if t.is_finite() {
+        t.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
     let plan = plan_steps(doc, faces, up_to, t);
     let mut warnings = plan.warnings;
 
-    let result = ori3_rigid::solve(&doc.cp, faces, &plan.drivers, None);
+    let result = match &plan.path {
+        Some(path) => solve_along(doc, faces, path, t),
+        None => ori3_rigid::solve(&doc.cp, faces, &plan.drivers, None),
+    };
     if !result.converged {
         warnings.push(format!(
             "手順{up_to}までの形が展開図から求まりませんでした(いちばん近い形で表示します)。一部の層だけを折る手順は、展開図からの折り直しでは正確に再現できないことがあります"
@@ -161,7 +186,11 @@ pub fn flat_state_at(
         placements.insert(
             f.id,
             Isometry2 {
-                rotation: r.x_axis.y.atan2(r.x_axis.x).rem_euclid(std::f64::consts::TAU),
+                rotation: r
+                    .x_axis
+                    .y
+                    .atan2(r.x_axis.x)
+                    .rem_euclid(std::f64::consts::TAU),
                 translation: DVec2::new(t.x, t.y),
                 mirrored: det < 0.0,
             },
@@ -176,10 +205,46 @@ pub fn flat_state_at(
     ))
 }
 
+/// 折り途中の姿勢を求める分割数。目標角を `SUBSTEPS` 等分して少しずつ動かし、
+/// 前の解を次の初期値にする(連続法)。1回で `t` へ飛ばすと、対称な複数の解の
+/// あいだで解が飛び移り、紙が瞬間移動したように見える。
+const SUBSTEPS: u32 = 12;
+
+/// 折り道 `path`(ヒンジごとの 直前の角度→目標角)を `0..=t` までたどり、
+/// 途中で紙がつながったままになる姿勢を求める。
+///
+/// 各分割点で「閉包を満たす形のうち、補間した角度にいちばん近いもの」を解き、
+/// その解を次の分割点の初期値にする。分割点は `t` の等分なので `t` だけで
+/// 決まり、同じ入力なら常に同じ結果になる(SYS-004)。
+fn solve_along(
+    doc: &Document,
+    faces: &[Face],
+    path: &[(EdgeId, f64, f64)],
+    t: f64,
+) -> ori3_rigid::SolveResult {
+    let mut warm: Option<HashMap<EdgeId, f64>> = None;
+    let mut result = None;
+    for i in 1..=SUBSTEPS {
+        let s = t * f64::from(i) / f64::from(SUBSTEPS);
+        let targets: HashMap<EdgeId, f64> = path
+            .iter()
+            .map(|&(e, from, to)| (e, from + (to - from) * s))
+            .collect();
+        let r = ori3_rigid::solve_near(&doc.cp, faces, &[], &targets, warm.as_ref());
+        warm = Some(r.angles.clone());
+        result = Some(r);
+    }
+    result.expect("SUBSTEPSは1以上")
+}
+
 /// `up_to` ステップまでの角度指定・層順序・警告(replayとflat_state_atの共通処理)。
 struct StepPlan {
-    /// 全ヒンジの角度指定(未駆動のヒンジは0°で明示的に固定済み)
+    /// ソルバーへ渡す角度指定。t=1のときは全ヒンジ(未駆動は0°)、
+    /// 折り途中(t<1)は「そのステップが駆動するヒンジ」だけ
     drivers: Vec<Driver>,
+    /// 折り途中(t<1)の折り道: ヒンジごとの (辺ID, 直前の角度, 目標角) (度)。
+    /// この間を少しずつ動かしながら「閉じた形」を追いかける。t=1ではNone。
+    path: Option<Vec<(EdgeId, f64, f64)>>,
     /// 層順序(下→上)
     order: Vec<FaceId>,
     skipped: Vec<StepId>,
@@ -199,13 +264,19 @@ fn plan_steps(doc: &Document, faces: &[Face], up_to: usize, t: f64) -> StepPlan 
     let mut skipped: Vec<StepId> = Vec::new();
     // 現在の層順序(下→上)。初期状態は面ID昇順。
     let mut order = FlatState::initial(&doc.cp, faces).order;
-    // そこまでのステップの角度指定の累積(後から積んだものが優先される)
-    let mut drivers: Vec<Driver> = Vec::new();
-    let mut driven: HashSet<EdgeId> = HashSet::new();
+    // ヒンジごとの目標角(後から積んだステップが優先される)。BTreeMapなので
+    // ソルバーへ渡す順序も辺ID昇順で決定的(SYS-004)。
+    let mut angles: BTreeMap<EdgeId, f64> = BTreeMap::new();
+    // `up_to` ステップ目に入る直前の角度(折り途中の補間の始点)
+    let mut before: BTreeMap<EdgeId, f64> = BTreeMap::new();
 
     for (i, step) in doc.sequence.iter().take(up_to).enumerate() {
         let number = i + 1; // 利用者向けの手順番号は1始まり
-        let scale = if number == up_to { t } else { 1.0 };
+        let last = number == up_to;
+        if last {
+            // 飛ばした場合も「直前の状態」を正しく指すよう、解決の前に控える
+            before.clone_from(&angles);
+        }
 
         let mut resolved_lines = 0usize;
         let mut step_drivers: Vec<Driver> = Vec::new();
@@ -217,7 +288,7 @@ fn plan_steps(doc: &Document, faces: &[Face], up_to: usize, t: f64) -> StepPlan 
             resolved_lines += 1;
             step_drivers.extend(edges.into_iter().map(|hinge| Driver {
                 hinge,
-                target_angle_deg: line.target_angle_deg * scale,
+                target_angle_deg: line.target_angle_deg,
             }));
         }
         if resolved_lines == 0 && !step.drivers.is_empty() {
@@ -230,12 +301,13 @@ fn plan_steps(doc: &Document, faces: &[Face], up_to: usize, t: f64) -> StepPlan 
         if resolved_lines < step.drivers.len() {
             warnings.push(format!("手順{number}の折り線の一部が見つかりません"));
         }
-        driven.extend(step_drivers.iter().map(|d| d.hinge));
-        drivers.extend(step_drivers);
+        for d in step_drivers {
+            angles.insert(d.hinge, d.target_angle_deg);
+        }
 
         // 層順序はステップ完了時にだけ更新する。層順序を持たないステップ(Pose)と、
         // 代表点が1点も現在の面に解決できなかったステップは直前の層順序を保つ。
-        if scale >= 1.0
+        if (!last || t >= 1.0)
             && let Some(points) = &step.layer_order
             && !points.is_empty()
         {
@@ -249,20 +321,49 @@ fn plan_steps(doc: &Document, faces: &[Face], up_to: usize, t: f64) -> StepPlan 
         }
     }
 
-    // まだ折っていない折り線は0°(平ら)に固定する。自由変数として残すと初期値
-    // バイアスから別の枝へ収束し、警告なしで誤った形が返る(モジュールdoc参照)。
-    let mut all: Vec<Driver> = hinge_edges(faces)
+    let hinges = hinge_edges(faces);
+    // t=0 は「直前の手順を折り終えた状態」そのもの。連続法を1歩も進めずに
+    // 厳密解の道(下の全ヒンジ固定)へ回し、`replay(k, 0)` が `replay(k-1, 1)` と
+    // ビット一致するようにする。
+    if t <= 0.0 {
+        angles = before.clone();
+    }
+
+    // 折り途中(t<1): 補間した角度は「目標」であって解ではない。全部を固定すると
+    // 内部頂点まわりのループ閉包が破れ、面どうしが離れて紙がちぎれて見える
+    // (自由度1の四折り頂点で2本以上を勝手な値にすると閉じない)。
+    // 角度指定は置かず、閉包を満たす形のうち補間値にいちばん近いものを解かせる。
+    if t > 0.0 && t < 1.0 {
+        let path: Vec<(EdgeId, f64, f64)> = hinges
+            .iter()
+            .map(|&e| {
+                let from = before.get(&e).copied().unwrap_or(0.0);
+                (e, from, angles.get(&e).copied().unwrap_or(0.0))
+            })
+            .collect();
+        return StepPlan {
+            drivers: Vec::new(),
+            path: Some(path),
+            order,
+            skipped,
+            warnings,
+        };
+    }
+
+    // 折り上がり(t=1)は全ヒンジを固定して厳密な形を出す。まだ折っていない
+    // 折り線も0°(平ら)で明示する。自由変数として残すと初期値バイアスから
+    // 別の枝へ収束し、警告なしで誤った形が返る(モジュールdoc参照)。
+    let all: Vec<Driver> = hinges
         .into_iter()
-        .filter(|e| !driven.contains(e))
         .map(|hinge| Driver {
             hinge,
-            target_angle_deg: 0.0,
+            target_angle_deg: angles.get(&hinge).copied().unwrap_or(0.0),
         })
         .collect();
-    all.extend(drivers);
 
     StepPlan {
         drivers: all,
+        path: None,
         order,
         skipped,
         warnings,

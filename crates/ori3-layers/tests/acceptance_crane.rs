@@ -130,7 +130,11 @@ fn apply(
         },
     )
     .expect("折れる指定");
-    assert!(res.warnings.is_empty(), "警告なしで折れる: {:?}", res.warnings);
+    assert!(
+        res.warnings.is_empty(),
+        "警告なしで折れる: {:?}",
+        res.warnings
+    );
     let mut step = res.step;
     step.id = u32::try_from(up_to).unwrap();
     doc.cp = cp;
@@ -148,20 +152,32 @@ fn state_of(doc: &Document) -> (Vec<Face>, FlatState) {
 
 /// 展開図の頂点の位置(頂点ID→座標)。
 fn vertex_pos(cp: &CreasePattern) -> HashMap<u32, DVec2> {
-    cp.vertices.iter().map(|v| (v.id, DVec2::from(v.pos))).collect()
+    cp.vertices
+        .iter()
+        .map(|v| (v.id, DVec2::from(v.pos)))
+        .collect()
 }
 
 /// 面が畳み平面で占める多角形。
 fn plane_poly(cp: &CreasePattern, f: &Face, state: &FlatState) -> Vec<DVec2> {
     let pos = vertex_pos(cp);
     let pl = state.placements[&f.id];
-    f.vertices.iter().filter_map(|v| pos.get(v).copied()).map(|p| pl.apply(p)).collect()
+    f.vertices
+        .iter()
+        .filter_map(|v| pos.get(v).copied())
+        .map(|p| pl.apply(p))
+        .collect()
 }
 
 /// 畳んだ形の外形(minx, miny, maxx, maxy)。
 fn bbox(doc: &Document) -> [f64; 4] {
     let (faces, state) = state_of(doc);
-    let mut b = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    let mut b = [
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+    ];
     for f in &faces {
         for p in plane_poly(&doc.cp, f, &state) {
             b[0] = b[0].min(p.x);
@@ -278,7 +294,11 @@ struct FaceMap {
 impl FaceMap {
     fn new(cp: &CreasePattern, face: &Face, polygon: &[[f64; 3]]) -> Option<FaceMap> {
         let pos = vertex_pos(cp);
-        let pts: Vec<DVec2> = face.vertices.iter().filter_map(|v| pos.get(v).copied()).collect();
+        let pts: Vec<DVec2> = face
+            .vertices
+            .iter()
+            .filter_map(|v| pos.get(v).copied())
+            .collect();
         if pts.len() != face.vertices.len() || pts.len() != polygon.len() || pts.len() < 3 {
             return None;
         }
@@ -321,8 +341,10 @@ impl FaceMap {
 fn assert_display_order(doc: &Document, label: &str) {
     const READABLE: f64 = 1e-4;
     let (faces, state) = state_of(doc);
-    let plane: HashMap<FaceId, Vec<DVec2>> =
-        faces.iter().map(|f| (f.id, plane_poly(&doc.cp, f, &state))).collect();
+    let plane: HashMap<FaceId, Vec<DVec2>> = faces
+        .iter()
+        .map(|f| (f.id, plane_poly(&doc.cp, f, &state)))
+        .collect();
     let frame = replay(doc, doc.sequence.len(), 0.99).frame;
     let maps: HashMap<FaceId, FaceMap> = frame
         .faces
@@ -371,7 +393,7 @@ fn assert_display_order(doc: &Document, label: &str) {
 fn assert_fold_senses(doc: &Document, label: &str) {
     let (faces, state) = state_of(doc);
     let mut edge_faces: HashMap<u32, Vec<FaceId>> = HashMap::new();
-    for f in &faces {
+    for f in faces {
         let mut ids = f.edges.clone();
         ids.sort_unstable();
         ids.dedup();
@@ -414,13 +436,67 @@ fn assert_fold_senses(doc: &Document, label: &str) {
     assert!(checked > 0, "{label}: 折られた折り目が1本も無い");
 }
 
+/// 折り途中(t<1)も含めて、折り目でつながった面が離れていないことを確かめる。
+///
+/// 折り目の両端の頂点を、その折り目を共有する2つの面それぞれの3D多角形から読み、
+/// 同じ位置に来ているかを見る。離れていたら紙がちぎれている(内部頂点まわりの
+/// ループ閉包が破れている)。
+/// 折り目でつながった2面の、その折り目の端点の3D位置のずれの最大値。
+pub fn tear_of(doc: &Document, faces: &[Face], frame: &ori3_model::Frame3D) -> f64 {
+    let poly: HashMap<FaceId, &Vec<[f64; 3]>> =
+        frame.faces.iter().map(|f| (f.face, &f.polygon)).collect();
+    let mut edge_faces: HashMap<u32, Vec<&Face>> = HashMap::new();
+    for f in faces {
+        let mut ids = f.edges.clone();
+        ids.sort_unstable();
+        ids.dedup();
+        for eid in ids {
+            edge_faces.entry(eid).or_default().push(f);
+        }
+    }
+    let mut worst = 0.0f64;
+    for e in &doc.cp.edges {
+        let Some(fs) = edge_faces.get(&e.id) else {
+            continue;
+        };
+        if fs.len() != 2 || fs[0].id == fs[1].id {
+            continue;
+        }
+        for v in [e.v0, e.v1] {
+            let pts: Vec<DVec3> = fs
+                .iter()
+                .filter_map(|f| {
+                    let i = f.vertices.iter().position(|&x| x == v)?;
+                    Some(DVec3::from(poly.get(&f.id)?[i]))
+                })
+                .collect();
+            if pts.len() == 2 {
+                worst = worst.max((pts[0] - pts[1]).length());
+            }
+        }
+    }
+    worst
+}
+
 /// 折り上がりが平ら(全ての面がz=0に乗る)ことを確かめる。
 fn assert_flat(doc: &Document, label: &str) {
     let result = replay(doc, doc.sequence.len(), 1.0);
-    assert!(result.warnings.is_empty(), "{label}: 再生の警告 {:?}", result.warnings);
-    assert!(result.skipped.is_empty(), "{label}: 飛ばした手順 {:?}", result.skipped);
     assert!(
-        result.frame.faces.iter().all(|f| f.polygon.iter().all(|p| p[2].abs() < 1e-6)),
+        result.warnings.is_empty(),
+        "{label}: 再生の警告 {:?}",
+        result.warnings
+    );
+    assert!(
+        result.skipped.is_empty(),
+        "{label}: 飛ばした手順 {:?}",
+        result.skipped
+    );
+    assert!(
+        result
+            .frame
+            .faces
+            .iter()
+            .all(|f| f.polygon.iter().all(|p| p[2].abs() < 1e-6)),
         "{label}: 折り上がりは平ら"
     );
 }
@@ -435,8 +511,18 @@ fn assert_flat(doc: &Document, label: &str) {
 /// (0,1) に、紙の中心が閉じた角 (0.5,0.5) に来る。
 fn preliminary_base() -> Document {
     let mut doc = square_doc();
-    fold(&mut doc, [[0.0, 0.5], [1.0, 0.5]], [0.5, 0.25], FoldDirection::Up);
-    fold(&mut doc, [[0.5, 0.0], [0.5, 0.5]], [0.25, 0.25], FoldDirection::Up);
+    fold(
+        &mut doc,
+        [[0.0, 0.5], [1.0, 0.5]],
+        [0.5, 0.25],
+        FoldDirection::Up,
+    );
+    fold(
+        &mut doc,
+        [[0.5, 0.0], [0.5, 0.5]],
+        [0.25, 0.25],
+        FoldDirection::Up,
+    );
     for (line, reference) in [
         ([[0.5, 0.0], [0.5, 1.0]], [0.5, 0.1]),
         ([[0.0, 0.5], [1.0, 0.5]], [0.1, 0.5]),
@@ -537,7 +623,10 @@ fn crane() -> (Document, FlatState) {
         state = Some(s);
         warnings = w;
     }
-    assert!(warnings.is_empty(), "羽は警告なしで下げられる: {warnings:?}");
+    assert!(
+        warnings.is_empty(),
+        "羽は警告なしで下げられる: {warnings:?}"
+    );
     (doc, state.expect("最後の操作の平坦状態"))
 }
 
@@ -577,10 +666,16 @@ fn preliminary_base_folds_the_square_into_four_layers() {
     // 紙の4隅は開いた先端に、紙の中心は閉じた角に集まる
     for corner in [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]] {
         let p = only(&doc, corner, "紙の隅");
-        assert!((p - DVec2::new(0.0, 1.0)).length() < 1e-9, "4隅は先端 (0,1)(実際 {p:?})");
+        assert!(
+            (p - DVec2::new(0.0, 1.0)).length() < 1e-9,
+            "4隅は先端 (0,1)(実際 {p:?})"
+        );
     }
     let apex = only(&doc, [0.5, 0.5], "紙の中心");
-    assert!((apex - DVec2::new(0.5, 0.5)).length() < 1e-9, "中心は閉じた角(実際 {apex:?})");
+    assert!(
+        (apex - DVec2::new(0.5, 0.5)).length() < 1e-9,
+        "中心は閉じた角(実際 {apex:?})"
+    );
     assert_display_order(&doc, "予備基本形");
     assert_fold_senses(&doc, "予備基本形");
     assert_flat(&doc, "予備基本形");
@@ -597,27 +692,43 @@ fn bird_base_lifts_two_slender_points() {
 
     // 花弁折りした2隅(向かい合う隅)が細い先に、残る2隅は広いフラップの先に来る
     let slender = [only(&doc, [0.0, 0.0], "隅A"), only(&doc, [1.0, 1.0], "隅C")];
-    assert!((slender[0] - slender[1]).length() < 1e-9, "細い先2本は重なる");
+    assert!(
+        (slender[0] - slender[1]).length() < 1e-9,
+        "細い先2本は重なる"
+    );
     let wide = [only(&doc, [1.0, 0.0], "隅B"), only(&doc, [0.0, 1.0], "隅D")];
-    assert!((wide[0] - wide[1]).length() < 1e-9, "広いフラップ2枚も重なる");
+    assert!(
+        (wide[0] - wide[1]).length() < 1e-9,
+        "広いフラップ2枚も重なる"
+    );
     let apex = only(&doc, [0.5, 0.5], "紙の中心");
 
     // 中心から見て、細い先は CORE、広いフラップは √2/2 の距離で正反対を向く
     let a = slender[0] - apex;
     let b = wide[0] - apex;
-    assert!((a.length() - CORE).abs() < 1e-9, "細い先の長さ(実際 {})", a.length());
+    assert!(
+        (a.length() - CORE).abs() < 1e-9,
+        "細い先の長さ(実際 {})",
+        a.length()
+    );
     assert!(
         (b.length() - 0.5 * std::f64::consts::SQRT_2).abs() < 1e-9,
         "広いフラップの長さ(実際 {})",
         b.length()
     );
-    assert!((angle_between(a, b) - 180.0).abs() < 1e-6, "細い先と広いフラップは逆向き");
+    assert!(
+        (angle_between(a, b) - 180.0).abs() < 1e-6,
+        "細い先と広いフラップは逆向き"
+    );
 
     // 外形は先端の角が45°のひし形(全長は紙の1辺と同じ1.0)
     let bb = bbox(&doc);
     assert!((bb[3] - bb[1] - 1.0).abs() < 1e-9, "全長1.0(実際 {bb:?})");
     let half = 0.5 * (2.0_f64.sqrt() - 1.0);
-    assert!((bb[2] - half).abs() < 1e-9 && (bb[0] + half).abs() < 1e-9, "幅(実際 {bb:?})");
+    assert!(
+        (bb[2] - half).abs() < 1e-9 && (bb[0] + half).abs() < 1e-9,
+        "幅(実際 {bb:?})"
+    );
 
     assert_fold_senses(&doc, "鶴の基本形");
     assert_flat(&doc, "鶴の基本形");
@@ -710,6 +821,26 @@ fn crane_replays_from_the_crease_pattern() {
     }
 }
 
+/// 折っている最中(t=0.25/0.5/0.75)も紙がつながったままであること。
+/// 全ヒンジ角を線形補間しただけの値は内部頂点まわりのループ閉包を満たさず、
+/// 面どうしが離れて紙がちぎれて見える(実機で報告された不具合の回帰テスト)。
+#[test]
+fn crane_paper_stays_connected_while_folding() {
+    let (doc, _) = crane();
+    let faces = extract_faces(&doc.cp);
+    for up_to in 1..=doc.sequence.len() {
+        for k in 1..=8 {
+            let t = f64::from(k) / 8.0;
+            let frame = replay(&doc, up_to, t).frame;
+            let gap = tear_of(&doc, &faces, &frame);
+            assert!(
+                gap < 1e-6,
+                "折り鶴(手順{up_to}, t={t}): 面が {gap:.9} 離れている"
+            );
+        }
+    }
+}
+
 /// 同じ操作列は何度実行しても同じ結果になる(決定性)。
 #[test]
 fn crane_is_deterministic() {
@@ -720,7 +851,6 @@ fn crane_is_deterministic() {
     let frame = |doc: &Document| format!("{:?}", replay(doc, doc.sequence.len(), 1.0).frame);
     assert_eq!(frame(&a), frame(&b), "折り上がりの3D姿勢がビット一致する");
 }
-
 
 // ---------------------------------------------------------------------------
 // フロント側テスト用のフィクスチャ書き出し
@@ -733,12 +863,20 @@ fn crane_is_deterministic() {
 pub fn write_fixture(doc: &Document, faces: &[Face], name: &str) {
     let mut s = String::from("{\n");
     let (w, h) = (doc.paper.width_mm, doc.paper.height_mm);
-    s.push_str(&format!("  \"paper\": {{ \"width_mm\": {w:?}, \"height_mm\": {h:?} }},\n"));
+    s.push_str(&format!(
+        "  \"paper\": {{ \"width_mm\": {w:?}, \"height_mm\": {h:?} }},\n"
+    ));
     s.push_str("  \"vertices\": [\n");
     for (i, v) in doc.cp.vertices.iter().enumerate() {
         let (id, x, y) = (v.id, v.pos[0], v.pos[1]);
-        let comma = if i + 1 < doc.cp.vertices.len() { "," } else { "" };
-        s.push_str(&format!("    {{ \"id\": {id}, \"pos\": [{x:?}, {y:?}] }}{comma}\n"));
+        let comma = if i + 1 < doc.cp.vertices.len() {
+            ","
+        } else {
+            ""
+        };
+        s.push_str(&format!(
+            "    {{ \"id\": {id}, \"pos\": [{x:?}, {y:?}] }}{comma}\n"
+        ));
     }
     s.push_str("  ],\n  \"edges\": [\n");
     for (i, e) in doc.cp.edges.iter().enumerate() {
@@ -757,7 +895,10 @@ pub fn write_fixture(doc: &Document, faces: &[Face], name: &str) {
         ));
     }
     s.push_str("  ]\n}\n");
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/desktop/src/lib/__fixtures__");
+    let dir = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../apps/desktop/src/lib/__fixtures__"
+    );
     std::fs::create_dir_all(dir).expect("フィクスチャ置き場を作る");
     std::fs::write(format!("{dir}/{name}.json"), s).expect("フィクスチャを書き出す");
 }

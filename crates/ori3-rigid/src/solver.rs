@@ -39,8 +39,12 @@ use crate::tree;
 /// 完全に畳んだ状態(±180°)の近くでは残差が角度誤差の2乗オーダーになるため、
 /// 表示に必要な精度(座標誤差1e-6)を確保できるようノイズ床の10倍に取る。
 const TOL_RMS: f64 = 1e-13;
-/// Gauss-Newtonの最大反復回数。
+/// Gauss-Newtonの最大反復回数(1段あたり)。
 const MAX_ITER: u32 = 50;
+/// [`solve_near`] の「目標角へ引くばね」の重みの2乗。閉包残差(座標のスケールは
+/// 紙の長辺=1.0)に対してこの重みで角度(ラジアン)のずれを罰する。大きすぎると
+/// 閉包を犠牲にして目標へ張り付き、小さすぎると引きが効かず解が遠くへ飛ぶ。
+const SPRING_W2: f64 = 1e-2;
 
 /// `solve` の結果。anglesは全ヒンジの角度(度)で、次回のwarm_startに使える。
 /// driverのない自由ヒンジのうちループに乗らないものは、拘束が働かないため
@@ -153,6 +157,48 @@ pub fn solve(
     faces: &[Face],
     drivers: &[Driver],
     warm_start: Option<&HashMap<EdgeId, f64>>,
+) -> SolveResult {
+    solve_impl(cp, faces, drivers, warm_start, None)
+}
+
+/// 「`targets` の角度にいちばん近い、閉じた(紙がつながったままの)形」を求める。
+///
+/// 折り途中の姿勢を出すための入口。折り角を線形補間しただけの値は、内部頂点の
+/// まわりのループ閉包を満たさない(自由度1の四折り頂点で2本以上を勝手な値に
+/// すると閉じない)ため、そのまま姿勢にすると面どうしが離れて紙がちぎれて見える。
+/// かといって閉包だけを解くと、目標から遠く離れた別の形へ落ちて紙が飛び跳ねる。
+///
+/// そこで2段階で解く:
+/// 1. 全ての自由変数を `targets` へばね([`SPRING_W2`])で引きながら閉包を解く
+/// 2. ばねを外して閉包だけを厳密に詰める(1で十分近づいているので大きく動かない)
+///
+/// `targets` は全ヒンジの角度(度)。ループに乗らないヒンジは変数にならないので
+/// 指定した値がそのまま残る。角度指定([`Driver`])を併用してもよい。
+///
+/// `warm_start` は初期値(なければ `targets`)。目標を少しずつ動かしながら前の解を
+/// 渡していくと、対称な2つの解のあいだで解が飛び移らない連続した動きになる。
+pub fn solve_near(
+    cp: &CreasePattern,
+    faces: &[Face],
+    drivers: &[Driver],
+    targets: &HashMap<EdgeId, f64>,
+    warm_start: Option<&HashMap<EdgeId, f64>>,
+) -> SolveResult {
+    solve_impl(
+        cp,
+        faces,
+        drivers,
+        warm_start.or(Some(targets)),
+        Some(targets),
+    )
+}
+
+fn solve_impl(
+    cp: &CreasePattern,
+    faces: &[Face],
+    drivers: &[Driver],
+    warm_start: Option<&HashMap<EdgeId, f64>>,
+    spring: Option<&HashMap<EdgeId, f64>>,
 ) -> SolveResult {
     let forest = tree::build_forest(cp, faces);
     let n = forest.hinges.len();
@@ -288,7 +334,9 @@ pub fn solve(
         .collect();
 
     // 変数 = driver固定でなく、かつ閉路上のヒンジ
-    let vars: Vec<usize> = (0..n).filter(|&i| fixed[i].is_none() && on_loop[i]).collect();
+    let vars: Vec<usize> = (0..n)
+        .filter(|&i| fixed[i].is_none() && on_loop[i])
+        .collect();
     let mut var_of: Vec<Option<usize>> = vec![None; n];
     for (vi, &hi) in vars.iter().enumerate() {
         var_of[hi] = Some(vi);
@@ -337,100 +385,154 @@ pub fn solve(
         }
     };
 
+    // ばねの目標角(ラジアン)。指定の無いヒンジは初期値のまま=引かれない
+    let x0: Vec<f64> = (0..n)
+        .map(|i| {
+            spring
+                .and_then(|s| s.get(&forest.hinges[i]))
+                .map_or(x[i], |v| v.to_radians())
+        })
+        .collect();
+    // 変数にならない自由ヒンジ(閉路に乗らない=拘束が働かない)は目標角そのもの。
+    // ここをwarm start(連続法の前の解)のままにすると、ばねが効かず動かなくなる。
+    if spring.is_some() {
+        for (i, xi) in x.iter_mut().enumerate() {
+            if fixed[i].is_none() && var_of[i].is_none() {
+                *xi = x0[i];
+            }
+        }
+    }
+    let spring_cost = |x: &[f64], w2: f64| -> f64 {
+        if w2 == 0.0 {
+            return 0.0;
+        }
+        w2 * vars.iter().map(|&hi| (x[hi] - x0[hi]).powi(2)).sum::<f64>()
+    };
+
     let mut iterations = 0u32;
     let mut r = vec![0.0; m];
     eval_all(&x, &mut r);
-    let mut cost = sq_sum(&r);
-    let mut converged = rms(cost) < TOL_RMS;
-    let mut best_cost = cost;
+    let mut converged = rms(sq_sum(&r)) < TOL_RMS;
     let mut best_x = x.clone();
 
     if k > 0 && m > 0 {
-        let mut lambda = 1e-3;
         let mut vals = vec![0.0; col_idx.len()];
-        let mut blocks: Vec<Vec<f64>> =
-            loop_vars.iter().map(|vs| vec![0.0; 12 * vs.len()]).collect();
+        let mut blocks: Vec<Vec<f64>> = loop_vars
+            .iter()
+            .map(|vs| vec![0.0; 12 * vs.len()])
+            .collect();
         let mut chol = EnvelopeCholesky::new(k, &row_ptr, &col_idx);
-        while !converged && iterations < MAX_ITER {
-            iterations += 1;
-            // 疎ヤコビアン: 閉路ごとに、その閉路上の変数の列だけを解析微分で作る
-            // (全域再伝播なし。閉路外のヒンジの列は零。driver固定ヒンジは捨てる)
-            for (li, lw) in loop_walks.iter().enumerate() {
-                let vs = &loop_vars[li];
-                let w = vs.len();
-                let block = &mut blocks[li];
-                block.fill(0.0);
-                let emit = |hinge: usize, col: [f64; 12]| {
-                    let Some(vi) = var_of[hinge] else { return };
-                    let c = vs.binary_search(&vi).expect("閉路上の変数");
-                    for (row, v) in col.iter().enumerate() {
-                        block[row * w + c] += v;
+        // ばね付き→ばね無しの2段(ばね無しの呼び出しは1段だけ)
+        let phases: &[f64] = if spring.is_some() {
+            &[SPRING_W2, 0.0]
+        } else {
+            &[0.0]
+        };
+        for &w2 in phases {
+            let mut lambda = 1e-3;
+            let mut cost = sq_sum(&r) + spring_cost(&x, w2);
+            let mut best_cost = cost;
+            best_x.clone_from(&x);
+            converged = rms(sq_sum(&r)) < TOL_RMS;
+            let mut it = 0u32;
+            // ばね付きの段は「閉包が0でも目標へ引く仕事が残っている」ので、
+            // 改善が止まる(またはMAX_ITER)まで回す。ばね無しの段は残差0で終わり。
+            while it < MAX_ITER && !(w2 == 0.0 && converged) {
+                it += 1;
+                iterations += 1;
+                // 疎ヤコビアン: 閉路ごとに、その閉路上の変数の列だけを解析微分で作る
+                // (全域再伝播なし。閉路外のヒンジの列は零。driver固定ヒンジは捨てる)
+                for (li, lw) in loop_walks.iter().enumerate() {
+                    let vs = &loop_vars[li];
+                    let w = vs.len();
+                    let block = &mut blocks[li];
+                    block.fill(0.0);
+                    let emit = |hinge: usize, col: [f64; 12]| {
+                        let Some(vi) = var_of[hinge] else { return };
+                        let c = vs.binary_search(&vi).expect("閉路上の変数");
+                        for (row, v) in col.iter().enumerate() {
+                            block[row * w + c] += v;
+                        }
+                    };
+                    side_jacobian(&lw.ops, &x, 1.0, emit);
+                }
+                // 正規方程式の左辺JtJ(CSRへ加算)と右辺Jt・r
+                vals.fill(0.0);
+                let mut jtr = vec![0.0; k];
+                for (li, vs) in loop_vars.iter().enumerate() {
+                    let w = vs.len();
+                    let block = &blocks[li];
+                    let rl = &r[12 * li..12 * li + 12];
+                    for (ci, &vi) in vs.iter().enumerate() {
+                        jtr[vi] += (0..12)
+                            .map(|row| block[row * w + ci] * rl[row])
+                            .sum::<f64>();
+                        let (lo, hi2) = (row_ptr[vi], row_ptr[vi + 1]);
+                        for (cj, &vj) in vs.iter().enumerate() {
+                            let s: f64 = (0..12)
+                                .map(|row| block[row * w + ci] * block[row * w + cj])
+                                .sum();
+                            let pos = lo
+                                + col_idx[lo..hi2]
+                                    .binary_search(&vj)
+                                    .expect("疎パターンに含まれる");
+                            vals[pos] += s;
+                        }
                     }
-                };
-                side_jacobian(&lw.ops, &x, 1.0, emit);
-            }
-            // 正規方程式の左辺JtJ(CSRへ加算)と右辺Jt・r
-            vals.fill(0.0);
-            let mut jtr = vec![0.0; k];
-            for (li, vs) in loop_vars.iter().enumerate() {
-                let w = vs.len();
-                let block = &blocks[li];
-                let rl = &r[12 * li..12 * li + 12];
-                for (ci, &vi) in vs.iter().enumerate() {
-                    jtr[vi] += (0..12).map(|row| block[row * w + ci] * rl[row]).sum::<f64>();
-                    let (lo, hi2) = (row_ptr[vi], row_ptr[vi + 1]);
-                    for (cj, &vj) in vs.iter().enumerate() {
-                        let s: f64 = (0..12)
-                            .map(|row| block[row * w + ci] * block[row * w + cj])
-                            .sum();
-                        let pos = lo
-                            + col_idx[lo..hi2]
-                                .binary_search(&vj)
-                                .expect("疎パターンに含まれる");
-                        vals[pos] += s;
+                }
+                // ばね(対角のみ): 目標角からのずれを罰する項を正規方程式へ足す
+                if w2 > 0.0 {
+                    for (vi, &hi) in vars.iter().enumerate() {
+                        jtr[vi] += w2 * (x[hi] - x0[hi]);
+                        let (lo, hi2) = (row_ptr[vi], row_ptr[vi + 1]);
+                        let pos = lo + col_idx[lo..hi2].binary_search(&vi).expect("対角は必ずある");
+                        vals[pos] += w2;
                     }
                 }
-            }
-            // Levenberg減衰: 残差が減るまでλを10倍しながら更新を試す
-            let mut improved = false;
-            for _ in 0..8 {
-                if !chol.factor(&row_ptr, &col_idx, &vals, lambda) {
+                // Levenberg減衰: 残差が減るまでλを10倍しながら更新を試す
+                let mut improved = false;
+                for _ in 0..8 {
+                    if !chol.factor(&row_ptr, &col_idx, &vals, lambda) {
+                        lambda *= 10.0;
+                        continue;
+                    }
+                    let b: Vec<f64> = jtr.iter().map(|v| -v).collect();
+                    let delta = chol.solve(&b);
+                    if !delta.iter().all(|d| d.is_finite()) {
+                        lambda *= 10.0;
+                        continue;
+                    }
+                    let mut xt = x.clone();
+                    for (vi, &hi) in vars.iter().enumerate() {
+                        xt[hi] += delta[vi];
+                    }
+                    let mut rt = vec![0.0; m];
+                    eval_all(&xt, &mut rt);
+                    let ct = sq_sum(&rt) + spring_cost(&xt, w2);
+                    if ct < cost {
+                        x = xt;
+                        r = rt;
+                        cost = ct;
+                        lambda = (lambda * 0.1).max(1e-12);
+                        improved = true;
+                        break;
+                    }
                     lambda *= 10.0;
-                    continue;
                 }
-                let b: Vec<f64> = jtr.iter().map(|v| -v).collect();
-                let delta = chol.solve(&b);
-                if !delta.iter().all(|d| d.is_finite()) {
-                    lambda *= 10.0;
-                    continue;
+                if cost < best_cost {
+                    best_cost = cost;
+                    best_x.clone_from(&x);
                 }
-                let mut xt = x.clone();
-                for (vi, &hi) in vars.iter().enumerate() {
-                    xt[hi] += delta[vi];
+                converged = rms(sq_sum(&r)) < TOL_RMS;
+                if !improved {
+                    break; // 停滞: これ以上残差を減らせない
                 }
-                let mut rt = vec![0.0; m];
-                eval_all(&xt, &mut rt);
-                let ct = sq_sum(&rt);
-                if ct < cost {
-                    x = xt;
-                    r = rt;
-                    cost = ct;
-                    lambda = (lambda * 0.1).max(1e-12);
-                    improved = true;
-                    break;
-                }
-                lambda *= 10.0;
             }
-            if cost < best_cost {
-                best_cost = cost;
-                best_x = x.clone();
-            }
-            converged = rms(cost) < TOL_RMS;
-            if !improved && !converged {
-                break; // 停滞: これ以上残差を減らせない
-            }
+            // 次の段(および最終姿勢)は、この段でいちばん良かった点から始める
+            x.clone_from(&best_x);
+            eval_all(&x, &mut r);
+            converged = rms(sq_sum(&r)) < TOL_RMS;
         }
-        x = best_x;
     }
 
     // 結果の角度(度)。±180°へ折り返すが、warm startのある自由ヒンジは
@@ -518,10 +620,7 @@ impl EnvelopeCholesky {
         let deg = |i: usize| row_ptr[i + 1] - row_ptr[i];
         let mut order = Vec::with_capacity(k);
         let mut visited = vec![false; k];
-        while let Some(start) = (0..k)
-            .filter(|&i| !visited[i])
-            .min_by_key(|&i| (deg(i), i))
-        {
+        while let Some(start) = (0..k).filter(|&i| !visited[i]).min_by_key(|&i| (deg(i), i)) {
             visited[start] = true;
             let mut queue = VecDeque::from([start]);
             while let Some(cur) = queue.pop_front() {
