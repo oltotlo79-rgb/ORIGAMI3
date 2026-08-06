@@ -718,6 +718,7 @@ dependencies = [
  "ori3-cp",
  "ori3-layers",
  "ori3-model",
+ "ori3-propose",
  "ori3-rigid",
  "serde",
  "serde_json",

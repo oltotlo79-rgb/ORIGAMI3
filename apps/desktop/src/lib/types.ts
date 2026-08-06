@@ -186,6 +186,33 @@ export interface SolveResult {
   iterations: number;
 }
 
+/**
+ * 骨格の節点(ori3-propose::SkeletonNode)。
+ * parentがnullの節点が根(胴の中心)で、ちょうど1つだけ置く。
+ * lengthは親へつながる辺の長さ(根では使わない)、width_factorは太さ(膨らみ)。
+ */
+export interface SkeletonNode {
+  id: number;
+  parent: number | null;
+  length: number;
+  width_factor: number;
+}
+
+/** 骨格全体(ori3-propose::Skeleton) */
+export interface Skeleton {
+  nodes: SkeletonNode[];
+}
+
+/** proposal_generate が返す展開図の候補1つ分(commands.rs::ProposalCandidate) */
+export interface ProposalCandidate {
+  cp: CreasePattern;
+  /** 骨格の長さ1あたりが紙の何割になるか(大きいほど完成品が大きい) */
+  scale: number;
+  /** 平坦に折りにくい頂点の数(0が理想。0でなくても使える) */
+  violations: number;
+  warnings: string[];
+}
+
 /** recovery_check の戻り値。前回の異常終了で残った自動保存の情報(SYS-003) */
 export interface RecoveryInfo {
   /** 自動保存ファイルの場所 */

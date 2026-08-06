@@ -405,3 +405,80 @@ body,
   font-size: 13px;
   line-height: 1.6;
 }
+
+/* 提案ウィザード(PRO-004)。骨格の絵・候補の見本を並べるため復旧ダイアログより広い */
+.dialog-wide {
+  max-width: 720px;
+  max-height: 88vh;
+  overflow-y: auto;
+}
+
+.proposal-body {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.skeleton-preview,
+.cp-thumb {
+  width: 200px;
+  height: 200px;
+  flex: none;
+  border: 1px solid #ccc;
+  background: #fff;
+}
+
+.limb-list {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.limb-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.limb-name {
+  width: 4.5em;
+  flex: none;
+}
+
+.limb-row input[type="range"] {
+  width: 80px;
+}
+
+.candidate-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.candidate {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  background: #f4f4f4;
+  border: 2px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.candidate.selected {
+  border-color: #ff9500;
+  background: #fff5e6;
+}
+
+.candidate .cp-thumb {
+  width: 150px;
+  height: 150px;
+}
+
+.candidate-caption {
+  font-size: 12px;
+}

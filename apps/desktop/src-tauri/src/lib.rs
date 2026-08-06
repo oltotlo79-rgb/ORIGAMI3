@@ -24,6 +24,7 @@ pub fn run() {
             commands::pose_solve,
             commands::recovery_check,
             commands::recovery_restore,
+            commands::proposal_generate,
         ])
         // 30秒ごとの自動保存(SYS-003)。書き出しはこのスレッドの中だけで完結する
         .setup(|app| {

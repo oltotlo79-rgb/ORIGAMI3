@@ -11,11 +11,13 @@ use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::autosave;
 use crate::store::{DocumentStore, DocumentView, add_penetration_warning, attach_replay};
-use ori3_model::{Driver, EditOp, Paper, SeqOp};
+use ori3_model::{CreasePattern, Driver, EditOp, Paper, SeqOp};
+use ori3_propose::{Skeleton, generate, pack};
 
 /// panicをErr文字列に変換する(SYS-005: アプリを落とさない)。
 fn guard<T>(f: impl FnOnce() -> Result<T, String> + std::panic::UnwindSafe) -> Result<T, String> {
@@ -194,10 +196,116 @@ pub fn sequence_replay(
     }))
 }
 
+/// 円充填のやり直し回数。多いほど良い配置に当たりやすいが時間もかかる。
+/// 8回で12本の角でも数百ms以内に収まる(packing.rsの調整値と揃えてある)。
+const PACK_STARTS: usize = 8;
+
+/// 提案された展開図1つ分。`scale` は骨格の長さ1あたりが紙の何割になるか(大きいほど
+/// 完成品が大きい)、`violations` は平坦に折りにくい頂点の数(0が理想)。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProposalCandidate {
+    pub cp: CreasePattern,
+    pub scale: f64,
+    pub violations: usize,
+    pub warnings: Vec<String>,
+}
+
+/// 骨格から展開図の候補を作る(PRO-001/PRO-005、Task 3-4)。
+/// 乱数の初期値違いで最大4つの候補を返し、どれを使うかは利用者が選ぶ。
+///
+/// 設計規約: ロック中に重い計算をしない。この処理は作品の状態を一切見ないので
+/// storeのロックそのものを取らない(充填中も他のコマンドが普通に動く)。
+#[tauri::command(async)]
+pub fn proposal_generate(
+    skeleton: Skeleton,
+    paper: Paper,
+    seed: u64,
+) -> Result<Vec<ProposalCandidate>, String> {
+    guard(AssertUnwindSafe(move || {
+        skeleton.validate()?;
+        let long = paper.width_mm.max(paper.height_mm);
+        if !(long > 0.0 && long.is_finite()) {
+            return Err("紙のサイズは正の値にしてください".to_string());
+        }
+        // CPの座標系は「紙の長辺=1.0」正規化(ori3_model::Document::new と同じ)
+        let (w, h) = (paper.width_mm / long, paper.height_mm / long);
+        let packings = pack(&skeleton, w, h, seed, PACK_STARTS);
+        let mut out = Vec::new();
+        let mut last_err = None;
+        for p in &packings {
+            match generate(&skeleton, p, w, h) {
+                Ok(r) => out.push(ProposalCandidate {
+                    cp: r.cp,
+                    scale: p.scale,
+                    violations: r.violations,
+                    warnings: r.warnings,
+                }),
+                Err(e) => last_err = Some(e),
+            }
+        }
+        if out.is_empty() {
+            return Err(last_err.unwrap_or_else(|| {
+                "この骨格を紙の上に配置できませんでした(角を減らすか短くしてみてください)"
+                    .to_string()
+            }));
+        }
+        Ok(out)
+    }))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::guard;
+    use super::{guard, proposal_generate};
+    use ori3_model::Paper;
+    use ori3_propose::{Skeleton, SkeletonNode};
     use std::panic::AssertUnwindSafe;
+
+    /// 根1つ+`leaves`本の角(すべて同じ長さ・太さ)の骨格。
+    fn star(leaves: u32) -> Skeleton {
+        let mut nodes = vec![SkeletonNode::new(0, None, 0.0)];
+        nodes.extend((1..=leaves).map(|i| SkeletonNode::new(i, Some(0), 1.0)));
+        Skeleton { nodes }
+    }
+
+    const A4ISH: Paper = Paper {
+        width_mm: 150.0,
+        height_mm: 150.0,
+    };
+
+    #[test]
+    fn proposal_generate_returns_candidates() {
+        let out = proposal_generate(star(4), A4ISH, 7).expect("候補が返るはず");
+        assert!(!out.is_empty() && out.len() <= 4, "件数={}", out.len());
+        for c in &out {
+            assert!(c.scale > 0.0, "scale={}", c.scale);
+            // 輪郭4辺だけ、ということはない(折り線が引かれている)
+            assert!(c.cp.edges.len() > 4, "辺数={}", c.cp.edges.len());
+        }
+    }
+
+    #[test]
+    fn proposal_generate_is_deterministic() {
+        let a = proposal_generate(star(3), A4ISH, 42).unwrap();
+        let b = proposal_generate(star(3), A4ISH, 42).unwrap();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn proposal_generate_rejects_broken_skeleton() {
+        // 角が1本もない(根だけ)骨格は骨格側の検査で日本語のErrになる
+        let only_root = Skeleton {
+            nodes: vec![SkeletonNode::new(0, None, 0.0)],
+        };
+        let err = proposal_generate(only_root, A4ISH, 1).unwrap_err();
+        assert!(err.contains("角"), "err={err}");
+
+        // 紙のサイズが0以下でもErr(パニックにしない)
+        let bad_paper = Paper {
+            width_mm: 0.0,
+            height_mm: 0.0,
+        };
+        assert!(proposal_generate(star(2), bad_paper, 1).is_err());
+    }
 
     #[test]
     fn guard_converts_panic_to_err() {

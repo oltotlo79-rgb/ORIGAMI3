@@ -27,11 +27,14 @@ import type {
   FoldDirection,
   Frame3D,
   Paper,
+  ProposalCandidate,
   RecoveryInfo,
   SeqOp,
+  Skeleton,
   TechniqueKind,
   Vec2,
 } from "../lib/types";
+import { defaultSkeleton } from "../lib/skeleton";
 
 /** ヒンジ角の連続操作(スライダー)を間引く間隔(ms) */
 const POSE_THROTTLE_MS = 60;
@@ -48,6 +51,12 @@ export type ToolId =
   | "fold"
   | "technique"
   | "construct";
+
+/** 提案ウィザードの3画面(骨格を作る → 候補を選ぶ → 確認する) */
+export type ProposalStep = "skeleton" | "candidates" | "confirm";
+
+/** 提案の計算に使う紙(作品が無いときの控え。App.tsxの既定と同じ) */
+const FALLBACK_PAPER: Paper = { width_mm: 150, height_mm: 150 };
 
 /** 選択中の線・頂点(ID)。DOMのSelectionと紛れないよう注意 */
 export interface Selection {
@@ -164,6 +173,21 @@ interface AppState {
   /** 前回の異常終了で残った作業中の内容。あれば復旧ダイアログを出す(SYS-003) */
   recovery: RecoveryInfo | null;
 
+  /** 提案ウィザードの今の画面。nullなら閉じている(PRO-004: 常設UIは増やさない) */
+  proposalStep: ProposalStep | null;
+  /** ウィザードで編集中の骨格(PRO-001) */
+  proposalSkeleton: Skeleton;
+  /** 生成された候補(最大4件。PRO-005) */
+  proposalCandidates: ProposalCandidate[];
+  /** 選んでいる候補の添字。まだ選んでいなければnull */
+  proposalSelected: number | null;
+  /** 生成中か(「計算中…」の表示用) */
+  proposalBusy: boolean;
+  /** 生成に失敗した理由(日本語)。成功したらnull */
+  proposalError: string | null;
+  /** 次に使う乱数の初期値。作り直すたびに増やして別の配置を出す */
+  proposalSeed: number;
+
   newDocument: (paper: Paper) => Promise<void>;
   openDocument: (path: string) => Promise<void>;
   saveDocument: (path: string | null) => Promise<void>;
@@ -223,6 +247,20 @@ interface AppState {
   checkRecovery: () => Promise<void>;
   /** 復旧ダイアログの答えを実行する(true=復元する / false=破棄する) */
   resolveRecovery: (accept: boolean) => Promise<void>;
+  /** 提案ウィザードを開く(骨格は初期状態に戻す) */
+  openProposal: () => void;
+  /** 提案ウィザードを閉じる */
+  closeProposal: () => void;
+  /** ウィザードの画面を切り替える */
+  setProposalStep: (step: ProposalStep) => void;
+  /** 編集した骨格を差し替える(前の候補は作り直しになるので捨てる) */
+  setProposalSkeleton: (skeleton: Skeleton) => void;
+  /** 今の骨格で候補を作り、候補選びの画面へ進む(PRO-005) */
+  generateProposal: () => Promise<void>;
+  /** 候補を選ぶ */
+  selectProposalCandidate: (index: number) => void;
+  /** 選んだ候補を今の作品の展開図にしてウィザードを閉じる(PRO-003) */
+  applyProposalCandidate: () => Promise<void>;
 }
 
 const EMPTY_SELECTION: Selection = { edgeIds: [], vertexIds: [] };
@@ -549,6 +587,13 @@ export const useAppStore = create<AppState>((set, get) => {
     poseWarnings: [],
     poseConverged: true,
     recovery: null,
+    proposalStep: null,
+    proposalSkeleton: defaultSkeleton(),
+    proposalCandidates: [],
+    proposalSelected: null,
+    proposalBusy: false,
+    proposalError: null,
+    proposalSeed: 1,
 
     newDocument: (paper) => runViewCommand(() => ipc.documentNew(paper), true),
 
@@ -910,6 +955,73 @@ export const useAppStore = create<AppState>((set, get) => {
         if (!view) throw "作業中だった内容が見つかりませんでした";
         return view;
       }, true);
+    },
+
+    openProposal: () =>
+      set({
+        proposalStep: "skeleton",
+        proposalSkeleton: defaultSkeleton(),
+        proposalCandidates: [],
+        proposalSelected: null,
+        proposalBusy: false,
+        proposalError: null,
+      }),
+
+    closeProposal: () => set({ proposalStep: null, proposalBusy: false }),
+
+    setProposalStep: (step) => set({ proposalStep: step }),
+
+    // 骨格を触ったら前の候補は別物になるので捨てる(古い形のまま選べてしまうのを防ぐ)
+    setProposalSkeleton: (skeleton) =>
+      set({
+        proposalSkeleton: skeleton,
+        proposalCandidates: [],
+        proposalSelected: null,
+      }),
+
+    generateProposal: async () => {
+      const s = get();
+      if (s.proposalBusy) return;
+      const paper = s.doc?.paper ?? FALLBACK_PAPER;
+      const seed = s.proposalSeed;
+      set({ proposalBusy: true, proposalError: null, proposalSeed: seed + 1 });
+      // 提案の計算は作品の状態を読まない独立処理。直列化キューに載せると
+      // 数百msの計算の間だけ編集が止まるので、ここは載せずに直接呼ぶ
+      try {
+        const list = await ipc.proposalGenerate(s.proposalSkeleton, paper, seed);
+        set({
+          proposalCandidates: list,
+          proposalSelected: list.length > 0 ? 0 : null,
+          proposalStep: list.length > 0 ? "candidates" : "skeleton",
+          proposalError:
+            list.length > 0 ? null : "候補を作れませんでした。骨格を変えてみてください",
+          proposalBusy: false,
+        });
+      } catch (e) {
+        set({
+          proposalBusy: false,
+          proposalError: typeof e === "string" ? e : String(e),
+        });
+      }
+    },
+
+    selectProposalCandidate: (index) => {
+      const list = get().proposalCandidates;
+      if (index < 0 || index >= list.length) return;
+      set({ proposalSelected: index });
+    },
+
+    applyProposalCandidate: async () => {
+      const s = get();
+      const chosen =
+        s.proposalSelected === null
+          ? undefined
+          : s.proposalCandidates[s.proposalSelected];
+      if (!chosen) return;
+      // 以後は普通の展開図として自由に編集できる(PRO-003)。
+      // 元に戻せる操作なので、通常の編集と同じ経路(edit_apply)で流し込む
+      set({ proposalStep: null });
+      await get().applyEdit({ type: "ReplaceCreasePattern", cp: chosen.cp });
     },
   };
 });

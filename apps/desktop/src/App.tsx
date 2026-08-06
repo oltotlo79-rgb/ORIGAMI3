@@ -11,6 +11,7 @@ import { CpEditor } from "./components/CpEditor/CpEditor";
 import { Viewer3D } from "./components/Viewer3D/Viewer3D";
 import { Timeline } from "./components/Timeline";
 import { RecoveryDialog } from "./components/RecoveryDialog";
+import { ProposalWizard } from "./components/dialogs/ProposalWizard";
 import { uniqueWarnings } from "./lib/techniques";
 import "./App.css";
 
@@ -24,6 +25,7 @@ function App() {
   const checkRecovery = useAppStore((s) => s.checkRecovery);
   const undo = useAppStore((s) => s.undo);
   const redo = useAppStore((s) => s.redo);
+  const openProposal = useAppStore((s) => s.openProposal);
   const warningCount = useAppStore(
     (s) => uniqueWarnings(s.warnings, s.poseWarnings, s.replayWarnings).length,
   );
@@ -72,6 +74,11 @@ function App() {
         <button type="button" onClick={() => void redo()}>
           やり直し
         </button>
+        <span className="toolbar-separator" />
+        {/* 提案ウィザードの入口。開くのは独立ダイアログで、常設区画は増やさない(PRO-004) */}
+        <button type="button" onClick={openProposal}>
+          提案
+        </button>
       </header>
       <div className="main-row">
         <ToolRail
@@ -104,6 +111,7 @@ function App() {
       </div>
       <ContextPanel />
       <RecoveryDialog />
+      <ProposalWizard />
     </div>
   );
 }

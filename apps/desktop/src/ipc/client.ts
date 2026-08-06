@@ -8,9 +8,11 @@ import type {
   Driver,
   EditOp,
   Paper,
+  ProposalCandidate,
   RecoveryInfo,
   ReplayResult,
   SeqOp,
+  Skeleton,
   SolveResult,
 } from "../lib/types";
 
@@ -61,4 +63,13 @@ export function recoveryCheck(): Promise<RecoveryInfo | null> {
 /** accept=trueなら自動保存の内容を復元、falseなら自動保存ファイルを捨てる */
 export function recoveryRestore(accept: boolean): Promise<DocumentView | null> {
   return invoke("recovery_restore", { accept });
+}
+
+/** 骨格から展開図の候補を作る(最大4件)。seedを変えると別の配置が出る */
+export function proposalGenerate(
+  skeleton: Skeleton,
+  paper: Paper,
+  seed: number,
+): Promise<ProposalCandidate[]> {
+  return invoke("proposal_generate", { skeleton, paper, seed });
 }
