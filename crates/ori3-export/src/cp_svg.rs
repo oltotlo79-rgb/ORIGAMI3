@@ -32,7 +32,7 @@ fn style(kind: EdgeKind) -> (&'static str, f64, &'static str) {
 }
 
 /// 小数を短く書く(末尾の0と小数点を落とす)。
-fn num(v: f64) -> String {
+pub(crate) fn num(v: f64) -> String {
     let s = format!("{:.4}", if v == 0.0 { 0.0 } else { v });
     let s = s.trim_end_matches('0').trim_end_matches('.');
     if s.is_empty() { "0".to_string() } else { s.to_string() }

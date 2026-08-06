@@ -1,0 +1,227 @@
+//! 折り図のページ組版(EXP-003 / EXP-004)。
+//!
+//! A4(210×297mm)の紙に、1ページあたり2列×3段の6コマを並べる。1ページ目は
+//! 表紙で、題と完成の形を大きく載せる。同じ組版からPDF(1つのファイル)と
+//! ページごとのSVG(EXP-004)の両方を作る。
+
+use ori3_cp::extract_faces;
+use ori3_model::Document;
+use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
+
+use crate::diagram::{CELL, FONT, cell_body, esc};
+
+/// A4の大きさ(mm)。
+const A4_W: f64 = 210.0;
+const A4_H: f64 = 297.0;
+/// コマの一辺(mm)と、コマとコマの間・上下左右の余白(mm)。
+const CELL_MM: f64 = 83.0;
+const GAP: f64 = 6.0;
+const LEFT: f64 = (A4_W - 2.0 * CELL_MM - GAP) / 2.0;
+const TOP: f64 = 22.0;
+/// 1ページに載せるコマ数(2列×3段)。
+pub const CELLS_PER_PAGE: usize = 6;
+
+/// mmをPDFの単位(1/72インチ)に直す。
+fn pt(mm: f64) -> f32 {
+    (mm * 72.0 / 25.4) as f32
+}
+
+fn page_open() -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{A4_W}mm\" height=\"{A4_H}mm\" \
+         viewBox=\"0 0 {A4_W} {A4_H}\">\n\
+         \x20 <rect x=\"0\" y=\"0\" width=\"{A4_W}\" height=\"{A4_H}\" fill=\"#ffffff\"/>\n"
+    )
+}
+
+/// コマの中身(100×100の座標で書かれている)を、ページの指定の場所へ縮めて置く。
+fn place(body: &str, x: f64, y: f64, size: f64) -> String {
+    format!(
+        "  <g transform=\"translate({x} {y}) scale({})\">\n{body}  </g>\n",
+        size / CELL
+    )
+}
+
+/// 表紙(題と完成の形)。
+fn cover_page(doc: &Document, faces: &[ori3_cp::Face]) -> Result<String, String> {
+    let body = cell_body(doc, faces, doc.sequence.len(), false)?;
+    let size = 150.0;
+    let mut page = page_open();
+    page.push_str(&format!(
+        "  <text x=\"{}\" y=\"48\" text-anchor=\"middle\" font-family=\"{FONT}\" \
+         font-size=\"16\" font-weight=\"bold\" fill=\"#1a1a1a\">折り図</text>\n",
+        A4_W / 2.0
+    ));
+    page.push_str(&place(&body, (A4_W - size) / 2.0, 70.0, size));
+    page.push_str(&format!(
+        "  <text x=\"{}\" y=\"245\" text-anchor=\"middle\" font-family=\"{FONT}\" \
+         font-size=\"5\" fill=\"#333333\">できあがりの形(全{}手順)</text>\n",
+        A4_W / 2.0,
+        doc.sequence.len()
+    ));
+    page.push_str(&format!(
+        "  <text x=\"{}\" y=\"258\" text-anchor=\"middle\" font-family=\"{FONT}\" \
+         font-size=\"4\" fill=\"#555555\">紙の大きさ {}×{}mm</text>\n",
+        A4_W / 2.0,
+        doc.paper.width_mm,
+        doc.paper.height_mm
+    ));
+    page.push_str("</svg>\n");
+    Ok(page)
+}
+
+/// 手順のページ(2列×3段)。`from` はこのページの先頭の手順番号(0始まり)。
+fn step_page(doc: &Document, faces: &[ori3_cp::Face], from: usize) -> Result<String, String> {
+    let mut page = page_open();
+    for slot in 0..CELLS_PER_PAGE {
+        let index = from + slot;
+        if index >= doc.sequence.len() {
+            break;
+        }
+        let body = cell_body(doc, faces, index, true)?;
+        let x = LEFT + (slot % 2) as f64 * (CELL_MM + GAP);
+        let y = TOP + (slot / 2) as f64 * (CELL_MM + GAP);
+        page.push_str(&place(&body, x, y, CELL_MM));
+    }
+    page.push_str(&format!(
+        "  <text x=\"{}\" y=\"288\" text-anchor=\"middle\" font-family=\"{FONT}\" \
+         font-size=\"3.6\" fill=\"#777777\">{}ページ</text>\n",
+        A4_W / 2.0,
+        esc(&format!("{}", from / CELLS_PER_PAGE + 2))
+    ));
+    page.push_str("</svg>\n");
+    Ok(page)
+}
+
+/// 折り図をページごとのSVGにして返す(EXP-004)。先頭は表紙。
+pub fn diagram_svg_pages(doc: &Document) -> Result<Vec<String>, String> {
+    if doc.sequence.is_empty() {
+        return Err("折り手順がまだありません。手順を作ってから折り図を書き出してください".into());
+    }
+    let faces = extract_faces(&doc.cp);
+    let mut pages = vec![cover_page(doc, &faces)?];
+    let mut from = 0;
+    while from < doc.sequence.len() {
+        pages.push(step_page(doc, &faces, from)?);
+        from += CELLS_PER_PAGE;
+    }
+    Ok(pages)
+}
+
+/// 折り図を1つのPDF(A4・複数ページ)にして返す(EXP-003)。
+///
+/// ページごとのSVGをそれぞれPDFの図形に直し、A4のページへ貼り合わせる。
+/// 文字は形(線)に直してから埋めるので、読む人の機械に同じ書体が無くても崩れない。
+pub fn diagram_pdf(doc: &Document) -> Result<Vec<u8>, String> {
+    let pages = diagram_svg_pages(doc)?;
+    let mut options = svg2pdf::usvg::Options::default();
+    options.fontdb_mut().load_system_fonts();
+    let conv = svg2pdf::ConversionOptions {
+        embed_text: false,
+        ..Default::default()
+    };
+
+    let mut alloc = Ref::new(1);
+    let catalog_id = alloc.bump();
+    let page_tree_id = alloc.bump();
+
+    // 先に全ページを図形へ直し、番号がぶつからないように振り直しておく
+    let mut parts = Vec::with_capacity(pages.len());
+    for svg in &pages {
+        let tree = svg2pdf::usvg::Tree::from_str(svg, &options)
+            .map_err(|e| format!("折り図を組み立てられませんでした: {e}"))?;
+        let (chunk, svg_ref) = svg2pdf::to_chunk(&tree, conv)
+            .map_err(|e| format!("折り図をPDFに直せませんでした: {e}"))?;
+        let mut map = std::collections::HashMap::new();
+        let chunk = chunk.renumber(|old| *map.entry(old).or_insert_with(|| alloc.bump()));
+        let svg_id = *map
+            .get(&svg_ref)
+            .ok_or_else(|| "折り図の中身が見つかりませんでした".to_string())?;
+        parts.push((chunk, alloc.bump(), alloc.bump(), svg_id));
+    }
+
+    let mut pdf = Pdf::new();
+    pdf.catalog(catalog_id).pages(page_tree_id);
+    pdf.pages(page_tree_id)
+        .kids(parts.iter().map(|p| p.1))
+        .count(parts.len() as i32);
+
+    let name = Name(b"S1");
+    for (chunk, page_id, content_id, svg_id) in parts {
+        let mut page = pdf.page(page_id);
+        page.media_box(Rect::new(0.0, 0.0, pt(A4_W), pt(A4_H)));
+        page.parent(page_tree_id);
+        page.contents(content_id);
+        let mut resources = page.resources();
+        resources.x_objects().pair(name, svg_id);
+        resources.finish();
+        page.finish();
+
+        let mut content = Content::new();
+        content
+            .transform([pt(A4_W), 0.0, 0.0, pt(A4_H), 0.0, 0.0])
+            .x_object(name);
+        pdf.stream(content_id, &content.finish());
+        pdf.extend(&chunk);
+    }
+    Ok(pdf.finish())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagram::strip_doc;
+
+    /// 7手順ならA4の2列×3コマで2ページ、表紙を足して3ページになる。
+    #[test]
+    fn seven_steps_make_a_cover_and_two_pages() {
+        let doc = strip_doc(7);
+        assert_eq!(doc.sequence.len(), 7);
+        let pages = diagram_svg_pages(&doc).expect("ページができるはず");
+        assert_eq!(pages.len(), 3, "表紙1+手順2ページ");
+        assert!(pages[0].contains("折り図"), "表紙に題がない");
+        assert!(pages[0].contains("できあがりの形(全7手順)"), "{}", pages[0]);
+        for p in &pages {
+            assert!(p.contains("viewBox=\"0 0 210 297\""), "A4ではない: {p}");
+        }
+        // 1ページ目に6コマ、2ページ目に残り1コマ
+        assert_eq!(pages[1].matches("<g transform=\"translate(").count(), 6);
+        assert_eq!(pages[2].matches("<g transform=\"translate(").count(), 1);
+        // 6コマ目と7コマ目はページをまたぐ
+        assert!(pages[1].contains(">6. "), "{}", pages[1]);
+        assert!(pages[2].contains(">7. "), "{}", pages[2]);
+    }
+
+    /// 同じ組版からA4・3ページのPDFが1つできる。
+    #[test]
+    fn pdf_has_one_a4_page_per_svg_page() {
+        let pdf = diagram_pdf(&strip_doc(7)).expect("PDFができるはず");
+        assert!(pdf.len() > 1000, "中身が空に近い: {}バイト", pdf.len());
+        assert_eq!(&pdf[0..5], b"%PDF-", "PDFの印がない");
+        let text = String::from_utf8_lossy(&pdf);
+        assert_eq!(text.matches("/MediaBox").count(), 3, "ページ数が合わない");
+        assert!(text.contains("/Count 3"), "ページ数の記載がない");
+        // A4(210×297mm)= 595×842ポイント
+        assert!(text.contains("595.2756"), "A4の幅ではない");
+    }
+
+    /// 1ページに収まる手順数なら表紙+1ページ。
+    #[test]
+    fn six_steps_fit_on_one_page() {
+        assert_eq!(diagram_svg_pages(&strip_doc(6)).unwrap().len(), 2);
+        assert_eq!(diagram_svg_pages(&strip_doc(1)).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn no_steps_is_a_japanese_error() {
+        let doc = strip_doc(0);
+        for err in [
+            diagram_svg_pages(&doc).unwrap_err(),
+            diagram_pdf(&doc).unwrap_err(),
+        ] {
+            assert!(err.contains("折り手順がまだありません"), "err={err}");
+        }
+    }
+}
+
