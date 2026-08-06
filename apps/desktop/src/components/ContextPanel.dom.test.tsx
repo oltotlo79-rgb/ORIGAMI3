@@ -210,3 +210,91 @@ describe("ねじり折りの中央多角形(TEC-009)", () => {
     expect(useAppStore.getState().techniqueDraft?.polygon).toHaveLength(2);
   });
 });
+
+/** 合わせて折るの下ごしらえ(選び終えて折り線が求まった状態)にする */
+function seedAlign(mode: "pointPoint" | "lineLine") {
+  seed(new Map());
+  useAppStore.setState({
+    activeTool: "fold",
+    selection: { edgeIds: [], vertexIds: [] },
+    alignDraft: null,
+    foldDraft: null,
+  });
+  const s = useAppStore.getState();
+  s.beginAlign(mode);
+  if (mode === "pointPoint") {
+    s.pickAlignTarget({ kind: "point", p: [0, 0] });
+    s.pickAlignTarget({ kind: "point", p: [1, 1] });
+  } else {
+    s.pickAlignTarget({ kind: "line", a: [0, 0], b: [1, 0] }, [1, 1]);
+    s.pickAlignTarget({ kind: "line", a: [0, 0], b: [0, 1] }, [1, 1]);
+  }
+}
+
+describe("合わせて折る(パネル)", () => {
+  it("折るツールのときだけ3つの合わせ方を出す", () => {
+    seed(new Map());
+    useAppStore.setState({ activeTool: "fold" });
+    render(<ContextPanel />);
+    expect(screen.getByRole("button", { name: "点と点を合わせる" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "線と線を合わせる" })).toBeTruthy();
+    cleanup();
+
+    useAppStore.setState({ activeTool: "select" });
+    render(<ContextPanel />);
+    expect(screen.queryByRole("button", { name: "点と点を合わせる" })).toBeNull();
+  });
+
+  it("選択の途中経過を出し、そろうと既存の折り確定UI(山谷・折る)が出る", () => {
+    seed(new Map());
+    useAppStore.setState({ activeTool: "fold", alignDraft: null, foldDraft: null });
+    useAppStore.getState().beginAlign("pointPoint");
+    render(<ContextPanel />);
+    expect(screen.getByText(/選択 0 \/ 2/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "折る" })).toBeNull();
+
+    cleanup();
+    seedAlign("pointPoint");
+    render(<ContextPanel />);
+    expect(screen.getByText(/選択 2 \/ 2/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "折る" })).toBeTruthy();
+    expect(screen.getByText(/手前へ折る/)).toBeTruthy();
+    // 解が1本しかないときは切り替えボタンを出さない
+    expect(screen.queryByRole("button", { name: /別の解/ })).toBeNull();
+  });
+
+  it("解が2つあるときは「別の解」で切り替えられる", () => {
+    seedAlign("lineLine");
+    render(<ContextPanel />);
+    const button = screen.getByRole("button", { name: "別の解(1/2)" });
+    const before = useAppStore.getState().foldDraft!.line;
+    fireEvent.click(button);
+    expect(useAppStore.getState().alignDraft?.solutionIndex).toBe(1);
+    expect(useAppStore.getState().foldDraft!.line).not.toEqual(before);
+    expect(screen.getByRole("button", { name: "別の解(2/2)" })).toBeTruthy();
+  });
+
+  it("「1つ戻す」と「合わせるのをやめる」で取り消せる", () => {
+    seedAlign("pointPoint");
+    render(<ContextPanel />);
+    fireEvent.click(screen.getByRole("button", { name: "1つ戻す" }));
+    expect(useAppStore.getState().alignDraft?.picks).toHaveLength(1);
+    expect(useAppStore.getState().foldDraft).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "合わせるのをやめる" }));
+    expect(useAppStore.getState().alignDraft).toBeNull();
+  });
+
+  it("折り線が求まらないときは理由を見せる", () => {
+    seed(new Map());
+    useAppStore.setState({ activeTool: "fold", alignDraft: null, foldDraft: null });
+    const s = useAppStore.getState();
+    s.beginAlign("pointLineThrough");
+    s.pickAlignTarget({ kind: "point", p: [0, 1] });
+    s.pickAlignTarget({ kind: "line", a: [0, 0], b: [1, 0] });
+    s.pickAlignTarget({ kind: "point", p: [0, 3] });
+    render(<ContextPanel />);
+    expect(screen.getByText(/届きません/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "折る" })).toBeNull();
+  });
+});

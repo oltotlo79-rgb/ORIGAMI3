@@ -4,11 +4,14 @@
 import { useEffect, useRef } from "react";
 import {
   isStepSkipped,
+  nextAlignKind,
   poseRecordReason,
   useAppStore,
+  type AlignDraft,
   type FoldDraft,
   type TechniqueDraft,
 } from "../store/appStore";
+import { ALIGN_LABELS, ALIGN_STEPS, type AlignMode } from "../lib/alignFold";
 import {
   TECHNIQUE_KINDS,
   TECHNIQUE_LABEL,
@@ -328,6 +331,73 @@ function StepContent({ number }: { number: number }) {
           この手順を削除
         </button>
       </div>
+    </div>
+  );
+}
+
+/** 「合わせて折る」の入口(折るツールのときだけ出す。ツールレールは増やさない) */
+function AlignStartRow() {
+  const beginAlign = useAppStore((s) => s.beginAlign);
+  const modes: AlignMode[] = ["pointPoint", "lineLine", "pointLineThrough"];
+  return (
+    <div className="button-row">
+      <span>合わせて折る</span>
+      {modes.map((m) => (
+        <button key={m} type="button" onClick={() => beginAlign(m)}>
+          {ALIGN_LABELS[m]}
+        </button>
+      ))}
+      <span className="hint">
+        (目分量ではなく、選んだ点や線から折り線を正確に決めます)
+      </span>
+    </div>
+  );
+}
+
+/**
+ * 合わせて折るの途中経過と、求まった折り線の確定UI。
+ * 折り線が求まったら、下に既存の折り確定UI(山谷・対象の層・折る)をそのまま出す。
+ */
+function AlignDraftContent({
+  draft,
+  foldDraft,
+}: {
+  draft: AlignDraft;
+  foldDraft: FoldDraft | null;
+}) {
+  const nextAlignSolution = useAppStore((s) => s.nextAlignSolution);
+  const undoAlignPick = useAppStore((s) => s.undoAlignPick);
+  const cancelAlign = useAppStore((s) => s.cancelAlign);
+  const need = ALIGN_STEPS[draft.mode].length;
+  const kind = nextAlignKind(draft);
+
+  return (
+    <div>
+      <div className="button-row">
+        <span>{ALIGN_LABELS[draft.mode]}</span>
+        <span>
+          選択 {draft.picks.length} / {need}
+          {kind !== null &&
+            `(次は${kind === "point" ? "点" : "線"}を3D表示でクリック)`}
+        </span>
+        {draft.solutions.length >= 2 && (
+          <button type="button" onClick={() => nextAlignSolution()}>
+            別の解({draft.solutionIndex + 1}/{draft.solutions.length})
+          </button>
+        )}
+        <button
+          type="button"
+          disabled={draft.picks.length === 0}
+          onClick={() => undoAlignPick()}
+        >
+          1つ戻す
+        </button>
+        <button type="button" onClick={() => cancelAlign()}>
+          合わせるのをやめる
+        </button>
+      </div>
+      {draft.reason !== null && <p className="warning-text">{draft.reason}</p>}
+      {foldDraft && <FoldDraftContent draft={foldDraft} />}
     </div>
   );
 }
@@ -747,6 +817,7 @@ export function ContextPanel() {
   const currentStep = useAppStore((s) => s.currentStep);
   const activeTool = useAppStore((s) => s.activeTool);
   const foldDraft = useAppStore((s) => s.foldDraft);
+  const alignDraft = useAppStore((s) => s.alignDraft);
   const techniqueDraft = useAppStore((s) => s.techniqueDraft);
   // 同じ文言は1回だけ出す(展開図の検査結果には自動再生の警告も合流している)
   const allWarnings = uniqueWarnings(warnings, poseWarnings, replayWarnings);
@@ -762,11 +833,14 @@ export function ContextPanel() {
           <StepContent number={currentStep} />
         ) : techniqueDraft ? (
           <TechniqueDraftContent draft={techniqueDraft} />
+        ) : alignDraft ? (
+          <AlignDraftContent draft={alignDraft} foldDraft={foldDraft} />
         ) : foldDraft ? (
           <FoldDraftContent draft={foldDraft} />
         ) : (
           <>
             {activeTool === "pull" ? <PullContent /> : <SelectionContent />}
+            {activeTool === "fold" && <AlignStartRow />}
             <FoldControls />
           </>
         )}

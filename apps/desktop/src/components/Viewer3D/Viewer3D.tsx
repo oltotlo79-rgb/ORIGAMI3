@@ -34,6 +34,8 @@ import {
   type Viewer3DScene,
 } from "./sceneBuilder";
 import { twistPreviewSegments } from "../../lib/twistPolygon";
+import { ALIGN_STEPS } from "../../lib/alignFold";
+import { nearestAlignLine, nearestAlignPoint } from "../../lib/alignPick";
 import { planGrabFold, type GrabMode } from "./grabFold";
 import { pickFace, pickHinge, pickPaper, type HingeSegment } from "./hingePicker";
 
@@ -75,6 +77,8 @@ const FOLD_SNAP_PX = 14;
 const FOLD_SNAP_FALLBACK = 0.02;
 /** これ未満の長さの折り線は引かなかったことにする(正規化座標) */
 const MIN_FOLD_LENGTH = 1e-4;
+/** 合わせて折るときに、点・線を拾う許容距離(px) */
+const ALIGN_PICK_PX = 16;
 /** 技法のフラップ選択で、層の輪郭からこの距離以内なら「その場所にある」とみなす
  * (クリック位置は紙の点・輪郭へ吸着するので、境界ちょうどを指しても拾えるようにする) */
 const FLAP_PICK_EPS = 1e-3;
@@ -134,6 +138,7 @@ export function Viewer3D({ fitRef }: Props) {
   const docEpoch = useAppStore((s) => s.docEpoch);
   const activeTool = useAppStore((s) => s.activeTool);
   const foldDraft = useAppStore((s) => s.foldDraft);
+  const alignDraft = useAppStore((s) => s.alignDraft);
   const techniqueDraft = useAppStore((s) => s.techniqueDraft);
   const foldReady = useAppStore(canFoldNow);
   const pullHinge = useAppStore((s) => s.pullHinge);
@@ -160,6 +165,10 @@ export function Viewer3D({ fitRef }: Props) {
       techniqueKind: s.techniqueDraft?.kind ?? null,
       techniqueVertexCount: s.techniqueDraft?.polygon.length ?? 0,
       techniqueHasCenter: s.techniqueDraft?.center != null,
+      alignMode: s.alignDraft?.mode ?? null,
+      alignPickCount: s.alignDraft?.picks.length ?? 0,
+      alignSolutionCount: s.alignDraft?.solutions.length ?? 0,
+      alignReason: s.alignDraft?.reason ?? null,
     }),
   );
   // 「折る」と「技法」はどちらも紙の上に折り線を引く(左ドラッグを線引きに使う)
@@ -220,6 +229,26 @@ export function Viewer3D({ fitRef }: Props) {
       return;
     }
     scene.setPreview([], PREVIEW_FILL_LIFT);
+    // 合わせて折る: 選んだ点(十字)・線を光らせ、求まった折り線は下見に重ねる
+    if (s.activeTool === "fold" && s.alignDraft && s.doc) {
+      const segments: [Vec2, Vec2][] = [];
+      for (const t of s.alignDraft.picks) {
+        if (t.kind === "point") segments.push(...centerMark(t.p));
+        else segments.push([t.a, t.b]);
+      }
+      if (s.foldDraft) {
+        segments.push(
+          ...foldPreviewSegments(
+            foldLayers(s.frame3d, s.doc, s.faces),
+            s.foldDraft.line,
+            keepSidePoint(s.foldDraft.line, s.foldDraft.movingSide),
+            s.foldDraft.target === "top",
+          ),
+        );
+      }
+      scene.setHighlight(toHighlight(segments));
+      return;
+    }
     // 技法では、選んだフラップ(重なった層)の輪郭も光らせる
     if (s.activeTool === "technique" && s.techniqueDraft && s.doc) {
       const draft = s.techniqueDraft;
@@ -284,6 +313,7 @@ export function Viewer3D({ fitRef }: Props) {
     hinges,
     frame3d,
     foldDraft,
+    alignDraft,
     techniqueDraft,
     activeTool,
     pullHinge,
@@ -295,10 +325,10 @@ export function Viewer3D({ fitRef }: Props) {
   // 引くツールでは代わりに右ドラッグで回せるようにする(色々な向きから引くため)
   useEffect(() => {
     sceneRef.current?.setDrawMode(
-      (foldMode && foldReady) || (pullMode && pullBlocked === null),
+      (foldMode && foldReady && !alignDraft) || (pullMode && pullBlocked === null),
       pullMode,
     );
-  }, [foldMode, foldReady, pullMode, pullBlocked]);
+  }, [foldMode, foldReady, pullMode, pullBlocked, alignDraft]);
 
   // 折るツールから離れたら、引きかけの線とつかみかけの紙を捨てる
   useEffect(() => {
@@ -321,6 +351,25 @@ export function Viewer3D({ fitRef }: Props) {
       } else if (e.key === "Backspace" && s.techniqueDraft.polygon.length > 0) {
         e.preventDefault();
         s.undoTechniqueVertex();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [activeTool]);
+
+  // 合わせて折る途中のキー操作(Escでやめる・Backspaceで直前の選択を取り消す)。
+  // 入力欄を打っている間は邪魔しない
+  useEffect(() => {
+    if (activeTool !== "fold") return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLElement && e.target.tagName === "INPUT") return;
+      const s = useAppStore.getState();
+      if (!s.alignDraft) return;
+      if (e.key === "Escape") {
+        s.cancelAlign();
+      } else if (e.key === "Backspace" && s.alignDraft.picks.length > 0) {
+        e.preventDefault();
+        s.undoAlignPick();
       }
     };
     window.addEventListener("keydown", handler);
@@ -462,6 +511,7 @@ export function Viewer3D({ fitRef }: Props) {
         e.button === 0 &&
         s.activeTool === "fold" &&
         !e.ctrlKey &&
+        !s.alignDraft &&
         canFoldNow(s) &&
         scene?.content
       ) {
@@ -486,7 +536,7 @@ export function Viewer3D({ fitRef }: Props) {
         }
         return;
       }
-      if (e.button === 0 && drawTool && canFoldNow(s)) {
+      if (e.button === 0 && drawTool && !s.alignDraft && canFoldNow(s)) {
         const p = planePoint(rect, x, y);
         if (p) {
           e.currentTarget.setPointerCapture(e.pointerId);
@@ -593,6 +643,32 @@ export function Viewer3D({ fitRef }: Props) {
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
       if (Math.hypot(x - down.x, y - down.y) > CLICK_MOVE_PX) return; // 視点の回転・移動
+      // 合わせて折る: 次に選ぶべき種類(点/線)に合わせて、近い方へ吸着して拾う
+      const st = useAppStore.getState();
+      if (st.activeTool === "fold" && st.alignDraft && st.doc) {
+        const steps = ALIGN_STEPS[st.alignDraft.mode];
+        const at = st.alignDraft.picks.length % steps.length;
+        const p = rawPoint(rect, x, y);
+        if (!p) return;
+        const radius = planeRadius(
+          scene.camera,
+          rect.width,
+          rect.height,
+          x,
+          y,
+          ALIGN_PICK_PX,
+          FOLD_SNAP_FALLBACK,
+        );
+        const layers = foldLayers(st.frame3d, st.doc, st.faces);
+        if (steps[at] === "point") {
+          const hit = nearestAlignPoint(layers, p, radius);
+          if (hit) st.pickAlignTarget({ kind: "point", p: hit }, p);
+        } else {
+          const hit = nearestAlignLine(layers, p, radius);
+          if (hit) st.pickAlignTarget({ kind: "line", a: hit[0], b: hit[1] }, p);
+        }
+        return;
+      }
       const edgeId = pickHinge(
         scene.content.hingeSegments,
         scene.camera,
@@ -606,7 +682,7 @@ export function Viewer3D({ fitRef }: Props) {
         vertexIds: [],
       });
     },
-    [drawHighlight],
+    [drawHighlight, rawPoint],
   );
 
   return (
@@ -620,7 +696,7 @@ export function Viewer3D({ fitRef }: Props) {
               ? "grab"
               : !foldMode || !foldReady
                 ? "default"
-                : activeTool === "fold"
+                : activeTool === "fold" && !alignDraft
                   ? "grab"
                   : "crosshair",
         }}

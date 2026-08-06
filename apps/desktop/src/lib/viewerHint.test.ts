@@ -128,3 +128,52 @@ describe("viewerHint", () => {
     expect(viewerHint({ ...READY, tool: "select" }).length).toBeGreaterThan(0);
   });
 });
+
+describe("合わせて折るの案内", () => {
+  it("点を線に合わせるときは、3つの選択を順に案内する", () => {
+    const base = { ...READY, alignMode: "pointLineThrough" as const };
+    expect(viewerHint({ ...base, alignPickCount: 0 })).toContain(
+      "線に合わせたい点",
+    );
+    expect(viewerHint({ ...base, alignPickCount: 1 })).toContain("合わせ先の線");
+    expect(viewerHint({ ...base, alignPickCount: 2 })).toContain(
+      "折り目が通る点",
+    );
+  });
+
+  it("選び始めたら、取り消しのキーを常に添える", () => {
+    const hint = viewerHint({
+      ...READY,
+      alignMode: "pointPoint",
+      alignPickCount: 1,
+    });
+    expect(hint).toContain("Backspace");
+    expect(hint).toContain("Esc");
+  });
+
+  it("解が2つあるときは切り替えられることを伝える", () => {
+    const hint = viewerHint({
+      ...READY,
+      alignMode: "lineLine",
+      alignPickCount: 2,
+      alignSolutionCount: 2,
+    });
+    expect(hint).toContain("解が2つ");
+    expect(hint).toContain("折る");
+  });
+
+  it("折れないときは理由をそのまま出す", () => {
+    const hint = viewerHint({
+      ...READY,
+      alignMode: "pointLineThrough",
+      alignPickCount: 3,
+      alignSolutionCount: 0,
+      alignReason: "この点を通る折り方では届きません",
+    });
+    expect(hint).toContain("届きません");
+  });
+
+  it("合わせモードでないときは、これまでどおりの案内に戻る", () => {
+    expect(viewerHint({ ...READY, alignMode: null })).toContain(DRAG_FOLD_HINT);
+  });
+});

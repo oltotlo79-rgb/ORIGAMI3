@@ -2,6 +2,7 @@
 // 画面から切り離した純粋な関数にして、文言だけをテストできるようにする。
 // 言い回しは折り紙で使う言葉に寄せる(層→重なった紙、レイヤ選択→何枚折るか)。
 
+import { ALIGN_STEPS, type AlignMode } from "./alignFold";
 import { MIN_TWIST_VERTICES } from "./twistPolygon";
 import type { TechniqueKind } from "./types";
 import type { ToolId } from "../store/appStore";
@@ -68,6 +69,50 @@ export interface HintState extends FoldReadiness {
   techniqueVertexCount?: number;
   /** ねじり折りの中心を自分で指したか(指していなければ多角形の重心) */
   techniqueHasCenter?: boolean;
+  /** 「合わせて折る」の合わせ方(合わせモードでなければnull) */
+  alignMode?: AlignMode | null;
+  /** 合わせるために選び終えた対象の数 */
+  alignPickCount?: number;
+  /** 求まった折り線の本数(0なら折れない) */
+  alignSolutionCount?: number;
+  /** 折り線が求まらなかった理由(求まったならnull) */
+  alignReason?: string | null;
+}
+
+/** 合わせて折るときに、次に何を選べばよいかの案内(選ぶ順にそのまま並べる) */
+const ALIGN_PROMPTS: Record<AlignMode, string[]> = {
+  pointPoint: [
+    "1つ目の点(動かす方)をクリックしてください(角・折り目の端・交点に吸着します)",
+    "2つ目の点(合わせ先)をクリックしてください",
+  ],
+  lineLine: [
+    "1つ目の線(動かす方)をクリックしてください(紙の辺・折り線を選べます)",
+    "2つ目の線(合わせ先)をクリックしてください",
+  ],
+  pointLineThrough: [
+    "線に合わせたい点をクリックしてください",
+    "合わせ先の線をクリックしてください",
+    "折り目が通る点をクリックしてください",
+  ],
+};
+
+/** 選び直しの操作(選び始めたら常に添える) */
+const ALIGN_KEYS = "(Backspaceで1つ戻す、Escでやめる)";
+
+/** 「合わせて折る」の途中経過の案内(UI-009: 今すべきことを常に出す) */
+export function alignHint(s: HintState): string {
+  const mode = s.alignMode;
+  if (!mode) return "";
+  const picked = s.alignPickCount ?? 0;
+  const prompts = ALIGN_PROMPTS[mode];
+  const keys = picked > 0 ? ALIGN_KEYS : "";
+  if (picked < ALIGN_STEPS[mode].length) return `${prompts[picked]}${keys}`;
+  if (s.alignReason) return `${s.alignReason}${ALIGN_KEYS}`;
+  const other =
+    (s.alignSolutionCount ?? 0) >= 2
+      ? "解が2つあります。下のパネルの「別の解」で切り替えられます。"
+      : "";
+  return `折り線が決まりました。${other}下のパネルで山折り/谷折りを選んで「折る」を押してください${ALIGN_KEYS}`;
 }
 
 /** ねじり折りの中央多角形を指すときの案内(UI-009: 今すべきことを常に出す) */
@@ -85,6 +130,8 @@ export function viewerHint(s: HintState): string {
   if (s.tool === "fold") {
     if (blocked) return `今は折れません: ${blocked}`;
     const where = insertPositionHint(s);
+    // 合わせモードの間は、選ぶ途中経過を常に出す(折り線は選択から決まる)
+    if (s.alignMode) return `${alignHint(s)}${where}`;
     if (s.hasFoldDraft)
       return `折り線を引きました。下のパネルで向きと動かす側を決めて「折る」を押してください(やり直すときは「やめる」)${where}`;
     return `${DRAG_FOLD_HINT}${where}`;

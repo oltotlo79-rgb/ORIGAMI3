@@ -26,6 +26,15 @@ import {
   loadPrefs,
   savePrefs,
 } from "../lib/displayPrefs";
+import {
+  ALIGN_STEPS,
+  alignRefPoint,
+  movingSideOf,
+  solveAlign,
+  type AlignMode,
+  type AlignTarget,
+  type FoldLine,
+} from "../lib/alignFold";
 import { mirrorAxisX, mirrorSegments } from "../lib/mirror";
 import { withMirrorEdges } from "../lib/mirrorEdit";
 import {
@@ -130,6 +139,24 @@ export interface FoldDraft {
   upTo: number;
 }
 
+/**
+ * 「合わせて折る」の途中経過(折り紙の基準合わせ)。
+ * 3D画面で点・線を順に選び、そろった時点で折り線を計算してFoldDraftを作る。
+ * 折り方の決定(山谷・対象の層・折る/やめる)は既存の折り確定UIをそのまま使う。
+ */
+export interface AlignDraft {
+  /** 合わせ方(点と点/線と線/点を線へ) */
+  mode: AlignMode;
+  /** 選んだ対象(ALIGN_STEPSの順。まだ足りない間は途中まで) */
+  picks: AlignTarget[];
+  /** 求まった折り線(0〜2本。カーソルに近い順) */
+  solutions: FoldLine[];
+  /** 今使っている解の番号(「別の解」で切り替える) */
+  solutionIndex: number;
+  /** 解が求まらなかった理由(求まったならnull) */
+  reason: string | null;
+}
+
 /** 技法の下ごしらえ(選んだ技法・フラップ・折り線)。確定するまで保持する */
 export interface TechniqueDraft {
   /** 選んだ技法(実装済みのものだけ。lib/techniques.tsのSUPPORTED_TECHNIQUESを参照) */
@@ -155,6 +182,39 @@ export interface TechniqueDraft {
   stepCount: number;
   /** 選んだ時点で見ていた位置(=技法が挟まる位置)。FoldDraftと同じ意味 */
   upTo: number;
+}
+
+/**
+ * 合わせて求まった折り線から、確定前の折り(FoldDraft)を作る。
+ * 動く側は「1つ目に選んだ対象がある側」にする(その対象が相手に重なる)。
+ * 向き・対象の層は既存の折り操作と同じ既定にして、あとはパネルで決めてもらう。
+ */
+export function alignFoldDraft(
+  s: { docEpoch: number; doc: Document | null; currentStep: number | null },
+  line: FoldLine,
+  picks: AlignTarget[],
+): FoldDraft | null {
+  if (!s.doc || picks.length === 0) return null;
+  return {
+    line,
+    direction: "Up",
+    target: "all",
+    movingSide: movingSideOf(line, alignRefPoint(picks[0])),
+    docEpoch: s.docEpoch,
+    stepCount: s.doc.sequence.length,
+    upTo: foldInsertAt(s),
+  };
+}
+
+/** 選び終えたかどうか(合わせ方ごとに必要な数だけ選べたか) */
+export function isAlignComplete(draft: AlignDraft): boolean {
+  return draft.picks.length >= ALIGN_STEPS[draft.mode].length;
+}
+
+/** 次に選ぶべき対象の種類(選び終えていればnull) */
+export function nextAlignKind(draft: AlignDraft): "point" | "line" | null {
+  const steps = ALIGN_STEPS[draft.mode];
+  return draft.picks.length < steps.length ? steps[draft.picks.length] : null;
 }
 
 /** 段折りの段の幅の初期値(mm) */
@@ -246,6 +306,8 @@ interface AppState {
   activeTool: ToolId;
   /** 引いたばかりの折り線と確定前の設定。nullなら折り線を引いていない */
   foldDraft: FoldDraft | null;
+  /** 「合わせて折る」の途中経過。nullなら合わせモードに入っていない */
+  alignDraft: AlignDraft | null;
   /** 選んだ技法と、その下ごしらえ(フラップ・折り線)。nullなら技法を選んでいない */
   techniqueDraft: TechniqueDraft | null;
   /** 作図補助の選択(どの作図か・等分数・角度の刻み)。CpEditorが使う */
@@ -367,6 +429,16 @@ interface AppState {
   cancelFoldDraft: () => void;
   /** 引いた折り線で実際に折る(sequence_apply FoldThrough)。成功したら折り線を捨てる */
   commitFoldDraft: () => Promise<void>;
+  /** 「合わせて折る」を始める(合わせ方を選ぶ)。同じ合わせ方をもう一度押すとやめる */
+  beginAlign: (mode: AlignMode) => void;
+  /** 合わせる対象(点・線)を1つ選ぶ。cursorは解が2つあるときの既定を決めるのに使う */
+  pickAlignTarget: (target: AlignTarget, cursor?: Vec2 | null) => void;
+  /** 解が2つあるときに別の解へ切り替える */
+  nextAlignSolution: () => void;
+  /** 直前の選択を取り消す(選択が無ければ何もしない) */
+  undoAlignPick: () => void;
+  /** 合わせモードをやめる(選択も求まった折り線も捨てる) */
+  cancelAlign: () => void;
   /**
    * 紙をつかんで動かす折り操作(UI-007)。つかんだ点fromから離した点toへの
    * ドラッグを折り線・対象の層に翻訳して、そのまま折る(パネル操作は要らない)。
@@ -573,6 +645,7 @@ export const useAppStore = create<AppState>((set, get) => {
       doc: view.doc,
       display: view.doc.display,
       foldDraft: null,
+      alignDraft: null,
       techniqueDraft: null,
       faces: view.faces,
       hinges: hingeEdgeIds(view.doc, view.faces),
@@ -624,6 +697,7 @@ export const useAppStore = create<AppState>((set, get) => {
           replaySkipped: [],
           replayWarnings: [],
           foldDraft: null,
+          alignDraft: null,
           techniqueDraft: null,
         });
       }
@@ -798,6 +872,7 @@ export const useAppStore = create<AppState>((set, get) => {
     selection: EMPTY_SELECTION,
     activeTool: "select",
     foldDraft: null,
+    alignDraft: null,
     techniqueDraft: null,
     construct: DEFAULT_CONSTRUCT,
     frame3d: null,
@@ -916,7 +991,7 @@ export const useAppStore = create<AppState>((set, get) => {
       stopPlayback();
       // 別の手順の形を見せる操作なので、その前の形の上に引いた折り線は捨てる
       // (残すとコンテキストパネルに折りUIが出たままになり、手順の設定も出せない)
-      if (get().foldDraft) set({ foldDraft: null });
+      if (get().foldDraft) set({ foldDraft: null, alignDraft: null });
       if (get().techniqueDraft) set({ techniqueDraft: null });
       const s = get();
       const total = s.doc?.sequence.length ?? 0;
@@ -954,7 +1029,7 @@ export const useAppStore = create<AppState>((set, get) => {
       const next = startPlayback(s.currentStep, s.playT, total);
       if (!next.playing) return;
       // 再生中は形が刻々と変わるので、引きかけの折り線・技法の下ごしらえは捨てる
-      set({ foldDraft: null, techniqueDraft: null });
+      set({ foldDraft: null, alignDraft: null, techniqueDraft: null });
       set({ currentStep: next.step, playT: next.t, playing: true });
       lastTs = 0; // 止めていた間の時間は進めない(1コマ目の経過時間は0)
       cancelFrame = scheduleFrame(tick);
@@ -968,6 +1043,7 @@ export const useAppStore = create<AppState>((set, get) => {
           activeTool: tool,
           selection: EMPTY_SELECTION,
           foldDraft: null,
+          alignDraft: null,
           techniqueDraft: null,
           pullHinge: null,
           pullMirrorHinge: null,
@@ -1009,7 +1085,9 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     cancelFoldDraft: () => {
-      if (get().foldDraft) set({ foldDraft: null });
+      // 「やめる」は合わせて折るの途中経過もまとめて捨てる(選び直しは合わせ方から)
+      if (get().foldDraft || get().alignDraft)
+        set({ foldDraft: null, alignDraft: null });
     },
 
     commitFoldDraft: async () => {
@@ -1024,7 +1102,7 @@ export const useAppStore = create<AppState>((set, get) => {
         draft.stepCount !== s.doc.sequence.length ||
         draft.upTo !== foldInsertAt(s)
       ) {
-        set({ foldDraft: null, errorMessage: STALE_DRAFT_MESSAGE });
+        set({ foldDraft: null, alignDraft: null, errorMessage: STALE_DRAFT_MESSAGE });
         return;
       }
       const keep = keepSidePoint(draft.line, draft.movingSide);
@@ -1049,7 +1127,86 @@ export const useAppStore = create<AppState>((set, get) => {
         direction: draft.direction,
       });
       // 失敗したときは設定を変えてやり直せるよう、折り線を残す
-      if (get().errorMessage === null) set({ foldDraft: null });
+      if (get().errorMessage === null) set({ foldDraft: null, alignDraft: null });
+    },
+
+    beginAlign: (mode) => {
+      const s = get();
+      if (!s.doc) return;
+      // 同じ合わせ方をもう一度押したらやめる(入る・出るを1つのボタンで済ませる)
+      if (s.alignDraft?.mode === mode) {
+        set({ alignDraft: null, foldDraft: null });
+        return;
+      }
+      set({
+        activeTool: "fold",
+        selection: EMPTY_SELECTION,
+        foldDraft: null,
+        techniqueDraft: null,
+        alignDraft: { mode, picks: [], solutions: [], solutionIndex: 0, reason: null },
+        errorMessage: null,
+      });
+    },
+
+    pickAlignTarget: (target, cursor = null) => {
+      const s = get();
+      const draft = s.alignDraft;
+      if (!draft || !s.doc) return;
+      const steps = ALIGN_STEPS[draft.mode];
+      // 選び終えたあとにもう一度選んだら、1つ目から選び直す
+      const picks = isAlignComplete(draft) ? [target] : [...draft.picks, target];
+      if (steps[picks.length - 1] !== target.kind) return; // 種類違いは受け付けない
+      const solved = solveAlign(draft.mode, picks, cursor);
+      const line = solved.lines[0] ?? null;
+      set({
+        alignDraft: {
+          mode: draft.mode,
+          picks,
+          solutions: solved.lines,
+          solutionIndex: 0,
+          reason: solved.reason,
+        },
+        foldDraft: line ? alignFoldDraft(s, line, picks) : null,
+        errorMessage: null,
+      });
+    },
+
+    nextAlignSolution: () => {
+      const s = get();
+      const draft = s.alignDraft;
+      if (!draft || draft.solutions.length < 2) return;
+      const index = (draft.solutionIndex + 1) % draft.solutions.length;
+      const line = draft.solutions[index];
+      set({
+        alignDraft: { ...draft, solutionIndex: index },
+        // 向き・対象の層など、パネルで決めた設定は引き継ぐ(線と動く側だけ入れ替える)
+        foldDraft: s.foldDraft
+          ? {
+              ...s.foldDraft,
+              line,
+              movingSide: movingSideOf(line, alignRefPoint(draft.picks[0])),
+            }
+          : alignFoldDraft(s, line, draft.picks),
+      });
+    },
+
+    undoAlignPick: () => {
+      const draft = get().alignDraft;
+      if (!draft || draft.picks.length === 0) return;
+      set({
+        alignDraft: {
+          ...draft,
+          picks: draft.picks.slice(0, -1),
+          solutions: [],
+          solutionIndex: 0,
+          reason: null,
+        },
+        foldDraft: null,
+      });
+    },
+
+    cancelAlign: () => {
+      if (get().alignDraft) set({ alignDraft: null, foldDraft: null });
     },
 
     foldByDrag: async (from, to, mode, grabFace = null) => {
@@ -1086,6 +1243,7 @@ export const useAppStore = create<AppState>((set, get) => {
       set({
         currentStep: upTo === s.doc.sequence.length ? null : upTo + 1,
         foldDraft: null,
+        alignDraft: null,
       });
       await get().applySequenceOp({
         type: "FoldThrough",
@@ -1104,6 +1262,7 @@ export const useAppStore = create<AppState>((set, get) => {
         activeTool: "technique",
         selection: EMPTY_SELECTION,
         foldDraft: null,
+        alignDraft: null,
         techniqueDraft: {
           kind,
           flap: [],

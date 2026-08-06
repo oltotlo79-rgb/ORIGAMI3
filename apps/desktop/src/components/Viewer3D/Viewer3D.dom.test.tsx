@@ -327,3 +327,92 @@ describe("Viewer3D(ねじり折りの中央多角形を指す)", () => {
     expect(useAppStore.getState().techniqueDraft).toBeNull();
   });
 });
+
+/**
+ * 合わせて折る(基準合わせ)の画面テスト。
+ * カメラは紙(0..1の正方形)を真上から見ているので、画面の位置と紙の座標が対応する:
+ * 中央(200,200)が(0.5,0.5)、左下の角(0,0)は約(79,321)、右上の角(1,1)は約(321,79)。
+ */
+describe("Viewer3D(合わせて折る)", () => {
+  beforeEach(() => {
+    stubLayout();
+    vi.mocked(ipc.sequenceApply).mockReset();
+    vi.mocked(ipc.sequenceApply).mockResolvedValue(VIEW);
+    useAppStore.setState({
+      doc: DOC,
+      faces: FACES,
+      hinges: new Set<number>(),
+      frame3d: null,
+      activeTool: "fold",
+      currentStep: null,
+      playT: 1,
+      playing: false,
+      drivers: new Map(),
+      errorMessage: null,
+      foldDraft: null,
+      alignDraft: null,
+      techniqueDraft: null,
+    });
+  });
+  afterEach(() => cleanup());
+
+  /** クリック(押して同じ場所で離す) */
+  function click(canvas: Element, x: number, y: number) {
+    fireEvent.pointerDown(canvas, { button: 0, pointerId: 1, clientX: x, clientY: y });
+    fireEvent.pointerUp(canvas, { button: 0, pointerId: 1, clientX: x, clientY: y });
+  }
+
+  it("合わせモードでは、次に何を選べばよいかを常にヒントに出す", () => {
+    useAppStore.getState().beginAlign("pointPoint");
+    const canvas = renderViewer();
+    expect(screen.getByRole("status").textContent).toContain("1つ目の点");
+
+    click(canvas, 79, 321); // 紙の角(0,0)
+    expect(useAppStore.getState().alignDraft?.picks).toHaveLength(1);
+    expect(screen.getByRole("status").textContent).toContain("2つ目の点");
+  });
+
+  it("角を2つクリックすると、その垂直二等分線が折り線として求まる", () => {
+    useAppStore.getState().beginAlign("pointPoint");
+    const canvas = renderViewer();
+    click(canvas, 79, 321); // (0,0)へ吸着
+    click(canvas, 321, 79); // (1,1)へ吸着
+
+    const picks = useAppStore.getState().alignDraft!.picks;
+    expect(picks).toHaveLength(2);
+    // クリックのずれに関わらず、紙の角ちょうどへ吸着している
+    expect(picks[0]).toEqual({ kind: "point", p: [0, 0] });
+    expect(picks[1]).toEqual({ kind: "point", p: [1, 1] });
+    // 折り線は y = 1 - x
+    for (const p of useAppStore.getState().foldDraft!.line) {
+      expect(p[0] + p[1]).toBeCloseTo(1, 9);
+    }
+    expect(screen.getByRole("status").textContent).toContain("折り線が決まりました");
+    // 選んだだけでは折らない(下のパネルで「折る」を押すまで待つ)
+    expect(ipc.sequenceApply).not.toHaveBeenCalled();
+  });
+
+  it("線と線を選ぶと、解が2つあることをヒントに出す", () => {
+    useAppStore.getState().beginAlign("lineLine");
+    const canvas = renderViewer();
+    click(canvas, 200, 321); // 下の辺 (0,0)-(1,0)
+    click(canvas, 79, 200); // 左の辺 (0,1)-(0,0)
+    expect(useAppStore.getState().alignDraft?.solutions).toHaveLength(2);
+    expect(screen.getByRole("status").textContent).toContain("解が2つ");
+  });
+
+  it("Backspaceで1つ戻す、Escでやめる", () => {
+    useAppStore.getState().beginAlign("pointPoint");
+    const canvas = renderViewer();
+    click(canvas, 79, 321);
+    expect(useAppStore.getState().alignDraft?.picks).toHaveLength(1);
+
+    fireEvent.keyDown(window, { key: "Backspace" });
+    expect(useAppStore.getState().alignDraft?.picks).toHaveLength(0);
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(useAppStore.getState().alignDraft).toBeNull();
+    // やめたら、いつもの「つかんで折る」案内へ戻る
+    expect(screen.getByRole("status").textContent).toContain("紙をつかんでドラッグ");
+  });
+});
