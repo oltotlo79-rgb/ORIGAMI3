@@ -1,0 +1,14 @@
+[package]
+name = "ori3-soft"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ori3-model.workspace = true
+ori3-cp.workspace = true
+glam.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+ori3-rigid.workspace = true
+ori3-layers.workspace = true

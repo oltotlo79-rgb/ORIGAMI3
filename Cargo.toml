@@ -6,6 +6,7 @@ members = [
     "crates/ori3-cp",
     "crates/ori3-rigid",
     "crates/ori3-layers",
+    "crates/ori3-soft",
     "crates/ori3-propose",
     "crates/ori3-export",
     "apps/desktop/src-tauri",
@@ -27,5 +28,6 @@ ori3-geometry = { path = "crates/ori3-geometry" }
 ori3-cp = { path = "crates/ori3-cp" }
 ori3-rigid = { path = "crates/ori3-rigid" }
 ori3-layers = { path = "crates/ori3-layers" }
+ori3-soft = { path = "crates/ori3-soft" }
 ori3-propose = { path = "crates/ori3-propose" }
 ori3-export = { path = "crates/ori3-export" }
