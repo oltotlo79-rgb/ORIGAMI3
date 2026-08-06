@@ -103,6 +103,8 @@ fn apply(
             line,
             reference_point,
             open_to_back: None,
+            polygon: None,
+            center: None,
         },
     )
 }
@@ -1043,6 +1045,8 @@ fn squash_can_open_the_flap_to_the_back() {
             line,
             reference_point,
             open_to_back: Some(true),
+            polygon: None,
+            center: None,
         },
     )
     .expect("向こうへ開ける");
@@ -1474,6 +1478,8 @@ fn bird_base() -> Document {
             line: center_line,
             reference_point: tip,
             open_to_back: Some(true),
+            polygon: None,
+            center: None,
         },
     )
     .expect("背面の花弁折り");
@@ -1922,6 +1928,162 @@ fn twist_works_on_a_triangle_and_rejects_only_undefined_input() {
     let faces = extract_faces(&doc.cp);
     let (after, _) = flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
     assert_eq!(after.order, a.order, "層順序が再生結果と一致する");
+}
+
+/// ねじり折りを、頂点を並べた多角形と中心の明示指定で1回かける(テスト用の小道具)。
+fn twist_polygon(
+    doc: &mut Document,
+    polygon: Vec<[f64; 2]>,
+    center: [f64; 2],
+    deg: f64,
+) -> Result<Applied, String> {
+    let c = DVec2::from(center);
+    let mid = (DVec2::from(polygon[0]) + DVec2::from(polygon[1])) * 0.5;
+    let target = c + rotate2(mid - c, deg.to_radians()) * 2.0;
+    apply_input(
+        doc,
+        twist,
+        TechniqueInput {
+            flap: Vec::new(),
+            // polygon を渡すときは line を見ない(退化していない値を置いておく)
+            line: [[0.0, 0.0], [1.0, 0.0]],
+            reference_point: [target.x, target.y],
+            open_to_back: None,
+            polygon: Some(polygon),
+            center: Some(center),
+        },
+    )
+}
+
+/// ねじり折り1件ぶんの指定(名前・中央多角形の頂点・中心・面の数・折り線の本数)。
+type TwistCase = (&'static str, Vec<[f64; 2]>, [f64; 2], usize, usize);
+
+/// 辺の長さが違う多角形でもねじれる(不等辺三角形・不等辺四角形)。
+///
+/// 中央多角形は「1辺を中心のまわりに回してできる形」に限らない。頂点を順に並べて
+/// 渡せば、辺ごとに長さの違う多角形でもそのまま折れる(各頂点の**外角**から
+/// ひだの折り線の向きが決まるので、辺の数も長さも仮定しない)。中心も明示できる。
+///
+/// 表示上の重なりは折り目の向きとの一致([`assert_fold_senses`])で確かめる。
+/// ねじり折りは腕と中央が折り目2つ分離れていて、手順再生は前の折り目を180°に
+/// 固定したまま補間するため、折り終わる直前(t=0.99)の高さは大回りの途中を指す
+/// (中割り折りと同じ事情。冒頭のコメント参照)。
+#[test]
+fn twist_folds_a_polygon_with_unequal_sides() {
+    // (名前, 頂点, 中心, 期待する面の数=中央1+ひだn+腕n, 折り線の本数=3n)
+    let cases: Vec<TwistCase> = vec![
+        (
+            "不等辺三角形",
+            vec![[0.85, 0.50], [0.45, 0.75], [0.40, 0.45]],
+            [0.55, 0.56],
+            7,
+            9,
+        ),
+        (
+            "不等辺四角形",
+            vec![[0.80, 0.45], [0.55, 0.78], [0.30, 0.58], [0.42, 0.36]],
+            [0.52, 0.54],
+            9,
+            12,
+        ),
+    ];
+    for (name, polygon, center, faces, drivers) in cases {
+        let n = polygon.len();
+        // 辺の長さが本当にばらばらであることを確かめてから折る
+        let lens: Vec<f64> = (0..n)
+            .map(|k| (DVec2::from(polygon[(k + 1) % n]) - DVec2::from(polygon[k])).length())
+            .collect();
+        let (lo, hi) = (
+            lens.iter().copied().fold(f64::INFINITY, f64::min),
+            lens.iter().copied().fold(0.0, f64::max),
+        );
+        assert!(hi - lo > 0.05, "{name}: 辺の長さが違う({lens:?})");
+
+        let mut doc = square_doc();
+        let a = twist_polygon(&mut doc, polygon.clone(), center, 20.0).expect("ねじれる");
+        assert!(a.warnings.is_empty(), "{name}: 紙は裂けない: {:?}", a.warnings);
+        assert_eq!(a.faces.len(), faces, "{name}: 中央1面+ひだ{n}面+腕{n}面");
+        let step = doc.sequence.last().expect("手順が積まれる");
+        assert_eq!(step.kind, TechniqueKind::Twist);
+        assert_eq!(
+            step.drivers.len(),
+            drivers,
+            "{name}: 辺{n}本+ひだの折り線{}本: {:?}",
+            2 * n,
+            step.drivers
+        );
+        assert_fold_senses(&doc, name);
+
+        // 展開図と手順だけから同じ形に折り直せる
+        let new_faces = extract_faces(&doc.cp);
+        let (replayed, warnings) =
+            flat_state_at(&doc, &new_faces, doc.sequence.len()).expect("平らに畳める");
+        assert!(warnings.is_empty(), "{name}: {warnings:?}");
+        assert_eq!(replayed.order, a.order, "{name}: 層順序が再生と一致する");
+    }
+}
+
+/// 中心は明示できる(省略時の重心と違う中心を渡すと、折り上がりも変わる)。
+/// 多角形の指定で断るのは、幾何的に多角形にならない入力だけ。
+#[test]
+fn twist_takes_an_explicit_center_and_rejects_only_undefined_polygons() {
+    let square = vec![[0.65, 0.5], [0.5, 0.65], [0.35, 0.5], [0.5, 0.35]];
+    // 重心が (0.5,0.5) の紙。中心を省略するとその重心が使われる
+    let tri = vec![[0.85, 0.50], [0.45, 0.75], [0.40, 0.45]];
+
+    // 中心を明示すると、同じ多角形でも回る先が変わる(=別の折り上がりになる)
+    let mut a_doc = square_doc();
+    let a = apply_input(
+        &mut a_doc,
+        twist,
+        TechniqueInput {
+            flap: Vec::new(),
+            line: [[0.0, 0.0], [1.0, 0.0]],
+            reference_point: [0.5 + 0.4 * 20.0_f64.to_radians().cos(), 0.5],
+            open_to_back: None,
+            polygon: Some(tri.clone()),
+            center: None,
+        },
+    )
+    .expect("中心を省略しても折れる");
+    let mut b_doc = square_doc();
+    let b = twist_polygon(&mut b_doc, tri, [0.55, 0.56], 20.0).expect("中心を明示しても折れる");
+    assert!(b.warnings.is_empty(), "{:?}", b.warnings);
+    assert_eq!(b.faces.len(), 7, "中心を明示すると中央1面+ひだ3面+腕3面");
+    assert!(a.faces.len() >= 7, "中心を省略しても折れる(実際 {})", a.faces.len());
+    let pos = |doc: &Document| -> Vec<[f64; 2]> {
+        let mut v: Vec<[f64; 2]> = doc.cp.vertices.iter().map(|v| v.pos).collect();
+        v.sort_by(|p, q| p.partial_cmp(q).expect("有限"));
+        v
+    };
+    assert_ne!(pos(&a_doc), pos(&b_doc), "中心をずらすと折り線の位置が変わる");
+
+    // 頂点が3つ未満
+    let mut doc = square_doc();
+    let before = doc.clone();
+    let err = twist_polygon(&mut doc, vec![[0.4, 0.4], [0.6, 0.6]], [0.5, 0.5], 20.0)
+        .expect_err("頂点2つはエラー");
+    assert!(err.contains("頂点が3つ以上"), "{err}");
+    assert_eq!(doc, before, "失敗時は文書を変更しない");
+
+    // 続く頂点が重なっている(辺の長さが0)
+    let err = twist_polygon(
+        &mut doc,
+        vec![[0.65, 0.5], [0.65, 0.5], [0.35, 0.5], [0.5, 0.35]],
+        [0.5, 0.5],
+        20.0,
+    )
+    .expect_err("重なった頂点はエラー");
+    assert!(err.contains("長さが0"), "{err}");
+    assert_eq!(doc, before);
+
+    // 中心が多角形の外(定義はできるので断らず、警告して続ける)
+    let out = twist_polygon(&mut doc, square, [0.9, 0.9], 20.0).expect("断らない");
+    assert!(
+        out.warnings.iter().any(|w| w.contains("中心が中央多角形の外")),
+        "{:?}",
+        out.warnings
+    );
 }
 
 /// 中心線の向きを角 `a` だけ回した向き(テスト用の小道具)。

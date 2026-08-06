@@ -73,6 +73,14 @@ pub struct TechniqueInput {
     /// 両方を表せるようにしてある。
     /// 段折り・中割り折り・かぶせ折りでは見ない(向きは紙のつながりから決まるため)。
     pub open_to_back: Option<bool>,
+    /// ねじり折りの中央多角形(畳み平面の頂点を順に並べる。3点以上)。
+    /// 省略すると `line` を1辺として中心のまわりに回した正多角形になる。
+    /// 辺ごとに長さの違う多角形は線1本では指せないので、この項目で直接渡す
+    /// (半平面はいくつでも並べられるので [`flat_motion`] 側の制限ではない)。
+    /// 他の技法では見ない。
+    pub polygon: Option<Vec<[f64; 2]>>,
+    /// ねじり折りの中心。省略すると選んだ層の重心を使う。他の技法では見ない。
+    pub center: Option<[f64; 2]>,
 }
 
 /// 段折り(平行な2本の折り線で山・谷を交互に折る)。
@@ -750,17 +758,17 @@ pub fn swivel(
 ///
 /// # 入力の決め方(設計)
 ///
-/// [`TechniqueInput`] は「線1本+点1つ」しか運べないので、次のように決めてある。
+/// 中央多角形は2通りに指せる。どちらでも `reference_point` = **回転量を示す点**で、
+/// 中心から見た「1辺目の中点の向き」から「この点の向き」までの角がねじる角αになる。
 ///
-/// - `line` = **中央多角形の1辺**。2点は辺の両端(ここだけ無限直線ではなく線分)
-/// - `reference_point` = **回転量を示す点**。中心から見た「辺の中点の向き」から
-///   「この点の向き」までの角が、ねじる角αになる
-/// - **中心**は、選んだ層が畳み平面で占める範囲の重心。辺が中心のまわりに張る角から
-///   辺の数 n = 2π/∠ を決め、その辺を中心のまわりに回して中央多角形を作る
+/// - `polygon` を渡す = **頂点を順に並べた任意の多角形**(3点以上)。辺ごとに
+///   長さの違う多角形(不等辺三角形・不等辺四角形など)もそのまま折れる。
+///   中心は `center`(省略時は選んだ層の重心)
+/// - `polygon` が空(従来の指し方) = `line` を**中央多角形の1辺**(2点は辺の両端)
+///   とし、中心のまわりに回して正多角形を作る。辺が中心のまわりに張る角から
+///   辺の数 n = 2π/∠ を決める
 ///
-/// つまり中央多角形は「1辺を中心のまわりに回してできる形」に限られる。辺ごとに
-/// 長さの違う多角形は、この入力(1辺+1点)では指し示せない
-/// ([`flat_motion`] 自体は半平面をいくつでも並べられるので表せる)。
+/// 中心は `center` で明示できる(省略時は選んだ層が畳み平面で占める範囲の重心)。
 ///
 /// # 紙の動き(2n+1個の [`MotionPart`])
 ///
@@ -770,9 +778,10 @@ pub fn swivel(
 ///   紙の縁まで伸びて腕どうしを切り離すので、腕は1つずつ別に動ける
 ///
 /// 各頂点は「多角形の辺2本+ひだの折り線2本」の4本が集まる点になり、平らに畳める。
-/// 層の数の偶奇やフラップの形は仮定しない。Errにするのは幾何的に決められない入力
-/// (退化した辺・見つからない層・中心と重なる辺の端・中央多角形が作れない角・
-/// 回転量が0)だけで、紙が裂ける指定は警告して続ける。
+/// 層の数の偶奇やフラップの形・多角形の辺の数や長さは仮定しない。Errにするのは
+/// 幾何的に決められない入力(退化した辺・見つからない層・中心と重なる辺の端・
+/// 中央多角形が作れない角・回転量が0・頂点が3つ未満や重なった多角形)だけで、
+/// 紙が裂ける指定・中心が多角形の外にある指定は警告して続ける。
 pub fn twist(
     cp: &mut CreasePattern,
     faces: &[Face],
@@ -780,33 +789,27 @@ pub fn twist(
     input: &TechniqueInput,
 ) -> Result<FoldThroughResult, String> {
     let name = "ねじり折り";
-    let (a, b) = line_points(input.line)?;
     let flap = flap_or_all(faces, state, &input.flap, name)?;
-    let center = flap_centroid(cp, faces, state, &flap)
-        .ok_or_else(|| format!("{name}の中心が決められません。層を選び直してください"))?;
-
-    let (ra, rb) = (a - center, b - center);
-    if ra.length() <= EPS || rb.length() <= EPS {
-        return Err(format!(
-            "{name}の中央多角形の辺が中心を通っています。中心から離れた辺を指してください"
-        ));
-    }
-    let span = ra.perp_dot(rb).atan2(ra.dot(rb));
-    if span.abs() <= ANGLE_EPS {
-        return Err(format!(
-            "{name}の中央多角形が作れません。辺の両端が中心から見て同じ向きにあります"
-        ));
-    }
-    let n_f = std::f64::consts::TAU / span.abs();
-    let n = n_f.round().max(3.0) as usize;
+    let center = match input.center {
+        Some(c) => DVec2::from(c),
+        None => flap_centroid(cp, faces, state, &flap)
+            .ok_or_else(|| format!("{name}の中心が決められません。層を選び直してください"))?,
+    };
     let mut warnings: Vec<String> = Vec::new();
-    if (n_f - n as f64).abs() > 1e-6 {
-        warnings.push(format!(
-            "この{name}では、指定した辺から中央多角形をちょうど{n}角形に丸めました(指定のまま続行します)"
-        ));
-    }
+    // `mid` は「ねじる角αを測る起点」= 1辺目の中点
+    let (v, mid) = match input.polygon.as_deref() {
+        Some(pts) => {
+            let v = polygon_vertices(pts, center, name, &mut warnings)?;
+            let mid = (v[0] + v[1]) * 0.5;
+            (v, mid)
+        }
+        None => {
+            let (a, b) = line_points(input.line)?;
+            let v = regular_polygon(a, b, center, name, &mut warnings)?;
+            (v, (a + b) * 0.5)
+        }
+    };
 
-    let mid = (a + b) * 0.5;
     let rp = DVec2::from(input.reference_point) - center;
     let rm = mid - center;
     if rp.length() <= EPS {
@@ -826,7 +829,7 @@ pub fn twist(
     } else {
         FoldDirection::Up
     };
-    let parts = twist_parts(&flap, &input.flap, center, ra, span.signum(), n, alpha, open);
+    let parts = twist_parts(&flap, &input.flap, center, &v, alpha, open);
     let mut res = flat_motion(
         cp,
         faces,
@@ -2222,18 +2225,93 @@ fn line_of(p: DVec2, q: DVec2) -> [[f64; 2]; 2] {
     [[p.x, p.y], [q.x, q.y]]
 }
 
+/// ねじり折りの中央多角形を、指定された頂点の並びから作る。
+///
+/// 辺の長さも辺の数も仮定しない。Errにするのは幾何的に多角形にならない指定
+/// (頂点3つ未満・続く頂点が重なる・中心が頂点と重なる)だけ。中心が外にある・
+/// 凹んでいる指定は、断らずに警告して続ける(「止めずに警告」原則)。
+fn polygon_vertices(
+    pts: &[[f64; 2]],
+    center: DVec2,
+    name: &str,
+    warnings: &mut Vec<String>,
+) -> Result<Vec<DVec2>, String> {
+    if pts.len() < 3 {
+        return Err(format!(
+            "{name}の中央多角形には頂点が3つ以上必要です。頂点を足してください"
+        ));
+    }
+    let v: Vec<DVec2> = pts.iter().map(|p| DVec2::from(*p)).collect();
+    let n = v.len();
+    for k in 0..n {
+        if (v[(k + 1) % n] - v[k]).length() <= EPS {
+            return Err(format!(
+                "{name}の中央多角形の {k} 番目の辺の長さが0です。重なった頂点を外してください"
+            ));
+        }
+        if (v[k] - center).length() <= EPS {
+            return Err(format!(
+                "{name}の中央多角形の {k} 番目の頂点が中心と同じ位置です。中心をずらしてください"
+            ));
+        }
+    }
+    if !in_polygon(&v, center) {
+        warnings.push(format!(
+            "この{name}では、中心が中央多角形の外にあります。ひだと腕の向きが定まらないことがあります(指定のまま続行します)"
+        ));
+    } else {
+        let turns: Vec<f64> = (0..n)
+            .map(|k| (v[(k + 1) % n] - v[k]).perp_dot(v[(k + 2) % n] - v[(k + 1) % n]))
+            .collect();
+        if turns.iter().any(|t| *t < 0.0) && turns.iter().any(|t| *t > 0.0) {
+            warnings.push(format!(
+                "この{name}では、中央多角形が凹んでいます。折り上がりが平らにならないことがあります(指定のまま続行します)"
+            ));
+        }
+    }
+    Ok(v)
+}
+
+/// ねじり折りの中央多角形を、1辺(`a`-`b`)を中心のまわりに回して作る。
+fn regular_polygon(
+    a: DVec2,
+    b: DVec2,
+    center: DVec2,
+    name: &str,
+    warnings: &mut Vec<String>,
+) -> Result<Vec<DVec2>, String> {
+    let (ra, rb) = (a - center, b - center);
+    if ra.length() <= EPS || rb.length() <= EPS {
+        return Err(format!(
+            "{name}の中央多角形の辺が中心を通っています。中心から離れた辺を指してください"
+        ));
+    }
+    let span = ra.perp_dot(rb).atan2(ra.dot(rb));
+    if span.abs() <= ANGLE_EPS {
+        return Err(format!(
+            "{name}の中央多角形が作れません。辺の両端が中心から見て同じ向きにあります"
+        ));
+    }
+    let n_f = std::f64::consts::TAU / span.abs();
+    let n = n_f.round().max(3.0) as usize;
+    if (n_f - n as f64).abs() > 1e-6 {
+        warnings.push(format!(
+            "この{name}では、指定した辺から中央多角形をちょうど{n}角形に丸めました(指定のまま続行します)"
+        ));
+    }
+    let step = span.signum() * std::f64::consts::TAU / n as f64;
+    Ok((0..n).map(|k| center + rotate(ra, step * k as f64)).collect())
+}
+
 /// ねじり折りの動き。中央の回転・辺ごとのひだ・頂点ごとの腕を組み立てる。
 ///
-/// `ra` は中心から中央多角形の最初の頂点へのベクトル、`turn` は頂点を並べる向き
-/// (+1/-1)、`alpha` はねじる角。
-#[allow(clippy::too_many_arguments)]
+/// `v` は中央多角形の頂点(順に並べたもの)、`alpha` はねじる角。
+/// 辺の長さも辺の数も仮定しない(頂点ごとの外角から折り線の向きを決める)。
 fn twist_parts(
     flap: &[FaceId],
     given: &[FaceId],
     center: DVec2,
-    ra: DVec2,
-    turn: f64,
-    n: usize,
+    v: &[DVec2],
     alpha: f64,
     open: FoldDirection,
 ) -> Vec<MotionPart> {
@@ -2242,10 +2320,7 @@ fn twist_parts(
     } else {
         flap.to_vec()
     };
-    let step = turn * std::f64::consts::TAU / n as f64;
-    let v: Vec<DVec2> = (0..n)
-        .map(|k| center + rotate(ra, step * k as f64))
-        .collect();
+    let n = v.len();
     let rot = rotation_about(center, alpha);
     let vp: Vec<DVec2> = v.iter().map(|&p| rot.apply(p)).collect();
     let at = |k: usize| k % n;
@@ -2260,25 +2335,27 @@ fn twist_parts(
     // 頂点jから外へ出る2本の折り線: p_j(ひだ j-1 との境)と q_j(ひだ j との境)。
     // p_j は中心から外へ向かう放射方向にとり、q_j は「腕がひだの両側と折り目で
     // つながる」条件から決まる(頂点に4本が集まり、平らに畳める形になる)。
+    //
+    // その条件を解くと q_j は「p_j を頂点jの**外角**(辺 j-1 から辺 j への曲がり角)
+    // だけ回した向き」になる。正多角形では外角が 2π/n で一定だが、辺の長さが違う
+    // 多角形では頂点ごとに変わるので、頂点ごとに測る。
     let p_dir: Vec<DVec2> = (0..n).map(|j| (v[j] - center).normalize()).collect();
     let q_dir: Vec<DVec2> = (0..n)
         .map(|j| {
-            let prev = &pleat[(j + n - 1) % n];
-            let inv = pleat[j].inverse();
-            let p_img = prev.apply(v[j] + p_dir[j]) - prev.apply(v[j]);
-            let q_img = rotate(p_img, step);
-            (inv.apply(vp[j] + q_img) - inv.apply(vp[j])).normalize()
+            let (before, after) = (v[j] - v[(j + n - 1) % n], v[at(j + 1)] - v[j]);
+            let ext = before.perp_dot(after).atan2(before.dot(after));
+            rotate(p_dir[j], ext)
         })
         .collect();
 
-    let radius = ra.length();
     let mut parts: Vec<MotionPart> = Vec::with_capacity(2 * n + 1);
     // 重なりは下から「ひだ → 腕 → 中央」。ひだは元の場所に残し、腕と中央を
     // その上へ回す(どちらの側へ回すかは open_to_back で選べる)
     // ひだ: 辺kの外側で、両端の折り線に挟まれた帯
     for k in 0..n {
         let mid = (v[k] + v[at(k + 1)]) * 0.5;
-        let inside = mid + (mid - center).normalize() * (radius * 0.02);
+        // 辺の外側のすぐ近く(辺ごとに中心からの距離で目盛りを取る)
+        let inside = mid + (mid - center) * 0.02;
         parts.push(MotionPart {
             layers: layers.clone(),
             region: vec![
@@ -2308,7 +2385,7 @@ fn twist_parts(
         } else {
             DVec2::new(-p_dir[j].y, p_dir[j].x)
         };
-        let inside = v[j] + bis * radius;
+        let inside = v[j] + bis * (v[j] - center).length();
         let prev = &pleat[(j + n - 1) % n];
         let axis0 = prev.apply(v[j]);
         let axis1 = prev.apply(v[j] + p_dir[j]);

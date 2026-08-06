@@ -282,6 +282,14 @@ pub enum SeqOp {
         /// 省略時は手前へ開く。実際の紙ではどちらへも開けるため選べるようにしてある
         #[serde(default)]
         open_to_back: Option<bool>,
+        /// ねじり折りの中央多角形(畳み平面の頂点を順に並べる)。省略時は
+        /// `line` を1辺として中心のまわりに回した正多角形を使う。辺ごとに
+        /// 長さの違う多角形は線1本では指せないので、この項目で直接渡す
+        #[serde(default)]
+        polygon: Option<Vec<[f64; 2]>>,
+        /// ねじり折りの中心。省略時は選んだ層の重心
+        #[serde(default)]
+        center: Option<[f64; 2]>,
     },
 }
 

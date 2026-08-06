@@ -272,6 +272,8 @@ impl DocumentStore {
                 line,
                 reference_point,
                 open_to_back,
+                polygon,
+                center,
             } => {
                 // FoldThroughと同じ規約(途中への挿入も可。後続手順は再生時に検査される)
                 let mut insert_warnings = check_insert_point(&doc, up_to)?;
@@ -302,6 +304,8 @@ impl DocumentStore {
                         line,
                         reference_point,
                         open_to_back,
+                        polygon,
+                        center,
                     },
                 )?;
                 let mut step = result.step;
@@ -1218,6 +1222,8 @@ mod tests {
                 line: [[0.4, 0.0], [0.4, 1.0]],
                 reference_point: [0.5, 0.5],
                 open_to_back: None,
+                polygon: None,
+                center: None,
             })
             .unwrap();
         // 折り線2本で面が3つに分かれ、手順が1つ増える
@@ -1266,6 +1272,8 @@ mod tests {
                 line: [[0.7, 0.5], [0.5, 0.0]],
                 reference_point: [0.2, 0.25],
                 open_to_back: None,
+                polygon: None,
+                center: None,
             })
             .unwrap();
         assert_eq!(view.faces.len(), 4, "2層が4層になる");
@@ -1295,6 +1303,8 @@ mod tests {
                 line: [[0.0, 0.5], [1.0, 0.5]],
                 reference_point: [1.0 - d, 0.5 - d],
                 open_to_back: None,
+                polygon: None,
+                center: None,
             })
             .unwrap();
         assert_eq!(view.faces.len(), 3, "手前の層が分かれて3層になる");
@@ -1329,6 +1339,8 @@ mod tests {
                 line: [[0.0, 0.5], [1.0, 0.5]],
                 reference_point: [1.0, 0.5],
                 open_to_back: None,
+                polygon: None,
+                center: None,
             })
             .unwrap();
         assert!(view.faces.len() > 2, "羽と中央のくさびに分かれる");
@@ -1358,6 +1370,8 @@ mod tests {
                 line: [[0.8, 0.0], [1.0, 0.2]],
                 reference_point: [0.97, 0.03],
                 open_to_back: None,
+                polygon: None,
+                center: None,
             })
             .unwrap();
         assert!(view.faces.len() > 2, "先端側で各層が分かれる");
@@ -1381,6 +1395,8 @@ mod tests {
                 line: [[0.0, 0.5], [1.0, 0.5]],
                 reference_point: [1.0, 0.8],
                 open_to_back: None,
+                polygon: None,
+                center: None,
             })
             .unwrap();
         assert_eq!(view.faces.len(), 3, "くさび・その先・基準線の向こう");
@@ -1395,11 +1411,44 @@ mod tests {
                 line: [[0.4, 0.4], [0.6, 0.4]],
                 reference_point: [0.6, 0.327],
                 open_to_back: None,
+                polygon: None,
+                center: None,
             })
             .unwrap();
         assert_eq!(view.faces.len(), 9, "中央1面+ひだ4面+腕4面");
         assert_eq!(view.doc.sequence[0].kind, TechniqueKind::Twist);
         assert!(!view.doc.sequence[0].drivers.is_empty());
+    }
+
+    /// ねじり折りは、中央多角形と中心を直接渡せる(辺の長さが違う多角形も折れる)。
+    /// `polygon`/`center` は省略できる項目なので、古い作品ファイル(この2つが無い
+    /// JSON)もそのまま読める。
+    #[test]
+    fn technique_twist_takes_a_polygon_with_unequal_sides() {
+        let mut store = square_store();
+        let view = store
+            .apply_seq(SeqOp::Technique {
+                up_to: 0,
+                kind: TechniqueKind::Twist,
+                flap: Vec::new(),
+                line: [[0.0, 0.0], [1.0, 0.0]],
+                reference_point: [0.72, 0.75],
+                open_to_back: None,
+                polygon: Some(vec![[0.85, 0.50], [0.45, 0.75], [0.40, 0.45]]),
+                center: Some([0.55, 0.56]),
+            })
+            .unwrap();
+        assert_eq!(view.faces.len(), 7, "中央1面+ひだ3面+腕3面");
+        assert_eq!(view.doc.sequence[0].kind, TechniqueKind::Twist);
+        assert!(view.warnings.is_empty(), "紙は裂けない: {:?}", view.warnings);
+
+        // 省略した形のJSONも読める(#[serde(default)])
+        let old = r#"{"type":"Technique","up_to":0,"kind":"Twist","flap":[],
+            "line":[[0.4,0.4],[0.6,0.4]],"reference_point":[0.6,0.327]}"#;
+        let op: SeqOp = serde_json::from_str(old).expect("古い形のJSONも読める");
+        let mut store = square_store();
+        let view = store.apply_seq(op).unwrap();
+        assert_eq!(view.faces.len(), 9, "中央1面+ひだ4面+腕4面(従来の指し方)");
     }
 
     /// 未実装の技法・折れない指定・範囲外の挿入位置はErr(文書は無変更)。
@@ -1416,6 +1465,8 @@ mod tests {
                 line: [[0.4, 0.0], [0.4, 1.0]],
                 reference_point: [0.5, 0.5],
                 open_to_back: None,
+                polygon: None,
+                center: None,
             })
             .unwrap_err();
         assert!(err.contains("まだ選べません"), "err={err}");
@@ -1430,6 +1481,8 @@ mod tests {
                 line: [[0.4, 0.0], [0.4, 1.0]],
                 reference_point: [0.4, 0.5],
                 open_to_back: None,
+                polygon: None,
+                center: None,
             })
             .unwrap_err();
         assert!(err.contains("段の幅"), "err={err}");
@@ -1445,6 +1498,8 @@ mod tests {
                 line: [[0.4, 0.0], [0.4, 1.0]],
                 reference_point: [0.5, 0.5],
                 open_to_back: None,
+                polygon: None,
+                center: None,
             })
             .unwrap_err();
         assert!(err.contains("手順の数を超えています"), "err={err}");

@@ -115,6 +115,8 @@ fn apply(
             line,
             reference_point,
             open_to_back,
+            polygon: None,
+            center: None,
         },
     )
     .expect("折れる指定");
