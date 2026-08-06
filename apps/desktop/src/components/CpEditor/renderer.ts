@@ -1,23 +1,26 @@
-// 展開図のCanvas 2D描画。色・線幅はここの定数に集約する。
+// 展開図のCanvas 2D描画。線幅はここの定数に、紙と線の色は lib/cpColors に集約する。
 // 座標系: 正規化座標(長辺=1.0、y軸上向き)→ 画面座標(px、y軸下向き)。
 
 import type { Document, EdgeKind, Vec2 } from "../../lib/types";
 import type { Selection } from "../../store/appStore";
+import {
+  EDGE_COLORS,
+  cssRgb,
+  gridColor,
+  haloColor,
+  paperFill,
+  type Rgb,
+} from "../../lib/cpColors";
 import { paperExtent, type SnapResult } from "./snap";
 
-/** 線種ごとの色 */
-export const EDGE_COLORS: Record<EdgeKind, string> = {
-  Border: "#000000",
-  Mountain: "#d43c3c",
-  Valley: "#3b6fc9",
-  Aux: "#909090",
-};
+// 線種ごとの色(山=赤・谷=青の慣例)は lib/cpColors に集約した。
+// 紙の塗りと同時に決めないと、赤い紙に赤い山折り線を描いて見えなくなるため。
+export { EDGE_COLORS };
 
 export const COLORS = {
   background: "#d8d8dc",
   paper: "#ffffff",
   paperShadow: "rgba(0, 0, 0, 0.25)",
-  grid: "#dcdcdc",
   selection: "#ff9500",
   snapMarker: "#2aa02a",
   /** 平らに畳めない点(CPE-009)。操作は止めず色で知らせるだけ */
@@ -36,9 +39,12 @@ export const LINE_WIDTHS = {
   crease: 1.5,
   aux: 1,
   grid: 1,
-  selected: 4,
+  selected: 6,
   preview: 1.5,
 } as const;
+
+/** 線の下に敷く縁取りの太さ(線幅にこれだけ足す) */
+export const HALO_EXTRA_WIDTH = 2;
 
 /** 補助線・プレビュー線の破線パターン(px) */
 export const DASH_AUX = [5, 4] as const;
@@ -95,11 +101,6 @@ export interface RenderOverlay {
   tooltip: { pos: Vec2; text: string } | null;
   /** ドラッグ中の点と、離したら移る位置(CPE-006のプレビュー) */
   vertexDrag: { id: number; to: Vec2 } | null;
-}
-
-/** 紙の色([r,g,b])をcanvasの色文字列にする */
-export function paperColor(rgb: [number, number, number]): string {
-  return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
 }
 
 /** 点を動かしている途中のプレビュー: つながる線を破線で新しい位置へ引き直す */
@@ -182,11 +183,13 @@ function drawGrid(
   ctx: CanvasRenderingContext2D,
   doc: Document,
   view: ViewTransform,
+  fill: Rgb,
 ): void {
   const n = doc.display.grid_divisions;
   if (n <= 0) return;
   const [w, h] = paperExtent(doc);
-  ctx.strokeStyle = COLORS.grid;
+  // 方眼は紙の塗りを少し暗くした色。紙の色を変えても消えず、折り線より控えめになる
+  ctx.strokeStyle = cssRgb(gridColor(fill));
   ctx.lineWidth = LINE_WIDTHS.grid;
   // x方向・y方向とも同じ分割数(輪郭と重なる両端は描かない)
   for (let i = 1; i < n; i++) {
@@ -200,9 +203,11 @@ function drawEdges(
   doc: Document,
   view: ViewTransform,
   selection: Selection,
+  fill: Rgb,
 ): void {
   const byId = new Map(doc.cp.vertices.map((v) => [v.id, v.pos]));
   const selected = new Set(selection.edgeIds);
+  const halo = haloColor(fill);
   for (const e of doc.cp.edges) {
     const a = byId.get(e.v0);
     const b = byId.get(e.v1);
@@ -216,14 +221,22 @@ function drawEdges(
       strokeSegment(ctx, view, a, b);
       ctx.restore();
     }
-    ctx.strokeStyle = EDGE_COLORS[e.kind];
-    ctx.lineWidth =
+    const width =
       e.kind === "Border"
         ? LINE_WIDTHS.border
         : e.kind === "Aux"
           ? LINE_WIDTHS.aux
           : LINE_WIDTHS.crease;
     ctx.setLineDash(e.kind === "Aux" ? [...DASH_AUX] : []);
+    // 縁取りを先に敷く: 方眼や選択の橙色の帯に重なっても線種の色が読める。
+    // 輪郭は紙の外の背景と接するので敷かない(紙の縁が白く光って見えるため)
+    if (e.kind !== "Border") {
+      ctx.strokeStyle = halo;
+      ctx.lineWidth = width + HALO_EXTRA_WIDTH;
+      strokeSegment(ctx, view, a, b);
+    }
+    ctx.strokeStyle = EDGE_COLORS[e.kind];
+    ctx.lineWidth = width;
     strokeSegment(ctx, view, a, b);
   }
   ctx.setLineDash([]);
@@ -336,14 +349,16 @@ export function render(
   ctx.save();
   ctx.shadowColor = COLORS.paperShadow;
   ctx.shadowBlur = 8;
-  // 展開図は紙の表を見ている面なので、表の色で塗る(PAP-003の見た目確認)
-  ctx.fillStyle = paperColor(doc.display.front_color);
+  // 展開図は紙の表を見ている面なので表の色で塗る(PAP-003の見た目確認)。
+  // ただし赤い紙に赤い山折り線が埋もれるので、線が読める濃さまで白へ薄めて塗る
+  const fill = paperFill(doc.display.front_color);
+  ctx.fillStyle = cssRgb(fill);
   ctx.fillRect(tl[0], tl[1], w * view.scale, h * view.scale);
   ctx.restore();
 
-  drawGrid(ctx, doc, view);
+  drawGrid(ctx, doc, view, fill);
   if (overlay.mirrorAxis !== null) drawMirrorAxis(ctx, doc, view, overlay.mirrorAxis);
-  drawEdges(ctx, doc, view, selection);
+  drawEdges(ctx, doc, view, selection, fill);
   drawSelectedVertices(ctx, doc, view, selection);
   drawViolations(ctx, doc, view, overlay.violations);
   if (overlay.vertexDrag) drawVertexDrag(ctx, doc, view, overlay.vertexDrag);
