@@ -16,13 +16,17 @@ import { mirrorAxisX, mirrorPoint } from "../../lib/mirror";
 import type { Document, EdgeKind } from "../../lib/types";
 import {
   constructDone,
+  cursorFor,
   curveDraft,
   initialEphemeralState,
+  isSpaceKey,
   onKeyDown,
+  onKeyUp,
   onMouseDown,
   onMouseMove,
   onMouseUp,
   onWheel,
+  panHint,
   previewKind,
   type InteractionCtx,
 } from "./interaction";
@@ -82,7 +86,10 @@ export function CpEditor({ fitRef }: Props) {
     const canvas = canvasRef.current;
     const { doc, selection, activeTool, violations, construct, curve, mirrorDraw } =
       useAppStore.getState();
-    if (!canvas || !doc) return;
+    if (!canvas) return;
+    // カーソルの形は表示専用なので、再描画を起こさずcanvasへ直接反映する
+    canvas.style.cursor = cursorFor(activeTool, stateRef.current);
+    if (!doc) return;
     const w = canvas.clientWidth;
     const h = canvas.clientHeight;
     if (w === 0 || h === 0) return;
@@ -123,16 +130,19 @@ export function CpEditor({ fitRef }: Props) {
       constructPoints:
         activeTool === "construct" ? st.constructPoints : curveMode ? st.curvePoints : [],
       // 作図補助では次にすることを常に1行で出す(設計原則3b)
-      hint: st.vertexDrag
-        ? "点を動かしています(離すと決まります。Escでやめる)"
-        : activeTool === "construct"
+      // つかんで動かしている間は、その案内を他より優先して出す
+      hint:
+        panHint(st) ??
+        (st.vertexDrag
+          ? "点を動かしています(離すと決まります。Escでやめる)"
+          : activeTool === "construct"
           ? constructHint(construct.kind, constructDone(st), construct.divisions)
           : curveMode
             ? curveHint(curve.shape, st.curvePoints.length, curve.rulings)
             : // 今どの描き方かが画面の上で分かるようにする(設計原則3b)
               mirrorDraw
               ? "左右対称に描いています(線を引くときだけ効きます)"
-              : null,
+              : null),
       tooltip: violationTooltip(doc, st.hoverViolation),
       vertexDrag: st.vertexDrag
         ? { id: st.vertexDrag.id, to: st.vertexDrag.to }
@@ -218,18 +228,42 @@ export function CpEditor({ fitRef }: Props) {
     };
   }, [fitRef, draw]);
 
-  // Esc(描画中止)・Delete(選択線の削除)
+  // Esc(描画中止)・Delete(選択線の削除)・スペース(押している間つかんで動かす)
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLElement && e.target.tagName === "INPUT") return;
+    const isInput = (t: EventTarget | null) =>
+      t instanceof HTMLElement && t.tagName === "INPUT";
+    const down = (e: KeyboardEvent) => {
+      if (isInput(e.target)) return;
+      // スペースは画面のスクロールに使われるので、つかむ操作のために止める
+      if (isSpaceKey(e.key)) e.preventDefault();
       const ctx = makeCtx();
       if (ctx) {
         onKeyDown(ctx, e.key);
         draw();
       }
     };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
+    const up = (e: KeyboardEvent) => {
+      if (isInput(e.target)) return;
+      const ctx = makeCtx();
+      if (ctx) {
+        onKeyUp(ctx, e.key);
+        draw();
+      }
+    };
+    // 別の窓へ移ったときにスペースを押しっぱなしと誤解しないよう解除する
+    const blur = () => {
+      stateRef.current.spaceHeld = false;
+      stateRef.current.panLast = null;
+      draw();
+    };
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    window.addEventListener("blur", blur);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", blur);
+    };
   }, [makeCtx, draw]);
 
   const screenPos = (e: React.MouseEvent<HTMLCanvasElement>): Vec2 => {
@@ -249,14 +283,6 @@ export function CpEditor({ fitRef }: Props) {
     <canvas
       ref={canvasRef}
       className="cp-canvas"
-      style={{
-        cursor:
-          previewKind(activeTool) !== undefined ||
-          activeTool === "delete" ||
-          activeTool === "construct"
-            ? "crosshair"
-            : "default",
-      }}
       onPointerDown={(e) => {
         e.preventDefault();
         // ポインタ捕捉: canvas外へ出てもmove/upが届き、ドラッグ状態が残留しない

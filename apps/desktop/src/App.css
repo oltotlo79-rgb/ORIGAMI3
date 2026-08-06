@@ -336,6 +336,26 @@ body,
   pointer-events: none;
 }
 
+/* 3D区画右下の「視点を戻す」。常設区画・ツールレールを増やさずに置く小さなボタン */
+.viewer-reset {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 3px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 10px;
+  background: rgba(40, 40, 48, 0.78);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.viewer-reset:hover,
+.viewer-reset:focus-visible {
+  background: rgba(59, 111, 201, 0.9);
+}
+
 /* 折れない状態(理由つき)は色を変えて気付けるようにする */
 .viewer-hint.blocked {
   background: rgba(150, 90, 20, 0.86);

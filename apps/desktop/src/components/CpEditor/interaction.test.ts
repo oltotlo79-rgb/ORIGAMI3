@@ -4,9 +4,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   constructDone,
+  cursorFor,
   curveDraft,
   initialEphemeralState,
   onKeyDown,
+  onKeyUp,
   onMouseDown,
   onMouseMove,
   onMouseUp,
@@ -257,5 +259,72 @@ describe("曲線の折り目を描く", () => {
     onMouseDown(ctx, toScreen([0.9, 0.2]), 0);
     expect(drawSegment).toHaveBeenCalledTimes(1);
     expect(drawCurve).not.toHaveBeenCalled();
+  });
+});
+
+describe("展開図をつかんで動かす", () => {
+  /** setViewに渡された最後の表示位置 */
+  const lastView = (ctx: InteractionCtx) => {
+    const calls = vi.mocked(ctx.setView).mock.calls;
+    return calls.length > 0 ? calls[calls.length - 1][0] : null;
+  };
+
+  it("スペースを押しながらの左ドラッグで表示位置が動く", () => {
+    const { ctx } = makeCtx();
+    ctx.tool = "select";
+    onKeyDown(ctx, " ");
+    expect(cursorFor(ctx.tool, ctx.state)).toBe("grab");
+
+    onMouseDown(ctx, [100, 100], 0);
+    expect(ctx.state.marqueeStart).toBeNull(); // 選択は始まらない
+    expect(cursorFor(ctx.tool, ctx.state)).toBe("grabbing");
+    onMouseMove(ctx, [130, 80]);
+    expect(lastView(ctx)).toEqual({ scale: 500, offsetX: 30, offsetY: 480 });
+
+    onMouseUp(ctx, [130, 80], 0);
+    onKeyUp(ctx, " ");
+    expect(ctx.state.panLast).toBeNull();
+    expect(cursorFor(ctx.tool, ctx.state)).toBe("default");
+  });
+
+  it("右ドラッグでも表示位置が動く(中ボタンの無い機器のため)", () => {
+    const { ctx } = makeCtx();
+    ctx.tool = "valley";
+    onMouseDown(ctx, [100, 100], 2);
+    onMouseMove(ctx, [90, 110]);
+    expect(lastView(ctx)).toEqual({ scale: 500, offsetX: -10, offsetY: 510 });
+    onMouseUp(ctx, [90, 110], 2);
+    expect(ctx.state.panLast).toBeNull();
+    expect(ctx.state.pendingStart).toBeNull(); // 線引きは始まっていない
+  });
+
+  it("中ボタンドラッグは今までどおり動く", () => {
+    const { ctx } = makeCtx();
+    onMouseDown(ctx, [100, 100], 1);
+    onMouseMove(ctx, [120, 100]);
+    expect(lastView(ctx)).toEqual({ scale: 500, offsetX: 20, offsetY: 500 });
+    onMouseUp(ctx, [120, 100], 1);
+    expect(ctx.state.panLast).toBeNull();
+  });
+
+  it("スペースを押していない普通の左ドラッグは今までどおり選択になる", () => {
+    const { ctx } = makeCtx();
+    ctx.tool = "select";
+    onMouseDown(ctx, toScreen([0.2, 0.2]), 0);
+    onMouseMove(ctx, toScreen([0.8, 0.8]));
+    expect(ctx.state.panLast).toBeNull();
+    expect(ctx.state.marqueeEnd).not.toBeNull();
+    onMouseUp(ctx, toScreen([0.8, 0.8]), 0);
+    expect(vi.mocked(ctx.setSelection)).toHaveBeenCalled();
+    expect(vi.mocked(ctx.setView)).not.toHaveBeenCalled();
+  });
+
+  it("スペースを離す・Escで、つかんでいる状態が解ける", () => {
+    const { ctx } = makeCtx();
+    onKeyDown(ctx, " ");
+    onMouseDown(ctx, [10, 10], 0);
+    onKeyDown(ctx, "Escape");
+    expect(ctx.state.spaceHeld).toBe(false);
+    expect(ctx.state.panLast).toBeNull();
   });
 });

@@ -764,6 +764,16 @@ export function Viewer3D({ fitRef }: Props) {
       >
         {hint}
       </div>
+      {/* 立体だけを最初の視点へ戻す小さなボタン(ツールレールは増やさない)。
+          上端は警告バッジが使うので、区画の右下の隅に置く */}
+      <button
+        type="button"
+        className="viewer-reset"
+        title="紙全体が見える最初の視点に戻します(展開図の表示はそのまま)"
+        onClick={fitCamera}
+      >
+        視点を戻す
+      </button>
     </>
   );
 }

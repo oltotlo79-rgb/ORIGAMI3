@@ -449,3 +449,41 @@ describe("Viewer3D(合わせて折る)", () => {
     expect(screen.getByRole("status").textContent).toContain("紙をつかんでドラッグ");
   });
 });
+
+describe("Viewer3D(視点を戻す)", () => {
+  beforeEach(() => {
+    stubLayout();
+    useAppStore.setState({
+      doc: DOC,
+      faces: FACES,
+      hinges: new Set<number>(),
+      frame3d: null,
+      activeTool: "select",
+      currentStep: null,
+      playT: 1,
+      playing: false,
+      drivers: new Map(),
+      errorMessage: null,
+      foldDraft: null,
+      alignDraft: null,
+      techniqueDraft: null,
+    });
+  });
+  afterEach(() => cleanup());
+
+  it("3D区画に「視点を戻す」ボタンが常に出ている", () => {
+    renderViewer();
+    const button = screen.getByRole("button", { name: "視点を戻す" });
+    expect(button.title).toContain("最初の視点");
+  });
+
+  it("押すと紙全体が見える初期の視点へ戻す", () => {
+    renderViewer();
+    const resetCamera = held.scene.resetCamera as ReturnType<typeof vi.fn>;
+    resetCamera.mockClear(); // 表示直後の1回を数えない
+    fireEvent.click(screen.getByRole("button", { name: "視点を戻す" }));
+    expect(resetCamera).toHaveBeenCalledTimes(1);
+    // 紙の大きさ(150×150mm → 正規化して1×1)で全体が入る位置を求める
+    expect(resetCamera.mock.calls[0]).toEqual([1, 1]);
+  });
+});

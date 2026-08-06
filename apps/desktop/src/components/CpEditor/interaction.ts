@@ -1,7 +1,9 @@
 // ツール別のマウス・キーボード操作。
 // 山/谷/補助: 1クリック目で始点(スナップ適用)→プレビュー→2クリック目で確定、Escで中止。
 // 選択: クリックで線/頂点を選択、ドラッグで矩形複数選択。削除: クリックした線を削除。
-// 共通: ホイールズーム(カーソル中心)、中ボタンドラッグでパン、Deleteで選択線削除。
+// 共通: ホイールズーム(カーソル中心)、Deleteで選択線削除。
+// 表示位置の移動(パン)は3通り: スペースキーを押しながら左ドラッグ / 右ドラッグ /
+// 中ボタンドラッグ。中ボタンの無い機器でもつかんで動かせるようにするため。
 
 import type { Document, EdgeKind, EditOp, Vec2 } from "../../lib/types";
 import type { Selection, ToolId } from "../../store/appStore";
@@ -34,6 +36,8 @@ export interface EphemeralState {
   downScreen: Vec2 | null;
   /** パン中の直前カーソル位置(px) */
   panLast: Vec2 | null;
+  /** スペースキーを押し下げている間だけtrue(左ドラッグを表示位置の移動に使う) */
+  spaceHeld: boolean;
   /** 作図補助でクリック済みの点(正規化座標) */
   constructPoints: Vec2[];
   /** 作図補助でクリック済みの線(両端の座標) */
@@ -55,6 +59,7 @@ export function initialEphemeralState(): EphemeralState {
     marqueeEnd: null,
     downScreen: null,
     panLast: null,
+    spaceHeld: false,
     constructPoints: [],
     constructSeg: null,
     hoverViolation: null,
@@ -236,8 +241,14 @@ export function onWheel(ctx: InteractionCtx, screen: Vec2, deltaY: number): void
   });
 }
 
+/** このボタン(と今のキー状態)は「展開図をつかんで動かす」操作か */
+export function isPanStart(state: EphemeralState, button: number): boolean {
+  return button === 1 || button === 2 || (button === 0 && state.spaceHeld);
+}
+
 export function onMouseDown(ctx: InteractionCtx, screen: Vec2, button: number): void {
-  if (button === 1) {
+  // 表示位置の移動を最優先で拾う(線引き・選択より先に判定する)
+  if (isPanStart(ctx.state, button)) {
     ctx.state.panLast = screen;
     return;
   }
@@ -348,7 +359,8 @@ export function onMouseMove(ctx: InteractionCtx, screen: Vec2): void {
 }
 
 export function onMouseUp(ctx: InteractionCtx, screen: Vec2, button: number): void {
-  if (button === 1) {
+  // どのボタンで動かし始めていても、離したところで移動を終える
+  if (ctx.state.panLast) {
     ctx.state.panLast = null;
     return;
   }
@@ -385,9 +397,37 @@ export function onMouseUp(ctx: InteractionCtx, screen: Vec2, button: number): vo
   ctx.setSelection({ edgeIds: edgeId !== null ? [edgeId] : [], vertexIds: [] });
 }
 
-/** Esc: 描画・選択操作の中止 / Delete: 選択中の線を削除 */
+/** スペースキーとみなす入力(環境によっては"Spacebar"が来る) */
+export function isSpaceKey(key: string): boolean {
+  return key === " " || key === "Spacebar";
+}
+
+/** 今の状態に合ったカーソルの形(つかんで動かしている間は「つかんだ手」) */
+export function cursorFor(tool: ToolId, state: EphemeralState): string {
+  if (state.panLast) return "grabbing";
+  if (state.spaceHeld) return "grab";
+  if (previewKind(tool) !== undefined || tool === "delete" || tool === "construct") {
+    return "crosshair";
+  }
+  return "default";
+}
+
+/** 表示位置を動かしている(動かせる)ときの案内。それ以外はnull(設計原則3b) */
+export function panHint(state: EphemeralState): string | null {
+  if (state.panLast) return "表示位置を動かしています(離すと決まります)";
+  if (state.spaceHeld) return "スペースを押している間はドラッグで表示位置を動かせます";
+  return null;
+}
+
+/** Esc: 描画・選択操作の中止 / Delete: 選択中の線を削除 / スペース: つかんで動かす */
 export function onKeyDown(ctx: InteractionCtx, key: string): void {
+  if (isSpaceKey(key)) {
+    ctx.state.spaceHeld = true;
+    return;
+  }
   if (key === "Escape") {
+    ctx.state.spaceHeld = false;
+    ctx.state.panLast = null;
     ctx.state.pendingStart = null;
     ctx.state.downScreen = null;
     ctx.state.marqueeStart = null;
@@ -402,4 +442,11 @@ export function onKeyDown(ctx: InteractionCtx, key: string): void {
   if (key === "Delete" && ctx.selection.edgeIds.length > 0) {
     ctx.applyEdit({ type: "RemoveEdges", ids: ctx.selection.edgeIds });
   }
+}
+
+/** スペースキーを離したら、つかんで動かす状態を解く */
+export function onKeyUp(ctx: InteractionCtx, key: string): void {
+  if (!isSpaceKey(key)) return;
+  ctx.state.spaceHeld = false;
+  ctx.state.panLast = null;
 }
