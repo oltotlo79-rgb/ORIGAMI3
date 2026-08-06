@@ -22,6 +22,7 @@ const READY: HintState = {
   hasTechniqueLine: false,
   pullBlocked: null,
   pulling: false,
+  pullMirrored: false,
 };
 
 describe("foldBlockReason", () => {
@@ -91,6 +92,10 @@ describe("viewerHint", () => {
     expect(viewerHint(p)).toBe(PULL_HINT);
     expect(viewerHint(p)).toContain("つじつま");
     expect(viewerHint({ ...p, pulling: true })).toContain("折り線");
+    // 左右同時に動かしている間は、そのことが分かるように示す(UI-007)
+    expect(
+      viewerHint({ ...p, pulling: true, pullMirrored: true }),
+    ).toContain("左右対称に動かしています");
     expect(viewerHint({ ...p, pullBlocked: "再生中は引けません" })).toContain(
       "今は引けません",
     );

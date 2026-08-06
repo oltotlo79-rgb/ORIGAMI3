@@ -48,11 +48,24 @@ describe("見た目の好み", () => {
   });
 
   it("保存した好みは次に読むとそのまま戻る", () => {
-    savePrefs({ splitRatio: 0.3, mirrorDraw: true }, storage);
+    savePrefs(
+      { splitRatio: 0.3, mirrorDraw: true, pullMirror: false },
+      storage,
+    );
     const loaded = loadPrefs(storage);
     expect(loaded.splitRatio).toBeCloseTo(0.3);
     // 左右対称に描く指定も端末に覚えておく(CPE-010)
     expect(loaded.mirrorDraw).toBe(true);
+    // 3Dで引くときの左右同時の指定も覚えておく(UI-007)
+    expect(loaded.pullMirror).toBe(false);
+  });
+
+  it("3Dで引くときの左右同時は、保存が無ければ既定のオン(UI-007)", () => {
+    expect(DEFAULT_PREFS.pullMirror).toBe(true);
+    expect(loadPrefs(storage).pullMirror).toBe(true);
+    // 古い版が書いた好み(pullMirrorが無い)を読んでもオンのまま
+    storage.setItem("origami3.prefs", JSON.stringify({ splitRatio: 0.4 }));
+    expect(loadPrefs(storage).pullMirror).toBe(true);
   });
 
   it("紙の色・方眼は端末に覚えない(作品ファイル側の設定なので)", () => {
@@ -62,7 +75,11 @@ describe("見た目の好み", () => {
       display: { ...DEFAULT_DISPLAY, front_color: [0, 128, 255] },
       splitRatio: 0.3,
     });
-    expect(loadPrefs(storage)).toEqual({ splitRatio: 0.3, mirrorDraw: false });
+    expect(loadPrefs(storage)).toEqual({
+      splitRatio: 0.3,
+      mirrorDraw: false,
+      pullMirror: true,
+    });
   });
 
   it("何も保存されていない・壊れている場合は既定値に戻す", () => {

@@ -112,3 +112,34 @@ describe("この形で仕上げる(SIM-009)", () => {
     expect(op.type === "PushStep" && op.step.kind).toBe("Pose");
   });
 });
+
+describe("引くツールの左右同時の切替(UI-007)", () => {
+  it("引くツールを選ぶと切替が出て、押すと設定が変わる", () => {
+    seed(new Map());
+    // 何も選んでいない状態で「引く」ツールにする(常設UIは増やさない)
+    useAppStore.setState({
+      activeTool: "pull",
+      selection: { edgeIds: [], vertexIds: [] },
+      pullMirror: true,
+    });
+    render(<ContextPanel />);
+
+    const box = screen.getByLabelText("左右対称に動かす") as HTMLInputElement;
+    expect(box.checked).toBe(true); // 既定はオン(作品はほとんど左右対称なので)
+    expect(screen.getAllByText(/鶴の両羽が一緒に開きます/).length).toBe(1);
+
+    fireEvent.click(box);
+    expect(useAppStore.getState().pullMirror).toBe(false);
+    expect(screen.getAllByText(/つかんだ側の折り線だけが動きます/).length).toBe(1);
+  });
+
+  it("他のツールでは出さない(下部パネルの内容を増やしすぎない)", () => {
+    seed(new Map());
+    useAppStore.setState({
+      activeTool: "select",
+      selection: { edgeIds: [], vertexIds: [] },
+    });
+    render(<ContextPanel />);
+    expect(screen.queryByLabelText("左右対称に動かす")).toBeNull();
+  });
+});

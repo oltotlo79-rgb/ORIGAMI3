@@ -266,6 +266,9 @@ interface AppState {
   poseConverged: boolean;
   /** 今つかんで引いている折り線の辺ID(3D表示で色を付ける)。引いていなければnull */
   pullHinge: number | null;
+  /** 一緒に動かしている左右対称の相手の折り線(3D表示で同じ色を付ける)。
+   * 左右同時が切ってあるか、対称の相手が無ければnull */
+  pullMirrorHinge: number | null;
   /** 前回の異常終了で残った作業中の内容。あれば復旧ダイアログを出す(SYS-003) */
   recovery: RecoveryInfo | null;
 
@@ -312,6 +315,9 @@ interface AppState {
   /** 左右対称に線を引くか(CPE-010)。紙の縦の中心線が対称軸。
    * 効くのは線を引くときだけで、消す・種類を変えるときは片側ずつになる */
   mirrorDraw: boolean;
+  /** 3Dで紙を引くとき左右対称の相手も同時に動かすか(UI-007)。既定はオン。
+   * 画面の使い方の好みなので端末に覚えておく(作品の中身には入れない) */
+  pullMirror: boolean;
 
   newDocument: (paper: Paper) => Promise<void>;
   openDocument: (path: string) => Promise<void>;
@@ -322,6 +328,8 @@ interface AppState {
   drawSegment: (a: Vec2, b: Vec2, kind: EdgeKind) => Promise<void>;
   /** 左右対称に線を引くかを切り替える(次回起動時も同じ設定に戻る) */
   setMirrorDraw: (on: boolean) => void;
+  /** 3Dで引くとき左右同時に動かすかを切り替える(次回起動時も同じ設定に戻る) */
+  setPullMirror: (on: boolean) => void;
   undo: () => Promise<void>;
   redo: () => Promise<void>;
   /** 手順の追加・変更・削除(sequence_apply)。再生中なら止めてから送る */
@@ -373,8 +381,13 @@ interface AppState {
    * そのまま送ってソルバーの出発点を今の形に合わせ、駆動する折り線を覚える。
    * これがないと、手順で折り上げた作品を引いたとたん平らな解へ飛んでしまう
    */
-  beginPull: (hinge: number, angles: ReadonlyMap<number, number>) => void;
-  /** 引いている間の角度(度)。60ms間引きで追従計算を呼ぶ */
+  beginPull: (
+    hinge: number,
+    angles: ReadonlyMap<number, number>,
+    mirrorHinge?: number | null,
+  ) => void;
+  /** 引いている間の角度(度)。60ms間引きで追従計算を呼ぶ。
+   * 左右対称の相手がいれば同じ角度で一緒に動かす */
   pullTo: (deg: number) => void;
   /** 引く操作を終える(角度指定は残る。色付けだけ消す) */
   endPull: () => void;
@@ -514,6 +527,12 @@ export const useAppStore = create<AppState>((set, get) => {
   const queue = createSerialQueue();
   const prefs = loadPrefs();
 
+  /** 画面の使い方の好み(作品の中身ではないもの)を端末に覚えておく */
+  const persistPrefs = () => {
+    const { splitRatio, mirrorDraw, pullMirror } = get();
+    savePrefs({ splitRatio, mirrorDraw, pullMirror });
+  };
+
   /** DocumentViewの内容で状態を一括更新する(成功時共通処理)。
    * isNewDocument=true(新規/開く)なら選択を解除しdocEpochを進める。
    * 手順が減ったときは表示中の手順番号を手順数まで詰める。
@@ -575,6 +594,7 @@ export const useAppStore = create<AppState>((set, get) => {
           poseWarnings: [],
           poseConverged: true,
           pullHinge: null,
+          pullMirrorHinge: null,
           frame3d: r.value.frame,
           currentStep: null,
           playT: 1,
@@ -771,6 +791,7 @@ export const useAppStore = create<AppState>((set, get) => {
     poseWarnings: [],
     poseConverged: true,
     pullHinge: null,
+    pullMirrorHinge: null,
     recovery: null,
     proposalStep: null,
     proposalSkeleton: defaultSkeleton(),
@@ -791,6 +812,7 @@ export const useAppStore = create<AppState>((set, get) => {
     display: DEFAULT_DISPLAY,
     splitRatio: prefs.splitRatio,
     mirrorDraw: prefs.mirrorDraw,
+    pullMirror: prefs.pullMirror,
 
     newDocument: (paper) => runViewCommand(() => ipc.documentNew(paper), true),
 
@@ -831,7 +853,14 @@ export const useAppStore = create<AppState>((set, get) => {
 
     setMirrorDraw: (on) => {
       set({ mirrorDraw: on });
-      savePrefs({ splitRatio: get().splitRatio, mirrorDraw: on });
+      persistPrefs();
+    },
+
+    setPullMirror: (on) => {
+      set({ pullMirror: on });
+      // 切ったら、いま一緒に動かしている相手もその場で外す(次のドラッグを待たない)
+      if (!on) set({ pullMirrorHinge: null });
+      persistPrefs();
     },
 
     undo: () => {
@@ -908,6 +937,7 @@ export const useAppStore = create<AppState>((set, get) => {
           foldDraft: null,
           techniqueDraft: null,
           pullHinge: null,
+          pullMirrorHinge: null,
         });
       }
     },
@@ -1133,9 +1163,14 @@ export const useAppStore = create<AppState>((set, get) => {
       }
     },
 
-    beginPull: (hinge, angles) => {
+    beginPull: (hinge, angles, mirrorHinge = null) => {
       if (!get().doc) return;
-      set({ pullHinge: hinge, errorMessage: null });
+      // 左右同時を切っている間は相手を覚えない(切替が次のドラッグから必ず効く)
+      set({
+        pullHinge: hinge,
+        pullMirrorHinge: get().pullMirror ? mirrorHinge : null,
+        errorMessage: null,
+      });
       // 今見えている形をそのまま角度指定として1回だけ送り、次からの計算の
       // 出発点(warm start)を今の形に合わせる。全ヒンジを指定するので形は動かない
       if (angles.size > 0) {
@@ -1148,13 +1183,19 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     pullTo: (deg) => {
-      const hinge = get().pullHinge;
-      if (hinge === null) return;
-      get().setDriverAngle(hinge, deg);
+      const { pullHinge, pullMirrorHinge } = get();
+      if (pullHinge === null) return;
+      // 左右対称の相手も同じ角度で動かす(鶴の両羽が一緒に開く)。
+      // 2本まとめて1回の追従計算にするので、送る回数は片側だけのときと同じ
+      const drivers = new Map(get().drivers);
+      drivers.set(pullHinge, deg);
+      if (pullMirrorHinge !== null) drivers.set(pullMirrorHinge, deg);
+      set({ drivers });
+      pose.schedule();
     },
 
     endPull: () => {
-      if (get().pullHinge !== null) set({ pullHinge: null });
+      if (get().pullHinge !== null) set({ pullHinge: null, pullMirrorHinge: null });
     },
 
     setDriverAngle: (hinge, deg) => {
@@ -1361,9 +1402,8 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     setSplitRatio: (ratio) => {
-      const splitRatio = clampSplitRatio(ratio);
-      set({ splitRatio });
-      savePrefs({ splitRatio, mirrorDraw: get().mirrorDraw });
+      set({ splitRatio: clampSplitRatio(ratio) });
+      persistPrefs();
     },
 
     moveStep: async (number, delta) => {

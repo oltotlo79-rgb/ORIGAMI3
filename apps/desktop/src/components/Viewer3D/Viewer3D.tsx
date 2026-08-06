@@ -120,6 +120,7 @@ export function Viewer3D({ fitRef }: Props) {
   const techniqueDraft = useAppStore((s) => s.techniqueDraft);
   const foldReady = useAppStore(canFoldNow);
   const pullHinge = useAppStore((s) => s.pullHinge);
+  const pullMirrorHinge = useAppStore((s) => s.pullMirrorHinge);
   const pullBlocked = useAppStore(pullBlockedOf);
   // 「今どのモードで何ができるか」を1行で常に出す(UI-009)。
   // 文字列を返す選択なので、内容が変わらない限り再描画は起きない
@@ -127,6 +128,7 @@ export function Viewer3D({ fitRef }: Props) {
     viewerHint({
       pullBlocked: pullBlockedOf(s),
       pulling: s.pullHinge !== null,
+      pullMirrored: s.pullMirrorHinge !== null,
       hasDoc: s.doc !== null,
       playing: s.playing,
       playT: s.playT,
@@ -233,9 +235,14 @@ export function Viewer3D({ fitRef }: Props) {
       scene.setHighlight(toHighlight(segments));
       return;
     }
-    // 引いている間は、いま角度を変えている折り線だけを色で示す(UI-007)
+    // 引いている間は、いま角度を変えている折り線だけを色で示す(UI-007)。
+    // 左右同時のときは対称の相手にも同じ色を付け、両方動くことを見せる
     const selected = new Set(
-      s.pullHinge !== null ? [s.pullHinge] : s.selection.edgeIds,
+      s.pullHinge !== null
+        ? s.pullMirrorHinge !== null
+          ? [s.pullHinge, s.pullMirrorHinge]
+          : [s.pullHinge]
+        : s.selection.edgeIds,
     );
     scene.setHighlight(
       scene.content.hingeSegments.filter((seg) => selected.has(seg.edgeId)),
@@ -255,6 +262,7 @@ export function Viewer3D({ fitRef }: Props) {
     techniqueDraft,
     activeTool,
     pullHinge,
+    pullMirrorHinge,
     drawHighlight,
   ]);
 
@@ -382,6 +390,8 @@ export function Viewer3D({ fitRef }: Props) {
             s.frame3d,
             hit.face,
             [hit.point.x, hit.point.y, hit.point.z],
+            [0, 0, 0],
+            s.pullMirror,
           );
         if (hit && plan) {
           e.currentTarget.setPointerCapture(e.pointerId);
@@ -392,7 +402,11 @@ export function Viewer3D({ fitRef }: Props) {
             x,
             y,
           };
-          s.beginPull(plan.hinge, hingeAnglesFromFrame(s.doc, s.faces, s.frame3d));
+          s.beginPull(
+            plan.hinge,
+            hingeAnglesFromFrame(s.doc, s.faces, s.frame3d),
+            plan.mirrorHinge,
+          );
         }
         return;
       }

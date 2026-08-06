@@ -50,6 +50,8 @@ export interface HintState extends FoldReadiness {
   pullBlocked: string | null;
   /** 今つかんで引いている最中か */
   pulling: boolean;
+  /** 引いている折り線に左右対称の相手がいて、一緒に動かしているか(UI-007) */
+  pullMirrored: boolean;
   /** 折り線を引いて確定待ちか */
   hasFoldDraft: boolean;
   /** 技法を選んでいるか */
@@ -73,7 +75,9 @@ export function viewerHint(s: HintState): string {
   if (s.tool === "pull") {
     if (s.pullBlocked) return `今は引けません: ${s.pullBlocked}`;
     if (s.pulling)
-      return "引いている折り線を黄色で示しています。離すとその形のまま残ります";
+      return s.pullMirrored
+        ? "左右対称に動かしています。黄色い2本の折り線(左右の対)が同じ角度で一緒に動きます。離すとその形のまま残ります"
+        : "引いている折り線を黄色で示しています。離すとその形のまま残ります";
     return PULL_HINT;
   }
   if (s.tool === "technique") {

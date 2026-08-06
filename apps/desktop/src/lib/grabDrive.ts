@@ -9,7 +9,8 @@
 // 折り上がった作品からも引けるように、今見えている立体の形から全ての折り線の
 // 角度を読み取る関数も置く(ソルバーの出発点=warm startをその形に合わせるため)。
 
-import type { Document, Face, Frame3D } from "./types";
+import { MIRROR_EPS, isSameSegment, mirrorAxisX, type Segment } from "./mirror";
+import type { Document, Face, Frame3D, Paper, Vec2 } from "./types";
 
 export type Vec3 = [number, number, number];
 
@@ -228,6 +229,75 @@ export function hingeAnglesFromFrame(
   return out;
 }
 
+/** 展開図の対称軸(点pを通り、単位ベクトルdの向きの直線) */
+interface MirrorLine {
+  p: Vec2;
+  d: Vec2;
+}
+
+/** 直線axで折り返した点 */
+function reflectPoint(q: Vec2, ax: MirrorLine): Vec2 {
+  const w: Vec2 = [q[0] - ax.p[0], q[1] - ax.p[1]];
+  const t = w[0] * ax.d[0] + w[1] * ax.d[1];
+  return [ax.p[0] + 2 * t * ax.d[0] - w[0], ax.p[1] + 2 * t * ax.d[1] - w[1]];
+}
+
+/**
+ * 「左右」を折り返す軸の候補(効かせたい順)。
+ *
+ * まずは紙の縦の中心線(左右対称に線を引く CPE-010 と同じ軸)。ただし、この
+ * アプリの折り操作で折った作品は紙の対角線が体の軸になることが多い(折り鶴は
+ * 正方形を半分に2回折って組み立てるので、首と尾が向かい合う2隅、羽が残りの
+ * 2隅から出る)。そこで正方形の紙では対角線も候補に入れる。
+ * 縦・横に長い紙では対角線は対称軸になり得ないので入れない。
+ */
+function mirrorLines(paper: Paper): MirrorLine[] {
+  const long = Math.max(paper.width_mm, paper.height_mm);
+  const w = long > 0 ? paper.width_mm / long : 0;
+  const h = long > 0 ? paper.height_mm / long : 0;
+  const lines: MirrorLine[] = [{ p: [mirrorAxisX(paper), 0], d: [0, 1] }];
+  if (Math.abs(w - h) <= MIRROR_EPS) {
+    lines.push({ p: [0, 0], d: [Math.SQRT1_2, Math.SQRT1_2] });
+    lines.push({ p: [0, h], d: [Math.SQRT1_2, -Math.SQRT1_2] });
+  }
+  return lines;
+}
+
+/**
+ * 対称軸をはさんで、その折り線と対称の位置にある折り線を探す(UI-007)。
+ * 鶴の羽のように左右対になった折り線を一緒に動かすために使う。
+ *
+ * 次のときは「もう1本動かす意味がない」のでnullを返す(呼ぶ側は1本だけ動かす):
+ *   - その折り線が軸の上に乗っている(折り返しても自分自身)
+ *   - 折り返した線がもとの線と同じ(軸に直交して軸をまたぐ線)
+ *   - 折り返した位置に折り線が無い(左右対称でない展開図)
+ * 相手は「両側に面がある折り線」に限る(輪郭を動かしても形は変わらないため)。
+ */
+export function mirrorHingeOf(
+  doc: Document,
+  faces: Face[],
+  hinge: number,
+  eps = MIRROR_EPS,
+): number | null {
+  const pos = new Map(doc.cp.vertices.map((v) => [v.id, v.pos]));
+  const owners = hingeOwners(faces);
+  const segs: [number, Segment][] = [];
+  for (const e of doc.cp.edges) {
+    const a = pos.get(e.v0);
+    const b = pos.get(e.v1);
+    if (owners.has(e.id) && a && b) segs.push([e.id, [a, b]]);
+  }
+  const seg = segs.find(([id]) => id === hinge)?.[1];
+  if (!seg) return null;
+  for (const ax of mirrorLines(doc.paper)) {
+    const other: Segment = [reflectPoint(seg[0], ax), reflectPoint(seg[1], ax)];
+    if (isSameSegment(seg, other, eps)) continue; // 軸の上・軸に対称な線
+    const found = segs.find(([, s]) => isSameSegment(s, other, eps));
+    if (found) return found[0];
+  }
+  return null;
+}
+
 /** つかんだ紙を引くときに動かす折り線と、その効き具合 */
 export interface PullPlan {
   /** 角度を変える折り線の辺ID */
@@ -236,6 +306,8 @@ export interface PullPlan {
   velocity: Vec3;
   /** 今の角度(度)。ドラッグ量はここからの差として足す */
   baseDeg: number;
+  /** 左右対称の相手の折り線(同じ角度で一緒に動かす)。無ければnull */
+  mirrorHinge: number | null;
 }
 
 /**
@@ -246,6 +318,7 @@ export interface PullPlan {
  * まだ向きが分からない(つかんだ瞬間)ときは dragDir を省くと、単純に
  * モーメントアームがいちばん大きい1本を選ぶ。
  * 経路が無い(つかんだ面が根そのもの)ときは null。
+ * mirror=trueなら、選んだ折り線と左右対称の相手も一緒に動かす相手として返す。
  */
 export function planPull(
   doc: Document,
@@ -254,6 +327,7 @@ export function planPull(
   faceId: number,
   grabPoint: Vec3,
   dragDir: Vec3 = [0, 0, 0],
+  mirror = false,
 ): PullPlan | null {
   const angles = hingeAnglesFromFrame(doc, faces, frame);
   const dir = normalize(dragDir);
@@ -264,8 +338,14 @@ export function planPull(
     const score = dir ? Math.abs(dot(velocity, dir)) : length(velocity);
     if (score <= bestScore) continue;
     bestScore = score;
-    best = { hinge: ax.hinge, velocity, baseDeg: angles.get(ax.hinge) ?? 0 };
+    best = {
+      hinge: ax.hinge,
+      velocity,
+      baseDeg: angles.get(ax.hinge) ?? 0,
+      mirrorHinge: null,
+    };
   }
+  if (best && mirror) best.mirrorHinge = mirrorHingeOf(doc, faces, best.hinge);
   return best;
 }
 

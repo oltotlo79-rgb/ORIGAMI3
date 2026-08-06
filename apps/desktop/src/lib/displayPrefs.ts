@@ -33,11 +33,16 @@ export interface Prefs {
   splitRatio: number;
   /** 左右対称に線を引くか(CPE-010)。次に起動しても同じ描き方に戻る */
   mirrorDraw: boolean;
+  /** 3Dで紙を引くとき、対称の相手の折り線も同時に動かすか(UI-007)。
+   * 折り紙の作品はほとんどが左右対称で、鶴の羽のように両側を一緒に開くのが
+   * 自然なので既定はオン。対称の相手が無い折り線では自動的に1本だけになる */
+  pullMirror: boolean;
 }
 
 export const DEFAULT_PREFS: Prefs = {
   splitRatio: DEFAULT_SPLIT_RATIO,
   mirrorDraw: false,
+  pullMirror: true,
 };
 
 /** 方眼の分割数を範囲内の整数に丸める(入力が数でなければ既定値) */
@@ -90,6 +95,8 @@ export function loadPrefs(storage: StorageLike | null = defaultStorage()): Prefs
     return {
       splitRatio: clampSplitRatio(saved.splitRatio ?? DEFAULT_SPLIT_RATIO),
       mirrorDraw: saved.mirrorDraw === true,
+      // 保存が無い(初めての起動・古い保存)ときは既定のオンのままにする
+      pullMirror: saved.pullMirror !== false,
     };
   } catch {
     return DEFAULT_PREFS;

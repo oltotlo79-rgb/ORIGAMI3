@@ -88,6 +88,8 @@ describe("紙をつかんで引く", () => {
       drivers: new Map(),
       poseAngles: new Map(),
       pullHinge: null,
+      pullMirrorHinge: null,
+      pullMirror: true,
       currentStep: null,
       playT: 1,
       playing: false,
@@ -137,6 +139,57 @@ describe("紙をつかんで引く", () => {
   it("つかんでいないときは角度を変えない", () => {
     useAppStore.getState().pullTo(-150);
     expect(useAppStore.getState().drivers.size).toBe(0);
+  });
+
+  it("左右同時なら、対称の相手の折り線も同じ角度で一緒に送られる", async () => {
+    vi.useFakeTimers();
+    try {
+      useAppStore.setState({ pullMirror: true });
+      const store = useAppStore.getState();
+      // 辺5(つかんだ折り線)と、その左右対称の相手として辺7
+      store.beginPull(5, new Map(), 7);
+      expect(useAppStore.getState().pullMirrorHinge).toBe(7);
+      store.pullTo(-150);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(poseCalls()).toEqual([
+        [
+          { hinge: 5, target_angle_deg: -150 },
+          { hinge: 7, target_angle_deg: -150 },
+        ],
+      ]);
+      // 離すと色付けは消えるが、両方の角度指定は残る
+      store.endPull();
+      expect(useAppStore.getState().pullMirrorHinge).toBeNull();
+      expect(useAppStore.getState().drivers.get(5)).toBe(-150);
+      expect(useAppStore.getState().drivers.get(7)).toBe(-150);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("左右同時を切っていれば、相手が見つかっていても1本だけ送る", async () => {
+    vi.useFakeTimers();
+    try {
+      useAppStore.setState({ pullMirror: false });
+      const store = useAppStore.getState();
+      store.beginPull(5, new Map(), 7);
+      expect(useAppStore.getState().pullMirrorHinge).toBeNull();
+      store.pullTo(-150);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(poseCalls()).toEqual([[{ hinge: 5, target_angle_deg: -150 }]]);
+      expect(useAppStore.getState().drivers.has(7)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("引いている最中に左右同時を切ると、その場で相手が外れる", () => {
+    useAppStore.setState({ pullMirror: true });
+    useAppStore.getState().beginPull(5, new Map(), 7);
+    useAppStore.getState().setPullMirror(false);
+    expect(useAppStore.getState().pullMirrorHinge).toBeNull();
+    useAppStore.getState().pullTo(-150);
+    expect(useAppStore.getState().drivers.has(7)).toBe(false);
   });
 
   it("紙が無ければ引き始められない", () => {

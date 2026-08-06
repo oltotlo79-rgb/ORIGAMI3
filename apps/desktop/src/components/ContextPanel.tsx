@@ -557,6 +557,42 @@ function TechniqueDraftContent({ draft }: { draft: TechniqueDraft }) {
   );
 }
 
+/**
+ * 「引く」ツールを選んでいるときの内容(UI-007)。
+ * 左右同時に動かすかの切替をここに置く(ツールレールも常設区画も増やさない)。
+ * 折り紙の作品はほとんどが左右対称なので既定はオン。片方だけ形を変えたいとき
+ * (くちばしの角度を少しだけ変える等)に切れるようにしてある。
+ */
+function PullContent() {
+  const pullMirror = useAppStore((s) => s.pullMirror);
+  const setPullMirror = useAppStore((s) => s.setPullMirror);
+
+  return (
+    <div>
+      <p className="hint">
+        立体表示で紙をドラッグすると、折り線のつじつまを合わせて全体が連動して動きます
+        (右ドラッグで視点を回す)
+      </p>
+      <div className="button-row">
+        <label>
+          <input
+            type="checkbox"
+            aria-label="左右対称に動かす"
+            checked={pullMirror}
+            onChange={(e) => setPullMirror(e.target.checked)}
+          />
+          左右対称に動かす
+        </label>
+        <span className="hint">
+          {pullMirror
+            ? "作品の対称軸をはさんで対になる折り線も同じ角度で動きます(鶴の両羽が一緒に開きます)。対になる折り線が無いところでは、そこだけが動きます"
+            : "つかんだ側の折り線だけが動きます(片方の羽だけ形を変えたいときはこちら)"}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function SelectionContent() {
   const doc = useAppStore((s) => s.doc);
   const selection = useAppStore((s) => s.selection);
@@ -634,6 +670,7 @@ export function ContextPanel() {
   const replayWarnings = useAppStore((s) => s.replayWarnings);
   const errorMessage = useAppStore((s) => s.errorMessage);
   const currentStep = useAppStore((s) => s.currentStep);
+  const activeTool = useAppStore((s) => s.activeTool);
   const foldDraft = useAppStore((s) => s.foldDraft);
   const techniqueDraft = useAppStore((s) => s.techniqueDraft);
   // 同じ文言は1回だけ出す(展開図の検査結果には自動再生の警告も合流している)
@@ -654,7 +691,7 @@ export function ContextPanel() {
           <FoldDraftContent draft={foldDraft} />
         ) : (
           <>
-            <SelectionContent />
+            {activeTool === "pull" ? <PullContent /> : <SelectionContent />}
             <FoldControls />
           </>
         )}
