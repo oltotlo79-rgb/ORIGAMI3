@@ -5,11 +5,18 @@ import { useCallback, useEffect, useRef } from "react";
 import type { Vec2 } from "../../lib/types";
 import { useAppStore } from "../../store/appStore";
 import { constructHint } from "../../lib/construct";
+import {
+  curveHint,
+  firstCrossing,
+  rulingLines,
+  type CurveOptions,
+} from "../../lib/curve";
 import { violationReason } from "../../lib/flatFoldHint";
 import { mirrorAxisX, mirrorPoint } from "../../lib/mirror";
-import type { Document } from "../../lib/types";
+import type { Document, EdgeKind } from "../../lib/types";
 import {
   constructDone,
+  curveDraft,
   initialEphemeralState,
   onKeyDown,
   onMouseDown,
@@ -33,6 +40,29 @@ function violationTooltip(doc: Document, vertexId: number | null) {
   return v ? { pos: v.pos, text: violationReason(doc, vertexId) } : null;
 }
 
+/**
+ * 描いている最中の曲線と、確定したときに一緒に入る「紙が曲がるための線」を
+ * まとめて返す(確定前に何が入るかを見せるため。設計原則3b)。
+ * 曲がるための線は、折り目の両側で曲がる向きが逆になるので線種を分ける。
+ */
+function curvePreviewPaths(
+  doc: Document,
+  points: Vec2[],
+  kind: EdgeKind,
+  curve: CurveOptions,
+): { points: Vec2[]; kind: EdgeKind }[] {
+  const paths = [{ points, kind }];
+  if (!curve.rulings || kind === "Aux") return paths;
+  const long = Math.max(doc.paper.width_mm, doc.paper.height_mm);
+  const paper: Vec2 = [doc.paper.width_mm / long, doc.paper.height_mm / long];
+  const opposite: EdgeKind = kind === "Mountain" ? "Valley" : "Mountain";
+  for (const r of rulingLines(points, paper)) {
+    paths.push({ points: [r.at, firstCrossing(doc, r.at, r.concave)], kind: opposite });
+    paths.push({ points: [r.at, firstCrossing(doc, r.at, r.convex)], kind });
+  }
+  return paths;
+}
+
 export function CpEditor({ fitRef }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewRef = useRef<ViewTransform | null>(null);
@@ -45,11 +75,12 @@ export function CpEditor({ fitRef }: Props) {
   const docEpoch = useAppStore((s) => s.docEpoch);
   const violations = useAppStore((s) => s.violations);
   const construct = useAppStore((s) => s.construct);
+  const curve = useAppStore((s) => s.curve);
   const mirrorDraw = useAppStore((s) => s.mirrorDraw);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
-    const { doc, selection, activeTool, violations, construct, mirrorDraw } =
+    const { doc, selection, activeTool, violations, construct, curve, mirrorDraw } =
       useAppStore.getState();
     if (!canvas || !doc) return;
     const w = canvas.clientWidth;
@@ -65,10 +96,14 @@ export function CpEditor({ fitRef }: Props) {
     const kind = previewKind(activeTool);
     // 左右対称のときは対称軸を薄く出し、引いている最中の線も反対側に見せる
     const axisX = mirrorDraw ? mirrorAxisX(doc.paper) : null;
+    const curveMode = kind !== undefined && curve.enabled && activeTool !== "fold";
     const preview =
-      kind && st.pendingStart && st.cursorWorld
+      kind && !curveMode && st.pendingStart && st.cursorWorld
         ? { a: st.pendingStart, b: st.hoverSnap?.pos ?? st.cursorWorld, kind }
         : null;
+    // 曲線モードでは、確定したときに入るのと同じ折れ線をそのまま見せる(設計原則3b)
+    const draft = curveMode ? curveDraft(st, curve) : null;
+    const previewPaths = draft && kind ? curvePreviewPaths(doc, draft, kind, curve) : [];
     const overlay: RenderOverlay = {
       hoverSnap: kind ? st.hoverSnap : null,
       preview,
@@ -81,19 +116,23 @@ export function CpEditor({ fitRef }: Props) {
               kind: preview.kind,
             }
           : null,
+      previewPaths,
       marquee:
         st.marqueeStart && st.marqueeEnd ? { a: st.marqueeStart, b: st.marqueeEnd } : null,
       violations,
-      constructPoints: activeTool === "construct" ? st.constructPoints : [],
+      constructPoints:
+        activeTool === "construct" ? st.constructPoints : curveMode ? st.curvePoints : [],
       // 作図補助では次にすることを常に1行で出す(設計原則3b)
       hint: st.vertexDrag
         ? "点を動かしています(離すと決まります。Escでやめる)"
         : activeTool === "construct"
           ? constructHint(construct.kind, constructDone(st), construct.divisions)
-          : // 今どの描き方かが画面の上で分かるようにする(設計原則3b)
-            mirrorDraw
-            ? "左右対称に描いています(線を引くときだけ効きます)"
-            : null,
+          : curveMode
+            ? curveHint(curve.shape, st.curvePoints.length, curve.rulings)
+            : // 今どの描き方かが画面の上で分かるようにする(設計原則3b)
+              mirrorDraw
+              ? "左右対称に描いています(線を引くときだけ効きます)"
+              : null,
       tooltip: violationTooltip(doc, st.hoverViolation),
       vertexDrag: st.vertexDrag
         ? { id: st.vertexDrag.id, to: st.vertexDrag.to }
@@ -115,6 +154,7 @@ export function CpEditor({ fitRef }: Props) {
       tool: s.activeTool,
       selection: s.selection,
       construct: s.construct,
+      curve: s.curve,
       violations: s.violations,
       state: stateRef.current,
       setView: (v) => {
@@ -122,6 +162,7 @@ export function CpEditor({ fitRef }: Props) {
       },
       applyEdit: s.applyEdit,
       drawSegment: (a, b, kind) => void s.drawSegment(a, b, kind),
+      drawCurve: (points, kind) => void s.drawCurve(points, kind),
       setSelection: s.setSelection,
       beginFoldDraft: s.beginFoldDraft,
     };
@@ -130,7 +171,7 @@ export function CpEditor({ fitRef }: Props) {
   // ストアの変化(線の追加・選択・ツール切替・畳めない点・作図の選び方)で再描画
   useEffect(() => {
     draw();
-  }, [doc, selection, activeTool, violations, construct, mirrorDraw, draw]);
+  }, [doc, selection, activeTool, violations, construct, curve, mirrorDraw, draw]);
 
   // 新規作成・ファイルを開いた直後は紙全体が見える表示に戻す
   useEffect(() => {
@@ -148,6 +189,7 @@ export function CpEditor({ fitRef }: Props) {
     st.marqueeEnd = null;
     st.constructPoints = [];
     st.constructSeg = null;
+    st.curvePoints = [];
     st.vertexDrag = null;
     draw();
   }, [activeTool, draw]);

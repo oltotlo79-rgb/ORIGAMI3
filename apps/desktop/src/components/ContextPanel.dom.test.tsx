@@ -7,6 +7,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { ContextPanel } from "./ContextPanel";
 import { useAppStore } from "../store/appStore";
 import type { Document } from "../lib/types";
+import { DEFAULT_CURVE } from "../lib/curve";
 
 vi.mock("../ipc/client", () => ({
   sequenceApply: vi.fn(),
@@ -296,5 +297,49 @@ describe("合わせて折る(パネル)", () => {
     render(<ContextPanel />);
     expect(screen.getByText(/届きません/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "折る" })).toBeNull();
+  });
+});
+
+describe("曲線の折り目の設定(CPE-011)", () => {
+  /** 線ツールを選んで何も選択していない状態 */
+  function seedLineTool() {
+    seed(new Map());
+    useAppStore.setState({
+      activeTool: "valley",
+      selection: { edgeIds: [], vertexIds: [] },
+      alignDraft: null,
+      curve: DEFAULT_CURVE,
+    });
+  }
+
+  it("線ツールのときだけ曲線の切り替えが出る", () => {
+    seedLineTool();
+    render(<ContextPanel />);
+    expect(screen.getByLabelText("曲線で描く")).toBeTruthy();
+    cleanup();
+    useAppStore.setState({ activeTool: "select" });
+    render(<ContextPanel />);
+    expect(screen.queryByLabelText("曲線で描く")).toBeNull();
+  });
+
+  it("曲線に切り替えると描き方・分割・曲がるための線を選べる", () => {
+    seedLineTool();
+    render(<ContextPanel />);
+    // 切る前は細かい設定を出さない(画面を混ませない)
+    expect(screen.queryByLabelText("紙が曲がるための線も引く")).toBeNull();
+    fireEvent.click(screen.getByLabelText("曲線で描く"));
+    expect(useAppStore.getState().curve.enabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("描き方"), { target: { value: "bezier" } });
+    expect(useAppStore.getState().curve.shape).toBe("bezier");
+    // 分割は既定で自動、指定に切り替えられる
+    expect(useAppStore.getState().curve.segments).toBeNull();
+    fireEvent.click(screen.getByLabelText("分割の細かさを自分で決める"));
+    expect(useAppStore.getState().curve.segments).toBe(16);
+    // 曲がるための線は既定でオン(これが無いと曲線折りは折れない)
+    const rulings = screen.getByLabelText("紙が曲がるための線も引く");
+    expect((rulings as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(rulings);
+    expect(useAppStore.getState().curve.rulings).toBe(false);
+    expect(screen.getByText(/このままでは折れません/)).toBeTruthy();
   });
 });

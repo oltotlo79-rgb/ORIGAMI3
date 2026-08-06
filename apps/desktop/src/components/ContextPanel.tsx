@@ -10,7 +10,14 @@ import {
   type AlignDraft,
   type FoldDraft,
   type TechniqueDraft,
+  type ToolId,
 } from "../store/appStore";
+import {
+  CURVE_LABEL,
+  DEFAULT_CURVE_TOL,
+  MAX_CURVE_SEGMENTS,
+  type CurveShape,
+} from "../lib/curve";
 import { ALIGN_LABELS, ALIGN_STEPS, type AlignMode } from "../lib/alignFold";
 import {
   TECHNIQUE_KINDS,
@@ -27,6 +34,9 @@ const KIND_LABEL: Record<EdgeKind, string> = {
   Valley: "谷折り",
   Aux: "補助線",
 };
+
+/** 線を引くツール(曲線モードの切り替えを出す対象) */
+const LINE_TOOLS: ToolId[] = ["mountain", "valley", "aux"];
 
 /** 角度の指定できる範囲(度)。+=山折り、−=谷折り、±180=完全に折る */
 const ANGLE_MIN = -180;
@@ -738,6 +748,90 @@ function PullContent() {
   );
 }
 
+/**
+ * 曲線の折り目(CPE-011)の設定。山折り・谷折り・補助線ツールのときだけ出す。
+ * ツールレールは10個で上限なので曲線用のツールは増やさず、既存の線ツールの
+ * 「直線/曲線」の切り替えとしてここに置く(線を引く操作の設定は1か所にまとまる)。
+ */
+function CurveRow() {
+  const curve = useAppStore((s) => s.curve);
+  const setCurve = useAppStore((s) => s.setCurve);
+  const shapes: CurveShape[] = ["arc", "bezier"];
+
+  return (
+    <div className="button-row">
+      <label>
+        <input
+          type="checkbox"
+          aria-label="曲線で描く"
+          checked={curve.enabled}
+          onChange={(e) => setCurve({ enabled: e.target.checked })}
+        />
+        曲線で描く
+      </label>
+      {!curve.enabled ? (
+        <span className="hint">
+          曲線の折り目(曲線折り)を引きます。細かい折れ線として展開図に入ります
+        </span>
+      ) : (
+        <>
+          <label htmlFor="curve-shape">描き方</label>
+          <select
+            id="curve-shape"
+            value={curve.shape}
+            onChange={(e) => setCurve({ shape: e.target.value as CurveShape })}
+          >
+            {shapes.map((s) => (
+              <option key={s} value={s}>
+                {CURVE_LABEL[s]}
+                {s === "arc" ? "(3点)" : "(4点・S字も可)"}
+              </option>
+            ))}
+          </select>
+          <label>
+            <input
+              type="checkbox"
+              aria-label="分割の細かさを自分で決める"
+              checked={curve.segments !== null}
+              onChange={(e) => setCurve({ segments: e.target.checked ? 16 : null })}
+            />
+            分割数を指定
+          </label>
+          {curve.segments === null ? (
+            <span className="hint">
+              自動(曲線と折れ線のずれが紙の長辺の
+              {(DEFAULT_CURVE_TOL * 100).toFixed(1)}%以内になるまで細かくします)
+            </span>
+          ) : (
+            <NumberInput
+              id="curve-segments"
+              value={curve.segments}
+              min={1}
+              onCommit={(v) =>
+                setCurve({ segments: Math.min(MAX_CURVE_SEGMENTS, Math.round(v)) })
+              }
+            />
+          )}
+          <label>
+            <input
+              type="checkbox"
+              aria-label="紙が曲がるための線も引く"
+              checked={curve.rulings}
+              onChange={(e) => setCurve({ rulings: e.target.checked })}
+            />
+            曲がるための線も引く
+          </label>
+          <span className="hint">
+            {curve.rulings
+              ? "曲線の両側に、紙が曲がるための線を入れます(実際の紙と同じで、これが無いと曲線折りは折れません)"
+              : "折り線だけを引きます(展開図の見た目は素直ですが、このままでは折れません)"}
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+
 function SelectionContent() {
   const doc = useAppStore((s) => s.doc);
   const selection = useAppStore((s) => s.selection);
@@ -840,6 +934,7 @@ export function ContextPanel() {
         ) : (
           <>
             {activeTool === "pull" ? <PullContent /> : <SelectionContent />}
+            {LINE_TOOLS.includes(activeTool) && <CurveRow />}
             {activeTool === "fold" && <AlignStartRow />}
             <FoldControls />
           </>

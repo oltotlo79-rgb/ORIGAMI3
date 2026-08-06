@@ -8,6 +8,7 @@ import type { Selection, ToolId } from "../../store/appStore";
 import { screenToWorld, type ViewTransform } from "./renderer";
 import { paperExtent, snap, snapForMove, type SnapResult } from "./snap";
 import { CONSTRUCT_STEPS, constructLines, type ConstructOptions } from "../../lib/construct";
+import { CURVE_STEPS, curvePolyline, type CurveOptions } from "../../lib/curve";
 
 /** 吸着半径(px) */
 export const SNAP_RADIUS_PX = 12;
@@ -41,6 +42,8 @@ export interface EphemeralState {
   hoverViolation: number | null;
   /** ドラッグ中の点(CPE-006)。toは離したときに確定する位置(それまではプレビュー) */
   vertexDrag: { id: number; from: Vec2; to: Vec2 } | null;
+  /** 曲線モードでクリック済みの点(CPE-011)。順は[始点, 終点, 形を決める点…] */
+  curvePoints: Vec2[];
 }
 
 export function initialEphemeralState(): EphemeralState {
@@ -56,7 +59,33 @@ export function initialEphemeralState(): EphemeralState {
     constructSeg: null,
     hoverViolation: null,
     vertexDrag: null,
+    curvePoints: [],
   };
+}
+
+/**
+ * 曲線モードのクリックを1回分受け取る(CPE-011)。
+ * 必要な数がそろったら折れ線として引く。まだ足りなければ点を覚えるだけ。
+ */
+function onCurveClick(ctx: InteractionCtx, pos: Vec2, kind: EdgeKind): void {
+  const st = ctx.state;
+  const need = CURVE_STEPS[ctx.curve.shape];
+  // 始点と同じところをもう一度押しても線にならないので受け付けない
+  if (st.curvePoints.length === 1 && dist(st.curvePoints[0], pos) <= 1e-9) return;
+  st.curvePoints.push(pos);
+  if (st.curvePoints.length < need) return;
+  const pts = curvePolyline(ctx.curve.shape, st.curvePoints, {
+    segments: ctx.curve.segments,
+  });
+  st.curvePoints = [];
+  if (pts && pts.length >= 2) ctx.drawCurve(pts, kind);
+}
+
+/** 描いている最中の曲線(カーソル位置を仮の点として補った形)。まだ描けなければnull */
+export function curveDraft(state: EphemeralState, curve: CurveOptions): Vec2[] | null {
+  if (state.curvePoints.length === 0 || !state.cursorWorld) return null;
+  const pts = [...state.curvePoints, state.cursorWorld];
+  return curvePolyline(curve.shape, pts, { segments: curve.segments });
 }
 
 /** 作図補助で集め終えたクリックの数 */
@@ -101,6 +130,8 @@ export interface InteractionCtx {
   selection: Selection;
   /** 作図補助の選び方(どの作図か・等分数・角度の刻み) */
   construct: ConstructOptions;
+  /** 曲線の折り目の選び方(直線/曲線・描き方・分割・曲がるための線) */
+  curve: CurveOptions;
   /** 平らに畳めない点のID(Rust側の判定結果)。橙色の丸で知らせる */
   violations: number[];
   state: EphemeralState; // その場で書き換える
@@ -108,6 +139,8 @@ export interface InteractionCtx {
   applyEdit: (op: EditOp) => void;
   /** 線を1本引く(左右対称のときは反対側にも引かれる。CPE-010) */
   drawSegment: (a: Vec2, b: Vec2, kind: EdgeKind) => void;
+  /** 曲線を折れ線として引く(曲がるための線も設定に応じて一緒に引かれる) */
+  drawCurve: (points: Vec2[], kind: EdgeKind) => void;
   setSelection: (selection: Selection) => void;
   /** 折るツールで引いた線を確定前の状態としてストアへ渡す */
   beginFoldDraft: (line: [Vec2, Vec2], source: "2d" | "3d") => void;
@@ -214,6 +247,11 @@ export function onMouseDown(ctx: InteractionCtx, screen: Vec2, button: number): 
   const pickTol = PICK_TOLERANCE_PX / ctx.view.scale;
 
   const kind = TOOL_KIND[ctx.tool];
+  if (kind && ctx.curve.enabled) {
+    // 曲線モード(CPE-011): 始点・終点・形を決める点を順にクリックする
+    onCurveClick(ctx, snap(ctx.doc, world, snapRadius)?.pos ?? world, kind);
+    return;
+  }
   if (kind || ctx.tool === "fold") {
     // 線ツール・折るツール: 1クリック目=始点、2クリック目=確定
     const pos = snap(ctx.doc, world, snapRadius)?.pos ?? world;
@@ -356,6 +394,7 @@ export function onKeyDown(ctx: InteractionCtx, key: string): void {
     ctx.state.marqueeEnd = null;
     ctx.state.constructPoints = [];
     ctx.state.constructSeg = null;
+    ctx.state.curvePoints = [];
     // 動かしかけの点は元の位置に戻す(まだ確定していない)
     ctx.state.vertexDrag = null;
     return;

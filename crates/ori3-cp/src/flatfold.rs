@@ -24,6 +24,11 @@ use ori3_model::{CreasePattern, EPS, EdgeKind, VertexId};
 /// 既存頂点へEPS吸着されるため、正しい図形なら誤差は丸め程度に収まる。
 const ANGLE_TOL: f64 = 1e-6;
 
+/// 「1本の曲線の途中」とみなす曲がりの上限(ラジアン、45°)。
+/// これを超える折れ方は曲線の近似ではなく意図した折れ曲がりなので、
+/// 印をまとめず1点ずつ知らせる。
+const MAX_CURVE_BEND: f64 = std::f64::consts::PI / 4.0;
+
 /// 平らに畳めない疑いのある内部頂点のIDを昇順で返す(空=問題なし)。
 /// 結果は入力CPに対して決定的(BTreeMapの昇順走査に基づく)。
 #[must_use]
@@ -55,12 +60,102 @@ pub fn local_violations(cp: &CreasePattern) -> Vec<VertexId> {
         incident.entry(e.v1).or_default().push((p0 - p1, e.kind));
     }
 
-    incident
+    let violating: Vec<VertexId> = incident
         .iter()
         .filter(|(v, edges)| !on_border.contains(v) && edges.len() >= 2)
         .filter(|(_, edges)| !maekawa_ok(edges) || !kawasaki_ok(edges))
         .map(|(v, _)| *v)
-        .collect()
+        .collect();
+    collapse_curve_chains(cp, &incident, &on_border, violating)
+}
+
+/// 曲線の折り目の途中の点か。
+///
+/// その点に集まる折り目のうち「1本につながって見える組」(同じ線種で向きが
+/// ほぼ正反対)を探し、その曲がりがわずかなら1本の曲線の途中とみなす。
+/// 曲がりが0(まっすぐ)なら普通の交点なので数えない(まっすぐな折り目が
+/// 並んだだけの点まで間引いてしまわないため)。曲がりが[`MAX_CURVE_BEND`]を
+/// 超える折れ方は曲線ではなく「折れ曲がり」なので、その点は個別に知らせる。
+fn is_curve_vertex(edges: &[(DVec2, EdgeKind)]) -> bool {
+    let mut best = f64::MAX;
+    for (i, (d0, k0)) in edges.iter().enumerate() {
+        for (d1, k1) in &edges[i + 1..] {
+            if k0 != k1 {
+                continue;
+            }
+            // 2本のなす角と180°との差 = この点での折れ線の曲がり。
+            // ぴったりまっすぐな組(別の折り目が通り抜けているだけ)は数えない
+            let bend = (std::f64::consts::PI - d0.angle_to(*d1).abs()).abs();
+            if bend > ANGLE_TOL {
+                best = best.min(bend);
+            }
+        }
+    }
+    best <= MAX_CURVE_BEND
+}
+
+/// 一続きの曲線の折り目については、印を1つだけ残す。
+///
+/// 曲線は細かい折れ線として入るため、そのままだと1本の曲線に数十個の橙色の丸が
+/// 並んで画面が読めなくなる。問題を隠さないよう「1本につき1つ」は必ず残し、
+/// 数だけ減らす(曲線以外の点は1つも間引かない)。
+fn collapse_curve_chains(
+    cp: &CreasePattern,
+    incident: &BTreeMap<VertexId, Vec<(DVec2, EdgeKind)>>,
+    on_border: &BTreeSet<VertexId>,
+    violating: Vec<VertexId>,
+) -> Vec<VertexId> {
+    let curve: BTreeSet<VertexId> = incident
+        .iter()
+        .filter(|(v, e)| !on_border.contains(v) && is_curve_vertex(e))
+        .map(|(v, _)| *v)
+        .collect();
+    if curve.is_empty() {
+        return violating;
+    }
+    // 曲線の途中の点から折り目1本でつながる先までを「その曲線のまわり」とみなす。
+    // 曲がるための線の行き止まり(曲線から出て隣の折り目に突き当たる点)も
+    // 曲線があるせいでできた点なので、同じまとまりに入れる
+    let mut adj: BTreeMap<VertexId, Vec<VertexId>> = BTreeMap::new();
+    for e in &cp.edges {
+        if e.kind == EdgeKind::Aux || !(curve.contains(&e.v0) || curve.contains(&e.v1)) {
+            continue;
+        }
+        adj.entry(e.v0).or_default().push(e.v1);
+        adj.entry(e.v1).or_default().push(e.v0);
+    }
+    // 連結成分ごとに、違反している点のうち先頭の1つだけを残す
+    let violating_set: BTreeSet<VertexId> = violating.iter().copied().collect();
+    let mut seen: BTreeSet<VertexId> = BTreeSet::new();
+    let mut drop: BTreeSet<VertexId> = BTreeSet::new();
+    for &start in &curve {
+        if !seen.insert(start) {
+            continue;
+        }
+        let mut stack = vec![start];
+        let mut group = vec![start];
+        while let Some(v) = stack.pop() {
+            for &w in adj.get(&v).map(Vec::as_slice).unwrap_or(&[]) {
+                if seen.insert(w) {
+                    group.push(w);
+                    // 広げていくのは曲線の途中の点だけ(隣は行き止まりとして入れる)
+                    if curve.contains(&w) {
+                        stack.push(w);
+                    }
+                }
+            }
+        }
+        // 曲線とみなすのは、曲がった点が3つ以上つながっているときだけ。
+        // たまたま少し曲がって見える点1つ2つで、まわりの印まで消さないための歯止め
+        if group.iter().filter(|v| curve.contains(v)).count() < 3 {
+            continue;
+        }
+        group.sort_unstable();
+        let mut hit = group.iter().filter(|v| violating_set.contains(v));
+        hit.next(); // 先頭の1つは残す
+        drop.extend(hit);
+    }
+    violating.into_iter().filter(|v| !drop.contains(v)).collect()
 }
 
 /// 前川定理: 山の本数 − 谷の本数 = ±2。

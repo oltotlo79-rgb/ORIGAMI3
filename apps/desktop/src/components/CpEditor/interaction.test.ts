@@ -4,6 +4,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   constructDone,
+  curveDraft,
   initialEphemeralState,
   onKeyDown,
   onMouseDown,
@@ -12,6 +13,7 @@ import {
   type InteractionCtx,
 } from "./interaction";
 import { DEFAULT_CONSTRUCT, type ConstructOptions } from "../../lib/construct";
+import { DEFAULT_CURVE, type CurveOptions } from "../../lib/curve";
 import type { Document, EdgeKind, EditOp, Vec2 } from "../../lib/types";
 
 /** 1辺1.0の正方形(輪郭だけ)の作品 */
@@ -44,24 +46,31 @@ function squareDoc(): Document {
 /** 正規化座標 → 画面座標(scale=500、y軸反転) */
 const toScreen = (p: Vec2): Vec2 => [p[0] * 500, 500 - p[1] * 500];
 
-function makeCtx(construct: Partial<ConstructOptions> = {}, violations: number[] = []) {
+function makeCtx(
+  construct: Partial<ConstructOptions> = {},
+  violations: number[] = [],
+  curve: Partial<CurveOptions> = {},
+) {
   const applyEdit = vi.fn<(op: EditOp) => void>();
   const drawSegment = vi.fn<(a: Vec2, b: Vec2, kind: EdgeKind) => void>();
+  const drawCurve = vi.fn<(points: Vec2[], kind: EdgeKind) => void>();
   const ctx: InteractionCtx = {
     doc: squareDoc(),
     view: { scale: 500, offsetX: 0, offsetY: 500 },
     tool: "construct",
     selection: { edgeIds: [], vertexIds: [] },
     construct: { ...DEFAULT_CONSTRUCT, ...construct },
+    curve: { ...DEFAULT_CURVE, ...curve },
     violations,
     state: initialEphemeralState(),
     setView: vi.fn(),
     applyEdit,
     drawSegment,
+    drawCurve,
     setSelection: vi.fn(),
     beginFoldDraft: vi.fn(),
   };
-  return { ctx, applyEdit, drawSegment };
+  return { ctx, applyEdit, drawSegment, drawCurve };
 }
 
 describe("作図補助の操作", () => {
@@ -180,5 +189,73 @@ describe("線ツール", () => {
     expect(drawSegment.mock.calls[0][2]).toBe("Mountain");
     // 線の追加はdrawSegment経由に一本化する(直接の編集要求は出さない)
     expect(applyEdit).not.toHaveBeenCalled();
+  });
+});
+
+describe("曲線の折り目を描く", () => {
+  it("円弧は3回クリックするまで引かれず、そろったら折れ線として引かれる", () => {
+    const { ctx, drawCurve, drawSegment } = makeCtx({}, [], { enabled: true });
+    ctx.tool = "valley";
+    onMouseDown(ctx, toScreen([0.1, 0.2]), 0);
+    onMouseDown(ctx, toScreen([0.9, 0.2]), 0);
+    expect(drawCurve).not.toHaveBeenCalled();
+    expect(drawSegment).not.toHaveBeenCalled(); // 直線として引いてしまわない
+    onMouseDown(ctx, toScreen([0.5, 0.5]), 0);
+    expect(drawCurve).toHaveBeenCalledTimes(1);
+    const [points, kind] = drawCurve.mock.calls[0];
+    expect(kind).toBe("Valley");
+    expect(points.length).toBeGreaterThan(2); // 折れ線になっている
+    expect(points[0]).toEqual([0.1, 0.2]);
+    expect(points[points.length - 1]).toEqual([0.9, 0.2]);
+    expect(ctx.state.curvePoints).toEqual([]); // 次の曲線のために空に戻る
+  });
+
+  it("ベジェは4回クリックで引かれる", () => {
+    const { ctx, drawCurve } = makeCtx({}, [], { enabled: true, shape: "bezier" });
+    ctx.tool = "mountain";
+    for (const p of [
+      [0.1, 0.1],
+      [0.9, 0.1],
+      [0.2, 0.8],
+      [0.8, 0.8],
+    ] as Vec2[]) {
+      onMouseDown(ctx, toScreen(p), 0);
+    }
+    expect(drawCurve).toHaveBeenCalledTimes(1);
+    expect(drawCurve.mock.calls[0][1]).toBe("Mountain");
+  });
+
+  it("Escで描きかけの曲線をやめられる", () => {
+    const { ctx, drawCurve } = makeCtx({}, [], { enabled: true });
+    ctx.tool = "valley";
+    onMouseDown(ctx, toScreen([0.1, 0.2]), 0);
+    onMouseDown(ctx, toScreen([0.9, 0.2]), 0);
+    onKeyDown(ctx, "Escape");
+    expect(ctx.state.curvePoints).toEqual([]);
+    onMouseDown(ctx, toScreen([0.5, 0.5]), 0);
+    expect(drawCurve).not.toHaveBeenCalled();
+  });
+
+  it("描いている最中はカーソルの位置で形が決まる(プレビュー)", () => {
+    const { ctx } = makeCtx({}, [], { enabled: true });
+    ctx.tool = "valley";
+    expect(curveDraft(ctx.state, ctx.curve)).toBeNull(); // まだ何もない
+    onMouseDown(ctx, toScreen([0.1, 0.2]), 0);
+    onMouseDown(ctx, toScreen([0.9, 0.2]), 0);
+    onMouseMove(ctx, toScreen([0.5, 0.6]));
+    const draft = curveDraft(ctx.state, ctx.curve);
+    expect((draft ?? []).length).toBeGreaterThan(2);
+    // カーソルを動かすと形も変わる
+    onMouseMove(ctx, toScreen([0.5, 0.3]));
+    expect(curveDraft(ctx.state, ctx.curve)).not.toEqual(draft);
+  });
+
+  it("曲線モードを切っていれば今までどおり2クリックの直線になる", () => {
+    const { ctx, drawSegment, drawCurve } = makeCtx();
+    ctx.tool = "valley";
+    onMouseDown(ctx, toScreen([0.1, 0.2]), 0);
+    onMouseDown(ctx, toScreen([0.9, 0.2]), 0);
+    expect(drawSegment).toHaveBeenCalledTimes(1);
+    expect(drawCurve).not.toHaveBeenCalled();
   });
 });

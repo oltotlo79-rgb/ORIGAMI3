@@ -19,6 +19,7 @@ import { planGrabFold, type GrabMode } from "../components/Viewer3D/grabFold";
 import { foldBlockReason } from "../lib/viewerHint";
 import { buildPoseStep, currentAngles, hasPoseAngle } from "../lib/poseStep";
 import { DEFAULT_CONSTRUCT, type ConstructOptions } from "../lib/construct";
+import { DEFAULT_CURVE, firstCrossing, rulingLines, type CurveOptions } from "../lib/curve";
 import {
   DEFAULT_DISPLAY,
   clampDivisions,
@@ -327,6 +328,8 @@ interface AppState {
   techniqueDraft: TechniqueDraft | null;
   /** 作図補助の選択(どの作図か・等分数・角度の刻み)。CpEditorが使う */
   construct: ConstructOptions;
+  /** 曲線の折り目(CPE-011)の選択(直線/曲線・描き方・分割・曲がるための線) */
+  curve: CurveOptions;
   /** 3D表示フレーム。nullなら平ら(展開図から直接描く) */
   frame3d: Frame3D | null;
   /** たわみの三角形の網(SIM-012)。たわみを切っているとnull(従来の描き方に戻る) */
@@ -432,6 +435,9 @@ interface AppState {
   /** 展開図に線を1本引く(CPE-010)。左右対称のときは中心線で折り返した線も
    * 続けて引く(引いた順に直列化キューへ積むので適用順は変わらない) */
   drawSegment: (a: Vec2, b: Vec2, kind: EdgeKind) => Promise<void>;
+  /** 曲線の折り目を折れ線として引く(CPE-011)。設定に応じて「紙が曲がるための
+   * 線」も続けて引く。左右対称の指定は drawSegment がそのまま効かせる */
+  drawCurve: (points: Vec2[], kind: EdgeKind) => Promise<void>;
   /** 左右対称に線を引くかを切り替える(次回起動時も同じ設定に戻る) */
   setMirrorDraw: (on: boolean) => void;
   /** 3Dで引くとき左右同時に動かすかを切り替える(次回起動時も同じ設定に戻る) */
@@ -493,6 +499,8 @@ interface AppState {
   updateTechniqueDraft: (patch: Partial<TechniqueDraft>) => void;
   /** 作図補助(CPE-005)の選び方を変える(どの作図か・等分数・角度の刻み) */
   setConstruct: (patch: Partial<ConstructOptions>) => void;
+  /** 曲線の折り目(CPE-011)の選び方を変える */
+  setCurve: (patch: Partial<CurveOptions>) => void;
   /** 技法の下ごしらえを捨てる */
   cancelTechnique: () => void;
   /** 選んだ技法を実際に適用する(sequence_apply Technique) */
@@ -1070,6 +1078,7 @@ export const useAppStore = create<AppState>((set, get) => {
     alignDraft: null,
     techniqueDraft: null,
     construct: DEFAULT_CONSTRUCT,
+    curve: DEFAULT_CURVE,
     frame3d: null,
     softMesh: null,
     softWarnings: [],
@@ -1156,6 +1165,35 @@ export const useAppStore = create<AppState>((set, get) => {
         await get().applyEdit({ type: "AddSegment", a: p, b: q, kind });
         // 1本目で断られたら理由を残したまま止める(片側だけ引かれた形にしない)
         if (get().errorMessage !== null) return;
+      }
+    },
+
+    // 曲線は「十分細かい折れ線」として入れる(展開図の辺は直線だけなので)。
+    // 曲線の折り目は両側の紙が曲がらないと折れない(平らな板2枚を曲線でつなぐと
+    // 角度0以外では紙がちぎれる)ので、既定では「紙が曲がるための線」も一緒に
+    // 引く。曲がるための線は隣の折り目に突き当たったところで止める
+    drawCurve: async (points, kind) => {
+      const s = get();
+      if (!s.doc || points.length < 2) return;
+      for (let i = 0; i + 1 < points.length; i++) {
+        await get().drawSegment(points[i], points[i + 1], kind);
+        if (get().errorMessage !== null) return; // 途中で断られたら理由を残して止める
+      }
+      if (!s.curve.rulings || kind === "Aux") return;
+      const long = Math.max(s.doc.paper.width_mm, s.doc.paper.height_mm);
+      const paper: Vec2 = [s.doc.paper.width_mm / long, s.doc.paper.height_mm / long];
+      // 折り目の両側で曲がる向きが逆になるので、へこむ側は反対の線種にする
+      const opposite: EdgeKind = kind === "Mountain" ? "Valley" : "Mountain";
+      for (const r of rulingLines(points, paper)) {
+        for (const [to, k] of [
+          [r.concave, opposite],
+          [r.convex, kind],
+        ] as [Vec2, EdgeKind][]) {
+          const doc = get().doc;
+          if (!doc) return;
+          await get().drawSegment(r.at, firstCrossing(doc, r.at, to), k);
+          if (get().errorMessage !== null) return;
+        }
       }
     },
 
@@ -1557,6 +1595,8 @@ export const useAppStore = create<AppState>((set, get) => {
 
     setConstruct: (patch) =>
       set((s) => ({ construct: { ...s.construct, ...patch } })),
+
+    setCurve: (patch) => set((s) => ({ curve: { ...s.curve, ...patch } })),
 
     cancelTechnique: () => {
       if (get().techniqueDraft) set({ techniqueDraft: null });

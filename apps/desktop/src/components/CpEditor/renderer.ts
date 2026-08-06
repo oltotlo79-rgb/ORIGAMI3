@@ -89,6 +89,9 @@ export interface RenderOverlay {
   mirrorAxis: number | null;
   /** 対称軸の反対側に出るプレビュー線(左右対称のときだけ) */
   mirrorPreview: { a: Vec2; b: Vec2; kind: EdgeKind } | null;
+  /** 描いている最中の曲線と、それに付く「曲がるための線」(CPE-011)。
+   * 確定すると細かい折れ線として展開図に入るので、その形をそのまま見せる */
+  previewPaths: { points: Vec2[]; kind: EdgeKind }[];
   /** 矩形選択ドラッグ中の範囲(正規化座標) */
   marquee: { a: Vec2; b: Vec2 } | null;
   /** 平らに畳めない点のID(Rust側の判定結果。橙色の丸で知らせる) */
@@ -285,6 +288,20 @@ function drawOverlay(
     ctx.lineWidth = LINE_WIDTHS.preview;
     ctx.setLineDash([...DASH_PREVIEW]);
     strokeSegment(ctx, view, line.a, line.b);
+    ctx.setLineDash([]);
+  }
+  for (const path of overlay.previewPaths) {
+    if (path.points.length < 2) continue;
+    ctx.strokeStyle = EDGE_COLORS[path.kind];
+    ctx.lineWidth = LINE_WIDTHS.preview;
+    ctx.setLineDash([...DASH_PREVIEW]);
+    ctx.beginPath();
+    path.points.forEach((p, i) => {
+      const [sx, sy] = worldToScreen(view, p);
+      if (i === 0) ctx.moveTo(sx, sy);
+      else ctx.lineTo(sx, sy);
+    });
+    ctx.stroke();
     ctx.setLineDash([]);
   }
   if (overlay.marquee) {
