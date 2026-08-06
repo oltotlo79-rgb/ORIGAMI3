@@ -14,6 +14,7 @@ import {
   uniqueWarnings,
 } from "../lib/techniques";
 import type { EdgeKind, FoldStep, TechniqueKind } from "../lib/types";
+import { PaperAppearance } from "./PaperAppearance";
 
 const KIND_LABEL: Record<EdgeKind, string> = {
   Border: "輪郭",
@@ -225,6 +226,8 @@ function StepContent({ number }: { number: number }) {
   const skipped = useAppStore((s) => s.skipped);
   const replaySkipped = useAppStore((s) => s.replaySkipped);
   const applySequenceOp = useAppStore((s) => s.applySequenceOp);
+  const moveStep = useAppStore((s) => s.moveStep);
+  const total = useAppStore((s) => s.doc?.sequence.length ?? 0);
 
   const step = doc?.sequence[number - 1];
   if (!step) return <p className="hint">この手順はもうありません</p>;
@@ -258,6 +261,31 @@ function StepContent({ number }: { number: number }) {
           ))}
         </select>
         <NoteInput key={step.id} step={step} />
+        {/* 手順の並べ替え(SEQ-005)。押せないときもボタンは消さず理由を出す */}
+        <button
+          type="button"
+          disabled={number <= 1}
+          title={
+            number <= 1
+              ? "いちばん最初の手順なので、これより前へは動かせません"
+              : "この手順を1つ前へ動かします(元に戻すは2回押してください)"
+          }
+          onClick={() => void moveStep(number, -1)}
+        >
+          ◀ 前へ動かす
+        </button>
+        <button
+          type="button"
+          disabled={number >= total}
+          title={
+            number >= total
+              ? "いちばん最後の手順なので、これより後ろへは動かせません"
+              : "この手順を1つ後ろへ動かします(元に戻すは2回押してください)"
+          }
+          onClick={() => void moveStep(number, 1)}
+        >
+          後ろへ動かす ▶
+        </button>
         <button
           type="button"
           title="この手順を手順一覧から取り除きます(展開図の折り線は残ります)"
@@ -557,10 +585,15 @@ function SelectionContent() {
   }
 
   return (
-    <p className="hint">
-      左のツールを選んで操作します。山折り・谷折り・補助線: 2回クリックで線を引く(Escで中止)/
-      選択: クリックまたはドラッグで選ぶ / Deleteキー: 選択した線を削除
-    </p>
+    <>
+      <p className="hint">
+        左のツールを選んで操作します。山折り・谷折り・補助線: 2回クリックで線を引く(Escで中止)/
+        選択: クリックまたはドラッグで選ぶ、点はドラッグで動かせる / Deleteキー:
+        選択した線を削除
+      </p>
+      {/* 紙の色と方眼の数は、何も選んでいないときだけここに出す(PAP-003 / CPE-003) */}
+      <PaperAppearance />
+    </>
   );
 }
 

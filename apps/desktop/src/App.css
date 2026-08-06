@@ -51,11 +51,25 @@ body,
   margin: 0 4px;
 }
 
-/* 中央行: ツールレール + 2D + 3D */
+/* 中央行: ツールレール + 2D + 境目 + 3D。
+   2Dと3Dの割合はApp.tsxがストアの値で上書きする(UI-004) */
 .main-row {
   display: grid;
-  grid-template-columns: 64px 1fr 1fr;
+  grid-template-columns: 64px 1fr 6px 1fr;
   min-height: 0;
+}
+
+/* 2Dと3Dの境目(左右にドラッグして広さを変える) */
+.pane-splitter {
+  background: #c8c8cc;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.pane-splitter:hover,
+.pane-splitter:focus-visible {
+  background: #3b6fc9;
+  outline: none;
 }
 
 .tool-rail {
@@ -118,7 +132,41 @@ body,
 
 .pane-2d {
   background: #d8d8dc;
-  border-right: 1px solid #c8c8cc;
+}
+
+/* 紙の色・方眼の数(何も選んでいないときだけ出す) */
+.paper-appearance {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.paper-appearance input[type="number"] {
+  width: 56px;
+  margin-left: 4px;
+}
+
+/* 新規作成ダイアログの大きさ入力と見本 */
+.new-paper-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.new-paper-row input {
+  width: 72px;
+  margin-left: 4px;
+}
+
+.new-paper-preview {
+  display: inline-block;
+  background: #fff;
+  border: 1px solid #888;
 }
 
 /* 3D区画は内側を上下に分ける(立体表示 + 手順タイムライン)。

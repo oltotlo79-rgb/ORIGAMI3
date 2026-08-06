@@ -8,6 +8,7 @@ import {
   onKeyDown,
   onMouseDown,
   onMouseMove,
+  onMouseUp,
   type InteractionCtx,
 } from "./interaction";
 import { DEFAULT_CONSTRUCT, type ConstructOptions } from "../../lib/construct";
@@ -110,5 +111,59 @@ describe("平らに畳めない点", () => {
     expect(ctx.state.hoverViolation).toBe(2);
     onMouseMove(ctx, toScreen([0.5, 0.5]));
     expect(ctx.state.hoverViolation).toBeNull();
+  });
+});
+
+describe("点のドラッグ移動(選択ツール)", () => {
+  /** 選択ツールで頂点2(1,1)を押さえた状態を作る */
+  function grabCorner() {
+    const made = makeCtx();
+    made.ctx.tool = "select";
+    onMouseDown(made.ctx, toScreen([1, 1]), 0);
+    return made;
+  }
+
+  it("押している間はプレビューだけで、離したときに動かす", () => {
+    const { ctx, applyEdit } = grabCorner();
+    expect(ctx.state.vertexDrag?.id).toBe(2);
+    expect(ctx.setSelection).toHaveBeenCalledWith({ edgeIds: [], vertexIds: [2] });
+
+    onMouseMove(ctx, toScreen([0.63, 0.63]));
+    // 動かしている途中では編集を送らない(1回のドラッグ=1回の編集)
+    expect(applyEdit).not.toHaveBeenCalled();
+    expect(ctx.state.vertexDrag?.to[0]).toBeCloseTo(0.625, 3); // 8等分の目盛りに吸着
+    expect(ctx.state.marqueeEnd).toBeNull(); // 矩形選択にはならない
+
+    onMouseUp(ctx, toScreen([0.63, 0.63]), 0);
+    expect(applyEdit).toHaveBeenCalledWith({
+      type: "MoveVertex",
+      id: 2,
+      to: [0.625, 0.625],
+    });
+    expect(ctx.state.vertexDrag).toBeNull();
+  });
+
+  it("動かさずに離したときは選択のままで編集しない", () => {
+    const { ctx, applyEdit } = grabCorner();
+    onMouseUp(ctx, toScreen([1, 1]), 0);
+    expect(applyEdit).not.toHaveBeenCalled();
+  });
+
+  it("Escでやめれば元の位置のまま", () => {
+    const { ctx, applyEdit } = grabCorner();
+    onMouseMove(ctx, toScreen([0.5, 0.5]));
+    onKeyDown(ctx, "Escape");
+    expect(ctx.state.vertexDrag).toBeNull();
+    onMouseUp(ctx, toScreen([0.5, 0.5]), 0);
+    expect(applyEdit).not.toHaveBeenCalled();
+  });
+
+  it("点のない所を押したときはこれまで通り矩形選択になる", () => {
+    const { ctx } = makeCtx();
+    ctx.tool = "select";
+    onMouseDown(ctx, toScreen([0.5, 0.5]), 0);
+    expect(ctx.state.vertexDrag).toBeNull();
+    onMouseMove(ctx, toScreen([0.8, 0.8]));
+    expect(ctx.state.marqueeEnd).not.toBeNull();
   });
 });

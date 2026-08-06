@@ -1,0 +1,145 @@
+// 新規作成の紙の指定(PAP-001)・紙の色と方眼(PAP-003 / CPE-003)・
+// 2D/3Dの分割比(UI-004)・手順の並べ替え(SEQ-005)のテスト。
+
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Document, DocumentView, FoldStep } from "../lib/types";
+
+vi.mock("../ipc/client", () => ({
+  documentNew: vi.fn(),
+  documentOpen: vi.fn(),
+  documentSave: vi.fn(),
+  editApply: vi.fn(),
+  editUndo: vi.fn(),
+  editRedo: vi.fn(),
+  sequenceApply: vi.fn(),
+  sequenceReplay: vi.fn(),
+  poseSolve: vi.fn(),
+  recoveryCheck: vi.fn(),
+  recoveryRestore: vi.fn(),
+  proposalGenerate: vi.fn(),
+}));
+
+import * as ipc from "../ipc/client";
+import { DEFAULT_NEW_PAPER, useAppStore } from "./appStore";
+import { DEFAULT_DISPLAY } from "../lib/displayPrefs";
+
+function step(id: number): FoldStep {
+  return { id, kind: "Simple", drivers: [], layer_order: null, note: `手順${id}` };
+}
+
+function makeDoc(sequence: FoldStep[]): Document {
+  return {
+    schema_version: 1,
+    paper: { width_mm: 150, height_mm: 150 },
+    cp: { vertices: [], edges: [], next_vertex_id: 0, next_edge_id: 0 },
+    sequence,
+    display: DEFAULT_DISPLAY,
+  };
+}
+
+function makeView(doc: Document): DocumentView {
+  return {
+    doc,
+    faces: [],
+    warnings: [],
+    violations: [],
+    frame: null,
+    skipped: [],
+  };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  useAppStore.setState({
+    doc: null,
+    newDialogOpen: false,
+    newPaperDraft: DEFAULT_NEW_PAPER,
+    display: DEFAULT_DISPLAY,
+    splitRatio: 0.5,
+    errorMessage: null,
+    currentStep: null,
+  });
+});
+
+describe("新規作成の紙の指定", () => {
+  it("正方形なら縦は横に合わせ、長方形なら別々に指定できる", async () => {
+    vi.mocked(ipc.documentNew).mockResolvedValue(makeView(makeDoc([])));
+    const s = useAppStore.getState();
+    s.openNewDialog();
+    expect(useAppStore.getState().newDialogOpen).toBe(true);
+
+    s.setNewPaperDraft({ widthMm: 200, heightMm: 90 });
+    await useAppStore.getState().confirmNewDocument();
+    expect(ipc.documentNew).toHaveBeenLastCalledWith({
+      width_mm: 200,
+      height_mm: 200,
+    });
+    // 作りはじめたらダイアログは閉じる
+    expect(useAppStore.getState().newDialogOpen).toBe(false);
+
+    s.setNewPaperDraft({ square: false });
+    await useAppStore.getState().confirmNewDocument();
+    expect(ipc.documentNew).toHaveBeenLastCalledWith({
+      width_mm: 200,
+      height_mm: 90,
+    });
+  });
+
+  it("0以下の大きさは作らずに理由を出す", async () => {
+    useAppStore.getState().setNewPaperDraft({ widthMm: 0 });
+    await useAppStore.getState().confirmNewDocument();
+    expect(ipc.documentNew).not.toHaveBeenCalled();
+    expect(useAppStore.getState().errorMessage).toContain("0より大きい");
+  });
+});
+
+describe("紙の色と方眼・分割比", () => {
+  it("色と方眼の数は表示中の作品にもすぐ反映する", () => {
+    useAppStore.setState({ doc: makeDoc([]) });
+    useAppStore.getState().setDisplay({ front_color: [0, 128, 255] });
+    expect(useAppStore.getState().doc?.display.front_color).toEqual([0, 128, 255]);
+
+    useAppStore.getState().setDisplay({ grid_divisions: 100 });
+    // 範囲外は上限(64)に丸める
+    expect(useAppStore.getState().display.grid_divisions).toBe(64);
+    expect(useAppStore.getState().doc?.display.grid_divisions).toBe(64);
+  });
+
+  it("分割比は狭くしすぎないように収める", () => {
+    useAppStore.getState().setSplitRatio(0.01);
+    expect(useAppStore.getState().splitRatio).toBeCloseTo(0.2);
+    useAppStore.getState().setSplitRatio(0.35);
+    expect(useAppStore.getState().splitRatio).toBeCloseTo(0.35);
+  });
+});
+
+describe("手順の並べ替え", () => {
+  it("選んだ手順を前へ動かすと、取り除いてから同じ手順を入れ直す", async () => {
+    const doc = makeDoc([step(1), step(2), step(3)]);
+    useAppStore.setState({ doc });
+    vi.mocked(ipc.sequenceApply).mockResolvedValue(makeView(doc));
+    vi.mocked(ipc.sequenceReplay).mockResolvedValue({
+      frame: { faces: [], warnings: [] },
+      skipped: [],
+      warnings: [],
+    });
+
+    await useAppStore.getState().moveStep(3, -1);
+    expect(vi.mocked(ipc.sequenceApply).mock.calls[0][0]).toEqual({
+      type: "RemoveStep",
+      id: 3,
+    });
+    expect(vi.mocked(ipc.sequenceApply).mock.calls[1][0]).toEqual({
+      type: "InsertStep",
+      index: 1,
+      step: step(3),
+    });
+  });
+
+  it("端の手順はそれ以上動かさない(要求も送らない)", async () => {
+    useAppStore.setState({ doc: makeDoc([step(1), step(2)]) });
+    await useAppStore.getState().moveStep(1, -1);
+    await useAppStore.getState().moveStep(2, 1);
+    expect(ipc.sequenceApply).not.toHaveBeenCalled();
+  });
+});

@@ -31,11 +31,17 @@ function closestPointOnSegment(p: Vec2, a: Vec2, b: Vec2): Vec2 {
   return [a[0] + ab[0] * tc, a[1] + ab[1] * tc];
 }
 
-/** 半径内で最も近い既存頂点 */
-function snapVertex(doc: Document, cursor: Vec2, radius: number): SnapResult | null {
+/** 半径内で最も近い既存頂点(excludeIdの点は無視する) */
+function snapVertex(
+  doc: Document,
+  cursor: Vec2,
+  radius: number,
+  excludeId?: number,
+): SnapResult | null {
   let best: Vec2 | null = null;
   let bestDist = radius;
   for (const v of doc.cp.vertices) {
+    if (v.id === excludeId) continue;
     const d = dist(cursor, v.pos);
     if (d <= bestDist) {
       bestDist = d;
@@ -85,5 +91,22 @@ export function snap(doc: Document, cursor: Vec2, radiusNorm: number): SnapResul
     snapVertex(doc, cursor, radiusNorm) ??
     snapGrid(doc, cursor, radiusNorm) ??
     snapEdge(doc, cursor, radiusNorm)
+  );
+}
+
+/**
+ * 点を動かしているときの吸着(CPE-006)。動かしている点そのものと、
+ * その点につながる線は一緒に動くので吸着先にしない(自分自身に吸い付かない)。
+ * 他の点 > グリッド交点の順に見る。
+ */
+export function snapForMove(
+  doc: Document,
+  cursor: Vec2,
+  radiusNorm: number,
+  movingId: number,
+): SnapResult | null {
+  return (
+    snapVertex(doc, cursor, radiusNorm, movingId) ??
+    snapGrid(doc, cursor, radiusNorm)
   );
 }

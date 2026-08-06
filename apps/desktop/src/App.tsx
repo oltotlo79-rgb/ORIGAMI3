@@ -11,6 +11,8 @@ import { CpEditor } from "./components/CpEditor/CpEditor";
 import { Viewer3D } from "./components/Viewer3D/Viewer3D";
 import { Timeline } from "./components/Timeline";
 import { RecoveryDialog } from "./components/RecoveryDialog";
+import { PaneSplitter } from "./components/PaneSplitter";
+import { NewDocumentDialog } from "./components/dialogs/NewDocumentDialog";
 import { ProposalWizard } from "./components/dialogs/ProposalWizard";
 import { ExportDialog } from "./components/dialogs/ExportDialog";
 import { uniqueWarnings } from "./lib/techniques";
@@ -28,6 +30,9 @@ function App() {
   const redo = useAppStore((s) => s.redo);
   const openProposal = useAppStore((s) => s.openProposal);
   const openExport = useAppStore((s) => s.openExport);
+  const openNewDialog = useAppStore((s) => s.openNewDialog);
+  // 中央の2区画の広さの割合(UI-004)。境目のドラッグで変わる
+  const splitRatio = useAppStore((s) => s.splitRatio);
   const warningCount = useAppStore(
     (s) => uniqueWarnings(s.warnings, s.poseWarnings, s.replayWarnings).length,
   );
@@ -60,7 +65,8 @@ function App() {
   return (
     <div className="app">
       <header className="toolbar">
-        <button type="button" onClick={() => void newDocument(DEFAULT_PAPER)}>
+        {/* 紙の形と大きさを決めてから作る(PAP-001)。開くのは独立ダイアログ */}
+        <button type="button" onClick={openNewDialog}>
           新規
         </button>
         <button type="button" onClick={() => void handleOpen()}>
@@ -86,7 +92,12 @@ function App() {
           書き出し
         </button>
       </header>
-      <div className="main-row">
+      <div
+        className="main-row"
+        style={{
+          gridTemplateColumns: `64px ${splitRatio}fr 6px ${1 - splitRatio}fr`,
+        }}
+      >
         <ToolRail
           onFitView={() => {
             fit2dRef.current?.();
@@ -96,6 +107,7 @@ function App() {
         <section className="pane pane-2d">
           <CpEditor fitRef={fit2dRef} />
         </section>
+        <PaneSplitter />
         <section className="pane pane-3d">
           <div className="pane-3d-view">
             <Viewer3D fitRef={fit3dRef} />
@@ -117,6 +129,7 @@ function App() {
       </div>
       <ContextPanel />
       <RecoveryDialog />
+      <NewDocumentDialog />
       <ProposalWizard />
       <ExportDialog />
     </div>

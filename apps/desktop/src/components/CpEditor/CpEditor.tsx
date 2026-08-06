@@ -71,11 +71,15 @@ export function CpEditor({ fitRef }: Props) {
       violations,
       constructPoints: activeTool === "construct" ? st.constructPoints : [],
       // 作図補助では次にすることを常に1行で出す(設計原則3b)
-      hint:
-        activeTool === "construct"
+      hint: st.vertexDrag
+        ? "点を動かしています(離すと決まります。Escでやめる)"
+        : activeTool === "construct"
           ? constructHint(construct.kind, constructDone(st), construct.divisions)
           : null,
       tooltip: violationTooltip(doc, st.hoverViolation),
+      vertexDrag: st.vertexDrag
+        ? { id: st.vertexDrag.id, to: st.vertexDrag.to }
+        : null,
     };
     const ctx2d = canvas.getContext("2d");
     if (ctx2d) {
@@ -125,6 +129,7 @@ export function CpEditor({ fitRef }: Props) {
     st.marqueeEnd = null;
     st.constructPoints = [];
     st.constructSeg = null;
+    st.vertexDrag = null;
     draw();
   }, [activeTool, draw]);
 
@@ -213,6 +218,7 @@ export function CpEditor({ fitRef }: Props) {
         st.panLast = null;
         st.marqueeStart = null;
         st.marqueeEnd = null;
+        st.vertexDrag = null;
         draw();
       }}
       onWheel={(e) => withCtx((ctx) => onWheel(ctx, screenPos(e), e.deltaY))}

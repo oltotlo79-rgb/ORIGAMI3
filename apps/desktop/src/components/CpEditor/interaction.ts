@@ -6,7 +6,7 @@
 import type { Document, EdgeKind, EditOp, Vec2 } from "../../lib/types";
 import type { Selection, ToolId } from "../../store/appStore";
 import { screenToWorld, type ViewTransform } from "./renderer";
-import { paperExtent, snap, type SnapResult } from "./snap";
+import { paperExtent, snap, snapForMove, type SnapResult } from "./snap";
 import { CONSTRUCT_STEPS, constructLines, type ConstructOptions } from "../../lib/construct";
 
 /** 吸着半径(px) */
@@ -39,6 +39,8 @@ export interface EphemeralState {
   constructSeg: [Vec2, Vec2] | null;
   /** カーソルが乗っている「平らに畳めない点」のID(なければnull) */
   hoverViolation: number | null;
+  /** ドラッグ中の点(CPE-006)。toは離したときに確定する位置(それまではプレビュー) */
+  vertexDrag: { id: number; from: Vec2; to: Vec2 } | null;
 }
 
 export function initialEphemeralState(): EphemeralState {
@@ -53,6 +55,7 @@ export function initialEphemeralState(): EphemeralState {
     constructPoints: [],
     constructSeg: null,
     hoverViolation: null,
+    vertexDrag: null,
   };
 }
 
@@ -241,8 +244,18 @@ export function onMouseDown(ctx: InteractionCtx, screen: Vec2, button: number): 
   if (ctx.tool === "select") {
     // クリックかドラッグかはmouseupまで分からないので開始点だけ覚える
     ctx.state.downScreen = screen;
-    ctx.state.marqueeStart = world;
     ctx.state.marqueeEnd = null;
+    // 点の上で押したときは、その点を動かす操作として始める(CPE-006)。
+    // 動かさずに離せばただの選択になる
+    const hit = pickVertex(ctx.doc, world, pickTol);
+    const pos = hit === null ? null : ctx.doc.cp.vertices.find((v) => v.id === hit)?.pos;
+    if (hit !== null && pos) {
+      ctx.state.vertexDrag = { id: hit, from: pos, to: pos };
+      ctx.state.marqueeStart = null;
+      ctx.setSelection({ edgeIds: [], vertexIds: [hit] });
+      return;
+    }
+    ctx.state.marqueeStart = world;
   }
 }
 
@@ -264,6 +277,16 @@ export function onMouseMove(ctx: InteractionCtx, screen: Vec2): void {
   const near = pickVertex(ctx.doc, world, SNAP_RADIUS_PX / ctx.view.scale);
   ctx.state.hoverViolation =
     near !== null && ctx.violations.includes(near) ? near : null;
+
+  // 点を動かしている間は、離す前の位置をプレビューとして持つだけにする
+  // (1ドラッグ=1回の編集。途中の位置は履歴に残さない)
+  const drag = ctx.state.vertexDrag;
+  if (drag && ctx.state.downScreen) {
+    const radius = SNAP_RADIUS_PX / ctx.view.scale;
+    drag.to = snapForMove(ctx.doc, world, radius, drag.id)?.pos ?? world;
+    ctx.state.hoverSnap = null;
+    return;
+  }
 
   // 矩形選択のドラッグ更新
   if (ctx.tool === "select" && ctx.state.downScreen) {
@@ -290,6 +313,16 @@ export function onMouseUp(ctx: InteractionCtx, screen: Vec2, button: number): vo
     return;
   }
   if (button !== 0 || ctx.tool !== "select" || !ctx.state.downScreen) return;
+  // 点を離したところで動かし方を確定する(CPE-006)。動いていなければ選択のまま
+  const drag = ctx.state.vertexDrag;
+  if (drag) {
+    ctx.state.vertexDrag = null;
+    ctx.state.downScreen = null;
+    if (dist(drag.from, drag.to) > 1e-9) {
+      ctx.applyEdit({ type: "MoveVertex", id: drag.id, to: drag.to });
+    }
+    return;
+  }
   const start = ctx.state.marqueeStart;
   const end = ctx.state.marqueeEnd;
   ctx.state.downScreen = null;
@@ -321,6 +354,8 @@ export function onKeyDown(ctx: InteractionCtx, key: string): void {
     ctx.state.marqueeEnd = null;
     ctx.state.constructPoints = [];
     ctx.state.constructSeg = null;
+    // 動かしかけの点は元の位置に戻す(まだ確定していない)
+    ctx.state.vertexDrag = null;
     return;
   }
   if (key === "Delete" && ctx.selection.edgeIds.length > 0) {

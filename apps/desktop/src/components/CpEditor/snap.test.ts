@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { Document, Edge, Vertex } from "../../lib/types";
-import { paperExtent, snap } from "./snap";
+import { paperExtent, snap, snapForMove } from "./snap";
 
 /** 150×150mm相当の正方形ドキュメント(輪郭4辺、グリッド8分割) */
 function makeDoc(overrides?: {
@@ -111,5 +111,26 @@ describe("snap", () => {
     });
     expect(snap(doc, [0.4, 0.15], 0.02)).toBeNull();
     expect(snap(doc, [0.01, 0.01], 0.05)?.kind).toBe("vertex");
+  });
+});
+
+describe("snapForMove(点を動かしているときの吸着)", () => {
+  it("動かしている点そのものには吸い付かない", () => {
+    const doc = makeDoc();
+    // 頂点0(0,0)を動かしている間、その場所は吸着先にならずグリッドが選ばれる
+    expect(snap(doc, [0.004, 0.004], 0.05)?.kind).toBe("vertex");
+    expect(snapForMove(doc, [0.004, 0.004], 0.05, 0)?.kind).toBe("grid");
+  });
+
+  it("ほかの点には吸い付く", () => {
+    const doc = makeDoc({ extraVertices: [{ id: 4, pos: [0.3, 0.3] }] });
+    const r = snapForMove(doc, [0.302, 0.301], 0.02, 0);
+    expect(r).toEqual({ pos: [0.3, 0.3], kind: "vertex" });
+  });
+
+  it("つながっている線の上には吸い付かない(線も一緒に動くため)", () => {
+    // 対角線上の(0.3,0.3)はグリッド交点ではないので、線上吸着が無ければnull
+    expect(snap(docWithDiagonal(), [0.31, 0.29], 0.02)?.kind).toBe("edge");
+    expect(snapForMove(docWithDiagonal(), [0.31, 0.29], 0.02, 0)).toBeNull();
   });
 });

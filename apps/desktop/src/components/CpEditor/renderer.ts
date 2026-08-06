@@ -87,6 +87,38 @@ export interface RenderOverlay {
   hint: string | null;
   /** カーソルの近くに出す説明(平らに畳めない理由) */
   tooltip: { pos: Vec2; text: string } | null;
+  /** ドラッグ中の点と、離したら移る位置(CPE-006のプレビュー) */
+  vertexDrag: { id: number; to: Vec2 } | null;
+}
+
+/** 紙の色([r,g,b])をcanvasの色文字列にする */
+export function paperColor(rgb: [number, number, number]): string {
+  return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+}
+
+/** 点を動かしている途中のプレビュー: つながる線を破線で新しい位置へ引き直す */
+function drawVertexDrag(
+  ctx: CanvasRenderingContext2D,
+  doc: Document,
+  view: ViewTransform,
+  drag: { id: number; to: Vec2 },
+): void {
+  const byId = new Map(doc.cp.vertices.map((v) => [v.id, v.pos]));
+  ctx.setLineDash([...DASH_PREVIEW]);
+  ctx.lineWidth = LINE_WIDTHS.preview;
+  for (const e of doc.cp.edges) {
+    if (e.v0 !== drag.id && e.v1 !== drag.id) continue;
+    const other = byId.get(e.v0 === drag.id ? e.v1 : e.v0);
+    if (!other) continue;
+    ctx.strokeStyle = EDGE_COLORS[e.kind];
+    strokeSegment(ctx, view, drag.to, other);
+  }
+  ctx.setLineDash([]);
+  const [sx, sy] = worldToScreen(view, drag.to);
+  ctx.fillStyle = COLORS.selection;
+  ctx.beginPath();
+  ctx.arc(sx, sy, VERTEX_MARKER_RADIUS, 0, Math.PI * 2);
+  ctx.fill();
 }
 
 /** 案内・説明の文字サイズ(px) */
@@ -282,7 +314,8 @@ export function render(
   ctx.save();
   ctx.shadowColor = COLORS.paperShadow;
   ctx.shadowBlur = 8;
-  ctx.fillStyle = COLORS.paper;
+  // 展開図は紙の表を見ている面なので、表の色で塗る(PAP-003の見た目確認)
+  ctx.fillStyle = paperColor(doc.display.front_color);
   ctx.fillRect(tl[0], tl[1], w * view.scale, h * view.scale);
   ctx.restore();
 
@@ -290,5 +323,6 @@ export function render(
   drawEdges(ctx, doc, view, selection);
   drawSelectedVertices(ctx, doc, view, selection);
   drawViolations(ctx, doc, view, overlay.violations);
+  if (overlay.vertexDrag) drawVertexDrag(ctx, doc, view, overlay.vertexDrag);
   drawOverlay(ctx, view, overlay);
 }

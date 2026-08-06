@@ -18,8 +18,15 @@ import {
 import { planGrabFold, type GrabMode } from "../components/Viewer3D/grabFold";
 import { foldBlockReason } from "../lib/viewerHint";
 import { DEFAULT_CONSTRUCT, type ConstructOptions } from "../lib/construct";
+import {
+  clampDivisions,
+  clampSplitRatio,
+  loadPrefs,
+  savePrefs,
+} from "../lib/displayPrefs";
 import type {
   Document,
+  DisplaySettings,
   DocumentView,
   Driver,
   EditOp,
@@ -58,6 +65,28 @@ export type ProposalStep = "skeleton" | "candidates" | "confirm";
 
 /** 提案の計算に使う紙(作品が無いときの控え。App.tsxの既定と同じ) */
 const FALLBACK_PAPER: Paper = { width_mm: 150, height_mm: 150 };
+
+/** 新規作成ダイアログで決める紙(PAP-001)。squareなら縦を横に合わせる */
+export interface NewPaperDraft {
+  widthMm: number;
+  heightMm: number;
+  square: boolean;
+}
+
+/** 新規作成ダイアログの初期値(起動時と同じ150×150mmの正方形) */
+export const DEFAULT_NEW_PAPER: NewPaperDraft = {
+  widthMm: 150,
+  heightMm: 150,
+  square: true,
+};
+
+/** 下書きから実際の紙を作る(正方形なら縦=横) */
+export function draftToPaper(draft: NewPaperDraft): Paper {
+  return {
+    width_mm: draft.widthMm,
+    height_mm: draft.square ? draft.widthMm : draft.heightMm,
+  };
+}
 
 /** 選択中の線・頂点(ID)。DOMのSelectionと紛れないよう注意 */
 export interface Selection {
@@ -204,6 +233,16 @@ interface AppState {
   /** 保存できたファイルの場所。まだならnull(「保存しました」の表示用) */
   exportSavedPath: string | null;
 
+  /** 新規作成ダイアログを開いているか(常設UIは増やさない。PAP-001) */
+  newDialogOpen: boolean;
+  /** 新規作成ダイアログで決めている紙の形と大きさ */
+  newPaperDraft: NewPaperDraft;
+  /** 紙の色・方眼の分割数(PAP-003 / CPE-003)。画面側の好みとして持ち、
+   * 作品を読み込むたびにdoc.displayへ差し込む */
+  display: DisplaySettings;
+  /** 中央の2D区画の幅の割合(残りが3D区画。UI-004) */
+  splitRatio: number;
+
   newDocument: (paper: Paper) => Promise<void>;
   openDocument: (path: string) => Promise<void>;
   saveDocument: (path: string | null) => Promise<void>;
@@ -285,6 +324,20 @@ interface AppState {
   setExportOption: (patch: Partial<ExportSettings>) => void;
   /** 指定の場所へ書き出す。成功したらexportSavedPathに場所が入る */
   runExport: (path: string) => Promise<void>;
+  /** 新規作成ダイアログを開く(前回決めた大きさをそのまま出す) */
+  openNewDialog: () => void;
+  /** 新規作成ダイアログを閉じる(作らずにやめる) */
+  closeNewDialog: () => void;
+  /** 新規作成ダイアログの紙の指定を変える */
+  setNewPaperDraft: (patch: Partial<NewPaperDraft>) => void;
+  /** ダイアログで決めた大きさの紙で作り直す */
+  confirmNewDocument: () => Promise<void>;
+  /** 紙の色・方眼の分割数を変える(表示中の作品にもすぐ反映する) */
+  setDisplay: (patch: Partial<DisplaySettings>) => void;
+  /** 2D区画と3D区画の分割比を変える(次回起動時も同じ位置に戻る) */
+  setSplitRatio: (ratio: number) => void;
+  /** 手順の順番を入れ替える(numberは1始まり、deltaは-1で前へ/+1で後ろへ) */
+  moveStep: (number: number, delta: number) => Promise<void>;
 }
 
 /** 書き出しダイアログで変えられる指定 */
@@ -371,6 +424,7 @@ function pruneSelection(selection: Selection, doc: Document): Selection {
 
 export const useAppStore = create<AppState>((set, get) => {
   const queue = createSerialQueue();
+  const prefs = loadPrefs();
 
   /** DocumentViewの内容で状態を一括更新する(成功時共通処理)。
    * isNewDocument=true(新規/開く)なら選択を解除しdocEpochを進める。
@@ -383,7 +437,10 @@ export const useAppStore = create<AppState>((set, get) => {
   const applyView = (view: DocumentView, isNewDocument: boolean) => {
     const total = view.doc.sequence.length;
     set((s) => ({
-      doc: view.doc,
+      // 紙の色・方眼は画面側の好み(Rust側に覚えさせる口が無い)。
+      // 受け取った作品へ差し込んでから配ることで、展開図・立体表示の描画は
+      // これまで通りdoc.displayだけを見れば済む
+      doc: { ...view.doc, display: s.display },
       foldDraft: null,
       techniqueDraft: null,
       faces: view.faces,
@@ -635,6 +692,10 @@ export const useAppStore = create<AppState>((set, get) => {
     exportBusy: false,
     exportError: null,
     exportSavedPath: null,
+    newDialogOpen: false,
+    newPaperDraft: DEFAULT_NEW_PAPER,
+    display: prefs.display,
+    splitRatio: prefs.splitRatio,
 
     newDocument: (paper) => runViewCommand(() => ipc.documentNew(paper), true),
 
@@ -1099,6 +1160,56 @@ export const useAppStore = create<AppState>((set, get) => {
           exportError: typeof e === "string" ? e : String(e),
         });
       }
+    },
+
+    openNewDialog: () => set({ newDialogOpen: true, errorMessage: null }),
+
+    closeNewDialog: () => set({ newDialogOpen: false }),
+
+    setNewPaperDraft: (patch) =>
+      set((s) => ({ newPaperDraft: { ...s.newPaperDraft, ...patch } })),
+
+    confirmNewDocument: async () => {
+      const paper = draftToPaper(get().newPaperDraft);
+      if (!(paper.width_mm > 0) || !(paper.height_mm > 0)) {
+        set({ errorMessage: "紙の大きさは0より大きいmmで入れてください" });
+        return;
+      }
+      set({ newDialogOpen: false });
+      await get().newDocument(paper);
+    },
+
+    setDisplay: (patch) => {
+      const display = { ...get().display, ...patch };
+      if (patch.grid_divisions !== undefined) {
+        display.grid_divisions = clampDivisions(patch.grid_divisions);
+      }
+      const doc = get().doc;
+      // 表示中の作品にもすぐ反映する(結果をその場で見せる。設計原則3b)
+      set(doc ? { display, doc: { ...doc, display } } : { display });
+      savePrefs({ display, splitRatio: get().splitRatio });
+    },
+
+    setSplitRatio: (ratio) => {
+      const splitRatio = clampSplitRatio(ratio);
+      set({ splitRatio });
+      savePrefs({ display: get().display, splitRatio });
+    },
+
+    moveStep: async (number, delta) => {
+      const s = get();
+      const steps = s.doc?.sequence ?? [];
+      const from = number - 1;
+      const to = from + delta;
+      const step = steps[from];
+      if (!step || to < 0 || to >= steps.length) return;
+      // 途中への挿入はSeqOpに用意されているが、折り操作そのものを途中へ
+      // 挟むのは断る仕様なので、既にある手順の位置替えとして使う
+      // (取り除いてから入れ直す。元に戻すは2回ぶんになる)
+      await get().applySequenceOp({ type: "RemoveStep", id: step.id });
+      if (get().errorMessage !== null) return;
+      await get().applySequenceOp({ type: "InsertStep", index: to, step });
+      if (get().errorMessage === null) get().selectStep(to + 1);
     },
   };
 });
