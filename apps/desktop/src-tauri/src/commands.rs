@@ -16,7 +16,7 @@ use tauri::State;
 
 use crate::autosave;
 use crate::store::{DocumentStore, DocumentView, add_penetration_warning, attach_replay};
-use ori3_export::{CpSvgOptions, cp_png, cp_svg};
+use ori3_export::{CpSvgOptions, cp_png, cp_svg, diagram_pdf, diagram_svg_pages};
 use ori3_model::{CreasePattern, Driver, EditOp, Paper, SeqOp};
 use ori3_propose::{Skeleton, generate, pack};
 
@@ -262,6 +262,10 @@ pub enum ExportKind {
     CpSvg,
     /// 展開図の画像(PNG)
     CpPng,
+    /// 折り図(PDF。A4に1ページ6コマ、表紙つき)
+    DiagramPdf,
+    /// 折り図の画像(SVG。ページごとに別ファイル)
+    DiagramSvg,
 }
 
 /// 書き出しの細かい指定。
@@ -286,25 +290,47 @@ pub fn document_export(
 ) -> Result<(), String> {
     guard(AssertUnwindSafe(move || {
         let doc = lock(&state).export_inputs(); // 複製のみ、即ロック解放
-        let bytes = export_bytes(&doc, kind, options)?;
-        std::fs::write(Path::new(&path), &bytes)
-            .map_err(|e| format!("ファイルに書き出せませんでした: {e}"))
+        let files = export_files(&doc, kind, options)?;
+        let path = Path::new(&path);
+        for (suffix, bytes) in files {
+            // 折り図の画像はページごとに別ファイルになるので、選ばれた場所を基準に
+            // 「鶴-01.svg」「鶴-02.svg」…と番号を足して並べる
+            let target = if suffix.is_empty() {
+                path.to_path_buf()
+            } else {
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("折り図");
+                let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("svg");
+                path.with_file_name(format!("{stem}{suffix}.{ext}"))
+            };
+            std::fs::write(&target, &bytes)
+                .map_err(|e| format!("ファイルに書き出せませんでした: {e}"))?;
+        }
+        Ok(())
     }))
 }
 
-/// 指定の種類でファイルの中身を組み立てる(ロックを取らない純粋な処理)。
-fn export_bytes(
+/// 指定の種類で書き出す中身を組み立てる(ロックを取らない純粋な処理)。
+///
+/// 戻り値は(ファイル名の後ろに足す文字, 中身)の並び。1つのファイルで済む種類は
+/// 空文字を返し、折り図の画像(EXP-004)だけページ数ぶんの並びになる。
+fn export_files(
     doc: &ori3_model::Document,
     kind: ExportKind,
     options: ExportOptions,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<(String, Vec<u8>)>, String> {
     let opts = CpSvgOptions {
         include_aux: options.include_aux,
     };
-    match kind {
-        ExportKind::CpSvg => Ok(cp_svg(doc, &opts).into_bytes()),
-        ExportKind::CpPng => cp_png(doc, &opts, options.png_long_side),
-    }
+    Ok(match kind {
+        ExportKind::CpSvg => vec![(String::new(), cp_svg(doc, &opts).into_bytes())],
+        ExportKind::CpPng => vec![(String::new(), cp_png(doc, &opts, options.png_long_side)?)],
+        ExportKind::DiagramPdf => vec![(String::new(), diagram_pdf(doc)?)],
+        ExportKind::DiagramSvg => diagram_svg_pages(doc)?
+            .into_iter()
+            .enumerate()
+            .map(|(i, page)| (format!("-{:02}", i + 1), page.into_bytes()))
+            .collect(),
+    })
 }
 
 #[cfg(test)]
@@ -363,25 +389,42 @@ mod tests {
 
     #[test]
     fn export_bytes_makes_svg_and_png() {
-        use super::{ExportKind, ExportOptions, export_bytes};
+        use super::{ExportKind, ExportOptions, export_files};
         let doc = ori3_model::Document::new(A4ISH);
         let opts = ExportOptions {
             include_aux: true,
             png_long_side: 128,
         };
-        let svg = export_bytes(&doc, ExportKind::CpSvg, opts).unwrap();
-        let text = String::from_utf8(svg).unwrap();
+        let svg = export_files(&doc, ExportKind::CpSvg, opts).unwrap();
+        assert_eq!(svg.len(), 1);
+        assert!(svg[0].0.is_empty(), "1つのファイルなので番号は付かない");
+        let text = String::from_utf8(svg[0].1.clone()).unwrap();
         assert!(text.contains("viewBox=\"0 0 150 150\""), "{text}");
 
-        let png = export_bytes(&doc, ExportKind::CpPng, opts).unwrap();
-        assert_eq!(&png[0..8], b"\x89PNG\r\n\x1a\n");
+        let png = export_files(&doc, ExportKind::CpPng, opts).unwrap();
+        assert_eq!(&png[0].1[0..8], b"\x89PNG\r\n\x1a\n");
 
         // 点数が0など無理な指定は日本語のErr(パニックにしない)
         let bad = ExportOptions {
             include_aux: false,
             png_long_side: 0,
         };
-        assert!(export_bytes(&doc, ExportKind::CpPng, bad).is_err());
+        assert!(export_files(&doc, ExportKind::CpPng, bad).is_err());
+    }
+
+    /// 折り図は手順が無いと書き出せず、理由を日本語で返す(EXP-003 / EXP-004)。
+    #[test]
+    fn diagram_export_needs_steps() {
+        use super::{ExportKind, ExportOptions, export_files};
+        let doc = ori3_model::Document::new(A4ISH);
+        let opts = ExportOptions {
+            include_aux: true,
+            png_long_side: 128,
+        };
+        for kind in [ExportKind::DiagramPdf, ExportKind::DiagramSvg] {
+            let err = export_files(&doc, kind, opts).unwrap_err();
+            assert!(err.contains("折り手順がまだありません"), "err={err}");
+        }
     }
 
     #[test]

@@ -224,8 +224,9 @@ export interface RecoveryInfo {
 }
 
 /** document_export の書き出しの種類(commands.rs::ExportKind)。
- * 展開図の画像はSVG(実寸mm)とPNGの2つ。折り図は後のタスクでここへ足す */
-export type ExportKind = "CpSvg" | "CpPng";
+ * 展開図の画像はSVG(実寸mm)とPNGの2つ。折り図はPDF(1ファイル)と
+ * ページごとのSVG(複数ファイル)の2つ */
+export type ExportKind = "CpSvg" | "CpPng" | "DiagramPdf" | "DiagramSvg";
 
 /** document_export の細かい指定(commands.rs::ExportOptions) */
 export interface ExportOptions {

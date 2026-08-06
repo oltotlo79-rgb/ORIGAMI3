@@ -8,12 +8,13 @@ import { useAppStore } from "../../store/appStore";
 import { fileName } from "../RecoveryDialog";
 import type { ExportKind } from "../../lib/types";
 
-/** 種類ごとの表示名・拡張子・ひとこと説明 */
+/** 種類ごとの表示名・拡張子・ひとこと説明。needsStepsは折り手順が要るもの */
 export const EXPORT_CHOICES: {
   kind: ExportKind;
   label: string;
   ext: string;
   hint: string;
+  needsSteps?: boolean;
 }[] = [
   {
     kind: "CpSvg",
@@ -27,7 +28,29 @@ export const EXPORT_CHOICES: {
     ext: "png",
     hint: "写真と同じ形式です。そのまま画面で見たり貼り付けたりできます。",
   },
+  {
+    kind: "DiagramPdf",
+    label: "折り図(PDF)",
+    ext: "pdf",
+    hint:
+      "折る手順を1コマずつ絵にして、A4の紙に1ページ6コマ並べます。" +
+      "1ページ目は表紙(できあがりの形)です。そのまま印刷して使えます。",
+    needsSteps: true,
+  },
+  {
+    kind: "DiagramSvg",
+    label: "折り図(画像・ページごと)",
+    ext: "svg",
+    hint:
+      "折り図をページごとの画像にします。選んだ場所に「-01」「-02」…と" +
+      "番号を足したファイルがページの数だけ並びます。",
+    needsSteps: true,
+  },
 ];
+
+/** 折り手順がまだ無いときに、その種類を選べない理由(日本語) */
+export const NO_STEPS_REASON =
+  "折り手順がまだありません。紙を折って手順を作ると折り図を書き出せます。";
 
 export function ExportDialog() {
   const open = useAppStore((s) => s.exportOpen);
@@ -40,9 +63,13 @@ export function ExportDialog() {
   const setOption = useAppStore((s) => s.setExportOption);
   const runExport = useAppStore((s) => s.runExport);
   const close = useAppStore((s) => s.closeExport);
+  const stepCount = useAppStore((s) => s.doc?.sequence.length ?? 0);
   if (!open) return null;
 
   const choice = EXPORT_CHOICES.find((c) => c.kind === kind) ?? EXPORT_CHOICES[0];
+  // 折り図は手順が要る。選べないときも選択肢は残し、理由を出す
+  const blocked = (c: (typeof EXPORT_CHOICES)[number]) =>
+    c.needsSteps === true && stepCount === 0;
 
   const handleSave = async () => {
     const path = await save({
@@ -68,6 +95,7 @@ export function ExportDialog() {
                 type="radio"
                 name="export-kind"
                 checked={kind === c.kind}
+                disabled={blocked(c)}
                 onChange={() => setOption({ exportKind: c.kind })}
               />
               {c.label}
@@ -75,14 +103,19 @@ export function ExportDialog() {
           ))}
         </fieldset>
         <p className="hint">{choice.hint}</p>
-        <label>
-          <input
-            type="checkbox"
-            checked={includeAux}
-            onChange={(e) => setOption({ exportIncludeAux: e.target.checked })}
-          />
-          補助線(下書きの線)も含める
-        </label>
+        {stepCount === 0 && (
+          <p className="hint">折り図について:{NO_STEPS_REASON}</p>
+        )}
+        {(kind === "CpSvg" || kind === "CpPng") && (
+          <label>
+            <input
+              type="checkbox"
+              checked={includeAux}
+              onChange={(e) => setOption({ exportIncludeAux: e.target.checked })}
+            />
+            補助線(下書きの線)も含める
+          </label>
+        )}
         {kind === "CpPng" && (
           <label>
             画像の大きさ(長辺の点数)
@@ -99,7 +132,11 @@ export function ExportDialog() {
         {savedPath && <p className="hint">保存しました:{fileName(savedPath)}</p>}
         {error && <p className="error-text">保存できませんでした:{error}</p>}
         <div className="button-row">
-          <button type="button" disabled={busy} onClick={() => void handleSave()}>
+          <button
+            type="button"
+            disabled={busy || blocked(choice)}
+            onClick={() => void handleSave()}
+          >
             {busy ? "書き出しています…" : "保存先を選んで書き出す"}
           </button>
           <button type="button" onClick={close}>
