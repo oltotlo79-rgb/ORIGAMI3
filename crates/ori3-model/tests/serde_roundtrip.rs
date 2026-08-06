@@ -110,6 +110,29 @@ fn test_edit_op_tagged_roundtrip() {
 }
 
 #[test]
+fn test_edit_op_set_display_roundtrip() {
+    // 紙の色・方眼の分割数の変更(PAP-003 / CPE-003)も内部タグ形式で往復できること。
+    let op = EditOp::SetDisplay {
+        display: ori3_model::DisplaySettings {
+            front_color: [1, 2, 3],
+            back_color: [4, 5, 6],
+            grid_divisions: 12,
+        },
+    };
+    let json = serde_json::to_string(&op).expect("serialize");
+    assert!(json.contains("\"type\":\"SetDisplay\""), "json = {json}");
+    let back: EditOp = serde_json::from_str(&json).expect("deserialize");
+    match back {
+        EditOp::SetDisplay { display } => {
+            assert_eq!(display.front_color, [1, 2, 3]);
+            assert_eq!(display.back_color, [4, 5, 6]);
+            assert_eq!(display.grid_divisions, 12);
+        }
+        other => panic!("unexpected variant: {other:?}"),
+    }
+}
+
+#[test]
 fn test_seq_op_tagged_roundtrip() {
     let op = SeqOp::RemoveStep { id: 7 };
     let json = serde_json::to_string(&op).expect("serialize");

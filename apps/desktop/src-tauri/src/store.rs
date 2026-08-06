@@ -19,8 +19,8 @@ use std::path::{Path, PathBuf};
 
 use ori3_cp::Face;
 use ori3_model::{
-    CreasePattern, Document, EdgeId, EdgeKind, EditOp, Frame3D, Paper, SCHEMA_VERSION, SeqOp,
-    StepId, TechniqueKind, VertexId,
+    CreasePattern, Document, EdgeId, EdgeKind, EditOp, Frame3D, MAX_GRID_DIVISIONS,
+    MIN_GRID_DIVISIONS, Paper, SCHEMA_VERSION, SeqOp, StepId, TechniqueKind, VertexId,
 };
 
 /// undo履歴の最大件数。超過時は最古をFIFOで破棄する。
@@ -191,6 +191,19 @@ impl DocumentStore {
             EditOp::ReplaceCreasePattern { cp } => {
                 // 提案ウィザード用のCP全置換。妥当性はvalidateの警告として返すのみ
                 doc.cp = cp;
+            }
+            EditOp::SetDisplay { mut display } => {
+                // 色は[u8;3]なので0〜255は型が保証する(範囲外はIPCの読み取りで弾かれる)。
+                // 分割数だけは範囲外を丸めて続ける(止めずに警告)
+                let n = display.grid_divisions;
+                if !(MIN_GRID_DIVISIONS..=MAX_GRID_DIVISIONS).contains(&n) {
+                    display.grid_divisions = n.clamp(MIN_GRID_DIVISIONS, MAX_GRID_DIVISIONS);
+                    warnings.push(format!(
+                        "方眼の数は{MIN_GRID_DIVISIONS}〜{MAX_GRID_DIVISIONS}の範囲で指定してください({n}は{}に丸めました)",
+                        display.grid_divisions
+                    ));
+                }
+                doc.display = display;
             }
         }
         Ok(self.commit(doc, warnings))
@@ -790,6 +803,61 @@ mod tests {
             .fold(0.0, f64::max);
         assert!((ymax - 100.0 / 150.0).abs() < 1e-12);
         assert_eq!(view.doc.sequence.len(), 1);
+    }
+
+    /// 紙の色と方眼の数は作品(Document::display)に保存され、undo/redoで戻せる。
+    /// 方眼の数が範囲外なら丸めて警告する(止めない)。
+    #[test]
+    fn set_display_saves_into_document_and_is_undoable() {
+        let mut store = square_store();
+        let before = store.doc.display.clone();
+
+        let view = store
+            .apply_edit(EditOp::SetDisplay {
+                display: ori3_model::DisplaySettings {
+                    front_color: [0, 128, 255],
+                    back_color: [16, 16, 16],
+                    grid_divisions: 16,
+                },
+            })
+            .unwrap();
+        assert_eq!(view.doc.display.front_color, [0, 128, 255]);
+        assert_eq!(view.doc.display.back_color, [16, 16, 16]);
+        assert_eq!(view.doc.display.grid_divisions, 16);
+        assert!(view.warnings.is_empty(), "warnings={:?}", view.warnings);
+        assert!(store.is_dirty(), "作品が変わったので未保存になる");
+
+        // 範囲外(0と100)は丸めて警告する
+        let view = store
+            .apply_edit(EditOp::SetDisplay {
+                display: ori3_model::DisplaySettings {
+                    grid_divisions: 100,
+                    ..view.doc.display.clone()
+                },
+            })
+            .unwrap();
+        assert_eq!(view.doc.display.grid_divisions, MAX_GRID_DIVISIONS);
+        assert!(
+            view.warnings.iter().any(|w| w.contains("方眼の数")),
+            "warnings={:?}",
+            view.warnings
+        );
+        let view = store
+            .apply_edit(EditOp::SetDisplay {
+                display: ori3_model::DisplaySettings {
+                    grid_divisions: 0,
+                    ..view.doc.display.clone()
+                },
+            })
+            .unwrap();
+        assert_eq!(view.doc.display.grid_divisions, MIN_GRID_DIVISIONS);
+
+        // undoを3回で元の見た目へ戻る
+        for _ in 0..3 {
+            store.undo().unwrap();
+        }
+        assert_eq!(store.doc.display, before);
+        assert_eq!(store.redo().unwrap().doc.display.front_color, [0, 128, 255]);
     }
 
     #[test]

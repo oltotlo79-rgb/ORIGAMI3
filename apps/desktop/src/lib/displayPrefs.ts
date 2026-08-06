@@ -1,11 +1,15 @@
-// 見た目の設定(紙の色・方眼の分割数)と2D/3Dの分割比の保管。
-// Tauriコマンドは13個で打ち止めで、色・方眼を保存する口が無いため、
-// これらは「その利用者の見え方の好み」として画面側だけで持ち、
-// localStorageへ覚えておく(次に起動しても同じ見え方に戻る)。
+// 見た目の設定(紙の色・方眼の分割数)を扱う小道具と、2D/3Dの分割比の保管。
+//
+// 紙の色・方眼の分割数は「作品ごとの設定」なので、EditOp::SetDisplay を通じて
+// Document.display に保存する(.ori3ファイルに入り、渡した相手にも同じ見た目で
+// 伝わる)。ここでlocalStorageへ覚えることはしない。覚えてしまうと、人から
+// もらった作品を開いたときにその作品の色を黙って上書きしてしまうため。
+// localStorageに残すのは2D/3Dの分割比だけ(作品の中身ではなく画面の使い方の好み)。
 
 import type { DisplaySettings } from "./types";
 
-/** Rust側 Document::new と同じ初期値(赤い表・白い裏・8分割) */
+/** Rust側 Document::new と同じ初期値(赤い表・白い裏・8分割)。
+ * 作品をまだ開いていない間の表示に使う */
 export const DEFAULT_DISPLAY: DisplaySettings = {
   front_color: [237, 28, 36],
   back_color: [255, 255, 255],
@@ -23,15 +27,15 @@ export const MAX_SPLIT_RATIO = 0.8;
 
 const STORAGE_KEY = "origami3.prefs";
 
+/** localStorageへ覚えておく画面の好み。作品の中身(紙の色・方眼)は
+ * ここには入らない(作品ファイル側に保存する) */
 export interface Prefs {
-  display: DisplaySettings;
   splitRatio: number;
   /** 左右対称に線を引くか(CPE-010)。次に起動しても同じ描き方に戻る */
   mirrorDraw: boolean;
 }
 
 export const DEFAULT_PREFS: Prefs = {
-  display: DEFAULT_DISPLAY,
   splitRatio: DEFAULT_SPLIT_RATIO,
   mirrorDraw: false,
 };
@@ -83,15 +87,7 @@ export function loadPrefs(storage: StorageLike | null = defaultStorage()): Prefs
     const raw = storage?.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_PREFS;
     const saved = JSON.parse(raw) as Partial<Prefs>;
-    const d = saved.display;
     return {
-      display: {
-        front_color: d?.front_color ?? DEFAULT_DISPLAY.front_color,
-        back_color: d?.back_color ?? DEFAULT_DISPLAY.back_color,
-        grid_divisions: clampDivisions(
-          d?.grid_divisions ?? DEFAULT_DISPLAY.grid_divisions,
-        ),
-      },
       splitRatio: clampSplitRatio(saved.splitRatio ?? DEFAULT_SPLIT_RATIO),
       mirrorDraw: saved.mirrorDraw === true,
     };

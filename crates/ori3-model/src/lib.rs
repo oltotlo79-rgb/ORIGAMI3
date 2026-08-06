@@ -106,6 +106,11 @@ pub enum FoldDirection {
     Down,
 }
 
+/// 方眼の分割数の下限・上限(CPE-003)。範囲外の指定は丸めて警告する
+/// (「止めずに警告」原則)。色は `u8` なので0〜255は型が保証する。
+pub const MIN_GRID_DIVISIONS: u32 = 2;
+pub const MAX_GRID_DIVISIONS: u32 = 64;
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DisplaySettings {
     pub front_color: [u8; 3],
@@ -213,6 +218,13 @@ pub enum EditOp {
     /// 提案ウィザードの流し込み用
     ReplaceCreasePattern {
         cp: CreasePattern,
+    },
+    /// 紙の色と方眼の分割数を変える(PAP-003 / CPE-003)。
+    /// 作品ごとの設定として `Document::display` に保存され、undo/redoの対象になる。
+    /// `grid_divisions` が [`MIN_GRID_DIVISIONS`]〜[`MAX_GRID_DIVISIONS`] の外なら
+    /// 丸めて警告する(止めない)。
+    SetDisplay {
+        display: DisplaySettings,
     },
 }
 

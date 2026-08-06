@@ -95,15 +95,38 @@ describe("新規作成の紙の指定", () => {
 });
 
 describe("紙の色と方眼・分割比", () => {
-  it("色と方眼の数は表示中の作品にもすぐ反映する", () => {
+  it("色と方眼の数は作品ごとの設定として保存する(SetDisplayを送る)", async () => {
+    // Rust側は受け取った見た目をそのまま作品へ入れて返す
+    vi.mocked(ipc.editApply).mockImplementation(async (op) =>
+      makeView({
+        ...makeDoc([]),
+        display: op.type === "SetDisplay" ? op.display : DEFAULT_DISPLAY,
+      }),
+    );
     useAppStore.setState({ doc: makeDoc([]) });
-    useAppStore.getState().setDisplay({ front_color: [0, 128, 255] });
-    expect(useAppStore.getState().doc?.display.front_color).toEqual([0, 128, 255]);
 
-    useAppStore.getState().setDisplay({ grid_divisions: 100 });
-    // 範囲外は上限(64)に丸める
-    expect(useAppStore.getState().display.grid_divisions).toBe(64);
+    await useAppStore.getState().setDisplay({ front_color: [0, 128, 255] });
+    expect(vi.mocked(ipc.editApply).mock.calls[0][0]).toEqual({
+      type: "SetDisplay",
+      display: { ...DEFAULT_DISPLAY, front_color: [0, 128, 255] },
+    });
+    // 作品にも画面側の写しにも入る(保存すれば.ori3へ、相手にも同じ色で伝わる)
+    expect(useAppStore.getState().doc?.display.front_color).toEqual([0, 128, 255]);
+    expect(useAppStore.getState().display.front_color).toEqual([0, 128, 255]);
+
+    // 範囲外は上限(64)に丸めてから送る
+    await useAppStore.getState().setDisplay({ grid_divisions: 100 });
+    const last = vi.mocked(ipc.editApply).mock.calls[1][0];
+    if (last.type !== "SetDisplay") throw new Error("SetDisplayでない");
+    expect(last.display.grid_divisions).toBe(64);
     expect(useAppStore.getState().doc?.display.grid_divisions).toBe(64);
+  });
+
+  it("作品をまだ開いていないときは画面の見た目だけ変える(送らない)", async () => {
+    useAppStore.setState({ doc: null });
+    await useAppStore.getState().setDisplay({ grid_divisions: 16 });
+    expect(ipc.editApply).not.toHaveBeenCalled();
+    expect(useAppStore.getState().display.grid_divisions).toBe(16);
   });
 
   it("分割比は狭くしすぎないように収める", () => {

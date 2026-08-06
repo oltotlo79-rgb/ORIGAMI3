@@ -20,6 +20,7 @@ import { foldBlockReason } from "../lib/viewerHint";
 import { buildPoseStep, currentAngles, hasPoseAngle } from "../lib/poseStep";
 import { DEFAULT_CONSTRUCT, type ConstructOptions } from "../lib/construct";
 import {
+  DEFAULT_DISPLAY,
   clampDivisions,
   clampSplitRatio,
   loadPrefs,
@@ -285,8 +286,9 @@ interface AppState {
   newDialogOpen: boolean;
   /** 新規作成ダイアログで決めている紙の形と大きさ */
   newPaperDraft: NewPaperDraft;
-  /** 紙の色・方眼の分割数(PAP-003 / CPE-003)。画面側の好みとして持ち、
-   * 作品を読み込むたびにdoc.displayへ差し込む */
+  /** 紙の色・方眼の分割数(PAP-003 / CPE-003)。作品ごとの設定なので
+   * doc.displayの写し(作品を開くたびにその作品の値になる)。
+   * まだ作品が無い間だけ既定値を持つ */
   display: DisplaySettings;
   /** 中央の2D区画の幅の割合(残りが3D区画。UI-004) */
   splitRatio: number;
@@ -401,8 +403,8 @@ interface AppState {
   setNewPaperDraft: (patch: Partial<NewPaperDraft>) => void;
   /** ダイアログで決めた大きさの紙で作り直す */
   confirmNewDocument: () => Promise<void>;
-  /** 紙の色・方眼の分割数を変える(表示中の作品にもすぐ反映する) */
-  setDisplay: (patch: Partial<DisplaySettings>) => void;
+  /** 紙の色・方眼の分割数を変える(作品ごとの設定として保存する) */
+  setDisplay: (patch: Partial<DisplaySettings>) => Promise<void>;
   /** 2D区画と3D区画の分割比を変える(次回起動時も同じ位置に戻る) */
   setSplitRatio: (ratio: number) => void;
   /** 手順の順番を入れ替える(numberは1始まり、deltaは-1で前へ/+1で後ろへ) */
@@ -506,10 +508,11 @@ export const useAppStore = create<AppState>((set, get) => {
   const applyView = (view: DocumentView, isNewDocument: boolean) => {
     const total = view.doc.sequence.length;
     set((s) => ({
-      // 紙の色・方眼は画面側の好み(Rust側に覚えさせる口が無い)。
-      // 受け取った作品へ差し込んでから配ることで、展開図・立体表示の描画は
-      // これまで通りdoc.displayだけを見れば済む
-      doc: { ...view.doc, display: s.display },
+      // 紙の色・方眼は作品ごとの設定(doc.display)。ここを唯一の拠り所にして
+      // 画面側の写し(display)をそろえる。人からもらった作品を開けば、
+      // その作品の色と方眼がそのまま出る
+      doc: view.doc,
+      display: view.doc.display,
       foldDraft: null,
       techniqueDraft: null,
       faces: view.faces,
@@ -768,7 +771,7 @@ export const useAppStore = create<AppState>((set, get) => {
     exportSavedPath: null,
     newDialogOpen: false,
     newPaperDraft: DEFAULT_NEW_PAPER,
-    display: prefs.display,
+    display: DEFAULT_DISPLAY,
     splitRatio: prefs.splitRatio,
     mirrorDraw: prefs.mirrorDraw,
 
@@ -811,11 +814,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
     setMirrorDraw: (on) => {
       set({ mirrorDraw: on });
-      savePrefs({
-        display: get().display,
-        splitRatio: get().splitRatio,
-        mirrorDraw: on,
-      });
+      savePrefs({ splitRatio: get().splitRatio, mirrorDraw: on });
     },
 
     undo: () => {
@@ -1322,29 +1321,24 @@ export const useAppStore = create<AppState>((set, get) => {
       await get().newDocument(paper);
     },
 
-    setDisplay: (patch) => {
+    setDisplay: async (patch) => {
       const display = { ...get().display, ...patch };
       if (patch.grid_divisions !== undefined) {
         display.grid_divisions = clampDivisions(patch.grid_divisions);
       }
       const doc = get().doc;
-      // 表示中の作品にもすぐ反映する(結果をその場で見せる。設計原則3b)
+      // 色見本や数の入力はその場で見えたほうがよいので、先に画面へ映してから
+      // 作品へ書き込む(設計原則3b)。書き込んだ結果が返ればそれで上書きされる
       set(doc ? { display, doc: { ...doc, display } } : { display });
-      savePrefs({
-        display,
-        splitRatio: get().splitRatio,
-        mirrorDraw: get().mirrorDraw,
-      });
+      // 作品ごとの設定として保存する(.ori3に入り、元に戻す/やり直しも効く)。
+      // 作品をまだ開いていないときは画面の表示だけ変える
+      if (doc) await get().applyEdit({ type: "SetDisplay", display });
     },
 
     setSplitRatio: (ratio) => {
       const splitRatio = clampSplitRatio(ratio);
       set({ splitRatio });
-      savePrefs({
-        display: get().display,
-        splitRatio,
-        mirrorDraw: get().mirrorDraw,
-      });
+      savePrefs({ splitRatio, mirrorDraw: get().mirrorDraw });
     },
 
     moveStep: async (number, delta) => {

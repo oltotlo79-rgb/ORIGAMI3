@@ -48,20 +48,21 @@ describe("見た目の好み", () => {
   });
 
   it("保存した好みは次に読むとそのまま戻る", () => {
-    savePrefs(
-      {
-        display: { ...DEFAULT_DISPLAY, front_color: [0, 128, 255], grid_divisions: 16 },
-        splitRatio: 0.3,
-        mirrorDraw: true,
-      },
-      storage,
-    );
+    savePrefs({ splitRatio: 0.3, mirrorDraw: true }, storage);
     const loaded = loadPrefs(storage);
-    expect(loaded.display.front_color).toEqual([0, 128, 255]);
-    expect(loaded.display.grid_divisions).toBe(16);
     expect(loaded.splitRatio).toBeCloseTo(0.3);
     // 左右対称に描く指定も端末に覚えておく(CPE-010)
     expect(loaded.mirrorDraw).toBe(true);
+  });
+
+  it("紙の色・方眼は端末に覚えない(作品ファイル側の設定なので)", () => {
+    // 古い版が書いた好み(displayを含む)を読んでも、色は引き継がない。
+    // 引き継ぐと、人からもらった作品を開いたときにその色を黙って上書きしてしまう
+    store["origami3.prefs"] = JSON.stringify({
+      display: { ...DEFAULT_DISPLAY, front_color: [0, 128, 255] },
+      splitRatio: 0.3,
+    });
+    expect(loadPrefs(storage)).toEqual({ splitRatio: 0.3, mirrorDraw: false });
   });
 
   it("何も保存されていない・壊れている場合は既定値に戻す", () => {
