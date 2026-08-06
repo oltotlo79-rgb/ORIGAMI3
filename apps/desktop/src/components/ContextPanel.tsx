@@ -14,6 +14,7 @@ import {
   TECHNIQUE_LABEL,
   uniqueWarnings,
 } from "../lib/techniques";
+import { isTwistPolygonReady } from "../lib/twistPolygon";
 import type { EdgeKind, FoldStep, TechniqueKind } from "../lib/types";
 import { PaperAppearance } from "./PaperAppearance";
 
@@ -428,13 +429,22 @@ function FoldDraftContent({ draft }: { draft: FoldDraft }) {
 }
 
 /**
- * 段の幅(mm)の入力欄。書きかけの文字を打てるよう表示は制御せず、確定
- * (Enter・入力欄から離れたとき)にストアへ送る(要件§2: 状態はストア1本)。
+ * 数値の入力欄(段の幅・ねじる角)。書きかけの文字を打てるよう表示は制御せず、
+ * 確定(Enter・入力欄から離れたとき)にストアへ送る(要件§2: 状態はストア1本)。
  */
-function PleatWidthInput({ value }: { value: number }) {
+function NumberInput({
+  id,
+  value,
+  min,
+  onCommit,
+}: {
+  id: string;
+  value: number;
+  min: number;
+  onCommit: (v: number) => void;
+}) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const editedRef = useRef(false);
-  const updateTechniqueDraft = useAppStore((s) => s.updateTechniqueDraft);
 
   useEffect(() => {
     const el = inputRef.current;
@@ -446,21 +456,21 @@ function PleatWidthInput({ value }: { value: number }) {
     if (!el || !editedRef.current) return;
     editedRef.current = false;
     const entered = Number(el.value);
-    if (!Number.isFinite(entered) || entered <= 0) {
+    if (!Number.isFinite(entered) || entered < min) {
       el.value = String(value); // 数字でない入力は捨てて現在値へ戻す
       return;
     }
     el.value = String(entered);
-    updateTechniqueDraft({ widthMm: entered });
+    onCommit(entered);
   };
 
   return (
     <input
       ref={inputRef}
-      id="pleat-width"
+      id={id}
       type="number"
       className="angle-number"
-      min={0.1}
+      min={min}
       step={1}
       defaultValue={value}
       onChange={() => {
@@ -474,6 +484,41 @@ function PleatWidthInput({ value }: { value: number }) {
   );
 }
 
+/**
+ * ねじり折りの中央多角形の指定状況(TEC-009)。
+ * 立体表示で角を順にクリックすると、辺の数も長さも自由な多角形をそのまま折れる。
+ * ここには「今いくつ置いたか」と取り消しだけを出す(操作そのものは立体表示側)。
+ */
+function TwistPolygonRow({ draft }: { draft: TechniqueDraft }) {
+  const undoTechniqueVertex = useAppStore((s) => s.undoTechniqueVertex);
+  const setTechniqueCenter = useAppStore((s) => s.setTechniqueCenter);
+  const n = draft.polygon.length;
+  const ready = isTwistPolygonReady(draft.polygon);
+
+  return (
+    <div className="button-row">
+      <span>
+        中央の形: 角を{n}個指定{ready ? `(${n}角形)` : "(あと3個以上必要)"}
+        {draft.center ? " / 中心は指定した点" : " / 中心は形の重心"}
+      </span>
+      <button type="button" disabled={n === 0} onClick={() => undoTechniqueVertex()}>
+        角を1つ戻す
+      </button>
+      <button
+        type="button"
+        disabled={draft.center === null}
+        onClick={() => setTechniqueCenter(null)}
+      >
+        中心を重心へ戻す
+      </button>
+      <span className="hint">
+        立体表示で中央の形の角を順にクリックしてください(3つ以上)。
+        Ctrl+クリックで中心、Backspaceで1つ戻す、Escでやめる
+      </span>
+    </div>
+  );
+}
+
 /** 技法の確定UI(フラップ・折り線を選んでから適用する) */
 function TechniqueDraftContent({ draft }: { draft: TechniqueDraft }) {
   const paper = useAppStore((s) => s.doc?.paper ?? null);
@@ -482,16 +527,21 @@ function TechniqueDraftContent({ draft }: { draft: TechniqueDraft }) {
   const commitTechnique = useAppStore((s) => s.commitTechnique);
   const scale = paper ? Math.max(paper.width_mm, paper.height_mm) : 1;
   const mm = (v: number) => (v * scale).toFixed(1);
-  const needsFlap = draft.kind !== "Pleat";
+  // ねじり折りは中央多角形を角のクリックで指せる(層は選ばなくてよい)
+  const byPolygon = draft.kind === "Twist" && isTwistPolygonReady(draft.polygon);
+  const needsFlap = draft.kind !== "Pleat" && !byPolygon;
   // 中割り折り・かぶせ折りには重なった層が要る(枚数は奇数でもよい)
   const flapOk = draft.flap.length >= 2;
-  const ready = draft.line !== null && (!needsFlap || flapOk);
+  const ready = (draft.line !== null || byPolygon) && (!needsFlap || flapOk);
 
   return (
     <div>
+      {draft.kind === "Twist" && <TwistPolygonRow draft={draft} />}
       <p>
         {TECHNIQUE_LABEL[draft.kind]}: 層を{draft.flap.length}枚選択中
-        {draft.line ? (
+        {byPolygon ? (
+          " / 中央の形で折ります(層を選ばなければ全ての層)"
+        ) : draft.line ? (
           <>
             {" "}
             / 折り線 ({mm(draft.line[0][0])}, {mm(draft.line[0][1])}) →(
@@ -504,7 +554,13 @@ function TechniqueDraftContent({ draft }: { draft: TechniqueDraft }) {
       {/* どちらの技法でも「動く側」を選ぶ。中割り・かぶせでは折り返される先端の側、
           段折りでは段になって送られる側にあたる(反対側の紙はその場に残る) */}
       <div className="button-row">
-        <span>{needsFlap ? "先端(動く側)" : "段になる側"}</span>
+        <span>
+          {draft.kind === "Twist"
+            ? "ねじる向き"
+            : needsFlap
+              ? "先端(動く側)"
+              : "段になる側"}
+        </span>
         <label>
           <input
             type="radio"
@@ -526,7 +582,23 @@ function TechniqueDraftContent({ draft }: { draft: TechniqueDraft }) {
         {draft.kind === "Pleat" && (
           <>
             <label htmlFor="pleat-width">段の幅(mm)</label>
-            <PleatWidthInput value={draft.widthMm} />
+            <NumberInput
+              id="pleat-width"
+              value={draft.widthMm}
+              min={0.1}
+              onCommit={(v) => updateTechniqueDraft({ widthMm: v })}
+            />
+          </>
+        )}
+        {draft.kind === "Twist" && (
+          <>
+            <label htmlFor="twist-deg">ねじる角(度)</label>
+            <NumberInput
+              id="twist-deg"
+              value={draft.twistDeg}
+              min={0.1}
+              onCommit={(v) => updateTechniqueDraft({ twistDeg: v })}
+            />
           </>
         )}
       </div>
@@ -537,9 +609,11 @@ function TechniqueDraftContent({ draft }: { draft: TechniqueDraft }) {
           title={
             ready
               ? "選んだ技法で折ります"
-              : needsFlap && !flapOk
-                ? "立体表示で紙をクリックして、重なった層を選んでください"
-                : "立体表示で紙の上をドラッグして折り線を引いてください"
+              : draft.kind === "Twist"
+                ? "立体表示で中央の形の角を3つ以上クリックしてください"
+                : needsFlap && !flapOk
+                  ? "立体表示で紙をクリックして、重なった層を選んでください"
+                  : "立体表示で紙の上をドラッグして折り線を引いてください"
           }
           onClick={() => void commitTechnique()}
         >
@@ -549,8 +623,9 @@ function TechniqueDraftContent({ draft }: { draft: TechniqueDraft }) {
           やめる
         </button>
         <span className="hint">
-          立体表示で紙をクリックすると、その場所に重なっている層をまとめて選びます。
-          そのままドラッグすると折り線を引けます(黄色く光っている層が対象です)
+          {draft.kind === "Twist"
+            ? "立体表示で指した中央の形と、そこから出るひだの折り線を黄色で見せています。層を選ばなければ全ての層をねじります"
+            : "立体表示で紙をクリックすると、その場所に重なっている層をまとめて選びます。そのままドラッグすると折り線を引けます(黄色く光っている層が対象です)"}
         </span>
       </div>
     </div>

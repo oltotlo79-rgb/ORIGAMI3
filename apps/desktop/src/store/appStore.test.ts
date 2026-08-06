@@ -1000,6 +1000,9 @@ describe("技法(選ぶだけで折る)", () => {
       line: null,
       movingSide: "right",
       widthMm: 10,
+      polygon: [],
+      center: null,
+      twistDeg: 30,
       docEpoch: useAppStore.getState().docEpoch,
       stepCount: 1,
       upTo: 1,
@@ -1064,6 +1067,64 @@ describe("技法(選ぶだけで折る)", () => {
     const op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
     if (op.type !== "Technique") throw new Error("Techniqueでない");
     expect(op.flap).toEqual([0, 1, 2]);
+  });
+
+  it("ねじり折り: 順にクリックした角がそのまま中央多角形として送られる", async () => {
+    seedFolded();
+    vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(makeStepView(4040, 2));
+
+    useAppStore.getState().beginTechnique("Twist");
+    // 辺の長さがそろっていない三角形(正多角形では表せない形)
+    const pts: Vec2[] = [
+      [0.2, 0.2],
+      [0.8, 0.2],
+      [0.3, 0.9],
+    ];
+    for (const p of pts) useAppStore.getState().addTechniqueVertex(p);
+    // 角を1つ余分に置いてから取り消せる
+    useAppStore.getState().addTechniqueVertex([0.1, 0.5]);
+    useAppStore.getState().undoTechniqueVertex();
+    expect(useAppStore.getState().techniqueDraft?.polygon).toEqual(pts);
+
+    await useAppStore.getState().commitTechnique();
+    const op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
+    if (op.type !== "Technique") throw new Error("Techniqueでない");
+    expect(op.kind).toBe("Twist");
+    expect(op.polygon).toEqual(pts);
+    // 中心は指定しなければ多角形の重心
+    expect(op.center?.[0]).toBeCloseTo((0.2 + 0.8 + 0.3) / 3, 9);
+    expect(op.center?.[1]).toBeCloseTo((0.2 + 0.2 + 0.9) / 3, 9);
+    // 層を選ばなくても送れる(選ばなければ全ての層)
+    expect(op.flap).toEqual([]);
+    // 折り線は1辺目(エンジンは多角形を優先する)
+    expect(op.line).toEqual([pts[0], pts[1]]);
+    expect(useAppStore.getState().techniqueDraft).toBeNull();
+  });
+
+  it("ねじり折り: 中心を指した点にでき、角が3つ未満なら送らずに案内する", async () => {
+    seedFolded();
+    useAppStore.getState().beginTechnique("Twist");
+    useAppStore.getState().addTechniqueVertex([0.2, 0.2]);
+    useAppStore.getState().addTechniqueVertex([0.8, 0.2]);
+
+    await useAppStore.getState().commitTechnique();
+    expect(vi.mocked(ipc.sequenceApply)).not.toHaveBeenCalled();
+    expect(useAppStore.getState().errorMessage).toContain("角を3つ以上");
+
+    vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(makeStepView(4050, 2));
+    useAppStore.getState().addTechniqueVertex([0.3, 0.9]);
+    useAppStore.getState().setTechniqueCenter([0.4, 0.4]);
+    await useAppStore.getState().commitTechnique();
+    const op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
+    if (op.type !== "Technique") throw new Error("Techniqueでない");
+    expect(op.center).toEqual([0.4, 0.4]);
+    // 基準点は1辺目の中点を中心のまわりに既定の30度回した点(ねじる角)
+    const mid: Vec2 = [0.5, 0.2];
+    const rad = (30 * Math.PI) / 180;
+    expect(op.reference_point[0]).toBeCloseTo(
+      0.4 + (mid[0] - 0.4) * Math.cos(rad) - (mid[1] - 0.4) * Math.sin(rad),
+      9,
+    );
   });
 
   it("折れなかったときは手動の折り操作への案内を添え、下ごしらえを残す", async () => {

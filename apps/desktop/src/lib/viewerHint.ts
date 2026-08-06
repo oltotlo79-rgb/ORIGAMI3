@@ -2,6 +2,8 @@
 // 画面から切り離した純粋な関数にして、文言だけをテストできるようにする。
 // 言い回しは折り紙で使う言葉に寄せる(層→重なった紙、レイヤ選択→何枚折るか)。
 
+import { MIN_TWIST_VERTICES } from "./twistPolygon";
+import type { TechniqueKind } from "./types";
 import type { ToolId } from "../store/appStore";
 
 /** 折れる状態かどうかを決める材料(canFoldNowと同じ条件を文章にするため) */
@@ -60,6 +62,21 @@ export interface HintState extends FoldReadiness {
   techniqueFlapCount: number;
   /** 技法の折り線を引いたか */
   hasTechniqueLine: boolean;
+  /** 選んでいる技法の種類(選んでいなければnull)。ねじり折りだけ操作が違う */
+  techniqueKind?: TechniqueKind | null;
+  /** ねじり折りの中央多角形として置いた頂点の数 */
+  techniqueVertexCount?: number;
+  /** ねじり折りの中心を自分で指したか(指していなければ多角形の重心) */
+  techniqueHasCenter?: boolean;
+}
+
+/** ねじり折りの中央多角形を指すときの案内(UI-009: 今すべきことを常に出す) */
+export function twistHint(s: HintState): string {
+  const n = s.techniqueVertexCount ?? 0;
+  const center = s.techniqueHasCenter ? "中心は指定した点" : "中心は形の重心";
+  if (n < MIN_TWIST_VERTICES)
+    return `中央の形の角を順にクリックしてください(3つ以上。いま${n}個)。Ctrl+クリックで中心を指定、Backspaceで1つ戻す、Escでやめる`;
+  return `中央の形を${n}角形で指しました(${center})。角を足すクリックも続けられます。下のパネルでねじる角と向きを決めて「適用」を押してください`;
 }
 
 /** 立体表示に出す1行の案内。どのツールでも必ず何か返す(空にしない) */
@@ -83,6 +100,8 @@ export function viewerHint(s: HintState): string {
   if (s.tool === "technique") {
     if (blocked) return `今は折れません: ${blocked}`;
     if (!s.hasTechnique) return "左の一覧から技法を選んでください";
+    // ねじり折りは中央の多角形を頂点で指す(層は選ばなくてよい)
+    if (s.techniqueKind === "Twist") return twistHint(s);
     if (s.techniqueFlapCount === 0)
       return "紙をクリックすると、その場所の重なりをまとめて選べます";
     if (!s.hasTechniqueLine)

@@ -27,6 +27,14 @@ import {
   savePrefs,
 } from "../lib/displayPrefs";
 import { mirrorAxisX, mirrorSegments } from "../lib/mirror";
+import {
+  DEFAULT_TWIST_DEG,
+  addTwistVertex,
+  isTwistPolygonReady,
+  polygonCentroid,
+  twistReferencePoint,
+  undoTwistVertex,
+} from "../lib/twistPolygon";
 import type {
   Document,
   DisplaySettings,
@@ -133,6 +141,13 @@ export interface TechniqueDraft {
   movingSide: "left" | "right";
   /** 段折りの段の幅(mm) */
   widthMm: number;
+  /** ねじり折りの中央多角形(畳み平面座標)。3D画面で順にクリックした頂点。
+   * 3点以上そろうと、この形のまま折る(辺の数も長さも仮定しない) */
+  polygon: Vec2[];
+  /** ねじり折りの中心(畳み平面座標)。nullなら多角形の重心を使う */
+  center: Vec2 | null;
+  /** ねじり折りのねじる角(度)。動かす側の指定で向きが決まる */
+  twistDeg: number;
   /** 選んだ時点の作品の世代番号(新規・開くで変わる) */
   docEpoch: number;
   /** 選んだ時点の手順の数 */
@@ -367,6 +382,12 @@ interface AppState {
   setTechniqueFlap: (faces: number[]) => void;
   /** 技法の折り線を引く */
   setTechniqueLine: (line: [Vec2, Vec2]) => void;
+  /** ねじり折りの中央多角形へ頂点を1つ足す(3D画面のクリック) */
+  addTechniqueVertex: (p: Vec2) => void;
+  /** 直前に足した頂点を取り消す(頂点が無ければ何もしない) */
+  undoTechniqueVertex: () => void;
+  /** ねじり折りの中心を指定する(nullで多角形の重心へ戻す) */
+  setTechniqueCenter: (p: Vec2 | null) => void;
   /** 技法の設定(動かす側・段の幅)を変える */
   updateTechniqueDraft: (patch: Partial<TechniqueDraft>) => void;
   /** 作図補助(CPE-005)の選び方を変える(どの作図か・等分数・角度の刻み) */
@@ -1077,6 +1098,9 @@ export const useAppStore = create<AppState>((set, get) => {
           line: null,
           movingSide: "right",
           widthMm: DEFAULT_PLEAT_WIDTH_MM,
+          polygon: [],
+          center: null,
+          twistDeg: DEFAULT_TWIST_DEG,
           docEpoch: s.docEpoch,
           stepCount: s.doc.sequence.length,
           upTo: foldInsertAt(s),
@@ -1095,6 +1119,25 @@ export const useAppStore = create<AppState>((set, get) => {
       if (draft) set({ techniqueDraft: { ...draft, line } });
     },
 
+    addTechniqueVertex: (p) => {
+      const draft = get().techniqueDraft;
+      if (draft) {
+        set({ techniqueDraft: { ...draft, polygon: addTwistVertex(draft.polygon, p) } });
+      }
+    },
+
+    undoTechniqueVertex: () => {
+      const draft = get().techniqueDraft;
+      if (draft && draft.polygon.length > 0) {
+        set({ techniqueDraft: { ...draft, polygon: undoTwistVertex(draft.polygon) } });
+      }
+    },
+
+    setTechniqueCenter: (p) => {
+      const draft = get().techniqueDraft;
+      if (draft) set({ techniqueDraft: { ...draft, center: p } });
+    },
+
     updateTechniqueDraft: (patch) => {
       const draft = get().techniqueDraft;
       if (draft) set({ techniqueDraft: { ...draft, ...patch } });
@@ -1111,10 +1154,16 @@ export const useAppStore = create<AppState>((set, get) => {
       const s = get();
       const draft = s.techniqueDraft;
       if (!draft || !s.doc) return;
-      if (!draft.line) {
+      // ねじり折りは中央多角形を頂点で指せる(辺の数も長さも仮定しない)。
+      // 3点以上そろっていれば、折り線1本の指し方(正多角形)より優先する
+      const byPolygon =
+        draft.kind === "Twist" && isTwistPolygonReady(draft.polygon);
+      if (!draft.line && !byPolygon) {
         set({
           errorMessage:
-            "折り線がありません。立体表示の紙の上をドラッグして折り線を引いてください",
+            draft.kind === "Twist"
+              ? "中央の形が決まっていません。立体表示で角を3つ以上クリックしてください"
+              : "折り線がありません。立体表示の紙の上をドラッグして折り線を引いてください",
         });
         return;
       }
@@ -1129,8 +1178,9 @@ export const useAppStore = create<AppState>((set, get) => {
         return;
       }
       // 中割り折り・かぶせ折りには重なった層が要る(層の数は奇数でもよい。
-      // 先端をどちら向きに回すかは紙のつながりから決まる)
-      if (draft.kind !== "Pleat" && draft.flap.length < 2) {
+      // 先端をどちら向きに回すかは紙のつながりから決まる)。
+      // 多角形で指したねじり折りは層を選ばなくてよい(選ばなければ全ての層)
+      if (draft.kind !== "Pleat" && !byPolygon && draft.flap.length < 2) {
         set({
           errorMessage:
             "先に立体表示で紙をクリックし、重なった層(フラップ)を選んでください",
@@ -1138,12 +1188,27 @@ export const useAppStore = create<AppState>((set, get) => {
         return;
       }
       // 基準点の意味は技法ごとに違う。段折りは2本目の折り線の位置(段の幅ぶん
-      // 動く側へ離した点)、中割り・かぶせは先端が向かう側(動かない側)の点
+      // 動く側へ離した点)、中割り・かぶせは先端が向かう側(動かない側)の点、
+      // 多角形で指したねじり折りはねじる角(向きは「動かす側」で決める)
       const scale = Math.max(s.doc.paper.width_mm, s.doc.paper.height_mm);
+      const twistCenter = byPolygon
+        ? (draft.center ?? polygonCentroid(draft.polygon))
+        : null;
+      const twistRef = twistCenter
+        ? twistReferencePoint(
+            draft.polygon,
+            twistCenter,
+            draft.movingSide === "right" ? draft.twistDeg : -draft.twistDeg,
+          )
+        : null;
+      // 多角形を指したときは1辺目をlineとして送る(エンジンはpolygonを優先する)
+      const line: [Vec2, Vec2] =
+        draft.line ?? [draft.polygon[0], draft.polygon[1]];
       const reference =
-        draft.kind === "Pleat"
-          ? offsetPoint(draft.line, draft.movingSide, draft.widthMm / scale)
-          : keepSidePoint(draft.line, draft.movingSide);
+        twistRef ??
+        (draft.kind === "Pleat"
+          ? offsetPoint(line, draft.movingSide, draft.widthMm / scale)
+          : keepSidePoint(line, draft.movingSide));
       // 折った結果を見せる。末尾へ足したなら最新、途中へ挟んだなら挟んだ手順
       set({ currentStep: draft.upTo === s.doc.sequence.length ? null : draft.upTo + 1 });
       await get().applySequenceOp({
@@ -1151,8 +1216,11 @@ export const useAppStore = create<AppState>((set, get) => {
         up_to: draft.upTo,
         kind: draft.kind,
         flap: draft.flap,
-        line: draft.line,
+        line,
         reference_point: reference,
+        ...(byPolygon && twistCenter
+          ? { polygon: draft.polygon, center: twistCenter }
+          : {}),
       });
       const error = get().errorMessage;
       if (error === null) {

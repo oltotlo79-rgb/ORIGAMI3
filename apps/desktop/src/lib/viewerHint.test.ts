@@ -87,6 +87,29 @@ describe("viewerHint", () => {
     ).toContain("適用");
   });
 
+  it("ねじり折りでは、中央の形の角を順にクリックするよう常に案内する", () => {
+    const t: HintState = {
+      ...READY,
+      tool: "technique",
+      hasTechnique: true,
+      techniqueKind: "Twist",
+    };
+    // まだ足りないうちは「あと何をするか」と今の個数を出す
+    const few = viewerHint({ ...t, techniqueVertexCount: 2 });
+    expect(few).toContain("角を順にクリック");
+    expect(few).toContain("3つ以上");
+    expect(few).toContain("いま2個");
+    expect(few).toContain("Esc");
+    // 3つそろったら適用の案内へ変わる
+    const ready = viewerHint({ ...t, techniqueVertexCount: 4 });
+    expect(ready).toContain("4角形");
+    expect(ready).toContain("適用");
+    expect(ready).toContain("中心は形の重心");
+    expect(
+      viewerHint({ ...t, techniqueVertexCount: 4, techniqueHasCenter: true }),
+    ).toContain("中心は指定した点");
+  });
+
   it("引くツールでは、つじつまを合わせて全体が動くことを案内する", () => {
     const p: HintState = { ...READY, tool: "pull" };
     expect(viewerHint(p)).toBe(PULL_HINT);

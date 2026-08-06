@@ -253,3 +253,77 @@ describe("Viewer3D(紙をつかんで引く)", () => {
     expect(useAppStore.getState().drivers.has(5)).toBe(true); // 形は残る
   });
 });
+
+describe("Viewer3D(ねじり折りの中央多角形を指す)", () => {
+  /** ねじり折りを選んだ状態(角はまだ置いていない) */
+  function seedTwist() {
+    useAppStore.setState({
+      doc: DOC,
+      faces: FACES,
+      hinges: new Set<number>(),
+      frame3d: null,
+      activeTool: "technique",
+      currentStep: null,
+      playT: 1,
+      playing: false,
+      drivers: new Map(),
+      errorMessage: null,
+      foldDraft: null,
+      techniqueDraft: {
+        kind: "Twist",
+        flap: [],
+        line: null,
+        movingSide: "right",
+        widthMm: 10,
+        polygon: [],
+        center: null,
+        twistDeg: 30,
+        docEpoch: 0,
+        stepCount: 0,
+        upTo: 0,
+      },
+    });
+  }
+
+  /** 紙の上を1回クリックする(動かさないのでクリック扱いになる) */
+  function click(canvas: Element, x: number, y: number, ctrlKey = false) {
+    fireEvent.pointerDown(canvas, { button: 0, pointerId: 1, clientX: x, clientY: y, ctrlKey });
+    fireEvent.pointerUp(canvas, { button: 0, pointerId: 1, clientX: x, clientY: y, ctrlKey });
+  }
+
+  beforeEach(() => {
+    stubLayout();
+    seedTwist();
+  });
+  afterEach(() => cleanup());
+
+  it("クリックのたびに角が増え、何をすればよいかが常に出る", () => {
+    const canvas = renderViewer();
+    expect(screen.getByRole("status").textContent).toContain("角を順にクリック");
+
+    click(canvas, 170, 170);
+    click(canvas, 230, 170);
+    click(canvas, 200, 230);
+    expect(useAppStore.getState().techniqueDraft?.polygon).toHaveLength(3);
+    // 3つそろうと案内が「適用」へ変わり、下見の線分が渡される
+    expect(screen.getByRole("status").textContent).toContain("3角形");
+    const setHighlight = held.scene.setHighlight as ReturnType<typeof vi.fn>;
+    const last = setHighlight.mock.calls[setHighlight.mock.calls.length - 1][0];
+    expect((last as unknown[]).length).toBe(3 + 6); // 辺3本+頂点3つ×2本
+  });
+
+  it("Ctrl+クリックで中心を指せる。Backspaceで1つ戻り、Escでやめる", () => {
+    const canvas = renderViewer();
+    click(canvas, 170, 170);
+    click(canvas, 230, 170);
+    click(canvas, 200, 230, true); // 中心の指定(角は増えない)
+    expect(useAppStore.getState().techniqueDraft?.polygon).toHaveLength(2);
+    expect(useAppStore.getState().techniqueDraft?.center).not.toBeNull();
+
+    fireEvent.keyDown(window, { key: "Backspace" });
+    expect(useAppStore.getState().techniqueDraft?.polygon).toHaveLength(1);
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(useAppStore.getState().techniqueDraft).toBeNull();
+  });
+});

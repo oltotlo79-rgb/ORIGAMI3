@@ -143,3 +143,70 @@ describe("引くツールの左右同時の切替(UI-007)", () => {
     expect(screen.queryByLabelText("左右対称に動かす")).toBeNull();
   });
 });
+
+describe("ねじり折りの中央多角形(TEC-009)", () => {
+  /** ねじり折りを選び、角をcount個置いた状態にする */
+  function seedTwist(count: number, center: [number, number] | null = null) {
+    seed(new Map());
+    const pts: [number, number][] = [
+      [0.2, 0.2],
+      [0.8, 0.2],
+      [0.5, 0.9],
+      [0.3, 0.5],
+    ];
+    useAppStore.setState({
+      activeTool: "technique",
+      selection: { edgeIds: [], vertexIds: [] },
+      techniqueDraft: {
+        kind: "Twist",
+        flap: [],
+        line: null,
+        movingSide: "right",
+        widthMm: 10,
+        polygon: pts.slice(0, count),
+        center,
+        twistDeg: 30,
+        docEpoch: 0,
+        stepCount: 0,
+        upTo: 0,
+      },
+    });
+  }
+
+  it("角が足りないうちは、何をすればよいかを見せて適用できない", () => {
+    seedTwist(2);
+    render(<ContextPanel />);
+
+    expect(screen.getAllByText(/角を2個指定/).length).toBe(1);
+    expect(screen.getAllByText(/あと3個以上必要/).length).toBe(1);
+    expect(screen.getAllByText(/角を順にクリック/).length).toBeGreaterThan(0);
+    const apply = screen.getByRole("button", { name: "適用" });
+    expect(apply).toHaveProperty("disabled", true);
+  });
+
+  it("3つ以上そろえば、層を選ばなくても適用できる", () => {
+    seedTwist(3);
+    render(<ContextPanel />);
+
+    expect(screen.getAllByText(/3角形/).length).toBe(1);
+    expect(screen.getByRole("button", { name: "適用" })).toHaveProperty(
+      "disabled",
+      false,
+    );
+    // ねじる角は数値で決められる(既定30度)
+    const deg = screen.getByLabelText("ねじる角(度)") as HTMLInputElement;
+    expect(deg.value).toBe("30");
+  });
+
+  it("角を1つ戻す・中心を重心へ戻すが効く", () => {
+    seedTwist(3, [0.4, 0.4]);
+    render(<ContextPanel />);
+
+    expect(screen.getAllByText(/中心は指定した点/).length).toBe(1);
+    fireEvent.click(screen.getByRole("button", { name: "中心を重心へ戻す" }));
+    expect(useAppStore.getState().techniqueDraft?.center).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "角を1つ戻す" }));
+    expect(useAppStore.getState().techniqueDraft?.polygon).toHaveLength(2);
+  });
+});

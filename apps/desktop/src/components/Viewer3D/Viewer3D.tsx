@@ -33,6 +33,7 @@ import {
   updateFrame,
   type Viewer3DScene,
 } from "./sceneBuilder";
+import { twistPreviewSegments } from "../../lib/twistPolygon";
 import { planGrabFold, type GrabMode } from "./grabFold";
 import { pickFace, pickHinge, pickPaper, type HingeSegment } from "./hingePicker";
 
@@ -43,6 +44,20 @@ function toHighlight(segments: [Vec2, Vec2][]): HingeSegment[] {
     a: new THREE.Vector3(a[0], a[1], PREVIEW_LIFT),
     b: new THREE.Vector3(b[0], b[1], PREVIEW_LIFT),
   }));
+}
+
+/** 指定した中心の位置を示す小さな十字(ねじり折りの下見) */
+function centerMark(c: Vec2, r = CENTER_MARK): [Vec2, Vec2][] {
+  return [
+    [
+      [c[0] - r, c[1]],
+      [c[0] + r, c[1]],
+    ],
+    [
+      [c[0], c[1] - r],
+      [c[0], c[1] + r],
+    ],
+  ];
 }
 
 /** 修飾キーから「何枚の紙を動かすか」を決める(説明は常にヒント行に出す) */
@@ -63,6 +78,8 @@ const MIN_FOLD_LENGTH = 1e-4;
 /** 技法のフラップ選択で、層の輪郭からこの距離以内なら「その場所にある」とみなす
  * (クリック位置は紙の点・輪郭へ吸着するので、境界ちょうどを指しても拾えるようにする) */
 const FLAP_PICK_EPS = 1e-3;
+/** ねじり折りの中心を示す十字の腕の長さ(正規化座標) */
+const CENTER_MARK = 0.02;
 /** プレビュー線を紙より少しだけ上に浮かせる高さ(重なりのちらつき防止) */
 const PREVIEW_LIFT = 0.002;
 /** 折った結果の下見(半透明の面)を浮かせる高さ。層のずらし表示より上に置く */
@@ -140,6 +157,9 @@ export function Viewer3D({ fitRef }: Props) {
       hasTechnique: s.techniqueDraft !== null,
       techniqueFlapCount: s.techniqueDraft?.flap.length ?? 0,
       hasTechniqueLine: s.techniqueDraft?.line != null,
+      techniqueKind: s.techniqueDraft?.kind ?? null,
+      techniqueVertexCount: s.techniqueDraft?.polygon.length ?? 0,
+      techniqueHasCenter: s.techniqueDraft?.center != null,
     }),
   );
   // 「折る」と「技法」はどちらも紙の上に折り線を引く(左ドラッグを線引きに使う)
@@ -205,6 +225,11 @@ export function Viewer3D({ fitRef }: Props) {
       const draft = s.techniqueDraft;
       const layers = foldLayers(s.frame3d, s.doc, s.faces);
       const segments: [Vec2, Vec2][] = [];
+      // ねじり折り: 指した中央多角形と、そこから出るひだの折り線を下見する
+      if (draft.kind === "Twist" && draft.polygon.length > 0) {
+        segments.push(...twistPreviewSegments(draft.polygon, draft.center));
+        if (draft.center) segments.push(...centerMark(draft.center));
+      }
       const shown = drawing ? [drawing.a, drawing.b] : draft.line;
       if (shown) segments.push([shown[0], shown[1]]);
       for (const l of layers.filter((l) => draft.flap.includes(l.face))) {
@@ -282,6 +307,25 @@ export function Viewer3D({ fitRef }: Props) {
       grabRef.current = null;
     }
   }, [foldMode]);
+
+  // ねじり折りで中央多角形を置いている間のキー操作(Escでやめる・
+  // Backspaceで直前の角を取り消す)。入力欄を打っている間は邪魔しない
+  useEffect(() => {
+    if (activeTool !== "technique") return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLElement && e.target.tagName === "INPUT") return;
+      const s = useAppStore.getState();
+      if (!s.techniqueDraft) return;
+      if (e.key === "Escape") {
+        s.cancelTechnique();
+      } else if (e.key === "Backspace" && s.techniqueDraft.polygon.length > 0) {
+        e.preventDefault();
+        s.undoTechniqueVertex();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [activeTool]);
 
   // 引くツールから離れたら、引きかけの状態を捨てる
   useEffect(() => {
@@ -519,7 +563,11 @@ export function Viewer3D({ fitRef }: Props) {
         const s = useAppStore.getState();
         const drawn = Math.hypot(b[0] - a[0], b[1] - a[1]) >= MIN_FOLD_LENGTH;
         if (s.activeTool === "technique" && s.techniqueDraft && s.doc) {
-          if (drawn) {
+          if (s.techniqueDraft.kind === "Twist" && !drawn) {
+            // ねじり折り: クリックで中央多角形の角を順に置く(Ctrlなら中心)
+            if (e.ctrlKey) s.setTechniqueCenter(a);
+            else s.addTechniqueVertex(a);
+          } else if (drawn) {
             s.setTechniqueLine([a, b]);
           } else {
             // ドラッグせずクリックしただけ: その場所に重なっている層を選ぶ
@@ -580,7 +628,9 @@ export function Viewer3D({ fitRef }: Props) {
           pullMode
             ? "紙をつかんでドラッグすると、折り線のつじつまを保ったまま全体が連動して動く(右ドラッグで視点を回す)"
             : activeTool === "technique"
-            ? "紙をクリックして層を選び、ドラッグして折り線を引く(平らに畳んだ状態で使える)"
+            ? techniqueDraft?.kind === "Twist"
+              ? "中央の形の角を順にクリックする(3つ以上)。Ctrl+クリックで中心、Backspaceで1つ戻す、Escでやめる"
+              : "紙をクリックして層を選び、ドラッグして折り線を引く(平らに畳んだ状態で使える)"
             : foldMode
               ? "紙をつかんでドラッグすると折れる。Shiftで重なった紙を全部、Altで1枚だけ、Ctrl+ドラッグで折り線を引く(平らに畳んだ状態で使える)"
               : "ドラッグで回転、ホイールで拡大縮小、折り線をクリックで選択"
