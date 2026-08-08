@@ -1,4 +1,65 @@
-/* ORIGAMI3 4区画レイアウトと基本部品のスタイル */
+/* ORIGAMI3 4区画レイアウトと基本部品のスタイル。
+   色・余白・角丸・影・文字の大きさは下の設計トークン(CSS変数)に集約する。
+   各部品はトークンだけを参照し、生の数値や色を書かない(見た目を揃えるため)。 */
+
+:root {
+  /* 配色: 和紙のような温かみのある無彩色を土台にする。
+     効き色は深緑。展開図の慣例色(山=赤 #d43c3c / 谷=青 #3b6fc9)と
+     取り違えないよう、赤系・青系はUIの効き色に使わない。
+     文字色はどれも背景に対してコントラスト比4.5:1以上(lib/uiTokens.test.ts) */
+  --color-bg: #e8e4dc;
+  --color-surface: #f2efe8; /* 操作の区画(ツールバー・レール・パネル) */
+  --color-surface-sunken: #dcd7cd; /* 表示の区画・押せない部品 */
+  --color-control: #fbf9f4;
+  --color-control-hover: #ffffff;
+  --color-canvas-2d: #ddd8d0; /* 展開図の余白(renderer.ts と揃える) */
+  --color-canvas-3d: #cfcbc2; /* 立体表示の背景(sceneBuilder.ts と揃える) */
+  --color-border: #cec8bd;
+  --color-border-strong: #b3aa9c;
+  --color-text: #22201c; /* surface上で14.2:1 */
+  --color-text-muted: #5b5449; /* 補助の文字。surface上で6.5:1 */
+  --color-accent: #2f6b5b; /* 選択中。白文字で6.2:1 */
+  --color-accent-strong: #24564d;
+  --color-accent-soft: #e2ece7;
+  --color-danger: #a33232; /* surface上で6.0:1 */
+  --color-danger-soft: #f6e4e2;
+  --color-warn: #7a5400; /* surface上で5.9:1 */
+  --color-warn-badge: #8a5a12; /* 白文字で5.9:1 */
+  --color-overlay: rgba(28, 26, 22, 0.78);
+  --color-scrim: rgba(28, 26, 22, 0.38);
+
+  /* 余白(2の倍数で段階を作る) */
+  --sp-1: 2px;
+  --sp-2: 4px;
+  --sp-3: 6px;
+  --sp-4: 8px;
+  --sp-5: 12px;
+  --sp-6: 16px;
+
+  /* 角丸 */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-pill: 999px;
+
+  /* 影(重なりの深さを3段階で表す) */
+  --shadow-1: 0 1px 2px rgba(28, 26, 22, 0.08);
+  --shadow-2: 0 2px 6px rgba(28, 26, 22, 0.14);
+  --shadow-dialog: 0 12px 32px rgba(28, 26, 22, 0.28);
+
+  /* 文字の大きさ(補助 / 小 / 本文 / 見出し)と行間 */
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 15px;
+  /* 行間も3段階。狭い区画は詰め、説明文はゆったりさせる(日本語は行間が要る) */
+  --lh-tight: 1.45; /* ボタン・札などの操作部品 */
+  --lh-normal: 1.65; /* コンテキストパネルの説明 */
+  --lh-body: 1.8; /* ダイアログの本文 */
+  --fw-bold: 600;
+
+  --t-fast: 120ms ease;
+}
 
 * {
   box-sizing: border-box;
@@ -10,10 +71,51 @@ body,
   margin: 0;
   height: 100%;
   font-family: "Yu Gothic UI", "Meiryo", sans-serif;
-  font-size: 13px;
-  color: #222;
-  background: #f0f0f2;
+  font-size: var(--fs-md);
+  line-height: var(--lh-tight);
+  color: var(--color-text);
+  background: var(--color-bg);
   overflow: hidden;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+/* 文字・数値・選択の入力欄はどこでも同じ見た目にする */
+input[type="text"],
+input[type="number"],
+select {
+  padding: var(--sp-1) var(--sp-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-control);
+  color: var(--color-text);
+  line-height: var(--lh-tight);
+}
+
+input:disabled,
+select:disabled {
+  background: var(--color-surface-sunken);
+  border-color: var(--color-border);
+  color: var(--color-text-muted);
+}
+
+/* つまみ・チェックの色も効き色に揃える(展開図の山赤・谷青と混ざらない深緑) */
+input[type="checkbox"],
+input[type="radio"],
+input[type="range"] {
+  accent-color: var(--color-accent);
+}
+
+/* キーボードで辿っているときだけ、どこにいるかをはっきり出す */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
 }
 
 .app {
@@ -22,33 +124,78 @@ body,
   height: 100%;
 }
 
-/* 上部ツールバー */
+/* ボタンの共通の見た目。どのボタンも「ふつう / 指を乗せた / 選択中 / 押せない」が
+   同じ約束で見分けられるようにする(設計原則3b) */
+.toolbar button,
+.tool-button,
+.timeline-controls button,
+.timeline-chip,
+.button-row button,
+.angle-row button {
+  padding: var(--sp-2) var(--sp-5);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-control);
+  color: var(--color-text);
+  line-height: var(--lh-tight);
+  box-shadow: var(--shadow-1);
+  cursor: pointer;
+  transition:
+    background var(--t-fast),
+    border-color var(--t-fast),
+    color var(--t-fast);
+}
+
+.toolbar button:hover:not(:disabled),
+.tool-button:hover:not(:disabled),
+.timeline-controls button:hover:not(:disabled),
+.timeline-chip:hover:not(:disabled),
+.button-row button:hover:not(:disabled),
+.angle-row button:hover:not(:disabled) {
+  background: var(--color-control-hover);
+  border-color: var(--color-accent);
+}
+
+.toolbar button:active:not(:disabled),
+.tool-button:active:not(:disabled),
+.timeline-controls button:active:not(:disabled),
+.timeline-chip:active:not(:disabled),
+.button-row button:active:not(:disabled),
+.angle-row button:active:not(:disabled) {
+  background: var(--color-accent-soft);
+  box-shadow: none;
+}
+
+/* 押せないボタンは消さずに残す決まりなので、平らな見た目で「今は押せない」を出す */
+.toolbar button:disabled,
+.tool-button:disabled,
+.timeline-controls button:disabled,
+.button-row button:disabled,
+.angle-row button:disabled {
+  background: var(--color-surface-sunken);
+  border-color: var(--color-border);
+  color: var(--color-text-muted);
+  box-shadow: none;
+  cursor: default;
+}
+
+/* 上部ツールバー: 作品全体に効く操作の場所 */
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
-  background: #e4e4e8;
-  border-bottom: 1px solid #c8c8cc;
-}
-
-.toolbar button {
-  padding: 4px 12px;
-  border: 1px solid #b4b4b8;
-  border-radius: 4px;
-  background: #fafafa;
-  cursor: pointer;
-}
-
-.toolbar button:hover {
-  background: #fff;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-5);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  box-shadow: var(--shadow-1);
+  z-index: 1;
 }
 
 .toolbar-separator {
   width: 1px;
-  height: 20px;
-  background: #c0c0c4;
-  margin: 0 4px;
+  height: 22px;
+  background: var(--color-border);
+  margin: 0 var(--sp-2);
 }
 
 /* 中央行: ツールレール + 2D + 境目 + 3D。
@@ -61,66 +208,75 @@ body,
 
 /* 2Dと3Dの境目(左右にドラッグして広さを変える) */
 .pane-splitter {
-  background: #c8c8cc;
+  background: var(--color-border);
   cursor: col-resize;
   touch-action: none;
+  transition: background var(--t-fast);
 }
 
 .pane-splitter:hover,
 .pane-splitter:focus-visible {
-  background: #3b6fc9;
+  background: var(--color-accent);
   outline: none;
 }
 
 .tool-rail {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 8px 6px;
-  background: #e4e4e8;
-  border-right: 1px solid #c8c8cc;
+  gap: var(--sp-2);
+  padding: var(--sp-4) var(--sp-3);
+  background: var(--color-surface);
+  border-right: 1px solid var(--color-border);
 }
 
 .tool-button {
-  padding: 8px 0;
-  border: 1px solid #b4b4b8;
-  border-radius: 4px;
-  background: #fafafa;
-  cursor: pointer;
-  font-size: 12px;
+  padding: var(--sp-4) var(--sp-1);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-bold);
+  letter-spacing: 0.04em;
 }
 
-.tool-button:hover {
-  background: #fff;
-}
-
-.tool-button.active {
-  background: #3b6fc9;
-  border-color: #2d5aa8;
+/* 選択中のツールは面で塗る(縁の色だけでは何を選んでいるか分かりにくい) */
+.tool-button.active,
+.tool-button.active:hover:not(:disabled) {
+  background: var(--color-accent);
+  border-color: var(--color-accent-strong);
   color: #fff;
+  box-shadow: var(--shadow-2);
 }
 
-/* 技法のサブメニュー(「技法」を選んでいる間だけ出る) */
+.tool-button.active:hover:not(:disabled) {
+  background: var(--color-accent-strong);
+}
+
+/* 技法・作図のサブメニュー(そのツールを選んでいる間だけ出る) */
 .tool-submenu {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  margin: 2px 0 6px;
-  padding: 4px 2px;
-  border-left: 3px solid #3b6fc9;
-  background: #eeeef2;
+  gap: var(--sp-1);
+  margin: var(--sp-1) 0 var(--sp-3);
+  padding: var(--sp-2) var(--sp-1);
+  border-left: 3px solid var(--color-accent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--color-accent-soft);
 }
 
 .tool-button.small {
-  padding: 5px 0;
-  font-size: 11px;
+  padding: var(--sp-3) var(--sp-1);
+  font-size: var(--fs-xs);
+  font-weight: normal;
+  letter-spacing: 0;
 }
 
 /* サブメニューの中の数選び(等分の数・角度の刻み) */
 .tool-select {
-  margin-top: 2px;
+  margin-top: var(--sp-1);
   width: 100%;
-  font-size: 11px;
+  padding: var(--sp-1);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-control);
+  font-size: var(--fs-xs);
 }
 
 .pane {
@@ -131,7 +287,7 @@ body,
 }
 
 .pane-2d {
-  background: #d8d8dc;
+  background: var(--color-canvas-2d);
 }
 
 /* 紙の色・方眼の数(何も選んでいないときだけ出す) */
@@ -139,34 +295,48 @@ body,
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px 12px;
-  margin-top: 6px;
-  font-size: 12px;
+  gap: var(--sp-2) var(--sp-5);
+  margin-top: var(--sp-3);
+  font-size: var(--fs-sm);
 }
 
 .paper-appearance input[type="number"] {
   width: 56px;
-  margin-left: 4px;
+  margin-left: var(--sp-2);
+}
+
+.paper-appearance input[type="color"] {
+  width: 28px;
+  height: 20px;
+  margin-left: var(--sp-2);
+  padding: 0;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-control);
+  vertical-align: middle;
+  cursor: pointer;
 }
 
 /* 新規作成ダイアログの大きさ入力と見本 */
 .new-paper-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin: 8px 0;
-  font-size: 13px;
+  gap: var(--sp-5);
+  margin: var(--sp-4) 0;
+  font-size: var(--fs-md);
 }
 
 .new-paper-row input {
   width: 72px;
-  margin-left: 4px;
+  margin-left: var(--sp-2);
 }
 
 .new-paper-preview {
   display: inline-block;
   background: #fff;
-  border: 1px solid #888;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 2px;
+  box-shadow: var(--shadow-1);
 }
 
 /* 3D区画は内側を上下に分ける(立体表示 + 手順タイムライン)。
@@ -174,7 +344,7 @@ body,
 .pane-3d {
   display: grid;
   grid-template-rows: 1fr 96px;
-  background: #caccd4;
+  background: var(--color-canvas-3d);
 }
 
 .pane-3d-view {
@@ -187,109 +357,104 @@ body,
 .timeline {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 6px 8px;
-  background: #e4e4e8;
-  border-top: 1px solid #c8c8cc;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-5);
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
   min-height: 0;
 }
 
 .timeline-controls {
   display: flex;
-  gap: 6px;
+  gap: var(--sp-3);
 }
 
 .timeline-controls button {
-  padding: 3px 10px;
-  border: 1px solid #b4b4b8;
-  border-radius: 4px;
-  background: #fafafa;
-  cursor: pointer;
-}
-
-.timeline-controls button:hover {
-  background: #fff;
+  padding: var(--sp-1) var(--sp-5);
+  font-size: var(--fs-sm);
 }
 
 .timeline-steps {
   display: flex;
   align-items: flex-start;
-  gap: 4px;
+  gap: var(--sp-2);
   overflow-x: auto;
   overflow-y: hidden;
-  padding-bottom: 4px;
+  padding-bottom: var(--sp-2);
 }
 
 /* 手順1つぶんの枠(「ここに挿入」ボタン+手順チップ) */
 .timeline-slot {
   display: inline-flex;
   align-items: stretch;
-  gap: 2px;
+  gap: var(--sp-1);
   flex: none;
 }
 
 /* 手順の前へ折りを挟む導線(SEQ-006)。細く控えめにして常設の区画を増やさない */
 .timeline-insert {
   flex: none;
-  padding: 0 3px;
-  border: 1px dashed #b4b4b8;
-  border-radius: 4px;
+  padding: 0 var(--sp-1);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: #6a6a70;
+  color: var(--color-text-muted);
   cursor: pointer;
   line-height: 1;
+  transition:
+    background var(--t-fast),
+    border-color var(--t-fast),
+    color var(--t-fast);
 }
 
 .timeline-insert:hover {
-  background: #eef3fc;
-  border-color: #3b6fc9;
-  color: #2d5aa8;
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent);
+  color: var(--color-accent-strong);
 }
 
 .timeline-insert.active {
   border-style: solid;
-  border-color: #3b6fc9;
-  background: #dbe6f8;
-  color: #2d5aa8;
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+  color: var(--color-accent-strong);
 }
 
+/* 手順の札。番号と技法名が読めるよう、選択中は面で塗って区別する */
 .timeline-chip {
   flex: none;
-  padding: 4px 8px;
-  border: 1px solid #b4b4b8;
-  border-radius: 4px;
-  background: #fafafa;
-  cursor: pointer;
+  padding: var(--sp-2) var(--sp-4);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
   white-space: nowrap;
 }
 
-.timeline-chip:hover {
-  background: #fff;
-}
-
-.timeline-chip.selected {
-  background: #3b6fc9;
-  border-color: #2d5aa8;
+.timeline-chip.selected,
+.timeline-chip.selected:hover:not(:disabled) {
+  background: var(--color-accent);
+  border-color: var(--color-accent-strong);
   color: #fff;
+  font-weight: var(--fw-bold);
+  box-shadow: var(--shadow-2);
 }
 
-.timeline-chip.skipped {
-  background: #f7dede;
-  border-color: #d43c3c;
-  color: #b42424;
+/* 飛ばされた手順は赤系で知らせる(展開図の線ではないので慣例色とは別物) */
+.timeline-chip.skipped,
+.timeline-chip.skipped:hover:not(:disabled) {
+  background: var(--color-danger-soft);
+  border-color: var(--color-danger);
+  color: var(--color-danger);
 }
 
-.timeline-chip.skipped.selected {
-  background: #d43c3c;
-  border-color: #a02a2a;
+.timeline-chip.skipped.selected,
+.timeline-chip.skipped.selected:hover:not(:disabled) {
+  background: var(--color-danger);
+  border-color: var(--color-danger);
   color: #fff;
 }
 
 .note-input {
   min-width: 180px;
-  padding: 2px 6px;
-  border: 1px solid #b4b4b8;
-  border-radius: 4px;
 }
 
 .cp-canvas {
@@ -308,17 +473,20 @@ body,
 /* 3D区画右上の警告/エラーバッジ */
 .status-badge {
   position: absolute;
-  top: 8px;
-  right: 8px;
-  padding: 3px 10px;
-  border-radius: 10px;
-  background: #e6a817;
+  top: var(--sp-4);
+  right: var(--sp-4);
+  padding: var(--sp-1) var(--sp-5);
+  border-radius: var(--radius-pill);
+  background: var(--color-warn-badge);
   color: #fff;
-  font-weight: bold;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-tight);
+  box-shadow: var(--shadow-2);
 }
 
 .status-badge.error {
-  background: #d43c3c;
+  background: var(--color-danger);
 }
 
 /* 3D区画の上端に常に出す操作ヒント(UI-009)。
@@ -328,51 +496,54 @@ body,
   top: 0;
   left: 0;
   right: 0;
-  padding: 4px 88px 4px 10px;
-  background: rgba(40, 40, 48, 0.78);
+  padding: var(--sp-2) 88px var(--sp-2) var(--sp-5);
+  background: var(--color-overlay);
   color: #fff;
-  font-size: 12px;
-  line-height: 1.4;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-tight);
   pointer-events: none;
 }
 
 /* 3D区画右下の「視点を戻す」。常設区画・ツールレールを増やさずに置く小さなボタン */
 .viewer-reset {
   position: absolute;
-  right: 8px;
-  bottom: 8px;
-  padding: 3px 10px;
+  right: var(--sp-4);
+  bottom: var(--sp-4);
+  padding: var(--sp-1) var(--sp-5);
   border: 1px solid rgba(255, 255, 255, 0.35);
-  border-radius: 10px;
-  background: rgba(40, 40, 48, 0.78);
+  border-radius: var(--radius-pill);
+  background: var(--color-overlay);
   color: #fff;
-  font-size: 12px;
-  line-height: 1.4;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-tight);
   cursor: pointer;
+  transition: background var(--t-fast);
 }
 
 .viewer-reset:hover,
 .viewer-reset:focus-visible {
-  background: rgba(59, 111, 201, 0.9);
+  background: var(--color-accent);
 }
 
 /* 折れない状態(理由つき)は色を変えて気付けるようにする */
 .viewer-hint.blocked {
-  background: rgba(150, 90, 20, 0.86);
+  background: rgba(122, 84, 0, 0.9);
 }
 
 /* 下部コンテキストパネル */
 .context-panel {
   display: flex;
-  gap: 16px;
-  padding: 8px 12px;
-  background: #e4e4e8;
-  border-top: 1px solid #c8c8cc;
+  gap: var(--sp-6);
+  padding: var(--sp-4) var(--sp-5);
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+  box-shadow: 0 -1px 2px rgba(28, 26, 22, 0.06);
+  line-height: var(--lh-normal);
   overflow-y: auto;
 }
 
 .context-panel p {
-  margin: 2px 0;
+  margin: var(--sp-1) 0;
 }
 
 .context-selection {
@@ -380,55 +551,42 @@ body,
   min-width: 0;
 }
 
+/* 警告・エラーの置き場。左の操作の並びと混ざらないよう区切って少し沈める */
 .context-messages {
   flex: 1;
   min-width: 0;
-  border-left: 1px solid #c8c8cc;
-  padding-left: 16px;
+  border-left: 1px solid var(--color-border);
+  padding-left: var(--sp-6);
   overflow-y: auto;
 }
 
 .button-row {
   display: flex;
-  gap: 6px;
-  margin-top: 6px;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
   flex-wrap: wrap;
 }
 
 .button-row button {
-  padding: 3px 10px;
-  border: 1px solid #b4b4b8;
-  border-radius: 4px;
-  background: #fafafa;
-  cursor: pointer;
-}
-
-.button-row button:hover {
-  background: #fff;
+  padding: var(--sp-1) var(--sp-5);
 }
 
 .button-row label {
   align-self: center;
 }
 
-.button-row select {
-  padding: 2px 4px;
-  border: 1px solid #b4b4b8;
-  border-radius: 4px;
-  background: #fafafa;
-}
-
 /* 折り角度の操作(折り線を選んだとき) */
 .fold-controls {
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px solid #d0d0d4;
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--color-border);
 }
 
 .angle-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-4);
   flex-wrap: wrap;
 }
 
@@ -440,71 +598,95 @@ body,
 
 .angle-number {
   width: 64px;
-  padding: 2px 4px;
-  border: 1px solid #b4b4b8;
-  border-radius: 4px;
 }
 
 .angle-row button {
-  padding: 3px 10px;
-  border: 1px solid #b4b4b8;
-  border-radius: 4px;
-  background: #fafafa;
-  cursor: pointer;
-}
-
-.angle-row button:disabled {
-  color: #999;
-  cursor: default;
+  padding: var(--sp-1) var(--sp-5);
 }
 
 .vertex-list {
-  margin: 4px 0 0;
+  margin: var(--sp-2) 0 0;
   padding-left: 18px;
 }
 
+/* 説明・警告・エラーの文字(どれも背景に対して4.5:1以上) */
 .hint {
-  color: #666;
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
 }
 
 .error-text {
-  color: #b42424;
-  font-weight: bold;
+  color: var(--color-danger);
+  font-weight: var(--fw-bold);
 }
 
 .warning-text {
-  color: #8a6100;
+  color: var(--color-warn);
 }
 
 /* 復旧ダイアログ(SYS-003)。常設4区画の上に重ねて出す */
 .dialog-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.35);
+  background: var(--color-scrim);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 100;
 }
 
+/* 4種のダイアログ(新規作成・提案・書き出し・復旧)で同じ枠・同じ余白を使う */
 .dialog {
   background: #fff;
-  border: 1px solid #bbb;
-  border-radius: 6px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
-  padding: 16px 20px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-dialog);
+  padding: var(--sp-6) 20px;
   max-width: 460px;
 }
 
+/* 見出しは下に細い線を敷いて、題と中身の区切りを見せる */
 .dialog h2 {
-  font-size: 15px;
-  margin: 0 0 8px;
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-tight);
+  margin: 0 0 var(--sp-5);
+  padding-bottom: var(--sp-3);
+  border-bottom: 1px solid var(--color-border);
 }
 
 .dialog p {
-  margin: 0 0 8px;
-  font-size: 13px;
-  line-height: 1.6;
+  margin: 0 0 var(--sp-4);
+  font-size: var(--fs-md);
+  line-height: var(--lh-body);
+}
+
+/* 選択肢のまとまり(紙の形・書き出す種類)は枠で囲って一目で分かるようにする */
+.dialog fieldset {
+  margin: 0 0 var(--sp-5);
+  padding: var(--sp-2) var(--sp-5) var(--sp-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.dialog legend {
+  padding: 0 var(--sp-2);
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+}
+
+.dialog fieldset label,
+.dialog > label {
+  display: block;
+  margin-top: var(--sp-2);
+}
+
+/* ダイアログの決定・取り消しは下端にまとめ、上の説明と線で分ける */
+.dialog .button-row:last-child {
+  margin-top: var(--sp-5);
+  padding-top: var(--sp-5);
+  border-top: 1px solid var(--color-border);
 }
 
 /* 提案ウィザード(PRO-004)。骨格の絵・候補の見本を並べるため復旧ダイアログより広い */
@@ -516,7 +698,7 @@ body,
 
 .proposal-body {
   display: flex;
-  gap: 12px;
+  gap: var(--sp-5);
   align-items: flex-start;
 }
 
@@ -525,7 +707,8 @@ body,
   width: 200px;
   height: 200px;
   flex: none;
-  border: 1px solid #ccc;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
   background: #fff;
 }
 
@@ -533,14 +716,14 @@ body,
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
 }
 
 .limb-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-3);
 }
 
 .limb-name {
@@ -555,24 +738,34 @@ body,
 .candidate-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 8px;
+  gap: var(--sp-4);
 }
 
 .candidate {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-  padding: 6px;
-  background: #f4f4f4;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  background: var(--color-surface);
   border: 2px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
+  color: var(--color-text);
   cursor: pointer;
+  transition:
+    background var(--t-fast),
+    border-color var(--t-fast);
 }
 
-.candidate.selected {
-  border-color: #ff9500;
-  background: #fff5e6;
+.candidate:hover {
+  border-color: var(--color-border-strong);
+  background: var(--color-control-hover);
+}
+
+.candidate.selected,
+.candidate.selected:hover {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
 }
 
 .candidate .cp-thumb {
@@ -581,5 +774,6 @@ body,
 }
 
 .candidate-caption {
-  font-size: 12px;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-tight);
 }

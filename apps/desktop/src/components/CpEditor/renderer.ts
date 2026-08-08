@@ -18,14 +18,15 @@ import { paperExtent, type SnapResult } from "./snap";
 export { EDGE_COLORS };
 
 export const COLORS = {
-  background: "#d8d8dc",
+  /** 紙の外側の余白。App.css の --color-canvas-2d と同じ色にして境目を作らない */
+  background: "#ddd8d0",
   paper: "#ffffff",
   paperShadow: "rgba(0, 0, 0, 0.25)",
   selection: "#ff9500",
   snapMarker: "#2aa02a",
   /** 平らに畳めない点(CPE-009)。操作は止めず色で知らせるだけ */
   violation: "#ff8c00",
-  hintBackground: "rgba(20, 20, 24, 0.78)",
+  hintBackground: "rgba(28, 26, 22, 0.78)",
   hintText: "#ffffff",
   /** 左右対称に描くときの対称軸(CPE-010)。薄く出して邪魔をしない */
   mirrorAxis: "rgba(59, 111, 201, 0.45)",

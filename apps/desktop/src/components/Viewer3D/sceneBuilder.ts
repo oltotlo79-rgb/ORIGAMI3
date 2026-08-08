@@ -36,8 +36,8 @@ const HIGHLIGHT_COLOR = 0xffd400;
 const PREVIEW_COLOR = 0x2f8fff;
 /** 下見の透け具合(下の紙が見える程度) */
 const PREVIEW_OPACITY = 0.45;
-/** 背景色(2D区画と揃える) */
-const BACKGROUND_COLOR = 0xcaccd4;
+/** 背景色(App.css の --color-canvas-3d と同じ。展開図側より少し沈めて奥行きを出す) */
+const BACKGROUND_COLOR = 0xcfcbc2;
 /** 選択中ヒンジの太さ(紙の長辺=1.0を基準にした半径) */
 const HIGHLIGHT_RADIUS = 0.006;
 /** カメラ画角(度) */
