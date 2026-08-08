@@ -405,9 +405,12 @@ fn analyze_collision(
             continue;
         };
         let target_poly = folded_face_polygon(target, &vpos, state);
-        if target_poly.len() < 3 || !is_convex(&target_poly) {
-            continue; // 凹フラップの分割は複数区間になり得るため安全側へフォールバック
+        if target_poly.len() < 3 {
+            continue;
         }
+        // 凹フラップは半平面で複数片へ分かれ得るので提案はしない。ただし下の
+        // 簡易走査は続け、縁を横断した事実を警告へフォールバックできるようにする。
+        let target_is_convex = is_convex(&target_poly);
         let movable = clip_to_side(&target_poly, resolved.l0, resolved.u, -resolved.keep_sign);
         if polygon_area(&movable).abs() <= EPS * EPS {
             continue;
@@ -459,6 +462,10 @@ fn analyze_collision(
                     continue;
                 }
                 saw_collision = true;
+                if !target_is_convex {
+                    unsupported_collision = true;
+                    continue;
+                }
                 // 非平行な縁ではguideと主折り線が交わり、遠側を1半平面で一意に
                 // 決められない。衝突は記録したうえで警告のみにする。
                 if resolved.u.perp_dot(edge_dir.normalize()).abs() > 1e-6 {
