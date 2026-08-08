@@ -32,6 +32,8 @@ import type { HingeSegment } from "./hingePicker";
 const OUTLINE_COLOR = 0x1a1a1a;
 /** 選択中ヒンジの強調色(黄色) */
 const HIGHLIGHT_COLOR = 0xffd400;
+/** 選択中だが折る操作の対象ではない縁・補助線などの強調色(水色) */
+const REFERENCE_HIGHLIGHT_COLOR = 0x40cfff;
 /** 折った結果の下見(実行前プレビュー)の色。動く紙と分かるよう青系にする */
 const PREVIEW_COLOR = 0x2f8fff;
 /** 下見の透け具合(下の紙が見える程度) */
@@ -446,7 +448,7 @@ export interface Viewer3DScene {
   readonly camera: THREE.PerspectiveCamera;
   /** 面と境界線を入れる入れ物(作り直しのたびに中身を破棄する) */
   readonly contentGroup: THREE.Group;
-  /** 選択中ヒンジの強調を入れる入れ物 */
+  /** 選択中の辺や折り線プレビューの強調を入れる入れ物 */
   readonly highlightGroup: THREE.Group;
   /** 表示中の面・線。展開図が変わるまで作り替えない */
   content: Viewer3DContent | null;
@@ -466,8 +468,8 @@ export interface Viewer3DScene {
    * たわみを入れても折る・つかむ操作がそのまま使える。
    */
   setSoft(soft: SoftContent | null): void;
-  /** 選択中ヒンジの強調を更新する(形と材質は使い回す) */
-  setHighlight(segments: HingeSegment[]): void;
+  /** 選択中の辺の強調を更新する(形と材質は使い回す) */
+  setHighlight(segments: HighlightSegment[]): void;
   /**
    * 折った結果の下見を半透明の面で重ねる(UI-008)。
    * 多角形は畳み平面(z=0)の座標で、liftだけ持ち上げて描く。
@@ -482,6 +484,11 @@ export interface Viewer3DScene {
    */
   setDrawMode(enabled: boolean, rotateWithRight?: boolean): void;
   dispose(): void;
+}
+
+/** 強調線分。role省略時は従来どおり操作対象の黄色で描く。 */
+export interface HighlightSegment extends HingeSegment {
+  role?: "hinge" | "reference";
 }
 
 /** 面・線1つ分の資源を破棄する */
@@ -571,6 +578,10 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
     color: HIGHLIGHT_COLOR,
     depthTest: false, // 紙に隠れても見えるように深度判定を切る
   });
+  const referenceHighlightMaterial = new THREE.MeshBasicMaterial({
+    color: REFERENCE_HIGHLIGHT_COLOR,
+    depthTest: false,
+  });
   const dir = new THREE.Vector3();
 
   /** 表示中のたわみの網(null なら従来の面の描き方) */
@@ -638,6 +649,8 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
           mesh.frustumCulled = false;
           highlightGroup.add(mesh);
         }
+        mesh.material =
+          seg.role === "reference" ? referenceHighlightMaterial : highlightMaterial;
         mesh.position.copy(seg.a);
         mesh.quaternion.setFromUnitVectors(AXIS_Y, dir.normalize());
         mesh.scale.set(1, length, 1);
@@ -689,6 +702,7 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
       highlightGroup.clear(); // 形と材質は共有しているのでここでは壊さない
       highlightGeometry.dispose();
       highlightMaterial.dispose();
+      referenceHighlightMaterial.dispose();
       renderer.dispose();
     },
   };

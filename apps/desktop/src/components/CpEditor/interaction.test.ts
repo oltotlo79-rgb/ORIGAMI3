@@ -12,6 +12,11 @@ import {
   onMouseDown,
   onMouseMove,
   onMouseUp,
+  onWheel,
+  scrollView,
+  wheelAction,
+  wheelHint,
+  zoomView,
   type InteractionCtx,
 } from "./interaction";
 import { DEFAULT_CONSTRUCT, type ConstructOptions } from "../../lib/construct";
@@ -68,6 +73,7 @@ function makeCtx(
     selection: { edgeIds: [], vertexIds: [] },
     construct: { ...DEFAULT_CONSTRUCT, ...construct },
     curve: { ...DEFAULT_CURVE, ...curve },
+    wheelBehavior: "scroll",
     violations,
     state: initialEphemeralState(),
     setView: vi.fn(),
@@ -318,6 +324,70 @@ describe("曲線の折り目を描く", () => {
     onMouseDown(ctx, toScreen([0.9, 0.2]), 0);
     expect(drawSegment).toHaveBeenCalledTimes(1);
     expect(drawCurve).not.toHaveBeenCalled();
+  });
+});
+
+describe("ホイールで表示位置と拡大率を変える", () => {
+  it("既定のスクロール設定ではShiftが横、Ctrlが拡大縮小になる", () => {
+    expect(wheelAction("scroll", { shiftKey: false, ctrlKey: false })).toBe("scroll-y");
+    expect(wheelAction("scroll", { shiftKey: true, ctrlKey: false })).toBe("scroll-x");
+    expect(wheelAction("scroll", { shiftKey: false, ctrlKey: true })).toBe("zoom");
+    // ズーム中はShiftよりCtrlの役割を優先する
+    expect(wheelAction("scroll", { shiftKey: true, ctrlKey: true })).toBe("zoom");
+  });
+
+  it("拡大縮小設定へ切り替えると、スクロールがCtrl+ホイールへ入れ替わる", () => {
+    expect(wheelAction("zoom", { shiftKey: false, ctrlKey: false })).toBe("zoom");
+    expect(wheelAction("zoom", { shiftKey: true, ctrlKey: false })).toBe("zoom");
+    expect(wheelAction("zoom", { shiftKey: false, ctrlKey: true })).toBe("scroll-y");
+    expect(wheelAction("zoom", { shiftKey: true, ctrlKey: true })).toBe("scroll-x");
+    expect(wheelHint("zoom")).toContain("Ctrl+Shift+ホイール: 左右");
+  });
+
+  it("スクロール量をそのまま表示位置の移動へ変換する", () => {
+    const view = { scale: 500, offsetX: 30, offsetY: 480 };
+    expect(scrollView(view, "scroll-y", 0, 40)).toEqual({
+      scale: 500,
+      offsetX: 30,
+      offsetY: 440,
+    });
+    expect(scrollView(view, "scroll-x", 0, -25)).toEqual({
+      scale: 500,
+      offsetX: 55,
+      offsetY: 480,
+    });
+    // Shift時にOSが横量へ移し替える場合も同じ結果
+    expect(scrollView(view, "scroll-x", 12, 0).offsetX).toBe(18);
+  });
+
+  it("拡大縮小してもカーソルが指す紙の位置は動かない", () => {
+    const view = { scale: 500, offsetX: 0, offsetY: 500 };
+    expect(zoomView(view, [250, 250], -100)).toEqual({
+      scale: 550,
+      offsetX: -25,
+      offsetY: 525,
+    });
+  });
+
+  it("設定に従って同じホイール入力の役割を切り替える", () => {
+    const { ctx } = makeCtx();
+    const gesture = {
+      deltaX: 0,
+      deltaY: 20,
+      shiftKey: false,
+      ctrlKey: false,
+    };
+    onWheel(ctx, [250, 250], gesture);
+    expect(vi.mocked(ctx.setView)).toHaveBeenLastCalledWith({
+      scale: 500,
+      offsetX: 0,
+      offsetY: 480,
+    });
+
+    ctx.wheelBehavior = "zoom";
+    onWheel(ctx, [250, 250], gesture);
+    const calls = vi.mocked(ctx.setView).mock.calls;
+    expect(calls[calls.length - 1][0].scale).toBeLessThan(500);
   });
 });
 

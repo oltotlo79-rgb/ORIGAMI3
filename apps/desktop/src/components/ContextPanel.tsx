@@ -836,6 +836,7 @@ function SelectionContent() {
   const doc = useAppStore((s) => s.doc);
   const selection = useAppStore((s) => s.selection);
   const applyEdit = useAppStore((s) => s.applyEdit);
+  const wheelBehavior = useAppStore((s) => s.wheelBehavior);
 
   if (!doc) return <p>読み込み中…</p>;
 
@@ -896,7 +897,10 @@ function SelectionContent() {
         左のツールを選んで操作します。山折り・谷折り・補助線: 2回クリックで線を引く(Escで中止)/
         選択: クリックまたはドラッグで選ぶ、点はドラッグで動かせる / Deleteキー:
         選択した線を削除 / 展開図をつかんで動かす:
-        スペースキーを押しながらドラッグ、右ドラッグ、中ボタンドラッグのどれでも
+        スペースキーを押しながらドラッグ、右ドラッグ、中ボタンドラッグのどれでも /{" "}
+        {wheelBehavior === "scroll"
+          ? "ホイールで上下、Shift+ホイールで左右、Ctrl+ホイールで拡大縮小"
+          : "ホイールで拡大縮小、Ctrl+ホイールで上下、Ctrl+Shift+ホイールで左右"}
       </p>
       {/* 紙の色と方眼の数は、何も選んでいないときだけここに出す(PAP-003 / CPE-003) */}
       <PaperAppearance />

@@ -1,11 +1,11 @@
-// 紙の色(PAP-003)・方眼の分割数(CPE-003)・左右対称に描くか(CPE-010)の指定。
+// 紙の色(PAP-003)・方眼の分割数(CPE-003)・描画操作の好みの指定。
 // 何も選んでいないときのコンテキストパネルに出すだけで、常設の区画は増やさない。
 // 変えた結果は展開図・立体表示にその場で映る(設計原則3b)。
 //
 // 紙の色と方眼は作品ごとの設定として保存される(setDisplay が edit_apply の
 // EditOp::SetDisplay を送る)。.ori3ファイルに入るので、作品を渡した相手にも
 // 同じ色・同じ方眼で見え、元に戻す/やり直しも効く。
-// 左右対称に描くかは作品の中身ではなく描き方の好みなので端末側に覚える。
+// 左右対称に描くか・ホイールの役割は作品の中身ではなく操作の好みなので端末側に覚える。
 //
 // 紙のたわみ(SIM-012/013/015)もここに置く。硬さ・膨らみの強さは
 // 「パラメータだけを残して頂点の位置は保存しない」決まりなので、紙の色と同じく
@@ -27,10 +27,28 @@ export function PaperAppearance() {
   const softWarnings = useAppStore((s) => s.softWarnings);
   const mirrorDraw = useAppStore((s) => s.mirrorDraw);
   const setMirrorDraw = useAppStore((s) => s.setMirrorDraw);
+  const wheelBehavior = useAppStore((s) => s.wheelBehavior);
+  const setWheelBehavior = useAppStore((s) => s.setWheelBehavior);
   const soft = softOf(display);
 
   return (
     <div className="paper-appearance">
+      <label>
+        ホイールの動作
+        <select
+          aria-label="ホイールの動作"
+          value={wheelBehavior}
+          onChange={(e) => setWheelBehavior(e.target.value === "zoom" ? "zoom" : "scroll")}
+        >
+          <option value="scroll">スクロール</option>
+          <option value="zoom">拡大縮小</option>
+        </select>
+      </label>
+      <span className="hint">
+        {wheelBehavior === "scroll"
+          ? "ホイール: 上下 / Shift+ホイール: 左右 / Ctrl+ホイール: カーソル位置を中心に拡大縮小"
+          : "ホイール: カーソル位置を中心に拡大縮小 / Ctrl+ホイール: 上下 / Ctrl+Shift+ホイール: 左右"}
+      </span>
       <label>
         紙の表の色
         <input

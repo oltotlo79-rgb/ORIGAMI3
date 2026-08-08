@@ -13,6 +13,7 @@ afterEach(() => {
     display: DEFAULT_DISPLAY,
     doc: null,
     mirrorDraw: false,
+    wheelBehavior: "scroll",
     softWarnings: [],
   });
 });
@@ -46,6 +47,25 @@ describe("紙の色と方眼", () => {
     expect(useAppStore.getState().display.grid_divisions).toBe(16);
     fireEvent.change(input, { target: { value: "1" } });
     expect(useAppStore.getState().display.grid_divisions).toBe(2);
+  });
+});
+
+describe("展開図のホイール動作", () => {
+  it("既定はスクロールで、上下・左右・拡大縮小の割り当てを見せる", () => {
+    render(<PaperAppearance />);
+    expect(screen.getByLabelText("ホイールの動作")).toHaveProperty("value", "scroll");
+    expect(screen.getByText(/Shift\+ホイール: 左右/)).not.toBeNull();
+    expect(screen.getByText(/Ctrl\+ホイール: カーソル位置を中心に拡大縮小/)).not.toBeNull();
+  });
+
+  it("拡大縮小へ切り替えるとスクロールがCtrl+ホイールへ入れ替わる", () => {
+    render(<PaperAppearance />);
+    fireEvent.change(screen.getByLabelText("ホイールの動作"), {
+      target: { value: "zoom" },
+    });
+    expect(useAppStore.getState().wheelBehavior).toBe("zoom");
+    expect(screen.getByText(/Ctrl\+ホイール: 上下/)).not.toBeNull();
+    expect(screen.getByText(/Ctrl\+Shift\+ホイール: 左右/)).not.toBeNull();
   });
 });
 

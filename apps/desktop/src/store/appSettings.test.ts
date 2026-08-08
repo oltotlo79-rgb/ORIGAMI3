@@ -59,6 +59,7 @@ beforeEach(() => {
     errorMessage: null,
     currentStep: null,
     mirrorDraw: false,
+    wheelBehavior: "scroll",
   });
 });
 

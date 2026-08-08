@@ -28,6 +28,7 @@ import {
   loadPrefs,
   savePrefs,
   softOf,
+  type WheelBehavior,
 } from "../lib/displayPrefs";
 import {
   ALIGN_STEPS,
@@ -427,6 +428,8 @@ interface AppState {
   /** 3Dで紙を引くとき左右対称の相手も同時に動かすか(UI-007)。既定はオン。
    * 画面の使い方の好みなので端末に覚えておく(作品の中身には入れない) */
   pullMirror: boolean;
+  /** 2D展開図で修飾キーなしのホイールをスクロールと拡大縮小のどちらに使うか。 */
+  wheelBehavior: WheelBehavior;
 
   newDocument: (paper: Paper) => Promise<void>;
   openDocument: (path: string) => Promise<void>;
@@ -442,6 +445,8 @@ interface AppState {
   setMirrorDraw: (on: boolean) => void;
   /** 3Dで引くとき左右同時に動かすかを切り替える(次回起動時も同じ設定に戻る) */
   setPullMirror: (on: boolean) => void;
+  /** 2D展開図のホイール動作を切り替える(次回起動時も同じ設定に戻る) */
+  setWheelBehavior: (behavior: WheelBehavior) => void;
   undo: () => Promise<void>;
   redo: () => Promise<void>;
   /** 手順の追加・変更・削除(sequence_apply)。再生中なら止めてから送る */
@@ -666,8 +671,8 @@ export const useAppStore = create<AppState>((set, get) => {
 
   /** 画面の使い方の好み(作品の中身ではないもの)を端末に覚えておく */
   const persistPrefs = () => {
-    const { splitRatio, mirrorDraw, pullMirror } = get();
-    savePrefs({ splitRatio, mirrorDraw, pullMirror });
+    const { splitRatio, mirrorDraw, pullMirror, wheelBehavior } = get();
+    savePrefs({ splitRatio, mirrorDraw, pullMirror, wheelBehavior });
   };
 
   /** DocumentViewの内容で状態を一括更新する(成功時共通処理)。
@@ -1133,6 +1138,7 @@ export const useAppStore = create<AppState>((set, get) => {
     splitRatio: prefs.splitRatio,
     mirrorDraw: prefs.mirrorDraw,
     pullMirror: prefs.pullMirror,
+    wheelBehavior: prefs.wheelBehavior,
 
     newDocument: (paper) => runViewCommand(() => ipc.documentNew(paper), true),
 
@@ -1224,6 +1230,11 @@ export const useAppStore = create<AppState>((set, get) => {
       set({ pullMirror: on });
       // 切ったら、いま一緒に動かしている相手もその場で外す(次のドラッグを待たない)
       if (!on) set({ pullMirrorHinge: null });
+      persistPrefs();
+    },
+
+    setWheelBehavior: (behavior) => {
+      set({ wheelBehavior: behavior });
       persistPrefs();
     },
 

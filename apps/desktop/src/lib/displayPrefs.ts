@@ -1,10 +1,10 @@
-// 見た目の設定(紙の色・方眼の分割数)を扱う小道具と、2D/3Dの分割比の保管。
+// 見た目の設定(紙の色・方眼の分割数)を扱う小道具と、画面操作の好みの保管。
 //
 // 紙の色・方眼の分割数は「作品ごとの設定」なので、EditOp::SetDisplay を通じて
 // Document.display に保存する(.ori3ファイルに入り、渡した相手にも同じ見た目で
 // 伝わる)。ここでlocalStorageへ覚えることはしない。覚えてしまうと、人から
 // もらった作品を開いたときにその作品の色を黙って上書きしてしまうため。
-// localStorageに残すのは2D/3Dの分割比だけ(作品の中身ではなく画面の使い方の好み)。
+// localStorageに残すのは分割比・対称描画・ホイールなど画面の使い方の好みだけ。
 
 import type { DisplaySettings, SoftSettings } from "./types";
 
@@ -56,6 +56,9 @@ export const MAX_SPLIT_RATIO = 0.8;
 
 const STORAGE_KEY = "origami3.prefs";
 
+/** 2D展開図で修飾キーを押していないときのホイール動作。 */
+export type WheelBehavior = "scroll" | "zoom";
+
 /** localStorageへ覚えておく画面の好み。作品の中身(紙の色・方眼)は
  * ここには入らない(作品ファイル側に保存する) */
 export interface Prefs {
@@ -66,12 +69,15 @@ export interface Prefs {
    * 折り紙の作品はほとんどが左右対称で、鶴の羽のように両側を一緒に開くのが
    * 自然なので既定はオン。対称の相手が無い折り線では自動的に1本だけになる */
   pullMirror: boolean;
+  /** 2D展開図のホイール操作。作品ではなく端末ごとの操作の好みとして覚える。 */
+  wheelBehavior: WheelBehavior;
 }
 
 export const DEFAULT_PREFS: Prefs = {
   splitRatio: DEFAULT_SPLIT_RATIO,
   mirrorDraw: false,
   pullMirror: true,
+  wheelBehavior: "scroll",
 };
 
 /** 方眼の分割数を範囲内の整数に丸める(入力が数でなければ既定値) */
@@ -126,6 +132,8 @@ export function loadPrefs(storage: StorageLike | null = defaultStorage()): Prefs
       mirrorDraw: saved.mirrorDraw === true,
       // 保存が無い(初めての起動・古い保存)ときは既定のオンのままにする
       pullMirror: saved.pullMirror !== false,
+      // 古い保存には項目が無いので、一般的な描画ソフトと同じスクロールを既定にする
+      wheelBehavior: saved.wheelBehavior === "zoom" ? "zoom" : "scroll",
     };
   } catch {
     return DEFAULT_PREFS;

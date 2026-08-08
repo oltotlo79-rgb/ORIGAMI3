@@ -42,6 +42,7 @@ import { ALIGN_STEPS } from "../../lib/alignFold";
 import { nearestAlignLine, nearestAlignPoint } from "../../lib/alignPick";
 import { planGrabFold, type GrabMode } from "./grabFold";
 import { pickFace, pickHinge, pickPaper, type HingeSegment } from "./hingePicker";
+import { deriveSelectedEdgeHighlights } from "./edgeHighlight";
 
 /** 畳み平面の線分列を強調表示用の線分へ(紙より少しだけ浮かせる) */
 function toHighlight(segments: [Vec2, Vec2][]): HingeSegment[] {
@@ -321,15 +322,37 @@ export function Viewer3D({ fitRef }: Props) {
     }
     // 引いている間は、いま角度を変えている折り線だけを色で示す(UI-007)。
     // 左右同時のときは対称の相手にも同じ色を付け、両方動くことを見せる
-    const selected = new Set(
-      s.pullHinge !== null
-        ? s.pullMirrorHinge !== null
+    if (s.pullHinge !== null) {
+      const selected = new Set(
+        s.pullMirrorHinge !== null
           ? [s.pullHinge, s.pullMirrorHinge]
-          : [s.pullHinge]
-        : s.selection.edgeIds,
-    );
+          : [s.pullHinge],
+      );
+      scene.setHighlight(
+        scene.content.hingeSegments.filter((seg) => selected.has(seg.edgeId)),
+      );
+      return;
+    }
+    // 2Dで選んだ辺は種類を問わず現在の3D位置へ写す。ヒンジは黄色、
+    // 折る操作の対象にならない縁・補助線・非ヒンジ折り線は水色で区別する。
+    if (!s.doc) {
+      scene.setHighlight([]);
+      return;
+    }
     scene.setHighlight(
-      scene.content.hingeSegments.filter((seg) => selected.has(seg.edgeId)),
+      deriveSelectedEdgeHighlights(
+        s.doc,
+        s.faces,
+        scene.content.topology.slots,
+        scene.content.positions,
+        s.hinges,
+        s.selection.edgeIds,
+      ).map((target) => ({
+        edgeId: target.edgeId,
+        role: target.role,
+        a: new THREE.Vector3(...target.a),
+        b: new THREE.Vector3(...target.b),
+      })),
     );
   }, []);
 
@@ -739,7 +762,7 @@ export function Viewer3D({ fitRef }: Props) {
               : "紙をクリックして層を選び、ドラッグして折り線を引く(平らに畳んだ状態で使える)"
             : foldMode
               ? "紙をつかんでドラッグすると折れる。Shiftで重なった紙を全部、Altで1枚だけ、Ctrl+ドラッグで折り線を引く(平らに畳んだ状態で使える)"
-              : "ドラッグで回転、ホイールで拡大縮小、折り線をクリックで選択"
+              : "ドラッグで回転、ホイールで拡大縮小、折り線をクリックで選択(展開図で選んだ縁・補助線は水色)"
         }
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}

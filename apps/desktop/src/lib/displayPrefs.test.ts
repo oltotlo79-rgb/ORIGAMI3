@@ -49,7 +49,12 @@ describe("見た目の好み", () => {
 
   it("保存した好みは次に読むとそのまま戻る", () => {
     savePrefs(
-      { splitRatio: 0.3, mirrorDraw: true, pullMirror: false },
+      {
+        splitRatio: 0.3,
+        mirrorDraw: true,
+        pullMirror: false,
+        wheelBehavior: "zoom",
+      },
       storage,
     );
     const loaded = loadPrefs(storage);
@@ -58,6 +63,18 @@ describe("見た目の好み", () => {
     expect(loaded.mirrorDraw).toBe(true);
     // 3Dで引くときの左右同時の指定も覚えておく(UI-007)
     expect(loaded.pullMirror).toBe(false);
+    // 2D展開図のホイール動作も端末ごとに戻る
+    expect(loaded.wheelBehavior).toBe("zoom");
+  });
+
+  it("ホイールは既定でスクロールし、古い保存や不正値もスクロールに戻す", () => {
+    expect(DEFAULT_PREFS.wheelBehavior).toBe("scroll");
+    expect(loadPrefs(storage).wheelBehavior).toBe("scroll");
+    storage.setItem(
+      "origami3.prefs",
+      JSON.stringify({ splitRatio: 0.4, wheelBehavior: "unknown" }),
+    );
+    expect(loadPrefs(storage).wheelBehavior).toBe("scroll");
   });
 
   it("3Dで引くときの左右同時は、保存が無ければ既定のオン(UI-007)", () => {
@@ -79,6 +96,7 @@ describe("見た目の好み", () => {
       splitRatio: 0.3,
       mirrorDraw: false,
       pullMirror: true,
+      wheelBehavior: "scroll",
     });
   });
 

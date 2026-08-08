@@ -34,6 +34,9 @@ export const COLORS = {
   mirrorAxis: "rgba(59, 111, 201, 0.45)",
   marqueeFill: "rgba(59, 111, 201, 0.12)",
   marqueeStroke: "#3b6fc9",
+  /** 拡大中に、紙のどの部分を見ているか示す細い位置バー */
+  positionBarTrack: "rgba(28, 26, 22, 0.14)",
+  positionBarThumb: "rgba(47, 107, 91, 0.58)",
 } as const;
 
 /** 線幅(px) */
@@ -80,6 +83,109 @@ export function fitView(doc: Document, widthPx: number, heightPx: number): ViewT
     scale,
     offsetX: (widthPx - w * scale) / 2,
     offsetY: heightPx - (heightPx - h * scale) / 2,
+  };
+}
+
+/** 位置バーの1軸分。値はすべてCanvas上のCSSピクセル。 */
+export interface AxisPositionBar {
+  trackStart: number;
+  trackLength: number;
+  thumbStart: number;
+  thumbLength: number;
+}
+
+/** 下端の横位置バーと右端の縦位置バー。 */
+export interface ViewportPositionBars {
+  horizontal: AxisPositionBar;
+  vertical: AxisPositionBar;
+}
+
+/** 位置バーをCanvas端から離す量・太さ・最小のつまみ長(px)。 */
+const POSITION_BAR_MARGIN = 6;
+const POSITION_BAR_THICKNESS = 3;
+const POSITION_BAR_MIN_THUMB = 20;
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+/**
+ * 紙の画面上の開始位置・長さから、位置バー1軸のつまみを求める純関数。
+ * 紙が表示区画より大きいときは表示割合を長さ、スクロール進捗を位置にする。
+ * 紙がこの軸に収まるときは、全範囲が見えていることをトラック全長で表す。
+ */
+export function deriveAxisPositionBar(
+  paperStart: number,
+  paperLength: number,
+  viewportLength: number,
+  trackStart: number,
+  trackLength: number,
+): AxisPositionBar {
+  const safeTrackLength = Math.max(0, trackLength);
+  if (safeTrackLength === 0) {
+    return { trackStart, trackLength: 0, thumbStart: trackStart, thumbLength: 0 };
+  }
+  const visibleRatio =
+    paperLength > 0 ? clamp(viewportLength / paperLength, 0, 1) : 1;
+  const thumbLength =
+    visibleRatio >= 1
+      ? safeTrackLength
+      : clamp(
+          safeTrackLength * visibleRatio,
+          Math.min(POSITION_BAR_MIN_THUMB, safeTrackLength),
+          safeTrackLength,
+        );
+  const scrollable = Math.max(0, paperLength - viewportLength);
+  const progress = scrollable === 0 ? 0 : clamp(-paperStart / scrollable, 0, 1);
+  const thumbStart = trackStart + (safeTrackLength - thumbLength) * progress;
+  return { trackStart, trackLength: safeTrackLength, thumbStart, thumbLength };
+}
+
+/**
+ * 拡大中の紙と表示区画から、右端・下端の位置バーを求める純関数。
+ * fitViewの倍率を1.0とし、それ以下ではバーを出さない。
+ */
+export function deriveViewportPositionBars(
+  doc: Document,
+  view: ViewTransform,
+  widthPx: number,
+  heightPx: number,
+): ViewportPositionBars | null {
+  if (widthPx <= 0 || heightPx <= 0) return null;
+  const fitScale = fitView(doc, widthPx, heightPx).scale;
+  if (!Number.isFinite(view.scale) || view.scale <= fitScale) return null;
+
+  const [paperWidth, paperHeight] = paperExtent(doc);
+  const paperWidthPx = paperWidth * view.scale;
+  const paperHeightPx = paperHeight * view.scale;
+  if (paperWidthPx <= 0 || paperHeightPx <= 0) return null;
+
+  // 右下で2本が重ならないよう、互いの太さと余白の分だけトラックを短くする。
+  const horizontalTrackLength = Math.max(
+    0,
+    widthPx - POSITION_BAR_MARGIN * 3 - POSITION_BAR_THICKNESS,
+  );
+  const verticalTrackLength = Math.max(
+    0,
+    heightPx - POSITION_BAR_MARGIN * 3 - POSITION_BAR_THICKNESS,
+  );
+  // 紙の原点は左下なので、縦軸だけ画面上端の位置へ直す。
+  const paperTop = view.offsetY - paperHeightPx;
+  return {
+    horizontal: deriveAxisPositionBar(
+      view.offsetX,
+      paperWidthPx,
+      widthPx,
+      POSITION_BAR_MARGIN,
+      horizontalTrackLength,
+    ),
+    vertical: deriveAxisPositionBar(
+      paperTop,
+      paperHeightPx,
+      heightPx,
+      POSITION_BAR_MARGIN,
+      verticalTrackLength,
+    ),
   };
 }
 
@@ -354,6 +460,49 @@ function drawOverlay(
   }
 }
 
+/** 拡大中の紙の見えている範囲を、Canvasの右端・下端へ薄く重ねる。 */
+function drawViewportPositionBars(
+  ctx: CanvasRenderingContext2D,
+  doc: Document,
+  view: ViewTransform,
+  widthPx: number,
+  heightPx: number,
+): void {
+  const bars = deriveViewportPositionBars(doc, view, widthPx, heightPx);
+  if (!bars) return;
+
+  const horizontalY = heightPx - POSITION_BAR_MARGIN - POSITION_BAR_THICKNESS;
+  const verticalX = widthPx - POSITION_BAR_MARGIN - POSITION_BAR_THICKNESS;
+  ctx.save();
+  ctx.fillStyle = COLORS.positionBarTrack;
+  ctx.fillRect(
+    bars.horizontal.trackStart,
+    horizontalY,
+    bars.horizontal.trackLength,
+    POSITION_BAR_THICKNESS,
+  );
+  ctx.fillRect(
+    verticalX,
+    bars.vertical.trackStart,
+    POSITION_BAR_THICKNESS,
+    bars.vertical.trackLength,
+  );
+  ctx.fillStyle = COLORS.positionBarThumb;
+  ctx.fillRect(
+    bars.horizontal.thumbStart,
+    horizontalY,
+    bars.horizontal.thumbLength,
+    POSITION_BAR_THICKNESS,
+  );
+  ctx.fillRect(
+    verticalX,
+    bars.vertical.thumbStart,
+    POSITION_BAR_THICKNESS,
+    bars.vertical.thumbLength,
+  );
+  ctx.restore();
+}
+
 /**
  * 展開図全体を描画する。widthPx/heightPxはCSSピクセルのキャンバスサイズ。
  * 呼び出し側でcanvas.width/heightをdpr倍に設定しておくこと。
@@ -392,4 +541,6 @@ export function render(
   drawViolations(ctx, doc, view, overlay.violations);
   if (overlay.vertexDrag) drawVertexDrag(ctx, doc, view, overlay.vertexDrag);
   drawOverlay(ctx, view, overlay);
+  // 選択線や操作ヒントの後に描き、紙の位置を常に見失わないようにする。
+  drawViewportPositionBars(ctx, doc, view, widthPx, heightPx);
 }

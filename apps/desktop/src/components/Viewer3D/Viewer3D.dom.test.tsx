@@ -82,6 +82,30 @@ const DOC: Document = {
   display: { front_color: [230, 90, 60], back_color: [245, 245, 245], grid_divisions: 8 },
 };
 const FACES: Face[] = [{ id: 0, vertices: [0, 1, 2, 3], edges: [10, 11, 12, 13] }];
+const EDGE_DOC: Document = {
+  ...DOC,
+  cp: {
+    vertices: [
+      ...DOC.cp.vertices,
+      { id: 4, pos: [0.25, 0.1] },
+      { id: 5, pos: [0.75, 0.1] },
+    ],
+    edges: [
+      { id: 0, v0: 0, v1: 1, kind: "Border" },
+      { id: 1, v0: 1, v1: 2, kind: "Border" },
+      { id: 2, v0: 2, v1: 3, kind: "Border" },
+      { id: 3, v0: 3, v1: 0, kind: "Border" },
+      { id: 5, v0: 0, v1: 2, kind: "Mountain" },
+      { id: 6, v0: 4, v1: 5, kind: "Aux" },
+    ],
+    next_vertex_id: 6,
+    next_edge_id: 7,
+  },
+};
+const EDGE_FACES: Face[] = [
+  { id: 0, vertices: [0, 1, 2], edges: [0, 1, 5] },
+  { id: 1, vertices: [0, 2, 3], edges: [5, 2, 3] },
+];
 const VIEW: DocumentView = {
   doc: DOC,
   faces: FACES,
@@ -135,6 +159,7 @@ describe("Viewer3D(画面)", () => {
       errorMessage: null,
       foldDraft: null,
       techniqueDraft: null,
+      selection: { edgeIds: [], vertexIds: [] },
     });
   });
   afterEach(() => cleanup());
@@ -468,6 +493,33 @@ describe("Viewer3D(視点を戻す)", () => {
       alignDraft: null,
       techniqueDraft: null,
     });
+  });
+
+  it("2Dで選んだヒンジ・縁・補助線を3Dへ渡し、操作対象外は水色の役割に分ける", async () => {
+    useAppStore.setState({
+      doc: EDGE_DOC,
+      faces: EDGE_FACES,
+      hinges: new Set([5]),
+      activeTool: "select",
+      selection: { edgeIds: [0, 5, 6], vertexIds: [] },
+    });
+    renderViewer();
+
+    await waitFor(() => {
+      const setHighlight = held.scene.setHighlight as ReturnType<typeof vi.fn>;
+      const calls = setHighlight.mock.calls;
+      expect(calls.length).toBeGreaterThan(0);
+      const last = calls[calls.length - 1][0] as {
+        edgeId: number;
+        role?: string;
+      }[];
+      expect(last.map(({ edgeId, role }) => ({ edgeId, role }))).toEqual([
+        { edgeId: 0, role: "reference" },
+        { edgeId: 5, role: "hinge" },
+        { edgeId: 6, role: "reference" },
+      ]);
+    });
+    expect(screen.getByRole("status").textContent).toContain("水色");
   });
   afterEach(() => cleanup());
 

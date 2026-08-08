@@ -6,6 +6,7 @@
 // 中ボタンドラッグ。中ボタンの無い機器でもつかんで動かせるようにするため。
 
 import type { Document, EdgeKind, EditOp, Vec2 } from "../../lib/types";
+import type { WheelBehavior } from "../../lib/displayPrefs";
 import type { Selection, ToolId } from "../../store/appStore";
 import { screenToWorld, type ViewTransform } from "./renderer";
 import { paperExtent, snap, snapForMove, type SnapResult } from "./snap";
@@ -147,6 +148,8 @@ export interface InteractionCtx {
   construct: ConstructOptions;
   /** 曲線の折り目の選び方(直線/曲線・描き方・分割・曲がるための線) */
   curve: CurveOptions;
+  /** 修飾キーを押していないときのホイール動作(端末ごとの設定)。 */
+  wheelBehavior: WheelBehavior;
   /** 平らに畳めない点のID(Rust側の判定結果)。橙色の丸で知らせる */
   violations: number[];
   state: EphemeralState; // その場で書き換える
@@ -276,16 +279,74 @@ export function selectInRect(doc: Document, a: Vec2, b: Vec2): Selection {
   return { edgeIds, vertexIds };
 }
 
-/** ホイールズーム(カーソル位置を中心に拡大縮小) */
-export function onWheel(ctx: InteractionCtx, screen: Vec2, deltaY: number): void {
-  const factor = deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
-  const scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, ctx.view.scale * factor));
-  const f = scale / ctx.view.scale;
-  ctx.setView({
+/** ホイール操作1回に含まれる移動量と修飾キー。移動量はCSS pxへ換算済み。 */
+export interface WheelGesture {
+  deltaX: number;
+  deltaY: number;
+  shiftKey: boolean;
+  ctrlKey: boolean;
+}
+
+/** 設定と修飾キーから決まる、今回のホイールの役割。 */
+export type WheelAction = "zoom" | "scroll-x" | "scroll-y";
+
+/**
+ * 通常ホイールとCtrl+ホイールの役割を入れ替える。
+ * スクロールになった場合だけShiftで横方向へ切り替える。
+ */
+export function wheelAction(
+  behavior: WheelBehavior,
+  modifiers: Pick<WheelGesture, "shiftKey" | "ctrlKey">,
+): WheelAction {
+  const zoom = (behavior === "zoom") !== modifiers.ctrlKey;
+  if (zoom) return "zoom";
+  return modifiers.shiftKey ? "scroll-x" : "scroll-y";
+}
+
+/** 現在の設定に合う、Canvas上の短い操作案内。 */
+export function wheelHint(behavior: WheelBehavior): string {
+  return behavior === "scroll"
+    ? "ホイール: 上下 / Shift+ホイール: 左右 / Ctrl+ホイール: 拡大縮小"
+    : "ホイール: 拡大縮小 / Ctrl+ホイール: 上下 / Ctrl+Shift+ホイール: 左右";
+}
+
+/** ホイールの移動量だけ表示位置を動かす(正の量なら紙は上・左へ動く)。 */
+export function scrollView(
+  view: ViewTransform,
+  action: "scroll-x" | "scroll-y",
+  deltaX: number,
+  deltaY: number,
+): ViewTransform {
+  // Shift+ホイールをOSがdeltaXへ移し替える場合にも同じ量で動かす。
+  const delta = deltaY !== 0 ? deltaY : deltaX;
+  return {
+    scale: view.scale,
+    offsetX: view.offsetX - (action === "scroll-x" ? delta : 0),
+    offsetY: view.offsetY - (action === "scroll-y" ? delta : 0),
+  };
+}
+
+/** カーソル位置を動かさずに拡大縮小した表示変換を返す。 */
+export function zoomView(view: ViewTransform, screen: Vec2, delta: number): ViewTransform {
+  if (delta === 0) return view;
+  const factor = delta < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
+  const scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, view.scale * factor));
+  const f = scale / view.scale;
+  return {
     scale,
-    offsetX: screen[0] - (screen[0] - ctx.view.offsetX) * f,
-    offsetY: screen[1] - (screen[1] - ctx.view.offsetY) * f,
-  });
+    offsetX: screen[0] - (screen[0] - view.offsetX) * f,
+    offsetY: screen[1] - (screen[1] - view.offsetY) * f,
+  };
+}
+
+/** 設定に従ってスクロールまたはカーソル中心ズームを行う。 */
+export function onWheel(ctx: InteractionCtx, screen: Vec2, gesture: WheelGesture): void {
+  const action = wheelAction(ctx.wheelBehavior, gesture);
+  ctx.setView(
+    action === "zoom"
+      ? zoomView(ctx.view, screen, gesture.deltaY !== 0 ? gesture.deltaY : gesture.deltaX)
+      : scrollView(ctx.view, action, gesture.deltaX, gesture.deltaY),
+  );
 }
 
 /** このボタン(と今のキー状態)は「展開図をつかんで動かす」操作か */

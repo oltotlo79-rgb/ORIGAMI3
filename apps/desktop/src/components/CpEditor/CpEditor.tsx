@@ -29,6 +29,7 @@ import {
   onWheel,
   panHint,
   previewKind,
+  wheelHint,
   type InteractionCtx,
 } from "./interaction";
 import { fitView, render, type RenderOverlay, type ViewTransform } from "./renderer";
@@ -83,11 +84,20 @@ export function CpEditor({ fitRef }: Props) {
   const construct = useAppStore((s) => s.construct);
   const curve = useAppStore((s) => s.curve);
   const mirrorDraw = useAppStore((s) => s.mirrorDraw);
+  const wheelBehavior = useAppStore((s) => s.wheelBehavior);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
-    const { doc, selection, activeTool, violations, construct, curve, mirrorDraw } =
-      useAppStore.getState();
+    const {
+      doc,
+      selection,
+      activeTool,
+      violations,
+      construct,
+      curve,
+      mirrorDraw,
+      wheelBehavior,
+    } = useAppStore.getState();
     if (!canvas) return;
     // カーソルの形は表示専用なので、再描画を起こさずcanvasへ直接反映する
     canvas.style.cursor = cursorFor(activeTool, stateRef.current);
@@ -177,7 +187,7 @@ export function CpEditor({ fitRef }: Props) {
         panHint(st) ??
         (st.vertexDrag
           ? "点を動かしています(離すと決まります。Escでやめる)"
-          : toolHint),
+          : (toolHint ?? wheelHint(wheelBehavior))),
       tooltip: violationTooltip(doc, st.hoverViolation),
       vertexDrag: st.vertexDrag
         ? { id: st.vertexDrag.id, to: st.vertexDrag.to }
@@ -200,6 +210,7 @@ export function CpEditor({ fitRef }: Props) {
       selection: s.selection,
       construct: s.construct,
       curve: s.curve,
+      wheelBehavior: s.wheelBehavior,
       violations: s.violations,
       state: stateRef.current,
       setView: (v) => {
@@ -216,7 +227,17 @@ export function CpEditor({ fitRef }: Props) {
   // ストアの変化(線の追加・選択・ツール切替・畳めない点・作図の選び方)で再描画
   useEffect(() => {
     draw();
-  }, [doc, selection, activeTool, violations, construct, curve, mirrorDraw, draw]);
+  }, [
+    doc,
+    selection,
+    activeTool,
+    violations,
+    construct,
+    curve,
+    mirrorDraw,
+    wheelBehavior,
+    draw,
+  ]);
 
   // 新規作成・ファイルを開いた直後は紙全体が見える表示に戻す
   useEffect(() => {
@@ -348,7 +369,19 @@ export function CpEditor({ fitRef }: Props) {
         st.directionSnap = null;
         draw();
       }}
-      onWheel={(e) => withCtx((ctx) => onWheel(ctx, screenPos(e), e.deltaY))}
+      onWheel={(e) => {
+        e.preventDefault();
+        // DOM_DELTA_LINE / DOM_DELTA_PAGEも同じCSS px単位へそろえる。
+        const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? e.currentTarget.clientHeight : 1;
+        withCtx((ctx) =>
+          onWheel(ctx, screenPos(e), {
+            deltaX: e.deltaX * unit,
+            deltaY: e.deltaY * unit,
+            shiftKey: e.shiftKey,
+            ctrlKey: e.ctrlKey,
+          }),
+        );
+      }}
       onContextMenu={(e) => e.preventDefault()}
     />
   );
