@@ -10,7 +10,13 @@ import type { Document, EdgeKind, EditOp, Vec2 } from "../../lib/types";
 import type { WheelBehavior } from "../../lib/displayPrefs";
 import type { Selection, ToolId } from "../../store/appStore";
 import { screenToWorld, type ViewTransform } from "./renderer";
-import { paperExtent, snap, snapForMove, type SnapResult } from "./snap";
+import {
+  paperExtent,
+  snap,
+  snapForMove,
+  snapOnDirectionAxis,
+  type SnapResult,
+} from "./snap";
 import { CONSTRUCT_STEPS, constructLines, type ConstructOptions } from "../../lib/construct";
 import { CURVE_STEPS, curvePolyline, type CurveOptions } from "../../lib/curve";
 import {
@@ -188,8 +194,10 @@ function dist(a: Vec2, b: Vec2): number {
 }
 
 /**
- * 通常の直線描画の終点を決める。既存の点吸着を常に先に試し、候補が無いとき
- * だけ方向吸着を使う。曲線モードと「折る」ツールには方向吸着を適用しない。
+ * 通常の直線描画の終点を決める。方向吸着中はその方向を軸として保ち、
+ * 近くの頂点・グリッド交点は軸への投影点、線分は軸との交点へ吸着する。
+ * 方向吸着が無いときは従来どおり頂点・グリッド・線分の順で吸着する。
+ * 曲線モードと「折る」ツールには方向吸着を適用しない。
  */
 function resolveLineEndpoint(
   ctx: InteractionCtx,
@@ -200,19 +208,33 @@ function resolveLineEndpoint(
   pointSnap: SnapResult | null;
   directionSnap: DirectionSnapResult | null;
 } {
-  const pointSnap = snap(ctx.doc, world, snapRadius);
-  if (pointSnap) return { pos: pointSnap.pos, pointSnap, directionSnap: null };
-
   const start = ctx.state.pendingStart;
   const straightKind = TOOL_KIND[ctx.tool];
   const directionSnap =
     start && straightKind && !ctx.curve.enabled && !ctx.state.shiftHeld
       ? snapLineDirection(ctx.doc, start, world)
       : null;
+  if (directionSnap && start) {
+    const pointSnap = snapOnDirectionAxis(
+      ctx.doc,
+      start,
+      directionSnap.direction,
+      world,
+      snapRadius,
+    );
+    const pos = pointSnap?.pos ?? directionSnap.pos;
+    return {
+      pos,
+      pointSnap,
+      directionSnap: { ...directionSnap, pos },
+    };
+  }
+
+  const pointSnap = snap(ctx.doc, world, snapRadius);
   return {
-    pos: directionSnap?.pos ?? world,
-    pointSnap: null,
-    directionSnap,
+    pos: pointSnap?.pos ?? world,
+    pointSnap,
+    directionSnap: null,
   };
 }
 
@@ -597,7 +619,15 @@ export function panHint(state: EphemeralState): string | null {
 export function onKeyDown(ctx: InteractionCtx, key: string): void {
   if (key === "Shift") {
     ctx.state.shiftHeld = true;
-    ctx.state.directionSnap = null;
+    if (ctx.state.cursorWorld) {
+      refreshLineEndpoint(
+        ctx,
+        ctx.state.cursorWorld,
+        SNAP_RADIUS_PX / ctx.view.scale,
+      );
+    } else {
+      ctx.state.directionSnap = null;
+    }
     return;
   }
   if (isSpaceKey(key)) {

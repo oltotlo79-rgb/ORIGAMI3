@@ -290,7 +290,7 @@ describe("線ツール", () => {
     expect(end[1]).toBeCloseTo(0.57 * Math.SQRT1_2, 10);
   });
 
-  it("既存頂点への点吸着を方向吸着より優先する", () => {
+  it("方向を保ったまま既存頂点の軸への投影点へ吸着する", () => {
     const { ctx, drawSegment } = makeCtx();
     ctx.tool = "valley";
     ctx.doc.cp.vertices.push({ id: 4, pos: [0.4, 0.43] });
@@ -298,10 +298,48 @@ describe("線ツール", () => {
 
     onMouseDown(ctx, toScreen([0, 0]), 0);
     onMouseMove(ctx, toScreen([0.4, 0.43]));
-    expect(ctx.state.hoverSnap).toEqual({ pos: [0.4, 0.43], kind: "vertex" });
-    expect(ctx.state.directionSnap).toBeNull();
+    expect(ctx.state.hoverSnap?.kind).toBe("vertex");
+    expect(ctx.state.hoverSnap?.pos[0]).toBeCloseTo(0.415, 12);
+    expect(ctx.state.hoverSnap?.pos[1]).toBeCloseTo(0.415, 12);
+    expect(ctx.state.directionSnap?.kind).toBe("bisector");
     onMouseDown(ctx, toScreen([0.4, 0.43]), 0);
-    expect(drawSegment.mock.calls[0][1]).toEqual([0.4, 0.43]);
+    expect(drawSegment.mock.calls[0][1][0]).toBeCloseTo(0.415, 12);
+    expect(drawSegment.mock.calls[0][1][1]).toBeCloseTo(0.415, 12);
+  });
+
+  it("方向を保ったまま既存線分との交点へ吸着する", () => {
+    const { ctx, drawSegment } = makeCtx();
+    ctx.tool = "mountain";
+    ctx.doc.cp.vertices.push(
+      { id: 4, pos: [0.6, 0.2] },
+      { id: 5, pos: [0.6, 0.8] },
+    );
+    ctx.doc.cp.edges.push({ id: 4, v0: 4, v1: 5, kind: "Valley" });
+
+    onMouseDown(ctx, toScreen([0, 0]), 0);
+    // 線分上ではあるが交点からは吸着半径(0.024)より離れた位置。
+    onMouseMove(ctx, toScreen([0.6, 0.64]));
+    expect(ctx.state.hoverSnap?.kind).toBe("edge");
+    expect(ctx.state.hoverSnap?.pos[0]).toBeCloseTo(0.6, 12);
+    expect(ctx.state.hoverSnap?.pos[1]).toBeCloseTo(0.6, 12);
+    expect(ctx.state.directionSnap?.kind).toBe("bisector");
+    expect(ctx.state.directionSnap?.pos[0]).toBeCloseTo(0.6, 12);
+    expect(ctx.state.directionSnap?.pos[1]).toBeCloseTo(0.6, 12);
+
+    onMouseDown(ctx, toScreen([0.6, 0.64]), 0);
+    expect(drawSegment.mock.calls[0][1][0]).toBeCloseTo(0.6, 12);
+    expect(drawSegment.mock.calls[0][1][1]).toBeCloseTo(0.6, 12);
+  });
+
+  it("方向の許容角度外では従来どおり既存頂点を優先する", () => {
+    const { ctx } = makeCtx();
+    ctx.tool = "valley";
+    ctx.doc.cp.vertices.push({ id: 4, pos: [0.4, 0.49] });
+
+    onMouseDown(ctx, toScreen([0, 0]), 0);
+    onMouseMove(ctx, toScreen([0.4, 0.49]));
+    expect(ctx.state.hoverSnap).toEqual({ pos: [0.4, 0.49], kind: "vertex" });
+    expect(ctx.state.directionSnap).toBeNull();
   });
 
   it("Shift中は方向吸着を解除するが、従来の点吸着は残す", () => {
@@ -323,6 +361,25 @@ describe("線ツール", () => {
     onKeyDown(point.ctx, "Shift");
     onMouseMove(point.ctx, toScreen([0.4, 0.43]));
     expect(point.ctx.state.hoverSnap?.kind).toBe("vertex");
+  });
+
+  it("方向吸着中にShiftを押すと、動かさなくても従来の点吸着へ戻る", () => {
+    const { ctx } = makeCtx();
+    ctx.tool = "aux";
+    ctx.doc.cp.vertices.push({ id: 4, pos: [0.4, 0.43] });
+
+    onMouseDown(ctx, toScreen([0, 0]), 0);
+    onMouseMove(ctx, toScreen([0.4, 0.43]));
+    expect(ctx.state.directionSnap?.kind).toBe("bisector");
+    expect(ctx.state.hoverSnap?.pos[0]).toBeCloseTo(0.415, 12);
+
+    onKeyDown(ctx, "Shift");
+    expect(ctx.state.directionSnap).toBeNull();
+    expect(ctx.state.hoverSnap).toEqual({ pos: [0.4, 0.43], kind: "vertex" });
+
+    onKeyUp(ctx, "Shift");
+    expect(ctx.state.directionSnap?.kind).toBe("bisector");
+    expect(ctx.state.hoverSnap?.pos[0]).toBeCloseTo(0.415, 12);
   });
 });
 

@@ -44,8 +44,60 @@ function dot(a: Vec2, b: Vec2): number {
   return a[0] * b[0] + a[1] * b[1];
 }
 
+function cross(a: Vec2, b: Vec2): number {
+  return a[0] * b[1] - a[1] * b[0];
+}
+
 function near(a: Vec2, b: Vec2, tolerance = CONNECT_TOLERANCE): boolean {
   return length(sub(a, b)) <= tolerance;
+}
+
+/**
+ * 点を始点から direction へ伸びる半直線へ垂直投影する。
+ * 投影先が始点より後ろにある場合と、方向が長さ0の場合は null を返す。
+ */
+export function projectPointToDirectionRay(
+  start: Vec2,
+  direction: Vec2,
+  point: Vec2,
+): Vec2 | null {
+  const unit = normalize(direction);
+  if (!unit) return null;
+  const along = dot(sub(point, start), unit);
+  if (along < -EPS) return null;
+  const distance = Math.max(0, along);
+  return [start[0] + unit[0] * distance, start[1] + unit[1] * distance];
+}
+
+/**
+ * 始点から direction へ伸びる半直線と線分 ab の交点を返す。
+ * 平行・同一直線、半直線の後方、線分の範囲外では交点なしとする。
+ */
+export function intersectDirectionRayWithSegment(
+  start: Vec2,
+  direction: Vec2,
+  a: Vec2,
+  b: Vec2,
+): Vec2 | null {
+  const unit = normalize(direction);
+  if (!unit) return null;
+  const segment = sub(b, a);
+  const denominator = cross(unit, segment);
+  if (Math.abs(denominator) <= EPS) return null;
+
+  const fromStart = sub(a, start);
+  const rayDistance = cross(fromStart, segment) / denominator;
+  const segmentRatio = cross(fromStart, unit) / denominator;
+  if (
+    rayDistance < -EPS ||
+    segmentRatio < -EPS ||
+    segmentRatio > 1 + EPS
+  ) {
+    return null;
+  }
+
+  const distance = Math.max(0, rayDistance);
+  return [start[0] + unit[0] * distance, start[1] + unit[1] * distance];
 }
 
 /** startが線分ab上にあるか（端点を含む）。 */

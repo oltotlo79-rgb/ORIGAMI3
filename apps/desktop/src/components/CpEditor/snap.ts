@@ -3,6 +3,10 @@
 // 「既存頂点」に含まれる)。
 
 import type { Document, Vec2 } from "../../lib/types";
+import {
+  intersectDirectionRayWithSegment,
+  projectPointToDirectionRay,
+} from "../../lib/directionSnap";
 
 export type SnapKind = "vertex" | "grid" | "edge";
 
@@ -92,6 +96,55 @@ export function snap(doc: Document, cursor: Vec2, radiusNorm: number): SnapResul
     snapGrid(doc, cursor, radiusNorm) ??
     snapEdge(doc, cursor, radiusNorm)
   );
+}
+
+/**
+ * 方向吸着を保ったまま、近くの頂点・グリッド交点・線分へ吸着する。
+ * 点は半直線へ垂直投影し、線分は半直線との交点を使うため、結果は必ず軸上にある。
+ * 候補の優先順位は通常の吸着と同じく、頂点 > グリッド > 線分とする。
+ */
+export function snapOnDirectionAxis(
+  doc: Document,
+  start: Vec2,
+  direction: Vec2,
+  cursor: Vec2,
+  radiusNorm: number,
+): SnapResult | null {
+  let vertex: Vec2 | null = null;
+  let vertexDistance = radiusNorm;
+  for (const candidate of doc.cp.vertices) {
+    const cursorDistance = dist(cursor, candidate.pos);
+    if (cursorDistance > vertexDistance) continue;
+    const projected = projectPointToDirectionRay(start, direction, candidate.pos);
+    if (!projected || dist(candidate.pos, projected) > radiusNorm) continue;
+    vertex = projected;
+    vertexDistance = cursorDistance;
+  }
+  if (vertex) return { pos: vertex, kind: "vertex" };
+
+  const grid = snapGrid(doc, cursor, radiusNorm);
+  if (grid) {
+    const projected = projectPointToDirectionRay(start, direction, grid.pos);
+    if (projected && dist(grid.pos, projected) <= radiusNorm) {
+      return { pos: projected, kind: "grid" };
+    }
+  }
+
+  const byId = new Map(doc.cp.vertices.map((candidate) => [candidate.id, candidate.pos]));
+  let edge: Vec2 | null = null;
+  let edgeDistance = radiusNorm;
+  for (const candidate of doc.cp.edges) {
+    const a = byId.get(candidate.v0);
+    const b = byId.get(candidate.v1);
+    if (!a || !b) continue;
+    const cursorDistance = dist(cursor, closestPointOnSegment(cursor, a, b));
+    if (cursorDistance > edgeDistance) continue;
+    const intersection = intersectDirectionRayWithSegment(start, direction, a, b);
+    if (!intersection) continue;
+    edge = intersection;
+    edgeDistance = cursorDistance;
+  }
+  return edge ? { pos: edge, kind: "edge" } : null;
 }
 
 /**

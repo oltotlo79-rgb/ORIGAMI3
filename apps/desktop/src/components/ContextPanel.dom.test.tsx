@@ -3,7 +3,14 @@
 // 押せないときもボタンは消さず、理由を日本語で見せることを確かめる。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { ContextPanel } from "./ContextPanel";
 import { resetPoseThrottle, useAppStore } from "../store/appStore";
 import type { Document } from "../lib/types";
@@ -128,6 +135,11 @@ describe("複数の折り目の角度(SIM-001)", () => {
       expect(screen.getByLabelText(`折り目 #${hinge}の角度`)).not.toBeNull();
     }
     expect(screen.getByLabelText("選択した折り目ごとの角度").children).toHaveLength(3);
+    const controls = document.querySelector(".fold-controls") as HTMLElement;
+    const sliders = within(controls).getAllByRole("slider");
+    expect(sliders[0]).toBe(
+      screen.getByLabelText("選択した折り目をまとめて動かす"),
+    );
   });
 
   it("一括スライダーは選択中の全折り目を同じ絶対角度へそろえる", () => {
@@ -161,6 +173,74 @@ describe("複数の折り目の角度(SIM-001)", () => {
     expect(screen.getByLabelText("折り目 #5の角度")).not.toBeNull();
     expect(screen.queryByLabelText("選択した折り目をまとめて動かす")).toBeNull();
     expect(screen.getByRole("button", { name: "この折り線の角度を解除" })).not.toBeNull();
+  });
+
+  it("最小ウィンドウでも折り角度を最上部に置き、操作手順はその下で閉じておく", () => {
+    seed(new Map([[5, 90]]));
+    render(<ContextPanel />);
+
+    const panel = document.querySelector(".context-selection")!;
+    const controls = panel.querySelector(".fold-controls") as HTMLElement;
+    const operationSteps = panel.querySelector(".operation-steps") as HTMLElement;
+    expect(panel.firstElementChild).toBe(controls);
+    expect(controls.nextElementSibling).toBe(operationSteps);
+    expect(within(controls).getByRole("slider", { name: "折り目 #5の角度" })).toBeTruthy();
+    expect(operationSteps.querySelector("details")?.open).toBe(false);
+  });
+});
+
+describe("コンテキストパネルの主操作順", () => {
+  it("何も選んでいないときは現在ツールの1行ガイドを最初に出す", () => {
+    seed(new Map());
+    useAppStore.setState({
+      activeTool: "select",
+      selection: { edgeIds: [], vertexIds: [] },
+    });
+    render(<ContextPanel />);
+
+    const panel = document.querySelector(".context-selection") as HTMLElement;
+    expect(panel.firstElementChild?.classList.contains("operation-steps")).toBe(true);
+    expect(panel.querySelector("details")?.open).toBe(false);
+  });
+
+  it.each([
+    {
+      label: "辺",
+      selection: { edgeIds: [0], vertexIds: [] },
+      heading: "線を1本選択中",
+    },
+    {
+      label: "頂点",
+      selection: { edgeIds: [], vertexIds: [2] },
+      heading: "点を1個選択中",
+    },
+  ])("$labelでは対象の操作をガイドより先に出す", ({ selection, heading }) => {
+    seed(new Map());
+    useAppStore.setState({ activeTool: "select", selection });
+    render(<ContextPanel />);
+
+    const panel = document.querySelector(".context-selection") as HTMLElement;
+    expect(panel.firstElementChild?.textContent).toContain(heading);
+    expect(panel.lastElementChild?.classList.contains("operation-steps")).toBe(true);
+  });
+
+  it("手順を選んだときは手順設定をガイドより先に出す", () => {
+    seed(new Map());
+    const doc = makeDoc();
+    doc.sequence = [
+      { id: 1, kind: "Simple", drivers: [], layer_order: null, note: "" },
+    ];
+    useAppStore.setState({
+      doc,
+      activeTool: "select",
+      currentStep: 1,
+      selection: { edgeIds: [], vertexIds: [] },
+    });
+    render(<ContextPanel />);
+
+    const panel = document.querySelector(".context-selection") as HTMLElement;
+    expect(panel.firstElementChild?.textContent).toContain("手順1");
+    expect(panel.lastElementChild?.classList.contains("operation-steps")).toBe(true);
   });
 });
 

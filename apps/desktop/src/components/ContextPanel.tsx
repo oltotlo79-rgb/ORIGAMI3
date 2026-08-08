@@ -243,7 +243,7 @@ function PoseRecordButton() {
 }
 
 /** 折り角度の操作(選択した全ヒンジの個別/一括スライダー)と、全解除ボタン */
-function FoldControls() {
+function FoldControls({ primary = false }: { primary?: boolean }) {
   const hinges = useAppStore((s) => s.hinges);
   const selection = useAppStore((s) => s.selection);
   const drivers = useAppStore((s) => s.drivers);
@@ -261,7 +261,7 @@ function FoldControls() {
   if (selected.length === 0 && drivers.size === 0) return null;
 
   return (
-    <div className="fold-controls">
+    <div className={`fold-controls${primary ? " fold-controls-primary" : ""}`}>
       {selected.length > 0 && (
         <>
           <div className="fold-controls-heading">
@@ -1072,33 +1072,70 @@ export function ContextPanel() {
   const pendingFoldThrough = useAppStore((s) => s.pendingFoldThrough);
   const alignDraft = useAppStore((s) => s.alignDraft);
   const techniqueDraft = useAppStore((s) => s.techniqueDraft);
+  const selection = useAppStore((s) => s.selection);
+  const hinges = useAppStore((s) => s.hinges);
   // 同じ文言は1回だけ出す(展開図の検査結果には自動再生の警告も合流している)
   const allWarnings = uniqueWarnings(warnings, poseWarnings, replayWarnings);
   // 手順を選んでいる間はその手順の設定を出す(「折る前」「最新」は選択なし扱い)
   const stepSelected = currentStep !== null && currentStep >= 1;
+  const hasSelection =
+    selection.edgeIds.length > 0 || selection.vertexIds.length > 0;
+  const hasSelectedHinge = selection.edgeIds.some((id) => hinges.has(id));
 
   return (
     <footer className="context-panel">
       <div className="context-selection">
-        <OperationSteps />
         {/* 手順を選んでいるときはその設定を優先する。折り線は「今見えている形」の
             上に引くものなので、手順を選んだ時点でストアが捨てている(ここは念のため) */}
         {pendingFoldThrough ? (
-          <FoldThroughProposalContent pending={pendingFoldThrough} />
-        ) : stepSelected ? (
-          <StepContent number={currentStep} />
-        ) : techniqueDraft ? (
-          <TechniqueDraftContent draft={techniqueDraft} />
-        ) : alignDraft ? (
-          <AlignDraftContent draft={alignDraft} foldDraft={foldDraft} />
-        ) : foldDraft ? (
-          <FoldDraftContent draft={foldDraft} />
-        ) : (
           <>
+            <FoldThroughProposalContent pending={pendingFoldThrough} />
+            <OperationSteps />
+          </>
+        ) : stepSelected ? (
+          <>
+            <StepContent number={currentStep} />
+            <OperationSteps />
+          </>
+        ) : techniqueDraft ? (
+          <>
+            <TechniqueDraftContent draft={techniqueDraft} />
+            <OperationSteps />
+          </>
+        ) : alignDraft ? (
+          <>
+            <AlignDraftContent draft={alignDraft} foldDraft={foldDraft} />
+            <OperationSteps />
+          </>
+        ) : foldDraft ? (
+          <>
+            <FoldDraftContent draft={foldDraft} />
+            <OperationSteps />
+          </>
+        ) : hasSelectedHinge ? (
+          <>
+            <FoldControls primary />
+            <OperationSteps />
             {activeTool === "pull" ? <PullContent /> : <SelectionContent />}
             {LINE_TOOLS.includes(activeTool) && <CurveRow />}
             {activeTool === "fold" && <AlignStartRow />}
+          </>
+        ) : (
+          <>
+            {!hasSelection && <OperationSteps />}
+            {activeTool === "pull" ? (
+              <PullContent />
+            ) : (
+              <>
+                {!hasSelection && LINE_TOOLS.includes(activeTool) && <CurveRow />}
+                {!hasSelection && activeTool === "fold" && <AlignStartRow />}
+                <SelectionContent />
+                {hasSelection && LINE_TOOLS.includes(activeTool) && <CurveRow />}
+                {hasSelection && activeTool === "fold" && <AlignStartRow />}
+              </>
+            )}
             <FoldControls />
+            {hasSelection && <OperationSteps />}
           </>
         )}
       </div>

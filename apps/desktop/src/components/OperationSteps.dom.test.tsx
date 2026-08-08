@@ -2,7 +2,7 @@
 // 選択中のツールに合う手順と、操作の進行に合う現在位置を確かめる。
 
 import { afterEach, describe, expect, it } from "vitest";
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { OperationSteps } from "./OperationSteps";
 import { useAppStore, type ToolId } from "../store/appStore";
 
@@ -34,7 +34,7 @@ describe("今できる操作の手順", () => {
     {
       tool: "select",
       title: "紙と折り線を選ぶ",
-      steps: ["クリック（Ctrlで複数選択）", "下の角度を個別・一括で変える"],
+      steps: ["クリック（Ctrlで複数選択）", "折り角度を個別・一括で変える"],
     },
     {
       tool: "mountain",
@@ -69,7 +69,7 @@ describe("今できる操作の手順", () => {
     {
       tool: "technique",
       title: "技法で折る",
-      steps: ["左で技法を選ぶ", "3Dで紙の層と折り線を選ぶ", "下の「適用」で折る"],
+      steps: ["左で技法を選ぶ", "3Dで紙の層と折り線を選ぶ", "「適用」で折る"],
     },
     {
       tool: "construct",
@@ -82,6 +82,10 @@ describe("今できる操作の手順", () => {
 
     const guide = screen.getByRole("region", { name: `${title}の操作手順` });
     expect(within(guide).getByText(title)).toBeTruthy();
+    const details = guide.querySelector("details");
+    expect(details?.open).toBe(false);
+    fireEvent.click(guide.querySelector("summary")!);
+    expect(details?.open).toBe(true);
     for (const step of steps) {
       expect(within(guide).getByText(step)).toBeTruthy();
     }
@@ -91,6 +95,7 @@ describe("今できる操作の手順", () => {
   it("操作が進むたびにaria-currentを次の手順へ移す", () => {
     seed("mountain");
     render(<OperationSteps />);
+    fireEvent.click(screen.getByText("山折り線を引く"));
 
     const items = () => screen.getAllByRole("listitem");
     expect(items().map((item) => item.getAttribute("aria-current"))).toEqual([
@@ -114,5 +119,18 @@ describe("今できる操作の手順", () => {
       "step",
     ]);
     expect(items()[1].className).toContain("completed");
+  });
+
+  it("既定は見出し1行だけで、クリックすると手順を展開する", () => {
+    seed("valley");
+    render(<OperationSteps />);
+
+    const guide = screen.getByRole("region", { name: "谷折り線を引くの操作手順" });
+    const details = guide.querySelector("details")!;
+    expect(details.open).toBe(false);
+
+    fireEvent.click(guide.querySelector("summary")!);
+    expect(details.open).toBe(true);
+    expect(screen.getAllByRole("listitem")).toHaveLength(3);
   });
 });

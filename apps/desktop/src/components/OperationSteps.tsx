@@ -1,4 +1,4 @@
-// 選択中ツールで「次に何をすればよいか」を、下部パネルの先頭に常時出す。
+// 選択中ツールで「次に何をすればよいか」を、下部パネルへ折りたたんで出す。
 // 操作そのものは既存のキャンバスへ任せ、ここではZustandの進行段階を読むだけにする。
 
 import { useAppStore, type ToolId } from "../store/appStore";
@@ -30,7 +30,7 @@ export function operationGuideFor(s: ReturnType<typeof useAppStore.getState>): O
     if (s.pendingFoldThrough) {
       return {
         title: "追加の折り目を確認する",
-        steps: ["水色の線を確認", "下で折り方を選ぶ", "折りを確定"],
+        steps: ["水色の線を確認", "折り方を選ぶ", "折りを確定"],
         current: 1,
       };
     }
@@ -45,7 +45,7 @@ export function operationGuideFor(s: ReturnType<typeof useAppStore.getState>): O
     if (s.foldDraft) {
       return {
         title: "線を決めて折る",
-        steps: ["Ctrl+ドラッグで折り線を引く", "折る向き・動く側を選ぶ", "下の「折る」で確定"],
+        steps: ["Ctrl+ドラッグで折り線を引く", "折る向き・動く側を選ぶ", "「折る」で確定"],
         current: Math.max(1, s.operationStage),
       };
     }
@@ -69,13 +69,13 @@ export function operationGuideFor(s: ReturnType<typeof useAppStore.getState>): O
       const n = s.techniqueDraft.polygon.length;
       return {
         title: "ねじり折り",
-        steps: ["中央の角を3つ以上クリック", "中心とねじる角を調整", "下の「適用」で折る"],
+        steps: ["中央の角を3つ以上クリック", "中心とねじる角を調整", "「適用」で折る"],
         current: n >= 3 ? 1 : 0,
       };
     }
     return {
       title: "技法で折る",
-      steps: ["左で技法を選ぶ", "3Dで紙の層と折り線を選ぶ", "下の「適用」で折る"],
+      steps: ["左で技法を選ぶ", "3Dで紙の層と折り線を選ぶ", "「適用」で折る"],
       current: !s.techniqueDraft
         ? 0
         : s.techniqueDraft.line
@@ -104,7 +104,7 @@ export function operationGuideFor(s: ReturnType<typeof useAppStore.getState>): O
 
   return {
     title: "紙と折り線を選ぶ",
-    steps: ["クリック（Ctrlで複数選択）", "下の角度を個別・一括で変える"],
+    steps: ["クリック（Ctrlで複数選択）", "折り角度を個別・一括で変える"],
     current:
       s.selection.edgeIds.length > 0 || s.selection.vertexIds.length > 0 ? 1 : 0,
   };
@@ -133,30 +133,32 @@ export function OperationSteps() {
 
   return (
     <section className="operation-steps" aria-label={`${guide.title}の操作手順`}>
-      <div className="operation-steps-heading">
-        <span>今できる操作</span>
-        <strong>{guide.title}</strong>
-      </div>
-      <ol>
-        {guide.steps.map((step, index) => (
-          <li
-            key={step}
-            className={
-              index === current
-                ? "current"
-                : index < current
-                  ? "completed"
-                  : "pending"
-            }
-            aria-current={index === current ? "step" : undefined}
-          >
-            <span className="operation-step-number" aria-hidden="true">
-              {index < current ? "✓" : index + 1}
-            </span>
-            <span>{step}</span>
-          </li>
-        ))}
-      </ol>
+      <details>
+        <summary className="operation-steps-heading">
+          <span>今できる操作</span>
+          <strong>{guide.title}</strong>
+        </summary>
+        <ol>
+          {guide.steps.map((step, index) => (
+            <li
+              key={step}
+              className={
+                index === current
+                  ? "current"
+                  : index < current
+                    ? "completed"
+                    : "pending"
+              }
+              aria-current={index === current ? "step" : undefined}
+            >
+              <span className="operation-step-number" aria-hidden="true">
+                {index < current ? "✓" : index + 1}
+              </span>
+              <span>{step}</span>
+            </li>
+          ))}
+        </ol>
+      </details>
     </section>
   );
 }

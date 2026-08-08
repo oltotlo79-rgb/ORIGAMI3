@@ -3,6 +3,8 @@ import type { Document, Edge, Vec2, Vertex } from "./types";
 import {
   DIRECTION_SNAP_ANGLE_DEG,
   directionCandidatesAt,
+  intersectDirectionRayWithSegment,
+  projectPointToDirectionRay,
   snapLineDirection,
   snapToDirection,
   type DirectionCandidate,
@@ -152,5 +154,44 @@ describe("snapToDirection", () => {
 
   it("始点とカーソルが同じなら吸着しない", () => {
     expect(snapLineDirection(axisDoc(), [0, 0], [0, 0])).toBeNull();
+  });
+});
+
+describe("方向軸上の対応点", () => {
+  it("点を半直線へ垂直投影し、単位長でない方向も扱う", () => {
+    const projected = projectPointToDirectionRay([0.1, 0.2], [2, 0], [0.7, 0.5]);
+    expect(projected?.[0]).toBeCloseTo(0.7, 12);
+    expect(projected?.[1]).toBeCloseTo(0.2, 12);
+  });
+
+  it("投影先が始点より後ろか方向が長さ0なら投影しない", () => {
+    expect(projectPointToDirectionRay([0, 0], [1, 0], [-0.1, 0.2])).toBeNull();
+    expect(projectPointToDirectionRay([0, 0], [0, 0], [0.1, 0.2])).toBeNull();
+  });
+
+  it("半直線と線分の交点を求める", () => {
+    const intersection = intersectDirectionRayWithSegment(
+      [0, 0],
+      [2, 2],
+      [0.2, 0.5],
+      [0.8, 0.5],
+    );
+    expect(intersection?.[0]).toBeCloseTo(0.5, 12);
+    expect(intersection?.[1]).toBeCloseTo(0.5, 12);
+  });
+
+  it("後方・線分外・平行・長さ0方向には交点を作らない", () => {
+    expect(
+      intersectDirectionRayWithSegment([0, 0], [1, 0], [-1, -1], [-1, 1]),
+    ).toBeNull();
+    expect(
+      intersectDirectionRayWithSegment([0, 0], [1, 0], [0.5, 1], [0.5, 2]),
+    ).toBeNull();
+    expect(
+      intersectDirectionRayWithSegment([0, 0], [1, 0], [0, 1], [1, 1]),
+    ).toBeNull();
+    expect(
+      intersectDirectionRayWithSegment([0, 0], [0, 0], [0, -1], [0, 1]),
+    ).toBeNull();
   });
 });

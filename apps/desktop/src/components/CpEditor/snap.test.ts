@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { Document, Edge, Vertex } from "../../lib/types";
-import { paperExtent, snap, snapForMove } from "./snap";
+import { paperExtent, snap, snapForMove, snapOnDirectionAxis } from "./snap";
 
 /** 150×150mm相当の正方形ドキュメント(輪郭4辺、グリッド8分割) */
 function makeDoc(overrides?: {
@@ -140,5 +140,94 @@ describe("snapForMove(点を動かしているときの吸着)", () => {
     // 対角線上の(0.3,0.3)はグリッド交点ではないので、線上吸着が無ければnull
     expect(snap(docWithDiagonal(), [0.31, 0.29], 0.02)?.kind).toBe("edge");
     expect(snapForMove(docWithDiagonal(), [0.31, 0.29], 0.02, 0)).toBeNull();
+  });
+});
+
+describe("snapOnDirectionAxis(方向を保った吸着)", () => {
+  it("近い頂点を軸へ投影し、丸印用の頂点吸着として返す", () => {
+    const doc = makeDoc({
+      gridDivisions: 0,
+      extraVertices: [{ id: 4, pos: [0.4, 0.43] }],
+    });
+    const result = snapOnDirectionAxis(
+      doc,
+      [0, 0],
+      [1, 1],
+      [0.4, 0.43],
+      0.025,
+    );
+    expect(result?.kind).toBe("vertex");
+    expect(result?.pos[0]).toBeCloseTo(0.415, 12);
+    expect(result?.pos[1]).toBeCloseTo(0.415, 12);
+  });
+
+  it("近いグリッド交点を軸へ投影する", () => {
+    const result = snapOnDirectionAxis(
+      makeDoc(),
+      [0, 0],
+      [1, 0.1],
+      [0.375, 0.004],
+      0.04,
+    );
+    expect(result?.kind).toBe("grid");
+    expect(result?.pos[0]).toBeCloseTo(0.3712871287, 9);
+    expect(result?.pos[1]).toBeCloseTo(0.0371287129, 9);
+  });
+
+  it("近い線分と方向の半直線との交点へ吸着する", () => {
+    const doc = makeDoc({
+      gridDivisions: 0,
+      extraVertices: [
+        { id: 4, pos: [0.5, 0.2] },
+        { id: 5, pos: [0.5, 0.8] },
+      ],
+      extraEdges: [{ id: 4, v0: 4, v1: 5, kind: "Mountain" }],
+    });
+    const result = snapOnDirectionAxis(
+      doc,
+      [0, 0],
+      [1, 1],
+      [0.508, 0.494],
+      0.02,
+    );
+    expect(result).toEqual({ pos: [0.5, 0.5], kind: "edge" });
+  });
+
+  it("線分上のカーソルから交点が許容距離より離れていても交点へ吸着する", () => {
+    const doc = makeDoc({
+      gridDivisions: 0,
+      extraVertices: [
+        { id: 4, pos: [0.5, -0.2] },
+        { id: 5, pos: [0.5, 0.2] },
+      ],
+      extraEdges: [{ id: 4, v0: 4, v1: 5, kind: "Mountain" }],
+    });
+    expect(
+      snapOnDirectionAxis(doc, [0, 0], [1, 0], [0.5, 0.04], 0.024),
+    ).toEqual({ pos: [0.5, 0], kind: "edge" });
+  });
+
+  it("通常と同じく頂点をグリッド・線分より優先する", () => {
+    const doc = makeDoc({ extraVertices: [{ id: 4, pos: [0.49, 0.51] }] });
+    const result = snapOnDirectionAxis(
+      doc,
+      [0, 0],
+      [1, 1],
+      [0.49, 0.51],
+      0.03,
+    );
+    expect(result?.kind).toBe("vertex");
+    expect(result?.pos[0]).toBeCloseTo(0.5, 12);
+    expect(result?.pos[1]).toBeCloseTo(0.5, 12);
+  });
+
+  it("点候補が軸から許容距離より遠ければ吸着しない", () => {
+    const doc = makeDoc({
+      gridDivisions: 0,
+      extraVertices: [{ id: 4, pos: [0.4, 0.5] }],
+    });
+    expect(
+      snapOnDirectionAxis(doc, [0, 0], [1, 1], [0.4, 0.5], 0.03),
+    ).toBeNull();
   });
 });
