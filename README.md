@@ -45,3 +45,7 @@ Windows Smart App Controlが有効な環境では、署名のないexeが完全�
 ## 技術構成
 
 Tauri 2 / React / TypeScript / Three.js / Rust計算コア
+
+## ライセンス
+
+[MIT License](LICENSE)
