@@ -195,14 +195,22 @@ fn reverse_fold(
     input: &TechniqueInput,
     inside: bool,
 ) -> Result<FoldThroughResult, String> {
-    let name = if inside { "中割り折り" } else { "かぶせ折り" };
+    let name = if inside {
+        "中割り折り"
+    } else {
+        "かぶせ折り"
+    };
     let (l0, l1) = line_points(input.line)?;
     let u = (l1 - l0).normalize();
     let keep = DVec2::from(input.reference_point);
     if u.perp_dot(keep - l0).abs() <= EPS {
         return Err(format!(
             "{name}の向きを示す点が折り線の上にあります。先端を{}側の点を指してください",
-            if inside { "折り込む先の" } else { "かぶせる先の" }
+            if inside {
+                "折り込む先の"
+            } else {
+                "かぶせる先の"
+            }
         ));
     }
 
@@ -227,8 +235,7 @@ fn reverse_fold(
     // 裏返るので、必ず反対向きに回る。層の数を機械的に半分に割ると、奇数層や
     // 一部だけを選んだフラップで紙のつながりと食い違ってしまう。
     let up = s.split_flap_by_connection(&flap, input.line, inside, name)?;
-    let (up_faces, down_faces): (Vec<FaceId>, Vec<FaceId>) =
-        flap.iter().partition(|id| up[id]);
+    let (up_faces, down_faces): (Vec<FaceId>, Vec<FaceId>) = flap.iter().partition(|id| up[id]);
 
     // 下へ回す層と上へ回す層をそれぞれ1回の折りにまとめる(どちらかが空になる
     // 指定=つながっていない層だけを選んだ場合は、その回を飛ばす)。
@@ -244,7 +251,12 @@ fn reverse_fold(
         if now.is_empty() {
             continue;
         }
-        let m = s.fold(line_now, keep_now, Some(&now), turn_direction(direction, turned))?;
+        let m = s.fold(
+            line_now,
+            keep_now,
+            Some(&now),
+            turn_direction(direction, turned),
+        )?;
         // 折り線と動かさない側の点は動かない側の幾何なので、平面座標のずれだけを打ち消す
         let a = m.apply(DVec2::from(line_now[0]));
         let b = m.apply(DVec2::from(line_now[1]));
@@ -320,8 +332,9 @@ pub fn squash(
             warnings.push(format!(
                 "この{name}では、中心線の上に開ける折り目が見つかりません。中心線がフラップの背に重なっているか確かめてください(指定のまま続行します)"
             ));
-            flap_span_along(cp, faces, state, &flap, l0, u)
-                .ok_or_else(|| format!("{name}の支点が決められません。中心線を引き直してください"))?
+            flap_span_along(cp, faces, state, &flap, l0, u).ok_or_else(|| {
+                format!("{name}の支点が決められません。中心線を引き直してください")
+            })?
         }
     };
 
@@ -683,17 +696,11 @@ pub fn swivel(
     }
 
     let m_dir = rotate(s_dir, alpha * 0.5);
-    let m_line = [
-        [pivot.x, pivot.y],
-        [pivot.x + m_dir.x, pivot.y + m_dir.y],
-    ];
+    let m_line = [[pivot.x, pivot.y], [pivot.x + m_dir.x, pivot.y + m_dir.y]];
     // くさび(基準線とMの間)の内側を示す点と、その反対側(基準線の向こう)の点
     let inside = pivot + rotate(s_dir, alpha * 0.25) * (reach * 0.5);
     let beyond = reflect_across_line(inside, l0, l1);
-    let base_line = [
-        [pivot.x, pivot.y],
-        [pivot.x + s_dir.x, pivot.y + s_dir.y],
-    ];
+    let base_line = [[pivot.x, pivot.y], [pivot.x + s_dir.x, pivot.y + s_dir.y]];
     // 空の指定は「領域に掛かる全ての層」。層を並べ直して渡すと、掛からない層に
     // ついて余計な警告が出る
     let layers = if input.flap.is_empty() {
@@ -993,11 +1000,7 @@ impl Session {
     fn descendants(&self, of: &[FaceId]) -> Vec<FaceId> {
         self.faces
             .iter()
-            .filter(|f| {
-                self.origin
-                    .get(&f.id)
-                    .is_some_and(|o| of.contains(o))
-            })
+            .filter(|f| self.origin.get(&f.id).is_some_and(|o| of.contains(o)))
             .map(|f| f.id)
             .collect()
     }
@@ -1036,9 +1039,10 @@ impl Session {
                         return false;
                     };
                     let pl = self.state.placements[id];
-                    f.vertices.iter().filter_map(|v| pos.get(v)).any(|&p| {
-                        keep_sign * u.perp_dot(pl.apply(p) - l0) < -EPS
-                    })
+                    f.vertices
+                        .iter()
+                        .filter_map(|v| pos.get(v))
+                        .any(|&p| keep_sign * u.perp_dot(pl.apply(p) - l0) < -EPS)
                 })
                 .collect(),
         )
@@ -1065,7 +1069,8 @@ impl Session {
     ) -> Result<HashMap<FaceId, bool>, String> {
         let members: HashSet<FaceId> = flap.iter().copied().collect();
         // つながりの図: 折り線が横切る折り目を共有する層の組
-        let mut adj: HashMap<FaceId, Vec<FaceId>> = flap.iter().map(|&id| (id, Vec::new())).collect();
+        let mut adj: HashMap<FaceId, Vec<FaceId>> =
+            flap.iter().map(|&id| (id, Vec::new())).collect();
         for (eid, fs) in faces_by_edge(&self.faces) {
             if fs.len() != 2 || !fs.iter().all(|id| members.contains(id)) {
                 continue;
@@ -1193,7 +1198,10 @@ impl Session {
                 continue;
             }
             // 技法で動いた紙の中の折り目だけを見る
-            if !fs.iter().all(|id| self.flipped.get(id).copied() == Some(true)) {
+            if !fs
+                .iter()
+                .all(|id| self.flipped.get(id).copied() == Some(true))
+            {
                 continue;
             }
             let (a, b) = (fs[0], fs[1]);
@@ -1306,7 +1314,10 @@ impl Session {
             if fs.len() != 2 {
                 continue;
             }
-            if !fs.iter().any(|id| self.flipped.get(id).copied() == Some(true)) {
+            if !fs
+                .iter()
+                .any(|id| self.flipped.get(id).copied() == Some(true))
+            {
                 continue;
             }
             let Some(e) = self.cp.edges.iter().find(|e| e.id == *eid) else {
@@ -1537,7 +1548,12 @@ fn flap_span_along(
     let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
     for f in faces.iter().filter(|f| flap.contains(&f.id)) {
         let pl = state.placements.get(&f.id)?;
-        for t in f.vertices.iter().filter_map(|v| pos.get(v)).map(|&q| u.dot(pl.apply(q) - l0)) {
+        for t in f
+            .vertices
+            .iter()
+            .filter_map(|v| pos.get(v))
+            .map(|&q| u.dot(pl.apply(q) - l0))
+        {
             lo = lo.min(t);
             hi = hi.max(t);
         }
@@ -1794,7 +1810,12 @@ fn flap_polygons(
         .filter(|f| flap.contains(&f.id))
         .filter_map(|f| {
             let pl = state.placements.get(&f.id)?;
-            let poly = f.vertices.iter().filter_map(|v| pos.get(v)).map(|&q| pl.apply(q)).collect();
+            let poly = f
+                .vertices
+                .iter()
+                .filter_map(|v| pos.get(v))
+                .map(|&q| pl.apply(q))
+                .collect();
             Some((f.id, poly))
         })
         .collect()
@@ -1951,10 +1972,8 @@ fn wing_neighbors(
     let pos = vertex_positions(cp);
     let k = rotate(d, ang * 0.5);
     let near = half_plane(hinge, tip);
-    let planes: [&dyn Fn(DVec2) -> f64; 2] = [
-        &near,
-        &|q: DVec2| ang.signum() * k.perp_dot(q - tip),
-    ];
+    let planes: [&dyn Fn(DVec2) -> f64; 2] =
+        [&near, &|q: DVec2| ang.signum() * k.perp_dot(q - tip)];
     let mut out: Vec<FaceId> = Vec::new();
     for (eid, fs) in faces_by_edge(faces) {
         if fs.len() != 2 {
@@ -2046,7 +2065,10 @@ fn petal_parts(
     };
     // 領域の内側を示す点は、左右のうち短いほうの縁を基準に取る
     // (長いほうで取るとちょうつがいの向こう側へはみ出すことがある)
-    let inner = sides.iter().map(|(_, r, _)| *r).fold(f64::INFINITY, f64::min);
+    let inner = sides
+        .iter()
+        .map(|(_, r, _)| *r)
+        .fold(f64::INFINITY, f64::min);
     let mut parts: Vec<MotionPart> = Vec::new();
     let mut middle = vec![near_side.clone()];
     for (ang, reach, neighbors) in sides {
@@ -2183,7 +2205,11 @@ fn petal_pockets(
     // タイブレークして袋の並びを決定的にする
     let rank = |id: &FaceId| {
         (
-            state.order.iter().position(|x| x == id).unwrap_or(usize::MAX),
+            state
+                .order
+                .iter()
+                .position(|x| x == id)
+                .unwrap_or(usize::MAX),
             *id,
         )
     };
@@ -2300,7 +2326,9 @@ fn regular_polygon(
         ));
     }
     let step = span.signum() * std::f64::consts::TAU / n as f64;
-    Ok((0..n).map(|k| center + rotate(ra, step * k as f64)).collect())
+    Ok((0..n)
+        .map(|k| center + rotate(ra, step * k as f64))
+        .collect())
 }
 
 /// ねじり折りの動き。中央の回転・辺ごとのひだ・頂点ごとの腕を組み立てる。
@@ -2327,9 +2355,7 @@ fn twist_parts(
     // 辺kの直線(回転前)と、ひだkの等長変換(回転後の辺で折り返す)
     let edges: Vec<[[f64; 2]; 2]> = (0..n).map(|k| line_of(v[k], v[at(k + 1)])).collect();
     let pleat: Vec<Isometry2> = (0..n)
-        .map(|k| {
-            Isometry2::reflection(vp[k], vp[at(k + 1)]).compose(&rot)
-        })
+        .map(|k| Isometry2::reflection(vp[k], vp[at(k + 1)]).compose(&rot))
         .collect();
 
     // 頂点jから外へ出る2本の折り線: p_j(ひだ j-1 との境)と q_j(ひだ j との境)。
@@ -2401,9 +2427,7 @@ fn twist_parts(
                     inside_point: [inside.x, inside.y],
                 },
             ],
-            transform: MotionTransform::Isometry(
-                Isometry2::reflection(axis0, axis1).compose(prev),
-            ),
+            transform: MotionTransform::Isometry(Isometry2::reflection(axis0, axis1).compose(prev)),
             turn: LayerTurn::Outside(open),
             reverse_layers: None,
         });
@@ -2468,24 +2492,23 @@ mod tests {
         let tri = |a: DVec2, b: DVec2, c: DVec2| vec![a, b, c];
         let mut polys: HashMap<FaceId, Vec<DVec2>> = HashMap::new();
         // フラップの層(先端を含む三角形)
-        polys.insert(1, tri(DVec2::ZERO, DVec2::new(1.0, -1.0), DVec2::new(1.0, 1.0)));
+        polys.insert(
+            1,
+            tri(DVec2::ZERO, DVec2::new(1.0, -1.0), DVec2::new(1.0, 1.0)),
+        );
         // 隣の層は羽の領域から遠く離れていて、どちらの羽にも掛からない
         polys.insert(
             7,
-            tri(DVec2::new(5.0, 5.0), DVec2::new(6.0, 5.0), DVec2::new(6.0, 6.0)),
+            tri(
+                DVec2::new(5.0, 5.0),
+                DVec2::new(6.0, 5.0),
+                DVec2::new(6.0, 6.0),
+            ),
         );
         let quarter = std::f64::consts::FRAC_PI_4;
         let sides = vec![(quarter, 1.0, vec![7]), (-quarter, 1.0, vec![7])];
 
-        let parts = petal_parts(
-            &[vec![1]],
-            &polys,
-            tip,
-            d,
-            hinge,
-            &sides,
-            FoldDirection::Up,
-        );
+        let parts = petal_parts(&[vec![1]], &polys, tip, d, hinge, &sides, FoldDirection::Up);
 
         assert!(!parts.is_empty(), "紙のある層は動く");
         for p in &parts {

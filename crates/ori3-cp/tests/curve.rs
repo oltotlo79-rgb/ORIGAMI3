@@ -49,7 +49,10 @@ fn 分割数は細かさの指定に応じて増える() {
     // 半円・半径0.5・既定の誤差ならおよそ10〜20分割(辺数が爆発しない)
     let n = arc_segment_count(0.5, std::f64::consts::PI, DEFAULT_CURVE_TOL);
     assert!((8..=24).contains(&n), "分割数 {n}");
-    assert_eq!(arc_segment_count(0.5, std::f64::consts::PI, 1e-12), MAX_CURVE_SEGMENTS);
+    assert_eq!(
+        arc_segment_count(0.5, std::f64::consts::PI, 1e-12),
+        MAX_CURVE_SEGMENTS
+    );
 }
 
 #[test]
@@ -88,7 +91,14 @@ fn ベジェも指定した誤差以内の折れ線になる() {
         assert!(worst <= tol, "tol={tol} で誤差 {worst}");
     }
     // 制御点が一直線上ならただの線分でよい
-    let straight = cubic_polyline([0.0, 0.0], [0.25, 0.25], [0.75, 0.75], [1.0, 1.0], 0.005, None);
+    let straight = cubic_polyline(
+        [0.0, 0.0],
+        [0.25, 0.25],
+        [0.75, 0.75],
+        [1.0, 1.0],
+        0.005,
+        None,
+    );
     assert_eq!(straight, vec![[0.0, 0.0], [1.0, 1.0]]);
 }
 
@@ -110,7 +120,10 @@ fn 曲がるための線は曲線に直角で両側へ伸びる() {
     for (i, [concave, cur, convex]) in rulings.iter().enumerate() {
         let tan = DVec2::from(pts[i + 2]) - DVec2::from(pts[i]);
         let dir = DVec2::from(*convex) - DVec2::from(*concave);
-        assert!(tan.normalize().dot(dir.normalize()).abs() < 1e-9, "直角でない");
+        assert!(
+            tan.normalize().dot(dir.normalize()).abs() < 1e-9,
+            "直角でない"
+        );
         // 上に膨らむ弧なので、へこむ側(円の中心側)は下
         assert!(concave[1] < cur[1] && convex[1] > cur[1], "向きが逆");
     }
@@ -180,7 +193,11 @@ fn 曲線を10本引いても検査が実用的な速さで終わる() {
         warn.len(),
         violations.len()
     );
-    assert!(doc.cp.edges.len() > 200, "辺が十分ある: {}", doc.cp.edges.len());
+    assert!(
+        doc.cp.edges.len() > 200,
+        "辺が十分ある: {}",
+        doc.cp.edges.len()
+    );
     // デバッグビルドでも余裕を持って通る上限(実測はこの1/10以下)
     assert!(check_ms < 500, "検査が遅い: {check_ms}ms");
 }

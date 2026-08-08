@@ -17,7 +17,12 @@ fn radial(kinds: &[(f64, EdgeKind)]) -> Document {
         let (s, c) = deg.to_radians().sin_cos();
         // 中心から縁まで届く長さ(正方形の半対角より長い)
         let (x, y) = (0.5 + c, 0.5 + s);
-        insert_segment(&mut doc.cp, [0.5, 0.5], [x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)], kind);
+        insert_segment(
+            &mut doc.cp,
+            [0.5, 0.5],
+            [x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)],
+            kind,
+        );
     }
     doc
 }

@@ -34,7 +34,10 @@ static ATOMIC_WRITE_ID: AtomicU64 = AtomicU64::new(0);
 /// 書き込み中に止まっても、既存の完成ファイルを途中の内容で壊さない。
 pub(crate) fn write_atomic(target: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let dir = target.parent().unwrap_or_else(|| Path::new("."));
-    let name = target.file_name().and_then(|n| n.to_str()).unwrap_or("ori3");
+    let name = target
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("ori3");
     let id = ATOMIC_WRITE_ID.fetch_add(1, Ordering::Relaxed);
     let temp = dir.join(format!(".{name}.{}.{}.tmp", std::process::id(), id));
     std::fs::write(&temp, bytes)?;
@@ -416,15 +419,16 @@ impl DocumentStore {
         view
     }
 
-    /// pose_solveの入力(CPの複製・導出済みfacesの複製・前回解)を取り出す。
+    /// pose_solveの入力(CP・導出済みfaces・前回解・重なり防止設定)を取り出す。
     /// facesは編集時に導出済みのキャッシュの流用で、extract_facesを再実行しない。
     /// 設計規約: ロック中に重い計算をしないため、コマンド層はこの複製を取って
     /// 即ロックを解放し、solveはロックの外で実行する。
-    pub fn pose_inputs(&self) -> (CreasePattern, Vec<Face>, Option<HashMap<EdgeId, f64>>) {
+    pub fn pose_inputs(&self) -> (CreasePattern, Vec<Face>, Option<HashMap<EdgeId, f64>>, bool) {
         (
             self.doc.cp.clone(),
             self.faces.clone(),
             self.pose_angles.clone(),
+            self.doc.display.overlap_prevention_enabled,
         )
     }
 
@@ -517,6 +521,19 @@ pub fn attach_replay(view: &mut DocumentView) {
     }
     let up_to = view.doc.sequence.len();
     let mut replayed = ori3_layers::replay_with_faces(&view.doc, &view.faces, up_to, 1.0);
+    let transition = replayed.layer_transition.clone();
+    ori3_soft::prevent_overlap(
+        &view.doc.cp,
+        &view.faces,
+        &mut replayed.frame,
+        &transition.start,
+        &transition.end,
+        transition.progress,
+        &ori3_soft::OverlapSettings {
+            enabled: view.doc.display.overlap_prevention_enabled,
+            ..Default::default()
+        },
+    );
     // 紙のめり込み(SIM-007)。折り上がりは平ら(z≒0)なので通常は出ないが、
     // 平らに畳みきれない形では立体のまま返るため、そのときに知らせる
     if add_penetration_warning(&mut replayed.frame) {
@@ -1033,10 +1050,11 @@ mod tests {
         assert_eq!(store.pose_inputs().2, None);
 
         store.store_pose_angles(HashMap::from([(6u32, 90.0f64)]));
-        let (cp, faces, warm) = store.pose_inputs();
+        let (cp, faces, warm, overlap_enabled) = store.pose_inputs();
         assert_eq!(cp, store.doc.cp);
         assert_eq!(faces.len(), 1, "正方形1面のはず");
         assert_eq!(warm, Some(HashMap::from([(6u32, 90.0f64)])));
+        assert!(overlap_enabled, "重なり防止は既定オン");
 
         // 新規作成で前回解は破棄される(別のCPに古い解を引き継がない)
         store
@@ -1222,7 +1240,9 @@ mod tests {
             "元の手順は後ろへ押し出される"
         );
         assert!(
-            view.warnings.iter().any(|w| w.contains("前に折りを挟みました")),
+            view.warnings
+                .iter()
+                .any(|w| w.contains("前に折りを挟みました")),
             "途中挿入は警告で知らせる: {:?}",
             view.warnings
         );
@@ -1293,7 +1313,10 @@ mod tests {
             .map(|e| e.kind)
             .filter(|k| *k != EdgeKind::Border)
             .collect();
-        assert_eq!(kinds.iter().filter(|k| **k == EdgeKind::Mountain).count(), 1);
+        assert_eq!(
+            kinds.iter().filter(|k| **k == EdgeKind::Mountain).count(),
+            1
+        );
         assert_eq!(kinds.iter().filter(|k| **k == EdgeKind::Valley).count(), 1);
         attach_replay(&mut view);
         assert!(view.skipped.is_empty(), "warnings={:?}", view.warnings);
@@ -1491,7 +1514,11 @@ mod tests {
             .unwrap();
         assert_eq!(view.faces.len(), 7, "中央1面+ひだ3面+腕3面");
         assert_eq!(view.doc.sequence[0].kind, TechniqueKind::Twist);
-        assert!(view.warnings.is_empty(), "紙は裂けない: {:?}", view.warnings);
+        assert!(
+            view.warnings.is_empty(),
+            "紙は裂けない: {:?}",
+            view.warnings
+        );
 
         // 省略した形のJSONも読める(#[serde(default)])
         let old = r#"{"type":"Technique","up_to":0,"kind":"Twist","flap":[],
@@ -1612,11 +1639,7 @@ mod tests {
         );
         // 手順を最初から再生し直しても同じ形になる(3D状態を保存しない設計の確認)
         let replayed = ori3_layers::replay(&store.doc, 6, 1.0);
-        assert!(
-            replayed.skipped.is_empty(),
-            "警告={:?}",
-            replayed.warnings
-        );
+        assert!(replayed.skipped.is_empty(), "警告={:?}", replayed.warnings);
         assert!(replayed.warnings.is_empty(), "警告={:?}", replayed.warnings);
         assert!(
             replayed
@@ -1655,7 +1678,10 @@ mod tests {
                 assert_eq!(z.signum(), sign, "{label}: 動いた層は同じ向きへ浮く");
             }
         }
-        assert!(!lifted.is_empty(), "{label}: 折る直前には動いた層が浮いている");
+        assert!(
+            !lifted.is_empty(),
+            "{label}: 折る直前には動いた層が浮いている"
+        );
 
         let frame = ori3_layers::replay(&store.doc, up_to, 1.0).frame;
         let total = frame.faces.len();
@@ -1677,7 +1703,8 @@ mod tests {
             .collect();
         got.sort_unstable();
         assert_eq!(
-            got, want,
+            got,
+            want,
             "{label}: 浮いた層が層番号の端にまとまっていない(layer={:?})",
             frame
                 .faces
@@ -1735,7 +1762,14 @@ mod tests {
         // 操作は成功したうえで、中心の1点が「畳めない点」として返る
         assert_eq!(view.violations.len(), 1, "violations={:?}", view.violations);
         let id = view.violations[0];
-        let pos = view.doc.cp.vertices.iter().find(|v| v.id == id).unwrap().pos;
+        let pos = view
+            .doc
+            .cp
+            .vertices
+            .iter()
+            .find(|v| v.id == id)
+            .unwrap()
+            .pos;
         assert!((pos[0] - 0.5).abs() < 1e-9 && (pos[1] - 0.5).abs() < 1e-9);
 
         // 1本を谷に変えれば違反は消える(山3・谷1)
@@ -1753,7 +1787,11 @@ mod tests {
                 kind: EdgeKind::Valley,
             })
             .unwrap();
-        assert!(view.violations.is_empty(), "violations={:?}", view.violations);
+        assert!(
+            view.violations.is_empty(),
+            "violations={:?}",
+            view.violations
+        );
     }
 
     #[test]

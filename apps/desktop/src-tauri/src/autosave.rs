@@ -70,11 +70,7 @@ fn same_existing_path(a: &Path, b: &Path) -> bool {
 /// 無題の自動保存はアプリデータ配下だけを許し、名前付き作品は現在の保存先に
 /// `.autosave` を足した**その1ファイル**だけを許す。現在の作品が無い起動直後は
 /// アプリデータ外の自動保存を読んで復旧を提案しても、削除はしない。
-fn valid_autosave_path(
-    autosave: &Path,
-    app_data: &Path,
-    current_document: Option<&Path>,
-) -> bool {
+fn valid_autosave_path(autosave: &Path, app_data: &Path, current_document: Option<&Path>) -> bool {
     if autosave.extension().and_then(|e| e.to_str()) != Some("autosave") {
         return false;
     }
@@ -108,7 +104,10 @@ fn recorded_autosave_path(
     if valid_autosave_path(&autosave, app_data, current_document) || recovery_path {
         Some(autosave)
     } else {
-        eprintln!("自動保存の目印に許可されない場所が指定されているため無視しました: {}", autosave.display());
+        eprintln!(
+            "自動保存の目印に許可されない場所が指定されているため無視しました: {}",
+            autosave.display()
+        );
         None
     }
 }
@@ -145,8 +144,11 @@ fn write_snapshot(doc: &Document, doc_path: Option<&Path>, app_data: &Path) -> R
         .map_err(|e| format!("自動保存データの作成に失敗しました: {e}"))?;
     std::fs::create_dir_all(app_data).map_err(|e| format!("自動保存に失敗しました: {e}"))?;
     write_atomic(&target, json.as_bytes()).map_err(|e| format!("自動保存に失敗しました: {e}"))?;
-    write_atomic(marker_path(app_data).as_path(), target.to_string_lossy().as_bytes())
-        .map_err(|e| format!("自動保存に失敗しました: {e}"))?;
+    write_atomic(
+        marker_path(app_data).as_path(),
+        target.to_string_lossy().as_bytes(),
+    )
+    .map_err(|e| format!("自動保存に失敗しました: {e}"))?;
     Ok(())
 }
 
@@ -282,7 +284,11 @@ mod tests {
 
         assert!(run_once(&store, &dir).unwrap(), "未保存なので書き出す");
         let s = store.lock().unwrap();
-        assert_eq!(s.current_path(), Some(doc_path.clone()), "保存先は乗っ取らない");
+        assert_eq!(
+            s.current_path(),
+            Some(doc_path.clone()),
+            "保存先は乗っ取らない"
+        );
         assert!(s.is_dirty(), "未保存の印は消さない");
         drop(s);
         // 書き出し先は<保存先>.autosave、元ファイルは自動保存で上書きされない
@@ -311,7 +317,10 @@ mod tests {
             .unwrap();
         assert!(run_once(&store, &dir).unwrap());
         let info = check(&dir).expect("自動保存が残っている");
-        assert_eq!(info.autosave_path, dir.join(UNTITLED_FILE).to_string_lossy());
+        assert_eq!(
+            info.autosave_path,
+            dir.join(UNTITLED_FILE).to_string_lossy()
+        );
         assert_eq!(info.document_path, None, "無題なので元ファイルは無い");
         assert!(info.saved_at_ms.is_some());
     }
@@ -338,7 +347,10 @@ mod tests {
         // 異常終了を模して、まっさらなstoreへ復元する
         let fresh = Mutex::new(DocumentStore::default());
         let info = check(&dir).expect("自動保存が残っている");
-        assert_eq!(info.document_path, Some(doc_path.to_string_lossy().into_owned()));
+        assert_eq!(
+            info.document_path,
+            Some(doc_path.to_string_lossy().into_owned())
+        );
         let view = restore(&fresh, &dir).unwrap().expect("復元できる");
         assert_eq!(view.doc, expected, "作業中だった内容が戻る");
         let s = fresh.lock().unwrap();
@@ -376,7 +388,11 @@ mod tests {
         assert!(autosave.is_file(), "未保存なのに自動保存を消している");
 
         // 保存済みなら正常終了なので片付ける。
-        store.lock().unwrap().save(Some(&dir.join("保存済み.ori3"))).unwrap();
+        store
+            .lock()
+            .unwrap()
+            .save(Some(&dir.join("保存済み.ori3")))
+            .unwrap();
         discard_if_clean(&store, &dir);
         assert!(!autosave.exists(), "保存済みなのに自動保存が残っている");
     }
@@ -384,10 +400,8 @@ mod tests {
     #[test]
     fn tampered_marker_never_deletes_an_unrelated_file() {
         let dir = temp_dir("tampered_marker");
-        let unrelated = std::env::temp_dir().join(format!(
-            "ori3_unrelated_{}.autosave",
-            std::process::id()
-        ));
+        let unrelated =
+            std::env::temp_dir().join(format!("ori3_unrelated_{}.autosave", std::process::id()));
         let unrelated_document = document_path_of(&unrelated).unwrap();
         std::fs::write(&unrelated_document, "別の作品").unwrap();
         std::fs::write(&unrelated, "消してはいけない").unwrap();
@@ -395,7 +409,10 @@ mod tests {
 
         discard(&dir, None);
 
-        assert!(unrelated.is_file(), "目印の改変で関係ないファイルを消している");
+        assert!(
+            unrelated.is_file(),
+            "目印の改変で関係ないファイルを消している"
+        );
         assert!(!marker_path(&dir).exists(), "危険な目印は片付ける");
         std::fs::remove_file(unrelated).ok();
         std::fs::remove_file(unrelated_document).ok();

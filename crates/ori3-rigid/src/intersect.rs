@@ -69,8 +69,14 @@ impl Part {
         let tris = (1..points.len().saturating_sub(1))
             .map(|k| [points[0], points[k], points[k + 1]])
             .collect();
-        let lo = points.iter().copied().fold(DVec3::splat(f64::MAX), DVec3::min);
-        let hi = points.iter().copied().fold(DVec3::splat(f64::MIN), DVec3::max);
+        let lo = points
+            .iter()
+            .copied()
+            .fold(DVec3::splat(f64::MAX), DVec3::min);
+        let hi = points
+            .iter()
+            .copied()
+            .fold(DVec3::splat(f64::MIN), DVec3::max);
         Part {
             tris,
             lo,

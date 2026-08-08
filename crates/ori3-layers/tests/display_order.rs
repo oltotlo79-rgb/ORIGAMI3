@@ -90,9 +90,12 @@ fn lifted_at_t099(doc: &Document, up_to: usize) -> (HashSet<FaceId>, f64) {
 fn assert_display_order(doc: &Document, up_to: usize, label: &str) {
     let (lifted, sign) = lifted_at_t099(doc, up_to);
     let faces = extract_faces(&doc.cp);
-    let (state, warnings) =
-        flat_state_at(doc, &faces, up_to).unwrap_or_else(|e| panic!("{label}: 畳んだ状態が求まらない: {e}"));
-    assert!(warnings.is_empty(), "{label}: 警告なしで再生できる: {warnings:?}");
+    let (state, warnings) = flat_state_at(doc, &faces, up_to)
+        .unwrap_or_else(|e| panic!("{label}: 畳んだ状態が求まらない: {e}"));
+    assert!(
+        warnings.is_empty(),
+        "{label}: 警告なしで再生できる: {warnings:?}"
+    );
     let order = state.order;
     assert_eq!(order.len(), faces.len(), "{label}: 層順序は全ての面を含む");
 
@@ -133,7 +136,12 @@ fn rep_x(doc: &Document, id: FaceId) -> f64 {
 fn display_order_matches_when_root_face_stays() {
     let mut doc = square_doc();
     // x=0.5 で左半分を右へ折る(動かさない側=右)
-    fold(&mut doc, [[0.5, 0.0], [0.5, 1.0]], [0.75, 0.5], FoldDirection::Up);
+    fold(
+        &mut doc,
+        [[0.5, 0.0], [0.5, 1.0]],
+        [0.75, 0.5],
+        FoldDirection::Up,
+    );
 
     let (lifted, sign) = lifted_at_t099(&doc, 1);
     assert_eq!(lifted.len(), 1);
@@ -149,7 +157,12 @@ fn display_order_matches_when_root_face_stays() {
 fn display_order_matches_when_root_face_moves() {
     let mut doc = square_doc();
     // x=0.5 で右半分を左へ折る(動かさない側=左)
-    fold(&mut doc, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5], FoldDirection::Up);
+    fold(
+        &mut doc,
+        [[0.5, 0.0], [0.5, 1.0]],
+        [0.25, 0.5],
+        FoldDirection::Up,
+    );
 
     let (lifted, sign) = lifted_at_t099(&doc, 1);
     assert_eq!(lifted.len(), 1);
@@ -166,10 +179,20 @@ fn display_order_matches_when_root_face_moves() {
 #[test]
 fn display_order_matches_through_three_folds() {
     let mut doc = square_doc();
-    fold(&mut doc, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5], FoldDirection::Up);
+    fold(
+        &mut doc,
+        [[0.5, 0.0], [0.5, 1.0]],
+        [0.25, 0.5],
+        FoldDirection::Up,
+    );
     assert_display_order(&doc, 1, "3手順の1手目");
 
-    fold(&mut doc, [[0.0, 0.5], [0.5, 0.5]], [0.25, 0.25], FoldDirection::Up);
+    fold(
+        &mut doc,
+        [[0.0, 0.5], [0.5, 0.5]],
+        [0.25, 0.25],
+        FoldDirection::Up,
+    );
     assert_display_order(&doc, 2, "3手順の2手目");
 
     fold(

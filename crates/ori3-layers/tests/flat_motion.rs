@@ -90,7 +90,10 @@ fn assert_replay_matches(doc: &Document, res: &FoldThroughResult, label: &str) {
     let faces = extract_faces(&doc.cp);
     let (again, _) = flat_state_at(doc, &faces, doc.sequence.len())
         .unwrap_or_else(|e| panic!("{label}: 再生で平らな状態が求まらない: {e}"));
-    assert_eq!(res.state.order, again.order, "{label}: 層順序が再生と一致する");
+    assert_eq!(
+        res.state.order, again.order,
+        "{label}: 層順序が再生と一致する"
+    );
     for f in &faces {
         assert!(
             res.state.placements[&f.id].approx_eq(&again.placements[&f.id], 1e-6),
@@ -151,7 +154,10 @@ fn assert_display_order(doc: &Document, up_to: usize, label: &str) {
             }
         }
     }
-    assert!(!lifted.is_empty(), "{label}: 折り終わる直前には層が浮いている");
+    assert!(
+        !lifted.is_empty(),
+        "{label}: 折り終わる直前には層が浮いている"
+    );
     let faces = extract_faces(&doc.cp);
     let (state, _) = flat_state_at(doc, &faces, up_to).expect("畳んだ状態");
     let order = state.order;
@@ -224,7 +230,12 @@ fn simple_fold_gives_the_same_result_as_fold_through() {
 #[test]
 fn opening_a_crease_brings_the_paper_back_flat() {
     let mut doc = square_doc();
-    fold(&mut doc, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5], FoldDirection::Up);
+    fold(
+        &mut doc,
+        [[0.5, 0.0], [0.5, 1.0]],
+        [0.25, 0.5],
+        FoldDirection::Up,
+    );
 
     let (faces, state) = state_of(&doc);
     assert_eq!(faces.len(), 2);
@@ -269,7 +280,12 @@ fn restacking_without_moving_paper_only_changes_layers_and_creases() {
     // 正方形を2回半分に折った4層。ここから紙をまったく動かさずに、
     // いちばん下の層をいちばん上へ回す(つぶし折りの退化ケースと同じ形の遷移)。
     let mut doc = square_doc();
-    fold(&mut doc, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5], FoldDirection::Up);
+    fold(
+        &mut doc,
+        [[0.5, 0.0], [0.5, 1.0]],
+        [0.25, 0.5],
+        FoldDirection::Up,
+    );
     let (faces, state) = state_of(&doc);
     let (lo, hi) = bbox(&doc.cp, &faces, &state);
     let mid_y = 0.5 * (lo[1] + hi[1]);
@@ -316,7 +332,11 @@ fn restacking_without_moving_paper_only_changes_layers_and_creases() {
         .filter(|(id, k)| before_kinds.get(id) != Some(k))
         .map(|(id, _)| *id)
         .collect();
-    assert_eq!(changed.len(), 2, "山谷が入れ替わるのは2本(changed={changed:?})");
+    assert_eq!(
+        changed.len(),
+        2,
+        "山谷が入れ替わるのは2本(changed={changed:?})"
+    );
     assert_eq!(res.step.drivers.len(), 2, "その2本ぶんだけ手順に記録される");
     for d in &res.step.drivers {
         assert!(d.target_angle_deg.abs() == 180.0, "{d:?}");
@@ -333,7 +353,12 @@ fn restacking_without_moving_paper_only_changes_layers_and_creases() {
 fn beside_without_a_neighbour_still_follows_the_direction() {
     for direction in [FoldDirection::Up, FoldDirection::Down] {
         let mut doc = square_doc();
-        fold(&mut doc, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5], FoldDirection::Up);
+        fold(
+            &mut doc,
+            [[0.5, 0.0], [0.5, 1.0]],
+            [0.25, 0.5],
+            FoldDirection::Up,
+        );
         let (faces, state) = state_of(&doc);
         let (lo, hi) = bbox(&doc.cp, &faces, &state);
         let mid_y = 0.5 * (lo[1] + hi[1]);
@@ -379,7 +404,12 @@ fn one_motion_can_turn_each_layer_the_opposite_way() {
     // 半分に折った2層。先端(上端側)を、下の層は上へ・上の層は下へ回すと、
     // 先端が2枚の間に挟まる(=中割り折りの重なり)。
     let mut doc = square_doc();
-    fold(&mut doc, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5], FoldDirection::Up);
+    fold(
+        &mut doc,
+        [[0.5, 0.0], [0.5, 1.0]],
+        [0.25, 0.5],
+        FoldDirection::Up,
+    );
 
     let (faces, state) = state_of(&doc);
     let (lo, hi) = bbox(&doc.cp, &faces, &state);
@@ -425,7 +455,11 @@ fn one_motion_can_turn_each_layer_the_opposite_way() {
         .collect();
     assert_eq!(moved.len(), 2, "動いたのは2枚の先端");
     let middle: HashSet<FaceId> = res.state.order[1..3].iter().copied().collect();
-    assert_eq!(middle, moved, "先端は胴2枚の間に挟まる(order={:?})", res.state.order);
+    assert_eq!(
+        middle, moved,
+        "先端は胴2枚の間に挟まる(order={:?})",
+        res.state.order
+    );
 
     // 背(2層をつなぐ折り目)は先端側だけ山谷が入れ替わる
     let seam_kinds: Vec<(f64, EdgeKind)> = doc
@@ -550,8 +584,18 @@ fn one_motion_can_use_a_rotation_made_of_two_reflections() {
 fn moving_only_some_layers_of_an_odd_stack_warns_but_continues() {
     // 段折りで3層(奇数)にしてから、上2枚だけを折る。
     let mut doc = square_doc();
-    fold(&mut doc, [[0.75, 0.0], [0.75, 1.0]], [0.5, 0.5], FoldDirection::Up);
-    fold(&mut doc, [[1.0, 0.0], [1.0, 1.0]], [0.9, 0.5], FoldDirection::Down);
+    fold(
+        &mut doc,
+        [[0.75, 0.0], [0.75, 1.0]],
+        [0.5, 0.5],
+        FoldDirection::Up,
+    );
+    fold(
+        &mut doc,
+        [[1.0, 0.0], [1.0, 1.0]],
+        [0.9, 0.5],
+        FoldDirection::Down,
+    );
 
     let (faces, state) = state_of(&doc);
     assert_eq!(faces.len(), 3, "3層(奇数)になる");
@@ -610,7 +654,11 @@ fn moving_only_some_layers_of_an_odd_stack_warns_but_continues() {
         .iter()
         .copied()
         .collect();
-    assert_eq!(top, moved, "動いた層が上に固まる(order={:?})", res.state.order);
+    assert_eq!(
+        top, moved,
+        "動いた層が上に固まる(order={:?})",
+        res.state.order
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -620,7 +668,12 @@ fn moving_only_some_layers_of_an_odd_stack_warns_but_continues() {
 #[test]
 fn one_motion_can_open_one_crease_and_make_another() {
     let mut doc = square_doc();
-    fold(&mut doc, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5], FoldDirection::Up);
+    fold(
+        &mut doc,
+        [[0.5, 0.0], [0.5, 1.0]],
+        [0.25, 0.5],
+        FoldDirection::Up,
+    );
 
     let (faces, state) = state_of(&doc);
     let (lo, hi) = bbox(&doc.cp, &faces, &state);
@@ -677,7 +730,12 @@ fn one_motion_can_open_one_crease_and_make_another() {
 #[test]
 fn layers_inside_a_region_can_be_turned_inside_out_without_moving() {
     let mut doc = square_doc();
-    fold(&mut doc, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5], FoldDirection::Up);
+    fold(
+        &mut doc,
+        [[0.5, 0.0], [0.5, 1.0]],
+        [0.25, 0.5],
+        FoldDirection::Up,
+    );
     let (faces, state) = state_of(&doc);
     let (lo, hi) = bbox(&doc.cp, &faces, &state);
     let mid_y = 0.5 * (lo[1] + hi[1]);
@@ -691,7 +749,10 @@ fn layers_inside_a_region_can_be_turned_inside_out_without_moving() {
     let (faces, state) = state_of(&doc);
     let (lo, hi) = bbox(&doc.cp, &faces, &state);
     // 角の三角形の領域(1本の斜め線で切り取る)の中だけ、重なりを裏返す
-    let line = [[lo[0], 0.5 * (lo[1] + hi[1])], [0.5 * (lo[0] + hi[0]), lo[1]]];
+    let line = [
+        [lo[0], 0.5 * (lo[1] + hi[1])],
+        [0.5 * (lo[0] + hi[0]), lo[1]],
+    ];
     let inside = [lo[0] + 0.1 * (hi[0] - lo[0]), lo[1] + 0.1 * (hi[1] - lo[1])];
     let before_order = state.order.clone();
 
@@ -714,9 +775,7 @@ fn layers_inside_a_region_can_be_turned_inside_out_without_moving() {
     for f in &faces {
         let child = extract_faces(&doc.cp)
             .into_iter()
-            .find(|nf| {
-                ori3_layers::point_in_face(&doc.cp, f, representative_point(&doc.cp, nf))
-            })
+            .find(|nf| ori3_layers::point_in_face(&doc.cp, f, representative_point(&doc.cp, nf)))
             .expect("元の面に含まれる新しい面");
         assert!(
             res.state.placements[&child.id].approx_eq(&state.placements[&f.id], 1e-12),

@@ -150,7 +150,10 @@ fn test_collinear_overlap_endpoint_touch() {
     )
     .expect("point touch must count");
     assert!(approx(p0, DVec2::new(2.0, 0.0)), "got {p0:?}");
-    assert!(approx(p0, p1), "point touch must return the same point pair");
+    assert!(
+        approx(p0, p1),
+        "point touch must return the same point pair"
+    );
 }
 
 #[test]
@@ -363,6 +366,9 @@ fn test_isometry_inverse_roundtrip() {
         );
         // inverse ∘ iso も恒等変換として振る舞う。
         let ident = iso.inverse().compose(&iso);
-        assert!(approx(ident.apply(p), p), "compose-identity failed: {ident:?}");
+        assert!(
+            approx(ident.apply(p), p),
+            "compose-identity failed: {ident:?}"
+        );
     }
 }

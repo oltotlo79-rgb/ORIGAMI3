@@ -467,7 +467,12 @@ pub(crate) fn run_motion(
 
     // 7. 紙が裂ける指定の検出
     warnings.extend(tear_warnings(
-        &work, &new_faces, &wpos, &placements, &moved, &parent_of,
+        &work,
+        &new_faces,
+        &wpos,
+        &placements,
+        &moved,
+        &parent_of,
     ));
 
     let new_state = FlatState { placements, order };
@@ -1035,7 +1040,10 @@ fn record_cut_driver(
                 (
                     p0,
                     p1,
-                    angles.get(&e.id).copied().unwrap_or_else(|| angle_of(e.kind)),
+                    angles
+                        .get(&e.id)
+                        .copied()
+                        .unwrap_or_else(|| angle_of(e.kind)),
                 )
             })
         })

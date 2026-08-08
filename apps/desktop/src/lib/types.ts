@@ -81,6 +81,9 @@ export interface DisplaySettings {
   front_color: [number, number, number];
   back_color: [number, number, number];
   grid_divisions: number;
+  /** 折り動作中の紙どうしの重なりを補正するか。既定はオン。
+   * 古い作品ファイルには無いので省略可とし、falseのときだけ切る */
+  overlap_prevention_enabled?: boolean;
   /** 紙のたわみを表現するか(SIM-012)。既定はオフ。
    * 古い作品ファイルには無いのでRust側が既定値で埋める(省略可) */
   soft_enabled?: boolean;

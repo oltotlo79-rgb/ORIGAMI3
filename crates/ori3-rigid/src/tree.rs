@@ -80,13 +80,7 @@ pub(crate) struct Forest {
 
 /// 親姿勢(r, t)にヒンジ回転(軸上の点a・単位方向u・角theta_rad)を合成した
 /// 子姿勢を返す。子のCP座標pは `r * (rot_local * (p - a) + a) + t` へ写る。
-pub(crate) fn fold_child(
-    r: DMat3,
-    t: DVec3,
-    a: DVec3,
-    u: DVec3,
-    theta_rad: f64,
-) -> (DMat3, DVec3) {
+pub(crate) fn fold_child(r: DMat3, t: DVec3, a: DVec3, u: DVec3, theta_rad: f64) -> (DMat3, DVec3) {
     let rl = DMat3::from_quat(DQuat::from_axis_angle(u, theta_rad));
     (r * rl, t + r * (a - rl * a))
 }

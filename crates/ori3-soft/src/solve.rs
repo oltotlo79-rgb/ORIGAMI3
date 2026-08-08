@@ -40,7 +40,7 @@ const NEIGHBOR_CELLS: [[i64; 3]; 14] = {
 };
 
 /// 層どうしを離す最小の隙間(紙の長辺=1.0の系での「紙の厚み」相当)。
-const LAYER_GAP: f64 = 0.002;
+pub(crate) const LAYER_GAP: f64 = 0.002;
 /// 隙間拘束を組む相手を探す半径。
 const SEARCH_RADIUS: f64 = LAYER_GAP * 4.0;
 /// 三角形の広域探索用セル。頂点用より粗くして、細分済みの網で候補が増えすぎない
@@ -87,6 +87,10 @@ pub(crate) struct Constraints {
     pub sealed: Vec<(f64, f64)>,
     /// 空気圧の1反復あたりの押し出し量(0なら膨らませない)
     pub push_step: f64,
+    /// 接触相手とみなす最小の層スコア差。
+    pub min_layer_diff: f64,
+    /// 中間層スコアの差に応じて目標隙間を滑らかに弱めるか。
+    pub scale_gap_by_layer_diff: bool,
 }
 
 /// 大きさの最大成分が正になるよう向きをそろえる(層の向きの符号を決定的にする)。
@@ -236,6 +240,8 @@ pub(crate) fn build(
         tri_layer: mesh.tri_layer.iter().map(|&v| f64::from(v)).collect(),
         sealed,
         push_step: pressure * PRESSURE_STEP * (1.0 - STIFFNESS_DAMPING * stiffness),
+        min_layer_diff: LAYER_DIFF,
+        scale_gap_by_layer_diff: false,
     }
 }
 
@@ -247,12 +253,14 @@ enum Contact {
         upper: u32,
         dir: DVec3,
         sealed: bool,
+        gap_scale: f64,
     },
     VertexTriangle {
         vertex: u32,
         triangle: [u32; 3],
         vertex_is_lower: bool,
         dir: DVec3,
+        gap_scale: f64,
     },
 }
 
@@ -294,7 +302,10 @@ impl TriangleGrid {
             for x in lo[0]..=hi[0] {
                 for y in lo[1]..=hi[1] {
                     for z in lo[2]..=hi[2] {
-                        cells.entry([x, y, z]).or_insert_with(Vec::new).push(ti as u32);
+                        cells
+                            .entry([x, y, z])
+                            .or_insert_with(Vec::new)
+                            .push(ti as u32);
                     }
                 }
             }
@@ -365,7 +376,7 @@ fn find_contacts(
         .iter()
         .fold((f64::MAX, f64::MIN), |(a, b), &v| (a.min(v), b.max(v)));
     let mut out = Vec::new();
-    if lmax - lmin < LAYER_DIFF {
+    if lmax - lmin < c.min_layer_diff {
         return out;
     }
     let grid = CellGrid::new(pos, SEARCH_RADIUS);
@@ -379,13 +390,18 @@ fn find_contacts(
             let same_cell = d == [0, 0, 0];
             for &j in grid.cell([b[0] + d[0], b[1] + d[1], b[2] + d[2]]) {
                 let (li, lj) = (c.layer[i], c.layer[j as usize]);
+                let layer_diff = (li - lj).abs();
                 if (same_cell && j as usize <= i)
-                    || (li - lj).abs() < LAYER_DIFF
+                    || layer_diff < c.min_layer_diff
                     || (pos[j as usize] - *p).length() > SEARCH_RADIUS
                 {
                     continue;
                 }
-                let (lo, hi) = if li < lj { (i as u32, j) } else { (j, i as u32) };
+                let (lo, hi) = if li < lj {
+                    (i as u32, j)
+                } else {
+                    (j, i as u32)
+                };
                 let dir = stack_dir(up[lo as usize], up[hi as usize]);
                 has_vertex_contact[i] = true;
                 has_vertex_contact[j as usize] = true;
@@ -394,6 +410,11 @@ fn find_contacts(
                     upper: hi,
                     dir,
                     sealed: is_sealed(&c.sealed, li.min(lj), li.max(lj)),
+                    gap_scale: if c.scale_gap_by_layer_diff {
+                        layer_diff.min(1.0)
+                    } else {
+                        1.0
+                    },
                 });
             }
         }
@@ -410,7 +431,8 @@ fn find_contacts(
             }
             let triangle_layer = c.tri_layer[triangle_id as usize];
             let vertex_layer = c.layer[vertex];
-            if (triangle_layer - vertex_layer).abs() < LAYER_DIFF {
+            let layer_diff = (triangle_layer - vertex_layer).abs();
+            if layer_diff < c.min_layer_diff {
                 return;
             }
             let points = triangle.map(|id| pos[id as usize]);
@@ -428,11 +450,10 @@ fn find_contacts(
             if (nearest - p).length() > SEARCH_RADIUS {
                 return;
             }
-            let triangle_up = (up[triangle[0] as usize]
-                + up[triangle[1] as usize]
-                + up[triangle[2] as usize])
-                .try_normalize()
-                .unwrap_or(up[triangle[0] as usize]);
+            let triangle_up =
+                (up[triangle[0] as usize] + up[triangle[1] as usize] + up[triangle[2] as usize])
+                    .try_normalize()
+                    .unwrap_or(up[triangle[0] as usize]);
             let vertex_is_lower = vertex_layer < triangle_layer;
             let dir = if vertex_is_lower {
                 stack_dir(up[vertex], triangle_up)
@@ -444,6 +465,11 @@ fn find_contacts(
                 triangle,
                 vertex_is_lower,
                 dir,
+                gap_scale: if c.scale_gap_by_layer_diff {
+                    layer_diff.min(1.0)
+                } else {
+                    1.0
+                },
             });
         };
         if let Some(candidates) = triangles_grid.cell(p) {
@@ -544,19 +570,25 @@ fn pressure_push(n: usize, stack: &[(u32, u32, bool)], up: &[DVec3], step: f64) 
     }
     sum.iter()
         .zip(&cnt)
-        .map(|(s, &c)| if c > 0.0 { *s * (step / c) } else { DVec3::ZERO })
+        .map(|(s, &c)| {
+            if c > 0.0 {
+                *s * (step / c)
+            } else {
+                DVec3::ZERO
+            }
+        })
         .collect()
 }
 
 /// 下の層`a`から見て上の層`b`が`dir`方向へ最低`LAYER_GAP`だけ離れるよう押し戻す。
 #[inline]
-fn separate(pos: &mut [DVec3], a: u32, b: u32, dir: DVec3) {
+fn separate(pos: &mut [DVec3], a: u32, b: u32, dir: DVec3, gap: f64) {
     let (a, b) = (a as usize, b as usize);
     let s = (pos[b] - pos[a]).dot(dir);
-    if s >= LAYER_GAP {
+    if s >= gap {
         return;
     }
-    let c = dir * (0.5 * (LAYER_GAP - s));
+    let c = dir * (0.5 * (gap - s));
     pos[a] -= c;
     pos[b] += c;
 }
@@ -570,6 +602,7 @@ fn separate_vertex_triangle(
     triangle: [u32; 3],
     vertex_is_lower: bool,
     dir: DVec3,
+    target_gap: f64,
 ) {
     let point = pos[vertex as usize];
     let triangle_points = triangle.map(|id| pos[id as usize]);
@@ -584,10 +617,10 @@ fn separate_vertex_triangle(
     } else {
         (point - nearest).dot(dir)
     };
-    if gap >= LAYER_GAP {
+    if gap >= target_gap {
         return;
     }
-    let correction = dir * (0.5 * (LAYER_GAP - gap));
+    let correction = dir * (0.5 * (target_gap - gap));
     if vertex_is_lower {
         pos[vertex as usize] -= correction;
         for (id, weight) in triangle.into_iter().zip(weights) {
@@ -601,18 +634,77 @@ fn separate_vertex_triangle(
     }
 }
 
-fn project_contact(pos: &mut [DVec3], contact: Contact) {
+fn project_contact(pos: &mut [DVec3], contact: Contact, gap: f64) {
     match contact {
         Contact::Vertices {
-            lower, upper, dir, ..
-        } => separate(pos, lower, upper, dir),
+            lower,
+            upper,
+            dir,
+            gap_scale,
+            ..
+        } => separate(pos, lower, upper, dir, gap * gap_scale),
         Contact::VertexTriangle {
             vertex,
             triangle,
             vertex_is_lower,
             dir,
-        } => separate_vertex_triangle(pos, vertex, triangle, vertex_is_lower, dir),
+            gap_scale,
+        } => separate_vertex_triangle(pos, vertex, triangle, vertex_is_lower, dir, gap * gap_scale),
     }
+}
+
+/// 現在見つかる接触について、層順序に反した食い込みの量を合計する。
+fn penetration_depth(pos: &[DVec3], contact: Contact) -> f64 {
+    match contact {
+        Contact::Vertices {
+            lower, upper, dir, ..
+        } => (-(pos[upper as usize] - pos[lower as usize]).dot(dir)).max(0.0),
+        Contact::VertexTriangle {
+            vertex,
+            triangle,
+            vertex_is_lower,
+            dir,
+            ..
+        } => {
+            let point = pos[vertex as usize];
+            let points = triangle.map(|id| pos[id as usize]);
+            let (nearest, _) = closest_point_on_triangle(point, points[0], points[1], points[2]);
+            let signed = if vertex_is_lower {
+                (nearest - point).dot(dir)
+            } else {
+                (point - nearest).dot(dir)
+            };
+            (-signed).max(0.0)
+        }
+    }
+}
+
+/// 接触補正の前後を検査するための食い込み量。
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct PenetrationMeasure {
+    pub count: usize,
+    pub total_depth: f64,
+    pub max_depth: f64,
+}
+
+pub(crate) fn measure_penetration(
+    pos: &[DVec3],
+    triangles: &[[u32; 3]],
+    c: &Constraints,
+) -> PenetrationMeasure {
+    let up = up_field(triangles, pos);
+    let contacts = find_contacts(pos, triangles, &up, c);
+    contacts
+        .iter()
+        .fold(PenetrationMeasure::default(), |mut m, &contact| {
+            let depth = penetration_depth(pos, contact);
+            if depth > 0.0 {
+                m.count += 1;
+                m.total_depth += depth;
+                m.max_depth = m.max_depth.max(depth);
+            }
+            m
+        })
 }
 
 fn is_penetrating(pos: &[DVec3], contact: Contact) -> bool {
@@ -625,6 +717,7 @@ fn is_penetrating(pos: &[DVec3], contact: Contact) -> bool {
             triangle,
             vertex_is_lower,
             dir,
+            ..
         } => {
             let point = pos[vertex as usize];
             let points = triangle.map(|id| pos[id as usize]);
@@ -648,6 +741,19 @@ pub(crate) fn run(
     c: &Constraints,
     iterations: u32,
 ) -> usize {
+    run_with_gap(pos, triangles, c, iterations, LAYER_GAP)
+}
+
+/// [`run`] と同じ拘束を、接触の目標隙間だけ縮めて適用する。
+/// 折り上がり直前に層順序が切り替わるときの滑らかな減衰に使う。
+pub(crate) fn run_with_gap(
+    pos: &mut [DVec3],
+    triangles: &[[u32; 3]],
+    c: &Constraints,
+    iterations: u32,
+    contact_gap: f64,
+) -> usize {
+    let contact_gap = contact_gap.clamp(0.0, LAYER_GAP);
     let mut contacts = Vec::new();
     let mut push = Vec::new();
     // 積み上げ向きの**符号**は基準の形(剛体折りの結果)で決める。組み直しでは
@@ -699,7 +805,7 @@ pub(crate) fn run(
             project_bend(pos, b);
         }
         for &contact in &contacts {
-            project_contact(pos, contact);
+            project_contact(pos, contact, contact_gap);
         }
     }
     contacts
@@ -734,6 +840,8 @@ mod tests {
             tri_layer: vec![0.0, 0.0],
             sealed: Vec::new(),
             push_step: 0.0,
+            min_layer_diff: LAYER_DIFF,
+            scale_gap_by_layer_diff: false,
         };
         let triangles = [[0u32, 1, 2], [1, 0, 3]];
         run(&mut pos, &triangles, &c, 60);
@@ -759,12 +867,7 @@ mod tests {
 
     /// 2層ぶんの三角形の網。`shared`なら2枚が2点を共有する(折り目でつながった袋)。
     fn two_layers(shared: bool) -> RawMesh {
-        let mut positions = vec![
-            DVec3::ZERO,
-            DVec3::X,
-            DVec3::Y,
-            DVec3::new(1.0, 1.0, 0.0),
-        ];
+        let mut positions = vec![DVec3::ZERO, DVec3::X, DVec3::Y, DVec3::new(1.0, 1.0, 0.0)];
         let second = if shared {
             [1, 2, 3]
         } else {
@@ -776,6 +879,7 @@ mod tests {
             triangles: vec![[0, 1, 2], second],
             tri_face: vec![0, 1],
             tri_layer: vec![0, 1],
+            corners: Default::default(),
             warnings: Vec::new(),
         }
     }
@@ -822,15 +926,21 @@ mod tests {
             tri_layer: vec![0.0, 2.0],
             sealed: Vec::new(),
             push_step: 0.0,
+            min_layer_diff: LAYER_DIFF,
+            scale_gap_by_layer_diff: false,
         };
         let up = up_field(&triangles, &pos);
         let contacts = find_contacts(&pos, &triangles, &up, &c);
         assert!(
-            contacts.iter().any(|contact| matches!(contact, Contact::VertexTriangle { .. })),
+            contacts
+                .iter()
+                .any(|contact| matches!(contact, Contact::VertexTriangle { .. })),
             "大三角形との接触を検出していない"
         );
         assert!(
-            !contacts.iter().any(|contact| matches!(contact, Contact::Vertices { .. })),
+            !contacts
+                .iter()
+                .any(|contact| matches!(contact, Contact::Vertices { .. })),
             "この配置は頂点対では検出できないはず"
         );
 

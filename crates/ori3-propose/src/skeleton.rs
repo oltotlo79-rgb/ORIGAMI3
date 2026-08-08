@@ -164,9 +164,7 @@ impl Skeleton {
             return Err("角(頭・尾・足など)が1本もありません".to_string());
         }
         if leaves > MAX_LEAVES {
-            return Err(format!(
-                "角は{MAX_LEAVES}本までです(現在{leaves}本)"
-            ));
+            return Err(format!("角は{MAX_LEAVES}本までです(現在{leaves}本)"));
         }
         Ok(())
     }

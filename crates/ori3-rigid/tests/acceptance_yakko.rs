@@ -235,8 +235,14 @@ fn blintz_once_folds_flat_to_rotated_square() {
 
     // 外形: バウンディングボックスは1×1(回転正方形が紙の四辺に接する)
     let (min, max) = bbox_xy(&result.frame);
-    assert!((max[0] - min[0] - 1.0).abs() < 1e-6, "bbox={min:?}..{max:?}");
-    assert!((max[1] - min[1] - 1.0).abs() < 1e-6, "bbox={min:?}..{max:?}");
+    assert!(
+        (max[0] - min[0] - 1.0).abs() < 1e-6,
+        "bbox={min:?}..{max:?}"
+    );
+    assert!(
+        (max[1] - min[1] - 1.0).abs() < 1e-6,
+        "bbox={min:?}..{max:?}"
+    );
     let c = DVec3::new((min[0] + max[0]) * 0.5, (min[1] + max[1]) * 0.5, 0.0);
 
     // 全ての点が中心まわりの1/√2角の回転正方形(|dx|+|dy|≤0.5)の中にある
@@ -296,8 +302,14 @@ fn yakko_double_blintz_folds_flat_to_half_square() {
 
     // 外形: 1/2角の正方形(理論値と1e-6で一致)
     let (min, max) = bbox_xy(&result.frame);
-    assert!((max[0] - min[0] - 0.5).abs() < 1e-6, "bbox={min:?}..{max:?}");
-    assert!((max[1] - min[1] - 0.5).abs() < 1e-6, "bbox={min:?}..{max:?}");
+    assert!(
+        (max[0] - min[0] - 0.5).abs() < 1e-6,
+        "bbox={min:?}..{max:?}"
+    );
+    assert!(
+        (max[1] - min[1] - 0.5).abs() < 1e-6,
+        "bbox={min:?}..{max:?}"
+    );
     let c = DVec3::new((min[0] + max[0]) * 0.5, (min[1] + max[1]) * 0.5, 0.0);
 
     // 4隅と辺中点M1..M4は全て中心の1点に重なる(座布団折り2回の性質)

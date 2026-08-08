@@ -155,7 +155,10 @@ fn collapse_curve_chains(
         hit.next(); // 先頭の1つは残す
         drop.extend(hit);
     }
-    violating.into_iter().filter(|v| !drop.contains(v)).collect()
+    violating
+        .into_iter()
+        .filter(|v| !drop.contains(v))
+        .collect()
 }
 
 /// 前川定理: 山の本数 − 谷の本数 = ±2。

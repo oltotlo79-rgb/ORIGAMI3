@@ -29,6 +29,8 @@ pub(crate) struct RawMesh {
     pub triangles: Vec<[u32; 3]>,
     pub tri_face: Vec<FaceId>,
     pub tri_layer: Vec<u32>,
+    /// CP頂点IDから共有網頂点への対応。補正後の位置をFrame3Dへ戻すために使う。
+    pub corners: BTreeMap<VertexId, u32>,
     pub warnings: Vec<String>,
 }
 
@@ -187,6 +189,13 @@ pub(crate) fn build_mesh(cp: &CreasePattern, faces: &[Face], frame: &Frame3D, di
         triangles,
         tri_face,
         tri_layer,
+        corners: index
+            .iter()
+            .filter_map(|(key, &id)| match key {
+                MeshKey::Corner(vertex) => Some((*vertex, id)),
+                _ => None,
+            })
+            .collect(),
         warnings,
     }
 }

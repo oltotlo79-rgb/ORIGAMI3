@@ -179,20 +179,23 @@ pub fn generate(
     let pts = dedup(&pts);
     let tris = triangulate(&pts);
     if tris.is_empty() {
-        warnings.push(
-            "円の中心と紙の角が一直線に並んでいるため、折り線を作れませんでした".to_string(),
-        );
+        warnings
+            .push("円の中心と紙の角が一直線に並んでいるため、折り線を作れませんでした".to_string());
     }
 
     let mut cp = border_cp(paper_w, paper_h);
     for t in &tris {
-        fill_polygon(&mut cp, &[pts[t[0]], pts[t[1]], pts[t[2]]], paper_w, paper_h);
+        fill_polygon(
+            &mut cp,
+            &[pts[t[0]], pts[t[1]], pts[t[2]]],
+            paper_w,
+            paper_h,
+        );
     }
 
     // 三角形の頂点として使われなかった円中心があれば知らせる。
     for &(id, c) in &packing.centers {
-        let used = index_of(&pts, c)
-            .is_some_and(|i| tris.iter().any(|t| t.contains(&i)));
+        let used = index_of(&pts, c).is_some_and(|i| tris.iter().any(|t| t.contains(&i)));
         if !used {
             warnings.push(format!(
                 "角{id}の位置が他の角と重なっているため、専用の折り線を作れませんでした"

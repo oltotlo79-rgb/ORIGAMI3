@@ -206,7 +206,14 @@ fn large_cp_operation_costs() {
         // 4) local_violations
         if !stop[3] {
             let (v, dt) = timed(|| local_violations(&cp));
-            row("local_violations", n, e, f, dt, &format!("違反{}点", v.len()));
+            row(
+                "local_violations",
+                n,
+                e,
+                f,
+                dt,
+                &format!("違反{}点", v.len()),
+            );
             stop[3] |= dt > GATE;
         }
 
@@ -251,7 +258,14 @@ fn large_cp_operation_costs() {
         // 6) replay / flat_state_at(手順3個)
         if !stop[5] {
             let (r, dt) = timed(|| replay(&doc, 3, 1.0));
-            row("replay(3手順)", n, e, f, dt, &format!("警告{}", r.warnings.len()));
+            row(
+                "replay(3手順)",
+                n,
+                e,
+                f,
+                dt,
+                &format!("警告{}", r.warnings.len()),
+            );
             stop[5] |= dt > GATE;
             let (st, dt) = timed(|| flat_state_at(&doc, &faces, 3));
             row(
@@ -265,7 +279,9 @@ fn large_cp_operation_costs() {
         }
 
         // 概算メモリ(CP+面+半辺の実体サイズ)
-        let mem = cp.vertices.len() * 24 + e * 16 + faces.iter().map(|x| x.vertices.len() * 8).sum::<usize>();
+        let mem = cp.vertices.len() * 24
+            + e * 16
+            + faces.iter().map(|x| x.vertices.len() * 8).sum::<usize>();
         println!("|   memory(CP+faces)   | n={n:3} | 約 {} KB", mem / 1024);
     }
     for (i, s) in stop.iter().enumerate() {

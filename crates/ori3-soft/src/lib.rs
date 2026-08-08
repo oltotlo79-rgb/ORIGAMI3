@@ -16,6 +16,8 @@ mod grid;
 mod solve;
 mod subdivide;
 
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
 use glam::DVec3;
 use ori3_cp::Face;
 use ori3_model::{CreasePattern, FaceId, Frame3D};
@@ -31,6 +33,42 @@ const MAX_ITERATIONS: u32 = 200;
 /// 1フレームおよそ「三角形1,000枚あたり1.6ms」で、三角形12,800枚だと約21msと
 /// 目標の16msを超える。8,000枚なら約13msに収まるのでこの値にしている。
 const MAX_TRIANGLES: usize = 8_000;
+/// 中間フレームの接触補正に使う既定の反復数。
+pub const DEFAULT_OVERLAP_ITERATIONS: u32 = 4;
+/// 接触補正はドラッグ中の1フレームへ入るよう、たわみより低い上限にする。
+const MAX_OVERLAP_ITERATIONS: u32 = 20;
+
+/// 剛体折りの後に掛ける、表示優先の重なり防止設定。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OverlapSettings {
+    /// falseならFrame3Dを1ビットも変更しない。
+    pub enabled: bool,
+    /// PBDの反復数。画面の既定は[`DEFAULT_OVERLAP_ITERATIONS`]。
+    pub iterations: u32,
+}
+
+impl Default for OverlapSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            iterations: DEFAULT_OVERLAP_ITERATIONS,
+        }
+    }
+}
+
+/// 1フレームの接触補正結果。完全保証ではなく、近傍で見つかった接触の指標。
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct OverlapReport {
+    pub applied: bool,
+    pub corrected_vertices: usize,
+    pub penetrations_before: usize,
+    pub penetrations_after: usize,
+    pub total_depth_before: f64,
+    pub total_depth_after: f64,
+    pub max_depth_before: f64,
+    pub max_depth_after: f64,
+    pub target_gap: f64,
+}
 
 /// たわみの設定。SIM-015 のとおり、たわみの状態はこの値だけで表す。
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -84,6 +122,187 @@ fn estimate(faces: &[Face], div: u32) -> usize {
     per.saturating_mul((div as usize).saturating_mul(div as usize))
 }
 
+/// 指定された面を全て1回ずつ含む、決定的な層順位を作る。
+fn complete_ranks(ids: &BTreeSet<FaceId>, order: &[FaceId]) -> BTreeMap<FaceId, f64> {
+    let mut complete = Vec::with_capacity(ids.len());
+    let mut seen = BTreeSet::new();
+    for &id in order {
+        if ids.contains(&id) && seen.insert(id) {
+            complete.push(id);
+        }
+    }
+    complete.extend(ids.iter().copied().filter(|id| seen.insert(*id)));
+    complete
+        .into_iter()
+        .enumerate()
+        .map(|(rank, id)| (id, rank as f64))
+        .collect()
+}
+
+/// 開始順と完了順を進行度で補間した面ごとの層スコア。
+fn interpolated_layers(
+    faces: &[Face],
+    start_order: &[FaceId],
+    end_order: &[FaceId],
+    progress: f64,
+) -> (BTreeMap<FaceId, f64>, bool) {
+    let ids: BTreeSet<FaceId> = faces.iter().map(|face| face.id).collect();
+    let start = complete_ranks(&ids, start_order);
+    let end = complete_ranks(&ids, end_order);
+    let progress = if progress.is_finite() {
+        progress.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    // ease-in/outにして、層の上下が切り替わる前後の力の変化を急にしない。
+    let t = progress * progress * (3.0 - 2.0 * progress);
+    let scores = ids
+        .iter()
+        .map(|&id| {
+            let a = start[&id];
+            let b = end[&id];
+            (id, a + (b - a) * t)
+        })
+        .collect();
+    let ids: Vec<FaceId> = ids.into_iter().collect();
+    let order_changes = (0..ids.len()).any(|i| {
+        (i + 1..ids.len()).any(|j| {
+            let (a, b) = (ids[i], ids[j]);
+            (start[&a] < start[&b]) != (end[&a] < end[&b])
+        })
+    });
+    (scores, order_changes)
+}
+
+/// 180度付近で初めて確定する層順序は、完了直前の15%で隙間を0へ滑らかに減らす。
+/// 完了フレームは既存のstackLiftsが厚みを付けるため、ここで逆向きへ押し返さない。
+fn completion_gap_scale(progress: f64, order_changes: bool) -> f64 {
+    if !order_changes {
+        return 1.0;
+    }
+    let progress = if progress.is_finite() {
+        progress.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    const TAPER_START: f64 = 0.85;
+    if progress <= TAPER_START {
+        return 1.0;
+    }
+    let t = (progress - TAPER_START) / (1.0 - TAPER_START);
+    1.0 - t * t * (3.0 - 2.0 * t)
+}
+
+/// 剛体解の1フレームへ、層順序ベースの面間分離と頂点-三角形接触を後段適用する。
+///
+/// 網のCP頂点は面をまたいで共有されるため、補正で面が多少たわんでも折り目の接続は
+/// 切れない。近傍探索で見つかる接触だけを扱う表示優先の近似で、完全な無貫通は保証
+/// しない。`start_order` / `end_order` はどちらも下から上の面ID列。
+pub fn prevent_overlap(
+    cp: &CreasePattern,
+    faces: &[Face],
+    frame: &mut Frame3D,
+    start_order: &[FaceId],
+    end_order: &[FaceId],
+    progress: f64,
+    settings: &OverlapSettings,
+) -> OverlapReport {
+    if !settings.enabled || settings.iterations == 0 || faces.len() < 2 {
+        return OverlapReport::default();
+    }
+    let (scores, order_changes) = interpolated_layers(faces, start_order, end_order, progress);
+    let target_gap = solve::LAYER_GAP * completion_gap_scale(progress, order_changes);
+    if target_gap <= ori3_model::EPS {
+        return OverlapReport {
+            target_gap,
+            ..OverlapReport::default()
+        };
+    }
+
+    // 細分なし(元の面の三角形だけ)で、ドラッグ中にも収まる軽い後処理にする。
+    let mut raw = subdivide::build_mesh(cp, faces, frame, 1);
+    if raw.positions.is_empty() || raw.triangles.is_empty() {
+        return OverlapReport {
+            target_gap,
+            ..OverlapReport::default()
+        };
+    }
+    let iterations = settings.iterations.min(MAX_OVERLAP_ITERATIONS);
+    // 面内・折り目とも基準角を強く戻し、最後の接触射影だけに見た目上必要な
+    // ごく小さい変形を許す。共有頂点なので折り目の接続自体は常に保たれる。
+    let mut constraints = solve::build(&raw, &raw.positions, 1.0, 0.0, iterations);
+
+    // 整数の表示層とは別に、開始→完了を補間した連続スコアを接触へ渡す。
+    constraints.tri_layer = raw
+        .tri_face
+        .iter()
+        .map(|face| scores.get(face).copied().unwrap_or(0.0))
+        .collect();
+    let mut sums = vec![0.0; raw.positions.len()];
+    let mut counts = vec![0u32; raw.positions.len()];
+    for (triangle, &layer) in raw.triangles.iter().zip(&constraints.tri_layer) {
+        for &vertex in triangle {
+            sums[vertex as usize] += layer;
+            counts[vertex as usize] += 1;
+        }
+    }
+    constraints.layer = sums
+        .iter()
+        .zip(&counts)
+        .map(|(&sum, &count)| {
+            if count == 0 {
+                0.0
+            } else {
+                sum / f64::from(count)
+            }
+        })
+        .collect();
+    constraints.min_layer_diff = ori3_model::EPS;
+    constraints.scale_gap_by_layer_diff = true;
+
+    let before = solve::measure_penetration(&raw.positions, &raw.triangles, &constraints);
+    let original = raw.positions.clone();
+    solve::run_with_gap(
+        &mut raw.positions,
+        &raw.triangles,
+        &constraints,
+        iterations,
+        target_gap,
+    );
+    let after = solve::measure_penetration(&raw.positions, &raw.triangles, &constraints);
+
+    // CP頂点の共有網位置を各Face3Dへ戻す。同じ折り目の両面には必ず同じ値が入る。
+    let face_by_id: HashMap<FaceId, &Face> = faces.iter().map(|face| (face.id, face)).collect();
+    for output in &mut frame.faces {
+        let Some(face) = face_by_id.get(&output.face) else {
+            continue;
+        };
+        if output.polygon.len() != face.vertices.len() {
+            continue;
+        }
+        for (point, vertex) in output.polygon.iter_mut().zip(&face.vertices) {
+            if let Some(&index) = raw.corners.get(vertex) {
+                *point = raw.positions[index as usize].to_array();
+            }
+        }
+    }
+    OverlapReport {
+        applied: true,
+        corrected_vertices: original
+            .iter()
+            .zip(&raw.positions)
+            .filter(|(a, b)| a.to_array() != b.to_array())
+            .count(),
+        penetrations_before: before.count,
+        penetrations_after: after.count,
+        total_depth_before: before.total_depth,
+        total_depth_after: after.total_depth,
+        max_depth_before: before.max_depth,
+        max_depth_after: after.max_depth,
+        target_gap,
+    }
+}
+
 /// 剛体折りの結果(基準の形)と層順序から、たわませた三角形網を作る。
 ///
 /// `settings.enabled` が false のときは細分も反復も行わず、`frame` の多角形を
@@ -109,7 +328,9 @@ pub fn relax(
         0
     };
     if settings.enabled && settings.subdivision > MAX_SUBDIVISION {
-        warnings.push(format!("面の分割の細かさは{MAX_SUBDIVISION}までに丸めました"));
+        warnings.push(format!(
+            "面の分割の細かさは{MAX_SUBDIVISION}までに丸めました"
+        ));
     }
     if settings.enabled && sub > 0 && estimate(faces, 1 << sub) > MAX_TRIANGLES {
         while sub > 0 && estimate(faces, 1 << sub) > MAX_TRIANGLES {
@@ -137,5 +358,159 @@ pub fn relax(
         triangle_faces: raw.tri_face,
         triangle_layers: raw.tri_layer,
         warnings,
+    }
+}
+
+#[cfg(test)]
+mod overlap_tests {
+    use super::*;
+    use ori3_model::{Edge, EdgeKind, Face3D, Vertex};
+
+    /// 1本の折り目を共有する2三角形を、上下が逆になるほど浅く重ねた姿勢。
+    fn penetrating_crease() -> (CreasePattern, Vec<Face>, Frame3D) {
+        let vertices = vec![
+            Vertex {
+                id: 0,
+                pos: [0.0, 0.0],
+            },
+            Vertex {
+                id: 1,
+                pos: [1.0, 0.0],
+            },
+            Vertex {
+                id: 2,
+                pos: [0.0, 1.0],
+            },
+            Vertex {
+                id: 3,
+                pos: [0.0, -1.0],
+            },
+        ];
+        let edge = |id, v0, v1, kind| Edge { id, v0, v1, kind };
+        let edges = vec![
+            edge(0, 0, 1, EdgeKind::Mountain),
+            edge(1, 1, 2, EdgeKind::Border),
+            edge(2, 2, 0, EdgeKind::Border),
+            edge(3, 0, 3, EdgeKind::Border),
+            edge(4, 3, 1, EdgeKind::Border),
+        ];
+        let cp = CreasePattern {
+            vertices,
+            edges,
+            next_vertex_id: 4,
+            next_edge_id: 5,
+        };
+        let faces = vec![
+            Face {
+                id: 0,
+                vertices: vec![0, 1, 2],
+                edges: vec![0, 1, 2],
+            },
+            Face {
+                id: 1,
+                vertices: vec![1, 0, 3],
+                edges: vec![0, 3, 4],
+            },
+        ];
+        let shared0 = [0.0, 0.0, 0.0];
+        let shared1 = [1.0, 0.0, 0.0];
+        let frame = Frame3D {
+            faces: vec![
+                Face3D {
+                    face: 0,
+                    polygon: vec![shared0, shared1, [0.0, 1.0, 0.0005]],
+                    layer: 0,
+                },
+                Face3D {
+                    face: 1,
+                    polygon: vec![shared1, shared0, [0.0, 1.0, -0.0005]],
+                    layer: 1,
+                },
+            ],
+            warnings: Vec::new(),
+        };
+        (cp, faces, frame)
+    }
+
+    #[test]
+    fn overlap_correction_reduces_penetration_depth() {
+        let (cp, faces, mut frame) = penetrating_crease();
+        let report = prevent_overlap(
+            &cp,
+            &faces,
+            &mut frame,
+            &[0, 1],
+            &[0, 1],
+            0.5,
+            &OverlapSettings::default(),
+        );
+        assert!(report.applied);
+        assert!(
+            report.penetrations_before > 0,
+            "補正前に食い込みがある: {report:?}"
+        );
+        assert!(
+            report.total_depth_after <= report.total_depth_before * 0.5,
+            "食い込み量が半分以下へ減る: {report:?}"
+        );
+        assert!(
+            report.max_depth_after < report.max_depth_before,
+            "{report:?}"
+        );
+    }
+
+    #[test]
+    fn overlap_correction_keeps_the_crease_connected() {
+        let (cp, faces, mut frame) = penetrating_crease();
+        prevent_overlap(
+            &cp,
+            &faces,
+            &mut frame,
+            &[0, 1],
+            &[0, 1],
+            0.5,
+            &OverlapSettings::default(),
+        );
+        // 面0の頂点0/1と、逆向きに並ぶ面1の頂点1/0は同じCP頂点。
+        assert_eq!(frame.faces[0].polygon[0], frame.faces[1].polygon[1]);
+        assert_eq!(frame.faces[0].polygon[1], frame.faces[1].polygon[0]);
+    }
+
+    #[test]
+    fn disabled_overlap_correction_is_a_bitwise_passthrough() {
+        let (cp, faces, mut frame) = penetrating_crease();
+        let before: Vec<Vec<[f64; 3]>> = frame.faces.iter().map(|f| f.polygon.clone()).collect();
+        let report = prevent_overlap(
+            &cp,
+            &faces,
+            &mut frame,
+            &[0, 1],
+            &[0, 1],
+            0.5,
+            &OverlapSettings {
+                enabled: false,
+                ..OverlapSettings::default()
+            },
+        );
+        let after: Vec<Vec<[f64; 3]>> = frame.faces.iter().map(|f| f.polygon.clone()).collect();
+        assert!(!report.applied);
+        assert_eq!(after, before, "OFFなら従来の剛体フレームをそのまま返す");
+    }
+
+    #[test]
+    fn changing_layer_order_is_interpolated_and_tapers_near_completion() {
+        let (_, faces, _) = penetrating_crease();
+        let (scores, changes) = interpolated_layers(&faces, &[0, 1], &[1, 0], 0.5);
+        assert!(changes);
+        assert_eq!(
+            scores[&0], scores[&1],
+            "上下の切替点では分離方向を確定しない"
+        );
+        let near_end = completion_gap_scale(0.9, changes);
+        assert!(
+            (0.0..1.0).contains(&near_end),
+            "完了へ向けて隙間を漸減: {near_end}"
+        );
+        assert_eq!(completion_gap_scale(1.0, changes), 0.0);
     }
 }

@@ -83,7 +83,11 @@ impl Problem {
             v = v.max(s * d - dist(c[i], c[j]));
         }
         for p in c {
-            v = v.max(-p[0]).max(p[0] - self.w).max(-p[1]).max(p[1] - self.h);
+            v = v
+                .max(-p[0])
+                .max(p[0] - self.w)
+                .max(-p[1])
+                .max(p[1] - self.h);
         }
         v.max(0.0)
     }
@@ -288,7 +292,11 @@ pub fn pack(
     }
     // 制約を満たすものを先に、その中では縮尺の大きい順に並べる。
     let feasible = |x: &Packing| u8::from(x.violation > PACK_TOL);
-    out.sort_by(|a, b| feasible(a).cmp(&feasible(b)).then(b.scale.total_cmp(&a.scale)));
+    out.sort_by(|a, b| {
+        feasible(a)
+            .cmp(&feasible(b))
+            .then(b.scale.total_cmp(&a.scale))
+    });
     out.truncate(MAX_CANDIDATES);
     out
 }

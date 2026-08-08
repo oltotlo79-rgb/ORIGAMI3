@@ -116,6 +116,11 @@ fn default_stiffness() -> f64 {
     0.5
 }
 
+/// 重なり防止の既定値。古い作品には項目が無いため、明示的にオンで補う。
+fn default_overlap_prevention() -> bool {
+    true
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DisplaySettings {
     pub front_color: [u8; 3],
@@ -133,6 +138,11 @@ pub struct DisplaySettings {
     /// 膨らみの強さ(0.0〜1.0、SIM-013)。0.0なら膨らませない。
     #[serde(default)]
     pub soft_pressure: f64,
+    /// 折り途中の面どうしへ接触補正を掛けるか。**既定はオン**。
+    ///
+    /// 補正後の頂点そのものは保存せず、表示を求めるたびに剛体解へ後段適用する。
+    #[serde(default = "default_overlap_prevention")]
+    pub overlap_prevention_enabled: bool,
 }
 
 impl Default for DisplaySettings {
@@ -144,6 +154,7 @@ impl Default for DisplaySettings {
             soft_enabled: false,
             soft_stiffness: default_stiffness(),
             soft_pressure: 0.0,
+            overlap_prevention_enabled: default_overlap_prevention(),
         }
     }
 }
@@ -186,10 +197,7 @@ impl Document {
                 id: 1,
                 pos: [w, 0.0],
             },
-            Vertex {
-                id: 2,
-                pos: [w, h],
-            },
+            Vertex { id: 2, pos: [w, h] },
             Vertex {
                 id: 3,
                 pos: [0.0, h],

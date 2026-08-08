@@ -11,6 +11,9 @@
 //! | 細分2(自動調整なし・参考値) | 12,800 | 約12ms | 約21ms |
 //! | 細分1(自動調整後=既定の動き) | 3,200 | 約3.1ms | 約6.3ms |
 //!
+//! 中間フレームの接触専用経路は、同じ開発機・release・面400・細分なし・4反復で
+//! **7.52ms/フレーム**(2026-08-08実測)。16msの1フレーム枠内に収まる。
+//!
 //! 面400・細分2は16msに収まらないため、`ori3-soft` は三角形数の上限
 //! (`MAX_TRIANGLES`)で細分を自動的に1へ落とす(NFR-002bの「大きな展開図では
 //! 分割の細かさを自動で落として目標を保つ」)。このテストが測るのはその
@@ -26,10 +29,12 @@ use std::time::{Duration, Instant};
 use ori3_cp::extract_faces;
 use ori3_model::{CreasePattern, Driver, Edge, EdgeKind, Vertex};
 use ori3_rigid::solve;
-use ori3_soft::{SoftSettings, relax};
+use ori3_soft::{OverlapSettings, SoftSettings, prevent_overlap, relax};
 
 /// debugビルドでの`relax` 1回あたりの上限(モジュール冒頭の計測記録を参照)。
 const DEBUG_BUDGET: Duration = Duration::from_millis(200);
+/// 接触専用経路のdebug実測(約129ms)に対する、CIばらつき込みの退行検知枠。
+const OVERLAP_DEBUG_BUDGET: Duration = Duration::from_millis(300);
 
 /// nc×nr面のミウラ折りCP(`ori3-rigid/tests/perf_miura.rs` と同じ作り方)。
 fn miura_cp(nc: usize, nr: usize) -> CreasePattern {
@@ -139,9 +144,55 @@ fn relax_of_400_faces_fits_in_one_frame() {
         warm.triangles.len(),
         warm.positions.len()
     );
-    assert!(best <= DEBUG_BUDGET, "1回あたり {best:?}(上限 {DEBUG_BUDGET:?})");
+    assert!(
+        best <= DEBUG_BUDGET,
+        "1回あたり {best:?}(上限 {DEBUG_BUDGET:?})"
+    );
     assert!(
         best_layered <= DEBUG_BUDGET,
         "16層で1回あたり {best_layered:?}(上限 {DEBUG_BUDGET:?})"
     );
+}
+
+#[test]
+fn overlap_correction_of_400_faces_fits_in_one_frame() {
+    let cp = miura_cp(20, 20);
+    let faces = extract_faces(&cp);
+    assert_eq!(faces.len(), 400, "面400の規模");
+    let frame = solve(
+        &cp,
+        &faces,
+        &[Driver {
+            hinge: 21,
+            target_angle_deg: 20.0,
+        }],
+        None,
+    )
+    .frame;
+    let mut order: Vec<u32> = faces.iter().map(|face| face.id).collect();
+    order.sort_unstable();
+    let settings = OverlapSettings::default();
+
+    let mut warm = frame.clone();
+    let report = prevent_overlap(&cp, &faces, &mut warm, &order, &order, 0.5, &settings);
+    assert!(report.applied);
+    let mut best = Duration::MAX;
+    for _ in 0..5 {
+        let mut corrected = frame.clone();
+        let t = Instant::now();
+        let report = prevent_overlap(&cp, &faces, &mut corrected, &order, &order, 0.5, &settings);
+        best = best.min(t.elapsed());
+        assert!(report.applied);
+    }
+    println!(
+        "prevent_overlap: 面{}・反復{} → {best:?}/フレーム",
+        faces.len(),
+        settings.iterations
+    );
+    let budget = if cfg!(debug_assertions) {
+        OVERLAP_DEBUG_BUDGET
+    } else {
+        Duration::from_millis(16)
+    };
+    assert!(best <= budget, "1フレーム {best:?}(上限 {budget:?})");
 }

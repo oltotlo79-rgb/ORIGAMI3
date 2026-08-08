@@ -876,7 +876,10 @@ fn hinges_at_inner_vertex(cp: &CreasePattern, faces: &[Face]) -> Vec<u32> {
         .collect();
     // 本数の多い順、同数なら頂点ID順(HashMapの走査順に依存しない決定的な選択)
     cand.sort_by_key(|(n, v, _)| (std::cmp::Reverse(*n), *v));
-    cand.into_iter().next().map(|(_, _, es)| es).unwrap_or_default()
+    cand.into_iter()
+        .next()
+        .map(|(_, _, es)| es)
+        .unwrap_or_default()
 }
 
 /// 角度スライダーで折り角を次々に指定していく操作の再現(実機で報告された不具合)。
@@ -890,9 +893,18 @@ fn crane_paper_stays_connected_while_angles_are_set_one_by_one() {
     let (doc, _) = crane();
     let faces = extract_faces(&doc.cp);
     let hinges = hinges_at_inner_vertex(&doc.cp, &faces);
-    assert!(hinges.len() >= 5, "内部頂点に折り線が5本以上ある: {hinges:?}");
+    assert!(
+        hinges.len() >= 5,
+        "内部頂点に折り線が5本以上ある: {hinges:?}"
+    );
     let kinds: HashMap<u32, EdgeKind> = doc.cp.edges.iter().map(|e| (e.id, e.kind)).collect();
-    let want = |e: u32| if kinds[&e] == EdgeKind::Valley { -70.0 } else { 70.0 };
+    let want = |e: u32| {
+        if kinds[&e] == EdgeKind::Valley {
+            -70.0
+        } else {
+            70.0
+        }
+    };
     let picked: Vec<u32> = hinges.iter().copied().take(5).collect();
 
     // (1) 指定済みを全部固定する古いやり方は面が離れる(不具合の再現)

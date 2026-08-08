@@ -12,7 +12,11 @@ fn bird_base() -> Skeleton {
         SkeletonNode::new(3, Some(1), 1.0),
     ];
     for i in 0..4u32 {
-        nodes.push(SkeletonNode::new(4 + i, Some(if i < 2 { 0 } else { 1 }), 0.7));
+        nodes.push(SkeletonNode::new(
+            4 + i,
+            Some(if i < 2 { 0 } else { 1 }),
+            0.7,
+        ));
     }
     Skeleton { nodes }
 }

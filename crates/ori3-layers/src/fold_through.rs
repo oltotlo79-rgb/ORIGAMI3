@@ -121,8 +121,9 @@ pub fn fold_through(
                     continue;
                 }
                 match faces.iter().find(|f| f.id == id) {
-                    None => warnings
-                        .push(format!("対象層 {id} は現在の面に存在しないため除外しました")),
+                    None => warnings.push(format!(
+                        "対象層 {id} は現在の面に存在しないため除外しました"
+                    )),
                     Some(f) if !has_movable_part(f) => warnings.push(format!(
                         "対象層 {id} は折り線の可動側に掛かっていないため除外しました"
                     )),

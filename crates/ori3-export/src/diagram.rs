@@ -304,7 +304,12 @@ fn arrow_normal(dx: f64, dy: f64, mid: (f64, f64), toward: (f64, f64)) -> (f64, 
 /// 矢印は折り線の真ん中から線と直角に伸ばし、[`arrow_normal`] が決めた側へ向ける。
 /// 「はみ出している側をこちらへ倒す」という読み方になる。
 /// 山折りか谷折りかは線の描き方(一点鎖線か破線か)のほうで示す。
-fn arrow_svg(crease: &(DVec2, DVec2), fit: &Fit, kind: TechniqueKind, toward: (f64, f64)) -> String {
+fn arrow_svg(
+    crease: &(DVec2, DVec2),
+    fit: &Fit,
+    kind: TechniqueKind,
+    toward: (f64, f64),
+) -> String {
     let (a, b) = *crease;
     let (x1, y1) = fit.map(a);
     let (x2, y2) = fit.map(b);
@@ -432,7 +437,6 @@ pub fn render_step(doc: &Document, step_index: usize) -> Result<String, String> 
     ))
 }
 
-
 /// 縦に `creases` 本の折り目が入った短冊。手順は右の折り目から順に、
 /// 山と谷を交互に180度折る(段折りの形)。折り図の見た目を確かめるための土台。
 #[cfg(test)]
@@ -446,8 +450,14 @@ pub(crate) fn strip_doc(creases: usize) -> Document {
     let mut vertices = Vec::new();
     for i in 0..=n {
         let x = i as f64 / n as f64;
-        vertices.push(Vertex { id: 2 * i as u32, pos: [x, 0.0] });
-        vertices.push(Vertex { id: 2 * i as u32 + 1, pos: [x, 1.0] });
+        vertices.push(Vertex {
+            id: 2 * i as u32,
+            pos: [x, 0.0],
+        });
+        vertices.push(Vertex {
+            id: 2 * i as u32 + 1,
+            pos: [x, 1.0],
+        });
     }
     let mut edges = Vec::new();
     let mut id = 0u32;
@@ -470,7 +480,11 @@ pub(crate) fn strip_doc(creases: usize) -> Document {
     ];
     for (k, i) in (1..=creases).rev().enumerate() {
         let valley = k % 2 == 0;
-        let kind = if valley { EdgeKind::Valley } else { EdgeKind::Mountain };
+        let kind = if valley {
+            EdgeKind::Valley
+        } else {
+            EdgeKind::Mountain
+        };
         add(2 * i as u32, 2 * i as u32 + 1, kind);
         let x = i as f64 / n as f64;
         doc.sequence.push(FoldStep {
@@ -497,7 +511,11 @@ pub(crate) fn strip_doc(creases: usize) -> Document {
 #[cfg(test)]
 pub(crate) fn multi_driver_doc(creases: usize) -> Document {
     let mut doc = strip_doc(creases);
-    let drivers: Vec<_> = doc.sequence.iter().flat_map(|s| s.drivers.clone()).collect();
+    let drivers: Vec<_> = doc
+        .sequence
+        .iter()
+        .flat_map(|s| s.drivers.clone())
+        .collect();
     doc.sequence.truncate(1);
     doc.sequence[0].kind = TechniqueKind::Pleat;
     doc.sequence[0].drivers = drivers;
@@ -511,7 +529,8 @@ mod tests {
 
     /// 1コマに出ている矢印の本数(矢印1本につき専用の`<g>`が1つ出る)。
     fn arrow_count(svg: &str) -> usize {
-        svg.matches("stroke=\"#1a1a1a\" stroke-width=\"0.55\"").count()
+        svg.matches("stroke=\"#1a1a1a\" stroke-width=\"0.55\"")
+            .count()
     }
 
     /// 3手順なら3コマぶんの図ができ、どのコマにも
@@ -525,7 +544,10 @@ mod tests {
             assert!(svg.contains("<polygon"), "折る前の形がない: {svg}");
             assert!(svg.contains("stroke-dasharray"), "折り線がない: {svg}");
             assert!(svg.contains("<path"), "矢印がない: {svg}");
-            assert!(svg.contains(&format!(">{}. ", i + 1)), "手順番号がない: {svg}");
+            assert!(
+                svg.contains(&format!(">{}. ", i + 1)),
+                "手順番号がない: {svg}"
+            );
             assert!(svg.contains("本目の折り目を折ります"), "注記がない: {svg}");
         }
     }
@@ -538,7 +560,10 @@ mod tests {
         let mountain = render_step(&doc, 1).unwrap(); // 2本目は山
         assert!(valley.contains("stroke-dasharray=\"1.8 1.0\""), "{valley}");
         assert!(valley.contains("#1e5ac8"), "{valley}");
-        assert!(mountain.contains("stroke-dasharray=\"2.4 0.8 0.5 0.8\""), "{mountain}");
+        assert!(
+            mountain.contains("stroke-dasharray=\"2.4 0.8 0.5 0.8\""),
+            "{mountain}"
+        );
         assert!(mountain.contains("#c8321e"), "{mountain}");
     }
 
@@ -548,13 +573,25 @@ mod tests {
         let doc = strip_doc(3);
         let simple = render_step(&doc, 0).unwrap(); // 単純折り
         let pleat = render_step(&doc, 1).unwrap(); // 段折り
-        assert!(simple.contains(technique_mark(TechniqueKind::Simple)), "{simple}");
-        assert!(pleat.contains(technique_mark(TechniqueKind::Pleat)), "{pleat}");
+        assert!(
+            simple.contains(technique_mark(TechniqueKind::Simple)),
+            "{simple}"
+        );
+        assert!(
+            pleat.contains(technique_mark(TechniqueKind::Pleat)),
+            "{pleat}"
+        );
         // 目印は10種すべて別の形
         let mut marks: Vec<&str> = [
-            TechniqueKind::Simple, TechniqueKind::Pleat, TechniqueKind::InsideReverse,
-            TechniqueKind::OutsideReverse, TechniqueKind::Petal, TechniqueKind::Squash,
-            TechniqueKind::OpenSink, TechniqueKind::Swivel, TechniqueKind::Twist,
+            TechniqueKind::Simple,
+            TechniqueKind::Pleat,
+            TechniqueKind::InsideReverse,
+            TechniqueKind::OutsideReverse,
+            TechniqueKind::Petal,
+            TechniqueKind::Squash,
+            TechniqueKind::OpenSink,
+            TechniqueKind::Swivel,
+            TechniqueKind::Twist,
             TechniqueKind::Pose,
         ]
         .into_iter()

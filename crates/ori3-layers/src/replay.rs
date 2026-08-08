@@ -67,6 +67,21 @@ use crate::fold_through::resolve_driver_edges;
 /// [`ori3_model::EPS`](1e-9)では厳しすぎて、正しく畳めた状態を弾いてしまう。
 const FLAT_EPS: f64 = 1e-6;
 
+/// 折り途中の接触補正に使う層順序の契約。
+///
+/// 表示用の [`Frame3D::faces`] は従来どおり、途中では `start`、完了時は `end`
+/// の層番号を持つ。接触補正だけは両方と進行度を受け取り、上下が切り替わる折りでも
+/// 突然向きが反転しないようにできる。
+#[derive(Clone, Debug, PartialEq)]
+pub struct LayerTransition {
+    /// この手順に入る直前の層順序(下→上)。
+    pub start: Vec<FaceId>,
+    /// この手順を完了したときの層順序(下→上)。
+    pub end: Vec<FaceId>,
+    /// 現在の進行度(0.0〜1.0)。
+    pub progress: f64,
+}
+
 /// [`replay`] の結果。
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct ReplayResult {
@@ -76,6 +91,9 @@ pub struct ReplayResult {
     pub skipped: Vec<StepId>,
     /// 再生中に出た警告(日本語)
     pub warnings: Vec<String>,
+    /// 接触補正専用の開始・完了層順序。IPCへは出さず、コマンド層でだけ使う。
+    #[serde(skip)]
+    pub layer_transition: LayerTransition,
 }
 
 /// ステップ列を順に適用する。
@@ -103,6 +121,11 @@ pub fn replay_with_faces(doc: &Document, faces: &[Face], up_to: usize, t: f64) -
         1.0
     };
     let plan = plan_steps(doc, faces, up_to, t);
+    let layer_transition = LayerTransition {
+        start: plan.order_start.clone(),
+        end: plan.order_end.clone(),
+        progress: t,
+    };
     let mut warnings = plan.warnings;
 
     let result = match &plan.path {
@@ -130,6 +153,7 @@ pub fn replay_with_faces(doc: &Document, faces: &[Face], up_to: usize, t: f64) -
         frame,
         skipped: plan.skipped,
         warnings,
+        layer_transition,
     }
 }
 
@@ -247,6 +271,10 @@ struct StepPlan {
     path: Option<Vec<(EdgeId, f64, f64)>>,
     /// 層順序(下→上)
     order: Vec<FaceId>,
+    /// `up_to` 手順へ入る直前の層順序(接触補正用)。
+    order_start: Vec<FaceId>,
+    /// `up_to` 手順を完了したときの層順序(接触補正用)。
+    order_end: Vec<FaceId>,
     skipped: Vec<StepId>,
     warnings: Vec<String>,
 }
@@ -264,6 +292,8 @@ fn plan_steps(doc: &Document, faces: &[Face], up_to: usize, t: f64) -> StepPlan 
     let mut skipped: Vec<StepId> = Vec::new();
     // 現在の層順序(下→上)。初期状態は面ID昇順。
     let mut order = FlatState::initial(&doc.cp, faces).order;
+    let mut order_start = order.clone();
+    let mut order_end = order.clone();
     // ヒンジごとの目標角(後から積んだステップが優先される)。BTreeMapなので
     // ソルバーへ渡す順序も辺ID昇順で決定的(SYS-004)。
     let mut angles: BTreeMap<EdgeId, f64> = BTreeMap::new();
@@ -276,6 +306,8 @@ fn plan_steps(doc: &Document, faces: &[Face], up_to: usize, t: f64) -> StepPlan 
         if last {
             // 飛ばした場合も「直前の状態」を正しく指すよう、解決の前に控える
             before.clone_from(&angles);
+            order_start.clone_from(&order);
+            order_end.clone_from(&order);
         }
 
         let mut resolved_lines = 0usize;
@@ -305,19 +337,33 @@ fn plan_steps(doc: &Document, faces: &[Face], up_to: usize, t: f64) -> StepPlan 
             angles.insert(d.hinge, d.target_angle_deg);
         }
 
-        // 層順序はステップ完了時にだけ更新する。層順序を持たないステップ(Pose)と、
-        // 代表点が1点も現在の面に解決できなかったステップは直前の層順序を保つ。
-        if (!last || t >= 1.0)
-            && let Some(points) = &step.layer_order
+        // 表示の層順序はステップ完了時にだけ更新する。一方、接触補正は折っている
+        // 最中にも完了順を使うため、最後の手順だけは先読みして別に保持する。
+        // 層順序を持たないPoseと、代表点が1点も解決できない手順は直前順を保つ。
+        let mut resolved_order = None;
+        if let Some(points) = &step.layer_order
             && !points.is_empty()
         {
             let (resolved, mut w) = FlatState::resolve_order(&doc.cp, faces, points);
             // resolve_orderは解決できなかった点ごとにちょうど1件の警告を返すので、
             // 警告の数が点の数と同じなら1点も解決できていない
             if w.len() < points.len() {
-                order = resolved;
+                resolved_order = Some(resolved);
             }
-            warnings.append(&mut w);
+            // 途中フレームの先読みだけで、従来より早く警告を見せない。
+            if !last || t >= 1.0 {
+                warnings.append(&mut w);
+            }
+        }
+        if last {
+            if let Some(next) = resolved_order {
+                order_end = next;
+            }
+            if t >= 1.0 {
+                order.clone_from(&order_end);
+            }
+        } else if let Some(next) = resolved_order {
+            order = next;
         }
     }
 
@@ -345,6 +391,8 @@ fn plan_steps(doc: &Document, faces: &[Face], up_to: usize, t: f64) -> StepPlan 
             drivers: Vec::new(),
             path: Some(path),
             order,
+            order_start,
+            order_end,
             skipped,
             warnings,
         };
@@ -365,6 +413,8 @@ fn plan_steps(doc: &Document, faces: &[Face], up_to: usize, t: f64) -> StepPlan 
         drivers: all,
         path: None,
         order,
+        order_start,
+        order_end,
         skipped,
         warnings,
     }

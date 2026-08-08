@@ -47,7 +47,11 @@ fn z_span(frame: &Frame3D) -> f64 {
 /// 剛体折りは面を平らな板として扱うのでこれは0。たわみが効くと0より大きくなる。
 fn inner_bend(mesh: &SoftMesh) -> f64 {
     let p = |i: u32| DVec3::from(mesh.positions[i as usize]);
-    let normal = |t: [u32; 3]| (p(t[1]) - p(t[0])).cross(p(t[2]) - p(t[0])).normalize_or_zero();
+    let normal = |t: [u32; 3]| {
+        (p(t[1]) - p(t[0]))
+            .cross(p(t[2]) - p(t[0]))
+            .normalize_or_zero()
+    };
     let mut seen: std::collections::BTreeMap<(u32, u32), usize> = std::collections::BTreeMap::new();
     let mut inner = 0.0;
     for (ti, t) in mesh.triangles.iter().enumerate() {
@@ -82,11 +86,19 @@ fn drive(cp: &CreasePattern, faces: &[Face], hinge: u32, deg: f64) -> ori3_rigid
 fn 円弧の折り目は曲がるための線があれば立体に折れる() {
     let (cp, arc) = arc_cp(true);
     let faces = extract_faces(&cp);
-    assert!(faces.len() > 2, "曲がるための線で面が分かれる: {}", faces.len());
+    assert!(
+        faces.len() > 2,
+        "曲がるための線で面が分かれる: {}",
+        faces.len()
+    );
     for deg in [-30.0, -60.0, -120.0] {
         let r = drive(&cp, &faces, arc[arc.len() / 2], deg);
         assert!(r.converged, "{deg}度で紙がつながったまま解けない");
-        assert!(r.frame.warnings.is_empty(), "{deg}度で警告: {:?}", r.frame.warnings);
+        assert!(
+            r.frame.warnings.is_empty(),
+            "{deg}度で警告: {:?}",
+            r.frame.warnings
+        );
         assert!(z_span(&r.frame) > 0.2, "{deg}度で立体になっていない");
     }
 }
@@ -136,7 +148,10 @@ fn 曲線を細かく分けるほど曲面が滑らかになる() {
             .filter(|(k, _)| !ids.contains(k))
             .map(|(_, v)| v.abs())
             .fold(0.0, f64::max);
-        assert!(worst < prev, "誤差{tol}で滑らかにならない({worst}度 >= {prev}度)");
+        assert!(
+            worst < prev,
+            "誤差{tol}で滑らかにならない({worst}度 >= {prev}度)"
+        );
         prev = worst;
     }
     assert!(prev < 10.0, "いちばん細かい分割でも折れ角が {prev} 度");
@@ -168,6 +183,9 @@ fn たわみ計算を通しても曲線の折り目の形は保たれる() {
         let zs: Vec<f64> = m.positions.iter().map(|p| p[2]).collect();
         zs.iter().copied().fold(f64::MIN, f64::max) - zs.iter().copied().fold(f64::MAX, f64::min)
     };
-    assert!((span(&on) - z_span(&r.frame)).abs() < 1e-3, "立体の高さが変わらない");
+    assert!(
+        (span(&on) - z_span(&r.frame)).abs() < 1e-3,
+        "立体の高さが変わらない"
+    );
     assert!(on.positions.iter().all(|p| p.iter().all(|v| v.is_finite())));
 }

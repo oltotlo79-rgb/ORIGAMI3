@@ -66,7 +66,12 @@ fn fixed_and_moving(faces: &[Face], frame: &FoldedFrame) -> (usize, usize) {
 }
 
 /// 動く面の変換後ポリゴンを返す(頂点順は face.vertices と同順)。
-fn moved_polygon(cp: &CreasePattern, faces: &[Face], frame: &FoldedFrame, idx: usize) -> Vec<DVec3> {
+fn moved_polygon(
+    cp: &CreasePattern,
+    faces: &[Face],
+    frame: &FoldedFrame,
+    idx: usize,
+) -> Vec<DVec3> {
     let f3d = to_frame3d(cp, faces, frame);
     let face3d = f3d
         .faces

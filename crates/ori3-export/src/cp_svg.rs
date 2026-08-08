@@ -35,7 +35,11 @@ fn style(kind: EdgeKind) -> (&'static str, f64, &'static str) {
 pub(crate) fn num(v: f64) -> String {
     let s = format!("{:.4}", if v == 0.0 { 0.0 } else { v });
     let s = s.trim_end_matches('0').trim_end_matches('.');
-    if s.is_empty() { "0".to_string() } else { s.to_string() }
+    if s.is_empty() {
+        "0".to_string()
+    } else {
+        s.to_string()
+    }
 }
 
 /// 実寸mmのSVGを文字列で返す。viewBoxは紙の実寸(mm)。
@@ -163,8 +167,14 @@ mod tests {
         let svg = cp_svg(&sample_doc(), &CpSvgOptions::default());
         // 内部の(0,0)は紙の左下 → SVGでは左下 = (0mm, 100mm)、
         // 内部の(1, 2/3)は右上 → (150mm, 0mm)
-        assert!(svg.contains("x1=\"0\" y1=\"100\" x2=\"150\" y2=\"100\""), "{svg}");
-        assert!(svg.contains("x1=\"0\" y1=\"100\" x2=\"150\" y2=\"0\""), "{svg}");
+        assert!(
+            svg.contains("x1=\"0\" y1=\"100\" x2=\"150\" y2=\"100\""),
+            "{svg}"
+        );
+        assert!(
+            svg.contains("x1=\"0\" y1=\"100\" x2=\"150\" y2=\"0\""),
+            "{svg}"
+        );
     }
 
     #[test]

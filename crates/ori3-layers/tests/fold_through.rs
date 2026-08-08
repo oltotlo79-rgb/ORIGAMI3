@@ -23,7 +23,11 @@ fn face_by_id(faces: &[Face], id: FaceId) -> &Face {
 }
 
 fn edge_kind(cp: &CreasePattern, id: u32) -> EdgeKind {
-    cp.edges.iter().find(|e| e.id == id).expect("辺が存在する").kind
+    cp.edges
+        .iter()
+        .find(|e| e.id == id)
+        .expect("辺が存在する")
+        .kind
 }
 
 fn vertex_pos(cp: &CreasePattern, id: u32) -> DVec2 {
@@ -319,7 +323,11 @@ fn folding_only_top_layer_keeps_lower_layers_in_place() {
         moved.push(nf.id);
     }
     assert_eq!(moved.len(), 1, "動いた面はちょうど1つ");
-    assert_eq!(*res.state.order.last().unwrap(), moved[0], "動いた面が最上層");
+    assert_eq!(
+        *res.state.order.last().unwrap(),
+        moved[0],
+        "動いた面が最上層"
+    );
 }
 
 #[test]
@@ -406,7 +414,11 @@ fn layer_order_round_trips_and_is_deterministic() {
 
     // FoldStep.layer_orderをresolve_orderで解決すると同じ層順序に戻る
     let faces = extract_faces(&cp_a);
-    let points = r_a.step.layer_order.as_ref().expect("layer_orderが設定される");
+    let points = r_a
+        .step
+        .layer_order
+        .as_ref()
+        .expect("layer_orderが設定される");
     assert_eq!(points.len(), 4);
     let (order, warnings) = FlatState::resolve_order(&cp_a, &faces, points);
     assert!(warnings.is_empty(), "{warnings:?}");
@@ -587,7 +599,12 @@ fn warns_when_existing_crease_on_the_line_has_the_opposite_kind() {
     // 山の区間・谷の区間それぞれにDriverLineが付く
     assert_eq!(res.step.drivers.len(), 2);
     assert!(res.step.drivers.iter().any(|d| d.target_angle_deg == 180.0));
-    assert!(res.step.drivers.iter().any(|d| d.target_angle_deg == -180.0));
+    assert!(
+        res.step
+            .drivers
+            .iter()
+            .any(|d| d.target_angle_deg == -180.0)
+    );
 }
 
 #[test]

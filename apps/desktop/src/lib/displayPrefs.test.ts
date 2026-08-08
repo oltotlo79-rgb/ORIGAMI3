@@ -8,6 +8,7 @@ import {
   clampSplitRatio,
   hexToRgb,
   loadPrefs,
+  overlapPreventionOf,
   rgbToHex,
   savePrefs,
   type StorageLike,
@@ -45,6 +46,16 @@ describe("見た目の好み", () => {
     expect(rgbToHex([237, 28, 36])).toBe("#ed1c24");
     expect(hexToRgb("#ED1C24")).toEqual([237, 28, 36]);
     expect(hexToRgb("あか")).toBeNull();
+  });
+
+  it("重なり防止は既定でオンで、項目の無い古い作品もオンとして扱う", () => {
+    expect(overlapPreventionOf(DEFAULT_DISPLAY)).toBe(true);
+    const oldDisplay = { ...DEFAULT_DISPLAY };
+    delete oldDisplay.overlap_prevention_enabled;
+    expect(overlapPreventionOf(oldDisplay)).toBe(true);
+    expect(
+      overlapPreventionOf({ ...DEFAULT_DISPLAY, overlap_prevention_enabled: false }),
+    ).toBe(false);
   });
 
   it("保存した好みは次に読むとそのまま戻る", () => {

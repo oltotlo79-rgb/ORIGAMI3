@@ -132,7 +132,12 @@ fn apply_input(
         .collect();
     let at: HashMap<FaceId, DVec2> = faces
         .iter()
-        .map(|f| (f.id, res.state.placements[&f.id].apply(DVec2::from(rep[&f.id]))))
+        .map(|f| {
+            (
+                f.id,
+                res.state.placements[&f.id].apply(DVec2::from(rep[&f.id])),
+            )
+        })
         .collect();
     Ok(Applied {
         faces,
@@ -156,7 +161,11 @@ fn face_with_rep(a: &Applied, pred: impl Fn([f64; 2]) -> bool) -> Vec<FaceId> {
 }
 
 fn edge_kind_at(cp: &CreasePattern, mid: [f64; 2]) -> Option<EdgeKind> {
-    let pos: HashMap<u32, DVec2> = cp.vertices.iter().map(|v| (v.id, DVec2::from(v.pos))).collect();
+    let pos: HashMap<u32, DVec2> = cp
+        .vertices
+        .iter()
+        .map(|v| (v.id, DVec2::from(v.pos)))
+        .collect();
     let m = DVec2::from(mid);
     cp.edges
         .iter()
@@ -171,7 +180,10 @@ fn edge_kind_at(cp: &CreasePattern, mid: [f64; 2]) -> Option<EdgeKind> {
 
 /// 層順序での位置(下から0)。
 fn layer_of(a: &Applied, id: FaceId) -> usize {
-    a.order.iter().position(|&f| f == id).expect("層順序に面がある")
+    a.order
+        .iter()
+        .position(|&f| f == id)
+        .expect("層順序に面がある")
 }
 
 // ---------------------------------------------------------------------------
@@ -192,9 +204,16 @@ struct FaceMap {
 
 impl FaceMap {
     fn new(cp: &CreasePattern, face: &Face, polygon: &[[f64; 3]]) -> Option<FaceMap> {
-        let pos: HashMap<u32, DVec2> =
-            cp.vertices.iter().map(|v| (v.id, DVec2::from(v.pos))).collect();
-        let pts: Vec<DVec2> = face.vertices.iter().filter_map(|v| pos.get(v).copied()).collect();
+        let pos: HashMap<u32, DVec2> = cp
+            .vertices
+            .iter()
+            .map(|v| (v.id, DVec2::from(v.pos)))
+            .collect();
+        let pts: Vec<DVec2> = face
+            .vertices
+            .iter()
+            .filter_map(|v| pos.get(v).copied())
+            .collect();
         if pts.len() != face.vertices.len() || pts.len() != polygon.len() || pts.len() < 3 {
             return None;
         }
@@ -273,7 +292,10 @@ fn assert_display_order(doc: &Document, label: &str) {
     let faces = extract_faces(&doc.cp);
     let (state, warnings) = flat_state_at(doc, &faces, up_to)
         .unwrap_or_else(|e| panic!("{label}: 畳んだ状態が求まらない: {e}"));
-    assert!(warnings.is_empty(), "{label}: 警告なしで再生できる: {warnings:?}");
+    assert!(
+        warnings.is_empty(),
+        "{label}: 警告なしで再生できる: {warnings:?}"
+    );
 
     let pos: HashMap<u32, DVec2> = doc
         .cp
@@ -351,7 +373,10 @@ fn assert_fold_senses(doc: &Document, label: &str) {
     let up_to = doc.sequence.len();
     let (state, warnings) = flat_state_at(doc, &faces, up_to)
         .unwrap_or_else(|e| panic!("{label}: 畳んだ状態が求まらない: {e}"));
-    assert!(warnings.is_empty(), "{label}: 警告なしで再生できる: {warnings:?}");
+    assert!(
+        warnings.is_empty(),
+        "{label}: 警告なしで再生できる: {warnings:?}"
+    );
 
     let mut edge_faces: HashMap<u32, Vec<FaceId>> = HashMap::new();
     for f in &faces {
@@ -462,19 +487,18 @@ fn pleat_makes_two_alternating_creases_and_three_layers() {
 fn pleat_on_two_layer_flap_folds_both_layers() {
     let mut doc = square_doc();
     // 下ごしらえ: y=0.5 で上半分を下へ折る(2層。折り目=谷)
-    fold(&mut doc, [[0.0, 0.5], [1.0, 0.5]], [0.5, 0.25], FoldDirection::Up);
+    fold(
+        &mut doc,
+        [[0.0, 0.5], [1.0, 0.5]],
+        [0.5, 0.25],
+        FoldDirection::Up,
+    );
     assert_eq!(edge_kind_at(&doc.cp, [0.5, 0.5]), Some(EdgeKind::Valley));
 
     let faces = extract_faces(&doc.cp);
     let flap: Vec<FaceId> = faces.iter().map(|f| f.id).collect();
-    let a = apply(
-        &mut doc,
-        pleat,
-        flap,
-        [[0.6, 0.0], [0.6, 1.0]],
-        [0.7, 0.25],
-    )
-    .expect("2層のフラップも段折りできる");
+    let a = apply(&mut doc, pleat, flap, [[0.6, 0.0], [0.6, 1.0]], [0.7, 0.25])
+        .expect("2層のフラップも段折りできる");
     assert!(a.warnings.is_empty(), "{:?}", a.warnings);
 
     // 2層それぞれが3つに分かれて6面
@@ -517,7 +541,12 @@ fn pleat_rejects_zero_gap_without_touching_document() {
 /// 2層のフラップ(正方形を半分に折ったもの)。折り目(背)は y=0.5。
 fn two_layer_flap() -> Document {
     let mut doc = square_doc();
-    fold(&mut doc, [[0.0, 0.5], [1.0, 0.5]], [0.5, 0.25], FoldDirection::Up);
+    fold(
+        &mut doc,
+        [[0.0, 0.5], [1.0, 0.5]],
+        [0.5, 0.25],
+        FoldDirection::Up,
+    );
     doc
 }
 
@@ -631,7 +660,14 @@ fn inside_and_outside_reverse_differ_only_in_layer_order() {
     let mut outside_doc = two_layer_flap();
     let flap: Vec<FaceId> = extract_faces(&inside_doc.cp).iter().map(|f| f.id).collect();
 
-    let i = apply(&mut inside_doc, inside_reverse, flap.clone(), line, reference).unwrap();
+    let i = apply(
+        &mut inside_doc,
+        inside_reverse,
+        flap.clone(),
+        line,
+        reference,
+    )
+    .unwrap();
     let o = apply(&mut outside_doc, outside_reverse, flap, line, reference).unwrap();
 
     // 展開図に入る点の位置は同じ(IDの付き方は折る順で変わるので位置で比べる)
@@ -705,7 +741,12 @@ fn techniques_replay_from_the_crease_pattern() {
     // 段折りの基準点は2本目の折り線の位置、中割り・かぶせは先端が向かう側
     let d = 0.5 * std::f64::consts::SQRT_2;
     let cases: [ReplayCase; 5] = [
-        ("段折り", pleat as Technique, [[0.6, 0.0], [0.6, 1.0]], [0.7, 0.25]),
+        (
+            "段折り",
+            pleat as Technique,
+            [[0.6, 0.0], [0.6, 1.0]],
+            [0.7, 0.25],
+        ),
         // つぶし折りは背(y=0.5)を開いて右端まわりに45°回す
         (
             "つぶし折り",
@@ -726,7 +767,12 @@ fn techniques_replay_from_the_crease_pattern() {
             [0.2, 0.25],
         ),
         // 花弁折りは背(y=0.5)を中心線に、右端の先端を持ち上げる
-        ("花弁折り", petal as Technique, [[0.0, 0.5], [1.0, 0.5]], [1.0, 0.5]),
+        (
+            "花弁折り",
+            petal as Technique,
+            [[0.0, 0.5], [1.0, 0.5]],
+            [1.0, 0.5],
+        ),
     ];
     for (label, technique, line, reference) in cases {
         let mut doc = two_layer_flap();
@@ -738,11 +784,16 @@ fn techniques_replay_from_the_crease_pattern() {
         let (replayed, warnings) =
             flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
         assert!(warnings.is_empty(), "{label}: {warnings:?}");
-        assert_eq!(replayed.order, a.order, "{label}: 層順序が再生結果と一致する");
+        assert_eq!(
+            replayed.order, a.order,
+            "{label}: 層順序が再生結果と一致する"
+        );
         for f in &faces {
             assert!(
-                a.at[&f.id]
-                    .abs_diff_eq(replayed.placements[&f.id].apply(DVec2::from(a.rep[&f.id])), 1e-6),
+                a.at[&f.id].abs_diff_eq(
+                    replayed.placements[&f.id].apply(DVec2::from(a.rep[&f.id])),
+                    1e-6
+                ),
                 "{label}: 面 {} の位置が再生結果と一致する",
                 f.id
             );
@@ -779,10 +830,7 @@ fn inside_reverse_twice_makes_a_neck_and_a_head() {
     .expect("首の中割り折り");
     assert_eq!(a.faces.len(), 4, "2層が4層になる");
     // 追加された線: 各層1本ずつ(横切られた輪郭線と背も分割される)
-    assert!(
-        doc.cp.edges.len() > edges_before,
-        "展開図に折り線が増える"
-    );
+    assert!(doc.cp.edges.len() > edges_before, "展開図に折り線が増える");
     // 中割り折りの2本は谷、入れ替わった背の先だけが山になる
     let mountains = doc
         .cp
@@ -812,10 +860,12 @@ fn inside_reverse_twice_makes_a_neck_and_a_head() {
     // 首がどこに立っているかを見て、その先端を折り返す線を引く
     let tips: Vec<DVec2> = neck
         .iter()
-        .map(|id| state.placements[id].apply(DVec2::from(representative_point(
-            &doc.cp,
-            faces.iter().find(|f| f.id == *id).unwrap(),
-        ))))
+        .map(|id| {
+            state.placements[id].apply(DVec2::from(representative_point(
+                &doc.cp,
+                faces.iter().find(|f| f.id == *id).unwrap(),
+            )))
+        })
         .collect();
     let center = (tips[0] + tips[1]) * 0.5;
     assert!(center.x < 0.7, "首は折り線の反対側へ倒れている");
@@ -836,8 +886,18 @@ fn inside_reverse_twice_makes_a_neck_and_a_head() {
 /// 正方形を2回折った4層の紙(層順序は下→上)。
 fn four_layer_stack() -> Document {
     let mut doc = square_doc();
-    fold(&mut doc, [[0.0, 0.5], [1.0, 0.5]], [0.5, 0.25], FoldDirection::Up);
-    fold(&mut doc, [[0.5, 0.0], [0.5, 0.5]], [0.25, 0.25], FoldDirection::Up);
+    fold(
+        &mut doc,
+        [[0.0, 0.5], [1.0, 0.5]],
+        [0.5, 0.25],
+        FoldDirection::Up,
+    );
+    fold(
+        &mut doc,
+        [[0.5, 0.0], [0.5, 0.5]],
+        [0.25, 0.25],
+        FoldDirection::Up,
+    );
     doc
 }
 
@@ -885,8 +945,10 @@ fn inside_reverse_on_odd_number_of_layers() {
     assert_eq!(replayed.order, a.order, "層順序が再生結果と一致する");
     for f in &new_faces {
         assert!(
-            a.at[&f.id]
-                .abs_diff_eq(replayed.placements[&f.id].apply(DVec2::from(a.rep[&f.id])), 1e-6),
+            a.at[&f.id].abs_diff_eq(
+                replayed.placements[&f.id].apply(DVec2::from(a.rep[&f.id])),
+                1e-6
+            ),
             "面 {} の位置が再生結果と一致する",
             f.id
         );
@@ -987,7 +1049,9 @@ fn squash_opens_the_spine_and_spreads_the_flap() {
         step.drivers
     );
     assert!(
-        step.drivers.iter().any(|dr| dr.target_angle_deg.abs() == 180.0),
+        step.drivers
+            .iter()
+            .any(|dr| dr.target_angle_deg.abs() == 180.0),
         "新しい折り線は±180°で記録される: {:?}",
         step.drivers
     );
@@ -995,8 +1059,12 @@ fn squash_opens_the_spine_and_spreads_the_flap() {
     // 背でつながる2面の向きがそろう(=背が開いて平ら)
     let faces = extract_faces(&doc.cp);
     let (state, _) = flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
-    let pos: HashMap<u32, DVec2> =
-        doc.cp.vertices.iter().map(|v| (v.id, DVec2::from(v.pos))).collect();
+    let pos: HashMap<u32, DVec2> = doc
+        .cp
+        .vertices
+        .iter()
+        .map(|v| (v.id, DVec2::from(v.pos)))
+        .collect();
     let spine = doc
         .cp
         .edges
@@ -1033,8 +1101,8 @@ fn squash_can_open_the_flap_to_the_back() {
 
     let mut front_doc = two_layer_flap();
     let flap: Vec<FaceId> = extract_faces(&front_doc.cp).iter().map(|f| f.id).collect();
-    let front = apply(&mut front_doc, squash, flap.clone(), line, reference_point)
-        .expect("手前へ開ける");
+    let front =
+        apply(&mut front_doc, squash, flap.clone(), line, reference_point).expect("手前へ開ける");
 
     let mut back_doc = two_layer_flap();
     let back = apply_input(
@@ -1051,7 +1119,11 @@ fn squash_can_open_the_flap_to_the_back() {
     )
     .expect("向こうへ開ける");
 
-    assert!(back.warnings.is_empty(), "紙は裂けない: {:?}", back.warnings);
+    assert!(
+        back.warnings.is_empty(),
+        "紙は裂けない: {:?}",
+        back.warnings
+    );
     assert_eq!(back.faces.len(), front.faces.len(), "分かれる面の数は同じ");
     for f in &back.faces {
         assert!(
@@ -1083,8 +1155,14 @@ fn squash_reorders_layers_without_moving_paper() {
 
     // 1回目: いちばん下の層を、右端(x=0.5)の背を開いて上へ回す
     let bottom = start_order[0];
-    let a = apply(&mut doc, squash, vec![bottom], [[0.5, 0.0], [0.5, 1.0]], [0.5, 0.1])
-        .expect("つぶし折りできる");
+    let a = apply(
+        &mut doc,
+        squash,
+        vec![bottom],
+        [[0.5, 0.0], [0.5, 1.0]],
+        [0.5, 0.1],
+    )
+    .expect("つぶし折りできる");
     assert!(a.warnings.is_empty(), "{:?}", a.warnings);
     assert_eq!(a.faces.len(), 4, "面は分かれない(新しい折り線が要らない)");
     for f in &a.faces {
@@ -1109,8 +1187,14 @@ fn squash_reorders_layers_without_moving_paper() {
     // 2回目: 新しくいちばん下になった層を、上端(y=0.5)の背を開いて上へ回す
     let kinds_mid = kinds(&doc.cp);
     let bottom2 = a.order[0];
-    let b = apply(&mut doc, squash, vec![bottom2], [[0.0, 0.5], [1.0, 0.5]], [0.1, 0.5])
-        .expect("2回目もつぶし折りできる");
+    let b = apply(
+        &mut doc,
+        squash,
+        vec![bottom2],
+        [[0.0, 0.5], [1.0, 0.5]],
+        [0.1, 0.5],
+    )
+    .expect("2回目もつぶし折りできる");
     assert!(b.warnings.is_empty(), "{:?}", b.warnings);
     for f in &b.faces {
         assert!(
@@ -1122,7 +1206,11 @@ fn squash_reorders_layers_without_moving_paper() {
             f.id
         );
     }
-    assert_eq!(changed_kinds(&kinds_mid, &kinds(&doc.cp)), 2, "2回目も1組だけ");
+    assert_eq!(
+        changed_kinds(&kinds_mid, &kinds(&doc.cp)),
+        2,
+        "2回目も1組だけ"
+    );
     // 4層の並びは元の並びを2つずらしたもの(=予備基本形と同じつながり方)
     let expected: Vec<FaceId> = start_order[2..]
         .iter()
@@ -1179,8 +1267,16 @@ fn squash_opens_a_pocket_whose_far_layer_is_attached_to_the_body() {
         )
         .expect("袋をつぶせる");
 
-        assert!(a.warnings.is_empty(), "{deg}°: 紙は裂けない: {:?}", a.warnings);
-        assert_eq!(a.faces.len(), 6, "{deg}°: 袋の2層がそれぞれ2つに分かれて6面");
+        assert!(
+            a.warnings.is_empty(),
+            "{deg}°: 紙は裂けない: {:?}",
+            a.warnings
+        );
+        assert_eq!(
+            a.faces.len(),
+            6,
+            "{deg}°: 袋の2層がそれぞれ2つに分かれて6面"
+        );
         let step = doc.sequence.last().expect("手順が積まれる");
         assert_eq!(step.kind, TechniqueKind::Squash);
         assert!(
@@ -1199,7 +1295,11 @@ fn squash_opens_a_pocket_whose_far_layer_is_attached_to_the_body() {
             .collect();
         assert_eq!(added.len(), 4, "{deg}°: 折り返した紙2枚と動かない2層");
         assert!(
-            added.iter().filter(|k| **k > at[0].min(at[1]) && **k < at[0].max(at[1])).count() == 2,
+            added
+                .iter()
+                .filter(|k| **k > at[0].min(at[1]) && **k < at[0].max(at[1]))
+                .count()
+                == 2,
             "{deg}°: 折り返した2枚が袋の中に入る(層 {at:?} / {added:?})"
         );
 
@@ -1220,7 +1320,10 @@ fn kinds(cp: &CreasePattern) -> HashMap<u32, EdgeKind> {
 
 /// 線種が変わった辺の本数。
 fn changed_kinds(before: &HashMap<u32, EdgeKind>, after: &HashMap<u32, EdgeKind>) -> usize {
-    after.iter().filter(|(id, k)| before.get(id) != Some(k)).count()
+    after
+        .iter()
+        .filter(|(id, k)| before.get(id) != Some(k))
+        .count()
 }
 
 /// つぶし折りが断るのは幾何的に決められない入力だけ。断ったときは文書を変えない。
@@ -1231,21 +1334,39 @@ fn squash_rejects_undefined_input_without_touching_document() {
     let flap: Vec<FaceId> = extract_faces(&doc.cp).iter().map(|f| f.id).collect();
 
     // 中心線が退化(2点が一致)
-    let err = apply(&mut doc, squash, flap.clone(), [[0.5, 0.5], [0.5, 0.5]], [0.2, 0.2])
-        .expect_err("退化した中心線はエラー");
+    let err = apply(
+        &mut doc,
+        squash,
+        flap.clone(),
+        [[0.5, 0.5], [0.5, 0.5]],
+        [0.2, 0.2],
+    )
+    .expect_err("退化した中心線はエラー");
     assert!(err.contains("2点が一致"), "{err}");
     assert_eq!(doc, before, "失敗時は文書を変更しない");
 
     // フラップの指定が無い
-    let err = apply(&mut doc, squash, Vec::new(), [[0.0, 0.5], [1.0, 0.5]], [0.2, 0.2])
-        .expect_err("フラップ未指定はエラー");
+    let err = apply(
+        &mut doc,
+        squash,
+        Vec::new(),
+        [[0.0, 0.5], [1.0, 0.5]],
+        [0.2, 0.2],
+    )
+    .expect_err("フラップ未指定はエラー");
     assert!(err.contains("フラップ"), "{err}");
     assert_eq!(doc, before);
 
     // 無い層を指定した
     let missing = flap.iter().max().copied().unwrap_or(0) + 99;
-    let err = apply(&mut doc, squash, vec![missing], [[0.0, 0.5], [1.0, 0.5]], [0.2, 0.2])
-        .expect_err("無い層はエラー");
+    let err = apply(
+        &mut doc,
+        squash,
+        vec![missing],
+        [[0.0, 0.5], [1.0, 0.5]],
+        [0.2, 0.2],
+    )
+    .expect_err("無い層はエラー");
     assert!(err.contains("見つかりません"), "{err}");
     assert_eq!(doc, before);
 
@@ -1265,10 +1386,22 @@ fn preliminary_base() -> Document {
     let faces = extract_faces(&doc.cp);
     let (state, _) = flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
     let bottom = state.order[0];
-    let a = apply(&mut doc, squash, vec![bottom], [[0.5, 0.0], [0.5, 1.0]], [0.5, 0.1])
-        .expect("1回目の組み替え");
-    apply(&mut doc, squash, vec![a.order[0]], [[0.0, 0.5], [1.0, 0.5]], [0.1, 0.5])
-        .expect("2回目の組み替え");
+    let a = apply(
+        &mut doc,
+        squash,
+        vec![bottom],
+        [[0.5, 0.0], [0.5, 1.0]],
+        [0.5, 0.1],
+    )
+    .expect("1回目の組み替え");
+    apply(
+        &mut doc,
+        squash,
+        vec![a.order[0]],
+        [[0.0, 0.5], [1.0, 0.5]],
+        [0.1, 0.5],
+    )
+    .expect("2回目の組み替え");
     doc
 }
 
@@ -1289,15 +1422,25 @@ fn petal_lifts_the_front_of_the_bird_base() {
     let front = *before.order.last().expect("最前面");
     let edges_before = doc.cp.edges.len();
 
-    let a = apply(&mut doc, petal, vec![front], [[0.0, 1.0], [0.5, 0.5]], [0.0, 1.0])
-        .expect("前面を花弁折りできる");
+    let a = apply(
+        &mut doc,
+        petal,
+        vec![front],
+        [[0.0, 1.0], [0.5, 0.5]],
+        [0.0, 1.0],
+    )
+    .expect("前面を花弁折りできる");
     assert!(a.warnings.is_empty(), "紙は裂けない: {:?}", a.warnings);
 
     // 前面が「羽2枚・中央のくさび・動かない部分」の4面に、
     // 一緒に開く隣の2層がそれぞれ2面に分かれる(4+2+2+1=9面)
     assert_eq!(a.faces.len(), 9, "前面4面・隣の層2面ずつ・残り1層");
     assert_eq!(a.order.len(), 9);
-    assert_eq!(doc.cp.edges.len(), edges_before + 7, "折り線5本と輪郭の分割2本");
+    assert_eq!(
+        doc.cp.edges.len(),
+        edges_before + 7,
+        "折り線5本と輪郭の分割2本"
+    );
 
     let step = &doc.sequence[doc.sequence.len() - 1];
     assert_eq!(step.kind, TechniqueKind::Petal);
@@ -1326,11 +1469,14 @@ fn petal_lifts_the_front_of_the_bird_base() {
     let apex = DVec2::new(0.5, 0.5);
     let axis = (apex - tip).normalize();
     let faces = extract_faces(&doc.cp);
-    let (after, warnings) =
-        flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
+    let (after, warnings) = flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
     assert!(warnings.is_empty(), "{warnings:?}");
-    let pos: HashMap<u32, DVec2> =
-        doc.cp.vertices.iter().map(|v| (v.id, DVec2::from(v.pos))).collect();
+    let pos: HashMap<u32, DVec2> = doc
+        .cp
+        .vertices
+        .iter()
+        .map(|v| (v.id, DVec2::from(v.pos)))
+        .collect();
     let reach_of = |f: &Face| -> f64 {
         f.vertices
             .iter()
@@ -1356,7 +1502,10 @@ fn petal_lifts_the_front_of_the_bird_base() {
     assert_eq!(after.order, a.order, "層順序が再生結果と一致する");
     for f in &faces {
         assert!(
-            a.at[&f.id].abs_diff_eq(after.placements[&f.id].apply(DVec2::from(a.rep[&f.id])), 1e-6),
+            a.at[&f.id].abs_diff_eq(
+                after.placements[&f.id].apply(DVec2::from(a.rep[&f.id])),
+                1e-6
+            ),
             "面 {} の位置が再生結果と一致する",
             f.id
         );
@@ -1373,7 +1522,12 @@ fn rectangular_two_layer_flap() -> Document {
         width_mm: 100.0,
         height_mm: 50.0,
     });
-    fold(&mut doc, [[0.0, 0.25], [1.0, 0.25]], [0.5, 0.125], FoldDirection::Up);
+    fold(
+        &mut doc,
+        [[0.0, 0.25], [1.0, 0.25]],
+        [0.5, 0.125],
+        FoldDirection::Up,
+    );
     doc
 }
 
@@ -1392,13 +1546,15 @@ fn petal_on_a_flap_with_different_edge_lengths() {
     assert!(a.warnings.is_empty(), "紙は裂けない: {:?}", a.warnings);
 
     let faces = extract_faces(&doc.cp);
-    let (after, warnings) =
-        flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
+    let (after, warnings) = flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_eq!(after.order, a.order, "層順序が再生結果と一致する");
     for f in &faces {
         assert!(
-            a.at[&f.id].abs_diff_eq(after.placements[&f.id].apply(DVec2::from(a.rep[&f.id])), 1e-6),
+            a.at[&f.id].abs_diff_eq(
+                after.placements[&f.id].apply(DVec2::from(a.rep[&f.id])),
+                1e-6
+            ),
             "面 {} の位置が再生結果と一致する",
             f.id
         );
@@ -1411,11 +1567,20 @@ fn petal_on_a_flap_with_different_edge_lengths() {
 fn plane_at(doc: &Document, p: [f64; 2]) -> [f64; 2] {
     let faces = extract_faces(&doc.cp);
     let (state, _) = flat_state_at(doc, &faces, doc.sequence.len()).expect("平らに畳める");
-    let pos: HashMap<u32, DVec2> =
-        doc.cp.vertices.iter().map(|v| (v.id, DVec2::from(v.pos))).collect();
+    let pos: HashMap<u32, DVec2> = doc
+        .cp
+        .vertices
+        .iter()
+        .map(|v| (v.id, DVec2::from(v.pos)))
+        .collect();
     let q = DVec2::from(p);
     for f in &faces {
-        let poly: Vec<DVec2> = f.vertices.iter().filter_map(|v| pos.get(v)).copied().collect();
+        let poly: Vec<DVec2> = f
+            .vertices
+            .iter()
+            .filter_map(|v| pos.get(v))
+            .copied()
+            .collect();
         if inside_polygon(&poly, q, 1e-12) {
             let at = state.placements[&f.id].apply(q);
             return [at.x, at.y];
@@ -1432,7 +1597,12 @@ fn kite_base() -> Document {
         let (s, c) = deg.to_radians().sin_cos();
         [c * r, s * r]
     };
-    fold(&mut doc, [[0.0, 0.0], at(22.5, 1.0)], [0.1, 0.9], FoldDirection::Up);
+    fold(
+        &mut doc,
+        [[0.0, 0.0], at(22.5, 1.0)],
+        [0.1, 0.9],
+        FoldDirection::Up,
+    );
     let line = [plane_at(&doc, [0.0, 0.0]), plane_at(&doc, at(67.5, 0.5))];
     let keep = plane_at(&doc, [0.9, 0.5]);
     fold(&mut doc, line, keep, FoldDirection::Up);
@@ -1463,8 +1633,14 @@ fn petal_hinge_stops_where_the_slant_leaves_the_paper() {
             .any(|v| (v.pos[0] - p[0]).abs() <= eps && (v.pos[1] - p[1]).abs() <= eps)
     };
     let stop = (33.75_f64).to_radians().tan();
-    assert!(has([1.0, stop], 1e-9), "ちょうつがいの端が (1, {stop}) にある");
-    assert!(has([stop, 1.0], 1e-9), "ちょうつがいの端が ({stop}, 1) にある");
+    assert!(
+        has([1.0, stop], 1e-9),
+        "ちょうつがいの端が (1, {stop}) にある"
+    );
+    assert!(
+        has([stop, 1.0], 1e-9),
+        "ちょうつがいの端が ({stop}, 1) にある"
+    );
 
     // 旧規則なら止まり点は縁の長さ 1/cos22.5° から決まり、ちょうつがいは
     // x+y = √2/cos22.5° の線になる(角が90°のときだけ上と一致する)
@@ -1485,37 +1661,61 @@ fn petal_rejects_undefined_input_without_touching_document() {
     let front = *state.order.last().expect("最前面");
 
     // 中心線が退化(2点が一致)
-    let err = apply(&mut doc, petal, vec![front], [[0.5, 0.5], [0.5, 0.5]], [0.0, 1.0])
-        .expect_err("退化した中心線はエラー");
+    let err = apply(
+        &mut doc,
+        petal,
+        vec![front],
+        [[0.5, 0.5], [0.5, 0.5]],
+        [0.0, 1.0],
+    )
+    .expect_err("退化した中心線はエラー");
     assert!(err.contains("2点が一致"), "{err}");
     assert_eq!(doc, before, "失敗時は文書を変更しない");
 
     // フラップの指定が無い
-    let err = apply(&mut doc, petal, Vec::new(), [[0.0, 1.0], [0.5, 0.5]], [0.0, 1.0])
-        .expect_err("フラップ未指定はエラー");
+    let err = apply(
+        &mut doc,
+        petal,
+        Vec::new(),
+        [[0.0, 1.0], [0.5, 0.5]],
+        [0.0, 1.0],
+    )
+    .expect_err("フラップ未指定はエラー");
     assert!(err.contains("フラップ"), "{err}");
     assert_eq!(doc, before);
 
     // 無い層を指定した
     let missing = faces.iter().map(|f| f.id).max().unwrap_or(0) + 99;
-    let err = apply(&mut doc, petal, vec![missing], [[0.0, 1.0], [0.5, 0.5]], [0.0, 1.0])
-        .expect_err("無い層はエラー");
+    let err = apply(
+        &mut doc,
+        petal,
+        vec![missing],
+        [[0.0, 1.0], [0.5, 0.5]],
+        [0.0, 1.0],
+    )
+    .expect_err("無い層はエラー");
     assert!(err.contains("見つかりません"), "{err}");
     assert_eq!(doc, before);
 
     // 中心線がフラップの縁に重なっていて片側にしか紙が無い指定は、断らずに
     // 警告して続ける(「止めずに警告」原則)
-    let a = apply(&mut doc, petal, vec![front], [[0.0, 0.5], [0.5, 0.5]], [0.0, 0.5])
-        .expect("片側だけでも折れる");
+    let a = apply(
+        &mut doc,
+        petal,
+        vec![front],
+        [[0.0, 0.5], [0.5, 0.5]],
+        [0.0, 0.5],
+    )
+    .expect("片側だけでも折れる");
     assert!(
-        a.warnings.iter().any(|w| w.contains("中心線の横まで広がって")),
+        a.warnings
+            .iter()
+            .any(|w| w.contains("中心線の横まで広がって")),
         "無理のある指定は警告になる: {:?}",
         a.warnings
     );
     assert_ne!(doc, before, "警告付きでも折りは適用される");
 }
-
-
 
 // ---------------------------------------------------------------------------
 // 沈め折り
@@ -1537,8 +1737,12 @@ fn bird_base() -> Document {
     let (state, _) = flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
     let has = |f: &Face, p: DVec2| {
         let pl = state.placements[&f.id];
-        let pos: HashMap<u32, DVec2> =
-            doc.cp.vertices.iter().map(|v| (v.id, DVec2::from(v.pos))).collect();
+        let pos: HashMap<u32, DVec2> = doc
+            .cp
+            .vertices
+            .iter()
+            .map(|v| (v.id, DVec2::from(v.pos)))
+            .collect();
         f.vertices
             .iter()
             .filter_map(|v| pos.get(v))
@@ -1580,14 +1784,18 @@ fn open_sink_turns_the_tip_of_the_preliminary_base_inside_out() {
 
     // 閉じた角 (0.5,0.5) を切り取る線(先端側は小さな三角形)
     let line = [[0.5, 0.6], [0.4, 0.5]];
-    let a = apply(&mut doc, open_sink, Vec::new(), line, [0.47, 0.53])
-        .expect("閉じた角を沈められる");
+    let a =
+        apply(&mut doc, open_sink, Vec::new(), line, [0.47, 0.53]).expect("閉じた角を沈められる");
     assert!(a.warnings.is_empty(), "紙は裂けない: {:?}", a.warnings);
 
     // 4層それぞれが先端の三角形と残りに分かれる
     assert_eq!(a.faces.len(), 8, "4層が先端と胴に分かれる");
     assert_eq!(a.order.len(), 8);
-    assert_eq!(doc.cp.edges.len(), edges_before + 8, "折り線4本と輪郭の分割4本");
+    assert_eq!(
+        doc.cp.edges.len(),
+        edges_before + 8,
+        "折り線4本と輪郭の分割4本"
+    );
     let step = &doc.sequence[doc.sequence.len() - 1];
     assert_eq!(step.kind, TechniqueKind::OpenSink);
 
@@ -1622,11 +1830,27 @@ fn open_sink_turns_the_tip_of_the_preliminary_base_inside_out() {
         let d = DVec2::from(line[1]) - DVec2::from(line[0]);
         d.perp_dot(a.at[&id] - DVec2::from(line[0]))
     };
-    let tip: Vec<FaceId> = a.order.iter().copied().filter(|&id| side(id) > 0.0).collect();
-    let body: Vec<FaceId> = a.order.iter().copied().filter(|&id| side(id) < 0.0).collect();
+    let tip: Vec<FaceId> = a
+        .order
+        .iter()
+        .copied()
+        .filter(|&id| side(id) > 0.0)
+        .collect();
+    let body: Vec<FaceId> = a
+        .order
+        .iter()
+        .copied()
+        .filter(|&id| side(id) < 0.0)
+        .collect();
     assert_eq!(tip.len(), 4, "先端側は4枚");
     assert_eq!(body.len(), 4, "胴側は4枚");
-    let rank = |id: FaceId| before.order.iter().position(|&p| p == parent_of(id)).unwrap();
+    let rank = |id: FaceId| {
+        before
+            .order
+            .iter()
+            .position(|&p| p == parent_of(id))
+            .unwrap()
+    };
     let tip_ranks: Vec<usize> = tip.iter().map(|&id| rank(id)).collect();
     let body_ranks: Vec<usize> = body.iter().map(|&id| rank(id)).collect();
     assert_eq!(body_ranks, vec![0, 1, 2, 3], "胴側は元の重なり順のまま");
@@ -1651,7 +1875,10 @@ fn open_sink_turns_the_tip_of_the_preliminary_base_inside_out() {
     assert_eq!(again.order, a.order, "層順序が再生結果と一致する");
     for f in &after_faces {
         assert!(
-            a.at[&f.id].abs_diff_eq(again.placements[&f.id].apply(DVec2::from(a.rep[&f.id])), 1e-6),
+            a.at[&f.id].abs_diff_eq(
+                again.placements[&f.id].apply(DVec2::from(a.rep[&f.id])),
+                1e-6
+            ),
             "面 {} の位置が再生結果と一致する",
             f.id
         );
@@ -1708,8 +1935,7 @@ fn open_sink_works_on_the_bird_base_apex() {
 
     // 記録した手順から同じ形に折り直せる
     let after_faces = extract_faces(&doc.cp);
-    let (again, _) =
-        flat_state_at(&doc, &after_faces, doc.sequence.len()).expect("平らに畳める");
+    let (again, _) = flat_state_at(&doc, &after_faces, doc.sequence.len()).expect("平らに畳める");
     assert_eq!(again.order, a.order, "層順序が再生結果と一致する");
 }
 
@@ -1724,8 +1950,14 @@ fn open_sink_accepts_partial_flaps_and_rejects_only_undefined_input() {
     let line = [[0.5, 0.6], [0.4, 0.5]];
 
     // 退化した折り線
-    let err = apply(&mut doc, open_sink, Vec::new(), [[0.5, 0.5], [0.5, 0.5]], [0.47, 0.53])
-        .expect_err("退化した折り線はエラー");
+    let err = apply(
+        &mut doc,
+        open_sink,
+        Vec::new(),
+        [[0.5, 0.5], [0.5, 0.5]],
+        [0.47, 0.53],
+    )
+    .expect_err("退化した折り線はエラー");
     assert!(err.contains("2点が一致"), "{err}");
     assert_eq!(doc, before_doc, "失敗時は文書を変更しない");
 
@@ -1737,15 +1969,15 @@ fn open_sink_accepts_partial_flaps_and_rejects_only_undefined_input() {
 
     // 無い層
     let missing = faces.iter().map(|f| f.id).max().unwrap_or(0) + 99;
-    let err = apply(&mut doc, open_sink, vec![missing], line, [0.47, 0.53])
-        .expect_err("無い層はエラー");
+    let err =
+        apply(&mut doc, open_sink, vec![missing], line, [0.47, 0.53]).expect_err("無い層はエラー");
     assert!(err.contains("見つかりません"), "{err}");
     assert_eq!(doc, before_doc);
 
     // 一部の層(奇数枚)だけを沈める: 断らずに折れる
     let some: Vec<FaceId> = state.order[..3].to_vec();
-    let a = apply(&mut doc, open_sink, some, line, [0.47, 0.53])
-        .expect("3層(奇数)だけでも沈められる");
+    let a =
+        apply(&mut doc, open_sink, some, line, [0.47, 0.53]).expect("3層(奇数)だけでも沈められる");
     assert_eq!(a.faces.len(), 7, "選んだ3層だけが先端と胴に分かれる");
     assert_ne!(doc, before_doc, "折りは適用される");
 }
@@ -1773,7 +2005,12 @@ fn swivel_brings_the_edge_onto_the_target_line() {
     assert_eq!(doc.cp.edges.len(), 9, "輪郭4本+折り線2本+輪郭の分割3本");
     let step = &doc.sequence[doc.sequence.len() - 1];
     assert_eq!(step.kind, TechniqueKind::Swivel);
-    assert_eq!(step.drivers.len(), 2, "支点で出会う2本を記録する: {:?}", step.drivers);
+    assert_eq!(
+        step.drivers.len(),
+        2,
+        "支点で出会う2本を記録する: {:?}",
+        step.drivers
+    );
     for d in &step.drivers {
         assert_eq!(d.target_angle_deg.abs(), 180.0, "{d:?}");
     }
@@ -1783,8 +2020,12 @@ fn swivel_brings_the_edge_onto_the_target_line() {
     let want = pivot + (DVec2::from(target) - pivot).normalize() * 1.0;
     let faces = extract_faces(&doc.cp);
     let (after, _) = flat_state_at(&doc, &faces, doc.sequence.len()).expect("平らに畳める");
-    let pos: HashMap<u32, DVec2> =
-        doc.cp.vertices.iter().map(|v| (v.id, DVec2::from(v.pos))).collect();
+    let pos: HashMap<u32, DVec2> = doc
+        .cp
+        .vertices
+        .iter()
+        .map(|v| (v.id, DVec2::from(v.pos)))
+        .collect();
     // 座標系は「動かなかった紙(Mの向こう)」を基準にそろえて比べる
     // (畳み平面の全体の等長変換は折るたびに付け直されるため)
     let stay = faces
@@ -1836,8 +2077,14 @@ fn swivel_works_on_stacked_layers_and_rejects_only_undefined_input() {
     let line = [[0.0, 0.25], [1.0, 0.25]];
 
     // 退化した基準線
-    let err = apply(&mut doc, swivel, Vec::new(), [[0.2, 0.25], [0.2, 0.25]], [1.0, 0.4])
-        .expect_err("退化した基準線はエラー");
+    let err = apply(
+        &mut doc,
+        swivel,
+        Vec::new(),
+        [[0.2, 0.25], [0.2, 0.25]],
+        [1.0, 0.4],
+    )
+    .expect_err("退化した基準線はエラー");
     assert!(err.contains("2点が一致"), "{err}");
     assert_eq!(doc, before_doc, "失敗時は文書を変更しない");
 
@@ -1849,8 +2096,7 @@ fn swivel_works_on_stacked_layers_and_rejects_only_undefined_input() {
 
     // 無い層
     let missing = faces.iter().map(|f| f.id).max().unwrap_or(0) + 99;
-    let err = apply(&mut doc, swivel, vec![missing], line, [1.0, 0.4])
-        .expect_err("無い層はエラー");
+    let err = apply(&mut doc, swivel, vec![missing], line, [1.0, 0.4]).expect_err("無い層はエラー");
     assert!(err.contains("見つかりません"), "{err}");
     assert_eq!(doc, before_doc);
 
@@ -1907,9 +2153,7 @@ fn twist_rotates_the_middle_square_and_makes_four_pleats() {
     // 中央と同じ向き(裏返っていない)のは腕、裏返っているのはひだ
     let same: Vec<FaceId> = faces
         .iter()
-        .filter(|f| {
-            after.placements[&f.id].mirrored == after.placements[&center.id].mirrored
-        })
+        .filter(|f| after.placements[&f.id].mirrored == after.placements[&center.id].mirrored)
         .map(|f| f.id)
         .collect();
     assert_eq!(same.len(), 5, "中央1面と腕4面が同じ向き(残り4面がひだ)");
@@ -1944,7 +2188,10 @@ fn twist_rotates_the_middle_square_and_makes_four_pleats() {
     assert_eq!(after.order, a.order, "層順序が再生結果と一致する");
     for f in &faces {
         assert!(
-            a.at[&f.id].abs_diff_eq(after.placements[&f.id].apply(DVec2::from(a.rep[&f.id])), 1e-6),
+            a.at[&f.id].abs_diff_eq(
+                after.placements[&f.id].apply(DVec2::from(a.rep[&f.id])),
+                1e-6
+            ),
             "面 {} の位置が再生結果と一致する",
             f.id
         );
@@ -1963,46 +2210,47 @@ fn twist_works_on_a_triangle_and_rejects_only_undefined_input() {
     let line = [v0, v1];
 
     // 退化した辺
-    let err = apply(&mut doc, twist, Vec::new(), [v0, v0], [0.5, 0.2])
-        .expect_err("退化した辺はエラー");
+    let err =
+        apply(&mut doc, twist, Vec::new(), [v0, v0], [0.5, 0.2]).expect_err("退化した辺はエラー");
     assert!(err.contains("2点が一致"), "{err}");
     assert_eq!(doc, before_doc, "失敗時は文書を変更しない");
 
     // 回転量を示す点が中心と同じ
-    let err = apply(&mut doc, twist, Vec::new(), line, [0.5, 0.5])
-        .expect_err("中心と同じ点はエラー");
+    let err =
+        apply(&mut doc, twist, Vec::new(), line, [0.5, 0.5]).expect_err("中心と同じ点はエラー");
     assert!(err.contains("中心と同じ"), "{err}");
     assert_eq!(doc, before_doc);
 
     // ねじる角が0(辺の中点の向きと同じ向きの点)
-    let mid = DVec2::new(
-        0.5 * (v0[0] + v1[0]),
-        0.5 * (v0[1] + v1[1]),
-    );
+    let mid = DVec2::new(0.5 * (v0[0] + v1[0]), 0.5 * (v0[1] + v1[1]));
     let out = DVec2::new(0.5, 0.5) + (mid - DVec2::new(0.5, 0.5)) * 2.0;
-    let err = apply(&mut doc, twist, Vec::new(), line, [out.x, out.y])
-        .expect_err("ねじる角0はエラー");
+    let err =
+        apply(&mut doc, twist, Vec::new(), line, [out.x, out.y]).expect_err("ねじる角0はエラー");
     assert!(err.contains("ねじる角が0"), "{err}");
     assert_eq!(doc, before_doc);
 
     // 無い層
     let faces = extract_faces(&doc.cp);
     let missing = faces.iter().map(|f| f.id).max().unwrap_or(0) + 99;
-    let err = apply(&mut doc, twist, vec![missing], line, [0.5, 0.2])
-        .expect_err("無い層はエラー");
+    let err = apply(&mut doc, twist, vec![missing], line, [0.5, 0.2]).expect_err("無い層はエラー");
     assert!(err.contains("見つかりません"), "{err}");
     assert_eq!(doc, before_doc);
 
     // 三角形の中央領域を25°ねじる
     let dir = rotate2(mid - DVec2::new(0.5, 0.5), 25.0_f64.to_radians());
     let target = DVec2::new(0.5, 0.5) + dir * 2.0;
-    let a = apply(&mut doc, twist, Vec::new(), line, [target.x, target.y])
-        .expect("三角形でもねじれる");
+    let a =
+        apply(&mut doc, twist, Vec::new(), line, [target.x, target.y]).expect("三角形でもねじれる");
     assert!(a.warnings.is_empty(), "紙は裂けない: {:?}", a.warnings);
     assert_eq!(a.faces.len(), 7, "中央1面+ひだ3面+腕3面");
     let step = &doc.sequence[doc.sequence.len() - 1];
     assert_eq!(step.kind, TechniqueKind::Twist);
-    assert_eq!(step.drivers.len(), 9, "辺3本+ひだの折り線6本: {:?}", step.drivers);
+    assert_eq!(
+        step.drivers.len(),
+        9,
+        "辺3本+ひだの折り線6本: {:?}",
+        step.drivers
+    );
     assert_fold_senses(&doc, "三角形のねじり折り");
 
     let faces = extract_faces(&doc.cp);
@@ -2081,7 +2329,11 @@ fn twist_folds_a_polygon_with_unequal_sides() {
 
         let mut doc = square_doc();
         let a = twist_polygon(&mut doc, polygon.clone(), center, 20.0).expect("ねじれる");
-        assert!(a.warnings.is_empty(), "{name}: 紙は裂けない: {:?}", a.warnings);
+        assert!(
+            a.warnings.is_empty(),
+            "{name}: 紙は裂けない: {:?}",
+            a.warnings
+        );
         assert_eq!(a.faces.len(), faces, "{name}: 中央1面+ひだ{n}面+腕{n}面");
         let step = doc.sequence.last().expect("手順が積まれる");
         assert_eq!(step.kind, TechniqueKind::Twist);
@@ -2130,13 +2382,21 @@ fn twist_takes_an_explicit_center_and_rejects_only_undefined_polygons() {
     let b = twist_polygon(&mut b_doc, tri, [0.55, 0.56], 20.0).expect("中心を明示しても折れる");
     assert!(b.warnings.is_empty(), "{:?}", b.warnings);
     assert_eq!(b.faces.len(), 7, "中心を明示すると中央1面+ひだ3面+腕3面");
-    assert!(a.faces.len() >= 7, "中心を省略しても折れる(実際 {})", a.faces.len());
+    assert!(
+        a.faces.len() >= 7,
+        "中心を省略しても折れる(実際 {})",
+        a.faces.len()
+    );
     let pos = |doc: &Document| -> Vec<[f64; 2]> {
         let mut v: Vec<[f64; 2]> = doc.cp.vertices.iter().map(|v| v.pos).collect();
         v.sort_by(|p, q| p.partial_cmp(q).expect("有限"));
         v
     };
-    assert_ne!(pos(&a_doc), pos(&b_doc), "中心をずらすと折り線の位置が変わる");
+    assert_ne!(
+        pos(&a_doc),
+        pos(&b_doc),
+        "中心をずらすと折り線の位置が変わる"
+    );
 
     // 頂点が3つ未満
     let mut doc = square_doc();
@@ -2160,7 +2420,9 @@ fn twist_takes_an_explicit_center_and_rejects_only_undefined_polygons() {
     // 中心が多角形の外(定義はできるので断らず、警告して続ける)
     let out = twist_polygon(&mut doc, square, [0.9, 0.9], 20.0).expect("断らない");
     assert!(
-        out.warnings.iter().any(|w| w.contains("中心が中央多角形の外")),
+        out.warnings
+            .iter()
+            .any(|w| w.contains("中心が中央多角形の外")),
         "{:?}",
         out.warnings
     );

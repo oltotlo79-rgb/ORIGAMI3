@@ -1,7 +1,7 @@
 // appStoreのテスト:
 //  - 直列化まわり:「成功したviewはisLatestに関わらず破棄されない」
 //    (A成功→B失敗でも、画面はAのdocを保持しバックエンドと一致する)
-//  - 折り角度の指定: 60ms間引き・全解除・展開図編集後の追従
+//  - 折り角度の指定: 16ms間引き・全解除・展開図編集後の追従
 //  - 手順の表示と再生: 手順選択・コマ送り・アニメーションの進行と停止・
 //    最新1件だけを送る間引き(coalescing)
 
@@ -308,7 +308,7 @@ describe("appStore 折り角度の指定", () => {
     expect(poseCalls()).toHaveLength(1);
   });
 
-  it("連続操作は60msで間引かれ、最後の角度が必ず送られる", async () => {
+  it("連続操作は16msで間引かれ、最後の角度が必ず送られる", async () => {
     primeFakeTimers();
     try {
       const store = useAppStore.getState();

@@ -1,7 +1,7 @@
 // 「3Dの紙をつかんで引く」操作(UI-007)のストア側テスト。
 //   - 引き始めに、今見えている形の全ての折り角をそのまま送る
 //     (ソルバーの出発点を今の形へ合わせる。折り上がった作品から引くのに要る)
-//   - 引いている間の角度は60ms間引きで、駆動する1本だけが送られる
+//   - 引いている間の角度は16ms間引きで、駆動する1本だけが送られる
 //   - 離しても形(角度指定)は残り、色付けだけ消える
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -111,7 +111,7 @@ describe("紙をつかんで引く", () => {
     expect(useAppStore.getState().frame3d).toBe(FOLDED);
   });
 
-  it("引いている間は60ms間引きで、駆動する1本だけが送られる", async () => {
+  it("引いている間は16ms間引きで、駆動する1本だけが送られる", async () => {
     vi.useFakeTimers();
     try {
       const store = useAppStore.getState();

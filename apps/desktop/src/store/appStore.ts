@@ -73,7 +73,8 @@ import type {
 import { defaultSkeleton } from "../lib/skeleton";
 
 /** ヒンジ角の連続操作(スライダー)を間引く間隔(ms) */
-const POSE_THROTTLE_MS = 60;
+/** 追従計算は60fps相当で最大1回。runLatestが計算待ちを最新1件へまとめる。 */
+const POSE_THROTTLE_MS = 16;
 
 /** たわみの指定を作品へ書き込むまでの待ち(ms)。つまみを動かしている間の
  * 書き込みをまとめ、元に戻す履歴が細かく埋まらないようにする */
@@ -521,12 +522,12 @@ interface AppState {
     angles: ReadonlyMap<number, number>,
     mirrorHinge?: number | null,
   ) => void;
-  /** 引いている間の角度(度)。60ms間引きで追従計算を呼ぶ。
+  /** 引いている間の角度(度)。16ms間引きで追従計算を呼ぶ。
    * 左右対称の相手がいれば同じ角度で一緒に動かす */
   pullTo: (deg: number) => void;
   /** 引く操作を終える(角度指定は残る。色付けだけ消す) */
   endPull: () => void;
-  /** ヒンジの折り角度を指定する(60ms間引きで追従計算を呼ぶ) */
+  /** ヒンジの折り角度を指定する(16ms間引きで追従計算を呼ぶ) */
   setDriverAngle: (hinge: number, deg: number) => void;
   /** 1本の角度指定を解除する(形は残りの指定から計算し直す) */
   clearDriver: (hinge: number) => void;
@@ -572,7 +573,7 @@ interface AppState {
   setDisplay: (patch: Partial<DisplaySettings>) => Promise<void>;
   /**
    * 紙のたわみの指定を変える(SIM-012 / SIM-013)。
-   * 画面はその場で変え、3D表示の作り直しは60msに1回へ間引いて依頼する
+   * 画面はその場で変え、3D表示の作り直しは16msに1回へ間引いて依頼する
    * (膨らみのつまみを動かしながら形を見られるように)。
    * 作品への保存は少し遅らせてまとめる(つまみ1回の操作で履歴が埋まらないように)
    */
@@ -955,7 +956,7 @@ export const useAppStore = create<AppState>((set, get) => {
     void runReplay(s.currentStep ?? total, s.currentStep === null ? 1 : s.playT, true);
   };
 
-  // つまみを動かしている間も形が付いてくるよう、角度と同じ60ms間引きに乗せる
+  // つまみを動かしている間も形が付いてくるよう、角度と同じ16ms間引きに乗せる
   const softShape = createTrailingThrottle(POSE_THROTTLE_MS, refreshShape);
   // 作品への保存はもう少しまとめる(つまみ1回の操作で元に戻す履歴が埋まらないように)
   /** たわみの指定にまだ作品へ書き込んでいないものがあるか */

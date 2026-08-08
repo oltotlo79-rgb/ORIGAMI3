@@ -73,7 +73,12 @@ mod tests {
     #[test]
     fn default_long_side_is_2048() {
         assert_eq!(DEFAULT_LONG_SIDE_PX, 2048);
-        let png = cp_png(&sample_doc(), &CpSvgOptions::default(), DEFAULT_LONG_SIDE_PX).unwrap();
+        let png = cp_png(
+            &sample_doc(),
+            &CpSvgOptions::default(),
+            DEFAULT_LONG_SIDE_PX,
+        )
+        .unwrap();
         assert_eq!(png_size(&png).0, 2048);
     }
 

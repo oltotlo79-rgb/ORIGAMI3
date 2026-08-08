@@ -66,7 +66,11 @@ fn four_leaves_and_a_body_give_a_valid_planar_graph() {
     assert!(faces.len() >= 2, "面が分かれていない: {}", faces.len());
     // オイラーの公式 V − E + F = 1(外周面を除く)で平面グラフの整合を検算する。
     let (v, e, f) = (r.cp.vertices.len(), r.cp.edges.len(), faces.len());
-    assert_eq!(v + f, e + 1, "平面グラフとして辻褄が合わない: V{v} E{e} F{f}");
+    assert_eq!(
+        v + f,
+        e + 1,
+        "平面グラフとして辻褄が合わない: V{v} E{e} F{f}"
+    );
     assert!(r.violations <= interior_vertex_count(&r.cp));
 }
 
@@ -107,7 +111,10 @@ fn broken_input_is_rejected_with_japanese_message() {
     assert!(generate(&s, &p, 0.0, 1.0).is_err(), "紙幅0が通ってしまった");
     let broken = Skeleton { nodes: Vec::new() };
     let e = generate(&broken, &p, 1.0, 1.0).unwrap_err();
-    assert!(!e.is_empty() && !e.is_ascii(), "日本語のエラー文になっていない");
+    assert!(
+        !e.is_empty() && !e.is_ascii(),
+        "日本語のエラー文になっていない"
+    );
 }
 
 #[test]
@@ -144,12 +151,11 @@ fn crane_like_skeleton_yields_a_crane_class_base() {
 
     // (a) 6本の角それぞれの円中心から折り線が放射状に出ている。
     for &(id, c) in &ps[0].centers {
-        let v = r
-            .cp
-            .vertices
-            .iter()
-            .find(|v| (v.pos[0] - c[0]).hypot(v.pos[1] - c[1]) < 1e-7)
-            .unwrap_or_else(|| panic!("角{id}の円中心が展開図の頂点になっていない"));
+        let v =
+            r.cp.vertices
+                .iter()
+                .find(|v| (v.pos[0] - c[0]).hypot(v.pos[1] - c[1]) < 1e-7)
+                .unwrap_or_else(|| panic!("角{id}の円中心が展開図の頂点になっていない"));
         let d = deg.get(&v.id).copied().unwrap_or(0);
         assert!(d >= 3, "角{id}から出る折り線が{d}本しかない");
     }
@@ -160,7 +166,11 @@ fn crane_like_skeleton_yields_a_crane_class_base() {
 
     // (c) 平面グラフとしての妥当性。
     let (v, e, f) = (r.cp.vertices.len(), r.cp.edges.len(), faces.len());
-    assert_eq!(v + f, e + 1, "平面グラフとして辻褄が合わない: V{v} E{e} F{f}");
+    assert_eq!(
+        v + f,
+        e + 1,
+        "平面グラフとして辻褄が合わない: V{v} E{e} F{f}"
+    );
     assert!(validate(&r.cp).is_empty(), "点検: {:?}", validate(&r.cp));
 
     // (d) 平坦折り違反が内部頂点の半数以下。

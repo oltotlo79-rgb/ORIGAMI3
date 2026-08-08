@@ -16,6 +16,7 @@ import {
   MAX_DIVISIONS,
   MIN_DIVISIONS,
   hexToRgb,
+  overlapPreventionOf,
   rgbToHex,
   softOf,
 } from "../lib/displayPrefs";
@@ -30,6 +31,7 @@ export function PaperAppearance() {
   const wheelBehavior = useAppStore((s) => s.wheelBehavior);
   const setWheelBehavior = useAppStore((s) => s.setWheelBehavior);
   const soft = softOf(display);
+  const overlapPrevention = overlapPreventionOf(display);
 
   return (
     <div className="paper-appearance">
@@ -87,6 +89,18 @@ export function PaperAppearance() {
       <span className="hint">
         紙を{display.grid_divisions}等分した目盛りに線が吸い付きます({MIN_DIVISIONS}〜
         {MAX_DIVISIONS})
+      </span>
+      <label>
+        <input
+          type="checkbox"
+          aria-label="重なり防止"
+          checked={overlapPrevention}
+          onChange={(e) => setDisplay({ overlap_prevention_enabled: e.target.checked })}
+        />
+        重なり防止
+      </label>
+      <span className="hint">
+        折っている途中で紙どうしが突き抜けにくいよう補正します(完全には防げません)
       </span>
       {/* 紙のたわみ(SIM-012 / SIM-013)。既定はオフで、入れると折り目以外の
           ところでも紙が丸く曲がった形になる。膨らみは動かすとすぐ3Dに映る */}

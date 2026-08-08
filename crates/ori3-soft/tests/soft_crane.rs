@@ -108,7 +108,10 @@ fn apply(
 
 /// 展開図の頂点の位置(頂点ID→座標)。
 fn vertex_pos(cp: &CreasePattern) -> HashMap<u32, DVec2> {
-    cp.vertices.iter().map(|v| (v.id, DVec2::from(v.pos))).collect()
+    cp.vertices
+        .iter()
+        .map(|v| (v.id, DVec2::from(v.pos)))
+        .collect()
 }
 
 /// 畳み平面で点`p`を角に持つ層(=その先端を作っている紙)を下から順に返す。
@@ -150,8 +153,18 @@ fn layers_in_quarter(doc: &Document, b: [f64; 4]) -> Vec<FaceId> {
 /// 予備基本形(4層が輪につながった袋)。
 fn preliminary_base() -> Document {
     let mut doc = square_doc();
-    fold(&mut doc, [[0.0, 0.5], [1.0, 0.5]], [0.5, 0.25], FoldDirection::Up);
-    fold(&mut doc, [[0.5, 0.0], [0.5, 0.5]], [0.25, 0.25], FoldDirection::Up);
+    fold(
+        &mut doc,
+        [[0.0, 0.5], [1.0, 0.5]],
+        [0.5, 0.25],
+        FoldDirection::Up,
+    );
+    fold(
+        &mut doc,
+        [[0.5, 0.0], [0.5, 0.5]],
+        [0.25, 0.25],
+        FoldDirection::Up,
+    );
     for (line, reference) in [
         ([[0.5, 0.0], [0.5, 1.0]], [0.5, 0.1]),
         ([[0.0, 0.5], [1.0, 0.5]], [0.1, 0.5]),
@@ -271,18 +284,34 @@ fn the_body_of_the_crane_puffs_up() {
         let p = |i: u32| glam::DVec3::from(m.positions[i as usize]);
         (p(t[1]) - p(t[0])).length()
     };
-    let worst = puffy.triangles.iter().zip(&flat.triangles)
+    let worst = puffy
+        .triangles
+        .iter()
+        .zip(&flat.triangles)
         .map(|(a, b)| (len(&puffy, a) - len(&flat, b)).abs())
         .fold(0.0, f64::max);
-    assert!(worst < 0.02, "紙は伸びない: 辺の長さの変化 最大{worst}(紙の一辺=1.0)");
+    assert!(
+        worst < 0.02,
+        "紙は伸びない: 辺の長さの変化 最大{worst}(紙の一辺=1.0)"
+    );
 }
 
 /// 風船(水風船)の基本形。予備基本形と同じ折り順を**対角線**で行ったもの
 /// (山谷が逆=予備基本形を裏返した形)。4層が輪につながった袋になる。
 fn waterbomb_base() -> Document {
     let mut doc = square_doc();
-    fold(&mut doc, [[0.0, 0.0], [1.0, 1.0]], [0.75, 0.25], FoldDirection::Up);
-    fold(&mut doc, [[1.0, 0.0], [0.5, 0.5]], [0.9, 0.6], FoldDirection::Up);
+    fold(
+        &mut doc,
+        [[0.0, 0.0], [1.0, 1.0]],
+        [0.75, 0.25],
+        FoldDirection::Up,
+    );
+    fold(
+        &mut doc,
+        [[1.0, 0.0], [0.5, 0.5]],
+        [0.9, 0.6],
+        FoldDirection::Up,
+    );
     for (line, reference) in [
         ([[0.0, 0.0], [1.0, 1.0]], [0.9, 0.9]),
         ([[1.0, 0.0], [0.5, 0.5]], [0.95, 0.05]),
@@ -322,12 +351,19 @@ fn a_waterbomb_base_becomes_round_when_inflated() {
     let mut blow = settings(0.9);
     blow.iterations = 120;
     let puffy = relax(&doc.cp, &faces, &frame, &blow);
-    assert!(thickness(&flat) < 0.01, "折り上がりは平ら: {}", thickness(&flat));
+    assert!(
+        thickness(&flat) < 0.01,
+        "折り上がりは平ら: {}",
+        thickness(&flat)
+    );
     let e = extents(&puffy);
     // 平らな紙のままなら厚みは幅に比べてごく薄い。丸くなったかどうかを
     // 「厚みが幅の何割か」で見る(風船なので3方向の大きさが近づく)。
     let round = e[2] / e[0].max(e[1]);
-    assert!(round > 0.5, "平たい紙ではなく丸くなる: 広がり{e:?} 丸み{round}");
+    assert!(
+        round > 0.5,
+        "平たい紙ではなく丸くなる: 広がり{e:?} 丸み{round}"
+    );
     // 本物の風船と同じように、膨らむぶん紙が引き寄せられて横幅は縮む
     assert!(
         e[0] < extents(&flat)[0],

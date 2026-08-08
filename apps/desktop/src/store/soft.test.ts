@@ -1,7 +1,7 @@
 // 紙のたわみ(SIM-012 / SIM-013 / SIM-015)をストアから使えることのテスト。
 //  - 既定はオフで、切っている間はIPCへ指定を送らない(従来どおりの動き)
 //  - 入れると指定が付き、返ってきた網が表示状態へ入る
-//  - 膨らみのつまみは60ms間引き経由で送られ、最後の値が必ず届く
+//  - 膨らみのつまみは16ms間引き経由で送られ、最後の値が必ず届く
 //  - 設定は作品(.ori3)へ保存され、「この形で仕上げる」でも一緒に確定する
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -26,7 +26,7 @@ import * as ipc from "../ipc/client";
 import { resetPoseThrottle, useAppStore } from "./appStore";
 import { DEFAULT_DISPLAY } from "../lib/displayPrefs";
 
-/** 間引き(60ms)と保存待ち(400ms)の両方を過ぎるまで待つ */
+/** 間引き(16ms)と保存待ち(400ms)の両方を過ぎるまで待つ */
 const WAIT_MS = 600;
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

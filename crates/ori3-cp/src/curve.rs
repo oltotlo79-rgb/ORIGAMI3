@@ -121,7 +121,10 @@ pub fn cubic_segment_count(
             return 1;
         }
     }
-    let m = 6.0 * (p0 - 2.0 * c1 + c2).length().max((c1 - 2.0 * c2 + p1).length());
+    let m = 6.0
+        * (p0 - 2.0 * c1 + c2)
+            .length()
+            .max((c1 - 2.0 * c2 + p1).length());
     if m <= EPS {
         return 1;
     }
@@ -152,10 +155,8 @@ pub fn cubic_polyline(
         .map(|i| {
             let t = f64::from(i) / f64::from(n);
             let u = 1.0 - t;
-            let p = a * (u * u * u)
-                + b * (3.0 * u * u * t)
-                + c * (3.0 * u * t * t)
-                + d * (t * t * t);
+            let p =
+                a * (u * u * u) + b * (3.0 * u * u * t) + c * (3.0 * u * t * t) + d * (t * t * t);
             [p.x, p.y]
         })
         .collect();
@@ -225,11 +226,7 @@ pub fn ruling_lines(points: &[[f64; 2]], paper: [f64; 2]) -> Vec<[[f64; 2]; 3]> 
 
 /// 折れ線を展開図へ入れる(区間ごとに `insert_segment`)。
 /// 戻り値は新しくできた辺のID(後の区間の挿入で再分割され得る点は同じ)。
-pub fn insert_polyline(
-    cp: &mut CreasePattern,
-    points: &[[f64; 2]],
-    kind: EdgeKind,
-) -> Vec<EdgeId> {
+pub fn insert_polyline(cp: &mut CreasePattern, points: &[[f64; 2]], kind: EdgeKind) -> Vec<EdgeId> {
     points
         .windows(2)
         .flat_map(|w| insert_segment(cp, w[0], w[1], kind))
@@ -252,8 +249,18 @@ pub fn insert_rulings(
     };
     let mut ids = Vec::new();
     for [concave, cur, convex] in ruling_lines(points, paper) {
-        ids.extend(insert_segment(cp, cur, first_crossing(cp, cur, concave), opposite));
-        ids.extend(insert_segment(cp, cur, first_crossing(cp, cur, convex), curve_kind));
+        ids.extend(insert_segment(
+            cp,
+            cur,
+            first_crossing(cp, cur, concave),
+            opposite,
+        ));
+        ids.extend(insert_segment(
+            cp,
+            cur,
+            first_crossing(cp, cur, convex),
+            curve_kind,
+        ));
     }
     ids
 }

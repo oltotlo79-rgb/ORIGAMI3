@@ -117,6 +117,39 @@ fn replay_twice_is_bit_identical() {
 }
 
 #[test]
+fn intermediate_frame_carries_both_start_and_completed_layer_orders() {
+    let doc = folded_document(2);
+    let order = |frame: &Frame3D| {
+        let mut by_layer: Vec<(u32, u32)> = frame
+            .faces
+            .iter()
+            .map(|face| (face.layer, face.face))
+            .collect();
+        by_layer.sort_unstable();
+        by_layer
+            .into_iter()
+            .map(|(_, face)| face)
+            .collect::<Vec<_>>()
+    };
+    let before = replay(&doc, 1, 1.0);
+    let midway = replay(&doc, 2, 0.5);
+    let completed = replay(&doc, 2, 1.0);
+
+    assert_eq!(midway.layer_transition.start, order(&before.frame));
+    assert_eq!(midway.layer_transition.end, order(&completed.frame));
+    assert_eq!(midway.layer_transition.progress, 0.5);
+    assert_eq!(
+        order(&midway.frame),
+        midway.layer_transition.start,
+        "表示層は従来どおり完了まで開始順を保つ"
+    );
+    assert_ne!(
+        midway.layer_transition.start, midway.layer_transition.end,
+        "2手目で層順序が変わる前提"
+    );
+}
+
+#[test]
 fn full_replay_folds_flat_and_layers_are_a_permutation() {
     let doc = three_step_document();
     let res = replay(&doc, 3, 1.0);

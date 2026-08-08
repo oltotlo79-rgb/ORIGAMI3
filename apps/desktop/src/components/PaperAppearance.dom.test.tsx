@@ -69,6 +69,19 @@ describe("展開図のホイール動作", () => {
   });
 });
 
+describe("重なり防止", () => {
+  it("既定はオンで、切ると作品の表示設定へその場で入る", () => {
+    render(<PaperAppearance />);
+    const box = screen.getByLabelText("重なり防止");
+    expect(box).toHaveProperty("checked", true);
+    expect(screen.getByText(/完全には防げません/)).not.toBeNull();
+
+    fireEvent.click(box);
+    expect(useAppStore.getState().display.overlap_prevention_enabled).toBe(false);
+    expect(box).toHaveProperty("checked", false);
+  });
+});
+
 describe("紙のたわみ(SIM-012 / SIM-013)", () => {
   it("切替が出ていて、はじめは切ってある(つまみもまだ出ない)", () => {
     render(<PaperAppearance />);

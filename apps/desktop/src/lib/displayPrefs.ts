@@ -8,12 +8,13 @@
 
 import type { DisplaySettings, SoftSettings } from "./types";
 
-/** Rust側 Document::new と同じ初期値(赤い表・白い裏・8分割・たわみはオフ)。
+/** Rust側 Document::new と同じ初期値(赤い表・白い裏・8分割・重なり防止はオン・たわみはオフ)。
  * 作品をまだ開いていない間の表示に使う */
 export const DEFAULT_DISPLAY: DisplaySettings = {
   front_color: [237, 28, 36],
   back_color: [255, 255, 255],
   grid_divisions: 8,
+  overlap_prevention_enabled: true,
   soft_enabled: false,
   soft_stiffness: 0.5,
   soft_pressure: 0,
@@ -29,6 +30,11 @@ export const SOFT_ITERATIONS = 20;
 export function clampUnit(v: number, fallback: number): number {
   if (!Number.isFinite(v)) return fallback;
   return Math.max(0, Math.min(1, v));
+}
+
+/** 折り動作中の重なり防止を使うか。項目の無い古い作品も既定のオンで扱う。 */
+export function overlapPreventionOf(display: DisplaySettings): boolean {
+  return display.overlap_prevention_enabled !== false;
 }
 
 /**

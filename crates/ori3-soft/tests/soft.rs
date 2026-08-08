@@ -72,8 +72,18 @@ fn squash_bottom(doc: &mut Document, line: [[f64; 2]; 2], reference_point: [f64;
 /// `acceptance_crane.rs` の `preliminary_base` と同じ折り順。
 fn preliminary_base() -> Document {
     let mut doc = square_doc();
-    fold(&mut doc, [[0.0, 0.5], [1.0, 0.5]], [0.5, 0.25], FoldDirection::Up);
-    fold(&mut doc, [[0.5, 0.0], [0.5, 0.5]], [0.25, 0.25], FoldDirection::Up);
+    fold(
+        &mut doc,
+        [[0.0, 0.5], [1.0, 0.5]],
+        [0.5, 0.25],
+        FoldDirection::Up,
+    );
+    fold(
+        &mut doc,
+        [[0.5, 0.0], [0.5, 0.5]],
+        [0.25, 0.25],
+        FoldDirection::Up,
+    );
     squash_bottom(&mut doc, [[0.5, 0.0], [0.5, 1.0]], [0.5, 0.1]);
     squash_bottom(&mut doc, [[0.0, 0.5], [1.0, 0.5]], [0.1, 0.5]);
     doc
@@ -111,7 +121,11 @@ fn settings(enabled: bool, stiffness: f64, pressure: f64) -> SoftSettings {
 /// 網の二面角: (折り目=面をまたぐ辺の角度の絶対値の合計, 面の中の辺の合計)。
 fn bend_stats(mesh: &SoftMesh) -> (f64, f64) {
     let p = |i: u32| DVec3::from(mesh.positions[i as usize]);
-    let normal = |t: [u32; 3]| (p(t[1]) - p(t[0])).cross(p(t[2]) - p(t[0])).normalize_or_zero();
+    let normal = |t: [u32; 3]| {
+        (p(t[1]) - p(t[0]))
+            .cross(p(t[2]) - p(t[0]))
+            .normalize_or_zero()
+    };
     let mut seen: BTreeMap<(u32, u32), usize> = BTreeMap::new();
     let (mut crease, mut inner) = (0.0, 0.0);
     for (ti, t) in mesh.triangles.iter().enumerate() {
@@ -120,7 +134,10 @@ fn bend_stats(mesh: &SoftMesh) -> (f64, f64) {
             match seen.insert((a.min(b), a.max(b)), ti) {
                 None => {}
                 Some(t0) => {
-                    let ang = normal(mesh.triangles[t0]).dot(normal(*t)).clamp(-1.0, 1.0).acos();
+                    let ang = normal(mesh.triangles[t0])
+                        .dot(normal(*t))
+                        .clamp(-1.0, 1.0)
+                        .acos();
                     if mesh.triangle_faces[t0] == mesh.triangle_faces[ti] {
                         inner += ang;
                     } else {
@@ -140,7 +157,12 @@ fn mean_height(mesh: &SoftMesh, layer: u32) -> f64 {
         .iter()
         .zip(&mesh.triangle_layers)
         .filter(|&(_, &l)| l == layer)
-        .map(|(t, _)| t.iter().map(|&i| mesh.positions[i as usize][2]).sum::<f64>() / 3.0)
+        .map(|(t, _)| {
+            t.iter()
+                .map(|&i| mesh.positions[i as usize][2])
+                .sum::<f64>()
+                / 3.0
+        })
         .collect();
     zs.iter().sum::<f64>() / zs.len() as f64
 }
@@ -152,7 +174,12 @@ fn mean_along(mesh: &SoftMesh, layer: u32, axis: usize) -> f64 {
         .iter()
         .zip(&mesh.triangle_layers)
         .filter(|&(_, &l)| l == layer)
-        .map(|(t, _)| t.iter().map(|&i| mesh.positions[i as usize][axis]).sum::<f64>() / 3.0)
+        .map(|(t, _)| {
+            t.iter()
+                .map(|&i| mesh.positions[i as usize][axis])
+                .sum::<f64>()
+                / 3.0
+        })
         .collect();
     vs.iter().sum::<f64>() / vs.len() as f64
 }
@@ -177,7 +204,10 @@ fn disabled_returns_the_rigid_polygons_untouched() {
     let want: usize = faces.iter().map(|f| f.vertices.len() - 2).sum();
     assert_eq!(m.triangles.len(), want, "多角形を三角形にしただけ");
     let pts: Vec<[f64; 3]> = frame.faces.iter().flat_map(|f| f.polygon.clone()).collect();
-    assert!(m.positions.iter().all(|p| pts.contains(p)), "位置はそのまま");
+    assert!(
+        m.positions.iter().all(|p| pts.contains(p)),
+        "位置はそのまま"
+    );
 }
 
 #[test]
@@ -282,7 +312,10 @@ fn the_crane_base_bulges_when_inflated() {
         extent(&puffy)
     );
     let hs: Vec<f64> = layers.iter().map(|&l| mean_height(&puffy, l)).collect();
-    assert!(hs.windows(2).all(|w| w[0] < w[1]), "層順どおり重なる: {hs:?}");
+    assert!(
+        hs.windows(2).all(|w| w[0] < w[1]),
+        "層順どおり重なる: {hs:?}"
+    );
     assert!(puffy.warnings.is_empty(), "警告なし: {:?}", puffy.warnings);
 }
 
@@ -294,7 +327,6 @@ fn layer_order_is_kept_while_inflating() {
     assert!(z1 > z0 + 1e-4, "層0が層1より下にある: {z0} < {z1}");
     assert!(m.warnings.is_empty(), "層の警告は出ない: {:?}", m.warnings);
 }
-
 
 #[test]
 fn an_open_shape_is_not_a_bag_and_does_not_inflate() {

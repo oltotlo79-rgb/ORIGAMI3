@@ -100,7 +100,11 @@ fn bird_base_skeleton_packs_reasonably() {
         SkeletonNode::new(3, Some(1), 1.0),
     ];
     for i in 0..4u32 {
-        nodes.push(SkeletonNode::new(4 + i, Some(if i < 2 { 0 } else { 1 }), 0.6));
+        nodes.push(SkeletonNode::new(
+            4 + i,
+            Some(if i < 2 { 0 } else { 1 }),
+            0.6,
+        ));
     }
     let s = Skeleton { nodes };
     let out = pack(&s, 1.0, 1.0, 2026, 8);

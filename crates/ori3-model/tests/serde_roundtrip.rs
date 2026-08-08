@@ -105,7 +105,7 @@ fn test_edit_op_tagged_roundtrip() {
     }
 }
 
-/// たわみの項目が無い古い作品ファイルも、既定(オフ)で読めること(SIM-012)。
+/// 表示補正の項目が無い古い作品ファイルも、それぞれの既定値で読めること。
 #[test]
 fn test_display_settings_defaults_for_old_files() {
     let old = r#"{"front_color":[1,2,3],"back_color":[4,5,6],"grid_divisions":8}"#;
@@ -113,6 +113,7 @@ fn test_display_settings_defaults_for_old_files() {
     assert!(!d.soft_enabled, "たわみの既定はオフ");
     assert_eq!(d.soft_stiffness, 0.5);
     assert_eq!(d.soft_pressure, 0.0);
+    assert!(d.overlap_prevention_enabled, "重なり防止の既定はオン");
 }
 
 #[test]
@@ -126,6 +127,7 @@ fn test_edit_op_set_display_roundtrip() {
             soft_enabled: true,
             soft_stiffness: 0.25,
             soft_pressure: 0.75,
+            overlap_prevention_enabled: false,
         },
     };
     let json = serde_json::to_string(&op).expect("serialize");
@@ -140,6 +142,7 @@ fn test_edit_op_set_display_roundtrip() {
             assert!(display.soft_enabled);
             assert_eq!(display.soft_stiffness, 0.25);
             assert_eq!(display.soft_pressure, 0.75);
+            assert!(!display.overlap_prevention_enabled);
         }
         other => panic!("unexpected variant: {other:?}"),
     }

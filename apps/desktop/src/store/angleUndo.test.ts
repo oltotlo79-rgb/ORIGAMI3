@@ -21,7 +21,7 @@ vi.mock("../ipc/client", () => ({
 import * as ipc from "../ipc/client";
 import { resetPoseThrottle, useAppStore } from "./appStore";
 
-/** 角度の間引き(60ms)より少し長く待つ時間(ms) */
+/** 角度の間引き(16ms)より少し長く待つ時間(ms) */
 const POSE_WAIT_MS = 100;
 
 /** 対角線(辺5)で2つの面に分かれた正方形 */

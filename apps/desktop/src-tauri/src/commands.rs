@@ -217,7 +217,7 @@ pub fn pose_solve(
     soft: Option<SoftSettings>,
 ) -> Result<PoseOutcome, String> {
     guard(AssertUnwindSafe(|| {
-        let (cp, faces, warm) = lock(&state).pose_inputs(); // 複製のみ、即ロック解放
+        let (cp, faces, warm, overlap_enabled) = lock(&state).pose_inputs(); // 複製のみ、即ロック解放
         let keep = keep.unwrap_or_default();
         let mut result = if keep.is_empty() {
             ori3_rigid::solve(&cp, &faces, &drivers, warm.as_ref())
@@ -229,7 +229,23 @@ pub fn pose_solve(
                 .collect();
             ori3_rigid::solve_near(&cp, &faces, &drivers, &targets, warm.as_ref())
         };
-        add_penetration_warning(&mut result.frame); // 紙のめり込み(SIM-007)
+        // 手順を持たない角度操作では初期層順序(面ID順)を上下の契約にする。
+        // 共有網頂点へ補正するので、折り目の接続は切れない。
+        let mut order: Vec<ori3_model::FaceId> = faces.iter().map(|face| face.id).collect();
+        order.sort_unstable();
+        ori3_soft::prevent_overlap(
+            &cp,
+            &faces,
+            &mut result.frame,
+            &order,
+            &order,
+            0.5,
+            &ori3_soft::OverlapSettings {
+                enabled: overlap_enabled,
+                ..Default::default()
+            },
+        );
+        add_penetration_warning(&mut result.frame); // 補正後に残る紙のめり込み(SIM-007)
         // たわみもロックの外で計算する(規約どおり)
         let mesh = soft_mesh(&cp, &faces, &result.frame, soft.as_ref());
         lock(&state).store_pose_angles(result.angles.clone()); // 短いロックで書き戻し
@@ -252,6 +268,19 @@ pub fn sequence_replay(
     guard(AssertUnwindSafe(|| {
         let (doc, faces) = lock(&state).replay_inputs(); // 複製のみ、即ロック解放
         let mut result = ori3_layers::replay_with_faces(&doc, &faces, up_to, t);
+        let transition = result.layer_transition.clone();
+        ori3_soft::prevent_overlap(
+            &doc.cp,
+            &faces,
+            &mut result.frame,
+            &transition.start,
+            &transition.end,
+            transition.progress,
+            &ori3_soft::OverlapSettings {
+                enabled: doc.display.overlap_prevention_enabled,
+                ..Default::default()
+            },
+        );
         // 折る途中(t<1)は立体になるので、紙が食い込んでいないかを見る(SIM-007)。
         // 画面のバッジは ReplayResult.warnings を見るので両方へ同じ文言を載せる
         if add_penetration_warning(&mut result.frame) {
@@ -393,14 +422,20 @@ fn export_target(path: &Path, suffix: &str) -> std::path::PathBuf {
     if suffix.is_empty() {
         return path.to_path_buf();
     }
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("折り図");
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("折り図");
     let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("svg");
     path.with_file_name(format!("{stem}{suffix}.{ext}"))
 }
 
 fn export_temp_path(target: &Path) -> std::path::PathBuf {
     let dir = target.parent().unwrap_or_else(|| Path::new("."));
-    let name = target.file_name().and_then(|n| n.to_str()).unwrap_or("export");
+    let name = target
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("export");
     let id = EXPORT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
     dir.join(format!(".{name}.{}.{}.export.tmp", std::process::id(), id))
 }
@@ -611,10 +646,7 @@ mod tests {
     #[test]
     fn failed_multi_svg_export_never_deletes_the_previous_file() {
         use super::write_export_files;
-        let dir = std::env::temp_dir().join(format!(
-            "ori3_export_rollback_{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("ori3_export_rollback_{}", std::process::id()));
         std::fs::remove_dir_all(&dir).ok();
         std::fs::create_dir_all(&dir).unwrap();
         let base = dir.join("折り図.svg");
