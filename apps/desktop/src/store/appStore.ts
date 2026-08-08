@@ -72,6 +72,7 @@ import type {
   Vec2,
 } from "../lib/types";
 import { defaultSkeleton } from "../lib/skeleton";
+import { loadOnboarding, saveOnboarding } from "../lib/firstRunGuide";
 
 /** ヒンジ角の連続操作(スライダー)を間引く間隔(ms) */
 /** 追従計算は60fps相当で最大1回。runLatestが計算待ちを最新1件へまとめる。 */
@@ -101,6 +102,11 @@ export type ToolId =
   | "pull"
   | "technique"
   | "construct";
+
+/** UI-012の4操作と、全てできた後の完了画面。 */
+export type GuideStep = 0 | 1 | 2 | 3 | 4;
+export type GuideAction = "fold" | "angle" | "pull" | "inflate";
+const GUIDE_ACTIONS: GuideAction[] = ["fold", "angle", "pull", "inflate"];
 
 /** 提案ウィザードの3画面(骨格を作る → 候補を選ぶ → 確認する) */
 export type ProposalStep = "skeleton" | "candidates" | "confirm";
@@ -451,6 +457,18 @@ interface AppState {
   pullMirror: boolean;
   /** 2D展開図で修飾キーなしのホイールをスクロールと拡大縮小のどちらに使うか。 */
   wheelBehavior: WheelBehavior;
+  /** 3D操作の吹き出しを展開しているか。閉じても見出しは常に残す。 */
+  viewerHintExpanded: boolean;
+  /** 初回ガイドを隅のカードとして表示しているか。 */
+  guideOpen: boolean;
+  /** 0〜3が実践する4操作、4は全操作を終えた完了画面。 */
+  guideStep: GuideStep;
+  /** 選択中ツールの手順のうち、いま強調する段階(0始まり)。 */
+  operationStage: number;
+  /** 3Dで紙そのものを選んだときの「引く・膨らます」案内を出しているか。 */
+  paperActionTipVisible: boolean;
+  /** 紙の操作案内を詳しく開いているか。閉じた後は小さな入口だけ残す。 */
+  paperActionTipExpanded: boolean;
 
   newDocument: (paper: Paper) => Promise<void>;
   openDocument: (path: string) => Promise<void>;
@@ -468,6 +486,24 @@ interface AppState {
   setPullMirror: (on: boolean) => void;
   /** 2D展開図のホイール動作を切り替える(次回起動時も同じ設定に戻る) */
   setWheelBehavior: (behavior: WheelBehavior) => void;
+  /** 3D操作の吹き出しを開閉する。 */
+  toggleViewerHint: () => void;
+  /** ヘルプから基本操作ガイドを最初の操作へ戻して表示する。 */
+  openGuide: () => void;
+  /** ×またはスキップで閉じ、この端末では初回表示済みとして覚える。 */
+  dismissGuide: () => void;
+  /** 該当する実操作が成功したときだけ、ガイドを次へ進める。 */
+  completeGuideAction: (action: GuideAction) => void;
+  /** 選択中ツールの手順表示を、指定した段階へ進める/戻す。 */
+  setOperationStage: (stage: number) => void;
+  /** 3Dで紙を選んだとき、引く・膨らますへの入口を表示する。 */
+  showPaperActionTip: () => void;
+  /** 詳しい紙の操作案内を小さな入口へ畳む。 */
+  collapsePaperActionTip: () => void;
+  /** 小さな紙の操作入口をもう一度詳しく開く。 */
+  expandPaperActionTip: () => void;
+  /** 空白などを選んだとき紙の操作案内を隠す。 */
+  hidePaperActionTip: () => void;
   undo: () => Promise<void>;
   redo: () => Promise<void>;
   /** 手順の追加・変更・削除(sequence_apply)。再生中なら止めてから送る */
@@ -691,6 +727,7 @@ function pruneSelection(selection: Selection, doc: Document): Selection {
 export const useAppStore = create<AppState>((set, get) => {
   const queue = createSerialQueue();
   const prefs = loadPrefs();
+  let onboarding = loadOnboarding();
 
   /**
    * FoldThroughの事前確認を無効にする世代番号。
@@ -740,6 +777,8 @@ export const useAppStore = create<AppState>((set, get) => {
       pendingFoldThrough: null,
       alignDraft: null,
       techniqueDraft: null,
+      paperActionTipVisible: false,
+      paperActionTipExpanded: false,
       faces: view.faces,
       hinges: hingeEdgeIds(view.doc, view.faces),
       warnings: view.warnings,
@@ -798,6 +837,7 @@ export const useAppStore = create<AppState>((set, get) => {
           foldThroughBusy: false,
           alignDraft: null,
           techniqueDraft: null,
+          operationStage: 0,
         });
       }
       if (r.value.doc.sequence.length > 0) {
@@ -828,6 +868,10 @@ export const useAppStore = create<AppState>((set, get) => {
 
   /** 今のドラッグで角度の履歴をもう積んだか(ドラッグ1回=履歴1件にする) */
   let pullPushed = false;
+  /** ガイド用: 今の「引く」ドラッグで角度が実際に1度以上変わったか。 */
+  let pullMovedForGuide = false;
+  /** ガイド用: 細かなpointer moveを足し上げても判定できるよう、つかんだ瞬間の角度を保つ。 */
+  let pullGuideStartAngle: number | null = null;
 
   /** 直前に履歴へ積んだ操作の目印と時刻(続けざまの操作を1件にまとめるため) */
   let lastAngleKey: string | null = null;
@@ -1038,6 +1082,8 @@ export const useAppStore = create<AppState>((set, get) => {
     lastAngleKey = null;
     lastAngleAt = 0;
     pullPushed = false;
+    pullMovedForGuide = false;
+    pullGuideStartAngle = null;
     clearAngleHistory();
   };
 
@@ -1132,6 +1178,12 @@ export const useAppStore = create<AppState>((set, get) => {
     if (next.playing) cancelFrame = scheduleFrame(tick);
   };
 
+  /** 初回案内の既読状態だけを端末へ覚える(作品の内容には含めない)。 */
+  const updateOnboarding = (patch: Partial<typeof onboarding>) => {
+    onboarding = { ...onboarding, ...patch };
+    saveOnboarding(onboarding);
+  };
+
   /** FoldThroughを作品へ適用する。事前提案の有無にかかわらず最後はこの経路を通る。 */
   const applyFoldThrough = async (
     operation: FoldThroughInput,
@@ -1144,6 +1196,8 @@ export const useAppStore = create<AppState>((set, get) => {
       finishFoldThroughBusy(busyToken);
       return;
     }
+    const beforeEpoch = s.docEpoch;
+    const beforeSequenceCount = s.doc.sequence.length;
     // 末尾へ足すなら最新表示、途中へ挟むなら挟んだ手順を表示する。
     set({
       currentStep:
@@ -1160,6 +1214,14 @@ export const useAppStore = create<AppState>((set, get) => {
       // 最新でない失敗は共通処理が画面へ出さない。その場合も確認中のままにしない。
       // tokenを照合し、後から始まった別の確認のbusyは消さない。
       finishFoldThroughBusy(busyToken);
+    }
+    const completed = get();
+    if (
+      completed.errorMessage === null &&
+      completed.docEpoch === beforeEpoch &&
+      (completed.doc?.sequence.length ?? 0) > beforeSequenceCount
+    ) {
+      completed.completeGuideAction("fold");
     }
   };
 
@@ -1293,6 +1355,12 @@ export const useAppStore = create<AppState>((set, get) => {
     mirrorDraw: prefs.mirrorDraw,
     pullMirror: prefs.pullMirror,
     wheelBehavior: prefs.wheelBehavior,
+    viewerHintExpanded: true,
+    guideOpen: !onboarding.guideComplete,
+    guideStep: 0,
+    operationStage: 0,
+    paperActionTipVisible: false,
+    paperActionTipExpanded: false,
 
     newDocument: (paper) => {
       invalidateFoldThrough();
@@ -1399,6 +1467,52 @@ export const useAppStore = create<AppState>((set, get) => {
       set({ wheelBehavior: behavior });
       persistPrefs();
     },
+
+    toggleViewerHint: () =>
+      set((s) => ({ viewerHintExpanded: !s.viewerHintExpanded })),
+
+    openGuide: () => set({ guideOpen: true, guideStep: 0 }),
+
+    dismissGuide: () => {
+      set({ guideOpen: false });
+      updateOnboarding({ guideComplete: true });
+    },
+
+    completeGuideAction: (action) => {
+      const s = get();
+      if (!s.guideOpen || s.guideStep >= 4 || GUIDE_ACTIONS[s.guideStep] !== action) {
+        return;
+      }
+      const next = (s.guideStep + 1) as GuideStep;
+      set({ guideStep: next });
+      // 最後の操作を実際にできた時点で既読にする。完了カードは閉じるまで残す。
+      if (next === 4) updateOnboarding({ guideComplete: true });
+    },
+
+    setOperationStage: (stage) => {
+      const next = Math.max(0, Math.floor(stage));
+      if (get().operationStage !== next) set({ operationStage: next });
+    },
+
+    showPaperActionTip: () => {
+      const firstTime = !onboarding.paperActionTipSeen;
+      set((s) => ({
+        paperActionTipVisible: true,
+        // 初回だけ詳しく開く。その後の紙選択では小さなヒントから始める。
+        paperActionTipExpanded: s.paperActionTipVisible
+          ? s.paperActionTipExpanded
+          : firstTime,
+      }));
+      if (firstTime) updateOnboarding({ paperActionTipSeen: true });
+    },
+
+    collapsePaperActionTip: () => set({ paperActionTipExpanded: false }),
+
+    expandPaperActionTip: () =>
+      set({ paperActionTipVisible: true, paperActionTipExpanded: true }),
+
+    hidePaperActionTip: () =>
+      set({ paperActionTipVisible: false, paperActionTipExpanded: false }),
 
     // 「元に戻す」は“直前にした操作”を戻す。折り角度の変更は作品データでは
     // ないので作品側の履歴(edit_undo)に載らない。そこで角度の履歴を先に見て、
@@ -1523,6 +1637,9 @@ export const useAppStore = create<AppState>((set, get) => {
           techniqueDraft: null,
           pullHinge: null,
           pullMirrorHinge: null,
+          operationStage: 0,
+          paperActionTipVisible: false,
+          paperActionTipExpanded: false,
         });
       }
     },
@@ -1553,12 +1670,24 @@ export const useAppStore = create<AppState>((set, get) => {
           upTo: foldInsertAt(s),
         },
         errorMessage: null,
+        operationStage: 1,
       });
     },
 
     updateFoldDraft: (patch) => {
       const draft = get().foldDraft;
-      if (draft) set({ foldDraft: { ...draft, ...patch } });
+      if (draft) {
+        set({
+          foldDraft: { ...draft, ...patch },
+          // 向きや動かす側へ触れたら、最後の「折るで確定」を強調する。
+          operationStage:
+            patch.direction !== undefined ||
+            patch.movingSide !== undefined ||
+            patch.target !== undefined
+              ? 2
+              : get().operationStage,
+        });
+      }
     },
 
     cancelFoldDraft: () => {
@@ -1905,6 +2034,9 @@ export const useAppStore = create<AppState>((set, get) => {
       if (!get().doc) return;
       invalidateFoldThrough();
       pullPushed = false; // このドラッグではまだ履歴を積んでいない
+      pullMovedForGuide = false;
+      pullGuideStartAngle =
+        angles.get(hinge) ?? get().drivers.get(hinge) ?? get().poseAngles.get(hinge) ?? 0;
       // 左右同時を切っている間は相手を覚えない(切替が次のドラッグから必ず効く)
       set({
         pullHinge: hinge,
@@ -1934,6 +2066,9 @@ export const useAppStore = create<AppState>((set, get) => {
       // 左右対称の相手も同じ角度で動かす(鶴の両羽が一緒に開く)。
       // 2本まとめて1回の追従計算にするので、送る回数は片側だけのときと同じ
       const drivers = new Map(get().drivers);
+      if (pullGuideStartAngle !== null && Math.abs(deg - pullGuideStartAngle) >= 1) {
+        pullMovedForGuide = true;
+      }
       drivers.set(pullHinge, deg);
       if (pullMirrorHinge !== null) drivers.set(pullMirrorHinge, deg);
       set({ drivers });
@@ -1944,17 +2079,24 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     endPull: () => {
-      if (get().pullHinge !== null) set({ pullHinge: null, pullMirrorHinge: null });
+      if (get().pullHinge !== null) {
+        set({ pullHinge: null, pullMirrorHinge: null });
+        if (pullMovedForGuide) get().completeGuideAction("pull");
+      }
+      pullMovedForGuide = false;
+      pullGuideStartAngle = null;
     },
 
     setDriverAngle: (hinge, deg) => {
       invalidateFoldThrough();
+      const before = get().drivers.get(hinge) ?? get().poseAngles.get(hinge) ?? 0;
       // スライダーを動かしている間の細かい変更は1件にまとめる
       pushAngleUndo(`angle:${hinge}`);
       // 画面の反応を優先し、指定はその場で反映してから計算を間引いて依頼する
       const drivers = new Map(get().drivers);
       drivers.set(hinge, deg);
       set({ drivers });
+      if (Math.abs(deg - before) >= 1) get().completeGuideAction("angle");
       // いま動かしている1本だけを固定する。以前に指定した折り線まで固定すると
       // 内部頂点まわりの拘束と両立せず、面が離れて紙が切れて見える
       activeHinges = [hinge];
@@ -2169,6 +2311,7 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     setSoft: (patch) => {
+      const beforeSoft = softOf(get().display);
       const display = { ...get().display, ...patch };
       if (patch.soft_stiffness !== undefined) {
         display.soft_stiffness = clampUnit(patch.soft_stiffness, 0.5);
@@ -2179,6 +2322,14 @@ export const useAppStore = create<AppState>((set, get) => {
       const doc = get().doc;
       // つまみの位置はその場で映す(設計原則3b: 結果を見ながら調整できること)
       set(doc ? { display, doc: { ...doc, display } } : { display });
+      const afterSoft = softOf(display);
+      if (
+        afterSoft.enabled &&
+        afterSoft.pressure > 0 &&
+        (!beforeSoft.enabled || Math.abs(afterSoft.pressure - beforeSoft.pressure) >= 0.01)
+      ) {
+        get().completeGuideAction("inflate");
+      }
       // 切ったらすぐ従来の描き方へ戻す(次の計算を待たない)
       if (display.soft_enabled !== true) set({ softMesh: null, softWarnings: [] });
       softShape.schedule();

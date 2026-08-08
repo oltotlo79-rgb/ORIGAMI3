@@ -43,6 +43,8 @@ import { nearestAlignLine, nearestAlignPoint } from "../../lib/alignPick";
 import { planGrabFold, type GrabMode } from "./grabFold";
 import { pickFace, pickHinge, pickPaper, type HingeSegment } from "./hingePicker";
 import { deriveSelectedEdgeHighlights } from "./edgeHighlight";
+import { ViewerOperationHint } from "./ViewerOperationHint";
+import { PaperActionTip } from "./PaperActionTip";
 
 /** 畳み平面の線分列を強調表示用の線分へ(紙より少しだけ浮かせる) */
 function toHighlight(segments: [Vec2, Vec2][]): HingeSegment[] {
@@ -522,6 +524,124 @@ export function Viewer3D({ fitRef }: Props) {
     [],
   );
 
+  /**
+   * 指している対象に合わせてカーソルだけを直接変える。
+   * hoverは表示専用なのでZustandへ頻繁に書かず、CpEditorと同じくDOMへ反映する。
+   */
+  const updateHoverCursor = useCallback(
+    (canvas: HTMLCanvasElement, x: number, y: number, ctrlKey = false) => {
+      const s = useAppStore.getState();
+      const scene = sceneRef.current;
+      if (!scene?.content) {
+        canvas.style.cursor = "default";
+        return;
+      }
+      const rect = canvas.getBoundingClientRect();
+      if (s.activeTool === "pull") {
+        if (pullBlockedOf(s) !== null) {
+          canvas.style.cursor = "not-allowed";
+          return;
+        }
+        const hit = pickPaper(
+          scene.content.mesh,
+          scene.content.topology.triangleFaceIds,
+          scene.camera,
+          rect.width,
+          rect.height,
+          x,
+          y,
+        );
+        const plan =
+          hit &&
+          s.doc &&
+          planPull(
+            s.doc,
+            s.faces,
+            s.frame3d,
+            hit.face,
+            [hit.point.x, hit.point.y, hit.point.z],
+            [0, 0, 0],
+            s.pullMirror,
+          );
+        canvas.style.cursor = hit && plan ? "grab" : "default";
+        return;
+      }
+      if (s.activeTool === "fold") {
+        if (!canFoldNow(s) || s.foldThroughBusy || s.pendingFoldThrough) {
+          canvas.style.cursor = "not-allowed";
+          return;
+        }
+        if (s.alignDraft && s.doc) {
+          const p = screenToPlane(scene.camera, rect.width, rect.height, x, y);
+          if (!p) {
+            canvas.style.cursor = "default";
+            return;
+          }
+          const steps = ALIGN_STEPS[s.alignDraft.mode];
+          const at = s.alignDraft.picks.length % steps.length;
+          const radius = planeRadius(
+            scene.camera,
+            rect.width,
+            rect.height,
+            x,
+            y,
+            ALIGN_PICK_PX,
+            FOLD_SNAP_FALLBACK,
+          );
+          const layers = foldLayers(s.frame3d, s.doc, s.faces);
+          const hit =
+            steps[at] === "point"
+              ? nearestAlignPoint(layers, p, radius)
+              : nearestAlignLine(layers, p, radius);
+          canvas.style.cursor = hit ? "pointer" : "default";
+          return;
+        }
+        if (ctrlKey) {
+          canvas.style.cursor = "crosshair";
+          return;
+        }
+        const face = pickFace(
+          scene.content.mesh,
+          scene.content.topology.triangleFaceIds,
+          scene.camera,
+          rect.width,
+          rect.height,
+          x,
+          y,
+        );
+        canvas.style.cursor = face === null ? "default" : "grab";
+        return;
+      }
+      if (s.activeTool === "technique") {
+        canvas.style.cursor = canFoldNow(s) ? "crosshair" : "not-allowed";
+        return;
+      }
+      const edgeId = pickHinge(
+        scene.content.hingeSegments,
+        scene.camera,
+        rect.width,
+        rect.height,
+        x,
+        y,
+      );
+      if (edgeId !== null) {
+        canvas.style.cursor = "pointer";
+        return;
+      }
+      const paper = pickPaper(
+        scene.content.mesh,
+        scene.content.topology.triangleFaceIds,
+        scene.camera,
+        rect.width,
+        rect.height,
+        x,
+        y,
+      );
+      canvas.style.cursor = paper ? "pointer" : "default";
+    },
+    [],
+  );
+
   const handlePointerDown = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
       const rect = e.currentTarget.getBoundingClientRect();
@@ -561,6 +681,8 @@ export function Viewer3D({ fitRef }: Props) {
           );
         if (hit && plan) {
           e.currentTarget.setPointerCapture(e.pointerId);
+          e.currentTarget.style.cursor = "grabbing";
+          s.setOperationStage(1);
           pullRef.current = {
             plan,
             origin: hit.point,
@@ -590,21 +712,24 @@ export function Viewer3D({ fitRef }: Props) {
         canFoldNow(s) &&
         scene?.content
       ) {
-        const p = rawPoint(rect, x, y);
-        if (p) {
+        const face = pickFace(
+          scene.content.mesh,
+          scene.content.topology.triangleFaceIds,
+          scene.camera,
+          rect.width,
+          rect.height,
+          x,
+          y,
+        );
+        const p = face === null ? null : rawPoint(rect, x, y);
+        if (p && face !== null) {
           e.currentTarget.setPointerCapture(e.pointerId);
+          e.currentTarget.style.cursor = "grabbing";
+          s.setOperationStage(1);
           grabRef.current = {
             a: p,
             b: p,
-            face: pickFace(
-              scene.content.mesh,
-              scene.content.topology.triangleFaceIds,
-              scene.camera,
-              rect.width,
-              rect.height,
-              x,
-              y,
-            ),
+            face,
             mode: grabMode(e),
           };
           drawHighlight();
@@ -622,12 +747,15 @@ export function Viewer3D({ fitRef }: Props) {
         const p = planePoint(rect, x, y);
         if (p) {
           e.currentTarget.setPointerCapture(e.pointerId);
+          e.currentTarget.style.cursor = "crosshair";
+          s.setOperationStage(1);
           drawingRef.current = { a: p, b: p };
           drawHighlight();
         }
         return;
       }
       downPosRef.current = { x, y };
+      if (e.button === 0 || e.button === 2) e.currentTarget.style.cursor = "grabbing";
     },
     [planePoint, rawPoint, drawHighlight],
   );
@@ -648,6 +776,10 @@ export function Viewer3D({ fitRef }: Props) {
         ).unproject(scene.camera);
         const drag = moved.sub(pull.origin);
         const delta = pullDeltaDeg(pull.plan.velocity, [drag.x, drag.y, drag.z]);
+        if (Math.hypot(dx, dy) > CLICK_MOVE_PX) {
+          useAppStore.getState().setOperationStage(2);
+        }
+        e.currentTarget.style.cursor = "grabbing";
         useAppStore.getState().pullTo(pull.plan.baseDeg + delta);
         return;
       }
@@ -656,18 +788,30 @@ export function Viewer3D({ fitRef }: Props) {
         const p = rawPoint(rect, e.clientX - rect.left, e.clientY - rect.top);
         if (!p) return;
         grab.b = p;
+        useAppStore.getState().setOperationStage(2);
+        e.currentTarget.style.cursor = "grabbing";
         grab.mode = grabMode(e); // 途中で修飾キーを押しても下見に反映する
         drawHighlight();
         return;
       }
       const drawing = drawingRef.current;
-      if (!drawing) return;
+      if (!drawing) {
+        updateHoverCursor(
+          e.currentTarget,
+          e.clientX - rect.left,
+          e.clientY - rect.top,
+          e.ctrlKey,
+        );
+        return;
+      }
       const p = planePoint(rect, e.clientX - rect.left, e.clientY - rect.top);
       if (!p) return;
       drawing.b = p;
+      useAppStore.getState().setOperationStage(2);
+      e.currentTarget.style.cursor = "crosshair";
       drawHighlight();
     },
-    [planePoint, rawPoint, drawHighlight],
+    [planePoint, rawPoint, drawHighlight, updateHoverCursor],
   );
 
   /** クリック(視点操作でない)なら最寄りのヒンジを選ぶ。折り線を引いていたら確定する */
@@ -677,11 +821,19 @@ export function Viewer3D({ fitRef }: Props) {
         // 引いた形はそのまま残る(角度指定として保持される)。色付けだけ消す
         pullRef.current = null;
         useAppStore.getState().endPull();
+        useAppStore.getState().setOperationStage(2);
+        updateHoverCursor(
+          e.currentTarget,
+          e.clientX - e.currentTarget.getBoundingClientRect().left,
+          e.clientY - e.currentTarget.getBoundingClientRect().top,
+          e.ctrlKey,
+        );
         return;
       }
       const grab = grabRef.current;
       if (grab) {
         grabRef.current = null;
+        useAppStore.getState().setOperationStage(2);
         drawHighlight(); // 下見を消してから、実際に折る
         void useAppStore
           .getState()
@@ -713,6 +865,7 @@ export function Viewer3D({ fitRef }: Props) {
           }
         } else if (drawn) {
           s.beginFoldDraft([a, b], "3d");
+          s.setOperationStage(1);
         }
         drawHighlight();
         return;
@@ -763,8 +916,24 @@ export function Viewer3D({ fitRef }: Props) {
         edgeIds: edgeId !== null ? [edgeId] : [],
         vertexIds: [],
       });
+      if (st.activeTool === "select" && edgeId === null) {
+        const paper = pickPaper(
+          scene.content.mesh,
+          scene.content.topology.triangleFaceIds,
+          scene.camera,
+          rect.width,
+          rect.height,
+          x,
+          y,
+        );
+        if (paper) st.showPaperActionTip();
+        else st.hidePaperActionTip();
+      } else if (st.activeTool === "select") {
+        st.hidePaperActionTip();
+      }
+      updateHoverCursor(e.currentTarget, x, y, e.ctrlKey);
     },
-    [drawHighlight, rawPoint],
+    [drawHighlight, rawPoint, updateHoverCursor],
   );
 
   return (
@@ -802,20 +971,22 @@ export function Viewer3D({ fitRef }: Props) {
           grabRef.current = null;
           pullRef.current = null;
           useAppStore.getState().endPull();
+          useAppStore.getState().setOperationStage(0);
           drawHighlight();
+        }}
+        onPointerLeave={(e) => {
+          if (!pullRef.current && !grabRef.current && !drawingRef.current) {
+            e.currentTarget.style.cursor = "default";
+          }
         }}
         onContextMenu={(e) => e.preventDefault()}
       />
-      <div
-        className={
-          (foldMode && !foldReady) || (pullMode && pullBlocked !== null)
-            ? "viewer-hint blocked"
-            : "viewer-hint"
-        }
-        role="status"
-      >
-        {hint}
-      </div>
+      <ViewerOperationHint
+        hint={hint}
+        blocked={(foldMode && !foldReady) || (pullMode && pullBlocked !== null)}
+        aligning={alignDraft !== null}
+      />
+      <PaperActionTip />
       {/* 立体だけを最初の視点へ戻す小さなボタン(ツールレールは増やさない)。
           上端は警告バッジが使うので、区画の右下の隅に置く */}
       <button

@@ -4,7 +4,7 @@
 // 三角形分割や当たり判定などの計算は本物を使う。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as THREE from "three";
 import type { Document, DocumentView, Face } from "../../lib/types";
 
@@ -63,6 +63,8 @@ vi.mock("../../ipc/client", () => ({
 import * as ipc from "../../ipc/client";
 import { useAppStore } from "../../store/appStore";
 import { Viewer3D } from "./Viewer3D";
+
+const initialStoreState = useAppStore.getState();
 
 const DOC: Document = {
   schema_version: 1,
@@ -350,6 +352,73 @@ describe("Viewer3D(紙をつかんで引く)", () => {
     fireEvent.pointerUp(canvas, { button: 0, pointerId: 1, clientX: sx, clientY: sy - 60 });
     expect(useAppStore.getState().pullHinge).toBeNull(); // 色付けは消える
     expect(useAppStore.getState().drivers.has(5)).toBe(true); // 形は残る
+  });
+});
+
+describe("Viewer3D(指している場所のカーソル)", () => {
+  beforeEach(() => {
+    stubLayout();
+    useAppStore.setState({
+      doc: EDGE_DOC,
+      faces: EDGE_FACES,
+      hinges: new Set([5]),
+      frame3d: null,
+      activeTool: "select",
+      currentStep: null,
+      playT: 1,
+      playing: false,
+      drivers: new Map(),
+      errorMessage: null,
+      foldDraft: null,
+      pendingFoldThrough: null,
+      foldThroughBusy: false,
+      alignDraft: null,
+      techniqueDraft: null,
+      selection: { edgeIds: [], vertexIds: [] },
+      paperActionTipVisible: false,
+      paperActionTipExpanded: false,
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    useAppStore.setState(initialStoreState, true);
+  });
+
+  it("選べる場所はpointer、つかめる紙面はgrab、操作不可ならnot-allowedになる", async () => {
+    const canvas = renderViewer();
+    await waitFor(() => expect(held.scene.content).not.toBeNull());
+
+    // 選択モードでは、折り線も紙面もクリックできる対象としてpointerになる。
+    fireEvent.pointerMove(canvas, { clientX: 200, clientY: 200 });
+    expect(canvas.style.cursor).toBe("pointer");
+
+    fireEvent.pointerMove(canvas, { clientX: 150, clientY: 200 });
+    expect(canvas.style.cursor).toBe("pointer");
+
+    // 折るモードの紙面は実際につかめるのでgrabになる。
+    act(() => useAppStore.setState({ activeTool: "fold", playing: false }));
+    fireEvent.pointerMove(canvas, { clientX: 150, clientY: 200 });
+    expect(canvas.style.cursor).toBe("grab");
+
+    act(() => useAppStore.setState({ activeTool: "fold", playing: true }));
+    fireEvent.pointerMove(canvas, { clientX: 150, clientY: 200 });
+    expect(canvas.style.cursor).toBe("not-allowed");
+  });
+
+  it("合わせて折る途中は、いま選べる点の近くだけpointerになる", async () => {
+    act(() => {
+      useAppStore.setState({ activeTool: "fold" });
+      useAppStore.getState().beginAlign("pointPoint");
+    });
+    const canvas = renderViewer();
+    await waitFor(() => expect(held.scene.content).not.toBeNull());
+
+    fireEvent.pointerMove(canvas, { clientX: 200, clientY: 200 });
+    expect(canvas.style.cursor).toBe("default");
+
+    fireEvent.pointerMove(canvas, { clientX: 79, clientY: 321 });
+    expect(canvas.style.cursor).toBe("pointer");
   });
 });
 

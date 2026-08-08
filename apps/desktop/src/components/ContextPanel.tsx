@@ -28,6 +28,7 @@ import {
 import { isTwistPolygonReady } from "../lib/twistPolygon";
 import type { EdgeKind, FoldStep, TechniqueKind } from "../lib/types";
 import { PaperAppearance } from "./PaperAppearance";
+import { OperationSteps } from "./OperationSteps";
 
 const KIND_LABEL: Record<EdgeKind, string> = {
   Border: "輪郭",
@@ -783,6 +784,39 @@ function PullContent() {
             : "つかんだ側の折り線だけが動きます(片方の羽だけ形を変えたいときはこちら)"}
         </span>
       </div>
+      <PaperActionEntrances showPull={false} />
+    </div>
+  );
+}
+
+/**
+ * 紙の形を直接変える2つの入口。ツール名だけでは結果を想像しにくいので、
+ * 「何が起きるか」を動詞で並べる。膨らみは設定を開くだけで、強さは利用者が
+ * 下のつまみを動かして決める(勝手に作品の形を変えない)。
+ */
+function PaperActionEntrances({ showPull = true }: { showPull?: boolean }) {
+  const setTool = useAppStore((s) => s.setTool);
+  const setSelection = useAppStore((s) => s.setSelection);
+  const setSoft = useAppStore((s) => s.setSoft);
+
+  const showInflate = () => {
+    setTool("select");
+    setSelection({ edgeIds: [], vertexIds: [] });
+    setSoft({ soft_enabled: true });
+  };
+
+  return (
+    <div className="paper-action-entrances" aria-label="紙の形を変える">
+      <span className="paper-action-entrances-title">紙の形を変える</span>
+      {showPull && (
+        <button type="button" onClick={() => setTool("pull")}>
+          ↔ 紙を引いて動かす
+        </button>
+      )}
+      <button type="button" onClick={showInflate}>
+        ◯ 紙をふくらませる
+      </button>
+      <span className="hint">3Dを見ながら、その場で形を調整できます</span>
     </div>
   );
 }
@@ -932,6 +966,7 @@ function SelectionContent() {
 
   return (
     <>
+      <PaperActionEntrances />
       <p className="hint">
         左のツールを選んで操作します。山折り・谷折り・補助線: 2回クリックで線を引く(Escで中止)/
         選択: クリックまたはドラッグで選ぶ、点はドラッグで動かせる / Deleteキー:
@@ -966,6 +1001,7 @@ export function ContextPanel() {
   return (
     <footer className="context-panel">
       <div className="context-selection">
+        <OperationSteps />
         {/* 手順を選んでいるときはその設定を優先する。折り線は「今見えている形」の
             上に引くものなので、手順を選んだ時点でストアが捨てている(ここは念のため) */}
         {pendingFoldThrough ? (

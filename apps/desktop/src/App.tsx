@@ -18,6 +18,7 @@ import { ExportDialog } from "./components/dialogs/ExportDialog";
 import { HistoryButtons } from "./components/HistoryButtons";
 import { HistoryShortcuts } from "./components/HistoryShortcuts";
 import { ToolbarIcon } from "./components/ToolIcons";
+import { FirstRunGuide } from "./components/FirstRunGuide";
 import { uniqueWarnings } from "./lib/techniques";
 import "./App.css";
 
@@ -32,6 +33,7 @@ function App() {
   const openProposal = useAppStore((s) => s.openProposal);
   const openExport = useAppStore((s) => s.openExport);
   const openNewDialog = useAppStore((s) => s.openNewDialog);
+  const openGuide = useAppStore((s) => s.openGuide);
   // 中央の2区画の広さの割合(UI-004)。境目のドラッグで変わる
   const splitRatio = useAppStore((s) => s.splitRatio);
   const warningCount = useAppStore(
@@ -125,6 +127,17 @@ function App() {
           <ToolbarIcon name="export" />
           書き出し
         </button>
+        <span className="toolbar-separator" />
+        <button
+          type="button"
+          className="toolbar-help"
+          title="折る・角度・引く・ふくらますの基本操作ガイドを開きます"
+          aria-label="基本操作ガイドを開く"
+          onClick={openGuide}
+        >
+          <ToolbarIcon name="help" />
+          ヘルプ
+        </button>
       </header>
       <div
         className="main-row"
@@ -178,6 +191,7 @@ function App() {
       <NewDocumentDialog />
       <ProposalWizard />
       <ExportDialog />
+      <FirstRunGuide />
     </div>
   );
 }

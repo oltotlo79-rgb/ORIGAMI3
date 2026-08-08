@@ -756,22 +756,167 @@ input[type="radio"] {
   filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.2));
 }
 
-/* 3D区画の上端に常に出す操作ヒント(UI-009)。
-   区画は増やさず、立体表示に重ねて置く。クリックは下の画面へ通す */
-.viewer-hint {
+/* 3D操作の吹き出し(UI-009/UI-012)。現在モードとマウス割り当てをカードで示す。
+   区画は増やさず立体表示へ重ね、詳しい割り当てだけを折りたためる。 */
+.viewer-operation-hint {
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  padding: var(--sp-3) 98px var(--sp-3) var(--sp-5);
-  background: var(--color-overlay);
-  color: #fff;
+  top: var(--sp-5);
+  left: var(--sp-5);
+  width: min(430px, calc(100% - 112px));
+  padding: var(--sp-4);
+  border: 3px solid rgba(255, 255, 255, 0.9);
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--color-text);
   font-size: var(--fs-sm);
-  font-weight: var(--fw-medium);
   line-height: var(--lh-tight);
-  pointer-events: none;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.18);
-  backdrop-filter: blur(6px);
+  box-shadow: 0 5px 0 rgba(84, 36, 163, 0.2), var(--shadow-panel);
+  backdrop-filter: blur(10px);
+  z-index: 4;
+  transition:
+    width var(--t-base),
+    background var(--t-fast),
+    transform var(--t-fast);
+}
+
+.viewer-operation-hint::after {
+  content: "";
+  position: absolute;
+  left: var(--sp-8);
+  bottom: -13px;
+  width: 20px;
+  height: 20px;
+  border-right: 3px solid rgba(255, 255, 255, 0.9);
+  border-bottom: 3px solid rgba(255, 255, 255, 0.9);
+  background: inherit;
+  transform: rotate(45deg);
+}
+
+.viewer-operation-hint.collapsed {
+  width: min(330px, calc(100% - 112px));
+}
+
+.viewer-operation-hint.blocked {
+  background: rgba(255, 245, 194, 0.96);
+  border-color: #fff;
+}
+
+.viewer-operation-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.viewer-mode-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border-radius: 50%;
+  background: linear-gradient(145deg, var(--color-secondary-soft), var(--color-accent-soft));
+  color: var(--color-secondary);
+}
+
+.viewer-mode-icon .tool-icon {
+  width: 24px;
+  height: 24px;
+}
+
+.viewer-mode-copy {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.viewer-mode-copy small,
+.viewer-mouse-assignment small {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.viewer-mode-copy strong {
+  color: var(--color-secondary-strong);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-black);
+}
+
+.viewer-hint-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  padding: 0;
+  border: 2px solid var(--color-secondary-soft);
+  border-radius: 50%;
+  background: #fff;
+  color: var(--color-secondary-strong);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-black);
+  cursor: pointer;
+  box-shadow: 0 2px 0 rgba(84, 36, 163, 0.16);
+}
+
+.viewer-current-action {
+  margin: var(--sp-3) 0 0;
+  color: var(--color-text);
+  font-weight: var(--fw-bold);
+}
+
+.viewer-operation-hint.collapsed .viewer-current-action {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.viewer-mouse-assignments {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+  padding-top: var(--sp-3);
+  border-top: 2px dashed var(--color-secondary-soft);
+}
+
+.viewer-mouse-assignment {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-secondary-soft);
+}
+
+.viewer-mouse-assignment > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.viewer-mouse-assignment strong {
+  overflow: hidden;
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mouse-glyph {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  fill: #fff;
+  stroke: var(--color-secondary-strong);
+  stroke-width: 1.7;
+}
+
+.mouse-glyph-active {
+  fill: var(--color-pop-yellow);
+  stroke: var(--color-secondary-strong);
 }
 
 /* 3D区画右下の「視点を戻す」。常設区画・ツールレールを増やさずに置く小さなボタン */
@@ -807,11 +952,6 @@ input[type="radio"] {
   transform: translateY(2px);
 }
 
-/* 折れない状態(理由つき)は色を変えて気付けるようにする */
-.viewer-hint.blocked {
-  background: rgba(122, 84, 0, 0.9);
-}
-
 /* 下部コンテキストパネル(160px)。高さは固定なので、中身が多いときは
    左右それぞれの列の中でスクロールさせる(パネルの外へはみ出させない) */
 .context-panel {
@@ -842,6 +982,413 @@ input[type="radio"] {
   border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.88);
   box-shadow: var(--shadow-1);
+}
+
+/* 選択中ツールの手順。パネルをスクロールしても先頭で目に入る短い3段階表示。 */
+.operation-steps {
+  margin: calc(-1 * var(--sp-3)) calc(-1 * var(--sp-5)) var(--sp-3);
+  padding: var(--sp-3) var(--sp-5);
+  border-bottom: 2px solid rgba(0, 122, 112, 0.18);
+  background: linear-gradient(100deg, var(--color-accent-soft), #fff);
+}
+
+.operation-steps-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-2);
+}
+
+.operation-steps-heading > span {
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: var(--radius-pill);
+  background: var(--color-secondary);
+  color: #fff;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+}
+
+.operation-steps-heading strong {
+  color: var(--color-accent-strong);
+}
+
+.operation-steps ol {
+  display: flex;
+  align-items: stretch;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.operation-steps li {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border: 2px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+}
+
+.operation-steps li.current {
+  border-color: var(--color-accent);
+  background: #fff;
+  color: var(--color-text);
+  font-weight: var(--fw-bold);
+  box-shadow: var(--shadow-1);
+}
+
+.operation-steps li.completed {
+  color: var(--color-accent-strong);
+  background: rgba(255, 255, 255, 0.54);
+}
+
+.operation-step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--color-surface-sunken);
+  color: var(--color-text-muted);
+  font-weight: var(--fw-black);
+}
+
+.operation-steps li.current .operation-step-number {
+  background: var(--color-pop-yellow);
+  color: var(--color-text);
+}
+
+.operation-steps li.completed .operation-step-number {
+  background: var(--color-accent);
+  color: #fff;
+}
+
+.paper-action-entrances {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin: var(--sp-3) 0;
+  padding: var(--sp-3);
+  border: 2px dashed rgba(112, 64, 201, 0.28);
+  border-radius: var(--radius-md);
+  background: var(--color-secondary-soft);
+}
+
+.paper-action-entrances-title {
+  color: var(--color-secondary-strong);
+  font-weight: var(--fw-bold);
+}
+
+.paper-action-entrances button,
+.paper-action-tip button {
+  min-height: 30px;
+  padding: var(--sp-2) var(--sp-4);
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: #fff;
+  color: var(--color-text);
+  font-weight: var(--fw-bold);
+  cursor: pointer;
+  box-shadow: var(--shadow-button);
+}
+
+.soft-controls {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: var(--sp-3) var(--sp-5);
+  padding: var(--sp-3) var(--sp-4);
+  border: 2px solid rgba(0, 122, 112, 0.22);
+  border-radius: var(--radius-md);
+  background: var(--color-accent-soft);
+}
+
+.soft-controls-heading {
+  display: flex;
+  min-width: 170px;
+  flex-direction: column;
+}
+
+.soft-controls-heading strong {
+  color: var(--color-accent-strong);
+}
+
+.soft-controls-heading span {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+/* 紙をクリックした初回に出す操作の吹き出し。畳むと同じ場所の小さな入口になる。 */
+.paper-action-tip {
+  position: absolute;
+  left: var(--sp-5);
+  bottom: var(--sp-5);
+  z-index: 5;
+}
+
+.paper-action-tip.expanded {
+  width: min(360px, calc(100% - 104px));
+  padding: var(--sp-5);
+  border: 3px solid #fff;
+  border-radius: var(--radius-lg);
+  background: linear-gradient(145deg, var(--color-pop-yellow-soft), #fff);
+  box-shadow: 0 5px 0 rgba(150, 80, 0, 0.24), var(--shadow-panel);
+}
+
+.paper-action-tip.expanded > strong {
+  color: var(--color-secondary-strong);
+  font-size: var(--fs-lg);
+}
+
+.paper-action-tip.expanded p {
+  margin: var(--sp-2) var(--sp-7) var(--sp-3) 0;
+  color: var(--color-text-muted);
+  line-height: var(--lh-normal);
+}
+
+.paper-action-tip.compact {
+  min-height: 32px;
+  padding: var(--sp-2) var(--sp-5);
+  border: 2px solid var(--color-pop-yellow);
+  border-radius: var(--radius-pill);
+  border-color: var(--color-pop-yellow);
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--color-text);
+  font-family: inherit;
+  font-weight: var(--fw-bold);
+  cursor: pointer;
+  box-shadow: var(--shadow-button);
+}
+
+.paper-action-tip-close {
+  position: absolute;
+  top: var(--sp-3);
+  right: var(--sp-3);
+  width: 28px;
+  min-height: 28px !important;
+  padding: 0 !important;
+  border-radius: 50% !important;
+}
+
+.paper-action-tip-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+/* UI-012 初回ガイド。全画面を塞がず、左上の隅に置くカードだけがクリックを受ける。 */
+.first-run-guide {
+  position: fixed;
+  top: 68px;
+  left: 80px;
+  width: min(340px, calc(100vw - 32px));
+  padding: var(--sp-6);
+  border: 3px solid #fff;
+  border-radius: var(--radius-xl);
+  background: linear-gradient(155deg, #fff 0%, #fff 60%, var(--color-secondary-soft) 100%);
+  box-shadow: 0 7px 0 rgba(84, 36, 163, 0.24), var(--shadow-dialog);
+  z-index: 30;
+  animation: guide-pop 260ms cubic-bezier(0.2, 1.35, 0.4, 1) both;
+}
+
+.first-run-guide::before {
+  content: "";
+  position: absolute;
+  top: -8px;
+  left: 52px;
+  width: 22px;
+  height: 22px;
+  border-top: 3px solid #fff;
+  border-left: 3px solid #fff;
+  background: #fff;
+  transform: rotate(45deg);
+}
+
+.first-run-guide-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-right: var(--sp-8);
+  color: var(--color-secondary-strong);
+}
+
+.first-run-guide-header > span {
+  font-weight: var(--fw-black);
+  letter-spacing: 0.06em;
+}
+
+.first-run-guide-header > strong {
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: var(--radius-pill);
+  background: var(--color-pop-yellow);
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.first-run-guide-progress {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: var(--sp-4) 0 var(--sp-5);
+  padding: 0;
+  list-style: none;
+}
+
+.first-run-guide-progress li {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--color-border);
+  border-radius: 50%;
+  background: var(--color-surface-sunken);
+  color: var(--color-text-muted);
+  font-weight: var(--fw-black);
+}
+
+.first-run-guide-progress li + li::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: calc(100% + 2px);
+  width: 55px;
+  height: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--color-border);
+  transform: translateY(-50%);
+}
+
+.first-run-guide-progress li.current {
+  border-color: var(--color-secondary);
+  background: var(--color-pop-yellow);
+  color: var(--color-text);
+  box-shadow: 0 0 0 4px var(--color-secondary-soft);
+}
+
+.first-run-guide-progress li.completed {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: #fff;
+}
+
+.first-run-guide-try {
+  display: inline-block;
+  padding: var(--sp-1) var(--sp-4);
+  border-radius: var(--radius-pill);
+  background: var(--color-pop-coral);
+  color: #fff;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-black);
+  transform: rotate(-2deg);
+}
+
+.first-run-guide h2 {
+  margin: var(--sp-3) 0;
+  color: var(--color-secondary-strong);
+  font-size: var(--fs-xl);
+  line-height: var(--lh-tight);
+}
+
+.first-run-guide p {
+  margin: var(--sp-3) 0;
+  line-height: var(--lh-body);
+}
+
+.first-run-guide-note {
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius-md);
+  background: var(--color-pop-yellow-soft);
+  color: var(--color-warn);
+  font-size: var(--fs-sm);
+}
+
+.first-run-guide button {
+  min-height: 34px;
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font-family: inherit;
+  font-weight: var(--fw-bold);
+  cursor: pointer;
+}
+
+.first-run-guide-close {
+  position: absolute;
+  top: var(--sp-4);
+  right: var(--sp-4);
+  width: 32px;
+  padding: 0;
+  border-radius: 50% !important;
+  background: #fff;
+  color: var(--color-text-muted);
+  box-shadow: 0 2px 0 rgba(39, 33, 61, 0.14);
+}
+
+.first-run-guide-prepare,
+.first-run-guide-done {
+  width: 100%;
+  margin-top: var(--sp-3);
+  padding: var(--sp-3) var(--sp-5);
+  border-color: var(--color-accent-strong) !important;
+  background: linear-gradient(145deg, var(--color-accent), var(--color-accent-strong));
+  color: #fff;
+  box-shadow: 0 4px 0 #004d47, 0 8px 16px rgba(0, 94, 86, 0.2);
+}
+
+.first-run-guide-skip {
+  display: block;
+  margin: var(--sp-4) auto var(--sp-2);
+  padding: var(--sp-2) var(--sp-5);
+  border-color: transparent !important;
+  background: transparent;
+  color: var(--color-text-muted);
+  text-decoration: underline;
+  box-shadow: none;
+}
+
+.first-run-guide-auto {
+  display: block;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.first-run-guide.complete {
+  text-align: center;
+}
+
+.first-run-guide-celebration {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  margin-bottom: var(--sp-3);
+  border-radius: 50%;
+  background: linear-gradient(145deg, var(--color-accent), var(--color-accent-strong));
+  color: #fff;
+  font-size: 34px;
+  font-weight: var(--fw-black);
+  box-shadow: 0 6px 0 #004d47, var(--shadow-2);
+}
+
+@keyframes guide-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 /* 警告・エラーの置き場。左の操作の並びと混ざらないよう区切って少し沈める */

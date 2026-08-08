@@ -8,7 +8,8 @@ export type ToolbarIconName =
   | "undo"
   | "redo"
   | "proposal"
-  | "export";
+  | "export"
+  | "help";
 
 interface ToolIconProps {
   tool: ToolIconName;
@@ -298,6 +299,14 @@ export function ToolbarIcon({ name }: ToolbarIconProps) {
           <rect x="3" y="5" width="13" height="14" rx="2" fill="currentColor" fillOpacity=".1" />
           <path d="m5.5 16 3.5-4 2.5 3 2-2 2.5 3M17 8h4m-2-2 2 2-2 2" />
           <circle cx="7.5" cy="9" r="1.2" fill="currentColor" stroke="none" />
+        </svg>
+      );
+    case "help":
+      return (
+        <svg className="toolbar-icon" {...svgProps}>
+          <circle cx="12" cy="12" r="9" fill="var(--color-pop-yellow-soft)" />
+          <path d="M9.7 9a2.5 2.5 0 0 1 4.8 1c0 2-2.5 2-2.5 4" />
+          <circle cx="12" cy="17.5" r="1" fill="currentColor" stroke="none" />
         </svg>
       );
   }

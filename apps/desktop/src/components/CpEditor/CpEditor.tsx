@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { Vec2 } from "../../lib/types";
 import { useAppStore } from "../../store/appStore";
-import { clipToPaper, constructHint } from "../../lib/construct";
+import { clipToPaper, CONSTRUCT_STEPS, constructHint } from "../../lib/construct";
 import {
   curveHint,
   firstCrossing,
@@ -346,6 +346,16 @@ export function CpEditor({ fitRef }: Props) {
       className="cp-canvas"
       onPointerDown={(e) => {
         e.preventDefault();
+        const s = useAppStore.getState();
+        if (
+          (s.activeTool === "mountain" ||
+            s.activeTool === "valley" ||
+            s.activeTool === "aux" ||
+            s.activeTool === "construct") &&
+          s.operationStage === 2
+        ) {
+          s.setOperationStage(0);
+        }
         // ポインタ捕捉: canvas外へ出てもmove/upが届き、ドラッグ状態が残留しない
         e.currentTarget.setPointerCapture(e.pointerId);
         withCtx((ctx) => onMouseDown(ctx, screenPos(e), e.button, e.shiftKey));
@@ -353,7 +363,26 @@ export function CpEditor({ fitRef }: Props) {
       onPointerMove={(e) =>
         withCtx((ctx) => onMouseMove(ctx, screenPos(e), e.shiftKey))
       }
-      onPointerUp={(e) => withCtx((ctx) => onMouseUp(ctx, screenPos(e), e.button))}
+      onPointerUp={(e) => {
+        const hadStart = stateRef.current.pendingStart !== null;
+        const constructBefore = constructDone(stateRef.current);
+        withCtx((ctx) => onMouseUp(ctx, screenPos(e), e.button));
+        const s = useAppStore.getState();
+        if (
+          s.activeTool === "mountain" ||
+          s.activeTool === "valley" ||
+          s.activeTool === "aux"
+        ) {
+          const hasStart = stateRef.current.pendingStart !== null;
+          if (!hadStart && hasStart) s.setOperationStage(1);
+          else if (hadStart && !hasStart) s.setOperationStage(2);
+        } else if (s.activeTool === "construct" && e.button === 0) {
+          const constructAfter = constructDone(stateRef.current);
+          const required = CONSTRUCT_STEPS[s.construct.kind].length;
+          if (constructAfter > 0) s.setOperationStage(1);
+          else if (constructBefore > 0 || required === 1) s.setOperationStage(2);
+        }
+      }}
       onPointerLeave={() => {
         // 捕捉中はleaveが飛ばないため、ここに来るのはドラッグしていない時だけ
         stateRef.current.hoverSnap = null;

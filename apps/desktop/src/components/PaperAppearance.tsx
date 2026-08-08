@@ -35,6 +35,61 @@ export function PaperAppearance() {
 
   return (
     <div className="paper-appearance">
+      {/* 「膨らます」への入口は、色や方眼より先に見える位置へ置く。
+          入れると折り目以外も丸く曲がり、つまみの結果はその場で3Dへ映る。 */}
+      <section className="soft-controls" aria-label="紙をふくらませる設定">
+        <div className="soft-controls-heading">
+          <strong>紙をふくらませる</strong>
+          <span>袋になったところへ空気を入れるように丸みをつけます</span>
+        </div>
+        <label>
+          <input
+            type="checkbox"
+            aria-label="紙のたわみを表現する"
+            checked={soft.enabled}
+            onChange={(e) => setSoft({ soft_enabled: e.target.checked })}
+          />
+          丸みをつける
+        </label>
+        {soft.enabled && (
+          <>
+            <label>
+              紙の硬さ
+              <input
+                type="range"
+                aria-label="紙の硬さ"
+                min={0}
+                max={1}
+                step={0.05}
+                value={soft.stiffness}
+                onChange={(e) => setSoft({ soft_stiffness: Number(e.target.value) })}
+              />
+            </label>
+            <label>
+              膨らみの強さ
+              <input
+                type="range"
+                aria-label="膨らみの強さ"
+                min={0}
+                max={1}
+                step={0.05}
+                value={soft.pressure}
+                onChange={(e) => setSoft({ soft_pressure: Number(e.target.value) })}
+              />
+            </label>
+          </>
+        )}
+        <span className="hint">
+          {soft.enabled
+            ? "面を細かく分けて曲げ、紙の丸みを見せています。硬くすると面が平らに近づき、膨らませると袋になっているところに空気が入ります(動かすとその場で3Dに映ります)"
+            : "折り目以外のところでも紙が丸く曲がった形を見せます(見た目だけの表現で、折り手順や折り図は変わりません)"}
+        </span>
+        {softWarnings.map((w) => (
+          <span className="hint" key={w}>
+            {w}
+          </span>
+        ))}
+      </section>
       <label>
         ホイールの動作
         <select
@@ -102,55 +157,6 @@ export function PaperAppearance() {
       <span className="hint">
         折っている途中で紙どうしが突き抜けにくいよう補正します(完全には防げません)
       </span>
-      {/* 紙のたわみ(SIM-012 / SIM-013)。既定はオフで、入れると折り目以外の
-          ところでも紙が丸く曲がった形になる。膨らみは動かすとすぐ3Dに映る */}
-      <label>
-        <input
-          type="checkbox"
-          aria-label="紙のたわみを表現する"
-          checked={soft.enabled}
-          onChange={(e) => setSoft({ soft_enabled: e.target.checked })}
-        />
-        紙のたわみを表現する
-      </label>
-      {soft.enabled && (
-        <>
-          <label>
-            紙の硬さ
-            <input
-              type="range"
-              aria-label="紙の硬さ"
-              min={0}
-              max={1}
-              step={0.05}
-              value={soft.stiffness}
-              onChange={(e) => setSoft({ soft_stiffness: Number(e.target.value) })}
-            />
-          </label>
-          <label>
-            膨らみの強さ
-            <input
-              type="range"
-              aria-label="膨らみの強さ"
-              min={0}
-              max={1}
-              step={0.05}
-              value={soft.pressure}
-              onChange={(e) => setSoft({ soft_pressure: Number(e.target.value) })}
-            />
-          </label>
-        </>
-      )}
-      <span className="hint">
-        {soft.enabled
-          ? "面を細かく分けて曲げ、紙の丸みを見せています。硬くすると面が平らに近づき、膨らませると袋になっているところに空気が入ります(動かすとその場で3Dに映ります)"
-          : "折り目以外のところでも紙が丸く曲がった形を見せます(見た目だけの表現で、折り手順や折り図は変わりません)"}
-      </span>
-      {softWarnings.map((w) => (
-        <span className="hint" key={w}>
-          {w}
-        </span>
-      ))}
       {/* 左右対称に描く(CPE-010)。作品は左右対称のものが多いので、片側を
           描くと反対側にも同じ線が引かれ、作業が半分で済む */}
       <label>
