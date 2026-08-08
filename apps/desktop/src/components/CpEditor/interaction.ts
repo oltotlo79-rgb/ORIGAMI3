@@ -11,6 +11,10 @@ import { screenToWorld, type ViewTransform } from "./renderer";
 import { paperExtent, snap, snapForMove, type SnapResult } from "./snap";
 import { CONSTRUCT_STEPS, constructLines, type ConstructOptions } from "../../lib/construct";
 import { CURVE_STEPS, curvePolyline, type CurveOptions } from "../../lib/curve";
+import {
+  snapLineDirection,
+  type DirectionSnapResult,
+} from "../../lib/directionSnap";
 
 /** 吸着半径(px) */
 export const SNAP_RADIUS_PX = 12;
@@ -29,6 +33,8 @@ export interface EphemeralState {
   pendingStart: Vec2 | null;
   cursorWorld: Vec2 | null;
   hoverSnap: SnapResult | null;
+  /** 既存線の延長または角の二等分へ向きだけを合わせた終点。 */
+  directionSnap: DirectionSnapResult | null;
   /** 矩形選択: ドラッグ開始点と現在点(正規化座標) */
   marqueeStart: Vec2 | null;
   marqueeEnd: Vec2 | null;
@@ -38,6 +44,8 @@ export interface EphemeralState {
   panLast: Vec2 | null;
   /** スペースキーを押し下げている間だけtrue(左ドラッグを表示位置の移動に使う) */
   spaceHeld: boolean;
+  /** Shiftを押し下げている間は方向吸着を一時的に解除する。 */
+  shiftHeld: boolean;
   /** 作図補助でクリック済みの点(正規化座標) */
   constructPoints: Vec2[];
   /** 作図補助でクリック済みの線(両端の座標) */
@@ -55,11 +63,13 @@ export function initialEphemeralState(): EphemeralState {
     pendingStart: null,
     cursorWorld: null,
     hoverSnap: null,
+    directionSnap: null,
     marqueeStart: null,
     marqueeEnd: null,
     downScreen: null,
     panLast: null,
     spaceHeld: false,
+    shiftHeld: false,
     constructPoints: [],
     constructSeg: null,
     hoverViolation: null,
@@ -170,6 +180,43 @@ function dist(a: Vec2, b: Vec2): number {
   return Math.hypot(a[0] - b[0], a[1] - b[1]);
 }
 
+/**
+ * 通常の直線描画の終点を決める。既存の点吸着を常に先に試し、候補が無いとき
+ * だけ方向吸着を使う。曲線モードと「折る」ツールには方向吸着を適用しない。
+ */
+function resolveLineEndpoint(
+  ctx: InteractionCtx,
+  world: Vec2,
+  snapRadius: number,
+): {
+  pos: Vec2;
+  pointSnap: SnapResult | null;
+  directionSnap: DirectionSnapResult | null;
+} {
+  const pointSnap = snap(ctx.doc, world, snapRadius);
+  if (pointSnap) return { pos: pointSnap.pos, pointSnap, directionSnap: null };
+
+  const start = ctx.state.pendingStart;
+  const straightKind = TOOL_KIND[ctx.tool];
+  const directionSnap =
+    start && straightKind && !ctx.curve.enabled && !ctx.state.shiftHeld
+      ? snapLineDirection(ctx.doc, start, world)
+      : null;
+  return {
+    pos: directionSnap?.pos ?? world,
+    pointSnap: null,
+    directionSnap,
+  };
+}
+
+/** カーソル移動・Shift解除のどちらからも同じ吸着結果へ更新する。 */
+function refreshLineEndpoint(ctx: InteractionCtx, world: Vec2, snapRadius: number): Vec2 {
+  const resolved = resolveLineEndpoint(ctx, world, snapRadius);
+  ctx.state.hoverSnap = resolved.pointSnap;
+  ctx.state.directionSnap = resolved.directionSnap;
+  return resolved.pos;
+}
+
 function distToSegment(p: Vec2, a: Vec2, b: Vec2): number {
   const ab: Vec2 = [b[0] - a[0], b[1] - a[1]];
   const len2 = ab[0] * ab[0] + ab[1] * ab[1];
@@ -246,10 +293,17 @@ export function isPanStart(state: EphemeralState, button: number): boolean {
   return button === 1 || button === 2 || (button === 0 && state.spaceHeld);
 }
 
-export function onMouseDown(ctx: InteractionCtx, screen: Vec2, button: number): void {
+export function onMouseDown(
+  ctx: InteractionCtx,
+  screen: Vec2,
+  button: number,
+  shiftHeld?: boolean,
+): void {
+  if (shiftHeld !== undefined) ctx.state.shiftHeld = shiftHeld;
   // 表示位置の移動を最優先で拾う(線引き・選択より先に判定する)
   if (isPanStart(ctx.state, button)) {
     ctx.state.panLast = screen;
+    ctx.state.directionSnap = null;
     return;
   }
   if (button !== 0) return;
@@ -265,7 +319,7 @@ export function onMouseDown(ctx: InteractionCtx, screen: Vec2, button: number): 
   }
   if (kind || ctx.tool === "fold") {
     // 線ツール・折るツール: 1クリック目=始点、2クリック目=確定
-    const pos = snap(ctx.doc, world, snapRadius)?.pos ?? world;
+    const pos = refreshLineEndpoint(ctx, world, snapRadius);
     const start = ctx.state.pendingStart;
     if (start === null) {
       ctx.state.pendingStart = pos;
@@ -278,6 +332,7 @@ export function onMouseDown(ctx: InteractionCtx, screen: Vec2, button: number): 
         }
       }
       ctx.state.pendingStart = null;
+      ctx.state.directionSnap = null;
     }
     return;
   }
@@ -310,7 +365,8 @@ export function onMouseDown(ctx: InteractionCtx, screen: Vec2, button: number): 
   }
 }
 
-export function onMouseMove(ctx: InteractionCtx, screen: Vec2): void {
+export function onMouseMove(ctx: InteractionCtx, screen: Vec2, shiftHeld?: boolean): void {
+  if (shiftHeld !== undefined) ctx.state.shiftHeld = shiftHeld;
   if (ctx.state.panLast) {
     const [lx, ly] = ctx.state.panLast;
     ctx.state.panLast = screen;
@@ -319,6 +375,7 @@ export function onMouseMove(ctx: InteractionCtx, screen: Vec2): void {
       offsetX: ctx.view.offsetX + screen[0] - lx,
       offsetY: ctx.view.offsetY + screen[1] - ly,
     });
+    ctx.state.directionSnap = null;
     return;
   }
   const world = screenToWorld(ctx.view, screen);
@@ -336,6 +393,7 @@ export function onMouseMove(ctx: InteractionCtx, screen: Vec2): void {
     const radius = SNAP_RADIUS_PX / ctx.view.scale;
     drag.to = snapForMove(ctx.doc, world, radius, drag.id)?.pos ?? world;
     ctx.state.hoverSnap = null;
+    ctx.state.directionSnap = null;
     return;
   }
 
@@ -350,11 +408,16 @@ export function onMouseMove(ctx: InteractionCtx, screen: Vec2): void {
     return;
   }
 
-  // 線ツール・折るツール・作図補助のスナップ候補表示
-  if (previewKind(ctx.tool) || ctx.tool === "construct") {
+  // 通常の直線は、点吸着が無いときだけ延長・二等分方向へ吸着する。
+  const straightKind = TOOL_KIND[ctx.tool];
+  if ((straightKind && !ctx.curve.enabled) || ctx.tool === "fold") {
+    refreshLineEndpoint(ctx, world, SNAP_RADIUS_PX / ctx.view.scale);
+  } else if (previewKind(ctx.tool) || ctx.tool === "construct") {
     ctx.state.hoverSnap = snap(ctx.doc, world, SNAP_RADIUS_PX / ctx.view.scale);
+    ctx.state.directionSnap = null;
   } else {
     ctx.state.hoverSnap = null;
+    ctx.state.directionSnap = null;
   }
 }
 
@@ -421,14 +484,21 @@ export function panHint(state: EphemeralState): string | null {
 
 /** Esc: 描画・選択操作の中止 / Delete: 選択中の線を削除 / スペース: つかんで動かす */
 export function onKeyDown(ctx: InteractionCtx, key: string): void {
+  if (key === "Shift") {
+    ctx.state.shiftHeld = true;
+    ctx.state.directionSnap = null;
+    return;
+  }
   if (isSpaceKey(key)) {
     ctx.state.spaceHeld = true;
     return;
   }
   if (key === "Escape") {
     ctx.state.spaceHeld = false;
+    ctx.state.shiftHeld = false;
     ctx.state.panLast = null;
     ctx.state.pendingStart = null;
+    ctx.state.directionSnap = null;
     ctx.state.downScreen = null;
     ctx.state.marqueeStart = null;
     ctx.state.marqueeEnd = null;
@@ -446,6 +516,17 @@ export function onKeyDown(ctx: InteractionCtx, key: string): void {
 
 /** スペースキーを離したら、つかんで動かす状態を解く */
 export function onKeyUp(ctx: InteractionCtx, key: string): void {
+  if (key === "Shift") {
+    ctx.state.shiftHeld = false;
+    if (ctx.state.cursorWorld) {
+      refreshLineEndpoint(
+        ctx,
+        ctx.state.cursorWorld,
+        SNAP_RADIUS_PX / ctx.view.scale,
+      );
+    }
+    return;
+  }
   if (!isSpaceKey(key)) return;
   ctx.state.spaceHeld = false;
   ctx.state.panLast = null;

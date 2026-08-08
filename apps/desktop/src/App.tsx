@@ -16,6 +16,7 @@ import { NewDocumentDialog } from "./components/dialogs/NewDocumentDialog";
 import { ProposalWizard } from "./components/dialogs/ProposalWizard";
 import { ExportDialog } from "./components/dialogs/ExportDialog";
 import { HistoryButtons } from "./components/HistoryButtons";
+import { HistoryShortcuts } from "./components/HistoryShortcuts";
 import { uniqueWarnings } from "./lib/techniques";
 import "./App.css";
 
@@ -63,6 +64,7 @@ function App() {
 
   return (
     <div className="app">
+      <HistoryShortcuts />
       <header className="toolbar">
         {/* 紙の形と大きさを決めてから作る(PAP-001)。開くのは独立ダイアログ */}
         <button type="button" onClick={openNewDialog}>

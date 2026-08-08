@@ -25,6 +25,8 @@ describe("元に戻す/やり直しのボタン", () => {
     render(<HistoryButtons />);
     expect(undoButton().title).toContain("展開図・手順の変更を戻します");
     expect(redoButton().title).toContain("やり直せる操作はありません");
+    expect(undoButton().title).toContain("(Ctrl+Z)");
+    expect(redoButton().title).toContain("(Ctrl+Y)");
   });
 
   it("角度の履歴があれば、折り角度が戻ると知らせる", () => {
@@ -45,6 +47,6 @@ describe("元に戻す/やり直しのボタン", () => {
     cleanup();
     useAppStore.setState({ docUndoDepth: 0 });
     render(<HistoryButtons />);
-    expect(redoButton().title).toBe("折り角度の変更をやり直します");
+    expect(redoButton().title).toBe("折り角度の変更をやり直します (Ctrl+Y)");
   });
 });

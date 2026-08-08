@@ -15,10 +15,10 @@ export function HistoryButtons() {
 
   return (
     <>
-      <button type="button" title={undoHint} onClick={() => void undo()}>
+      <button type="button" title={`${undoHint} (Ctrl+Z)`} onClick={() => void undo()}>
         元に戻す
       </button>
-      <button type="button" title={redoHint} onClick={() => void redo()}>
+      <button type="button" title={`${redoHint} (Ctrl+Y)`} onClick={() => void redo()}>
         やり直し
       </button>
     </>

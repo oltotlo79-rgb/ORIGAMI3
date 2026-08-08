@@ -28,6 +28,8 @@ export const COLORS = {
   violation: "#ff8c00",
   hintBackground: "rgba(28, 26, 22, 0.78)",
   hintText: "#ffffff",
+  /** 延長・二等分方向へ吸着中であることを示す薄いガイド線。 */
+  directionGuide: "rgba(38, 97, 74, 0.48)",
   /** 左右対称に描くときの対称軸(CPE-010)。薄く出して邪魔をしない */
   mirrorAxis: "rgba(59, 111, 201, 0.45)",
   marqueeFill: "rgba(59, 111, 201, 0.12)",
@@ -86,6 +88,8 @@ export interface RenderOverlay {
   hoverSnap: SnapResult | null;
   /** 描画中のプレビュー線(始点確定後) */
   preview: { a: Vec2; b: Vec2; kind: EdgeKind } | null;
+  /** 方向吸着中に紙を横切って示す補助ガイド。 */
+  directionGuide: [Vec2, Vec2] | null;
   /** 左右対称に描いているときの対称軸のx座標(正規化座標)。使わないならnull */
   mirrorAxis: number | null;
   /** 対称軸の反対側に出るプレビュー線(左右対称のときだけ) */
@@ -283,6 +287,13 @@ function drawOverlay(
   view: ViewTransform,
   overlay: RenderOverlay,
 ): void {
+  if (overlay.directionGuide) {
+    ctx.strokeStyle = COLORS.directionGuide;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 5]);
+    strokeSegment(ctx, view, overlay.directionGuide[0], overlay.directionGuide[1]);
+    ctx.setLineDash([]);
+  }
   for (const line of [overlay.preview, overlay.mirrorPreview]) {
     if (!line) continue;
     ctx.strokeStyle = EDGE_COLORS[line.kind];

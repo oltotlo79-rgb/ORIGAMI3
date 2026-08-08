@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { Vec2 } from "../../lib/types";
 import { useAppStore } from "../../store/appStore";
-import { constructHint } from "../../lib/construct";
+import { clipToPaper, constructHint } from "../../lib/construct";
 import {
   curveHint,
   firstCrossing,
@@ -13,6 +13,7 @@ import {
 } from "../../lib/curve";
 import { violationReason } from "../../lib/flatFoldHint";
 import { mirrorAxisX, mirrorPoint } from "../../lib/mirror";
+import { isEditableTarget } from "../../lib/keyboard";
 import type { Document, EdgeKind } from "../../lib/types";
 import {
   constructDone,
@@ -31,6 +32,7 @@ import {
   type InteractionCtx,
 } from "./interaction";
 import { fitView, render, type RenderOverlay, type ViewTransform } from "./renderer";
+import { paperExtent } from "./snap";
 
 interface Props {
   /** 「全体表示」用: 親が current を呼ぶと紙全体が収まる表示に戻す */
@@ -104,16 +106,56 @@ export function CpEditor({ fitRef }: Props) {
     // 左右対称のときは対称軸を薄く出し、引いている最中の線も反対側に見せる
     const axisX = mirrorDraw ? mirrorAxisX(doc.paper) : null;
     const curveMode = kind !== undefined && curve.enabled && activeTool !== "fold";
+    const directionSnap =
+      kind && !curveMode && st.pendingStart ? st.directionSnap : null;
     const preview =
       kind && !curveMode && st.pendingStart && st.cursorWorld
-        ? { a: st.pendingStart, b: st.hoverSnap?.pos ?? st.cursorWorld, kind }
+        ? {
+            a: st.pendingStart,
+            b: st.hoverSnap?.pos ?? directionSnap?.pos ?? st.cursorWorld,
+            kind,
+          }
+        : null;
+    const [paperWidth, paperHeight] = paperExtent(doc);
+    const guideReach = 2 * Math.max(paperWidth, paperHeight);
+    const directionGuide =
+      directionSnap && st.pendingStart
+        ? clipToPaper(
+            [
+              [
+                st.pendingStart[0] - directionSnap.direction[0] * guideReach,
+                st.pendingStart[1] - directionSnap.direction[1] * guideReach,
+              ],
+              [
+                st.pendingStart[0] + directionSnap.direction[0] * guideReach,
+                st.pendingStart[1] + directionSnap.direction[1] * guideReach,
+              ],
+            ],
+            paperWidth,
+            paperHeight,
+          )
         : null;
     // 曲線モードでは、確定したときに入るのと同じ折れ線をそのまま見せる(設計原則3b)
     const draft = curveMode ? curveDraft(st, curve) : null;
     const previewPaths = draft && kind ? curvePreviewPaths(doc, draft, kind, curve) : [];
+    const directionHint = directionSnap
+      ? directionSnap.kind === "bisector"
+        ? "二等分方向に吸着中(Shiftで解除)"
+        : "辺・折り目の延長方向に吸着中(Shiftで解除)"
+      : null;
+    const toolHint =
+      directionHint ??
+      (activeTool === "construct"
+        ? constructHint(construct.kind, constructDone(st), construct.divisions)
+        : curveMode
+          ? curveHint(curve.shape, st.curvePoints.length, curve.rulings)
+          : mirrorDraw
+            ? "左右対称に描いています(線を引くときだけ効きます)"
+            : null);
     const overlay: RenderOverlay = {
       hoverSnap: kind ? st.hoverSnap : null,
       preview,
+      directionGuide,
       mirrorAxis: axisX,
       mirrorPreview:
         axisX !== null && preview
@@ -135,14 +177,7 @@ export function CpEditor({ fitRef }: Props) {
         panHint(st) ??
         (st.vertexDrag
           ? "点を動かしています(離すと決まります。Escでやめる)"
-          : activeTool === "construct"
-          ? constructHint(construct.kind, constructDone(st), construct.divisions)
-          : curveMode
-            ? curveHint(curve.shape, st.curvePoints.length, curve.rulings)
-            : // 今どの描き方かが画面の上で分かるようにする(設計原則3b)
-              mirrorDraw
-              ? "左右対称に描いています(線を引くときだけ効きます)"
-              : null),
+          : toolHint),
       tooltip: violationTooltip(doc, st.hoverViolation),
       vertexDrag: st.vertexDrag
         ? { id: st.vertexDrag.id, to: st.vertexDrag.to }
@@ -201,6 +236,7 @@ export function CpEditor({ fitRef }: Props) {
     st.constructSeg = null;
     st.curvePoints = [];
     st.vertexDrag = null;
+    st.directionSnap = null;
     draw();
   }, [activeTool, draw]);
 
@@ -230,10 +266,8 @@ export function CpEditor({ fitRef }: Props) {
 
   // Esc(描画中止)・Delete(選択線の削除)・スペース(押している間つかんで動かす)
   useEffect(() => {
-    const isInput = (t: EventTarget | null) =>
-      t instanceof HTMLElement && t.tagName === "INPUT";
     const down = (e: KeyboardEvent) => {
-      if (isInput(e.target)) return;
+      if (isEditableTarget(e.target)) return;
       // スペースは画面のスクロールに使われるので、つかむ操作のために止める
       if (isSpaceKey(e.key)) e.preventDefault();
       const ctx = makeCtx();
@@ -243,7 +277,7 @@ export function CpEditor({ fitRef }: Props) {
       }
     };
     const up = (e: KeyboardEvent) => {
-      if (isInput(e.target)) return;
+      if (isEditableTarget(e.target)) return;
       const ctx = makeCtx();
       if (ctx) {
         onKeyUp(ctx, e.key);
@@ -253,7 +287,9 @@ export function CpEditor({ fitRef }: Props) {
     // 別の窓へ移ったときにスペースを押しっぱなしと誤解しないよう解除する
     const blur = () => {
       stateRef.current.spaceHeld = false;
+      stateRef.current.shiftHeld = false;
       stateRef.current.panLast = null;
+      stateRef.current.directionSnap = null;
       draw();
     };
     window.addEventListener("keydown", down);
@@ -287,13 +323,16 @@ export function CpEditor({ fitRef }: Props) {
         e.preventDefault();
         // ポインタ捕捉: canvas外へ出てもmove/upが届き、ドラッグ状態が残留しない
         e.currentTarget.setPointerCapture(e.pointerId);
-        withCtx((ctx) => onMouseDown(ctx, screenPos(e), e.button));
+        withCtx((ctx) => onMouseDown(ctx, screenPos(e), e.button, e.shiftKey));
       }}
-      onPointerMove={(e) => withCtx((ctx) => onMouseMove(ctx, screenPos(e)))}
+      onPointerMove={(e) =>
+        withCtx((ctx) => onMouseMove(ctx, screenPos(e), e.shiftKey))
+      }
       onPointerUp={(e) => withCtx((ctx) => onMouseUp(ctx, screenPos(e), e.button))}
       onPointerLeave={() => {
         // 捕捉中はleaveが飛ばないため、ここに来るのはドラッグしていない時だけ
         stateRef.current.hoverSnap = null;
+        stateRef.current.directionSnap = null;
         stateRef.current.cursorWorld = null;
         stateRef.current.hoverViolation = null;
         draw();
@@ -306,6 +345,7 @@ export function CpEditor({ fitRef }: Props) {
         st.marqueeStart = null;
         st.marqueeEnd = null;
         st.vertexDrag = null;
+        st.directionSnap = null;
         draw();
       }}
       onWheel={(e) => withCtx((ctx) => onWheel(ctx, screenPos(e), e.deltaY))}

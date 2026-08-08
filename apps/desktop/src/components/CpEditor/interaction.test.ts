@@ -48,6 +48,11 @@ function squareDoc(): Document {
 /** 正規化座標 → 画面座標(scale=500、y軸反転) */
 const toScreen = (p: Vec2): Vec2 => [p[0] * 500, 500 - p[1] * 500];
 
+const polar = (deg: number, radius: number): Vec2 => {
+  const rad = (deg * Math.PI) / 180;
+  return [Math.cos(rad) * radius, Math.sin(rad) * radius];
+};
+
 function makeCtx(
   construct: Partial<ConstructOptions> = {},
   violations: number[] = [],
@@ -191,6 +196,60 @@ describe("線ツール", () => {
     expect(drawSegment.mock.calls[0][2]).toBe("Mountain");
     // 線の追加はdrawSegment経由に一本化する(直接の編集要求は出さない)
     expect(applyEdit).not.toHaveBeenCalled();
+  });
+
+  it("点吸着候補が無ければ角の二等分方向へ向きだけを吸着する", () => {
+    const { ctx, drawSegment } = makeCtx();
+    ctx.tool = "mountain";
+    const cursor = polar(48, 0.57);
+
+    onMouseDown(ctx, toScreen([0, 0]), 0);
+    onMouseMove(ctx, toScreen(cursor));
+    expect(ctx.state.hoverSnap).toBeNull();
+    expect(ctx.state.directionSnap?.kind).toBe("bisector");
+    expect(ctx.state.directionSnap?.pos[0]).toBeCloseTo(0.57 * Math.SQRT1_2, 10);
+    expect(ctx.state.directionSnap?.pos[1]).toBeCloseTo(0.57 * Math.SQRT1_2, 10);
+
+    // 確定時にもプレビューと同じ計算を使い、長さはカーソルまでの距離を保つ。
+    onMouseDown(ctx, toScreen(cursor), 0);
+    const [, end] = drawSegment.mock.calls[0];
+    expect(end[0]).toBeCloseTo(0.57 * Math.SQRT1_2, 10);
+    expect(end[1]).toBeCloseTo(0.57 * Math.SQRT1_2, 10);
+  });
+
+  it("既存頂点への点吸着を方向吸着より優先する", () => {
+    const { ctx, drawSegment } = makeCtx();
+    ctx.tool = "valley";
+    ctx.doc.cp.vertices.push({ id: 4, pos: [0.4, 0.43] });
+    ctx.doc.cp.next_vertex_id = 5;
+
+    onMouseDown(ctx, toScreen([0, 0]), 0);
+    onMouseMove(ctx, toScreen([0.4, 0.43]));
+    expect(ctx.state.hoverSnap).toEqual({ pos: [0.4, 0.43], kind: "vertex" });
+    expect(ctx.state.directionSnap).toBeNull();
+    onMouseDown(ctx, toScreen([0.4, 0.43]), 0);
+    expect(drawSegment.mock.calls[0][1]).toEqual([0.4, 0.43]);
+  });
+
+  it("Shift中は方向吸着を解除するが、従来の点吸着は残す", () => {
+    const free = makeCtx();
+    free.ctx.tool = "aux";
+    const cursor = polar(48, 0.57);
+    onMouseDown(free.ctx, toScreen([0, 0]), 0);
+    onKeyDown(free.ctx, "Shift");
+    onMouseMove(free.ctx, toScreen(cursor));
+    expect(free.ctx.state.directionSnap).toBeNull();
+    onMouseDown(free.ctx, toScreen(cursor), 0);
+    expect(free.drawSegment.mock.calls[0][1][0]).toBeCloseTo(cursor[0], 10);
+    expect(free.drawSegment.mock.calls[0][1][1]).toBeCloseTo(cursor[1], 10);
+
+    const point = makeCtx();
+    point.ctx.tool = "aux";
+    point.ctx.doc.cp.vertices.push({ id: 4, pos: [0.4, 0.43] });
+    onMouseDown(point.ctx, toScreen([0, 0]), 0);
+    onKeyDown(point.ctx, "Shift");
+    onMouseMove(point.ctx, toScreen([0.4, 0.43]));
+    expect(point.ctx.state.hoverSnap?.kind).toBe("vertex");
   });
 });
 

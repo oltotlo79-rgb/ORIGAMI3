@@ -1,0 +1,182 @@
+// 通常の直線描画で使う方向吸着の純関数。
+// 始点につながる既存線の延長方向と、線どうしが作る角の二等分方向を候補にする。
+
+import type { Document, Vec2 } from "./types";
+
+/** カーソル方向が候補からこの角度以内なら吸着する。 */
+export const DIRECTION_SNAP_ANGLE_DEG = 5;
+
+/** 始点が既存線上にあるかを調べる正規化座標上の許容誤差。 */
+const CONNECT_TOLERANCE = 1e-7;
+const EPS = 1e-9;
+const SAME_DIRECTION_DOT = 1 - 1e-10;
+
+export type DirectionSnapKind = "extension" | "bisector";
+
+export interface DirectionCandidate {
+  /** 始点から見た単位方向ベクトル。反対側は別候補として列挙する。 */
+  direction: Vec2;
+  kind: DirectionSnapKind;
+}
+
+export interface DirectionSnapResult extends DirectionCandidate {
+  /** 向きだけを候補へ合わせ、カーソルまでの距離を保った終点。 */
+  pos: Vec2;
+}
+
+function sub(a: Vec2, b: Vec2): Vec2 {
+  return [a[0] - b[0], a[1] - b[1]];
+}
+
+function length(v: Vec2): number {
+  return Math.hypot(v[0], v[1]);
+}
+
+function normalize(v: Vec2): Vec2 | null {
+  const n = length(v);
+  if (n <= EPS) return null;
+  const x = v[0] / n;
+  const y = v[1] / n;
+  return [Math.abs(x) <= EPS ? 0 : x, Math.abs(y) <= EPS ? 0 : y];
+}
+
+function dot(a: Vec2, b: Vec2): number {
+  return a[0] * b[0] + a[1] * b[1];
+}
+
+function near(a: Vec2, b: Vec2, tolerance = CONNECT_TOLERANCE): boolean {
+  return length(sub(a, b)) <= tolerance;
+}
+
+/** startが線分ab上にあるか（端点を含む）。 */
+function liesOnSegment(start: Vec2, a: Vec2, b: Vec2): boolean {
+  const ab = sub(b, a);
+  const abLength = length(ab);
+  if (abLength <= EPS) return false;
+  const ap = sub(start, a);
+  const crossDistance = Math.abs(ab[0] * ap[1] - ab[1] * ap[0]) / abLength;
+  if (crossDistance > CONNECT_TOLERANCE) return false;
+  const t = dot(ap, ab) / (abLength * abLength);
+  const tTolerance = CONNECT_TOLERANCE / abLength;
+  return t >= -tTolerance && t <= 1 + tTolerance;
+}
+
+function addUniqueDirection(directions: Vec2[], direction: Vec2): void {
+  const unit = normalize(direction);
+  if (!unit) return;
+  if (directions.some((existing) => dot(existing, unit) >= SAME_DIRECTION_DOT)) return;
+  directions.push(unit);
+}
+
+function addUniqueCandidate(
+  candidates: DirectionCandidate[],
+  direction: Vec2,
+  kind: DirectionSnapKind,
+): void {
+  const unit = normalize(direction);
+  if (!unit) return;
+  // 同じ向きが延長と二等分の両方に現れるときは、先に追加する延長として扱う。
+  if (candidates.some((candidate) => dot(candidate.direction, unit) >= SAME_DIRECTION_DOT)) {
+    return;
+  }
+  candidates.push({ direction: unit, kind });
+}
+
+/**
+ * 始点で使える方向候補を列挙する。
+ *
+ * - 始点を通る各既存線から、線の延長を両方向へ列挙する。
+ * - 始点を端点に持つ既存線の各ペアから、角の二等分を両方向へ列挙する。
+ * - 180°の角は、その直線に垂直な方向が二等分方向になる。
+ * - 壊れた参照、長さ0の線、重複方向は無視する。
+ */
+export function directionCandidatesAt(doc: Document, start: Vec2): DirectionCandidate[] {
+  const byId = new Map(doc.cp.vertices.map((vertex) => [vertex.id, vertex.pos]));
+  const extensionDirections: Vec2[] = [];
+  const connectedRays: Vec2[] = [];
+
+  for (const edge of doc.cp.edges) {
+    const a = byId.get(edge.v0);
+    const b = byId.get(edge.v1);
+    if (!a || !b) continue;
+    const axis = normalize(sub(b, a));
+    if (!axis) continue;
+
+    // 線の途中を始点にした場合にも、その線の延長方向は利用できる。
+    if (liesOnSegment(start, a, b)) {
+      addUniqueDirection(extensionDirections, axis);
+      addUniqueDirection(extensionDirections, [-axis[0], -axis[1]]);
+    }
+
+    // 二等分は「始点に集まっている線」だけを対象にする。線の途中に置いた
+    // 1点から同じ線の両端を2本と数えて、不要な垂線を作らないため。
+    if (near(start, a)) addUniqueDirection(connectedRays, sub(b, a));
+    if (near(start, b)) addUniqueDirection(connectedRays, sub(a, b));
+  }
+
+  const candidates: DirectionCandidate[] = [];
+  for (const direction of extensionDirections) {
+    addUniqueCandidate(candidates, direction, "extension");
+  }
+
+  for (let i = 0; i < connectedRays.length; i += 1) {
+    for (let j = i + 1; j < connectedRays.length; j += 1) {
+      const a = connectedRays[i];
+      const b = connectedRays[j];
+      const sum: Vec2 = [a[0] + b[0], a[1] + b[1]];
+      // 反対向きの2本は180°の角を作るので、垂直方向が二等分になる。
+      const bisector: Vec2 = length(sum) > EPS ? sum : [-a[1], a[0]];
+      addUniqueCandidate(candidates, bisector, "bisector");
+      addUniqueCandidate(candidates, [-bisector[0], -bisector[1]], "bisector");
+    }
+  }
+
+  return candidates;
+}
+
+/**
+ * カーソル方向に最も近い候補へ向きだけを吸着させる。
+ * 長さは始点から元のカーソルまでの距離を保つので、終点は自由に決められる。
+ */
+export function snapToDirection(
+  start: Vec2,
+  cursor: Vec2,
+  candidates: DirectionCandidate[],
+  maxAngleDeg = DIRECTION_SNAP_ANGLE_DEG,
+): DirectionSnapResult | null {
+  if (maxAngleDeg < 0) return null;
+  const delta = sub(cursor, start);
+  const distance = length(delta);
+  const cursorDirection = normalize(delta);
+  if (!cursorDirection || candidates.length === 0) return null;
+
+  let best: DirectionCandidate | null = null;
+  let bestDot = -Infinity;
+  for (const candidate of candidates) {
+    const similarity = dot(cursorDirection, candidate.direction);
+    if (similarity > bestDot) {
+      best = candidate;
+      bestDot = similarity;
+    }
+  }
+
+  const threshold = Math.cos((Math.min(maxAngleDeg, 180) * Math.PI) / 180);
+  if (!best || bestDot + EPS < threshold) return null;
+  return {
+    ...best,
+    pos: [
+      start[0] + best.direction[0] * distance,
+      start[1] + best.direction[1] * distance,
+    ],
+  };
+}
+
+/** ドキュメントから候補を作り、カーソル方向への吸着までまとめて行う。 */
+export function snapLineDirection(
+  doc: Document,
+  start: Vec2,
+  cursor: Vec2,
+  maxAngleDeg = DIRECTION_SNAP_ANGLE_DEG,
+): DirectionSnapResult | null {
+  return snapToDirection(start, cursor, directionCandidatesAt(doc, start), maxAngleDeg);
+}
