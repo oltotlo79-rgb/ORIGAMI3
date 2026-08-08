@@ -49,3 +49,13 @@ Tauri 2 / React / TypeScript / Three.js / Rust計算コア
 ## ライセンス
 
 [MIT License](LICENSE)
+
+## コード署名について (Code signing policy)
+
+This program uses free code signing provided by [SignPath.io](https://signpath.io), and a free code signing certificate by the [SignPath Foundation](https://signpath.org).
+
+- 配布物(インストーラー・ポータブル版・MSI)は、このリポジトリのソースコードからGitHub Actionsで自動ビルドされたものだけに署名します
+- チーム構成: 個人開発(committer / reviewer / approver を開発者本人が兼任)
+- 本アプリは利用者のデータを収集・送信しません(ファイルの保存はすべて利用者のPC内で完結します)
+
+Free code signing provided by SignPath.io, certificate by SignPath Foundation.
