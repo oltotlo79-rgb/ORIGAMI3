@@ -1,7 +1,6 @@
 // 4区画レイアウト: 上部ツールバー / 左ツールレール / 中央(2D+3D) / 下部コンテキストパネル。
 // 手順タイムラインは3D区画の内側を上下に分けて置く(常設区画は増やさない)。
 // このファイルはレイアウト構成のみ(200行以内を維持)。
-
 import { useEffect, useRef } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useAppStore } from "./store/appStore";
@@ -19,6 +18,7 @@ import { HistoryButtons } from "./components/HistoryButtons";
 import { HistoryShortcuts } from "./components/HistoryShortcuts";
 import { ToolbarIcon } from "./components/ToolIcons";
 import { FirstRunGuide } from "./components/FirstRunGuide";
+import { HelpCenter } from "./components/dialogs/HelpCenter";
 import { uniqueWarnings } from "./lib/techniques";
 import "./App.css";
 
@@ -33,7 +33,7 @@ function App() {
   const openProposal = useAppStore((s) => s.openProposal);
   const openExport = useAppStore((s) => s.openExport);
   const openNewDialog = useAppStore((s) => s.openNewDialog);
-  const openGuide = useAppStore((s) => s.openGuide);
+  const openHelp = useAppStore((s) => s.openHelp);
   // 中央の2区画の広さの割合(UI-004)。境目のドラッグで変わる
   const splitRatio = useAppStore((s) => s.splitRatio);
   const warningCount = useAppStore(
@@ -131,9 +131,9 @@ function App() {
         <button
           type="button"
           className="toolbar-help"
-          title="折る・角度・引く・ふくらますの基本操作ガイドを開きます"
-          aria-label="基本操作ガイドを開く"
-          onClick={openGuide}
+          title="目次と検索のあるヘルプセンターを開きます(F1)"
+          aria-label="ヘルプセンターを開く"
+          onClick={openHelp}
         >
           <ToolbarIcon name="help" />
           ヘルプ
@@ -191,6 +191,7 @@ function App() {
       <NewDocumentDialog />
       <ProposalWizard />
       <ExportDialog />
+      <HelpCenter />
       <FirstRunGuide />
     </div>
   );

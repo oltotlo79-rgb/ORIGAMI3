@@ -73,6 +73,7 @@ import type {
 } from "../lib/types";
 import { defaultSkeleton } from "../lib/skeleton";
 import { loadOnboarding, saveOnboarding } from "../lib/firstRunGuide";
+import type { HelpChapterId } from "../help/helpTypes";
 
 /** ヒンジ角の連続操作(スライダー)を間引く間隔(ms) */
 /** 追従計算は60fps相当で最大1回。runLatestが計算待ちを最新1件へまとめる。 */
@@ -465,6 +466,12 @@ interface AppState {
   guideOpen: boolean;
   /** 0〜3が実践する4操作、4は全操作を終えた完了画面。 */
   guideStep: GuideStep;
+  /** 詳しいヘルプセンターを独立ダイアログで表示しているか。 */
+  helpOpen: boolean;
+  /** ヘルプセンターで最後に選んだ章。 */
+  helpChapterId: HelpChapterId;
+  /** 章題と本文を絞り込む検索文字列。 */
+  helpQuery: string;
   /** 選択中ツールの手順のうち、いま強調する段階(0始まり)。 */
   operationStage: number;
   /** 3Dで紙そのものを選んだときの「引く・膨らます」案内を出しているか。 */
@@ -492,6 +499,14 @@ interface AppState {
   toggleViewerHint: () => void;
   /** ヘルプから基本操作ガイドを最初の操作へ戻して表示する。 */
   openGuide: () => void;
+  /** ヘルプセンターを開く。ツールバーとF1から共用する。 */
+  openHelp: () => void;
+  /** ヘルプセンターを閉じる。 */
+  closeHelp: () => void;
+  /** ヘルプセンターで表示する章を選ぶ。 */
+  selectHelpChapter: (chapterId: HelpChapterId) => void;
+  /** ヘルプセンターの検索文字列を変える。 */
+  setHelpQuery: (query: string) => void;
   /** ×またはスキップで閉じ、この端末では初回表示済みとして覚える。 */
   dismissGuide: () => void;
   /** 該当する実操作が成功したときだけ、ガイドを次へ進める。 */
@@ -1366,6 +1381,9 @@ export const useAppStore = create<AppState>((set, get) => {
     viewerHintExpanded: true,
     guideOpen: !onboarding.guideComplete,
     guideStep: 0,
+    helpOpen: false,
+    helpChapterId: "overview",
+    helpQuery: "",
     operationStage: 0,
     paperActionTipVisible: false,
     paperActionTipExpanded: false,
@@ -1480,6 +1498,14 @@ export const useAppStore = create<AppState>((set, get) => {
       set((s) => ({ viewerHintExpanded: !s.viewerHintExpanded })),
 
     openGuide: () => set({ guideOpen: true, guideStep: 0 }),
+
+    openHelp: () => set({ helpOpen: true }),
+
+    closeHelp: () => set({ helpOpen: false }),
+
+    selectHelpChapter: (chapterId) => set({ helpChapterId: chapterId }),
+
+    setHelpQuery: (query) => set({ helpQuery: query }),
 
     dismissGuide: () => {
       set({ guideOpen: false });
