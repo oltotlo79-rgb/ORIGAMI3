@@ -28,6 +28,7 @@ import {
   loadPrefs,
   savePrefs,
   softOf,
+  type UiTheme,
   type WheelBehavior,
 } from "../lib/displayPrefs";
 import {
@@ -460,6 +461,8 @@ interface AppState {
   pullMirror: boolean;
   /** 2D展開図で修飾キーなしのホイールをスクロールと拡大縮小のどちらに使うか。 */
   wheelBehavior: WheelBehavior;
+  /** 画面全体のデザイン。端末にだけ保存し、作品ファイルには含めない。 */
+  uiTheme: UiTheme;
   /** 3D操作の吹き出しを展開しているか。閉じても見出しは常に残す。 */
   viewerHintExpanded: boolean;
   /** 初回ガイドを隅のカードとして表示しているか。 */
@@ -495,6 +498,8 @@ interface AppState {
   setPullMirror: (on: boolean) => void;
   /** 2D展開図のホイール動作を切り替える(次回起動時も同じ設定に戻る) */
   setWheelBehavior: (behavior: WheelBehavior) => void;
+  /** 画面デザインを切り替える(次回起動時も同じ設定に戻る) */
+  setUiTheme: (theme: UiTheme) => void;
   /** 3D操作の吹き出しを開閉する。 */
   toggleViewerHint: () => void;
   /** ヘルプから基本操作ガイドを最初の操作へ戻して表示する。 */
@@ -774,8 +779,8 @@ export const useAppStore = create<AppState>((set, get) => {
 
   /** 画面の使い方の好み(作品の中身ではないもの)を端末に覚えておく */
   const persistPrefs = () => {
-    const { splitRatio, mirrorDraw, pullMirror, wheelBehavior } = get();
-    savePrefs({ splitRatio, mirrorDraw, pullMirror, wheelBehavior });
+    const { splitRatio, mirrorDraw, pullMirror, wheelBehavior, uiTheme } = get();
+    savePrefs({ splitRatio, mirrorDraw, pullMirror, wheelBehavior, uiTheme });
   };
 
   /** DocumentViewの内容で状態を一括更新する(成功時共通処理)。
@@ -1378,6 +1383,7 @@ export const useAppStore = create<AppState>((set, get) => {
     mirrorDraw: prefs.mirrorDraw,
     pullMirror: prefs.pullMirror,
     wheelBehavior: prefs.wheelBehavior,
+    uiTheme: prefs.uiTheme,
     viewerHintExpanded: true,
     guideOpen: !onboarding.guideComplete,
     guideStep: 0,
@@ -1491,6 +1497,11 @@ export const useAppStore = create<AppState>((set, get) => {
 
     setWheelBehavior: (behavior) => {
       set({ wheelBehavior: behavior });
+      persistPrefs();
+    },
+
+    setUiTheme: (theme) => {
+      set({ uiTheme: theme });
       persistPrefs();
     },
 

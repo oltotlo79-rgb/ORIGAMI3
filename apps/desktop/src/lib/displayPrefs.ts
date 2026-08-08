@@ -65,6 +65,15 @@ const STORAGE_KEY = "origami3.prefs";
 /** 2D展開図で修飾キーを押していないときのホイール動作。 */
 export type WheelBehavior = "scroll" | "zoom";
 
+/** 端末ごとに選べる画面デザイン。作品ファイルには含めない。 */
+export const UI_THEMES = ["pop", "simple", "japanese", "modern", "classic"] as const;
+export type UiTheme = (typeof UI_THEMES)[number];
+
+/** 古い保存値や手編集されたlocalStorageから、安全なテーマだけを受け入れる。 */
+export function isUiTheme(value: unknown): value is UiTheme {
+  return typeof value === "string" && (UI_THEMES as readonly string[]).includes(value);
+}
+
 /** localStorageへ覚えておく画面の好み。作品の中身(紙の色・方眼)は
  * ここには入らない(作品ファイル側に保存する) */
 export interface Prefs {
@@ -77,6 +86,8 @@ export interface Prefs {
   pullMirror: boolean;
   /** 2D展開図のホイール操作。作品ではなく端末ごとの操作の好みとして覚える。 */
   wheelBehavior: WheelBehavior;
+  /** 画面全体のデザイン。作品には保存せず、この端末だけに覚える。 */
+  uiTheme: UiTheme;
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -84,6 +95,7 @@ export const DEFAULT_PREFS: Prefs = {
   mirrorDraw: false,
   pullMirror: true,
   wheelBehavior: "scroll",
+  uiTheme: "pop",
 };
 
 /** 方眼の分割数を範囲内の整数に丸める(入力が数でなければ既定値) */
@@ -140,6 +152,8 @@ export function loadPrefs(storage: StorageLike | null = defaultStorage()): Prefs
       pullMirror: saved.pullMirror !== false,
       // 古い保存には項目が無いので、一般的な描画ソフトと同じスクロールを既定にする
       wheelBehavior: saved.wheelBehavior === "zoom" ? "zoom" : "scroll",
+      // テーマ未保存の旧版・未知の値は、従来デザインのポップへ戻す
+      uiTheme: isUiTheme(saved.uiTheme) ? saved.uiTheme : "pop",
     };
   } catch {
     return DEFAULT_PREFS;

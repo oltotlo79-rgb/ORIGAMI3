@@ -17,8 +17,10 @@ import { ExportDialog } from "./components/dialogs/ExportDialog";
 import { HistoryButtons } from "./components/HistoryButtons";
 import { HistoryShortcuts } from "./components/HistoryShortcuts";
 import { ToolbarIcon } from "./components/ToolIcons";
+import { ToolbarBrandMark } from "./components/ToolbarBrandMark";
 import { FirstRunGuide } from "./components/FirstRunGuide";
 import { HelpCenter } from "./components/dialogs/HelpCenter";
+import { ThemeRoot } from "./components/ThemeRoot";
 import { uniqueWarnings } from "./lib/techniques";
 import "./App.css";
 
@@ -26,6 +28,7 @@ const DEFAULT_PAPER = { width_mm: 150, height_mm: 150 };
 const ORI3_FILTERS = [{ name: "ORIGAMI3作品", extensions: ["ori3"] }];
 
 function App() {
+  const uiTheme = useAppStore((s) => s.uiTheme);
   const newDocument = useAppStore((s) => s.newDocument);
   const openDocument = useAppStore((s) => s.openDocument);
   const saveDocument = useAppStore((s) => s.saveDocument);
@@ -66,32 +69,11 @@ function App() {
   };
 
   return (
-    <div className="app">
+    <ThemeRoot>
       <HistoryShortcuts />
       <header className="toolbar">
         <span className="toolbar-brand">
-          <svg
-            className="toolbar-brand-mark"
-            viewBox="0 0 44 44"
-            aria-hidden="true"
-            focusable="false"
-          >
-            <circle cx="22" cy="22" r="20" fill="var(--color-accent-soft)" />
-            <path d="M4 22 20 7l-3 17Z" fill="var(--color-secondary)" />
-            <path d="m17 24 22-12-14 18Z" fill="var(--color-pop-yellow)" />
-            <path d="m17 24 8 6-12 8Z" fill="var(--color-pop-coral)" />
-            <path d="m25 30 7 6-9-3Z" fill="var(--color-accent)" />
-            <path d="m25 30 6-20 5-4-4 22Z" fill="var(--color-accent)" />
-            <path d="m17 24 8 6-5-23Z" fill="#fff" fillOpacity=".76" />
-            <circle cx="34.5" cy="8" r="1.1" fill="var(--color-text)" />
-            <path
-              d="M7 9v4M5 11h4M37 28v4M35 30h4"
-              fill="none"
-              stroke="var(--color-secondary)"
-              strokeLinecap="round"
-              strokeWidth="1.8"
-            />
-          </svg>
+          <ToolbarBrandMark theme={uiTheme} />
           <span className="toolbar-brand-copy">
             <strong>
               ORIGAMI<span>3</span>
@@ -193,7 +175,7 @@ function App() {
       <ExportDialog />
       <HelpCenter />
       <FirstRunGuide />
-    </div>
+    </ThemeRoot>
   );
 }
 

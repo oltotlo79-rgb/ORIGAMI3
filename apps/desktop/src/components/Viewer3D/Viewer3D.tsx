@@ -148,6 +148,7 @@ export function Viewer3D({ fitRef }: Props) {
   const hoveredHinge = useAppStore((s) => s.hoveredHinge);
   const docEpoch = useAppStore((s) => s.docEpoch);
   const activeTool = useAppStore((s) => s.activeTool);
+  const uiTheme = useAppStore((s) => s.uiTheme);
   const foldDraft = useAppStore((s) => s.foldDraft);
   const pendingFoldThrough = useAppStore((s) => s.pendingFoldThrough);
   const alignDraft = useAppStore((s) => s.alignDraft);
@@ -207,6 +208,11 @@ export function Viewer3D({ fitRef }: Props) {
       scene.dispose();
     };
   }, []);
+
+  // テーマ変更後のCSS変数を読み直して、WebGL背景も直ちに描き替える。
+  useEffect(() => {
+    sceneRef.current?.syncTheme();
+  }, [uiTheme]);
 
   // 展開図が変わったときだけ、三角形分割・境界線・ヒンジ対応を作り直す
   useEffect(() => {

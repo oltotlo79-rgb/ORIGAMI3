@@ -51,7 +51,11 @@ export function ToolIcon({ tool }: ToolIconProps) {
     case "mountain":
       return (
         <svg className="tool-icon tool-icon-mountain" {...svgProps}>
-          <path d="M3.5 18.5 12 4l8.5 14.5h-17Z" fill="#fff" fillOpacity=".92" />
+          <path
+            d="M3.5 18.5 12 4l8.5 14.5h-17Z"
+            fill="var(--color-on-solid, #fff)"
+            fillOpacity=".92"
+          />
           <path
             d="m5 16.2 3.6-5.3 3 3.9 3.3-5.4 4.1 6.8"
             stroke="var(--color-crease-mountain)"
@@ -64,7 +68,11 @@ export function ToolIcon({ tool }: ToolIconProps) {
     case "valley":
       return (
         <svg className="tool-icon tool-icon-valley" {...svgProps}>
-          <path d="M3.5 5.5h17L12 20 3.5 5.5Z" fill="#fff" fillOpacity=".92" />
+          <path
+            d="M3.5 5.5h17L12 20 3.5 5.5Z"
+            fill="var(--color-on-solid, #fff)"
+            fillOpacity=".92"
+          />
           <path
             d="m5.2 7.6 3.4 5.2 3-3.7 3.2 5.3 4-6.8"
             stroke="var(--color-crease-valley)"
@@ -125,7 +133,11 @@ export function ToolIcon({ tool }: ToolIconProps) {
     case "technique":
       return (
         <svg className="tool-icon" {...svgProps}>
-          <path d="m12 3 8 5-3 10H7L4 8l8-5Z" fill="#fff" fillOpacity=".9" />
+          <path
+            d="m12 3 8 5-3 10H7L4 8l8-5Z"
+            fill="var(--color-on-solid, #fff)"
+            fillOpacity=".9"
+          />
           <path d="m4 8 8 4 8-4-3 10-5-6-5 6-3-10Z" fill="var(--color-secondary-soft)" />
           <path d="m4 8 8 4 8-4M12 3v9M12 12l-5 6M12 12l5 6" />
           <circle cx="12" cy="12" r="1.4" fill="var(--color-pop-coral)" stroke="none" />

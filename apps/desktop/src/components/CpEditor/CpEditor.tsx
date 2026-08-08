@@ -86,6 +86,7 @@ export function CpEditor({ fitRef }: Props) {
   const curve = useAppStore((s) => s.curve);
   const mirrorDraw = useAppStore((s) => s.mirrorDraw);
   const wheelBehavior = useAppStore((s) => s.wheelBehavior);
+  const uiTheme = useAppStore((s) => s.uiTheme);
   const pendingFoldThrough = useAppStore((s) => s.pendingFoldThrough);
 
   const draw = useCallback(() => {
@@ -252,6 +253,11 @@ export function CpEditor({ fitRef }: Props) {
     viewRef.current = null; // 次のdrawが全体表示から作り直す
     draw();
   }, [docEpoch, draw]);
+
+  // CSS変数の実効値を読み直し、テーマ切替と同じフレームで背景を描き替える。
+  useEffect(() => {
+    draw();
+  }, [uiTheme, draw]);
 
   // ツール切替時は描画途中・選択途中の一時状態を破棄する
   // (山折りの1点目を谷折りに引き継ぐ、といった取り違えを防ぐ)

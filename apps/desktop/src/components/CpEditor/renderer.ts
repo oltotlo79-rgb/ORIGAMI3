@@ -43,6 +43,12 @@ export const COLORS = {
   positionBarThumb: "rgba(47, 107, 91, 0.58)",
 } as const;
 
+/** App.cssで選択中テーマの2D背景色を読む。テスト等でCSSが無い場合はPOP既定へ戻す。 */
+export function canvasBackgroundColor(canvas: HTMLCanvasElement): string {
+  if (typeof getComputedStyle !== "function") return COLORS.background;
+  return getComputedStyle(canvas).getPropertyValue("--color-canvas-2d").trim() || COLORS.background;
+}
+
 /** 線幅(px) */
 export const LINE_WIDTHS = {
   border: 2,
@@ -558,7 +564,7 @@ export function render(
   overlay: RenderOverlay,
 ): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = COLORS.background;
+  ctx.fillStyle = canvasBackgroundColor(ctx.canvas);
   ctx.fillRect(0, 0, widthPx, heightPx);
 
   // 紙(白地+うっすら影)

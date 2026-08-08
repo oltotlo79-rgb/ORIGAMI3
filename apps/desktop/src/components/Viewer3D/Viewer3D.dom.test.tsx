@@ -29,6 +29,7 @@ vi.mock("./sceneBuilder", async (importOriginal) => {
         content: null as unknown,
         soft: null as unknown,
         render: vi.fn(),
+        syncTheme: vi.fn(),
         resize: vi.fn(),
         resetCamera: vi.fn(),
         setContent: vi.fn((c: unknown) => {
@@ -164,6 +165,7 @@ describe("Viewer3D(画面)", () => {
       foldThroughBusy: false,
       techniqueDraft: null,
       selection: { edgeIds: [], vertexIds: [] },
+      uiTheme: "pop",
     });
   });
   afterEach(() => cleanup());
@@ -180,6 +182,14 @@ describe("Viewer3D(画面)", () => {
     useAppStore.setState({ playing: true });
     renderViewer();
     expect(screen.getByRole("status").textContent).toContain("再生中");
+  });
+
+  it("テーマ変更時にCSS変数から3D背景を読み直す", () => {
+    renderViewer();
+    const syncTheme = held.scene.syncTheme as ReturnType<typeof vi.fn>;
+    syncTheme.mockClear();
+    act(() => useAppStore.getState().setUiTheme("classic"));
+    expect(syncTheme).toHaveBeenCalledTimes(1);
   });
 
   it("巻き込みの追加折り目を、畳み平面の位置へ水色の参照線として出す", async () => {

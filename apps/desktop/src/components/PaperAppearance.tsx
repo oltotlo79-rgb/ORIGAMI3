@@ -15,11 +15,21 @@ import { useAppStore } from "../store/appStore";
 import {
   MAX_DIVISIONS,
   MIN_DIVISIONS,
+  UI_THEMES,
   hexToRgb,
   overlapPreventionOf,
   rgbToHex,
   softOf,
+  type UiTheme,
 } from "../lib/displayPrefs";
+
+const UI_THEME_LABELS: Record<UiTheme, string> = {
+  pop: "ポップ",
+  simple: "シンプル",
+  japanese: "和風",
+  modern: "モダン",
+  classic: "クラシック",
+};
 
 /**
  * 子供向けの折り紙セットで親しまれている色を中心にした固定パレット。
@@ -123,6 +133,8 @@ export function PaperAppearance() {
   const setMirrorDraw = useAppStore((s) => s.setMirrorDraw);
   const wheelBehavior = useAppStore((s) => s.wheelBehavior);
   const setWheelBehavior = useAppStore((s) => s.setWheelBehavior);
+  const uiTheme = useAppStore((s) => s.uiTheme);
+  const setUiTheme = useAppStore((s) => s.setUiTheme);
   const soft = softOf(display);
   const overlapPrevention = overlapPreventionOf(display);
 
@@ -199,6 +211,20 @@ export function PaperAppearance() {
           ? "ホイール: 上下 / Shift+ホイール: 左右 / Ctrl+ホイール: カーソル位置を中心に拡大縮小"
           : "ホイール: カーソル位置を中心に拡大縮小 / Ctrl+ホイール: 上下 / Ctrl+Shift+ホイール: 左右"}
       </span>
+      <label>
+        画面のデザイン
+        <select
+          aria-label="画面のデザイン"
+          value={uiTheme}
+          onChange={(e) => setUiTheme(e.target.value as UiTheme)}
+        >
+          {UI_THEMES.map((theme) => (
+            <option key={theme} value={theme}>
+              {UI_THEME_LABELS[theme]}
+            </option>
+          ))}
+        </select>
+      </label>
       <div className="paper-color-settings">
         <ColorPalette
           label="紙の表"

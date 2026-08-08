@@ -40,8 +40,17 @@ const FOCUS_HIGHLIGHT_COLOR = 0xed5c70;
 const PREVIEW_COLOR = 0x2f8fff;
 /** 下見の透け具合(下の紙が見える程度) */
 const PREVIEW_OPACITY = 0.45;
-/** 背景色(App.css の --color-canvas-3d と同じ。展開図側より少し沈めて奥行きを出す) */
-const BACKGROUND_COLOR = 0xcfcbc2;
+/** CSSが読み込まれない単体テスト環境で使うPOPテーマの背景色。 */
+const DEFAULT_BACKGROUND_COLOR = "#cfcbc2";
+
+/** App.cssで選択中テーマの3D背景色を読む。 */
+export function canvas3dBackgroundColor(canvas: HTMLCanvasElement): string {
+  if (typeof getComputedStyle !== "function") return DEFAULT_BACKGROUND_COLOR;
+  return (
+    getComputedStyle(canvas).getPropertyValue("--color-canvas-3d").trim() ||
+    DEFAULT_BACKGROUND_COLOR
+  );
+}
 /** 選択中ヒンジの太さ(紙の長辺=1.0を基準にした半径) */
 const HIGHLIGHT_RADIUS = 0.006;
 /** カメラ画角(度) */
@@ -456,6 +465,8 @@ export interface Viewer3DScene {
   content: Viewer3DContent | null;
   /** 次の描画機会に1回だけ描く(1フレーム1回にまとめる) */
   render(): void;
+  /** 現在のテーマのCSS変数から背景色を読み直して描画する。 */
+  syncTheme(): void;
   resize(widthPx: number, heightPx: number): void;
   /** 紙全体が見える斜め上の初期位置へカメラを戻す */
   resetCamera(paperWidth: number, paperHeight: number): void;
@@ -519,7 +530,7 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
   renderer.setPixelRatio(window.devicePixelRatio || 1);
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(BACKGROUND_COLOR);
+  scene.background = new THREE.Color(canvas3dBackgroundColor(canvas));
 
   const camera = new THREE.PerspectiveCamera(CAMERA_FOV, 1, 0.01, 100);
   camera.position.set(0.5, -1.2, 1.4);
@@ -599,6 +610,10 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
     highlightGroup,
     content: null,
     render,
+    syncTheme() {
+      scene.background = new THREE.Color(canvas3dBackgroundColor(canvas));
+      render();
+    },
     resize(widthPx, heightPx) {
       if (widthPx === 0 || heightPx === 0) return;
       // 画面の細かさは移動先の画面で変わることがあるので毎回合わせ直す

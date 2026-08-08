@@ -1,15 +1,42 @@
 // @vitest-environment jsdom
 // 紙の色(PAP-003)と方眼の数(CPE-003)の画面テスト。
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import {
   GRID_DIVISION_PRESETS,
   PAPER_COLOR_PALETTE,
   PaperAppearance,
 } from "./PaperAppearance";
+import { ThemeRoot } from "./ThemeRoot";
 import { useAppStore } from "../store/appStore";
-import { DEFAULT_DISPLAY } from "../lib/displayPrefs";
+import { DEFAULT_DISPLAY, UI_THEMES } from "../lib/displayPrefs";
+
+let localValues: Record<string, string>;
+const localStorageMock: Storage = {
+  get length() {
+    return Object.keys(localValues).length;
+  },
+  clear: () => {
+    localValues = {};
+  },
+  getItem: (key) => localValues[key] ?? null,
+  key: (index) => Object.keys(localValues)[index] ?? null,
+  removeItem: (key) => {
+    delete localValues[key];
+  },
+  setItem: (key, value) => {
+    localValues[key] = value;
+  },
+};
+
+beforeEach(() => {
+  localValues = {};
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: localStorageMock,
+  });
+});
 
 afterEach(() => {
   cleanup();
@@ -18,6 +45,7 @@ afterEach(() => {
     doc: null,
     mirrorDraw: false,
     wheelBehavior: "scroll",
+    uiTheme: "pop",
     softWarnings: [],
   });
 });
@@ -111,6 +139,46 @@ describe("展開図のホイール動作", () => {
     expect(useAppStore.getState().wheelBehavior).toBe("zoom");
     expect(screen.getByText(/Ctrl\+ホイール: 上下/)).not.toBeNull();
     expect(screen.getByText(/Ctrl\+Shift\+ホイール: 左右/)).not.toBeNull();
+  });
+});
+
+describe("画面のデザイン", () => {
+  it("既定はポップで、5テーマを日本語名から選べる", () => {
+    useAppStore.setState({ uiTheme: "pop" });
+    render(<PaperAppearance />);
+    const select = screen.getByLabelText("画面のデザイン");
+    expect(select).toHaveProperty("value", "pop");
+    expect(within(select).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "ポップ",
+      "シンプル",
+      "和風",
+      "モダン",
+      "クラシック",
+    ]);
+  });
+
+  it("5テーマをその場で切り替え、data-themeと端末保存を同時に更新する", () => {
+    render(
+      <ThemeRoot>
+        <PaperAppearance />
+      </ThemeRoot>,
+    );
+    const app = document.querySelector(".app");
+    expect(app).not.toBeNull();
+    expect(app!.hasAttribute("data-theme")).toBe(false);
+
+    for (const uiTheme of UI_THEMES) {
+      fireEvent.change(screen.getByLabelText("画面のデザイン"), {
+        target: { value: uiTheme },
+      });
+
+      expect(useAppStore.getState().uiTheme).toBe(uiTheme);
+      if (uiTheme === "pop") expect(app!.hasAttribute("data-theme")).toBe(false);
+      else expect(app!.getAttribute("data-theme")).toBe(uiTheme);
+      expect(
+        JSON.parse(globalThis.localStorage.getItem("origami3.prefs") ?? "{}"),
+      ).toMatchObject({ uiTheme });
+    }
   });
 });
 

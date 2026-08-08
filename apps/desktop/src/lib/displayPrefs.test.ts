@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_DISPLAY,
   DEFAULT_PREFS,
+  UI_THEMES,
   clampDivisions,
   clampSplitRatio,
   hexToRgb,
@@ -66,6 +67,7 @@ describe("見た目の好み", () => {
         mirrorDraw: true,
         pullMirror: false,
         wheelBehavior: "zoom",
+        uiTheme: "classic",
       },
       storage,
     );
@@ -77,6 +79,8 @@ describe("見た目の好み", () => {
     expect(loaded.pullMirror).toBe(false);
     // 2D展開図のホイール動作も端末ごとに戻る
     expect(loaded.wheelBehavior).toBe("zoom");
+    // 画面デザインも作品とは分けて端末へ覚える
+    expect(loaded.uiTheme).toBe("classic");
   });
 
   it("ホイールは既定でスクロールし、古い保存や不正値もスクロールに戻す", () => {
@@ -87,6 +91,23 @@ describe("見た目の好み", () => {
       JSON.stringify({ splitRatio: 0.4, wheelBehavior: "unknown" }),
     );
     expect(loadPrefs(storage).wheelBehavior).toBe("scroll");
+  });
+
+  it("画面デザインは5テーマから選び、未保存・不正値はポップへ戻す", () => {
+    expect(UI_THEMES).toEqual(["pop", "simple", "japanese", "modern", "classic"]);
+    expect(DEFAULT_PREFS.uiTheme).toBe("pop");
+    expect(loadPrefs(storage).uiTheme).toBe("pop");
+
+    for (const uiTheme of UI_THEMES) {
+      savePrefs({ ...DEFAULT_PREFS, uiTheme }, storage);
+      expect(loadPrefs(storage).uiTheme).toBe(uiTheme);
+    }
+
+    storage.setItem(
+      "origami3.prefs",
+      JSON.stringify({ ...DEFAULT_PREFS, uiTheme: "unknown" }),
+    );
+    expect(loadPrefs(storage).uiTheme).toBe("pop");
   });
 
   it("3Dで引くときの左右同時は、保存が無ければ既定のオン(UI-007)", () => {
@@ -109,6 +130,7 @@ describe("見た目の好み", () => {
       mirrorDraw: false,
       pullMirror: true,
       wheelBehavior: "scroll",
+      uiTheme: "pop",
     });
   });
 
