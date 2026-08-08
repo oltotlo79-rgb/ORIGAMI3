@@ -154,6 +154,63 @@ describe("複数の折り目の角度(SIM-001)", () => {
     expect(screen.getAllByText("45°")).toHaveLength(4);
   });
 
+  it("数値入力のchangeだけで個別・一括の角度をストアへ反映する", () => {
+    seedMultiple();
+    render(<ContextPanel />);
+
+    const individual = screen.getByLabelText("折り目 #7の角度（数値）");
+    fireEvent.change(individual, { target: { value: "-21" } });
+    let drivers = useAppStore.getState().drivers;
+    expect([drivers.get(5), drivers.get(7), drivers.get(9)]).toEqual([
+      30,
+      -21,
+      undefined,
+    ]);
+
+    const bulk = screen.getByLabelText(
+      "選択した折り目をまとめて動かす角度（数値）",
+    );
+    fireEvent.change(bulk, { target: { value: "46" } });
+    drivers = useAppStore.getState().drivers;
+    expect([drivers.get(5), drivers.get(7), drivers.get(9)]).toEqual([46, 46, 46]);
+  });
+
+  it("数値入力はEnterなしで反映し、Enterでは最終値を丸める", () => {
+    seed(new Map([[5, 30]]));
+    render(<ContextPanel />);
+    const input = screen.getByLabelText("折り目 #5の角度（数値）");
+    fireEvent.focus(input);
+
+    // スピナー・矢印キー・直接入力はいずれもブラウザからchangeとして届く
+    fireEvent.change(input, { target: { value: "30.6" } });
+    expect(useAppStore.getState().drivers.get(5)).toBe(30.6);
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(useAppStore.getState().drivers.get(5)).toBe(31);
+    expect(input).toHaveProperty("value", "31");
+
+    fireEvent.change(input, { target: { value: "999" } });
+    expect(useAppStore.getState().drivers.get(5)).toBe(31);
+    fireEvent.blur(input);
+    expect(useAppStore.getState().drivers.get(5)).toBe(180);
+    expect(input).toHaveProperty("value", "180");
+  });
+
+  it.each(["", "-", "12."])(
+    "入力途中の「%s」では角度を更新しない",
+    (incomplete) => {
+      seed(new Map([[5, 30]]));
+      render(<ContextPanel />);
+      const input = screen.getByLabelText("折り目 #5の角度（数値）");
+      fireEvent.focus(input);
+
+      // jsdomのnumber入力は「-」「12.」を空文字へ正規化するが、いずれも
+      // ブラウザでchangeが届いた時点では不完全な入力として扱われる
+      fireEvent.change(input, { target: { value: incomplete } });
+      expect(useAppStore.getState().drivers.get(5)).toBe(30);
+    },
+  );
+
   it("各行を指すと該当する折り目IDを2D/3D強調用にストアへ置く", () => {
     seedMultiple();
     render(<ContextPanel />);
@@ -388,6 +445,21 @@ describe("引くツールの左右同時の切替(UI-007)", () => {
   });
 });
 
+describe("技法の数値プレビュー", () => {
+  it("段の幅は完全な数値だけを入力中からドラフトへ反映する", () => {
+    seed(new Map());
+    useAppStore.getState().beginTechnique("Pleat");
+    render(<ContextPanel />);
+    const width = screen.getByLabelText("段の幅(mm)");
+    fireEvent.focus(width);
+
+    fireEvent.change(width, { target: { value: "14.5" } });
+    expect(useAppStore.getState().techniqueDraft?.widthMm).toBe(14.5);
+    fireEvent.change(width, { target: { value: "" } });
+    expect(useAppStore.getState().techniqueDraft?.widthMm).toBe(14.5);
+  });
+});
+
 describe("ねじり折りの中央多角形(TEC-009)", () => {
   /** ねじり折りを選び、角をcount個置いた状態にする */
   function seedTwist(count: number, center: [number, number] | null = null) {
@@ -440,6 +512,18 @@ describe("ねじり折りの中央多角形(TEC-009)", () => {
     // ねじる角は数値で決められる(既定30度)
     const deg = screen.getByLabelText("ねじる角(度)") as HTMLInputElement;
     expect(deg.value).toBe("30");
+  });
+
+  it("ねじる角は完全な数値だけを入力中からドラフトへ反映する", () => {
+    seedTwist(3);
+    render(<ContextPanel />);
+    const deg = screen.getByLabelText("ねじる角(度)");
+    fireEvent.focus(deg);
+
+    fireEvent.change(deg, { target: { value: "42" } });
+    expect(useAppStore.getState().techniqueDraft?.twistDeg).toBe(42);
+    fireEvent.change(deg, { target: { value: "" } });
+    expect(useAppStore.getState().techniqueDraft?.twistDeg).toBe(42);
   });
 
   it("角を1つ戻す・中心を重心へ戻すが効く", () => {
@@ -584,5 +668,22 @@ describe("曲線の折り目の設定(CPE-011)", () => {
     fireEvent.click(rulings);
     expect(useAppStore.getState().curve.rulings).toBe(false);
     expect(screen.getByText(/このままでは折れません/)).toBeTruthy();
+  });
+
+  it("分割数は範囲内の完全な数値だけを入力中から反映する", () => {
+    seedLineTool();
+    useAppStore.setState({
+      curve: { ...DEFAULT_CURVE, enabled: true, segments: 16 },
+    });
+    render(<ContextPanel />);
+    const segments = document.querySelector("#curve-segments") as HTMLInputElement;
+    fireEvent.focus(segments);
+
+    fireEvent.change(segments, { target: { value: "24" } });
+    expect(useAppStore.getState().curve.segments).toBe(24);
+    fireEvent.change(segments, { target: { value: "" } });
+    expect(useAppStore.getState().curve.segments).toBe(24);
+    fireEvent.change(segments, { target: { value: "201" } });
+    expect(useAppStore.getState().curve.segments).toBe(24);
   });
 });

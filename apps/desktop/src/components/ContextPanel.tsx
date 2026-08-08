@@ -49,25 +49,38 @@ function clampAngle(deg: number): number {
 }
 
 /**
+ * 入力を終えた数値だけを返す。Number("12.")のような書きかけも数値へ
+ * 変換できてしまうため、先に文字列の形を調べて入力途中と区別する。
+ */
+function completeNumber(raw: string): number | null {
+  const text = raw.trim();
+  if (!/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(text)) {
+    return null;
+  }
+  const value = Number(text);
+  return Number.isFinite(value) ? value : null;
+}
+
+/**
  * 角度の数値入力。入力途中の「−」だけ・空文字といった状態を打てるように、
- * 入力欄の表示は制御せず(値をストアで固定せず)、確定(Enter・入力欄から
- * 離れたとき)にストアへ反映する。表示専用の一時状態なのでrefで扱う。
+ * 入力欄の表示は制御せず(値をストアで固定せず)、完全で範囲内の数値だけを
+ * 入力中からストアへ反映する。最終確定はEnter・入力欄から離れたときに行う。
+ * 表示専用の一時状態なのでrefで扱う。
  * 書き換えていない入力欄から離れただけでは角度を指定しない(選んだだけの
  * 折り線が勝手に指定済みになるのを防ぐ)。Escapeで書きかけを取り消す。
  */
 function AngleNumberInput({
-  hinge,
   value,
-  label,
+  ariaLabel,
+  onValue,
 }: {
-  hinge: number;
   value: number;
-  label: string;
+  ariaLabel: string;
+  onValue: (value: number) => void;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   /** 利用者がこの入力欄を書き換えたか(未編集なら確定しない) */
   const editedRef = useRef(false);
-  const setDriverAngle = useAppStore((s) => s.setDriverAngle);
 
   // 入力中でなければ、スライダー操作や計算結果に表示を追従させる
   useEffect(() => {
@@ -86,15 +99,15 @@ function AngleNumberInput({
     const el = inputRef.current;
     if (!el) return;
     if (!editedRef.current) return; // 書き換えていないので何もしない
-    const entered = Number(el.value);
-    if (el.value.trim() === "" || !Number.isFinite(entered)) {
+    const entered = completeNumber(el.value);
+    if (entered === null) {
       revert(); // 数字になっていない入力は捨てて現在値へ戻す
       return;
     }
     const angle = clampAngle(Math.round(entered));
     el.value = String(angle);
     editedRef.current = false;
-    setDriverAngle(hinge, angle);
+    onValue(angle);
   };
 
   return (
@@ -102,13 +115,18 @@ function AngleNumberInput({
       ref={inputRef}
       type="number"
       className="angle-number"
-      aria-label={`${label}の角度（数値）`}
+      aria-label={ariaLabel}
       min={ANGLE_MIN}
       max={ANGLE_MAX}
       step={1}
       defaultValue={value}
-      onChange={() => {
+      onChange={(e) => {
         editedRef.current = true;
+        const entered = completeNumber(e.currentTarget.value);
+        if (entered !== null && entered >= ANGLE_MIN && entered <= ANGLE_MAX) {
+          // スライダーと同じストア操作へ送り、16ms間引きの3D追従に乗せる
+          onValue(entered);
+        }
       }}
       onBlur={commit}
       onKeyDown={(e) => {
@@ -166,7 +184,12 @@ function HingeAngle({ hinge, only }: { hinge: number; only: boolean }) {
           value={value}
           onChange={(e) => setDriverAngle(hinge, Number(e.target.value))}
         />
-        <AngleNumberInput key={hinge} hinge={hinge} value={value} label={label} />
+        <AngleNumberInput
+          key={hinge}
+          value={value}
+          ariaLabel={`${label}の角度（数値）`}
+          onValue={(angle) => setDriverAngle(hinge, angle)}
+        />
         <button
           type="button"
           title="この折り線の角度指定をやめます(この線は平らに戻り、形は残りの指定から計算し直します)"
@@ -180,7 +203,7 @@ function HingeAngle({ hinge, only }: { hinge: number; only: boolean }) {
   );
 }
 
-/** 複数選択した折り目を同じ絶対角度へそろえる一括スライダー。 */
+/** 複数選択した折り目を同じ絶対角度へそろえる一括操作。 */
 function HingeAngleGroup({ hinges }: { hinges: number[] }) {
   const drivers = useAppStore((s) => s.drivers);
   const poseAngles = useAppStore((s) => s.poseAngles);
@@ -206,6 +229,12 @@ function HingeAngleGroup({ hinges }: { hinges: number[] }) {
           step={1}
           value={value}
           onChange={(e) => setDriverAngles(hinges, Number(e.target.value))}
+        />
+        <AngleNumberInput
+          key={hinges.join(",")}
+          value={value}
+          ariaLabel="選択した折り目をまとめて動かす角度（数値）"
+          onValue={(angle) => setDriverAngles(hinges, angle)}
         />
         <span className="hint">動かすと選択中の全てを同じ角度にそろえます</span>
       </div>
@@ -242,7 +271,7 @@ function PoseRecordButton() {
   );
 }
 
-/** 折り角度の操作(選択した全ヒンジの個別/一括スライダー)と、全解除ボタン */
+/** 折り角度の操作(選択した全ヒンジの個別/一括入力)と、全解除ボタン */
 function FoldControls({ primary = false }: { primary?: boolean }) {
   const hinges = useAppStore((s) => s.hinges);
   const selection = useAppStore((s) => s.selection);
@@ -277,7 +306,7 @@ function FoldControls({ primary = false }: { primary?: boolean }) {
             ))}
           </div>
           <span className="hint">
-            +は山折り、−は谷折り、±180で完全に折ります（数値はEnterで確定）
+            +は山折り、−は谷折り、±180で完全に折ります（数値も入力中から反映し、Enterか欄外で確定）
           </span>
         </>
       )}
@@ -628,19 +657,26 @@ function FoldThroughProposalContent({ pending }: { pending: PendingFoldThrough }
 }
 
 /**
- * 数値の入力欄(段の幅・ねじる角)。書きかけの文字を打てるよう表示は制御せず、
- * 確定(Enter・入力欄から離れたとき)にストアへ送る(要件§2: 状態はストア1本)。
+ * 数値の入力欄(段の幅・ねじる角・曲線の分割数)。書きかけの文字を打てるよう
+ * 表示は制御せず、完全で範囲内の数値はプレビューへ即時反映する。
+ * Enter・入力欄から離れたときの最終確定も残す(要件§2: 状態はストア1本)。
  */
 function NumberInput({
   id,
   value,
   min,
+  max,
+  onPreview,
   onCommit,
+  normalizeOnCommit,
 }: {
   id: string;
   value: number;
   min: number;
+  max?: number;
+  onPreview: (v: number) => void;
   onCommit: (v: number) => void;
+  normalizeOnCommit?: (v: number) => number;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const editedRef = useRef(false);
@@ -654,13 +690,14 @@ function NumberInput({
     const el = inputRef.current;
     if (!el || !editedRef.current) return;
     editedRef.current = false;
-    const entered = Number(el.value);
-    if (!Number.isFinite(entered) || entered < min) {
+    const entered = completeNumber(el.value);
+    if (entered === null || entered < min) {
       el.value = String(value); // 数字でない入力は捨てて現在値へ戻す
       return;
     }
-    el.value = String(entered);
-    onCommit(entered);
+    const committed = normalizeOnCommit?.(entered) ?? entered;
+    el.value = String(committed);
+    onCommit(committed);
   };
 
   return (
@@ -670,10 +707,15 @@ function NumberInput({
       type="number"
       className="angle-number"
       min={min}
+      max={max}
       step={1}
       defaultValue={value}
-      onChange={() => {
+      onChange={(e) => {
         editedRef.current = true;
+        const entered = completeNumber(e.currentTarget.value);
+        if (entered !== null && entered >= min && (max === undefined || entered <= max)) {
+          onPreview(entered);
+        }
       }}
       onBlur={commit}
       onKeyDown={(e) => {
@@ -785,6 +827,7 @@ function TechniqueDraftContent({ draft }: { draft: TechniqueDraft }) {
               id="pleat-width"
               value={draft.widthMm}
               min={0.1}
+              onPreview={(v) => updateTechniqueDraft({ widthMm: v })}
               onCommit={(v) => updateTechniqueDraft({ widthMm: v })}
             />
           </>
@@ -796,6 +839,7 @@ function TechniqueDraftContent({ draft }: { draft: TechniqueDraft }) {
               id="twist-deg"
               value={draft.twistDeg}
               min={0.1}
+              onPreview={(v) => updateTechniqueDraft({ twistDeg: v })}
               onCommit={(v) => updateTechniqueDraft({ twistDeg: v })}
             />
           </>
@@ -959,9 +1003,12 @@ function CurveRow() {
               id="curve-segments"
               value={curve.segments}
               min={1}
-              onCommit={(v) =>
-                setCurve({ segments: Math.min(MAX_CURVE_SEGMENTS, Math.round(v)) })
+              max={MAX_CURVE_SEGMENTS}
+              onPreview={(v) => setCurve({ segments: v })}
+              normalizeOnCommit={(v) =>
+                Math.min(MAX_CURVE_SEGMENTS, Math.round(v))
               }
+              onCommit={(v) => setCurve({ segments: v })}
             />
           )}
           <label>
