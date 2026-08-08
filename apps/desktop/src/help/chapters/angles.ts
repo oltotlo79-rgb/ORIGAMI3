@@ -10,7 +10,7 @@ export const anglesChapter = {
       type: "paragraph",
       text: "折った後も、折り目ごとの角度を−180°から+180°まで変えられます。プラスは山折り、マイナスは谷折り、±180°はぴったり重なる完全折りです。展開図と立体表示は同時に選択を示します。",
     },
-    { type: "figure", diagramId: "angle-controls" },
+    { type: "figure", diagramId: "angle-controls", image: "screen-angle-slider.png" },
     {
       type: "steps",
       title: "一つの折り目の角度を変える",

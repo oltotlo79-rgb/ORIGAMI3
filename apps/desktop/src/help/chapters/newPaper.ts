@@ -10,7 +10,7 @@ export const newPaperChapter = {
       type: "paragraph",
       text: "起動直後は一般的な折り紙と同じ150×150mmの紙が用意されます。別の形や大きさで始めたいときは、上部の「新規」から取り替えます。",
     },
-    { type: "figure", diagramId: "new-paper-settings" },
+    { type: "figure", diagramId: "new-paper-settings", image: "screen-paper-colors.png" },
     {
       type: "steps",
       title: "紙の形と大きさを決める",

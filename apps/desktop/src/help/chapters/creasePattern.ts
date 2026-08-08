@@ -10,7 +10,7 @@ export const creasePatternChapter = {
       type: "paragraph",
       text: "展開図には、紙の外形を示す輪郭、手前へ山になる山折り、奥へへこむ谷折り、折らない下書きの補助線があります。輪郭は紙そのものなので編集できません。山・谷・補助は左端から選んで描きます。",
     },
-    { type: "figure", diagramId: "crease-tools" },
+    { type: "figure", diagramId: "crease-tools", image: "screen-draw-line.png" },
     {
       type: "steps",
       title: "まっすぐな線を1本引く",

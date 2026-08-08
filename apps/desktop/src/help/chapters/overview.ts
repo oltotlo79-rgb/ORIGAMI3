@@ -10,7 +10,7 @@ export const overviewChapter = {
       type: "paragraph",
       text: "ORIGAMI3は、折り線を描く平らな展開図と、折った姿を確かめる立体表示を並べて使う折り紙設計アプリです。紙を直接つかんで折ることも、折り目と角度を細かく決めることもできます。",
     },
-    { type: "figure", diagramId: "overview-flow" },
+    { type: "figure", diagramId: "overview-flow", image: "screen-overview-guide.png" },
     { type: "heading", text: "作品づくりの流れ" },
     {
       type: "steps",

@@ -10,7 +10,7 @@ export const foldChapter = {
       type: "paragraph",
       text: "いちばん手早い方法は、立体表示の紙をつかんで動かすことです。正確な位置で折りたいときは折り線を引き、手前か向こうか、どの重なりを動かすかを下部で決めます。折る前には、着地点と動く範囲が半透明で表示されます。",
     },
-    { type: "figure", diagramId: "fold-flow" },
+    { type: "figure", diagramId: "fold-flow", image: "screen-fold-drag.png" },
     {
       type: "steps",
       title: "紙を直接つかんで折る",

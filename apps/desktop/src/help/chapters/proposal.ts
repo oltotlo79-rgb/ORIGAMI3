@@ -10,7 +10,7 @@ export const proposalChapter = {
       type: "paragraph",
       text: "どこから線を引くか迷ったときは、完成形の出っぱりから展開図を作ってもらえます。難しい計算を指定する必要はありません。頭・尾・足のような出っぱりの数、長さ、太さを見本で整えます。",
     },
-    { type: "figure", diagramId: "proposal-wizard" },
+    { type: "figure", diagramId: "proposal-wizard", image: "screen-proposal-wizard.png" },
     {
       type: "steps",
       title: "展開図の候補を作る",

@@ -10,7 +10,7 @@ export const troubleshootingChapter = {
       type: "paragraph",
       text: "ORIGAMI3は、形を最後まで試せるように、畳みにくさや紙の食い込みを見つけても多くの場合は操作を止めません。色の付いた印、立体表示右上の札、下部の説明を順に見ると、直す場所が分かります。",
     },
-    { type: "figure", diagramId: "troubleshooting-flow" },
+    { type: "figure", diagramId: "troubleshooting-flow", image: "screen-warning.png" },
     {
       type: "table",
       title: "画面に出る主な印",

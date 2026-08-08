@@ -10,7 +10,7 @@ export const shortcutsChapter = {
       type: "paragraph",
       text: "CtrlやShiftは、押している間だけクリックやドラッグの働きを変えるキーです。文字や数値の入力中は、元に戻す・やり直しのキーが入力欄の編集に使われ、作品の操作を横取りしません。",
     },
-    { type: "figure", diagramId: "shortcut-map" },
+    { type: "figure", diagramId: "shortcut-map", image: "screen-help-center.png" },
     {
       type: "table",
       title: "アプリ全体",

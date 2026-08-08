@@ -10,7 +10,7 @@ export const workspaceChapter = {
       type: "paragraph",
       text: "画面は、道具を選ぶ場所、展開図、立体表示と手順、説明と設定の4区画に固定されています。作業中に区画が増えないので、いつも同じ場所を見れば次の操作が分かります。",
     },
-    { type: "figure", diagramId: "workspace-four-areas" },
+    { type: "figure", diagramId: "workspace-four-areas", image: "screen-workspace.png" },
     {
       type: "table",
       title: "4区画の役割",

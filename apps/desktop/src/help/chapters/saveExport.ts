@@ -10,7 +10,7 @@ export const saveExportChapter = {
       type: "paragraph",
       text: "「保存」は、後でORIGAMI3で開いて編集を続けるための操作です。「書き出し」は、展開図を画像にしたり、折る順番をページに並べたりする操作です。目的が違うため、配る画像を作った後も元の作品を保存してください。",
     },
-    { type: "figure", diagramId: "save-export-flow" },
+    { type: "figure", diagramId: "save-export-flow", image: "screen-export-dialog.png" },
     {
       type: "steps",
       title: "作品を保存して開く",
