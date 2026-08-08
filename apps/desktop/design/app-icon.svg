@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="1240" viewBox="0 0 1240 1240" role="img" aria-labelledby="title desc">
+  <title id="title">ORIGAMI3</title>
+  <desc id="desc">和紙の上に深緑の幾何学的な折り鶴を描いたアプリケーションアイコン</desc>
+  <defs>
+    <linearGradient id="paper" x1="160" y1="110" x2="1080" y2="1150" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fbf9f4"/>
+      <stop offset=".58" stop-color="#f2efe8"/>
+      <stop offset="1" stop-color="#e2ece7"/>
+    </linearGradient>
+    <linearGradient id="wingLeft" x1="270" y1="460" x2="660" y2="820" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#e7f0eb"/>
+      <stop offset="1" stop-color="#74a08f"/>
+    </linearGradient>
+    <linearGradient id="wingRight" x1="610" y1="470" x2="1020" y2="840" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5d8c7b"/>
+      <stop offset="1" stop-color="#2f6b5b"/>
+    </linearGradient>
+    <linearGradient id="body" x1="540" y1="510" x2="760" y2="840" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f7f5ef"/>
+      <stop offset="1" stop-color="#b8d0c5"/>
+    </linearGradient>
+    <linearGradient id="neck" x1="690" y1="300" x2="835" y2="730" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#407e6b"/>
+      <stop offset="1" stop-color="#24564d"/>
+    </linearGradient>
+    <pattern id="fibers" width="38" height="38" patternUnits="userSpaceOnUse">
+      <path d="M-6 10C5 6 15 14 25 9S42 11 47 5M-3 28c9-6 19 4 28-2s15 1 20-3" fill="none" stroke="#2f6b5b" stroke-opacity=".06" stroke-width="2"/>
+      <path d="M9-4c-4 12 4 18-1 31M31 14c-6 7 0 14-4 28" fill="none" stroke="#a33232" stroke-opacity=".035" stroke-width="1.5"/>
+    </pattern>
+    <clipPath id="roundSquare"><rect x="58" y="58" width="1124" height="1124" rx="242"/></clipPath>
+  </defs>
+
+  <rect width="1240" height="1240" fill="#2f6b5b"/>
+  <g clip-path="url(#roundSquare)">
+    <rect x="58" y="58" width="1124" height="1124" fill="url(#paper)"/>
+    <rect x="58" y="58" width="1124" height="1124" fill="url(#fibers)"/>
+    <path d="M88 355C290 255 384 278 542 174M736 110c178 106 238 92 418 223M91 937c190-95 287-64 431-169M735 1073c162-129 265-126 417-205" fill="none" stroke="#2f6b5b" stroke-opacity=".075" stroke-width="16"/>
+    <path d="M105 649c202-114 339-97 491-36M663 1000c168-145 284-121 456-220" fill="none" stroke="#a33232" stroke-opacity=".055" stroke-width="8"/>
+  </g>
+  <rect x="58" y="58" width="1124" height="1124" rx="242" fill="none" stroke="#24564d" stroke-opacity=".28" stroke-width="18"/>
+
+  <g stroke="#24564d" stroke-width="18" stroke-linejoin="round" stroke-linecap="round">
+    <path d="m550 674-343 182 353 37 119-153Z" fill="#407e6b"/>
+    <path d="m550 674-343 182 269-16 203-100Z" fill="#2f6b5b"/>
+    <path d="m550 674 129 66-119 153-84-53Z" fill="#e2ece7"/>
+
+    <path d="m606 608-338-151 226 349 184-65Z" fill="url(#wingLeft)"/>
+    <path d="m268 457 338 151-112 198Z" fill="#f7f5ef"/>
+    <path d="m494 806 112-198 72 133Z" fill="#8db5a5"/>
+
+    <path d="m606 608 420-119-250 351-98-99Z" fill="url(#wingRight)"/>
+    <path d="m606 608 170 232 250-351Z" fill="#2f6b5b"/>
+    <path d="m776 840-46-181 296-170Z" fill="#407e6b"/>
+
+    <path d="m606 608 124-78 132 151-86 159-98-99Z" fill="url(#body)"/>
+    <path d="m606 608 72 133 98 99-46-181Z" fill="#d5e4dc"/>
+    <path d="m730 530 132 151-132-22-52 82-72-133Z" fill="#f9f7f1"/>
+
+    <path d="m730 530 89-268 102 98-59 321-132-22Z" fill="url(#neck)"/>
+    <path d="m819 262 110-40-8 138-102 0Z" fill="#e2ece7"/>
+    <path d="m929 222 95 50-103 88 8-138Z" fill="#d43c3c"/>
+    <path d="m862 681 59-321 32 74-38 222-53 25Z" fill="#74a08f"/>
+  </g>
+
+  <path d="m819 262 110-40" fill="none" stroke="#a33232" stroke-width="16" stroke-linecap="round"/>
+  <circle cx="877" cy="326" r="12" fill="#f2efe8"/>
+  <circle cx="877" cy="326" r="5" fill="#24564d"/>
+
+  <g transform="translate(925 922)">
+    <rect width="122" height="122" rx="18" fill="#d43c3c"/>
+    <path d="m61 21 31 40-31 40-31-40 31-40Zm0 18-17 22 17 22 17-22-17-22Z" fill="#f7f5ef"/>
+  </g>
+</svg>

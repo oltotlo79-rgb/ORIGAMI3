@@ -23,6 +23,8 @@
   --color-accent-soft: #e2ece7;
   --color-danger: #a33232; /* surface上で6.0:1 */
   --color-danger-soft: #f6e4e2;
+  --color-crease-mountain: #d43c3c;
+  --color-crease-valley: #3b6fc9;
   --color-warn: #7a5400; /* surface上で5.9:1 */
   --color-warn-badge: #8a5a12; /* 白文字で5.9:1 */
   --color-overlay: rgba(28, 26, 22, 0.78);
@@ -58,7 +60,7 @@
   --lh-body: 1.8; /* ダイアログの本文 */
   --fw-bold: 600;
 
-  --t-fast: 120ms ease;
+  --t-fast: 150ms ease;
 }
 
 * {
@@ -115,7 +117,8 @@ input[type="range"] {
 /* キーボードで辿っているときだけ、どこにいるかをはっきり出す */
 :focus-visible {
   outline: 2px solid var(--color-accent);
-  outline-offset: 1px;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgba(47, 107, 91, 0.18);
 }
 
 /* 中央行は minmax(0, 1fr) にする。1fr の下限は中身の高さなので、
@@ -146,7 +149,9 @@ input[type="range"] {
   transition:
     background var(--t-fast),
     border-color var(--t-fast),
-    color var(--t-fast);
+    color var(--t-fast),
+    box-shadow var(--t-fast),
+    transform var(--t-fast);
 }
 
 .toolbar button:hover:not(:disabled),
@@ -167,6 +172,7 @@ input[type="range"] {
 .angle-row button:active:not(:disabled) {
   background: var(--color-accent-soft);
   box-shadow: none;
+  transform: translateY(1px);
 }
 
 /* 押せないボタンは消さずに残す決まりなので、平らな見た目で「今は押せない」を出す */
@@ -240,8 +246,14 @@ input[type="range"] {
 
 .tool-button {
   flex: none; /* 縦に詰まってもボタンを潰さない(文字が読めなくなるため) */
-  padding: var(--sp-4) var(--sp-1);
-  font-size: var(--fs-sm);
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-1);
+  min-height: 48px;
+  padding: var(--sp-2) var(--sp-1);
+  font-size: var(--fs-xs);
   font-weight: var(--fw-bold);
   letter-spacing: 0.04em;
 }
@@ -253,6 +265,21 @@ input[type="range"] {
   border-color: var(--color-accent-strong);
   color: #fff;
   box-shadow: var(--shadow-2);
+}
+
+.tool-icon {
+  display: block;
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+
+.tool-label {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tool-button.active:hover:not(:disabled) {
@@ -273,7 +300,11 @@ input[type="range"] {
 }
 
 .tool-button.small {
-  padding: var(--sp-3) var(--sp-1);
+  flex-direction: row;
+  justify-content: flex-start;
+  gap: var(--sp-2);
+  min-height: 28px;
+  padding: var(--sp-2) var(--sp-1);
   font-size: var(--fs-xs);
   font-weight: normal;
   letter-spacing: 0;
@@ -288,6 +319,12 @@ input[type="range"] {
   border-radius: var(--radius-sm);
   background: var(--color-control);
   font-size: var(--fs-xs);
+}
+
+.tool-sub-icon {
+  width: 13px;
+  height: 13px;
+  flex: none;
 }
 
 .pane {
@@ -378,11 +415,15 @@ input[type="range"] {
 .timeline-controls {
   display: flex;
   gap: var(--sp-3);
+  align-items: center;
 }
 
 .timeline-controls button {
-  padding: var(--sp-1) var(--sp-5);
+  min-height: 26px;
+  padding: var(--sp-1) var(--sp-4);
   font-size: var(--fs-sm);
+  border-radius: var(--radius-pill);
+  font-variant-numeric: tabular-nums;
 }
 
 .timeline-steps {
@@ -422,6 +463,7 @@ input[type="range"] {
   background: var(--color-accent-soft);
   border-color: var(--color-accent);
   color: var(--color-accent-strong);
+  transform: translateY(-1px);
 }
 
 .timeline-insert.active {
@@ -438,6 +480,7 @@ input[type="range"] {
   border-radius: var(--radius-md);
   font-size: var(--fs-sm);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .timeline-chip.selected,
@@ -650,6 +693,7 @@ input[type="range"] {
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: var(--sp-6);
   z-index: 100;
 }
 
@@ -659,8 +703,10 @@ input[type="range"] {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-dialog);
-  padding: var(--sp-6) 20px;
+  padding: 20px;
   max-width: 460px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
 }
 
 /* 見出しは下に細い線を敷いて、題と中身の区切りを見せる */
@@ -671,6 +717,7 @@ input[type="range"] {
   margin: 0 0 var(--sp-5);
   padding-bottom: var(--sp-3);
   border-bottom: 1px solid var(--color-border);
+  letter-spacing: 0.02em;
 }
 
 .dialog p {
@@ -705,6 +752,10 @@ input[type="range"] {
   margin-top: var(--sp-5);
   padding-top: var(--sp-5);
   border-top: 1px solid var(--color-border);
+}
+
+.dialog > :last-child {
+  margin-bottom: 0;
 }
 
 /* 提案ウィザード(PRO-004)。骨格の絵・候補の見本を並べるため復旧ダイアログより広い */

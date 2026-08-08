@@ -5,6 +5,7 @@
 import { useAppStore, type ToolId } from "../store/appStore";
 import { SUPPORTED_TECHNIQUES, TECHNIQUE_LABEL } from "../lib/techniques";
 import { CONSTRUCT_LABEL, type ConstructKind } from "../lib/construct";
+import { ToolIcon, ToolSubIcon } from "./ToolIcons";
 
 /** 作図の種類とその説明(サブメニューの並び順) */
 const CONSTRUCT_KINDS: ConstructKind[] = ["bisector", "perpendicular", "divide", "angle"];
@@ -70,7 +71,8 @@ export function ToolRail({ onFitView }: Props) {
           className={activeTool === t.id ? "tool-button active" : "tool-button"}
           onClick={() => setTool(t.id)}
         >
-          {t.label}
+          <ToolIcon tool={t.id} />
+          <span className="tool-label">{t.label}</span>
         </button>
       ))}
       {activeTool === "technique" && (
@@ -88,6 +90,7 @@ export function ToolRail({ onFitView }: Props) {
               }
               onClick={() => beginTechnique(t.kind)}
             >
+              <ToolSubIcon name={t.kind} />
               {t.short}
             </button>
           ))}
@@ -105,6 +108,7 @@ export function ToolRail({ onFitView }: Props) {
               }
               onClick={() => setConstruct({ kind: k })}
             >
+              <ToolSubIcon name={k} />
               {CONSTRUCT_LABEL[k]}
             </button>
           ))}
@@ -140,6 +144,7 @@ export function ToolRail({ onFitView }: Props) {
         className="tool-button"
         onClick={onFitView}
       >
+        <ToolIcon tool="fit" />
         全体
       </button>
     </nav>
