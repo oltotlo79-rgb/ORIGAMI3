@@ -58,6 +58,13 @@ fn sample_document() -> Document {
                     target_angle_deg: 180.0,
                 }],
                 layer_order: Some(vec![[0.25, 0.25], [0.75, 0.25]]),
+                alignment: Some(FoldAlignment {
+                    mode: AlignmentMode::PointPoint,
+                    picks: vec![
+                        AlignmentTarget::Point { p: [1.0, 0.0] },
+                        AlignmentTarget::Point { p: [0.0, 1.0] },
+                    ],
+                }),
                 note: "半分に折る".to_string(),
             },
             FoldStep {
@@ -69,6 +76,7 @@ fn sample_document() -> Document {
                     target_angle_deg: -90.0,
                 }],
                 layer_order: None,
+                alignment: None,
                 note: String::new(),
             },
         ],
@@ -170,6 +178,7 @@ fn test_seq_op_fold_through_json_shape() {
         keep_side_point: [0.5, 0.25],
         target_layers: Some(vec![3]),
         direction: FoldDirection::Down,
+        alignment: None,
         accept_additional_crease: false,
     };
     let json = serde_json::to_string(&op).expect("serialize");
@@ -185,6 +194,7 @@ fn test_seq_op_fold_through_json_shape() {
             keep_side_point,
             target_layers,
             direction,
+            alignment,
             accept_additional_crease,
         } => {
             assert_eq!(up_to, 2);
@@ -192,6 +202,7 @@ fn test_seq_op_fold_through_json_shape() {
             assert_eq!(keep_side_point, [0.5, 0.25]);
             assert_eq!(target_layers, Some(vec![3]));
             assert_eq!(direction, FoldDirection::Down);
+            assert_eq!(alignment, None);
             assert!(!accept_additional_crease);
         }
         other => panic!("unexpected variant: {other:?}"),
@@ -203,6 +214,7 @@ fn test_seq_op_fold_through_json_shape() {
         keep_side_point: [1.0, 0.0],
         target_layers: None,
         direction: FoldDirection::Up,
+        alignment: None,
         accept_additional_crease: false,
     })
     .expect("serialize");
@@ -215,6 +227,7 @@ fn test_seq_op_fold_through_json_shape() {
         keep_side_point: [0.5, 0.25],
         target_layers: Some(vec![3]),
         direction: FoldDirection::Down,
+        alignment: None,
         accept_additional_crease: true,
     })
     .expect("serialize");
@@ -222,6 +235,13 @@ fn test_seq_op_fold_through_json_shape() {
         accepted.contains(r#""accept_additional_crease":true"#),
         "json = {accepted}"
     );
+}
+
+#[test]
+fn test_fold_step_without_alignment_remains_readable() {
+    let old = r#"{"id":3,"kind":"Simple","drivers":[],"layer_order":null,"note":""}"#;
+    let step: FoldStep = serde_json::from_str(old).expect("旧形式を読み込む");
+    assert_eq!(step.alignment, None);
 }
 
 #[test]

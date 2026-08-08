@@ -1425,6 +1425,7 @@ impl Session {
             kind,
             drivers: self.drivers,
             layer_order: Some(layer_points),
+            alignment: None,
             note: String::new(),
         };
         *cp = self.cp;

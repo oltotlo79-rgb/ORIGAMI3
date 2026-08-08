@@ -2,8 +2,12 @@
 // 紙の色(PAP-003)と方眼の数(CPE-003)の画面テスト。
 
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { PaperAppearance } from "./PaperAppearance";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  GRID_DIVISION_PRESETS,
+  PAPER_COLOR_PALETTE,
+  PaperAppearance,
+} from "./PaperAppearance";
 import { useAppStore } from "../store/appStore";
 import { DEFAULT_DISPLAY } from "../lib/displayPrefs";
 
@@ -23,7 +27,12 @@ describe("紙の色と方眼", () => {
     render(<PaperAppearance />);
     expect(screen.getByLabelText("紙の表の色")).toHaveProperty("value", "#ed1c24");
     expect(screen.getByLabelText("紙の裏の色")).toHaveProperty("value", "#ffffff");
-    expect(screen.getByLabelText("方眼の数(1辺)")).toHaveProperty("value", "8");
+    expect(screen.getByLabelText("方眼の細かさ（1辺の等分数）")).toHaveProperty(
+      "value",
+      "8",
+    );
+    expect(screen.getByText("方眼の細かさ")).not.toBeNull();
+    expect(screen.getByText((_, element) => element?.textContent === "8等分")).not.toBeNull();
     // 何のための数かを折り紙の言葉で添える
     expect(screen.getByText(/等分した目盛り/)).not.toBeNull();
   });
@@ -40,13 +49,49 @@ describe("紙の色と方眼", () => {
     expect(useAppStore.getState().display.back_color).toEqual([0, 0, 0]);
   });
 
-  it("方眼の数は2〜64に収まる", () => {
+  it("表と裏をそれぞれ24色の見本から選べて、現在色に印が付く", () => {
     render(<PaperAppearance />);
-    const input = screen.getByLabelText("方眼の数(1辺)");
+    const front = screen.getByRole("group", { name: "紙の表の24色パレット" });
+    const back = screen.getByRole("group", { name: "紙の裏の24色パレット" });
+    expect(within(front).getAllByRole("button")).toHaveLength(24);
+    expect(within(back).getAllByRole("button")).toHaveLength(24);
+    expect(PAPER_COLOR_PALETTE).toHaveLength(24);
+
+    const red = within(front).getByRole("button", { name: "紙の表を赤にする" });
+    expect(red).toHaveProperty("title", "赤");
+    expect(red.getAttribute("aria-pressed")).toBe("true");
+
+    const purple = within(front).getByRole("button", { name: "紙の表を紫にする" });
+    fireEvent.click(purple);
+    expect(useAppStore.getState().display.front_color).toEqual([112, 64, 201]);
+    expect(purple.getAttribute("aria-pressed")).toBe("true");
+    expect(red.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("よく使う6種類の方眼を選べて現在値を示す", () => {
+    render(<PaperAppearance />);
+    const presets = screen.getByRole("group", { name: "よく使う方眼の細かさ" });
+    expect(within(presets).getAllByRole("button")).toHaveLength(6);
+    expect(GRID_DIVISION_PRESETS).toEqual([4, 8, 12, 16, 24, 32]);
+    const eight = within(presets).getByRole("button", { name: "8" });
+    expect(eight.getAttribute("aria-pressed")).toBe("true");
+
+    const twentyFour = within(presets).getByRole("button", { name: "24" });
+    fireEvent.click(twentyFour);
+    expect(useAppStore.getState().display.grid_divisions).toBe(24);
+    expect(twentyFour.getAttribute("aria-pressed")).toBe("true");
+    expect(eight.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("方眼の数は任意に指定でき、2〜128に収まる", () => {
+    render(<PaperAppearance />);
+    const input = screen.getByLabelText("方眼の細かさ（1辺の等分数）");
     fireEvent.change(input, { target: { value: "16" } });
     expect(useAppStore.getState().display.grid_divisions).toBe(16);
     fireEvent.change(input, { target: { value: "1" } });
     expect(useAppStore.getState().display.grid_divisions).toBe(2);
+    fireEvent.change(input, { target: { value: "200" } });
+    expect(useAppStore.getState().display.grid_divisions).toBe(128);
   });
 });
 

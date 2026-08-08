@@ -21,6 +21,99 @@ import {
   softOf,
 } from "../lib/displayPrefs";
 
+/**
+ * 子供向けの折り紙セットで親しまれている色を中心にした固定パレット。
+ * 色名はボタンのtitleにも使い、色だけに頼らず選べるようにする。
+ */
+export const PAPER_COLOR_PALETTE = [
+  { name: "赤", hex: "#ed1c24" },
+  { name: "朱", hex: "#f4511e" },
+  { name: "桃", hex: "#f06292" },
+  { name: "桜", hex: "#f8bbd0" },
+  { name: "橙", hex: "#ff8c00" },
+  { name: "山吹", hex: "#f6b900" },
+  { name: "黄", hex: "#ffd84d" },
+  { name: "レモン", hex: "#fff176" },
+  { name: "黄緑", hex: "#8bc34a" },
+  { name: "緑", hex: "#20a162" },
+  { name: "深緑", hex: "#006b4f" },
+  { name: "水色", hex: "#4fc3f7" },
+  { name: "空色", hex: "#29b6f6" },
+  { name: "青", hex: "#3578e5" },
+  { name: "紺", hex: "#243b78" },
+  { name: "紫", hex: "#7040c9" },
+  { name: "藤", hex: "#b39ddb" },
+  { name: "茶", hex: "#8d5a3b" },
+  { name: "肌色", hex: "#f4c7a1" },
+  { name: "金茶", hex: "#c88a16" },
+  { name: "銀鼠", hex: "#a7a9ac" },
+  { name: "白", hex: "#ffffff" },
+  { name: "灰", hex: "#777777" },
+  { name: "黒", hex: "#1f1f1f" },
+] as const;
+
+/** よく使う方眼。任意入力への近道であり、これ以外の数も指定できる。 */
+export const GRID_DIVISION_PRESETS = [4, 8, 12, 16, 24, 32] as const;
+
+function paletteMarkColor(hex: string): "#ffffff" | "#27213d" {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return "#27213d";
+  // sRGBの簡易輝度。小さなチェック印がどの見本でも読める側を選ぶ。
+  const luminance = rgb[0] * 0.299 + rgb[1] * 0.587 + rgb[2] * 0.114;
+  return luminance < 145 ? "#ffffff" : "#27213d";
+}
+
+function ColorPalette({
+  label,
+  pickerLabel,
+  value,
+  onSelect,
+}: {
+  label: string;
+  pickerLabel: string;
+  value: string;
+  onSelect: (hex: string) => void;
+}) {
+  const normalizedValue = value.toLowerCase();
+
+  return (
+    <fieldset className="paper-color-palette">
+      <legend>{label}</legend>
+      <div className="paper-color-swatches" role="group" aria-label={`${label}の24色パレット`}>
+        {PAPER_COLOR_PALETTE.map((swatch) => {
+          const selected = normalizedValue === swatch.hex;
+          return (
+            <button
+              key={swatch.name}
+              type="button"
+              className="paper-color-swatch"
+              style={{
+                backgroundColor: swatch.hex,
+                color: paletteMarkColor(swatch.hex),
+              }}
+              title={swatch.name}
+              aria-label={`${label}を${swatch.name}にする`}
+              aria-pressed={selected}
+              onClick={() => onSelect(swatch.hex)}
+            >
+              <span aria-hidden="true">{selected ? "✓" : ""}</span>
+            </button>
+          );
+        })}
+      </div>
+      <label className="paper-custom-color">
+        その他の色
+        <input
+          type="color"
+          aria-label={pickerLabel}
+          value={value}
+          onChange={(e) => onSelect(e.target.value)}
+        />
+      </label>
+    </fieldset>
+  );
+}
+
 export function PaperAppearance() {
   const display = useAppStore((s) => s.display);
   const setDisplay = useAppStore((s) => s.setDisplay);
@@ -106,45 +199,63 @@ export function PaperAppearance() {
           ? "ホイール: 上下 / Shift+ホイール: 左右 / Ctrl+ホイール: カーソル位置を中心に拡大縮小"
           : "ホイール: カーソル位置を中心に拡大縮小 / Ctrl+ホイール: 上下 / Ctrl+Shift+ホイール: 左右"}
       </span>
-      <label>
-        紙の表の色
-        <input
-          type="color"
-          aria-label="紙の表の色"
+      <div className="paper-color-settings">
+        <ColorPalette
+          label="紙の表"
+          pickerLabel="紙の表の色"
           value={rgbToHex(display.front_color)}
-          onChange={(e) => {
-            const rgb = hexToRgb(e.target.value);
+          onSelect={(hex) => {
+            const rgb = hexToRgb(hex);
             if (rgb) setDisplay({ front_color: rgb });
           }}
         />
-      </label>
-      <label>
-        紙の裏の色
-        <input
-          type="color"
-          aria-label="紙の裏の色"
+        <ColorPalette
+          label="紙の裏"
+          pickerLabel="紙の裏の色"
           value={rgbToHex(display.back_color)}
-          onChange={(e) => {
-            const rgb = hexToRgb(e.target.value);
+          onSelect={(hex) => {
+            const rgb = hexToRgb(hex);
             if (rgb) setDisplay({ back_color: rgb });
           }}
         />
-      </label>
-      <label>
-        方眼の数(1辺)
-        <input
-          type="number"
-          min={MIN_DIVISIONS}
-          max={MAX_DIVISIONS}
-          step={1}
-          value={display.grid_divisions}
-          onChange={(e) => setDisplay({ grid_divisions: Number(e.target.value) })}
-        />
-      </label>
-      <span className="hint">
-        紙を{display.grid_divisions}等分した目盛りに線が吸い付きます({MIN_DIVISIONS}〜
-        {MAX_DIVISIONS})
-      </span>
+      </div>
+      <section className="grid-divisions-control" aria-labelledby="grid-divisions-heading">
+        <div className="grid-divisions-heading">
+          <span id="grid-divisions-heading">方眼の細かさ</span>
+          <output aria-live="polite">
+            {display.grid_divisions}
+            <small>等分</small>
+          </output>
+        </div>
+        <div className="grid-division-presets" role="group" aria-label="よく使う方眼の細かさ">
+          {GRID_DIVISION_PRESETS.map((divisions) => (
+            <button
+              key={divisions}
+              type="button"
+              aria-pressed={display.grid_divisions === divisions}
+              onClick={() => setDisplay({ grid_divisions: divisions })}
+            >
+              {divisions}
+            </button>
+          ))}
+        </div>
+        <label className="grid-division-custom">
+          自由に指定
+          <input
+            type="number"
+            aria-label="方眼の細かさ（1辺の等分数）"
+            min={MIN_DIVISIONS}
+            max={MAX_DIVISIONS}
+            step={1}
+            value={display.grid_divisions}
+            onChange={(e) => setDisplay({ grid_divisions: Number(e.target.value) })}
+          />
+        </label>
+        <span className="hint">
+          紙を{display.grid_divisions}等分した目盛りに線が吸い付きます（{MIN_DIVISIONS}〜
+          {MAX_DIVISIONS}）
+        </span>
+      </section>
       <label>
         <input
           type="checkbox"

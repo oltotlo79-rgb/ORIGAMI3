@@ -1321,6 +1321,155 @@ input[type="radio"] {
   cursor: pointer;
 }
 
+.paper-color-settings {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--sp-3);
+}
+
+.paper-color-palette {
+  min-width: 0;
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
+  border: 2px solid var(--color-secondary-soft);
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.paper-color-palette legend {
+  padding: 0 var(--sp-2);
+  color: var(--color-secondary-strong);
+  font-weight: var(--fw-black);
+}
+
+.paper-color-swatches {
+  display: grid;
+  grid-template-columns: repeat(8, 26px);
+  gap: 4px;
+}
+
+.paper-color-swatch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  min-height: 0;
+  padding: 0;
+  border: 2px solid rgba(39, 33, 61, 0.24);
+  border-radius: 8px;
+  font-weight: var(--fw-black);
+  line-height: 1;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.32);
+  cursor: pointer;
+  transition:
+    transform var(--t-fast),
+    border-color var(--t-fast),
+    box-shadow var(--t-fast);
+}
+
+.paper-color-swatch:hover {
+  z-index: 1;
+  border-color: var(--color-secondary-strong);
+  transform: translateY(-2px) scale(1.08);
+}
+
+.paper-color-swatch[aria-pressed="true"] {
+  border-color: var(--color-accent-strong);
+  box-shadow:
+    0 0 0 3px var(--color-accent-soft),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.42);
+}
+
+.paper-color-swatch:focus-visible {
+  outline-offset: 2px;
+}
+
+.paper-custom-color {
+  display: inline-flex;
+  align-items: center;
+  margin-top: var(--sp-2);
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+}
+
+.grid-divisions-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: 2px solid var(--color-accent-soft);
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.grid-divisions-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  color: var(--color-accent-strong);
+  font-weight: var(--fw-black);
+}
+
+.grid-divisions-heading output {
+  min-width: 76px;
+  padding: 2px var(--sp-3);
+  border-radius: var(--radius-pill);
+  background: var(--color-pop-yellow);
+  color: var(--color-text);
+  font-size: var(--fs-xl);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--lh-tight);
+  text-align: center;
+  box-shadow: 0 3px 0 rgba(112, 64, 201, 0.22);
+}
+
+.grid-divisions-heading output small {
+  margin-left: 2px;
+  font-size: var(--fs-xs);
+}
+
+.grid-division-presets {
+  display: flex;
+  gap: 4px;
+}
+
+.grid-division-presets button {
+  min-width: 34px;
+  min-height: 30px;
+  padding: var(--sp-1) var(--sp-2);
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-control);
+  color: var(--color-text);
+  font-weight: var(--fw-black);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.grid-division-presets button:hover {
+  border-color: var(--color-secondary);
+  background: var(--color-secondary-soft);
+}
+
+.grid-division-presets button[aria-pressed="true"] {
+  border-color: var(--color-accent-strong);
+  background: var(--color-accent);
+  color: #fff;
+  box-shadow: 0 3px 0 var(--color-accent-strong);
+}
+
+.grid-division-custom {
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+}
+
 .first-run-guide-close {
   position: absolute;
   top: var(--sp-4);
@@ -1429,6 +1578,72 @@ input[type="radio"] {
   border-top: 2px dashed var(--color-border);
 }
 
+.fold-controls-heading,
+.hinge-angle-name {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.fold-controls-heading {
+  margin-bottom: var(--sp-2);
+}
+
+.fold-controls-heading strong {
+  color: var(--color-secondary-strong);
+}
+
+.bulk-angle-row {
+  margin-bottom: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border: 2px solid var(--color-pop-yellow);
+  border-radius: var(--radius-lg);
+  background: var(--color-pop-yellow-soft);
+}
+
+.hinge-angle-list {
+  display: grid;
+  gap: var(--sp-2);
+  max-height: 180px;
+  padding: 2px var(--sp-2) 2px 2px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-secondary) transparent;
+}
+
+.hinge-angle-item {
+  padding: var(--sp-2) var(--sp-3);
+  border: 2px solid var(--color-border);
+  border-left: 6px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.88);
+  transition:
+    border-color var(--t-fast),
+    background var(--t-fast),
+    box-shadow var(--t-fast);
+}
+
+.hinge-angle-item:hover,
+.hinge-angle-item:focus-within {
+  border-color: var(--color-pop-coral);
+  background: #fff;
+  box-shadow: 0 0 0 3px var(--color-danger-soft);
+}
+
+.hinge-angle-name {
+  margin-bottom: var(--sp-1);
+  color: var(--color-secondary-strong);
+}
+
+.hinge-angle-name > span {
+  min-width: 76px;
+  color: var(--color-accent-strong);
+  font-weight: var(--fw-black);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
 /* 紙の縁を巻き込むための追加折り目。下部パネル内の非モーダル通知として出す。 */
 .fold-through-proposal {
   border: 2px solid rgba(150, 80, 0, 0.34);
@@ -1463,6 +1678,18 @@ input[type="radio"] {
 
 .angle-row button {
   padding: var(--sp-1) var(--sp-5);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .vertex-list {

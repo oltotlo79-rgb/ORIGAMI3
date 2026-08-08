@@ -55,7 +55,15 @@ function clampAngle(deg: number): number {
  * 書き換えていない入力欄から離れただけでは角度を指定しない(選んだだけの
  * 折り線が勝手に指定済みになるのを防ぐ)。Escapeで書きかけを取り消す。
  */
-function AngleNumberInput({ hinge, value }: { hinge: number; value: number }) {
+function AngleNumberInput({
+  hinge,
+  value,
+  label,
+}: {
+  hinge: number;
+  value: number;
+  label: string;
+}) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   /** 利用者がこの入力欄を書き換えたか(未編集なら確定しない) */
   const editedRef = useRef(false);
@@ -94,6 +102,7 @@ function AngleNumberInput({ hinge, value }: { hinge: number; value: number }) {
       ref={inputRef}
       type="number"
       className="angle-number"
+      aria-label={`${label}の角度（数値）`}
       min={ANGLE_MIN}
       max={ANGLE_MAX}
       step={1}
@@ -115,41 +124,92 @@ function AngleNumberInput({ hinge, value }: { hinge: number; value: number }) {
 }
 
 /** 選択中の折り線1本の角度操作(スライダー+数値入力+解除) */
-function HingeAngle({ hinge }: { hinge: number }) {
+function HingeAngle({ hinge, only }: { hinge: number; only: boolean }) {
   const drivers = useAppStore((s) => s.drivers);
   const poseAngles = useAppStore((s) => s.poseAngles);
   const setDriverAngle = useAppStore((s) => s.setDriverAngle);
   const clearDriver = useAppStore((s) => s.clearDriver);
+  const setHoveredHinge = useAppStore((s) => s.setHoveredHinge);
 
   // 指定値 → 計算結果 → 0度(平ら)の順に現在値を決める
   const specified = drivers.get(hinge);
   const value = Math.round(specified ?? poseAngles.get(hinge) ?? 0);
+  const label = `折り目 #${hinge}`;
+  const sliderId = `hinge-angle-${hinge}`;
 
   return (
-    <div className="angle-row">
-      <label htmlFor="hinge-angle">折り角度</label>
-      <input
-        id="hinge-angle"
-        type="range"
-        min={ANGLE_MIN}
-        max={ANGLE_MAX}
-        step={1}
-        value={value}
-        onChange={(e) => setDriverAngle(hinge, Number(e.target.value))}
-      />
-      <AngleNumberInput key={hinge} hinge={hinge} value={value} />
-      <span className="hint">
-        度(+は山折り、−は谷折り、±180で完全に折る。数値はEnterで確定)
-      </span>
-      <button
-        type="button"
-        title="この折り線の角度指定をやめます(この線は平らに戻り、形は残りの指定から計算し直します)"
-        disabled={specified === undefined}
-        onClick={() => clearDriver(hinge)}
-      >
-        この折り線の角度を解除
-      </button>
-    </div>
+    <article
+      className="hinge-angle-item"
+      aria-label={`${label}の角度設定`}
+      onMouseEnter={() => setHoveredHinge(hinge)}
+      onMouseLeave={() => setHoveredHinge(null)}
+      onFocus={() => setHoveredHinge(hinge)}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget)) setHoveredHinge(null);
+      }}
+    >
+      <div className="hinge-angle-name">
+        <strong>{only ? "折り角度" : label}</strong>
+        <span>{value}°</span>
+      </div>
+      <div className="angle-row">
+        <label className="sr-only" htmlFor={sliderId}>
+          {label}の角度
+        </label>
+        <input
+          id={sliderId}
+          aria-label={`${label}の角度`}
+          type="range"
+          min={ANGLE_MIN}
+          max={ANGLE_MAX}
+          step={1}
+          value={value}
+          onChange={(e) => setDriverAngle(hinge, Number(e.target.value))}
+        />
+        <AngleNumberInput key={hinge} hinge={hinge} value={value} label={label} />
+        <button
+          type="button"
+          title="この折り線の角度指定をやめます(この線は平らに戻り、形は残りの指定から計算し直します)"
+          disabled={specified === undefined}
+          onClick={() => clearDriver(hinge)}
+        >
+          {only ? "この折り線の角度を解除" : "角度を解除"}
+        </button>
+      </div>
+    </article>
+  );
+}
+
+/** 複数選択した折り目を同じ絶対角度へそろえる一括スライダー。 */
+function HingeAngleGroup({ hinges }: { hinges: number[] }) {
+  const drivers = useAppStore((s) => s.drivers);
+  const poseAngles = useAppStore((s) => s.poseAngles);
+  const setDriverAngles = useAppStore((s) => s.setDriverAngles);
+  const values = hinges.map((hinge) =>
+    Math.round(drivers.get(hinge) ?? poseAngles.get(hinge) ?? 0),
+  );
+  const value = values[0] ?? 0;
+  const mixed = values.some((angle) => angle !== value);
+
+  return (
+    <section className="bulk-angle-row" aria-label="選択した折り目の一括角度設定">
+      <div className="hinge-angle-name">
+        <strong>まとめて動かす</strong>
+        <span>{mixed ? "角度はばらばら" : `${value}°`}</span>
+      </div>
+      <div className="angle-row">
+        <input
+          type="range"
+          aria-label="選択した折り目をまとめて動かす"
+          min={ANGLE_MIN}
+          max={ANGLE_MAX}
+          step={1}
+          value={value}
+          onChange={(e) => setDriverAngles(hinges, Number(e.target.value))}
+        />
+        <span className="hint">動かすと選択中の全てを同じ角度にそろえます</span>
+      </div>
+    </section>
   );
 }
 
@@ -182,26 +242,45 @@ function PoseRecordButton() {
   );
 }
 
-/** 折り角度の操作(折り線を1本だけ選んでいるとき)と、全解除ボタン */
+/** 折り角度の操作(選択した全ヒンジの個別/一括スライダー)と、全解除ボタン */
 function FoldControls() {
   const hinges = useAppStore((s) => s.hinges);
   const selection = useAppStore((s) => s.selection);
   const drivers = useAppStore((s) => s.drivers);
   const clearDrivers = useAppStore((s) => s.clearDrivers);
+  const setHoveredHinge = useAppStore((s) => s.setHoveredHinge);
 
-  const selected =
-    selection.edgeIds.length === 1 && selection.vertexIds.length === 0
-      ? selection.edgeIds[0]
-      : null;
   // 折り線(山折り・谷折りで、両側に面がある辺)だけが角度を指定できる
   // ヒンジ集合はストアが展開図の更新時に1度だけ導出したものを使う
-  const hinge = selected !== null && hinges.has(selected) ? selected : null;
+  const selected = [...new Set(selection.edgeIds.filter((id) => hinges.has(id)))].sort(
+    (a, b) => a - b,
+  );
 
-  if (hinge === null && drivers.size === 0) return null;
+  useEffect(() => () => setHoveredHinge(null), [setHoveredHinge]);
+
+  if (selected.length === 0 && drivers.size === 0) return null;
 
   return (
     <div className="fold-controls">
-      {hinge !== null && <HingeAngle hinge={hinge} />}
+      {selected.length > 0 && (
+        <>
+          <div className="fold-controls-heading">
+            <strong>折り目を{selected.length}本選択中</strong>
+            <span className="hint">
+              Ctrl+クリックで追加・解除。各行を指すと2D/3Dの該当箇所が光ります
+            </span>
+          </div>
+          {selected.length > 1 && <HingeAngleGroup hinges={selected} />}
+          <div className="hinge-angle-list" aria-label="選択した折り目ごとの角度">
+            {selected.map((hinge) => (
+              <HingeAngle key={hinge} hinge={hinge} only={selected.length === 1} />
+            ))}
+          </div>
+          <span className="hint">
+            +は山折り、−は谷折り、±180で完全に折ります（数値はEnterで確定）
+          </span>
+        </>
+      )}
       <PoseRecordButton />
       {drivers.size > 0 && (
         <div className="button-row">
@@ -969,7 +1048,7 @@ function SelectionContent() {
       <PaperActionEntrances />
       <p className="hint">
         左のツールを選んで操作します。山折り・谷折り・補助線: 2回クリックで線を引く(Escで中止)/
-        選択: クリックまたはドラッグで選ぶ、点はドラッグで動かせる / Deleteキー:
+        選択: クリック、Ctrl+クリックで追加・解除、ドラッグで矩形選択。点はドラッグで動かせる / Deleteキー:
         選択した線を削除 / 展開図をつかんで動かす:
         スペースキーを押しながらドラッグ、右ドラッグ、中ボタンドラッグのどれでも /{" "}
         {wheelBehavior === "scroll"

@@ -168,6 +168,13 @@ describe("求まった折り線でFoldThroughを送る", () => {
     expect(op.line).toEqual(line);
     expect(op.target_layers).toBeNull(); // 既定は全ての層
     expect(op.direction).toBe("Up");
+    expect(op.alignment).toEqual({
+      mode: "pointPoint",
+      picks: [
+        { kind: "point", p: [0, 0] },
+        { kind: "point", p: [1, 1] },
+      ],
+    });
     // (0,0)が(1,1)へ重なるので、動かさない側は(1,1)の側
     expect(op.keep_side_point[0]).toBeGreaterThan(0.5);
     expect(op.keep_side_point[1]).toBeGreaterThan(0.5);

@@ -138,6 +138,73 @@ describe("平らに畳めない点", () => {
   });
 });
 
+describe("Ctrl+クリック・矩形での複数選択", () => {
+  /** 選択ツールで、修飾キーを押したまま1回クリックする。 */
+  function ctrlClick(ctx: InteractionCtx, world: Vec2): void {
+    const screen = toScreen(world);
+    onMouseDown(ctx, screen, 0, false, true);
+    onMouseUp(ctx, screen, 0, true);
+  }
+
+  it("Ctrl+クリックで辺を追加し、同じ辺をもう一度クリックすると解除する", () => {
+    const { ctx } = makeCtx();
+    ctx.tool = "select";
+    ctx.selection = { edgeIds: [0], vertexIds: [] };
+
+    // 右辺(id=1)の中央。頂点から離して、辺として拾わせる。
+    ctrlClick(ctx, [1, 0.5]);
+    expect(ctx.setSelection).toHaveBeenLastCalledWith({ edgeIds: [0, 1], vertexIds: [] });
+
+    // テスト用ctxはモックのsetSelectionで自動更新されないため、画面の次状態を反映する。
+    ctx.selection = { edgeIds: [0, 1], vertexIds: [] };
+    vi.mocked(ctx.setSelection).mockClear();
+    ctrlClick(ctx, [1, 0.5]);
+    expect(ctx.setSelection).toHaveBeenCalledWith({ edgeIds: [0], vertexIds: [] });
+  });
+
+  it("Ctrl+空白クリックでは現在の選択を維持する", () => {
+    const { ctx } = makeCtx();
+    ctx.tool = "select";
+    ctx.selection = { edgeIds: [0, 1], vertexIds: [3] };
+
+    ctrlClick(ctx, [0.5, 0.5]);
+
+    // 変更が無いのでストアへ新しい選択を送らない。
+    expect(ctx.setSelection).not.toHaveBeenCalled();
+    expect(ctx.selection).toEqual({ edgeIds: [0, 1], vertexIds: [3] });
+  });
+
+  it("押下後にCtrlを離しても追加選択として確定する", () => {
+    const { ctx } = makeCtx();
+    ctx.tool = "select";
+    ctx.selection = { edgeIds: [0], vertexIds: [] };
+    const screen = toScreen([1, 0.5]);
+
+    onMouseDown(ctx, screen, 0, false, true);
+    onMouseUp(ctx, screen, 0, false);
+
+    expect(ctx.setSelection).toHaveBeenCalledWith({ edgeIds: [0, 1], vertexIds: [] });
+  });
+
+  it("Ctrl+矩形選択は範囲内の辺・点を既存選択へ足す", () => {
+    const { ctx } = makeCtx();
+    ctx.tool = "select";
+    ctx.selection = { edgeIds: [0], vertexIds: [0] };
+
+    // 右辺(id=1)と、その両端の点1・2だけを囲む。
+    const start = toScreen([0.8, -0.1]);
+    const end = toScreen([1.1, 1.1]);
+    onMouseDown(ctx, start, 0, false, true);
+    onMouseMove(ctx, end);
+    onMouseUp(ctx, end, 0, true);
+
+    expect(ctx.setSelection).toHaveBeenCalledWith({
+      edgeIds: [0, 1],
+      vertexIds: [0, 1, 2],
+    });
+  });
+});
+
 describe("点のドラッグ移動(選択ツール)", () => {
   /** 選択ツールで頂点2(1,1)を押さえた状態を作る */
   function grabCorner() {

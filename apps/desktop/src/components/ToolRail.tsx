@@ -17,7 +17,12 @@ const CONSTRUCT_TITLE: Record<ConstructKind, string> = {
 };
 
 const TOOLS: { id: ToolId; label: string; title: string }[] = [
-  { id: "select", label: "選択", title: "選択: クリックで線や点を選ぶ。ドラッグで範囲選択" },
+  {
+    id: "select",
+    label: "選択",
+    title:
+      "選択: クリックで線や点を選ぶ。Ctrl+クリックで追加・解除、ドラッグで範囲選択",
+  },
   { id: "mountain", label: "山", title: "山折り線: 2回クリックで線を引く(Escで中止)" },
   { id: "valley", label: "谷", title: "谷折り線: 2回クリックで線を引く(Escで中止)" },
   { id: "aux", label: "補助", title: "補助線: 2回クリックで線を引く(Escで中止)" },

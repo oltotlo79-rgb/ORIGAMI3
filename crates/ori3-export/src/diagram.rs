@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use glam::DVec2;
 use ori3_cp::{Face, extract_faces};
 use ori3_layers::{FlatState, flat_state_at, resolve_driver_edges};
-use ori3_model::{Document, TechniqueKind, VertexId};
+use ori3_model::{AlignmentMode, AlignmentTarget, Document, FoldStep, TechniqueKind, VertexId};
 
 use crate::cp_svg::num;
 
@@ -195,6 +195,174 @@ impl Fit {
     }
 }
 
+/// 点群の外接矩形 `[x0, y0, x1, y1]`。
+///
+/// 折り図では折る直前の紙の形を渡し、その見た目を九宮格へ分ける基準にする。
+fn bounds_of_points(points: &[DVec2]) -> [f64; 4] {
+    let (mut x0, mut y0) = (f64::INFINITY, f64::INFINITY);
+    let (mut x1, mut y1) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for p in points {
+        x0 = x0.min(p.x);
+        y0 = y0.min(p.y);
+        x1 = x1.max(p.x);
+        y1 = y1.max(p.y);
+    }
+    if !x0.is_finite() {
+        [0.0, 0.0, 1.0, 1.0]
+    } else {
+        [x0, y0, x1, y1]
+    }
+}
+
+/// 九宮格の横・縦それぞれの位置。内部座標はyが上向き。
+fn third(value: f64, lo: f64, hi: f64) -> i8 {
+    let span = hi - lo;
+    if span.abs() <= 1e-9 {
+        return 0;
+    }
+    let t = (value - lo) / span;
+    if t < 1.0 / 3.0 {
+        -1
+    } else if t > 2.0 / 3.0 {
+        1
+    } else {
+        0
+    }
+}
+
+/// 折る直前の紙を九宮格に分け、点が紙のどのあたりかを折り紙の言葉で返す。
+fn position_label(point: [f64; 2], bounds: [f64; 4]) -> &'static str {
+    match (
+        third(point[0], bounds[0], bounds[2]),
+        third(point[1], bounds[1], bounds[3]),
+    ) {
+        (-1, 1) => "左上",
+        (0, 1) => "上",
+        (1, 1) => "右上",
+        (-1, 0) => "左",
+        (0, 0) => "中央",
+        (1, 0) => "右",
+        (-1, -1) => "左下",
+        (0, -1) => "下",
+        (1, -1) => "右下",
+        _ => "中央", // `third` の戻り値は -1/0/1 だけ
+    }
+}
+
+/// 点の位置を説明に使う言い方へ直す。四隅は「角」、それ以外は「点」と呼ぶ。
+fn point_label(point: [f64; 2], bounds: [f64; 4]) -> String {
+    let place = position_label(point, bounds);
+    let corner = matches!(place, "左上" | "右上" | "左下" | "右下");
+    format!("{place}の{}", if corner { "角" } else { "点" })
+}
+
+fn midpoint(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
+    [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]
+}
+
+fn line_label(a: [f64; 2], b: [f64; 2], bounds: [f64; 4]) -> String {
+    format!("{}の線", position_label(midpoint(a, b), bounds))
+}
+
+/// 山谷をdriver角の符号から読む。正負が混ざる技法も情報を落とさない。
+fn fold_action(step: &FoldStep) -> &'static str {
+    let mountain = step.drivers.iter().any(|d| d.target_angle_deg > 1e-9);
+    let valley = step.drivers.iter().any(|d| d.target_angle_deg < -1e-9);
+    match (mountain, valley) {
+        (true, false) => "山折り",
+        (false, true) => "谷折り",
+        (true, true) => "山折りと谷折り",
+        (false, false) => "折り目を開く",
+    }
+}
+
+/// 「合わせて折る」で選ばれた対応から、人が読める「どことどこ」の部分を作る。
+fn alignment_instruction(step: &FoldStep, bounds: [f64; 4]) -> Option<String> {
+    let alignment = step.alignment.as_ref()?;
+    match (&alignment.mode, alignment.picks.as_slice()) {
+        (
+            AlignmentMode::PointPoint,
+            [
+                AlignmentTarget::Point { p: from },
+                AlignmentTarget::Point { p: to },
+                ..,
+            ],
+        ) => Some(format!(
+            "{}を{}に合わせて",
+            point_label(*from, bounds),
+            point_label(*to, bounds)
+        )),
+        (
+            AlignmentMode::LineLine,
+            [
+                AlignmentTarget::Line { a: a0, b: a1 },
+                AlignmentTarget::Line { a: b0, b: b1 },
+                ..,
+            ],
+        ) => Some(format!(
+            "{}を{}に合わせて",
+            line_label(*a0, *a1, bounds),
+            line_label(*b0, *b1, bounds)
+        )),
+        (
+            AlignmentMode::PointLineThrough,
+            [
+                AlignmentTarget::Point { p },
+                AlignmentTarget::Line { a, b },
+                AlignmentTarget::Point { p: through },
+                ..,
+            ],
+        ) => Some(format!(
+            "{}を{}に合わせ、{}を通るように",
+            point_label(*p, bounds),
+            line_label(*a, *b, bounds),
+            point_label(*through, bounds)
+        )),
+        _ => None,
+    }
+}
+
+/// 折り操作の内容から、折り図へ添える短い日本語説明を作る純関数。
+///
+/// `projected_lines` は折る直前の畳み平面へ写した折り線。分割された線が複数ある
+/// 場合は最長の1本を位置の代表にする。技法と合わせ折りは `FoldStep` の永続化情報を
+/// 使うため、PDF/SVGのどちらでも同じ文になる。
+pub fn automatic_instruction(
+    step: &FoldStep,
+    projected_lines: &[[[f64; 2]; 2]],
+    bounds: [f64; 4],
+) -> String {
+    match step.kind {
+        TechniqueKind::Pleat => "段折りにする".to_string(),
+        TechniqueKind::InsideReverse => "中割り折りにする".to_string(),
+        TechniqueKind::OutsideReverse => "かぶせ折りにする".to_string(),
+        TechniqueKind::Petal => "花弁折りにする".to_string(),
+        TechniqueKind::Squash => "開いてつぶす".to_string(),
+        TechniqueKind::OpenSink => "沈め折りにする".to_string(),
+        TechniqueKind::Swivel => "ひだ寄せにする".to_string(),
+        TechniqueKind::Twist => "ねじり折りにする".to_string(),
+        TechniqueKind::Pose => "折り目の角度を整える".to_string(),
+        TechniqueKind::Simple => {
+            let action = fold_action(step);
+            if let Some(prefix) = alignment_instruction(step, bounds) {
+                return format!("{prefix}{action}");
+            }
+            let representative = projected_lines.iter().max_by(|a, b| {
+                let length2 = |line: &&[[f64; 2]; 2]| {
+                    let dx = line[1][0] - line[0][0];
+                    let dy = line[1][1] - line[0][1];
+                    dx * dx + dy * dy
+                };
+                length2(a).total_cmp(&length2(b))
+            });
+            match representative {
+                Some([a, b]) => format!("{}に沿って{action}", line_label(*a, *b, bounds)),
+                None => action.to_string(),
+            }
+        }
+    }
+}
+
 /// 全ての点が描画範囲に収まるような当てはめを決める(y軸は上下反転する)。
 fn fit_to_area(points: &[DVec2]) -> Fit {
     let (mut x0, mut y0) = (f64::INFINITY, f64::INFINITY);
@@ -348,19 +516,52 @@ fn arrow_svg(
 /// 日本語が出る一般的な書体を順に指定する(見つかった最初のものが使われる)。
 pub(crate) const FONT: &str = "Yu Gothic, Meiryo, Hiragino Sans, Noto Sans JP, sans-serif";
 
-/// 手順番号・技法の呼び名・注記の文字。注記は長すぎるとコマから溢れるので折り返す。
-fn labels_svg(number: usize, kind: TechniqueKind, note: &str) -> String {
+/// 手順番号・技法の呼び名・注記・自動説明の文字。
+///
+/// 手動注記があれば従来の大きさで先に最大2行を確保し、自動説明はその後ろへ
+/// 小さく1行載せる。注記がなければ自動説明を読みやすい大きさで最大2行使う。
+fn labels_svg(number: usize, kind: TechniqueKind, note: &str, instruction: &str) -> String {
     let mut out = format!(
         "  <text x=\"7\" y=\"9.5\" font-family=\"{FONT}\" font-size=\"5.5\" \
          font-weight=\"bold\" fill=\"#1a1a1a\">{number}. {}</text>\n",
         esc(technique_label(kind))
     );
-    let chars: Vec<char> = note.chars().collect();
-    for (row, line) in chars.chunks(26).take(2).enumerate() {
+
+    let note_chars: Vec<char> = note.chars().collect();
+    let note_lines: Vec<String> = note_chars
+        .chunks(26)
+        .take(2)
+        .map(|line| line.iter().collect())
+        .collect();
+    for (row, line) in note_lines.iter().enumerate() {
         out.push_str(&format!(
             "  <text x=\"7\" y=\"{}\" font-family=\"{FONT}\" font-size=\"3.4\" \
-             fill=\"#333333\">{}</text>\n",
+             fill=\"#333333\" data-role=\"manual-note\">{}</text>\n",
             num(86.0 + row as f64 * 4.6),
+            esc(line)
+        ));
+    }
+
+    let instruction_chars: Vec<char> = instruction.chars().collect();
+    let (width, rows, size, y, line_height, color) = if note_lines.is_empty() {
+        (26, 2, 3.4, 86.0, 4.6, "#333333")
+    } else {
+        // 手動注記を2行使っても、最下部の1行は自動説明用に残る。
+        (
+            34,
+            1,
+            2.7,
+            86.0 + note_lines.len() as f64 * 4.6,
+            3.8,
+            "#666666",
+        )
+    };
+    for (row, line) in instruction_chars.chunks(width).take(rows).enumerate() {
+        out.push_str(&format!(
+            "  <text x=\"7\" y=\"{}\" font-family=\"{FONT}\" font-size=\"{}\" \
+             fill=\"{color}\" data-role=\"automatic-instruction\">{}</text>\n",
+            num(y + row as f64 * line_height),
+            num(size),
             esc(&line.iter().collect::<String>())
         ));
     }
@@ -384,7 +585,9 @@ pub(crate) fn cell_body(
         Vec::new()
     };
 
-    let mut points: Vec<DVec2> = polys.iter().flatten().copied().collect();
+    let paper_points: Vec<DVec2> = polys.iter().flatten().copied().collect();
+    let paper_bounds = bounds_of_points(&paper_points);
+    let mut points = paper_points;
     for c in &creases {
         points.push(c.a);
         points.push(c.b);
@@ -405,7 +608,12 @@ pub(crate) fn cell_body(
         for crease in arrow_targets(&creases) {
             out.push_str(&arrow_svg(&crease, &fit, step.kind, toward));
         }
-        out.push_str(&labels_svg(index + 1, step.kind, &step.note));
+        let projected_lines: Vec<[[f64; 2]; 2]> = creases
+            .iter()
+            .map(|c| [[c.a.x, c.a.y], [c.b.x, c.b.y]])
+            .collect();
+        let instruction = automatic_instruction(step, &projected_lines, paper_bounds);
+        out.push_str(&labels_svg(index + 1, step.kind, &step.note, &instruction));
     }
     Ok(out)
 }
@@ -497,6 +705,7 @@ pub(crate) fn strip_doc(creases: usize) -> Document {
             }],
             layer_order: None,
             note: format!("{}本目の折り目を折ります", k + 1),
+            alignment: None,
         });
     }
     doc.cp.vertices = vertices;
@@ -549,6 +758,10 @@ mod tests {
                 "手順番号がない: {svg}"
             );
             assert!(svg.contains("本目の折り目を折ります"), "注記がない: {svg}");
+            assert!(
+                svg.contains("data-role=\"automatic-instruction\""),
+                "自動説明がない: {svg}"
+            );
         }
     }
 
@@ -607,6 +820,71 @@ mod tests {
     fn technique_names_are_origami_words() {
         assert_eq!(technique_label(TechniqueKind::InsideReverse), "中割り折り");
         assert_eq!(technique_label(TechniqueKind::Squash), "開いてつぶす");
+    }
+
+    /// 合わせ折りの点対応は、折る直前の形を九宮格に分けて自然な日本語にする。
+    #[test]
+    fn point_alignment_names_both_corners_and_fold_direction() {
+        let mut doc = strip_doc(1);
+        let step = &mut doc.sequence[0];
+        step.kind = TechniqueKind::Simple;
+        step.drivers[0].target_angle_deg = -180.0;
+        step.alignment = Some(ori3_model::FoldAlignment {
+            mode: AlignmentMode::PointPoint,
+            picks: vec![
+                AlignmentTarget::Point { p: [0.9, 0.1] },
+                AlignmentTarget::Point { p: [0.1, 0.9] },
+            ],
+        });
+        assert_eq!(
+            automatic_instruction(step, &[[[0.5, 0.0], [0.5, 1.0]]], [0.0, 0.0, 1.0, 1.0]),
+            "右下の角を左上の角に合わせて谷折り"
+        );
+    }
+
+    /// 合わせ指定がない通常折りは、折り線の九宮格位置と山谷を説明する。
+    #[test]
+    fn centered_mountain_uses_the_crease_position() {
+        let mut doc = strip_doc(1);
+        let step = &mut doc.sequence[0];
+        step.kind = TechniqueKind::Simple;
+        step.drivers[0].target_angle_deg = 180.0;
+        step.alignment = None;
+        assert_eq!(
+            automatic_instruction(step, &[[[0.5, 0.0], [0.5, 1.0]]], [0.0, 0.0, 1.0, 1.0]),
+            "中央の線に沿って山折り"
+        );
+    }
+
+    /// 名前のある技法は山谷の内訳より、折り紙で通じる技法名を優先する。
+    #[test]
+    fn pleat_has_a_short_technique_instruction() {
+        let mut doc = multi_driver_doc(2);
+        let step = &mut doc.sequence[0];
+        step.kind = TechniqueKind::Pleat;
+        assert_eq!(
+            automatic_instruction(step, &[], [0.0, 0.0, 1.0, 1.0]),
+            "段折りにする"
+        );
+    }
+
+    /// 手動注記を先に従来サイズで置き、自動文はその後ろへ小さく添える。
+    #[test]
+    fn manual_note_precedes_the_smaller_automatic_instruction() {
+        let svg = labels_svg(
+            1,
+            TechniqueKind::Simple,
+            "角をしっかり押さえる",
+            "右下の角を左上の角に合わせて谷折り",
+        );
+        let manual = svg.find("data-role=\"manual-note\"").unwrap();
+        let automatic = svg.find("data-role=\"automatic-instruction\"").unwrap();
+        assert!(manual < automatic, "手動注記が先ではない: {svg}");
+        let automatic_tag = svg[..automatic].rfind("<text").unwrap();
+        assert!(
+            svg[automatic_tag..automatic].contains("font-size=\"2.7\""),
+            "自動文が小さくない: {svg}"
+        );
     }
 
     #[test]

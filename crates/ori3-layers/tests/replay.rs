@@ -404,6 +404,7 @@ fn steps_without_drivers_are_not_skipped() {
         kind: TechniqueKind::Pose,
         drivers: Vec::new(),
         layer_order: None,
+        alignment: None,
         note: String::new(),
     });
     let res = replay(&doc, 4, 1.0);
@@ -506,6 +507,7 @@ fn accordion_document() -> Document {
                 })
                 .collect(),
             layer_order: Some(layer_order.clone()),
+            alignment: None,
             note: String::new(),
         })
         .collect();
@@ -724,6 +726,7 @@ fn pose_step_reproduces_folded_shape_after_cp_edit() {
             target_angle_deg: 90.0,
         }],
         layer_order: None,
+        alignment: None,
         note: String::new(),
     });
 
@@ -771,6 +774,7 @@ fn pose_step_after_flat_folds_keeps_the_solid_shape() {
             target_angle_deg: 90.0,
         }],
         layer_order: None,
+        alignment: None,
         note: String::new(),
     });
     let posed = replay(&doc, 2, 1.0);
@@ -863,6 +867,7 @@ fn pose_step_angles_must_not_be_rounded() {
                 })
                 .collect(),
             layer_order: None,
+            alignment: None,
             note: String::new(),
         });
         replay(&doc, 1, 1.0)

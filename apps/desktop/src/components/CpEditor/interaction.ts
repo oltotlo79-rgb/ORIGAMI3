@@ -1,6 +1,7 @@
 // ツール別のマウス・キーボード操作。
 // 山/谷/補助: 1クリック目で始点(スナップ適用)→プレビュー→2クリック目で確定、Escで中止。
-// 選択: クリックで線/頂点を選択、ドラッグで矩形複数選択。削除: クリックした線を削除。
+// 選択: クリックで線/頂点を選択、Ctrl+クリックで追加/解除、ドラッグで矩形複数選択。
+// 削除: クリックした線を削除。
 // 共通: ホイールズーム(カーソル中心)、Deleteで選択線削除。
 // 表示位置の移動(パン)は3通り: スペースキーを押しながら左ドラッグ / 右ドラッグ /
 // 中ボタンドラッグ。中ボタンの無い機器でもつかんで動かせるようにするため。
@@ -41,6 +42,8 @@ export interface EphemeralState {
   marqueeEnd: Vec2 | null;
   /** 左ボタン押下位置(px)。クリックとドラッグの判別に使う */
   downScreen: Vec2 | null;
+  /** 今の選択操作を既存選択への追加/解除として扱うか(Ctrl/Command押下時) */
+  selectionToggle: boolean;
   /** パン中の直前カーソル位置(px) */
   panLast: Vec2 | null;
   /** スペースキーを押し下げている間だけtrue(左ドラッグを表示位置の移動に使う) */
@@ -68,6 +71,7 @@ export function initialEphemeralState(): EphemeralState {
     marqueeStart: null,
     marqueeEnd: null,
     downScreen: null,
+    selectionToggle: false,
     panLast: null,
     spaceHeld: false,
     shiftHeld: false,
@@ -359,6 +363,7 @@ export function onMouseDown(
   screen: Vec2,
   button: number,
   shiftHeld?: boolean,
+  selectionToggle = false,
 ): void {
   if (shiftHeld !== undefined) ctx.state.shiftHeld = shiftHeld;
   // 表示位置の移動を最優先で拾う(線引き・選択より先に判定する)
@@ -411,6 +416,7 @@ export function onMouseDown(
   if (ctx.tool === "select") {
     // クリックかドラッグかはmouseupまで分からないので開始点だけ覚える
     ctx.state.downScreen = screen;
+    ctx.state.selectionToggle = selectionToggle;
     ctx.state.marqueeEnd = null;
     // 点の上で押したときは、その点を動かす操作として始める(CPE-006)。
     // 動かさずに離せばただの選択になる
@@ -419,7 +425,9 @@ export function onMouseDown(
     if (hit !== null && pos) {
       ctx.state.vertexDrag = { id: hit, from: pos, to: pos };
       ctx.state.marqueeStart = null;
-      ctx.setSelection({ edgeIds: [], vertexIds: [hit] });
+      // Ctrl/Commandクリックは離したときに既存選択へ追加/解除する。
+      // 通常の点ドラッグは従来どおり押した時点でその点を選ぶ。
+      if (!selectionToggle) ctx.setSelection({ edgeIds: [], vertexIds: [hit] });
       return;
     }
     ctx.state.marqueeStart = world;
@@ -482,13 +490,41 @@ export function onMouseMove(ctx: InteractionCtx, screen: Vec2, shiftHeld?: boole
   }
 }
 
-export function onMouseUp(ctx: InteractionCtx, screen: Vec2, button: number): void {
+function mergeSelection(a: Selection, b: Selection): Selection {
+  return {
+    edgeIds: [...new Set([...a.edgeIds, ...b.edgeIds])],
+    vertexIds: [...new Set([...a.vertexIds, ...b.vertexIds])],
+  };
+}
+
+function toggleSelectionId(
+  selection: Selection,
+  kind: "edge" | "vertex",
+  id: number,
+): Selection {
+  const key = kind === "edge" ? "edgeIds" : "vertexIds";
+  const ids = selection[key];
+  return {
+    ...selection,
+    [key]: ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id],
+  };
+}
+
+export function onMouseUp(
+  ctx: InteractionCtx,
+  screen: Vec2,
+  button: number,
+  selectionToggle?: boolean,
+): void {
   // どのボタンで動かし始めていても、離したところで移動を終える
   if (ctx.state.panLast) {
     ctx.state.panLast = null;
     return;
   }
   if (button !== 0 || ctx.tool !== "select" || !ctx.state.downScreen) return;
+  // クリック途中でCtrl/Commandを離しても、押し始めた時点の複数選択意図を保つ。
+  const toggle = ctx.state.selectionToggle || selectionToggle === true;
+  ctx.state.selectionToggle = false;
   // 点を離したところで動かし方を確定する(CPE-006)。動いていなければ選択のまま
   const drag = ctx.state.vertexDrag;
   if (drag) {
@@ -496,6 +532,8 @@ export function onMouseUp(ctx: InteractionCtx, screen: Vec2, button: number): vo
     ctx.state.downScreen = null;
     if (dist(drag.from, drag.to) > 1e-9) {
       ctx.applyEdit({ type: "MoveVertex", id: drag.id, to: drag.to });
+    } else if (toggle) {
+      ctx.setSelection(toggleSelectionId(ctx.selection, "vertex", drag.id));
     }
     return;
   }
@@ -506,7 +544,8 @@ export function onMouseUp(ctx: InteractionCtx, screen: Vec2, button: number): vo
   ctx.state.marqueeEnd = null;
   if (start && end) {
     // 矩形ドラッグ: 範囲内の線・頂点を複数選択
-    ctx.setSelection(selectInRect(ctx.doc, start, end));
+    const inRect = selectInRect(ctx.doc, start, end);
+    ctx.setSelection(toggle ? mergeSelection(ctx.selection, inRect) : inRect);
     return;
   }
   // クリック: 頂点優先で近傍の1つを選択(何もなければ選択解除)
@@ -514,10 +553,21 @@ export function onMouseUp(ctx: InteractionCtx, screen: Vec2, button: number): vo
   const pickTol = PICK_TOLERANCE_PX / ctx.view.scale;
   const vertexId = pickVertex(ctx.doc, world, pickTol);
   if (vertexId !== null) {
-    ctx.setSelection({ edgeIds: [], vertexIds: [vertexId] });
+    ctx.setSelection(
+      toggle
+        ? toggleSelectionId(ctx.selection, "vertex", vertexId)
+        : { edgeIds: [], vertexIds: [vertexId] },
+    );
     return;
   }
   const edgeId = pickEdge(ctx.doc, world, pickTol);
+  if (toggle) {
+    // Ctrl/Command+空白は現在の複数選択を保つ。
+    if (edgeId !== null) {
+      ctx.setSelection(toggleSelectionId(ctx.selection, "edge", edgeId));
+    }
+    return;
+  }
   ctx.setSelection({ edgeIds: edgeId !== null ? [edgeId] : [], vertexIds: [] });
 }
 
@@ -563,6 +613,7 @@ export function onKeyDown(ctx: InteractionCtx, key: string): void {
     ctx.state.downScreen = null;
     ctx.state.marqueeStart = null;
     ctx.state.marqueeEnd = null;
+    ctx.state.selectionToggle = false;
     ctx.state.constructPoints = [];
     ctx.state.constructSeg = null;
     ctx.state.curvePoints = [];

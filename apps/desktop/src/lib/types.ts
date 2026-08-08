@@ -61,12 +61,26 @@ export interface DriverLine {
   target_angle_deg: number;
 }
 
+/** 「合わせて折る」の基準。RustのFoldAlignmentと同じJSON形。 */
+export type AlignMode = "pointPoint" | "lineLine" | "pointLineThrough";
+
+export type AlignTarget =
+  | { kind: "point"; p: Vec2 }
+  | { kind: "line"; a: Vec2; b: Vec2 };
+
+export interface FoldAlignment {
+  mode: AlignMode;
+  picks: AlignTarget[];
+}
+
 export interface FoldStep {
   id: number;
   kind: TechniqueKind;
   drivers: DriverLine[];
   /** 平坦到達時の層順序(下→上)。各面は内部代表点で参照。平坦にならない場合null */
   layer_order: Vec2[] | null;
+  /** 合わせ折りで選んだ点・線。旧形式の作品では省略される */
+  alignment?: FoldAlignment | null;
   note: string;
 }
 
@@ -169,7 +183,7 @@ export type EditOp =
   | { type: "ReplaceCreasePattern"; cp: CreasePattern }
   /** 紙の色と方眼の分割数(PAP-003 / CPE-003)。作品ごとの設定として
    * .ori3ファイルに保存され、元に戻す/やり直しの対象になる。
-   * grid_divisionsが2〜64の外ならRust側が丸めて警告を返す */
+   * grid_divisionsが2〜128の外ならRust側が丸めて警告を返す */
   | { type: "SetDisplay"; display: DisplaySettings };
 
 /** sequence_apply の操作(serde内部タグ形式) */
@@ -192,6 +206,8 @@ export type SeqOp =
       keep_side_point: Vec2;
       target_layers: number[] | null;
       direction: FoldDirection;
+      /** 合わせ折りの説明文に使う点・線。折り計算には影響しない。 */
+      alignment?: FoldAlignment | null;
       /** trueなら事前提案された追加折り目を入れて、巻き込みながら折る。 */
       accept_additional_crease: boolean;
     }

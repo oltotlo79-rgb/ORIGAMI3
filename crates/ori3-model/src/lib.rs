@@ -82,6 +82,31 @@ pub struct DriverLine {
     pub target_angle_deg: f64,
 }
 
+/// 「合わせて折る」で選んだ基準の種類。
+///
+/// camelCase はデスクトップ側の `AlignMode` と同じ表記にしている。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AlignmentMode {
+    PointPoint,
+    LineLine,
+    PointLineThrough,
+}
+
+/// 合わせ折りの説明文を再現するため、選んだ点・線を畳み平面座標で保存する。
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum AlignmentTarget {
+    Point { p: [f64; 2] },
+    Line { a: [f64; 2], b: [f64; 2] },
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct FoldAlignment {
+    pub mode: AlignmentMode,
+    pub picks: Vec<AlignmentTarget>,
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FoldStep {
     pub id: StepId,
@@ -91,6 +116,9 @@ pub struct FoldStep {
     /// 各面を「CP座標系におけるその面の内部代表点」で参照する。
     /// 平坦にならないステップ(Pose)ではNone。
     pub layer_order: Option<Vec<[f64; 2]>>,
+    /// 合わせ折りで選んだ点・線。旧形式の作品では存在しないため任意。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alignment: Option<FoldAlignment>,
     pub note: String,
 }
 
@@ -109,7 +137,7 @@ pub enum FoldDirection {
 /// 方眼の分割数の下限・上限(CPE-003)。範囲外の指定は丸めて警告する
 /// (「止めずに警告」原則)。色は `u8` なので0〜255は型が保証する。
 pub const MIN_GRID_DIVISIONS: u32 = 2;
-pub const MAX_GRID_DIVISIONS: u32 = 64;
+pub const MAX_GRID_DIVISIONS: u32 = 128;
 
 /// 紙の硬さの既定値(SIM-012)。古い作品ファイルにはこの項目が無いので既定で読む。
 fn default_stiffness() -> f64 {
@@ -293,6 +321,9 @@ pub enum SeqOp {
         /// 折る対象の層。None = 折り線の可動側に掛かる全ての層
         target_layers: Option<Vec<FaceId>>,
         direction: FoldDirection,
+        /// 合わせ折りで選んだ点・線。説明文生成用で、折り計算には影響しない。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        alignment: Option<FoldAlignment>,
         /// 衝突する縁が1本に定まる場合、誘導折り目を加えて紙を巻き込む。
         /// 古い作品・画面から省略された場合は従来どおり警告だけで折る。
         #[serde(default, skip_serializing_if = "is_false")]

@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ContextPanel } from "./ContextPanel";
-import { useAppStore } from "../store/appStore";
+import { resetPoseThrottle, useAppStore } from "../store/appStore";
 import type { Document } from "../lib/types";
 import { DEFAULT_CURVE } from "../lib/curve";
 
@@ -76,11 +76,92 @@ function seed(drivers: Map<number, number>, poseAngles = new Map<number, number>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetPoseThrottle();
+  vi.mocked(ipc.poseSolve).mockResolvedValue({
+    frame: { faces: [], warnings: [] },
+    converged: true,
+    angles: {},
+    iterations: 1,
+    soft: null,
+  });
 });
 
 afterEach(() => {
   cleanup();
-  useAppStore.setState({ doc: null, drivers: new Map(), poseAngles: new Map() });
+  useAppStore.setState({
+    doc: null,
+    drivers: new Map(),
+    poseAngles: new Map(),
+    hoveredHinge: null,
+  });
+});
+
+describe("複数の折り目の角度(SIM-001)", () => {
+  function seedMultiple() {
+    seed(
+      new Map([
+        [5, 30],
+        [7, -20],
+      ]),
+      new Map([[9, 75]]),
+    );
+    const doc = makeDoc();
+    doc.cp.edges.push(
+      { id: 7, v0: 1, v1: 3, kind: "Valley" },
+      { id: 9, v0: 0, v1: 1, kind: "Mountain" },
+    );
+    useAppStore.setState({
+      doc,
+      hinges: new Set([5, 7, 9]),
+      selection: { edgeIds: [9, 5, 7], vertexIds: [2] },
+    });
+  }
+
+  it("複数選択では一括スライダーを先頭に置き、各折り目のスライダーを縦に出す", () => {
+    seedMultiple();
+    render(<ContextPanel />);
+
+    expect(screen.getByText("折り目を3本選択中")).not.toBeNull();
+    expect(screen.getByLabelText("選択した折り目をまとめて動かす")).not.toBeNull();
+    expect(screen.getByText("角度はばらばら")).not.toBeNull();
+    for (const hinge of [5, 7, 9]) {
+      expect(screen.getByLabelText(`折り目 #${hinge}の角度`)).not.toBeNull();
+    }
+    expect(screen.getByLabelText("選択した折り目ごとの角度").children).toHaveLength(3);
+  });
+
+  it("一括スライダーは選択中の全折り目を同じ絶対角度へそろえる", () => {
+    seedMultiple();
+    render(<ContextPanel />);
+
+    fireEvent.change(screen.getByLabelText("選択した折り目をまとめて動かす"), {
+      target: { value: "45" },
+    });
+    const drivers = useAppStore.getState().drivers;
+    expect([drivers.get(5), drivers.get(7), drivers.get(9)]).toEqual([45, 45, 45]);
+    expect(screen.getAllByText("45°")).toHaveLength(4);
+  });
+
+  it("各行を指すと該当する折り目IDを2D/3D強調用にストアへ置く", () => {
+    seedMultiple();
+    render(<ContextPanel />);
+    const row = screen.getByLabelText("折り目 #7の角度設定");
+
+    fireEvent.mouseEnter(row);
+    expect(useAppStore.getState().hoveredHinge).toBe(7);
+    fireEvent.mouseLeave(row);
+    expect(useAppStore.getState().hoveredHinge).toBeNull();
+  });
+
+  it("1本選択では従来どおり個別の折り角度だけを出す", () => {
+    seed(new Map([[5, 90]]));
+    render(<ContextPanel />);
+
+    expect(screen.getByText("折り角度")).not.toBeNull();
+    expect(screen.getByLabelText("折り目 #5の角度")).not.toBeNull();
+    expect(screen.queryByLabelText("選択した折り目をまとめて動かす")).toBeNull();
+    expect(screen.getByRole("button", { name: "この折り線の角度を解除" })).not.toBeNull();
+  });
 });
 
 describe("この形で仕上げる(SIM-009)", () => {

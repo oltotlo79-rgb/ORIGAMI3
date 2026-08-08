@@ -145,6 +145,7 @@ export function Viewer3D({ fitRef }: Props) {
   const frame3d = useAppStore((s) => s.frame3d);
   const softMesh = useAppStore((s) => s.softMesh);
   const selection = useAppStore((s) => s.selection);
+  const hoveredHinge = useAppStore((s) => s.hoveredHinge);
   const docEpoch = useAppStore((s) => s.docEpoch);
   const activeTool = useAppStore((s) => s.activeTool);
   const foldDraft = useAppStore((s) => s.foldDraft);
@@ -370,7 +371,7 @@ export function Viewer3D({ fitRef }: Props) {
         s.selection.edgeIds,
       ).map((target) => ({
         edgeId: target.edgeId,
-        role: target.role,
+        role: target.edgeId === s.hoveredHinge ? ("focus" as const) : target.role,
         a: new THREE.Vector3(...target.a),
         b: new THREE.Vector3(...target.b),
       })),
@@ -382,6 +383,7 @@ export function Viewer3D({ fitRef }: Props) {
     drawHighlight();
   }, [
     selection,
+    hoveredHinge,
     doc,
     faces,
     hinges,
@@ -912,10 +914,21 @@ export function Viewer3D({ fitRef }: Props) {
         x,
         y,
       );
-      useAppStore.getState().setSelection({
-        edgeIds: edgeId !== null ? [edgeId] : [],
-        vertexIds: [],
-      });
+      const toggle = e.ctrlKey || e.metaKey;
+      if (toggle && edgeId === null) {
+        // Ctrl/Command+空白は現在の複数選択を保つ。
+        updateHoverCursor(e.currentTarget, x, y, e.ctrlKey);
+        return;
+      }
+      const edgeIds =
+        toggle && edgeId !== null
+          ? st.selection.edgeIds.includes(edgeId)
+            ? st.selection.edgeIds.filter((id) => id !== edgeId)
+            : [...st.selection.edgeIds, edgeId]
+          : edgeId !== null
+            ? [edgeId]
+            : [];
+      st.setSelection({ edgeIds, vertexIds: [] });
       if (st.activeTool === "select" && edgeId === null) {
         const paper = pickPaper(
           scene.content.mesh,
@@ -960,7 +973,7 @@ export function Viewer3D({ fitRef }: Props) {
               : "紙をクリックして層を選び、ドラッグして折り線を引く(平らに畳んだ状態で使える)"
             : foldMode
               ? "紙をつかんでドラッグすると折れる。Shiftで重なった紙を全部、Altで1枚だけ、Ctrl+ドラッグで折り線を引く(平らに畳んだ状態で使える)"
-              : "ドラッグで回転、ホイールで拡大縮小、折り線をクリックで選択(展開図で選んだ縁・補助線は水色)"
+              : "ドラッグで回転、ホイールで拡大縮小、折り線をクリックで選択、Ctrl+クリックで追加/解除(展開図で選んだ縁・補助線は水色)"
         }
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}

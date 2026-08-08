@@ -78,6 +78,7 @@ export function CpEditor({ fitRef }: Props) {
   // 購読はdrawの再実行トリガーとして使う(値の読み出しはgetStateで行う)
   const doc = useAppStore((s) => s.doc);
   const selection = useAppStore((s) => s.selection);
+  const hoveredHinge = useAppStore((s) => s.hoveredHinge);
   const activeTool = useAppStore((s) => s.activeTool);
   const docEpoch = useAppStore((s) => s.docEpoch);
   const violations = useAppStore((s) => s.violations);
@@ -98,6 +99,7 @@ export function CpEditor({ fitRef }: Props) {
       curve,
       mirrorDraw,
       wheelBehavior,
+      hoveredHinge,
     } = useAppStore.getState();
     if (!canvas) return;
     // カーソルの形は表示専用なので、再描画を起こさずcanvasへ直接反映する
@@ -195,6 +197,7 @@ export function CpEditor({ fitRef }: Props) {
         : null,
       suggestedCreases: useAppStore.getState().pendingFoldThrough?.proposal
         .crease_segments,
+      hoveredHinge,
     };
     const ctx2d = canvas.getContext("2d");
     if (ctx2d) {
@@ -233,6 +236,7 @@ export function CpEditor({ fitRef }: Props) {
   }, [
     doc,
     selection,
+    hoveredHinge,
     activeTool,
     violations,
     construct,
@@ -257,6 +261,7 @@ export function CpEditor({ fitRef }: Props) {
     st.downScreen = null;
     st.marqueeStart = null;
     st.marqueeEnd = null;
+    st.selectionToggle = false;
     st.constructPoints = [];
     st.constructSeg = null;
     st.curvePoints = [];
@@ -358,7 +363,15 @@ export function CpEditor({ fitRef }: Props) {
         }
         // ポインタ捕捉: canvas外へ出てもmove/upが届き、ドラッグ状態が残留しない
         e.currentTarget.setPointerCapture(e.pointerId);
-        withCtx((ctx) => onMouseDown(ctx, screenPos(e), e.button, e.shiftKey));
+        withCtx((ctx) =>
+          onMouseDown(
+            ctx,
+            screenPos(e),
+            e.button,
+            e.shiftKey,
+            e.ctrlKey || e.metaKey,
+          ),
+        );
       }}
       onPointerMove={(e) =>
         withCtx((ctx) => onMouseMove(ctx, screenPos(e), e.shiftKey))
@@ -366,7 +379,9 @@ export function CpEditor({ fitRef }: Props) {
       onPointerUp={(e) => {
         const hadStart = stateRef.current.pendingStart !== null;
         const constructBefore = constructDone(stateRef.current);
-        withCtx((ctx) => onMouseUp(ctx, screenPos(e), e.button));
+        withCtx((ctx) =>
+          onMouseUp(ctx, screenPos(e), e.button, e.ctrlKey || e.metaKey),
+        );
         const s = useAppStore.getState();
         if (
           s.activeTool === "mountain" ||
@@ -398,6 +413,7 @@ export function CpEditor({ fitRef }: Props) {
         st.panLast = null;
         st.marqueeStart = null;
         st.marqueeEnd = null;
+        st.selectionToggle = false;
         st.vertexDrag = null;
         st.directionSnap = null;
         draw();

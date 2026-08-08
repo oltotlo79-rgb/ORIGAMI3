@@ -482,6 +482,7 @@ pub(crate) fn run_motion(
         kind: input.kind,
         drivers,
         layer_order: Some(layer_points),
+        alignment: None,
         note: String::new(),
     };
     Ok(MotionOutcome {

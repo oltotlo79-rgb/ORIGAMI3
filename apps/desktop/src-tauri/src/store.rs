@@ -275,6 +275,7 @@ impl DocumentStore {
                 keep_side_point,
                 target_layers,
                 direction,
+                alignment,
                 accept_additional_crease,
             } => {
                 let mut insert_warnings = check_insert_point(&doc, up_to)?;
@@ -296,6 +297,7 @@ impl DocumentStore {
                 )?;
                 let mut step = result.step;
                 step.id = next_step_id(&doc);
+                step.alignment = alignment;
                 doc.cp = cp;
                 doc.sequence.insert(up_to, step);
                 warnings = state_warnings;
@@ -712,6 +714,7 @@ mod tests {
             kind: TechniqueKind::Simple,
             drivers: Vec::new(),
             layer_order: None,
+            alignment: None,
             note: String::new(),
         }
     }
@@ -968,11 +971,11 @@ mod tests {
         assert!(view.warnings.is_empty(), "warnings={:?}", view.warnings);
         assert!(store.is_dirty(), "作品が変わったので未保存になる");
 
-        // 範囲外(0と100)は丸めて警告する
+        // 範囲外(0と上限超過)は丸めて警告する
         let view = store
             .apply_edit(EditOp::SetDisplay {
                 display: ori3_model::DisplaySettings {
-                    grid_divisions: 100,
+                    grid_divisions: MAX_GRID_DIVISIONS + 1,
                     ..view.doc.display.clone()
                 },
             })
@@ -1295,6 +1298,31 @@ mod tests {
     }
 
     #[test]
+    fn fold_through_keeps_alignment_metadata_on_the_new_step() {
+        let mut store = square_store();
+        let alignment = ori3_model::FoldAlignment {
+            mode: ori3_model::AlignmentMode::PointPoint,
+            picks: vec![
+                ori3_model::AlignmentTarget::Point { p: [1.0, 0.0] },
+                ori3_model::AlignmentTarget::Point { p: [0.0, 1.0] },
+            ],
+        };
+        let view = store
+            .apply_seq(SeqOp::FoldThrough {
+                up_to: 0,
+                line: [[0.0, 0.0], [1.0, 1.0]],
+                keep_side_point: [0.0, 1.0],
+                target_layers: None,
+                direction: ori3_model::FoldDirection::Up,
+                alignment: Some(alignment.clone()),
+                accept_additional_crease: false,
+            })
+            .expect("合わせ折りを適用する");
+
+        assert_eq!(view.doc.sequence[0].alignment, Some(alignment));
+    }
+
+    #[test]
     fn preview_fold_through_is_non_destructive_and_acceptance_adds_the_guide() {
         let mut store = square_store();
         store
@@ -1304,6 +1332,7 @@ mod tests {
                 keep_side_point: [0.5, 0.5],
                 target_layers: None,
                 direction: ori3_model::FoldDirection::Up,
+                alignment: None,
                 accept_additional_crease: false,
             })
             .expect("左端を折る");
@@ -1335,6 +1364,7 @@ mod tests {
                 keep_side_point: [0.6, 0.5],
                 target_layers: None,
                 direction: ori3_model::FoldDirection::Up,
+                alignment: None,
                 accept_additional_crease: true,
             })
             .expect("提案を承諾して折る");
@@ -1919,6 +1949,7 @@ mod tests {
             keep_side_point,
             target_layers: None,
             direction: ori3_model::FoldDirection::Up,
+            alignment: None,
             accept_additional_crease: false,
         }
     }

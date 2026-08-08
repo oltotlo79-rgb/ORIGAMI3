@@ -85,6 +85,14 @@ describe("snap", () => {
     expect(r?.pos[1]).toBeCloseTo(1 / 6, 12);
   });
 
+  it("128等分でも近い交点を定数時間で求める", () => {
+    const doc = makeDoc({ gridDivisions: 128 });
+    const r = snap(doc, [65 / 128 + 0.0002, 31 / 128 - 0.0002], 0.001);
+    expect(r?.kind).toBe("grid");
+    expect(r?.pos[0]).toBeCloseTo(65 / 128, 12);
+    expect(r?.pos[1]).toBeCloseTo(31 / 128, 12);
+  });
+
   it("線分上の点より近いグリッド交点を優先する", () => {
     // 下辺(y=0)上のグリッド交点(0.5,0): 線上吸着ではなくgridとして返る
     const r = snap(makeDoc(), [0.5, 0.005], 0.02);

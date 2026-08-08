@@ -7,21 +7,14 @@
 //   線と線  → 2直線の角の二等分線(交わるなら2本、平行なら中間線1本)
 //   点を線へ(折り目が通る点を指定) → 指定点を中心にした円と線の交点から作る(0〜2本)
 
-import type { Vec2 } from "./types";
+import type { AlignMode, AlignTarget, Vec2 } from "./types";
+export type { AlignMode, AlignTarget } from "./types";
 
 /** 長さ・距離が0かどうかの判定に使う余裕(正規化座標。紙の長辺=1.0) */
 export const ALIGN_EPS = 1e-9;
 
 /** 折り線(畳み平面の2点。FoldThroughのlineと同じ形) */
 export type FoldLine = [Vec2, Vec2];
-
-/** 3つの合わせ方 */
-export type AlignMode = "pointPoint" | "lineLine" | "pointLineThrough";
-
-/** 合わせる対象(3D画面でクリックして選ぶ) */
-export type AlignTarget =
-  | { kind: "point"; p: Vec2 }
-  | { kind: "line"; a: Vec2; b: Vec2 };
 
 /** 合わせ方ごとに必要な選択の数と、順番どおりの対象の種類 */
 export const ALIGN_STEPS: Record<AlignMode, ("point" | "line")[]> = {

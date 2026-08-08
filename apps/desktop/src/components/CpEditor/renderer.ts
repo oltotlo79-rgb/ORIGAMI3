@@ -23,6 +23,8 @@ export const COLORS = {
   paper: "#ffffff",
   paperShadow: "rgba(0, 0, 0, 0.25)",
   selection: "#ff9500",
+  /** 複数スライダーのうち、指している折り目を選択全体から見分ける色 */
+  hingeHover: "#7040c9",
   snapMarker: "#2aa02a",
   /** 平らに畳めない点(CPE-009)。操作は止めず色で知らせるだけ */
   violation: "#ff8c00",
@@ -48,6 +50,7 @@ export const LINE_WIDTHS = {
   aux: 1,
   grid: 1,
   selected: 6,
+  hovered: 10,
   preview: 1.5,
 } as const;
 
@@ -219,6 +222,8 @@ export interface RenderOverlay {
   vertexDrag: { id: number; to: Vec2 } | null;
   /** 巻き込み折りで追加されるCP上の線分。候補が無ければ省略する */
   suggestedCreases?: [Vec2, Vec2][];
+  /** 複数角度スライダーで指している折り目。選択色より太い縁で個別に示す */
+  hoveredHinge?: number | null;
 }
 
 /** 点を動かしている途中のプレビュー: つながる線を破線で新しい位置へ引き直す */
@@ -309,11 +314,21 @@ function drawGrid(
   // 方眼は紙の塗りを少し暗くした色。紙の色を変えても消えず、折り線より控えめになる
   ctx.strokeStyle = cssRgb(gridColor(fill));
   ctx.lineWidth = LINE_WIDTHS.grid;
-  // x方向・y方向とも同じ分割数(輪郭と重なる両端は描かない)
+  ctx.setLineDash([]);
+  // x方向・y方向とも同じ分割数(輪郭と重なる両端は描かない)。
+  // 128等分でも254線分を1つのPath/1回のstrokeへまとめ、描画呼び出しを増やさない。
+  ctx.beginPath();
   for (let i = 1; i < n; i++) {
-    strokeSegment(ctx, view, [(i * w) / n, 0], [(i * w) / n, h]);
-    strokeSegment(ctx, view, [0, (i * h) / n], [w, (i * h) / n]);
+    const x0 = worldToScreen(view, [(i * w) / n, 0]);
+    const x1 = worldToScreen(view, [(i * w) / n, h]);
+    const y0 = worldToScreen(view, [0, (i * h) / n]);
+    const y1 = worldToScreen(view, [w, (i * h) / n]);
+    ctx.moveTo(x0[0], x0[1]);
+    ctx.lineTo(x1[0], x1[1]);
+    ctx.moveTo(y0[0], y0[1]);
+    ctx.lineTo(y1[0], y1[1]);
   }
+  ctx.stroke();
 }
 
 function drawEdges(
@@ -322,6 +337,7 @@ function drawEdges(
   view: ViewTransform,
   selection: Selection,
   fill: Rgb,
+  hoveredHinge: number | null,
 ): void {
   const byId = new Map(doc.cp.vertices.map((v) => [v.id, v.pos]));
   const selected = new Set(selection.edgeIds);
@@ -330,6 +346,15 @@ function drawEdges(
     const a = byId.get(e.v0);
     const b = byId.get(e.v1);
     if (!a || !b) continue; // 参照切れの壊れた線は描かない(検査の警告で知らせる)
+    if (e.id === hoveredHinge) {
+      // 全選択の橙色より外側へ紫の縁を敷き、どのスライダーの線かを示す。
+      ctx.save();
+      ctx.strokeStyle = COLORS.hingeHover;
+      ctx.lineWidth = LINE_WIDTHS.hovered;
+      ctx.setLineDash([]);
+      strokeSegment(ctx, view, a, b);
+      ctx.restore();
+    }
     if (selected.has(e.id)) {
       // 選択強調: 下に太いハイライトを敷く
       ctx.save();
@@ -551,7 +576,7 @@ export function render(
 
   drawGrid(ctx, doc, view, fill);
   if (overlay.mirrorAxis !== null) drawMirrorAxis(ctx, doc, view, overlay.mirrorAxis);
-  drawEdges(ctx, doc, view, selection, fill);
+  drawEdges(ctx, doc, view, selection, fill, overlay.hoveredHinge ?? null);
   drawSelectedVertices(ctx, doc, view, selection);
   drawViolations(ctx, doc, view, overlay.violations);
   if (overlay.vertexDrag) drawVertexDrag(ctx, doc, view, overlay.vertexDrag);

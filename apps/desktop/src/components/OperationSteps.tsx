@@ -104,7 +104,7 @@ export function operationGuideFor(s: ReturnType<typeof useAppStore.getState>): O
 
   return {
     title: "紙と折り線を選ぶ",
-    steps: ["展開図または3Dをクリック", "下に出た設定を変える"],
+    steps: ["クリック（Ctrlで複数選択）", "下の角度を個別・一括で変える"],
     current:
       s.selection.edgeIds.length > 0 || s.selection.vertexIds.length > 0 ? 1 : 0,
   };

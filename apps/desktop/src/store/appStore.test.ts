@@ -373,6 +373,103 @@ describe("appStore 折り角度の指定", () => {
     }
   });
 
+  it("複数の折り線を同じ角度にして1回で送り、対象外の指定は保ちたい目標にする", async () => {
+    primeFakeTimers();
+    try {
+      const view = makeHingeView(460);
+      useAppStore.setState({
+        doc: view.doc,
+        faces: view.faces,
+        hinges: new Set([5, 7, 9]),
+        drivers: new Map([[9, 25]]),
+      });
+
+      // 重複と存在しない辺を含めても、有効な選択だけを番号順に1回へまとめる。
+      useAppStore.getState().setDriverAngles([7, 5, 7, 999], 60);
+      expect(ipc.poseSolve).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(POSE_WAIT_MS);
+
+      expect(poseCalls()).toEqual([
+        [
+          { hinge: 5, target_angle_deg: 60 },
+          { hinge: 7, target_angle_deg: 60 },
+        ],
+      ]);
+      expect(poseKeeps()).toEqual([[{ hinge: 9, target_angle_deg: 25 }]]);
+      expect([...useAppStore.getState().drivers]).toEqual([
+        [9, 25],
+        [5, 60],
+        [7, 60],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("複数折り線の連続変更も16ms間引きとrunLatestで最後だけを残し履歴は1件にする", async () => {
+    primeFakeTimers();
+    try {
+      const slow = deferred<SolveResult>();
+      vi.mocked(ipc.poseSolve).mockReturnValueOnce(slow.promise);
+      const view = makeHingeView(470);
+      useAppStore.setState({
+        doc: view.doc,
+        faces: view.faces,
+        hinges: new Set([5, 7, 9, 11]),
+        drivers: new Map([[9, 25]]),
+        angleUndoStack: [],
+        angleRedoStack: [new Map([[9, 10]])],
+      });
+      const store = useAppStore.getState();
+      const selected = [11, 7, 5, 7, 999];
+
+      store.setDriverAngles(selected, 10);
+      await vi.advanceTimersByTimeAsync(POSE_WAIT_MS); // 1件目が実行中になる
+      expect(poseCalls()).toEqual([
+        [
+          { hinge: 5, target_angle_deg: 10 },
+          { hinge: 7, target_angle_deg: 10 },
+          { hinge: 11, target_angle_deg: 10 },
+        ],
+      ]);
+      expect(poseKeeps()).toEqual([[{ hinge: 9, target_angle_deg: 25 }]]);
+
+      for (const deg of [20, 30, 40]) {
+        store.setDriverAngles(selected, deg);
+        await vi.advanceTimersByTimeAsync(POSE_WAIT_MS);
+      }
+      expect(poseCalls()).toHaveLength(1); // 実行中は中間の20・30度を送らない
+
+      // 同じ選択組のスライダー操作は、最初の状態だけを1件の履歴に残す。
+      const during = useAppStore.getState();
+      expect(during.angleUndoStack).toHaveLength(1);
+      expect([...during.angleUndoStack[0]]).toEqual([[9, 25]]);
+      expect(during.angleRedoStack).toEqual([]);
+
+      slow.resolve(makeSolveResult());
+      await vi.advanceTimersByTimeAsync(POSE_WAIT_MS);
+
+      expect(poseCalls()).toEqual([
+        [
+          { hinge: 5, target_angle_deg: 10 },
+          { hinge: 7, target_angle_deg: 10 },
+          { hinge: 11, target_angle_deg: 10 },
+        ],
+        [
+          { hinge: 5, target_angle_deg: 40 },
+          { hinge: 7, target_angle_deg: 40 },
+          { hinge: 11, target_angle_deg: 40 },
+        ],
+      ]);
+      expect(poseKeeps()).toEqual([
+        [{ hinge: 9, target_angle_deg: 25 }],
+        [{ hinge: 9, target_angle_deg: 25 }],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("追い越された追従計算の成功結果は3D表示へ反映しない", async () => {
     const first = deferred<SolveResult>();
     const second = deferred<SolveResult>();

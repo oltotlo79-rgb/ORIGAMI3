@@ -165,6 +165,7 @@ fn doc_with_steps(cp: CreasePattern, nc: usize) -> Document {
                     target_angle_deg: 30.0,
                 }],
                 layer_order: None,
+                alignment: None,
                 note: String::new(),
             }
         })

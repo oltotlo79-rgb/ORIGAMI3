@@ -115,12 +115,12 @@ describe("紙の色と方眼・重なり防止・分割比", () => {
     expect(useAppStore.getState().doc?.display.front_color).toEqual([0, 128, 255]);
     expect(useAppStore.getState().display.front_color).toEqual([0, 128, 255]);
 
-    // 範囲外は上限(64)に丸めてから送る
-    await useAppStore.getState().setDisplay({ grid_divisions: 100 });
+    // 範囲外は上限(128)に丸めてから送る
+    await useAppStore.getState().setDisplay({ grid_divisions: 200 });
     const last = vi.mocked(ipc.editApply).mock.calls[1][0];
     if (last.type !== "SetDisplay") throw new Error("SetDisplayでない");
-    expect(last.display.grid_divisions).toBe(64);
-    expect(useAppStore.getState().doc?.display.grid_divisions).toBe(64);
+    expect(last.display.grid_divisions).toBe(128);
+    expect(useAppStore.getState().doc?.display.grid_divisions).toBe(128);
 
     await useAppStore
       .getState()

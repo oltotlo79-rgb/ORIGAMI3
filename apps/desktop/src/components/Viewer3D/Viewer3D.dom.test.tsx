@@ -406,6 +406,49 @@ describe("Viewer3D(指している場所のカーソル)", () => {
     expect(canvas.style.cursor).toBe("not-allowed");
   });
 
+  it("Ctrl+クリックでヒンジを既存選択へ追加し、もう一度で解除する", async () => {
+    useAppStore.setState({ selection: { edgeIds: [0], vertexIds: [] } });
+    const canvas = renderViewer();
+    await waitFor(() => expect(held.scene.content).not.toBeNull());
+
+    const ctrlClick = () => {
+      fireEvent.pointerDown(canvas, {
+        button: 0,
+        pointerId: 1,
+        clientX: 200,
+        clientY: 200,
+        ctrlKey: true,
+      });
+      fireEvent.pointerUp(canvas, {
+        button: 0,
+        pointerId: 1,
+        clientX: 200,
+        clientY: 200,
+        ctrlKey: true,
+      });
+    };
+
+    ctrlClick();
+    expect(useAppStore.getState().selection.edgeIds).toEqual([0, 5]);
+    ctrlClick();
+    expect(useAppStore.getState().selection.edgeIds).toEqual([0]);
+  });
+
+  it("スライダー行のホバー対象だけをfocus色の役割で3D強調する", async () => {
+    useAppStore.setState({ selection: { edgeIds: [0, 5, 6], vertexIds: [] } });
+    renderViewer();
+    await waitFor(() => expect(held.scene.content).not.toBeNull());
+
+    act(() => useAppStore.getState().setHoveredHinge(5));
+    await waitFor(() => {
+      const setHighlight = held.scene.setHighlight as ReturnType<typeof vi.fn>;
+      const calls = setHighlight.mock.calls;
+      const last = calls[calls.length - 1][0] as { edgeId: number; role?: string }[];
+      expect(last.find((segment) => segment.edgeId === 5)?.role).toBe("focus");
+      expect(last.find((segment) => segment.edgeId === 0)?.role).toBe("reference");
+    });
+  });
+
   it("合わせて折る途中は、いま選べる点の近くだけpointerになる", async () => {
     act(() => {
       useAppStore.setState({ activeTool: "fold" });

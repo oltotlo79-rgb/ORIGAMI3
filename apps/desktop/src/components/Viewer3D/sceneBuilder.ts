@@ -34,6 +34,8 @@ const OUTLINE_COLOR = 0x1a1a1a;
 const HIGHLIGHT_COLOR = 0xffd400;
 /** 選択中だが折る操作の対象ではない縁・補助線などの強調色(水色) */
 const REFERENCE_HIGHLIGHT_COLOR = 0x40cfff;
+/** 複数スライダーのうち指している1本の強調色(POPのコーラル) */
+const FOCUS_HIGHLIGHT_COLOR = 0xed5c70;
 /** 折った結果の下見(実行前プレビュー)の色。動く紙と分かるよう青系にする */
 const PREVIEW_COLOR = 0x2f8fff;
 /** 下見の透け具合(下の紙が見える程度) */
@@ -488,7 +490,7 @@ export interface Viewer3DScene {
 
 /** 強調線分。role省略時は従来どおり操作対象の黄色で描く。 */
 export interface HighlightSegment extends HingeSegment {
-  role?: "hinge" | "reference";
+  role?: "hinge" | "reference" | "focus";
 }
 
 /** 面・線1つ分の資源を破棄する */
@@ -582,6 +584,10 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
     color: REFERENCE_HIGHLIGHT_COLOR,
     depthTest: false,
   });
+  const focusHighlightMaterial = new THREE.MeshBasicMaterial({
+    color: FOCUS_HIGHLIGHT_COLOR,
+    depthTest: false,
+  });
   const dir = new THREE.Vector3();
 
   /** 表示中のたわみの網(null なら従来の面の描き方) */
@@ -650,10 +656,15 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
           highlightGroup.add(mesh);
         }
         mesh.material =
-          seg.role === "reference" ? referenceHighlightMaterial : highlightMaterial;
+          seg.role === "reference"
+            ? referenceHighlightMaterial
+            : seg.role === "focus"
+              ? focusHighlightMaterial
+              : highlightMaterial;
         mesh.position.copy(seg.a);
         mesh.quaternion.setFromUnitVectors(AXIS_Y, dir.normalize());
-        mesh.scale.set(1, length, 1);
+        const thickness = seg.role === "focus" ? 1.45 : 1;
+        mesh.scale.set(thickness, length, thickness);
         mesh.visible = true;
         used++;
       }
@@ -703,6 +714,7 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
       highlightGeometry.dispose();
       highlightMaterial.dispose();
       referenceHighlightMaterial.dispose();
+      focusHighlightMaterial.dispose();
       renderer.dispose();
     },
   };

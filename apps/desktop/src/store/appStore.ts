@@ -343,6 +343,8 @@ interface AppState {
   warnings: string[];
   violations: number[];
   selection: Selection;
+  /** 複数スライダーのうち、いま指している折り目。2D/3Dの個別強調に使う。 */
+  hoveredHinge: number | null;
   activeTool: ToolId;
   /** 引いたばかりの折り線と確定前の設定。nullなら折り線を引いていない */
   foldDraft: FoldDraft | null;
@@ -516,6 +518,8 @@ interface AppState {
   togglePlay: () => void;
   setTool: (tool: ToolId) => void;
   setSelection: (selection: Selection) => void;
+  /** 折り目ごとの角度行を指したときの一時的な強調(nullで解除) */
+  setHoveredHinge: (hinge: number | null) => void;
   /** 引いた折り線を確定前の状態として置く(source="2d"は手順がある間は断る) */
   beginFoldDraft: (line: [Vec2, Vec2], source: "2d" | "3d") => void;
   /** 確定前の折りの設定(向き・対象層・動かす側)を変える */
@@ -587,6 +591,8 @@ interface AppState {
   endPull: () => void;
   /** ヒンジの折り角度を指定する(16ms間引きで追従計算を呼ぶ) */
   setDriverAngle: (hinge: number, deg: number) => void;
+  /** 複数ヒンジを同じ角度へまとめ、1回の追従計算へ送る */
+  setDriverAngles: (hinges: readonly number[], deg: number) => void;
   /** 1本の角度指定を解除する(形は残りの指定から計算し直す) */
   clearDriver: (hinge: number) => void;
   /** 全ての角度指定を解除して平らに戻す */
@@ -791,6 +797,7 @@ export const useAppStore = create<AppState>((set, get) => {
       selection: isNewDocument
         ? EMPTY_SELECTION
         : pruneSelection(s.selection, view.doc),
+      hoveredHinge: null,
       errorMessage: null,
       docEpoch: isNewDocument ? s.docEpoch + 1 : s.docEpoch,
     }));
@@ -1305,6 +1312,7 @@ export const useAppStore = create<AppState>((set, get) => {
     warnings: [],
     violations: [],
     selection: EMPTY_SELECTION,
+    hoveredHinge: null,
     activeTool: "select",
     foldDraft: null,
     pendingFoldThrough: null,
@@ -1632,6 +1640,7 @@ export const useAppStore = create<AppState>((set, get) => {
         set({
           activeTool: tool,
           selection: EMPTY_SELECTION,
+          hoveredHinge: null,
           foldDraft: null,
           alignDraft: null,
           techniqueDraft: null,
@@ -1644,7 +1653,23 @@ export const useAppStore = create<AppState>((set, get) => {
       }
     },
 
-    setSelection: (selection) => set({ selection }),
+    setSelection: (selection) =>
+      set((s) => ({
+        selection,
+        // スライダー行が消える選択変更なら、残ったホバー色も一緒に消す。
+        hoveredHinge:
+          s.hoveredHinge !== null && selection.edgeIds.includes(s.hoveredHinge)
+            ? s.hoveredHinge
+            : null,
+      })),
+
+    setHoveredHinge: (hinge) =>
+      set((s) => ({
+        hoveredHinge:
+          hinge !== null && s.hinges.has(hinge) && s.selection.edgeIds.includes(hinge)
+            ? hinge
+            : null,
+      })),
 
     beginFoldDraft: (line, source) => {
       const s = get();
@@ -1722,6 +1747,10 @@ export const useAppStore = create<AppState>((set, get) => {
         }
         targetLayers = [top];
       }
+      const alignment =
+        s.alignDraft && isAlignComplete(s.alignDraft)
+          ? { mode: s.alignDraft.mode, picks: [...s.alignDraft.picks] }
+          : null;
       await requestFoldThrough({
         type: "FoldThrough",
         up_to: draft.upTo,
@@ -1729,6 +1758,7 @@ export const useAppStore = create<AppState>((set, get) => {
         keep_side_point: keep,
         target_layers: targetLayers,
         direction: draft.direction,
+        ...(alignment ? { alignment } : {}),
       });
     },
 
@@ -2100,6 +2130,29 @@ export const useAppStore = create<AppState>((set, get) => {
       // いま動かしている1本だけを固定する。以前に指定した折り線まで固定すると
       // 内部頂点まわりの拘束と両立せず、面が離れて紙が切れて見える
       activeHinges = [hinge];
+      pose.schedule();
+    },
+
+    setDriverAngles: (hinges, deg) => {
+      invalidateFoldThrough();
+      const valid = [...new Set(hinges)]
+        .filter((hinge) => get().hinges.has(hinge))
+        .sort((a, b) => a - b);
+      if (valid.length === 0) return;
+      // 一括スライダーの連続変更も、選択した折り目の組ごとに履歴1件へまとめる。
+      pushAngleUndo(`angles:${valid.join(",")}`);
+      const s = get();
+      const drivers = new Map(s.drivers);
+      const changedForGuide = valid.some((hinge) => {
+        const before = s.drivers.get(hinge) ?? s.poseAngles.get(hinge) ?? 0;
+        return Math.abs(deg - before) >= 1;
+      });
+      for (const hinge of valid) drivers.set(hinge, deg);
+      set({ drivers });
+      if (changedForGuide) get().completeGuideAction("angle");
+      // 選択中の全ヒンジをhard driverとして同じ1回のpose_solveへ渡す。
+      // それ以外の以前の指定は従来どおりkeep driverになる。
+      activeHinges = valid;
       pose.schedule();
     },
 
