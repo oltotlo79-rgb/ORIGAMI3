@@ -118,9 +118,12 @@ input[type="range"] {
   outline-offset: 1px;
 }
 
+/* 中央行は minmax(0, 1fr) にする。1fr の下限は中身の高さなので、
+   狭い画面ではツールレールの高さで行が伸び、下のパネルを画面外へ押し出して
+   文字が重なって見えていた。下限を0にして、はみ出しは各区画の中で処理する */
 .app {
   display: grid;
-  grid-template-rows: auto 1fr 160px;
+  grid-template-rows: auto minmax(0, 1fr) 160px;
   height: 100%;
 }
 
@@ -220,6 +223,8 @@ input[type="range"] {
   outline: none;
 }
 
+/* 10個のボタンが縦に入りきらない画面では、レールの中だけを縦にスクロールさせる。
+   2列にしたりボタンを縮めたりすると押しにくくなるので、大きさは変えずに送る */
 .tool-rail {
   display: flex;
   flex-direction: column;
@@ -227,9 +232,14 @@ input[type="range"] {
   padding: var(--sp-4) var(--sp-3);
   background: var(--color-surface);
   border-right: 1px solid var(--color-border);
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
 }
 
 .tool-button {
+  flex: none; /* 縦に詰まってもボタンを潰さない(文字が読めなくなるため) */
   padding: var(--sp-4) var(--sp-1);
   font-size: var(--fs-sm);
   font-weight: var(--fw-bold);
@@ -251,6 +261,7 @@ input[type="range"] {
 
 /* 技法・作図のサブメニュー(そのツールを選んでいる間だけ出る) */
 .tool-submenu {
+  flex: none;
   display: flex;
   flex-direction: column;
   gap: var(--sp-1);
@@ -343,7 +354,7 @@ input[type="range"] {
    常設区画は4つのままで、タイムラインは3D区画の一部として置く */
 .pane-3d {
   display: grid;
-  grid-template-rows: 1fr 96px;
+  grid-template-rows: minmax(0, 1fr) 96px;
   background: var(--color-canvas-3d);
 }
 
@@ -530,7 +541,8 @@ input[type="range"] {
   background: rgba(122, 84, 0, 0.9);
 }
 
-/* 下部コンテキストパネル */
+/* 下部コンテキストパネル(160px)。高さは固定なので、中身が多いときは
+   左右それぞれの列の中でスクロールさせる(パネルの外へはみ出させない) */
 .context-panel {
   display: flex;
   gap: var(--sp-6);
@@ -539,7 +551,8 @@ input[type="range"] {
   border-top: 1px solid var(--color-border);
   box-shadow: 0 -1px 2px rgba(28, 26, 22, 0.06);
   line-height: var(--lh-normal);
-  overflow-y: auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .context-panel p {
@@ -549,6 +562,9 @@ input[type="range"] {
 .context-selection {
   flex: 1;
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 
 /* 警告・エラーの置き場。左の操作の並びと混ざらないよう区切って少し沈める */
@@ -557,7 +573,9 @@ input[type="range"] {
   min-width: 0;
   border-left: 1px solid var(--color-border);
   padding-left: var(--sp-6);
+  min-height: 0;
   overflow-y: auto;
+  scrollbar-width: thin;
 }
 
 .button-row {
