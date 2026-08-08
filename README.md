@@ -9,6 +9,33 @@
 
 前身の [ORIGAMI2](../ORIGAMI2) の反省(厳密演算による肥大・UIの複雑化)を踏まえ、「実用上正しい」を優先して新規開発する。
 
+## Windows版の入手と起動
+
+### インストーラー版（推奨）
+
+1. [GitHub Releases](https://github.com/oltotlo79-rgb/ORIGAMI3/releases) から、使いたいバージョンの `ORIGAMI3_x.x.x_setup.exe` をダウンロードする。
+2. ダウンロードしたファイルをダブルクリックし、画面の案内に従ってインストールする。管理者権限は不要。
+3. インストール完了後にORIGAMI3を起動する。自動で開かなかった場合は、スタートメニューの「ORIGAMI3」から起動する。
+
+### ポータブル版（インストール不要）
+
+同じReleaseにある `ORIGAMI3_x.x.x_portable.exe` をダウンロードし、その1ファイルをダブルクリックすると起動できる。フロントエンド資産はexeに埋め込まれている。Windows 10/11に標準搭載されている Microsoft Edge WebView2 Runtime が必要。
+
+### 初回起動時の注意
+
+現在の配布物にはコード署名がないため、Windows SmartScreenの警告が表示される場合がある。その場合は、内容とダウンロード元を確認してから「詳細情報」→「実行」を選ぶ。
+
+Windows Smart App Controlが有効な環境では、署名のないexeが完全にブロックされ、「実行」を選べないことがある。この場合は配布物側にコード署名が必要であり、インストーラー版・ポータブル版とも起動できない可能性がある。
+
+### 開発者向け: リリース作成
+
+1. `Cargo.toml` の `workspace.package.version`、`apps/desktop/package.json` と `apps/desktop/package-lock.json`、`apps/desktop/src-tauri/tauri.conf.json` の `version` を同じ値に更新してコミットする。
+2. `scripts/check.ps1` を実行し、全5検査が通ることを確認する。
+3. バージョンと同じタグを作成してpushする（例: `git tag v0.1.0`、`git push origin v0.1.0`）。
+4. GitHub ActionsがWindows版をビルドし、NSISインストーラー、MSI、ポータブルexeをGitHub Releasesへ添付する。タグと設定上のバージョンが一致しない場合、ビルドは失敗する。
+
+既存タグのリリースを再ビルドする場合は、GitHub Actionsの「Release Windows」から手動実行し、そのタグ名（例: `v0.1.0`）を入力する。
+
 ## ドキュメント
 
 - [要件定義書](docs/requirements-definition.md)

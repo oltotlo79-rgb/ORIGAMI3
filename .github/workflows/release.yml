@@ -1,0 +1,166 @@
+name: Release Windows
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "再ビルドするリリースタグ（例: v0.1.0）"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows:
+    name: Build and release Windows packages
+    runs-on: windows-latest
+
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+
+      - name: Validate release version
+        id: meta
+        shell: pwsh
+        env:
+          REQUESTED_TAG: ${{ inputs.tag }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          if ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch") {
+            $tag = $env:REQUESTED_TAG
+          } else {
+            $tag = $env:GITHUB_REF_NAME
+          }
+
+          if ($tag -notmatch '^v(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)$') {
+            throw "リリースタグの形式が不正です: $tag"
+          }
+
+          $version = $Matches.version
+          $tauriConfig = Get-Content -LiteralPath "apps/desktop/src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json
+          $package = Get-Content -LiteralPath "apps/desktop/package.json" -Raw | ConvertFrom-Json
+          $packageLockText = Get-Content -LiteralPath "apps/desktop/package-lock.json" -Raw
+          $cargoToml = Get-Content -LiteralPath "Cargo.toml" -Raw
+
+          $packageLockVersionMatch = [regex]::Match(
+            $packageLockText,
+            '(?m)^\s*"version"\s*:\s*"(?<version>[^"]+)"'
+          )
+          $workspacePackage = [regex]::Match(
+            $cargoToml,
+            '(?ms)^\[workspace\.package\]\s*(?<body>.*?)(?=^\[|\z)'
+          )
+          $cargoVersionMatch = [regex]::Match(
+            $workspacePackage.Groups['body'].Value,
+            '(?m)^version\s*=\s*"(?<version>[^"]+)"'
+          )
+          if (-not $workspacePackage.Success -or -not $cargoVersionMatch.Success) {
+            throw "Cargo.toml から workspace.package.version を取得できません。"
+          }
+          if (-not $packageLockVersionMatch.Success) {
+            throw "package-lock.json から version を取得できません。"
+          }
+          $packageLockVersion = $packageLockVersionMatch.Groups['version'].Value
+          $cargoVersion = $cargoVersionMatch.Groups['version'].Value
+
+          if ([string]$tauriConfig.version -ne $version) {
+            throw "タグ $tag と tauri.conf.json の version $($tauriConfig.version) が一致しません。"
+          }
+          if ([string]$package.version -ne $version) {
+            throw "タグ $tag と package.json の version $($package.version) が一致しません。"
+          }
+          if ($packageLockVersion -ne $version) {
+            throw "タグ $tag と package-lock.json の version $packageLockVersion が一致しません。"
+          }
+          if ($cargoVersion -ne $version) {
+            throw "タグ $tag と Cargo.toml の version $cargoVersion が一致しません。"
+          }
+
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "prerelease=$($version.Split('+')[0].Contains('-').ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Build Tauri application
+        working-directory: apps/desktop
+        run: npm run tauri build
+
+      - name: Collect release files
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $releaseRoot = Join-Path $env:GITHUB_WORKSPACE "target/release"
+          $bundleRoot = Join-Path $releaseRoot "bundle"
+          $outputDir = Join-Path $env:GITHUB_WORKSPACE "release-artifacts"
+
+          $nsisPattern = "ORIGAMI3_{0}_*-setup.exe" -f $env:VERSION
+          $msiPattern = "ORIGAMI3_{0}_*.msi" -f $env:VERSION
+          $nsisFiles = @(Get-ChildItem -LiteralPath (Join-Path $bundleRoot "nsis") -Filter $nsisPattern -File)
+          $msiFiles = @(Get-ChildItem -LiteralPath (Join-Path $bundleRoot "msi") -Filter $msiPattern -File)
+          $portable = Join-Path $releaseRoot "desktop.exe"
+
+          if ($nsisFiles.Count -ne 1) {
+            throw "NSISインストーラーが1件ではありません: $($nsisFiles.Count)"
+          }
+          if ($msiFiles.Count -ne 1) {
+            throw "MSIインストーラーが1件ではありません: $($msiFiles.Count)"
+          }
+          if (-not (Test-Path -LiteralPath $portable -PathType Leaf)) {
+            throw "ポータブル版exeが見つかりません: $portable"
+          }
+
+          New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
+
+          $setupName = "ORIGAMI3_{0}_setup.exe" -f $env:VERSION
+          $msiName = "ORIGAMI3_{0}_x64.msi" -f $env:VERSION
+          $portableName = "ORIGAMI3_{0}_portable.exe" -f $env:VERSION
+
+          Copy-Item -LiteralPath $nsisFiles[0].FullName -Destination (Join-Path $outputDir $setupName)
+          Copy-Item -LiteralPath $msiFiles[0].FullName -Destination (Join-Path $outputDir $msiName)
+          Copy-Item -LiteralPath $portable -Destination (Join-Path $outputDir $portableName)
+
+          Get-ChildItem -LiteralPath $outputDir -File | Select-Object Name, Length
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ORIGAMI3 ${{ steps.meta.outputs.tag }}
+          generate_release_notes: true
+          prerelease: ${{ steps.meta.outputs.prerelease }}
+          fail_on_unmatched_files: true
+          files: |
+            release-artifacts/ORIGAMI3_${{ steps.meta.outputs.version }}_setup.exe
+            release-artifacts/ORIGAMI3_${{ steps.meta.outputs.version }}_x64.msi
+            release-artifacts/ORIGAMI3_${{ steps.meta.outputs.version }}_portable.exe
