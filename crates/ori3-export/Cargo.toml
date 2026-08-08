@@ -10,9 +10,12 @@ ori3-geometry.workspace = true
 ori3-layers.workspace = true
 ori3-rigid.workspace = true
 glam.workspace = true
-# SVGのラスタライズ(PNG書き出し)。文字は使わないのでtext機能は外す
-resvg = { version = "0.48.1", default-features = false }
-# 折り図のPDF化。文字を出すのでtextは入れるが、画像や特殊効果は使わない
+serde.workspace = true
+serde_json.workspace = true
+miniz_oxide = "0.8.9"
+# SVGのラスタライズ。取扱説明書の図解に日本語があるため文字とシステム書体を有効にする
+resvg = { version = "0.45.1", default-features = false, features = ["text", "system-fonts"] }
+# 折り図・取扱説明書のPDF化。本文と、resvgで描いた図解PNGを埋め込む
 svg2pdf = { version = "0.13.0", default-features = false, features = ["text"] }
 # 複数ページのPDFを組み立てる(svg2pdfが使うのと同じ版)
 pdf-writer = "0.12.1"

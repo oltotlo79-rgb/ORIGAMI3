@@ -4,9 +4,12 @@
 //! 表紙で、題と完成の形を大きく載せる。同じ組版からPDF(1つのファイル)と
 //! ページごとのSVG(EXP-004)の両方を作る。
 
+use std::sync::Arc;
+
+use miniz_oxide::deflate::compress_to_vec_zlib;
 use ori3_cp::extract_faces;
 use ori3_model::Document;
-use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref};
+use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref};
 
 use crate::diagram::{CELL, FONT, cell_body};
 
@@ -136,12 +139,56 @@ fn japanese_font_missing(db: &svg2pdf::usvg::fontdb::Database) -> bool {
 /// 標準エラー出力に日本語で注意を出す(絵そのものは問題なく書き出せる)。
 pub fn diagram_pdf(doc: &Document) -> Result<Vec<u8>, String> {
     let pages = diagram_svg_pages(doc)?;
+    svg_pages_pdf(&pages, "折り図")
+}
+
+/// SVGページの上へ重ねる、premultiplied RGBA形式のラスター画像。
+///
+/// 座標はSVGと同じくページ左上が原点で、配置の単位はmm。`pixels` はtiny-skiaの
+/// Pixmapが返す並びと同じ、1画素4バイトのpremultiplied RGBAでなければならない。
+#[derive(Clone, Debug)]
+pub(crate) struct RasterPlacement {
+    pub(crate) pixels: Arc<[u8]>,
+    pub(crate) pixel_width: u32,
+    pub(crate) pixel_height: u32,
+    pub(crate) x_mm: f64,
+    pub(crate) y_mm: f64,
+    pub(crate) width_mm: f64,
+    pub(crate) height_mm: f64,
+}
+
+/// PDFへ変換する1ページ。SVGの後から`images`を描くため、画像は必ず前面に出る。
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PdfPage<'a> {
+    pub(crate) svg: &'a str,
+    pub(crate) images: &'a [RasterPlacement],
+}
+
+/// A4のページごとのSVGを、1つの複数ページPDFに束ねる。
+///
+/// `context` は、SVGの解析やPDF変換に失敗したときの日本語エラーへ入れる対象名。
+/// 文字はパスへ変換するため、生成側の機械に日本語書体が必要になる。
+pub(crate) fn svg_pages_pdf(pages: &[String], context: &str) -> Result<Vec<u8>, String> {
+    let pages: Vec<_> = pages
+        .iter()
+        .map(|svg| PdfPage { svg, images: &[] })
+        .collect();
+    svg_pdf_pages(&pages, context)
+}
+
+/// SVGとラスター画像からなるA4ページを、1つの複数ページPDFに束ねる。
+pub(crate) fn svg_pdf_pages(pages: &[PdfPage<'_>], context: &str) -> Result<Vec<u8>, String> {
     let mut options = svg2pdf::usvg::Options::default();
     options.fontdb_mut().load_system_fonts();
     if japanese_font_missing(&options.fontdb) {
+        let text_context = if context == "折り図" {
+            "折り図の手順番号や説明"
+        } else {
+            context
+        };
         eprintln!(
             "注意: 日本語を出せる書体が見つかりませんでした。\
-             折り図の手順番号や説明の文字が出ないことがあります"
+             {text_context}の文字が出ないことがあります"
         );
     }
     let conv = svg2pdf::ConversionOptions {
@@ -155,17 +202,26 @@ pub fn diagram_pdf(doc: &Document) -> Result<Vec<u8>, String> {
 
     // 先に全ページを図形へ直し、番号がぶつからないように振り直しておく
     let mut parts = Vec::with_capacity(pages.len());
-    for svg in &pages {
-        let tree = svg2pdf::usvg::Tree::from_str(svg, &options)
-            .map_err(|e| format!("折り図を組み立てられませんでした: {e}"))?;
+    for page in pages {
+        validate_raster_images(page.images, context)?;
+        let tree = svg2pdf::usvg::Tree::from_str(page.svg, &options)
+            .map_err(|e| format!("{context}を組み立てられませんでした: {e}"))?;
         let (chunk, svg_ref) = svg2pdf::to_chunk(&tree, conv)
-            .map_err(|e| format!("折り図をPDFに直せませんでした: {e}"))?;
+            .map_err(|e| format!("{context}をPDFに直せませんでした: {e}"))?;
         let mut map = std::collections::HashMap::new();
         let chunk = chunk.renumber(|old| *map.entry(old).or_insert_with(|| alloc.bump()));
         let svg_id = *map
             .get(&svg_ref)
-            .ok_or_else(|| "折り図の中身が見つかりませんでした".to_string())?;
-        parts.push((chunk, alloc.bump(), alloc.bump(), svg_id));
+            .ok_or_else(|| format!("{context}の中身が見つかりませんでした"))?;
+        let image_ids: Vec<_> = page.images.iter().map(|_| alloc.bump()).collect();
+        parts.push((
+            chunk,
+            alloc.bump(),
+            alloc.bump(),
+            svg_id,
+            image_ids,
+            page.images,
+        ));
     }
 
     let mut pdf = Pdf::new();
@@ -174,25 +230,105 @@ pub fn diagram_pdf(doc: &Document) -> Result<Vec<u8>, String> {
         .kids(parts.iter().map(|p| p.1))
         .count(parts.len() as i32);
 
-    let name = Name(b"S1");
-    for (chunk, page_id, content_id, svg_id) in parts {
+    let svg_name = Name(b"S1");
+    for (chunk, page_id, content_id, svg_id, image_ids, images) in parts {
         let mut page = pdf.page(page_id);
         page.media_box(Rect::new(0.0, 0.0, pt(A4_W), pt(A4_H)));
         page.parent(page_tree_id);
         page.contents(content_id);
         let mut resources = page.resources();
-        resources.x_objects().pair(name, svg_id);
+        let mut x_objects = resources.x_objects();
+        x_objects.pair(svg_name, svg_id);
+        for (index, image_id) in image_ids.iter().enumerate() {
+            let image_name = format!("Im{}", index + 1);
+            x_objects.pair(Name(image_name.as_bytes()), *image_id);
+        }
+        x_objects.finish();
         resources.finish();
         page.finish();
 
         let mut content = Content::new();
         content
+            .save_state()
             .transform([pt(A4_W), 0.0, 0.0, pt(A4_H), 0.0, 0.0])
-            .x_object(name);
+            .x_object(svg_name)
+            .restore_state();
+        for (index, image) in images.iter().enumerate() {
+            let image_name = format!("Im{}", index + 1);
+            let bottom_mm = A4_H - image.y_mm - image.height_mm;
+            content
+                .save_state()
+                .transform([
+                    pt(image.width_mm),
+                    0.0,
+                    0.0,
+                    pt(image.height_mm),
+                    pt(image.x_mm),
+                    pt(bottom_mm),
+                ])
+                .x_object(Name(image_name.as_bytes()))
+                .restore_state();
+        }
         pdf.stream(content_id, &content.finish());
+
+        for (image_id, image) in image_ids.into_iter().zip(images) {
+            let rgb = composite_rgba_over_white(&image.pixels);
+            let compressed = compress_to_vec_zlib(&rgb, 6);
+            let mut x_object = pdf.image_xobject(image_id, &compressed);
+            x_object.filter(Filter::FlateDecode);
+            x_object.width(image.pixel_width as i32);
+            x_object.height(image.pixel_height as i32);
+            x_object.color_space().device_rgb();
+            x_object.bits_per_component(8);
+            x_object.finish();
+        }
         pdf.extend(&chunk);
     }
     Ok(pdf.finish())
+}
+
+fn validate_raster_images(images: &[RasterPlacement], context: &str) -> Result<(), String> {
+    for (index, image) in images.iter().enumerate() {
+        let number = index + 1;
+        if image.pixel_width == 0 || image.pixel_height == 0 {
+            return Err(format!("{context}の画像{number}の大きさが0です"));
+        }
+        if image.pixel_width > i32::MAX as u32 || image.pixel_height > i32::MAX as u32 {
+            return Err(format!("{context}の画像{number}が大きすぎます"));
+        }
+        let expected = (image.pixel_width as usize)
+            .checked_mul(image.pixel_height as usize)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| format!("{context}の画像{number}が大きすぎます"))?;
+        if image.pixels.len() != expected {
+            return Err(format!(
+                "{context}の画像{number}の画素数が合いません（必要: {expected}バイト、実際: {}バイト）",
+                image.pixels.len()
+            ));
+        }
+        if !image.x_mm.is_finite()
+            || !image.y_mm.is_finite()
+            || !image.width_mm.is_finite()
+            || !image.height_mm.is_finite()
+            || image.width_mm <= 0.0
+            || image.height_mm <= 0.0
+        {
+            return Err(format!("{context}の画像{number}の配置が正しくありません"));
+        }
+    }
+    Ok(())
+}
+
+/// premultiplied RGBAを白背景へ合成し、PDFのDeviceRGBへ渡すRGB列にする。
+fn composite_rgba_over_white(rgba: &[u8]) -> Vec<u8> {
+    let mut rgb = Vec::with_capacity(rgba.len() / 4 * 3);
+    for pixel in rgba.chunks_exact(4) {
+        let white = 255 - pixel[3];
+        rgb.push(pixel[0].saturating_add(white));
+        rgb.push(pixel[1].saturating_add(white));
+        rgb.push(pixel[2].saturating_add(white));
+    }
+    rgb
 }
 
 #[cfg(test)]

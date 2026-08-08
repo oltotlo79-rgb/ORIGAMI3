@@ -2,6 +2,14 @@
 
 各タスク完了時に新しい記録を上に追記する。1件3〜10行以内(要件定義書NFR-006: 長文の経緯記録は禁止)。
 
+## 2026-08-09 - 共通ヘルプから取扱説明書PDFを生成・配布(EXP-005)
+
+- `HELP_CHAPTERS`と`HELP_DIAGRAMS`をUTF-8 JSONへ直列化し、同じ内容源から表紙・目次・13章をA4縦32ページへ自動組版するRust CLIを追加した
+- 段落・箇条書き・番号付き手順・注意枠・表を自動改ページし、13点のSVG図解はresvgで1800pxへ描画して日本語書体とともにPDFへ埋め込んだ
+- figureの任意`image`で`docs/manual/assets`直下のPNGを縦横比維持で差し込めるようにし、未配置時はSVG図解だけで生成を続ける
+- `scripts/build-manual.ps1`でJSON→PDF生成を一括化し、Tauri配布への「取扱説明書.pdf」同梱とGitHub ReleaseへのPDF単体添付、READMEリンクを追加した
+- 検証: `scripts/check.ps1`の全5検査に合格(cargo test / clippy -D warnings / build / lint / 624件の画面・ロジックテスト)。実PDFは32ページ・13画像で生成確認
+
 ## 2026-08-08 - 詳細なヘルプセンターを追加(UI-011)
 
 - Reactに依存しない型付きブロックの13章と、ID参照するSVG文字列13点を共通内容源にし、アプリ表示と次タスクの取扱説明書PDFから同じ配列を読めるようにした

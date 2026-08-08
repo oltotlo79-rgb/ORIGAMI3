@@ -70,6 +70,8 @@ export interface HelpCalloutBlock {
 export interface HelpFigureBlock {
   type: "figure";
   diagramId: HelpDiagramId;
+  /** 取扱説明書へ追加表示する docs/manual/assets/ 配下の画像ファイル名。 */
+  image?: string;
 }
 
 export interface HelpTableBlock {

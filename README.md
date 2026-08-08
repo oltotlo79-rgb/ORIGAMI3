@@ -32,12 +32,13 @@ Windows Smart App Controlが有効な環境では、署名のないexeが完全�
 1. `Cargo.toml` の `workspace.package.version`、`apps/desktop/package.json` と `apps/desktop/package-lock.json`、`apps/desktop/src-tauri/tauri.conf.json` の `version` を同じ値に更新してコミットする。
 2. `scripts/check.ps1` を実行し、全5検査が通ることを確認する。
 3. バージョンと同じタグを作成してpushする（例: `git tag v0.1.0`、`git push origin v0.1.0`）。
-4. GitHub ActionsがWindows版をビルドし、NSISインストーラー、MSI、ポータブルexeをGitHub Releasesへ添付する。タグと設定上のバージョンが一致しない場合、ビルドは失敗する。
+4. GitHub ActionsがWindows版をビルドし、NSISインストーラー、MSI、ポータブルexe、取扱説明書PDFをGitHub Releasesへ添付する。タグと設定上のバージョンが一致しない場合、ビルドは失敗する。
 
 既存タグのリリースを再ビルドする場合は、GitHub Actionsの「Release Windows」から手動実行し、そのタグ名（例: `v0.1.0`）を入力する。
 
 ## ドキュメント
 
+- [ORIGAMI3取扱説明書](docs/manual/ORIGAMI3取扱説明書.pdf)
 - [要件定義書](docs/requirements-definition.md)
 - [実装ロードマップ](docs/implementation-roadmap.md)
 

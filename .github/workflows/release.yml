@@ -109,6 +109,9 @@ jobs:
         working-directory: apps/desktop
         run: npm ci
 
+      - name: Build user manual PDF
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-manual.ps1
+
       - name: Build Tauri application
         working-directory: apps/desktop
         run: npm run tauri build
@@ -164,3 +167,4 @@ jobs:
             release-artifacts/ORIGAMI3_${{ steps.meta.outputs.version }}_setup.exe
             release-artifacts/ORIGAMI3_${{ steps.meta.outputs.version }}_x64.msi
             release-artifacts/ORIGAMI3_${{ steps.meta.outputs.version }}_portable.exe
+            docs/manual/ORIGAMI3取扱説明書.pdf
