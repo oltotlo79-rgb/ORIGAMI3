@@ -15,7 +15,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use ori3_model::Document;
 
-use crate::store::{DocumentStore, DocumentView, parse_document};
+use crate::store::{DocumentStore, DocumentView, parse_document, write_atomic};
 
 /// 自動保存の間隔(SYS-003: 30秒ごと)
 pub const INTERVAL: Duration = Duration::from_secs(30);
@@ -57,6 +57,62 @@ fn marker_path(app_data: &Path) -> PathBuf {
     app_data.join(MARKER_FILE)
 }
 
+/// パスが実在する場合に、シンボリックリンクや`..`を解決して同じ場所か比べる。
+fn same_existing_path(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// アプリデータの外にあるファイルを、改変された目印から消さないための検査。
+///
+/// 無題の自動保存はアプリデータ配下だけを許し、名前付き作品は現在の保存先に
+/// `.autosave` を足した**その1ファイル**だけを許す。現在の作品が無い起動直後は
+/// アプリデータ外の自動保存を読んで復旧を提案しても、削除はしない。
+fn valid_autosave_path(
+    autosave: &Path,
+    app_data: &Path,
+    current_document: Option<&Path>,
+) -> bool {
+    if autosave.extension().and_then(|e| e.to_str()) != Some("autosave") {
+        return false;
+    }
+    let in_app_data = match (autosave.canonicalize(), app_data.canonicalize()) {
+        (Ok(path), Ok(dir)) => path.starts_with(dir),
+        _ => false,
+    };
+    if in_app_data {
+        return true;
+    }
+    if let Some(document) = current_document {
+        return same_existing_path(autosave, &target_path(Some(document), app_data));
+    }
+    false
+}
+
+/// 目印を読み、削除・復旧してよい自動保存だけを返す。
+fn recorded_autosave_path(
+    app_data: &Path,
+    current_document: Option<&Path>,
+    for_recovery: bool,
+) -> Option<PathBuf> {
+    let recorded = std::fs::read_to_string(marker_path(app_data)).ok()?;
+    let autosave = PathBuf::from(recorded.trim());
+    let recovery_path = for_recovery
+        && current_document.is_none()
+        && document_path_of(&autosave).is_some_and(|document| {
+            document.is_file()
+                && same_existing_path(&autosave, &target_path(Some(&document), app_data))
+        });
+    if valid_autosave_path(&autosave, app_data, current_document) || recovery_path {
+        Some(autosave)
+    } else {
+        eprintln!("自動保存の目印に許可されない場所が指定されているため無視しました: {}", autosave.display());
+        None
+    }
+}
+
 /// 自動保存ファイルの場所から元の保存先を割り出す(無題ならNone)。
 fn document_path_of(autosave: &Path) -> Option<PathBuf> {
     let text = autosave.to_str()?;
@@ -88,8 +144,8 @@ fn write_snapshot(doc: &Document, doc_path: Option<&Path>, app_data: &Path) -> R
     let json = serde_json::to_string_pretty(doc)
         .map_err(|e| format!("自動保存データの作成に失敗しました: {e}"))?;
     std::fs::create_dir_all(app_data).map_err(|e| format!("自動保存に失敗しました: {e}"))?;
-    std::fs::write(&target, json).map_err(|e| format!("自動保存に失敗しました: {e}"))?;
-    std::fs::write(marker_path(app_data), target.to_string_lossy().as_ref())
+    write_atomic(&target, json.as_bytes()).map_err(|e| format!("自動保存に失敗しました: {e}"))?;
+    write_atomic(marker_path(app_data).as_path(), target.to_string_lossy().as_bytes())
         .map_err(|e| format!("自動保存に失敗しました: {e}"))?;
     Ok(())
 }
@@ -97,8 +153,7 @@ fn write_snapshot(doc: &Document, doc_path: Option<&Path>, app_data: &Path) -> R
 /// 前回の自動保存が残っていれば、その情報を返す(起動時の復旧確認)。
 /// 正常終了・明示保存のたびに消しているので、残っていれば異常終了とみなせる。
 pub fn check(app_data: &Path) -> Option<RecoveryInfo> {
-    let recorded = std::fs::read_to_string(marker_path(app_data)).ok()?;
-    let autosave = PathBuf::from(recorded.trim());
+    let autosave = recorded_autosave_path(app_data, None, true)?;
     let meta = std::fs::metadata(&autosave).ok()?;
     let saved_at_ms = meta
         .modified()
@@ -114,11 +169,22 @@ pub fn check(app_data: &Path) -> Option<RecoveryInfo> {
 
 /// 自動保存ファイルと目印を消す(正常終了時・明示保存の成功時・利用者が破棄したとき)。
 /// 消せなくても呼び出し側を止めない(次の自動保存で上書きされる)。
-pub fn discard(app_data: &Path) {
-    if let Ok(recorded) = std::fs::read_to_string(marker_path(app_data)) {
-        std::fs::remove_file(PathBuf::from(recorded.trim())).ok();
+pub fn discard(app_data: &Path, current_document: Option<&Path>) {
+    if let Some(autosave) = recorded_autosave_path(app_data, current_document, false) {
+        std::fs::remove_file(autosave).ok();
     }
     std::fs::remove_file(marker_path(app_data)).ok();
+}
+
+/// 正常終了時だけ自動保存を片付ける。未保存なら次回の復旧に残す。
+pub fn discard_if_clean(store: &Mutex<DocumentStore>, app_data: &Path) {
+    let guard = store.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.is_dirty() {
+        return;
+    }
+    let path = guard.current_path();
+    drop(guard);
+    discard(app_data, path.as_deref());
 }
 
 /// 自動保存の内容を読み込んで現在の作品にする。残っていなければNone。
@@ -134,12 +200,14 @@ pub fn restore(
         .map_err(|e| format!("作業中だった内容を読み込めませんでした: {e}"))?;
     let doc = parse_document(&text)?;
     let path = info.document_path.map(PathBuf::from);
-    let view = store
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .restore(doc, path);
+    let mut guard = store.lock().unwrap_or_else(|e| e.into_inner());
+    // 復旧前から開いていた作品だけが、外部の`.autosave`を消してよい保存先になる。
+    // 目印から今セットしたpathを信用して削除対象にしてはいけない。
+    let previous_path = guard.current_path();
+    let view = guard.restore(doc, path);
+    drop(guard);
     // 復元した内容は画面に載ったので、同じ提案を次の起動で繰り返さない
-    discard(app_data);
+    discard(app_data, previous_path.as_deref());
     Ok(Some(view))
 }
 
@@ -289,11 +357,48 @@ mod tests {
         let autosave = PathBuf::from(check(&dir).unwrap().autosave_path);
         assert!(autosave.is_file());
 
-        discard(&dir);
+        discard(&dir, None);
         assert!(!autosave.exists(), "自動保存ファイルが残っている");
         assert!(!marker_path(&dir).exists(), "目印が残っている");
         assert!(check(&dir).is_none());
         assert!(restore(&store, &dir).unwrap().is_none());
+    }
+
+    #[test]
+    fn clean_exit_discards_but_dirty_exit_keeps_the_autosave() {
+        let dir = temp_dir("exit");
+        let store = store_with_edit();
+        run_once(&store, &dir).unwrap();
+        let autosave = PathBuf::from(check(&dir).unwrap().autosave_path);
+
+        // 未保存の通常終了はクラッシュ時と同じく、次回の復旧に残す。
+        discard_if_clean(&store, &dir);
+        assert!(autosave.is_file(), "未保存なのに自動保存を消している");
+
+        // 保存済みなら正常終了なので片付ける。
+        store.lock().unwrap().save(Some(&dir.join("保存済み.ori3"))).unwrap();
+        discard_if_clean(&store, &dir);
+        assert!(!autosave.exists(), "保存済みなのに自動保存が残っている");
+    }
+
+    #[test]
+    fn tampered_marker_never_deletes_an_unrelated_file() {
+        let dir = temp_dir("tampered_marker");
+        let unrelated = std::env::temp_dir().join(format!(
+            "ori3_unrelated_{}.autosave",
+            std::process::id()
+        ));
+        let unrelated_document = document_path_of(&unrelated).unwrap();
+        std::fs::write(&unrelated_document, "別の作品").unwrap();
+        std::fs::write(&unrelated, "消してはいけない").unwrap();
+        std::fs::write(marker_path(&dir), unrelated.to_string_lossy().as_bytes()).unwrap();
+
+        discard(&dir, None);
+
+        assert!(unrelated.is_file(), "目印の改変で関係ないファイルを消している");
+        assert!(!marker_path(&dir).exists(), "危険な目印は片付ける");
+        std::fs::remove_file(unrelated).ok();
+        std::fs::remove_file(unrelated_document).ok();
     }
 
     /// 書き出し先の決め方(保存先があれば隣、無題ならアプリデータ配下)。

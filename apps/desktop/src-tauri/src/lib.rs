@@ -4,6 +4,8 @@ pub mod store;
 
 use std::sync::Mutex;
 
+use tauri::Manager;
+
 use store::DocumentStore;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -39,7 +41,9 @@ pub fn run() {
             if matches!(event, tauri::RunEvent::Exit)
                 && let Ok(dir) = autosave::app_data_dir(app)
             {
-                autosave::discard(&dir);
+                // 未保存の作業は異常終了と同じく次回の復旧対象として残す。
+                // 保存済みの場合だけ、正常終了として自動保存を片付ける。
+                autosave::discard_if_clean(app.state::<Mutex<DocumentStore>>().inner(), &dir);
             }
         });
 }

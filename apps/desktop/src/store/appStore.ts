@@ -810,8 +810,9 @@ export const useAppStore = create<AppState>((set, get) => {
    */
   const applyDocChange = async (
     task: () => Promise<DocumentView>,
+    isNewDocument = false,
   ): Promise<void> => {
-    await runViewCommand(task, false);
+    await runViewCommand(task, isNewDocument);
     if (get().errorMessage === null) clearAngleHistory();
   };
 
@@ -844,7 +845,7 @@ export const useAppStore = create<AppState>((set, get) => {
    * ので待ち行列に最新1件だけを置く(runLatest)。追い越された要求は実行されない。
    * 一方、解除操作のように「その1回だけ0度を明示する」意味を持つ要求は、
    * 追い越されると意味が失われるのでFIFO(run)で必ず送る。
-   * 実行された成功応答は完了順に全て適用する(runViewCommandと同じ規約)。
+   * 表示専用の結果は、実行済みでも新しい要求に追い越されていれば適用しない。
    * 成功時にerrorMessageは触らない(編集側のエラー報告を消さないため) */
   /** 今の作品の設定から、たわみ計算へ渡す指定を作る(切ってあればnull=送らない) */
   const softArg = (): SoftSettings | null => {
@@ -868,21 +869,22 @@ export const useAppStore = create<AppState>((set, get) => {
     const soft = softArg();
     const call = () => ipc.poseSolve(drivers, keep, soft);
     const r = await (coalesce ? queue.runLatest(call) : queue.run(call));
-    if (r.ok) {
-      set({
-        // 出発点合わせ(applyFrame=false)では形は変わらないので、手順再生が
-        // 持っていた層の重なり情報を消さないよう立体表示はそのままにする
-        ...(applyFrame ? { frame3d: r.value.frame } : {}),
-        ...(applyFrame ? softResult(r.value.soft) : {}),
-        poseWarnings: r.value.frame.warnings,
-        poseConverged: r.value.converged,
-        poseAngles: new Map(
-          Object.entries(r.value.angles).map(([id, deg]) => [Number(id), deg]),
-        ),
-      });
-    } else if (r.isLatest) {
-      fail(r.error);
+    if (!r.ok) {
+      if (r.isLatest) fail(r.error);
+      return;
     }
+    if (!r.isLatest) return;
+    set({
+      // 出発点合わせ(applyFrame=false)では形は変わらないので、手順再生が
+      // 持っていた層の重なり情報を消さないよう立体表示はそのままにする
+      ...(applyFrame ? { frame3d: r.value.frame } : {}),
+      ...(applyFrame ? softResult(r.value.soft) : {}),
+      poseWarnings: r.value.frame.warnings,
+      poseConverged: r.value.converged,
+      poseAngles: new Map(
+        Object.entries(r.value.angles).map(([id, deg]) => [Number(id), deg]),
+      ),
+    });
   };
 
   /** 展開図の更新後、残っている角度指定で立体形状を計算し直す。
@@ -953,21 +955,29 @@ export const useAppStore = create<AppState>((set, get) => {
   // 作品への保存はもう少しまとめる(つまみ1回の操作で元に戻す履歴が埋まらないように)
   /** たわみの指定にまだ作品へ書き込んでいないものがあるか */
   let softPending = false;
+  /** 遅延保存へ渡す、setSoftが最後に指定した完全な表示設定。
+   * 途中で別編集の古いDocumentViewが返ってきても、この値を上書きしない。 */
+  let pendingSoftDisplay: DisplaySettings | null = null;
   const softSave = createTrailingThrottle(SOFT_SAVE_MS, () => {
+    const display = pendingSoftDisplay;
+    pendingSoftDisplay = null;
     softPending = false;
-    void get().setDisplay({});
+    if (display) void get().setDisplay(display);
   });
 
   /** 書き込み待ちのたわみの指定を今すぐ確定する(手順として残す前に呼ぶ) */
   const flushSoftSave = async (): Promise<void> => {
     if (!softPending) return;
+    const display = pendingSoftDisplay;
+    pendingSoftDisplay = null;
     softPending = false;
     softSave.reset(); // 予約を取り消す(同じ内容を二度送らない)
-    await get().setDisplay({});
+    if (display) await get().setDisplay(display);
   };
 
   resetThrottle = () => {
     softPending = false;
+    pendingSoftDisplay = null;
     pose.clearAll();
     softShape.clearAll();
     softSave.clearAll();
@@ -988,20 +998,23 @@ export const useAppStore = create<AppState>((set, get) => {
   ): Promise<void> => {
     const call = () => ipc.sequenceReplay(upTo, t, softArg());
     const r = await (coalesce ? queue.runLatest(call) : queue.run(call));
-    if (r.ok) {
-      const s = get();
-      set({
-        frame3d: r.value.frame,
-        ...softResult(r.value.soft),
-        // upToまでの再生結果なので、作品全体のskippedは上書きしない
-        replaySkipped: keepIfSame(s.replaySkipped, r.value.skipped),
-        replayWarnings: keepIfSame(s.replayWarnings, r.value.warnings),
-      });
-    } else if (r.isLatest) {
-      // 再生できない状態のままでは毎コマ失敗するので、止めて理由を知らせる
-      stopPlayback();
-      fail(r.error);
+    if (!r.ok) {
+      if (r.isLatest) {
+        // 再生できない状態のままでは毎コマ失敗するので、止めて理由を知らせる
+        stopPlayback();
+        fail(r.error);
+      }
+      return;
     }
+    if (!r.isLatest) return;
+    const s = get();
+    set({
+      frame3d: r.value.frame,
+      ...softResult(r.value.soft),
+      // upToまでの再生結果なので、作品全体のskippedは上書きしない
+      replaySkipped: keepIfSame(s.replaySkipped, r.value.skipped),
+      replayWarnings: keepIfSame(s.replayWarnings, r.value.warnings),
+    });
   };
 
   /** 手順のある作品では、立体表示は手順の再生結果で表す(角度スライダーは
@@ -1126,6 +1139,8 @@ export const useAppStore = create<AppState>((set, get) => {
     openDocument: (path) => runViewCommand(() => ipc.documentOpen(path), true),
 
     saveDocument: async (path) => {
+      // たわみのつまみを動かした直後でも、保存要求より前に作品データへ確定する。
+      await flushSoftSave();
       // 保存も直列化する(直前の編集が確定してから保存されることを保証)。
       // 状態の更新はないので、応答の新旧に関わらず結果を報告する
       const r = await queue.run(() => ipc.documentSave(path));
@@ -1150,7 +1165,10 @@ export const useAppStore = create<AppState>((set, get) => {
         (op.type === "RemoveEdges" || op.type === "SetEdgeKind")
           ? { ...op, ids: withMirrorEdges(s.doc, s.faces, op.ids) }
           : op;
-      return applyDocChange(() => ipc.editApply(mirrored));
+      return applyDocChange(
+        () => ipc.editApply(mirrored),
+        mirrored.type === "ReplaceCreasePattern",
+      );
     },
 
     drawSegment: async (a, b, kind) => {
@@ -1962,6 +1980,7 @@ export const useAppStore = create<AppState>((set, get) => {
       softShape.schedule();
       if (doc) {
         softPending = true;
+        pendingSoftDisplay = display;
         softSave.schedule();
       }
     },

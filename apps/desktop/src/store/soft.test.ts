@@ -176,6 +176,46 @@ describe("たわみの設定の保存(SIM-015)", () => {
     await wait(WAIT_MS);
   });
 
+  it("途中の編集応答が古い表示設定でも、最後に指定したたわみを保存する", async () => {
+    // setSoftの直後に別編集の応答が返ると、画面のdisplayは古い値へ戻り得る。
+    // 遅延保存はその画面値ではなく、setSoftで控えた最新値を送らなければならない。
+    vi.mocked(ipc.editApply).mockImplementation(async (op) =>
+      makeView({
+        ...makeDoc(),
+        display: op.type === "SetDisplay" ? op.display : DEFAULT_DISPLAY,
+      }),
+    );
+    useAppStore.getState().setSoft({ soft_enabled: true, soft_pressure: 0.7 });
+    await useAppStore.getState().applyEdit({ type: "RemoveEdges", ids: [] });
+    await wait(WAIT_MS);
+
+    const saves = vi
+      .mocked(ipc.editApply)
+      .mock.calls.map(([op]) => op)
+      .filter((op) => op.type === "SetDisplay");
+    const saved = saves[saves.length - 1];
+    if (!saved || saved.type !== "SetDisplay") throw new Error("たわみ設定が保存されていない");
+    expect(saved.display.soft_enabled).toBe(true);
+    expect(saved.display.soft_pressure).toBe(0.7);
+  });
+
+  it("作品を保存する前に、待機中のたわみ設定を確定する", async () => {
+    vi.mocked(ipc.documentSave).mockResolvedValue(undefined);
+    useAppStore.getState().setSoft({ soft_enabled: true, soft_pressure: 0.4 });
+
+    await useAppStore.getState().saveDocument(null);
+
+    const savedSetting = vi
+      .mocked(ipc.editApply)
+      .mock.calls.map(([op]) => op)
+      .find((op) => op.type === "SetDisplay");
+    if (!savedSetting || savedSetting.type !== "SetDisplay") {
+      throw new Error("保存前にたわみ設定が確定されていない");
+    }
+    expect(savedSetting.display.soft_pressure).toBe(0.4);
+    expect(ipc.documentSave).toHaveBeenCalledOnce();
+  });
+
   it("作品をまだ開いていないときは画面の表示だけ変える(送らない)", async () => {
     useAppStore.setState({ doc: null });
     useAppStore.getState().setSoft({ soft_enabled: true });

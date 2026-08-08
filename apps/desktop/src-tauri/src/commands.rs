@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
@@ -21,6 +22,9 @@ use ori3_export::{CpSvgOptions, cp_png, cp_svg, diagram_pdf, diagram_svg_pages};
 use ori3_model::{CreasePattern, Driver, EdgeId, EditOp, Paper, SeqOp};
 use ori3_propose::{Skeleton, generate, pack};
 use ori3_soft::{SoftMesh, SoftSettings};
+
+/// 複数ファイル書き出し用の同名一時ファイルを区別する連番。
+static EXPORT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
 /// たわみの計算結果を足した `pose_solve` の戻り値(SIM-012)。
 /// 既存の中身は `#[serde(flatten)]` でそのまま並べるので、たわみを使わない
@@ -114,10 +118,13 @@ pub fn document_save(
     path: Option<String>,
 ) -> Result<(), String> {
     guard(AssertUnwindSafe(|| {
-        lock(&state).save(path.as_deref().map(Path::new))?;
+        let mut store = lock(&state);
+        store.save(path.as_deref().map(Path::new))?;
+        let document_path = store.current_path();
+        drop(store);
         // 保存できた内容は自動保存から復元する必要がない(SYS-003)
         if let Ok(dir) = autosave::app_data_dir(&app) {
-            autosave::discard(&dir);
+            autosave::discard(&dir, document_path.as_deref());
         }
         Ok(())
     }))
@@ -146,7 +153,8 @@ pub fn recovery_restore(
     guard(AssertUnwindSafe(|| {
         let dir = autosave::app_data_dir(&app)?;
         if !accept {
-            autosave::discard(&dir);
+            let document_path = lock(&state).current_path();
+            autosave::discard(&dir, document_path.as_deref());
             return Ok(None);
         }
         let Some(mut view) = autosave::restore(&state, &dir)? else {
@@ -372,22 +380,10 @@ pub fn document_export(
         let doc = lock(&state).export_inputs(); // 複製のみ、即ロック解放
         // 先に全ページぶんを作り切る。途中の手順で失敗しても、その時点では
         // まだ1つもファイルを作っていないので中途半端な結果が残らない
+        // 全ページを先にメモリへ作り、次に全て一時ファイルへ書く。途中で失敗しても
+        // 既存の完成ファイルには触れない。
         let files = export_files(&doc, kind, options)?;
-        let path = Path::new(&path);
-        let mut written: Vec<std::path::PathBuf> = Vec::new();
-        for (suffix, bytes) in &files {
-            let target = export_target(path, suffix);
-            if let Err(e) = std::fs::write(&target, bytes) {
-                // 書き込みの途中で失敗したら、そこまでに作ったファイルは片付ける
-                // (半分だけの折り図が完成品に見えてしまわないように)
-                for done in &written {
-                    let _ = std::fs::remove_file(done);
-                }
-                return Err(format!("ファイルに書き出せませんでした: {e}"));
-            }
-            written.push(target);
-        }
-        Ok(())
+        write_export_files(Path::new(&path), &files)
     }))
 }
 
@@ -400,6 +396,57 @@ fn export_target(path: &Path, suffix: &str) -> std::path::PathBuf {
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("折り図");
     let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("svg");
     path.with_file_name(format!("{stem}{suffix}.{ext}"))
+}
+
+fn export_temp_path(target: &Path) -> std::path::PathBuf {
+    let dir = target.parent().unwrap_or_else(|| Path::new("."));
+    let name = target.file_name().and_then(|n| n.to_str()).unwrap_or("export");
+    let id = EXPORT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+    dir.join(format!(".{name}.{}.{}.export.tmp", std::process::id(), id))
+}
+
+/// 全ページを一時ファイルへ出してから完成名へ切り替える。
+///
+/// 切り替え中に失敗した場合に消すのは、今回初めて作った完成名だけである。
+/// 上書き前からあったファイルは、途中の失敗時にも削除しない。
+fn write_export_files(path: &Path, files: &[(String, Vec<u8>)]) -> Result<(), String> {
+    let targets: Vec<_> = files
+        .iter()
+        .map(|(suffix, _)| export_target(path, suffix))
+        .collect();
+    let existed: Vec<_> = targets.iter().map(|target| target.exists()).collect();
+    let mut staged = Vec::with_capacity(files.len());
+
+    for ((_, bytes), target) in files.iter().zip(&targets) {
+        let temp = export_temp_path(target);
+        if let Err(err) = std::fs::write(&temp, bytes) {
+            for done in &staged {
+                let _ = std::fs::remove_file(done);
+            }
+            return Err(format!("ファイルに書き出せませんでした: {err}"));
+        }
+        staged.push(temp);
+    }
+
+    let mut created = Vec::new();
+    for ((temp, target), already_existed) in staged.iter().zip(&targets).zip(&existed) {
+        if let Err(err) = std::fs::rename(temp, target) {
+            // まだ切り替えていない一時ファイルだけを片付ける。
+            for pending in &staged {
+                let _ = std::fs::remove_file(pending);
+            }
+            // 今回新規に作った完成ファイルは半端な折り図に見えないよう消す。
+            // もともとあった完成ファイルは絶対に消さない。
+            for done in &created {
+                let _ = std::fs::remove_file(done);
+            }
+            return Err(format!("ファイルに書き出せませんでした: {err}"));
+        }
+        if !already_existed {
+            created.push(target.clone());
+        }
+    }
+    Ok(())
 }
 
 /// 指定の種類で書き出す中身を組み立てる(ロックを取らない純粋な処理)。
@@ -559,6 +606,32 @@ mod tests {
             export_target(base, "-02"),
             Path::new("C:/作品/鶴-02.svg").to_path_buf()
         );
+    }
+
+    #[test]
+    fn failed_multi_svg_export_never_deletes_the_previous_file() {
+        use super::write_export_files;
+        let dir = std::env::temp_dir().join(format!(
+            "ori3_export_rollback_{}",
+            std::process::id()
+        ));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let base = dir.join("折り図.svg");
+        let first = dir.join("折り図-01.svg");
+        let second = dir.join("折り図-02.svg");
+        std::fs::write(&first, "前からある1ページ目").unwrap();
+        // 2ページ目の完成名をディレクトリにして、名前の切り替えだけを失敗させる。
+        // 一時ファイルへの全ページ書き出しは通るため、巻き戻し経路を検査できる。
+        std::fs::create_dir(&second).unwrap();
+        let files = vec![
+            ("-01".to_string(), "今回の1ページ目".as_bytes().to_vec()),
+            ("-02".to_string(), "今回の2ページ目".as_bytes().to_vec()),
+        ];
+
+        assert!(write_export_files(&base, &files).is_err());
+        assert!(first.exists(), "上書き前からあるファイルを消している");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// たわみの指定が無い/切ってあるときは何も返さず、入れたときだけ網が返る

@@ -371,6 +371,36 @@ describe("appStore 折り角度の指定", () => {
     }
   });
 
+  it("追い越された追従計算の成功結果は3D表示へ反映しない", async () => {
+    const first = deferred<SolveResult>();
+    const second = deferred<SolveResult>();
+    vi.mocked(ipc.poseSolve)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const view = makeHingeView(450);
+    const before = { faces: [], warnings: ["表示中の形"] };
+    useAppStore.setState({
+      doc: view.doc,
+      faces: view.faces,
+      hinges: new Set([5]),
+      frame3d: before,
+    });
+
+    const store = useAppStore.getState();
+    store.clearDrivers();
+    await flush();
+    store.clearDrivers();
+    await flush();
+    first.resolve({ ...makeSolveResult(), frame: { faces: [], warnings: ["古い形"] } });
+    await flush();
+    expect(useAppStore.getState().frame3d).toEqual(before);
+
+    const latest = { faces: [], warnings: ["新しい形"] };
+    second.resolve({ ...makeSolveResult(), frame: latest });
+    await flush();
+    expect(useAppStore.getState().frame3d).toEqual(latest);
+  });
+
   it("角度を次々に指定しても、固定するのは操作中の1本だけ(紙が切れない)", async () => {
     primeFakeTimers();
     try {
@@ -628,6 +658,30 @@ describe("appStore 手順の表示と再生", () => {
     }
   });
 
+  it("追い越された再生の成功結果は3D表示へ反映しない", async () => {
+    const first = deferred<ReplayResult>();
+    const second = deferred<ReplayResult>();
+    vi.mocked(ipc.sequenceReplay)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const before = { faces: [], warnings: ["表示中の形"] };
+    seedSequence(2);
+    useAppStore.setState({ frame3d: before });
+
+    useAppStore.getState().selectStep(1);
+    await flush();
+    useAppStore.getState().selectStep(2);
+    await flush();
+    first.resolve({ frame: { faces: [], warnings: ["古い形"] }, skipped: [1], warnings: [] });
+    await flush();
+    expect(useAppStore.getState().frame3d).toEqual(before);
+
+    const latest = { faces: [], warnings: ["新しい形"] };
+    second.resolve({ frame: latest, skipped: [2], warnings: [] });
+    await flush();
+    expect(useAppStore.getState().frame3d).toEqual(latest);
+  });
+
   it("再生中でも、飛ばした手順と警告の中身が同じなら配列を作り直さない", async () => {
     seedSequence(2);
     vi.mocked(ipc.sequenceReplay).mockResolvedValue({
@@ -778,6 +832,42 @@ describe("appStore 手順の表示と再生", () => {
 
     expect(useAppStore.getState().currentStep).toBeNull();
     expect(replayCalls()).toEqual([]);
+  });
+});
+
+describe("展開図の置き換え", () => {
+  it("手順・角度履歴・3D表示を新規作品と同じくリセットする", async () => {
+    const before = makeStepView(2300, 1);
+    const replacement = makeView(2301);
+    vi.mocked(ipc.editApply).mockResolvedValueOnce(replacement);
+    useAppStore.setState({
+      doc: before.doc,
+      faces: before.faces,
+      hinges: new Set([5]),
+      currentStep: 1,
+      frame3d: { faces: [], warnings: ["前の手順の形"] },
+      drivers: new Map([[5, 90]]),
+      poseAngles: new Map([[5, 90]]),
+      angleUndoStack: [new Map([[5, 45]])],
+      angleRedoStack: [new Map([[5, 30]])],
+      docUndoDepth: 1,
+    });
+
+    await useAppStore.getState().applyEdit({
+      type: "ReplaceCreasePattern",
+      cp: replacement.doc.cp,
+    });
+
+    const s = useAppStore.getState();
+    expect(s.doc?.sequence).toEqual([]);
+    expect(s.currentStep).toBeNull();
+    expect(s.frame3d).toBeNull();
+    expect(s.drivers.size).toBe(0);
+    expect(s.poseAngles.size).toBe(0);
+    expect(s.angleUndoStack).toEqual([]);
+    expect(s.angleRedoStack).toEqual([]);
+    expect(ipc.poseSolve).not.toHaveBeenCalled();
+    expect(ipc.sequenceReplay).not.toHaveBeenCalled();
   });
 });
 

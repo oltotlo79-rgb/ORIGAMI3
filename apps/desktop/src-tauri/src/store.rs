@@ -16,6 +16,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use ori3_cp::Face;
 use ori3_model::{
@@ -25,6 +26,24 @@ use ori3_model::{
 
 /// undo履歴の最大件数。超過時は最古をFIFOで破棄する。
 const MAX_UNDO: usize = 100;
+
+/// 同じ場所に一時ファイルを書いてから名前を入れ替えるための連番。
+static ATOMIC_WRITE_ID: AtomicU64 = AtomicU64::new(0);
+
+/// 同一ディレクトリ内の一時ファイル経由でファイルを置き換える。
+/// 書き込み中に止まっても、既存の完成ファイルを途中の内容で壊さない。
+pub(crate) fn write_atomic(target: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let dir = target.parent().unwrap_or_else(|| Path::new("."));
+    let name = target.file_name().and_then(|n| n.to_str()).unwrap_or("ori3");
+    let id = ATOMIC_WRITE_ID.fetch_add(1, Ordering::Relaxed);
+    let temp = dir.join(format!(".{name}.{}.{}.tmp", std::process::id(), id));
+    std::fs::write(&temp, bytes)?;
+    if let Err(err) = std::fs::rename(&temp, target) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(err);
+    }
+    Ok(())
+}
 
 /// フロントへ返す表示用ビュー(Document全体 + 導出情報)。
 /// save以外の全コマンドの成功時戻り値。
@@ -121,7 +140,7 @@ impl DocumentStore {
         };
         let json = serde_json::to_string_pretty(&self.doc)
             .map_err(|e| format!("保存データの作成に失敗しました: {e}"))?;
-        std::fs::write(&target, json).map_err(|e| format!("保存に失敗しました: {e}"))?;
+        write_atomic(&target, json.as_bytes()).map_err(|e| format!("保存に失敗しました: {e}"))?;
         self.path = Some(target);
         self.dirty = false;
         Ok(())
@@ -129,6 +148,7 @@ impl DocumentStore {
 
     /// 編集操作を適用する。実際に変更が起きた場合のみundo履歴に積む。
     pub fn apply_edit(&mut self, op: EditOp) -> Result<DocumentView, String> {
+        let replaced_crease_pattern = matches!(&op, EditOp::ReplaceCreasePattern { .. });
         let mut doc = self.doc.clone();
         let mut warnings = Vec::new();
         match op {
@@ -191,6 +211,9 @@ impl DocumentStore {
             EditOp::ReplaceCreasePattern { cp } => {
                 // 提案ウィザード用のCP全置換。妥当性はvalidateの警告として返すのみ
                 doc.cp = cp;
+                // 別の展開図へ付けた手順を残すと、たまたま同じIDの無関係な線を
+                // 折ってしまう。置換は新規作品と同じく手順を持たない状態から始める。
+                doc.sequence.clear();
             }
             EditOp::SetDisplay { mut display } => {
                 // 色は[u8;3]なので0〜255は型が保証する(範囲外はIPCの読み取りで弾かれる)。
@@ -206,7 +229,12 @@ impl DocumentStore {
                 doc.display = display;
             }
         }
-        Ok(self.commit(doc, warnings))
+        let view = self.commit(doc, warnings);
+        if replaced_crease_pattern {
+            // CP全置換前の解は辺IDが偶然一致しても使ってはいけない。
+            self.pose_angles = None;
+        }
+        Ok(view)
     }
 
     /// 折り手順操作を適用する。実際に変更が起きた場合のみundo履歴に積む。
@@ -1018,6 +1046,28 @@ mod tests {
             })
             .unwrap();
         assert_eq!(store.pose_inputs().2, None);
+    }
+
+    #[test]
+    fn replacing_crease_pattern_clears_steps_and_warm_start() {
+        let mut store = square_store();
+        store.apply_edit(diagonal()).unwrap();
+        store.apply_seq(SeqOp::PushStep { step: step(7) }).unwrap();
+        store.store_pose_angles(HashMap::from([(4u32, 120.0f64)]));
+
+        let replacement = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        })
+        .cp;
+        let view = store
+            .apply_edit(EditOp::ReplaceCreasePattern { cp: replacement })
+            .unwrap();
+
+        assert!(view.doc.sequence.is_empty(), "手順が残っている");
+        assert!(store.doc.sequence.is_empty(), "storeにも手順が残っている");
+        assert!(view.frame.is_none(), "手順の3D結果を持ち越さない");
+        assert_eq!(store.pose_inputs().2, None, "暖機用の角度を持ち越さない");
     }
 
     /// facesキャッシュがdocの全変更経路(編集・undo・redo)で追従することの検証。
