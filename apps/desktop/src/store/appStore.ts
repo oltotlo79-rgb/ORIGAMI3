@@ -59,6 +59,7 @@ import type {
   ExportKind,
   Face,
   FoldDirection,
+  FoldThroughProposal,
   Frame3D,
   Paper,
   ProposalCandidate,
@@ -155,6 +156,21 @@ export interface FoldDraft {
   /** 線を引いた時点で見ていた位置(=折りが挟まる位置)。見る手順を移すと
    * 別の形の上の線になってしまうので、ここが変わった線は捨てる */
   upTo: number;
+}
+
+/** 実際に作品へ適用するFoldThrough。事前確認では最後の指定だけを除いて使う。 */
+type FoldThroughApplyOp = Extract<SeqOp, { type: "FoldThrough" }>;
+type FoldThroughInput = Omit<FoldThroughApplyOp, "accept_additional_crease">;
+
+/**
+ * 縁への衝突が1か所だけ見つかり、巻き込み用の追加折り目を選べる状態。
+ * 元の折り入力も保持し、利用者の答えを同じ条件へ適用する。
+ */
+export interface PendingFoldThrough {
+  proposal: FoldThroughProposal;
+  operation: FoldThroughInput;
+  docEpoch: number;
+  stepCount: number;
 }
 
 /**
@@ -324,6 +340,10 @@ interface AppState {
   activeTool: ToolId;
   /** 引いたばかりの折り線と確定前の設定。nullなら折り線を引いていない */
   foldDraft: FoldDraft | null;
+  /** 巻き込み用の追加折り目を提案中。2D/3Dのプレビューもこの値を使う */
+  pendingFoldThrough: PendingFoldThrough | null;
+  /** 折りの事前確認または、提案への答えを適用している途中 */
+  foldThroughBusy: boolean;
   /** 「合わせて折る」の途中経過。nullなら合わせモードに入っていない */
   alignDraft: AlignDraft | null;
   /** 選んだ技法と、その下ごしらえ(フラップ・折り線)。nullなら技法を選んでいない */
@@ -468,6 +488,8 @@ interface AppState {
   cancelFoldDraft: () => void;
   /** 引いた折り線で実際に折る(sequence_apply FoldThrough)。成功したら折り線を捨てる */
   commitFoldDraft: () => Promise<void>;
+  /** 巻き込み用の追加折り目を入れるか答え、元の折りを確定する */
+  resolveFoldThroughProposal: (accept: boolean) => Promise<void>;
   /** 「合わせて折る」を始める(合わせ方を選ぶ)。同じ合わせ方をもう一度押すとやめる */
   beginAlign: (mode: AlignMode) => void;
   /** 合わせる対象(点・線)を1つ選ぶ。cursorは解が2つあるときの既定を決めるのに使う */
@@ -670,6 +692,28 @@ export const useAppStore = create<AppState>((set, get) => {
   const queue = createSerialQueue();
   const prefs = loadPrefs();
 
+  /**
+   * FoldThroughの事前確認を無効にする世代番号。
+   *
+   * 提案は作品を止めない非モーダルUIなので、確認IPCの待機中にも利用者は
+   * 手順表示やツールを変えられる。その場合、古い形から返った候補を採用しない。
+   * 表示する状態ではないためZustandへ公開せず、このストア1本の内部で管理する。
+   */
+  let foldThroughRevision = 0;
+  /** busyを開始した要求の番号。古い要求のfinallyが新しいbusyを消さないために使う */
+  let foldThroughBusyToken = 0;
+
+  const invalidateFoldThrough = (): void => {
+    foldThroughRevision++;
+    if (get().pendingFoldThrough !== null) set({ pendingFoldThrough: null });
+  };
+
+  const finishFoldThroughBusy = (token: number): void => {
+    if (foldThroughBusyToken === token && get().foldThroughBusy) {
+      set({ foldThroughBusy: false });
+    }
+  };
+
   /** 画面の使い方の好み(作品の中身ではないもの)を端末に覚えておく */
   const persistPrefs = () => {
     const { splitRatio, mirrorDraw, pullMirror, wheelBehavior } = get();
@@ -693,6 +737,7 @@ export const useAppStore = create<AppState>((set, get) => {
       doc: view.doc,
       display: view.doc.display,
       foldDraft: null,
+      pendingFoldThrough: null,
       alignDraft: null,
       techniqueDraft: null,
       faces: view.faces,
@@ -749,6 +794,8 @@ export const useAppStore = create<AppState>((set, get) => {
           replaySkipped: [],
           replayWarnings: [],
           foldDraft: null,
+          pendingFoldThrough: null,
+          foldThroughBusy: false,
           alignDraft: null,
           techniqueDraft: null,
         });
@@ -1085,6 +1132,110 @@ export const useAppStore = create<AppState>((set, get) => {
     if (next.playing) cancelFrame = scheduleFrame(tick);
   };
 
+  /** FoldThroughを作品へ適用する。事前提案の有無にかかわらず最後はこの経路を通る。 */
+  const applyFoldThrough = async (
+    operation: FoldThroughInput,
+    acceptAdditionalCrease: boolean,
+    busyToken: number,
+  ): Promise<void> => {
+    const s = get();
+    if (!s.doc) {
+      set({ pendingFoldThrough: null });
+      finishFoldThroughBusy(busyToken);
+      return;
+    }
+    // 末尾へ足すなら最新表示、途中へ挟むなら挟んだ手順を表示する。
+    set({
+      currentStep:
+        operation.up_to === s.doc.sequence.length ? null : operation.up_to + 1,
+    });
+    try {
+      await applyDocChange(() =>
+        ipc.sequenceApply({
+          ...operation,
+          accept_additional_crease: acceptAdditionalCrease,
+        }),
+      );
+    } finally {
+      // 最新でない失敗は共通処理が画面へ出さない。その場合も確認中のままにしない。
+      // tokenを照合し、後から始まった別の確認のbusyは消さない。
+      finishFoldThroughBusy(busyToken);
+    }
+  };
+
+  /**
+   * 折りを適用する前に、縁へぶつかる典型ケースだけを非破壊で調べる。
+   * PreviewFoldThroughのDocumentViewは作品更新として反映せず、提案だけを取り出す。
+   * これにより、確定前の折り線や編集中の選択を事前確認で失わない。
+   */
+  const requestFoldThrough = async (operation: FoldThroughInput): Promise<void> => {
+    if (get().foldThroughBusy || get().pendingFoldThrough) return;
+    stopPlayback();
+    const started = get();
+    const revision = ++foldThroughRevision;
+    const busyToken = ++foldThroughBusyToken;
+    set({
+      pendingFoldThrough: null,
+      foldThroughBusy: true,
+      errorMessage: null,
+    });
+    const r = await queue.run(() =>
+      ipc.sequenceApply({
+        type: "PreviewFoldThrough",
+        up_to: operation.up_to,
+        line: operation.line,
+        keep_side_point: operation.keep_side_point,
+        target_layers: operation.target_layers,
+        direction: operation.direction,
+      }),
+    );
+    // ツール切替など、IPCを伴わない操作でも確認を取り消せるよう世代を先に見る。
+    if (revision !== foldThroughRevision) {
+      finishFoldThroughBusy(busyToken);
+      return;
+    }
+    if (!r.ok) {
+      if (r.isLatest) fail(r.error);
+      finishFoldThroughBusy(busyToken);
+      return;
+    }
+    // 後続の編集要求がすでに積まれたなら、その編集前の形に対する候補は使わない。
+    if (!r.isLatest) {
+      finishFoldThroughBusy(busyToken);
+      return;
+    }
+    const current = get();
+    if (
+      !current.doc ||
+      !canFoldNow(current) ||
+      current.docEpoch !== started.docEpoch ||
+      current.doc.sequence.length !== started.doc?.sequence.length ||
+      foldInsertAt(current) !== operation.up_to
+    ) {
+      finishFoldThroughBusy(busyToken);
+      set({ errorMessage: STALE_DRAFT_MESSAGE });
+      return;
+    }
+    const proposal = r.value.fold_through_proposal ?? null;
+    if (proposal) {
+      set({
+        pendingFoldThrough: {
+          proposal,
+          operation,
+          docEpoch: current.docEpoch,
+          stepCount: current.doc.sequence.length,
+        },
+        // 元の入力はoperationへ移したので、折り線の確定UIは提案UIへ切り替える。
+        foldDraft: null,
+        alignDraft: null,
+        foldThroughBusy: false,
+      });
+      return;
+    }
+    // 単純な衝突が無い、または複雑で提案できない場合は従来の折りを続ける。
+    await applyFoldThrough(operation, false, busyToken);
+  };
+
   return {
     doc: null,
     faces: [],
@@ -1094,6 +1245,8 @@ export const useAppStore = create<AppState>((set, get) => {
     selection: EMPTY_SELECTION,
     activeTool: "select",
     foldDraft: null,
+    pendingFoldThrough: null,
+    foldThroughBusy: false,
     alignDraft: null,
     techniqueDraft: null,
     construct: DEFAULT_CONSTRUCT,
@@ -1141,9 +1294,15 @@ export const useAppStore = create<AppState>((set, get) => {
     pullMirror: prefs.pullMirror,
     wheelBehavior: prefs.wheelBehavior,
 
-    newDocument: (paper) => runViewCommand(() => ipc.documentNew(paper), true),
+    newDocument: (paper) => {
+      invalidateFoldThrough();
+      return runViewCommand(() => ipc.documentNew(paper), true);
+    },
 
-    openDocument: (path) => runViewCommand(() => ipc.documentOpen(path), true),
+    openDocument: (path) => {
+      invalidateFoldThrough();
+      return runViewCommand(() => ipc.documentOpen(path), true);
+    },
 
     saveDocument: async (path) => {
       // たわみのつまみを動かした直後でも、保存要求より前に作品データへ確定する。
@@ -1162,6 +1321,8 @@ export const useAppStore = create<AppState>((set, get) => {
     // (止めないと、折り直した形が次のコマですぐ上書きされて一瞬跳ねて見える)
     applyEdit: (op) => {
       stopPlayback();
+      // 提案は現在のCPから計算したもの。編集要求を積んだ時点で応答前でも無効にする。
+      invalidateFoldThrough();
       // 左右対称のときは、消す・種類を変える相手にも同じ操作を効かせる(CPE-010)。
       // ここで辺IDを増やしておけば、展開図の右クリック消し・Deleteキー・
       // コンテキストパネルのどこから来ても左右そろって変わる
@@ -1244,6 +1405,7 @@ export const useAppStore = create<AppState>((set, get) => {
     // 残っていればそれを戻す(角度を変えた直後に線の追加が消えないように)
     undo: async () => {
       stopPlayback();
+      invalidateFoldThrough();
       const s = get();
       const prev = s.angleUndoStack[s.angleUndoStack.length - 1];
       if (prev !== undefined) {
@@ -1265,6 +1427,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
     redo: async () => {
       stopPlayback();
+      invalidateFoldThrough();
       // 作品データを戻したぶんが残っていれば、そちらを先にやり直す
       if (get().docUndoDepth > 0) {
         await runViewCommand(() => ipc.editRedo(), false);
@@ -1293,11 +1456,13 @@ export const useAppStore = create<AppState>((set, get) => {
     applySequenceOp: (op) => {
       // 手順が入れ替わると再生位置の意味が変わるので、先に止める
       stopPlayback();
+      invalidateFoldThrough();
       return applyDocChange(() => ipc.sequenceApply(op));
     },
 
     selectStep: (step) => {
       stopPlayback();
+      invalidateFoldThrough();
       // 別の手順の形を見せる操作なので、その前の形の上に引いた折り線は捨てる
       // (残すとコンテキストパネルに折りUIが出たままになり、手順の設定も出せない)
       if (get().foldDraft) set({ foldDraft: null, alignDraft: null });
@@ -1337,6 +1502,7 @@ export const useAppStore = create<AppState>((set, get) => {
       const total = s.doc?.sequence.length ?? 0;
       const next = startPlayback(s.currentStep, s.playT, total);
       if (!next.playing) return;
+      invalidateFoldThrough();
       // 再生中は形が刻々と変わるので、引きかけの折り線・技法の下ごしらえは捨てる
       set({ foldDraft: null, alignDraft: null, techniqueDraft: null });
       set({ currentStep: next.step, playT: next.t, playing: true });
@@ -1348,6 +1514,7 @@ export const useAppStore = create<AppState>((set, get) => {
       // ツール切替時は選択を保つ必要がないので解除する。
       // 引きかけの折り線も、別のツールへ移った時点で意味を失うので捨てる
       if (get().activeTool !== tool) {
+        invalidateFoldThrough();
         set({
           activeTool: tool,
           selection: EMPTY_SELECTION,
@@ -1364,7 +1531,8 @@ export const useAppStore = create<AppState>((set, get) => {
 
     beginFoldDraft: (line, source) => {
       const s = get();
-      if (!s.doc) return;
+      // 事前確認中の折りAへ、別の折りBを上書きしない。回答後に改めて引ける。
+      if (!s.doc || s.foldThroughBusy || s.pendingFoldThrough) return;
       // 展開図の座標と畳み平面の座標が一致するのは1回も折っていないときだけ
       if (source === "2d" && s.doc.sequence.length > 0) {
         set({
@@ -1425,9 +1593,7 @@ export const useAppStore = create<AppState>((set, get) => {
         }
         targetLayers = [top];
       }
-      // 折った結果を見せる。末尾へ足したなら最新、途中へ挟んだなら挟んだ手順
-      set({ currentStep: draft.upTo === s.doc.sequence.length ? null : draft.upTo + 1 });
-      await get().applySequenceOp({
+      await requestFoldThrough({
         type: "FoldThrough",
         up_to: draft.upTo,
         line: draft.line,
@@ -1435,13 +1601,35 @@ export const useAppStore = create<AppState>((set, get) => {
         target_layers: targetLayers,
         direction: draft.direction,
       });
-      // 失敗したときは設定を変えてやり直せるよう、折り線を残す
-      if (get().errorMessage === null) set({ foldDraft: null, alignDraft: null });
+    },
+
+    resolveFoldThroughProposal: async (accept) => {
+      const s = get();
+      const pending = s.pendingFoldThrough;
+      if (!pending || s.foldThroughBusy) return;
+      if (
+        !s.doc ||
+        !canFoldNow(s) ||
+        pending.docEpoch !== s.docEpoch ||
+        pending.stepCount !== s.doc.sequence.length ||
+        pending.operation.up_to !== foldInsertAt(s)
+      ) {
+        set({
+          pendingFoldThrough: null,
+          foldThroughBusy: false,
+          errorMessage: STALE_DRAFT_MESSAGE,
+        });
+        return;
+      }
+      const busyToken = ++foldThroughBusyToken;
+      set({ foldThroughBusy: true, errorMessage: null });
+      await applyFoldThrough(pending.operation, accept, busyToken);
     },
 
     beginAlign: (mode) => {
       const s = get();
       if (!s.doc) return;
+      invalidateFoldThrough();
       // 同じ合わせ方をもう一度押したらやめる(入る・出るを1つのボタンで済ませる)
       if (s.alignDraft?.mode === mode) {
         set({ alignDraft: null, foldDraft: null });
@@ -1520,7 +1708,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
     foldByDrag: async (from, to, mode, grabFace = null) => {
       const s = get();
-      if (!s.doc) return;
+      if (!s.doc || s.foldThroughBusy || s.pendingFoldThrough) return;
       // 折れない状態は「なぜできないか」を短い日本語で伝える(要件UI-009)
       const reason = foldBlockReason({
         hasDoc: true,
@@ -1550,11 +1738,10 @@ export const useAppStore = create<AppState>((set, get) => {
       // 引きかけの折り線が残っていても、この操作で決着させる
       const upTo = foldInsertAt(s);
       set({
-        currentStep: upTo === s.doc.sequence.length ? null : upTo + 1,
         foldDraft: null,
         alignDraft: null,
       });
-      await get().applySequenceOp({
+      await requestFoldThrough({
         type: "FoldThrough",
         up_to: upTo,
         line: result.plan.line,
@@ -1567,6 +1754,7 @@ export const useAppStore = create<AppState>((set, get) => {
     beginTechnique: (kind) => {
       const s = get();
       if (!s.doc) return;
+      invalidateFoldThrough();
       set({
         activeTool: "technique",
         selection: EMPTY_SELECTION,
@@ -1715,6 +1903,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
     beginPull: (hinge, angles, mirrorHinge = null) => {
       if (!get().doc) return;
+      invalidateFoldThrough();
       pullPushed = false; // このドラッグではまだ履歴を積んでいない
       // 左右同時を切っている間は相手を覚えない(切替が次のドラッグから必ず効く)
       set({
@@ -1759,6 +1948,7 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     setDriverAngle: (hinge, deg) => {
+      invalidateFoldThrough();
       // スライダーを動かしている間の細かい変更は1件にまとめる
       pushAngleUndo(`angle:${hinge}`);
       // 画面の反応を優先し、指定はその場で反映してから計算を間引いて依頼する
@@ -1774,6 +1964,7 @@ export const useAppStore = create<AppState>((set, get) => {
     clearDriver: (hinge) => {
       const drivers = new Map(get().drivers);
       if (!drivers.delete(hinge)) return;
+      invalidateFoldThrough();
       pushAngleUndo(null); // 1回押すごとに履歴1件
       set({ drivers });
       activeHinges = [];
@@ -1788,6 +1979,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
     clearDrivers: () => {
       const hinges = get().hinges;
+      invalidateFoldThrough();
       if (get().drivers.size > 0) pushAngleUndo(null);
       set({ drivers: new Map() });
       activeHinges = [];

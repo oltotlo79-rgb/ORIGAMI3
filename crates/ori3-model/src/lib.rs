@@ -293,6 +293,20 @@ pub enum SeqOp {
         /// 折る対象の層。None = 折り線の可動側に掛かる全ての層
         target_layers: Option<Vec<FaceId>>,
         direction: FoldDirection,
+        /// 衝突する縁が1本に定まる場合、誘導折り目を加えて紙を巻き込む。
+        /// 古い作品・画面から省略された場合は従来どおり警告だけで折る。
+        #[serde(default, skip_serializing_if = "is_false")]
+        accept_additional_crease: bool,
+    },
+    /// [`SeqOp::FoldThrough`] を変更せずに調べ、巻き込み用の追加折り目を提案する。
+    ///
+    /// コマンドの戻り値だけに提案を載せ、展開図・手順・undo履歴は変更しない。
+    PreviewFoldThrough {
+        up_to: usize,
+        line: [[f64; 2]; 2],
+        keep_side_point: [f64; 2],
+        target_layers: Option<Vec<FaceId>>,
+        direction: FoldDirection,
     },
     /// 基本技法(段折り・中割り折り・かぶせ折り・開いてつぶす)をまとめて折る。
     ///
@@ -325,6 +339,10 @@ pub enum SeqOp {
         #[serde(default)]
         center: Option<[f64; 2]>,
     },
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// 3D表示用フレーム(IPC戻り値)

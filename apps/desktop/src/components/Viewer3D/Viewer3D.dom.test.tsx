@@ -158,6 +158,8 @@ describe("Viewer3D(画面)", () => {
       drivers: new Map(),
       errorMessage: null,
       foldDraft: null,
+      pendingFoldThrough: null,
+      foldThroughBusy: false,
       techniqueDraft: null,
       selection: { edgeIds: [], vertexIds: [] },
     });
@@ -178,6 +180,45 @@ describe("Viewer3D(画面)", () => {
     expect(screen.getByRole("status").textContent).toContain("再生中");
   });
 
+  it("巻き込みの追加折り目を、畳み平面の位置へ水色の参照線として出す", async () => {
+    useAppStore.setState({
+      pendingFoldThrough: {
+        proposal: {
+          folded_line: [
+            [0.3, 0.2],
+            [0.3, 0.8],
+          ],
+          crease_segments: [],
+          message: "追加折り目の候補です。",
+        },
+        operation: {
+          type: "FoldThrough",
+          up_to: 0,
+          line: [
+            [0.5, 0],
+            [0.5, 1],
+          ],
+          keep_side_point: [0.25, 0.5],
+          target_layers: null,
+          direction: "Up",
+        },
+        docEpoch: useAppStore.getState().docEpoch,
+        stepCount: 0,
+      },
+    });
+    renderViewer();
+
+    await waitFor(() => {
+      const calls = (held.scene.setHighlight as ReturnType<typeof vi.fn>).mock.calls;
+      const segments = calls[calls.length - 1]?.[0] as
+        | { role?: string; a: THREE.Vector3; b: THREE.Vector3 }[]
+        | undefined;
+      expect(segments?.[0]?.role).toBe("reference");
+      expect(segments?.[0]?.a.toArray()).toEqual([0.3, 0.2, 0.002]);
+      expect(segments?.[0]?.b.toArray()).toEqual([0.3, 0.8, 0.002]);
+    });
+  });
+
   it("紙をドラッグすると折れる。途中では結果を半透明で下見できる", async () => {
     const canvas = renderViewer();
     fireEvent.pointerDown(canvas, { button: 0, pointerId: 1, clientX: 150, clientY: 200 });
@@ -190,8 +231,8 @@ describe("Viewer3D(画面)", () => {
     expect(ipc.sequenceApply).not.toHaveBeenCalled();
 
     fireEvent.pointerUp(canvas, { button: 0, pointerId: 1, clientX: 250, clientY: 200 });
-    await waitFor(() => expect(ipc.sequenceApply).toHaveBeenCalled());
-    const op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
+    await waitFor(() => expect(ipc.sequenceApply).toHaveBeenCalledTimes(2));
+    const op = vi.mocked(ipc.sequenceApply).mock.calls[1][0];
     expect(op.type).toBe("FoldThrough");
     if (op.type !== "FoldThrough") return;
     // 画面中央(x=0.5)に折り線が立ち、離した側が動かない側になる
@@ -224,8 +265,8 @@ describe("Viewer3D(画面)", () => {
     fireEvent.pointerDown(canvas, { button: 0, pointerId: 1, clientX: 150, clientY: 200 });
     fireEvent.pointerMove(canvas, { pointerId: 1, clientX: 250, clientY: 200 });
     fireEvent.pointerUp(canvas, { button: 0, pointerId: 1, clientX: 250, clientY: 200 });
-    await waitFor(() => expect(ipc.sequenceApply).toHaveBeenCalled());
-    expect(vi.mocked(ipc.sequenceApply).mock.calls[0][0].type).toBe("FoldThrough");
+    await waitFor(() => expect(ipc.sequenceApply).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(ipc.sequenceApply).mock.calls[1][0].type).toBe("FoldThrough");
     useAppStore.setState({ softMesh: null });
   });
 });

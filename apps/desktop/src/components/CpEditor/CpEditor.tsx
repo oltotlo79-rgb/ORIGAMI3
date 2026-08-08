@@ -85,6 +85,7 @@ export function CpEditor({ fitRef }: Props) {
   const curve = useAppStore((s) => s.curve);
   const mirrorDraw = useAppStore((s) => s.mirrorDraw);
   const wheelBehavior = useAppStore((s) => s.wheelBehavior);
+  const pendingFoldThrough = useAppStore((s) => s.pendingFoldThrough);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -192,6 +193,8 @@ export function CpEditor({ fitRef }: Props) {
       vertexDrag: st.vertexDrag
         ? { id: st.vertexDrag.id, to: st.vertexDrag.to }
         : null,
+      suggestedCreases: useAppStore.getState().pendingFoldThrough?.proposal
+        .crease_segments,
     };
     const ctx2d = canvas.getContext("2d");
     if (ctx2d) {
@@ -236,6 +239,7 @@ export function CpEditor({ fitRef }: Props) {
     curve,
     mirrorDraw,
     wheelBehavior,
+    pendingFoldThrough,
     draw,
   ]);
 

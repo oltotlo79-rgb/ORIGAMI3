@@ -26,6 +26,8 @@ export const COLORS = {
   snapMarker: "#2aa02a",
   /** 平らに畳めない点(CPE-009)。操作は止めず色で知らせるだけ */
   violation: "#ff8c00",
+  /** 巻き込みのために追加される折り目。確定前なので橙色の太い破線で示す */
+  foldSuggestion: "#d97706",
   hintBackground: "rgba(28, 26, 22, 0.78)",
   hintText: "#ffffff",
   /** 延長・二等分方向へ吸着中であることを示す薄いガイド線。 */
@@ -215,6 +217,8 @@ export interface RenderOverlay {
   tooltip: { pos: Vec2; text: string } | null;
   /** ドラッグ中の点と、離したら移る位置(CPE-006のプレビュー) */
   vertexDrag: { id: number; to: Vec2 } | null;
+  /** 巻き込み折りで追加されるCP上の線分。候補が無ければ省略する */
+  suggestedCreases?: [Vec2, Vec2][];
 }
 
 /** 点を動かしている途中のプレビュー: つながる線を破線で新しい位置へ引き直す */
@@ -420,6 +424,17 @@ function drawOverlay(
       else ctx.lineTo(sx, sy);
     });
     ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  for (const [a, b] of overlay.suggestedCreases ?? []) {
+    // 既存線や方眼に重なっても候補位置が読めるよう、白い縁取りの上へ描く。
+    ctx.setLineDash([...DASH_PREVIEW]);
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+    ctx.lineWidth = 5;
+    strokeSegment(ctx, view, a, b);
+    ctx.strokeStyle = COLORS.foldSuggestion;
+    ctx.lineWidth = 3;
+    strokeSegment(ctx, view, a, b);
     ctx.setLineDash([]);
   }
   if (overlay.marquee) {

@@ -11,7 +11,9 @@ pub use flat_motion::{
 };
 pub use flat_state::{FlatState, point_in_face, representative_point};
 pub use fold_through::{
-    FoldDirection, FoldThroughInput, FoldThroughResult, fold_through, resolve_driver_edges,
+    FOLD_PENETRATION_WARNING, FoldDirection, FoldThroughInput, FoldThroughProposal,
+    FoldThroughResult, fold_through, fold_through_with_additional_crease, propose_fold_through,
+    resolve_driver_edges,
 };
 pub use replay::{LayerTransition, ReplayResult, flat_state_at, replay, replay_with_faces};
 pub use techniques::{

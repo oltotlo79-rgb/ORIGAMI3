@@ -74,23 +74,69 @@ describe("foldByDrag", () => {
       drivers: new Map(),
       errorMessage: null,
       foldDraft: null,
+      pendingFoldThrough: null,
+      foldThroughBusy: false,
     });
   });
 
   it("つかんだ点から離した点へのドラッグで、その場で折れる", async () => {
     await useAppStore.getState().foldByDrag([0.25, 0.5], [0.75, 0.5], "flap");
+    expect(vi.mocked(ipc.sequenceApply).mock.calls.map(([op]) => op.type)).toEqual([
+      "PreviewFoldThrough",
+      "FoldThrough",
+    ]);
     const op = lastFoldOp();
     // 折り線は2点の垂直二等分線(x=0.5)、動かさない側は離した点
     expect(op.line[0][0]).toBeCloseTo(0.5);
     expect(op.keep_side_point).toEqual([0.75, 0.5]);
     expect(op.direction).toBe("Up");
     expect(op.target_layers).toEqual([0]);
+    expect(op.accept_additional_crease).toBe(false);
     expect(useAppStore.getState().errorMessage).toBeNull();
   });
 
   it("Shift(重なった紙を全部)は対象層を指定しない", async () => {
     await useAppStore.getState().foldByDrag([0.25, 0.5], [0.75, 0.5], "all");
     expect(lastFoldOp().target_layers).toBeNull();
+  });
+
+  it("追加折り目の候補があれば適用せず保持し、承諾後に同じ折りへ追加指定する", async () => {
+    vi.mocked(ipc.sequenceApply)
+      .mockResolvedValueOnce({
+        ...VIEW,
+        fold_through_proposal: {
+          folded_line: [
+            [0.4, 0.2],
+            [0.4, 0.8],
+          ],
+          crease_segments: [
+            [
+              [0.6, 0.2],
+              [0.6, 0.8],
+            ],
+          ],
+          message: "縁に沿う追加折り目を入れると貫通を避けられます。",
+        },
+      })
+      .mockResolvedValueOnce(VIEW);
+
+    await useAppStore.getState().foldByDrag([0.25, 0.5], [0.75, 0.5], "flap");
+    expect(vi.mocked(ipc.sequenceApply).mock.calls).toHaveLength(1);
+    expect(vi.mocked(ipc.sequenceApply).mock.calls[0][0].type).toBe(
+      "PreviewFoldThrough",
+    );
+    expect(useAppStore.getState().pendingFoldThrough?.proposal.crease_segments).toEqual([
+      [
+        [0.6, 0.2],
+        [0.6, 0.8],
+      ],
+    ]);
+
+    await useAppStore.getState().resolveFoldThroughProposal(true);
+    const op = lastFoldOp();
+    expect(op.accept_additional_crease).toBe(true);
+    expect(op.line[0][0]).toBeCloseTo(0.5);
+    expect(useAppStore.getState().pendingFoldThrough).toBeNull();
   });
 
   it("折れない状態では折らずに理由を出す", async () => {

@@ -202,6 +202,8 @@ beforeEach(() => {
     replayWarnings: [],
     activeTool: "select",
     foldDraft: null,
+    pendingFoldThrough: null,
+    foldThroughBusy: false,
     techniqueDraft: null,
     recovery: null,
   });
@@ -900,6 +902,24 @@ describe("3D画面での折り操作(折り線を引いて折る)", () => {
     [0.5, 1],
   ];
 
+  function foldThroughProposalView(mark: number): DocumentView {
+    const view = makeStepView(mark, 1);
+    view.fold_through_proposal = {
+      folded_line: [
+        [0.4, 0.2],
+        [0.4, 0.8],
+      ],
+      crease_segments: [
+        [
+          [0.6, 0.2],
+          [0.6, 0.8],
+        ],
+      ],
+      message: "縁に沿う追加折り目を入れると貫通を避けられます。",
+    };
+    return view;
+  }
+
   it("平らに畳んだ状態なら、途中の手順を見ていても折れる", () => {
     seedFolded();
     expect(canFoldNow(useAppStore.getState())).toBe(true);
@@ -923,7 +943,7 @@ describe("3D画面での折り操作(折り線を引いて折る)", () => {
 
   it("引いた折り線の設定どおりにFoldThroughを送る(全ての層・向こうへ折る)", async () => {
     seedFolded();
-    vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(makeStepView(3000, 2));
+    vi.mocked(ipc.sequenceApply).mockResolvedValue(makeStepView(3000, 2));
 
     const store = useAppStore.getState();
     store.beginFoldDraft(LINE, "3d");
@@ -940,13 +960,19 @@ describe("3D画面での折り操作(折り線を引いて折る)", () => {
     store.updateFoldDraft({ direction: "Down" });
     await useAppStore.getState().commitFoldDraft();
 
-    const op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
+    const calls = vi.mocked(ipc.sequenceApply).mock.calls;
+    expect(calls.map(([op]) => op.type)).toEqual([
+      "PreviewFoldThrough",
+      "FoldThrough",
+    ]);
+    const op = calls[1][0];
     expect(op.type).toBe("FoldThrough");
     if (op.type !== "FoldThrough") throw new Error("FoldThroughでない");
     expect(op.up_to).toBe(1); // 手順の数(末尾へ足す)
     expect(op.line).toEqual(LINE);
     expect(op.direction).toBe("Down");
     expect(op.target_layers).toBeNull(); // 全ての層
+    expect(op.accept_additional_crease).toBe(false); // 提案なしなら従来どおり折る
     // 右側を動かすので、動かさない側の点は左(x<0.5)
     expect(op.keep_side_point[0]).toBeLessThan(0.5);
     // 折り終えたら折り線は捨て、最新の形を表示する
@@ -957,13 +983,13 @@ describe("3D画面での折り操作(折り線を引いて折る)", () => {
   it("途中の手順を見ているときは、その手順の前へ挟むFoldThroughを送る(SEQ-006)", async () => {
     seedSequence(3, 1); // 手順3つのうち、手順1まで折った形を表示中
     useAppStore.setState({ activeTool: "fold", frame3d: stackedFrame() });
-    vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(makeStepView(3020, 4));
+    vi.mocked(ipc.sequenceApply).mockResolvedValue(makeStepView(3020, 4));
 
     useAppStore.getState().beginFoldDraft(LINE, "3d");
     expect(useAppStore.getState().foldDraft?.upTo).toBe(1);
     await useAppStore.getState().commitFoldDraft();
 
-    const op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
+    const op = vi.mocked(ipc.sequenceApply).mock.calls[1][0];
     if (op.type !== "FoldThrough") throw new Error("FoldThroughでない");
     expect(op.up_to).toBe(1); // 手順2の位置へ挟む(後ろの手順2・3は残る)
     // 挟んだ手順(2番目)を表示したままにする。最新へ飛ばさない
@@ -986,13 +1012,13 @@ describe("3D画面での折り操作(折り線を引いて折る)", () => {
 
   it("「いちばん上の1枚」ではその層の面IDだけを対象にする", async () => {
     seedFolded();
-    vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(makeStepView(3010, 2));
+    vi.mocked(ipc.sequenceApply).mockResolvedValue(makeStepView(3010, 2));
 
     useAppStore.getState().beginFoldDraft(LINE, "3d");
     useAppStore.getState().updateFoldDraft({ target: "top", movingSide: "left" });
     await useAppStore.getState().commitFoldDraft();
 
-    const op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
+    const op = vi.mocked(ipc.sequenceApply).mock.calls[1][0];
     if (op.type !== "FoldThrough") throw new Error("FoldThroughでない");
     expect(op.target_layers).toEqual([1]); // 重なり順がいちばん上の面
     expect(op.keep_side_point[0]).toBeGreaterThan(0.5); // 左を動かすので右が残る
@@ -1000,7 +1026,9 @@ describe("3D画面での折り操作(折り線を引いて折る)", () => {
 
   it("折れなかったときは折り線を残し、やめると捨てる", async () => {
     seedFolded();
-    vi.mocked(ipc.sequenceApply).mockRejectedValueOnce("折り線がどの層の面も横切っていません");
+    vi.mocked(ipc.sequenceApply)
+      .mockResolvedValueOnce(makeStepView(3030, 1))
+      .mockRejectedValueOnce("折り線がどの層の面も横切っていません");
 
     useAppStore.getState().beginFoldDraft(LINE, "3d");
     await useAppStore.getState().commitFoldDraft();
@@ -1081,6 +1109,104 @@ describe("3D画面での折り操作(折り線を引いて折る)", () => {
     useAppStore.getState().beginFoldDraft(LINE, "3d");
     useAppStore.getState().togglePlay();
     expect(useAppStore.getState().foldDraft).toBeNull();
+  });
+
+  it("事前確認中・提案中は別の折り入力で元の操作を上書きしない", async () => {
+    seedFolded();
+    const preview = deferred<DocumentView>();
+    vi.mocked(ipc.sequenceApply).mockReset().mockReturnValueOnce(preview.promise);
+
+    useAppStore.getState().beginFoldDraft(LINE, "3d");
+    const commit = useAppStore.getState().commitFoldDraft();
+    expect(useAppStore.getState().foldThroughBusy).toBe(true);
+
+    const another: [Vec2, Vec2] = [
+      [0.25, 0],
+      [0.25, 1],
+    ];
+    useAppStore.getState().beginFoldDraft(another, "3d");
+    await useAppStore.getState().foldByDrag([0.2, 0.5], [0.8, 0.5], "all");
+    expect(useAppStore.getState().foldDraft?.line).toEqual(LINE);
+    expect(ipc.sequenceApply).toHaveBeenCalledTimes(1);
+
+    preview.resolve(foldThroughProposalView(3050));
+    await commit;
+    expect(useAppStore.getState().pendingFoldThrough).not.toBeNull();
+
+    useAppStore.getState().beginFoldDraft(another, "3d");
+    await useAppStore.getState().foldByDrag([0.2, 0.5], [0.8, 0.5], "all");
+    expect(useAppStore.getState().foldDraft).toBeNull();
+    expect(ipc.sequenceApply).toHaveBeenCalledTimes(1);
+  });
+
+  it("確認IPCの待機中にツールを変えたら、古い候補も元の折りも適用しない", async () => {
+    seedFolded();
+    const preview = deferred<DocumentView>();
+    vi.mocked(ipc.sequenceApply).mockReset().mockReturnValueOnce(preview.promise);
+
+    useAppStore.getState().beginFoldDraft(LINE, "3d");
+    const commit = useAppStore.getState().commitFoldDraft();
+    useAppStore.getState().setTool("select");
+    preview.resolve(foldThroughProposalView(3051));
+    await commit;
+
+    expect(useAppStore.getState().pendingFoldThrough).toBeNull();
+    expect(useAppStore.getState().foldThroughBusy).toBe(false);
+    expect(ipc.sequenceApply).toHaveBeenCalledTimes(1);
+  });
+
+  it("提案後に再生状態へ変わっていたら、承認時にも古い折りを断る", async () => {
+    seedFolded();
+    vi.mocked(ipc.sequenceApply)
+      .mockReset()
+      .mockResolvedValueOnce(foldThroughProposalView(3052));
+
+    useAppStore.getState().beginFoldDraft(LINE, "3d");
+    await useAppStore.getState().commitFoldDraft();
+    expect(useAppStore.getState().pendingFoldThrough).not.toBeNull();
+
+    // 通常のtogglePlayは提案を即時取消する。ここでは承認処理自身の最終防衛を検査する。
+    useAppStore.setState({ playing: true });
+    await useAppStore.getState().resolveFoldThroughProposal(true);
+
+    expect(ipc.sequenceApply).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().pendingFoldThrough).toBeNull();
+    expect(useAppStore.getState().errorMessage).toContain("もう一度線を引いて");
+  });
+
+  it("提案後に別の手順を選んだ時点で、古いプレビューをすぐ消す", async () => {
+    seedFolded();
+    vi.mocked(ipc.sequenceApply)
+      .mockReset()
+      .mockResolvedValueOnce(foldThroughProposalView(3054));
+
+    useAppStore.getState().beginFoldDraft(LINE, "3d");
+    await useAppStore.getState().commitFoldDraft();
+    expect(useAppStore.getState().pendingFoldThrough).not.toBeNull();
+
+    useAppStore.getState().selectStep(0);
+    expect(useAppStore.getState().pendingFoldThrough).toBeNull();
+    await Promise.resolve();
+  });
+
+  it("後続の保存で最新でなくなった折りが失敗しても、提案のbusyを必ず戻す", async () => {
+    seedFolded();
+    const fold = deferred<DocumentView>();
+    vi.mocked(ipc.sequenceApply)
+      .mockReset()
+      .mockResolvedValueOnce(foldThroughProposalView(3053))
+      .mockReturnValueOnce(fold.promise);
+    vi.mocked(ipc.documentSave).mockResolvedValue(undefined);
+
+    useAppStore.getState().beginFoldDraft(LINE, "3d");
+    await useAppStore.getState().commitFoldDraft();
+    const accept = useAppStore.getState().resolveFoldThroughProposal(true);
+    const save = useAppStore.getState().saveDocument(null);
+    fold.reject("古い折りの失敗");
+    await Promise.all([accept, save]);
+
+    expect(useAppStore.getState().foldThroughBusy).toBe(false);
+    expect(useAppStore.getState().pendingFoldThrough).not.toBeNull();
   });
 });
 

@@ -14,8 +14,11 @@
 //! 凸でない面では扇分割の三角形が面の外へはみ出すため、まれに実際より広く
 //! 見積もる(警告を出しすぎる=安全側)。
 
-use glam::DVec3;
-use ori3_model::Frame3D;
+use std::collections::{BTreeMap, HashMap};
+
+use glam::{DVec2, DVec3};
+use ori3_cp::Face;
+use ori3_model::{CreasePattern, EdgeKind, FaceId, Frame3D, VertexId};
 
 /// めり込みを見つけたときの警告文(3D表示のバッジに出る)
 pub const PENETRATION_WARNING: &str = "紙が重なって食い込んでいます";
@@ -53,6 +56,101 @@ pub fn self_intersects(frame: &Frame3D) -> bool {
         }
     }
     false
+}
+
+/// 平らに折り切った面の層順序が、共有折り目の山谷と矛盾しているか。
+///
+/// 表向きの面`a`から見て谷なら隣の面`b`は上、山なら下に来る。`a`が裏返って
+/// いればこの関係も反転する。これは層モデルが折り目を通って紙を突き抜けた順序を
+/// 記録していないかを調べる局所検査で、折り途中・投影が退化した面・未折りの辺は
+/// 判定しない。
+#[must_use]
+pub fn layer_order_conflicts(cp: &CreasePattern, faces: &[Face], frame: &Frame3D) -> bool {
+    let all_points = frame.faces.iter().flat_map(|face| &face.polygon);
+    let (min_z, max_z) = all_points.fold((f64::MAX, f64::MIN), |(lo, hi), point| {
+        (lo.min(point[2]), hi.max(point[2]))
+    });
+    if min_z == f64::MAX || max_z - min_z > TOL {
+        return false; // 平らに折り切った状態だけを検査する
+    }
+
+    let positions: HashMap<VertexId, DVec2> = cp
+        .vertices
+        .iter()
+        .map(|vertex| (vertex.id, DVec2::from(vertex.pos)))
+        .collect();
+    let output: HashMap<FaceId, &ori3_model::Face3D> =
+        frame.faces.iter().map(|face| (face.face, face)).collect();
+    let mut mirrored: HashMap<FaceId, bool> = HashMap::new();
+    for face in faces {
+        let Some(folded) = output.get(&face.id) else {
+            continue;
+        };
+        let original: Vec<DVec2> = face
+            .vertices
+            .iter()
+            .filter_map(|vertex| positions.get(vertex).copied())
+            .collect();
+        let projected: Vec<DVec2> = folded
+            .polygon
+            .iter()
+            .map(|point| DVec2::new(point[0], point[1]))
+            .collect();
+        let original_area = signed_area(&original);
+        let projected_area = signed_area(&projected);
+        if original_area.abs() <= TOL * TOL || projected_area.abs() <= TOL * TOL {
+            continue;
+        }
+        mirrored.insert(face.id, original_area.signum() != projected_area.signum());
+    }
+
+    let mut edge_faces: BTreeMap<u32, Vec<FaceId>> = BTreeMap::new();
+    for face in faces {
+        let mut edges = face.edges.clone();
+        edges.sort_unstable();
+        edges.dedup();
+        for edge in edges {
+            edge_faces.entry(edge).or_default().push(face.id);
+        }
+    }
+    for edge in &cp.edges {
+        if !matches!(edge.kind, EdgeKind::Mountain | EdgeKind::Valley) {
+            continue;
+        }
+        let Some(adjacent) = edge_faces.get(&edge.id) else {
+            continue;
+        };
+        if adjacent.len() != 2 {
+            continue;
+        }
+        let (a, b) = (adjacent[0], adjacent[1]);
+        let (Some(&a_mirrored), Some(&b_mirrored)) = (mirrored.get(&a), mirrored.get(&b)) else {
+            continue;
+        };
+        if a_mirrored == b_mirrored {
+            continue; // この折り目は平らなままで、上下を拘束しない
+        }
+        let (Some(face_a), Some(face_b)) = (output.get(&a), output.get(&b)) else {
+            continue;
+        };
+        let b_should_be_above = matches!(
+            (edge.kind, a_mirrored),
+            (EdgeKind::Valley, false) | (EdgeKind::Mountain, true)
+        );
+        if (face_b.layer > face_a.layer) != b_should_be_above {
+            return true;
+        }
+    }
+    false
+}
+
+fn signed_area(poly: &[DVec2]) -> f64 {
+    if poly.len() < 3 {
+        return 0.0;
+    }
+    0.5 * (0..poly.len())
+        .map(|index| poly[index].perp_dot(poly[(index + 1) % poly.len()]))
+        .sum::<f64>()
 }
 
 /// 1つの面の三角形列と外接直方体

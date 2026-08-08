@@ -17,7 +17,9 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::autosave;
-use crate::store::{DocumentStore, DocumentView, add_penetration_warning, attach_replay};
+use crate::store::{
+    DocumentStore, DocumentView, add_layer_order_warning, add_penetration_warning, attach_replay,
+};
 use ori3_export::{CpSvgOptions, cp_png, cp_svg, diagram_pdf, diagram_svg_pages};
 use ori3_model::{CreasePattern, Driver, EdgeId, EditOp, Paper, SeqOp};
 use ori3_propose::{Skeleton, generate, pack};
@@ -245,7 +247,7 @@ pub fn pose_solve(
                 ..Default::default()
             },
         );
-        add_penetration_warning(&mut result.frame); // 補正後に残る紙のめり込み(SIM-007)
+        let _ = add_penetration_warning(&cp, &faces, &mut result.frame, false); // SIM-007
         // たわみもロックの外で計算する(規約どおり)
         let mesh = soft_mesh(&cp, &faces, &result.frame, soft.as_ref());
         lock(&state).store_pose_angles(result.angles.clone()); // 短いロックで書き戻し
@@ -268,6 +270,13 @@ pub fn sequence_replay(
     guard(AssertUnwindSafe(|| {
         let (doc, faces) = lock(&state).replay_inputs(); // 複製のみ、即ロック解放
         let mut result = ori3_layers::replay_with_faces(&doc, &faces, up_to, t);
+        let completed = !t.is_finite() || t >= 1.0;
+        let mut penetration_warnings: Vec<&'static str> = Vec::new();
+        if completed
+            && let Some(warning) = add_layer_order_warning(&doc.cp, &faces, &mut result.frame)
+        {
+            penetration_warnings.push(warning);
+        }
         let transition = result.layer_transition.clone();
         ori3_soft::prevent_overlap(
             &doc.cp,
@@ -283,10 +292,16 @@ pub fn sequence_replay(
         );
         // 折る途中(t<1)は立体になるので、紙が食い込んでいないかを見る(SIM-007)。
         // 画面のバッジは ReplayResult.warnings を見るので両方へ同じ文言を載せる
-        if add_penetration_warning(&mut result.frame) {
-            result
-                .warnings
-                .push(ori3_rigid::PENETRATION_WARNING.to_string());
+        penetration_warnings.extend(add_penetration_warning(
+            &doc.cp,
+            &faces,
+            &mut result.frame,
+            false,
+        ));
+        for warning in penetration_warnings {
+            if !result.warnings.iter().any(|existing| existing == warning) {
+                result.warnings.push(warning.to_string());
+            }
         }
         // たわみもロックの外で計算する(規約どおり)
         let mesh = soft_mesh(&doc.cp, &faces, &result.frame, soft.as_ref());

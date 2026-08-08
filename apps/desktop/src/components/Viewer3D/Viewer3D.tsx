@@ -146,16 +146,24 @@ export function Viewer3D({ fitRef }: Props) {
   const docEpoch = useAppStore((s) => s.docEpoch);
   const activeTool = useAppStore((s) => s.activeTool);
   const foldDraft = useAppStore((s) => s.foldDraft);
+  const pendingFoldThrough = useAppStore((s) => s.pendingFoldThrough);
   const alignDraft = useAppStore((s) => s.alignDraft);
   const techniqueDraft = useAppStore((s) => s.techniqueDraft);
-  const foldReady = useAppStore(canFoldNow);
+  const foldReady = useAppStore(
+    (s) =>
+      canFoldNow(s) && !s.foldThroughBusy && s.pendingFoldThrough === null,
+  );
   const pullHinge = useAppStore((s) => s.pullHinge);
   const pullMirrorHinge = useAppStore((s) => s.pullMirrorHinge);
   const pullBlocked = useAppStore(pullBlockedOf);
   // 「今どのモードで何ができるか」を1行で常に出す(UI-009)。
   // 文字列を返す選択なので、内容が変わらない限り再描画は起きない
-  const hint = useAppStore((s) =>
-    viewerHint({
+  const hint = useAppStore((s) => {
+    if (s.foldThroughBusy) return "折り方を確認しています。少し待ってください";
+    if (s.pendingFoldThrough) {
+      return "追加折り目の位置を確認し、下のパネルで折り方を選んでください";
+    }
+    return viewerHint({
       pullBlocked: pullBlockedOf(s),
       pulling: s.pullHinge !== null,
       pullMirrored: s.pullMirrorHinge !== null,
@@ -177,8 +185,8 @@ export function Viewer3D({ fitRef }: Props) {
       alignPickCount: s.alignDraft?.picks.length ?? 0,
       alignSolutionCount: s.alignDraft?.solutions.length ?? 0,
       alignReason: s.alignDraft?.reason ?? null,
-    }),
-  );
+    });
+  });
   // 「折る」と「技法」はどちらも紙の上に折り線を引く(左ドラッグを線引きに使う)
   const foldMode = activeTool === "fold" || activeTool === "technique";
   // 「引く」は紙をつかんで動かす(左ドラッグを紙の操作に使う)
@@ -260,6 +268,17 @@ export function Viewer3D({ fitRef }: Props) {
       return;
     }
     scene.setPreview([], PREVIEW_FILL_LIFT);
+    // 巻き込み用の追加折り目。Rustが現在の畳み平面へ写した線を、既存の
+    // 参照線ハイライト(水色)で示す。展開図側は別のCP座標を使う。
+    if (s.pendingFoldThrough) {
+      scene.setHighlight(
+        toHighlight([s.pendingFoldThrough.proposal.folded_line]).map((segment) => ({
+          ...segment,
+          role: "reference" as const,
+        })),
+      );
+      return;
+    }
     // 合わせて折る: 選んだ点(十字)・線を光らせ、求まった折り線は下見に重ねる
     if (s.activeTool === "fold" && s.alignDraft && s.doc) {
       const segments: [Vec2, Vec2][] = [];
@@ -366,6 +385,7 @@ export function Viewer3D({ fitRef }: Props) {
     hinges,
     frame3d,
     foldDraft,
+    pendingFoldThrough,
     alignDraft,
     techniqueDraft,
     activeTool,
@@ -565,6 +585,8 @@ export function Viewer3D({ fitRef }: Props) {
         s.activeTool === "fold" &&
         !e.ctrlKey &&
         !s.alignDraft &&
+        !s.foldThroughBusy &&
+        !s.pendingFoldThrough &&
         canFoldNow(s) &&
         scene?.content
       ) {
@@ -589,7 +611,14 @@ export function Viewer3D({ fitRef }: Props) {
         }
         return;
       }
-      if (e.button === 0 && drawTool && !s.alignDraft && canFoldNow(s)) {
+      if (
+        e.button === 0 &&
+        drawTool &&
+        !s.alignDraft &&
+        !s.foldThroughBusy &&
+        !s.pendingFoldThrough &&
+        canFoldNow(s)
+      ) {
         const p = planePoint(rect, x, y);
         if (p) {
           e.currentTarget.setPointerCapture(e.pointerId);

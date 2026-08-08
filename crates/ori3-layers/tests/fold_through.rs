@@ -5,9 +5,12 @@ use ori3_cp::{Face, extract_faces, insert_segment};
 use ori3_geometry::Isometry2;
 use ori3_layers::flat_state::{FlatState, point_in_face, representative_point};
 use ori3_layers::fold_through::{
-    FoldDirection, FoldThroughInput, FoldThroughResult, fold_through, resolve_driver_edges,
+    FOLD_PENETRATION_WARNING, FoldDirection, FoldThroughInput, FoldThroughResult, fold_through,
+    fold_through_with_additional_crease, propose_fold_through, resolve_driver_edges,
 };
+use ori3_layers::replay;
 use ori3_model::{CreasePattern, Document, Driver, EdgeKind, FaceId, Paper};
+use ori3_rigid::layer_order_conflicts;
 
 /// 正方形(輪郭4辺のみ)のCPを作る。
 fn square_cp() -> CreasePattern {
@@ -77,6 +80,193 @@ fn four_layer_fixture() -> (CreasePattern, FoldThroughResult, FoldThroughResult)
     )
     .expect("2回目の折り");
     (cp, r1, r2)
+}
+
+/// 左端を折って外周縁x=0.5を上層へ置き、その下の右側フラップをx=0.7で折る。
+fn single_collision_fixture() -> (CreasePattern, FoldThroughResult, FaceId, FoldThroughInput) {
+    let mut cp = square_cp();
+    let faces = extract_faces(&cp);
+    let initial = FlatState::initial(&cp, &faces);
+    let first = fold_through(
+        &mut cp,
+        &faces,
+        &initial,
+        &FoldThroughInput {
+            line: [[0.25, 0.0], [0.25, 1.0]],
+            keep_side_point: [0.5, 0.5],
+            target_layers: None,
+            direction: FoldDirection::Up,
+        },
+    )
+    .expect("左端を右へ折る");
+    let faces = extract_faces(&cp);
+    let base = faces
+        .iter()
+        .find(|face| representative_point(&cp, face)[0] > 0.25)
+        .expect("右側の基層")
+        .id;
+    assert_eq!(first.state.order[0], base, "基層の上に左端が重なる");
+    let input = FoldThroughInput {
+        line: [[0.7, 0.0], [0.7, 1.0]],
+        keep_side_point: [0.6, 0.5],
+        target_layers: None,
+        direction: FoldDirection::Up,
+    };
+    (cp, first, base, input)
+}
+
+#[test]
+fn proposes_reflected_edge_and_guided_fold_removes_the_same_collision() {
+    let (cp, first, base, input) = single_collision_fixture();
+    let faces = extract_faces(&cp);
+    let proposal = propose_fold_through(&cp, &faces, &first.state, &input)
+        .expect("提案の幾何計算")
+        .expect("単一縁なので提案できる");
+
+    // 障害縁x=.5を主折り線x=.7で反転したx=.9が誘導折り目になる。
+    assert!(
+        proposal
+            .folded_line
+            .iter()
+            .all(|point| (point[0] - 0.9).abs() < 1e-9)
+    );
+    assert_eq!(proposal.crease_segments.len(), 1);
+    assert!(proposal.message.contains("指定した場所以外"));
+    assert!(proposal.message.contains("折り目"));
+
+    let mut rejected_cp = cp.clone();
+    let rejected =
+        fold_through_with_additional_crease(&mut rejected_cp, &faces, &first.state, &input, false)
+            .expect("提案を断っても通常どおり折れる");
+    assert!(
+        rejected
+            .warnings
+            .iter()
+            .any(|warning| warning == FOLD_PENETRATION_WARNING),
+        "提案を断った通常折りには貫通警告が残る: {:?}",
+        rejected.warnings
+    );
+
+    let mut accepted_cp = cp;
+    let accepted =
+        fold_through_with_additional_crease(&mut accepted_cp, &faces, &first.state, &input, true)
+            .expect("提案を承諾すると巻き込み折りになる");
+    assert!(
+        accepted
+            .warnings
+            .iter()
+            .all(|warning| warning != FOLD_PENETRATION_WARNING && !warning.contains("裂け")),
+        "承諾後は貫通・裂け警告が消える: {:?}",
+        accepted.warnings
+    );
+    assert!(
+        accepted_cp.edges.iter().any(|edge| {
+            if !matches!(edge.kind, EdgeKind::Mountain | EdgeKind::Valley) {
+                return false;
+            }
+            let midpoint = edge_midpoint(&accepted_cp, edge.id);
+            (midpoint.x - 0.9).abs() < 1e-9
+        }),
+        "展開図へx=.9の誘導折り目が追加される"
+    );
+
+    // 同じ「鏡映後フラップが障害縁を横断する」述語で見ると、遠側が巻き戻されて
+    // 障害の内側へ入らない。元の基層から分かれた各面の表示位置を直接確認する。
+    let accepted_faces = extract_faces(&accepted_cp);
+    for face in accepted_faces.iter().filter(|face| {
+        let representative = representative_point(&accepted_cp, face);
+        representative[0] > 0.25
+    }) {
+        let representative = representative_point(&accepted_cp, face);
+        if representative[0] <= 0.7 {
+            continue; // 動かなかった基層部分
+        }
+        let placement = accepted.state.placements[&face.id];
+        let polygon: Vec<DVec2> = face
+            .vertices
+            .iter()
+            .map(|vertex| placement.apply(vertex_pos(&accepted_cp, *vertex)))
+            .collect();
+        let (min_x, max_x) = polygon
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(lo, hi), point| {
+                (lo.min(point.x), hi.max(point.x))
+            });
+        assert!(
+            min_x >= 0.5 - 1e-9 || max_x <= 0.5 + 1e-9,
+            "承諾後のフラップ面は障害縁x=.5を横断しない: {polygon:?}"
+        );
+    }
+    let after_proposal = propose_fold_through(
+        &accepted_cp,
+        &accepted_faces,
+        &accepted.state,
+        &FoldThroughInput {
+            target_layers: Some(vec![base]),
+            ..input
+        },
+    );
+    // 面ID体系が変わるため同じ対象IDは無効化されてもよいが、少なくとも同じ衝突を
+    // 再提案することはない。
+    assert!(
+        after_proposal.is_err() || after_proposal.unwrap().is_none(),
+        "適用済みの衝突を再提案しない"
+    );
+
+    // 保存されるCP+手順から折り直しても平坦になり、一般の山谷/層順検査でも
+    // 貫通矛盾が残らない。
+    let mut document = Document::new(Paper {
+        width_mm: 100.0,
+        height_mm: 100.0,
+    });
+    document.cp = accepted_cp;
+    let mut first_step = first.step.clone();
+    first_step.id = 0;
+    let mut accepted_step = accepted.step.clone();
+    accepted_step.id = 1;
+    document.sequence = vec![first_step, accepted_step];
+    let replayed = replay(&document, 2, 1.0);
+    assert!(
+        replayed
+            .warnings
+            .iter()
+            .all(|warning| warning != FOLD_PENETRATION_WARNING),
+        "再生後も貫通警告なし: {:?}",
+        replayed.warnings
+    );
+    assert!(
+        !layer_order_conflicts(&document.cp, &accepted_faces, &replayed.frame),
+        "提案適用後の山谷と層順は矛盾しない"
+    );
+}
+
+#[test]
+fn non_parallel_collision_falls_back_to_warning_without_a_proposal() {
+    let (cp, first, _base, mut input) = single_collision_fixture();
+    // 障害縁はx=.5の鉛直線。主折り線をわずかに傾けると反射後フラップは同じ縁へ
+    // 入るが、guideと主折り線が交差するため単一の「遠側」を安全に定義できない。
+    input.line = [[0.7, 0.0], [0.8, 1.0]];
+    input.keep_side_point = [0.6, 0.5];
+    let faces = extract_faces(&cp);
+    assert!(
+        propose_fold_through(&cp, &faces, &first.state, &input)
+            .expect("衝突解析")
+            .is_none(),
+        "非平行な複雑ケースは提案しない"
+    );
+
+    let mut folded_cp = cp;
+    let result =
+        fold_through_with_additional_crease(&mut folded_cp, &faces, &first.state, &input, false)
+            .expect("複雑ケースも操作は止めない");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|warning| warning == FOLD_PENETRATION_WARNING),
+        "提案できなくても貫通警告へフォールバックする: {:?}",
+        result.warnings
+    );
 }
 
 #[test]

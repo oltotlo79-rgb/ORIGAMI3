@@ -1,7 +1,8 @@
 //! めり込み警告(SIM-007)の検査。
 
-use ori3_model::{Face3D, Frame3D};
-use ori3_rigid::self_intersects;
+use ori3_cp::{extract_faces, insert_segment};
+use ori3_model::{Document, EdgeKind, Face3D, Frame3D, Paper};
+use ori3_rigid::{layer_order_conflicts, self_intersects};
 
 fn frame(faces: Vec<Face3D>) -> Frame3D {
     Frame3D {
@@ -41,6 +42,91 @@ fn flat_stacked_layers_are_not_penetration() {
         ],
     );
     assert!(!self_intersects(&frame(vec![a, b])));
+}
+
+#[test]
+fn flat_fold_warns_only_for_layer_order_that_contradicts_mountain_valley() {
+    let mut document = Document::new(Paper {
+        width_mm: 100.0,
+        height_mm: 100.0,
+    });
+    insert_segment(&mut document.cp, [0.5, 0.0], [0.5, 1.0], EdgeKind::Valley);
+    let faces = extract_faces(&document.cp);
+    assert_eq!(faces.len(), 2);
+    let crease = document
+        .cp
+        .edges
+        .iter()
+        .find(|edge| edge.kind == EdgeKind::Valley)
+        .expect("谷折り線");
+    let adjacent: Vec<_> = faces
+        .iter()
+        .filter(|face| face.edges.contains(&crease.id))
+        .map(|face| face.id)
+        .collect();
+    assert_eq!(adjacent.len(), 2);
+
+    let vertex = |id| {
+        document
+            .cp
+            .vertices
+            .iter()
+            .find(|vertex| vertex.id == id)
+            .expect("頂点")
+            .pos
+    };
+    let mut folded_faces: Vec<Face3D> = faces
+        .iter()
+        .map(|face| {
+            let mean_x = face.vertices.iter().map(|&id| vertex(id)[0]).sum::<f64>()
+                / face.vertices.len() as f64;
+            let mirrored = mean_x > 0.5;
+            Face3D {
+                face: face.id,
+                polygon: face
+                    .vertices
+                    .iter()
+                    .map(|&id| {
+                        let [x, y] = vertex(id);
+                        [if mirrored { 1.0 - x } else { x }, y, 0.0]
+                    })
+                    .collect(),
+                layer: 0,
+            }
+        })
+        .collect();
+    let a = adjacent[0];
+    let b = adjacent[1];
+    let source_a = faces.iter().find(|face| face.id == a).expect("元面a");
+    let a_mirrored = source_a
+        .vertices
+        .iter()
+        .map(|&id| vertex(id)[0])
+        .sum::<f64>()
+        / source_a.vertices.len() as f64
+        > 0.5;
+    let b_should_be_above = !a_mirrored; // 谷: 表向きaから見ればbが上
+    for face in &mut folded_faces {
+        face.layer = if face.face == a {
+            u32::from(!b_should_be_above)
+        } else if face.face == b {
+            u32::from(b_should_be_above)
+        } else {
+            0
+        };
+    }
+    let mut folded = frame(folded_faces);
+    assert!(
+        !layer_order_conflicts(&document.cp, &faces, &folded),
+        "山谷どおりの層順序は正常"
+    );
+    for face in &mut folded.faces {
+        face.layer = 1 - face.layer;
+    }
+    assert!(
+        layer_order_conflicts(&document.cp, &faces, &folded),
+        "上下を反転すると紙が折り目を突き抜ける矛盾になる"
+    );
 }
 
 #[test]

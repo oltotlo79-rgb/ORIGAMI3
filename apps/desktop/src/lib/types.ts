@@ -141,6 +141,22 @@ export interface DocumentView {
   frame: Frame3D | null;
   /** 自動再生で折り線が見つからず飛ばされたステップID */
   skipped: number[];
+  /**
+   * 折り切る前の非破壊確認で見つかった、巻き込みに必要な追加折り目。
+   * 通常のDocumentViewでは未指定またはnullになる。
+   */
+  fold_through_proposal?: FoldThroughProposal | null;
+}
+
+/**
+ * 紙の縁へぶつかる単純な1か所を、巻き込み折りで避ける提案。
+ * folded_lineは現在の畳み平面(3D表示)の座標、crease_segmentsは
+ * 元の展開図(CP)へ写した線分で、同じ追加折り目を2つの区画に表示する。
+ */
+export interface FoldThroughProposal {
+  folded_line: [Vec2, Vec2];
+  crease_segments: [Vec2, Vec2][];
+  message: string;
 }
 
 /** edit_apply の操作(serde内部タグ形式: { "type": "..." }) */
@@ -171,6 +187,20 @@ export type SeqOp =
       type: "FoldThrough";
       /** この折りの直前までの手順数。手順数と同じなら末尾へ足し、
        * 途中の値ならその位置へ挟む(後続の手順はそのまま残る) */
+      up_to: number;
+      line: [Vec2, Vec2];
+      keep_side_point: Vec2;
+      target_layers: number[] | null;
+      direction: FoldDirection;
+      /** trueなら事前提案された追加折り目を入れて、巻き込みながら折る。 */
+      accept_additional_crease: boolean;
+    }
+  /**
+   * FoldThroughをまだ作品へ適用せず、巻き込み折り目が必要かだけ調べる。
+   * 結果はDocumentView.fold_through_proposalに入る。
+   */
+  | {
+      type: "PreviewFoldThrough";
       up_to: number;
       line: [Vec2, Vec2];
       keep_side_point: Vec2;

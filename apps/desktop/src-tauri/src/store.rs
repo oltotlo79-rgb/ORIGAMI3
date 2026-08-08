@@ -63,6 +63,9 @@ pub struct DocumentView {
     pub frame: Option<Frame3D>,
     /// 自動再生で折り線が見つからず飛ばされたステップのID
     pub skipped: Vec<StepId>,
+    /// 巻き込みで回避できる典型的な単一縁衝突の、非破壊プレビュー結果。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fold_through_proposal: Option<ori3_layers::FoldThroughProposal>,
 }
 
 pub struct DocumentStore {
@@ -244,6 +247,7 @@ impl DocumentStore {
     pub fn apply_seq(&mut self, op: SeqOp) -> Result<DocumentView, String> {
         let mut doc = self.doc.clone();
         let mut warnings: Vec<String> = Vec::new();
+        let mut fold_through_proposal = None;
         match op {
             SeqOp::PushStep { step } => doc.sequence.push(step),
             SeqOp::InsertStep { index, step } => {
@@ -271,13 +275,14 @@ impl DocumentStore {
                 keep_side_point,
                 target_layers,
                 direction,
+                accept_additional_crease,
             } => {
                 let mut insert_warnings = check_insert_point(&doc, up_to)?;
                 // facesは現docから導出済みのキャッシュ(docはまだ複製したまま無変更)
                 // 現在の状態を求め直すときの警告(飛ばした手順など)も利用者へ返す
                 let (state, state_warnings) = ori3_layers::flat_state_at(&doc, &self.faces, up_to)?;
                 let mut cp = doc.cp.clone();
-                let result = ori3_layers::fold_through(
+                let result = ori3_layers::fold_through_with_additional_crease(
                     &mut cp,
                     &self.faces,
                     &state,
@@ -287,6 +292,7 @@ impl DocumentStore {
                         target_layers,
                         direction,
                     },
+                    accept_additional_crease,
                 )?;
                 let mut step = result.step;
                 step.id = next_step_id(&doc);
@@ -295,6 +301,28 @@ impl DocumentStore {
                 warnings = state_warnings;
                 warnings.append(&mut insert_warnings);
                 warnings.extend(result.warnings);
+            }
+            SeqOp::PreviewFoldThrough {
+                up_to,
+                line,
+                keep_side_point,
+                target_layers,
+                direction,
+            } => {
+                check_insert_point(&doc, up_to)?;
+                let (state, state_warnings) = ori3_layers::flat_state_at(&doc, &self.faces, up_to)?;
+                fold_through_proposal = ori3_layers::propose_fold_through(
+                    &doc.cp,
+                    &self.faces,
+                    &state,
+                    &ori3_layers::FoldThroughInput {
+                        line,
+                        keep_side_point,
+                        target_layers,
+                        direction,
+                    },
+                )?;
+                warnings = state_warnings;
             }
             SeqOp::Technique {
                 up_to,
@@ -348,7 +376,9 @@ impl DocumentStore {
                 warnings.extend(result.warnings);
             }
         }
-        Ok(self.commit(doc, warnings))
+        let mut view = self.commit(doc, warnings);
+        view.fold_through_proposal = fold_through_proposal;
+        Ok(view)
     }
 
     /// 直前の変更を取り消す。
@@ -504,6 +534,7 @@ fn build_view(doc: &Document, mut warnings: Vec<String>) -> DocumentView {
         violations: ori3_cp::local_violations(&doc.cp),
         frame: None,
         skipped: Vec::new(),
+        fold_through_proposal: None,
     }
 }
 
@@ -521,6 +552,10 @@ pub fn attach_replay(view: &mut DocumentView) {
     }
     let up_to = view.doc.sequence.len();
     let mut replayed = ori3_layers::replay_with_faces(&view.doc, &view.faces, up_to, 1.0);
+    let mut penetration_warnings: Vec<&'static str> = Vec::new();
+    if let Some(warning) = add_layer_order_warning(&view.doc.cp, &view.faces, &mut replayed.frame) {
+        penetration_warnings.push(warning);
+    }
     let transition = replayed.layer_transition.clone();
     ori3_soft::prevent_overlap(
         &view.doc.cp,
@@ -536,27 +571,67 @@ pub fn attach_replay(view: &mut DocumentView) {
     );
     // 紙のめり込み(SIM-007)。折り上がりは平ら(z≒0)なので通常は出ないが、
     // 平らに畳みきれない形では立体のまま返るため、そのときに知らせる
-    if add_penetration_warning(&mut replayed.frame) {
-        replayed
-            .warnings
-            .push(ori3_rigid::PENETRATION_WARNING.to_string());
+    penetration_warnings.extend(add_penetration_warning(
+        &view.doc.cp,
+        &view.faces,
+        &mut replayed.frame,
+        false,
+    ));
+    for warning in penetration_warnings {
+        if !replayed.warnings.iter().any(|existing| existing == warning) {
+            replayed.warnings.push(warning.to_string());
+        }
     }
     view.warnings.extend(replayed.warnings);
     view.skipped = replayed.skipped;
     view.frame = Some(replayed.frame);
 }
 
-/// 立体の面同士が食い込んでいれば、フレームの警告に一文を足す(SIM-007)。
+/// 立体交差、または折り切り時の山谷と層順序の矛盾をフレームへ足す。
 /// 厳密な防止はせず、気づけるようにするだけ(「止めずに警告」原則)。
-/// 平らに畳んだ状態(z≒0)では層が同一平面に重なるのが正常なので何もしない。
-pub fn add_penetration_warning(frame: &mut Frame3D) -> bool {
-    if ori3_rigid::self_intersects(frame) {
+/// `check_layer_order` はt=1の平坦状態だけでtrueにする。
+pub fn add_penetration_warning(
+    cp: &CreasePattern,
+    faces: &[Face],
+    frame: &mut Frame3D,
+    check_layer_order: bool,
+) -> Vec<&'static str> {
+    let mut added = Vec::new();
+    if ori3_rigid::self_intersects(frame)
+        && !frame
+            .warnings
+            .iter()
+            .any(|warning| warning == ori3_rigid::PENETRATION_WARNING)
+    {
         frame
             .warnings
             .push(ori3_rigid::PENETRATION_WARNING.to_string());
-        return true;
+        added.push(ori3_rigid::PENETRATION_WARNING);
     }
-    false
+    if check_layer_order && let Some(warning) = add_layer_order_warning(cp, faces, frame) {
+        added.push(warning);
+    }
+    added
+}
+
+/// 接触補正でzが動く前の平坦フレームに、層順序矛盾の警告を足す。
+pub(crate) fn add_layer_order_warning(
+    cp: &CreasePattern,
+    faces: &[Face],
+    frame: &mut Frame3D,
+) -> Option<&'static str> {
+    if !ori3_rigid::layer_order_conflicts(cp, faces, frame)
+        || frame
+            .warnings
+            .iter()
+            .any(|warning| warning == ori3_layers::FOLD_PENETRATION_WARNING)
+    {
+        return None;
+    }
+    frame
+        .warnings
+        .push(ori3_layers::FOLD_PENETRATION_WARNING.to_string());
+    Some(ori3_layers::FOLD_PENETRATION_WARNING)
 }
 
 fn check_paper(paper: &Paper) -> Result<(), String> {
@@ -1219,6 +1294,108 @@ mod tests {
         assert_eq!(view.faces.len(), 2);
     }
 
+    #[test]
+    fn preview_fold_through_is_non_destructive_and_acceptance_adds_the_guide() {
+        let mut store = square_store();
+        store
+            .apply_seq(SeqOp::FoldThrough {
+                up_to: 0,
+                line: [[0.25, 0.0], [0.25, 1.0]],
+                keep_side_point: [0.5, 0.5],
+                target_layers: None,
+                direction: ori3_model::FoldDirection::Up,
+                accept_additional_crease: false,
+            })
+            .expect("左端を折る");
+        let before = store.doc.clone();
+        let undo_count = store.undo_stack.len();
+        let preview = store
+            .apply_seq(SeqOp::PreviewFoldThrough {
+                up_to: 1,
+                line: [[0.7, 0.0], [0.7, 1.0]],
+                keep_side_point: [0.6, 0.5],
+                target_layers: None,
+                direction: ori3_model::FoldDirection::Up,
+            })
+            .expect("巻き込み候補を調べる");
+        let proposal = preview.fold_through_proposal.expect("単一衝突縁の提案");
+        assert!(
+            proposal
+                .folded_line
+                .iter()
+                .all(|point| (point[0] - 0.9).abs() < 1e-9)
+        );
+        assert_eq!(store.doc, before, "プレビューは文書を変更しない");
+        assert_eq!(store.undo_stack.len(), undo_count, "undo履歴も増やさない");
+
+        let accepted = store
+            .apply_seq(SeqOp::FoldThrough {
+                up_to: 1,
+                line: [[0.7, 0.0], [0.7, 1.0]],
+                keep_side_point: [0.6, 0.5],
+                target_layers: None,
+                direction: ori3_model::FoldDirection::Up,
+                accept_additional_crease: true,
+            })
+            .expect("提案を承諾して折る");
+        assert!(
+            accepted
+                .warnings
+                .iter()
+                .all(|warning| warning != ori3_layers::FOLD_PENETRATION_WARNING),
+            "承諾後は貫通警告が消える: {:?}",
+            accepted.warnings
+        );
+        assert!(accepted.doc.cp.edges.iter().any(|edge| {
+            if !matches!(edge.kind, EdgeKind::Mountain | EdgeKind::Valley) {
+                return false;
+            }
+            let p0 = accepted
+                .doc
+                .cp
+                .vertices
+                .iter()
+                .find(|vertex| vertex.id == edge.v0)
+                .expect("端点")
+                .pos;
+            let p1 = accepted
+                .doc
+                .cp
+                .vertices
+                .iter()
+                .find(|vertex| vertex.id == edge.v1)
+                .expect("端点")
+                .pos;
+            ((p0[0] + p1[0]) * 0.5 - 0.9).abs() < 1e-9
+        }));
+    }
+
+    #[test]
+    fn flat_layer_order_contradiction_adds_fold_penetration_warning() {
+        let mut store = square_store();
+        store
+            .apply_seq(fold_op(0, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5]))
+            .unwrap();
+        let faces = ori3_cp::extract_faces(&store.doc.cp);
+        let mut frame = ori3_layers::replay(&store.doc, 1, 1.0).frame;
+        assert!(!ori3_rigid::layer_order_conflicts(
+            &store.doc.cp,
+            &faces,
+            &frame
+        ));
+        for face in &mut frame.faces {
+            face.layer = 1 - face.layer;
+        }
+        let added = add_penetration_warning(&store.doc.cp, &faces, &mut frame, true);
+        assert_eq!(added, vec![ori3_layers::FOLD_PENETRATION_WARNING]);
+        assert!(
+            frame
+                .warnings
+                .iter()
+                .any(|warning| warning == ori3_layers::FOLD_PENETRATION_WARNING)
+        );
+    }
+
     /// 手順の途中(末尾以外)へも折り操作を挟める。挟んだ折りはその位置に入り、
     /// 後続の手順は残ったまま再生し直される(SEQ-006)。
     #[test]
@@ -1742,6 +1919,7 @@ mod tests {
             keep_side_point,
             target_layers: None,
             direction: ori3_model::FoldDirection::Up,
+            accept_additional_crease: false,
         }
     }
 

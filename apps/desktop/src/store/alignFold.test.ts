@@ -64,6 +64,8 @@ function seedFlat(): void {
     playing: false,
     drivers: new Map(),
     foldDraft: null,
+    pendingFoldThrough: null,
+    foldThroughBusy: false,
     alignDraft: null,
     errorMessage: null,
     frame3d: {
@@ -140,7 +142,7 @@ describe("選択の進行", () => {
 
 describe("求まった折り線でFoldThroughを送る", () => {
   it("1つ目に選んだ点がある側が動く(動かさない側の点は2つ目の点の側)", async () => {
-    vi.mocked(ipc.sequenceApply).mockResolvedValueOnce({
+    vi.mocked(ipc.sequenceApply).mockResolvedValue({
       doc: useAppStore.getState().doc!,
       faces: [],
       warnings: [],
@@ -156,7 +158,11 @@ describe("求まった折り線でFoldThroughを送る", () => {
 
     await useAppStore.getState().commitFoldDraft();
 
-    const op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
+    expect(vi.mocked(ipc.sequenceApply).mock.calls.map(([op]) => op.type)).toEqual([
+      "PreviewFoldThrough",
+      "FoldThrough",
+    ]);
+    const op = vi.mocked(ipc.sequenceApply).mock.calls[1][0];
     if (op.type !== "FoldThrough") throw new Error("FoldThroughでない");
     expect(op.up_to).toBe(1); // 手順1つの末尾へ足す
     expect(op.line).toEqual(line);

@@ -170,6 +170,7 @@ fn test_seq_op_fold_through_json_shape() {
         keep_side_point: [0.5, 0.25],
         target_layers: Some(vec![3]),
         direction: FoldDirection::Down,
+        accept_additional_crease: false,
     };
     let json = serde_json::to_string(&op).expect("serialize");
     assert_eq!(
@@ -184,12 +185,14 @@ fn test_seq_op_fold_through_json_shape() {
             keep_side_point,
             target_layers,
             direction,
+            accept_additional_crease,
         } => {
             assert_eq!(up_to, 2);
             assert_eq!(line, [[0.0, 0.5], [1.0, 0.5]]);
             assert_eq!(keep_side_point, [0.5, 0.25]);
             assert_eq!(target_layers, Some(vec![3]));
             assert_eq!(direction, FoldDirection::Down);
+            assert!(!accept_additional_crease);
         }
         other => panic!("unexpected variant: {other:?}"),
     }
@@ -200,10 +203,49 @@ fn test_seq_op_fold_through_json_shape() {
         keep_side_point: [1.0, 0.0],
         target_layers: None,
         direction: FoldDirection::Up,
+        accept_additional_crease: false,
     })
     .expect("serialize");
     assert!(json.contains(r#""target_layers":null"#), "json = {json}");
     assert!(json.contains(r#""direction":"Up""#), "json = {json}");
+
+    let accepted = serde_json::to_string(&SeqOp::FoldThrough {
+        up_to: 2,
+        line: [[0.0, 0.5], [1.0, 0.5]],
+        keep_side_point: [0.5, 0.25],
+        target_layers: Some(vec![3]),
+        direction: FoldDirection::Down,
+        accept_additional_crease: true,
+    })
+    .expect("serialize");
+    assert!(
+        accepted.contains(r#""accept_additional_crease":true"#),
+        "json = {accepted}"
+    );
+}
+
+#[test]
+fn test_seq_op_preview_fold_through_json_shape() {
+    let op = SeqOp::PreviewFoldThrough {
+        up_to: 1,
+        line: [[0.7, 0.0], [0.7, 1.0]],
+        keep_side_point: [0.6, 0.5],
+        target_layers: Some(vec![0]),
+        direction: FoldDirection::Up,
+    };
+    let json = serde_json::to_string(&op).expect("serialize");
+    assert_eq!(
+        json,
+        r#"{"type":"PreviewFoldThrough","up_to":1,"line":[[0.7,0.0],[0.7,1.0]],"keep_side_point":[0.6,0.5],"target_layers":[0],"direction":"Up"}"#
+    );
+    assert!(matches!(
+        serde_json::from_str::<SeqOp>(&json).expect("deserialize"),
+        SeqOp::PreviewFoldThrough {
+            up_to: 1,
+            direction: FoldDirection::Up,
+            ..
+        }
+    ));
 }
 
 #[test]

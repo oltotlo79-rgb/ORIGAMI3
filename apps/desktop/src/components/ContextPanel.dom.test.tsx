@@ -3,7 +3,7 @@
 // 押せないときもボタンは消さず、理由を日本語で見せることを確かめる。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ContextPanel } from "./ContextPanel";
 import { useAppStore } from "../store/appStore";
 import type { Document } from "../lib/types";
@@ -64,6 +64,8 @@ function seed(drivers: Map<number, number>, poseAngles = new Map<number, number>
     playing: false,
     playT: 1,
     foldDraft: null,
+    pendingFoldThrough: null,
+    foldThroughBusy: false,
     techniqueDraft: null,
     warnings: [],
     poseWarnings: [],
@@ -111,6 +113,86 @@ describe("この形で仕上げる(SIM-009)", () => {
     expect(vi.mocked(ipc.sequenceApply)).toHaveBeenCalledTimes(1);
     const op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
     expect(op.type === "PushStep" && op.step.kind).toBe("Pose");
+  });
+});
+
+describe("巻き込み折り目の提案", () => {
+  function seedProposal() {
+    seed(new Map());
+    useAppStore.setState({
+      pendingFoldThrough: {
+        proposal: {
+          folded_line: [
+            [0.25, 0.5],
+            [0.75, 0.5],
+          ],
+          crease_segments: [
+            [
+              [0.2, 0.4],
+              [0.8, 0.4],
+            ],
+          ],
+          message: "重なりの縁に沿って巻き込むと、紙の突き抜けを避けられます。",
+        },
+        operation: {
+          type: "FoldThrough",
+          up_to: 0,
+          line: [
+            [0.5, 0],
+            [0.5, 1],
+          ],
+          keep_side_point: [0.25, 0.5],
+          target_layers: null,
+          direction: "Up",
+        },
+        docEpoch: useAppStore.getState().docEpoch,
+        stepCount: 0,
+      },
+    });
+  }
+
+  function resolvedView() {
+    return {
+      doc: makeDoc(),
+      faces: [],
+      warnings: [],
+      violations: [],
+      frame: null,
+      skipped: [],
+    };
+  }
+
+  it("作業を止めるダイアログではなく、下部パネルへ日本語の選択肢を出す", () => {
+    seedProposal();
+    render(<ContextPanel />);
+
+    expect(screen.getByLabelText("巻き込み折り目の提案")).toBeTruthy();
+    expect(screen.getByText("指定した場所以外に、ここへ折り目がつきます")).toBeTruthy();
+    expect(screen.getByText(/展開図の橙色の破線.*3D表示の水色/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "追加折り目を入れて折る" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "追加せず折る（警告のみ）" })).toBeTruthy();
+  });
+
+  it("承諾なら追加折り目あり、拒否なら追加なしで元の折りを送る", async () => {
+    vi.mocked(ipc.sequenceApply).mockResolvedValue(resolvedView());
+    seedProposal();
+    render(<ContextPanel />);
+
+    fireEvent.click(screen.getByRole("button", { name: "追加折り目を入れて折る" }));
+    await waitFor(() => expect(ipc.sequenceApply).toHaveBeenCalledTimes(1));
+    let op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
+    expect(op.type === "FoldThrough" && op.accept_additional_crease).toBe(true);
+    await waitFor(() => expect(useAppStore.getState().pendingFoldThrough).toBeNull());
+
+    cleanup();
+    vi.mocked(ipc.sequenceApply).mockClear();
+    seedProposal();
+    render(<ContextPanel />);
+    fireEvent.click(screen.getByRole("button", { name: "追加せず折る（警告のみ）" }));
+    await waitFor(() => expect(ipc.sequenceApply).toHaveBeenCalledTimes(1));
+    op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
+    expect(op.type === "FoldThrough" && op.accept_additional_crease).toBe(false);
+    await waitFor(() => expect(useAppStore.getState().pendingFoldThrough).toBeNull());
   });
 });
 

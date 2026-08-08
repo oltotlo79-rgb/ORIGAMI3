@@ -9,6 +9,7 @@ import {
   useAppStore,
   type AlignDraft,
   type FoldDraft,
+  type PendingFoldThrough,
   type TechniqueDraft,
   type ToolId,
 } from "../store/appStore";
@@ -418,6 +419,7 @@ function FoldDraftContent({ draft }: { draft: FoldDraft }) {
   const updateFoldDraft = useAppStore((s) => s.updateFoldDraft);
   const cancelFoldDraft = useAppStore((s) => s.cancelFoldDraft);
   const commitFoldDraft = useAppStore((s) => s.commitFoldDraft);
+  const busy = useAppStore((s) => s.foldThroughBusy);
   const [a, b] = draft.line;
   // 座標は「紙の長辺=1」に正規化された値なので、紙の寸法を掛けてmmで見せる
   const scale = paper ? Math.max(paper.width_mm, paper.height_mm) : 1;
@@ -434,6 +436,7 @@ function FoldDraftContent({ draft }: { draft: FoldDraft }) {
           <input
             type="radio"
             name="fold-direction"
+            disabled={busy}
             checked={draft.direction === "Up"}
             onChange={() => updateFoldDraft({ direction: "Up" })}
           />
@@ -443,6 +446,7 @@ function FoldDraftContent({ draft }: { draft: FoldDraft }) {
           <input
             type="radio"
             name="fold-direction"
+            disabled={busy}
             checked={draft.direction === "Down"}
             onChange={() => updateFoldDraft({ direction: "Down" })}
           />
@@ -453,6 +457,7 @@ function FoldDraftContent({ draft }: { draft: FoldDraft }) {
           <input
             type="radio"
             name="fold-target"
+            disabled={busy}
             checked={draft.target === "all"}
             onChange={() => updateFoldDraft({ target: "all" })}
           />
@@ -462,6 +467,7 @@ function FoldDraftContent({ draft }: { draft: FoldDraft }) {
           <input
             type="radio"
             name="fold-target"
+            disabled={busy}
             checked={draft.target === "top"}
             onChange={() => updateFoldDraft({ target: "top" })}
           />
@@ -477,6 +483,7 @@ function FoldDraftContent({ draft }: { draft: FoldDraft }) {
           <input
             type="radio"
             name="fold-side"
+            disabled={busy}
             checked={draft.movingSide === "right"}
             onChange={() => updateFoldDraft({ movingSide: "right" })}
           />
@@ -486,6 +493,7 @@ function FoldDraftContent({ draft }: { draft: FoldDraft }) {
           <input
             type="radio"
             name="fold-side"
+            disabled={busy}
             checked={draft.movingSide === "left"}
             onChange={() => updateFoldDraft({ movingSide: "left" })}
           />
@@ -497,14 +505,45 @@ function FoldDraftContent({ draft }: { draft: FoldDraft }) {
         </span>
       </div>
       <div className="button-row">
-        <button type="button" onClick={() => void commitFoldDraft()}>
-          折る
+        <button type="button" disabled={busy} onClick={() => void commitFoldDraft()}>
+          {busy ? "折り方を確認中…" : "折る"}
         </button>
-        <button type="button" onClick={() => cancelFoldDraft()}>
+        <button type="button" disabled={busy} onClick={() => cancelFoldDraft()}>
           やめる
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * 巻き込み用の折り目を入れるか、その場で選ぶ非モーダルの提案。
+ * 「追加しない」も元の折りは実行し、貫通が残れば通常の警告として知らせる。
+ */
+function FoldThroughProposalContent({ pending }: { pending: PendingFoldThrough }) {
+  const busy = useAppStore((s) => s.foldThroughBusy);
+  const resolve = useAppStore((s) => s.resolveFoldThroughProposal);
+  const count = pending.proposal.crease_segments.length;
+
+  return (
+    <section className="fold-through-proposal" aria-label="巻き込み折り目の提案">
+      <p className="fold-through-proposal-title">
+        指定した場所以外に、ここへ折り目がつきます
+      </p>
+      <p>{pending.proposal.message}</p>
+      <p className="hint">
+        追加位置を展開図の橙色の破線と、3D表示の水色の線で確認できます
+        {count > 1 ? `（展開図では${count}線分）` : ""}。
+      </p>
+      <div className="button-row">
+        <button type="button" disabled={busy} onClick={() => void resolve(true)}>
+          {busy ? "適用中…" : "追加折り目を入れて折る"}
+        </button>
+        <button type="button" disabled={busy} onClick={() => void resolve(false)}>
+          追加せず折る（警告のみ）
+        </button>
+      </div>
+    </section>
   );
 }
 
@@ -916,6 +955,7 @@ export function ContextPanel() {
   const currentStep = useAppStore((s) => s.currentStep);
   const activeTool = useAppStore((s) => s.activeTool);
   const foldDraft = useAppStore((s) => s.foldDraft);
+  const pendingFoldThrough = useAppStore((s) => s.pendingFoldThrough);
   const alignDraft = useAppStore((s) => s.alignDraft);
   const techniqueDraft = useAppStore((s) => s.techniqueDraft);
   // 同じ文言は1回だけ出す(展開図の検査結果には自動再生の警告も合流している)
@@ -928,7 +968,9 @@ export function ContextPanel() {
       <div className="context-selection">
         {/* 手順を選んでいるときはその設定を優先する。折り線は「今見えている形」の
             上に引くものなので、手順を選んだ時点でストアが捨てている(ここは念のため) */}
-        {stepSelected ? (
+        {pendingFoldThrough ? (
+          <FoldThroughProposalContent pending={pendingFoldThrough} />
+        ) : stepSelected ? (
           <StepContent number={currentStep} />
         ) : techniqueDraft ? (
           <TechniqueDraftContent draft={techniqueDraft} />
