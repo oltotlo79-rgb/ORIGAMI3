@@ -134,6 +134,7 @@ export function ExportDialog() {
         <div className="button-row">
           <button
             type="button"
+            className="button-primary"
             disabled={busy || blocked(choice)}
             onClick={() => void handleSave()}
           >

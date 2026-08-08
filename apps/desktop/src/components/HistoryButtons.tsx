@@ -4,6 +4,7 @@
 
 import { useAppStore } from "../store/appStore";
 import { redoHintText, undoHintText } from "../lib/undoHint";
+import { ToolbarIcon } from "./ToolIcons";
 
 export function HistoryButtons() {
   const undo = useAppStore((s) => s.undo);
@@ -16,9 +17,11 @@ export function HistoryButtons() {
   return (
     <>
       <button type="button" title={`${undoHint} (Ctrl+Z)`} onClick={() => void undo()}>
+        <ToolbarIcon name="undo" />
         元に戻す
       </button>
       <button type="button" title={`${redoHint} (Ctrl+Y)`} onClick={() => void redo()}>
+        <ToolbarIcon name="redo" />
         やり直し
       </button>
     </>

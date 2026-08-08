@@ -7,28 +7,35 @@
      効き色は深緑。展開図の慣例色(山=赤 #d43c3c / 谷=青 #3b6fc9)と
      取り違えないよう、赤系・青系はUIの効き色に使わない。
      文字色はどれも背景に対してコントラスト比4.5:1以上(lib/uiTokens.test.ts) */
-  --color-bg: #e8e4dc;
-  --color-surface: #f2efe8; /* 操作の区画(ツールバー・レール・パネル) */
-  --color-surface-sunken: #dcd7cd; /* 表示の区画・押せない部品 */
-  --color-control: #fbf9f4;
-  --color-control-hover: #ffffff;
+  --color-bg: #f5f2ff;
+  --color-surface: #ffffff; /* 操作の区画(ツールバー・レール・パネル) */
+  --color-surface-raised: #ffffff;
+  --color-surface-sunken: #ece8f6; /* 表示の区画・押せない部品 */
+  --color-control: #ffffff;
+  --color-control-hover: #faf8ff;
   --color-canvas-2d: #ddd8d0; /* 展開図の余白(renderer.ts と揃える) */
   --color-canvas-3d: #cfcbc2; /* 立体表示の背景(sceneBuilder.ts と揃える) */
-  --color-border: #cec8bd;
-  --color-border-strong: #b3aa9c;
-  --color-text: #22201c; /* surface上で14.2:1 */
-  --color-text-muted: #5b5449; /* 補助の文字。surface上で6.5:1 */
-  --color-accent: #2f6b5b; /* 選択中。白文字で6.2:1 */
-  --color-accent-strong: #24564d;
-  --color-accent-soft: #e2ece7;
-  --color-danger: #a33232; /* surface上で6.0:1 */
-  --color-danger-soft: #f6e4e2;
+  --color-border: #ddd7ec;
+  --color-border-strong: #9f93b8;
+  --color-text: #27213d; /* surface上で15.3:1 */
+  --color-text-muted: #5e576f; /* 補助の文字。surface上で6.8:1 */
+  --color-accent: #007a70; /* 選択中。白文字で5.2:1 */
+  --color-accent-strong: #005e56;
+  --color-accent-soft: #ddf8f1;
+  --color-secondary: #7040c9;
+  --color-secondary-strong: #5424a3;
+  --color-secondary-soft: #eee7ff;
+  --color-pop-yellow: #ffd84d;
+  --color-pop-yellow-soft: #fff5c2;
+  --color-pop-coral: #ed5c70;
+  --color-danger: #b4233d; /* surface上で6.5:1 */
+  --color-danger-soft: #ffe8ed;
   --color-crease-mountain: #d43c3c;
   --color-crease-valley: #3b6fc9;
-  --color-warn: #7a5400; /* surface上で5.9:1 */
-  --color-warn-badge: #8a5a12; /* 白文字で5.9:1 */
-  --color-overlay: rgba(28, 26, 22, 0.78);
-  --color-scrim: rgba(28, 26, 22, 0.38);
+  --color-warn: #765100; /* surface上で7.1:1 */
+  --color-warn-badge: #965000; /* 白文字で6.1:1 */
+  --color-overlay: rgba(39, 33, 61, 0.84);
+  --color-scrim: rgba(39, 33, 61, 0.46);
 
   /* 余白(2の倍数で段階を作る) */
   --sp-1: 2px;
@@ -37,30 +44,41 @@
   --sp-4: 8px;
   --sp-5: 12px;
   --sp-6: 16px;
+  --sp-7: 20px;
+  --sp-8: 24px;
+  --sp-9: 32px;
 
   /* 角丸 */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 10px;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 22px;
+  --radius-xl: 28px;
   --radius-pill: 999px;
 
   /* 影(重なりの深さを3段階で表す) */
-  --shadow-1: 0 1px 2px rgba(28, 26, 22, 0.08);
-  --shadow-2: 0 2px 6px rgba(28, 26, 22, 0.14);
-  --shadow-dialog: 0 12px 32px rgba(28, 26, 22, 0.28);
+  --shadow-1: 0 2px 8px rgba(63, 45, 94, 0.1);
+  --shadow-2: 0 8px 20px rgba(63, 45, 94, 0.16);
+  --shadow-panel: 0 12px 28px rgba(63, 45, 94, 0.14);
+  --shadow-button: 0 3px 0 rgba(39, 33, 61, 0.16), 0 6px 12px rgba(63, 45, 94, 0.1);
+  --shadow-dialog: 0 24px 64px rgba(39, 33, 61, 0.3);
 
   /* 文字の大きさ(補助 / 小 / 本文 / 見出し)と行間 */
   --fs-xs: 11px;
   --fs-sm: 12px;
   --fs-md: 13px;
-  --fs-lg: 15px;
+  --fs-lg: 16px;
+  --fs-xl: 22px;
   /* 行間も3段階。狭い区画は詰め、説明文はゆったりさせる(日本語は行間が要る) */
   --lh-tight: 1.45; /* ボタン・札などの操作部品 */
   --lh-normal: 1.65; /* コンテキストパネルの説明 */
   --lh-body: 1.8; /* ダイアログの本文 */
-  --fw-bold: 600;
+  --fw-medium: 600;
+  --fw-bold: 700;
+  --fw-black: 800;
 
-  --t-fast: 150ms ease;
+  --t-fast: 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --t-base: 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --focus-ring: 0 0 0 4px rgba(0, 122, 112, 0.2);
 }
 
 * {
@@ -72,9 +90,10 @@ body,
 #root {
   margin: 0;
   height: 100%;
-  font-family: "Yu Gothic UI", "Meiryo", sans-serif;
+  font-family: "Hiragino Maru Gothic ProN", "Yu Gothic UI", "Meiryo", sans-serif;
   font-size: var(--fs-md);
   line-height: var(--lh-tight);
+  font-weight: 500;
   color: var(--color-text);
   background: var(--color-bg);
   overflow: hidden;
@@ -92,12 +111,31 @@ textarea {
 input[type="text"],
 input[type="number"],
 select {
-  padding: var(--sp-1) var(--sp-3);
-  border: 1px solid var(--color-border-strong);
+  min-height: 32px;
+  padding: var(--sp-2) var(--sp-4);
+  border: 2px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-control);
   color: var(--color-text);
   line-height: var(--lh-tight);
+  box-shadow: inset 0 1px 2px rgba(39, 33, 61, 0.04);
+  transition:
+    border-color var(--t-fast),
+    box-shadow var(--t-fast),
+    background var(--t-fast);
+}
+
+input[type="text"]:hover:not(:disabled),
+input[type="number"]:hover:not(:disabled),
+select:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
+}
+
+input[type="text"]:focus,
+input[type="number"]:focus,
+select:focus {
+  border-color: var(--color-accent);
+  box-shadow: var(--focus-ring);
 }
 
 input:disabled,
@@ -114,11 +152,18 @@ input[type="range"] {
   accent-color: var(--color-accent);
 }
 
+input[type="checkbox"],
+input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  vertical-align: -3px;
+}
+
 /* キーボードで辿っているときだけ、どこにいるかをはっきり出す */
 :focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
-  box-shadow: 0 0 0 4px rgba(47, 107, 91, 0.18);
+  box-shadow: var(--focus-ring);
 }
 
 /* 中央行は minmax(0, 1fr) にする。1fr の下限は中身の高さなので、
@@ -138,20 +183,23 @@ input[type="range"] {
 .timeline-chip,
 .button-row button,
 .angle-row button {
+  min-height: 32px;
   padding: var(--sp-2) var(--sp-5);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-sm);
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-md);
   background: var(--color-control);
   color: var(--color-text);
   line-height: var(--lh-tight);
-  box-shadow: var(--shadow-1);
+  font-weight: var(--fw-medium);
+  box-shadow: var(--shadow-button);
   cursor: pointer;
   transition:
     background var(--t-fast),
     border-color var(--t-fast),
     color var(--t-fast),
     box-shadow var(--t-fast),
-    transform var(--t-fast);
+    transform var(--t-fast),
+    filter var(--t-fast);
 }
 
 .toolbar button:hover:not(:disabled),
@@ -162,6 +210,8 @@ input[type="range"] {
 .angle-row button:hover:not(:disabled) {
   background: var(--color-control-hover);
   border-color: var(--color-accent);
+  box-shadow: 0 4px 0 rgba(0, 94, 86, 0.16), 0 9px 18px rgba(63, 45, 94, 0.13);
+  transform: translateY(-1px);
 }
 
 .toolbar button:active:not(:disabled),
@@ -171,8 +221,8 @@ input[type="range"] {
 .button-row button:active:not(:disabled),
 .angle-row button:active:not(:disabled) {
   background: var(--color-accent-soft);
-  box-shadow: none;
-  transform: translateY(1px);
+  box-shadow: 0 1px 0 rgba(39, 33, 61, 0.12);
+  transform: translateY(2px) scale(0.98);
 }
 
 /* 押せないボタンは消さずに残す決まりなので、平らな見た目で「今は押せない」を出す */
@@ -185,7 +235,8 @@ input[type="range"] {
   border-color: var(--color-border);
   color: var(--color-text-muted);
   box-shadow: none;
-  cursor: default;
+  cursor: not-allowed;
+  opacity: 0.72;
 }
 
 /* 上部ツールバー: 作品全体に効く操作の場所 */
@@ -193,18 +244,102 @@ input[type="range"] {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
-  padding: var(--sp-3) var(--sp-5);
-  background: var(--color-surface);
-  border-bottom: 1px solid var(--color-border);
-  box-shadow: var(--shadow-1);
-  z-index: 1;
+  min-height: 52px;
+  padding: var(--sp-4) var(--sp-6);
+  background: linear-gradient(100deg, #ffffff 0%, #ffffff 68%, var(--color-secondary-soft) 100%);
+  border-bottom: 2px solid var(--color-secondary-soft);
+  box-shadow: 0 5px 18px rgba(63, 45, 94, 0.12);
+  position: relative;
+  z-index: 3;
+}
+
+.toolbar button {
+  min-height: 34px;
+  padding-inline: var(--sp-5);
+  background: rgba(255, 255, 255, 0.94);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  white-space: nowrap;
+}
+
+.toolbar-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex: none;
+  margin-right: var(--sp-2);
+  padding-right: var(--sp-5);
+  border-right: 2px dashed rgba(112, 64, 201, 0.22);
+}
+
+.toolbar-brand-mark {
+  width: 38px;
+  height: 38px;
+  flex: none;
+  overflow: visible;
+  filter: drop-shadow(0 4px 5px rgba(84, 36, 163, 0.2));
+  transform: rotate(-2deg);
+}
+
+.toolbar-brand-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1;
+}
+
+.toolbar-brand-copy strong {
+  color: var(--color-secondary-strong);
+  font-size: 16px;
+  font-weight: var(--fw-black);
+  letter-spacing: 0.055em;
+}
+
+.toolbar-brand-copy strong span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-left: 2px;
+  border-radius: 50% 46% 52% 45%;
+  background: var(--color-pop-yellow);
+  color: var(--color-text);
+  transform: rotate(7deg);
+}
+
+.toolbar-brand-copy small {
+  margin-top: 3px;
+  color: var(--color-text-muted);
+  font-size: 9px;
+  font-weight: var(--fw-bold);
+  letter-spacing: 0.18em;
+}
+
+.toolbar-icon {
+  width: 17px;
+  height: 17px;
+  flex: none;
+  color: var(--color-secondary);
+  transition:
+    color var(--t-fast),
+    transform var(--t-fast);
+}
+
+.toolbar button:hover:not(:disabled) .toolbar-icon {
+  color: var(--color-accent-strong);
+  transform: rotate(-5deg) scale(1.08);
 }
 
 .toolbar-separator {
-  width: 1px;
-  height: 22px;
-  background: var(--color-border);
-  margin: 0 var(--sp-2);
+  width: 4px;
+  height: 26px;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(var(--color-pop-yellow), var(--color-pop-coral));
+  margin: 0 var(--sp-1);
+  box-shadow: 0 2px 5px rgba(112, 64, 201, 0.16);
 }
 
 /* 中央行: ツールレール + 2D + 境目 + 3D。
@@ -217,15 +352,19 @@ input[type="range"] {
 
 /* 2Dと3Dの境目(左右にドラッグして広さを変える) */
 .pane-splitter {
-  background: var(--color-border);
+  background:
+    radial-gradient(circle, rgba(255, 255, 255, 0.92) 1px, transparent 1.5px) center / 4px 8px,
+    linear-gradient(var(--color-secondary), var(--color-accent));
   cursor: col-resize;
   touch-action: none;
-  transition: background var(--t-fast);
+  box-shadow: inset 1px 0 rgba(255, 255, 255, 0.5), inset -1px 0 rgba(39, 33, 61, 0.12);
+  transition: filter var(--t-fast);
+  z-index: 2;
 }
 
 .pane-splitter:hover,
 .pane-splitter:focus-visible {
-  background: var(--color-accent);
+  filter: brightness(1.2) saturate(1.15);
   outline: none;
 }
 
@@ -234,14 +373,36 @@ input[type="range"] {
 .tool-rail {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-2);
-  padding: var(--sp-4) var(--sp-3);
-  background: var(--color-surface);
-  border-right: 1px solid var(--color-border);
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-3) var(--sp-6);
+  background: linear-gradient(180deg, #ffffff 0%, var(--color-secondary-soft) 58%, var(--color-accent-soft) 100%);
+  border-right: 2px solid var(--color-secondary-soft);
+  box-shadow: 5px 0 18px rgba(63, 45, 94, 0.1);
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-width: thin;
+  scrollbar-color: var(--color-secondary) transparent;
+  position: relative;
+  z-index: 2;
+}
+
+.tool-rail::-webkit-scrollbar,
+.timeline-steps::-webkit-scrollbar,
+.context-selection::-webkit-scrollbar,
+.context-messages::-webkit-scrollbar,
+.dialog::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+.tool-rail::-webkit-scrollbar-thumb,
+.timeline-steps::-webkit-scrollbar-thumb,
+.context-selection::-webkit-scrollbar-thumb,
+.context-messages::-webkit-scrollbar-thumb,
+.dialog::-webkit-scrollbar-thumb {
+  border-radius: var(--radius-pill);
+  background: var(--color-secondary);
 }
 
 .tool-button {
@@ -250,28 +411,56 @@ input[type="range"] {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: var(--sp-1);
-  min-height: 48px;
+  gap: var(--sp-2);
+  min-height: 52px;
   padding: var(--sp-2) var(--sp-1);
   font-size: var(--fs-xs);
   font-weight: var(--fw-bold);
   letter-spacing: 0.04em;
+  border-width: 2px;
+  border-color: rgba(112, 64, 201, 0.16);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  box-shadow: 0 3px 0 rgba(84, 36, 163, 0.15), 0 6px 12px rgba(63, 45, 94, 0.1);
 }
 
 /* 選択中のツールは面で塗る(縁の色だけでは何を選んでいるか分かりにくい) */
 .tool-button.active,
 .tool-button.active:hover:not(:disabled) {
-  background: var(--color-accent);
+  background: linear-gradient(145deg, #008d80, var(--color-accent));
   border-color: var(--color-accent-strong);
   color: #fff;
-  box-shadow: var(--shadow-2);
+  box-shadow: 0 4px 0 var(--color-accent-strong), 0 9px 18px rgba(0, 94, 86, 0.24);
 }
 
 .tool-icon {
   display: block;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   flex: none;
+  color: var(--color-secondary);
+  filter: drop-shadow(0 1px 0 rgba(255, 255, 255, 0.85));
+  transition:
+    transform var(--t-fast),
+    color var(--t-fast),
+    filter var(--t-fast);
+}
+
+.tool-button:hover:not(:disabled) .tool-icon {
+  transform: rotate(-4deg) scale(1.08);
+}
+
+.tool-button.active .tool-icon {
+  color: #fff;
+  filter: drop-shadow(0 2px 2px rgba(0, 57, 52, 0.3));
+}
+
+.tool-button:not(.active):nth-of-type(3n + 2) .tool-icon {
+  color: var(--color-accent);
+}
+
+.tool-button:not(.active):nth-of-type(3n) .tool-icon {
+  color: var(--color-pop-coral);
 }
 
 .tool-label {
@@ -291,31 +480,35 @@ input[type="range"] {
   flex: none;
   display: flex;
   flex-direction: column;
-  gap: var(--sp-1);
-  margin: var(--sp-1) 0 var(--sp-3);
-  padding: var(--sp-2) var(--sp-1);
-  border-left: 3px solid var(--color-accent);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  background: var(--color-accent-soft);
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-3);
+  padding: var(--sp-3) var(--sp-1);
+  border: 2px solid rgba(112, 64, 201, 0.18);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: inset 0 2px 8px rgba(112, 64, 201, 0.08);
 }
 
 .tool-button.small {
   flex-direction: row;
   justify-content: flex-start;
   gap: var(--sp-2);
-  min-height: 28px;
+  min-height: 30px;
   padding: var(--sp-2) var(--sp-1);
   font-size: var(--fs-xs);
-  font-weight: normal;
+  font-weight: var(--fw-medium);
   letter-spacing: 0;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 2px 0 rgba(84, 36, 163, 0.12);
 }
 
 /* サブメニューの中の数選び(等分の数・角度の刻み) */
 .tool-select {
   margin-top: var(--sp-1);
   width: 100%;
-  padding: var(--sp-1);
-  border: 1px solid var(--color-border-strong);
+  min-height: 30px;
+  padding: var(--sp-1) var(--sp-2);
+  border: 2px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-control);
   font-size: var(--fs-xs);
@@ -336,6 +529,7 @@ input[type="range"] {
 
 .pane-2d {
   background: var(--color-canvas-2d);
+  box-shadow: inset 0 0 0 3px rgba(255, 255, 255, 0.42);
 }
 
 /* 紙の色・方眼の数(何も選んでいないときだけ出す) */
@@ -354,12 +548,12 @@ input[type="range"] {
 }
 
 .paper-appearance input[type="color"] {
-  width: 28px;
-  height: 20px;
+  width: 34px;
+  height: 28px;
   margin-left: var(--sp-2);
   padding: 0;
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-sm);
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-md);
   background: var(--color-control);
   vertical-align: middle;
   cursor: pointer;
@@ -382,9 +576,9 @@ input[type="range"] {
 .new-paper-preview {
   display: inline-block;
   background: #fff;
-  border: 1px solid var(--color-border-strong);
-  border-radius: 2px;
-  box-shadow: var(--shadow-1);
+  border: 2px solid var(--color-secondary-soft);
+  border-radius: var(--radius-sm);
+  box-shadow: 5px 6px 0 var(--color-secondary-soft), var(--shadow-2);
 }
 
 /* 3D区画は内側を上下に分ける(立体表示 + 手順タイムライン)。
@@ -399,16 +593,18 @@ input[type="range"] {
   position: relative;
   min-height: 0;
   overflow: hidden;
+  box-shadow: inset 0 0 0 3px rgba(255, 255, 255, 0.35);
 }
 
 /* 手順タイムライン(3D区画の下側・96px) */
 .timeline {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-3);
-  padding: var(--sp-3) var(--sp-5);
-  background: var(--color-surface);
-  border-top: 1px solid var(--color-border);
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-5) var(--sp-2);
+  background: linear-gradient(100deg, #ffffff, var(--color-secondary-soft));
+  border-top: 2px solid rgba(112, 64, 201, 0.2);
+  box-shadow: 0 -5px 16px rgba(63, 45, 94, 0.1);
   min-height: 0;
 }
 
@@ -419,11 +615,12 @@ input[type="range"] {
 }
 
 .timeline-controls button {
-  min-height: 26px;
+  min-height: 25px;
   padding: var(--sp-1) var(--sp-4);
   font-size: var(--fs-sm);
   border-radius: var(--radius-pill);
   font-variant-numeric: tabular-nums;
+  box-shadow: 0 2px 0 rgba(84, 36, 163, 0.15);
 }
 
 .timeline-steps {
@@ -447,16 +644,17 @@ input[type="range"] {
 .timeline-insert {
   flex: none;
   padding: 0 var(--sp-1);
-  border: 1px dashed var(--color-border-strong);
-  border-radius: var(--radius-sm);
-  background: transparent;
+  border: 2px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.55);
   color: var(--color-text-muted);
   cursor: pointer;
   line-height: 1;
   transition:
     background var(--t-fast),
     border-color var(--t-fast),
-    color var(--t-fast);
+    color var(--t-fast),
+    transform var(--t-fast);
 }
 
 .timeline-insert:hover {
@@ -477,7 +675,7 @@ input[type="range"] {
 .timeline-chip {
   flex: none;
   padding: var(--sp-2) var(--sp-4);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-pill);
   font-size: var(--fs-sm);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -527,20 +725,35 @@ input[type="range"] {
 /* 3D区画右上の警告/エラーバッジ */
 .status-badge {
   position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
   top: var(--sp-4);
   right: var(--sp-4);
-  padding: var(--sp-1) var(--sp-5);
+  padding: var(--sp-2) var(--sp-5);
+  border: 3px solid #fff;
   border-radius: var(--radius-pill);
   background: var(--color-warn-badge);
   color: #fff;
   font-size: var(--fs-sm);
   font-weight: var(--fw-bold);
   line-height: var(--lh-tight);
-  box-shadow: var(--shadow-2);
+  letter-spacing: 0.02em;
+  box-shadow: 0 4px 0 #643600, 0 10px 22px rgba(39, 33, 61, 0.28);
+  animation: badge-pop 260ms cubic-bezier(0.2, 1.4, 0.4, 1) both;
 }
 
 .status-badge.error {
   background: var(--color-danger);
+  box-shadow: 0 4px 0 #771329, 0 10px 22px rgba(39, 33, 61, 0.3);
+}
+
+.status-icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: #fff;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.2));
 }
 
 /* 3D区画の上端に常に出す操作ヒント(UI-009)。
@@ -550,12 +763,15 @@ input[type="range"] {
   top: 0;
   left: 0;
   right: 0;
-  padding: var(--sp-2) 88px var(--sp-2) var(--sp-5);
+  padding: var(--sp-3) 98px var(--sp-3) var(--sp-5);
   background: var(--color-overlay);
   color: #fff;
   font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
   line-height: var(--lh-tight);
   pointer-events: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(6px);
 }
 
 /* 3D区画右下の「視点を戻す」。常設区画・ツールレールを増やさずに置く小さなボタン */
@@ -563,20 +779,32 @@ input[type="range"] {
   position: absolute;
   right: var(--sp-4);
   bottom: var(--sp-4);
+  min-height: 30px;
   padding: var(--sp-1) var(--sp-5);
-  border: 1px solid rgba(255, 255, 255, 0.35);
+  border: 2px solid rgba(255, 255, 255, 0.58);
   border-radius: var(--radius-pill);
   background: var(--color-overlay);
   color: #fff;
   font-size: var(--fs-sm);
   line-height: var(--lh-tight);
   cursor: pointer;
-  transition: background var(--t-fast);
+  font-weight: var(--fw-bold);
+  box-shadow: 0 3px 0 rgba(0, 0, 0, 0.24);
+  transition:
+    background var(--t-fast),
+    transform var(--t-fast),
+    box-shadow var(--t-fast);
 }
 
 .viewer-reset:hover,
 .viewer-reset:focus-visible {
   background: var(--color-accent);
+  transform: translateY(-1px);
+}
+
+.viewer-reset:active {
+  box-shadow: none;
+  transform: translateY(2px);
 }
 
 /* 折れない状態(理由つき)は色を変えて気付けるようにする */
@@ -588,11 +816,11 @@ input[type="range"] {
    左右それぞれの列の中でスクロールさせる(パネルの外へはみ出させない) */
 .context-panel {
   display: flex;
-  gap: var(--sp-6);
+  gap: var(--sp-5);
   padding: var(--sp-4) var(--sp-5);
-  background: var(--color-surface);
-  border-top: 1px solid var(--color-border);
-  box-shadow: 0 -1px 2px rgba(28, 26, 22, 0.06);
+  background: linear-gradient(100deg, var(--color-accent-soft), #ffffff 42%, var(--color-pop-yellow-soft));
+  border-top: 2px solid rgba(0, 122, 112, 0.18);
+  box-shadow: 0 -7px 22px rgba(63, 45, 94, 0.12);
   line-height: var(--lh-normal);
   min-height: 0;
   overflow: hidden;
@@ -608,17 +836,27 @@ input[type="range"] {
   min-height: 0;
   overflow-y: auto;
   scrollbar-width: thin;
+  scrollbar-color: var(--color-accent) transparent;
+  padding: var(--sp-3) var(--sp-5);
+  border: 1px solid rgba(0, 122, 112, 0.18);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: var(--shadow-1);
 }
 
 /* 警告・エラーの置き場。左の操作の並びと混ざらないよう区切って少し沈める */
 .context-messages {
   flex: 1;
   min-width: 0;
-  border-left: 1px solid var(--color-border);
-  padding-left: var(--sp-6);
+  padding: var(--sp-3) var(--sp-5);
+  border: 2px solid rgba(150, 80, 0, 0.22);
+  border-radius: var(--radius-md);
+  background: rgba(255, 245, 194, 0.9);
+  box-shadow: var(--shadow-1);
   min-height: 0;
   overflow-y: auto;
   scrollbar-width: thin;
+  scrollbar-color: var(--color-warn-badge) transparent;
 }
 
 .button-row {
@@ -630,7 +868,7 @@ input[type="range"] {
 }
 
 .button-row button {
-  padding: var(--sp-1) var(--sp-5);
+  padding: var(--sp-2) var(--sp-5);
 }
 
 .button-row label {
@@ -641,14 +879,17 @@ input[type="range"] {
 .fold-controls {
   margin-top: var(--sp-3);
   padding-top: var(--sp-3);
-  border-top: 1px solid var(--color-border);
+  border-top: 2px dashed var(--color-border);
 }
 
 /* 紙の縁を巻き込むための追加折り目。下部パネル内の非モーダル通知として出す。 */
 .fold-through-proposal {
-  border-left: 4px solid var(--color-warn);
-  padding: var(--sp-2) var(--sp-4);
-  background: color-mix(in srgb, var(--color-warn) 8%, var(--color-surface));
+  border: 2px solid rgba(150, 80, 0, 0.34);
+  border-left: 7px solid var(--color-warn-badge);
+  border-radius: var(--radius-md);
+  padding: var(--sp-3) var(--sp-5);
+  background: var(--color-pop-yellow-soft);
+  box-shadow: var(--shadow-1);
 }
 
 .fold-through-proposal-title {
@@ -695,6 +936,7 @@ input[type="range"] {
 
 .warning-text {
   color: var(--color-warn);
+  font-weight: var(--fw-medium);
 }
 
 /* 復旧ダイアログ(SYS-003)。常設4区画の上に重ねて出す */
@@ -706,30 +948,35 @@ input[type="range"] {
   align-items: center;
   justify-content: center;
   padding: var(--sp-6);
+  backdrop-filter: blur(9px) saturate(0.9);
   z-index: 100;
 }
 
 /* 4種のダイアログ(新規作成・提案・書き出し・復旧)で同じ枠・同じ余白を使う */
 .dialog {
-  background: #fff;
-  border: 1px solid var(--color-border);
+  position: relative;
+  background: linear-gradient(160deg, #ffffff 0%, #ffffff 72%, var(--color-secondary-soft) 100%);
+  border: 2px solid rgba(112, 64, 201, 0.2);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-dialog);
-  padding: 20px;
+  padding: var(--sp-7);
   max-width: 460px;
   max-height: calc(100vh - 32px);
   overflow-y: auto;
+  scrollbar-color: var(--color-secondary) transparent;
+  animation: dialog-in var(--t-base) both;
 }
 
 /* 見出しは下に細い線を敷いて、題と中身の区切りを見せる */
 .dialog h2 {
-  font-size: var(--fs-lg);
-  font-weight: var(--fw-bold);
+  color: var(--color-secondary-strong);
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-black);
   line-height: var(--lh-tight);
-  margin: 0 0 var(--sp-5);
-  padding-bottom: var(--sp-3);
-  border-bottom: 1px solid var(--color-border);
-  letter-spacing: 0.02em;
+  margin: 0 0 var(--sp-6);
+  padding-bottom: var(--sp-4);
+  border-bottom: 4px solid var(--color-pop-yellow);
+  letter-spacing: 0.03em;
 }
 
 .dialog p {
@@ -741,16 +988,17 @@ input[type="range"] {
 /* 選択肢のまとまり(紙の形・書き出す種類)は枠で囲って一目で分かるようにする */
 .dialog fieldset {
   margin: 0 0 var(--sp-5);
-  padding: var(--sp-2) var(--sp-5) var(--sp-4);
-  border: 1px solid var(--color-border);
+  padding: var(--sp-3) var(--sp-5) var(--sp-5);
+  border: 2px solid rgba(112, 64, 201, 0.18);
   border-radius: var(--radius-md);
-  background: var(--color-surface);
+  background: rgba(238, 231, 255, 0.55);
 }
 
 .dialog legend {
   padding: 0 var(--sp-2);
-  color: var(--color-text-muted);
+  color: var(--color-secondary-strong);
   font-size: var(--fs-sm);
+  font-weight: var(--fw-bold);
 }
 
 .dialog fieldset label,
@@ -763,7 +1011,32 @@ input[type="range"] {
 .dialog .button-row:last-child {
   margin-top: var(--sp-5);
   padding-top: var(--sp-5);
-  border-top: 1px solid var(--color-border);
+  border-top: 2px dashed var(--color-border);
+}
+
+.button-primary,
+.button-primary:hover:not(:disabled) {
+  border-color: var(--color-accent-strong);
+  background: linear-gradient(145deg, #008d80, var(--color-accent));
+  color: #fff;
+  font-weight: var(--fw-bold);
+  box-shadow: 0 4px 0 var(--color-accent-strong), 0 9px 18px rgba(0, 94, 86, 0.2);
+}
+
+.button-primary:hover:not(:disabled) {
+  filter: brightness(1.08) saturate(1.06);
+}
+
+.button-primary:active:not(:disabled) {
+  background: var(--color-accent-strong);
+  box-shadow: 0 1px 0 var(--color-accent-strong);
+}
+
+.button-danger,
+.button-danger:hover:not(:disabled) {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+  background: var(--color-danger-soft);
 }
 
 .dialog > :last-child {
@@ -788,9 +1061,10 @@ input[type="range"] {
   width: 200px;
   height: 200px;
   flex: none;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  border: 2px solid rgba(112, 64, 201, 0.18);
+  border-radius: var(--radius-lg);
   background: #fff;
+  box-shadow: var(--shadow-2);
 }
 
 .limb-list {
@@ -819,7 +1093,7 @@ input[type="range"] {
 .candidate-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: var(--sp-4);
+  gap: var(--sp-5);
 }
 
 .candidate {
@@ -827,26 +1101,32 @@ input[type="range"] {
   flex-direction: column;
   align-items: center;
   gap: var(--sp-2);
-  padding: var(--sp-3);
-  background: var(--color-surface);
-  border: 2px solid transparent;
-  border-radius: var(--radius-md);
+  padding: var(--sp-4);
+  background: #fff;
+  border: 3px solid var(--color-secondary-soft);
+  border-radius: var(--radius-lg);
   color: var(--color-text);
   cursor: pointer;
+  box-shadow: 0 4px 0 rgba(84, 36, 163, 0.14), var(--shadow-1);
   transition:
     background var(--t-fast),
-    border-color var(--t-fast);
+    border-color var(--t-fast),
+    box-shadow var(--t-fast),
+    transform var(--t-fast);
 }
 
 .candidate:hover {
-  border-color: var(--color-border-strong);
-  background: var(--color-control-hover);
+  border-color: var(--color-secondary);
+  background: var(--color-secondary-soft);
+  box-shadow: 0 6px 0 rgba(84, 36, 163, 0.18), var(--shadow-2);
+  transform: translateY(-2px) rotate(-0.4deg);
 }
 
 .candidate.selected,
 .candidate.selected:hover {
   border-color: var(--color-accent);
   background: var(--color-accent-soft);
+  box-shadow: 0 5px 0 var(--color-accent), var(--shadow-2);
 }
 
 .candidate .cp-thumb {
@@ -856,5 +1136,74 @@ input[type="range"] {
 
 .candidate-caption {
   font-size: var(--fs-sm);
+  font-weight: var(--fw-bold);
   line-height: var(--lh-tight);
+}
+
+@keyframes badge-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.86);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (max-width: 1100px) {
+  .toolbar {
+    gap: var(--sp-2);
+    padding-inline: var(--sp-5);
+  }
+
+  .toolbar button {
+    padding-inline: var(--sp-4);
+  }
+
+  .toolbar-brand {
+    gap: var(--sp-2);
+    margin-right: 0;
+    padding-right: var(--sp-4);
+  }
+
+  .toolbar-brand-mark {
+    width: 34px;
+    height: 34px;
+  }
+
+  .toolbar-brand-copy strong {
+    font-size: 14px;
+  }
+
+  .toolbar-brand-copy small {
+    display: none;
+  }
+
+  .context-panel {
+    gap: var(--sp-4);
+    padding-inline: var(--sp-4);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

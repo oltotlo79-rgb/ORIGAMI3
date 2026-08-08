@@ -107,7 +107,12 @@ export function NewDocumentDialog() {
           <p className="error-text">大きさは0より大きいmmで入れてください</p>
         )}
         <div className="button-row">
-          <button type="button" disabled={!valid} onClick={() => void confirm()}>
+          <button
+            type="button"
+            className="button-primary"
+            disabled={!valid}
+            onClick={() => void confirm()}
+          >
             この紙で作りはじめる
           </button>
           <button type="button" onClick={close}>

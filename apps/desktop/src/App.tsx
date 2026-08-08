@@ -17,6 +17,7 @@ import { ProposalWizard } from "./components/dialogs/ProposalWizard";
 import { ExportDialog } from "./components/dialogs/ExportDialog";
 import { HistoryButtons } from "./components/HistoryButtons";
 import { HistoryShortcuts } from "./components/HistoryShortcuts";
+import { ToolbarIcon } from "./components/ToolIcons";
 import { uniqueWarnings } from "./lib/techniques";
 import "./App.css";
 
@@ -66,14 +67,47 @@ function App() {
     <div className="app">
       <HistoryShortcuts />
       <header className="toolbar">
+        <span className="toolbar-brand">
+          <svg
+            className="toolbar-brand-mark"
+            viewBox="0 0 44 44"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <circle cx="22" cy="22" r="20" fill="var(--color-accent-soft)" />
+            <path d="M4 22 20 7l-3 17Z" fill="var(--color-secondary)" />
+            <path d="m17 24 22-12-14 18Z" fill="var(--color-pop-yellow)" />
+            <path d="m17 24 8 6-12 8Z" fill="var(--color-pop-coral)" />
+            <path d="m25 30 7 6-9-3Z" fill="var(--color-accent)" />
+            <path d="m25 30 6-20 5-4-4 22Z" fill="var(--color-accent)" />
+            <path d="m17 24 8 6-5-23Z" fill="#fff" fillOpacity=".76" />
+            <circle cx="34.5" cy="8" r="1.1" fill="var(--color-text)" />
+            <path
+              d="M7 9v4M5 11h4M37 28v4M35 30h4"
+              fill="none"
+              stroke="var(--color-secondary)"
+              strokeLinecap="round"
+              strokeWidth="1.8"
+            />
+          </svg>
+          <span className="toolbar-brand-copy">
+            <strong>
+              ORIGAMI<span>3</span>
+            </strong>
+            <small>おりがみ工房</small>
+          </span>
+        </span>
         {/* 紙の形と大きさを決めてから作る(PAP-001)。開くのは独立ダイアログ */}
         <button type="button" onClick={openNewDialog}>
+          <ToolbarIcon name="new" />
           新規
         </button>
         <button type="button" onClick={() => void handleOpen()}>
+          <ToolbarIcon name="open" />
           開く
         </button>
         <button type="button" onClick={() => void handleSave()}>
+          <ToolbarIcon name="save" />
           保存
         </button>
         <span className="toolbar-separator" />
@@ -83,10 +117,12 @@ function App() {
         <span className="toolbar-separator" />
         {/* 提案ウィザードの入口。開くのは独立ダイアログで、常設区画は増やさない(PRO-004) */}
         <button type="button" onClick={openProposal}>
+          <ToolbarIcon name="proposal" />
           提案
         </button>
         {/* 書き出しの入口。開くのは独立ダイアログで、常設区画は増やさない(EXP-001/002) */}
         <button type="button" onClick={openExport}>
+          <ToolbarIcon name="export" />
           書き出し
         </button>
       </header>
@@ -114,11 +150,23 @@ function App() {
                 className={hasError ? "status-badge error" : "status-badge"}
                 title="詳細は下のパネルに表示されます"
               >
-                {hasError
-                  ? "エラー"
-                  : poseConverged
-                    ? `警告 ${warningCount}`
-                    : "⚠ 追従計算が収束していません"}
+                <svg
+                  className="status-icon"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                  focusable="false"
+                >
+                  <path d="M12 3 22 20H2L12 3Z" fill="none" stroke="currentColor" strokeWidth="2.4" />
+                  <path d="M12 8v6" stroke="currentColor" strokeLinecap="round" strokeWidth="2.4" />
+                  <circle cx="12" cy="17.5" r="1.2" fill="currentColor" />
+                </svg>
+                <span>
+                  {hasError
+                    ? "エラー"
+                    : poseConverged
+                      ? `警告 ${warningCount}`
+                      : "⚠ 追従計算が収束していません"}
+                </span>
               </div>
             )}
           </div>

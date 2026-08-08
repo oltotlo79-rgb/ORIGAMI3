@@ -53,10 +53,18 @@ export function RecoveryDialog() {
           「破棄する」を選ぶと、控えていた内容は消えて元に戻せません。
         </p>
         <div className="button-row">
-          <button type="button" onClick={() => void resolveRecovery(true)}>
+          <button
+            type="button"
+            className="button-primary"
+            onClick={() => void resolveRecovery(true)}
+          >
             復元する
           </button>
-          <button type="button" onClick={() => void resolveRecovery(false)}>
+          <button
+            type="button"
+            className="button-danger"
+            onClick={() => void resolveRecovery(false)}
+          >
             破棄する
           </button>
         </div>

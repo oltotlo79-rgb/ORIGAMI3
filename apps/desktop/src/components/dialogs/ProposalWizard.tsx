@@ -100,7 +100,12 @@ function SkeletonStep() {
         >
           出っぱりを増やす
         </button>
-        <button type="button" disabled={busy} onClick={() => void generate()}>
+        <button
+          type="button"
+          className="button-primary"
+          disabled={busy}
+          onClick={() => void generate()}
+        >
           {busy ? "計算中…" : "展開図を作ってもらう"}
         </button>
         <button type="button" onClick={close}>
@@ -153,6 +158,7 @@ function CandidateStep() {
         </button>
         <button
           type="button"
+          className="button-primary"
           disabled={selected === null}
           onClick={() => setStep("confirm")}
         >
@@ -195,7 +201,11 @@ function ConfirmStep() {
         <button type="button" onClick={() => setStep("candidates")}>
           選び直す
         </button>
-        <button type="button" onClick={() => void apply()}>
+        <button
+          type="button"
+          className="button-primary"
+          onClick={() => void apply()}
+        >
           この展開図を使う
         </button>
       </div>
