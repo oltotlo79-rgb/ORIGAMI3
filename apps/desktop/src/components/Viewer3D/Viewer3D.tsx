@@ -169,6 +169,7 @@ export function Viewer3D({ fitRef }: Props) {
     if (s.pendingFoldThrough) {
       return "追加折り目の位置を確認し、下のパネルで折り方を選んでください";
     }
+    if (s.contactStopped) return "紙がぶつかるためここまでです";
     return viewerHint({
       pullBlocked: pullBlockedOf(s),
       pulling: s.pullHinge !== null,

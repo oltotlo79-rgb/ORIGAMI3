@@ -195,6 +195,19 @@ describe("重なり防止", () => {
   });
 });
 
+describe("食い込み防止", () => {
+  it("既定はオンで、切ると作品の表示設定へその場で入る", () => {
+    render(<PaperAppearance />);
+    const box = screen.getByLabelText("食い込み防止");
+    expect(box).toHaveProperty("checked", true);
+    expect(screen.getByText(/ごく複雑な形では防げない/)).not.toBeNull();
+
+    fireEvent.click(box);
+    expect(useAppStore.getState().display.penetration_prevention_enabled).toBe(false);
+    expect(box).toHaveProperty("checked", false);
+  });
+});
+
 describe("紙のたわみ(SIM-012 / SIM-013)", () => {
   it("切替が出ていて、はじめは切ってある(つまみもまだ出ない)", () => {
     render(<PaperAppearance />);

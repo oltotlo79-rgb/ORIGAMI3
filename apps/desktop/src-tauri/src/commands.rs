@@ -38,6 +38,8 @@ pub struct PoseOutcome {
     pub result: ori3_rigid::SolveResult,
     pub soft: Option<SoftMesh>,
     pub suspect_hinges: Vec<EdgeId>,
+    /// 食い込み防止が紙どうしの接触直前で動きを止めたか。正常な停止なので警告ではない。
+    pub contact_stopped: bool,
 }
 
 /// たわみの計算結果を足した `sequence_replay` の戻り値(SIM-012)。
@@ -62,6 +64,42 @@ fn soft_mesh(
         return None;
     }
     Some(ori3_soft::relax(cp, faces, frame, settings))
+}
+
+/// 不収束候補の壊れたフレームを表示せず、warm startの直前収束姿勢へ警告だけ載せる。
+fn keep_previous_pose_on_failure(
+    cp: &CreasePattern,
+    faces: &[ori3_cp::Face],
+    warm: Option<&HashMap<EdgeId, f64>>,
+    failed: ori3_rigid::SolveResult,
+) -> ori3_rigid::SolveResult {
+    if failed.converged {
+        return failed;
+    }
+    let Some(warm) = warm else { return failed };
+    let mut previous = ori3_rigid::solve(cp, faces, &[], Some(warm));
+    if !previous.converged {
+        return failed;
+    }
+    previous.converged = false;
+    previous.iterations = previous.iterations.saturating_add(failed.iterations);
+    for warning in failed.frame.warnings {
+        if !previous.frame.warnings.contains(&warning) {
+            previous.frame.warnings.push(warning);
+        }
+    }
+    if !previous
+        .frame
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("収束していません"))
+    {
+        previous
+            .frame
+            .warnings
+            .push("追従計算が収束していません".to_string());
+    }
+    previous
 }
 
 /// panicをErr文字列に変換する(SYS-005: アプリを落とさない)。
@@ -219,25 +257,42 @@ pub fn pose_solve(
     drivers: Vec<Driver>,
     keep: Option<Vec<Driver>>,
     soft: Option<SoftSettings>,
+    seed_only: Option<bool>,
 ) -> Result<PoseOutcome, String> {
     guard(AssertUnwindSafe(|| {
-        let (cp, faces, warm, overlap_enabled) = lock(&state).pose_inputs(); // 複製のみ、即ロック解放
+        let (cp, faces, warm, overlap_enabled, penetration_enabled) = lock(&state).pose_inputs(); // 複製のみ、即ロック解放
         let keep = keep.unwrap_or_default();
         let driver_hinges: Vec<EdgeId> = drivers
             .iter()
             .chain(&keep)
             .map(|driver| driver.hinge)
             .collect();
-        let mut result = if keep.is_empty() {
-            ori3_rigid::solve(&cp, &faces, &drivers, warm.as_ref())
-        } else {
-            let targets: HashMap<EdgeId, f64> = keep
-                .iter()
+        let targets: Option<HashMap<EdgeId, f64>> = (!keep.is_empty()).then(|| {
+            keep.iter()
                 .map(|d| (d.hinge, d.target_angle_deg))
                 .chain(drivers.iter().map(|d| (d.hinge, d.target_angle_deg)))
-                .collect();
-            ori3_rigid::solve_near(&cp, &faces, &drivers, &targets, warm.as_ref())
+                .collect()
+        });
+        // beginPullが現在表示中の角度をwarm startへ合わせる1回だけは、平坦からの
+        // 動きとして接触停止しない。通常の角度操作と引く操作は同じ継続法を通る。
+        let (raw_result, contact_stopped) = if seed_only.unwrap_or(false) {
+            let result = targets.as_ref().map_or_else(
+                || ori3_rigid::solve(&cp, &faces, &drivers, warm.as_ref()),
+                |targets| ori3_rigid::solve_near(&cp, &faces, &drivers, targets, warm.as_ref()),
+            );
+            (result, false)
+        } else {
+            let motion = ori3_rigid::solve_motion(
+                &cp,
+                &faces,
+                &drivers,
+                targets.as_ref(),
+                warm.as_ref(),
+                penetration_enabled,
+            );
+            (motion.result, motion.contact_stopped)
         };
+        let mut result = keep_previous_pose_on_failure(&cp, &faces, warm.as_ref(), raw_result);
         // 手順を持たない角度操作では初期層順序(面ID順)を上下の契約にする。
         // 共有網頂点へ補正するので、折り目の接続は切れない。
         let mut order: Vec<ori3_model::FaceId> = faces.iter().map(|face| face.id).collect();
@@ -270,11 +325,14 @@ pub fn pose_solve(
         ); // SIM-007
         // たわみもロックの外で計算する(規約どおり)
         let mesh = soft_mesh(&cp, &faces, &result.frame, soft.as_ref());
-        lock(&state).store_pose_angles(result.angles.clone()); // 短いロックで書き戻し
+        if result.converged {
+            lock(&state).store_pose_angles(result.angles.clone()); // 短いロックで書き戻し
+        }
         Ok(PoseOutcome {
             result,
             soft: mesh,
             suspect_hinges,
+            contact_stopped,
         })
     }))
 }

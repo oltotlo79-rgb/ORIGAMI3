@@ -406,6 +406,8 @@ interface AppState {
   poseWarnings: string[];
   /** 追従計算が収束したか(falseなら3D区画のバッジで知らせる) */
   poseConverged: boolean;
+  /** 食い込み防止が接触直前で正常停止したか。3Dの1行案内にだけ使う */
+  contactStopped: boolean;
   /** 今つかんで引いている折り線の辺ID(3D表示で色を付ける)。引いていなければnull */
   pullHinge: number | null;
   /** 一緒に動かしている左右対称の相手の折り線(3D表示で同じ色を付ける)。
@@ -822,6 +824,7 @@ export const useAppStore = create<AppState>((set, get) => {
         : pruneSelection(s.selection, view.doc),
       hoveredHinge: null,
       errorMessage: null,
+      contactStopped: false,
       docEpoch: isNewDocument ? s.docEpoch + 1 : s.docEpoch,
     }));
   };
@@ -853,6 +856,7 @@ export const useAppStore = create<AppState>((set, get) => {
           poseAngles: new Map(),
           poseWarnings: [],
           poseConverged: true,
+          contactStopped: false,
           pullHinge: null,
           pullMirrorHinge: null,
           frame3d: r.value.frame,
@@ -994,13 +998,29 @@ export const useAppStore = create<AppState>((set, get) => {
   ): Promise<void> => {
     pose.reset();
     const soft = softArg();
-    const call = () => ipc.poseSolve(drivers, keep, soft);
+    const call = () => ipc.poseSolve(drivers, keep, soft, !applyFrame);
     const r = await (coalesce ? queue.runLatest(call) : queue.run(call));
     if (!r.ok) {
       if (r.isLatest) fail(r.error);
       return;
     }
     if (!r.isLatest) return;
+    const poseAngles = new Map(
+      Object.entries(r.value.angles).map(([id, deg]) => [Number(id), deg]),
+    );
+    const contactStopped = r.value.contact_stopped === true;
+    let settledDrivers: Map<number, number> | null = null;
+    if (contactStopped && applyFrame) {
+      const current = get().drivers;
+      const next = new Map(current);
+      for (const requested of drivers) {
+        // 計算中に次のpointer入力が入っていれば、その未送信の新値を消さない。
+        if (current.get(requested.hinge) !== requested.target_angle_deg) continue;
+        const safe = poseAngles.get(requested.hinge);
+        if (safe !== undefined) next.set(requested.hinge, safe);
+      }
+      settledDrivers = next;
+    }
     set({
       // 出発点合わせ(applyFrame=false)では形は変わらないので、手順再生が
       // 持っていた層の重なり情報を消さないよう立体表示はそのままにする
@@ -1016,9 +1036,9 @@ export const useAppStore = create<AppState>((set, get) => {
         : {}),
       poseWarnings: r.value.frame.warnings,
       poseConverged: r.value.converged,
-      poseAngles: new Map(
-        Object.entries(r.value.angles).map(([id, deg]) => [Number(id), deg]),
-      ),
+      poseAngles,
+      contactStopped,
+      ...(settledDrivers ? { drivers: settledDrivers } : {}),
     });
   };
 
@@ -1155,6 +1175,7 @@ export const useAppStore = create<AppState>((set, get) => {
         s.suspectHinges,
         r.value.suspect_hinges ?? [],
       ),
+      contactStopped: false,
     });
   };
 
@@ -1383,6 +1404,7 @@ export const useAppStore = create<AppState>((set, get) => {
     poseAngles: new Map(),
     poseWarnings: [],
     poseConverged: true,
+    contactStopped: false,
     pullHinge: null,
     pullMirrorHinge: null,
     recovery: null,

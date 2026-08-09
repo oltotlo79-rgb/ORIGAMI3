@@ -122,6 +122,7 @@ fn test_display_settings_defaults_for_old_files() {
     assert_eq!(d.soft_stiffness, 0.5);
     assert_eq!(d.soft_pressure, 0.0);
     assert!(d.overlap_prevention_enabled, "重なり防止の既定はオン");
+    assert!(d.penetration_prevention_enabled, "食い込み防止の既定はオン");
 }
 
 #[test]
@@ -136,6 +137,7 @@ fn test_edit_op_set_display_roundtrip() {
             soft_stiffness: 0.25,
             soft_pressure: 0.75,
             overlap_prevention_enabled: false,
+            penetration_prevention_enabled: false,
         },
     };
     let json = serde_json::to_string(&op).expect("serialize");
@@ -151,6 +153,7 @@ fn test_edit_op_set_display_roundtrip() {
             assert_eq!(display.soft_stiffness, 0.25);
             assert_eq!(display.soft_pressure, 0.75);
             assert!(!display.overlap_prevention_enabled);
+            assert!(!display.penetration_prevention_enabled);
         }
         other => panic!("unexpected variant: {other:?}"),
     }

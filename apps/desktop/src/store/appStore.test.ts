@@ -193,6 +193,7 @@ beforeEach(() => {
     poseAngles: new Map(),
     poseWarnings: [],
     poseConverged: true,
+    contactStopped: false,
     frame3d: null,
     suspectHinges: [],
     currentStep: null,
@@ -296,6 +297,28 @@ function primeFakeTimers(): void {
 }
 
 describe("appStore 折り角度の指定", () => {
+  it("食い込み防止で止まると安全側の角度へ戻し、正常停止として覚える", async () => {
+    const view = makeHingeView(445);
+    useAppStore.setState({
+      doc: view.doc,
+      faces: view.faces,
+      hinges: new Set([5]),
+    });
+    vi.mocked(ipc.poseSolve).mockResolvedValueOnce({
+      ...makeSolveResult({ "5": 104.75 }),
+      contact_stopped: true,
+    });
+
+    useAppStore.getState().setDriverAngle(5, 110);
+    await vi.waitFor(() => expect(useAppStore.getState().contactStopped).toBe(true));
+
+    const state = useAppStore.getState();
+    expect(state.drivers.get(5)).toBe(104.75);
+    expect(state.poseAngles.get(5)).toBe(104.75);
+    expect(state.poseWarnings).toEqual([]);
+    expect(vi.mocked(ipc.poseSolve).mock.calls[0][3]).toBe(false);
+  });
+
   it("実際に待っても、連続変更は1回にまとまり最後の角度が送られる", async () => {
     const store = useAppStore.getState();
     store.setDriverAngle(5, 10);

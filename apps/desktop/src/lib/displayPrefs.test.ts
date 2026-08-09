@@ -10,6 +10,7 @@ import {
   hexToRgb,
   loadPrefs,
   overlapPreventionOf,
+  penetrationPreventionOf,
   rgbToHex,
   savePrefs,
   type StorageLike,
@@ -57,6 +58,19 @@ describe("見た目の好み", () => {
     expect(overlapPreventionOf(oldDisplay)).toBe(true);
     expect(
       overlapPreventionOf({ ...DEFAULT_DISPLAY, overlap_prevention_enabled: false }),
+    ).toBe(false);
+  });
+
+  it("食い込み防止は既定でオンで、項目の無い古い作品もオンとして扱う", () => {
+    expect(penetrationPreventionOf(DEFAULT_DISPLAY)).toBe(true);
+    const oldDisplay = { ...DEFAULT_DISPLAY };
+    delete oldDisplay.penetration_prevention_enabled;
+    expect(penetrationPreventionOf(oldDisplay)).toBe(true);
+    expect(
+      penetrationPreventionOf({
+        ...DEFAULT_DISPLAY,
+        penetration_prevention_enabled: false,
+      }),
     ).toBe(false);
   });
 

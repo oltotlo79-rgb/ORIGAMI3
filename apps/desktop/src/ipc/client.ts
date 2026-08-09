@@ -69,11 +69,13 @@ export function poseSolve(
   drivers: Driver[],
   keep?: Driver[] | null,
   soft?: SoftSettings | null,
+  seedOnly = false,
 ): Promise<SolveResult> {
   return invoke("pose_solve", {
     drivers,
     keep: keep?.length ? keep : null,
     soft: soft ?? null,
+    seedOnly,
   });
 }
 

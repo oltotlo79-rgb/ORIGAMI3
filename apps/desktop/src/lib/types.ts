@@ -98,6 +98,9 @@ export interface DisplaySettings {
   /** 折り動作中の紙どうしの重なりを補正するか。既定はオン。
    * 古い作品ファイルには無いので省略可とし、falseのときだけ切る */
   overlap_prevention_enabled?: boolean;
+  /** 角度を動かす途中で紙どうしが交差したら、ぶつかる直前で止めるか。既定はオン。
+   * 古い作品ファイルには無いので省略可とし、falseのときだけ切る */
+  penetration_prevention_enabled?: boolean;
   /** 紙のたわみを表現するか(SIM-012)。既定はオフ。
    * 古い作品ファイルには無いのでRust側が既定値で埋める(省略可) */
   soft_enabled?: boolean;
@@ -281,6 +284,8 @@ export interface SolveResult {
   iterations: number;
   /** 補正後にも残る食い込みの原因候補ヒンジ */
   suspect_hinges?: number[];
+  /** 食い込み防止により、紙どうしがぶつかる直前で動きを止めたか */
+  contact_stopped?: boolean;
   /** たわみを指定したときだけ入る三角形の網(SIM-012) */
   soft?: SoftMesh | null;
 }

@@ -254,18 +254,67 @@ fn solve_along(
     t: f64,
 ) -> ori3_rigid::SolveResult {
     let mut warm: Option<HashMap<EdgeId, f64>> = None;
-    let mut result = None;
+    let mut result: Option<ori3_rigid::SolveResult> = None;
+    let mut iterations = 0u32;
     for i in 1..=SUBSTEPS {
         let s = t * f64::from(i) / f64::from(SUBSTEPS);
         let targets: HashMap<EdgeId, f64> = path
             .iter()
             .map(|&(e, from, to)| (e, from + (to - from) * s))
             .collect();
-        let r = ori3_rigid::solve_near(&doc.cp, faces, &[], &targets, warm.as_ref());
-        warm = Some(r.angles.clone());
-        result = Some(r);
+        let mut candidate = ori3_rigid::solve_near(&doc.cp, faces, &[], &targets, warm.as_ref());
+        iterations = iterations.saturating_add(candidate.iterations);
+        if !candidate.converged {
+            // 箱制約の境界では、次の補間点に閉じた解が存在しないことがある。
+            // 不収束候補を次のwarm startへ昇格させず、直前の収束解を表示する。
+            // 最初の補間点で失敗した場合だけ、s=0の開始姿勢を明示的に解く。
+            let previous = if let Some(previous) = result {
+                previous
+            } else {
+                let initial_targets: HashMap<EdgeId, f64> =
+                    path.iter().map(|&(edge, from, _)| (edge, from)).collect();
+                let initial = ori3_rigid::solve_near(&doc.cp, faces, &[], &initial_targets, None);
+                iterations = iterations.saturating_add(initial.iterations);
+                if !initial.converged {
+                    candidate.iterations = iterations;
+                    return candidate;
+                }
+                initial
+            };
+            return previous_replay_result(previous, candidate, iterations);
+        }
+        candidate.iterations = iterations;
+        warm = Some(candidate.angles.clone());
+        result = Some(candidate);
     }
     result.expect("SUBSTEPSは1以上")
+}
+
+/// 閉包を満たさない中間姿勢を見せず、直前の収束姿勢へ不収束警告だけを載せる。
+fn previous_replay_result(
+    mut previous: ori3_rigid::SolveResult,
+    failed: ori3_rigid::SolveResult,
+    iterations: u32,
+) -> ori3_rigid::SolveResult {
+    previous.converged = false;
+    previous.iterations = iterations;
+    for warning in failed.frame.warnings {
+        if !previous.frame.warnings.contains(&warning) {
+            previous.frame.warnings.push(warning);
+        }
+    }
+    if !previous
+        .frame
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("収束していません"))
+    {
+        previous
+            .frame
+            .warnings
+            .push("追従計算が収束していません".to_string());
+    }
+    previous
 }
 
 /// `up_to` ステップまでの角度指定・層順序・警告(replayとflat_state_atの共通処理)。

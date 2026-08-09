@@ -18,6 +18,7 @@ import {
   UI_THEMES,
   hexToRgb,
   overlapPreventionOf,
+  penetrationPreventionOf,
   rgbToHex,
   softOf,
   type UiTheme,
@@ -137,6 +138,7 @@ export function PaperAppearance() {
   const setUiTheme = useAppStore((s) => s.setUiTheme);
   const soft = softOf(display);
   const overlapPrevention = overlapPreventionOf(display);
+  const penetrationPrevention = penetrationPreventionOf(display);
 
   return (
     <div className="paper-appearance">
@@ -293,6 +295,20 @@ export function PaperAppearance() {
       </label>
       <span className="hint">
         折っている途中で紙どうしが突き抜けにくいよう補正します(完全には防げません)
+      </span>
+      <label>
+        <input
+          type="checkbox"
+          aria-label="食い込み防止"
+          checked={penetrationPrevention}
+          onChange={(e) =>
+            setDisplay({ penetration_prevention_enabled: e.target.checked })
+          }
+        />
+        食い込み防止
+      </label>
+      <span className="hint">
+        紙どうしがぶつかる所で動きを止めます(ごく複雑な形では防げないことがあります)
       </span>
       {/* 左右対称に描く(CPE-010)。作品は左右対称のものが多いので、片側を
           描くと反対側にも同じ線が引かれ、作業が半分で済む */}

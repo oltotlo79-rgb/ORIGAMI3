@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use glam::DVec3;
 use ori3_cp::extract_faces;
 use ori3_model::{CreasePattern, Driver, Edge, EdgeKind, Vertex};
-use ori3_rigid::solve;
+use ori3_rigid::{solve, solve_near};
 
 fn v(id: u32, x: f64, y: f64) -> Vertex {
     Vertex { id, pos: [x, y] }
@@ -256,22 +256,45 @@ fn loop_free_cp_converges_immediately() {
 }
 
 #[test]
-fn free_hinge_without_driver_keeps_warm_start_value() {
-    // driverを外した自由ヒンジには拘束が働かないため、warm startの値がそのまま
-    // 解として残る(solveのdocに明文化された仕様)。さらに、結果の角度は
-    // ±180°の単純な折り返しではなく前回値に近い同値角を選ぶため、
-    // 350°(=−10°と同じ回転)は−10°へ符号反転せず350°のまま返る
+fn free_hinge_without_driver_clamps_out_of_range_warm_start() {
+    // driverを外した自由ヒンジにも物理限界は適用する。古いwarm startに
+    // 範囲外の値が残っていても、同値角へ通り抜けず境界で止まる。
     let cp = loop_free_cp();
     let faces = extract_faces(&cp);
     let warm = HashMap::from([(6u32, 350.0f64)]);
     let result = solve(&cp, &faces, &[], Some(&warm));
     assert!(result.converged);
     assert_eq!(result.iterations, 0);
-    assert!(
-        (result.angles[&6] - 350.0).abs() < 1e-9,
-        "angles={:?}",
-        result.angles
-    );
+    assert_eq!(result.angles[&6], 180.0, "angles={:?}", result.angles);
+}
+
+#[test]
+fn solve_near_dependent_target_stops_exactly_at_both_limits() {
+    // 閉路のない自由ヒンジはsolve_nearの目標へそのまま動くため、射影境界を
+    // 厳密に検査できる。±180°を越えた目標でも返り値は境界ちょうどになる。
+    let cp = loop_free_cp();
+    let faces = extract_faces(&cp);
+    for (target, expected) in [(240.0, 180.0), (-240.0, -180.0)] {
+        let targets = HashMap::from([(6u32, target)]);
+        let result = solve_near(&cp, &faces, &[], &targets, None);
+        assert!(result.converged);
+        assert_eq!(result.angles[&6], expected, "target={target}");
+    }
+}
+
+#[test]
+fn all_dependent_angles_stay_within_physical_range() {
+    let cp = degree4_cp();
+    let faces = extract_faces(&cp);
+    let warm = HashMap::from([(9u32, 540.0), (10u32, -540.0), (11u32, 270.0)]);
+    let result = solve(&cp, &faces, &[d(8, 90.0)], Some(&warm));
+    for id in [9u32, 10, 11] {
+        assert!(
+            (-180.0..=180.0).contains(&result.angles[&id]),
+            "ヒンジ{id}: {:?}",
+            result.angles
+        );
+    }
 }
 
 #[test]

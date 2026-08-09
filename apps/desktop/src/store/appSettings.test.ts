@@ -95,8 +95,8 @@ describe("新規作成の紙の指定", () => {
   });
 });
 
-describe("紙の色と方眼・重なり防止・分割比", () => {
-  it("色と方眼の数と重なり防止は作品ごとの設定として保存する(SetDisplayを送る)", async () => {
+describe("紙の色と方眼・重なり/食い込み防止・分割比", () => {
+  it("色・方眼・2種類の防止設定を作品ごとの設定として保存する", async () => {
     // Rust側は受け取った見た目をそのまま作品へ入れて返す
     vi.mocked(ipc.editApply).mockImplementation(async (op) =>
       makeView({
@@ -129,6 +129,14 @@ describe("紙の色と方眼・重なり防止・分割比", () => {
     if (overlap.type !== "SetDisplay") throw new Error("SetDisplayでない");
     expect(overlap.display.overlap_prevention_enabled).toBe(false);
     expect(useAppStore.getState().doc?.display.overlap_prevention_enabled).toBe(false);
+
+    await useAppStore
+      .getState()
+      .setDisplay({ penetration_prevention_enabled: false });
+    const penetration = vi.mocked(ipc.editApply).mock.calls[3][0];
+    if (penetration.type !== "SetDisplay") throw new Error("SetDisplayでない");
+    expect(penetration.display.penetration_prevention_enabled).toBe(false);
+    expect(useAppStore.getState().doc?.display.penetration_prevention_enabled).toBe(false);
   });
 
   it("作品をまだ開いていないときは画面の見た目だけ変える(送らない)", async () => {

@@ -164,6 +164,7 @@ describe("Viewer3D(画面)", () => {
       pendingFoldThrough: null,
       foldThroughBusy: false,
       techniqueDraft: null,
+      contactStopped: false,
       selection: { edgeIds: [], vertexIds: [] },
       uiTheme: "pop",
     });
@@ -182,6 +183,12 @@ describe("Viewer3D(画面)", () => {
     useAppStore.setState({ playing: true });
     renderViewer();
     expect(screen.getByRole("status").textContent).toContain("再生中");
+  });
+
+  it("接触で止まったときは警告でなく3Dの1行案内に理由を出す", () => {
+    useAppStore.setState({ contactStopped: true });
+    renderViewer();
+    expect(screen.getByRole("status").textContent).toBe("紙がぶつかるためここまでです");
   });
 
   it("テーマ変更時にCSS変数から3D背景を読み直す", () => {
@@ -321,6 +328,7 @@ describe("Viewer3D(紙をつかんで引く)", () => {
       errorMessage: null,
       foldDraft: null,
       techniqueDraft: null,
+      contactStopped: false,
     });
   });
   afterEach(() => cleanup());
@@ -350,6 +358,7 @@ describe("Viewer3D(紙をつかんで引く)", () => {
     expect(vi.mocked(ipc.poseSolve).mock.calls[0][0]).toEqual([
       { hinge: 5, target_angle_deg: 0 },
     ]);
+    expect(vi.mocked(ipc.poseSolve).mock.calls[0][3]).toBe(true);
 
     // 画面の上へ引く = 斜め視点では紙を起こす向きになる
     fireEvent.pointerMove(canvas, { pointerId: 1, clientX: sx, clientY: sy - 60 });

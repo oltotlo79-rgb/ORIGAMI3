@@ -149,6 +149,11 @@ fn default_overlap_prevention() -> bool {
     true
 }
 
+/// 食い込み防止の既定値。古い作品には項目が無いため、明示的にオンで補う。
+fn default_penetration_prevention() -> bool {
+    true
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DisplaySettings {
     pub front_color: [u8; 3],
@@ -171,6 +176,10 @@ pub struct DisplaySettings {
     /// 補正後の頂点そのものは保存せず、表示を求めるたびに剛体解へ後段適用する。
     #[serde(default = "default_overlap_prevention")]
     pub overlap_prevention_enabled: bool,
+    /// 角度を動かす途中で紙どうしが交差したとき、ぶつかる直前で止めるか。
+    /// **既定はオン**。複雑な形では高速な簡易判定が見逃すことがある。
+    #[serde(default = "default_penetration_prevention")]
+    pub penetration_prevention_enabled: bool,
 }
 
 impl Default for DisplaySettings {
@@ -183,6 +192,7 @@ impl Default for DisplaySettings {
             soft_stiffness: default_stiffness(),
             soft_pressure: 0.0,
             overlap_prevention_enabled: default_overlap_prevention(),
+            penetration_prevention_enabled: default_penetration_prevention(),
         }
     }
 }

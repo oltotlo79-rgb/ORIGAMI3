@@ -453,16 +453,25 @@ impl DocumentStore {
         view
     }
 
-    /// pose_solveの入力(CP・導出済みfaces・前回解・重なり防止設定)を取り出す。
+    /// pose_solveの入力(CP・導出済みfaces・前回解・2種類の接触設定)を取り出す。
     /// facesは編集時に導出済みのキャッシュの流用で、extract_facesを再実行しない。
     /// 設計規約: ロック中に重い計算をしないため、コマンド層はこの複製を取って
     /// 即ロックを解放し、solveはロックの外で実行する。
-    pub fn pose_inputs(&self) -> (CreasePattern, Vec<Face>, Option<HashMap<EdgeId, f64>>, bool) {
+    pub fn pose_inputs(
+        &self,
+    ) -> (
+        CreasePattern,
+        Vec<Face>,
+        Option<HashMap<EdgeId, f64>>,
+        bool,
+        bool,
+    ) {
         (
             self.doc.cp.clone(),
             self.faces.clone(),
             self.pose_angles.clone(),
             self.doc.display.overlap_prevention_enabled,
+            self.doc.display.penetration_prevention_enabled,
         )
     }
 
@@ -1153,11 +1162,12 @@ mod tests {
         assert_eq!(store.pose_inputs().2, None);
 
         store.store_pose_angles(HashMap::from([(6u32, 90.0f64)]));
-        let (cp, faces, warm, overlap_enabled) = store.pose_inputs();
+        let (cp, faces, warm, overlap_enabled, penetration_enabled) = store.pose_inputs();
         assert_eq!(cp, store.doc.cp);
         assert_eq!(faces.len(), 1, "正方形1面のはず");
         assert_eq!(warm, Some(HashMap::from([(6u32, 90.0f64)])));
         assert!(overlap_enabled, "重なり防止は既定オン");
+        assert!(penetration_enabled, "食い込み防止は既定オン");
 
         // 新規作成で前回解は破棄される(別のCPに古い解を引き継がない)
         store

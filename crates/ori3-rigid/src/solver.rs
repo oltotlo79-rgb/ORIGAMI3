@@ -41,6 +41,11 @@ use crate::tree;
 const TOL_RMS: f64 = 1e-13;
 /// Gauss-Newtonの最大反復回数(1段あたり)。
 const MAX_ITER: u32 = 50;
+/// 従属ヒンジが紙を通り抜けないための物理的な可動限界。
+///
+/// バリアでは境界へ厳密に到達できないため、Levenberg-Marquardt の各候補を
+/// この区間へ射影する。driver は利用者が直接指定する固定値なので対象外。
+const DEPENDENT_ANGLE_LIMIT: f64 = std::f64::consts::PI;
 /// [`solve_near`] の「目標角へ引くばね」の重みの2乗。閉包残差(座標のスケールは
 /// 紙の長辺=1.0)に対してこの重みで角度(ラジアン)のずれを罰する。大きすぎると
 /// 閉包を犠牲にして目標へ張り付き、小さすぎると引きが効かず解が遠くへ飛ぶ。
@@ -147,9 +152,8 @@ fn side_jacobian(ops: &[FoldOp], x: &[f64], sign: f64, mut emit: impl FnMut(usiz
 ///   拘束が働かないため変数にならず、warm_startの値(なければ0度)がそのまま
 ///   解として残る。スライダーからdriverを外した直後も形が跳ねないための挙動で、
 ///   平らに戻すには0度のdriverを明示するか、warm_startなしで呼ぶ
-/// - 結果の角度は±180°へ折り返すが、warm_startのある自由ヒンジは前回値に
-///   最も近い同値角(±360°ずらし)を選ぶ。±180°をまたいだ瞬間に符号が反転して
-///   山谷が逆に見えたり、次回のwarm start連鎖が反対枝へ飛ぶのを防ぐ
+/// - driver以外の従属ヒンジは初期値と反復ごとの候補を±180°へ射影する。
+///   他の折り目へ追従しても紙を通り抜けず、境界の180°で止まる
 /// - 不収束時はpanicせず、反復中の最良解で `converged: false` のFrame3Dを返し、
 ///   warningsに「追従計算が収束していません」を追加する
 pub fn solve(
@@ -316,7 +320,8 @@ fn solve_impl(
         }
     };
 
-    // 初期値(全ヒンジ分。fixedは固定値で埋める)
+    // 初期値(全ヒンジ分。fixedは固定値で埋める)。従属ヒンジは前回解が
+    // 範囲外だった古い状態から始める場合も、最初に物理限界へ戻す。
     let mut x: Vec<f64> = (0..n)
         .map(|i| {
             if let Some(v) = fixed[i] {
@@ -332,6 +337,7 @@ fn solve_impl(
             }
         })
         .collect();
+    clamp_dependent_angles(&mut x, &fixed);
 
     // 変数 = driver固定でなく、かつ閉路上のヒンジ
     let vars: Vec<usize> = (0..n)
@@ -388,9 +394,14 @@ fn solve_impl(
     // ばねの目標角(ラジアン)。指定の無いヒンジは初期値のまま=引かれない
     let x0: Vec<f64> = (0..n)
         .map(|i| {
-            spring
+            let target = spring
                 .and_then(|s| s.get(&forest.hinges[i]))
-                .map_or(x[i], |v| v.to_radians())
+                .map_or(x[i], |v| v.to_radians());
+            if fixed[i].is_none() {
+                target.clamp(-DEPENDENT_ANGLE_LIMIT, DEPENDENT_ANGLE_LIMIT)
+            } else {
+                target
+            }
         })
         .collect();
     // 変数にならない自由ヒンジ(閉路に乗らない=拘束が働かない)は目標角そのもの。
@@ -506,6 +517,9 @@ fn solve_impl(
                     for (vi, &hi) in vars.iter().enumerate() {
                         xt[hi] += delta[vi];
                     }
+                    // 箱制約付きLMの射影ステップ。境界を越える候補だけを±πへ
+                    // 戻すため、範囲内の通常解では従来と同じ更新になる。
+                    clamp_dependent_angles(&mut xt, &fixed);
                     let mut rt = vec![0.0; m];
                     eval_all(&xt, &mut rt);
                     let ct = sq_sum(&rt) + spring_cost(&xt, w2);
@@ -535,20 +549,20 @@ fn solve_impl(
         }
     }
 
-    // 結果の角度(度)。±180°へ折り返すが、warm startのある自由ヒンジは
-    // 前回値に最も近い同値角を選ぶ(±180°またぎの符号反転防止)。
-    // driver固定ヒンジは指定値そのまま(折り返しのみ)。
+    // 結果の角度(度)。従属ヒンジは反復中から箱制約内にあり、丸め誤差も
+    // 最後に詰めて必ず[-180, 180]を返す。driver固定ヒンジだけは従来どおり
+    // 指定値と同値な±180°表現へ折り返す。
     let angles: HashMap<EdgeId, f64> = forest
         .hinges
         .iter()
         .enumerate()
         .map(|(i, &e)| {
-            let prev = if fixed[i].is_some() {
-                None
+            let deg = if fixed[i].is_some() {
+                wrap_deg(x[i].to_degrees())
             } else {
-                warm_start.and_then(|w| w.get(&e).copied())
+                x[i].to_degrees().clamp(-180.0, 180.0)
             };
-            (e, unwrap_deg(x[i].to_degrees(), prev))
+            (e, deg)
         })
         .collect();
 
@@ -573,26 +587,20 @@ fn sq_sum(v: &[f64]) -> f64 {
     v.iter().map(|x| x * x).sum()
 }
 
+/// driverでない全ヒンジを物理的な可動範囲へ射影する。
+fn clamp_dependent_angles(x: &mut [f64], fixed: &[Option<f64>]) {
+    for (angle, driver) in x.iter_mut().zip(fixed) {
+        if driver.is_none() {
+            *angle = angle.clamp(-DEPENDENT_ANGLE_LIMIT, DEPENDENT_ANGLE_LIMIT);
+        }
+    }
+}
+
 /// 角度(度)を[−180, 180]へ折り返す。+180ちょうど(および+180と同値の正の角)は
 /// −180ではなく+180を返し、符号を保つ。
 fn wrap_deg(d: f64) -> f64 {
     let w = (d + 180.0).rem_euclid(360.0) - 180.0;
     if w == -180.0 && d > 0.0 { 180.0 } else { w }
-}
-
-/// 折り返した角度のうち、前回値`prev`に最も近い同値角(±360°ずらし)を返す。
-/// warm start連鎖で±180°をまたいだとき、同じ回転なのに符号が反転した表現
-/// (山谷が逆に見える反対枝)へ飛ぶのを防ぐ。`prev`がなければ通常の折り返し。
-fn unwrap_deg(deg: f64, prev: Option<f64>) -> f64 {
-    let w = wrap_deg(deg);
-    let Some(p) = prev else { return w };
-    let mut best = w;
-    for cand in [w - 360.0, w + 360.0] {
-        if (cand - p).abs() < (best - p).abs() {
-            best = cand;
-        }
-    }
-    best
 }
 
 /// (JtJ + λI)・δ = b の直接法ソルバー: RCM順序付きの帯(エンベロープ)
@@ -737,7 +745,7 @@ impl EnvelopeCholesky {
 
 #[cfg(test)]
 mod tests {
-    use super::{FoldOp, LoopWalk, eval_loop, side_jacobian, unwrap_deg, wrap_deg};
+    use super::{FoldOp, LoopWalk, eval_loop, side_jacobian, wrap_deg};
     use glam::DVec3;
 
     /// 解析ヤコビアン(side_jacobian)が数値微分(中心差分)と一致することの
@@ -788,16 +796,5 @@ mod tests {
         assert_eq!(wrap_deg(-180.0), -180.0);
         assert_eq!(wrap_deg(540.0), 180.0);
         assert_eq!(wrap_deg(-190.0), 170.0);
-    }
-
-    #[test]
-    fn unwrap_prefers_side_near_previous() {
-        // ±180°またぎ: 181°はwrapで−179°になるが、前回179°なら181°を保つ
-        assert!((unwrap_deg(181.0, Some(179.0)) - 181.0).abs() < 1e-12);
-        assert!((unwrap_deg(-181.0, Some(-179.0)) + 181.0).abs() < 1e-12);
-        // 前回値が反対側なら通常どおり折り返す
-        assert!((unwrap_deg(181.0, Some(-170.0)) + 179.0).abs() < 1e-12);
-        // 前回値なしは折り返しのみ
-        assert!((unwrap_deg(181.0, None) + 179.0).abs() < 1e-12);
     }
 }

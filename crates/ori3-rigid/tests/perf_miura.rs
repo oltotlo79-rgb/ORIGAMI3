@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 
 use ori3_cp::extract_faces;
 use ori3_model::{CreasePattern, Driver, Edge, EdgeKind, Vertex};
-use ori3_rigid::{solve, solve_near};
+use ori3_rigid::{solve, solve_motion, solve_near};
 
 /// debugビルドでのsolve 1回あたりの上限(モジュールコメントの計測記録を参照)。
 const DEBUG_BUDGET: Duration = Duration::from_millis(330);
@@ -34,6 +34,10 @@ const DEBUG_BUDGET: Duration = Duration::from_millis(330);
 /// 上限。debug実測の最悪値516msの約3倍に取り、機材やCIのばらつきを吸収しつつ
 /// 大きな性能後退を検出する。
 const NEAR_DEBUG_BUDGET: Duration = Duration::from_millis(1500);
+/// 食い込み防止込みの通常1フレーム。releaseでは16ms、debugでは同じ処理の
+/// 最適化差を見込んだ上限で回帰を検出する。
+const MOTION_DEBUG_BUDGET: Duration = Duration::from_millis(500);
+const MOTION_RELEASE_BUDGET: Duration = Duration::from_millis(16);
 
 /// nc×nr面のミウラ折りCP。頂点(i,j)は x=i·dx、y=(j+奇数列なら振れ幅s)·dy。
 /// 縦線はまっすぐ(内部の山谷は列+行のパリティで交互)、横線はジグザグ
@@ -192,5 +196,53 @@ fn miura_20x20_solve_near_stays_within_frame_budget() {
     assert!(
         worst < NEAR_DEBUG_BUDGET,
         "角度を次々に指定する追従計算が遅すぎます: worst={worst:?}(このテストの計測記録を参照)"
+    );
+}
+
+#[test]
+fn miura_20x20_contact_check_stays_within_frame_budget() {
+    let (nc, nr) = (20, 20);
+    let cp = miura_cp(nc, nr);
+    let faces = extract_faces(&cp);
+    assert_eq!(faces.len(), 400);
+    let hinge = (nr / 2 * (nc + 1) + nc / 2) as u32;
+    let start = solve(
+        &cp,
+        &faces,
+        &[Driver {
+            hinge,
+            target_angle_deg: 20.0,
+        }],
+        None,
+    );
+    assert!(start.converged);
+
+    let t0 = Instant::now();
+    let motion = solve_motion(
+        &cp,
+        &faces,
+        &[Driver {
+            hinge,
+            target_angle_deg: 22.0,
+        }],
+        None,
+        Some(&start.angles),
+        true,
+    );
+    let elapsed = t0.elapsed();
+    println!(
+        "面400・食い込み防止: iterations={} time={elapsed:?}",
+        motion.result.iterations
+    );
+    assert!(motion.result.converged);
+    assert!(!motion.contact_stopped);
+    let budget = if cfg!(debug_assertions) {
+        MOTION_DEBUG_BUDGET
+    } else {
+        MOTION_RELEASE_BUDGET
+    };
+    assert!(
+        elapsed < budget,
+        "食い込み防止込みの追従が遅すぎます: {elapsed:?}"
     );
 }
