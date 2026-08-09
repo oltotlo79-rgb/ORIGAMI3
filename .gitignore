@@ -13,3 +13,6 @@ dist/
 .idea/
 Thumbs.db
 .DS_Store
+
+# ローカル検証資料(配布しない)
+一分ローズ検証手順.pdf
