@@ -52,6 +52,7 @@ export function helpBlockText(block: HelpBlock): string {
     case "table":
       return [block.title, ...block.columns, ...block.rows.flat()].filter(Boolean).join(" ");
     case "figure":
+    case "screenshot":
       return "";
   }
 }

@@ -74,6 +74,14 @@ export interface HelpFigureBlock {
   image?: string;
 }
 
+/** PDFだけに載せる実画面。画像本体をアプリのビルドへ含めない。 */
+export interface HelpScreenshotBlock {
+  type: "screenshot";
+  /** docs/manual/assets/ 直下のPNGファイル名。 */
+  image: string;
+  caption: string;
+}
+
 export interface HelpTableBlock {
   type: "table";
   title?: string;
@@ -88,6 +96,7 @@ export type HelpBlock =
   | HelpStepsBlock
   | HelpCalloutBlock
   | HelpFigureBlock
+  | HelpScreenshotBlock
   | HelpTableBlock;
 
 export interface HelpChapter {

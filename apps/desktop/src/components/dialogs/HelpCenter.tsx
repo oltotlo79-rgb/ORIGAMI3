@@ -61,6 +61,9 @@ function BlockView({ block }: { block: HelpBlock }) {
         </figure>
       );
     }
+    case "screenshot":
+      // docs/manual/assets/ の画面写真はPDF専用。アプリの配布物へは含めない。
+      return null;
     case "table":
       return (
         <section className="help-table-wrap">

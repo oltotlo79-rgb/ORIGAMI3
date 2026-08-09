@@ -77,6 +77,8 @@ enum Block {
         #[serde(default)]
         image: Option<String>,
     },
+    #[serde(rename = "screenshot")]
+    Screenshot { image: String, caption: String },
     #[serde(rename = "table")]
     Table {
         #[serde(default)]
@@ -462,9 +464,12 @@ impl BookLayout {
         self.y = y0 + height + 3.0;
     }
 
-    fn screenshot(&mut self, filename: &str, screenshot: &RasterScreenshot) {
+    fn screenshot(&mut self, filename: &str, caption: Option<&str>, screenshot: &RasterScreenshot) {
         let image_height = 96.0;
-        let height = image_height + 14.0;
+        let caption_lines = caption
+            .map(|text| wrap_text(text, CONTENT_W - 8.0, 2.95))
+            .unwrap_or_default();
+        let height = image_height + 14.0 + caption_lines.len() as f64 * 4.15;
         self.ensure_space(height + 4.0);
         let y0 = self.y;
         self.text(LEFT, y0 + 4.0, 3.65, "700", "#27213d", "画面例");
@@ -499,6 +504,11 @@ impl BookLayout {
                 width_mm,
                 height_mm,
             });
+        let mut caption_y = y0 + 7.0 + image_height + 4.3;
+        for line in caption_lines {
+            self.text(LEFT + 4.0, caption_y, 2.95, "400", "#655c73", &line);
+            caption_y += 4.15;
+        }
         self.y = y0 + height + 4.0;
     }
 }
@@ -561,7 +571,12 @@ fn manual_svg_pages(json: &str, assets_dir: &Path) -> Result<ManualPages, String
                     if let Some(filename) = image
                         && let Some(screenshot) = screenshot_data(assets_dir, filename)?
                     {
-                        layout.screenshot(filename, &screenshot);
+                        layout.screenshot(filename, None, &screenshot);
+                    }
+                }
+                Block::Screenshot { image, caption } => {
+                    if let Some(screenshot) = screenshot_data(assets_dir, image)? {
+                        layout.screenshot(image, Some(caption), &screenshot);
                     }
                 }
             }
@@ -603,9 +618,9 @@ fn manual_svg_pages(json: &str, assets_dir: &Path) -> Result<ManualPages, String
 }
 
 fn validate_content(content: &ManualContent) -> Result<(), String> {
-    if content.schema_version != 1 {
+    if content.schema_version != 2 {
         return Err(format!(
-            "取扱説明書JSONのschemaVersionは1にしてください(指定: {})",
+            "取扱説明書JSONのschemaVersionは2にしてください(指定: {})",
             content.schema_version
         ));
     }
@@ -636,6 +651,14 @@ fn validate_content(content: &ManualContent) -> Result<(), String> {
                     if !content.diagrams.contains_key(diagram_id) {
                         return Err(format!(
                             "第{}章が存在しない図解ID「{diagram_id}」を参照しています",
+                            chapter.number
+                        ));
+                    }
+                }
+                Block::Screenshot { image, caption } => {
+                    if image.trim().is_empty() || caption.trim().is_empty() {
+                        return Err(format!(
+                            "第{}章の画面例には画像名と説明が必要です",
                             chapter.number
                         ));
                     }
@@ -720,7 +743,7 @@ fn screenshot_data(assets_dir: &Path, filename: &str) -> Result<Option<RasterScr
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             eprintln!(
-                "注意: 画面写真が見つからないため図解だけを載せます: {}",
+                "注意: 画面写真が見つからないため、この画面例を省略します: {}",
                 full_path.display()
             );
             return Ok(None);
@@ -919,12 +942,26 @@ mod tests {
     use super::*;
 
     fn representative_json(image: Option<&str>) -> String {
+        representative_json_with_screenshot(image, None)
+    }
+
+    fn representative_json_with_screenshot(
+        image: Option<&str>,
+        screenshot: Option<(&str, &str)>,
+    ) -> String {
         let image = image
             .map(|name| format!(r#", "image": "{name}""#))
             .unwrap_or_default();
+        let screenshot = screenshot
+            .map(|(name, caption)| {
+                format!(
+                    r#", {{ "type": "screenshot", "image": "{name}", "caption": "{caption}" }}"#
+                )
+            })
+            .unwrap_or_default();
         format!(
             r##"{{
-              "schemaVersion": 1,
+              "schemaVersion": 2,
               "application": {{ "name": "ORIGAMI3", "version": "0.1.0" }},
               "chapters": [
                 {{
@@ -941,7 +978,7 @@ mod tests {
                 {{
                   "id": "draw", "number": 2, "title": "図を使う", "summary": "図解を見ながら進めます。",
                   "blocks": [
-                    {{ "type": "figure", "diagramId": "flow"{image} }}
+                    {{ "type": "figure", "diagramId": "flow"{image} }}{screenshot}
                   ]
                 }}
               ],
@@ -1029,6 +1066,40 @@ mod tests {
                 .sum::<usize>(),
             2,
             "図解1枚と画面写真1枚"
+        );
+
+        fs::remove_file(assets.join("screen.png")).unwrap();
+        fs::remove_dir(assets).unwrap();
+    }
+
+    #[test]
+    fn standalone_screenshot_block_is_placed_with_its_caption() {
+        let assets = std::env::temp_dir().join(format!(
+            "ori3-manual-standalone-screenshot-assets-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&assets).unwrap();
+        let mut pixmap = tiny_skia::Pixmap::new(16, 9).unwrap();
+        pixmap.fill(tiny_skia::Color::from_rgba8(112, 64, 201, 255));
+        fs::write(assets.join("screen.png"), pixmap.encode_png().unwrap()).unwrap();
+
+        let json = representative_json_with_screenshot(
+            None,
+            Some(("screen.png", "設定パネルの画面です。")),
+        );
+        let pages = manual_svg_pages(&json, &assets).unwrap();
+        assert!(pages.pages.iter().any(|page| {
+            page.svg.contains("data-role=\"screenshot\"")
+                && page.svg.contains("設定パネルの画面です。")
+        }));
+        assert_eq!(
+            pages
+                .pages
+                .iter()
+                .map(|page| page.images.len())
+                .sum::<usize>(),
+            2,
+            "図解1枚と独立した画面写真1枚"
         );
 
         fs::remove_file(assets.join("screen.png")).unwrap();

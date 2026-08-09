@@ -17,7 +17,8 @@ const outputPath = process.argv[2]
   : defaultOutput;
 
 const manualContent = {
-  schemaVersion: 1,
+  // screenshotブロックを扱う共通内容形式。
+  schemaVersion: 2,
   application: {
     name: "ORIGAMI3",
     version: packageJson.version,
