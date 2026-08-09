@@ -4,6 +4,9 @@ pub mod intersect;
 pub mod solver;
 pub mod tree;
 
-pub use intersect::{PENETRATION_WARNING, layer_order_conflicts, self_intersects};
+pub use intersect::{
+    PENETRATION_WARNING, layer_order_conflicts, self_intersection_pairs, self_intersects,
+    suspect_hinges, suspect_hinges_for_intersections,
+};
 pub use solver::{SolveResult, solve, solve_near};
 pub use tree::{FoldedFrame, propagate, to_frame3d};

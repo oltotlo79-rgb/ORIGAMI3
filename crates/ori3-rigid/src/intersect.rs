@@ -14,11 +14,11 @@
 //! 凸でない面では扇分割の三角形が面の外へはみ出すため、まれに実際より広く
 //! 見積もる(警告を出しすぎる=安全側)。
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
 use glam::{DVec2, DVec3};
 use ori3_cp::Face;
-use ori3_model::{CreasePattern, EdgeKind, FaceId, Frame3D, VertexId};
+use ori3_model::{CreasePattern, EdgeId, EdgeKind, FaceId, Frame3D, VertexId};
 
 /// めり込みを見つけたときの警告文(3D表示のバッジに出る)
 pub const PENETRATION_WARNING: &str = "紙が重なって食い込んでいます";
@@ -33,14 +33,28 @@ const TOL: f64 = 1e-6;
 /// (重なりの上下は層番号で表し、表示側が層をずらして見せる)。
 #[must_use]
 pub fn self_intersects(frame: &Frame3D) -> bool {
+    !find_self_intersections(frame, Some(1)).is_empty()
+}
+
+/// 立体表示で実際に食い込んでいる面の組を、フレーム内の順序で返す。
+///
+/// [`self_intersects`] と判定条件は同じ。折り目でつながる面や、平らに畳まれた
+/// 状態は含めない。原因候補の折り目を案内したい呼び出し側はこの詳細版を使う。
+#[must_use]
+pub fn self_intersection_pairs(frame: &Frame3D) -> Vec<(FaceId, FaceId)> {
+    find_self_intersections(frame, None)
+}
+
+fn find_self_intersections(frame: &Frame3D, limit: Option<usize>) -> Vec<(FaceId, FaceId)> {
     let flat = frame
         .faces
         .iter()
         .all(|f| f.polygon.iter().all(|p| p[2].abs() < TOL));
     if flat {
-        return false;
+        return Vec::new();
     }
     let parts: Vec<Part> = frame.faces.iter().map(Part::new).collect();
+    let mut pairs = Vec::new();
     for i in 0..parts.len() {
         for j in (i + 1)..parts.len() {
             let (a, b) = (&parts[i], &parts[j]);
@@ -51,11 +65,147 @@ pub fn self_intersects(frame: &Frame3D) -> bool {
                 .iter()
                 .any(|t1| b.tris.iter().any(|t2| tris_pierce(t1, t2)))
             {
-                return true;
+                pairs.push((frame.faces[i].face, frame.faces[j].face));
+                if limit.is_some_and(|max| pairs.len() >= max) {
+                    return pairs;
+                }
             }
         }
     }
-    false
+    pairs
+}
+
+/// 食い込みの原因として利用者へ案内するヒンジを最大5本返す。
+///
+/// 交差面に直接隣接するdriverヒンジを最優先し、残りは各交差面ペアを面グラフ上で
+/// 結ぶ最短経路から選ぶ。入力と辺IDだけで順序が決まるため、同じ形には常に同じ
+/// 候補を返す。交差がなければ空になる。
+#[must_use]
+pub fn suspect_hinges(
+    cp: &CreasePattern,
+    faces: &[Face],
+    frame: &Frame3D,
+    driver_hinges: &[EdgeId],
+) -> Vec<EdgeId> {
+    suspect_hinges_for_intersections(cp, faces, &self_intersection_pairs(frame), driver_hinges)
+}
+
+/// 交差面ペアを既に求めている呼び出し側のための [`suspect_hinges`]。
+/// 16msごとの追従計算で同じ交差判定を警告用と候補用に二重実行しないために使う。
+#[must_use]
+pub fn suspect_hinges_for_intersections(
+    cp: &CreasePattern,
+    faces: &[Face],
+    intersections: &[(FaceId, FaceId)],
+    driver_hinges: &[EdgeId],
+) -> Vec<EdgeId> {
+    const MAX_SUSPECTS: usize = 5;
+
+    if intersections.is_empty() {
+        return Vec::new();
+    }
+
+    let fold_edges: BTreeSet<EdgeId> = cp
+        .edges
+        .iter()
+        .filter(|edge| matches!(edge.kind, EdgeKind::Mountain | EdgeKind::Valley))
+        .map(|edge| edge.id)
+        .collect();
+    let mut edge_faces: BTreeMap<EdgeId, Vec<FaceId>> = BTreeMap::new();
+    for face in faces {
+        for &edge in &face.edges {
+            if fold_edges.contains(&edge) {
+                edge_faces.entry(edge).or_default().push(face.id);
+            }
+        }
+    }
+    for adjacent in edge_faces.values_mut() {
+        adjacent.sort_unstable();
+        adjacent.dedup();
+    }
+    edge_faces.retain(|_, adjacent| adjacent.len() == 2);
+
+    let mut face_hinges: BTreeMap<FaceId, Vec<EdgeId>> = BTreeMap::new();
+    for (&edge, adjacent) in &edge_faces {
+        for &face in adjacent {
+            face_hinges.entry(face).or_default().push(edge);
+        }
+    }
+
+    let drivers: BTreeSet<EdgeId> = driver_hinges.iter().copied().collect();
+    let mut selected = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    // 全交差ペアのdriver候補を先に集め、経路候補より必ず優先する。
+    for &(a, b) in intersections {
+        let incident = face_hinges
+            .get(&a)
+            .into_iter()
+            .chain(face_hinges.get(&b))
+            .flatten()
+            .copied()
+            .filter(|edge| drivers.contains(edge))
+            .collect::<BTreeSet<_>>();
+        for edge in incident {
+            if selected.len() < MAX_SUSPECTS && seen.insert(edge) {
+                selected.push(edge);
+            }
+        }
+    }
+
+    for &(start, goal) in intersections {
+        if selected.len() >= MAX_SUSPECTS {
+            break;
+        }
+        for edge in shortest_hinge_path(start, goal, &face_hinges, &edge_faces) {
+            if selected.len() < MAX_SUSPECTS && seen.insert(edge) {
+                selected.push(edge);
+            }
+        }
+    }
+    selected
+}
+
+fn shortest_hinge_path(
+    start: FaceId,
+    goal: FaceId,
+    face_hinges: &BTreeMap<FaceId, Vec<EdgeId>>,
+    edge_faces: &BTreeMap<EdgeId, Vec<FaceId>>,
+) -> Vec<EdgeId> {
+    if start == goal {
+        return Vec::new();
+    }
+    let mut queue = VecDeque::from([start]);
+    let mut visited = BTreeSet::from([start]);
+    let mut previous: BTreeMap<FaceId, (FaceId, EdgeId)> = BTreeMap::new();
+    while let Some(face) = queue.pop_front() {
+        for &edge in face_hinges.get(&face).into_iter().flatten() {
+            let Some(adjacent) = edge_faces.get(&edge) else {
+                continue;
+            };
+            for &next in adjacent {
+                if next == face || !visited.insert(next) {
+                    continue;
+                }
+                previous.insert(next, (face, edge));
+                if next == goal {
+                    let mut path = Vec::new();
+                    let mut cursor = goal;
+                    while cursor != start {
+                        let &(parent, via) = previous
+                            .get(&cursor)
+                            .expect("訪問済みの面には直前のヒンジがある");
+                        path.push(via);
+                        cursor = parent;
+                    }
+                    path.reverse();
+                    return path;
+                }
+                queue.push_back(next);
+            }
+        }
+    }
+    Vec::new()
 }
 
 /// 平らに折り切った面の層順序が、共有折り目の山谷と矛盾しているか。

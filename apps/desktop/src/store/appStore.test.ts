@@ -194,6 +194,7 @@ beforeEach(() => {
     poseWarnings: [],
     poseConverged: true,
     frame3d: null,
+    suspectHinges: [],
     currentStep: null,
     playT: 1,
     playing: false,
@@ -483,6 +484,7 @@ describe("appStore 折り角度の指定", () => {
       faces: view.faces,
       hinges: new Set([5]),
       frame3d: before,
+      suspectHinges: [99],
     });
 
     const store = useAppStore.getState();
@@ -490,14 +492,44 @@ describe("appStore 折り角度の指定", () => {
     await flush();
     store.clearDrivers();
     await flush();
-    first.resolve({ ...makeSolveResult(), frame: { faces: [], warnings: ["古い形"] } });
+    first.resolve({
+      ...makeSolveResult(),
+      frame: { faces: [], warnings: ["古い形"] },
+      suspect_hinges: [5],
+    });
     await flush();
     expect(useAppStore.getState().frame3d).toEqual(before);
+    expect(useAppStore.getState().suspectHinges).toEqual([99]);
 
     const latest = { faces: [], warnings: ["新しい形"] };
-    second.resolve({ ...makeSolveResult(), frame: latest });
+    second.resolve({
+      ...makeSolveResult(),
+      frame: latest,
+      suspect_hinges: [7],
+    });
     await flush();
     expect(useAppStore.getState().frame3d).toEqual(latest);
+    expect(useAppStore.getState().suspectHinges).toEqual([7]);
+  });
+
+  it("追従計算の原因候補を反映し、次の空応答で消す", async () => {
+    const view = makeHingeView(451);
+    useAppStore.setState({
+      doc: view.doc,
+      faces: view.faces,
+      hinges: new Set([5, 7]),
+    });
+    vi.mocked(ipc.poseSolve)
+      .mockResolvedValueOnce({ ...makeSolveResult(), suspect_hinges: [5, 7] })
+      .mockResolvedValueOnce({ ...makeSolveResult(), suspect_hinges: [] });
+
+    useAppStore.getState().clearDrivers();
+    await flush();
+    expect(useAppStore.getState().suspectHinges).toEqual([5, 7]);
+
+    useAppStore.getState().clearDrivers();
+    await flush();
+    expect(useAppStore.getState().suspectHinges).toEqual([]);
   });
 
   it("角度を次々に指定しても、固定するのは操作中の1本だけ(紙が切れない)", async () => {
@@ -765,20 +797,47 @@ describe("appStore 手順の表示と再生", () => {
       .mockReturnValueOnce(second.promise);
     const before = { faces: [], warnings: ["表示中の形"] };
     seedSequence(2);
-    useAppStore.setState({ frame3d: before });
+    useAppStore.setState({ frame3d: before, suspectHinges: [99] });
 
     useAppStore.getState().selectStep(1);
     await flush();
     useAppStore.getState().selectStep(2);
     await flush();
-    first.resolve({ frame: { faces: [], warnings: ["古い形"] }, skipped: [1], warnings: [] });
+    first.resolve({
+      frame: { faces: [], warnings: ["古い形"] },
+      skipped: [1],
+      warnings: [],
+      suspect_hinges: [5],
+    });
     await flush();
     expect(useAppStore.getState().frame3d).toEqual(before);
+    expect(useAppStore.getState().suspectHinges).toEqual([99]);
 
     const latest = { faces: [], warnings: ["新しい形"] };
-    second.resolve({ frame: latest, skipped: [2], warnings: [] });
+    second.resolve({
+      frame: latest,
+      skipped: [2],
+      warnings: [],
+      suspect_hinges: [7],
+    });
     await flush();
     expect(useAppStore.getState().frame3d).toEqual(latest);
+    expect(useAppStore.getState().suspectHinges).toEqual([7]);
+  });
+
+  it("手順再生の原因候補を反映し、次の空応答で消す", async () => {
+    seedSequence(2);
+    vi.mocked(ipc.sequenceReplay)
+      .mockResolvedValueOnce({ ...makeReplayResult(), suspect_hinges: [5, 7] })
+      .mockResolvedValueOnce({ ...makeReplayResult(), suspect_hinges: [] });
+
+    useAppStore.getState().selectStep(1);
+    await flush();
+    expect(useAppStore.getState().suspectHinges).toEqual([5, 7]);
+
+    useAppStore.getState().selectStep(2);
+    await flush();
+    expect(useAppStore.getState().suspectHinges).toEqual([]);
   });
 
   it("再生中でも、飛ばした手順と警告の中身が同じなら配列を作り直さない", async () => {

@@ -79,6 +79,7 @@ export function CpEditor({ fitRef }: Props) {
   const doc = useAppStore((s) => s.doc);
   const selection = useAppStore((s) => s.selection);
   const hoveredHinge = useAppStore((s) => s.hoveredHinge);
+  const suspectHinges = useAppStore((s) => s.suspectHinges);
   const activeTool = useAppStore((s) => s.activeTool);
   const docEpoch = useAppStore((s) => s.docEpoch);
   const violations = useAppStore((s) => s.violations);
@@ -101,6 +102,7 @@ export function CpEditor({ fitRef }: Props) {
       mirrorDraw,
       wheelBehavior,
       hoveredHinge,
+      suspectHinges,
     } = useAppStore.getState();
     if (!canvas) return;
     // カーソルの形は表示専用なので、再描画を起こさずcanvasへ直接反映する
@@ -199,6 +201,7 @@ export function CpEditor({ fitRef }: Props) {
       suggestedCreases: useAppStore.getState().pendingFoldThrough?.proposal
         .crease_segments,
       hoveredHinge,
+      suspectHinges,
     };
     const ctx2d = canvas.getContext("2d");
     if (ctx2d) {
@@ -238,6 +241,7 @@ export function CpEditor({ fitRef }: Props) {
     doc,
     selection,
     hoveredHinge,
+    suspectHinges,
     activeTool,
     violations,
     construct,

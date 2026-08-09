@@ -44,6 +44,8 @@ function App() {
   );
   const poseConverged = useAppStore((s) => s.poseConverged);
   const hasError = useAppStore((s) => s.errorMessage !== null);
+  const suspectHinges = useAppStore((s) => s.suspectHinges);
+  const setSelection = useAppStore((s) => s.setSelection);
   // 「全体表示」は2D・3D両方を紙全体が収まる表示に戻す(ボタンは増やさない)
   const fit2dRef = useRef<(() => void) | null>(null);
   const fit3dRef = useRef<(() => void) | null>(null);
@@ -163,6 +165,18 @@ function App() {
                       : "⚠ 追従計算が収束していません"}
                 </span>
               </div>
+            )}
+            {suspectHinges.length > 0 && (
+              <button
+                type="button"
+                className="suspect-hinge-guide"
+                title="最初の原因候補を選択して、下の角度スライダーを表示します"
+                onClick={() =>
+                  setSelection({ edgeIds: [suspectHinges[0]], vertexIds: [] })
+                }
+              >
+                赤く光る折り目の角度を見直してください
+              </button>
             )}
           </div>
           <Timeline />

@@ -385,6 +385,7 @@ describe("Viewer3D(指している場所のカーソル)", () => {
       alignDraft: null,
       techniqueDraft: null,
       selection: { edgeIds: [], vertexIds: [] },
+      suspectHinges: [],
       paperActionTipVisible: false,
       paperActionTipExpanded: false,
     });
@@ -456,6 +457,32 @@ describe("Viewer3D(指している場所のカーソル)", () => {
       const last = calls[calls.length - 1][0] as { edgeId: number; role?: string }[];
       expect(last.find((segment) => segment.edgeId === 5)?.role).toBe("focus");
       expect(last.find((segment) => segment.edgeId === 0)?.role).toBe("reference");
+    });
+  });
+
+  it("食い込み候補をsuspect役割で強調し、解消したら消す", async () => {
+    useAppStore.setState({ suspectHinges: [5] });
+    renderViewer();
+    await waitFor(() => expect(held.scene.content).not.toBeNull());
+
+    await waitFor(() => {
+      const setHighlight = held.scene.setHighlight as ReturnType<typeof vi.fn>;
+      const calls = setHighlight.mock.calls;
+      const last = calls[calls.length - 1]?.[0] as
+        | { edgeId: number; role?: string }[]
+        | undefined;
+      expect(last?.find((segment) => segment.edgeId === 5)?.role).toBe("suspect");
+    });
+
+    act(() => useAppStore.setState({ suspectHinges: [] }));
+
+    await waitFor(() => {
+      const setHighlight = held.scene.setHighlight as ReturnType<typeof vi.fn>;
+      const calls = setHighlight.mock.calls;
+      const last = calls[calls.length - 1]?.[0] as
+        | { edgeId: number; role?: string }[]
+        | undefined;
+      expect(last?.some((segment) => segment.role === "suspect")).toBe(false);
     });
   });
 

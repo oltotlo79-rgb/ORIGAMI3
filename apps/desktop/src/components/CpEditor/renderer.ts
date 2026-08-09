@@ -25,6 +25,9 @@ export const COLORS = {
   selection: "#ff9500",
   /** 複数スライダーのうち、指している折り目を選択全体から見分ける色 */
   hingeHover: "#7040c9",
+  /** 補正後にも食い込みが残る原因候補。選択の橙・ホバーの紫より外側で光らせる。 */
+  suspect: "#ff2438",
+  suspectGlow: "rgba(255, 36, 56, 0.88)",
   snapMarker: "#2aa02a",
   /** 平らに畳めない点(CPE-009)。操作は止めず色で知らせるだけ */
   violation: "#ff8c00",
@@ -57,6 +60,7 @@ export const LINE_WIDTHS = {
   grid: 1,
   selected: 6,
   hovered: 10,
+  suspect: 11,
   preview: 1.5,
 } as const;
 
@@ -230,6 +234,8 @@ export interface RenderOverlay {
   suggestedCreases?: [Vec2, Vec2][];
   /** 複数角度スライダーで指している折り目。選択色より太い縁で個別に示す */
   hoveredHinge?: number | null;
+  /** 補正後にも食い込みが残る原因候補ヒンジ */
+  suspectHinges?: number[];
 }
 
 /** 点を動かしている途中のプレビュー: つながる線を破線で新しい位置へ引き直す */
@@ -344,14 +350,28 @@ function drawEdges(
   selection: Selection,
   fill: Rgb,
   hoveredHinge: number | null,
+  suspectHinges: readonly number[],
 ): void {
   const byId = new Map(doc.cp.vertices.map((v) => [v.id, v.pos]));
   const selected = new Set(selection.edgeIds);
+  const suspects = new Set(suspectHinges);
   const halo = haloColor(fill);
   for (const e of doc.cp.edges) {
     const a = byId.get(e.v0);
     const b = byId.get(e.v1);
     if (!a || !b) continue; // 参照切れの壊れた線は描かない(検査の警告で知らせる)
+    if (suspects.has(e.id)) {
+      // 赤い光を通常線と選択色の下へ敷く。同じ線を選ぶと橙/紫の芯が残り、
+      // 「原因候補」と「いま操作中」を同時に見分けられる。
+      ctx.save();
+      ctx.strokeStyle = COLORS.suspectGlow;
+      ctx.lineWidth = LINE_WIDTHS.suspect;
+      ctx.shadowColor = COLORS.suspect;
+      ctx.shadowBlur = 12;
+      ctx.setLineDash([]);
+      strokeSegment(ctx, view, a, b);
+      ctx.restore();
+    }
     if (e.id === hoveredHinge) {
       // 全選択の橙色より外側へ紫の縁を敷き、どのスライダーの線かを示す。
       ctx.save();
@@ -582,7 +602,15 @@ export function render(
 
   drawGrid(ctx, doc, view, fill);
   if (overlay.mirrorAxis !== null) drawMirrorAxis(ctx, doc, view, overlay.mirrorAxis);
-  drawEdges(ctx, doc, view, selection, fill, overlay.hoveredHinge ?? null);
+  drawEdges(
+    ctx,
+    doc,
+    view,
+    selection,
+    fill,
+    overlay.hoveredHinge ?? null,
+    overlay.suspectHinges ?? [],
+  );
   drawSelectedVertices(ctx, doc, view, selection);
   drawViolations(ctx, doc, view, overlay.violations);
   if (overlay.vertexDrag) drawVertexDrag(ctx, doc, view, overlay.vertexDrag);

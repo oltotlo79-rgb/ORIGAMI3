@@ -34,6 +34,7 @@ import {
   updateFrame,
   updateSoftContent,
   type SoftContent,
+  type HighlightSegment,
   type Viewer3DScene,
 } from "./sceneBuilder";
 import { softSignature } from "./softMesh";
@@ -146,6 +147,7 @@ export function Viewer3D({ fitRef }: Props) {
   const softMesh = useAppStore((s) => s.softMesh);
   const selection = useAppStore((s) => s.selection);
   const hoveredHinge = useAppStore((s) => s.hoveredHinge);
+  const suspectHinges = useAppStore((s) => s.suspectHinges);
   const docEpoch = useAppStore((s) => s.docEpoch);
   const activeTool = useAppStore((s) => s.activeTool);
   const uiTheme = useAppStore((s) => s.uiTheme);
@@ -260,6 +262,13 @@ export function Viewer3D({ fitRef }: Props) {
     const scene = sceneRef.current;
     if (!scene?.content) return;
     const s = useAppStore.getState();
+    const suspectIds = new Set(s.suspectHinges);
+    const suspectSegments: HighlightSegment[] = scene.content.hingeSegments
+      .filter((segment) => suspectIds.has(segment.edgeId))
+      .map((segment) => ({ ...segment, role: "suspect" as const }));
+    const setHighlight = (segments: HighlightSegment[]) => {
+      scene.setHighlight([...suspectSegments, ...segments]);
+    };
     const drawing = drawingRef.current;
     // つかんで動かしている間は「折った結果の形」を半透明で重ねて見せる(UI-008)
     const grab = grabRef.current;
@@ -273,14 +282,14 @@ export function Viewer3D({ fitRef }: Props) {
         grab.face,
       );
       scene.setPreview(plan.ok ? plan.plan.preview : [], PREVIEW_FILL_LIFT);
-      scene.setHighlight(plan.ok ? toHighlight(plan.plan.segments) : []);
+      setHighlight(plan.ok ? toHighlight(plan.plan.segments) : []);
       return;
     }
     scene.setPreview([], PREVIEW_FILL_LIFT);
     // 巻き込み用の追加折り目。Rustが現在の畳み平面へ写した線を、既存の
     // 参照線ハイライト(水色)で示す。展開図側は別のCP座標を使う。
     if (s.pendingFoldThrough) {
-      scene.setHighlight(
+      setHighlight(
         toHighlight([s.pendingFoldThrough.proposal.folded_line]).map((segment) => ({
           ...segment,
           role: "reference" as const,
@@ -305,7 +314,7 @@ export function Viewer3D({ fitRef }: Props) {
           ),
         );
       }
-      scene.setHighlight(toHighlight(segments));
+      setHighlight(toHighlight(segments));
       return;
     }
     // 技法では、選んだフラップ(重なった層)の輪郭も光らせる
@@ -325,7 +334,7 @@ export function Viewer3D({ fitRef }: Props) {
           segments.push([l.polygon[i], l.polygon[(i + 1) % l.polygon.length]]);
         }
       }
-      scene.setHighlight(toHighlight(segments));
+      setHighlight(toHighlight(segments));
       return;
     }
     const line: [Vec2, Vec2] | null = drawing
@@ -345,7 +354,7 @@ export function Viewer3D({ fitRef }: Props) {
         keep,
         s.foldDraft?.target === "top",
       );
-      scene.setHighlight(toHighlight(segments));
+      setHighlight(toHighlight(segments));
       return;
     }
     // 引いている間は、いま角度を変えている折り線だけを色で示す(UI-007)。
@@ -356,7 +365,7 @@ export function Viewer3D({ fitRef }: Props) {
           ? [s.pullHinge, s.pullMirrorHinge]
           : [s.pullHinge],
       );
-      scene.setHighlight(
+      setHighlight(
         scene.content.hingeSegments.filter((seg) => selected.has(seg.edgeId)),
       );
       return;
@@ -364,10 +373,10 @@ export function Viewer3D({ fitRef }: Props) {
     // 2Dで選んだ辺は種類を問わず現在の3D位置へ写す。ヒンジは黄色、
     // 折る操作の対象にならない縁・補助線・非ヒンジ折り線は水色で区別する。
     if (!s.doc) {
-      scene.setHighlight([]);
+      setHighlight([]);
       return;
     }
-    scene.setHighlight(
+    setHighlight(
       deriveSelectedEdgeHighlights(
         s.doc,
         s.faces,
@@ -390,6 +399,7 @@ export function Viewer3D({ fitRef }: Props) {
   }, [
     selection,
     hoveredHinge,
+    suspectHinges,
     doc,
     faces,
     hinges,

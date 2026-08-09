@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use ori3_cp::Face;
 use ori3_model::{
-    CreasePattern, Document, EdgeId, EdgeKind, EditOp, Frame3D, MAX_GRID_DIVISIONS,
+    CreasePattern, Document, EdgeId, EdgeKind, EditOp, FaceId, Frame3D, MAX_GRID_DIVISIONS,
     MIN_GRID_DIVISIONS, Paper, SCHEMA_VERSION, SeqOp, StepId, TechniqueKind, VertexId,
 };
 
@@ -63,6 +63,8 @@ pub struct DocumentView {
     pub frame: Option<Frame3D>,
     /// 自動再生で折り線が見つからず飛ばされたステップのID
     pub skipped: Vec<StepId>,
+    /// 補正後にも残る食い込みの原因候補ヒンジ。
+    pub suspect_hinges: Vec<EdgeId>,
     /// 巻き込みで回避できる典型的な単一縁衝突の、非破壊プレビュー結果。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fold_through_proposal: Option<ori3_layers::FoldThroughProposal>,
@@ -536,6 +538,7 @@ fn build_view(doc: &Document, mut warnings: Vec<String>) -> DocumentView {
         violations: ori3_cp::local_violations(&doc.cp),
         frame: None,
         skipped: Vec::new(),
+        suspect_hinges: Vec::new(),
         fold_through_proposal: None,
     }
 }
@@ -571,13 +574,21 @@ pub fn attach_replay(view: &mut DocumentView) {
             ..Default::default()
         },
     );
+    let intersections = ori3_rigid::self_intersection_pairs(&replayed.frame);
+    replayed.suspect_hinges = ori3_rigid::suspect_hinges_for_intersections(
+        &view.doc.cp,
+        &view.faces,
+        &intersections,
+        &replayed.driver_hinges,
+    );
     // 紙のめり込み(SIM-007)。折り上がりは平ら(z≒0)なので通常は出ないが、
     // 平らに畳みきれない形では立体のまま返るため、そのときに知らせる
-    penetration_warnings.extend(add_penetration_warning(
+    penetration_warnings.extend(add_penetration_warning_for_intersections(
         &view.doc.cp,
         &view.faces,
         &mut replayed.frame,
         false,
+        &intersections,
     ));
     for warning in penetration_warnings {
         if !replayed.warnings.iter().any(|existing| existing == warning) {
@@ -586,6 +597,7 @@ pub fn attach_replay(view: &mut DocumentView) {
     }
     view.warnings.extend(replayed.warnings);
     view.skipped = replayed.skipped;
+    view.suspect_hinges = replayed.suspect_hinges;
     view.frame = Some(replayed.frame);
 }
 
@@ -598,8 +610,21 @@ pub fn add_penetration_warning(
     frame: &mut Frame3D,
     check_layer_order: bool,
 ) -> Vec<&'static str> {
+    let intersections = ori3_rigid::self_intersection_pairs(frame);
+    add_penetration_warning_for_intersections(cp, faces, frame, check_layer_order, &intersections)
+}
+
+/// 交差面ペアを既に求めた追従・再生経路向けの警告付与。
+/// 候補抽出と同じ結果を共有し、重い三角形交差判定を二重に走らせない。
+pub fn add_penetration_warning_for_intersections(
+    cp: &CreasePattern,
+    faces: &[Face],
+    frame: &mut Frame3D,
+    check_layer_order: bool,
+    intersections: &[(FaceId, FaceId)],
+) -> Vec<&'static str> {
     let mut added = Vec::new();
-    if ori3_rigid::self_intersects(frame)
+    if !intersections.is_empty()
         && !frame
             .warnings
             .iter()

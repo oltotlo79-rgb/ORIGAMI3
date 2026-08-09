@@ -36,6 +36,8 @@ const HIGHLIGHT_COLOR = 0xffd400;
 const REFERENCE_HIGHLIGHT_COLOR = 0x40cfff;
 /** 複数スライダーのうち指している1本の強調色(POPのコーラル) */
 const FOCUS_HIGHLIGHT_COLOR = 0xed5c70;
+/** 補正後にも残る食い込みの原因候補。選択の黄色・水色と明確に分ける。 */
+const SUSPECT_HIGHLIGHT_COLOR = 0xff2038;
 /** 折った結果の下見(実行前プレビュー)の色。動く紙と分かるよう青系にする */
 const PREVIEW_COLOR = 0x2f8fff;
 /** 下見の透け具合(下の紙が見える程度) */
@@ -501,7 +503,7 @@ export interface Viewer3DScene {
 
 /** 強調線分。role省略時は従来どおり操作対象の黄色で描く。 */
 export interface HighlightSegment extends HingeSegment {
-  role?: "hinge" | "reference" | "focus";
+  role?: "hinge" | "reference" | "focus" | "suspect";
 }
 
 /** 面・線1つ分の資源を破棄する */
@@ -599,6 +601,10 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
     color: FOCUS_HIGHLIGHT_COLOR,
     depthTest: false,
   });
+  const suspectHighlightMaterial = new THREE.MeshBasicMaterial({
+    color: SUSPECT_HIGHLIGHT_COLOR,
+    depthTest: false,
+  });
   const dir = new THREE.Vector3();
 
   /** 表示中のたわみの網(null なら従来の面の描き方) */
@@ -666,19 +672,22 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
         let mesh = pool[used] as THREE.Mesh | undefined;
         if (!mesh) {
           mesh = new THREE.Mesh(highlightGeometry, highlightMaterial);
-          mesh.renderOrder = 1;
           mesh.frustumCulled = false;
           highlightGroup.add(mesh);
         }
         mesh.material =
-          seg.role === "reference"
+          seg.role === "suspect"
+            ? suspectHighlightMaterial
+            : seg.role === "reference"
             ? referenceHighlightMaterial
             : seg.role === "focus"
               ? focusHighlightMaterial
               : highlightMaterial;
+        // 赤を太い外周、選択色を細い芯として同じ折り目にも同時表示する。
+        mesh.renderOrder = seg.role === "suspect" ? 3 : 4;
         mesh.position.copy(seg.a);
         mesh.quaternion.setFromUnitVectors(AXIS_Y, dir.normalize());
-        const thickness = seg.role === "focus" ? 1.45 : 1;
+        const thickness = seg.role === "suspect" ? 1.8 : seg.role === "focus" ? 1.45 : 1;
         mesh.scale.set(thickness, length, thickness);
         mesh.visible = true;
         used++;
@@ -730,6 +739,7 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
       highlightMaterial.dispose();
       referenceHighlightMaterial.dispose();
       focusHighlightMaterial.dispose();
+      suspectHighlightMaterial.dispose();
       renderer.dispose();
     },
   };

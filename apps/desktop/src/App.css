@@ -1565,6 +1565,31 @@ input[type="radio"] {
   box-shadow: var(--shadow-status-danger);
 }
 
+/* 食い込み候補の案内。押すと最初の赤い折り目を選び、既存の角度欄へつなぐ。 */
+.suspect-hinge-guide {
+  position: absolute;
+  top: calc(var(--sp-4) + 42px);
+  right: var(--sp-4);
+  max-width: min(330px, calc(100% - var(--sp-8)));
+  padding: var(--sp-2) var(--sp-4);
+  border: var(--floating-border-width) solid rgba(255, 255, 255, 0.92);
+  border-radius: var(--radius-pill);
+  background: rgba(127, 15, 29, 0.94);
+  color: #fff;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-tight);
+  box-shadow: 0 0 14px rgba(255, 36, 56, 0.62), var(--shadow-status-danger);
+  cursor: pointer;
+  z-index: 3;
+}
+
+.suspect-hinge-guide:hover,
+.suspect-hinge-guide:focus-visible {
+  background: #a31125;
+  box-shadow: 0 0 20px rgba(255, 36, 56, 0.78), var(--shadow-status-danger);
+}
+
 .status-icon {
   width: 16px;
   height: 16px;

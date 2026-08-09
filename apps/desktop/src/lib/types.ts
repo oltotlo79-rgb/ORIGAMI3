@@ -155,6 +155,8 @@ export interface DocumentView {
   frame: Frame3D | null;
   /** 自動再生で折り線が見つからず飛ばされたステップID */
   skipped: number[];
+  /** 補正後にも残る食い込みの原因候補ヒンジ */
+  suspect_hinges?: number[];
   /**
    * 折り切る前の非破壊確認で見つかった、巻き込みに必要な追加折り目。
    * 通常のDocumentViewでは未指定またはnullになる。
@@ -263,6 +265,8 @@ export interface ReplayResult {
   /** 折り線が見つからず飛ばされたステップID */
   skipped: number[];
   warnings: string[];
+  /** 補正後にも残る食い込みの原因候補ヒンジ */
+  suspect_hinges?: number[];
   /** たわみを指定したときだけ入る三角形の網(SIM-012) */
   soft?: SoftMesh | null;
 }
@@ -275,6 +279,8 @@ export interface SolveResult {
   angles: Record<string, number>;
   /** 実行した反復回数(warm start効果の確認用) */
   iterations: number;
+  /** 補正後にも残る食い込みの原因候補ヒンジ */
+  suspect_hinges?: number[];
   /** たわみを指定したときだけ入る三角形の網(SIM-012) */
   soft?: SoftMesh | null;
 }

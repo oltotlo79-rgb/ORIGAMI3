@@ -18,7 +18,8 @@ use tauri::State;
 
 use crate::autosave;
 use crate::store::{
-    DocumentStore, DocumentView, add_layer_order_warning, add_penetration_warning, attach_replay,
+    DocumentStore, DocumentView, add_layer_order_warning,
+    add_penetration_warning_for_intersections, attach_replay,
 };
 use ori3_export::{CpSvgOptions, cp_png, cp_svg, diagram_pdf, diagram_svg_pages};
 use ori3_model::{CreasePattern, Driver, EdgeId, EditOp, Paper, SeqOp};
@@ -36,6 +37,7 @@ pub struct PoseOutcome {
     #[serde(flatten)]
     pub result: ori3_rigid::SolveResult,
     pub soft: Option<SoftMesh>,
+    pub suspect_hinges: Vec<EdgeId>,
 }
 
 /// たわみの計算結果を足した `sequence_replay` の戻り値(SIM-012)。
@@ -221,6 +223,11 @@ pub fn pose_solve(
     guard(AssertUnwindSafe(|| {
         let (cp, faces, warm, overlap_enabled) = lock(&state).pose_inputs(); // 複製のみ、即ロック解放
         let keep = keep.unwrap_or_default();
+        let driver_hinges: Vec<EdgeId> = drivers
+            .iter()
+            .chain(&keep)
+            .map(|driver| driver.hinge)
+            .collect();
         let mut result = if keep.is_empty() {
             ori3_rigid::solve(&cp, &faces, &drivers, warm.as_ref())
         } else {
@@ -247,11 +254,28 @@ pub fn pose_solve(
                 ..Default::default()
             },
         );
-        let _ = add_penetration_warning(&cp, &faces, &mut result.frame, false); // SIM-007
+        let intersections = ori3_rigid::self_intersection_pairs(&result.frame);
+        let suspect_hinges = ori3_rigid::suspect_hinges_for_intersections(
+            &cp,
+            &faces,
+            &intersections,
+            &driver_hinges,
+        );
+        let _ = add_penetration_warning_for_intersections(
+            &cp,
+            &faces,
+            &mut result.frame,
+            false,
+            &intersections,
+        ); // SIM-007
         // たわみもロックの外で計算する(規約どおり)
         let mesh = soft_mesh(&cp, &faces, &result.frame, soft.as_ref());
         lock(&state).store_pose_angles(result.angles.clone()); // 短いロックで書き戻し
-        Ok(PoseOutcome { result, soft: mesh })
+        Ok(PoseOutcome {
+            result,
+            soft: mesh,
+            suspect_hinges,
+        })
     }))
 }
 
@@ -290,13 +314,21 @@ pub fn sequence_replay(
                 ..Default::default()
             },
         );
+        let intersections = ori3_rigid::self_intersection_pairs(&result.frame);
+        result.suspect_hinges = ori3_rigid::suspect_hinges_for_intersections(
+            &doc.cp,
+            &faces,
+            &intersections,
+            &result.driver_hinges,
+        );
         // 折る途中(t<1)は立体になるので、紙が食い込んでいないかを見る(SIM-007)。
         // 画面のバッジは ReplayResult.warnings を見るので両方へ同じ文言を載せる
-        penetration_warnings.extend(add_penetration_warning(
+        penetration_warnings.extend(add_penetration_warning_for_intersections(
             &doc.cp,
             &faces,
             &mut result.frame,
             false,
+            &intersections,
         ));
         for warning in penetration_warnings {
             if !result.warnings.iter().any(|existing| existing == warning) {

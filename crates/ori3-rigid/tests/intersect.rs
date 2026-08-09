@@ -2,7 +2,7 @@
 
 use ori3_cp::{extract_faces, insert_segment};
 use ori3_model::{Document, EdgeKind, Face3D, Frame3D, Paper};
-use ori3_rigid::{layer_order_conflicts, self_intersects};
+use ori3_rigid::{layer_order_conflicts, self_intersection_pairs, self_intersects, suspect_hinges};
 
 fn frame(faces: Vec<Face3D>) -> Frame3D {
     Frame3D {
@@ -150,7 +150,91 @@ fn crossing_faces_are_reported() {
             [0.5, -0.5, 0.5],
         ],
     );
-    assert!(self_intersects(&frame(vec![flat, upright])));
+    let crossed = frame(vec![flat, upright]);
+    assert!(self_intersects(&crossed));
+    assert_eq!(self_intersection_pairs(&crossed), vec![(0, 1)]);
+}
+
+#[test]
+fn intersecting_faces_prioritize_an_adjacent_driver_hinge() {
+    let mut document = Document::new(Paper {
+        width_mm: 100.0,
+        height_mm: 100.0,
+    });
+    insert_segment(
+        &mut document.cp,
+        [1.0 / 3.0, 0.0],
+        [1.0 / 3.0, 1.0],
+        EdgeKind::Valley,
+    );
+    insert_segment(
+        &mut document.cp,
+        [2.0 / 3.0, 0.0],
+        [2.0 / 3.0, 1.0],
+        EdgeKind::Mountain,
+    );
+    let faces = extract_faces(&document.cp);
+    assert_eq!(faces.len(), 3);
+    let driver = document
+        .cp
+        .edges
+        .iter()
+        .find(|edge| edge.kind == EdgeKind::Valley)
+        .expect("driverにする谷折り")
+        .id;
+    let crossed = frame(vec![
+        face(
+            faces[0].id,
+            &[
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [0.0, 1.0, 0.5],
+            ],
+        ),
+        face(
+            faces[2].id,
+            &[
+                [0.5, -0.5, -0.5],
+                [0.5, 1.5, -0.5],
+                [0.5, 1.5, 0.5],
+                [0.5, -0.5, 0.5],
+            ],
+        ),
+    ]);
+
+    let suspects = suspect_hinges(&document.cp, &faces, &crossed, &[driver]);
+    assert_eq!(suspects.first(), Some(&driver));
+    assert!(suspects.len() <= 5);
+}
+
+#[test]
+fn no_intersection_has_no_suspect_hinges() {
+    let mut document = Document::new(Paper {
+        width_mm: 100.0,
+        height_mm: 100.0,
+    });
+    insert_segment(&mut document.cp, [0.5, 0.0], [0.5, 1.0], EdgeKind::Valley);
+    let faces = extract_faces(&document.cp);
+    let driver = document
+        .cp
+        .edges
+        .iter()
+        .find(|edge| edge.kind == EdgeKind::Valley)
+        .expect("driverにする谷折り")
+        .id;
+    let separated = frame(vec![
+        face(
+            faces[0].id,
+            &[[0.0, 0.0, 0.0], [0.4, 0.0, 0.1], [0.4, 1.0, 0.1]],
+        ),
+        face(
+            faces[1].id,
+            &[[0.6, 0.0, 0.2], [1.0, 0.0, 0.3], [1.0, 1.0, 0.3]],
+        ),
+    ]);
+
+    assert!(suspect_hinges(&document.cp, &faces, &separated, &[driver]).is_empty());
 }
 
 #[test]

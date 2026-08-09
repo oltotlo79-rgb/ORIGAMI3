@@ -364,6 +364,8 @@ interface AppState {
   curve: CurveOptions;
   /** 3D表示フレーム。nullなら平ら(展開図から直接描く) */
   frame3d: Frame3D | null;
+  /** 補正後にも残る食い込みの原因候補。2D/3Dの赤い強調で共用する。 */
+  suspectHinges: number[];
   /** たわみの三角形の網(SIM-012)。たわみを切っているとnull(従来の描き方に戻る) */
   softMesh: SoftMesh | null;
   /** たわみの計算から返った注意書き(日本語)。設定パネルに出す */
@@ -810,6 +812,7 @@ export const useAppStore = create<AppState>((set, get) => {
       warnings: view.warnings,
       violations: view.violations,
       skipped: view.skipped,
+      suspectHinges: keepIfSame(s.suspectHinges, view.suspect_hinges ?? []),
       currentStep:
         total === 0 || s.currentStep === null
           ? null
@@ -1003,6 +1006,14 @@ export const useAppStore = create<AppState>((set, get) => {
       // 持っていた層の重なり情報を消さないよう立体表示はそのままにする
       ...(applyFrame ? { frame3d: r.value.frame } : {}),
       ...(applyFrame ? softResult(r.value.soft) : {}),
+      ...(applyFrame
+        ? {
+            suspectHinges: keepIfSame(
+              get().suspectHinges,
+              r.value.suspect_hinges ?? [],
+            ),
+          }
+        : {}),
       poseWarnings: r.value.frame.warnings,
       poseConverged: r.value.converged,
       poseAngles: new Map(
@@ -1140,6 +1151,10 @@ export const useAppStore = create<AppState>((set, get) => {
       // upToまでの再生結果なので、作品全体のskippedは上書きしない
       replaySkipped: keepIfSame(s.replaySkipped, r.value.skipped),
       replayWarnings: keepIfSame(s.replayWarnings, r.value.warnings),
+      suspectHinges: keepIfSame(
+        s.suspectHinges,
+        r.value.suspect_hinges ?? [],
+      ),
     });
   };
 
@@ -1152,7 +1167,15 @@ export const useAppStore = create<AppState>((set, get) => {
     // 表示中の手順番号はapplyViewで手順数まで詰めてある
     const step = get().currentStep;
     if (step === null) {
-      set({ frame3d: view.frame, replaySkipped: [], replayWarnings: [] });
+      set((s) => ({
+        frame3d: view.frame,
+        replaySkipped: [],
+        replayWarnings: [],
+        suspectHinges: keepIfSame(
+          s.suspectHinges,
+          view.suspect_hinges ?? [],
+        ),
+      }));
       // 自動再生の結果にはたわみの網が入っていないので、たわみを使うときだけ
       // 同じ形をもう一度たわませて描き直す(切っていれば今までどおり1往復のまま)
       if (softArg()) await runReplay(view.doc.sequence.length, 1, true);
@@ -1342,6 +1365,7 @@ export const useAppStore = create<AppState>((set, get) => {
     construct: DEFAULT_CONSTRUCT,
     curve: DEFAULT_CURVE,
     frame3d: null,
+    suspectHinges: [],
     softMesh: null,
     softWarnings: [],
     currentStep: null,

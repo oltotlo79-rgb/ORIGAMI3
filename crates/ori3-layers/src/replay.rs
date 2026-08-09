@@ -91,6 +91,11 @@ pub struct ReplayResult {
     pub skipped: Vec<StepId>,
     /// 再生中に出た警告(日本語)
     pub warnings: Vec<String>,
+    /// 補正後にも残る食い込みの原因候補ヒンジ。コマンド層で判定して設定する。
+    pub suspect_hinges: Vec<EdgeId>,
+    /// 手順から実際に角度指定されたヒンジ。候補の優先順位付け専用。
+    #[serde(skip)]
+    pub driver_hinges: Vec<EdgeId>,
     /// 接触補正専用の開始・完了層順序。IPCへは出さず、コマンド層でだけ使う。
     #[serde(skip)]
     pub layer_transition: LayerTransition,
@@ -153,6 +158,8 @@ pub fn replay_with_faces(doc: &Document, faces: &[Face], up_to: usize, t: f64) -
         frame,
         skipped: plan.skipped,
         warnings,
+        suspect_hinges: Vec::new(),
+        driver_hinges: plan.driver_hinges,
         layer_transition,
     }
 }
@@ -266,6 +273,8 @@ struct StepPlan {
     /// ソルバーへ渡す角度指定。t=1のときは全ヒンジ(未駆動は0°)、
     /// 折り途中(t<1)は「そのステップが駆動するヒンジ」だけ
     drivers: Vec<Driver>,
+    /// 手順内のDriverLineから解決できたヒンジ。未指定ヒンジの0度固定は含めない。
+    driver_hinges: Vec<EdgeId>,
     /// 折り途中(t<1)の折り道: ヒンジごとの (辺ID, 直前の角度, 目標角) (度)。
     /// この間を少しずつ動かしながら「閉じた形」を追いかける。t=1ではNone。
     path: Option<Vec<(EdgeId, f64, f64)>>,
@@ -389,6 +398,7 @@ fn plan_steps(doc: &Document, faces: &[Face], up_to: usize, t: f64) -> StepPlan 
             .collect();
         return StepPlan {
             drivers: Vec::new(),
+            driver_hinges: angles.keys().copied().collect(),
             path: Some(path),
             order,
             order_start,
@@ -411,6 +421,7 @@ fn plan_steps(doc: &Document, faces: &[Face], up_to: usize, t: f64) -> StepPlan 
 
     StepPlan {
         drivers: all,
+        driver_hinges: angles.keys().copied().collect(),
         path: None,
         order,
         order_start,

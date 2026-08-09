@@ -2,7 +2,7 @@
 // 巻き込み用の追加折り目が、RustのCP座標のまま2D描画へ渡ることを確かめる。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import type React from "react";
 import type { Document } from "../../lib/types";
 
@@ -73,6 +73,7 @@ beforeEach(() => {
     selection: { edgeIds: [], vertexIds: [] },
     activeTool: "select",
     violations: [],
+    suspectHinges: [],
     pendingFoldThrough: {
       proposal: {
         // 3D用の畳み平面座標とは違う値にし、取り違えを見つける。
@@ -108,7 +109,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  useAppStore.setState({ doc: null, pendingFoldThrough: null });
+  useAppStore.setState({ doc: null, pendingFoldThrough: null, suspectHinges: [] });
 });
 
 describe("CpEditor 巻き込み折り目プレビュー", () => {
@@ -124,6 +125,26 @@ describe("CpEditor 巻き込み折り目プレビュー", () => {
           [0.65, 0.75],
         ],
       ]);
+    });
+  });
+});
+
+describe("CpEditor 食い込み候補の強調", () => {
+  it("候補ヒンジを描画オーバーレイへ渡し、解消したら空にする", async () => {
+    useAppStore.setState({ pendingFoldThrough: null, suspectHinges: [5] });
+    const fitRef = { current: null } as React.RefObject<(() => void) | null>;
+    render(<CpEditor fitRef={fitRef} />);
+
+    await waitFor(() => {
+      const overlay = held.overlay as RenderOverlay | null;
+      expect(overlay?.suspectHinges).toEqual([5]);
+    });
+
+    act(() => useAppStore.setState({ suspectHinges: [] }));
+
+    await waitFor(() => {
+      const overlay = held.overlay as RenderOverlay | null;
+      expect(overlay?.suspectHinges).toEqual([]);
     });
   });
 });
