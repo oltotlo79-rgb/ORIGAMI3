@@ -203,11 +203,11 @@ export interface PendingFoldThrough {
  * 折り方の決定(山谷・対象の層・折る/やめる)は既存の折り確定UIをそのまま使う。
  */
 export interface AlignDraft {
-  /** 合わせ方(点と点/線と線/点を線へ) */
+  /** 藤田・羽鳥の7基本作図、または既存線をそのまま使う合わせ方 */
   mode: AlignMode;
   /** 選んだ対象(ALIGN_STEPSの順。まだ足りない間は途中まで) */
   picks: AlignTarget[];
-  /** 求まった折り線(0〜2本。カーソルに近い順) */
+  /** 求まった折り線(0〜3本。カーソルに近い順) */
   solutions: FoldLine[];
   /** 今使っている解の番号(「別の解」で切り替える) */
   solutionIndex: number;

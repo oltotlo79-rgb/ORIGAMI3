@@ -2,6 +2,7 @@
 // 操作そのものは既存のキャンバスへ任せ、ここではZustandの進行段階を読むだけにする。
 
 import { useAppStore, type ToolId } from "../store/appStore";
+import { ALIGN_LABELS } from "../lib/alignFold";
 
 interface OperationGuide {
   title: string;
@@ -37,8 +38,12 @@ export function operationGuideFor(s: ReturnType<typeof useAppStore.getState>): O
     if (s.alignDraft) {
       const picked = s.alignDraft.picks.length;
       return {
-        title: "合わせて折る",
-        steps: ["動かす点・線を選ぶ", "合わせ先を選ぶ", "向きと動く側を決めて折る"],
+        title: ALIGN_LABELS[s.alignDraft.mode],
+        steps: [
+          "案内どおりに点・線を順に選ぶ",
+          "求まった折り目を確認する",
+          "向きと動く側を決めて折る",
+        ],
         current: s.foldDraft ? 2 : Math.min(picked, 1),
       };
     }

@@ -329,6 +329,89 @@ fn half_fold_up_makes_two_layers_with_one_valley() {
 }
 
 #[test]
+fn folds_along_an_existing_diagonal_crease_without_adding_edges() {
+    let mut cp = square_cp();
+    let existing = insert_segment(&mut cp, [0.0, 0.0], [1.0, 1.0], EdgeKind::Valley);
+    assert_eq!(existing.len(), 1, "対角線の既存折り筋は1辺");
+    let before = cp.clone();
+    let faces = extract_faces(&cp);
+    assert_eq!(faces.len(), 2, "既存折り筋で正方形は2面に分かれる");
+    let state = FlatState::initial(&cp, &faces);
+
+    let res = fold_through_with_additional_crease(
+        &mut cp,
+        &faces,
+        &state,
+        &FoldThroughInput {
+            line: [[0.0, 0.0], [1.0, 1.0]],
+            keep_side_point: [0.25, 0.75],
+            target_layers: None,
+            direction: FoldDirection::Up,
+        },
+        false,
+    )
+    .expect("既存の対角折り筋に沿って折れる");
+
+    assert_eq!(cp, before, "既存折り筋の再利用ではCPを変更しない");
+    assert!(res.added_edges.is_empty(), "折り筋を重複追加しない");
+    assert_eq!(res.state.order.len(), 2, "2面の層順を保持する");
+
+    let moved = faces
+        .iter()
+        .find(|face| {
+            let p = representative_point(&cp, face);
+            p[0] > p[1]
+        })
+        .expect("対角線の可動側の面")
+        .id;
+    let fixed = faces
+        .iter()
+        .find(|face| {
+            let p = representative_point(&cp, face);
+            p[0] < p[1]
+        })
+        .expect("対角線の固定側の面")
+        .id;
+    assert_ne!(
+        res.state.placements[&moved].mirrored, res.state.placements[&fixed].mirrored,
+        "可動側だけが折り返される"
+    );
+    assert_eq!(
+        res.state.order.last().copied(),
+        Some(if res.state.placements[&moved].mirrored {
+            moved
+        } else {
+            fixed
+        }),
+        "Up折りの層が表示座標系でも上側に積まれる"
+    );
+
+    assert_eq!(
+        res.step.drivers.len(),
+        1,
+        "既存折り筋を1本のdriverとして記録する"
+    );
+    assert_eq!(res.step.drivers[0].target_angle_deg, -180.0);
+    assert_eq!(
+        resolve_driver_edges(&cp, &res.step.drivers[0]),
+        existing,
+        "FoldStepのdriverが既存折り筋へ解決される"
+    );
+    let points = res
+        .step
+        .layer_order
+        .as_ref()
+        .expect("層順をFoldStepへ記録する");
+    assert_eq!(points.len(), 2);
+    let (recorded_order, warnings) = FlatState::resolve_order(&cp, &faces, points);
+    assert!(warnings.is_empty(), "層順の再解決: {warnings:?}");
+    assert_eq!(
+        recorded_order, res.state.order,
+        "FoldStepから既存折り筋で反転した層順を再現できる"
+    );
+}
+
+#[test]
 fn second_fold_pulls_back_two_lines_with_opposite_kinds() {
     let (cp, _r1, r2) = four_layer_fixture();
     let faces = extract_faces(&cp);

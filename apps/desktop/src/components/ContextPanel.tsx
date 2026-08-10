@@ -467,17 +467,37 @@ function StepContent({ number }: { number: number }) {
 }
 
 /** 「合わせて折る」の入口(折るツールのときだけ出す。ツールレールは増やさない) */
+const ALIGN_MODES: AlignMode[] = [
+  "throughTwoPoints",
+  "pointPoint",
+  "lineLine",
+  "pointPerpendicularLine",
+  "pointLineThrough",
+  "pointToLinePointToLine",
+  "pointLinePerpendicular",
+  "existingLine",
+];
+
 function AlignStartRow() {
   const beginAlign = useAppStore((s) => s.beginAlign);
-  const modes: AlignMode[] = ["pointPoint", "lineLine", "pointLineThrough"];
   return (
-    <div className="button-row">
-      <span>合わせて折る</span>
-      {modes.map((m) => (
-        <button key={m} type="button" onClick={() => beginAlign(m)}>
-          {ALIGN_LABELS[m]}
-        </button>
-      ))}
+    <div className="button-row align-start-row">
+      <strong className="align-start-label">合わせて折る</strong>
+      <div
+        className="align-mode-buttons"
+        role="group"
+        aria-label="折り目の決め方"
+      >
+        {ALIGN_MODES.map((mode) => (
+          <button
+            key={mode}
+            type="button"
+            onClick={() => beginAlign(mode)}
+          >
+            {ALIGN_LABELS[mode]}
+          </button>
+        ))}
+      </div>
       <span className="hint">
         (目分量ではなく、選んだ点や線から折り線を正確に決めます)
       </span>

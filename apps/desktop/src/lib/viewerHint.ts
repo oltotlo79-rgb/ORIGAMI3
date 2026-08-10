@@ -89,6 +89,10 @@ export interface HintState extends FoldReadiness {
 
 /** 合わせて折るときに、次に何を選べばよいかの案内(選ぶ順にそのまま並べる) */
 const ALIGN_PROMPTS: Record<AlignMode, string[]> = {
+  throughTwoPoints: [
+    "折り目が通る1つ目の点をクリックしてください(角・折り目の端・交点に吸着します)",
+    "折り目が通る2つ目の点をクリックしてください",
+  ],
   pointPoint: [
     "1つ目の点(動かす方)をクリックしてください(角・折り目の端・交点に吸着します)",
     "2つ目の点(合わせ先)をクリックしてください",
@@ -97,10 +101,28 @@ const ALIGN_PROMPTS: Record<AlignMode, string[]> = {
     "1つ目の線(動かす方)をクリックしてください(紙の辺・折り線を選べます)",
     "2つ目の線(合わせ先)をクリックしてください",
   ],
+  pointPerpendicularLine: [
+    "折り目が通る点をクリックしてください(角・折り目の端・交点に吸着します)",
+    "折り目を垂直にする線をクリックしてください(紙の辺・折り線を選べます)",
+  ],
   pointLineThrough: [
     "線に合わせたい点をクリックしてください",
     "合わせ先の線をクリックしてください",
     "折り目が通る点をクリックしてください",
+  ],
+  pointToLinePointToLine: [
+    "線に合わせたい1つ目の点をクリックしてください",
+    "1つ目の合わせ先の線をクリックしてください",
+    "線に合わせたい2つ目の点をクリックしてください",
+    "2つ目の合わせ先の線をクリックしてください",
+  ],
+  pointLinePerpendicular: [
+    "線に合わせたい点をクリックしてください",
+    "点の合わせ先の線をクリックしてください",
+    "折り目を垂直にする線をクリックしてください",
+  ],
+  existingLine: [
+    "折り目にする既存の線をクリックしてください(紙の辺・折り線を選べます)",
   ],
 };
 
@@ -116,9 +138,10 @@ export function alignHint(s: HintState): string {
   const keys = picked > 0 ? ALIGN_KEYS : "";
   if (picked < ALIGN_STEPS[mode].length) return `${prompts[picked]}${keys}`;
   if (s.alignReason) return `${s.alignReason}${ALIGN_KEYS}`;
+  const solutionCount = s.alignSolutionCount ?? 0;
   const other =
-    (s.alignSolutionCount ?? 0) >= 2
-      ? "解が2つあります。下のパネルの「別の解」で切り替えられます。"
+    solutionCount >= 2
+      ? `解が${solutionCount}つあります。下のパネルの「別の解」で切り替えられます。`
       : "";
   return `折り線が決まりました。${other}下のパネルで山折り/谷折りを選んで「折る」を押してください${ALIGN_KEYS}`;
 }

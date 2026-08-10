@@ -61,8 +61,22 @@ export interface DriverLine {
   target_angle_deg: number;
 }
 
-/** 「合わせて折る」の基準。RustのFoldAlignmentと同じJSON形。 */
-export type AlignMode = "pointPoint" | "lineLine" | "pointLineThrough";
+/**
+ * 「合わせて折る」の基準。RustのFoldAlignmentと同じJSON形。
+ *
+ * throughTwoPoints〜pointLinePerpendicular は藤田・羽鳥の7基本作図の順に対応する。
+ * existingLine は、折り図で頻出する「付いている折り筋で折る」を座標の引き直しなしで
+ * 指定するための追加モード。
+ */
+export type AlignMode =
+  | "throughTwoPoints"
+  | "pointPoint"
+  | "lineLine"
+  | "pointPerpendicularLine"
+  | "pointLineThrough"
+  | "pointToLinePointToLine"
+  | "pointLinePerpendicular"
+  | "existingLine";
 
 export type AlignTarget =
   | { kind: "point"; p: Vec2 }

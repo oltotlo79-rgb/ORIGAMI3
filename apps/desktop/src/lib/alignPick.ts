@@ -11,8 +11,8 @@ export interface AlignPickLayer {
   polygon: Vec2[];
 }
 
-/** 同じ線分を1本にまとめるときの座標の丸め幅 */
-const DEDUPE = 1e7;
+/** 同じ線分を1本にまとめるときの座標の丸め幅。幾何判定の許容差と揃える。 */
+const DEDUPE = 1 / ALIGN_EPS;
 
 function key(p: Vec2): string {
   return `${Math.round(p[0] * DEDUPE)},${Math.round(p[1] * DEDUPE)}`;
@@ -74,7 +74,8 @@ export function segmentIntersection(
   const r: Vec2 = [s1[1][0] - s1[0][0], s1[1][1] - s1[0][1]];
   const s: Vec2 = [s2[1][0] - s2[0][0], s2[1][1] - s2[0][1]];
   const den = r[0] * s[1] - r[1] * s[0];
-  if (Math.abs(den) < ALIGN_EPS) return null;
+  const scale = Math.hypot(r[0], r[1]) * Math.hypot(s[0], s[1]);
+  if (scale < ALIGN_EPS * ALIGN_EPS || Math.abs(den) <= ALIGN_EPS * scale) return null;
   const d: Vec2 = [s2[0][0] - s1[0][0], s2[0][1] - s1[0][1]];
   const t = (d[0] * s[1] - d[1] * s[0]) / den;
   const u = (d[0] * r[1] - d[1] * r[0]) / den;
@@ -105,8 +106,10 @@ export function nearestAlignLine(
 
 /**
  * カーソルにいちばん近い点(半径内に無ければnull)。
- * 頂点(紙の角・折り目の端)を先に探し、無ければ辺どうしの交点を探す。
+ * 頂点(紙の角・折り目の端)と辺どうしの交点を同じ距離基準で探す。
  * 交点はカーソル周りの辺だけで作るので、辺が何万本あっても重くならない。
+ * 頂点を無条件に優先すると、クリックした交点の近くに別の端点がある場合に
+ * 交点を選べなくなるため、必ず実距離が短い候補を返す。
  */
 export function nearestAlignPoint(
   layers: AlignPickLayer[],
@@ -122,8 +125,6 @@ export function nearestAlignPoint(
       best = p;
     }
   }
-  if (best) return best;
-
   const near = alignLineCandidates(layers).filter(
     (seg) => distanceToSegment(cursor, seg[0], seg[1]) <= radius * 2,
   );

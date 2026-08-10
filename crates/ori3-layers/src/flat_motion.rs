@@ -210,7 +210,8 @@ pub fn flat_motion(
 pub(crate) struct MotionOutcome {
     pub cp: CreasePattern,
     pub result: FoldThroughResult,
-    /// 面の内部を横切って新しい折り線を引いたか
+    /// 面の内部を横切って新しい折り線を引いたか、既存の折り筋を駆動したか。
+    /// `fold_through` はどちらも有効な折り操作として受理する。
     pub crossed_any: bool,
 }
 
@@ -325,6 +326,10 @@ pub(crate) fn run_motion(
                             ((o1 - o0).length() > EPS).then_some((e.id, e.kind))
                         });
                         if let Some((eid, k)) = found {
+                            // 面を新しく分割しなくても、境界にある既存の折り筋は
+                            // この動きのヒンジになる。区間をDriverLineへ残すだけでなく、
+                            // fold_throughの「有効な折り線」判定にも含める。
+                            crossed_any = true;
                             cut_intervals.push((q0, q1, k));
                             if k != kind && warned_overlap.insert(eid) {
                                 warnings.push(opposite_crease_warning(eid));

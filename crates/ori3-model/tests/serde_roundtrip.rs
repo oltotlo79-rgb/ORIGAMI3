@@ -93,6 +93,36 @@ fn test_document_json_roundtrip() {
 }
 
 #[test]
+fn test_alignment_modes_use_desktop_camel_case_and_roundtrip() {
+    let cases = [
+        (AlignmentMode::ThroughTwoPoints, "throughTwoPoints"),
+        (AlignmentMode::PointPoint, "pointPoint"),
+        (AlignmentMode::LineLine, "lineLine"),
+        (
+            AlignmentMode::PointPerpendicularLine,
+            "pointPerpendicularLine",
+        ),
+        (AlignmentMode::PointLineThrough, "pointLineThrough"),
+        (
+            AlignmentMode::PointToLinePointToLine,
+            "pointToLinePointToLine",
+        ),
+        (
+            AlignmentMode::PointLinePerpendicular,
+            "pointLinePerpendicular",
+        ),
+        (AlignmentMode::ExistingLine, "existingLine"),
+    ];
+
+    for (mode, name) in cases {
+        let json = serde_json::to_string(&mode).expect("serialize AlignmentMode");
+        assert_eq!(json, format!(r#""{name}""#));
+        let back: AlignmentMode = serde_json::from_str(&json).expect("deserialize AlignmentMode");
+        assert_eq!(back, mode);
+    }
+}
+
+#[test]
 fn test_edit_op_tagged_roundtrip() {
     // EditOp は #[serde(tag = "type")] の内部タグ形式で往復できること。
     let op = EditOp::AddSegment {

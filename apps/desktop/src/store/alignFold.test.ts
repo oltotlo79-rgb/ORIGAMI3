@@ -138,6 +138,68 @@ describe("選択の進行", () => {
     useAppStore.getState().beginAlign("lineLine");
     expect(useAppStore.getState().alignDraft).toBeNull();
   });
+
+  it("2点を通る: 選んだ2点を正確に通る折り線を作る", () => {
+    const s = useAppStore.getState();
+    s.beginAlign("throughTwoPoints");
+    s.pickAlignTarget({ kind: "point", p: [0.125, 0.25] });
+    s.pickAlignTarget({ kind: "point", p: [0.875, 0.75] });
+    const line = useAppStore.getState().foldDraft!.line;
+    const distance = (p: Vec2) => {
+      const dx = line[1][0] - line[0][0];
+      const dy = line[1][1] - line[0][1];
+      return Math.abs(dx * (p[1] - line[0][1]) - dy * (p[0] - line[0][0])) /
+        Math.hypot(dx, dy);
+    };
+    expect(distance([0.125, 0.25])).toBeLessThan(1e-12);
+    expect(distance([0.875, 0.75])).toBeLessThan(1e-12);
+  });
+
+  it("点を通り垂直: 点→線の2選択で厳密な垂線を作る", () => {
+    const s = useAppStore.getState();
+    s.beginAlign("pointPerpendicularLine");
+    s.pickAlignTarget({ kind: "point", p: [0.25, 0.5] });
+    s.pickAlignTarget(XAXIS);
+    const line = useAppStore.getState().foldDraft!.line;
+    expect(line[0][0]).toBeCloseTo(0.25, 12);
+    expect(line[1][0]).toBeCloseTo(0.25, 12);
+  });
+
+  it("2組を同時に合わせる: 4選択がそろうまで待ち、最大3解を保持する", () => {
+    const s = useAppStore.getState();
+    s.beginAlign("pointToLinePointToLine");
+    s.pickAlignTarget({ kind: "point", p: [0, 0] });
+    s.pickAlignTarget({ kind: "line", a: [1, -1], b: [1, 2] });
+    s.pickAlignTarget({ kind: "point", p: [-1, 1] });
+    expect(useAppStore.getState().foldDraft).toBeNull();
+    s.pickAlignTarget({ kind: "line", a: [1, 0], b: [2, 1] });
+    const draft = useAppStore.getState().alignDraft!;
+    expect(draft.picks).toHaveLength(4);
+    expect(draft.solutions.length).toBeGreaterThan(0);
+    expect(draft.solutions.length).toBeLessThanOrEqual(3);
+    expect(useAppStore.getState().foldDraft).not.toBeNull();
+  });
+
+  it("点→線+垂直と既存線は、それぞれ3選択・1選択で折り線になる", () => {
+    const s = useAppStore.getState();
+    s.beginAlign("pointLinePerpendicular");
+    s.pickAlignTarget({ kind: "point", p: [0, 2] });
+    s.pickAlignTarget(XAXIS);
+    s.pickAlignTarget(YAXIS);
+    let line = useAppStore.getState().foldDraft!.line;
+    expect(line[0][1]).toBeCloseTo(1, 12);
+    expect(line[1][1]).toBeCloseTo(1, 12);
+
+    useAppStore.getState().beginAlign("existingLine");
+    useAppStore.getState().pickAlignTarget({
+      kind: "line",
+      a: [0, 0.375],
+      b: [1, 0.375],
+    });
+    line = useAppStore.getState().foldDraft!.line;
+    expect(line[0][1]).toBeCloseTo(0.375, 12);
+    expect(line[1][1]).toBeCloseTo(0.375, 12);
+  });
 });
 
 describe("求まった折り線でFoldThroughを送る", () => {

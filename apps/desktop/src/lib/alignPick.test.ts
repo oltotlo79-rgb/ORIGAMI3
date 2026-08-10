@@ -52,6 +52,25 @@ describe("候補の集め方", () => {
     expect(alignVertexCandidates(HALVES)).toHaveLength(4);
   });
 
+  it("1e-7未満でも許容差より離れた別の端点・線を同一視しない", () => {
+    const close: AlignPickLayer[] = [
+      {
+        polygon: [
+          [0, 0],
+          [1, 0],
+        ],
+      },
+      {
+        polygon: [
+          [0, 4e-8],
+          [1, 4e-8],
+        ],
+      },
+    ];
+    expect(alignVertexCandidates(close)).toHaveLength(4);
+    expect(alignLineCandidates(close)).toHaveLength(2);
+  });
+
   it("長さ0の辺は候補に入れない", () => {
     const degenerate: AlignPickLayer = {
       polygon: [
@@ -93,6 +112,22 @@ describe("線分の交点", () => {
         ],
       ),
     ).toBeNull();
+  });
+
+  it("短い線分でも、直交していれば長さに依存せず交点を返す", () => {
+    const x = segmentIntersection(
+      [
+        [-5e-6, 0],
+        [5e-6, 0],
+      ],
+      [
+        [0, -5e-6],
+        [0, 5e-6],
+      ],
+    );
+    expect(x).not.toBeNull();
+    expect(x![0]).toBeCloseTo(0, 15);
+    expect(x![1]).toBeCloseTo(0, 15);
   });
 
   it("延長すれば交わるが線分としては交わらない組はnull", () => {
@@ -138,6 +173,32 @@ describe("いちばん近いものを拾う", () => {
       },
     ];
     const p = nearestAlignPoint(cross, [0.52, 0.53], 0.06);
+    expect(p![0]).toBeCloseTo(0.5, 12);
+    expect(p![1]).toBeCloseTo(0.5, 12);
+  });
+
+  it("半径内に別の端点があっても、クリック位置に近い暗黙の交点を選ぶ", () => {
+    const crossingWithNearbyEndpoint: AlignPickLayer[] = [
+      {
+        polygon: [
+          [0, 0.5],
+          [1, 0.5],
+        ],
+      },
+      {
+        polygon: [
+          [0.5, 0],
+          [0.5, 1],
+        ],
+      },
+      {
+        polygon: [
+          [0.54, 0.54],
+          [0.8, 0.8],
+        ],
+      },
+    ];
+    const p = nearestAlignPoint(crossingWithNearbyEndpoint, [0.5, 0.5], 0.08);
     expect(p![0]).toBeCloseTo(0.5, 12);
     expect(p![1]).toBeCloseTo(0.5, 12);
   });

@@ -88,9 +88,14 @@ pub struct DriverLine {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AlignmentMode {
+    ThroughTwoPoints,
     PointPoint,
     LineLine,
+    PointPerpendicularLine,
     PointLineThrough,
+    PointToLinePointToLine,
+    PointLinePerpendicular,
+    ExistingLine,
 }
 
 /// 合わせ折りの説明文を再現するため、選んだ点・線を畳み平面座標で保存する。

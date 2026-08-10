@@ -281,6 +281,18 @@ fn alignment_instruction(step: &FoldStep, bounds: [f64; 4]) -> Option<String> {
     let alignment = step.alignment.as_ref()?;
     match (&alignment.mode, alignment.picks.as_slice()) {
         (
+            AlignmentMode::ThroughTwoPoints,
+            [
+                AlignmentTarget::Point { p: first },
+                AlignmentTarget::Point { p: second },
+                ..,
+            ],
+        ) => Some(format!(
+            "{}と{}を通るように",
+            point_label(*first, bounds),
+            point_label(*second, bounds)
+        )),
+        (
             AlignmentMode::PointPoint,
             [
                 AlignmentTarget::Point { p: from },
@@ -305,6 +317,18 @@ fn alignment_instruction(step: &FoldStep, bounds: [f64; 4]) -> Option<String> {
             line_label(*b0, *b1, bounds)
         )),
         (
+            AlignmentMode::PointPerpendicularLine,
+            [
+                AlignmentTarget::Point { p },
+                AlignmentTarget::Line { a, b },
+                ..,
+            ],
+        ) => Some(format!(
+            "{}を通り、{}に垂直になるように",
+            point_label(*p, bounds),
+            line_label(*a, *b, bounds)
+        )),
+        (
             AlignmentMode::PointLineThrough,
             [
                 AlignmentTarget::Point { p },
@@ -318,6 +342,51 @@ fn alignment_instruction(step: &FoldStep, bounds: [f64; 4]) -> Option<String> {
             line_label(*a, *b, bounds),
             point_label(*through, bounds)
         )),
+        (
+            AlignmentMode::PointToLinePointToLine,
+            [
+                AlignmentTarget::Point { p: first },
+                AlignmentTarget::Line {
+                    a: first_a,
+                    b: first_b,
+                },
+                AlignmentTarget::Point { p: second },
+                AlignmentTarget::Line {
+                    a: second_a,
+                    b: second_b,
+                },
+                ..,
+            ],
+        ) => Some(format!(
+            "{}を{}に、同時に{}を{}に合わせて",
+            point_label(*first, bounds),
+            line_label(*first_a, *first_b, bounds),
+            point_label(*second, bounds),
+            line_label(*second_a, *second_b, bounds)
+        )),
+        (
+            AlignmentMode::PointLinePerpendicular,
+            [
+                AlignmentTarget::Point { p },
+                AlignmentTarget::Line {
+                    a: target_a,
+                    b: target_b,
+                },
+                AlignmentTarget::Line {
+                    a: perpendicular_a,
+                    b: perpendicular_b,
+                },
+                ..,
+            ],
+        ) => Some(format!(
+            "{}を{}に合わせ、折り目が{}に垂直になるように",
+            point_label(*p, bounds),
+            line_label(*target_a, *target_b, bounds),
+            line_label(*perpendicular_a, *perpendicular_b, bounds)
+        )),
+        (AlignmentMode::ExistingLine, [AlignmentTarget::Line { a, b }, ..]) => {
+            Some(format!("{}に沿って", line_label(*a, *b, bounds)))
+        }
         _ => None,
     }
 }
@@ -840,6 +909,71 @@ mod tests {
             automatic_instruction(step, &[[[0.5, 0.0], [0.5, 1.0]]], [0.0, 0.0, 1.0, 1.0]),
             "右下の角を左上の角に合わせて谷折り"
         );
+    }
+
+    /// 藤田・羽鳥の7作図と既存折り筋の指定を、選択内容を落とさず日本語にする。
+    #[test]
+    fn every_alignment_mode_has_a_japanese_instruction() {
+        let point = |p| AlignmentTarget::Point { p };
+        let line = |a, b| AlignmentTarget::Line { a, b };
+        let left = || line([0.1, 0.1], [0.1, 0.9]);
+        let top = || line([0.1, 0.9], [0.9, 0.9]);
+        let center = || line([0.1, 0.1], [0.9, 0.9]);
+        let cases = vec![
+            (
+                AlignmentMode::ThroughTwoPoints,
+                vec![point([0.1, 0.9]), point([0.9, 0.1])],
+                "左上の角と右下の角を通るように谷折り",
+            ),
+            (
+                AlignmentMode::PointPoint,
+                vec![point([0.1, 0.9]), point([0.9, 0.1])],
+                "左上の角を右下の角に合わせて谷折り",
+            ),
+            (
+                AlignmentMode::LineLine,
+                vec![left(), top()],
+                "左の線を上の線に合わせて谷折り",
+            ),
+            (
+                AlignmentMode::PointPerpendicularLine,
+                vec![point([0.5, 0.5]), left()],
+                "中央の点を通り、左の線に垂直になるように谷折り",
+            ),
+            (
+                AlignmentMode::PointLineThrough,
+                vec![point([0.1, 0.9]), left(), point([0.5, 0.5])],
+                "左上の角を左の線に合わせ、中央の点を通るように谷折り",
+            ),
+            (
+                AlignmentMode::PointToLinePointToLine,
+                vec![point([0.1, 0.9]), left(), point([0.9, 0.1]), top()],
+                "左上の角を左の線に、同時に右下の角を上の線に合わせて谷折り",
+            ),
+            (
+                AlignmentMode::PointLinePerpendicular,
+                vec![point([0.1, 0.9]), left(), top()],
+                "左上の角を左の線に合わせ、折り目が上の線に垂直になるように谷折り",
+            ),
+            (
+                AlignmentMode::ExistingLine,
+                vec![center()],
+                "中央の線に沿って谷折り",
+            ),
+        ];
+
+        for (mode, picks, expected) in cases {
+            let mut doc = strip_doc(1);
+            let step = &mut doc.sequence[0];
+            step.kind = TechniqueKind::Simple;
+            step.drivers[0].target_angle_deg = -180.0;
+            step.alignment = Some(ori3_model::FoldAlignment { mode, picks });
+            assert_eq!(
+                automatic_instruction(step, &[[[0.5, 0.0], [0.5, 1.0]]], [0.0, 0.0, 1.0, 1.0]),
+                expected,
+                "mode={mode:?}"
+            );
+        }
     }
 
     /// 合わせ指定がない通常折りは、折り線の九宮格位置と山谷を説明する。

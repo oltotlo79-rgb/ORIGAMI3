@@ -2443,6 +2443,33 @@ input[type="radio"] {
   align-self: center;
 }
 
+/* 「合わせて折る」は8種類あるため、長い日本語名をつぶさず並べる。 */
+.align-start-row {
+  align-items: flex-start;
+}
+
+.align-start-label {
+  padding-top: var(--sp-2);
+  white-space: nowrap;
+}
+
+.align-mode-buttons {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  flex: 1 1 720px;
+  gap: var(--sp-2);
+}
+
+.align-mode-buttons button {
+  min-width: 0;
+  padding-inline: var(--sp-3);
+  text-align: left;
+}
+
+.align-start-row > .hint {
+  flex-basis: 100%;
+}
+
 /* 技法の対象層。数十〜百層でも4つの指定ボタンを先に使えるようにし、
    個別チェックは必要なときだけdetailsを開いてスクロールする。 */
 .technique-layer-picker {

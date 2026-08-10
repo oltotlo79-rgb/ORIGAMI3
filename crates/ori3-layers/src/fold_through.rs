@@ -15,9 +15,10 @@
 //!   一番下(Down)に入れる」近似で決める。折り線が一部の層しか跨がない部分的な
 //!   折りでは、物理的に厳密な挟み込み順にならないことがある(層の間へ差し込む
 //!   入れ方が要る場合は [`crate::flat_motion`] を直接使う)。
-//! - 折り線がどの面も横切らない指定はエラーにする。既存の折り線と完全に一致する
-//!   「再折り」(新しい線を1本も引かない折り)もこの条件に該当し、未対応
-//!   (折り目を開く・重なり順だけ変える動きは [`crate::flat_motion`] で表せる)。
+//! - 折り線が新しい面を横切らず、既存の山谷折り線とも重ならない指定はエラーにする。
+//!   既存の折り線と完全に一致する「再折り」は、その線上の既存断片をdriverとして
+//!   記録して受理する(折り目を開く・重なり順だけ変える動きは
+//!   [`crate::flat_motion`] で表せる)。
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -127,10 +128,7 @@ pub fn fold_through(
     let resolved = resolve_fold(cp, faces, state, input)?;
     let out = run_motion(cp, faces, state, &simple_motion(&resolved))?;
     if !out.crossed_any {
-        return Err(
-            "折り線がどの層の面も横切っていません(既存の折り線での再折りには対応していません)"
-                .to_string(),
-        );
+        return Err("折り線がどの層の面も横切らず、既存の折り筋にも重なっていません".to_string());
     }
     let mut result = out.result;
     let mut warnings = resolved.warnings;
@@ -187,15 +185,12 @@ pub fn fold_through_with_additional_crease(
     let resolved = resolve_fold(cp, faces, state, input)?;
     let analysis = analyze_collision(cp, faces, state, &resolved);
 
-    // まず従来の単純折りで、主折り線が実際に面を横切ることを検査する。
+    // まず従来の単純折りで、主折り線が実際に面を横切るか既存の折り筋に重なることを検査する。
     // 誘導折り目だけが横切る入力を誤って成功させないため、承諾時もこの検査を行う。
     let simple = simple_motion(&resolved);
     let simple_out = run_motion(cp, faces, state, &simple)?;
     if !simple_out.crossed_any {
-        return Err(
-            "折り線がどの層の面も横切っていません(既存の折り線での再折りには対応していません)"
-                .to_string(),
-        );
+        return Err("折り線がどの層の面も横切らず、既存の折り筋にも重なっていません".to_string());
     }
 
     let mut used_proposal = false;

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { OperationSteps } from "./OperationSteps";
 import { useAppStore, type ToolId } from "../store/appStore";
+import { ALIGN_LABELS } from "../lib/alignFold";
 
 const initialStoreState = useAppStore.getState();
 
@@ -132,5 +133,26 @@ describe("今できる操作の手順", () => {
     fireEvent.click(guide.querySelector("summary")!);
     expect(details.open).toBe(true);
     expect(screen.getAllByRole("listitem")).toHaveLength(3);
+  });
+
+  it("基準合わせでは動かす対象とは限らない選択も正しく案内する", () => {
+    seed("fold");
+    useAppStore.setState({
+      alignDraft: {
+        mode: "existingLine",
+        picks: [],
+        solutions: [],
+        solutionIndex: 0,
+        reason: null,
+      },
+    });
+    render(<OperationSteps />);
+
+    const guide = screen.getByRole("region", {
+      name: `${ALIGN_LABELS.existingLine}の操作手順`,
+    });
+    fireEvent.click(guide.querySelector("summary")!);
+    expect(within(guide).getByText("案内どおりに点・線を順に選ぶ")).toBeTruthy();
+    expect(within(guide).getByText("求まった折り目を確認する")).toBeTruthy();
   });
 });

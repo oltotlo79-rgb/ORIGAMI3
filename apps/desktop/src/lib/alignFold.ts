@@ -2,10 +2,8 @@
 // 目分量ではなく、選んだ点・線から折り線を厳密に決めるための純関数だけを置く。
 // 座標は畳み平面(3D表示のxy = 平らに畳んだ紙の座標)。Three.jsには依存しない。
 //
-// 対応する3つの合わせ方(折り紙公理の2・3・5に相当):
-//   点と点  → 2点の垂直二等分線(解は1本)
-//   線と線  → 2直線の角の二等分線(交わるなら2本、平行なら中間線1本)
-//   点を線へ(折り目が通る点を指定) → 指定点を中心にした円と線の交点から作る(0〜2本)
+// 藤田・羽鳥の7基本作図をすべて扱う。加えて、折り図で頻出する
+// 「既存の折り筋をそのまま使う」も、画面上で引き直さず選べるようにする。
 
 import type { AlignMode, AlignTarget, Vec2 } from "./types";
 export type { AlignMode, AlignTarget } from "./types";
@@ -18,20 +16,36 @@ export type FoldLine = [Vec2, Vec2];
 
 /** 合わせ方ごとに必要な選択の数と、順番どおりの対象の種類 */
 export const ALIGN_STEPS: Record<AlignMode, ("point" | "line")[]> = {
+  throughTwoPoints: ["point", "point"],
   pointPoint: ["point", "point"],
   lineLine: ["line", "line"],
+  pointPerpendicularLine: ["point", "line"],
   pointLineThrough: ["point", "line", "point"],
+  pointToLinePointToLine: ["point", "line", "point", "line"],
+  pointLinePerpendicular: ["point", "line", "line"],
+  existingLine: ["line"],
 };
 
 /** 合わせ方の日本語名(画面のボタン・ヒントで使う) */
 export const ALIGN_LABELS: Record<AlignMode, string> = {
+  throughTwoPoints: "2点を通る",
   pointPoint: "点と点を合わせる",
   lineLine: "線と線を合わせる",
+  pointPerpendicularLine: "点を通り線と垂直に",
   pointLineThrough: "点を線に合わせる(折り目が通る点を指定)",
+  pointToLinePointToLine: "2組を同時に合わせる",
+  pointLinePerpendicular: "点を線に合わせて別の線と垂直に",
+  existingLine: "既存の線に沿って折る",
 };
 
 function sub(a: Vec2, b: Vec2): Vec2 {
   return [a[0] - b[0], a[1] - b[1]];
+}
+function add(a: Vec2, b: Vec2): Vec2 {
+  return [a[0] + b[0], a[1] + b[1]];
+}
+function mul(a: Vec2, k: number): Vec2 {
+  return [a[0] * k, a[1] * k];
 }
 function dot(a: Vec2, b: Vec2): number {
   return a[0] * b[0] + a[1] * b[1];
@@ -45,6 +59,33 @@ export function unitDir(line: FoldLine): Vec2 | null {
   const d = sub(line[1], line[0]);
   const len = Math.hypot(d[0], d[1]);
   return len < ALIGN_EPS ? null : [d[0] / len, d[1] / len];
+}
+
+/** 藤田・羽鳥1: 異なる2点を通る折り線。選んだ座標をそのまま端点に使う。 */
+export function lineThroughPoints(p: Vec2, q: Vec2): FoldLine | null {
+  return Math.hypot(q[0] - p[0], q[1] - p[1]) < ALIGN_EPS ? null : [p, q];
+}
+
+/** 藤田・羽鳥4: 点pを通り、lineに垂直な折り線。 */
+export function perpendicularThroughPoint(p: Vec2, line: FoldLine): FoldLine | null {
+  const u = unitDir(line);
+  if (!u) return null;
+  const half = Math.max(
+    Math.hypot(line[1][0] - line[0][0], line[1][1] - line[0][1]),
+    ALIGN_EPS,
+  );
+  return segmentAt(p, [-u[1], u[0]], half);
+}
+
+/** 2本の無限直線の交点。平行ならnull。 */
+function lineIntersection(l1: FoldLine, l2: FoldLine): Vec2 | null {
+  const r = sub(l1[1], l1[0]);
+  const s = sub(l2[1], l2[0]);
+  const den = cross(r, s);
+  const scale = Math.hypot(r[0], r[1]) * Math.hypot(s[0], s[1]);
+  if (scale < ALIGN_EPS || Math.abs(den) <= ALIGN_EPS * scale) return null;
+  const t = cross(sub(l2[0], l1[0]), s) / den;
+  return add(l1[0], mul(r, t));
 }
 
 /**
@@ -149,6 +190,265 @@ export function foldPointOntoLine(
   return out;
 }
 
+/** 点を折り線で鏡映した位置。長さ0の折り線ならnull。 */
+export function reflectPointAcrossFold(p: Vec2, fold: FoldLine): Vec2 | null {
+  const u = unitDir(fold);
+  if (!u) return null;
+  const foot = footOnLine(p, fold, u);
+  return [2 * foot[0] - p[0], 2 * foot[1] - p[1]];
+}
+
+interface LineEquation {
+  /** 単位法線 */
+  n: Vec2;
+  /** n・x = d */
+  d: number;
+}
+
+function lineEquation(line: FoldLine): LineEquation | null {
+  const u = unitDir(line);
+  if (!u) return null;
+  const n: Vec2 = [-u[1], u[0]];
+  return { n, d: dot(n, line[0]) };
+}
+
+/** 係数を定数項から昇順に並べた多項式。 */
+type Polynomial = number[];
+
+function polyScale(a: Polynomial, k: number): Polynomial {
+  return a.map((v) => v * k);
+}
+
+function polySub(a: Polynomial, b: Polynomial): Polynomial {
+  return Array.from({ length: Math.max(a.length, b.length) }, (_, i) =>
+    (a[i] ?? 0) - (b[i] ?? 0),
+  );
+}
+
+function polyMul(a: Polynomial, b: Polynomial): Polynomial {
+  const out = Array.from({ length: a.length + b.length - 1 }, () => 0);
+  for (let i = 0; i < a.length; i++) {
+    for (let j = 0; j < b.length; j++) out[i + j] += a[i] * b[j];
+  }
+  return out;
+}
+
+function polyValue(a: Polynomial, x: number): number {
+  let out = 0;
+  for (let i = a.length - 1; i >= 0; i--) out = out * x + a[i];
+  return out;
+}
+
+function polyDerivativeValue(a: Polynomial, x: number): number {
+  let out = 0;
+  for (let i = a.length - 1; i >= 1; i--) out = out * x + i * a[i];
+  return out;
+}
+
+function uniqueRoots(values: number[]): number[] {
+  const out: number[] = [];
+  for (const value of values.filter(Number.isFinite).sort((a, b) => a - b)) {
+    const prev = out[out.length - 1];
+    if (prev === undefined || Math.abs(value - prev) > 1e-8 * Math.max(1, Math.abs(value))) {
+      out.push(value);
+    }
+  }
+  return out;
+}
+
+/** 3次以下の実係数多項式の実根。Cardanoの式の後にNewton法で残差を詰める。 */
+function realPolynomialRoots(input: Polynomial): number[] {
+  const coeff = [...input];
+  const scale = Math.max(Number.MIN_VALUE, ...coeff.map(Math.abs));
+  // 係数全体に対する相対値だけで次数を判定する。絶対値1を下限にすると、
+  // 紙内のごく近い線から生じる小さい（ただし有効な）3次項を消してしまう。
+  while (
+    coeff.length > 1 &&
+    Math.abs(coeff[coeff.length - 1]) <= 64 * Number.EPSILON * scale
+  ) {
+    coeff.pop();
+  }
+  const degree = coeff.length - 1;
+  let roots: number[] = [];
+  if (degree === 1) {
+    roots = [-coeff[0] / coeff[1]];
+  } else if (degree === 2) {
+    const [c, b, a] = coeff;
+    const disc = b * b - 4 * a * c;
+    const tol =
+      64 * Number.EPSILON *
+      Math.max(Number.MIN_VALUE, Math.abs(b * b), Math.abs(4 * a * c));
+    if (disc >= -tol) {
+      const s = Math.sqrt(Math.max(0, disc));
+      roots = s <= Math.sqrt(tol) ? [-b / (2 * a)] : [(-b - s) / (2 * a), (-b + s) / (2 * a)];
+    }
+  } else if (degree === 3) {
+    const [d, c, b, a] = coeff;
+    const aa = b / a;
+    const bb = c / a;
+    const cc = d / a;
+    const p = bb - (aa * aa) / 3;
+    const q = (2 * aa * aa * aa) / 27 - (aa * bb) / 3 + cc;
+    const disc = (q * q) / 4 + (p * p * p) / 27;
+    // 判別式は近接した3実根で非常に小さくなる。ここへ絶対値1の床を置くと、
+    // 負の判別式を0とみなして2解を落とすため、構成項の丸め誤差だけを許容する。
+    const tol =
+      64 * Number.EPSILON *
+      Math.max(Number.MIN_VALUE, Math.abs((q * q) / 4), Math.abs((p * p * p) / 27));
+    if (disc > tol) {
+      const s = Math.sqrt(disc);
+      roots = [Math.cbrt(-q / 2 + s) + Math.cbrt(-q / 2 - s) - aa / 3];
+    } else if (disc >= -tol) {
+      const u = Math.cbrt(-q / 2);
+      roots = [2 * u - aa / 3, -u - aa / 3];
+    } else {
+      const radius = 2 * Math.sqrt(-p / 3);
+      const den = 2 * Math.sqrt(-(p * p * p) / 27);
+      const angle = Math.acos(Math.max(-1, Math.min(1, -q / den)));
+      roots = [0, 1, 2].map(
+        (k) => radius * Math.cos((angle + 2 * Math.PI * k) / 3) - aa / 3,
+      );
+    }
+  }
+
+  // 閉形式で得た値を元の係数へ戻して磨く。選択座標自体は一切丸めない。
+  const refined = roots.map((initial) => {
+    let x = initial;
+    for (let i = 0; i < 6; i++) {
+      const dy = polyDerivativeValue(coeff, x);
+      if (!Number.isFinite(dy) || Math.abs(dy) <= 1e-14) break;
+      const next = x - polyValue(coeff, x) / dy;
+      if (!Number.isFinite(next)) break;
+      x = next;
+    }
+    return x;
+  });
+  return uniqueRoots(refined);
+}
+
+interface NormalFold {
+  line: FoldLine;
+  n: Vec2;
+  c: number;
+}
+
+function canonicalNormal(n: Vec2, c: number): { n: Vec2; c: number } {
+  if (n[0] < -ALIGN_EPS || (Math.abs(n[0]) <= ALIGN_EPS && n[1] < 0)) {
+    return { n: [-n[0], -n[1]], c: -c };
+  }
+  return { n, c };
+}
+
+/**
+ * 法線nの向きを固定したとき、2組の「点→線」を同時に満たす折り線を作る。
+ * 各条件から折り線 n・x=c のcを独立に求め、一致と反射後の距離を再検算する。
+ */
+function simultaneousCandidate(
+  normal: Vec2,
+  p1: Vec2,
+  l1: FoldLine,
+  e1: LineEquation,
+  p2: Vec2,
+  l2: FoldLine,
+  e2: LineEquation,
+): NormalFold | null {
+  const length = Math.hypot(normal[0], normal[1]);
+  if (length < ALIGN_EPS) return null;
+  const n: Vec2 = [normal[0] / length, normal[1] / length];
+
+  const offset = (p: Vec2, e: LineEquation): number | null | undefined => {
+    const delta = dot(e.n, p) - e.d;
+    const den = dot(e.n, n);
+    if (Math.abs(den) <= ALIGN_EPS) {
+      // 焦点が既に線上ならこの条件はcを拘束しない。それ以外はこの向きでは不可能。
+      return Math.abs(delta) <= ALIGN_EPS ? null : undefined;
+    }
+    return dot(n, p) - delta / (2 * den);
+  };
+
+  const c1 = offset(p1, e1);
+  const c2 = offset(p2, e2);
+  if (c1 === undefined || c2 === undefined || (c1 === null && c2 === null)) return null;
+  if (c1 !== null && c2 !== null && Math.abs(c1 - c2) > 2e-7) return null;
+  const c = c1 === null ? c2! : c2 === null ? c1 : (c1 + c2) / 2;
+  const base = mul(n, c);
+  const fold = segmentAt(base, [-n[1], n[0]], 1);
+  const q1 = reflectPointAcrossFold(p1, fold);
+  const q2 = reflectPointAcrossFold(p2, fold);
+  if (!q1 || !q2 || distanceToLine(l1, q1) > 2e-7 || distanceToLine(l2, q2) > 2e-7) {
+    return null;
+  }
+  if (
+    Math.hypot(q1[0] - p1[0], q1[1] - p1[1]) <= ALIGN_EPS &&
+    Math.hypot(q2[0] - p2[0], q2[1] - p2[1]) <= ALIGN_EPS
+  ) {
+    return null;
+  }
+  const canonical = canonicalNormal(n, c);
+  return { line: fold, ...canonical };
+}
+
+/**
+ * 藤田・羽鳥6: p1をl1へ、同時にp2をl2へ重ねる折り線(0〜3本)。
+ *
+ * 折り線を n・x=c、各合わせ先を mi・x=di とすると、反射条件は
+ *   δi|n|² - 2(mi・n)(n・pi-c)=0,  δi=mi・pi-di
+ * になる。n=(1,t)として2条件からcを消去すると3次方程式なので、その全実根と
+ * n=(0,1)(無限遠の根)を調べる。最後に実際に2点を反射して両直線への距離を検算する。
+ */
+export function foldTwoPointsOntoTwoLines(
+  p1: Vec2,
+  l1: FoldLine,
+  p2: Vec2,
+  l2: FoldLine,
+): FoldLine[] {
+  const e1 = lineEquation(l1);
+  const e2 = lineEquation(l2);
+  if (!e1 || !e2) return [];
+  const delta1 = dot(e1.n, p1) - e1.d;
+  const delta2 = dot(e2.n, p2) - e2.d;
+  const a: Polynomial = [e1.n[0], e1.n[1]];
+  const b: Polynomial = [e2.n[0], e2.n[1]];
+  const displacement: Polynomial = [p1[0] - p2[0], p1[1] - p2[1]];
+  // 2(n・(p1-p2))(m1・n)(m2・n) - |n|²(δ1(m2・n)-δ2(m1・n)) = 0
+  const cubic = polySub(
+    polyScale(polyMul(polyMul(displacement, a), b), 2),
+    polyMul([1, 0, 1], polySub(polyScale(b, delta1), polyScale(a, delta2))),
+  );
+
+  const candidates: NormalFold[] = [];
+  const addCandidate = (normal: Vec2) => {
+    const candidate = simultaneousCandidate(normal, p1, l1, e1, p2, l2, e2);
+    if (!candidate) return;
+    const duplicate = candidates.some(
+      (other) =>
+        Math.hypot(other.n[0] - candidate.n[0], other.n[1] - candidate.n[1]) <= 2e-7 &&
+        Math.abs(other.c - candidate.c) <= 2e-7,
+    );
+    if (!duplicate) candidates.push(candidate);
+  };
+  for (const t of realPolynomialRoots(cubic)) addCandidate([1, t]);
+  // n.x=0 は t=∞に当たり、通常の3次方程式の有限根には現れない。
+  addCandidate([0, 1]);
+  return candidates.map((candidate) => candidate.line);
+}
+
+/**
+ * 藤田・羽鳥7: pをtargetへ重ね、折り目をperpendicularToに垂直にする。
+ * pの移動先は「pを通りperpendicularToと平行な線」とtargetの交点で一意に決まる。
+ */
+export function foldPointOntoLinePerpendicular(
+  p: Vec2,
+  target: FoldLine,
+  perpendicularTo: FoldLine,
+): FoldLine | null {
+  const u = unitDir(perpendicularTo);
+  if (!u) return null;
+  const destination = lineIntersection([p, add(p, u)], target);
+  if (!destination) return null;
+  return perpendicularBisector(p, destination);
+}
+
 /** 折り線を長さ2*halfの線分へ伸ばす(向きと乗っている直線は変えない)。
  * 下見の表示と可動側の判定を安定させるため、解はすべて紙より長くしておく */
 export function extendLine(line: FoldLine, half = 1): FoldLine {
@@ -211,7 +511,20 @@ export function solveAlign(
   const need = ALIGN_STEPS[mode].length;
   if (picks.length < need) return { lines: [], reason: null };
   let lines: FoldLine[];
-  if (mode === "pointPoint" && picks[0].kind === "point" && picks[1].kind === "point") {
+  if (
+    mode === "throughTwoPoints" &&
+    picks[0].kind === "point" &&
+    picks[1].kind === "point"
+  ) {
+    const line = lineThroughPoints(picks[0].p, picks[1].p);
+    if (!line)
+      return { lines: [], reason: "2つの点が同じ位置です。別の点を選んでください" };
+    lines = [line];
+  } else if (
+    mode === "pointPoint" &&
+    picks[0].kind === "point" &&
+    picks[1].kind === "point"
+  ) {
     const b = perpendicularBisector(picks[0].p, picks[1].p);
     if (!b) return { lines: [], reason: "2つの点が同じ位置です。別の点を選んでください" };
     lines = [b];
@@ -219,6 +532,15 @@ export function solveAlign(
     lines = angleBisectors([picks[0].a, picks[0].b], [picks[1].a, picks[1].b]);
     if (lines.length === 0)
       return { lines: [], reason: "選んだ線の長さが0です。別の線を選んでください" };
+  } else if (
+    mode === "pointPerpendicularLine" &&
+    picks[0].kind === "point" &&
+    picks[1].kind === "line"
+  ) {
+    const line = perpendicularThroughPoint(picks[0].p, [picks[1].a, picks[1].b]);
+    if (!line)
+      return { lines: [], reason: "選んだ線の長さが0です。別の線を選んでください" };
+    lines = [line];
   } else if (
     mode === "pointLineThrough" &&
     picks[0].kind === "point" &&
@@ -232,6 +554,46 @@ export function solveAlign(
         reason:
           "この点を通る折り方では届きません(折り目が通る点をもっと線の近くに選んでください)",
       };
+  } else if (
+    mode === "pointToLinePointToLine" &&
+    picks[0].kind === "point" &&
+    picks[1].kind === "line" &&
+    picks[2].kind === "point" &&
+    picks[3].kind === "line"
+  ) {
+    lines = foldTwoPointsOntoTwoLines(
+      picks[0].p,
+      [picks[1].a, picks[1].b],
+      picks[2].p,
+      [picks[3].a, picks[3].b],
+    );
+    if (lines.length === 0)
+      return {
+        lines: [],
+        reason: "この2組を同時に合わせる折り目はありません。別の点や線を選んでください",
+      };
+  } else if (
+    mode === "pointLinePerpendicular" &&
+    picks[0].kind === "point" &&
+    picks[1].kind === "line" &&
+    picks[2].kind === "line"
+  ) {
+    const line = foldPointOntoLinePerpendicular(
+      picks[0].p,
+      [picks[1].a, picks[1].b],
+      [picks[2].a, picks[2].b],
+    );
+    if (!line)
+      return {
+        lines: [],
+        reason: "点を合わせながら垂直にできません。別の点や線を選んでください",
+      };
+    lines = [line];
+  } else if (mode === "existingLine" && picks[0].kind === "line") {
+    const line: FoldLine = [picks[0].a, picks[0].b];
+    if (!unitDir(line))
+      return { lines: [], reason: "選んだ線の長さが0です。別の線を選んでください" };
+    lines = [line];
   } else {
     return { lines: [], reason: "選んだ対象の種類が合いません。やり直してください" };
   }

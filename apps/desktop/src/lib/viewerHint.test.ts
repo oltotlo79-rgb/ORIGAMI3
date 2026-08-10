@@ -183,15 +183,40 @@ describe("viewerHint", () => {
 });
 
 describe("合わせて折るの案内", () => {
-  it("点を線に合わせるときは、3つの選択を順に案内する", () => {
-    const base = { ...READY, alignMode: "pointLineThrough" as const };
-    expect(viewerHint({ ...base, alignPickCount: 0 })).toContain(
-      "線に合わせたい点",
-    );
-    expect(viewerHint({ ...base, alignPickCount: 1 })).toContain("合わせ先の線");
-    expect(viewerHint({ ...base, alignPickCount: 2 })).toContain(
-      "折り目が通る点",
-    );
+  it.each([
+    ["throughTwoPoints", ["折り目が通る1つ目の点", "折り目が通る2つ目の点"]],
+    ["pointPoint", ["1つ目の点(動かす方)", "2つ目の点(合わせ先)"]],
+    ["lineLine", ["1つ目の線(動かす方)", "2つ目の線(合わせ先)"]],
+    ["pointPerpendicularLine", ["折り目が通る点", "折り目を垂直にする線"]],
+    ["pointLineThrough", ["線に合わせたい点", "合わせ先の線", "折り目が通る点"]],
+    [
+      "pointToLinePointToLine",
+      [
+        "線に合わせたい1つ目の点",
+        "1つ目の合わせ先の線",
+        "線に合わせたい2つ目の点",
+        "2つ目の合わせ先の線",
+      ],
+    ],
+    [
+      "pointLinePerpendicular",
+      ["線に合わせたい点", "点の合わせ先の線", "折り目を垂直にする線"],
+    ],
+    ["existingLine", ["折り目にする既存の線"]],
+  ] as const)("%sの選択を順に案内する", (alignMode, prompts) => {
+    for (const [alignPickCount, prompt] of prompts.entries()) {
+      expect(
+        viewerHint({ ...READY, alignMode, alignPickCount }),
+      ).toContain(prompt);
+    }
+    expect(
+      viewerHint({
+        ...READY,
+        alignMode,
+        alignPickCount: prompts.length,
+        alignSolutionCount: 1,
+      }),
+    ).toContain("折り線が決まりました");
   });
 
   it("選び始めたら、取り消しのキーを常に添える", () => {
@@ -213,6 +238,17 @@ describe("合わせて折るの案内", () => {
     });
     expect(hint).toContain("解が2つ");
     expect(hint).toContain("折る");
+  });
+
+  it("公理6で解が3つあるときは実際の本数を伝える", () => {
+    const hint = viewerHint({
+      ...READY,
+      alignMode: "pointToLinePointToLine",
+      alignPickCount: 4,
+      alignSolutionCount: 3,
+    });
+    expect(hint).toContain("解が3つ");
+    expect(hint).toContain("別の解");
   });
 
   it("折れないときは理由をそのまま出す", () => {

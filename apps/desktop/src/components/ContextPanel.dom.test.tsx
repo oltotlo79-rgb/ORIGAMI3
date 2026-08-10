@@ -15,6 +15,7 @@ import { ContextPanel } from "./ContextPanel";
 import { resetPoseThrottle, useAppStore } from "../store/appStore";
 import type { Document } from "../lib/types";
 import { DEFAULT_CURVE } from "../lib/curve";
+import { ALIGN_LABELS } from "../lib/alignFold";
 
 vi.mock("../ipc/client", () => ({
   sequenceApply: vi.fn(),
@@ -729,17 +730,27 @@ function seedAlign(mode: "pointPoint" | "lineLine") {
 }
 
 describe("合わせて折る(パネル)", () => {
-  it("折るツールのときだけ3つの合わせ方を出す", () => {
+  it("折るツールのときだけ8つの合わせ方を出す", () => {
     seed(new Map());
     useAppStore.setState({ activeTool: "fold" });
     render(<ContextPanel />);
-    expect(screen.getByRole("button", { name: "点と点を合わせる" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "線と線を合わせる" })).toBeTruthy();
+    const choices = screen.getByRole("group", { name: "折り目の決め方" });
+    expect(within(choices).getAllByRole("button")).toHaveLength(8);
+    for (const label of Object.values(ALIGN_LABELS)) {
+      expect(within(choices).getByRole("button", { name: label })).toBeTruthy();
+    }
+
+    fireEvent.click(
+      within(choices).getByRole("button", {
+        name: ALIGN_LABELS.throughTwoPoints,
+      }),
+    );
+    expect(useAppStore.getState().alignDraft?.mode).toBe("throughTwoPoints");
     cleanup();
 
     useAppStore.setState({ activeTool: "select" });
     render(<ContextPanel />);
-    expect(screen.queryByRole("button", { name: "点と点を合わせる" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "折り目の決め方" })).toBeNull();
   });
 
   it("選択の途中経過を出し、そろうと既存の折り確定UI(山谷・折る)が出る", () => {
