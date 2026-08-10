@@ -1056,14 +1056,14 @@ mod tests {
                 display: ori3_model::DisplaySettings {
                     front_color: [0, 128, 255],
                     back_color: [16, 16, 16],
-                    grid_divisions: 16,
+                    grid_divisions: 1024,
                     ..Default::default()
                 },
             })
             .unwrap();
         assert_eq!(view.doc.display.front_color, [0, 128, 255]);
         assert_eq!(view.doc.display.back_color, [16, 16, 16]);
-        assert_eq!(view.doc.display.grid_divisions, 16);
+        assert_eq!(view.doc.display.grid_divisions, 1024);
         assert!(view.warnings.is_empty(), "warnings={:?}", view.warnings);
         assert!(store.is_dirty(), "作品が変わったので未保存になる");
 
@@ -1092,8 +1092,8 @@ mod tests {
             .unwrap();
         assert_eq!(view.doc.display.grid_divisions, MIN_GRID_DIVISIONS);
 
-        // undoを3回で元の見た目へ戻る
-        for _ in 0..3 {
+        // 上限超過はすでに1024なので履歴を増やさず、実際に変わった2回を戻す
+        for _ in 0..2 {
             store.undo().unwrap();
         }
         assert_eq!(store.doc.display, before);

@@ -59,7 +59,7 @@ export function softOf(display: DisplaySettings): SoftSettings {
 
 /** 方眼の分割数の下限・上限(CPE-003) */
 export const MIN_DIVISIONS = 2;
-export const MAX_DIVISIONS = 128;
+export const MAX_DIVISIONS = 1024;
 
 /** 2D区画の幅の割合の既定値と可動範囲(UI-004) */
 export const DEFAULT_SPLIT_RATIO = 0.5;

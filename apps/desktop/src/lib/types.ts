@@ -232,7 +232,7 @@ export type EditOp =
   | { type: "ReplaceCreasePattern"; cp: CreasePattern }
   /** 紙の色と方眼の分割数(PAP-003 / CPE-003)。作品ごとの設定として
    * .ori3ファイルに保存され、元に戻す/やり直しの対象になる。
-   * grid_divisionsが2〜128の外ならRust側が丸めて警告を返す */
+   * grid_divisionsが2〜1024の外ならRust側が丸めて警告を返す */
   | { type: "SetDisplay"; display: DisplaySettings };
 
 /** sequence_apply の操作(serde内部タグ形式) */

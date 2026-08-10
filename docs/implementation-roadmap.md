@@ -210,7 +210,7 @@ pub enum EditOp {
     SetPaper { paper: Paper },
     /// 提案ウィザードの流し込み用
     ReplaceCreasePattern { cp: CreasePattern },
-    /// 紙の色・方眼の分割数(作品ごとの設定。undo/redo対象。分割数2〜64外は丸めて警告)
+    /// 紙の色・方眼の分割数(作品ごとの設定。undo/redo対象。分割数2〜1024外は丸めて警告)
     SetDisplay { display: DisplaySettings },
 }
 

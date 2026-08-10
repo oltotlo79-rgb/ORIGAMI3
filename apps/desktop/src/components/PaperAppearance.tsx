@@ -64,7 +64,7 @@ export const PAPER_COLOR_PALETTE = [
 ] as const;
 
 /** よく使う方眼。任意入力への近道であり、これ以外の数も指定できる。 */
-export const GRID_DIVISION_PRESETS = [4, 8, 12, 16, 24, 32] as const;
+export const GRID_DIVISION_PRESETS = [4, 8, 12, 16, 24, 32, 64, 128, 256] as const;
 
 function paletteMarkColor(hex: string): "#ffffff" | "#27213d" {
   const rgb = hexToRgb(hex);

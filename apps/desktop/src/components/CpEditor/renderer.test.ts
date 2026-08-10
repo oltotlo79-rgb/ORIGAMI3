@@ -1,12 +1,14 @@
 // 展開図を拡大したときに出す、右端・下端の位置バーの幾何テスト。
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Document, Vec2 } from "../../lib/types";
 import { paperExtent } from "./snap";
 import {
   deriveAxisPositionBar,
   deriveViewportPositionBars,
+  drawGrid,
   fitView,
+  gridDrawStride,
   type ViewTransform,
 } from "./renderer";
 
@@ -51,6 +53,51 @@ function centeredView(doc: Document, widthPx: number, heightPx: number, scale: n
     offsetY: (heightPx + paperHeight * scale) / 2,
   } satisfies ViewTransform;
 }
+
+function gridContext() {
+  const beginPath = vi.fn();
+  const moveTo = vi.fn();
+  const lineTo = vi.fn();
+  const stroke = vi.fn();
+  const ctx = {
+    beginPath,
+    moveTo,
+    lineTo,
+    stroke,
+    setLineDash: vi.fn(),
+    strokeStyle: "",
+    lineWidth: 0,
+  } as unknown as CanvasRenderingContext2D;
+  return { ctx, beginPath, moveTo, lineTo, stroke };
+}
+
+describe("高密度方眼の間引き", () => {
+  it("線間隔2pxを境に1→8→64本ごとへ切り替える", () => {
+    expect(gridDrawStride(1024, 2048)).toBe(1);
+    expect(gridDrawStride(1024, 2047)).toBe(8);
+    expect(gridDrawStride(1024, 256)).toBe(8);
+    expect(gridDrawStride(1024, 255)).toBe(64);
+  });
+
+  it("1024等分を1 Path・1 strokeで描き、拡大すると全細線を戻す", () => {
+    const doc = paperDoc();
+    doc.display.grid_divisions = 1024;
+
+    const thinned = gridContext();
+    drawGrid(thinned.ctx, doc, { scale: 1024, offsetX: 0, offsetY: 1024 }, [255, 255, 255]);
+    expect(thinned.beginPath).toHaveBeenCalledTimes(1);
+    expect(thinned.moveTo).toHaveBeenCalledTimes(254);
+    expect(thinned.lineTo).toHaveBeenCalledTimes(254);
+    expect(thinned.stroke).toHaveBeenCalledTimes(1);
+
+    const zoomed = gridContext();
+    drawGrid(zoomed.ctx, doc, { scale: 2048, offsetX: 0, offsetY: 2048 }, [255, 255, 255]);
+    expect(zoomed.beginPath).toHaveBeenCalledTimes(1);
+    expect(zoomed.moveTo).toHaveBeenCalledTimes(2046);
+    expect(zoomed.lineTo).toHaveBeenCalledTimes(2046);
+    expect(zoomed.stroke).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("位置バー1軸の導出", () => {
   it("表示割合をつまみの長さ、スクロール進捗を位置にする", () => {

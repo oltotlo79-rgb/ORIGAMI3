@@ -197,7 +197,7 @@ pub struct MotionPart {
 /// 方眼の分割数の下限・上限(CPE-003)。範囲外の指定は丸めて警告する
 /// (「止めずに警告」原則)。色は `u8` なので0〜255は型が保証する。
 pub const MIN_GRID_DIVISIONS: u32 = 2;
-pub const MAX_GRID_DIVISIONS: u32 = 128;
+pub const MAX_GRID_DIVISIONS: u32 = 1024;
 
 /// 紙の硬さの既定値(SIM-012)。古い作品ファイルにはこの項目が無いので既定で読む。
 fn default_stiffness() -> f64 {

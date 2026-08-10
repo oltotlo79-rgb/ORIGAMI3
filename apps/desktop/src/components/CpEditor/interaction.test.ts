@@ -138,6 +138,23 @@ describe("平らに畳めない点", () => {
   });
 });
 
+describe("方眼吸着の画面距離", () => {
+  it("1024等分でもズーム倍率によらず画面上12px以内だけ吸着する", () => {
+    for (const scale of [32768, 65536]) {
+      const { ctx } = makeCtx();
+      ctx.doc.display.grid_divisions = 1024;
+      ctx.view = { scale, offsetX: 0, offsetY: scale };
+      const centerScreen: Vec2 = [scale / 2, scale / 2];
+
+      onMouseMove(ctx, [centerScreen[0] + 11, centerScreen[1]]);
+      expect(ctx.state.hoverSnap).toEqual({ pos: [0.5, 0.5], kind: "grid" });
+
+      onMouseMove(ctx, [centerScreen[0] + 13, centerScreen[1]]);
+      expect(ctx.state.hoverSnap).toBeNull();
+    }
+  });
+});
+
 describe("Ctrl+クリック・矩形での複数選択", () => {
   /** 選択ツールで、修飾キーを押したまま1回クリックする。 */
   function ctrlClick(ctx: InteractionCtx, world: Vec2): void {

@@ -64,6 +64,32 @@ export const LINE_WIDTHS = {
   preview: 1.5,
 } as const;
 
+/** 方眼が黒く潰れないための最小表示間隔(CSS px)。 */
+export const MIN_GRID_SPACING_PX = 2;
+/** 細線を隠したときに残す大きな区切り。1→8→64→512本ごとに切り替える。 */
+export const GRID_MAJOR_STEP = 8;
+
+/**
+ * 方眼を何本ごとに描くかを、紙の表示幅と等分数から決める。
+ * 拡大して元の間隔が2px以上になれば1へ戻り、すべての細線が再び現れる。
+ */
+export function gridDrawStride(divisions: number, paperWidthPx: number): number {
+  if (
+    !Number.isFinite(divisions) ||
+    divisions <= 1 ||
+    !Number.isFinite(paperWidthPx) ||
+    paperWidthPx <= 0
+  ) {
+    return 1;
+  }
+  const baseSpacingPx = paperWidthPx / divisions;
+  let stride = 1;
+  while (baseSpacingPx * stride < MIN_GRID_SPACING_PX && stride < divisions) {
+    stride *= GRID_MAJOR_STEP;
+  }
+  return stride;
+}
+
 /** 線の下に敷く縁取りの太さ(線幅にこれだけ足す) */
 export const HALO_EXTRA_WIDTH = 2;
 
@@ -314,7 +340,7 @@ function strokeSegment(
   ctx.stroke();
 }
 
-function drawGrid(
+export function drawGrid(
   ctx: CanvasRenderingContext2D,
   doc: Document,
   view: ViewTransform,
@@ -327,18 +353,25 @@ function drawGrid(
   ctx.strokeStyle = cssRgb(gridColor(fill));
   ctx.lineWidth = LINE_WIDTHS.grid;
   ctx.setLineDash([]);
-  // x方向・y方向とも同じ分割数(輪郭と重なる両端は描かない)。
-  // 128等分でも254線分を1つのPath/1回のstrokeへまとめ、描画呼び出しを増やさない。
+  // 紙の表示幅÷等分数が2px未満なら、8本・64本・512本ごとの大きな区切りだけを残す。
+  // どの粒度でも全線分を1つのPath/1回のstrokeへまとめ、描画呼び出しを増やさない。
+  const paperWidthPx = w * view.scale;
+  const paperHeightPx = h * view.scale;
+  const stride = gridDrawStride(n, paperWidthPx);
+  const left = view.offsetX;
+  const right = left + paperWidthPx;
+  const bottom = view.offsetY;
+  const top = bottom - paperHeightPx;
+  const stepX = paperWidthPx / n;
+  const stepY = paperHeightPx / n;
   ctx.beginPath();
-  for (let i = 1; i < n; i++) {
-    const x0 = worldToScreen(view, [(i * w) / n, 0]);
-    const x1 = worldToScreen(view, [(i * w) / n, h]);
-    const y0 = worldToScreen(view, [0, (i * h) / n]);
-    const y1 = worldToScreen(view, [w, (i * h) / n]);
-    ctx.moveTo(x0[0], x0[1]);
-    ctx.lineTo(x1[0], x1[1]);
-    ctx.moveTo(y0[0], y0[1]);
-    ctx.lineTo(y1[0], y1[1]);
+  for (let i = stride; i < n; i += stride) {
+    const x = left + i * stepX;
+    const y = bottom - i * stepY;
+    ctx.moveTo(x, bottom);
+    ctx.lineTo(x, top);
+    ctx.moveTo(left, y);
+    ctx.lineTo(right, y);
   }
   ctx.stroke();
 }

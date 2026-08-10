@@ -30,10 +30,11 @@ beforeEach(() => {
 });
 
 describe("見た目の好み", () => {
-  it("方眼の分割数は2〜128の整数に丸める", () => {
+  it("方眼の分割数は2〜1024の整数に丸める", () => {
     expect(clampDivisions(1)).toBe(2);
     expect(clampDivisions(100)).toBe(100);
-    expect(clampDivisions(200)).toBe(128);
+    expect(clampDivisions(1024)).toBe(1024);
+    expect(clampDivisions(2048)).toBe(1024);
     expect(clampDivisions(8.4)).toBe(8);
     expect(clampDivisions(Number.NaN)).toBe(DEFAULT_DISPLAY.grid_divisions);
   });
