@@ -2,6 +2,19 @@
 
 各タスク完了時に新しい記録を上に追記する。1件3〜10行以内(要件定義書NFR-006: 長文の経緯記録は禁止)。
 
+## 2026-08-11 - CIとpre-pushによる退行検知を追加
+
+- `main`へのpushとpull requestで、Windows上のRust test・Clippy・desktop build/lint/testを実行するCIを追加した。npmとCargo/targetのキャッシュを既存releaseワークフローに揃えた
+- `perf_soft`と`perf_miura`は別ジョブのreleaseビルドで実行し、ローカル実測でもsoft 2件・rigid 3件が合格した
+- `scripts/install-hooks.ps1`で`core.hooksPath=scripts/hooks`を設定し、pre-pushから全5検査を実行する。`SKIP_CHECK=1`の場合だけ警告付きで回避できる
+- 検証: YAML・sh・PowerShell構文に合格。存在しない`RUSTC`を一時指定したdry-run pushは終了1で停止し、同条件の`SKIP_CHECK=1`は終了0。`scripts/check.ps1`全5検査にも合格した
+
+## 2026-08-11 - 統括役と実作業役の共通規約を追加
+
+- `CLAUDE.md`を新設し、ClaudeとCodexの役割分担、委譲・監視、禁止事項、コミット、品質ゲート、設計規律、数値上限撤廃の9項目を理由付きで明文化した
+- `AGENTS.md`を新設し、コーディングエージェントが同じ規約を参照できるよう`CLAUDE.md`を正本として案内した
+- 文書3ファイルだけを変更し、アプリ、ブラウザ、gitは操作していない
+
 ## 2026-08-10 - 方眼の上限を1024等分へ拡張(CPE-003)
 
 - 方眼の任意入力を2〜1024等分へ広げ、64・128・256のプリセットとヘルプ・要件記述を追加した。既定8・画面上12pxの交点吸着・Zustandストア1本・常設4区画は維持した

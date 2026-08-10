@@ -162,6 +162,57 @@ pub fn point_in_face(cp: &CreasePattern, face: &Face, p: [f64; 2]) -> bool {
     point_in_polygon(&poly, DVec2::from(p))
 }
 
+/// Return the layers covering `point` in the folded plane, ordered bottom to top.
+///
+/// A face is tested after pulling the folded-plane point back through that
+/// face's placement.  This is the stable selection primitive needed by book
+/// instructions such as "the front four sheets" or "the second sheet from
+/// the front"; a slice of the global layer order is not sufficient when only
+/// some of those layers cover the indicated point.
+#[must_use]
+pub fn layers_at_point(
+    cp: &CreasePattern,
+    faces: &[Face],
+    state: &FlatState,
+    point: [f64; 2],
+) -> Vec<FaceId> {
+    let folded = DVec2::from(point);
+    state
+        .order
+        .iter()
+        .copied()
+        .filter(|face_id| {
+            let Some(face) = faces.iter().find(|face| face.id == *face_id) else {
+                return false;
+            };
+            let Some(placement) = state.placements.get(face_id) else {
+                return false;
+            };
+            let local = placement.inverse().apply(folded);
+            point_in_face(cp, face, [local.x, local.y])
+        })
+        .collect()
+}
+
+/// Select `count` local layers from the top, after skipping `skip` top layers.
+///
+/// The returned order is still bottom-to-top so it can be passed directly to
+/// layer-motion operations without silently reversing a packet.
+#[must_use]
+pub fn layers_from_top_at_point(
+    cp: &CreasePattern,
+    faces: &[Face],
+    state: &FlatState,
+    point: [f64; 2],
+    skip: usize,
+    count: usize,
+) -> Vec<FaceId> {
+    let layers = layers_at_point(cp, faces, state, point);
+    let end = layers.len().saturating_sub(skip);
+    let start = end.saturating_sub(count);
+    layers[start..end].to_vec()
+}
+
 /// 多角形の内部(境界からEPS以内を含む)に点があるか。
 fn point_in_polygon(poly: &[DVec2], p: DVec2) -> bool {
     on_boundary(poly, p) || crossing_number_is_odd(poly, p)

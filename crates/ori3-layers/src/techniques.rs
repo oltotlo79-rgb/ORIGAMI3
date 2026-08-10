@@ -47,8 +47,8 @@ use crate::flat_motion::{
 };
 use crate::flat_state::{FlatState, point_in_face, representative_point};
 use crate::fold_through::{
-    FoldDirection, FoldThroughInput, FoldThroughResult, TEAR_MARK, angle_of, faces_by_edge,
-    fold_through, push_driver_line, vertex_positions,
+    AUX_PROMOTION_WARNING_MARK, FoldDirection, FoldThroughInput, FoldThroughResult, TEAR_MARK,
+    angle_of, faces_by_edge, fold_through, push_driver_line, vertex_positions,
 };
 
 /// 面の配置の一致を見る許容誤差(等長変換の積み重ねで出る誤差より十分大きく取る)。
@@ -951,9 +951,10 @@ impl Session {
     ///
     /// `targets` が `None` なら可動側に掛かる全ての層が対象。
     ///
-    /// 途中の折りで出る「紙が裂けます」の警告は捨てる。技法は複数回の折りで
+    /// 途中の折りで出る「紙が裂けます」と補助線昇格の警告は捨てる。技法は複数回の折りで
     /// 1つの形を作るため、1回目だけを見ると必ず層のつながりが切れて見える
-    /// (最終形での裂けは [`Session::tear_warnings`] で改めて調べる)。
+    /// (最終形での裂けは [`Session::tear_warnings`] で改めて調べる)。補助線は技法が
+    /// 予定した折り筋として使うため、利用者向けの昇格通知は技法の警告に含めない。
     fn fold(
         &mut self,
         line: [[f64; 2]; 2],
@@ -1015,8 +1016,9 @@ impl Session {
         self.flipped = flipped;
         self.drivers.extend(res.step.drivers);
         self.added.extend(res.added_edges);
-        self.warnings
-            .extend(res.warnings.into_iter().filter(|w| !w.contains(TEAR_MARK)));
+        self.warnings.extend(res.warnings.into_iter().filter(|w| {
+            !w.contains(TEAR_MARK) && !w.starts_with(AUX_PROMOTION_WARNING_MARK)
+        }));
         Ok(plane_map.unwrap_or_else(Isometry2::identity))
     }
 

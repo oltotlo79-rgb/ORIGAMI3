@@ -22,6 +22,7 @@ import { FirstRunGuide } from "./components/FirstRunGuide";
 import { HelpCenter } from "./components/dialogs/HelpCenter";
 import { ThemeRoot } from "./components/ThemeRoot";
 import { uniqueWarnings } from "./lib/techniques";
+import { installCaptureApi } from "./captureApi";
 import "./App.css";
 
 const DEFAULT_PAPER = { width_mm: 150, height_mm: 150 };
@@ -55,6 +56,12 @@ function App() {
   useEffect(() => {
     void newDocument(DEFAULT_PAPER).then(() => checkRecovery());
   }, [newDocument, checkRecovery]);
+
+  // 解説画像の自動撮影口。DOM上のボタンは増やさず、WebView2/CDPからだけ使う。
+  useEffect(
+    () => installCaptureApi({ fit2d: fit2dRef, fit3d: fit3dRef }),
+    [fit2dRef, fit3dRef],
+  );
 
   const handleOpen = async () => {
     const path = await open({ filters: ORI3_FILTERS, multiple: false });

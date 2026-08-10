@@ -5,7 +5,9 @@ use std::collections::HashMap;
 use glam::DVec2;
 use ori3_cp::{Face, extract_faces, insert_segment};
 use ori3_geometry::Isometry2;
-use ori3_layers::flat_state::{FlatState, point_in_face, representative_point};
+use ori3_layers::flat_state::{
+    FlatState, layers_at_point, layers_from_top_at_point, point_in_face, representative_point,
+};
 use ori3_model::{CreasePattern, Document, EdgeKind, FaceId, Paper};
 
 /// 正方形(輪郭4辺のみ)のCPを作る。
@@ -103,6 +105,26 @@ fn half_folded_square_is_mirror_pair_with_right_face_on_top() {
     // (b) 層順序は[下面, 上面] = [左面, 右面]。
     assert_eq!(state.order, vec![left, right]);
     assert_eq!(*state.order.last().unwrap(), right, "折り返した右面が上");
+
+    assert_eq!(
+        layers_at_point(&cp, &faces, &state, [0.25, 0.5]),
+        vec![left, right],
+        "folded-plane point is covered by both local layers"
+    );
+    assert_eq!(
+        layers_from_top_at_point(&cp, &faces, &state, [0.25, 0.5], 0, 1),
+        vec![right],
+        "front sheet is selected from the local stack"
+    );
+    assert_eq!(
+        layers_from_top_at_point(&cp, &faces, &state, [0.25, 0.5], 1, 1),
+        vec![left],
+        "one skipped front sheet selects the second local sheet"
+    );
+    assert!(
+        layers_at_point(&cp, &faces, &state, [0.75, 0.5]).is_empty(),
+        "no folded layer covers the opposite half"
+    );
 }
 
 #[test]

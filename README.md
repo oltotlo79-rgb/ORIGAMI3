@@ -29,6 +29,8 @@ Windows Smart App Controlが有効な環境では、署名のないexeが完全�
 
 ### 開発者向け: リリース作成
 
+開発を始めるときは `scripts/install-hooks.ps1` を一度実行してください。
+
 1. `Cargo.toml` の `workspace.package.version`、`apps/desktop/package.json` と `apps/desktop/package-lock.json`、`apps/desktop/src-tauri/tauri.conf.json` の `version` を同じ値に更新してコミットする。
 2. `scripts/check.ps1` を実行し、全5検査が通ることを確認する。
 3. バージョンと同じタグを作成してpushする（例: `git tag v0.1.0`、`git push origin v0.1.0`）。

@@ -284,11 +284,21 @@ impl TriangleGrid {
         let mut cells = HashMap::new();
         let mut large = Vec::new();
         for (ti, &triangle) in triangles.iter().enumerate() {
+            let points = triangle.map(|vertex| pos[vertex as usize]);
+            // 頂点対拘束で十分に拾える小三角形は、候補になっても必ず後段で
+            // 除外される。格子への登録前に同じ条件で省き、無駄な候補走査を防ぐ。
+            let longest_side = (points[1] - points[0])
+                .length()
+                .max((points[2] - points[1]).length())
+                .max((points[0] - points[2]).length());
+            if longest_side < TRIANGLE_CELL * 8.0 {
+                continue;
+            }
             let mut min = DVec3::splat(f64::INFINITY);
             let mut max = DVec3::splat(f64::NEG_INFINITY);
-            for vertex in triangle {
-                min = min.min(pos[vertex as usize]);
-                max = max.max(pos[vertex as usize]);
+            for point in points {
+                min = min.min(point);
+                max = max.max(point);
             }
             let lo = Self::cell_of(min - DVec3::splat(SEARCH_RADIUS));
             let hi = Self::cell_of(max + DVec3::splat(SEARCH_RADIUS));
@@ -436,16 +446,6 @@ fn find_contacts(
                 return;
             }
             let points = triangle.map(|id| pos[id as usize]);
-            // 細分済みの小三角形は既存の頂点対拘束で十分に拾える。ここでは
-            // 頂点が互いに遠くなり得る大三角形だけを補い、同じ紙面を過剰に
-            // 二重拘束しないようにする。
-            let longest_side = (points[1] - points[0])
-                .length()
-                .max((points[2] - points[1]).length())
-                .max((points[0] - points[2]).length());
-            if longest_side < TRIANGLE_CELL * 8.0 {
-                return;
-            }
             let (nearest, _) = closest_point_on_triangle(p, points[0], points[1], points[2]);
             if (nearest - p).length() > SEARCH_RADIUS {
                 return;

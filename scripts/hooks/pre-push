@@ -1,0 +1,37 @@
+#!/bin/sh
+
+if [ "${SKIP_CHECK:-}" = "1" ]; then
+    printf '%s\n' '警告: SKIP_CHECK=1 のため検査を飛ばして push しました' >&2
+    exit 0
+fi
+
+hook_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+repo_root=$(CDPATH= cd -- "$hook_dir/../.." && pwd)
+check_script="$repo_root/scripts/check.ps1"
+
+if [ ! -f "$check_script" ]; then
+    printf '%s\n' "[NG] 検査スクリプトが見つからないため push を中止します: $check_script" >&2
+    exit 1
+fi
+
+if command -v powershell.exe >/dev/null 2>&1; then
+    powershell_command=powershell.exe
+elif command -v pwsh >/dev/null 2>&1; then
+    powershell_command=pwsh
+elif command -v powershell >/dev/null 2>&1; then
+    powershell_command=powershell
+else
+    printf '%s\n' '[NG] PowerShell が見つからないため push を中止します' >&2
+    exit 127
+fi
+
+"$powershell_command" -NoProfile -ExecutionPolicy Bypass -File "$check_script"
+check_status=$?
+
+if [ "$check_status" -ne 0 ]; then
+    printf '%s\n' "[NG] 事前検査が失敗したため push を中止します (終了コード: $check_status)" >&2
+    exit "$check_status"
+fi
+
+printf '%s\n' '[OK] 事前検査に合格しました'
+exit 0

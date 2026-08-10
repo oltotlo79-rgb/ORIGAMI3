@@ -1544,6 +1544,57 @@ input[type="radio"] {
   touch-action: none; /* ドラッグでの視点操作を優先する */
 }
 
+/*
+ * 解説画像の自動撮影時だけ、対象canvasをウィンドウ全面へ広げる。
+ * 属性はwindow.__origami3Captureが一時的に付けるため、通常UIには影響しない。
+ */
+html[data-origami3-capture-view] .app {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+html[data-origami3-capture-view] .app > .toolbar,
+html[data-origami3-capture-view] .app > .context-panel,
+html[data-origami3-capture-view] .app > .dialog-backdrop,
+html[data-origami3-capture-view] .app > .first-run-guide,
+html[data-origami3-capture-view] .tool-rail,
+html[data-origami3-capture-view] .pane-splitter,
+html[data-origami3-capture-view] .timeline {
+  display: none !important;
+}
+
+html[data-origami3-capture-view] .main-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) !important;
+  height: 100%;
+}
+
+html[data-origami3-capture-view] .pane,
+html[data-origami3-capture-view] .pane-3d-view {
+  width: 100%;
+  height: 100%;
+}
+
+html[data-origami3-capture-view] .pane-3d {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+html[data-origami3-capture-view="3d"] .pane-2d,
+html[data-origami3-capture-view="cp"] .pane-3d {
+  display: none;
+}
+
+html[data-origami3-capture-view="both"] .main-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+
+html[data-origami3-capture-view] .viewer-operation-hint,
+html[data-origami3-capture-view] .paper-action-tip,
+html[data-origami3-capture-view] .viewer-reset,
+html[data-origami3-capture-view] .status-badge,
+html[data-origami3-capture-view] .suspect-hinge-guide {
+  display: none !important;
+}
+
 /* 3D区画右上の警告/エラーバッジ */
 .status-badge {
   position: absolute;

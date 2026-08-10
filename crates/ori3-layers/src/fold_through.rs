@@ -39,6 +39,7 @@ pub use ori3_model::FoldDirection;
 
 /// 折り切り時の層矛盾、または巻き込みが必要な衝突を知らせる警告文。
 pub const FOLD_PENETRATION_WARNING: &str = "この折り方だと紙が突き抜けています";
+pub(crate) const AUX_PROMOTION_WARNING_MARK: &str = "折り線と重なっていた補助線";
 
 /// fold_throughの入力。座標は全て「畳んだ平面座標」。
 #[derive(Clone, Debug)]
@@ -130,8 +131,14 @@ pub fn fold_through(
     if !out.crossed_any {
         return Err("折り線がどの層の面も横切らず、既存の折り筋にも重なっていません".to_string());
     }
+    let promoted_aux_edges = out.promoted_aux_edges;
     let mut result = out.result;
     let mut warnings = resolved.warnings;
+    if promoted_aux_edges > 0 {
+        warnings.push(format!(
+            "{AUX_PROMOTION_WARNING_MARK}{promoted_aux_edges}本を折り線に変更しました"
+        ));
+    }
     warnings.append(&mut result.warnings);
     result.warnings = warnings;
     *cp = out.cp;
@@ -215,8 +222,14 @@ pub fn fold_through_with_additional_crease(
         _ => simple_out,
     };
 
+    let promoted_aux_edges = out.promoted_aux_edges;
     let mut result = out.result;
     let mut warnings = resolved.warnings;
+    if promoted_aux_edges > 0 {
+        warnings.push(format!(
+            "{AUX_PROMOTION_WARNING_MARK}{promoted_aux_edges}本を折り線に変更しました"
+        ));
+    }
     warnings.append(&mut result.warnings);
     if analysis.collision
         && !used_proposal

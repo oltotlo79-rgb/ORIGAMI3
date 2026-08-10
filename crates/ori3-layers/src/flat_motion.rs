@@ -99,6 +99,9 @@ pub enum MotionTransform {
 pub enum LayerTurn {
     /// 重なり順を変えない
     Keep,
+    /// Leave the layer order unchanged while assigning the requested sense to
+    /// a crease that is folded and immediately unfolded.
+    CreaseOnly(FoldDirection),
     /// 重なり全体のいちばん上(Up)/いちばん下(Down)へ回す(普通の折り)
     Outside(FoldDirection),
     /// 分かれた元の紙のすぐ上(Up)/すぐ下(Down)へ差し込む(中割り・かぶせ)
@@ -163,6 +166,26 @@ impl MotionPart {
         }
     }
 
+    /// Add a crease to the selected flap without changing its final placement
+    /// or its position in the layer stack.
+    pub fn crease_only(
+        layers: Vec<FaceId>,
+        line: [[f64; 2]; 2],
+        movable_point: [f64; 2],
+        direction: FoldDirection,
+    ) -> MotionPart {
+        MotionPart {
+            layers,
+            region: vec![HalfPlane {
+                line,
+                inside_point: movable_point,
+            }],
+            transform: MotionTransform::Stay,
+            turn: LayerTurn::CreaseOnly(direction),
+            reverse_layers: Some(false),
+        }
+    }
+
     /// 紙を動かさず、重なり順だけを変える。
     pub fn restack(layers: Vec<FaceId>, turn: LayerTurn) -> MotionPart {
         MotionPart {
@@ -213,6 +236,8 @@ pub(crate) struct MotionOutcome {
     /// 面の内部を横切って新しい折り線を引いたか、既存の折り筋を駆動したか。
     /// `fold_through` はどちらも有効な折り操作として受理する。
     pub crossed_any: bool,
+    /// この動きで折り線へ昇格した既存の補助線断片の数。
+    pub promoted_aux_edges: usize,
 }
 
 /// 半平面(内側が正になる符号付き距離を持つ)。
@@ -288,8 +313,8 @@ pub(crate) fn run_motion(
     // 最終的な線種で付け直すので、ここでは記録だけしておく。
     let mut cut_intervals: Vec<(DVec2, DVec2, EdgeKind)> = Vec::new();
     let mut warned_overlap: HashSet<EdgeId> = HashSet::new();
-    let mut promoted_aux = 0usize;
     let mut crossed_any = false;
+    let mut promoted_aux_edges = 0;
     let mut wvpos = vertex_positions(&work);
     for part in &parts {
         for f in faces.iter().filter(|f| part.layers.contains(&f.id)) {
@@ -368,7 +393,7 @@ pub(crate) fn run_motion(
                             {
                                 e.kind = kind;
                                 added.push(e.id);
-                                promoted_aux += 1;
+                                promoted_aux_edges += 1;
                             }
                         }
                     }
@@ -376,11 +401,7 @@ pub(crate) fn run_motion(
             }
         }
     }
-    if promoted_aux > 0 {
-        warnings.push(format!(
-            "折り線と重なっていた補助線{promoted_aux}本を折り線に変更しました"
-        ));
-    }
+
     added.sort_unstable();
     added.dedup();
     added.retain(|id| work.edges.iter().any(|e| e.id == *id));
@@ -499,6 +520,7 @@ pub(crate) fn run_motion(
             warnings,
         },
         crossed_any,
+        promoted_aux_edges,
     })
 }
 
@@ -587,6 +609,7 @@ fn resolve_part(
 
     let direction = match spec.turn {
         LayerTurn::Keep => None,
+        LayerTurn::CreaseOnly(direction) => Some(direction),
         LayerTurn::Outside(d) | LayerTurn::Inside(d) => Some(d),
         LayerTurn::Beside { direction, .. } => Some(direction),
     };
@@ -777,7 +800,7 @@ fn build_order(
             block.reverse();
         }
         match part.turn {
-            LayerTurn::Keep => {
+            LayerTurn::Keep | LayerTurn::CreaseOnly(_) => {
                 // 位置は変えず、部分の中の並びだけ差し替える
                 let slots: Vec<usize> = order
                     .iter()

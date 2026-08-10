@@ -608,6 +608,8 @@ interface AppState {
   applySequenceOp: (op: SeqOp) => Promise<void>;
   /** 表示する手順を選ぶ(0=折る前、null=最新)。再生中なら止める */
   selectStep: (step: number | null) => void;
+  /** 撮影用: 表示する手順を選び、立体の再計算が終わるまで待つ。 */
+  selectStepForCapture: (step: number) => Promise<void>;
   /** 表示する手順を前後に動かす(コマ送り) */
   stepBy: (delta: number) => void;
   /** 再生と一時停止を切り替える */
@@ -1263,6 +1265,35 @@ export const useAppStore = create<AppState>((set, get) => {
     });
   };
 
+  /**
+   * 手順表示を切り替え、バックエンドの再生結果まで待つ共通処理。
+   * 通常UIはこのPromiseを待たず、撮影APIだけが待つことで操作感を変えずに
+   * 「番号だけ先に変わり、立体は前の手順」という撮影競合を防ぐ。
+   */
+  const selectStepAndWait = async (step: number | null): Promise<void> => {
+    stopPlayback();
+    invalidateFoldThrough();
+    // 別の手順の形を見せる操作なので、その前の形の上に引いた折り線は捨てる
+    // (残すとコンテキストパネルに折りUIが出たままになり、手順の設定も出せない)
+    if (get().foldDraft) set({ foldDraft: null, alignDraft: null });
+    if (get().techniqueDraft) set({ techniqueDraft: null });
+    const s = get();
+    const total = s.doc?.sequence.length ?? 0;
+    if (total === 0) {
+      set({ currentStep: null, playT: 1 });
+      return;
+    }
+    const upTo = step === null ? total : Math.max(0, Math.min(step, total));
+    const next = step === null ? null : upTo;
+    // すでに同じ形を表示しているなら描き直しを頼まない
+    // (端で「次へ」を連打したときに、同じ要求が何度も飛ぶのを防ぐ)
+    if (s.currentStep === next && s.playT === 1) return;
+    set({ currentStep: next, playT: 1 });
+    // 最新(null)の形も再生で作る(DocumentViewのframeと同じ内容になる)。
+    // 途中まで折った表示から戻すときに、必ず最新の形へ描き直すため
+    await runReplay(upTo, 1);
+  };
+
   /** 手順のある作品では、立体表示は手順の再生結果で表す(角度スライダーは
    * 手順の無い作品の確認用)。
    * 最新表示中(currentStep=null)はviewに自動再生の結果(立体・飛ばした手順・
@@ -1750,28 +1781,10 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     selectStep: (step) => {
-      stopPlayback();
-      invalidateFoldThrough();
-      // 別の手順の形を見せる操作なので、その前の形の上に引いた折り線は捨てる
-      // (残すとコンテキストパネルに折りUIが出たままになり、手順の設定も出せない)
-      if (get().foldDraft) set({ foldDraft: null, alignDraft: null });
-      if (get().techniqueDraft) set({ techniqueDraft: null });
-      const s = get();
-      const total = s.doc?.sequence.length ?? 0;
-      if (total === 0) {
-        set({ currentStep: null, playT: 1 });
-        return;
-      }
-      const upTo = step === null ? total : Math.max(0, Math.min(step, total));
-      const next = step === null ? null : upTo;
-      // すでに同じ形を表示しているなら描き直しを頼まない
-      // (端で「次へ」を連打したときに、同じ要求が何度も飛ぶのを防ぐ)
-      if (s.currentStep === next && s.playT === 1) return;
-      set({ currentStep: next, playT: 1 });
-      // 最新(null)の形も再生で作る(DocumentViewのframeと同じ内容になる)。
-      // 途中まで折った表示から戻すときに、必ず最新の形へ描き直すため
-      void runReplay(upTo, 1);
+      void selectStepAndWait(step);
     },
+
+    selectStepForCapture: (step) => selectStepAndWait(step),
 
     stepBy: (delta) => {
       const s = get();

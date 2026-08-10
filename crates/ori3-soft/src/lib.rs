@@ -12,9 +12,19 @@
 //! たわみの状態は[`SoftSettings`]のパラメータとしてのみ扱い、頂点の位置そのものは
 //! 保存しない(SIM-015)。
 
+mod cup;
+mod curl;
 mod grid;
 mod solve;
 mod subdivide;
+mod symmetry;
+
+pub use cup::{RadialCupError, RadialCupReport, RadialCupSettings, radial_cup_vertices};
+pub use curl::{CurlError, CurlReport, CurlSettings, curl_vertices};
+pub use symmetry::{
+    HalfTurnSymmetryError, HalfTurnSymmetryReport, HalfTurnSymmetrySettings,
+    enforce_half_turn_symmetry,
+};
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -343,7 +353,13 @@ pub fn relax(
 
     let mut raw = subdivide::build_mesh(cp, faces, frame, 1 << sub);
     warnings.append(&mut raw.warnings);
-    if settings.enabled {
+    // 全三角形が同じ層なら、初期位置は伸び・曲げ拘束を既に満たし、層接触も
+    // 袋の空気圧も発生しない。細分網は返しつつ、結果を変えない拘束構築と反復を省く。
+    let has_multiple_layers = raw
+        .tri_layer
+        .windows(2)
+        .any(|layers| layers[0] != layers[1]);
+    if settings.enabled && has_multiple_layers {
         let c = solve::build(&raw, &raw.positions, stiffness, pressure, iterations);
         let broken = solve::run(&mut raw.positions, &raw.triangles, &c, iterations);
         if broken > 0 {

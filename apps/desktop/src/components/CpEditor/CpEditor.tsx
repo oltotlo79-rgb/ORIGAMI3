@@ -118,6 +118,9 @@ export function CpEditor({ fitRef }: Props) {
     }
     viewRef.current ??= fitView(doc, w, h);
     const st = stateRef.current;
+    const captureClean = document.documentElement.hasAttribute(
+      "data-origami3-capture-view",
+    );
     const kind = previewKind(activeTool);
     // 左右対称のときは対称軸を薄く出し、引いている最中の線も反対側に見せる
     const axisX = mirrorDraw ? mirrorAxisX(doc.paper) : null;
@@ -203,9 +206,36 @@ export function CpEditor({ fitRef }: Props) {
       hoveredHinge,
       suspectHinges,
     };
+    if (captureClean) {
+      // 撮影画像には作品そのものだけを残し、操作中だけの案内・強調を消す。
+      overlay.hoverSnap = null;
+      overlay.preview = null;
+      overlay.directionGuide = null;
+      overlay.mirrorAxis = null;
+      overlay.mirrorPreview = null;
+      overlay.previewPaths = [];
+      overlay.marquee = null;
+      overlay.violations = [];
+      overlay.constructPoints = [];
+      overlay.hint = null;
+      overlay.tooltip = null;
+      overlay.vertexDrag = null;
+      overlay.suggestedCreases = undefined;
+      overlay.hoveredHinge = null;
+      overlay.suspectHinges = [];
+    }
     const ctx2d = canvas.getContext("2d");
     if (ctx2d) {
-      render(ctx2d, w, h, dpr, doc, viewRef.current, selection, overlay);
+      render(
+        ctx2d,
+        w,
+        h,
+        dpr,
+        doc,
+        viewRef.current,
+        captureClean ? { edgeIds: [], vertexIds: [] } : selection,
+        overlay,
+      );
     }
   }, []);
 

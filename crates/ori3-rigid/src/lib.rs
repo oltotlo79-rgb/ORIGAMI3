@@ -4,6 +4,8 @@ pub mod intersect;
 pub mod motion;
 pub mod seam;
 pub mod solver;
+pub mod support;
+pub mod symmetry;
 pub mod tree;
 
 pub use intersect::{
@@ -13,4 +15,12 @@ pub use intersect::{
 pub use motion::{MotionSolveResult, solve_motion};
 pub use seam::max_seam_gap;
 pub use solver::{SolveResult, solve, solve_near};
+pub use support::{
+    DEFAULT_SUPPORT_TOLERANCE, SupportError, SupportPlane, ThreePointSupport, three_point_support,
+    three_point_support_with_tolerance,
+};
+pub use symmetry::{
+    DEFAULT_REFLECTION_ANGLE_TOLERANCE_DEG, DEFAULT_REFLECTION_PROJECTIONS,
+    ReflectionSymmetryError, ReflectionSymmetrySolveResult, solve_near_with_reflection_symmetry,
+};
 pub use tree::{FoldedFrame, propagate, to_frame3d};
