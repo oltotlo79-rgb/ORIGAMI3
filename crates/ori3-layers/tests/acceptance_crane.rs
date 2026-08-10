@@ -45,6 +45,7 @@ use ori3_layers::{
     FlatState, FoldThroughResult, flat_state_at, inside_reverse, petal, replay, squash,
 };
 use ori3_model::{CreasePattern, Document, Driver, EdgeKind, FaceId, Paper};
+use ori3_rigid::max_seam_gap;
 
 /// 紙の中心から細い先までの距離(鶴の基本形。1 - √2/2)。
 const CORE: f64 = 1.0 - 0.5 * std::f64::consts::SQRT_2;
@@ -436,48 +437,6 @@ fn assert_fold_senses(doc: &Document, label: &str) {
     assert!(checked > 0, "{label}: 折られた折り目が1本も無い");
 }
 
-/// 折り途中(t<1)も含めて、折り目でつながった面が離れていないことを確かめる。
-///
-/// 折り目の両端の頂点を、その折り目を共有する2つの面それぞれの3D多角形から読み、
-/// 同じ位置に来ているかを見る。離れていたら紙がちぎれている(内部頂点まわりの
-/// ループ閉包が破れている)。
-/// 折り目でつながった2面の、その折り目の端点の3D位置のずれの最大値。
-pub fn tear_of(doc: &Document, faces: &[Face], frame: &ori3_model::Frame3D) -> f64 {
-    let poly: HashMap<FaceId, &Vec<[f64; 3]>> =
-        frame.faces.iter().map(|f| (f.face, &f.polygon)).collect();
-    let mut edge_faces: HashMap<u32, Vec<&Face>> = HashMap::new();
-    for f in faces {
-        let mut ids = f.edges.clone();
-        ids.sort_unstable();
-        ids.dedup();
-        for eid in ids {
-            edge_faces.entry(eid).or_default().push(f);
-        }
-    }
-    let mut worst = 0.0f64;
-    for e in &doc.cp.edges {
-        let Some(fs) = edge_faces.get(&e.id) else {
-            continue;
-        };
-        if fs.len() != 2 || fs[0].id == fs[1].id {
-            continue;
-        }
-        for v in [e.v0, e.v1] {
-            let pts: Vec<DVec3> = fs
-                .iter()
-                .filter_map(|f| {
-                    let i = f.vertices.iter().position(|&x| x == v)?;
-                    Some(DVec3::from(poly.get(&f.id)?[i]))
-                })
-                .collect();
-            if pts.len() == 2 {
-                worst = worst.max((pts[0] - pts[1]).length());
-            }
-        }
-    }
-    worst
-}
-
 /// 折り上がりが平ら(全ての面がz=0に乗る)ことを確かめる。
 fn assert_flat(doc: &Document, label: &str) {
     let result = replay(doc, doc.sequence.len(), 1.0);
@@ -832,13 +791,53 @@ fn crane_paper_stays_connected_while_folding() {
         for k in 1..=8 {
             let t = f64::from(k) / 8.0;
             let frame = replay(&doc, up_to, t).frame;
-            let gap = tear_of(&doc, &faces, &frame);
+            let gap = max_seam_gap(&doc.cp, &faces, &frame);
             assert!(
                 gap < 1e-6,
                 "折り鶴(手順{up_to}, t={t}): 面が {gap:.9} 離れている"
             );
         }
     }
+}
+
+/// 裂け検査が壊れた入力を確実に検出することも、完成した鶴そのもので確かめる。
+#[test]
+fn seam_gap_detects_a_deliberately_broken_crane_frame() {
+    let (doc, _) = crane();
+    let faces = extract_faces(&doc.cp);
+    let mut frame = replay(&doc, doc.sequence.len(), 1.0).frame;
+    assert!(max_seam_gap(&doc.cp, &faces, &frame) < 1e-6);
+
+    let mut edge_face_count: HashMap<u32, usize> = HashMap::new();
+    for face in &faces {
+        let mut edges = face.edges.clone();
+        edges.sort_unstable();
+        edges.dedup();
+        for edge in edges {
+            *edge_face_count.entry(edge).or_default() += 1;
+        }
+    }
+    let moved_face = faces
+        .iter()
+        .find(|face| {
+            face.edges
+                .iter()
+                .any(|edge| edge_face_count.get(edge) == Some(&2))
+        })
+        .expect("折り目を共有する鶴の面")
+        .id;
+    for point in &mut frame
+        .faces
+        .iter_mut()
+        .find(|face| face.face == moved_face)
+        .expect("3Dフレーム内の鶴の面")
+        .polygon
+    {
+        point[2] += 0.01;
+    }
+
+    let gap = max_seam_gap(&doc.cp, &faces, &frame);
+    assert!(gap > 1e-3, "壊した鶴の裂けを検出できない: gap={gap}");
 }
 
 /// 内部頂点(まわりの辺がすべて折り線=紙の縁に触れない点)のうち、折り線が
@@ -918,7 +917,7 @@ fn crane_paper_stays_connected_while_angles_are_set_one_by_one() {
             })
             .collect();
         let res = ori3_rigid::solve(&doc.cp, &faces, &drivers, None);
-        torn = torn.max(tear_of(&doc, &faces, &res.frame));
+        torn = torn.max(max_seam_gap(&doc.cp, &faces, &res.frame));
     }
     assert!(torn > 1e-3, "全部固定だと面が離れるはず(実際 {torn:.9})");
 
@@ -932,7 +931,7 @@ fn crane_paper_stays_connected_while_angles_are_set_one_by_one() {
         }];
         let targets: HashMap<u32, f64> = picked[..i].iter().map(|&e| (e, want(e))).collect();
         let res = ori3_rigid::solve_near(&doc.cp, &faces, &hard, &targets, warm.as_ref());
-        let gap = tear_of(&doc, &faces, &res.frame);
+        let gap = max_seam_gap(&doc.cp, &faces, &res.frame);
         assert!(gap < 1e-6, "{i}本目まで指定: 面が {gap:.9} 離れている");
         assert!(
             (res.angles[&h] - want(h)).abs() < 1e-9,
@@ -977,7 +976,7 @@ fn crane_keeps_previously_set_angles_while_setting_more() {
         }];
         let targets: HashMap<u32, f64> = picked[..i].iter().map(|&e| (e, goal(e))).collect();
         let res = ori3_rigid::solve_near(&doc.cp, &faces, &hard, &targets, warm.as_ref());
-        let gap = tear_of(&doc, &faces, &res.frame);
+        let gap = max_seam_gap(&doc.cp, &faces, &res.frame);
         assert!(gap < 1e-6, "{i}本目まで指定: 面が {gap:.9} 離れている");
         for &e in &picked[..i] {
             let d = (res.angles[&e] - goal(e)).abs();

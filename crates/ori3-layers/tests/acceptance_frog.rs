@@ -40,7 +40,7 @@
 
 use std::collections::HashMap;
 
-use glam::{DVec2, DVec3};
+use glam::DVec2;
 use ori3_cp::{Face, extract_faces};
 use ori3_layers::fold_through::{FoldDirection, FoldThroughInput, fold_through};
 use ori3_layers::techniques::TechniqueInput;
@@ -48,6 +48,7 @@ use ori3_layers::{
     FlatState, FoldThroughResult, flat_state_at, inside_reverse, petal, pleat, replay, squash,
 };
 use ori3_model::{CreasePattern, Document, EdgeKind, FaceId, Paper};
+use ori3_rigid::max_seam_gap;
 
 /// 畳んだたこ形の半分の開き角(22.5°)の正接から決まる、袋を開いた後の外形の値。
 const HALF: f64 = std::f64::consts::FRAC_PI_8;
@@ -866,47 +867,16 @@ fn the_frog_has_four_legs_sticking_out_of_the_body() {
 fn frog_paper_stays_connected_while_folding() {
     let (doc, _) = frog();
     let faces = extract_faces(&doc.cp);
-    let mut edge_faces: HashMap<u32, Vec<&Face>> = HashMap::new();
-    for f in &faces {
-        let mut ids = f.edges.clone();
-        ids.sort_unstable();
-        ids.dedup();
-        for eid in ids {
-            edge_faces.entry(eid).or_default().push(f);
-        }
-    }
     // 全手順×全tは重いので、袋を開く工程(内部頂点が増える)と完成形を代表で見る
     for up_to in [5, 9, doc.sequence.len()] {
         for k in [1, 2, 3] {
             let t = f64::from(k) / 4.0;
             let frame = replay(&doc, up_to, t).frame;
-            let poly: HashMap<FaceId, &Vec<[f64; 3]>> =
-                frame.faces.iter().map(|f| (f.face, &f.polygon)).collect();
-            for e in &doc.cp.edges {
-                let Some(fs) = edge_faces.get(&e.id) else {
-                    continue;
-                };
-                if fs.len() != 2 || fs[0].id == fs[1].id {
-                    continue;
-                }
-                for v in [e.v0, e.v1] {
-                    let pts: Vec<DVec3> = fs
-                        .iter()
-                        .filter_map(|f| {
-                            let i = f.vertices.iter().position(|&x| x == v)?;
-                            Some(DVec3::from(poly.get(&f.id)?[i]))
-                        })
-                        .collect();
-                    if pts.len() == 2 {
-                        let gap = (pts[0] - pts[1]).length();
-                        assert!(
-                            gap < 1e-6,
-                            "カエル(手順{up_to}, t={t}): 折り目(辺{})でつながった面が {gap:.9} 離れている",
-                            e.id
-                        );
-                    }
-                }
-            }
+            let gap = max_seam_gap(&doc.cp, &faces, &frame);
+            assert!(
+                gap < 1e-6,
+                "カエル(手順{up_to}, t={t}): 面が {gap:.9} 離れている"
+            );
         }
     }
 }

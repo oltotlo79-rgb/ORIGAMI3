@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use glam::{DVec2, DVec3};
 use ori3_cp::{Face, extract_faces, insert_segment, validate};
 use ori3_model::{CreasePattern, Document, Driver, EdgeKind, Frame3D, Paper, VertexId};
-use ori3_rigid::solve;
+use ori3_rigid::{max_seam_gap, solve};
 
 /// UIの1回の線描画操作: 始点・終点・線種。
 type Stroke = ([f64; 2], [f64; 2], EdgeKind);
@@ -285,6 +285,8 @@ fn yakko_double_blintz_folds_flat_to_half_square() {
         "warnings={:?} angles={:?}",
         result.frame.warnings, result.angles
     );
+    let gap = max_seam_gap(&cp, &faces, &result.frame);
+    assert!(gap < 1e-6, "やっこさん: 面が {gap:.9} 離れている");
     for d in &drivers {
         let got = result.angles[&d.hinge];
         assert!(

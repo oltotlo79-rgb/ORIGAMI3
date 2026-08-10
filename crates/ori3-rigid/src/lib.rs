@@ -2,6 +2,7 @@
 
 pub mod intersect;
 pub mod motion;
+pub mod seam;
 pub mod solver;
 pub mod tree;
 
@@ -10,5 +11,6 @@ pub use intersect::{
     suspect_hinges, suspect_hinges_for_intersections,
 };
 pub use motion::{MotionSolveResult, solve_motion};
+pub use seam::max_seam_gap;
 pub use solver::{SolveResult, solve, solve_near};
 pub use tree::{FoldedFrame, propagate, to_frame3d};
