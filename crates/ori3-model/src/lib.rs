@@ -134,6 +134,61 @@ pub enum FoldDirection {
     Down,
 }
 
+/// 畳み平面上の半平面。`inside_point` がある側を操作対象にする。
+///
+/// 汎用層操作([`SeqOp::FlatMotion`])のIPC入力用で、境界線は必要に応じて
+/// 新しい折り線になる。座標は「畳んだ平面座標」。
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct HalfPlane {
+    pub line: [[f64; 2]; 2],
+    pub inside_point: [f64; 2],
+}
+
+/// 汎用層操作で紙へ施す平面等長変換。
+///
+/// UIから必要になる基本形だけを永続コマンド型に公開する。任意の等長変換は
+/// 鏡映の列で表せる(1本なら折り返し、2本なら回転)。
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum MotionTransform {
+    /// 配置を動かさず、重なり順や山谷だけを変更する。
+    Stay,
+    /// 指定した直線での鏡映を先頭から順に適用する。
+    Reflect(Vec<[[f64; 2]; 2]>),
+}
+
+/// 動かした紙を重なりのどこへ入れるか。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum LayerTurn {
+    /// 現在の重なり順を保つ。
+    Keep,
+    /// 重なり全体の外側へ回す。
+    Outside(FoldDirection),
+    /// 分かれた元の紙のすぐ内側へ差し込む。
+    Inside(FoldDirection),
+    /// 指定面のすぐ隣へ差し込む。
+    Beside {
+        anchor: FaceId,
+        direction: FoldDirection,
+    },
+}
+
+/// 汎用層操作のうち、同じ変換と重ね方で動く一部分。
+///
+/// `layers` の面IDは操作開始時(`up_to`)の導出面を指す一時入力であり、作品には
+/// 保存しない。実行結果は安定な座標参照を持つ [`FoldStep`] へ変換して保存する。
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct MotionPart {
+    /// 対象面。空なら全ての面。
+    pub layers: Vec<FaceId>,
+    /// 半平面の共通部分。空なら対象面の全域。
+    pub region: Vec<HalfPlane>,
+    pub transform: MotionTransform,
+    pub turn: LayerTurn,
+    /// 対象部分内の層順を反転するか。`None`なら変換から自動決定する。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reverse_layers: Option<bool>,
+}
+
 /// 方眼の分割数の下限・上限(CPE-003)。範囲外の指定は丸めて警告する
 /// (「止めずに警告」原則)。色は `u8` なので0〜255は型が保証する。
 pub const MIN_GRID_DIVISIONS: u32 = 2;
@@ -348,6 +403,18 @@ pub enum SeqOp {
         keep_side_point: [f64; 2],
         target_layers: Option<Vec<FaceId>>,
         direction: FoldDirection,
+    },
+    /// 平坦状態から別の平坦状態へ、複数部分を同時に動かす汎用層操作。
+    ///
+    /// 開く・重ね替え・選択領域だけの山谷反転・複数ヒンジの同時移動を、
+    /// 名前付き技法を追加せずに表現する。結果は通常の [`FoldStep`] として記録される。
+    FlatMotion {
+        /// この操作の直前までの手順数。
+        up_to: usize,
+        /// 先に置いた部分を優先する。
+        parts: Vec<MotionPart>,
+        /// 手順一覧に記録する技法種別。
+        kind: TechniqueKind,
     },
     /// 基本技法(段折り・中割り折り・かぶせ折り・開いてつぶす)をまとめて折る。
     ///

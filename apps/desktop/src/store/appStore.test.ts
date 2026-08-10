@@ -12,6 +12,7 @@ import type {
   FoldStep,
   ReplayResult,
   SolveResult,
+  TechniqueKind,
   Vec2,
 } from "../lib/types";
 import { STEP_DURATION_MS } from "../lib/playback";
@@ -1427,12 +1428,23 @@ describe("技法(選ぶだけで折る)", () => {
     expect(useAppStore.getState().techniqueDraft).toEqual({
       kind: "InsideReverse",
       flap: [],
+      flapCandidates: [],
+      flapPickCount: 1,
       line: null,
       movingSide: "right",
       widthMm: 10,
       polygon: [],
       center: null,
+      referencePoint: null,
       twistDeg: 30,
+      openToBack: false,
+      motionMode: "reflect",
+      motionTurn: "Keep",
+      motionDirection: "Up",
+      motionAnchor: 0,
+      motionReverseLayers: false,
+      motionAxisEdgeId: null,
+      motionParts: [],
       docEpoch: useAppStore.getState().docEpoch,
       stepCount: 1,
       upTo: 1,
@@ -1448,11 +1460,111 @@ describe("技法(選ぶだけで折る)", () => {
     expect(op.kind).toBe("InsideReverse");
     expect(op.flap).toEqual([0, 1]);
     expect(op.line).toEqual(LINE);
+    expect(op).not.toHaveProperty("open_to_back");
     // 「こちら側」が動くので、先端が向かう側(基準点)は反対側(x<0.5)
     expect(op.reference_point[0]).toBeLessThan(0.5);
     // 折り終えたら下ごしらえを捨て、最新の形を表示する
     expect(useAppStore.getState().techniqueDraft).toBeNull();
     expect(useAppStore.getState().currentStep).toBeNull();
+  });
+
+  it("層操作: 既存折り目の開閉と重ね替えを複数部分のFlatMotionで送る", async () => {
+    seedFolded();
+    vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(makeStepView(4001, 2));
+
+    useAppStore.getState().beginTechnique("Simple");
+    useAppStore.getState().setTechniqueFlap([1]);
+    useAppStore.getState().setLayerMotionAxis(12, LINE);
+    useAppStore.getState().addLayerMotionPart();
+
+    expect(useAppStore.getState().techniqueDraft).toMatchObject({
+      flap: [],
+      line: null,
+      motionAxisEdgeId: null,
+      motionParts: [
+        {
+          layers: [1],
+          region: [],
+          transform: { Reflect: [LINE] },
+          turn: "Keep",
+        },
+      ],
+    });
+
+    useAppStore.getState().setTechniqueFlap([0]);
+    useAppStore.getState().updateTechniqueDraft({
+      motionMode: "stay",
+      motionTurn: "Beside",
+      motionDirection: "Down",
+      motionAnchor: 1,
+      motionReverseLayers: true,
+    });
+    await useAppStore.getState().commitTechnique();
+
+    expect(vi.mocked(ipc.sequenceApply)).toHaveBeenCalledWith({
+      type: "FlatMotion",
+      up_to: 1,
+      kind: "Simple",
+      parts: [
+        {
+          layers: [1],
+          region: [],
+          transform: { Reflect: [LINE] },
+          turn: "Keep",
+        },
+        {
+          layers: [0],
+          region: [],
+          transform: "Stay",
+          turn: { Beside: { anchor: 1, direction: "Down" } },
+          reverse_layers: true,
+        },
+      ],
+    });
+    expect(useAppStore.getState().techniqueDraft).toBeNull();
+  });
+
+  it("層操作: Stay+Keepの無変更は送らず、選択層の山谷反転だけなら送る", async () => {
+    seedFolded();
+    useAppStore.getState().beginTechnique("Simple");
+    useAppStore.getState().updateTechniqueDraft({ motionMode: "stay" });
+
+    await useAppStore.getState().commitTechnique();
+    expect(vi.mocked(ipc.sequenceApply)).not.toHaveBeenCalled();
+    expect(useAppStore.getState().errorMessage).toContain("重ね方・山谷反転");
+
+    vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(makeStepView(4002, 2));
+    useAppStore.getState().setTechniqueFlap([0]);
+    useAppStore.getState().updateTechniqueDraft({ motionReverseLayers: true });
+    await useAppStore.getState().commitTechnique();
+
+    expect(vi.mocked(ipc.sequenceApply)).toHaveBeenCalledWith({
+      type: "FlatMotion",
+      up_to: 1,
+      kind: "Simple",
+      parts: [
+        {
+          layers: [0],
+          region: [],
+          transform: "Stay",
+          turn: "Keep",
+          reverse_layers: true,
+        },
+      ],
+    });
+  });
+
+  it("層操作: ドラッグした目分量の線は既存折り目のReflect軸として送らない", async () => {
+    seedFolded();
+    useAppStore.getState().beginTechnique("Simple");
+    useAppStore.getState().setTechniqueFlap([1]);
+    useAppStore.getState().setTechniqueLine(LINE);
+
+    await useAppStore.getState().commitTechnique();
+
+    expect(vi.mocked(ipc.sequenceApply)).not.toHaveBeenCalled();
+    expect(useAppStore.getState().errorMessage).toContain("正確な開閉軸");
+    expect(useAppStore.getState().techniqueDraft?.motionAxisEdgeId).toBeNull();
   });
 
   it("段折り: フラップ指定なしで送れる。基準点は段の幅ぶん動く側へ離れる", async () => {
@@ -1471,6 +1583,37 @@ describe("技法(選ぶだけで折る)", () => {
     // 紙の長辺150mmに対して段の幅15mm = 正規化座標で0.1。動く側(こちら側=x>0.5)
     expect(op.reference_point[0]).toBeCloseTo(0.6, 9);
     expect(op.reference_point[1]).toBeCloseTo(0.5, 9);
+  });
+
+  it("沈め折り: 自動の基準点は動かす側と同じ先端側に置く", async () => {
+    seedFolded();
+    vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(makeStepView(4011, 2));
+
+    useAppStore.getState().beginTechnique("OpenSink");
+    useAppStore.getState().setTechniqueLine(LINE);
+    await useAppStore.getState().commitTechnique();
+
+    const op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
+    if (op.type !== "Technique") throw new Error("Techniqueでない");
+    expect(op.kind).toBe("OpenSink");
+    // LINEは下→上なのでrightはx>0.5。沈める先端側をそのままRustへ渡す。
+    expect(op.reference_point[0]).toBeGreaterThan(0.5);
+    expect(op.reference_point[1]).toBeCloseTo(0.5, 9);
+  });
+
+  it("任意の基準点を指定すると技法ごとの自動点より優先する", async () => {
+    seedFolded();
+    vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(makeStepView(4012, 2));
+
+    useAppStore.getState().beginTechnique("Swivel");
+    useAppStore.getState().setTechniqueLine(LINE);
+    useAppStore.getState().setTechniqueReferencePoint([0.87, 0.13]);
+    await useAppStore.getState().commitTechnique();
+
+    const op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
+    if (op.type !== "Technique") throw new Error("Techniqueでない");
+    expect(op.kind).toBe("Swivel");
+    expect(op.reference_point).toEqual([0.87, 0.13]);
   });
 
   it("フラップや折り線が足りないときは送らずに案内する", async () => {
@@ -1497,6 +1640,70 @@ describe("技法(選ぶだけで折る)", () => {
     const op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
     if (op.type !== "Technique") throw new Error("Techniqueでない");
     expect(op.flap).toEqual([0, 1, 2]);
+  });
+
+  it.each<{
+    kind: TechniqueKind;
+    flap: number[];
+    sendsOpenSide: boolean;
+  }>([
+    { kind: "Squash", flap: [1], sendsOpenSide: true },
+    { kind: "Petal", flap: [1], sendsOpenSide: true },
+    { kind: "OpenSink", flap: [], sendsOpenSide: false },
+    { kind: "Swivel", flap: [], sendsOpenSide: true },
+  ])("$kindはRust側と同じ最小層数で送れる", async ({ kind, flap, sendsOpenSide }) => {
+    seedFolded();
+    vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(makeStepView(4035, 2));
+    useAppStore.getState().beginTechnique(kind);
+    useAppStore.getState().setTechniqueLine(LINE);
+    if (flap.length > 0) useAppStore.getState().setTechniqueFlap(flap);
+
+    await useAppStore.getState().commitTechnique();
+
+    const op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
+    if (op.type !== "Technique") throw new Error("Techniqueでない");
+    expect(op.flap).toEqual(flap);
+    if (sendsOpenSide) expect(op.open_to_back).toBe(false);
+    else expect(op).not.toHaveProperty("open_to_back");
+  });
+
+  it("向こうへ開く指定をsnake_caseでRustへ送る", async () => {
+    seedFolded();
+    vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(makeStepView(4036, 2));
+    useAppStore.getState().beginTechnique("Petal");
+    useAppStore.getState().setTechniqueFlap([1]);
+    useAppStore.getState().setTechniqueLine(LINE);
+    useAppStore.getState().updateTechniqueDraft({ openToBack: true });
+
+    await useAppStore.getState().commitTechnique();
+
+    const op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
+    if (op.type !== "Technique") throw new Error("Techniqueでない");
+    expect(op.open_to_back).toBe(true);
+  });
+
+  it("クリック候補を全選択し、枚数・奥行き・個別チェックで部分集合にできる", () => {
+    seedFolded();
+    useAppStore.getState().beginTechnique("Squash");
+    const candidates = Array.from({ length: 128 }, (_, i) => i);
+
+    useAppStore.getState().setTechniqueFlap(candidates);
+    expect(useAppStore.getState().techniqueDraft?.flapCandidates).toEqual(candidates);
+    expect(useAppStore.getState().techniqueDraft?.flap).toEqual(candidates);
+
+    useAppStore.getState().updateTechniqueDraft({ flapPickCount: 51 });
+    useAppStore.getState().setTechniqueFlapPreset("front");
+    expect(useAppStore.getState().techniqueDraft?.flap).toEqual(candidates.slice(77));
+
+    useAppStore.getState().updateTechniqueDraft({ flapPickCount: 55 });
+    useAppStore.getState().setTechniqueFlapPreset("back");
+    expect(useAppStore.getState().techniqueDraft?.flap).toEqual(candidates.slice(0, 55));
+
+    useAppStore.getState().updateTechniqueDraft({ flapPickCount: 128 });
+    useAppStore.getState().setTechniqueFlapPreset("frontNth");
+    expect(useAppStore.getState().techniqueDraft?.flap).toEqual([0]);
+    useAppStore.getState().toggleTechniqueFlap(127);
+    expect(useAppStore.getState().techniqueDraft?.flap).toEqual([0, 127]);
   });
 
   it("ねじり折り: 順にクリックした角がそのまま中央多角形として送られる", async () => {

@@ -118,7 +118,31 @@ export function pickHinge(
   y: number,
   thresholdPx: number = PICK_THRESHOLD_PX,
 ): number | null {
-  const candidates: { edgeId: number; bucket: number; depth: number }[] = [];
+  return pickHingeSegment(
+    segments,
+    camera,
+    widthPx,
+    heightPx,
+    x,
+    y,
+    thresholdPx,
+  )?.edgeId ?? null;
+}
+
+/**
+ * `pickHinge`と同じ優先順位で、IDだけでなく正確な表示線分を返す。
+ * 汎用層操作で既存折り目を鏡映軸にするとき、手描きの近似線に戻さないために使う。
+ */
+export function pickHingeSegment(
+  segments: HingeSegment[],
+  camera: THREE.Camera,
+  widthPx: number,
+  heightPx: number,
+  x: number,
+  y: number,
+  thresholdPx: number = PICK_THRESHOLD_PX,
+): HingeSegment | null {
+  const candidates: { segment: HingeSegment; bucket: number; depth: number }[] = [];
   for (const seg of segments) {
     const a = project(seg.a, camera, widthPx, heightPx);
     const b = project(seg.b, camera, widthPx, heightPx);
@@ -126,12 +150,12 @@ export function pickHinge(
     const dist = distanceToSegment(x, y, a.x, a.y, b.x, b.y);
     if (dist > thresholdPx) continue;
     candidates.push({
-      edgeId: seg.edgeId,
+      segment: seg,
       bucket: Math.round(dist / DISTANCE_BUCKET_PX),
       depth: (a.depth + b.depth) / 2,
     });
   }
   if (candidates.length === 0) return null;
   candidates.sort((p, q) => p.bucket - q.bucket || p.depth - q.depth);
-  return candidates[0].edgeId;
+  return candidates[0].segment;
 }

@@ -460,6 +460,163 @@ describe("技法の数値プレビュー", () => {
   });
 });
 
+describe("技法の開く側と対象層", () => {
+  const LINE: [[number, number], [number, number]] = [
+    [0.5, 0],
+    [0.5, 1],
+  ];
+
+  function seedTechnique(kind: "InsideReverse" | "OutsideReverse" | "Squash" | "Petal" | "OpenSink" | "Swivel" | "Twist") {
+    seed(new Map());
+    useAppStore.getState().beginTechnique(kind);
+    useAppStore.getState().setTechniqueLine(LINE);
+  }
+
+  it.each(["Squash", "Petal", "Swivel", "Twist"] as const)(
+    "%sでは開く側を手前/向こうから選べる",
+    (kind) => {
+      seedTechnique(kind);
+      render(<ContextPanel />);
+
+      const front = screen.getByLabelText("開く側: 手前") as HTMLInputElement;
+      const back = screen.getByLabelText("開く側: 向こう") as HTMLInputElement;
+      expect(front.checked).toBe(true);
+      expect(back.checked).toBe(false);
+      fireEvent.click(back);
+      expect(useAppStore.getState().techniqueDraft?.openToBack).toBe(true);
+    },
+  );
+
+  it("沈め折りでは使わない開く側を出さない", () => {
+    seedTechnique("OpenSink");
+    render(<ContextPanel />);
+    expect(screen.queryByLabelText("開く側: 手前")).toBeNull();
+    expect(screen.queryByLabelText("開く側: 向こう")).toBeNull();
+  });
+
+  it("Ctrlで指定した基準点を表示し、自動へ戻せる", () => {
+    seedTechnique("Swivel");
+    useAppStore.getState().setTechniqueReferencePoint([0.8, 0.7]);
+    render(<ContextPanel />);
+
+    expect(screen.getByText("寄せる先: 指定した点")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "基準点を自動へ戻す" }));
+    expect(useAppStore.getState().techniqueDraft?.referencePoint).toBeNull();
+    expect(screen.getByText("寄せる先: 自動")).toBeTruthy();
+  });
+
+  it.each([
+    { kind: "InsideReverse" as const, flap: [1], disabled: true },
+    { kind: "OutsideReverse" as const, flap: [1], disabled: true },
+    { kind: "Squash" as const, flap: [1], disabled: false },
+    { kind: "Petal" as const, flap: [1], disabled: false },
+    { kind: "OpenSink" as const, flap: [], disabled: false },
+    { kind: "Swivel" as const, flap: [], disabled: false },
+  ])("$kindは技法固有の最小層数で適用可否を決める", ({ kind, flap, disabled }) => {
+    seedTechnique(kind);
+    if (flap.length > 0) useAppStore.getState().setTechniqueFlap(flap);
+    render(<ContextPanel />);
+    expect(screen.getByRole("button", { name: "適用" })).toHaveProperty(
+      "disabled",
+      disabled,
+    );
+  });
+
+  it("128層を全部・手前51枚・奥55枚・手前98枚・手前から128枚目で指定できる", () => {
+    seedTechnique("Squash");
+    const candidates = Array.from({ length: 128 }, (_, i) => i);
+    useAppStore.getState().setTechniqueFlap(candidates);
+    render(<ContextPanel />);
+
+    expect(screen.getAllByText(/候補128枚/).length).toBe(1);
+    expect(useAppStore.getState().techniqueDraft?.flap).toHaveLength(128);
+    const count = screen.getByLabelText("N(枚数・奥行き)");
+
+    fireEvent.change(count, { target: { value: "51" } });
+    fireEvent.click(screen.getByRole("button", { name: "手前からN枚" }));
+    expect(useAppStore.getState().techniqueDraft?.flap).toEqual(candidates.slice(77));
+
+    fireEvent.change(count, { target: { value: "55" } });
+    fireEvent.click(screen.getByRole("button", { name: "奥からN枚" }));
+    expect(useAppStore.getState().techniqueDraft?.flap).toEqual(candidates.slice(0, 55));
+
+    fireEvent.change(count, { target: { value: "98" } });
+    fireEvent.click(screen.getByRole("button", { name: "手前からN枚" }));
+    expect(useAppStore.getState().techniqueDraft?.flap).toEqual(candidates.slice(30));
+
+    fireEvent.change(count, { target: { value: "128" } });
+    fireEvent.click(screen.getByRole("button", { name: "手前からN枚目" }));
+    expect(useAppStore.getState().techniqueDraft?.flap).toEqual([0]);
+
+    // 個別チェックでも同じ候補順を使える。
+    fireEvent.click(screen.getByLabelText(/奥から1枚目 \/ 手前から128枚目/));
+    expect(useAppStore.getState().techniqueDraft?.flap).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "全部" }));
+    expect(useAppStore.getState().techniqueDraft?.flap).toEqual(candidates);
+  });
+});
+
+describe("層操作の開閉・重ね替え", () => {
+  const LINE: [[number, number], [number, number]] = [
+    [0, 0],
+    [1, 1],
+  ];
+
+  it("既存折り目を軸にした部分とStayの部分を、同じ1手へ追加できる", () => {
+    seed(new Map());
+    useAppStore.getState().beginTechnique("Simple");
+    useAppStore.getState().setTechniqueFlap([1]);
+    useAppStore.getState().setLayerMotionAxis(5, LINE);
+    render(<ContextPanel />);
+
+    expect(screen.getByText("軸: 折り目5")).toBeTruthy();
+    const apply = screen.getByRole("button", { name: "まとめて適用" });
+    expect(apply).toHaveProperty("disabled", false);
+    fireEvent.click(screen.getByRole("button", { name: "この部分を追加" }));
+    expect(screen.getByText(/1\. 1層を折り目で開閉/)).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText("動かさず重ね替え"));
+    fireEvent.change(screen.getByLabelText("重ね方"), {
+      target: { value: "Outside" },
+    });
+    fireEvent.click(screen.getByLabelText("奥側"));
+    fireEvent.click(
+      screen.getByLabelText("選択層だけ山谷反転(層順も反転)"),
+    );
+
+    expect(useAppStore.getState().techniqueDraft).toMatchObject({
+      motionMode: "stay",
+      motionTurn: "Outside",
+      motionDirection: "Down",
+      motionReverseLayers: true,
+      motionParts: [{ transform: { Reflect: [LINE] } }],
+    });
+    expect(screen.getByRole("button", { name: "まとめて適用" })).toHaveProperty(
+      "disabled",
+      false,
+    );
+  });
+
+  it("動かさず位置も保つ指定は、山谷反転を選ぶまで適用できない", () => {
+    seed(new Map());
+    useAppStore.getState().beginTechnique("Simple");
+    render(<ContextPanel />);
+
+    fireEvent.click(screen.getByLabelText("動かさず重ね替え"));
+    expect(screen.getByRole("button", { name: "まとめて適用" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    fireEvent.click(
+      screen.getByLabelText("選択層だけ山谷反転(層順も反転)"),
+    );
+    expect(screen.getByRole("button", { name: "まとめて適用" })).toHaveProperty(
+      "disabled",
+      false,
+    );
+  });
+});
+
 describe("ねじり折りの中央多角形(TEC-009)", () => {
   /** ねじり折りを選び、角をcount個置いた状態にする */
   function seedTwist(count: number, center: [number, number] | null = null) {
@@ -476,12 +633,23 @@ describe("ねじり折りの中央多角形(TEC-009)", () => {
       techniqueDraft: {
         kind: "Twist",
         flap: [],
+        flapCandidates: [],
+        flapPickCount: 1,
         line: null,
         movingSide: "right",
         widthMm: 10,
         polygon: pts.slice(0, count),
         center,
+        referencePoint: null,
         twistDeg: 30,
+        openToBack: false,
+        motionMode: "reflect",
+        motionTurn: "Keep",
+        motionDirection: "Up",
+        motionAnchor: 0,
+        motionReverseLayers: false,
+        motionAxisEdgeId: null,
+        motionParts: [],
         docEpoch: 0,
         stepCount: 0,
         upTo: 0,
@@ -496,6 +664,7 @@ describe("ねじり折りの中央多角形(TEC-009)", () => {
     expect(screen.getAllByText(/角を2個指定/).length).toBe(1);
     expect(screen.getAllByText(/あと3個以上必要/).length).toBe(1);
     expect(screen.getAllByText(/角を順にクリック/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Shift\+クリックで対象層/).length).toBeGreaterThan(0);
     const apply = screen.getByRole("button", { name: "適用" });
     expect(apply).toHaveProperty("disabled", true);
   });

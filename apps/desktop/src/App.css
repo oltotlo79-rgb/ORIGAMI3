@@ -1408,6 +1408,7 @@ input[type="radio"] {
 
 .pane-3d-view {
   position: relative;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
   box-shadow: var(--shadow-canvas-3d);
@@ -1422,13 +1423,17 @@ input[type="radio"] {
   background: var(--timeline-background);
   border-top: var(--panel-border-width) solid var(--panel-border-color);
   box-shadow: var(--shadow-timeline);
+  min-width: 0;
   min-height: 0;
+  overflow: hidden;
 }
 
 .timeline-controls {
   display: flex;
   gap: var(--sp-3);
   align-items: center;
+  min-width: 0;
+  overflow-x: auto;
 }
 
 .timeline-controls button {
@@ -2436,6 +2441,41 @@ input[type="radio"] {
 
 .button-row label {
   align-self: center;
+}
+
+/* 技法の対象層。数十〜百層でも4つの指定ボタンを先に使えるようにし、
+   個別チェックは必要なときだけdetailsを開いてスクロールする。 */
+.technique-layer-picker {
+  margin-top: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: var(--control-border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.technique-layer-picker .button-row {
+  margin-top: 0;
+}
+
+.technique-layer-candidates {
+  margin-top: var(--sp-2);
+}
+
+.technique-layer-candidates summary {
+  cursor: pointer;
+  color: var(--color-text-muted);
+}
+
+.technique-layer-candidate-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--sp-1) var(--sp-3);
+  max-height: 112px;
+  margin-top: var(--sp-2);
+  overflow-y: auto;
+}
+
+.technique-layer-candidate-list label {
+  white-space: nowrap;
 }
 
 /* 折り角度の操作(折り線を選んだとき) */

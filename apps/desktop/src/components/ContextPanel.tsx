@@ -26,6 +26,17 @@ import {
   uniqueWarnings,
 } from "../lib/techniques";
 import { isTwistPolygonReady } from "../lib/twistPolygon";
+import {
+  clampTechniqueLayerCount,
+  minimumTechniqueFlap,
+  techniqueUsesOpenToBack,
+} from "../lib/techniqueLayers";
+import {
+  buildLayerMotionPart,
+  describeLayerMotionPart,
+  hasLayerMotionInput,
+  type LayerTurnMode,
+} from "../lib/layerMotion";
 import type { EdgeKind, FoldStep, TechniqueKind } from "../lib/types";
 import { PaperAppearance } from "./PaperAppearance";
 import { OperationSteps } from "./OperationSteps";
@@ -754,14 +765,334 @@ function TwistPolygonRow({ draft }: { draft: TechniqueDraft }) {
       </button>
       <span className="hint">
         立体表示で中央の形の角を順にクリックしてください(3つ以上)。
-        Ctrl+クリックで中心、Backspaceで1つ戻す、Escでやめる
+        Ctrl+クリックで中心、Shift+クリックで対象層、Backspaceで1つ戻す、Escでやめる
       </span>
+    </div>
+  );
+}
+
+/**
+ * クリック地点に重なる層から、技法の対象だけを選ぶ。
+ * 候補順は facesAtPoint と同じ奥→手前。大量の層でも4つの指定ボタンを先に使え、
+ * 必要なときだけdetailsを開いて1枚ずつチェックできる。
+ */
+function TechniqueLayerPicker({ draft }: { draft: TechniqueDraft }) {
+  const setPreset = useAppStore((s) => s.setTechniqueFlapPreset);
+  const toggleFlap = useAppStore((s) => s.toggleTechniqueFlap);
+  const updateTechniqueDraft = useAppStore((s) => s.updateTechniqueDraft);
+  const candidates = draft.flapCandidates;
+  const selected = new Set(draft.flap);
+  const hasCandidates = candidates.length > 0;
+
+  return (
+    <fieldset className="technique-layer-picker">
+      <legend>対象にする層</legend>
+      <div className="button-row">
+        <span>
+          候補{candidates.length}枚(奥→手前) / 選択{draft.flap.length}枚
+        </span>
+        <label htmlFor="technique-layer-count">N(枚数・奥行き)</label>
+        <NumberInput
+          id="technique-layer-count"
+          value={draft.flapPickCount}
+          min={1}
+          max={Math.max(1, candidates.length)}
+          onPreview={(v) => updateTechniqueDraft({ flapPickCount: v })}
+          onCommit={(v) => updateTechniqueDraft({ flapPickCount: v })}
+          normalizeOnCommit={(v) =>
+            clampTechniqueLayerCount(v, candidates.length)
+          }
+        />
+        <button type="button" disabled={!hasCandidates} onClick={() => setPreset("all")}>
+          全部
+        </button>
+        <button type="button" disabled={!hasCandidates} onClick={() => setPreset("front")}>
+          手前からN枚
+        </button>
+        <button type="button" disabled={!hasCandidates} onClick={() => setPreset("back")}>
+          奥からN枚
+        </button>
+        <button
+          type="button"
+          disabled={!hasCandidates}
+          onClick={() => setPreset("frontNth")}
+        >
+          手前からN枚目
+        </button>
+      </div>
+      {hasCandidates ? (
+        <details className="technique-layer-candidates">
+          <summary>候補ごとのチェック切替</summary>
+          <div className="technique-layer-candidate-list">
+            {candidates.map((face, i) => {
+              const fromBack = i + 1;
+              const fromFront = candidates.length - i;
+              return (
+                <label key={face}>
+                  <input
+                    type="checkbox"
+                    checked={selected.has(face)}
+                    onChange={() => toggleFlap(face)}
+                  />
+                  奥から{fromBack}枚目 / 手前から{fromFront}枚目(面{face})
+                </label>
+              );
+            })}
+          </div>
+        </details>
+      ) : (
+        <span className="hint">
+          {draft.kind === "Twist"
+            ? "立体表示の紙をShift+クリックすると、その場所の候補層が奥→手前の順で入ります"
+            : "立体表示の紙をクリックすると、その場所の候補層が奥→手前の順で入ります"}
+        </span>
+      )}
+    </fieldset>
+  );
+}
+
+/** Ctrl+クリックで明示できる、名前付き技法ごとの基準点の呼び名。 */
+function techniqueReferenceLabel(kind: TechniqueKind): string {
+  switch (kind) {
+    case "Pleat":
+      return "段の行き先";
+    case "InsideReverse":
+    case "OutsideReverse":
+      return "先端の行き先";
+    case "Squash":
+      return "つぶす先";
+    case "Petal":
+      return "持ち上げる先端";
+    case "OpenSink":
+      return "沈める先端";
+    case "Swivel":
+      return "寄せる先";
+    default:
+      return "基準点";
+  }
+}
+
+/** 自動の左右指定では足りない技法で、任意の基準点を直接指定する入口。 */
+function TechniqueReferenceRow({ draft }: { draft: TechniqueDraft }) {
+  const setReference = useAppStore((s) => s.setTechniqueReferencePoint);
+  const label = techniqueReferenceLabel(draft.kind);
+
+  return (
+    <div className="button-row">
+      <span>
+        {label}: {draft.referencePoint === null ? "自動" : "指定した点"}
+      </span>
+      <button
+        type="button"
+        disabled={draft.referencePoint === null}
+        onClick={() => setReference(null)}
+      >
+        基準点を自動へ戻す
+      </button>
+      <span className="hint">
+        立体表示をCtrl+クリックすると任意の{label}を指せます。指定した点は「こちら側／反対側」より優先します
+      </span>
+    </div>
+  );
+}
+
+/** 名前付き技法では表せない、既存折り目の開閉・重ね替え・層限定反転。 */
+function LayerMotionDraftContent({ draft }: { draft: TechniqueDraft }) {
+  const updateTechniqueDraft = useAppStore((s) => s.updateTechniqueDraft);
+  const addLayerMotionPart = useAppStore((s) => s.addLayerMotionPart);
+  const undoLayerMotionPart = useAppStore((s) => s.undoLayerMotionPart);
+  const cancelTechnique = useAppStore((s) => s.cancelTechnique);
+  const commitTechnique = useAppStore((s) => s.commitTechnique);
+  const current = {
+    layers: draft.flap,
+    line: draft.line,
+    mode: draft.motionMode,
+    turn: draft.motionTurn,
+    direction: draft.motionDirection,
+    anchor: draft.motionAnchor,
+    reverseLayers: draft.motionReverseLayers,
+  } as const;
+  const hasCurrent = hasLayerMotionInput(current);
+  const built = buildLayerMotionPart(current);
+  const exactAxisReady =
+    draft.motionMode !== "reflect" || draft.motionAxisEdgeId !== null;
+  const currentValid = !hasCurrent || (built.ok && exactAxisReady);
+  const ready =
+    currentValid &&
+    (draft.motionParts.length > 0 || (hasCurrent && built.ok));
+
+  return (
+    <div>
+      <p>
+        層操作: 追加済み{draft.motionParts.length}部分 / 現在{draft.flap.length}層を選択
+      </p>
+      <TechniqueLayerPicker draft={draft} />
+      <div className="button-row">
+        <span>操作:</span>
+        <label>
+          <input
+            type="radio"
+            name="layer-motion-mode"
+            checked={draft.motionMode === "reflect"}
+            onChange={() =>
+              updateTechniqueDraft({ motionMode: "reflect", motionTurn: "Keep" })
+            }
+          />
+          既存折り目で開閉
+        </label>
+        <label>
+          <input
+            type="radio"
+            name="layer-motion-mode"
+            checked={draft.motionMode === "stay"}
+            onChange={() =>
+              updateTechniqueDraft({
+                motionMode: "stay",
+                line: null,
+                motionAxisEdgeId: null,
+              })
+            }
+          />
+          動かさず重ね替え
+        </label>
+      </div>
+      {draft.motionMode === "reflect" ? (
+        <div className="button-row">
+          <span>
+            軸: {draft.motionAxisEdgeId === null ? "未選択" : `折り目${draft.motionAxisEdgeId}`}
+          </span>
+          <span className="hint">
+            立体表示の既存折り目をクリックすると、その正確な線で選択層を開く・折り返す操作になります
+          </span>
+        </div>
+      ) : (
+        <div className="button-row">
+          <label htmlFor="layer-motion-turn">重ね方</label>
+          <select
+            id="layer-motion-turn"
+            value={draft.motionTurn}
+            onChange={(e) =>
+              updateTechniqueDraft({ motionTurn: e.target.value as LayerTurnMode })
+            }
+          >
+            <option value="Keep">位置を保つ</option>
+            <option value="Outside">重なり全体の外側</option>
+            <option value="Inside">元の紙のすぐ隣</option>
+            <option value="Beside">指定面のすぐ隣</option>
+          </select>
+          {draft.motionTurn === "Beside" && (
+            <>
+              <label htmlFor="layer-motion-anchor">基準面ID</label>
+              <NumberInput
+                id="layer-motion-anchor"
+                value={draft.motionAnchor}
+                min={0}
+                onPreview={(v) => updateTechniqueDraft({ motionAnchor: v })}
+                onCommit={(v) => updateTechniqueDraft({ motionAnchor: v })}
+                normalizeOnCommit={(v) => Math.max(0, Math.round(v))}
+              />
+            </>
+          )}
+          {draft.motionTurn !== "Keep" && (
+            <>
+              <label>
+                <input
+                  type="radio"
+                  name="layer-motion-direction"
+                  checked={draft.motionDirection === "Up"}
+                  onChange={() => updateTechniqueDraft({ motionDirection: "Up" })}
+                />
+                手前側
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="layer-motion-direction"
+                  checked={draft.motionDirection === "Down"}
+                  onChange={() => updateTechniqueDraft({ motionDirection: "Down" })}
+                />
+                奥側
+              </label>
+            </>
+          )}
+        </div>
+      )}
+      <div className="button-row">
+        <label>
+          <input
+            type="checkbox"
+            checked={draft.motionReverseLayers}
+            onChange={(e) =>
+              updateTechniqueDraft({ motionReverseLayers: e.target.checked })
+            }
+          />
+          選択層だけ山谷反転(層順も反転)
+        </label>
+        <span className="hint">層を選ばなければ、この位置にある全層が対象です</span>
+      </div>
+      {draft.motionParts.length > 0 && (
+        <div className="button-row" aria-label="追加済みの同時層操作">
+          {draft.motionParts.map((part, index) => (
+            <span key={`${index}-${describeLayerMotionPart(part)}`}>
+              {index + 1}. {describeLayerMotionPart(part)}
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="button-row">
+        <button
+          type="button"
+          disabled={!hasCurrent || !built.ok || !exactAxisReady}
+          title={
+            !exactAxisReady
+              ? "立体表示で既存の折り目をクリックして、正確な開閉軸を選んでください"
+              : built.ok
+                ? "現在の部分を同じ1手へ追加します"
+                : built.error
+          }
+          onClick={() => addLayerMotionPart()}
+        >
+          この部分を追加
+        </button>
+        <button
+          type="button"
+          disabled={draft.motionParts.length === 0}
+          onClick={() => undoLayerMotionPart()}
+        >
+          直前の追加を外す
+        </button>
+        <button
+          type="button"
+          disabled={!ready}
+          title={
+            ready
+              ? "追加済みと現在の部分を1手として同時に適用します"
+              : hasCurrent && !exactAxisReady
+                ? "立体表示で既存の折り目をクリックして、正確な開閉軸を選んでください"
+                : hasCurrent && !built.ok
+                  ? built.error
+                : "層操作を1つ以上指定してください"
+          }
+          onClick={() => void commitTechnique()}
+        >
+          まとめて適用
+        </button>
+        <button type="button" onClick={() => cancelTechnique()}>
+          やめる
+        </button>
+      </div>
     </div>
   );
 }
 
 /** 技法の確定UI(フラップ・折り線を選んでから適用する) */
 function TechniqueDraftContent({ draft }: { draft: TechniqueDraft }) {
+  if (draft.kind === "Simple") return <LayerMotionDraftContent draft={draft} />;
+  return <NamedTechniqueDraftContent draft={draft} />;
+}
+
+/** 従来の名前付き技法。層操作とは下書きの入力形が異なるため別コンポーネントにする。 */
+function NamedTechniqueDraftContent({ draft }: { draft: TechniqueDraft }) {
   const paper = useAppStore((s) => s.doc?.paper ?? null);
   const updateTechniqueDraft = useAppStore((s) => s.updateTechniqueDraft);
   const cancelTechnique = useAppStore((s) => s.cancelTechnique);
@@ -770,10 +1101,11 @@ function TechniqueDraftContent({ draft }: { draft: TechniqueDraft }) {
   const mm = (v: number) => (v * scale).toFixed(1);
   // ねじり折りは中央多角形を角のクリックで指せる(層は選ばなくてよい)
   const byPolygon = draft.kind === "Twist" && isTwistPolygonReady(draft.polygon);
-  const needsFlap = draft.kind !== "Pleat" && !byPolygon;
-  // 中割り折り・かぶせ折りには重なった層が要る(枚数は奇数でもよい)
-  const flapOk = draft.flap.length >= 2;
-  const ready = (draft.line !== null || byPolygon) && (!needsFlap || flapOk);
+  const minimumFlap = minimumTechniqueFlap(draft.kind);
+  const needsFlap = minimumFlap > 0;
+  const flapOk = draft.flap.length >= minimumFlap;
+  const ready = (draft.line !== null || byPolygon) && flapOk;
+  const openSide = techniqueUsesOpenToBack(draft.kind);
 
   return (
     <div>
@@ -792,15 +1124,17 @@ function TechniqueDraftContent({ draft }: { draft: TechniqueDraft }) {
           " / 折り線はまだ引かれていません"
         )}
       </p>
+      <TechniqueLayerPicker draft={draft} />
+      {draft.kind !== "Twist" && <TechniqueReferenceRow draft={draft} />}
       {/* どちらの技法でも「動く側」を選ぶ。中割り・かぶせでは折り返される先端の側、
           段折りでは段になって送られる側にあたる(反対側の紙はその場に残る) */}
       <div className="button-row">
         <span>
           {draft.kind === "Twist"
             ? "ねじる向き"
-            : needsFlap
-              ? "先端(動く側)"
-              : "段になる側"}
+            : draft.kind === "Pleat"
+              ? "段になる側"
+              : "先端(動く側)"}
         </span>
         <label>
           <input
@@ -845,6 +1179,34 @@ function TechniqueDraftContent({ draft }: { draft: TechniqueDraft }) {
           </>
         )}
       </div>
+      {openSide && (
+        <div className="button-row">
+          <span>開く側:</span>
+          <label>
+            <input
+              type="radio"
+              name="technique-open-side"
+              aria-label="開く側: 手前"
+              checked={!draft.openToBack}
+              onChange={() => updateTechniqueDraft({ openToBack: false })}
+            />
+            手前
+          </label>
+          <label>
+            <input
+              type="radio"
+              name="technique-open-side"
+              aria-label="開く側: 向こう"
+              checked={draft.openToBack}
+              onChange={() => updateTechniqueDraft({ openToBack: true })}
+            />
+            向こう
+          </label>
+          <span className="hint">
+            動かした紙を重なりのいちばん上へ置くか、いちばん下へ入れるかを選びます
+          </span>
+        </div>
+      )}
       <div className="button-row">
         <button
           type="button"
@@ -852,11 +1214,13 @@ function TechniqueDraftContent({ draft }: { draft: TechniqueDraft }) {
           title={
             ready
               ? "選んだ技法で折ります"
-              : draft.kind === "Twist"
+              : draft.line === null && draft.kind === "Twist"
                 ? "立体表示で中央の形の角を3つ以上クリックしてください"
-                : needsFlap && !flapOk
-                  ? "立体表示で紙をクリックして、重なった層を選んでください"
-                  : "立体表示で紙の上をドラッグして折り線を引いてください"
+                : draft.line === null
+                  ? "立体表示で紙の上をドラッグして折り線を引いてください"
+                  : needsFlap && !flapOk
+                    ? `立体表示で紙をクリックして、対象の層を${minimumFlap}枚以上選んでください`
+                    : "選んだ技法の指定を確認してください"
           }
           onClick={() => void commitTechnique()}
         >
@@ -867,8 +1231,10 @@ function TechniqueDraftContent({ draft }: { draft: TechniqueDraft }) {
         </button>
         <span className="hint">
           {draft.kind === "Twist"
-            ? "立体表示で指した中央の形と、そこから出るひだの折り線を黄色で見せています。層を選ばなければ全ての層をねじります"
-            : "立体表示で紙をクリックすると、その場所に重なっている層をまとめて選びます。そのままドラッグすると折り線を引けます(黄色く光っている層が対象です)"}
+            ? "立体表示で指した中央の形と、そこから出るひだの折り線を黄色で見せています。Shift+クリックで層を選べ、選ばなければ全ての層をねじります"
+            : minimumFlap === 0
+              ? "層を選ばなければ、その領域の全ての層が対象です。クリック後は枚数・奥行きを絞れ、Ctrl+クリックで基準点を直接指定できます"
+              : "立体表示で紙をクリックすると、その場所の候補層をまとめて選びます。枚数・奥行きや個別チェックで絞れ、Ctrl+クリックで基準点を直接指定できます(黄色く光っている層が対象です)"}
         </span>
       </div>
     </div>

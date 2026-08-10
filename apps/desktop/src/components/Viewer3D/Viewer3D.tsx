@@ -42,7 +42,13 @@ import { twistPreviewSegments } from "../../lib/twistPolygon";
 import { ALIGN_STEPS } from "../../lib/alignFold";
 import { nearestAlignLine, nearestAlignPoint } from "../../lib/alignPick";
 import { planGrabFold, type GrabMode } from "./grabFold";
-import { pickFace, pickHinge, pickPaper, type HingeSegment } from "./hingePicker";
+import {
+  pickFace,
+  pickHinge,
+  pickHingeSegment,
+  pickPaper,
+  type HingeSegment,
+} from "./hingePicker";
 import { deriveSelectedEdgeHighlights } from "./edgeHighlight";
 import { ViewerOperationHint } from "./ViewerOperationHint";
 import { PaperActionTip } from "./PaperActionTip";
@@ -184,10 +190,12 @@ export function Viewer3D({ fitRef }: Props) {
       hasFoldDraft: s.foldDraft !== null,
       hasTechnique: s.techniqueDraft !== null,
       techniqueFlapCount: s.techniqueDraft?.flap.length ?? 0,
+      techniqueCandidateCount: s.techniqueDraft?.flapCandidates.length ?? 0,
       hasTechniqueLine: s.techniqueDraft?.line != null,
       techniqueKind: s.techniqueDraft?.kind ?? null,
       techniqueVertexCount: s.techniqueDraft?.polygon.length ?? 0,
       techniqueHasCenter: s.techniqueDraft?.center != null,
+      techniqueHasReference: s.techniqueDraft?.referencePoint != null,
       alignMode: s.alignDraft?.mode ?? null,
       alignPickCount: s.alignDraft?.picks.length ?? 0,
       alignSolutionCount: s.alignDraft?.solutions.length ?? 0,
@@ -323,14 +331,29 @@ export function Viewer3D({ fitRef }: Props) {
       const draft = s.techniqueDraft;
       const layers = foldLayers(s.frame3d, s.doc, s.faces);
       const segments: [Vec2, Vec2][] = [];
+      // 層操作で追加済みのReflect軸も、現在選択中の軸と一緒に表示する。
+      if (draft.kind === "Simple") {
+        for (const part of draft.motionParts) {
+          if (part.transform !== "Stay") segments.push(...part.transform.Reflect);
+        }
+      }
       // ねじり折り: 指した中央多角形と、そこから出るひだの折り線を下見する
       if (draft.kind === "Twist" && draft.polygon.length > 0) {
         segments.push(...twistPreviewSegments(draft.polygon, draft.center));
         if (draft.center) segments.push(...centerMark(draft.center));
       }
+      // Ctrl+クリックで明示した基準点。「こちら側／反対側」より優先される位置を
+      // 適用前に確認できるよう、折り線と同じ黄色の十字で見せる。
+      if (draft.referencePoint) segments.push(...centerMark(draft.referencePoint));
       const shown = drawing ? [drawing.a, drawing.b] : draft.line;
       if (shown) segments.push([shown[0], shown[1]]);
-      for (const l of layers.filter((l) => draft.flap.includes(l.face))) {
+      const selectedMotionLayers = new Set([
+        ...draft.flap,
+        ...(draft.kind === "Simple"
+          ? draft.motionParts.flatMap((part) => part.layers)
+          : []),
+      ]);
+      for (const l of layers.filter((l) => selectedMotionLayers.has(l.face))) {
         for (let i = 0; i < l.polygon.length; i++) {
           segments.push([l.polygon[i], l.polygon[(i + 1) % l.polygon.length]]);
         }
@@ -632,7 +655,23 @@ export function Viewer3D({ fitRef }: Props) {
         return;
       }
       if (s.activeTool === "technique") {
-        canvas.style.cursor = canFoldNow(s) ? "crosshair" : "not-allowed";
+        if (!canFoldNow(s)) {
+          canvas.style.cursor = "not-allowed";
+          return;
+        }
+        if (s.techniqueDraft?.kind === "Simple" && s.techniqueDraft.motionMode === "reflect") {
+          const axis = pickHingeSegment(
+            scene.content.hingeSegments,
+            scene.camera,
+            rect.width,
+            rect.height,
+            x,
+            y,
+          );
+          canvas.style.cursor = axis ? "pointer" : "crosshair";
+          return;
+        }
+        canvas.style.cursor = "crosshair";
         return;
       }
       const edgeId = pickHinge(
@@ -866,21 +905,66 @@ export function Viewer3D({ fitRef }: Props) {
         const s = useAppStore.getState();
         const drawn = Math.hypot(b[0] - a[0], b[1] - a[1]) >= MIN_FOLD_LENGTH;
         if (s.activeTool === "technique" && s.techniqueDraft && s.doc) {
-          if (s.techniqueDraft.kind === "Twist" && !drawn) {
-            // ねじり折り: クリックで中央多角形の角を順に置く(Ctrlなら中心)
-            if (e.ctrlKey) s.setTechniqueCenter(a);
-            else s.addTechniqueVertex(a);
-          } else if (drawn) {
-            s.setTechniqueLine([a, b]);
-          } else {
-            // ドラッグせずクリックしただけ: その場所に重なっている層を選ぶ
+          const techniqueDoc = s.doc;
+          const selectTechniqueFlap = () =>
             s.setTechniqueFlap(
               facesAtPoint(
-                foldLayers(s.frame3d, s.doc, s.faces),
+                foldLayers(s.frame3d, techniqueDoc, s.faces),
                 a,
                 FLAP_PICK_EPS,
               ),
             );
+          if (s.techniqueDraft.kind === "Twist" && !drawn) {
+            // ねじり折り: 通常クリック=中央多角形の角、Ctrl=中心、Shift=対象層。
+            // 通常クリックが頂点専用でも、既存の層ピッカーを全て使えるようにする。
+            if (e.ctrlKey) s.setTechniqueCenter(a);
+            else if (e.shiftKey) selectTechniqueFlap();
+            else s.addTechniqueVertex(a);
+          } else if (
+            !drawn &&
+            e.ctrlKey &&
+            s.techniqueDraft.kind !== "Simple"
+          ) {
+            // 名前付き技法の任意基準点。Swivelの寄せ先など、自動の左右点では
+            // 表せない位置を直接指す。SimpleはCtrlも従来どおり層/既存軸選択。
+            s.setTechniqueReferencePoint(a);
+          } else if (drawn) {
+            // 既存折り目の開閉は、目分量のドラッグ軸を受け取らない。クリックで
+            // sceneのヒンジ線分を選び、現在形と完全に同じ座標を使う。
+            if (
+              !(
+                s.techniqueDraft.kind === "Simple" &&
+                s.techniqueDraft.motionMode === "reflect"
+              )
+            ) {
+              s.setTechniqueLine([a, b]);
+            }
+          } else {
+            // 層操作の開閉では、既存ヒンジをクリックすると表示中の正確な線分を
+            // Reflect軸へ使う。ヒンジ以外の紙面クリックは従来どおり層選択。
+            const rect = e.currentTarget.getBoundingClientRect();
+            const scene = sceneRef.current;
+            const axis =
+              s.techniqueDraft.kind === "Simple" &&
+              s.techniqueDraft.motionMode === "reflect" &&
+              scene?.content
+                ? pickHingeSegment(
+                    scene.content.hingeSegments,
+                    scene.camera,
+                    rect.width,
+                    rect.height,
+                    e.clientX - rect.left,
+                    e.clientY - rect.top,
+                  )
+                : null;
+            if (axis) {
+              s.setLayerMotionAxis(axis.edgeId, [
+                [axis.a.x, axis.a.y],
+                [axis.b.x, axis.b.y],
+              ]);
+            } else {
+              selectTechniqueFlap();
+            }
           }
         } else if (drawn) {
           s.beginFoldDraft([a, b], "3d");
@@ -985,9 +1069,11 @@ export function Viewer3D({ fitRef }: Props) {
           pullMode
             ? "紙をつかんでドラッグすると、折り線のつじつまを保ったまま全体が連動して動く(右ドラッグで視点を回す)"
             : activeTool === "technique"
-            ? techniqueDraft?.kind === "Twist"
-              ? "中央の形の角を順にクリックする(3つ以上)。Ctrl+クリックで中心、Backspaceで1つ戻す、Escでやめる"
-              : "紙をクリックして層を選び、ドラッグして折り線を引く(平らに畳んだ状態で使える)"
+            ? techniqueDraft?.kind === "Simple"
+              ? "紙面をクリックして対象層を選ぶ。既存折り目をクリックすると正確な開閉軸になる。ドラッグでは任意軸を引ける"
+              : techniqueDraft?.kind === "Twist"
+              ? "中央の形の角を順にクリックする(3つ以上)。Ctrl+クリックで中心、Shift+クリックで対象層、Backspaceで1つ戻す、Escでやめる"
+              : "紙をクリックして層、Ctrl+クリックで基準点を選び、ドラッグして折り線を引く(平らに畳んだ状態で使える)"
             : foldMode
               ? "紙をつかんでドラッグすると折れる。Shiftで重なった紙を全部、Altで1枚だけ、Ctrl+ドラッグで折り線を引く(平らに畳んだ状態で使える)"
               : "ドラッグで回転、ホイールで拡大縮小、折り線をクリックで選択、Ctrl+クリックで追加/解除(展開図で選んだ縁・補助線は水色)"

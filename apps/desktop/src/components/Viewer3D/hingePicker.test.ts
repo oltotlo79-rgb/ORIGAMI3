@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
-import { pickHinge, type HingeSegment } from "./hingePicker";
+import { pickHinge, pickHingeSegment, type HingeSegment } from "./hingePicker";
 
 /** 原点を正面から見るカメラ(画面200×200px) */
 function makeCamera(): THREE.PerspectiveCamera {
@@ -44,6 +44,13 @@ describe("pickHinge", () => {
     expect(pickHinge([far, near], camera, 200, 200, 100, 100)).toBe(2);
     // 並び順に関わらず同じ結果になる
     expect(pickHinge([near, far], camera, 200, 200, 100, 100)).toBe(2);
+  });
+
+  it("層操作用にはIDだけでなく、選んだ既存折り目の正確な線分を返す", () => {
+    const far = segment(1, [-0.5, 0, 0], [0.5, 0, 0]);
+    const near = segment(2, [-0.5, 0, 0.5], [0.5, 0, 0.5]);
+
+    expect(pickHingeSegment([far, near], camera, 200, 200, 100, 100)).toBe(near);
   });
 
   it("わずかに手前の方が遠い場合でも、0.5px刻みで同程度なら手前を選ぶ", () => {

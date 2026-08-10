@@ -62,6 +62,7 @@ import type {
   FoldDirection,
   FoldThroughProposal,
   Frame3D,
+  MotionPart,
   Paper,
   ProposalCandidate,
   RecoveryInfo,
@@ -75,6 +76,21 @@ import type {
 import { defaultSkeleton } from "../lib/skeleton";
 import { loadOnboarding, saveOnboarding } from "../lib/firstRunGuide";
 import type { HelpChapterId } from "../help/helpTypes";
+import {
+  clampTechniqueLayerCount,
+  minimumTechniqueFlap,
+  techniqueFlapForPreset,
+  techniqueUsesOpenToBack,
+  toggleTechniqueFlap as toggleTechniqueFlapSelection,
+  type TechniqueLayerPreset,
+} from "../lib/techniqueLayers";
+import {
+  buildLayerMotionPart,
+  hasLayerMotionInput,
+  type LayerMotionMode,
+  type LayerMotionPartDraft,
+  type LayerTurnMode,
+} from "../lib/layerMotion";
 
 /** ヒンジ角の連続操作(スライダー)を間引く間隔(ms) */
 /** 追従計算は60fps相当で最大1回。runLatestが計算待ちを最新1件へまとめる。 */
@@ -205,6 +221,10 @@ export interface TechniqueDraft {
   kind: TechniqueKind;
   /** 対象フラップ(3D表示でクリックした場所に重なっている層の面ID) */
   flap: number[];
+  /** クリック地点に重なる候補層。facesAtPointと同じ奥→手前の順 */
+  flapCandidates: number[];
+  /** 「手前/奥からN枚」「手前からN枚目」で使う枚数・奥行き */
+  flapPickCount: number;
   /** 折り線(畳み平面座標)。まだ引いていなければnull */
   line: [Vec2, Vec2] | null;
   /** 折り線のどちら側が動くか(線の進行方向に対する左右) */
@@ -216,14 +236,66 @@ export interface TechniqueDraft {
   polygon: Vec2[];
   /** ねじり折りの中心(畳み平面座標)。nullなら多角形の重心を使う */
   center: Vec2 | null;
+  /**
+   * 名前付き技法へ渡す基準点(畳み平面座標)。nullなら折り線と動かす側から
+   * 自動で決める。技法ごとの意味は、つぶす先・持ち上げる先端・沈める先端・
+   * 寄せる先など。ねじり折りの中心は上のcenterを使う。
+   */
+  referencePoint: Vec2 | null;
   /** ねじり折りのねじる角(度)。動かす側の指定で向きが決まる */
   twistDeg: number;
+  /** 対応技法で、動かした紙を向こう側(重なりの下)へ入れるか */
+  openToBack: boolean;
+  /** kind=Simpleを「層操作」入口として使うときの現在partの変換。 */
+  motionMode: LayerMotionMode;
+  /** Stayで紙を動かさず重ね替えるときの置き場所。 */
+  motionTurn: LayerTurnMode;
+  /** Outside/Inside/Besideの手前(Up)・奥(Down)。 */
+  motionDirection: FoldDirection;
+  /** Besideで隣へ置く基準面ID。 */
+  motionAnchor: number;
+  /** 現在part内の重なり順を反転するか。 */
+  motionReverseLayers: boolean;
+  /** クリックで正確に選んだ既存折り目。手描き軸ならnull。 */
+  motionAxisEdgeId: number | null;
+  /** 1手として同時に適用する、追加済みのpart。 */
+  motionParts: MotionPart[];
   /** 選んだ時点の作品の世代番号(新規・開くで変わる) */
   docEpoch: number;
   /** 選んだ時点の手順の数 */
   stepCount: number;
   /** 選んだ時点で見ていた位置(=技法が挟まる位置)。FoldDraftと同じ意味 */
   upTo: number;
+}
+
+/** 技法下書きの共通項目から、汎用層操作の現在partだけを取り出す。 */
+function layerMotionPartDraft(draft: TechniqueDraft): LayerMotionPartDraft {
+  return {
+    layers: draft.flap,
+    line: draft.line,
+    mode: draft.motionMode,
+    turn: draft.motionTurn,
+    direction: draft.motionDirection,
+    anchor: draft.motionAnchor,
+    reverseLayers: draft.motionReverseLayers,
+  };
+}
+
+/** part追加後、次の部分を選べる空の状態へ戻す。追加済みpartは呼び出し側で保つ。 */
+function clearCurrentLayerMotion(draft: TechniqueDraft): TechniqueDraft {
+  return {
+    ...draft,
+    flap: [],
+    flapCandidates: [],
+    flapPickCount: 1,
+    line: null,
+    motionMode: "reflect",
+    motionTurn: "Keep",
+    motionDirection: "Up",
+    motionAnchor: 0,
+    motionReverseLayers: false,
+    motionAxisEdgeId: null,
+  };
 }
 
 /**
@@ -579,14 +651,26 @@ interface AppState {
   beginTechnique: (kind: TechniqueKind) => void;
   /** 3D表示でクリックした場所の層をフラップとして選ぶ */
   setTechniqueFlap: (faces: number[]) => void;
+  /** 候補層を「全部/手前・奥からN枚/手前からN枚目」で選ぶ */
+  setTechniqueFlapPreset: (preset: TechniqueLayerPreset) => void;
+  /** 候補層1枚のチェックを切り替える */
+  toggleTechniqueFlap: (face: number) => void;
   /** 技法の折り線を引く */
   setTechniqueLine: (line: [Vec2, Vec2]) => void;
+  /** 層操作で、3D上の既存折り目を正確な開閉軸として選ぶ。 */
+  setLayerMotionAxis: (edgeId: number, line: [Vec2, Vec2]) => void;
+  /** 現在の層操作partを同時操作の一覧へ追加する。 */
+  addLayerMotionPart: () => void;
+  /** 同時操作の一覧から直前のpartを外す。 */
+  undoLayerMotionPart: () => void;
   /** ねじり折りの中央多角形へ頂点を1つ足す(3D画面のクリック) */
   addTechniqueVertex: (p: Vec2) => void;
   /** 直前に足した頂点を取り消す(頂点が無ければ何もしない) */
   undoTechniqueVertex: () => void;
   /** ねじり折りの中心を指定する(nullで多角形の重心へ戻す) */
   setTechniqueCenter: (p: Vec2 | null) => void;
+  /** 名前付き技法の基準点を明示する(nullで自動へ戻す) */
+  setTechniqueReferencePoint: (p: Vec2 | null) => void;
   /** 技法の設定(動かす側・段の幅)を変える */
   updateTechniqueDraft: (patch: Partial<TechniqueDraft>) => void;
   /** 作図補助(CPE-005)の選び方を変える(どの作図か・等分数・角度の刻み) */
@@ -2005,12 +2089,23 @@ export const useAppStore = create<AppState>((set, get) => {
         techniqueDraft: {
           kind,
           flap: [],
+          flapCandidates: [],
+          flapPickCount: 1,
           line: null,
           movingSide: "right",
           widthMm: DEFAULT_PLEAT_WIDTH_MM,
           polygon: [],
           center: null,
+          referencePoint: null,
           twistDeg: DEFAULT_TWIST_DEG,
+          openToBack: false,
+          motionMode: "reflect",
+          motionTurn: "Keep",
+          motionDirection: "Up",
+          motionAnchor: 0,
+          motionReverseLayers: false,
+          motionAxisEdgeId: null,
+          motionParts: [],
           docEpoch: s.docEpoch,
           stepCount: s.doc.sequence.length,
           upTo: foldInsertAt(s),
@@ -2021,12 +2116,114 @@ export const useAppStore = create<AppState>((set, get) => {
 
     setTechniqueFlap: (faces) => {
       const draft = get().techniqueDraft;
-      if (draft) set({ techniqueDraft: { ...draft, flap: faces } });
+      if (!draft) return;
+      const candidates = [...new Set(faces)];
+      set({
+        techniqueDraft: {
+          ...draft,
+          flap: candidates,
+          flapCandidates: candidates,
+          flapPickCount: clampTechniqueLayerCount(
+            draft.flapPickCount,
+            candidates.length,
+          ),
+        },
+      });
+    },
+
+    setTechniqueFlapPreset: (preset) => {
+      const draft = get().techniqueDraft;
+      if (!draft) return;
+      set({
+        techniqueDraft: {
+          ...draft,
+          flap: techniqueFlapForPreset(
+            draft.flapCandidates,
+            preset,
+            draft.flapPickCount,
+          ),
+        },
+      });
+    },
+
+    toggleTechniqueFlap: (face) => {
+      const draft = get().techniqueDraft;
+      if (!draft) return;
+      set({
+        techniqueDraft: {
+          ...draft,
+          flap: toggleTechniqueFlapSelection(
+            draft.flapCandidates,
+            draft.flap,
+            face,
+          ),
+        },
+      });
     },
 
     setTechniqueLine: (line) => {
       const draft = get().techniqueDraft;
-      if (draft) set({ techniqueDraft: { ...draft, line } });
+      if (draft) {
+        set({
+          techniqueDraft: {
+            ...draft,
+            line,
+            // ドラッグで引いた軸は既存折り目IDを保証できない。
+            motionAxisEdgeId: draft.kind === "Simple" ? null : draft.motionAxisEdgeId,
+          },
+        });
+      }
+    },
+
+    setLayerMotionAxis: (edgeId, line) => {
+      const draft = get().techniqueDraft;
+      if (!draft || draft.kind !== "Simple") return;
+      set({
+        techniqueDraft: {
+          ...draft,
+          line,
+          motionAxisEdgeId: edgeId,
+          motionMode: "reflect",
+        },
+        errorMessage: null,
+      });
+    },
+
+    addLayerMotionPart: () => {
+      const draft = get().techniqueDraft;
+      if (!draft || draft.kind !== "Simple") return;
+      if (draft.motionMode === "reflect" && draft.motionAxisEdgeId === null) {
+        set({
+          errorMessage:
+            "立体表示で既存の折り目をクリックして、正確な開閉軸を選んでください",
+        });
+        return;
+      }
+      const built = buildLayerMotionPart(layerMotionPartDraft(draft));
+      if (!built.ok) {
+        set({ errorMessage: built.error });
+        return;
+      }
+      set({
+        techniqueDraft: {
+          ...clearCurrentLayerMotion(draft),
+          motionParts: [...draft.motionParts, built.part],
+        },
+        errorMessage: null,
+        operationStage: 1,
+      });
+    },
+
+    undoLayerMotionPart: () => {
+      const draft = get().techniqueDraft;
+      if (!draft || draft.kind !== "Simple" || draft.motionParts.length === 0) return;
+      set({
+        techniqueDraft: {
+          ...draft,
+          motionParts: draft.motionParts.slice(0, -1),
+        },
+        errorMessage: null,
+      });
     },
 
     addTechniqueVertex: (p) => {
@@ -2048,6 +2245,13 @@ export const useAppStore = create<AppState>((set, get) => {
       if (draft) set({ techniqueDraft: { ...draft, center: p } });
     },
 
+    setTechniqueReferencePoint: (p) => {
+      const draft = get().techniqueDraft;
+      if (draft && draft.kind !== "Simple" && draft.kind !== "Twist") {
+        set({ techniqueDraft: { ...draft, referencePoint: p } });
+      }
+    },
+
     updateTechniqueDraft: (patch) => {
       const draft = get().techniqueDraft;
       if (draft) set({ techniqueDraft: { ...draft, ...patch } });
@@ -2066,6 +2270,54 @@ export const useAppStore = create<AppState>((set, get) => {
       const s = get();
       const draft = s.techniqueDraft;
       if (!draft || !s.doc) return;
+      // TechniqueKind::Simpleは通常の単純折りではなく、技法メニュー内の
+      // 「層操作」入口として使う。FlatMotionは名前付き技法とは入力形が違う。
+      if (draft.kind === "Simple") {
+        if (
+          !canFoldNow(s) ||
+          draft.docEpoch !== s.docEpoch ||
+          draft.stepCount !== s.doc.sequence.length ||
+          draft.upTo !== foldInsertAt(s)
+        ) {
+          set({ techniqueDraft: null, errorMessage: STALE_DRAFT_MESSAGE });
+          return;
+        }
+        const parts = [...draft.motionParts];
+        const current = layerMotionPartDraft(draft);
+        if (hasLayerMotionInput(current)) {
+          if (draft.motionMode === "reflect" && draft.motionAxisEdgeId === null) {
+            set({
+              errorMessage:
+                "立体表示で既存の折り目をクリックして、正確な開閉軸を選んでください",
+            });
+            return;
+          }
+          const built = buildLayerMotionPart(current);
+          if (!built.ok) {
+            set({ errorMessage: built.error });
+            return;
+          }
+          parts.push(built.part);
+        }
+        if (parts.length === 0) {
+          set({
+            errorMessage:
+              "既存折り目と対象層を選ぶか、重ね方・山谷反転を指定してください",
+          });
+          return;
+        }
+        set({
+          currentStep: draft.upTo === s.doc.sequence.length ? null : draft.upTo + 1,
+        });
+        await get().applySequenceOp({
+          type: "FlatMotion",
+          up_to: draft.upTo,
+          parts,
+          kind: "Simple",
+        });
+        if (get().errorMessage === null) set({ techniqueDraft: null });
+        return;
+      }
       // ねじり折りは中央多角形を頂点で指せる(辺の数も長さも仮定しない)。
       // 3点以上そろっていれば、折り線1本の指し方(正多角形)より優先する
       const byPolygon =
@@ -2089,13 +2341,13 @@ export const useAppStore = create<AppState>((set, get) => {
         set({ techniqueDraft: null, errorMessage: STALE_DRAFT_MESSAGE });
         return;
       }
-      // 中割り折り・かぶせ折りには重なった層が要る(層の数は奇数でもよい。
-      // 先端をどちら向きに回すかは紙のつながりから決まる)。
-      // 多角形で指したねじり折りは層を選ばなくてよい(選ばなければ全ての層)
-      if (draft.kind !== "Pleat" && !byPolygon && draft.flap.length < 2) {
+      // Rust側と同じ層数規約にする。中割り・かぶせだけ2枚以上、つぶし・花弁は
+      // 1枚以上。段・沈め・ひだ寄せ・ねじりは空なら領域の全層を対象にする。
+      const minimumFlap = minimumTechniqueFlap(draft.kind);
+      if (draft.flap.length < minimumFlap) {
         set({
           errorMessage:
-            "先に立体表示で紙をクリックし、重なった層(フラップ)を選んでください",
+            `先に立体表示で紙をクリックし、対象の層(フラップ)を${minimumFlap}枚以上選んでください`,
         });
         return;
       }
@@ -2116,11 +2368,23 @@ export const useAppStore = create<AppState>((set, get) => {
       // 多角形を指したときは1辺目をlineとして送る(エンジンはpolygonを優先する)
       const line: [Vec2, Vec2] =
         draft.line ?? [draft.polygon[0], draft.polygon[1]];
+      const lineLength = Math.hypot(
+        line[1][0] - line[0][0],
+        line[1][1] - line[0][1],
+      );
+      // 沈め折りのreference_pointは「沈める先端側」そのもの。他の技法で使う
+      // keepSidePoint(動かさない側・行き先)とは意味が逆なので、未指定時も
+      // movingSideと同じ側へ点を置く。Ctrl+クリックの明示点は全技法で優先する。
+      const automaticReference =
+        draft.kind === "Pleat"
+          ? offsetPoint(line, draft.movingSide, draft.widthMm / scale)
+          : draft.kind === "OpenSink"
+            ? offsetPoint(line, draft.movingSide, Math.max(0.01, lineLength * 0.25))
+            : keepSidePoint(line, draft.movingSide);
       const reference =
         twistRef ??
-        (draft.kind === "Pleat"
-          ? offsetPoint(line, draft.movingSide, draft.widthMm / scale)
-          : keepSidePoint(line, draft.movingSide));
+        draft.referencePoint ??
+        automaticReference;
       // 折った結果を見せる。末尾へ足したなら最新、途中へ挟んだなら挟んだ手順
       set({ currentStep: draft.upTo === s.doc.sequence.length ? null : draft.upTo + 1 });
       await get().applySequenceOp({
@@ -2130,6 +2394,9 @@ export const useAppStore = create<AppState>((set, get) => {
         flap: draft.flap,
         line,
         reference_point: reference,
+        ...(techniqueUsesOpenToBack(draft.kind)
+          ? { open_to_back: draft.openToBack }
+          : {}),
         ...(byPolygon && twistCenter
           ? { polygon: draft.polygon, center: twistCenter }
           : {}),

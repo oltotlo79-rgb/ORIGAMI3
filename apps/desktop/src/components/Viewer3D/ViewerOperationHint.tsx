@@ -68,7 +68,11 @@ export function viewerAssignments(
   }
   if (tool === "technique") {
     return [
-      { control: "left", label: "左クリック／ドラッグ", action: "紙の層・折り線を選ぶ" },
+      {
+        control: "left",
+        label: "左クリック／ドラッグ",
+        action: "層・角・基準点／折り線を選ぶ",
+      },
       { control: "right", label: "右ドラッグ", action: "視点を動かす" },
       { control: "wheel", label: "ホイール", action: "拡大・縮小" },
     ];

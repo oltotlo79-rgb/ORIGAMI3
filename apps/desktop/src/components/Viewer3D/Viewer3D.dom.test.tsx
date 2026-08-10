@@ -260,6 +260,27 @@ describe("Viewer3D(画面)", () => {
     expect(op.target_layers).toEqual([0]);
   });
 
+  it("技法で紙をクリックすると候補層を保存し、初期対象は候補全部にする", () => {
+    useAppStore.getState().beginTechnique("Squash");
+    const canvas = renderViewer();
+
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 1,
+      clientX: 200,
+      clientY: 200,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 1,
+      clientX: 200,
+      clientY: 200,
+    });
+
+    expect(useAppStore.getState().techniqueDraft?.flapCandidates).toEqual([0]);
+    expect(useAppStore.getState().techniqueDraft?.flap).toEqual([0]);
+  });
+
   // SIM-012: たわみは見た目だけの表現。当たり判定は剛体折りの多角形のままなので、
   // 細かい網を描いている間も折る・つかむ操作がそのまま使える
   it("たわみを入れても紙をつかんで折れる(当たり判定は元の面のまま)", async () => {
@@ -529,12 +550,23 @@ describe("Viewer3D(ねじり折りの中央多角形を指す)", () => {
       techniqueDraft: {
         kind: "Twist",
         flap: [],
+        flapCandidates: [],
+        flapPickCount: 1,
         line: null,
         movingSide: "right",
         widthMm: 10,
         polygon: [],
         center: null,
+        referencePoint: null,
         twistDeg: 30,
+        openToBack: false,
+        motionMode: "reflect",
+        motionTurn: "Keep",
+        motionDirection: "Up",
+        motionAnchor: 0,
+        motionReverseLayers: false,
+        motionAxisEdgeId: null,
+        motionParts: [],
         docEpoch: 0,
         stepCount: 0,
         upTo: 0,
@@ -543,9 +575,29 @@ describe("Viewer3D(ねじり折りの中央多角形を指す)", () => {
   }
 
   /** 紙の上を1回クリックする(動かさないのでクリック扱いになる) */
-  function click(canvas: Element, x: number, y: number, ctrlKey = false) {
-    fireEvent.pointerDown(canvas, { button: 0, pointerId: 1, clientX: x, clientY: y, ctrlKey });
-    fireEvent.pointerUp(canvas, { button: 0, pointerId: 1, clientX: x, clientY: y, ctrlKey });
+  function click(
+    canvas: Element,
+    x: number,
+    y: number,
+    ctrlKey = false,
+    shiftKey = false,
+  ) {
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 1,
+      clientX: x,
+      clientY: y,
+      ctrlKey,
+      shiftKey,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 1,
+      clientX: x,
+      clientY: y,
+      ctrlKey,
+      shiftKey,
+    });
   }
 
   beforeEach(() => {
@@ -582,6 +634,35 @@ describe("Viewer3D(ねじり折りの中央多角形を指す)", () => {
 
     fireEvent.keyDown(window, { key: "Escape" });
     expect(useAppStore.getState().techniqueDraft).toBeNull();
+  });
+
+  it("Shift+クリックで中央多角形を増やさず対象層を選べる", () => {
+    const canvas = renderViewer();
+    expect(screen.getByRole("status").textContent).toContain("Shift+クリック");
+
+    click(canvas, 200, 200, false, true);
+
+    expect(useAppStore.getState().techniqueDraft?.polygon).toEqual([]);
+    expect(useAppStore.getState().techniqueDraft?.flapCandidates).toEqual([0]);
+    expect(useAppStore.getState().techniqueDraft?.flap).toEqual([0]);
+  });
+
+  it("ねじり以外はCtrl+クリックで任意の基準点を指せる", () => {
+    const draft = useAppStore.getState().techniqueDraft;
+    if (!draft) throw new Error("技法ドラフトがない");
+    useAppStore.setState({ techniqueDraft: { ...draft, kind: "Swivel" } });
+    const canvas = renderViewer();
+    expect(screen.getByRole("status").textContent).toContain("Ctrl+クリック");
+
+    click(canvas, 230, 200, true);
+
+    const reference = useAppStore.getState().techniqueDraft?.referencePoint;
+    expect(reference).not.toBeNull();
+    expect(reference?.[0]).toBeGreaterThan(0.5);
+    expect(useAppStore.getState().techniqueDraft?.flap).toEqual([]);
+    const setHighlight = held.scene.setHighlight as ReturnType<typeof vi.fn>;
+    const last = setHighlight.mock.calls[setHighlight.mock.calls.length - 1][0];
+    expect((last as unknown[]).length).toBe(2); // 基準点の十字
   });
 });
 

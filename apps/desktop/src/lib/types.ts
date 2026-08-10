@@ -91,6 +91,36 @@ export interface FoldStep {
  */
 export type FoldDirection = "Up" | "Down";
 
+/** 汎用層操作の対象領域。inside_point側の半平面を使う。 */
+export interface HalfPlane {
+  line: [Vec2, Vec2];
+  inside_point: Vec2;
+}
+
+/** Rustの外部タグenumと同じJSON形。鏡映は先頭から順に適用する。 */
+export type MotionTransform =
+  | "Stay"
+  | { Reflect: [Vec2, Vec2][] };
+
+/** 動かした層を重なりのどこへ置くか。 */
+export type LayerTurn =
+  | "Keep"
+  | { Outside: FoldDirection }
+  | { Inside: FoldDirection }
+  | { Beside: { anchor: number; direction: FoldDirection } };
+
+/** 1回の汎用層操作の中で、同じように動く紙の一部分。 */
+export interface MotionPart {
+  /** 操作開始時点の面ID。空なら全層。 */
+  layers: number[];
+  /** 空なら選んだ層の全域。既存折り目の開閉・重ね替えでは空を使う。 */
+  region: HalfPlane[];
+  transform: MotionTransform;
+  turn: LayerTurn;
+  /** 省略時は変換から自動決定。 */
+  reverse_layers?: boolean;
+}
+
 export interface DisplaySettings {
   front_color: [number, number, number];
   back_color: [number, number, number];
@@ -229,6 +259,16 @@ export type SeqOp =
       direction: FoldDirection;
     }
   /**
+   * 名前付き技法に閉じない層操作。複数partを1手で同時に適用する。
+   * 結果はRust側で通常のFoldStepへ変換され、作品に保存・再生される。
+   */
+  | {
+      type: "FlatMotion";
+      up_to: number;
+      parts: MotionPart[];
+      kind: TechniqueKind;
+    }
+  /**
    * 基本技法(段折り・中割り折り・かぶせ折り)をまとめて折る。
    * 座標はFoldThroughと同じ畳み平面。flapは対象の層(段折りでは空を許す)。
    * reference_pointの意味は技法ごとに違う(段折り=2本目の折り線の位置、
@@ -241,6 +281,9 @@ export type SeqOp =
       flap: number[];
       line: [Vec2, Vec2];
       reference_point: Vec2;
+      /** つぶし・花弁・ひだ寄せ・ねじりで、動かした紙を向こう側へ入れる。
+       * 省略/falseは手前。ほかの技法では送らない */
+      open_to_back?: boolean;
       /** ねじり折りの中央多角形(畳み平面の頂点を順に並べる。3点以上)。
        * 省略するとlineを1辺として中心のまわりに回した正多角形になる。
        * 辺の数も長さも仮定しないので、任意の形の中央多角形を指定できる */

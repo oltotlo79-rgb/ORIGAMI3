@@ -33,8 +33,9 @@ describe("技法の表示名", () => {
 });
 
 describe("サブメニューに出す技法", () => {
-  it("自動で折れる8種(段・中割り・かぶせ・つぶす・花弁・沈め・ひだ寄せ・ねじり)が並ぶ", () => {
+  it("汎用層操作と、自動で折れる8種の名前付き技法が並ぶ", () => {
     expect(SUPPORTED_TECHNIQUES.map((t) => t.kind)).toEqual([
+      "Simple",
       "Pleat",
       "InsideReverse",
       "OutsideReverse",

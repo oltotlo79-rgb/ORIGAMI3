@@ -87,7 +87,7 @@ export function ToolRail({ onFitView }: Props) {
               key={t.kind}
               type="button"
               title={t.title}
-              aria-label={TECHNIQUE_LABEL[t.kind]}
+              aria-label={t.kind === "Simple" ? "層操作" : TECHNIQUE_LABEL[t.kind]}
               className={
                 techniqueDraft?.kind === t.kind
                   ? "tool-button small active"

@@ -65,6 +65,24 @@ export function operationGuideFor(s: ReturnType<typeof useAppStore.getState>): O
   }
 
   if (s.activeTool === "technique") {
+    if (s.techniqueDraft?.kind === "Simple") {
+      const draft = s.techniqueDraft;
+      const hasPart = draft.motionParts.length > 0;
+      const hasCurrent =
+        draft.flap.length > 0 ||
+        draft.line !== null ||
+        draft.motionReverseLayers ||
+        (draft.motionMode === "stay" && draft.motionTurn !== "Keep");
+      return {
+        title: "層を開く・重ね替える",
+        steps: [
+          "3Dで対象層を選び、開閉なら既存折り目をクリック",
+          "重ね方・向き・山谷反転を決め、必要なら部分を追加",
+          "「まとめて適用」で1手として確定",
+        ],
+        current: hasPart ? 2 : hasCurrent ? 1 : 0,
+      };
+    }
     if (s.techniqueDraft?.kind === "Twist") {
       const n = s.techniqueDraft.polygon.length;
       return {

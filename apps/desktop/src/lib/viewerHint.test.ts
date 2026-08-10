@@ -87,6 +87,56 @@ describe("viewerHint", () => {
     ).toContain("適用");
   });
 
+  it("技法固有の必要層数と候補から選んだ部分集合を案内する", () => {
+    const t: HintState = {
+      ...READY,
+      tool: "technique",
+      hasTechnique: true,
+      techniqueKind: "InsideReverse",
+      techniqueCandidateCount: 5,
+      techniqueFlapCount: 1,
+    };
+    const reverse = viewerHint(t);
+    expect(reverse).toContain("候補5枚のうち1枚");
+    expect(reverse).toContain("2枚以上");
+
+    const squash = viewerHint({
+      ...t,
+      techniqueKind: "Squash",
+      techniqueFlapCount: 1,
+    });
+    expect(squash).toContain("中心線");
+    expect(squash).toContain("Ctrl+クリック");
+    expect(squash).toContain("基準点");
+
+    const sink = viewerHint({
+      ...t,
+      techniqueKind: "OpenSink",
+      techniqueCandidateCount: 0,
+      techniqueFlapCount: 0,
+    });
+    expect(sink).toContain("全ての層");
+    expect(sink).toContain("中心線");
+
+    const petal = viewerHint({
+      ...t,
+      techniqueKind: "Petal",
+      techniqueFlapCount: 1,
+      hasTechniqueLine: true,
+    });
+    expect(petal).toContain("開く側");
+    expect(petal).toContain("Ctrl+クリック");
+    expect(
+      viewerHint({
+        ...t,
+        techniqueKind: "Swivel",
+        techniqueFlapCount: 0,
+        hasTechniqueLine: true,
+        techniqueHasReference: true,
+      }),
+    ).toContain("基準点も指定しました");
+  });
+
   it("ねじり折りでは、中央の形の角を順にクリックするよう常に案内する", () => {
     const t: HintState = {
       ...READY,
@@ -100,11 +150,14 @@ describe("viewerHint", () => {
     expect(few).toContain("3つ以上");
     expect(few).toContain("いま2個");
     expect(few).toContain("Esc");
+    expect(few).toContain("Shift+クリック");
     // 3つそろったら適用の案内へ変わる
     const ready = viewerHint({ ...t, techniqueVertexCount: 4 });
     expect(ready).toContain("4角形");
     expect(ready).toContain("適用");
     expect(ready).toContain("中心は形の重心");
+    expect(ready).toContain("開く側");
+    expect(ready).toContain("Shift+クリック");
     expect(
       viewerHint({ ...t, techniqueVertexCount: 4, techniqueHasCenter: true }),
     ).toContain("中心は指定した点");

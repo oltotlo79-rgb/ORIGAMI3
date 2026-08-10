@@ -328,6 +328,29 @@ impl DocumentStore {
                 )?;
                 warnings = state_warnings;
             }
+            SeqOp::FlatMotion { up_to, parts, kind } => {
+                // FoldThrough/Techniqueと同じ挿入・警告規約。面IDはこの時点の
+                // 導出値だが、結果は座標参照のFoldStepへ変換されて保存される。
+                let mut insert_warnings = check_insert_point(&doc, up_to)?;
+                let (state, state_warnings) = ori3_layers::flat_state_at(&doc, &self.faces, up_to)?;
+                let mut cp = doc.cp.clone();
+                let result = ori3_layers::flat_motion(
+                    &mut cp,
+                    &self.faces,
+                    &state,
+                    &ori3_layers::FlatMotionInput {
+                        parts: parts.into_iter().map(to_layer_motion_part).collect(),
+                        kind,
+                    },
+                )?;
+                let mut step = result.step;
+                step.id = next_step_id(&doc);
+                doc.cp = cp;
+                doc.sequence.insert(up_to, step);
+                warnings = state_warnings;
+                warnings.append(&mut insert_warnings);
+                warnings.extend(result.warnings);
+            }
             SeqOp::Technique {
                 up_to,
                 kind,
@@ -678,7 +701,38 @@ fn check_paper(paper: &Paper) -> Result<(), String> {
     }
 }
 
-/// 折り操作([`SeqOp::FoldThrough`] / [`SeqOp::Technique`])の挿入位置を検査する。
+/// IPC用のserde型を、汎用層演算の内部型へ移す。
+fn to_layer_motion_part(part: ori3_model::MotionPart) -> ori3_layers::MotionPart {
+    ori3_layers::MotionPart {
+        layers: part.layers,
+        region: part
+            .region
+            .into_iter()
+            .map(|half_plane| ori3_layers::HalfPlane {
+                line: half_plane.line,
+                inside_point: half_plane.inside_point,
+            })
+            .collect(),
+        transform: match part.transform {
+            ori3_model::MotionTransform::Stay => ori3_layers::MotionTransform::Stay,
+            ori3_model::MotionTransform::Reflect(lines) => {
+                ori3_layers::MotionTransform::Reflect(lines)
+            }
+        },
+        turn: match part.turn {
+            ori3_model::LayerTurn::Keep => ori3_layers::LayerTurn::Keep,
+            ori3_model::LayerTurn::Outside(direction) => ori3_layers::LayerTurn::Outside(direction),
+            ori3_model::LayerTurn::Inside(direction) => ori3_layers::LayerTurn::Inside(direction),
+            ori3_model::LayerTurn::Beside { anchor, direction } => {
+                ori3_layers::LayerTurn::Beside { anchor, direction }
+            }
+        },
+        reverse_layers: part.reverse_layers,
+    }
+}
+
+/// 折り操作([`SeqOp::FoldThrough`] / [`SeqOp::FlatMotion`] / [`SeqOp::Technique`])の
+/// 挿入位置を検査する。
 ///
 /// `up_to` は「この折りの直前までの手順数」で、途中の値も許す(手順の途中へ折りを
 /// 挟める)。挟めるのは、手順の永続化が面IDや辺IDではなく幾何(折り線の線分・層順序の
@@ -751,6 +805,14 @@ mod tests {
             alignment: None,
             note: String::new(),
         }
+    }
+
+    fn current_flat_state(store: &DocumentStore) -> ori3_layers::FlatState {
+        let (state, warnings) =
+            ori3_layers::flat_state_at(&store.doc, &store.faces, store.doc.sequence.len())
+                .expect("現在の手順は平坦状態");
+        assert!(warnings.is_empty(), "再生警告={warnings:?}");
+        state
     }
 
     #[test]
@@ -1330,6 +1392,217 @@ mod tests {
         let view = store.undo().unwrap();
         assert_eq!(view.doc.sequence.len(), 1);
         assert_eq!(view.faces.len(), 2);
+    }
+
+    /// 既存折り目を、領域を追加せず鏡映する汎用操作で0°まで開ける。
+    #[test]
+    fn flat_motion_opens_existing_crease_and_replays() {
+        let mut store = square_store();
+        store
+            .apply_seq(fold_op(0, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5]))
+            .expect("半分に折る");
+        let before = current_flat_state(&store);
+        let folded = store
+            .faces
+            .iter()
+            .find(|face| before.placements[&face.id].mirrored)
+            .expect("折り返された層")
+            .id;
+        let ([x0, y0], [_, y1]) = outline_bbox(&store);
+        let seam = [[x0, y0], [x0, y1]];
+        let cp_before = store.doc.cp.clone();
+
+        let view = store
+            .apply_seq(SeqOp::FlatMotion {
+                up_to: 1,
+                parts: vec![ori3_model::MotionPart {
+                    layers: vec![folded],
+                    region: Vec::new(),
+                    transform: ori3_model::MotionTransform::Reflect(vec![seam]),
+                    turn: ori3_model::LayerTurn::Keep,
+                    reverse_layers: None,
+                }],
+                kind: TechniqueKind::Simple,
+            })
+            .expect("既存折り目を開く");
+
+        assert_eq!(view.doc.cp, cp_before, "開く操作はCPへ線を追加しない");
+        assert_eq!(view.doc.sequence.len(), 2);
+        assert!(
+            view.doc.sequence[1]
+                .drivers
+                .iter()
+                .any(|driver| driver.target_angle_deg.abs() <= ori3_model::EPS),
+            "開いた折り目は0°で記録される"
+        );
+        let replayed = current_flat_state(&store);
+        let first = replayed.placements[&store.faces[0].id];
+        for face in &store.faces {
+            assert!(
+                replayed.placements[&face.id].approx_eq(&first, 1e-6),
+                "面{}が開いた平面へ戻る",
+                face.id
+            );
+        }
+    }
+
+    /// `Stay`は紙を動かさず、指定層の重なり順だけを変更して再生できる。
+    #[test]
+    fn flat_motion_restacks_without_moving_and_replays() {
+        let mut store = square_store();
+        store
+            .apply_seq(fold_op(0, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5]))
+            .expect("半分に折る");
+        let before = current_flat_state(&store);
+        let bottom = before.order[0];
+        let expected = vec![before.order[1], bottom];
+        let cp_before = store.doc.cp.clone();
+
+        let view = store
+            .apply_seq(SeqOp::FlatMotion {
+                up_to: 1,
+                parts: vec![ori3_model::MotionPart {
+                    layers: vec![bottom],
+                    region: Vec::new(),
+                    transform: ori3_model::MotionTransform::Stay,
+                    turn: ori3_model::LayerTurn::Outside(ori3_model::FoldDirection::Up),
+                    reverse_layers: None,
+                }],
+                kind: TechniqueKind::Pose,
+            })
+            .expect("層を最上面へ重ね替える");
+
+        assert_eq!(
+            view.doc.cp.edges.len(),
+            cp_before.edges.len(),
+            "重ね替えはCPへ線を追加しない"
+        );
+        assert_eq!(view.doc.cp.vertices.len(), cp_before.vertices.len());
+        assert_eq!(view.doc.cp.next_edge_id, cp_before.next_edge_id);
+        assert_eq!(view.doc.cp.next_vertex_id, cp_before.next_vertex_id);
+        assert_ne!(
+            view.doc.cp, cp_before,
+            "新しい層順に合わせて既存折り目の山谷は更新される"
+        );
+        let after = current_flat_state(&store);
+        assert_eq!(after.order, expected);
+        for face in &store.faces {
+            assert!(
+                after.placements[&face.id].approx_eq(&before.placements[&face.id], 1e-9),
+                "面{}の配置は動かない",
+                face.id
+            );
+        }
+    }
+
+    /// `reverse_layers`は選んだ層だけを裏返し、他の層順を保つ。
+    #[test]
+    fn flat_motion_reverses_only_selected_layers_and_replays() {
+        let mut store = square_store();
+        store
+            .apply_seq(fold_op(0, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5]))
+            .expect("1回目");
+        store
+            .apply_seq(fold_op(1, [[0.0, 0.5], [1.0, 0.5]], [0.5, 0.25]))
+            .expect("2回目");
+        let before = current_flat_state(&store);
+        assert_eq!(before.order.len(), 4);
+        let selected = vec![before.order[1], before.order[2]];
+        let mut expected = before.order.clone();
+        expected.swap(1, 2);
+
+        store
+            .apply_seq(SeqOp::FlatMotion {
+                up_to: 2,
+                parts: vec![ori3_model::MotionPart {
+                    layers: selected,
+                    region: Vec::new(),
+                    transform: ori3_model::MotionTransform::Stay,
+                    turn: ori3_model::LayerTurn::Keep,
+                    reverse_layers: Some(true),
+                }],
+                kind: TechniqueKind::OpenSink,
+            })
+            .expect("選択層だけ山谷を反転する");
+
+        let after = current_flat_state(&store);
+        assert_eq!(after.order, expected);
+        for face in &store.faces {
+            assert!(
+                after.placements[&face.id].approx_eq(&before.placements[&face.id], 1e-9),
+                "面{}の配置は動かない",
+                face.id
+            );
+        }
+    }
+
+    /// 複数partを1手として処理し、不在層は警告して有効な部分を続行する。
+    #[test]
+    fn flat_motion_runs_multiple_parts_and_continues_with_warning() {
+        let mut store = square_store();
+        store
+            .apply_seq(fold_op(0, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5]))
+            .expect("半分に折る");
+        let before = current_flat_state(&store);
+        let folded = before
+            .placements
+            .iter()
+            .find_map(|(&id, placement)| placement.mirrored.then_some(id))
+            .expect("折り返された層");
+        let stationary = before
+            .placements
+            .iter()
+            .find_map(|(&id, placement)| (!placement.mirrored).then_some(id))
+            .expect("動いていない層");
+        let ([x0, y0], [_, y1]) = outline_bbox(&store);
+        let seam = [[x0, y0], [x0, y1]];
+
+        let view = store
+            .apply_seq(SeqOp::FlatMotion {
+                up_to: 1,
+                parts: vec![
+                    ori3_model::MotionPart {
+                        layers: vec![999],
+                        region: Vec::new(),
+                        transform: ori3_model::MotionTransform::Stay,
+                        turn: ori3_model::LayerTurn::Keep,
+                        reverse_layers: None,
+                    },
+                    ori3_model::MotionPart {
+                        layers: vec![folded],
+                        region: Vec::new(),
+                        transform: ori3_model::MotionTransform::Reflect(vec![seam]),
+                        turn: ori3_model::LayerTurn::Keep,
+                        reverse_layers: None,
+                    },
+                    ori3_model::MotionPart {
+                        layers: vec![stationary],
+                        region: Vec::new(),
+                        transform: ori3_model::MotionTransform::Stay,
+                        turn: ori3_model::LayerTurn::Outside(ori3_model::FoldDirection::Up),
+                        reverse_layers: None,
+                    },
+                ],
+                kind: TechniqueKind::Pose,
+            })
+            .expect("有効な複数部分は続行する");
+
+        assert_eq!(view.doc.sequence.len(), 2, "複数partでも1手だけ増える");
+        assert!(
+            view.warnings
+                .iter()
+                .any(|warning| warning.contains("対象層 999")),
+            "warnings={:?}",
+            view.warnings
+        );
+        let replayed = current_flat_state(&store);
+        let first = replayed.placements[&store.faces[0].id];
+        assert!(
+            store
+                .faces
+                .iter()
+                .all(|face| replayed.placements[&face.id].approx_eq(&first, 1e-6))
+        );
     }
 
     #[test]

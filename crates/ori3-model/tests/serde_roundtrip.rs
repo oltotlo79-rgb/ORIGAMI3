@@ -240,6 +240,81 @@ fn test_seq_op_fold_through_json_shape() {
     );
 }
 
+/// 名前付き技法に閉じない層操作も、複数部分をまとめたままIPCで往復できる。
+#[test]
+fn test_seq_op_flat_motion_json_roundtrip() {
+    let seam = [[0.5, 0.0], [0.5, 1.0]];
+    let op = SeqOp::FlatMotion {
+        up_to: 3,
+        parts: vec![
+            MotionPart {
+                layers: vec![2],
+                region: Vec::new(),
+                transform: MotionTransform::Reflect(vec![seam]),
+                turn: LayerTurn::Keep,
+                reverse_layers: None,
+            },
+            MotionPart {
+                layers: vec![0],
+                region: Vec::new(),
+                transform: MotionTransform::Stay,
+                turn: LayerTurn::Outside(FoldDirection::Up),
+                reverse_layers: None,
+            },
+            MotionPart {
+                layers: vec![1, 3],
+                region: vec![HalfPlane {
+                    line: [[0.0, 0.25], [1.0, 0.25]],
+                    inside_point: [0.5, 0.0],
+                }],
+                transform: MotionTransform::Stay,
+                turn: LayerTurn::Inside(FoldDirection::Down),
+                reverse_layers: Some(true),
+            },
+            MotionPart {
+                layers: vec![4],
+                region: Vec::new(),
+                transform: MotionTransform::Stay,
+                turn: LayerTurn::Beside {
+                    anchor: 7,
+                    direction: FoldDirection::Down,
+                },
+                reverse_layers: None,
+            },
+        ],
+        kind: TechniqueKind::Pose,
+    };
+
+    let json = serde_json::to_string(&op).expect("serialize");
+    assert!(json.contains(r#""type":"FlatMotion""#), "json = {json}");
+    assert!(json.contains(r#""Reflect""#), "json = {json}");
+    assert!(json.contains(r#""Outside""#), "json = {json}");
+    assert!(json.contains(r#""Inside""#), "json = {json}");
+    assert!(json.contains(r#""Beside""#), "json = {json}");
+    assert!(json.contains(r#""reverse_layers":true"#), "json = {json}");
+
+    let back: SeqOp = serde_json::from_str(&json).expect("deserialize");
+    let SeqOp::FlatMotion { up_to, parts, kind } = back else {
+        panic!("unexpected variant: {back:?}");
+    };
+    assert_eq!(up_to, 3);
+    assert_eq!(kind, TechniqueKind::Pose);
+    assert_eq!(parts.len(), 4);
+    assert_eq!(parts[0].transform, MotionTransform::Reflect(vec![seam]));
+    assert_eq!(parts[0].turn, LayerTurn::Keep);
+    assert_eq!(parts[1].turn, LayerTurn::Outside(FoldDirection::Up));
+    assert_eq!(parts[2].region[0].inside_point, [0.5, 0.0]);
+    assert_eq!(parts[2].turn, LayerTurn::Inside(FoldDirection::Down));
+    assert_eq!(parts[2].reverse_layers, Some(true));
+    assert_eq!(
+        parts[3].turn,
+        LayerTurn::Beside {
+            anchor: 7,
+            direction: FoldDirection::Down,
+        }
+    );
+}
+
 #[test]
 fn test_fold_step_without_alignment_remains_readable() {
     let old = r#"{"id":3,"kind":"Simple","drivers":[],"layer_order":null,"note":""}"#;
