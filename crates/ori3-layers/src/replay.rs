@@ -96,6 +96,10 @@ pub struct ReplayResult {
     /// 手順から実際に角度指定されたヒンジ。候補の優先順位付け専用。
     #[serde(skip)]
     pub driver_hinges: Vec<EdgeId>,
+    /// 剛体ソルバーが返した最終姿勢の全ヒンジ角(度)。
+    /// Poseの次の操作を同じ閉包解から続けるための内部状態で、IPCへは出さない。
+    #[serde(skip)]
+    pub hinge_angles: HashMap<EdgeId, f64>,
     /// 接触補正専用の開始・完了層順序。IPCへは出さず、コマンド層でだけ使う。
     #[serde(skip)]
     pub layer_transition: LayerTransition,
@@ -143,6 +147,7 @@ pub fn replay_with_faces(doc: &Document, faces: &[Face], up_to: usize, t: f64) -
         ));
     }
 
+    let hinge_angles = result.angles;
     let mut frame = result.frame;
     let layer_of: HashMap<FaceId, u32> = plan
         .order
@@ -160,6 +165,7 @@ pub fn replay_with_faces(doc: &Document, faces: &[Face], up_to: usize, t: f64) -
         warnings,
         suspect_hinges: Vec::new(),
         driver_hinges: plan.driver_hinges,
+        hinge_angles,
         layer_transition,
     }
 }

@@ -7,6 +7,8 @@ pub mod flat_state;
 pub mod folded_query;
 pub mod fold_network;
 pub mod fold_through;
+pub mod pose_motion;
+pub mod pose_oracle;
 pub mod pose_step;
 pub mod precrease_collapse;
 pub mod rabbit_ear;
@@ -29,6 +31,15 @@ pub use fold_through::{
     FOLD_PENETRATION_WARNING, FoldDirection, FoldThroughInput, FoldThroughProposal,
     FoldThroughResult, fold_through, fold_through_with_additional_crease, propose_fold_through,
     resolve_driver_edges,
+};
+pub use pose_motion::{
+    PoseAngleTarget, PoseEdgeActivation, PoseMotionInput, PoseMotionResult,
+    solve_and_apply_pose_step,
+};
+pub use pose_oracle::{
+    FaceHit, PoseDepthExpectation, PoseDepthSample, PoseDifference, PoseExpectation, PoseFeatures,
+    PoseLandmarkExpectation, PoseLandmarkSample, PoseOracleReport, PoseOracleTolerance, Ray3,
+    RaycastError, evaluate_pose, raycast_faces,
 };
 pub use pose_step::{PoseStepInput, PoseStepResult, apply_pose_step};
 pub use precrease_collapse::{PrecreaseCollapseInput, collapse_precrease_network};

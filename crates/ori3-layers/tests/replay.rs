@@ -779,6 +779,16 @@ fn pose_step_after_flat_folds_keeps_the_solid_shape() {
     });
     let posed = replay(&doc, 2, 1.0);
     assert!(posed.skipped.is_empty(), "警告={:?}", posed.warnings);
+    let pose_hinges = resolve_driver_edges(&doc.cp, &doc.sequence[1].drivers[0]);
+    assert!(!pose_hinges.is_empty(), "Poseの論理線がヒンジへ解決されること");
+    for hinge in pose_hinges {
+        let angle = posed
+            .hinge_angles
+            .get(&hinge)
+            .copied()
+            .expect("再生結果が全ヒンジ角を公開すること");
+        assert!((angle - 90.0).abs() < 1e-9, "hinge {hinge}: angle={angle}");
+    }
     assert!(
         (extent(&posed.frame, 2) - 0.5).abs() < 1e-6,
         "仕上げの角度が勝って立体になるはず: z幅={}",

@@ -365,12 +365,63 @@ impl<'a> FoldedQuery<'a> {
     ///
     /// All CP edge kinds are included, including auxiliary construction edges.
     pub fn nearest_edge(&self, point: [f64; 2]) -> Result<NearestEdge, FoldedQueryError> {
+        self.nearest_edge_matching(point, |_| true)
+    }
+
+    /// Find the closest mapped CP-edge instance that belongs to `face_id`.
+    ///
+    /// A material edge can have several coincident instances in the folded plane when different
+    /// sheets overlap. Filtering by the owning/containing face prevents the deterministic global
+    /// edge-ID tie-break from selecting an edge on a different sheet.
+    pub fn nearest_edge_on_face(
+        &self,
+        point: [f64; 2],
+        face_id: FaceId,
+    ) -> Result<NearestEdge, FoldedQueryError> {
+        if self.face_geometry(face_id).is_none() {
+            return Err(FoldedQueryError::MissingPlacement { face_id });
+        }
+        self.nearest_edge_matching(point, |edge| edge.face_id == face_id)
+    }
+
+    /// Select a sheet at the strictly interior `layer_seed`, then find its closest edge to
+    /// `edge_point`.
+    ///
+    /// `sheet_number` is one-based from the front (top). `edge_point` may lie directly on a face
+    /// boundary; it is deliberately separate from `layer_seed`, for which the strict
+    /// [`Self::nth_from_top_at_point`] rules still apply.
+    pub fn nearest_edge_on_sheet(
+        &self,
+        edge_point: [f64; 2],
+        layer_seed: [f64; 2],
+        sheet_number: usize,
+    ) -> Result<NearestEdge, FoldedQueryError> {
+        if !is_finite(edge_point) {
+            return Err(FoldedQueryError::InvalidPoint { point: edge_point });
+        }
+        let face_id = self.nth_from_top_at_point(layer_seed, sheet_number)?;
+        self.nearest_edge_on_face(edge_point, face_id)
+    }
+
+    fn point_is_on_boundary(&self, point: [f64; 2]) -> bool {
+        let point = DVec2::from(point);
+        self.face_geometries
+            .iter()
+            .any(|geometry| point_on_folded_boundary(&geometry.polygon, point))
+    }
+
+    fn nearest_edge_matching(
+        &self,
+        point: [f64; 2],
+        mut include: impl FnMut(&FoldedEdgeSegment) -> bool,
+    ) -> Result<NearestEdge, FoldedQueryError> {
         if !is_finite(point) {
             return Err(FoldedQueryError::InvalidPoint { point });
         }
         let point = DVec2::from(point);
         self.edge_segments
             .iter()
+            .filter(|edge| include(edge))
             .map(|edge| (edge, dist_point_segment(point, edge.a, edge.b)))
             .min_by(|(left_edge, left_distance), (right_edge, right_distance)| {
                 left_distance
@@ -383,13 +434,6 @@ impl<'a> FoldedQuery<'a> {
                 distance,
             })
             .ok_or(FoldedQueryError::NoEdges)
-    }
-
-    fn point_is_on_boundary(&self, point: [f64; 2]) -> bool {
-        let point = DVec2::from(point);
-        self.face_geometries
-            .iter()
-            .any(|geometry| point_on_folded_boundary(&geometry.polygon, point))
     }
 }
 
