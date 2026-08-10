@@ -2,6 +2,13 @@
 
 各タスク完了時に新しい記録を上に追記する。1件3〜10行以内(要件定義書NFR-006: 長文の経緯記録は禁止)。
 
+## 2026-08-11 - v0.3.0のリリース準備
+
+- `Cargo.toml`、desktopの`package.json`・`package-lock.json`(2か所)、`src-tauri/tauri.conf.json`の版番号を`0.3.0`へ統一し、`Cargo.lock`のworkspace 9パッケージもCargo実行で自動更新した。対象設定ファイルはすべてUTF-8 BOMなし
+- `scripts/build-manual.ps1`で`docs/manual/ORIGAMI3取扱説明書.pdf`を再生成し、表紙入力が`0.3.0`、全50ページであることを確認した
+- 検証: `scripts/check.ps1`の全5検査(cargo test / clippy -D warnings / build / lint / test)に合格。画面側テストは67ファイル・764件合格
+- アプリ、ブラウザ、gitは操作していない
+
 ## 2026-08-11 - CIとpre-pushによる退行検知を追加
 
 - `main`へのpushとpull requestで、Windows上のRust test・Clippy・desktop build/lint/testを実行するCIを追加した。npmとCargo/targetのキャッシュを既存releaseワークフローに揃えた

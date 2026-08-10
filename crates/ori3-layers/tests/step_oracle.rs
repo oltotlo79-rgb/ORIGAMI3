@@ -12,7 +12,7 @@ use ori3_model::{
 
 const ROSE_011: &str = include_str!("fixtures/rose-011.ori3");
 const ROSE_029: &str = include_str!("fixtures/rose-029.ori3");
-const DEVIL_024: &str = include_str!("fixtures/devil-024.ori3");
+const DEVIL_024: &str = include_str!("fixtures/folded-sample.ori3");
 
 #[test]
 fn extracts_features_from_completed_rose_and_devil_fixtures() {

@@ -12,7 +12,7 @@ use ori3_model::{
     CreasePattern, Document, DriverLine, Edge, EdgeKind, FoldStep, Paper, TechniqueKind, Vertex,
 };
 
-const DEVIL_024: &str = include_str!("fixtures/devil-024.ori3");
+const DEVIL_024: &str = include_str!("fixtures/folded-sample.ori3");
 const TOLERANCE: f64 = 1.0e-9;
 
 fn devil_context() -> (Document, Vec<Face>, FlatState) {
