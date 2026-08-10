@@ -57,6 +57,13 @@ const JOIN_EPS: f64 = 1e-6;
 /// 「向きが同じ」とみなす角度の許容誤差(rad)。つぶし折りの退化ケースの判定に使う。
 const ANGLE_EPS: f64 = 1e-9;
 
+/// 細分化された曲線の隣り合う区間として追跡する最大の折れ角。
+/// `ori3-cp::flatfold` が曲線の警告を1件へまとめる判定と同じ45°。
+const MAX_CURVE_BEND: f64 = std::f64::consts::FRAC_PI_4;
+
+/// 曲線の各分割点を貫くrulingまたは交差線の共線判定の許容誤差。
+const CURVE_RULING_EPS: f64 = 1e-6;
+
 /// 技法の共通入力。座標は全て「畳んだ平面座標」(3D表示のxy)。
 #[derive(Clone, Debug)]
 pub struct TechniqueInput {
@@ -322,11 +329,23 @@ pub fn squash(
     let (l0, l1) = line_points(input.line)?;
     let u = (l1 - l0).normalize();
 
-    let flap = flap_in_layer_order(faces, state, &input.flap, name)?;
+    let mut flap = flap_in_layer_order(faces, state, &input.flap, name)?;
 
     let mut warnings: Vec<String> = Vec::new();
-    let (span, pairs) = spine_along(cp, faces, state, &flap, l0, u);
-    let span = match span {
+    let spine = spine_along(cp, faces, state, &flap, l0, u);
+    if spine.curve_ends.is_some() {
+        // 曲線ツールのrulingで分割されたfacetは、画面では1枚の花びらとして選ぶ。
+        // 選択した1面だけでは曲線の途中で層対応が途切れるため、同じ曲線の全区間で
+        // 背を挟む面を論理フラップへ含める。直線の背では従来の明示選択を変えない。
+        let curve_faces: HashSet<FaceId> = spine.pairs.iter().flatten().copied().collect();
+        flap = state
+            .order
+            .iter()
+            .copied()
+            .filter(|id| flap.contains(id) || curve_faces.contains(id))
+            .collect();
+    }
+    let span = match spine.span {
         Some(s) => s,
         None => {
             warnings.push(format!(
@@ -339,7 +358,9 @@ pub fn squash(
     };
 
     let p = DVec2::from(input.reference_point);
-    let (ends0, ends1) = (l0 + u * span.0, l0 + u * span.1);
+    let (ends0, ends1) = spine
+        .curve_ends
+        .unwrap_or((l0 + u * span.0, l0 + u * span.1));
     // 支点は基準点から遠いほうの端(背は支点まわりに回り、自由端が基準点へ向かう)
     let (pivot, tip) = if (p - ends0).length() >= (p - ends1).length() {
         (ends0, ends1)
@@ -360,27 +381,63 @@ pub fn squash(
     let c_dir = (p - pivot).normalize();
     let alpha = s_dir.perp_dot(c_dir).atan2(s_dir.dot(c_dir));
 
-    let (near, far) = split_by_spine(&flap, &pairs, name, &mut warnings);
+    let same_side = if spine.curve_ends.is_some() {
+        spine_side_links(faces, &spine.edges, &spine.pairs)
+    } else {
+        Vec::new()
+    };
+    let (near, far) = split_by_spine(&flap, &spine.pairs, &same_side, name, &mut warnings);
     // 奥の半分がフラップの外の紙とつながっていると、層まるごと回すと必ずそこで裂ける。
     // 実際の紙では両側とも二等分線Mで折り返される(予備基本形の袋を開く動き)
-    let anchored = !far.is_empty() && anchored_outside(cp, faces, state, &far, &flap, l0, u);
-    let parts = squash_parts(
-        &flap,
-        &near,
-        &far,
-        pivot,
-        s_dir,
-        c_dir,
-        alpha,
-        (tip - pivot).length(),
-        if input.open_to_back.unwrap_or(false) {
-            FoldDirection::Down
-        } else {
-            FoldDirection::Up
-        },
-        anchored,
-    );
-
+    let anchored = spine.curve_ends.is_none()
+        && !far.is_empty()
+        && anchored_outside(
+            cp,
+            faces,
+            state,
+            &far,
+            &flap,
+            &spine.edges,
+            SpineAxis {
+                origin: l0,
+                direction: u,
+            },
+        );
+    let open = if input.open_to_back.unwrap_or(false) {
+        FoldDirection::Down
+    } else {
+        FoldDirection::Up
+    };
+    let parts = if spine.curve_ends.is_some() {
+        let polys = flap_polygons(cp, faces, state, &state.order);
+        curved_squash_parts(
+            cp,
+            faces,
+            &near,
+            &far,
+            &spine.pairs,
+            state,
+            &polys,
+            pivot,
+            s_dir,
+            alpha,
+            (tip - pivot).length(),
+            open,
+        )
+    } else {
+        squash_parts(
+            &flap,
+            &near,
+            &far,
+            pivot,
+            s_dir,
+            c_dir,
+            alpha,
+            (tip - pivot).length(),
+            open,
+            anchored,
+        )
+    };
     let mut res = flat_motion(
         cp,
         faces,
@@ -1488,11 +1545,23 @@ fn flap_or_all(
     flap_in_layer_order(faces, state, flap, name)
 }
 
+/// つぶし折りで開く背。曲線は細分化された辺をまとめて保持する。
+struct SquashSpine {
+    /// 直線の背が入力線上で占める範囲。
+    span: Option<(f64, f64)>,
+    /// 背を挟んでつながる、選択フラップ内の面対。
+    pairs: Vec<[FaceId; 2]>,
+    /// 同じ背に属する辺。曲線の続きを外部固定と誤認しないためにも使う。
+    edges: HashSet<EdgeId>,
+    /// 曲線だった場合の両端(現在の畳み平面座標)。
+    curve_ends: Option<(DVec2, DVec2)>,
+}
+
 /// 中心線に重なっている折り目(開く背)を探す。
 ///
-/// 戻り値は「背が中心線上で占める範囲(l0からの符号付き距離)」と
-/// 「フラップの中で背でつながっている面の組」。範囲はフラップの外の面と
-/// つながる背も含める(フラップが1層でも支点を決められるように)。
+/// 直線なら従来どおり入力線上の全断片を集める。入力線に乗る断片から45°以内で
+/// 接線方向が最も滑らかにつながり、各中継点を直交するrulingが貫く折り辺列が
+/// 見つかった場合は、曲線を近似した1本の背として全区間を集める。
 fn spine_along(
     cp: &CreasePattern,
     faces: &[Face],
@@ -1500,11 +1569,13 @@ fn spine_along(
     flap: &[FaceId],
     l0: DVec2,
     u: DVec2,
-) -> (Option<(f64, f64)>, Vec<[FaceId; 2]>) {
+) -> SquashSpine {
     let pos = vertex_positions(cp);
+    let by_edge = faces_by_edge(faces);
     let mut span: Option<(f64, f64)> = None;
     let mut pairs: Vec<[FaceId; 2]> = Vec::new();
-    for (eid, fs) in faces_by_edge(faces) {
+    let mut straight_edges: Vec<EdgeId> = Vec::new();
+    for (&eid, fs) in &by_edge {
         if fs.len() != 2 || !fs.iter().any(|id| flap.contains(id)) {
             continue;
         }
@@ -1529,11 +1600,218 @@ fn spine_along(
             None => (ta.min(tb), ta.max(tb)),
             Some((lo, hi)) => (lo.min(ta.min(tb)), hi.max(ta.max(tb))),
         });
+        straight_edges.push(eid);
         if fs.iter().all(|id| flap.contains(id)) {
             pairs.push([fs[0], fs[1]]);
         }
     }
-    (span, pairs)
+    straight_edges.sort_unstable();
+
+    // 入力線上の断片をseedに、最長の曲がった連続辺列を選ぶ。
+    let mut curved: Option<(Vec<EdgeId>, Vec<VertexId>)> = None;
+    for &seed in &straight_edges {
+        let Some((edge_ids, vertices)) = crease_chain(cp, seed, &pos) else {
+            continue;
+        };
+        if !chain_is_curved(&vertices, &pos) {
+            continue;
+        }
+        let replace = curved
+            .as_ref()
+            .is_none_or(|(best, _)| edge_ids.len() > best.len());
+        if replace {
+            curved = Some((edge_ids, vertices));
+        }
+    }
+
+    let Some((edge_ids, vertices)) = curved else {
+        return SquashSpine {
+            span,
+            pairs,
+            edges: straight_edges.into_iter().collect(),
+            curve_ends: None,
+        };
+    };
+
+    let edges: HashSet<EdgeId> = edge_ids.iter().copied().collect();
+    pairs.clear();
+    for eid in &edge_ids {
+        let Some(fs) = by_edge.get(eid) else {
+            continue;
+        };
+        if fs.len() == 2 {
+            pairs.push([fs[0], fs[1]]);
+        }
+    }
+    let placed_end = |vid: VertexId, eid: EdgeId| -> Option<DVec2> {
+        let fs = by_edge.get(&eid)?;
+        let face = fs.first()?;
+        Some(state.placements.get(face)?.apply(*pos.get(&vid)?))
+    };
+    let curve_ends = edge_ids
+        .first()
+        .zip(edge_ids.last())
+        .and_then(|(&first, &last)| {
+            Some((
+                placed_end(*vertices.first()?, first)?,
+                placed_end(*vertices.last()?, last)?,
+            ))
+        });
+
+    SquashSpine {
+        span,
+        pairs,
+        edges,
+        curve_ends,
+    }
+}
+
+/// seed辺の両端から、同じ山谷で接線方向が最も滑らかに続くものを追う。
+///
+/// 曲線ツールは各分割点へ接線と直交するrulingを両側へ引く。continuationの両端を
+/// 除いた辺にその一直線がある頂点だけを中継点とすることで、曲線の端から角度の
+/// 浅い通常の折り目へ誤って延長しない。後から交差で分割された点でもrulingは
+/// その点を一直線に貫くので同じ判定になる。
+fn crease_chain(
+    cp: &CreasePattern,
+    seed: EdgeId,
+    pos: &HashMap<VertexId, DVec2>,
+) -> Option<(Vec<EdgeId>, Vec<VertexId>)> {
+    let seed_edge = cp.edges.iter().find(|e| e.id == seed)?;
+    if !matches!(seed_edge.kind, EdgeKind::Mountain | EdgeKind::Valley) {
+        return None;
+    }
+    let mut incident: HashMap<VertexId, Vec<EdgeId>> = HashMap::new();
+    for e in &cp.edges {
+        if e.kind == seed_edge.kind {
+            incident.entry(e.v0).or_default().push(e.id);
+            incident.entry(e.v1).or_default().push(e.id);
+        }
+    }
+    for ids in incident.values_mut() {
+        ids.sort_unstable();
+    }
+
+    let mut edges = std::collections::VecDeque::from([seed]);
+    let mut vertices = std::collections::VecDeque::from([seed_edge.v0, seed_edge.v1]);
+    let mut seen: HashSet<EdgeId> = HashSet::from([seed]);
+
+    let mut extend = |front: bool,
+                      edges: &mut std::collections::VecDeque<EdgeId>,
+                      vertices: &mut std::collections::VecDeque<VertexId>| {
+        loop {
+            let (previous, at) = if front {
+                (vertices[1], vertices[0])
+            } else {
+                let n = vertices.len();
+                (vertices[n - 2], vertices[n - 1])
+            };
+            let (Some(&p_prev), Some(&p_at)) = (pos.get(&previous), pos.get(&at)) else {
+                break;
+            };
+            let incoming = p_at - p_prev;
+            if incoming.length() <= EPS {
+                break;
+            }
+            let previous_edge = if front {
+                edges[0]
+            } else {
+                edges[edges.len() - 1]
+            };
+            let mut candidates: Vec<(f64, EdgeId, VertexId)> = Vec::new();
+            for &eid in incident.get(&at).map(Vec::as_slice).unwrap_or(&[]) {
+                if seen.contains(&eid) {
+                    continue;
+                }
+                let Some(e) = cp.edges.iter().find(|e| e.id == eid) else {
+                    continue;
+                };
+                let next = if e.v0 == at { e.v1 } else { e.v0 };
+                let Some(&p_next) = pos.get(&next) else {
+                    continue;
+                };
+                let outgoing = p_next - p_at;
+                if outgoing.length() <= EPS {
+                    continue;
+                }
+                let bend = incoming
+                    .perp_dot(outgoing)
+                    .atan2(incoming.dot(outgoing))
+                    .abs();
+                if bend <= MAX_CURVE_BEND + ANGLE_EPS
+                    && has_through_crease(cp, at, previous_edge, eid, pos)
+                {
+                    candidates.push((bend, eid, next));
+                }
+            }
+            candidates.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+            let Some((_, eid, next)) = candidates.first().copied() else {
+                break;
+            };
+            seen.insert(eid);
+            if front {
+                edges.push_front(eid);
+                vertices.push_front(next);
+            } else {
+                edges.push_back(eid);
+                vertices.push_back(next);
+            }
+        }
+    };
+    extend(true, &mut edges, &mut vertices);
+    extend(false, &mut edges, &mut vertices);
+    Some((edges.into(), vertices.into()))
+}
+
+fn has_through_crease(
+    cp: &CreasePattern,
+    at: VertexId,
+    previous_edge: EdgeId,
+    next_edge: EdgeId,
+    pos: &HashMap<VertexId, DVec2>,
+) -> bool {
+    let Some(&p_at) = pos.get(&at) else {
+        return false;
+    };
+    let directions: Vec<DVec2> = cp
+        .edges
+        .iter()
+        .filter(|e| {
+            e.id != previous_edge
+                && e.id != next_edge
+                && e.kind != EdgeKind::Border
+                && (e.v0 == at || e.v1 == at)
+        })
+        .filter_map(|e| {
+            let other = if e.v0 == at { e.v1 } else { e.v0 };
+            let direction = *pos.get(&other)? - p_at;
+            (direction.length() > EPS).then(|| direction.normalize())
+        })
+        .collect();
+    directions.iter().enumerate().any(|(i, &a)| {
+        directions
+            .iter()
+            .skip(i + 1)
+            .any(|&b| a.perp_dot(b).abs() <= CURVE_RULING_EPS && a.dot(b) < 0.0)
+    })
+}
+
+fn chain_is_curved(vertices: &[VertexId], pos: &HashMap<VertexId, DVec2>) -> bool {
+    vertices
+        .windows(3)
+        .filter(|v| {
+            let (Some(&a), Some(&b), Some(&c)) = (pos.get(&v[0]), pos.get(&v[1]), pos.get(&v[2]))
+            else {
+                return false;
+            };
+            let (d0, d1) = (b - a, c - b);
+            d0.length() > EPS
+                && d1.length() > EPS
+                && d0.perp_dot(d1).atan2(d0.dot(d1)).abs() > ANGLE_EPS
+        })
+        .take(2)
+        .count()
+        >= 2
 }
 
 /// 中心線に背が見つからないときの支点の当て(フラップが中心線の向きに占める範囲)。
@@ -1562,14 +1840,35 @@ fn flap_span_along(
     (lo < hi).then_some((lo, hi))
 }
 
+/// 曲線の背に沿って隣り合うfacetのうち、背を渡らず同じ側でrulingを共有する面対。
+fn spine_side_links(
+    faces: &[Face],
+    spine_edges: &HashSet<EdgeId>,
+    spine_pairs: &[[FaceId; 2]],
+) -> Vec<[FaceId; 2]> {
+    let spine_faces: HashSet<FaceId> = spine_pairs.iter().flatten().copied().collect();
+    faces_by_edge(faces)
+        .into_iter()
+        .filter(|(edge, adjacent)| {
+            !spine_edges.contains(edge)
+                && adjacent.len() == 2
+                && adjacent.iter().all(|face| spine_faces.contains(face))
+        })
+        .map(|(_, adjacent)| [adjacent[0], adjacent[1]])
+        .collect()
+}
+
 /// フラップを背で2色に塗り分ける。戻り値は(手前寄り=下の層を含む側, 奥側)。
 ///
 /// 背でつながった2層は開くと反対側へ分かれるので、つながりの図を2色で塗り分ければ
-/// どちらの側へ行くかが決まる(層の数を機械的に半分に割らないのは中割り折りと同じ)。
+/// どちらの側へ行くかが決まる。曲線のrulingで隣り合うfacetは同じ色にして、区間ごとに
+/// 層順が入れ替わっていても曲線の片側全体を同じ動きへまとめる。
+/// (層の数を機械的に半分に割らないのは中割り折りと同じ)。
 /// 塗り分けられない(奇数の輪になる)場合は、断らずに警告して続ける。
 fn split_by_spine(
     flap: &[FaceId],
     pairs: &[[FaceId; 2]],
+    same_side: &[[FaceId; 2]],
     name: &str,
     warnings: &mut Vec<String>,
 ) -> (Vec<FaceId>, Vec<FaceId>) {
@@ -1583,7 +1882,11 @@ fn split_by_spine(
         let mut queue = vec![start];
         while let Some(cur) = queue.pop() {
             let cur_color = color[&cur];
-            for pr in pairs {
+            for (pr, opposite) in pairs
+                .iter()
+                .map(|pair| (pair, true))
+                .chain(same_side.iter().map(|pair| (pair, false)))
+            {
                 let next = if pr[0] == cur {
                     pr[1]
                 } else if pr[1] == cur {
@@ -1591,10 +1894,11 @@ fn split_by_spine(
                 } else {
                     continue;
                 };
+                let expected = cur_color != opposite;
                 match color.get(&next) {
-                    Some(&v) => odd |= v == cur_color,
+                    Some(&v) => odd |= v != expected,
                     None => {
-                        color.insert(next, !cur_color);
+                        color.insert(next, expected);
                         queue.push(next);
                     }
                 }
@@ -1613,15 +1917,24 @@ fn split_by_spine(
 ///
 /// つながっていれば向こう端が固定されているので、層まるごと回すとそこで紙が裂ける
 /// (中心線に乗っている折り目=これから開く背は、固定とは数えない)。
+struct SpineAxis {
+    origin: DVec2,
+    direction: DVec2,
+}
+
 fn anchored_outside(
     cp: &CreasePattern,
     faces: &[Face],
     state: &FlatState,
     group: &[FaceId],
     flap: &[FaceId],
-    l0: DVec2,
-    u: DVec2,
+    spine_edges: &HashSet<EdgeId>,
+    axis: SpineAxis,
 ) -> bool {
+    let SpineAxis {
+        origin: l0,
+        direction: u,
+    } = axis;
     let pos = vertex_positions(cp);
     faces_by_edge(faces).into_iter().any(|(eid, fs)| {
         if fs.len() != 2 {
@@ -1637,6 +1950,9 @@ fn anchored_outside(
         let Some(e) = cp.edges.iter().find(|e| e.id == eid) else {
             return false;
         };
+        if spine_edges.contains(&eid) {
+            return false;
+        }
         // 山谷だけでなく Aux(平らに開いた折り目)でも紙は外とつながっている。
         // 数えないと、そこで裂ける動きを選んでしまう
         if matches!(e.kind, EdgeKind::Border) {
@@ -1654,6 +1970,153 @@ fn anchored_outside(
 
 /// つぶし折りの動き(手前側=新しい折り線で折り返す / 奥側=層まるごと回る。
 /// ただし `anchored` なら奥側も手前と同じ二等分線で折り返す)。
+///
+/// 曲線の背では区間ごとに隣接する面の現在配置が違う。手前側を二等分線で
+/// 折り返したあとの配置へ、各区間の奥側facetを個別に開くことで、曲線頂点の
+/// rulingを挟むfacetも共有辺上で同じ位置を保つ。
+#[allow(clippy::too_many_arguments)]
+fn curved_squash_parts(
+    cp: &CreasePattern,
+    faces: &[Face],
+    near: &[FaceId],
+    far: &[FaceId],
+    pairs: &[[FaceId; 2]],
+    state: &FlatState,
+    polys: &HashMap<FaceId, Vec<DVec2>>,
+    pivot: DVec2,
+    s_dir: DVec2,
+    alpha: f64,
+    reach: f64,
+    open: FoldDirection,
+) -> Vec<MotionPart> {
+    if alpha.abs() <= ANGLE_EPS {
+        let mut layers = near.to_vec();
+        layers.extend(far.iter().copied());
+        return vec![MotionPart::restack(layers, LayerTurn::Outside(open))];
+    }
+
+    let (sn, cs) = (alpha * 0.5).sin_cos();
+    let m_dir = DVec2::new(s_dir.x * cs - s_dir.y * sn, s_dir.x * sn + s_dir.y * cs);
+    let m_line = [[pivot.x, pivot.y], [pivot.x + m_dir.x, pivot.y + m_dir.y]];
+    let inside = pivot + s_dir * reach;
+    let reflected = Isometry2::reflection(pivot, pivot + m_dir);
+
+    let near_set: HashSet<FaceId> = near.iter().copied().collect();
+    let far_set: HashSet<FaceId> = far.iter().copied().collect();
+    let mut far_open: HashMap<FaceId, (Isometry2, FaceId)> = HashMap::new();
+    for pair in pairs {
+        let (n, f) = if near_set.contains(&pair[0]) && far_set.contains(&pair[1]) {
+            (pair[0], pair[1])
+        } else if near_set.contains(&pair[1]) && far_set.contains(&pair[0]) {
+            (pair[1], pair[0])
+        } else {
+            continue;
+        };
+        let (Some(near_placement), Some(far_placement)) =
+            (state.placements.get(&n), state.placements.get(&f))
+        else {
+            continue;
+        };
+        // near ∘ far^-1: 奥facetの現在座標を、対応する手前facetの座標へ開く。
+        let motion = near_placement.compose(&far_placement.inverse());
+        far_open.entry(f).or_insert((motion, n));
+    }
+
+    let near_region = vec![HalfPlane {
+        line: m_line,
+        inside_point: [inside.x, inside.y],
+    }];
+    if !far_open.is_empty()
+        && far_open.len() == far_set.len()
+        && far_open
+            .values()
+            .all(|(opening, _)| opening.approx_eq(&Isometry2::identity(), JOIN_EPS))
+    {
+        // 背が既に0°で開いている曲線では、両側のfacetは1枚の連続した紙面にある。
+        // 曲線facetを種に、二等分線の可動側で共有辺が実際につながる面へ同じ鏡映を
+        // 伝える。選択したfacetだけを動かすと、その外周のrulingで紙が裂ける。
+        let mut seeds = near.to_vec();
+        seeds.extend(far.iter().copied());
+        let moving = connected_layers_in_region(cp, faces, state, polys, &seeds, &near_region);
+        return (!moving.is_empty())
+            .then_some(MotionPart {
+                layers: moving,
+                region: near_region,
+                transform: MotionTransform::Isometry(reflected),
+                turn: LayerTurn::Outside(open),
+                reverse_layers: None,
+            })
+            .into_iter()
+            .collect();
+    }
+    let moving_near = layers_in_region(polys, near, &near_region);
+    let mut parts = Vec::with_capacity(far_open.len() * 2 + usize::from(!moving_near.is_empty()));
+    if !moving_near.is_empty() {
+        parts.push(MotionPart {
+            layers: moving_near,
+            region: near_region,
+            transform: MotionTransform::Isometry(reflected),
+            turn: LayerTurn::Outside(open),
+            reverse_layers: None,
+        });
+    }
+    let mut far_ids: Vec<FaceId> = far_open.keys().copied().collect();
+    far_ids.sort_by_key(|id| {
+        state
+            .order
+            .iter()
+            .position(|face| face == id)
+            .unwrap_or(usize::MAX)
+    });
+    for id in far_ids {
+        let (opening, anchor) = far_open[&id];
+        // far側では「near側の二等分線」をopeningの逆で引き戻した線で分ける。
+        // これにより、開くだけの部分と開いて折り返す部分が境界上で一致する。
+        let inv = opening.inverse();
+        let far_pivot = inv.apply(pivot);
+        let far_axis = inv.apply(pivot + m_dir);
+        let far_inside = inv.apply(inside);
+        let other_side = reflect_across_line(inside, pivot, pivot + m_dir);
+        let far_outside = inv.apply(other_side);
+        let line = [[far_pivot.x, far_pivot.y], [far_axis.x, far_axis.y]];
+        let moving_region = vec![HalfPlane {
+            line,
+            inside_point: [far_inside.x, far_inside.y],
+        }];
+        if !layers_in_region(polys, &[id], &moving_region).is_empty() {
+            parts.push(MotionPart {
+                layers: vec![id],
+                region: moving_region,
+                transform: MotionTransform::Isometry(reflected.compose(&opening)),
+                turn: LayerTurn::Beside {
+                    anchor,
+                    direction: open,
+                },
+                reverse_layers: None,
+            });
+        }
+        let stationary_region = vec![HalfPlane {
+            line,
+            inside_point: [far_outside.x, far_outside.y],
+        }];
+        if !layers_in_region(polys, &[id], &stationary_region).is_empty()
+            && !opening.approx_eq(&Isometry2::identity(), JOIN_EPS)
+        {
+            parts.push(MotionPart {
+                layers: vec![id],
+                region: stationary_region,
+                transform: MotionTransform::Isometry(opening),
+                turn: LayerTurn::Beside {
+                    anchor,
+                    direction: open,
+                },
+                reverse_layers: None,
+            });
+        }
+    }
+    parts
+}
+
 #[allow(clippy::too_many_arguments)]
 fn squash_parts(
     flap: &[FaceId],
@@ -1871,6 +2334,102 @@ fn layers_in_region(
             area * 0.5 > EPS * EPS
         })
         .collect()
+}
+
+/// 種となるfacetから、領域の内部に長さを持つ共有辺を渡ってつながる面を集める。
+///
+/// 曲線のrulingで細分化された紙面へ同じ等長変換を伝えるために使う。折り線となる
+/// 領域境界上だけで接する面や、頂点1点で接するだけの面へは伝えない。
+fn connected_layers_in_region(
+    cp: &CreasePattern,
+    faces: &[Face],
+    state: &FlatState,
+    polys: &HashMap<FaceId, Vec<DVec2>>,
+    seeds: &[FaceId],
+    region: &[HalfPlane],
+) -> Vec<FaceId> {
+    let all: Vec<FaceId> = faces.iter().map(|face| face.id).collect();
+    let eligible: HashSet<FaceId> = layers_in_region(polys, &all, region).into_iter().collect();
+    let by_edge = faces_by_edge(faces);
+    let face_by_id: HashMap<FaceId, &Face> = faces.iter().map(|face| (face.id, face)).collect();
+    let positions = vertex_positions(cp);
+    let mut reached: HashSet<FaceId> = seeds
+        .iter()
+        .copied()
+        .filter(|face| eligible.contains(face))
+        .collect();
+    let mut queue: Vec<FaceId> = reached.iter().copied().collect();
+    while let Some(face_id) = queue.pop() {
+        let (Some(face), Some(placement)) =
+            (face_by_id.get(&face_id), state.placements.get(&face_id))
+        else {
+            continue;
+        };
+        for &edge_id in &face.edges {
+            let Some(adjacent) = by_edge.get(&edge_id) else {
+                continue;
+            };
+            if adjacent.len() != 2 {
+                continue;
+            }
+            let next = if adjacent[0] == face_id {
+                adjacent[1]
+            } else {
+                adjacent[0]
+            };
+            if reached.contains(&next) || !eligible.contains(&next) {
+                continue;
+            }
+            let Some(edge) = cp.edges.iter().find(|edge| edge.id == edge_id) else {
+                continue;
+            };
+            let (Some(&p0), Some(&p1)) = (positions.get(&edge.v0), positions.get(&edge.v1)) else {
+                continue;
+            };
+            if segment_has_region_length(placement.apply(p0), placement.apply(p1), region) {
+                reached.insert(next);
+                queue.push(next);
+            }
+        }
+    }
+    state
+        .order
+        .iter()
+        .copied()
+        .filter(|face| reached.contains(face))
+        .collect()
+}
+
+fn segment_has_region_length(a: DVec2, b: DVec2, region: &[HalfPlane]) -> bool {
+    if (b - a).length() <= EPS {
+        return false;
+    }
+    let (mut lo, mut hi) = (0.0_f64, 1.0_f64);
+    for half_plane in region {
+        let l0 = DVec2::from(half_plane.line[0]);
+        let direction = DVec2::from(half_plane.line[1]) - l0;
+        if direction.length() <= EPS {
+            return false;
+        }
+        let direction = direction.normalize();
+        let side = direction
+            .perp_dot(DVec2::from(half_plane.inside_point) - l0)
+            .signum();
+        let da = side * direction.perp_dot(a - l0) - JOIN_EPS;
+        let db = side * direction.perp_dot(b - l0) - JOIN_EPS;
+        if da <= 0.0 && db <= 0.0 {
+            return false;
+        }
+        if da <= 0.0 {
+            lo = lo.max(-da / (db - da));
+        } else if db <= 0.0 {
+            hi = hi.min(da / (da - db));
+        }
+        if hi - lo <= EPS {
+            return false;
+        }
+    }
+    hi - lo > EPS
 }
 
 /// 多角形の内部(境界を含まない)に点があるか。

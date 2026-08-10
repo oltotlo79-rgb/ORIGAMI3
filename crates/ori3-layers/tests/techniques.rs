@@ -20,18 +20,26 @@
 //! そのまま t=0.99 の検証を使う。中割り折りは折り目の向きとの一致
 //! ([`assert_fold_senses`])で確かめる。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use glam::{DVec2, DVec3};
-use ori3_cp::{Face, extract_faces};
+use ori3_cp::{
+    Face,
+    curve::{arc_polyline, insert_polyline, insert_rulings},
+    extract_faces,
+};
 use ori3_layers::flat_state::representative_point;
-use ori3_layers::fold_through::{FoldDirection, FoldThroughInput, fold_through};
+use ori3_layers::fold_through::{
+    FoldDirection, FoldThroughInput, fold_through, resolve_driver_edges,
+};
 use ori3_layers::techniques::TechniqueInput;
 use ori3_layers::{
     flat_state_at, inside_reverse, open_sink, outside_reverse, petal, pleat, replay, squash,
     swivel, twist,
 };
-use ori3_model::{CreasePattern, Document, EdgeKind, FaceId, Paper, TechniqueKind};
+use ori3_model::{
+    CreasePattern, Document, DriverLine, EdgeId, EdgeKind, FaceId, Paper, TechniqueKind,
+};
 
 /// 技法1回ぶんの結果(検証しやすいようにまとめた)。
 #[derive(Debug)]
@@ -43,6 +51,7 @@ struct Applied {
     at: HashMap<FaceId, DVec2>,
     /// 層順序(下→上)
     order: Vec<FaceId>,
+    state: ori3_layers::FlatState,
     warnings: Vec<String>,
 }
 
@@ -125,6 +134,7 @@ fn apply_input(
     doc.cp = cp;
     doc.sequence.push(step);
 
+    let result_state = res.state;
     let faces = extract_faces(&doc.cp);
     let rep: HashMap<FaceId, [f64; 2]> = faces
         .iter()
@@ -135,7 +145,7 @@ fn apply_input(
         .map(|f| {
             (
                 f.id,
-                res.state.placements[&f.id].apply(DVec2::from(rep[&f.id])),
+                result_state.placements[&f.id].apply(DVec2::from(rep[&f.id])),
             )
         })
         .collect();
@@ -143,7 +153,8 @@ fn apply_input(
         faces,
         rep,
         at,
-        order: res.state.order,
+        order: result_state.order.clone(),
+        state: result_state,
         warnings: res.warnings,
     })
 }
@@ -176,6 +187,19 @@ fn edge_kind_at(cp: &CreasePattern, mid: [f64; 2]) -> Option<EdgeKind> {
             ((a + b) * 0.5 - m).length() < 1e-9
         })
         .map(|e| e.kind)
+}
+
+fn test_faces_by_edge(faces: &[Face]) -> HashMap<EdgeId, Vec<FaceId>> {
+    let mut out: HashMap<EdgeId, Vec<FaceId>> = HashMap::new();
+    for face in faces {
+        for &edge in &face.edges {
+            let adjacent = out.entry(edge).or_default();
+            if !adjacent.contains(&face.id) {
+                adjacent.push(face.id);
+            }
+        }
+    }
+    out
 }
 
 /// 層順序での位置(下から0)。
@@ -1014,6 +1038,107 @@ fn inside_reverse_on_four_layer_flap() {
 // ---------------------------------------------------------------------------
 // 開いてつぶす折り
 // ---------------------------------------------------------------------------
+
+/// 平らなprecrease上でも、曲線の背は細かい折れ線に分かれていても、つぶし折りでは
+/// 一続きの折り目として扱う。先頭区間だけを中心線として指しても、続く区間との
+/// 接続を外部固定と誤認して面を別々に動かしてはならない。
+#[test]
+fn squash_keeps_layers_joined_across_a_curved_spine() {
+    let mut doc = square_doc();
+    let curve = arc_polyline([0.5, 0.5], [0.32, 0.72], [0.3, 1.0], 0.005, Some(8));
+    insert_polyline(&mut doc.cp, &[[0.0, 0.0], [0.5, 0.5]], EdgeKind::Mountain);
+    insert_polyline(&mut doc.cp, &[[1.0, 0.0], [0.5, 0.5]], EdgeKind::Mountain);
+    insert_polyline(&mut doc.cp, &curve, EdgeKind::Valley);
+    insert_rulings(&mut doc.cp, &curve, [1.0, 1.0], EdgeKind::Valley);
+
+    let faces = extract_faces(&doc.cp);
+    let pos: HashMap<u32, [f64; 2]> = doc.cp.vertices.iter().map(|v| (v.id, v.pos)).collect();
+    let by_edge = test_faces_by_edge(&faces);
+    let crease_lines: Vec<DriverLine> = doc
+        .cp
+        .edges
+        .iter()
+        .filter(|e| {
+            matches!(e.kind, EdgeKind::Mountain | EdgeKind::Valley)
+                && by_edge.get(&e.id).is_some_and(|fs| fs.len() == 2)
+        })
+        .map(|e| DriverLine {
+            a: pos[&e.v0],
+            b: pos[&e.v1],
+            target_angle_deg: 0.0,
+        })
+        .collect();
+    let seed_line = DriverLine {
+        a: curve[curve.len() - 2],
+        b: curve[curve.len() - 1],
+        target_angle_deg: 0.0,
+    };
+    let seed_edge = resolve_driver_edges(&doc.cp, &seed_line)[0];
+    let flap = vec![by_edge[&seed_edge][0]];
+    let before_faces = faces.len();
+    let a = apply(
+        &mut doc,
+        squash,
+        flap,
+        [seed_line.a, seed_line.b],
+        [0.1, 0.9],
+    )
+    .expect("曲線の背もつぶし折りできる");
+
+    let pos_after: HashMap<u32, DVec2> = doc
+        .cp
+        .vertices
+        .iter()
+        .map(|v| (v.id, DVec2::from(v.pos)))
+        .collect();
+
+    assert!(
+        a.warnings.is_empty(),
+        "曲線の折れ線群を別々の接続と誤認して紙を裂いてはならない: {:?}",
+        a.warnings
+    );
+    assert!(a.faces.len() >= before_faces, "つぶし折りで面が欠けない");
+    let face_ids: HashSet<FaceId> = a.faces.iter().map(|f| f.id).collect();
+    let order_ids: HashSet<FaceId> = a.order.iter().copied().collect();
+    assert_eq!(order_ids.len(), a.order.len(), "層順序に重複がない");
+    assert_eq!(order_ids, face_ids, "全ての面が層順序にちょうど1回残る");
+
+    // つぶす前の曲線・rulingは新しい折り線との交点で再分割されても、各断片の
+    // 両側の面が共有辺上で同じ位置へ写り、紙が離れない。
+    let after_by_edge = test_faces_by_edge(&a.faces);
+    for line in &crease_lines {
+        let fragments = resolve_driver_edges(&doc.cp, line);
+        assert!(!fragments.is_empty(), "元の折り目が失われない: {line:?}");
+        for edge_id in fragments {
+            let adjacent = &after_by_edge[&edge_id];
+            assert_eq!(adjacent.len(), 2, "折り目の面対応が失われない: 辺{edge_id}");
+            let edge = doc.cp.edges.iter().find(|e| e.id == edge_id).unwrap();
+            for vertex in [edge.v0, edge.v1] {
+                let point = pos_after[&vertex];
+                let p0 = a.state.placements[&adjacent[0]].apply(point);
+                let p1 = a.state.placements[&adjacent[1]].apply(point);
+                assert!(
+                    (p0 - p1).length() <= 1e-6,
+                    "共有辺{edge_id}の頂点{vertex}で面が離れた: {p0:?} / {p1:?}"
+                );
+            }
+        }
+    }
+
+    let replay_faces = extract_faces(&doc.cp);
+    let (replayed, replay_warnings) =
+        flat_state_at(&doc, &replay_faces, doc.sequence.len()).expect("手順を再生できる");
+    assert!(replay_warnings.is_empty(), "{replay_warnings:?}");
+    assert_eq!(replayed.order, a.order, "保存した層順序を再生できる");
+    for face in &a.faces {
+        assert!(
+            replayed.placements[&face.id].approx_eq(&a.state.placements[&face.id], 1e-6),
+            "面{}の配置を再生できる",
+            face.id
+        );
+    }
+    assert_fold_senses(&doc, "曲線の背を含むつぶし折り");
+}
 
 /// つぶし折り: 背が開いて(角0°)、手前の層は新しい折り線で折り返し、
 /// 奥の層は鏡映2回=回転で丸ごと回る。

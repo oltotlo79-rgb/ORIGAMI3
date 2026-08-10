@@ -2,6 +2,10 @@ pub mod autosave;
 pub mod commands;
 pub mod store;
 
+#[cfg(test)]
+#[path = "../../../../verification/curve-crush-probe.rs"]
+mod curve_crush_probe;
+
 use std::sync::Mutex;
 
 use tauri::Manager;
