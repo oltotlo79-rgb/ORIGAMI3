@@ -4,7 +4,10 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 // vitestは.cssのimportを空にするため、既存のuiTokens.test.tsと同じく直に読む。
-const appCss = readFileSync(new URL("../App.css", import.meta.url), "utf8");
+const appCss = readFileSync(new URL("../App.css", import.meta.url), "utf8").replace(
+  /\r\n/g,
+  "\n",
+);
 
 function cssDeclarations(selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
