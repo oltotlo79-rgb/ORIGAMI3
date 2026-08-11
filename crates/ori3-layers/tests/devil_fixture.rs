@@ -17,4 +17,3 @@ fn complete_checkpoint_serializer_contains_the_document_schema() {
     assert!(json.contains("\"display\":{"));
     assert!(json.ends_with("}\n"));
 }
-

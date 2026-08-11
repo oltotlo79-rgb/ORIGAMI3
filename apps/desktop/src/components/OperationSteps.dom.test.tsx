@@ -18,6 +18,7 @@ function seed(tool: ToolId, operationStage = 0) {
     pendingFoldThrough: null,
     alignDraft: null,
     techniqueDraft: null,
+    contextHelpExpanded: true,
   });
 }
 
@@ -83,10 +84,11 @@ describe("今できる操作の手順", () => {
 
     const guide = screen.getByRole("region", { name: `${title}の操作手順` });
     expect(within(guide).getByText(title)).toBeTruthy();
-    const details = guide.querySelector("details");
-    expect(details?.open).toBe(false);
-    fireEvent.click(guide.querySelector("summary")!);
-    expect(details?.open).toBe(true);
+    expect(
+      within(guide).getByRole("button", { name: "この道具の詳しい操作方法 ▲" }).getAttribute(
+        "aria-expanded",
+      ),
+    ).toBe("true");
     for (const step of steps) {
       expect(within(guide).getByText(step)).toBeTruthy();
     }
@@ -96,7 +98,6 @@ describe("今できる操作の手順", () => {
   it("操作が進むたびにaria-currentを次の手順へ移す", () => {
     seed("mountain");
     render(<OperationSteps />);
-    fireEvent.click(screen.getByText("山折り線を引く"));
 
     const items = () => screen.getAllByRole("listitem");
     expect(items().map((item) => item.getAttribute("aria-current"))).toEqual([
@@ -122,16 +123,37 @@ describe("今できる操作の手順", () => {
     expect(items()[1].className).toContain("completed");
   });
 
-  it("既定は見出し1行だけで、クリックすると手順を展開する", () => {
+  it("初回は開き、閉じても現在操作の1行を残して開閉選択を保つ", () => {
     seed("valley");
-    render(<OperationSteps />);
+    const { unmount } = render(<OperationSteps />);
 
     const guide = screen.getByRole("region", { name: "谷折り線を引くの操作手順" });
-    const details = guide.querySelector("details")!;
-    expect(details.open).toBe(false);
+    const close = within(guide).getByRole("button", {
+      name: "この道具の詳しい操作方法 ▲",
+    });
+    expect(close.getAttribute("aria-expanded")).toBe("true");
+    expect(within(guide).getAllByRole("listitem")).toHaveLength(3);
 
-    fireEvent.click(guide.querySelector("summary")!);
-    expect(details.open).toBe(true);
+    fireEvent.click(close);
+    expect(useAppStore.getState().contextHelpExpanded).toBe(false);
+    expect(within(guide).getByText("今できる操作")).toBeTruthy();
+    expect(within(guide).getByText("谷折り線を引く")).toBeTruthy();
+    expect(within(guide).queryByRole("listitem")).toBeNull();
+    expect(
+      within(guide).getByRole("button", { name: "この道具の詳しい操作方法 ▼" }).getAttribute(
+        "aria-expanded",
+      ),
+    ).toBe("false");
+
+    // 同じ端末設定を読む再表示でも、利用者が閉じた選択を維持する
+    unmount();
+    render(<OperationSteps />);
+    expect(screen.queryByRole("listitem")).toBeNull();
+    const open = screen.getByRole("button", {
+      name: "この道具の詳しい操作方法 ▼",
+    });
+    fireEvent.click(open);
+    expect(useAppStore.getState().contextHelpExpanded).toBe(true);
     expect(screen.getAllByRole("listitem")).toHaveLength(3);
   });
 
@@ -151,7 +173,6 @@ describe("今できる操作の手順", () => {
     const guide = screen.getByRole("region", {
       name: `${ALIGN_LABELS.existingLine}の操作手順`,
     });
-    fireEvent.click(guide.querySelector("summary")!);
     expect(within(guide).getByText("案内どおりに点・線を順に選ぶ")).toBeTruthy();
     expect(within(guide).getByText("求まった折り目を確認する")).toBeTruthy();
   });

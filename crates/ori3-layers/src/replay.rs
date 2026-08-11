@@ -7,17 +7,15 @@
 //!
 //! # 求め方(折り上がり `t=1`)
 //!
-//! 折り畳んだ状態の上に次の折りを重ねるのではなく、**平らな展開図に
-//! 「そこまでの全ステップのdriver」をまとめて与えて1回で解く**。
-//! 同じ辺を複数のステップが駆動する場合は後のステップが勝つ。
+//! 折り畳んだ状態の上に次の折りを重ねるのではなく、平らな展開図に手順を解決して
+//! 1回で解く。同じ辺を複数のステップが指定する場合は後のステップが勝つ。
+//! 表示solveでは、現在の非Pose手順で実際に変えた角度だけをhard、過去手順とPoseを
+//! preferred、未指定ヒンジをfreeにする。過去の希望が現在操作を妨げず、未指定角を
+//! 0°へ引く人工的な抵抗も生じない。
 //!
-//! **まだ折っていない折り線は0°(平ら)のdriverとして明示的に固定する。**
-//! ソルバーは角度指定の無いヒンジを自由変数として扱い、初期値バイアス(山谷の向きへ
-//! driver角の平均の半分)から別の枝へ収束させてしまうため、これを省くと
-//! 「後続ステップの折り線まで曲がった、警告の出ない誤った形」が返る
-//! (`ori3-rigid` の `solve` のdocが書いているとおり、平らに戻すには0°の明示が要る)。
-//! 結果として全ヒンジが固定値になるので、ステップごとに解き直しても最後の1回と
-//! 同じ姿勢になる。無駄を避けて1回だけ解く(warm startを使わないので決定的)。
+//! 後続の平坦操作が使う[`FlatState`]だけは表示とは分け、従来どおり全保存角をexact、
+//! 未指定ヒンジを0°として[`ori3_rigid::propagate`]する。表示の自然追従によって
+//! fold-throughの組合せ的な意味を変えないためである。
 //!
 //! # 折っている最中(`0 < t < 1`)
 //!
@@ -25,9 +23,11 @@
 //! まわりにはループ閉包の拘束があり(自由度1の四折り頂点で2本以上を勝手な値に
 //! すると閉じない)、破ると**面どうしが離れて紙がちぎれて見える**。
 //!
-//! そこで補間値は「目標」として扱い、[`ori3_rigid::solve_near`] で
-//! **閉包を満たす形のうち目標にいちばん近いもの**を求める。さらに一発で `t` まで
-//! 飛ばすと対称な解のあいだで解が飛び移って紙が瞬間移動するため、目標を
+//! 単一Simple DriverLineは利用者が直接指定した現在角としてhardにする。一方、
+//! `flat_motion`由来の複数DriverLineは独立な入力角ではなく、完了形で変化した全角の
+//! スナップショットである。この一様補間は一般に剛体経路ではないため、途中だけは
+//! [`ori3_rigid::solve_near`] の共同path targetとして閉じた経路へ射影する。さらに
+//! 一発で `t` まで飛ばすと対称な解のあいだで解が飛び移って紙が瞬間移動するため、目標を
 //! [`SUBSTEPS`] 等分して少しずつ動かし、前の解を次の初期値にする(連続法)。
 //! 分割点は `t` だけで決まるので結果は決定的(SYS-004)。
 //! `t=0` は「直前の手順を折り終えた状態」として `t=1` と同じ厳密な道で解く。
@@ -58,7 +58,7 @@ use std::collections::{BTreeMap, HashMap};
 use glam::DVec2;
 use ori3_cp::{Face, extract_faces};
 use ori3_geometry::Isometry2;
-use ori3_model::{Document, Driver, EdgeId, FaceId, Frame3D, StepId};
+use ori3_model::{Document, Driver, EdgeId, FaceId, Frame3D, StepId, TechniqueKind};
 
 use crate::flat_state::FlatState;
 use crate::fold_through::resolve_driver_edges;
@@ -100,6 +100,22 @@ pub struct ReplayResult {
     /// Poseの次の操作を同じ閉包解から続けるための内部状態で、IPCへは出さない。
     #[serde(skip)]
     pub hinge_angles: HashMap<EdgeId, f64>,
+    /// 表示位置までに保存手順から解決できた明示角（辺ID昇順）。
+    /// 未指定ヒンジを平らにするための0°は含めない。
+    #[serde(skip)]
+    pub sequence_targets: Vec<Driver>,
+    /// 過去手順またはPoseの希望角を譲った診断（辺ID昇順）。
+    #[serde(skip)]
+    pub relaxations: Vec<ori3_rigid::AngleRelaxation>,
+    /// 表示解の閉包残差RMS。
+    #[serde(skip)]
+    pub closure_rms: f64,
+    /// 閉包収束前でも、現在手順を守った有限候補を表示しているか。
+    #[serde(skip)]
+    pub best_effort: bool,
+    /// 表示解が閉包収束したか。
+    #[serde(skip)]
+    pub converged: bool,
     /// 接触補正専用の開始・完了層順序。IPCへは出さず、コマンド層でだけ使う。
     #[serde(skip)]
     pub layer_transition: LayerTransition,
@@ -129,6 +145,11 @@ pub fn replay_with_faces(doc: &Document, faces: &[Face], up_to: usize, t: f64) -
     } else {
         1.0
     };
+    // 現在手順がまだ始まっていないt=0は、直前手順の完了表示をそのまま再利用する。
+    // 現在手順の解決警告や分類を先取りしないため、frame・角度・警告がビット一致する。
+    if up_to > 0 && t <= 0.0 {
+        return replay_with_faces(doc, faces, up_to - 1, 1.0);
+    }
     let plan = plan_steps(doc, faces, up_to, t);
     let layer_transition = LayerTransition {
         start: plan.order_start.clone(),
@@ -138,8 +159,33 @@ pub fn replay_with_faces(doc: &Document, faces: &[Face], up_to: usize, t: f64) -
     let mut warnings = plan.warnings;
 
     let result = match &plan.path {
-        Some(path) => solve_along(doc, faces, path, t),
-        None => ori3_rigid::solve(&doc.cp, faces, &plan.drivers, None),
+        Some(path) => {
+            // 直接操作角があるときはt=0と同じ直前姿勢から始める。共同path targetだけの
+            // 複合技法は、そのtarget自身を初期値にしないと平坦分岐の零勾配に留まるため、
+            // 最初だけwarmを渡さず、2点目以降は有限な直前候補を引き継ぐ。
+            let warm = if path.hard.is_empty() {
+                None
+            } else {
+                Some(replay_with_faces(doc, faces, up_to - 1, 1.0).hinge_angles)
+            };
+            solve_along(doc, faces, path, t, warm)
+        }
+        None => {
+            // exact角は表示拘束には使わず、全ヒンジを含む決定的なbranch seedにだけ使う。
+            // これにより未指定ヒンジはfreeのまま、まだ操作していない折り目を0°から始める。
+            let warm: HashMap<EdgeId, f64> = plan
+                .flat_exact
+                .iter()
+                .map(|driver| (driver.hinge, driver.target_angle_deg))
+                .collect();
+            solve_display_near(
+                doc,
+                faces,
+                &plan.display_hard,
+                &plan.display_preferred,
+                Some(&warm),
+            )
+        }
     };
     if !result.converged {
         warnings.push(format!(
@@ -148,6 +194,10 @@ pub fn replay_with_faces(doc: &Document, faces: &[Face], up_to: usize, t: f64) -
     }
 
     let hinge_angles = result.angles;
+    let relaxations = result.relaxations;
+    let closure_rms = result.closure_rms;
+    let best_effort = result.best_effort;
+    let converged = result.converged;
     let mut frame = result.frame;
     let layer_of: HashMap<FaceId, u32> = plan
         .order
@@ -166,6 +216,11 @@ pub fn replay_with_faces(doc: &Document, faces: &[Face], up_to: usize, t: f64) -
         suspect_hinges: Vec::new(),
         driver_hinges: plan.driver_hinges,
         hinge_angles,
+        sequence_targets: plan.sequence_targets,
+        relaxations,
+        closure_rms,
+        best_effort,
+        converged,
         layer_transition,
     }
 }
@@ -198,7 +253,7 @@ pub fn flat_state_at(
     let plan = plan_steps(doc, faces, up_to, 1.0);
     // 後から積んだ指定が優先(HashMapへの順次挿入で後勝ちになる)
     let angles: HashMap<EdgeId, f64> = plan
-        .drivers
+        .flat_exact
         .iter()
         .map(|d| (d.hinge, d.target_angle_deg))
         .collect();
@@ -256,53 +311,89 @@ const SUBSTEPS: u32 = 12;
 fn solve_along(
     doc: &Document,
     faces: &[Face],
-    path: &[(EdgeId, f64, f64)],
+    path: &StepPath,
     t: f64,
+    mut warm: Option<HashMap<EdgeId, f64>>,
 ) -> ori3_rigid::SolveResult {
-    let mut warm: Option<HashMap<EdgeId, f64>> = None;
-    let mut result: Option<ori3_rigid::SolveResult> = None;
+    let mut last_finite: Option<ori3_rigid::SolveResult> = None;
+    let mut final_failure: Option<ori3_rigid::SolveResult> = None;
     let mut iterations = 0u32;
     for i in 1..=SUBSTEPS {
         let s = t * f64::from(i) / f64::from(SUBSTEPS);
-        let targets: HashMap<EdgeId, f64> = path
+        let drivers: Vec<Driver> = path
+            .hard
             .iter()
-            .map(|&(e, from, to)| (e, from + (to - from) * s))
+            .map(|&(hinge, from, to)| Driver {
+                hinge,
+                target_angle_deg: from + (to - from) * s,
+            })
             .collect();
-        let mut candidate = ori3_rigid::solve_near(&doc.cp, faces, &[], &targets, warm.as_ref());
+        let targets: HashMap<EdgeId, f64> = path
+            .preferred
+            .iter()
+            .map(|&(hinge, from, to)| (hinge, from + (to - from) * s))
+            .collect();
+        let mut candidate = solve_display_near(doc, faces, &drivers, &targets, warm.as_ref());
         iterations = iterations.saturating_add(candidate.iterations);
-        if !candidate.converged {
-            // 箱制約の境界では、次の補間点に閉じた解が存在しないことがある。
-            // 不収束候補を次のwarm startへ昇格させず、直前の収束解を表示する。
-            // 最初の補間点で失敗した場合だけ、s=0の開始姿勢を明示的に解く。
-            let previous = if let Some(previous) = result {
-                previous
-            } else {
-                let initial_targets: HashMap<EdgeId, f64> =
-                    path.iter().map(|&(edge, from, _)| (edge, from)).collect();
-                let initial = ori3_rigid::solve_near(&doc.cp, faces, &[], &initial_targets, None);
-                iterations = iterations.saturating_add(initial.iterations);
-                if !initial.converged {
-                    candidate.iterations = iterations;
-                    return candidate;
-                }
-                initial
-            };
-            return previous_replay_result(previous, candidate, iterations);
+        if is_finite_result(&candidate, faces.len()) {
+            candidate.iterations = iterations;
+            warm = Some(candidate.angles.clone());
+            last_finite = Some(candidate);
+            final_failure = None;
+        } else if i == SUBSTEPS {
+            final_failure = Some(candidate);
         }
-        candidate.iterations = iterations;
-        warm = Some(candidate.angles.clone());
-        result = Some(candidate);
     }
-    result.expect("SUBSTEPSは1以上")
+    match (last_finite, final_failure) {
+        (Some(previous), Some(failed)) => previous_replay_result(previous, failed, iterations),
+        (Some(mut result), None) => {
+            result.iterations = iterations;
+            result
+        }
+        (None, Some(mut failed)) => {
+            failed.iterations = iterations;
+            failed
+        }
+        (None, None) => unreachable!("SUBSTEPSは1以上"),
+    }
 }
 
-/// 閉包を満たさない中間姿勢を見せず、直前の収束姿勢へ不収束警告だけを載せる。
+/// soft抵抗を外した最終閉包段まで行う表示solve。
+fn solve_display_near(
+    doc: &Document,
+    faces: &[Face],
+    drivers: &[Driver],
+    targets: &HashMap<EdgeId, f64>,
+    warm: Option<&HashMap<EdgeId, f64>>,
+) -> ori3_rigid::SolveResult {
+    ori3_rigid::solve_near_exact(&doc.cp, faces, drivers, targets, warm)
+}
+
+fn is_finite_result(result: &ori3_rigid::SolveResult, expected_faces: usize) -> bool {
+    result.closure_rms.is_finite()
+        && result.angles.values().all(|angle| angle.is_finite())
+        && result.relaxations.iter().all(|relaxation| {
+            relaxation.target_angle_deg.is_finite()
+                && relaxation.actual_angle_deg.is_finite()
+                && relaxation.delta_deg.is_finite()
+        })
+        && result.frame.faces.len() == expected_faces
+        && result.frame.faces.iter().all(|face| {
+            face.polygon
+                .iter()
+                .flatten()
+                .all(|coordinate| coordinate.is_finite())
+        })
+}
+
+/// 最終要求で有限形を作れなかった場合だけ、直前の有限姿勢へ警告を載せる。
 fn previous_replay_result(
     mut previous: ori3_rigid::SolveResult,
     failed: ori3_rigid::SolveResult,
     iterations: u32,
 ) -> ori3_rigid::SolveResult {
     previous.converged = false;
+    previous.best_effort = true;
     previous.iterations = iterations;
     for warning in failed.frame.warnings {
         if !previous.frame.warnings.contains(&warning) {
@@ -323,16 +414,28 @@ fn previous_replay_result(
     previous
 }
 
+/// 現在手順を補間する経路。hardとpreferredの出所を保ったまま連続法へ渡す。
+struct StepPath {
+    /// 現在の単一Simple直接操作。(辺ID, 開始角, 完了角)
+    hard: Vec<(EdgeId, f64, f64)>,
+    /// 過去手順、Pose、複数lineの共同path target。(辺ID, 開始角, 完了角)
+    preferred: Vec<(EdgeId, f64, f64)>,
+}
+
 /// `up_to` ステップまでの角度指定・層順序・警告(replayとflat_state_atの共通処理)。
 struct StepPlan {
-    /// ソルバーへ渡す角度指定。t=1のときは全ヒンジ(未駆動は0°)、
-    /// 折り途中(t<1)は「そのステップが駆動するヒンジ」だけ
-    drivers: Vec<Driver>,
+    /// 表示solveで固定する現在の直接操作角。
+    display_hard: Vec<Driver>,
+    /// 表示solveでなるべく保つ過去手順、Pose、共同path target。
+    display_preferred: HashMap<EdgeId, f64>,
+    /// 表示位置までに解決できた全明示角。未指定ヒンジの0°は含めない。
+    sequence_targets: Vec<Driver>,
+    /// FlatState専用のexact角。従来どおり未指定ヒンジも0°で固定する。
+    flat_exact: Vec<Driver>,
     /// 手順内のDriverLineから解決できたヒンジ。未指定ヒンジの0度固定は含めない。
     driver_hinges: Vec<EdgeId>,
-    /// 折り途中(t<1)の折り道: ヒンジごとの (辺ID, 直前の角度, 目標角) (度)。
-    /// この間を少しずつ動かしながら「閉じた形」を追いかける。t=1ではNone。
-    path: Option<Vec<(EdgeId, f64, f64)>>,
+    /// 折り途中(t<1)のhard/preferredを保った折り道。t=1ではNone。
+    path: Option<StepPath>,
     /// 層順序(下→上)
     order: Vec<FaceId>,
     /// `up_to` 手順へ入る直前の層順序(接触補正用)。
@@ -363,6 +466,10 @@ fn plan_steps(doc: &Document, faces: &[Face], up_to: usize, t: f64) -> StepPlan 
     let mut angles: BTreeMap<EdgeId, f64> = BTreeMap::new();
     // `up_to` ステップ目に入る直前の角度(折り途中の補間の始点)
     let mut before: BTreeMap<EdgeId, f64> = BTreeMap::new();
+    // 現在手順で解決できた角度。過去角と混ぜず、表示solveのhard判定に使う。
+    let mut current: BTreeMap<EdgeId, f64> = BTreeMap::new();
+    let mut current_kind: Option<TechniqueKind> = None;
+    let mut current_driver_lines = 0usize;
 
     for (i, step) in doc.sequence.iter().take(up_to).enumerate() {
         let number = i + 1; // 利用者向けの手順番号は1始まり
@@ -382,6 +489,18 @@ fn plan_steps(doc: &Document, faces: &[Face], up_to: usize, t: f64) -> StepPlan 
                 continue;
             }
             resolved_lines += 1;
+            if last {
+                let mut line_changes_angle = false;
+                for &hinge in &edges {
+                    let from = before.get(&hinge).copied().unwrap_or(0.0);
+                    if !same_step_angle(step.kind, from, line.target_angle_deg) {
+                        line_changes_angle = true;
+                    }
+                }
+                if line_changes_angle {
+                    current_driver_lines += 1;
+                }
+            }
             step_drivers.extend(edges.into_iter().map(|hinge| Driver {
                 hinge,
                 target_angle_deg: line.target_angle_deg,
@@ -396,6 +515,23 @@ fn plan_steps(doc: &Document, faces: &[Face], up_to: usize, t: f64) -> StepPlan 
         }
         if resolved_lines < step.drivers.len() {
             warnings.push(format!("手順{number}の折り線の一部が見つかりません"));
+        }
+        if last {
+            current_kind = Some(step.kind);
+            let final_step_angles: BTreeMap<EdgeId, f64> = step_drivers
+                .iter()
+                .map(|driver| (driver.hinge, driver.target_angle_deg))
+                .collect();
+            current = final_step_angles
+                .into_iter()
+                .filter(|(hinge, target)| {
+                    !same_step_angle(
+                        step.kind,
+                        before.get(hinge).copied().unwrap_or(0.0),
+                        *target,
+                    )
+                })
+                .collect();
         }
         for d in step_drivers {
             angles.insert(d.hinge, d.target_angle_deg);
@@ -432,41 +568,88 @@ fn plan_steps(doc: &Document, faces: &[Face], up_to: usize, t: f64) -> StepPlan 
     }
 
     let hinges = hinge_edges(faces);
-    // t=0 は「直前の手順を折り終えた状態」そのもの。連続法を1歩も進めずに
-    // 厳密解の道(下の全ヒンジ固定)へ回し、`replay(k, 0)` が `replay(k-1, 1)` と
-    // ビット一致するようにする。
-    if t <= 0.0 {
-        angles = before.clone();
+
+    // IPCと表示solveへ渡す明示角は、現在の再生位置まで補間する。未指定ヒンジは
+    // この集合へ0°として足さない。それらはlow/freeであり、warm startだけで枝を保つ。
+    let mut display_angles = if t < 1.0 {
+        before.clone()
+    } else {
+        angles.clone()
+    };
+    if t > 0.0 && t < 1.0 {
+        for (&hinge, &target) in &current {
+            let start = before.get(&hinge).copied().unwrap_or(0.0);
+            display_angles.insert(hinge, start + (target - start) * t);
+        }
     }
 
-    // 折り途中(t<1): 補間した角度は「目標」であって解ではない。全部を固定すると
-    // 内部頂点まわりのループ閉包が破れ、面どうしが離れて紙がちぎれて見える
-    // (自由度1の四折り頂点で2本以上を勝手な値にすると閉じない)。
-    // 角度指定は置かず、閉包を満たす形のうち補間値にいちばん近いものを解かせる。
-    if t > 0.0 && t < 1.0 {
-        let path: Vec<(EdgeId, f64, f64)> = hinges
+    // flat_motion由来の複数DriverLineは、利用者が直接指定した独立角ではなく、
+    // 完了形から記録した全変化ヒンジである。元のMotionPartやactive折り目は保存されず、
+    // 途中の一様な角度補間は一般に剛体経路にならないため、共同path targetとして
+    // 閉じた経路へ射影する。現行形式で直接操作と確定できる単一Simple lineだけは
+    // 補間中もhardにし、閉じることが既知のt=1では全ての非Pose currentをhardに戻す。
+    let current_is_direct_angle =
+        current_kind == Some(TechniqueKind::Simple) && current_driver_lines == 1;
+    let current_is_path_target =
+        current_kind == Some(TechniqueKind::Pose) || (t < 1.0 && !current_is_direct_angle);
+    let current_is_hard = |hinge: EdgeId| !current_is_path_target && current.contains_key(&hinge);
+    let display_hard: Vec<Driver> = if current_is_path_target {
+        Vec::new()
+    } else {
+        current
+            .keys()
+            .filter(|&&hinge| current_is_hard(hinge))
+            .filter_map(|hinge| {
+                display_angles.get(hinge).map(|&target_angle_deg| Driver {
+                    hinge: *hinge,
+                    target_angle_deg,
+                })
+            })
+            .collect()
+    };
+    let display_preferred: HashMap<EdgeId, f64> = display_angles
+        .iter()
+        .filter(|(hinge, _)| !current_is_hard(**hinge))
+        .map(|(&hinge, &angle)| (hinge, angle))
+        .collect();
+
+    // 連続法でも出所を混ぜない。直接操作角だけがhard、過去角はその場に留まる
+    // soft target、Poseと共同path targetは補間するsoft targetになる。
+    let path = if t > 0.0 && t < 1.0 && !current.is_empty() {
+        let hard = current
             .iter()
-            .map(|&e| {
-                let from = before.get(&e).copied().unwrap_or(0.0);
-                (e, from, angles.get(&e).copied().unwrap_or(0.0))
+            .filter(|(hinge, _)| current_is_hard(**hinge))
+            .map(|(&hinge, &target)| (hinge, before.get(&hinge).copied().unwrap_or(0.0), target))
+            .collect();
+        let preferred = angles
+            .iter()
+            .filter(|(hinge, _)| !current_is_hard(**hinge))
+            .map(|(&hinge, &target)| {
+                let start = if current.contains_key(&hinge) {
+                    before.get(&hinge).copied().unwrap_or(0.0)
+                } else {
+                    target
+                };
+                (hinge, start, target)
             })
             .collect();
-        return StepPlan {
-            drivers: Vec::new(),
-            driver_hinges: angles.keys().copied().collect(),
-            path: Some(path),
-            order,
-            order_start,
-            order_end,
-            skipped,
-            warnings,
-        };
-    }
+        Some(StepPath { hard, preferred })
+    } else {
+        None
+    };
 
-    // 折り上がり(t=1)は全ヒンジを固定して厳密な形を出す。まだ折っていない
-    // 折り線も0°(平ら)で明示する。自由変数として残すと初期値バイアスから
-    // 別の枝へ収束し、警告なしで誤った形が返る(モジュールdoc参照)。
-    let all: Vec<Driver> = hinges
+    let sequence_targets: Vec<Driver> = display_angles
+        .iter()
+        .map(|(&hinge, &target_angle_deg)| Driver {
+            hinge,
+            target_angle_deg,
+        })
+        .collect();
+    let driver_hinges = display_angles.keys().copied().collect();
+
+    // FlatStateは平坦操作の基礎状態なので、従来どおり保存手順をexactに再生する。
+    // 表示solveだけを優先度付きに変え、ここでは未指定ヒンジも0°へ固定する。
+    let flat_exact = hinges
         .into_iter()
         .map(|hinge| Driver {
             hinge,
@@ -475,15 +658,32 @@ fn plan_steps(doc: &Document, faces: &[Face], up_to: usize, t: f64) -> StepPlan 
         .collect();
 
     StepPlan {
-        drivers: all,
-        driver_hinges: angles.keys().copied().collect(),
-        path: None,
+        display_hard,
+        display_preferred,
+        sequence_targets,
+        flat_exact,
+        driver_hinges,
+        path,
         order,
         order_start,
         order_end,
         skipped,
         warnings,
     }
+}
+
+/// 変化しない再指定を現在操作から除く。Simpleの層移動とPoseでは±180°が同じ
+/// 平坦姿勢を表すだけなので周期同値とする。名前付き技法ではその符号変更自体が
+/// 開いて折り直す途中経路を表すため、数値が一致するときだけ同じとみなす。
+fn same_step_angle(kind: TechniqueKind, left: f64, right: f64) -> bool {
+    if !left.is_finite() || !right.is_finite() {
+        return false;
+    }
+    if !matches!(kind, TechniqueKind::Simple | TechniqueKind::Pose) {
+        return (right - left).abs() <= 1e-9;
+    }
+    let delta = (right - left + 180.0).rem_euclid(360.0) - 180.0;
+    delta.abs() <= 1e-9
 }
 
 /// ヒンジ(ちょうど2つの異なる面が共有する辺)を辺ID昇順で返す。
@@ -500,4 +700,206 @@ fn hinge_edges(faces: &[Face]) -> Vec<EdgeId> {
         .filter(|(_, list)| list.len() == 2 && list[0] != list[1])
         .map(|(eid, _)| eid)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use ori3_model::{CreasePattern, DriverLine, Edge, EdgeKind, FoldStep, Paper, Vertex};
+
+    use super::*;
+
+    fn degree_four_document(current_kind: TechniqueKind) -> Document {
+        let ray_50_x = 0.5 + 0.5 * 50f64.to_radians().cos() / 50f64.to_radians().sin();
+        let ray_110_x = 0.5 + 0.5 * 110f64.to_radians().cos() / 110f64.to_radians().sin();
+        let ray_240_x = 0.5 + 0.5 / 240f64.to_radians().sin().abs() * 240f64.to_radians().cos();
+        let mut document = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        document.cp = CreasePattern {
+            vertices: vec![
+                Vertex {
+                    id: 0,
+                    pos: [0.0, 0.0],
+                },
+                Vertex {
+                    id: 1,
+                    pos: [ray_240_x, 0.0],
+                },
+                Vertex {
+                    id: 2,
+                    pos: [1.0, 0.0],
+                },
+                Vertex {
+                    id: 3,
+                    pos: [1.0, 0.5],
+                },
+                Vertex {
+                    id: 4,
+                    pos: [1.0, 1.0],
+                },
+                Vertex {
+                    id: 5,
+                    pos: [ray_50_x, 1.0],
+                },
+                Vertex {
+                    id: 6,
+                    pos: [ray_110_x, 1.0],
+                },
+                Vertex {
+                    id: 7,
+                    pos: [0.0, 1.0],
+                },
+                Vertex {
+                    id: 8,
+                    pos: [0.5, 0.5],
+                },
+            ],
+            edges: vec![
+                Edge {
+                    id: 0,
+                    v0: 0,
+                    v1: 1,
+                    kind: EdgeKind::Border,
+                },
+                Edge {
+                    id: 1,
+                    v0: 1,
+                    v1: 2,
+                    kind: EdgeKind::Border,
+                },
+                Edge {
+                    id: 2,
+                    v0: 2,
+                    v1: 3,
+                    kind: EdgeKind::Border,
+                },
+                Edge {
+                    id: 3,
+                    v0: 3,
+                    v1: 4,
+                    kind: EdgeKind::Border,
+                },
+                Edge {
+                    id: 4,
+                    v0: 4,
+                    v1: 5,
+                    kind: EdgeKind::Border,
+                },
+                Edge {
+                    id: 5,
+                    v0: 5,
+                    v1: 6,
+                    kind: EdgeKind::Border,
+                },
+                Edge {
+                    id: 6,
+                    v0: 6,
+                    v1: 7,
+                    kind: EdgeKind::Border,
+                },
+                Edge {
+                    id: 7,
+                    v0: 7,
+                    v1: 0,
+                    kind: EdgeKind::Border,
+                },
+                Edge {
+                    id: 8,
+                    v0: 8,
+                    v1: 3,
+                    kind: EdgeKind::Mountain,
+                },
+                Edge {
+                    id: 9,
+                    v0: 8,
+                    v1: 5,
+                    kind: EdgeKind::Valley,
+                },
+                Edge {
+                    id: 10,
+                    v0: 8,
+                    v1: 6,
+                    kind: EdgeKind::Mountain,
+                },
+                Edge {
+                    id: 11,
+                    v0: 8,
+                    v1: 1,
+                    kind: EdgeKind::Mountain,
+                },
+            ],
+            next_vertex_id: 9,
+            next_edge_id: 12,
+        };
+        document.sequence = vec![
+            FoldStep {
+                id: 0,
+                kind: TechniqueKind::Simple,
+                drivers: vec![DriverLine {
+                    a: [0.5, 0.5],
+                    b: [ray_50_x, 1.0],
+                    target_angle_deg: 0.0,
+                }],
+                layer_order: None,
+                alignment: None,
+                note: String::new(),
+            },
+            FoldStep {
+                id: 1,
+                kind: current_kind,
+                drivers: vec![DriverLine {
+                    a: [0.5, 0.5],
+                    b: [1.0, 0.5],
+                    target_angle_deg: 90.0,
+                }],
+                layer_order: None,
+                alignment: None,
+                note: String::new(),
+            },
+        ];
+        document
+    }
+
+    #[test]
+    fn replay_plan_separates_current_previous_and_unmentioned_angles() {
+        let document = degree_four_document(TechniqueKind::Simple);
+        let faces = extract_faces(&document.cp);
+        let plan = plan_steps(&document, &faces, 2, 1.0);
+
+        assert_eq!(
+            plan.display_hard,
+            vec![Driver {
+                hinge: 8,
+                target_angle_deg: 90.0,
+            }]
+        );
+        assert_eq!(plan.display_preferred, HashMap::from([(9, 0.0)]));
+        assert_eq!(
+            plan.sequence_targets,
+            vec![
+                Driver {
+                    hinge: 8,
+                    target_angle_deg: 90.0,
+                },
+                Driver {
+                    hinge: 9,
+                    target_angle_deg: 0.0,
+                },
+            ]
+        );
+        assert!(
+            [10, 11].into_iter().all(|hinge| {
+                !plan.display_preferred.contains_key(&hinge)
+                    && !plan.display_hard.iter().any(|driver| driver.hinge == hinge)
+            }),
+            "一度も明示していないヒンジはfree"
+        );
+
+        let pose_document = degree_four_document(TechniqueKind::Pose);
+        let pose_faces = extract_faces(&pose_document.cp);
+        let pose = plan_steps(&pose_document, &pose_faces, 2, 1.0);
+        assert!(pose.display_hard.is_empty());
+        assert_eq!(pose.display_preferred, HashMap::from([(8, 90.0), (9, 0.0)]));
+    }
 }

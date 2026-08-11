@@ -80,19 +80,22 @@ describe("3Dビューの操作ヒント", () => {
   it("詳細を折りたたみ、同じボタンから再び開ける", () => {
     renderHint("fold");
 
-    const close = screen.getByRole("button", { name: "操作ヒントを折りたたむ" });
+    const close = screen.getByRole("button", { name: "詳しい3D操作方法を折りたたむ" });
     expect(close.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByLabelText("マウス操作の割り当て")).toBeTruthy();
 
     fireEvent.click(close);
+    expect(useAppStore.getState().viewerHintExpanded).toBe(false);
     expect(screen.queryByLabelText("マウス操作の割り当て")).toBeNull();
-    const open = screen.getByRole("button", { name: "操作ヒントを開く" });
+    expect(screen.getByRole("status").textContent).toBe("紙の上で操作できます");
+    const open = screen.getByRole("button", { name: "詳しい3D操作方法を開く" });
     expect(open.getAttribute("aria-expanded")).toBe("false");
 
     fireEvent.click(open);
+    expect(useAppStore.getState().viewerHintExpanded).toBe(true);
     expect(screen.getByLabelText("マウス操作の割り当て")).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: "操作ヒントを折りたたむ" }).getAttribute(
+      screen.getByRole("button", { name: "詳しい3D操作方法を折りたたむ" }).getAttribute(
         "aria-expanded",
       ),
     ).toBe("true");

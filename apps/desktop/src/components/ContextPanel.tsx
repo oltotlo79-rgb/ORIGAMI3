@@ -1,4 +1,5 @@
-// 下部コンテキストパネル(160px)。選択状態に応じて内容を切り替える。
+// 下部コンテキストパネル。高さは上端の取っ手で変えられ、選択状態に応じて
+// 内容を切り替える。
 // 警告・エラーの詳細もここに表示する(常設パネルを増やさない)。
 
 import { useEffect, useRef } from "react";
@@ -6,6 +7,7 @@ import {
   isStepSkipped,
   nextAlignKind,
   poseRecordReason,
+  relaxationNotices,
   useAppStore,
   type AlignDraft,
   type FoldDraft,
@@ -15,7 +17,6 @@ import {
 } from "../store/appStore";
 import {
   CURVE_LABEL,
-  DEFAULT_CURVE_TOL,
   MAX_CURVE_SEGMENTS,
   type CurveShape,
 } from "../lib/curve";
@@ -39,6 +40,8 @@ import {
 } from "../lib/layerMotion";
 import type { EdgeKind, FoldStep, TechniqueKind } from "../lib/types";
 import { PaperAppearance } from "./PaperAppearance";
+import { MirrorAxisControls } from "./MirrorAxisControls";
+import { mirrorAxisLabel } from "../lib/mirror";
 import { OperationSteps } from "./OperationSteps";
 
 const KIND_LABEL: Record<EdgeKind, string> = {
@@ -84,10 +87,12 @@ function AngleNumberInput({
   value,
   ariaLabel,
   onValue,
+  onFinish,
 }: {
   value: number;
   ariaLabel: string;
   onValue: (value: number) => void;
+  onFinish: () => void;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   /** 利用者がこの入力欄を書き換えたか(未編集なら確定しない) */
@@ -127,6 +132,7 @@ function AngleNumberInput({
       type="number"
       className="angle-number"
       aria-label={ariaLabel}
+      data-tooltip={`${ariaLabel}を-180°から180°で指定します`}
       min={ANGLE_MIN}
       max={ANGLE_MAX}
       step={1}
@@ -139,10 +145,14 @@ function AngleNumberInput({
           onValue(entered);
         }
       }}
-      onBlur={commit}
+      onBlur={() => {
+        commit();
+        onFinish();
+      }}
       onKeyDown={(e) => {
         if (e.key === "Enter") {
           commit();
+          onFinish();
         } else if (e.key === "Escape") {
           revert();
           e.currentTarget.blur();
@@ -156,13 +166,23 @@ function AngleNumberInput({
 function HingeAngle({ hinge, only }: { hinge: number; only: boolean }) {
   const drivers = useAppStore((s) => s.drivers);
   const poseAngles = useAppStore((s) => s.poseAngles);
+  const sequenceTargets = useAppStore((s) => s.sequenceTargets);
+  const relaxations = useAppStore((s) => s.relaxations);
   const setDriverAngle = useAppStore((s) => s.setDriverAngle);
   const clearDriver = useAppStore((s) => s.clearDriver);
   const setHoveredHinge = useAppStore((s) => s.setHoveredHinge);
+  const finishAngleIntent = useAppStore((s) => s.finishAngleIntent);
 
-  // 指定値 → 計算結果 → 0度(平ら)の順に現在値を決める
+  const relaxation = relaxationNotices(relaxations).find((item) => item.hinge === hinge);
+  // 一時指定・保存済み希望は、計算結果が譲っても入力欄へそのまま残す。
   const specified = drivers.get(hinge);
-  const value = Math.round(specified ?? poseAngles.get(hinge) ?? 0);
+  const desired =
+    specified ??
+    sequenceTargets.get(hinge) ??
+    relaxation?.target_angle_deg ??
+    poseAngles.get(hinge) ??
+    0;
+  const value = Math.round(desired);
   const label = `折り目 #${hinge}`;
   const sliderId = `hinge-angle-${hinge}`;
 
@@ -179,7 +199,12 @@ function HingeAngle({ hinge, only }: { hinge: number; only: boolean }) {
     >
       <div className="hinge-angle-name">
         <strong>{only ? "折り角度" : label}</strong>
-        <span>{value}°</span>
+        <span>
+          {value}°
+          {relaxation && (
+            <small className="actual-angle">現在{relaxation.actual_angle_deg.toFixed(1)}°</small>
+          )}
+        </span>
       </div>
       <div className="angle-row">
         <label className="sr-only" htmlFor={sliderId}>
@@ -188,22 +213,28 @@ function HingeAngle({ hinge, only }: { hinge: number; only: boolean }) {
         <input
           id={sliderId}
           aria-label={`${label}の角度`}
+          data-tooltip="折り目の角度を調整します。+は山折り、−は谷折りです"
           type="range"
           min={ANGLE_MIN}
           max={ANGLE_MAX}
           step={1}
           value={value}
           onChange={(e) => setDriverAngle(hinge, Number(e.target.value))}
+          onPointerUp={() => void finishAngleIntent()}
+          onPointerCancel={() => void finishAngleIntent()}
+          onBlur={() => void finishAngleIntent()}
+          onKeyUp={() => void finishAngleIntent()}
         />
         <AngleNumberInput
           key={hinge}
           value={value}
           ariaLabel={`${label}の角度（数値）`}
           onValue={(angle) => setDriverAngle(hinge, angle)}
+          onFinish={() => void finishAngleIntent()}
         />
         <button
           type="button"
-          title="この折り線の角度指定をやめます(この線は平らに戻り、形は残りの指定から計算し直します)"
+          data-tooltip="この折り線の角度指定を解除し、形を計算し直します"
           disabled={specified === undefined}
           onClick={() => clearDriver(hinge)}
         >
@@ -218,36 +249,70 @@ function HingeAngle({ hinge, only }: { hinge: number; only: boolean }) {
 function HingeAngleGroup({ hinges }: { hinges: number[] }) {
   const drivers = useAppStore((s) => s.drivers);
   const poseAngles = useAppStore((s) => s.poseAngles);
+  const sequenceTargets = useAppStore((s) => s.sequenceTargets);
+  const relaxations = useAppStore((s) => s.relaxations);
   const setDriverAngles = useAppStore((s) => s.setDriverAngles);
+  const finishAngleIntent = useAppStore((s) => s.finishAngleIntent);
+  const noticed = relaxationNotices(relaxations);
   const values = hinges.map((hinge) =>
-    Math.round(drivers.get(hinge) ?? poseAngles.get(hinge) ?? 0),
+    Math.round(
+      drivers.get(hinge) ??
+        sequenceTargets.get(hinge) ??
+        noticed.find((item) => item.hinge === hinge)?.target_angle_deg ??
+        poseAngles.get(hinge) ??
+        0,
+    ),
   );
   const value = values[0] ?? 0;
   const mixed = values.some((angle) => angle !== value);
+  const actualValues = hinges.map(
+    (hinge, index) =>
+      noticed.find((item) => item.hinge === hinge)?.actual_angle_deg ??
+      poseAngles.get(hinge) ??
+      values[index] ??
+      0,
+  );
+  const hasRelaxation = hinges.some((hinge) => noticed.some((item) => item.hinge === hinge));
+  const firstActual = actualValues[0] ?? 0;
+  const mixedActual = actualValues.some(
+    (angle) => Math.abs(angle - firstActual) >= 0.05,
+  );
 
   return (
     <section className="bulk-angle-row" aria-label="選択した折り目の一括角度設定">
       <div className="hinge-angle-name">
         <strong>まとめて動かす</strong>
-        <span>{mixed ? "角度はばらばら" : `${value}°`}</span>
+        <span>
+          {mixed ? "角度はばらばら" : `${value}°`}
+          {hasRelaxation && (
+            <small className="actual-angle">
+              {mixedActual ? "現在はばらばら" : `現在${firstActual.toFixed(1)}°`}
+            </small>
+          )}
+        </span>
       </div>
       <div className="angle-row">
         <input
           type="range"
           aria-label="選択した折り目をまとめて動かす"
+          data-tooltip="選択した折り目を同じ角度へまとめて動かします"
           min={ANGLE_MIN}
           max={ANGLE_MAX}
           step={1}
           value={value}
           onChange={(e) => setDriverAngles(hinges, Number(e.target.value))}
+          onPointerUp={() => void finishAngleIntent()}
+          onPointerCancel={() => void finishAngleIntent()}
+          onBlur={() => void finishAngleIntent()}
+          onKeyUp={() => void finishAngleIntent()}
         />
         <AngleNumberInput
           key={hinges.join(",")}
           value={value}
           ariaLabel="選択した折り目をまとめて動かす角度（数値）"
           onValue={(angle) => setDriverAngles(hinges, angle)}
+          onFinish={() => void finishAngleIntent()}
         />
-        <span className="hint">動かすと選択中の全てを同じ角度にそろえます</span>
       </div>
     </section>
   );
@@ -267,7 +332,7 @@ function PoseRecordButton() {
       <button
         type="button"
         disabled={reason !== null}
-        title={
+        data-tooltip={
           reason ??
           "今の立体的な形を、折り角度の手順として手順一覧の最後に残します"
         }
@@ -275,9 +340,7 @@ function PoseRecordButton() {
       >
         この形で仕上げる
       </button>
-      <span className="hint">
-        {reason ?? "今の形が手順一覧に残り、展開図を編集しても戻せます"}
-      </span>
+      {reason && <span className="hint">{reason}</span>}
     </div>
   );
 }
@@ -304,11 +367,12 @@ function FoldControls({ primary = false }: { primary?: boolean }) {
     <div className={`fold-controls${primary ? " fold-controls-primary" : ""}`}>
       {selected.length > 0 && (
         <>
-          <div className="fold-controls-heading">
+          <div
+            className="fold-controls-heading"
+            data-tooltip="Ctrl+クリックで選択を追加・解除できます"
+            tabIndex={0}
+          >
             <strong>折り目を{selected.length}本選択中</strong>
-            <span className="hint">
-              Ctrl+クリックで追加・解除。各行を指すと2D/3Dの該当箇所が光ります
-            </span>
           </div>
           {selected.length > 1 && <HingeAngleGroup hinges={selected} />}
           <div className="hinge-angle-list" aria-label="選択した折り目ごとの角度">
@@ -316,9 +380,6 @@ function FoldControls({ primary = false }: { primary?: boolean }) {
               <HingeAngle key={hinge} hinge={hinge} only={selected.length === 1} />
             ))}
           </div>
-          <span className="hint">
-            +は山折り、−は谷折り、±180で完全に折ります（数値も入力中から反映し、Enterか欄外で確定）
-          </span>
         </>
       )}
       <PoseRecordButton />
@@ -431,7 +492,7 @@ function StepContent({ number }: { number: number }) {
         <button
           type="button"
           disabled={number <= 1}
-          title={
+          data-tooltip={
             number <= 1
               ? "いちばん最初の手順なので、これより前へは動かせません"
               : "この手順を1つ前へ動かします(元に戻すは2回押してください)"
@@ -443,7 +504,7 @@ function StepContent({ number }: { number: number }) {
         <button
           type="button"
           disabled={number >= total}
-          title={
+          data-tooltip={
             number >= total
               ? "いちばん最後の手順なので、これより後ろへは動かせません"
               : "この手順を1つ後ろへ動かします(元に戻すは2回押してください)"
@@ -454,7 +515,7 @@ function StepContent({ number }: { number: number }) {
         </button>
         <button
           type="button"
-          title="この手順を手順一覧から取り除きます(展開図の折り線は残ります)"
+          data-tooltip="この手順を一覧から削除します。展開図の折り線は残ります"
           onClick={() =>
             void applySequenceOp({ type: "RemoveStep", id: step.id })
           }
@@ -492,15 +553,13 @@ function AlignStartRow() {
           <button
             key={mode}
             type="button"
+            data-tooltip="選んだ点や線から、折り線を正確に決めます"
             onClick={() => beginAlign(mode)}
           >
             {ALIGN_LABELS[mode]}
           </button>
         ))}
       </div>
-      <span className="hint">
-        (目分量ではなく、選んだ点や線から折り線を正確に決めます)
-      </span>
     </div>
   );
 }
@@ -623,6 +682,7 @@ function FoldDraftContent({ draft }: { draft: FoldDraft }) {
           <input
             type="radio"
             name="fold-side"
+            data-tooltip="黄色く光る側の紙を動かします"
             disabled={busy}
             checked={draft.movingSide === "right"}
             onChange={() => updateFoldDraft({ movingSide: "right" })}
@@ -633,16 +693,13 @@ function FoldDraftContent({ draft }: { draft: FoldDraft }) {
           <input
             type="radio"
             name="fold-side"
+            data-tooltip="黄色く光る側の紙を動かします"
             disabled={busy}
             checked={draft.movingSide === "left"}
             onChange={() => updateFoldDraft({ movingSide: "left" })}
           />
           反対側
         </label>
-        <span className="hint">
-          (立体表示で黄色く光っている方が動きます。違う方を動かしたいときは
-          もう一方を選んでください)
-        </span>
       </div>
       <div className="button-row">
         <button type="button" disabled={busy} onClick={() => void commitFoldDraft()}>
@@ -773,20 +830,22 @@ function TwistPolygonRow({ draft }: { draft: TechniqueDraft }) {
         中央の形: 角を{n}個指定{ready ? `(${n}角形)` : "(あと3個以上必要)"}
         {draft.center ? " / 中心は指定した点" : " / 中心は形の重心"}
       </span>
-      <button type="button" disabled={n === 0} onClick={() => undoTechniqueVertex()}>
+      <button
+        type="button"
+        disabled={n === 0}
+        data-tooltip="最後に選んだ中央の角を取り消します"
+        onClick={() => undoTechniqueVertex()}
+      >
         角を1つ戻す
       </button>
       <button
         type="button"
         disabled={draft.center === null}
+        data-tooltip="指定した中心をやめ、中央の形の重心を使います"
         onClick={() => setTechniqueCenter(null)}
       >
         中心を重心へ戻す
       </button>
-      <span className="hint">
-        立体表示で中央の形の角を順にクリックしてください(3つ以上)。
-        Ctrl+クリックで中心、Shift+クリックで対象層、Backspaceで1つ戻す、Escでやめる
-      </span>
     </div>
   );
 }
@@ -863,8 +922,8 @@ function TechniqueLayerPicker({ draft }: { draft: TechniqueDraft }) {
       ) : (
         <span className="hint">
           {draft.kind === "Twist"
-            ? "立体表示の紙をShift+クリックすると、その場所の候補層が奥→手前の順で入ります"
-            : "立体表示の紙をクリックすると、その場所の候補層が奥→手前の順で入ります"}
+            ? "Shift+クリックで対象層を選びます"
+            : "3Dの紙をクリックして対象層を選びます"}
         </span>
       )}
     </fieldset>
@@ -899,19 +958,20 @@ function TechniqueReferenceRow({ draft }: { draft: TechniqueDraft }) {
 
   return (
     <div className="button-row">
-      <span>
+      <span
+        data-tooltip={`3DをCtrl+クリックすると任意の${label}を指定できます`}
+        tabIndex={0}
+      >
         {label}: {draft.referencePoint === null ? "自動" : "指定した点"}
       </span>
       <button
         type="button"
         disabled={draft.referencePoint === null}
+        data-tooltip={`指定した${label}をやめ、自動で決めます`}
         onClick={() => setReference(null)}
       >
         基準点を自動へ戻す
       </button>
-      <span className="hint">
-        立体表示をCtrl+クリックすると任意の{label}を指せます。指定した点は「こちら側／反対側」より優先します
-      </span>
     </div>
   );
 }
@@ -978,11 +1038,11 @@ function LayerMotionDraftContent({ draft }: { draft: TechniqueDraft }) {
       </div>
       {draft.motionMode === "reflect" ? (
         <div className="button-row">
-          <span>
+          <span
+            data-tooltip="3Dの既存折り目をクリックして、正確な開閉軸を選びます"
+            tabIndex={0}
+          >
             軸: {draft.motionAxisEdgeId === null ? "未選択" : `折り目${draft.motionAxisEdgeId}`}
-          </span>
-          <span className="hint">
-            立体表示の既存折り目をクリックすると、その正確な線で選択層を開く・折り返す操作になります
           </span>
         </div>
       ) : (
@@ -1041,6 +1101,7 @@ function LayerMotionDraftContent({ draft }: { draft: TechniqueDraft }) {
         <label>
           <input
             type="checkbox"
+            data-tooltip="選択した層だけ山折りと谷折り、層順を反転します。未選択なら全層が対象です"
             checked={draft.motionReverseLayers}
             onChange={(e) =>
               updateTechniqueDraft({ motionReverseLayers: e.target.checked })
@@ -1048,7 +1109,6 @@ function LayerMotionDraftContent({ draft }: { draft: TechniqueDraft }) {
           />
           選択層だけ山谷反転(層順も反転)
         </label>
-        <span className="hint">層を選ばなければ、この位置にある全層が対象です</span>
       </div>
       {draft.motionParts.length > 0 && (
         <div className="button-row" aria-label="追加済みの同時層操作">
@@ -1063,7 +1123,7 @@ function LayerMotionDraftContent({ draft }: { draft: TechniqueDraft }) {
         <button
           type="button"
           disabled={!hasCurrent || !built.ok || !exactAxisReady}
-          title={
+          data-tooltip={
             !exactAxisReady
               ? "立体表示で既存の折り目をクリックして、正確な開閉軸を選んでください"
               : built.ok
@@ -1084,7 +1144,7 @@ function LayerMotionDraftContent({ draft }: { draft: TechniqueDraft }) {
         <button
           type="button"
           disabled={!ready}
-          title={
+          data-tooltip={
             ready
               ? "追加済みと現在の部分を1手として同時に適用します"
               : hasCurrent && !exactAxisReady
@@ -1207,6 +1267,7 @@ function NamedTechniqueDraftContent({ draft }: { draft: TechniqueDraft }) {
               type="radio"
               name="technique-open-side"
               aria-label="開く側: 手前"
+              data-tooltip="動かした紙を重なりの手前へ置きます"
               checked={!draft.openToBack}
               onChange={() => updateTechniqueDraft({ openToBack: false })}
             />
@@ -1217,21 +1278,19 @@ function NamedTechniqueDraftContent({ draft }: { draft: TechniqueDraft }) {
               type="radio"
               name="technique-open-side"
               aria-label="開く側: 向こう"
+              data-tooltip="動かした紙を重なりの奥へ入れます"
               checked={draft.openToBack}
               onChange={() => updateTechniqueDraft({ openToBack: true })}
             />
             向こう
           </label>
-          <span className="hint">
-            動かした紙を重なりのいちばん上へ置くか、いちばん下へ入れるかを選びます
-          </span>
         </div>
       )}
       <div className="button-row">
         <button
           type="button"
           disabled={!ready}
-          title={
+          data-tooltip={
             ready
               ? "選んだ技法で折ります"
               : draft.line === null && draft.kind === "Twist"
@@ -1249,13 +1308,6 @@ function NamedTechniqueDraftContent({ draft }: { draft: TechniqueDraft }) {
         <button type="button" onClick={() => cancelTechnique()}>
           やめる
         </button>
-        <span className="hint">
-          {draft.kind === "Twist"
-            ? "立体表示で指した中央の形と、そこから出るひだの折り線を黄色で見せています。Shift+クリックで層を選べ、選ばなければ全ての層をねじります"
-            : minimumFlap === 0
-              ? "層を選ばなければ、その領域の全ての層が対象です。クリック後は枚数・奥行きを絞れ、Ctrl+クリックで基準点を直接指定できます"
-              : "立体表示で紙をクリックすると、その場所の候補層をまとめて選びます。枚数・奥行きや個別チェックで絞れ、Ctrl+クリックで基準点を直接指定できます(黄色く光っている層が対象です)"}
-        </span>
       </div>
     </div>
   );
@@ -1270,28 +1322,26 @@ function NamedTechniqueDraftContent({ draft }: { draft: TechniqueDraft }) {
 function PullContent() {
   const pullMirror = useAppStore((s) => s.pullMirror);
   const setPullMirror = useAppStore((s) => s.setPullMirror);
+  const mirrorAxis = useAppStore((s) => s.mirrorAxis);
+  const drawingAxis = mirrorAxisLabel(mirrorAxis);
 
   return (
     <div>
-      <p className="hint">
-        立体表示で紙をドラッグすると、折り線のつじつまを合わせて全体が連動して動きます
-        (右ドラッグで視点を回す)
-      </p>
       <div className="button-row">
         <label>
           <input
             type="checkbox"
             aria-label="左右対称に動かす"
+            data-tooltip={
+              pullMirror
+                ? `動かすときは展開図から対になる折り目を自動で見つけ、反対側も同じ角度で動かします。線をそろえる現在の基準: ${drawingAxis}`
+                : `つかんだ側の折り目だけを動かします。線をそろえる現在の基準: ${drawingAxis}`
+            }
             checked={pullMirror}
             onChange={(e) => setPullMirror(e.target.checked)}
           />
           左右対称に動かす
         </label>
-        <span className="hint">
-          {pullMirror
-            ? "作品の対称軸をはさんで対になる折り線も同じ角度で動きます(鶴の両羽が一緒に開きます)。対になる折り線が無いところでは、そこだけが動きます"
-            : "つかんだ側の折り線だけが動きます(片方の羽だけ形を変えたいときはこちら)"}
-        </span>
       </div>
       <PaperActionEntrances showPull={false} />
     </div>
@@ -1318,14 +1368,21 @@ function PaperActionEntrances({ showPull = true }: { showPull?: boolean }) {
     <div className="paper-action-entrances" aria-label="紙の形を変える">
       <span className="paper-action-entrances-title">紙の形を変える</span>
       {showPull && (
-        <button type="button" onClick={() => setTool("pull")}>
+        <button
+          type="button"
+          data-tooltip="3Dの紙を引き、折り目を連動させます"
+          onClick={() => setTool("pull")}
+        >
           ↔ 紙を引いて動かす
         </button>
       )}
-      <button type="button" onClick={showInflate}>
+      <button
+        type="button"
+        data-tooltip="紙へ丸みと膨らみを付ける設定を開きます"
+        onClick={showInflate}
+      >
         ◯ 紙をふくらませる
       </button>
-      <span className="hint">3Dを見ながら、その場で形を調整できます</span>
     </div>
   );
 }
@@ -1346,16 +1403,13 @@ function CurveRow() {
         <input
           type="checkbox"
           aria-label="曲線で描く"
+          data-tooltip="曲線の折り目を細かな折れ線として引きます"
           checked={curve.enabled}
           onChange={(e) => setCurve({ enabled: e.target.checked })}
         />
         曲線で描く
       </label>
-      {!curve.enabled ? (
-        <span className="hint">
-          曲線の折り目(曲線折り)を引きます。細かい折れ線として展開図に入ります
-        </span>
-      ) : (
+      {curve.enabled && (
         <>
           <label htmlFor="curve-shape">描き方</label>
           <select
@@ -1374,17 +1428,13 @@ function CurveRow() {
             <input
               type="checkbox"
               aria-label="分割の細かさを自分で決める"
+              data-tooltip="曲線を何本の短い線へ分けるか自分で指定します"
               checked={curve.segments !== null}
               onChange={(e) => setCurve({ segments: e.target.checked ? 16 : null })}
             />
             分割数を指定
           </label>
-          {curve.segments === null ? (
-            <span className="hint">
-              自動(曲線と折れ線のずれが紙の長辺の
-              {(DEFAULT_CURVE_TOL * 100).toFixed(1)}%以内になるまで細かくします)
-            </span>
-          ) : (
+          {curve.segments !== null && (
             <NumberInput
               id="curve-segments"
               value={curve.segments}
@@ -1401,16 +1451,16 @@ function CurveRow() {
             <input
               type="checkbox"
               aria-label="紙が曲がるための線も引く"
+              data-tooltip={
+                curve.rulings
+                  ? "曲線の両側へ、紙が滑らかに曲がるための線も引きます"
+                  : "折り線だけを引きます。このままでは3Dで曲線折りできません"
+              }
               checked={curve.rulings}
               onChange={(e) => setCurve({ rulings: e.target.checked })}
             />
             曲がるための線も引く
           </label>
-          <span className="hint">
-            {curve.rulings
-              ? "曲線の両側に、紙が曲がるための線を入れます(実際の紙と同じで、これが無いと曲線折りは折れません)"
-              : "折り線だけを引きます(展開図の見た目は素直ですが、このままでは折れません)"}
-          </span>
         </>
       )}
     </div>
@@ -1422,6 +1472,7 @@ function SelectionContent() {
   const selection = useAppStore((s) => s.selection);
   const applyEdit = useAppStore((s) => s.applyEdit);
   const wheelBehavior = useAppStore((s) => s.wheelBehavior);
+  const contextHelpExpanded = useAppStore((s) => s.contextHelpExpanded);
 
   if (!doc) return <p>読み込み中…</p>;
 
@@ -1454,6 +1505,7 @@ function SelectionContent() {
             削除
           </button>
         </div>
+        <MirrorAxisControls />
       </div>
     );
   }
@@ -1472,6 +1524,8 @@ function SelectionContent() {
             </li>
           ))}
         </ul>
+        {/* 点だけを選んでいる間も、線を選べない理由を吹き出しで確認できる。 */}
+        <MirrorAxisControls />
       </div>
     );
   }
@@ -1479,18 +1533,52 @@ function SelectionContent() {
   return (
     <>
       <PaperActionEntrances />
-      <p className="hint">
-        左のツールを選んで操作します。山折り・谷折り・補助線: 2回クリックで線を引く(Escで中止)/
-        選択: クリック、Ctrl+クリックで追加・解除、ドラッグで矩形選択。点はドラッグで動かせる / Deleteキー:
-        選択した線を削除 / 展開図をつかんで動かす:
-        スペースキーを押しながらドラッグ、右ドラッグ、中ボタンドラッグのどれでも /{" "}
-        {wheelBehavior === "scroll"
-          ? "ホイールで上下、Shift+ホイールで左右、Ctrl+ホイールで拡大縮小"
-          : "ホイールで拡大縮小、Ctrl+ホイールで上下、Ctrl+Shift+ホイールで左右"}
-      </p>
+      {contextHelpExpanded && (
+        <p className="hint context-help-detail">
+          山折り・谷折り・補助線は2回クリックで引き、Escで中止します。選択はクリック、Ctrl+クリックで追加・解除、ドラッグで矩形選択します。点はドラッグで動かせます。Deleteキーで選択した線を削除します。展開図はスペースキーを押しながらドラッグ、右ドラッグ、中ボタンドラッグのどれでも動かせます。{" "}
+          {wheelBehavior === "scroll"
+            ? "ホイールで上下、Shift+ホイールで左右、Ctrl+ホイールで拡大縮小します。"
+            : "ホイールで拡大縮小、Ctrl+ホイールで上下、Ctrl+Shift+ホイールで左右へ動かします。"}
+        </p>
+      )}
       {/* 紙の色と方眼の数は、何も選んでいないときだけここに出す(PAP-003 / CPE-003) */}
       <PaperAppearance />
     </>
+  );
+}
+
+/** 希望角を譲った折り目。既存の警告欄から2D/3Dの強調と選択へつなぐ。 */
+function RelaxationMessages() {
+  const relaxations = useAppStore((s) => s.relaxations);
+  const setSelection = useAppStore((s) => s.setSelection);
+  const setHoveredHinge = useAppStore((s) => s.setHoveredHinge);
+  const notices = relaxationNotices(relaxations);
+  const shown = notices.slice(0, 5);
+  const remaining = notices.length - shown.length;
+
+  if (shown.length === 0) return null;
+  return (
+    <div className="relaxation-messages" aria-label="前の折り目の追従">
+      {shown.map((item) => (
+        <button
+          type="button"
+          className="relaxation-message"
+          key={item.hinge}
+          onMouseEnter={() => setHoveredHinge(item.hinge)}
+          onMouseLeave={() => setHoveredHinge(null)}
+          onFocus={() => setHoveredHinge(item.hinge)}
+          onBlur={() => setHoveredHinge(null)}
+          onClick={() => {
+            setSelection({ edgeIds: [item.hinge], vertexIds: [] });
+            setHoveredHinge(item.hinge);
+          }}
+        >
+          折り目 #{item.hinge}: 指定{item.target_angle_deg.toFixed(1)}° → 現在
+          {item.actual_angle_deg.toFixed(1)}°
+        </button>
+      ))}
+      {remaining > 0 && <p className="relaxation-more">ほか{remaining}本</p>}
+    </div>
   );
 }
 
@@ -1499,6 +1587,7 @@ export function ContextPanel() {
   const poseWarnings = useAppStore((s) => s.poseWarnings);
   const replayWarnings = useAppStore((s) => s.replayWarnings);
   const errorMessage = useAppStore((s) => s.errorMessage);
+  const mirrorAxisNotice = useAppStore((s) => s.mirrorAxisNotice);
   const currentStep = useAppStore((s) => s.currentStep);
   const activeTool = useAppStore((s) => s.activeTool);
   const foldDraft = useAppStore((s) => s.foldDraft);
@@ -1507,8 +1596,10 @@ export function ContextPanel() {
   const techniqueDraft = useAppStore((s) => s.techniqueDraft);
   const selection = useAppStore((s) => s.selection);
   const hinges = useAppStore((s) => s.hinges);
+  const relaxations = useAppStore((s) => s.relaxations);
   // 同じ文言は1回だけ出す(展開図の検査結果には自動再生の警告も合流している)
   const allWarnings = uniqueWarnings(warnings, poseWarnings, replayWarnings);
+  const hasRelaxations = relaxationNotices(relaxations).length > 0;
   // 手順を選んでいる間はその手順の設定を出す(「折る前」「最新」は選択なし扱い)
   const stepSelected = currentStep !== null && currentStep >= 1;
   const hasSelection =
@@ -1516,7 +1607,7 @@ export function ContextPanel() {
   const hasSelectedHinge = selection.edgeIds.some((id) => hinges.has(id));
 
   return (
-    <footer className="context-panel">
+    <footer className="context-panel" id="context-panel">
       <div className="context-selection">
         {/* 手順を選んでいるときはその設定を優先する。折り線は「今見えている形」の
             上に引くものなので、手順を選んだ時点でストアが捨てている(ここは念のため) */}
@@ -1572,9 +1663,16 @@ export function ContextPanel() {
           </>
         )}
       </div>
-      {(errorMessage !== null || allWarnings.length > 0) && (
+      {(errorMessage !== null ||
+        mirrorAxisNotice !== null ||
+        allWarnings.length > 0 ||
+        hasRelaxations) && (
         <div className="context-messages">
           {errorMessage !== null && <p className="error-text">{errorMessage}</p>}
+          {mirrorAxisNotice !== null && (
+            <p className="mirror-axis-notice">{mirrorAxisNotice}</p>
+          )}
+          <RelaxationMessages />
           {allWarnings.map((w, i) => (
             <p key={i} className="warning-text">
               {w}

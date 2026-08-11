@@ -7,13 +7,17 @@ use ori3_model::{CreasePattern, Document, Edge, EdgeKind, Paper, TechniqueKind, 
 // `pose_motion` is deliberately tested before it is wired into `lib.rs`.
 // Re-export its existing crate-level dependencies so the production source can
 // be compiled here without maintaining a test-only copy of the implementation.
-pub use ori3_layers::{PoseStepInput, ReplayResult, apply_pose_step, replay};
+pub use ori3_layers::{
+    FlatState, PoseStepInput, Ray3, ReplayResult, apply_pose_step, flat_state_at, raycast_faces,
+    replay, representative_point,
+};
 
 #[path = "../src/pose_motion.rs"]
 mod pose_motion;
 
 use pose_motion::{
-    PoseAngleTarget, PoseEdgeActivation, PoseMotionInput, solve_and_apply_pose_step,
+    FlatPoseMotionInput, PoseAngleTarget, PoseEdgeActivation, PoseMotionInput,
+    solve_and_apply_flat_pose_step, solve_and_apply_pose_step,
 };
 
 fn vertex(id: u32, x: f64, y: f64) -> Vertex {
@@ -224,6 +228,90 @@ fn branch_seed_derives_and_persists_every_closed_loop_angle_across_pose_steps() 
     assert_eq!(document.sequence[1].drivers.len(), 4);
     let replayed = replay(&document, document.sequence.len(), 1.0);
     assert_angle_maps_close(&second.hinge_angles, &replayed.hinge_angles);
+}
+
+#[test]
+fn non_flat_closed_loop_can_finish_at_an_exact_flat_endpoint() {
+    let mut document = closed_loop_document();
+    let raised = solve_and_apply_pose_step(
+        &mut document,
+        PoseMotionInput {
+            activations: activations(),
+            drivers: vec![target(8, 90.0)],
+            branch_hints: vec![target(9, -60.0), target(10, 60.0), target(11, 60.0)],
+            note: "raise the four-sector vertex".to_string(),
+        },
+    )
+    .expect("the loop first reaches a closed non-flat pose");
+    let branch_hints = raised
+        .hinge_angles
+        .iter()
+        .filter(|(edge, _)| **edge != 8)
+        .map(|(&edge_id, &target_angle_deg)| target(edge_id, target_angle_deg))
+        .collect();
+
+    let flattened = solve_and_apply_flat_pose_step(
+        &mut document,
+        FlatPoseMotionInput {
+            activations: Vec::new(),
+            drivers: vec![target(8, 180.0)],
+            branch_hints,
+            note: "close the four-sector vertex flat".to_string(),
+        },
+    )
+    .expect("the persisted pose continues through a near-flat sample and snaps exactly flat");
+
+    assert_eq!(flattened.step_id, 1);
+    assert!(flattened.max_seam_gap < 1e-6);
+    assert!(flattened.frame.warnings.is_empty());
+    assert_eq!(flattened.frame.faces.len(), 4);
+    assert_eq!(flattened.state.order.len(), 4);
+    assert!(
+        flattened
+            .frame
+            .faces
+            .iter()
+            .flat_map(|face| &face.polygon)
+            .all(|point| point[2].abs() < 1e-6)
+    );
+    assert!(
+        flattened
+            .hinge_angles
+            .values()
+            .all(|angle| { *angle == -180.0 || *angle == 0.0 || *angle == 180.0 })
+    );
+    assert_eq!(document.sequence.len(), 2);
+    assert_eq!(document.sequence[1].kind, TechniqueKind::Simple);
+    assert!(document.sequence[1].layer_order.is_some());
+
+    let replayed = replay(&document, document.sequence.len(), 1.0);
+    assert!(replayed.skipped.is_empty());
+    assert!(replayed.warnings.is_empty());
+    assert!(replayed.frame.warnings.is_empty());
+    assert_angle_maps_close(&flattened.hinge_angles, &replayed.hinge_angles);
+    let faces = ori3_cp::extract_faces(&document.cp);
+    let (state, warnings) = flat_state_at(&document, &faces, document.sequence.len())
+        .expect("the exact endpoint is available to ordinary flat operations");
+    assert!(warnings.is_empty());
+    assert_eq!(state, flattened.state);
+}
+
+#[test]
+fn invalid_flat_endpoint_is_explicit_and_transactional() {
+    let mut document = closed_loop_document();
+    let before = document.clone();
+    let error = solve_and_apply_flat_pose_step(
+        &mut document,
+        FlatPoseMotionInput {
+            activations: activations(),
+            drivers: vec![target(8, 90.0)],
+            branch_hints: Vec::new(),
+            note: String::new(),
+        },
+    )
+    .expect_err("a non-flat hard target cannot be recorded as flat");
+    assert!(error.contains("not 0 or +/-180"), "{error}");
+    assert_eq!(document, before);
 }
 
 #[test]

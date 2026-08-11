@@ -1,86 +1,70 @@
 import { describe, expect, it } from "vitest";
 import { mirrorEdgeOf, withMirrorEdges } from "./mirrorEdit";
-import type { Document, Face } from "./types";
+import { paperMirrorLine, type MirrorLine } from "./mirror";
+import { DEFAULT_DISPLAY } from "./displayPrefs";
+import type { Document, EdgeKind, Vec2 } from "./types";
 
-/**
- * 左右対称な展開図(縦の中心線が対称軸)。
- * 中心線(辺13)と、そこへ集まる斜めの折り線2本(辺10・辺11)が左右の対になる。
- * 横に折り返しても重ならない形なので、対称軸は縦の1本だけが見つかる。
- * 相手のいない補助線(辺12)も混ぜてある。
- */
 function makeDoc(): Document {
+  const vertices: Document["cp"]["vertices"] = [];
+  const edges: Document["cp"]["edges"] = [];
+  let nextVertex = 0;
+  const add = (id: number, a: Vec2, b: Vec2, kind: EdgeKind = "Aux") => {
+    const v0 = nextVertex++;
+    const v1 = nextVertex++;
+    vertices.push({ id: v0, pos: a }, { id: v1, pos: b });
+    edges.push({ id, v0, v1, kind });
+  };
+  // 縦中心x=.5で対になる2本と、軸上の1本。
+  add(10, [0.1, 0.2], [0.3, 0.4], "Mountain");
+  add(11, [0.9, 0.2], [0.7, 0.4], "Mountain");
+  add(12, [0.5, 0.1], [0.5, 0.9], "Valley");
+  // 横中心y=.5で対になる2本。
+  add(20, [0.15, 0.2], [0.35, 0.2]);
+  add(21, [0.15, 0.8], [0.35, 0.8]);
+  // 選んだ斜線y=xで対になる2本と、基準線そのもの。
+  add(30, [0.1, 0.3], [0.2, 0.4]);
+  add(31, [0.3, 0.1], [0.4, 0.2]);
+  add(32, [0, 0], [1, 1]);
+  // どの例でも相手にしない孤立線。
+  add(40, [0.05, 0.65], [0.08, 0.72]);
   return {
     schema_version: 1,
     paper: { width_mm: 150, height_mm: 150 },
-    cp: {
-      vertices: [
-        { id: 0, pos: [0, 0] },
-        { id: 1, pos: [1, 0] },
-        { id: 2, pos: [1, 1] },
-        { id: 3, pos: [0, 1] },
-        { id: 4, pos: [0.5, 0] },
-        { id: 5, pos: [0.5, 1] },
-        { id: 8, pos: [0.2, 0.4] },
-        { id: 9, pos: [0.2, 0.6] },
-      ],
-      edges: [
-        { id: 0, v0: 0, v1: 4, kind: "Border" },
-        { id: 1, v0: 4, v1: 1, kind: "Border" },
-        { id: 2, v0: 1, v1: 2, kind: "Border" },
-        { id: 3, v0: 2, v1: 5, kind: "Border" },
-        { id: 4, v0: 5, v1: 3, kind: "Border" },
-        { id: 5, v0: 3, v1: 0, kind: "Border" },
-        { id: 10, v0: 0, v1: 5, kind: "Mountain" },
-        { id: 11, v0: 1, v1: 5, kind: "Mountain" },
-        { id: 12, v0: 8, v1: 9, kind: "Aux" },
-        { id: 13, v0: 4, v1: 5, kind: "Valley" },
-      ],
-      next_vertex_id: 10,
-      next_edge_id: 14,
-    },
+    cp: { vertices, edges, next_vertex_id: nextVertex, next_edge_id: 41 },
     sequence: [],
-    display: {
-      front_color: [237, 28, 36],
-      back_color: [255, 255, 255],
-      grid_divisions: 8,
-    },
+    display: DEFAULT_DISPLAY,
   };
 }
 
-const FACES: Face[] = [
-  { id: 0, vertices: [0, 4, 5], edges: [0, 13, 10] },
-  { id: 1, vertices: [4, 1, 5], edges: [1, 11, 13] },
-  { id: 2, vertices: [0, 5, 3], edges: [10, 4, 5] },
-  { id: 3, vertices: [1, 2, 5], edges: [2, 3, 11] },
-];
+const DIAGONAL: MirrorLine = { p: [0, 0], d: [1, 1] };
 
-describe("左右対称の相手の線を探す(消す・種類を変えるときに使う)", () => {
-  it("展開図から見つけた対称軸で、折り線の相手が見つかる", () => {
+describe("指定した基準線で、消す・線種変更の相手を探す", () => {
+  it("紙の縦の中心線で左右の相手が見つかる", () => {
     const doc = makeDoc();
-    expect(mirrorEdgeOf(doc, FACES, 10)).toBe(11);
-    expect(mirrorEdgeOf(doc, FACES, 11)).toBe(10);
+    const axis = paperMirrorLine(doc.paper, "paperVertical");
+    expect(mirrorEdgeOf(doc, 10, axis)).toBe(11);
+    expect(mirrorEdgeOf(doc, 11, axis)).toBe(10);
+    expect(withMirrorEdges(doc, [10], axis).sort()).toEqual([10, 11]);
   });
 
-  it("輪郭の線にも効く(折り線に限らない)", () => {
+  it("紙の横の中心線で上下の相手が見つかる", () => {
     const doc = makeDoc();
-    expect(mirrorEdgeOf(doc, FACES, 0)).toBe(1);
+    const axis = paperMirrorLine(doc.paper, "paperHorizontal");
+    expect(mirrorEdgeOf(doc, 20, axis)).toBe(21);
+    expect(withMirrorEdges(doc, [21], axis).sort()).toEqual([20, 21]);
   });
 
-  it("対称軸の上に乗る線には相手がいない(二重に消さない)", () => {
+  it("選んだ斜め線で対角位置の相手が見つかる", () => {
     const doc = makeDoc();
-    expect(mirrorEdgeOf(doc, FACES, 13)).toBeNull();
+    expect(mirrorEdgeOf(doc, 30, DIAGONAL)).toBe(31);
+    expect(withMirrorEdges(doc, [30], DIAGONAL).sort()).toEqual([30, 31]);
   });
 
-  it("反対側に線が無ければ相手はいない", () => {
+  it("基準線上の線には相手を足さず、孤立線も選んだ1本だけにする", () => {
     const doc = makeDoc();
-    expect(mirrorEdgeOf(doc, FACES, 12)).toBeNull();
-  });
-
-  it("選んだ線に相手を足す。相手のいない線はその線だけが残る", () => {
-    const doc = makeDoc();
-    expect(withMirrorEdges(doc, FACES, [10]).sort()).toEqual([10, 11]);
-    expect(withMirrorEdges(doc, FACES, [12])).toEqual([12]);
-    // すでに対になっている2本を選んでも増えない
-    expect(withMirrorEdges(doc, FACES, [10, 11]).sort()).toEqual([10, 11]);
+    expect(mirrorEdgeOf(doc, 12, paperMirrorLine(doc.paper, "paperVertical"))).toBeNull();
+    expect(mirrorEdgeOf(doc, 32, DIAGONAL)).toBeNull();
+    expect(withMirrorEdges(doc, [40], DIAGONAL)).toEqual([40]);
+    expect(withMirrorEdges(doc, [30, 31], DIAGONAL).sort()).toEqual([30, 31]);
   });
 });

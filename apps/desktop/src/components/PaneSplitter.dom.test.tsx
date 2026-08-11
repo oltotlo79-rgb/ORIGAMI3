@@ -25,7 +25,10 @@ describe("2Dと3Dの境目", () => {
     renderInRow();
     const handle = screen.getByRole("separator");
     expect(handle.getAttribute("aria-label")).toContain("広さを変える");
-    expect(handle.getAttribute("title")).toContain("ドラッグ");
+    expect(handle.getAttribute("data-tooltip")).toBe(
+      "左右にドラッグして、展開図と3Dの広さを変えます",
+    );
+    expect(handle.hasAttribute("title")).toBe(false);
     expect(handle.getAttribute("aria-valuenow")).toBe("50");
   });
 

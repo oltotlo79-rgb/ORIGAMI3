@@ -3,7 +3,7 @@
 // このファイルはレイアウト構成のみ(200行以内を維持)。
 import { useEffect, useRef } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { useAppStore } from "./store/appStore";
+import { relaxationNotices, useAppStore } from "./store/appStore";
 import { ToolRail } from "./components/ToolRail";
 import { ContextPanel } from "./components/ContextPanel";
 import { CpEditor } from "./components/CpEditor/CpEditor";
@@ -11,6 +11,7 @@ import { Viewer3D } from "./components/Viewer3D/Viewer3D";
 import { Timeline } from "./components/Timeline";
 import { RecoveryDialog } from "./components/RecoveryDialog";
 import { PaneSplitter } from "./components/PaneSplitter";
+import { ContextPanelSplitter } from "./components/ContextPanelSplitter";
 import { NewDocumentDialog } from "./components/dialogs/NewDocumentDialog";
 import { ProposalWizard } from "./components/dialogs/ProposalWizard";
 import { ExportDialog } from "./components/dialogs/ExportDialog";
@@ -21,12 +22,26 @@ import { ToolbarBrandMark } from "./components/ToolbarBrandMark";
 import { FirstRunGuide } from "./components/FirstRunGuide";
 import { HelpCenter } from "./components/dialogs/HelpCenter";
 import { ThemeRoot } from "./components/ThemeRoot";
+import { TooltipHost } from "./components/Tooltip";
 import { uniqueWarnings } from "./lib/techniques";
 import { installCaptureApi } from "./captureApi";
+import type { AngleRelaxation } from "./lib/types";
 import "./App.css";
 
 const DEFAULT_PAPER = { width_mm: 150, height_mm: 150 };
 const ORI3_FILTERS = [{ name: "ORIGAMI3作品", extensions: ["ori3"] }];
+
+/** 3D右上へ出す自然追従の短い知らせ。nullなら通常の警告表示へ譲る。 */
+export function relaxationStatus(
+  relaxations: readonly AngleRelaxation[],
+  bestEffort: boolean,
+): string | null {
+  if (bestEffort) return "指定を優先し、いちばん近い形で追従中";
+  const notices = relaxationNotices(relaxations);
+  if (notices.length === 0) return null;
+  const maxDelta = Math.max(...notices.map((item) => Math.abs(item.delta_deg)));
+  return `前の折り目${notices.length}本が追従（最大${maxDelta.toFixed(1)}°）`;
+}
 
 function App() {
   const uiTheme = useAppStore((s) => s.uiTheme);
@@ -44,12 +59,15 @@ function App() {
     (s) => uniqueWarnings(s.warnings, s.poseWarnings, s.replayWarnings).length,
   );
   const poseConverged = useAppStore((s) => s.poseConverged);
+  const relaxations = useAppStore((s) => s.relaxations);
+  const poseBestEffort = useAppStore((s) => s.poseBestEffort);
   const hasError = useAppStore((s) => s.errorMessage !== null);
   const suspectHinges = useAppStore((s) => s.suspectHinges);
   const setSelection = useAppStore((s) => s.setSelection);
   // 「全体表示」は2D・3D両方を紙全体が収まる表示に戻す(ボタンは増やさない)
   const fit2dRef = useRef<(() => void) | null>(null);
   const fit3dRef = useRef<(() => void) | null>(null);
+  const followStatus = relaxationStatus(relaxations, poseBestEffort);
 
   // 起動時に150×150mmの新規作品を開き、続けて前回の異常終了の有無を調べる
   // (残っていれば復旧ダイアログが出る。SYS-003)
@@ -80,6 +98,7 @@ function App() {
   return (
     <ThemeRoot>
       <HistoryShortcuts />
+      <TooltipHost />
       <header className="toolbar">
         <span className="toolbar-brand">
           <ToolbarBrandMark theme={uiTheme} />
@@ -91,15 +110,27 @@ function App() {
           </span>
         </span>
         {/* 紙の形と大きさを決めてから作る(PAP-001)。開くのは独立ダイアログ */}
-        <button type="button" onClick={openNewDialog}>
+        <button
+          type="button"
+          data-tooltip="紙の形と大きさを決めて、新しい作品を始めます"
+          onClick={openNewDialog}
+        >
           <ToolbarIcon name="new" />
           新規
         </button>
-        <button type="button" onClick={() => void handleOpen()}>
+        <button
+          type="button"
+          data-tooltip="保存した作品(.ori3)を開きます"
+          onClick={() => void handleOpen()}
+        >
           <ToolbarIcon name="open" />
           開く
         </button>
-        <button type="button" onClick={() => void handleSave()}>
+        <button
+          type="button"
+          data-tooltip="作品を.ori3ファイルへ保存します"
+          onClick={() => void handleSave()}
+        >
           <ToolbarIcon name="save" />
           保存
         </button>
@@ -109,12 +140,20 @@ function App() {
         <HistoryButtons />
         <span className="toolbar-separator" />
         {/* 提案ウィザードの入口。開くのは独立ダイアログで、常設区画は増やさない(PRO-004) */}
-        <button type="button" onClick={openProposal}>
+        <button
+          type="button"
+          data-tooltip="作りたい形から折り方の候補を探します"
+          onClick={openProposal}
+        >
           <ToolbarIcon name="proposal" />
           提案
         </button>
         {/* 書き出しの入口。開くのは独立ダイアログで、常設区画は増やさない(EXP-001/002) */}
-        <button type="button" onClick={openExport}>
+        <button
+          type="button"
+          data-tooltip="折り図や3Dデータを書き出します"
+          onClick={openExport}
+        >
           <ToolbarIcon name="export" />
           書き出し
         </button>
@@ -122,7 +161,7 @@ function App() {
         <button
           type="button"
           className="toolbar-help"
-          title="目次と検索のあるヘルプセンターを開きます(F1)"
+          data-tooltip="使い方を目次や検索から調べます(F1)"
           aria-label="ヘルプセンターを開く"
           onClick={openHelp}
         >
@@ -149,10 +188,11 @@ function App() {
         <section className="pane pane-3d">
           <div className="pane-3d-view">
             <Viewer3D fitRef={fit3dRef} />
-            {(hasError || !poseConverged || warningCount > 0) && (
+            {(hasError || followStatus !== null || !poseConverged || warningCount > 0) && (
               <div
                 className={hasError ? "status-badge error" : "status-badge"}
-                title="詳細は下のパネルに表示されます"
+                data-floating-ui="status-badge"
+                data-tooltip="詳しい通知を下のパネルで確認できます"
               >
                 <svg
                   className="status-icon"
@@ -167,9 +207,11 @@ function App() {
                 <span>
                   {hasError
                     ? "エラー"
-                    : poseConverged
-                      ? `警告 ${warningCount}`
-                      : "⚠ 追従計算が収束していません"}
+                    : followStatus !== null
+                      ? followStatus
+                      : poseConverged
+                        ? `警告 ${warningCount}`
+                        : "⚠ 追従計算が収束していません"}
                 </span>
               </div>
             )}
@@ -177,7 +219,8 @@ function App() {
               <button
                 type="button"
                 className="suspect-hinge-guide"
-                title="最初の原因候補を選択して、下の角度スライダーを表示します"
+                data-floating-ui="suspect-hinge-guide"
+                data-tooltip="原因候補の折り目を選び、角度を確認します"
                 onClick={() =>
                   setSelection({ edgeIds: [suspectHinges[0]], vertexIds: [] })
                 }
@@ -189,6 +232,7 @@ function App() {
           <Timeline />
         </section>
       </div>
+      <ContextPanelSplitter />
       <ContextPanel />
       <RecoveryDialog />
       <NewDocumentDialog />

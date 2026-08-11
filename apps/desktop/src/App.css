@@ -54,9 +54,23 @@
   --color-grid-border: var(--color-accent-soft);
   --color-warning-surface: rgba(255, 245, 194, 0.9);
   --color-warning-border: rgba(150, 80, 0, 0.22);
+  /* 作品の状態を示す意味色。全テーマで同じ意味を保ち、部品側の直書きを避ける。 */
+  --color-relaxation: #d97706;
+  --color-collision-surface: rgba(127, 15, 29, 0.94);
+  --color-collision-surface-hover: #a31125;
+  --color-collision-border: rgba(255, 255, 255, 0.92);
+  --color-collision-text: var(--color-on-solid);
+  /* bodyへ出る吹き出しはThemeRootが現在テーマの実効値をこの橋渡し先へ同期する。 */
+  --color-tooltip-background: var(--color-overlay);
+  --color-tooltip-border: var(--floating-border-color);
+  --color-tooltip-text: var(--color-on-solid);
+  --tooltip-padding-inline: var(--sp-5);
 
   /* テーマ固有の面・装飾。部品側はこの値だけを参照する。 */
   --app-background-image: none;
+  --app-background-size: auto;
+  --app-background-repeat: repeat;
+  --app-background-position: 0 0;
   --toolbar-background: linear-gradient(100deg, #ffffff 0%, #ffffff 68%, var(--color-secondary-soft) 100%);
   --tool-rail-background: linear-gradient(180deg, #ffffff 0%, var(--color-secondary-soft) 58%, var(--color-accent-soft) 100%);
   --timeline-background: linear-gradient(100deg, #ffffff, var(--color-secondary-soft));
@@ -76,6 +90,10 @@
   --splitter-background:
     radial-gradient(circle, rgba(255, 255, 255, 0.92) 1px, transparent 1.5px) center / 4px 8px,
     linear-gradient(var(--color-secondary), var(--color-accent));
+  --toolbar-separator-width: 4px;
+  --toolbar-separator-height: 26px;
+  --toolbar-separator-radius: var(--radius-pill);
+  --toolbar-separator-background: linear-gradient(var(--color-pop-yellow), var(--color-pop-coral));
   --toolbar-button-background: rgba(255, 255, 255, 0.94);
   --button-primary-background: linear-gradient(145deg, #008579, var(--color-accent));
   --button-primary-color: #ffffff;
@@ -126,6 +144,7 @@
   --radius-lg: 22px;
   --radius-xl: 28px;
   --radius-pill: 999px;
+  --radius-tooltip: var(--radius-sm);
 
   /* 影(重なりの深さを3段階で表す) */
   --shadow-1: 0 2px 8px rgba(63, 45, 94, 0.1);
@@ -151,6 +170,9 @@
   --shadow-canvas-3d: inset 0 0 0 3px rgba(255, 255, 255, 0.35);
   --shadow-status: 0 4px 0 #643600, 0 10px 22px rgba(39, 33, 61, 0.28);
   --shadow-status-danger: 0 4px 0 #771329, 0 10px 22px rgba(39, 33, 61, 0.3);
+  --shadow-collision-guide: 0 0 14px rgba(255, 36, 56, 0.62), var(--shadow-status-danger);
+  --shadow-collision-guide-hover: 0 0 20px rgba(255, 36, 56, 0.78), var(--shadow-status-danger);
+  --shadow-tooltip: var(--shadow-2);
   --shadow-overlay-button: 0 3px 0 rgba(0, 0, 0, 0.24);
   --shadow-candidate: 0 4px 0 rgba(84, 36, 163, 0.14), var(--shadow-1);
   --shadow-candidate-hover: 0 6px 0 rgba(84, 36, 163, 0.18), var(--shadow-2);
@@ -204,9 +226,12 @@
   --fw-medium: 600;
   --fw-bold: 700;
   --fw-black: 800;
+  --tooltip-font-weight: var(--fw-medium);
+  --tooltip-border-width: var(--control-border-width);
 
   --font-body: "Hiragino Maru Gothic ProN", "Yu Gothic UI", "Meiryo", sans-serif;
   --font-heading: var(--font-body);
+  --tooltip-font-family: var(--font-body);
   --body-font-weight: 500;
   --body-letter-spacing: normal;
   --heading-letter-spacing: 0.03em;
@@ -215,6 +240,8 @@
   --t-base: 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
   --t-entrance: 260ms cubic-bezier(0.2, 1.4, 0.4, 1);
   --focus-ring: 0 0 0 4px rgba(0, 122, 112, 0.2);
+  /* 色ピッカーが選択中の色相で上書きする、彩度・明度面の安全な初期値。 */
+  --picker-hue: hsl(0 100% 50%);
 }
 
 /* シンプル — 道具は消え、作品だけが残る。 */
@@ -244,6 +271,7 @@
   --color-danger-soft: #ffebe9;
   --color-warn: #7d4e00;
   --color-warn-badge: #7d4e00;
+  --color-on-gold: var(--color-text);
   --color-on-coral: #ffffff;
   --color-overlay: rgba(31, 35, 40, 0.84);
   --color-scrim: rgba(31, 35, 40, 0.38);
@@ -275,8 +303,18 @@
   --guide-background: var(--color-surface);
   --floating-border-color: var(--color-border);
   --splitter-background: var(--color-border-strong);
+  --toolbar-separator-width: 1px;
+  --toolbar-separator-height: 20px;
+  --toolbar-separator-radius: 0;
+  --toolbar-separator-background: var(--color-border-strong);
   --toolbar-button-background: var(--color-surface);
   --button-primary-background: var(--color-accent);
+  --tool-active-background: var(--color-accent);
+  --tool-active-color: var(--color-on-solid);
+  --tool-active-border: var(--color-accent-strong);
+  --tool-active-hover-background: var(--color-accent-strong);
+  --tool-active-hover-color: var(--color-on-solid);
+  --tool-active-hover-border: var(--color-accent-strong);
   --button-hover-background: var(--color-surface-sunken);
   --button-hover-color: var(--color-text);
   --button-hover-border: var(--color-border-strong);
@@ -328,6 +366,8 @@
   --shadow-canvas-3d: none;
   --shadow-status: var(--shadow-1);
   --shadow-status-danger: var(--shadow-1);
+  --shadow-collision-guide: var(--shadow-1);
+  --shadow-collision-guide-hover: var(--shadow-1);
   --shadow-overlay-button: none;
   --shadow-candidate: none;
   --shadow-candidate-hover: none;
@@ -378,53 +418,59 @@
 
 /* 和風 — 和紙と藍、朱の落款。 */
 .app[data-theme="japanese"] {
-  --color-bg: #f5efe2;
-  --color-surface: #faf6ec;
-  --color-surface-raised: #faf6ec;
-  --color-surface-sunken: #eae2cf;
-  --color-control: #faf6ec;
-  --color-control-hover: #dfe7f0;
+  --color-bg: #f4efe2;
+  --color-surface: #fbf8ef;
+  --color-surface-raised: #fffaf1;
+  --color-surface-sunken: #e9e1d0;
+  --color-control: #fcf9f1;
+  --color-control-hover: #e8eef2;
   --color-canvas-2d: #efe8d8;
   --color-canvas-3d: #e5dcc6;
-  --color-border: #d5c9ab;
-  --color-border-strong: #a5936c;
-  --color-text: #33291c;
-  --color-text-muted: #6b5d45;
-  --color-accent: #2b4a73;
-  --color-accent-strong: #1d3452;
-  --color-accent-soft: #dfe7f0;
-  --color-secondary: #a63a2a;
-  --color-secondary-strong: #7d2c20;
-  --color-secondary-soft: #f4e0da;
-  --color-pop-yellow: #b08d3f;
-  --color-pop-yellow-soft: #f3ead2;
-  --color-pop-coral: #a63a2a;
-  --color-danger: #9e2b23;
-  --color-danger-soft: #f4e0da;
-  --color-warn: #6e5200;
-  --color-warn-badge: #6e5200;
+  --color-border: #cec3aa;
+  --color-border-strong: #877860;
+  --color-text: #2b2723;
+  --color-text-muted: #625b50;
+  --color-accent: #1f3f5e;
+  --color-accent-strong: #17334d;
+  --color-accent-soft: #dce6ec;
+  --color-secondary: #61713e;
+  --color-secondary-strong: #4e5c31;
+  --color-secondary-soft: #e5e9d9;
+  --color-pop-yellow: #c4a15a;
+  --color-pop-yellow-soft: #f1e6c7;
+  --color-pop-coral: #b8433a;
+  --color-danger: #a73730;
+  --color-danger-soft: #f5ddd7;
+  --color-warn: #6f5200;
+  --color-warn-badge: #6f5200;
+  --color-on-gold: var(--color-text);
   --color-on-coral: #ffffff;
-  --color-overlay: rgba(51, 41, 28, 0.84);
-  --color-scrim: rgba(51, 41, 28, 0.42);
-  --color-surface-translucent: rgba(250, 246, 236, 0.9);
-  --color-surface-translucent-strong: rgba(250, 246, 236, 0.96);
-  --color-surface-translucent-light: rgba(250, 246, 236, 0.72);
-  --color-surface-translucent-medium: rgba(250, 246, 236, 0.86);
-  --color-surface-translucent-submenu: rgba(250, 246, 236, 0.82);
-  --color-accent-border: #d5c9ab;
-  --color-secondary-border: rgba(166, 58, 42, 0.2);
+  --color-overlay: rgba(43, 39, 35, 0.86);
+  --color-scrim: rgba(43, 39, 35, 0.42);
+  --color-surface-translucent: rgba(251, 248, 239, 0.9);
+  --color-surface-translucent-strong: rgba(251, 248, 239, 0.96);
+  --color-surface-translucent-light: rgba(251, 248, 239, 0.72);
+  --color-surface-translucent-medium: rgba(251, 248, 239, 0.86);
+  --color-surface-translucent-submenu: rgba(251, 248, 239, 0.82);
+  --color-accent-border: rgba(31, 63, 94, 0.22);
+  --color-secondary-border: rgba(111, 127, 74, 0.26);
   --color-secondary-border-soft: var(--color-border);
   --color-tool-border: var(--color-border);
   --color-palette-border: var(--color-border);
   --color-grid-border: var(--color-border);
-  --color-warning-surface: #f3ead2;
-  --color-warning-border: rgba(176, 141, 63, 0.45);
-  --app-background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='48' viewBox='0 0 96 48'%3E%3Cg fill='none' stroke='%232b4a73' stroke-width='1' stroke-opacity='.035'%3E%3Cpath d='M0 24a24 24 0 0 1 48 0a24 24 0 0 1 48 0M-24 48a24 24 0 0 1 48 0a24 24 0 0 1 48 0a24 24 0 0 1 48 0'/%3E%3Cpath d='M8 24a16 16 0 0 1 32 0m16 0a16 16 0 0 1 32 0M-16 48a16 16 0 0 1 32 0m16 0a16 16 0 0 1 32 0m16 0a16 16 0 0 1 32 0'/%3E%3C/g%3E%3C/svg%3E");
-  --toolbar-background: var(--color-surface);
-  --tool-rail-background: var(--color-surface);
-  --timeline-background: var(--color-surface);
-  --context-panel-background: var(--color-surface);
-  --dialog-background: var(--color-surface);
+  --color-warning-surface: #f2e8ce;
+  --color-warning-border: rgba(154, 120, 51, 0.42);
+  --app-background-image:
+    linear-gradient(rgba(244, 239, 226, 0.08), rgba(244, 239, 226, 0.08)),
+    url("./assets/themes/japanese-washi.webp");
+  --app-background-size: auto, 1248px 1248px;
+  --app-background-repeat: repeat, repeat;
+  --app-background-position: 0 0, 0 0;
+  --toolbar-background: rgba(251, 248, 239, 0.72);
+  --tool-rail-background: rgba(251, 248, 239, 0.68);
+  --timeline-background: rgba(251, 248, 239, 0.7);
+  --context-panel-background: rgba(251, 248, 239, 0.68);
+  --dialog-background: rgba(255, 250, 241, 0.98);
   --dialog-fieldset-background: var(--color-bg);
   --help-header-background: var(--color-surface-sunken);
   --help-sidebar-background: var(--color-surface);
@@ -434,9 +480,19 @@
   --paper-tip-background: var(--color-surface);
   --guide-background: var(--color-surface);
   --floating-border-color: var(--color-border);
-  --splitter-background: var(--color-accent);
+  --splitter-background: var(--color-border-strong);
+  --toolbar-separator-width: 2px;
+  --toolbar-separator-height: 22px;
+  --toolbar-separator-radius: 1px;
+  --toolbar-separator-background: var(--color-pop-coral);
   --toolbar-button-background: var(--color-surface);
   --button-primary-background: var(--color-accent);
+  --tool-active-background: var(--color-accent);
+  --tool-active-color: var(--color-on-solid);
+  --tool-active-border: var(--color-accent-strong);
+  --tool-active-hover-background: var(--color-accent-strong);
+  --tool-active-hover-color: var(--color-on-solid);
+  --tool-active-hover-border: var(--color-accent-strong);
   --button-hover-background: var(--color-accent-soft);
   --button-hover-color: var(--color-text);
   --button-hover-border: var(--color-accent);
@@ -460,20 +516,20 @@
   --panel-border-width: 1px;
   --floating-border-width: 1px;
   --heading-rule-width: 1px;
-  --radius-sm: 2px;
-  --radius-md: 4px;
+  --radius-sm: 4px;
+  --radius-md: 5px;
   --radius-lg: 6px;
   --radius-xl: 6px;
   --radius-pill: 6px;
-  --shadow-1: 0 1px 3px rgba(51, 41, 28, 0.12);
-  --shadow-2: 0 1px 3px rgba(51, 41, 28, 0.12);
-  --shadow-panel: inset 0 0 0 1px rgba(165, 147, 108, 0.35), 0 1px 3px rgba(51, 41, 28, 0.12);
-  --shadow-button: 0 1px 3px rgba(51, 41, 28, 0.12);
-  --shadow-dialog: inset 0 0 0 1px rgba(165, 147, 108, 0.35), 0 1px 3px rgba(51, 41, 28, 0.12);
-  --shadow-input: inset 0 0 0 1px rgba(165, 147, 108, 0.22);
-  --shadow-button-hover: 0 1px 3px rgba(51, 41, 28, 0.12);
+  --shadow-1: 0 1px 2px rgba(43, 39, 35, 0.08);
+  --shadow-2: 0 2px 6px rgba(43, 39, 35, 0.1);
+  --shadow-panel: inset 0 0 0 1px rgba(43, 39, 35, 0.04), 0 1px 3px rgba(43, 39, 35, 0.08);
+  --shadow-button: 0 1px 2px rgba(43, 39, 35, 0.1);
+  --shadow-dialog: 0 12px 32px rgba(43, 39, 35, 0.16);
+  --shadow-input: inset 0 1px 2px rgba(43, 39, 35, 0.06);
+  --shadow-button-hover: 0 1px 2px rgba(43, 39, 35, 0.12);
   --shadow-button-active: none;
-  --shadow-button-primary: 0 1px 3px rgba(51, 41, 28, 0.12);
+  --shadow-button-primary: 0 1px 2px rgba(43, 39, 35, 0.12);
   --shadow-button-primary-active: none;
   --shadow-toolbar: var(--shadow-panel);
   --shadow-tool-rail: var(--shadow-panel);
@@ -489,6 +545,8 @@
   --shadow-canvas-3d: inset 0 0 0 1px var(--color-border);
   --shadow-status: var(--shadow-1);
   --shadow-status-danger: var(--shadow-1);
+  --shadow-collision-guide: var(--shadow-1);
+  --shadow-collision-guide-hover: var(--shadow-1);
   --shadow-overlay-button: var(--shadow-button);
   --shadow-candidate: var(--shadow-button);
   --shadow-candidate-hover: var(--shadow-button);
@@ -521,68 +579,75 @@
   --brand-digit-height: auto;
   --brand-digit-margin: 0;
   --brand-digit-transform: none;
-  --brand-subtitle-font: "Yu Mincho", "Hiragino Mincho ProN", serif;
+  --brand-subtitle-font: var(--font-body);
   --brand-font: var(--font-body);
   --brand-font-weight: 700;
   --brand-letter-spacing: 0.06em;
   --brand-subtitle-letter-spacing: 0.12em;
   --font-body: "Yu Gothic UI", "Meiryo", sans-serif;
-  --font-heading: "Yu Mincho", "Hiragino Mincho ProN", serif;
-  --body-font-weight: 500;
+  --font-heading: var(--font-body);
+  --body-font-weight: 400;
+  --fw-bold: 600;
   --fw-black: 700;
   --body-letter-spacing: 0.02em;
   --heading-letter-spacing: 0.02em;
-  --focus-ring: 0 0 0 3px rgba(43, 74, 115, 0.2);
+  --focus-ring: 0 0 0 3px rgba(31, 63, 94, 0.2);
 }
 
-/* モダン — 白・墨・電紫のフラット。 */
+/* モダン — 明るい精密機器の面を、青1色と中立色で階層化する。 */
 .app[data-theme="modern"] {
-  --color-bg: #fafafa;
+  --color-bg: #f7f8fa;
   --color-surface: #ffffff;
   --color-surface-raised: #ffffff;
-  --color-surface-sunken: #f0f0f2;
+  --color-surface-sunken: #f1f3f5;
   --color-control: #ffffff;
-  --color-control-hover: #18181b;
+  --color-control-hover: #eff6ff;
   --color-canvas-2d: #f4f4f5;
   --color-canvas-3d: #e9e9eb;
-  --color-border: #e4e4e7;
-  --color-border-strong: #52525b;
-  --color-text: #18181b;
-  --color-text-muted: #52525b;
-  --color-accent: #6d28d9;
-  --color-accent-strong: #5b21b6;
-  --color-accent-soft: #ede9fe;
-  --color-secondary: #18181b;
-  --color-secondary-strong: #18181b;
-  --color-secondary-soft: #f0f0f2;
-  --color-pop-yellow: #6d28d9;
-  --color-pop-yellow-soft: #ede9fe;
-  --color-pop-coral: #18181b;
-  --color-danger: #dc2626;
-  --color-danger-soft: #fff5f5;
+  --color-border: #dfe3e8;
+  --color-border-strong: #8d98a5;
+  --color-text: #181b20;
+  --color-text-muted: #56616d;
+  --color-accent: #2563eb;
+  --color-accent-strong: #1d4ed8;
+  --color-accent-soft: #eff6ff;
+  --color-secondary: #374151;
+  --color-secondary-strong: #1f2937;
+  --color-secondary-soft: #f3f4f6;
+  --color-pop-yellow: #2563eb;
+  --color-pop-yellow-soft: #eff6ff;
+  --color-pop-coral: #2563eb;
+  --color-danger: #b42318;
+  --color-danger-soft: #fef2f2;
   --color-warn: #854d0e;
   --color-warn-badge: #854d0e;
   --color-on-coral: #ffffff;
-  --color-overlay: rgba(24, 24, 27, 0.86);
-  --color-scrim: rgba(24, 24, 27, 0.38);
+  --color-overlay: rgba(24, 27, 32, 0.86);
+  --color-scrim: rgba(24, 27, 32, 0.38);
   --color-surface-translucent: rgba(255, 255, 255, 0.92);
   --color-surface-translucent-strong: #ffffff;
   --color-surface-translucent-light: #ffffff;
   --color-surface-translucent-medium: #ffffff;
   --color-surface-translucent-submenu: #ffffff;
-  --color-accent-border: #e4e4e7;
-  --color-secondary-border: #e4e4e7;
-  --color-secondary-border-soft: #e4e4e7;
-  --color-tool-border: #e4e4e7;
+  --color-accent-border: rgba(59, 130, 246, 0.22);
+  --color-secondary-border: #dfe3e8;
+  --color-secondary-border-soft: #dfe3e8;
+  --color-tool-border: #dfe3e8;
   --color-palette-border: var(--color-border);
   --color-grid-border: var(--color-border);
   --color-warning-surface: #fef3c7;
-  --color-warning-border: #e4e4e7;
+  --color-warning-border: rgba(133, 77, 14, 0.35);
   --color-on-gold: #ffffff;
-  --toolbar-background: var(--color-surface);
-  --tool-rail-background: var(--color-surface);
-  --timeline-background: var(--color-surface);
-  --context-panel-background: var(--color-surface);
+  --app-background-image:
+    radial-gradient(circle at 12% 8%, rgba(255, 255, 255, 0.65) 0, rgba(255, 255, 255, 0) 48%),
+    url("./assets/themes/modern-grain.webp");
+  --app-background-size: 100% 100%, 1248px 1248px;
+  --app-background-repeat: no-repeat, repeat;
+  --app-background-position: left top, 0 0;
+  --toolbar-background: rgba(255, 255, 255, 0.84);
+  --tool-rail-background: rgba(255, 255, 255, 0.82);
+  --timeline-background: rgba(255, 255, 255, 0.84);
+  --context-panel-background: rgba(255, 255, 255, 0.82);
   --dialog-background: var(--color-surface);
   --dialog-fieldset-background: var(--color-bg);
   --help-header-background: var(--color-surface);
@@ -593,12 +658,22 @@
   --paper-tip-background: var(--color-surface);
   --guide-background: var(--color-surface);
   --floating-border-color: var(--color-border);
-  --splitter-background: var(--color-secondary);
+  --splitter-background: var(--color-border-strong);
+  --toolbar-separator-width: 1px;
+  --toolbar-separator-height: 20px;
+  --toolbar-separator-radius: 1px;
+  --toolbar-separator-background: var(--color-accent);
   --toolbar-button-background: var(--color-surface);
   --button-primary-background: var(--color-accent);
-  --button-hover-background: var(--color-secondary);
-  --button-hover-color: #ffffff;
-  --button-hover-border: var(--color-secondary);
+  --tool-active-background: var(--color-accent);
+  --tool-active-color: var(--color-on-solid);
+  --tool-active-border: var(--color-accent-strong);
+  --tool-active-hover-background: var(--color-accent-strong);
+  --tool-active-hover-color: var(--color-on-solid);
+  --tool-active-hover-border: var(--color-accent-strong);
+  --button-hover-background: var(--color-accent-soft);
+  --button-hover-color: var(--color-accent-strong);
+  --button-hover-border: var(--color-accent);
   --button-hover-transform: none;
   --button-active-transform: none;
   --icon-hover-transform: none;
@@ -619,16 +694,23 @@
   --panel-border-width: 1px;
   --floating-border-width: 1px;
   --heading-rule-width: 1px;
+  --sp-3: 8px;
+  --sp-4: 10px;
+  --sp-5: 14px;
+  --sp-6: 18px;
+  --sp-7: 24px;
+  --sp-8: 32px;
+  --sp-9: 40px;
   --radius-sm: 8px;
   --radius-md: 8px;
   --radius-lg: 8px;
   --radius-xl: 8px;
   --radius-pill: 8px;
-  --shadow-1: none;
-  --shadow-2: none;
+  --shadow-1: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-2: 0 2px 8px rgba(15, 23, 42, 0.07);
   --shadow-panel: none;
   --shadow-button: none;
-  --shadow-dialog: 0 8px 24px rgba(0, 0, 0, 0.08);
+  --shadow-dialog: 0 16px 40px rgba(15, 23, 42, 0.1);
   --shadow-input: none;
   --shadow-button-hover: none;
   --shadow-button-active: none;
@@ -648,6 +730,8 @@
   --shadow-canvas-3d: none;
   --shadow-status: var(--shadow-dialog);
   --shadow-status-danger: var(--shadow-dialog);
+  --shadow-collision-guide: none;
+  --shadow-collision-guide-hover: none;
   --shadow-overlay-button: none;
   --shadow-candidate: none;
   --shadow-candidate-hover: none;
@@ -691,16 +775,10 @@
   --heading-letter-spacing: -0.01em;
   --fw-bold: 700;
   --fw-black: 700;
-  --t-fast: 150ms ease;
-  --t-base: 150ms ease;
-  --t-entrance: 150ms ease;
-  --focus-ring: 0 0 0 3px rgba(109, 40, 217, 0.2);
-  --tool-active-background: var(--color-secondary);
-  --tool-active-color: var(--color-on-solid);
-  --tool-active-border: var(--color-secondary);
-  --tool-active-hover-background: var(--color-surface);
-  --tool-active-hover-color: var(--color-secondary);
-  --tool-active-hover-border: var(--color-secondary);
+  --t-fast: 100ms ease-out;
+  --t-base: 140ms ease-out;
+  --t-entrance: 160ms ease-out;
+  --focus-ring: 0 0 0 3px rgba(59, 130, 246, 0.22);
 }
 
 /* クラシック — 書斎の折り紙図鑑。 */
@@ -762,8 +840,18 @@
   --guide-background: var(--color-surface);
   --floating-border-color: var(--color-border-strong);
   --splitter-background: var(--color-secondary);
+  --toolbar-separator-width: 3px;
+  --toolbar-separator-height: 24px;
+  --toolbar-separator-radius: var(--radius-sm);
+  --toolbar-separator-background: linear-gradient(var(--color-pop-yellow), var(--color-pop-coral));
   --toolbar-button-background: var(--color-surface);
   --button-primary-background: var(--color-accent);
+  --tool-active-background: var(--color-accent);
+  --tool-active-color: var(--color-on-solid);
+  --tool-active-border: var(--color-accent-strong);
+  --tool-active-hover-background: var(--color-accent-strong);
+  --tool-active-hover-color: var(--color-on-solid);
+  --tool-active-hover-border: var(--color-accent-strong);
   --button-hover-background: var(--color-accent-soft);
   --button-hover-color: var(--color-text);
   --button-hover-border: var(--color-accent);
@@ -816,6 +904,8 @@
   --shadow-canvas-3d: var(--shadow-panel);
   --shadow-status: var(--shadow-dialog);
   --shadow-status-danger: var(--shadow-dialog);
+  --shadow-collision-guide: var(--shadow-dialog);
+  --shadow-collision-guide-hover: var(--shadow-dialog);
   --shadow-overlay-button: var(--shadow-button);
   --shadow-candidate: var(--shadow-button);
   --shadow-candidate-hover: var(--shadow-button);
@@ -892,13 +982,16 @@ textarea {
 /* 文字・数値・選択の入力欄はどこでも同じ見た目にする */
 input[type="text"],
 input[type="number"],
-select {
+input[type="search"],
+select,
+textarea {
   min-height: 32px;
   padding: var(--sp-2) var(--sp-4);
   border: var(--control-border-width) solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-control);
   color: var(--color-text);
+  font-size: var(--fs-md);
   line-height: var(--lh-tight);
   box-shadow: var(--shadow-input);
   transition:
@@ -909,13 +1002,17 @@ select {
 
 input[type="text"]:hover:not(:disabled),
 input[type="number"]:hover:not(:disabled),
-select:hover:not(:disabled) {
+input[type="search"]:hover:not(:disabled),
+select:hover:not(:disabled),
+textarea:hover:not(:disabled) {
   border-color: var(--color-border-strong);
 }
 
 input[type="text"]:focus,
 input[type="number"]:focus,
-select:focus {
+input[type="search"]:focus,
+select:focus,
+textarea:focus {
   border-color: var(--color-accent);
   box-shadow: var(--focus-ring);
 }
@@ -941,6 +1038,177 @@ input[type="radio"] {
   vertical-align: -3px;
 }
 
+/* OSごとの差が大きいnative部品も、意味と操作感を保ったままテーマへ接続する。 */
+.app select {
+  appearance: none;
+  padding-right: calc(var(--sp-8) + var(--sp-2));
+  background-color: var(--color-control);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--color-text-muted) 50%),
+    linear-gradient(135deg, var(--color-text-muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 13px) 50%,
+    calc(100% - 8px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.app select option {
+  background: var(--color-control);
+  color: var(--color-text);
+}
+
+.app input[type="checkbox"] {
+  appearance: none;
+  display: inline-grid;
+  place-content: center;
+  border: var(--control-border-width) solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-control);
+  box-shadow: var(--shadow-input);
+  cursor: pointer;
+  transition:
+    background var(--t-fast),
+    border-color var(--t-fast),
+    box-shadow var(--t-fast);
+}
+
+.app input[type="checkbox"]::before {
+  width: 9px;
+  height: 9px;
+  background: var(--color-on-solid);
+  clip-path: polygon(14% 44%, 0 62%, 40% 100%, 100% 20%, 82% 4%, 38% 70%);
+  content: "";
+  transform: scale(0);
+  transition: transform var(--t-fast);
+}
+
+.app input[type="checkbox"]:checked {
+  border-color: var(--color-accent-strong);
+  background: var(--color-accent);
+}
+
+.app input[type="checkbox"]:checked::before {
+  transform: scale(1);
+}
+
+.app input[type="radio"] {
+  appearance: none;
+  display: inline-grid;
+  place-content: center;
+  border: var(--control-border-width) solid var(--color-border-strong);
+  border-radius: 50%;
+  background: var(--color-control);
+  box-shadow: var(--shadow-input);
+  cursor: pointer;
+}
+
+.app input[type="radio"]::before {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-on-solid);
+  content: "";
+  transform: scale(0);
+  transition: transform var(--t-fast);
+}
+
+.app input[type="radio"]:checked {
+  border-color: var(--color-accent-strong);
+  background: var(--color-accent);
+}
+
+.app input[type="radio"]:checked::before {
+  transform: scale(1);
+}
+
+.app input[type="range"] {
+  appearance: none;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.app input[type="range"]::-webkit-slider-runnable-track {
+  height: 5px;
+  border: var(--control-border-width) solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-sunken);
+  box-shadow: var(--shadow-input);
+}
+
+.app input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 17px;
+  height: 17px;
+  margin-top: calc(-6px - var(--control-border-width) / 2);
+  border: var(--control-border-width) solid var(--color-accent-strong);
+  border-radius: 50%;
+  background: var(--color-accent);
+  box-shadow: var(--shadow-button);
+}
+
+.app input[type="range"]:hover:not(:disabled)::-webkit-slider-thumb {
+  background: var(--color-accent-strong);
+}
+
+.app input[type="color"] {
+  appearance: none;
+  min-width: 34px;
+  min-height: 30px;
+  padding: var(--sp-1);
+  border: var(--control-border-width) solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-control);
+  box-shadow: var(--shadow-input);
+  cursor: pointer;
+}
+
+.app input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.app input[type="color"]::-webkit-color-swatch {
+  border: 0;
+  border-radius: calc(var(--radius-sm) / 2);
+}
+
+.app input[type="number"] {
+  appearance: textfield;
+}
+
+.app input[type="number"]::-webkit-inner-spin-button,
+.app input[type="number"]::-webkit-outer-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+.app input[type="search"] {
+  appearance: none;
+}
+
+.app input[type="checkbox"]:disabled,
+.app input[type="radio"]:disabled {
+  border-color: var(--color-border);
+  background: var(--color-surface-sunken);
+  box-shadow: none;
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.app input[type="range"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+
+.app input[type="range"]:disabled::-webkit-slider-thumb {
+  border-color: var(--color-border-strong);
+  background: var(--color-text-muted);
+  box-shadow: none;
+}
+
 /* キーボードで辿っているときだけ、どこにいるかをはっきり出す */
 :focus-visible {
   outline: 2px solid var(--color-accent);
@@ -948,16 +1216,36 @@ input[type="radio"] {
   box-shadow: var(--focus-ring);
 }
 
-/* 中央行は minmax(0, 1fr) にする。1fr の下限は中身の高さなので、
+/* Tooltip.tsxはbodyへportalし既存のinline基底を持つため、テーマ橋渡し値で明示上書きする。 */
+[data-floating-ui="tooltip"] {
+  padding: var(--sp-2) var(--tooltip-padding-inline) !important;
+  border: var(--tooltip-border-width) solid var(--color-tooltip-border) !important;
+  border-radius: var(--radius-tooltip) !important;
+  background: var(--color-tooltip-background) !important;
+  color: var(--color-tooltip-text) !important;
+  box-shadow: var(--shadow-tooltip) !important;
+  font-family: var(--tooltip-font-family) !important;
+  font-weight: var(--tooltip-font-weight) !important;
+}
+
+/* 中央行は minmax(0, fr) にする。fr の下限は中身の高さなので、
    狭い画面ではツールレールの高さで行が伸び、下のパネルを画面外へ押し出して
-   文字が重なって見えていた。下限を0にして、はみ出しは各区画の中で処理する */
+   文字が重なって見えていた。下限を0にして、はみ出しは各区画の中で処理する。
+   2つのfrはThemeRootが端末保存した下部パネル比率から設定する。 */
 .app {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) 160px;
+  grid-template-rows:
+    auto
+    minmax(0, var(--main-row-share, 0.68fr))
+    10px
+    minmax(0, var(--context-panel-share, 0.32fr));
   height: 100%;
   color: var(--color-text);
   background-color: var(--color-bg);
   background-image: var(--app-background-image);
+  background-size: var(--app-background-size);
+  background-repeat: var(--app-background-repeat);
+  background-position: var(--app-background-position);
   font-family: var(--font-body);
   font-weight: var(--body-font-weight);
   letter-spacing: var(--body-letter-spacing);
@@ -987,18 +1275,15 @@ input[type="radio"] {
 
 /* ボタンの共通の見た目。どのボタンも「ふつう / 指を乗せた / 選択中 / 押せない」が
    同じ約束で見分けられるようにする(設計原則3b) */
-.toolbar button,
-.tool-button,
-.timeline-controls button,
-.timeline-chip,
-.button-row button,
-.angle-row button {
+.app :where(button) {
+  appearance: none;
   min-height: 32px;
   padding: var(--sp-2) var(--sp-5);
   border: var(--control-border-width) solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-control);
   color: var(--color-text);
+  font-size: var(--fs-md);
   line-height: var(--lh-tight);
   font-weight: var(--fw-medium);
   box-shadow: var(--shadow-button);
@@ -1012,12 +1297,7 @@ input[type="radio"] {
     filter var(--t-fast);
 }
 
-.toolbar button:hover:not(:disabled),
-.tool-button:hover:not(:disabled),
-.timeline-controls button:hover:not(:disabled),
-.timeline-chip:hover:not(:disabled),
-.button-row button:hover:not(:disabled),
-.angle-row button:hover:not(:disabled) {
+.app :where(button):hover:where(:not(:disabled)) {
   background: var(--button-hover-background);
   border-color: var(--button-hover-border);
   color: var(--button-hover-color);
@@ -1025,29 +1305,36 @@ input[type="radio"] {
   transform: var(--button-hover-transform);
 }
 
-.toolbar button:active:not(:disabled),
-.tool-button:active:not(:disabled),
-.timeline-controls button:active:not(:disabled),
-.timeline-chip:active:not(:disabled),
-.button-row button:active:not(:disabled),
-.angle-row button:active:not(:disabled) {
+.app :where(button):active:where(:not(:disabled)) {
   background: var(--color-accent-soft);
   box-shadow: var(--shadow-button-active);
   transform: var(--button-active-transform);
 }
 
 /* 押せないボタンは消さずに残す決まりなので、平らな見た目で「今は押せない」を出す */
-.toolbar button:disabled,
-.tool-button:disabled,
-.timeline-controls button:disabled,
-.button-row button:disabled,
-.angle-row button:disabled {
+.app :where(button):disabled {
   background: var(--color-surface-sunken);
   border-color: var(--color-border);
   color: var(--color-text-muted);
   box-shadow: none;
   cursor: not-allowed;
-  opacity: 0.72;
+}
+
+/* 操作の役割はこの4分類に集約する。class無しの既存ボタンは補助操作を既定とする。 */
+.button-secondary {
+  border-color: var(--color-border);
+  background: var(--color-control);
+  color: var(--color-text);
+  box-shadow: var(--shadow-button);
+}
+
+.button-icon {
+  display: inline-grid;
+  width: 32px;
+  min-height: 32px;
+  padding: 0;
+  place-content: center;
+  border-radius: var(--radius-md);
 }
 
 /* 上部ツールバー: 作品全体に効く操作の場所 */
@@ -1148,10 +1435,10 @@ input[type="radio"] {
 }
 
 .toolbar-separator {
-  width: 4px;
-  height: 26px;
-  border-radius: var(--radius-pill);
-  background: linear-gradient(var(--color-pop-yellow), var(--color-pop-coral));
+  width: var(--toolbar-separator-width);
+  height: var(--toolbar-separator-height);
+  border-radius: var(--toolbar-separator-radius);
+  background: var(--toolbar-separator-background);
   margin: 0 var(--sp-1);
   box-shadow: var(--shadow-decoration);
 }
@@ -1166,6 +1453,7 @@ input[type="radio"] {
 
 /* 2Dと3Dの境目(左右にドラッグして広さを変える) */
 .pane-splitter {
+  position: relative;
   background: var(--splitter-background);
   cursor: col-resize;
   touch-action: none;
@@ -1174,10 +1462,86 @@ input[type="radio"] {
   z-index: 2;
 }
 
+.pane-splitter::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 4px;
+  height: 48px;
+  border: var(--control-border-width) solid var(--color-border-strong);
+  border-radius: var(--radius-pill);
+  background: repeating-linear-gradient(
+    to bottom,
+    var(--color-surface-translucent-strong) 0 3px,
+    transparent 3px 7px
+  );
+  content: "";
+  opacity: 0.9;
+  transform: translate(-50%, -50%);
+  transition: height var(--t-fast);
+}
+
 .pane-splitter:hover,
 .pane-splitter:focus-visible {
   filter: var(--splitter-hover-filter);
   outline: none;
+}
+
+.pane-splitter:hover::after,
+.pane-splitter:focus-visible::after {
+  height: 64px;
+}
+
+.pane-splitter:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+/* 作業画面と「今できる操作」の境目。既存の左右仕切りと同じ色を使い、
+   中央の白いグリップがhover/focusで広がるため、説明なしでもつかめる。 */
+.context-panel-splitter {
+  position: relative;
+  min-height: 10px;
+  background: var(--splitter-background);
+  cursor: row-resize;
+  touch-action: none;
+  box-shadow: var(--shadow-splitter);
+  transition: filter var(--t-fast);
+  z-index: 3;
+}
+
+.context-panel-splitter::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 58px;
+  height: 4px;
+  border: var(--control-border-width) solid var(--color-border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-translucent-strong);
+  box-shadow: var(--shadow-1);
+  transform: translate(-50%, -50%);
+  transition:
+    width var(--t-fast),
+    height var(--t-fast),
+    background var(--t-fast);
+}
+
+.context-panel-splitter:hover,
+.context-panel-splitter:focus-visible {
+  filter: var(--splitter-hover-filter);
+  outline: none;
+}
+
+.context-panel-splitter:hover::after,
+.context-panel-splitter:focus-visible::after {
+  width: 86px;
+  height: 6px;
+  background: var(--color-surface);
+}
+
+.context-panel-splitter:focus-visible {
+  box-shadow: var(--focus-ring);
 }
 
 /* 10個のボタンが縦に入りきらない画面では、レールの中だけを縦にスクロールさせる。
@@ -1288,10 +1652,6 @@ input[type="radio"] {
   white-space: nowrap;
 }
 
-.tool-button.active:hover:not(:disabled) {
-  background: var(--color-accent-strong);
-}
-
 /* 技法・作図のサブメニュー(そのツールを選んでいる間だけ出る) */
 .tool-submenu {
   flex: none;
@@ -1398,6 +1758,70 @@ input[type="radio"] {
   box-shadow: var(--shadow-preview);
 }
 
+/* 対称描画は切替・3種類の基準・現在値を1枚にまとめる。線選択時も同じ部品を使う。 */
+.mirror-draw-controls {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+  padding: var(--sp-3);
+  border: var(--control-border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-translucent-medium);
+}
+
+.mirror-draw-toggle {
+  font-weight: var(--fw-bold);
+}
+
+.mirror-axis-heading {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+
+.mirror-axis-heading span {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.mirror-axis-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.mirror-axis-buttons button {
+  min-height: 30px;
+  padding: var(--sp-1) var(--sp-3);
+  border: var(--control-border-width) solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.mirror-axis-buttons button[aria-pressed="true"] {
+  border-color: var(--color-accent-strong);
+  background: var(--color-accent);
+  color: var(--color-on-solid);
+  box-shadow: var(--shadow-selected-control);
+}
+
+.mirror-axis-disabled-tooltip {
+  display: inline-flex;
+  border-radius: var(--radius-sm);
+}
+
+.mirror-axis-disabled-tooltip:focus-visible {
+  outline: 2px solid var(--color-accent-strong);
+  outline-offset: 2px;
+}
+
+.mirror-axis-notice {
+  margin: 0;
+  color: var(--color-accent-strong);
+  font-weight: var(--fw-bold);
+}
+
 /* 3D区画は内側を上下に分ける(立体表示 + 手順タイムライン)。
    常設区画は4つのままで、タイムラインは3D区画の一部として置く */
 .pane-3d {
@@ -1408,6 +1832,7 @@ input[type="radio"] {
 
 .pane-3d-view {
   position: relative;
+  container: viewer-operation-help / inline-size;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -1531,10 +1956,135 @@ input[type="radio"] {
   min-width: 180px;
 }
 
+.cp-editor {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  container: cp-operation-help / inline-size;
+}
+
 .cp-canvas {
   display: block;
   width: 100%;
   height: 100%;
+}
+
+/* 展開図へ重ねる操作案内。現在できることだけは、詳細を畳んでも残す。 */
+.cp-operation-hint {
+  position: absolute;
+  top: var(--sp-4);
+  left: var(--sp-4);
+  z-index: 3;
+  max-width: min(520px, calc(100% - 150px));
+  box-sizing: border-box;
+  overflow: hidden;
+  padding: var(--sp-2) var(--sp-3);
+  border: var(--floating-border-width) solid var(--floating-border-color);
+  border-radius: var(--radius-md);
+  background: var(--viewer-hint-background);
+  color: var(--color-text);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-tight);
+  box-shadow: var(--shadow-viewer-hint);
+  backdrop-filter: var(--floating-backdrop-filter);
+  pointer-events: none;
+}
+
+.cp-operation-current {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.cp-operation-current > span {
+  flex: none;
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-pill);
+  background: var(--color-secondary);
+  color: var(--color-on-solid);
+  font-weight: var(--fw-bold);
+}
+
+.cp-operation-current > strong {
+  min-width: 0;
+}
+
+.cp-operation-hint p {
+  margin: var(--sp-2) 0;
+  color: var(--color-text-muted);
+}
+
+.cp-help-toggle {
+  min-height: 26px;
+  padding: var(--sp-1) var(--sp-3);
+  border: var(--control-border-width) solid var(--color-secondary-soft);
+  border-radius: var(--radius-pill);
+  background: var(--color-control);
+  color: var(--color-secondary-strong);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+  white-space: nowrap;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+/* 4か所の詳しい操作ボタンは、flex内でも文字1字分まで縮ませない。
+   入らない区画では下のcontainer queryが文言をアイコンへ置き換える。 */
+.operation-detail-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operation-detail-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operation-detail-icon {
+  flex: none;
+}
+
+/* 詳細を畳んでも残す要点は常に1行。全文は同じ要素のdata-tooltipで読める。 */
+.operation-summary-line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cp-operation-hint.collapsed {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+/* 展開図区画の中で、現在どこまで折った状態かを常に示す。 */
+.cp-step-indicator {
+  position: absolute;
+  top: var(--sp-4);
+  right: var(--sp-4);
+  z-index: 3;
+  padding: var(--sp-2) var(--sp-4);
+  border: var(--floating-border-width) solid var(--floating-border-color);
+  border-radius: var(--radius-pill);
+  background: var(--viewer-hint-background);
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-tight);
+  box-shadow: var(--shadow-viewer-hint);
+  backdrop-filter: var(--floating-backdrop-filter);
+  cursor: help;
 }
 
 .viewer3d-canvas {
@@ -1558,6 +2108,7 @@ html[data-origami3-capture-view] .app > .dialog-backdrop,
 html[data-origami3-capture-view] .app > .first-run-guide,
 html[data-origami3-capture-view] .tool-rail,
 html[data-origami3-capture-view] .pane-splitter,
+html[data-origami3-capture-view] .context-panel-splitter,
 html[data-origami3-capture-view] .timeline {
   display: none !important;
 }
@@ -1603,6 +2154,7 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   gap: var(--sp-2);
   top: var(--sp-4);
   right: var(--sp-4);
+  max-width: min(430px, calc(100% - 2 * var(--sp-4)));
   padding: var(--sp-2) var(--sp-5);
   border: var(--floating-border-width) solid var(--color-on-solid);
   border-radius: var(--radius-pill);
@@ -1614,6 +2166,8 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   letter-spacing: 0.02em;
   box-shadow: var(--shadow-status);
   animation: badge-pop var(--t-entrance) both;
+  /* 狭い3D区画では操作案内と重なるため、重要な状態を必ず手前へ出す。 */
+  z-index: 6;
 }
 
 .status-badge.error {
@@ -1628,22 +2182,24 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   right: var(--sp-4);
   max-width: min(330px, calc(100% - var(--sp-8)));
   padding: var(--sp-2) var(--sp-4);
-  border: var(--floating-border-width) solid rgba(255, 255, 255, 0.92);
+  border: var(--floating-border-width) solid var(--color-collision-border);
   border-radius: var(--radius-pill);
-  background: rgba(127, 15, 29, 0.94);
-  color: #fff;
+  background: var(--color-collision-surface);
+  color: var(--color-collision-text);
   font-size: var(--fs-sm);
   font-weight: var(--fw-bold);
   line-height: var(--lh-tight);
-  box-shadow: 0 0 14px rgba(255, 36, 56, 0.62), var(--shadow-status-danger);
+  box-shadow: var(--shadow-collision-guide);
   cursor: pointer;
-  z-index: 3;
+  /* 最狭時も操作案内の裏へ隠さず、原因へ進む操作を残す。 */
+  z-index: 5;
 }
 
 .suspect-hinge-guide:hover,
 .suspect-hinge-guide:focus-visible {
-  background: #a31125;
-  box-shadow: 0 0 20px rgba(255, 36, 56, 0.78), var(--shadow-status-danger);
+  background: var(--color-collision-surface-hover);
+  color: var(--color-collision-text);
+  box-shadow: var(--shadow-collision-guide-hover);
 }
 
 .status-icon {
@@ -1660,7 +2216,10 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   position: absolute;
   top: var(--sp-5);
   left: var(--sp-5);
-  width: min(430px, calc(100% - 112px));
+  right: 112px;
+  width: auto;
+  max-width: 430px;
+  box-sizing: border-box;
   padding: var(--sp-4);
   border: var(--floating-border-width) solid var(--floating-border-color);
   border-radius: var(--radius-lg);
@@ -1691,7 +2250,7 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 }
 
 .viewer-operation-hint.collapsed {
-  width: min(330px, calc(100% - 112px));
+  width: auto;
 }
 
 .viewer-operation-hint.blocked {
@@ -1736,39 +2295,47 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 }
 
 .viewer-mode-copy strong {
+  min-width: 0;
+  overflow: hidden;
   color: var(--color-secondary-strong);
   font-size: var(--fs-lg);
   font-weight: var(--fw-black);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .viewer-hint-toggle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  min-height: 28px;
   flex: none;
-  padding: 0;
+  padding: var(--sp-1) var(--sp-3);
   border: var(--control-border-width) solid var(--color-secondary-soft);
-  border-radius: 50%;
+  border-radius: var(--radius-pill);
   background: var(--color-control);
   color: var(--color-secondary-strong);
-  font-size: var(--fs-lg);
-  font-weight: var(--fw-black);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+  white-space: nowrap;
   cursor: pointer;
   box-shadow: var(--shadow-viewer-toggle);
 }
 
-.viewer-current-action {
-  margin: var(--sp-3) 0 0;
-  color: var(--color-text);
-  font-weight: var(--fw-bold);
+.viewer-current-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
 }
 
-.viewer-operation-hint.collapsed .viewer-current-action {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.viewer-current-action {
+  min-width: 0;
+  flex: 1;
+  margin: 0;
+  color: var(--color-text);
+  font-weight: var(--fw-bold);
 }
 
 .viewer-mouse-assignments {
@@ -1842,6 +2409,7 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 .viewer-reset:hover,
 .viewer-reset:focus-visible {
   background: var(--color-accent);
+  color: var(--color-on-solid);
   transform: var(--minor-hover-transform);
 }
 
@@ -1850,7 +2418,7 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   transform: var(--minor-active-transform);
 }
 
-/* 下部コンテキストパネル(160px)。高さは固定なので、中身が多いときは
+/* 下部コンテキストパネル。高さは上端の取っ手で変わり、中身が多いときは
    左右それぞれの列の中でスクロールさせる(パネルの外へはみ出させない) */
 .context-panel {
   display: flex;
@@ -1872,6 +2440,7 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   flex: 1;
   min-width: 0;
   min-height: 0;
+  container: context-operation-help / inline-size;
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--color-accent) transparent;
@@ -1882,7 +2451,7 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   box-shadow: var(--shadow-context-card);
 }
 
-/* 選択中ツールの手順。主操作の後ろで、既定は1行に折りたたむ。 */
+/* 選択中ツールの手順。現在できる1行を残し、詳しい段階だけを畳む。 */
 .operation-steps {
   margin: var(--sp-3) calc(-1 * var(--sp-5)) 0;
   padding: var(--sp-3) var(--sp-5);
@@ -1893,31 +2462,9 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 .operation-steps-heading {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--sp-3);
   min-width: 0;
-  cursor: pointer;
-  list-style: none;
-}
-
-.operation-steps-heading::-webkit-details-marker {
-  display: none;
-}
-
-.operation-steps-heading::after {
-  content: "手順を開く ▼";
-  margin-left: auto;
-  color: var(--color-accent-strong);
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-bold);
-  white-space: nowrap;
-}
-
-.operation-steps details[open] .operation-steps-heading {
-  margin-bottom: var(--sp-2);
-}
-
-.operation-steps details[open] .operation-steps-heading::after {
-  content: "手順を閉じる ▲";
 }
 
 .operation-steps-heading > span {
@@ -1930,14 +2477,31 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 }
 
 .operation-steps-heading strong {
+  flex: 1 1 140px;
+  min-width: 0;
   color: var(--color-accent-strong);
+}
+
+.operation-help-toggle,
+.paper-help-toggle {
+  min-height: 28px;
+  margin-left: auto;
+  padding: var(--sp-1) var(--sp-3);
+  border: var(--control-border-width) solid var(--color-accent-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-control);
+  color: var(--color-accent-strong);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+  white-space: nowrap;
+  cursor: pointer;
 }
 
 .operation-steps ol {
   display: flex;
   align-items: stretch;
   gap: var(--sp-2);
-  margin: 0;
+  margin: var(--sp-2) 0 0;
   padding: 0;
   list-style: none;
 }
@@ -2024,6 +2588,9 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 .soft-controls {
   display: flex;
   width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--sp-3) var(--sp-5);
   padding: var(--sp-3) var(--sp-4);
@@ -2034,7 +2601,8 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 
 .soft-controls-heading {
   display: flex;
-  min-width: 170px;
+  min-width: 0;
+  flex: 1 1 170px;
   flex-direction: column;
 }
 
@@ -2042,9 +2610,19 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   color: var(--color-accent-strong);
 }
 
-.soft-controls-heading span {
+.soft-controls-heading > span {
   color: var(--color-text-muted);
   font-size: var(--fs-xs);
+}
+
+.soft-controls-heading .paper-help-toggle {
+  align-self: flex-start;
+  margin: var(--sp-2) 0 0;
+}
+
+.soft-controls > .hint {
+  min-width: 0;
+  flex: 1 0 100%;
 }
 
 /* 紙をクリックした初回に出す操作の吹き出し。畳むと同じ場所の小さな入口になる。 */
@@ -2056,7 +2634,10 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 }
 
 .paper-action-tip.expanded {
-  width: min(360px, calc(100% - 104px));
+  right: 104px;
+  width: auto;
+  max-width: 360px;
+  box-sizing: border-box;
   padding: var(--sp-5);
   border: var(--floating-border-width) solid var(--floating-border-color);
   border-radius: var(--radius-lg);
@@ -2065,8 +2646,13 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 }
 
 .paper-action-tip.expanded > strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
   color: var(--color-secondary-strong);
   font-size: var(--fs-lg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .paper-action-tip.expanded p {
@@ -2076,7 +2662,10 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 }
 
 .paper-action-tip.compact {
+  box-sizing: border-box;
+  max-width: calc(100% - 40px);
   min-height: 32px;
+  overflow: hidden;
   padding: var(--sp-2) var(--sp-5);
   border: var(--control-border-width) solid var(--color-pop-yellow);
   border-radius: var(--radius-pill);
@@ -2085,6 +2674,8 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   color: var(--color-text);
   font-family: inherit;
   font-weight: var(--fw-bold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
   cursor: pointer;
   box-shadow: var(--shadow-button);
 }
@@ -2105,12 +2696,142 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   gap: var(--sp-2);
 }
 
+.paper-action-tip-buttons > button {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 左右仕切りで3Dだけを狭くした場合。window幅ではなく実際の3D区画幅で切り替える。 */
+@container viewer-operation-help (max-width: 360px) {
+  .viewer-operation-hint {
+    top: var(--sp-5);
+    right: var(--sp-5);
+    max-width: none;
+    max-height: calc(100% - 2 * var(--sp-5));
+    padding: var(--sp-3);
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .viewer-operation-hint::after {
+    display: none;
+  }
+
+  /* 紙の詳しい案内も開いた間は、3Dカードを要点1行へ縮めて上下を分ける。 */
+  .viewer-operation-hint.paper-action-tip-open .viewer-operation-heading,
+  .viewer-operation-hint.paper-action-tip-open .viewer-mouse-assignments {
+    display: none;
+  }
+
+  .viewer-operation-hint.paper-action-tip-open .viewer-current-row {
+    margin-top: 0;
+  }
+
+  .viewer-operation-hint.paper-action-tip-open {
+    max-height: 48px;
+  }
+
+  .viewer-hint-toggle {
+    width: 32px;
+    min-width: 32px;
+    padding-inline: var(--sp-1);
+  }
+
+  .viewer-hint-toggle .operation-detail-label {
+    display: none;
+  }
+
+  .viewer-mouse-assignments {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .paper-action-tip {
+    right: var(--sp-5);
+  }
+
+  .paper-action-tip.compact {
+    bottom: 56px;
+    width: auto;
+    max-width: none;
+  }
+
+  .paper-action-tip.expanded {
+    right: var(--sp-5);
+    bottom: 56px;
+    width: auto;
+    max-width: none;
+    /* 通常高さでは上の3Dカード領域を確保し、カードの中だけを送る。 */
+    max-height: calc(100% - 222px);
+    overflow-y: auto;
+  }
+}
+
+/* 最小ウィンドウでは3D区画自体が低くなるため、説明を消さず小さなスクロール枠へ収める。 */
+@media (max-height: 760px) {
+  @container viewer-operation-help (max-width: 360px) {
+    .paper-action-tip.expanded {
+      max-height: calc(100% - 120px);
+    }
+  }
+}
+
+/* 2Dを下限まで狭くした場合は、右上の状態表示の下へ案内を移す。 */
+@container cp-operation-help (max-width: 520px) {
+  .cp-operation-hint {
+    top: 52px;
+    right: var(--sp-4);
+    max-width: none;
+  }
+
+  .cp-operation-hint.collapsed {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .cp-help-toggle {
+    width: 32px;
+    min-width: 32px;
+    padding-inline: var(--sp-1);
+  }
+
+  .cp-help-toggle .operation-detail-label {
+    display: none;
+  }
+}
+
+/* 下部パネル自身が狭い場合も、文言を潰さずアイコンへ切り替える。 */
+@container context-operation-help (max-width: 480px) {
+  .operation-steps-heading {
+    flex-wrap: nowrap;
+  }
+
+  .operation-help-toggle,
+  .paper-help-toggle {
+    width: 32px;
+    min-width: 32px;
+    padding-inline: var(--sp-1);
+  }
+
+  .operation-help-toggle .operation-detail-label,
+  .paper-help-toggle .operation-detail-label {
+    display: none;
+  }
+
+  .soft-controls-heading {
+    flex-basis: 100%;
+  }
+}
+
 /* UI-012 初回ガイド。全画面を塞がず、左上の隅に置くカードだけがクリックを受ける。 */
 .first-run-guide {
   position: fixed;
   top: 68px;
-  left: 80px;
+  left: clamp(16px, 8vw, 80px);
   width: min(340px, calc(100vw - 32px));
+  max-height: calc(100vh - 84px);
+  overflow-y: auto;
   padding: var(--sp-6);
   border: var(--floating-border-width) solid var(--floating-border-color);
   border-radius: var(--radius-xl);
@@ -2249,6 +2970,51 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   gap: var(--sp-3);
 }
 
+.paper-color-section {
+  display: grid;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.paper-color-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  min-height: 34px;
+  padding: var(--sp-2) var(--sp-4);
+  border: var(--control-border-width) solid var(--color-palette-border);
+  border-radius: var(--radius-md);
+  background: var(--color-control);
+  color: var(--color-accent-strong);
+  font-weight: var(--fw-black);
+  box-shadow: var(--shadow-settings-card);
+  cursor: pointer;
+}
+
+.paper-color-current,
+.paper-color-current > span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.paper-color-current {
+  gap: var(--sp-3);
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.paper-color-current i,
+.paper-custom-color-preview {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border: var(--control-border-width) solid var(--color-border-strong);
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px var(--color-swatch-highlight-soft);
+}
+
 .paper-color-palette {
   min-width: 0;
   margin: 0;
@@ -2311,10 +3077,192 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 .paper-custom-color {
   display: inline-flex;
   align-items: center;
+  gap: var(--sp-2);
   margin-top: var(--sp-2);
+  min-height: 30px;
+  padding: var(--sp-1) var(--sp-3);
+  border: var(--control-border-width) solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-control);
   color: var(--color-text-muted);
   font-size: var(--fs-xs);
   font-weight: var(--fw-bold);
+  box-shadow: var(--shadow-tool-small);
+  cursor: pointer;
+}
+
+.paper-custom-color-preview {
+  width: 18px;
+  height: 18px;
+}
+
+/* OSの色選択窓ではなく、アプリ内に置く非モーダルの色選択。 */
+.color-picker-popover {
+  position: fixed;
+  z-index: 1000;
+  display: grid;
+  gap: var(--sp-4);
+  width: min(320px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: var(--sp-5);
+  border: var(--floating-border-width) solid var(--floating-border-color);
+  border-radius: var(--radius-lg);
+  background: var(--dialog-background);
+  color: var(--color-text);
+  box-shadow: var(--shadow-dialog);
+  scrollbar-color: var(--color-secondary) transparent;
+}
+
+.color-picker-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  color: var(--heading-color);
+  font-size: var(--fs-lg);
+}
+
+.color-picker-close {
+  width: 30px;
+  min-height: 30px;
+  padding: 0;
+  border: var(--control-border-width) solid var(--color-border);
+  border-radius: 50%;
+  background: var(--color-control);
+  color: var(--color-text-muted);
+  font-size: var(--fs-lg);
+  cursor: pointer;
+}
+
+.color-saturation-value {
+  position: relative;
+  width: 100%;
+  height: 150px;
+  overflow: hidden;
+  border: var(--control-border-width) solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(to top, #000000, transparent),
+    linear-gradient(to right, #ffffff, var(--picker-hue));
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.color-saturation-value:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.color-saturation-value-thumb {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border: 2px solid #ffffff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.72);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.color-hue-row,
+.color-hex-row {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr) 48px;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-bold);
+}
+
+.color-hue-row input[type="range"] {
+  width: 100%;
+  min-width: 0;
+}
+
+.color-hue-row input[type="range"]::-webkit-slider-runnable-track {
+  background: linear-gradient(
+    90deg,
+    hsl(0 100% 50%),
+    hsl(60 100% 50%),
+    hsl(120 100% 42%),
+    hsl(180 100% 42%),
+    hsl(240 100% 55%),
+    hsl(300 100% 50%),
+    hsl(360 100% 50%)
+  );
+}
+
+.color-hue-row input[type="range"]::-webkit-slider-thumb {
+  border-color: var(--color-text);
+  background: var(--color-surface);
+}
+
+.color-hue-row output {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.color-hex-row {
+  grid-template-columns: 54px 30px minmax(0, 1fr);
+}
+
+.color-hex-row input {
+  width: 100%;
+  min-width: 0;
+  text-transform: uppercase;
+  font-family: Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.color-hex-row input[aria-invalid="true"] {
+  border-color: var(--color-danger);
+}
+
+.color-picker-result,
+.color-picker-result > span {
+  display: block;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+}
+
+.color-picker-result {
+  border: var(--control-border-width) solid var(--color-border-strong);
+  overflow: hidden;
+}
+
+.color-picker-error {
+  color: var(--color-danger);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+}
+
+.color-picker-actions {
+  display: flex;
+  justify-content: flex-start;
+  gap: var(--sp-3);
+  margin-top: var(--sp-2);
+  padding-top: var(--sp-5);
+  border-top: var(--control-border-width) dashed var(--color-border);
+}
+
+.color-picker-actions .button-primary {
+  order: -1;
+}
+
+.color-picker-actions button {
+  min-height: 34px;
+  padding: var(--sp-2) var(--sp-5);
+  font-weight: var(--fw-bold);
+}
+
+.color-picker-key-help {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  text-align: center;
 }
 
 .grid-divisions-control {
@@ -2416,6 +3364,16 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   box-shadow: var(--shadow-guide-primary);
 }
 
+.first-run-guide-prepare:hover:not(:disabled),
+.first-run-guide-done:hover:not(:disabled),
+.first-run-guide-prepare:active:not(:disabled),
+.first-run-guide-done:active:not(:disabled) {
+  border-color: var(--color-accent-strong) !important;
+  background: var(--color-accent-strong);
+  color: var(--button-primary-color);
+  box-shadow: var(--shadow-guide-primary);
+}
+
 .first-run-guide-skip {
   display: block;
   margin: var(--sp-4) auto var(--sp-2);
@@ -2425,6 +3383,15 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   color: var(--color-text-muted);
   text-decoration: underline;
   box-shadow: none;
+}
+
+.first-run-guide-skip:hover:not(:disabled),
+.first-run-guide-skip:active:not(:disabled) {
+  border-color: transparent !important;
+  background: transparent;
+  color: var(--color-accent-strong);
+  box-shadow: none;
+  transform: none;
 }
 
 .first-run-guide-auto {
@@ -2539,8 +3506,39 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 }
 
 .technique-layer-candidates summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-sm);
+  list-style: none;
   cursor: pointer;
   color: var(--color-text-muted);
+  font-weight: var(--fw-medium);
+  transition:
+    background var(--t-fast),
+    color var(--t-fast);
+}
+
+.technique-layer-candidates summary::-webkit-details-marker {
+  display: none;
+}
+
+.technique-layer-candidates summary::before {
+  content: "▶";
+  color: var(--color-accent);
+  font-size: var(--fs-xs);
+  transition: transform var(--t-fast);
+}
+
+.technique-layer-candidates[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.technique-layer-candidates summary:hover,
+.technique-layer-candidates summary:focus-visible {
+  background: var(--button-hover-background);
+  color: var(--button-hover-color);
 }
 
 .technique-layer-candidate-list {
@@ -2628,11 +3626,24 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 }
 
 .hinge-angle-name > span {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: var(--sp-2);
   min-width: 76px;
   color: var(--color-accent-strong);
   font-weight: var(--fw-black);
   font-variant-numeric: tabular-nums;
   text-align: right;
+}
+
+.actual-angle {
+  display: inline;
+  color: var(--color-warn);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-tight);
+  white-space: nowrap;
 }
 
 /* 紙の縁を巻き込むための追加折り目。下部パネル内の非モーダル通知として出す。 */
@@ -2702,6 +3713,43 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 .warning-text {
   color: var(--color-warn);
   font-weight: var(--fw-medium);
+}
+
+/* 希望角を譲った折り目は、既存の警告欄から選択・ホバーできる行として示す。 */
+.relaxation-messages {
+  display: grid;
+  gap: var(--sp-1);
+  margin-bottom: var(--sp-2);
+}
+
+.relaxation-message {
+  width: 100%;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid transparent;
+  border-left: 5px solid var(--color-relaxation);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-warn);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-normal);
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+  box-shadow: none;
+}
+
+.relaxation-message:hover,
+.relaxation-message:focus-visible {
+  border-color: var(--color-warning-border);
+  border-left-color: var(--color-relaxation);
+  background: var(--color-pop-yellow-soft);
+  outline: none;
+}
+
+.relaxation-more {
+  color: var(--color-warn);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-bold);
 }
 
 /* 復旧ダイアログ(SYS-003)。常設4区画の上に重ねて出す */
@@ -2982,8 +4030,10 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 }
 
 .help-toc button:hover {
-  border-color: var(--color-border);
-  background: var(--color-control-hover);
+  border-color: var(--button-hover-border);
+  background: var(--button-hover-background);
+  color: var(--button-hover-color);
+  box-shadow: var(--shadow-button-hover);
 }
 
 .help-toc button.current {

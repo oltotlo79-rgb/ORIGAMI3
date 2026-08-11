@@ -4,9 +4,11 @@
 // Document.display に保存する(.ori3ファイルに入り、渡した相手にも同じ見た目で
 // 伝わる)。ここでlocalStorageへ覚えることはしない。覚えてしまうと、人から
 // もらった作品を開いたときにその作品の色を黙って上書きしてしまうため。
-// localStorageに残すのは分割比・対称描画・ホイールなど画面の使い方の好みだけ。
+// localStorageに残すのは2D/3Dの分割比・下部パネルの高さ・対称描画・
+// ホイール・操作説明の開閉など画面の使い方の好みだけ。
 
 import type { DisplaySettings, SoftSettings } from "./types";
+import type { MirrorAxisPreset } from "./mirror";
 
 /** Rust側 Document::new と同じ初期値(赤い表・白い裏・8分割・各防止はオン・たわみはオフ)。
  * 作品をまだ開いていない間の表示に使う */
@@ -38,7 +40,7 @@ export function overlapPreventionOf(display: DisplaySettings): boolean {
   return display.overlap_prevention_enabled !== false;
 }
 
-/** 角度操作中の食い込み防止を使うか。項目の無い古い作品も既定のオンで扱う。 */
+/** 角度操作中の食い込み検出を使うか。項目の無い古い作品も既定のオンで扱う。 */
 export function penetrationPreventionOf(display: DisplaySettings): boolean {
   return display.penetration_prevention_enabled !== false;
 }
@@ -66,6 +68,16 @@ export const DEFAULT_SPLIT_RATIO = 0.5;
 export const MIN_SPLIT_RATIO = 0.2;
 export const MAX_SPLIT_RATIO = 0.8;
 
+/**
+ * 画面下部の「今できる操作」が、ツールバーを除いた作業領域に占める割合。
+ * 1080px級では既定値で約325pxとなり、従来の160pxより説明と主操作が見やすい。
+ * 最小ウィンドウ(700px高)でも、下限は従来と同程度の約160px、上限でも
+ * 2D/3D側へ約285pxを残す。
+ */
+export const DEFAULT_CONTEXT_PANEL_RATIO = 0.32;
+export const MIN_CONTEXT_PANEL_RATIO = 0.25;
+export const MAX_CONTEXT_PANEL_RATIO = 0.55;
+
 const STORAGE_KEY = "origami3.prefs";
 
 /** 2D展開図で修飾キーを押していないときのホイール動作。 */
@@ -84,8 +96,12 @@ export function isUiTheme(value: unknown): value is UiTheme {
  * ここには入らない(作品ファイル側に保存する) */
 export interface Prefs {
   splitRatio: number;
+  /** 下部の「今できる操作」の高さ。作品ではなく画面の使い方として覚える。 */
+  contextPanelRatio: number;
   /** 左右対称に線を引くか(CPE-010)。次に起動しても同じ描き方に戻る */
   mirrorDraw: boolean;
+  /** 紙の中心線のどちらを対称操作の基準にするか。作品内で選んだ線は保存しない。 */
+  mirrorAxis: MirrorAxisPreset;
   /** 3Dで紙を引くとき、対称の相手の折り線も同時に動かすか(UI-007)。
    * 折り紙の作品はほとんどが左右対称で、鶴の羽のように両側を一緒に開くのが
    * 自然なので既定はオン。対称の相手が無い折り線では自動的に1本だけになる */
@@ -94,14 +110,31 @@ export interface Prefs {
   wheelBehavior: WheelBehavior;
   /** 画面全体のデザイン。作品には保存せず、この端末だけに覚える。 */
   uiTheme: UiTheme;
+  /** 下部の詳しい操作方法を開いているか。初回は文字を増やさないよう畳む。 */
+  contextHelpExpanded: boolean;
+  /** 3Dビューの詳しいマウス操作を開いているか。初回は畳む。 */
+  viewerHintExpanded: boolean;
+  /** 2D展開図の詳しいホイール操作を開いているか。初回は畳む。 */
+  cpHelpExpanded: boolean;
+  /** 紙の丸み・膨らみについての詳しい説明を開いているか。初回は畳む。 */
+  paperHelpExpanded: boolean;
+  /** 紙の表裏の色見本を開いているか。初回は畳み、現在色だけ小さく残す。 */
+  paperColorExpanded: boolean;
 }
 
 export const DEFAULT_PREFS: Prefs = {
   splitRatio: DEFAULT_SPLIT_RATIO,
+  contextPanelRatio: DEFAULT_CONTEXT_PANEL_RATIO,
   mirrorDraw: false,
+  mirrorAxis: "paperVertical",
   pullMirror: true,
   wheelBehavior: "scroll",
   uiTheme: "pop",
+  contextHelpExpanded: false,
+  viewerHintExpanded: false,
+  cpHelpExpanded: false,
+  paperHelpExpanded: false,
+  paperColorExpanded: false,
 };
 
 /** 方眼の分割数を範囲内の整数に丸める(入力が数でなければ既定値) */
@@ -114,6 +147,12 @@ export function clampDivisions(n: number): number {
 export function clampSplitRatio(r: number): number {
   if (!Number.isFinite(r)) return DEFAULT_SPLIT_RATIO;
   return Math.max(MIN_SPLIT_RATIO, Math.min(MAX_SPLIT_RATIO, r));
+}
+
+/** 下部パネルの割合を、上下どちらの区画も使える範囲へ収める。 */
+export function clampContextPanelRatio(r: number): number {
+  if (!Number.isFinite(r)) return DEFAULT_CONTEXT_PANEL_RATIO;
+  return Math.max(MIN_CONTEXT_PANEL_RATIO, Math.min(MAX_CONTEXT_PANEL_RATIO, r));
 }
 
 /** [r,g,b] → "#rrggbb"(色見本の入力欄が使う形) */
@@ -153,13 +192,28 @@ export function loadPrefs(storage: StorageLike | null = defaultStorage()): Prefs
     const saved = JSON.parse(raw) as Partial<Prefs>;
     return {
       splitRatio: clampSplitRatio(saved.splitRatio ?? DEFAULT_SPLIT_RATIO),
+      contextPanelRatio: clampContextPanelRatio(
+        saved.contextPanelRatio ?? DEFAULT_CONTEXT_PANEL_RATIO,
+      ),
       mirrorDraw: saved.mirrorDraw === true,
+      // 選んだ作品内の線や不正な値は保存対象外。旧版も縦の中心線へ戻す。
+      mirrorAxis:
+        saved.mirrorAxis === "paperHorizontal"
+          ? "paperHorizontal"
+          : "paperVertical",
       // 保存が無い(初めての起動・古い保存)ときは既定のオンのままにする
       pullMirror: saved.pullMirror !== false,
       // 古い保存には項目が無いので、一般的な描画ソフトと同じスクロールを既定にする
       wheelBehavior: saved.wheelBehavior === "zoom" ? "zoom" : "scroll",
       // テーマ未保存の旧版・未知の値は、従来デザインのポップへ戻す
       uiTheme: isUiTheme(saved.uiTheme) ? saved.uiTheme : "pop",
+      // 初回・開閉項目を持たない旧版では文字を増やさないよう畳む。
+      // 利用者が明示的に開いた項目だけ、次回も開いたままにする。
+      contextHelpExpanded: saved.contextHelpExpanded === true,
+      viewerHintExpanded: saved.viewerHintExpanded === true,
+      cpHelpExpanded: saved.cpHelpExpanded === true,
+      paperHelpExpanded: saved.paperHelpExpanded === true,
+      paperColorExpanded: saved.paperColorExpanded === true,
     };
   } catch {
     return DEFAULT_PREFS;

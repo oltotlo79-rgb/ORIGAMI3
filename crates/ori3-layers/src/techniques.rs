@@ -1016,9 +1016,11 @@ impl Session {
         self.flipped = flipped;
         self.drivers.extend(res.step.drivers);
         self.added.extend(res.added_edges);
-        self.warnings.extend(res.warnings.into_iter().filter(|w| {
-            !w.contains(TEAR_MARK) && !w.starts_with(AUX_PROMOTION_WARNING_MARK)
-        }));
+        self.warnings.extend(
+            res.warnings
+                .into_iter()
+                .filter(|w| !w.contains(TEAR_MARK) && !w.starts_with(AUX_PROMOTION_WARNING_MARK)),
+        );
         Ok(plane_map.unwrap_or_else(Isometry2::identity))
     }
 

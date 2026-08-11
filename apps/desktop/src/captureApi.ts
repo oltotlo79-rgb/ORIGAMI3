@@ -15,8 +15,18 @@ export interface CaptureDocumentInfo {
   steps: CaptureStepInfo[];
 }
 
+export interface CaptureStatus {
+  version: 1;
+  ready: true;
+  generation: string;
+  heartbeat: number;
+  url: string;
+  title: string;
+}
+
 export interface Origami3CaptureApi {
   readonly version: 1;
+  getStatus(): CaptureStatus;
   openDocument(path: string): Promise<CaptureDocumentInfo>;
   getDocumentInfo(): CaptureDocumentInfo;
   goToStep(step: number): Promise<CaptureStepInfo>;
@@ -37,6 +47,19 @@ interface FitRefs {
 }
 
 const CAPTURE_VIEW_ATTRIBUTE = "data-origami3-capture-view";
+let fallbackGenerationCounter = 0;
+
+function createCaptureGeneration(): string {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+
+  fallbackGenerationCounter += 1;
+  const randomValues = new Uint32Array(4);
+  globalThis.crypto?.getRandomValues?.(randomValues);
+  const randomPart = Array.from(randomValues, (value) => value.toString(16)).join("-");
+  return `${Date.now().toString(36)}-${fallbackGenerationCounter.toString(36)}-${randomPart}`;
+}
 
 function nextPaint(): Promise<void> {
   return new Promise((resolve) => {
@@ -89,8 +112,22 @@ function setCaptureView(view: CaptureView): void {
  * React StrictModeの再マウントでも、cleanupが自分のAPIだけを取り外す。
  */
 export function installCaptureApi({ fit2d, fit3d }: FitRefs): () => void {
+  const generation = createCaptureGeneration();
+  let heartbeat = 0;
   const api: Origami3CaptureApi = {
     version: 1,
+
+    getStatus() {
+      heartbeat += 1;
+      return {
+        version: 1,
+        ready: true,
+        generation,
+        heartbeat,
+        url: window.location.href,
+        title: document.title,
+      };
+    },
 
     async openDocument(path) {
       setCaptureView("normal");

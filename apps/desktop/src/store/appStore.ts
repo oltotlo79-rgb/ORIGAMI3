@@ -22,6 +22,9 @@ import { DEFAULT_CONSTRUCT, type ConstructOptions } from "../lib/construct";
 import { DEFAULT_CURVE, firstCrossing, rulingLines, type CurveOptions } from "../lib/curve";
 import {
   DEFAULT_DISPLAY,
+  DEFAULT_CONTEXT_PANEL_RATIO,
+  DEFAULT_SPLIT_RATIO,
+  clampContextPanelRatio,
   clampDivisions,
   clampSplitRatio,
   clampUnit,
@@ -40,7 +43,17 @@ import {
   type AlignTarget,
   type FoldLine,
 } from "../lib/alignFold";
-import { mirrorAxisX, mirrorSegments } from "../lib/mirror";
+import {
+  DEFAULT_MIRROR_AXIS,
+  mirrorLineForChoice,
+  mirrorSegments,
+  paperMirrorLine,
+  rebindSelectedMirrorAxis,
+  selectedEdgeMirrorLine,
+  type MirrorAxisChoice,
+  type MirrorAxisPreset,
+  type MirrorLine,
+} from "../lib/mirror";
 import { withMirrorEdges } from "../lib/mirrorEdit";
 import {
   DEFAULT_TWIST_DEG,
@@ -51,6 +64,7 @@ import {
   undoTwistVertex,
 } from "../lib/twistPolygon";
 import type {
+  AngleRelaxation,
   Document,
   DisplaySettings,
   DocumentView,
@@ -109,6 +123,36 @@ const ANGLE_HISTORY_LIMIT = 50;
 /** 同じ折り線への続けざまの角度変更(スライダーを動かしている間)を
  * 1件にまとめる時間(ms)。ドラッグ1回=履歴1件にするための間隔 */
 const ANGLE_GROUP_MS = 700;
+
+/** 希望角との差がこの値以上なら、画面で「追従した」と知らせる。 */
+export const RELAX_NOTICE_EPS_DEG = 0.1;
+
+/** 選んだ基準線が編集後に無くなったとき、既存の通知欄へ出す文言。 */
+export const MIRROR_AXIS_REMOVED_NOTICE =
+  "基準にしていた線が無くなったので、紙の縦の中心線に戻しました";
+
+/** 0.1°を10進入力から計算したときの丸め誤差だけを吸収する比較余裕。 */
+const RELAX_NOTICE_COMPARE_EPS_DEG = 1e-12;
+
+/** 数値診断から、画面に常時表示する追従だけを辺ID順で取り出す。 */
+export function relaxationNotices(
+  relaxations: readonly AngleRelaxation[],
+): AngleRelaxation[] {
+  return relaxations
+    .filter(
+      (item) =>
+        Number.isFinite(item.delta_deg) &&
+        Math.abs(item.delta_deg) + RELAX_NOTICE_COMPARE_EPS_DEG >=
+          RELAX_NOTICE_EPS_DEG,
+    )
+    .sort((a, b) => a.hinge - b.hinge);
+}
+
+/** 1回の角度操作に属する「いま固定する折り目」。作品には保存しない。 */
+export interface ActiveAngleIntent {
+  generation: number;
+  hinges: number[];
+}
 
 export type ToolId =
   | "select"
@@ -405,7 +449,15 @@ export function poseRecordReason(s: {
   if (!s.doc) return "まだ紙がありません";
   if (s.playing) return "再生を止めてから残してください";
   if (s.hinges.size === 0) return "折り線がまだありません";
-  if (!hasPoseAngle(currentAngles(s.hinges, s.drivers, s.poseAngles))) {
+  // 計算待ちの間はposeAnglesが直前値のことがある。利用者が非0°を指定済みなら
+  // ボタンを出しておき、recordPoseStep側で末尾solveを待って実角を再確認する。
+  const requested = new Map(
+    [...s.hinges].map((hinge) => [hinge, s.drivers.get(hinge) ?? 0]),
+  );
+  if (
+    !hasPoseAngle(requested) &&
+    !hasPoseAngle(currentAngles(s.hinges, s.drivers, s.poseAngles))
+  ) {
     return "まだ角度が付いていません(折り線を選んで角度を変えてください)";
   }
   return null;
@@ -438,6 +490,10 @@ interface AppState {
   frame3d: Frame3D | null;
   /** 補正後にも残る食い込みの原因候補。2D/3Dの赤い強調で共用する。 */
   suspectHinges: number[];
+  /** 表示中の保存手順から現在の辺へ解決した希望角。作品には保存しない。 */
+  sequenceTargets: Map<number, number>;
+  /** 前の希望角が紙のつながりに合わせて譲った診断。作品には保存しない。 */
+  relaxations: AngleRelaxation[];
   /** たわみの三角形の網(SIM-012)。たわみを切っているとnull(従来の描き方に戻る) */
   softMesh: SoftMesh | null;
   /** たわみの計算から返った注意書き(日本語)。設定パネルに出す */
@@ -478,8 +534,16 @@ interface AppState {
   poseWarnings: string[];
   /** 追従計算が収束したか(falseなら3D区画のバッジで知らせる) */
   poseConverged: boolean;
-  /** 食い込み防止が接触直前で正常停止したか。3Dの1行案内にだけ使う */
-  contactStopped: boolean;
+  /** 収束前でも現在指定を守った最良の有限候補を表示しているか。 */
+  poseBestEffort: boolean;
+  /** 表示中の追従結果の閉包残差RMS。 */
+  poseClosureRms: number | null;
+  /** 紙どうしの接触を検出したか。接触しても要求角まで進む。 */
+  contactDetected: boolean;
+  /** 現在操作中の折り目と要求世代。Zustand内だけに置く一時情報。 */
+  activeAngleIntent: ActiveAngleIntent | null;
+  /** 新しい操作が古い操作を必ず追い越すための単調増加番号。 */
+  angleIntentGeneration: number;
   /** 今つかんで引いている折り線の辺ID(3D表示で色を付ける)。引いていなければnull */
   pullHinge: number | null;
   /** 一緒に動かしている左右対称の相手の折り線(3D表示で同じ色を付ける)。
@@ -528,10 +592,14 @@ interface AppState {
   display: DisplaySettings;
   /** 中央の2D区画の幅の割合(残りが3D区画。UI-004) */
   splitRatio: number;
-  /** 左右対称に線を引くか(CPE-010)。線を引くときは紙の縦の中心線が対称軸。
-   * 消すとき・種類を変えるときにも効き、そちらは展開図から見つけた対称軸
-   * (lib/mirrorEdit.ts)で相手の線を探す。相手が無い線はその線だけが変わる */
+  /** 下部の「今できる操作」の高さの割合。端末にだけ保存する。 */
+  contextPanelRatio: number;
+  /** 対称に線を引くか(CPE-010)。消す・種類を変える操作にも同じ基準線で効く。 */
   mirrorDraw: boolean;
+  /** 描画・削除・線種変更で共通して使う基準線。作品ファイルには保存しない。 */
+  mirrorAxis: MirrorAxisChoice;
+  /** 選んだ基準線が無くなったとき、既存の下部通知欄へ出す非エラーのお知らせ。 */
+  mirrorAxisNotice: string | null;
   /** 3Dで紙を引くとき左右対称の相手も同時に動かすか(UI-007)。既定はオン。
    * 画面の使い方の好みなので端末に覚えておく(作品の中身には入れない) */
   pullMirror: boolean;
@@ -539,8 +607,16 @@ interface AppState {
   wheelBehavior: WheelBehavior;
   /** 画面全体のデザイン。端末にだけ保存し、作品ファイルには含めない。 */
   uiTheme: UiTheme;
+  /** 下部の詳しい操作方法を展開しているか。閉じても今できる操作は常に残す。 */
+  contextHelpExpanded: boolean;
   /** 3D操作の吹き出しを展開しているか。閉じても見出しは常に残す。 */
   viewerHintExpanded: boolean;
+  /** 2D展開図の詳しいホイール操作を展開しているか。 */
+  cpHelpExpanded: boolean;
+  /** 紙の丸み・膨らみについての詳しい説明を展開しているか。 */
+  paperHelpExpanded: boolean;
+  /** 紙の表裏の色見本を展開しているか。畳んでも現在色は小さく残す。 */
+  paperColorExpanded: boolean;
   /** 初回ガイドを隅のカードとして表示しているか。 */
   guideOpen: boolean;
   /** 0〜3が実践する4操作、4は全操作を終えた完了画面。 */
@@ -570,14 +646,26 @@ interface AppState {
   drawCurve: (points: Vec2[], kind: EdgeKind) => Promise<void>;
   /** 左右対称に線を引くかを切り替える(次回起動時も同じ設定に戻る) */
   setMirrorDraw: (on: boolean) => void;
+  /** 紙の縦・横の中心線を基準にする。端末設定へ保存する。 */
+  setMirrorAxisPreset: (preset: MirrorAxisPreset) => void;
+  /** 展開図で選んでいる折り線・補助線1本を基準にする。作品をまたいで保存しない。 */
+  setSelectedLineAsMirrorAxis: () => void;
   /** 3Dで引くとき左右同時に動かすかを切り替える(次回起動時も同じ設定に戻る) */
   setPullMirror: (on: boolean) => void;
   /** 2D展開図のホイール動作を切り替える(次回起動時も同じ設定に戻る) */
   setWheelBehavior: (behavior: WheelBehavior) => void;
   /** 画面デザインを切り替える(次回起動時も同じ設定に戻る) */
   setUiTheme: (theme: UiTheme) => void;
+  /** 下部の詳しい操作方法を開閉する。 */
+  toggleContextHelp: () => void;
   /** 3D操作の吹き出しを開閉する。 */
   toggleViewerHint: () => void;
+  /** 2D展開図の詳しいホイール操作を開閉する。 */
+  toggleCpHelp: () => void;
+  /** 紙の丸み・膨らみについての詳しい説明を開閉する。 */
+  togglePaperHelp: () => void;
+  /** 紙の表裏の色見本を開閉する。 */
+  togglePaperColor: () => void;
   /** ヘルプから基本操作ガイドを最初の操作へ戻して表示する。 */
   openGuide: () => void;
   /** ヘルプセンターを開く。ツールバーとF1から共用する。 */
@@ -703,6 +791,8 @@ interface AppState {
   setDriverAngle: (hinge: number, deg: number) => void;
   /** 複数ヒンジを同じ角度へまとめ、1回の追従計算へ送る */
   setDriverAngles: (hinges: readonly number[], deg: number) => void;
+  /** 末尾の角度要求を送り終えてから、操作中の強調を解除する。 */
+  finishAngleIntent: () => Promise<void>;
   /** 1本の角度指定を解除する(形は残りの指定から計算し直す) */
   clearDriver: (hinge: number) => void;
   /** 全ての角度指定を解除して平らに戻す */
@@ -754,6 +844,10 @@ interface AppState {
   setSoft: (patch: Partial<DisplaySettings>) => void;
   /** 2D区画と3D区画の分割比を変える(次回起動時も同じ位置に戻る) */
   setSplitRatio: (ratio: number) => void;
+  /** 下部の「今できる操作」の高さを変える(次回起動時も同じ位置に戻る) */
+  setContextPanelRatio: (ratio: number) => void;
+  /** 2D/3Dと下部パネルの広さを、初めて開いたときの値へ戻す。 */
+  resetPaneSizes: () => void;
   /** 手順の順番を入れ替える(numberは1始まり、deltaは-1で前へ/+1で後ろへ) */
   moveStep: (number: number, delta: number) => Promise<void>;
 }
@@ -796,6 +890,13 @@ function createTrailingThrottle(intervalMs: number, fn: () => void) {
     reset: () => {
       clear();
       lastRun = Date.now();
+    },
+    /** 予約中の末尾1件を待たずに実行する。予約が無ければ何もしない。 */
+    flush: () => {
+      if (timer === null) return;
+      clear();
+      lastRun = Date.now();
+      fn();
     },
     /** 予約と間隔の基準を完全に初期化する(テストの前処理用) */
     clearAll: () => {
@@ -869,8 +970,38 @@ export const useAppStore = create<AppState>((set, get) => {
 
   /** 画面の使い方の好み(作品の中身ではないもの)を端末に覚えておく */
   const persistPrefs = () => {
-    const { splitRatio, mirrorDraw, pullMirror, wheelBehavior, uiTheme } = get();
-    savePrefs({ splitRatio, mirrorDraw, pullMirror, wheelBehavior, uiTheme });
+    const {
+      splitRatio,
+      contextPanelRatio,
+      mirrorDraw,
+      mirrorAxis,
+      pullMirror,
+      wheelBehavior,
+      uiTheme,
+      contextHelpExpanded,
+      viewerHintExpanded,
+      cpHelpExpanded,
+      paperHelpExpanded,
+      paperColorExpanded,
+    } = get();
+    savePrefs({
+      splitRatio,
+      contextPanelRatio,
+      mirrorDraw,
+      // 作品内の線は保存しない。選択中なら再起動時の戻り先も初期値の縦にする。
+      mirrorAxis:
+        mirrorAxis.kind === "paperHorizontal"
+          ? "paperHorizontal"
+          : "paperVertical",
+      pullMirror,
+      wheelBehavior,
+      uiTheme,
+      contextHelpExpanded,
+      viewerHintExpanded,
+      cpHelpExpanded,
+      paperHelpExpanded,
+      paperColorExpanded,
+    });
   };
 
   /** DocumentViewの内容で状態を一括更新する(成功時共通処理)。
@@ -883,36 +1014,73 @@ export const useAppStore = create<AppState>((set, get) => {
    * 通るので、折り終わった線がそのまま残ることもない) */
   const applyView = (view: DocumentView, isNewDocument: boolean) => {
     const total = view.doc.sequence.length;
-    set((s) => ({
-      // 紙の色・方眼は作品ごとの設定(doc.display)。ここを唯一の拠り所にして
-      // 画面側の写し(display)をそろえる。人からもらった作品を開けば、
-      // その作品の色と方眼がそのまま出る
-      doc: view.doc,
-      display: view.doc.display,
-      foldDraft: null,
-      pendingFoldThrough: null,
-      alignDraft: null,
-      techniqueDraft: null,
-      paperActionTipVisible: false,
-      paperActionTipExpanded: false,
-      faces: view.faces,
-      hinges: hingeEdgeIds(view.doc, view.faces),
-      warnings: view.warnings,
-      violations: view.violations,
-      skipped: view.skipped,
-      suspectHinges: keepIfSame(s.suspectHinges, view.suspect_hinges ?? []),
-      currentStep:
-        total === 0 || s.currentStep === null
-          ? null
-          : Math.min(s.currentStep, total),
-      selection: isNewDocument
-        ? EMPTY_SELECTION
-        : pruneSelection(s.selection, view.doc),
-      hoveredHinge: null,
-      errorMessage: null,
-      contactStopped: false,
-      docEpoch: isNewDocument ? s.docEpoch + 1 : s.docEpoch,
-    }));
+    set((s) => {
+      const reboundSelectedAxis =
+        !isNewDocument &&
+        s.doc !== null &&
+        s.mirrorAxis.kind === "selectedLine"
+          ? rebindSelectedMirrorAxis(s.doc, view.doc, s.mirrorAxis)
+          : null;
+      const selectedAxisMissing =
+        s.mirrorAxis.kind === "selectedLine" &&
+        !isNewDocument &&
+        reboundSelectedAxis === null;
+      const resetSelectedAxis =
+        s.mirrorAxis.kind === "selectedLine" &&
+        (isNewDocument || selectedAxisMissing);
+      return {
+        // 紙の色・方眼は作品ごとの設定(doc.display)。ここを唯一の拠り所にして
+        // 画面側の写し(display)をそろえる。人からもらった作品を開けば、
+        // その作品の色と方眼がそのまま出る
+        doc: view.doc,
+        display: view.doc.display,
+        foldDraft: null,
+        pendingFoldThrough: null,
+        alignDraft: null,
+        techniqueDraft: null,
+        paperActionTipVisible: false,
+        paperActionTipExpanded: false,
+        faces: view.faces,
+        hinges: hingeEdgeIds(view.doc, view.faces),
+        warnings: view.warnings,
+        violations: view.violations,
+        skipped: view.skipped,
+        suspectHinges: keepIfSame(s.suspectHinges, view.suspect_hinges ?? []),
+        sequenceTargets: new Map(
+          [...(view.sequence_targets ?? [])]
+            .sort((a, b) => a.hinge - b.hinge)
+            .map((driver) => [driver.hinge, driver.target_angle_deg]),
+        ),
+        poseAngles: new Map(
+          Object.entries(view.angles ?? {}).map(([id, deg]) => [Number(id), deg]),
+        ),
+        relaxations: view.relaxations ?? [],
+        poseConverged: view.converged ?? true,
+        poseBestEffort: view.best_effort === true,
+        poseClosureRms:
+          typeof view.closure_rms === "number" ? view.closure_rms : null,
+        currentStep:
+          total === 0 || s.currentStep === null
+            ? null
+            : Math.min(s.currentStep, total),
+        selection: isNewDocument
+          ? EMPTY_SELECTION
+          : pruneSelection(s.selection, view.doc),
+        mirrorAxis: resetSelectedAxis
+          ? DEFAULT_MIRROR_AXIS
+          : reboundSelectedAxis ?? s.mirrorAxis,
+        mirrorAxisNotice:
+          !isNewDocument && selectedAxisMissing
+            ? MIRROR_AXIS_REMOVED_NOTICE
+            : isNewDocument
+              ? null
+              : s.mirrorAxisNotice,
+        hoveredHinge: null,
+        errorMessage: null,
+        contactDetected: false,
+        docEpoch: isNewDocument ? s.docEpoch + 1 : s.docEpoch,
+      };
+    });
   };
 
   /** IPC失敗(reject)をerrorMessageへ反映する */
@@ -939,10 +1107,10 @@ export const useAppStore = create<AppState>((set, get) => {
         clearAngleHistory();
         set({
           drivers: new Map(),
-          poseAngles: new Map(),
           poseWarnings: [],
-          poseConverged: true,
-          contactStopped: false,
+          contactDetected: false,
+          activeAngleIntent: null,
+          angleIntentGeneration: get().angleIntentGeneration + 1,
           pullHinge: null,
           pullMirrorHinge: null,
           frame3d: r.value.frame,
@@ -980,11 +1148,26 @@ export const useAppStore = create<AppState>((set, get) => {
   const flatDrivers = (hinges: ReadonlySet<number>): Driver[] =>
     [...hinges].map((hinge) => ({ hinge, target_angle_deg: 0 }));
 
-  /** いま操作している折り線(角度スライダー・紙を引く操作)。
-   * 内部頂点のまわりでは折り角どうしに拘束があるので、指定済みを全部固定すると
-   * 形が閉じず面が離れる(=紙が切れて見える)。この1〜2本だけを固定し、
-   * 以前の指定は「なるべく保ちたい目標」として追従させる */
-  let activeHinges: number[] = [];
+  /** 新しい角度操作をZustandへ世代付きで載せる。 */
+  const activateAngleIntent = (hinges: readonly number[]): number => {
+    const generation = get().angleIntentGeneration + 1;
+    set({
+      angleIntentGeneration: generation,
+      activeAngleIntent: {
+        generation,
+        hinges: [...new Set(hinges)].sort((a, b) => a - b),
+      },
+    });
+    return generation;
+  };
+
+  /** 古い結果が同じ世代番号を再利用しないよう、解除時も番号を進める。 */
+  const cancelAngleIntent = (): void => {
+    set((s) => ({
+      angleIntentGeneration: s.angleIntentGeneration + 1,
+      activeAngleIntent: null,
+    }));
+  };
 
   /** 今のドラッグで角度の履歴をもう積んだか(ドラッグ1回=履歴1件にする) */
   let pullPushed = false;
@@ -1033,6 +1216,31 @@ export const useAppStore = create<AppState>((set, get) => {
     if (get().errorMessage === null) clearAngleHistory();
   };
 
+  /** 現在の指定を必ず有効な基準線へ解決する。不正な一時状態は縦中心へ安全に戻す。 */
+  const activeMirrorLine = (
+    doc: Document,
+    choice: MirrorAxisChoice,
+  ): MirrorLine =>
+    mirrorLineForChoice(doc, choice) ??
+    paperMirrorLine(doc.paper, "paperVertical");
+
+  /** 1回の描画開始時に固定した基準線で、元と反対側の線を順番に追加する。 */
+  const drawSegmentWithAxis = async (
+    a: Vec2,
+    b: Vec2,
+    kind: EdgeKind,
+    axis: MirrorLine | null,
+  ): Promise<void> => {
+    const segments = axis
+      ? mirrorSegments([a, b], axis)
+      : ([[a, b]] as [Vec2, Vec2][]);
+    for (const [p, q] of segments) {
+      await get().applyEdit({ type: "AddSegment", a: p, b: q, kind });
+      // 1本目で断られたら理由を残したまま止める(片側だけ引かれた形にしない)
+      if (get().errorMessage !== null) return;
+    }
+  };
+
   /** 角度の履歴を捨てる(作品データを変えたとき・別の作品になったとき)。
    * 作品データの変更のほうが新しい操作になるので、「元に戻す」はそちらへ回す */
   const clearAngleHistory = (): void => {
@@ -1044,17 +1252,46 @@ export const useAppStore = create<AppState>((set, get) => {
     set({ angleUndoStack: [], angleRedoStack: [], docUndoDepth: 0 });
   };
 
-  /** 角度指定を「いま操作している分(固定)」と「以前の分(目標)」に分ける */
-  const splitDrivers = (
-    drivers: Map<number, number>,
-  ): { hard: Driver[]; keep: Driver[] } => {
-    const active = new Set(activeHinges.filter((h) => drivers.has(h)));
-    const hard: Driver[] = [];
-    const keep: Driver[] = [];
-    for (const [hinge, deg] of drivers) {
-      (active.has(hinge) ? hard : keep).push({ hinge, target_angle_deg: deg });
+  /**
+   * 保存手順 → 同じ作業中の希望 → 現在操作中hard、の順で角度をまとめる。
+   * 同じ辺は後の値が勝ち、hardとpreferredへ重複して載せない。
+   */
+  const splitDrivers = (): { hard: Driver[]; preferred: Driver[] } => {
+    const s = get();
+    const active = new Set(
+      (s.activeAngleIntent?.hinges ?? []).filter((hinge) => s.drivers.has(hinge)),
+    );
+    const merged = new Map(
+      [...s.sequenceTargets].filter(([hinge]) => s.hinges.has(hinge)),
+    );
+    for (const [hinge, deg] of s.drivers) {
+      merged.set(hinge, deg);
     }
-    return { hard, keep };
+    const hard: Driver[] = [];
+    const preferred: Driver[] = [];
+    for (const [hinge, deg] of [...merged].sort(([a], [b]) => a - b)) {
+      (active.has(hinge) ? hard : preferred).push({
+        hinge,
+        target_angle_deg: deg,
+      });
+    }
+    return { hard, preferred };
+  };
+
+  /** 明示hardを除いた現在のpreferred一覧。解除の1回だけhardを送る経路で使う。 */
+  const preferredWithout = (hardHinges: readonly number[]): Driver[] => {
+    const excluded = new Set(hardHinges);
+    const s = get();
+    const merged = new Map(
+      [...s.sequenceTargets].filter(([hinge]) => s.hinges.has(hinge)),
+    );
+    for (const [hinge, deg] of s.drivers) {
+      merged.set(hinge, deg);
+    }
+    return [...merged]
+      .filter(([hinge]) => !excluded.has(hinge))
+      .sort(([a], [b]) => a - b)
+      .map(([hinge, target_angle_deg]) => ({ hinge, target_angle_deg }));
   };
 
   /** 追従計算を直列化キュー経由で実行し、3D表示へ反映する。
@@ -1077,15 +1314,20 @@ export const useAppStore = create<AppState>((set, get) => {
   });
 
   const runPoseSolve = async (
-    drivers: Driver[],
-    keep: Driver[] = [],
+    hard: Driver[],
+    preferred: Driver[] = [],
     coalesce = false,
     applyFrame = true,
+    warmSeed: Driver[] = [],
   ): Promise<void> => {
+    // 次の16ms要求がまだキューへ積まれていない間でも、新しい角度操作が
+    // 始まった時点から旧世代の表示結果を採用しない。
+    const requestGeneration = get().angleIntentGeneration;
     pose.reset();
     const soft = softArg();
-    const call = () => ipc.poseSolve(drivers, keep, soft, !applyFrame);
+    const call = () => ipc.poseSolve(hard, preferred, soft, warmSeed);
     const r = await (coalesce ? queue.runLatest(call) : queue.run(call));
+    if (requestGeneration !== get().angleIntentGeneration) return;
     if (!r.ok) {
       if (r.isLatest) fail(r.error);
       return;
@@ -1094,19 +1336,6 @@ export const useAppStore = create<AppState>((set, get) => {
     const poseAngles = new Map(
       Object.entries(r.value.angles).map(([id, deg]) => [Number(id), deg]),
     );
-    const contactStopped = r.value.contact_stopped === true;
-    let settledDrivers: Map<number, number> | null = null;
-    if (contactStopped && applyFrame) {
-      const current = get().drivers;
-      const next = new Map(current);
-      for (const requested of drivers) {
-        // 計算中に次のpointer入力が入っていれば、その未送信の新値を消さない。
-        if (current.get(requested.hinge) !== requested.target_angle_deg) continue;
-        const safe = poseAngles.get(requested.hinge);
-        if (safe !== undefined) next.set(requested.hinge, safe);
-      }
-      settledDrivers = next;
-    }
     set({
       // 出発点合わせ(applyFrame=false)では形は変わらないので、手順再生が
       // 持っていた層の重なり情報を消さないよう立体表示はそのままにする
@@ -1118,14 +1347,48 @@ export const useAppStore = create<AppState>((set, get) => {
               get().suspectHinges,
               r.value.suspect_hinges ?? [],
             ),
+            poseWarnings: r.value.frame.warnings,
+            poseConverged: r.value.converged,
+            poseBestEffort: r.value.best_effort === true,
+            poseClosureRms:
+              typeof r.value.closure_rms === "number"
+                ? r.value.closure_rms
+                : null,
+            relaxations: r.value.relaxations ?? [],
+            contactDetected: r.value.contact_detected === true,
           }
         : {}),
-      poseWarnings: r.value.frame.warnings,
-      poseConverged: r.value.converged,
       poseAngles,
-      contactStopped,
-      ...(settledDrivers ? { drivers: settledDrivers } : {}),
     });
+  };
+
+  /** record/end操作が「最後に送った計算」まで待てるようPromiseを保持する。 */
+  let latestPosePromise: Promise<void> = Promise.resolve();
+  const requestPoseSolve = (
+    hard: Driver[],
+    preferred: Driver[] = [],
+    coalesce = false,
+    applyFrame = true,
+    warmSeed: Driver[] = [],
+  ): Promise<void> => {
+    const pending = runPoseSolve(hard, preferred, coalesce, applyFrame, warmSeed);
+    latestPosePromise = pending;
+    return pending;
+  };
+
+  /**
+   * 予約済みの末尾要求を送り、待っている間にさらに新しい要求が積まれた場合も
+   * 本当に最新の1件が完了するまで待つ。Pose保存だけが使う非ブロッキング待機。
+   */
+  const waitForLatestPose = async (): Promise<void> => {
+    while (true) {
+      pose.flush();
+      const pending = latestPosePromise;
+      await pending;
+      // await中に始まった操作の末尾タイマーも、読み取り前に即時送信する。
+      pose.flush();
+      if (pending === latestPosePromise) return;
+    }
   };
 
   /** 展開図の更新後、残っている角度指定で立体形状を計算し直す。
@@ -1142,20 +1405,35 @@ export const useAppStore = create<AppState>((set, get) => {
       // 指定が全て無くなった(線の種類変更などで折り線でなくなった)場合、
       // 空のまま送ると前回の計算結果を引き継いで折れたまま残り、画面には
       // 平らへ戻す操作も出なくなる。全ての折り線へ0度を明示して平らに戻す
-      await runPoseSolve(flatDrivers(hinges));
+      await requestPoseSolve(flatDrivers(hinges));
       return;
     }
     // 展開図を編集した後は操作中の折り線がないので、全部を目標として
     // 「閉包を満たす形のうち目標にいちばん近いもの」を解く(紙が切れない)
-    await runPoseSolve([], driverList(kept));
+    cancelAngleIntent();
+    await requestPoseSolve([], preferredWithout([]));
   };
 
   // スライダーの連続操作を間引く(実行時点の最新driversを送る)。
   // 間引いてもなお計算が追いつかない場合に備え、待ち行列は最新1件だけにする
   const pose = createTrailingThrottle(POSE_THROTTLE_MS, () => {
-    const { hard, keep } = splitDrivers(get().drivers);
-    void runPoseSolve(hard, keep, true);
+    const { hard, preferred } = splitDrivers();
+    latestPosePromise = runPoseSolve(hard, preferred, true);
   });
+
+  /** pointer up / blur / Enterでは末尾要求を必ず送り、その結果の後でactiveを消す。 */
+  const finishCurrentAngleIntent = async (): Promise<void> => {
+    const generation = get().activeAngleIntent?.generation;
+    pose.flush();
+    const pending = latestPosePromise;
+    await pending;
+    if (
+      generation !== undefined &&
+      get().activeAngleIntent?.generation === generation
+    ) {
+      cancelAngleIntent();
+    }
+  };
 
   /**
    * 履歴から取り出したdriversへ戻し、その形を計算し直す(元に戻す/やり直し)。
@@ -1166,16 +1444,19 @@ export const useAppStore = create<AppState>((set, get) => {
     const before = get().drivers;
     const drivers = new Map(next);
     set({ drivers });
-    activeHinges = [];
+    cancelAngleIntent();
     pose.clearAll(); // 予約済みの間引き計算は古い指定なので捨てる
     if (drivers.size === 0) {
-      void runPoseSolve(flatDrivers(get().hinges));
+      void requestPoseSolve(flatDrivers(get().hinges));
       return;
     }
     const flattened = [...before.keys()]
       .filter((hinge) => !drivers.has(hinge))
       .map((hinge) => ({ hinge, target_angle_deg: 0 }));
-    void runPoseSolve(flattened, driverList(drivers));
+    void requestPoseSolve(
+      flattened,
+      preferredWithout(flattened.map((driver) => driver.hinge)),
+    );
   };
 
   /** 今見えている形をもう一度作り直す(たわみの指定を変えたときに使う)。
@@ -1185,7 +1466,7 @@ export const useAppStore = create<AppState>((set, get) => {
     if (!s.doc) return;
     const total = s.doc.sequence.length;
     if (total === 0) {
-      void runPoseSolve([], driverList(s.drivers), true);
+      void requestPoseSolve([], preferredWithout([]), true);
       return;
     }
     void runReplay(s.currentStep ?? total, s.currentStep === null ? 1 : s.playT, true);
@@ -1220,6 +1501,7 @@ export const useAppStore = create<AppState>((set, get) => {
     softPending = false;
     pendingSoftDisplay = null;
     pose.clearAll();
+    latestPosePromise = Promise.resolve();
     softShape.clearAll();
     softSave.clearAll();
     // 角度の履歴のまとめ判定も時計を持つので、一緒に初期化する
@@ -1228,6 +1510,7 @@ export const useAppStore = create<AppState>((set, get) => {
     pullPushed = false;
     pullMovedForGuide = false;
     pullGuideStartAngle = null;
+    cancelAngleIntent();
     clearAngleHistory();
   };
 
@@ -1239,8 +1522,11 @@ export const useAppStore = create<AppState>((set, get) => {
     t: number,
     coalesce = false,
   ): Promise<void> => {
+    // poseと同じく、次の角度要求がthrottle待ちでも旧再生を表示しない。
+    const requestGeneration = get().angleIntentGeneration;
     const call = () => ipc.sequenceReplay(upTo, t, softArg());
     const r = await (coalesce ? queue.runLatest(call) : queue.run(call));
+    if (requestGeneration !== get().angleIntentGeneration) return;
     if (!r.ok) {
       if (r.isLatest) {
         // 再生できない状態のままでは毎コマ失敗するので、止めて理由を知らせる
@@ -1261,7 +1547,24 @@ export const useAppStore = create<AppState>((set, get) => {
         s.suspectHinges,
         r.value.suspect_hinges ?? [],
       ),
-      contactStopped: false,
+      sequenceTargets: new Map(
+        [...(r.value.sequence_targets ?? [])]
+          .sort((a, b) => a.hinge - b.hinge)
+          .map((driver) => [driver.hinge, driver.target_angle_deg]),
+      ),
+      poseAngles: r.value.angles
+        ? new Map(
+            Object.entries(r.value.angles).map(([id, deg]) => [Number(id), deg]),
+          )
+        : s.poseAngles,
+      relaxations: r.value.relaxations ?? [],
+      poseConverged: r.value.converged ?? true,
+      poseBestEffort: r.value.best_effort === true,
+      poseClosureRms:
+        typeof r.value.closure_rms === "number"
+          ? r.value.closure_rms
+          : null,
+      contactDetected: r.value.contact_detected === true,
     });
   };
 
@@ -1502,6 +1805,8 @@ export const useAppStore = create<AppState>((set, get) => {
     curve: DEFAULT_CURVE,
     frame3d: null,
     suspectHinges: [],
+    sequenceTargets: new Map(),
+    relaxations: [],
     softMesh: null,
     softWarnings: [],
     currentStep: null,
@@ -1519,7 +1824,11 @@ export const useAppStore = create<AppState>((set, get) => {
     poseAngles: new Map(),
     poseWarnings: [],
     poseConverged: true,
-    contactStopped: false,
+    poseBestEffort: false,
+    poseClosureRms: null,
+    contactDetected: false,
+    activeAngleIntent: null,
+    angleIntentGeneration: 0,
     pullHinge: null,
     pullMirrorHinge: null,
     recovery: null,
@@ -1541,11 +1850,18 @@ export const useAppStore = create<AppState>((set, get) => {
     newPaperDraft: DEFAULT_NEW_PAPER,
     display: DEFAULT_DISPLAY,
     splitRatio: prefs.splitRatio,
+    contextPanelRatio: prefs.contextPanelRatio,
     mirrorDraw: prefs.mirrorDraw,
+    mirrorAxis: { kind: prefs.mirrorAxis },
+    mirrorAxisNotice: null,
     pullMirror: prefs.pullMirror,
     wheelBehavior: prefs.wheelBehavior,
     uiTheme: prefs.uiTheme,
-    viewerHintExpanded: true,
+    contextHelpExpanded: prefs.contextHelpExpanded,
+    viewerHintExpanded: prefs.viewerHintExpanded,
+    cpHelpExpanded: prefs.cpHelpExpanded,
+    paperHelpExpanded: prefs.paperHelpExpanded,
+    paperColorExpanded: prefs.paperColorExpanded,
     guideOpen: !onboarding.guideComplete,
     guideStep: 0,
     helpOpen: false,
@@ -1592,7 +1908,14 @@ export const useAppStore = create<AppState>((set, get) => {
         s.mirrorDraw &&
         s.doc &&
         (op.type === "RemoveEdges" || op.type === "SetEdgeKind")
-          ? { ...op, ids: withMirrorEdges(s.doc, s.faces, op.ids) }
+          ? {
+              ...op,
+              ids: withMirrorEdges(
+                s.doc,
+                op.ids,
+                activeMirrorLine(s.doc, s.mirrorAxis),
+              ),
+            }
           : op;
       return applyDocChange(
         () => ipc.editApply(mirrored),
@@ -1603,16 +1926,11 @@ export const useAppStore = create<AppState>((set, get) => {
     drawSegment: async (a, b, kind) => {
       const s = get();
       if (!s.doc) return;
-      // 左右対称のときは中心線の反対側にも同じ線を引く。中心線に重なる線や
-      // もともと左右対称な線は、同じ線が二重にならないよう1本だけにする
-      const segments = s.mirrorDraw
-        ? mirrorSegments([a, b], mirrorAxisX(s.doc.paper))
-        : [[a, b] as [Vec2, Vec2]];
-      for (const [p, q] of segments) {
-        await get().applyEdit({ type: "AddSegment", a: p, b: q, kind });
-        // 1本目で断られたら理由を残したまま止める(片側だけ引かれた形にしない)
-        if (get().errorMessage !== null) return;
-      }
+      // 1操作の途中で作品が更新されても、開始時と同じ基準線で2本をそろえる。
+      const axis = s.mirrorDraw
+        ? activeMirrorLine(s.doc, s.mirrorAxis)
+        : null;
+      await drawSegmentWithAxis(a, b, kind, axis);
     },
 
     // 曲線は「十分細かい折れ線」として入れる(展開図の辺は直線だけなので)。
@@ -1622,8 +1940,12 @@ export const useAppStore = create<AppState>((set, get) => {
     drawCurve: async (points, kind) => {
       const s = get();
       if (!s.doc || points.length < 2) return;
+      // 選んだ基準線が交点で分割されても、曲線1回の途中で基準を切り替えない。
+      const axis = s.mirrorDraw
+        ? activeMirrorLine(s.doc, s.mirrorAxis)
+        : null;
       for (let i = 0; i + 1 < points.length; i++) {
-        await get().drawSegment(points[i], points[i + 1], kind);
+        await drawSegmentWithAxis(points[i], points[i + 1], kind, axis);
         if (get().errorMessage !== null) return; // 途中で断られたら理由を残して止める
       }
       if (!s.curve.rulings || kind === "Aux") return;
@@ -1638,7 +1960,7 @@ export const useAppStore = create<AppState>((set, get) => {
         ] as [Vec2, EdgeKind][]) {
           const doc = get().doc;
           if (!doc) return;
-          await get().drawSegment(r.at, firstCrossing(doc, r.at, to), k);
+          await drawSegmentWithAxis(r.at, firstCrossing(doc, r.at, to), k, axis);
           if (get().errorMessage !== null) return;
         }
       }
@@ -1646,6 +1968,29 @@ export const useAppStore = create<AppState>((set, get) => {
 
     setMirrorDraw: (on) => {
       set({ mirrorDraw: on });
+      persistPrefs();
+    },
+
+    setMirrorAxisPreset: (preset) => {
+      set({ mirrorAxis: { kind: preset }, mirrorAxisNotice: null });
+      persistPrefs();
+    },
+
+    setSelectedLineAsMirrorAxis: () => {
+      const s = get();
+      if (!s.doc) return;
+      const selected = [...new Set(s.selection.edgeIds)];
+      if (
+        selected.length !== 1 ||
+        selectedEdgeMirrorLine(s.doc, selected[0]) === null
+      ) {
+        return;
+      }
+      set({
+        mirrorAxis: { kind: "selectedLine", edgeId: selected[0] },
+        mirrorAxisNotice: null,
+      });
+      // 辺IDは保存せず、次回起動時の戻り先として縦中心を覚える。
       persistPrefs();
     },
 
@@ -1666,8 +2011,30 @@ export const useAppStore = create<AppState>((set, get) => {
       persistPrefs();
     },
 
-    toggleViewerHint: () =>
-      set((s) => ({ viewerHintExpanded: !s.viewerHintExpanded })),
+    toggleContextHelp: () => {
+      set((s) => ({ contextHelpExpanded: !s.contextHelpExpanded }));
+      persistPrefs();
+    },
+
+    toggleViewerHint: () => {
+      set((s) => ({ viewerHintExpanded: !s.viewerHintExpanded }));
+      persistPrefs();
+    },
+
+    toggleCpHelp: () => {
+      set((s) => ({ cpHelpExpanded: !s.cpHelpExpanded }));
+      persistPrefs();
+    },
+
+    togglePaperHelp: () => {
+      set((s) => ({ paperHelpExpanded: !s.paperHelpExpanded }));
+      persistPrefs();
+    },
+
+    togglePaperColor: () => {
+      set((s) => ({ paperColorExpanded: !s.paperColorExpanded }));
+      persistPrefs();
+    },
 
     openGuide: () => set({ guideOpen: true, guideStep: 0 }),
 
@@ -1846,7 +2213,10 @@ export const useAppStore = create<AppState>((set, get) => {
     setHoveredHinge: (hinge) =>
       set((s) => ({
         hoveredHinge:
-          hinge !== null && s.hinges.has(hinge) && s.selection.edgeIds.includes(hinge)
+          hinge !== null &&
+          s.hinges.has(hinge) &&
+          (s.selection.edgeIds.includes(hinge) ||
+            relaxationNotices(s.relaxations).some((item) => item.hinge === hinge))
             ? hinge
             : null,
       })),
@@ -2436,14 +2806,15 @@ export const useAppStore = create<AppState>((set, get) => {
         pullMirrorHinge: get().pullMirror ? mirrorHinge : null,
         errorMessage: null,
       });
-      // 今見えている形をそのまま角度指定として1回だけ送り、次からの計算の
-      // 出発点(warm start)を今の形に合わせる。全ヒンジを指定するので形は動かない
+      // 今見えている実角は固定条件ではなくwarm startとしてだけ渡す。
+      // 保存済みの手順角はpreferredのままなので、引き始めても希望を失わない。
       if (angles.size > 0) {
-        void runPoseSolve(
-          [...angles].map(([h, deg]) => ({ hinge: h, target_angle_deg: deg })),
+        void requestPoseSolve(
           [],
+          preferredWithout([]),
           false,
           false, // 形は今のまま(層の重なり表示を保つ)
+          driverList(new Map(angles)),
         );
       }
     },
@@ -2466,8 +2837,9 @@ export const useAppStore = create<AppState>((set, get) => {
       if (pullMirrorHinge !== null) drivers.set(pullMirrorHinge, deg);
       set({ drivers });
       // 引いている折り線(と対称の相手)だけを固定し、以前の指定は追従させる
-      activeHinges =
-        pullMirrorHinge === null ? [pullHinge] : [pullHinge, pullMirrorHinge];
+      activateAngleIntent(
+        pullMirrorHinge === null ? [pullHinge] : [pullHinge, pullMirrorHinge],
+      );
       pose.schedule();
     },
 
@@ -2478,6 +2850,7 @@ export const useAppStore = create<AppState>((set, get) => {
       }
       pullMovedForGuide = false;
       pullGuideStartAngle = null;
+      void finishCurrentAngleIntent();
     },
 
     setDriverAngle: (hinge, deg) => {
@@ -2492,7 +2865,7 @@ export const useAppStore = create<AppState>((set, get) => {
       if (Math.abs(deg - before) >= 1) get().completeGuideAction("angle");
       // いま動かしている1本だけを固定する。以前に指定した折り線まで固定すると
       // 内部頂点まわりの拘束と両立せず、面が離れて紙が切れて見える
-      activeHinges = [hinge];
+      activateAngleIntent([hinge]);
       pose.schedule();
     },
 
@@ -2515,9 +2888,11 @@ export const useAppStore = create<AppState>((set, get) => {
       if (changedForGuide) get().completeGuideAction("angle");
       // 選択中の全ヒンジをhard driverとして同じ1回のpose_solveへ渡す。
       // それ以外の以前の指定は従来どおりkeep driverになる。
-      activeHinges = valid;
+      activateAngleIntent(valid);
       pose.schedule();
     },
+
+    finishAngleIntent: finishCurrentAngleIntent,
 
     clearDriver: (hinge) => {
       const drivers = new Map(get().drivers);
@@ -2525,48 +2900,87 @@ export const useAppStore = create<AppState>((set, get) => {
       invalidateFoldThrough();
       pushAngleUndo(null); // 1回押すごとに履歴1件
       set({ drivers });
-      activeHinges = [];
+      const generation = activateAngleIntent([hinge]);
       // 指定を消しただけだと、この折り線は前回の計算結果(warm start)を
       // 引き継いで折れたまま残る。1回だけ0度(平ら)を明示して送り、
       // 次回以降は残りの指定だけで計算する(「全て平らに戻す」と同じ考え方)
-      void runPoseSolve(
+      void requestPoseSolve(
         [{ hinge, target_angle_deg: 0 }],
-        driverList(drivers),
-      );
+        preferredWithout([hinge]),
+      ).finally(() => {
+        if (get().activeAngleIntent?.generation === generation) {
+          cancelAngleIntent();
+        }
+      });
     },
 
     clearDrivers: () => {
+      // 再生tickがこの0度計算より後に積まれると、正しい平坦結果が古い応答として
+      // 捨てられるか、再生結果で折れた形へ上書きされる。予約中のコマを先に止め、
+      // 「全て平らに戻す」を最後の表示要求にする。
+      stopPlayback();
       const hinges = get().hinges;
       invalidateFoldThrough();
       if (get().drivers.size > 0) pushAngleUndo(null);
       set({ drivers: new Map() });
-      activeHinges = [];
+      cancelAngleIntent();
       // 全ての折り線を0度に固定する形は必ず閉じる(平ら)ので全部hardでよい
-      void runPoseSolve(flatDrivers(hinges));
+      void requestPoseSolve(flatDrivers(hinges));
     },
 
     recordPoseStep: async () => {
-      const s = get();
-      const reason = poseRecordReason(s);
-      if (reason !== null || !s.doc) {
+      const before = get();
+      if (!before.doc || before.playing || before.hinges.size === 0) {
+        set({ errorMessage: poseRecordReason(before) });
+        return;
+      }
+      // 16ms待ちの末尾solveを今すぐ送り、実行中の最新要求まで待ってから実角を読む。
+      await waitForLatestPose();
+      const solved = get();
+      const reason = poseRecordReason(solved);
+      if (reason !== null || !solved.doc) {
         set({ errorMessage: reason });
         return;
       }
-      const angles = currentAngles(s.hinges, s.drivers, s.poseAngles);
+      const angles = currentAngles(
+        solved.hinges,
+        solved.drivers,
+        solved.poseAngles,
+      );
+      // 保存IPCを待つ間に始まった新しい角度操作を、完了処理で消さないための世代。
+      const recordedGeneration = solved.angleIntentGeneration;
       // SIM-015: たわみは「硬さ・膨らみの強さ」というパラメータとしてだけ残す
       // (頂点の位置は保存しない)。書き込み待ちの指定があればここで先に確定させ、
       // 仕上げの手順と同じ作品ファイルへ必ず一緒に入るようにする
       await flushSoftSave();
       if (get().errorMessage !== null) return;
+      const latest = get();
+      if (!latest.doc) return;
       // 記録した形をそのまま見せる(手順の再生結果が最新の表示になる)
       set({ currentStep: null, errorMessage: null });
       await get().applySequenceOp({
         type: "PushStep",
-        step: buildPoseStep(s.doc, angles),
+        step: buildPoseStep(latest.doc, angles),
       });
       // 手順として残ったので、一時的な角度指定は役目を終える。
       // ここで平らに戻す計算は送らない(再生結果の立体表示を消さないため)
-      if (get().errorMessage === null) set({ drivers: new Map() });
+      if (get().errorMessage !== null) return;
+      if (get().angleIntentGeneration === recordedGeneration) {
+        set({ drivers: new Map() });
+        cancelAngleIntent();
+        return;
+      }
+      // 保存IPCを待つ間に始まった操作は、新しいDocumentViewの自動再生よりも
+      // 利用者の現在操作を優先する。たわみ表示の再生が待機中poseを追い越しても、
+      // 更新後の保存済み希望とdriversから必ず最後の形をもう一度求める。
+      const { hard, preferred } = splitDrivers();
+      await requestPoseSolve(
+        hard,
+        preferred,
+        true,
+        true,
+        driverList(new Map(get().poseAngles)),
+      );
     },
 
     checkRecovery: async () => {
@@ -2758,6 +3172,19 @@ export const useAppStore = create<AppState>((set, get) => {
 
     setSplitRatio: (ratio) => {
       set({ splitRatio: clampSplitRatio(ratio) });
+      persistPrefs();
+    },
+
+    setContextPanelRatio: (ratio) => {
+      set({ contextPanelRatio: clampContextPanelRatio(ratio) });
+      persistPrefs();
+    },
+
+    resetPaneSizes: () => {
+      set({
+        splitRatio: DEFAULT_SPLIT_RATIO,
+        contextPanelRatio: DEFAULT_CONTEXT_PANEL_RATIO,
+      });
       persistPrefs();
     },
 

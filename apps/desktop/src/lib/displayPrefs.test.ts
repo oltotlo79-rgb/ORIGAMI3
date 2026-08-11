@@ -2,9 +2,13 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  DEFAULT_CONTEXT_PANEL_RATIO,
   DEFAULT_DISPLAY,
   DEFAULT_PREFS,
+  MAX_CONTEXT_PANEL_RATIO,
+  MIN_CONTEXT_PANEL_RATIO,
   UI_THEMES,
+  clampContextPanelRatio,
   clampDivisions,
   clampSplitRatio,
   hexToRgb,
@@ -46,6 +50,18 @@ describe("見た目の好み", () => {
     expect(clampSplitRatio(Number.NaN)).toBeCloseTo(0.5);
   });
 
+  it("下部パネルの比率は25%〜55%に収め、不正値は32%へ戻す", () => {
+    expect(DEFAULT_CONTEXT_PANEL_RATIO).toBeCloseTo(0.32);
+    expect(MIN_CONTEXT_PANEL_RATIO).toBeCloseTo(0.25);
+    expect(MAX_CONTEXT_PANEL_RATIO).toBeCloseTo(0.55);
+    expect(clampContextPanelRatio(0.1)).toBeCloseTo(MIN_CONTEXT_PANEL_RATIO);
+    expect(clampContextPanelRatio(0.8)).toBeCloseTo(MAX_CONTEXT_PANEL_RATIO);
+    expect(clampContextPanelRatio(0.4)).toBeCloseTo(0.4);
+    expect(clampContextPanelRatio(Number.NaN)).toBeCloseTo(
+      DEFAULT_CONTEXT_PANEL_RATIO,
+    );
+  });
+
   it("色は色見本の形と行き来できる", () => {
     expect(rgbToHex([237, 28, 36])).toBe("#ed1c24");
     expect(hexToRgb("#ED1C24")).toEqual([237, 28, 36]);
@@ -62,7 +78,7 @@ describe("見た目の好み", () => {
     ).toBe(false);
   });
 
-  it("食い込み防止は既定でオンで、項目の無い古い作品もオンとして扱う", () => {
+  it("食い込み検出は既定でオンで、項目の無い古い作品もオンとして扱う", () => {
     expect(penetrationPreventionOf(DEFAULT_DISPLAY)).toBe(true);
     const oldDisplay = { ...DEFAULT_DISPLAY };
     delete oldDisplay.penetration_prevention_enabled;
@@ -79,23 +95,80 @@ describe("見た目の好み", () => {
     savePrefs(
       {
         splitRatio: 0.3,
+        contextPanelRatio: 0.44,
         mirrorDraw: true,
+        mirrorAxis: "paperHorizontal",
         pullMirror: false,
         wheelBehavior: "zoom",
         uiTheme: "classic",
+        contextHelpExpanded: false,
+        viewerHintExpanded: true,
+        cpHelpExpanded: false,
+        paperHelpExpanded: true,
+        paperColorExpanded: true,
       },
       storage,
     );
     const loaded = loadPrefs(storage);
     expect(loaded.splitRatio).toBeCloseTo(0.3);
+    expect(loaded.contextPanelRatio).toBeCloseTo(0.44);
     // 左右対称に描く指定も端末に覚えておく(CPE-010)
     expect(loaded.mirrorDraw).toBe(true);
+    expect(loaded.mirrorAxis).toBe("paperHorizontal");
     // 3Dで引くときの左右同時の指定も覚えておく(UI-007)
     expect(loaded.pullMirror).toBe(false);
     // 2D展開図のホイール動作も端末ごとに戻る
     expect(loaded.wheelBehavior).toBe("zoom");
     // 画面デザインも作品とは分けて端末へ覚える
     expect(loaded.uiTheme).toBe("classic");
+    // 操作説明の開閉も作品ではなく端末ごとの選択として戻る
+    expect(loaded.contextHelpExpanded).toBe(false);
+    expect(loaded.viewerHintExpanded).toBe(true);
+    expect(loaded.cpHelpExpanded).toBe(false);
+    expect(loaded.paperHelpExpanded).toBe(true);
+    expect(loaded.paperColorExpanded).toBe(true);
+  });
+
+  it("操作説明は初回と旧版では畳み、一度開いた選択は次回も保つ", () => {
+    expect(loadPrefs(storage)).toMatchObject({
+      contextHelpExpanded: false,
+      viewerHintExpanded: false,
+      cpHelpExpanded: false,
+      paperHelpExpanded: false,
+      paperColorExpanded: false,
+    });
+
+    // 開閉項目をまだ持たない旧版の保存も、文字を増やさないよう畳んで補う
+    storage.setItem(
+      "origami3.prefs",
+      JSON.stringify({ splitRatio: 0.4, uiTheme: "modern" }),
+    );
+    expect(loadPrefs(storage)).toMatchObject({
+      contextHelpExpanded: false,
+      viewerHintExpanded: false,
+      cpHelpExpanded: false,
+      paperHelpExpanded: false,
+      paperColorExpanded: false,
+    });
+
+    savePrefs(
+      {
+        ...DEFAULT_PREFS,
+        contextHelpExpanded: true,
+        viewerHintExpanded: true,
+        cpHelpExpanded: true,
+        paperHelpExpanded: true,
+        paperColorExpanded: true,
+      },
+      storage,
+    );
+    expect(loadPrefs(storage)).toMatchObject({
+      contextHelpExpanded: true,
+      viewerHintExpanded: true,
+      cpHelpExpanded: true,
+      paperHelpExpanded: true,
+      paperColorExpanded: true,
+    });
   });
 
   it("ホイールは既定でスクロールし、古い保存や不正値もスクロールに戻す", () => {
@@ -106,6 +179,18 @@ describe("見た目の好み", () => {
       JSON.stringify({ splitRatio: 0.4, wheelBehavior: "unknown" }),
     );
     expect(loadPrefs(storage).wheelBehavior).toBe("scroll");
+  });
+
+  it("対称操作の基準は縦中心が既定で、横中心だけを端末へ保存できる", () => {
+    expect(DEFAULT_PREFS.mirrorAxis).toBe("paperVertical");
+    expect(loadPrefs(storage).mirrorAxis).toBe("paperVertical");
+    savePrefs({ ...DEFAULT_PREFS, mirrorAxis: "paperHorizontal" }, storage);
+    expect(loadPrefs(storage).mirrorAxis).toBe("paperHorizontal");
+    storage.setItem(
+      "origami3.prefs",
+      JSON.stringify({ ...DEFAULT_PREFS, mirrorAxis: "selectedLine" }),
+    );
+    expect(loadPrefs(storage).mirrorAxis).toBe("paperVertical");
   });
 
   it("画面デザインは5テーマから選び、未保存・不正値はポップへ戻す", () => {
@@ -133,6 +218,22 @@ describe("見た目の好み", () => {
     expect(loadPrefs(storage).pullMirror).toBe(true);
   });
 
+  it("下部パネルの比率が無い旧版の保存は32%で補う", () => {
+    storage.setItem(
+      "origami3.prefs",
+      JSON.stringify({
+        splitRatio: 0.4,
+        mirrorDraw: true,
+        pullMirror: false,
+        wheelBehavior: "zoom",
+        uiTheme: "modern",
+      }),
+    );
+    expect(loadPrefs(storage).contextPanelRatio).toBeCloseTo(
+      DEFAULT_CONTEXT_PANEL_RATIO,
+    );
+  });
+
   it("紙の色・方眼は端末に覚えない(作品ファイル側の設定なので)", () => {
     // 古い版が書いた好み(displayを含む)を読んでも、色は引き継がない。
     // 引き継ぐと、人からもらった作品を開いたときにその色を黙って上書きしてしまう
@@ -142,10 +243,17 @@ describe("見た目の好み", () => {
     });
     expect(loadPrefs(storage)).toEqual({
       splitRatio: 0.3,
+      contextPanelRatio: DEFAULT_CONTEXT_PANEL_RATIO,
       mirrorDraw: false,
+      mirrorAxis: "paperVertical",
       pullMirror: true,
       wheelBehavior: "scroll",
       uiTheme: "pop",
+      contextHelpExpanded: false,
+      viewerHintExpanded: false,
+      cpHelpExpanded: false,
+      paperHelpExpanded: false,
+      paperColorExpanded: false,
     });
   });
 

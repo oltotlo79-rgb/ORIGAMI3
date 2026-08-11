@@ -40,15 +40,20 @@ describe("手順タイムライン", () => {
     render(<Timeline />);
 
     // 手順の数だけ挿入用のボタンがある(手順1の前〜手順3の前)
-    const inserts = screen.getAllByTitle(/の前に折りを挟みます/);
+    const inserts = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        '.timeline-insert[data-tooltip*="の前に新しい折りを挟みます"]',
+      ),
+    );
     expect(inserts.length).toBe(3);
+    expect(inserts.every((button) => !button.hasAttribute("title"))).toBe(true);
 
     // 手順2の前を押すと「手順1まで折った形」が出る(そこで折ると手順2の前に入る)
-    fireEvent.click(screen.getByTitle(/手順2の前に折りを挟みます/));
+    fireEvent.click(inserts[1]);
     expect(useAppStore.getState().currentStep).toBe(1);
 
     // 手順1の前なら折る前の形
-    fireEvent.click(screen.getByTitle(/手順1の前に折りを挟みます/));
+    fireEvent.click(inserts[0]);
     expect(useAppStore.getState().currentStep).toBe(0);
   });
 

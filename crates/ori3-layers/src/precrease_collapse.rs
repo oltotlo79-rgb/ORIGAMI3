@@ -11,9 +11,7 @@ use ori3_cp::{Face, extract_faces};
 use ori3_geometry::Isometry2;
 use ori3_model::{CreasePattern, EPS, EdgeId, EdgeKind, FaceId, TechniqueKind, VertexId};
 
-use crate::flat_motion::{
-    FlatMotionInput, LayerTurn, MotionPart, MotionTransform, run_motion,
-};
+use crate::flat_motion::{FlatMotionInput, LayerTurn, MotionPart, MotionTransform, run_motion};
 use crate::flat_state::{FlatState, point_in_face, representative_point};
 use crate::fold_through::{FoldDirection, FoldThroughResult};
 
@@ -45,7 +43,10 @@ pub fn collapse_precrease_network(
         if layers.is_empty() {
             return Err("precrease collapse target layer packet is empty".to_string());
         }
-        if layers.iter().any(|id| !faces.iter().any(|face| face.id == *id)) {
+        if layers
+            .iter()
+            .any(|id| !faces.iter().any(|face| face.id == *id))
+        {
             return Err("precrease collapse target layer does not exist".to_string());
         }
     }
@@ -65,8 +66,7 @@ pub fn collapse_precrease_network(
             if edge.kind == EdgeKind::Aux {
                 let midpoint = (*a + *b) * 0.5;
                 faces.iter().any(|face| {
-                    selected.contains(&face.id)
-                        && point_in_face(cp, face, [midpoint.x, midpoint.y])
+                    selected.contains(&face.id) && point_in_face(cp, face, [midpoint.x, midpoint.y])
                 })
             } else {
                 old_owners.get(&edge.id).is_some_and(|owners| {
@@ -162,7 +162,10 @@ fn validate_input(input: &PrecreaseCollapseInput) -> Result<(), String> {
         let a = DVec2::from(line[0]);
         let b = DVec2::from(line[1]);
         if !a.is_finite() || !b.is_finite() || (b - a).length() <= EPS {
-            return Err(format!("precrease collapse line {} is degenerate", index + 1));
+            return Err(format!(
+                "precrease collapse line {} is degenerate",
+                index + 1
+            ));
         }
     }
     Ok(())
@@ -253,11 +256,9 @@ fn reflected_placements(
             let old_a = parent_of[&face];
             let old_b = parent_of[&neighbor];
             let closes = network.contains(&edge_id)
-                || old_state.placements[&old_a].mirrored
-                    != old_state.placements[&old_b].mirrored;
+                || old_state.placements[&old_a].mirrored != old_state.placements[&old_b].mirrored;
             let candidate = if closes {
-                let reflection =
-                    Isometry2::reflection(positions[&edge.v0], positions[&edge.v1]);
+                let reflection = Isometry2::reflection(positions[&edge.v0], positions[&edge.v1]);
                 placement.compose(&reflection)
             } else {
                 placement
@@ -365,10 +366,7 @@ mod tests {
             &faces,
             &state,
             &PrecreaseCollapseInput {
-                lines: vec![
-                    [[0.5, 0.0], [0.5, 1.0]],
-                    [[0.0, 0.5], [1.0, 0.5]],
-                ],
+                lines: vec![[[0.5, 0.0], [0.5, 1.0]], [[0.0, 0.5], [1.0, 0.5]]],
                 target_layers: None,
             },
         )
@@ -376,6 +374,12 @@ mod tests {
         assert!(result.warnings.is_empty());
         assert_eq!(extract_faces(&document.cp).len(), 4);
         assert_eq!(result.state.placements.len(), 4);
-        assert!(document.cp.edges.iter().all(|edge| edge.kind != EdgeKind::Aux));
+        assert!(
+            document
+                .cp
+                .edges
+                .iter()
+                .all(|edge| edge.kind != EdgeKind::Aux)
+        );
     }
 }

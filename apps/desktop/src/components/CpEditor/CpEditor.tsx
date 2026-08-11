@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import type { Vec2 } from "../../lib/types";
-import { useAppStore } from "../../store/appStore";
+import { relaxationNotices, useAppStore } from "../../store/appStore";
 import { clipToPaper, CONSTRUCT_STEPS, constructHint } from "../../lib/construct";
 import {
   curveHint,
@@ -12,7 +12,14 @@ import {
   type CurveOptions,
 } from "../../lib/curve";
 import { violationReason } from "../../lib/flatFoldHint";
-import { mirrorAxisX, mirrorPoint } from "../../lib/mirror";
+import { documentForCpStep } from "../../lib/cpHistory";
+import {
+  mirrorAxisLabel,
+  mirrorLineForChoice,
+  mirrorLineInsidePaper,
+  mirrorPoint,
+  paperMirrorLine,
+} from "../../lib/mirror";
 import { isEditableTarget } from "../../lib/keyboard";
 import type { Document, EdgeKind } from "../../lib/types";
 import {
@@ -29,11 +36,11 @@ import {
   onWheel,
   panHint,
   previewKind,
-  wheelHint,
   type InteractionCtx,
 } from "./interaction";
 import { fitView, render, type RenderOverlay, type ViewTransform } from "./renderer";
 import { paperExtent } from "./snap";
+import { CpOperationHint } from "./CpOperationHint";
 
 interface Props {
   /** 「全体表示」用: 親が current を呼ぶと紙全体が収まる表示に戻す */
@@ -77,15 +84,19 @@ export function CpEditor({ fitRef }: Props) {
 
   // 購読はdrawの再実行トリガーとして使う(値の読み出しはgetStateで行う)
   const doc = useAppStore((s) => s.doc);
+  const currentStep = useAppStore((s) => s.currentStep);
   const selection = useAppStore((s) => s.selection);
   const hoveredHinge = useAppStore((s) => s.hoveredHinge);
   const suspectHinges = useAppStore((s) => s.suspectHinges);
+  const relaxations = useAppStore((s) => s.relaxations);
+  const activeAngleIntent = useAppStore((s) => s.activeAngleIntent);
   const activeTool = useAppStore((s) => s.activeTool);
   const docEpoch = useAppStore((s) => s.docEpoch);
   const violations = useAppStore((s) => s.violations);
   const construct = useAppStore((s) => s.construct);
   const curve = useAppStore((s) => s.curve);
   const mirrorDraw = useAppStore((s) => s.mirrorDraw);
+  const mirrorAxisChoice = useAppStore((s) => s.mirrorAxis);
   const wheelBehavior = useAppStore((s) => s.wheelBehavior);
   const uiTheme = useAppStore((s) => s.uiTheme);
   const pendingFoldThrough = useAppStore((s) => s.pendingFoldThrough);
@@ -94,15 +105,18 @@ export function CpEditor({ fitRef }: Props) {
     const canvas = canvasRef.current;
     const {
       doc,
+      currentStep,
       selection,
       activeTool,
       violations,
       construct,
       curve,
       mirrorDraw,
-      wheelBehavior,
+      mirrorAxis,
       hoveredHinge,
       suspectHinges,
+      relaxations,
+      activeAngleIntent,
     } = useAppStore.getState();
     if (!canvas) return;
     // カーソルの形は表示専用なので、再描画を起こさずcanvasへ直接反映する
@@ -117,13 +131,18 @@ export function CpEditor({ fitRef }: Props) {
       canvas.height = Math.round(h * dpr);
     }
     viewRef.current ??= fitView(doc, w, h);
+    const cpDocument = documentForCpStep(doc, currentStep);
     const st = stateRef.current;
     const captureClean = document.documentElement.hasAttribute(
       "data-origami3-capture-view",
     );
     const kind = previewKind(activeTool);
     // 左右対称のときは対称軸を薄く出し、引いている最中の線も反対側に見せる
-    const axisX = mirrorDraw ? mirrorAxisX(doc.paper) : null;
+    const axis = mirrorDraw
+      ? mirrorLineForChoice(doc, mirrorAxis) ??
+        paperMirrorLine(doc.paper, "paperVertical")
+      : null;
+    const axisSegment = axis ? mirrorLineInsidePaper(doc.paper, axis) : null;
     const curveMode = kind !== undefined && curve.enabled && activeTool !== "fold";
     const directionSnap =
       kind && !curveMode && st.pendingStart ? st.directionSnap : null;
@@ -169,18 +188,18 @@ export function CpEditor({ fitRef }: Props) {
         : curveMode
           ? curveHint(curve.shape, st.curvePoints.length, curve.rulings)
           : mirrorDraw
-            ? "左右対称に描いています(線を引くときだけ効きます)"
+            ? `対称にそろえています（基準: ${mirrorAxisLabel(mirrorAxis)}。引く・消す・線種変更）`
             : null);
     const overlay: RenderOverlay = {
       hoverSnap: kind ? st.hoverSnap : null,
       preview,
       directionGuide,
-      mirrorAxis: axisX,
+      mirrorAxis: axisSegment,
       mirrorPreview:
-        axisX !== null && preview
+        axis !== null && preview
           ? {
-              a: mirrorPoint(preview.a, axisX),
-              b: mirrorPoint(preview.b, axisX),
+              a: mirrorPoint(preview.a, axis),
+              b: mirrorPoint(preview.b, axis),
               kind: preview.kind,
             }
           : null,
@@ -196,7 +215,7 @@ export function CpEditor({ fitRef }: Props) {
         panHint(st) ??
         (st.vertexDrag
           ? "点を動かしています(離すと決まります。Escでやめる)"
-          : (toolHint ?? wheelHint(wheelBehavior))),
+          : toolHint),
       tooltip: violationTooltip(doc, st.hoverViolation),
       vertexDrag: st.vertexDrag
         ? { id: st.vertexDrag.id, to: st.vertexDrag.to }
@@ -205,6 +224,8 @@ export function CpEditor({ fitRef }: Props) {
         .crease_segments,
       hoveredHinge,
       suspectHinges,
+      relaxedHinges: relaxationNotices(relaxations).map((item) => item.hinge),
+      activeHinges: activeAngleIntent?.hinges ?? [],
     };
     if (captureClean) {
       // 撮影画像には作品そのものだけを残し、操作中だけの案内・強調を消す。
@@ -223,6 +244,8 @@ export function CpEditor({ fitRef }: Props) {
       overlay.suggestedCreases = undefined;
       overlay.hoveredHinge = null;
       overlay.suspectHinges = [];
+      overlay.relaxedHinges = [];
+      overlay.activeHinges = [];
     }
     const ctx2d = canvas.getContext("2d");
     if (ctx2d) {
@@ -231,7 +254,7 @@ export function CpEditor({ fitRef }: Props) {
         w,
         h,
         dpr,
-        doc,
+        cpDocument,
         viewRef.current,
         captureClean ? { edgeIds: [], vertexIds: [] } : selection,
         overlay,
@@ -269,14 +292,18 @@ export function CpEditor({ fitRef }: Props) {
     draw();
   }, [
     doc,
+    currentStep,
     selection,
     hoveredHinge,
     suspectHinges,
+    relaxations,
+    activeAngleIntent,
     activeTool,
     violations,
     construct,
     curve,
     mirrorDraw,
+    mirrorAxisChoice,
     wheelBehavior,
     pendingFoldThrough,
     draw,
@@ -385,93 +412,116 @@ export function CpEditor({ fitRef }: Props) {
     }
   };
 
+  const totalSteps = doc?.sequence.length ?? 0;
+  const displayedStep =
+    currentStep === null
+      ? totalSteps
+      : Math.max(0, Math.min(totalSteps, Math.trunc(currentStep)));
+
   return (
-    <canvas
-      ref={canvasRef}
-      className="cp-canvas"
-      onPointerDown={(e) => {
-        e.preventDefault();
-        const s = useAppStore.getState();
-        if (
-          (s.activeTool === "mountain" ||
+    <div className="cp-editor">
+      <CpOperationHint />
+      <canvas
+        ref={canvasRef}
+        className="cp-canvas"
+        onPointerDown={(e) => {
+          e.preventDefault();
+          const s = useAppStore.getState();
+          if (
+            (s.activeTool === "mountain" ||
+              s.activeTool === "valley" ||
+              s.activeTool === "aux" ||
+              s.activeTool === "construct") &&
+            s.operationStage === 2
+          ) {
+            s.setOperationStage(0);
+          }
+          // ポインタ捕捉: canvas外へ出てもmove/upが届き、ドラッグ状態が残留しない
+          e.currentTarget.setPointerCapture(e.pointerId);
+          withCtx((ctx) =>
+            onMouseDown(
+              ctx,
+              screenPos(e),
+              e.button,
+              e.shiftKey,
+              e.ctrlKey || e.metaKey,
+            ),
+          );
+        }}
+        onPointerMove={(e) =>
+          withCtx((ctx) => onMouseMove(ctx, screenPos(e), e.shiftKey))
+        }
+        onPointerUp={(e) => {
+          const hadStart = stateRef.current.pendingStart !== null;
+          const constructBefore = constructDone(stateRef.current);
+          withCtx((ctx) =>
+            onMouseUp(ctx, screenPos(e), e.button, e.ctrlKey || e.metaKey),
+          );
+          const s = useAppStore.getState();
+          if (
+            s.activeTool === "mountain" ||
             s.activeTool === "valley" ||
-            s.activeTool === "aux" ||
-            s.activeTool === "construct") &&
-          s.operationStage === 2
-        ) {
-          s.setOperationStage(0);
-        }
-        // ポインタ捕捉: canvas外へ出てもmove/upが届き、ドラッグ状態が残留しない
-        e.currentTarget.setPointerCapture(e.pointerId);
-        withCtx((ctx) =>
-          onMouseDown(
-            ctx,
-            screenPos(e),
-            e.button,
-            e.shiftKey,
-            e.ctrlKey || e.metaKey,
-          ),
-        );
-      }}
-      onPointerMove={(e) =>
-        withCtx((ctx) => onMouseMove(ctx, screenPos(e), e.shiftKey))
-      }
-      onPointerUp={(e) => {
-        const hadStart = stateRef.current.pendingStart !== null;
-        const constructBefore = constructDone(stateRef.current);
-        withCtx((ctx) =>
-          onMouseUp(ctx, screenPos(e), e.button, e.ctrlKey || e.metaKey),
-        );
-        const s = useAppStore.getState();
-        if (
-          s.activeTool === "mountain" ||
-          s.activeTool === "valley" ||
-          s.activeTool === "aux"
-        ) {
-          const hasStart = stateRef.current.pendingStart !== null;
-          if (!hadStart && hasStart) s.setOperationStage(1);
-          else if (hadStart && !hasStart) s.setOperationStage(2);
-        } else if (s.activeTool === "construct" && e.button === 0) {
-          const constructAfter = constructDone(stateRef.current);
-          const required = CONSTRUCT_STEPS[s.construct.kind].length;
-          if (constructAfter > 0) s.setOperationStage(1);
-          else if (constructBefore > 0 || required === 1) s.setOperationStage(2);
-        }
-      }}
-      onPointerLeave={() => {
-        // 捕捉中はleaveが飛ばないため、ここに来るのはドラッグしていない時だけ
-        stateRef.current.hoverSnap = null;
-        stateRef.current.directionSnap = null;
-        stateRef.current.cursorWorld = null;
-        stateRef.current.hoverViolation = null;
-        draw();
-      }}
-      onPointerCancel={() => {
-        // 捕捉が中断されたらドラッグ系の一時状態を破棄する
-        const st = stateRef.current;
-        st.downScreen = null;
-        st.panLast = null;
-        st.marqueeStart = null;
-        st.marqueeEnd = null;
-        st.selectionToggle = false;
-        st.vertexDrag = null;
-        st.directionSnap = null;
-        draw();
-      }}
-      onWheel={(e) => {
-        e.preventDefault();
-        // DOM_DELTA_LINE / DOM_DELTA_PAGEも同じCSS px単位へそろえる。
-        const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? e.currentTarget.clientHeight : 1;
-        withCtx((ctx) =>
-          onWheel(ctx, screenPos(e), {
-            deltaX: e.deltaX * unit,
-            deltaY: e.deltaY * unit,
-            shiftKey: e.shiftKey,
-            ctrlKey: e.ctrlKey,
-          }),
-        );
-      }}
-      onContextMenu={(e) => e.preventDefault()}
-    />
+            s.activeTool === "aux"
+          ) {
+            const hasStart = stateRef.current.pendingStart !== null;
+            if (!hadStart && hasStart) s.setOperationStage(1);
+            else if (hadStart && !hasStart) s.setOperationStage(2);
+          } else if (s.activeTool === "construct" && e.button === 0) {
+            const constructAfter = constructDone(stateRef.current);
+            const required = CONSTRUCT_STEPS[s.construct.kind].length;
+            if (constructAfter > 0) s.setOperationStage(1);
+            else if (constructBefore > 0 || required === 1) s.setOperationStage(2);
+          }
+        }}
+        onPointerLeave={() => {
+          // 捕捉中はleaveが飛ばないため、ここに来るのはドラッグしていない時だけ
+          stateRef.current.hoverSnap = null;
+          stateRef.current.directionSnap = null;
+          stateRef.current.cursorWorld = null;
+          stateRef.current.hoverViolation = null;
+          draw();
+        }}
+        onPointerCancel={() => {
+          // 捕捉が中断されたらドラッグ系の一時状態を破棄する
+          const st = stateRef.current;
+          st.downScreen = null;
+          st.panLast = null;
+          st.marqueeStart = null;
+          st.marqueeEnd = null;
+          st.selectionToggle = false;
+          st.vertexDrag = null;
+          st.directionSnap = null;
+          draw();
+        }}
+        onWheel={(e) => {
+          e.preventDefault();
+          // DOM_DELTA_LINE / DOM_DELTA_PAGEも同じCSS px単位へそろえる。
+          const unit =
+            e.deltaMode === 1
+              ? 16
+              : e.deltaMode === 2
+                ? e.currentTarget.clientHeight
+                : 1;
+          withCtx((ctx) =>
+            onWheel(ctx, screenPos(e), {
+              deltaX: e.deltaX * unit,
+              deltaY: e.deltaY * unit,
+              shiftKey: e.shiftKey,
+              ctrlKey: e.ctrlKey,
+            }),
+          );
+        }}
+        onContextMenu={(e) => e.preventDefault()}
+      />
+      <div
+        className="cp-step-indicator"
+        data-floating-ui="cp-step-indicator"
+        aria-label="展開図に表示している手順"
+        data-tooltip="この手順までに付いた折り線を表示しています"
+        tabIndex={0}
+      >
+        手順 {displayedStep} / {totalSteps}
+      </div>
+    </div>
   );
 }

@@ -1,16 +1,17 @@
 #!/bin/sh
 
-if [ "${SKIP_CHECK:-}" = "1" ]; then
-    printf '%s\n' '警告: SKIP_CHECK=1 のため検査を飛ばして push しました' >&2
-    exit 0
-fi
-
 hook_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$hook_dir/../.." && pwd)
 check_script="$repo_root/scripts/check.ps1"
+check_ci_script="$repo_root/scripts/check-ci.ps1"
 
 if [ ! -f "$check_script" ]; then
     printf '%s\n' "[NG] 検査スクリプトが見つからないため push を中止します: $check_script" >&2
+    exit 1
+fi
+
+if [ ! -f "$check_ci_script" ]; then
+    printf '%s\n' "[NG] CI再現検査スクリプトが見つからないため push を中止します: $check_ci_script" >&2
     exit 1
 fi
 
@@ -33,5 +34,13 @@ if [ "$check_status" -ne 0 ]; then
     exit "$check_status"
 fi
 
-printf '%s\n' '[OK] 事前検査に合格しました'
+"$powershell_command" -NoProfile -ExecutionPolicy Bypass -File "$check_ci_script"
+check_ci_status=$?
+
+if [ "$check_ci_status" -ne 0 ]; then
+    printf '%s\n' "[NG] CI再現検査が失敗したため push を中止します (終了コード: $check_ci_status)" >&2
+    exit "$check_ci_status"
+fi
+
+printf '%s\n' '[OK] 作業ツリー検査とCI再現検査に合格しました'
 exit 0

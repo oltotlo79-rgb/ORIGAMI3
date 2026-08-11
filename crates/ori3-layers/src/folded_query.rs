@@ -11,7 +11,7 @@ use std::fmt;
 use glam::DVec2;
 use ori3_cp::Face;
 use ori3_geometry::dist_point_segment;
-use ori3_model::{CreasePattern, EPS, EdgeId, FaceId, VertexId};
+use ori3_model::{CreasePattern, EPS, EdgeId, EdgeKind, FaceId, VertexId};
 
 use crate::flat_state::{
     FlatState, layers_at_point, layers_from_top_at_point, representative_point,
@@ -91,6 +91,42 @@ pub struct ExtremeVertex {
 pub struct NearestEdge {
     pub edge_id: EdgeId,
     pub distance: f64,
+}
+
+/// One material edge as mapped by one owning face into the folded plane.
+///
+/// Unlike the legacy closest-edge queries, an edge instance is a true face
+/// boundary: `edge_id` occurs in [`Face::edges`] for `face_id`. Construction
+/// lines that merely pass through the face interior are therefore excluded.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FoldedEdgeInstance {
+    pub face_id: FaceId,
+    pub edge_id: EdgeId,
+    pub kind: EdgeKind,
+    /// Edge endpoints after applying the owning face's placement. Endpoint
+    /// order follows the crease-pattern edge (`v0`, then `v1`).
+    pub segment: [[f64; 2]; 2],
+}
+
+/// A closest true-boundary edge instance and its distance from the query point.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NearestFoldedEdgeInstance {
+    pub edge: FoldedEdgeInstance,
+    pub distance: f64,
+}
+
+/// A material edge shared by a requested near face and one adjacent far face.
+///
+/// Both mapped instances are retained. They coincide in a closed flat state,
+/// while a difference between them exposes a seam gap instead of hiding it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FoldedSharedEdge {
+    pub near_face_id: FaceId,
+    pub far_face_id: FaceId,
+    pub edge_id: EdgeId,
+    pub kind: EdgeKind,
+    pub near_segment: [[f64; 2]; 2],
+    pub far_segment: [[f64; 2]; 2],
 }
 
 /// Errors from construction and strict folded-state selection.
@@ -195,6 +231,7 @@ impl Error for FoldedQueryError {}
 struct FoldedEdgeSegment {
     edge_id: EdgeId,
     face_id: FaceId,
+    kind: EdgeKind,
     a: DVec2,
     b: DVec2,
 }
@@ -206,6 +243,7 @@ pub struct FoldedQuery<'a> {
     face_geometries: Vec<FoldedFaceGeometry>,
     geometry_index: HashMap<FaceId, usize>,
     edge_segments: Vec<FoldedEdgeSegment>,
+    boundary_edge_segments: Vec<FoldedEdgeSegment>,
 }
 
 impl<'a> FoldedQuery<'a> {
@@ -269,12 +307,14 @@ impl<'a> FoldedQuery<'a> {
         }
 
         let edge_segments = map_edge_segments(cp, faces, state, &positions, &local_polygons)?;
+        let boundary_edge_segments = map_boundary_edge_segments(cp, faces, state, &positions)?;
         Ok(Self {
             faces,
             state,
             face_geometries,
             geometry_index,
             edge_segments,
+            boundary_edge_segments,
         })
     }
 
@@ -403,6 +443,108 @@ impl<'a> FoldedQuery<'a> {
         self.nearest_edge_on_face(edge_point, face_id)
     }
 
+    /// True boundary-edge instances owned by `face_id`, ordered by edge ID.
+    ///
+    /// Auxiliary or other mapped CP lines lying only in the face interior are
+    /// not returned. Repeated occurrences of the same material edge in a face
+    /// boundary (for example around a slit) are represented once.
+    pub fn boundary_edges_on_face(
+        &self,
+        face_id: FaceId,
+    ) -> Result<Vec<FoldedEdgeInstance>, FoldedQueryError> {
+        if self.face_geometry(face_id).is_none() {
+            return Err(FoldedQueryError::MissingPlacement { face_id });
+        }
+        Ok(self
+            .boundary_edge_segments
+            .iter()
+            .filter(|edge| edge.face_id == face_id)
+            .map(folded_edge_instance)
+            .collect())
+    }
+
+    /// Select a face at an interior folded coordinate and one-based depth, then
+    /// return all of its true boundary-edge instances in deterministic order.
+    pub fn boundary_edges_on_sheet(
+        &self,
+        layer_seed: [f64; 2],
+        sheet_number: usize,
+    ) -> Result<Vec<FoldedEdgeInstance>, FoldedQueryError> {
+        let face_id = self.nth_from_top_at_point(layer_seed, sheet_number)?;
+        self.boundary_edges_on_face(face_id)
+    }
+
+    /// Find the closest true boundary-edge instance owned by `face_id`.
+    ///
+    /// This differs intentionally from [`Self::nearest_edge_on_face`], which
+    /// retains its legacy behavior of also considering mapped CP lines in the
+    /// face interior.
+    pub fn nearest_boundary_edge_on_face(
+        &self,
+        point: [f64; 2],
+        face_id: FaceId,
+    ) -> Result<NearestFoldedEdgeInstance, FoldedQueryError> {
+        if self.face_geometry(face_id).is_none() {
+            return Err(FoldedQueryError::MissingPlacement { face_id });
+        }
+        self.nearest_boundary_edge_matching(point, |edge| edge.face_id == face_id)
+    }
+
+    /// Select a face at `layer_seed` and one-based depth from the front, then
+    /// find its closest true boundary-edge instance to `edge_point`.
+    ///
+    /// `layer_seed` must be strictly inside the sheet. `edge_point` may lie on
+    /// its boundary and is validated independently.
+    pub fn nearest_boundary_edge_on_sheet(
+        &self,
+        edge_point: [f64; 2],
+        layer_seed: [f64; 2],
+        sheet_number: usize,
+    ) -> Result<NearestFoldedEdgeInstance, FoldedQueryError> {
+        if !is_finite(edge_point) {
+            return Err(FoldedQueryError::InvalidPoint { point: edge_point });
+        }
+        let face_id = self.nth_from_top_at_point(layer_seed, sheet_number)?;
+        self.nearest_boundary_edge_on_face(edge_point, face_id)
+    }
+
+    /// Shared boundary edges adjacent to `face_id`.
+    ///
+    /// Results are ordered by `(edge_id, far_face_id)`. Each entry retains both
+    /// face-specific mapped segments and the shared material [`EdgeId`]. Border
+    /// edges and CP lines merely mapped through the face interior have no far
+    /// owner and are omitted.
+    pub fn shared_edges(&self, face_id: FaceId) -> Result<Vec<FoldedSharedEdge>, FoldedQueryError> {
+        if self.face_geometry(face_id).is_none() {
+            return Err(FoldedQueryError::MissingPlacement { face_id });
+        }
+
+        let mut shared = Vec::new();
+        for near in self
+            .boundary_edge_segments
+            .iter()
+            .filter(|edge| edge.face_id == face_id)
+        {
+            for far in self
+                .boundary_edge_segments
+                .iter()
+                .filter(|edge| edge.edge_id == near.edge_id && edge.face_id != near.face_id)
+            {
+                shared.push(FoldedSharedEdge {
+                    near_face_id: near.face_id,
+                    far_face_id: far.face_id,
+                    edge_id: near.edge_id,
+                    kind: near.kind,
+                    near_segment: [near.a.to_array(), near.b.to_array()],
+                    far_segment: [far.a.to_array(), far.b.to_array()],
+                });
+            }
+        }
+        shared.sort_by_key(|edge| (edge.edge_id, edge.far_face_id));
+        shared.dedup_by_key(|edge| (edge.edge_id, edge.far_face_id));
+        Ok(shared)
+    }
+
     fn point_is_on_boundary(&self, point: [f64; 2]) -> bool {
         let point = DVec2::from(point);
         self.face_geometries
@@ -431,6 +573,32 @@ impl<'a> FoldedQuery<'a> {
             })
             .map(|(edge, distance)| NearestEdge {
                 edge_id: edge.edge_id,
+                distance,
+            })
+            .ok_or(FoldedQueryError::NoEdges)
+    }
+
+    fn nearest_boundary_edge_matching(
+        &self,
+        point: [f64; 2],
+        mut include: impl FnMut(&FoldedEdgeSegment) -> bool,
+    ) -> Result<NearestFoldedEdgeInstance, FoldedQueryError> {
+        if !is_finite(point) {
+            return Err(FoldedQueryError::InvalidPoint { point });
+        }
+        let point = DVec2::from(point);
+        self.boundary_edge_segments
+            .iter()
+            .filter(|edge| include(edge))
+            .map(|edge| (edge, dist_point_segment(point, edge.a, edge.b)))
+            .min_by(|(left_edge, left_distance), (right_edge, right_distance)| {
+                left_distance
+                    .total_cmp(right_distance)
+                    .then(left_edge.edge_id.cmp(&right_edge.edge_id))
+                    .then(left_edge.face_id.cmp(&right_edge.face_id))
+            })
+            .map(|(edge, distance)| NearestFoldedEdgeInstance {
+                edge: folded_edge_instance(edge),
                 distance,
             })
             .ok_or(FoldedQueryError::NoEdges)
@@ -616,12 +784,74 @@ fn map_edge_segments(
             segments.push(FoldedEdgeSegment {
                 edge_id: edge.id,
                 face_id: face.id,
+                kind: edge.kind,
                 a: placement.apply(a),
                 b: placement.apply(b),
             });
         }
     }
     Ok(segments)
+}
+
+fn map_boundary_edge_segments(
+    cp: &CreasePattern,
+    faces: &[Face],
+    state: &FlatState,
+    positions: &HashMap<VertexId, DVec2>,
+) -> Result<Vec<FoldedEdgeSegment>, FoldedQueryError> {
+    let edges: HashMap<EdgeId, _> = cp.edges.iter().map(|edge| (edge.id, edge)).collect();
+    let mut segments = Vec::new();
+    for face in faces {
+        let placement = state
+            .placements
+            .get(&face.id)
+            .ok_or(FoldedQueryError::MissingPlacement { face_id: face.id })?;
+        let mut edge_ids = face.edges.clone();
+        edge_ids.sort_unstable();
+        edge_ids.dedup();
+        for edge_id in edge_ids {
+            // Keep construction backward compatible with callers that provide
+            // synthetic Face boundaries without corresponding CP edges. Such
+            // boundaries simply have no queryable material-edge instance.
+            let Some(edge) = edges.get(&edge_id) else {
+                continue;
+            };
+            let a =
+                positions
+                    .get(&edge.v0)
+                    .copied()
+                    .ok_or(FoldedQueryError::MissingEdgeVertex {
+                        edge_id,
+                        vertex_id: edge.v0,
+                    })?;
+            let b =
+                positions
+                    .get(&edge.v1)
+                    .copied()
+                    .ok_or(FoldedQueryError::MissingEdgeVertex {
+                        edge_id,
+                        vertex_id: edge.v1,
+                    })?;
+            segments.push(FoldedEdgeSegment {
+                edge_id,
+                face_id: face.id,
+                kind: edge.kind,
+                a: placement.apply(a),
+                b: placement.apply(b),
+            });
+        }
+    }
+    segments.sort_by_key(|edge| (edge.face_id, edge.edge_id));
+    Ok(segments)
+}
+
+fn folded_edge_instance(edge: &FoldedEdgeSegment) -> FoldedEdgeInstance {
+    FoldedEdgeInstance {
+        face_id: edge.face_id,
+        edge_id: edge.edge_id,
+        kind: edge.kind,
+        segment: [edge.a.to_array(), edge.b.to_array()],
+    }
 }
 
 fn extreme_precedes(candidate: ExtremeVertex, current: ExtremeVertex) -> bool {

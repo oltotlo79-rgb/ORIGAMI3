@@ -38,8 +38,8 @@ pub struct PoseOutcome {
     pub result: ori3_rigid::SolveResult,
     pub soft: Option<SoftMesh>,
     pub suspect_hinges: Vec<EdgeId>,
-    /// 食い込み防止が紙どうしの接触直前で動きを止めたか。正常な停止なので警告ではない。
-    pub contact_stopped: bool,
+    /// 紙どうしの接触を検出したか。接触しても要求角まで計算を続ける。
+    pub contact_detected: bool,
 }
 
 /// たわみの計算結果を足した `sequence_replay` の戻り値(SIM-012)。
@@ -48,6 +48,13 @@ pub struct ReplayOutcome {
     #[serde(flatten)]
     pub result: ori3_layers::ReplayResult,
     pub soft: Option<SoftMesh>,
+    pub sequence_targets: Vec<Driver>,
+    pub angles: HashMap<EdgeId, f64>,
+    pub relaxations: Vec<ori3_rigid::AngleRelaxation>,
+    pub closure_rms: Option<f64>,
+    pub best_effort: bool,
+    pub converged: bool,
+    pub contact_detected: bool,
 }
 
 /// たわみの網を作る。指定が無い・切ってあるときは何もしない(従来どおりの動作)。
@@ -66,22 +73,36 @@ fn soft_mesh(
     Some(ori3_soft::relax(cp, faces, frame, settings))
 }
 
-/// 不収束候補の壊れたフレームを表示せず、warm startの直前収束姿勢へ警告だけ載せる。
-fn keep_previous_pose_on_failure(
+/// 全値finiteの最良候補はそのまま表示し、数値が壊れた場合だけ直前形へ戻す。
+fn fallback_nonfinite_pose(
     cp: &CreasePattern,
     faces: &[ori3_cp::Face],
     warm: Option<&HashMap<EdgeId, f64>>,
     failed: ori3_rigid::SolveResult,
 ) -> ori3_rigid::SolveResult {
-    if failed.converged {
+    let finite = failed.closure_rms.is_finite()
+        && failed.angles.values().all(|angle| angle.is_finite())
+        && failed.frame.faces.iter().all(|face| {
+            face.polygon
+                .iter()
+                .flatten()
+                .all(|coordinate| coordinate.is_finite())
+        });
+    if finite {
         return failed;
     }
     let Some(warm) = warm else { return failed };
     let mut previous = ori3_rigid::solve(cp, faces, &[], Some(warm));
-    if !previous.converged {
+    if previous.frame.faces.iter().any(|face| {
+        face.polygon
+            .iter()
+            .flatten()
+            .any(|coordinate| !coordinate.is_finite())
+    }) {
         return failed;
     }
     previous.converged = false;
+    previous.best_effort = true;
     previous.iterations = previous.iterations.saturating_add(failed.iterations);
     for warning in failed.frame.warnings {
         if !previous.frame.warnings.contains(&warning) {
@@ -127,9 +148,19 @@ fn lock<'a>(state: &'a State<'_, Mutex<DocumentStore>>) -> MutexGuard<'a, Docume
 ///
 /// 設計規約: ロック中に重い計算をしない。`f` の中で取ったロックは `f` を抜けた時点で
 /// 解放されているので、再生(面400・10手順でrelease約23ms)はロックの外で走る。
-fn view_command(f: impl FnOnce() -> Result<DocumentView, String>) -> Result<DocumentView, String> {
+fn store_view_pose_angles(state: &State<'_, Mutex<DocumentStore>>, view: &DocumentView) {
+    if view.frame.is_some() && view.angles.values().all(|angle| angle.is_finite()) {
+        lock(state).store_pose_angles(view.angles.clone());
+    }
+}
+
+fn view_command(
+    state: &State<'_, Mutex<DocumentStore>>,
+    f: impl FnOnce() -> Result<DocumentView, String>,
+) -> Result<DocumentView, String> {
     let mut view = f()?; // ここでロックは解放済み
     attach_replay(&mut view);
+    store_view_pose_angles(state, &view);
     Ok(view)
 }
 
@@ -139,7 +170,7 @@ pub fn document_new(
     paper: Paper,
 ) -> Result<DocumentView, String> {
     guard(AssertUnwindSafe(|| {
-        view_command(|| lock(&state).new_document(paper))
+        view_command(&state, || lock(&state).new_document(paper))
     }))
 }
 
@@ -149,7 +180,7 @@ pub fn document_open(
     path: String,
 ) -> Result<DocumentView, String> {
     guard(AssertUnwindSafe(|| {
-        view_command(|| lock(&state).open(Path::new(&path)))
+        view_command(&state, || lock(&state).open(Path::new(&path)))
     }))
 }
 
@@ -203,6 +234,7 @@ pub fn recovery_restore(
             return Ok(None);
         };
         attach_replay(&mut view); // 重い再生はロック解放後(view_commandと同じ規約)
+        store_view_pose_angles(&state, &view);
         Ok(Some(view))
     }))
 }
@@ -213,18 +245,22 @@ pub fn edit_apply(
     op: EditOp,
 ) -> Result<DocumentView, String> {
     guard(AssertUnwindSafe(|| {
-        view_command(|| lock(&state).apply_edit(op))
+        view_command(&state, || lock(&state).apply_edit(op))
     }))
 }
 
 #[tauri::command(async)]
 pub fn edit_undo(state: State<'_, Mutex<DocumentStore>>) -> Result<DocumentView, String> {
-    guard(AssertUnwindSafe(|| view_command(|| lock(&state).undo())))
+    guard(AssertUnwindSafe(|| {
+        view_command(&state, || lock(&state).undo())
+    }))
 }
 
 #[tauri::command(async)]
 pub fn edit_redo(state: State<'_, Mutex<DocumentStore>>) -> Result<DocumentView, String> {
-    guard(AssertUnwindSafe(|| view_command(|| lock(&state).redo())))
+    guard(AssertUnwindSafe(|| {
+        view_command(&state, || lock(&state).redo())
+    }))
 }
 
 #[tauri::command(async)]
@@ -233,7 +269,7 @@ pub fn sequence_apply(
     op: SeqOp,
 ) -> Result<DocumentView, String> {
     guard(AssertUnwindSafe(|| {
-        view_command(|| lock(&state).apply_seq(op))
+        view_command(&state, || lock(&state).apply_seq(op))
     }))
 }
 
@@ -241,12 +277,12 @@ pub fn sequence_apply(
 /// 3D表示用フレームを返す。前回解はstoreが保持し、warm startとして使う。
 /// facesは編集時に導出済みのstoreのキャッシュを流用する(extract_faces再実行なし)。
 ///
-/// `drivers` は**厳密に固定**する折り線(いま操作しているヒンジ)、`keep` は
+/// `hard` は**厳密に固定**する折り線(いま操作しているヒンジ)、`preferred` は
 /// **なるべく保ちたい目標**(以前に指定した折り線)。内部頂点のまわりでは折り角
 /// どうしに拘束があるので、指定済みを全部固定すると閉包が破れて面が離れる
 /// (=紙が切れて見える)。`keep` があるときは「閉包を満たす形のうち目標に
 /// いちばん近いもの」を解き([`ori3_rigid::solve_near`])、紙がつながったまま
-/// 以前の指定へ追従させる。`keep` を省くと従来どおり全部固定で解く。
+/// 以前の指定へ追従させる。`warm_seed` は初期値であり、固定条件にはしない。
 ///
 /// 設計規約: ロック中に重い計算をしない(将来の自動保存スレッドとの共存のため)。
 /// ロック下ではCP・faces・前回解の複製だけを行って即ロックを解放し、
@@ -254,45 +290,48 @@ pub fn sequence_apply(
 #[tauri::command(async)]
 pub fn pose_solve(
     state: State<'_, Mutex<DocumentStore>>,
-    drivers: Vec<Driver>,
-    keep: Option<Vec<Driver>>,
+    hard: Vec<Driver>,
+    preferred: Option<Vec<Driver>>,
     soft: Option<SoftSettings>,
-    seed_only: Option<bool>,
+    warm_seed: Option<Vec<Driver>>,
 ) -> Result<PoseOutcome, String> {
     guard(AssertUnwindSafe(|| {
-        let (cp, faces, warm, overlap_enabled, penetration_enabled) = lock(&state).pose_inputs(); // 複製のみ、即ロック解放
-        let keep = keep.unwrap_or_default();
-        let driver_hinges: Vec<EdgeId> = drivers
-            .iter()
-            .chain(&keep)
-            .map(|driver| driver.hinge)
-            .collect();
-        let targets: Option<HashMap<EdgeId, f64>> = (!keep.is_empty()).then(|| {
-            keep.iter()
-                .map(|d| (d.hinge, d.target_angle_deg))
-                .chain(drivers.iter().map(|d| (d.hinge, d.target_angle_deg)))
+        let (cp, faces, stored_warm, overlap_enabled, penetration_enabled) =
+            lock(&state).pose_inputs(); // 複製のみ、即ロック解放
+        let preferred = preferred.unwrap_or_default();
+        let explicit_warm: Option<HashMap<EdgeId, f64>> = warm_seed.map(|seed| {
+            seed.into_iter()
+                .map(|driver| (driver.hinge, driver.target_angle_deg))
                 .collect()
         });
-        // beginPullが現在表示中の角度をwarm startへ合わせる1回だけは、平坦からの
-        // 動きとして接触停止しない。通常の角度操作と引く操作は同じ継続法を通る。
-        let (raw_result, contact_stopped) = if seed_only.unwrap_or(false) {
-            let result = targets.as_ref().map_or_else(
-                || ori3_rigid::solve(&cp, &faces, &drivers, warm.as_ref()),
-                |targets| ori3_rigid::solve_near(&cp, &faces, &drivers, targets, warm.as_ref()),
-            );
-            (result, false)
-        } else {
-            let motion = ori3_rigid::solve_motion(
-                &cp,
-                &faces,
-                &drivers,
-                targets.as_ref(),
-                warm.as_ref(),
-                penetration_enabled,
-            );
-            (motion.result, motion.contact_stopped)
-        };
-        let mut result = keep_previous_pose_on_failure(&cp, &faces, warm.as_ref(), raw_result);
+        if explicit_warm
+            .as_ref()
+            .is_some_and(|seed| seed.values().any(|angle| !angle.is_finite()))
+        {
+            return Err("追従計算の出発角に有限でない値があります".to_string());
+        }
+        let warm = explicit_warm.as_ref().or(stored_warm.as_ref());
+        let driver_hinges: Vec<EdgeId> = hard
+            .iter()
+            .chain(&preferred)
+            .map(|driver| driver.hinge)
+            .collect();
+        let targets: Option<HashMap<EdgeId, f64>> = (!preferred.is_empty()).then(|| {
+            preferred
+                .iter()
+                .map(|d| (d.hinge, d.target_angle_deg))
+                .collect()
+        });
+        let motion = ori3_rigid::solve_motion(
+            &cp,
+            &faces,
+            &hard,
+            targets.as_ref(),
+            warm,
+            penetration_enabled,
+        );
+        let contact_detected = motion.contact_detected;
+        let mut result = fallback_nonfinite_pose(&cp, &faces, warm, motion.result);
         // 手順を持たない角度操作では初期層順序(面ID順)を上下の契約にする。
         // 共有網頂点へ補正するので、折り目の接続は切れない。
         let mut order: Vec<ori3_model::FaceId> = faces.iter().map(|face| face.id).collect();
@@ -325,14 +364,14 @@ pub fn pose_solve(
         ); // SIM-007
         // たわみもロックの外で計算する(規約どおり)
         let mesh = soft_mesh(&cp, &faces, &result.frame, soft.as_ref());
-        if result.converged {
+        if result.closure_rms.is_finite() && result.angles.values().all(|angle| angle.is_finite()) {
             lock(&state).store_pose_angles(result.angles.clone()); // 短いロックで書き戻し
         }
         Ok(PoseOutcome {
             result,
             soft: mesh,
             suspect_hinges,
-            contact_stopped,
+            contact_detected,
         })
     }))
 }
@@ -341,7 +380,8 @@ pub fn pose_solve(
 /// 立体を求め直す。3D状態は保存しないので、展開図を編集した後でも再生できる。
 ///
 /// 設計規約: ロック中に重い計算をしない。ロック下ではDocumentと導出済みfacesの複製
-/// だけを行って即ロックを解放し、再生はロックの外で実行する(結果の書き戻しは不要)。
+/// だけを行って即ロックを解放し、再生はロックの外で実行する。実角は次回の
+/// warm startとしてだけ短いロックで保持し、作品ファイルには保存しない。
 #[tauri::command(async)]
 pub fn sequence_replay(
     state: State<'_, Mutex<DocumentStore>>,
@@ -373,6 +413,7 @@ pub fn sequence_replay(
             },
         );
         let intersections = ori3_rigid::self_intersection_pairs(&result.frame);
+        let contact_detected = !intersections.is_empty();
         result.suspect_hinges = ori3_rigid::suspect_hinges_for_intersections(
             &doc.cp,
             &faces,
@@ -395,7 +436,27 @@ pub fn sequence_replay(
         }
         // たわみもロックの外で計算する(規約どおり)
         let mesh = soft_mesh(&doc.cp, &faces, &result.frame, soft.as_ref());
-        Ok(ReplayOutcome { result, soft: mesh })
+        let angles = result.hinge_angles.clone();
+        let sequence_targets = result.sequence_targets.clone();
+        let relaxations = result.relaxations.clone();
+        let closure_rms = result.closure_rms.is_finite().then_some(result.closure_rms);
+        let best_effort = result.best_effort;
+        let converged = result.converged;
+        if angles.values().all(|angle| angle.is_finite()) {
+            // 再生後のライブ操作が同じ解枝から始まるよう、短いロックでwarmだけ更新する。
+            lock(&state).store_pose_angles(angles.clone());
+        }
+        Ok(ReplayOutcome {
+            result,
+            soft: mesh,
+            sequence_targets,
+            angles,
+            relaxations,
+            closure_rms,
+            best_effort,
+            converged,
+            contact_detected,
+        })
     }))
 }
 

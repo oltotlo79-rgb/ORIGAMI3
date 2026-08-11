@@ -16,11 +16,19 @@ export function HistoryButtons() {
 
   return (
     <>
-      <button type="button" title={`${undoHint} (Ctrl+Z)`} onClick={() => void undo()}>
+      <button
+        type="button"
+        data-tooltip={`${undoHint} (Ctrl+Z)`}
+        onClick={() => void undo()}
+      >
         <ToolbarIcon name="undo" />
         元に戻す
       </button>
-      <button type="button" title={`${redoHint} (Ctrl+Y)`} onClick={() => void redo()}>
+      <button
+        type="button"
+        data-tooltip={`${redoHint} (Ctrl+Y)`}
+        onClick={() => void redo()}
+      >
         <ToolbarIcon name="redo" />
         やり直し
       </button>

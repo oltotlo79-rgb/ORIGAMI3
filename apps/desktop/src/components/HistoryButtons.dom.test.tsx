@@ -23,17 +23,27 @@ const redoButton = () => screen.getByRole("button", { name: "やり直し" });
 describe("元に戻す/やり直しのボタン", () => {
   it("角度の履歴が無ければ、作品データを戻すと知らせる", () => {
     render(<HistoryButtons />);
-    expect(undoButton().title).toContain("展開図・手順の変更を戻します");
-    expect(redoButton().title).toContain("やり直せる操作はありません");
-    expect(undoButton().title).toContain("(Ctrl+Z)");
-    expect(redoButton().title).toContain("(Ctrl+Y)");
+    expect(undoButton().getAttribute("data-tooltip")).toContain(
+      "展開図・手順の変更を戻します",
+    );
+    expect(redoButton().getAttribute("data-tooltip")).toContain(
+      "やり直せる操作はありません",
+    );
+    expect(undoButton().getAttribute("data-tooltip")).toContain("(Ctrl+Z)");
+    expect(redoButton().getAttribute("data-tooltip")).toContain("(Ctrl+Y)");
+    expect(undoButton().hasAttribute("title")).toBe(false);
+    expect(redoButton().hasAttribute("title")).toBe(false);
   });
 
   it("角度の履歴があれば、折り角度が戻ると知らせる", () => {
     useAppStore.setState({ angleUndoStack: [new Map([[5, 90]])] });
     render(<HistoryButtons />);
-    expect(undoButton().title).toContain("折り角度の変更を戻します");
-    expect(undoButton().title).toContain("折り線はそのまま残ります");
+    expect(undoButton().getAttribute("data-tooltip")).toContain(
+      "折り角度の変更を戻します",
+    );
+    expect(undoButton().getAttribute("data-tooltip")).toContain(
+      "折り線はそのまま残ります",
+    );
   });
 
   it("やり直しは作品データが先で、その後に折り角度と知らせる", () => {
@@ -42,11 +52,15 @@ describe("元に戻す/やり直しのボタン", () => {
       angleRedoStack: [new Map([[5, 90]])],
     });
     render(<HistoryButtons />);
-    expect(redoButton().title).toContain("展開図・手順の変更をやり直します");
+    expect(redoButton().getAttribute("data-tooltip")).toContain(
+      "展開図・手順の変更をやり直します",
+    );
 
     cleanup();
     useAppStore.setState({ docUndoDepth: 0 });
     render(<HistoryButtons />);
-    expect(redoButton().title).toBe("折り角度の変更をやり直します (Ctrl+Y)");
+    expect(redoButton().getAttribute("data-tooltip")).toBe(
+      "折り角度の変更をやり直します (Ctrl+Y)",
+    );
   });
 });

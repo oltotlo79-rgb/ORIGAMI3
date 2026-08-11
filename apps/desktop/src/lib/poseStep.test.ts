@@ -64,7 +64,7 @@ describe("buildPoseStep", () => {
 });
 
 describe("currentAngles / hasPoseAngle", () => {
-  it("利用者の指定 → 追従計算の結果 → 0度 の順に決める", () => {
+  it("追従計算の実角 → 利用者の希望値 → 0度 の順に決める", () => {
     const angles = currentAngles(
       new Set([0, 5, 9]),
       new Map([[5, 90]]),
@@ -73,9 +73,24 @@ describe("currentAngles / hasPoseAngle", () => {
         [9, RAW],
       ]),
     );
-    expect(angles.get(5)).toBe(90);
+    expect(angles.get(5)).toBe(12);
     expect(angles.get(9)).toBe(RAW);
     expect(angles.get(0)).toBe(0);
+  });
+
+  it("希望90度より追従後の実角72.123456789度を丸めずに保存する", () => {
+    const actual = 72.123456789;
+    const angles = currentAngles(
+      new Set([5]),
+      new Map([[5, 90]]),
+      new Map([[5, actual]]),
+    );
+    const step = buildPoseStep(DOC, angles);
+
+    expect(step.drivers).toHaveLength(1);
+    expect(step.drivers[0].target_angle_deg).toBe(actual);
+    expect(step.drivers[0].target_angle_deg).not.toBe(90);
+    expect(JSON.parse(JSON.stringify(step)).drivers[0].target_angle_deg).toBe(actual);
   });
 
   it("ほぼ平らなら残す意味がない", () => {

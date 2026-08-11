@@ -52,6 +52,17 @@ export interface Driver {
 }
 
 /**
+ * 前の希望角を、紙のつながりを保つために譲った量。
+ * 1回の再生・追従計算だけに属する導出情報で、作品ファイルへは保存しない。
+ */
+export interface AngleRelaxation {
+  hinge: number;
+  target_angle_deg: number;
+  actual_angle_deg: number;
+  delta_deg: number;
+}
+
+/**
  * 手順永続化用のdriver: 折り線をCP座標の線分で指定する。
  * 再生時は線分上に乗る折り辺すべて(分割後の断片を含む)を対象角へ駆動する
  */
@@ -204,6 +215,18 @@ export interface DocumentView {
   skipped: number[];
   /** 補正後にも残る食い込みの原因候補ヒンジ */
   suspect_hinges?: number[];
+  /** 手順から現在の辺IDへ解決した希望角。保存データではなく再生の導出結果 */
+  sequence_targets?: Driver[];
+  /** 自動再生で得た全ヒンジの実角。次の操作のwarm startにも使う */
+  angles?: Record<string, number>;
+  /** 前の希望角を譲った診断（辺ID昇順） */
+  relaxations?: AngleRelaxation[];
+  /** 自動再生結果の閉包残差RMS */
+  closure_rms?: number;
+  /** 収束前でも現在指定を守った最良の有限候補を表示しているか */
+  best_effort?: boolean;
+  /** 自動再生の追従計算が収束したか */
+  converged?: boolean;
   /**
    * 折り切る前の非破壊確認で見つかった、巻き込みに必要な追加折り目。
    * 通常のDocumentViewでは未指定またはnullになる。
@@ -327,6 +350,17 @@ export interface ReplayResult {
   warnings: string[];
   /** 補正後にも残る食い込みの原因候補ヒンジ */
   suspect_hinges?: number[];
+  /** 手順から現在の辺IDへ解決した希望角（保存しない導出結果） */
+  sequence_targets?: Driver[];
+  /** 再生で得た全ヒンジの実角（JSONでは辺IDが文字列キーになる） */
+  angles?: Record<string, number>;
+  /** 前の希望角を譲った診断（辺ID昇順） */
+  relaxations?: AngleRelaxation[];
+  closure_rms?: number;
+  best_effort?: boolean;
+  converged?: boolean;
+  /** 紙どうしの接触を検出したか。接触しても要求角まで進む */
+  contact_detected?: boolean;
   /** たわみを指定したときだけ入る三角形の網(SIM-012) */
   soft?: SoftMesh | null;
 }
@@ -339,10 +373,16 @@ export interface SolveResult {
   angles: Record<string, number>;
   /** 実行した反復回数(warm start効果の確認用) */
   iterations: number;
+  /** 返した候補の閉包残差RMS */
+  closure_rms?: number;
+  /** 収束前でも現在指定を守った最良の有限候補を返しているか */
+  best_effort?: boolean;
+  /** 前の希望角を譲った診断（辺ID昇順） */
+  relaxations?: AngleRelaxation[];
   /** 補正後にも残る食い込みの原因候補ヒンジ */
   suspect_hinges?: number[];
-  /** 食い込み防止により、紙どうしがぶつかる直前で動きを止めたか */
-  contact_stopped?: boolean;
+  /** 紙どうしの接触を検出したか。接触しても要求角まで進む */
+  contact_detected?: boolean;
   /** たわみを指定したときだけ入る三角形の網(SIM-012) */
   soft?: SoftMesh | null;
 }

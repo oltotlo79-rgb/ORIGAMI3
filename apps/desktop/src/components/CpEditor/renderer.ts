@@ -12,6 +12,7 @@ import {
   type Rgb,
 } from "../../lib/cpColors";
 import { paperExtent, type SnapResult } from "./snap";
+import type { Segment } from "../../lib/mirror";
 
 // 線種ごとの色(山=赤・谷=青の慣例)は lib/cpColors に集約した。
 // 紙の塗りと同時に決めないと、赤い紙に赤い山折り線を描いて見えなくなるため。
@@ -28,6 +29,10 @@ export const COLORS = {
   /** 補正後にも食い込みが残る原因候補。選択の橙・ホバーの紫より外側で光らせる。 */
   suspect: "#ff2438",
   suspectGlow: "rgba(255, 36, 56, 0.88)",
+  /** 希望角を譲って紙のつながりへ追従した折り目。 */
+  relaxed: "#d97706",
+  /** いま角度を固定して操作している折り目。 */
+  active: "#40cfff",
   snapMarker: "#2aa02a",
   /** 平らに畳めない点(CPE-009)。操作は止めず色で知らせるだけ */
   violation: "#ff8c00",
@@ -37,8 +42,9 @@ export const COLORS = {
   hintText: "#ffffff",
   /** 延長・二等分方向へ吸着中であることを示す薄いガイド線。 */
   directionGuide: "rgba(38, 97, 74, 0.48)",
-  /** 左右対称に描くときの対称軸(CPE-010)。薄く出して邪魔をしない */
-  mirrorAxis: "rgba(59, 111, 201, 0.45)",
+  /** 対称操作の基準線(CPE-010)。山・谷・補助・選択のどの色とも見分ける。 */
+  mirrorAxis: "rgba(117, 61, 188, 0.94)",
+  mirrorAxisHalo: "rgba(255, 255, 255, 0.82)",
   marqueeFill: "rgba(59, 111, 201, 0.12)",
   marqueeStroke: "#3b6fc9",
   /** 拡大中に、紙のどの部分を見ているか示す細い位置バー */
@@ -60,8 +66,11 @@ export const LINE_WIDTHS = {
   grid: 1,
   selected: 6,
   hovered: 10,
-  suspect: 11,
+  relaxed: 8,
+  active: 6,
+  suspect: 13,
   preview: 1.5,
+  mirrorAxis: 2.5,
 } as const;
 
 /** 方眼が黒く潰れないための最小表示間隔(CSS px)。 */
@@ -237,8 +246,8 @@ export interface RenderOverlay {
   preview: { a: Vec2; b: Vec2; kind: EdgeKind } | null;
   /** 方向吸着中に紙を横切って示す補助ガイド。 */
   directionGuide: [Vec2, Vec2] | null;
-  /** 左右対称に描いているときの対称軸のx座標(正規化座標)。使わないならnull */
-  mirrorAxis: number | null;
+  /** 対称操作の基準線を、紙の輪郭まで延ばした線分。使わないならnull。 */
+  mirrorAxis: Segment | null;
   /** 対称軸の反対側に出るプレビュー線(左右対称のときだけ) */
   mirrorPreview: { a: Vec2; b: Vec2; kind: EdgeKind } | null;
   /** 描いている最中の曲線と、それに付く「曲がるための線」(CPE-011)。
@@ -262,6 +271,10 @@ export interface RenderOverlay {
   hoveredHinge?: number | null;
   /** 補正後にも食い込みが残る原因候補ヒンジ */
   suspectHinges?: number[];
+  /** 希望角を譲って追従したヒンジ */
+  relaxedHinges?: number[];
+  /** いま利用者が角度を操作しているヒンジ */
+  activeHinges?: number[];
 }
 
 /** 点を動かしている途中のプレビュー: つながる線を破線で新しい位置へ引き直す */
@@ -384,18 +397,21 @@ function drawEdges(
   fill: Rgb,
   hoveredHinge: number | null,
   suspectHinges: readonly number[],
+  relaxedHinges: readonly number[],
+  activeHinges: readonly number[],
 ): void {
   const byId = new Map(doc.cp.vertices.map((v) => [v.id, v.pos]));
   const selected = new Set(selection.edgeIds);
   const suspects = new Set(suspectHinges);
+  const relaxed = new Set(relaxedHinges);
+  const active = new Set(activeHinges);
   const halo = haloColor(fill);
   for (const e of doc.cp.edges) {
     const a = byId.get(e.v0);
     const b = byId.get(e.v1);
     if (!a || !b) continue; // 参照切れの壊れた線は描かない(検査の警告で知らせる)
     if (suspects.has(e.id)) {
-      // 赤い光を通常線と選択色の下へ敷く。同じ線を選ぶと橙/紫の芯が残り、
-      // 「原因候補」と「いま操作中」を同時に見分けられる。
+      // 食い込みは紙の異常なので、追従・選択・操作中の色より赤を優先する。
       ctx.save();
       ctx.strokeStyle = COLORS.suspectGlow;
       ctx.lineWidth = LINE_WIDTHS.suspect;
@@ -405,7 +421,16 @@ function drawEdges(
       strokeSegment(ctx, view, a, b);
       ctx.restore();
     }
-    if (e.id === hoveredHinge) {
+    if (!suspects.has(e.id) && relaxed.has(e.id)) {
+      // 希望角を譲った折り目は、通常線の外側へ琥珀を敷く。
+      ctx.save();
+      ctx.strokeStyle = COLORS.relaxed;
+      ctx.lineWidth = LINE_WIDTHS.relaxed;
+      ctx.setLineDash([]);
+      strokeSegment(ctx, view, a, b);
+      ctx.restore();
+    }
+    if (!suspects.has(e.id) && e.id === hoveredHinge) {
       // 全選択の橙色より外側へ紫の縁を敷き、どのスライダーの線かを示す。
       ctx.save();
       ctx.strokeStyle = COLORS.hingeHover;
@@ -414,11 +439,20 @@ function drawEdges(
       strokeSegment(ctx, view, a, b);
       ctx.restore();
     }
-    if (selected.has(e.id)) {
+    if (!suspects.has(e.id) && selected.has(e.id)) {
       // 選択強調: 下に太いハイライトを敷く
       ctx.save();
       ctx.strokeStyle = COLORS.selection;
       ctx.lineWidth = LINE_WIDTHS.selected;
+      ctx.setLineDash([]);
+      strokeSegment(ctx, view, a, b);
+      ctx.restore();
+    }
+    if (!suspects.has(e.id) && active.has(e.id)) {
+      // 現在操作中の水色を芯に置く。外側の赤・琥珀も同時に見える。
+      ctx.save();
+      ctx.strokeStyle = COLORS.active;
+      ctx.lineWidth = LINE_WIDTHS.active;
       ctx.setLineDash([]);
       strokeSegment(ctx, view, a, b);
       ctx.restore();
@@ -461,18 +495,19 @@ function drawSelectedVertices(
   }
 }
 
-/** 左右対称に描いているときの対称軸(紙の縦の中心線)を薄い破線で示す */
+/** 対称操作の基準線を、白い縁取りと目立つ破線で示す。 */
 function drawMirrorAxis(
   ctx: CanvasRenderingContext2D,
-  doc: Document,
   view: ViewTransform,
-  axisX: number,
+  axis: Segment,
 ): void {
-  const [, h] = paperExtent(doc);
+  ctx.setLineDash([9, 6]);
+  ctx.strokeStyle = COLORS.mirrorAxisHalo;
+  ctx.lineWidth = LINE_WIDTHS.mirrorAxis + 3;
+  strokeSegment(ctx, view, axis[0], axis[1]);
   ctx.strokeStyle = COLORS.mirrorAxis;
-  ctx.lineWidth = 1;
-  ctx.setLineDash([...DASH_AUX]);
-  strokeSegment(ctx, view, [axisX, 0], [axisX, h]);
+  ctx.lineWidth = LINE_WIDTHS.mirrorAxis;
+  strokeSegment(ctx, view, axis[0], axis[1]);
   ctx.setLineDash([]);
 }
 
@@ -555,7 +590,8 @@ function drawOverlay(
     drawLabel(ctx, sx + 12, sy + 12, overlay.tooltip.text);
   }
   if (overlay.hint) {
-    drawLabel(ctx, 8, 8, overlay.hint);
+    // 左上の常設DOM案内と重ならない位置に、一時的な作図案内だけを出す。
+    drawLabel(ctx, 8, 112, overlay.hint);
   }
 }
 
@@ -634,7 +670,6 @@ export function render(
   ctx.restore();
 
   drawGrid(ctx, doc, view, fill);
-  if (overlay.mirrorAxis !== null) drawMirrorAxis(ctx, doc, view, overlay.mirrorAxis);
   drawEdges(
     ctx,
     doc,
@@ -643,7 +678,11 @@ export function render(
     fill,
     overlay.hoveredHinge ?? null,
     overlay.suspectHinges ?? [],
+    overlay.relaxedHinges ?? [],
+    overlay.activeHinges ?? [],
   );
+  // 選んだ既存線を基準にしても、その線の下へ隠れない順番で重ねる。
+  if (overlay.mirrorAxis !== null) drawMirrorAxis(ctx, view, overlay.mirrorAxis);
   drawSelectedVertices(ctx, doc, view, selection);
   drawViolations(ctx, doc, view, overlay.violations);
   if (overlay.vertexDrag) drawVertexDrag(ctx, doc, view, overlay.vertexDrag);

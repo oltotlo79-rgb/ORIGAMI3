@@ -8,9 +8,7 @@ use ori3_layers::{replay, resolve_driver_edges};
 use ori3_model::{
     Document, Driver, DriverLine, EdgeKind, FoldStep, Frame3D, TechniqueKind, VertexId,
 };
-use ori3_rigid::{
-    max_seam_gap, solve_near_with_reflection_symmetry, three_point_support,
-};
+use ori3_rigid::{max_seam_gap, solve_near_with_reflection_symmetry, three_point_support};
 
 const EPS: f64 = 1e-8;
 
@@ -57,13 +55,21 @@ fn seed_drivers(document: &Document) -> Vec<Driver> {
     let mut drivers = BTreeMap::<u32, f64>::new();
     for line in &lines {
         let resolved = resolve_driver_edges(&document.cp, line);
-        assert_eq!(resolved.len(), 10, "a Devil horn line has ten exact fragments");
+        assert_eq!(
+            resolved.len(),
+            10,
+            "a Devil horn line has ten exact fragments"
+        );
         for edge in resolved {
             let previous = drivers.insert(edge, line.target_angle_deg);
             assert!(previous.is_none_or(|angle| angle == line.target_angle_deg));
         }
     }
-    assert_eq!(drivers.len(), 20, "the paired horn folds drive twenty fragments");
+    assert_eq!(
+        drivers.len(),
+        20,
+        "the paired horn folds drive twenty fragments"
+    );
     drivers
         .into_iter()
         .map(|(hinge, target_angle_deg)| Driver {
@@ -106,7 +112,10 @@ fn folded_vertices(faces: &[Face], frame: &Frame3D) -> HashMap<VertexId, DVec3> 
         for (&vertex, &point) in face.vertices.iter().zip(&face3d.polygon) {
             let point = DVec3::from(point);
             if let Some(previous) = positions.insert(vertex, point) {
-                assert!((previous - point).length() < 1e-7, "shared vertex {vertex} tore");
+                assert!(
+                    (previous - point).length() < 1e-7,
+                    "shared vertex {vertex} tore"
+                );
             }
         }
     }
@@ -173,12 +182,11 @@ fn boundary_corner_count(document: &Document) -> usize {
     neighbors
         .iter()
         .filter(|(vertex, adjacent)| {
-            adjacent.len() == 2
-                && {
-                    let a = (positions[&adjacent[0]] - positions[vertex]).normalize();
-                    let b = (positions[&adjacent[1]] - positions[vertex]).normalize();
-                    a.perp_dot(b).abs() > 0.5
-                }
+            adjacent.len() == 2 && {
+                let a = (positions[&adjacent[0]] - positions[vertex]).normalize();
+                let b = (positions[&adjacent[1]] - positions[vertex]).normalize();
+                a.perp_dot(b).abs() > 0.5
+            }
         })
         .count()
 }
@@ -194,9 +202,17 @@ pub fn append_step_144(document: &mut Document) -> DevilFinalMetrics {
         "steps 17-143 must activate every precrease before the final Pose"
     );
     let faces = extract_faces(&document.cp);
-    assert_eq!(faces.len(), 110, "the complete Devil crease pattern has 110 faces");
+    assert_eq!(
+        faces.len(),
+        110,
+        "the complete Devil crease pattern has 110 faces"
+    );
     let hinges = hinge_edges(&faces);
-    assert_eq!(hinges.len(), 177, "all 177 Devil crease fragments are hinges");
+    assert_eq!(
+        hinges.len(),
+        177,
+        "all 177 Devil crease fragments are hinges"
+    );
 
     let hard = seed_drivers(document);
     let uniform = hinges
@@ -231,20 +247,35 @@ pub fn append_step_144(document: &mut Document) -> DevilFinalMetrics {
     });
 
     let replayed = replay(document, document.sequence.len(), 1.0);
-    assert!(replayed.warnings.is_empty(), "replay warnings: {:?}", replayed.warnings);
-    assert!(replayed.skipped.is_empty(), "skipped: {:?}", replayed.skipped);
+    assert!(
+        replayed.warnings.is_empty(),
+        "replay warnings: {:?}",
+        replayed.warnings
+    );
+    assert!(
+        replayed.skipped.is_empty(),
+        "skipped: {:?}",
+        replayed.skipped
+    );
     assert!(
         replayed.frame.warnings.is_empty(),
         "frame warnings: {:?}",
         replayed.frame.warnings
     );
-    assert_eq!(replayed.frame.faces.len(), faces.len(), "no final face is lost");
+    assert_eq!(
+        replayed.frame.faces.len(),
+        faces.len(),
+        "no final face is lost"
+    );
     let gap = max_seam_gap(&document.cp, &faces, &replayed.frame);
     assert!(gap < 1e-6, "step 144 max_seam_gap={gap:.3e}");
 
     let positions = folded_vertices(&faces, &replayed.frame);
     let symmetry_error = reflection_error(&positions, &symmetric.mirrored_vertices);
-    assert!(symmetry_error < 1e-9, "left/right error={symmetry_error:.3e}");
+    assert!(
+        symmetry_error < 1e-9,
+        "left/right error={symmetry_error:.3e}"
+    );
     let span = z_span(&replayed.frame);
     assert!(span > 0.1, "the completed Devil must be three-dimensional");
 
@@ -253,7 +284,10 @@ pub fn append_step_144(document: &mut Document) -> DevilFinalMetrics {
     assert_ne!(horn_tips[0], horn_tips[1]);
     assert_eq!(symmetric.mirrored_vertices[&horn_tips[0]], horn_tips[1]);
     let boundary_corners = boundary_corner_count(document);
-    assert_eq!(boundary_corners, 4, "the source square retains four boundary corners");
+    assert_eq!(
+        boundary_corners, 4,
+        "the source square retains four boundary corners"
+    );
 
     let support = three_point_support(&faces, &replayed.frame, [1, 2, 3])
         .expect("feet and tail define a support plane");
@@ -262,7 +296,10 @@ pub fn append_step_144(document: &mut Document) -> DevilFinalMetrics {
         support.centroid_projection_inside,
         "centroid must lie in the support triangle"
     );
-    assert!(support.stable, "the completed Devil must stand on three points");
+    assert!(
+        support.stable,
+        "the completed Devil must stand on three points"
+    );
 
     DevilFinalMetrics {
         faces: faces.len(),

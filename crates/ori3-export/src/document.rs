@@ -5,7 +5,7 @@ use std::path::Path;
 
 use ori3_model::{Document, Frame3D};
 
-/// 折り目のない丸み・カールを含む、作品の完成時3D形状。
+/// 折り目のない丸み・カールや複合技法の途中を含む、工程到達時の3D形状。
 ///
 /// 通常のDocumentは手順と表示パラメータを保存し、頂点位置を持たない。
 /// 局所的な手整形まで行った作品を検証用fixtureへ残す場合だけ、この拡張を
@@ -14,6 +14,12 @@ use ori3_model::{Document, Frame3D};
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SoftGeometrySnapshot {
     pub book_step: u32,
+    /// 原資料の工程に対応する説明。既存fixtureには無いため任意。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instruction: Option<String>,
+    /// この工程で紙の形が変わるか。向き変更・保持・完成図はfalse。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changes_shape: Option<bool>,
     pub frame: Frame3D,
 }
 
@@ -206,6 +212,8 @@ mod tests {
         let document = sample_document();
         let snapshot = SoftGeometrySnapshot {
             book_step: 29,
+            instruction: Some("完成形を確認する".to_string()),
+            changes_shape: Some(false),
             frame: Frame3D {
                 faces: vec![Face3D {
                     face: 0,
@@ -227,6 +235,11 @@ mod tests {
             document_with_soft_geometry_from_json(&json).expect("軟体形状も読み戻せる");
         assert_eq!(restored, document);
         assert_eq!(restored_snapshot.book_step, 29);
+        assert_eq!(
+            restored_snapshot.instruction.as_deref(),
+            Some("完成形を確認する")
+        );
+        assert_eq!(restored_snapshot.changes_shape, Some(false));
         assert_eq!(restored_snapshot.frame.faces.len(), 1);
         assert_eq!(
             restored_snapshot.frame.faces[0].polygon,

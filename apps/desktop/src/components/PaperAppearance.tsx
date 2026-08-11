@@ -12,6 +12,8 @@
 // DisplaySettings に入れて .ori3ファイルへ保存する。
 
 import { useAppStore } from "../store/appStore";
+import { ColorPickerPopover } from "./ColorPickerPopover";
+import { MirrorAxisControls } from "./MirrorAxisControls";
 import {
   MAX_DIVISIONS,
   MIN_DIVISIONS,
@@ -34,7 +36,7 @@ const UI_THEME_LABELS: Record<UiTheme, string> = {
 
 /**
  * 子供向けの折り紙セットで親しまれている色を中心にした固定パレット。
- * 色名はボタンのtitleにも使い、色だけに頼らず選べるようにする。
+ * 色名は共通の吹き出しにも使い、色だけに頼らず選べるようにする。
  */
 export const PAPER_COLOR_PALETTE = [
   { name: "赤", hex: "#ed1c24" },
@@ -76,12 +78,10 @@ function paletteMarkColor(hex: string): "#ffffff" | "#27213d" {
 
 function ColorPalette({
   label,
-  pickerLabel,
   value,
   onSelect,
 }: {
   label: string;
-  pickerLabel: string;
   value: string;
   onSelect: (hex: string) => void;
 }) {
@@ -102,7 +102,7 @@ function ColorPalette({
                 backgroundColor: swatch.hex,
                 color: paletteMarkColor(swatch.hex),
               }}
-              title={swatch.name}
+              data-tooltip={`${swatch.name}を選びます`}
               aria-label={`${label}を${swatch.name}にする`}
               aria-pressed={selected}
               onClick={() => onSelect(swatch.hex)}
@@ -112,15 +112,7 @@ function ColorPalette({
           );
         })}
       </div>
-      <label className="paper-custom-color">
-        その他の色
-        <input
-          type="color"
-          aria-label={pickerLabel}
-          value={value}
-          onChange={(e) => onSelect(e.target.value)}
-        />
-      </label>
+      <ColorPickerPopover label={label} value={value} onSelect={onSelect} />
     </fieldset>
   );
 }
@@ -130,12 +122,15 @@ export function PaperAppearance() {
   const setDisplay = useAppStore((s) => s.setDisplay);
   const setSoft = useAppStore((s) => s.setSoft);
   const softWarnings = useAppStore((s) => s.softWarnings);
-  const mirrorDraw = useAppStore((s) => s.mirrorDraw);
-  const setMirrorDraw = useAppStore((s) => s.setMirrorDraw);
   const wheelBehavior = useAppStore((s) => s.wheelBehavior);
   const setWheelBehavior = useAppStore((s) => s.setWheelBehavior);
   const uiTheme = useAppStore((s) => s.uiTheme);
   const setUiTheme = useAppStore((s) => s.setUiTheme);
+  const resetPaneSizes = useAppStore((s) => s.resetPaneSizes);
+  const paperHelpExpanded = useAppStore((s) => s.paperHelpExpanded);
+  const togglePaperHelp = useAppStore((s) => s.togglePaperHelp);
+  const paperColorExpanded = useAppStore((s) => s.paperColorExpanded);
+  const togglePaperColor = useAppStore((s) => s.togglePaperColor);
   const soft = softOf(display);
   const overlapPrevention = overlapPreventionOf(display);
   const penetrationPrevention = penetrationPreventionOf(display);
@@ -147,12 +142,31 @@ export function PaperAppearance() {
       <section className="soft-controls" aria-label="紙をふくらませる設定">
         <div className="soft-controls-heading">
           <strong>紙をふくらませる</strong>
-          <span>袋になったところへ空気を入れるように丸みをつけます</span>
+          <span
+            className="operation-summary-line"
+            data-tooltip="丸みと膨らみを3Dで調整できます"
+          >
+            丸みと膨らみを3Dで調整できます
+          </span>
+          <button
+            type="button"
+            className="paper-help-toggle operation-detail-toggle"
+            aria-label={`丸みの詳しい操作方法 ${paperHelpExpanded ? "▲" : "▼"}`}
+            aria-expanded={paperHelpExpanded}
+            data-tooltip={paperHelpExpanded ? "丸みの説明を折りたたみます" : "丸みの説明を開きます"}
+            onClick={togglePaperHelp}
+          >
+            <span className="operation-detail-label">丸みの詳しい操作方法</span>
+            <span className="operation-detail-icon">
+              {paperHelpExpanded ? "▲" : "▼"}
+            </span>
+          </button>
         </div>
         <label>
           <input
             type="checkbox"
             aria-label="紙のたわみを表現する"
+            data-tooltip="折り目以外も滑らかに曲がる表示を切り替えます"
             checked={soft.enabled}
             onChange={(e) => setSoft({ soft_enabled: e.target.checked })}
           />
@@ -165,6 +179,7 @@ export function PaperAppearance() {
               <input
                 type="range"
                 aria-label="紙の硬さ"
+                data-tooltip="紙の面を平らに保つ強さを調整します"
                 min={0}
                 max={1}
                 step={0.05}
@@ -177,6 +192,7 @@ export function PaperAppearance() {
               <input
                 type="range"
                 aria-label="膨らみの強さ"
+                data-tooltip="袋へ空気を入れたような膨らみを調整します"
                 min={0}
                 max={1}
                 step={0.05}
@@ -186,11 +202,13 @@ export function PaperAppearance() {
             </label>
           </>
         )}
-        <span className="hint">
-          {soft.enabled
-            ? "面を細かく分けて曲げ、紙の丸みを見せています。硬くすると面が平らに近づき、膨らませると袋になっているところに空気が入ります(動かすとその場で3Dに映ります)"
-            : "折り目以外のところでも紙が丸く曲がった形を見せます(見た目だけの表現で、折り手順や折り図は変わりません)"}
-        </span>
+        {paperHelpExpanded && (
+          <span className="hint soft-help-detail">
+            {soft.enabled
+              ? "硬さで紙の曲がりやすさを、膨らみの強さで袋へ入れる空気の量を調整します。変更はその場で3Dに映ります。"
+              : "折り目以外にも丸みを見せる表示です。見た目だけが変わり、折り手順や折り図は変わりません。"}
+          </span>
+        )}
         {softWarnings.map((w) => (
           <span className="hint" key={w}>
             {w}
@@ -201,6 +219,11 @@ export function PaperAppearance() {
         ホイールの動作
         <select
           aria-label="ホイールの動作"
+          data-tooltip={
+            wheelBehavior === "scroll"
+              ? "ホイールで上下、Shiftで左右、Ctrlで拡大縮小します"
+              : "ホイールで拡大縮小、Ctrlで上下、Ctrl+Shiftで左右へ動かします"
+          }
           value={wheelBehavior}
           onChange={(e) => setWheelBehavior(e.target.value === "zoom" ? "zoom" : "scroll")}
         >
@@ -208,15 +231,11 @@ export function PaperAppearance() {
           <option value="zoom">拡大縮小</option>
         </select>
       </label>
-      <span className="hint">
-        {wheelBehavior === "scroll"
-          ? "ホイール: 上下 / Shift+ホイール: 左右 / Ctrl+ホイール: カーソル位置を中心に拡大縮小"
-          : "ホイール: カーソル位置を中心に拡大縮小 / Ctrl+ホイール: 上下 / Ctrl+Shift+ホイール: 左右"}
-      </span>
       <label>
         画面のデザイン
         <select
           aria-label="画面のデザイン"
+          data-tooltip="画面全体の配色と形を切り替えます"
           value={uiTheme}
           onChange={(e) => setUiTheme(e.target.value as UiTheme)}
         >
@@ -227,26 +246,59 @@ export function PaperAppearance() {
           ))}
         </select>
       </label>
-      <div className="paper-color-settings">
-        <ColorPalette
-          label="紙の表"
-          pickerLabel="紙の表の色"
-          value={rgbToHex(display.front_color)}
-          onSelect={(hex) => {
-            const rgb = hexToRgb(hex);
-            if (rgb) setDisplay({ front_color: rgb });
-          }}
-        />
-        <ColorPalette
-          label="紙の裏"
-          pickerLabel="紙の裏の色"
-          value={rgbToHex(display.back_color)}
-          onSelect={(hex) => {
-            const rgb = hexToRgb(hex);
-            if (rgb) setDisplay({ back_color: rgb });
-          }}
-        />
-      </div>
+      <button
+        type="button"
+        data-tooltip="展開図・立体・今できる操作の広さを初期値へ戻します"
+        onClick={resetPaneSizes}
+      >
+        表示の広さを初期に戻す
+      </button>
+      <section className="paper-color-section" aria-label="紙の色の設定">
+        <button
+          type="button"
+          className="paper-color-toggle"
+          aria-label={`紙の色 ${paperColorExpanded ? "▲" : "▼"}`}
+          aria-expanded={paperColorExpanded}
+          aria-controls="paper-color-settings"
+          data-tooltip={paperColorExpanded ? "紙の色見本を折りたたみます" : "紙の色見本を開きます"}
+          onClick={togglePaperColor}
+        >
+          <span>紙の色 {paperColorExpanded ? "▲" : "▼"}</span>
+          <span className="paper-color-current" aria-hidden="true">
+            <span>
+              表
+              <i style={{ backgroundColor: rgbToHex(display.front_color) }} />
+            </span>
+            <span>
+              裏
+              <i style={{ backgroundColor: rgbToHex(display.back_color) }} />
+            </span>
+          </span>
+        </button>
+        <span className="sr-only" aria-live="polite">
+          紙の表の現在色 {rgbToHex(display.front_color)}、紙の裏の現在色 {rgbToHex(display.back_color)}
+        </span>
+        {paperColorExpanded && (
+          <div id="paper-color-settings" className="paper-color-settings">
+            <ColorPalette
+              label="紙の表"
+              value={rgbToHex(display.front_color)}
+              onSelect={(hex) => {
+                const rgb = hexToRgb(hex);
+                if (rgb) setDisplay({ front_color: rgb });
+              }}
+            />
+            <ColorPalette
+              label="紙の裏"
+              value={rgbToHex(display.back_color)}
+              onSelect={(hex) => {
+                const rgb = hexToRgb(hex);
+                if (rgb) setDisplay({ back_color: rgb });
+              }}
+            />
+          </div>
+        )}
+      </section>
       <section className="grid-divisions-control" aria-labelledby="grid-divisions-heading">
         <div className="grid-divisions-heading">
           <span id="grid-divisions-heading">方眼の細かさ</span>
@@ -261,6 +313,7 @@ export function PaperAppearance() {
               key={divisions}
               type="button"
               aria-pressed={display.grid_divisions === divisions}
+              data-tooltip={`方眼を${divisions}等分にします`}
               onClick={() => setDisplay({ grid_divisions: divisions })}
             >
               {divisions}
@@ -272,6 +325,7 @@ export function PaperAppearance() {
           <input
             type="number"
             aria-label="方眼の細かさ（1辺の等分数）"
+            data-tooltip="1辺を何等分する方眼にするか指定します"
             min={MIN_DIVISIONS}
             max={MAX_DIVISIONS}
             step={1}
@@ -279,54 +333,30 @@ export function PaperAppearance() {
             onChange={(e) => setDisplay({ grid_divisions: Number(e.target.value) })}
           />
         </label>
-        <span className="hint">
-          紙を{display.grid_divisions}等分した目盛りに線が吸い付きます（{MIN_DIVISIONS}〜
-          {MAX_DIVISIONS}）
-        </span>
       </section>
       <label>
         <input
           type="checkbox"
           aria-label="重なり防止"
+          data-tooltip="折る途中で紙どうしが突き抜けにくい補正を切り替えます"
           checked={overlapPrevention}
           onChange={(e) => setDisplay({ overlap_prevention_enabled: e.target.checked })}
         />
         重なり防止
       </label>
-      <span className="hint">
-        折っている途中で紙どうしが突き抜けにくいよう補正します(完全には防げません)
-      </span>
       <label>
         <input
           type="checkbox"
-          aria-label="食い込み防止"
+          aria-label="食い込み検出"
+          data-tooltip="紙の接触を赤い折り目と警告で知らせる検出を切り替えます"
           checked={penetrationPrevention}
           onChange={(e) =>
             setDisplay({ penetration_prevention_enabled: e.target.checked })
           }
         />
-        食い込み防止
+        食い込み検出
       </label>
-      <span className="hint">
-        紙どうしがぶつかる所で動きを止めます(ごく複雑な形では防げないことがあります)
-      </span>
-      {/* 左右対称に描く(CPE-010)。作品は左右対称のものが多いので、片側を
-          描くと反対側にも同じ線が引かれ、作業が半分で済む */}
-      <label>
-        <input
-          type="checkbox"
-          aria-label="左右対称に描く"
-          checked={mirrorDraw}
-          onChange={(e) => setMirrorDraw(e.target.checked)}
-        />
-        左右対称に描く
-      </label>
-      <span className="hint">
-        {mirrorDraw
-          ? "左右対称に描いています。紙の縦の中心線をはさんで、反対側にも同じ線が引かれます(2Dの薄い縦線が中心線です)"
-          : "紙の縦の中心線をはさんで、反対側にも同じ線を引きます"}
-        。線を消すとき・種類を変えるときにも効き、そちらは展開図から見つけた対称軸で相手の線を探します(対になる線が無いところは、その線だけが変わります)
-      </span>
+      <MirrorAxisControls />
     </div>
   );
 }

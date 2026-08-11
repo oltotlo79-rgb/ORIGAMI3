@@ -101,14 +101,10 @@ pub fn reverse_fold_network(
         let before = before_kinds[edge_id];
         edge.kind = before;
         let (p0, p1) = (positions[&edge.v0], positions[&edge.v1]);
-        result.step.drivers.retain(|driver| {
-            !same_segment(
-                DVec2::from(driver.a),
-                DVec2::from(driver.b),
-                p0,
-                p1,
-            )
-        });
+        result
+            .step
+            .drivers
+            .retain(|driver| !same_segment(DVec2::from(driver.a), DVec2::from(driver.b), p0, p1));
         push_driver_line(&mut result.step.drivers, p0, p1, angle_of(before));
     }
     // A folded hinge is normally flipped by flat_motion's settling pass.  An open precrease has

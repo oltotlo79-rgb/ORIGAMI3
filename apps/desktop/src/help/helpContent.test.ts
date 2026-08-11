@@ -61,13 +61,13 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
     for (const chapter of HELP_CHAPTERS) {
       expect(chapter.blocks.some(manualImage), `第${chapter.number}章`).toBe(true);
     }
-    expect(screenshots).toHaveLength(4);
+    expect(screenshots).toHaveLength(21);
     for (const screenshot of screenshots) {
       expect(screenshot.image).toMatch(/^screen-[a-z0-9-]+\.png$/);
       expect(screenshot.caption.trim().length).toBeGreaterThan(0);
     }
-    expect(images).toHaveLength(17);
-    expect(new Set(images).size).toBe(17);
+    expect(images).toHaveLength(34);
+    expect(new Set(images).size).toBe(34);
   });
 
   it("本文は表示部品を含まない直列化可能なデータで、題と本文を検索できる", () => {
@@ -76,5 +76,98 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
     const crease = HELP_CHAPTERS.find((chapter) => chapter.id === "crease-pattern");
     expect(proposal && helpChapterSearchText(proposal)).toContain("骨格から展開図を提案");
     expect(crease && helpChapterSearchText(crease)).toContain("ベジェ曲線");
+  });
+
+  it("対称描画の目的・3つの基準・画面での選び方を利用者向けに説明する", () => {
+    const crease = HELP_CHAPTERS.find((chapter) => chapter.id === "crease-pattern");
+    expect(crease).toBeDefined();
+    const text = helpChapterSearchText(crease!);
+
+    expect(text).toContain("手間を半分");
+    expect(text).toContain("紙の縦の中心線");
+    expect(text).toContain("紙の横の中心線");
+    expect(text).toContain("この線を基準にする");
+    expect(text).toContain("紫の破線");
+    expect(text).toContain("別の作品へ切り替えたときも紙の縦の中心線へ戻ります");
+    expect(text).not.toContain("鏡映");
+    expect(text).not.toContain("ヤコビアン");
+
+    const angles = HELP_CHAPTERS.find((chapter) => chapter.id === "angles");
+    expect(angles).toBeDefined();
+    const angleText = helpChapterSearchText(angles!);
+    expect(angleText).toContain("展開図から対になる折り目を自動で見つけ");
+    expect(angleText).toContain("描画用の基準線とは別の動きです");
+  });
+
+  it("現行画面の折りたたみ・色・区画・テーマ・追従を利用者向けに網羅する", () => {
+    const allText = HELP_CHAPTERS.map(helpChapterSearchText).join("\n");
+
+    for (const label of [
+      "この道具の詳しい操作方法 ▼",
+      "展開図の詳しい操作方法 ▼",
+      "詳しい3D操作方法 ▼",
+      "丸みの詳しい操作方法 ▼",
+      "紙の色 ▼",
+    ]) {
+      expect(allText).toContain(label);
+    }
+    expect(allText).toContain("初めて使うとき、長い説明はすべて閉じています");
+    expect(allText).toContain("閉じたままでも表と裏の現在の色見本");
+    expect(allText).toContain("Tabキーで枠を移したときも同じ吹き出し");
+    expect(allText).toContain("文字の代わりに▼または▲のアイコン");
+
+    for (const colorControl of [
+      "色の面",
+      "色相",
+      "16進数",
+      "取り消し",
+      "この色にする",
+      "Shiftを押しながら矢印キー",
+      "Enterで確定",
+      "Escで閉じます",
+    ]) {
+      expect(allText).toContain(colorControl);
+    }
+
+    expect(allText).toContain("展開図と立体表示は50%ずつ、下部パネルは32%");
+    expect(allText).toContain("表示の広さを初期に戻す");
+    expect(allText).toContain("和紙のような繊維と濃淡");
+    expect(allText).toContain("ごく細かな粒");
+    expect(allText).toContain("操作方法は共通です");
+
+    expect(allText).toContain("動かしている折り目の角度を最優先");
+    expect(allText).toContain("前の希望から譲った折り目は琥珀色");
+    expect(allText).toContain("現在72.0°");
+    expect(allText).toContain("希望どおりの形が見つからない場合も操作は止まりません");
+
+    expect(allText).toContain("初めて使うときの基準は「紙の縦の中心線」");
+    expect(allText).toContain("紙の横の中心線");
+    expect(allText).toContain("この線を基準にする");
+    expect(allText).toContain("紫の破線");
+
+    for (const internalWord of [
+      "ヤコビアン",
+      "ソルバ",
+      "アルゴリズム",
+      "データ構造",
+      "細かな点の位置",
+      "細かな直線の集まり",
+    ]) {
+      expect(allText).not.toContain(internalWord);
+    }
+  });
+
+  it("一般的不収束は自動調整を案内し、折り線欠落だけは引き直し・削除を残す", () => {
+    const troubleshooting = HELP_CHAPTERS.find(
+      (chapter) => chapter.id === "troubleshooting",
+    );
+    expect(troubleshooting).toBeDefined();
+    const text = helpChapterSearchText(troubleshooting!);
+
+    expect(text).toContain("前の角度を自動調整しています。操作は続けられます");
+    expect(text).not.toContain("合わなくなった手順を移動・削除");
+    expect(text).toContain(
+      "「折り線が見つからない」: 展開図で消えた折り線を引き直すか、その手順を削除します",
+    );
   });
 });

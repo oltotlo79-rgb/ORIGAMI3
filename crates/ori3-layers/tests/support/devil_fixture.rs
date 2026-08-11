@@ -103,7 +103,8 @@ fn write_alignment(out: &mut String, alignment: &FoldAlignment) {
 #[must_use]
 pub fn document_json(document: &Document) -> String {
     let mut out = String::with_capacity(
-        256 + document.cp.vertices.len() * 80 + document.cp.edges.len() * 80
+        256 + document.cp.vertices.len() * 80
+            + document.cp.edges.len() * 80
             + document.sequence.len() * 160,
     );
     write!(

@@ -82,6 +82,7 @@ export function ExportDialog() {
     <div className="dialog-backdrop">
       <div
         className="dialog"
+        data-floating-ui="export-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="export-title"

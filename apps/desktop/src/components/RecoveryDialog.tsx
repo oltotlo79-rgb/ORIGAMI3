@@ -34,6 +34,7 @@ export function RecoveryDialog() {
     <div className="dialog-backdrop">
       <div
         className="dialog"
+        data-floating-ui="recovery-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="recovery-title"

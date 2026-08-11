@@ -68,6 +68,10 @@ function seed(drivers: Map<number, number>, poseAngles = new Map<number, number>
     selection: { edgeIds: [5], vertexIds: [] },
     drivers,
     poseAngles,
+    sequenceTargets: new Map(),
+    relaxations: [],
+    poseBestEffort: false,
+    activeAngleIntent: null,
     currentStep: null,
     playing: false,
     playT: 1,
@@ -79,6 +83,9 @@ function seed(drivers: Map<number, number>, poseAngles = new Map<number, number>
     poseWarnings: [],
     replayWarnings: [],
     errorMessage: null,
+    mirrorAxis: { kind: "paperVertical" },
+    mirrorAxisNotice: null,
+    contextHelpExpanded: true,
   });
 }
 
@@ -100,7 +107,13 @@ afterEach(() => {
     doc: null,
     drivers: new Map(),
     poseAngles: new Map(),
+    sequenceTargets: new Map(),
+    relaxations: [],
+    activeAngleIntent: null,
     hoveredHinge: null,
+    mirrorAxis: { kind: "paperVertical" },
+    mirrorAxisNotice: null,
+    contextHelpExpanded: true,
   });
 });
 
@@ -233,7 +246,7 @@ describe("複数の折り目の角度(SIM-001)", () => {
     expect(screen.getByRole("button", { name: "この折り線の角度を解除" })).not.toBeNull();
   });
 
-  it("最小ウィンドウでも折り角度を最上部に置き、操作手順はその下で閉じておく", () => {
+  it("折り角度は最上部に置き、詳しい手順を閉じても角度と現在操作を残す", () => {
     seed(new Map([[5, 90]]));
     render(<ContextPanel />);
 
@@ -243,7 +256,152 @@ describe("複数の折り目の角度(SIM-001)", () => {
     expect(panel.firstElementChild).toBe(controls);
     expect(controls.nextElementSibling).toBe(operationSteps);
     expect(within(controls).getByRole("slider", { name: "折り目 #5の角度" })).toBeTruthy();
-    expect(operationSteps.querySelector("details")?.open).toBe(false);
+    const close = within(operationSteps).getByRole("button", {
+      name: "この道具の詳しい操作方法 ▲",
+    });
+    expect(close.getAttribute("aria-expanded")).toBe("true");
+
+    fireEvent.click(close);
+    expect(within(controls).getByRole("slider", { name: "折り目 #5の角度" })).toBeTruthy();
+    expect(within(operationSteps).getByText("今できる操作")).toBeTruthy();
+    expect(within(operationSteps).getByText("紙と折り線を選ぶ")).toBeTruthy();
+    expect(within(operationSteps).queryByRole("listitem")).toBeNull();
+    expect(screen.queryByText(/左のツールを選んで操作します/)).toBeNull();
+  });
+
+  it("希望90度を入力欄に保ち、譲った実角72度を横へ併記する", () => {
+    seed(new Map([[5, 90]]), new Map([[5, 72]]));
+    useAppStore.setState({
+      relaxations: [
+        { hinge: 5, target_angle_deg: 90, actual_angle_deg: 72, delta_deg: -18 },
+      ],
+    });
+    render(<ContextPanel />);
+
+    expect(screen.getByLabelText("折り目 #5の角度")).toHaveProperty("value", "90");
+    expect(screen.getByLabelText("折り目 #5の角度（数値）")).toHaveProperty(
+      "value",
+      "90",
+    );
+    expect(screen.getAllByText("現在72.0°").length).toBeGreaterThan(0);
+  });
+
+  it("一括角度も希望値を保ち、選択中の実角を併記する", () => {
+    seedMultiple();
+    useAppStore.setState({
+      drivers: new Map([
+        [5, 90],
+        [7, 90],
+        [9, 90],
+      ]),
+      poseAngles: new Map([
+        [5, 72],
+        [7, 72],
+        [9, 72],
+      ]),
+      relaxations: [5, 7, 9].map((hinge) => ({
+        hinge,
+        target_angle_deg: 90,
+        actual_angle_deg: 72,
+        delta_deg: -18,
+      })),
+    });
+    render(<ContextPanel />);
+
+    const group = screen.getByLabelText("選択した折り目の一括角度設定");
+    expect(within(group).getByRole("slider")).toHaveProperty("value", "90");
+    expect(within(group).getByText("現在72.0°")).toBeTruthy();
+  });
+
+  it("スライダーと数値入力を離したときに末尾の追従計算を確定する", () => {
+    seed(new Map([[5, 30]]));
+    const original = useAppStore.getState().finishAngleIntent;
+    const finishAngleIntent = vi.fn(async () => {});
+    useAppStore.setState({ finishAngleIntent });
+    render(<ContextPanel />);
+
+    const slider = screen.getByLabelText("折り目 #5の角度");
+    fireEvent.pointerUp(slider);
+    fireEvent.keyUp(slider, { key: "ArrowRight" });
+    fireEvent.blur(slider);
+
+    const number = screen.getByLabelText("折り目 #5の角度（数値）");
+    fireEvent.change(number, { target: { value: "31" } });
+    fireEvent.keyDown(number, { key: "Enter" });
+    fireEvent.blur(number);
+
+    expect(finishAngleIntent).toHaveBeenCalledTimes(5);
+    useAppStore.setState({ finishAngleIntent: original });
+  });
+});
+
+describe("前の折り目の自然追従(SIM-018)", () => {
+  it("0.1度以上だけを最大5件表示し、6本目を残数へまとめる", () => {
+    seed(new Map());
+    useAppStore.setState({
+      contextHelpExpanded: false,
+      hinges: new Set([1, 2, 3, 4, 5, 6, 7]),
+      relaxations: [
+        ...[1, 2, 3, 4, 5, 6].map((hinge) => ({
+          hinge,
+          target_angle_deg: 90,
+          actual_angle_deg: 89.9 - hinge,
+          delta_deg: -0.1 - hinge,
+        })),
+        { hinge: 7, target_angle_deg: 90, actual_angle_deg: 89.901, delta_deg: -0.099 },
+      ],
+    });
+    render(<ContextPanel />);
+
+    const list = screen.getByLabelText("前の折り目の追従");
+    expect(
+      screen.getByRole("button", { name: "この道具の詳しい操作方法 ▼" }).getAttribute(
+        "aria-expanded",
+      ),
+    ).toBe("false");
+    expect(within(list).getAllByRole("button")).toHaveLength(5);
+    expect(within(list).getByText("ほか1本")).toBeTruthy();
+    expect(within(list).queryByText(/折り目 #7:/)).toBeNull();
+    expect(document.querySelectorAll(".context-panel")).toHaveLength(1);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("通知行のホバーとクリックで該当する折り目を示す", () => {
+    seed(new Map());
+    useAppStore.setState({
+      hinges: new Set([5, 9]),
+      relaxations: [
+        { hinge: 9, target_angle_deg: 90, actual_angle_deg: 72, delta_deg: -18 },
+      ],
+    });
+    render(<ContextPanel />);
+    const row = screen.getByRole("button", {
+      name: "折り目 #9: 指定90.0° → 現在72.0°",
+    });
+
+    fireEvent.mouseEnter(row);
+    expect(useAppStore.getState().hoveredHinge).toBe(9);
+    fireEvent.click(row);
+    expect(useAppStore.getState().selection).toEqual({ edgeIds: [9], vertexIds: [] });
+    fireEvent.mouseLeave(row);
+    expect(useAppStore.getState().hoveredHinge).toBeNull();
+  });
+
+  it("最良候補を表示中でも角度操作を無効化しない", () => {
+    seed(new Map([[5, 90]]), new Map([[5, 72]]));
+    useAppStore.setState({
+      poseBestEffort: true,
+      relaxations: [
+        { hinge: 5, target_angle_deg: 90, actual_angle_deg: 72, delta_deg: -18 },
+      ],
+    });
+    render(<ContextPanel />);
+
+    expect(screen.getByLabelText("折り目 #5の角度")).toHaveProperty("disabled", false);
+    expect(screen.getByLabelText("折り目 #5の角度（数値）")).toHaveProperty(
+      "disabled",
+      false,
+    );
   });
 });
 
@@ -258,7 +416,34 @@ describe("コンテキストパネルの主操作順", () => {
 
     const panel = document.querySelector(".context-selection") as HTMLElement;
     expect(panel.firstElementChild?.classList.contains("operation-steps")).toBe(true);
-    expect(panel.querySelector("details")?.open).toBe(false);
+    expect(within(panel).getByText("今できる操作")).toBeTruthy();
+    expect(within(panel).getByText("紙と折り線を選ぶ")).toBeTruthy();
+    expect(
+      within(panel).getByRole("button", { name: "この道具の詳しい操作方法 ▲" }).getAttribute(
+        "aria-expanded",
+      ),
+    ).toBe("true");
+  });
+
+  it("全体の長い操作説明だけを畳み、現在操作と設定部品は残す", () => {
+    seed(new Map());
+    useAppStore.setState({
+      activeTool: "mountain",
+      selection: { edgeIds: [], vertexIds: [] },
+      contextHelpExpanded: true,
+    });
+    render(<ContextPanel />);
+
+    expect(screen.getByText(/山折り・谷折り・補助線は2回クリック/)).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "この道具の詳しい操作方法 ▲" }),
+    );
+
+    expect(screen.queryByText(/山折り・谷折り・補助線は2回クリック/)).toBeNull();
+    expect(screen.getByText("今できる操作")).toBeTruthy();
+    expect(screen.getByText("山折り線を引く")).toBeTruthy();
+    expect(screen.getByLabelText("紙のたわみを表現する")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "表示の広さを初期に戻す" })).toBeTruthy();
   });
 
   it.each([
@@ -332,6 +517,35 @@ describe("この形で仕上げる(SIM-009)", () => {
     expect(vi.mocked(ipc.sequenceApply)).toHaveBeenCalledTimes(1);
     const op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
     expect(op.type === "PushStep" && op.step.kind).toBe("Pose");
+  });
+});
+
+describe("対称描画の選択線基準", () => {
+  it("折り線を1本選ぶと、この線を基準に設定できる", () => {
+    seed(new Map());
+    useAppStore.setState({ activeTool: "select" });
+    render(<ContextPanel />);
+
+    const selected = screen.getByRole("button", {
+      name: "この線を基準にする",
+    }) as HTMLButtonElement;
+    expect(selected.disabled).toBe(false);
+    expect(selected.getAttribute("data-tooltip")).toContain(
+      "展開図で選んだ折り線・補助線を基準にします",
+    );
+    expect(selected.getAttribute("data-tooltip")).toContain(
+      "現在の基準: 紙の縦の中心線",
+    );
+    expect(selected.hasAttribute("title")).toBe(false);
+
+    fireEvent.click(selected);
+
+    expect(useAppStore.getState().mirrorAxis).toEqual({
+      kind: "selectedLine",
+      edgeId: 5,
+    });
+    expect(selected.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByText("現在: 選んだ線")).not.toBeNull();
   });
 });
 
@@ -423,16 +637,27 @@ describe("引くツールの左右同時の切替(UI-007)", () => {
       activeTool: "pull",
       selection: { edgeIds: [], vertexIds: [] },
       pullMirror: true,
+      mirrorAxis: { kind: "paperHorizontal" },
     });
     render(<ContextPanel />);
 
     const box = screen.getByLabelText("左右対称に動かす") as HTMLInputElement;
     expect(box.checked).toBe(true); // 既定はオン(作品はほとんど左右対称なので)
-    expect(screen.getAllByText(/鶴の両羽が一緒に開きます/).length).toBe(1);
+    expect(box.getAttribute("data-tooltip")).toContain(
+      "展開図から対になる折り目を自動で見つけ",
+    );
+    expect(box.getAttribute("data-tooltip")).toContain(
+      "線をそろえる現在の基準: 紙の横の中心線",
+    );
+    expect(box.hasAttribute("title")).toBe(false);
+    expect(screen.queryByText(/鶴の両羽が一緒に開きます/)).toBeNull();
 
     fireEvent.click(box);
     expect(useAppStore.getState().pullMirror).toBe(false);
-    expect(screen.getAllByText(/つかんだ側の折り線だけが動きます/).length).toBe(1);
+    expect(box.getAttribute("data-tooltip")).toContain("つかんだ側");
+    expect(box.getAttribute("data-tooltip")).toContain(
+      "線をそろえる現在の基準: 紙の横の中心線",
+    );
   });
 
   it("他のツールでは出さない(下部パネルの内容を増やしすぎない)", () => {
@@ -664,10 +889,11 @@ describe("ねじり折りの中央多角形(TEC-009)", () => {
 
     expect(screen.getAllByText(/角を2個指定/).length).toBe(1);
     expect(screen.getAllByText(/あと3個以上必要/).length).toBe(1);
-    expect(screen.getAllByText(/角を順にクリック/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/中央の角を3つ以上クリック/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Shift\+クリックで対象層/).length).toBeGreaterThan(0);
     const apply = screen.getByRole("button", { name: "適用" });
     expect(apply).toHaveProperty("disabled", true);
+    expect(apply.getAttribute("data-tooltip")).toContain("角を3つ以上クリック");
   });
 
   it("3つ以上そろえば、層を選ばなくても適用できる", () => {
@@ -847,7 +1073,8 @@ describe("曲線の折り目の設定(CPE-011)", () => {
     expect((rulings as HTMLInputElement).checked).toBe(true);
     fireEvent.click(rulings);
     expect(useAppStore.getState().curve.rulings).toBe(false);
-    expect(screen.getByText(/このままでは折れません/)).toBeTruthy();
+    expect(rulings.getAttribute("data-tooltip")).toContain("このままでは3Dで曲線折りできません");
+    expect(screen.queryByText(/このままでは折れません/)).toBeNull();
   });
 
   it("分割数は範囲内の完全な数値だけを入力中から反映する", () => {

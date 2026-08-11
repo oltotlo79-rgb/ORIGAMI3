@@ -21,8 +21,8 @@ use crate::fold_through::{
     FoldDirection, FoldThroughInput, FoldThroughResult, fold_through,
     fold_through_with_additional_crease,
 };
-use crate::replay::{flat_state_at, replay};
 use crate::rabbit_ear::{RabbitEarInput, rabbit_ear};
+use crate::replay::{flat_state_at, replay};
 use crate::techniques::{
     TechniqueInput, inside_reverse, open_sink, outside_reverse, petal, pleat, squash, swivel, twist,
 };

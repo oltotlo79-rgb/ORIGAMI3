@@ -2,7 +2,13 @@
 // 2D/3Dの分割比(UI-004)・手順の並べ替え(SEQ-005)のテスト。
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Document, DocumentView, FoldStep } from "../lib/types";
+import type {
+  Document,
+  DocumentView,
+  EdgeKind,
+  FoldStep,
+  Vec2,
+} from "../lib/types";
 
 vi.mock("../ipc/client", () => ({
   documentNew: vi.fn(),
@@ -21,7 +27,12 @@ vi.mock("../ipc/client", () => ({
 
 import * as ipc from "../ipc/client";
 import { DEFAULT_NEW_PAPER, useAppStore } from "./appStore";
-import { DEFAULT_DISPLAY } from "../lib/displayPrefs";
+import {
+  DEFAULT_CONTEXT_PANEL_RATIO,
+  DEFAULT_DISPLAY,
+  MAX_CONTEXT_PANEL_RATIO,
+  MIN_CONTEXT_PANEL_RATIO,
+} from "../lib/displayPrefs";
 
 function step(id: number): FoldStep {
   return { id, kind: "Simple", drivers: [], layer_order: null, note: `手順${id}` };
@@ -56,9 +67,14 @@ beforeEach(() => {
     newPaperDraft: DEFAULT_NEW_PAPER,
     display: DEFAULT_DISPLAY,
     splitRatio: 0.5,
+    contextPanelRatio: DEFAULT_CONTEXT_PANEL_RATIO,
     errorMessage: null,
     currentStep: null,
     mirrorDraw: false,
+    mirrorAxis: { kind: "paperVertical" },
+    mirrorAxisNotice: null,
+    selection: { edgeIds: [], vertexIds: [] },
+    faces: [],
     wheelBehavior: "scroll",
   });
 });
@@ -95,7 +111,7 @@ describe("新規作成の紙の指定", () => {
   });
 });
 
-describe("紙の色と方眼・重なり/食い込み防止・分割比", () => {
+describe("紙の色と方眼・重なり防止/食い込み検出・区画の分割比", () => {
   it("色・方眼・2種類の防止設定を作品ごとの設定として保存する", async () => {
     // Rust側は受け取った見た目をそのまま作品へ入れて返す
     vi.mocked(ipc.editApply).mockImplementation(async (op) =>
@@ -152,139 +168,411 @@ describe("紙の色と方眼・重なり/食い込み防止・分割比", () => 
     useAppStore.getState().setSplitRatio(0.35);
     expect(useAppStore.getState().splitRatio).toBeCloseTo(0.35);
   });
-});
 
-describe("左右対称に線を引く", () => {
-  /** 線を1本引く準備(正方形の紙・編集は毎回成功する) */
-  function ready(mirrorDraw: boolean) {
-    const doc = makeDoc([]);
-    useAppStore.setState({ doc, mirrorDraw });
-    vi.mocked(ipc.editApply).mockResolvedValue(makeView(doc));
-  }
-
-  const calls = () => vi.mocked(ipc.editApply).mock.calls.map((c) => c[0]);
-
-  it("入れておくと、中心線の反対側にも同じ線が引かれる", async () => {
-    ready(true);
-    await useAppStore.getState().drawSegment([0.25, 0], [0.375, 1], "Mountain");
-    expect(calls()).toEqual([
-      { type: "AddSegment", a: [0.25, 0], b: [0.375, 1], kind: "Mountain" },
-      { type: "AddSegment", a: [0.75, 0], b: [0.625, 1], kind: "Mountain" },
-    ]);
+  it("下部パネルの比率は25%〜55%に収め、中間値はそのまま使う", () => {
+    useAppStore.getState().setContextPanelRatio(0.1);
+    expect(useAppStore.getState().contextPanelRatio).toBeCloseTo(
+      MIN_CONTEXT_PANEL_RATIO,
+    );
+    useAppStore.getState().setContextPanelRatio(0.4);
+    expect(useAppStore.getState().contextPanelRatio).toBeCloseTo(0.4);
+    useAppStore.getState().setContextPanelRatio(0.9);
+    expect(useAppStore.getState().contextPanelRatio).toBeCloseTo(
+      MAX_CONTEXT_PANEL_RATIO,
+    );
+    expect(ipc.editApply).not.toHaveBeenCalled();
+    expect(ipc.sequenceApply).not.toHaveBeenCalled();
   });
 
-  it("中心線に重なる線・もともと左右対称な線は1本だけになる", async () => {
-    ready(true);
-    await useAppStore.getState().drawSegment([0.5, 0], [0.5, 1], "Valley");
+  it("区画の広さを初期化しても作品データは変更しない", () => {
+    useAppStore.setState({
+      doc: makeDoc([]),
+      splitRatio: 0.72,
+      contextPanelRatio: 0.51,
+    });
+
+    useAppStore.getState().resetPaneSizes();
+
+    expect(useAppStore.getState().splitRatio).toBeCloseTo(0.5);
+    expect(useAppStore.getState().contextPanelRatio).toBeCloseTo(
+      DEFAULT_CONTEXT_PANEL_RATIO,
+    );
+    expect(ipc.editApply).not.toHaveBeenCalled();
+    expect(ipc.sequenceApply).not.toHaveBeenCalled();
+    expect(ipc.documentSave).not.toHaveBeenCalled();
+  });
+});
+
+type MirrorAxisTestCase = {
+  label: string;
+  kind: "paperVertical" | "paperHorizontal" | "selectedLine";
+  sourceId: number;
+  mirrorId: number;
+  mirrored: [Vec2, Vec2];
+  onAxis: [Vec2, Vec2];
+};
+
+const DRAW_SEGMENT: [Vec2, Vec2] = [
+  [0.125, 0.25],
+  [0.25, 0.375],
+];
+
+const MIRROR_AXIS_CASES: MirrorAxisTestCase[] = [
+  {
+    label: "紙の縦の中心線",
+    kind: "paperVertical",
+    sourceId: 10,
+    mirrorId: 11,
+    mirrored: [
+      [0.875, 0.25],
+      [0.75, 0.375],
+    ],
+    onAxis: [
+      [0.5, 0.125],
+      [0.5, 0.875],
+    ],
+  },
+  {
+    label: "紙の横の中心線",
+    kind: "paperHorizontal",
+    sourceId: 20,
+    mirrorId: 21,
+    mirrored: [
+      [0.125, 0.75],
+      [0.25, 0.625],
+    ],
+    onAxis: [
+      [0.125, 0.5],
+      [0.875, 0.5],
+    ],
+  },
+  {
+    label: "選んだ斜めの線",
+    kind: "selectedLine",
+    sourceId: 30,
+    mirrorId: 31,
+    mirrored: [
+      [0.25, 0.125],
+      [0.375, 0.25],
+    ],
+    onAxis: [
+      [0.125, 0.125],
+      [0.875, 0.875],
+    ],
+  },
+];
+
+function addMirrorTestEdge(
+  doc: Document,
+  id: number,
+  a: Vec2,
+  b: Vec2,
+  kind: EdgeKind = "Mountain",
+): void {
+  const v0 = doc.cp.next_vertex_id++;
+  const v1 = doc.cp.next_vertex_id++;
+  doc.cp.vertices.push({ id: v0, pos: a }, { id: v1, pos: b });
+  doc.cp.edges.push({ id, v0, v1, kind });
+  doc.cp.next_edge_id = Math.max(doc.cp.next_edge_id, id + 1);
+}
+
+/** 縦・横・斜めの各基準について、元の線と対になる線を持つ正方形の展開図。 */
+function mirrorTestDoc(): Document {
+  const doc = makeDoc([]);
+  addMirrorTestEdge(doc, 10, DRAW_SEGMENT[0], DRAW_SEGMENT[1]);
+  addMirrorTestEdge(doc, 11, [0.875, 0.25], [0.75, 0.375]);
+  addMirrorTestEdge(doc, 20, DRAW_SEGMENT[0], DRAW_SEGMENT[1]);
+  addMirrorTestEdge(doc, 21, [0.125, 0.75], [0.25, 0.625]);
+  addMirrorTestEdge(doc, 30, DRAW_SEGMENT[0], DRAW_SEGMENT[1]);
+  addMirrorTestEdge(doc, 31, [0.25, 0.125], [0.375, 0.25]);
+  // 選択基準は左下から右上へ通る補助線(y=x)。
+  addMirrorTestEdge(doc, 100, [0, 0], [1, 1], "Aux");
+  // 縦中心で反対側に相手が無い線。
+  addMirrorTestEdge(doc, 90, [0.625, 0.5], [0.75, 0.625], "Aux");
+  return doc;
+}
+
+/** 対称編集の準備。IPCは編集前と同じ展開図を成功結果として返す。 */
+function readyMirrorTest(mirrorDraw: boolean): Document {
+  const doc = mirrorTestDoc();
+  useAppStore.setState({
+    doc,
+    mirrorDraw,
+    mirrorAxis: { kind: "paperVertical" },
+    mirrorAxisNotice: null,
+    selection: { edgeIds: [], vertexIds: [] },
+    faces: [],
+  });
+  vi.mocked(ipc.editApply).mockResolvedValue(makeView(doc));
+  return doc;
+}
+
+function chooseMirrorAxis(axis: MirrorAxisTestCase): void {
+  const store = useAppStore.getState();
+  if (axis.kind === "selectedLine") {
+    store.setSelection({ edgeIds: [100], vertexIds: [] });
+    useAppStore.getState().setSelectedLineAsMirrorAxis();
+  } else {
+    store.setMirrorAxisPreset(axis.kind);
+  }
+}
+
+const editCalls = () => vi.mocked(ipc.editApply).mock.calls.map((call) => call[0]);
+
+const lastEditCall = () => {
+  const calls = vi.mocked(ipc.editApply).mock.calls;
+  return calls[calls.length - 1][0];
+};
+
+describe("基準線を選んで対称に線を引く", () => {
+  for (const axis of MIRROR_AXIS_CASES) {
+    it(`${axis.label}を基準に、反対側にも同じ線を引く`, async () => {
+      readyMirrorTest(true);
+      chooseMirrorAxis(axis);
+
+      await useAppStore
+        .getState()
+        .drawSegment(DRAW_SEGMENT[0], DRAW_SEGMENT[1], "Mountain");
+
+      const calls = editCalls();
+      expect(calls).toHaveLength(2);
+      expect(calls[0]).toEqual({
+        type: "AddSegment",
+        a: DRAW_SEGMENT[0],
+        b: DRAW_SEGMENT[1],
+        kind: "Mountain",
+      });
+      const reflected = calls[1];
+      if (reflected.type !== "AddSegment") throw new Error("AddSegmentでない");
+      expect(reflected.kind).toBe("Mountain");
+      if (axis.kind !== "selectedLine") {
+        // 紙の縦・横中心は二進数で正確な座標なので、従来どおり完全一致を守る。
+        expect(reflected).toEqual({
+          type: "AddSegment",
+          a: axis.mirrored[0],
+          b: axis.mirrored[1],
+          kind: "Mountain",
+        });
+      } else {
+        // 斜線への垂線計算はf64の丸めだけを明示的な桁数で許容する。
+        expect(reflected.a[0]).toBeCloseTo(axis.mirrored[0][0], 12);
+        expect(reflected.a[1]).toBeCloseTo(axis.mirrored[0][1], 12);
+        expect(reflected.b[0]).toBeCloseTo(axis.mirrored[1][0], 12);
+        expect(reflected.b[1]).toBeCloseTo(axis.mirrored[1][1], 12);
+      }
+    });
+
+    it(`${axis.label}の上に引いた線は1本だけになる`, async () => {
+      readyMirrorTest(true);
+      chooseMirrorAxis(axis);
+
+      await useAppStore
+        .getState()
+        .drawSegment(axis.onAxis[0], axis.onAxis[1], "Valley");
+
+      expect(editCalls()).toEqual([
+        {
+          type: "AddSegment",
+          a: axis.onAxis[0],
+          b: axis.onAxis[1],
+          kind: "Valley",
+        },
+      ]);
+    });
+  }
+
+  it("もともと縦中心をまたいで対称な線も1本だけになる", async () => {
+    readyMirrorTest(true);
+    useAppStore.getState().setMirrorAxisPreset("paperVertical");
+
     await useAppStore.getState().drawSegment([0.25, 0.5], [0.75, 0.5], "Valley");
-    expect(calls()).toEqual([
-      { type: "AddSegment", a: [0.5, 0], b: [0.5, 1], kind: "Valley" },
+
+    expect(editCalls()).toEqual([
       { type: "AddSegment", a: [0.25, 0.5], b: [0.75, 0.5], kind: "Valley" },
     ]);
   });
 
-  it("切ってあるときは引いた線だけを引く", async () => {
-    ready(false);
-    await useAppStore.getState().drawSegment([0.25, 0], [0.375, 1], "Aux");
-    expect(calls()).toEqual([
-      { type: "AddSegment", a: [0.25, 0], b: [0.375, 1], kind: "Aux" },
+  it("対称描画を切ってあるときは引いた線だけを引く", async () => {
+    readyMirrorTest(false);
+    useAppStore.getState().setMirrorAxisPreset("paperHorizontal");
+
+    await useAppStore
+      .getState()
+      .drawSegment(DRAW_SEGMENT[0], DRAW_SEGMENT[1], "Aux");
+
+    expect(editCalls()).toEqual([
+      { type: "AddSegment", a: DRAW_SEGMENT[0], b: DRAW_SEGMENT[1], kind: "Aux" },
     ]);
   });
 });
 
-describe("左右対称に消す・線種を変える", () => {
-  /** 縦の中心線を対称軸とする展開図(辺10と辺11が左右の対、辺12は相手なし) */
-  function symmetricDoc(): Document {
-    const doc = makeDoc([]);
-    doc.cp = {
-      vertices: [
-        { id: 0, pos: [0, 0] },
-        { id: 1, pos: [1, 0] },
-        { id: 2, pos: [1, 1] },
-        { id: 3, pos: [0, 1] },
-        { id: 4, pos: [0.5, 0] },
-        { id: 5, pos: [0.5, 1] },
-        { id: 8, pos: [0.2, 0.4] },
-        { id: 9, pos: [0.2, 0.6] },
-      ],
-      edges: [
-        { id: 0, v0: 0, v1: 4, kind: "Border" },
-        { id: 1, v0: 4, v1: 1, kind: "Border" },
-        { id: 2, v0: 1, v1: 2, kind: "Border" },
-        { id: 3, v0: 2, v1: 5, kind: "Border" },
-        { id: 4, v0: 5, v1: 3, kind: "Border" },
-        { id: 5, v0: 3, v1: 0, kind: "Border" },
-        { id: 10, v0: 0, v1: 5, kind: "Mountain" },
-        { id: 11, v0: 1, v1: 5, kind: "Mountain" },
-        { id: 12, v0: 8, v1: 9, kind: "Aux" },
-      ],
-      next_vertex_id: 10,
-      next_edge_id: 13,
-    };
-    return doc;
-  }
+describe("基準線を選んで対称に消す・線種を変える", () => {
+  for (const axis of MIRROR_AXIS_CASES) {
+    it(`${axis.label}を基準に、削除を反対側の線にも効かせる`, async () => {
+      readyMirrorTest(true);
+      chooseMirrorAxis(axis);
 
-  function ready(mirrorDraw: boolean) {
-    const doc = symmetricDoc();
-    useAppStore.setState({
-      doc,
-      mirrorDraw,
-      faces: [
-        { id: 0, vertices: [0, 4, 5], edges: [0, 4, 10] },
-        { id: 1, vertices: [4, 1, 5], edges: [1, 11, 4] },
-        { id: 2, vertices: [0, 5, 3], edges: [10, 4, 5] },
-        { id: 3, vertices: [1, 2, 5], edges: [2, 3, 11] },
-      ],
+      await useAppStore
+        .getState()
+        .applyEdit({ type: "RemoveEdges", ids: [axis.sourceId] });
+
+      const op = lastEditCall();
+      if (op.type !== "RemoveEdges") throw new Error("RemoveEdgesでない");
+      expect([...op.ids].sort((a, b) => a - b)).toEqual([
+        axis.sourceId,
+        axis.mirrorId,
+      ]);
     });
-    vi.mocked(ipc.editApply).mockResolvedValue(makeView(doc));
+
+    it(`${axis.label}を基準に、線種変更を反対側の線にも効かせる`, async () => {
+      readyMirrorTest(true);
+      chooseMirrorAxis(axis);
+
+      await useAppStore
+        .getState()
+        .applyEdit({ type: "SetEdgeKind", ids: [axis.sourceId], kind: "Valley" });
+
+      const op = lastEditCall();
+      if (op.type !== "SetEdgeKind") throw new Error("SetEdgeKindでない");
+      expect([...op.ids].sort((a, b) => a - b)).toEqual([
+        axis.sourceId,
+        axis.mirrorId,
+      ]);
+      expect(op.kind).toBe("Valley");
+    });
   }
 
-  const lastCall = () => {
-    const c = vi.mocked(ipc.editApply).mock.calls;
-    return c[c.length - 1][0];
-  };
+  it("反対側に相手がいない線は、その線だけを消す(警告は出さない)", async () => {
+    readyMirrorTest(true);
+    useAppStore.getState().setMirrorAxisPreset("paperVertical");
 
-  it("削除は鏡映の相手も一緒に消す", async () => {
-    ready(true);
-    await useAppStore.getState().applyEdit({ type: "RemoveEdges", ids: [10] });
-    const op = lastCall();
+    await useAppStore.getState().applyEdit({ type: "RemoveEdges", ids: [90] });
+
+    const op = lastEditCall();
     if (op.type !== "RemoveEdges") throw new Error("RemoveEdgesでない");
-    expect([...op.ids].sort()).toEqual([10, 11]);
-  });
-
-  it("線種の変更も鏡映の相手に効く", async () => {
-    ready(true);
-    await useAppStore
-      .getState()
-      .applyEdit({ type: "SetEdgeKind", ids: [11], kind: "Valley" });
-    const op = lastCall();
-    if (op.type !== "SetEdgeKind") throw new Error("SetEdgeKindでない");
-    expect([...op.ids].sort()).toEqual([10, 11]);
-    expect(op.kind).toBe("Valley");
-  });
-
-  it("鏡映の相手がいない線は、その線だけを消す(警告は出さない)", async () => {
-    ready(true);
-    await useAppStore.getState().applyEdit({ type: "RemoveEdges", ids: [12] });
-    const op = lastCall();
-    if (op.type !== "RemoveEdges") throw new Error("RemoveEdgesでない");
-    expect(op.ids).toEqual([12]);
+    expect(op.ids).toEqual([90]);
     expect(useAppStore.getState().errorMessage).toBeNull();
+    expect(useAppStore.getState().mirrorAxisNotice).toBeNull();
   });
 
-  it("切ってあるときは選んだ線だけが変わる", async () => {
-    ready(false);
+  it("対称描画を切ってあるときは選んだ線だけが変わる", async () => {
+    readyMirrorTest(false);
     await useAppStore.getState().applyEdit({ type: "RemoveEdges", ids: [10] });
-    const op = lastCall();
+    const op = lastEditCall();
     if (op.type !== "RemoveEdges") throw new Error("RemoveEdgesでない");
     expect(op.ids).toEqual([10]);
   });
 
   it("線を引く以外の編集(点を動かす等)はそのまま送る", async () => {
-    ready(true);
-    await useAppStore.getState().applyEdit({ type: "MoveVertex", id: 8, to: [0.3, 0.4] });
-    expect(lastCall()).toEqual({ type: "MoveVertex", id: 8, to: [0.3, 0.4] });
+    readyMirrorTest(true);
+    await useAppStore.getState().applyEdit({ type: "MoveVertex", id: 0, to: [0.3, 0.4] });
+    expect(lastEditCall()).toEqual({ type: "MoveVertex", id: 0, to: [0.3, 0.4] });
   });
+
+  it("選んだ基準線が交点で分割されても、同じ斜め基準を使い続ける", async () => {
+    readyMirrorTest(true);
+    chooseMirrorAxis(MIRROR_AXIS_CASES[2]);
+    const splitAxis = mirrorTestDoc();
+    splitAxis.cp.edges = splitAxis.cp.edges.filter((edge) => edge.id !== 100);
+    addMirrorTestEdge(splitAxis, 101, [0, 0], [0.5, 0.5], "Aux");
+    addMirrorTestEdge(splitAxis, 102, [0.5, 0.5], [1, 1], "Aux");
+    vi.mocked(ipc.editApply).mockResolvedValue(makeView(splitAxis));
+
+    // 基準線を横切る線を追加すると、実際の編集結果では基準辺が交点で2片に分かれる。
+    await useAppStore.getState().drawSegment([0.125, 0.5], [0.875, 0.5], "Aux");
+
+    expect(useAppStore.getState().mirrorAxis).toMatchObject({ kind: "selectedLine" });
+    expect(useAppStore.getState().mirrorAxisNotice).toBeNull();
+
+    // 次の操作でも、縦中心ではなく選んだ斜線(y=x)を使うことをIPC引数で確かめる。
+    const callsBeforeSecondDraw = editCalls().length;
+    await useAppStore
+      .getState()
+      .drawSegment(DRAW_SEGMENT[0], DRAW_SEGMENT[1], "Mountain");
+    const secondDraw = editCalls().slice(callsBeforeSecondDraw);
+    expect(secondDraw).toHaveLength(2);
+    expect(secondDraw[0]).toEqual({
+      type: "AddSegment",
+      a: DRAW_SEGMENT[0],
+      b: DRAW_SEGMENT[1],
+      kind: "Mountain",
+    });
+    const reflected = secondDraw[1];
+    if (reflected.type !== "AddSegment") throw new Error("AddSegmentでない");
+    expect(reflected.kind).toBe("Mountain");
+    expect(reflected.a[0]).toBeCloseTo(0.25, 12);
+    expect(reflected.a[1]).toBeCloseTo(0.125, 12);
+    expect(reflected.b[0]).toBeCloseTo(0.375, 12);
+    expect(reflected.b[1]).toBeCloseTo(0.25, 12);
+  });
+
+  it("選んだ基準線を削除すると縦中心へ戻し、理由を完全一致で通知する", async () => {
+    const doc = readyMirrorTest(true);
+    const withoutAxis: Document = {
+      ...doc,
+      cp: {
+        ...doc.cp,
+        edges: doc.cp.edges.filter((edge) => edge.id !== 100),
+      },
+    };
+    chooseMirrorAxis(MIRROR_AXIS_CASES[2]);
+    vi.mocked(ipc.editApply).mockResolvedValue(makeView(withoutAxis));
+
+    await useAppStore.getState().applyEdit({ type: "RemoveEdges", ids: [100] });
+
+    const op = lastEditCall();
+    if (op.type !== "RemoveEdges") throw new Error("RemoveEdgesでない");
+    expect(op.ids).toEqual([100]);
+    const state = useAppStore.getState();
+    expect(state.mirrorAxis).toEqual({ kind: "paperVertical" });
+    expect(state.selection.edgeIds).toEqual([]);
+    expect(state.mirrorAxisNotice).toBe(
+      "基準にしていた線が無くなったので、紙の縦の中心線に戻しました",
+    );
+  });
+});
+
+async function switchMirrorTestDocument(kind: "open" | "new"): Promise<void> {
+  const next = makeView(mirrorTestDoc());
+  if (kind === "open") {
+    vi.mocked(ipc.documentOpen).mockResolvedValue(next);
+    await useAppStore.getState().openDocument("別の作品.ori3");
+    return;
+  }
+  vi.mocked(ipc.documentNew).mockResolvedValue(next);
+  await useAppStore.getState().newDocument({ width_mm: 150, height_mm: 150 });
+}
+
+describe("作品を切り替えたときの対称基準", () => {
+  for (const kind of ["open", "new"] as const) {
+    const operation = kind === "open" ? "別の作品を開く" : "新しい作品を作る";
+
+    it(`${operation}と、選んだ線の基準だけ縦中心へ戻る`, async () => {
+      readyMirrorTest(true);
+      chooseMirrorAxis(MIRROR_AXIS_CASES[2]);
+      expect(useAppStore.getState().mirrorAxis).toEqual({
+        kind: "selectedLine",
+        edgeId: 100,
+      });
+
+      await switchMirrorTestDocument(kind);
+
+      const state = useAppStore.getState();
+      expect(state.mirrorAxis).toEqual({ kind: "paperVertical" });
+      expect(state.selection).toEqual({ edgeIds: [], vertexIds: [] });
+      expect(state.mirrorAxisNotice).toBeNull();
+    });
+
+    it(`${operation}ときも、紙の横の中心線は維持する`, async () => {
+      readyMirrorTest(true);
+      useAppStore.getState().setMirrorAxisPreset("paperHorizontal");
+
+      await switchMirrorTestDocument(kind);
+
+      expect(useAppStore.getState().mirrorAxis).toEqual({ kind: "paperHorizontal" });
+      expect(useAppStore.getState().mirrorAxisNotice).toBeNull();
+    });
+  }
 });
 
 describe("手順の並べ替え", () => {

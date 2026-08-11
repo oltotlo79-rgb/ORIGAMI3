@@ -34,7 +34,7 @@ const DEBUG_BUDGET: Duration = Duration::from_millis(330);
 /// 上限。debug実測の最悪値516msの約3倍に取り、機材やCIのばらつきを吸収しつつ
 /// 大きな性能後退を検出する。
 const NEAR_DEBUG_BUDGET: Duration = Duration::from_millis(1500);
-/// 食い込み防止込みの通常1フレーム。releaseでは16ms、debugでは同じ処理の
+/// 接触診断込みの通常1フレーム。releaseでは16ms、debugでは同じ処理の
 /// 最適化差を見込んだ上限で回帰を検出する。
 const MOTION_DEBUG_BUDGET: Duration = Duration::from_millis(500);
 const MOTION_RELEASE_BUDGET: Duration = Duration::from_millis(16);
@@ -155,7 +155,7 @@ fn miura_20x20_solve_stays_within_frame_budget() {
 
 /// 角度スライダーで折り角を次々に指定していく使い方の性能(NFR-002)。
 /// いま操作している1本だけを固定し、以前の指定は目標として `solve_near` で
-/// 追従させる。ばね付き→ばね無しの2段になるぶん通常solveより重い。
+/// 追従させる。目標保持→閉包精密化の2段になるぶん通常solveより重い。
 ///
 /// 実測(2026-08-07, 開発機 Windows 11): warm startありの1回あたり
 /// debug 約306〜516ms / release 約8.8〜12.7ms(NFR-002の33msに対し2.5倍以上の
@@ -181,7 +181,7 @@ fn miura_20x20_solve_near_stays_within_frame_budget() {
             hinge: h,
             target_angle_deg: goal(h),
         }];
-        let targets: HashMap<u32, f64> = picked[..i].iter().map(|&e| (e, goal(e))).collect();
+        let targets: HashMap<u32, f64> = picked[..i - 1].iter().map(|&e| (e, goal(e))).collect();
         let t0 = Instant::now();
         let res = solve_near(&cp, &faces, &hard, &targets, warm.as_ref());
         let dt = t0.elapsed();
@@ -231,11 +231,11 @@ fn miura_20x20_contact_check_stays_within_frame_budget() {
     );
     let elapsed = t0.elapsed();
     println!(
-        "面400・食い込み防止: iterations={} time={elapsed:?}",
+        "面400・接触診断: iterations={} time={elapsed:?}",
         motion.result.iterations
     );
     assert!(motion.result.converged);
-    assert!(!motion.contact_stopped);
+    assert!(!motion.contact_detected);
     let budget = if cfg!(debug_assertions) {
         MOTION_DEBUG_BUDGET
     } else {
@@ -243,6 +243,6 @@ fn miura_20x20_contact_check_stays_within_frame_budget() {
     };
     assert!(
         elapsed < budget,
-        "食い込み防止込みの追従が遅すぎます: {elapsed:?}"
+        "接触診断込みの追従が遅すぎます: {elapsed:?}"
     );
 }

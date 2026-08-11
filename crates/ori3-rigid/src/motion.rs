@@ -1,4 +1,4 @@
-//! 角度操作を前の姿勢から少しずつ追い、紙どうしが交差する直前で止める。
+//! 角度操作を前の姿勢から少しずつ追い、有限な最良候補を最終要求まで運ぶ。
 
 use std::collections::HashMap;
 
@@ -9,22 +9,20 @@ use crate::{SolveResult, self_intersects, solve, solve_near};
 
 /// 小さな作品で使う目標角の刻み。通常の16ms入力はこれより小さいため1段だけになる。
 const TARGET_STEP_DEG: f64 = 5.0;
-/// 接触区間を安全側から詰める回数。大きな作品では1フレームの費用を抑えて2回にする。
-const SMALL_BISECTIONS: usize = 3;
-const LARGE_BISECTIONS: usize = 2;
-
-/// 接触停止付き継続法の結果。
+/// 停止しない接触診断付き継続法の結果。
 #[derive(Clone, Debug)]
 pub struct MotionSolveResult {
     pub result: SolveResult,
-    /// 収束失敗ではなく、紙どうしの接触を検出して安全側で止めたか。
+    /// 要求までの経路で紙どうしの接触を検出したか。計算は停止しない。
+    pub contact_detected: bool,
+    /// 旧呼出し元との一時的な互換値。停止契約は廃止したため常にfalse。
     pub contact_stopped: bool,
 }
 
-/// 前回角から要求角までを継続法で追い、必要なら交差直前の安全解を返す。
+/// 前回角から要求角までを継続法で追い、接触や有限な不収束では停止しない。
 ///
 /// `targets` が `Some` なら各段で [`solve_near`]、`None` なら [`solve`] を使う。
-/// `prevent_contact == false` は従来関数を1回だけ呼び、結果をそのまま返す。
+/// `detect_contact == false` はソルバーを1回だけ呼び、結果をそのまま返す。
 /// 接触判定は剛体フレームへ掛けるため、後段の表示用重なり補正とは独立している。
 #[must_use]
 pub fn solve_motion(
@@ -33,39 +31,57 @@ pub fn solve_motion(
     drivers: &[Driver],
     targets: Option<&HashMap<EdgeId, f64>>,
     warm_start: Option<&HashMap<EdgeId, f64>>,
-    prevent_contact: bool,
+    detect_contact: bool,
 ) -> MotionSolveResult {
-    if !prevent_contact {
+    if !detect_contact {
+        let requested = solve_requested(cp, faces, drivers, targets, warm_start);
+        let result = if is_finite_result(&requested, faces.len()) {
+            requested
+        } else {
+            let previous = warm_start
+                .map(|warm| solve_warm_pose(cp, faces, warm))
+                .filter(|candidate| is_finite_result(candidate, faces.len()))
+                .or_else(|| {
+                    let flat = solve(cp, faces, &[], None);
+                    is_finite_result(&flat, faces.len()).then_some(flat)
+                });
+            let iterations = requested.iterations;
+            previous.map_or(requested.clone(), |previous| {
+                previous_with_failure(previous, requested, iterations)
+            })
+        };
         return MotionSolveResult {
-            result: solve_requested(cp, faces, drivers, targets, warm_start),
+            result,
+            contact_detected: false,
             contact_stopped: false,
         };
     }
 
-    // warm_startは直前に表示した収束解。driverを一度外して同じ角度から解けば、
-    // t=0の閉じたフレームと全ヒンジ角を得られる。初回は全角度0の平坦解になる。
-    let mut accepted = solve(cp, faces, &[], warm_start);
-    if !accepted.converged {
-        return MotionSolveResult {
-            result: accepted,
-            contact_stopped: false,
-        };
-    }
-    let start_angles = accepted.angles.clone();
+    // warmの全角度を一時hardにして、有限な不収束角も解き直さず正確にt=0へ戻す。
+    // warmが無い初回、または有限フレームを作れない場合だけ平らな導出形を使う。
+    let initial = warm_start.map_or_else(
+        || solve(cp, faces, &[], None),
+        |warm| solve_warm_pose(cp, faces, warm),
+    );
+    let flat = (!is_finite_result(&initial, faces.len())).then(|| solve(cp, faces, &[], None));
+    let mut last_finite = if is_finite_result(&initial, faces.len()) {
+        Some(initial)
+    } else {
+        flat.filter(|result| is_finite_result(result, faces.len()))
+    };
+    let start_angles = last_finite
+        .as_ref()
+        .map(|result| result.angles.clone())
+        .unwrap_or_default();
     let steps = continuation_steps(
         faces.len(),
         max_requested_delta(&start_angles, drivers, targets),
     );
-    let bisections = if faces.len() > 100 {
-        LARGE_BISECTIONS
-    } else {
-        SMALL_BISECTIONS
-    };
-    let mut iterations = accepted.iterations;
-    let mut accepted_t = 0.0;
-    // 既に食い込んだ作品を開いた直後でも、逆向きに抜く動きは妨げない。
-    // 一度安全になった後の safe→intersect 遷移だけを停止対象にする。
-    let mut guard_armed = !self_intersects(&accepted.frame);
+    let mut iterations = last_finite.as_ref().map_or(0, |result| result.iterations);
+    let mut contact_detected = last_finite
+        .as_ref()
+        .is_some_and(|result| self_intersects(&result.frame));
+    let mut final_failure = None;
 
     for step in 1..=steps {
         let t = step as f64 / steps as f64;
@@ -76,60 +92,68 @@ pub fn solve_motion(
             targets,
             &start_angles,
             t,
-            Some(&accepted.angles),
+            last_finite.as_ref().map(|result| &result.angles),
         );
         iterations = iterations.saturating_add(candidate.iterations);
-        if !candidate.converged {
-            return MotionSolveResult {
-                result: previous_with_failure(accepted, candidate, iterations),
-                contact_stopped: false,
-            };
+        if is_finite_result(&candidate, faces.len()) {
+            contact_detected |= self_intersects(&candidate.frame);
+            candidate.iterations = iterations;
+            last_finite = Some(candidate);
+            final_failure = None;
+        } else if step == steps {
+            final_failure = Some(candidate);
         }
-
-        let intersects = self_intersects(&candidate.frame);
-        if guard_armed && intersects {
-            // [accepted_t, t] は安全→交差の区間。常に安全側だけをwarm startへ採用し、
-            // 2〜3回の二分探索で「ぶつかる直前」へ寄せる。
-            let mut low = accepted_t;
-            let mut high = t;
-            for _ in 0..bisections {
-                let mid = (low + high) * 0.5;
-                let mid_result = solve_at(
-                    cp,
-                    faces,
-                    drivers,
-                    targets,
-                    &start_angles,
-                    mid,
-                    Some(&accepted.angles),
-                );
-                iterations = iterations.saturating_add(mid_result.iterations);
-                if mid_result.converged && !self_intersects(&mid_result.frame) {
-                    accepted = mid_result;
-                    low = mid;
-                } else {
-                    high = mid;
-                }
-            }
-            accepted.iterations = iterations;
-            return MotionSolveResult {
-                result: accepted,
-                contact_stopped: true,
-            };
-        }
-
-        if !intersects {
-            guard_armed = true;
-        }
-        candidate.iterations = iterations;
-        accepted = candidate;
-        accepted_t = t;
     }
 
+    let result = match (last_finite, final_failure) {
+        (Some(previous), Some(failed)) => previous_with_failure(previous, failed, iterations),
+        (Some(mut result), None) => {
+            result.iterations = iterations;
+            result
+        }
+        (None, Some(mut failed)) => {
+            failed.iterations = iterations;
+            failed
+        }
+        (None, None) => solve(cp, faces, &[], None),
+    };
     MotionSolveResult {
-        result: accepted,
+        result,
+        contact_detected,
         contact_stopped: false,
     }
+}
+
+fn solve_warm_pose(cp: &CreasePattern, faces: &[Face], warm: &HashMap<EdgeId, f64>) -> SolveResult {
+    let mut drivers: Vec<Driver> = warm
+        .iter()
+        .filter_map(|(&hinge, &target_angle_deg)| {
+            (target_angle_deg.is_finite() && (-180.0..=180.0).contains(&target_angle_deg))
+                .then_some(Driver {
+                    hinge,
+                    target_angle_deg,
+                })
+        })
+        .collect();
+    drivers.sort_unstable_by_key(|driver| driver.hinge);
+    solve(cp, faces, &drivers, Some(warm))
+}
+
+fn is_finite_result(result: &SolveResult, expected_faces: usize) -> bool {
+    result.closure_rms.is_finite()
+        && result.angles.values().all(|angle| angle.is_finite())
+        && result.relaxations.iter().all(|relaxation| {
+            relaxation.target_angle_deg.is_finite()
+                && relaxation.actual_angle_deg.is_finite()
+                && relaxation.delta_deg.is_finite()
+        })
+        && result.frame.faces.len() == expected_faces
+        && result.frame.faces.iter().all(|face| {
+            face.polygon
+                .iter()
+                .flatten()
+                .all(|coordinate| coordinate.is_finite())
+        })
 }
 
 fn solve_requested(
@@ -215,13 +239,14 @@ fn continuation_steps(face_count: usize, max_delta_deg: f64) -> usize {
     wanted.min(cap)
 }
 
-/// 中間段で閉包が解けなければ、壊れた候補を見せず直前の収束解へ警告だけ載せる。
+/// 最終要求で有限形を1つも作れなかった場合だけ、直前の有限形へ警告を載せる。
 fn previous_with_failure(
     mut previous: SolveResult,
     failed: SolveResult,
     iterations: u32,
 ) -> SolveResult {
     previous.converged = false;
+    previous.best_effort = true;
     previous.iterations = iterations;
     for warning in failed.frame.warnings {
         if !previous.frame.warnings.contains(&warning) {

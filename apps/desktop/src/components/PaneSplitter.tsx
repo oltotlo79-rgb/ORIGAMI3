@@ -39,7 +39,7 @@ export function PaneSplitter() {
       aria-valuemin={Math.round(MIN_SPLIT_RATIO * 100)}
       aria-valuemax={Math.round(MAX_SPLIT_RATIO * 100)}
       tabIndex={0}
-      title="左右にドラッグすると、展開図と立体の広さを変えられます"
+      data-tooltip="左右にドラッグして、展開図と3Dの広さを変えます"
       onPointerDown={(e) => {
         e.preventDefault();
         draggingRef.current = true;

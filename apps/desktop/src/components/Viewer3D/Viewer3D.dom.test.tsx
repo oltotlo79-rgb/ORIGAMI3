@@ -164,7 +164,6 @@ describe("Viewer3D(画面)", () => {
       pendingFoldThrough: null,
       foldThroughBusy: false,
       techniqueDraft: null,
-      contactStopped: false,
       selection: { edgeIds: [], vertexIds: [] },
       uiTheme: "pop",
     });
@@ -183,12 +182,6 @@ describe("Viewer3D(画面)", () => {
     useAppStore.setState({ playing: true });
     renderViewer();
     expect(screen.getByRole("status").textContent).toContain("再生中");
-  });
-
-  it("接触で止まったときは警告でなく3Dの1行案内に理由を出す", () => {
-    useAppStore.setState({ contactStopped: true });
-    renderViewer();
-    expect(screen.getByRole("status").textContent).toBe("紙がぶつかるためここまでです");
   });
 
   it("テーマ変更時にCSS変数から3D背景を読み直す", () => {
@@ -349,7 +342,6 @@ describe("Viewer3D(紙をつかんで引く)", () => {
       errorMessage: null,
       foldDraft: null,
       techniqueDraft: null,
-      contactStopped: false,
     });
   });
   afterEach(() => cleanup());
@@ -374,12 +366,12 @@ describe("Viewer3D(紙をつかんで引く)", () => {
     const sy = ((1 - ndc.y) / 2) * 400;
     fireEvent.pointerDown(canvas, { button: 0, pointerId: 1, clientX: sx, clientY: sy });
     expect(useAppStore.getState().pullHinge).toBe(5); // 動かす折り線が決まる
-    // 引き始めは今の形(全ての折り角)を送って出発点を合わせる
+    // 引き始めの実角は固定条件へ偽装せず、出発点のwarm seedとして送る。
     await waitFor(() => expect(ipc.poseSolve).toHaveBeenCalled());
-    expect(vi.mocked(ipc.poseSolve).mock.calls[0][0]).toEqual([
+    expect(vi.mocked(ipc.poseSolve).mock.calls[0][0]).toEqual([]);
+    expect(vi.mocked(ipc.poseSolve).mock.calls[0][3]).toEqual([
       { hinge: 5, target_angle_deg: 0 },
     ]);
-    expect(vi.mocked(ipc.poseSolve).mock.calls[0][3]).toBe(true);
 
     // 画面の上へ引く = 斜め視点では紙を起こす向きになる
     fireEvent.pointerMove(canvas, { pointerId: 1, clientX: sx, clientY: sy - 60 });
@@ -408,6 +400,8 @@ describe("Viewer3D(指している場所のカーソル)", () => {
       playT: 1,
       playing: false,
       drivers: new Map(),
+      relaxations: [],
+      activeAngleIntent: null,
       errorMessage: null,
       foldDraft: null,
       pendingFoldThrough: null,
@@ -514,6 +508,38 @@ describe("Viewer3D(指している場所のカーソル)", () => {
         | undefined;
       expect(last?.some((segment) => segment.role === "suspect")).toBe(false);
     });
+  });
+
+  it("追従は琥珀、操作中は水色とし、同じ辺の食い込み赤を最優先する", async () => {
+    useAppStore.setState({
+      relaxations: [
+        { hinge: 5, target_angle_deg: 90, actual_angle_deg: 72, delta_deg: -18 },
+      ],
+    });
+    renderViewer();
+    await waitFor(() => expect(held.scene.content).not.toBeNull());
+
+    const lastRoles = () => {
+      const setHighlight = held.scene.setHighlight as ReturnType<typeof vi.fn>;
+      const calls = setHighlight.mock.calls;
+      const last = calls[calls.length - 1]?.[0] as
+        | { edgeId: number; role?: string }[]
+        | undefined;
+      return last?.filter((segment) => segment.edgeId === 5).map((segment) => segment.role);
+    };
+
+    await waitFor(() => expect(lastRoles()).toContain("relaxed"));
+
+    act(() =>
+      useAppStore.setState({ activeAngleIntent: { generation: 4, hinges: [5] } }),
+    );
+    await waitFor(() => {
+      expect(lastRoles()).toContain("relaxed");
+      expect(lastRoles()).toContain("active");
+    });
+
+    act(() => useAppStore.setState({ suspectHinges: [5] }));
+    await waitFor(() => expect(lastRoles()).toEqual(["suspect"]));
   });
 
   it("合わせて折る途中は、いま選べる点の近くだけpointerになる", async () => {
@@ -768,6 +794,8 @@ describe("Viewer3D(視点を戻す)", () => {
       playT: 1,
       playing: false,
       drivers: new Map(),
+      relaxations: [],
+      activeAngleIntent: null,
       errorMessage: null,
       foldDraft: null,
       alignDraft: null,
@@ -799,14 +827,20 @@ describe("Viewer3D(視点を戻す)", () => {
         { edgeId: 6, role: "reference" },
       ]);
     });
-    expect(screen.getByRole("status").textContent).toContain("水色");
+    expect(screen.getByRole("status").textContent).toBe(
+      "3Dの紙を見回し、折り線や辺を選べます",
+    );
+    expect(screen.getByRole("status").textContent).not.toContain("水色");
   });
   afterEach(() => cleanup());
 
   it("3D区画に「視点を戻す」ボタンが常に出ている", () => {
     renderViewer();
     const button = screen.getByRole("button", { name: "視点を戻す" });
-    expect(button.title).toContain("最初の視点");
+    expect(button.getAttribute("data-tooltip")).toBe(
+      "3Dを紙全体が見える視点へ戻します",
+    );
+    expect(button.hasAttribute("title")).toBe(false);
   });
 
   it("押すと紙全体が見える初期の視点へ戻す", () => {

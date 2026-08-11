@@ -142,6 +142,8 @@ export function OperationSteps() {
   const pendingFoldThrough = useAppStore((s) => s.pendingFoldThrough);
   const alignDraft = useAppStore((s) => s.alignDraft);
   const techniqueDraft = useAppStore((s) => s.techniqueDraft);
+  const expanded = useAppStore((s) => s.contextHelpExpanded);
+  const toggle = useAppStore((s) => s.toggleContextHelp);
   const guide = operationGuideFor({
     ...useAppStore.getState(),
     activeTool,
@@ -156,11 +158,24 @@ export function OperationSteps() {
 
   return (
     <section className="operation-steps" aria-label={`${guide.title}の操作手順`}>
-      <details>
-        <summary className="operation-steps-heading">
-          <span>今できる操作</span>
-          <strong>{guide.title}</strong>
-        </summary>
+      <div className="operation-steps-heading">
+        <span>今できる操作</span>
+        <strong className="operation-summary-line" data-tooltip={guide.title}>
+          {guide.title}
+        </strong>
+        <button
+          type="button"
+          className="operation-help-toggle operation-detail-toggle"
+          aria-label={`この道具の詳しい操作方法 ${expanded ? "▲" : "▼"}`}
+          aria-expanded={expanded}
+          data-tooltip={expanded ? "この道具の詳しい操作を折りたたみます" : "この道具の詳しい操作を開きます"}
+          onClick={toggle}
+        >
+          <span className="operation-detail-label">この道具の詳しい操作方法</span>
+          <span className="operation-detail-icon">{expanded ? "▲" : "▼"}</span>
+        </button>
+      </div>
+      {expanded && (
         <ol>
           {guide.steps.map((step, index) => (
             <li
@@ -181,7 +196,7 @@ export function OperationSteps() {
             </li>
           ))}
         </ol>
-      </details>
+      )}
     </section>
   );
 }

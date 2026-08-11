@@ -31,6 +31,7 @@ export function NewDocumentDialog() {
     <div className="dialog-backdrop">
       <div
         className="dialog"
+        data-floating-ui="new-document-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="new-title"
@@ -42,6 +43,7 @@ export function NewDocumentDialog() {
             <input
               type="radio"
               name="paper-shape"
+              data-tooltip="正方形の紙を選びます"
               checked={draft.square}
               onChange={() => setDraft({ square: true })}
             />
@@ -51,6 +53,7 @@ export function NewDocumentDialog() {
             <input
               type="radio"
               name="paper-shape"
+              data-tooltip="長方形の紙を選びます"
               checked={!draft.square}
               onChange={() => setDraft({ square: false })}
             />
@@ -64,6 +67,7 @@ export function NewDocumentDialog() {
               type="number"
               min={1}
               max={2000}
+              data-tooltip="紙の横の長さをmmで入力します"
               value={draft.widthMm}
               onChange={(e) => setDraft({ widthMm: Number(e.target.value) })}
             />
@@ -76,7 +80,11 @@ export function NewDocumentDialog() {
               max={2000}
               value={draft.square ? draft.widthMm : draft.heightMm}
               disabled={draft.square}
-              title={draft.square ? "正方形なので、よこと同じ長さになります" : ""}
+              data-tooltip={
+                draft.square
+                  ? "正方形なので、横と同じ長さになります"
+                  : "紙の縦の長さをmmで入力します"
+              }
               onChange={(e) => setDraft({ heightMm: Number(e.target.value) })}
             />
           </label>
@@ -91,6 +99,7 @@ export function NewDocumentDialog() {
             <button
               key={p.label}
               type="button"
+              data-tooltip={`${p.label}の大きさを使います`}
               onClick={() =>
                 setDraft({
                   widthMm: p.width,
@@ -111,11 +120,12 @@ export function NewDocumentDialog() {
             type="button"
             className="button-primary"
             disabled={!valid}
+            data-tooltip="入力した大きさで新しい作品を始めます"
             onClick={() => void confirm()}
           >
             この紙で作りはじめる
           </button>
-          <button type="button" onClick={close}>
+          <button type="button" data-tooltip="新規作成をやめます" onClick={close}>
             やめる
           </button>
         </div>

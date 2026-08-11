@@ -194,7 +194,13 @@ beforeEach(() => {
     poseAngles: new Map(),
     poseWarnings: [],
     poseConverged: true,
-    contactStopped: false,
+    poseBestEffort: false,
+    poseClosureRms: null,
+    contactDetected: false,
+    sequenceTargets: new Map(),
+    relaxations: [],
+    activeAngleIntent: null,
+    angleIntentGeneration: 0,
     frame3d: null,
     suspectHinges: [],
     currentStep: null,
@@ -266,6 +272,24 @@ describe("appStore 直列化と応答の反映", () => {
     expect(s.doc?.cp.next_edge_id).toBe(300); // その後に編集結果が上書き
   });
 
+  it("Document変更後は古い保存希望を捨て、再解決済みの辺ID順だけを持つ", async () => {
+    useAppStore.setState({ sequenceTargets: new Map([[999, 120]]) });
+    const view = makeView(301);
+    view.sequence_targets = [
+      { hinge: 9, target_angle_deg: 30 },
+      { hinge: 5, target_angle_deg: 60 },
+    ];
+    vi.mocked(ipc.documentNew).mockResolvedValueOnce(view);
+
+    await useAppStore.getState().newDocument({ width_mm: 150, height_mm: 150 });
+
+    expect([...useAppStore.getState().sequenceTargets]).toEqual([
+      [5, 60],
+      [9, 30],
+    ]);
+    expect(useAppStore.getState().sequenceTargets.has(999)).toBe(false);
+  });
+
   it("最新でない失敗は報告しない(直後に新しい結果が必ず続くため)", async () => {
     const slowFail = deferred<DocumentView>();
     vi.mocked(ipc.editApply)
@@ -290,6 +314,11 @@ function flush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/** 偽タイマーを進めず、Promiseの応答反映だけを流す。 */
+async function flushMicrotasks(): Promise<void> {
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+}
+
 /** 偽タイマーを使うテストの準備。
  * 間引きの基準時刻はbeforeEachのresetPoseThrottle()で初期化済みなので、
  * ここでは偽タイマーへ切り替えるだけでよい(テストの並び順に依存しない)。 */
@@ -298,7 +327,7 @@ function primeFakeTimers(): void {
 }
 
 describe("appStore 折り角度の指定", () => {
-  it("食い込み防止で止まると安全側の角度へ戻し、正常停止として覚える", async () => {
+  it("接触を検出しても希望角を書き戻さず、警告状態だけを覚える", async () => {
     const view = makeHingeView(445);
     useAppStore.setState({
       doc: view.doc,
@@ -307,17 +336,17 @@ describe("appStore 折り角度の指定", () => {
     });
     vi.mocked(ipc.poseSolve).mockResolvedValueOnce({
       ...makeSolveResult({ "5": 104.75 }),
-      contact_stopped: true,
+      contact_detected: true,
     });
 
     useAppStore.getState().setDriverAngle(5, 110);
-    await vi.waitFor(() => expect(useAppStore.getState().contactStopped).toBe(true));
+    await vi.waitFor(() => expect(useAppStore.getState().contactDetected).toBe(true));
 
     const state = useAppStore.getState();
-    expect(state.drivers.get(5)).toBe(104.75);
+    expect(state.drivers.get(5)).toBe(110);
     expect(state.poseAngles.get(5)).toBe(104.75);
     expect(state.poseWarnings).toEqual([]);
-    expect(vi.mocked(ipc.poseSolve).mock.calls[0][3]).toBe(false);
+    expect(vi.mocked(ipc.poseSolve).mock.calls[0][3]).toEqual([]);
   });
 
   it("実際に待っても、連続変更は1回にまとまり最後の角度が送られる", async () => {
@@ -393,6 +422,120 @@ describe("appStore 折り角度の指定", () => {
         [{ hinge: 5, target_angle_deg: 10 }],
         [{ hinge: 5, target_angle_deg: 40 }],
       ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("操作終了は予約中の末尾solveをflushし、完了後にactiveだけを解除する", async () => {
+    const solving = deferred<SolveResult>();
+    vi.mocked(ipc.poseSolve).mockReturnValueOnce(solving.promise);
+    const store = useAppStore.getState();
+    store.setDriverAngle(5, 72);
+    const generation = useAppStore.getState().activeAngleIntent?.generation;
+
+    const finishing = store.finishAngleIntent();
+    await flush();
+    expect(poseCalls()).toEqual([[{ hinge: 5, target_angle_deg: 72 }]]);
+    expect(useAppStore.getState().activeAngleIntent?.generation).toBe(generation);
+
+    solving.resolve(makeSolveResult({ "5": 72 }));
+    await finishing;
+    expect(useAppStore.getState().activeAngleIntent).toBeNull();
+    expect(useAppStore.getState().drivers.get(5)).toBe(72);
+  });
+
+  it("次の16ms要求が未送信でも、新しい操作世代は旧solveの表示を破棄する", async () => {
+    primeFakeTimers();
+    try {
+      const oldSolve = deferred<SolveResult>();
+      const latestFrame = { faces: [], warnings: ["最新の形"] };
+      vi.mocked(ipc.poseSolve)
+        .mockReturnValueOnce(oldSolve.promise)
+        .mockResolvedValueOnce({
+          ...makeSolveResult({ "5": 20 }),
+          frame: latestFrame,
+          relaxations: [
+            { hinge: 7, target_angle_deg: 45, actual_angle_deg: 40, delta_deg: -5 },
+          ],
+        });
+      const view = makeHingeView(446);
+      const beforeFrame = { faces: [], warnings: ["表示中の形"] };
+      useAppStore.setState({
+        doc: view.doc,
+        faces: view.faces,
+        hinges: new Set([5]),
+        frame3d: beforeFrame,
+        poseAngles: new Map([[5, 1]]),
+        relaxations: [],
+      });
+
+      const store = useAppStore.getState();
+      store.setDriverAngle(5, 10);
+      await vi.advanceTimersByTimeAsync(POSE_WAIT_MS); // 旧solveを実行中にする
+      store.setDriverAngle(5, 20); // 新要求はまだthrottle待ち
+
+      oldSolve.resolve({
+        ...makeSolveResult({ "5": 10 }),
+        frame: { faces: [], warnings: ["旧世代の形"] },
+        relaxations: [
+          { hinge: 5, target_angle_deg: 10, actual_angle_deg: 8, delta_deg: -2 },
+        ],
+      });
+      await flushMicrotasks();
+
+      expect(poseCalls()).toHaveLength(1);
+      expect(useAppStore.getState().frame3d).toBe(beforeFrame);
+      expect(useAppStore.getState().poseAngles.get(5)).toBe(1);
+      expect(useAppStore.getState().relaxations).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(POSE_WAIT_MS);
+      expect(poseCalls()).toHaveLength(2);
+      expect(useAppStore.getState().frame3d).toBe(latestFrame);
+      expect(useAppStore.getState().poseAngles.get(5)).toBe(20);
+      expect(useAppStore.getState().relaxations[0].hinge).toBe(7);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("不収束中の連続100入力でも、最後の要求角と最良候補が表示される", async () => {
+    primeFakeTimers();
+    try {
+      const slow = deferred<SolveResult>();
+      const finalFrame = { faces: [], warnings: ["いちばん近い形"] };
+      vi.mocked(ipc.poseSolve)
+        .mockReturnValueOnce(slow.promise)
+        .mockResolvedValueOnce({
+          ...makeSolveResult({ "5": 100 }),
+          converged: false,
+          best_effort: true,
+          frame: finalFrame,
+        });
+      const store = useAppStore.getState();
+
+      store.setDriverAngle(5, 1);
+      await vi.advanceTimersByTimeAsync(POSE_WAIT_MS);
+      for (let deg = 2; deg <= 100; deg++) {
+        store.setDriverAngle(5, deg);
+        await vi.advanceTimersByTimeAsync(POSE_WAIT_MS);
+      }
+      expect(poseCalls()).toHaveLength(1);
+
+      slow.resolve({
+        ...makeSolveResult({ "5": 1 }),
+        converged: false,
+        best_effort: true,
+      });
+      await vi.advanceTimersByTimeAsync(POSE_WAIT_MS);
+
+      expect(poseCalls()).toEqual([
+        [{ hinge: 5, target_angle_deg: 1 }],
+        [{ hinge: 5, target_angle_deg: 100 }],
+      ]);
+      expect(useAppStore.getState().drivers.get(5)).toBe(100);
+      expect(useAppStore.getState().frame3d).toEqual(finalFrame);
+      expect(useAppStore.getState().poseBestEffort).toBe(true);
     } finally {
       vi.useRealTimers();
     }
@@ -509,6 +652,15 @@ describe("appStore 折り角度の指定", () => {
       hinges: new Set([5]),
       frame3d: before,
       suspectHinges: [99],
+      relaxations: [
+        {
+          hinge: 99,
+          target_angle_deg: 90,
+          actual_angle_deg: 80,
+          delta_deg: -10,
+        },
+      ],
+      poseBestEffort: false,
     });
 
     const store = useAppStore.getState();
@@ -520,20 +672,32 @@ describe("appStore 折り角度の指定", () => {
       ...makeSolveResult(),
       frame: { faces: [], warnings: ["古い形"] },
       suspect_hinges: [5],
+      relaxations: [
+        { hinge: 5, target_angle_deg: 90, actual_angle_deg: 70, delta_deg: -20 },
+      ],
+      best_effort: true,
     });
     await flush();
     expect(useAppStore.getState().frame3d).toEqual(before);
     expect(useAppStore.getState().suspectHinges).toEqual([99]);
+    expect(useAppStore.getState().relaxations[0].hinge).toBe(99);
+    expect(useAppStore.getState().poseBestEffort).toBe(false);
 
     const latest = { faces: [], warnings: ["新しい形"] };
     second.resolve({
       ...makeSolveResult(),
       frame: latest,
       suspect_hinges: [7],
+      relaxations: [
+        { hinge: 7, target_angle_deg: 90, actual_angle_deg: 72, delta_deg: -18 },
+      ],
+      best_effort: true,
     });
     await flush();
     expect(useAppStore.getState().frame3d).toEqual(latest);
     expect(useAppStore.getState().suspectHinges).toEqual([7]);
+    expect(useAppStore.getState().relaxations[0].hinge).toBe(7);
+    expect(useAppStore.getState().poseBestEffort).toBe(true);
   });
 
   it("追従計算の原因候補を反映し、次の空応答で消す", async () => {
@@ -813,6 +977,53 @@ describe("appStore 手順の表示と再生", () => {
     }
   });
 
+  it("再生中に「全て平らに戻す」を押したら、後続の再生結果で折れ直さない", async () => {
+    primeFakeTimers();
+    try {
+      const slowReplay = deferred<ReplayResult>();
+      const foldedFrame = { faces: [], warnings: ["再生で折れた形"] };
+      const flatFrame = { faces: [], warnings: ["0度で平らな形"] };
+      vi.mocked(ipc.sequenceReplay)
+        .mockReturnValueOnce(slowReplay.promise)
+        .mockResolvedValue({
+          frame: foldedFrame,
+          skipped: [],
+          warnings: [],
+        });
+      vi.mocked(ipc.poseSolve).mockResolvedValue({
+        ...makeSolveResult({ "5": 0 }),
+        frame: flatFrame,
+      });
+      seedSequence(2);
+      useAppStore.setState({
+        drivers: new Map([[5, 90]]),
+        frame3d: foldedFrame,
+      });
+
+      useAppStore.getState().togglePlay();
+      await vi.advanceTimersByTimeAsync(32);
+      expect(replayCalls()).toHaveLength(1);
+
+      // 実機でボタンを押した順序を再現する。0度計算が待っている間にも
+      // 再生tickが続くと、正しい平坦結果が古い応答として捨てられてしまう。
+      useAppStore.getState().clearDrivers();
+      await vi.advanceTimersByTimeAsync(32);
+      slowReplay.resolve({
+        frame: foldedFrame,
+        skipped: [],
+        warnings: [],
+      });
+      await vi.runAllTimersAsync();
+
+      expect(poseCalls()).toEqual([[{ hinge: 5, target_angle_deg: 0 }]]);
+      expect(useAppStore.getState().drivers.size).toBe(0);
+      expect(useAppStore.getState().playing).toBe(false);
+      expect(useAppStore.getState().frame3d).toEqual(flatFrame);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("追い越された再生の成功結果は3D表示へ反映しない", async () => {
     const first = deferred<ReplayResult>();
     const second = deferred<ReplayResult>();
@@ -821,7 +1032,18 @@ describe("appStore 手順の表示と再生", () => {
       .mockReturnValueOnce(second.promise);
     const before = { faces: [], warnings: ["表示中の形"] };
     seedSequence(2);
-    useAppStore.setState({ frame3d: before, suspectHinges: [99] });
+    useAppStore.setState({
+      frame3d: before,
+      suspectHinges: [99],
+      sequenceTargets: new Map([[99, 12]]),
+      poseAngles: new Map([[99, 11]]),
+      relaxations: [
+        { hinge: 99, target_angle_deg: 12, actual_angle_deg: 11, delta_deg: -1 },
+      ],
+      poseBestEffort: false,
+      poseClosureRms: 0.01,
+      contactDetected: false,
+    });
 
     useAppStore.getState().selectStep(1);
     await flush();
@@ -832,10 +1054,24 @@ describe("appStore 手順の表示と再生", () => {
       skipped: [1],
       warnings: [],
       suspect_hinges: [5],
+      sequence_targets: [{ hinge: 5, target_angle_deg: 90 }],
+      angles: { "5": 70 },
+      relaxations: [
+        { hinge: 5, target_angle_deg: 90, actual_angle_deg: 70, delta_deg: -20 },
+      ],
+      best_effort: true,
+      closure_rms: 2,
+      contact_detected: true,
     });
     await flush();
     expect(useAppStore.getState().frame3d).toEqual(before);
     expect(useAppStore.getState().suspectHinges).toEqual([99]);
+    expect([...useAppStore.getState().sequenceTargets]).toEqual([[99, 12]]);
+    expect([...useAppStore.getState().poseAngles]).toEqual([[99, 11]]);
+    expect(useAppStore.getState().relaxations[0].hinge).toBe(99);
+    expect(useAppStore.getState().poseBestEffort).toBe(false);
+    expect(useAppStore.getState().poseClosureRms).toBe(0.01);
+    expect(useAppStore.getState().contactDetected).toBe(false);
 
     const latest = { faces: [], warnings: ["新しい形"] };
     second.resolve({
@@ -843,10 +1079,70 @@ describe("appStore 手順の表示と再生", () => {
       skipped: [2],
       warnings: [],
       suspect_hinges: [7],
+      sequence_targets: [{ hinge: 7, target_angle_deg: 45 }],
+      angles: { "7": 40 },
+      relaxations: [
+        { hinge: 7, target_angle_deg: 45, actual_angle_deg: 40, delta_deg: -5 },
+      ],
+      best_effort: true,
+      closure_rms: 0.5,
+      contact_detected: true,
     });
     await flush();
     expect(useAppStore.getState().frame3d).toEqual(latest);
     expect(useAppStore.getState().suspectHinges).toEqual([7]);
+    expect([...useAppStore.getState().sequenceTargets]).toEqual([[7, 45]]);
+    expect([...useAppStore.getState().poseAngles]).toEqual([[7, 40]]);
+    expect(useAppStore.getState().relaxations[0].hinge).toBe(7);
+    expect(useAppStore.getState().poseBestEffort).toBe(true);
+    expect(useAppStore.getState().poseClosureRms).toBe(0.5);
+    expect(useAppStore.getState().contactDetected).toBe(true);
+  });
+
+  it("角度操作の次要求がthrottle待ちでも、旧再生結果を表示しない", async () => {
+    primeFakeTimers();
+    try {
+      const oldReplay = deferred<ReplayResult>();
+      vi.mocked(ipc.sequenceReplay).mockReturnValueOnce(oldReplay.promise);
+      const before = { faces: [], warnings: ["角度操作前の表示"] };
+      seedSequence(2);
+      useAppStore.setState({
+        frame3d: before,
+        sequenceTargets: new Map([[99, 12]]),
+        poseAngles: new Map([[99, 11]]),
+        relaxations: [
+          { hinge: 99, target_angle_deg: 12, actual_angle_deg: 11, delta_deg: -1 },
+        ],
+      });
+
+      useAppStore.getState().selectStep(1);
+      await flushMicrotasks();
+      expect(replayCalls()).toEqual([[1, 1]]);
+      useAppStore.getState().setDriverAngle(5, 30); // pose要求はまだ未送信
+
+      oldReplay.resolve({
+        frame: { faces: [], warnings: ["旧再生"] },
+        skipped: [1],
+        warnings: ["旧警告"],
+        sequence_targets: [{ hinge: 5, target_angle_deg: 90 }],
+        angles: { "5": 90 },
+        relaxations: [
+          { hinge: 5, target_angle_deg: 90, actual_angle_deg: 70, delta_deg: -20 },
+        ],
+      });
+      await flushMicrotasks();
+
+      expect(poseCalls()).toHaveLength(0);
+      expect(useAppStore.getState().frame3d).toBe(before);
+      expect([...useAppStore.getState().sequenceTargets]).toEqual([[99, 12]]);
+      expect([...useAppStore.getState().poseAngles]).toEqual([[99, 11]]);
+      expect(useAppStore.getState().relaxations[0].hinge).toBe(99);
+
+      await vi.advanceTimersByTimeAsync(POSE_WAIT_MS);
+      expect(poseCalls()).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("手順再生の原因候補を反映し、次の空応答で消す", async () => {
@@ -1917,9 +2213,9 @@ describe("立体的な仕上げの形を手順として残す(SIM-009)", () => {
         id: 0,
         kind: "Pose",
         // 折り線は展開図座標の線分で残す(辺IDは編集で変わるため)。
-        // 指定した5は指定値、指定していない6は計算結果の角度が入る
+        // 希望値ではなく、最新solveが返した全ヒンジの実角を保存する
         drivers: [
-          { a: [0, 0], b: [1, 1], target_angle_deg: 90 },
+          { a: [0, 0], b: [1, 1], target_angle_deg: 89.9999 },
           { a: [1, 0], b: [0, 1], target_angle_deg: -30.5 },
         ],
         layer_order: null,
@@ -1930,6 +2226,184 @@ describe("立体的な仕上げの形を手順として残す(SIM-009)", () => {
     expect(useAppStore.getState().drivers.size).toBe(0);
     expect(poseCalls()).toEqual([]);
     expect(useAppStore.getState().errorMessage).toBeNull();
+  });
+
+  it("予約中の末尾solveを待ち、返った実角をPoseへ保存する", async () => {
+    const view = makePoseView(1202);
+    useAppStore.setState({
+      doc: view.doc,
+      faces: view.faces,
+      hinges: new Set([5, 6]),
+      drivers: new Map(),
+      poseAngles: new Map(),
+    });
+    const solving = deferred<SolveResult>();
+    vi.mocked(ipc.poseSolve).mockReturnValueOnce(solving.promise);
+    const pushed = makePoseView(1203);
+    pushed.doc.sequence = [makeStep(0)];
+    pushed.frame = { faces: [], warnings: [] };
+    vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(pushed);
+
+    useAppStore.getState().setDriverAngle(5, 90);
+    const recording = useAppStore.getState().recordPoseStep();
+    await flush();
+    expect(ipc.poseSolve).toHaveBeenCalledTimes(1);
+    expect(ipc.sequenceApply).not.toHaveBeenCalled();
+
+    solving.resolve(
+      makeSolveResult({
+        "5": 89.123456789,
+        "6": -30.5,
+      }),
+    );
+    await recording;
+
+    const op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
+    expect(op.type).toBe("PushStep");
+    if (op.type !== "PushStep") throw new Error("Pose手順ではありません");
+    expect(op.step.drivers.map((driver) => driver.target_angle_deg)).toEqual([
+      89.123456789,
+      -30.5,
+    ]);
+    expect(useAppStore.getState().activeAngleIntent).toBeNull();
+  });
+
+  it("保存待機中に積まれた後続solveまで待ち、最後の実角を保存する", async () => {
+    primeFakeTimers();
+    try {
+      const view = makePoseView(1204);
+      useAppStore.setState({
+        doc: view.doc,
+        faces: view.faces,
+        hinges: new Set([5, 6]),
+        drivers: new Map(),
+        poseAngles: new Map(),
+      });
+      const firstSolve = deferred<SolveResult>();
+      const latestSolve = deferred<SolveResult>();
+      vi.mocked(ipc.poseSolve)
+        .mockReturnValueOnce(firstSolve.promise)
+        .mockReturnValueOnce(latestSolve.promise);
+      const pushed = makePoseView(1205);
+      pushed.doc.sequence = [makeStep(0)];
+      pushed.frame = { faces: [], warnings: [] };
+      vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(pushed);
+
+      useAppStore.getState().setDriverAngle(5, 90);
+      await vi.advanceTimersByTimeAsync(POSE_WAIT_MS); // 90°を実行中にする
+      const recording = useAppStore.getState().recordPoseStep();
+      await flushMicrotasks();
+
+      useAppStore.getState().setDriverAngle(5, 100);
+      await vi.advanceTimersByTimeAsync(POSE_WAIT_MS); // 100°を待機枠へ積む
+      firstSolve.resolve(makeSolveResult({ "5": 89, "6": -20 }));
+      await flushMicrotasks();
+
+      expect(ipc.poseSolve).toHaveBeenCalledTimes(2);
+      expect(ipc.sequenceApply).not.toHaveBeenCalled();
+
+      latestSolve.resolve(
+        makeSolveResult({
+          "5": 72.123456789,
+          "6": -30.5,
+        }),
+      );
+      await recording;
+
+      const op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
+      expect(op.type).toBe("PushStep");
+      if (op.type !== "PushStep") throw new Error("Pose手順ではありません");
+      expect(op.step.drivers.map((driver) => driver.target_angle_deg)).toEqual([
+        72.123456789,
+        -30.5,
+      ]);
+      expect(useAppStore.getState().activeAngleIntent).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("保存が待っていたsolve自体が追い越されても、後継の実角まで待つ", async () => {
+    primeFakeTimers();
+    try {
+      const view = makePoseView(1206);
+      useAppStore.setState({
+        doc: view.doc,
+        faces: view.faces,
+        hinges: new Set([5, 6]),
+        drivers: new Map(),
+        poseAngles: new Map(),
+      });
+      // Aを実行中にして、90°(B)をrunLatestの待機枠へ置く。
+      const blockingSave = deferred<void>();
+      vi.mocked(ipc.documentSave).mockReturnValueOnce(blockingSave.promise);
+      const unrelated = useAppStore.getState().saveDocument(null);
+      await flushMicrotasks();
+
+      useAppStore.getState().setDriverAngle(5, 90);
+      await vi.advanceTimersByTimeAsync(POSE_WAIT_MS);
+      const recording = useAppStore.getState().recordPoseStep();
+      await flushMicrotasks();
+
+      // 保存処理が待つBを100°(C)でSUPERSEDEDにする。IPCへ届くのはCだけ。
+      const latestSolve = deferred<SolveResult>();
+      vi.mocked(ipc.poseSolve).mockReturnValueOnce(latestSolve.promise);
+      useAppStore.getState().setDriverAngle(5, 100);
+      await vi.advanceTimersByTimeAsync(POSE_WAIT_MS);
+      blockingSave.resolve();
+      await flushMicrotasks();
+
+      expect(poseCalls()).toEqual([[{ hinge: 5, target_angle_deg: 100 }]]);
+      expect(ipc.sequenceApply).not.toHaveBeenCalled();
+
+      const pushed = makePoseView(1207);
+      pushed.doc.sequence = [makeStep(0)];
+      pushed.frame = { faces: [], warnings: [] };
+      vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(pushed);
+      latestSolve.resolve(
+        makeSolveResult({
+          "5": 72.123456789,
+          "6": -30.5,
+        }),
+      );
+      await Promise.all([recording, unrelated]);
+
+      const op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
+      expect(op.type).toBe("PushStep");
+      if (op.type !== "PushStep") throw new Error("Pose手順ではありません");
+      expect(op.step.drivers.map((driver) => driver.target_angle_deg)).toEqual([
+        72.123456789,
+        -30.5,
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("Pose保存中に始まった新しい角度指定を消さず、自動再生後に再計算する", async () => {
+    seedPose();
+    useAppStore.setState({
+      display: { ...useAppStore.getState().doc!.display, soft_enabled: true },
+    });
+    const saving = deferred<DocumentView>();
+    vi.mocked(ipc.sequenceApply).mockReturnValueOnce(saving.promise);
+    const pushed = makePoseView(1206);
+    pushed.doc.sequence = [makeStep(0)];
+    pushed.doc.display.soft_enabled = true;
+    pushed.frame = { faces: [], warnings: [] };
+
+    const recording = useAppStore.getState().recordPoseStep();
+    await vi.waitFor(() => expect(ipc.sequenceApply).toHaveBeenCalledTimes(1));
+    useAppStore.getState().setDriverAngle(5, 100);
+    const newGeneration = useAppStore.getState().activeAngleIntent?.generation;
+
+    saving.resolve(pushed);
+    await recording;
+
+    expect(useAppStore.getState().drivers.get(5)).toBe(100);
+    expect(useAppStore.getState().activeAngleIntent?.generation).toBe(newGeneration);
+    expect(ipc.sequenceReplay).toHaveBeenCalledTimes(1);
+    expect(poseCalls()).toEqual([[{ hinge: 5, target_angle_deg: 100 }]]);
   });
 
   it("手順IDは既にある手順の続きになる", async () => {

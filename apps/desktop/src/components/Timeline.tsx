@@ -43,7 +43,7 @@ function StepChip({ step, number }: { step: FoldStep; number: number }) {
   );
   const warned = isSkipped || reasons.length > 0;
   const detail = reasons.length > 0 ? reasons.join(" / ") : "";
-  const title = isSkipped
+  const tooltip = isSkipped
     ? detail || SKIPPED_FALLBACK
     : [TECHNIQUE_LABEL[step.kind], step.note, detail]
         .filter((text) => text !== "")
@@ -56,7 +56,7 @@ function StepChip({ step, number }: { step: FoldStep; number: number }) {
       <button
         type="button"
         className={insertClass(currentStep === number - 1)}
-        title={`手順${number}の前に折りを挟みます。この形が出たら立体表示で折ってください`}
+        data-tooltip={`手順${number}の前に新しい折りを挟みます`}
         onClick={() => selectStep(number - 1)}
       >
         ＋
@@ -64,7 +64,7 @@ function StepChip({ step, number }: { step: FoldStep; number: number }) {
       <button
         type="button"
         className={chipClass(currentStep === number, isSkipped)}
-        title={title}
+        data-tooltip={tooltip}
         onClick={() => selectStep(number)}
       >
         {number} {TECHNIQUE_LABEL[step.kind]}
@@ -100,24 +100,24 @@ export function Timeline() {
       <div className="timeline-controls">
         <button
           type="button"
-          title="折る前の状態に戻します"
+          data-tooltip="折る前の状態に戻します"
           onClick={() => selectStep(0)}
         >
           ⏮ 最初へ
         </button>
         <button
           type="button"
-          title="1つ前の手順を表示します"
+          data-tooltip="1つ前の手順を表示します"
           onClick={() => stepBy(-1)}
         >
           ◀ 前へ
         </button>
         <button
           type="button"
-          title={
+          data-tooltip={
             playing
               ? "再生を止めます"
-              : "今の手順から最後まで、折れていく様子を続けて表示します"
+                : "今の手順から最後まで続けて表示します"
           }
           onClick={() => togglePlay()}
         >
@@ -125,7 +125,7 @@ export function Timeline() {
         </button>
         <button
           type="button"
-          title="1つ先の手順を表示します"
+          data-tooltip="1つ先の手順を表示します"
           onClick={() => stepBy(1)}
         >
           次へ ▶
@@ -135,7 +135,7 @@ export function Timeline() {
         <button
           type="button"
           className={chipClass(currentStep === 0)}
-          title="まだ何も折っていない、平らな状態を表示します"
+          data-tooltip="まだ折っていない平らな状態を表示します"
           onClick={() => selectStep(0)}
         >
           折る前
@@ -146,7 +146,7 @@ export function Timeline() {
         <button
           type="button"
           className={chipClass(currentStep === null)}
-          title="全ての手順を折った、いちばん新しい状態を表示します"
+          data-tooltip="全手順を折った最新の状態を表示します"
           onClick={() => selectStep(null)}
         >
           最新

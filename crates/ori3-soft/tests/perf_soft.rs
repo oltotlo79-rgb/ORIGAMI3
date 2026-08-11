@@ -93,12 +93,15 @@ fn miura_cp(nc: usize, nr: usize) -> CreasePattern {
 
 #[test]
 fn relax_of_400_faces_fits_in_one_frame() {
-    let cp = miura_cp(20, 20);
+    let (nc, nr) = (20, 20);
+    let cp = miura_cp(nc, nr);
     let faces = extract_faces(&cp);
     assert_eq!(faces.len(), 400, "面400の規模");
     // 少しだけ折った姿勢を基準の形にする(平らのままだと網も平面になる)
+    let hinge = (nr / 2 * (nc + 1) + nc / 2) as u32;
+    assert_eq!(cp.edges[hinge as usize].kind, EdgeKind::Mountain);
     let drivers = vec![Driver {
-        hinge: 21,
+        hinge,
         target_angle_deg: 20.0,
     }];
     let frame = solve(&cp, &faces, &drivers, None).frame;
@@ -156,14 +159,17 @@ fn relax_of_400_faces_fits_in_one_frame() {
 
 #[test]
 fn overlap_correction_of_400_faces_fits_in_one_frame() {
-    let cp = miura_cp(20, 20);
+    let (nc, nr) = (20, 20);
+    let cp = miura_cp(nc, nr);
     let faces = extract_faces(&cp);
     assert_eq!(faces.len(), 400, "面400の規模");
+    let hinge = (nr / 2 * (nc + 1) + nc / 2) as u32;
+    assert_eq!(cp.edges[hinge as usize].kind, EdgeKind::Mountain);
     let frame = solve(
         &cp,
         &faces,
         &[Driver {
-            hinge: 21,
+            hinge,
             target_angle_deg: 20.0,
         }],
         None,

@@ -46,7 +46,11 @@ pub fn verify_book_step(document: &Document, book_step: u32) -> f64 {
     let topology_ids = faces.iter().map(|face| face.id).collect::<BTreeSet<_>>();
     assert_eq!(frame_ids, topology_ids, "手順{book_step}: 面IDが失われた");
     for face in &replayed.frame.faces {
-        assert!(face.polygon.len() >= 3, "手順{book_step}: 面{}が退化", face.face);
+        assert!(
+            face.polygon.len() >= 3,
+            "手順{book_step}: 面{}が退化",
+            face.face
+        );
         assert!(
             face.polygon
                 .iter()
@@ -66,7 +70,10 @@ pub fn verify_book_step(document: &Document, book_step: u32) -> f64 {
     if !is_pose {
         let (state, warnings) = flat_state_at(document, &faces, document.sequence.len())
             .unwrap_or_else(|error| panic!("手順{book_step}: 平坦状態を復元できない: {error}"));
-        assert!(warnings.is_empty(), "手順{book_step}: flat warnings={warnings:?}");
+        assert!(
+            warnings.is_empty(),
+            "手順{book_step}: flat warnings={warnings:?}"
+        );
         assert_eq!(state.placements.len(), faces.len());
         assert_eq!(state.order.len(), faces.len());
         assert_eq!(

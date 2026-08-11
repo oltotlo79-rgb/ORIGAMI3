@@ -1,10 +1,26 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-const [, , actionsPath, endpoint = "http://127.0.0.1:9222"] = process.argv;
+const [
+  ,
+  ,
+  actionsPath,
+  endpoint = "http://127.0.0.1:9222",
+  expectedTargetIdArgument,
+  expectedGenerationArgument,
+] = process.argv;
 if (!actionsPath) {
-  throw new Error("usage: node capture-steps-cdp.mjs <actions.json> [endpoint]");
+  throw new Error(
+    "usage: node capture-steps-cdp.mjs <actions.json> [endpoint] [expectedTargetId] [expectedGeneration]",
+  );
 }
+function optionalExpectation(argument) {
+  const value = argument?.trim();
+  return value && value !== "-" ? value : undefined;
+}
+
+const expectedTargetId = optionalExpectation(expectedTargetIdArgument);
+const expectedGeneration = optionalExpectation(expectedGenerationArgument);
 
 const timeout = (label, milliseconds) => {
   let handle;
@@ -35,15 +51,43 @@ const targets = await discovery.json();
 const pages = targets.filter(
   (candidate) => candidate.type === "page" && candidate.webSocketDebuggerUrl,
 );
-if (pages.length !== 1) {
-  throw new Error(`Expected one CDP page target, found ${pages.length}`);
+
+function isOrigamiTarget(candidate) {
+  if (candidate.title === "ORIGAMI3") return true;
+  try {
+    const candidateUrl = new URL(candidate.url);
+    return (
+      (candidateUrl.hostname === "localhost" || candidateUrl.hostname === "127.0.0.1") &&
+      candidateUrl.port === "1420"
+    );
+  } catch {
+    return false;
+  }
 }
+
+const candidates = expectedTargetId
+  ? pages.filter((candidate) => candidate.id === expectedTargetId)
+  : pages.filter(isOrigamiTarget);
+if (candidates.length !== 1) {
+  const selection = expectedTargetId
+    ? `with id ${JSON.stringify(expectedTargetId)}`
+    : "matching ORIGAMI3";
+  throw new Error(
+    `Expected one CDP page target ${selection}, found ${candidates.length} (${pages.length} total page target(s))`,
+  );
+}
+const target = candidates[0];
+const targetInfo = {
+  id: target.id ?? "",
+  url: target.url ?? "",
+  title: target.title ?? "",
+};
 
 // WebView2 sometimes advertises `localhost` even when the debugger is listening
 // only on IPv4. Match the already-working discovery endpoint to avoid an IPv6
 // connection stall on Windows.
 const endpointUrl = new URL(endpoint);
-const socketUrl = new URL(pages[0].webSocketDebuggerUrl);
+const socketUrl = new URL(target.webSocketDebuggerUrl);
 socketUrl.hostname = endpointUrl.hostname;
 socketUrl.port = endpointUrl.port;
 
@@ -93,20 +137,44 @@ async function call(method, params = {}) {
   }
 }
 
+async function evaluate(expression) {
+  const result = await call("Runtime.evaluate", {
+    expression,
+    awaitPromise: true,
+    returnByValue: true,
+    userGesture: true,
+  });
+  if (result.exceptionDetails) {
+    throw new Error(
+      result.exceptionDetails.exception?.description ?? result.exceptionDetails.text,
+    );
+  }
+  return result.result?.value ?? result.result?.description;
+}
+
+async function assertExpectedGeneration() {
+  if (!expectedGeneration) return;
+  const status = await evaluate(`(() => {
+    const api = window.__origami3Capture;
+    if (!api || typeof api.getStatus !== "function") return null;
+    return api.getStatus();
+  })()`);
+  if (
+    !status ||
+    status.version !== 1 ||
+    status.ready !== true ||
+    status.generation !== expectedGeneration
+  ) {
+    const actualGeneration = status?.generation ?? "unavailable";
+    throw new Error(
+      `ORIGAMI3 capture generation changed: expected ${JSON.stringify(expectedGeneration)}, got ${JSON.stringify(actualGeneration)}`,
+    );
+  }
+}
+
 async function run(action, index) {
   if (action.act === "eval") {
-    const result = await call("Runtime.evaluate", {
-      expression: action.js,
-      awaitPromise: true,
-      returnByValue: true,
-      userGesture: true,
-    });
-    if (result.exceptionDetails) {
-      throw new Error(
-        result.exceptionDetails.exception?.description ?? result.exceptionDetails.text,
-      );
-    }
-    return result.result?.value ?? result.result?.description;
+    return await evaluate(action.js);
   }
   if (action.act === "shot") {
     const result = await call("Page.captureScreenshot", {
@@ -125,12 +193,14 @@ async function run(action, index) {
 try {
   await call("Runtime.enable");
   await call("Page.enable");
-  await call("Page.bringToFront");
   const actions = JSON.parse(await fs.readFile(actionsPath, "utf8"));
   for (let index = 0; index < actions.length; index += 1) {
     const action = actions[index];
+    await assertExpectedGeneration();
     const result = await run(action, index);
-    process.stdout.write(`${JSON.stringify({ index, act: action.act, result })}\n`);
+    process.stdout.write(
+      `${JSON.stringify({ index, act: action.act, target: targetInfo, result })}\n`,
+    );
   }
 } finally {
   if (socket.readyState === WebSocket.OPEN) socket.close();

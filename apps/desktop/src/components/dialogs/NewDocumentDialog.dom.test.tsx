@@ -29,7 +29,10 @@ describe("新規作成ダイアログ", () => {
     // 正方形の間は「たて」は触らせず、なぜ触れないかを添える
     const height = screen.getByLabelText("たて(mm)") as HTMLInputElement;
     expect(height.disabled).toBe(true);
-    expect(height.title).toContain("よこと同じ");
+    expect(height.getAttribute("data-tooltip")).toBe(
+      "正方形なので、横と同じ長さになります",
+    );
+    expect(height.hasAttribute("title")).toBe(false);
     expect(
       screen.getByRole("button", { name: "この紙で作りはじめる" }),
     ).not.toBeNull();

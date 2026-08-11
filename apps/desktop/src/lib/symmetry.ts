@@ -14,36 +14,39 @@
 // 頭など片側にしかない折り目があるため)。そこで完全一致ではなく一致率で判定する。
 // 計算量を抑えるため、一致率は最大 SCORE_SAMPLE 本の折り線を等間隔に抜き出して測る。
 
-import { MIRROR_EPS, isSameSegment, type Segment } from "./mirror";
+import {
+  MIRROR_EPS,
+  isSameSegment,
+  isValidMirrorLine,
+  mirrorPoint,
+  mirrorSegment,
+  normalizedPaperSize,
+  type MirrorLine,
+  type Segment,
+} from "./mirror";
 import type { Paper, Vec2 } from "./types";
 
-/** 対称軸(点pを通り、単位ベクトルdの向きの直線) */
-export interface MirrorLine {
-  p: Vec2;
-  d: Vec2;
-}
+export type { MirrorLine } from "./mirror";
 
-/** 直線axで折り返した点 */
+/** 直線axで折り返した点。許容幅を持たなかった既存APIどおり、有限点は厳密に移す。 */
 export function reflectPoint(q: Vec2, ax: MirrorLine): Vec2 {
-  const w: Vec2 = [q[0] - ax.p[0], q[1] - ax.p[1]];
-  const t = w[0] * ax.d[0] + w[1] * ax.d[1];
-  return [ax.p[0] + 2 * t * ax.d[0] - w[0], ax.p[1] + 2 * t * ax.d[1] - w[1]];
+  return mirrorPoint(q, ax, 0);
 }
 
 /** 直線axで折り返した線分 */
 export function reflectSegment(seg: Segment, ax: MirrorLine): Segment {
-  return [reflectPoint(seg[0], ax), reflectPoint(seg[1], ax)];
+  return mirrorSegment(seg, ax, 0);
 }
 
 /** 紙の中心(正規化座標) */
 export function paperCenter(paper: Paper): Vec2 {
-  const long = Math.max(paper.width_mm, paper.height_mm);
-  return long > 0 ? [paper.width_mm / long / 2, paper.height_mm / long / 2] : [0, 0];
+  const [width, height] = normalizedPaperSize(paper);
+  return [width / 2, height / 2];
 }
 
 /** 角度(度)から、紙の中心を通る対称軸を作る */
 export function axisAt(paper: Paper, deg: number): MirrorLine {
-  const r = (deg * Math.PI) / 180;
+  const r = ((Number.isFinite(deg) ? deg : 0) * Math.PI) / 180;
   return { p: paperCenter(paper), d: [Math.cos(r), Math.sin(r)] };
 }
 
@@ -122,17 +125,20 @@ function segmentAngle(s: Segment): number {
  * 候補を有限個に抑える。紙の縦・横・対角も必ず入れる(折り目が少ない作品向け)。
  */
 export function candidateAngles(paper: Paper, segs: Segment[]): number[] {
-  const long = Math.max(paper.width_mm, paper.height_mm);
-  const diag = (Math.atan2(paper.height_mm / long, paper.width_mm / long) * 180) / Math.PI;
+  const [width, height] = normalizedPaperSize(paper);
+  const diag = (Math.atan2(height, width) * 180) / Math.PI;
   const out: number[] = [];
   const add = (deg: number) => {
+    if (!Number.isFinite(deg)) return;
     const a = ((deg % 180) + 180) % 180;
     if (out.length < AXIS_LIMIT && !out.some((b) => Math.abs(a - b) < ANGLE_EPS)) out.push(a);
   };
   for (const a of [90, 0, diag, 180 - diag]) add(a);
   const count = new Map<number, number>();
   for (const s of segs) {
-    const k = Math.round(segmentAngle(s) * 1e6) / 1e6;
+    const angle = segmentAngle(s);
+    if (!Number.isFinite(angle)) continue;
+    const k = Math.round(angle * 1e6) / 1e6;
     count.set(k, (count.get(k) ?? 0) + 1);
   }
   const top = [...count]
@@ -151,7 +157,7 @@ export function candidateAngles(paper: Paper, segs: Segment[]): number[] {
 /** その軸で折り返したとき、折り線が元の折り線に重なる割合(0〜1) */
 export function symmetryScore(ix: SegmentIndex, ax: MirrorLine, eps = MIRROR_EPS): number {
   const n = ix.items.length;
-  if (n === 0) return 0;
+  if (n === 0 || !isValidMirrorLine(ax)) return 0;
   const step = Math.max(1, Math.ceil(n / SCORE_SAMPLE));
   let tried = 0;
   let hit = 0;
@@ -164,9 +170,15 @@ export function symmetryScore(ix: SegmentIndex, ax: MirrorLine, eps = MIRROR_EPS
 
 /** その軸で折り返しても動かない多角形か(頂点の集合が元と同じ) */
 export function keepsPolygon(poly: Vec2[], ax: MirrorLine, eps = MIRROR_EPS): boolean {
+  if (!isValidMirrorLine(ax)) return false;
+  const tolerance = Number.isFinite(eps) && eps >= 0 ? eps : MIRROR_EPS;
   return poly.every((q) => {
     const o = reflectPoint(q, ax);
-    return poly.some((p) => Math.abs(p[0] - o[0]) <= eps && Math.abs(p[1] - o[1]) <= eps);
+    return poly.some(
+      (p) =>
+        Math.abs(p[0] - o[0]) <= tolerance &&
+        Math.abs(p[1] - o[1]) <= tolerance,
+    );
   });
 }
 

@@ -99,13 +99,17 @@ function MouseGlyph({ control }: { control: Assignment["control"] }) {
 export function ViewerOperationHint({ hint, blocked, aligning = false }: Props) {
   const activeTool = useAppStore((s) => s.activeTool);
   const expanded = useAppStore((s) => s.viewerHintExpanded);
+  const paperActionTipOpen = useAppStore(
+    (s) => s.paperActionTipVisible && s.paperActionTipExpanded,
+  );
   const toggle = useAppStore((s) => s.toggleViewerHint);
   const assignments = viewerAssignments(activeTool, blocked, aligning);
 
   return (
     <aside
-      className={`viewer-operation-hint${expanded ? " expanded" : " collapsed"}${blocked ? " blocked" : ""}`}
+      className={`viewer-operation-hint${expanded ? " expanded" : " collapsed"}${blocked ? " blocked" : ""}${paperActionTipOpen ? " paper-action-tip-open" : ""}`}
       aria-label="3Dビューの操作ヒント"
+      data-floating-ui="viewer-operation-hint"
     >
       <div className="viewer-operation-heading">
         <span className="viewer-mode-icon">
@@ -115,19 +119,27 @@ export function ViewerOperationHint({ hint, blocked, aligning = false }: Props) 
           <small>いまのモード</small>
           <strong>{MODE_LABEL[activeTool]}</strong>
         </span>
+      </div>
+      <div className="viewer-current-row">
+        <p
+          className="viewer-current-action operation-summary-line"
+          role="status"
+          data-tooltip={hint}
+        >
+          {hint}
+        </p>
         <button
           type="button"
-          className="viewer-hint-toggle"
-          aria-label={expanded ? "操作ヒントを折りたたむ" : "操作ヒントを開く"}
+          className="viewer-hint-toggle operation-detail-toggle"
+          aria-label={expanded ? "詳しい3D操作方法を折りたたむ" : "詳しい3D操作方法を開く"}
           aria-expanded={expanded}
+          data-tooltip={expanded ? "マウス操作の説明を折りたたみます" : "マウス操作の説明を開きます"}
           onClick={toggle}
         >
-          {expanded ? "−" : "+"}
+          <span className="operation-detail-label">詳しい3D操作方法</span>
+          <span className="operation-detail-icon">{expanded ? "▲" : "▼"}</span>
         </button>
       </div>
-      <p className="viewer-current-action" role="status">
-        {hint}
-      </p>
       {expanded && (
         <div className="viewer-mouse-assignments" aria-label="マウス操作の割り当て">
           {assignments.map((item) => (

@@ -1,6 +1,7 @@
 {
   "build": {
-    "beforeDevCommand": null
+    "beforeDevCommand": null,
+    "beforeBuildCommand": null
   },
   "app": {
     "windows": [

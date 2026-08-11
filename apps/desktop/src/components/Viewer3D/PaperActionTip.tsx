@@ -18,14 +18,24 @@ export function PaperActionTip() {
 
   if (!expanded) {
     return (
-      <button type="button" className="paper-action-tip compact" onClick={expand}>
+      <button
+        type="button"
+        className="paper-action-tip compact"
+        data-floating-ui="paper-action-tip"
+        data-tooltip="この紙を動かす・ふくらます案内を開きます"
+        onClick={expand}
+      >
         ↔ この紙を動かす・ふくらます
       </button>
     );
   }
 
   return (
-    <aside className="paper-action-tip expanded" aria-label="選んだ紙でできること">
+    <aside
+      className="paper-action-tip expanded"
+      aria-label="選んだ紙でできること"
+      data-floating-ui="paper-action-tip"
+    >
       <button
         type="button"
         className="paper-action-tip-close"
@@ -34,13 +44,19 @@ export function PaperActionTip() {
       >
         ×
       </button>
-      <strong>この紙、もっと動かせます！</strong>
+      <strong
+        className="paper-action-tip-title"
+        data-tooltip="この紙、もっと動かせます！"
+      >
+        この紙、もっと動かせます！
+      </strong>
       <p>
         「引く」で紙を連動して動かしたり、「ふくらます」で袋のような丸みをつけたりできます。
       </p>
       <div className="paper-action-tip-buttons">
         <button
           type="button"
+          data-tooltip="この紙を引いて動かします"
           onClick={() => {
             hide();
             setTool("pull");
@@ -50,6 +66,7 @@ export function PaperActionTip() {
         </button>
         <button
           type="button"
+          data-tooltip="この紙をふくらませます"
           onClick={() => {
             setSelection({ edgeIds: [], vertexIds: [] });
             setSoft({ soft_enabled: true });

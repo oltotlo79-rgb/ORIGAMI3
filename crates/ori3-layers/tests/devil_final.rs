@@ -59,4 +59,3 @@ fn full_devil_pose_is_persisted_and_stands_on_three_points() {
     assert!(metrics.support_area > 0.1);
     assert!(metrics.centroid_height > 0.1);
 }
-

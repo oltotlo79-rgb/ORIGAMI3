@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use ori3_cp::Face;
 use ori3_model::{
-    CreasePattern, Document, EdgeId, EdgeKind, EditOp, FaceId, Frame3D, MAX_GRID_DIVISIONS,
+    CreasePattern, Document, Driver, EdgeId, EdgeKind, EditOp, FaceId, Frame3D, MAX_GRID_DIVISIONS,
     MIN_GRID_DIVISIONS, Paper, SCHEMA_VERSION, SeqOp, StepId, TechniqueKind, VertexId,
 };
 
@@ -65,6 +65,18 @@ pub struct DocumentView {
     pub skipped: Vec<StepId>,
     /// 補正後にも残る食い込みの原因候補ヒンジ。
     pub suspect_hinges: Vec<EdgeId>,
+    /// 保存手順の線分を現在の辺IDへ解決した希望角（永続化しない導出結果）。
+    pub sequence_targets: Vec<Driver>,
+    /// 自動再生で得た全ヒンジの実角。次の操作のwarm startにも使う。
+    pub angles: HashMap<EdgeId, f64>,
+    /// 前の希望角を譲った診断（永続化しない導出結果）。
+    pub relaxations: Vec<ori3_rigid::AngleRelaxation>,
+    /// 自動再生結果の閉包残差RMS（永続化しない導出結果）。
+    pub closure_rms: Option<f64>,
+    /// 現在指定を守った有限の最良候補を表示しているか。
+    pub best_effort: bool,
+    /// 自動再生の追従計算が収束したか。
+    pub converged: bool,
     /// 巻き込みで回避できる典型的な単一縁衝突の、非破壊プレビュー結果。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fold_through_proposal: Option<ori3_layers::FoldThroughProposal>,
@@ -571,6 +583,12 @@ fn build_view(doc: &Document, mut warnings: Vec<String>) -> DocumentView {
         frame: None,
         skipped: Vec::new(),
         suspect_hinges: Vec::new(),
+        sequence_targets: Vec::new(),
+        angles: HashMap::new(),
+        relaxations: Vec::new(),
+        closure_rms: None,
+        best_effort: false,
+        converged: true,
         fold_through_proposal: None,
     }
 }
@@ -589,6 +607,15 @@ pub fn attach_replay(view: &mut DocumentView) {
     }
     let up_to = view.doc.sequence.len();
     let mut replayed = ori3_layers::replay_with_faces(&view.doc, &view.faces, up_to, 1.0);
+    view.sequence_targets = replayed.sequence_targets.clone();
+    view.angles = replayed.hinge_angles.clone();
+    view.relaxations = replayed.relaxations.clone();
+    view.closure_rms = replayed
+        .closure_rms
+        .is_finite()
+        .then_some(replayed.closure_rms);
+    view.best_effort = replayed.best_effort;
+    view.converged = replayed.converged;
     let mut penetration_warnings: Vec<&'static str> = Vec::new();
     if let Some(warning) = add_layer_order_warning(&view.doc.cp, &view.faces, &mut replayed.frame) {
         penetration_warnings.push(warning);
@@ -1229,7 +1256,7 @@ mod tests {
         assert_eq!(faces.len(), 1, "正方形1面のはず");
         assert_eq!(warm, Some(HashMap::from([(6u32, 90.0f64)])));
         assert!(overlap_enabled, "重なり防止は既定オン");
-        assert!(penetration_enabled, "食い込み防止は既定オン");
+        assert!(penetration_enabled, "食い込み検出は既定オン");
 
         // 新規作成で前回解は破棄される(別のCPに古い解を引き継がない)
         store
@@ -1313,6 +1340,13 @@ mod tests {
         let frame = view.frame.clone().expect("手順があれば自動再生される");
         assert_eq!(frame.faces.len(), 2);
         assert!(view.skipped.is_empty(), "warnings={:?}", view.warnings);
+        assert_eq!(view.sequence_targets.len(), 1);
+        assert_eq!(view.sequence_targets[0].target_angle_deg, 180.0);
+        assert!(!view.angles.is_empty(), "実角度がビューへ運ばれる");
+        assert!(view.relaxations.is_empty());
+        assert!(view.closure_rms.is_some_and(f64::is_finite));
+        assert!(!view.best_effort);
+        assert!(view.converged);
         let mut layers: Vec<u32> = frame.faces.iter().map(|f| f.layer).collect();
         layers.sort_unstable();
         assert_eq!(layers, vec![0, 1]);

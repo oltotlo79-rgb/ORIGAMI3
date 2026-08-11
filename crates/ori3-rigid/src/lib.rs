@@ -14,7 +14,7 @@ pub use intersect::{
 };
 pub use motion::{MotionSolveResult, solve_motion};
 pub use seam::max_seam_gap;
-pub use solver::{SolveResult, solve, solve_near};
+pub use solver::{AngleRelaxation, SolveResult, solve, solve_near, solve_near_exact};
 pub use support::{
     DEFAULT_SUPPORT_TOLERANCE, SupportError, SupportPlane, ThreePointSupport, three_point_support,
     three_point_support_with_tolerance,

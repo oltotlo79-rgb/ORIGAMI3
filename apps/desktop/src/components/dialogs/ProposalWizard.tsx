@@ -220,6 +220,7 @@ export function ProposalWizard() {
     <div className="dialog-backdrop">
       <div
         className="dialog dialog-wide"
+        data-floating-ui="proposal-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="proposal-title"

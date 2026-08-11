@@ -25,6 +25,7 @@
 //! 座標は紙の長辺=1.0に正規化済みなので回転成分と並進成分のスケールは
 //! そろっている。
 
+use std::cmp::Ordering;
 use std::collections::{HashMap, VecDeque};
 
 use glam::{DMat3, DQuat, DVec3};
@@ -41,6 +42,8 @@ use crate::tree;
 const TOL_RMS: f64 = 1e-13;
 /// Gauss-Newtonの最大反復回数(1段あたり)。
 const MAX_ITER: u32 = 50;
+/// 零空間内の同順位選択は速く収束するため、対話性能を守る範囲へ制限する。
+const NULLSPACE_MAX_ITER: u32 = 10;
 /// 従属ヒンジが紙を通り抜けないための物理的な可動限界。
 ///
 /// バリアでは境界へ厳密に到達できないため、Levenberg-Marquardt の各候補を
@@ -50,6 +53,20 @@ const DEPENDENT_ANGLE_LIMIT: f64 = std::f64::consts::PI;
 /// 紙の長辺=1.0)に対してこの重みで角度(ラジアン)のずれを罰する。大きすぎると
 /// 閉包を犠牲にして目標へ張り付き、小さすぎると引きが効かず解が遠くへ飛ぶ。
 const SPRING_W2: f64 = 1e-2;
+/// 閉包精密化で、閉包ヤコビアンの零空間に残る同順位だけを決める数値重み。
+/// 物理的な抵抗として閉包を緩めないよう、第1段より十分小さくする。
+const NULLSPACE_KEEP_W2: f64 = 1e-14;
+/// soft targetの診断へ残す最小偏差（度）。
+const RELAXATION_EPS_DEG: f64 = 1e-6;
+
+/// 中優先の希望角から実角が譲った量。永続化せず、1回のsolve結果だけに載せる。
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct AngleRelaxation {
+    pub hinge: EdgeId,
+    pub target_angle_deg: f64,
+    pub actual_angle_deg: f64,
+    pub delta_deg: f64,
+}
 
 /// `solve` の結果。anglesは全ヒンジの角度(度)で、次回のwarm_startに使える。
 /// driverのない自由ヒンジのうちループに乗らないものは、拘束が働かないため
@@ -59,8 +76,94 @@ pub struct SolveResult {
     pub frame: Frame3D,
     pub converged: bool,
     pub angles: HashMap<EdgeId, f64>,
+    /// 返した候補の閉包残差RMS。
+    pub closure_rms: f64,
+    /// 閉包収束前でも、hardを守った有限候補を返しているか。
+    pub best_effort: bool,
+    /// 中優先角が希望値から譲った量（辺ID昇順）。
+    pub relaxations: Vec<AngleRelaxation>,
     /// 実行した反復回数(warm_startの効果確認・性能調整用)
     pub iterations: u32,
+}
+
+#[derive(Clone)]
+struct Candidate {
+    x: Vec<f64>,
+    closure_rms: f64,
+    keep_energy: f64,
+    warm_distance: f64,
+}
+
+#[derive(Clone, Copy)]
+struct SolveOptions {
+    wrap_updates: bool,
+    finish_closure: bool,
+    spring_w2: f64,
+}
+
+impl SolveOptions {
+    const fn new(wrap_updates: bool, finish_closure: bool, spring_w2: f64) -> Self {
+        Self {
+            wrap_updates,
+            finish_closure,
+            spring_w2,
+        }
+    }
+}
+
+impl Candidate {
+    fn new(x: &[f64], closure_rms: f64, keep_energy: f64, warm_seed: &[f64]) -> Option<Self> {
+        if !closure_rms.is_finite()
+            || !keep_energy.is_finite()
+            || !x.iter().all(|angle| angle.is_finite())
+        {
+            return None;
+        }
+        let warm_distance = x
+            .iter()
+            .zip(warm_seed)
+            .map(|(angle, seed)| (angle - seed).powi(2))
+            .sum::<f64>();
+        warm_distance.is_finite().then(|| Self {
+            x: x.to_vec(),
+            closure_rms,
+            keep_energy,
+            warm_distance,
+        })
+    }
+
+    fn is_better_than(&self, other: &Self) -> bool {
+        let self_closed = self.closure_rms < TOL_RMS;
+        let other_closed = other.closure_rms < TOL_RMS;
+        match self_closed.cmp(&other_closed) {
+            Ordering::Greater => return true,
+            Ordering::Less => return false,
+            Ordering::Equal => {}
+        }
+        let primary = if self_closed {
+            self.keep_energy.total_cmp(&other.keep_energy)
+        } else {
+            self.closure_rms.total_cmp(&other.closure_rms)
+        };
+        match primary {
+            Ordering::Less => return true,
+            Ordering::Greater => return false,
+            Ordering::Equal => {}
+        }
+        match self.warm_distance.total_cmp(&other.warm_distance) {
+            Ordering::Less => return true,
+            Ordering::Greater => return false,
+            Ordering::Equal => {}
+        }
+        self.x
+            .iter()
+            .zip(&other.x)
+            .find_map(|(a, b)| match a.total_cmp(b) {
+                Ordering::Equal => None,
+                ordering => Some(ordering == Ordering::Less),
+            })
+            .unwrap_or(false)
+    }
 }
 
 /// 閉路を渡り歩く1ステップ(渡る元の面の側の向き付き軸によるヒンジ折り)。
@@ -162,7 +265,26 @@ pub fn solve(
     drivers: &[Driver],
     warm_start: Option<&HashMap<EdgeId, f64>>,
 ) -> SolveResult {
-    solve_impl(cp, faces, drivers, warm_start, None)
+    let clamped = solve_impl(
+        cp,
+        faces,
+        drivers,
+        warm_start,
+        None,
+        SolveOptions::new(false, false, SPRING_W2),
+    );
+    if clamped.converged {
+        clamped
+    } else {
+        solve_impl(
+            cp,
+            faces,
+            drivers,
+            warm_start,
+            None,
+            SolveOptions::new(true, false, SPRING_W2),
+        )
+    }
 }
 
 /// 「`targets` の角度にいちばん近い、閉じた(紙がつながったままの)形」を求める。
@@ -173,8 +295,8 @@ pub fn solve(
 /// かといって閉包だけを解くと、目標から遠く離れた別の形へ落ちて紙が飛び跳ねる。
 ///
 /// そこで2段階で解く:
-/// 1. 全ての自由変数を `targets` へばね([`SPRING_W2`])で引きながら閉包を解く
-/// 2. ばねを外して閉包だけを厳密に詰める(1で十分近づいているので大きく動かない)
+/// 1. 中優先の変数だけを `targets` へ長さ比例の抵抗([`SPRING_W2`])で引きながら閉包を解く
+/// 2. 閉包を厳密に詰めつつ、数値的な零空間内だけで希望エネルギーを下げる
 ///
 /// `targets` は全ヒンジの角度(度)。ループに乗らないヒンジは変数にならないので
 /// 指定した値がそのまま残る。角度指定([`Driver`])を併用してもよい。
@@ -188,13 +310,71 @@ pub fn solve_near(
     targets: &HashMap<EdgeId, f64>,
     warm_start: Option<&HashMap<EdgeId, f64>>,
 ) -> SolveResult {
-    solve_impl(
+    solve_near_with_spring_weight(cp, faces, drivers, targets, warm_start, SPRING_W2)
+}
+
+pub(crate) fn solve_near_with_spring_weight(
+    cp: &CreasePattern,
+    faces: &[Face],
+    drivers: &[Driver],
+    targets: &HashMap<EdgeId, f64>,
+    warm_start: Option<&HashMap<EdgeId, f64>>,
+    spring_w2: f64,
+) -> SolveResult {
+    let clamped = solve_impl(
         cp,
         faces,
         drivers,
-        warm_start.or(Some(targets)),
+        warm_start,
         Some(targets),
-    )
+        SolveOptions::new(false, false, spring_w2),
+    );
+    if clamped.converged {
+        clamped
+    } else {
+        solve_impl(
+            cp,
+            faces,
+            drivers,
+            warm_start,
+            Some(targets),
+            SolveOptions::new(true, false, spring_w2),
+        )
+    }
+}
+
+/// [`solve_near`] と同じ優先度で解き、soft抵抗を完全に外す最終閉包段も行う。
+///
+/// 保存された複合手順の補間値のように、soft目標自体が閉包多様体上にない場合の
+/// 表示再生用。soft付きの2段で収束閾値へ届かなければ、その最良角を保ったまま
+/// 純粋な閉包残差を詰める。通常の対話solveは従来の[`solve_near`]を使う。
+pub fn solve_near_exact(
+    cp: &CreasePattern,
+    faces: &[Face],
+    drivers: &[Driver],
+    targets: &HashMap<EdgeId, f64>,
+    warm_start: Option<&HashMap<EdgeId, f64>>,
+) -> SolveResult {
+    let clamped = solve_impl(
+        cp,
+        faces,
+        drivers,
+        warm_start,
+        Some(targets),
+        SolveOptions::new(false, true, SPRING_W2),
+    );
+    if clamped.converged {
+        clamped
+    } else {
+        solve_impl(
+            cp,
+            faces,
+            drivers,
+            warm_start,
+            Some(targets),
+            SolveOptions::new(true, true, SPRING_W2),
+        )
+    }
 }
 
 fn solve_impl(
@@ -202,8 +382,14 @@ fn solve_impl(
     faces: &[Face],
     drivers: &[Driver],
     warm_start: Option<&HashMap<EdgeId, f64>>,
-    spring: Option<&HashMap<EdgeId, f64>>,
+    targets: Option<&HashMap<EdgeId, f64>>,
+    options: SolveOptions,
 ) -> SolveResult {
+    let SolveOptions {
+        wrap_updates,
+        finish_closure,
+        spring_w2,
+    } = options;
     let forest = tree::build_forest(cp, faces);
     let n = forest.hinges.len();
     let idx_of: HashMap<EdgeId, usize> = forest
@@ -217,6 +403,13 @@ fn solve_impl(
     // driver角(ラジアン)を固定値として登録
     let mut fixed: Vec<Option<f64>> = vec![None; n];
     for drv in drivers {
+        if !drv.target_angle_deg.is_finite() || !(-180.0..=180.0).contains(&drv.target_angle_deg) {
+            warnings.push(format!(
+                "辺ID {} の角度指定は有限な-180°以上180°以下ではないため、無視します",
+                drv.hinge
+            ));
+            continue;
+        }
         match idx_of.get(&drv.hinge) {
             Some(&i) => fixed[i] = Some(drv.target_angle_deg.to_radians()),
             None => warnings.push(format!(
@@ -320,6 +513,65 @@ fn solve_impl(
         }
     };
 
+    // soft targetは辺ID昇順の配列へ一度だけ移し、hardと重なる項を除外する。
+    // HashMapの列挙順は、警告・診断・最良候補の決定順に使わない。
+    let mut target_deg = vec![None; n];
+    let mut target_rad = vec![None; n];
+    for (i, &hinge) in forest.hinges.iter().enumerate() {
+        if fixed[i].is_some() {
+            continue;
+        }
+        let Some(&target) = targets.and_then(|values| values.get(&hinge)) else {
+            continue;
+        };
+        if !target.is_finite() {
+            warnings.push(format!(
+                "辺ID {hinge} の希望角は有限値ではないため、無視します"
+            ));
+            continue;
+        }
+        target_deg[i] = Some(target);
+        target_rad[i] = Some(target.clamp(-180.0, 180.0).to_radians());
+    }
+
+    // 単位紙長当たりの折り目抵抗。論理折り線が複数断片へ分かれても、
+    // 断片長の係数和が元の1辺と同じになる。
+    let mut min = [f64::INFINITY; 2];
+    let mut max = [f64::NEG_INFINITY; 2];
+    let vertex_positions: HashMap<_, _> = cp
+        .vertices
+        .iter()
+        .map(|vertex| {
+            for axis in 0..2 {
+                if vertex.pos[axis].is_finite() {
+                    min[axis] = min[axis].min(vertex.pos[axis]);
+                    max[axis] = max[axis].max(vertex.pos[axis]);
+                }
+            }
+            (vertex.id, vertex.pos)
+        })
+        .collect();
+    let paper_length = (max[0] - min[0]).max(max[1] - min[1]).max(1e-12);
+    let edge_length_ratio: HashMap<EdgeId, f64> = cp
+        .edges
+        .iter()
+        .filter_map(|edge| {
+            let (a, b) = (
+                vertex_positions.get(&edge.v0)?,
+                vertex_positions.get(&edge.v1)?,
+            );
+            let length = (b[0] - a[0]).hypot(b[1] - a[1]);
+            length
+                .is_finite()
+                .then_some((edge.id, length / paper_length))
+        })
+        .collect();
+    let target_weight: Vec<f64> = forest
+        .hinges
+        .iter()
+        .map(|hinge| edge_length_ratio.get(hinge).copied().unwrap_or(0.0))
+        .collect();
+
     // 初期値(全ヒンジ分。fixedは固定値で埋める)。従属ヒンジは前回解が
     // 範囲外だった古い状態から始める場合も、最初に物理限界へ戻す。
     let mut x: Vec<f64> = (0..n)
@@ -327,8 +579,13 @@ fn solve_impl(
             if let Some(v) = fixed[i] {
                 return v;
             }
-            if let Some(w) = warm_start.and_then(|m| m.get(&forest.hinges[i])) {
+            if let Some(w) = warm_start.and_then(|m| m.get(&forest.hinges[i]))
+                && w.is_finite()
+            {
                 return w.to_radians();
+            }
+            if let Some(target) = target_rad[i] {
+                return target;
             }
             if on_loop[i] {
                 kind_sign(forest.hinges[i]) * mean_drive * 0.5
@@ -338,6 +595,7 @@ fn solve_impl(
         })
         .collect();
     clamp_dependent_angles(&mut x, &fixed);
+    let warm_seed = x.clone();
 
     // 変数 = driver固定でなく、かつ閉路上のヒンジ
     let vars: Vec<usize> = (0..n)
@@ -391,40 +649,38 @@ fn solve_impl(
         }
     };
 
-    // ばねの目標角(ラジアン)。指定の無いヒンジは初期値のまま=引かれない
-    let x0: Vec<f64> = (0..n)
-        .map(|i| {
-            let target = spring
-                .and_then(|s| s.get(&forest.hinges[i]))
-                .map_or(x[i], |v| v.to_radians());
-            if fixed[i].is_none() {
-                target.clamp(-DEPENDENT_ANGLE_LIMIT, DEPENDENT_ANGLE_LIMIT)
-            } else {
-                target
-            }
-        })
-        .collect();
     // 変数にならない自由ヒンジ(閉路に乗らない=拘束が働かない)は目標角そのもの。
-    // ここをwarm start(連続法の前の解)のままにすると、ばねが効かず動かなくなる。
-    if spring.is_some() {
-        for (i, xi) in x.iter_mut().enumerate() {
-            if fixed[i].is_none() && var_of[i].is_none() {
-                *xi = x0[i];
-            }
+    // targetの無いlowはwarm seedのままで、希望ばねを一切持たない。
+    for (i, xi) in x.iter_mut().enumerate() {
+        if fixed[i].is_none()
+            && var_of[i].is_none()
+            && let Some(target) = target_rad[i]
+        {
+            *xi = target;
         }
     }
+    let soft_vars: Vec<(usize, usize, f64)> = vars
+        .iter()
+        .enumerate()
+        .filter_map(|(vi, &hi)| target_rad[hi].map(|_| (vi, hi, target_weight[hi])))
+        .collect();
     let spring_cost = |x: &[f64], w2: f64| -> f64 {
         if w2 == 0.0 {
             return 0.0;
         }
-        w2 * vars.iter().map(|&hi| (x[hi] - x0[hi]).powi(2)).sum::<f64>()
+        w2 * soft_vars
+            .iter()
+            .map(|&(_, hi, length_ratio)| {
+                length_ratio * (x[hi] - target_rad[hi].expect("soft変数には目標がある")).powi(2)
+            })
+            .sum::<f64>()
     };
-
     let mut iterations = 0u32;
     let mut r = vec![0.0; m];
     eval_all(&x, &mut r);
-    let mut converged = rms(sq_sum(&r)) < TOL_RMS;
     let mut best_x = x.clone();
+    let mut best_candidate =
+        Candidate::new(&x, rms(sq_sum(&r)), spring_cost(&x, spring_w2), &warm_seed);
 
     if k > 0 && m > 0 {
         let mut vals = vec![0.0; col_idx.len()];
@@ -433,22 +689,30 @@ fn solve_impl(
             .map(|vs| vec![0.0; 12 * vs.len()])
             .collect();
         let mut chol = EnvelopeCholesky::new(k, &row_ptr, &col_idx);
-        // ばね付き→ばね無しの2段(ばね無しの呼び出しは1段だけ)
-        let phases: &[f64] = if spring.is_some() {
-            &[SPRING_W2, 0.0]
+        // medium保持→零空間内の同順位選択。表示再生ではさらにsoft抵抗を
+        // 完全に外す閉包段を足す。soft targetなしは純粋な閉包段だけを行う。
+        let phases = if soft_vars.is_empty() {
+            vec![0.0]
+        } else if finish_closure {
+            vec![spring_w2, NULLSPACE_KEEP_W2, 0.0]
         } else {
-            &[0.0]
+            vec![spring_w2, NULLSPACE_KEEP_W2]
         };
-        for &w2 in phases {
-            let mut lambda = 1e-3;
+        for w2 in phases {
+            let phase_limit = if w2 == NULLSPACE_KEEP_W2 {
+                NULLSPACE_MAX_ITER
+            } else {
+                MAX_ITER
+            };
+            let mut lambda = if w2 == NULLSPACE_KEEP_W2 { 1e-15 } else { 1e-1 };
             let mut cost = sq_sum(&r) + spring_cost(&x, w2);
             let mut best_cost = cost;
             best_x.clone_from(&x);
-            converged = rms(sq_sum(&r)) < TOL_RMS;
+            let mut phase_converged = rms(sq_sum(&r)) < TOL_RMS;
             let mut it = 0u32;
             // ばね付きの段は「閉包が0でも目標へ引く仕事が残っている」ので、
             // 改善が止まる(またはMAX_ITER)まで回す。ばね無しの段は残差0で終わり。
-            while it < MAX_ITER && !(w2 == 0.0 && converged) {
+            while it < phase_limit && !(w2 == 0.0 && phase_converged) {
                 it += 1;
                 iterations += 1;
                 // 疎ヤコビアン: 閉路ごとに、その閉路上の変数の列だけを解析微分で作る
@@ -493,11 +757,13 @@ fn solve_impl(
                 }
                 // ばね(対角のみ): 目標角からのずれを罰する項を正規方程式へ足す
                 if w2 > 0.0 {
-                    for (vi, &hi) in vars.iter().enumerate() {
-                        jtr[vi] += w2 * (x[hi] - x0[hi]);
+                    for &(vi, hi, length_ratio) in &soft_vars {
+                        let coefficient = w2 * length_ratio;
+                        jtr[vi] +=
+                            coefficient * (x[hi] - target_rad[hi].expect("soft変数には目標がある"));
                         let (lo, hi2) = (row_ptr[vi], row_ptr[vi + 1]);
                         let pos = lo + col_idx[lo..hi2].binary_search(&vi).expect("対角は必ずある");
-                        vals[pos] += w2;
+                        vals[pos] += coefficient;
                     }
                 }
                 // Levenberg減衰: 残差が減るまでλを10倍しながら更新を試す
@@ -517,17 +783,36 @@ fn solve_impl(
                     for (vi, &hi) in vars.iter().enumerate() {
                         xt[hi] += delta[vi];
                     }
-                    // 箱制約付きLMの射影ステップ。境界を越える候補だけを±πへ
-                    // 戻すため、範囲内の通常解では従来と同じ更新になる。
-                    clamp_dependent_angles(&mut xt, &fixed);
+                    if wrap_updates {
+                        // Fold angles live on a circle: +π and -π are the same flat geometry.
+                        // A second full solve may cross that identified boundary when the usual
+                        // physical-interval projection cannot close.  Keeping this as a fallback
+                        // preserves the branch selected by legacy clamped continuation whenever
+                        // that branch already converges.
+                        wrap_dependent_updates(&mut xt, &fixed);
+                    } else {
+                        clamp_dependent_angles(&mut xt, &fixed);
+                    }
                     let mut rt = vec![0.0; m];
                     eval_all(&xt, &mut rt);
-                    let ct = sq_sum(&rt) + spring_cost(&xt, w2);
+                    let closure_cost = sq_sum(&rt);
+                    if let Some(candidate) = Candidate::new(
+                        &xt,
+                        rms(closure_cost),
+                        spring_cost(&xt, spring_w2),
+                        &warm_seed,
+                    ) && best_candidate
+                        .as_ref()
+                        .is_none_or(|best| candidate.is_better_than(best))
+                    {
+                        best_candidate = Some(candidate);
+                    }
+                    let ct = closure_cost + spring_cost(&xt, w2);
                     if ct < cost {
                         x = xt;
                         r = rt;
                         cost = ct;
-                        lambda = (lambda * 0.1).max(1e-12);
+                        lambda = (lambda * 0.1).max(1e-18);
                         improved = true;
                         break;
                     }
@@ -537,7 +822,7 @@ fn solve_impl(
                     best_cost = cost;
                     best_x.clone_from(&x);
                 }
-                converged = rms(sq_sum(&r)) < TOL_RMS;
+                phase_converged = rms(sq_sum(&r)) < TOL_RMS;
                 if !improved {
                     break; // 停滞: これ以上残差を減らせない
                 }
@@ -545,9 +830,17 @@ fn solve_impl(
             // 次の段(および最終姿勢)は、この段でいちばん良かった点から始める
             x.clone_from(&best_x);
             eval_all(&x, &mut r);
-            converged = rms(sq_sum(&r)) < TOL_RMS;
         }
     }
+
+    let mut converged = if let Some(candidate) = best_candidate {
+        x = candidate.x;
+        candidate.closure_rms < TOL_RMS
+    } else {
+        false
+    };
+    eval_all(&x, &mut r);
+    let closure_rms = rms(sq_sum(&r));
 
     // 結果の角度(度)。従属ヒンジは反復中から箱制約内にあり、丸め誤差も
     // 最後に詰めて必ず[-180, 180]を返す。driver固定ヒンジだけは従来どおり
@@ -565,20 +858,55 @@ fn solve_impl(
             (e, deg)
         })
         .collect();
+    let relaxations: Vec<AngleRelaxation> = forest
+        .hinges
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &hinge)| {
+            let target = target_deg[i]?;
+            let actual = angles[&hinge];
+            let delta = actual - target;
+            (delta.abs() >= RELAXATION_EPS_DEG).then_some(AngleRelaxation {
+                hinge,
+                target_angle_deg: target,
+                actual_angle_deg: actual,
+                delta_deg: delta,
+            })
+        })
+        .collect();
 
     // 最終フレームは構築済みの森で一度だけ伝播する(build_forestの二重実行を回避)
     let folded = tree::fold_frame(&forest, faces, &x);
     let mut frame = tree::to_frame3d(cp, faces, &folded);
     frame.warnings.append(&mut warnings);
-    if !converged {
+    let finite_frame = frame_is_finite_and_complete(&frame, faces.len());
+    if !finite_frame {
+        converged = false;
         frame
             .warnings
-            .push("追従計算が収束していません".to_string());
+            .push("有限な立体形状を生成できませんでした".to_string());
+    } else if !converged {
+        let location = r
+            .chunks_exact(12)
+            .enumerate()
+            .map(|(li, residual)| (li, sq_sum(residual)))
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(li, _)| forest.hinges[forest.loops[li].hinge]);
+        let detail = location.map_or_else(
+            || format!("閉包RMS {closure_rms:.3e}"),
+            |hinge| format!("閉包RMS {closure_rms:.3e}、折り目 #{hinge} 付近"),
+        );
+        frame
+            .warnings
+            .push(format!("追従計算が収束していません（{detail}）"));
     }
     SolveResult {
         frame,
         converged,
         angles,
+        closure_rms,
+        best_effort: !converged,
+        relaxations,
         iterations,
     }
 }
@@ -587,11 +915,42 @@ fn sq_sum(v: &[f64]) -> f64 {
     v.iter().map(|x| x * x).sum()
 }
 
+fn frame_is_finite_and_complete(frame: &Frame3D, expected_faces: usize) -> bool {
+    frame.faces.len() == expected_faces
+        && frame.faces.iter().all(|face| {
+            face.polygon
+                .iter()
+                .flatten()
+                .all(|coordinate| coordinate.is_finite())
+        })
+}
+
 /// driverでない全ヒンジを物理的な可動範囲へ射影する。
 fn clamp_dependent_angles(x: &mut [f64], fixed: &[Option<f64>]) {
     for (angle, driver) in x.iter_mut().zip(fixed) {
         if driver.is_none() {
             *angle = angle.clamp(-DEPENDENT_ANGLE_LIMIT, DEPENDENT_ANGLE_LIMIT);
+        }
+    }
+}
+
+/// Normalize non-driver LM candidates to the physical angle interval.
+///
+/// Unlike an out-of-range persisted warm start or requested soft target, an optimizer update may
+/// cross the identified +π/-π flat boundary.  Wrapping that update preserves exactly the same
+/// rigid geometry while allowing the next iteration to move away from the singular boundary.
+fn wrap_dependent_updates(x: &mut [f64], fixed: &[Option<f64>]) {
+    for (angle, driver) in x.iter_mut().zip(fixed) {
+        if driver.is_none() {
+            let original = *angle;
+            let wrapped = (original + DEPENDENT_ANGLE_LIMIT)
+                .rem_euclid(2.0 * DEPENDENT_ANGLE_LIMIT)
+                - DEPENDENT_ANGLE_LIMIT;
+            *angle = if wrapped == -DEPENDENT_ANGLE_LIMIT && original > 0.0 {
+                DEPENDENT_ANGLE_LIMIT
+            } else {
+                wrapped
+            };
         }
     }
 }
@@ -745,7 +1104,10 @@ impl EnvelopeCholesky {
 
 #[cfg(test)]
 mod tests {
-    use super::{FoldOp, LoopWalk, eval_loop, side_jacobian, wrap_deg};
+    use super::{
+        DEPENDENT_ANGLE_LIMIT, FoldOp, LoopWalk, eval_loop, side_jacobian, wrap_deg,
+        wrap_dependent_updates,
+    };
     use glam::DVec3;
 
     /// 解析ヤコビアン(side_jacobian)が数値微分(中心差分)と一致することの
@@ -796,5 +1158,22 @@ mod tests {
         assert_eq!(wrap_deg(-180.0), -180.0);
         assert_eq!(wrap_deg(540.0), 180.0);
         assert_eq!(wrap_deg(-190.0), 170.0);
+    }
+
+    #[test]
+    fn dependent_lm_updates_cross_the_identified_flat_boundary() {
+        let delta = 0.125;
+        let mut angles = [
+            DEPENDENT_ANGLE_LIMIT + delta,
+            -DEPENDENT_ANGLE_LIMIT - delta,
+            DEPENDENT_ANGLE_LIMIT + delta,
+        ];
+        let fixed = [None, None, Some(0.0)];
+
+        wrap_dependent_updates(&mut angles, &fixed);
+
+        assert!((angles[0] - (-DEPENDENT_ANGLE_LIMIT + delta)).abs() < 1e-15);
+        assert!((angles[1] - (DEPENDENT_ANGLE_LIMIT - delta)).abs() < 1e-15);
+        assert_eq!(angles[2], DEPENDENT_ANGLE_LIMIT + delta);
     }
 }

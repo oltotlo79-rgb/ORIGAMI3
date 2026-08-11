@@ -23,7 +23,11 @@ export function FirstRunGuide() {
 
   if (step === 4) {
     return (
-      <aside className="first-run-guide complete" aria-label="基本操作ガイド完了">
+      <aside
+        className="first-run-guide complete"
+        aria-label="基本操作ガイド完了"
+        data-floating-ui="first-run-guide"
+      >
         <button
           type="button"
           className="first-run-guide-close"
@@ -86,7 +90,11 @@ export function FirstRunGuide() {
   const page = pages[step];
 
   return (
-    <aside className="first-run-guide" aria-label="基本操作ガイド">
+    <aside
+      className="first-run-guide"
+      aria-label="基本操作ガイド"
+      data-floating-ui="first-run-guide"
+    >
       <button
         type="button"
         className="first-run-guide-close"

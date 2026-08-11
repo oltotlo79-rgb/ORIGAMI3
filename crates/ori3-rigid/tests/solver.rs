@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use glam::DVec3;
 use ori3_cp::extract_faces;
 use ori3_model::{CreasePattern, Driver, Edge, EdgeKind, Vertex};
-use ori3_rigid::{solve, solve_near};
+use ori3_rigid::{max_seam_gap, solve, solve_near};
 
 fn v(id: u32, x: f64, y: f64) -> Vertex {
     Vertex { id, pos: [x, y] }
@@ -65,6 +65,119 @@ fn degree4_cp() -> CreasePattern {
     }
 }
 
+/// 小型の多自由度テストに使うミウラ折りCP。
+fn miura_cp(nc: usize, nr: usize) -> CreasePattern {
+    let offset = 0.35;
+    let dx = 1.0 / nc as f64;
+    let dy = 1.0 / (nr as f64 + offset);
+    let vid = |i: usize, j: usize| (j * (nc + 1) + i) as u32;
+    let mut vertices = Vec::new();
+    for j in 0..=nr {
+        for i in 0..=nc {
+            vertices.push(v(
+                vid(i, j),
+                i as f64 * dx,
+                (j as f64 + if i % 2 == 1 { offset } else { 0.0 }) * dy,
+            ));
+        }
+    }
+    let mut edges = Vec::new();
+    for j in 0..nr {
+        for i in 0..=nc {
+            let kind = if i == 0 || i == nc {
+                EdgeKind::Border
+            } else if (i + j) % 2 == 0 {
+                EdgeKind::Mountain
+            } else {
+                EdgeKind::Valley
+            };
+            edges.push(e(edges.len() as u32, vid(i, j), vid(i, j + 1), kind));
+        }
+    }
+    for j in 0..=nr {
+        for i in 0..nc {
+            let kind = if j == 0 || j == nr {
+                EdgeKind::Border
+            } else if j % 2 == 1 {
+                EdgeKind::Mountain
+            } else {
+                EdgeKind::Valley
+            };
+            edges.push(e(edges.len() as u32, vid(i, j), vid(i + 1, j), kind));
+        }
+    }
+    CreasePattern {
+        next_vertex_id: vertices.len() as u32,
+        next_edge_id: edges.len() as u32,
+        vertices,
+        edges,
+    }
+}
+
+fn symmetric_degree4_cp() -> CreasePattern {
+    CreasePattern {
+        vertices: vec![
+            v(0, 0.0, 0.0),
+            v(1, 0.5, 0.0),
+            v(2, 1.0, 0.0),
+            v(3, 1.0, 0.5),
+            v(4, 1.0, 1.0),
+            v(5, 0.5, 1.0),
+            v(6, 0.0, 1.0),
+            v(7, 0.0, 0.5),
+            v(8, 0.5, 0.5),
+        ],
+        edges: vec![
+            e(0, 0, 1, EdgeKind::Border),
+            e(1, 1, 2, EdgeKind::Border),
+            e(2, 2, 3, EdgeKind::Border),
+            e(3, 3, 4, EdgeKind::Border),
+            e(4, 4, 5, EdgeKind::Border),
+            e(5, 5, 6, EdgeKind::Border),
+            e(6, 6, 7, EdgeKind::Border),
+            e(7, 7, 0, EdgeKind::Border),
+            e(8, 8, 3, EdgeKind::Mountain),
+            e(9, 8, 5, EdgeKind::Valley),
+            e(10, 8, 7, EdgeKind::Mountain),
+            e(11, 8, 1, EdgeKind::Mountain),
+        ],
+        next_vertex_id: 9,
+        next_edge_id: 12,
+    }
+}
+
+fn split_top_crease_into_four(mut cp: CreasePattern) -> CreasePattern {
+    let center = cp
+        .vertices
+        .iter()
+        .find(|vertex| vertex.id == 8)
+        .unwrap()
+        .pos;
+    let top = cp
+        .vertices
+        .iter()
+        .find(|vertex| vertex.id == 5)
+        .unwrap()
+        .pos;
+    for (index, t) in [0.25, 0.5, 0.75].into_iter().enumerate() {
+        cp.vertices.push(v(
+            9 + index as u32,
+            center[0] + (top[0] - center[0]) * t,
+            center[1] + (top[1] - center[1]) * t,
+        ));
+    }
+    cp.edges.retain(|edge| edge.id != 9);
+    cp.edges.extend([
+        e(9, 8, 9, EdgeKind::Valley),
+        e(12, 9, 10, EdgeKind::Valley),
+        e(13, 10, 11, EdgeKind::Valley),
+        e(14, 11, 5, EdgeKind::Valley),
+    ]);
+    cp.next_vertex_id = 12;
+    cp.next_edge_id = 15;
+    cp
+}
+
 /// 折られた形の物理的な整合性: 2面が共有する各折り線について、両側の面から
 /// 計算した端点の3D位置が一致することを確認する(ループ閉包の実体検証)。
 fn assert_edges_closed(cp: &CreasePattern, frame: &ori3_model::Frame3D, tol: f64) {
@@ -98,6 +211,33 @@ fn normal_of(poly: &[[f64; 3]]) -> DVec3 {
     n.normalize()
 }
 
+fn assert_solve_bits_eq(left: &ori3_rigid::SolveResult, right: &ori3_rigid::SolveResult) {
+    let sorted_angles = |result: &ori3_rigid::SolveResult| {
+        let mut values: Vec<_> = result
+            .angles
+            .iter()
+            .map(|(&hinge, &angle)| (hinge, angle.to_bits()))
+            .collect();
+        values.sort_unstable_by_key(|item| item.0);
+        values
+    };
+    assert_eq!(sorted_angles(left), sorted_angles(right));
+    assert_eq!(left.converged, right.converged);
+    assert_eq!(left.best_effort, right.best_effort);
+    assert_eq!(left.closure_rms.to_bits(), right.closure_rms.to_bits());
+    assert_eq!(left.iterations, right.iterations);
+    assert_eq!(left.relaxations, right.relaxations);
+    assert_eq!(left.frame.warnings, right.frame.warnings);
+    assert_eq!(left.frame.faces.len(), right.frame.faces.len());
+    for (a, b) in left.frame.faces.iter().zip(&right.frame.faces) {
+        assert_eq!((a.face, a.layer), (b.face, b.layer));
+        assert_eq!(a.polygon.len(), b.polygon.len());
+        for (pa, pb) in a.polygon.iter().zip(&b.polygon) {
+            assert_eq!(pa.map(f64::to_bits), pb.map(f64::to_bits));
+        }
+    }
+}
+
 #[test]
 fn driver_90_satisfies_loop_closure() {
     let cp = degree4_cp();
@@ -107,7 +247,8 @@ fn driver_90_satisfies_loop_closure() {
     let result = solve(&cp, &faces, &[d(8, 90.0)], None);
     assert!(result.converged, "angles={:?}", result.angles);
     // driver角は指定どおり
-    assert!((result.angles[&8] - 90.0).abs() < 1e-6);
+    assert!((result.angles[&8] - 90.0).abs() < 1e-9);
+    assert!(result.closure_rms < 1e-13);
     // 残り3ヒンジも動いている(平らなままではループが閉じない)
     for id in [9u32, 10, 11] {
         assert!(
@@ -148,6 +289,8 @@ fn driver_180_reaches_flat_folded_state() {
     for sign in [1.0f64, -1.0] {
         let result = solve(&cp, &faces, &[d(8, sign * 180.0)], None);
         assert!(result.converged, "sign={sign} angles={:?}", result.angles);
+        assert!((result.angles[&8] - sign * 180.0).abs() < 1e-9);
+        assert!(result.closure_rms < 1e-13);
         // 全ヒンジが±180°に達する
         for id in [8u32, 9, 10, 11] {
             assert!(
@@ -174,6 +317,9 @@ fn contradictory_drivers_return_best_effort_without_panic() {
     // 辺8を完全に折ると全ヒンジが±180°になるしかないため、辺9=-90°とは両立しない
     let result = solve(&cp, &faces, &[d(8, 180.0), d(9, -90.0)], None);
     assert!(!result.converged);
+    assert!(result.best_effort);
+    assert!(result.closure_rms.is_finite());
+    assert!(result.closure_rms >= 1e-13);
     assert!(
         result
             .frame
@@ -183,11 +329,208 @@ fn contradictory_drivers_return_best_effort_without_panic() {
         "warnings={:?}",
         result.frame.warnings
     );
+    assert!(
+        result
+            .frame
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("閉包RMS") && warning.contains("折り目 #")),
+        "warnings={:?}",
+        result.frame.warnings
+    );
     // 直前の最良解でフレームは返る(全面が出力される)
     assert_eq!(result.frame.faces.len(), 4);
+    assert!(result.frame.faces.iter().all(|face| {
+        face.polygon
+            .iter()
+            .flatten()
+            .all(|coordinate| coordinate.is_finite())
+    }));
     // driver角は固定されたまま
     assert!((result.angles[&8] - 180.0).abs() < 1e-9);
     assert!((result.angles[&9] + 90.0).abs() < 1e-9);
+}
+
+#[test]
+fn active_driver_wins_over_conflicting_previous_target() {
+    let cp = degree4_cp();
+    let faces = extract_faces(&cp);
+    let targets = HashMap::from([(8u32, -45.0), (9u32, 0.0)]);
+
+    let result = solve_near(&cp, &faces, &[d(8, 90.0)], &targets, None);
+
+    assert!(result.converged, "angles={:?}", result.angles);
+    assert!((result.angles[&8] - 90.0).abs() < 1e-9);
+    assert!(result.closure_rms < 1e-13, "rms={}", result.closure_rms);
+    assert!(max_seam_gap(&cp, &faces, &result.frame) < 1e-6);
+    assert!(
+        result.relaxations.iter().all(|item| item.hinge != 8),
+        "hardと重複したsoftは診断対象外: {:?}",
+        result.relaxations
+    );
+    let relaxed = result
+        .relaxations
+        .iter()
+        .find(|item| item.hinge == 9)
+        .expect("両立しない過去角は譲るはず");
+    assert_eq!(relaxed.target_angle_deg, 0.0);
+    assert_eq!(relaxed.actual_angle_deg, result.angles[&9]);
+    assert_eq!(
+        relaxed.delta_deg,
+        relaxed.actual_angle_deg - relaxed.target_angle_deg
+    );
+    assert!(
+        result
+            .relaxations
+            .windows(2)
+            .all(|pair| pair[0].hinge < pair[1].hinge)
+    );
+    assert!(
+        result
+            .relaxations
+            .iter()
+            .all(|item| item.delta_deg.abs() >= 1e-6)
+    );
+}
+
+#[test]
+fn unlisted_hinges_have_no_preference_spring() {
+    let cp = miura_cp(3, 3);
+    let faces = extract_faces(&cp);
+    let previous = solve(&cp, &faces, &[d(5, 20.0)], None);
+    assert!(previous.converged, "previous={:?}", previous.angles);
+    let target = previous.angles[&6];
+    let hard = [d(5, 40.0)];
+    let control = solve_near(&cp, &faces, &hard, &HashMap::new(), Some(&previous.angles));
+    let preferred = solve_near(
+        &cp,
+        &faces,
+        &hard,
+        &HashMap::from([(6u32, target)]),
+        Some(&previous.angles),
+    );
+
+    assert!(control.converged, "control={:?}", control.angles);
+    assert!(preferred.converged, "preferred={:?}", preferred.angles);
+    let control_error = (control.angles[&6] - target).powi(2);
+    let preferred_error = (preferred.angles[&6] - target).powi(2);
+    assert!(
+        preferred_error <= control_error / 10.0,
+        "target={target} control={} preferred={} errors={control_error}/{preferred_error}",
+        control.angles[&6],
+        preferred.angles[&6]
+    );
+    assert!(
+        preferred.angles.iter().any(|(&hinge, &angle)| {
+            hinge != 5
+                && hinge != 6
+                && (angle - previous.angles.get(&hinge).copied().unwrap_or(0.0)).abs() > 1.0
+        }),
+        "target未掲載のlowが閉包に従って動く: previous={:?} preferred={:?}",
+        previous.angles,
+        preferred.angles
+    );
+    assert!(control.iterations <= 100);
+    assert!(preferred.iterations <= 100);
+}
+
+#[test]
+fn equal_per_length_targets_relax_symmetrically() {
+    let cp = symmetric_degree4_cp();
+    let faces = extract_faces(&cp);
+    let targets = HashMap::from([(9u32, -10.0), (11u32, 10.0)]);
+
+    let result = solve_near(&cp, &faces, &[d(8, 90.0)], &targets, None);
+
+    assert!(result.converged, "angles={:?}", result.angles);
+    let left = result
+        .relaxations
+        .iter()
+        .find(|item| item.hinge == 9)
+        .expect("上側mediumが譲るはず");
+    let right = result
+        .relaxations
+        .iter()
+        .find(|item| item.hinge == 11)
+        .expect("下側mediumが譲るはず");
+    assert!(left.delta_deg.abs() > 0.1);
+    assert!(right.delta_deg.abs() > 0.1);
+    assert!(
+        (left.delta_deg.abs() - right.delta_deg.abs()).abs() < 1e-6,
+        "relaxations={:?} angles={:?}",
+        result.relaxations,
+        result.angles
+    );
+}
+
+#[test]
+fn logical_crease_weight_is_invariant_under_edge_split() {
+    let whole = symmetric_degree4_cp();
+    let split = split_top_crease_into_four(whole.clone());
+    let whole_faces = extract_faces(&whole);
+    let split_faces = extract_faces(&split);
+    assert_eq!(whole_faces.len(), split_faces.len());
+
+    let whole_result = solve_near(
+        &whole,
+        &whole_faces,
+        &[],
+        &HashMap::from([(9u32, -90.0), (11u32, 0.0)]),
+        None,
+    );
+    let split_result = solve_near(
+        &split,
+        &split_faces,
+        &[],
+        &HashMap::from([
+            (9u32, -90.0),
+            (12u32, -90.0),
+            (13u32, -90.0),
+            (14u32, -90.0),
+            (11u32, 0.0),
+        ]),
+        None,
+    );
+
+    assert!(whole_result.converged, "whole={:?}", whole_result.angles);
+    assert!(split_result.converged, "split={:?}", split_result.angles);
+    assert!(whole_result.closure_rms < 1e-13);
+    assert!(split_result.closure_rms < 1e-13);
+    for hinge in [8u32, 10, 11] {
+        assert!(
+            (whole_result.angles[&hinge] - split_result.angles[&hinge]).abs() < 1e-6,
+            "hinge={hinge} whole={:?} split={:?} iterations={}/{} rms={}/{}",
+            whole_result.angles,
+            split_result.angles,
+            whole_result.iterations,
+            split_result.iterations,
+            whole_result.closure_rms,
+            split_result.closure_rms
+        );
+    }
+    for hinge in [9u32, 12, 13, 14] {
+        assert!(
+            (whole_result.angles[&9] - split_result.angles[&hinge]).abs() < 1e-6,
+            "fragment={hinge} whole={:?} split={:?}",
+            whole_result.angles,
+            split_result.angles
+        );
+    }
+}
+
+#[test]
+fn solve_near_is_bit_identical_one_hundred_times() {
+    let cp = symmetric_degree4_cp();
+    let faces = extract_faces(&cp);
+    let targets = HashMap::from([(9u32, -10.0), (11u32, 10.0)]);
+    let first = solve_near(&cp, &faces, &[d(8, 90.0)], &targets, None);
+    assert!(first.iterations <= 100);
+
+    for _ in 1..100 {
+        let repeated = solve_near(&cp, &faces, &[d(8, 90.0)], &targets, None);
+        assert!(repeated.iterations <= 100);
+        assert_solve_bits_eq(&first, &repeated);
+    }
 }
 
 #[test]

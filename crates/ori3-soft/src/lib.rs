@@ -47,6 +47,11 @@ const MAX_TRIANGLES: usize = 8_000;
 pub const DEFAULT_OVERLAP_ITERATIONS: u32 = 4;
 /// 接触補正はドラッグ中の1フレームへ入るよう、たわみより低い上限にする。
 const MAX_OVERLAP_ITERATIONS: u32 = 20;
+/// 自己交差判定と同じ、平坦な物理フレームの許容誤差。
+///
+/// `ori3-rigid::intersect` の平坦除外と意味を揃え、全点の`|z|`がこの値より
+/// 小さいときだけ完全平坦として扱う。表示上の層分離は表示側へ任せる。
+const FLAT_FRAME_TOLERANCE: f64 = 1e-6;
 
 /// 剛体折りの後に掛ける、表示優先の重なり防止設定。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -203,6 +208,15 @@ fn completion_gap_scale(progress: f64, order_changes: bool) -> f64 {
     1.0 - t * t * (3.0 - 2.0 * t)
 }
 
+/// 自己交差判定が除外するのと同じ意味で、全点がz=0近傍にあるか。
+fn is_flat_frame(frame: &Frame3D) -> bool {
+    frame.faces.iter().all(|face| {
+        face.polygon
+            .iter()
+            .all(|point| point[2].abs() < FLAT_FRAME_TOLERANCE)
+    })
+}
+
 /// 剛体解の1フレームへ、層順序ベースの面間分離と頂点-三角形接触を後段適用する。
 ///
 /// 網のCP頂点は面をまたいで共有されるため、補正で面が多少たわんでも折り目の接続は
@@ -217,7 +231,7 @@ pub fn prevent_overlap(
     progress: f64,
     settings: &OverlapSettings,
 ) -> OverlapReport {
-    if !settings.enabled || settings.iterations == 0 || faces.len() < 2 {
+    if !settings.enabled || settings.iterations == 0 || faces.len() < 2 || is_flat_frame(frame) {
         return OverlapReport::default();
     }
     let (scores, order_changes) = interpolated_layers(faces, start_order, end_order, progress);
@@ -511,6 +525,21 @@ mod overlap_tests {
         let after: Vec<Vec<[f64; 3]>> = frame.faces.iter().map(|f| f.polygon.clone()).collect();
         assert!(!report.applied);
         assert_eq!(after, before, "OFFなら従来の剛体フレームをそのまま返す");
+    }
+
+    #[test]
+    fn flat_frame_threshold_is_strict_on_both_sides() {
+        let (_, _, mut frame) = penetrating_crease();
+        for point in frame.faces.iter_mut().flat_map(|face| &mut face.polygon) {
+            point[2] = FLAT_FRAME_TOLERANCE - f64::EPSILON;
+        }
+        assert!(is_flat_frame(&frame), "許容値未満なら平坦");
+
+        frame.faces[0].polygon[0][2] = FLAT_FRAME_TOLERANCE;
+        assert!(!is_flat_frame(&frame), "許容値ちょうどは平坦に含めない");
+
+        frame.faces[0].polygon[0][2] = -FLAT_FRAME_TOLERANCE;
+        assert!(!is_flat_frame(&frame), "負側も絶対値で同じ境界にする");
     }
 
     #[test]

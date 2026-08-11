@@ -8,12 +8,16 @@ use glam::DVec2;
 use ori3_cp::Face;
 use ori3_model::{CreasePattern, Driver, EPS, EdgeId, EdgeKind, VertexId};
 
-use crate::solver::{SolveResult, solve_near};
+use crate::solver::{SolveResult, solve_near_with_spring_weight};
 
 /// Maximum mismatch allowed between the angles of mirrored hinges.
 pub const DEFAULT_REFLECTION_ANGLE_TOLERANCE_DEG: f64 = 1e-9;
 /// Maximum number of angle-projection/warm-resolve passes.
 pub const DEFAULT_REFLECTION_PROJECTIONS: u32 = 12;
+/// Reflection projection needs a stronger target tether than unconstrained motion solving.
+/// It prevents the projected solve from freezing on a closed branch far from the requested pose,
+/// which can put nominal contact vertices on opposite sides of the support plane.
+const REFLECTION_SPRING_W2: f64 = 0.3;
 
 /// Result of [`solve_near_with_reflection_symmetry`].
 #[derive(Clone, Debug)]
@@ -226,7 +230,7 @@ impl Error for ReflectionSymmetryError {}
 ///
 /// The entire CP must be invariant under reflection about `axis`. Every hard
 /// driver must have a mirrored hard driver with the same angle. After the first
-/// [`solve_near`] call, each mirrored hinge pair is averaged into a new target,
+/// target-biased solve, each mirrored hinge pair is averaged into a new target,
 /// and that target is solved from the previous result as a warm start. This is
 /// repeated until the exact loop-closure solve and the reflection constraint
 /// both converge.
@@ -246,7 +250,14 @@ pub fn solve_near_with_reflection_symmetry(
     }
     validate_hard_drivers(hard_drivers, &mirrored_edges)?;
 
-    let mut result = solve_near(cp, faces, hard_drivers, targets, warm_start);
+    let mut result = solve_near_with_spring_weight(
+        cp,
+        faces,
+        hard_drivers,
+        targets,
+        warm_start,
+        REFLECTION_SPRING_W2,
+    );
     let mut angle_error = mirrored_angle_error(&result.angles, &mirrored_edges)?;
     if result.converged && angle_error <= DEFAULT_REFLECTION_ANGLE_TOLERANCE_DEG {
         return Ok(ReflectionSymmetrySolveResult {
@@ -260,12 +271,13 @@ pub fn solve_near_with_reflection_symmetry(
 
     for projection_iterations in 1..=DEFAULT_REFLECTION_PROJECTIONS {
         let projected_targets = average_mirrored_angles(&result.angles, &mirrored_edges)?;
-        result = solve_near(
+        result = solve_near_with_spring_weight(
             cp,
             faces,
             hard_drivers,
             &projected_targets,
             Some(&result.angles),
+            REFLECTION_SPRING_W2,
         );
         angle_error = mirrored_angle_error(&result.angles, &mirrored_edges)?;
         if result.converged && angle_error <= DEFAULT_REFLECTION_ANGLE_TOLERANCE_DEG {

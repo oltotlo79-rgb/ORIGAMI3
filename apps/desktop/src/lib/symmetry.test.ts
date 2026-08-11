@@ -8,6 +8,9 @@ import {
   candidateAngles,
   findMirrorAxes,
   findSegment,
+  keepsPolygon,
+  paperCenter,
+  reflectPoint,
   symmetryScore,
 } from "./symmetry";
 import type { Paper, Vec2 } from "./types";
@@ -47,6 +50,25 @@ describe("findSegment", () => {
   });
 });
 
+describe("既存の反転API", () => {
+  it("基準線に非常に近い点も従来どおり厳密に反転し、向きの倍率には依存しない", () => {
+    const delta = 2.5e-7;
+    const reflected = reflectPoint(
+      [0.2, 0.5 + delta],
+      { p: [0, 0.5], d: [1e-12, 0] },
+    );
+    expect(reflected[0]).toBeCloseTo(0.2, 12);
+    expect(reflected[1]).toBeCloseTo(0.5 - delta, 12);
+  });
+
+  it("無効な基準線を完全な対称軸とはみなさない", () => {
+    const ix = index([[[0.1, 0.2], [0.4, 0.6]]]);
+    const invalid = { p: [0, 0] as Vec2, d: [0, 0] as Vec2 };
+    expect(symmetryScore(ix, invalid)).toBe(0);
+    expect(keepsPolygon([[0, 0], [1, 0], [0, 1]], invalid)).toBe(false);
+  });
+});
+
 describe("candidateAngles", () => {
   it("紙の縦・横・対角を必ず候補に入れる", () => {
     const got = candidateAngles(SQUARE, []);
@@ -58,6 +80,19 @@ describe("candidateAngles", () => {
   it("長方形の紙では対角の角度が紙の縦横比で決まる", () => {
     const got = candidateAngles(OBLONG, []);
     expect(got.some((a) => Math.abs(a - 63.4349488) < 1e-6)).toBe(true);
+  });
+
+  it("非有限な紙寸法・線分からNaNの候補を作らない", () => {
+    expect(paperCenter({ width_mm: Number.POSITIVE_INFINITY, height_mm: 100 })).toEqual([
+      0,
+      0,
+    ]);
+    const got = candidateAngles(
+      { width_mm: Number.POSITIVE_INFINITY, height_mm: 100 },
+      [[[0, 0], [Number.NaN, 1]]],
+    );
+    expect(got.length).toBeGreaterThan(0);
+    expect(got.every(Number.isFinite)).toBe(true);
   });
 
   it("折り線の向きの組から軸の候補を作る(有限個に抑える)", () => {

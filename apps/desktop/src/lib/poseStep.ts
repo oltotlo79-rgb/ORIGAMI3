@@ -13,7 +13,7 @@ export const POSE_MIN_DEG = 0.5;
 
 /**
  * 今の折り角度(折り線の辺ID → 度)。
- * 利用者の指定 → 追従計算の結果 → 0度(平ら)の順に決める。
+ * 追従計算の実角 → 利用者の希望値 → 0度(平ら)の順に決める。
  * 指定していない折り線もソルバーが求めた角度で埋めるので、画面に見えている
  * 形がそのまま手順になる。
  */
@@ -24,7 +24,7 @@ export function currentAngles(
 ): Map<number, number> {
   const out = new Map<number, number>();
   for (const hinge of hinges) {
-    out.set(hinge, drivers.get(hinge) ?? poseAngles.get(hinge) ?? 0);
+    out.set(hinge, poseAngles.get(hinge) ?? drivers.get(hinge) ?? 0);
   }
   return out;
 }

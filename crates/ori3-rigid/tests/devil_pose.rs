@@ -12,10 +12,14 @@ use ori3_cp::{Face, extract_faces, insert_segment, local_violations, validate};
 use ori3_model::{
     CreasePattern, Document, Driver, DriverLine, EPS, EdgeId, EdgeKind, Frame3D, Paper, VertexId,
 };
-use ori3_rigid::{max_seam_gap, solve, solve_near_with_reflection_symmetry, three_point_support};
+use ori3_rigid::{
+    max_seam_gap, solve, solve_near_with_reflection_symmetry, three_point_support_with_tolerance,
+};
 
 const POSE_ANGLE_DEG: f64 = -60.0;
 const GEOM_TOL: f64 = 1e-8;
+/// Frame座標とseamの検査で一貫して使う、正規化紙長あたりの表示幾何許容差。
+const SUPPORT_TOL: f64 = 1e-6;
 
 fn devil_logical_lines() -> [([f64; 2], [f64; 2]); 22] {
     let sqrt2 = std::f64::consts::SQRT_2;
@@ -432,8 +436,9 @@ fn exact_devil_precrease_drives_a_watertight_symmetric_standing_pose() {
     let positions = folded_positions(&faces, &result.frame);
     let symmetry_error = assert_diagonal_reflection_symmetry(&cp, &positions);
     let support_vertices = [1, 2, 3];
-    let support = three_point_support(&faces, &result.frame, support_vertices)
-        .expect("境界上の3点を支持点として評価できない");
+    let support =
+        three_point_support_with_tolerance(&faces, &result.frame, support_vertices, SUPPORT_TOL)
+            .expect("境界上の3点を支持点として評価できない");
     assert!(support.one_sided, "metrics={support:?}");
     assert!(support.centroid_projection_inside, "metrics={support:?}");
     assert!(support.stable, "metrics={support:?}");
@@ -501,7 +506,7 @@ fn full_devil_precrease_pose_round_trips_through_driver_lines() {
     let symmetry_error = assert_diagonal_reflection_symmetry(&cp, &positions);
     assert!(symmetry_error < 1e-9, "symmetry_error={symmetry_error:.3e}");
 
-    let support = three_point_support(&faces, &solved.frame, [1, 2, 3])
+    let support = three_point_support_with_tolerance(&faces, &solved.frame, [1, 2, 3], SUPPORT_TOL)
         .expect("full CPの支持点を評価できない");
     println!("full CP initial support metrics={support:?}");
     assert!(support.stable, "metrics={support:?}");

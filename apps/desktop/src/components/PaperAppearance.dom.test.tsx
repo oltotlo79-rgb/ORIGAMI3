@@ -10,7 +10,12 @@ import {
 } from "./PaperAppearance";
 import { ThemeRoot } from "./ThemeRoot";
 import { useAppStore } from "../store/appStore";
-import { DEFAULT_DISPLAY, UI_THEMES } from "../lib/displayPrefs";
+import {
+  DEFAULT_CONTEXT_PANEL_RATIO,
+  DEFAULT_DISPLAY,
+  DEFAULT_SPLIT_RATIO,
+  UI_THEMES,
+} from "../lib/displayPrefs";
 
 let localValues: Record<string, string>;
 const localStorageMock: Storage = {
@@ -36,6 +41,13 @@ beforeEach(() => {
     configurable: true,
     value: localStorageMock,
   });
+  useAppStore.setState({
+    doc: null,
+    selection: { edgeIds: [], vertexIds: [] },
+    mirrorAxis: { kind: "paperVertical" },
+    paperHelpExpanded: true,
+    paperColorExpanded: false,
+  });
 });
 
 afterEach(() => {
@@ -43,42 +55,74 @@ afterEach(() => {
   useAppStore.setState({
     display: DEFAULT_DISPLAY,
     doc: null,
+    selection: { edgeIds: [], vertexIds: [] },
     mirrorDraw: false,
+    mirrorAxis: { kind: "paperVertical" },
+    mirrorAxisNotice: null,
     wheelBehavior: "scroll",
     uiTheme: "pop",
+    splitRatio: DEFAULT_SPLIT_RATIO,
+    contextPanelRatio: DEFAULT_CONTEXT_PANEL_RATIO,
     softWarnings: [],
+    paperHelpExpanded: true,
+    paperColorExpanded: false,
   });
 });
 
 describe("紙の色と方眼", () => {
-  it("今の色と方眼の数を見せる", () => {
+  it("初期状態は紙の色を畳み、表裏の現在色と方眼の数を見せる", () => {
     render(<PaperAppearance />);
-    expect(screen.getByLabelText("紙の表の色")).toHaveProperty("value", "#ed1c24");
-    expect(screen.getByLabelText("紙の裏の色")).toHaveProperty("value", "#ffffff");
+    const toggle = screen.getByRole("button", { name: "紙の色 ▼" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle.textContent).toContain("表");
+    expect(toggle.textContent).toContain("裏");
+    const current = screen.getByText(/紙の表の現在色/);
+    expect(current.textContent).toContain("#ed1c24");
+    expect(current.textContent).toContain("#ffffff");
+    expect(screen.queryByRole("group", { name: "紙の表の24色パレット" })).toBeNull();
+    expect(document.querySelectorAll('input[type="color"]')).toHaveLength(0);
     expect(screen.getByLabelText("方眼の細かさ（1辺の等分数）")).toHaveProperty(
       "value",
       "8",
     );
     expect(screen.getByText("方眼の細かさ")).not.toBeNull();
     expect(screen.getByText((_, element) => element?.textContent === "8等分")).not.toBeNull();
-    // 何のための数かを折り紙の言葉で添える
-    expect(screen.getByText(/等分した目盛り/)).not.toBeNull();
+    const input = screen.getByLabelText("方眼の細かさ（1辺の等分数）");
+    expect(input.getAttribute("data-tooltip")).toBe(
+      "1辺を何等分する方眼にするか指定します",
+    );
+    expect(input.hasAttribute("title")).toBe(false);
+    expect(screen.queryByText(/等分した目盛り/)).toBeNull();
   });
 
-  it("色を変えるとストアに入る", () => {
+  it("紙の色を開閉して端末へ覚え、16進数で表裏の色を確定できる", () => {
     render(<PaperAppearance />);
-    fireEvent.change(screen.getByLabelText("紙の表の色"), {
-      target: { value: "#0080ff" },
-    });
+    fireEvent.click(screen.getByRole("button", { name: "紙の色 ▼" }));
+    expect(useAppStore.getState().paperColorExpanded).toBe(true);
+    expect(
+      JSON.parse(globalThis.localStorage.getItem("origami3.prefs") ?? "{}"),
+    ).toMatchObject({ paperColorExpanded: true });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "紙の表のその他の色を開く" }),
+    );
+    const frontHex = screen.getByLabelText("紙の表の16進数の色コード");
+    fireEvent.change(frontHex, { target: { value: "#0080ff" } });
+    fireEvent.keyDown(frontHex, { key: "Enter" });
     expect(useAppStore.getState().display.front_color).toEqual([0, 128, 255]);
-    fireEvent.change(screen.getByLabelText("紙の裏の色"), {
-      target: { value: "#000000" },
-    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "紙の裏のその他の色を開く" }),
+    );
+    const backHex = screen.getByLabelText("紙の裏の16進数の色コード");
+    fireEvent.change(backHex, { target: { value: "#000000" } });
+    fireEvent.keyDown(backHex, { key: "Enter" });
     expect(useAppStore.getState().display.back_color).toEqual([0, 0, 0]);
   });
 
   it("表と裏をそれぞれ24色の見本から選べて、現在色に印が付く", () => {
     render(<PaperAppearance />);
+    fireEvent.click(screen.getByRole("button", { name: "紙の色 ▼" }));
     const front = screen.getByRole("group", { name: "紙の表の24色パレット" });
     const back = screen.getByRole("group", { name: "紙の裏の24色パレット" });
     expect(within(front).getAllByRole("button")).toHaveLength(24);
@@ -86,7 +130,8 @@ describe("紙の色と方眼", () => {
     expect(PAPER_COLOR_PALETTE).toHaveLength(24);
 
     const red = within(front).getByRole("button", { name: "紙の表を赤にする" });
-    expect(red).toHaveProperty("title", "赤");
+    expect(red.getAttribute("data-tooltip")).toBe("赤を選びます");
+    expect(red.hasAttribute("title")).toBe(false);
     expect(red.getAttribute("aria-pressed")).toBe("true");
 
     const purple = within(front).getByRole("button", { name: "紙の表を紫にする" });
@@ -127,11 +172,15 @@ describe("紙の色と方眼", () => {
 });
 
 describe("展開図のホイール動作", () => {
-  it("既定はスクロールで、上下・左右・拡大縮小の割り当てを見せる", () => {
+  it("既定はスクロールで、割り当てを短い吹き出し用説明に持つ", () => {
     render(<PaperAppearance />);
-    expect(screen.getByLabelText("ホイールの動作")).toHaveProperty("value", "scroll");
-    expect(screen.getByText(/Shift\+ホイール: 左右/)).not.toBeNull();
-    expect(screen.getByText(/Ctrl\+ホイール: カーソル位置を中心に拡大縮小/)).not.toBeNull();
+    const select = screen.getByLabelText("ホイールの動作");
+    expect(select).toHaveProperty("value", "scroll");
+    expect(select.getAttribute("data-tooltip")).toBe(
+      "ホイールで上下、Shiftで左右、Ctrlで拡大縮小します",
+    );
+    expect(select.hasAttribute("title")).toBe(false);
+    expect(screen.queryByText(/Shift\+ホイール: 左右/)).toBeNull();
   });
 
   it("拡大縮小へ切り替えるとスクロールがCtrl+ホイールへ入れ替わる", () => {
@@ -140,8 +189,10 @@ describe("展開図のホイール動作", () => {
       target: { value: "zoom" },
     });
     expect(useAppStore.getState().wheelBehavior).toBe("zoom");
-    expect(screen.getByText(/Ctrl\+ホイール: 上下/)).not.toBeNull();
-    expect(screen.getByText(/Ctrl\+Shift\+ホイール: 左右/)).not.toBeNull();
+    expect(
+      screen.getByLabelText("ホイールの動作").getAttribute("data-tooltip"),
+    ).toBe("ホイールで拡大縮小、Ctrlで上下、Ctrl+Shiftで左右へ動かします");
+    expect(screen.queryByText(/Ctrl\+ホイール: 上下/)).toBeNull();
   });
 });
 
@@ -183,6 +234,22 @@ describe("画面のデザイン", () => {
       ).toMatchObject({ uiTheme });
     }
   });
+
+  it("表示区画の広さを初期値へ戻し、端末設定にも保存する", () => {
+    useAppStore.setState({ splitRatio: 0.72, contextPanelRatio: 0.5 });
+    render(<PaperAppearance />);
+
+    fireEvent.click(screen.getByRole("button", { name: "表示の広さを初期に戻す" }));
+
+    expect(useAppStore.getState().splitRatio).toBe(DEFAULT_SPLIT_RATIO);
+    expect(useAppStore.getState().contextPanelRatio).toBe(DEFAULT_CONTEXT_PANEL_RATIO);
+    expect(
+      JSON.parse(globalThis.localStorage.getItem("origami3.prefs") ?? "{}"),
+    ).toMatchObject({
+      splitRatio: DEFAULT_SPLIT_RATIO,
+      contextPanelRatio: DEFAULT_CONTEXT_PANEL_RATIO,
+    });
+  });
 });
 
 describe("重なり防止", () => {
@@ -190,7 +257,11 @@ describe("重なり防止", () => {
     render(<PaperAppearance />);
     const box = screen.getByLabelText("重なり防止");
     expect(box).toHaveProperty("checked", true);
-    expect(screen.getByText(/完全には防げません/)).not.toBeNull();
+    expect(box.getAttribute("data-tooltip")).toBe(
+      "折る途中で紙どうしが突き抜けにくい補正を切り替えます",
+    );
+    expect(box.hasAttribute("title")).toBe(false);
+    expect(screen.queryByText(/完全には防げません/)).toBeNull();
 
     fireEvent.click(box);
     expect(useAppStore.getState().display.overlap_prevention_enabled).toBe(false);
@@ -198,12 +269,16 @@ describe("重なり防止", () => {
   });
 });
 
-describe("食い込み防止", () => {
+describe("食い込み検出", () => {
   it("既定はオンで、切ると作品の表示設定へその場で入る", () => {
     render(<PaperAppearance />);
-    const box = screen.getByLabelText("食い込み防止");
+    const box = screen.getByLabelText("食い込み検出");
     expect(box).toHaveProperty("checked", true);
-    expect(screen.getByText(/ごく複雑な形では防げない/)).not.toBeNull();
+    expect(box.getAttribute("data-tooltip")).toBe(
+      "紙の接触を赤い折り目と警告で知らせる検出を切り替えます",
+    );
+    expect(box.hasAttribute("title")).toBe(false);
+    expect(screen.queryByText(/角度操作は止めません/)).toBeNull();
 
     fireEvent.click(box);
     expect(useAppStore.getState().display.penetration_prevention_enabled).toBe(false);
@@ -212,13 +287,51 @@ describe("食い込み防止", () => {
 });
 
 describe("紙のたわみ(SIM-012 / SIM-013)", () => {
-  it("切替が出ていて、はじめは切ってある(つまみもまだ出ない)", () => {
+  it("切替と詳しい説明は初回に開いて出る(つまみはまだ出ない)", () => {
     render(<PaperAppearance />);
     const box = screen.getByLabelText("紙のたわみを表現する");
     expect(box).toHaveProperty("checked", false);
     expect(screen.queryByLabelText("膨らみの強さ")).toBeNull();
-    // 説明を読まなくても何が起きるか分かる言葉を添える
-    expect(screen.getByText(/紙が丸く曲がった形/)).not.toBeNull();
+    expect(screen.getByText("丸みと膨らみを3Dで調整できます")).not.toBeNull();
+    expect(screen.getByText(/折り目以外にも丸みを見せる表示/)).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: /丸みの詳しい操作方法/ }).getAttribute(
+        "aria-expanded",
+      ),
+    ).toBe("true");
+  });
+
+  it("説明を畳んでも見出し・要点・入力・計算の注意を残し、選択を端末へ保存する", () => {
+    useAppStore.setState({
+      display: { ...DEFAULT_DISPLAY, soft_enabled: true },
+      softWarnings: ["面の分割の細かさは4までに丸めました"],
+      paperHelpExpanded: true,
+    });
+    render(<PaperAppearance />);
+
+    const toggle = screen.getByRole("button", { name: /丸みの詳しい操作方法/ });
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText(/硬さで紙の曲がりやすさ/)).not.toBeNull();
+
+    fireEvent.click(toggle);
+
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(useAppStore.getState().paperHelpExpanded).toBe(false);
+    expect(
+      JSON.parse(globalThis.localStorage.getItem("origami3.prefs") ?? "{}"),
+    ).toMatchObject({ paperHelpExpanded: false });
+    expect(screen.getByText("紙をふくらませる")).not.toBeNull();
+    expect(screen.getByText("丸みと膨らみを3Dで調整できます")).not.toBeNull();
+    expect(screen.getByLabelText("紙のたわみを表現する")).not.toBeNull();
+    expect(screen.getByLabelText("紙の硬さ")).not.toBeNull();
+    expect(screen.getByLabelText("膨らみの強さ")).not.toBeNull();
+    expect(screen.getByText("面の分割の細かさは4までに丸めました")).not.toBeNull();
+    expect(screen.queryByText(/硬さで紙の曲がりやすさ/)).toBeNull();
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(useAppStore.getState().paperHelpExpanded).toBe(true);
+    expect(screen.getByText(/硬さで紙の曲がりやすさ/)).not.toBeNull();
   });
 
   it("入れると硬さと膨らみのつまみが出る", () => {
@@ -248,22 +361,62 @@ describe("紙のたわみ(SIM-012 / SIM-013)", () => {
 });
 
 describe("左右対称に描く(CPE-010)", () => {
-  it("切替が出ていて、はじめは切ってある", () => {
+  it("切替と3つの基準が出て、初期値は紙の縦の中心線", () => {
     render(<PaperAppearance />);
     const box = screen.getByLabelText("左右対称に描く");
     expect(box).toHaveProperty("checked", false);
-    // 消す・種類を変えるときにも効くこと(相手が無ければ片側だけ)を言葉で伝える
-    expect(
-      screen.getByText(/線を消すとき・種類を変えるときにも効き/),
-    ).not.toBeNull();
-    expect(screen.getByText(/対になる線が無いところは、その線だけが変わります/)).not.toBeNull();
+    expect(box.getAttribute("data-tooltip")).toContain("片側に線を引くだけ");
+    expect(box.getAttribute("data-tooltip")).toContain("消す・線種変更もそろえます");
+    expect(box.getAttribute("data-tooltip")).toContain(
+      "現在の基準: 紙の縦の中心線",
+    );
+    expect(box.hasAttribute("title")).toBe(false);
+
+    const group = screen.getByRole("group", { name: "基準にする線" });
+    expect(within(group).getAllByRole("button")).toHaveLength(3);
+    const vertical = within(group).getByRole("button", { name: "紙の縦の中心線" });
+    const horizontal = within(group).getByRole("button", { name: "紙の横の中心線" });
+    const selected = within(group).getByRole("button", {
+      name: "この線を基準にする",
+    }) as HTMLButtonElement;
+    expect(vertical.getAttribute("aria-pressed")).toBe("true");
+    expect(horizontal.getAttribute("aria-pressed")).toBe("false");
+    expect(selected.disabled).toBe(true);
+    expect(selected.getAttribute("data-tooltip")).toContain(
+      "展開図で折り線または補助線を1本選ぶと使えます",
+    );
+    expect(selected.getAttribute("data-tooltip")).toContain(
+      "現在の基準: 紙の縦の中心線",
+    );
+    expect(selected.hasAttribute("title")).toBe(false);
+    expect(selected.parentElement?.getAttribute("tabindex")).toBe("0");
+    expect(screen.getByText("現在: 紙の縦の中心線")).not.toBeNull();
   });
 
-  it("入れると今その状態だと分かる案内が出る", () => {
+  it("入れるとストアと切替の状態がその場で変わる", () => {
     render(<PaperAppearance />);
-    fireEvent.click(screen.getByLabelText("左右対称に描く"));
+    const box = screen.getByLabelText("左右対称に描く");
+    fireEvent.click(box);
     expect(useAppStore.getState().mirrorDraw).toBe(true);
-    expect(screen.getByText(/左右対称に描いています/)).not.toBeNull();
-    expect(screen.getByText(/紙の縦の中心線/)).not.toBeNull();
+    expect(box).toHaveProperty("checked", true);
+  });
+
+  it("紙の横の中心線へ切り替え、現在表示と端末設定を同時に更新する", () => {
+    render(<PaperAppearance />);
+    const horizontal = screen.getByRole("button", { name: "紙の横の中心線" });
+
+    fireEvent.click(horizontal);
+
+    expect(useAppStore.getState().mirrorAxis).toEqual({ kind: "paperHorizontal" });
+    expect(horizontal.getAttribute("aria-pressed")).toBe("true");
+    expect(
+      screen.getByRole("button", { name: "紙の縦の中心線" }).getAttribute(
+        "aria-pressed",
+      ),
+    ).toBe("false");
+    expect(screen.getByText("現在: 紙の横の中心線")).not.toBeNull();
+    expect(
+      JSON.parse(globalThis.localStorage.getItem("origami3.prefs") ?? "{}"),
+    ).toMatchObject({ mirrorAxis: "paperHorizontal" });
   });
 });

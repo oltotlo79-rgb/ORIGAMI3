@@ -1,6 +1,6 @@
 // 「3Dの紙をつかんで引く」操作(UI-007)のストア側テスト。
-//   - 引き始めに、今見えている形の全ての折り角をそのまま送る
-//     (ソルバーの出発点を今の形へ合わせる。折り上がった作品から引くのに要る)
+//   - 引き始めに、今見えている形の全ての折り角をwarm seedとして送る
+//     (固定条件にせず、ソルバーの出発点だけを今の形へ合わせる)
 //   - 引いている間の角度は16ms間引きで、駆動する1本だけが送られる
 //   - 離しても形(角度指定)は残り、色付けだけ消える
 
@@ -76,6 +76,14 @@ function poseCalls(): Driver[][] {
   return vi.mocked(ipc.poseSolve).mock.calls.map(([drivers]) => drivers);
 }
 
+function warmCalls(): (Driver[] | null | undefined)[] {
+  return vi.mocked(ipc.poseSolve).mock.calls.map(([, , , warm]) => warm);
+}
+
+function preferredCalls(): Driver[][] {
+  return vi.mocked(ipc.poseSolve).mock.calls.map(([, preferred]) => preferred ?? []);
+}
+
 describe("紙をつかんで引く", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -88,6 +96,10 @@ describe("紙をつかんで引く", () => {
       frame3d: FOLDED,
       drivers: new Map(),
       poseAngles: new Map(),
+      sequenceTargets: new Map(),
+      relaxations: [],
+      activeAngleIntent: null,
+      angleIntentGeneration: 0,
       pullHinge: null,
       pullMirrorHinge: null,
       pullMirror: true,
@@ -104,7 +116,8 @@ describe("紙をつかんで引く", () => {
     expect(useAppStore.getState().pullHinge).toBe(5);
     await Promise.resolve();
     await Promise.resolve();
-    expect(poseCalls()).toEqual([[{ hinge: 5, target_angle_deg: -180 }]]);
+    expect(poseCalls()).toEqual([[]]);
+    expect(warmCalls()).toEqual([[{ hinge: 5, target_angle_deg: -180 }]]);
     // 出発点を合わせるだけなので、角度指定としては残さない
     expect(useAppStore.getState().drivers.size).toBe(0);
     // 形は変わらないので、手順再生が作った立体表示(層の重なり)は消さない
@@ -128,6 +141,77 @@ describe("紙をつかんで引く", () => {
     }
   });
 
+  it("保存手順の希望角をpreferredに保ち、つかんだ同じ辺はhardだけにする", async () => {
+    vi.useFakeTimers();
+    try {
+      useAppStore.setState({
+        hinges: new Set([5, 7, 9]),
+        sequenceTargets: new Map([
+          [5, 90],
+          [7, 45],
+        ]),
+        drivers: new Map([[9, 25]]),
+      });
+      const store = useAppStore.getState();
+      store.beginPull(5, new Map());
+      store.pullTo(100);
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(poseCalls()).toEqual([[{ hinge: 5, target_angle_deg: 100 }]]);
+      expect(preferredCalls()).toEqual([
+        [
+          { hinge: 7, target_angle_deg: 45 },
+          { hinge: 9, target_angle_deg: 25 },
+        ],
+      ]);
+      expect(
+        preferredCalls()[0].filter((driver) => driver.hinge === 5),
+      ).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("表示実角をwarmにし、保存希望は引き始めから全pointer moveまでpreferredに保つ", async () => {
+    vi.useFakeTimers();
+    try {
+      useAppStore.setState({
+        hinges: new Set([5, 7]),
+        sequenceTargets: new Map([
+          [5, 90],
+          [7, 45],
+        ]),
+      });
+      const store = useAppStore.getState();
+      store.beginPull(
+        5,
+        new Map([
+          [5, 80],
+          [7, 40],
+        ]),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(poseCalls()[0]).toEqual([]);
+      expect(preferredCalls()[0]).toEqual([
+        { hinge: 5, target_angle_deg: 90 },
+        { hinge: 7, target_angle_deg: 45 },
+      ]);
+      expect(warmCalls()[0]).toEqual([
+        { hinge: 5, target_angle_deg: 80 },
+        { hinge: 7, target_angle_deg: 40 },
+      ]);
+
+      store.pullTo(100);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(poseCalls()[1]).toEqual([{ hinge: 5, target_angle_deg: 100 }]);
+      expect(preferredCalls()[1]).toEqual([{ hinge: 7, target_angle_deg: 45 }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("離しても形は残り、色付けだけ消える", () => {
     const store = useAppStore.getState();
     store.beginPull(5, new Map());
@@ -146,6 +230,7 @@ describe("紙をつかんで引く", () => {
     vi.useFakeTimers();
     try {
       useAppStore.setState({ pullMirror: true });
+      useAppStore.setState({ hinges: new Set([5, 7]) });
       const store = useAppStore.getState();
       // 辺5(つかんだ折り線)と、その左右対称の相手として辺7
       store.beginPull(5, new Map(), 7);

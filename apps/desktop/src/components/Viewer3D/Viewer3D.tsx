@@ -8,7 +8,12 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import * as THREE from "three";
-import { canFoldNow, pullBlockReason, useAppStore } from "../../store/appStore";
+import {
+  canFoldNow,
+  pullBlockReason,
+  relaxationNotices,
+  useAppStore,
+} from "../../store/appStore";
 import { viewerHint } from "../../lib/viewerHint";
 import {
   hingeAnglesFromFrame,
@@ -154,6 +159,8 @@ export function Viewer3D({ fitRef }: Props) {
   const selection = useAppStore((s) => s.selection);
   const hoveredHinge = useAppStore((s) => s.hoveredHinge);
   const suspectHinges = useAppStore((s) => s.suspectHinges);
+  const relaxations = useAppStore((s) => s.relaxations);
+  const activeAngleIntent = useAppStore((s) => s.activeAngleIntent);
   const docEpoch = useAppStore((s) => s.docEpoch);
   const activeTool = useAppStore((s) => s.activeTool);
   const uiTheme = useAppStore((s) => s.uiTheme);
@@ -175,7 +182,6 @@ export function Viewer3D({ fitRef }: Props) {
     if (s.pendingFoldThrough) {
       return "追加折り目の位置を確認し、下のパネルで折り方を選んでください";
     }
-    if (s.contactStopped) return "紙がぶつかるためここまでです";
     return viewerHint({
       pullBlocked: pullBlockedOf(s),
       pulling: s.pullHinge !== null,
@@ -275,8 +281,37 @@ export function Viewer3D({ fitRef }: Props) {
     const suspectSegments: HighlightSegment[] = scene.content.hingeSegments
       .filter((segment) => suspectIds.has(segment.edgeId))
       .map((segment) => ({ ...segment, role: "suspect" as const }));
+    const relaxedIds = new Set(
+      relaxationNotices(s.relaxations)
+        .map((item) => item.hinge)
+        .filter((hinge) => !suspectIds.has(hinge)),
+    );
+    const relaxedSegments: HighlightSegment[] = scene.content.hingeSegments
+      .filter((segment) => relaxedIds.has(segment.edgeId))
+      .map((segment) => ({ ...segment, role: "relaxed" as const }));
+    const activeIds = new Set(s.activeAngleIntent?.hinges ?? []);
+    if (s.pullHinge !== null) activeIds.add(s.pullHinge);
+    if (s.pullMirrorHinge !== null) activeIds.add(s.pullMirrorHinge);
+    const activeSegments: HighlightSegment[] = scene.content.hingeSegments
+      .filter((segment) => activeIds.has(segment.edgeId) && !suspectIds.has(segment.edgeId))
+      .map((segment) => ({ ...segment, role: "active" as const }));
+    const hoveredSegments: HighlightSegment[] =
+      s.hoveredHinge !== null && !s.selection.edgeIds.includes(s.hoveredHinge)
+        ? scene.content.hingeSegments
+            .filter(
+              (segment) =>
+                segment.edgeId === s.hoveredHinge && !suspectIds.has(segment.edgeId),
+            )
+            .map((segment) => ({ ...segment, role: "focus" as const }))
+        : [];
     const setHighlight = (segments: HighlightSegment[]) => {
-      scene.setHighlight([...suspectSegments, ...segments]);
+      scene.setHighlight([
+        ...suspectSegments,
+        ...relaxedSegments,
+        ...segments.filter((segment) => !suspectIds.has(segment.edgeId)),
+        ...hoveredSegments,
+        ...activeSegments,
+      ]);
     };
     const drawing = drawingRef.current;
     // つかんで動かしている間は「折った結果の形」を半透明で重ねて見せる(UI-008)
@@ -384,14 +419,7 @@ export function Viewer3D({ fitRef }: Props) {
     // 引いている間は、いま角度を変えている折り線だけを色で示す(UI-007)。
     // 左右同時のときは対称の相手にも同じ色を付け、両方動くことを見せる
     if (s.pullHinge !== null) {
-      const selected = new Set(
-        s.pullMirrorHinge !== null
-          ? [s.pullHinge, s.pullMirrorHinge]
-          : [s.pullHinge],
-      );
-      setHighlight(
-        scene.content.hingeSegments.filter((seg) => selected.has(seg.edgeId)),
-      );
+      setHighlight([]);
       return;
     }
     // 2Dで選んだ辺は種類を問わず現在の3D位置へ写す。ヒンジは黄色、
@@ -424,6 +452,8 @@ export function Viewer3D({ fitRef }: Props) {
     selection,
     hoveredHinge,
     suspectHinges,
+    relaxations,
+    activeAngleIntent,
     doc,
     faces,
     hinges,
@@ -1065,18 +1095,18 @@ export function Viewer3D({ fitRef }: Props) {
                   ? "grab"
                   : "crosshair",
         }}
-        title={
+        data-tooltip={
           pullMode
-            ? "紙をつかんでドラッグすると、折り線のつじつまを保ったまま全体が連動して動く(右ドラッグで視点を回す)"
+            ? "紙をドラッグして全体を連動させます。右ドラッグで視点を回します"
             : activeTool === "technique"
             ? techniqueDraft?.kind === "Simple"
-              ? "紙面をクリックして対象層を選ぶ。既存折り目をクリックすると正確な開閉軸になる。ドラッグでは任意軸を引ける"
+              ? "紙面を選び、折り目またはドラッグで開閉軸を指定します"
               : techniqueDraft?.kind === "Twist"
-              ? "中央の形の角を順にクリックする(3つ以上)。Ctrl+クリックで中心、Shift+クリックで対象層、Backspaceで1つ戻す、Escでやめる"
-              : "紙をクリックして層、Ctrl+クリックで基準点を選び、ドラッグして折り線を引く(平らに畳んだ状態で使える)"
+              ? "中央の形の角を3つ以上、順に選びます"
+              : "紙の層を選び、ドラッグで折り線を引きます"
             : foldMode
-              ? "紙をつかんでドラッグすると折れる。Shiftで重なった紙を全部、Altで1枚だけ、Ctrl+ドラッグで折り線を引く(平らに畳んだ状態で使える)"
-              : "ドラッグで回転、ホイールで拡大縮小、折り線をクリックで選択、Ctrl+クリックで追加/解除(展開図で選んだ縁・補助線は水色)"
+              ? "紙をドラッグして折ります。Ctrl+ドラッグで折り線を指定します"
+              : "ドラッグで回転、ホイールで拡大縮小。クリックで線を選びます"
         }
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
@@ -1108,7 +1138,8 @@ export function Viewer3D({ fitRef }: Props) {
       <button
         type="button"
         className="viewer-reset"
-        title="紙全体が見える最初の視点に戻します(展開図の表示はそのまま)"
+        data-floating-ui="viewer-reset"
+        data-tooltip="3Dを紙全体が見える視点へ戻します"
         onClick={fitCamera}
       >
         視点を戻す

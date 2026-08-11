@@ -135,6 +135,7 @@ export function HelpCenter() {
     >
       <div
         className="dialog help-dialog"
+        data-floating-ui="help-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="help-center-title"

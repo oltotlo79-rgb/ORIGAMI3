@@ -5,10 +5,18 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { EDGE_COLORS, contrastRatio, type Rgb } from "./cpColors";
-import { hexToRgb } from "./displayPrefs";
+import { UI_THEMES, hexToRgb } from "./displayPrefs";
 
 // vitest は .css の取り込みを空にするため、App.css は文字として直に読む。
 const css = readFileSync(new URL("../App.css", import.meta.url), "utf8");
+const rendererSource = readFileSync(
+  new URL("../components/CpEditor/renderer.ts", import.meta.url),
+  "utf8",
+);
+const sceneSource = readFileSync(
+  new URL("../components/Viewer3D/sceneBuilder.ts", import.meta.url),
+  "utf8",
+);
 
 const THEMES = [
   { id: "pop", label: "ポップ", selector: null },
@@ -33,10 +41,25 @@ const EXPECTED_CANVAS_COLORS: Record<
 };
 
 function declarationBlock(selector: string): string {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escaped = selector
+    .trim()
+    .split(/\s+/)
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("\\s+");
   const match = new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\}`).exec(css);
   if (match === null) throw new Error(`CSSブロックがありません: ${selector}`);
   return match[1];
+}
+
+function declarationBlocks(selector: string): string[] {
+  const escaped = selector
+    .trim()
+    .split(/\s+/)
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("\\s+");
+  return [...css.matchAll(new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\}`, "g"))].map(
+    (match) => match[1],
+  );
 }
 
 function declarations(block: string): Map<string, string> {
@@ -45,6 +68,55 @@ function declarations(block: string): Map<string, string> {
     result.set(match[1], match[2].trim());
   }
   return result;
+}
+
+/** WebPのコンテナから画像寸法とbyte数だけを読む。画素QAは受入検査で行う。 */
+function webpInfo(file: URL): { width: number; height: number; bytes: number } {
+  const readBinary = readFileSync as unknown as (path: string | URL) => Uint8Array;
+  const data = readBinary(file);
+  const ascii = (start: number, end: number) =>
+    String.fromCharCode(...data.subarray(start, end));
+  const uint16 = (start: number) => data[start] | (data[start + 1] << 8);
+  const uint24 = (start: number) =>
+    data[start] | (data[start + 1] << 8) | (data[start + 2] << 16);
+  const uint32 = (start: number) =>
+    (data[start] |
+      (data[start + 1] << 8) |
+      (data[start + 2] << 16) |
+      (data[start + 3] << 24)) >>>
+    0;
+
+  if (ascii(0, 4) !== "RIFF" || ascii(8, 12) !== "WEBP") {
+    throw new Error(`WebPではありません: ${file.pathname}`);
+  }
+
+  for (let cursor = 12; cursor + 8 <= data.length; ) {
+    const kind = ascii(cursor, cursor + 4);
+    const size = uint32(cursor + 4);
+    const start = cursor + 8;
+    if (kind === "VP8X" && start + 10 <= data.length) {
+      return {
+        width: 1 + uint24(start + 4),
+        height: 1 + uint24(start + 7),
+        bytes: data.byteLength,
+      };
+    }
+    if (kind === "VP8 " && start + 10 <= data.length) {
+      return {
+        width: uint16(start + 6) & 0x3fff,
+        height: uint16(start + 8) & 0x3fff,
+        bytes: data.byteLength,
+      };
+    }
+    if (kind === "VP8L" && start + 5 <= data.length && data[start] === 0x2f) {
+      const width = 1 + data[start + 1] + ((data[start + 2] & 0x3f) << 8);
+      const height =
+        1 + ((data[start + 2] & 0xc0) >> 6) + (data[start + 3] << 2) + ((data[start + 4] & 0x0f) << 10);
+      return { width, height, bytes: data.byteLength };
+    }
+    cursor += 8 + size + (size % 2);
+  }
+  throw new Error(`WebPの画像チャンクがありません: ${file.pathname}`);
 }
 
 /** :root とテーマ固有ブロックをマージし、実効トークンを返す。 */
@@ -151,7 +223,113 @@ const SOLID_SURFACES = [
   "--color-warn-badge",
 ] as const;
 
+const QUALITY_SIGNATURES = {
+  japanese: {
+    "--color-bg": "#f4efe2",
+    "--color-surface": "#fbf8ef",
+    "--color-surface-sunken": "#e9e1d0",
+    "--color-text": "#2b2723",
+    "--color-text-muted": "#625b50",
+    "--color-accent": "#1f3f5e",
+    "--color-accent-strong": "#17334d",
+    "--color-accent-soft": "#dce6ec",
+    "--color-secondary": "#61713e",
+    "--color-pop-coral": "#b8433a",
+    "--radius-sm": "4px",
+    "--radius-md": "5px",
+    "--radius-lg": "6px",
+    "--splitter-background": "#877860",
+    "--toolbar-separator-width": "2px",
+    "--shadow-button": "0 1px 2px rgba(43, 39, 35, 0.1)",
+  },
+  modern: {
+    "--color-bg": "#f7f8fa",
+    "--color-surface": "#ffffff",
+    "--color-surface-sunken": "#f1f3f5",
+    "--color-text": "#181b20",
+    "--color-text-muted": "#56616d",
+    "--color-accent": "#2563eb",
+    "--color-accent-strong": "#1d4ed8",
+    "--color-accent-soft": "#eff6ff",
+    "--color-accent-border": "rgba(59, 130, 246, 0.22)",
+    "--color-secondary": "#374151",
+    "--radius-sm": "8px",
+    "--radius-md": "8px",
+    "--radius-lg": "8px",
+    "--toolbar-separator-width": "1px",
+    "--shadow-button": "none",
+    "--shadow-panel": "none",
+    "--t-fast": "100ms ease-out",
+  },
+} as const;
+
 describe("設計トークン", () => {
+  it("選択可能な5テーマとCSSテーマ定義が1対1で対応する", () => {
+    expect(THEMES.map((theme) => theme.id)).toEqual([...UI_THEMES]);
+    for (const id of UI_THEMES.filter((theme) => theme !== "pop")) {
+      expect(declarationBlocks(`.app[data-theme="${id}"]`), id).toHaveLength(1);
+    }
+  });
+
+  it("和紙・粒子背景はローカルWebPで、寸法と容量の上限を守る", () => {
+    const assets = {
+      japanese: "japanese-washi.webp",
+      modern: "modern-grain.webp",
+    } as const;
+
+    for (const [id, fileName] of Object.entries(assets)) {
+      const theme = THEMES.find((candidate) => candidate.id === id);
+      expect(theme, id).toBeDefined();
+      expect(theme!.selector, id).not.toBeNull();
+      const ownTokens = declarations(declarationBlock(theme!.selector!));
+      const background = ownTokens.get("--app-background-image") ?? "";
+      expect(background, id).toContain(`url("./assets/themes/${fileName}")`);
+      expect(background, id).not.toContain("data:image");
+
+      const file = new URL(`../assets/themes/${fileName}`, import.meta.url);
+      const info = webpInfo(file);
+      expect(info.width, `${id}: width`).toBeGreaterThanOrEqual(1024);
+      expect(info.height, `${id}: height`).toBeGreaterThanOrEqual(1024);
+      expect(info.bytes, `${id}: bytes`).toBeLessThanOrEqual(500_000);
+    }
+
+    expect(Object.values(assets).every((name) => name.endsWith(".webp"))).toBe(true);
+    expect(css).not.toMatch(/assets\/themes\/[^"')]*(?:\.png|\.jpe?g)/i);
+  });
+
+  it("和風とモダンの品質を決める色・形・影・速さを固定する", () => {
+    for (const [id, signature] of Object.entries(QUALITY_SIGNATURES)) {
+      const theme = THEMES.find((candidate) => candidate.id === id)!;
+      const themeTokens = tokens(theme);
+      for (const [name, expected] of Object.entries(signature)) {
+        expect(valueOf(themeTokens, name), `${theme.label}: ${name}`).toBe(expected);
+      }
+    }
+  });
+
+  it("背景のむらを含む最暗部でも本文と補助文字が4.5:1以上", () => {
+    const cases = [
+      { id: "japanese", background: "#e6ded0" },
+      { id: "modern", background: "#f2f3f5" },
+    ] as const;
+    for (const sample of cases) {
+      const theme = THEMES.find((candidate) => candidate.id === sample.id)!;
+      const background = hexToRgb(sample.background) as Rgb;
+      for (const foreground of ["--color-text", "--color-text-muted"] as const) {
+        expect(
+          contrastRatio(rgbOf(tokens(theme), foreground), background),
+          `${theme.label}: ${foreground} / texture dark edge`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it("動く部品へSVGフィルタを掛けず、背景は静的なローカル画像だけを使う", () => {
+    expect(css).not.toMatch(/filter\s*:\s*url\(/i);
+    expect(css).not.toMatch(/--app-background-image\s*:[^;]*https?:/i);
+    expect(css).not.toMatch(/animation(?:-name)?\s*:[^;]*app-background/i);
+  });
+
   it("色・余白・角丸・影・文字の大きさの段階が定義されている", () => {
     const themeTokens = tokens();
     const required = [
@@ -163,6 +341,10 @@ describe("設計トークン", () => {
       "--color-canvas-3d",
       "--color-crease-mountain",
       "--color-crease-valley",
+      "--color-relaxation",
+      "--app-background-image",
+      "--app-background-size",
+      "--app-background-repeat",
       "--sp-2",
       "--sp-4",
       "--radius-sm",
@@ -183,6 +365,95 @@ describe("設計トークン", () => {
     for (const match of css.matchAll(/var\((--[\w-]+)\)/g)) {
       expect(rootTokens.has(match[1]), match[1]).toBe(true);
     }
+  });
+
+  it("全ボタンがテーマ共通の土台を通り、OS既定の立体枠へ戻らない", () => {
+    const buttonBase = declarationBlock(".app :where(button)");
+    expect(buttonBase).toMatch(/appearance\s*:\s*none\s*;/);
+    expect(buttonBase).toMatch(
+      /border\s*:[^;]*var\(--color-border\)[^;]*;/,
+    );
+    expect(buttonBase).toMatch(
+      /background\s*:\s*var\(--color-control\)\s*;/,
+    );
+    expect(buttonBase).toMatch(/border-radius\s*:\s*var\(--radius-md\)\s*;/);
+    expect(buttonBase).toMatch(/box-shadow\s*:\s*var\(--shadow-button\)\s*;/);
+    expect(css).not.toMatch(/\b(?:outset|inset-button)\b/i);
+  });
+
+  it("選択肢・チェック・スライダー・色入力はOS既定appearanceを使わない", () => {
+    for (const selector of [
+      ".app select",
+      '.app input[type="checkbox"]',
+      '.app input[type="radio"]',
+      '.app input[type="range"]',
+      '.app input[type="color"]',
+    ]) {
+      expect(declarationBlock(selector), selector).toMatch(/appearance\s*:\s*none\s*;/);
+    }
+  });
+
+  it("吹き出しのインライン固定色をテーマトークンで上書きする", () => {
+    const tooltip = declarationBlock('[data-floating-ui="tooltip"]');
+    expect(tooltip).toMatch(/background\s*:\s*var\(--color-tooltip-background\)\s*!important/);
+    expect(tooltip).toMatch(/border[^;]*var\(--color-tooltip-border\)[^;]*!important/);
+    expect(tooltip).toMatch(/color\s*:\s*var\(--color-tooltip-text\)\s*!important/);
+    expect(tooltip).toMatch(/box-shadow\s*:\s*var\(--shadow-tooltip\)\s*!important/);
+    expect(tooltip).toMatch(/padding[^;]*var\(--tooltip-padding-inline\)[^;]*!important/);
+  });
+
+  it("選択中ツールのhover規則はテーマ指定を後勝ちで潰さない", () => {
+    const hoverRules = declarationBlocks(".tool-button.active:hover:not(:disabled)");
+    expect(hoverRules).toHaveLength(1);
+    expect(hoverRules[0]).toMatch(
+      /background\s*:\s*var\(--tool-active-hover-background\)\s*;/,
+    );
+  });
+
+  it("rootで先に解決される別名tokenは各テーマ自身が再定義する", () => {
+    const aliases = [
+      "--color-on-gold",
+      "--tool-active-background",
+      "--tool-active-color",
+      "--tool-active-border",
+      "--tool-active-hover-background",
+      "--tool-active-hover-color",
+      "--tool-active-hover-border",
+      "--shadow-collision-guide",
+      "--shadow-collision-guide-hover",
+      "--toolbar-separator-radius",
+      "--toolbar-separator-background",
+    ] as const;
+    for (const theme of THEMES.filter((candidate) => candidate.selector !== null)) {
+      const ownTokens = declarations(declarationBlock(theme.selector!));
+      for (const alias of aliases) {
+        expect(ownTokens.has(alias), `${theme.label}: ${alias}`).toBe(true);
+      }
+    }
+  });
+
+  it("無効ボタンの文字コントラストを要素opacityで薄めない", () => {
+    const disabled = declarationBlock(".app :where(button):disabled");
+    expect(disabled).not.toMatch(/\bopacity\s*:/);
+    expect(disabled).toMatch(/color\s*:\s*var\(--color-text-muted\)/);
+    expect(disabled).toMatch(/background\s*:\s*var\(--color-surface-sunken\)/);
+  });
+
+  it("濃色の操作面はhover時も白文字を維持する", () => {
+    const viewerReset = declarationBlock(".viewer-reset:hover,\n.viewer-reset:focus-visible");
+    expect(viewerReset).toMatch(/color\s*:\s*var\(--color-on-solid\)/);
+    const collision = declarationBlock(
+      ".suspect-hinge-guide:hover,\n.suspect-hinge-guide:focus-visible",
+    );
+    expect(collision).toMatch(/color\s*:\s*var\(--color-collision-text\)/);
+  });
+
+  it("初回案内の主操作はhoverとactiveでも主ボタン配色を保つ", () => {
+    const rules = declarationBlock(
+      ".first-run-guide-prepare:hover:not(:disabled),\n.first-run-guide-done:hover:not(:disabled),\n.first-run-guide-prepare:active:not(:disabled),\n.first-run-guide-done:active:not(:disabled)",
+    );
+    expect(rules).toMatch(/background\s*:\s*var\(--color-accent-strong\)/);
+    expect(rules).toMatch(/color\s*:\s*var\(--button-primary-color\)/);
   });
 
   for (const theme of THEMES) {
@@ -251,15 +522,47 @@ describe("設計トークン", () => {
     }
   });
 
-  it("シンプルの太字は600を超えず、モダンの墨ボタンはhoverで白地へ反転する", () => {
+  it("作品の選択・食い込み・追従・操作中の意味色をテーマ変更で変えない", () => {
+    expect(rendererSource).toMatch(/selection:\s*"#ff9500"/);
+    expect(rendererSource).toMatch(/suspect:\s*"#ff2438"/);
+    expect(rendererSource).toMatch(/relaxed:\s*"#d97706"/);
+    expect(rendererSource).toMatch(/active:\s*"#40cfff"/);
+    expect(rendererSource).toMatch(/foldSuggestion:\s*"#d97706"/);
+    expect(sceneSource).toMatch(/HIGHLIGHT_COLOR\s*=\s*0xffd400/);
+    expect(sceneSource).toMatch(/REFERENCE_HIGHLIGHT_COLOR\s*=\s*0x40cfff/);
+    expect(sceneSource).toMatch(/SUSPECT_HIGHLIGHT_COLOR\s*=\s*0xff2038/);
+    expect(sceneSource).toMatch(/RELAXED_HIGHLIGHT_COLOR\s*=\s*0xd97706/);
+    expect(sceneSource).toMatch(/ACTIVE_HIGHLIGHT_COLOR\s*=\s*0x40cfff/);
+    expect(sceneSource).toMatch(/PREVIEW_COLOR\s*=\s*0x2f8fff/);
+
+    for (const theme of THEMES) {
+      expect(valueOf(tokens(theme), "--color-relaxation")).toBe("#d97706");
+    }
+
+    const semanticColors = ["#d97706", "#40cfff", "#ff2038"].map(
+      (value) => hexToRgb(value) as Rgb,
+    );
+    for (let left = 0; left < semanticColors.length; left += 1) {
+      for (let right = left + 1; right < semanticColors.length; right += 1) {
+        const distance = Math.hypot(
+          ...semanticColors[left].map(
+            (value, index) => value - semanticColors[right][index],
+          ),
+        );
+        expect(distance, `${left}/${right}`).toBeGreaterThan(100);
+      }
+    }
+  });
+
+  it("シンプルの太字は600を超えず、モダンの選択ボタンは青1色で階層化する", () => {
     const simple = tokens(THEMES[1]);
     expect(Number(valueOf(simple, "--fw-bold"))).toBeLessThanOrEqual(600);
     expect(Number(valueOf(simple, "--fw-black"))).toBeLessThanOrEqual(600);
 
     const modern = tokens(THEMES[3]);
-    expect(valueOf(modern, "--tool-active-background")).toBe("#18181b");
+    expect(valueOf(modern, "--tool-active-background")).toBe("#2563eb");
     expect(valueOf(modern, "--tool-active-color")).toBe("#ffffff");
-    expect(valueOf(modern, "--tool-active-hover-background")).toBe("#ffffff");
-    expect(valueOf(modern, "--tool-active-hover-color")).toBe("#18181b");
+    expect(valueOf(modern, "--tool-active-hover-background")).toBe("#1d4ed8");
+    expect(valueOf(modern, "--tool-active-hover-color")).toBe("#ffffff");
   });
 });

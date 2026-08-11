@@ -28,7 +28,6 @@ $root = Split-Path -Parent $PSScriptRoot
 $endpoint = "http://127.0.0.1:9222"
 $cdpEntry = Join-Path $PSScriptRoot "capture-steps-cdp.mjs"
 $appExe = Join-Path $root "target\debug\desktop.exe"
-$tauriEntry = Join-Path $root "apps\desktop\node_modules\@tauri-apps\cli\tauri.js"
 $viteEntry = Join-Path $root "apps\desktop\node_modules\vite\bin\vite.js"
 $tauriCaptureConfig = Join-Path $root "apps\desktop\src-tauri\tauri.capture.conf.json"
 $captureTempRoot = Join-Path $root "verification\capture"
@@ -37,6 +36,9 @@ $script:ownedApp = $null
 $script:ownedLauncher = $null
 $script:ownedVite = $null
 $script:runSucceeded = $false
+$script:targetId = $null
+$script:targetGeneration = $null
+$script:preserveOwnedHost = $false
 
 function Write-Milestone {
     param([string]$Message)
@@ -59,62 +61,179 @@ function Quote-NativeArgument {
     return '"' + $Value.Replace('"', '\"') + '"'
 }
 
-function Get-CdpPages {
-    try {
-        $response = Invoke-WebRequest `
-            -Uri "$endpoint/json/list" `
-            -UseBasicParsing `
-            -TimeoutSec 2
-        $targets = @($response.Content | ConvertFrom-Json)
-        return @($targets | Where-Object {
-            $_.type -eq "page" -and -not [string]::IsNullOrWhiteSpace($_.webSocketDebuggerUrl)
-        })
-    }
-    catch {
-        return @()
-    }
+function Get-DesktopProcesses {
+    # The process name is the authority for the 0/1/many startup decision. Do not
+    # discard an existing instance merely because its path or title is temporarily
+    # unavailable while WebView2 is starting.
+    return @(Get-Process -Name "desktop" -ErrorAction SilentlyContinue)
 }
 
-function Get-OrigamiProcesses {
-    $expectedExe = [System.IO.Path]::GetFullPath($appExe)
-    $matches = @()
-    foreach ($process in @(Get-Process -Name "desktop" -ErrorAction SilentlyContinue)) {
-        $samePath = $false
+function Test-ProcessDescendsFrom {
+    param(
+        [Parameter(Mandatory = $true)] [int]$ProcessId,
+        [Parameter(Mandatory = $true)] [int]$AncestorId
+    )
+
+    $seen = New-Object 'System.Collections.Generic.HashSet[int]'
+    $currentId = $ProcessId
+    while ($currentId -gt 0 -and $seen.Add($currentId)) {
         try {
-            $samePath = -not [string]::IsNullOrWhiteSpace($process.Path) -and
-                [System.IO.Path]::GetFullPath($process.Path).Equals(
-                    $expectedExe,
-                    [System.StringComparison]::OrdinalIgnoreCase
-                )
+            $row = @(
+                Get-CimInstance Win32_Process `
+                    -Filter "ProcessId = $currentId" `
+                    -ErrorAction Stop
+            ) | Select-Object -First 1
         }
         catch {
-            $samePath = $false
+            # Some managed Windows sessions deny Win32_Process queries even for
+            # the current user. Let the caller use its path/start-time fallback.
+            return $null
         }
-        if ($samePath -or $process.MainWindowTitle -eq "ORIGAMI3") {
-            $matches += $process
-        }
+        if ($null -eq $row) { return $false }
+        $parentId = [int]$row.ParentProcessId
+        if ($parentId -eq $AncestorId) { return $true }
+        $currentId = $parentId
     }
-    return @($matches)
+    return $false
 }
 
-function Stop-OrigamiProcesses {
-    $processes = @(Get-OrigamiProcesses)
-    if ($processes.Count -eq 0) { return }
-    Write-Milestone "closing $($processes.Count) stale ORIGAMI3 process(es)"
-    foreach ($process in $processes) {
-        try { [void]$process.CloseMainWindow() } catch { }
+function Remove-CaptureOrphanedWebViews {
+    if (@(Get-DesktopProcesses).Count -ne 0) {
+        throw "Refusing to clean WebView2 processes while desktop.exe is running"
     }
-    $deadline = [DateTime]::UtcNow.AddSeconds(5)
-    while ([DateTime]::UtcNow -lt $deadline) {
-        $alive = @($processes | Where-Object { -not $_.HasExited })
-        if ($alive.Count -eq 0) { break }
-        Start-Sleep -Milliseconds 200
+
+    try {
+        $all = @(Get-CimInstance Win32_Process -ErrorAction Stop)
     }
-    foreach ($process in $processes) {
-        if (-not $process.HasExited) {
-            Stop-Process -Id $process.Id -Force
+    catch {
+        # Command lines are required to distinguish our private WebView2 profile
+        # from Search, Widgets, Office, and other legitimate WebView2 hosts.
+        # Never compensate for a denied query by stopping every WebView2 process.
+        $visible = @(Get-Process -Name "msedgewebview2" -ErrorAction SilentlyContinue)
+        Write-Milestone "WebView2 command-line inspection is unavailable; left $($visible.Count) unclassified process(es) untouched"
+        return
+    }
+    $normalizedRoot = [System.IO.Path]::GetFullPath($root).TrimEnd('\') + '\'
+    $profilePrefix = [System.IO.Path]::GetFullPath(
+        (Join-Path $captureTempRoot "wv2-")
+    )
+    $legacyProfileName = "webview-profile-nosandbox"
+    $seeds = @(
+        $all | Where-Object {
+            if ($_.Name -ine "msedgewebview2.exe" -or
+                [string]::IsNullOrWhiteSpace($_.CommandLine)) {
+                return $false
+            }
+            $commandLine = ([string]$_.CommandLine).Replace('/', '\')
+            $ownedProfile = $commandLine.IndexOf(
+                $profilePrefix,
+                [System.StringComparison]::OrdinalIgnoreCase
+            ) -ge 0
+            $legacyProfile = $commandLine.IndexOf(
+                $normalizedRoot,
+                [System.StringComparison]::OrdinalIgnoreCase
+            ) -ge 0 -and $commandLine.IndexOf(
+                $legacyProfileName,
+                [System.StringComparison]::OrdinalIgnoreCase
+            ) -ge 0
+            return $ownedProfile -or $legacyProfile
+        }
+    )
+
+    $byParent = @{}
+    $byId = @{}
+    foreach ($row in $all) {
+        $processId = [int]$row.ProcessId
+        $parentId = [int]$row.ParentProcessId
+        $byId[$processId] = $row
+        if (-not $byParent.ContainsKey($parentId)) {
+            $byParent[$parentId] = New-Object 'System.Collections.Generic.List[int]'
+        }
+        $byParent[$parentId].Add($processId)
+    }
+
+    $targetIds = New-Object 'System.Collections.Generic.HashSet[int]'
+    $pending = New-Object 'System.Collections.Generic.Queue[int]'
+    foreach ($seed in $seeds) {
+        $seedId = [int]$seed.ProcessId
+        if ($targetIds.Add($seedId)) { $pending.Enqueue($seedId) }
+    }
+    while ($pending.Count -gt 0) {
+        $parentId = $pending.Dequeue()
+        if (-not $byParent.ContainsKey($parentId)) { continue }
+        foreach ($childId in $byParent[$parentId]) {
+            if ($targetIds.Add($childId)) { $pending.Enqueue($childId) }
         }
     }
+
+    # Stop leaves before their parents. That keeps every target attributable to
+    # the captured process tree and makes the reported count deterministic.
+    $targetsWithDepth = @()
+    foreach ($targetId in $targetIds) {
+        $depth = 0
+        $cursor = $targetId
+        $seen = New-Object 'System.Collections.Generic.HashSet[int]'
+        while ($byId.ContainsKey($cursor) -and $seen.Add($cursor)) {
+            $parentId = [int]$byId[$cursor].ParentProcessId
+            if (-not $targetIds.Contains($parentId)) { break }
+            $depth++
+            $cursor = $parentId
+        }
+        $targetsWithDepth += [pscustomobject]@{ ProcessId = $targetId; Depth = $depth }
+    }
+
+    $cleaned = 0
+    foreach ($target in @($targetsWithDepth | Sort-Object Depth -Descending)) {
+        try {
+            Stop-Process -Id ([int]$target.ProcessId) -Force -ErrorAction Stop
+            $cleaned++
+        }
+        catch {
+            # A parent may have already reaped a child between enumeration and stop.
+            # Access-denied and other failures must remain visible instead of being
+            # reported as a successful cleanup.
+            if ($null -ne (Get-Process -Id ([int]$target.ProcessId) -ErrorAction SilentlyContinue)) {
+                throw
+            }
+        }
+    }
+    Write-Milestone "cleaned $cleaned orphaned WebView2 process(es)"
+}
+
+function Test-TcpPortOpen {
+    param([int]$Port)
+
+    $client = New-Object System.Net.Sockets.TcpClient
+    try {
+        $pending = $client.BeginConnect("127.0.0.1", $Port, $null, $null)
+        if (-not $pending.AsyncWaitHandle.WaitOne(500)) { return $false }
+        $client.EndConnect($pending)
+        return $true
+    }
+    catch {
+        return $false
+    }
+    finally {
+        $client.Close()
+    }
+}
+
+function Wait-ForCapturePortFree {
+    param([int]$TimeoutSeconds = 10, [int]$ConsecutiveChecks = 5)
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    $closedCount = 0
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if (Test-TcpPortOpen -Port 9222) {
+            $closedCount = 0
+        }
+        else {
+            $closedCount++
+            if ($closedCount -ge $ConsecutiveChecks) { return }
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    throw "CDP port 9222 was not continuously free for $ConsecutiveChecks checks"
 }
 
 function Get-AppExitDetail {
@@ -146,6 +265,58 @@ function Test-FrontendServer {
     }
 }
 
+function Invoke-HiddenNativeCommand {
+    param(
+        [Parameter(Mandatory = $true)] [string]$Code,
+        [Parameter(Mandatory = $true)] [string]$StatusName,
+        [Parameter(Mandatory = $true)] [string]$Label,
+        [int]$TimeoutSeconds = 300
+    )
+
+    $statusPath = Join-Path $runDir "$StatusName.exit"
+    $statusLiteral = $statusPath.Replace("'", "''")
+    $wrappedCode = @"
+`$ErrorActionPreference = "Continue"
+`$nativeExitCode = 1
+try {
+$Code
+  if (`$null -ne `$LASTEXITCODE) { `$nativeExitCode = [int]`$LASTEXITCODE }
+}
+catch {
+  `$nativeExitCode = 1
+}
+[IO.File]::WriteAllText('$statusLiteral', [string]`$nativeExitCode)
+exit `$nativeExitCode
+"@
+    $encodedCode = [Convert]::ToBase64String(
+        [Text.Encoding]::Unicode.GetBytes($wrappedCode)
+    )
+    $helper = Start-Process `
+        -FilePath (Get-Command powershell.exe -ErrorAction Stop).Source `
+        -ArgumentList "-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encodedCode" `
+        -WindowStyle Hidden `
+        -PassThru
+    try {
+        if (-not $helper.WaitForExit($TimeoutSeconds * 1000)) {
+            & taskkill.exe /PID $helper.Id /T /F 2>$null | Out-Null
+            throw "$Label timed out after $TimeoutSeconds seconds"
+        }
+        $helper.WaitForExit()
+    }
+    finally {
+        $helper.Dispose()
+    }
+
+    if (-not (Test-Path -LiteralPath $statusPath -PathType Leaf)) {
+        throw "$Label did not report its exit status"
+    }
+    $nativeExitCode = 0
+    if (-not [int]::TryParse((Read-Utf8 $statusPath).Trim(), [ref]$nativeExitCode) -or
+        $nativeExitCode -ne 0) {
+        throw "$Label failed (exit $nativeExitCode)"
+    }
+}
+
 function Start-FrontendServerIfNeeded {
     if (Test-FrontendServer) {
         Write-Milestone "reusing the ORIGAMI3 frontend server on port 1420"
@@ -154,10 +325,24 @@ function Start-FrontendServerIfNeeded {
     if (-not (Test-Path -LiteralPath $viteEntry -PathType Leaf)) {
         throw "Vite is unavailable; run npm install in apps/desktop"
     }
-    $viteStdout = Join-Path $runDir "vite.stdout.log"
-    $viteStderr = Join-Path $runDir "vite.stderr.log"
+    $npmCommand = Get-Command npm.cmd -ErrorAction Stop
+    $desktopDirLiteral = (Join-Path $root "apps\desktop").Replace("'", "''")
+    $npmLiteral = $npmCommand.Source.Replace("'", "''")
+    $frontendBuildCode = @"
+Set-Location -LiteralPath '$desktopDirLiteral'
+& '$npmLiteral' run build
+"@
+    Invoke-HiddenNativeCommand `
+        -Code $frontendBuildCode `
+        -StatusName "frontend-build" `
+        -Label "ORIGAMI3 frontend build" `
+        -TimeoutSeconds 180
+    Write-Milestone "built the current ORIGAMI3 frontend"
+
     $viteArgs = @(
         (Quote-NativeArgument $viteEntry),
+        "preview",
+        "--configLoader", "runner",
         "--host", "127.0.0.1",
         "--port", "1420",
         "--strictPort"
@@ -167,8 +352,6 @@ function Start-FrontendServerIfNeeded {
         -ArgumentList $viteArgs `
         -WorkingDirectory (Join-Path $root "apps\desktop") `
         -WindowStyle Hidden `
-        -RedirectStandardOutput $viteStdout `
-        -RedirectStandardError $viteStderr `
         -PassThru
     $deadline = [DateTime]::UtcNow.AddSeconds(60)
     while ([DateTime]::UtcNow -lt $deadline) {
@@ -189,7 +372,9 @@ function Invoke-CdpActions {
     param(
         [Parameter(Mandatory = $true)] [object[]]$Actions,
         [Parameter(Mandatory = $true)] [string]$Label,
-        [int]$TimeoutSeconds = 120
+        [int]$TimeoutSeconds = 120,
+        [string]$ExpectedTargetId = "",
+        [string]$ExpectedGeneration = ""
     )
 
     $script:actionCounter++
@@ -199,30 +384,60 @@ function Invoke-CdpActions {
     $stderrPath = Join-Path $runDir "$stem.stderr.log"
     Write-Utf8NoBom $actionPath (ConvertTo-Json -InputObject $Actions -Depth 8)
 
+    $targetArgument = if (-not [string]::IsNullOrWhiteSpace($ExpectedTargetId)) {
+        $ExpectedTargetId
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($script:targetId)) {
+        [string]$script:targetId
+    }
+    else {
+        "-"
+    }
+    $generationArgument = if (-not [string]::IsNullOrWhiteSpace($ExpectedGeneration)) {
+        $ExpectedGeneration
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($script:targetGeneration)) {
+        [string]$script:targetGeneration
+    }
+    else {
+        "-"
+    }
     $argumentLine = @(
         (Quote-NativeArgument $cdpEntry),
         (Quote-NativeArgument $actionPath),
-        (Quote-NativeArgument $endpoint)
+        (Quote-NativeArgument $endpoint),
+        (Quote-NativeArgument $targetArgument),
+        (Quote-NativeArgument $generationArgument)
     ) -join " "
-    $process = Start-Process `
-        -FilePath $nodeCommand.Source `
-        -ArgumentList $argumentLine `
-        -WorkingDirectory $root `
-        -WindowStyle Hidden `
-        -RedirectStandardOutput $stdoutPath `
-        -RedirectStandardError $stderrPath `
-        -PassThru
-
-    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        throw "$Label timed out after $TimeoutSeconds seconds.$(Get-AppExitDetail)"
+    # In managed Windows sessions Start-Process can expose a null ExitCode even
+    # after a successful child exits. The old code interpreted null as failure
+    # and then called a healthy desktop instance stale. Invoke Node directly so
+    # PowerShell's native-command $LASTEXITCODE is authoritative. Every CDP
+    # operation also has an internal timeout in capture-steps-cdp.mjs.
+    $previousLocation = Get-Location
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        Set-Location -LiteralPath $root
+        $ErrorActionPreference = "Continue"
+        & $nodeCommand.Source `
+            $cdpEntry $actionPath $endpoint $targetArgument $generationArgument `
+            1> $stdoutPath 2> $stderrPath
+        $exitCode = $LASTEXITCODE
     }
-    $process.WaitForExit()
+    finally {
+        $ErrorActionPreference = $previousErrorAction
+        Set-Location -LiteralPath $previousLocation
+    }
     $stdout = if (Test-Path -LiteralPath $stdoutPath) { Read-Utf8 $stdoutPath } else { "" }
     $stderr = if (Test-Path -LiteralPath $stderrPath) { Read-Utf8 $stderrPath } else { "" }
-    if ($process.ExitCode -ne 0) {
+    if ($exitCode -ne 0) {
         $detail = ($stderr.Trim() + " " + $stdout.Trim()).Trim()
-        throw "$Label failed (CDP exit $($process.ExitCode)).$(Get-AppExitDetail) $detail"
+        if (-not [string]::IsNullOrWhiteSpace($script:targetId) -and
+            $detail -match '(?i)(capture generation changed|CDP page target with id)') {
+            $script:preserveOwnedHost = $true
+            throw "Capture target identity changed; ORIGAMI3 was left running for diagnosis. $detail"
+        }
+        throw "$Label failed (CDP exit $exitCode).$(Get-AppExitDetail) $detail"
     }
 
     $records = @()
@@ -231,192 +446,254 @@ function Invoke-CdpActions {
             $records += $line | ConvertFrom-Json
         }
     }
+    if (-not [string]::IsNullOrWhiteSpace($script:targetId)) {
+        foreach ($record in $records) {
+            $actualTargetId = if ($null -ne $record.target) {
+                [string]$record.target.id
+            }
+            else {
+                ""
+            }
+            if ($actualTargetId -ne [string]$script:targetId) {
+                $script:preserveOwnedHost = $true
+                throw "Capture target changed from $($script:targetId) to $actualTargetId; ORIGAMI3 was left running for diagnosis"
+            }
+        }
+    }
     return @($records)
 }
 
-function Test-CaptureApi {
-    try {
-        $probe = @(
-            [ordered]@{
-                act = "eval"
-                js = @"
-(async () => {
-  const deadline = Date.now() + 10000;
-  while (!window.__origami3Capture && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 100));
+function Get-CaptureApiSample {
+    $probe = @(
+        [ordered]@{
+            act = "eval"
+            js = @"
+(() => {
+  const api = window.__origami3Capture;
+  if (!api || typeof api.getStatus !== "function") {
+    throw new Error("ORIGAMI3 capture API status is unavailable");
   }
-  if (!window.__origami3Capture) throw new Error("ORIGAMI3 capture API is unavailable");
-  return { version: window.__origami3Capture.version, title: document.title };
+  return api.getStatus();
 })()
 "@
-            }
-        )
-        $result = @(Invoke-CdpActions -Actions $probe -Label "capture API probe" -TimeoutSeconds 20)
-        return $result.Count -eq 1 -and
-            $result[0].result.version -eq 1 -and
-            $result[0].result.title -eq "ORIGAMI3"
+        }
+    )
+    $records = @(
+        Invoke-CdpActions `
+            -Actions $probe `
+            -Label "capture API status probe" `
+            -TimeoutSeconds 20 `
+            -ExpectedTargetId "-" `
+            -ExpectedGeneration "-"
+    )
+    if ($records.Count -ne 1 -or $null -eq $records[0].target) {
+        throw "Capture API probe returned no unambiguous target"
     }
-    catch {
-        return $false
+
+    $target = $records[0].target
+    $status = $records[0].result
+    $targetId = [string]$target.id
+    $generation = [string]$status.generation
+    $targetUrl = [string]$target.url
+    $targetTitle = [string]$target.title
+    $statusUrl = [string]$status.url
+    $statusTitle = [string]$status.title
+    $heartbeat = 0.0
+    $heartbeatOk = [double]::TryParse(
+        [string]$status.heartbeat,
+        [System.Globalization.NumberStyles]::Float,
+        [System.Globalization.CultureInfo]::InvariantCulture,
+        [ref]$heartbeat
+    )
+
+    if ([string]::IsNullOrWhiteSpace($targetId) -or
+        [string]::IsNullOrWhiteSpace($generation) -or
+        $status.version -ne 1 -or
+        $status.ready -ne $true -or
+        -not $heartbeatOk -or
+        [string]::IsNullOrWhiteSpace($statusUrl) -or
+        $statusTitle -ne "ORIGAMI3" -or
+        $targetUrl -ne $statusUrl -or
+        $targetTitle -ne $statusTitle) {
+        throw "Capture API status is not ready or does not match its CDP target"
+    }
+
+    return [pscustomobject]@{
+        TargetId = $targetId
+        Generation = $generation
+        Heartbeat = $heartbeat
+        Url = $statusUrl
+        Title = $statusTitle
     }
 }
 
 function Wait-ForCaptureApi {
-    param([int]$TimeoutSeconds = 120)
+    param(
+        [Parameter(Mandatory = $true)] [System.Diagnostics.Process]$DesktopProcess,
+        [int]$TimeoutSeconds = 120
+    )
+
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
-    $webviewDeadline = $null
+    $previous = $null
+    $lastProbeError = "capture target has not appeared"
     while ([DateTime]::UtcNow -lt $deadline) {
-        if ($null -eq $script:ownedApp) {
-            $started = @(Get-OrigamiProcesses)
-            if ($started.Count -gt 1) {
-                throw "More than one ORIGAMI3 process appeared during startup"
+        $DesktopProcess.Refresh()
+        if ($DesktopProcess.HasExited) {
+            throw "ORIGAMI3 process $($DesktopProcess.Id) exited while waiting for its capture API"
+        }
+        $desktopProcesses = @(Get-DesktopProcesses)
+        if ($desktopProcesses.Count -gt 1) {
+            throw "More than one desktop.exe process is running; all instances were left untouched"
+        }
+        if ($desktopProcesses.Count -eq 0 -or
+            $desktopProcesses[0].Id -ne $DesktopProcess.Id) {
+            throw "The observed ORIGAMI3 process changed while its capture API was starting"
+        }
+
+        try {
+            $sample = Get-CaptureApiSample
+            if ($null -ne $previous -and
+                $sample.TargetId -eq $previous.TargetId -and
+                $sample.Generation -eq $previous.Generation -and
+                $sample.Heartbeat -gt $previous.Heartbeat) {
+                $script:targetId = $sample.TargetId
+                $script:targetGeneration = $sample.Generation
+                Write-Milestone "capture API ready (PID $($DesktopProcess.Id), target $($sample.TargetId), generation $($sample.Generation))"
+                return
             }
-            if ($started.Count -eq 1) {
-                $script:ownedApp = $started[0]
-                $webviewDeadline = [DateTime]::UtcNow.AddSeconds(25)
-                Write-Milestone "started one ORIGAMI3 process (PID $($script:ownedApp.Id))"
+            if ($null -ne $previous -and
+                ($sample.TargetId -ne $previous.TargetId -or
+                    $sample.Generation -ne $previous.Generation)) {
+                $lastProbeError = "capture target identity changed before it became stable"
             }
-        }
-        if ($null -ne $script:ownedApp) {
-            $script:ownedApp.Refresh()
-            if ($script:ownedApp.HasExited) {
-                throw "ORIGAMI3 crashed during startup with exit code $($script:ownedApp.ExitCode)"
+            else {
+                $lastProbeError = "capture API heartbeat has not advanced yet"
             }
+            $previous = $sample
         }
-        if ($null -ne $script:ownedLauncher) {
-            $script:ownedLauncher.Refresh()
-            if ($script:ownedLauncher.HasExited -and $null -eq $script:ownedApp) {
-                throw "Tauri launcher exited during startup with code $($script:ownedLauncher.ExitCode)"
+        catch {
+            $lastProbeError = [string]$_.Exception.Message
+            $previous = $null
+        }
+        Start-Sleep -Milliseconds 300
+    }
+    throw "ORIGAMI3 process $($DesktopProcess.Id) did not expose a stable capture API within $TimeoutSeconds seconds; the process was left running. Last probe: $lastProbeError"
+}
+
+function Wait-ForOwnedDesktopProcess {
+    param([int]$TimeoutSeconds = 120)
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $script:ownedLauncher.Refresh()
+        if ($script:ownedLauncher.HasExited) {
+            throw "Tauri launcher exited during startup with code $($script:ownedLauncher.ExitCode)"
+        }
+        $desktopProcesses = @(Get-DesktopProcesses)
+        if ($desktopProcesses.Count -gt 1) {
+            throw "More than one desktop.exe process appeared during startup"
+        }
+        if ($desktopProcesses.Count -eq 1) {
+            $candidate = $desktopProcesses[0]
+            $descendsFromLauncher = Test-ProcessDescendsFrom `
+                -ProcessId $candidate.Id `
+                -AncestorId $script:ownedLauncher.Id
+            $fallbackOwned = $false
+            if ($null -eq $descendsFromLauncher) {
+                $candidatePath = ""
+                $candidateStart = [DateTime]::MinValue
+                try { $candidatePath = [System.IO.Path]::GetFullPath($candidate.Path) } catch { }
+                try { $candidateStart = $candidate.StartTime } catch { }
+                $fallbackOwned =
+                    $candidatePath.Equals(
+                        [System.IO.Path]::GetFullPath($appExe),
+                        [System.StringComparison]::OrdinalIgnoreCase
+                    ) -and
+                    $candidateStart -ge $script:ownedLauncher.StartTime.AddSeconds(-1)
             }
-        }
-        $pages = @(Get-CdpPages)
-        if ($pages.Count -gt 1) {
-            throw "CDP port 9222 exposes multiple page targets; refusing an ambiguous capture"
-        }
-        if ($pages.Count -eq 1) {
-            if (Test-CaptureApi) { return }
-        }
-        if ($null -ne $webviewDeadline -and [DateTime]::UtcNow -ge $webviewDeadline) {
-            throw "WebView2 did not expose CDP port 9222 within 25 seconds"
+            if ($descendsFromLauncher -ne $true -and -not $fallbackOwned) {
+                throw "A desktop.exe process not owned by this capture run appeared during startup; it was left untouched"
+            }
+            $script:ownedApp = $candidate
+            Write-Milestone "started one ORIGAMI3 process (PID $($script:ownedApp.Id))"
+            return $candidate
         }
         Start-Sleep -Milliseconds 250
     }
-    throw "ORIGAMI3 did not expose CDP port 9222 within $TimeoutSeconds seconds$(Get-AppExitDetail)"
+    throw "ORIGAMI3 desktop.exe did not start within $TimeoutSeconds seconds$(Get-AppExitDetail)"
 }
 
 function Start-CaptureApp {
     Start-FrontendServerIfNeeded
-    if (-not (Test-Path -LiteralPath $tauriEntry -PathType Leaf)) {
-        throw "Tauri CLI is unavailable; run npm install in apps/desktop"
-    }
     if (-not (Test-Path -LiteralPath $tauriCaptureConfig -PathType Leaf)) {
         throw "Capture configuration is missing: $tauriCaptureConfig"
     }
-    $runtimeRoot = "C:\Program Files (x86)\Microsoft\EdgeWebView\Application"
-    $olderRuntimes = @()
-    if (Test-Path -LiteralPath $runtimeRoot -PathType Container) {
-        $olderRuntimes = @(
-            Get-ChildItem -LiteralPath $runtimeRoot -Directory |
-                Where-Object {
-                    $parsedVersion = $null
-                    [Version]::TryParse($_.Name, [ref]$parsedVersion) -and
-                        (Test-Path -LiteralPath (Join-Path $_.FullName "msedgewebview2.exe"))
-                } |
-                Sort-Object { [Version]$_.Name } -Descending |
-                Select-Object -Skip 1 -First 2
+    $cargoCommand = Get-Command cargo.exe -ErrorAction Stop
+    $rootLiteral = $root.Replace("'", "''")
+    $cargoLiteral = $cargoCommand.Source.Replace("'", "''")
+    $tauriConfig = ConvertTo-Json -Compress -Depth 20 -InputObject (
+        Get-Content -LiteralPath $tauriCaptureConfig -Raw -Encoding UTF8 |
+            ConvertFrom-Json
+    )
+    $tauriConfigLiteral = $tauriConfig.Replace("'", "''")
+    $desktopBuildCode = @"
+Set-Location -LiteralPath '$rootLiteral'
+`$env:TAURI_CONFIG = '$tauriConfigLiteral'
+& '$cargoLiteral' build -p desktop
+"@
+    Invoke-HiddenNativeCommand `
+        -Code $desktopBuildCode `
+        -StatusName "desktop-build" `
+        -Label "ORIGAMI3 desktop build" `
+        -TimeoutSeconds 300
+    if (-not (Test-Path -LiteralPath $appExe -PathType Leaf)) {
+        throw "ORIGAMI3 desktop executable is missing after build: $appExe"
+    }
+    Write-Milestone "built the current ORIGAMI3 desktop"
+    Write-Milestone "starting one ORIGAMI3 instance with the default WebView2 runtime"
+    # Keep the profile path short and unique to this script process. Chromium
+    # creates deeply nested files below it on Windows.
+    $profilePath = Join-Path $captureTempRoot "wv2-$PID"
+    $previousArgs = $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS
+    $previousProfile = $env:WEBVIEW2_USER_DATA_FOLDER
+    try {
+        $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS =
+            "--remote-debugging-port=9222 --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"
+        $env:WEBVIEW2_USER_DATA_FOLDER = $profilePath
+        # Build tools may leave inheritable handles in this PowerShell process;
+        # Chromium then cannot create its restricted sandbox token. A fresh,
+        # hidden helper owns exactly one desktop.exe and waits for it, keeping
+        # process ownership explicit without weakening the WebView2 sandbox.
+        $exeLiteral = $appExe.Replace("'", "''")
+        $rootLiteral = $root.Replace("'", "''")
+        $launchCode =
+            "`$app = Start-Process -FilePath '$exeLiteral' -WorkingDirectory '$rootLiteral' -PassThru; `$app.WaitForExit()"
+        $encodedLaunch = [Convert]::ToBase64String(
+            [Text.Encoding]::Unicode.GetBytes($launchCode)
         )
+        $script:ownedLauncher = Start-Process `
+            -FilePath (Get-Command powershell.exe -ErrorAction Stop).Source `
+            -ArgumentList "-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encodedLaunch" `
+            -WindowStyle Hidden `
+            -PassThru
     }
-    $lastStartupError = ""
-    foreach ($attempt in 1..3) {
-        $runtimeFolder = $null
-        if ($attempt -gt 1 -and $olderRuntimes.Count -ge ($attempt - 1)) {
-            $runtimeFolder = $olderRuntimes[$attempt - 2].FullName
+    finally {
+        if ($null -eq $previousArgs) {
+            Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue
         }
-        $runtimeLabel = if ($null -eq $runtimeFolder) { "default WebView2" } else {
-            "WebView2 $($olderRuntimes[$attempt - 2].Name)"
+        else {
+            $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = $previousArgs
         }
-        Write-Milestone "starting ORIGAMI3 (attempt $attempt/3, $runtimeLabel)"
-        # Keep the WebView2 profile path short. Chromium creates deeply nested files under it,
-        # and long per-run paths can make WebView initialization fail on Windows.
-        $profilePath = Join-Path $captureTempRoot "wv2-$attempt"
-        if (-not [string]::IsNullOrWhiteSpace($env:ORIGAMI3_CAPTURE_WEBVIEW2_PROFILE)) {
-            $overridePath = [System.IO.Path]::GetFullPath(
-                $env:ORIGAMI3_CAPTURE_WEBVIEW2_PROFILE
-            )
-            $allowedProfileRoot = [System.IO.Path]::GetFullPath($captureTempRoot).TrimEnd('\') + '\'
-            if (-not $overridePath.StartsWith(
-                $allowedProfileRoot,
-                [System.StringComparison]::OrdinalIgnoreCase
-            )) {
-                throw "ORIGAMI3_CAPTURE_WEBVIEW2_PROFILE must be under $captureTempRoot"
-            }
-            $profilePath = $overridePath
+        if ($null -eq $previousProfile) {
+            Remove-Item Env:WEBVIEW2_USER_DATA_FOLDER -ErrorAction SilentlyContinue
         }
-        $launcherStdout = Join-Path $runDir "tauri-$attempt.stdout.log"
-        $launcherStderr = Join-Path $runDir "tauri-$attempt.stderr.log"
-        $previousArgs = $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS
-        $previousProfile = $env:WEBVIEW2_USER_DATA_FOLDER
-        $previousRuntime = $env:WEBVIEW2_BROWSER_EXECUTABLE_FOLDER
-        try {
-            $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS =
-                "--remote-debugging-port=9222 --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"
-            $env:WEBVIEW2_USER_DATA_FOLDER = $profilePath
-            if ($null -ne $runtimeFolder) {
-                $env:WEBVIEW2_BROWSER_EXECUTABLE_FOLDER = $runtimeFolder
-            }
-            $launcherArgs = @(
-                (Quote-NativeArgument $tauriEntry),
-                "dev",
-                "--no-watch",
-                "--no-dev-server-wait",
-                "--config",
-                (Quote-NativeArgument $tauriCaptureConfig)
-            ) -join " "
-            $script:ownedLauncher = Start-Process `
-                -FilePath $nodeCommand.Source `
-                -ArgumentList $launcherArgs `
-                -WorkingDirectory (Join-Path $root "apps\desktop") `
-                -WindowStyle Hidden `
-                -RedirectStandardOutput $launcherStdout `
-                -RedirectStandardError $launcherStderr `
-                -PassThru
-        }
-        finally {
-            if ($null -eq $previousArgs) {
-                Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue
-            }
-            else {
-                $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = $previousArgs
-            }
-            if ($null -eq $previousProfile) {
-                Remove-Item Env:WEBVIEW2_USER_DATA_FOLDER -ErrorAction SilentlyContinue
-            }
-            else {
-                $env:WEBVIEW2_USER_DATA_FOLDER = $previousProfile
-            }
-            if ($null -eq $previousRuntime) {
-                Remove-Item Env:WEBVIEW2_BROWSER_EXECUTABLE_FOLDER -ErrorAction SilentlyContinue
-            }
-            else {
-                $env:WEBVIEW2_BROWSER_EXECUTABLE_FOLDER = $previousRuntime
-            }
-        }
-        try {
-            Wait-ForCaptureApi -TimeoutSeconds 120
-            return
-        }
-        catch {
-            $lastStartupError = [string]$_.Exception.Message
-            Write-Milestone "startup attempt $attempt/3 failed; restarting the isolated WebView2 host"
-            Stop-OwnedHost
-            Stop-OrigamiProcesses
-            $portDeadline = [DateTime]::UtcNow.AddSeconds(10)
-            while (@(Get-CdpPages).Count -gt 0 -and [DateTime]::UtcNow -lt $portDeadline) {
-                Start-Sleep -Milliseconds 200
-            }
+        else {
+            $env:WEBVIEW2_USER_DATA_FOLDER = $previousProfile
         }
     }
-    throw "ORIGAMI3 startup failed three times: $lastStartupError"
+
+    $desktopProcess = Wait-ForOwnedDesktopProcess -TimeoutSeconds 120
+    Wait-ForCaptureApi -DesktopProcess $desktopProcess -TimeoutSeconds 120
 }
 
 function Stop-OwnedHost {
@@ -444,6 +721,10 @@ function Stop-OwnedHost {
 }
 
 function Stop-OwnedApp {
+    if ($script:preserveOwnedHost) {
+        Write-Milestone "owned ORIGAMI3 host left running because capture identity changed"
+        return
+    }
     Stop-OwnedHost
     if ($null -ne $script:ownedVite) {
         $script:ownedVite.Refresh()
@@ -493,27 +774,23 @@ foreach ($file in @(Get-ChildItem -LiteralPath $outPath -File -ErrorAction Silen
 Write-Milestone "document: $documentPath"
 Write-Milestone "output: $outPath (views=$Views)"
 
+$restoreIdentityError = $null
 try {
-    $pages = @(Get-CdpPages)
-    $origamiProcesses = @(Get-OrigamiProcesses)
-    $reuseExisting = $pages.Count -eq 1 -and
-        $origamiProcesses.Count -le 1 -and
-        (Test-CaptureApi)
-
-    if ($reuseExisting) {
-        Write-Milestone "reusing the healthy ORIGAMI3 instance on CDP port 9222"
+    $desktopProcesses = @(Get-DesktopProcesses)
+    if ($desktopProcesses.Count -gt 1) {
+        throw "Found $($desktopProcesses.Count) desktop.exe processes; all instances were left untouched because capture would be ambiguous"
+    }
+    if ($desktopProcesses.Count -eq 1) {
+        $existingApp = $desktopProcesses[0]
+        Write-Milestone "reusing the existing ORIGAMI3 process (PID $($existingApp.Id)); it will not be restarted"
+        Wait-ForCaptureApi -DesktopProcess $existingApp -TimeoutSeconds 120
     }
     else {
-        if ($pages.Count -gt 0 -and $origamiProcesses.Count -eq 0) {
-            throw "CDP port 9222 is occupied by another application"
-        }
-        Stop-OrigamiProcesses
-        $portDeadline = [DateTime]::UtcNow.AddSeconds(10)
-        while (@(Get-CdpPages).Count -gt 0 -and [DateTime]::UtcNow -lt $portDeadline) {
-            Start-Sleep -Milliseconds 200
-        }
-        if (@(Get-CdpPages).Count -gt 0) {
-            throw "CDP port 9222 remained occupied after closing stale ORIGAMI3 processes"
+        Remove-CaptureOrphanedWebViews
+        Wait-ForCapturePortFree -TimeoutSeconds 10 -ConsecutiveChecks 5
+        $appeared = @(Get-DesktopProcesses)
+        if ($appeared.Count -ne 0) {
+            throw "A desktop.exe process appeared before capture startup; it was left untouched"
         }
         Start-CaptureApp
     }
@@ -547,11 +824,14 @@ try {
     $captureCp = $Views -eq "cp" -or $Views -eq "both"
     $manifest = @()
     $stepsJsonPath = Join-Path $outPath "steps.json"
+    $captureSteps = @($steps | Sort-Object { [int]$_.number } -Descending)
+    $capturedCount = 0
 
-    foreach ($step in $steps) {
+    foreach ($step in $captureSteps) {
         $number = [int]$step.number
         $serial = $number.ToString("D4")
-        Write-Milestone "state $($number + 1)/$($steps.Count): $($step.name)"
+        $capturedCount++
+        Write-Milestone "state $capturedCount/$($steps.Count), step ${number}: $($step.name)"
         $actions = @(
             [ordered]@{
                 act = "eval"
@@ -579,7 +859,8 @@ try {
             name = [string]$step.name
             images = $images
         }
-        Write-StepsJson -Entries $manifest -Path $stepsJsonPath
+        $orderedManifest = @($manifest | Sort-Object { [int]$_.number })
+        Write-StepsJson -Entries $orderedManifest -Path $stepsJsonPath
     }
 
     $viewCount = [int]$capture3d + [int]$captureCp
@@ -596,7 +877,8 @@ try {
     Write-Milestone "complete: $($steps.Count) state(s), $expectedImages image(s), steps.json"
 }
 finally {
-    if (@(Get-CdpPages).Count -eq 1) {
+    if (-not [string]::IsNullOrWhiteSpace($script:targetId) -and
+        -not $script:preserveOwnedHost) {
         try {
             $restore = @([ordered]@{
                 act = "eval"
@@ -604,7 +886,12 @@ finally {
             })
             [void](Invoke-CdpActions -Actions $restore -Label "restore normal view" -TimeoutSeconds 15)
         }
-        catch { }
+        catch {
+            if ($script:preserveOwnedHost) {
+                $script:runSucceeded = $false
+                $restoreIdentityError = $_.Exception
+            }
+        }
     }
     Stop-OwnedApp
 
@@ -618,5 +905,8 @@ finally {
     }
     else {
         Write-Milestone "failed; diagnostic files kept in $runDir"
+    }
+    if ($null -ne $restoreIdentityError) {
+        throw $restoreIdentityError
     }
 }

@@ -43,6 +43,52 @@ type Technique = fn(
 const CENTER: [f64; 2] = [0.5, 0.5];
 const CURVE_SEGMENTS: u32 = 3;
 
+const STEP_INSTRUCTIONS: [&str; 29] = [
+    "型紙を重ね、全ての折り筋を強くなぞる",
+    "色の付いた表側から裏側へ返す",
+    "中央小正方形の4辺を裏から山折り方向へつまむ",
+    "太線4本を曲線の山折りにする",
+    "別の太線4本を強く山折りする",
+    "中央を押してへこませる",
+    "太い山折り線をつまんで立てる",
+    "★印を支点に太線を動かし、中央をせり上げる",
+    "太線2本を押し、中心を時計回りに回転させる",
+    "谷折りを確認し、太い山折り線を滑らかにする",
+    "横向きに持ち、最初の折り筋で谷折りする",
+    "花びら①・②と※印の3枚を持ち、手前へ少し回す",
+    "奥の花びら③を出し、①・②・※・③の4枚を重ねてつまむ",
+    "袋を膨らませながら破線を軽く谷折りする",
+    "袋をつぶして花びら4を作る",
+    "花びら4を親指で押さえる",
+    "花びら1〜4の層配置を拡大して確認する",
+    "同じつぶし折りで6枚目の花びらを作る",
+    "次の対象を手前へ少し回す",
+    "同じつぶし折りで8枚目の花びらを作る",
+    "回した後の層配置を確認する",
+    "花びら①・②を開き、手順12〜17と同様につぶして⑦・⑧へかぶせ、①・②を④の下へ戻す",
+    "底の三角の角aを内側へ折り込む",
+    "角b・c・dも内側へ折り、底を円筒にする",
+    "円筒を矢印方向から見る",
+    "太い山折り線を滑らかにする",
+    "☆印の花びらの角を外側へカールさせる",
+    "▲印の角を外側へカールさせる",
+    "完成したローズを確認する",
+];
+
+fn step_changes_shape(book_step: usize) -> bool {
+    !matches!(book_step, 2 | 16 | 17 | 19 | 21 | 25 | 29)
+}
+
+#[derive(Clone)]
+pub(crate) struct RoseStepArtifact {
+    pub(crate) book_step: u32,
+    pub(crate) instruction: &'static str,
+    pub(crate) changes_shape: bool,
+    pub(crate) document: Document,
+    pub(crate) frame: Frame3D,
+    pub(crate) max_seam_gap: f64,
+}
+
 #[derive(Clone, Copy)]
 struct QuarterLine {
     kind: EdgeKind,
@@ -222,71 +268,98 @@ fn apply_motion(doc: &mut Document, parts: Vec<MotionPart>, note: &str) -> FlatS
     result.state
 }
 
-/// `last_from..=last_to`を、最後に追加した複合技法の途中経過へ対応させて検査する。
-fn verify_book_frames(doc: &Document, last_from: usize, last_to: usize) -> f64 {
+fn audit_frame(doc: &Document, frame: &Frame3D, book_step: usize) -> f64 {
     let cp_warnings = validate(&doc.cp);
     assert!(
         cp_warnings.is_empty(),
-        "手順{last_from}〜{last_to}: 型紙警告 {cp_warnings:?}"
+        "手順{book_step}: 型紙警告 {cp_warnings:?}"
     );
     let faces = extract_faces(&doc.cp);
     let expected = faces
         .iter()
         .map(|face| (face.id, face.vertices.len()))
         .collect::<HashMap<_, _>>();
-    let count = last_to - last_from + 1;
-    let mut max_gap = 0.0_f64;
-    for book_step in last_from..=last_to {
-        let t = (book_step - last_from + 1) as f64 / count as f64;
-        let result = replay(doc, doc.sequence.len(), t);
-        assert!(
-            result.warnings.is_empty(),
-            "手順{book_step}: 再生警告 {:?}",
-            result.warnings
-        );
-        assert!(
-            result.skipped.is_empty(),
-            "手順{book_step}: 再生スキップ {:?}",
-            result.skipped
-        );
-        assert_eq!(
-            result.frame.faces.len(),
-            faces.len(),
-            "手順{book_step}: 面が失われた"
-        );
-        assert!(
-            result.frame.warnings.is_empty(),
-            "手順{book_step}: 3D警告 {:?}",
-            result.frame.warnings
-        );
-        let actual = result
-            .frame
+    assert_eq!(
+        frame.faces.len(),
+        faces.len(),
+        "手順{book_step}: 面が失われた"
+    );
+    assert!(
+        frame.warnings.is_empty(),
+        "手順{book_step}: 3D警告 {:?}",
+        frame.warnings
+    );
+    let actual = frame
+        .faces
+        .iter()
+        .map(|face| (face.face, face.polygon.len()))
+        .collect::<HashMap<_, _>>();
+    assert_eq!(
+        actual, expected,
+        "手順{book_step}: 面または面頂点が失われた"
+    );
+    assert!(
+        frame
             .faces
             .iter()
-            .map(|face| (face.face, face.polygon.len()))
-            .collect::<HashMap<_, _>>();
-        assert_eq!(
-            actual, expected,
-            "手順{book_step}: 面または面頂点が失われた"
-        );
-        assert!(
-            result
-                .frame
-                .faces
-                .iter()
-                .flat_map(|face| &face.polygon)
-                .flatten()
-                .all(|value| value.is_finite()),
-            "手順{book_step}: 非有限な3D座標"
-        );
-        let gap = max_seam_gap(&doc.cp, &faces, &result.frame);
-        assert!(gap < 1e-6, "手順{book_step}: 裂け {gap:.9}");
-        max_gap = max_gap.max(gap);
-        if book_step % 5 == 0 {
-            println!("手順{book_step}まで通過。max_seam_gap={max_gap:.3e}");
-        }
+            .flat_map(|face| &face.polygon)
+            .flatten()
+            .all(|value| value.is_finite()),
+        "手順{book_step}: 非有限な3D座標"
+    );
+    let gap = max_seam_gap(&doc.cp, &faces, frame);
+    assert!(gap < 1e-6, "手順{book_step}: 裂け {gap:.9}");
+    if book_step.is_multiple_of(5) {
+        println!("手順{book_step}まで通過。max_seam_gap={gap:.3e}");
     }
-    max_gap
+    gap
+}
+
+fn replay_artifact(doc: &Document, book_step: usize, t: f64) -> RoseStepArtifact {
+    let result = replay(doc, doc.sequence.len(), t);
+    assert!(
+        result.warnings.is_empty(),
+        "手順{book_step}: 再生警告 {:?}",
+        result.warnings
+    );
+    assert!(
+        result.skipped.is_empty(),
+        "手順{book_step}: 再生スキップ {:?}",
+        result.skipped
+    );
+    let gap = audit_frame(doc, &result.frame, book_step);
+    RoseStepArtifact {
+        book_step: u32::try_from(book_step).unwrap(),
+        instruction: STEP_INSTRUCTIONS[book_step - 1],
+        changes_shape: step_changes_shape(book_step),
+        document: doc.clone(),
+        frame: result.frame,
+        max_seam_gap: gap,
+    }
+}
+
+fn duplicate_artifact(source: &RoseStepArtifact, book_step: usize) -> RoseStepArtifact {
+    let gap = audit_frame(&source.document, &source.frame, book_step);
+    RoseStepArtifact {
+        book_step: u32::try_from(book_step).unwrap(),
+        instruction: STEP_INSTRUCTIONS[book_step - 1],
+        changes_shape: step_changes_shape(book_step),
+        document: source.document.clone(),
+        frame: source.frame.clone(),
+        max_seam_gap: gap,
+    }
+}
+
+fn soft_artifact(doc: &Document, frame: &Frame3D, book_step: usize) -> RoseStepArtifact {
+    let gap = audit_frame(doc, frame, book_step);
+    RoseStepArtifact {
+        book_step: u32::try_from(book_step).unwrap(),
+        instruction: STEP_INSTRUCTIONS[book_step - 1],
+        changes_shape: step_changes_shape(book_step),
+        document: doc.clone(),
+        frame: frame.clone(),
+        max_seam_gap: gap,
+    }
 }
 
 /// 曲線の端の直線谷折りにも接する、つぶす側のfacetを決定的に選ぶ。
@@ -434,7 +507,6 @@ fn close_petal_ring(doc: &mut Document, curves: &[Vec<[f64; 2]>; 4]) {
         }],
         "川崎1分ローズ 手順22: 花びら1・2を花びら4の下へ戻して閉環",
     );
-    verify_book_frames(doc, 22, 22);
 }
 
 /// 剛体再生の面ごとの頂点コピーを、CP頂点IDごとの共有座標へ集約する。
@@ -517,47 +589,6 @@ fn write_shared_positions(faces: &[Face], frame: &mut Frame3D, positions: &[[f64
     }
 }
 
-fn audit_soft_frame(doc: &Document, faces: &[Face], frame: &Frame3D, book_step: usize) -> f64 {
-    let cp_warnings = validate(&doc.cp);
-    assert!(
-        cp_warnings.is_empty(),
-        "手順{book_step}: 型紙警告 {cp_warnings:?}"
-    );
-    assert!(
-        frame.warnings.is_empty(),
-        "手順{book_step}: 3D警告 {:?}",
-        frame.warnings
-    );
-    let expected = faces
-        .iter()
-        .map(|face| (face.id, face.vertices.len()))
-        .collect::<HashMap<_, _>>();
-    let actual = frame
-        .faces
-        .iter()
-        .map(|face| (face.face, face.polygon.len()))
-        .collect::<HashMap<_, _>>();
-    assert_eq!(
-        actual, expected,
-        "手順{book_step}: 面または面頂点が失われた"
-    );
-    assert!(
-        frame
-            .faces
-            .iter()
-            .flat_map(|face| &face.polygon)
-            .flatten()
-            .all(|value| value.is_finite()),
-        "手順{book_step}: 非有限な3D座標"
-    );
-    let gap = max_seam_gap(&doc.cp, faces, frame);
-    assert!(gap < 1e-6, "手順{book_step}: 裂け {gap:.9}");
-    if book_step.is_multiple_of(5) {
-        println!("手順{book_step}まで通過。max_seam_gap={gap:.3e}");
-    }
-    gap
-}
-
 fn mean_position(positions: &[[f64; 3]], vertices: &[VertexId]) -> DVec3 {
     vertices
         .iter()
@@ -572,6 +603,7 @@ struct CompletedRose {
     checkpoint11: Document,
     checkpoint21: Document,
     checkpoint29: Document,
+    artifacts: Vec<RoseStepArtifact>,
     frame29: Frame3D,
     positions29: Vec<[f64; 3]>,
     gaps: Vec<f64>,
@@ -581,8 +613,12 @@ struct CompletedRose {
 }
 
 /// 正確座標の型紙を、手順21(8枚の花びら)まで畳む。
-fn rose_through_21() -> (Document, Document, [f64; 2]) {
+fn rose_through_21() -> (Document, Document, Vec<RoseStepArtifact>) {
     let (mut doc, curves) = rose_pattern();
+    let step1 = replay_artifact(&doc, 1, 1.0);
+    let step2 = duplicate_artifact(&step1, 2);
+    let step3 = duplicate_artifact(&step2, 3);
+    let mut artifacts = vec![step1, step2, step3];
 
     let polygon = vec![
         [0.500, 0.579],
@@ -606,16 +642,16 @@ fn rose_through_21() -> (Document, Document, [f64; 2]) {
         },
         "川崎1分ローズ 手順4〜11: ねじり畳み",
     );
-    let gap11 = verify_book_frames(&doc, 4, 11);
+    for book_step in 4..=11 {
+        let progress = (book_step - 3) as f64 / 8.0;
+        artifacts.push(replay_artifact(&doc, book_step, progress));
+    }
     let checkpoint11 = doc.clone();
 
-    // 書籍の手順15・18・20で、曲線の背を開いて花びら4・6・8まで作る。
-    // 各技法の準備動作も中間フレームとして12〜21へ対応させる。
-    for (turn, range, note) in [
-        (0usize, (12usize, 17usize), "手順12〜17: 花びら1〜4"),
-        (3usize, (18usize, 18usize), "手順18: 花びら5・6"),
-        (2usize, (19usize, 20usize), "手順19〜20: 花びら7・8"),
-    ] {
+    // 原図の12〜15は1回目のつぶし折りの準備・途中・完了。16・17は
+    // 完成した花びらを押さえて拡大確認するだけなので、15の形をそのまま残す。
+    {
+        let turn = 0usize;
         let (flap, line, reference_point) = curve_flap(&doc, &curves[turn]);
         apply_technique(
             &mut doc,
@@ -628,12 +664,67 @@ fn rose_through_21() -> (Document, Document, [f64; 2]) {
                 polygon: None,
                 center: None,
             },
-            note,
+            // 既存rose-021の履歴注記はバイト互換のため維持する。16・17が
+            // 保持・拡大だけである正しい区分はRoseStepArtifact側へ記録する。
+            "手順12〜17: 花びら1〜4",
         );
-        verify_book_frames(&doc, range.0, range.1);
+        for (book_step, progress) in [(12usize, 0.25), (13, 0.50), (14, 0.75), (15, 1.0)] {
+            artifacts.push(replay_artifact(&doc, book_step, progress));
+        }
+        let step15 = artifacts.last().expect("手順15").clone();
+        let step16 = duplicate_artifact(&step15, 16);
+        artifacts.push(step16.clone());
+        artifacts.push(duplicate_artifact(&step16, 17));
     }
-    let gap21 = verify_book_frames(&doc, 21, 21);
-    (checkpoint11, doc, [gap11, gap21])
+
+    // 原図18は6枚目を作る反復操作、19は次の対象を手前へ回すだけ。
+    {
+        let turn = 3usize;
+        let (flap, line, reference_point) = curve_flap(&doc, &curves[turn]);
+        apply_technique(
+            &mut doc,
+            squash,
+            TechniqueInput {
+                flap: vec![flap],
+                line,
+                reference_point,
+                open_to_back: Some(false),
+                polygon: None,
+                center: None,
+            },
+            "手順18: 花びら5・6",
+        );
+        let step18 = replay_artifact(&doc, 18, 1.0);
+        artifacts.push(step18.clone());
+        artifacts.push(duplicate_artifact(&step18, 19));
+    }
+
+    // 原図20は8枚目を作り、21は回した後の層配置を示すだけ。
+    {
+        let turn = 2usize;
+        let (flap, line, reference_point) = curve_flap(&doc, &curves[turn]);
+        apply_technique(
+            &mut doc,
+            squash,
+            TechniqueInput {
+                flap: vec![flap],
+                line,
+                reference_point,
+                open_to_back: Some(false),
+                polygon: None,
+                center: None,
+            },
+            // 既存rose-021の履歴注記はバイト互換のため維持する。工程19が
+            // 向き変更だけである正しい区分はRoseStepArtifact側へ記録する。
+            "手順19〜20: 花びら7・8",
+        );
+        let step20 = replay_artifact(&doc, 20, 1.0);
+        artifacts.push(step20.clone());
+        artifacts.push(duplicate_artifact(&step20, 21));
+    }
+
+    assert_eq!(artifacts.len(), 21, "手順1〜21を1件ずつ収集");
+    (checkpoint11, doc, artifacts)
 }
 
 /// 手順23〜29の底の折り込み・円筒化・丸み・8枚のカールを、
@@ -642,9 +733,12 @@ fn shape_rose_to_29(
     mut doc: Document,
     checkpoint11: Document,
     checkpoint21: Document,
-    mut gaps: Vec<f64>,
+    mut artifacts: Vec<RoseStepArtifact>,
 ) -> CompletedRose {
     let (faces, mut frame, mut positions, vertices) = shared_frame(&doc);
+    doc.display.soft_enabled = true;
+    doc.display.soft_stiffness = 0.72;
+    doc.display.soft_pressure = 0.20;
     let center_vertices = (0..4)
         .map(|turn| vertex_at(&doc.cp, rotate_quarter([0.5, 0.579], turn)))
         .collect::<Vec<_>>();
@@ -667,44 +761,47 @@ fn shape_rose_to_29(
     // 折り畳まれた多層の閉ループを平面反転すると側辺が裂けるため、
     // 共有頂点のまま軸回りに曲げ、半径と高さの両方が内側へ移ることを確かめる。
     let tuck_center = center;
-    for (turns, book_step) in [(0usize..1, 23usize), (1usize..4, 24usize)] {
-        for turn in turns {
-            let corner = center_vertices[turn];
-            let before = DVec3::from(positions[corner as usize]);
-            let toward_corner = (before - tuck_center).reject_from(normal);
-            let distance = toward_corner.length();
-            assert!(distance > scale * 0.01, "底のカド{}", turn + 1);
-            let report = soft_curl::curl_vertices(
-                &mut positions,
-                &[corner],
-                &soft_curl::CurlSettings {
-                    axis_origin: tuck_center.to_array(),
-                    axis_direction: normal.cross(toward_corner).to_array(),
-                    toward_tip: toward_corner.to_array(),
-                    radius: distance * 0.55,
-                    angle_deg: 68.0,
-                },
-            )
-            .unwrap_or_else(|error| panic!("底のカド{}の折り込み: {error}", turn + 1));
-            let after = DVec3::from(positions[corner as usize]);
-            assert_eq!(report.moved_vertices, 1, "底のカド{}を動かす", turn + 1);
-            assert!(
-                planar_radius(after, tuck_center) < planar_radius(before, tuck_center) * 0.90,
-                "底のカド{}が内側へ入る",
-                turn + 1
-            );
-            assert!(
-                after.z < before.z - scale * 0.005,
-                "底のカド{}が花の内側へ入る",
-                turn + 1
-            );
-        }
-        write_shared_positions(&faces, &mut frame, &positions);
-        gaps.push(audit_soft_frame(&doc, &faces, &frame, book_step));
+    let tuck_corner = |turn: usize, positions: &mut Vec<[f64; 3]>| {
+        let corner = center_vertices[turn];
+        let before = DVec3::from(positions[corner as usize]);
+        let toward_corner = (before - tuck_center).reject_from(normal);
+        let distance = toward_corner.length();
+        assert!(distance > scale * 0.01, "底のカド{}", turn + 1);
+        let report = soft_curl::curl_vertices(
+            positions,
+            &[corner],
+            &soft_curl::CurlSettings {
+                axis_origin: tuck_center.to_array(),
+                axis_direction: normal.cross(toward_corner).to_array(),
+                toward_tip: toward_corner.to_array(),
+                radius: distance * 0.55,
+                angle_deg: 68.0,
+            },
+        )
+        .unwrap_or_else(|error| panic!("底のカド{}の折り込み: {error}", turn + 1));
+        let after = DVec3::from(positions[corner as usize]);
+        assert_eq!(report.moved_vertices, 1, "底のカド{}を動かす", turn + 1);
+        assert!(
+            planar_radius(after, tuck_center) < planar_radius(before, tuck_center) * 0.90,
+            "底のカド{}が内側へ入る",
+            turn + 1
+        );
+        assert!(
+            after.z < before.z - scale * 0.005,
+            "底のカド{}が花の内側へ入る",
+            turn + 1
+        );
+    };
+    tuck_corner(0, &mut positions);
+    write_shared_positions(&faces, &mut frame, &positions);
+    artifacts.push(soft_artifact(&doc, &frame, 23));
+    for turn in 1..4 {
+        tuck_corner(turn, &mut positions);
     }
     center = mean_position(&positions, &center_vertices);
 
-    // 手順25: 中心を持ち上げ、遷移帯で底を円筒状の壁へつなぐ。
+    // 原図24の「底を円筒にする」までをここで完了する。25はその円筒を
+    // 矢印方向から見るだけなので、同じ到達形状を別番号で保存する。
     let cup = soft_cup::radial_cup_vertices(
         &mut positions,
         &vertices,
@@ -716,13 +813,15 @@ fn shape_rose_to_29(
             height: scale * 0.20,
         },
     )
-    .expect("手順25の円筒化");
+    .expect("手順24の円筒化");
     assert!(
         cup.moved_vertices > 0 && cup.max_displacement > scale * 0.05,
         "底を円筒化できた: {cup:?}"
     );
     write_shared_positions(&faces, &mut frame, &positions);
-    gaps.push(audit_soft_frame(&doc, &faces, &frame, 25));
+    let step24 = soft_artifact(&doc, &frame, 24);
+    artifacts.push(step24.clone());
+    artifacts.push(duplicate_artifact(&step24, 25));
 
     // 手順26: 太い山折りを、より広いC2連続の丸みで滑らかにする。
     center = mean_position(&positions, &center_vertices);
@@ -743,7 +842,7 @@ fn shape_rose_to_29(
         "山折り線を滑らかにできた: {smooth:?}"
     );
     write_shared_positions(&faces, &mut frame, &positions);
-    gaps.push(audit_soft_frame(&doc, &faces, &frame, 26));
+    artifacts.push(soft_artifact(&doc, &frame, 26));
 
     // 型紙上の境界2点×4回転を8枚の先端とする。各CP頂点は最寄りの先端へ
     // 一意に割り当て、同じ頂点へ二重にカールを掛けない。
@@ -798,7 +897,7 @@ fn shape_rose_to_29(
     }
 
     let before_curl = positions.clone();
-    for (orbit, book_step) in [(0usize, 27usize), (1usize, 28usize)] {
+    for orbit in 0..2 {
         for turn in 0..4 {
             let index = orbit * 4 + turn;
             let root = vertex_at(&doc.cp, rotate_quarter([0.286, 0.822], turn));
@@ -828,7 +927,9 @@ fn shape_rose_to_29(
             );
         }
         write_shared_positions(&faces, &mut frame, &positions);
-        gaps.push(audit_soft_frame(&doc, &faces, &frame, book_step));
+        if orbit == 0 {
+            artifacts.push(soft_artifact(&doc, &frame, 27));
+        }
     }
 
     for (index, &tip) in tips.iter().enumerate() {
@@ -842,8 +943,8 @@ fn shape_rose_to_29(
         );
     }
 
-    // 手順29の最終整形: 対向する4組を、軸回り半回転で最近接の左右対称形へ
-    // そろえる。共有頂点そのものを補正するので、この仕上げでも裂けは生じない。
+    // 原図28のカールを左右対称にそろえて完成形まで仕上げる。原図29は
+    // 新しい操作のない完成図なので、この同じ形を29にも保存する。
     let symmetry_center = mean_position(&positions, &center_vertices);
     let symmetry_pairs = [
         [tips[0], tips[2]],
@@ -859,7 +960,7 @@ fn shape_rose_to_29(
             axis: normal.to_array(),
         },
     )
-    .expect("手順29の左右対称仕上げ");
+    .expect("手順28の左右対称仕上げ");
     assert_eq!(symmetry.pairs, 4);
     assert_eq!(symmetry.selected_vertices, 8);
     assert!(
@@ -867,16 +968,28 @@ fn shape_rose_to_29(
         "左右対称仕上げを適用した: {symmetry:?}"
     );
     write_shared_positions(&faces, &mut frame, &positions);
-    gaps.push(audit_soft_frame(&doc, &faces, &frame, 29));
-    doc.display.soft_enabled = true;
-    doc.display.soft_stiffness = 0.72;
-    doc.display.soft_pressure = 0.20;
+    let step28 = soft_artifact(&doc, &frame, 28);
+    artifacts.push(step28.clone());
+    artifacts.push(duplicate_artifact(&step28, 29));
+    assert_eq!(artifacts.len(), 29, "全29工程を1件ずつ収集");
+    assert!(
+        artifacts
+            .iter()
+            .enumerate()
+            .all(|(index, artifact)| artifact.book_step as usize == index + 1),
+        "工程番号が1〜29の連番"
+    );
+    let gaps = artifacts
+        .iter()
+        .map(|artifact| artifact.max_seam_gap)
+        .collect::<Vec<_>>();
     let center = mean_position(&positions, &center_vertices);
 
     CompletedRose {
         checkpoint11,
         checkpoint21,
         checkpoint29: doc,
+        artifacts,
         frame29: frame,
         positions29: positions,
         gaps,
@@ -887,7 +1000,7 @@ fn shape_rose_to_29(
 }
 
 fn complete_rose() -> CompletedRose {
-    let (checkpoint11, mut doc, rigid_gaps) = rose_through_21();
+    let (checkpoint11, mut doc, mut artifacts) = rose_through_21();
     let checkpoint21 = doc.clone();
     let curves = std::array::from_fn(|turn| {
         let spec = QUARTER.iter().find(|line| line.curved).unwrap();
@@ -899,12 +1012,15 @@ fn complete_rose() -> CompletedRose {
         arc_polyline(p[0], p[1], p[2], 0.005, Some(CURVE_SEGMENTS))
     });
     close_petal_ring(&mut doc, &curves);
-    shape_rose_to_29(
-        doc,
-        checkpoint11,
-        checkpoint21,
-        rigid_gaps.into_iter().collect(),
-    )
+    artifacts.push(replay_artifact(&doc, 22, 1.0));
+    shape_rose_to_29(doc, checkpoint11, checkpoint21, artifacts)
+}
+
+/// 原図の工程番号と1対1の到達状態。向き変更・保持・完成図だけの工程も、
+/// 直前と同じFrameを明示的に1件持つ。
+#[allow(dead_code)]
+pub(crate) fn rose_step_artifacts() -> Vec<RoseStepArtifact> {
+    complete_rose().artifacts
 }
 
 /// ori3-export側のfixture生成器からも、同じ自己完結した折りを再利用する。
@@ -919,6 +1035,17 @@ pub(crate) fn rose_checkpoint_artifacts() -> (Document, Document, Document, Fram
     )
 }
 
+#[cfg(test)]
+fn assert_same_frame(first: &Frame3D, second: &Frame3D, label: &str) {
+    assert_eq!(first.warnings, second.warnings, "{label}: 3D警告");
+    assert_eq!(first.faces.len(), second.faces.len(), "{label}: 面数");
+    for (a, b) in first.faces.iter().zip(&second.faces) {
+        assert_eq!(a.face, b.face, "{label}: 面ID");
+        assert_eq!(a.layer, b.layer, "{label}: 層番号");
+        assert_eq!(a.polygon, b.polygon, "{label}: 面頂点");
+    }
+}
+
 #[test]
 fn rose_reaches_book_step_29_with_eight_curled_petals() {
     let completed = complete_rose();
@@ -930,11 +1057,44 @@ fn rose_reaches_book_step_29_with_eight_curled_petals() {
     );
     assert_eq!(completed.checkpoint11.sequence.len(), 1, "手順11の保存点");
     assert_eq!(completed.checkpoint21.sequence.len(), 4, "手順21の保存点");
+    assert_eq!(completed.artifacts.len(), 29, "原図29工程の到達状態");
+    assert!(
+        completed
+            .artifacts
+            .iter()
+            .all(|artifact| !artifact.instruction.is_empty()),
+        "全工程に原図対応の説明がある"
+    );
+    assert!(
+        completed.artifacts.iter().all(|artifact| {
+            artifact.changes_shape == step_changes_shape(artifact.book_step as usize)
+        }),
+        "形状不変工程の判定を成果物へ残す"
+    );
+    assert_eq!(completed.gaps.len(), 29, "全工程を個別に裂け検査");
     assert!(
         completed.gaps.iter().all(|gap| *gap < 1e-6),
         "全手順で裂けが許容値未満: {:?}",
         completed.gaps
     );
+    let largest_gap = completed.gaps.iter().copied().fold(0.0_f64, f64::max);
+    println!("ローズ29工程の最大max_seam_gap={largest_gap:.3e}");
+    assert_eq!(completed.gaps[28], 0.0, "手順29の裂けは従来どおり0");
+    for &(first, second) in &[
+        (1usize, 2usize),
+        (15, 16),
+        (16, 17),
+        (18, 19),
+        (20, 21),
+        (24, 25),
+        (28, 29),
+    ] {
+        assert_same_frame(
+            &completed.artifacts[first - 1].frame,
+            &completed.artifacts[second - 1].frame,
+            &format!("形状不変の手順{first}→{second}"),
+        );
+    }
     assert_eq!(
         completed.checkpoint29.sequence.len(),
         5,

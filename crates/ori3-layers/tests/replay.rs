@@ -780,7 +780,10 @@ fn pose_step_after_flat_folds_keeps_the_solid_shape() {
     let posed = replay(&doc, 2, 1.0);
     assert!(posed.skipped.is_empty(), "警告={:?}", posed.warnings);
     let pose_hinges = resolve_driver_edges(&doc.cp, &doc.sequence[1].drivers[0]);
-    assert!(!pose_hinges.is_empty(), "Poseの論理線がヒンジへ解決されること");
+    assert!(
+        !pose_hinges.is_empty(),
+        "Poseの論理線がヒンジへ解決されること"
+    );
     for hinge in pose_hinges {
         let angle = posed
             .hinge_angles
@@ -799,10 +802,10 @@ fn pose_step_after_flat_folds_keeps_the_solid_shape() {
 /// SIM-009: 記録する「仕上げの角度」を丸めてはいけない。
 ///
 /// 頂点のまわりを1周する折り線の角度は互いに厳密な関係(ループ閉包)で結ばれて
-/// いるため、少しでも丸めると関係が崩れ、再生のたびに
-/// 「追従計算が収束していません」の警告が出る(形の見た目は変わらないので
-/// 気づきにくい)。ソルバーの収束判定は残差RMS 1e-13で、小数9桁に丸めても
-/// 桁が足りない。フロント側(poseStep.ts)はf64のまま書き出す。
+/// いるため、丸めた角度は記録元とは別の形を表す。SIM-018ではPoseをsoft target
+/// として閉じた形へ追従させるので、丸めたPoseも収束し得る。そこで警告の有無では
+/// なく、保存された明示角をf64のまま保持することと、丸めれば再現形が変わることを
+/// 直接確かめる。
 #[test]
 fn pose_step_angles_must_not_be_rounded() {
     // 1点から出る4本の折り線 = 4次の頂点(1自由度の剛体折り。閉じたループを持つ)。
@@ -852,7 +855,7 @@ fn pose_step_angles_must_not_be_rounded() {
     );
     assert!(solved.converged, "出発点となる形は収束しているはず");
 
-    // その形をPoseステップとして記録し、再生する。丸め幅ごとに警告の有無を見る
+    // その形をPoseステップとして記録し、丸め幅ごとの明示目標と再現形を見る
     let record = |digits: Option<i32>| -> ReplayResult {
         let mut doc = doc.clone();
         doc.sequence.push(FoldStep {
@@ -882,26 +885,60 @@ fn pose_step_angles_must_not_be_rounded() {
         });
         replay(&doc, 1, 1.0)
     };
-    let unconverged = |r: &ReplayResult| {
-        r.warnings
+    let target_angle = |result: &ReplayResult, hinge| {
+        result
+            .sequence_targets
             .iter()
-            .chain(r.frame.warnings.iter())
-            .any(|w| w.contains("収束"))
+            .find(|driver| driver.hinge == hinge)
+            .expect("Poseの明示角が再生結果に残ること")
+            .target_angle_deg
+    };
+    let pose_error = |result: &ReplayResult| {
+        halves
+            .iter()
+            .map(|&seg| {
+                let hinge = hinge_of(seg);
+                (result.hinge_angles[&hinge] - solved.angles[&hinge]).abs()
+            })
+            .fold(0.0_f64, f64::max)
     };
 
     let exact = record(None);
     assert!(
-        !unconverged(&exact),
-        "丸めずに記録すれば警告は出ない: {:?}",
-        exact.warnings
+        exact.converged && exact.closure_rms < 1e-13,
+        "丸めていないPoseは閉じた形として再生できる: rms={}",
+        exact.closure_rms
     );
-    // 丸めると(かつては小数3桁だった)ループが閉じず、毎回の再生で警告が出る。
-    // 小数9桁でも収束判定(残差RMS 1e-13)には足りない
+    for &seg in &halves {
+        let hinge = hinge_of(seg);
+        assert_eq!(
+            target_angle(&exact, hinge).to_bits(),
+            solved.angles[&hinge].to_bits(),
+            "hinge {hinge}: Poseの明示角を1ビットも丸めない"
+        );
+    }
+    let exact_error = pose_error(&exact);
+    assert!(
+        exact_error < 1e-9,
+        "丸めていないPoseは記録元の形を再現する: 最大角度差={exact_error}"
+    );
+
+    // Poseはsoftなので丸めた入力も閉じた形へ追従するが、記録元と同じ形ではない。
     for digits in [3, 9] {
         let rounded = record(Some(digits));
         assert!(
-            unconverged(&rounded),
-            "小数{digits}桁に丸めると警告が出る(だから丸めない)"
+            rounded.converged && rounded.closure_rms < 1e-13,
+            "小数{digits}桁へ丸めてもsoft targetとして閉じた形へ追従する: rms={}",
+            rounded.closure_rms
+        );
+        assert!(
+            pose_error(&rounded) > exact_error,
+            "小数{digits}桁への丸めは記録元とは異なる角度の形になる"
+        );
+        assert_ne!(
+            frame_bits(&rounded.frame),
+            frame_bits(&exact.frame),
+            "小数{digits}桁への丸めを同じ仕上げ形として扱わない"
         );
     }
 }
