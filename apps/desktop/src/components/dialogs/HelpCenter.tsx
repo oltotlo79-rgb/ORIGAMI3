@@ -156,19 +156,34 @@ export function HelpCenter() {
         </header>
 
         <aside className="help-sidebar">
-          <label className="help-search">
-            <span>章題・本文を検索</span>
+          <div className="help-search">
+            <label htmlFor="help-search-input">章題・本文を検索</label>
             <span className="help-search-control">
               <span aria-hidden="true">⌕</span>
               <input
+                id="help-search-input"
                 ref={searchRef}
                 type="search"
                 value={query}
                 placeholder="例: 曲線、保存、F1"
                 onChange={(event) => setQuery(event.target.value)}
               />
+              {query && (
+                <button
+                  type="button"
+                  className="help-search-clear"
+                  aria-label="検索語を消す"
+                  data-tooltip="入力した検索語を消します"
+                  onClick={() => {
+                    setQuery("");
+                    searchRef.current?.focus();
+                  }}
+                >
+                  <span aria-hidden="true">×</span>
+                </button>
+              )}
             </span>
-          </label>
+          </div>
           <div className="help-result-count" aria-live="polite">
             {normalizedQuery ? `${matches.length}章が見つかりました` : `全${HELP_CHAPTERS.length}章`}
           </div>

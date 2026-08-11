@@ -38,8 +38,6 @@ const REFERENCE_HIGHLIGHT_COLOR = 0x40cfff;
 const FOCUS_HIGHLIGHT_COLOR = 0xed5c70;
 /** 補正後にも残る食い込みの原因候補。選択の黄色・水色と明確に分ける。 */
 const SUSPECT_HIGHLIGHT_COLOR = 0xff2038;
-/** 希望角を譲って自然追従した折り目(琥珀)。 */
-const RELAXED_HIGHLIGHT_COLOR = 0xd97706;
 /** いま利用者が角度を固定して動かしている折り目(水色)。 */
 const ACTIVE_HIGHLIGHT_COLOR = 0x40cfff;
 /** 折った結果の下見(実行前プレビュー)の色。動く紙と分かるよう青系にする */
@@ -507,7 +505,7 @@ export interface Viewer3DScene {
 
 /** 強調線分。role省略時は従来どおり操作対象の黄色で描く。 */
 export interface HighlightSegment extends HingeSegment {
-  role?: "hinge" | "reference" | "focus" | "suspect" | "relaxed" | "active";
+  role?: "hinge" | "reference" | "focus" | "suspect" | "active";
 }
 
 /** 面・線1つ分の資源を破棄する */
@@ -609,10 +607,6 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
     color: SUSPECT_HIGHLIGHT_COLOR,
     depthTest: false,
   });
-  const relaxedHighlightMaterial = new THREE.MeshBasicMaterial({
-    color: RELAXED_HIGHLIGHT_COLOR,
-    depthTest: false,
-  });
   const activeHighlightMaterial = new THREE.MeshBasicMaterial({
     color: ACTIVE_HIGHLIGHT_COLOR,
     depthTest: false,
@@ -690,36 +684,23 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
         mesh.material =
           seg.role === "suspect"
             ? suspectHighlightMaterial
-            : seg.role === "relaxed"
-              ? relaxedHighlightMaterial
-              : seg.role === "active"
-                ? activeHighlightMaterial
-            : seg.role === "reference"
-            ? referenceHighlightMaterial
-            : seg.role === "focus"
-              ? focusHighlightMaterial
-              : highlightMaterial;
-        // 食い込みの赤を最優先、操作中の水色を芯、追従の琥珀を外周にする。
-        mesh.renderOrder =
-          seg.role === "suspect"
-            ? 7
             : seg.role === "active"
-              ? 6
-              : seg.role === "focus"
-                ? 5
-                : seg.role === "relaxed"
-                  ? 4
-                  : 5;
+              ? activeHighlightMaterial
+              : seg.role === "reference"
+                ? referenceHighlightMaterial
+                : seg.role === "focus"
+                  ? focusHighlightMaterial
+                  : highlightMaterial;
+        // 食い込みの赤を最優先し、操作中は水色で示す。
+        mesh.renderOrder = seg.role === "suspect" ? 7 : seg.role === "active" ? 6 : 5;
         mesh.position.copy(seg.a);
         mesh.quaternion.setFromUnitVectors(AXIS_Y, dir.normalize());
         const thickness =
           seg.role === "suspect"
             ? 2
-            : seg.role === "relaxed"
-              ? 1.65
-              : seg.role === "focus"
-                ? 1.45
-                : 1;
+            : seg.role === "focus"
+              ? 1.45
+              : 1;
         mesh.scale.set(thickness, length, thickness);
         mesh.visible = true;
         used++;
@@ -772,7 +753,6 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
       referenceHighlightMaterial.dispose();
       focusHighlightMaterial.dispose();
       suspectHighlightMaterial.dispose();
-      relaxedHighlightMaterial.dispose();
       activeHighlightMaterial.dispose();
       renderer.dispose();
     },

@@ -1436,26 +1436,43 @@ export const useAppStore = create<AppState>((set, get) => {
   };
 
   /**
-   * 履歴から取り出したdriversへ戻し、その形を計算し直す(元に戻す/やり直し)。
-   * 指定が消えた折り線は前回の計算結果(warm start)を引き継いで折れたまま
-   * 残るので、その分だけ0度(平ら)を明示して送る(clearDriverと同じ考え方)。
+   * 履歴から取り出したdriversへ戻し、その形を展開図と手順から作り直す。
+   * 追従角や3D頂点は履歴へ保存せず、手順なしなら平ら、手順ありなら再生結果を
+   * 明示的なwarm seedにして解く。Rust側に残った直前解を出発点にしないため、
+   * 未指定の折り目もundo/redo先の状態へ確実に戻る。
    */
-  const applyAngleSnapshot = (next: ReadonlyMap<number, number>): void => {
-    const before = get().drivers;
+  const applyAngleSnapshot = async (
+    next: ReadonlyMap<number, number>,
+  ): Promise<void> => {
     const drivers = new Map(next);
     set({ drivers });
     cancelAngleIntent();
+    const restoreGeneration = get().angleIntentGeneration;
     pose.clearAll(); // 予約済みの間引き計算は古い指定なので捨てる
-    if (drivers.size === 0) {
-      void requestPoseSolve(flatDrivers(get().hinges));
-      return;
+
+    const s = get();
+    const total = s.doc?.sequence.length ?? 0;
+    let warmSeed: Driver[];
+    if (total > 0) {
+      const upTo = s.currentStep ?? total;
+      const t = s.currentStep === null ? 1 : s.playT;
+      await runReplay(upTo, t);
+      // 連打中に次のundo/redoや新しい角度操作が始まった古い復元は打ち切る。
+      if (restoreGeneration !== get().angleIntentGeneration) return;
+      if (get().errorMessage !== null) return;
+      // driverが無ければ、手順再生の形がそのまま復元結果になる。
+      if (drivers.size === 0) return;
+      warmSeed = driverList(new Map(get().poseAngles));
+    } else {
+      warmSeed = flatDrivers(s.hinges);
     }
-    const flattened = [...before.keys()]
-      .filter((hinge) => !drivers.has(hinge))
-      .map((hinge) => ({ hinge, target_angle_deg: 0 }));
-    void requestPoseSolve(
-      flattened,
-      preferredWithout(flattened.map((driver) => driver.hinge)),
+
+    await requestPoseSolve(
+      [],
+      preferredWithout([]),
+      false,
+      true,
+      warmSeed,
     );
   };
 
@@ -2104,7 +2121,7 @@ export const useAppStore = create<AppState>((set, get) => {
           ),
           errorMessage: null,
         });
-        applyAngleSnapshot(prev);
+        await applyAngleSnapshot(prev);
         return;
       }
       await runViewCommand(() => ipc.editUndo(), false);
@@ -2137,7 +2154,7 @@ export const useAppStore = create<AppState>((set, get) => {
         ),
         errorMessage: null,
       });
-      applyAngleSnapshot(next);
+      await applyAngleSnapshot(next);
     },
 
     applySequenceOp: (op) => {

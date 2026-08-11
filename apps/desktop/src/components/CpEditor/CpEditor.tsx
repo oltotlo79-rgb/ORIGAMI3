@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import type { Vec2 } from "../../lib/types";
-import { relaxationNotices, useAppStore } from "../../store/appStore";
+import { useAppStore } from "../../store/appStore";
 import { clipToPaper, CONSTRUCT_STEPS, constructHint } from "../../lib/construct";
 import {
   curveHint,
@@ -88,7 +88,6 @@ export function CpEditor({ fitRef }: Props) {
   const selection = useAppStore((s) => s.selection);
   const hoveredHinge = useAppStore((s) => s.hoveredHinge);
   const suspectHinges = useAppStore((s) => s.suspectHinges);
-  const relaxations = useAppStore((s) => s.relaxations);
   const activeAngleIntent = useAppStore((s) => s.activeAngleIntent);
   const activeTool = useAppStore((s) => s.activeTool);
   const docEpoch = useAppStore((s) => s.docEpoch);
@@ -115,7 +114,6 @@ export function CpEditor({ fitRef }: Props) {
       mirrorAxis,
       hoveredHinge,
       suspectHinges,
-      relaxations,
       activeAngleIntent,
     } = useAppStore.getState();
     if (!canvas) return;
@@ -224,7 +222,6 @@ export function CpEditor({ fitRef }: Props) {
         .crease_segments,
       hoveredHinge,
       suspectHinges,
-      relaxedHinges: relaxationNotices(relaxations).map((item) => item.hinge),
       activeHinges: activeAngleIntent?.hinges ?? [],
     };
     if (captureClean) {
@@ -244,7 +241,6 @@ export function CpEditor({ fitRef }: Props) {
       overlay.suggestedCreases = undefined;
       overlay.hoveredHinge = null;
       overlay.suspectHinges = [];
-      overlay.relaxedHinges = [];
       overlay.activeHinges = [];
     }
     const ctx2d = canvas.getContext("2d");
@@ -296,7 +292,6 @@ export function CpEditor({ fitRef }: Props) {
     selection,
     hoveredHinge,
     suspectHinges,
-    relaxations,
     activeAngleIntent,
     activeTool,
     violations,

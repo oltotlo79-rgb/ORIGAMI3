@@ -14,6 +14,7 @@
 import { useAppStore } from "../store/appStore";
 import { ColorPickerPopover } from "./ColorPickerPopover";
 import { MirrorAxisControls } from "./MirrorAxisControls";
+import { NumberStepper } from "./NumberStepper";
 import {
   MAX_DIVISIONS,
   MIN_DIVISIONS,
@@ -322,8 +323,7 @@ export function PaperAppearance() {
         </div>
         <label className="grid-division-custom">
           自由に指定
-          <input
-            type="number"
+          <NumberStepper
             aria-label="方眼の細かさ（1辺の等分数）"
             data-tooltip="1辺を何等分する方眼にするか指定します"
             min={MIN_DIVISIONS}

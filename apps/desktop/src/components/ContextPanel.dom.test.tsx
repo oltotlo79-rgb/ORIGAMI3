@@ -189,6 +189,48 @@ describe("複数の折り目の角度(SIM-001)", () => {
     expect([drivers.get(5), drivers.get(7), drivers.get(9)]).toEqual([46, 46, 46]);
   });
 
+  it("テーマ共通の上下ボタンと入力欄の矢印キーで角度を確定し、上下限を越えない", () => {
+    seed(new Map([[5, 30]]));
+    const original = useAppStore.getState().finishAngleIntent;
+    const finishAngleIntent = vi.fn(async () => {});
+    useAppStore.setState({ finishAngleIntent });
+    render(<ContextPanel />);
+
+    const input = screen.getByLabelText("折り目 #5の角度（数値）");
+    const increase = screen.getByRole("button", {
+      name: "折り目 #5の角度（数値）を増やす",
+    });
+    const decrease = screen.getByRole("button", {
+      name: "折り目 #5の角度（数値）を減らす",
+    });
+
+    increase.focus();
+    expect(document.activeElement).toBe(increase);
+    expect(increase.getAttribute("data-tooltip")).toContain("Shift");
+    expect(increase.hasAttribute("title")).toBe(false);
+
+    fireEvent.click(increase);
+    expect(useAppStore.getState().drivers.get(5)).toBe(31);
+    expect(input).toHaveProperty("value", "31");
+
+    fireEvent.click(decrease, { shiftKey: true });
+    expect(useAppStore.getState().drivers.get(5)).toBe(21);
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(useAppStore.getState().drivers.get(5)).toBe(22);
+
+    fireEvent.change(input, { target: { value: "180" } });
+    fireEvent.click(increase);
+    expect(useAppStore.getState().drivers.get(5)).toBe(180);
+    expect(input).toHaveProperty("value", "180");
+
+    fireEvent.change(input, { target: { value: "-180" } });
+    fireEvent.click(decrease);
+    expect(useAppStore.getState().drivers.get(5)).toBe(-180);
+    expect(input).toHaveProperty("value", "-180");
+    expect(finishAngleIntent).toHaveBeenCalledTimes(3);
+    useAppStore.setState({ finishAngleIntent: original });
+  });
+
   it("数値入力はEnterなしで反映し、Enterでは最終値を丸める", () => {
     seed(new Map([[5, 30]]));
     render(<ContextPanel />);

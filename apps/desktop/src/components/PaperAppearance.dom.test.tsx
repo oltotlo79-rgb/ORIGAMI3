@@ -169,6 +169,36 @@ describe("紙の色と方眼", () => {
     expect(useAppStore.getState().display.grid_divisions).toBe(1024);
     expect(input).toHaveProperty("max", "1024");
   });
+
+  it("方眼の自由指定は上下ボタンで1ずつ変わり、上下限を越えない", () => {
+    render(<PaperAppearance />);
+    const input = screen.getByLabelText(
+      "方眼の細かさ（1辺の等分数）",
+    ) as HTMLInputElement;
+    const increment = screen.getByRole("button", {
+      name: "方眼の細かさ（1辺の等分数）を増やす",
+    });
+    const decrement = screen.getByRole("button", {
+      name: "方眼の細かさ（1辺の等分数）を減らす",
+    });
+
+    fireEvent.click(increment);
+    expect(input.value).toBe("9");
+    expect(useAppStore.getState().display.grid_divisions).toBe(9);
+    fireEvent.click(decrement);
+    expect(input.value).toBe("8");
+    expect(useAppStore.getState().display.grid_divisions).toBe(8);
+
+    fireEvent.change(input, { target: { value: "2" } });
+    fireEvent.click(decrement);
+    expect(input.value).toBe("2");
+    expect(useAppStore.getState().display.grid_divisions).toBe(2);
+
+    fireEvent.change(input, { target: { value: "1024" } });
+    fireEvent.click(increment);
+    expect(input.value).toBe("1024");
+    expect(useAppStore.getState().display.grid_divisions).toBe(1024);
+  });
 });
 
 describe("展開図のホイール動作", () => {

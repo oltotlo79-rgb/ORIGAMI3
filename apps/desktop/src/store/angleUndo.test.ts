@@ -85,6 +85,9 @@ beforeEach(() => {
     faces: FACES,
     hinges: new Set([5, 7]),
     drivers: new Map(),
+    angleUndoStack: [],
+    angleRedoStack: [],
+    docUndoDepth: 0,
     poseAngles: new Map(),
     frame3d: null,
     playing: false,
@@ -205,18 +208,182 @@ describe("折り角度の元に戻す/やり直し", () => {
     expect(useAppStore.getState().angleRedoStack).toHaveLength(0);
   });
 
-  it("戻して指定が減った折り線には0度を明示して形を作り直す", async () => {
-    const store = useAppStore.getState();
-    store.setDriverAngle(5, 90);
-    await settle();
-    store.setDriverAngle(7, 45);
-    await settle();
-    vi.mocked(ipc.poseSolve).mockClear();
+  it("追従した全角度と3D高さをcold startから複数回undo/redoして再現する", async () => {
+    const allHinges = [5, 7, 9];
+    let warmAngles = new Map<number, number>([
+      [5, 90],
+      [7, 30],
+      [9, -15],
+    ]);
+
+    const solvedFrom = (driverAngle: number): SolveResult => {
+      const followed = driverAngle / 3;
+      const opposite = -driverAngle / 6;
+      return {
+        frame: {
+          faces: [
+            {
+              face: 0,
+              polygon: [
+                [0, 0, 0],
+                [1, 0, Math.abs(followed) / 5],
+                [0, 1, 0],
+              ],
+              layer: 0,
+            },
+          ],
+          warnings: [],
+        },
+        converged: true,
+        angles: { 5: driverAngle, 7: followed, 9: opposite },
+        iterations: 1,
+      };
+    };
+
+    vi.mocked(ipc.poseSolve).mockImplementation(
+      async (_hard, preferred, _soft, warmSeed) => {
+        const cold = warmSeed?.length === allHinges.length;
+        if (cold) {
+          warmAngles = new Map(
+            warmSeed.map((driver) => [driver.hinge, driver.target_angle_deg]),
+          );
+        }
+        const target = preferred?.find((driver) => driver.hinge === 5)?.target_angle_deg ?? 0;
+        if (cold) {
+          const solved = solvedFrom(target);
+          warmAngles = new Map(
+            Object.entries(solved.angles).map(([hinge, angle]) => [Number(hinge), angle]),
+          );
+          return solved;
+        }
+
+        // 旧経路の再現: preferredだけを戻しても、未指定ヒンジ7/9は
+        // 前のwarm startを引き継ぎ、変形したまま残る。
+        warmAngles.set(5, target);
+        const height = Math.abs(warmAngles.get(7) ?? 0) / 5;
+        return {
+          frame: {
+            faces: [
+              {
+                face: 0,
+                polygon: [
+                  [0, 0, 0],
+                  [1, 0, height],
+                  [0, 1, 0],
+                ],
+                layer: 0,
+              },
+            ],
+            warnings: [],
+          },
+          converged: true,
+          angles: Object.fromEntries(warmAngles),
+          iterations: 1,
+        };
+      },
+    );
+
+    useAppStore.setState({
+      hinges: new Set(allHinges),
+      drivers: new Map([[5, 90]]),
+      angleUndoStack: [new Map([[5, 30]]), new Map([[5, 60]])],
+      angleRedoStack: [],
+      poseAngles: new Map(warmAngles),
+      frame3d: solvedFrom(90).frame,
+    });
+
+    const zSpread = () => {
+      const zs = (useAppStore.getState().frame3d?.faces ?? []).flatMap((face) =>
+        face.polygon.map((point) => point[2]),
+      );
+      return zs.length === 0 ? 0 : Math.max(...zs) - Math.min(...zs);
+    };
+    const expectShape = (driverAngle: number) => {
+      expect(Object.fromEntries(useAppStore.getState().poseAngles)).toEqual({
+        5: driverAngle,
+        7: driverAngle / 3,
+        9: -driverAngle / 6,
+      });
+      expect(zSpread()).toBeCloseTo(Math.abs(driverAngle / 3) / 5, 10);
+    };
 
     await useAppStore.getState().undo();
     await settle();
-    const [hard, keep] = vi.mocked(ipc.poseSolve).mock.calls[0];
-    expect(hard).toEqual([{ hinge: 7, target_angle_deg: 0 }]);
-    expect(keep).toEqual([{ hinge: 5, target_angle_deg: 90 }]);
+    expectShape(60);
+    await useAppStore.getState().undo();
+    await settle();
+    expectShape(30);
+    await useAppStore.getState().redo();
+    await settle();
+    expectShape(60);
+    await useAppStore.getState().redo();
+    await settle();
+    expectShape(90);
+  });
+
+  it("保存済み手順がある角度undoは平らにせず、手順から基準形を再生する", async () => {
+    const sequenceDoc: Document = {
+      ...DOC,
+      sequence: [
+        {
+          id: 1,
+          kind: "Simple",
+          drivers: [{ a: [0, 0], b: [1, 1], target_angle_deg: 60 }],
+          layer_order: null,
+          note: "",
+        },
+      ],
+    };
+    const replayFrame = {
+      faces: [
+        {
+          face: 0,
+          polygon: [
+            [0, 0, 0],
+            [1, 0, 4],
+            [0, 1, 0],
+          ] as [number, number, number][],
+          layer: 0,
+        },
+      ],
+      warnings: [],
+    };
+    vi.mocked(ipc.sequenceReplay).mockResolvedValue({
+      frame: replayFrame,
+      skipped: [],
+      warnings: [],
+      sequence_targets: [{ hinge: 5, target_angle_deg: 60 }],
+      angles: { 5: 60, 7: 20, 9: -10 },
+      converged: true,
+    });
+    vi.mocked(ipc.poseSolve).mockClear();
+    useAppStore.setState({
+      doc: sequenceDoc,
+      hinges: new Set([5, 7, 9]),
+      drivers: new Map([[7, 90]]),
+      angleUndoStack: [new Map()],
+      angleRedoStack: [],
+      currentStep: null,
+      playT: 1,
+      poseAngles: new Map([
+        [5, 60],
+        [7, 90],
+        [9, -25],
+      ]),
+    });
+
+    await useAppStore.getState().undo();
+
+    expect(vi.mocked(ipc.sequenceReplay)).toHaveBeenCalledWith(1, 1, null);
+    expect(vi.mocked(ipc.poseSolve)).not.toHaveBeenCalled();
+    expect(Object.fromEntries(useAppStore.getState().poseAngles)).toEqual({
+      5: 60,
+      7: 20,
+      9: -10,
+    });
+    const zs = useAppStore
+      .getState()
+      .frame3d?.faces.flatMap((face) => face.polygon.map((point) => point[2]));
+    expect(Math.max(...(zs ?? [0])) - Math.min(...(zs ?? [0]))).toBe(4);
   });
 });

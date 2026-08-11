@@ -3,6 +3,7 @@
 // 決めた形はその場で見本の四角に映す(結果をプレビューで見せる。設計原則3b)。
 
 import { draftToPaper, useAppStore } from "../../store/appStore";
+import { NumberStepper } from "../NumberStepper";
 
 /** よく使う紙の大きさ(mm)。押すとその大きさが入る */
 export const PAPER_PRESETS: { label: string; width: number; height: number }[] = [
@@ -63,10 +64,11 @@ export function NewDocumentDialog() {
         <div className="new-paper-row">
           <label>
             よこ(mm)
-            <input
-              type="number"
+            <NumberStepper
+              aria-label="紙の横の長さ（mm）"
               min={1}
               max={2000}
+              step={1}
               data-tooltip="紙の横の長さをmmで入力します"
               value={draft.widthMm}
               onChange={(e) => setDraft({ widthMm: Number(e.target.value) })}
@@ -74,10 +76,11 @@ export function NewDocumentDialog() {
           </label>
           <label>
             たて(mm)
-            <input
-              type="number"
+            <NumberStepper
+              aria-label="紙の縦の長さ（mm）"
               min={1}
               max={2000}
+              step={1}
               value={draft.square ? draft.widthMm : draft.heightMm}
               disabled={draft.square}
               data-tooltip={

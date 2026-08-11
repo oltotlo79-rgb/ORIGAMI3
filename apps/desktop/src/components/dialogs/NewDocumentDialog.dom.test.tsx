@@ -48,6 +48,29 @@ describe("新規作成ダイアログ", () => {
     expect(useAppStore.getState().newPaperDraft.heightMm).toBe(100);
   });
 
+  it("横の上下ボタンは1mmずつ変わり、正方形では縦の上下ボタンも無効になる", () => {
+    useAppStore.setState({ newDialogOpen: true });
+    render(<NewDocumentDialog />);
+
+    const width = screen.getByLabelText("紙の横の長さ（mm）") as HTMLInputElement;
+    fireEvent.click(screen.getByRole("button", { name: "紙の横の長さ（mm）を増やす" }));
+    expect(width.value).toBe("151");
+    expect(useAppStore.getState().newPaperDraft.widthMm).toBe(151);
+
+    fireEvent.click(screen.getByRole("button", { name: "紙の横の長さ（mm）を減らす" }));
+    expect(width.value).toBe("150");
+    expect(useAppStore.getState().newPaperDraft.widthMm).toBe(150);
+
+    expect(
+      (screen.getByRole("button", { name: "紙の縦の長さ（mm）を増やす" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "紙の縦の長さ（mm）を減らす" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
   it("よく使う大きさを押すとその大きさが入る", () => {
     useAppStore.setState({ newDialogOpen: true });
     render(<NewDocumentDialog />);

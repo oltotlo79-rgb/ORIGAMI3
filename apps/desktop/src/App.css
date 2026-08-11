@@ -55,7 +55,6 @@
   --color-warning-surface: rgba(255, 245, 194, 0.9);
   --color-warning-border: rgba(150, 80, 0, 0.22);
   /* 作品の状態を示す意味色。全テーマで同じ意味を保ち、部品側の直書きを避ける。 */
-  --color-relaxation: #d97706;
   --color-collision-surface: rgba(127, 15, 29, 0.94);
   --color-collision-surface-hover: #a31125;
   --color-collision-border: rgba(255, 255, 255, 0.92);
@@ -1185,6 +1184,50 @@ input[type="radio"] {
   margin: 0;
 }
 
+/* OS標準spinnerの代わりに、全テーマ共通の押しやすい増減操作を置く。 */
+.number-stepper {
+  display: inline-flex;
+  align-items: stretch;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.number-stepper-input {
+  min-width: 0;
+}
+
+.number-stepper-controls {
+  display: inline-grid;
+  grid-template-columns: repeat(2, 32px);
+  gap: var(--sp-1);
+}
+
+.app .number-stepper-button {
+  display: grid;
+  place-items: center;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: var(--control-border-width) solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-sunken);
+  color: var(--color-text-muted);
+  box-shadow: var(--shadow-tool-small);
+  font-size: var(--fs-xs);
+  line-height: 1;
+}
+
+.app .number-stepper-button:hover:not(:disabled) {
+  border-color: var(--button-hover-border);
+  background: var(--button-hover-background);
+  color: var(--button-hover-color);
+  box-shadow: var(--shadow-button-hover);
+}
+
+.app .number-stepper-button:active:not(:disabled) {
+  box-shadow: var(--shadow-button-active);
+}
+
 .app input[type="search"] {
   appearance: none;
 }
@@ -2173,6 +2216,21 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 .status-badge.error {
   background: var(--color-danger);
   box-shadow: var(--shadow-status-danger);
+}
+
+/* 自然追従は警告ではなく補助情報なので、作品より目立たない札にする。 */
+.status-badge.follow {
+  border-color: var(--color-border);
+  background: var(--color-surface-raised);
+  color: var(--color-text-muted);
+  font-weight: 400;
+  letter-spacing: 0;
+  box-shadow: var(--shadow-1);
+}
+
+.status-badge.follow .status-icon {
+  opacity: 0.55;
+  filter: none;
 }
 
 /* 食い込み候補の案内。押すと最初の赤い折り目を選び、既存の角度欄へつなぐ。 */
@@ -3639,9 +3697,9 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 
 .actual-angle {
   display: inline;
-  color: var(--color-warn);
+  color: var(--color-text-muted);
   font-size: var(--fs-xs);
-  font-weight: var(--fw-bold);
+  font-weight: 400;
   line-height: var(--lh-tight);
   white-space: nowrap;
 }
@@ -3715,7 +3773,7 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   font-weight: var(--fw-medium);
 }
 
-/* 希望角を譲った折り目は、既存の警告欄から選択・ホバーできる行として示す。 */
+/* 追従した角度は、既存の通知欄から選択できる控えめな行として示す。 */
 .relaxation-messages {
   display: grid;
   gap: var(--sp-1);
@@ -3725,13 +3783,12 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 .relaxation-message {
   width: 100%;
   padding: var(--sp-1) var(--sp-2);
-  border: 1px solid transparent;
-  border-left: 5px solid var(--color-relaxation);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--color-warn);
+  color: var(--color-text-muted);
   font-size: var(--fs-sm);
-  font-weight: var(--fw-medium);
+  font-weight: 400;
   line-height: var(--lh-normal);
   text-align: left;
   font-variant-numeric: tabular-nums;
@@ -3740,16 +3797,19 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 
 .relaxation-message:hover,
 .relaxation-message:focus-visible {
-  border-color: var(--color-warning-border);
-  border-left-color: var(--color-relaxation);
-  background: var(--color-pop-yellow-soft);
+  border-color: var(--color-border-strong);
+  background: var(--color-control-hover);
   outline: none;
 }
 
+.relaxation-message:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
 .relaxation-more {
-  color: var(--color-warn);
+  color: var(--color-text-muted);
   font-size: var(--fs-sm);
-  font-weight: var(--fw-bold);
+  font-weight: 400;
 }
 
 /* 復旧ダイアログ(SYS-003)。常設4区画の上に重ねて出す */
@@ -3944,7 +4004,7 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   border-right: var(--panel-border-width) solid var(--color-border);
 }
 
-.help-search > span:first-child {
+.help-search > label {
   display: block;
   margin-bottom: var(--sp-2);
   color: var(--color-text-muted);
@@ -3982,6 +4042,18 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   outline: 0;
   background: transparent;
   color: var(--color-text);
+  box-shadow: none;
+}
+
+.app .help-search-clear {
+  flex: 0 0 auto;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border-color: var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-sunken);
+  color: var(--color-text-muted);
   box-shadow: none;
 }
 

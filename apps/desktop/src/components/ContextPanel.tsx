@@ -43,6 +43,7 @@ import { PaperAppearance } from "./PaperAppearance";
 import { MirrorAxisControls } from "./MirrorAxisControls";
 import { mirrorAxisLabel } from "../lib/mirror";
 import { OperationSteps } from "./OperationSteps";
+import { NumberStepper } from "./NumberStepper";
 
 const KIND_LABEL: Record<EdgeKind, string> = {
   Border: "輪郭",
@@ -127,9 +128,8 @@ function AngleNumberInput({
   };
 
   return (
-    <input
+    <NumberStepper
       ref={inputRef}
-      type="number"
       className="angle-number"
       aria-label={ariaLabel}
       data-tooltip={`${ariaLabel}を-180°から180°で指定します`}
@@ -144,6 +144,10 @@ function AngleNumberInput({
           // スライダーと同じストア操作へ送り、16ms間引きの3D追従に乗せる
           onValue(entered);
         }
+      }}
+      onStepComplete={() => {
+        editedRef.current = false;
+        onFinish();
       }}
       onBlur={() => {
         commit();
@@ -751,6 +755,7 @@ function FoldThroughProposalContent({ pending }: { pending: PendingFoldThrough }
  */
 function NumberInput({
   id,
+  ariaLabel,
   value,
   min,
   max,
@@ -759,6 +764,7 @@ function NumberInput({
   normalizeOnCommit,
 }: {
   id: string;
+  ariaLabel: string;
   value: number;
   min: number;
   max?: number;
@@ -789,11 +795,11 @@ function NumberInput({
   };
 
   return (
-    <input
+    <NumberStepper
       ref={inputRef}
       id={id}
-      type="number"
       className="angle-number"
+      aria-label={ariaLabel}
       min={min}
       max={max}
       step={1}
@@ -805,6 +811,7 @@ function NumberInput({
           onPreview(entered);
         }
       }}
+      onStepComplete={commit}
       onBlur={commit}
       onKeyDown={(e) => {
         if (e.key === "Enter") commit();
@@ -873,6 +880,7 @@ function TechniqueLayerPicker({ draft }: { draft: TechniqueDraft }) {
         <label htmlFor="technique-layer-count">N(枚数・奥行き)</label>
         <NumberInput
           id="technique-layer-count"
+          ariaLabel="対象層の枚数"
           value={draft.flapPickCount}
           min={1}
           max={Math.max(1, candidates.length)}
@@ -1065,6 +1073,7 @@ function LayerMotionDraftContent({ draft }: { draft: TechniqueDraft }) {
               <label htmlFor="layer-motion-anchor">基準面ID</label>
               <NumberInput
                 id="layer-motion-anchor"
+                ariaLabel="基準面ID"
                 value={draft.motionAnchor}
                 min={0}
                 onPreview={(v) => updateTechniqueDraft({ motionAnchor: v })}
@@ -1239,6 +1248,7 @@ function NamedTechniqueDraftContent({ draft }: { draft: TechniqueDraft }) {
             <label htmlFor="pleat-width">段の幅(mm)</label>
             <NumberInput
               id="pleat-width"
+              ariaLabel="段の幅（mm）"
               value={draft.widthMm}
               min={0.1}
               onPreview={(v) => updateTechniqueDraft({ widthMm: v })}
@@ -1251,6 +1261,7 @@ function NamedTechniqueDraftContent({ draft }: { draft: TechniqueDraft }) {
             <label htmlFor="twist-deg">ねじる角(度)</label>
             <NumberInput
               id="twist-deg"
+              ariaLabel="ねじる角（度）"
               value={draft.twistDeg}
               min={0.1}
               onPreview={(v) => updateTechniqueDraft({ twistDeg: v })}
@@ -1437,6 +1448,7 @@ function CurveRow() {
           {curve.segments !== null && (
             <NumberInput
               id="curve-segments"
+              ariaLabel="曲線の分割数"
               value={curve.segments}
               min={1}
               max={MAX_CURVE_SEGMENTS}
@@ -1547,7 +1559,7 @@ function SelectionContent() {
   );
 }
 
-/** 希望角を譲った折り目。既存の警告欄から2D/3Dの強調と選択へつなぐ。 */
+/** 希望角を譲った折り目。作品を色付けせず、控えめな一覧から選択できるようにする。 */
 function RelaxationMessages() {
   const relaxations = useAppStore((s) => s.relaxations);
   const setSelection = useAppStore((s) => s.setSelection);

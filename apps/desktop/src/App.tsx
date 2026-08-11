@@ -190,7 +190,13 @@ function App() {
             <Viewer3D fitRef={fit3dRef} />
             {(hasError || followStatus !== null || !poseConverged || warningCount > 0) && (
               <div
-                className={hasError ? "status-badge error" : "status-badge"}
+                className={
+                  hasError
+                    ? "status-badge error"
+                    : followStatus !== null
+                      ? "status-badge follow"
+                      : "status-badge"
+                }
                 data-floating-ui="status-badge"
                 data-tooltip="詳しい通知を下のパネルで確認できます"
               >

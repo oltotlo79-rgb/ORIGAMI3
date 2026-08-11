@@ -11,7 +11,6 @@ import * as THREE from "three";
 import {
   canFoldNow,
   pullBlockReason,
-  relaxationNotices,
   useAppStore,
 } from "../../store/appStore";
 import { viewerHint } from "../../lib/viewerHint";
@@ -159,7 +158,6 @@ export function Viewer3D({ fitRef }: Props) {
   const selection = useAppStore((s) => s.selection);
   const hoveredHinge = useAppStore((s) => s.hoveredHinge);
   const suspectHinges = useAppStore((s) => s.suspectHinges);
-  const relaxations = useAppStore((s) => s.relaxations);
   const activeAngleIntent = useAppStore((s) => s.activeAngleIntent);
   const docEpoch = useAppStore((s) => s.docEpoch);
   const activeTool = useAppStore((s) => s.activeTool);
@@ -281,14 +279,6 @@ export function Viewer3D({ fitRef }: Props) {
     const suspectSegments: HighlightSegment[] = scene.content.hingeSegments
       .filter((segment) => suspectIds.has(segment.edgeId))
       .map((segment) => ({ ...segment, role: "suspect" as const }));
-    const relaxedIds = new Set(
-      relaxationNotices(s.relaxations)
-        .map((item) => item.hinge)
-        .filter((hinge) => !suspectIds.has(hinge)),
-    );
-    const relaxedSegments: HighlightSegment[] = scene.content.hingeSegments
-      .filter((segment) => relaxedIds.has(segment.edgeId))
-      .map((segment) => ({ ...segment, role: "relaxed" as const }));
     const activeIds = new Set(s.activeAngleIntent?.hinges ?? []);
     if (s.pullHinge !== null) activeIds.add(s.pullHinge);
     if (s.pullMirrorHinge !== null) activeIds.add(s.pullMirrorHinge);
@@ -307,7 +297,6 @@ export function Viewer3D({ fitRef }: Props) {
     const setHighlight = (segments: HighlightSegment[]) => {
       scene.setHighlight([
         ...suspectSegments,
-        ...relaxedSegments,
         ...segments.filter((segment) => !suspectIds.has(segment.edgeId)),
         ...hoveredSegments,
         ...activeSegments,
@@ -452,7 +441,6 @@ export function Viewer3D({ fitRef }: Props) {
     selection,
     hoveredHinge,
     suspectHinges,
-    relaxations,
     activeAngleIntent,
     doc,
     faces,

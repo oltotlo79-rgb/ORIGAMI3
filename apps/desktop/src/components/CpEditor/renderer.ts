@@ -29,8 +29,6 @@ export const COLORS = {
   /** 補正後にも食い込みが残る原因候補。選択の橙・ホバーの紫より外側で光らせる。 */
   suspect: "#ff2438",
   suspectGlow: "rgba(255, 36, 56, 0.88)",
-  /** 希望角を譲って紙のつながりへ追従した折り目。 */
-  relaxed: "#d97706",
   /** いま角度を固定して操作している折り目。 */
   active: "#40cfff",
   snapMarker: "#2aa02a",
@@ -66,7 +64,6 @@ export const LINE_WIDTHS = {
   grid: 1,
   selected: 6,
   hovered: 10,
-  relaxed: 8,
   active: 6,
   suspect: 13,
   preview: 1.5,
@@ -271,8 +268,6 @@ export interface RenderOverlay {
   hoveredHinge?: number | null;
   /** 補正後にも食い込みが残る原因候補ヒンジ */
   suspectHinges?: number[];
-  /** 希望角を譲って追従したヒンジ */
-  relaxedHinges?: number[];
   /** いま利用者が角度を操作しているヒンジ */
   activeHinges?: number[];
 }
@@ -397,13 +392,11 @@ function drawEdges(
   fill: Rgb,
   hoveredHinge: number | null,
   suspectHinges: readonly number[],
-  relaxedHinges: readonly number[],
   activeHinges: readonly number[],
 ): void {
   const byId = new Map(doc.cp.vertices.map((v) => [v.id, v.pos]));
   const selected = new Set(selection.edgeIds);
   const suspects = new Set(suspectHinges);
-  const relaxed = new Set(relaxedHinges);
   const active = new Set(activeHinges);
   const halo = haloColor(fill);
   for (const e of doc.cp.edges) {
@@ -411,21 +404,12 @@ function drawEdges(
     const b = byId.get(e.v1);
     if (!a || !b) continue; // 参照切れの壊れた線は描かない(検査の警告で知らせる)
     if (suspects.has(e.id)) {
-      // 食い込みは紙の異常なので、追従・選択・操作中の色より赤を優先する。
+      // 食い込みは紙の異常なので、選択・操作中の色より赤を優先する。
       ctx.save();
       ctx.strokeStyle = COLORS.suspectGlow;
       ctx.lineWidth = LINE_WIDTHS.suspect;
       ctx.shadowColor = COLORS.suspect;
       ctx.shadowBlur = 12;
-      ctx.setLineDash([]);
-      strokeSegment(ctx, view, a, b);
-      ctx.restore();
-    }
-    if (!suspects.has(e.id) && relaxed.has(e.id)) {
-      // 希望角を譲った折り目は、通常線の外側へ琥珀を敷く。
-      ctx.save();
-      ctx.strokeStyle = COLORS.relaxed;
-      ctx.lineWidth = LINE_WIDTHS.relaxed;
       ctx.setLineDash([]);
       strokeSegment(ctx, view, a, b);
       ctx.restore();
@@ -449,7 +433,7 @@ function drawEdges(
       ctx.restore();
     }
     if (!suspects.has(e.id) && active.has(e.id)) {
-      // 現在操作中の水色を芯に置く。外側の赤・琥珀も同時に見える。
+      // 現在操作中の折り目は水色で示す。
       ctx.save();
       ctx.strokeStyle = COLORS.active;
       ctx.lineWidth = LINE_WIDTHS.active;
@@ -678,7 +662,6 @@ export function render(
     fill,
     overlay.hoveredHinge ?? null,
     overlay.suspectHinges ?? [],
-    overlay.relaxedHinges ?? [],
     overlay.activeHinges ?? [],
   );
   // 選んだ既存線を基準にしても、その線の下へ隠れない順番で重ねる。

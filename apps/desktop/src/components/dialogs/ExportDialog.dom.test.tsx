@@ -114,7 +114,7 @@ describe("書き出しダイアログ", () => {
     saveMock.mockResolvedValue("C:\\出力\\鶴.png");
     render(<ExportDialog />);
     fireEvent.click(screen.getByRole("radio", { name: "展開図の画像(PNG)" }));
-    const size = screen.getByLabelText(/画像の大きさ/) as HTMLInputElement;
+    const size = screen.getByLabelText("画像の大きさ（長辺の点数）") as HTMLInputElement;
     expect(size.value).toBe("2048"); // 既定は長辺2048点
     fireEvent.change(size, { target: { value: "1024" } });
     fireEvent.click(screen.getByRole("button", { name: "保存先を選んで書き出す" }));
@@ -125,6 +125,24 @@ describe("書き出しダイアログ", () => {
         png_long_side: 1024,
       }),
     );
+  });
+
+  it("PNGの大きさは上下ボタンで256点ずつ変わる", () => {
+    render(<ExportDialog />);
+    fireEvent.click(screen.getByRole("radio", { name: "展開図の画像(PNG)" }));
+    const size = screen.getByLabelText("画像の大きさ（長辺の点数）") as HTMLInputElement;
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "画像の大きさ（長辺の点数）を増やす" }),
+    );
+    expect(size.value).toBe("2304");
+    expect(useAppStore.getState().exportLongSide).toBe(2304);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "画像の大きさ（長辺の点数）を減らす" }),
+    );
+    expect(size.value).toBe("2048");
+    expect(useAppStore.getState().exportLongSide).toBe(2048);
   });
 
   it("保存先を選ばずに閉じたら何も書き出さない", async () => {

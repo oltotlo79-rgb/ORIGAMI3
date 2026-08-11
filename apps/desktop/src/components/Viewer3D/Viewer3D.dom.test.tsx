@@ -510,7 +510,7 @@ describe("Viewer3D(指している場所のカーソル)", () => {
     });
   });
 
-  it("追従は琥珀、操作中は水色とし、同じ辺の食い込み赤を最優先する", async () => {
+  it("追従診断は色付けせず、操作中は水色、食い込みは赤だけで示す", async () => {
     useAppStore.setState({
       relaxations: [
         { hinge: 5, target_angle_deg: 90, actual_angle_deg: 72, delta_deg: -18 },
@@ -525,18 +525,15 @@ describe("Viewer3D(指している場所のカーソル)", () => {
       const last = calls[calls.length - 1]?.[0] as
         | { edgeId: number; role?: string }[]
         | undefined;
-      return last?.filter((segment) => segment.edgeId === 5).map((segment) => segment.role);
+      return last?.filter((segment) => segment.edgeId === 5).map((segment) => segment.role) ?? [];
     };
 
-    await waitFor(() => expect(lastRoles()).toContain("relaxed"));
+    await waitFor(() => expect(lastRoles()).toEqual([]));
 
     act(() =>
       useAppStore.setState({ activeAngleIntent: { generation: 4, hinges: [5] } }),
     );
-    await waitFor(() => {
-      expect(lastRoles()).toContain("relaxed");
-      expect(lastRoles()).toContain("active");
-    });
+    await waitFor(() => expect(lastRoles()).toEqual(["active"]));
 
     act(() => useAppStore.setState({ suspectHinges: [5] }));
     await waitFor(() => expect(lastRoles()).toEqual(["suspect"]));

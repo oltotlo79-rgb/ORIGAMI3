@@ -341,7 +341,6 @@ describe("設計トークン", () => {
       "--color-canvas-3d",
       "--color-crease-mountain",
       "--color-crease-valley",
-      "--color-relaxation",
       "--app-background-image",
       "--app-background-size",
       "--app-background-repeat",
@@ -522,24 +521,22 @@ describe("設計トークン", () => {
     }
   });
 
-  it("作品の選択・食い込み・追従・操作中の意味色をテーマ変更で変えない", () => {
+  it("作品の選択・食い込み・操作中の意味色を保ち、追従だけを色付けしない", () => {
     expect(rendererSource).toMatch(/selection:\s*"#ff9500"/);
     expect(rendererSource).toMatch(/suspect:\s*"#ff2438"/);
-    expect(rendererSource).toMatch(/relaxed:\s*"#d97706"/);
     expect(rendererSource).toMatch(/active:\s*"#40cfff"/);
     expect(rendererSource).toMatch(/foldSuggestion:\s*"#d97706"/);
     expect(sceneSource).toMatch(/HIGHLIGHT_COLOR\s*=\s*0xffd400/);
     expect(sceneSource).toMatch(/REFERENCE_HIGHLIGHT_COLOR\s*=\s*0x40cfff/);
     expect(sceneSource).toMatch(/SUSPECT_HIGHLIGHT_COLOR\s*=\s*0xff2038/);
-    expect(sceneSource).toMatch(/RELAXED_HIGHLIGHT_COLOR\s*=\s*0xd97706/);
     expect(sceneSource).toMatch(/ACTIVE_HIGHLIGHT_COLOR\s*=\s*0x40cfff/);
     expect(sceneSource).toMatch(/PREVIEW_COLOR\s*=\s*0x2f8fff/);
+    expect(rendererSource).not.toMatch(/\brelaxed\s*:/);
+    expect(sceneSource).not.toMatch(/RELAXED_HIGHLIGHT_COLOR/);
+    expect(sceneSource).not.toMatch(/"relaxed"/);
+    expect(css).not.toMatch(/--color-relaxation\s*:/);
 
-    for (const theme of THEMES) {
-      expect(valueOf(tokens(theme), "--color-relaxation")).toBe("#d97706");
-    }
-
-    const semanticColors = ["#d97706", "#40cfff", "#ff2038"].map(
+    const semanticColors = ["#40cfff", "#ff2038"].map(
       (value) => hexToRgb(value) as Rgb,
     );
     for (let left = 0; left < semanticColors.length; left += 1) {

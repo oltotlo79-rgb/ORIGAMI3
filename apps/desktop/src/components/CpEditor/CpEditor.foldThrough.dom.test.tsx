@@ -165,8 +165,8 @@ describe("CpEditor 食い込み候補の強調", () => {
   });
 });
 
-describe("CpEditor 自然追従の強調", () => {
-  it("0.1度以上の追従と操作中ヒンジを描画へ渡し、食い込み候補も分離する", async () => {
+describe("CpEditor 自然追従の表示", () => {
+  it("追従診断は描画へ渡さず、操作中と食い込み候補だけを強調する", async () => {
     useAppStore.setState({
       pendingFoldThrough: null,
       suspectHinges: [7],
@@ -181,7 +181,7 @@ describe("CpEditor 自然追従の強調", () => {
 
     await waitFor(() => {
       const overlay = held.overlay as RenderOverlay | null;
-      expect(overlay?.relaxedHinges).toEqual([5]);
+      expect(overlay).not.toHaveProperty("relaxedHinges");
       expect(overlay?.activeHinges).toEqual([9]);
       expect(overlay?.suspectHinges).toEqual([7]);
     });

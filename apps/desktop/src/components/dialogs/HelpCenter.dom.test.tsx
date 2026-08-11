@@ -85,7 +85,15 @@ describe("ヘルプセンター", () => {
     expect(screen.getByRole("button", { name: /展開図に線を引く/ })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "展開図に線を引く" })).toBeTruthy();
 
-    fireEvent.change(search, { target: { value: "" } });
+    const clear = screen.getByRole("button", { name: "検索語を消す" });
+    expect(clear.getAttribute("data-tooltip")).toBe("入力した検索語を消します");
+    expect(clear.hasAttribute("title")).toBe(false);
+    clear.focus();
+    expect(document.activeElement).toBe(clear);
+    fireEvent.click(clear);
+    expect((search as HTMLInputElement).value).toBe("");
+    expect(document.activeElement).toBe(search);
+    expect(screen.queryByRole("button", { name: "検索語を消す" })).toBeNull();
     expect(screen.getByText("全13章")).toBeTruthy();
     expect(screen.getByRole("button", { name: /画面の見かた/ })).toBeTruthy();
   });

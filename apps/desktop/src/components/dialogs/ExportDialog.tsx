@@ -6,6 +6,7 @@
 import { save } from "@tauri-apps/plugin-dialog";
 import { useAppStore } from "../../store/appStore";
 import { fileName } from "../RecoveryDialog";
+import { NumberStepper } from "../NumberStepper";
 import type { ExportKind } from "../../lib/types";
 
 /** 種類ごとの表示名・拡張子・ひとこと説明。needsStepsは折り手順が要るもの */
@@ -120,8 +121,8 @@ export function ExportDialog() {
         {kind === "CpPng" && (
           <label>
             画像の大きさ(長辺の点数)
-            <input
-              type="number"
+            <NumberStepper
+              aria-label="画像の大きさ（長辺の点数）"
               min={1}
               max={16384}
               step={256}
