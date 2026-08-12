@@ -593,7 +593,10 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
   highlightGeometry.translate(0, 0.5, 0); // 原点を端点aに合わせる
   const highlightMaterial = new THREE.MeshBasicMaterial({
     color: HIGHLIGHT_COLOR,
-    depthTest: false, // 紙に隠れても見えるように深度判定を切る
+    // 実際の折り紙と同じく、紙の重なりの内側にある折り目は見えないようにする。
+    // 食い込みや原因の案内(赤・橙)は隠れていても知らせる必要があるため、
+    // そちらは深度判定を切ったままにする。
+    depthTest: true,
   });
   const referenceHighlightMaterial = new THREE.MeshBasicMaterial({
     color: REFERENCE_HIGHLIGHT_COLOR,
