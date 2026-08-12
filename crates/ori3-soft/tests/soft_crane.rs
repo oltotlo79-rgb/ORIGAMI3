@@ -27,6 +27,22 @@ const SWEEP_HINGE: EdgeId = 24;
 const SOLVE_BUDGET: Duration = Duration::from_millis(330);
 const CONTACT_DIAGNOSIS_BUDGET: Duration = Duration::from_millis(500);
 
+/// 速さの上限は、最適化ありのビルドのときだけ判定する。
+///
+/// 上限値は利用者が実際に使う最適化ありのビルドを前提にした数値で、
+/// 最適化なしのビルドでは同じ処理が何倍も遅くなるため、そのまま比べても意味がない。
+/// 最適化ありでの計測は、専用の性能テスト(`perf_soft` と `perf_miura`)が
+/// 自動検査の別ジョブで行っている。上限値そのものは緩めていない。
+///
+/// このテストの本来の目的は「往復させても面が交差しないこと」であり、
+/// 交差と裂けの判定は最適化のありなしにかかわらず常に行う。
+fn assert_within_budget(elapsed: Duration, budget: Duration, label: &str) {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    assert!(elapsed < budget, "{label}: {elapsed:?} < {budget:?}");
+}
+
 type Technique = fn(
     &mut CreasePattern,
     &[Face],
@@ -348,9 +364,10 @@ fn run_bird_base_sweep(
         let started = Instant::now();
         let motion = solve_motion(&doc.cp, faces, &hard, Some(targets), Some(&warm), true);
         let solve_time = started.elapsed();
-        assert!(
-            solve_time < SOLVE_BUDGET,
-            "{direction} {angle_deg}°: solve {solve_time:?} < {SOLVE_BUDGET:?}"
+        assert_within_budget(
+            solve_time,
+            SOLVE_BUDGET,
+            &format!("{direction} {angle_deg}°: solve"),
         );
         assert!(!motion.contact_stopped, "接触で操作を止めない");
         assert_finite_sweep_result(&motion.result, faces.len(), direction, angle_deg);
@@ -370,9 +387,10 @@ fn run_bird_base_sweep(
         let started = Instant::now();
         let raw_pairs = self_intersection_pairs(&motion.result.frame);
         let raw_time = started.elapsed();
-        assert!(
-            raw_time < CONTACT_DIAGNOSIS_BUDGET,
-            "{direction} {angle_deg}°: raw診断 {raw_time:?} < {CONTACT_DIAGNOSIS_BUDGET:?}"
+        assert_within_budget(
+            raw_time,
+            CONTACT_DIAGNOSIS_BUDGET,
+            &format!("{direction} {angle_deg}°: raw診断"),
         );
         if !raw_pairs.is_empty() {
             let ordinary = solve_near(&doc.cp, faces, &hard, targets, Some(&warm));
@@ -422,17 +440,19 @@ fn run_bird_base_sweep(
             &settings,
         );
         let pbd_time = started.elapsed();
-        assert!(
-            pbd_time < CONTACT_DIAGNOSIS_BUDGET,
-            "{direction} {angle_deg}°: PBD {pbd_time:?} < {CONTACT_DIAGNOSIS_BUDGET:?}"
+        assert_within_budget(
+            pbd_time,
+            CONTACT_DIAGNOSIS_BUDGET,
+            &format!("{direction} {angle_deg}°: PBD"),
         );
 
         let started = Instant::now();
         let display_pairs = self_intersection_pairs(&displayed);
         let display_time = started.elapsed();
-        assert!(
-            display_time < CONTACT_DIAGNOSIS_BUDGET,
-            "{direction} {angle_deg}°: 表示診断 {display_time:?} < {CONTACT_DIAGNOSIS_BUDGET:?}"
+        assert_within_budget(
+            display_time,
+            CONTACT_DIAGNOSIS_BUDGET,
+            &format!("{direction} {angle_deg}°: 表示診断"),
         );
         assert!(
             display_pairs.is_empty(),
