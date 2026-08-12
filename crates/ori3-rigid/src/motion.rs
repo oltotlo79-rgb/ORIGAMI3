@@ -15,6 +15,8 @@ use crate::{
 
 /// 小さな作品で使う目標角の刻み。通常の16ms入力はこれより小さいため1段だけになる。
 const TARGET_STEP_DEG: f64 = 5.0;
+/// 完全に折った状態とみなす角度の幅(度)。この近くは計算上の特異点になる。
+const NEAR_FLAT_FOLD_DEG: f64 = 5.0;
 /// 接触補正で同時に動かすヒンジの上限。診断時の速度見積もりと同じ値。
 const MAX_CONTACT_HINGES: usize = 64;
 /// 交差形と非交差形の間で、mediumを最小限だけ譲らせる固定二分回数。
@@ -90,9 +92,16 @@ pub fn solve_motion(
         .as_ref()
         .map(|result| result.angles.clone())
         .unwrap_or_default();
+    // 完全に折った状態(±180°)の近くは計算上の特異点で、そこから一気に解くと
+    // 紙が遠くへ飛ぶ。小さな要求でも分割を細かくして、実際の紙のように連続して動かす。
+    // やっこさんで1本を4°動かす場合、分割1回では他が179.9°暴れ、4回では160.3°に収まる。
+    let near_fully_folded = start_angles
+        .values()
+        .any(|angle| (angle.abs() - 180.0).abs() < NEAR_FLAT_FOLD_DEG);
     let steps = continuation_steps(
         faces.len(),
         max_requested_delta(&start_angles, drivers, targets),
+        near_fully_folded,
     );
     let mut iterations = last_finite.as_ref().map_or(0, |result| result.iterations);
     let mut last_finite_intersects = last_finite
@@ -396,14 +405,15 @@ fn max_requested_delta(
 
 /// 面数に応じて決定的に段数を落とす。実時間で変えると同じ入力の結果が端末負荷で
 /// 変わるため、形の規模だけを使う。面400では従来solve+交差判定を各1回に抑える。
-fn continuation_steps(face_count: usize, max_delta_deg: f64) -> usize {
+fn continuation_steps(face_count: usize, max_delta_deg: f64, near_fully_folded: bool) -> usize {
     let wanted = (max_delta_deg / TARGET_STEP_DEG).ceil().max(1.0) as usize;
     let cap = match face_count {
         0..=100 => 4,
         101..=300 => 2,
         _ => 1,
     };
-    wanted.min(cap)
+    // 特異点の近くだけは、要求が小さくても上限まで刻む。
+    if near_fully_folded { cap } else { wanted.min(cap) }
 }
 
 #[derive(Clone)]
@@ -1099,10 +1109,13 @@ mod tests {
 
     #[test]
     fn large_models_use_fewer_deterministic_steps() {
-        assert_eq!(continuation_steps(20, 180.0), 4);
-        assert_eq!(continuation_steps(200, 180.0), 2);
-        assert_eq!(continuation_steps(400, 180.0), 1);
-        assert_eq!(continuation_steps(400, 1.0), 1);
+        assert_eq!(continuation_steps(20, 180.0, false), 4);
+        assert_eq!(continuation_steps(200, 180.0, false), 2);
+        assert_eq!(continuation_steps(400, 180.0, false), 1);
+        assert_eq!(continuation_steps(400, 1.0, false), 1);
+        // 完全に折った状態の近くでは、要求が小さくても上限まで刻む。
+        assert_eq!(continuation_steps(20, 1.0, false), 1);
+        assert_eq!(continuation_steps(20, 1.0, true), 4);
     }
 
     fn ranked_candidate(contact: ContactMetrics, medium_energy: f64) -> ContactCandidate {
