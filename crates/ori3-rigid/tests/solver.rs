@@ -394,6 +394,63 @@ fn active_driver_wins_over_conflicting_previous_target() {
 }
 
 #[test]
+fn equivalent_plus_minus_180_does_not_report_angle_relaxation() {
+    let cp = degree4_cp();
+    let faces = extract_faces(&cp);
+
+    for (target, expected_actual, mountain_angle) in
+        [(180.0, -180.0, 180.0), (-180.0, 180.0, -180.0)]
+    {
+        let warm = solve(
+            &cp,
+            &faces,
+            &[
+                d(8, mountain_angle),
+                d(9, expected_actual),
+                d(10, mountain_angle),
+                d(11, mountain_angle),
+            ],
+            None,
+        );
+        assert!(warm.converged, "warm angles={:?}", warm.angles);
+
+        let result = solve_near(
+            &cp,
+            &faces,
+            &[
+                d(8, mountain_angle),
+                d(10, mountain_angle),
+                d(11, mountain_angle),
+            ],
+            &HashMap::from([(9, target)]),
+            Some(&warm.angles),
+        );
+
+        assert!(result.converged, "angles={:?}", result.angles);
+        assert!(
+            (result.angles[&9] - expected_actual).abs() < 1e-9,
+            "target={target}° actual={}°",
+            result.angles[&9]
+        );
+        assert!(result.closure_rms < 1e-13, "rms={}", result.closure_rms);
+        assert!(max_seam_gap(&cp, &faces, &result.frame) < 1e-6);
+        assert!(
+            result.relaxations.iter().all(|item| item.hinge != 9),
+            "±180°は同じ平坦姿勢なので通知しない: {:?}",
+            result.relaxations
+        );
+        assert!(
+            result
+                .relaxations
+                .iter()
+                .all(|item| item.delta_deg.abs() <= 180.0),
+            "診断角は最短差へ正規化する: {:?}",
+            result.relaxations
+        );
+    }
+}
+
+#[test]
 fn unlisted_hinges_have_no_preference_spring() {
     let cp = miura_cp(3, 3);
     let faces = extract_faces(&cp);

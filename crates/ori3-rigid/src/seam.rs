@@ -4,18 +4,22 @@ use std::collections::HashMap;
 
 use glam::DVec3;
 use ori3_cp::Face;
-use ori3_model::{CreasePattern, EPS, EdgeId, Face3D, FaceId, Frame3D};
+use ori3_model::{CreasePattern, EPS, EdgeId, Face3D, FaceId, Frame3D, VertexId};
 
-/// Returns the largest separation between the two copies of a shared edge endpoint.
+/// Returns the largest separation between copies of the same material vertex.
 ///
 /// A crease shared by two faces has one copy of each endpoint in each face's 3D
-/// polygon. Those copies must coincide even while the paper is moving. The
-/// returned distance is divided by the crease pattern's long-axis extent, so it
-/// is expressed relative to a paper whose long edge is `1.0`.
+/// polygon. Faces can also meet at only one material vertex without sharing an
+/// edge; every polygon copy of that vertex must still coincide while the paper
+/// is moving. The returned distance is divided by the crease pattern's
+/// long-axis extent, so it is expressed relative to a paper whose long edge is
+/// `1.0`.
 ///
 /// Border edges and edges that are not shared by exactly two distinct faces do
-/// not form seams and are ignored. Missing faces or malformed polygons are also
-/// ignored; callers should validate the crease pattern and frame separately.
+/// not form edge seams and are ignored by the shared-edge pass. The vertex pass
+/// still compares their incident face copies. Missing faces, unknown material
+/// vertices, or malformed polygons are ignored; callers should validate the
+/// crease pattern and frame separately.
 #[must_use]
 pub fn max_seam_gap(cp: &CreasePattern, faces: &[Face], frame: &Frame3D) -> f64 {
     let frame_faces: HashMap<FaceId, &Face3D> =
@@ -64,6 +68,36 @@ pub fn max_seam_gap(cp: &CreasePattern, faces: &[Face], frame: &Frame3D) -> f64 
         }
     }
 
+    // Shared-edge checks do not cover two polygons that touch at only one material vertex.
+    // Collect every polygon occurrence by VertexId as well. Keeping occurrences rather than
+    // deduplicating by face also catches malformed/slit polygons whose repeated copies diverge.
+    let mut vertex_copies: HashMap<VertexId, Vec<DVec3>> = cp
+        .vertices
+        .iter()
+        .map(|vertex| (vertex.id, Vec::new()))
+        .collect();
+    for face in faces {
+        let Some(frame_face) = frame_faces.get(&face.id) else {
+            continue;
+        };
+        for (index, vertex_id) in face.vertices.iter().copied().enumerate() {
+            let (Some(copies), Some(point)) = (
+                vertex_copies.get_mut(&vertex_id),
+                frame_face.polygon.get(index),
+            ) else {
+                continue;
+            };
+            copies.push(DVec3::from(*point));
+        }
+    }
+    for copies in vertex_copies.values() {
+        for (index, first) in copies.iter().enumerate() {
+            for second in &copies[index + 1..] {
+                worst = worst.max((*first - *second).length());
+            }
+        }
+    }
+
     let (mut min, mut max) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
     for vertex in &cp.vertices {
         for axis in 0..2 {
@@ -83,8 +117,8 @@ pub fn max_seam_gap(cp: &CreasePattern, faces: &[Face], frame: &Frame3D) -> f64 
 mod tests {
     use std::collections::HashMap;
 
-    use ori3_cp::extract_faces;
-    use ori3_model::{CreasePattern, Edge, EdgeKind, Vertex};
+    use ori3_cp::{Face, extract_faces};
+    use ori3_model::{CreasePattern, Edge, EdgeKind, Face3D, Frame3D, Vertex};
 
     use super::max_seam_gap;
     use crate::tree::{propagate, to_frame3d};
@@ -139,5 +173,54 @@ mod tests {
         // The physical gap is 0.25 and the paper's long edge is 2.0.
         let gap = max_seam_gap(&cp, &faces, &frame);
         assert!((gap - 0.125).abs() < 1e-12, "gap={gap}");
+    }
+
+    #[test]
+    fn point_only_shared_vertex_gap_is_detected() {
+        let vertex = |id, x, y| Vertex { id, pos: [x, y] };
+        let cp = CreasePattern {
+            // The two triangles share vertex 0 but no edge. The 2.0 long-axis extent also
+            // verifies that point-only gaps use the same normalization as edge seams.
+            vertices: vec![
+                vertex(0, 0.0, 0.0),
+                vertex(1, 1.0, 0.0),
+                vertex(2, 0.0, 1.0),
+                vertex(3, -1.0, 0.0),
+                vertex(4, 0.0, -1.0),
+            ],
+            edges: Vec::new(),
+            next_vertex_id: 5,
+            next_edge_id: 0,
+        };
+        let faces = vec![
+            Face {
+                id: 10,
+                vertices: vec![0, 1, 2],
+                edges: Vec::new(),
+            },
+            Face {
+                id: 11,
+                vertices: vec![0, 3, 4],
+                edges: Vec::new(),
+            },
+        ];
+        let frame = Frame3D {
+            faces: vec![
+                Face3D {
+                    face: 10,
+                    polygon: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                    layer: 0,
+                },
+                Face3D {
+                    face: 11,
+                    polygon: vec![[0.0, 0.0, 0.5], [-1.0, 0.0, 0.5], [0.0, -1.0, 0.5]],
+                    layer: 1,
+                },
+            ],
+            warnings: Vec::new(),
+        };
+
+        let gap = max_seam_gap(&cp, &faces, &frame);
+        assert!((gap - 0.25).abs() < 1e-12, "gap={gap}");
     }
 }

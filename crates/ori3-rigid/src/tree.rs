@@ -99,7 +99,10 @@ pub(crate) fn build_forest(cp: &CreasePattern, faces: &[Face]) -> Forest {
     let vpos = vertex_positions(cp);
 
     // 辺ID→出現リスト(面添字, 軸始点a, 軸単位方向u)。BTreeMapで辺ID順に固定。
-    let mut occ: BTreeMap<EdgeId, Vec<(usize, DVec3, DVec3)>> = BTreeMap::new();
+    type Occurrence = (usize, DVec3, DVec3);
+    // 1辺がヒンジになる条件は「ちょうど2面」だけ。辺ごとの小Vec確保を避け、
+    // 3面以上の非多様体辺はcountだけ保持して従来どおり除外する。
+    let mut occ: BTreeMap<EdgeId, (usize, [Option<Occurrence>; 2])> = BTreeMap::new();
     for (fi, face) in faces.iter().enumerate() {
         let n = face.vertices.len();
         for (j, &eid) in face.edges.iter().enumerate() {
@@ -113,7 +116,11 @@ pub(crate) fn build_forest(cp: &CreasePattern, faces: &[Face]) -> Forest {
             if d.length() < EPS {
                 continue;
             }
-            occ.entry(eid).or_default().push((fi, a, d.normalize()));
+            let entry = occ.entry(eid).or_insert((0, [None, None]));
+            if entry.0 < entry.1.len() {
+                entry.1[entry.0] = Some((fi, a, d.normalize()));
+            }
+            entry.0 += 1;
         }
     }
 
@@ -121,11 +128,16 @@ pub(crate) fn build_forest(cp: &CreasePattern, faces: &[Face]) -> Forest {
     let mut hinges: Vec<EdgeId> = Vec::new();
     let mut hinge_faces: Vec<(usize, usize)> = Vec::new();
     let mut hinge_occ: Vec<[(usize, DVec3, DVec3); 2]> = Vec::new();
-    for (&eid, list) in &occ {
-        if list.len() == 2 && list[0].0 != list[1].0 {
+    for (&eid, (count, entries)) in &occ {
+        if *count == 2 {
+            let first = entries[0].expect("2面辺の第1出現");
+            let second = entries[1].expect("2面辺の第2出現");
+            if first.0 == second.0 {
+                continue;
+            }
             hinges.push(eid);
-            hinge_faces.push((list[0].0, list[1].0));
-            hinge_occ.push([list[0], list[1]]);
+            hinge_faces.push((first.0, second.0));
+            hinge_occ.push([first, second]);
         }
     }
 

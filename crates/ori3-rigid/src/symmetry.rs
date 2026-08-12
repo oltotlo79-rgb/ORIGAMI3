@@ -304,6 +304,12 @@ fn reflect_point(point: DVec2, a: DVec2, b: DVec2) -> DVec2 {
     projection * 2.0 - point
 }
 
+fn sorted_map_ids<V>(map: &HashMap<u32, V>) -> Vec<u32> {
+    let mut ids = map.keys().copied().collect::<Vec<_>>();
+    ids.sort_unstable();
+    ids
+}
+
 fn build_vertex_reflection(
     cp: &CreasePattern,
     axis: [[f64; 2]; 2],
@@ -346,7 +352,8 @@ fn build_vertex_reflection(
             }
         }
     }
-    for (&vertex, &mirror) in &mirrored {
+    for vertex in sorted_map_ids(&mirrored) {
+        let mirror = mirrored[&vertex];
         let mirror_of_mirror = mirrored[&mirror];
         if mirror_of_mirror != vertex {
             return Err(ReflectionSymmetryError::NonInvolutiveVertexMap {
@@ -401,7 +408,8 @@ fn build_edge_reflection(
         }
         mirrored.insert(edge.id, mirror);
     }
-    for (&edge, &mirror) in &mirrored {
+    for edge in sorted_map_ids(&mirrored) {
+        let mirror = mirrored[&edge];
         let mirror_of_mirror = mirrored[&mirror];
         if mirror_of_mirror != edge {
             return Err(ReflectionSymmetryError::NonInvolutiveEdgeMap {
@@ -423,7 +431,8 @@ fn validate_angle_map(
     values: &HashMap<EdgeId, f64>,
     warm_start: bool,
 ) -> Result<(), ReflectionSymmetryError> {
-    for (&edge, &angle_deg) in values {
+    for edge in sorted_map_ids(values) {
+        let angle_deg = values[&edge];
         if !cp.edges.iter().any(|candidate| candidate.id == edge) {
             return Err(if warm_start {
                 ReflectionSymmetryError::UnknownWarmStart(edge)
@@ -468,7 +477,8 @@ fn validate_hard_drivers(
             });
         }
     }
-    for (&edge, &angle_deg) in &angles {
+    for edge in sorted_map_ids(&angles) {
+        let angle_deg = angles[&edge];
         let mirror = mirrored_edges[&edge];
         let Some(&mirrored_angle_deg) = angles.get(&mirror) else {
             return Err(ReflectionSymmetryError::MissingMirroredHardDriver { edge, mirror });
@@ -489,17 +499,17 @@ fn average_mirrored_angles(
     angles: &HashMap<EdgeId, f64>,
     mirrored_edges: &HashMap<EdgeId, EdgeId>,
 ) -> Result<HashMap<EdgeId, f64>, ReflectionSymmetryError> {
-    angles
-        .iter()
-        .map(|(&edge, &angle)| {
-            let mirror = mirrored_edges[&edge];
-            let mirrored_angle = angles
-                .get(&mirror)
-                .copied()
-                .ok_or(ReflectionSymmetryError::MissingMirroredHinge { edge, mirror })?;
-            Ok((edge, 0.5 * (angle + mirrored_angle)))
-        })
-        .collect()
+    let mut averaged = HashMap::with_capacity(angles.len());
+    for edge in sorted_map_ids(angles) {
+        let angle = angles[&edge];
+        let mirror = mirrored_edges[&edge];
+        let mirrored_angle = angles
+            .get(&mirror)
+            .copied()
+            .ok_or(ReflectionSymmetryError::MissingMirroredHinge { edge, mirror })?;
+        averaged.insert(edge, 0.5 * (angle + mirrored_angle));
+    }
+    Ok(averaged)
 }
 
 fn mirrored_angle_error(
@@ -507,7 +517,8 @@ fn mirrored_angle_error(
     mirrored_edges: &HashMap<EdgeId, EdgeId>,
 ) -> Result<f64, ReflectionSymmetryError> {
     let mut worst = 0.0_f64;
-    for (&edge, &angle) in angles {
+    for edge in sorted_map_ids(angles) {
+        let angle = angles[&edge];
         let mirror = mirrored_edges[&edge];
         let mirrored_angle = angles
             .get(&mirror)
@@ -525,7 +536,10 @@ mod tests {
     use ori3_cp::{extract_faces, insert_segment};
     use ori3_model::{Document, Driver, EdgeKind, Paper};
 
-    use super::{ReflectionSymmetryError, solve_near_with_reflection_symmetry};
+    use super::{
+        ReflectionSymmetryError, average_mirrored_angles, mirrored_angle_error,
+        solve_near_with_reflection_symmetry, validate_angle_map, validate_hard_drivers,
+    };
 
     fn symmetric_parallel_cp() -> (ori3_model::CreasePattern, [u32; 2]) {
         let mut document = Document::new(Paper {
@@ -643,5 +657,59 @@ mod tests {
             asymmetric,
             Err(ReflectionSymmetryError::MissingMirroredVertex { .. })
         ));
+    }
+
+    #[test]
+    fn angle_map_validation_reports_lowest_invalid_edge_across_insertion_orders() {
+        let (cp, _) = symmetric_parallel_cp();
+        let first_unknown = cp.edges.iter().map(|edge| edge.id).max().unwrap() + 1;
+        let second_unknown = first_unknown + 1;
+        for entries in [
+            [(first_unknown, 0.0), (second_unknown, 0.0)],
+            [(second_unknown, 0.0), (first_unknown, 0.0)],
+        ] {
+            let values = entries.into_iter().collect::<HashMap<_, _>>();
+            assert_eq!(
+                validate_angle_map(&cp, &values, false),
+                Err(ReflectionSymmetryError::UnknownTarget(first_unknown))
+            );
+            assert_eq!(
+                validate_angle_map(&cp, &values, true),
+                Err(ReflectionSymmetryError::UnknownWarmStart(first_unknown))
+            );
+        }
+    }
+
+    #[test]
+    fn mirrored_map_validation_reports_lowest_invalid_edge() {
+        let mirrored_edges = [(2, 3), (3, 2), (10, 11), (11, 10)]
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+        let hard_drivers = [
+            Driver {
+                hinge: 10,
+                target_angle_deg: 30.0,
+            },
+            Driver {
+                hinge: 2,
+                target_angle_deg: 30.0,
+            },
+        ];
+        assert_eq!(
+            validate_hard_drivers(&hard_drivers, &mirrored_edges),
+            Err(ReflectionSymmetryError::MissingMirroredHardDriver { edge: 2, mirror: 3 })
+        );
+
+        let angles = [(10, 30.0), (2, 30.0)]
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+        assert_eq!(
+            average_mirrored_angles(&angles, &mirrored_edges),
+            Err(ReflectionSymmetryError::MissingMirroredHinge { edge: 2, mirror: 3 })
+        );
+        assert_eq!(
+            mirrored_angle_error(&angles, &mirrored_edges),
+            Err(ReflectionSymmetryError::MissingMirroredHinge { edge: 2, mirror: 3 })
+        );
     }
 }

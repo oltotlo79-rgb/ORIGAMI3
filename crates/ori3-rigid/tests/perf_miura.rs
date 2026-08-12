@@ -25,7 +25,8 @@ use std::time::{Duration, Instant};
 
 use ori3_cp::extract_faces;
 use ori3_model::{CreasePattern, Driver, Edge, EdgeKind, Vertex};
-use ori3_rigid::{solve, solve_motion, solve_near};
+use ori3_rigid::intersect::contact_scan_profile;
+use ori3_rigid::{self_intersection_pairs, solve, solve_motion, solve_near};
 
 /// debugビルドでのsolve 1回あたりの上限(モジュールコメントの計測記録を参照)。
 const DEBUG_BUDGET: Duration = Duration::from_millis(330);
@@ -217,6 +218,40 @@ fn miura_20x20_contact_check_stays_within_frame_budget() {
     );
     assert!(start.converged);
 
+    let mut warm_drivers: Vec<Driver> = start
+        .angles
+        .iter()
+        .map(|(&hinge, &target_angle_deg)| Driver {
+            hinge,
+            target_angle_deg,
+        })
+        .collect();
+    warm_drivers.sort_unstable_by_key(|driver| driver.hinge);
+    let stage_started = Instant::now();
+    let warm_pose = solve(&cp, &faces, &warm_drivers, Some(&start.angles));
+    let warm_pose_time = stage_started.elapsed();
+    let stage_started = Instant::now();
+    let requested = solve(
+        &cp,
+        &faces,
+        &[Driver {
+            hinge,
+            target_angle_deg: 22.0,
+        }],
+        Some(&start.angles),
+    );
+    let requested_solve_time = stage_started.elapsed();
+    assert!(warm_pose.converged);
+    assert!(requested.converged);
+    let warm_scan = contact_scan_profile(&warm_pose.frame);
+    let requested_scan = contact_scan_profile(&requested.frame);
+    println!(
+        "接触診断・段階内訳(時間枠外): warm_pose={warm_pose_time:?} requested_solve={requested_solve_time:?}"
+    );
+    println!("接触診断・開始姿勢走査: {warm_scan:?}");
+    println!("接触診断・要求姿勢走査: {requested_scan:?}");
+    println!("接触診断・solve_motion走査回数: 2 (開始姿勢1 + 要求姿勢1)");
+
     let t0 = Instant::now();
     let motion = solve_motion(
         &cp,
@@ -245,4 +280,47 @@ fn miura_20x20_contact_check_stays_within_frame_budget() {
         elapsed < budget,
         "接触診断込みの追従が遅すぎます: {elapsed:?}"
     );
+
+    // 性能変更後も同一入力の交差集合と数値結果が毎回同一であることを、
+    // 時間枠の外で確認する（SYS-004）。この姿勢の従来交差集合は空。
+    let expected_pairs = self_intersection_pairs(&motion.result.frame);
+    assert!(expected_pairs.is_empty());
+    for _ in 0..5 {
+        let repeated = solve_motion(
+            &cp,
+            &faces,
+            &[Driver {
+                hinge,
+                target_angle_deg: 22.0,
+            }],
+            None,
+            Some(&start.angles),
+            true,
+        );
+        assert_eq!(repeated.result.angles, motion.result.angles);
+        assert_eq!(
+            repeated.result.closure_rms.to_bits(),
+            motion.result.closure_rms.to_bits()
+        );
+        assert_eq!(repeated.result.iterations, motion.result.iterations);
+        assert_eq!(repeated.contact_detected, motion.contact_detected);
+        assert_eq!(
+            self_intersection_pairs(&repeated.result.frame),
+            expected_pairs
+        );
+        for (actual, expected) in repeated
+            .result
+            .frame
+            .faces
+            .iter()
+            .zip(&motion.result.frame.faces)
+        {
+            assert_eq!(actual.face, expected.face);
+            assert_eq!(actual.layer, expected.layer);
+            assert_eq!(actual.polygon.len(), expected.polygon.len());
+            for (actual, expected) in actual.polygon.iter().zip(&expected.polygon) {
+                assert_eq!(actual.map(f64::to_bits), expected.map(f64::to_bits));
+            }
+        }
+    }
 }

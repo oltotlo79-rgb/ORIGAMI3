@@ -158,14 +158,14 @@ fn relax_of_400_faces_fits_in_one_frame() {
 }
 
 #[test]
-fn overlap_correction_of_400_faces_fits_in_one_frame() {
+fn contact_free_overlap_check_of_400_faces_fits_in_one_frame() {
     let (nc, nr) = (20, 20);
     let cp = miura_cp(nc, nr);
     let faces = extract_faces(&cp);
     assert_eq!(faces.len(), 400, "面400の規模");
     let hinge = (nr / 2 * (nc + 1) + nc / 2) as u32;
     assert_eq!(cp.edges[hinge as usize].kind, EdgeKind::Mountain);
-    let frame = solve(
+    let mut frame = solve(
         &cp,
         &faces,
         &[Driver {
@@ -175,23 +175,29 @@ fn overlap_correction_of_400_faces_fits_in_one_frame() {
         None,
     )
     .frame;
+    // FaceId代用の早期no-opではなく、完全な層順を持つ接触0フレームの診断経路を測る。
+    for output in &mut frame.faces {
+        output.layer = output.face;
+    }
     let mut order: Vec<u32> = faces.iter().map(|face| face.id).collect();
     order.sort_unstable();
     let settings = OverlapSettings::default();
 
     let mut warm = frame.clone();
     let report = prevent_overlap(&cp, &faces, &mut warm, &order, &order, 0.5, &settings);
-    assert!(report.applied);
+    assert!(report.skipped_no_signed_penetration, "{report:?}");
+    assert!(!report.applied);
     let mut best = Duration::MAX;
     for _ in 0..5 {
         let mut corrected = frame.clone();
         let t = Instant::now();
         let report = prevent_overlap(&cp, &faces, &mut corrected, &order, &order, 0.5, &settings);
         best = best.min(t.elapsed());
-        assert!(report.applied);
+        assert!(report.skipped_no_signed_penetration, "{report:?}");
+        assert!(!report.applied);
     }
     println!(
-        "prevent_overlap: 面{}・反復{} → {best:?}/フレーム",
+        "prevent_overlap接触0早期終了: 面{}・反復{} → {best:?}/フレーム",
         faces.len(),
         settings.iterations
     );

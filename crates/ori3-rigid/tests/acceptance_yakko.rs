@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use glam::{DVec2, DVec3};
 use ori3_cp::{Face, extract_faces, insert_segment, validate};
 use ori3_model::{CreasePattern, Document, Driver, EdgeKind, Frame3D, Paper, VertexId};
-use ori3_rigid::{max_seam_gap, solve};
+use ori3_rigid::{max_seam_gap, self_intersection_pairs, solve, solve_motion};
 
 /// UIの1回の線描画操作: 始点・終点・線種。
 type Stroke = ([f64; 2], [f64; 2], EdgeKind);
@@ -103,6 +103,145 @@ fn full_fold_drivers(cp: &CreasePattern) -> Vec<Driver> {
             })
         })
         .collect()
+}
+
+/// 代表ヒンジを指定系列で動かし、接触回避後もhard・紙の接続・有限性を守ることを検査する。
+fn assert_contact_free_sweep(
+    cp: &CreasePattern,
+    faces: &[Face],
+    (hinge, final_angle_deg): (u32, f64),
+    magnitudes: impl IntoIterator<Item = u32>,
+    medium: &HashMap<u32, f64>,
+    mut warm: HashMap<u32, f64>,
+    direction: &str,
+) {
+    let sign = final_angle_deg.signum();
+    assert_ne!(sign, 0.0, "代表ヒンジの完成角には向きが必要");
+    for magnitude in magnitudes {
+        let requested = sign * f64::from(magnitude);
+        let solve_started = std::time::Instant::now();
+        let motion = solve_motion(
+            cp,
+            faces,
+            &[Driver {
+                hinge,
+                target_angle_deg: requested,
+            }],
+            Some(medium),
+            Some(&warm),
+            true,
+        );
+        let solve_time = solve_started.elapsed();
+        let result = &motion.result;
+        assert!(
+            solve_time < std::time::Duration::from_millis(330),
+            "{direction} {magnitude}°: solve={solve_time:?}"
+        );
+        assert!(
+            !motion.contact_stopped,
+            "{direction} {magnitude}°: 接触で操作が停止した"
+        );
+        let hard_error = (result.angles[&hinge] - requested).abs();
+        assert!(
+            hard_error < 1e-9,
+            "{direction} {magnitude}°: hard誤差={hard_error:e} angles={:?}",
+            result.angles
+        );
+        assert!(
+            result.closure_rms.is_finite()
+                && result.angles.values().all(|angle| angle.is_finite())
+                && result.relaxations.iter().all(|relaxation| {
+                    relaxation.target_angle_deg.is_finite()
+                        && relaxation.actual_angle_deg.is_finite()
+                        && relaxation.delta_deg.is_finite()
+                })
+                && result.frame.faces.len() == faces.len()
+                && result.frame.faces.iter().all(|face| {
+                    face.polygon
+                        .iter()
+                        .flatten()
+                        .all(|coordinate| coordinate.is_finite())
+                }),
+            "{direction} {magnitude}°: finiteな全面形ではない"
+        );
+        let gap = max_seam_gap(cp, faces, &result.frame);
+        assert!(
+            gap < 1e-6,
+            "{direction} {magnitude}°: seam={gap:e} rms={:e}",
+            result.closure_rms
+        );
+        let contact_started = std::time::Instant::now();
+        let intersections = self_intersection_pairs(&result.frame);
+        let contact_time = contact_started.elapsed();
+        assert!(
+            contact_time < std::time::Duration::from_millis(500),
+            "{direction} {magnitude}°: contact={contact_time:?}"
+        );
+        assert!(
+            intersections.is_empty(),
+            "{direction} {magnitude}° (要求{requested}°): 交差={intersections:?} relaxations={:?}",
+            result.relaxations
+        );
+        warm = result.angles.clone();
+    }
+}
+
+fn assert_yakko_hinge_20_round_trip(magnitudes: &[u32], label: &str) {
+    const HINGE: u32 = 20;
+
+    let cp = yakko_cp();
+    let faces = extract_faces(&cp);
+    let completed_drivers = full_fold_drivers(&cp);
+    let final_angle = completed_drivers
+        .iter()
+        .find(|driver| driver.hinge == HINGE)
+        .unwrap_or_else(|| panic!("代表ヒンジ#{HINGE}が展開図にない"))
+        .target_angle_deg;
+
+    let flat = solve(&cp, &faces, &[], None);
+    assert!(
+        flat.converged,
+        "平坦開始形: warnings={:?}",
+        flat.frame.warnings
+    );
+    assert!(self_intersection_pairs(&flat.frame).is_empty());
+    let ascending_medium: HashMap<u32, f64> = completed_drivers
+        .iter()
+        .filter(|driver| driver.hinge != HINGE)
+        .map(|driver| (driver.hinge, 0.0))
+        .collect();
+    assert_contact_free_sweep(
+        &cp,
+        &faces,
+        (HINGE, final_angle),
+        magnitudes.iter().copied(),
+        &ascending_medium,
+        flat.angles,
+        &format!("{label} 0→180"),
+    );
+
+    let completed = solve(&cp, &faces, &completed_drivers, None);
+    assert!(
+        completed.converged,
+        "完成開始形: warnings={:?}",
+        completed.frame.warnings
+    );
+    assert!(self_intersection_pairs(&completed.frame).is_empty());
+    let descending_medium: HashMap<u32, f64> = completed
+        .angles
+        .iter()
+        .filter(|(hinge, _)| **hinge != HINGE)
+        .map(|(&hinge, &angle)| (hinge, angle))
+        .collect();
+    assert_contact_free_sweep(
+        &cp,
+        &faces,
+        (HINGE, final_angle),
+        magnitudes.iter().rev().copied(),
+        &descending_medium,
+        completed.angles,
+        &format!("{label} 180→0"),
+    );
 }
 
 /// 種類ごとの辺の本数 (輪郭, 山, 谷)。
@@ -344,6 +483,23 @@ fn yakko_double_blintz_folds_flat_to_half_square() {
             .count();
         assert_eq!(hits, 1, "畳んだ正方形の隅{corner}に写るNが{hits}個");
     }
+}
+
+/// 診断で代表にしたヒンジ#20を有効な平坦形から往復させても、他の折り目が譲って
+/// 紙の交差を作らない。上昇は以前の指定を0°、下降は完成角へ保つmediumとする。
+#[test]
+fn yakko_hinge_20_round_trip_stays_contact_free() {
+    let magnitudes: Vec<u32> = (0..=180).collect();
+    assert_yakko_hinge_20_round_trip(&magnitudes, "1°刻み");
+}
+
+#[test]
+fn yakko_hinge_20_sixteen_degree_jumps_stay_contact_free() {
+    let mut magnitudes: Vec<u32> = (0..=180).step_by(16).collect();
+    if magnitudes.last() != Some(&180) {
+        magnitudes.push(180);
+    }
+    assert_yakko_hinge_20_round_trip(&magnitudes, "16°飛び");
 }
 
 /// 決定性: 同じ入力で2回solveすると、角度も3D座標も完全に同一になる。

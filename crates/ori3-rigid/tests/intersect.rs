@@ -2,6 +2,7 @@
 
 use ori3_cp::{extract_faces, insert_segment};
 use ori3_model::{Document, EdgeKind, Face3D, Frame3D, Paper};
+use ori3_rigid::intersect::{MAX_CONTACT_WITNESSES, contact_metrics, contact_witnesses};
 use ori3_rigid::{layer_order_conflicts, self_intersection_pairs, self_intersects, suspect_hinges};
 
 fn frame(faces: Vec<Face3D>) -> Frame3D {
@@ -17,6 +18,30 @@ fn face(id: u32, polygon: &[[f64; 3]]) -> Face3D {
         polygon: polygon.to_vec(),
         layer: 0,
     }
+}
+
+/// x方向に十分離して複数並べられる、水平面と垂直面の交差ペア。
+fn isolated_crossing_pair(first_id: u32, x: f64, depth: f64) -> [Face3D; 2] {
+    [
+        face(
+            first_id,
+            &[
+                [x, 0.0, 0.0],
+                [x + 1.0, 0.0, 0.0],
+                [x + 1.0, 1.0, 0.0],
+                [x, 1.0, 0.0],
+            ],
+        ),
+        face(
+            first_id + 1,
+            &[
+                [x + 0.5, 0.2, -depth],
+                [x + 0.5, 0.8, -depth],
+                [x + 0.5, 0.8, depth],
+                [x + 0.5, 0.2, depth],
+            ],
+        ),
+    ]
 }
 
 /// 平らに畳んだ状態(全ての点がz≒0)では、重なっていても警告を出さない。
@@ -41,7 +66,10 @@ fn flat_stacked_layers_are_not_penetration() {
             [0.2, 0.8, 0.0],
         ],
     );
-    assert!(!self_intersects(&frame(vec![a, b])));
+    let flat = frame(vec![a, b]);
+    assert!(!self_intersects(&flat));
+    assert!(contact_witnesses(&flat).is_empty());
+    assert_eq!(contact_metrics(&flat), Default::default());
 }
 
 #[test]
@@ -153,6 +181,102 @@ fn crossing_faces_are_reported() {
     let crossed = frame(vec![flat, upright]);
     assert!(self_intersects(&crossed));
     assert_eq!(self_intersection_pairs(&crossed), vec![(0, 1)]);
+
+    let witnesses = contact_witnesses(&crossed);
+    let metrics = contact_metrics(&crossed);
+    assert_eq!(witnesses.len(), 1);
+    assert_eq!(witnesses[0].faces, (0, 1));
+    assert_eq!(metrics.pair_count, 1);
+    assert_eq!(metrics.max_penetration, metrics.total_penetration);
+    assert_eq!(metrics.max_penetration, witnesses[0].penetration_depth);
+    assert!(witnesses[0].penetration_depth > 0.0);
+    assert!(
+        witnesses[0]
+            .point
+            .iter()
+            .chain(&witnesses[0].normal)
+            .all(|value| value.is_finite())
+    );
+    let normal_length = witnesses[0]
+        .normal
+        .iter()
+        .map(|value| value * value)
+        .sum::<f64>()
+        .sqrt();
+    assert!((normal_length - 1.0).abs() < 1e-12);
+}
+
+#[test]
+fn contact_witnesses_are_deep_first_and_deterministic() {
+    let mut faces = Vec::new();
+    // 深さを優先し、同じ深さならFaceIdの小さい組を先にする。
+    faces.extend(isolated_crossing_pair(20, 0.0, 0.15));
+    faces.extend(isolated_crossing_pair(8, 3.0, 0.35));
+    faces.extend(isolated_crossing_pair(4, 6.0, 0.15));
+    let crossed = frame(faces);
+
+    let first = contact_witnesses(&crossed);
+    let first_metrics = contact_metrics(&crossed);
+    for _ in 0..10 {
+        assert_eq!(contact_witnesses(&crossed), first);
+        assert_eq!(contact_metrics(&crossed), first_metrics);
+    }
+    assert_eq!(first.len(), 3);
+    assert_eq!(first[0].faces, (8, 9));
+    assert_eq!(first[1].faces, (4, 5));
+    assert_eq!(first[2].faces, (20, 21));
+    assert!(
+        first
+            .windows(2)
+            .all(|pair| pair[0].penetration_depth >= pair[1].penetration_depth)
+    );
+
+    let metrics = first_metrics;
+    assert_eq!(metrics.pair_count, self_intersection_pairs(&crossed).len());
+    assert_eq!(metrics.pair_count, 3);
+    assert_eq!(metrics.max_penetration, first[0].penetration_depth);
+    assert!(metrics.total_penetration >= metrics.max_penetration);
+    assert!(metrics.max_penetration.is_finite());
+    assert!(metrics.total_penetration.is_finite());
+}
+
+#[test]
+fn contact_witness_limit_keeps_full_pair_metrics() {
+    let pair_count = MAX_CONTACT_WITNESSES + 8;
+    let mut faces = Vec::with_capacity(pair_count * 2);
+    for index in 0..pair_count {
+        faces.extend(isolated_crossing_pair(
+            u32::try_from(index * 2).unwrap(),
+            index as f64 * 3.0,
+            0.25,
+        ));
+    }
+    let crossed = frame(faces);
+    let witnesses = contact_witnesses(&crossed);
+    let metrics = contact_metrics(&crossed);
+
+    assert_eq!(witnesses.len(), MAX_CONTACT_WITNESSES);
+    assert_eq!(metrics.pair_count, pair_count);
+    assert_eq!(metrics.pair_count, self_intersection_pairs(&crossed).len());
+    assert!(
+        witnesses
+            .windows(2)
+            .all(|pair| pair[0].faces < pair[1].faces)
+    );
+    assert_eq!(witnesses.first().map(|witness| witness.faces), Some((0, 1)));
+}
+
+#[test]
+fn endpoint_contact_has_zero_penetration() {
+    let [horizontal, mut vertical] = isolated_crossing_pair(0, 0.0, 0.25);
+    for point in &mut vertical.polygon {
+        point[2] += 0.25;
+    }
+    let touching = frame(vec![horizontal, vertical]);
+
+    assert!(!self_intersects(&touching));
+    assert!(contact_witnesses(&touching).is_empty());
+    assert_eq!(contact_metrics(&touching), Default::default());
 }
 
 #[test]

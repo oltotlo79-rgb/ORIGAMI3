@@ -78,7 +78,7 @@ pub struct SolveResult {
     pub angles: HashMap<EdgeId, f64>,
     /// 返した候補の閉包残差RMS。
     pub closure_rms: f64,
-    /// 閉包収束前でも、hardを守った有限候補を返しているか。
+    /// 閉包未収束または接触不可避でも、hardを守った最良の有限候補を返しているか。
     pub best_effort: bool,
     /// 中優先角が希望値から譲った量（辺ID昇順）。
     pub relaxations: Vec<AngleRelaxation>,
@@ -112,27 +112,57 @@ impl SolveOptions {
 }
 
 impl Candidate {
-    fn new(x: &[f64], closure_rms: f64, keep_energy: f64, warm_seed: &[f64]) -> Option<Self> {
-        if !closure_rms.is_finite()
-            || !keep_energy.is_finite()
-            || !x.iter().all(|angle| angle.is_finite())
-        {
-            return None;
+    fn update_if_better(
+        best: &mut Option<Self>,
+        x: &[f64],
+        closure_rms: f64,
+        keep_energy: f64,
+        warm_seed: &[f64],
+    ) {
+        if !closure_rms.is_finite() || !keep_energy.is_finite() {
+            return;
         }
-        let warm_distance = x
-            .iter()
-            .zip(warm_seed)
-            .map(|(angle, seed)| (angle - seed).powi(2))
-            .sum::<f64>();
-        warm_distance.is_finite().then(|| Self {
-            x: x.to_vec(),
+        let mut warm_distance = 0.0;
+        for (&angle, &seed) in x.iter().zip(warm_seed) {
+            if !angle.is_finite() {
+                return;
+            }
+            warm_distance += (angle - seed).powi(2);
+        }
+        if !warm_distance.is_finite() {
+            return;
+        }
+        let candidate = Self {
+            x: Vec::new(),
             closure_rms,
             keep_energy,
             warm_distance,
-        })
+        };
+        if best
+            .as_ref()
+            .is_some_and(|current| !candidate.is_better_than_with_x(current, x))
+        {
+            return;
+        }
+        match best {
+            Some(current) => {
+                current.x.clone_from_slice(x);
+                current.closure_rms = closure_rms;
+                current.keep_energy = keep_energy;
+                current.warm_distance = warm_distance;
+            }
+            None => {
+                *best = Some(Self {
+                    x: x.to_vec(),
+                    closure_rms,
+                    keep_energy,
+                    warm_distance,
+                });
+            }
+        }
     }
 
-    fn is_better_than(&self, other: &Self) -> bool {
+    fn is_better_than_with_x(&self, other: &Self, x: &[f64]) -> bool {
         let self_closed = self.closure_rms < TOL_RMS;
         let other_closed = other.closure_rms < TOL_RMS;
         match self_closed.cmp(&other_closed) {
@@ -155,8 +185,7 @@ impl Candidate {
             Ordering::Greater => return false,
             Ordering::Equal => {}
         }
-        self.x
-            .iter()
+        x.iter()
             .zip(&other.x)
             .find_map(|(a, b)| match a.total_cmp(b) {
                 Ordering::Equal => None,
@@ -178,6 +207,107 @@ struct FoldOp {
 /// 元の面へ戻る閉路のヒンジ折り列。一周の合成が恒等になることが拘束。
 struct LoopWalk {
     ops: Vec<FoldOp>,
+}
+
+/// CPと面集合だけで決まる、solve間で共有できる閉包トポロジ。
+///
+/// 連続追従では開始姿勢の検証と要求姿勢のsolveが同じCPを使うため、この部分を
+/// 一度だけ構築する。数値計算用の配列は含めず、各solveの状態は従来どおり独立する。
+pub(crate) struct PreparedTopology {
+    forest: tree::Forest,
+    idx_of: HashMap<EdgeId, usize>,
+    loop_walks: Vec<LoopWalk>,
+    on_loop: Vec<bool>,
+}
+
+pub(crate) fn prepare_topology(cp: &CreasePattern, faces: &[Face]) -> PreparedTopology {
+    let forest = tree::build_forest(cp, faces);
+    let n = forest.hinges.len();
+    let idx_of = forest
+        .hinges
+        .iter()
+        .enumerate()
+        .map(|(i, &edge)| (edge, i))
+        .collect();
+
+    // 閉包拘束の閉路を作る。BFSの走査はヒンジ添字順なので決定的。
+    let mut is_tree = vec![true; n];
+    let mut loop_rank = vec![usize::MAX; n];
+    for (li, closure) in forest.loops.iter().enumerate() {
+        is_tree[closure.hinge] = false;
+        loop_rank[closure.hinge] = li;
+    }
+    let mut adj: Vec<Vec<(usize, usize)>> = vec![Vec::new(); faces.len()];
+    for (hi, occ) in forest.hinge_occ.iter().enumerate() {
+        let (f, g) = (occ[0].0, occ[1].0);
+        adj[f].push((hi, g));
+        adj[g].push((hi, f));
+    }
+    let axis_on = |hi: usize, face: usize| {
+        let occ = &forest.hinge_occ[hi];
+        let occurrence = if occ[0].0 == face { occ[0] } else { occ[1] };
+        (occurrence.1, occurrence.2)
+    };
+    let mut loop_walks = Vec::with_capacity(forest.loops.len());
+    let mut prev: Vec<Option<(usize, usize)>> = vec![None; faces.len()];
+    let mut visited = vec![false; faces.len()];
+    let mut queue = VecDeque::new();
+    let mut back = Vec::new();
+    for (li, closure) in forest.loops.iter().enumerate() {
+        prev.fill(None);
+        visited.fill(false);
+        queue.clear();
+        visited[closure.to] = true;
+        queue.push_back(closure.to);
+        'bfs: while let Some(cur) = queue.pop_front() {
+            for &(hi, next) in &adj[cur] {
+                if visited[next] || !(is_tree[hi] || loop_rank[hi] < li) {
+                    continue;
+                }
+                visited[next] = true;
+                prev[next] = Some((cur, hi));
+                if next == closure.from {
+                    break 'bfs;
+                }
+                queue.push_back(next);
+            }
+        }
+        back.clear();
+        let mut cur = closure.from;
+        while cur != closure.to {
+            let (previous, hi) = prev[cur].expect("木辺だけでも必ず届く");
+            back.push((previous, hi));
+            cur = previous;
+        }
+        let mut ops = Vec::with_capacity(back.len() + 1);
+        ops.push(FoldOp {
+            hinge: closure.hinge,
+            axis_a: closure.axis_a,
+            axis_u: closure.axis_u,
+        });
+        for &(source, hi) in back.iter().rev() {
+            let (axis_a, axis_u) = axis_on(hi, source);
+            ops.push(FoldOp {
+                hinge: hi,
+                axis_a,
+                axis_u,
+            });
+        }
+        loop_walks.push(LoopWalk { ops });
+    }
+
+    let mut on_loop = vec![false; n];
+    for walk in &loop_walks {
+        for op in &walk.ops {
+            on_loop[op.hinge] = true;
+        }
+    }
+    PreparedTopology {
+        forest,
+        idx_of,
+        loop_walks,
+        on_loop,
+    }
 }
 
 /// opsの折りを恒等姿勢から順に合成した姿勢を返す。
@@ -216,13 +346,36 @@ fn cross_matrix(u: DVec3) -> DMat3 {
 /// となる(Pの並進は定数なので消える)。前進差分と違い厳密なので、±180°近傍の
 /// 縮退(残差が角度誤差の2乗)でも勾配を誤らず、平坦到達時の収束減速がない。
 /// 計算量は折り列の長さLに対しO(L)(数値微分のO(L²)から改善)。
-fn side_jacobian(ops: &[FoldOp], x: &[f64], sign: f64, mut emit: impl FnMut(usize, [f64; 12])) {
-    let rots: Vec<DMat3> = ops
-        .iter()
-        .map(|op| DMat3::from_quat(DQuat::from_axis_angle(op.axis_u, x[op.hinge])))
-        .collect();
+#[cfg(test)]
+fn side_jacobian(ops: &[FoldOp], x: &[f64], sign: f64, emit: impl FnMut(usize, [f64; 12])) {
+    let mut rots = Vec::new();
+    let mut suffix = Vec::new();
+    let mut emit = emit;
+    side_jacobian_with_scratch(ops, x, sign, &mut rots, &mut suffix, |_, hinge, col| {
+        emit(hinge, col);
+    });
+}
+
+/// 全閉路で作業領域を使い回す [`side_jacobian`] の実行経路。
+/// 面400では1回のsolve中に数千回呼ぶため、閉路ごとの小さなVec確保を避ける。
+fn side_jacobian_with_scratch(
+    ops: &[FoldOp],
+    x: &[f64],
+    sign: f64,
+    rots: &mut Vec<DMat3>,
+    suffix: &mut Vec<(DMat3, DVec3)>,
+    mut emit: impl FnMut(usize, usize, [f64; 12]),
+) {
+    rots.clear();
+    for op in ops {
+        rots.push(DMat3::from_quat(DQuat::from_axis_angle(
+            op.axis_u,
+            x[op.hinge],
+        )));
+    }
     // suffix[i] = F_{i+1}∘…∘F_p(iより後ろの合成)
-    let mut suffix = vec![(DMat3::IDENTITY, DVec3::ZERO); ops.len() + 1];
+    suffix.clear();
+    suffix.resize(ops.len() + 1, (DMat3::IDENTITY, DVec3::ZERO));
     for (i, op) in ops.iter().enumerate().rev() {
         let (rs, ts) = suffix[i + 1];
         let ti = op.axis_a - rots[i] * op.axis_a;
@@ -237,7 +390,7 @@ fn side_jacobian(ops: &[FoldOp], x: &[f64], sign: f64, mut emit: impl FnMut(usiz
         let mut col = [0.0; 12];
         col[..9].copy_from_slice(&dlin.to_cols_array());
         col[9..].copy_from_slice(&dtr.to_array());
-        emit(op.hinge, col);
+        emit(i, op.hinge, col);
         rp *= rots[i];
     }
 }
@@ -265,24 +418,37 @@ pub fn solve(
     drivers: &[Driver],
     warm_start: Option<&HashMap<EdgeId, f64>>,
 ) -> SolveResult {
-    let clamped = solve_impl(
+    let topology = prepare_topology(cp, faces);
+    solve_prepared(cp, faces, drivers, warm_start, &topology)
+}
+
+pub(crate) fn solve_prepared(
+    cp: &CreasePattern,
+    faces: &[Face],
+    drivers: &[Driver],
+    warm_start: Option<&HashMap<EdgeId, f64>>,
+    topology: &PreparedTopology,
+) -> SolveResult {
+    let clamped = solve_impl_prepared(
         cp,
         faces,
         drivers,
         warm_start,
         None,
         SolveOptions::new(false, false, SPRING_W2),
+        topology,
     );
     if clamped.converged {
         clamped
     } else {
-        solve_impl(
+        solve_impl_prepared(
             cp,
             faces,
             drivers,
             warm_start,
             None,
             SolveOptions::new(true, false, SPRING_W2),
+            topology,
         )
     }
 }
@@ -313,6 +479,19 @@ pub fn solve_near(
     solve_near_with_spring_weight(cp, faces, drivers, targets, warm_start, SPRING_W2)
 }
 
+pub(crate) fn solve_near_prepared(
+    cp: &CreasePattern,
+    faces: &[Face],
+    drivers: &[Driver],
+    targets: &HashMap<EdgeId, f64>,
+    warm_start: Option<&HashMap<EdgeId, f64>>,
+    topology: &PreparedTopology,
+) -> SolveResult {
+    solve_near_with_spring_weight_prepared(
+        cp, faces, drivers, targets, warm_start, SPRING_W2, topology,
+    )
+}
+
 pub(crate) fn solve_near_with_spring_weight(
     cp: &CreasePattern,
     faces: &[Face],
@@ -321,24 +500,41 @@ pub(crate) fn solve_near_with_spring_weight(
     warm_start: Option<&HashMap<EdgeId, f64>>,
     spring_w2: f64,
 ) -> SolveResult {
-    let clamped = solve_impl(
+    let topology = prepare_topology(cp, faces);
+    solve_near_with_spring_weight_prepared(
+        cp, faces, drivers, targets, warm_start, spring_w2, &topology,
+    )
+}
+
+fn solve_near_with_spring_weight_prepared(
+    cp: &CreasePattern,
+    faces: &[Face],
+    drivers: &[Driver],
+    targets: &HashMap<EdgeId, f64>,
+    warm_start: Option<&HashMap<EdgeId, f64>>,
+    spring_w2: f64,
+    topology: &PreparedTopology,
+) -> SolveResult {
+    let clamped = solve_impl_prepared(
         cp,
         faces,
         drivers,
         warm_start,
         Some(targets),
         SolveOptions::new(false, false, spring_w2),
+        topology,
     );
     if clamped.converged {
         clamped
     } else {
-        solve_impl(
+        solve_impl_prepared(
             cp,
             faces,
             drivers,
             warm_start,
             Some(targets),
             SolveOptions::new(true, false, spring_w2),
+            topology,
         )
     }
 }
@@ -355,49 +551,63 @@ pub fn solve_near_exact(
     targets: &HashMap<EdgeId, f64>,
     warm_start: Option<&HashMap<EdgeId, f64>>,
 ) -> SolveResult {
-    let clamped = solve_impl(
+    let topology = prepare_topology(cp, faces);
+    solve_near_exact_prepared(cp, faces, drivers, targets, warm_start, &topology)
+}
+
+pub(crate) fn solve_near_exact_prepared(
+    cp: &CreasePattern,
+    faces: &[Face],
+    drivers: &[Driver],
+    targets: &HashMap<EdgeId, f64>,
+    warm_start: Option<&HashMap<EdgeId, f64>>,
+    topology: &PreparedTopology,
+) -> SolveResult {
+    let clamped = solve_impl_prepared(
         cp,
         faces,
         drivers,
         warm_start,
         Some(targets),
         SolveOptions::new(false, true, SPRING_W2),
+        topology,
     );
     if clamped.converged {
         clamped
     } else {
-        solve_impl(
+        solve_impl_prepared(
             cp,
             faces,
             drivers,
             warm_start,
             Some(targets),
             SolveOptions::new(true, true, SPRING_W2),
+            topology,
         )
     }
 }
 
-fn solve_impl(
+fn solve_impl_prepared(
     cp: &CreasePattern,
     faces: &[Face],
     drivers: &[Driver],
     warm_start: Option<&HashMap<EdgeId, f64>>,
     targets: Option<&HashMap<EdgeId, f64>>,
     options: SolveOptions,
+    topology: &PreparedTopology,
 ) -> SolveResult {
     let SolveOptions {
         wrap_updates,
         finish_closure,
         spring_w2,
     } = options;
-    let forest = tree::build_forest(cp, faces);
+    let PreparedTopology {
+        forest,
+        idx_of,
+        loop_walks,
+        on_loop,
+    } = topology;
     let n = forest.hinges.len();
-    let idx_of: HashMap<EdgeId, usize> = forest
-        .hinges
-        .iter()
-        .enumerate()
-        .map(|(i, &e)| (e, i))
-        .collect();
     let mut warnings = Vec::new();
 
     // driver角(ラジアン)を固定値として登録
@@ -419,95 +629,32 @@ fn solve_impl(
         }
     }
 
-    // 閉包拘束の閉路を作る(モジュール冒頭のコメント参照)。BFSの走査は
-    // ヒンジ添字順なので決定的。木辺だけでも必ず届くため経路は常に存在する。
-    let mut is_tree = vec![true; n];
-    let mut loop_rank = vec![usize::MAX; n];
-    for (li, l) in forest.loops.iter().enumerate() {
-        is_tree[l.hinge] = false;
-        loop_rank[l.hinge] = li;
-    }
-    let mut adj: Vec<Vec<(usize, usize)>> = vec![Vec::new(); faces.len()]; // (ヒンジ, 相手面)
-    for (hi, occ) in forest.hinge_occ.iter().enumerate() {
-        let (f, g) = (occ[0].0, occ[1].0);
-        adj[f].push((hi, g));
-        adj[g].push((hi, f));
-    }
-    let axis_on = |hi: usize, face: usize| {
-        let occ = &forest.hinge_occ[hi];
-        let o = if occ[0].0 == face { occ[0] } else { occ[1] };
-        (o.1, o.2)
-    };
-    let loop_walks: Vec<LoopWalk> = forest
-        .loops
-        .iter()
-        .enumerate()
-        .map(|(li, l)| {
-            // BFS: l.to から l.from へ(使える辺: 木辺と先順の非木辺)
-            let mut prev: Vec<Option<(usize, usize)>> = vec![None; faces.len()]; // (元の面, ヒンジ)
-            let mut visited = vec![false; faces.len()];
-            let mut queue = VecDeque::new();
-            visited[l.to] = true;
-            queue.push_back(l.to);
-            'bfs: while let Some(cur) = queue.pop_front() {
-                for &(hi, nb) in &adj[cur] {
-                    if visited[nb] || !(is_tree[hi] || loop_rank[hi] < li) {
-                        continue;
-                    }
-                    visited[nb] = true;
-                    prev[nb] = Some((cur, hi));
-                    if nb == l.from {
-                        break 'bfs;
-                    }
-                    queue.push_back(nb);
-                }
-            }
-            // 経路を復元し、渡る元の面の側の軸で折り列にする。
-            // 一周: まず非木辺を from→to へ渡り、経路で to→…→from と戻る
-            let mut back = Vec::new(); // (渡る元の面, ヒンジ)。from側から遡った逆順
-            let mut cur = l.from;
-            while cur != l.to {
-                let (p, hi) = prev[cur].expect("木辺だけでも必ず届く");
-                back.push((p, hi));
-                cur = p;
-            }
-            let mut ops = vec![FoldOp {
-                hinge: l.hinge,
-                axis_a: l.axis_a,
-                axis_u: l.axis_u,
-            }];
-            for &(src, hi) in back.iter().rev() {
-                let (a, u) = axis_on(hi, src);
-                ops.push(FoldOp {
-                    hinge: hi,
-                    axis_a: a,
-                    axis_u: u,
-                });
-            }
-            LoopWalk { ops }
-        })
-        .collect();
-
-    // ループ(閉路)上のヒンジ=初期値バイアスの適用範囲。
-    // 閉路に乗らないヒンジ(ぶら下がりの面へ向かう木辺など)は残差に影響しない
-    // =初期値がそのまま解として残るため、バイアスを掛けてはいけない。
-    let mut on_loop = vec![false; n];
-    for lw in &loop_walks {
-        for op in &lw.ops {
-            on_loop[op.hinge] = true;
-        }
-    }
-
     // driver角の平均の大きさ(ラジアン)と山谷符号による初期値バイアス
-    let fixed_vals: Vec<f64> = fixed.iter().filter_map(|v| *v).collect();
-    let mean_drive = if fixed_vals.is_empty() {
+    let (fixed_abs_sum, fixed_count) = fixed
+        .iter()
+        .filter_map(|value| *value)
+        .fold((0.0, 0usize), |(sum, count), value| {
+            (sum + value.abs(), count + 1)
+        });
+    let mean_drive = if fixed_count == 0 {
         0.0
     } else {
-        fixed_vals.iter().map(|v| v.abs()).sum::<f64>() / fixed_vals.len() as f64
+        fixed_abs_sum / fixed_count as f64
     };
-    let kinds: HashMap<EdgeId, EdgeKind> = cp.edges.iter().map(|e| (e.id, e.kind)).collect();
+    let needs_kind_bias = (0..n).any(|i| {
+        fixed[i].is_none()
+            && on_loop[i]
+            && !warm_start
+                .and_then(|values| values.get(&forest.hinges[i]))
+                .is_some_and(|value| value.is_finite())
+            && !targets
+                .and_then(|values| values.get(&forest.hinges[i]))
+                .is_some_and(|value| value.is_finite())
+    });
+    let kinds: Option<HashMap<EdgeId, EdgeKind>> =
+        needs_kind_bias.then(|| cp.edges.iter().map(|e| (e.id, e.kind)).collect());
     let kind_sign = |eid: EdgeId| -> f64 {
-        match kinds.get(&eid) {
+        match kinds.as_ref().and_then(|values| values.get(&eid)) {
             Some(EdgeKind::Valley) => -1.0,
             _ => 1.0,
         }
@@ -534,43 +681,47 @@ fn solve_impl(
         target_rad[i] = Some(target.clamp(-180.0, 180.0).to_radians());
     }
 
-    // 単位紙長当たりの折り目抵抗。論理折り線が複数断片へ分かれても、
-    // 断片長の係数和が元の1辺と同じになる。
-    let mut min = [f64::INFINITY; 2];
-    let mut max = [f64::NEG_INFINITY; 2];
-    let vertex_positions: HashMap<_, _> = cp
-        .vertices
-        .iter()
-        .map(|vertex| {
-            for axis in 0..2 {
-                if vertex.pos[axis].is_finite() {
-                    min[axis] = min[axis].min(vertex.pos[axis]);
-                    max[axis] = max[axis].max(vertex.pos[axis]);
+    // 単位紙長当たりの折り目抵抗。soft targetが無い通常solveでは使わないため、
+    // 頂点・辺HashMapの構築も省く（400面追従では毎フレームの固定費になる）。
+    let target_weight: Vec<f64> = if target_rad.iter().any(Option::is_some) {
+        let mut min = [f64::INFINITY; 2];
+        let mut max = [f64::NEG_INFINITY; 2];
+        let vertex_positions: HashMap<_, _> = cp
+            .vertices
+            .iter()
+            .map(|vertex| {
+                for axis in 0..2 {
+                    if vertex.pos[axis].is_finite() {
+                        min[axis] = min[axis].min(vertex.pos[axis]);
+                        max[axis] = max[axis].max(vertex.pos[axis]);
+                    }
                 }
-            }
-            (vertex.id, vertex.pos)
-        })
-        .collect();
-    let paper_length = (max[0] - min[0]).max(max[1] - min[1]).max(1e-12);
-    let edge_length_ratio: HashMap<EdgeId, f64> = cp
-        .edges
-        .iter()
-        .filter_map(|edge| {
-            let (a, b) = (
-                vertex_positions.get(&edge.v0)?,
-                vertex_positions.get(&edge.v1)?,
-            );
-            let length = (b[0] - a[0]).hypot(b[1] - a[1]);
-            length
-                .is_finite()
-                .then_some((edge.id, length / paper_length))
-        })
-        .collect();
-    let target_weight: Vec<f64> = forest
-        .hinges
-        .iter()
-        .map(|hinge| edge_length_ratio.get(hinge).copied().unwrap_or(0.0))
-        .collect();
+                (vertex.id, vertex.pos)
+            })
+            .collect();
+        let paper_length = (max[0] - min[0]).max(max[1] - min[1]).max(1e-12);
+        let edge_length_ratio: HashMap<EdgeId, f64> = cp
+            .edges
+            .iter()
+            .filter_map(|edge| {
+                let (a, b) = (
+                    vertex_positions.get(&edge.v0)?,
+                    vertex_positions.get(&edge.v1)?,
+                );
+                let length = (b[0] - a[0]).hypot(b[1] - a[1]);
+                length
+                    .is_finite()
+                    .then_some((edge.id, length / paper_length))
+            })
+            .collect();
+        forest
+            .hinges
+            .iter()
+            .map(|hinge| edge_length_ratio.get(hinge).copied().unwrap_or(0.0))
+            .collect()
+    } else {
+        vec![0.0; n]
+    };
 
     // 初期値(全ヒンジ分。fixedは固定値で埋める)。従属ヒンジは前回解が
     // 範囲外だった古い状態から始める場合も、最初に物理限界へ戻す。
@@ -617,6 +768,16 @@ fn solve_impl(
             vs
         })
         .collect();
+    let loop_op_cols: Vec<Vec<Option<usize>>> = loop_walks
+        .iter()
+        .zip(&loop_vars)
+        .map(|(walk, vars)| {
+            walk.ops
+                .iter()
+                .map(|op| var_of[op.hinge].map(|vi| vars.binary_search(&vi).expect("閉路上の変数")))
+                .collect()
+        })
+        .collect();
 
     // JtJの疎パターン(CSR): 同じ閉路に現れる変数対の位置だけ非零
     let mut nbrs: Vec<Vec<usize>> = vec![Vec::new(); k];
@@ -659,36 +820,82 @@ fn solve_impl(
             *xi = target;
         }
     }
-    let soft_vars: Vec<(usize, usize, f64)> = vars
+    let soft_vars: Vec<(usize, usize, f64, usize)> = vars
         .iter()
         .enumerate()
-        .filter_map(|(vi, &hi)| target_rad[hi].map(|_| (vi, hi, target_weight[hi])))
+        .filter_map(|(vi, &hi)| {
+            target_rad[hi].map(|_| {
+                let (lo, end) = (row_ptr[vi], row_ptr[vi + 1]);
+                let diagonal = lo + col_idx[lo..end].binary_search(&vi).expect("対角は必ずある");
+                (vi, hi, target_weight[hi], diagonal)
+            })
+        })
         .collect();
     let spring_cost = |x: &[f64], w2: f64| -> f64 {
         if w2 == 0.0 {
             return 0.0;
         }
-        w2 * soft_vars
-            .iter()
-            .map(|&(_, hi, length_ratio)| {
-                length_ratio * (x[hi] - target_rad[hi].expect("soft変数には目標がある")).powi(2)
-            })
-            .sum::<f64>()
+        let mut sum = 0.0;
+        for &(_, hi, length_ratio, _) in &soft_vars {
+            sum += length_ratio * (x[hi] - target_rad[hi].expect("soft変数には目標がある")).powi(2);
+        }
+        w2 * sum
     };
     let mut iterations = 0u32;
     let mut r = vec![0.0; m];
     eval_all(&x, &mut r);
     let mut best_x = x.clone();
-    let mut best_candidate =
-        Candidate::new(&x, rms(sq_sum(&r)), spring_cost(&x, spring_w2), &warm_seed);
+    let mut best_candidate = None;
+    Candidate::update_if_better(
+        &mut best_candidate,
+        &x,
+        rms(sq_sum(&r)),
+        spring_cost(&x, spring_w2),
+        &warm_seed,
+    );
 
     if k > 0 && m > 0 {
         let mut vals = vec![0.0; col_idx.len()];
-        let mut blocks: Vec<Vec<f64>> = loop_vars
+        let mut blocks: Vec<Vec<[f64; 12]>> = loop_vars
             .iter()
-            .map(|vs| vec![0.0; 12 * vs.len()])
+            .map(|vs| vec![[0.0; 12]; vs.len()])
             .collect();
         let mut chol = EnvelopeCholesky::new(k, &row_ptr, &col_idx);
+        // factorが読むのはRCM順の下三角だけ。同じ対称成分を両側で計算したり、
+        // 反復ごとにCSR位置を二分探索したりせず、閉路内の列対と格納先を固定する。
+        let normal_slots: Vec<Vec<(usize, usize, usize)>> = loop_vars
+            .iter()
+            .map(|vs| {
+                let mut slots = Vec::with_capacity(vs.len() * (vs.len() + 1) / 2);
+                for (ci, &vi) in vs.iter().enumerate() {
+                    let (lo, hi) = (row_ptr[vi], row_ptr[vi + 1]);
+                    for (cj, &vj) in vs.iter().enumerate() {
+                        if chol.pos[vi] < chol.pos[vj] {
+                            continue;
+                        }
+                        let slot = lo
+                            + col_idx[lo..hi]
+                                .binary_search(&vj)
+                                .expect("疎パターンに含まれる");
+                        slots.push((ci, cj, slot));
+                    }
+                }
+                slots
+            })
+            .collect();
+        let max_loop_ops = loop_walks
+            .iter()
+            .map(|walk| walk.ops.len())
+            .max()
+            .unwrap_or(0);
+        let mut jacobian_rots = Vec::with_capacity(max_loop_ops);
+        let mut jacobian_suffix = Vec::with_capacity(max_loop_ops + 1);
+        let mut jtr = vec![0.0; k];
+        let mut b = vec![0.0; k];
+        let mut delta = vec![0.0; k];
+        let mut solve_work = vec![0.0; k];
+        let mut xt = x.clone();
+        let mut rt = vec![0.0; m];
         // medium保持→零空間内の同順位選択。表示再生ではさらにsoft抵抗を
         // 完全に外す閉包段を足す。soft targetなしは純粋な閉包段だけを行う。
         let phases = if soft_vars.is_empty() {
@@ -704,7 +911,19 @@ fn solve_impl(
             } else {
                 MAX_ITER
             };
-            let mut lambda = if w2 == NULLSPACE_KEEP_W2 { 1e-15 } else { 1e-1 };
+            let use_continuation_lambda = w2 != NULLSPACE_KEEP_W2
+                && targets.is_none()
+                && warm_start.is_some()
+                && faces.len() > 100;
+            let mut lambda = if w2 == NULLSPACE_KEEP_W2 {
+                1e-15
+            } else if use_continuation_lambda {
+                // 追従中は既に直前の閉包解の近傍にいる。強い初期減衰で小刻みに
+                // 7回進む代わりにNewton stepから始め、悪化時は従来どおり10倍して戻す。
+                1e-6
+            } else {
+                1e-1
+            };
             let mut cost = sq_sum(&r) + spring_cost(&x, w2);
             let mut best_cost = cost;
             best_x.clone_from(&x);
@@ -718,70 +937,81 @@ fn solve_impl(
                 // 疎ヤコビアン: 閉路ごとに、その閉路上の変数の列だけを解析微分で作る
                 // (全域再伝播なし。閉路外のヒンジの列は零。driver固定ヒンジは捨てる)
                 for (li, lw) in loop_walks.iter().enumerate() {
-                    let vs = &loop_vars[li];
-                    let w = vs.len();
                     let block = &mut blocks[li];
-                    block.fill(0.0);
-                    let emit = |hinge: usize, col: [f64; 12]| {
-                        let Some(vi) = var_of[hinge] else { return };
-                        let c = vs.binary_search(&vi).expect("閉路上の変数");
+                    block.fill([0.0; 12]);
+                    let emit = |op_index: usize, _hinge: usize, col: [f64; 12]| {
+                        let Some(c) = loop_op_cols[li][op_index] else {
+                            return;
+                        };
                         for (row, v) in col.iter().enumerate() {
-                            block[row * w + c] += v;
+                            block[c][row] += v;
                         }
                     };
-                    side_jacobian(&lw.ops, &x, 1.0, emit);
+                    side_jacobian_with_scratch(
+                        &lw.ops,
+                        &x,
+                        1.0,
+                        &mut jacobian_rots,
+                        &mut jacobian_suffix,
+                        emit,
+                    );
                 }
                 // 正規方程式の左辺JtJ(CSRへ加算)と右辺Jt・r
                 vals.fill(0.0);
-                let mut jtr = vec![0.0; k];
+                jtr.fill(0.0);
                 for (li, vs) in loop_vars.iter().enumerate() {
-                    let w = vs.len();
                     let block = &blocks[li];
                     let rl = &r[12 * li..12 * li + 12];
                     for (ci, &vi) in vs.iter().enumerate() {
-                        jtr[vi] += (0..12)
-                            .map(|row| block[row * w + ci] * rl[row])
-                            .sum::<f64>();
-                        let (lo, hi2) = (row_ptr[vi], row_ptr[vi + 1]);
-                        for (cj, &vj) in vs.iter().enumerate() {
-                            let s: f64 = (0..12)
-                                .map(|row| block[row * w + ci] * block[row * w + cj])
-                                .sum();
-                            let pos = lo
-                                + col_idx[lo..hi2]
-                                    .binary_search(&vj)
-                                    .expect("疎パターンに含まれる");
-                            vals[pos] += s;
+                        let mut dot = 0.0;
+                        for row in 0..12 {
+                            dot += block[ci][row] * rl[row];
                         }
+                        jtr[vi] += dot;
+                    }
+                    for &(ci, cj, slot) in &normal_slots[li] {
+                        let mut dot = 0.0;
+                        for row in 0..12 {
+                            dot += block[ci][row] * block[cj][row];
+                        }
+                        vals[slot] += dot;
                     }
                 }
                 // ばね(対角のみ): 目標角からのずれを罰する項を正規方程式へ足す
                 if w2 > 0.0 {
-                    for &(vi, hi, length_ratio) in &soft_vars {
+                    for &(vi, hi, length_ratio, diagonal) in &soft_vars {
                         let coefficient = w2 * length_ratio;
                         jtr[vi] +=
                             coefficient * (x[hi] - target_rad[hi].expect("soft変数には目標がある"));
-                        let (lo, hi2) = (row_ptr[vi], row_ptr[vi + 1]);
-                        let pos = lo + col_idx[lo..hi2].binary_search(&vi).expect("対角は必ずある");
-                        vals[pos] += coefficient;
+                        vals[diagonal] += coefficient;
                     }
                 }
                 // Levenberg減衰: 残差が減るまでλを10倍しながら更新を試す
                 let mut improved = false;
-                for _ in 0..8 {
+                // The continuation path starts five decades below the legacy damping.  Keep the
+                // cheap near-solution case, but retain the same maximum damping for arbitrary
+                // public warm starts that are not actually close to a solution.
+                let trial_limit = if use_continuation_lambda { 13 } else { 8 };
+                for _ in 0..trial_limit {
                     if !chol.factor(&row_ptr, &col_idx, &vals, lambda) {
                         lambda *= 10.0;
                         continue;
                     }
-                    let b: Vec<f64> = jtr.iter().map(|v| -v).collect();
-                    let delta = chol.solve(&b);
+                    for (to, from) in b.iter_mut().zip(&jtr) {
+                        *to = -*from;
+                    }
+                    chol.solve_into(&b, &mut solve_work, &mut delta);
                     if !delta.iter().all(|d| d.is_finite()) {
                         lambda *= 10.0;
                         continue;
                     }
-                    let mut xt = x.clone();
+                    if wrap_updates {
+                        // rem_euclid is not bit-idempotent.  A rejected LM trial must therefore
+                        // start from x again, including free hinges outside every closure loop.
+                        xt.clone_from(&x);
+                    }
                     for (vi, &hi) in vars.iter().enumerate() {
-                        xt[hi] += delta[vi];
+                        xt[hi] = x[hi] + delta[vi];
                     }
                     if wrap_updates {
                         // Fold angles live on a circle: +π and -π are the same flat geometry.
@@ -793,24 +1023,19 @@ fn solve_impl(
                     } else {
                         clamp_dependent_angles(&mut xt, &fixed);
                     }
-                    let mut rt = vec![0.0; m];
                     eval_all(&xt, &mut rt);
                     let closure_cost = sq_sum(&rt);
-                    if let Some(candidate) = Candidate::new(
+                    Candidate::update_if_better(
+                        &mut best_candidate,
                         &xt,
                         rms(closure_cost),
                         spring_cost(&xt, spring_w2),
                         &warm_seed,
-                    ) && best_candidate
-                        .as_ref()
-                        .is_none_or(|best| candidate.is_better_than(best))
-                    {
-                        best_candidate = Some(candidate);
-                    }
+                    );
                     let ct = closure_cost + spring_cost(&xt, w2);
                     if ct < cost {
-                        x = xt;
-                        r = rt;
+                        x.clone_from(&xt);
+                        r.clone_from(&rt);
                         cost = ct;
                         lambda = (lambda * 0.1).max(1e-18);
                         improved = true;
@@ -865,7 +1090,7 @@ fn solve_impl(
         .filter_map(|(i, &hinge)| {
             let target = target_deg[i]?;
             let actual = angles[&hinge];
-            let delta = actual - target;
+            let delta = canonical_delta_deg(actual, target);
             (delta.abs() >= RELAXATION_EPS_DEG).then_some(AngleRelaxation {
                 hinge,
                 target_angle_deg: target,
@@ -912,7 +1137,11 @@ fn solve_impl(
 }
 
 fn sq_sum(v: &[f64]) -> f64 {
-    v.iter().map(|x| x * x).sum()
+    let mut sum = 0.0;
+    for &value in v {
+        sum += value * value;
+    }
+    sum
 }
 
 fn frame_is_finite_and_complete(frame: &Frame3D, expected_faces: usize) -> bool {
@@ -960,6 +1189,23 @@ fn wrap_dependent_updates(x: &mut [f64], fixed: &[Option<f64>]) {
 fn wrap_deg(d: f64) -> f64 {
     let w = (d + 180.0).rem_euclid(360.0) - 180.0;
     if w == -180.0 && d > 0.0 { 180.0 } else { w }
+}
+
+/// 角度差を同値な回転のうち絶対値が最小の `[-180, 180]` へ正規化する。
+///
+/// 折り角では +180° と -180° が同じ平坦姿勢を表すため、生の差を診断へ載せると
+/// 360°譲ったという誤った通知になる。ちょうど180°の差だけは元の向きを保つ。
+pub(crate) fn canonical_delta_deg(actual: f64, target: f64) -> f64 {
+    let raw = actual - target;
+    if (-180.0..=180.0).contains(&raw) {
+        return raw;
+    }
+    let wrapped = (raw + 180.0).rem_euclid(360.0) - 180.0;
+    if wrapped == -180.0 && raw > 0.0 {
+        180.0
+    } else {
+        wrapped
+    }
 }
 
 /// (JtJ + λI)・δ = b の直接法ソルバー: RCM順序付きの帯(エンベロープ)
@@ -1043,70 +1289,84 @@ impl EnvelopeCholesky {
         self.data.fill(0.0);
         let k = self.order.len();
         for (ni, &oi) in self.order.iter().enumerate() {
-            for (t, &oj) in col_idx[row_ptr[oi]..row_ptr[oi + 1]].iter().enumerate() {
+            let row_start = row_ptr[oi];
+            let row_end = row_ptr[oi + 1];
+            for t in 0..row_end - row_start {
+                let oj = col_idx[row_start + t];
                 let nj = self.pos[oj];
                 if nj <= ni {
-                    self.data[self.offset[ni] + (nj - self.first[ni])] = vals[row_ptr[oi] + t];
+                    self.data[self.offset[ni] + (nj - self.first[ni])] = vals[row_start + t];
                 }
             }
             self.data[self.offset[ni] + (ni - self.first[ni])] += lambda;
         }
         for i in 0..k {
+            let i_offset = self.offset[i];
+            let i_first = self.first[i];
             for j in self.first[i]..=i {
-                let start = self.first[i].max(self.first[j]);
-                let mut sum = self.at(i, j);
+                let j_offset = self.offset[j];
+                let j_first = self.first[j];
+                let start = i_first.max(j_first);
+                let mut sum = self.data[i_offset + (j - i_first)];
                 for t in start..j {
-                    sum -= self.at(i, t) * self.at(j, t);
+                    sum -=
+                        self.data[i_offset + (t - i_first)] * self.data[j_offset + (t - j_first)];
                 }
                 let v = if j < i {
-                    sum / self.at(j, j)
+                    sum / self.data[j_offset + (j - j_first)]
                 } else {
                     if sum <= 1e-300 {
                         return false;
                     }
                     sum.sqrt()
                 };
-                self.data[self.offset[i] + (j - self.first[i])] = v;
+                self.data[i_offset + (j - i_first)] = v;
             }
         }
         true
     }
 
     /// 分解済みのLで (JtJ+λI)・x = b を解く(前進・後退代入)。
-    fn solve(&self, b: &[f64]) -> Vec<f64> {
+    fn solve_into(&self, b: &[f64], work: &mut Vec<f64>, out: &mut Vec<f64>) {
         let k = self.order.len();
         // 前進代入 L・y = P・b(行iの帯の対角を除く部分が列 first[i]..i に対応)
-        let mut y: Vec<f64> = self.order.iter().map(|&oi| b[oi]).collect();
+        work.clear();
+        for &oi in &self.order {
+            work.push(b[oi]);
+        }
         for i in 0..k {
             let f = self.first[i];
             let row = &self.data[self.offset[i]..self.offset[i + 1] - 1];
-            let s: f64 = row.iter().zip(&y[f..i]).map(|(l, v)| l * v).sum();
-            y[i] = (y[i] - s) / self.at(i, i);
+            let mut s = 0.0;
+            for (l, v) in row.iter().zip(&work[f..i]) {
+                s += l * v;
+            }
+            work[i] = (work[i] - s) / self.at(i, i);
         }
         // 後退代入 Lᵀ・z = y(行方向の走査で列アクセスを避ける)
         for i in (0..k).rev() {
-            let zi = y[i] / self.at(i, i);
-            y[i] = zi;
+            let zi = work[i] / self.at(i, i);
+            work[i] = zi;
             let f = self.first[i];
             let row = &self.data[self.offset[i]..self.offset[i + 1] - 1];
-            for (l, v) in row.iter().zip(y[f..i].iter_mut()) {
+            for (l, v) in row.iter().zip(work[f..i].iter_mut()) {
                 *v -= l * zi;
             }
         }
         // 順序を元に戻す
-        let mut x = vec![0.0; k];
+        out.clear();
+        out.resize(k, 0.0);
         for (ni, &oi) in self.order.iter().enumerate() {
-            x[oi] = y[ni];
+            out[oi] = work[ni];
         }
-        x
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        DEPENDENT_ANGLE_LIMIT, FoldOp, LoopWalk, eval_loop, side_jacobian, wrap_deg,
-        wrap_dependent_updates,
+        DEPENDENT_ANGLE_LIMIT, FoldOp, LoopWalk, canonical_delta_deg, eval_loop, side_jacobian,
+        wrap_deg, wrap_dependent_updates,
     };
     use glam::DVec3;
 
@@ -1158,6 +1418,15 @@ mod tests {
         assert_eq!(wrap_deg(-180.0), -180.0);
         assert_eq!(wrap_deg(540.0), 180.0);
         assert_eq!(wrap_deg(-190.0), 170.0);
+    }
+
+    #[test]
+    fn angle_relaxation_wraps_plus_minus_180() {
+        assert_eq!(canonical_delta_deg(180.0, -180.0), 0.0);
+        assert_eq!(canonical_delta_deg(-180.0, 180.0), 0.0);
+        assert_eq!(canonical_delta_deg(180.0, 540.0), 0.0);
+        assert!((canonical_delta_deg(-179.75, 179.75) - 0.5).abs() < 1e-12);
+        assert!((canonical_delta_deg(179.75, -179.75) + 0.5).abs() < 1e-12);
     }
 
     #[test]

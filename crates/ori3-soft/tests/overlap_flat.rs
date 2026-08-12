@@ -66,6 +66,37 @@ fn flat_foldable_kome() -> CreasePattern {
     }
 }
 
+/// 正方形を縦3短冊へ分けた木構造。104度では剛体解に交差がない一方、従来の
+/// FaceId順PBDは外側2面の交差を新しく作っていた診断用の最小形。
+fn three_strips() -> CreasePattern {
+    CreasePattern {
+        vertices: vec![
+            vertex(0, 0.0, 0.0),
+            vertex(1, 1.0 / 3.0, 0.0),
+            vertex(2, 2.0 / 3.0, 0.0),
+            vertex(3, 1.0, 0.0),
+            vertex(4, 1.0, 1.0),
+            vertex(5, 2.0 / 3.0, 1.0),
+            vertex(6, 1.0 / 3.0, 1.0),
+            vertex(7, 0.0, 1.0),
+        ],
+        edges: vec![
+            edge(0, 0, 1, EdgeKind::Border),
+            edge(1, 1, 2, EdgeKind::Border),
+            edge(2, 2, 3, EdgeKind::Border),
+            edge(3, 3, 4, EdgeKind::Border),
+            edge(4, 4, 5, EdgeKind::Border),
+            edge(5, 5, 6, EdgeKind::Border),
+            edge(6, 6, 7, EdgeKind::Border),
+            edge(7, 7, 0, EdgeKind::Border),
+            edge(8, 1, 6, EdgeKind::Mountain),
+            edge(9, 2, 5, EdgeKind::Mountain),
+        ],
+        next_vertex_id: 8,
+        next_edge_id: 10,
+    }
+}
+
 fn z_span(frame: &ori3_model::Frame3D) -> f64 {
     let mut min = f64::INFINITY;
     let mut max = f64::NEG_INFINITY;
@@ -163,6 +194,116 @@ fn flat_foldable_kome_stays_flat_and_has_no_intersections_after_overlap_preventi
         before,
         "完全平坦な物理フレームを歪めない"
     );
+}
+
+#[test]
+fn nonflat_raw_zero_stays_zero_when_the_pbd_candidate_adds_an_intersection() {
+    let cp = three_strips();
+    let faces = extract_faces(&cp);
+    let solved = solve(
+        &cp,
+        &faces,
+        &[
+            Driver {
+                hinge: 8,
+                target_angle_deg: 150.0,
+            },
+            Driver {
+                hinge: 9,
+                target_angle_deg: 104.0,
+            },
+        ],
+        None,
+    );
+    assert!(solved.converged);
+    assert!(
+        self_intersection_pairs(&solved.frame).is_empty(),
+        "診断どおり104度の剛体解は交差0"
+    );
+
+    let mut corrected = solved.frame;
+    let before = polygons(&corrected);
+    let order: Vec<FaceId> = faces.iter().map(|face| face.id).collect();
+    let report = prevent_overlap(
+        &cp,
+        &faces,
+        &mut corrected,
+        &order,
+        &order,
+        0.5,
+        &OverlapSettings::default(),
+    );
+
+    assert!(report.skipped_untrusted_layer_order, "{report:?}");
+    assert!(!report.attempted, "物理層順なしではPBDを始めない");
+    assert!(!report.accepted);
+    assert!(!report.applied);
+    assert_eq!(report.intersection_pairs_before, 0);
+    assert_eq!(report.intersection_pairs_after, 0);
+    assert_eq!(polygons(&corrected), before, "未信頼順は入力をbitwise保持");
+    assert!(self_intersection_pairs(&corrected).is_empty());
+}
+
+#[test]
+fn overlap_output_never_replaces_an_existing_intersection_with_a_new_pair() {
+    let cp = three_strips();
+    let faces = extract_faces(&cp);
+    let mut solved = solve(
+        &cp,
+        &faces,
+        &[
+            Driver {
+                hinge: 8,
+                target_angle_deg: 150.0,
+            },
+            Driver {
+                hinge: 9,
+                target_angle_deg: 110.0,
+            },
+        ],
+        None,
+    );
+    assert!(solved.converged);
+    for face in &mut solved.frame.faces {
+        face.layer = face.face;
+    }
+    let before_pairs = self_intersection_pairs(&solved.frame);
+    assert_eq!(before_pairs.len(), 1, "110度では外側2面が交差する");
+
+    let mut corrected = solved.frame;
+    let before_polygons = polygons(&corrected);
+    let order: Vec<FaceId> = faces.iter().map(|face| face.id).collect();
+    let report = prevent_overlap(
+        &cp,
+        &faces,
+        &mut corrected,
+        &order,
+        &order,
+        0.5,
+        &OverlapSettings::default(),
+    );
+    let after_pairs = self_intersection_pairs(&corrected);
+
+    assert!(
+        report.attempted || report.skipped_no_signed_penetration,
+        "{report:?}"
+    );
+    assert!(after_pairs.len() <= before_pairs.len(), "{report:?}");
+    assert!(
+        after_pairs.iter().all(|pair| before_pairs.contains(pair)),
+        "既存ペアを別の新規ペアへ置換しない: before={before_pairs:?}, after={after_pairs:?}"
+    );
+    assert!(
+        report.total_depth_after <= report.total_depth_before + 1e-12,
+        "{report:?}"
+    );
+    assert!(
+        report.max_depth_after <= report.max_depth_before + 1e-12,
+        "{report:?}"
+    );
+    if !report.accepted {
+        assert_eq!(polygons(&corrected), before_polygons);
+    }
 }
 
 fn square_doc() -> Document {
