@@ -8,11 +8,15 @@
 
 import type { Face3D, Frame3D } from "./types";
 
-/** 層1枚あたりのずらし量(紙の長辺に対する割合) */
-export const LAYER_STEP_RATIO = 0.01;
+/** 層1枚あたりのずらし量(紙の長辺に対する割合)
+ *
+ * 実際の折り紙の紙の厚さは0とみなす(利用者の指示)。重なった紙が離れて見えると
+ * 実物と違うため、目で見て分からない大きさに抑える。0にはしない。完全に同じ位置に
+ * 描くと、どちらの面が手前か決まらず、内側の面や折り目が表面に透けて見えるため。 */
+export const LAYER_STEP_RATIO = 0.0002;
 
 /** 重なり全体の厚みの上限(紙の長辺に対する割合)。層が多くても分厚く見せない */
-export const MAX_STACK_RATIO = 0.03;
+export const MAX_STACK_RATIO = 0.001;
 
 /** これ以下の高さは計算誤差とみなして「平ら」と扱う(foldDrawの判定と揃える) */
 const FLAT_EPS = 1e-6;
