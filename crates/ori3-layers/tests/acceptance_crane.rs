@@ -1055,3 +1055,43 @@ fn crane_is_written_as_a_fixture() {
     let faces = extract_faces(&doc.cp);
     write_fixture(&doc, &faces, "crane");
 }
+
+/// 角度だけで折った形からでも、紙の重なり順を求められることを検査する。
+///
+/// 手順を記録せず角度で折ると重なり順が決まらず、同じ平面の面が完全に同じ位置へ
+/// 描かれて裏面が見えたり貫通して見える(2026-08-12に利用者の画面で確認。
+/// 16面すべてが同じ段、厚み0)。折り上がった形から順序を求めれば解消できる。
+#[test]
+fn derived_layer_order_matches_the_recorded_fold() {
+    let document = bird_base();
+    let faces = extract_faces(&document.cp);
+    let replayed = replay(&document, document.sequence.len(), 1.0);
+
+    let derived = ori3_rigid::derive_layer_order(&document.cp, &faces, &replayed.frame)
+        .expect("平らに折り切った鳥の基本形から重なり順を求められる");
+    assert_eq!(
+        derived.len(),
+        replayed.frame.faces.len(),
+        "全ての面が順序に含まれる"
+    );
+
+    // 求めた順序を段として入れ直すと、形との矛盾が無くなること。
+    let mut frame = replayed.frame.clone();
+    let rank: HashMap<FaceId, u32> = derived
+        .iter()
+        .enumerate()
+        .map(|(index, &id)| (id, u32::try_from(index).expect("面の数は段に収まる")))
+        .collect();
+    for face in &mut frame.faces {
+        face.layer = rank[&face.face];
+    }
+    assert!(
+        !ori3_rigid::layer_order_conflicts(&document.cp, &faces, &frame),
+        "求めた重なり順が紙の形と矛盾している"
+    );
+
+    // 同じ入力なら必ず同じ順序になること。
+    let again = ori3_rigid::derive_layer_order(&document.cp, &faces, &replayed.frame)
+        .expect("2回目も求められる");
+    assert_eq!(derived, again, "同じ入力で順序が変わってはいけない");
+}

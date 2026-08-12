@@ -479,6 +479,134 @@ pub fn layer_order_conflicts(cp: &CreasePattern, faces: &[Face], frame: &Frame3D
     false
 }
 
+/// 平らに折り切った形から、紙の重なり順を求める。
+///
+/// 折り目を1本ずつ見ると、山谷と面の裏返りから「どちらの面が上か」が一つに決まる。
+/// その上下関係を並べ替えて順序(下から上)を作る。同じ高さに置ける面は面IDの
+/// 小さい方を下にして、同じ入力なら必ず同じ順序になるようにする。
+///
+/// 平らに折り切っていない形、または上下関係が循環して成り立たない場合は `None`。
+///
+/// 手順を記録せず角度だけで折ると重なり順が決まらず、同じ平面の面が完全に同じ位置へ
+/// 描かれて裏面が見えたり貫通して見えるため、その場合の順序決めに使う。
+#[must_use]
+pub fn derive_layer_order(
+    cp: &CreasePattern,
+    faces: &[Face],
+    frame: &Frame3D,
+) -> Option<Vec<FaceId>> {
+    let constraints = folded_pair_constraints(cp, faces, frame)?;
+    let ids: BTreeSet<FaceId> = frame.faces.iter().map(|face| face.face).collect();
+
+    // 「下の面 → 上の面」の向きで数え上げる。
+    let mut above_of: BTreeMap<FaceId, BTreeSet<FaceId>> = BTreeMap::new();
+    let mut below_count: BTreeMap<FaceId, usize> = ids.iter().map(|&id| (id, 0)).collect();
+    for &(lower, upper) in &constraints {
+        if above_of.entry(lower).or_default().insert(upper) {
+            *below_count.entry(upper).or_default() += 1;
+        }
+    }
+
+    let mut ready: BTreeSet<FaceId> = below_count
+        .iter()
+        .filter_map(|(&id, &count)| (count == 0).then_some(id))
+        .collect();
+    let mut order: Vec<FaceId> = Vec::with_capacity(ids.len());
+    while let Some(&id) = ready.iter().next() {
+        ready.remove(&id);
+        order.push(id);
+        for &upper in above_of.get(&id).into_iter().flatten() {
+            let count = below_count.get_mut(&upper)?;
+            *count -= 1;
+            if *count == 0 {
+                ready.insert(upper);
+            }
+        }
+    }
+    (order.len() == ids.len()).then_some(order)
+}
+
+/// 折り目ごとの「下の面, 上の面」。平らに折り切っていない形では `None`。
+fn folded_pair_constraints(
+    cp: &CreasePattern,
+    faces: &[Face],
+    frame: &Frame3D,
+) -> Option<Vec<(FaceId, FaceId)>> {
+    let all_points = frame.faces.iter().flat_map(|face| &face.polygon);
+    let (min_z, max_z) = all_points.fold((f64::MAX, f64::MIN), |(lo, hi), point| {
+        (lo.min(point[2]), hi.max(point[2]))
+    });
+    if min_z == f64::MAX || max_z - min_z > TOL {
+        return None;
+    }
+
+    let positions: HashMap<VertexId, DVec2> = cp
+        .vertices
+        .iter()
+        .map(|vertex| (vertex.id, DVec2::from(vertex.pos)))
+        .collect();
+    let output: HashMap<FaceId, &ori3_model::Face3D> =
+        frame.faces.iter().map(|face| (face.face, face)).collect();
+    let mut mirrored: HashMap<FaceId, bool> = HashMap::new();
+    for face in faces {
+        let Some(folded) = output.get(&face.id) else {
+            continue;
+        };
+        let original: Vec<DVec2> = face
+            .vertices
+            .iter()
+            .filter_map(|vertex| positions.get(vertex).copied())
+            .collect();
+        let projected: Vec<DVec2> = folded
+            .polygon
+            .iter()
+            .map(|point| DVec2::new(point[0], point[1]))
+            .collect();
+        let original_area = signed_area(&original);
+        let projected_area = signed_area(&projected);
+        if original_area.abs() <= TOL * TOL || projected_area.abs() <= TOL * TOL {
+            continue;
+        }
+        mirrored.insert(face.id, original_area.signum() != projected_area.signum());
+    }
+
+    let mut edge_faces: BTreeMap<u32, Vec<FaceId>> = BTreeMap::new();
+    for face in faces {
+        let mut edges = face.edges.clone();
+        edges.sort_unstable();
+        edges.dedup();
+        for edge in edges {
+            edge_faces.entry(edge).or_default().push(face.id);
+        }
+    }
+
+    let mut pairs = Vec::new();
+    for edge in &cp.edges {
+        if !matches!(edge.kind, EdgeKind::Mountain | EdgeKind::Valley) {
+            continue;
+        }
+        let Some(adjacent) = edge_faces.get(&edge.id) else {
+            continue;
+        };
+        if adjacent.len() != 2 {
+            continue;
+        }
+        let (a, b) = (adjacent[0], adjacent[1]);
+        let (Some(&a_mirrored), Some(&b_mirrored)) = (mirrored.get(&a), mirrored.get(&b)) else {
+            continue;
+        };
+        if a_mirrored == b_mirrored {
+            continue; // この折り目は平らなままで、上下を拘束しない
+        }
+        let b_should_be_above = matches!(
+            (edge.kind, a_mirrored),
+            (EdgeKind::Valley, false) | (EdgeKind::Mountain, true)
+        );
+        pairs.push(if b_should_be_above { (a, b) } else { (b, a) });
+    }
+    Some(pairs)
+}
+
 fn signed_area(poly: &[DVec2]) -> f64 {
     if poly.len() < 3 {
         return 0.0;

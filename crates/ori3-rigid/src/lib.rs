@@ -10,7 +10,8 @@ pub mod tree;
 
 pub use intersect::{
     ContactMetrics, ContactWitness, MAX_CONTACT_WITNESSES, PENETRATION_WARNING, contact_metrics,
-    contact_witnesses, layer_order_conflicts, self_intersection_pairs, self_intersects,
+    contact_witnesses, derive_layer_order, layer_order_conflicts, self_intersection_pairs,
+    self_intersects,
     suspect_hinges, suspect_hinges_for_intersections,
 };
 pub use motion::{MotionSolveResult, solve_motion};

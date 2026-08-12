@@ -700,12 +700,30 @@ pub fn add_penetration_warning_for_intersections(
     added
 }
 
-/// 接触補正でzが動く前の平坦フレームに、層順序矛盾の警告を足す。
+/// 接触補正でzが動く前の平坦フレームで、紙の重なり順を形に合わせる。
+///
+/// 手順を記録せず角度だけで折ると重なり順が決まらず、同じ平面の面が完全に同じ位置へ
+/// 描かれて裏面が見えたり貫通して見える。まず折り上がった形から重なり順を求めて直し、
+/// それでも矛盾が残るときだけ警告を足す。
 pub(crate) fn add_layer_order_warning(
     cp: &CreasePattern,
     faces: &[Face],
     frame: &mut Frame3D,
 ) -> Option<&'static str> {
+    if ori3_rigid::layer_order_conflicts(cp, faces, frame)
+        && let Some(order) = ori3_rigid::derive_layer_order(cp, faces, frame)
+    {
+        let rank: HashMap<FaceId, u32> = order
+            .iter()
+            .enumerate()
+            .map(|(index, &id)| (id, u32::try_from(index).unwrap_or(u32::MAX)))
+            .collect();
+        for face in &mut frame.faces {
+            if let Some(&layer) = rank.get(&face.face) {
+                face.layer = layer;
+            }
+        }
+    }
     if !ori3_rigid::layer_order_conflicts(cp, faces, frame)
         || frame
             .warnings
@@ -831,6 +849,7 @@ mod tests {
             layer_order: None,
             alignment: None,
             note: String::new(),
+            motion_path: None,
         }
     }
 
