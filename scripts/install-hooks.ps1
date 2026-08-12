@@ -2,10 +2,13 @@
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$hookPath = Join-Path $repoRoot "scripts\hooks\pre-push"
+$hookNames = @("pre-commit", "pre-push")
 
-if (-not (Test-Path -LiteralPath $hookPath -PathType Leaf)) {
-    throw "pre-push フックが見つかりません: $hookPath"
+foreach ($name in $hookNames) {
+    $hookPath = Join-Path $repoRoot "scripts\hooks\$name"
+    if (-not (Test-Path -LiteralPath $hookPath -PathType Leaf)) {
+        throw "$name フックが見つかりません: $hookPath"
+    }
 }
 
 try {
@@ -25,4 +28,4 @@ catch {
     throw "git hook の有効化に失敗しました: $($_.Exception.Message)"
 }
 
-Write-Host "[OK] pre-push フックを有効化しました (core.hooksPath=scripts/hooks)" -ForegroundColor Green
+Write-Host "[OK] pre-commit / pre-push フックを有効化しました (core.hooksPath=scripts/hooks)" -ForegroundColor Green

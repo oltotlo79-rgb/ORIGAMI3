@@ -1,0 +1,4 @@
+# gitフックはshが読むので、Windowsでも必ずLFで取り出す。
+# CRLFになると1行目の #!/bin/sh が壊れ、フックが動かないまま
+# コミットやpushが通ってしまう。
+scripts/hooks/* text eol=lf
