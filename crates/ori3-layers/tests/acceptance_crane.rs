@@ -1164,3 +1164,83 @@ fn completed_crane_is_flat_and_symmetric() {
         ratio * 100.0
     );
 }
+
+/// 画面確認用に、完成した鶴の作品ファイル(.ori3)を書き出す。
+///
+/// 保存先は環境変数 `ORI3_CRANE_OUT` で渡す。依存を増やさないよう、
+/// `write_fixture` と同じく必要な項目だけを手書きで出力する。
+#[test]
+#[ignore = "画面確認用。ORI3_CRANE_OUT=<保存先> を指定して実行する"]
+fn write_crane_document_for_screen_check() {
+    let Ok(path) = std::env::var("ORI3_CRANE_OUT") else {
+        panic!("保存先を ORI3_CRANE_OUT で渡してください");
+    };
+    let (doc, _) = crane();
+    let mut s = String::from("{\n  \"schema_version\":1,\n");
+    s.push_str(&format!(
+        "  \"paper\":{{\"width_mm\":{:?},\"height_mm\":{:?}}},\n",
+        doc.paper.width_mm, doc.paper.height_mm
+    ));
+    s.push_str("  \"cp\":{\n    \"vertices\":[");
+    for (i, v) in doc.cp.vertices.iter().enumerate() {
+        s.push_str(&format!(
+            "{}{{\"id\":{},\"pos\":[{:?},{:?}]}}",
+            if i == 0 { "" } else { "," },
+            v.id,
+            v.pos[0],
+            v.pos[1]
+        ));
+    }
+    s.push_str("],\n    \"edges\":[");
+    for (i, e) in doc.cp.edges.iter().enumerate() {
+        s.push_str(&format!(
+            "{}{{\"id\":{},\"v0\":{},\"v1\":{},\"kind\":\"{:?}\"}}",
+            if i == 0 { "" } else { "," },
+            e.id,
+            e.v0,
+            e.v1,
+            e.kind
+        ));
+    }
+    s.push_str(&format!(
+        "],\n    \"next_vertex_id\":{},\n    \"next_edge_id\":{}\n  }},\n",
+        doc.cp.next_vertex_id, doc.cp.next_edge_id
+    ));
+    s.push_str("  \"sequence\":[");
+    for (i, step) in doc.sequence.iter().enumerate() {
+        s.push_str(&format!(
+            "{}{{\"id\":{},\"kind\":\"{:?}\",\"drivers\":[",
+            if i == 0 { "" } else { "," },
+            step.id,
+            step.kind
+        ));
+        for (j, d) in step.drivers.iter().enumerate() {
+            s.push_str(&format!(
+                "{}{{\"a\":[{:?},{:?}],\"b\":[{:?},{:?}],\"target_angle_deg\":{:?}}}",
+                if j == 0 { "" } else { "," },
+                d.a[0],
+                d.a[1],
+                d.b[0],
+                d.b[1],
+                d.target_angle_deg
+            ));
+        }
+        s.push(']');
+        if let Some(order) = &step.layer_order {
+            s.push_str(",\"layer_order\":[");
+            for (j, p) in order.iter().enumerate() {
+                s.push_str(&format!(
+                    "{}[{:?},{:?}]",
+                    if j == 0 { "" } else { "," },
+                    p[0],
+                    p[1]
+                ));
+            }
+            s.push(']');
+        }
+        s.push_str(",\"note\":\"\"}");
+    }
+    s.push_str("]\n}\n");
+    std::fs::write(&path, s).expect("作品ファイルを書き出す");
+    println!("書き出しました: {path}(手順{}件)", doc.sequence.len());
+}
