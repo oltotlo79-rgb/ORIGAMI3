@@ -40,23 +40,6 @@ use crate::tree;
 /// 完全に畳んだ状態(±180°)の近くでは残差が角度誤差の2乗オーダーになるため、
 /// 表示に必要な精度(座標誤差1e-6)を確保できるようノイズ床の10倍に取る。
 const TOL_RMS: f64 = 1e-13;
-/// 候補の点数を比べるときの相対許容差。
-///
-/// 点数(閉包誤差・目標保持エネルギー・前姿勢からの距離)は計算順序やCPUの違いで
-/// 最終桁が揺れる。その桁だけで候補の順位が入れ替わると、同じ操作をしても機械や
-/// 実行ごとに紙が別の姿へ飛び、貫通したりしなかったりする。丸め由来の揺れ
-/// (相対1e-16程度)より十分大きく、意味のある差(通常は相対1e-3以上)より十分
-/// 小さいこの幅までは同点とみなし、次の基準で決める。
-const SCORE_REL_TOL: f64 = 1e-12;
-
-/// 相対許容差つきの点数比較。差が許容内なら `Equal` を返す。
-fn score_cmp(a: f64, b: f64) -> Ordering {
-    if (a - b).abs() <= SCORE_REL_TOL * a.abs().max(b.abs()) {
-        Ordering::Equal
-    } else {
-        a.total_cmp(&b)
-    }
-}
 /// Gauss-Newtonの最大反復回数(1段あたり)。
 const MAX_ITER: u32 = 50;
 /// 零空間内の同順位選択は速く収束するため、対話性能を守る範囲へ制限する。
@@ -188,16 +171,16 @@ impl Candidate {
             Ordering::Equal => {}
         }
         let primary = if self_closed {
-            score_cmp(self.keep_energy, other.keep_energy)
+            self.keep_energy.total_cmp(&other.keep_energy)
         } else {
-            score_cmp(self.closure_rms, other.closure_rms)
+            self.closure_rms.total_cmp(&other.closure_rms)
         };
         match primary {
             Ordering::Less => return true,
             Ordering::Greater => return false,
             Ordering::Equal => {}
         }
-        match score_cmp(self.warm_distance, other.warm_distance) {
+        match self.warm_distance.total_cmp(&other.warm_distance) {
             Ordering::Less => return true,
             Ordering::Greater => return false,
             Ordering::Equal => {}
