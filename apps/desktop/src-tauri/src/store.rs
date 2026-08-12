@@ -1760,8 +1760,13 @@ mod tests {
         }));
     }
 
+    /// 重なり順が紙の形と食い違っているときは、警告を出す前に正しい順序へ直す。
+    ///
+    /// 以前は警告を出すだけだったが、角度だけで折ると重なり順が決まらず、同じ平面の
+    /// 面が完全に同じ位置へ描かれて裏面が見えたり貫通して見えた(2026-08-12に
+    /// 利用者の画面で確認)。折り上がった形から順序を求めて直すようにした。
     #[test]
-    fn flat_layer_order_contradiction_adds_fold_penetration_warning() {
+    fn flat_layer_order_contradiction_is_corrected_instead_of_warned() {
         let mut store = square_store();
         store
             .apply_seq(fold_op(0, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5]))
@@ -1777,12 +1782,21 @@ mod tests {
             face.layer = 1 - face.layer;
         }
         let added = add_penetration_warning(&store.doc.cp, &faces, &mut frame, true);
-        assert_eq!(added, vec![ori3_layers::FOLD_PENETRATION_WARNING]);
         assert!(
-            frame
+            added.is_empty(),
+            "直せる食い違いなのに警告を出した: {added:?}"
+        );
+        assert!(
+            !ori3_rigid::layer_order_conflicts(&store.doc.cp, &faces, &frame),
+            "重なり順が紙の形と食い違ったまま残った"
+        );
+        assert!(
+            !frame
                 .warnings
                 .iter()
-                .any(|warning| warning == ori3_layers::FOLD_PENETRATION_WARNING)
+                .any(|warning| warning == ori3_layers::FOLD_PENETRATION_WARNING),
+            "直したのに貫通の警告が残っている: {:?}",
+            frame.warnings
         );
     }
 
