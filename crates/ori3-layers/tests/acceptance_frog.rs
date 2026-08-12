@@ -1018,9 +1018,10 @@ fn frog_front_fixture_matches_read_only() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../apps/desktop/src/lib/__fixtures__/frog.json");
     let stored = std::fs::read_to_string(&path).expect("既存のフロント用カエルfixtureを読む");
+    let generated = front_fixture_json(&doc, &faces);
     assert_eq!(
-        stored,
-        front_fixture_json(&doc, &faces),
+        stored.replace("\r\n", "\n"),
+        generated.replace("\r\n", "\n"),
         "フロント用カエルfixtureが現在の展開図と不一致: {}",
         path.display()
     );
