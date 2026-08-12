@@ -26,6 +26,31 @@ export const ALIGN_STEPS: Record<AlignMode, ("point" | "line")[]> = {
   existingLine: ["line"],
 };
 
+/**
+ * 合わせ方ごとの説明。何ができるかと、何をどの順にクリックするかを書く。
+ *
+ * ボタンの名前だけでは何が起きるか分からないため、マウスを乗せたときと
+ * キーボードで選んだときに、この文をそのまま出す。
+ */
+export const ALIGN_HINTS: Record<AlignMode, string> = {
+  throughTwoPoints:
+    "選んだ2つの点を結ぶ位置に折り目を作ります。3D表示で点を2つクリックします",
+  pointPoint:
+    "一方の点をもう一方へぴったり重ねる折り目を作ります。3D表示で点を2つクリックします",
+  lineLine:
+    "一方の線をもう一方へぴったり重ねる折り目を作ります。3D表示で線を2つクリックします",
+  pointPerpendicularLine:
+    "選んだ点を通り、選んだ線と直角に交わる折り目を作ります。点→線の順にクリックします",
+  pointLineThrough:
+    "点を線の上へ重ねる折り目のうち、指定した別の点を通るものを作ります。点→線→通ってほしい点の順にクリックします",
+  pointToLinePointToLine:
+    "2つの点を、それぞれ別の線の上へ同時に重ねる折り目を作ります。点→線→点→線の順にクリックします",
+  pointLinePerpendicular:
+    "点を線の上へ重ねつつ、もう1本の線と直角に交わる折り目を作ります。点→線→線の順にクリックします",
+  existingLine:
+    "すでにある折り線に沿って折ります。3D表示でその線をクリックします",
+};
+
 /** 合わせ方の日本語名(画面のボタン・ヒントで使う) */
 export const ALIGN_LABELS: Record<AlignMode, string> = {
   throughTwoPoints: "2点を通る",

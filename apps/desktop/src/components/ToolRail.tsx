@@ -29,7 +29,8 @@ const TOOLS: { id: ToolId; label: string; tooltip: string }[] = [
   {
     id: "fold",
     label: "折る",
-    tooltip: "3Dの紙をドラッグして折ります",
+    tooltip:
+      "3Dの紙をドラッグして折ります。点や線を合わせて折り目を決める8通りの方法も、選ぶと下のパネルに出ます",
   },
   {
     id: "pull",

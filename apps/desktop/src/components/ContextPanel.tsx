@@ -20,7 +20,12 @@ import {
   MAX_CURVE_SEGMENTS,
   type CurveShape,
 } from "../lib/curve";
-import { ALIGN_LABELS, ALIGN_STEPS, type AlignMode } from "../lib/alignFold";
+import {
+  ALIGN_HINTS,
+  ALIGN_LABELS,
+  ALIGN_STEPS,
+  type AlignMode,
+} from "../lib/alignFold";
 import {
   TECHNIQUE_KINDS,
   TECHNIQUE_LABEL,
@@ -557,7 +562,7 @@ function AlignStartRow() {
           <button
             key={mode}
             type="button"
-            data-tooltip="選んだ点や線から、折り線を正確に決めます"
+            data-tooltip={ALIGN_HINTS[mode]}
             onClick={() => beginAlign(mode)}
           >
             {ALIGN_LABELS[mode]}
