@@ -830,3 +830,122 @@ fn a_waterbomb_base_becomes_round_when_inflated() {
     );
     assert!(puffy.warnings.is_empty(), "警告なし: {:?}", puffy.warnings);
 }
+
+/// 鶴の基本形(花弁折り後)を全ての折り目まで畳み切っても、貫通の警告が出ないこと。
+///
+/// 花弁折り前の予備基本形は `ori3-soft/tests/overlap_flat.rs` で確認していたが、
+/// 花弁折り後は層が増えるため別に確かめる必要がある。利用者から
+/// 「花弁折りした状態で全て±180度にすると貫通の警告が多く出て、
+/// 3Dでも紙の裏が見えたり貫通して見える」との報告があった。
+#[test]
+fn bird_base_has_zero_penetration_warnings_when_fully_folded() {
+    let doc = bird_base();
+    let faces = extract_faces(&doc.cp);
+    let replayed = replay(&doc, doc.sequence.len(), 1.0);
+    assert!(
+        replayed.warnings.is_empty(),
+        "再生の警告なし: {:?}",
+        replayed.warnings
+    );
+    assert!(
+        replayed.skipped.is_empty(),
+        "飛ばした手順なし: {:?}",
+        replayed.skipped
+    );
+
+    let zs: Vec<f64> = replayed
+        .frame
+        .faces
+        .iter()
+        .flat_map(|face| face.polygon.iter().map(|point| point[2]))
+        .collect();
+    let z_span = zs.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+        - zs.iter().copied().fold(f64::INFINITY, f64::min);
+    assert!(z_span < 1e-9, "折り上がりは完全平坦: z幅={z_span:e}");
+
+    let raw = self_intersection_pairs(&replayed.frame);
+    assert!(
+        raw.is_empty(),
+        "生の鶴の基本形には貫通警告の根拠がない: {raw:?}"
+    );
+
+    // 手順を持たない角度操作と同じ、面ID順・進行度0.5の入力でも平坦形を歪めない。
+    let order: Vec<FaceId> = faces.iter().map(|face| face.id).collect();
+    let mut corrected = replayed.frame;
+    let report = prevent_overlap(
+        &doc.cp,
+        &faces,
+        &mut corrected,
+        &order,
+        &order,
+        0.5,
+        &OverlapSettings::default(),
+    );
+    let after = self_intersection_pairs(&corrected);
+    assert!(after.is_empty(), "重なり防止の後も貫通警告は0件: {after:?}");
+    assert!(
+        !report.applied,
+        "完全平坦な鶴の基本形へ重なり防止を適用しない: {report:?}"
+    );
+}
+
+/// 利用者が手で角度を指定して畳み切ったときも、貫通の警告が出ないこと。
+///
+/// 記録した手順の再生とは別の経路(角度指定から形を解く)を通る。
+/// 利用者の報告はこちらの操作なので、再生が正しくてもこちらが誤っている
+/// 可能性がある。再生で得た角度をそのまま指定して、同じ形になるか確かめる。
+#[test]
+fn bird_base_folded_by_angles_has_zero_penetration_warnings() {
+    let doc = bird_base();
+    let faces = extract_faces(&doc.cp);
+    let replayed = replay(&doc, doc.sequence.len(), 1.0);
+
+    // 再生で得た「畳み切った角度」を、そのまま利用者の指定として与える。
+    let drivers: Vec<Driver> = replayed
+        .hinge_angles
+        .iter()
+        .map(|(&hinge, &target_angle_deg)| Driver {
+            hinge,
+            target_angle_deg,
+        })
+        .collect();
+    assert!(!drivers.is_empty(), "折り目がある");
+
+    let solved = solve(&doc.cp, &faces, &drivers, None);
+
+    let zs: Vec<f64> = solved
+        .frame
+        .faces
+        .iter()
+        .flat_map(|face| face.polygon.iter().map(|point| point[2]))
+        .collect();
+    let z_span = zs.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+        - zs.iter().copied().fold(f64::INFINITY, f64::min);
+    assert!(z_span < 1e-9, "角度指定でも完全平坦: z幅={z_span:e}");
+
+    let raw = self_intersection_pairs(&solved.frame);
+    assert!(
+        raw.is_empty(),
+        "角度指定で畳み切った鶴の基本形に貫通の根拠がない: {raw:?}"
+    );
+
+    // 手順を持たない角度操作では層順が分からないため面ID順が渡る。
+    // その入力でも平坦形を歪めず、交差を作り出さないこと。
+    let order: Vec<FaceId> = faces.iter().map(|face| face.id).collect();
+    let mut corrected = solved.frame;
+    let report = prevent_overlap(
+        &doc.cp,
+        &faces,
+        &mut corrected,
+        &order,
+        &order,
+        0.5,
+        &OverlapSettings::default(),
+    );
+    let after = self_intersection_pairs(&corrected);
+    assert!(after.is_empty(), "重なり防止の後も貫通警告は0件: {after:?}");
+    assert!(
+        !report.applied,
+        "完全平坦なら重なり防止を適用しない: {report:?}"
+    );
+}
