@@ -953,13 +953,13 @@ fn the_frog_is_deterministic() {
 }
 
 // ---------------------------------------------------------------------------
-// フロント側テスト用のフィクスチャ書き出し
+// フロント側テスト用フィクスチャの読み取り検証
 // ---------------------------------------------------------------------------
 
-/// 完成形の展開図と面を、フロント側(vitest)が読めるJSONとして書き出す。
+/// 完成形の展開図と面を、フロント側(vitest)が読めるJSONにする。
 /// 対称軸の判定(`apps/desktop/src/lib/grabDrive.ts`)を**実データ**で検証するため。
 /// 統合テストは1ファイル=1クレートなので `acceptance_crane.rs` と同じ内容を置く。
-fn write_fixture(doc: &Document, faces: &[Face], name: &str) {
+fn front_fixture_json(doc: &Document, faces: &[Face]) -> String {
     let mut s = String::from("{\n");
     let (w, h) = (doc.paper.width_mm, doc.paper.height_mm);
     s.push_str(&format!(
@@ -994,18 +994,21 @@ fn write_fixture(doc: &Document, faces: &[Face], name: &str) {
         ));
     }
     s.push_str("  ]\n}\n");
-    let dir = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../apps/desktop/src/lib/__fixtures__"
-    );
-    std::fs::create_dir_all(dir).expect("フィクスチャ置き場を作る");
-    std::fs::write(format!("{dir}/{name}.json"), s).expect("フィクスチャを書き出す");
+    s
 }
 
-/// カエルの完成形をフィクスチャとして書き出す。
+/// apps配下へ書き込まず、既存のカエルフィクスチャが現在の実データと一致するか調べる。
 #[test]
-fn the_frog_is_written_as_a_fixture() {
+fn frog_front_fixture_matches_read_only() {
     let (doc, _) = frog();
     let faces = extract_faces(&doc.cp);
-    write_fixture(&doc, &faces, "frog");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../apps/desktop/src/lib/__fixtures__/frog.json");
+    let stored = std::fs::read_to_string(&path).expect("既存のフロント用カエルfixtureを読む");
+    assert_eq!(
+        stored,
+        front_fixture_json(&doc, &faces),
+        "フロント用カエルfixtureが現在の展開図と不一致: {}",
+        path.display()
+    );
 }
