@@ -150,11 +150,26 @@ pub fn solve_motion(
                 step_warm,
                 &topology,
             );
-            if is_finite_result(&exact, faces.len())
-                && !self_intersects(&exact.frame)
-                && max_seam_gap(cp, faces, &exact.frame) < max_seam_gap(cp, faces, &candidate.frame)
-            {
-                candidate = exact;
+            // 分割の途中で別の枝へ逸れると、最終段の初期値が既に悪くなっていて、
+            // そこから解き直しても紙が裂けたままになる。分割前の姿勢を初期値にして
+            // 一度で解き直した候補も試す。折り鶴の28°では、途中経由の解が裂け3.5e-5
+            // なのに対し、分割前から解くと7.3e-15かつ交差なしになる。
+            let from_start = solver::solve_near_prepared(
+                cp,
+                faces,
+                &step_drivers,
+                targets,
+                Some(&start_angles),
+                &topology,
+            );
+            for alternative in [exact, from_start] {
+                if is_finite_result(&alternative, faces.len())
+                    && !self_intersects(&alternative.frame)
+                    && max_seam_gap(cp, faces, &alternative.frame)
+                        < max_seam_gap(cp, faces, &candidate.frame)
+                {
+                    candidate = alternative;
+                }
             }
         }
         let raw_contact =
