@@ -1462,7 +1462,16 @@ export const useAppStore = create<AppState>((set, get) => {
       if (get().errorMessage !== null) return;
       // driverが無ければ、手順再生の形がそのまま復元結果になる。
       if (drivers.size === 0) return;
-      warmSeed = driverList(new Map(get().poseAngles));
+      // 追従計算が破綻した後の姿勢を出発点にすると、元に戻しても崩れた形から
+      // 計算し直すことになり、戻らない。警告が出ている姿勢は使わず、
+      // 手順再生の形(平らな畳み)から解き直す。
+      const broken = get().warnings.some(
+        (warning) =>
+          warning.includes("収束していません") || warning.includes("食い込"),
+      );
+      warmSeed = broken
+        ? flatDrivers(s.hinges)
+        : driverList(new Map(get().poseAngles));
     } else {
       warmSeed = flatDrivers(s.hinges);
     }
