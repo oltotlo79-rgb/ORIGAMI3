@@ -837,13 +837,7 @@ fn solve_impl_prepared(
         }
         let mut sum = 0.0;
         for &(_, hi, length_ratio, _) in &soft_vars {
-            // 折り角は +180° と -180° が同じ折り方なので、生の差で測ると
-            // 完全に折った折り目が「360°ずれている」ことになり、巨大な罰則で
-            // 解が歪む。同値な回転のうち絶対値が最小の差で測る。
-            let raw = x[hi] - target_rad[hi].expect("soft変数には目標がある");
-            let wrapped = (raw + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
-                - std::f64::consts::PI;
-            sum += length_ratio * wrapped.powi(2);
+            sum += length_ratio * (x[hi] - target_rad[hi].expect("soft変数には目標がある")).powi(2);
         }
         w2 * sum
     };
