@@ -757,6 +757,36 @@ fn segment_piercing(p0: DVec3, p1: DVec3, tri: &[DVec3; 3]) -> Option<SegmentTri
 mod tests {
     use super::{ContactWitness, MAX_CONTACT_WITNESSES, TOL, sort_contact_witnesses};
 
+    use ori3_model::{Face3D, Frame3D};
+
+    /// 立体的な姿勢(平らに折り切っていない形)では重なり順を決めない。
+    /// 重なった面が同じ高さに無いので、上下は見る向きで変わるため。
+    #[test]
+    fn solid_pose_has_no_single_layer_order() {
+        let frame = Frame3D {
+            faces: vec![
+                Face3D {
+                    face: 0,
+                    polygon: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0]],
+                    layer: 0,
+                },
+                Face3D {
+                    face: 1,
+                    polygon: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.5], [1.0, 1.0, 0.5]],
+                    layer: 0,
+                },
+            ],
+            warnings: Vec::new(),
+        };
+        let cp = ori3_model::Document::new(ori3_model::Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        })
+        .cp;
+        let faces = ori3_cp::extract_faces(&cp);
+        assert!(super::derive_layer_order(&cp, &faces, &frame).is_none());
+    }
+
     #[test]
     fn witness_cutoff_uses_face_ids_for_depths_within_tolerance() {
         let denominator = (MAX_CONTACT_WITNESSES * 2) as f64;
