@@ -6,7 +6,7 @@
 //
 // ここで作る値は表示専用で、作品データ(Frame3D)そのものには一切反映しない。
 
-import type { Face3D, Frame3D } from "./types";
+import type { Frame3D } from "./types";
 
 /** 層1枚あたりのずらし量(紙の長辺に対する割合)
  *
@@ -115,65 +115,10 @@ function facePlane(poly: readonly Vec3[]): { n: Vec3; d: number } | null {
  * 塗りつぶしてしまうため(実機で見つかった不具合)。
  *
  * 層番号が同じ面は離さない(展開した1枚の紙がばらばらに浮かないように)。
+ * 角度だけで折ると全ての面が同じ段になり、離す幅は0になる。その重なりは面を
+ * 離して隠すのではなく、表と裏で色と描画の奥行きを変えて見せる
+ * (`Viewer3D/sceneBuilder.ts`。`sceneBuilder.test.ts` に同じ設計の検査がある)。
  */
-/** 面の重心(平面上の点で判定するのに使う)。 */
-function centroid(poly: readonly Vec3[]): Vec3 {
-  const s: Vec3 = [0, 0, 0];
-  for (const p of poly) {
-    s[0] += p[0];
-    s[1] += p[1];
-    s[2] += p[2];
-  }
-  const n = Math.max(poly.length, 1);
-  return [s[0] / n, s[1] / n, s[2] / n];
-}
-
-/**
- * 同じ平面にある2つの面が重なっているか。
- *
- * 重心が相手の内側にあるかを、面の法線を軸から外した2方向へ落として調べる。
- * 重なった紙の層を見分けるための判定なので、厳密な多角形の交差までは要らない。
- */
-function overlapsInPlane(a: Face3D, b: Face3D): boolean {
-  const n = polygonNormal(a.polygon);
-  if (n === null) return false;
-  const axis = canonicalAxis(n);
-  const u: Vec3 = [
-    n[1] * axis[2] - n[2] * axis[1],
-    n[2] * axis[0] - n[0] * axis[2],
-    n[0] * axis[1] - n[1] * axis[0],
-  ];
-  const ul = Math.hypot(u[0], u[1], u[2]);
-  if (ul < AREA_EPS) return false;
-  const uu: Vec3 = [u[0] / ul, u[1] / ul, u[2] / ul];
-  const vv: Vec3 = [
-    n[1] * uu[2] - n[2] * uu[1],
-    n[2] * uu[0] - n[0] * uu[2],
-    n[0] * uu[1] - n[1] * uu[0],
-  ];
-  const to2 = (p: Vec3): [number, number] => [
-    p[0] * uu[0] + p[1] * uu[1] + p[2] * uu[2],
-    p[0] * vv[0] + p[1] * vv[1] + p[2] * vv[2],
-  ];
-  const inside = (poly: readonly Vec3[], q: [number, number]): boolean => {
-    const pts = poly.map(to2);
-    let hit = false;
-    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
-      const [xi, yi] = pts[i];
-      const [xj, yj] = pts[j];
-      if (yi > q[1] !== yj > q[1]) {
-        const x = xi + ((q[1] - yi) / (yj - yi)) * (xj - xi);
-        if (q[0] < x) hit = !hit;
-      }
-    }
-    return hit;
-  };
-  return (
-    inside(a.polygon, to2(centroid(b.polygon))) ||
-    inside(b.polygon, to2(centroid(a.polygon)))
-  );
-}
-
 export function stackLifts(frame: Frame3D, paperScale: number): Vec3[] {
   const faces = frame.faces;
   const lifts: Vec3[] = faces.map(() => [0, 0, 0]);
@@ -203,19 +148,6 @@ export function stackLifts(frame: Frame3D, paperScale: number): Vec3[] {
       (a, b) => a - b,
     );
     for (const i of g.members) ranks[i] = sorted.indexOf(faces[i].layer);
-    // 手順を記録せず角度だけで折ると、全ての面が同じ段になり離す幅が0になる。
-    // すると重なった紙が完全に同じ位置へ描かれ、内側の折り目が表面から透けて
-    // 見える。同じ段でも「互いに重なっている」面は離す。展開した1枚の紙は
-    // 面どうしが重ならないので、これまでどおりばらけない。
-    if (sorted.length === 1 && g.members.length > 1) {
-      const stacked = g.members.filter((i) =>
-        g.members.some((j) => j !== i && overlapsInPlane(faces[i], faces[j])),
-      );
-      stacked.forEach((i, index) => {
-        ranks[i] = index;
-      });
-      if (stacked.length > depth) depth = stacked.length;
-    }
     if (sorted.length > depth) depth = sorted.length;
   }
 
