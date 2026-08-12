@@ -971,8 +971,8 @@ fn solve_impl_prepared(
                     }
                     for &(ci, cj, slot) in &normal_slots[li] {
                         let mut dot = 0.0;
-                        for row in 0..12 {
-                            dot += block[ci][row] * block[cj][row];
+                        for (bi, bj) in block[ci].iter().zip(block[cj].iter()) {
+                            dot += bi * bj;
                         }
                         vals[slot] += dot;
                     }
@@ -1101,7 +1101,7 @@ fn solve_impl_prepared(
         .collect();
 
     // 最終フレームは構築済みの森で一度だけ伝播する(build_forestの二重実行を回避)
-    let folded = tree::fold_frame(&forest, faces, &x);
+    let folded = tree::fold_frame(forest, faces, &x);
     let mut frame = tree::to_frame3d(cp, faces, &folded);
     frame.warnings.append(&mut warnings);
     let finite_frame = frame_is_finite_and_complete(&frame, faces.len());
