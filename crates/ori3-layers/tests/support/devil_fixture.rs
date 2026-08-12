@@ -200,12 +200,20 @@ pub fn document_json(document: &Document) -> String {
     out
 }
 
-/// Write one complete checkpoint beside `acceptance_devil.rs`.
+/// 悪魔のチェックポイントを1つ書き出す。
+///
+/// 既定の書き出し先は一時フォルダ。以前は `tests/fixtures/` を直接上書きしていたため、
+/// テストを走らせるたびにコミット済みのfixtureが最終桁だけ書き換わり、作業ツリーが
+/// 汚れた。同じファイルを `folded_query.rs` や `step_oracle.rs` が読むので、
+/// テストの実行順で読む内容が変わる状態にもなっていた。
+///
+/// fixtureを更新したいときだけ `ORI3_DEVIL_FIXTURE_OUT=<保存先フォルダ>` を指定する。
 #[allow(dead_code)] // Used by acceptance_devil; the serializer unit test includes this module too.
 pub fn write_checkpoint(document: &Document, step: u32) -> PathBuf {
-    let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures");
+    let directory = std::env::var_os("ORI3_DEVIL_FIXTURE_OUT").map_or_else(
+        || std::env::temp_dir().join("ori3-devil-checkpoints"),
+        |out| Path::new(&out).to_path_buf(),
+    );
     std::fs::create_dir_all(&directory).expect("create Devil fixture directory");
     let path = directory.join(format!("devil-{step:03}.ori3"));
     std::fs::write(&path, document_json(document)).expect("write complete Devil checkpoint");

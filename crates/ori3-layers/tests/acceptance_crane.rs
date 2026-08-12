@@ -1001,11 +1001,11 @@ fn crane_is_deterministic() {
 // フロント側テスト用のフィクスチャ書き出し
 // ---------------------------------------------------------------------------
 
-/// 完成形の展開図と面を、フロント側(vitest)が読めるJSONとして書き出す。
+/// 完成形の展開図と面を、フロント側(vitest)が読めるJSONの文字列にする。
 /// 対称軸の判定(`apps/desktop/src/lib/grabDrive.ts`)を**実データ**で検証するため。
 /// serde_jsonへ依存を増やさずに済むよう、必要な項目だけを手書きで出力する。
 /// f64は `{:?}` で往復可能な最短表記になる。
-pub fn write_fixture(doc: &Document, faces: &[Face], name: &str) {
+fn front_fixture_json(doc: &Document, faces: &[Face]) -> String {
     let mut s = String::from("{\n");
     let (w, h) = (doc.paper.width_mm, doc.paper.height_mm);
     s.push_str(&format!(
@@ -1040,20 +1040,112 @@ pub fn write_fixture(doc: &Document, faces: &[Face], name: &str) {
         ));
     }
     s.push_str("  ]\n}\n");
-    let dir = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../apps/desktop/src/lib/__fixtures__"
-    );
-    std::fs::create_dir_all(dir).expect("フィクスチャ置き場を作る");
-    std::fs::write(format!("{dir}/{name}.json"), s).expect("フィクスチャを書き出す");
+    s
 }
 
-/// 折り鶴の完成形をフィクスチャとして書き出す。
+fn crane_front_fixture_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../apps/desktop/src/lib/__fixtures__/crane.json")
+}
+
+/// 明示的な再生成専用: `cargo test -p ori3-layers --test acceptance_crane regenerate_crane_front_fixture -- --ignored --exact`
 #[test]
-fn crane_is_written_as_a_fixture() {
+#[ignore = "フロント用折り鶴fixtureを明示的に作り直すときだけ実行する"]
+fn regenerate_crane_front_fixture() {
     let (doc, _) = crane();
     let faces = extract_faces(&doc.cp);
-    write_fixture(&doc, &faces, "crane");
+    let path = crane_front_fixture_path();
+    std::fs::create_dir_all(path.parent().expect("置き場")).expect("フィクスチャ置き場を作る");
+    std::fs::write(&path, front_fixture_json(&doc, &faces)).expect("フィクスチャを書き出す");
+}
+
+/// apps配下へ書き込まず、既存の折り鶴フィクスチャが現在の実データと一致するか調べる。
+///
+/// 以前は普通のテストが毎回このファイルを上書きしていた。テストを走らせるだけで
+/// コミット済みのファイルが変わると、意図しない書き換えを一緒にコミットしてしまう。
+/// カエル(`acceptance_frog.rs`)と同じ「読むだけで照合する」形にそろえる。
+#[test]
+fn crane_front_fixture_matches_read_only() {
+    /// 座標の差の許容量。紙の一辺を1とした値なので、この差は表示にも計算にも影響しない。
+    const COORD_TOLERANCE: f64 = 1e-9;
+
+    let (doc, _) = crane();
+    let faces = extract_faces(&doc.cp);
+    let path = crane_front_fixture_path();
+    let stored = std::fs::read_to_string(&path).expect("既存のフロント用折り鶴fixtureを読む");
+    let generated = front_fixture_json(&doc, &faces);
+
+    let (stored_shape, stored_numbers) = split_numbers(&stored.replace("\r\n", "\n"));
+    let (generated_shape, generated_numbers) = split_numbers(&generated.replace("\r\n", "\n"));
+
+    assert_eq!(
+        stored_shape,
+        generated_shape,
+        "フロント用折り鶴fixtureの構造が現在の展開図と不一致: {}",
+        path.display()
+    );
+    assert_eq!(
+        stored_numbers.len(),
+        generated_numbers.len(),
+        "フロント用折り鶴fixtureの数値の個数が不一致: {}",
+        path.display()
+    );
+    for (index, (stored_value, generated_value)) in
+        stored_numbers.iter().zip(&generated_numbers).enumerate()
+    {
+        let scale = stored_value.abs().max(generated_value.abs()).max(1.0);
+        assert!(
+            (stored_value - generated_value).abs() <= COORD_TOLERANCE * scale,
+            "フロント用折り鶴fixtureの{index}番目の数値が不一致: 保存 {stored_value} / 現在 {generated_value} ({})",
+            path.display()
+        );
+    }
+}
+
+/// 数値を `#` へ置き換えた骨組みと、取り出した数値の並びに分ける。
+///
+/// 座標は計算機や数学ライブラリの違いで最下位の桁が変わることがあるため、
+/// 文字列のまま厳密に比べると、どの計算機で作り直しても他方では一致しなくなる。
+/// 骨組み(項目名・並び・整数のID)は厳密に、座標は許容差で比べるために分ける。
+fn split_numbers(text: &str) -> (String, Vec<f64>) {
+    let chars: Vec<char> = text.chars().collect();
+    let mut skeleton = String::with_capacity(text.len());
+    let mut numbers = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let head = chars[i];
+        let starts_number = head.is_ascii_digit()
+            || (head == '-' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit());
+        if !starts_number {
+            skeleton.push(head);
+            i += 1;
+            continue;
+        }
+        let start = i;
+        i += 1;
+        while i < chars.len() {
+            let c = chars[i];
+            if c.is_ascii_digit() || c == '.' {
+                i += 1;
+            } else if c == 'e' || c == 'E' {
+                i += 1;
+                if i < chars.len() && (chars[i] == '+' || chars[i] == '-') {
+                    i += 1;
+                }
+            } else {
+                break;
+            }
+        }
+        let token: String = chars[start..i].iter().collect();
+        match token.parse::<f64>() {
+            Ok(value) => {
+                numbers.push(value);
+                skeleton.push('#');
+            }
+            Err(_) => skeleton.push_str(&token),
+        }
+    }
+    (skeleton, numbers)
 }
 
 /// 角度だけで折った形からでも、紙の重なり順を求められることを検査する。
@@ -1243,4 +1335,52 @@ fn write_crane_document_for_screen_check() {
     s.push_str("]\n}\n");
     std::fs::write(&path, s).expect("作品ファイルを書き出す");
     println!("書き出しました: {path}(手順{}件)", doc.sequence.len());
+}
+
+/// 折り目1本を谷折りで−180°まで送っても、紙が閉じたままであること。
+///
+/// 前の姿勢から連続に追うだけでは閉じた形へ辿り着けない角度があり、−147°〜−162°
+/// あたりで閉包RMSが 2.835e-3〜9.177e-3 になっていた(紙が裂けて見える大きさ)。
+/// 刻みを5°/2°/1°/0.5°と変えても同じ範囲で起きるため、分割を細かくしても直らない。
+/// 閉じた形自体は存在するので、最終要求で閉じなかったときだけ初期値を変えて
+/// 解き直すようにした。上限 1e-9 は、この修正後の実測 最悪 3.692e-14 を根拠にする。
+#[test]
+fn valley_folding_one_crease_to_180_keeps_the_paper_closed() {
+    use ori3_rigid::motion::solve_motion;
+
+    let (doc, _) = crane();
+    let cp = &doc.cp;
+    let faces = extract_faces(cp);
+    let creases: Vec<u32> = cp
+        .edges
+        .iter()
+        .filter(|edge| edge.kind != EdgeKind::Border)
+        .map(|edge| edge.id)
+        .collect();
+    // 利用者が実際に選んだ2本と同じ位置づけ(操作中の1本＝hard、もう1本＝希望)
+    let (driven, wanted) = (creases[17], creases[20]);
+    let mut warm: HashMap<u32, f64> = creases.iter().map(|&edge| (edge, 0.0)).collect();
+    let mut worst_rms = 0.0_f64;
+
+    for step in 1..=36u32 {
+        let angle = -5.0 * f64::from(step);
+        let drivers = vec![Driver {
+            hinge: driven,
+            target_angle_deg: angle,
+        }];
+        let targets: HashMap<u32, f64> = HashMap::from([(wanted, angle)]);
+        let solved = solve_motion(cp, &faces, &drivers, Some(&targets), Some(&warm), true).result;
+        assert!(
+            solved.converged,
+            "{angle}°で紙が閉じない(閉包RMS {:.3e}、警告 {:?})",
+            solved.closure_rms, solved.frame.warnings
+        );
+        worst_rms = worst_rms.max(solved.closure_rms);
+        warm = solved.angles.clone();
+    }
+
+    assert!(
+        worst_rms < 1e-9,
+        "36段すべてで閉じるが、最悪の閉包RMSが大きすぎる: {worst_rms:.3e}"
+    );
 }

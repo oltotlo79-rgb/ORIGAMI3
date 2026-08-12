@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
 use ori3_cp::Face;
-use ori3_model::{CreasePattern, Driver, EdgeId, FaceId, Frame3D};
+use ori3_model::{CreasePattern, Driver, EdgeId, EdgeKind, FaceId, Frame3D};
 
 use crate::intersect::{ContactMetrics, contact_metrics, contact_witnesses};
 use crate::solver::{self, PreparedTopology, canonical_delta_deg};
@@ -24,6 +24,8 @@ const CONTACT_LINE_SEARCH_STEPS: usize = 8;
 /// solverと同じ閉包収束閾値。接触より閉包を常に上位へ置く順位付けに使う。
 const CLOSURE_TOLERANCE: f64 = 1e-13;
 const RELAXATION_EPS_DEG: f64 = 1e-6;
+/// 紙が裂けたとみなす辺の離れ(紙の長辺を1とした値)。表示でも検査でも同じ値を使う。
+const SEAM_TEAR_TOLERANCE: f64 = 1e-6;
 const CONTACT_BEST_EFFORT_WARNING: &str =
     "紙の貫通を完全には避けられないため、貫通が最も少ない有限形で追従しています";
 /// 停止しない接触診断付き継続法の結果。
@@ -147,7 +149,7 @@ pub fn solve_motion(
             && let Some(targets) = step_targets.as_ref()
             && is_finite_result(&candidate, faces.len())
             && !self_intersects(&candidate.frame)
-            && max_seam_gap(cp, faces, &candidate.frame) >= 1e-6
+            && max_seam_gap(cp, faces, &candidate.frame) >= SEAM_TEAR_TOLERANCE
         {
             // medium付き通常解が非交差のまま厳密seamだけを僅かに外したときに限り、
             // ばね0の最終閉包段を1回使う。別の交差枝へ移る候補は採用しない。
@@ -180,6 +182,18 @@ pub fn solve_motion(
                     candidate = alternative;
                 }
             }
+        }
+        if step == steps && !candidate.converged && is_finite_result(&candidate, faces.len()) {
+            candidate = Reseed {
+                cp,
+                faces,
+                drivers: &step_drivers,
+                targets: step_targets.as_ref(),
+                start_angles: &start_angles,
+                warm: step_warm,
+                topology: &topology,
+            }
+            .rescue(candidate);
         }
         let raw_contact =
             is_finite_result(&candidate, faces.len()) && self_intersects(&candidate.frame);
@@ -515,6 +529,113 @@ impl ContactCandidate {
                     .then(|| left.1.total_cmp(&right.1) == Ordering::Less)
             })
             .unwrap_or(false)
+    }
+}
+
+/// 最終要求で紙が閉じなかったときに、初期値を変えて解き直すための一式。
+struct Reseed<'a> {
+    cp: &'a CreasePattern,
+    faces: &'a [Face],
+    drivers: &'a [Driver],
+    targets: Option<&'a HashMap<EdgeId, f64>>,
+    start_angles: &'a HashMap<EdgeId, f64>,
+    warm: Option<&'a HashMap<EdgeId, f64>>,
+    topology: &'a PreparedTopology,
+}
+
+impl Reseed<'_> {
+    /// 紙が実際に裂けているときだけ、決まった初期値をいくつか試して解き直す。
+    /// 閉じて・交差せず・裂けも増えない解が見つかれば、その中で前の姿勢に最も近い
+    /// ものへ差し替える。見つからなければ元のまま返す(操作は止めない)。
+    ///
+    /// 前の姿勢から連続に追うだけでは、折り目の角度によっては閉じた形へ辿り着けない
+    /// ことがある。折り鶴で1本を−150°〜−160°へ折ると閉包RMSが2.835e-3〜9.177e-3
+    /// (紙が裂けて見える大きさ)になるが、閉じた形自体は存在し、初期値を変えると
+    /// 1.441e-14以下まで下がる。刻みを5°/2°/1°/0.5°と変えても同じ範囲で起きるため、
+    /// 分割を細かくしても解決しない。
+    fn rescue(&self, candidate: SolveResult) -> SolveResult {
+        let candidate_gap = max_seam_gap(self.cp, self.faces, &candidate.frame);
+        if candidate_gap < SEAM_TEAR_TOLERANCE {
+            // 閉包残差が残っていても紙が裂けていないなら、見た目は正しい。
+            // ここで別の枝の解へ移ると、以降の追従がその枝に乗り換えてしまう。
+            // 鳥の基本形を180°から戻す掃引では、残差2.559e-3でも裂けは1.249e-15で、
+            // 解き直すと後の173°で裂けが1.479e-5まで広がった。
+            return candidate;
+        }
+        let mut best: Option<(f64, SolveResult)> = None;
+        for seed in self.seeds() {
+            let solved = self.solve_from(seed.as_ref());
+            if !solved.converged
+                || !is_finite_result(&solved, self.faces.len())
+                || self_intersects(&solved.frame)
+                || max_seam_gap(self.cp, self.faces, &solved.frame) > candidate_gap
+            {
+                continue;
+            }
+            let distance = self.distance_from_previous(&solved.angles);
+            if best.as_ref().is_none_or(|(d, _)| distance < *d) {
+                best = Some((distance, solved));
+            }
+        }
+        match best {
+            Some((_, mut solved)) => {
+                solved.iterations = solved.iterations.saturating_add(candidate.iterations);
+                solved.relaxations = collect_relaxations(&solved.angles, self.drivers, self.targets);
+                solved
+            }
+            None => candidate,
+        }
+    }
+
+    /// 試す初期値。回数を固定するので、解けない場合でも所要時間は増え続けない。
+    fn seeds(&self) -> Vec<Option<HashMap<EdgeId, f64>>> {
+        let mut seeds = vec![None, Some(self.start_angles.clone())];
+        // 「全ての折り目を要求と同じだけ折った形」から解くと、平らに近い側の
+        // 局所解へ落ちずに、深く折れた側の解へ届く。
+        if let Some(deepest) = self
+            .drivers
+            .iter()
+            .map(|driver| driver.target_angle_deg)
+            .max_by(|left, right| left.abs().total_cmp(&right.abs()))
+        {
+            seeds.push(Some(
+                self.cp
+                    .edges
+                    .iter()
+                    .filter(|edge| edge.kind != EdgeKind::Border)
+                    .map(|edge| (edge.id, deepest))
+                    .collect(),
+            ));
+        }
+        seeds
+    }
+
+    fn solve_from(&self, seed: Option<&HashMap<EdgeId, f64>>) -> SolveResult {
+        self.targets.map_or_else(
+            || solver::solve_prepared(self.cp, self.faces, self.drivers, seed, self.topology),
+            |targets| {
+                solver::solve_near_exact_prepared(
+                    self.cp,
+                    self.faces,
+                    self.drivers,
+                    targets,
+                    seed,
+                    self.topology,
+                )
+            },
+        )
+    }
+
+    /// 前の姿勢からの角度の隔たり。近い解ほど紙の見た目が飛ばない。
+    fn distance_from_previous(&self, angles: &HashMap<EdgeId, f64>) -> f64 {
+        let previous = self.warm.unwrap_or(self.start_angles);
+        angles
+            .iter()
+            .map(|(hinge, &angle)| {
+                canonical_delta_deg(angle, previous.get(hinge).copied().unwrap_or(0.0)).powi(2)
+            })
+            .sum::<f64>()
+            .sqrt()
     }
 }
 

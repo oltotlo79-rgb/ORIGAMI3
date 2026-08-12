@@ -31,7 +31,26 @@ function Invoke-Check {
 
 Push-Location $root
 try {
+    # テストが追跡対象のファイルを書き換えていないかを、実行の前後で比べる。
+    # 悪魔のチェックポイントを書くテストが tests/fixtures/devil-025.ori3 を毎回
+    # 上書きしており、テストを走らせるだけで作業ツリーが汚れていた。
+    # 同じファイルを別のテストが読むため、実行順で読む内容が変わる状態でもあった。
+    $global:LASTEXITCODE = 0
+    $beforeTracked = (& git -C $root status --porcelain --untracked-files=no) -join "`n"
+
     Invoke-Check "(1/5) cargo test --workspace" cargo @("test", "--workspace")
+
+    $global:LASTEXITCODE = 0
+    $afterTracked = (& git -C $root status --porcelain --untracked-files=no) -join "`n"
+    if ($afterTracked -ne $beforeTracked) {
+        Write-Host ""
+        Write-Host "[NG] テストが追跡対象のファイルを書き換えました" -ForegroundColor Red
+        Write-Host "実行前:" -ForegroundColor Yellow
+        Write-Host $beforeTracked
+        Write-Host "実行後:" -ForegroundColor Yellow
+        Write-Host $afterTracked
+        exit 1
+    }
     Invoke-Check "(2/5) cargo clippy --workspace --all-targets -- -D warnings" cargo @("clippy", "--workspace", "--all-targets", "--", "-D", "warnings")
 
     Set-Location (Join-Path $root "apps\desktop")

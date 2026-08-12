@@ -254,3 +254,20 @@ Co-Authored-By: Codex <noreply@openai.com>
     `scripts/install-hooks.ps1` が pre-commit と pre-push の両方を有効化する。
   - **角度の等価性を扱う変更は、平坦な終点だけでなく途中の姿勢で検査する。**
     `assert_display_order` は99%まで折った時点の上下を見ており、この誤りを実際に捕まえた。
+
+### 10.7.6 テストが追跡対象のファイルを書き換えていた(2026-08-13)
+
+- **起きたこと**: 上の調査中に `crates/ori3-layers/tests/fixtures/devil-025.ori3` が
+  変更済みになっていた。悪魔の受け入れテストが実行のたびにこのファイルを上書きしており、
+  数値の最終桁(1e-14)だけが毎回変わっていた。同じファイルを `folded_query.rs` と
+  `step_oracle.rs` が読むため、テストの実行順で読む内容が変わる状態でもあった。
+  折り鶴も同様に `apps/desktop/src/lib/__fixtures__/crane.json` を毎回上書きしていた。
+- **原因**: 「fixtureを作る」と「fixtureで検査する」を同じテストが兼ねていた。
+  §10.1が禁じる「テストが製品側ソースへ書き込む」と同じ形が、fixtureで起きていた。
+- **仕組みでの対策**:
+  - 普通のテストは**読んで照合するだけ**にする。作り直しは `#[ignore]` の
+    再生成専用テストに分け、明示的に実行したときだけ書き込む
+    (`regenerate_crane_front_fixture` / `ORI3_DEVIL_FIXTURE_OUT`)。
+  - `scripts/check.ps1` が `cargo test --workspace` の前後で
+    `git status --porcelain --untracked-files=no` を比べ、
+    **追跡対象のファイルが1つでも変わったら失敗させる**。
