@@ -849,7 +849,6 @@ mod tests {
             layer_order: None,
             alignment: None,
             note: String::new(),
-            motion_path: None,
         }
     }
 
