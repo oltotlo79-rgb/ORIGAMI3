@@ -770,6 +770,20 @@ pub fn raycast_faces(
             .total_cmp(&right.distance)
             .then(left.face.cmp(&right.face))
     });
+    // A ray tolerance also defines equal depth.  Keep the exact distance sort above so the
+    // comparator remains transitive, then give every non-chaining tolerance bucket a stable
+    // topology tie-break.  Comparing approximately inside `sort_by` would be invalid when
+    // a is close to b and b is close to c but a is not close to c.
+    let mut bucket_start = 0;
+    while bucket_start < hits.len() {
+        let anchor = hits[bucket_start].distance;
+        let mut bucket_end = bucket_start + 1;
+        while bucket_end < hits.len() && hits[bucket_end].distance - anchor <= tolerance {
+            bucket_end += 1;
+        }
+        hits[bucket_start..bucket_end].sort_by_key(|hit| hit.face);
+        bucket_start = bucket_end;
+    }
     Ok(hits)
 }
 
