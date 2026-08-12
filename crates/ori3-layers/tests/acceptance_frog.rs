@@ -997,6 +997,19 @@ fn front_fixture_json(doc: &Document, faces: &[Face]) -> String {
     s
 }
 
+/// 明示的な再生成専用: `cargo test -p ori3-layers --test acceptance_frog regenerate_frog_front_fixture -- --ignored --exact`
+/// コミット済みHEADの複製内で実行し、生成したfrog.jsonだけを本体へコピーする。
+#[test]
+#[ignore = "フロント用カエルfixtureを明示的に再生成するときだけ実行する"]
+fn regenerate_frog_front_fixture() {
+    let (doc, _) = frog();
+    let faces = extract_faces(&doc.cp);
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../apps/desktop/src/lib/__fixtures__/frog.json");
+    std::fs::write(&path, front_fixture_json(&doc, &faces))
+        .expect("フロント用カエルfixtureを書き直す");
+}
+
 /// apps配下へ書き込まず、既存のカエルフィクスチャが現在の実データと一致するか調べる。
 #[test]
 fn frog_front_fixture_matches_read_only() {
