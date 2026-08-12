@@ -949,3 +949,61 @@ fn bird_base_folded_by_angles_has_zero_penetration_warnings() {
         "完全平坦なら重なり防止を適用しない: {report:?}"
     );
 }
+
+/// 全ての折り目に角度を指定した状態から1本を動かしたとき、他がどれだけ譲るか。
+///
+/// 利用者から「追従が弱く、貫通したり警告が出て、実際の折り紙のように
+/// 自然によけたり動いたりしない」との報告があった。実機では15本すべてに
+/// 角度が指定されていた。その状況を再現して、譲る量と交差の有無を測る。
+#[test]
+fn diagnose_follow_strength_when_every_crease_is_specified() {
+    let doc = bird_base();
+    let faces = extract_faces(&doc.cp);
+    let replayed = replay(&doc, doc.sequence.len(), 1.0);
+    let folded: HashMap<EdgeId, f64> = replayed.hinge_angles.clone();
+    println!("折り目の数: {}", folded.len());
+
+    // 畳み切った状態を出発点に、1本だけを動かす(利用者の操作に近い)
+    let moving = SWEEP_HINGE;
+    let base_angle = *folded.get(&moving).expect("動かす折り目がある");
+    println!("動かす折り目 #{moving} の元の角度: {base_angle}°");
+
+    for step in [10.0_f64, 30.0, 60.0, 90.0] {
+        let requested = base_angle - base_angle.signum() * step;
+        let hard = [Driver {
+            hinge: moving,
+            target_angle_deg: requested,
+        }];
+        let motion = solve_motion(&doc.cp, &faces, &hard, Some(&folded), Some(&folded), true);
+        let raw = self_intersection_pairs(&motion.result.frame);
+        let yielded: Vec<(EdgeId, f64)> = motion
+            .result
+            .angles
+            .iter()
+            .filter_map(|(&hinge, &actual)| {
+                if hinge == moving {
+                    return None;
+                }
+                let want = folded.get(&hinge).copied().unwrap_or(0.0);
+                // +180度と-180度は同じ折り方なので、短い方の差で測る
+                let mut diff = (actual - want).rem_euclid(360.0);
+                if diff > 180.0 {
+                    diff = 360.0 - diff;
+                }
+                if diff > 179.9 {
+                    diff = (diff - 180.0).abs();
+                }
+                (diff > 0.1).then_some((hinge, diff))
+            })
+            .collect();
+        let max_yield = yielded.iter().map(|(_, d)| *d).fold(0.0_f64, f64::max);
+        println!(
+            "{requested:>7.1}°を指定: 交差{}組 譲った折り目{}本 最大{:.2}° 接触停止={} 収束={}",
+            raw.len(),
+            yielded.len(),
+            max_yield,
+            motion.contact_stopped,
+            motion.result.converged
+        );
+    }
+}
