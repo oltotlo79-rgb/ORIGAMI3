@@ -1095,3 +1095,72 @@ fn derived_layer_order_matches_the_recorded_fold() {
         .expect("2回目も求められる");
     assert_eq!(derived, again, "同じ入力で順序が変わってはいけない");
 }
+
+/// 完成した鶴の形を検査する。
+///
+/// 裂けや交差が0でも形が違うことがある(2026-08-12にローズと折り鶴で確認)。
+/// 数値だけを合格条件にせず、形そのものを条件に入れる。
+///
+/// 実測(2026-08-12): 外形 幅0.432 × 奥行0.432 × 高さ0.000、面29枚、交差0組。
+/// 完成形は平らに畳まれ、対角線について左右対称になる。
+#[test]
+fn completed_crane_is_flat_and_symmetric() {
+    let (doc, _) = crane();
+    let replayed = replay(&doc, doc.sequence.len(), 1.0);
+    let points: Vec<[f64; 3]> = replayed
+        .frame
+        .faces
+        .iter()
+        .flat_map(|face| face.polygon.iter().copied())
+        .collect();
+    assert!(!points.is_empty(), "面がある");
+
+    let span = |axis: usize| {
+        let lo = points.iter().map(|p| p[axis]).fold(f64::MAX, f64::min);
+        let hi = points.iter().map(|p| p[axis]).fold(f64::MIN, f64::max);
+        (lo, hi, hi - lo)
+    };
+    let (_, _, width) = span(0);
+    let (_, _, depth) = span(1);
+    let (_, _, height) = span(2);
+
+    assert!(
+        height < 1e-9,
+        "完成した鶴は平らに畳まれるはずだが高さ{height:e}がある"
+    );
+    assert!(
+        (width - depth).abs() < 1e-6,
+        "外形が正方形にならない(幅{width:.6} 奥行{depth:.6})"
+    );
+    assert!(
+        (0.3..0.6).contains(&width),
+        "外形の大きさが想定外(幅{width:.6}、紙の一辺は1.0)"
+    );
+    assert!(
+        ori3_rigid::self_intersection_pairs(&replayed.frame).is_empty(),
+        "完成した鶴で紙が交差している"
+    );
+
+    // 鶴は首と尾を振り分ける対角線について、概ね左右対称になる。
+    // 頭の中割り折りは片側だけなので完全な対称にはならない。
+    // 実測(2026-08-12): 全118点のうち鏡像が無いのは18点(15.3%)で、これが頭の分。
+    const MIRROR_TOL: f64 = 1e-6;
+    const MAX_ASYMMETRIC_RATIO: f64 = 0.25;
+    let mirrored_missing = points
+        .iter()
+        .filter(|p| {
+            !points.iter().any(|q| {
+                (q[0] - p[1]).abs() < MIRROR_TOL
+                    && (q[1] - p[0]).abs() < MIRROR_TOL
+                    && (q[2] - p[2]).abs() < MIRROR_TOL
+            })
+        })
+        .count();
+    let ratio = mirrored_missing as f64 / points.len() as f64;
+    assert!(
+        ratio < MAX_ASYMMETRIC_RATIO,
+        "対角線について左右対称になっていない(鏡像が無い点が{mirrored_missing}/{}={:.1}%)",
+        points.len(),
+        ratio * 100.0
+    );
+}
