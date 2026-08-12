@@ -1005,5 +1005,33 @@ fn diagnose_follow_strength_when_every_crease_is_specified() {
             motion.contact_stopped,
             motion.result.converged
         );
+        // 譲りの大きい折り目と、その折り目の長さ(紙の一辺=1.0)を並べる。
+        // 長さに比例した抵抗にしているため、短い折り目へ譲りが集まる疑いを確かめる。
+        let position: HashMap<_, _> = doc
+            .cp
+            .vertices
+            .iter()
+            .map(|vertex| (vertex.id, vertex.pos))
+            .collect();
+        let length_of = |hinge: EdgeId| -> f64 {
+            doc.cp
+                .edges
+                .iter()
+                .find(|edge| edge.id == hinge)
+                .and_then(|edge| Some((position.get(&edge.v0)?, position.get(&edge.v1)?)))
+                .map_or(f64::NAN, |(a, b)| {
+                    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
+                })
+        };
+        let mut ranked = yielded.clone();
+        ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let lengths: Vec<f64> = doc.cp.edges.iter().map(|edge| length_of(edge.id)).collect();
+        let longest = lengths.iter().copied().fold(0.0_f64, f64::max);
+        for (hinge, diff) in ranked.iter().take(3) {
+            println!(
+                "    折り目#{hinge}: 譲り{diff:.1}° 長さ{:.3}(最長{longest:.3})",
+                length_of(*hinge)
+            );
+        }
     }
 }
