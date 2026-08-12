@@ -266,11 +266,12 @@ fn assert_overlap_report_quality(
     raw_pairs: &[(FaceId, FaceId)],
     display_pairs: &[(FaceId, FaceId)],
     displayed: &Frame3D,
-    cp: &CreasePattern,
-    faces: &[Face],
+    // 展開図と面は常に一組で使うので、まとめて受け取る(引数を増やしすぎない)
+    geometry: (&CreasePattern, &[Face]),
     direction: &str,
     angle_deg: u32,
 ) {
+    let (cp, faces) = geometry;
     assert!(
         displayed.faces.iter().all(|face| {
             face.polygon
@@ -452,8 +453,7 @@ fn run_bird_base_sweep(
             &raw_pairs,
             &display_pairs,
             &displayed,
-            &doc.cp,
-            faces,
+            (&doc.cp, faces),
             direction,
             angle_deg,
         );

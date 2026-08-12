@@ -1010,19 +1010,88 @@ fn regenerate_frog_front_fixture() {
         .expect("フロント用カエルfixtureを書き直す");
 }
 
+/// 数値を `#` へ置き換えた骨組みと、取り出した数値の並びに分ける。
+///
+/// 座標は計算機や数学ライブラリの違いで最下位の桁が変わることがあるため、
+/// 文字列のまま厳密に比べると、どの計算機で作り直しても他方では一致しなくなる。
+/// 骨組み(項目名・並び・整数のID)は厳密に、座標は許容差で比べるために分ける。
+fn split_numbers(text: &str) -> (String, Vec<f64>) {
+    let chars: Vec<char> = text.chars().collect();
+    let mut skeleton = String::with_capacity(text.len());
+    let mut numbers = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let head = chars[i];
+        let starts_number = head.is_ascii_digit()
+            || (head == '-' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit());
+        if !starts_number {
+            skeleton.push(head);
+            i += 1;
+            continue;
+        }
+        let start = i;
+        i += 1;
+        while i < chars.len() {
+            let c = chars[i];
+            if c.is_ascii_digit() || c == '.' {
+                i += 1;
+            } else if c == 'e' || c == 'E' {
+                i += 1;
+                if i < chars.len() && (chars[i] == '+' || chars[i] == '-') {
+                    i += 1;
+                }
+            } else {
+                break;
+            }
+        }
+        let token: String = chars[start..i].iter().collect();
+        match token.parse::<f64>() {
+            Ok(value) => {
+                numbers.push(value);
+                skeleton.push('#');
+            }
+            Err(_) => skeleton.push_str(&token),
+        }
+    }
+    (skeleton, numbers)
+}
+
 /// apps配下へ書き込まず、既存のカエルフィクスチャが現在の実データと一致するか調べる。
 #[test]
 fn frog_front_fixture_matches_read_only() {
+    /// 座標の差の許容量。紙の一辺を1とした値なので、この差は表示にも計算にも影響しない。
+    const COORD_TOLERANCE: f64 = 1e-9;
+
     let (doc, _) = frog();
     let faces = extract_faces(&doc.cp);
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../apps/desktop/src/lib/__fixtures__/frog.json");
     let stored = std::fs::read_to_string(&path).expect("既存のフロント用カエルfixtureを読む");
     let generated = front_fixture_json(&doc, &faces);
+
+    let (stored_shape, stored_numbers) = split_numbers(&stored.replace("\r\n", "\n"));
+    let (generated_shape, generated_numbers) = split_numbers(&generated.replace("\r\n", "\n"));
+
     assert_eq!(
-        stored.replace("\r\n", "\n"),
-        generated.replace("\r\n", "\n"),
-        "フロント用カエルfixtureが現在の展開図と不一致: {}",
+        stored_shape,
+        generated_shape,
+        "フロント用カエルfixtureの構造が現在の展開図と不一致: {}",
         path.display()
     );
+    assert_eq!(
+        stored_numbers.len(),
+        generated_numbers.len(),
+        "フロント用カエルfixtureの数値の個数が不一致: {}",
+        path.display()
+    );
+    for (index, (stored_value, generated_value)) in
+        stored_numbers.iter().zip(&generated_numbers).enumerate()
+    {
+        let scale = stored_value.abs().max(generated_value.abs()).max(1.0);
+        assert!(
+            (stored_value - generated_value).abs() <= COORD_TOLERANCE * scale,
+            "フロント用カエルfixtureの{index}番目の数値が不一致: 保存 {stored_value} / 現在 {generated_value} ({})",
+            path.display()
+        );
+    }
 }
