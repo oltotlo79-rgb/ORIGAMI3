@@ -141,6 +141,31 @@ describe("折り角度の元に戻す/やり直し", () => {
     expect(useAppStore.getState().drivers.get(5)).toBe(90);
   });
 
+  // 実機で見つかった不具合: 元に戻すと角度の表示は戻るのに、3Dが完全な平らになった。
+  // 手順を記録していない作品では、戻した先の指定角ではなく「全ての折り線を0度」を
+  // 出発点にして解き直していたため。戻した先の角度そのものを出発点にする。
+  it("元に戻したとき、戻した先の角度を出発点にして解き直す(平らにしない)", async () => {
+    const store = useAppStore.getState();
+    store.setDriverAngle(5, 90);
+    await settle();
+    // 同じ折り線の連続変更は1件にまとまるので、別の折り線を動かして履歴を分ける
+    store.setDriverAngle(7, 20);
+    await settle();
+    vi.mocked(ipc.poseSolve).mockClear();
+
+    await useAppStore.getState().undo();
+    await settle();
+
+    expect(useAppStore.getState().drivers.get(5)).toBe(90);
+    expect(useAppStore.getState().drivers.has(7)).toBe(false);
+    expect(vi.mocked(ipc.poseSolve)).toHaveBeenCalled();
+    const calls = vi.mocked(ipc.poseSolve).mock.calls;
+    const seed = calls[calls.length - 1][3] as { hinge: number; target_angle_deg: number }[];
+    expect(seed.find((d) => d.hinge === 5)?.target_angle_deg).toBe(90);
+    // 指定の無い折り線は平らのまま
+    expect(seed.find((d) => d.hinge === 7)?.target_angle_deg).toBe(0);
+  });
+
   it("紙を1回ドラッグしても履歴は1件しか増えない", () => {
     const store = useAppStore.getState();
     store.beginPull(5, new Map());

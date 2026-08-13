@@ -1148,6 +1148,21 @@ export const useAppStore = create<AppState>((set, get) => {
   const flatDrivers = (hinges: ReadonlySet<number>): Driver[] =>
     [...hinges].map((hinge) => ({ hinge, target_angle_deg: 0 }));
 
+  /** 元に戻す・やり直しの出発点。戻した先の指定角そのものを出発点にし、
+   * 指定の無い折り線だけ平らにする。
+   *
+   * 以前は全ての折り線を0度にしていたため、角度の表示だけが戻って
+   * 3Dは完全な平らのままになっていた(手順を記録していない作品で発生)。
+   * 前回の姿勢を引き継がないので、崩れた形から解き直す問題も起きない。 */
+  const snapshotSeed = (
+    drivers: ReadonlyMap<number, number>,
+    hinges: ReadonlySet<number>,
+  ): Driver[] =>
+    [...hinges].map((hinge) => ({
+      hinge,
+      target_angle_deg: drivers.get(hinge) ?? 0,
+    }));
+
   /** 新しい角度操作をZustandへ世代付きで載せる。 */
   const activateAngleIntent = (hinges: readonly number[]): number => {
     const generation = get().angleIntentGeneration + 1;
@@ -1470,10 +1485,10 @@ export const useAppStore = create<AppState>((set, get) => {
           warning.includes("収束していません") || warning.includes("食い込"),
       );
       warmSeed = broken
-        ? flatDrivers(s.hinges)
+        ? snapshotSeed(drivers, s.hinges)
         : driverList(new Map(get().poseAngles));
     } else {
-      warmSeed = flatDrivers(s.hinges);
+      warmSeed = snapshotSeed(drivers, s.hinges);
     }
 
     await requestPoseSolve(
