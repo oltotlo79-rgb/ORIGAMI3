@@ -202,3 +202,125 @@ fn folding_two_more_creases_keeps_the_folded_ones() {
     sweep(&cp, &faces, &targets, &[40, 45], -1.0, &start.angles, "谷折り");
     sweep(&cp, &faces, &targets, &[40, 45], 1.0, &start.angles, "山折り");
 }
+
+/// 利用者の画面から取り出した展開図(2026-08-13)。鶴の基本形を作る途中。
+fn user_cp2() -> CreasePattern {
+    CreasePattern {
+        vertices: vec![
+            Vertex { id: 0, pos: [0.0, 0.0] },
+            Vertex { id: 1, pos: [1.0, 0.0] },
+            Vertex { id: 2, pos: [1.0, 1.0] },
+            Vertex { id: 3, pos: [0.0, 1.0] },
+            Vertex { id: 4, pos: [0.0, 0.5] },
+            Vertex { id: 5, pos: [1.0, 0.5] },
+            Vertex { id: 6, pos: [0.5, 1.0] },
+            Vertex { id: 7, pos: [0.5, 0.0] },
+            Vertex { id: 8, pos: [0.5, 0.5] },
+            Vertex { id: 9, pos: [0.7928932188134525, 0.5] },
+            Vertex { id: 10, pos: [0.5, 0.20710678118654752] },
+            Vertex { id: 11, pos: [0.25, 0.5] },
+            Vertex { id: 12, pos: [0.5, 0.7928932188134525] },
+        ],
+        edges: vec![
+            Edge { id: 4, v0: 3, v1: 4, kind: EdgeKind::Border },
+            Edge { id: 5, v0: 4, v1: 0, kind: EdgeKind::Border },
+            Edge { id: 6, v0: 1, v1: 5, kind: EdgeKind::Border },
+            Edge { id: 7, v0: 5, v1: 2, kind: EdgeKind::Border },
+            Edge { id: 9, v0: 2, v1: 6, kind: EdgeKind::Border },
+            Edge { id: 10, v0: 6, v1: 3, kind: EdgeKind::Border },
+            Edge { id: 11, v0: 0, v1: 7, kind: EdgeKind::Border },
+            Edge { id: 12, v0: 7, v1: 1, kind: EdgeKind::Border },
+            Edge { id: 17, v0: 0, v1: 8, kind: EdgeKind::Valley },
+            Edge { id: 18, v0: 8, v1: 2, kind: EdgeKind::Valley },
+            Edge { id: 19, v0: 8, v1: 9, kind: EdgeKind::Mountain },
+            Edge { id: 20, v0: 9, v1: 5, kind: EdgeKind::Mountain },
+            Edge { id: 21, v0: 2, v1: 9, kind: EdgeKind::Mountain },
+            Edge { id: 22, v0: 9, v1: 1, kind: EdgeKind::Mountain },
+            Edge { id: 23, v0: 8, v1: 10, kind: EdgeKind::Mountain },
+            Edge { id: 24, v0: 10, v1: 7, kind: EdgeKind::Mountain },
+            Edge { id: 25, v0: 0, v1: 10, kind: EdgeKind::Mountain },
+            Edge { id: 26, v0: 10, v1: 1, kind: EdgeKind::Mountain },
+            Edge { id: 27, v0: 4, v1: 11, kind: EdgeKind::Mountain },
+            Edge { id: 28, v0: 11, v1: 8, kind: EdgeKind::Mountain },
+            Edge { id: 29, v0: 0, v1: 11, kind: EdgeKind::Mountain },
+            Edge { id: 30, v0: 11, v1: 3, kind: EdgeKind::Mountain },
+            Edge { id: 31, v0: 6, v1: 12, kind: EdgeKind::Mountain },
+            Edge { id: 32, v0: 12, v1: 8, kind: EdgeKind::Mountain },
+            Edge { id: 33, v0: 2, v1: 12, kind: EdgeKind::Mountain },
+            Edge { id: 34, v0: 12, v1: 3, kind: EdgeKind::Mountain },
+            Edge { id: 35, v0: 11, v1: 12, kind: EdgeKind::Valley },
+            Edge { id: 36, v0: 10, v1: 9, kind: EdgeKind::Valley },
+        ],
+        next_vertex_id: 13,
+        next_edge_id: 37,
+    }
+}
+
+/// 選んだ折り目を「まとめて動かす」でそろえて折っても、紙が閉じ続けること。
+///
+/// 利用者の報告(2026-08-13): 「指定した線を同時に山折りしていったら鶴の
+/// 花弁折りした状態になるが貫通になる」。
+///
+/// 原因は、選んだ折り目を**全て同じ角度ちょうどで固定**していたこと。
+/// 実際の紙では折り目どうしがわずかに違う角度を取る必要がある。8本を147°で
+/// 固定すると紙が閉じない(閉包RMS 8.714e-3)が、代表1本だけを固定して残りを
+/// 希望角にすると、45°・90°・147°のいずれでも閉包1e-15以下・食い込み0組で解け、
+/// 8本の実際の角度は要求から1.6°以内に収まる(実測)。
+///
+/// 画面側は `setDriverAngles` で代表1本だけを固定して送るようになっている。
+#[test]
+fn moving_the_selected_creases_together_keeps_the_paper_closed() {
+    let cp = user_cp2();
+    let faces = extract_faces(&cp);
+    let group = [21u32, 22, 25, 26, 29, 30, 33, 34];
+
+    let mut warm: HashMap<u32, f64> = cp
+        .edges
+        .iter()
+        .filter(|edge| edge.kind != EdgeKind::Border)
+        .map(|edge| (edge.id, 0.0))
+        .collect();
+    // 5°〜165°を確かめる。170°〜179°は完全に折った状態のすぐ手前で、
+    // 別の形へ飛んで食い込む(最大1.053e-1)課題が残っている。
+    for step in 1..=33u32 {
+        let angle = 5.0 * f64::from(step);
+        let drivers = vec![Driver {
+            hinge: group[0],
+            target_angle_deg: angle,
+        }];
+        let targets: HashMap<u32, f64> = group
+            .iter()
+            .skip(1)
+            .map(|&hinge| (hinge, angle))
+            .collect();
+        let solved = solve_motion(&cp, &faces, &drivers, Some(&targets), Some(&warm), true).result;
+
+        assert!(
+            solved.converged,
+            "{angle}°で紙が閉じない(閉包RMS {:.3e})",
+            solved.closure_rms
+        );
+        let pairs = self_intersection_pairs(&solved.frame);
+        assert!(
+            pairs.is_empty(),
+            "{angle}°で紙が食い込んでいる({}組)",
+            pairs.len()
+        );
+        let worst = solved
+            .relaxations
+            .iter()
+            .map(|relaxation| relaxation.delta_deg.abs())
+            .fold(0.0_f64, f64::max);
+        // 指定からのずれ。実測では145°まで最大1.7°に収まる。
+        // 150°以降は枝が変わって最大33.1°まで開く課題が残っており、
+        // ここで上限を掛けるのは145°までとする(数値を緩めて隠さないため、
+        // 残っている値をこのコメントに明記する)。
+        if angle <= 145.0 {
+            assert!(
+                worst < 2.0,
+                "{angle}°で指定から離れすぎた(最大 {worst:.1}°)"
+            );
+        }
+        warm = solved.angles.clone();
+    }
+}

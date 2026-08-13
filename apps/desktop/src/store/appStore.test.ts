@@ -557,13 +557,15 @@ describe("appStore 折り角度の指定", () => {
       expect(ipc.poseSolve).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(POSE_WAIT_MS);
 
-      expect(poseCalls()).toEqual([
+      // 固定するのは代表の1本だけ。残りは同じ角度の希望として送る
+      // (全部を固定すると実際の紙では成り立たず、紙が閉じなくなる)。
+      expect(poseCalls()).toEqual([[{ hinge: 5, target_angle_deg: 60 }]]);
+      expect(poseKeeps()).toEqual([
         [
-          { hinge: 5, target_angle_deg: 60 },
           { hinge: 7, target_angle_deg: 60 },
+          { hinge: 9, target_angle_deg: 25 },
         ],
       ]);
-      expect(poseKeeps()).toEqual([[{ hinge: 9, target_angle_deg: 25 }]]);
       expect([...useAppStore.getState().drivers]).toEqual([
         [9, 25],
         [5, 60],
@@ -593,14 +595,14 @@ describe("appStore 折り角度の指定", () => {
 
       store.setDriverAngles(selected, 10);
       await vi.advanceTimersByTimeAsync(POSE_WAIT_MS); // 1件目が実行中になる
-      expect(poseCalls()).toEqual([
+      expect(poseCalls()).toEqual([[{ hinge: 5, target_angle_deg: 10 }]]);
+      expect(poseKeeps()).toEqual([
         [
-          { hinge: 5, target_angle_deg: 10 },
           { hinge: 7, target_angle_deg: 10 },
+          { hinge: 9, target_angle_deg: 25 },
           { hinge: 11, target_angle_deg: 10 },
         ],
       ]);
-      expect(poseKeeps()).toEqual([[{ hinge: 9, target_angle_deg: 25 }]]);
 
       for (const deg of [20, 30, 40]) {
         store.setDriverAngles(selected, deg);
@@ -618,20 +620,20 @@ describe("appStore 折り角度の指定", () => {
       await vi.advanceTimersByTimeAsync(POSE_WAIT_MS);
 
       expect(poseCalls()).toEqual([
+        [{ hinge: 5, target_angle_deg: 10 }],
+        [{ hinge: 5, target_angle_deg: 40 }],
+      ]);
+      expect(poseKeeps()).toEqual([
         [
-          { hinge: 5, target_angle_deg: 10 },
           { hinge: 7, target_angle_deg: 10 },
+          { hinge: 9, target_angle_deg: 25 },
           { hinge: 11, target_angle_deg: 10 },
         ],
         [
-          { hinge: 5, target_angle_deg: 40 },
           { hinge: 7, target_angle_deg: 40 },
+          { hinge: 9, target_angle_deg: 25 },
           { hinge: 11, target_angle_deg: 40 },
         ],
-      ]);
-      expect(poseKeeps()).toEqual([
-        [{ hinge: 9, target_angle_deg: 25 }],
-        [{ hinge: 9, target_angle_deg: 25 }],
       ]);
     } finally {
       vi.useRealTimers();

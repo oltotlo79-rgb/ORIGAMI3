@@ -2927,9 +2927,16 @@ export const useAppStore = create<AppState>((set, get) => {
       for (const hinge of valid) drivers.set(hinge, deg);
       set({ drivers });
       if (changedForGuide) get().completeGuideAction("angle");
-      // 選択中の全ヒンジをhard driverとして同じ1回のpose_solveへ渡す。
-      // それ以外の以前の指定は従来どおりkeep driverになる。
-      activateAngleIntent(valid);
+      // まとめて動かすときも、固定するのは代表の1本だけにする。
+      //
+      // 選んだ折り線を全て「その角度ちょうど」で固定すると、実際の紙では
+      // 成り立たない。鶴の花弁折りで8本を同時に動かした実測では、紙が閉じず
+      // (閉包RMS 8.7e-3)食い込みも出た。代表1本だけを固定して残りを希望にすると、
+      // 45度でも90度でも147度でも閉包1e-15以下・食い込み0組で解け、8本の実際の
+      // 角度は要求から1.6度以内に収まる。折り線どうしがわずかに違う角度を
+      // 取れることが、紙が破れないために必要。
+      // 残りの選択は drivers に入っているので、そのまま希望角として送られる。
+      activateAngleIntent([valid[0]]);
       pose.schedule();
     },
 
