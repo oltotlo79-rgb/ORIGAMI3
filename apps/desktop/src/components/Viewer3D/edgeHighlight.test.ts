@@ -32,7 +32,7 @@ const SQUARE_VERTICES: Vertex[] = [
 ];
 
 describe("deriveSelectedEdgeHighlights", () => {
-  it("境界辺は表示中positionsから直接読み、重複選択をDocument順の1件にする", () => {
+  it("境界辺をDocument辺順・面順で返し、共有辺は各所有面の表示座標を保つ", () => {
     const doc = documentOf(SQUARE_VERTICES, [
       { id: 10, v0: 0, v1: 1, kind: "Border" },
       { id: 11, v0: 1, v1: 2, kind: "Border" },
@@ -48,7 +48,7 @@ describe("deriveSelectedEdgeHighlights", () => {
       [0, { offset: 0, count: 3 }],
       [1, { offset: 3, count: 3 }],
     ]);
-    // 面0と面1で別々に持つ表示座標。共有辺20は従来どおり最初の面0側を使う。
+    // 面0と面1で別々に持つ表示座標。共有辺20の2コピーを区別できる値にする。
     const positions = new Float32Array([
       0, 0, 0,
       2, 0, 0,
@@ -65,18 +65,45 @@ describe("deriveSelectedEdgeHighlights", () => {
       positions,
       new Set([20]),
       [20, 12, 10, 10, 999, 20],
+      // face0/face1の各境界辺に接する三角形の第3display頂点。
+      new Int32Array([2, 0, 1, 5, 3, 4]),
     );
 
     // 選択配列の順序ではなく、Document内の辺順で一定になる。
-    expect(result.map((target) => target.edgeId)).toEqual([10, 12, 20]);
+    expect(result.map((target) => target.edgeId)).toEqual([10, 12, 20, 20]);
     expect(result.map((target) => target.role)).toEqual([
       "reference",
       "reference",
       "hinge",
+      "hinge",
     ]);
-    expect(result[0]).toMatchObject({ a: [0, 0, 0], b: [2, 0, 0] });
-    expect(result[1]).toMatchObject({ a: [2, 1, 2], b: [0, 2, 0] });
-    expect(result[2]).toMatchObject({ a: [2, 0, 2], b: [0, 0, 0] });
+    expect(result.map((target) => target.ownerFace)).toEqual([0, 1, 0, 1]);
+    expect(result[0]).toMatchObject({
+      ownerFace: 0,
+      a: [0, 0, 0],
+      b: [2, 0, 0],
+      surfaceProbe: [2, 0, 2],
+    });
+    expect(result[1]).toMatchObject({
+      ownerFace: 1,
+      a: [2, 1, 2],
+      b: [0, 2, 0],
+      surfaceProbe: [0, 1, 0],
+    });
+    expect(result[2]).toMatchObject({
+      ownerFace: 0,
+      a: [2, 0, 2],
+      b: [0, 0, 0],
+      surfaceProbe: [2, 0, 0],
+    });
+    expect(result[3]).toMatchObject({
+      ownerFace: 1,
+      a: [0, 1, 0],
+      b: [2, 1, 2],
+      surfaceProbe: [0, 2, 0],
+    });
+    expect(result.filter((target) => target.edgeId === 10)).toHaveLength(1);
+    expect(result.filter((target) => target.edgeId === 12)).toHaveLength(1);
   });
 
   it("山谷でもヒンジ集合に無い辺は操作対象外の色へ分類する", () => {
@@ -109,6 +136,7 @@ describe("deriveSelectedEdgeHighlights", () => {
       {
         edgeId: 20,
         role: "reference",
+        ownerFace: 7,
         a: [4, 0, 0],
         b: [4, 1, 0],
       },
@@ -162,6 +190,7 @@ describe("deriveSelectedEdgeHighlights", () => {
 
     expect(result).toHaveLength(1);
     expect(result[0].role).toBe("reference");
+    expect(result[0].ownerFace).toBe(1);
     expect(result[0].a[0]).toBeCloseTo(0.5, 9);
     expect(result[0].a[1]).toBeCloseTo(0.1, 9);
     expect(result[0].a[2]).toBeCloseTo(0.5, 9);
@@ -179,16 +208,16 @@ describe("deriveSelectedEdgeHighlights", () => {
       { id: 40, v0: 4, v1: 5, kind: "Aux" },
     ]);
 
-    expect(
-      deriveSelectedEdgeHighlights(
-        doc,
-        [],
-        new Map(),
-        new Float32Array(),
-        new Set(),
-        [40],
-      ),
-    ).toEqual([
+    const result = deriveSelectedEdgeHighlights(
+      doc,
+      [],
+      new Map(),
+      new Float32Array(),
+      new Set(),
+      [40],
+    );
+
+    expect(result).toEqual([
       {
         edgeId: 40,
         role: "reference",
@@ -196,6 +225,7 @@ describe("deriveSelectedEdgeHighlights", () => {
         b: [0.8, 0.7, 0],
       },
     ]);
+    expect("ownerFace" in result[0]).toBe(false);
   });
 
   it("対応頂点が欠けた辺と未選択辺は返さず、入力を書き換えない", () => {

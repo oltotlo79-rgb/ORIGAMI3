@@ -10,11 +10,83 @@ import * as THREE from "three";
 export const PICK_THRESHOLD_PX = 10;
 /** 「同じくらい近い」とみなす刻み(px)。この刻みで並べた上で手前を優先する */
 const DISTANCE_BUCKET_PX = 0.5;
+/** 実距離がこれ以下なら、共平面の候補として層順で決める */
+export const SURFACE_HIT_DISTANCE_EPS = 1e-8;
 
 export interface HingeSegment {
   edgeId: number;
   a: THREE.Vector3;
   b: THREE.Vector3;
+  /** 太い強調線の中心が面の境界上にあるとき、紙の内側を示す点。 */
+  surfaceProbe?: THREE.Vector3;
+  /** この線分を持つ面。共有折り目は面ごとに1本ずつ持つ */
+  ownerFace?: number;
+  /** 所属面の層順。同一深度の可視面判定とそろえる */
+  layer?: number;
+}
+
+/** 線を拾う前に、同じ画素の表面所有面を調べるための紙面 */
+export interface PaperPickSurface {
+  mesh: THREE.Mesh;
+  triangleFaceIds: number[];
+  triangleLayers: number[];
+}
+
+/** Raycasterの1交点を、描画と同じ表面所有順で比較できる形にしたもの */
+export interface PaperHitCandidate {
+  face: number;
+  layer: number;
+  distance: number;
+  point: THREE.Vector3;
+  normal: THREE.Vector3;
+}
+
+/**
+ * 向きが反対でも同じ平面なら同じ法線にする。
+ * 丸め誤差の小さな成分で符号が決まらないよう、絶対値最大の成分を正にする。
+ */
+export function canonicalizeHitNormal(normal: THREE.Vector3): THREE.Vector3 {
+  const out = normal.clone().normalize();
+  const components = [out.x, out.y, out.z];
+  let axis = 0;
+  for (let i = 1; i < components.length; i++) {
+    if (Math.abs(components[i]) > Math.abs(components[axis])) axis = i;
+  }
+  if (components[axis] < 0) out.multiplyScalar(-1);
+  return out;
+}
+
+/**
+ * 同じ画素に当たった面から表面所有面を選ぶ純粋関数。
+ * 実距離の最小を優先し、`SURFACE_HIT_DISTANCE_EPS`以内の共平面は
+ * canonical法線の+側から見ると大きい層/面ID、-側なら小さい層/面IDを選ぶ。
+ */
+export function selectPaperHit(
+  hits: readonly PaperHitCandidate[],
+  cameraPosition: THREE.Vector3,
+): PaperHitCandidate | null {
+  if (hits.length === 0) return null;
+  let minimumDistance = Number.POSITIVE_INFINITY;
+  for (const hit of hits) minimumDistance = Math.min(minimumDistance, hit.distance);
+  const tied = hits.filter(
+    (hit) => hit.distance - minimumDistance <= SURFACE_HIT_DISTANCE_EPS,
+  );
+  const reference = tied[0];
+  const normal = canonicalizeHitNormal(reference.normal);
+  const positiveSide = normal.dot(cameraPosition.clone().sub(reference.point)) >= 0;
+  let selected = reference;
+  for (let i = 1; i < tied.length; i++) {
+    const candidate = tied[i];
+    const layerOrder = candidate.layer - selected.layer;
+    const faceOrder = candidate.face - selected.face;
+    const order = layerOrder || faceOrder;
+    if ((positiveSide && order > 0) || (!positiveSide && order < 0)) {
+      selected = candidate;
+    } else if (order === 0 && candidate.distance < selected.distance) {
+      selected = candidate;
+    }
+  }
+  return selected;
 }
 
 /** 世界座標を画面座標(px)へ。カメラの後ろ側ならnull */
@@ -33,6 +105,39 @@ function project(
   };
 }
 
+/** Raycasterの全交点を面ID/層と結び、描画と同じ順序で所有面を1つに決める */
+function pickPaperHit(
+  mesh: THREE.Mesh,
+  triangleFaceIds: number[],
+  camera: THREE.Camera,
+  widthPx: number,
+  heightPx: number,
+  x: number,
+  y: number,
+  triangleLayers?: number[],
+): PaperHitCandidate | null {
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(
+    new THREE.Vector2((x / widthPx) * 2 - 1, 1 - (y / heightPx) * 2),
+    camera,
+  );
+  const normalMatrix = new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld);
+  const hits: PaperHitCandidate[] = [];
+  for (const hit of raycaster.intersectObject(mesh, false)) {
+    if (hit.faceIndex == null || hit.face == null) continue;
+    const face = triangleFaceIds[hit.faceIndex];
+    if (face === undefined) continue;
+    hits.push({
+      face,
+      layer: triangleLayers?.[hit.faceIndex] ?? 0,
+      distance: hit.distance,
+      point: hit.point.clone(),
+      normal: hit.face.normal.clone().applyNormalMatrix(normalMatrix).normalize(),
+    });
+  }
+  return selectPaperHit(hits, camera.getWorldPosition(new THREE.Vector3()));
+}
+
 /**
  * クリック位置の真下にある面のうち、いちばん手前(視点に近い)のものの面ID。
  * 紙をつかむ操作で「どの層をつかんだか」を決めるのに使う。
@@ -47,18 +152,18 @@ export function pickFace(
   heightPx: number,
   x: number,
   y: number,
+  triangleLayers?: number[],
 ): number | null {
-  const raycaster = new THREE.Raycaster();
-  raycaster.setFromCamera(
-    new THREE.Vector2((x / widthPx) * 2 - 1, 1 - (y / heightPx) * 2),
+  return pickPaperHit(
+    mesh,
+    triangleFaceIds,
     camera,
-  );
-  // 最初の交点がいちばん手前(Raycasterは距離順に返す)
-  for (const hit of raycaster.intersectObject(mesh, false)) {
-    const id = hit.faceIndex == null ? undefined : triangleFaceIds[hit.faceIndex];
-    if (id !== undefined) return id;
-  }
-  return null;
+    widthPx,
+    heightPx,
+    x,
+    y,
+    triangleLayers,
+  )?.face ?? null;
 }
 
 /**
@@ -74,17 +179,19 @@ export function pickPaper(
   heightPx: number,
   x: number,
   y: number,
+  triangleLayers?: number[],
 ): { face: number; point: THREE.Vector3 } | null {
-  const raycaster = new THREE.Raycaster();
-  raycaster.setFromCamera(
-    new THREE.Vector2((x / widthPx) * 2 - 1, 1 - (y / heightPx) * 2),
+  const hit = pickPaperHit(
+    mesh,
+    triangleFaceIds,
     camera,
+    widthPx,
+    heightPx,
+    x,
+    y,
+    triangleLayers,
   );
-  for (const hit of raycaster.intersectObject(mesh, false)) {
-    const id = hit.faceIndex == null ? undefined : triangleFaceIds[hit.faceIndex];
-    if (id !== undefined) return { face: id, point: hit.point.clone() };
-  }
-  return null;
+  return hit ? { face: hit.face, point: hit.point.clone() } : null;
 }
 
 /** 点(px, py)から線分(ax,ay)-(bx,by)までの距離(px) */
@@ -117,6 +224,7 @@ export function pickHinge(
   x: number,
   y: number,
   thresholdPx: number = PICK_THRESHOLD_PX,
+  surface?: PaperPickSurface,
 ): number | null {
   return pickHingeSegment(
     segments,
@@ -126,6 +234,7 @@ export function pickHinge(
     x,
     y,
     thresholdPx,
+    surface,
   )?.edgeId ?? null;
 }
 
@@ -141,9 +250,31 @@ export function pickHingeSegment(
   x: number,
   y: number,
   thresholdPx: number = PICK_THRESHOLD_PX,
+  surface?: PaperPickSurface,
 ): HingeSegment | null {
+  const surfaceFace = surface
+    ? pickFace(
+        surface.mesh,
+        surface.triangleFaceIds,
+        camera,
+        widthPx,
+        heightPx,
+        x,
+        y,
+        surface.triangleLayers,
+      )
+    : null;
   const candidates: { segment: HingeSegment; bucket: number; depth: number }[] = [];
   for (const seg of segments) {
+    // 所有面付きの新しい線だけを可視面で絞る。古いowner無し線と
+    // 紙面に当たらない場所は、従来の距離判定をそのまま使う。
+    if (
+      surfaceFace !== null &&
+      seg.ownerFace !== undefined &&
+      seg.ownerFace !== surfaceFace
+    ) {
+      continue;
+    }
     const a = project(seg.a, camera, widthPx, heightPx);
     const b = project(seg.b, camera, widthPx, heightPx);
     if (!a || !b) continue;

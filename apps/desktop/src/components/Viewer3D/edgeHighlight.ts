@@ -17,6 +17,9 @@ export type EdgeHighlightRole = "hinge" | "reference";
 export interface EdgeHighlightTarget {
   edgeId: number;
   role: EdgeHighlightRole;
+  ownerFace?: number;
+  /** 境界線の太さを保つために使う、その所有面の内側の点。 */
+  surfaceProbe?: Vec3;
   a: Vec3;
   b: Vec3;
 }
@@ -24,9 +27,12 @@ export interface EdgeHighlightTarget {
 interface Segment3D {
   a: Vec3;
   b: Vec3;
+  ownerFace?: number;
+  surfaceProbe?: Vec3;
 }
 
 interface FacePlacement {
+  faceId: number;
   polygon: Vec2[];
   p0: Vec2;
   e1: Vec2;
@@ -72,14 +78,17 @@ function validSlot(slot: FacePositionSlot | undefined, face: Face): slot is Face
 
 /**
  * Face.edgesに現れる辺は、頂点バッファから両端を直接読む。
- * 共有辺やスリットで複数回現れる場合は、facesの走査順で最初の有効なものを使う。
+ * 共有辺はincident faceごとに表示位置が異なるのでfaces順に全コピーを返す。
+ * 同じ面のスリットで複数回現れる辺は、その面が所有する1コピーとして最初を使う。
  */
-function boundarySegment(
+function boundarySegments(
   edgeId: number,
   faces: readonly Face[],
   slots: ReadonlyMap<number, FacePositionSlot>,
   positions: ArrayLike<number>,
-): Segment3D | null {
+  lineProbeIndices?: ArrayLike<number>,
+): Segment3D[] {
+  const segments: Segment3D[] = [];
   for (const face of faces) {
     const slot = slots.get(face.id);
     if (!validSlot(slot, face)) continue;
@@ -87,9 +96,19 @@ function boundarySegment(
     if (i < 0) continue;
     const a = readPosition(positions, slot.offset + i);
     const b = readPosition(positions, slot.offset + ((i + 1) % slot.count));
-    if (a && b) return { a, b };
+    const probeIndex = lineProbeIndices?.[slot.offset + i];
+    const surfaceProbe =
+      probeIndex === undefined ? null : readPosition(positions, probeIndex);
+    if (a && b) {
+      segments.push({
+        a,
+        b,
+        ownerFace: face.id,
+        ...(surfaceProbe ? { surfaceProbe } : {}),
+      });
+    }
   }
-  return null;
+  return segments;
 }
 
 function cross2(a: Vec2, b: Vec2): number {
@@ -165,6 +184,7 @@ function facePlacement(
       const det = cross2(e1, e2);
       if (Math.abs(det) <= AFFINE_EPS) continue;
       return {
+        faceId: face.id,
         polygon,
         p0,
         e1,
@@ -205,7 +225,7 @@ function interiorSegment(
     if (!pointInPolygon(placement.polygon, mid)) continue;
     const a = mapPoint(placement, a2);
     const b = mapPoint(placement, b2);
-    if (a && b) return { a, b };
+    if (a && b) return { a, b, ownerFace: placement.faceId };
   }
   return null;
 }
@@ -213,9 +233,11 @@ function interiorSegment(
 /**
  * 2Dで選択中の辺を、現在3Dビューに表示している線分へ導出する。
  *
- * 出力順はDocument内の辺順で一定。選択IDや壊れたDocumentに重複があっても
- * 同じedgeIdは最大1件だけ返す。面との対応が取れない辺は平面(z=0)へ戻して、
- * 選択したのに何も見えない状態を避ける。
+ * 出力順はDocument内の辺順、その中でfaces順に一定。共有辺は各所有面の画素で
+ * surface ownerと照合できるよう、同じedgeIdを面コピーごとに返す。深度1段
+ * 1.58269e-5は層間隔0.0002より十分細かい一方、to_frame3dが全layer=0を返す
+ * 経路では面の位置差が0になるため、深度設定ではなく所有面で判定する必要がある。
+ * 面との対応が取れない辺だけは平面(z=0)へ戻し、ownerFaceを付けない。
  */
 export function deriveSelectedEdgeHighlights(
   doc: Document,
@@ -224,6 +246,7 @@ export function deriveSelectedEdgeHighlights(
   positions: ArrayLike<number>,
   hinges: ReadonlySet<number>,
   selectedEdgeIds: readonly number[],
+  lineProbeIndices?: ArrayLike<number>,
 ): EdgeHighlightTarget[] {
   const selected = new Set(selectedEdgeIds);
   if (selected.size === 0) return [];
@@ -239,21 +262,31 @@ export function deriveSelectedEdgeHighlights(
     if (!selected.has(edge.id) || emitted.has(edge.id)) continue;
     const a2 = vertexPositions.get(edge.v0);
     const b2 = vertexPositions.get(edge.v1);
-    let segment = boundarySegment(edge.id, faces, slots, positions);
-    if (!segment && a2 && b2 && finite2(a2) && finite2(b2)) {
-      segment = interiorSegment(a2, b2, placements) ?? {
-        a: [a2[0], a2[1], 0],
-        b: [b2[0], b2[1], 0],
-      };
+    const segments = boundarySegments(edge.id, faces, slots, positions, lineProbeIndices);
+    if (segments.length === 0 && a2 && b2 && finite2(a2) && finite2(b2)) {
+      segments.push(
+        interiorSegment(a2, b2, placements) ?? {
+          a: [a2[0], a2[1], 0],
+          b: [b2[0], b2[1], 0],
+        },
+      );
     }
-    if (!segment) continue;
+    if (segments.length === 0) continue;
     emitted.add(edge.id);
-    out.push({
-      edgeId: edge.id,
-      role: hinges.has(edge.id) ? "hinge" : "reference",
-      a: segment.a,
-      b: segment.b,
-    });
+    for (const segment of segments) {
+      out.push({
+        edgeId: edge.id,
+        role: hinges.has(edge.id) ? "hinge" : "reference",
+        ...(segment.ownerFace === undefined
+          ? {}
+          : { ownerFace: segment.ownerFace }),
+        ...(segment.surfaceProbe === undefined
+          ? {}
+          : { surfaceProbe: segment.surfaceProbe }),
+        a: segment.a,
+        b: segment.b,
+      });
+    }
   }
   return out;
 }

@@ -23,8 +23,14 @@ export interface SoftLayout {
   indices: number[];
   /** 面の境目の線(2つで1本)。面の中で1回しか使われていない辺=面の輪郭 */
   lineIndices: number[];
+  /** 各輪郭辺に接する唯一の三角形の第3頂点。画面上の紙の内向きを決める。 */
+  lineProbeIndices: number[];
   /** 三角形の通し番号 → 面ID(当たり判定で使う。網のtriangle_facesと同じ並び) */
   triangleFaceIds: number[];
+  /** 三角形の通し番号 → 層番号(surface ownerと当たり判定のtie-breakで使う) */
+  triangleLayers: number[];
+  /** 表示三角形 → SoftMesh.triangles上の番号(座標更新時にlayerを取り直す)。 */
+  triangleSources: number[];
 }
 
 /** 辺の鍵。複製後の番号は面ごとに固有なので、この鍵は面をまたいで衝突しない */
@@ -48,9 +54,11 @@ export function buildSoftLayout(soft: SoftMesh): SoftLayout {
   const faceOf: number[] = [];
   const indices: number[] = [];
   const triangleFaceIds: number[] = [];
+  const triangleLayers: number[] = [];
+  const triangleSources: number[] = [];
   // 面ID → (元の頂点番号 → 複製後の番号)
   const perFace = new Map<number, Map<number, number>>();
-  const edgeUse = new Map<number, number>();
+  const edgeUse = new Map<number, { count: number; probe: number }>();
 
   for (let t = 0; t < soft.triangles.length; t++) {
     const tri = soft.triangles[t];
@@ -81,17 +89,23 @@ export function buildSoftLayout(soft: SoftMesh): SoftLayout {
     if (broken) continue;
     indices.push(local[0], local[1], local[2]);
     triangleFaceIds.push(face);
+    triangleLayers.push(soft.triangle_layers[t] ?? 0);
+    triangleSources.push(t);
     for (let i = 0; i < 3; i++) {
       const key = edgeKey(local[i], local[(i + 1) % 3]);
-      edgeUse.set(key, (edgeUse.get(key) ?? 0) + 1);
+      const used = edgeUse.get(key);
+      if (used) used.count += 1;
+      else edgeUse.set(key, { count: 1, probe: local[(i + 2) % 3] });
     }
   }
 
   // 1つの三角形からしか使われていない辺が、その面の輪郭(=境界線)
   const lineIndices: number[] = [];
-  for (const [key, count] of edgeUse) {
-    if (count !== 1) continue;
+  const lineProbeIndices: number[] = [];
+  for (const [key, use] of edgeUse) {
+    if (use.count !== 1) continue;
     lineIndices.push(Math.floor(key / EDGE_STRIDE), key % EDGE_STRIDE);
+    lineProbeIndices.push(use.probe);
   }
 
   return {
@@ -100,7 +114,10 @@ export function buildSoftLayout(soft: SoftMesh): SoftLayout {
     faceOf: Int32Array.from(faceOf),
     indices,
     lineIndices,
+    lineProbeIndices,
     triangleFaceIds,
+    triangleLayers,
+    triangleSources,
   };
 }
 

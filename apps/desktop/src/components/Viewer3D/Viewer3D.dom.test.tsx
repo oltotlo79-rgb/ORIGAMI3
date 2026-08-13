@@ -519,24 +519,38 @@ describe("Viewer3D(指している場所のカーソル)", () => {
     renderViewer();
     await waitFor(() => expect(held.scene.content).not.toBeNull());
 
-    const lastRoles = () => {
+    const lastHingeHighlights = () => {
       const setHighlight = held.scene.setHighlight as ReturnType<typeof vi.fn>;
       const calls = setHighlight.mock.calls;
       const last = calls[calls.length - 1]?.[0] as
-        | { edgeId: number; role?: string }[]
+        | { edgeId: number; role?: string; ownerFace?: number }[]
         | undefined;
-      return last?.filter((segment) => segment.edgeId === 5).map((segment) => segment.role) ?? [];
+      return (
+        last
+          ?.filter((segment) => segment.edgeId === 5)
+          .map(({ edgeId, role, ownerFace }) => ({ edgeId, role, ownerFace })) ?? []
+      );
     };
 
-    await waitFor(() => expect(lastRoles()).toEqual([]));
+    await waitFor(() => expect(lastHingeHighlights()).toEqual([]));
 
     act(() =>
       useAppStore.setState({ activeAngleIntent: { generation: 4, hinges: [5], fixAll: true } }),
     );
-    await waitFor(() => expect(lastRoles()).toEqual(["active"]));
+    await waitFor(() =>
+      expect(lastHingeHighlights()).toEqual([
+        { edgeId: 5, role: "active", ownerFace: 0 },
+        { edgeId: 5, role: "active", ownerFace: 1 },
+      ]),
+    );
 
     act(() => useAppStore.setState({ suspectHinges: [5] }));
-    await waitFor(() => expect(lastRoles()).toEqual(["suspect"]));
+    await waitFor(() =>
+      expect(lastHingeHighlights()).toEqual([
+        { edgeId: 5, role: "suspect", ownerFace: 0 },
+        { edgeId: 5, role: "suspect", ownerFace: 1 },
+      ]),
+    );
   });
 
   it("合わせて折る途中は、いま選べる点の近くだけpointerになる", async () => {
@@ -817,12 +831,22 @@ describe("Viewer3D(視点を戻す)", () => {
       const last = calls[calls.length - 1][0] as {
         edgeId: number;
         role?: string;
+        ownerFace?: number;
+        surfaceProbe?: THREE.Vector3;
       }[];
-      expect(last.map(({ edgeId, role }) => ({ edgeId, role }))).toEqual([
-        { edgeId: 0, role: "reference" },
-        { edgeId: 5, role: "hinge" },
-        { edgeId: 6, role: "reference" },
+      expect(
+        last.map(({ edgeId, role, ownerFace }) => ({ edgeId, role, ownerFace })),
+      ).toEqual([
+        { edgeId: 0, role: "reference", ownerFace: 0 },
+        { edgeId: 5, role: "hinge", ownerFace: 0 },
+        { edgeId: 5, role: "hinge", ownerFace: 1 },
+        { edgeId: 6, role: "reference", ownerFace: 0 },
       ]);
+      expect(last.slice(0, 3).every((segment) => segment.surfaceProbe instanceof THREE.Vector3)).toBe(
+        true,
+      );
+      // 面内Auxは境界triangleが一意でないため、無方向探索へは落とさない。
+      expect(last[3].surfaceProbe).toBeUndefined();
     });
     expect(screen.getByRole("status").textContent).toBe(
       "3Dの紙を見回し、折り線や辺を選べます",

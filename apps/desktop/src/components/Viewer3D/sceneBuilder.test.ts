@@ -330,8 +330,25 @@ describe("buildTopology(展開図から作る組み立て情報)", () => {
     expect(topo.triangleFaceIds).toEqual([0, 1]);
     // 境界線は面の辺の数だけ(3+3本 = 添字12個)
     expect(topo.lineIndices).toHaveLength(12);
-    // 面0のedges[2]=辺5は vertices[2]→vertices[0]
-    expect(topo.hingeSlots).toEqual([{ edgeId: 5, ia: 2, ib: 0 }]);
+    expect(topo.lineProbeIndices).toHaveLength(topo.lineIndices.length / 2);
+    for (let edge = 0; edge < topo.lineProbeIndices.length; edge++) {
+      const a = topo.lineIndices[edge * 2];
+      const b = topo.lineIndices[edge * 2 + 1];
+      const probe = topo.lineProbeIndices[edge];
+      const adjacent = Array.from({ length: topo.indices.length / 3 }, (_, triangle) =>
+        topo.indices.slice(triangle * 3, triangle * 3 + 3),
+      ).filter((indices) => indices.includes(a) && indices.includes(b));
+      expect(adjacent).toHaveLength(1);
+      expect(adjacent[0]).toContain(probe);
+      expect(probe).not.toBe(a);
+      expect(probe).not.toBe(b);
+    }
+    // 共有ヒンジは両面のコピーと所有面を残す。owner判定で見える側だけを出す。
+    expect(topo.hingeSlots).toEqual([
+      { edgeId: 5, faceId: 0, ia: 2, ib: 0, ip: 1 },
+      { edgeId: 5, faceId: 1, ia: 3, ib: 4, ip: 5 },
+    ]);
+    expect(topo.vertexFaceIds).toEqual([0, 0, 0, 1, 1, 1]);
   });
 
   it("折り線でない辺はヒンジにしない", () => {
@@ -399,8 +416,19 @@ describe("createContent / updateFrame(形の更新)", () => {
     expect(groups).toHaveLength(2);
     expect(groups.map((g) => g.materialIndex)).toEqual([0, 1]);
     expect(Array.isArray(content.mesh.material)).toBe(true);
-    // 境界線は面と同じ頂点座標を共有する(二重に更新しない)
-    expect(content.line.geometry.getAttribute("position")).toBe(
+    // 各edge固有の内向きprobeを補間せず持たせるため、境界線だけは非indexedで
+    // 2頂点ずつ複製する。座標の出所はmeshの動的positionのまま。
+    const linePosition = content.line.geometry.getAttribute("position");
+    expect(content.line.geometry.getIndex()).toBeNull();
+    expect(linePosition).not.toBe(content.mesh.geometry.getAttribute("position"));
+    expect(linePosition.count).toBe(content.topology.lineIndices.length);
+    expect(content.line.geometry.getAttribute("surfaceOwnerOther").count).toBe(
+      linePosition.count,
+    );
+    expect(content.line.geometry.getAttribute("surfaceOwnerProbe").count).toBe(
+      linePosition.count,
+    );
+    expect(content.outline.sourcePosition).toBe(
       content.mesh.geometry.getAttribute("position"),
     );
   });
@@ -441,6 +469,55 @@ describe("createContent / updateFrame(形の更新)", () => {
     expect([...positions.slice(0, 3)]).toEqual([0, 0, 0]); // 面0は平らのまま
   });
 
+  it("立体更新後も黒outlineの端点・反対端・内向きprobeを同じsourceへ同期する", () => {
+    const doc = makeDoc();
+    const content = createContent(buildTopology(doc, FACES, HINGES), doc.display);
+    updateFrame(content, {
+      faces: [
+        {
+          face: 0,
+          polygon: [
+            [0.1, 0.2, 0.3],
+            [1.1, 0.2, 0.4],
+            [1.1, 1.2, 0.5],
+          ],
+          layer: 0,
+        },
+        {
+          face: 1,
+          polygon: [
+            [0.6, 0.7, 0.8],
+            [1.6, 1.7, 0.9],
+            [0.6, 1.7, 1.0],
+          ],
+          layer: 0,
+        },
+      ],
+      warnings: [],
+    });
+
+    const source = content.outline.sourcePosition;
+    const endpoint = content.line.geometry.getAttribute("position");
+    const other = content.line.geometry.getAttribute("surfaceOwnerOther");
+    const probe = content.line.geometry.getAttribute("surfaceOwnerProbe");
+    const expectSource = (
+      attribute: THREE.BufferAttribute | THREE.InterleavedBufferAttribute,
+      at: number,
+      sourceAt: number,
+    ) => {
+      expect([attribute.getX(at), attribute.getY(at), attribute.getZ(at)]).toEqual([
+        source.getX(sourceAt),
+        source.getY(sourceAt),
+        source.getZ(sourceAt),
+      ]);
+    };
+    for (let at = 0; at < content.outline.endpointSources.length; at++) {
+      expectSource(endpoint, at, content.outline.endpointSources[at]);
+      expectSource(other, at, content.outline.otherSources[at]);
+      expectSource(probe, at, content.outline.probeSources[at]);
+    }
+  });
+
   it("平らな面の法線は表(+z)を向き、ヒンジ線分も立体の座標から更新される", () => {
     const doc = makeDoc();
     const content = createContent(
@@ -452,10 +529,18 @@ describe("createContent / updateFrame(形の更新)", () => {
     const normal = content.mesh.geometry.getAttribute("normal");
     expect(normal.getZ(0)).toBeCloseTo(1, 6);
     expect(normal.getZ(5)).toBeCloseTo(1, 6);
-    expect(content.hingeSegments).toHaveLength(1);
-    expect(content.hingeSegments[0].edgeId).toBe(5);
+    expect(
+      content.hingeSegments.map(({ edgeId, ownerFace }) => ({ edgeId, ownerFace })),
+    ).toEqual([
+      { edgeId: 5, ownerFace: 0 },
+      { edgeId: 5, ownerFace: 1 },
+    ]);
     expect(content.hingeSegments[0].a.toArray()).toEqual([1, 1, 0]);
     expect(content.hingeSegments[0].b.toArray()).toEqual([0, 0, 0]);
+    expect(content.hingeSegments[0].surfaceProbe?.toArray()).toEqual([1, 0, 0]);
+    expect(content.hingeSegments[1].a.toArray()).toEqual([0, 0, 0]);
+    expect(content.hingeSegments[1].b.toArray()).toEqual([1, 1, 0]);
+    expect(content.hingeSegments[1].surfaceProbe?.toArray()).toEqual([0, 1, 0]);
   });
 
   it("平らに畳んだ状態では層ごとに高さを付けて重なりを見せる(表示専用)", () => {
@@ -634,7 +719,9 @@ describe("紙のたわみの表示(SIM-012)", () => {
     expect(content.layout.vertexCount).toBe(6);
     expect(Array.isArray(content.mesh.material)).toBe(true);
     expect(content.mesh.geometry.groups.length).toBe(2); // 表と裏
-    expect(content.line.geometry.getIndex()?.count).toBe(3 * 2 * 2); // 三角形2枚の輪郭
+    expect(content.line.geometry.getIndex()).toBeNull();
+    expect(content.line.geometry.getAttribute("position").count).toBe(3 * 2 * 2);
+    expect(content.line.geometry.getAttribute("surfaceOwnerProbe").count).toBe(3 * 2 * 2);
   });
 
   it("層のずらし表示が三角形の網にも効く(重なった紙が見分けられる)", () => {

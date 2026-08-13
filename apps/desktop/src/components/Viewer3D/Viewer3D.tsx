@@ -42,6 +42,11 @@ import {
   type Viewer3DScene,
 } from "./sceneBuilder";
 import { softSignature } from "./softMesh";
+import {
+  buildSoftHighlightMap,
+  projectHighlightSegmentsToSoftSurface,
+  type SoftHighlightMap,
+} from "./softHighlight";
 import { twistPreviewSegments } from "../../lib/twistPolygon";
 import { ALIGN_STEPS } from "../../lib/alignFold";
 import { nearestAlignLine, nearestAlignPoint } from "../../lib/alignPick";
@@ -52,6 +57,7 @@ import {
   pickHingeSegment,
   pickPaper,
   type HingeSegment,
+  type PaperPickSurface,
 } from "./hingePicker";
 import { deriveSelectedEdgeHighlights } from "./edgeHighlight";
 import { ViewerOperationHint } from "./ViewerOperationHint";
@@ -64,6 +70,19 @@ function toHighlight(segments: [Vec2, Vec2][]): HingeSegment[] {
     a: new THREE.Vector3(a[0], a[1], PREVIEW_LIFT),
     b: new THREE.Vector3(b[0], b[1], PREVIEW_LIFT),
   }));
+}
+
+/** たわみONでは、見えている細分網をowner/pickerの両方で使う。 */
+function displayedPickSurface(scene: Viewer3DScene): PaperPickSurface | null {
+  if (scene.pickSurface) return scene.pickSurface;
+  const content = scene.content;
+  if (!content) return null;
+  return {
+    mesh: content.mesh,
+    triangleFaceIds: content.topology.triangleFaceIds,
+    triangleLayers: content.owner?.triangleLayers ??
+      new Array(content.topology.triangleFaceIds.length).fill(0),
+  };
 }
 
 /** 指定した中心の位置を示す小さな十字(ねじり折りの下見) */
@@ -129,6 +148,8 @@ export function Viewer3D({ fitRef }: Props) {
   const sceneRef = useRef<Viewer3DScene | null>(null);
   /** 表示中のたわみの網(Three.jsの資源なのでストアには入れずrefで持つ) */
   const softRef = useRef<SoftContent | null>(null);
+  /** CP上の物理辺を、表示中のたわみ網へ厳密に写す対応。網の形が変わるまで再利用する。 */
+  const softHighlightRef = useRef<SoftHighlightMap | null>(null);
   const downPosRef = useRef<{ x: number; y: number } | null>(null);
   /** 折り線を引いている最中の2点(表示専用の一時状態なのでrefで持つ) */
   const drawingRef = useRef<{ a: Vec2; b: Vec2 } | null>(null);
@@ -220,6 +241,8 @@ export function Viewer3D({ fitRef }: Props) {
     scene.resize(canvas.clientWidth, canvas.clientHeight);
     return () => {
       sceneRef.current = null;
+      softRef.current = null;
+      softHighlightRef.current = null;
       scene.dispose();
     };
   }, []);
@@ -232,8 +255,13 @@ export function Viewer3D({ fitRef }: Props) {
   // 展開図が変わったときだけ、三角形分割・境界線・ヒンジ対応を作り直す
   useEffect(() => {
     const scene = sceneRef.current;
+    softHighlightRef.current = null;
     if (!scene || !doc) return;
-    const content = createContent(buildTopology(doc, faces, hinges), doc.display);
+    const content = createContent(
+      buildTopology(doc, faces, hinges),
+      doc.display,
+      scene.ownerBinding,
+    );
     softRef.current = null; // setContentがたわみの表示物を捨てるので参照も外す
     scene.setContent(content);
     updateFrame(content, useAppStore.getState().frame3d);
@@ -257,16 +285,27 @@ export function Viewer3D({ fitRef }: Props) {
     const s = useAppStore.getState();
     if (!softMesh || !s.doc) {
       softRef.current = null;
+      softHighlightRef.current = null;
       scene.setSoft(null);
       return;
     }
     let content = softRef.current;
+    let replaced = false;
     if (!content || content.signature !== softSignature(softMesh)) {
-      content = createSoftContent(softMesh, s.doc.display);
+      content = createSoftContent(
+        softMesh,
+        s.doc.display,
+        scene.ownerBinding,
+        scene.content?.owner.ownerCodes,
+      );
       softRef.current = content;
       scene.setSoft(content);
+      replaced = true;
     }
     updateSoftContent(content, softMesh, s.frame3d);
+    if (replaced) {
+      softHighlightRef.current = buildSoftHighlightMap(s.doc, s.faces, softMesh, content);
+    }
     scene.render();
   }, [softMesh, doc, faces, hinges]);
 
@@ -295,12 +334,15 @@ export function Viewer3D({ fitRef }: Props) {
             .map((segment) => ({ ...segment, role: "focus" as const }))
         : [];
     const setHighlight = (segments: HighlightSegment[]) => {
-      scene.setHighlight([
+      const physicalSegments = [
         ...suspectSegments,
         ...segments.filter((segment) => !suspectIds.has(segment.edgeId)),
         ...hoveredSegments,
         ...activeSegments,
-      ]);
+      ];
+      scene.setHighlight(
+        projectHighlightSegmentsToSoftSurface(physicalSegments, softHighlightRef.current),
+      );
     };
     const drawing = drawingRef.current;
     // つかんで動かしている間は「折った結果の形」を半透明で重ねて見せる(UI-008)
@@ -425,11 +467,16 @@ export function Viewer3D({ fitRef }: Props) {
         scene.content.positions,
         s.hinges,
         s.selection.edgeIds,
+        scene.content.topology.lineProbeIndices,
       ).map((target) => ({
         edgeId: target.edgeId,
+        ownerFace: target.ownerFace,
         role: target.edgeId === s.hoveredHinge ? ("focus" as const) : target.role,
         a: new THREE.Vector3(...target.a),
         b: new THREE.Vector3(...target.b),
+        ...(target.surfaceProbe === undefined
+          ? {}
+          : { surfaceProbe: new THREE.Vector3(...target.surfaceProbe) }),
       })),
     );
   }, []);
@@ -453,6 +500,7 @@ export function Viewer3D({ fitRef }: Props) {
     activeTool,
     pullHinge,
     pullMirrorHinge,
+    softMesh,
     drawHighlight,
   ]);
 
@@ -597,19 +645,21 @@ export function Viewer3D({ fitRef }: Props) {
         return;
       }
       const rect = canvas.getBoundingClientRect();
+      const surface = displayedPickSurface(scene);
       if (s.activeTool === "pull") {
         if (pullBlockedOf(s) !== null) {
           canvas.style.cursor = "not-allowed";
           return;
         }
-        const hit = pickPaper(
-          scene.content.mesh,
-          scene.content.topology.triangleFaceIds,
+        const hit = surface && pickPaper(
+          surface.mesh,
+          surface.triangleFaceIds,
           scene.camera,
           rect.width,
           rect.height,
           x,
           y,
+          surface.triangleLayers,
         );
         const plan =
           hit &&
@@ -660,16 +710,17 @@ export function Viewer3D({ fitRef }: Props) {
           canvas.style.cursor = "crosshair";
           return;
         }
-        const face = pickFace(
-          scene.content.mesh,
-          scene.content.topology.triangleFaceIds,
+        const face = surface && pickFace(
+          surface.mesh,
+          surface.triangleFaceIds,
           scene.camera,
           rect.width,
           rect.height,
           x,
           y,
+          surface.triangleLayers,
         );
-        canvas.style.cursor = face === null ? "default" : "grab";
+        canvas.style.cursor = face == null ? "default" : "grab";
         return;
       }
       if (s.activeTool === "technique") {
@@ -685,6 +736,8 @@ export function Viewer3D({ fitRef }: Props) {
             rect.height,
             x,
             y,
+            undefined,
+            surface ?? undefined,
           );
           canvas.style.cursor = axis ? "pointer" : "crosshair";
           return;
@@ -699,19 +752,22 @@ export function Viewer3D({ fitRef }: Props) {
         rect.height,
         x,
         y,
+        undefined,
+        surface ?? undefined,
       );
       if (edgeId !== null) {
         canvas.style.cursor = "pointer";
         return;
       }
-      const paper = pickPaper(
-        scene.content.mesh,
-        scene.content.topology.triangleFaceIds,
+      const paper = surface && pickPaper(
+        surface.mesh,
+        surface.triangleFaceIds,
         scene.camera,
         rect.width,
         rect.height,
         x,
         y,
+        surface.triangleLayers,
       );
       canvas.style.cursor = paper ? "pointer" : "default";
     },
@@ -735,14 +791,16 @@ export function Viewer3D({ fitRef }: Props) {
         s.doc &&
         scene0?.content
       ) {
-        const hit = pickPaper(
-          scene0.content.mesh,
-          scene0.content.topology.triangleFaceIds,
+        const surface = displayedPickSurface(scene0);
+        const hit = surface && pickPaper(
+          surface.mesh,
+          surface.triangleFaceIds,
           scene0.camera,
           rect.width,
           rect.height,
           x,
           y,
+          surface.triangleLayers,
         );
         const plan =
           hit &&
@@ -788,17 +846,19 @@ export function Viewer3D({ fitRef }: Props) {
         canFoldNow(s) &&
         scene?.content
       ) {
-        const face = pickFace(
-          scene.content.mesh,
-          scene.content.topology.triangleFaceIds,
+        const surface = displayedPickSurface(scene);
+        const face = surface && pickFace(
+          surface.mesh,
+          surface.triangleFaceIds,
           scene.camera,
           rect.width,
           rect.height,
           x,
           y,
+          surface.triangleLayers,
         );
-        const p = face === null ? null : rawPoint(rect, x, y);
-        if (p && face !== null) {
+        const p = face == null ? null : rawPoint(rect, x, y);
+        if (p && face != null) {
           e.currentTarget.setPointerCapture(e.pointerId);
           e.currentTarget.style.cursor = "grabbing";
           s.setOperationStage(1);
@@ -973,6 +1033,8 @@ export function Viewer3D({ fitRef }: Props) {
                     rect.height,
                     e.clientX - rect.left,
                     e.clientY - rect.top,
+                    undefined,
+                    displayedPickSurface(scene) ?? undefined,
                   )
                 : null;
             if (axis) {
@@ -1032,6 +1094,8 @@ export function Viewer3D({ fitRef }: Props) {
         rect.height,
         x,
         y,
+        undefined,
+        displayedPickSurface(scene) ?? undefined,
       );
       const toggle = e.ctrlKey || e.metaKey;
       if (toggle && edgeId === null) {
@@ -1049,14 +1113,16 @@ export function Viewer3D({ fitRef }: Props) {
             : [];
       st.setSelection({ edgeIds, vertexIds: [] });
       if (st.activeTool === "select" && edgeId === null) {
-        const paper = pickPaper(
-          scene.content.mesh,
-          scene.content.topology.triangleFaceIds,
+        const surface = displayedPickSurface(scene);
+        const paper = surface && pickPaper(
+          surface.mesh,
+          surface.triangleFaceIds,
           scene.camera,
           rect.width,
           rect.height,
           x,
           y,
+          surface.triangleLayers,
         );
         if (paper) st.showPaperActionTip();
         else st.hidePaperActionTip();
