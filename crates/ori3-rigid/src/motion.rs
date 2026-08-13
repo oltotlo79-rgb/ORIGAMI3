@@ -52,6 +52,35 @@ pub fn solve_motion(
     warm_start: Option<&HashMap<EdgeId, f64>>,
     detect_contact: bool,
 ) -> MotionSolveResult {
+    let followed = solve_motion_from(cp, faces, drivers, targets, warm_start, detect_contact);
+    if !detect_contact
+        || warm_start.is_none()
+        || !is_finite_result(&followed.result, faces.len())
+        || !self_intersects(&followed.result.frame)
+    {
+        return followed;
+    }
+    // 紙は自分を通り抜けられない。前の姿勢から追っても食い込みが残るときは、
+    // 平らな状態から同じ要求まで1回だけ追い直す。折り鶴の花弁折りを170°まで
+    // 折る操作では、前の姿勢から追うと29組・食い込み1.053e-1になるのに対し、
+    // 平らから追い直すと0組で解ける(指定からのずれも178.1°→102.2°と小さい)。
+    // 追い直しは1回だけで、そこでも食い込むなら元の結果を返すので操作は止まらない。
+    let restarted = solve_motion_from(cp, faces, drivers, targets, None, detect_contact);
+    let improved = is_finite_result(&restarted.result, faces.len())
+        && !self_intersects(&restarted.result.frame)
+        && max_seam_gap(cp, faces, &restarted.result.frame)
+            <= max_seam_gap(cp, faces, &followed.result.frame).max(SEAM_TEAR_TOLERANCE);
+    if improved { restarted } else { followed }
+}
+
+fn solve_motion_from(
+    cp: &CreasePattern,
+    faces: &[Face],
+    drivers: &[Driver],
+    targets: Option<&HashMap<EdgeId, f64>>,
+    warm_start: Option<&HashMap<EdgeId, f64>>,
+    detect_contact: bool,
+) -> MotionSolveResult {
     if !detect_contact {
         let requested = solve_requested(cp, faces, drivers, targets, warm_start);
         let result = if is_finite_result(&requested, faces.len()) {

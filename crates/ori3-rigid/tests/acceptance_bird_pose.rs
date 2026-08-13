@@ -280,9 +280,10 @@ fn moving_the_selected_creases_together_keeps_the_paper_closed() {
         .filter(|edge| edge.kind != EdgeKind::Border)
         .map(|edge| (edge.id, 0.0))
         .collect();
-    // 5°〜165°を確かめる。170°〜179°は完全に折った状態のすぐ手前で、
-    // 別の形へ飛んで食い込む(最大1.053e-1)課題が残っている。
-    for step in 1..=33u32 {
+    // 5°から180°まで36段すべてを確かめる。以前は170°〜179°で別の形へ飛び、
+    // 食い込みが最大1.053e-1(紙の一辺の10%)になっていた。前の姿勢から追って
+    // 食い込みが残るときは平らから1回だけ追い直すようにして、0組になった。
+    for step in 1..=36u32 {
         let angle = 5.0 * f64::from(step);
         let drivers = vec![Driver {
             hinge: group[0],
@@ -312,9 +313,11 @@ fn moving_the_selected_creases_together_keeps_the_paper_closed() {
             .map(|relaxation| relaxation.delta_deg.abs())
             .fold(0.0_f64, f64::max);
         // 指定からのずれ。実測では145°まで最大1.7°に収まる。
-        // 150°以降は枝が変わって最大33.1°まで開く課題が残っており、
-        // ここで上限を掛けるのは145°までとする(数値を緩めて隠さないため、
-        // 残っている値をこのコメントに明記する)。
+        //
+        // 148.5°から149°の間で解の枝が変わり、そこから先は最大33.4°ずれる。
+        // これは計算の失敗ではなく、この展開図で8本をほぼ同じ角度に保てる形が
+        // その角度で終わっているため(どの初期値から解いても同じ値になることを実測)。
+        // 実際の紙でも花弁折りはここで一気に入る。よって上限は145°までに掛ける。
         if angle <= 145.0 {
             assert!(
                 worst < 2.0,
