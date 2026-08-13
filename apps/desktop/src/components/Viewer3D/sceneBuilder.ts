@@ -508,6 +508,39 @@ export interface HighlightSegment extends HingeSegment {
   role?: "hinge" | "reference" | "focus" | "suspect" | "active";
 }
 
+/** 強調表示5種類の材質を作る。深度判定の違いを単体検査できる形にまとめる。 */
+export function createHighlightMaterials() {
+  const highlightMaterial = new THREE.MeshBasicMaterial({
+    color: HIGHLIGHT_COLOR,
+    depthTest: true,
+  });
+  const referenceHighlightMaterial = new THREE.MeshBasicMaterial({
+    color: REFERENCE_HIGHLIGHT_COLOR,
+    depthTest: true,
+  });
+  const focusHighlightMaterial = new THREE.MeshBasicMaterial({
+    color: FOCUS_HIGHLIGHT_COLOR,
+    depthTest: true,
+  });
+  const suspectHighlightMaterial = new THREE.MeshBasicMaterial({
+    color: SUSPECT_HIGHLIGHT_COLOR,
+    // 食い込みは紙の内側で起きるため、隠れると原因の折り目を見つけられない。
+    // これだけは意図的に手前へ描く。
+    depthTest: false,
+  });
+  const activeHighlightMaterial = new THREE.MeshBasicMaterial({
+    color: ACTIVE_HIGHLIGHT_COLOR,
+    depthTest: true,
+  });
+  return {
+    highlightMaterial,
+    referenceHighlightMaterial,
+    focusHighlightMaterial,
+    suspectHighlightMaterial,
+    activeHighlightMaterial,
+  };
+}
+
 /** 面・線1つ分の資源を破棄する */
 function disposeDrawable(child: THREE.Object3D): void {
   if (!(child instanceof THREE.Mesh || child instanceof THREE.LineSegments)) return;
@@ -591,29 +624,13 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
     HIGHLIGHT_SEGMENTS,
   );
   highlightGeometry.translate(0, 0.5, 0); // 原点を端点aに合わせる
-  const highlightMaterial = new THREE.MeshBasicMaterial({
-    color: HIGHLIGHT_COLOR,
-    // 実際の折り紙と同じく、紙の重なりの内側にある折り目は見えないようにする。
-    // 食い込みや原因の案内(赤・橙)は隠れていても知らせる必要があるため、
-    // そちらは深度判定を切ったままにする。
-    depthTest: true,
-  });
-  const referenceHighlightMaterial = new THREE.MeshBasicMaterial({
-    color: REFERENCE_HIGHLIGHT_COLOR,
-    depthTest: false,
-  });
-  const focusHighlightMaterial = new THREE.MeshBasicMaterial({
-    color: FOCUS_HIGHLIGHT_COLOR,
-    depthTest: false,
-  });
-  const suspectHighlightMaterial = new THREE.MeshBasicMaterial({
-    color: SUSPECT_HIGHLIGHT_COLOR,
-    depthTest: false,
-  });
-  const activeHighlightMaterial = new THREE.MeshBasicMaterial({
-    color: ACTIVE_HIGHLIGHT_COLOR,
-    depthTest: false,
-  });
+  const {
+    highlightMaterial,
+    referenceHighlightMaterial,
+    focusHighlightMaterial,
+    suspectHighlightMaterial,
+    activeHighlightMaterial,
+  } = createHighlightMaterials();
   const dir = new THREE.Vector3();
 
   /** 表示中のたわみの網(null なら従来の面の描き方) */
@@ -694,7 +711,9 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
                 : seg.role === "focus"
                   ? focusHighlightMaterial
                   : highlightMaterial;
-        // 食い込みの赤を最優先し、操作中は水色で示す。
+        // 紙と同じ深度の表面では強調線を見せるため、紙より後に描く。
+        // 深度判定する4種類は後描きでも紙の裏側なら隠れ、食い込みの赤だけは
+        // 深度判定を切って最後に描くため、内側でも原因を見つけられる。
         mesh.renderOrder = seg.role === "suspect" ? 7 : seg.role === "active" ? 6 : 5;
         mesh.position.copy(seg.a);
         mesh.quaternion.setFromUnitVectors(AXIS_Y, dir.normalize());

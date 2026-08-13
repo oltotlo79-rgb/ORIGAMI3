@@ -21,7 +21,9 @@ import {
 } from "./interaction";
 import { DEFAULT_CONSTRUCT, type ConstructOptions } from "../../lib/construct";
 import { DEFAULT_CURVE, type CurveOptions } from "../../lib/curve";
+import { intersectDirectionRayWithSegment } from "../../lib/directionSnap";
 import type { Document, EdgeKind, EditOp, Vec2 } from "../../lib/types";
+import { screenToWorld } from "./renderer";
 
 /** 1辺1.0の正方形(輪郭だけ)の作品 */
 function squareDoc(): Document {
@@ -50,8 +52,72 @@ function squareDoc(): Document {
   };
 }
 
+const CRANE_BASE_INTERSECTION_X = 0.20710678118654752;
+
+/** 左下の45°線と左辺が作る67.5°方向、および中央横線を持つ作品。 */
+function directionGridConflictDoc(gridDivisions = 4): Document {
+  const doc = squareDoc();
+  doc.display.grid_divisions = gridDivisions;
+  doc.cp.vertices.push(
+    { id: 4, pos: [0, 0.5] },
+    { id: 5, pos: [1, 0.5] },
+  );
+  doc.cp.edges.push(
+    { id: 4, v0: 0, v1: 2, kind: "Aux" },
+    { id: 5, v0: 4, v1: 5, kind: "Aux" },
+  );
+  doc.cp.next_vertex_id = 6;
+  doc.cp.next_edge_id = 6;
+  return doc;
+}
+
+/** 画面→正規化座標の丸めが12px境界をまたぐ方向吸着用の作品。 */
+function directionRoundingBoundaryDoc(): Document {
+  const doc = squareDoc();
+  const startY = 52 / 127;
+  const intersection = 26 / 127;
+  doc.cp.vertices.push(
+    { id: 4, pos: [0, startY] },
+    { id: 5, pos: [0.1, startY - 0.1] },
+    { id: 6, pos: [0.1, intersection] },
+    { id: 7, pos: [0.4, intersection] },
+  );
+  doc.cp.edges.push(
+    { id: 4, v0: 4, v1: 5, kind: "Aux" },
+    { id: 5, v0: 6, v1: 7, kind: "Aux" },
+  );
+  doc.cp.next_vertex_id = 8;
+  doc.cp.next_edge_id = 6;
+  return doc;
+}
+
+/** 高倍率・中央座標で交点計算の丸めが12px境界をまたぐ作品。 */
+function highScaleDirectionRoundingBoundaryDoc(): Document {
+  const doc = squareDoc();
+  doc.display.grid_divisions = 1024;
+  doc.cp.vertices.push(
+    { id: 4, pos: [0.24356623889179896, 0.5024259923957288] },
+    { id: 5, pos: [0.34356623889179894, 0.5024259923957288] },
+    { id: 6, pos: [0.643566238891799, 0.40242599239572885] },
+    { id: 7, pos: [0.643566238891799, 0.6024259923957288] },
+  );
+  doc.cp.edges.push(
+    { id: 4, v0: 4, v1: 5, kind: "Aux" },
+    { id: 5, v0: 6, v1: 7, kind: "Aux" },
+  );
+  doc.cp.next_vertex_id = 8;
+  doc.cp.next_edge_id = 6;
+  return doc;
+}
+
 /** 正規化座標 → 画面座標(scale=500、y軸反転) */
 const toScreen = (p: Vec2): Vec2 => [p[0] * 500, 500 - p[1] * 500];
+
+/** 任意の拡大率での正規化座標 → 画面座標。 */
+const toScreenAtScale = (p: Vec2, scale: number): Vec2 => [
+  p[0] * scale,
+  scale - p[1] * scale,
+];
 
 const polar = (deg: number, radius: number): Vec2 => {
   const rad = (deg * Math.PI) / 180;
@@ -66,6 +132,7 @@ function makeCtx(
   const applyEdit = vi.fn<(op: EditOp) => void>();
   const drawSegment = vi.fn<(a: Vec2, b: Vec2, kind: EdgeKind) => void>();
   const drawCurve = vi.fn<(points: Vec2[], kind: EdgeKind) => void>();
+  const beginFoldDraft = vi.fn<(line: [Vec2, Vec2], source: "2d" | "3d") => void>();
   const ctx: InteractionCtx = {
     doc: squareDoc(),
     view: { scale: 500, offsetX: 0, offsetY: 500 },
@@ -81,12 +148,22 @@ function makeCtx(
     drawSegment,
     drawCurve,
     setSelection: vi.fn(),
-    beginFoldDraft: vi.fn(),
+    beginFoldDraft,
   };
-  return { ctx, applyEdit, drawSegment, drawCurve };
+  return { ctx, applyEdit, drawSegment, drawCurve, beginFoldDraft };
 }
 
 describe("作図補助の操作", () => {
+  it("作図の点指定は実交点より方眼を優先する", () => {
+    const { ctx } = makeCtx({ kind: "bisector" });
+    ctx.doc = directionGridConflictDoc();
+    const cursor: Vec2 = [(CRANE_BASE_INTERSECTION_X + 0.25) / 2, 0.5];
+
+    onMouseDown(ctx, toScreen(cursor), 0);
+    expect(ctx.state.constructPoints).toEqual([[0.25, 0.5]]);
+    expect(ctx.state.directionSnap).toBeNull();
+  });
+
   it("角度線は1回のクリックで、刻みの数だけ補助線を引く", () => {
     const { ctx, applyEdit } = makeCtx({ kind: "angle", stepDeg: 45 });
     onMouseDown(ctx, toScreen([0.5, 0.5]), 0);
@@ -251,6 +328,19 @@ describe("点のドラッグ移動(選択ツール)", () => {
     expect(ctx.state.vertexDrag).toBeNull();
   });
 
+  it("頂点移動は実交点より方眼を優先する", () => {
+    const { ctx, applyEdit } = makeCtx();
+    ctx.doc = directionGridConflictDoc();
+    ctx.tool = "select";
+    const cursor: Vec2 = [(CRANE_BASE_INTERSECTION_X + 0.25) / 2, 0.5];
+
+    onMouseDown(ctx, toScreen([1, 0]), 0);
+    onMouseMove(ctx, toScreen(cursor));
+    expect(ctx.state.vertexDrag?.to).toEqual([0.25, 0.5]);
+    onMouseUp(ctx, toScreen(cursor), 0);
+    expect(applyEdit).toHaveBeenCalledWith({ type: "MoveVertex", id: 1, to: [0.25, 0.5] });
+  });
+
   it("動かさずに離したときは選択のままで編集しない", () => {
     const { ctx, applyEdit } = grabCorner();
     onMouseUp(ctx, toScreen([1, 1]), 0);
@@ -286,6 +376,18 @@ describe("線ツール", () => {
     expect(drawSegment.mock.calls[0][2]).toBe("Mountain");
     // 線の追加はdrawSegment経由に一本化する(直接の編集要求は出さない)
     expect(applyEdit).not.toHaveBeenCalled();
+  });
+
+  it("「折る」の点指定は実交点より方眼を優先する", () => {
+    const { ctx, beginFoldDraft } = makeCtx();
+    ctx.doc = directionGridConflictDoc();
+    ctx.tool = "fold";
+    const cursor: Vec2 = [(CRANE_BASE_INTERSECTION_X + 0.25) / 2, 0.5];
+
+    onMouseDown(ctx, toScreen([0, 0]), 0);
+    onMouseDown(ctx, toScreen(cursor), 0);
+    expect(beginFoldDraft).toHaveBeenCalledWith([[0, 0], [0.25, 0.5]], "2d");
+    expect(ctx.state.directionSnap).toBeNull();
   });
 
   it("点吸着候補が無ければ角の二等分方向へ向きだけを吸着する", () => {
@@ -348,6 +450,124 @@ describe("線ツール", () => {
     expect(drawSegment.mock.calls[0][1][1]).toBeCloseTo(0.6, 12);
   });
 
+  it("67.5°方向で中央横線の鶴の基本形に必要な位置へ確定する", () => {
+    const { ctx, drawSegment } = makeCtx();
+    ctx.doc = directionGridConflictDoc();
+    ctx.tool = "mountain";
+    const cursor: Vec2 = [(CRANE_BASE_INTERSECTION_X + 0.25) / 2, 0.5];
+
+    onMouseDown(ctx, toScreen([0, 0]), 0);
+    onMouseMove(ctx, toScreen(cursor));
+    expect(ctx.state.directionSnap?.kind).toBe("bisector");
+    expect(ctx.state.hoverSnap?.kind).toBe("edge");
+    expect(
+      Math.abs((ctx.state.hoverSnap?.pos[0] ?? Number.NaN) - CRANE_BASE_INTERSECTION_X),
+    ).toBeLessThan(1e-12);
+    expect(Math.abs((ctx.state.hoverSnap?.pos[1] ?? Number.NaN) - 0.5)).toBeLessThan(1e-12);
+
+    onMouseDown(ctx, toScreen(cursor), 0);
+    const [, end] = drawSegment.mock.calls[0];
+    expect(Math.abs(end[0] - CRANE_BASE_INTERSECTION_X)).toBeLessThan(1e-12);
+    expect(Math.abs(end[1] - 0.5)).toBeLessThan(1e-12);
+  });
+
+  it("拡大率が変わっても実交点までの画面距離12pxを基準にする", () => {
+    for (const scale of [256, 1024]) {
+      const { ctx } = makeCtx();
+      ctx.doc = directionGridConflictDoc(32);
+      ctx.tool = "aux";
+      ctx.view = { scale, offsetX: 0, offsetY: scale };
+
+      onMouseDown(ctx, toScreenAtScale([0, 0], scale), 0);
+      onMouseMove(
+        ctx,
+        toScreenAtScale([CRANE_BASE_INTERSECTION_X + 11 / scale, 0.5], scale),
+      );
+      expect(ctx.state.hoverSnap?.kind, `${scale}倍表示・11px`).toBe("edge");
+      expect(
+        Math.abs((ctx.state.hoverSnap?.pos[0] ?? Number.NaN) - CRANE_BASE_INTERSECTION_X),
+      ).toBeLessThan(1e-12);
+
+      onMouseMove(
+        ctx,
+        toScreenAtScale([CRANE_BASE_INTERSECTION_X + 13 / scale, 0.5], scale),
+      );
+      expect(ctx.state.hoverSnap?.kind, `${scale}倍表示・13px`).toBe("grid");
+    }
+  });
+
+  it("画面では12px以内の実交点を正規化座標の丸めで落とさない", () => {
+    const scale = 128;
+    const start: Vec2 = [0, 52 / 127];
+    const intersection: Vec2 = [26 / 127, 26 / 127];
+    const cursorScreen: Vec2 = [34.690005783687255, 110.28055696478988];
+    const intersectionScreen = toScreenAtScale(intersection, scale);
+    expect(
+      Math.hypot(
+        cursorScreen[0] - intersectionScreen[0],
+        cursorScreen[1] - intersectionScreen[1],
+      ),
+    ).toBeLessThan(12);
+
+    const { ctx } = makeCtx();
+    ctx.doc = directionRoundingBoundaryDoc();
+    ctx.tool = "aux";
+    ctx.view = { scale, offsetX: 0, offsetY: scale };
+    const cursorWorld = screenToWorld(ctx.view, cursorScreen);
+    const calculatedIntersection = intersectDirectionRayWithSegment(
+      start,
+      [1, -1],
+      [0.1, 26 / 127],
+      [0.4, 26 / 127],
+    );
+    expect(calculatedIntersection).not.toBeNull();
+    expect(
+      Math.hypot(
+        cursorWorld[0] - (calculatedIntersection?.[0] ?? Number.NaN),
+        cursorWorld[1] - (calculatedIntersection?.[1] ?? Number.NaN),
+      ),
+    ).toBeGreaterThan(12 / scale);
+
+    onMouseDown(ctx, toScreenAtScale(start, scale), 0);
+    onMouseMove(ctx, cursorScreen);
+
+    expect(ctx.state.directionSnap?.kind).toBe("extension");
+    expect(ctx.state.hoverSnap?.kind).toBe("edge");
+    expect(ctx.state.hoverSnap?.pos[0]).toBeCloseTo(intersection[0], 12);
+    expect(ctx.state.hoverSnap?.pos[1]).toBeCloseTo(intersection[1], 12);
+  });
+
+  it("高倍率・中央座標でも画面12px以内の実交点を丸めで落とさない", () => {
+    const scale = 10000;
+    const start: Vec2 = [0.24356623889179896, 0.5024259923957288];
+    const intersection: Vec2 = [0.643566238891799, 0.5024259923957288];
+    const cursorScreen: Vec2 = [6446.937264917439, 4971.631892600235];
+    const intersectionScreen = toScreenAtScale(intersection, scale);
+    expect(
+      Math.hypot(
+        cursorScreen[0] - intersectionScreen[0],
+        cursorScreen[1] - intersectionScreen[1],
+      ),
+    ).toBeLessThan(12);
+
+    const { ctx } = makeCtx();
+    ctx.doc = highScaleDirectionRoundingBoundaryDoc();
+    ctx.tool = "aux";
+    ctx.view = { scale, offsetX: 0, offsetY: scale };
+    const cursorWorld = screenToWorld(ctx.view, cursorScreen);
+    expect(Math.hypot(cursorWorld[0] - intersection[0], cursorWorld[1] - intersection[1])).toBeGreaterThan(
+      12 / scale,
+    );
+
+    onMouseDown(ctx, toScreenAtScale(start, scale), 0);
+    onMouseMove(ctx, cursorScreen);
+
+    expect(ctx.state.directionSnap?.kind).toBe("extension");
+    expect(ctx.state.hoverSnap?.kind).toBe("edge");
+    expect(ctx.state.hoverSnap?.pos[0]).toBeCloseTo(intersection[0], 12);
+    expect(ctx.state.hoverSnap?.pos[1]).toBeCloseTo(intersection[1], 12);
+  });
+
   it("方向の許容角度外では従来どおり既存頂点を優先する", () => {
     const { ctx } = makeCtx();
     ctx.tool = "valley";
@@ -398,9 +618,32 @@ describe("線ツール", () => {
     expect(ctx.state.directionSnap?.kind).toBe("bisector");
     expect(ctx.state.hoverSnap?.pos[0]).toBeCloseTo(0.415, 12);
   });
+
+  it("方向を解除した通常直線は実交点より方眼を優先する", () => {
+    const { ctx, drawSegment } = makeCtx();
+    ctx.doc = directionGridConflictDoc();
+    ctx.tool = "valley";
+    const cursor: Vec2 = [(CRANE_BASE_INTERSECTION_X + 0.25) / 2, 0.5];
+
+    onMouseDown(ctx, toScreen([0, 0]), 0);
+    onKeyDown(ctx, "Shift");
+    onMouseDown(ctx, toScreen(cursor), 0);
+    expect(drawSegment.mock.calls[0][1]).toEqual([0.25, 0.5]);
+  });
 });
 
 describe("曲線の折り目を描く", () => {
+  it("曲線の点指定は実交点より方眼を優先する", () => {
+    const { ctx } = makeCtx({}, [], { enabled: true });
+    ctx.doc = directionGridConflictDoc();
+    ctx.tool = "mountain";
+    const cursor: Vec2 = [(CRANE_BASE_INTERSECTION_X + 0.25) / 2, 0.5];
+
+    onMouseDown(ctx, toScreen(cursor), 0);
+    expect(ctx.state.curvePoints).toEqual([[0.25, 0.5]]);
+    expect(ctx.state.directionSnap).toBeNull();
+  });
+
   it("円弧は3回クリックするまで引かれず、そろったら折れ線として引かれる", () => {
     const { ctx, drawCurve, drawSegment } = makeCtx({}, [], { enabled: true });
     ctx.tool = "valley";

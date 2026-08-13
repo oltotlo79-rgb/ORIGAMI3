@@ -1241,6 +1241,25 @@ mod tests {
             .collect()
     }
 
+    /// 保存手順の明示角を、姿勢計算を行わず現在の辺IDへ解決する。
+    fn sequence_targets(doc: &Document) -> Vec<Driver> {
+        let mut targets = std::collections::BTreeMap::new();
+        for step in &doc.sequence {
+            for line in &step.drivers {
+                for hinge in ori3_layers::resolve_driver_edges(&doc.cp, line) {
+                    targets.insert(hinge, line.target_angle_deg);
+                }
+            }
+        }
+        targets
+            .into_iter()
+            .map(|(hinge, target_angle_deg)| Driver {
+                hinge,
+                target_angle_deg,
+            })
+            .collect()
+    }
+
     #[derive(serde::Deserialize)]
     struct FrontCpFixture {
         vertices: Vec<Vertex>,
@@ -1301,56 +1320,12 @@ mod tests {
         cp
     }
 
-    fn flat_fold_counts(
-        cp: &CreasePattern,
-        targets: &[Driver],
-        angles: &HashMap<EdgeId, f64>,
-        contact_detected: bool,
-        paper_intersects: bool,
-        contact_count: usize,
-    ) -> (usize, usize, usize, usize, usize, usize) {
+    fn flat_fold_rule_counts(cp: &CreasePattern, targets: &[Driver]) -> (usize, usize, usize) {
         let raw = ori3_cp::local_violations(cp).len();
         let filtered = flat_fold_notice_violations(cp, targets, &HashMap::new(), false).len();
-        let notice = flat_fold_notice_violations(cp, targets, angles, paper_intersects).len();
-        (
-            raw,
-            filtered,
-            usize::from(contact_detected),
-            usize::from(paper_intersects),
-            contact_count,
-            notice,
-        )
-    }
-
-    fn solved_flat_fold_counts(
-        label: &str,
-        cp: &CreasePattern,
-        targets: &[Driver],
-    ) -> (usize, usize, usize, usize, usize, usize) {
-        let faces = ori3_cp::extract_faces(cp);
-        let motion = ori3_rigid::solve_motion(cp, &faces, targets, None, None, true);
-        let solved = motion.result;
-        assert!(
-            solved.angles.values().all(|angle| angle.is_finite()),
-            "{label}の実角は全て有限: rms={:.3e} warnings={:?}",
-            solved.closure_rms,
-            solved.frame.warnings
-        );
-        let contact_count = ori3_rigid::self_intersection_pairs(&solved.frame).len();
-        let paper_intersects = pose_flat_fold_notice_intersects(
-            cp,
-            targets,
-            motion.contact_detected,
-            contact_count > 0,
-        );
-        flat_fold_counts(
-            cp,
-            targets,
-            &solved.angles,
-            motion.contact_detected,
-            paper_intersects,
-            contact_count,
-        )
+        let notice =
+            flat_fold_notice_violations(cp, targets, &reached_angles(targets), false).len();
+        (raw, filtered, notice)
     }
 
     #[test]
@@ -1371,12 +1346,6 @@ mod tests {
             Vec::<VertexId>::new(),
             "全て指定角へ届き、紙も食い込んでいなければ知らせない"
         );
-        assert_eq!(
-            flat_fold_notice_violations(&cp, &targets, &reached_angles(&targets), true),
-            vec![9, 10, 11, 12],
-            "全て指定角へ届いても紙が食い込んでいれば4点を知らせる"
-        );
-
         let opposite: HashMap<EdgeId, f64> = targets
             .iter()
             .map(|target| (target.hinge, -target.target_angle_deg))
@@ -1470,51 +1439,18 @@ mod tests {
     #[test]
     fn flat_fold_notice_reports_four_reached_points_when_paper_intersects() {
         let cp = flat_fold_notice_user_cp();
-        let faces = ori3_cp::extract_faces(&cp);
         let targets = user_flat_targets();
+        let angles = reached_angles(&targets);
         assert_eq!(targets.len(), 8, "利用者がまとめて動かした折り目は8本");
-        let motion = ori3_rigid::solve_motion(&cp, &faces, &targets, None, None, true);
-        let solved = motion.result;
-        let raw_intersections = ori3_rigid::self_intersection_pairs(&solved.frame);
-
-        assert!(solved.converged, "180°の姿勢計算は収束する");
-        assert!(
-            solved.relaxations.is_empty(),
-            "8本とも指定角へ届くので譲りは0件: {:?}",
-            solved.relaxations
-        );
-        assert!(!motion.contact_stopped, "接触を検出しても操作を止めない");
-        assert!(
-            targets.iter().all(|target| {
-                solved.angles.get(&target.hinge).is_some_and(|actual| {
-                    (actual - target.target_angle_deg).abs() <= FLAT_TARGET_EPS_DEG
-                })
-            }),
-            "8本すべてが指定した180°へ届く: {:?}",
-            solved.angles
-        );
-        assert!(
-            motion.contact_detected,
-            "指定角へ届いていても紙が食い込む: raw={} warnings={:?} angles={:?}",
-            raw_intersections.len(),
-            solved.frame.warnings,
-            solved.angles
-        );
-        let paper_intersects = pose_flat_fold_notice_intersects(
-            &cp,
-            &targets,
-            motion.contact_detected,
-            !raw_intersections.is_empty(),
-        );
         assert_eq!(
-            flat_fold_notice_violations(&cp, &targets, &solved.angles, paper_intersects,),
+            flat_fold_notice_violations(&cp, &targets, &angles, true),
             vec![9, 10, 11, 12],
-            "食い込みがあれば平らに畳めない4点を知らせる"
+            "利用者の展開図では、8本が指定角へ届いていても食い込みがあれば4点を知らせる"
         );
     }
 
     #[test]
-    fn flat_fold_notice_does_not_stop_the_requested_motion() {
+    fn flat_fold_motion_reaches_requested_angle_without_stopping() {
         let cp = flat_fold_notice_user_cp();
         let faces = ori3_cp::extract_faces(&cp);
         let targets = user_flat_targets();
@@ -1543,80 +1479,53 @@ mod tests {
         }
         let solved = final_result.expect("180°までの操作結果を返す");
 
-        assert!(!solved.frame.faces.is_empty(), "通知対象でも立体を返す");
+        assert!(!solved.frame.faces.is_empty(), "平坦折り操作でも立体を返す");
         assert!(
             solved.angles.values().all(|angle| angle.is_finite()),
-            "通知対象でも有限の角度を返す"
+            "平坦折り操作でも有限の角度を返す"
         );
         assert!(
             (solved.angles[&targets[0].hinge] - targets[0].target_angle_deg).abs()
                 <= FLAT_TARGET_EPS_DEG,
             "操作中の折り目は指定した180°まで動く"
         );
-        assert_eq!(
-            flat_fold_notice_violations(
-                &cp,
-                &targets,
-                &solved.angles,
-                !ori3_rigid::self_intersection_pairs(&solved.frame).is_empty(),
-            ),
-            vec![9, 10, 11, 12],
-            "ほかの指定が届かない4点は、操作を止めずに知らせる"
-        );
     }
 
     #[test]
-    fn five_existing_works_have_69_raw_12_filtered_zero_intersections_and_zero_notices() {
+    fn five_existing_works_have_69_raw_12_filtered_and_zero_notices_for_reached_targets() {
         let devil: Document = serde_json::from_str(include_str!(
             "../../../../crates/ori3-layers/tests/fixtures/devil-024.ori3"
         ))
         .expect("悪魔24を読む");
-        let devil_replayed = ori3_layers::replay(&devil, devil.sequence.len(), 1.0);
-        let devil_contacts = ori3_rigid::self_intersection_pairs(&devil_replayed.frame).len();
-        let devil_counts = flat_fold_counts(
-            &devil.cp,
-            &devil_replayed.sequence_targets,
-            &devil_replayed.hinge_angles,
-            devil_contacts > 0,
-            devil_contacts > 0,
-            devil_contacts,
-        );
+        let devil_targets = sequence_targets(&devil);
+        let devil_counts = flat_fold_rule_counts(&devil.cp, &devil_targets);
 
         let crane = front_fixture_cp(include_str!("../../src/lib/__fixtures__/crane.json"));
         let crane_targets = all_crease_flat_targets(&crane);
-        let crane_counts = solved_flat_fold_counts("鶴", &crane, &crane_targets);
+        let crane_counts = flat_fold_rule_counts(&crane, &crane_targets);
 
         let frog = front_fixture_cp(include_str!("../../src/lib/__fixtures__/frog.json"));
         let frog_targets = all_crease_flat_targets(&frog);
-        let frog_counts = solved_flat_fold_counts("カエル", &frog, &frog_targets);
+        let frog_counts = flat_fold_rule_counts(&frog, &frog_targets);
 
         let yakko = yakko_cp();
         let yakko_targets = all_crease_flat_targets(&yakko);
-        let yakko_counts = solved_flat_fold_counts("やっこさん", &yakko, &yakko_targets);
+        let yakko_counts = flat_fold_rule_counts(&yakko, &yakko_targets);
 
         let rose: Document = serde_json::from_str(include_str!(
             "../../../../crates/ori3-layers/tests/fixtures/rose-029.ori3"
         ))
         .expect("ローズ29を読む");
-        let rose_replayed = ori3_layers::replay(&rose, rose.sequence.len(), 1.0);
-        let rose_contacts = ori3_rigid::self_intersection_pairs(&rose_replayed.frame).len();
-        let rose_counts = flat_fold_counts(
-            &rose.cp,
-            &rose_replayed.sequence_targets,
-            &rose_replayed.hinge_angles,
-            rose_contacts > 0,
-            rose_contacts > 0,
-            rose_contacts,
-        );
+        let rose_targets = sequence_targets(&rose);
+        let rose_counts = flat_fold_rule_counts(&rose.cp, &rose_targets);
 
-        // (生の局所違反, ±180°候補, 経路中の累積接触, 通知に使う食い込み,
-        //  最終交差組, 通知点)。全折り目を同時に完成角へ補間する3作品では、
-        // 最終交差0組でも途中だけ接触するため、その累積値を通知へ上げない。
-        assert_eq!(devil_counts, (6, 2, 0, 0, 0, 0), "悪魔");
-        assert_eq!(crane_counts, (3, 3, 1, 0, 0, 0), "鶴");
-        assert_eq!(frog_counts, (3, 3, 1, 0, 0, 0), "カエル");
-        assert_eq!(yakko_counts, (0, 0, 1, 0, 0, 0), "やっこさん");
-        assert_eq!(rose_counts, (57, 4, 0, 0, 0, 0), "ローズ");
+        // (生の局所違反, ±180°候補, 通知点)。通知規則を姿勢解から切り離し、
+        // 指定角到達済み・食い込みなしを入力として明示する。
+        assert_eq!(devil_counts, (6, 2, 0), "悪魔");
+        assert_eq!(crane_counts, (3, 3, 0), "鶴");
+        assert_eq!(frog_counts, (3, 3, 0), "カエル");
+        assert_eq!(yakko_counts, (0, 0, 0), "やっこさん");
+        assert_eq!(rose_counts, (57, 4, 0), "ローズ");
 
         let total = [
             devil_counts,
@@ -1626,17 +1535,10 @@ mod tests {
             rose_counts,
         ]
         .into_iter()
-        .fold((0, 0, 0, 0, 0, 0), |sum, counts| {
-            (
-                sum.0 + counts.0,
-                sum.1 + counts.1,
-                sum.2 + counts.2,
-                sum.3 + counts.3,
-                sum.4 + counts.4,
-                sum.5 + counts.5,
-            )
+        .fold((0, 0, 0), |sum, counts| {
+            (sum.0 + counts.0, sum.1 + counts.1, sum.2 + counts.2)
         });
-        assert_eq!(total, (69, 12, 3, 0, 0, 0));
+        assert_eq!(total, (69, 12, 0));
     }
 
     fn current_flat_state(store: &DocumentStore) -> ori3_layers::FlatState {

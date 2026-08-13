@@ -2,7 +2,7 @@
 // テスト用に手組みして検証する(頂点優先・グリッド・線上・範囲外null)。
 
 import { describe, expect, it } from "vitest";
-import type { Document, Edge, Vertex } from "../../lib/types";
+import type { Document, Edge, Vec2, Vertex } from "../../lib/types";
 import { paperExtent, snap, snapForMove, snapOnDirectionAxis } from "./snap";
 
 /** 150×150mm相当の正方形ドキュメント(輪郭4辺、グリッド8分割) */
@@ -172,6 +172,123 @@ describe("snapOnDirectionAxis(方向を保った吸着)", () => {
     expect(result?.kind).toBe("grid");
     expect(result?.pos[0]).toBeCloseTo(0.3712871287, 9);
     expect(result?.pos[1]).toBeCloseTo(0.0371287129, 9);
+  });
+
+  it("実交点が12px以内なら方眼より優先し、12pxより遠ければ方眼を選ぶ", () => {
+    const scale = 128;
+    const radius = 12 / scale;
+    const intersectionX = 5 / 16;
+    const doc = makeDoc({
+      gridDivisions: 2,
+      extraVertices: [
+        { id: 4, pos: [intersectionX, 0.25] },
+        { id: 5, pos: [intersectionX, 0.75] },
+      ],
+      extraEdges: [{ id: 4, v0: 4, v1: 5, kind: "Mountain" }],
+    });
+
+    expect(
+      snapOnDirectionAxis(
+        doc,
+        [0, 0.5],
+        [1, 0],
+        [intersectionX + 12 / scale, 0.5],
+        radius,
+      ),
+    ).toEqual({ pos: [intersectionX, 0.5], kind: "edge" });
+    expect(
+      snapOnDirectionAxis(
+        doc,
+        [0, 0.5],
+        [1, 0],
+        [intersectionX + 13 / scale, 0.5],
+        radius,
+      ),
+    ).toEqual({ pos: [0.5, 0.5], kind: "grid" });
+  });
+
+  it("線分距離の丸めが12pxをわずかに超えても、実交点が厳密に12pxなら選ぶ", () => {
+    const scale = 128;
+    const doc = makeDoc({
+      extraVertices: [
+        { id: 4, pos: [0.026316968439483994, 0.004406492046424613] },
+        { id: 5, pos: [0.0148364654685313, 0.03212287802176322] },
+      ],
+      extraEdges: [{ id: 4, v0: 4, v1: 5, kind: "Mountain" }],
+    });
+
+    expect(
+      snapOnDirectionAxis(
+        doc,
+        [0, 0],
+        [0.9238795325112867, 0.3826834323650898],
+        [0.11063457401822659, 0.0458263410257195],
+        12 / scale,
+      ),
+    ).toEqual({
+      pos: [0.02402086784529346, 0.009949769241492337],
+      kind: "edge",
+    });
+  });
+
+  it("67.5°方向と中央横線の実交点を1e-12未満の誤差で選ぶ", () => {
+    const expectedX = 0.20710678118654752;
+    const doc = makeDoc({
+      gridDivisions: 4,
+      extraVertices: [
+        { id: 4, pos: [0, 0.5] },
+        { id: 5, pos: [1, 0.5] },
+      ],
+      extraEdges: [{ id: 4, v0: 4, v1: 5, kind: "Aux" }],
+    });
+    const cursor: Vec2 = [(expectedX + 0.25) / 2, 0.5];
+    const radius = 12 / 500;
+
+    expect(snap(doc, cursor, radius)).toEqual({ pos: [0.25, 0.5], kind: "grid" });
+    const result = snapOnDirectionAxis(
+      doc,
+      [0, 0],
+      [Math.SQRT2 - 1, 1],
+      cursor,
+      radius,
+    );
+    expect(result?.kind).toBe("edge");
+    expect(Math.abs((result?.pos[0] ?? Number.NaN) - expectedX)).toBeLessThan(1e-12);
+    expect(Math.abs((result?.pos[1] ?? Number.NaN) - 0.5)).toBeLessThan(1e-12);
+  });
+
+  it("複数の近い実交点は距離、同距離なら辺IDで決定的に選ぶ", () => {
+    const vertices: Vertex[] = [
+      { id: 4, pos: [0.375, 0.25] },
+      { id: 5, pos: [0.375, 0.75] },
+      { id: 6, pos: [0.625, 0.25] },
+      { id: 7, pos: [0.625, 0.75] },
+    ];
+    const edges: Edge[] = [
+      { id: 9, v0: 4, v1: 5, kind: "Mountain" },
+      { id: 4, v0: 6, v1: 7, kind: "Valley" },
+    ];
+
+    for (const extraEdges of [edges, [...edges].reverse()]) {
+      expect(
+        snapOnDirectionAxis(
+          makeDoc({ gridDivisions: 0, extraVertices: vertices, extraEdges }),
+          [0, 0.5],
+          [1, 0],
+          [0.4, 0.5],
+          0.24,
+        ),
+      ).toEqual({ pos: [0.375, 0.5], kind: "edge" });
+      expect(
+        snapOnDirectionAxis(
+          makeDoc({ gridDivisions: 0, extraVertices: vertices, extraEdges }),
+          [0, 0.5],
+          [1, 0],
+          [0.5, 0.5],
+          0.13,
+        ),
+      ).toEqual({ pos: [0.625, 0.5], kind: "edge" });
+    }
   });
 
   it("近い線分と方向の半直線との交点へ吸着する", () => {

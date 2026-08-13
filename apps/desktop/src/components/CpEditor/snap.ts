@@ -15,6 +15,10 @@ export interface SnapResult {
   kind: SnapKind;
 }
 
+// 画面座標との相互変換と交点計算で生じる丸めだけを、12px境界で許容する。
+// 最大表示倍率100000でも画面上1e-7pxなので、実際の吸着範囲は広げない。
+const SNAP_RADIUS_ROUNDING_EPSILON = 1e-12;
+
 /** 紙の正規化サイズ [幅, 高さ](長辺=1.0) */
 export function paperExtent(doc: Document): Vec2 {
   const long = Math.max(doc.paper.width_mm, doc.paper.height_mm);
@@ -101,7 +105,8 @@ export function snap(doc: Document, cursor: Vec2, radiusNorm: number): SnapResul
 /**
  * 方向吸着を保ったまま、近くの頂点・グリッド交点・線分へ吸着する。
  * 点は半直線へ垂直投影し、線分は半直線との交点を使うため、結果は必ず軸上にある。
- * 候補の優先順位は通常の吸着と同じく、頂点 > グリッド > 線分とする。
+ * 頂点を最優先にし、実交点が半径内にあるときだけグリッドより先にする。
+ * それ以外は通常と同じくグリッドを線分より優先する。
  */
 export function snapOnDirectionAxis(
   doc: Document,
@@ -122,6 +127,47 @@ export function snapOnDirectionAxis(
   }
   if (vertex) return { pos: vertex, kind: "vertex" };
 
+  const byId = new Map(doc.cp.vertices.map((candidate) => [candidate.id, candidate.pos]));
+  let nearbyIntersection: Vec2 | null = null;
+  let nearbyIntersectionDistance = radiusNorm;
+  let nearbyIntersectionEdgeId = Number.POSITIVE_INFINITY;
+  let edge: Vec2 | null = null;
+  let edgeDistance = radiusNorm;
+  for (const candidate of doc.cp.edges) {
+    const a = byId.get(candidate.v0);
+    const b = byId.get(candidate.v1);
+    if (!a || !b) continue;
+    const intersection = intersectDirectionRayWithSegment(start, direction, a, b);
+    if (!intersection) continue;
+
+    // 方向合わせ中だけの例外: 鶴の基本形に必要な x=(√2-1)/2 は無理数で、
+    // 方眼座標i/nは有理数なので2〜1024の整数等分では正確に表せない。
+    // 実測では0.25へのずれにより、
+    // 8本を180°にしたときの指定角が最大105.526°ずれ、実交点なら0°になった。
+    // 通常のsnap順は変えず、実交点そのものが画面由来の半径(12px相当)内に
+    // ある場合だけ方眼より優先する。
+    const intersectionDistance = dist(cursor, intersection);
+    if (
+      intersectionDistance <= radiusNorm + SNAP_RADIUS_ROUNDING_EPSILON &&
+      (nearbyIntersection === null ||
+        intersectionDistance < nearbyIntersectionDistance ||
+        (intersectionDistance === nearbyIntersectionDistance &&
+          candidate.id < nearbyIntersectionEdgeId))
+    ) {
+      nearbyIntersection = intersection;
+      nearbyIntersectionDistance = intersectionDistance;
+      nearbyIntersectionEdgeId = candidate.id;
+    }
+
+    const cursorDistance = dist(cursor, closestPointOnSegment(cursor, a, b));
+    if (cursorDistance <= edgeDistance) {
+      edge = intersection;
+      edgeDistance = cursorDistance;
+    }
+  }
+
+  if (nearbyIntersection) return { pos: nearbyIntersection, kind: "edge" };
+
   const grid = snapGrid(doc, cursor, radiusNorm);
   if (grid) {
     const projected = projectPointToDirectionRay(start, direction, grid.pos);
@@ -130,20 +176,6 @@ export function snapOnDirectionAxis(
     }
   }
 
-  const byId = new Map(doc.cp.vertices.map((candidate) => [candidate.id, candidate.pos]));
-  let edge: Vec2 | null = null;
-  let edgeDistance = radiusNorm;
-  for (const candidate of doc.cp.edges) {
-    const a = byId.get(candidate.v0);
-    const b = byId.get(candidate.v1);
-    if (!a || !b) continue;
-    const cursorDistance = dist(cursor, closestPointOnSegment(cursor, a, b));
-    if (cursorDistance > edgeDistance) continue;
-    const intersection = intersectDirectionRayWithSegment(start, direction, a, b);
-    if (!intersection) continue;
-    edge = intersection;
-    edgeDistance = cursorDistance;
-  }
   return edge ? { pos: edge, kind: "edge" } : null;
 }
 

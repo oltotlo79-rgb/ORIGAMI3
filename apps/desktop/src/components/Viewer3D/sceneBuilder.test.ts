@@ -5,6 +5,7 @@
 // (2) トポロジ(三角形分割・添字・ヒンジ対応・三角形→面IDの対応表)の確認。
 // (3) 立体形状の更新が「その場書き換え」で、資源を作り直さないことの確認。
 // (4) 平らに畳んだときだけ層をずらして描くこと(UI-010 / SIM-004)の確認。
+// (5) 強調表示が紙の表裏を無視せず、食い込み原因だけ例外にすることの確認。
 
 import { describe, expect, it, vi } from "vitest";
 import * as THREE from "three";
@@ -14,6 +15,7 @@ import {
   buildTopology,
   clearGroup,
   createContent,
+  createHighlightMaterials,
   createSoftContent,
   updateFrame,
   updateSoftContent,
@@ -82,6 +84,31 @@ describe("clearGroup(資源の破棄)", () => {
 
     expect(group.children).toEqual([]);
     expect(disposeSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("強調表示の深度判定", () => {
+  it("選択・参照・フォーカス・操作中の折り目は紙の裏側なら隠す", () => {
+    const materials = createHighlightMaterials();
+    try {
+      expect({
+        selected: materials.highlightMaterial.depthTest,
+        reference: materials.referenceHighlightMaterial.depthTest,
+        focus: materials.focusHighlightMaterial.depthTest,
+        active: materials.activeHighlightMaterial.depthTest,
+      }).toEqual({ selected: true, reference: true, focus: true, active: true });
+    } finally {
+      for (const material of Object.values(materials)) material.dispose();
+    }
+  });
+
+  it("食い込み原因候補だけは紙の内側でも見つけられるよう隠さない", () => {
+    const materials = createHighlightMaterials();
+    try {
+      expect(materials.suspectHighlightMaterial.depthTest).toBe(false);
+    } finally {
+      for (const material of Object.values(materials)) material.dispose();
+    }
   });
 });
 
