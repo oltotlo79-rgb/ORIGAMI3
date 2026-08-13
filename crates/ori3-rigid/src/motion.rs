@@ -121,6 +121,26 @@ pub fn solve_motion(
             let start = start_angles.get(&driver.hinge).copied().unwrap_or(0.0);
             driver.target_angle_deg.abs() + RELAXATION_EPS_DEG >= start.abs()
         });
+        let reseed = Reseed {
+            cp,
+            faces,
+            drivers: &step_drivers,
+            targets: step_targets.as_ref(),
+            start_angles: &start_angles,
+            warm: step_warm,
+            topology: &topology,
+        };
+        // 利用者が指定した角度が全て同時に成り立つなら、それがそのまま答え。
+        // ここで先に確かめておかないと、譲った姿勢が次の段の出発点になり、
+        // ずれが後の段へ積み上がる。成り立たない段だけ、譲りを許す計算へ進む。
+        if let Some(mut exact) = reseed.all_specified() {
+            iterations = iterations.saturating_add(exact.iterations);
+            exact.iterations = iterations;
+            last_finite = Some(exact);
+            last_finite_intersects = Some(false);
+            final_failure = None;
+            continue;
+        }
         let mut candidate = if step == steps && moving_outward {
             step_targets.as_ref().map_or_else(
                 || solver::solve_prepared(cp, faces, &step_drivers, step_warm, &topology),
@@ -183,20 +203,8 @@ pub fn solve_motion(
                 }
             }
         }
-        if step == steps && is_finite_result(&candidate, faces.len()) {
-            let reseed = Reseed {
-                cp,
-                faces,
-                drivers: &step_drivers,
-                targets: step_targets.as_ref(),
-                start_angles: &start_angles,
-                warm: step_warm,
-                topology: &topology,
-            };
-            if !candidate.converged {
-                candidate = reseed.rescue(candidate);
-            }
-            candidate = reseed.honor_targets(candidate);
+        if step == steps && !candidate.converged && is_finite_result(&candidate, faces.len()) {
+            candidate = reseed.rescue(candidate);
         }
         let raw_contact =
             is_finite_result(&candidate, faces.len()) && self_intersects(&candidate.frame);
@@ -590,23 +598,20 @@ impl Reseed<'_> {
         }
     }
 
-    /// 希望角が捨てられたとき、希望角も固定して解けるならその形を採る。
+    /// 利用者が指定した角度を**全て**固定して解いた形。成り立たなければ `None`。
     ///
-    /// 希望角は「必要なときだけ譲る」ものなのに、譲らなくても解ける場面でも
-    /// 譲っていた。利用者の画面で実際に起きた例(鳥の基本形の途中、8本を180°・
-    /// 2本を0°に指定した状態から、別の2本を−5°動かす)では、既に折ってある
-    /// 折り目が最大179.3°ほどけた。同じ姿勢を12本すべて固定して解くと、
-    /// −10°でも−90°でも−180°でも閉包1e-14以下・自己交差0組で解ける。
-    /// つまり譲る必要は無かった。
+    /// 希望角は「どうしても必要なときだけ譲る」ものなのに、譲らなくても解ける
+    /// 場面でも譲っていた。利用者の画面で実際に起きた例(鳥の基本形の途中、
+    /// 8本を180°・2本を0°に折った状態から、別の2本を−5°動かす)では、
+    /// 既に折ってある折り目が最大179.3°ほどけて紙が食い込んだ。
+    /// 同じ姿勢を12本すべて固定して解くと、−10°でも−90°でも−180°でも
+    /// 閉包1e-14以下・自己交差0組で解ける。つまり譲る必要は無かった。
     ///
-    /// 固定して解けないときは元の候補をそのまま返すので、操作は止まらない。
-    fn honor_targets(&self, candidate: SolveResult) -> SolveResult {
-        let Some(targets) = self.targets else {
-            return candidate;
-        };
-        if candidate.relaxations.is_empty() {
-            return candidate;
-        }
+    /// これを継続法の**各段**で先に確かめる。最終段だけで直すと、途中で譲った
+    /// 姿勢が次の段の出発点になり、ずれが後の段へ積み上がってしまう。
+    /// 成り立たない段だけ、従来どおり譲りを許す計算へ進むので操作は止まらない。
+    fn all_specified(&self) -> Option<SolveResult> {
+        let targets = self.targets?;
         let fixed: BTreeSet<EdgeId> = self.drivers.iter().map(|driver| driver.hinge).collect();
         let mut all: Vec<Driver> = self.drivers.to_vec();
         for (&hinge, &target_angle_deg) in targets {
@@ -617,24 +622,21 @@ impl Reseed<'_> {
                 });
             }
         }
-        all.sort_unstable_by_key(|driver| driver.hinge);
         if all.len() == self.drivers.len() {
-            return candidate;
+            return None;
         }
-        let solved = solver::solve_prepared(self.cp, self.faces, &all, self.warm, self.topology);
+        all.sort_unstable_by_key(|driver| driver.hinge);
+        let mut solved =
+            solver::solve_prepared(self.cp, self.faces, &all, self.warm, self.topology);
         if !solved.converged
             || !is_finite_result(&solved, self.faces.len())
             || self_intersects(&solved.frame)
-            || max_seam_gap(self.cp, self.faces, &solved.frame)
-                > max_seam_gap(self.cp, self.faces, &candidate.frame)
-                    .max(SEAM_TEAR_TOLERANCE)
+            || max_seam_gap(self.cp, self.faces, &solved.frame) >= SEAM_TEAR_TOLERANCE
         {
-            return candidate;
+            return None;
         }
-        let mut solved = solved;
-        solved.iterations = solved.iterations.saturating_add(candidate.iterations);
         solved.relaxations = collect_relaxations(&solved.angles, self.drivers, self.targets);
-        solved
+        Some(solved)
     }
 
     /// 試す初期値。回数を固定するので、解けない場合でも所要時間は増え続けない。
