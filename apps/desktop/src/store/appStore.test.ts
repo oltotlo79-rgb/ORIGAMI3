@@ -576,6 +576,52 @@ describe("appStore 折り角度の指定", () => {
     }
   });
 
+  it("まとめて動かすと、選んだ折り目は全部が動かし中(3Dで水色)になる", () => {
+    const view = makeHingeView(462);
+    useAppStore.setState({
+      doc: view.doc,
+      faces: view.faces,
+      hinges: new Set([5, 7, 9]),
+      drivers: new Map(),
+    });
+    useAppStore.getState().setDriverAngles([9, 5, 7], 60);
+    // 光るのは3本すべて。固定するのはそのうち1本だけ(splitDriversの役目)。
+    expect(useAppStore.getState().activeAngleIntent?.hinges).toEqual([5, 7, 9]);
+    expect(useAppStore.getState().activeAngleIntent?.fixAll).toBe(false);
+  });
+
+  it("選択を外すと、動かし中の水色も消える", () => {
+    const view = makeHingeView(463);
+    useAppStore.setState({
+      doc: view.doc,
+      faces: view.faces,
+      hinges: new Set([5, 7]),
+      drivers: new Map(),
+      selection: { edgeIds: [5, 7], vertexIds: [] },
+    });
+    useAppStore.getState().setDriverAngles([5, 7], 60);
+    expect(useAppStore.getState().activeAngleIntent).not.toBeNull();
+
+    // 実機で見つかった不具合: 角度を動かし終えても印が残り、何も選んでいないのに
+    // 3Dの線が水色に光ったままになっていた。
+    useAppStore.getState().setSelection({ edgeIds: [], vertexIds: [] });
+    expect(useAppStore.getState().activeAngleIntent).toBeNull();
+  });
+
+  it("選んだままなら、動かし中の印は残る", () => {
+    const view = makeHingeView(464);
+    useAppStore.setState({
+      doc: view.doc,
+      faces: view.faces,
+      hinges: new Set([5, 7]),
+      drivers: new Map(),
+      selection: { edgeIds: [5, 7], vertexIds: [] },
+    });
+    useAppStore.getState().setDriverAngles([5, 7], 60);
+    useAppStore.getState().setSelection({ edgeIds: [5], vertexIds: [] });
+    expect(useAppStore.getState().activeAngleIntent?.hinges).toEqual([5, 7]);
+  });
+
   it("複数折り線の連続変更も16ms間引きとrunLatestで最後だけを残し履歴は1件にする", async () => {
     primeFakeTimers();
     try {

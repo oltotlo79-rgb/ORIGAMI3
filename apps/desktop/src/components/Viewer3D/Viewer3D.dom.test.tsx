@@ -531,7 +531,7 @@ describe("Viewer3D(指している場所のカーソル)", () => {
     await waitFor(() => expect(lastRoles()).toEqual([]));
 
     act(() =>
-      useAppStore.setState({ activeAngleIntent: { generation: 4, hinges: [5] } }),
+      useAppStore.setState({ activeAngleIntent: { generation: 4, hinges: [5], fixAll: true } }),
     );
     await waitFor(() => expect(lastRoles()).toEqual(["active"]));
 

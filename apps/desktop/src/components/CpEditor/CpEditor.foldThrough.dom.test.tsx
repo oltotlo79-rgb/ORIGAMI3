@@ -174,7 +174,7 @@ describe("CpEditor 自然追従の表示", () => {
         { hinge: 5, target_angle_deg: 90, actual_angle_deg: 72, delta_deg: -18 },
         { hinge: 6, target_angle_deg: 45, actual_angle_deg: 44.901, delta_deg: -0.099 },
       ],
-      activeAngleIntent: { generation: 3, hinges: [9] },
+      activeAngleIntent: { generation: 3, hinges: [9], fixAll: true },
     });
     const fitRef = { current: null } as React.RefObject<(() => void) | null>;
     render(<CpEditor fitRef={fitRef} />);

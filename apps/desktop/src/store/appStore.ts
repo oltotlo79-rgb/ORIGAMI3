@@ -151,7 +151,14 @@ export function relaxationNotices(
 /** 1回の角度操作に属する「いま固定する折り目」。作品には保存しない。 */
 export interface ActiveAngleIntent {
   generation: number;
+  /** いま動かしている折り目(3Dで水色に光る) */
   hinges: number[];
+  /** 全部を「その角度ちょうど」で固定してよいか。
+   *
+   * 紙を引く操作(左右対称の相手を含む)は2本までなので固定してよい。
+   * まとめてスライダーで動かす場合は、全部を同じ角度で固定すると実際の紙では
+   * 成り立たないため、代表1本だけを固定する。 */
+  fixAll: boolean;
 }
 
 export type ToolId =
@@ -1164,13 +1171,17 @@ export const useAppStore = create<AppState>((set, get) => {
     }));
 
   /** 新しい角度操作をZustandへ世代付きで載せる。 */
-  const activateAngleIntent = (hinges: readonly number[]): number => {
+  const activateAngleIntent = (
+    hinges: readonly number[],
+    fixAll = true,
+  ): number => {
     const generation = get().angleIntentGeneration + 1;
     set({
       angleIntentGeneration: generation,
       activeAngleIntent: {
         generation,
         hinges: [...new Set(hinges)].sort((a, b) => a - b),
+        fixAll,
       },
     });
     return generation;
@@ -1273,8 +1284,19 @@ export const useAppStore = create<AppState>((set, get) => {
    */
   const splitDrivers = (): { hard: Driver[]; preferred: Driver[] } => {
     const s = get();
+    // まとめてスライダーで動かすときは、角度を固定するのは代表の1本だけにする。
+    //
+    // 選んだ折り線を全て「その角度ちょうど」で固定すると、実際の紙では成り立たない。
+    // 鶴の花弁折りで8本を同時に動かした実測では、紙が閉じず(閉包RMS 8.714e-3)
+    // 食い込みも出た。代表1本だけを固定して残りを希望角にすると、45度でも90度でも
+    // 147度でも閉包1e-15以下・食い込み0組で解け、8本の実際の角度は要求から
+    // 1.6度以内に収まる。折り線どうしがわずかに違う角度を取れることが、
+    // 紙が破れないために必要。残りは希望角として同じ1回の計算へ渡る。
+    const moving = (s.activeAngleIntent?.hinges ?? [])
+      .filter((hinge) => s.drivers.has(hinge))
+      .sort((a, b) => a - b);
     const active = new Set(
-      (s.activeAngleIntent?.hinges ?? []).filter((hinge) => s.drivers.has(hinge)),
+      s.activeAngleIntent?.fixAll === false ? moving.slice(0, 1) : moving,
     );
     const merged = new Map(
       [...s.sequenceTargets].filter(([hinge]) => s.hinges.has(hinge)),
@@ -2242,14 +2264,32 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     setSelection: (selection) =>
-      set((s) => ({
-        selection,
-        // スライダー行が消える選択変更なら、残ったホバー色も一緒に消す。
-        hoveredHinge:
-          s.hoveredHinge !== null && selection.edgeIds.includes(s.hoveredHinge)
-            ? s.hoveredHinge
-            : null,
-      })),
+      set((s) => {
+        // 「いま動かしている折り目」の水色は、その折り目が選択から外れたら消す。
+        // 以前は角度を動かし終えても印が残り、何も選んでいないのに3Dの線が
+        // 水色に光ったままになっていた(実機で確認)。
+        // 紙を引いている間は選択と関係なく動かしているので、そのときは残す。
+        const stillMoving =
+          s.pullHinge !== null ||
+          (s.activeAngleIntent?.hinges ?? []).some((hinge) =>
+            selection.edgeIds.includes(hinge),
+          );
+        const dropActive = s.activeAngleIntent !== null && !stillMoving;
+        return {
+          selection,
+          // スライダー行が消える選択変更なら、残ったホバー色も一緒に消す。
+          hoveredHinge:
+            s.hoveredHinge !== null && selection.edgeIds.includes(s.hoveredHinge)
+              ? s.hoveredHinge
+              : null,
+          ...(dropActive
+            ? {
+                activeAngleIntent: null,
+                angleIntentGeneration: s.angleIntentGeneration + 1,
+              }
+            : {}),
+        };
+      }),
 
     setHoveredHinge: (hinge) =>
       set((s) => ({
@@ -2927,16 +2967,9 @@ export const useAppStore = create<AppState>((set, get) => {
       for (const hinge of valid) drivers.set(hinge, deg);
       set({ drivers });
       if (changedForGuide) get().completeGuideAction("angle");
-      // まとめて動かすときも、固定するのは代表の1本だけにする。
-      //
-      // 選んだ折り線を全て「その角度ちょうど」で固定すると、実際の紙では
-      // 成り立たない。鶴の花弁折りで8本を同時に動かした実測では、紙が閉じず
-      // (閉包RMS 8.7e-3)食い込みも出た。代表1本だけを固定して残りを希望にすると、
-      // 45度でも90度でも147度でも閉包1e-15以下・食い込み0組で解け、8本の実際の
-      // 角度は要求から1.6度以内に収まる。折り線どうしがわずかに違う角度を
-      // 取れることが、紙が破れないために必要。
-      // 残りの選択は drivers に入っているので、そのまま希望角として送られる。
-      activateAngleIntent([valid[0]]);
+      // 動かしている折り目は選んだ全部(3Dで全部が水色に光る)。
+      // そのうち角度を固定するのは代表1本だけ(fixAll=false)。
+      activateAngleIntent(valid, false);
       pose.schedule();
     },
 
