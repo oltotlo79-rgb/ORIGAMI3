@@ -9,18 +9,27 @@
 
 import { describe, expect, it, vi } from "vitest";
 import * as THREE from "three";
+import { Line2 } from "three/examples/jsm/lines/Line2.js";
 import {
-  BACK_OFFSET_UNITS,
-  FACE_OFFSET_UNITS,
+  FOCUS_HIGHLIGHT_WIDTH_PX,
+  HIGHLIGHT_WIDTH_PX,
+  SUSPECT_HIGHLIGHT_WIDTH_PX,
   buildTopology,
   clearGroup,
   createContent,
+  createHighlightGeometry,
+  createHighlightLayer,
   createHighlightMaterials,
   createSoftContent,
+  highlightAppearance,
   updateFrame,
   updateSoftContent,
 } from "./sceneBuilder";
-import { layerOffsets } from "../../lib/layerOffset";
+import {
+  LAYER_STEP_RATIO,
+  MAX_STACK_RATIO,
+  layerOffsets,
+} from "../../lib/layerOffset";
 import type { Document, Face, Frame3D } from "../../lib/types";
 
 /** dispose回数を数える偽の資源(Three.jsの実体は使わない) */
@@ -87,7 +96,56 @@ describe("clearGroup(資源の破棄)", () => {
   });
 });
 
-describe("強調表示の深度判定", () => {
+describe("強調表示の太さ・深度判定", () => {
+  it("画面上の太さを保ちながら3Dでは紙を貫く半径を持たない", () => {
+    const geometry = createHighlightGeometry();
+    try {
+      geometry.computeBoundingBox();
+      const size = geometry.boundingBox!.getSize(new THREE.Vector3());
+
+      // 中心線はy方向の長さ1だけ。LineMaterialが画面方向へ太く描くため、
+      // 世界座標の幅・奥行きは厳密に0で、重なり全体0.001より小さい。
+      expect(size.toArray()).toEqual([0, 1, 0]);
+      expect(Math.max(size.x, size.z)).toBe(0);
+      expect(Math.max(size.x, size.z)).toBeLessThan(MAX_STACK_RATIO);
+      // 紙の層間隔を広げて直す退行も同時に防ぐ。
+      expect(LAYER_STEP_RATIO).toBe(0.0002);
+      expect(MAX_STACK_RATIO).toBe(0.001);
+    } finally {
+      geometry.dispose();
+    }
+  });
+
+  it("5種類とも世界単位でなくCSSピクセルの見える太さを使う", () => {
+    const materials = createHighlightMaterials();
+    try {
+      expect(Object.keys(materials)).toHaveLength(5);
+      expect({
+        selected: materials.highlightMaterial.linewidth,
+        reference: materials.referenceHighlightMaterial.linewidth,
+        focus: materials.focusHighlightMaterial.linewidth,
+        suspect: materials.suspectHighlightMaterial.linewidth,
+        active: materials.activeHighlightMaterial.linewidth,
+      }).toEqual({
+        selected: HIGHLIGHT_WIDTH_PX,
+        reference: HIGHLIGHT_WIDTH_PX,
+        focus: FOCUS_HIGHLIGHT_WIDTH_PX,
+        suspect: SUSPECT_HIGHLIGHT_WIDTH_PX,
+        active: HIGHLIGHT_WIDTH_PX,
+      });
+      expect(HIGHLIGHT_WIDTH_PX).toBe(4);
+      expect(FOCUS_HIGHLIGHT_WIDTH_PX).toBe(6);
+      expect(SUSPECT_HIGHLIGHT_WIDTH_PX).toBe(8);
+      for (const material of Object.values(materials)) {
+        expect(material.worldUnits).toBe(false);
+        expect(material.depthFunc).toBe(THREE.LessEqualDepth);
+        expect(material.depthWrite).toBe(false);
+      }
+    } finally {
+      for (const material of Object.values(materials)) material.dispose();
+    }
+  });
+
   it("選択・参照・フォーカス・操作中の折り目は紙の裏側なら隠す", () => {
     const materials = createHighlightMaterials();
     try {
@@ -106,8 +164,102 @@ describe("強調表示の深度判定", () => {
     const materials = createHighlightMaterials();
     try {
       expect(materials.suspectHighlightMaterial.depthTest).toBe(false);
+      expect(materials.suspectHighlightMaterial.color.getHex()).toBe(0xff2038);
     } finally {
       for (const material of Object.values(materials)) material.dispose();
+    }
+  });
+
+  it("5役割と省略時を実際の材質・描画順へ漏れなく対応付ける", () => {
+    const materials = createHighlightMaterials();
+    try {
+      expect([
+        highlightAppearance(materials, undefined),
+        highlightAppearance(materials, "hinge"),
+        highlightAppearance(materials, "reference"),
+        highlightAppearance(materials, "focus"),
+        highlightAppearance(materials, "active"),
+        highlightAppearance(materials, "suspect"),
+      ]).toEqual([
+        { material: materials.highlightMaterial, renderOrder: 5 },
+        { material: materials.highlightMaterial, renderOrder: 5 },
+        { material: materials.referenceHighlightMaterial, renderOrder: 5 },
+        { material: materials.focusHighlightMaterial, renderOrder: 5 },
+        { material: materials.activeHighlightMaterial, renderOrder: 6 },
+        { material: materials.suspectHighlightMaterial, renderOrder: 7 },
+      ]);
+    } finally {
+      for (const material of Object.values(materials)) material.dispose();
+    }
+  });
+
+  it("本番と同じLine2プールを5役割＋省略経路で更新・再利用・破棄する", () => {
+    const layer = createHighlightLayer();
+    let disposed = false;
+    try {
+      const roles = [
+        undefined,
+        "hinge",
+        "reference",
+        "focus",
+        "active",
+        "suspect",
+      ] as const;
+      const segments = roles.map((role, index) => ({
+        edgeId: index,
+        a: new THREE.Vector3(index, 0, 0),
+        b: new THREE.Vector3(index, index + 1, 0),
+        role,
+      }));
+
+      layer.setSegments(segments);
+      expect(layer.group.children).toHaveLength(6);
+      const firstPool = [...layer.group.children] as Line2[];
+      const expected = [
+        highlightAppearance(layer.materials, undefined),
+        highlightAppearance(layer.materials, "hinge"),
+        highlightAppearance(layer.materials, "reference"),
+        highlightAppearance(layer.materials, "focus"),
+        highlightAppearance(layer.materials, "active"),
+        highlightAppearance(layer.materials, "suspect"),
+      ];
+      for (let i = 0; i < firstPool.length; i++) {
+        const line = firstPool[i];
+        expect(line).toBeInstanceOf(Line2);
+        expect(line.geometry).toBe(layer.geometry);
+        expect(line.material).toBe(expected[i].material);
+        expect(line.renderOrder).toBe(expected[i].renderOrder);
+        expect(line.frustumCulled).toBe(false);
+        expect(line.position.toArray()).toEqual([i, 0, 0]);
+        expect(line.scale.toArray()).toEqual([1, i + 1, 1]);
+        expect(line.visible).toBe(true);
+      }
+
+      layer.setSegments(segments.slice(0, 2));
+      expect(layer.group.children).toEqual(firstPool);
+      expect(firstPool.map((line) => line.visible)).toEqual([
+        true,
+        true,
+        false,
+        false,
+        false,
+        false,
+      ]);
+      layer.setSegments(segments);
+      expect(layer.group.children).toEqual(firstPool);
+      expect(firstPool.every((line) => line.visible)).toBe(true);
+
+      const geometryDispose = vi.spyOn(layer.geometry, "dispose");
+      const materialDisposes = Object.values(layer.materials).map((material) =>
+        vi.spyOn(material, "dispose"),
+      );
+      layer.dispose();
+      disposed = true;
+      expect(layer.group.children).toEqual([]);
+      expect(geometryDispose).toHaveBeenCalledTimes(1);
+      for (const dispose of materialDisposes) expect(dispose).toHaveBeenCalledTimes(1);
+    } finally {
+      if (!disposed) layer.dispose();
     }
   });
 });
@@ -403,16 +555,20 @@ describe("createContent / updateFrame(形の更新)", () => {
     expect(normal.getZ(3)).toBeCloseTo(-1, 6); // 面1は裏返り=白で描かれる
     expect(content.positions[2]).toBe(content.positions[3 * 3 + 2]);
 
-    // 深度が同値のときは表の色が残るよう、裏面だけ余分に奥へずらす
+    // 面の実際の深度は動かさない。表と裏が同値のときだけ、裏面のstrict lessで
+    // 先に見えている表を守る。境界線は同値を通すLEQUALで面より後に描く。
     const materials = content.mesh.material as THREE.MeshLambertMaterial[];
     expect(materials[0].side).toBe(THREE.FrontSide);
     expect(materials[1].side).toBe(THREE.BackSide);
-    for (const m of materials) expect(m.polygonOffset).toBe(true);
-    expect(materials[0].polygonOffsetUnits).toBe(FACE_OFFSET_UNITS);
-    expect(materials[1].polygonOffsetUnits).toBe(BACK_OFFSET_UNITS);
-    expect(materials[1].polygonOffsetUnits).toBeGreaterThan(
-      materials[0].polygonOffsetUnits,
-    );
+    for (const m of materials) {
+      expect(m.depthTest).toBe(true);
+      expect(m.depthWrite).toBe(true);
+      expect(m.polygonOffset).toBe(false);
+    }
+    expect(materials[0].depthFunc).toBe(THREE.LessEqualDepth);
+    expect(materials[1].depthFunc).toBe(THREE.LessDepth);
+    expect(content.mesh.renderOrder).toBe(0);
+    expect(content.line.renderOrder).toBe(1);
   });
 
   it("立体・折り途中で重なった面も層の上下を保って離れる", () => {

@@ -10,6 +10,9 @@
 
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { Line2 } from "three/examples/jsm/lines/Line2.js";
+import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
+import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import type {
   DisplaySettings,
   Document,
@@ -55,17 +58,26 @@ export function canvas3dBackgroundColor(canvas: HTMLCanvasElement): string {
     DEFAULT_BACKGROUND_COLOR
   );
 }
-/** 選択中ヒンジの太さ(紙の長辺=1.0を基準にした半径) */
-const HIGHLIGHT_RADIUS = 0.006;
+/**
+ * 選択中ヒンジの画面上の太さ(CSS px)。
+ *
+ * 層間隔の1/4以下の円柱にすると半径は0.00005以下となり、400pxの既定表示では
+ * 直径が約0.03pxで見えない。そこで3Dの半径を持たない画面上4 CSS pxの線へ替える。
+ * ANGLE/D3D11の原寸オフスクリーン描画でも紙面上で連続して見えることを目視済み。
+ * 紙の裏側は材質の深度判定で隠す。
+ */
+export const HIGHLIGHT_WIDTH_PX = 4;
+/** 指している1本は通常線より見分けやすくする。 */
+export const FOCUS_HIGHLIGHT_WIDTH_PX = 6;
+/** 食い込み原因は警告として最も目立たせる。 */
+export const SUSPECT_HIGHLIGHT_WIDTH_PX = 8;
 /** カメラ画角(度) */
 const CAMERA_FOV = 45;
 /** 初期カメラの向き(紙の中心から見た方向。斜め上=手前上から見下ろす) */
 const CAMERA_DIR = new THREE.Vector3(0.35, -0.85, 0.95).normalize();
 /** 紙全体が収まるための距離の余裕 */
 const CAMERA_MARGIN = 1.35;
-/** 強調表示の円柱の分割数 */
-const HIGHLIGHT_SEGMENTS = 8;
-/** 円柱の伸ばす向き(強調表示の回転計算に使う) */
+/** 強調表示の伸ばす向き(回転計算に使う) */
 const AXIS_Y = new THREE.Vector3(0, 1, 0);
 /** 紙の長辺(展開図は長辺=1.0の正規化座標。層のずらし量の基準にする) */
 const PAPER_LONG_SIDE = 1;
@@ -254,27 +266,19 @@ function toColor(rgb: [number, number, number]): THREE.Color {
   return new THREE.Color(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255);
 }
 
-/** 面を奥へずらす量(境界線が面に埋もれないように) */
-export const FACE_OFFSET_UNITS = 1;
 /**
- * 裏面を表面より更に奥へずらす量。
+ * 面のマテリアル。紙面の実際の深度をそのまま書き込む。
  *
- * 表と裏は同じ三角形を2回描くので、Three.jsは必ず表→裏の順に描く。深度判定は
- * 「同値なら通す」なので、紙が完全に重なって深度が同値になると、後から描かれる
- * 裏面が表の色を塗りつぶし、表を向いた面まで裏の白になってしまう(実機で発生)。
- * 裏面だけ深度を余分に奥へずらし、同値のときは表の色が残るようにする。
+ * 面を奥へずらすpolygon offsetは、0.0002しかない層間隔を打ち消し、裏の強調線を
+ * 露出させ得るので使わない。同じ深度で表と裏が重なったときだけ、後から描く裏面を
+ * strict lessにして、先に見えている表面を塗りつぶさない。
  */
-export const BACK_OFFSET_UNITS = 3;
-
-/** 面のマテリアル。境界線が面に埋もれないよう面を少しだけ奥へずらして描く */
 function faceMaterial(rgb: [number, number, number], side: THREE.Side) {
   return new THREE.MeshLambertMaterial({
     color: toColor(rgb),
     side,
-    polygonOffset: true,
-    polygonOffsetFactor: 1,
-    polygonOffsetUnits:
-      side === THREE.BackSide ? BACK_OFFSET_UNITS : FACE_OFFSET_UNITS,
+    polygonOffset: false,
+    depthFunc: side === THREE.BackSide ? THREE.LessDepth : THREE.LessEqualDepth,
   });
 }
 
@@ -316,6 +320,8 @@ export function createContent(
     lineGeometry,
     new THREE.LineBasicMaterial({ color: OUTLINE_COLOR }),
   );
+  // 面と同じ深度ではLEQUALで境界線を残す。面の深度自体は動かさない。
+  line.renderOrder = 1;
   // 形が毎フレーム変わるので、範囲の当たり判定による省略は行わない
   mesh.frustumCulled = false;
   line.frustumCulled = false;
@@ -427,6 +433,7 @@ export function createSoftContent(
     lineGeometry,
     new THREE.LineBasicMaterial({ color: OUTLINE_COLOR }),
   );
+  line.renderOrder = 1;
   mesh.frustumCulled = false;
   line.frustumCulled = false;
   return { signature: softSignature(soft), layout, mesh, line, positions };
@@ -508,36 +515,178 @@ export interface HighlightSegment extends HingeSegment {
   role?: "hinge" | "reference" | "focus" | "suspect" | "active";
 }
 
-/** 強調表示5種類の材質を作る。深度判定の違いを単体検査できる形にまとめる。 */
-export function createHighlightMaterials() {
-  const highlightMaterial = new THREE.MeshBasicMaterial({
-    color: HIGHLIGHT_COLOR,
-    depthTest: true,
-  });
-  const referenceHighlightMaterial = new THREE.MeshBasicMaterial({
-    color: REFERENCE_HIGHLIGHT_COLOR,
-    depthTest: true,
-  });
-  const focusHighlightMaterial = new THREE.MeshBasicMaterial({
-    color: FOCUS_HIGHLIGHT_COLOR,
-    depthTest: true,
-  });
-  const suspectHighlightMaterial = new THREE.MeshBasicMaterial({
-    color: SUSPECT_HIGHLIGHT_COLOR,
+/** @types/threeがまだ公開していないLineMaterialの実在するlinewidthアクセサ。 */
+export type HighlightLineMaterial = LineMaterial & { linewidth: number };
+
+/** 強調表示5種類の共有材質。 */
+export interface HighlightMaterials {
+  highlightMaterial: HighlightLineMaterial;
+  referenceHighlightMaterial: HighlightLineMaterial;
+  focusHighlightMaterial: HighlightLineMaterial;
+  suspectHighlightMaterial: HighlightLineMaterial;
+  activeHighlightMaterial: HighlightLineMaterial;
+}
+
+/** 世界単位の断面を作らず、画面上で一定の太さを保つ線材質を作る。 */
+function createHighlightMaterial(
+  color: number,
+  linewidth: number,
+  depthTest: boolean,
+): HighlightLineMaterial {
+  const material = new LineMaterial({
+    color,
+    worldUnits: false,
+    alphaToCoverage: true,
+    depthTest,
+    depthFunc: THREE.LessEqualDepth,
+    depthWrite: false,
+  }) as HighlightLineMaterial;
+  material.linewidth = linewidth;
+  return material;
+}
+
+/** 強調表示5種類の材質を作る。太さと深度判定を単体検査できる形にまとめる。 */
+export function createHighlightMaterials(): HighlightMaterials {
+  const highlightMaterial = createHighlightMaterial(
+    HIGHLIGHT_COLOR,
+    HIGHLIGHT_WIDTH_PX,
+    true,
+  );
+  const referenceHighlightMaterial = createHighlightMaterial(
+    REFERENCE_HIGHLIGHT_COLOR,
+    HIGHLIGHT_WIDTH_PX,
+    true,
+  );
+  const focusHighlightMaterial = createHighlightMaterial(
+    FOCUS_HIGHLIGHT_COLOR,
+    FOCUS_HIGHLIGHT_WIDTH_PX,
+    true,
+  );
+  const suspectHighlightMaterial = createHighlightMaterial(
+    SUSPECT_HIGHLIGHT_COLOR,
+    SUSPECT_HIGHLIGHT_WIDTH_PX,
     // 食い込みは紙の内側で起きるため、隠れると原因の折り目を見つけられない。
     // これだけは意図的に手前へ描く。
-    depthTest: false,
-  });
-  const activeHighlightMaterial = new THREE.MeshBasicMaterial({
-    color: ACTIVE_HIGHLIGHT_COLOR,
-    depthTest: true,
-  });
+    false,
+  );
+  const activeHighlightMaterial = createHighlightMaterial(
+    ACTIVE_HIGHLIGHT_COLOR,
+    HIGHLIGHT_WIDTH_PX,
+    true,
+  );
   return {
     highlightMaterial,
     referenceHighlightMaterial,
     focusHighlightMaterial,
     suspectHighlightMaterial,
     activeHighlightMaterial,
+  };
+}
+
+/**
+ * 強調表示の中心線。画面方向へだけ太くするLine2用なので、世界座標ではx/z方向の
+ * 幅が0、すなわち紙の重なりを幾何的に貫通する半径を持たない。
+ */
+export function createHighlightGeometry(): LineGeometry {
+  const geometry = new LineGeometry();
+  geometry.setPositions([0, 0, 0, 0, 1, 0]);
+  return geometry;
+}
+
+const HIGHLIGHT_RENDER_ORDER = 5;
+const ACTIVE_HIGHLIGHT_RENDER_ORDER = 6;
+const SUSPECT_HIGHLIGHT_RENDER_ORDER = 7;
+
+/** 5役割を実際に使う材質・描画順へ対応付ける。role省略時はhingeと同じ。 */
+export function highlightAppearance(
+  materials: HighlightMaterials,
+  role: HighlightSegment["role"],
+): { material: HighlightLineMaterial; renderOrder: number } {
+  switch (role) {
+    case "suspect":
+      return {
+        material: materials.suspectHighlightMaterial,
+        renderOrder: SUSPECT_HIGHLIGHT_RENDER_ORDER,
+      };
+    case "active":
+      return {
+        material: materials.activeHighlightMaterial,
+        renderOrder: ACTIVE_HIGHLIGHT_RENDER_ORDER,
+      };
+    case "reference":
+      return {
+        material: materials.referenceHighlightMaterial,
+        renderOrder: HIGHLIGHT_RENDER_ORDER,
+      };
+    case "focus":
+      return {
+        material: materials.focusHighlightMaterial,
+        renderOrder: HIGHLIGHT_RENDER_ORDER,
+      };
+    case "hinge":
+    case undefined:
+      return {
+        material: materials.highlightMaterial,
+        renderOrder: HIGHLIGHT_RENDER_ORDER,
+      };
+  }
+}
+
+/** createSceneが実際に使う強調線の生成・プール更新・破棄をまとめた層。 */
+export interface HighlightLayer {
+  readonly group: THREE.Group;
+  readonly geometry: LineGeometry;
+  readonly materials: HighlightMaterials;
+  setSegments(segments: HighlightSegment[]): void;
+  dispose(): void;
+}
+
+/**
+ * 強調線の実描画物を作る。補助関数だけを検査して本番が円柱へ戻る退行を防ぐため、
+ * createSceneと単体検査はこの同じ経路を使う。
+ */
+export function createHighlightLayer(): HighlightLayer {
+  const group = new THREE.Group();
+  const geometry = createHighlightGeometry();
+  const materials = createHighlightMaterials();
+  const dir = new THREE.Vector3();
+
+  return {
+    group,
+    geometry,
+    materials,
+    setSegments(segments) {
+      const pool = group.children;
+      let used = 0;
+      for (const seg of segments) {
+        dir.subVectors(seg.b, seg.a);
+        const length = dir.length();
+        if (length < 1e-9) continue;
+        let line = pool[used] as Line2 | undefined;
+        if (!line) {
+          line = new Line2(geometry, materials.highlightMaterial);
+          line.frustumCulled = false;
+          group.add(line);
+        }
+        const appearance = highlightAppearance(materials, seg.role);
+        line.material = appearance.material;
+        // 紙と同じ深度の表面では強調線を見せるため、紙より後に描く。
+        // 深度判定する4種類は後描きでも紙の裏側なら隠れ、食い込みの赤だけは
+        // 深度判定を切って最後に描くため、内側でも原因を見つけられる。
+        line.renderOrder = appearance.renderOrder;
+        line.position.copy(seg.a);
+        line.quaternion.setFromUnitVectors(AXIS_Y, dir.normalize());
+        line.scale.set(1, length, 1);
+        line.visible = true;
+        used++;
+      }
+      for (let i = used; i < pool.length; i++) pool[i].visible = false;
+    },
+    dispose() {
+      group.clear(); // 全Line2が共有する資源は以下でそれぞれ1回だけ破棄する
+      geometry.dispose();
+      for (const material of Object.values(materials)) material.dispose();
+    },
   };
 }
 
@@ -582,7 +731,8 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
   scene.add(fill);
 
   const contentGroup = new THREE.Group();
-  const highlightGroup = new THREE.Group();
+  const highlightLayer = createHighlightLayer();
+  const highlightGroup = highlightLayer.group;
   // 折った結果の下見。紙に隠れず常に見えるよう深度判定を切って最後に描く
   const previewMaterial = new THREE.MeshBasicMaterial({
     color: PREVIEW_COLOR,
@@ -615,23 +765,6 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
   // 描画資源が失われて復帰したときは描き直す(復帰直後は画面が空になるため)
   const onContextRestored = () => render();
   canvas.addEventListener("webglcontextrestored", onContextRestored);
-
-  // 強調表示は長さ1の円柱1個を使い回し、位置・向き・伸ばし方だけ変える
-  const highlightGeometry = new THREE.CylinderGeometry(
-    HIGHLIGHT_RADIUS,
-    HIGHLIGHT_RADIUS,
-    1,
-    HIGHLIGHT_SEGMENTS,
-  );
-  highlightGeometry.translate(0, 0.5, 0); // 原点を端点aに合わせる
-  const {
-    highlightMaterial,
-    referenceHighlightMaterial,
-    focusHighlightMaterial,
-    suspectHighlightMaterial,
-    activeHighlightMaterial,
-  } = createHighlightMaterials();
-  const dir = new THREE.Vector3();
 
   /** 表示中のたわみの網(null なら従来の面の描き方) */
   let soft: SoftContent | null = null;
@@ -689,45 +822,7 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
       render();
     },
     setHighlight(segments) {
-      const pool = highlightGroup.children;
-      let used = 0;
-      for (const seg of segments) {
-        dir.subVectors(seg.b, seg.a);
-        const length = dir.length();
-        if (length < 1e-9) continue;
-        let mesh = pool[used] as THREE.Mesh | undefined;
-        if (!mesh) {
-          mesh = new THREE.Mesh(highlightGeometry, highlightMaterial);
-          mesh.frustumCulled = false;
-          highlightGroup.add(mesh);
-        }
-        mesh.material =
-          seg.role === "suspect"
-            ? suspectHighlightMaterial
-            : seg.role === "active"
-              ? activeHighlightMaterial
-              : seg.role === "reference"
-                ? referenceHighlightMaterial
-                : seg.role === "focus"
-                  ? focusHighlightMaterial
-                  : highlightMaterial;
-        // 紙と同じ深度の表面では強調線を見せるため、紙より後に描く。
-        // 深度判定する4種類は後描きでも紙の裏側なら隠れ、食い込みの赤だけは
-        // 深度判定を切って最後に描くため、内側でも原因を見つけられる。
-        mesh.renderOrder = seg.role === "suspect" ? 7 : seg.role === "active" ? 6 : 5;
-        mesh.position.copy(seg.a);
-        mesh.quaternion.setFromUnitVectors(AXIS_Y, dir.normalize());
-        const thickness =
-          seg.role === "suspect"
-            ? 2
-            : seg.role === "focus"
-              ? 1.45
-              : 1;
-        mesh.scale.set(thickness, length, thickness);
-        mesh.visible = true;
-        used++;
-      }
-      for (let i = used; i < pool.length; i++) pool[i].visible = false;
+      highlightLayer.setSegments(segments);
       render();
     },
     setPreview(polygons, lift) {
@@ -769,13 +864,7 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
       api.setSoft(null); // たわみの表示物も片付ける(外していた面・線が入れ物へ戻る)
       clearGroup(contentGroup);
       api.content = null;
-      highlightGroup.clear(); // 形と材質は共有しているのでここでは壊さない
-      highlightGeometry.dispose();
-      highlightMaterial.dispose();
-      referenceHighlightMaterial.dispose();
-      focusHighlightMaterial.dispose();
-      suspectHighlightMaterial.dispose();
-      activeHighlightMaterial.dispose();
+      highlightLayer.dispose();
       renderer.dispose();
     },
   };
