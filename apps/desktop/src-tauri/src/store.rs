@@ -59,7 +59,8 @@ pub struct DocumentView {
     /// 平らに畳めない疑いのある点(前川定理・川崎定理を満たさない内部頂点)。
     /// 操作は止めず、2D画面で色を変えて知らせるだけ(CPE-009)
     pub violations: Vec<VertexId>,
-    /// 今回の平坦化指定に関係し、指定角まで届かなかったときだけ全体通知へ出す点。
+    /// 今回の平坦化指定に関係し、指定角まで届かなかったか紙が食い込んだときに
+    /// 全体通知へ出す点。
     /// 生の `violations` とは分け、操作の可否には使わない。
     pub flat_fold_violations: Vec<VertexId>,
     /// 最新ステップまで自動再生した立体(SEQ-004)。手順が空ならNone
@@ -601,8 +602,45 @@ fn build_view(doc: &Document, mut warnings: Vec<String>) -> DocumentView {
 /// 既存の角度緩和診断が記録を始める `1e-6°` と同じ値にそろえる。
 const FLAT_TARGET_EPS_DEG: f64 = 1e-6;
 
+/// 姿勢計算で既に得た接触情報を、平坦折り通知に使う条件へ絞る。
+///
+/// `contact_detected` は補正前の途中姿勢も含む累積値である。全折り目を一度に完成角へ
+/// 補間すると、正しく畳める作品でも途中だけ接触して最終交差0組になることがあるため、
+/// その値は一部の折り目をまとめて動かした操作だけで採用する。補正後の最終姿勢に
+/// 交差が残る場合は、要求範囲によらず常に採用する。
+pub(crate) fn pose_flat_fold_notice_intersects(
+    cp: &CreasePattern,
+    targets: &[Driver],
+    contact_detected: bool,
+    final_intersects: bool,
+) -> bool {
+    if final_intersects {
+        return true;
+    }
+    if !contact_detected {
+        return false;
+    }
+
+    let latest_targets: HashMap<EdgeId, f64> = targets
+        .iter()
+        .map(|target| (target.hinge, target.target_angle_deg))
+        .collect();
+    let mut crease_edges = cp
+        .edges
+        .iter()
+        .filter(|edge| matches!(edge.kind, EdgeKind::Mountain | EdgeKind::Valley))
+        .peekable();
+    let requests_every_crease_flat = crease_edges.peek().is_some()
+        && crease_edges.all(|edge| {
+            latest_targets.get(&edge.id).is_some_and(|target| {
+                target.is_finite() && (target.abs() - 180.0).abs() <= FLAT_TARGET_EPS_DEG
+            })
+        });
+    !requests_every_crease_flat
+}
+
 /// 今回±180°を求めた折り目だけで局所平坦折り条件を検査し、かつそのうち1本でも
-/// 指定角へ届かなかった場合に限って、通知対象の点を返す。
+/// 指定角へ届かなかったか、紙の食い込みが検出された場合に通知対象の点を返す。
 ///
 /// 検査用CPは複製して作り、元のCPも操作結果も変更しない。通知は表示情報だけであり、
 /// 呼び出し側が姿勢計算や手順再生を止める条件にはしない。
@@ -610,6 +648,7 @@ pub(crate) fn flat_fold_notice_violations(
     cp: &CreasePattern,
     targets: &[Driver],
     angles: &HashMap<EdgeId, f64>,
+    paper_intersects: bool,
 ) -> Vec<VertexId> {
     // 先に全要求を辺ごとにまとめてから±180°へ絞る。同じ辺が複数回現れた場合は
     // 後の要求を優先するため、pose_solveで後置したhardがpreferredを確実に上書きする。
@@ -652,7 +691,22 @@ pub(crate) fn flat_fold_notice_violations(
             !actual.is_finite() || (actual - target).abs() > FLAT_TARGET_EPS_DEG
         })
     });
-    if missed { violations } else { Vec::new() }
+    if missed || paper_intersects {
+        violations
+    } else {
+        Vec::new()
+    }
+}
+
+/// 手順再生で既に計算した最終フレームの交差組を、そのまま通知条件へ接続する。
+/// 呼び出し側で自己交差判定を増やさず、姿勢・手順は結果にかかわらず返す。
+pub(crate) fn replay_flat_fold_notice_violations(
+    cp: &CreasePattern,
+    targets: &[Driver],
+    angles: &HashMap<EdgeId, f64>,
+    intersections: &[(FaceId, FaceId)],
+) -> Vec<VertexId> {
+    flat_fold_notice_violations(cp, targets, angles, !intersections.is_empty())
 }
 
 /// ビューへ手順の自動再生結果(立体・飛ばした手順・警告)を載せる
@@ -669,11 +723,6 @@ pub fn attach_replay(view: &mut DocumentView) {
     }
     let up_to = view.doc.sequence.len();
     let mut replayed = ori3_layers::replay_with_faces(&view.doc, &view.faces, up_to, 1.0);
-    view.flat_fold_violations = flat_fold_notice_violations(
-        &view.doc.cp,
-        &replayed.sequence_targets,
-        &replayed.hinge_angles,
-    );
     view.sequence_targets = replayed.sequence_targets.clone();
     view.angles = replayed.hinge_angles.clone();
     view.relaxations = replayed.relaxations.clone();
@@ -701,6 +750,12 @@ pub fn attach_replay(view: &mut DocumentView) {
         },
     );
     let intersections = ori3_rigid::self_intersection_pairs(&replayed.frame);
+    view.flat_fold_violations = replay_flat_fold_notice_violations(
+        &view.doc.cp,
+        &replayed.sequence_targets,
+        &replayed.hinge_angles,
+        &intersections,
+    );
     replayed.suspect_hinges = ori3_rigid::suspect_hinges_for_intersections(
         &view.doc.cp,
         &view.faces,
@@ -1250,11 +1305,52 @@ mod tests {
         cp: &CreasePattern,
         targets: &[Driver],
         angles: &HashMap<EdgeId, f64>,
-    ) -> (usize, usize, usize) {
+        contact_detected: bool,
+        paper_intersects: bool,
+        contact_count: usize,
+    ) -> (usize, usize, usize, usize, usize, usize) {
         let raw = ori3_cp::local_violations(cp).len();
-        let filtered = flat_fold_notice_violations(cp, targets, &HashMap::new()).len();
-        let notice = flat_fold_notice_violations(cp, targets, angles).len();
-        (raw, filtered, notice)
+        let filtered = flat_fold_notice_violations(cp, targets, &HashMap::new(), false).len();
+        let notice = flat_fold_notice_violations(cp, targets, angles, paper_intersects).len();
+        (
+            raw,
+            filtered,
+            usize::from(contact_detected),
+            usize::from(paper_intersects),
+            contact_count,
+            notice,
+        )
+    }
+
+    fn solved_flat_fold_counts(
+        label: &str,
+        cp: &CreasePattern,
+        targets: &[Driver],
+    ) -> (usize, usize, usize, usize, usize, usize) {
+        let faces = ori3_cp::extract_faces(cp);
+        let motion = ori3_rigid::solve_motion(cp, &faces, targets, None, None, true);
+        let solved = motion.result;
+        assert!(
+            solved.angles.values().all(|angle| angle.is_finite()),
+            "{label}の実角は全て有限: rms={:.3e} warnings={:?}",
+            solved.closure_rms,
+            solved.frame.warnings
+        );
+        let contact_count = ori3_rigid::self_intersection_pairs(&solved.frame).len();
+        let paper_intersects = pose_flat_fold_notice_intersects(
+            cp,
+            targets,
+            motion.contact_detected,
+            contact_count > 0,
+        );
+        flat_fold_counts(
+            cp,
+            targets,
+            &solved.angles,
+            motion.contact_detected,
+            paper_intersects,
+            contact_count,
+        )
     }
 
     #[test]
@@ -1266,14 +1362,19 @@ mod tests {
             targets.iter().map(|target| (target.hinge, 90.0)).collect();
 
         assert_eq!(
-            flat_fold_notice_violations(&cp, &targets, &missed),
+            flat_fold_notice_violations(&cp, &targets, &missed, false),
             vec![9, 10, 11, 12],
             "利用者の図では指定角未到達の4点を知らせる"
         );
         assert_eq!(
-            flat_fold_notice_violations(&cp, &targets, &reached_angles(&targets)),
+            flat_fold_notice_violations(&cp, &targets, &reached_angles(&targets), false),
             Vec::<VertexId>::new(),
-            "同じ要求でも全て指定角へ届けば知らせない"
+            "全て指定角へ届き、紙も食い込んでいなければ知らせない"
+        );
+        assert_eq!(
+            flat_fold_notice_violations(&cp, &targets, &reached_angles(&targets), true),
+            vec![9, 10, 11, 12],
+            "全て指定角へ届いても紙が食い込んでいれば4点を知らせる"
         );
 
         let opposite: HashMap<EdgeId, f64> = targets
@@ -1281,7 +1382,7 @@ mod tests {
             .map(|target| (target.hinge, -target.target_angle_deg))
             .collect();
         assert_eq!(
-            flat_fold_notice_violations(&cp, &targets, &opposite),
+            flat_fold_notice_violations(&cp, &targets, &opposite, false),
             vec![9, 10, 11, 12],
             "+180°と-180°を指定角の到達判定では同一視しない"
         );
@@ -1294,10 +1395,122 @@ mod tests {
             target_angle_deg: 90.0,
         }));
         assert!(
-            flat_fold_notice_violations(&cp, &overridden, &missed).is_empty(),
+            flat_fold_notice_violations(&cp, &overridden, &missed, true).is_empty(),
             "後置したhardがpreferredを上書きする"
         );
         assert_eq!(cp, original, "通知検査は元の展開図を変更しない");
+    }
+
+    #[test]
+    fn replay_flat_fold_notice_reuses_existing_intersections() {
+        let cp = flat_fold_notice_user_cp();
+        let targets = user_flat_targets();
+        let angles = reached_angles(&targets);
+
+        assert!(
+            replay_flat_fold_notice_violations(&cp, &targets, &angles, &[]).is_empty(),
+            "最終交差がなければ、指定角到達だけでは再生通知を出さない"
+        );
+        assert_eq!(
+            replay_flat_fold_notice_violations(&cp, &targets, &angles, &[(0, 1)]),
+            vec![9, 10, 11, 12],
+            "再生側で既に得た交差組があれば4点を知らせる"
+        );
+    }
+
+    #[test]
+    fn pose_flat_fold_notice_filters_only_transient_full_sweep_contacts() {
+        let cp = flat_fold_notice_user_cp();
+        let partial_targets = user_flat_targets();
+        assert!(pose_flat_fold_notice_intersects(
+            &cp,
+            &partial_targets,
+            true,
+            false
+        ));
+        assert!(!pose_flat_fold_notice_intersects(
+            &cp,
+            &partial_targets,
+            false,
+            false
+        ));
+
+        let all_targets = all_crease_flat_targets(&cp);
+        assert_eq!(all_targets.len(), 20);
+        assert!(
+            !pose_flat_fold_notice_intersects(&cp, &all_targets, true, false),
+            "全折り目を完成角へ補間した途中だけの接触は通知へ上げない"
+        );
+        assert!(
+            pose_flat_fold_notice_intersects(&cp, &all_targets, false, true),
+            "補正後の最終交差は全折り目一括でも必ず通知へ上げる"
+        );
+
+        let mut aux_only = Document::new(Paper {
+            width_mm: 150.0,
+            height_mm: 150.0,
+        })
+        .cp;
+        ori3_cp::insert_segment(&mut aux_only, [0.0, 0.0], [1.0, 1.0], EdgeKind::Aux);
+        let aux_target = aux_only
+            .edges
+            .iter()
+            .find(|edge| edge.kind == EdgeKind::Aux)
+            .map(|edge| Driver {
+                hinge: edge.id,
+                target_angle_deg: 180.0,
+            })
+            .expect("補助線を追加する");
+        assert!(
+            pose_flat_fold_notice_intersects(&aux_only, &[aux_target], true, false),
+            "山谷の折り目が0本でも空集合を全折り目一括とはみなさない"
+        );
+    }
+
+    #[test]
+    fn flat_fold_notice_reports_four_reached_points_when_paper_intersects() {
+        let cp = flat_fold_notice_user_cp();
+        let faces = ori3_cp::extract_faces(&cp);
+        let targets = user_flat_targets();
+        assert_eq!(targets.len(), 8, "利用者がまとめて動かした折り目は8本");
+        let motion = ori3_rigid::solve_motion(&cp, &faces, &targets, None, None, true);
+        let solved = motion.result;
+        let raw_intersections = ori3_rigid::self_intersection_pairs(&solved.frame);
+
+        assert!(solved.converged, "180°の姿勢計算は収束する");
+        assert!(
+            solved.relaxations.is_empty(),
+            "8本とも指定角へ届くので譲りは0件: {:?}",
+            solved.relaxations
+        );
+        assert!(!motion.contact_stopped, "接触を検出しても操作を止めない");
+        assert!(
+            targets.iter().all(|target| {
+                solved.angles.get(&target.hinge).is_some_and(|actual| {
+                    (actual - target.target_angle_deg).abs() <= FLAT_TARGET_EPS_DEG
+                })
+            }),
+            "8本すべてが指定した180°へ届く: {:?}",
+            solved.angles
+        );
+        assert!(
+            motion.contact_detected,
+            "指定角へ届いていても紙が食い込む: raw={} warnings={:?} angles={:?}",
+            raw_intersections.len(),
+            solved.frame.warnings,
+            solved.angles
+        );
+        let paper_intersects = pose_flat_fold_notice_intersects(
+            &cp,
+            &targets,
+            motion.contact_detected,
+            !raw_intersections.is_empty(),
+        );
+        assert_eq!(
+            flat_fold_notice_violations(&cp, &targets, &solved.angles, paper_intersects,),
+            vec![9, 10, 11, 12],
+            "食い込みがあれば平らに畳めない4点を知らせる"
+        );
     }
 
     #[test]
@@ -1341,55 +1554,69 @@ mod tests {
             "操作中の折り目は指定した180°まで動く"
         );
         assert_eq!(
-            flat_fold_notice_violations(&cp, &targets, &solved.angles),
+            flat_fold_notice_violations(
+                &cp,
+                &targets,
+                &solved.angles,
+                !ori3_rigid::self_intersection_pairs(&solved.frame).is_empty(),
+            ),
             vec![9, 10, 11, 12],
             "ほかの指定が届かない4点は、操作を止めずに知らせる"
         );
     }
 
     #[test]
-    fn five_existing_works_have_69_raw_12_filtered_and_zero_notices() {
+    fn five_existing_works_have_69_raw_12_filtered_zero_intersections_and_zero_notices() {
         let devil: Document = serde_json::from_str(include_str!(
             "../../../../crates/ori3-layers/tests/fixtures/devil-024.ori3"
         ))
         .expect("悪魔24を読む");
         let devil_replayed = ori3_layers::replay(&devil, devil.sequence.len(), 1.0);
+        let devil_contacts = ori3_rigid::self_intersection_pairs(&devil_replayed.frame).len();
         let devil_counts = flat_fold_counts(
             &devil.cp,
             &devil_replayed.sequence_targets,
             &devil_replayed.hinge_angles,
+            devil_contacts > 0,
+            devil_contacts > 0,
+            devil_contacts,
         );
 
         let crane = front_fixture_cp(include_str!("../../src/lib/__fixtures__/crane.json"));
         let crane_targets = all_crease_flat_targets(&crane);
-        let crane_counts =
-            flat_fold_counts(&crane, &crane_targets, &reached_angles(&crane_targets));
+        let crane_counts = solved_flat_fold_counts("鶴", &crane, &crane_targets);
 
         let frog = front_fixture_cp(include_str!("../../src/lib/__fixtures__/frog.json"));
         let frog_targets = all_crease_flat_targets(&frog);
-        let frog_counts = flat_fold_counts(&frog, &frog_targets, &reached_angles(&frog_targets));
+        let frog_counts = solved_flat_fold_counts("カエル", &frog, &frog_targets);
 
         let yakko = yakko_cp();
         let yakko_targets = all_crease_flat_targets(&yakko);
-        let yakko_counts =
-            flat_fold_counts(&yakko, &yakko_targets, &reached_angles(&yakko_targets));
+        let yakko_counts = solved_flat_fold_counts("やっこさん", &yakko, &yakko_targets);
 
         let rose: Document = serde_json::from_str(include_str!(
             "../../../../crates/ori3-layers/tests/fixtures/rose-029.ori3"
         ))
         .expect("ローズ29を読む");
         let rose_replayed = ori3_layers::replay(&rose, rose.sequence.len(), 1.0);
+        let rose_contacts = ori3_rigid::self_intersection_pairs(&rose_replayed.frame).len();
         let rose_counts = flat_fold_counts(
             &rose.cp,
             &rose_replayed.sequence_targets,
             &rose_replayed.hinge_angles,
+            rose_contacts > 0,
+            rose_contacts > 0,
+            rose_contacts,
         );
 
-        assert_eq!(devil_counts, (6, 2, 0), "悪魔");
-        assert_eq!(crane_counts, (3, 3, 0), "鶴");
-        assert_eq!(frog_counts, (3, 3, 0), "カエル");
-        assert_eq!(yakko_counts, (0, 0, 0), "やっこさん");
-        assert_eq!(rose_counts, (57, 4, 0), "ローズ");
+        // (生の局所違反, ±180°候補, 経路中の累積接触, 通知に使う食い込み,
+        //  最終交差組, 通知点)。全折り目を同時に完成角へ補間する3作品では、
+        // 最終交差0組でも途中だけ接触するため、その累積値を通知へ上げない。
+        assert_eq!(devil_counts, (6, 2, 0, 0, 0, 0), "悪魔");
+        assert_eq!(crane_counts, (3, 3, 1, 0, 0, 0), "鶴");
+        assert_eq!(frog_counts, (3, 3, 1, 0, 0, 0), "カエル");
+        assert_eq!(yakko_counts, (0, 0, 1, 0, 0, 0), "やっこさん");
+        assert_eq!(rose_counts, (57, 4, 0, 0, 0, 0), "ローズ");
 
         let total = [
             devil_counts,
@@ -1399,10 +1626,17 @@ mod tests {
             rose_counts,
         ]
         .into_iter()
-        .fold((0, 0, 0), |sum, counts| {
-            (sum.0 + counts.0, sum.1 + counts.1, sum.2 + counts.2)
+        .fold((0, 0, 0, 0, 0, 0), |sum, counts| {
+            (
+                sum.0 + counts.0,
+                sum.1 + counts.1,
+                sum.2 + counts.2,
+                sum.3 + counts.3,
+                sum.4 + counts.4,
+                sum.5 + counts.5,
+            )
         });
-        assert_eq!(total, (69, 12, 0));
+        assert_eq!(total, (69, 12, 3, 0, 0, 0));
     }
 
     fn current_flat_state(store: &DocumentStore) -> ori3_layers::FlatState {

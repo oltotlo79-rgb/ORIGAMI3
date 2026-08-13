@@ -20,6 +20,7 @@ use crate::autosave;
 use crate::store::{
     DocumentStore, DocumentView, add_layer_order_warning,
     add_penetration_warning_for_intersections, attach_replay, flat_fold_notice_violations,
+    pose_flat_fold_notice_intersects, replay_flat_fold_notice_violations,
 };
 use ori3_export::{CpSvgOptions, cp_png, cp_svg, diagram_pdf, diagram_svg_pages};
 use ori3_model::{CreasePattern, Driver, EdgeId, EditOp, Paper, SeqOp, VertexId};
@@ -40,7 +41,7 @@ pub struct PoseOutcome {
     pub suspect_hinges: Vec<EdgeId>,
     /// 紙どうしの接触を検出したか。接触しても要求角まで計算を続ける。
     pub contact_detected: bool,
-    /// 今回の±180°指定に関係し、指定角まで届かなかった通知対象の点。
+    /// 今回の±180°指定に関係し、指定角まで届かなかったか紙が食い込んだ通知対象の点。
     pub flat_fold_violations: Vec<VertexId>,
 }
 
@@ -370,8 +371,14 @@ pub fn pose_solve(
         ); // SIM-007
         // たわみもロックの外で計算する(規約どおり)
         let mesh = soft_mesh(&cp, &faces, &result.frame, soft.as_ref());
+        let paper_intersects = pose_flat_fold_notice_intersects(
+            &cp,
+            &requested_targets,
+            contact_detected,
+            !intersections.is_empty(),
+        );
         let flat_fold_violations =
-            flat_fold_notice_violations(&cp, &requested_targets, &result.angles);
+            flat_fold_notice_violations(&cp, &requested_targets, &result.angles, paper_intersects);
         if result.closure_rms.is_finite() && result.angles.values().all(|angle| angle.is_finite()) {
             lock(&state).store_pose_angles(result.angles.clone()); // 短いロックで書き戻し
         }
@@ -445,8 +452,12 @@ pub fn sequence_replay(
         }
         // たわみもロックの外で計算する(規約どおり)
         let mesh = soft_mesh(&doc.cp, &faces, &result.frame, soft.as_ref());
-        let flat_fold_violations =
-            flat_fold_notice_violations(&doc.cp, &result.sequence_targets, &result.hinge_angles);
+        let flat_fold_violations = replay_flat_fold_notice_violations(
+            &doc.cp,
+            &result.sequence_targets,
+            &result.hinge_angles,
+            &intersections,
+        );
         let angles = result.hinge_angles.clone();
         let sequence_targets = result.sequence_targets.clone();
         let relaxations = result.relaxations.clone();
