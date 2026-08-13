@@ -22,6 +22,7 @@ import {
 import { DEFAULT_CONSTRUCT, type ConstructOptions } from "../../lib/construct";
 import { DEFAULT_CURVE, type CurveOptions } from "../../lib/curve";
 import { intersectDirectionRayWithSegment } from "../../lib/directionSnap";
+import { paperMirrorLine } from "../../lib/mirror";
 import type { Document, EdgeKind, EditOp, Vec2 } from "../../lib/types";
 import { screenToWorld } from "./renderer";
 
@@ -129,12 +130,13 @@ function makeCtx(
   violations: number[] = [],
   curve: Partial<CurveOptions> = {},
 ) {
+  const doc = squareDoc();
   const applyEdit = vi.fn<(op: EditOp) => void>();
   const drawSegment = vi.fn<(a: Vec2, b: Vec2, kind: EdgeKind) => void>();
   const drawCurve = vi.fn<(points: Vec2[], kind: EdgeKind) => void>();
   const beginFoldDraft = vi.fn<(line: [Vec2, Vec2], source: "2d" | "3d") => void>();
   const ctx: InteractionCtx = {
-    doc: squareDoc(),
+    doc,
     view: { scale: 500, offsetX: 0, offsetY: 500 },
     tool: "construct",
     selection: { edgeIds: [], vertexIds: [] },
@@ -142,6 +144,7 @@ function makeCtx(
     curve: { ...DEFAULT_CURVE, ...curve },
     wheelBehavior: "scroll",
     violations,
+    mirrorAxis: paperMirrorLine(doc.paper, "paperVertical"),
     state: initialEphemeralState(),
     setView: vi.fn(),
     applyEdit,
@@ -328,7 +331,7 @@ describe("点のドラッグ移動(選択ツール)", () => {
     expect(ctx.state.vertexDrag).toBeNull();
   });
 
-  it("頂点移動は実交点より方眼を優先する", () => {
+  it("点移動の正確な候補が近くになければ従来どおり方眼へ吸着する", () => {
     const { ctx, applyEdit } = makeCtx();
     ctx.doc = directionGridConflictDoc();
     ctx.tool = "select";
@@ -339,6 +342,54 @@ describe("点のドラッグ移動(選択ツール)", () => {
     expect(ctx.state.vertexDrag?.to).toEqual([0.25, 0.5]);
     onMouseUp(ctx, toScreen(cursor), 0);
     expect(applyEdit).toHaveBeenCalledWith({ type: "MoveVertex", id: 1, to: [0.25, 0.5] });
+  });
+
+  it("点をつかんで、縦中心で折り返した正しい位置へ1e-12未満で動かせる", () => {
+    const target: Vec2 = [0.20710678118654752, 0.5];
+    const { ctx, applyEdit } = makeCtx();
+    ctx.tool = "select";
+    ctx.doc.display.grid_divisions = 4;
+    ctx.doc.cp.vertices.push(
+      { id: 4, pos: [0.25, 0.5] },
+      { id: 5, pos: [0.7928932188134525, 0.5] },
+    );
+    ctx.doc.cp.next_vertex_id = 6;
+    const cursor: Vec2 = [(target[0] + 0.25) / 2, target[1]];
+
+    onMouseDown(ctx, toScreen([0.25, 0.5]), 0);
+    onMouseMove(ctx, toScreen(cursor));
+    const preview = ctx.state.vertexDrag?.to;
+    expect(Math.abs((preview?.[0] ?? Number.NaN) - target[0])).toBeLessThan(1e-12);
+    expect(Math.abs((preview?.[1] ?? Number.NaN) - target[1])).toBeLessThan(1e-12);
+
+    onMouseUp(ctx, toScreen(cursor), 0);
+    expect(applyEdit).toHaveBeenCalledTimes(1);
+    const edit = applyEdit.mock.calls[0][0];
+    expect(edit.type).toBe("MoveVertex");
+    if (edit.type !== "MoveVertex") throw new Error("MoveVertexではない編集が送られた");
+    expect(edit.id).toBe(4);
+    expect(Math.abs(edit.to[0] - target[0])).toBeLessThan(1e-12);
+    expect(Math.abs(edit.to[1] - target[1])).toBeLessThan(1e-12);
+  });
+
+  it("クリックだけでは候補を作らず、移動開始時と表示倍率変更時に12pxへ準備する", () => {
+    const { ctx } = makeCtx();
+    ctx.tool = "select";
+    ctx.doc.cp.vertices.push({ id: 4, pos: [0.25, 0.5] });
+    ctx.doc.cp.next_vertex_id = 5;
+
+    onMouseDown(ctx, toScreen([0.25, 0.5]), 0);
+    const before = ctx.state.vertexDrag?.snap;
+    expect(before).toBeNull();
+
+    onMouseMove(ctx, toScreen([0.4, 0.5]));
+    const prepared = ctx.state.vertexDrag?.snap;
+    expect(prepared?.radiusNorm).toBe(12 / 500);
+
+    ctx.view.scale = 250;
+    onMouseMove(ctx, toScreenAtScale([0.4, 0.5], 250));
+    expect(ctx.state.vertexDrag?.snap).not.toBe(prepared);
+    expect(ctx.state.vertexDrag?.snap?.radiusNorm).toBe(12 / 250);
   });
 
   it("動かさずに離したときは選択のままで編集しない", () => {

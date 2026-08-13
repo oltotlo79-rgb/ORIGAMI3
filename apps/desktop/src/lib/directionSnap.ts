@@ -52,6 +52,81 @@ function near(a: Vec2, b: Vec2, tolerance = CONNECT_TOLERANCE): boolean {
   return length(sub(a, b)) <= tolerance;
 }
 
+interface LineSegmentParameters {
+  unit: Vec2;
+  lineDistance: number;
+  segmentRatio: number;
+}
+
+interface LineIntersectionParameters {
+  firstUnit: Vec2;
+  firstLength: number;
+  firstDistance: number;
+  secondLength: number;
+  secondDistance: number;
+}
+
+/**
+ * start + unit * lineDistance と a + (b-a) * segmentRatio が交わる値を返す。
+ * 範囲の制限は呼び出し側で行い、平行・同一直線・長さ0は一意な交点なしとする。
+ */
+function lineSegmentParameters(
+  start: Vec2,
+  direction: Vec2,
+  a: Vec2,
+  b: Vec2,
+): LineSegmentParameters | null {
+  const unit = normalize(direction);
+  if (!unit) return null;
+  const segment = sub(b, a);
+  const denominator = cross(unit, segment);
+  if (Math.abs(denominator) <= EPS) return null;
+
+  const fromStart = sub(a, start);
+  return {
+    unit,
+    lineDistance: cross(fromStart, segment) / denominator,
+    segmentRatio: cross(fromStart, unit) / denominator,
+  };
+}
+
+/**
+ * 2直線の交点を、両方の方向を単位化して対称に求める。
+ * 通常描画用の半直線計算とは分け、線分長や引数順で平行判定が変わらないようにする。
+ */
+function lineIntersectionParameters(
+  a: Vec2,
+  b: Vec2,
+  c: Vec2,
+  d: Vec2,
+): LineIntersectionParameters | null {
+  const first = sub(b, a);
+  const second = sub(d, c);
+  const firstLength = length(first);
+  const secondLength = length(second);
+  if (firstLength <= EPS || secondLength <= EPS) return null;
+
+  const firstUnit: Vec2 = [first[0] / firstLength, first[1] / firstLength];
+  const secondUnit: Vec2 = [second[0] / secondLength, second[1] / secondLength];
+  const denominator = cross(firstUnit, secondUnit);
+  if (Math.abs(denominator) <= EPS) return null;
+
+  const offset = sub(c, a);
+  const firstDistance = cross(offset, secondUnit) / denominator;
+  const secondDistance = cross(offset, firstUnit) / denominator;
+  return {
+    firstUnit,
+    firstLength,
+    firstDistance,
+    secondLength,
+    secondDistance,
+  };
+}
+
+function pointOnUnitLine(start: Vec2, unit: Vec2, distance: number): Vec2 {
+  return [start[0] + unit[0] * distance, start[1] + unit[1] * distance];
+}
+
 /**
  * 点を始点から direction へ伸びる半直線へ垂直投影する。
  * 投影先が始点より後ろにある場合と、方向が長さ0の場合は null を返す。
@@ -79,15 +154,9 @@ export function intersectDirectionRayWithSegment(
   a: Vec2,
   b: Vec2,
 ): Vec2 | null {
-  const unit = normalize(direction);
-  if (!unit) return null;
-  const segment = sub(b, a);
-  const denominator = cross(unit, segment);
-  if (Math.abs(denominator) <= EPS) return null;
-
-  const fromStart = sub(a, start);
-  const rayDistance = cross(fromStart, segment) / denominator;
-  const segmentRatio = cross(fromStart, unit) / denominator;
+  const intersection = lineSegmentParameters(start, direction, a, b);
+  if (!intersection) return null;
+  const { unit, lineDistance: rayDistance, segmentRatio } = intersection;
   if (
     rayDistance < -EPS ||
     segmentRatio < -EPS ||
@@ -97,7 +166,41 @@ export function intersectDirectionRayWithSegment(
   }
 
   const distance = Math.max(0, rayDistance);
-  return [start[0] + unit[0] * distance, start[1] + unit[1] * distance];
+  return pointOnUnitLine(start, unit, distance);
+}
+
+/**
+ * 2本の線分ab・cdの交点を返す。
+ * 線分の外側、平行・同一直線、長さ0では交点なしとする。
+ */
+export function intersectSegments(a: Vec2, b: Vec2, c: Vec2, d: Vec2): Vec2 | null {
+  const intersection = lineIntersectionParameters(a, b, c, d);
+  if (!intersection) return null;
+  if (
+    intersection.firstDistance < -EPS ||
+    intersection.firstDistance > intersection.firstLength + EPS ||
+    intersection.secondDistance < -EPS ||
+    intersection.secondDistance > intersection.secondLength + EPS
+  ) {
+    return null;
+  }
+  return pointOnUnitLine(a, intersection.firstUnit, intersection.firstDistance);
+}
+
+/**
+ * 線分ab・cdを両方向へ延ばした2直線の交点を返す。
+ * 平行・同一直線、長さ0では一意な交点がないためnullとする。
+ */
+export function intersectInfiniteLines(
+  a: Vec2,
+  b: Vec2,
+  c: Vec2,
+  d: Vec2,
+): Vec2 | null {
+  const intersection = lineIntersectionParameters(a, b, c, d);
+  return intersection
+    ? pointOnUnitLine(a, intersection.firstUnit, intersection.firstDistance)
+    : null;
 }
 
 /** startが線分ab上にあるか（端点を含む）。 */

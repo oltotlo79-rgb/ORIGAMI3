@@ -2,8 +2,15 @@
 // テスト用に手組みして検証する(頂点優先・グリッド・線上・範囲外null)。
 
 import { describe, expect, it } from "vitest";
+import { paperMirrorLine } from "../../lib/mirror";
 import type { Document, Edge, Vec2, Vertex } from "../../lib/types";
-import { paperExtent, snap, snapForMove, snapOnDirectionAxis } from "./snap";
+import {
+  paperExtent,
+  sameMoveMirrorAxis,
+  snap,
+  snapForMove,
+  snapOnDirectionAxis,
+} from "./snap";
 
 /** 150×150mm相当の正方形ドキュメント(輪郭4辺、グリッド8分割) */
 function makeDoc(overrides?: {
@@ -127,19 +134,226 @@ describe("snapForMove(点を動かしているときの吸着)", () => {
     const doc = makeDoc();
     // 頂点0(0,0)を動かしている間、その場所は吸着先にならずグリッドが選ばれる
     expect(snap(doc, [0.004, 0.004], 0.05)?.kind).toBe("vertex");
-    expect(snapForMove(doc, [0.004, 0.004], 0.05, 0)?.kind).toBe("grid");
+    expect(snapForMove(doc, [0.004, 0.004], 0.05, 0, null)?.kind).toBe("grid");
   });
 
   it("ほかの点には吸い付く", () => {
     const doc = makeDoc({ extraVertices: [{ id: 4, pos: [0.3, 0.3] }] });
-    const r = snapForMove(doc, [0.302, 0.301], 0.02, 0);
+    const r = snapForMove(doc, [0.302, 0.301], 0.02, 0, null);
     expect(r).toEqual({ pos: [0.3, 0.3], kind: "vertex" });
   });
 
   it("つながっている線の上には吸い付かない(線も一緒に動くため)", () => {
     // 対角線上の(0.3,0.3)はグリッド交点ではないので、線上吸着が無ければnull
     expect(snap(docWithDiagonal(), [0.31, 0.29], 0.02)?.kind).toBe("edge");
-    expect(snapForMove(docWithDiagonal(), [0.31, 0.29], 0.02, 0)).toBeNull();
+    expect(snapForMove(docWithDiagonal(), [0.31, 0.29], 0.02, 0, null)).toBeNull();
+  });
+
+  it("既存線分どうしの交点を方眼より優先し、正しい位置へ1e-12未満で吸着する", () => {
+    const target: Vec2 = [0.20710678118654752, 0.5];
+    const doc = makeDoc({
+      gridDivisions: 4,
+      extraVertices: [
+        { id: 4, pos: [0.25, 0.5] },
+        { id: 5, pos: [target[0] - 0.1, 0.4] },
+        { id: 6, pos: [target[0] + 0.1, 0.6] },
+        { id: 7, pos: [target[0] - 0.1, 0.6] },
+        { id: 8, pos: [target[0] + 0.1, 0.4] },
+      ],
+      extraEdges: [
+        { id: 4, v0: 5, v1: 6, kind: "Mountain" },
+        { id: 5, v0: 7, v1: 8, kind: "Valley" },
+      ],
+    });
+    const cursor: Vec2 = [(target[0] + 0.25) / 2, target[1]];
+
+    expect(snap(doc, cursor, 12 / 500)).toEqual({ pos: [0.25, 0.5], kind: "vertex" });
+    const result = snapForMove(doc, cursor, 12 / 500, 4, null);
+    expect(result?.kind).toBe("edge");
+    expect(Math.abs((result?.pos[0] ?? Number.NaN) - target[0])).toBeLessThan(1e-12);
+    expect(Math.abs((result?.pos[1] ?? Number.NaN) - target[1])).toBeLessThan(1e-12);
+  });
+
+  it("紙の縁と折り目の線分内交点も方眼より優先する", () => {
+    const doc = makeDoc({
+      gridDivisions: 4,
+      extraVertices: [
+        { id: 4, pos: [0.25, 0.25] },
+        { id: 5, pos: [0.2, -0.1] },
+        { id: 6, pos: [0.4, 0.1] },
+      ],
+      extraEdges: [{ id: 4, v0: 5, v1: 6, kind: "Mountain" }],
+    });
+
+    const result = snapForMove(doc, [0.28, 0.01], 0.03, 4, null);
+    expect(result?.kind).toBe("edge");
+    expect(result?.pos[0]).toBeCloseTo(0.3, 12);
+    expect(result?.pos[1]).toBe(0);
+  });
+
+  it("縦中心の基準線で既存頂点を折り返した位置へ1e-12未満で吸着する", () => {
+    const target: Vec2 = [0.20710678118654752, 0.5];
+    const doc = makeDoc({
+      gridDivisions: 4,
+      extraVertices: [
+        { id: 4, pos: [0.25, 0.5] },
+        { id: 5, pos: [0.7928932188134525, 0.5] },
+      ],
+    });
+    const cursor: Vec2 = [(target[0] + 0.25) / 2, target[1]];
+    const result = snapForMove(
+      doc,
+      cursor,
+      12 / 500,
+      4,
+      paperMirrorLine(doc.paper, "paperVertical"),
+    );
+
+    expect(result?.kind).toBe("vertex");
+    expect(Math.abs((result?.pos[0] ?? Number.NaN) - target[0])).toBeLessThan(1e-12);
+    expect(Math.abs((result?.pos[1] ?? Number.NaN) - target[1])).toBeLessThan(1e-12);
+  });
+
+  it("折り目どうしを延ばした線の交点へ1e-12未満で吸着する", () => {
+    const target: Vec2 = [0.20710678118654752, 0.5];
+    const doc = makeDoc({
+      gridDivisions: 4,
+      extraVertices: [
+        { id: 4, pos: [0.25, 0.5] },
+        { id: 5, pos: [0.05, 0.5] },
+        { id: 6, pos: [0.15, 0.5] },
+        { id: 7, pos: [target[0], 0.65] },
+        { id: 8, pos: [target[0], 0.8] },
+      ],
+      extraEdges: [
+        { id: 4, v0: 5, v1: 6, kind: "Mountain" },
+        { id: 5, v0: 7, v1: 8, kind: "Valley" },
+      ],
+    });
+    const cursor: Vec2 = [(target[0] + 0.25) / 2, target[1]];
+    const result = snapForMove(doc, cursor, 12 / 500, 4, null);
+
+    expect(result?.kind).toBe("edge");
+    expect(Math.abs((result?.pos[0] ?? Number.NaN) - target[0])).toBeLessThan(1e-12);
+    expect(Math.abs((result?.pos[1] ?? Number.NaN) - target[1])).toBeLessThan(1e-12);
+  });
+
+  it("正確な候補は12px以内だけ方眼より優先し、13pxでは従来どおり方眼へ吸着する", () => {
+    const scale = 500;
+    const target: Vec2 = [0.20710678118654752, 0.5];
+    const doc = makeDoc({
+      gridDivisions: 4,
+      extraVertices: [
+        { id: 4, pos: [0.25, 0.5] },
+        { id: 5, pos: [0.7928932188134525, 0.5] },
+      ],
+    });
+    const axis = paperMirrorLine(doc.paper, "paperVertical");
+
+    const atTwelve = snapForMove(
+      doc,
+      [target[0] + 12 / scale, target[1]],
+      12 / scale,
+      4,
+      axis,
+    );
+    expect(Math.abs((atTwelve?.pos[0] ?? Number.NaN) - target[0])).toBeLessThan(1e-12);
+    expect(Math.abs((atTwelve?.pos[1] ?? Number.NaN) - target[1])).toBeLessThan(1e-12);
+
+    expect(
+      snapForMove(
+        doc,
+        [target[0] + 13 / scale, target[1]],
+        12 / scale,
+        4,
+        axis,
+      ),
+    ).toEqual({ pos: [0.25, 0.5], kind: "grid" });
+  });
+
+  it("動かしている点につながる線は交点候補にも使わない", () => {
+    const doc = makeDoc({
+      gridDivisions: 0,
+      extraVertices: [
+        { id: 4, pos: [0.25, 0.5] },
+        { id: 5, pos: [0.5, 0.5] },
+        { id: 6, pos: [0.4, 0.4] },
+        { id: 7, pos: [0.4, 0.6] },
+      ],
+      extraEdges: [
+        { id: 4, v0: 4, v1: 5, kind: "Mountain" },
+        { id: 5, v0: 6, v1: 7, kind: "Valley" },
+      ],
+    });
+
+    expect(snapForMove(doc, [0.4, 0.5], 0.02, 4, null)).toBeNull();
+  });
+
+  it("紙の縁は折り目の延長交点には使わない", () => {
+    const doc = makeDoc({
+      gridDivisions: 4,
+      extraVertices: [
+        { id: 4, pos: [0.5, 0.5] },
+        { id: 5, pos: [0.3, 0.2] },
+        { id: 6, pos: [0.3, 0.3] },
+      ],
+      extraEdges: [{ id: 4, v0: 5, v1: 6, kind: "Mountain" }],
+    });
+
+    expect(snapForMove(doc, [0.3, 0], 0.06, 4, null)).toEqual({
+      pos: [0.25, 0],
+      kind: "grid",
+    });
+  });
+
+  it("紙外にある対称位置は候補にせず、紙端の方眼へ吸着する", () => {
+    const doc = makeDoc({
+      gridDivisions: 4,
+      extraVertices: [
+        { id: 4, pos: [0.5, 0.5] },
+        { id: 5, pos: [0.9, 0.5] },
+      ],
+    });
+    const axis = { p: [0.1, 0] as Vec2, d: [0, 1] as Vec2 };
+
+    expect(snapForMove(doc, [-0.7, 0.5], 0.75, 4, axis)).toEqual({
+      pos: [0, 0.5],
+      kind: "grid",
+    });
+  });
+
+  it("紙外にある折り目の延長交点は候補にせず、紙端の方眼へ吸着する", () => {
+    const doc = makeDoc({
+      gridDivisions: 4,
+      extraVertices: [
+        { id: 4, pos: [0.25, 0.25] },
+        { id: 5, pos: [0.2, 0.5] },
+        { id: 6, pos: [0.3, 0.5] },
+        { id: 7, pos: [0.2, 0.8] },
+        { id: 8, pos: [0.3, 0.9] },
+      ],
+      extraEdges: [
+        { id: 4, v0: 5, v1: 6, kind: "Mountain" },
+        { id: 5, v0: 7, v1: 8, kind: "Valley" },
+      ],
+    });
+
+    expect(snapForMove(doc, [-0.1, 0.5], 0.12, 4, null)).toEqual({
+      pos: [0, 0.5],
+      kind: "grid",
+    });
+  });
+
+  it("イベントごとに作り直された同値の基準線を同じ軸として扱う", () => {
+    const doc = makeDoc({
+      gridDivisions: 4,
+    });
+    const axis = paperMirrorLine(doc.paper, "paperVertical");
+    const equivalentAxis = paperMirrorLine(doc.paper, "paperVertical");
+
+    expect(axis).not.toBe(equivalentAxis);
+    expect(sameMoveMirrorAxis(axis, equivalentAxis)).toBe(true);
+    expect(sameMoveMirrorAxis(axis, paperMirrorLine(doc.paper, "paperHorizontal"))).toBe(false);
   });
 });
 

@@ -8,13 +8,17 @@
 
 import type { Document, EdgeKind, EditOp, Vec2 } from "../../lib/types";
 import type { WheelBehavior } from "../../lib/displayPrefs";
+import type { MirrorLine } from "../../lib/mirror";
 import type { Selection, ToolId } from "../../store/appStore";
 import { screenToWorld, type ViewTransform } from "./renderer";
 import {
   paperExtent,
+  prepareMoveSnap,
+  sameMoveMirrorAxis,
   snap,
   snapForMove,
   snapOnDirectionAxis,
+  type PreparedMoveSnap,
   type SnapResult,
 } from "./snap";
 import { CONSTRUCT_STEPS, constructLines, type ConstructOptions } from "../../lib/construct";
@@ -63,7 +67,7 @@ export interface EphemeralState {
   /** カーソルが乗っている「平らに畳めない点」のID(なければnull) */
   hoverViolation: number | null;
   /** ドラッグ中の点(CPE-006)。toは離したときに確定する位置(それまではプレビュー) */
-  vertexDrag: { id: number; from: Vec2; to: Vec2 } | null;
+  vertexDrag: { id: number; from: Vec2; to: Vec2; snap: PreparedMoveSnap | null } | null;
   /** 曲線モードでクリック済みの点(CPE-011)。順は[始点, 終点, 形を決める点…] */
   curvePoints: Vec2[];
 }
@@ -162,6 +166,8 @@ export interface InteractionCtx {
   wheelBehavior: WheelBehavior;
   /** 平らに畳めない点のID(Rust側の判定結果)。橙色の丸で知らせる */
   violations: number[];
+  /** 点を動かすとき、既存頂点を折り返す現在の対称基準線。 */
+  mirrorAxis: MirrorLine | null;
   state: EphemeralState; // その場で書き換える
   setView: (view: ViewTransform) => void;
   applyEdit: (op: EditOp) => void;
@@ -445,7 +451,12 @@ export function onMouseDown(
     const hit = pickVertex(ctx.doc, world, pickTol);
     const pos = hit === null ? null : ctx.doc.cp.vertices.find((v) => v.id === hit)?.pos;
     if (hit !== null && pos) {
-      ctx.state.vertexDrag = { id: hit, from: pos, to: pos };
+      ctx.state.vertexDrag = {
+        id: hit,
+        from: pos,
+        to: pos,
+        snap: null,
+      };
       ctx.state.marqueeStart = null;
       // Ctrl/Commandクリックは離したときに既存選択へ追加/解除する。
       // 通常の点ドラッグは従来どおり押した時点でその点を選ぶ。
@@ -482,7 +493,16 @@ export function onMouseMove(ctx: InteractionCtx, screen: Vec2, shiftHeld?: boole
   const drag = ctx.state.vertexDrag;
   if (drag && ctx.state.downScreen) {
     const radius = SNAP_RADIUS_PX / ctx.view.scale;
-    drag.to = snapForMove(ctx.doc, world, radius, drag.id)?.pos ?? world;
+    if (
+      drag.snap === null ||
+      drag.snap.doc !== ctx.doc ||
+      !sameMoveMirrorAxis(drag.snap.mirrorAxis, ctx.mirrorAxis) ||
+      drag.snap.radiusNorm !== radius
+    ) {
+      drag.snap = prepareMoveSnap(ctx.doc, drag.id, ctx.mirrorAxis, radius);
+    }
+    drag.to =
+      snapForMove(ctx.doc, world, radius, drag.id, ctx.mirrorAxis, drag.snap)?.pos ?? world;
     ctx.state.hoverSnap = null;
     ctx.state.directionSnap = null;
     return;

@@ -4,6 +4,8 @@ import {
   DIRECTION_SNAP_ANGLE_DEG,
   directionCandidatesAt,
   intersectDirectionRayWithSegment,
+  intersectInfiniteLines,
+  intersectSegments,
   projectPointToDirectionRay,
   snapLineDirection,
   snapToDirection,
@@ -193,5 +195,38 @@ describe("方向軸上の対応点", () => {
     expect(
       intersectDirectionRayWithSegment([0, 0], [0, 0], [0, -1], [0, 1]),
     ).toBeNull();
+  });
+
+  it("線分内の交点と、線分外にある延長線だけの交点を区別する", () => {
+    expect(intersectSegments([0, 0], [1, 1], [0, 1], [1, 0])).toEqual([0.5, 0.5]);
+    expect(intersectSegments([0, 0], [0.25, 0], [0.5, 0.5], [0.5, 1])).toBeNull();
+    expect(intersectInfiniteLines([0, 0], [0.25, 0], [0.5, 0.5], [0.5, 1])).toEqual([
+      0.5, 0,
+    ]);
+  });
+
+  it("平行・同一直線・長さ0の線には一意な交点を作らない", () => {
+    expect(intersectInfiniteLines([0, 0], [1, 0], [0, 1], [1, 1])).toBeNull();
+    expect(intersectInfiniteLines([0, 0], [1, 0], [0.5, 0], [2, 0])).toBeNull();
+    expect(intersectInfiniteLines([0, 0], [0, 0], [0, -1], [0, 1])).toBeNull();
+    expect(intersectInfiniteLines([0, -1], [0, 1], [0, 0], [0, 0])).toBeNull();
+  });
+
+  it("長さの比や引数順にかかわらず浅い角度の交点を同じように求める", () => {
+    const longA: Vec2 = [0, 0];
+    const longB: Vec2 = [1, 0];
+    const shortA: Vec2 = [0, -2.5e-10];
+    const shortB: Vec2 = [0.01, 2.5e-10];
+
+    const forward = intersectSegments(longA, longB, shortA, shortB);
+    const reversed = intersectSegments(shortA, shortB, longA, longB);
+    expect(forward).not.toBeNull();
+    expect(reversed).not.toBeNull();
+    expect(Math.abs((forward?.[0] ?? Number.NaN) - 0.005)).toBeLessThan(1e-12);
+    expect(Math.abs(forward?.[1] ?? Number.NaN)).toBeLessThan(1e-12);
+    expect(Math.abs((reversed?.[0] ?? Number.NaN) - 0.005)).toBeLessThan(1e-12);
+    expect(Math.abs(reversed?.[1] ?? Number.NaN)).toBeLessThan(1e-12);
+    expect(intersectSegments(longB, longA, shortA, shortB)).not.toBeNull();
+    expect(intersectSegments(longA, longB, shortB, shortA)).not.toBeNull();
   });
 });

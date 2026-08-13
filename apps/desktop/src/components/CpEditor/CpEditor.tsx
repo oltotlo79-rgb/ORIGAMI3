@@ -271,6 +271,11 @@ export function CpEditor({ fitRef }: Props) {
       curve: s.curve,
       wheelBehavior: s.wheelBehavior,
       violations: s.violations,
+      // 点移動の対称位置吸着は、対称描画のオン・オフに関係なく現在の基準を使う。
+      // 選んだ線が編集直後に無効なら、画面表示・対称編集と同じ縦中心へ戻す。
+      mirrorAxis:
+        mirrorLineForChoice(s.doc, s.mirrorAxis) ??
+        paperMirrorLine(s.doc.paper, "paperVertical"),
       state: stateRef.current,
       setView: (v) => {
         viewRef.current = v;
