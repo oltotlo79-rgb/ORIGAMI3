@@ -31,6 +31,7 @@ import {
   TECHNIQUE_LABEL,
   uniqueWarnings,
 } from "../lib/techniques";
+import { flatFoldNotice } from "../lib/flatFoldNotice";
 import { isTwistPolygonReady } from "../lib/twistPolygon";
 import {
   clampTechniqueLayerCount,
@@ -1603,6 +1604,7 @@ export function ContextPanel() {
   const warnings = useAppStore((s) => s.warnings);
   const poseWarnings = useAppStore((s) => s.poseWarnings);
   const replayWarnings = useAppStore((s) => s.replayWarnings);
+  const flatFoldViolations = useAppStore((s) => s.flatFoldViolations);
   const errorMessage = useAppStore((s) => s.errorMessage);
   const mirrorAxisNotice = useAppStore((s) => s.mirrorAxisNotice);
   const currentStep = useAppStore((s) => s.currentStep);
@@ -1615,7 +1617,13 @@ export function ContextPanel() {
   const hinges = useAppStore((s) => s.hinges);
   const relaxations = useAppStore((s) => s.relaxations);
   // 同じ文言は1回だけ出す(展開図の検査結果には自動再生の警告も合流している)
-  const allWarnings = uniqueWarnings(warnings, poseWarnings, replayWarnings);
+  const flatFoldWarning = flatFoldNotice(flatFoldViolations);
+  const allWarnings = uniqueWarnings(
+    warnings,
+    poseWarnings,
+    replayWarnings,
+    flatFoldWarning === null ? [] : [flatFoldWarning],
+  );
   const hasRelaxations = relaxationNotices(relaxations).length > 0;
   // 手順を選んでいる間はその手順の設定を出す(「折る前」「最新」は選択なし扱い)
   const stepSelected = currentStep !== null && currentStep >= 1;

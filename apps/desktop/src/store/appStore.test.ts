@@ -187,6 +187,7 @@ beforeEach(() => {
     hinges: new Set<number>(),
     warnings: [],
     violations: [],
+    flatFoldViolations: [],
     selection: { edgeIds: [], vertexIds: [] },
     errorMessage: null,
     docEpoch: 0,
@@ -327,6 +328,51 @@ function primeFakeTimers(): void {
 }
 
 describe("appStore 折り角度の指定", () => {
+  it("±180度で4点を知らせても角度を反映し、離した後も次の最新結果まで残す", async () => {
+    const view = makeHingeView(444);
+    useAppStore.setState({
+      doc: view.doc,
+      faces: view.faces,
+      hinges: new Set([5]),
+    });
+    vi.mocked(ipc.poseSolve)
+      .mockResolvedValueOnce({
+        ...makeSolveResult({ "5": 104.75 }),
+        frame: { faces: [], warnings: ["180度へ動かした形"] },
+        flat_fold_violations: [9, 10, 11, 12],
+      })
+      .mockResolvedValueOnce({
+        ...makeSolveResult({ "5": 90 }),
+        frame: { faces: [], warnings: ["次の形"] },
+        flat_fold_violations: [],
+      });
+
+    useAppStore.getState().setDriverAngle(5, 180);
+    await vi.waitFor(() =>
+      expect(useAppStore.getState().flatFoldViolations).toEqual([9, 10, 11, 12]),
+    );
+
+    let state = useAppStore.getState();
+    expect(state.drivers.get(5)).toBe(180);
+    expect(state.poseAngles.get(5)).toBe(104.75);
+    expect(state.frame3d?.warnings).toEqual(["180度へ動かした形"]);
+    expect(state.errorMessage).toBeNull();
+
+    await state.finishAngleIntent();
+    expect(useAppStore.getState().activeAngleIntent).toBeNull();
+    expect(useAppStore.getState().flatFoldViolations).toEqual([9, 10, 11, 12]);
+
+    useAppStore.getState().setDriverAngle(5, 90);
+    await vi.waitFor(() =>
+      expect(useAppStore.getState().flatFoldViolations).toEqual([]),
+    );
+    state = useAppStore.getState();
+    expect(state.drivers.get(5)).toBe(90);
+    expect(state.poseAngles.get(5)).toBe(90);
+    expect(state.frame3d?.warnings).toEqual(["次の形"]);
+    expect(state.errorMessage).toBeNull();
+  });
+
   it("接触を検出しても希望角を書き戻さず、警告状態だけを覚える", async () => {
     const view = makeHingeView(445);
     useAppStore.setState({
@@ -898,6 +944,40 @@ describe("appStore 折り角度の指定", () => {
 });
 
 describe("appStore 手順の表示と再生", () => {
+  it("4点を知らせても手順を再生し、次の最新再生結果が空なら解除する", async () => {
+    seedSequence(3);
+    vi.mocked(ipc.sequenceReplay)
+      .mockResolvedValueOnce({
+        ...makeReplayResult(),
+        frame: { faces: [], warnings: ["手順2の形"] },
+        flat_fold_violations: [9, 10, 11, 12],
+      })
+      .mockResolvedValueOnce({
+        ...makeReplayResult(),
+        frame: { faces: [], warnings: ["手順1の形"] },
+        flat_fold_violations: [],
+      });
+
+    useAppStore.getState().selectStep(2);
+    await vi.waitFor(() =>
+      expect(useAppStore.getState().flatFoldViolations).toEqual([9, 10, 11, 12]),
+    );
+
+    let state = useAppStore.getState();
+    expect(state.currentStep).toBe(2);
+    expect(state.frame3d?.warnings).toEqual(["手順2の形"]);
+    expect(state.errorMessage).toBeNull();
+
+    state.selectStep(1);
+    await vi.waitFor(() =>
+      expect(useAppStore.getState().flatFoldViolations).toEqual([]),
+    );
+    state = useAppStore.getState();
+    expect(state.currentStep).toBe(1);
+    expect(state.frame3d?.warnings).toEqual(["手順1の形"]);
+    expect(state.errorMessage).toBeNull();
+  });
+
   it("手順を選ぶと、その手順まで折った形を表示する", async () => {
     seedSequence(3);
     vi.mocked(ipc.sequenceReplay).mockResolvedValueOnce({
@@ -1762,6 +1842,32 @@ describe("技法(選ぶだけで折る)", () => {
     [0.5, 0],
     [0.5, 1],
   ];
+
+  it("平らに畳む技法で4点を知らせても技法と最新の形を適用する", async () => {
+    seedFolded();
+    const applied = makeStepView(3999, 2);
+    applied.frame = { faces: [], warnings: ["技法を適用した形"] };
+    applied.flat_fold_violations = [9, 10, 11, 12];
+    vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(applied);
+
+    const store = useAppStore.getState();
+    store.beginTechnique("InsideReverse");
+    store.setTechniqueFlap([0, 1]);
+    store.setTechniqueLine(LINE);
+    await store.commitTechnique();
+
+    expect(vi.mocked(ipc.sequenceApply)).toHaveBeenCalledTimes(1);
+    const op = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
+    expect(op.type).toBe("Technique");
+    expect(op.type === "Technique" && op.kind).toBe("InsideReverse");
+    const state = useAppStore.getState();
+    expect(state.doc?.sequence).toHaveLength(2);
+    expect(state.techniqueDraft).toBeNull();
+    expect(state.currentStep).toBeNull();
+    expect(state.frame3d?.warnings).toEqual(["技法を適用した形"]);
+    expect(state.flatFoldViolations).toEqual([9, 10, 11, 12]);
+    expect(state.errorMessage).toBeNull();
+  });
 
   it("中割り折り: フラップと折り線を選んでTechniqueを送る", async () => {
     seedFolded();

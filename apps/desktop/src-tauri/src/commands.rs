@@ -19,10 +19,10 @@ use tauri::State;
 use crate::autosave;
 use crate::store::{
     DocumentStore, DocumentView, add_layer_order_warning,
-    add_penetration_warning_for_intersections, attach_replay,
+    add_penetration_warning_for_intersections, attach_replay, flat_fold_notice_violations,
 };
 use ori3_export::{CpSvgOptions, cp_png, cp_svg, diagram_pdf, diagram_svg_pages};
-use ori3_model::{CreasePattern, Driver, EdgeId, EditOp, Paper, SeqOp};
+use ori3_model::{CreasePattern, Driver, EdgeId, EditOp, Paper, SeqOp, VertexId};
 use ori3_propose::{Skeleton, generate, pack};
 use ori3_soft::{SoftMesh, SoftSettings};
 
@@ -40,6 +40,8 @@ pub struct PoseOutcome {
     pub suspect_hinges: Vec<EdgeId>,
     /// 紙どうしの接触を検出したか。接触しても要求角まで計算を続ける。
     pub contact_detected: bool,
+    /// 今回の±180°指定に関係し、指定角まで届かなかった通知対象の点。
+    pub flat_fold_violations: Vec<VertexId>,
 }
 
 /// たわみの計算結果を足した `sequence_replay` の戻り値(SIM-012)。
@@ -55,6 +57,7 @@ pub struct ReplayOutcome {
     pub best_effort: bool,
     pub converged: bool,
     pub contact_detected: bool,
+    pub flat_fold_violations: Vec<VertexId>,
 }
 
 /// たわみの網を作る。指定が無い・切ってあるときは何もしない(従来どおりの動作)。
@@ -299,6 +302,9 @@ pub fn pose_solve(
         let (cp, faces, stored_warm, overlap_enabled, penetration_enabled) =
             lock(&state).pose_inputs(); // 複製のみ、即ロック解放
         let preferred = preferred.unwrap_or_default();
+        // 同じ辺が両方にあれば、現在操作中のhardを後から入れて優先する。
+        // warm_seedは出発角であって要求ではないため含めない。
+        let requested_targets: Vec<Driver> = preferred.iter().chain(&hard).cloned().collect();
         let explicit_warm: Option<HashMap<EdgeId, f64>> = warm_seed.map(|seed| {
             seed.into_iter()
                 .map(|driver| (driver.hinge, driver.target_angle_deg))
@@ -364,6 +370,8 @@ pub fn pose_solve(
         ); // SIM-007
         // たわみもロックの外で計算する(規約どおり)
         let mesh = soft_mesh(&cp, &faces, &result.frame, soft.as_ref());
+        let flat_fold_violations =
+            flat_fold_notice_violations(&cp, &requested_targets, &result.angles);
         if result.closure_rms.is_finite() && result.angles.values().all(|angle| angle.is_finite()) {
             lock(&state).store_pose_angles(result.angles.clone()); // 短いロックで書き戻し
         }
@@ -372,6 +380,7 @@ pub fn pose_solve(
             soft: mesh,
             suspect_hinges,
             contact_detected,
+            flat_fold_violations,
         })
     }))
 }
@@ -436,6 +445,8 @@ pub fn sequence_replay(
         }
         // たわみもロックの外で計算する(規約どおり)
         let mesh = soft_mesh(&doc.cp, &faces, &result.frame, soft.as_ref());
+        let flat_fold_violations =
+            flat_fold_notice_violations(&doc.cp, &result.sequence_targets, &result.hinge_angles);
         let angles = result.hinge_angles.clone();
         let sequence_targets = result.sequence_targets.clone();
         let relaxations = result.relaxations.clone();
@@ -456,6 +467,7 @@ pub fn sequence_replay(
             best_effort,
             converged,
             contact_detected,
+            flat_fold_violations,
         })
     }))
 }

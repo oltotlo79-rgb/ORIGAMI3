@@ -23,7 +23,11 @@ import { FirstRunGuide } from "./components/FirstRunGuide";
 import { HelpCenter } from "./components/dialogs/HelpCenter";
 import { ThemeRoot } from "./components/ThemeRoot";
 import { TooltipHost } from "./components/Tooltip";
-import { uniqueWarnings } from "./lib/techniques";
+import {
+  flatFoldViolationIds,
+  statusBadgeText,
+  warningCount as countWarnings,
+} from "./lib/flatFoldNotice";
 import { installCaptureApi } from "./captureApi";
 import type { AngleRelaxation } from "./lib/types";
 import "./App.css";
@@ -56,7 +60,16 @@ function App() {
   // 中央の2区画の広さの割合(UI-004)。境目のドラッグで変わる
   const splitRatio = useAppStore((s) => s.splitRatio);
   const warningCount = useAppStore(
-    (s) => uniqueWarnings(s.warnings, s.poseWarnings, s.replayWarnings).length,
+    (s) =>
+      countWarnings(
+        s.warnings,
+        s.poseWarnings,
+        s.replayWarnings,
+        s.flatFoldViolations,
+      ),
+  );
+  const flatFoldViolationCount = useAppStore(
+    (s) => flatFoldViolationIds(s.flatFoldViolations).length,
   );
   const poseConverged = useAppStore((s) => s.poseConverged);
   const relaxations = useAppStore((s) => s.relaxations);
@@ -68,6 +81,15 @@ function App() {
   const fit2dRef = useRef<(() => void) | null>(null);
   const fit3dRef = useRef<(() => void) | null>(null);
   const followStatus = relaxationStatus(relaxations, poseBestEffort);
+  const badgeText = statusBadgeText({
+    hasError,
+    followStatus,
+    poseConverged,
+    warningCount,
+    flatFoldViolationCount,
+  });
+  const showFollowStatus =
+    !hasError && flatFoldViolationCount === 0 && followStatus !== null;
 
   // 起動時に150×150mmの新規作品を開き、続けて前回の異常終了の有無を調べる
   // (残っていれば復旧ダイアログが出る。SYS-003)
@@ -188,12 +210,12 @@ function App() {
         <section className="pane pane-3d">
           <div className="pane-3d-view">
             <Viewer3D fitRef={fit3dRef} />
-            {(hasError || followStatus !== null || !poseConverged || warningCount > 0) && (
+            {badgeText !== null && (
               <div
                 className={
                   hasError
                     ? "status-badge error"
-                    : followStatus !== null
+                    : showFollowStatus
                       ? "status-badge follow"
                       : "status-badge"
                 }
@@ -210,15 +232,7 @@ function App() {
                   <path d="M12 8v6" stroke="currentColor" strokeLinecap="round" strokeWidth="2.4" />
                   <circle cx="12" cy="17.5" r="1.2" fill="currentColor" />
                 </svg>
-                <span>
-                  {hasError
-                    ? "エラー"
-                    : followStatus !== null
-                      ? followStatus
-                      : poseConverged
-                        ? `警告 ${warningCount}`
-                        : "⚠ 追従計算が収束していません"}
-                </span>
+                <span>{badgeText}</span>
               </div>
             )}
             {suspectHinges.length > 0 && (

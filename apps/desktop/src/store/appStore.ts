@@ -474,6 +474,8 @@ interface AppState {
   doc: Document | null;
   faces: Face[];
   warnings: string[];
+  /** 平らにする操作の最新結果で、利用者へ知らせる点(raw violationsとは別) */
+  flatFoldViolations: number[];
   violations: number[];
   selection: Selection;
   /** 複数スライダーのうち、いま指している折り目。2D/3Dの個別強調に使う。 */
@@ -1050,6 +1052,10 @@ export const useAppStore = create<AppState>((set, get) => {
         faces: view.faces,
         hinges: hingeEdgeIds(view.doc, view.faces),
         warnings: view.warnings,
+        flatFoldViolations: keepIfSame(
+          s.flatFoldViolations,
+          view.flat_fold_violations ?? [],
+        ),
         violations: view.violations,
         skipped: view.skipped,
         suspectHinges: keepIfSame(s.suspectHinges, view.suspect_hinges ?? []),
@@ -1385,6 +1391,10 @@ export const useAppStore = create<AppState>((set, get) => {
               r.value.suspect_hinges ?? [],
             ),
             poseWarnings: r.value.frame.warnings,
+            flatFoldViolations: keepIfSame(
+              get().flatFoldViolations,
+              r.value.flat_fold_violations ?? [],
+            ),
             poseConverged: r.value.converged,
             poseBestEffort: r.value.best_effort === true,
             poseClosureRms:
@@ -1606,6 +1616,10 @@ export const useAppStore = create<AppState>((set, get) => {
       // upToまでの再生結果なので、作品全体のskippedは上書きしない
       replaySkipped: keepIfSame(s.replaySkipped, r.value.skipped),
       replayWarnings: keepIfSame(s.replayWarnings, r.value.warnings),
+      flatFoldViolations: keepIfSame(
+        s.flatFoldViolations,
+        r.value.flat_fold_violations ?? [],
+      ),
       suspectHinges: keepIfSame(
         s.suspectHinges,
         r.value.suspect_hinges ?? [],
@@ -1855,6 +1869,7 @@ export const useAppStore = create<AppState>((set, get) => {
     faces: [],
     hinges: new Set<number>(),
     warnings: [],
+    flatFoldViolations: [],
     violations: [],
     selection: EMPTY_SELECTION,
     hoveredHinge: null,

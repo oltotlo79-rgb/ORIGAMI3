@@ -208,6 +208,8 @@ export interface DocumentView {
   doc: Document;
   faces: Face[];
   warnings: string[];
+  /** 今回の平らに畳む操作で知らせる点。rawのviolationsとは別の絞り込み済み結果 */
+  flat_fold_violations?: number[];
   violations: number[];
   /** 最新ステップまで自動再生した立体(SEQ-004)。手順が空ならnull */
   frame: Frame3D | null;
@@ -348,6 +350,8 @@ export interface ReplayResult {
   /** 折り線が見つからず飛ばされたステップID */
   skipped: number[];
   warnings: string[];
+  /** 今回の平らに畳む操作で知らせる点 */
+  flat_fold_violations?: number[];
   /** 補正後にも残る食い込みの原因候補ヒンジ */
   suspect_hinges?: number[];
   /** 手順から現在の辺IDへ解決した希望角（保存しない導出結果） */
@@ -369,6 +373,8 @@ export interface ReplayResult {
 export interface SolveResult {
   frame: Frame3D;
   converged: boolean;
+  /** 今回の平らに畳む操作で知らせる点 */
+  flat_fold_violations?: number[];
   /** 全ヒンジの角度(度)。キーは辺ID(JSONでは文字列になる) */
   angles: Record<string, number>;
   /** 実行した反復回数(warm start効果の確認用) */

@@ -82,6 +82,7 @@ function seed(drivers: Map<number, number>, poseAngles = new Map<number, number>
     warnings: [],
     poseWarnings: [],
     replayWarnings: [],
+    flatFoldViolations: [],
     errorMessage: null,
     mirrorAxis: { kind: "paperVertical" },
     mirrorAxisNotice: null,
@@ -109,6 +110,7 @@ afterEach(() => {
     poseAngles: new Map(),
     sequenceTargets: new Map(),
     relaxations: [],
+    flatFoldViolations: [],
     activeAngleIntent: null,
     hoveredHinge: null,
     mirrorAxis: { kind: "paperVertical" },
@@ -1134,5 +1136,21 @@ describe("曲線の折り目の設定(CPE-011)", () => {
     expect(useAppStore.getState().curve.segments).toBe(24);
     fireEvent.change(segments, { target: { value: "201" } });
     expect(useAppStore.getState().curve.segments).toBe(24);
+  });
+});
+
+describe("平らに畳めない点の警告欄", () => {
+  it("4点を重複なくまとめ、承認済みの文を1行だけ出す", () => {
+    seed(new Map());
+    useAppStore.setState({ flatFoldViolations: [9, 10, 11, 12, 9] });
+    render(<ContextPanel />);
+
+    const text =
+      "この折り方では平らに畳めない点が4か所あります。場所は展開図の橙色の丸で確認してください。折り目を足すか、使う折り目を減らすと畳めるようになることがあります。";
+    const rows = screen.getAllByText(text);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].classList.contains("warning-text")).toBe(true);
+    expect(rows[0].textContent).not.toContain("山と谷の本数");
+    expect(rows[0].textContent).not.toContain("向かい合う角の和");
   });
 });

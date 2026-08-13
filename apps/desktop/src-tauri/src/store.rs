@@ -59,6 +59,9 @@ pub struct DocumentView {
     /// 平らに畳めない疑いのある点(前川定理・川崎定理を満たさない内部頂点)。
     /// 操作は止めず、2D画面で色を変えて知らせるだけ(CPE-009)
     pub violations: Vec<VertexId>,
+    /// 今回の平坦化指定に関係し、指定角まで届かなかったときだけ全体通知へ出す点。
+    /// 生の `violations` とは分け、操作の可否には使わない。
+    pub flat_fold_violations: Vec<VertexId>,
     /// 最新ステップまで自動再生した立体(SEQ-004)。手順が空ならNone
     pub frame: Option<Frame3D>,
     /// 自動再生で折り線が見つからず飛ばされたステップのID
@@ -580,6 +583,7 @@ fn build_view(doc: &Document, mut warnings: Vec<String>) -> DocumentView {
         faces: ori3_cp::extract_faces(&doc.cp),
         warnings,
         violations: ori3_cp::local_violations(&doc.cp),
+        flat_fold_violations: Vec::new(),
         frame: None,
         skipped: Vec::new(),
         suspect_hinges: Vec::new(),
@@ -591,6 +595,64 @@ fn build_view(doc: &Document, mut warnings: Vec<String>) -> DocumentView {
         converged: true,
         fold_through_proposal: None,
     }
+}
+
+/// ±180°の指定と実角を照合するときの許容差(度)。
+/// 既存の角度緩和診断が記録を始める `1e-6°` と同じ値にそろえる。
+const FLAT_TARGET_EPS_DEG: f64 = 1e-6;
+
+/// 今回±180°を求めた折り目だけで局所平坦折り条件を検査し、かつそのうち1本でも
+/// 指定角へ届かなかった場合に限って、通知対象の点を返す。
+///
+/// 検査用CPは複製して作り、元のCPも操作結果も変更しない。通知は表示情報だけであり、
+/// 呼び出し側が姿勢計算や手順再生を止める条件にはしない。
+pub(crate) fn flat_fold_notice_violations(
+    cp: &CreasePattern,
+    targets: &[Driver],
+    angles: &HashMap<EdgeId, f64>,
+) -> Vec<VertexId> {
+    // 先に全要求を辺ごとにまとめてから±180°へ絞る。同じ辺が複数回現れた場合は
+    // 後の要求を優先するため、pose_solveで後置したhardがpreferredを確実に上書きする。
+    let mut flat_targets: HashMap<EdgeId, f64> = targets
+        .iter()
+        .map(|target| (target.hinge, target.target_angle_deg))
+        .collect();
+    flat_targets.retain(|_, target| {
+        target.is_finite() && (target.abs() - 180.0).abs() <= FLAT_TARGET_EPS_DEG
+    });
+    let edge_kinds: HashMap<EdgeId, EdgeKind> =
+        cp.edges.iter().map(|edge| (edge.id, edge.kind)).collect();
+    flat_targets.retain(|hinge, _| {
+        edge_kinds
+            .get(hinge)
+            .is_some_and(|kind| *kind != EdgeKind::Border)
+    });
+    if flat_targets.is_empty() {
+        return Vec::new();
+    }
+
+    let mut requested_cp = cp.clone();
+    for edge in &mut requested_cp.edges {
+        if edge.kind == EdgeKind::Border {
+            continue;
+        }
+        edge.kind = match flat_targets.get(&edge.id) {
+            Some(target) if target.is_sign_positive() => EdgeKind::Mountain,
+            Some(_) => EdgeKind::Valley,
+            None => EdgeKind::Aux,
+        };
+    }
+    let violations = ori3_cp::local_violations(&requested_cp);
+    if violations.is_empty() {
+        return violations;
+    }
+
+    let missed = flat_targets.iter().any(|(hinge, target)| {
+        angles.get(hinge).is_none_or(|actual| {
+            !actual.is_finite() || (actual - target).abs() > FLAT_TARGET_EPS_DEG
+        })
+    });
+    if missed { violations } else { Vec::new() }
 }
 
 /// ビューへ手順の自動再生結果(立体・飛ばした手順・警告)を載せる
@@ -607,6 +669,11 @@ pub fn attach_replay(view: &mut DocumentView) {
     }
     let up_to = view.doc.sequence.len();
     let mut replayed = ori3_layers::replay_with_faces(&view.doc, &view.faces, up_to, 1.0);
+    view.flat_fold_violations = flat_fold_notice_violations(
+        &view.doc.cp,
+        &replayed.sequence_targets,
+        &replayed.hinge_angles,
+    );
     view.sequence_targets = replayed.sequence_targets.clone();
     view.angles = replayed.hinge_angles.clone();
     view.relaxations = replayed.relaxations.clone();
@@ -820,7 +887,7 @@ fn is_border(cp: &CreasePattern, id: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ori3_model::{FoldStep, TechniqueKind};
+    use ori3_model::{Edge, FoldStep, TechniqueKind, Vertex};
 
     fn square_store() -> DocumentStore {
         let mut store = DocumentStore::default();
@@ -850,6 +917,492 @@ mod tests {
             alignment: None,
             note: String::new(),
         }
+    }
+
+    /// 利用者の画面から取り出した展開図(2026-08-13)。元の受け入れテストは
+    /// `crates/ori3-rigid/` にあるため変更せず、通知側の恒久検査用に同じ入力を置く。
+    fn flat_fold_notice_user_cp() -> CreasePattern {
+        CreasePattern {
+            vertices: vec![
+                Vertex {
+                    id: 0,
+                    pos: [0.0, 0.0],
+                },
+                Vertex {
+                    id: 1,
+                    pos: [1.0, 0.0],
+                },
+                Vertex {
+                    id: 2,
+                    pos: [1.0, 1.0],
+                },
+                Vertex {
+                    id: 3,
+                    pos: [0.0, 1.0],
+                },
+                Vertex {
+                    id: 4,
+                    pos: [0.0, 0.5],
+                },
+                Vertex {
+                    id: 5,
+                    pos: [1.0, 0.5],
+                },
+                Vertex {
+                    id: 6,
+                    pos: [0.5, 1.0],
+                },
+                Vertex {
+                    id: 7,
+                    pos: [0.5, 0.0],
+                },
+                Vertex {
+                    id: 8,
+                    pos: [0.5, 0.5],
+                },
+                Vertex {
+                    id: 9,
+                    pos: [0.7928932188134525, 0.5],
+                },
+                Vertex {
+                    id: 10,
+                    pos: [0.5, 0.20710678118654752],
+                },
+                Vertex {
+                    id: 11,
+                    pos: [0.25, 0.5],
+                },
+                Vertex {
+                    id: 12,
+                    pos: [0.5, 0.7928932188134525],
+                },
+            ],
+            edges: vec![
+                Edge {
+                    id: 4,
+                    v0: 3,
+                    v1: 4,
+                    kind: EdgeKind::Border,
+                },
+                Edge {
+                    id: 5,
+                    v0: 4,
+                    v1: 0,
+                    kind: EdgeKind::Border,
+                },
+                Edge {
+                    id: 6,
+                    v0: 1,
+                    v1: 5,
+                    kind: EdgeKind::Border,
+                },
+                Edge {
+                    id: 7,
+                    v0: 5,
+                    v1: 2,
+                    kind: EdgeKind::Border,
+                },
+                Edge {
+                    id: 9,
+                    v0: 2,
+                    v1: 6,
+                    kind: EdgeKind::Border,
+                },
+                Edge {
+                    id: 10,
+                    v0: 6,
+                    v1: 3,
+                    kind: EdgeKind::Border,
+                },
+                Edge {
+                    id: 11,
+                    v0: 0,
+                    v1: 7,
+                    kind: EdgeKind::Border,
+                },
+                Edge {
+                    id: 12,
+                    v0: 7,
+                    v1: 1,
+                    kind: EdgeKind::Border,
+                },
+                Edge {
+                    id: 17,
+                    v0: 0,
+                    v1: 8,
+                    kind: EdgeKind::Valley,
+                },
+                Edge {
+                    id: 18,
+                    v0: 8,
+                    v1: 2,
+                    kind: EdgeKind::Valley,
+                },
+                Edge {
+                    id: 19,
+                    v0: 8,
+                    v1: 9,
+                    kind: EdgeKind::Mountain,
+                },
+                Edge {
+                    id: 20,
+                    v0: 9,
+                    v1: 5,
+                    kind: EdgeKind::Mountain,
+                },
+                Edge {
+                    id: 21,
+                    v0: 2,
+                    v1: 9,
+                    kind: EdgeKind::Mountain,
+                },
+                Edge {
+                    id: 22,
+                    v0: 9,
+                    v1: 1,
+                    kind: EdgeKind::Mountain,
+                },
+                Edge {
+                    id: 23,
+                    v0: 8,
+                    v1: 10,
+                    kind: EdgeKind::Mountain,
+                },
+                Edge {
+                    id: 24,
+                    v0: 10,
+                    v1: 7,
+                    kind: EdgeKind::Mountain,
+                },
+                Edge {
+                    id: 25,
+                    v0: 0,
+                    v1: 10,
+                    kind: EdgeKind::Mountain,
+                },
+                Edge {
+                    id: 26,
+                    v0: 10,
+                    v1: 1,
+                    kind: EdgeKind::Mountain,
+                },
+                Edge {
+                    id: 27,
+                    v0: 4,
+                    v1: 11,
+                    kind: EdgeKind::Mountain,
+                },
+                Edge {
+                    id: 28,
+                    v0: 11,
+                    v1: 8,
+                    kind: EdgeKind::Mountain,
+                },
+                Edge {
+                    id: 29,
+                    v0: 0,
+                    v1: 11,
+                    kind: EdgeKind::Mountain,
+                },
+                Edge {
+                    id: 30,
+                    v0: 11,
+                    v1: 3,
+                    kind: EdgeKind::Mountain,
+                },
+                Edge {
+                    id: 31,
+                    v0: 6,
+                    v1: 12,
+                    kind: EdgeKind::Mountain,
+                },
+                Edge {
+                    id: 32,
+                    v0: 12,
+                    v1: 8,
+                    kind: EdgeKind::Mountain,
+                },
+                Edge {
+                    id: 33,
+                    v0: 2,
+                    v1: 12,
+                    kind: EdgeKind::Mountain,
+                },
+                Edge {
+                    id: 34,
+                    v0: 12,
+                    v1: 3,
+                    kind: EdgeKind::Mountain,
+                },
+                Edge {
+                    id: 35,
+                    v0: 11,
+                    v1: 12,
+                    kind: EdgeKind::Valley,
+                },
+                Edge {
+                    id: 36,
+                    v0: 10,
+                    v1: 9,
+                    kind: EdgeKind::Valley,
+                },
+            ],
+            next_vertex_id: 13,
+            next_edge_id: 37,
+        }
+    }
+
+    fn user_flat_targets() -> Vec<Driver> {
+        [21, 22, 25, 26, 29, 30, 33, 34]
+            .into_iter()
+            .map(|hinge| Driver {
+                hinge,
+                target_angle_deg: 180.0,
+            })
+            .collect()
+    }
+
+    fn reached_angles(targets: &[Driver]) -> HashMap<EdgeId, f64> {
+        targets
+            .iter()
+            .map(|target| (target.hinge, target.target_angle_deg))
+            .collect()
+    }
+
+    fn all_crease_flat_targets(cp: &CreasePattern) -> Vec<Driver> {
+        cp.edges
+            .iter()
+            .filter_map(|edge| {
+                let target_angle_deg = match edge.kind {
+                    EdgeKind::Mountain => 180.0,
+                    EdgeKind::Valley => -180.0,
+                    EdgeKind::Border | EdgeKind::Aux => return None,
+                };
+                Some(Driver {
+                    hinge: edge.id,
+                    target_angle_deg,
+                })
+            })
+            .collect()
+    }
+
+    #[derive(serde::Deserialize)]
+    struct FrontCpFixture {
+        vertices: Vec<Vertex>,
+        edges: Vec<Edge>,
+    }
+
+    /// フロントで実際に表示しているtracked fixtureからCPを復元する。
+    fn front_fixture_cp(text: &str) -> CreasePattern {
+        let fixture: FrontCpFixture = serde_json::from_str(text).expect("展開図fixtureを読む");
+        let next_vertex_id = fixture
+            .vertices
+            .iter()
+            .map(|vertex| vertex.id)
+            .max()
+            .map_or(0, |id| id.saturating_add(1));
+        let next_edge_id = fixture
+            .edges
+            .iter()
+            .map(|edge| edge.id)
+            .max()
+            .map_or(0, |id| id.saturating_add(1));
+        CreasePattern {
+            vertices: fixture.vertices,
+            edges: fixture.edges,
+            next_vertex_id,
+            next_edge_id,
+        }
+    }
+
+    /// 既存のやっこさん受け入れテストと同じ線を、通常の作図APIで作る。
+    fn yakko_cp() -> CreasePattern {
+        let mut cp = Document::new(Paper {
+            width_mm: 150.0,
+            height_mm: 150.0,
+        })
+        .cp;
+        let (m1, m2, m3, m4) = ([0.5, 0.0], [1.0, 0.5], [0.5, 1.0], [0.0, 0.5]);
+        for (a, b, kind) in [
+            (m1, m2, EdgeKind::Valley),
+            (m2, m3, EdgeKind::Valley),
+            (m3, m4, EdgeKind::Valley),
+            (m4, m1, EdgeKind::Valley),
+        ] {
+            ori3_cp::insert_segment(&mut cp, a, b, kind);
+        }
+        for t in [0.25, 0.75] {
+            for (a, b, kind) in [
+                ([t, 0.0], [t, 0.25], EdgeKind::Mountain),
+                ([t, 0.25], [t, 0.75], EdgeKind::Valley),
+                ([t, 0.75], [t, 1.0], EdgeKind::Mountain),
+                ([0.0, t], [0.25, t], EdgeKind::Mountain),
+                ([0.25, t], [0.75, t], EdgeKind::Valley),
+                ([0.75, t], [1.0, t], EdgeKind::Mountain),
+            ] {
+                ori3_cp::insert_segment(&mut cp, a, b, kind);
+            }
+        }
+        cp
+    }
+
+    fn flat_fold_counts(
+        cp: &CreasePattern,
+        targets: &[Driver],
+        angles: &HashMap<EdgeId, f64>,
+    ) -> (usize, usize, usize) {
+        let raw = ori3_cp::local_violations(cp).len();
+        let filtered = flat_fold_notice_violations(cp, targets, &HashMap::new()).len();
+        let notice = flat_fold_notice_violations(cp, targets, angles).len();
+        (raw, filtered, notice)
+    }
+
+    #[test]
+    fn flat_fold_notice_reports_only_missed_signed_targets_without_mutating_cp() {
+        let cp = flat_fold_notice_user_cp();
+        let original = cp.clone();
+        let targets = user_flat_targets();
+        let missed: HashMap<EdgeId, f64> =
+            targets.iter().map(|target| (target.hinge, 90.0)).collect();
+
+        assert_eq!(
+            flat_fold_notice_violations(&cp, &targets, &missed),
+            vec![9, 10, 11, 12],
+            "利用者の図では指定角未到達の4点を知らせる"
+        );
+        assert_eq!(
+            flat_fold_notice_violations(&cp, &targets, &reached_angles(&targets)),
+            Vec::<VertexId>::new(),
+            "同じ要求でも全て指定角へ届けば知らせない"
+        );
+
+        let opposite: HashMap<EdgeId, f64> = targets
+            .iter()
+            .map(|target| (target.hinge, -target.target_angle_deg))
+            .collect();
+        assert_eq!(
+            flat_fold_notice_violations(&cp, &targets, &opposite),
+            vec![9, 10, 11, 12],
+            "+180°と-180°を指定角の到達判定では同一視しない"
+        );
+
+        // pose_solveはpreferredを先、hardを後に並べる。同じ辺をhardで90°へ
+        // 動かした最新要求は、古いpreferredの180°を残してはならない。
+        let mut overridden = targets.clone();
+        overridden.extend(targets.iter().map(|target| Driver {
+            hinge: target.hinge,
+            target_angle_deg: 90.0,
+        }));
+        assert!(
+            flat_fold_notice_violations(&cp, &overridden, &missed).is_empty(),
+            "後置したhardがpreferredを上書きする"
+        );
+        assert_eq!(cp, original, "通知検査は元の展開図を変更しない");
+    }
+
+    #[test]
+    fn flat_fold_notice_does_not_stop_the_requested_motion() {
+        let cp = flat_fold_notice_user_cp();
+        let faces = ori3_cp::extract_faces(&cp);
+        let targets = user_flat_targets();
+        let mut warm: HashMap<EdgeId, f64> = cp
+            .edges
+            .iter()
+            .filter(|edge| edge.kind != EdgeKind::Border)
+            .map(|edge| (edge.id, 0.0))
+            .collect();
+        let mut final_result = None;
+        for step in 1..=36u32 {
+            let angle = 5.0 * f64::from(step);
+            let hard = vec![Driver {
+                hinge: targets[0].hinge,
+                target_angle_deg: angle,
+            }];
+            let preferred: HashMap<EdgeId, f64> = targets[1..]
+                .iter()
+                .map(|target| (target.hinge, angle))
+                .collect();
+            let solved =
+                ori3_rigid::solve_motion(&cp, &faces, &hard, Some(&preferred), Some(&warm), true)
+                    .result;
+            warm = solved.angles.clone();
+            final_result = Some(solved);
+        }
+        let solved = final_result.expect("180°までの操作結果を返す");
+
+        assert!(!solved.frame.faces.is_empty(), "通知対象でも立体を返す");
+        assert!(
+            solved.angles.values().all(|angle| angle.is_finite()),
+            "通知対象でも有限の角度を返す"
+        );
+        assert!(
+            (solved.angles[&targets[0].hinge] - targets[0].target_angle_deg).abs()
+                <= FLAT_TARGET_EPS_DEG,
+            "操作中の折り目は指定した180°まで動く"
+        );
+        assert_eq!(
+            flat_fold_notice_violations(&cp, &targets, &solved.angles),
+            vec![9, 10, 11, 12],
+            "ほかの指定が届かない4点は、操作を止めずに知らせる"
+        );
+    }
+
+    #[test]
+    fn five_existing_works_have_69_raw_12_filtered_and_zero_notices() {
+        let devil: Document = serde_json::from_str(include_str!(
+            "../../../../crates/ori3-layers/tests/fixtures/devil-024.ori3"
+        ))
+        .expect("悪魔24を読む");
+        let devil_replayed = ori3_layers::replay(&devil, devil.sequence.len(), 1.0);
+        let devil_counts = flat_fold_counts(
+            &devil.cp,
+            &devil_replayed.sequence_targets,
+            &devil_replayed.hinge_angles,
+        );
+
+        let crane = front_fixture_cp(include_str!("../../src/lib/__fixtures__/crane.json"));
+        let crane_targets = all_crease_flat_targets(&crane);
+        let crane_counts =
+            flat_fold_counts(&crane, &crane_targets, &reached_angles(&crane_targets));
+
+        let frog = front_fixture_cp(include_str!("../../src/lib/__fixtures__/frog.json"));
+        let frog_targets = all_crease_flat_targets(&frog);
+        let frog_counts = flat_fold_counts(&frog, &frog_targets, &reached_angles(&frog_targets));
+
+        let yakko = yakko_cp();
+        let yakko_targets = all_crease_flat_targets(&yakko);
+        let yakko_counts =
+            flat_fold_counts(&yakko, &yakko_targets, &reached_angles(&yakko_targets));
+
+        let rose: Document = serde_json::from_str(include_str!(
+            "../../../../crates/ori3-layers/tests/fixtures/rose-029.ori3"
+        ))
+        .expect("ローズ29を読む");
+        let rose_replayed = ori3_layers::replay(&rose, rose.sequence.len(), 1.0);
+        let rose_counts = flat_fold_counts(
+            &rose.cp,
+            &rose_replayed.sequence_targets,
+            &rose_replayed.hinge_angles,
+        );
+
+        assert_eq!(devil_counts, (6, 2, 0), "悪魔");
+        assert_eq!(crane_counts, (3, 3, 0), "鶴");
+        assert_eq!(frog_counts, (3, 3, 0), "カエル");
+        assert_eq!(yakko_counts, (0, 0, 0), "やっこさん");
+        assert_eq!(rose_counts, (57, 4, 0), "ローズ");
+
+        let total = [
+            devil_counts,
+            crane_counts,
+            frog_counts,
+            yakko_counts,
+            rose_counts,
+        ]
+        .into_iter()
+        .fold((0, 0, 0), |sum, counts| {
+            (sum.0 + counts.0, sum.1 + counts.1, sum.2 + counts.2)
+        });
+        assert_eq!(total, (69, 12, 0));
     }
 
     fn current_flat_state(store: &DocumentStore) -> ori3_layers::FlatState {

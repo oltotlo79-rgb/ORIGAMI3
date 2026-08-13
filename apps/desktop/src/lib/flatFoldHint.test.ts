@@ -49,6 +49,20 @@ describe("平らに畳めない点の説明", () => {
     expect(text).not.toContain(REASON_COUNTS);
   });
 
+  it("両方が合わないときは既存のホバー文をそのまま出す", () => {
+    const doc = radial([
+      [0, "Mountain"],
+      [60, "Mountain"],
+      [140, "Mountain"],
+      [220, "Mountain"],
+      [300, "Valley"],
+    ]);
+
+    expect(violationReason(doc, 0)).toBe(
+      "平らに畳めません: 山と谷の本数が合いません、向かい合う角の和が合いません",
+    );
+  });
+
   it("補助線は数えない(本数の理由が出る)", () => {
     const doc = radial([
       [0, "Mountain"],
