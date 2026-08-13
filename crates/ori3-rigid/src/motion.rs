@@ -183,8 +183,8 @@ pub fn solve_motion(
                 }
             }
         }
-        if step == steps && !candidate.converged && is_finite_result(&candidate, faces.len()) {
-            candidate = Reseed {
+        if step == steps && is_finite_result(&candidate, faces.len()) {
+            let reseed = Reseed {
                 cp,
                 faces,
                 drivers: &step_drivers,
@@ -192,8 +192,11 @@ pub fn solve_motion(
                 start_angles: &start_angles,
                 warm: step_warm,
                 topology: &topology,
+            };
+            if !candidate.converged {
+                candidate = reseed.rescue(candidate);
             }
-            .rescue(candidate);
+            candidate = reseed.honor_targets(candidate);
         }
         let raw_contact =
             is_finite_result(&candidate, faces.len()) && self_intersects(&candidate.frame);
@@ -585,6 +588,53 @@ impl Reseed<'_> {
             }
             None => candidate,
         }
+    }
+
+    /// 希望角が捨てられたとき、希望角も固定して解けるならその形を採る。
+    ///
+    /// 希望角は「必要なときだけ譲る」ものなのに、譲らなくても解ける場面でも
+    /// 譲っていた。利用者の画面で実際に起きた例(鳥の基本形の途中、8本を180°・
+    /// 2本を0°に指定した状態から、別の2本を−5°動かす)では、既に折ってある
+    /// 折り目が最大179.3°ほどけた。同じ姿勢を12本すべて固定して解くと、
+    /// −10°でも−90°でも−180°でも閉包1e-14以下・自己交差0組で解ける。
+    /// つまり譲る必要は無かった。
+    ///
+    /// 固定して解けないときは元の候補をそのまま返すので、操作は止まらない。
+    fn honor_targets(&self, candidate: SolveResult) -> SolveResult {
+        let Some(targets) = self.targets else {
+            return candidate;
+        };
+        if candidate.relaxations.is_empty() {
+            return candidate;
+        }
+        let fixed: BTreeSet<EdgeId> = self.drivers.iter().map(|driver| driver.hinge).collect();
+        let mut all: Vec<Driver> = self.drivers.to_vec();
+        for (&hinge, &target_angle_deg) in targets {
+            if !fixed.contains(&hinge) {
+                all.push(Driver {
+                    hinge,
+                    target_angle_deg,
+                });
+            }
+        }
+        all.sort_unstable_by_key(|driver| driver.hinge);
+        if all.len() == self.drivers.len() {
+            return candidate;
+        }
+        let solved = solver::solve_prepared(self.cp, self.faces, &all, self.warm, self.topology);
+        if !solved.converged
+            || !is_finite_result(&solved, self.faces.len())
+            || self_intersects(&solved.frame)
+            || max_seam_gap(self.cp, self.faces, &solved.frame)
+                > max_seam_gap(self.cp, self.faces, &candidate.frame)
+                    .max(SEAM_TEAR_TOLERANCE)
+        {
+            return candidate;
+        }
+        let mut solved = solved;
+        solved.iterations = solved.iterations.saturating_add(candidate.iterations);
+        solved.relaxations = collect_relaxations(&solved.angles, self.drivers, self.targets);
+        solved
     }
 
     /// 試す初期値。回数を固定するので、解けない場合でも所要時間は増え続けない。
