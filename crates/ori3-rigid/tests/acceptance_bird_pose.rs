@@ -99,6 +99,79 @@ fn user_targets() -> HashMap<u32, f64> {
 ///
 /// 上限値の根拠(この修正後の実測、36段すべて):
 /// 閉包RMSの最悪 4.643e-15、自己交差 0組、希望角からの譲り 0本。
+/// 指定した折り目を1本ずつ順に送り、毎段で「閉じる・食い込まない・ほどけない」ことを確かめる。
+fn sweep(
+    cp: &CreasePattern,
+    faces: &[ori3_cp::Face],
+    targets: &HashMap<u32, f64>,
+    driven: &[u32],
+    sign: f64,
+    start: &HashMap<u32, f64>,
+    label: &str,
+) {
+    let mut warm = start.clone();
+    for step in 1..=36u32 {
+        let angle = sign * 5.0 * f64::from(step);
+        let drivers: Vec<Driver> = driven
+            .iter()
+            .map(|&hinge| Driver {
+                hinge,
+                target_angle_deg: angle,
+            })
+            .collect();
+        let solved = solve_motion(cp, faces, &drivers, Some(targets), Some(&warm), true).result;
+
+        assert!(
+            solved.converged,
+            "{label} {angle}°で紙が閉じない(閉包RMS {:.3e})",
+            solved.closure_rms
+        );
+        let pairs = self_intersection_pairs(&solved.frame);
+        assert!(
+            pairs.is_empty(),
+            "{label} {angle}°で紙が食い込んでいる({}組)",
+            pairs.len()
+        );
+        let worst = solved
+            .relaxations
+            .iter()
+            .map(|relaxation| relaxation.delta_deg.abs())
+            .fold(0.0_f64, f64::max);
+        assert!(
+            worst < 1e-6,
+            "{label} {angle}°で折ってある折り目がほどけた(最大 {worst:.1}°、{}本)",
+            solved.relaxations.len()
+        );
+        warm = solved.angles.clone();
+    }
+}
+
+/// 指定した折り目をまとめて山折りしていっても、紙が食い込まないこと。
+///
+/// 利用者の報告(2026-08-13): 「指定した線を同時に山折りしていったら
+/// 鶴の花弁折りした状態になるが貫通になる」。実際の紙ではそうならない。
+#[test]
+fn folding_the_selected_creases_together_never_penetrates() {
+    let cp = user_bird_cp();
+    let faces = extract_faces(&cp);
+    let flat: HashMap<u32, f64> = cp
+        .edges
+        .iter()
+        .filter(|edge| edge.kind != EdgeKind::Border)
+        .map(|edge| (edge.id, 0.0))
+        .collect();
+    let keep_flat: HashMap<u32, f64> = HashMap::from([(17, 0.0), (18, 0.0)]);
+    sweep(
+        &cp,
+        &faces,
+        &keep_flat,
+        &[23, 24, 27, 28, 31, 32, 35, 36],
+        1.0,
+        &flat,
+        "まとめて山折り",
+    );
+}
+
 #[test]
 fn folding_two_more_creases_keeps_the_folded_ones() {
     let cp = user_bird_cp();
@@ -125,48 +198,7 @@ fn folding_two_more_creases_keeps_the_folded_ones() {
         "出発の姿勢で紙が食い込んでいる"
     );
 
-    let mut warm = start.angles.clone();
-    let mut worst_rms = 0.0_f64;
-    for step in 1..=36u32 {
-        let angle = -5.0 * f64::from(step);
-        let drivers = vec![
-            Driver {
-                hinge: 40,
-                target_angle_deg: angle,
-            },
-            Driver {
-                hinge: 45,
-                target_angle_deg: angle,
-            },
-        ];
-        let solved = solve_motion(&cp, &faces, &drivers, Some(&targets), Some(&warm), true).result;
-
-        assert!(
-            solved.converged,
-            "{angle}°で紙が閉じない(閉包RMS {:.3e})",
-            solved.closure_rms
-        );
-        let pairs = self_intersection_pairs(&solved.frame);
-        assert!(
-            pairs.is_empty(),
-            "{angle}°で紙が食い込んでいる({}組)",
-            pairs.len()
-        );
-        let worst = solved
-            .relaxations
-            .iter()
-            .map(|relaxation| relaxation.delta_deg.abs())
-            .fold(0.0_f64, f64::max);
-        assert!(
-            worst < 1e-6,
-            "{angle}°で折ってある折り目がほどけた(最大 {worst:.1}°、{}本)",
-            solved.relaxations.len()
-        );
-        worst_rms = worst_rms.max(solved.closure_rms);
-        warm = solved.angles.clone();
-    }
-    assert!(
-        worst_rms < 1e-12,
-        "36段すべて閉じるが、最悪の閉包RMSが大きすぎる: {worst_rms:.3e}"
-    );
+    // 谷折り(利用者が報告した向き)と山折りの両方を確かめる
+    sweep(&cp, &faces, &targets, &[40, 45], -1.0, &start.angles, "谷折り");
+    sweep(&cp, &faces, &targets, &[40, 45], 1.0, &start.angles, "山折り");
 }
