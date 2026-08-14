@@ -4,9 +4,10 @@ pub mod compound;
 pub mod crease_only;
 pub mod flat_motion;
 pub mod flat_state;
-pub mod folded_query;
 pub mod fold_network;
 pub mod fold_through;
+pub mod folded_query;
+pub mod plane_pullback;
 pub mod pose_motion;
 pub mod pose_oracle;
 pub mod pose_step;
@@ -31,6 +32,9 @@ pub use fold_through::{
     FOLD_PENETRATION_WARNING, FoldDirection, FoldThroughInput, FoldThroughProposal,
     FoldThroughResult, fold_through, fold_through_with_additional_crease, propose_fold_through,
     resolve_driver_edges,
+};
+pub use plane_pullback::{
+    FaceCreaseSegments, FoldPlane3D, PlanePullbackResult, pull_back_plane_to_faces,
 };
 pub use pose_motion::{
     PoseAngleTarget, PoseEdgeActivation, PoseMotionInput, PoseMotionResult,

@@ -4,10 +4,13 @@ use ori3_layers::step_oracle::{
     FoldSense, LandmarkExpectation, LandmarkKind, LayerCountExpectation, StepDifference,
     StepExpectation, evaluate_step, extract_step_features, layer_count_at,
 };
-use ori3_layers::{FlatState, flat_state_at, representative_point};
+use ori3_layers::{
+    FlatState, FoldPlane3D, flat_state_at, point_in_face, pull_back_plane_to_faces,
+    representative_point,
+};
 use ori3_model::{
-    CreasePattern, DisplaySettings, Document, DriverLine, Edge, EdgeKind, FoldStep, Paper,
-    TechniqueKind, Vertex,
+    CreasePattern, DisplaySettings, Document, DriverLine, EPS, Edge, EdgeKind, Face3D, FoldStep,
+    Frame3D, Paper, TechniqueKind, Vertex,
 };
 
 const ROSE_011: &str = include_str!("fixtures/rose-011.ori3");
@@ -157,6 +160,196 @@ fn reports_landmark_layer_count_and_visible_fold_sense_differences() {
             .iter()
             .any(|difference| matches!(difference, StepDifference::VisibleCreaseSense { .. }))
     );
+}
+
+#[test]
+fn plane_pullback_matches_flat_state_for_rose_011_fixture() {
+    assert_plane_pullback_matches_flat_fixture("rose-011", ROSE_011);
+}
+
+#[test]
+fn plane_pullback_matches_flat_state_for_rose_029_fixture() {
+    assert_plane_pullback_matches_flat_fixture("rose-029", ROSE_029);
+}
+
+#[test]
+fn plane_pullback_matches_flat_state_for_devil_024_fixture() {
+    assert_plane_pullback_matches_flat_fixture("devil-024", DEVIL_024);
+}
+
+fn assert_plane_pullback_matches_flat_fixture(label: &str, json: &str) {
+    let document = load_fixture(json);
+    let (faces, state) = state_of(&document);
+    let probe = top_face_probe(&document, &faces, &state);
+    let direction = DVec2::new(0.731, 0.417).normalize();
+    let line = [
+        (DVec2::from(probe) - direction).to_array(),
+        (DVec2::from(probe) + direction).to_array(),
+    ];
+    let frame = flat_frame_from_state(&document.cp, &faces, &state);
+    let result = pull_back_plane_to_faces(
+        &document.cp,
+        &faces,
+        &frame,
+        FoldPlane3D {
+            origin: [probe[0], probe[1], 0.0],
+            normal: [-direction.y, direction.x, 0.0],
+        },
+    );
+
+    assert!(
+        result.warnings.is_empty(),
+        "{label}: 新経路の警告={:?}",
+        result.warnings
+    );
+    assert_eq!(result.faces.len(), faces.len(), "{label}: 全面を返す");
+    let mut compared_segments = 0_usize;
+    let mut maximum_endpoint_error = 0.0_f64;
+    for face in &faces {
+        let expected = legacy_flat_pullback_segments(&document.cp, face, &state, line);
+        let actual = &result
+            .faces
+            .iter()
+            .find(|output| output.face == face.id)
+            .expect("入力面に対応する結果")
+            .segments;
+        assert_eq!(
+            actual.len(),
+            expected.len(),
+            "{label}: 面{}の線分数が違います: actual={actual:?}, expected={expected:?}",
+            face.id
+        );
+        for (&actual_segment, &expected_segment) in actual.iter().zip(&expected) {
+            let direct = endpoint_pair_error(actual_segment, expected_segment);
+            let reversed =
+                endpoint_pair_error(actual_segment, [expected_segment[1], expected_segment[0]]);
+            let error = direct.min(reversed);
+            maximum_endpoint_error = maximum_endpoint_error.max(error);
+            assert!(
+                error < 1e-9,
+                "{label}: 面{}の端点差が1e-9未満ではありません: error={error:.17e}, actual={actual_segment:?}, expected={expected_segment:?}",
+                face.id
+            );
+            compared_segments += 1;
+        }
+    }
+    assert!(compared_segments > 0, "{label}: 少なくとも1線分を比較する");
+    println!(
+        "{label}: compared_segments={compared_segments}, max_endpoint_error={maximum_endpoint_error:.17e}"
+    );
+}
+
+fn flat_frame_from_state(cp: &CreasePattern, faces: &[Face], state: &FlatState) -> Frame3D {
+    Frame3D {
+        faces: faces
+            .iter()
+            .map(|face| {
+                let placement = state.placements[&face.id];
+                Face3D {
+                    face: face.id,
+                    polygon: face
+                        .vertices
+                        .iter()
+                        .map(|vertex_id| {
+                            let local = DVec2::from(
+                                cp.vertices
+                                    .iter()
+                                    .find(|vertex| vertex.id == *vertex_id)
+                                    .expect("面の展開図頂点")
+                                    .pos,
+                            );
+                            let folded = placement.apply(local);
+                            [folded.x, folded.y, 0.0]
+                        })
+                        .collect(),
+                    layer: 0,
+                    mirrored: placement.mirrored,
+                }
+            })
+            .collect(),
+        warnings: Vec::new(),
+    }
+}
+
+/// 既存の `flat_state_at` が返す面別Isometry2で、畳み平面の直線をCPへ戻す。
+/// 新しい3D経路とは独立に、従来の `CutLine::pull_back` と同じ2D計算を行う。
+fn legacy_flat_pullback_segments(
+    cp: &CreasePattern,
+    face: &Face,
+    state: &FlatState,
+    folded_line: [[f64; 2]; 2],
+) -> Vec<[[f64; 2]; 2]> {
+    let inverse = state.placements[&face.id].inverse();
+    let line_start = inverse.apply(DVec2::from(folded_line[0]));
+    let line_end = inverse.apply(DVec2::from(folded_line[1]));
+    let direction = (line_end - line_start).normalize();
+    let polygon: Vec<DVec2> = face
+        .vertices
+        .iter()
+        .map(|vertex_id| {
+            DVec2::from(
+                cp.vertices
+                    .iter()
+                    .find(|vertex| vertex.id == *vertex_id)
+                    .expect("面の展開図頂点")
+                    .pos,
+            )
+        })
+        .collect();
+    let parameter = |point: DVec2| (point - line_start).dot(direction);
+    let mut parameters = Vec::new();
+    for index in 0..polygon.len() {
+        let first = polygon[index];
+        let second = polygon[(index + 1) % polygon.len()];
+        let first_side = direction.perp_dot(first - line_start);
+        let second_side = direction.perp_dot(second - line_start);
+        if first_side.abs() <= EPS && second_side.abs() <= EPS {
+            parameters.push(parameter(first));
+            parameters.push(parameter(second));
+        } else if first_side.abs() <= EPS {
+            parameters.push(parameter(first));
+        } else if second_side.abs() <= EPS {
+            parameters.push(parameter(second));
+        } else if first_side.is_sign_positive() != second_side.is_sign_positive() {
+            let crossing = first + (second - first) * (first_side / (first_side - second_side));
+            parameters.push(parameter(crossing));
+        }
+    }
+    parameters.sort_by(f64::total_cmp);
+    parameters.dedup_by(|left, right| (*left - *right).abs() <= EPS);
+
+    let mut segments = Vec::new();
+    for pair in parameters.windows(2) {
+        if pair[1] - pair[0] <= EPS {
+            continue;
+        }
+        let first = line_start + direction * pair[0];
+        let second = line_start + direction * pair[1];
+        if !point_in_face(cp, face, ((first + second) * 0.5).to_array()) {
+            continue;
+        }
+        let mut segment = [first.to_array(), second.to_array()];
+        if compare_test_points(segment[0], segment[1]).is_gt() {
+            segment.swap(0, 1);
+        }
+        segments.push(segment);
+    }
+    segments.sort_by(|left, right| {
+        compare_test_points(left[0], right[0]).then_with(|| compare_test_points(left[1], right[1]))
+    });
+    segments
+}
+
+fn endpoint_pair_error(actual: [[f64; 2]; 2], expected: [[f64; 2]; 2]) -> f64 {
+    (DVec2::from(actual[0]) - DVec2::from(expected[0]))
+        .length()
+        .max((DVec2::from(actual[1]) - DVec2::from(expected[1])).length())
+}
+
+fn compare_test_points(left: [f64; 2], right: [f64; 2]) -> std::cmp::Ordering {
+    left[0]
+        .total_cmp(&right[0])
+        .then_with(|| left[1].total_cmp(&right[1]))
 }
 
 fn state_of(document: &Document) -> (Vec<Face>, FlatState) {
