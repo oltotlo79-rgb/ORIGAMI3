@@ -113,3 +113,72 @@ fn bird_base_skeleton_packs_reasonably() {
     assert!(out[0].scale >= 0.30, "縮尺が小さすぎる: {}", out[0].scale);
     assert!(max_violation(&s, &out[0], 1.0, 1.0) <= PACK_TOL);
 }
+
+/// 中心だけを紙内に置く現行制約で、12葉がこの縮尺を満たせることの独立検算。
+#[test]
+fn twelve_leaf_center_containment_lower_bound_is_feasible() {
+    const LOWER_BOUND: f64 = 0.194_277_036;
+    let s = star(12, 1.0);
+    let centers = [
+        [0.600_398_070, 1.0],
+        [0.0, 0.0],
+        [0.399_425_171, 0.0],
+        [0.800_204_016, 0.0],
+        [1.0, 0.333_299_635],
+        [0.600_212_313, 0.333_192_196],
+        [0.400_706_494, 0.666_632_833],
+        [0.200_033_273, 0.333_492_338],
+        [1.0, 1.0],
+        [0.0, 0.667_164_704],
+        [0.800_087_884, 0.666_632_454],
+        [0.200_674_750, 1.0],
+    ];
+    let packing = Packing {
+        scale: LOWER_BOUND,
+        centers: (1..=12).zip(centers).collect(),
+        violation: 0.0,
+    };
+
+    let violation = max_violation(&s, &packing, 1.0, 1.0);
+    assert_eq!(
+        violation, 0.0,
+        "中心包含の12葉下限{LOWER_BOUND}を満たさない"
+    );
+}
+
+/// 半径まで紙内に収める場合も、4×3格子なら12葉でこの縮尺を満たせることの独立検算。
+#[test]
+fn twelve_leaf_full_circle_grid_lower_bound_is_feasible() {
+    const LOWER_BOUND: f64 = 0.124_999_999;
+    let s = star(12, 1.0);
+    let mut centers = Vec::with_capacity(12);
+    for row in 0..3 {
+        for column in 0..4 {
+            let id = 1 + row * 4 + column;
+            centers.push((
+                id,
+                [
+                    0.125 + f64::from(column) * 0.25,
+                    0.125 + f64::from(row) * 0.375,
+                ],
+            ));
+        }
+    }
+
+    for (index, &(id_a, a)) in centers.iter().enumerate() {
+        let radius = LOWER_BOUND * s.leaf_radius(id_a);
+        let boundary_margin = a[0].min(1.0 - a[0]).min(a[1]).min(1.0 - a[1]);
+        assert!(
+            boundary_margin >= radius,
+            "葉{id_a}の円が紙からはみ出す: margin={boundary_margin}, radius={radius}"
+        );
+        for &(id_b, b) in &centers[index + 1..] {
+            let distance = (a[0] - b[0]).hypot(a[1] - b[1]);
+            let required = LOWER_BOUND * s.leaf_distance(id_a, id_b);
+            assert!(
+                distance >= required,
+                "葉{id_a}と葉{id_b}が重なる: distance={distance}, required={required}"
+            );
+        }
+    }
+}
