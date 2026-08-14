@@ -82,11 +82,12 @@ describe("書き出しダイアログ", () => {
 
   it("選べる種類は展開図2つと折り図2つ", () => {
     render(<ExportDialog />);
-    expect(EXPORT_CHOICES.map((c) => c.kind)).toEqual([
-      "CpSvg",
-      "CpPng",
-      "DiagramPdf",
-      "DiagramSvg",
+    expect(EXPORT_CHOICES).toHaveLength(4);
+    expect(EXPORT_CHOICES.map(({ kind, label, ext }) => ({ kind, label, ext }))).toEqual([
+      { kind: "CpSvg", label: "展開図(SVG)", ext: "svg" },
+      { kind: "CpPng", label: "展開図(PNG)", ext: "png" },
+      { kind: "DiagramPdf", label: "折り図(PDF)", ext: "pdf" },
+      { kind: "DiagramSvg", label: "折り図(ページごとのSVG)", ext: "svg" },
     ]);
     for (const c of EXPORT_CHOICES) {
       expect(screen.getByRole("radio", { name: c.label })).not.toBeNull();
@@ -113,7 +114,7 @@ describe("書き出しダイアログ", () => {
   it("PNGを選ぶと大きさを指定でき、その点数が渡る", async () => {
     saveMock.mockResolvedValue("C:\\出力\\鶴.png");
     render(<ExportDialog />);
-    fireEvent.click(screen.getByRole("radio", { name: "展開図の画像(PNG)" }));
+    fireEvent.click(screen.getByRole("radio", { name: "展開図(PNG)" }));
     const size = screen.getByLabelText("画像の大きさ（長辺の点数）") as HTMLInputElement;
     expect(size.value).toBe("2048"); // 既定は長辺2048点
     fireEvent.change(size, { target: { value: "1024" } });
@@ -129,7 +130,7 @@ describe("書き出しダイアログ", () => {
 
   it("PNGの大きさは上下ボタンで256点ずつ変わる", () => {
     render(<ExportDialog />);
-    fireEvent.click(screen.getByRole("radio", { name: "展開図の画像(PNG)" }));
+    fireEvent.click(screen.getByRole("radio", { name: "展開図(PNG)" }));
     const size = screen.getByLabelText("画像の大きさ（長辺の点数）") as HTMLInputElement;
 
     fireEvent.click(
@@ -180,7 +181,7 @@ describe("書き出しダイアログ", () => {
   it("折り図(画像)はページごとに分かれると説明したうえで書き出す", async () => {
     saveMock.mockResolvedValue("C:/出力/鶴.svg");
     render(<ExportDialog />);
-    fireEvent.click(screen.getByRole("radio", { name: "折り図(画像・ページごと)" }));
+    fireEvent.click(screen.getByRole("radio", { name: "折り図(ページごとのSVG)" }));
     expect(screen.getByText(/「-01」「-02」/)).not.toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "保存先を選んで書き出す" }));
 
@@ -196,15 +197,23 @@ describe("書き出しダイアログ", () => {
     useAppStore.setState({ doc: docWithSteps(0), exportKind: "DiagramPdf" });
     render(<ExportDialog />);
     expect(screen.getByText(new RegExp(NO_STEPS_REASON))).not.toBeNull();
-    for (const kind of ["折り図(PDF)", "折り図(画像・ページごと)"]) {
+    for (const kind of ["折り図(PDF)", "折り図(ページごとのSVG)"]) {
       const radio = screen.getByRole("radio", { name: kind }) as HTMLInputElement;
       expect(radio.disabled).toBe(true);
     }
     // 展開図の書き出しはそのまま選べる
-    expect((screen.getByRole("radio", { name: "展開図の画像(SVG)" }) as HTMLInputElement).disabled)
+    expect((screen.getByRole("radio", { name: "展開図(SVG)" }) as HTMLInputElement).disabled)
       .toBe(false);
     const button = screen.getByRole("button", { name: "保存先を選んで書き出す" });
     expect(button).not.toBeNull();
     expect((button as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("PDFを画像と呼ばず、展開図と折り図の書き出し画面だと示す", () => {
+    render(<ExportDialog />);
+    expect(
+      screen.getByRole("dialog", { name: "展開図・折り図を書き出す" }),
+    ).not.toBeNull();
+    expect(screen.queryByRole("heading", { name: "画像として書き出す" })).toBeNull();
   });
 });

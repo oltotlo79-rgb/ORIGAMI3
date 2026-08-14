@@ -4,7 +4,7 @@
 // 候補を選んで「この展開図を使う」と edit_apply ReplaceCreasePattern が飛ぶ。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 vi.mock("../../ipc/client", () => ({
   documentNew: vi.fn(),
@@ -49,6 +49,14 @@ function makeCp(mark: number): CreasePattern {
 
 function makeCandidate(mark: number, violations: number): ProposalCandidate {
   return { cp: makeCp(mark), scale: 0.4, violations, warnings: [] };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 const VIEW: DocumentView = {
@@ -145,13 +153,151 @@ describe("提案ウィザード", () => {
   });
 
   it("作れなかったときは日本語の理由を出す", async () => {
-    vi.mocked(ipc.proposalGenerate).mockRejectedValue("角は12本までです");
+    vi.mocked(ipc.proposalGenerate).mockRejectedValue(
+      "紙の大きさを読み取れませんでした。作品を開き直してください。",
+    );
     useAppStore.getState().openProposal();
     render(<ProposalWizard />);
     fireEvent.click(screen.getByRole("button", { name: "展開図を作ってもらう" }));
     await vi.waitFor(() =>
-      expect(screen.getByText("角は12本までです")).not.toBeNull(),
+      expect(
+        screen.getByText(
+          "紙の大きさを読み取れませんでした。作品を開き直してください。",
+        ),
+      ).not.toBeNull(),
     );
+  });
+
+  it("別の置き方を作り直せなかったときも理由を候補画面に出す", async () => {
+    const reason =
+      "別の置き方を作れませんでした。形を直してから、もう一度試してください。";
+    vi.mocked(ipc.proposalGenerate).mockRejectedValue(reason);
+    useAppStore.setState({
+      proposalStep: "candidates",
+      proposalCandidates: [makeCandidate(10, 0)],
+      proposalSelected: 0,
+      proposalBusy: false,
+      proposalError: null,
+    });
+    render(<ProposalWizard />);
+
+    fireEvent.click(screen.getByRole("button", { name: "別の置き方も見る" }));
+
+    await vi.waitFor(() => expect(screen.getByText(reason)).not.toBeNull());
+    expect(screen.getByRole("button", { name: "候補1" })).not.toBeNull();
+  });
+
+  it.fails(
+    "D22: 計算中にやめた後、完了しても提案画面を再表示しない",
+    async () => {
+      const pending = deferred<ProposalCandidate[]>();
+      vi.mocked(ipc.proposalGenerate).mockReturnValue(pending.promise);
+      useAppStore.getState().openProposal();
+      render(<ProposalWizard />);
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "展開図を作ってもらう" }),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "やめる" }));
+      expect(screen.queryByRole("dialog")).toBeNull();
+
+      await act(async () => {
+        pending.resolve([makeCandidate(10, 0)]);
+        await pending.promise;
+        await Promise.resolve();
+      });
+      expect(useAppStore.getState().proposalCandidates).toHaveLength(0);
+      expect(useAppStore.getState().proposalStep).toBeNull();
+      expect(screen.queryByRole("dialog")).toBeNull();
+    },
+  );
+
+  it("提案の警告と生成エラーには内部用語を表示しない", () => {
+    const internalTerms = [
+      "骨格",
+      "充填",
+      "ソルバー",
+      "ヤコビアン",
+      "hard",
+      "soft",
+      "warm start",
+      "イテレーション",
+    ];
+    const internalMessage = `${internalTerms.join(" / ")} / 角17の円 / 節点ID 42`;
+    const visibleMessages = (container: HTMLElement) =>
+      Array.from(
+        container.querySelectorAll<HTMLElement>(".error-text, .warning-text"),
+      )
+        .map((node) => node.textContent ?? "")
+        .join("\n");
+
+    useAppStore.setState({
+      proposalStep: "skeleton",
+      proposalError: internalMessage,
+    });
+    const skeletonView = render(<ProposalWizard />);
+    const skeletonText = visibleMessages(skeletonView.container);
+    for (const term of internalTerms) {
+      expect(skeletonText.toLowerCase()).not.toContain(term.toLowerCase());
+    }
+    expect(skeletonText).not.toContain("17");
+    expect(skeletonText).not.toContain("42");
+    expect(skeletonText).toContain("展開図を作ってもらう");
+    skeletonView.unmount();
+
+    useAppStore.setState({
+      proposalStep: "candidates",
+      proposalCandidates: [makeCandidate(10, 0)],
+      proposalSelected: 0,
+      proposalError: internalMessage,
+    });
+    const candidateView = render(<ProposalWizard />);
+    const candidateText = visibleMessages(candidateView.container);
+    for (const term of internalTerms) {
+      expect(candidateText.toLowerCase()).not.toContain(term.toLowerCase());
+    }
+    expect(candidateText).not.toContain("17");
+    expect(candidateText).not.toContain("42");
+    expect(candidateText).toContain("形を直す");
+    expect(candidateText).toContain("別の置き方も見る");
+    candidateView.unmount();
+
+    useAppStore.setState({
+      proposalStep: "confirm",
+      proposalCandidates: [
+        { ...makeCandidate(10, 0), warnings: [internalMessage] },
+      ],
+      proposalSelected: 0,
+      proposalError: null,
+    });
+    const confirmView = render(<ProposalWizard />);
+    const warningText = visibleMessages(confirmView.container);
+    for (const term of internalTerms) {
+      expect(warningText.toLowerCase()).not.toContain(term.toLowerCase());
+    }
+    expect(warningText).not.toContain("17");
+    expect(warningText).not.toContain("42");
+    expect(warningText).toContain("選び直す");
+    expect(warningText).toContain("形を直す");
+
+    for (const opaque of [
+      "triangulation node 17 failed",
+      "request 42 failed",
+      "[object Object]",
+      "内部エラーが発生しました: 爆発した",
+    ]) {
+      act(() => {
+        useAppStore.setState({
+          proposalStep: "candidates",
+          proposalError: opaque,
+        });
+      });
+      const sanitized = visibleMessages(confirmView.container);
+      expect(sanitized).not.toContain(opaque);
+      expect(sanitized).not.toMatch(
+        /triangulation|node|request|17|42|object|内部エラー|爆発した/iu,
+      );
+    }
   });
 
   it("折りにくさの目安は0か所なら言い換える", () => {

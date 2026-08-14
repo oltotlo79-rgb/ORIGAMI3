@@ -18,6 +18,39 @@ import {
 import { SkeletonPreview } from "./SkeletonPreview";
 import { CpThumbnail } from "./CpThumbnail";
 
+const INTERNAL_PROPOSAL_WORDS =
+  /骨格|充填|ソルバー|ヤコビアン|hard|soft|warm[\s-]+start|イテレーション|内部エラー|節点|木構造|円の中心|角|ID/iu;
+const INTERNAL_MESSAGE_SHAPE = /[A-Za-z_{}[\]=]|\d/iu;
+
+type ProposalMessageKind = "initial-error" | "retry-error" | "warning";
+
+function hasInternalDetail(message: string): boolean {
+  const withoutVisibleNumbers = message
+    .replace(/出っぱり\d+/gu, "")
+    .replace(/\d+か所/gu, "")
+    .replace(/0より/gu, "");
+  return (
+    INTERNAL_PROPOSAL_WORDS.test(message) ||
+    INTERNAL_MESSAGE_SHAPE.test(withoutVisibleNumbers)
+  );
+}
+
+/** RustやIPCの内部表現を、画面で選べる操作の案内へ置き換える。 */
+export function proposalUserMessage(
+  message: string,
+  kind: ProposalMessageKind,
+): string {
+  const cleaned = message.replace(/^Error:\s*/u, "").trim();
+  if (cleaned && !hasInternalDetail(cleaned)) return cleaned;
+  if (kind === "warning") {
+    return "この置き方では希望した形を作りにくい部分があります。「選び直す」で戻って別の候補を選ぶか、「形を直す」から出っぱりの長さや太さを調整してください。";
+  }
+  if (kind === "retry-error") {
+    return "別の置き方を作れませんでした。「形を直す」で出っぱりの本数・長さ・太さを見直すか、もう一度「別の置き方も見る」を押してください。";
+  }
+  return "展開図を作れませんでした。上の出っぱりの本数・長さ・太さを見直してから、もう一度「展開図を作ってもらう」を押してください。";
+}
+
 /** 折りにくさの目安を日本語にする(数字だけだと良し悪しが伝わらない) */
 export function violationLabel(count: number): string {
   if (count === 0) return "きれいに畳めそうです";
@@ -41,7 +74,11 @@ function SkeletonStep() {
         本まで決められます。長さと太さを変えると、下の絵がそのまま変わります。
       </p>
       <div className="proposal-body">
-        <SkeletonPreview skeleton={skeleton} />
+        <div role="img" aria-label={`出っぱり${list.length}本の形見本`}>
+          <div aria-hidden="true">
+            <SkeletonPreview skeleton={skeleton} />
+          </div>
+        </div>
         <div className="limb-list">
           {list.map((n, i) => (
             <div className="limb-row" key={n.id}>
@@ -112,7 +149,11 @@ function SkeletonStep() {
           やめる
         </button>
       </div>
-      {error && <p className="error-text">{error}</p>}
+      {error && (
+        <p className="error-text">
+          {proposalUserMessage(error, "initial-error")}
+        </p>
+      )}
     </>
   );
 }
@@ -125,6 +166,7 @@ function CandidateStep() {
   const setStep = useAppStore((s) => s.setProposalStep);
   const generate = useAppStore((s) => s.generateProposal);
   const busy = useAppStore((s) => s.proposalBusy);
+  const error = useAppStore((s) => s.proposalError);
 
   return (
     <>
@@ -165,6 +207,11 @@ function CandidateStep() {
           これにする
         </button>
       </div>
+      {error && (
+        <p className="error-text">
+          {proposalUserMessage(error, "retry-error")}
+        </p>
+      )}
     </>
   );
 }
@@ -189,7 +236,7 @@ function ConfirmStep() {
           <p className="hint">{violationLabel(candidate.violations)}</p>
           {candidate.warnings.map((w, i) => (
             <p className="warning-text" key={i}>
-              {w}
+              {proposalUserMessage(w, "warning")}
             </p>
           ))}
           <p className="hint">

@@ -30,6 +30,53 @@ use crate::triangulate::{dedup, index_of, triangulate};
 /// 紙の縁に乗っているとみなす許容誤差。
 const ON_EDGE_TOL: f64 = 1e-9;
 
+/// 提案画面の入力行と同じ、出っぱりの表示名。
+const LIMB_NAMES: [&str; 8] = [
+    "頭",
+    "尾",
+    "右前足",
+    "左前足",
+    "右後足",
+    "左後足",
+    "右の羽",
+    "左の羽",
+];
+
+const PAPER_SIZE_ERROR: &str = "紙の幅と高さを0より大きくして、もう一度お試しください";
+const NO_PLACEMENT_ERROR: &str = "出っぱりを紙の上に配置できませんでした。出っぱりの数を減らすか、長さや太さを小さくして、もう一度お試しください";
+const STRAIGHT_LINE_WARNING: &str = "出っぱりの置き方が一直線に並び、折り線を作れませんでした。「選び直す」で戻り、さらに「形を直す」を選んで、出っぱりの長さか太さを変えてください";
+const INVALID_CREASES_WARNING: &str =
+    "折り線に重なりやつながり方の問題があります。「選び直す」で別の候補を選んでください";
+
+/// 内部IDではなく、提案画面で見分けられる入力行の名前を返す。
+fn limb_name(skeleton: &Skeleton, id: u32) -> String {
+    let Some(index) = skeleton.leaves().iter().position(|&leaf_id| leaf_id == id) else {
+        return "該当する出っぱり".to_string();
+    };
+    LIMB_NAMES.get(index).map_or_else(
+        || format!("出っぱり{}", index + 1),
+        |name| (*name).to_string(),
+    )
+}
+
+fn outside_paper_warning(name: &str) -> String {
+    format!(
+        "{name}が紙からはみ出しています。「選び直す」で戻り、さらに「形を直す」を選んで、{name}の長さか太さを小さくしてください"
+    )
+}
+
+fn overlapping_limb_warning(name: &str) -> String {
+    format!(
+        "{name}が別の出っぱりと同じ位置にあります。「選び直す」で別の候補を選ぶか、さらに「形を直す」で戻って{name}の長さか太さを変えてください"
+    )
+}
+
+fn foldability_warning(violations: usize) -> String {
+    format!(
+        "平らに折りたたみにくい点が{violations}か所あります。「選び直す」で別の候補を選ぶか、この展開図を使った後に折り線の交点を動かしてください"
+    )
+}
+
 /// 展開図の自動提案の結果。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProposalResult {
@@ -147,10 +194,10 @@ pub fn generate(
 ) -> Result<ProposalResult, String> {
     skeleton.validate()?;
     if !(paper_w > 0.0 && paper_h > 0.0 && paper_w.is_finite() && paper_h.is_finite()) {
-        return Err("紙の寸法は正の有限値にしてください".to_string());
+        return Err(PAPER_SIZE_ERROR.to_string());
     }
     if packing.centers.is_empty() {
-        return Err("充填結果に円の中心が1つも入っていません".to_string());
+        return Err(NO_PLACEMENT_ERROR.to_string());
     }
     let mut warnings = Vec::new();
 
@@ -162,9 +209,8 @@ pub fn generate(
             || c[1] - r < -ON_EDGE_TOL
             || c[1] + r > paper_h + ON_EDGE_TOL;
         if out {
-            warnings.push(format!(
-                "角{id}の円が紙からはみ出しています。この角は想定より短くなる可能性があります"
-            ));
+            let name = limb_name(skeleton, id);
+            warnings.push(outside_paper_warning(&name));
         }
     }
 
@@ -179,8 +225,7 @@ pub fn generate(
     let pts = dedup(&pts);
     let tris = triangulate(&pts);
     if tris.is_empty() {
-        warnings
-            .push("円の中心と紙の角が一直線に並んでいるため、折り線を作れませんでした".to_string());
+        warnings.push(STRAIGHT_LINE_WARNING.to_string());
     }
 
     let mut cp = border_cp(paper_w, paper_h);
@@ -197,20 +242,17 @@ pub fn generate(
     for &(id, c) in &packing.centers {
         let used = index_of(&pts, c).is_some_and(|i| tris.iter().any(|t| t.contains(&i)));
         if !used {
-            warnings.push(format!(
-                "角{id}の位置が他の角と重なっているため、専用の折り線を作れませんでした"
-            ));
+            let name = limb_name(skeleton, id);
+            warnings.push(overlapping_limb_warning(&name));
         }
     }
 
     let violations = local_violations(&cp).len();
     if violations > 0 {
-        warnings.push(format!(
-            "平らに折りたたむ条件を満たさない点が{violations}個あります。そのまま提示しますので、必要に応じて手直ししてください"
-        ));
+        warnings.push(foldability_warning(violations));
     }
-    for w in validate(&cp) {
-        warnings.push(format!("展開図の点検: {w}"));
+    for _ in validate(&cp) {
+        warnings.push(INVALID_CREASES_WARNING.to_string());
     }
     Ok(ProposalResult {
         cp,
@@ -222,6 +264,98 @@ pub fn generate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::skeleton::SkeletonNode;
+
+    fn named_limb_skeleton() -> Skeleton {
+        let root_id = 90;
+        let mut nodes = vec![SkeletonNode::new(root_id, None, 0.0)];
+        for id in [41, 7, 83, 2, 68, 15, 56, 31, 74] {
+            nodes.push(SkeletonNode::new(id, Some(root_id), 1.0));
+        }
+        Skeleton { nodes }
+    }
+
+    #[test]
+    fn limb_names_match_the_proposal_input_rows_without_using_ids() {
+        let skeleton = named_limb_skeleton();
+        let ids = skeleton.leaves();
+        let names: Vec<String> = ids.iter().map(|&id| limb_name(&skeleton, id)).collect();
+        assert_eq!(
+            names,
+            [
+                "頭",
+                "尾",
+                "右前足",
+                "左前足",
+                "右後足",
+                "左後足",
+                "右の羽",
+                "左の羽",
+                "出っぱり9",
+            ]
+        );
+        assert_eq!(limb_name(&skeleton, 999), "該当する出っぱり");
+    }
+
+    #[test]
+    fn generation_messages_use_screen_words_and_explain_the_next_action() {
+        assert_eq!(
+            outside_paper_warning("頭"),
+            "頭が紙からはみ出しています。「選び直す」で戻り、さらに「形を直す」を選んで、頭の長さか太さを小さくしてください"
+        );
+        assert_eq!(
+            overlapping_limb_warning("尾"),
+            "尾が別の出っぱりと同じ位置にあります。「選び直す」で別の候補を選ぶか、さらに「形を直す」で戻って尾の長さか太さを変えてください"
+        );
+        assert_eq!(
+            foldability_warning(3),
+            "平らに折りたたみにくい点が3か所あります。「選び直す」で別の候補を選ぶか、この展開図を使った後に折り線の交点を動かしてください"
+        );
+
+        let messages = [
+            PAPER_SIZE_ERROR.to_string(),
+            NO_PLACEMENT_ERROR.to_string(),
+            STRAIGHT_LINE_WARNING.to_string(),
+            INVALID_CREASES_WARNING.to_string(),
+            outside_paper_warning("頭"),
+            overlapping_limb_warning("尾"),
+            foldability_warning(3),
+        ];
+        let forbidden = [
+            "骨格",
+            "充填",
+            "ソルバー",
+            "ヤコビアン",
+            "hard",
+            "soft",
+            "warm start",
+            "イテレーション",
+            "角",
+            "円",
+        ];
+        for message in messages {
+            let lower = message.to_ascii_lowercase();
+            for word in forbidden {
+                assert!(
+                    !lower.contains(word),
+                    "利用者向けの文に内部用語「{word}」が含まれている: {message}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn generated_warning_identifies_the_same_limb_name_as_the_screen() {
+        let skeleton = named_limb_skeleton();
+        let packing = Packing {
+            scale: 1.0,
+            centers: vec![(41, [0.5, 0.5]), (7, [0.75, 0.75])],
+            violation: 0.0,
+        };
+        let result = generate(&skeleton, &packing, 1.0, 1.0).unwrap();
+        assert!(result.warnings.contains(&outside_paper_warning("頭")));
+        assert!(result.warnings.contains(&outside_paper_warning("尾")));
+    }
 
     /// 四角形の軸多角形を扇状分割で埋められること(ドロネー分割は三角形しか
     /// 返さないので、この経路はここで確認しておく)。

@@ -1,5 +1,5 @@
 // 書き出しダイアログ(EXP-001 / EXP-002、Task 4-3)。
-// 展開図を画像ファイルとして保存する。入口は上部ツールバーのボタン1つだけで、
+// 展開図と折り図をファイルとして保存する。入口は上部ツールバーのボタン1つだけで、
 // 常設4区画は増やさない。「ラスタライズ」「dpi」などの用語は出さず、
 // どちらを選ぶと何ができるかを日本語で書く(設計原則3b)。
 
@@ -19,13 +19,13 @@ export const EXPORT_CHOICES: {
 }[] = [
   {
     kind: "CpSvg",
-    label: "展開図の画像(SVG)",
+    label: "展開図(SVG)",
     ext: "svg",
     hint: "紙の実物大(mm)で保存します。いくら拡大してもぼやけず、印刷向きです。",
   },
   {
     kind: "CpPng",
-    label: "展開図の画像(PNG)",
+    label: "展開図(PNG)",
     ext: "png",
     hint: "写真と同じ形式です。そのまま画面で見たり貼り付けたりできます。",
   },
@@ -40,7 +40,7 @@ export const EXPORT_CHOICES: {
   },
   {
     kind: "DiagramSvg",
-    label: "折り図(画像・ページごと)",
+    label: "折り図(ページごとのSVG)",
     ext: "svg",
     hint:
       "折り図をページごとの画像にします。選んだ場所に「-01」「-02」…と" +
@@ -88,7 +88,7 @@ export function ExportDialog() {
         aria-modal="true"
         aria-labelledby="export-title"
       >
-        <h2 id="export-title">画像として書き出す</h2>
+        <h2 id="export-title">展開図・折り図を書き出す</h2>
         <fieldset>
           <legend>何を書き出しますか</legend>
           {EXPORT_CHOICES.map((c) => (

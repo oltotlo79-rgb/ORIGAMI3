@@ -14,7 +14,7 @@ import { PaneSplitter } from "./components/PaneSplitter";
 import { ContextPanelSplitter } from "./components/ContextPanelSplitter";
 import { NewDocumentDialog } from "./components/dialogs/NewDocumentDialog";
 import { ProposalWizard } from "./components/dialogs/ProposalWizard";
-import { ExportDialog } from "./components/dialogs/ExportDialog";
+import { ExportDialog, EXPORT_CHOICES } from "./components/dialogs/ExportDialog";
 import { HistoryButtons } from "./components/HistoryButtons";
 import { HistoryShortcuts } from "./components/HistoryShortcuts";
 import { ToolbarIcon } from "./components/ToolIcons";
@@ -34,6 +34,17 @@ import "./App.css";
 
 const DEFAULT_PAPER = { width_mm: 150, height_mm: 150 };
 const ORI3_FILTERS = [{ name: "ORIGAMI3作品", extensions: ["ori3"] }];
+const EXPORT_GUIDANCE = `${EXPORT_CHOICES.map((choice) => choice.label).join("、")}を書き出します`;
+
+/** 実際に選べる書き出し形式を、そのまま案内する上部ボタン。 */
+export function ExportButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button type="button" data-tooltip={EXPORT_GUIDANCE} onClick={onClick}>
+      <ToolbarIcon name="export" />
+      書き出し
+    </button>
+  );
+}
 
 /** 3D右上へ出す自然追従の短い知らせ。nullなら通常の警告表示へ譲る。 */
 export function relaxationStatus(
@@ -171,14 +182,7 @@ function App() {
           提案
         </button>
         {/* 書き出しの入口。開くのは独立ダイアログで、常設区画は増やさない(EXP-001/002) */}
-        <button
-          type="button"
-          data-tooltip="折り図や3Dデータを書き出します"
-          onClick={openExport}
-        >
-          <ToolbarIcon name="export" />
-          書き出し
-        </button>
+        <ExportButton onClick={openExport} />
         <span className="toolbar-separator" />
         <button
           type="button"
