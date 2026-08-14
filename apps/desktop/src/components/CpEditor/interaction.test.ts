@@ -973,6 +973,53 @@ describe("曲線の折り目を描く", () => {
     expect(curveDraft(ctx.state, ctx.curve)).not.toEqual(draft);
   });
 
+  it.each([
+    {
+      shape: "arc" as const,
+      fixed: [
+        [0.125, 0.25],
+        [0.875, 0.25],
+      ] as Vec2[],
+      cursor: [0.51, 0.625] as Vec2,
+      snapped: [0.5, 0.625] as Vec2,
+    },
+    {
+      shape: "bezier" as const,
+      fixed: [
+        [0.125, 0.25],
+        [0.875, 0.25],
+        [0.25, 0.75],
+      ] as Vec2[],
+      cursor: [0.76, 0.75] as Vec2,
+      snapped: [0.75, 0.75] as Vec2,
+    },
+  ])("D12 $shapeの下見座標と吸着後の確定座標の差は0", ({ shape, fixed, cursor, snapped }) => {
+    const { ctx, drawCurve } = makeCtx(
+      {},
+      [],
+      { enabled: true, shape, segments: 16 },
+    );
+    ctx.tool = "valley";
+    for (const point of fixed) onMouseDown(ctx, toScreen(point), 0);
+
+    onMouseMove(ctx, toScreen(cursor));
+    expect(ctx.state.hoverSnap?.pos).toEqual(snapped);
+    const preview = curveDraft(ctx.state, ctx.curve);
+    expect(preview).not.toBeNull();
+
+    onMouseDown(ctx, toScreen(cursor), 0);
+    expect(drawCurve).toHaveBeenCalledTimes(1);
+    const confirmed = drawCurve.mock.calls[0][0];
+    expect(confirmed).toHaveLength(preview?.length ?? -1);
+    const maxCoordinateDifference = Math.max(
+      ...confirmed.flatMap((point, index) => [
+        Math.abs(point[0] - (preview?.[index][0] ?? Number.NaN)),
+        Math.abs(point[1] - (preview?.[index][1] ?? Number.NaN)),
+      ]),
+    );
+    expect(maxCoordinateDifference).toBe(0);
+  });
+
   it("曲線モードを切っていれば今までどおり2クリックの直線になる", () => {
     const { ctx, drawSegment, drawCurve } = makeCtx();
     ctx.tool = "valley";

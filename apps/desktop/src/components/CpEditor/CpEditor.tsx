@@ -218,7 +218,8 @@ export function CpEditor({ fitRef }: Props) {
             ? `対称にそろえています（基準: ${mirrorAxisLabel(mirrorAxis)}。引く・消す・線種変更）`
             : null);
     const overlay: RenderOverlay = {
-      hoverSnap: kind ? st.hoverSnap : null,
+      // 作図も通常線と同じhoverSnapを渡し、renderer共通の緑丸で吸着を知らせる。
+      hoverSnap: kind !== undefined || activeTool === "construct" ? st.hoverSnap : null,
       preview,
       directionGuide,
       mirrorAxis: axisSegment,
@@ -359,8 +360,8 @@ export function CpEditor({ fitRef }: Props) {
     draw();
   }, [uiTheme, draw]);
 
-  // ツール切替時は描画途中・選択途中の一時状態を破棄する
-  // (山折りの1点目を谷折りに引き継ぐ、といった取り違えを防ぐ)
+  // ツール・作図方式・曲線の入切/形を変えたら、描画途中・選択途中を破棄する。
+  // 別の入力規則へ古い点や線を引き継ぐ取り違えを防ぐ。
   useEffect(() => {
     const st = stateRef.current;
     st.pendingStart = null;
@@ -375,7 +376,14 @@ export function CpEditor({ fitRef }: Props) {
     st.vertexDrag = null;
     st.directionSnap = null;
     draw();
-  }, [activeTool, alignDraft?.mode, draw]);
+  }, [
+    activeTool,
+    alignDraft?.mode,
+    construct.kind,
+    curve.enabled,
+    curve.shape,
+    draw,
+  ]);
 
   // 区画サイズの変化に追従
   useEffect(() => {

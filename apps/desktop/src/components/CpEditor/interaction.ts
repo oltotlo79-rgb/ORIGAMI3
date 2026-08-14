@@ -123,7 +123,8 @@ function onCurveClick(ctx: InteractionCtx, pos: Vec2, kind: EdgeKind): void {
 /** 描いている最中の曲線(カーソル位置を仮の点として補った形)。まだ描けなければnull */
 export function curveDraft(state: EphemeralState, curve: CurveOptions): Vec2[] | null {
   if (state.curvePoints.length === 0 || !state.cursorWorld) return null;
-  const pts = [...state.curvePoints, state.cursorWorld];
+  // 確定時のクリックと同じ吸着後座標を使い、押した瞬間に形が跳ばないようにする。
+  const pts = [...state.curvePoints, state.hoverSnap?.pos ?? state.cursorWorld];
   return curvePolyline(curve.shape, pts, { segments: curve.segments });
 }
 
