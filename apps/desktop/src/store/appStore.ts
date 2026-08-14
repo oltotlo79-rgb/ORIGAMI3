@@ -554,6 +554,8 @@ interface AppState {
   /** 手順再生からの警告(飛ばした理由など)。展開図・追従計算の警告とは別に持つ */
   replayWarnings: string[];
   errorMessage: string | null;
+  /** 直近に保存できた作品ファイルの場所。編集・次の保存開始・失敗で消す。 */
+  documentSavedPath: string | null;
   /** 作品の世代番号。新規/開くの成功で増える(エディタの表示リセット合図) */
   docEpoch: number;
   /** 利用者が指定した折り角度(度)。キーは辺ID */
@@ -1000,6 +1002,8 @@ export const useAppStore = create<AppState>((set, get) => {
   let foldThroughRevision = 0;
   /** busyを開始した要求の番号。古い要求のfinallyが新しいbusyを消さないために使う */
   let foldThroughBusyToken = 0;
+  /** 閉じた提案画面へ古い計算結果を戻さないための要求世代。 */
+  let proposalGeneration = 0;
 
   const invalidateFoldThrough = (): void => {
     foldThroughRevision++;
@@ -1125,6 +1129,7 @@ export const useAppStore = create<AppState>((set, get) => {
               : s.mirrorAxisNotice,
         hoveredHinge: null,
         errorMessage: null,
+        documentSavedPath: null,
         contactDetected: false,
         docEpoch: isNewDocument ? s.docEpoch + 1 : s.docEpoch,
       };
@@ -1133,7 +1138,10 @@ export const useAppStore = create<AppState>((set, get) => {
 
   /** IPC失敗(reject)をerrorMessageへ反映する */
   const fail = (e: unknown) => {
-    set({ errorMessage: typeof e === "string" ? e : String(e) });
+    set({
+      errorMessage: typeof e === "string" ? e : String(e),
+      documentSavedPath: null,
+    });
   };
 
   /** DocumentViewを返すコマンドを直列化キュー経由で実行し、結果を反映する。
@@ -1947,6 +1955,7 @@ export const useAppStore = create<AppState>((set, get) => {
     replaySkipped: [],
     replayWarnings: [],
     errorMessage: null,
+    documentSavedPath: null,
     docEpoch: 0,
     drivers: new Map(),
     angleUndoStack: [],
@@ -2013,13 +2022,15 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     saveDocument: async (path) => {
+      // 次の結果が出るまでは、前回の保存成功を現在の結果として見せない。
+      set({ documentSavedPath: null });
       // たわみのつまみを動かした直後でも、保存要求より前に作品データへ確定する。
       await flushSoftSave();
       // 保存も直列化する(直前の編集が確定してから保存されることを保証)。
       // 状態の更新はないので、応答の新旧に関わらず結果を報告する
       const r = await queue.run(() => ipc.documentSave(path));
       if (r.ok) {
-        set({ errorMessage: null });
+        set({ errorMessage: null, documentSavedPath: path });
       } else {
         fail(r.error);
       }
@@ -3204,7 +3215,8 @@ export const useAppStore = create<AppState>((set, get) => {
       }, true);
     },
 
-    openProposal: () =>
+    openProposal: () => {
+      proposalGeneration++;
       set({
         proposalStep: "skeleton",
         proposalSkeleton: defaultSkeleton(),
@@ -3212,9 +3224,13 @@ export const useAppStore = create<AppState>((set, get) => {
         proposalSelected: null,
         proposalBusy: false,
         proposalError: null,
-      }),
+      });
+    },
 
-    closeProposal: () => set({ proposalStep: null, proposalBusy: false }),
+    closeProposal: () => {
+      proposalGeneration++;
+      set({ proposalStep: null, proposalBusy: false });
+    },
 
     setProposalStep: (step) => set({ proposalStep: step }),
 
@@ -3231,11 +3247,13 @@ export const useAppStore = create<AppState>((set, get) => {
       if (s.proposalBusy) return;
       const paper = s.doc?.paper ?? FALLBACK_PAPER;
       const seed = s.proposalSeed;
+      const generation = ++proposalGeneration;
       set({ proposalBusy: true, proposalError: null, proposalSeed: seed + 1 });
       // 提案の計算は作品の状態を読まない独立処理。直列化キューに載せると
       // 数百msの計算の間だけ編集が止まるので、ここは載せずに直接呼ぶ
       try {
         const list = await ipc.proposalGenerate(s.proposalSkeleton, paper, seed);
+        if (generation !== proposalGeneration) return;
         set({
           proposalCandidates: list,
           proposalSelected: list.length > 0 ? 0 : null,
@@ -3245,6 +3263,7 @@ export const useAppStore = create<AppState>((set, get) => {
           proposalBusy: false,
         });
       } catch (e) {
+        if (generation !== proposalGeneration) return;
         set({
           proposalBusy: false,
           proposalError: typeof e === "string" ? e : String(e),
@@ -3267,6 +3286,7 @@ export const useAppStore = create<AppState>((set, get) => {
       if (!chosen) return;
       // 以後は普通の展開図として自由に編集できる(PRO-003)。
       // 元に戻せる操作なので、通常の編集と同じ経路(edit_apply)で流し込む
+      proposalGeneration++;
       set({ proposalStep: null });
       await get().applyEdit({ type: "ReplaceCreasePattern", cp: chosen.cp });
     },

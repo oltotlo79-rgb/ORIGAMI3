@@ -32,6 +32,7 @@ import {
   uniqueWarnings,
 } from "../lib/techniques";
 import { flatFoldNotice } from "../lib/flatFoldNotice";
+import { fileName } from "./RecoveryDialog";
 import { isTwistPolygonReady } from "../lib/twistPolygon";
 import {
   clampTechniqueLayerCount,
@@ -1571,13 +1572,11 @@ function RelaxationMessages() {
   const setSelection = useAppStore((s) => s.setSelection);
   const setHoveredHinge = useAppStore((s) => s.setHoveredHinge);
   const notices = relaxationNotices(relaxations);
-  const shown = notices.slice(0, 5);
-  const remaining = notices.length - shown.length;
 
-  if (shown.length === 0) return null;
+  if (notices.length === 0) return null;
   return (
     <div className="relaxation-messages" aria-label="前の折り目の追従">
-      {shown.map((item) => (
+      {notices.map((item) => (
         <button
           type="button"
           className="relaxation-message"
@@ -1595,7 +1594,6 @@ function RelaxationMessages() {
           {item.actual_angle_deg.toFixed(1)}°
         </button>
       ))}
-      {remaining > 0 && <p className="relaxation-more">ほか{remaining}本</p>}
     </div>
   );
 }
@@ -1606,6 +1604,7 @@ export function ContextPanel() {
   const replayWarnings = useAppStore((s) => s.replayWarnings);
   const flatFoldViolations = useAppStore((s) => s.flatFoldViolations);
   const errorMessage = useAppStore((s) => s.errorMessage);
+  const documentSavedPath = useAppStore((s) => s.documentSavedPath);
   const mirrorAxisNotice = useAppStore((s) => s.mirrorAxisNotice);
   const currentStep = useAppStore((s) => s.currentStep);
   const activeTool = useAppStore((s) => s.activeTool);
@@ -1689,11 +1688,17 @@ export function ContextPanel() {
         )}
       </div>
       {(errorMessage !== null ||
+        documentSavedPath !== null ||
         mirrorAxisNotice !== null ||
         allWarnings.length > 0 ||
         hasRelaxations) && (
         <div className="context-messages">
           {errorMessage !== null && <p className="error-text">{errorMessage}</p>}
+          {documentSavedPath !== null && errorMessage === null && (
+            <p className="mirror-axis-notice" aria-live="polite">
+              作品を「{fileName(documentSavedPath)}」に保存しました
+            </p>
+          )}
           {mirrorAxisNotice !== null && (
             <p className="mirror-axis-notice">{mirrorAxisNotice}</p>
           )}

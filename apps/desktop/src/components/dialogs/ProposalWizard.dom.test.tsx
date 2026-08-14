@@ -441,7 +441,7 @@ describe("提案ウィザード", () => {
     expect(screen.getByRole("button", { name: "候補1" })).not.toBeNull();
   });
 
-  it.fails(
+  it(
     "D22: 計算中にやめた後、完了しても提案画面を再表示しない",
     async () => {
       const pending = deferred<ProposalCandidate[]>();
@@ -465,6 +465,33 @@ describe("提案ウィザード", () => {
       expect(screen.queryByRole("dialog")).toBeNull();
     },
   );
+
+  it("D22: 取り消した100要求が逆順に完了しても画面・候補・計算中表示を戻さない", async () => {
+    const pending = Array.from({ length: 100 }, () => deferred<ProposalCandidate[]>());
+    let issued = 0;
+    vi.mocked(ipc.proposalGenerate).mockImplementation(() => pending[issued++].promise);
+    render(<ProposalWizard />);
+
+    const requests: Promise<void>[] = [];
+    for (let index = 0; index < pending.length; index++) {
+      useAppStore.getState().openProposal();
+      requests.push(useAppStore.getState().generateProposal());
+      useAppStore.getState().closeProposal();
+    }
+    expect(issued).toBe(100);
+
+    for (let index = pending.length - 1; index >= 0; index--) {
+      await act(async () => {
+        pending[index].resolve([makeCandidate(index + 10, 0)]);
+        await requests[index];
+      });
+      const state = useAppStore.getState();
+      expect(state.proposalStep).toBeNull();
+      expect(state.proposalCandidates).toHaveLength(0);
+      expect(state.proposalBusy).toBe(false);
+      expect(screen.queryByRole("dialog")).toBeNull();
+    }
+  });
 
   it("提案の警告と生成エラーには内部用語を表示しない", () => {
     const internalTerms = [

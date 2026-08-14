@@ -95,19 +95,30 @@ export function Timeline() {
     );
   }
 
+  const atStart = currentStep === 0;
+  const atEnd = currentStep === null || currentStep >= steps.length;
+
   return (
     <div className="timeline">
       <div className="timeline-controls">
         <button
           type="button"
-          data-tooltip="折る前の状態に戻します"
+          disabled={atStart}
+          data-tooltip={
+            atStart ? "すでに折る前の状態です" : "折る前の状態に戻します"
+          }
           onClick={() => selectStep(0)}
         >
           ⏮ 最初へ
         </button>
         <button
           type="button"
-          data-tooltip="1つ前の手順を表示します"
+          disabled={atStart}
+          data-tooltip={
+            atStart
+              ? "まだ折る前なので、これより前へは戻れません"
+              : "1つ前の手順を表示します"
+          }
           onClick={() => stepBy(-1)}
         >
           ◀ 前へ
@@ -125,7 +136,12 @@ export function Timeline() {
         </button>
         <button
           type="button"
-          data-tooltip="1つ先の手順を表示します"
+          disabled={atEnd}
+          data-tooltip={
+            atEnd
+              ? "いちばん最後の状態なので、これより先へは進めません"
+              : "1つ先の手順を表示します"
+          }
           onClick={() => stepBy(1)}
         >
           次へ ▶

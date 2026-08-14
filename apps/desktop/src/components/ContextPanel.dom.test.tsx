@@ -18,6 +18,7 @@ import { DEFAULT_CURVE } from "../lib/curve";
 import { ALIGN_LABELS } from "../lib/alignFold";
 
 vi.mock("../ipc/client", () => ({
+  documentSave: vi.fn(),
   sequenceApply: vi.fn(),
   sequenceReplay: vi.fn(),
   poseSolve: vi.fn(),
@@ -84,6 +85,7 @@ function seed(drivers: Map<number, number>, poseAngles = new Map<number, number>
     replayWarnings: [],
     flatFoldViolations: [],
     errorMessage: null,
+    documentSavedPath: null,
     mirrorAxis: { kind: "paperVertical" },
     mirrorAxisNotice: null,
     contextHelpExpanded: true,
@@ -113,6 +115,7 @@ afterEach(() => {
     flatFoldViolations: [],
     activeAngleIntent: null,
     hoveredHinge: null,
+    documentSavedPath: null,
     mirrorAxis: { kind: "paperVertical" },
     mirrorAxisNotice: null,
     contextHelpExpanded: true,
@@ -380,7 +383,7 @@ describe("複数の折り目の角度(SIM-001)", () => {
 });
 
 describe("前の折り目の自然追従(SIM-018)", () => {
-  it("0.1度以上だけを最大5件表示し、6本目を残数へまとめる", () => {
+  it("0.1度以上の追従だけを全て一覧へ表示する", () => {
     seed(new Map());
     useAppStore.setState({
       contextHelpExpanded: false,
@@ -403,8 +406,8 @@ describe("前の折り目の自然追従(SIM-018)", () => {
         "aria-expanded",
       ),
     ).toBe("false");
-    expect(within(list).getAllByRole("button")).toHaveLength(5);
-    expect(within(list).getByText("ほか1本")).toBeTruthy();
+    expect(within(list).getAllByRole("button")).toHaveLength(6);
+    expect(within(list).getByText(/折り目 #6:/)).toBeTruthy();
     expect(within(list).queryByText(/折り目 #7:/)).toBeNull();
     expect(document.querySelectorAll(".context-panel")).toHaveLength(1);
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -430,6 +433,41 @@ describe("前の折り目の自然追従(SIM-018)", () => {
     fireEvent.mouseLeave(row);
     expect(useAppStore.getState().hoveredHinge).toBeNull();
   });
+
+  it.each([6, 12, 30])(
+    "D20: 追従した折り目が%i本でも、全ての位置を確かめて選べる",
+    (count) => {
+      seed(new Map());
+      const hinges = Array.from({ length: count }, (_, index) => index + 1);
+      useAppStore.setState({
+        contextHelpExpanded: false,
+        hinges: new Set(hinges),
+        relaxations: hinges.map((hinge) => ({
+          hinge,
+          target_angle_deg: 90,
+          actual_angle_deg: 90 - hinge,
+          delta_deg: -hinge,
+        })),
+      });
+      render(<ContextPanel />);
+
+      const list = screen.getByLabelText("前の折り目の追従");
+      const rows = within(list).getAllByRole("button");
+      expect(rows).toHaveLength(count);
+      for (const [index, row] of rows.entries()) {
+        const hinge = index + 1;
+        fireEvent.focus(row);
+        expect(useAppStore.getState().hoveredHinge).toBe(hinge);
+        fireEvent.click(row);
+        expect(useAppStore.getState().selection).toEqual({
+          edgeIds: [hinge],
+          vertexIds: [],
+        });
+        fireEvent.blur(row);
+        expect(useAppStore.getState().hoveredHinge).toBeNull();
+      }
+    },
+  );
 
   it("最良候補を表示中でも角度操作を無効化しない", () => {
     seed(new Map([[5, 90]]), new Map([[5, 72]]));
@@ -1155,5 +1193,34 @@ describe("平らに畳めない点の警告欄", () => {
     expect(rows[0].classList.contains("warning-text")).toBe(true);
     expect(rows[0].textContent).not.toContain("山と谷の本数");
     expect(rows[0].textContent).not.toContain("向かい合う角の和");
+  });
+});
+
+describe("D25: 作品保存の知らせ", () => {
+  it("保存できたファイル名を既存の通知欄へ表示する", async () => {
+    seed(new Map());
+    vi.mocked(ipc.documentSave).mockResolvedValue(undefined);
+    render(<ContextPanel />);
+
+    await useAppStore.getState().saveDocument("C:\\作品\\鶴.ori3");
+
+    expect(screen.getByText("作品を「鶴.ori3」に保存しました")).toBeTruthy();
+    expect(screen.queryByText(/保存できません/)).toBeNull();
+  });
+
+  it("次の保存に失敗したら前の成功表示を消し、失敗理由だけを出す", async () => {
+    seed(new Map());
+    vi.mocked(ipc.documentSave)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce("保存先へ書き込めませんでした");
+    render(<ContextPanel />);
+
+    await useAppStore.getState().saveDocument("C:\\作品\\前の作品.ori3");
+    expect(screen.getByText("作品を「前の作品.ori3」に保存しました")).toBeTruthy();
+
+    await useAppStore.getState().saveDocument("C:\\作品\\新しい作品.ori3");
+
+    expect(screen.queryByText(/作品を「.*」に保存しました/)).toBeNull();
+    expect(screen.getByText("保存先へ書き込めませんでした")).toBeTruthy();
   });
 });

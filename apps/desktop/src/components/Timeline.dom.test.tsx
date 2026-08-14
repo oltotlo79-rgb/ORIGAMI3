@@ -63,4 +63,35 @@ describe("手順タイムライン", () => {
     fireEvent.click(screen.getByRole("button", { name: /^2 / }));
     expect(useAppStore.getState().currentStep).toBe(2);
   });
+
+  it("D28: 折る前では「前へ」を押せない見た目にする", () => {
+    useAppStore.setState({ doc: doc(3), currentStep: 0 });
+    render(<Timeline />);
+
+    const previous = screen.getByRole("button", { name: "◀ 前へ" }) as HTMLButtonElement;
+    const first = screen.getByRole("button", { name: "⏮ 最初へ" }) as HTMLButtonElement;
+    expect(first.disabled).toBe(true);
+    expect(previous.disabled).toBe(true);
+    expect(previous.getAttribute("data-tooltip")).toBe(
+      "まだ折る前なので、これより前へは戻れません",
+    );
+  });
+
+  it("D28: 最後の手順では「次へ」を押せない見た目にする", () => {
+    useAppStore.setState({ doc: doc(3), currentStep: 3 });
+    render(<Timeline />);
+
+    const next = screen.getByRole("button", { name: "次へ ▶" }) as HTMLButtonElement;
+    expect(next.disabled).toBe(true);
+    expect(next.getAttribute("data-tooltip")).toBe(
+      "いちばん最後の状態なので、これより先へは進めません",
+    );
+
+    cleanup();
+    useAppStore.setState({ currentStep: null });
+    render(<Timeline />);
+    expect(
+      (screen.getByRole("button", { name: "次へ ▶" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
 });
