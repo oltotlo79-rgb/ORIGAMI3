@@ -30,6 +30,7 @@ export interface PaperPickSurface {
   mesh: THREE.Mesh;
   triangleFaceIds: number[];
   triangleLayers: number[];
+  faceMirrored: ReadonlyMap<number, boolean>;
 }
 
 /** Raycasterの1交点を、描画と同じ表面所有順で比較できる形にしたもの */
@@ -39,6 +40,8 @@ export interface PaperHitCandidate {
   distance: number;
   point: THREE.Vector3;
   normal: THREE.Vector3;
+  /** 計算側が折りの合成で求めた面の鏡映偶奇。 */
+  mirrored: boolean;
 }
 
 /**
@@ -59,7 +62,9 @@ export function canonicalizeHitNormal(normal: THREE.Vector3): THREE.Vector3 {
 /**
  * 同じ画素に当たった面から表面所有面を選ぶ純粋関数。
  * 実距離の最小を優先し、`SURFACE_HIT_DISTANCE_EPS`以内の共平面は
- * canonical法線の+側から見ると大きい層/面ID、-側なら小さい層/面IDを選ぶ。
+ * canonical法線の+側から見ると大きい層、-側なら小さい層を選ぶ。同じ層だけは
+ * 計算側のmirrored=falseを優先し、面IDは同じ偶奇同士の決定的fallbackに限る。
+ * mirroredはカメラから独立しているため、裏視点では同じ物理面の裏を拾う。
  */
 export function selectPaperHit(
   hits: readonly PaperHitCandidate[],
@@ -78,11 +83,22 @@ export function selectPaperHit(
   for (let i = 1; i < tied.length; i++) {
     const candidate = tied[i];
     const layerOrder = candidate.layer - selected.layer;
-    const faceOrder = candidate.face - selected.face;
-    const order = layerOrder || faceOrder;
-    if ((positiveSide && order > 0) || (!positiveSide && order < 0)) {
+    if ((positiveSide && layerOrder > 0) || (!positiveSide && layerOrder < 0)) {
       selected = candidate;
-    } else if (order === 0 && candidate.distance < selected.distance) {
+      continue;
+    }
+    if (layerOrder !== 0) continue;
+
+    if (candidate.mirrored !== selected.mirrored && !candidate.mirrored) {
+      selected = candidate;
+      continue;
+    }
+    if (candidate.mirrored !== selected.mirrored) continue;
+
+    const faceOrder = candidate.face - selected.face;
+    if ((positiveSide && faceOrder > 0) || (!positiveSide && faceOrder < 0)) {
+      selected = candidate;
+    } else if (faceOrder === 0 && candidate.distance < selected.distance) {
       selected = candidate;
     }
   }
@@ -115,6 +131,7 @@ function pickPaperHit(
   x: number,
   y: number,
   triangleLayers?: number[],
+  faceMirrored?: ReadonlyMap<number, boolean>,
 ): PaperHitCandidate | null {
   const raycaster = new THREE.Raycaster();
   raycaster.setFromCamera(
@@ -133,6 +150,7 @@ function pickPaperHit(
       distance: hit.distance,
       point: hit.point.clone(),
       normal: hit.face.normal.clone().applyNormalMatrix(normalMatrix).normalize(),
+      mirrored: faceMirrored?.get(face) ?? false,
     });
   }
   return selectPaperHit(hits, camera.getWorldPosition(new THREE.Vector3()));
@@ -153,6 +171,7 @@ export function pickFace(
   x: number,
   y: number,
   triangleLayers?: number[],
+  faceMirrored?: ReadonlyMap<number, boolean>,
 ): number | null {
   return pickPaperHit(
     mesh,
@@ -163,6 +182,7 @@ export function pickFace(
     x,
     y,
     triangleLayers,
+    faceMirrored,
   )?.face ?? null;
 }
 
@@ -180,6 +200,7 @@ export function pickPaper(
   x: number,
   y: number,
   triangleLayers?: number[],
+  faceMirrored?: ReadonlyMap<number, boolean>,
 ): { face: number; point: THREE.Vector3 } | null {
   const hit = pickPaperHit(
     mesh,
@@ -190,6 +211,7 @@ export function pickPaper(
     x,
     y,
     triangleLayers,
+    faceMirrored,
   );
   return hit ? { face: hit.face, point: hit.point.clone() } : null;
 }
@@ -262,6 +284,7 @@ export function pickHingeSegment(
         x,
         y,
         surface.triangleLayers,
+        surface.faceMirrored,
       )
     : null;
   const candidates: { segment: HingeSegment; bucket: number; depth: number }[] = [];

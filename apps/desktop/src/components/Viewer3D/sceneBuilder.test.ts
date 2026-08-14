@@ -31,6 +31,7 @@ import {
   layerOffsets,
 } from "../../lib/layerOffset";
 import type { Document, Face, Frame3D } from "../../lib/types";
+import { orderSurfaceOwner } from "./surfaceOwner";
 
 /** dispose回数を数える偽の資源(Three.jsの実体は使わない) */
 function fake() {
@@ -605,8 +606,8 @@ describe("createContent / updateFrame(形の更新)", () => {
   it("紙が完全に重なっても、表を向いた面が裏の色で塗りつぶされない", () => {
     // 実機で見つかった不具合の再現。角度スライダー・紙を引く操作(pose_solve)の
     // 結果は全ての面が層0なので、面を離して描くことができず深度が同値になる。
-    // 表と裏は同じ三角形を2回描き、Three.jsは必ず表→裏の順に描くため、深度が
-    // 同値だと後から描かれる裏面(白)が表の色(赤)を塗りつぶしていた。
+    // owner順を現在のworld法線で決めると、谷折りで裏windingの面がownerに
+    // なり、別faceの表fragmentを先に捨てて裏色(白)だけを残していた。
     const doc = makeDoc();
     const content = createContent(buildTopology(doc, FACES, HINGES), doc.display);
     // 山折りを180度まで折った形: 面1が面0の上に完全に重なり、裏返っている
@@ -620,6 +621,7 @@ describe("createContent / updateFrame(形の更新)", () => {
             [1, 1, 0],
           ],
           layer: 0,
+          mirrored: false,
         },
         {
           face: 1,
@@ -629,6 +631,7 @@ describe("createContent / updateFrame(形の更新)", () => {
             [1, 0, 0],
           ],
           layer: 0,
+          mirrored: true,
         },
       ],
       warnings: [],
@@ -639,12 +642,35 @@ describe("createContent / updateFrame(形の更新)", () => {
     expect(normal.getZ(0)).toBeCloseTo(1, 6); // 面0は表(+z)向き=赤で描かれる
     expect(normal.getZ(3)).toBeCloseTo(-1, 6); // 面1は裏返り=白で描かれる
     expect(content.positions[2]).toBe(content.positions[3 * 3 + 2]);
+    expect([...content.owner.faceMirrored]).toEqual([[0, false], [1, true]]);
+
+    const ownerFaceFrom = (z: number) => {
+      const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
+      camera.position.set(0.5, 0.5, z);
+      camera.lookAt(0.5, 0.5, 0);
+      camera.updateMatrixWorld(true);
+      orderSurfaceOwner(content.owner, camera);
+      const index = content.owner.geometry.getIndex();
+      if (!index) throw new Error("surface owner index is missing");
+      return content.topology.vertexFaceIds[index.getX(index.count - 1)];
+    };
+
+    // 180°山折りの正面では+z表法線の面0を選ぶ。裏へ回しても面1の表へ
+    // 乗り換えず、同じ面0をBackSide材質で見るため裏の白になる。
+    expect(ownerFaceFrom(2)).toBe(0);
+    expect(ownerFaceFrom(-2)).toBe(0);
 
     // 面の実際の深度は動かさない。表と裏が同値のときだけ、裏面のstrict lessで
     // 先に見えている表を守る。境界線は同値を通すLEQUALで面より後に描く。
     const materials = content.mesh.material as THREE.MeshLambertMaterial[];
     expect(materials[0].side).toBe(THREE.FrontSide);
     expect(materials[1].side).toBe(THREE.BackSide);
+    expect(materials[0].color.toArray()).toEqual(
+      doc.display.front_color.map((channel) => channel / 255),
+    );
+    expect(materials[1].color.toArray()).toEqual(
+      doc.display.back_color.map((channel) => channel / 255),
+    );
     for (const m of materials) {
       expect(m.depthTest).toBe(true);
       expect(m.depthWrite).toBe(true);
@@ -728,8 +754,18 @@ describe("紙のたわみの表示(SIM-012)", () => {
     const content = createSoftContent(SOFT, makeDoc().display);
     updateSoftContent(content, SOFT, {
       faces: [
-        { face: 0, polygon: [[0, 0, 0], [1, 0, 0], [1, 1, 0]], layer: 0 },
-        { face: 1, polygon: [[0, 0, 0], [1, 1, 0], [0, 1, 0]], layer: 1 },
+        {
+          face: 0,
+          polygon: [[0, 0, 0], [1, 0, 0], [1, 1, 0]],
+          layer: 0,
+          mirrored: false,
+        },
+        {
+          face: 1,
+          polygon: [[0, 0, 0], [1, 1, 0], [0, 1, 0]],
+          layer: 1,
+          mirrored: true,
+        },
       ],
       warnings: [],
     });
@@ -739,5 +775,6 @@ describe("紙のたわみの表示(SIM-012)", () => {
     for (let i = 3; i < 6; i++) {
       expect(Math.abs(content.positions[i * 3 + 2])).toBeCloseTo(step, 6);
     }
+    expect([...content.owner.faceMirrored]).toEqual([[0, false], [1, true]]);
   });
 });

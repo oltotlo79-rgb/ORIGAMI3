@@ -77,6 +77,7 @@ fn frame_bits(frame: &Frame3D) -> Vec<u64> {
     for f in &frame.faces {
         out.push(u64::from(f.face));
         out.push(u64::from(f.layer));
+        out.push(u64::from(f.mirrored));
         for p in &f.polygon {
             out.extend(p.iter().map(|v| v.to_bits()));
         }
@@ -607,6 +608,15 @@ fn flat_state_at_matches_fold_through_state() {
             assert!(
                 got.approx_eq(want, 1e-9),
                 "{steps}手順目の面{id}の配置が違う: got={got:?}, want={want:?}"
+            );
+        }
+
+        let replayed = replay(&doc, steps, 1.0);
+        for face in &replayed.frame.faces {
+            assert_eq!(
+                face.mirrored, state.placements[&face.face].mirrored,
+                "{steps}手順目の面{}: replayとFlatStateの鏡映偶奇",
+                face.face
             );
         }
     }

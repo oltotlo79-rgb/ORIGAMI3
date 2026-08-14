@@ -313,6 +313,17 @@ fn bbox_xy(frame: &Frame3D) -> ([f64; 2], [f64; 2]) {
     (min, max)
 }
 
+fn signed_area_xy(points: &[[f64; 2]]) -> f64 {
+    (0..points.len())
+        .map(|index| {
+            let a = points[index];
+            let b = points[(index + 1) % points.len()];
+            a[0] * b[1] - a[1] * b[0]
+        })
+        .sum::<f64>()
+        * 0.5
+}
+
 /// CPを描画順に依らない正規形へ: 辺を(整列した端点座標の組, 種類)の
 /// 集合として取り出して整列する。座標は1e-6格子に丸める。
 fn canonical_edges(cp: &CreasePattern) -> Vec<([i64; 2], [i64; 2], u8)> {
@@ -370,6 +381,46 @@ fn blintz_once_folds_flat_to_rotated_square() {
     // 平坦: 全面の|z|<1e-6
     let z = max_abs_z(&result.frame);
     assert!(z < 1e-6, "max|z|={z}");
+    let vertex_positions = cp
+        .vertices
+        .iter()
+        .map(|vertex| (vertex.id, vertex.pos))
+        .collect::<HashMap<_, _>>();
+    let faces_by_id = faces
+        .iter()
+        .map(|face| (face.id, face))
+        .collect::<HashMap<_, _>>();
+    for face3d in &result.frame.faces {
+        let face = faces_by_id[&face3d.face];
+        let source = face
+            .vertices
+            .iter()
+            .map(|vertex| vertex_positions[vertex])
+            .collect::<Vec<_>>();
+        let folded = face3d
+            .polygon
+            .iter()
+            .map(|point| [point[0], point[1]])
+            .collect::<Vec<_>>();
+        let source_area = signed_area_xy(&source);
+        let folded_area = signed_area_xy(&folded);
+        assert!(
+            source_area.abs() > 1e-12 && folded_area.abs() > 1e-12,
+            "面{}の符号付き面積: source={source_area}, folded={folded_area}",
+            face3d.face
+        );
+        assert_eq!(
+            face3d.mirrored,
+            source_area * folded_area < 0.0,
+            "完成やっこさんの面{}の材質座標向き",
+            face3d.face
+        );
+    }
+    assert!(
+        result.frame.faces.iter().any(|face| face.mirrored)
+            && result.frame.faces.iter().any(|face| !face.mirrored),
+        "完成やっこさんは表向き面と裏返った面の双方を含む"
+    );
     let pos = folded_positions(&cp, &faces, &result.frame, 1e-6);
 
     // 外形: バウンディングボックスは1×1(回転正方形が紙の四辺に接する)
@@ -517,6 +568,7 @@ fn yakko_solve_twice_gives_identical_results() {
     assert_eq!(r1.frame.faces.len(), r2.frame.faces.len());
     for (f1, f2) in r1.frame.faces.iter().zip(&r2.frame.faces) {
         assert_eq!(f1.face, f2.face);
+        assert_eq!(f1.mirrored, f2.mirrored, "面{}の鏡映偶奇が不一致", f1.face);
         assert_eq!(f1.polygon, f2.polygon, "面{}の座標が不一致", f1.face);
     }
 }

@@ -769,11 +769,13 @@ mod tests {
                     face: 0,
                     polygon: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0]],
                     layer: 0,
+                    mirrored: false,
                 },
                 Face3D {
                     face: 1,
                     polygon: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.5], [1.0, 1.0, 0.5]],
                     layer: 0,
+                    mirrored: false,
                 },
             ],
             warnings: Vec::new(),

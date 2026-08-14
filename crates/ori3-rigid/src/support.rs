@@ -361,6 +361,7 @@ mod tests {
                 face: id,
                 polygon: polygon.to_vec(),
                 layer: 0,
+                mirrored: false,
             }],
             warnings: Vec::new(),
         }

@@ -268,6 +268,7 @@ fn assert_fold_senses(doc: &Document, label: &str) {
 /// 折り上がりが平ら(全ての面がz=0に乗る)ことを確かめる。
 fn assert_flat(doc: &Document, label: &str) {
     let result = replay(doc, doc.sequence.len(), 1.0);
+    let (_, state) = state_of(doc);
     assert!(
         result.warnings.is_empty(),
         "{label}: 再生の警告 {:?}",
@@ -285,6 +286,29 @@ fn assert_flat(doc: &Document, label: &str) {
             .iter()
             .all(|f| f.polygon.iter().all(|p| p[2].abs() < 1e-6)),
         "{label}: 折り上がりは平ら"
+    );
+    assert_eq!(
+        result.frame.faces.len(),
+        state.placements.len(),
+        "{label}: 3D表示と平坦状態の面数"
+    );
+    for face in &result.frame.faces {
+        assert_eq!(
+            face.mirrored, state.placements[&face.face].mirrored,
+            "{label}: 面{}の3D表示と平坦状態の鏡映偶奇",
+            face.face
+        );
+    }
+    assert!(
+        state
+            .placements
+            .values()
+            .any(|placement| placement.mirrored)
+            && state
+                .placements
+                .values()
+                .any(|placement| !placement.mirrored),
+        "{label}: 表向き面と裏返った面の双方を検査する"
     );
 }
 

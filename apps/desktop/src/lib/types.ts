@@ -336,6 +336,8 @@ export interface Face3D {
   face: number;
   polygon: [number, number, number][];
   layer: number;
+  /** 折り木で面が鏡映された回数の偶奇。旧mockは省略できるがRust IPCは常に返す。 */
+  mirrored?: boolean;
 }
 
 export interface Frame3D {

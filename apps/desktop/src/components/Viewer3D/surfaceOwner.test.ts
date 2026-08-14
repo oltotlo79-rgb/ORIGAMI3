@@ -9,6 +9,7 @@ import {
   orderSurfaceOwner,
   ownerCodeBytes,
   ownerCodeVector,
+  updateSurfaceOwnerFaceMirrored,
   updateSurfaceOwnerFaceLayers,
   updateSurfaceOwnerTriangleLayers,
 } from "./surfaceOwner";
@@ -22,6 +23,23 @@ function positionOfTwoOverlappingFaces(): THREE.BufferAttribute {
       0, 0, 0,
       1, 0, 0,
       0, 1, 0,
+    ]),
+    3,
+  );
+}
+
+/** 同じ三角形を、紙の表法線が反対になるwindingで完全に重ねる。 */
+function positionOfOppositeWindingFaces(): THREE.BufferAttribute {
+  return new THREE.BufferAttribute(
+    new Float32Array([
+      // 表法線 +z
+      0, 0, 0,
+      1, 0, 0,
+      0, 1, 0,
+      // 表法線 -z
+      0, 0, 0,
+      0, 1, 0,
+      1, 0, 0,
     ]),
     3,
   );
@@ -41,14 +59,46 @@ function indicesOf(surface: ReturnType<typeof createSurfaceOwnerSurface>): numbe
   return Array.from({ length: index.count }, (_, at) => index.getX(at));
 }
 
-function overlappingSurface(layers: [number, number] = [0, 0]) {
-  return createSurfaceOwnerSurface({
+function overlappingSurface(
+  layers: [number, number] = [0, 0],
+  mirrored: [boolean, boolean] = [false, false],
+) {
+  const surface = createSurfaceOwnerSurface({
     position: positionOfTwoOverlappingFaces(),
     vertexFaces: [10, 10, 10, 20, 20, 20],
     indices: [0, 1, 2, 3, 4, 5],
     triangleFaces: [10, 20],
     triangleLayers: layers,
   });
+  updateSurfaceOwnerFaceMirrored(surface, new Map([[10, mirrored[0]], [20, mirrored[1]]]));
+  return surface;
+}
+
+function oppositeWindingSurface(
+  frontFaceId: number,
+  backFaceId: number,
+  layers: [number, number] = [0, 0],
+  mirrored: [boolean, boolean] = [false, true],
+) {
+  const surface = createSurfaceOwnerSurface({
+    position: positionOfOppositeWindingFaces(),
+    vertexFaces: [
+      frontFaceId,
+      frontFaceId,
+      frontFaceId,
+      backFaceId,
+      backFaceId,
+      backFaceId,
+    ],
+    indices: [0, 1, 2, 3, 4, 5],
+    triangleFaces: [frontFaceId, backFaceId],
+    triangleLayers: layers,
+  });
+  updateSurfaceOwnerFaceMirrored(
+    surface,
+    new Map([[frontFaceId, mirrored[0]], [backFaceId, mirrored[1]]]),
+  );
+  return surface;
 }
 
 describe("surface owner code", () => {
@@ -116,6 +166,8 @@ describe("createSurfaceOwnerSurface", () => {
     expect(surface.batches.map((batch) => batch.layer)).toEqual([2, 4]);
     expect(surface.triangleFaces).toEqual([20, 10]);
     expect(surface.triangleLayers).toEqual([4, 2]);
+    expect(surface.batches.map((batch) => batch.mirrored)).toEqual([false, false]);
+    expect([...surface.faceMirrored]).toEqual([[20, false], [10, false]]);
 
     // 入力配列を書き換えてもowner側の記録・indexは変わらない。
     indices[0] = 99;
@@ -158,6 +210,118 @@ describe("orderSurfaceOwner", () => {
     expect(indicesOf(surface)).toEqual([0, 1, 2, 3, 4, 5]);
   });
 
+  it("同じ深度・同じlayerでは面IDによらずmirrored=falseを選び、裏視点でも同じ物理面を保つ", () => {
+    // 表面のface IDが大きい場合と小さい場合の両方を通し、ID順の偶然を排除する。
+    for (const [frontFaceId, backFaceId] of [[30, 10], [10, 30]] as const) {
+      const surface = oppositeWindingSurface(frontFaceId, backFaceId);
+      try {
+        orderSurfaceOwner(surface, cameraAt(2));
+        // mirrored=trueを先、falseの物理表面を後に描く。
+        expect(indicesOf(surface)).toEqual([3, 4, 5, 0, 1, 2]);
+
+        orderSurfaceOwner(surface, cameraAt(-2));
+        // カメラに向く面へ乗り換えない。同じ物理面を裏から見て裏色を出す。
+        expect(indicesOf(surface)).toEqual([3, 4, 5, 0, 1, 2]);
+      } finally {
+        disposeSurfaceOwnerSurface(surface);
+      }
+    }
+  });
+
+  it("A/B/Cの手順なし角度状態でmirrored=falseのownerを表裏視点とも保つ", () => {
+    const states = [
+      { label: "A: 8本を山折り+180°", tiltDeg: 0 },
+      { label: "B: 8本を谷折り-180°", tiltDeg: 0 },
+      { label: "C: 山折り+180°と#43=-85°", tiltDeg: 88.9 },
+    ] as const;
+    for (const state of states) {
+      // 実測中央と同じく、face 2/7がface 13を二分して完全に覆い、
+      // face 2/7とface 13のwindingは反対。Cだけはほぼ垂直へ回す。
+      const source = [
+        [0.25, 0.75], [0.25, -0.25], [-0.25, -0.25],
+        [0.25, -0.25], [0.25, 0.75], [0.75, -0.25],
+        [0.25, 0.75], [-0.25, -0.25], [0.75, -0.25],
+      ] as const;
+      const angle = THREE.MathUtils.degToRad(state.tiltDeg);
+      const positions = source.flatMap(([x, y]) => {
+        const dy = y - 0.25;
+        return [x, 0.25 + dy * Math.cos(angle), dy * Math.sin(angle)];
+      });
+      const position = new THREE.BufferAttribute(
+        new Float32Array(positions),
+        3,
+      );
+      const surface = createSurfaceOwnerSurface({
+        position,
+        vertexFaces: [2, 2, 2, 7, 7, 7, 13, 13, 13],
+        indices: [0, 1, 2, 3, 4, 5, 6, 7, 8],
+        triangleFaces: [2, 7, 13],
+      });
+      updateSurfaceOwnerFaceMirrored(
+        surface,
+        new Map([[2, true], [7, true], [13, false]]),
+      );
+      try {
+        for (const camera of [cameraAt(2), cameraAt(-2)]) {
+          orderSurfaceOwner(surface, camera);
+          const indices = indicesOf(surface);
+          const ownerVertex = indices[indices.length - 1];
+          const owner = ownerVertex === undefined ? -1 : [2, 7, 13][Math.floor(ownerVertex / 3)];
+          expect(owner, state.label).toBe(13);
+        }
+      } finally {
+        disposeSurfaceOwnerSurface(surface);
+      }
+    }
+  });
+
+  it("紙全体を剛体回転してworld法線の符号が反転してもownerを変えない", () => {
+    const surface = oppositeWindingSurface(10, 20);
+    try {
+      orderSurfaceOwner(surface, cameraAt(2));
+      const before = indicesOf(surface);
+      const position = surface.position.array as Float32Array;
+      for (let vertex = 0; vertex < surface.position.count; vertex++) {
+        position[vertex * 3 + 1] *= -1;
+        position[vertex * 3 + 2] *= -1;
+      }
+      surface.position.needsUpdate = true;
+      orderSurfaceOwner(surface, cameraAt(2));
+      expect(indicesOf(surface)).toEqual(before);
+    } finally {
+      disposeSurfaceOwnerSurface(surface);
+    }
+  });
+
+  it("異なるlayerではmirroredより従来の視点側layerを優先する", () => {
+    const surface = oppositeWindingSurface(20, 10, [1, 2]);
+    try {
+      orderSurfaceOwner(surface, cameraAt(2));
+      // +側ではlayer 2の裏winding面が本当に手前なので、こちらが最後になる。
+      expect(indicesOf(surface)).toEqual([0, 1, 2, 3, 4, 5]);
+
+      orderSurfaceOwner(surface, cameraAt(-2));
+      // -側ではlayer 1の面が手前になる。
+      expect(indicesOf(surface)).toEqual([3, 4, 5, 0, 1, 2]);
+    } finally {
+      disposeSurfaceOwnerSurface(surface);
+    }
+  });
+
+  it("同じ入力のmirrored選択を10回繰り返してもindex順が変わらない", () => {
+    const surface = oppositeWindingSurface(7, 99);
+    const orders = new Set<string>();
+    try {
+      for (let run = 0; run < 10; run++) {
+        orderSurfaceOwner(surface, cameraAt(2));
+        orders.add(indicesOf(surface).join(","));
+      }
+      expect(orders).toEqual(new Set(["3,4,5,0,1,2"]));
+    } finally {
+      disposeSurfaceOwnerSurface(surface);
+    }
+  });
+
   it("面layer・三角形layerの更新を次の並べ替えへ反映する", () => {
     const surface = overlappingSurface();
     updateSurfaceOwnerFaceLayers(surface, new Map([[10, 5], [20, 1]]));
@@ -171,6 +335,10 @@ describe("orderSurfaceOwner", () => {
     expect(surface.batches.map((batch) => batch.layer)).toEqual([0, 7]);
     orderSurfaceOwner(surface, cameraAt(2));
     expect(indicesOf(surface)).toEqual([0, 1, 2, 3, 4, 5]);
+
+    updateSurfaceOwnerFaceMirrored(surface, new Map([[10, true], [20, false]]));
+    expect([...surface.faceMirrored]).toEqual([[10, true], [20, false]]);
+    expect(surface.batches.map((batch) => batch.mirrored)).toEqual([true, false]);
   });
 
   it("positionの現座標から法線を取り直す", () => {

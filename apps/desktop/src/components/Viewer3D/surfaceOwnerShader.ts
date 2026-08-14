@@ -283,7 +283,8 @@ function createOwnerColorTarget(depthBuffer: boolean): THREE.WebGLRenderTarget {
  *
  * 共平面でも三角形分割が異なると、補間丸めにより同じ平面のdepthが1〜2 codeずれ、
  * LEQUALの後描きだけでは下面ownerが周期的に残る。そこで第1passは実際の最前深度、
- * 第2passはその値から2 code以内だけを通し、既存のlayer/face順でowner色を後勝ちさせる。
+ * 第2passはその値から2 code以内だけを通し、layer/面の鏡映偶奇/決定的fallback順で
+ * owner色を後勝ちさせる。
  * 既定中心の層間隔0.0002は12.64 code、視線方向成分でも約9.08 codeあるため、2 codeは
  * 実在する層差をtieへ丸めない。depthTargetを読みながら別colorTargetへ書くので、同じ
  * textureをsampling attachmentにもするWebGLのfeedback loopも作らない。

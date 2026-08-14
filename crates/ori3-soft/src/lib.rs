@@ -654,11 +654,13 @@ mod overlap_tests {
                     face: 0,
                     polygon: vec![shared0, shared1, [0.0, 1.0, 0.0005]],
                     layer: 0,
+                    mirrored: false,
                 },
                 Face3D {
                     face: 1,
                     polygon: vec![shared1, shared0, [0.0, 1.0, -0.0005]],
                     layer: 1,
+                    mirrored: true,
                 },
             ],
             warnings: Vec::new(),
@@ -681,6 +683,15 @@ mod overlap_tests {
         assert!(report.attempted);
         assert!(report.accepted, "品質検査を通る補正形: {report:?}");
         assert!(report.applied);
+        assert_eq!(
+            frame
+                .faces
+                .iter()
+                .map(|face| (face.face, face.mirrored))
+                .collect::<Vec<_>>(),
+            vec![(0, false), (1, true)],
+            "たわみ補正はrigid frameの面鏡映偶奇を保つ"
+        );
         assert!(
             report.penetrations_before > 0,
             "補正前に食い込みがある: {report:?}"

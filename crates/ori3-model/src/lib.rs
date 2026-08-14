@@ -464,6 +464,12 @@ pub struct Face3D {
     pub face: FaceId,
     pub polygon: Vec<[f64; 3]>,
     pub layer: u32,
+    /// 平坦折りで面の材質座標が鏡映されているか。
+    ///
+    /// 表示用の導出値であり、古い検証用soft geometry snapshotにも読み込めるよう
+    /// 未指定時は表向き(false)として扱う。
+    #[serde(default)]
+    pub mirrored: bool,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]

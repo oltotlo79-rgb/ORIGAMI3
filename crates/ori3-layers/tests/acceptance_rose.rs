@@ -1042,6 +1042,7 @@ fn assert_same_frame(first: &Frame3D, second: &Frame3D, label: &str) {
     for (a, b) in first.faces.iter().zip(&second.faces) {
         assert_eq!(a.face, b.face, "{label}: 面ID");
         assert_eq!(a.layer, b.layer, "{label}: 層番号");
+        assert_eq!(a.mirrored, b.mirrored, "{label}: 面{}の鏡映偶奇", a.face);
         assert_eq!(a.polygon, b.polygon, "{label}: 面頂点");
     }
 }
@@ -1102,6 +1103,27 @@ fn rose_reaches_book_step_29_with_eight_curled_petals() {
     );
     assert!(completed.checkpoint29.display.soft_enabled);
     assert!(completed.frame29.warnings.is_empty());
+    let (_, flat) = state_of(&completed.checkpoint29);
+    assert_eq!(
+        completed.frame29.faces.len(),
+        flat.placements.len(),
+        "完成ローズのsoft frameと平坦状態の面数"
+    );
+    for face in &completed.frame29.faces {
+        assert_eq!(
+            face.mirrored, flat.placements[&face.face].mirrored,
+            "完成ローズの面{}: soft変形後も鏡映偶奇を保つ",
+            face.face
+        );
+    }
+    assert!(
+        flat.placements.values().any(|placement| placement.mirrored)
+            && flat
+                .placements
+                .values()
+                .any(|placement| !placement.mirrored),
+        "完成ローズは表向き面と裏返った面の双方を含む"
+    );
     assert_eq!(
         completed.tips.iter().copied().collect::<HashSet<_>>().len(),
         8,

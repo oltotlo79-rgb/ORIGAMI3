@@ -4,8 +4,9 @@
 // 既定視点の24-bit depthは紙の位置で約1.58269e-5を区別でき、層間隔0.0002は
 // その12.64倍ある。従って深度の精度は足りており、根本原因ではなかった。
 // 角度操作ではto_frame3dが全ての面をlayer=0で返し得るため、重なった面の実際の
-// 位置差が0になることが原因である。同値はlayer→面IDの順で決め、線だけでなく
-// 紙の色も同じownerへ絞らなければ、同一深度の面同士の縞模様は消えない。
+// 位置差が0になることが原因である。同値はlayer→面の鏡映偶奇→決定的fallbackの順で
+// 決め、線だけでなく紙の色も同じownerへ絞らなければ、同一深度の面同士の縞模様は
+// 消えない。
 
 import * as THREE from "three";
 
@@ -90,6 +91,8 @@ export interface SurfaceOwnerBatch {
   readonly indices: number[];
   /** layer更新APIで書き換える現在の層番号。 */
   layer: number;
+  /** 計算側が折りの合成で求めた面の鏡映偶奇。 */
+  mirrored: boolean;
 }
 
 /** owner pass専用geometryと、視点ごとの並べ替えに必要な純粋データ。 */
@@ -99,6 +102,8 @@ export interface SurfaceOwnerSurface {
   readonly ownerCodes: Map<number, number>;
   readonly triangleFaces: number[];
   readonly triangleLayers: number[];
+  /** pickerと同じ実体を共有する、面ID→鏡映偶奇。 */
+  readonly faceMirrored: Map<number, boolean>;
   readonly batches: SurfaceOwnerBatch[];
 }
 
@@ -246,6 +251,7 @@ export function createSurfaceOwnerSurface(
         triangles: [],
         indices: [],
         layer: triangleLayers[triangle],
+        mirrored: false,
       };
       byFace.set(faceId, batch);
     }
@@ -260,6 +266,7 @@ export function createSurfaceOwnerSurface(
     ownerCodes,
     triangleFaces,
     triangleLayers,
+    faceMirrored: new Map([...byFace.keys()].map((faceId) => [faceId, false])),
     batches: [...byFace.values()].sort((a, b) => a.faceId - b.faceId),
   };
   refreshBatchLayers(surface);
@@ -293,6 +300,19 @@ export function updateSurfaceOwnerTriangleLayers(
   refreshBatchLayers(surface);
 }
 
+/** 面IDごとの鏡映偶奇へ差し替える。Mapに無い面は表向き(false)へ戻す。 */
+export function updateSurfaceOwnerFaceMirrored(
+  surface: SurfaceOwnerSurface,
+  mirrored: ReadonlyMap<number, boolean>,
+): void {
+  // pickSurfaceはこのMap実体を保持するため、置換せず内容だけを更新する。
+  surface.faceMirrored.clear();
+  for (const batch of surface.batches) {
+    batch.mirrored = mirrored.get(batch.faceId) ?? false;
+    surface.faceMirrored.set(batch.faceId, batch.mirrored);
+  }
+}
+
 const workA = new THREE.Vector3();
 const workB = new THREE.Vector3();
 const workC = new THREE.Vector3();
@@ -315,15 +335,18 @@ function canonicalize(normal: THREE.Vector3): void {
   const ay = Math.abs(normal.y);
   const az = Math.abs(normal.z);
   const component = ax >= ay && ax >= az ? normal.x : ay >= az ? normal.y : normal.z;
-  if (component < 0) normal.multiplyScalar(-1);
+  if (component < 0) {
+    normal.multiplyScalar(-1);
+  }
 }
 
-/** 現在のpositionから面の法線と中心を毎回求め、カメラが平面のどちら側か返す。 */
-function batchSide(
+/** 現在のpositionからcanonical法線とカメラ側を毎回求める。 */
+function updateBatchViewOrder(
   surface: SurfaceOwnerSurface,
-  batch: SurfaceOwnerBatch,
+  item: BatchViewOrder,
   cameraPosition: THREE.Vector3,
-): 1 | -1 {
+): void {
+  const { batch } = item;
   workNormal.set(0, 0, 0);
   workCenter.set(0, 0, 0);
   let points = 0;
@@ -341,12 +364,20 @@ function batchSide(
   if (workNormal.lengthSq() <= Number.EPSILON) workNormal.set(0, 0, 1);
   else workNormal.normalize();
   canonicalize(workNormal);
-  return workNormal.dot(workA.subVectors(cameraPosition, workCenter)) >= 0 ? 1 : -1;
+  item.side = workNormal.dot(workA.subVectors(cameraPosition, workCenter)) >= 0 ? 1 : -1;
 }
 
 /**
  * owner passのindexを視点側の優先順へ並べ直す。同じ深度はLEQUALの後描きが勝つため、
- * +側ではlayer/faceId/codeの大きい面、-側では小さい面が最後になる。
+ * 実深度はGPUの第1・第2passで先に限定し、異なるlayerは従来の視点側順を守る。
+ * 同じ実深度・同じlayerだけは、面IDより先に計算側のmirrored=falseを後勝ちにする。
+ * mirroredはworld法線にもカメラにも依存しないため、裏視点では同じ物理面の裏色が
+ * 見える。faceId/codeは同じ偶奇同士を全順序にするだけで、表裏の勝者を決めない。
+ *
+ * 2026-08-14の800x800実GPU測定（赤=表、白=裏）:
+ * - 直前の実装（不具合）: 赤0 / 白26,677
+ * - この修正を入れる前（owner無効）: 赤20,152 / 白3,031
+ * - 同じ深度・同じlayerで表向きを優先: 赤27,036 / 白0
  */
 export function orderSurfaceOwner(
   surface: SurfaceOwnerSurface,
@@ -359,11 +390,18 @@ export function orderSurfaceOwner(
     viewOrders.set(surface, ordered);
   }
   for (const item of ordered) {
-    item.side = batchSide(surface, item.batch, workCameraPosition);
+    updateBatchViewOrder(surface, item, workCameraPosition);
   }
   ordered.sort((a, b) => {
     const layer = a.side * a.batch.layer - b.side * b.batch.layer;
     if (layer !== 0) return layer;
+    // productionのlayerは非負整数なので、上の値が同じなら実layerも同じになる。
+    // 防御的な全順序を置き、異なるlayerへmirrored優先が漏れないようにする。
+    const exactLayer = a.batch.layer - b.batch.layer;
+    if (exactLayer !== 0) return exactLayer;
+    if (a.batch.mirrored !== b.batch.mirrored) {
+      return a.batch.mirrored ? -1 : 1;
+    }
     const face = a.side * a.batch.faceId - b.side * b.batch.faceId;
     if (face !== 0) return face;
     const code = a.side * a.batch.ownerCode - b.side * b.batch.ownerCode;

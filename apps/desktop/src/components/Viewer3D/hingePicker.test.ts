@@ -51,11 +51,12 @@ function segment(
 function makeOverlappingSurface(
   triangleFaceIds: number[],
   triangleLayers: number[],
+  triangleMirrored: boolean[] = new Array(triangleFaceIds.length).fill(false),
 ): PaperPickSurface {
-  const frontWinding = [-1, -1, 0, 1, -1, 0, 0, 1, 0];
-  const backWinding = [-1, -1, 0, 0, 1, 0, 1, -1, 0];
+  const positiveZWinding = [-1, -1, 0, 1, -1, 0, 0, 1, 0];
+  const negativeZWinding = [-1, -1, 0, 0, 1, 0, 1, -1, 0];
   const positions = triangleFaceIds.flatMap((_, index) =>
-    index % 2 === 0 ? backWinding : frontWinding,
+    index % 2 === 0 ? negativeZWinding : positiveZWinding,
   );
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute(
@@ -67,7 +68,14 @@ function makeOverlappingSurface(
     new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }),
   );
   mesh.updateMatrixWorld(true);
-  return { mesh, triangleFaceIds, triangleLayers };
+  return {
+    mesh,
+    triangleFaceIds,
+    triangleLayers,
+    faceMirrored: new Map(
+      triangleFaceIds.map((face, index) => [face, triangleMirrored[index] ?? false]),
+    ),
+  };
 }
 
 function disposeSurface(surface: PaperPickSurface): void {
@@ -127,7 +135,7 @@ describe("pickHinge", () => {
     expect(pickHinge(behind, camera, 200, 200, 100, 100)).toBeNull();
   });
 
-  it("同深度の紙面は正面で大きい層と面ID、裏面で小さい層と面IDを選ぶ", () => {
+  it("同深度ではwindingよりlayerを優先し、正面で大きい層、裏面で小さい層を選ぶ", () => {
     const surface = makeOverlappingSurface([90, 3, 4, 9], [1, 1, 2, 2]);
     const backCamera = makeBackCamera();
 
@@ -142,6 +150,7 @@ describe("pickHinge", () => {
           100,
           100,
           surface.triangleLayers,
+          surface.faceMirrored,
         ),
       ).toBe(9);
       expect(
@@ -154,6 +163,7 @@ describe("pickHinge", () => {
           100,
           100,
           surface.triangleLayers,
+          surface.faceMirrored,
         )?.face,
       ).toBe(9);
       expect(
@@ -166,6 +176,7 @@ describe("pickHinge", () => {
           100,
           100,
           surface.triangleLayers,
+          surface.faceMirrored,
         ),
       ).toBe(3);
       expect(
@@ -178,8 +189,123 @@ describe("pickHinge", () => {
           100,
           100,
           surface.triangleLayers,
+          surface.faceMirrored,
         )?.face,
       ).toBe(3);
+    } finally {
+      disposeSurface(surface);
+    }
+  });
+
+  it("同じ深度・同じlayerでは面IDによらずmirrored=falseの同じ物理面を前後から拾う", () => {
+    const backCamera = makeBackCamera();
+    // makeOverlappingSurfaceはindex偶数が-z、奇数が+z winding。
+    for (const { faces, expected } of [
+      { faces: [5, 90], expected: 90 },
+      { faces: [90, 5], expected: 5 },
+    ]) {
+      const surface = makeOverlappingSurface(faces, [0, 0], [true, false]);
+      try {
+        for (const view of [camera, backCamera]) {
+          expect(
+            pickFace(
+              surface.mesh,
+              surface.triangleFaceIds,
+              view,
+              200,
+              200,
+              100,
+              100,
+              surface.triangleLayers,
+              surface.faceMirrored,
+            ),
+          ).toBe(expected);
+          expect(
+            pickPaper(
+              surface.mesh,
+              surface.triangleFaceIds,
+              view,
+              200,
+              200,
+              100,
+              100,
+              surface.triangleLayers,
+              surface.faceMirrored,
+            )?.face,
+          ).toBe(expected);
+        }
+      } finally {
+        disposeSurface(surface);
+      }
+    }
+  });
+
+  it("A/B/Cの手順なし角度状態でも表示ownerと同じ面13を表裏視点から拾う", () => {
+    const backCamera = makeBackCamera();
+    for (const state of [
+      { label: "A: 8本を山折り+180°", tiltDeg: 0 },
+      { label: "B: 8本を谷折り-180°", tiltDeg: 0 },
+      { label: "C: 山折り+180°と#43=-85°", tiltDeg: 85 },
+    ] as const) {
+      const surface = makeOverlappingSurface(
+        [2, 7, 13],
+        [0, 0, 0],
+        [true, true, false],
+      );
+      try {
+        surface.mesh.rotation.x = THREE.MathUtils.degToRad(state.tiltDeg);
+        surface.mesh.updateMatrixWorld(true);
+        for (const view of [camera, backCamera]) {
+          expect(
+            pickFace(
+              surface.mesh,
+              surface.triangleFaceIds,
+              view,
+              200,
+              200,
+              100,
+              100,
+              surface.triangleLayers,
+              surface.faceMirrored,
+            ),
+            state.label,
+          ).toBe(13);
+        }
+      } finally {
+        disposeSurface(surface);
+      }
+    }
+  });
+
+  it("異なるlayerではmirroredより従来の視点側layerを優先する", () => {
+    const surface = makeOverlappingSurface([10, 20], [2, 1]);
+    try {
+      expect(
+        pickFace(
+          surface.mesh,
+          surface.triangleFaceIds,
+          camera,
+          200,
+          200,
+          100,
+          100,
+          surface.triangleLayers,
+          surface.faceMirrored,
+        ),
+      ).toBe(10);
+      expect(
+        pickFace(
+          surface.mesh,
+          surface.triangleFaceIds,
+          makeBackCamera(),
+          200,
+          200,
+          100,
+          100,
+          surface.triangleLayers,
+          surface.faceMirrored,
+        ),
+      ).toBe(20);
     } finally {
       disposeSurface(surface);
     }

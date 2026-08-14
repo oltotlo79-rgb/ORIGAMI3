@@ -31,6 +31,9 @@ use ori3_model::{CreasePattern, EPS, EdgeId, Face3D, FaceId, Frame3D, VertexId};
 #[derive(Clone, Debug)]
 pub struct FoldedFrame {
     pub transforms: HashMap<FaceId, (DMat3, DVec3)>,
+    /// 根面から折り木をたどった鏡映回数の偶奇。
+    /// ±90°を越えたヒンジを、最寄りの平坦状態での1回の鏡映として数える。
+    pub mirrored: HashMap<FaceId, bool>,
     /// 伝播時の警告(面が折り線で繋がっていない等)。`to_frame3d`でFrame3Dへ引き継ぐ。
     pub warnings: Vec<String>,
 }
@@ -233,6 +236,13 @@ pub(crate) fn propagate_with(
 /// 生成で `build_forest` を再実行しないための入口。
 pub(crate) fn fold_frame(forest: &Forest, faces: &[Face], angles_rad: &[f64]) -> FoldedFrame {
     let tf = propagate_with(forest, faces.len(), angles_rad);
+    // 平坦状態の Isometry2::mirrored と同じ偶奇を、非平坦姿勢にも連続する
+    // 「最寄りの平坦枝」として持たせる。world法線やcameraを使わないため、紙全体を
+    // 剛体回転しても値は変わらない。山谷の符号によらず±180°は1回、±85°は0回。
+    let mut mirrored = vec![false; faces.len()];
+    for step in &forest.steps {
+        mirrored[step.child] = mirrored[step.parent] ^ (angles_rad[step.hinge].cos() < 0.0);
+    }
     let mut warnings = Vec::new();
     if forest.roots.len() > 1 {
         warnings.push(
@@ -245,6 +255,11 @@ pub(crate) fn fold_frame(forest: &Forest, faces: &[Face], angles_rad: &[f64]) ->
             .iter()
             .enumerate()
             .map(|(i, f)| (f.id, tf[i]))
+            .collect(),
+        mirrored: faces
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (f.id, mirrored[i]))
             .collect(),
         warnings,
     }
@@ -290,6 +305,7 @@ pub fn to_frame3d(cp: &CreasePattern, faces: &[Face], frame: &FoldedFrame) -> Fr
                     })
                     .collect(),
                 layer: 0,
+                mirrored: frame.mirrored.get(&f.id).copied().unwrap_or(false),
             }
         })
         .collect();

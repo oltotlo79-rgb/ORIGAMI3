@@ -38,6 +38,7 @@ import {
   orderSurfaceOwner,
   ownerCodeVector,
   updateSurfaceOwnerFaceLayers,
+  updateSurfaceOwnerFaceMirrored,
   updateSurfaceOwnerTriangleLayers,
   type SurfaceOwnerBinding,
   type SurfaceOwnerSurface,
@@ -448,6 +449,7 @@ export function createContent(
 export function updateFrame(content: Viewer3DContent, frame: Frame3D | null): void {
   const { positions, topology } = content;
   const faceLayers = new Map<number, number>();
+  const faceMirrored = new Map<number, boolean>();
   if (frame === null) {
     positions.set(topology.flatPositions);
   } else {
@@ -456,6 +458,7 @@ export function updateFrame(content: Viewer3DContent, frame: Frame3D | null): vo
     for (let i = 0; i < frame.faces.length; i++) {
       const f = frame.faces[i];
       faceLayers.set(f.face, f.layer);
+      faceMirrored.set(f.face, f.mirrored ?? false);
       const slot = topology.slots.get(f.face);
       // 頂点数が合わない面は対応が取れないので前の座標のままにする
       // (展開図を編集した直後など、立体形状の計算が届くまでは平らのまま)
@@ -475,6 +478,7 @@ export function updateFrame(content: Viewer3DContent, frame: Frame3D | null): vo
   geometry.computeVertexNormals();
   geometry.computeBoundingSphere();
   updateSurfaceOwnerFaceLayers(content.owner, faceLayers);
+  updateSurfaceOwnerFaceMirrored(content.owner, faceMirrored);
 
   for (let i = 0; i < topology.hingeSlots.length; i++) {
     const slot = topology.hingeSlots[i];
@@ -569,10 +573,13 @@ export function updateSoftContent(
   frame: Frame3D | null,
 ): void {
   const lifts = new Map<number, Vec3>();
+  const faceMirrored = new Map<number, boolean>();
   if (frame) {
     const values = stackLifts(frame, PAPER_LONG_SIDE);
     for (let i = 0; i < frame.faces.length; i++) {
-      lifts.set(frame.faces[i].face, values[i]);
+      const face = frame.faces[i];
+      lifts.set(face.face, values[i]);
+      faceMirrored.set(face.face, face.mirrored ?? false);
     }
   }
   fillSoftPositions(soft, content.layout, lifts, content.positions);
@@ -580,6 +587,7 @@ export function updateSoftContent(
     content.owner,
     content.layout.triangleSources.map((triangle) => soft.triangle_layers[triangle] ?? 0),
   );
+  updateSurfaceOwnerFaceMirrored(content.owner, faceMirrored);
   const geometry = content.mesh.geometry;
   geometry.getAttribute("position").needsUpdate = true;
   updateSurfaceOwnerOutlineGeometry(content.outline);
@@ -989,7 +997,8 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
         renderer.render(ownerScene, camera);
 
         // Pass 2: depth textureを読む別targetへ、最前深度とtieの面だけを
-        // layer/face順で上書きする。描画中target自身は読まないためfeedbackにならない。
+        // layer/面の鏡映偶奇/決定的fallback順で上書きする。描画中target自身は
+        // 読まないためfeedbackにならない。
         ownerScene.overrideMaterial = null;
         renderer.setRenderTarget(ownerPass.colorTarget);
         renderer.render(ownerScene, camera);
@@ -1027,6 +1036,7 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
     mesh,
     triangleFaceIds: surface.triangleFaces,
     triangleLayers: surface.triangleLayers,
+    faceMirrored: surface.faceMirrored,
   });
 
   const api: Viewer3DScene = {

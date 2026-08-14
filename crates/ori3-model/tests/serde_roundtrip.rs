@@ -88,8 +88,19 @@ fn sample_document() -> Document {
 fn test_document_json_roundtrip() {
     let doc = sample_document();
     let json = serde_json::to_string_pretty(&doc).expect("serialize");
+    assert!(
+        !json.contains("\"mirrored\""),
+        "表示用Face3Dは保存作品Documentへ入らない"
+    );
     let back: Document = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(doc, back);
+}
+
+#[test]
+fn old_face3d_without_mirrored_defaults_to_front() {
+    let old = r#"{"face":7,"polygon":[[0.0,0.0,0.0],[1.0,0.0,0.0],[0.0,1.0,0.0]],"layer":2}"#;
+    let face: Face3D = serde_json::from_str(old).expect("旧soft geometry frameを読み込む");
+    assert!(!face.mirrored);
 }
 
 #[test]

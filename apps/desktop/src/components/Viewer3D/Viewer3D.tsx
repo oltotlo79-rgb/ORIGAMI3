@@ -82,6 +82,7 @@ function displayedPickSurface(scene: Viewer3DScene): PaperPickSurface | null {
     triangleFaceIds: content.topology.triangleFaceIds,
     triangleLayers: content.owner?.triangleLayers ??
       new Array(content.topology.triangleFaceIds.length).fill(0),
+    faceMirrored: content.owner?.faceMirrored ?? new Map<number, boolean>(),
   };
 }
 
@@ -660,6 +661,7 @@ export function Viewer3D({ fitRef }: Props) {
           x,
           y,
           surface.triangleLayers,
+          surface.faceMirrored,
         );
         const plan =
           hit &&
@@ -719,6 +721,7 @@ export function Viewer3D({ fitRef }: Props) {
           x,
           y,
           surface.triangleLayers,
+          surface.faceMirrored,
         );
         canvas.style.cursor = face == null ? "default" : "grab";
         return;
@@ -768,6 +771,7 @@ export function Viewer3D({ fitRef }: Props) {
         x,
         y,
         surface.triangleLayers,
+        surface.faceMirrored,
       );
       canvas.style.cursor = paper ? "pointer" : "default";
     },
@@ -801,6 +805,7 @@ export function Viewer3D({ fitRef }: Props) {
           x,
           y,
           surface.triangleLayers,
+          surface.faceMirrored,
         );
         const plan =
           hit &&
@@ -856,6 +861,7 @@ export function Viewer3D({ fitRef }: Props) {
           x,
           y,
           surface.triangleLayers,
+          surface.faceMirrored,
         );
         const p = face == null ? null : rawPoint(rect, x, y);
         if (p && face != null) {
@@ -1123,6 +1129,7 @@ export function Viewer3D({ fitRef }: Props) {
           x,
           y,
           surface.triangleLayers,
+          surface.faceMirrored,
         );
         if (paper) st.showPaperActionTip();
         else st.hidePaperActionTip();

@@ -267,6 +267,27 @@ pub fn append_step_144(document: &mut Document) -> DevilFinalMetrics {
         faces.len(),
         "no final face is lost"
     );
+    let solved_mirrored = solved
+        .frame
+        .faces
+        .iter()
+        .map(|face| (face.face, face.mirrored))
+        .collect::<BTreeMap<_, _>>();
+    let replayed_mirrored = replayed
+        .frame
+        .faces
+        .iter()
+        .map(|face| (face.face, face.mirrored))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        replayed_mirrored, solved_mirrored,
+        "step 144の保存・再生で面の鏡映偶奇を変えない"
+    );
+    assert_eq!(
+        solved_mirrored.len(),
+        faces.len(),
+        "全完成面の鏡映偶奇を保存する"
+    );
     let gap = max_seam_gap(&document.cp, &faces, &replayed.frame);
     assert!(gap < 1e-6, "step 144 max_seam_gap={gap:.3e}");
 

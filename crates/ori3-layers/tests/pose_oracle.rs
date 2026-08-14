@@ -192,11 +192,13 @@ fn stacked_faces() -> (CreasePattern, Vec<Face>, Frame3D) {
                 face: 0,
                 polygon: square(0.0),
                 layer: 0,
+                mirrored: false,
             },
             Face3D {
                 face: 1,
                 polygon: square(1.0),
                 layer: 0,
+                mirrored: false,
             },
         ],
         warnings: Vec::new(),
