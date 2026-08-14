@@ -13,7 +13,7 @@ import {
   pullBlockReason,
   useAppStore,
 } from "../../store/appStore";
-import { viewerHint } from "../../lib/viewerHint";
+import { SELECTABLE_3D_EDGE_TARGETS, viewerHint } from "../../lib/viewerHint";
 import {
   hingeAnglesFromFrame,
   planPull,
@@ -49,11 +49,10 @@ import {
 } from "./softHighlight";
 import { twistPreviewSegments } from "../../lib/twistPolygon";
 import { ALIGN_STEPS } from "../../lib/alignFold";
-import { nearestAlignLine, nearestAlignPoint } from "../../lib/alignPick";
+import { nearestAlignPoint } from "../../lib/alignPick";
 import { planGrabFold, type GrabMode } from "./grabFold";
 import {
   pickFace,
-  pickHinge,
   pickHingeSegment,
   pickPaper,
   type HingeSegment,
@@ -151,6 +150,8 @@ export function Viewer3D({ fitRef }: Props) {
   const softRef = useRef<SoftContent | null>(null);
   /** CP上の物理辺を、表示中のたわみ網へ厳密に写す対応。網の形が変わるまで再利用する。 */
   const softHighlightRef = useRef<SoftHighlightMap | null>(null);
+  /** 実際に表示中の全辺。通常選択と合わせ入力が同じ線分・表面判定を共有する。 */
+  const selectableEdgeSegmentsRef = useRef<HingeSegment[]>([]);
   const downPosRef = useRef<{ x: number; y: number } | null>(null);
   /** 折り線を引いている最中の2点(表示専用の一時状態なのでrefで持つ) */
   const drawingRef = useRef<{ a: Vec2; b: Vec2 } | null>(null);
@@ -315,6 +316,41 @@ export function Viewer3D({ fitRef }: Props) {
     const scene = sceneRef.current;
     if (!scene?.content) return;
     const s = useAppStore.getState();
+    const physicalEdgeSegments: HighlightSegment[] = s.doc
+      ? deriveSelectedEdgeHighlights(
+          s.doc,
+          s.faces,
+          scene.content.topology.slots,
+          scene.content.positions,
+          s.hinges,
+          s.doc.cp.edges.map((edge) => edge.id),
+          scene.content.topology.lineProbeIndices,
+        ).map((target) => ({
+          edgeId: target.edgeId,
+          ownerFace: target.ownerFace,
+          role: target.role,
+          a: new THREE.Vector3(...target.a),
+          b: new THREE.Vector3(...target.b),
+          ...(target.surfaceProbe === undefined
+            ? {}
+            : { surfaceProbe: new THREE.Vector3(...target.surfaceProbe) }),
+        }))
+      : [];
+    // pickerへ渡す線と、基本outlineに含まれない線の表示は同じrigid/soft投影を使う。
+    // ownerの無いfallback線は紙面との対応を確認できず表示もしないため、hit対象にも入れない。
+    const displayedEdgeSegments = projectHighlightSegmentsToSoftSurface(
+      physicalEdgeSegments,
+      softHighlightRef.current,
+    ).filter((segment) => segment.ownerFace !== undefined);
+    selectableEdgeSegmentsRef.current = displayedEdgeSegments;
+    const outlinedEdgeIds = new Set(s.faces.flatMap((face) => face.edges));
+    const selectedIds = new Set(s.selection.edgeIds);
+    scene.setSupplementalEdges(
+      displayedEdgeSegments.filter(
+        (segment) =>
+          !outlinedEdgeIds.has(segment.edgeId) && !selectedIds.has(segment.edgeId),
+      ),
+    );
     const suspectIds = new Set(s.suspectHinges);
     const suspectSegments: HighlightSegment[] = scene.content.hingeSegments
       .filter((segment) => suspectIds.has(segment.edgeId))
@@ -461,24 +497,12 @@ export function Viewer3D({ fitRef }: Props) {
       return;
     }
     setHighlight(
-      deriveSelectedEdgeHighlights(
-        s.doc,
-        s.faces,
-        scene.content.topology.slots,
-        scene.content.positions,
-        s.hinges,
-        s.selection.edgeIds,
-        scene.content.topology.lineProbeIndices,
-      ).map((target) => ({
-        edgeId: target.edgeId,
-        ownerFace: target.ownerFace,
-        role: target.edgeId === s.hoveredHinge ? ("focus" as const) : target.role,
-        a: new THREE.Vector3(...target.a),
-        b: new THREE.Vector3(...target.b),
-        ...(target.surfaceProbe === undefined
-          ? {}
-          : { surfaceProbe: new THREE.Vector3(...target.surfaceProbe) }),
-      })),
+      physicalEdgeSegments
+        .filter((segment) => selectedIds.has(segment.edgeId))
+        .map((segment) => ({
+          ...segment,
+          role: segment.edgeId === s.hoveredHinge ? ("focus" as const) : segment.role,
+        })),
     );
   }, []);
 
@@ -684,27 +708,35 @@ export function Viewer3D({ fitRef }: Props) {
           return;
         }
         if (s.alignDraft && s.doc) {
-          const p = screenToPlane(scene.camera, rect.width, rect.height, x, y);
-          if (!p) {
-            canvas.style.cursor = "default";
-            return;
-          }
           const steps = ALIGN_STEPS[s.alignDraft.mode];
           const at = s.alignDraft.picks.length % steps.length;
-          const radius = planeRadius(
-            scene.camera,
-            rect.width,
-            rect.height,
-            x,
-            y,
-            ALIGN_PICK_PX,
-            FOLD_SNAP_FALLBACK,
-          );
-          const layers = foldLayers(s.frame3d, s.doc, s.faces);
+          const p = screenToPlane(scene.camera, rect.width, rect.height, x, y);
           const hit =
             steps[at] === "point"
-              ? nearestAlignPoint(layers, p, radius)
-              : nearestAlignLine(layers, p, radius);
+              ? p &&
+                nearestAlignPoint(
+                  foldLayers(s.frame3d, s.doc, s.faces),
+                  p,
+                  planeRadius(
+                    scene.camera,
+                    rect.width,
+                    rect.height,
+                    x,
+                    y,
+                    ALIGN_PICK_PX,
+                    FOLD_SNAP_FALLBACK,
+                  ),
+                )
+              : pickHingeSegment(
+                  selectableEdgeSegmentsRef.current,
+                  scene.camera,
+                  rect.width,
+                  rect.height,
+                  x,
+                  y,
+                  ALIGN_PICK_PX,
+                  surface ?? undefined,
+                );
           canvas.style.cursor = hit ? "pointer" : "default";
           return;
         }
@@ -748,8 +780,8 @@ export function Viewer3D({ fitRef }: Props) {
         canvas.style.cursor = "crosshair";
         return;
       }
-      const edgeId = pickHinge(
-        scene.content.hingeSegments,
+      const edgeId = pickHingeSegment(
+        selectableEdgeSegmentsRef.current,
         scene.camera,
         rect.width,
         rect.height,
@@ -757,7 +789,7 @@ export function Viewer3D({ fitRef }: Props) {
         y,
         undefined,
         surface ?? undefined,
-      );
+      )?.edgeId ?? null;
       if (edgeId !== null) {
         canvas.style.cursor = "pointer";
         return;
@@ -1072,29 +1104,50 @@ export function Viewer3D({ fitRef }: Props) {
       if (st.activeTool === "fold" && st.alignDraft && st.doc) {
         const steps = ALIGN_STEPS[st.alignDraft.mode];
         const at = st.alignDraft.picks.length % steps.length;
-        const p = rawPoint(rect, x, y);
-        if (!p) return;
-        const radius = planeRadius(
-          scene.camera,
-          rect.width,
-          rect.height,
-          x,
-          y,
-          ALIGN_PICK_PX,
-          FOLD_SNAP_FALLBACK,
-        );
-        const layers = foldLayers(st.frame3d, st.doc, st.faces);
         if (steps[at] === "point") {
-          const hit = nearestAlignPoint(layers, p, radius);
+          const p = rawPoint(rect, x, y);
+          if (!p) return;
+          const hit = nearestAlignPoint(
+            foldLayers(st.frame3d, st.doc, st.faces),
+            p,
+            planeRadius(
+              scene.camera,
+              rect.width,
+              rect.height,
+              x,
+              y,
+              ALIGN_PICK_PX,
+              FOLD_SNAP_FALLBACK,
+            ),
+          );
           if (hit) st.pickAlignTarget({ kind: "point", p: hit }, p);
         } else {
-          const hit = nearestAlignLine(layers, p, radius);
-          if (hit) st.pickAlignTarget({ kind: "line", a: hit[0], b: hit[1] }, p);
+          const hit = pickHingeSegment(
+            selectableEdgeSegmentsRef.current,
+            scene.camera,
+            rect.width,
+            rect.height,
+            x,
+            y,
+            ALIGN_PICK_PX,
+            displayedPickSurface(scene) ?? undefined,
+          );
+          if (hit) {
+            st.pickAlignTarget(
+              {
+                kind: "line",
+                a: [hit.a.x, hit.a.y],
+                b: [hit.b.x, hit.b.y],
+              },
+              rawPoint(rect, x, y),
+              { kind: "edge", id: hit.edgeId },
+            );
+          }
         }
         return;
       }
-      const edgeId = pickHinge(
-        scene.content.hingeSegments,
+      const edgeId = pickHingeSegment(
+        selectableEdgeSegmentsRef.current,
         scene.camera,
         rect.width,
         rect.height,
@@ -1102,7 +1155,7 @@ export function Viewer3D({ fitRef }: Props) {
         y,
         undefined,
         displayedPickSurface(scene) ?? undefined,
-      );
+      )?.edgeId ?? null;
       const toggle = e.ctrlKey || e.metaKey;
       if (toggle && edgeId === null) {
         // Ctrl/Command+空白は現在の複数選択を保つ。
@@ -1165,9 +1218,11 @@ export function Viewer3D({ fitRef }: Props) {
               : techniqueDraft?.kind === "Twist"
               ? "中央の形の角を3つ以上、順に選びます"
               : "紙の層を選び、ドラッグで折り線を引きます"
-            : foldMode
-              ? "紙をドラッグして折ります。Ctrl+ドラッグで折り線を指定します"
-              : "ドラッグで回転、ホイールで拡大縮小。クリックで線を選びます"
+            : activeTool === "fold" && alignDraft
+              ? `点または${SELECTABLE_3D_EDGE_TARGETS}をクリックして選びます`
+              : foldMode
+                ? "紙をドラッグして折ります。Ctrl+ドラッグで折り線を指定します"
+                : `ドラッグで回転、ホイールで拡大縮小。${SELECTABLE_3D_EDGE_TARGETS}をクリックして選びます`
         }
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}

@@ -22,23 +22,47 @@ vi.mock("./sceneBuilder", async (importOriginal) => {
       camera.lookAt(0.5, 0.5, 0);
       camera.updateMatrixWorld(true);
       camera.updateProjectionMatrix();
+      type DisplayContent = {
+        mesh: THREE.Mesh;
+        owner: {
+          triangleFaces: number[];
+          triangleLayers: number[];
+          faceMirrored: ReadonlyMap<number, boolean>;
+        };
+      };
+      const pickSurfaceOf = (content: unknown) => {
+        if (content === null) return null;
+        const displayed = content as DisplayContent;
+        return {
+          mesh: displayed.mesh,
+          triangleFaceIds: displayed.owner.triangleFaces,
+          triangleLayers: displayed.owner.triangleLayers,
+          faceMirrored: displayed.owner.faceMirrored,
+        };
+      };
       const scene = {
         camera,
         contentGroup: new THREE.Group(),
         highlightGroup: new THREE.Group(),
         content: null as unknown,
         soft: null as unknown,
+        pickSurface: null as ReturnType<typeof pickSurfaceOf>,
         render: vi.fn(),
         syncTheme: vi.fn(),
         resize: vi.fn(),
         resetCamera: vi.fn(),
         setContent: vi.fn((c: unknown) => {
           scene.content = c;
+          // rigid側はViewer3Dの既存fallbackも画面テストで通す。
+          scene.pickSurface = null;
         }),
+        setSupplementalEdges: vi.fn(),
         setHighlight: vi.fn(),
         setPreview: vi.fn(),
         setSoft: vi.fn((c: unknown) => {
           scene.soft = c;
+          // たわみ表示中だけは、本番sceneと同じく表示中の曲面を表面判定へ渡す。
+          scene.pickSurface = c === null ? null : pickSurfaceOf(c);
         }),
         setDrawMode: vi.fn(),
         dispose: vi.fn(),
@@ -92,6 +116,8 @@ const EDGE_DOC: Document = {
       ...DOC.cp.vertices,
       { id: 4, pos: [0.25, 0.1] },
       { id: 5, pos: [0.75, 0.1] },
+      { id: 6, pos: [0.25, 0.9] },
+      { id: 7, pos: [0.75, 0.9] },
     ],
     edges: [
       { id: 0, v0: 0, v1: 1, kind: "Border" },
@@ -100,9 +126,10 @@ const EDGE_DOC: Document = {
       { id: 3, v0: 3, v1: 0, kind: "Border" },
       { id: 5, v0: 0, v1: 2, kind: "Mountain" },
       { id: 6, v0: 4, v1: 5, kind: "Aux" },
+      { id: 7, v0: 6, v1: 7, kind: "Valley" },
     ],
-    next_vertex_id: 6,
-    next_edge_id: 7,
+    next_vertex_id: 8,
+    next_edge_id: 8,
   },
 };
 const EDGE_FACES: Face[] = [
@@ -142,6 +169,19 @@ function renderViewer() {
   const fitRef = { current: null } as React.RefObject<(() => void) | null>;
   render(<Viewer3D fitRef={fitRef} />);
   return document.querySelector("canvas")!;
+}
+
+/** 表示中の真上カメラで、世界座標を400×400 canvasのCSS pxへ直す。 */
+function canvasPoint(world: [number, number, number]): { x: number; y: number } {
+  const camera = held.scene.camera as THREE.PerspectiveCamera;
+  const ndc = new THREE.Vector3(...world).project(camera);
+  return { x: ((ndc.x + 1) / 2) * 400, y: ((1 - ndc.y) / 2) * 400 };
+}
+
+function clickCanvas(canvas: Element, world: [number, number, number], ctrlKey = false) {
+  const { x, y } = canvasPoint(world);
+  fireEvent.pointerDown(canvas, { button: 0, pointerId: 1, clientX: x, clientY: y, ctrlKey });
+  fireEvent.pointerUp(canvas, { button: 0, pointerId: 1, clientX: x, clientY: y, ctrlKey });
 }
 
 describe("Viewer3D(画面)", () => {
@@ -283,10 +323,14 @@ describe("Viewer3D(画面)", () => {
           [0, 0, 0],
           [1, 0, 0],
           [1, 1, 0],
+          [0, 1, 0],
         ],
-        triangles: [[0, 1, 2]],
-        triangle_faces: [0],
-        triangle_layers: [0],
+        triangles: [
+          [0, 1, 2],
+          [0, 2, 3],
+        ],
+        triangle_faces: [0, 0],
+        triangle_layers: [0, 0],
         warnings: [],
       },
     });
@@ -441,32 +485,82 @@ describe("Viewer3D(指している場所のカーソル)", () => {
     expect(canvas.style.cursor).toBe("not-allowed");
   });
 
-  it("Ctrl+クリックでヒンジを既存選択へ追加し、もう一度で解除する", async () => {
+  it("Ctrl+クリックで補助線を既存選択へ追加し、もう一度で解除する", async () => {
     useAppStore.setState({ selection: { edgeIds: [0], vertexIds: [] } });
     const canvas = renderViewer();
     await waitFor(() => expect(held.scene.content).not.toBeNull());
 
-    const ctrlClick = () => {
-      fireEvent.pointerDown(canvas, {
-        button: 0,
-        pointerId: 1,
-        clientX: 200,
-        clientY: 200,
-        ctrlKey: true,
-      });
-      fireEvent.pointerUp(canvas, {
-        button: 0,
-        pointerId: 1,
-        clientX: 200,
-        clientY: 200,
-        ctrlKey: true,
-      });
-    };
+    // 基本outlineに入らない補助線でも、2Dと同じ複数選択規則を使う。
+    const ctrlClick = () => clickCanvas(canvas, [0.5, 0.1, 0], true);
 
     ctrlClick();
-    expect(useAppStore.getState().selection.edgeIds).toEqual([0, 5]);
+    expect(useAppStore.getState().selection.edgeIds).toEqual([0, 6]);
     ctrlClick();
     expect(useAppStore.getState().selection.edgeIds).toEqual([0]);
+  });
+
+  it.each([
+    ["山折り線", 5, [0.5, 0.5, 0]],
+    ["谷折り線", 7, [0.5, 0.9, 0]],
+    ["補助線", 6, [0.5, 0.1, 0]],
+    ["紙の輪郭の辺", 0, [0.5, 0, 0]],
+  ] as const)("3Dの%sをクリックすると2Dと共通のSelectionへ入る", async (_label, edgeId, point) => {
+    const canvas = renderViewer();
+    await waitFor(() => {
+      const calls = (held.scene.setSupplementalEdges as ReturnType<typeof vi.fn>).mock.calls;
+      expect(calls.length).toBeGreaterThan(0);
+    });
+
+    clickCanvas(canvas, [...point]);
+
+    expect(useAppStore.getState().selection).toEqual({ edgeIds: [edgeId], vertexIds: [] });
+  });
+
+  it("たわみ表示中も、曲面へ投影した補助線をクリックして共通Selectionへ入れる", async () => {
+    useAppStore.setState({
+      softMesh: {
+        positions: [
+          [0, 0, 0],
+          [1, 1, 0],
+          [1, 0, 0.2],
+          [0, 1, 0],
+        ],
+        triangles: [
+          [0, 2, 1],
+          [0, 1, 3],
+        ],
+        triangle_faces: [0, 1],
+        triangle_layers: [0, 0],
+        warnings: [],
+      },
+    });
+    const canvas = renderViewer();
+    let segment: { a: THREE.Vector3; b: THREE.Vector3 } | undefined;
+    await waitFor(() => {
+      const calls = (held.scene.setSupplementalEdges as ReturnType<typeof vi.fn>).mock.calls;
+      const displayed = calls[calls.length - 1]?.[0] as
+        | { edgeId: number; a: THREE.Vector3; b: THREE.Vector3 }[]
+        | undefined;
+      segment = displayed?.find(({ edgeId }) => edgeId === 6);
+      expect(segment).toBeDefined();
+      expect(segment?.a.z === 0 && segment.b.z === 0).toBe(false);
+    });
+
+    const midpoint = segment!.a.clone().add(segment!.b).multiplyScalar(0.5);
+    clickCanvas(canvas, [midpoint.x, midpoint.y, midpoint.z]);
+
+    expect(useAppStore.getState().selection).toEqual({ edgeIds: [6], vertexIds: [] });
+  });
+
+  it("紙面クリックは面をSelectionへ入れず、紙の直接操作案内だけを開く", async () => {
+    useAppStore.setState({ selection: { edgeIds: [0], vertexIds: [] } });
+    const canvas = renderViewer();
+    await waitFor(() => expect(held.scene.content).not.toBeNull());
+
+    clickCanvas(canvas, [0.2, 0.5, 0]);
+
+    expect(useAppStore.getState().selection).toEqual({ edgeIds: [], vertexIds: [] });
+    expect(useAppStore.getState().paperActionTipVisible).toBe(true);
   });
 
   it("スライダー行のホバー対象だけをfocus色の役割で3D強調する", async () => {
@@ -714,9 +808,9 @@ describe("Viewer3D(合わせて折る)", () => {
     vi.mocked(ipc.sequenceApply).mockReset();
     vi.mocked(ipc.sequenceApply).mockResolvedValue(VIEW);
     useAppStore.setState({
-      doc: DOC,
-      faces: FACES,
-      hinges: new Set<number>(),
+      doc: EDGE_DOC,
+      faces: EDGE_FACES,
+      hinges: new Set<number>([5]),
       frame3d: null,
       activeTool: "fold",
       currentStep: null,
@@ -741,6 +835,9 @@ describe("Viewer3D(合わせて折る)", () => {
     useAppStore.getState().beginAlign("pointPoint");
     const canvas = renderViewer();
     expect(screen.getByRole("status").textContent).toContain("1つ目の点");
+    expect(canvas.getAttribute("data-tooltip")).toContain(
+      "山折り線・谷折り線・補助線・紙の輪郭の辺",
+    );
 
     click(canvas, 79, 321); // 紙の角(0,0)
     expect(useAppStore.getState().alignDraft?.picks).toHaveLength(1);
@@ -773,7 +870,25 @@ describe("Viewer3D(合わせて折る)", () => {
     click(canvas, 200, 321); // 下の辺 (0,0)-(1,0)
     click(canvas, 79, 200); // 左の辺 (0,1)-(0,0)
     expect(useAppStore.getState().alignDraft?.solutions).toHaveLength(2);
+    expect(useAppStore.getState().alignDraft?.cpPicks).toEqual([
+      { kind: "edge", id: 0 },
+      { kind: "edge", id: 3 },
+    ]);
     expect(screen.getByRole("status").textContent).toContain("解が2つ");
+  });
+
+  it("基本outlineに無い補助線も、edge ID付きで合わせ入力へ入る", async () => {
+    useAppStore.getState().beginAlign("existingLine");
+    const canvas = renderViewer();
+    await waitFor(() => {
+      const calls = (held.scene.setSupplementalEdges as ReturnType<typeof vi.fn>).mock.calls;
+      expect(calls.length).toBeGreaterThan(0);
+    });
+
+    clickCanvas(canvas, [0.5, 0.1, 0]);
+
+    expect(useAppStore.getState().alignDraft?.cpPicks).toEqual([{ kind: "edge", id: 6 }]);
+    expect(useAppStore.getState().alignDraft?.picks[0]).toMatchObject({ kind: "line" });
   });
 
   it("Backspaceで1つ戻す、Escでやめる", () => {
@@ -822,7 +937,7 @@ describe("Viewer3D(視点を戻す)", () => {
       activeTool: "select",
       selection: { edgeIds: [0, 5, 6], vertexIds: [] },
     });
-    renderViewer();
+    const canvas = renderViewer();
 
     await waitFor(() => {
       const setHighlight = held.scene.setHighlight as ReturnType<typeof vi.fn>;
@@ -848,10 +963,24 @@ describe("Viewer3D(視点を戻す)", () => {
       // 面内Auxは境界triangleが一意でないため、無方向探索へは落とさない。
       expect(last[3].surfaceProbe).toBeUndefined();
     });
+    const supplementalCalls = (
+      held.scene.setSupplementalEdges as ReturnType<typeof vi.fn>
+    ).mock.calls;
+    const supplemental = supplementalCalls[supplementalCalls.length - 1][0] as {
+      edgeId: number;
+      ownerFace?: number;
+    }[];
+    // 選択済みAuxは水色強調へ回り、未選択の非ヒンジ谷線は同じ候補から黒線表示へ渡る。
+    expect(supplemental.map(({ edgeId, ownerFace }) => ({ edgeId, ownerFace }))).toEqual([
+      { edgeId: 7, ownerFace: 1 },
+    ]);
     expect(screen.getByRole("status").textContent).toBe(
-      "3Dの紙を見回し、折り線や辺を選べます",
+      "3Dの紙を見回し、山折り線・谷折り線・補助線・紙の輪郭の辺を選べます",
     );
     expect(screen.getByRole("status").textContent).not.toContain("水色");
+    expect(canvas.getAttribute("data-tooltip")).toContain(
+      "山折り線・谷折り線・補助線・紙の輪郭の辺",
+    );
   });
   afterEach(() => cleanup());
 

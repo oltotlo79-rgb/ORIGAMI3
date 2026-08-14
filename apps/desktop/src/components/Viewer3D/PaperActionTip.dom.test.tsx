@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// 紙を選んだときの案内が邪魔にならず、引く・ふくらますへ直接進めることを確かめる。
+// 紙をクリックしたときの案内が邪魔にならず、引く・ふくらますへ直接進めることを確かめる。
 
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
@@ -28,21 +28,21 @@ afterEach(() => {
   useAppStore.setState(initialStoreState, true);
 });
 
-describe("選んだ紙の操作案内", () => {
+describe("クリックした紙の操作案内", () => {
   it("大きい案内を小さくし、小さいヒントから再び開ける", () => {
     seed();
     render(<PaperActionTip />);
 
-    expect(screen.getByLabelText("選んだ紙でできること")).toBeTruthy();
+    expect(screen.getByLabelText("クリックした紙でできること")).toBeTruthy();
     expect(screen.getByText("この紙、もっと動かせます！")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "紙の操作案内を小さくする" }));
-    expect(screen.queryByLabelText("選んだ紙でできること")).toBeNull();
+    expect(screen.queryByLabelText("クリックした紙でできること")).toBeNull();
     const compact = screen.getByRole("button", { name: /この紙を動かす・ふくらます/ });
     expect(compact).toBeTruthy();
 
     fireEvent.click(compact);
-    expect(screen.getByLabelText("選んだ紙でできること")).toBeTruthy();
+    expect(screen.getByLabelText("クリックした紙でできること")).toBeTruthy();
     expect(screen.getByRole("button", { name: /この紙を引いて動かす/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /この紙をふくらます/ })).toBeTruthy();
   });

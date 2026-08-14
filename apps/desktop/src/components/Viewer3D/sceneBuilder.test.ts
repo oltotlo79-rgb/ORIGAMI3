@@ -20,6 +20,7 @@ import {
   createHighlightGeometry,
   createHighlightLayer,
   createHighlightMaterials,
+  createSupplementalEdgeLayer,
   createSoftContent,
   highlightAppearance,
   updateFrame,
@@ -31,7 +32,7 @@ import {
   layerOffsets,
 } from "../../lib/layerOffset";
 import type { Document, Face, Frame3D } from "../../lib/types";
-import { orderSurfaceOwner } from "./surfaceOwner";
+import { orderSurfaceOwner, ownerCodeBytes } from "./surfaceOwner";
 
 /** dispose回数を数える偽の資源(Three.jsの実体は使わない) */
 function fake() {
@@ -304,6 +305,87 @@ const FACES: Face[] = [
 ];
 
 const HINGES = new Set([5]);
+
+describe("createSupplementalEdgeLayer(面境界へ入らない既存線)", () => {
+  it("rigidの黒outline材質とowner tokenを共有し、owner不明の裏線候補は描かない", () => {
+    const doc = makeDoc();
+    const content = createContent(buildTopology(doc, FACES, HINGES), doc.display);
+    const material = content.line.material as THREE.LineBasicMaterial;
+    const layer = createSupplementalEdgeLayer();
+    const probe = new THREE.Vector3(0.5, 0.25, 0);
+
+    layer.setSegments(
+      [
+        {
+          edgeId: 20,
+          ownerFace: 0,
+          a: new THREE.Vector3(0.2, 0.2, 0),
+          b: new THREE.Vector3(0.8, 0.2, 0),
+          surfaceProbe: probe,
+        },
+        {
+          edgeId: 21,
+          ownerFace: 999,
+          a: new THREE.Vector3(0.2, 0.3, 0),
+          b: new THREE.Vector3(0.8, 0.3, 0),
+        },
+        {
+          edgeId: 22,
+          a: new THREE.Vector3(0.2, 0.4, 0),
+          b: new THREE.Vector3(0.8, 0.4, 0),
+        },
+      ],
+      material,
+      content.owner.ownerCodes,
+    );
+
+    expect(layer.group.children).toHaveLength(1);
+    const line = layer.group.children[0] as THREE.LineSegments;
+    expect(line.material).toBe(material);
+    expect(material.userData.surfaceOwnerFilter).toBe("outline-inward");
+    expect(line.renderOrder).toBe(content.line.renderOrder);
+    expect(line.frustumCulled).toBe(false);
+    const geometry = line.geometry;
+    expect(geometry.getAttribute("position").count).toBe(2);
+    expect(geometry.getAttribute("surfaceOwnerOther").count).toBe(2);
+    expect(geometry.getAttribute("surfaceOwnerProbe").count).toBe(2);
+    expect(geometry.getAttribute("surfaceOwnerProbe").getX(0)).toBeCloseTo(probe.x, 9);
+    expect(geometry.getAttribute("surfaceOwnerProbe").getY(1)).toBeCloseTo(probe.y, 9);
+    const token = geometry.getAttribute("surfaceOwnerToken");
+    const code = content.owner.ownerCodes.get(0)!;
+    expect(Array.from((token.array as Uint8Array).slice(0, 4))).toEqual(ownerCodeBytes(code));
+
+    layer.dispose();
+  });
+
+  it("線分更新では借りたoutline材質を破棄せず、自分のgeometryだけを片付ける", () => {
+    const doc = makeDoc();
+    const content = createContent(buildTopology(doc, FACES, HINGES), doc.display);
+    const material = content.line.material as THREE.LineBasicMaterial;
+    const materialDispose = vi.spyOn(material, "dispose");
+    const layer = createSupplementalEdgeLayer();
+    const segment = {
+      edgeId: 20,
+      ownerFace: 0,
+      a: new THREE.Vector3(0.2, 0.2, 0),
+      b: new THREE.Vector3(0.8, 0.2, 0),
+    };
+    layer.setSegments([segment], material, content.owner.ownerCodes);
+    const first = (layer.group.children[0] as THREE.LineSegments).geometry;
+    const firstDispose = vi.spyOn(first, "dispose");
+
+    layer.setSegments([segment], material, content.owner.ownerCodes);
+    expect(firstDispose).toHaveBeenCalledTimes(1);
+    expect(materialDispose).not.toHaveBeenCalled();
+    const second = (layer.group.children[0] as THREE.LineSegments).geometry;
+    const secondDispose = vi.spyOn(second, "dispose");
+
+    layer.dispose();
+    expect(secondDispose).toHaveBeenCalledTimes(1);
+    expect(materialDispose).not.toHaveBeenCalled();
+    expect(layer.group.children).toEqual([]);
+  });
+});
 
 /** 三角形の2Dでの符号付き面積(正なら反時計回り=表向き) */
 function signedArea(
@@ -748,6 +830,34 @@ describe("紙のたわみの表示(SIM-012)", () => {
     expect(content.line.geometry.getIndex()).toBeNull();
     expect(content.line.geometry.getAttribute("position").count).toBe(3 * 2 * 2);
     expect(content.line.geometry.getAttribute("surfaceOwnerProbe").count).toBe(3 * 2 * 2);
+  });
+
+  it("補足線もsoftの黒outline材質とowner codeをそのまま共有する", () => {
+    const content = createSoftContent(SOFT, makeDoc().display);
+    const material = content.line.material as THREE.LineBasicMaterial;
+    const layer = createSupplementalEdgeLayer();
+    layer.setSegments(
+      [
+        {
+          edgeId: 20,
+          ownerFace: 1,
+          a: new THREE.Vector3(0.2, 0.8, 0),
+          b: new THREE.Vector3(0.8, 0.8, 0),
+          surfaceProbe: new THREE.Vector3(0.5, 0.7, 0),
+        },
+      ],
+      material,
+      content.owner.ownerCodes,
+    );
+
+    const line = layer.group.children[0] as THREE.LineSegments;
+    expect(line.material).toBe(material);
+    expect(material.userData.surfaceOwnerFilter).toBe("outline-inward");
+    const token = line.geometry.getAttribute("surfaceOwnerToken");
+    expect(Array.from((token.array as Uint8Array).slice(0, 4))).toEqual(
+      ownerCodeBytes(content.owner.ownerCodes.get(1)!),
+    );
+    layer.dispose();
   });
 
   it("層のずらし表示が三角形の網にも効く(重なった紙が見分けられる)", () => {

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { ViewerOperationHint } from "./ViewerOperationHint";
 import { useAppStore, type ToolId } from "../../store/appStore";
+import { SELECTABLE_3D_EDGE_TARGETS } from "../../lib/viewerHint";
 
 const initialStoreState = useAppStore.getState();
 
@@ -34,7 +35,10 @@ describe("3Dビューの操作ヒント", () => {
       tool: "select",
       mode: "見る・選ぶ",
       assignments: [
-        ["左ドラッグ", "視点を回す"],
+        [
+          "左クリック／ドラッグ",
+          `${SELECTABLE_3D_EDGE_TARGETS}を選ぶ／視点を回す`,
+        ],
         ["右ドラッグ", "視点を動かす"],
         ["ホイール", "拡大・縮小"],
       ],
@@ -120,6 +124,10 @@ describe("3Dビューの操作ヒント", () => {
     renderHint("fold", true, false, true);
     const aligning = screen.getByLabelText("マウス操作の割り当て");
     expect(within(aligning).getByText("左クリック／ドラッグ")).toBeTruthy();
-    expect(within(aligning).getByText("点・線を選ぶ／視点を回す")).toBeTruthy();
+    expect(
+      within(aligning).getByText(
+        `点・${SELECTABLE_3D_EDGE_TARGETS}を選ぶ／視点を回す`,
+      ),
+    ).toBeTruthy();
   });
 });

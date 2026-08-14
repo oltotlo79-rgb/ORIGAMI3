@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DRAG_FOLD_HINT,
   PULL_HINT,
+  SELECTABLE_3D_EDGE_TARGETS,
   foldBlockReason,
   insertPositionHint,
   viewerHint,
@@ -177,8 +178,13 @@ describe("viewerHint", () => {
     );
   });
 
-  it("折る以外のツールでも空にならない", () => {
-    expect(viewerHint({ ...READY, tool: "select" }).length).toBeGreaterThan(0);
+  it("選択では3Dで選べる4種類だけを一意に列挙する", () => {
+    expect(SELECTABLE_3D_EDGE_TARGETS).toBe(
+      "山折り線・谷折り線・補助線・紙の輪郭の辺",
+    );
+    expect(viewerHint({ ...READY, tool: "select" })).toBe(
+      `3Dの紙を見回し、${SELECTABLE_3D_EDGE_TARGETS}を選べます`,
+    );
   });
 });
 
@@ -217,6 +223,22 @@ describe("合わせて折るの案内", () => {
         alignSolutionCount: 1,
       }),
     ).toContain("折り線が決まりました");
+  });
+
+  it.each([
+    ["lineLine", 0],
+    ["lineLine", 1],
+    ["pointPerpendicularLine", 1],
+    ["pointLineThrough", 1],
+    ["pointToLinePointToLine", 1],
+    ["pointToLinePointToLine", 3],
+    ["pointLinePerpendicular", 1],
+    ["pointLinePerpendicular", 2],
+    ["existingLine", 0],
+  ] as const)("%sの線選択手順%dでも同じ4種類を1回だけ列挙する", (alignMode, alignPickCount) => {
+    const hint = viewerHint({ ...READY, alignMode, alignPickCount });
+    expect(hint.split(SELECTABLE_3D_EDGE_TARGETS)).toHaveLength(2);
+    expect(hint).toContain(`(${SELECTABLE_3D_EDGE_TARGETS}を選べます)`);
   });
 
   it("選び始めたら、取り消しのキーを常に添える", () => {

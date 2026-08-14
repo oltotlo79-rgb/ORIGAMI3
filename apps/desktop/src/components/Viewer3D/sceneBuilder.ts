@@ -36,6 +36,7 @@ import {
   createSurfaceOwnerSurface,
   disposeSurfaceOwnerSurface,
   orderSurfaceOwner,
+  ownerCodeBytes,
   ownerCodeVector,
   updateSurfaceOwnerFaceLayers,
   updateSurfaceOwnerFaceMirrored,
@@ -629,6 +630,11 @@ export interface Viewer3DScene {
    * たわみを入れても折る・つかむ操作の意味は変わらない。
    */
   setSoft(soft: SoftContent | null): void;
+  /**
+   * 面境界へ入らない既存線を、表示中の紙と同じ黒い線・表面判定で描く。
+   * 呼び出し側が選択中の線を除き、現在のrigid/soft座標へ写した線分を渡す。
+   */
+  setSupplementalEdges(segments: readonly HingeSegment[]): void;
   /** 選択中の辺の強調を更新する(形と材質は使い回す) */
   setHighlight(segments: HighlightSegment[]): void;
   /**
@@ -896,6 +902,86 @@ export function createHighlightLayer(
   };
 }
 
+/**
+ * Face.edgesへ入らない補助線・行き止まりの折り線を、基本outlineへ足す描画層。
+ * materialは現在表示中のrigid/soft outlineそのものを借り、ここでは生成・破棄しない。
+ */
+export interface SupplementalEdgeLayer {
+  readonly group: THREE.Group;
+  setSegments(
+    segments: readonly HingeSegment[],
+    material: THREE.LineBasicMaterial,
+    ownerCodes: ReadonlyMap<number, number>,
+  ): void;
+  clear(): void;
+  dispose(): void;
+}
+
+function finiteVector3(point: THREE.Vector3): boolean {
+  return Number.isFinite(point.x) && Number.isFinite(point.y) && Number.isFinite(point.z);
+}
+
+/**
+ * 補足線を、既存outlineと同じ非indexed属性へ変換する。
+ * ownerFaceが無い／現在のsurfaceに無い線は、裏線を漏らすany判定へ落とさず描かない。
+ */
+export function createSupplementalEdgeLayer(): SupplementalEdgeLayer {
+  const group = new THREE.Group();
+  let outline: SurfaceOwnerOutlineGeometry | null = null;
+
+  const clear = () => {
+    group.clear();
+    outline?.geometry.dispose();
+    outline = null;
+  };
+
+  return {
+    group,
+    setSegments(segments, material, ownerCodes) {
+      clear();
+      const positions: number[] = [];
+      const tokens: number[] = [];
+      const lineIndices: number[] = [];
+      const lineProbeIndices: number[] = [];
+      for (const segment of segments) {
+        if (!finiteVector3(segment.a) || !finiteVector3(segment.b)) continue;
+        if (segment.a.distanceToSquared(segment.b) < 1e-18) continue;
+        const code =
+          segment.ownerFace === undefined ? undefined : ownerCodes.get(segment.ownerFace);
+        if (code === undefined) continue;
+        const bytes = ownerCodeBytes(code);
+        const base = positions.length / 3;
+        const probe =
+          segment.surfaceProbe && finiteVector3(segment.surfaceProbe)
+            ? segment.surfaceProbe
+            : segment.a;
+        for (const point of [segment.a, segment.b, probe]) {
+          positions.push(point.x, point.y, point.z);
+          tokens.push(...bytes);
+        }
+        lineIndices.push(base, base + 1);
+        lineProbeIndices.push(base + 2);
+      }
+      if (lineIndices.length === 0) return;
+
+      const sourcePosition = new THREE.BufferAttribute(new Float32Array(positions), 3);
+      const sourceToken = new THREE.Uint8BufferAttribute(new Uint8Array(tokens), 4, true);
+      outline = createSurfaceOwnerOutlineGeometry({
+        sourcePosition,
+        sourceToken,
+        lineIndices,
+        lineProbeIndices,
+      });
+      const line = new THREE.LineSegments(outline.geometry, material);
+      line.renderOrder = 1;
+      line.frustumCulled = false;
+      group.add(line);
+    },
+    clear,
+    dispose: clear,
+  };
+}
+
 /** 面・線1つ分の資源を破棄する */
 function disposeDrawable(child: THREE.Object3D): void {
   if (!(child instanceof THREE.Mesh || child instanceof THREE.LineSegments)) return;
@@ -962,6 +1048,7 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
   scene.add(fill);
 
   const contentGroup = new THREE.Group();
+  const supplementalEdgeLayer = createSupplementalEdgeLayer();
   const highlightLayer = createHighlightLayer(ownerBinding);
   const highlightGroup = highlightLayer.group;
   // 折った結果の下見。紙に隠れず常に見えるよう深度判定を切って最後に描く
@@ -970,7 +1057,7 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
   previewMesh.renderOrder = 2;
   previewMesh.frustumCulled = false;
   previewMesh.visible = false;
-  scene.add(contentGroup, highlightGroup, previewMesh);
+  scene.add(contentGroup, supplementalEdgeLayer.group, highlightGroup, previewMesh);
 
   const controls = new OrbitControls(camera, canvas);
   controls.enableDamping = false; // 常時描画ループを持たない(変化時だけ描く)
@@ -1091,6 +1178,9 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
       render();
     },
     setSoft(next) {
+      // 座標・owner token・共有materialの参照元が切り替わる。呼び出し側が現在表示中の
+      // 面へ写した線分を直後に渡し直すまで、古い面の補足線は表示しない。
+      supplementalEdgeLayer.clear();
       if (soft !== null && soft !== next) {
         contentGroup.remove(soft.mesh, soft.line);
         disposeDrawable(soft.mesh);
@@ -1113,6 +1203,20 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
       } else if (!base) {
         showOwner(null);
         api.pickSurface = null;
+      }
+      render();
+    },
+    setSupplementalEdges(segments) {
+      const displayed = soft ?? api.content;
+      const material = displayed?.line.material;
+      if (
+        !displayed ||
+        Array.isArray(material) ||
+        !(material instanceof THREE.LineBasicMaterial)
+      ) {
+        supplementalEdgeLayer.clear();
+      } else {
+        supplementalEdgeLayer.setSegments(segments, material, displayed.owner.ownerCodes);
       }
       render();
     },
@@ -1167,6 +1271,7 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
       api.content = null;
       api.pickSurface = null;
       showOwner(null);
+      supplementalEdgeLayer.dispose();
       highlightLayer.dispose();
       emptyOwnerGeometry.dispose();
       disposeSurfaceOwnerPassResources(ownerPass);

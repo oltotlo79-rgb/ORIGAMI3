@@ -50,6 +50,14 @@ export function insertPositionHint(s: FoldReadiness): string {
 export const PULL_HINT =
   "紙をドラッグすると、折り線のつじつまを合わせて全体が連動して動きます(右ドラッグで視点を回す)";
 
+/** 3Dで共通の選択状態へ入れられる線・辺。案内ごとの列挙漏れを防ぐ正本。 */
+export const SELECTABLE_3D_EDGE_TARGETS =
+  "山折り線・谷折り線・補助線・紙の輪郭の辺";
+
+function withSelectable3dEdges(prompt: string): string {
+  return `${prompt}(${SELECTABLE_3D_EDGE_TARGETS}を選べます)`;
+}
+
 /** ヒント1行を組み立てる材料 */
 export interface HintState extends FoldReadiness {
   tool: ToolId;
@@ -98,31 +106,31 @@ const ALIGN_PROMPTS: Record<AlignMode, string[]> = {
     "2つ目の点(合わせ先)をクリックしてください",
   ],
   lineLine: [
-    "1つ目の線(動かす方)をクリックしてください(紙の辺・折り線を選べます)",
-    "2つ目の線(合わせ先)をクリックしてください",
+    withSelectable3dEdges("1つ目の線(動かす方)をクリックしてください"),
+    withSelectable3dEdges("2つ目の線(合わせ先)をクリックしてください"),
   ],
   pointPerpendicularLine: [
     "折り目が通る点をクリックしてください(角・折り目の端・交点に吸着します)",
-    "折り目を垂直にする線をクリックしてください(紙の辺・折り線を選べます)",
+    withSelectable3dEdges("折り目を垂直にする線をクリックしてください"),
   ],
   pointLineThrough: [
     "線に合わせたい点をクリックしてください",
-    "合わせ先の線をクリックしてください",
+    withSelectable3dEdges("合わせ先の線をクリックしてください"),
     "折り目が通る点をクリックしてください",
   ],
   pointToLinePointToLine: [
     "線に合わせたい1つ目の点をクリックしてください",
-    "1つ目の合わせ先の線をクリックしてください",
+    withSelectable3dEdges("1つ目の合わせ先の線をクリックしてください"),
     "線に合わせたい2つ目の点をクリックしてください",
-    "2つ目の合わせ先の線をクリックしてください",
+    withSelectable3dEdges("2つ目の合わせ先の線をクリックしてください"),
   ],
   pointLinePerpendicular: [
     "線に合わせたい点をクリックしてください",
-    "点の合わせ先の線をクリックしてください",
-    "折り目を垂直にする線をクリックしてください",
+    withSelectable3dEdges("点の合わせ先の線をクリックしてください"),
+    withSelectable3dEdges("折り目を垂直にする線をクリックしてください"),
   ],
   existingLine: [
-    "折り目にする既存の線をクリックしてください(紙の辺・折り線を選べます)",
+    withSelectable3dEdges("折り目にする既存の線をクリックしてください"),
   ],
 };
 
@@ -212,5 +220,5 @@ export function viewerHint(s: HintState): string {
       ? `中心線を引きました。${reference}下のパネルで向きと開く側を決めて「適用」を押してください`
       : `中心線を引きました。${reference}下のパネルで向きを決めて「適用」を押してください`;
   }
-  return "3Dの紙を見回し、折り線や辺を選べます";
+  return `3Dの紙を見回し、${SELECTABLE_3D_EDGE_TARGETS}を選べます`;
 }

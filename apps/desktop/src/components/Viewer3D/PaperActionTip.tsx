@@ -1,4 +1,4 @@
-// 3Dで紙そのものを選んだときに出す、引く・膨らますへの直接の入口。
+// 3Dで紙そのものをクリックしたときに出す、引く・膨らますへの直接の入口。
 // 初回は説明つき、畳んだ後は小さなヒントとして同じ場所に残す。
 
 import { useAppStore } from "../../store/appStore";
@@ -33,7 +33,7 @@ export function PaperActionTip() {
   return (
     <aside
       className="paper-action-tip expanded"
-      aria-label="選んだ紙でできること"
+      aria-label="クリックした紙でできること"
       data-floating-ui="paper-action-tip"
     >
       <button

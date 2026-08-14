@@ -2,6 +2,7 @@
 // 詳細だけを折りたためるようにする(UI-009 / UI-012)。
 
 import { useAppStore, type ToolId } from "../../store/appStore";
+import { SELECTABLE_3D_EDGE_TARGETS } from "../../lib/viewerHint";
 import { ToolIcon } from "../ToolIcons";
 
 interface Props {
@@ -54,7 +55,7 @@ export function viewerAssignments(
         {
           control: "left",
           label: "左クリック／ドラッグ",
-          action: "点・線を選ぶ／視点を回す",
+          action: `点・${SELECTABLE_3D_EDGE_TARGETS}を選ぶ／視点を回す`,
         },
         { control: "right", label: "右ドラッグ", action: "視点を動かす" },
         { control: "wheel", label: "ホイール", action: "拡大・縮小" },
@@ -72,6 +73,17 @@ export function viewerAssignments(
         control: "left",
         label: "左クリック／ドラッグ",
         action: "層・角・基準点／折り線を選ぶ",
+      },
+      { control: "right", label: "右ドラッグ", action: "視点を動かす" },
+      { control: "wheel", label: "ホイール", action: "拡大・縮小" },
+    ];
+  }
+  if (tool === "select") {
+    return [
+      {
+        control: "left",
+        label: "左クリック／ドラッグ",
+        action: `${SELECTABLE_3D_EDGE_TARGETS}を選ぶ／視点を回す`,
       },
       { control: "right", label: "右ドラッグ", action: "視点を動かす" },
       { control: "wheel", label: "ホイール", action: "拡大・縮小" },
