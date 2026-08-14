@@ -63,8 +63,8 @@ use ori3_model::{
 
 use crate::flat_state::{FlatState, point_in_face, representative_point};
 use crate::fold_through::{
-    FoldDirection, FoldThroughResult, TEAR_MARK, angle_of, faces_by_edge, flip_kind,
-    normalize_to_root, opposite_crease_warning, push_driver_line, vertex_positions,
+    FoldDirection, FoldThroughResult, TEAR_MARK, angle_of, faces_by_edge, flat_fold_kind,
+    flip_kind, normalize_to_root, opposite_crease_warning, push_driver_line, vertex_positions,
 };
 
 /// 面のつながり(同じ点に写るか)を見る許容誤差。等長変換の積み重ねと
@@ -323,11 +323,7 @@ pub(crate) fn run_motion(
             if poly.len() < 3 {
                 continue;
             }
-            let base = match part.direction {
-                Some(FoldDirection::Down) => EdgeKind::Mountain,
-                _ => EdgeKind::Valley,
-            };
-            let kind = if pl.mirrored { flip_kind(base) } else { base };
+            let kind = flat_fold_kind(part.direction, pl.mirrored);
             for (bi, boundary) in part.region.iter().enumerate() {
                 let cut = CutLine::pull_back(&pl, boundary);
                 for (q0, q1) in cut.intervals(&poly, part, bi, &pl) {

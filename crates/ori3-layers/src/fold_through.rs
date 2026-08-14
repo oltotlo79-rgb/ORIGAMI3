@@ -952,3 +952,13 @@ pub(crate) fn flip_kind(kind: EdgeKind) -> EdgeKind {
         k => k,
     }
 }
+
+/// 平坦な紙を上/下へ折る従来の山谷規則。
+/// `None` は従来どおり `Up` と同じ谷折りとして扱う。
+pub(crate) fn flat_fold_kind(direction: Option<FoldDirection>, mirrored: bool) -> EdgeKind {
+    let base = match direction {
+        Some(FoldDirection::Down) => EdgeKind::Mountain,
+        _ => EdgeKind::Valley,
+    };
+    if mirrored { flip_kind(base) } else { base }
+}

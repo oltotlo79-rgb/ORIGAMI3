@@ -101,6 +101,16 @@ pub struct DocumentStore {
     pose_angles: Option<HashMap<EdgeId, f64>>,
 }
 
+/// 3D画面で実際に当たった点から作る、立体折り専用の一時入力。
+/// 作品には保存せず、同じFoldThroughコマンドの処理中だけ使う。
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct SpatialFoldSpec {
+    pub from: [f64; 3],
+    pub to: [f64; 3],
+    #[serde(alias = "grabFace")]
+    pub grab_face: FaceId,
+}
+
 impl Default for DocumentStore {
     /// 起動直後の初期状態(150mm正方形の新規作品)。
     fn default() -> Self {
@@ -263,6 +273,16 @@ impl DocumentStore {
 
     /// 折り手順操作を適用する。実際に変更が起きた場合のみundo履歴に積む。
     pub fn apply_seq(&mut self, op: SeqOp) -> Result<DocumentView, String> {
+        self.apply_seq_with_spatial(op, None)
+    }
+
+    /// 3D画面の当たり点を伴う折り手順操作。
+    /// 平坦時は追加情報を見ず、従来の処理をそのまま使う。
+    pub fn apply_seq_with_spatial(
+        &mut self,
+        op: SeqOp,
+        spatial: Option<SpatialFoldSpec>,
+    ) -> Result<DocumentView, String> {
         let mut doc = self.doc.clone();
         let mut warnings: Vec<String> = Vec::new();
         let mut fold_through_proposal = None;
@@ -299,28 +319,91 @@ impl DocumentStore {
                 let mut insert_warnings = check_insert_point(&doc, up_to)?;
                 // facesは現docから導出済みのキャッシュ(docはまだ複製したまま無変更)
                 // 現在の状態を求め直すときの警告(飛ばした手順など)も利用者へ返す
-                let (state, state_warnings) = ori3_layers::flat_state_at(&doc, &self.faces, up_to)?;
-                let mut cp = doc.cp.clone();
-                let result = ori3_layers::fold_through_with_additional_crease(
-                    &mut cp,
-                    &self.faces,
-                    &state,
-                    &ori3_layers::FoldThroughInput {
+                // 3D画面が実際の当たり点を渡した場合は、画面と同じFrame3Dの
+                // z座標判定を先に行う。行列だけを見る平坦判定との差で、立体用
+                // 入力が従来の2D入力として処理されることを防ぐ。
+                let current = spatial
+                    .as_ref()
+                    .map(|_| ori3_layers::replay_with_faces(&doc, &self.faces, up_to, 1.0));
+                if let Some(current) = current
+                    .as_ref()
+                    .filter(|current| frame_is_nonflat(&current.frame))
+                {
+                    let input = spatial_fold_input(
+                        spatial.as_ref(),
+                        &current.frame,
+                        &self.faces,
                         line,
                         keep_side_point,
-                        target_layers,
+                        target_layers.as_deref(),
                         direction,
-                    },
-                    accept_additional_crease,
-                )?;
-                let mut step = result.step;
-                step.id = next_step_id(&doc);
-                step.alignment = alignment;
-                doc.cp = cp;
-                doc.sequence.insert(up_to, step);
-                warnings = state_warnings;
-                warnings.append(&mut insert_warnings);
-                warnings.extend(result.warnings);
+                    );
+                    let mut result =
+                        ori3_layers::fold_from_plane_3d(&doc, &self.faces, up_to, &input);
+                    if let Some(mut step) = result.step.take() {
+                        step.id = next_step_id(&doc);
+                        step.alignment = alignment;
+                        doc.cp = result.cp;
+                        doc.sequence.insert(up_to, step);
+                    }
+                    warnings.append(&mut insert_warnings);
+                    warnings.append(&mut result.warnings);
+                } else {
+                    match ori3_layers::flat_state_at(&doc, &self.faces, up_to) {
+                        Ok((state, state_warnings)) => {
+                            let mut cp = doc.cp.clone();
+                            let result = ori3_layers::fold_through_with_additional_crease(
+                                &mut cp,
+                                &self.faces,
+                                &state,
+                                &ori3_layers::FoldThroughInput {
+                                    line,
+                                    keep_side_point,
+                                    target_layers,
+                                    direction,
+                                },
+                                accept_additional_crease,
+                            )?;
+                            let mut step = result.step;
+                            step.id = next_step_id(&doc);
+                            step.alignment = alignment;
+                            doc.cp = cp;
+                            doc.sequence.insert(up_to, step);
+                            warnings = state_warnings;
+                            warnings.append(&mut insert_warnings);
+                            warnings.extend(result.warnings);
+                        }
+                        Err(flat_error) => {
+                            // 旧呼び出しにはspatialが無い。その場合も従来どおり、
+                            // 平坦判定が拒否した立体姿勢を2D入力から続けて折る。
+                            let current = current.unwrap_or_else(|| {
+                                ori3_layers::replay_with_faces(&doc, &self.faces, up_to, 1.0)
+                            });
+                            if !frame_is_nonflat(&current.frame) {
+                                return Err(flat_error);
+                            }
+                            let input = spatial_fold_input(
+                                spatial.as_ref(),
+                                &current.frame,
+                                &self.faces,
+                                line,
+                                keep_side_point,
+                                target_layers.as_deref(),
+                                direction,
+                            );
+                            let mut result =
+                                ori3_layers::fold_from_plane_3d(&doc, &self.faces, up_to, &input);
+                            if let Some(mut step) = result.step.take() {
+                                step.id = next_step_id(&doc);
+                                step.alignment = alignment;
+                                doc.cp = result.cp;
+                                doc.sequence.insert(up_to, step);
+                            }
+                            warnings.append(&mut insert_warnings);
+                            warnings.append(&mut result.warnings);
+                        }
+                    }
+                }
             }
             SeqOp::PreviewFoldThrough {
                 up_to,
@@ -330,19 +413,62 @@ impl DocumentStore {
                 direction,
             } => {
                 check_insert_point(&doc, up_to)?;
-                let (state, state_warnings) = ori3_layers::flat_state_at(&doc, &self.faces, up_to)?;
-                fold_through_proposal = ori3_layers::propose_fold_through(
-                    &doc.cp,
-                    &self.faces,
-                    &state,
-                    &ori3_layers::FoldThroughInput {
+                let current = spatial
+                    .as_ref()
+                    .map(|_| ori3_layers::replay_with_faces(&doc, &self.faces, up_to, 1.0));
+                if let Some(current) = current
+                    .as_ref()
+                    .filter(|current| frame_is_nonflat(&current.frame))
+                {
+                    let input = spatial_fold_input(
+                        spatial.as_ref(),
+                        &current.frame,
+                        &self.faces,
                         line,
                         keep_side_point,
-                        target_layers,
+                        target_layers.as_deref(),
                         direction,
-                    },
-                )?;
-                warnings = state_warnings;
+                    );
+                    warnings =
+                        ori3_layers::fold_from_plane_3d(&doc, &self.faces, up_to, &input).warnings;
+                } else {
+                    match ori3_layers::flat_state_at(&doc, &self.faces, up_to) {
+                        Ok((state, state_warnings)) => {
+                            fold_through_proposal = ori3_layers::propose_fold_through(
+                                &doc.cp,
+                                &self.faces,
+                                &state,
+                                &ori3_layers::FoldThroughInput {
+                                    line,
+                                    keep_side_point,
+                                    target_layers,
+                                    direction,
+                                },
+                            )?;
+                            warnings = state_warnings;
+                        }
+                        Err(flat_error) => {
+                            let current = current.unwrap_or_else(|| {
+                                ori3_layers::replay_with_faces(&doc, &self.faces, up_to, 1.0)
+                            });
+                            if !frame_is_nonflat(&current.frame) {
+                                return Err(flat_error);
+                            }
+                            let input = spatial_fold_input(
+                                spatial.as_ref(),
+                                &current.frame,
+                                &self.faces,
+                                line,
+                                keep_side_point,
+                                target_layers.as_deref(),
+                                direction,
+                            );
+                            warnings =
+                                ori3_layers::fold_from_plane_3d(&doc, &self.faces, up_to, &input)
+                                    .warnings;
+                        }
+                    }
+                }
             }
             SeqOp::FlatMotion { up_to, parts, kind } => {
                 // FoldThrough/Techniqueと同じ挿入・警告規約。面IDはこの時点の
@@ -898,6 +1024,90 @@ fn to_layer_motion_part(part: ori3_model::MotionPart) -> ori3_layers::MotionPart
     }
 }
 
+const NONFLAT_EPS: f64 = 1e-6;
+
+fn frame_is_nonflat(frame: &Frame3D) -> bool {
+    frame.faces.iter().any(|face| {
+        face.polygon
+            .iter()
+            .any(|point| point[2].abs() > NONFLAT_EPS)
+    })
+}
+
+fn spatial_fold_input(
+    spatial: Option<&SpatialFoldSpec>,
+    frame: &Frame3D,
+    faces: &[Face],
+    line: [[f64; 2]; 2],
+    keep_side_point: [f64; 2],
+    target_layers: Option<&[FaceId]>,
+    direction: ori3_model::FoldDirection,
+) -> ori3_layers::SpatialFoldInput {
+    if let Some(spatial) = spatial {
+        return ori3_layers::SpatialFoldInput {
+            plane: ori3_layers::FoldPlane3D {
+                origin: [
+                    (spatial.from[0] + spatial.to[0]) * 0.5,
+                    (spatial.from[1] + spatial.to[1]) * 0.5,
+                    (spatial.from[2] + spatial.to[2]) * 0.5,
+                ],
+                normal: [
+                    spatial.to[0] - spatial.from[0],
+                    spatial.to[1] - spatial.from[1],
+                    spatial.to[2] - spatial.from[2],
+                ],
+            },
+            grab_point: spatial.from,
+            grab_face: spatial.grab_face,
+            direction,
+        };
+    }
+
+    // 展開図画面など旧入力だけの呼び出しも、立体姿勢なら従来の2D折り線を
+    // z方向へ延ばした平面として扱い、止めずに続ける。
+    let dx = line[1][0] - line[0][0];
+    let dy = line[1][1] - line[0][1];
+    let normal = [-dy, dx, 0.0];
+    let length = dx.hypot(dy);
+    let keep_signed = normal[0] * (keep_side_point[0] - line[0][0])
+        + normal[1] * (keep_side_point[1] - line[0][1]);
+    let keep_sign = if keep_signed < 0.0 { -1.0 } else { 1.0 };
+    let unit = if length > 0.0 {
+        [normal[0] / length, normal[1] / length, 0.0]
+    } else {
+        [0.0, 0.0, 0.0]
+    };
+    let grab_point = [
+        line[0][0] - keep_sign * unit[0] * 0.25,
+        line[0][1] - keep_sign * unit[1] * 0.25,
+        -keep_sign * unit[2] * 0.25,
+    ];
+    let requested = target_layers
+        .into_iter()
+        .flatten()
+        .copied()
+        .find(|id| faces.iter().any(|face| face.id == *id));
+    let geometric = frame.faces.iter().find_map(|face| {
+        face.polygon
+            .iter()
+            .any(|point| {
+                -keep_sign
+                    * (normal[0] * (point[0] - line[0][0]) + normal[1] * (point[1] - line[0][1]))
+                    > ori3_model::EPS
+            })
+            .then_some(face.face)
+    });
+    ori3_layers::SpatialFoldInput {
+        plane: ori3_layers::FoldPlane3D {
+            origin: [line[0][0], line[0][1], 0.0],
+            normal,
+        },
+        grab_point,
+        grab_face: requested.or(geometric).unwrap_or(0),
+        direction,
+    }
+}
+
 /// 折り操作([`SeqOp::FoldThrough`] / [`SeqOp::FlatMotion`] / [`SeqOp::Technique`])の
 /// 挿入位置を検査する。
 ///
@@ -942,7 +1152,7 @@ fn is_border(cp: &CreasePattern, id: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ori3_model::{Edge, FoldStep, TechniqueKind, Vertex};
+    use ori3_model::{Edge, Face3D, FoldStep, TechniqueKind, Vertex};
 
     fn square_store() -> DocumentStore {
         let mut store = DocumentStore::default();
@@ -972,6 +1182,42 @@ mod tests {
             alignment: None,
             note: String::new(),
         }
+    }
+
+    fn frame_with_z(z: f64) -> Frame3D {
+        Frame3D {
+            faces: vec![Face3D {
+                face: 0,
+                polygon: vec![[0.0, 0.0, z]],
+                layer: 0,
+                mirrored: false,
+            }],
+            warnings: Vec::new(),
+        }
+    }
+
+    fn material_vertex_world_position(
+        faces: &[Face],
+        frame: &Frame3D,
+        vertex: VertexId,
+    ) -> Option<[f64; 3]> {
+        frame.faces.iter().find_map(|spatial_face| {
+            let material_face = faces.iter().find(|face| face.id == spatial_face.face)?;
+            let index = material_face
+                .vertices
+                .iter()
+                .position(|candidate| *candidate == vertex)?;
+            spatial_face.polygon.get(index).copied()
+        })
+    }
+
+    #[test]
+    fn spatial_nonflat_threshold_matches_viewer_contract() {
+        assert!(!frame_is_nonflat(&frame_with_z(0.0)));
+        assert!(!frame_is_nonflat(&frame_with_z(NONFLAT_EPS)));
+        assert!(!frame_is_nonflat(&frame_with_z(-NONFLAT_EPS)));
+        assert!(frame_is_nonflat(&frame_with_z(NONFLAT_EPS + 1e-12)));
+        assert!(frame_is_nonflat(&frame_with_z(-NONFLAT_EPS - 1e-12)));
     }
 
     /// 利用者の画面から取り出した展開図(2026-08-13)。元の受け入れテストは
@@ -2133,6 +2379,180 @@ mod tests {
         let view = store.undo().unwrap();
         assert_eq!(view.doc.sequence.len(), 1);
         assert_eq!(view.faces.len(), 2);
+    }
+
+    /// 「この形で仕上げる」に相当する90°のPoseを記録した後も、同じFoldThrough入口で
+    /// 次の折りを受け付け、展開図・立体・手順をまとめて更新する。
+    #[test]
+    fn fold_through_after_a_ninety_degree_pose_updates_cp_frame_and_sequence() {
+        let mut store = square_store();
+        store
+            .apply_edit(EditOp::AddSegment {
+                a: [0.5, 0.0],
+                b: [0.5, 1.0],
+                kind: EdgeKind::Mountain,
+            })
+            .expect("中央へ折り目を入れる");
+        let mut pose = step(0);
+        pose.kind = TechniqueKind::Pose;
+        pose.drivers = vec![ori3_model::DriverLine {
+            a: [0.5, 0.0],
+            b: [0.5, 1.0],
+            target_angle_deg: 90.0,
+        }];
+        store
+            .apply_seq(SeqOp::PushStep { step: pose })
+            .expect("90度の立体姿勢を記録する");
+
+        let before_edges = store.doc.cp.edges.len();
+        let before = ori3_layers::replay(&store.doc, 1, 1.0);
+        let z_span = before
+            .frame
+            .faces
+            .iter()
+            .flat_map(|face| face.polygon.iter().map(|point| point[2]))
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), z| {
+                (lo.min(z), hi.max(z))
+            });
+        assert!(
+            z_span.1 - z_span.0 > 0.4,
+            "90度の立体姿勢: z範囲={z_span:?}"
+        );
+
+        let grabbed = before
+            .frame
+            .faces
+            .iter()
+            .find(|face| {
+                let (lo, hi) = face
+                    .polygon
+                    .iter()
+                    .map(|point| point[2])
+                    .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), z| {
+                        (lo.min(z), hi.max(z))
+                    });
+                hi - lo > 0.4
+            })
+            .expect("90度で立った面");
+        let center_x = grabbed.polygon.iter().map(|point| point[0]).sum::<f64>()
+            / grabbed.polygon.len() as f64;
+        let center_z = grabbed.polygon.iter().map(|point| point[2]).sum::<f64>()
+            / grabbed.polygon.len() as f64;
+        let spatial = SpatialFoldSpec {
+            from: [center_x, 0.25, center_z],
+            to: [center_x, 0.5, center_z],
+            grab_face: grabbed.face,
+        };
+        let grabbed_material = store
+            .faces
+            .iter()
+            .find(|face| face.id == grabbed.face)
+            .expect("当たり面の展開図を得る");
+        let moving_vertex = grabbed_material
+            .vertices
+            .iter()
+            .zip(&grabbed.polygon)
+            .min_by(|(_, a), (_, b)| {
+                let distance = |point: &&[f64; 3]| {
+                    point
+                        .iter()
+                        .zip(spatial.from)
+                        .map(|(value, target)| (value - target).powi(2))
+                        .sum::<f64>()
+                };
+                distance(a).total_cmp(&distance(b))
+            })
+            .map(|(vertex, _)| *vertex)
+            .expect("当たり面の材質頂点を得る");
+        let fixed_vertex = store
+            .doc
+            .cp
+            .vertices
+            .iter()
+            .max_by(|left, right| {
+                left.pos[1]
+                    .total_cmp(&right.pos[1])
+                    .then_with(|| left.pos[0].total_cmp(&right.pos[0]))
+            })
+            .expect("動かさない側の材質頂点を得る")
+            .id;
+        let before_world =
+            material_vertex_world_position(&store.faces, &before.frame, moving_vertex)
+                .expect("折る前の材質頂点位置を得る");
+        let before_fixed =
+            material_vertex_world_position(&store.faces, &before.frame, fixed_vertex)
+                .expect("折る前の固定頂点位置を得る");
+
+        let preview = store
+            .apply_seq_with_spatial(
+                SeqOp::PreviewFoldThrough {
+                    up_to: 1,
+                    line: [[0.0, 0.375], [1.0, 0.375]],
+                    keep_side_point: [0.5, 0.75],
+                    target_layers: None,
+                    direction: ori3_model::FoldDirection::Up,
+                },
+                Some(spatial.clone()),
+            )
+            .expect("立体姿勢からの折りを変更せず下見できる");
+        assert_eq!(
+            preview.doc.cp.edges.len(),
+            before_edges,
+            "下見は展開図を変えない"
+        );
+        assert_eq!(preview.doc.sequence.len(), 1, "下見は手順を増やさない");
+
+        let mut view = store
+            .apply_seq_with_spatial(
+                fold_op(1, [[0.0, 0.375], [1.0, 0.375]], [0.5, 0.75]),
+                Some(spatial),
+            )
+            .expect("立体姿勢から続けた折りを受け付ける");
+        attach_replay(&mut view);
+
+        assert!(view.doc.cp.edges.len() > before_edges, "展開図の辺が増える");
+        let after_world = material_vertex_world_position(
+            &view.faces,
+            view.frame.as_ref().expect("更新後の立体を返す"),
+            moving_vertex,
+        )
+        .expect("折った後も同じ材質頂点を得る");
+        let after_fixed = material_vertex_world_position(
+            &view.faces,
+            view.frame.as_ref().expect("更新後の立体を返す"),
+            fixed_vertex,
+        )
+        .expect("折った後も固定頂点を得る");
+        let distance = |a: [f64; 3], b: [f64; 3]| {
+            a.iter()
+                .zip(b)
+                .map(|(left, right)| (left - right).powi(2))
+                .sum::<f64>()
+                .sqrt()
+        };
+        let displacement = distance(before_world, after_world);
+        assert!(
+            displacement > 1e-9,
+            "同じ材質頂点{moving_vertex}が3Dで移動する: 距離={displacement:.17e}"
+        );
+        let relative_change =
+            (distance(after_world, after_fixed) - distance(before_world, before_fixed)).abs();
+        assert!(
+            relative_change > 1e-9,
+            "全体の置き直しではなく材質頂点間の相対形が変わる: 差={relative_change:.17e}"
+        );
+        assert_eq!(view.doc.sequence.len(), 2, "手順が1件から2件へ増える");
+        assert!(
+            view.warnings.iter().all(|warning| {
+                !warning.contains("折り途中の状態では折れません")
+                    && !warning.contains("折れる紙がありません")
+            }),
+            "拒否文言を返さない: {:?}",
+            view.warnings
+        );
+        let frame = view.frame.as_ref().expect("更新後の立体を返す");
+        let gap = ori3_rigid::max_seam_gap(&view.doc.cp, &view.faces, frame);
+        assert!(gap < 1e-9, "共有辺の隙間={gap:.17e}");
     }
 
     /// 既存折り目を、領域を追加せず鏡映する汎用操作で0°まで開ける。

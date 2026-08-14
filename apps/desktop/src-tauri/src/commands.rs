@@ -18,7 +18,7 @@ use tauri::State;
 
 use crate::autosave;
 use crate::store::{
-    DocumentStore, DocumentView, add_layer_order_warning,
+    DocumentStore, DocumentView, SpatialFoldSpec, add_layer_order_warning,
     add_penetration_warning_for_intersections, attach_replay, flat_fold_notice_violations,
     pose_flat_fold_notice_intersects, replay_flat_fold_notice_violations,
 };
@@ -267,13 +267,33 @@ pub fn edit_redo(state: State<'_, Mutex<DocumentStore>>) -> Result<DocumentView,
     }))
 }
 
+#[derive(Deserialize)]
+struct SpatialEnvelope {
+    #[serde(default)]
+    spatial: Option<SpatialFoldSpec>,
+}
+
+fn parse_sequence_operation(
+    value: serde_json::Value,
+) -> Result<(SeqOp, Option<SpatialFoldSpec>), String> {
+    let spatial = serde_json::from_value::<SpatialEnvelope>(value.clone())
+        .map_err(|_| "折る位置を読み取れませんでした".to_string())?
+        .spatial;
+    let operation = serde_json::from_value::<SeqOp>(value)
+        .map_err(|_| "折る操作を読み取れませんでした".to_string())?;
+    Ok((operation, spatial))
+}
+
 #[tauri::command(async)]
 pub fn sequence_apply(
     state: State<'_, Mutex<DocumentStore>>,
-    op: SeqOp,
+    op: serde_json::Value,
 ) -> Result<DocumentView, String> {
     guard(AssertUnwindSafe(|| {
-        view_command(&state, || lock(&state).apply_seq(op))
+        let (operation, spatial) = parse_sequence_operation(op)?;
+        view_command(&state, || {
+            lock(&state).apply_seq_with_spatial(operation, spatial)
+        })
     }))
 }
 
@@ -897,5 +917,32 @@ mod tests {
             guard(AssertUnwindSafe(|| Err::<(), _>("だめ".to_string()))),
             Err("だめ".to_string())
         );
+    }
+
+    #[test]
+    fn sequence_operation_keeps_spatial_hit_and_legacy_fold_fields() {
+        let value = serde_json::json!({
+            "type": "PreviewFoldThrough",
+            "up_to": 1,
+            "line": [[0.0, 0.0], [1.0, 0.0]],
+            "keep_side_point": [0.0, 1.0],
+            "target_layers": null,
+            "direction": "Up",
+            "spatial": {
+                "from": [0.5, 0.25, -0.25],
+                "to": [0.5, 0.5, -0.25],
+                "grab_face": 1,
+                "mode": "flap"
+            }
+        });
+        let (operation, spatial) = super::parse_sequence_operation(value).expect("読み取れる");
+        assert!(matches!(
+            operation,
+            ori3_model::SeqOp::PreviewFoldThrough { up_to: 1, .. }
+        ));
+        let spatial = spatial.expect("立体の当たり点");
+        assert_eq!(spatial.from, [0.5, 0.25, -0.25]);
+        assert_eq!(spatial.to, [0.5, 0.5, -0.25]);
+        assert_eq!(spatial.grab_face, 1);
     }
 }

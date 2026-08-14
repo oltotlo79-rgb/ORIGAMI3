@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as THREE from "three";
-import type { Document, DocumentView, Face } from "../../lib/types";
+import type { Document, DocumentView, Face, Frame3D } from "../../lib/types";
 
 const held = vi.hoisted(() => ({ scene: null as unknown as Record<string, unknown> }));
 
@@ -145,6 +145,70 @@ const VIEW: DocumentView = {
   skipped: [],
 };
 
+/** 中央ヒンジで右半分を90°起こした、実際のraycastを検査する形。 */
+const SPATIAL_DOC: Document = {
+  ...DOC,
+  cp: {
+    vertices: [
+      { id: 0, pos: [0, 0] },
+      { id: 1, pos: [0.5, 0] },
+      { id: 2, pos: [1, 0] },
+      { id: 3, pos: [1, 1] },
+      { id: 4, pos: [0.5, 1] },
+      { id: 5, pos: [0, 1] },
+    ],
+    edges: [
+      { id: 0, v0: 0, v1: 1, kind: "Border" },
+      { id: 1, v0: 1, v1: 2, kind: "Border" },
+      { id: 2, v0: 2, v1: 3, kind: "Border" },
+      { id: 3, v0: 3, v1: 4, kind: "Border" },
+      { id: 4, v0: 4, v1: 5, kind: "Border" },
+      { id: 5, v0: 5, v1: 0, kind: "Border" },
+      { id: 6, v0: 1, v1: 4, kind: "Valley" },
+    ],
+    next_vertex_id: 6,
+    next_edge_id: 7,
+  },
+  sequence: [
+    {
+      id: 0,
+      kind: "Pose",
+      drivers: [{ a: [0.5, 0], b: [0.5, 1], target_angle_deg: 90 }],
+      layer_order: null,
+      note: "立体の形を残す",
+    },
+  ],
+};
+const SPATIAL_FACES: Face[] = [
+  { id: 0, vertices: [0, 1, 4, 5], edges: [0, 6, 4, 5] },
+  { id: 1, vertices: [1, 2, 3, 4], edges: [1, 2, 3, 6] },
+];
+const SPATIAL_FRAME: Frame3D = {
+  faces: [
+    {
+      face: 0,
+      polygon: [
+        [0, 0, 0],
+        [0.5, 0, 0],
+        [0.5, 1, 0],
+        [0, 1, 0],
+      ],
+      layer: 0,
+    },
+    {
+      face: 1,
+      polygon: [
+        [0.5, 0, 0],
+        [0.5, 0, 0.5],
+        [0.5, 1, 0.5],
+        [0.5, 1, 0],
+      ],
+      layer: 1,
+    },
+  ],
+  warnings: [],
+};
+
 /** 400×400pxのcanvasとして扱う(jsdomは実寸を持たないので固定する) */
 function stubLayout() {
   Object.defineProperty(HTMLCanvasElement.prototype, "clientWidth", {
@@ -189,6 +253,12 @@ describe("Viewer3D(画面)", () => {
     stubLayout();
     vi.mocked(ipc.sequenceApply).mockReset();
     vi.mocked(ipc.sequenceApply).mockResolvedValue(VIEW);
+    vi.mocked(ipc.poseSolve).mockResolvedValue({
+      frame: { faces: [], warnings: [] },
+      converged: true,
+      angles: {},
+      iterations: 1,
+    });
     useAppStore.setState({
       doc: DOC,
       faces: FACES,
@@ -291,6 +361,109 @@ describe("Viewer3D(画面)", () => {
     expect(op.line[0][0]).toBeCloseTo(0.5, 2);
     expect(op.keep_side_point[0]).toBeGreaterThan(0.5);
     expect(op.target_layers).toEqual([0]);
+  });
+
+  it("90°起こした面では実際の3D当たり点と画面奥行きを保って折る", async () => {
+    useAppStore.setState({
+      doc: SPATIAL_DOC,
+      faces: SPATIAL_FACES,
+      hinges: new Set([6]),
+      frame3d: SPATIAL_FRAME,
+      currentStep: null,
+      playT: 1,
+      playing: false,
+      drivers: new Map(),
+      errorMessage: null,
+      foldDraft: null,
+      pendingFoldThrough: null,
+      foldThroughBusy: false,
+    });
+    const canvas = renderViewer();
+    await waitFor(() => expect(held.scene.content).not.toBeNull());
+
+    // 垂直面を正面寄りから見る。真上では面が線に潰れるため、実際の操作と同じ斜め視点にする。
+    const camera = held.scene.camera as THREE.PerspectiveCamera;
+    camera.position.set(-1, -1.2, 1.2);
+    camera.lookAt(0.5, 0.5, 0.25);
+    camera.updateMatrixWorld(true);
+    camera.updateProjectionMatrix();
+
+    const grabbed: [number, number, number] = [0.5, 0.45, 0.4];
+    const start = canvasPoint(grabbed);
+    const dx = 36;
+    const dy = -28;
+    const grabbedNdc = new THREE.Vector3(...grabbed).project(camera);
+    const expectedTo = new THREE.Vector3(
+      grabbedNdc.x + (dx * 2) / 400,
+      grabbedNdc.y - (dy * 2) / 400,
+      grabbedNdc.z,
+    ).unproject(camera);
+
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 1,
+      clientX: start.x,
+      clientY: start.y,
+    });
+    fireEvent.pointerMove(canvas, {
+      pointerId: 1,
+      clientX: start.x + dx,
+      clientY: start.y + dy,
+    });
+
+    // z=0専用の半透明面へ潰さず、折り平面と反射後の動く輪郭を3Dで下見する。
+    const highlightCalls = (held.scene.setHighlight as ReturnType<typeof vi.fn>).mock
+      .calls;
+    const previewSegments = highlightCalls[highlightCalls.length - 1]?.[0] as
+      | { role?: string; a: THREE.Vector3; b: THREE.Vector3 }[]
+      | undefined;
+    expect(previewSegments?.some((segment) => segment.role === "reference")).toBe(true);
+    expect(previewSegments?.some((segment) => segment.role === "active")).toBe(true);
+    const currentPoints = SPATIAL_FRAME.faces.flatMap((face) =>
+      face.polygon.map((point) => new THREE.Vector3(...point)),
+    );
+    expect(
+      previewSegments
+        ?.filter((segment) => segment.role === "active")
+        .some((segment) =>
+          [segment.a, segment.b].some(
+            (point) =>
+              Math.min(...currentPoints.map((current) => current.distanceTo(point))) > 1e-6,
+          ),
+        ),
+    ).toBe(true);
+
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 1,
+      clientX: start.x + dx,
+      clientY: start.y + dy,
+    });
+
+    await waitFor(() => expect(ipc.sequenceApply).toHaveBeenCalledTimes(2));
+    const op = vi.mocked(ipc.sequenceApply).mock.calls[1][0] as unknown as {
+      type: string;
+      direction?: "Up" | "Down";
+      spatial?: {
+        from: [number, number, number];
+        to: [number, number, number];
+        grab_face: number;
+        mode: string;
+      };
+    };
+    expect(op.type).toBe("FoldThrough");
+    expect(op.spatial?.grab_face).toBe(1);
+    expect(op.spatial?.mode).toBe("flap");
+    for (let axis = 0; axis < 3; axis++) {
+      expect(op.spatial?.from[axis]).toBeCloseTo(grabbed[axis], 7);
+      expect(op.spatial?.to[axis]).toBeCloseTo(expectedTo.getComponent(axis), 7);
+    }
+    expect(Math.abs(op.spatial?.from[2] ?? 0)).toBeGreaterThan(0.1);
+    // この面の材質表法線は-x。ドラッグ途中で表裏どちらへ動いたかを
+    // 180°時の山谷分岐として保持する。
+    const materialNormal = new THREE.Vector3(-1, 0, 0);
+    const travel = expectedTo.clone().sub(new THREE.Vector3(...grabbed));
+    expect(op.direction).toBe(materialNormal.dot(travel) > 0 ? "Up" : "Down");
   });
 
   it("技法で紙をクリックすると候補層を保存し、初期対象は候補全部にする", () => {

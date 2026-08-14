@@ -237,13 +237,35 @@ export interface FoldDraft {
 type FoldThroughApplyOp = Extract<SeqOp, { type: "FoldThrough" }>;
 type FoldThroughInput = Omit<FoldThroughApplyOp, "accept_additional_crease">;
 
+/** 立体姿勢の紙をつかんだドラッグ。座標は3D表示と同じ世界座標。 */
+export type SpatialFoldDrag = {
+  from: [number, number, number];
+  to: [number, number, number];
+  grab_face: number;
+  mode: GrabMode;
+};
+
+/** 平坦用FoldThroughに、立体姿勢の入力を必要なときだけ添える。 */
+type FoldThroughOperation = FoldThroughInput & { spatial?: SpatialFoldDrag };
+
+/**
+ * Frame3Dが従来の畳み平面から外れているか。
+ * flat用のfoldLayersと同じ許容差を使い、平坦経路の選択を変えない。
+ */
+export function isSpatialFoldFrame(frame: Frame3D | null): boolean {
+  return (
+    frame !== null &&
+    frame.faces.some((face) => face.polygon.some(([, , z]) => Math.abs(z) > 1e-6))
+  );
+}
+
 /**
  * 縁への衝突が1か所だけ見つかり、巻き込み用の追加折り目を選べる状態。
  * 元の折り入力も保持し、利用者の答えを同じ条件へ適用する。
  */
 export interface PendingFoldThrough {
   proposal: FoldThroughProposal;
-  operation: FoldThroughInput;
+  operation: FoldThroughOperation;
   docEpoch: number;
   stepCount: number;
 }
@@ -749,13 +771,15 @@ interface AppState {
   /**
    * 紙をつかんで動かす折り操作(UI-007)。つかんだ点fromから離した点toへの
    * ドラッグを折り線・対象の層に翻訳して、そのまま折る(パネル操作は要らない)。
-   * grabFaceは立体表示で実際につかんだ面(raycastで拾えなければnull)
+   * grabFaceは立体表示で実際につかんだ面(raycastで拾えなければnull)。
+   * directionは立体で180°になったとき、ドラッグ途中に通った表裏の側を保つ。
    */
   foldByDrag: (
-    from: Vec2,
-    to: Vec2,
+    from: Vec2 | [number, number, number],
+    to: Vec2 | [number, number, number],
     mode: GrabMode,
     grabFace?: number | null,
+    direction?: FoldDirection,
   ) => Promise<void>;
   /** 技法を選ぶ(ツールレールのサブメニュー)。下ごしらえを作り直す */
   beginTechnique: (kind: TechniqueKind) => void;
@@ -1776,7 +1800,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
   /** FoldThroughを作品へ適用する。事前提案の有無にかかわらず最後はこの経路を通る。 */
   const applyFoldThrough = async (
-    operation: FoldThroughInput,
+    operation: FoldThroughOperation,
     acceptAdditionalCrease: boolean,
     busyToken: number,
   ): Promise<void> => {
@@ -1794,12 +1818,13 @@ export const useAppStore = create<AppState>((set, get) => {
         operation.up_to === s.doc.sequence.length ? null : operation.up_to + 1,
     });
     try {
-      await applyDocChange(() =>
-        ipc.sequenceApply({
+      await applyDocChange(() => {
+        const applyOperation: FoldThroughApplyOp & { spatial?: SpatialFoldDrag } = {
           ...operation,
           accept_additional_crease: acceptAdditionalCrease,
-        }),
-      );
+        };
+        return ipc.sequenceApply(applyOperation);
+      });
     } finally {
       // 最新でない失敗は共通処理が画面へ出さない。その場合も確認中のままにしない。
       // tokenを照合し、後から始まった別の確認のbusyは消さない。
@@ -1820,7 +1845,7 @@ export const useAppStore = create<AppState>((set, get) => {
    * PreviewFoldThroughのDocumentViewは作品更新として反映せず、提案だけを取り出す。
    * これにより、確定前の折り線や編集中の選択を事前確認で失わない。
    */
-  const requestFoldThrough = async (operation: FoldThroughInput): Promise<void> => {
+  const requestFoldThrough = async (operation: FoldThroughOperation): Promise<void> => {
     if (get().foldThroughBusy || get().pendingFoldThrough) return;
     stopPlayback();
     const started = get();
@@ -1831,16 +1856,20 @@ export const useAppStore = create<AppState>((set, get) => {
       foldThroughBusy: true,
       errorMessage: null,
     });
-    const r = await queue.run(() =>
-      ipc.sequenceApply({
+    const r = await queue.run(() => {
+      const previewOperation: Extract<SeqOp, { type: "PreviewFoldThrough" }> & {
+        spatial?: SpatialFoldDrag;
+      } = {
         type: "PreviewFoldThrough",
         up_to: operation.up_to,
         line: operation.line,
         keep_side_point: operation.keep_side_point,
         target_layers: operation.target_layers,
         direction: operation.direction,
-      }),
-    );
+        ...(operation.spatial ? { spatial: operation.spatial } : {}),
+      };
+      return ipc.sequenceApply(previewOperation);
+    });
     // ツール切替など、IPCを伴わない操作でも確認を取り消せるよう世代を先に見る。
     if (revision !== foldThroughRevision) {
       finishFoldThroughBusy(busyToken);
@@ -2556,7 +2585,7 @@ export const useAppStore = create<AppState>((set, get) => {
       if (get().alignDraft) set({ alignDraft: null, foldDraft: null });
     },
 
-    foldByDrag: async (from, to, mode, grabFace = null) => {
+    foldByDrag: async (from, to, mode, grabFace = null, direction = "Up") => {
       const s = get();
       if (!s.doc || s.foldThroughBusy || s.pendingFoldThrough) return;
       // 折れない状態は「なぜできないか」を短い日本語で伝える(要件UI-009)
@@ -2572,11 +2601,40 @@ export const useAppStore = create<AppState>((set, get) => {
         set({ errorMessage: reason });
         return;
       }
+      const upTo = foldInsertAt(s);
+      if (isSpatialFoldFrame(s.frame3d)) {
+        // 非平坦では単一の上下順やXY投影を使えない。実際につかんだ3D点を
+        // Rustへ渡し、再生した形の上で折り平面・つながった対象面・山谷を決める。
+        const spatial: SpatialFoldDrag = {
+          from: [from[0], from[1], from[2] ?? 0],
+          to: [to[0], to[1], to[2] ?? 0],
+          grab_face: grabFace ?? s.frame3d!.faces[0]?.face ?? 0,
+          mode,
+        };
+        set({
+          foldDraft: null,
+          alignDraft: null,
+        });
+        await requestFoldThrough({
+          type: "FoldThrough",
+          up_to: upTo,
+          // spatial分岐ではRustが使わない。旧serde形を保つ有限・非退化な値。
+          line: [
+            [0, 0],
+            [1, 0],
+          ],
+          keep_side_point: [0, 1],
+          target_layers: null,
+          direction,
+          spatial,
+        });
+        return;
+      }
       const result = planGrabFold(
         foldLayers(s.frame3d, s.doc, s.faces),
         s.faces,
-        from,
-        to,
+        [from[0], from[1]],
+        [to[0], to[1]],
         mode,
         grabFace,
       );
@@ -2586,7 +2644,6 @@ export const useAppStore = create<AppState>((set, get) => {
       }
       // つかんだ紙は離した位置へ倒れてくる(=手前へ折る)。
       // 引きかけの折り線が残っていても、この操作で決着させる
-      const upTo = foldInsertAt(s);
       set({
         foldDraft: null,
         alignDraft: null,

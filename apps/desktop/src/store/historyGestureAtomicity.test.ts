@@ -127,7 +127,7 @@ function interactionContext(options: {
     tool: "construct",
     selection: { edgeIds: [], vertexIds: [] },
     alignDraft: null,
-    alignPickDoc: doc,
+    finalDoc: doc,
     faces: [],
     frame3d: null,
     construct: { ...DEFAULT_CONSTRUCT, ...options.construct },

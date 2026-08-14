@@ -10,7 +10,9 @@ import { useCallback, useEffect, useRef } from "react";
 import * as THREE from "three";
 import {
   canFoldNow,
+  isSpatialFoldFrame,
   pullBlockReason,
+  type SpatialFoldDrag,
   useAppStore,
 } from "../../store/appStore";
 import { SELECTABLE_3D_EDGE_TARGETS, viewerHint } from "../../lib/viewerHint";
@@ -22,7 +24,7 @@ import {
 } from "../../lib/grabDrive";
 import { paperExtent } from "../CpEditor/snap";
 import { planeRadius, screenToPlane } from "../../lib/planeProject";
-import type { Vec2 } from "../../lib/types";
+import type { Face, FoldDirection, Frame3D, Vec2 } from "../../lib/types";
 import {
   facesAtPoint,
   foldLayers,
@@ -69,6 +71,197 @@ function toHighlight(segments: [Vec2, Vec2][]): HingeSegment[] {
     a: new THREE.Vector3(a[0], a[1], PREVIEW_LIFT),
     b: new THREE.Vector3(b[0], b[1], PREVIEW_LIFT),
   }));
+}
+
+const SPATIAL_PREVIEW_EPS = 1e-9;
+
+/** 面の頂点順を保った材質表側の法線。退化面では向きを変えない。 */
+function materialNormal(
+  frame: Frame3D | null,
+  faceId: number,
+): THREE.Vector3 | null {
+  const polygon = frame?.faces.find((face) => face.face === faceId)?.polygon;
+  if (!polygon || polygon.length < 3) return null;
+  const normal = new THREE.Vector3();
+  for (let i = 0; i < polygon.length; i++) {
+    const a = polygon[i];
+    const b = polygon[(i + 1) % polygon.length];
+    normal.x += (a[1] - b[1]) * (a[2] + b[2]);
+    normal.y += (a[2] - b[2]) * (a[0] + b[0]);
+    normal.z += (a[0] - b[0]) * (a[1] + b[1]);
+  }
+  return normal.lengthSq() > SPATIAL_PREVIEW_EPS ** 2 ? normal.normalize() : null;
+}
+
+/**
+ * 180°では終点の形だけから山谷を区別できないため、ドラッグ途中で材質の
+ * 表側へ動いたか裏側へ動いたかを保持する。面内だけの移動では従来値を保つ。
+ */
+function spatialDragDirection(
+  frame: Frame3D | null,
+  faceId: number,
+  from: SpatialFoldDrag["from"],
+  to: SpatialFoldDrag["to"],
+  previous: FoldDirection,
+): FoldDirection {
+  const normal = materialNormal(frame, faceId);
+  if (!normal) return previous;
+  const travel = new THREE.Vector3(...to).sub(new THREE.Vector3(...from));
+  const towardFront = normal.dot(travel);
+  if (Math.abs(towardFront) <= SPATIAL_PREVIEW_EPS) return previous;
+  return towardFront > 0 ? "Up" : "Down";
+}
+
+function clipSpatialPolygon(
+  polygon: readonly [number, number, number][],
+  origin: THREE.Vector3,
+  normal: THREE.Vector3,
+  movingSign: number,
+): THREE.Vector3[] {
+  const clipped: THREE.Vector3[] = [];
+  for (let i = 0; i < polygon.length; i++) {
+    const a = new THREE.Vector3(...polygon[i]);
+    const b = new THREE.Vector3(...polygon[(i + 1) % polygon.length]);
+    const da = movingSign * normal.dot(a.clone().sub(origin));
+    const db = movingSign * normal.dot(b.clone().sub(origin));
+    const aInside = da >= -SPATIAL_PREVIEW_EPS;
+    const bInside = db >= -SPATIAL_PREVIEW_EPS;
+    if (aInside) clipped.push(a);
+    if (aInside !== bInside) {
+      const t = da / (da - db);
+      clipped.push(a.lerp(b, t));
+    }
+  }
+  return clipped;
+}
+
+function spatialCrease(
+  polygon: readonly [number, number, number][],
+  origin: THREE.Vector3,
+  normal: THREE.Vector3,
+): [THREE.Vector3, THREE.Vector3] | null {
+  const crossings: THREE.Vector3[] = [];
+  const add = (point: THREE.Vector3) => {
+    if (!crossings.some((candidate) => candidate.distanceToSquared(point) <= 1e-18)) {
+      crossings.push(point);
+    }
+  };
+  for (let i = 0; i < polygon.length; i++) {
+    const a = new THREE.Vector3(...polygon[i]);
+    const b = new THREE.Vector3(...polygon[(i + 1) % polygon.length]);
+    const da = normal.dot(a.clone().sub(origin));
+    const db = normal.dot(b.clone().sub(origin));
+    if (Math.abs(da) <= SPATIAL_PREVIEW_EPS) add(a);
+    if (da * db < -(SPATIAL_PREVIEW_EPS ** 2)) add(a.lerp(b, da / (da - db)));
+  }
+  if (crossings.length < 2) return null;
+  let pair: [THREE.Vector3, THREE.Vector3] = [crossings[0], crossings[1]];
+  let farthest = pair[0].distanceToSquared(pair[1]);
+  for (let i = 0; i < crossings.length; i++) {
+    for (let j = i + 1; j < crossings.length; j++) {
+      const distance = crossings[i].distanceToSquared(crossings[j]);
+      if (distance > farthest) {
+        farthest = distance;
+        pair = [crossings[i], crossings[j]];
+      }
+    }
+  }
+  return farthest > SPATIAL_PREVIEW_EPS ** 2 ? pair : null;
+}
+
+/** 立体用計算と同じ「つかんだ面から同じ側へ共有辺でつながる面」。 */
+function spatialPreviewFaces(
+  frame: Frame3D,
+  faces: readonly Face[],
+  grab: Extract<GrabState, { spatial: true }>,
+  origin: THREE.Vector3,
+  normal: THREE.Vector3,
+  movingSign: number,
+): Set<number> {
+  const frameById = new Map(frame.faces.map((face) => [face.face, face]));
+  const faceById = new Map(faces.map((face) => [face.id, face]));
+  const owners = new Map<number, number[]>();
+  for (const face of faces) {
+    for (const edge of face.edges) {
+      const list = owners.get(edge) ?? [];
+      list.push(face.id);
+      owners.set(edge, list);
+    }
+  }
+  const reachesSide = (faceId: number) =>
+    frameById
+      .get(faceId)
+      ?.polygon.some(
+        (point) =>
+          movingSign *
+            normal.dot(new THREE.Vector3(...point).sub(origin)) >
+          SPATIAL_PREVIEW_EPS,
+      ) ?? false;
+  if (!reachesSide(grab.face)) return new Set();
+  const selected = new Set([grab.face]);
+  const queue = [grab.face];
+  while (queue.length > 0) {
+    const faceId = queue.shift()!;
+    const face = faceById.get(faceId);
+    const face3d = frameById.get(faceId);
+    if (!face || !face3d || face.vertices.length !== face3d.polygon.length) continue;
+    for (let edgeIndex = 0; edgeIndex < face.edges.length; edgeIndex++) {
+      const a = new THREE.Vector3(...face3d.polygon[edgeIndex]);
+      const b = new THREE.Vector3(
+        ...face3d.polygon[(edgeIndex + 1) % face3d.polygon.length],
+      );
+      const edgeReaches = [a, b].some(
+        (point) =>
+          movingSign * normal.dot(point.clone().sub(origin)) > SPATIAL_PREVIEW_EPS,
+      );
+      if (!edgeReaches) continue;
+      for (const neighbor of owners.get(face.edges[edgeIndex]) ?? []) {
+        if (!selected.has(neighbor) && reachesSide(neighbor)) {
+          selected.add(neighbor);
+          queue.push(neighbor);
+        }
+      }
+    }
+  }
+  return selected;
+}
+
+/** 立体の折り平面と、反射後の動く紙の輪郭を3D線で下見する。 */
+function spatialFoldPreview(
+  frame: Frame3D | null,
+  faces: readonly Face[],
+  grab: Extract<GrabState, { spatial: true }>,
+): HighlightSegment[] {
+  if (!frame) return [];
+  const from = new THREE.Vector3(...grab.a);
+  const to = new THREE.Vector3(...grab.b);
+  const normal = to.clone().sub(from);
+  if (normal.lengthSq() <= SPATIAL_PREVIEW_EPS ** 2) return [];
+  normal.normalize();
+  const origin = from.clone().add(to).multiplyScalar(0.5);
+  const signed = normal.dot(from.clone().sub(origin));
+  const movingSign = Math.abs(signed) > SPATIAL_PREVIEW_EPS ? Math.sign(signed) : -1;
+  const selected = spatialPreviewFaces(frame, faces, grab, origin, normal, movingSign);
+  const segments: HighlightSegment[] = [];
+  for (const face of frame.faces) {
+    if (!selected.has(face.face)) continue;
+    const crease = spatialCrease(face.polygon, origin, normal);
+    if (crease) {
+      segments.push({ edgeId: -1, a: crease[0], b: crease[1], role: "reference" });
+    }
+    const moving = clipSpatialPolygon(face.polygon, origin, normal, movingSign).map(
+      (point) => point.sub(normal.clone().multiplyScalar(2 * normal.dot(point.clone().sub(origin)))),
+    );
+    for (let i = 0; i < moving.length; i++) {
+      segments.push({
+        edgeId: -1,
+        a: moving[i],
+        b: moving[(i + 1) % moving.length],
+        role: "active",
+      });
+    }
+  }
+  return segments;
 }
 
 /** たわみONでは、見えている細分網をowner/pickerの両方で使う。 */
@@ -126,6 +319,27 @@ const PREVIEW_LIFT = 0.002;
 /** 折った結果の下見(半透明の面)を浮かせる高さ。層のずらし表示より上に置く */
 const PREVIEW_FILL_LIFT = 0.045;
 
+type GrabState = {
+  face: number;
+  mode: GrabMode;
+} & (
+  | {
+      spatial: false;
+      a: Vec2;
+      b: Vec2;
+    }
+  | {
+      spatial: true;
+      a: SpatialFoldDrag["from"];
+      b: SpatialFoldDrag["to"];
+      origin: THREE.Vector3;
+      ndc: THREE.Vector3;
+      x: number;
+      y: number;
+      direction: FoldDirection;
+    }
+);
+
 interface Props {
   /** 「全体表示」用: 親が current を呼ぶと紙全体が見える位置にカメラを戻す */
   fitRef: React.RefObject<(() => void) | null>;
@@ -156,12 +370,7 @@ export function Viewer3D({ fitRef }: Props) {
   /** 折り線を引いている最中の2点(表示専用の一時状態なのでrefで持つ) */
   const drawingRef = useRef<{ a: Vec2; b: Vec2 } | null>(null);
   /** 紙をつかんで動かしている最中のつかんだ点・今の点・つかんだ面・対象の枚数 */
-  const grabRef = useRef<{
-    a: Vec2;
-    b: Vec2;
-    face: number | null;
-    mode: GrabMode;
-  } | null>(null);
+  const grabRef = useRef<GrabState | null>(null);
   /** 紙を引いている最中の、つかんだ点(世界座標とその画面位置)と駆動する折り線。
    * ドラッグ中に形が変わっても基準はつかんだ瞬間のまま保つ(手が形に追われない) */
   const pullRef = useRef<{
@@ -385,6 +594,13 @@ export function Viewer3D({ fitRef }: Props) {
     // つかんで動かしている間は「折った結果の形」を半透明で重ねて見せる(UI-008)
     const grab = grabRef.current;
     if (grab && s.doc) {
+      if (grab.spatial) {
+        // setPreviewはz=0専用なので消し、立体では折り平面と反射後の輪郭を
+        // 3Dの強調線で示す。現在の紙と重ねることで動く側と結果形が分かる。
+        scene.setPreview([], PREVIEW_FILL_LIFT);
+        setHighlight(spatialFoldPreview(s.frame3d, s.faces, grab));
+        return;
+      }
       const plan = planGrabFold(
         foldLayers(s.frame3d, s.doc, s.faces),
         s.faces,
@@ -884,7 +1100,7 @@ export function Viewer3D({ fitRef }: Props) {
         scene?.content
       ) {
         const surface = displayedPickSurface(scene);
-        const face = surface && pickFace(
+        const hit = surface && pickPaper(
           surface.mesh,
           surface.triangleFaceIds,
           scene.camera,
@@ -895,17 +1111,35 @@ export function Viewer3D({ fitRef }: Props) {
           surface.triangleLayers,
           surface.faceMirrored,
         );
-        const p = face == null ? null : rawPoint(rect, x, y);
-        if (p && face != null) {
+        const spatial = isSpatialFoldFrame(s.frame3d);
+        const p = hit && !spatial ? rawPoint(rect, x, y) : null;
+        if (hit && (spatial || p)) {
           e.currentTarget.setPointerCapture(e.pointerId);
           e.currentTarget.style.cursor = "grabbing";
           s.setOperationStage(1);
-          grabRef.current = {
-            a: p,
-            b: p,
-            face,
-            mode: grabMode(e),
-          };
+          if (spatial) {
+            const a: SpatialFoldDrag["from"] = [hit.point.x, hit.point.y, hit.point.z];
+            grabRef.current = {
+              spatial: true,
+              a,
+              b: [...a],
+              face: hit.face,
+              mode: grabMode(e),
+              origin: hit.point.clone(),
+              ndc: hit.point.clone().project(scene.camera),
+              x,
+              y,
+              direction: "Up",
+            };
+          } else {
+            grabRef.current = {
+              spatial: false,
+              a: p!,
+              b: p!,
+              face: hit.face,
+              mode: grabMode(e),
+            };
+          }
           drawHighlight();
         }
         return;
@@ -959,9 +1193,28 @@ export function Viewer3D({ fitRef }: Props) {
       }
       const grab = grabRef.current;
       if (grab) {
-        const p = rawPoint(rect, e.clientX - rect.left, e.clientY - rect.top);
-        if (!p) return;
-        grab.b = p;
+        if (grab.spatial) {
+          if (!scene) return;
+          const dx = e.clientX - rect.left - grab.x;
+          const dy = e.clientY - rect.top - grab.y;
+          const moved = new THREE.Vector3(
+            grab.ndc.x + (dx * 2) / rect.width,
+            grab.ndc.y - (dy * 2) / rect.height,
+            grab.ndc.z,
+          ).unproject(scene.camera);
+          grab.b = [moved.x, moved.y, moved.z];
+          grab.direction = spatialDragDirection(
+            useAppStore.getState().frame3d,
+            grab.face,
+            grab.a,
+            grab.b,
+            grab.direction,
+          );
+        } else {
+          const p = rawPoint(rect, e.clientX - rect.left, e.clientY - rect.top);
+          if (!p) return;
+          grab.b = p;
+        }
         useAppStore.getState().setOperationStage(2);
         e.currentTarget.style.cursor = "grabbing";
         grab.mode = grabMode(e); // 途中で修飾キーを押しても下見に反映する
@@ -1011,7 +1264,13 @@ export function Viewer3D({ fitRef }: Props) {
         drawHighlight(); // 下見を消してから、実際に折る
         void useAppStore
           .getState()
-          .foldByDrag(grab.a, grab.b, grabMode(e), grab.face);
+          .foldByDrag(
+            grab.a,
+            grab.b,
+            grabMode(e),
+            grab.face,
+            grab.spatial ? grab.direction : "Up",
+          );
         return;
       }
       const drawing = drawingRef.current;
