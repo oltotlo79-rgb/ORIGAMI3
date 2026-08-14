@@ -17,6 +17,7 @@ fn face(id: u32, polygon: &[[f64; 3]]) -> Face3D {
         face: id,
         polygon: polygon.to_vec(),
         layer: 0,
+        surface_rank: 0,
         mirrored: false,
     }
 }
@@ -121,6 +122,7 @@ fn flat_fold_warns_only_for_layer_order_that_contradicts_mountain_valley() {
                     })
                     .collect(),
                 layer: 0,
+                surface_rank: 0,
                 mirrored,
             }
         })

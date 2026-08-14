@@ -5,13 +5,52 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import {
+  SURFACE_HIT_DISTANCE_EPS,
   pickFace,
   pickHinge,
   pickHingeSegment,
   pickPaper,
+  selectPaperHit,
   type HingeSegment,
   type PaperPickSurface,
 } from "./hingePicker";
+
+describe("selectPaperHit", () => {
+  const point = new THREE.Vector3(0, 0, 0);
+  const normal = new THREE.Vector3(0, 0, 1);
+
+  it("実距離がtie許容差を超えるとsurface rankより近い面を優先する", () => {
+    const selected = selectPaperHit(
+      [
+        { face: 10, surfaceRank: 0, distance: 1, point, normal },
+        {
+          face: 20,
+          surfaceRank: 99,
+          distance: 1 + SURFACE_HIT_DISTANCE_EPS * 2,
+          point,
+          normal,
+        },
+      ],
+      new THREE.Vector3(0, 0, 2),
+    );
+    expect(selected?.face).toBe(10);
+  });
+
+  it("実距離がtie許容差内のときだけ視点側のsurface rankを使う", () => {
+    const hits = [
+      { face: 10, surfaceRank: 1, distance: 1, point, normal },
+      {
+        face: 20,
+        surfaceRank: 2,
+        distance: 1 + SURFACE_HIT_DISTANCE_EPS / 2,
+        point,
+        normal,
+      },
+    ];
+    expect(selectPaperHit(hits, new THREE.Vector3(0, 0, 2))?.face).toBe(20);
+    expect(selectPaperHit(hits, new THREE.Vector3(0, 0, -2))?.face).toBe(10);
+  });
+});
 
 /** 原点を正面から見るカメラ(画面200×200px) */
 function makeCamera(): THREE.PerspectiveCamera {
@@ -50,13 +89,13 @@ function segment(
 /** 画面中央で完全に重なる三角形を面ごとに1枚ずつ作る */
 function makeOverlappingSurface(
   triangleFaceIds: number[],
-  triangleLayers: number[],
-  triangleMirrored: boolean[] = new Array(triangleFaceIds.length).fill(false),
+  surfaceRanks: number[],
+  backWinding: boolean[] = triangleFaceIds.map((_, index) => index % 2 === 0),
 ): PaperPickSurface {
   const positiveZWinding = [-1, -1, 0, 1, -1, 0, 0, 1, 0];
   const negativeZWinding = [-1, -1, 0, 0, 1, 0, 1, -1, 0];
   const positions = triangleFaceIds.flatMap((_, index) =>
-    index % 2 === 0 ? negativeZWinding : positiveZWinding,
+    backWinding[index] ? negativeZWinding : positiveZWinding,
   );
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute(
@@ -71,9 +110,9 @@ function makeOverlappingSurface(
   return {
     mesh,
     triangleFaceIds,
-    triangleLayers,
-    faceMirrored: new Map(
-      triangleFaceIds.map((face, index) => [face, triangleMirrored[index] ?? false]),
+    triangleLayers: [...surfaceRanks],
+    faceSurfaceRanks: new Map(
+      triangleFaceIds.map((face, index) => [face, surfaceRanks[index] ?? 0]),
     ),
   };
 }
@@ -150,7 +189,7 @@ describe("pickHinge", () => {
           100,
           100,
           surface.triangleLayers,
-          surface.faceMirrored,
+          surface.faceSurfaceRanks,
         ),
       ).toBe(9);
       expect(
@@ -163,7 +202,7 @@ describe("pickHinge", () => {
           100,
           100,
           surface.triangleLayers,
-          surface.faceMirrored,
+          surface.faceSurfaceRanks,
         )?.face,
       ).toBe(9);
       expect(
@@ -176,7 +215,7 @@ describe("pickHinge", () => {
           100,
           100,
           surface.triangleLayers,
-          surface.faceMirrored,
+          surface.faceSurfaceRanks,
         ),
       ).toBe(3);
       expect(
@@ -189,7 +228,7 @@ describe("pickHinge", () => {
           100,
           100,
           surface.triangleLayers,
-          surface.faceMirrored,
+          surface.faceSurfaceRanks,
         )?.face,
       ).toBe(3);
     } finally {
@@ -217,7 +256,7 @@ describe("pickHinge", () => {
               100,
               100,
               surface.triangleLayers,
-              surface.faceMirrored,
+              surface.faceSurfaceRanks,
             ),
           ).toBe(expected);
           expect(
@@ -230,7 +269,7 @@ describe("pickHinge", () => {
               100,
               100,
               surface.triangleLayers,
-              surface.faceMirrored,
+              surface.faceSurfaceRanks,
             )?.face,
           ).toBe(expected);
         }
@@ -266,7 +305,7 @@ describe("pickHinge", () => {
               100,
               100,
               surface.triangleLayers,
-              surface.faceMirrored,
+              surface.faceSurfaceRanks,
             ),
             state.label,
           ).toBe(13);
@@ -290,7 +329,7 @@ describe("pickHinge", () => {
           100,
           100,
           surface.triangleLayers,
-          surface.faceMirrored,
+          surface.faceSurfaceRanks,
         ),
       ).toBe(10);
       expect(
@@ -303,7 +342,7 @@ describe("pickHinge", () => {
           100,
           100,
           surface.triangleLayers,
-          surface.faceMirrored,
+          surface.faceSurfaceRanks,
         ),
       ).toBe(20);
     } finally {

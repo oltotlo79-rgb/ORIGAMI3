@@ -99,6 +99,7 @@ struct SolveOptions {
     wrap_updates: bool,
     finish_closure: bool,
     spring_w2: f64,
+    derive_surface_order: bool,
 }
 
 impl SolveOptions {
@@ -107,7 +108,13 @@ impl SolveOptions {
             wrap_updates,
             finish_closure,
             spring_w2,
+            derive_surface_order: true,
         }
+    }
+
+    const fn without_surface_order(mut self) -> Self {
+        self.derive_surface_order = false;
+        self
     }
 }
 
@@ -555,6 +562,21 @@ pub fn solve_near_exact(
     solve_near_exact_prepared(cp, faces, drivers, targets, warm_start, &topology)
 }
 
+/// replayが保存済みの層順を直後に刻印する場合の表示solve。
+/// 幾何計算は[`solve_near_exact`]と同一で、上書きされる重なり順の導出だけを省く。
+pub fn solve_near_exact_without_surface_order(
+    cp: &CreasePattern,
+    faces: &[Face],
+    drivers: &[Driver],
+    targets: &HashMap<EdgeId, f64>,
+    warm_start: Option<&HashMap<EdgeId, f64>>,
+) -> SolveResult {
+    let topology = prepare_topology(cp, faces);
+    solve_near_exact_prepared_without_surface_order(
+        cp, faces, drivers, targets, warm_start, &topology,
+    )
+}
+
 pub(crate) fn solve_near_exact_prepared(
     cp: &CreasePattern,
     faces: &[Face],
@@ -563,13 +585,44 @@ pub(crate) fn solve_near_exact_prepared(
     warm_start: Option<&HashMap<EdgeId, f64>>,
     topology: &PreparedTopology,
 ) -> SolveResult {
+    solve_near_exact_prepared_with_surface_order(
+        cp, faces, drivers, targets, warm_start, topology, true,
+    )
+}
+
+fn solve_near_exact_prepared_without_surface_order(
+    cp: &CreasePattern,
+    faces: &[Face],
+    drivers: &[Driver],
+    targets: &HashMap<EdgeId, f64>,
+    warm_start: Option<&HashMap<EdgeId, f64>>,
+    topology: &PreparedTopology,
+) -> SolveResult {
+    solve_near_exact_prepared_with_surface_order(
+        cp, faces, drivers, targets, warm_start, topology, false,
+    )
+}
+
+fn solve_near_exact_prepared_with_surface_order(
+    cp: &CreasePattern,
+    faces: &[Face],
+    drivers: &[Driver],
+    targets: &HashMap<EdgeId, f64>,
+    warm_start: Option<&HashMap<EdgeId, f64>>,
+    topology: &PreparedTopology,
+    derive_surface_order: bool,
+) -> SolveResult {
     let clamped = solve_impl_prepared(
         cp,
         faces,
         drivers,
         warm_start,
         Some(targets),
-        SolveOptions::new(false, true, SPRING_W2),
+        if derive_surface_order {
+            SolveOptions::new(false, true, SPRING_W2)
+        } else {
+            SolveOptions::new(false, true, SPRING_W2).without_surface_order()
+        },
         topology,
     );
     if clamped.converged {
@@ -581,7 +634,11 @@ pub(crate) fn solve_near_exact_prepared(
             drivers,
             warm_start,
             Some(targets),
-            SolveOptions::new(true, true, SPRING_W2),
+            if derive_surface_order {
+                SolveOptions::new(true, true, SPRING_W2)
+            } else {
+                SolveOptions::new(true, true, SPRING_W2).without_surface_order()
+            },
             topology,
         )
     }
@@ -600,6 +657,7 @@ fn solve_impl_prepared(
         wrap_updates,
         finish_closure,
         spring_w2,
+        derive_surface_order,
     } = options;
     let PreparedTopology {
         forest,
@@ -1102,7 +1160,7 @@ fn solve_impl_prepared(
 
     // 最終フレームは構築済みの森で一度だけ伝播する(build_forestの二重実行を回避)
     let folded = tree::fold_frame(forest, faces, &x);
-    let mut frame = tree::to_frame3d(cp, faces, &folded);
+    let mut frame = tree::to_frame3d_with_surface_order(cp, faces, &folded, derive_surface_order);
     frame.warnings.append(&mut warnings);
     let finite_frame = frame_is_finite_and_complete(&frame, faces.len());
     if !finite_frame {

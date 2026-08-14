@@ -336,6 +336,8 @@ export interface Face3D {
   face: number;
   polygon: [number, number, number][];
   layer: number;
+  /** 同一深度の紙面だけに使う、下から上への重なり順位。 */
+  surface_rank?: number;
   /** 折り木で面が鏡映された回数の偶奇。旧mockは省略できるがRust IPCは常に返す。 */
   mirrored?: boolean;
 }

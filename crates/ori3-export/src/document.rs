@@ -219,6 +219,7 @@ mod tests {
                     face: 0,
                     polygon: vec![[0.0, 0.0, 0.2], [1.0, 0.0, -0.1], [0.0, 1.0, 0.0]],
                     layer: 0,
+                    surface_rank: 0,
                     mirrored: false,
                 }],
                 warnings: Vec::new(),

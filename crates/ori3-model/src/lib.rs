@@ -464,6 +464,9 @@ pub struct Face3D {
     pub face: FaceId,
     pub polygon: Vec<[f64; 3]>,
     pub layer: u32,
+    /// 同一深度の面を決める、紙の下から上への重なり順位。
+    #[serde(default)]
+    pub surface_rank: u32,
     /// 平坦折りで面の材質座標が鏡映されているか。
     ///
     /// 表示用の導出値であり、古い検証用soft geometry snapshotにも読み込めるよう

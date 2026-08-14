@@ -704,6 +704,7 @@ fn frame_from_map(
                     })
                     .collect(),
                 layer: 0,
+                surface_rank: 0,
                 mirrored: false,
             })
             .collect(),

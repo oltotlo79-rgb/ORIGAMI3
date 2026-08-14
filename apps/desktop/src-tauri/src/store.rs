@@ -969,6 +969,7 @@ pub(crate) fn add_layer_order_warning(
         for face in &mut frame.faces {
             if let Some(&layer) = rank.get(&face.face) {
                 face.layer = layer;
+                face.surface_rank = layer;
             }
         }
     }
@@ -1190,6 +1191,7 @@ mod tests {
                 face: 0,
                 polygon: vec![[0.0, 0.0, z]],
                 layer: 0,
+                surface_rank: 0,
                 mirrored: false,
             }],
             warnings: Vec::new(),

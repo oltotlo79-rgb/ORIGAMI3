@@ -207,6 +207,7 @@ pub fn replay_with_faces(doc: &Document, faces: &[Face], up_to: usize, t: f64) -
         .collect();
     for f in &mut frame.faces {
         f.layer = layer_of.get(&f.face).copied().unwrap_or(0);
+        f.surface_rank = f.layer;
     }
 
     ReplayResult {
@@ -366,7 +367,7 @@ fn solve_display_near(
     targets: &HashMap<EdgeId, f64>,
     warm: Option<&HashMap<EdgeId, f64>>,
 ) -> ori3_rigid::SolveResult {
-    ori3_rigid::solve_near_exact(&doc.cp, faces, drivers, targets, warm)
+    ori3_rigid::solve_near_exact_without_surface_order(&doc.cp, faces, drivers, targets, warm)
 }
 
 fn is_finite_result(result: &ori3_rigid::SolveResult, expected_faces: usize) -> bool {

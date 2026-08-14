@@ -27,7 +27,7 @@ vi.mock("./sceneBuilder", async (importOriginal) => {
         owner: {
           triangleFaces: number[];
           triangleLayers: number[];
-          faceMirrored: ReadonlyMap<number, boolean>;
+          faceSurfaceRanks: ReadonlyMap<number, number>;
         };
       };
       const pickSurfaceOf = (content: unknown) => {
@@ -37,7 +37,7 @@ vi.mock("./sceneBuilder", async (importOriginal) => {
           mesh: displayed.mesh,
           triangleFaceIds: displayed.owner.triangleFaces,
           triangleLayers: displayed.owner.triangleLayers,
-          faceMirrored: displayed.owner.faceMirrored,
+          faceSurfaceRanks: displayed.owner.faceSurfaceRanks,
         };
       };
       const scene = {
@@ -194,6 +194,7 @@ const SPATIAL_FRAME: Frame3D = {
         [0, 1, 0],
       ],
       layer: 0,
+      surface_rank: 0,
     },
     {
       face: 1,
@@ -204,6 +205,7 @@ const SPATIAL_FRAME: Frame3D = {
         [0.5, 1, 0],
       ],
       layer: 1,
+      surface_rank: 1,
     },
   ],
   warnings: [],

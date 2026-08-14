@@ -9,7 +9,7 @@ import {
   orderSurfaceOwner,
   ownerCodeBytes,
   ownerCodeVector,
-  updateSurfaceOwnerFaceMirrored,
+  updateSurfaceOwnerFaceRanks,
   updateSurfaceOwnerFaceLayers,
   updateSurfaceOwnerTriangleLayers,
 } from "./surfaceOwner";
@@ -60,25 +60,23 @@ function indicesOf(surface: ReturnType<typeof createSurfaceOwnerSurface>): numbe
 }
 
 function overlappingSurface(
-  layers: [number, number] = [0, 0],
-  mirrored: [boolean, boolean] = [false, false],
+  ranks: [number, number] = [0, 0],
 ) {
   const surface = createSurfaceOwnerSurface({
     position: positionOfTwoOverlappingFaces(),
     vertexFaces: [10, 10, 10, 20, 20, 20],
     indices: [0, 1, 2, 3, 4, 5],
     triangleFaces: [10, 20],
-    triangleLayers: layers,
+    triangleLayers: ranks,
   });
-  updateSurfaceOwnerFaceMirrored(surface, new Map([[10, mirrored[0]], [20, mirrored[1]]]));
+  updateSurfaceOwnerFaceRanks(surface, new Map([[10, ranks[0]], [20, ranks[1]]]));
   return surface;
 }
 
 function oppositeWindingSurface(
   frontFaceId: number,
   backFaceId: number,
-  layers: [number, number] = [0, 0],
-  mirrored: [boolean, boolean] = [false, true],
+  ranks: [number, number] = [0, 0],
 ) {
   const surface = createSurfaceOwnerSurface({
     position: positionOfOppositeWindingFaces(),
@@ -92,11 +90,11 @@ function oppositeWindingSurface(
     ],
     indices: [0, 1, 2, 3, 4, 5],
     triangleFaces: [frontFaceId, backFaceId],
-    triangleLayers: layers,
+    triangleLayers: ranks,
   });
-  updateSurfaceOwnerFaceMirrored(
+  updateSurfaceOwnerFaceRanks(
     surface,
-    new Map([[frontFaceId, mirrored[0]], [backFaceId, mirrored[1]]]),
+    new Map([[frontFaceId, ranks[0]], [backFaceId, ranks[1]]]),
   );
   return surface;
 }
@@ -166,8 +164,8 @@ describe("createSurfaceOwnerSurface", () => {
     expect(surface.batches.map((batch) => batch.layer)).toEqual([2, 4]);
     expect(surface.triangleFaces).toEqual([20, 10]);
     expect(surface.triangleLayers).toEqual([4, 2]);
-    expect(surface.batches.map((batch) => batch.mirrored)).toEqual([false, false]);
-    expect([...surface.faceMirrored]).toEqual([[20, false], [10, false]]);
+    expect(surface.batches.map((batch) => batch.surfaceRank)).toEqual([0, 0]);
+    expect([...surface.faceSurfaceRanks]).toEqual([[20, 0], [10, 0]]);
 
     // 入力配列を書き換えてもowner側の記録・indexは変わらない。
     indices[0] = 99;
@@ -210,13 +208,13 @@ describe("orderSurfaceOwner", () => {
     expect(indicesOf(surface)).toEqual([0, 1, 2, 3, 4, 5]);
   });
 
-  it("同じ深度・同じlayerでは面IDによらずmirrored=falseを選び、裏視点でも同じ物理面を保つ", () => {
+  it("rank未指定の旧入力は面IDによらず材質windingを選び、裏視点でも同じ物理面を保つ", () => {
     // 表面のface IDが大きい場合と小さい場合の両方を通し、ID順の偶然を排除する。
     for (const [frontFaceId, backFaceId] of [[30, 10], [10, 30]] as const) {
       const surface = oppositeWindingSurface(frontFaceId, backFaceId);
       try {
         orderSurfaceOwner(surface, cameraAt(2));
-        // mirrored=trueを先、falseの物理表面を後に描く。
+        // 防御fallbackで裏windingを先、表windingの物理表面を後に描く。
         expect(indicesOf(surface)).toEqual([3, 4, 5, 0, 1, 2]);
 
         orderSurfaceOwner(surface, cameraAt(-2));
@@ -228,7 +226,7 @@ describe("orderSurfaceOwner", () => {
     }
   });
 
-  it("A/B/Cの手順なし角度状態でmirrored=falseのownerを表裏視点とも保つ", () => {
+  it("A/B/Cの旧rank未指定fixtureでも材質表面のownerを表裏視点とも保つ", () => {
     const states = [
       { label: "A: 8本を山折り+180°", tiltDeg: 0 },
       { label: "B: 8本を谷折り-180°", tiltDeg: 0 },
@@ -257,10 +255,6 @@ describe("orderSurfaceOwner", () => {
         indices: [0, 1, 2, 3, 4, 5, 6, 7, 8],
         triangleFaces: [2, 7, 13],
       });
-      updateSurfaceOwnerFaceMirrored(
-        surface,
-        new Map([[2, true], [7, true], [13, false]]),
-      );
       try {
         for (const camera of [cameraAt(2), cameraAt(-2)]) {
           orderSurfaceOwner(surface, camera);
@@ -277,6 +271,7 @@ describe("orderSurfaceOwner", () => {
 
   it("紙全体を剛体回転してworld法線の符号が反転してもownerを変えない", () => {
     const surface = oppositeWindingSurface(10, 20);
+    updateSurfaceOwnerFaceRanks(surface, new Map([[10, 1], [20, 0]]));
     try {
       orderSurfaceOwner(surface, cameraAt(2));
       const before = indicesOf(surface);
@@ -293,22 +288,22 @@ describe("orderSurfaceOwner", () => {
     }
   });
 
-  it("異なるlayerではmirroredより従来の視点側layerを優先する", () => {
+  it("異なるsurface rankは視点側に応じて比較方向を反転する", () => {
     const surface = oppositeWindingSurface(20, 10, [1, 2]);
     try {
       orderSurfaceOwner(surface, cameraAt(2));
-      // +側ではlayer 2の裏winding面が本当に手前なので、こちらが最後になる。
+      // +側ではrank 2の裏winding面が手前なので、こちらが最後になる。
       expect(indicesOf(surface)).toEqual([0, 1, 2, 3, 4, 5]);
 
       orderSurfaceOwner(surface, cameraAt(-2));
-      // -側ではlayer 1の面が手前になる。
+      // -側ではrank 1の面が手前になる。
       expect(indicesOf(surface)).toEqual([3, 4, 5, 0, 1, 2]);
     } finally {
       disposeSurfaceOwnerSurface(surface);
     }
   });
 
-  it("同じ入力のmirrored選択を10回繰り返してもindex順が変わらない", () => {
+  it("同じ入力のsurface rank選択を10回繰り返してもindex順が変わらない", () => {
     const surface = oppositeWindingSurface(7, 99);
     const orders = new Set<string>();
     try {
@@ -322,23 +317,25 @@ describe("orderSurfaceOwner", () => {
     }
   });
 
-  it("面layer・三角形layerの更新を次の並べ替えへ反映する", () => {
+  it("layer更新を保持しつつsurface rank更新だけを次の並べ替えへ反映する", () => {
     const surface = overlappingSurface();
     updateSurfaceOwnerFaceLayers(surface, new Map([[10, 5], [20, 1]]));
     expect(surface.triangleLayers).toEqual([5, 1]);
     expect(surface.batches.map((batch) => batch.layer)).toEqual([5, 1]);
+    updateSurfaceOwnerFaceRanks(surface, new Map([[10, 5], [20, 1]]));
     orderSurfaceOwner(surface, cameraAt(2));
     expect(indicesOf(surface)).toEqual([3, 4, 5, 0, 1, 2]);
 
     updateSurfaceOwnerTriangleLayers(surface, [0, 7]);
     expect(surface.triangleLayers).toEqual([0, 7]);
     expect(surface.batches.map((batch) => batch.layer)).toEqual([0, 7]);
+    updateSurfaceOwnerFaceRanks(surface, new Map([[10, 0], [20, 7]]));
     orderSurfaceOwner(surface, cameraAt(2));
     expect(indicesOf(surface)).toEqual([0, 1, 2, 3, 4, 5]);
 
-    updateSurfaceOwnerFaceMirrored(surface, new Map([[10, true], [20, false]]));
-    expect([...surface.faceMirrored]).toEqual([[10, true], [20, false]]);
-    expect(surface.batches.map((batch) => batch.mirrored)).toEqual([true, false]);
+    updateSurfaceOwnerFaceRanks(surface, new Map([[10, 3], [20, 2]]));
+    expect([...surface.faceSurfaceRanks]).toEqual([[10, 3], [20, 2]]);
+    expect(surface.batches.map((batch) => batch.surfaceRank)).toEqual([3, 2]);
   });
 
   it("positionの現座標から法線を取り直す", () => {

@@ -2,6 +2,9 @@ pub mod autosave;
 pub mod commands;
 pub mod store;
 
+#[cfg(test)]
+mod surface_order_acceptance;
+
 use std::sync::Mutex;
 
 use tauri::Manager;

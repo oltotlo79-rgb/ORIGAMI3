@@ -274,7 +274,7 @@ function displayedPickSurface(scene: Viewer3DScene): PaperPickSurface | null {
     triangleFaceIds: content.topology.triangleFaceIds,
     triangleLayers: content.owner?.triangleLayers ??
       new Array(content.topology.triangleFaceIds.length).fill(0),
-    faceMirrored: content.owner?.faceMirrored ?? new Map<number, boolean>(),
+    faceSurfaceRanks: content.owner?.faceSurfaceRanks ?? new Map<number, number>(),
   };
 }
 
@@ -900,8 +900,7 @@ export function Viewer3D({ fitRef }: Props) {
           rect.height,
           x,
           y,
-          surface.triangleLayers,
-          surface.faceMirrored,
+          surface.faceSurfaceRanks,
         );
         const plan =
           hit &&
@@ -968,8 +967,7 @@ export function Viewer3D({ fitRef }: Props) {
           rect.height,
           x,
           y,
-          surface.triangleLayers,
-          surface.faceMirrored,
+          surface.faceSurfaceRanks,
         );
         canvas.style.cursor = face == null ? "default" : "grab";
         return;
@@ -1018,8 +1016,7 @@ export function Viewer3D({ fitRef }: Props) {
         rect.height,
         x,
         y,
-        surface.triangleLayers,
-        surface.faceMirrored,
+        surface.faceSurfaceRanks,
       );
       canvas.style.cursor = paper ? "pointer" : "default";
     },
@@ -1052,8 +1049,7 @@ export function Viewer3D({ fitRef }: Props) {
           rect.height,
           x,
           y,
-          surface.triangleLayers,
-          surface.faceMirrored,
+          surface.faceSurfaceRanks,
         );
         const plan =
           hit &&
@@ -1108,8 +1104,7 @@ export function Viewer3D({ fitRef }: Props) {
           rect.height,
           x,
           y,
-          surface.triangleLayers,
-          surface.faceMirrored,
+          surface.faceSurfaceRanks,
         );
         const spatial = isSpatialFoldFrame(s.frame3d);
         const p = hit && !spatial ? rawPoint(rect, x, y) : null;
@@ -1440,8 +1435,7 @@ export function Viewer3D({ fitRef }: Props) {
           rect.height,
           x,
           y,
-          surface.triangleLayers,
-          surface.faceMirrored,
+          surface.faceSurfaceRanks,
         );
         if (paper) st.showPaperActionTip();
         else st.hidePaperActionTip();

@@ -536,6 +536,7 @@ describe("createContent / updateFrame(形の更新)", () => {
             [0, 1, 0.5],
           ],
           layer: 0,
+          surface_rank: 0,
         },
       ],
       warnings: [],
@@ -565,6 +566,7 @@ describe("createContent / updateFrame(形の更新)", () => {
             [1.1, 1.2, 0.5],
           ],
           layer: 0,
+          surface_rank: 0,
         },
         {
           face: 1,
@@ -574,6 +576,7 @@ describe("createContent / updateFrame(形の更新)", () => {
             [0.6, 1.7, 1.0],
           ],
           layer: 0,
+          surface_rank: 0,
         },
       ],
       warnings: [],
@@ -639,6 +642,7 @@ describe("createContent / updateFrame(形の更新)", () => {
             [1, 1, 0],
           ],
           layer: 0,
+          surface_rank: 0,
         },
         {
           face: 1,
@@ -648,6 +652,7 @@ describe("createContent / updateFrame(形の更新)", () => {
             [0, 1, 0],
           ],
           layer: 1,
+          surface_rank: 1,
         },
       ],
       warnings: [],
@@ -677,6 +682,7 @@ describe("createContent / updateFrame(形の更新)", () => {
             [0, 1, 0.5],
           ],
           layer: 1,
+          surface_rank: 1,
         },
       ],
       warnings: [],
@@ -703,6 +709,7 @@ describe("createContent / updateFrame(形の更新)", () => {
             [1, 1, 0],
           ],
           layer: 0,
+          surface_rank: 0,
           mirrored: false,
         },
         {
@@ -713,6 +720,7 @@ describe("createContent / updateFrame(形の更新)", () => {
             [1, 0, 0],
           ],
           layer: 0,
+          surface_rank: 0,
           mirrored: true,
         },
       ],
@@ -724,7 +732,7 @@ describe("createContent / updateFrame(形の更新)", () => {
     expect(normal.getZ(0)).toBeCloseTo(1, 6); // 面0は表(+z)向き=赤で描かれる
     expect(normal.getZ(3)).toBeCloseTo(-1, 6); // 面1は裏返り=白で描かれる
     expect(content.positions[2]).toBe(content.positions[3 * 3 + 2]);
-    expect([...content.owner.faceMirrored]).toEqual([[0, false], [1, true]]);
+    expect([...content.owner.faceSurfaceRanks]).toEqual([[0, 0], [1, 0]]);
 
     const ownerFaceFrom = (z: number) => {
       const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
@@ -777,6 +785,7 @@ describe("createContent / updateFrame(形の更新)", () => {
         [0, 1, 1],
       ],
       layer,
+      surface_rank: layer,
     });
     updateFrame(content, { faces: [wall(0, 0), wall(1, 1)], warnings: [] });
 
@@ -796,7 +805,7 @@ describe("createContent / updateFrame(形の更新)", () => {
     );
     updateFrame(content, null);
     updateFrame(content, {
-      faces: [{ face: 0, polygon: [[9, 9, 9]], layer: 0 }],
+      faces: [{ face: 0, polygon: [[9, 9, 9]], layer: 0, surface_rank: 0 }],
       warnings: [],
     });
     expect([...content.positions.slice(0, 3)]).toEqual([0, 0, 0]);
@@ -868,12 +877,14 @@ describe("紙のたわみの表示(SIM-012)", () => {
           face: 0,
           polygon: [[0, 0, 0], [1, 0, 0], [1, 1, 0]],
           layer: 0,
+          surface_rank: 0,
           mirrored: false,
         },
         {
           face: 1,
           polygon: [[0, 0, 0], [1, 1, 0], [0, 1, 0]],
           layer: 1,
+          surface_rank: 1,
           mirrored: true,
         },
       ],
@@ -885,6 +896,6 @@ describe("紙のたわみの表示(SIM-012)", () => {
     for (let i = 3; i < 6; i++) {
       expect(Math.abs(content.positions[i * 3 + 2])).toBeCloseTo(step, 6);
     }
-    expect([...content.owner.faceMirrored]).toEqual([[0, false], [1, true]]);
+    expect([...content.owner.faceSurfaceRanks]).toEqual([[0, 0], [1, 1]]);
   });
 });

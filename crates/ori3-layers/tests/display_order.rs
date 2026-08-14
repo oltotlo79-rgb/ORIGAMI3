@@ -121,6 +121,12 @@ fn assert_display_order(doc: &Document, up_to: usize, label: &str) {
             "{label}: 面 {} のlayerは層順序の位置と一致する",
             f3.face
         );
+        assert_eq!(
+            usize::try_from(f3.surface_rank).unwrap(),
+            expected,
+            "{label}: 面 {} のsurface_rankは既存層順序の位置と一致する",
+            f3.face
+        );
     }
 }
 

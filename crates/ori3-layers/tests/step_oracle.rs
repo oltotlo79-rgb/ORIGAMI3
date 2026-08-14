@@ -263,6 +263,7 @@ fn flat_frame_from_state(cp: &CreasePattern, faces: &[Face], state: &FlatState) 
                         })
                         .collect(),
                     layer: 0,
+                    surface_rank: 0,
                     mirrored: placement.mirrored,
                 }
             })

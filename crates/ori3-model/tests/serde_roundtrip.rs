@@ -100,6 +100,7 @@ fn test_document_json_roundtrip() {
 fn old_face3d_without_mirrored_defaults_to_front() {
     let old = r#"{"face":7,"polygon":[[0.0,0.0,0.0],[1.0,0.0,0.0],[0.0,1.0,0.0]],"layer":2}"#;
     let face: Face3D = serde_json::from_str(old).expect("旧soft geometry frameを読み込む");
+    assert_eq!(face.surface_rank, 0);
     assert!(!face.mirrored);
 }
 

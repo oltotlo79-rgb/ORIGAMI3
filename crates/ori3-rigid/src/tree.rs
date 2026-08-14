@@ -31,6 +31,10 @@ use ori3_model::{CreasePattern, EPS, EdgeId, Face3D, FaceId, Frame3D, VertexId};
 #[derive(Clone, Debug)]
 pub struct FoldedFrame {
     pub transforms: HashMap<FaceId, (DMat3, DVec3)>,
+    /// 現在角から完全折りの各ヒンジだけを0.001°展開側へ戻した、重なり順用の姿勢。
+    pub(crate) surface_probe_transforms: HashMap<FaceId, (DMat3, DVec3)>,
+    /// 完全折りのヒンジがあり、面積を持つ共平面重なりが生じ得るか。
+    pub(crate) has_surface_stack: bool,
     /// 根面から折り木をたどった鏡映回数の偶奇。
     /// ±90°を越えたヒンジを、最寄りの平坦状態での1回の鏡映として数える。
     pub mirrored: HashMap<FaceId, bool>,
@@ -236,6 +240,26 @@ pub(crate) fn propagate_with(
 /// 生成で `build_forest` を再実行しないための入口。
 pub(crate) fn fold_frame(forest: &Forest, faces: &[Face], angles_rad: &[f64]) -> FoldedFrame {
     let tf = propagate_with(forest, faces.len(), angles_rad);
+    let is_exact_stack = |angle: f64| {
+        (angle.abs() - std::f64::consts::PI).abs() <= crate::surface_order::EXACT_FLAT_EPS_RAD
+    };
+    let has_surface_stack = angles_rad.iter().copied().any(is_exact_stack);
+    let probe_tf = if has_surface_stack {
+        let probe_delta = crate::surface_order::SURFACE_APPROACH_DEG.to_radians();
+        let probe_angles = angles_rad
+            .iter()
+            .map(|&angle| {
+                if is_exact_stack(angle) {
+                    angle - angle.signum() * probe_delta
+                } else {
+                    angle
+                }
+            })
+            .collect::<Vec<_>>();
+        propagate_with(forest, faces.len(), &probe_angles)
+    } else {
+        Vec::new()
+    };
     // 平坦状態の Isometry2::mirrored と同じ偶奇を、非平坦姿勢にも連続する
     // 「最寄りの平坦枝」として持たせる。world法線やcameraを使わないため、紙全体を
     // 剛体回転しても値は変わらない。山谷の符号によらず±180°は1回、±85°は0回。
@@ -256,6 +280,16 @@ pub(crate) fn fold_frame(forest: &Forest, faces: &[Face], angles_rad: &[f64]) ->
             .enumerate()
             .map(|(i, f)| (f.id, tf[i]))
             .collect(),
+        surface_probe_transforms: if has_surface_stack {
+            faces
+                .iter()
+                .enumerate()
+                .map(|(i, f)| (f.id, probe_tf[i]))
+                .collect()
+        } else {
+            HashMap::new()
+        },
+        has_surface_stack,
         mirrored: faces
             .iter()
             .enumerate()
@@ -281,9 +315,21 @@ pub fn propagate(cp: &CreasePattern, faces: &[Face], angles: &HashMap<EdgeId, f6
     fold_frame(&forest, faces, &rad)
 }
 
-/// FoldedFrameを表示用のFrame3Dへ変換する。層順序はM2(ori3-layers)で
-/// 計算するため、ここでは全面 layer=0 とする。
+/// FoldedFrameを表示用のFrame3Dへ変換する。物理的な持ち上げに使うlayerは
+/// M2(ori3-layers)で計算するため全面0とし、同一深度専用のsurface_rankは
+/// 0.001°手前の実深度から決定的に求める。
 pub fn to_frame3d(cp: &CreasePattern, faces: &[Face], frame: &FoldedFrame) -> Frame3D {
+    to_frame3d_with_surface_order(cp, faces, frame, true)
+}
+
+/// replayのように直後に保存済み順序を刻印する呼出し向け。幾何と警告は同一で、
+/// 高価な完全重なり順の導出だけを省く。
+pub(crate) fn to_frame3d_with_surface_order(
+    cp: &CreasePattern,
+    faces: &[Face],
+    frame: &FoldedFrame,
+    derive_surface_order: bool,
+) -> Frame3D {
     let vpos = vertex_positions(cp);
     let faces3d = faces
         .iter()
@@ -305,12 +351,30 @@ pub fn to_frame3d(cp: &CreasePattern, faces: &[Face], frame: &FoldedFrame) -> Fr
                     })
                     .collect(),
                 layer: 0,
+                surface_rank: 0,
                 mirrored: frame.mirrored.get(&f.id).copied().unwrap_or(false),
             }
         })
         .collect();
-    Frame3D {
+    let mut output = Frame3D {
         faces: faces3d,
         warnings: frame.warnings.clone(),
-    }
+    };
+    let mut previous_order = faces.iter().map(|face| face.id).collect::<Vec<_>>();
+    previous_order.sort_unstable();
+    let order = if derive_surface_order && frame.has_surface_stack {
+        crate::surface_order::derive_surface_order(
+            faces,
+            &frame.surface_probe_transforms,
+            &frame.transforms,
+            &output,
+            &previous_order,
+        )
+        .unwrap_or(previous_order)
+    } else {
+        previous_order
+    };
+    crate::surface_order::stamp_surface_order(&mut output, &order)
+        .expect("rigid surface order contains the same faces as its frame");
+    output
 }

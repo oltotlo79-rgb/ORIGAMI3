@@ -83,7 +83,7 @@ fn solve_motion_from(
 ) -> MotionSolveResult {
     if !detect_contact {
         let requested = solve_requested(cp, faces, drivers, targets, warm_start);
-        let result = if is_finite_result(&requested, faces.len()) {
+        let mut result = if is_finite_result(&requested, faces.len()) {
             requested
         } else {
             let previous = warm_start
@@ -98,6 +98,7 @@ fn solve_motion_from(
                 previous_with_failure(previous, requested, iterations)
             })
         };
+        stamp_motion_surface_order(cp, faces, drivers, &mut result);
         return MotionSolveResult {
             result,
             contact_detected: false,
@@ -321,11 +322,72 @@ fn solve_motion_from(
         // 改善した有限候補だけを採る。
         result = avoid_contact(cp, faces, drivers, targets, warm_start, result);
     }
+    stamp_motion_surface_order(cp, faces, drivers, &mut result);
     MotionSolveResult {
         result,
         contact_detected,
         contact_stopped: false,
     }
+}
+
+fn stamp_motion_surface_order(
+    cp: &CreasePattern,
+    faces: &[Face],
+    drivers: &[Driver],
+    result: &mut SolveResult,
+) {
+    let mut previous_order = faces.iter().map(|face| face.id).collect::<Vec<_>>();
+    previous_order.sort_unstable();
+    let is_exact = |angle: f64| {
+        (angle.abs().to_radians() - std::f64::consts::PI).abs()
+            <= crate::surface_order::EXACT_FLAT_EPS_RAD
+    };
+    let has_exact = result.angles.values().copied().any(is_exact);
+    let approached_drivers = drivers
+        .iter()
+        .filter_map(|driver| {
+            let angle = result.angles.get(&driver.hinge).copied()?;
+            is_exact(angle).then_some((
+                driver.hinge,
+                Driver {
+                    hinge: driver.hinge,
+                    target_angle_deg: angle
+                        - angle.signum() * crate::surface_order::SURFACE_APPROACH_DEG,
+                },
+            ))
+        })
+        .collect::<BTreeMap<_, _>>()
+        .into_values()
+        .collect::<Vec<_>>();
+
+    // 完全折りが1本なら、最終角集合そのものをseedに179.999°の閉包姿勢を解き、
+    // canonicalな1軸極限を使う。
+    // 複数本が同時に完全折りなら一意な1軸極限がないため、treeのradial極限を維持する。
+    // hard driverは今回動かす自由度という明示入力として使うが、呼出し元のwarmや
+    // 直前のownerは順位へ使わない。
+    let order = if !has_exact {
+        crate::surface_order::derive_surface_order_from_current_depths(
+            faces,
+            &result.frame,
+            &previous_order,
+        )
+        .unwrap_or(previous_order)
+    } else if approached_drivers.len() != 1 {
+        return;
+    } else {
+        let approached = solve(cp, faces, &approached_drivers, Some(&result.angles));
+        if is_finite_result(&approached, faces.len()) {
+            crate::surface_order::derive_surface_order_from_current_depths(
+                faces,
+                &approached.frame,
+                &previous_order,
+            )
+            .unwrap_or(previous_order)
+        } else {
+            previous_order
+        }
+    };
+    let _ = crate::surface_order::stamp_surface_order(&mut result.frame, &order);
 }
 
 fn solve_warm_pose(cp: &CreasePattern, faces: &[Face], warm: &HashMap<EdgeId, f64>) -> SolveResult {
@@ -467,7 +529,11 @@ fn continuation_steps(face_count: usize, max_delta_deg: f64, near_fully_folded: 
         _ => 1,
     };
     // 特異点の近くだけは、要求が小さくても上限まで刻む。
-    if near_fully_folded { cap } else { wanted.min(cap) }
+    if near_fully_folded {
+        cap
+    } else {
+        wanted.min(cap)
+    }
 }
 
 #[derive(Clone)]
@@ -620,7 +686,8 @@ impl Reseed<'_> {
         match best {
             Some((_, mut solved)) => {
                 solved.iterations = solved.iterations.saturating_add(candidate.iterations);
-                solved.relaxations = collect_relaxations(&solved.angles, self.drivers, self.targets);
+                solved.relaxations =
+                    collect_relaxations(&solved.angles, self.drivers, self.targets);
                 solved
             }
             None => candidate,

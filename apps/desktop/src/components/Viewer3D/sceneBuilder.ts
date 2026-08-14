@@ -38,8 +38,8 @@ import {
   orderSurfaceOwner,
   ownerCodeBytes,
   ownerCodeVector,
+  updateSurfaceOwnerFaceRanks,
   updateSurfaceOwnerFaceLayers,
-  updateSurfaceOwnerFaceMirrored,
   updateSurfaceOwnerTriangleLayers,
   type SurfaceOwnerBinding,
   type SurfaceOwnerSurface,
@@ -450,7 +450,7 @@ export function createContent(
 export function updateFrame(content: Viewer3DContent, frame: Frame3D | null): void {
   const { positions, topology } = content;
   const faceLayers = new Map<number, number>();
-  const faceMirrored = new Map<number, boolean>();
+  const faceSurfaceRanks = new Map<number, number>();
   if (frame === null) {
     positions.set(topology.flatPositions);
   } else {
@@ -459,7 +459,7 @@ export function updateFrame(content: Viewer3DContent, frame: Frame3D | null): vo
     for (let i = 0; i < frame.faces.length; i++) {
       const f = frame.faces[i];
       faceLayers.set(f.face, f.layer);
-      faceMirrored.set(f.face, f.mirrored ?? false);
+      faceSurfaceRanks.set(f.face, f.surface_rank ?? 0);
       const slot = topology.slots.get(f.face);
       // 頂点数が合わない面は対応が取れないので前の座標のままにする
       // (展開図を編集した直後など、立体形状の計算が届くまでは平らのまま)
@@ -479,7 +479,7 @@ export function updateFrame(content: Viewer3DContent, frame: Frame3D | null): vo
   geometry.computeVertexNormals();
   geometry.computeBoundingSphere();
   updateSurfaceOwnerFaceLayers(content.owner, faceLayers);
-  updateSurfaceOwnerFaceMirrored(content.owner, faceMirrored);
+  updateSurfaceOwnerFaceRanks(content.owner, faceSurfaceRanks);
 
   for (let i = 0; i < topology.hingeSlots.length; i++) {
     const slot = topology.hingeSlots[i];
@@ -574,13 +574,13 @@ export function updateSoftContent(
   frame: Frame3D | null,
 ): void {
   const lifts = new Map<number, Vec3>();
-  const faceMirrored = new Map<number, boolean>();
+  const faceSurfaceRanks = new Map<number, number>();
   if (frame) {
     const values = stackLifts(frame, PAPER_LONG_SIDE);
     for (let i = 0; i < frame.faces.length; i++) {
       const face = frame.faces[i];
       lifts.set(face.face, values[i]);
-      faceMirrored.set(face.face, face.mirrored ?? false);
+      faceSurfaceRanks.set(face.face, face.surface_rank ?? 0);
     }
   }
   fillSoftPositions(soft, content.layout, lifts, content.positions);
@@ -588,7 +588,7 @@ export function updateSoftContent(
     content.owner,
     content.layout.triangleSources.map((triangle) => soft.triangle_layers[triangle] ?? 0),
   );
-  updateSurfaceOwnerFaceMirrored(content.owner, faceMirrored);
+  updateSurfaceOwnerFaceRanks(content.owner, faceSurfaceRanks);
   const geometry = content.mesh.geometry;
   geometry.getAttribute("position").needsUpdate = true;
   updateSurfaceOwnerOutlineGeometry(content.outline);
@@ -1123,7 +1123,7 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
     mesh,
     triangleFaceIds: surface.triangleFaces,
     triangleLayers: surface.triangleLayers,
-    faceMirrored: surface.faceMirrored,
+    faceSurfaceRanks: surface.faceSurfaceRanks,
   });
 
   const api: Viewer3DScene = {

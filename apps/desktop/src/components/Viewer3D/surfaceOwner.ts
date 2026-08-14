@@ -91,8 +91,8 @@ export interface SurfaceOwnerBatch {
   readonly indices: number[];
   /** layer更新APIで書き換える現在の層番号。 */
   layer: number;
-  /** 計算側が折りの合成で求めた面の鏡映偶奇。 */
-  mirrored: boolean;
+  /** 計算側が返す、同一深度専用の下→上の重なり順位。 */
+  surfaceRank: number;
 }
 
 /** owner pass専用geometryと、視点ごとの並べ替えに必要な純粋データ。 */
@@ -102,8 +102,8 @@ export interface SurfaceOwnerSurface {
   readonly ownerCodes: Map<number, number>;
   readonly triangleFaces: number[];
   readonly triangleLayers: number[];
-  /** pickerと同じ実体を共有する、面ID→鏡映偶奇。 */
-  readonly faceMirrored: Map<number, boolean>;
+  /** pickerと同じ実体を共有する、面ID→重なり順位。 */
+  readonly faceSurfaceRanks: Map<number, number>;
   readonly batches: SurfaceOwnerBatch[];
 }
 
@@ -251,7 +251,7 @@ export function createSurfaceOwnerSurface(
         triangles: [],
         indices: [],
         layer: triangleLayers[triangle],
-        mirrored: false,
+        surfaceRank: 0,
       };
       byFace.set(faceId, batch);
     }
@@ -266,7 +266,7 @@ export function createSurfaceOwnerSurface(
     ownerCodes,
     triangleFaces,
     triangleLayers,
-    faceMirrored: new Map([...byFace.keys()].map((faceId) => [faceId, false])),
+    faceSurfaceRanks: new Map([...byFace.keys()].map((faceId) => [faceId, 0])),
     batches: [...byFace.values()].sort((a, b) => a.faceId - b.faceId),
   };
   refreshBatchLayers(surface);
@@ -300,16 +300,16 @@ export function updateSurfaceOwnerTriangleLayers(
   refreshBatchLayers(surface);
 }
 
-/** 面IDごとの鏡映偶奇へ差し替える。Mapに無い面は表向き(false)へ戻す。 */
-export function updateSurfaceOwnerFaceMirrored(
+/** 面IDごとの重なり順位へ差し替える。Mapに無い面は0へ戻す。 */
+export function updateSurfaceOwnerFaceRanks(
   surface: SurfaceOwnerSurface,
-  mirrored: ReadonlyMap<number, boolean>,
+  ranks: ReadonlyMap<number, number>,
 ): void {
   // pickSurfaceはこのMap実体を保持するため、置換せず内容だけを更新する。
-  surface.faceMirrored.clear();
+  surface.faceSurfaceRanks.clear();
   for (const batch of surface.batches) {
-    batch.mirrored = mirrored.get(batch.faceId) ?? false;
-    surface.faceMirrored.set(batch.faceId, batch.mirrored);
+    batch.surfaceRank = finiteLayer(ranks.get(batch.faceId));
+    surface.faceSurfaceRanks.set(batch.faceId, batch.surfaceRank);
   }
 }
 
@@ -325,19 +325,22 @@ const workCameraPosition = new THREE.Vector3();
 interface BatchViewOrder {
   batch: SurfaceOwnerBatch;
   side: 1 | -1;
+  materialOrientation: 1 | -1;
 }
 
 // 面数分の並べ替え要素は生成時に一度だけ確保し、毎フレーム使い回す。
 const viewOrders = new WeakMap<SurfaceOwnerSurface, BatchViewOrder[]>();
 
-function canonicalize(normal: THREE.Vector3): void {
+function canonicalize(normal: THREE.Vector3): boolean {
   const ax = Math.abs(normal.x);
   const ay = Math.abs(normal.y);
   const az = Math.abs(normal.z);
   const component = ax >= ay && ax >= az ? normal.x : ay >= az ? normal.y : normal.z;
   if (component < 0) {
     normal.multiplyScalar(-1);
+    return true;
   }
+  return false;
 }
 
 /** 現在のpositionからcanonical法線とカメラ側を毎回求める。 */
@@ -363,21 +366,18 @@ function updateBatchViewOrder(
   if (points > 0) workCenter.multiplyScalar(1 / points);
   if (workNormal.lengthSq() <= Number.EPSILON) workNormal.set(0, 0, 1);
   else workNormal.normalize();
+  // The paper is authored in the XY plane, so the rotated material front keeps
+  // the sign of its current z component.  This is geometry, not Face3D.mirrored.
+  item.materialOrientation = workNormal.z < 0 ? -1 : 1;
   canonicalize(workNormal);
   item.side = workNormal.dot(workA.subVectors(cameraPosition, workCenter)) >= 0 ? 1 : -1;
 }
 
 /**
  * owner passのindexを視点側の優先順へ並べ直す。同じ深度はLEQUALの後描きが勝つため、
- * 実深度はGPUの第1・第2passで先に限定し、異なるlayerは従来の視点側順を守る。
- * 同じ実深度・同じlayerだけは、面IDより先に計算側のmirrored=falseを後勝ちにする。
- * mirroredはworld法線にもカメラにも依存しないため、裏視点では同じ物理面の裏色が
- * 見える。faceId/codeは同じ偶奇同士を全順序にするだけで、表裏の勝者を決めない。
- *
- * 2026-08-14の800x800実GPU測定（赤=表、白=裏）:
- * - 直前の実装（不具合）: 赤0 / 白26,677
- * - この修正を入れる前（owner無効）: 赤20,152 / 白3,031
- * - 同じ深度・同じlayerで表向きを優先: 赤27,036 / 白0
+ * 実深度はGPUの第1・第2passで先に限定し、本当に同じ深度の候補だけを計算側の
+ * surfaceRankで並べる。mirroredは参照しない。同rankは古いsnapshotや不正入力だけの
+ * 防御経路で、現在の材質winding、面IDの順に決定的な全順序へ落とす。
  */
 export function orderSurfaceOwner(
   surface: SurfaceOwnerSurface,
@@ -386,22 +386,23 @@ export function orderSurfaceOwner(
   camera.getWorldPosition(workCameraPosition);
   let ordered = viewOrders.get(surface);
   if (!ordered) {
-    ordered = surface.batches.map((batch) => ({ batch, side: 1 }));
+    ordered = surface.batches.map((batch) => ({
+      batch,
+      side: 1,
+      materialOrientation: 1,
+    }));
     viewOrders.set(surface, ordered);
   }
   for (const item of ordered) {
     updateBatchViewOrder(surface, item, workCameraPosition);
   }
   ordered.sort((a, b) => {
-    const layer = a.side * a.batch.layer - b.side * b.batch.layer;
-    if (layer !== 0) return layer;
-    // productionのlayerは非負整数なので、上の値が同じなら実layerも同じになる。
-    // 防御的な全順序を置き、異なるlayerへmirrored優先が漏れないようにする。
-    const exactLayer = a.batch.layer - b.batch.layer;
-    if (exactLayer !== 0) return exactLayer;
-    if (a.batch.mirrored !== b.batch.mirrored) {
-      return a.batch.mirrored ? -1 : 1;
-    }
+    const rank = a.side * a.batch.surfaceRank - b.side * b.batch.surfaceRank;
+    if (rank !== 0) return rank;
+    const exactRank = a.batch.surfaceRank - b.batch.surfaceRank;
+    if (exactRank !== 0) return exactRank;
+    const material = a.materialOrientation - b.materialOrientation;
+    if (material !== 0) return material;
     const face = a.side * a.batch.faceId - b.side * b.batch.faceId;
     if (face !== 0) return face;
     const code = a.side * a.batch.ownerCode - b.side * b.batch.ownerCode;
