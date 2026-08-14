@@ -4,7 +4,7 @@
 //  - 解が2つあるときの切り替え・1つ戻す・やめる
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DocumentView, Vec2 } from "../lib/types";
+import type { DocumentView, ReplayResult, Vec2 } from "../lib/types";
 
 vi.mock("../ipc/client", () => ({
   documentNew: vi.fn(),
@@ -328,5 +328,40 @@ describe("折れないとき・やり直し", () => {
     useAppStore.getState().beginAlign("pointPoint");
     useAppStore.getState().setTool("select");
     expect(useAppStore.getState().alignDraft).toBeNull();
+  });
+
+  it("手順を切り替えると途中選択を捨て、表示の更新中は古い位置で選び始めない", async () => {
+    let finishReplay!: (view: ReplayResult) => void;
+    vi.mocked(ipc.sequenceReplay).mockReturnValueOnce(
+      new Promise<ReplayResult>((resolve) => {
+        finishReplay = resolve;
+      }),
+    );
+    const state = useAppStore.getState();
+    state.beginAlign("lineLine");
+    state.pickAlignTarget(XAXIS, null, { kind: "edge", id: 0 });
+    expect(useAppStore.getState().alignDraft?.cpPicks).toEqual([
+      { kind: "edge", id: 0 },
+    ]);
+
+    const switching = state.selectStepForCapture(0);
+    expect(useAppStore.getState().alignDraft).toBeNull();
+    expect(useAppStore.getState().foldDraft).toBeNull();
+
+    useAppStore.getState().beginAlign("lineLine");
+    expect(useAppStore.getState().alignDraft).toBeNull();
+    expect(useAppStore.getState().errorMessage).toContain("表示を切り替えています");
+
+    const current = useAppStore.getState();
+    finishReplay({
+      frame: current.frame3d!,
+      warnings: [],
+      skipped: [],
+    });
+    await switching;
+
+    useAppStore.getState().beginAlign("lineLine");
+    expect(useAppStore.getState().alignDraft?.mode).toBe("lineLine");
+    expect(useAppStore.getState().errorMessage).toBeNull();
   });
 });

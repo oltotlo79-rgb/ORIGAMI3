@@ -1007,7 +1007,9 @@ describe("合わせて折る(パネル)", () => {
     const choices = screen.getByRole("group", { name: "折り目の決め方" });
     expect(within(choices).getAllByRole("button")).toHaveLength(8);
     for (const label of Object.values(ALIGN_LABELS)) {
-      expect(within(choices).getByRole("button", { name: label })).toBeTruthy();
+      const button = within(choices).getByRole("button", { name: label });
+      expect(button).toBeTruthy();
+      expect(button.getAttribute("data-tooltip")).toContain("展開図または3D表示");
     }
 
     fireEvent.click(
@@ -1029,6 +1031,7 @@ describe("合わせて折る(パネル)", () => {
     useAppStore.getState().beginAlign("pointPoint");
     render(<ContextPanel />);
     expect(screen.getByText(/選択 0 \/ 2/)).toBeTruthy();
+    expect(screen.getByText(/次は点を展開図または3D表示でクリック/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "折る" })).toBeNull();
 
     cleanup();

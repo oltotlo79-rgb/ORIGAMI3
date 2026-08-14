@@ -1,8 +1,26 @@
 // @vitest-environment jsdom
 
-import { describe, expect, it } from "vitest";
-import { relaxationStatus } from "./App";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { ExportButton, relaxationStatus } from "./App";
+import { EXPORT_CHOICES } from "./components/dialogs/ExportDialog";
 import { statusBadgeText, warningCount } from "./lib/flatFoldNotice";
+
+afterEach(cleanup);
+
+describe("上部の書き出し案内(D27)", () => {
+  it("実際に選べる4形式だけを、選択肢と同じ順で案内する", () => {
+    render(<ExportButton onClick={vi.fn()} />);
+
+    const formats = EXPORT_CHOICES.map((choice) => choice.label);
+    const button = screen.getByRole("button", { name: "書き出し" });
+    expect(formats).toHaveLength(4);
+    expect(button.getAttribute("data-tooltip")).toBe(
+      `${formats.join("、")}を書き出します`,
+    );
+    expect(button.getAttribute("data-tooltip")).not.toContain("3D");
+  });
+});
 
 describe("3D右上の自然追従表示(SIM-018)", () => {
   it("0.1度以上では本数と最大偏差を出し、0.099度は表示しない", () => {

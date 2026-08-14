@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import type { Vec2 } from "../../lib/types";
-import { useAppStore } from "../../store/appStore";
+import { useAppStore, type AlignDraft, type Selection } from "../../store/appStore";
 import { clipToPaper, CONSTRUCT_STEPS, constructHint } from "../../lib/construct";
 import {
   curveHint,
@@ -54,6 +54,20 @@ function violationTooltip(doc: Document, vertexId: number | null) {
   return v ? { pos: v.pos, text: violationReason(doc, vertexId) } : null;
 }
 
+/** 選んだ点・線を、既存の展開図の選択強調へ対応付ける。 */
+function alignSelection(draft: AlignDraft): Selection {
+  const vertexIds = new Set<number>();
+  const edgeIds = new Set<number>();
+  for (const pick of draft.cpPicks ?? []) {
+    if (pick?.kind === "vertex") {
+      vertexIds.add(pick.id);
+    } else if (pick?.kind === "edge") {
+      edgeIds.add(pick.id);
+    }
+  }
+  return { edgeIds: [...edgeIds], vertexIds: [...vertexIds] };
+}
+
 /**
  * 描いている最中の曲線と、確定したときに一緒に入る「紙が曲がるための線」を
  * まとめて返す(確定前に何が入るかを見せるため。設計原則3b)。
@@ -99,6 +113,8 @@ export function CpEditor({ fitRef }: Props) {
   const wheelBehavior = useAppStore((s) => s.wheelBehavior);
   const uiTheme = useAppStore((s) => s.uiTheme);
   const pendingFoldThrough = useAppStore((s) => s.pendingFoldThrough);
+  const alignDraft = useAppStore((s) => s.alignDraft);
+  const foldDraft = useAppStore((s) => s.foldDraft);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -115,6 +131,8 @@ export function CpEditor({ fitRef }: Props) {
       hoveredHinge,
       suspectHinges,
       activeAngleIntent,
+      alignDraft,
+      foldDraft,
     } = useAppStore.getState();
     if (!canvas) return;
     // カーソルの形は表示専用なので、再描画を起こさずcanvasへ直接反映する
@@ -144,14 +162,25 @@ export function CpEditor({ fitRef }: Props) {
     const curveMode = kind !== undefined && curve.enabled && activeTool !== "fold";
     const directionSnap =
       kind && !curveMode && st.pendingStart ? st.directionSnap : null;
+    // 未折りなら展開図と畳み平面が同じなので、求まった折り線も2Dで下見できる。
+    // 手順後は座標系が異なるため、既存の3D下見だけに出す。
+    const alignPreview =
+      activeTool === "fold" && alignDraft && foldDraft && doc.sequence.length === 0
+        ? {
+            a: foldDraft.line[0],
+            b: foldDraft.line[1],
+            kind: foldDraft.direction === "Up" ? ("Valley" as const) : ("Mountain" as const),
+          }
+        : null;
     const preview =
-      kind && !curveMode && st.pendingStart && st.cursorWorld
+      alignPreview ??
+      (kind && !curveMode && st.pendingStart && st.cursorWorld
         ? {
             a: st.pendingStart,
             b: st.hoverSnap?.pos ?? directionSnap?.pos ?? st.cursorWorld,
             kind,
           }
-        : null;
+        : null);
     const [paperWidth, paperHeight] = paperExtent(doc);
     const guideReach = 2 * Math.max(paperWidth, paperHeight);
     const directionGuide =
@@ -245,6 +274,9 @@ export function CpEditor({ fitRef }: Props) {
     }
     const ctx2d = canvas.getContext("2d");
     if (ctx2d) {
+      const visibleSelection = alignDraft
+        ? alignSelection(alignDraft)
+        : selection;
       render(
         ctx2d,
         w,
@@ -252,7 +284,7 @@ export function CpEditor({ fitRef }: Props) {
         dpr,
         cpDocument,
         viewRef.current,
-        captureClean ? { edgeIds: [], vertexIds: [] } : selection,
+        captureClean ? { edgeIds: [], vertexIds: [] } : visibleSelection,
         overlay,
       );
     }
@@ -267,6 +299,10 @@ export function CpEditor({ fitRef }: Props) {
       view: viewRef.current,
       tool: s.activeTool,
       selection: s.selection,
+      alignDraft: s.alignDraft,
+      alignPickDoc: documentForCpStep(s.doc, s.currentStep),
+      faces: s.faces,
+      frame3d: s.frame3d,
       construct: s.construct,
       curve: s.curve,
       wheelBehavior: s.wheelBehavior,
@@ -285,6 +321,7 @@ export function CpEditor({ fitRef }: Props) {
       drawCurve: (points, kind) => void s.drawCurve(points, kind),
       setSelection: s.setSelection,
       beginFoldDraft: s.beginFoldDraft,
+      pickAlignTarget: s.pickAlignTarget,
     };
   }, []);
 
@@ -306,6 +343,8 @@ export function CpEditor({ fitRef }: Props) {
     mirrorAxisChoice,
     wheelBehavior,
     pendingFoldThrough,
+    alignDraft,
+    foldDraft,
     draw,
   ]);
 
@@ -335,7 +374,7 @@ export function CpEditor({ fitRef }: Props) {
     st.vertexDrag = null;
     st.directionSnap = null;
     draw();
-  }, [activeTool, draw]);
+  }, [activeTool, alignDraft?.mode, draw]);
 
   // 区画サイズの変化に追従
   useEffect(() => {

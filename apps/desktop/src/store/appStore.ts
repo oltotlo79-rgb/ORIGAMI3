@@ -250,7 +250,7 @@ export interface PendingFoldThrough {
 
 /**
  * 「合わせて折る」の途中経過(折り紙の基準合わせ)。
- * 3D画面で点・線を順に選び、そろった時点で折り線を計算してFoldDraftを作る。
+ * 展開図または3D表示で点・線を順に選び、そろった時点で折り線を計算してFoldDraftを作る。
  * 折り方の決定(山谷・対象の層・折る/やめる)は既存の折り確定UIをそのまま使う。
  */
 export interface AlignDraft {
@@ -258,6 +258,8 @@ export interface AlignDraft {
   mode: AlignMode;
   /** 選んだ対象(ALIGN_STEPSの順。まだ足りない間は途中まで) */
   picks: AlignTarget[];
+  /** 展開図から選んだ対象のID。3Dで選んだ段階はnull。picksと同じ順に並ぶ。 */
+  cpPicks?: (AlignCpPick | null)[];
   /** 求まった折り線(0〜3本。カーソルに近い順) */
   solutions: FoldLine[];
   /** 今使っている解の番号(「別の解」で切り替える) */
@@ -265,6 +267,11 @@ export interface AlignDraft {
   /** 解が求まらなかった理由(求まったならnull) */
   reason: string | null;
 }
+
+/** 展開図側で既存の選択強調へ対応付けるための、選んだ対象のID。 */
+export type AlignCpPick =
+  | { kind: "vertex"; id: number }
+  | { kind: "edge"; id: number };
 
 /** 技法の下ごしらえ(選んだ技法・フラップ・折り線)。確定するまで保持する */
 export interface TechniqueDraft {
@@ -728,7 +735,11 @@ interface AppState {
   /** 「合わせて折る」を始める(合わせ方を選ぶ)。同じ合わせ方をもう一度押すとやめる */
   beginAlign: (mode: AlignMode) => void;
   /** 合わせる対象(点・線)を1つ選ぶ。cursorは解が2つあるときの既定を決めるのに使う */
-  pickAlignTarget: (target: AlignTarget, cursor?: Vec2 | null) => void;
+  pickAlignTarget: (
+    target: AlignTarget,
+    cursor?: Vec2 | null,
+    cpPick?: AlignCpPick | null,
+  ) => void;
   /** 解が2つあるときに別の解へ切り替える */
   nextAlignSolution: () => void;
   /** 直前の選択を取り消す(選択が無ければ何もしない) */
@@ -1645,6 +1656,11 @@ export const useAppStore = create<AppState>((set, get) => {
     });
   };
 
+  // 手順の表示切替中はframe3dが直前の手順を指す。合わせ対象をその古い位置で
+  // 記録しないよう、完了するまで新しい合わせ操作の開始だけを待ってもらう。
+  let stepReplayGeneration = 0;
+  let stepReplayPending = false;
+
   /**
    * 手順表示を切り替え、バックエンドの再生結果まで待つ共通処理。
    * 通常UIはこのPromiseを待たず、撮影APIだけが待つことで操作感を変えずに
@@ -1655,7 +1671,9 @@ export const useAppStore = create<AppState>((set, get) => {
     invalidateFoldThrough();
     // 別の手順の形を見せる操作なので、その前の形の上に引いた折り線は捨てる
     // (残すとコンテキストパネルに折りUIが出たままになり、手順の設定も出せない)
-    if (get().foldDraft) set({ foldDraft: null, alignDraft: null });
+    if (get().foldDraft || get().alignDraft) {
+      set({ foldDraft: null, alignDraft: null });
+    }
     if (get().techniqueDraft) set({ techniqueDraft: null });
     const s = get();
     const total = s.doc?.sequence.length ?? 0;
@@ -1668,10 +1686,16 @@ export const useAppStore = create<AppState>((set, get) => {
     // すでに同じ形を表示しているなら描き直しを頼まない
     // (端で「次へ」を連打したときに、同じ要求が何度も飛ぶのを防ぐ)
     if (s.currentStep === next && s.playT === 1) return;
+    const replayGeneration = ++stepReplayGeneration;
+    stepReplayPending = true;
     set({ currentStep: next, playT: 1 });
     // 最新(null)の形も再生で作る(DocumentViewのframeと同じ内容になる)。
     // 途中まで折った表示から戻すときに、必ず最新の形へ描き直すため
-    await runReplay(upTo, 1);
+    try {
+      await runReplay(upTo, 1);
+    } finally {
+      if (stepReplayGeneration === replayGeneration) stepReplayPending = false;
+    }
   };
 
   /** 手順のある作品では、立体表示は手順の再生結果で表す(角度スライダーは
@@ -2435,6 +2459,13 @@ export const useAppStore = create<AppState>((set, get) => {
       const s = get();
       if (!s.doc) return;
       invalidateFoldThrough();
+      if (stepReplayPending) {
+        set({
+          errorMessage:
+            "表示を切り替えています。切り替わってから、もう一度合わせ方を選んでください",
+        });
+        return;
+      }
       // 同じ合わせ方をもう一度押したらやめる(入る・出るを1つのボタンで済ませる)
       if (s.alignDraft?.mode === mode) {
         set({ alignDraft: null, foldDraft: null });
@@ -2445,12 +2476,19 @@ export const useAppStore = create<AppState>((set, get) => {
         selection: EMPTY_SELECTION,
         foldDraft: null,
         techniqueDraft: null,
-        alignDraft: { mode, picks: [], solutions: [], solutionIndex: 0, reason: null },
+        alignDraft: {
+          mode,
+          picks: [],
+          cpPicks: [],
+          solutions: [],
+          solutionIndex: 0,
+          reason: null,
+        },
         errorMessage: null,
       });
     },
 
-    pickAlignTarget: (target, cursor = null) => {
+    pickAlignTarget: (target, cursor = null, cpPick = null) => {
       const s = get();
       const draft = s.alignDraft;
       if (!draft || !s.doc) return;
@@ -2458,12 +2496,18 @@ export const useAppStore = create<AppState>((set, get) => {
       // 選び終えたあとにもう一度選んだら、1つ目から選び直す
       const picks = isAlignComplete(draft) ? [target] : [...draft.picks, target];
       if (steps[picks.length - 1] !== target.kind) return; // 種類違いは受け付けない
+      const previousCpPicks =
+        draft.cpPicks ?? draft.picks.map((): AlignCpPick | null => null);
+      const cpPicks = isAlignComplete(draft)
+        ? [cpPick]
+        : [...previousCpPicks, cpPick];
       const solved = solveAlign(draft.mode, picks, cursor);
       const line = solved.lines[0] ?? null;
       set({
         alignDraft: {
           mode: draft.mode,
           picks,
+          cpPicks,
           solutions: solved.lines,
           solutionIndex: 0,
           reason: solved.reason,
@@ -2499,6 +2543,7 @@ export const useAppStore = create<AppState>((set, get) => {
         alignDraft: {
           ...draft,
           picks: draft.picks.slice(0, -1),
+          cpPicks: draft.cpPicks?.slice(0, -1),
           solutions: [],
           solutionIndex: 0,
           reason: null,

@@ -135,11 +135,16 @@ function makeCtx(
   const drawSegment = vi.fn<(a: Vec2, b: Vec2, kind: EdgeKind) => void>();
   const drawCurve = vi.fn<(points: Vec2[], kind: EdgeKind) => void>();
   const beginFoldDraft = vi.fn<(line: [Vec2, Vec2], source: "2d" | "3d") => void>();
+  const pickAlignTarget = vi.fn();
   const ctx: InteractionCtx = {
     doc,
     view: { scale: 500, offsetX: 0, offsetY: 500 },
     tool: "construct",
     selection: { edgeIds: [], vertexIds: [] },
+    alignDraft: null,
+    alignPickDoc: doc,
+    faces: [],
+    frame3d: null,
     construct: { ...DEFAULT_CONSTRUCT, ...construct },
     curve: { ...DEFAULT_CURVE, ...curve },
     wheelBehavior: "scroll",
@@ -152,8 +157,9 @@ function makeCtx(
     drawCurve,
     setSelection: vi.fn(),
     beginFoldDraft,
+    pickAlignTarget,
   };
-  return { ctx, applyEdit, drawSegment, drawCurve, beginFoldDraft };
+  return { ctx, applyEdit, drawSegment, drawCurve, beginFoldDraft, pickAlignTarget };
 }
 
 describe("作図補助の操作", () => {
@@ -680,6 +686,97 @@ describe("線ツール", () => {
     onKeyDown(ctx, "Shift");
     onMouseDown(ctx, toScreen(cursor), 0);
     expect(drawSegment.mock.calls[0][1]).toEqual([0.25, 0.5]);
+  });
+});
+
+describe("合わせて折るの2D選択", () => {
+  it("折った後は、面の対応で点と補助線を現在の平らな位置へ写して記録する", () => {
+    const { ctx, pickAlignTarget } = makeCtx();
+    const doc = squareDoc();
+    doc.cp.vertices.push(
+      { id: 4, pos: [0.25, 0.5] },
+      { id: 5, pos: [0.75, 0.5] },
+    );
+    // 補助線は面の境界辺には含めず、面内の点の対応で写せることを確かめる。
+    doc.cp.edges.push({ id: 4, v0: 4, v1: 5, kind: "Aux" });
+    doc.cp.next_vertex_id = 6;
+    doc.cp.next_edge_id = 5;
+    ctx.doc = doc;
+    ctx.alignPickDoc = doc;
+    ctx.faces = [{ id: 7, vertices: [0, 1, 2, 3], edges: [0, 1, 2, 3] }];
+    ctx.frame3d = {
+      faces: [
+        {
+          face: 7,
+          polygon: [
+            [2, 3, 0],
+            [2, 2, 0],
+            [1, 2, 0],
+            [1, 3, 0],
+          ],
+          layer: 2,
+        },
+      ],
+      warnings: [],
+    };
+    ctx.tool = "fold";
+    ctx.alignDraft = { mode: "pointLineThrough", picks: [] };
+
+    onMouseDown(ctx, toScreen([0.25, 0.5]), 0);
+    expect(pickAlignTarget).toHaveBeenNthCalledWith(
+      1,
+      { kind: "point", p: [1.5, 2.75] },
+      [1.5, 2.75],
+      { kind: "vertex", id: 4 },
+    );
+
+    ctx.alignDraft.picks = [{ kind: "point", p: [1.5, 2.75] }];
+    onMouseDown(ctx, toScreen([0.5, 0.5]), 0);
+    expect(pickAlignTarget).toHaveBeenNthCalledWith(
+      2,
+      { kind: "line", a: [1.5, 2.75], b: [1.5, 2.25] },
+      [1.5, 2.5],
+      { kind: "edge", id: 4 },
+    );
+  });
+
+  it("対象のないクリックは合わせ途中のまま保ち、通常の2点折りへ流さない", () => {
+    const { ctx, beginFoldDraft, pickAlignTarget } = makeCtx();
+    ctx.tool = "fold";
+    ctx.alignDraft = { mode: "lineLine", picks: [] };
+
+    onMouseDown(ctx, toScreen([0.5, 0.5]), 0);
+    onMouseDown(ctx, toScreen([0.6, 0.6]), 0);
+
+    expect(pickAlignTarget).not.toHaveBeenCalled();
+    expect(beginFoldDraft).not.toHaveBeenCalled();
+    expect(ctx.state.pendingStart).toBeNull();
+  });
+
+  it("現在の手順で見えない線は、全体の作品に存在していても拾わない", () => {
+    const { ctx, pickAlignTarget } = makeCtx();
+    const full = directionGridConflictDoc();
+    ctx.doc = full;
+    ctx.alignPickDoc = squareDoc();
+    ctx.tool = "fold";
+    ctx.alignDraft = { mode: "existingLine", picks: [] };
+
+    onMouseDown(ctx, toScreen([0.5, 0.5]), 0); // fullだけにある中央横線
+
+    expect(pickAlignTarget).not.toHaveBeenCalled();
+  });
+
+  it("現在の手順で見えない線だけに属する点も拾わない", () => {
+    const { ctx, pickAlignTarget } = makeCtx();
+    const full = directionGridConflictDoc();
+    ctx.doc = full;
+    ctx.alignPickDoc = squareDoc();
+    ctx.tool = "fold";
+    ctx.alignDraft = { mode: "pointPoint", picks: [] };
+
+    onMouseDown(ctx, toScreen([0, 0.5]), 0); // fullの中央横線だけにある頂点4
+
+    expect(pickAlignTarget).not.toHaveBeenCalled();
   });
 });
 

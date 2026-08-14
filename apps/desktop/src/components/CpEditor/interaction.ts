@@ -6,10 +6,11 @@
 // 表示位置の移動(パン)は3通り: スペースキーを押しながら左ドラッグ / 右ドラッグ /
 // 中ボタンドラッグ。中ボタンの無い機器でもつかんで動かせるようにするため。
 
-import type { Document, EdgeKind, EditOp, Vec2 } from "../../lib/types";
+import type { Document, EdgeKind, EditOp, Face, Frame3D, Vec2 } from "../../lib/types";
+import { ALIGN_STEPS, type AlignMode, type AlignTarget } from "../../lib/alignFold";
 import type { WheelBehavior } from "../../lib/displayPrefs";
 import type { MirrorLine } from "../../lib/mirror";
-import type { Selection, ToolId } from "../../store/appStore";
+import type { AlignCpPick, Selection, ToolId } from "../../store/appStore";
 import { screenToWorld, type ViewTransform } from "./renderer";
 import {
   paperExtent,
@@ -158,6 +159,13 @@ export interface InteractionCtx {
   view: ViewTransform;
   tool: ToolId;
   selection: Selection;
+  /** 「合わせて折る」の選択途中。nullなら通常の折り線入力として扱う。 */
+  alignDraft: { mode: AlignMode; picks: AlignTarget[] } | null;
+  /** 現在の手順位置で画面に見えている展開図。合わせ対象の当たり判定だけに使う。 */
+  alignPickDoc: Document;
+  /** 展開図の頂点・辺を現在の畳み平面へ写すための面対応。 */
+  faces: Face[];
+  frame3d: Frame3D | null;
   /** 作図補助の選び方(どの作図か・等分数・角度の刻み) */
   construct: ConstructOptions;
   /** 曲線の折り目の選び方(直線/曲線・描き方・分割・曲がるための線) */
@@ -178,6 +186,12 @@ export interface InteractionCtx {
   setSelection: (selection: Selection) => void;
   /** 折るツールで引いた線を確定前の状態としてストアへ渡す */
   beginFoldDraft: (line: [Vec2, Vec2], source: "2d" | "3d") => void;
+  /** 「合わせて折る」で、次に必要な点または線をストアへ渡す。 */
+  pickAlignTarget: (
+    target: AlignTarget,
+    cursor?: Vec2 | null,
+    cpPick?: AlignCpPick | null,
+  ) => void;
 }
 
 /** 線ツール → 引く線の種類(それ以外のツールは未定義) */
@@ -269,6 +283,30 @@ export function pickVertex(doc: Document, world: Vec2, tolNorm: number): number 
     if (d <= bestDist) {
       bestDist = d;
       best = v.id;
+    }
+  }
+  return best;
+}
+
+/** 現在の手順で見えている線に属する頂点だけを、合わせ対象の点として拾う。 */
+function pickVisibleAlignVertex(
+  doc: Document,
+  world: Vec2,
+  tolNorm: number,
+): number | null {
+  const visible = new Set<number>();
+  for (const edge of doc.cp.edges) {
+    visible.add(edge.v0);
+    visible.add(edge.v1);
+  }
+  let best: number | null = null;
+  let bestDist = tolNorm;
+  for (const vertex of doc.cp.vertices) {
+    if (!visible.has(vertex.id)) continue;
+    const d = dist(world, vertex.pos);
+    if (d <= bestDist) {
+      bestDist = d;
+      best = vertex.id;
     }
   }
   return best;
@@ -386,6 +424,222 @@ export function isPanStart(state: EphemeralState, button: number): boolean {
   return button === 1 || button === 2 || (button === 0 && state.spaceHeld);
 }
 
+/** 3Dの面が「合わせて折る」で使える平らな状態かを判定する余裕。 */
+const ALIGN_FLAT_EPS = 1e-6;
+const ALIGN_MAP_EPS = 1e-9;
+
+interface FlatFaceMap {
+  faceId: number;
+  layer: number;
+  source: Vec2[];
+  target: Vec2[];
+}
+
+function flatFaceMaps(doc: Document, faces: Face[], frame3d: Frame3D): FlatFaceMap[] {
+  const facesById = new Map(faces.map((face) => [face.id, face]));
+  const positions = new Map(doc.cp.vertices.map((vertex) => [vertex.id, vertex.pos]));
+  const maps: FlatFaceMap[] = [];
+  for (const frameFace of frame3d.faces) {
+    const face = facesById.get(frameFace.face);
+    if (
+      !face ||
+      frameFace.polygon.length !== face.vertices.length ||
+      frameFace.polygon.some(
+        (p) =>
+          !Number.isFinite(p[0]) ||
+          !Number.isFinite(p[1]) ||
+          !Number.isFinite(p[2]) ||
+          Math.abs(p[2]) > ALIGN_FLAT_EPS,
+      )
+    ) {
+      continue;
+    }
+    const source = face.vertices.map((id) => positions.get(id));
+    if (source.some((point) => point === undefined)) continue;
+    maps.push({
+      faceId: face.id,
+      layer: frameFace.layer,
+      source: source as Vec2[],
+      target: frameFace.polygon.map((p): Vec2 => [p[0], p[1]]),
+    });
+  }
+  return maps;
+}
+
+function pointInPolygon(point: Vec2, polygon: Vec2[]): boolean {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const a = polygon[j];
+    const b = polygon[i];
+    if (distToSegment(point, a, b) <= ALIGN_MAP_EPS) return true;
+    if (
+      (a[1] > point[1]) !== (b[1] > point[1]) &&
+      point[0] < ((b[0] - a[0]) * (point[1] - a[1])) / (b[1] - a[1]) + a[0]
+    ) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+/** 面の3点対応から、面内の点へ同じ回転・鏡映・平行移動を適用する。 */
+function mapPointInFace(map: FlatFaceMap, point: Vec2): Vec2 | null {
+  const sourceA = map.source[0];
+  const targetA = map.target[0];
+  if (!sourceA || !targetA) return null;
+  for (let i = 1; i < map.source.length; i++) {
+    for (let j = i + 1; j < map.source.length; j++) {
+      const sourceB = map.source[i];
+      const sourceC = map.source[j];
+      const targetB = map.target[i];
+      const targetC = map.target[j];
+      const bx = sourceB[0] - sourceA[0];
+      const by = sourceB[1] - sourceA[1];
+      const cx = sourceC[0] - sourceA[0];
+      const cy = sourceC[1] - sourceA[1];
+      const det = bx * cy - by * cx;
+      if (Math.abs(det) <= ALIGN_MAP_EPS) continue;
+      const px = point[0] - sourceA[0];
+      const py = point[1] - sourceA[1];
+      const u = (px * cy - py * cx) / det;
+      const v = (bx * py - by * px) / det;
+      return [
+        targetA[0] + u * (targetB[0] - targetA[0]) + v * (targetC[0] - targetA[0]),
+        targetA[1] + u * (targetB[1] - targetA[1]) + v * (targetC[1] - targetA[1]),
+      ];
+    }
+  }
+  return null;
+}
+
+function preferMapped<T extends { layer: number; faceId: number }>(
+  candidate: T,
+  current: T | null,
+): boolean {
+  return (
+    current === null ||
+    candidate.layer > current.layer ||
+    (candidate.layer === current.layer && candidate.faceId < current.faceId)
+  );
+}
+
+/** 展開図の頂点を、現在の平らに畳んだ紙の座標へ写す。 */
+export function foldedAlignPoint(
+  doc: Document,
+  faces: Face[],
+  frame3d: Frame3D | null,
+  vertexId: number,
+): Vec2 | null {
+  const source = doc.cp.vertices.find((v) => v.id === vertexId)?.pos ?? null;
+  if (!source || !frame3d) return source;
+  let best: { p: Vec2; layer: number; faceId: number } | null = null;
+  for (const map of flatFaceMaps(doc, faces, frame3d)) {
+    if (!pointInPolygon(source, map.source)) continue;
+    const p = mapPointInFace(map, source);
+    const candidate = p ? { p, layer: map.layer, faceId: map.faceId } : null;
+    if (candidate && preferMapped(candidate, best)) best = candidate;
+  }
+  return best?.p ?? null;
+}
+
+/** 展開図の辺を、同じ面の頂点対応で現在の平らに畳んだ紙の線へ写す。 */
+export function foldedAlignLine(
+  doc: Document,
+  faces: Face[],
+  frame3d: Frame3D | null,
+  edgeId: number,
+): [Vec2, Vec2] | null {
+  const edge = doc.cp.edges.find((candidate) => candidate.id === edgeId);
+  if (!edge) return null;
+  const byId = new Map(doc.cp.vertices.map((v) => [v.id, v.pos]));
+  const sourceA = byId.get(edge.v0);
+  const sourceB = byId.get(edge.v1);
+  if (!sourceA || !sourceB) return null;
+  if (!frame3d) {
+    return [sourceA, sourceB];
+  }
+  let best: { line: [Vec2, Vec2]; layer: number; faceId: number } | null = null;
+  const midpoint: Vec2 = [
+    (sourceA[0] + sourceB[0]) / 2,
+    (sourceA[1] + sourceB[1]) / 2,
+  ];
+  for (const map of flatFaceMaps(doc, faces, frame3d)) {
+    if (
+      !pointInPolygon(sourceA, map.source) ||
+      !pointInPolygon(midpoint, map.source) ||
+      !pointInPolygon(sourceB, map.source)
+    ) {
+      continue;
+    }
+    const a = mapPointInFace(map, sourceA);
+    const b = mapPointInFace(map, sourceB);
+    const candidate =
+      a && b
+        ? { line: [a, b] as [Vec2, Vec2], layer: map.layer, faceId: map.faceId }
+        : null;
+    if (candidate && preferMapped(candidate, best)) best = candidate;
+  }
+  return best?.line ?? null;
+}
+
+function foldedEdgeCursor(
+  doc: Document,
+  edgeId: number,
+  world: Vec2,
+  line: [Vec2, Vec2],
+): Vec2 {
+  const edge = doc.cp.edges.find((candidate) => candidate.id === edgeId);
+  const byId = new Map(doc.cp.vertices.map((v) => [v.id, v.pos]));
+  const a = edge ? byId.get(edge.v0) : null;
+  const b = edge ? byId.get(edge.v1) : null;
+  if (!a || !b) return [(line[0][0] + line[1][0]) / 2, (line[0][1] + line[1][1]) / 2];
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const len2 = dx * dx + dy * dy;
+  const t =
+    len2 === 0
+      ? 0.5
+      : Math.max(0, Math.min(1, ((world[0] - a[0]) * dx + (world[1] - a[1]) * dy) / len2));
+  return [
+    line[0][0] + (line[1][0] - line[0][0]) * t,
+    line[0][1] + (line[1][1] - line[0][1]) * t,
+  ];
+}
+
+/**
+ * 「合わせて折る」で次に必要な対象だけを展開図から拾う。
+ * 当たらなかったクリックは通常の2点折りへ流さず、同じ選択段階を保つ。
+ */
+function pickAlignFromCp(ctx: InteractionCtx, world: Vec2, pickTol: number): void {
+  const draft = ctx.alignDraft;
+  if (!draft) return;
+  const steps = ALIGN_STEPS[draft.mode];
+  const need = steps[draft.picks.length % steps.length];
+  if (need === "point") {
+    const id = pickVisibleAlignVertex(ctx.alignPickDoc, world, pickTol);
+    const point =
+      id === null ? null : foldedAlignPoint(ctx.doc, ctx.faces, ctx.frame3d, id);
+    if (id !== null && point) {
+      ctx.pickAlignTarget(
+        { kind: "point", p: point },
+        point,
+        { kind: "vertex", id },
+      );
+    }
+    return;
+  }
+
+  const id = pickEdge(ctx.alignPickDoc, world, pickTol);
+  const line = id === null ? null : foldedAlignLine(ctx.doc, ctx.faces, ctx.frame3d, id);
+  if (id !== null && line) {
+    ctx.pickAlignTarget(
+      { kind: "line", a: line[0], b: line[1] },
+      foldedEdgeCursor(ctx.doc, id, world, line),
+      { kind: "edge", id },
+    );
+  }
+}
+
 export function onMouseDown(
   ctx: InteractionCtx,
   screen: Vec2,
@@ -409,6 +663,13 @@ export function onMouseDown(
   if (kind && ctx.curve.enabled) {
     // 曲線モード(CPE-011): 始点・終点・形を決める点を順にクリックする
     onCurveClick(ctx, snap(ctx.doc, world, snapRadius)?.pos ?? world, kind);
+    return;
+  }
+  if (ctx.tool === "fold" && ctx.alignDraft) {
+    // 合わせモード中は、方式ごとの点・線選択を通常の2点折りより優先する。
+    pickAlignFromCp(ctx, world, pickTol);
+    ctx.state.pendingStart = null;
+    ctx.state.directionSnap = null;
     return;
   }
   if (kind || ctx.tool === "fold") {

@@ -598,7 +598,7 @@ function AlignDraftContent({
         <span>
           選択 {draft.picks.length} / {need}
           {kind !== null &&
-            `(次は${kind === "point" ? "点" : "線"}を3D表示でクリック)`}
+            `(次は${kind === "point" ? "点" : "線"}を展開図または3D表示でクリック)`}
         </span>
         {draft.solutions.length >= 2 && (
           <button type="button" onClick={() => nextAlignSolution()}>
