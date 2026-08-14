@@ -80,4 +80,15 @@ describe("展開図左上の操作案内", () => {
     expect(screen.getByText("補助線: 2回クリックで線を引きます")).toBeTruthy();
     expect(screen.getByText(/Ctrl\+Shift\+ホイール: 左右/)).toBeTruthy();
   });
+
+  it.each([
+    ["pull", "「引く」は3Dの紙をつかんで操作します"],
+    ["technique", "「技法」の対象は3Dで選びます"],
+  ] as const)("%sは3Dで行う操作だと案内する", (activeTool, message) => {
+    useAppStore.setState({ activeTool });
+
+    render(<CpOperationHint />);
+
+    expect(screen.getByText(message)).toBeTruthy();
+  });
 });

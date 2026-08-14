@@ -153,7 +153,7 @@ function onConstructClick(ctx: InteractionCtx, world: Vec2, snapRadius: number):
   const lines = constructLines(ctx.construct.kind, st.constructPoints, st.constructSeg, {
     divisions: ctx.construct.divisions,
     stepDeg: ctx.construct.stepDeg,
-    paper: paperExtent(ctx.doc),
+    paper: paperExtent(ctx.finalDoc),
   });
   for (const [a, b] of lines) {
     ctx.applyEdit({ type: "AddSegment", a, b, kind: "Aux" });
@@ -164,14 +164,15 @@ function onConstructClick(ctx: InteractionCtx, world: Vec2, snapRadius: number):
 
 /** 操作ハンドラが必要とする文脈(CpEditorが毎イベント渡す) */
 export interface InteractionCtx {
+  /** 現在の手順位置で画面に見えている展開図。操作対象は常にこの中から選ぶ。 */
   doc: Document;
+  /** 紙の寸法と、展開図から3Dへの面対応に使う最終作品。 */
+  finalDoc: Document;
   view: ViewTransform;
   tool: ToolId;
   selection: Selection;
   /** 「合わせて折る」の選択途中。nullなら通常の折り線入力として扱う。 */
   alignDraft: { mode: AlignMode; picks: AlignTarget[] } | null;
-  /** 現在の手順位置で画面に見えている展開図。合わせ対象の当たり判定だけに使う。 */
-  alignPickDoc: Document;
   /** 展開図の頂点・辺を現在の畳み平面へ写すための面対応。 */
   faces: Face[];
   frame3d: Frame3D | null;
@@ -654,9 +655,9 @@ function pickAlignFromCp(ctx: InteractionCtx, world: Vec2, pickTol: number): voi
   const steps = ALIGN_STEPS[draft.mode];
   const need = steps[draft.picks.length % steps.length];
   if (need === "point") {
-    const id = pickVisibleAlignVertex(ctx.alignPickDoc, world, pickTol);
+    const id = pickVisibleAlignVertex(ctx.doc, world, pickTol);
     const point =
-      id === null ? null : foldedAlignPoint(ctx.doc, ctx.faces, ctx.frame3d, id);
+      id === null ? null : foldedAlignPoint(ctx.finalDoc, ctx.faces, ctx.frame3d, id);
     if (id !== null && point) {
       ctx.pickAlignTarget(
         { kind: "point", p: point },
@@ -667,12 +668,12 @@ function pickAlignFromCp(ctx: InteractionCtx, world: Vec2, pickTol: number): voi
     return;
   }
 
-  const id = pickEdge(ctx.alignPickDoc, world, pickTol);
-  const line = id === null ? null : foldedAlignLine(ctx.doc, ctx.faces, ctx.frame3d, id);
+  const id = pickEdge(ctx.doc, world, pickTol);
+  const line = id === null ? null : foldedAlignLine(ctx.finalDoc, ctx.faces, ctx.frame3d, id);
   if (id !== null && line) {
     ctx.pickAlignTarget(
       { kind: "line", a: line[0], b: line[1] },
-      foldedEdgeCursor(ctx.doc, id, world, line),
+      foldedEdgeCursor(ctx.finalDoc, id, world, line),
       { kind: "edge", id },
     );
   }
@@ -694,7 +695,7 @@ export function onMouseDown(
   }
   if (button !== 0) return;
   const world = screenToWorld(ctx.view, screen);
-  const paperWorld = pointOnPaper(ctx.doc, world);
+  const paperWorld = pointOnPaper(ctx.finalDoc, world);
   if (paperWorld) ctx.state.lineInputHint = null;
   const snapRadius = SNAP_RADIUS_PX / ctx.view.scale;
   const pickTol = PICK_TOLERANCE_PX / ctx.view.scale;
@@ -727,7 +728,7 @@ export function onMouseDown(
       snapRadius,
     );
     if (kind) {
-      const bounded = pointOnPaper(ctx.doc, pos);
+      const bounded = pointOnPaper(ctx.finalDoc, pos);
       if (!bounded) {
         ctx.state.lineInputHint = OUTSIDE_PAPER_LINE_HINT;
         ctx.state.hoverSnap = null;
@@ -995,7 +996,9 @@ export function onKeyDown(ctx: InteractionCtx, key: string): void {
     return;
   }
   if (key === "Delete" && ctx.selection.edgeIds.length > 0) {
-    ctx.applyEdit({ type: "RemoveEdges", ids: ctx.selection.edgeIds });
+    const visibleEdgeIds = new Set(ctx.doc.cp.edges.map((edge) => edge.id));
+    const ids = ctx.selection.edgeIds.filter((id) => visibleEdgeIds.has(id));
+    if (ids.length > 0) ctx.applyEdit({ type: "RemoveEdges", ids });
   }
 }
 

@@ -295,13 +295,14 @@ export function CpEditor({ fitRef }: Props) {
   const makeCtx = useCallback((): InteractionCtx | null => {
     const s = useAppStore.getState();
     if (!s.doc || !viewRef.current) return null;
+    const stepDoc = documentForCpStep(s.doc, s.currentStep);
     return {
-      doc: s.doc,
+      doc: stepDoc,
+      finalDoc: s.doc,
       view: viewRef.current,
       tool: s.activeTool,
       selection: s.selection,
       alignDraft: s.alignDraft,
-      alignPickDoc: documentForCpStep(s.doc, s.currentStep),
       faces: s.faces,
       frame3d: s.frame3d,
       construct: s.construct,
@@ -474,6 +475,8 @@ export function CpEditor({ fitRef }: Props) {
         className="cp-canvas"
         onPointerDown={(e) => {
           e.preventDefault();
+          const hadStart = stateRef.current.pendingStart !== null;
+          const constructBefore = constructDone(stateRef.current);
           const s = useAppStore.getState();
           if (
             (s.activeTool === "mountain" ||
@@ -495,17 +498,6 @@ export function CpEditor({ fitRef }: Props) {
               e.ctrlKey || e.metaKey,
             ),
           );
-        }}
-        onPointerMove={(e) =>
-          withCtx((ctx) => onMouseMove(ctx, screenPos(e), e.shiftKey))
-        }
-        onPointerUp={(e) => {
-          const hadStart = stateRef.current.pendingStart !== null;
-          const constructBefore = constructDone(stateRef.current);
-          withCtx((ctx) =>
-            onMouseUp(ctx, screenPos(e), e.button, e.ctrlKey || e.metaKey),
-          );
-          const s = useAppStore.getState();
           if (
             s.activeTool === "mountain" ||
             s.activeTool === "valley" ||
@@ -520,6 +512,14 @@ export function CpEditor({ fitRef }: Props) {
             if (constructAfter > 0) s.setOperationStage(1);
             else if (constructBefore > 0 || required === 1) s.setOperationStage(2);
           }
+        }}
+        onPointerMove={(e) =>
+          withCtx((ctx) => onMouseMove(ctx, screenPos(e), e.shiftKey))
+        }
+        onPointerUp={(e) => {
+          withCtx((ctx) =>
+            onMouseUp(ctx, screenPos(e), e.button, e.ctrlKey || e.metaKey),
+          );
         }}
         onPointerLeave={() => {
           // 捕捉中はleaveが飛ばないため、ここに来るのはドラッグしていない時だけ

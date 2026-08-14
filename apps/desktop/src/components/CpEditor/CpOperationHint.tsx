@@ -11,8 +11,8 @@ const CURRENT_ACTION: Record<ToolId, string> = {
   aux: "補助線: 2回クリックで線を引きます",
   delete: "消したい線をクリックします",
   fold: "折り線や基準にする点・線を選べます",
-  pull: "折り目を選んで、3Dの紙を引けます",
-  technique: "技法に使う折り線や点を選べます",
+  pull: "「引く」は3Dの紙をつかんで操作します",
+  technique: "「技法」の対象は3Dで選びます",
   construct: "作図に使う点や線を順に選べます",
 };
 

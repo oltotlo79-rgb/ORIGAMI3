@@ -158,7 +158,7 @@ function makeCtx(
     tool: "construct",
     selection: { edgeIds: [], vertexIds: [] },
     alignDraft: null,
-    alignPickDoc: doc,
+    finalDoc: doc,
     faces: [],
     frame3d: null,
     construct: { ...DEFAULT_CONSTRUCT, ...construct },
@@ -826,7 +826,7 @@ describe("合わせて折るの2D選択", () => {
     doc.cp.next_vertex_id = 6;
     doc.cp.next_edge_id = 5;
     ctx.doc = doc;
-    ctx.alignPickDoc = doc;
+    ctx.finalDoc = doc;
     ctx.faces = [{ id: 7, vertices: [0, 1, 2, 3], edges: [0, 1, 2, 3] }];
     ctx.frame3d = {
       faces: [
@@ -880,8 +880,8 @@ describe("合わせて折るの2D選択", () => {
   it("現在の手順で見えない線は、全体の作品に存在していても拾わない", () => {
     const { ctx, pickAlignTarget } = makeCtx();
     const full = directionGridConflictDoc();
-    ctx.doc = full;
-    ctx.alignPickDoc = squareDoc();
+    ctx.doc = squareDoc();
+    ctx.finalDoc = full;
     ctx.tool = "fold";
     ctx.alignDraft = { mode: "existingLine", picks: [] };
 
@@ -893,8 +893,8 @@ describe("合わせて折るの2D選択", () => {
   it("現在の手順で見えない線だけに属する点も拾わない", () => {
     const { ctx, pickAlignTarget } = makeCtx();
     const full = directionGridConflictDoc();
-    ctx.doc = full;
-    ctx.alignPickDoc = squareDoc();
+    ctx.doc = squareDoc();
+    ctx.finalDoc = full;
     ctx.tool = "fold";
     ctx.alignDraft = { mode: "pointPoint", picks: [] };
 
