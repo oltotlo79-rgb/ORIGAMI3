@@ -754,7 +754,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "ori3-cp",
  "ori3-export",
@@ -2472,7 +2472,7 @@ dependencies = [
 
 [[package]]
 name = "ori3-cp"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "glam",
  "ori3-export",
@@ -2485,7 +2485,7 @@ dependencies = [
 
 [[package]]
 name = "ori3-export"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "glam",
  "miniz_oxide",
@@ -2503,7 +2503,7 @@ dependencies = [
 
 [[package]]
 name = "ori3-geometry"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "glam",
  "ori3-model",
@@ -2512,7 +2512,7 @@ dependencies = [
 
 [[package]]
 name = "ori3-layers"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "glam",
  "ori3-cp",
@@ -2524,7 +2524,7 @@ dependencies = [
 
 [[package]]
 name = "ori3-model"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "serde",
  "serde_json",
@@ -2532,7 +2532,7 @@ dependencies = [
 
 [[package]]
 name = "ori3-propose"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "ori3-cp",
  "ori3-model",
@@ -2543,7 +2543,7 @@ dependencies = [
 
 [[package]]
 name = "ori3-rigid"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "glam",
  "ori3-cp",
@@ -2553,7 +2553,7 @@ dependencies = [
 
 [[package]]
 name = "ori3-soft"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "glam",
  "ori3-cp",
