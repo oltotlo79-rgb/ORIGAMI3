@@ -37,7 +37,12 @@ import {
   limbs,
   skeletonRows,
 } from "../../lib/skeleton";
-import type { CreasePattern, DocumentView, ProposalCandidate } from "../../lib/types";
+import type {
+  CreasePattern,
+  DocumentView,
+  FoldStep,
+  ProposalCandidate,
+} from "../../lib/types";
 
 /** markで区別できる最小の展開図(正方形の輪郭だけ) */
 function makeCp(mark: number): CreasePattern {
@@ -90,6 +95,27 @@ const VIEW: DocumentView = {
   skipped: [],
 };
 
+function makeSteps(count: number): FoldStep[] {
+  return Array.from({ length: count }, (_, index) => ({
+    id: index + 1,
+    kind: "Simple",
+    drivers: [],
+    layer_order: null,
+    note: "",
+  }));
+}
+
+function showConfirmationWithSteps(count: number) {
+  useAppStore.setState({
+    doc: { ...VIEW.doc, sequence: makeSteps(count) },
+    proposalStep: "confirm",
+    proposalCandidates: [makeCandidate(10, 0)],
+    proposalSelected: 0,
+    proposalBusy: false,
+    proposalError: null,
+  });
+}
+
 function shapeRow(container: HTMLElement, id: number): HTMLElement {
   const row = container.querySelector<HTMLElement>(`[data-shape-row="${id}"]`);
   expect(row).not.toBeNull();
@@ -118,6 +144,7 @@ beforeEach(() => {
   vi.mocked(ipc.editApply).mockResolvedValue(VIEW);
   useAppStore.getState().closeProposal();
   useAppStore.setState({
+    doc: { ...VIEW.doc, sequence: [] },
     proposalSkeleton: defaultSkeleton(),
     proposalCandidates: [],
     proposalSelected: null,
@@ -379,6 +406,7 @@ describe("提案ウィザード", () => {
       makeCandidate(10, 0),
       makeCandidate(11, 3),
     ]);
+    useAppStore.setState({ doc: { ...VIEW.doc, sequence: makeSteps(1) } });
     useAppStore.getState().openProposal();
     render(<ProposalWizard />);
 
@@ -404,6 +432,43 @@ describe("提案ウィザード", () => {
     });
     // 流し込んだらダイアログは閉じる
     expect(useAppStore.getState().proposalStep).toBeNull();
+  });
+
+  it.each([{ count: 0 }, { count: 1 }, { count: 100 }])(
+    "既存の折り手順が$count件のとき、適用前の注意を正しく出す",
+    ({ count }) => {
+      showConfirmationWithSteps(count);
+      render(<ProposalWizard />);
+
+      const notice = screen.queryByText(/今ある折り手順.*すべて消えます/u);
+      if (count === 0) {
+        expect(notice).toBeNull();
+      } else {
+        expect(notice?.textContent?.replace(/\s+/gu, "")).toBe(
+          `この展開図を使うと、今ある折り手順${count}件はすべて消えます。`,
+        );
+      }
+      expect(notice?.textContent ?? "").not.toMatch(
+        /骨格|充填|ソルバー|ヤコビアン|hard|soft|warm[\s-]+start|イテレーション|節点|円の中心|ID/iu,
+      );
+      expect(
+        (screen.getByRole("button", {
+          name: "この展開図を使う",
+        }) as HTMLButtonElement).disabled,
+      ).toBe(false);
+    },
+  );
+
+  it("確認画面で選び直すと、今の作品を変えない", () => {
+    showConfirmationWithSteps(100);
+    const before = JSON.stringify(useAppStore.getState().doc);
+    render(<ProposalWizard />);
+
+    fireEvent.click(screen.getByRole("button", { name: "選び直す" }));
+
+    expect(ipc.editApply).not.toHaveBeenCalled();
+    expect(useAppStore.getState().proposalStep).toBe("candidates");
+    expect(JSON.stringify(useAppStore.getState().doc)).toBe(before);
   });
 
   it("作れなかったときは日本語の理由を出す", async () => {

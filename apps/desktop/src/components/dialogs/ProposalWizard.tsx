@@ -360,6 +360,7 @@ function ConfirmStep() {
       ? null
       : (s.proposalCandidates[s.proposalSelected] ?? null),
   );
+  const existingStepCount = useAppStore((s) => s.doc?.sequence.length ?? 0);
   const setStep = useAppStore((s) => s.setProposalStep);
   const apply = useAppStore((s) => s.applyProposalCandidate);
   if (!candidate) return null;
@@ -367,6 +368,12 @@ function ConfirmStep() {
   return (
     <>
       <p>この展開図を今の作品に入れます。入れた後は自由に描き足せます。</p>
+      {existingStepCount > 0 && (
+        <p className="warning-text">
+          この展開図を使うと、今ある折り手順{existingStepCount}
+          件はすべて消えます。
+        </p>
+      )}
       <div className="proposal-body">
         <CpThumbnail cp={candidate.cp} />
         <div>
