@@ -242,7 +242,7 @@ export function CpEditor({ fitRef }: Props) {
         panHint(st) ??
         (st.vertexDrag
           ? "点を動かしています(離すと決まります。Escでやめる)"
-          : toolHint),
+          : st.lineInputHint ?? toolHint),
       tooltip: violationTooltip(doc, st.hoverViolation),
       vertexDrag: st.vertexDrag
         ? { id: st.vertexDrag.id, to: st.vertexDrag.to }
@@ -364,6 +364,7 @@ export function CpEditor({ fitRef }: Props) {
   useEffect(() => {
     const st = stateRef.current;
     st.pendingStart = null;
+    st.lineInputHint = null;
     st.downScreen = null;
     st.marqueeStart = null;
     st.marqueeEnd = null;

@@ -53,6 +53,22 @@ function squareDoc(): Document {
   };
 }
 
+/**
+ * 以前はBorderだけの正方形の角を移動成功例に使い、CPE-001と逆の動作を
+ * 誤って固定していた。点移動の成功例は、補助線につながる内部頂点で検査する。
+ */
+function movableVertexDoc(): Document {
+  const doc = squareDoc();
+  doc.cp.vertices.push(
+    { id: 4, pos: [0.5, 0.5] },
+    { id: 5, pos: [0.75, 0.5] },
+  );
+  doc.cp.edges.push({ id: 4, v0: 4, v1: 5, kind: "Aux" });
+  doc.cp.next_vertex_id = 6;
+  doc.cp.next_edge_id = 5;
+  return doc;
+}
+
 const CRANE_BASE_INTERSECTION_X = 0.20710678118654752;
 
 /** 左下の45°線と左辺が作る67.5°方向、および中央横線を持つ作品。 */
@@ -309,45 +325,87 @@ describe("Ctrl+クリック・矩形での複数選択", () => {
 });
 
 describe("点のドラッグ移動(選択ツール)", () => {
-  /** 選択ツールで頂点2(1,1)を押さえた状態を作る */
-  function grabCorner() {
+  /** 選択ツールで補助線につながる内部頂点4を押さえた状態を作る。 */
+  function grabInternalVertex() {
     const made = makeCtx();
+    made.ctx.doc = movableVertexDoc();
     made.ctx.tool = "select";
-    onMouseDown(made.ctx, toScreen([1, 1]), 0);
+    onMouseDown(made.ctx, toScreen([0.5, 0.5]), 0);
     return made;
   }
 
-  it("押している間はプレビューだけで、離したときに動かす", () => {
-    const { ctx, applyEdit } = grabCorner();
-    expect(ctx.state.vertexDrag?.id).toBe(2);
-    expect(ctx.setSelection).toHaveBeenCalledWith({ edgeIds: [], vertexIds: [2] });
+  it("紙の四隅id=0..3は内側へドラッグしても編集しない", () => {
+    const cases: Array<{ id: number; from: Vec2; to: Vec2 }> = [
+      { id: 0, from: [0, 0], to: [0.25, 0.25] },
+      { id: 1, from: [1, 0], to: [0.75, 0.25] },
+      { id: 2, from: [1, 1], to: [0.75, 0.75] },
+      { id: 3, from: [0, 1], to: [0.25, 0.75] },
+    ];
 
-    onMouseMove(ctx, toScreen([0.63, 0.63]));
+    for (const { id, from, to } of cases) {
+      const { ctx, applyEdit } = makeCtx();
+      ctx.tool = "select";
+      onMouseDown(ctx, toScreen(from), 0);
+      expect(ctx.state.vertexDrag, `輪郭の角id=${id}`).toBeNull();
+      onMouseMove(ctx, toScreen(to));
+      onMouseUp(ctx, toScreen(to), 0);
+      expect(applyEdit, `輪郭の角id=${id}`).toHaveBeenCalledTimes(0);
+    }
+  });
+
+  it("輪郭辺の途中にある頂点もMoveVertexを送らない", () => {
+    const { ctx, applyEdit } = makeCtx();
+    ctx.tool = "select";
+    ctx.doc.cp.vertices.push({ id: 4, pos: [0.5, 0] });
+    ctx.doc.cp.edges = [
+      { id: 0, v0: 0, v1: 4, kind: "Border" },
+      { id: 4, v0: 4, v1: 1, kind: "Border" },
+      ...ctx.doc.cp.edges.filter((edge) => edge.id !== 0),
+    ];
+    ctx.doc.cp.next_vertex_id = 5;
+    ctx.doc.cp.next_edge_id = 5;
+
+    onMouseDown(ctx, toScreen([0.5, 0]), 0);
+    expect(ctx.state.vertexDrag).toBeNull();
+    onMouseMove(ctx, toScreen([0.5, 0.25]));
+    onMouseUp(ctx, toScreen([0.5, 0.25]), 0);
+
+    expect(applyEdit).toHaveBeenCalledTimes(0);
+  });
+
+  it("押している間はプレビューだけで、離したときに動かす", () => {
+    const { ctx, applyEdit } = grabInternalVertex();
+    expect(ctx.state.vertexDrag?.id).toBe(4);
+    expect(ctx.setSelection).toHaveBeenCalledWith({ edgeIds: [], vertexIds: [4] });
+
+    const destination: Vec2 = [0.68, 0.61];
+    onMouseMove(ctx, toScreen(destination));
     // 動かしている途中では編集を送らない(1回のドラッグ=1回の編集)
     expect(applyEdit).not.toHaveBeenCalled();
-    expect(ctx.state.vertexDrag?.to[0]).toBeCloseTo(0.625, 3); // 8等分の目盛りに吸着
+    expect(ctx.state.vertexDrag?.to).toEqual(destination);
     expect(ctx.state.marqueeEnd).toBeNull(); // 矩形選択にはならない
 
-    onMouseUp(ctx, toScreen([0.63, 0.63]), 0);
+    onMouseUp(ctx, toScreen(destination), 0);
     expect(applyEdit).toHaveBeenCalledWith({
       type: "MoveVertex",
-      id: 2,
-      to: [0.625, 0.625],
+      id: 4,
+      to: destination,
     });
     expect(ctx.state.vertexDrag).toBeNull();
   });
 
   it("点移動の正確な候補が近くになければ従来どおり方眼へ吸着する", () => {
     const { ctx, applyEdit } = makeCtx();
-    ctx.doc = directionGridConflictDoc();
+    ctx.doc = movableVertexDoc();
+    ctx.doc.display.grid_divisions = 4;
     ctx.tool = "select";
     const cursor: Vec2 = [(CRANE_BASE_INTERSECTION_X + 0.25) / 2, 0.5];
 
-    onMouseDown(ctx, toScreen([1, 0]), 0);
+    onMouseDown(ctx, toScreen([0.5, 0.5]), 0);
     onMouseMove(ctx, toScreen(cursor));
     expect(ctx.state.vertexDrag?.to).toEqual([0.25, 0.5]);
     onMouseUp(ctx, toScreen(cursor), 0);
-    expect(applyEdit).toHaveBeenCalledWith({ type: "MoveVertex", id: 1, to: [0.25, 0.5] });
+    expect(applyEdit).toHaveBeenCalledWith({ type: "MoveVertex", id: 4, to: [0.25, 0.5] });
   });
 
   it("点をつかんで、縦中心で折り返した正しい位置へ1e-12未満で動かせる", () => {
@@ -399,17 +457,17 @@ describe("点のドラッグ移動(選択ツール)", () => {
   });
 
   it("動かさずに離したときは選択のままで編集しない", () => {
-    const { ctx, applyEdit } = grabCorner();
-    onMouseUp(ctx, toScreen([1, 1]), 0);
+    const { ctx, applyEdit } = grabInternalVertex();
+    onMouseUp(ctx, toScreen([0.5, 0.5]), 0);
     expect(applyEdit).not.toHaveBeenCalled();
   });
 
   it("Escでやめれば元の位置のまま", () => {
-    const { ctx, applyEdit } = grabCorner();
-    onMouseMove(ctx, toScreen([0.5, 0.5]));
+    const { ctx, applyEdit } = grabInternalVertex();
+    onMouseMove(ctx, toScreen([0.68, 0.61]));
     onKeyDown(ctx, "Escape");
     expect(ctx.state.vertexDrag).toBeNull();
-    onMouseUp(ctx, toScreen([0.5, 0.5]), 0);
+    onMouseUp(ctx, toScreen([0.68, 0.61]), 0);
     expect(applyEdit).not.toHaveBeenCalled();
   });
 
@@ -433,6 +491,72 @@ describe("線ツール", () => {
     expect(drawSegment.mock.calls[0][2]).toBe("Mountain");
     // 線の追加はdrawSegment経由に一本化する(直接の編集要求は出さない)
     expect(applyEdit).not.toHaveBeenCalled();
+  });
+
+  it("山・谷・補助の各ツールで紙外の2点を押しても線を引かない", () => {
+    for (const tool of ["mountain", "valley", "aux"] as const) {
+      const { ctx, drawSegment } = makeCtx();
+      ctx.tool = tool;
+
+      // 12pxの吸着範囲内でも、生のクリックが紙外なら輪郭へ引き込まない。
+      onMouseDown(ctx, toScreen([-0.01, 0.2]), 0);
+      onMouseDown(ctx, toScreen([1.01, 0.8]), 0);
+
+      expect(drawSegment, tool).toHaveBeenCalledTimes(0);
+      expect(ctx.state.pendingStart, tool).toBeNull();
+      expect(ctx.state.lineInputHint, tool).toBe(
+        "紙の外には線を引けません。紙の上をクリックしてください",
+      );
+      onKeyDown(ctx, "Escape");
+      expect(ctx.state.lineInputHint, `${tool}: Esc`).toBeNull();
+    }
+  });
+
+  it("紙上の1点目の後に紙外を押すと始点と案内を保ち、次の紙上で1本だけ引く", () => {
+    const { ctx, drawSegment } = makeCtx();
+    ctx.tool = "mountain";
+    const start: Vec2 = [0.25, 0.25];
+    const end: Vec2 = [0.75, 0.75];
+
+    onMouseDown(ctx, toScreen(start), 0);
+    onMouseDown(ctx, toScreen([1.01, 0.5]), 0);
+
+    expect(drawSegment).toHaveBeenCalledTimes(0);
+    expect(ctx.state.pendingStart).toEqual(start);
+    expect(ctx.state.lineInputHint).toBe(
+      "紙の外には線を引けません。紙の上をクリックしてください",
+    );
+
+    onMouseDown(ctx, toScreen(end), 0);
+    expect(drawSegment).toHaveBeenCalledTimes(1);
+    expect(drawSegment).toHaveBeenCalledWith(start, end, "Mountain");
+    expect(ctx.state.pendingStart).toBeNull();
+    expect(ctx.state.lineInputHint).toBeNull();
+  });
+
+  it("紙外の1点目は捨て、次の紙上の点を1点目として保つ", () => {
+    const { ctx, drawSegment } = makeCtx();
+    ctx.tool = "valley";
+    const start: Vec2 = [0.25, 0.25];
+
+    onMouseDown(ctx, toScreen([-0.01, 0.5]), 0);
+    onMouseDown(ctx, toScreen(start), 0);
+
+    expect(drawSegment).toHaveBeenCalledTimes(0);
+    expect(ctx.state.pendingStart).toEqual(start);
+    expect(ctx.state.lineInputHint).toBeNull();
+  });
+
+  it("輪郭上の2点は有効で、丸め誤差だけを輪郭へ戻して1本引く", () => {
+    const { ctx, drawSegment } = makeCtx();
+    ctx.tool = "aux";
+
+    onMouseDown(ctx, toScreen([-5e-13, 0.25]), 0);
+    onMouseDown(ctx, toScreen([1 + 5e-13, 0.75]), 0);
+
+    expect(drawSegment).toHaveBeenCalledTimes(1);
+    expect(drawSegment).toHaveBeenCalledWith([0, 0.25], [1, 0.75], "Aux");
+    expect(ctx.state.pendingStart).toBeNull();
   });
 
   it("「折る」の点指定は実交点より方眼を優先する", () => {

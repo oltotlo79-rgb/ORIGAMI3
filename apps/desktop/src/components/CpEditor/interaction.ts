@@ -39,11 +39,18 @@ const DRAG_THRESHOLD_PX = 4;
 const ZOOM_STEP = 1.1;
 const MIN_SCALE = 20;
 const MAX_SCALE = 100000;
+// 画面座標との相互変換で紙端をわずかに越える丸めだけを許容する。
+// これを超える紙外入力は、12pxの吸着範囲内でも紙上へ引き込まない。
+const PAPER_BOUNDS_ROUNDING_EPSILON = 1e-12;
+const OUTSIDE_PAPER_LINE_HINT =
+  "紙の外には線を引けません。紙の上をクリックしてください";
 
 /** 描画・操作の一時状態(ストアに入れない表示専用状態) */
 export interface EphemeralState {
   /** 線ツールの始点(確定済み1クリック目) */
   pendingStart: Vec2 | null;
+  /** 紙外を押したときにCanvasへ出す一時案内。 */
+  lineInputHint: string | null;
   cursorWorld: Vec2 | null;
   hoverSnap: SnapResult | null;
   /** 既存線の延長または角の二等分へ向きだけを合わせた終点。 */
@@ -76,6 +83,7 @@ export interface EphemeralState {
 export function initialEphemeralState(): EphemeralState {
   return {
     pendingStart: null,
+    lineInputHint: null,
     cursorWorld: null,
     hoverSnap: null,
     directionSnap: null,
@@ -213,6 +221,26 @@ function dist(a: Vec2, b: Vec2): number {
   return Math.hypot(a[0] - b[0], a[1] - b[1]);
 }
 
+/** 紙端の丸め誤差だけを端へ戻し、それを超える紙外座標は受け付けない。 */
+function pointOnPaper(doc: Document, pos: Vec2): Vec2 | null {
+  const [width, height] = paperExtent(doc);
+  const epsilon = PAPER_BOUNDS_ROUNDING_EPSILON;
+  if (
+    !Number.isFinite(pos[0]) ||
+    !Number.isFinite(pos[1]) ||
+    pos[0] < -epsilon ||
+    pos[0] > width + epsilon ||
+    pos[1] < -epsilon ||
+    pos[1] > height + epsilon
+  ) {
+    return null;
+  }
+  return [
+    Math.max(0, Math.min(width, pos[0])),
+    Math.max(0, Math.min(height, pos[1])),
+  ];
+}
+
 /**
  * 通常の直線描画の終点を決める。方向吸着中はその方向を軸として保ち、
  * 近くの頂点・グリッド交点は軸への投影点、線分は軸との交点へ吸着する。
@@ -286,6 +314,15 @@ export function pickVertex(doc: Document, world: Vec2, tolNorm: number): number 
     }
   }
   return best;
+}
+
+/** Borderの端点は座標に関係なく紙の外形なので、点移動の対象にしない。 */
+function isBorderVertex(doc: Document, vertexId: number): boolean {
+  return doc.cp.edges.some(
+    (edge) =>
+      edge.kind === "Border" &&
+      (edge.v0 === vertexId || edge.v1 === vertexId),
+  );
 }
 
 /** 現在の手順で見えている線に属する頂点だけを、合わせ対象の点として拾う。 */
@@ -656,6 +693,8 @@ export function onMouseDown(
   }
   if (button !== 0) return;
   const world = screenToWorld(ctx.view, screen);
+  const paperWorld = pointOnPaper(ctx.doc, world);
+  if (paperWorld) ctx.state.lineInputHint = null;
   const snapRadius = SNAP_RADIUS_PX / ctx.view.scale;
   const pickTol = PICK_TOLERANCE_PX / ctx.view.scale;
 
@@ -674,7 +713,28 @@ export function onMouseDown(
   }
   if (kind || ctx.tool === "fold") {
     // 線ツール・折るツール: 1クリック目=始点、2クリック目=確定
-    const pos = refreshLineEndpoint(ctx, world, snapRadius);
+    // 生のクリック位置が紙外なら、近くの輪郭へ吸着させず同じ段階を保つ。
+    if (kind && !paperWorld) {
+      ctx.state.lineInputHint = OUTSIDE_PAPER_LINE_HINT;
+      ctx.state.hoverSnap = null;
+      ctx.state.directionSnap = null;
+      return;
+    }
+    let pos = refreshLineEndpoint(
+      ctx,
+      kind && paperWorld ? paperWorld : world,
+      snapRadius,
+    );
+    if (kind) {
+      const bounded = pointOnPaper(ctx.doc, pos);
+      if (!bounded) {
+        ctx.state.lineInputHint = OUTSIDE_PAPER_LINE_HINT;
+        ctx.state.hoverSnap = null;
+        ctx.state.directionSnap = null;
+        return;
+      }
+      pos = bounded;
+    }
     const start = ctx.state.pendingStart;
     if (start === null) {
       ctx.state.pendingStart = pos;
@@ -711,7 +771,7 @@ export function onMouseDown(
     // 動かさずに離せばただの選択になる
     const hit = pickVertex(ctx.doc, world, pickTol);
     const pos = hit === null ? null : ctx.doc.cp.vertices.find((v) => v.id === hit)?.pos;
-    if (hit !== null && pos) {
+    if (hit !== null && pos && !isBorderVertex(ctx.doc, hit)) {
       ctx.state.vertexDrag = {
         id: hit,
         from: pos,
@@ -920,6 +980,7 @@ export function onKeyDown(ctx: InteractionCtx, key: string): void {
     ctx.state.shiftHeld = false;
     ctx.state.panLast = null;
     ctx.state.pendingStart = null;
+    ctx.state.lineInputHint = null;
     ctx.state.directionSnap = null;
     ctx.state.downScreen = null;
     ctx.state.marqueeStart = null;
