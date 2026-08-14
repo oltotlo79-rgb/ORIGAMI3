@@ -3,6 +3,26 @@ import { HELP_CHAPTERS, helpBlockText, helpChapterSearchText } from "./helpConte
 import { HELP_DIAGRAMS } from "./helpDiagrams";
 import type { HelpBlock, HelpScreenshotBlock } from "./helpTypes";
 
+const REAL_SCREEN_DIAGRAM_IDS = [
+  "workspace-four-areas",
+  "new-paper-settings",
+  "crease-tools",
+  "angle-controls",
+  "three-dimensional-controls",
+  "technique-cards",
+  "timeline-flow",
+] as const;
+
+const INTENTIONAL_HAND_DRAWN_DIAGRAM_IDS = [
+  "overview-flow",
+  "fold-flow",
+  "save-export-flow",
+  "troubleshooting-flow",
+  "shortcut-map",
+] as const;
+
+const DEFERRED_DIAGRAM_ID = "proposal-wizard" as const;
+
 function manualImage(block: HelpBlock): string | null {
   if (block.type === "figure") return block.image?.trim() || null;
   if (block.type === "screenshot") return block.image.trim() || null;
@@ -27,7 +47,7 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
     }
   });
 
-  it("全章に解決できる固有のSVG図解が1点以上ある", () => {
+  it("全章に解決できる固有の図が1点以上ある", () => {
     const figureIds = HELP_CHAPTERS.flatMap((chapter) =>
       chapter.blocks
         .filter((block) => block.type === "figure")
@@ -47,8 +67,41 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
       expect(diagram.svg).toContain('viewBox="0 0 720 280"');
       expect(diagram.svg).toContain(`<title>${diagram.title}</title>`);
       expect(diagram.svg).toContain(`<desc>${diagram.alt}</desc>`);
+    }
+  });
+
+  it("対象7図だけが追跡対象の実画面PNGを表示し、PDF用画像名もそろっている", () => {
+    expect(REAL_SCREEN_DIAGRAM_IDS).toHaveLength(7);
+    const imageUrls = new Set<string>();
+
+    for (const id of REAL_SCREEN_DIAGRAM_IDS) {
+      const diagram = HELP_DIAGRAMS[id];
+      const expectedImage = `figure-${id}.png`;
+      expect(diagram.manualImage).toBe(expectedImage);
+      expect(diagram.svg).toContain("<image ");
+      expect(diagram.svg).toContain(expectedImage);
+      expect(diagram.svg).toContain('width="720" height="280"');
+      expect(diagram.svg).toContain('preserveAspectRatio="none"');
+      const href = diagram.svg.match(/<image href="([^"]+)"/)?.[1];
+      expect(href).toBeTruthy();
+      imageUrls.add(href!);
+    }
+    expect(imageUrls.size).toBe(7);
+  });
+
+  it("意図して手描きで残す5図と延期する提案図を区別する", () => {
+    expect(INTENTIONAL_HAND_DRAWN_DIAGRAM_IDS).toHaveLength(5);
+    for (const id of INTENTIONAL_HAND_DRAWN_DIAGRAM_IDS) {
+      const diagram = HELP_DIAGRAMS[id];
+      expect(diagram.manualImage).toBeUndefined();
+      expect(diagram.svg).not.toContain("<image ");
       expect(diagram.svg.length).toBeGreaterThan(500);
     }
+
+    const deferred = HELP_DIAGRAMS[DEFERRED_DIAGRAM_ID];
+    expect(deferred.manualImage).toBeUndefined();
+    expect(deferred.svg).not.toContain("<image ");
+    expect(deferred.svg.length).toBeGreaterThan(500);
   });
 
   it("全章に実画面が1点以上あり、独立した画面例も直列化できる", () => {

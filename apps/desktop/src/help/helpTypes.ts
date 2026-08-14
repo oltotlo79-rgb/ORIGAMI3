@@ -107,10 +107,15 @@ export interface HelpChapter {
   blocks: readonly HelpBlock[];
 }
 
-/** SVGは外部画像に依存しない完全な文字列として保持する。 */
+/**
+ * SVGは完全な文字列として保持する。画像を使う場合は、Viteが配布物へ含める
+ * apps/desktop/src/help/diagram-assets/ 配下の追跡対象PNGだけを参照する。
+ */
 export interface HelpDiagram {
   id: HelpDiagramId;
   title: string;
   alt: string;
   svg: string;
+  /** 取扱説明書ではSVGの代わりに載せる docs/manual/assets/ 直下のPNG名。 */
+  manualImage?: string;
 }

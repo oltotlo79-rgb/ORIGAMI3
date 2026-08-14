@@ -74,6 +74,24 @@ const svg = (
   };
 };
 
+const rasterSvg = (
+  id: HelpDiagramId,
+  title: string,
+  alt: string,
+  imageUrl: string,
+  manualImage: string,
+): HelpDiagram => ({
+  id,
+  title,
+  alt,
+  manualImage,
+  svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 280" aria-hidden="true" focusable="false">
+  <title>${title}</title>
+  <desc>${alt}</desc>
+  <image href="${imageUrl}" x="0" y="0" width="720" height="280" preserveAspectRatio="none"/>
+</svg>`,
+});
+
 const overviewFlow = svg(
   "overview-flow",
   "作品づくりの流れ",
@@ -91,62 +109,28 @@ const overviewFlow = svg(
     <text x="360" y="241" font-size="14" text-anchor="middle" font-weight="700">立体を見て展開図を直す</text>`,
 );
 
-const workspaceFourAreas = svg(
+const workspaceFourAreas = rasterSvg(
   "workspace-four-areas",
   "画面の4区画",
   "ツールレール、2D展開図、3D表示と手順、高さを変えられる下の設定パネルの位置",
-  () => `
-    <rect x="34" y="25" width="652" height="230" rx="13" fill="#fff" stroke="#27213d" stroke-width="3"/>
-    <rect x="42" y="34" width="636" height="30" rx="7" fill="#eee7ff"/><text x="60" y="54" font-size="13" font-weight="700">上部ツールバー（作品全体の操作）</text>
-    <rect x="42" y="70" width="58" height="118" rx="8" fill="#fff5c2" stroke="#ffd84d" stroke-width="2"/><text x="71" y="104" font-size="12" font-weight="700" text-anchor="middle"><tspan x="71">①</tspan><tspan x="71" dy="22">道具</tspan><tspan x="71" dy="18">レール</tspan></text>
-    <rect x="106" y="70" width="238" height="118" rx="8" fill="#ddf8f1" stroke="#007a70" stroke-width="2"/><text x="124" y="91" font-size="14" font-weight="700">② 2D 展開図</text><rect x="166" y="99" width="116" height="70" data-help-paper fill="#fff" stroke="#9f93b8"/><path d="M166 169 282 99M166 99l116 70" stroke="#d43c3c" stroke-width="3"/><path d="M224 99v70" stroke="#3b6fc9" stroke-width="3"/>
-    <rect x="350" y="70" width="328" height="82" rx="8" fill="#eee7ff" stroke="#7040c9" stroke-width="2"/><text x="368" y="91" font-size="14" font-weight="700">③ 立体表示</text><path d="M478 139 521 94l55 44-46-14Z" data-help-paper fill="#fff5c2" stroke="#7040c9" stroke-width="3"/><path d="M521 94l9 30" stroke="#d43c3c" stroke-width="3"/>
-    <rect x="350" y="160" width="328" height="28" rx="8" fill="#fff" stroke="#7040c9" stroke-width="2"/><text x="367" y="179" font-size="12" font-weight="700">手順タイムライン</text><g fill="#ddf8f1" stroke="#007a70"><rect x="520" y="166" width="28" height="16" rx="7"/><rect x="554" y="166" width="28" height="16" rx="7"/><rect x="588" y="166" width="28" height="16" rx="7"/></g>
-    <path d="M330 129h32M338 122l-8 7 8 7M354 122l8 7-8 7" fill="none" stroke="#7040c9" stroke-width="2"/><text x="346" y="97" font-size="10" text-anchor="middle">左右</text>
-    <rect x="42" y="196" width="636" height="51" rx="8" fill="#ffe8ed" stroke="#ed5c70" stroke-width="2"/><path d="M360 181v24M353 189l7-8 7 8M353 197l7 8 7-8" fill="none" stroke="#7040c9" stroke-width="2"/><text x="58" y="220" font-size="13" font-weight="700">④ 下部 — 今できる操作と選んだものの設定</text><text x="58" y="238" font-size="11">上端を上下へ動かして高さを変える</text>`,
+  new URL("./diagram-assets/figure-workspace-four-areas.png", import.meta.url).href,
+  "figure-workspace-four-areas.png",
 );
 
-const newPaperSettings = svg(
+const newPaperSettings = rasterSvg(
   "new-paper-settings",
   "新しい紙の設定",
   "紙の幅と高さを決め、24色から表と裏の色を選ぶ画面",
-  (arrow) => `
-    <!-- preserve-paper-colors:start -->
-    <rect x="77" y="51" width="202" height="172" rx="5" fill="#ffd84d" stroke="#27213d" stroke-width="3"/>
-    <path d="M77 51h202L238 92H77Z" fill="#fff" fill-opacity=".75"/>
-    <!-- preserve-paper-colors:end -->
-    <text x="93" y="79" font-size="13" font-weight="700">表</text><text x="243" y="79" font-size="13" font-weight="700">裏</text>
-    <path d="M77 235h202M77 229v12M279 229v12" stroke="#7040c9" stroke-width="2" marker-start="url(#${arrow})" marker-end="url(#${arrow})"/><text x="178" y="259" font-size="13" text-anchor="middle">よこ 150 mm</text>
-    <path d="M58 51v172M52 51h12M52 223h12" stroke="#7040c9" stroke-width="2" marker-start="url(#${arrow})" marker-end="url(#${arrow})"/><text x="25" y="142" font-size="13" text-anchor="middle" transform="rotate(-90 25 142)">たて 150 mm</text>
-    <g transform="translate(330 45)"><text x="0" y="0" font-size="14" font-weight="700">紙の表・紙の裏：24色</text>
-      <!-- preserve-paper-colors:start -->
-      <g stroke="#fff" stroke-width="2">
-        <circle cx="18" cy="34" r="13" fill="#ed1c24"/><circle cx="56" cy="34" r="13" fill="#f4511e"/><circle cx="94" cy="34" r="13" fill="#f06292"/><circle cx="132" cy="34" r="13" fill="#f8bbd0"/><circle cx="170" cy="34" r="13" fill="#ff8c00"/><circle cx="208" cy="34" r="13" fill="#f6b900"/>
-        <circle cx="18" cy="70" r="13" fill="#ffd84d"/><circle cx="56" cy="70" r="13" fill="#fff176"/><circle cx="94" cy="70" r="13" fill="#8bc34a"/><circle cx="132" cy="70" r="13" fill="#20a162"/><circle cx="170" cy="70" r="13" fill="#006b4f"/><circle cx="208" cy="70" r="13" fill="#4fc3f7"/>
-        <circle cx="18" cy="106" r="13" fill="#29b6f6"/><circle cx="56" cy="106" r="13" fill="#3578e5"/><circle cx="94" cy="106" r="13" fill="#243b78"/><circle cx="132" cy="106" r="13" fill="#7040c9"/><circle cx="170" cy="106" r="13" fill="#b39ddb"/><circle cx="208" cy="106" r="13" fill="#8d5a3b"/>
-        <circle cx="18" cy="142" r="13" fill="#f4c7a1"/><circle cx="56" cy="142" r="13" fill="#c88a16"/><circle cx="94" cy="142" r="13" fill="#a7a9ac"/><circle cx="132" cy="142" r="13" fill="#fff" stroke="#9f93b8"/><circle cx="170" cy="142" r="13" fill="#777"/><circle cx="208" cy="142" r="13" fill="#1f1f1f"/>
-      </g>
-      <!-- preserve-paper-colors:end -->
-      <circle cx="18" cy="70" r="17" fill="none" stroke="#7040c9" stroke-width="4"/><path d="m10 70 6 6 11-14" fill="none" stroke="#27213d" stroke-width="3" stroke-linecap="round"/>
-      <rect x="0" y="174" width="226" height="35" rx="16" fill="#ddf8f1"/><text x="113" y="197" font-size="13" font-weight="700" text-anchor="middle">24色＋「その他の色」</text>
-    </g>`,
+  new URL("./diagram-assets/figure-new-paper-settings.png", import.meta.url).href,
+  "figure-new-paper-settings.png",
 );
 
-const creaseTools = svg(
+const creaseTools = rasterSvg(
   "crease-tools",
   "展開図の道具",
   "山・谷・補助・曲線を方眼と吸着、二等分方向を使って引く様子",
-  () => `
-    <rect x="42" y="31" width="408" height="218" rx="7" data-help-paper fill="#fff" stroke="#27213d" stroke-width="3"/>
-    <g stroke="#ddd7ec" stroke-width="1"><path d="M93 31v218M144 31v218M195 31v218M246 31v218M297 31v218M348 31v218M399 31v218M42 85h408M42 139h408M42 193h408"/></g>
-    <path d="M62 219 247 50" stroke="#d43c3c" stroke-width="5"/><text x="78" y="202" font-size="13" font-weight="700" fill="#d43c3c">山</text>
-    <path d="M68 54 419 213" stroke="#3b6fc9" stroke-width="5"/><text x="376" y="195" font-size="13" font-weight="700" fill="#3b6fc9">谷</text>
-    <path d="M78 139h345" stroke="#777" stroke-width="3" stroke-dasharray="3 6"/><text x="370" y="132" font-size="12" fill="#666">補助</text>
-    <path d="M112 215Q220 118 389 65" fill="none" stroke="#7040c9" stroke-width="4"/><text x="286" y="89" font-size="12" font-weight="700" fill="#7040c9">曲線</text>
-    <circle cx="246" cy="139" r="10" fill="none" stroke="#2aa02a" stroke-width="3"/><text x="263" y="158" font-size="12" font-weight="700" fill="#2aa02a">吸着候補</text>
-    <g transform="translate(479 35)"><rect width="205" height="87" rx="14" fill="#fff" stroke="#9f93b8" stroke-width="2"/><text x="102" y="20" font-size="13" font-weight="700" text-anchor="middle">方眼の細かさ</text><rect x="18" y="31" width="56" height="43" fill="#ddf8f1" stroke="#007a70"/><path d="M46 31v43M18 52h56" stroke="#9f93b8"/><rect x="129" y="31" width="56" height="43" fill="#ddf8f1" stroke="#007a70"/><g stroke="#9f93b8"><path d="M143 31v43M157 31v43M171 31v43M129 42h56M129 53h56M129 64h56"/></g><path d="M82 53h37" stroke="#7040c9" stroke-width="3"/><path d="m113 47 8 6-8 6" fill="#7040c9"/></g>
-    <g transform="translate(479 135)"><rect width="205" height="83" rx="14" fill="#fff" stroke="#9f93b8" stroke-width="2"/><text x="102" y="20" font-size="13" font-weight="700" text-anchor="middle">二等分する向き</text><path d="M28 68 103 35l74 33" fill="none" stroke="#27213d" stroke-width="3"/><path d="M103 35v41" stroke="#7040c9" stroke-width="4" stroke-dasharray="6 4"/><path d="M76 53q27 21 54 0" fill="none" stroke="#ffd84d" stroke-width="5"/></g>
-    <rect x="492" y="230" width="180" height="27" rx="13" fill="#fff5c2" stroke="#ffd84d"/><text x="582" y="248" font-size="12" font-weight="700" text-anchor="middle">Shift：方向吸着だけ外す</text>`,
+  new URL("./diagram-assets/figure-crease-tools.png", import.meta.url).href,
+  "figure-crease-tools.png",
 );
 
 const foldFlow = svg(
@@ -162,59 +146,36 @@ const foldFlow = svg(
     <path d="M225 139h29M462 139h29" stroke="#7040c9" stroke-width="4" marker-end="url(#${arrow})"/>`,
 );
 
-const angleControls = svg(
+const angleControls = rasterSvg(
   "angle-controls",
   "角度の操作",
   "複数の折り目を選び、個別またはまとめて角度を変え、紙を引く操作",
-  (arrow) => `
-    <g transform="translate(35 38)"><rect width="210" height="190" rx="18" fill="#fff" stroke="#9f93b8" stroke-width="2"/><text x="105" y="25" font-size="13" font-weight="700" text-anchor="middle">Ctrl + クリックで複数選択</text><rect x="34" y="45" width="142" height="112" data-help-paper fill="#ddf8f1" stroke="#27213d" stroke-width="2"/><path d="M42 147 166 55M45 58l121 88M105 48v104" stroke="#7040c9" stroke-width="5"/><g fill="#ffd84d" stroke="#27213d" stroke-width="2" font-size="11" font-weight="700" text-anchor="middle"><circle cx="75" cy="122" r="13"/><circle cx="134" cy="116" r="13"/><circle cx="105" cy="91" r="13"/></g><g font-size="11" font-weight="700" text-anchor="middle"><text x="75" y="126">1</text><text x="134" y="120">2</text><text x="105" y="95">3</text></g></g>
-    <g transform="translate(273 33)"><rect width="205" height="202" rx="18" fill="#fff" stroke="#007a70" stroke-width="3"/><text x="102" y="24" font-size="13" font-weight="700" text-anchor="middle">折り角度</text><g font-size="11"><text x="18" y="59">まとめて動かす</text><text x="18" y="99">折り目 1</text><text x="18" y="139">折り目 2</text><text x="18" y="179">折り目 3</text></g><g stroke="#9f93b8" stroke-width="6" stroke-linecap="round"><path d="M110 54h72M110 94h72M110 134h72M110 174h72"/></g><g fill="#007a70"><circle cx="150" cy="54" r="9"/><circle cx="132" cy="94" r="9"/><circle cx="166" cy="134" r="9"/><circle cx="144" cy="174" r="9"/></g><path d="M150 66v20M150 66l-31 16M150 66l9 16M150 66l-13 16" fill="none" stroke="#7040c9" stroke-width="2" marker-end="url(#${arrow})"/></g>
-    <g transform="translate(506 38)"><rect width="178" height="190" rx="18" fill="#fff" stroke="#9f93b8" stroke-width="2"/><text x="89" y="25" font-size="13" font-weight="700" text-anchor="middle">紙を引いて動かす</text><path d="M28 139 80 68l70 67-60-17Z" data-help-paper fill="#ddf8f1" stroke="#27213d" stroke-width="2"/><path d="M80 68l10 50" stroke="#d43c3c" stroke-width="4"/><circle cx="123" cy="92" r="10" fill="#ffd84d" stroke="#7040c9" stroke-width="2"/><path d="M124 92q32-28 28-55" fill="none" stroke="#7040c9" stroke-width="4" marker-end="url(#${arrow})"/><text x="89" y="172" font-size="11" text-anchor="middle">折り目が一緒に動く</text></g>`,
+  new URL("./diagram-assets/figure-angle-controls.png", import.meta.url).href,
+  "figure-angle-controls.png",
 );
 
-const threeDimensionalControls = svg(
+const threeDimensionalControls = rasterSvg(
   "three-dimensional-controls",
   "立体の調整",
   "仕上げの角度、たわみ、ふくらみ、重なり防止で立体を整える様子",
-  (arrow) => `
-    <g font-size="12" font-weight="700" text-anchor="middle">
-      <g transform="translate(32 34)"><rect width="165" height="72" rx="16" fill="#fff" stroke="#7040c9" stroke-width="2"/><text x="82" y="22">この形で仕上げる</text><path d="M42 58 68 32l25 23 28-22 18 25" fill="none" stroke="#7040c9" stroke-width="3"/><g fill="#ffd84d" stroke="#27213d"><circle cx="68" cy="32" r="4"/><circle cx="93" cy="55" r="4"/><circle cx="121" cy="33" r="4"/></g></g>
-      <g transform="translate(523 34)"><rect width="165" height="72" rx="16" fill="#fff" stroke="#007a70" stroke-width="2"/><text x="82" y="22">紙のたわみ</text><path d="M27 40q55 38 111 0" fill="none" stroke="#007a70" stroke-width="5"/><path d="M82 34v27" stroke="#7040c9" stroke-width="3" marker-end="url(#${arrow})"/></g>
-      <g transform="translate(32 176)"><rect width="165" height="72" rx="16" fill="#fff" stroke="#007a70" stroke-width="2"/><text x="82" y="22">ふくらます</text><ellipse cx="82" cy="52" rx="37" ry="14" data-help-paper fill="#ddf8f1" stroke="#007a70" stroke-width="3"/><path d="M82 49V30M50 49 34 38M114 49l16-11" stroke="#7040c9" stroke-width="2" marker-end="url(#${arrow})"/></g>
-      <g transform="translate(523 176)"><rect width="165" height="72" rx="16" fill="#fff" stroke="#ed5c70" stroke-width="2"/><text x="82" y="22">重なり防止</text><path d="M39 60 93 35l38 18-54 17Z" data-help-paper fill="#eee7ff" stroke="#7040c9"/><path d="M34 50 88 25l38 18-54 17Z" data-help-paper fill="#ffd84d" stroke="#27213d"/><path d="M137 30v29M128 45h18" stroke="#ed5c70" stroke-width="4"/></g>
-    </g>
-    <g transform="translate(244 62)"><path d="M18 124 111 17l121 113-111-39Z" data-help-paper fill="#ddf8f1" stroke="#27213d" stroke-width="3"/><path d="M111 17 121 91M18 124l103-33 111 39" fill="none" stroke="#7040c9" stroke-width="3"/><g stroke="#9f93b8" stroke-width="1"><path d="M54 83l100 20M77 56l107 58M94 37l119 82"/><path d="M61 109 131 36M91 114l66-55M124 123l61-36"/></g><path d="M121 91q-5-40-10-74" fill="none" stroke="#007a70" stroke-width="4"/></g>
-    <g fill="none" stroke="#7040c9" stroke-width="3" marker-end="url(#${arrow})"><path d="M197 89 266 113"/><path d="M523 89 454 113"/><path d="M197 211 266 177"/><path d="M523 211 454 177"/></g>`,
+  new URL("./diagram-assets/figure-three-dimensional-controls.png", import.meta.url).href,
+  "figure-three-dimensional-controls.png",
 );
 
-const techniqueCards = svg(
+const techniqueCards = rasterSvg(
   "technique-cards",
   "層操作と8つの名前付き技法",
   "層操作と、段折りからねじり折りまで8種類の名前付き技法を合わせた9つの入口",
-  () => `
-    <g font-size="11" font-weight="700" text-anchor="middle">
-      <g transform="translate(29 22)"><rect width="202" height="65" rx="13" fill="#fff5c2" stroke="#ffd84d" stroke-width="4"/><text x="101" y="17">層操作</text><path d="m57 49 39-17 49 15-39 17Z" data-help-paper fill="#eee7ff" stroke="#7040c9" stroke-width="2"/><path d="m57 40 39-17 49 15-39 17Z" data-help-paper fill="#ddf8f1" stroke="#27213d" stroke-width="2"/><path d="M42 29v24m0-24-7 8m7-8 7 8M160 53V29m0 24-7-8m7 8 7-8" fill="none" stroke="#7040c9" stroke-width="2"/></g>
-      <g transform="translate(259 22)"><rect width="202" height="65" rx="13" fill="#fff" stroke="#9f93b8" stroke-width="2"/><text x="101" y="17">段折り</text><path d="M50 37h102" stroke="#d43c3c" stroke-width="4"/><path d="M50 51h102" stroke="#3b6fc9" stroke-width="4"/></g>
-      <g transform="translate(489 22)"><rect width="202" height="65" rx="13" fill="#fff" stroke="#9f93b8" stroke-width="2"/><text x="101" y="17">中割り折り</text><path d="M65 55 101 25l36 30-36-12Z" data-help-paper fill="#ddf8f1" stroke="#27213d"/><path d="M101 25v29" stroke="#7040c9" stroke-width="3"/></g>
-      <g transform="translate(29 107)"><rect width="202" height="65" rx="13" fill="#fff" stroke="#9f93b8" stroke-width="2"/><text x="101" y="17">かぶせ折り</text><path d="M65 55 101 26l36 29-36-11Z" data-help-paper fill="#eee7ff" stroke="#27213d"/><path d="M76 43q25-25 51 2" fill="none" stroke="#7040c9" stroke-width="3"/></g>
-      <g transform="translate(259 107)"><rect width="202" height="65" rx="13" fill="#fff" stroke="#9f93b8" stroke-width="2"/><text x="101" y="17">開いてつぶす</text><path d="M101 24 66 55h70Z" data-help-paper fill="#ddf8f1" stroke="#27213d"/><path d="M101 28 78 53m23-25 23 25" stroke="#7040c9" stroke-width="3"/></g>
-      <g transform="translate(489 107)"><rect width="202" height="65" rx="13" fill="#fff" stroke="#9f93b8" stroke-width="2"/><text x="101" y="17">花弁折り</text><path d="M66 56 101 25l35 31-35-13Z" data-help-paper fill="#ddf8f1" stroke="#27213d"/><path d="M101 25v31" stroke="#d43c3c" stroke-width="3"/></g>
-      <g transform="translate(29 192)"><rect width="202" height="65" rx="13" fill="#fff" stroke="#9f93b8" stroke-width="2"/><text x="101" y="17">沈め折り</text><path d="M67 55 101 25l34 30Z" data-help-paper fill="#eee7ff" stroke="#27213d"/><path d="M101 28v21" stroke="#ed5c70" stroke-width="4"/><path d="m94 43 7 10 7-10" fill="#ed5c70"/></g>
-      <g transform="translate(259 192)"><rect width="202" height="65" rx="13" fill="#fff" stroke="#9f93b8" stroke-width="2"/><text x="101" y="17">ひだ寄せ</text><path d="M65 55q36-34 72 0M76 55q25-22 51 0" fill="none" stroke="#7040c9" stroke-width="4"/></g>
-      <g transform="translate(489 192)"><rect width="202" height="65" rx="13" fill="#fff" stroke="#9f93b8" stroke-width="2"/><text x="101" y="17">ねじり折り</text><path d="m101 24 27 18-10 20H84L74 42Z" data-help-paper fill="#ffd84d" stroke="#27213d" stroke-width="2"/><path d="M101 24q28 9 20 31" fill="none" stroke="#7040c9" stroke-width="3"/><path d="m116 49 6 8 6-8" fill="#7040c9"/></g>
-    </g>`,
+  new URL("./diagram-assets/figure-technique-cards.png", import.meta.url).href,
+  "figure-technique-cards.png",
 );
 
-const timelineFlow = svg(
+const timelineFlow = rasterSvg(
   "timeline-flow",
   "手順タイムライン",
   "記録した折り手順を選択し、途中へ挿入して自動再生するタイムライン",
-  (arrow) => `
-    <g transform="translate(58 39)"><path d="M20 54 55 20l35 34-35-13Z" data-help-paper fill="#fff" stroke="#27213d"/><path d="M158 54 193 20l35 34-35-13Z" data-help-paper fill="#ddf8f1" stroke="#27213d"/><path d="M296 54 331 20l35 34-35-13Z" data-help-paper fill="#fff5c2" stroke="#27213d"/><path d="M434 54 469 20l35 34-35-13Z" data-help-paper fill="#eee7ff" stroke="#27213d"/></g>
-    <path d="M61 168h598" stroke="#9f93b8" stroke-width="6" stroke-linecap="round"/>
-    <g font-size="11" font-weight="700" text-anchor="middle"><g transform="translate(48 140)"><rect width="104" height="57" rx="14" fill="#fff" stroke="#9f93b8" stroke-width="2"/><text x="52" y="34">1 単純折り</text></g><g transform="translate(181 140)"><rect width="104" height="57" rx="14" fill="#eee7ff" stroke="#7040c9" stroke-width="4"/><text x="52" y="34">2 中割り折り</text></g><g transform="translate(430 140)"><rect width="104" height="57" rx="14" fill="#fff" stroke="#9f93b8" stroke-width="2"/><text x="52" y="34">3 段折り</text></g><g transform="translate(563 140)"><rect width="104" height="57" rx="14" fill="#fff" stroke="#9f93b8" stroke-width="2"/><text x="52" y="34">4 仕上げの角度</text></g></g>
-    <g transform="translate(309 92)"><rect width="96" height="48" rx="14" fill="#fff5c2" stroke="#ffd84d" stroke-width="3"/><text x="48" y="21" font-size="12" font-weight="700" text-anchor="middle">新しい手順</text><text x="48" y="38" font-size="11" text-anchor="middle">途中へ挿入</text><path d="M48 49v42" stroke="#7040c9" stroke-width="4" marker-end="url(#${arrow})"/></g>
-    <g transform="translate(58 224)"><circle cx="22" cy="15" r="15" fill="#007a70"/><path d="m18 8 12 7-12 7Z" fill="var(--color-on-solid, #fff)"/><text x="48" y="20" font-size="13" font-weight="700">自動再生</text><path d="M128 15h100" stroke="#7040c9" stroke-width="3" marker-end="url(#${arrow})"/><text x="245" y="20" font-size="12">手順を順番に折る</text></g>`,
+  new URL("./diagram-assets/figure-timeline-flow.png", import.meta.url).href,
+  "figure-timeline-flow.png",
 );
 
 const proposalWizard = svg(
