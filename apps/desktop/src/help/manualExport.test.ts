@@ -64,7 +64,7 @@ describe("取扱説明書向けの実画面図", () => {
       expect(helpBytes.byteLength).toBeGreaterThanOrEqual(4096);
       expect(pngSize(helpBytes)).toEqual([1800, 700]);
       expect(pngSize(manualBytes)).toEqual([1800, 700]);
-      expect(helpBytes).toEqual(manualBytes);
+      expect(helpBytes.equals(manualBytes)).toBe(true);
     }
   });
 
