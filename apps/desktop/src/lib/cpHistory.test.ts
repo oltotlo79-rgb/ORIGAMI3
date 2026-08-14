@@ -141,4 +141,20 @@ describe("documentForCpStep", () => {
     expect(edgeIds(documentForCpStep(doc, 0))).toContain(30);
     expect(edgeIds(documentForCpStep(doc, 0))).toContain(13);
   });
+
+  // D16は次回に直す。
+  it.fails("D16: 先に描いた折り線を後の手順で使っても折る前から表示する", () => {
+    const doc = documentWithHistory();
+    doc.sequence[0] = {
+      ...doc.sequence[0],
+      alignment: {
+        mode: "existingLine",
+        picks: [{ kind: "line", a: [0.25, 0], b: [0.25, 1] }],
+      },
+    };
+
+    // existingLineは少なくともこの折りより前に線が存在した証拠になる。
+    // ただし通常の折りには同じ証拠が無く、一般解には作成時点の永続的な来歴が必要。
+    expect(edgeIds(documentForCpStep(doc, 0))).toContain(13);
+  });
 });

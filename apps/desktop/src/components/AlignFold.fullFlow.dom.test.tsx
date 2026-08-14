@@ -55,6 +55,7 @@ vi.mock("./Viewer3D/sceneBuilder", async (importOriginal) => {
           scene.content = content;
         }),
         setHighlight: vi.fn(),
+        setSupplementalEdges: vi.fn(),
         setPreview: vi.fn(),
         setSoft: vi.fn((content: unknown) => {
           scene.soft = content;
@@ -84,7 +85,7 @@ vi.mock("../ipc/client", () => ({
 }));
 
 import * as ipc from "../ipc/client";
-import { useAppStore } from "../store/appStore";
+import { useAppStore, type AlignCpPick } from "../store/appStore";
 import { ContextPanel } from "./ContextPanel";
 import { CpEditor } from "./CpEditor/CpEditor";
 import { Timeline } from "./Timeline";
@@ -100,6 +101,7 @@ interface AlignFlowCase {
   kinds: AlignTarget["kind"][];
   expectedPicks2d: AlignTarget[];
   expectedPicks3d: AlignTarget[];
+  expectedCpPicks3d: (AlignCpPick | null)[];
   clicks2d: Vec2[];
   clicks3d: Vec2[];
   direction2d: Direction;
@@ -412,6 +414,7 @@ const P3 = {
 
 const pointTarget = (p: Vec2): AlignTarget => ({ kind: "point", p });
 const lineTarget = (a: Vec2, b: Vec2): AlignTarget => ({ kind: "line", a, b });
+const edgeCpPick = (id: number): AlignCpPick => ({ kind: "edge", id });
 const BL: Vec2 = [0, 0];
 const TL: Vec2 = [0, 1];
 const LEFT_MIDDLE: Vec2 = [0, 0.5];
@@ -428,6 +431,7 @@ const FLOW_CASES: AlignFlowCase[] = [
     kinds: ["point", "point"],
     expectedPicks2d: [pointTarget(RIGHT_MIDDLE), pointTarget(LEFT_MIDDLE)],
     expectedPicks3d: [pointTarget(RIGHT_MIDDLE), pointTarget(LEFT_MIDDLE)],
+    expectedCpPicks3d: [null, null],
     clicks2d: [P2.rightMiddle, P2.leftMiddle],
     clicks3d: [P3.rightMiddle, P3.leftMiddle],
     direction2d: "Up",
@@ -439,6 +443,7 @@ const FLOW_CASES: AlignFlowCase[] = [
     kinds: ["point", "point"],
     expectedPicks2d: [pointTarget(TL), pointTarget(BL)],
     expectedPicks3d: [pointTarget(TL), pointTarget(BL)],
+    expectedCpPicks3d: [null, null],
     clicks2d: [P2.tl, P2.bl],
     clicks3d: [P3.tl, P3.bl],
     direction2d: "Down",
@@ -450,6 +455,7 @@ const FLOW_CASES: AlignFlowCase[] = [
     kinds: ["line", "line"],
     expectedPicks2d: [TOP_LINE, BOTTOM_LINE],
     expectedPicks3d: [TOP_LINE, BOTTOM_LINE],
+    expectedCpPicks3d: [edgeCpPick(4), edgeCpPick(1)],
     clicks2d: [P2.topLine, P2.bottomLine],
     clicks3d: [P3.topLine, P3.bottomLine],
     direction2d: "Up",
@@ -461,6 +467,7 @@ const FLOW_CASES: AlignFlowCase[] = [
     kinds: ["point", "line"],
     expectedPicks2d: [pointTarget(RIGHT_MIDDLE), RIGHT_LOWER_LINE],
     expectedPicks3d: [pointTarget(RIGHT_MIDDLE), RIGHT_LOWER_LINE],
+    expectedCpPicks3d: [null, edgeCpPick(10)],
     clicks2d: [P2.rightMiddle, P2.rightLower],
     clicks3d: [P3.rightMiddle, P3.rightLower],
     direction2d: "Down",
@@ -472,6 +479,7 @@ const FLOW_CASES: AlignFlowCase[] = [
     kinds: ["point", "line", "point"],
     expectedPicks2d: [pointTarget(TL), BOTTOM_LINE, pointTarget(LEFT_MIDDLE)],
     expectedPicks3d: [pointTarget(TL), BOTTOM_LINE, pointTarget(LEFT_MIDDLE)],
+    expectedCpPicks3d: [null, edgeCpPick(1), null],
     clicks2d: [P2.tl, P2.bottomLine, P2.leftMiddle],
     clicks3d: [P3.tl, P3.bottomLine, P3.leftMiddle],
     direction2d: "Up",
@@ -483,6 +491,7 @@ const FLOW_CASES: AlignFlowCase[] = [
     kinds: ["point", "line", "point", "line"],
     expectedPicks2d: [pointTarget(TL), BOTTOM_LINE, pointTarget(BL), TOP_LINE],
     expectedPicks3d: [pointTarget(TL), BOTTOM_LINE, pointTarget(BL), TOP_LINE],
+    expectedCpPicks3d: [null, edgeCpPick(1), null, edgeCpPick(4)],
     clicks2d: [P2.tl, P2.bottomLine, P2.bl, P2.topLine],
     clicks3d: [P3.tl, P3.bottomLine, P3.bl, P3.topLine],
     direction2d: "Down",
@@ -494,6 +503,7 @@ const FLOW_CASES: AlignFlowCase[] = [
     kinds: ["point", "line", "line"],
     expectedPicks2d: [pointTarget(TL), BOTTOM_LINE, RIGHT_LOWER_LINE],
     expectedPicks3d: [pointTarget(TL), BOTTOM_LINE, RIGHT_LOWER_LINE],
+    expectedCpPicks3d: [null, edgeCpPick(1), edgeCpPick(10)],
     clicks2d: [P2.tl, P2.bottomLine, P2.rightLower],
     clicks3d: [P3.tl, P3.bottomLine, P3.rightLower],
     direction2d: "Up",
@@ -505,6 +515,7 @@ const FLOW_CASES: AlignFlowCase[] = [
     kinds: ["line"],
     expectedPicks2d: [MIDDLE_LEFT_LINE],
     expectedPicks3d: [MIDDLE_LEFT_LINE],
+    expectedCpPicks3d: [edgeCpPick(9)],
     clicks2d: [P2.middleLine],
     clicks3d: [P3.middleLine],
     direction2d: "Down",
@@ -709,7 +720,9 @@ function chooseModeAndTargets(
     expect(draft?.cpPicks).toHaveLength(testCase.kinds.length);
     expect(draft?.cpPicks?.every((pick) => pick !== null)).toBe(true);
   } else {
-    expect(draft?.cpPicks).toEqual(testCase.kinds.map(() => null));
+    // 重なった線では、3Dで実際に見えている前面ownerのCP辺IDを保持する。
+    // 点には3D上の頂点ID対応をまだ持たせないため、従来どおりnullのまま。
+    expect(draft?.cpPicks).toEqual(testCase.expectedCpPicks3d);
   }
   return {
     picks: [...(draft?.picks ?? [])],
