@@ -989,6 +989,12 @@ function pruneSelection(selection: Selection, doc: Document): Selection {
 
 export const useAppStore = create<AppState>((set, get) => {
   const queue = createSerialQueue();
+  /**
+   * 直前に開始した作品変更が、返されたDocumentViewをストアへ反映し終えるまでの約束。
+   * IPCのFIFOだけでは、後続操作が呼ばれた瞬間に読むdocまでは新しくならないため、
+   * 現在値を材料に次の操作を組み立てる箇所はこれを待つ。
+   */
+  let latestDocChange: Promise<void> = Promise.resolve();
   const prefs = loadPrefs();
   let onboarding = loadOnboarding();
 
@@ -1283,12 +1289,18 @@ export const useAppStore = create<AppState>((set, get) => {
    * 「元に戻す」を作品側(edit_undo)へ回す。断られたときは何も変わって
    * いないので角度の履歴はそのまま残す(角度を戻せなくならないように)。
    */
-  const applyDocChange = async (
+  const applyDocChange = (
     task: () => Promise<DocumentView>,
     isNewDocument = false,
   ): Promise<void> => {
-    await runViewCommand(task, isNewDocument);
-    if (get().errorMessage === null) clearAngleHistory();
+    const pending = (async () => {
+      await runViewCommand(task, isNewDocument);
+      if (get().errorMessage === null) clearAngleHistory();
+    })();
+    // 後続操作が待つためのPromiseはrejectを外へ漏らさない。呼び出し元には元の
+    // pendingを返すので、これまでどおり個別の失敗を観測できる。
+    latestDocChange = pending.catch(() => undefined);
+    return pending;
   };
 
   /** 現在の指定を必ず有効な基準線へ解決する。不正な一時状態は縦中心へ安全に戻す。 */
@@ -3407,12 +3419,21 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     moveStep: async (number, delta) => {
-      const s = get();
-      const steps = s.doc?.sequence ?? [];
-      const from = number - 1;
+      const visibleSteps = get().doc?.sequence ?? [];
+      const visibleFrom = number - 1;
+      const visibleTo = visibleFrom + delta;
+      const id = visibleSteps[visibleFrom]?.id;
+      if (id === undefined || visibleTo < 0 || visibleTo >= visibleSteps.length) return;
+
+      // 覚え書き・折り方の確定直後は、UpdateStepがFIFOに積まれていてもdocは
+      // まだ旧値のことがある。確定結果の反映を待ち、IDから最新の手順を取り直す。
+      const changesBeforeMove = latestDocChange;
+      await changesBeforeMove;
+      const steps = get().doc?.sequence ?? [];
+      const from = steps.findIndex((candidate) => candidate.id === id);
       const to = from + delta;
       const step = steps[from];
-      if (!step || to < 0 || to >= steps.length) return;
+      if (!step || from < 0 || to < 0 || to >= steps.length) return;
       // 途中への挿入はSeqOpに用意されているが、折り操作そのものを途中へ
       // 挟むのは断る仕様なので、既にある手順の位置替えとして使う
       // (取り除いてから入れ直す。元に戻すは2回ぶんになる)

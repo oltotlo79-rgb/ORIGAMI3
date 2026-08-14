@@ -224,7 +224,7 @@ export function CpEditor({ fitRef }: Props) {
       directionGuide,
       mirrorAxis: axisSegment,
       mirrorPreview:
-        axis !== null && preview
+        axis !== null && preview && activeTool !== "fold"
           ? {
               a: mirrorPoint(preview.a, axis),
               b: mirrorPoint(preview.b, axis),

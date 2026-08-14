@@ -267,6 +267,47 @@ afterEach(() => {
   });
 });
 
+describe("CpEditor 2D折りの下見", () => {
+  it.each([
+    ["OFF", false],
+    ["ON", true],
+  ] as const)("D14: 左右対称%sでも下見と確定は1本で一致する", async (_label, mirrorDraw) => {
+    useAppStore.setState({
+      activeTool: "fold",
+      mirrorDraw,
+      mirrorAxis: { kind: "paperVertical" },
+      pendingFoldThrough: null,
+      alignDraft: null,
+      foldDraft: null,
+      frame3d: null,
+    });
+    const fitRef = { current: null } as React.RefObject<(() => void) | null>;
+    const view = render(<CpEditor fitRef={fitRef} />);
+    const canvas = view.container.querySelector("canvas");
+    if (!canvas) throw new Error("展開図のcanvasがない");
+
+    const first: Vec2 = [100, 100];
+    const second: Vec2 = [100, 300];
+    pointerClick(canvas, first);
+    fireEvent.pointerMove(canvas, {
+      pointerId: 1,
+      clientX: second[0],
+      clientY: second[1],
+    });
+
+    await waitFor(() => {
+      const overlay = held.overlay as RenderOverlay;
+      expect([overlay.preview, overlay.mirrorPreview].filter(Boolean)).toHaveLength(1);
+    });
+    const preview = (held.overlay as RenderOverlay).preview;
+    if (!preview) throw new Error("2D折りの下見がない");
+    const previewLine: [Vec2, Vec2] = [preview.a, preview.b];
+
+    pointerClick(canvas, second);
+    await waitFor(() => expect(useAppStore.getState().foldDraft?.line).toEqual(previewLine));
+  });
+});
+
 describe("CpEditor 合わせて折る", () => {
   it.each(ALIGN_2D_CASES)(
     "$labelは2Dで順番どおり選ぶとalignDraftに入り下見が出る",

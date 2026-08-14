@@ -576,6 +576,72 @@ describe("作品を切り替えたときの対称基準", () => {
 });
 
 describe("手順の並べ替え", () => {
+  async function moveWhileUpdateIsPending(
+    delayMs: number,
+    patch: Partial<Pick<FoldStep, "note" | "kind">>,
+  ): Promise<FoldStep[]> {
+    let backend = makeDoc([step(1), step(2), step(3)]);
+    let releaseUpdate!: () => void;
+    const updateGate = new Promise<void>((resolve) => {
+      releaseUpdate = resolve;
+    });
+    vi.mocked(ipc.sequenceApply).mockImplementation(async (op) => {
+      if (op.type === "UpdateStep") {
+        await updateGate;
+        backend = {
+          ...backend,
+          sequence: backend.sequence.map((item) =>
+            item.id === op.step.id ? structuredClone(op.step) : item,
+          ),
+        };
+      } else if (op.type === "RemoveStep") {
+        backend = {
+          ...backend,
+          sequence: backend.sequence.filter((item) => item.id !== op.id),
+        };
+      } else if (op.type === "InsertStep") {
+        const sequence = [...backend.sequence];
+        sequence.splice(op.index, 0, structuredClone(op.step));
+        backend = { ...backend, sequence };
+      }
+      return makeView(structuredClone(backend));
+    });
+    vi.mocked(ipc.sequenceReplay).mockResolvedValue({
+      frame: { faces: [], warnings: [] },
+      skipped: [],
+      warnings: [],
+    });
+    useAppStore.setState({ doc: structuredClone(backend) });
+
+    const changed = { ...step(3), ...patch };
+    const update = useAppStore
+      .getState()
+      .applySequenceOp({ type: "UpdateStep", step: changed });
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    const move = useAppStore.getState().moveStep(3, -1);
+    releaseUpdate();
+    await Promise.all([update, move]);
+    return useAppStore.getState().doc?.sequence ?? [];
+  }
+
+  it.each([0, 1, 100])(
+    "D08: 覚え書きの確定から%dms後に前へ動かしても新しい内容を保つ",
+    async (delayMs) => {
+      const sequence = await moveWhileUpdateIsPending(delayMs, { note: "書き直した覚え書き" });
+      expect(sequence.map((item) => item.id)).toEqual([1, 3, 2]);
+      expect(sequence[1].note).toBe("書き直した覚え書き");
+    },
+  );
+
+  it.each([0, 1, 100])(
+    "D08: 折り方の確定から%dms後に前へ動かしても新しい種類を保つ",
+    async (delayMs) => {
+      const sequence = await moveWhileUpdateIsPending(delayMs, { kind: "InsideReverse" });
+      expect(sequence.map((item) => item.id)).toEqual([1, 3, 2]);
+      expect(sequence[1].kind).toBe("InsideReverse");
+    },
+  );
+
   it("選んだ手順を前へ動かすと、取り除いてから同じ手順を入れ直す", async () => {
     const doc = makeDoc([step(1), step(2), step(3)]);
     useAppStore.setState({ doc });
