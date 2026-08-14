@@ -3,8 +3,8 @@ import type { HelpChapter } from "../helpTypes";
 export const proposalChapter = {
   id: "proposal",
   number: 10,
-  title: "骨格から展開図を提案",
-  summary: "骨格とは頭・尾・足などの出っぱりの並びです。形を決め、最大4つの展開図候補から選べます。",
+  title: "形から展開図を提案",
+  summary: "頭・尾・足などの出っぱりの並びから形を決め、最大4つの展開図候補から選べます。",
   blocks: [
     {
       type: "paragraph",
@@ -17,7 +17,7 @@ export const proposalChapter = {
       items: [
         { title: "上部の「提案」を押す", description: "「形を決めて展開図を作ってもらう」画面が開きます。" },
         { title: "出っぱりを整える", description: "最初は頭・尾・右前足・左前足の4本です。それぞれの「長さ」と「太さ」を動かし、左の見本で形を確かめます。" },
-        { title: "本数を変える", description: "「出っぱりを増やす」または各行の×を使い、1〜12本にします。" },
+        { title: "出っぱりを足す", description: "「出っぱりを増やす」は胴から増やし、各行の「＋ この先に足す」は選んだ出っぱりの先へ足します。新しく足した先でも同じ操作を繰り返せます。×でその出っぱりとその先を消せます。先端は1〜12本です。" },
         { title: "候補を作る", description: "「展開図を作ってもらう」を押します。候補ができると最大4つの展開図が並びます。" },
       ],
     },

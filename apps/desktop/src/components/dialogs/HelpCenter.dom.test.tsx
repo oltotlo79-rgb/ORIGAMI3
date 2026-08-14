@@ -74,10 +74,10 @@ describe("ヘルプセンター", () => {
     render(<HelpCenter />);
     const search = screen.getByRole("searchbox", { name: "章題・本文を検索" });
 
-    fireEvent.change(search, { target: { value: "骨格から展開図" } });
+    fireEvent.change(search, { target: { value: "形から展開図" } });
     expect(screen.getByText("1章が見つかりました")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /骨格から展開図を提案/ })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "骨格から展開図を提案" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /形から展開図を提案/ })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "形から展開図を提案" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /画面の見かた/ })).toBeNull();
 
     fireEvent.change(search, { target: { value: "ベジェ曲線" } });

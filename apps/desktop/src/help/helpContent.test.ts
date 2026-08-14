@@ -29,6 +29,19 @@ function manualImage(block: HelpBlock): string | null {
   return null;
 }
 
+function userFacingBlockText(block: HelpBlock): string {
+  if (block.type === "screenshot") return block.caption;
+  if (block.type !== "figure") return helpBlockText(block);
+
+  const diagram = HELP_DIAGRAMS[block.diagramId];
+  const svgText = diagram.svg.replace(/<[^>]*>/g, " ");
+  return [diagram.title, diagram.alt, svgText].join(" ");
+}
+
+function userFacingChapterText(chapter: (typeof HELP_CHAPTERS)[number]): string {
+  return [chapter.title, chapter.summary, ...chapter.blocks.map(userFacingBlockText)].join(" ");
+}
+
 describe("ヘルプと取扱説明書PDFの共通内容源", () => {
   it("13章が番号順に並び、章IDと題がそろっている", () => {
     expect(HELP_CHAPTERS).toHaveLength(13);
@@ -127,8 +140,157 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
     expect(JSON.parse(JSON.stringify(HELP_CHAPTERS))).toEqual(HELP_CHAPTERS);
     const proposal = HELP_CHAPTERS.find((chapter) => chapter.id === "proposal");
     const crease = HELP_CHAPTERS.find((chapter) => chapter.id === "crease-pattern");
-    expect(proposal && helpChapterSearchText(proposal)).toContain("骨格から展開図を提案");
+    expect(proposal && helpChapterSearchText(proposal)).toContain("形から展開図を提案");
     expect(crease && helpChapterSearchText(crease)).toContain("ベジェ曲線");
+  });
+
+  it("v0.4.4で加わった利用者向け8機能を既存章で説明する", () => {
+    const features = [
+      {
+        number: 4,
+        checks: [
+          {
+            chapterId: "fold",
+            phrases: [
+              "8種類で必要な点や線",
+              "2D展開図と3D立体表示のどちらからでも押して選べます",
+            ],
+          },
+        ],
+      },
+      {
+        number: 5,
+        checks: [
+          {
+            chapterId: "three-dimensional",
+            phrases: ["補助線と紙のふち（輪郭の辺）も選べます"],
+          },
+        ],
+      },
+      {
+        number: 6,
+        checks: [
+          {
+            chapterId: "crease-pattern",
+            phrases: [
+              "山・谷・補助のまっすぐな線",
+              "紙の外を押しても線は作られず",
+              "紙のふちにある点は動かせません",
+            ],
+          },
+        ],
+      },
+      {
+        number: 7,
+        checks: [
+          {
+            chapterId: "proposal",
+            phrases: [
+              "形から展開図を提案",
+              "＋ この先に足す",
+              "新しく足した先でも同じ操作を繰り返せます",
+              "先端は1〜12本",
+            ],
+          },
+        ],
+      },
+      {
+        number: 8,
+        checks: [
+          {
+            chapterId: "crease-pattern",
+            phrases: [
+              "二等分・垂線・等分・角度線を途中で切り替えた場合",
+              "「曲線で描く」のオン・オフや円弧・ベジェの切り替え",
+              "すでに完成した線は残ります",
+            ],
+          },
+        ],
+      },
+      {
+        number: 9,
+        checks: [
+          {
+            chapterId: "timeline",
+            phrases: [
+              "後の手順で足される未表示の線",
+              "選ぶ・消す・吸着する・作図の基準にすることはできません",
+              "「最新」を押すと",
+            ],
+          },
+        ],
+      },
+      {
+        number: 10,
+        checks: [
+          {
+            chapterId: "angles",
+            phrases: ["「引く」を押す", "立体表示の紙を左ボタンでつかみ"],
+          },
+          {
+            chapterId: "techniques",
+            phrases: [
+              "ほかの技法は、中心線や折り返す線を立体表示でドラッグします",
+              "立体表示をCtrl+クリック",
+            ],
+          },
+        ],
+      },
+      {
+        number: 11,
+        checks: [
+          {
+            chapterId: "three-dimensional",
+            phrases: [
+              "「この形で仕上げる」は作業を終えるボタンではなく、一手を記録します",
+              "その姿から続けて折れます",
+              "新しい折り線は2D展開図へ、次の手順はタイムラインへ加わります",
+            ],
+          },
+        ],
+      },
+    ] as const;
+
+    expect(features).toHaveLength(8);
+    expect(features.map((feature) => feature.number)).toEqual([4, 5, 6, 7, 8, 9, 10, 11]);
+    for (const feature of features) {
+      for (const check of feature.checks) {
+        const chapter = HELP_CHAPTERS.find((entry) => entry.id === check.chapterId);
+        expect(chapter, `機能#${feature.number}: ${check.chapterId}`).toBeDefined();
+        const text = helpChapterSearchText(chapter!);
+        for (const phrase of check.phrases) {
+          expect(text, `機能#${feature.number}: ${phrase}`).toContain(phrase);
+        }
+      }
+    }
+  });
+
+  it("利用者向け文字列に指定された内部用語が0件である", () => {
+    const internalTerms = [
+      "骨格",
+      "木",
+      "節点",
+      "根",
+      "充填",
+      "ソルバー",
+      "ヤコビアン",
+      "hard",
+      "soft",
+      "warm start",
+      "イテレーション",
+    ] as const;
+    const violations: string[] = [];
+
+    for (const chapter of HELP_CHAPTERS) {
+      const text = userFacingChapterText(chapter).toLowerCase().replace(/[\s-]+/g, " ");
+      for (const term of internalTerms) {
+        if (text.includes(term.toLowerCase())) {
+          violations.push(`第${chapter.number}章「${chapter.title}」: ${term}`);
+        }
+      }
+    }
+
+    expect(violations).toEqual([]);
   });
 
   it("対称描画の目的・3つの基準・画面での選び方を利用者向けに説明する", () => {
