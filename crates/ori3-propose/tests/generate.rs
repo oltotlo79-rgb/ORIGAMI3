@@ -85,6 +85,53 @@ fn generated_cp_passes_cp_validate() {
 }
 
 #[test]
+fn depth_three_branching_skeleton_packs_and_generates_valid_cp() {
+    // 0=胴、1=途中、その先に3・6・7が分岐する深さ3の形。
+    // 2・4・5は胴から直接出し、従来の放射状の部分も同じ入力に残す。
+    let s = Skeleton {
+        nodes: vec![
+            SkeletonNode::new(0, None, 0.0),
+            SkeletonNode::new(1, Some(0), 0.3),
+            SkeletonNode::new(2, Some(0), 1.0),
+            SkeletonNode::new(3, Some(1), 1.0),
+            SkeletonNode::new(4, Some(0), 0.6),
+            SkeletonNode::new(5, Some(0), 0.6),
+            SkeletonNode::new(6, Some(1), 0.6),
+            SkeletonNode::new(7, Some(1), 0.6),
+        ],
+    };
+    assert_eq!(
+        s.nodes.iter().filter(|node| node.parent == Some(1)).count(),
+        3,
+        "途中から出る先端が3本でない"
+    );
+
+    let candidates = pack(&s, 1.0, 1.0, 2026, 8);
+    let candidate_count = candidates.len();
+    assert!(candidate_count >= 1, "候補が{candidate_count}件しかない");
+
+    let result = generate(&s, &candidates[0], 1.0, 1.0).expect("深さ3の形から生成できない");
+    let fold_line_count = result
+        .cp
+        .edges
+        .iter()
+        .filter(|edge| edge.kind != EdgeKind::Border)
+        .count();
+    assert!(
+        fold_line_count >= 1,
+        "輪郭以外の折り線が{fold_line_count}本しかない"
+    );
+
+    let validation_warnings = validate(&result.cp);
+    assert_eq!(
+        validation_warnings.len(),
+        0,
+        "展開図の点検警告が{}件ある: {validation_warnings:?}",
+        validation_warnings.len()
+    );
+}
+
+#[test]
 fn one_to_twelve_leaves_do_not_panic() {
     for n in 1..=12u32 {
         for (w, h) in [(1.0, 1.0), (1.0, 0.6)] {

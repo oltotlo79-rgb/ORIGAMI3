@@ -4,7 +4,14 @@
 // 候補を選んで「この展開図を使う」と edit_apply ReplaceCreasePattern が飛ぶ。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 
 vi.mock("../../ipc/client", () => ({
   documentNew: vi.fn(),
@@ -24,7 +31,12 @@ vi.mock("../../ipc/client", () => ({
 import * as ipc from "../../ipc/client";
 import { ProposalWizard, violationLabel } from "./ProposalWizard";
 import { useAppStore } from "../../store/appStore";
-import { defaultSkeleton, limbs } from "../../lib/skeleton";
+import {
+  defaultSkeleton,
+  leafNodes,
+  limbs,
+  skeletonRows,
+} from "../../lib/skeleton";
 import type { CreasePattern, DocumentView, ProposalCandidate } from "../../lib/types";
 
 /** markで区別できる最小の展開図(正方形の輪郭だけ) */
@@ -78,6 +90,30 @@ const VIEW: DocumentView = {
   skipped: [],
 };
 
+function shapeRow(container: HTMLElement, id: number): HTMLElement {
+  const row = container.querySelector<HTMLElement>(`[data-shape-row="${id}"]`);
+  expect(row).not.toBeNull();
+  return row!;
+}
+
+/** 画面上の指定行から1本足し、新しくできた部分のIDを返す。 */
+function extendFrom(container: HTMLElement, parentId: number): number {
+  const before = new Set(
+    useAppStore.getState().proposalSkeleton.nodes.map((node) => node.id),
+  );
+  const row = shapeRow(container, parentId);
+  const add = within(row).getByRole("button", { name: /のこの先に足す$/u });
+  expect(add.textContent?.trim()).toBe("＋ この先に足す");
+  fireEvent.click(add);
+  const added = useAppStore
+    .getState()
+    .proposalSkeleton.nodes.find(
+      (node) => node.parent === parentId && !before.has(node.id),
+    );
+  expect(added).toBeDefined();
+  return added!.id;
+}
+
 beforeEach(() => {
   vi.mocked(ipc.editApply).mockResolvedValue(VIEW);
   useAppStore.getState().closeProposal();
@@ -102,14 +138,232 @@ describe("提案ウィザード", () => {
 
   it("出っぱりを増やす・減らすと本数が変わる", () => {
     useAppStore.getState().openProposal();
-    render(<ProposalWizard />);
+    const { container } = render(<ProposalWizard />);
     expect(limbs(useAppStore.getState().proposalSkeleton)).toHaveLength(4);
 
     fireEvent.click(screen.getByRole("button", { name: "出っぱりを増やす" }));
     expect(limbs(useAppStore.getState().proposalSkeleton)).toHaveLength(5);
 
-    fireEvent.click(screen.getByRole("button", { name: "頭を減らす" }));
+    const head = skeletonRows(useAppStore.getState().proposalSkeleton)[0];
+    fireEvent.click(
+      within(shapeRow(container, head.node.id)).getByRole("button", {
+        name: "頭とその先を消す",
+      }),
+    );
     expect(limbs(useAppStore.getState().proposalSkeleton)).toHaveLength(4);
+  });
+
+  it("対象行からその先と、そのさらに先を足せる", () => {
+    useAppStore.getState().openProposal();
+    const { container } = render(<ProposalWizard />);
+    const head = skeletonRows(useAppStore.getState().proposalSkeleton)[0];
+
+    fireEvent.change(
+      within(shapeRow(container, head.node.id)).getByRole("slider", {
+        name: "頭の太さ",
+      }),
+      { target: { value: "1.8" } },
+    );
+    const nextId = extendFrom(container, head.node.id);
+    expect(
+      within(shapeRow(container, head.node.id)).queryByRole("slider", {
+        name: "頭の太さ",
+      }),
+    ).toBeNull();
+    const inheritedWidth = within(shapeRow(container, nextId)).getByRole(
+      "slider",
+      {
+        name: "頭のその先1の太さ",
+      },
+    ) as HTMLInputElement;
+    expect(inheritedWidth.value).toBe("1.8");
+    const fartherId = extendFrom(container, nextId);
+    const siblingId = extendFrom(container, head.node.id);
+    const skeleton = useAppStore.getState().proposalSkeleton;
+
+    expect(skeleton.nodes.find((node) => node.id === nextId)?.parent).toBe(
+      head.node.id,
+    );
+    expect(skeleton.nodes.find((node) => node.id === fartherId)?.parent).toBe(
+      nextId,
+    );
+    expect(skeleton.nodes.find((node) => node.id === siblingId)?.parent).toBe(
+      head.node.id,
+    );
+    expect(skeleton.nodes.filter((node) => node.parent === head.node.id)).toHaveLength(
+      2,
+    );
+    expect(shapeRow(container, nextId).textContent).toContain("その先1");
+    expect(shapeRow(container, siblingId).textContent).toContain("その先2");
+    expect(shapeRow(container, nextId).dataset.indentLevel).toBe("2");
+    expect(shapeRow(container, fartherId).dataset.indentLevel).toBe("3");
+  });
+
+  it("先端が12本でも既存の先は延ばせるが、新しい分かれ道は増やさない", () => {
+    useAppStore.getState().openProposal();
+    const { container } = render(<ProposalWizard />);
+    const addFromBody = screen.getByRole("button", {
+      name: "出っぱりを増やす",
+    }) as HTMLButtonElement;
+    for (let i = 4; i < 12; i++) fireEvent.click(addFromBody);
+    expect(leafNodes(useAppStore.getState().proposalSkeleton)).toHaveLength(12);
+    expect(addFromBody.disabled).toBe(true);
+    expect(addFromBody.title).toBe("先端は12本までです");
+
+    const head = skeletonRows(useAppStore.getState().proposalSkeleton)[0];
+    const nextId = extendFrom(container, head.node.id);
+    expect(leafNodes(useAppStore.getState().proposalSkeleton)).toHaveLength(12);
+
+    const headAdd = within(shapeRow(container, head.node.id)).getByRole(
+      "button",
+      { name: "頭のこの先に足す" },
+    ) as HTMLButtonElement;
+    const nextAdd = within(shapeRow(container, nextId)).getByRole("button", {
+      name: /のこの先に足す$/u,
+    }) as HTMLButtonElement;
+    expect(headAdd.disabled).toBe(true);
+    expect(headAdd.title).toBe("先端は12本までです");
+    expect(nextAdd.disabled).toBe(false);
+  });
+
+  it("親を消すと、その先を取り残さず一緒に消す", () => {
+    useAppStore.getState().openProposal();
+    const { container } = render(<ProposalWizard />);
+    const head = skeletonRows(useAppStore.getState().proposalSkeleton)[0];
+    const nextId = extendFrom(container, head.node.id);
+    const fartherId = extendFrom(container, nextId);
+
+    fireEvent.click(
+      within(shapeRow(container, head.node.id)).getByRole("button", {
+        name: "頭とその先を消す",
+      }),
+    );
+
+    const remaining = useAppStore.getState().proposalSkeleton.nodes;
+    expect(
+      remaining.filter((node) =>
+        [head.node.id, nextId, fartherId].includes(node.id),
+      ),
+    ).toHaveLength(0);
+    expect(container.querySelector(`[data-shape-row="${nextId}"]`)).toBeNull();
+    expect(
+      container.querySelector(`[data-shape-row="${fartherId}"]`),
+    ).toBeNull();
+  });
+
+  it("深さ3以上の形をそのまま候補生成へ渡す", async () => {
+    vi.mocked(ipc.proposalGenerate).mockResolvedValue([makeCandidate(12, 0)]);
+    useAppStore.getState().openProposal();
+    const { container } = render(<ProposalWizard />);
+    const head = skeletonRows(useAppStore.getState().proposalSkeleton)[0];
+    const nextId = extendFrom(container, head.node.id);
+    const fartherId = extendFrom(container, nextId);
+
+    fireEvent.click(screen.getByRole("button", { name: "展開図を作ってもらう" }));
+    await vi.waitFor(() => expect(ipc.proposalGenerate).toHaveBeenCalledTimes(1));
+
+    const sent = vi.mocked(ipc.proposalGenerate).mock.calls[0][0];
+    expect(sent.nodes.find((node) => node.id === nextId)?.parent).toBe(
+      head.node.id,
+    );
+    expect(sent.nodes.find((node) => node.id === fartherId)?.parent).toBe(
+      nextId,
+    );
+  });
+
+  it("形見本は親の終点からその先を描く", () => {
+    useAppStore.getState().openProposal();
+    const { container } = render(<ProposalWizard />);
+    const head = skeletonRows(useAppStore.getState().proposalSkeleton)[0];
+    const nextId = extendFrom(container, head.node.id);
+    const parentLine = container.querySelector<SVGLineElement>(
+      `[data-preview-part="${head.node.id}"]`,
+    );
+    const childLine = container.querySelector<SVGLineElement>(
+      `[data-preview-part="${nextId}"]`,
+    );
+    const parentLabel = container.querySelector<SVGTextElement>(
+      `[data-preview-label="${head.node.id}"]`,
+    );
+
+    expect(screen.getByRole("img", { name: "形見本" })).not.toBeNull();
+    expect(parentLine).not.toBeNull();
+    expect(childLine).not.toBeNull();
+    expect(parentLabel).not.toBeNull();
+    expect(Number(childLine!.getAttribute("x1"))).toBeCloseTo(
+      Number(parentLine!.getAttribute("x2")),
+      12,
+    );
+    expect(Number(childLine!.getAttribute("y1"))).toBeCloseTo(
+      Number(parentLine!.getAttribute("y2")),
+      12,
+    );
+    const labelX = Number(parentLabel!.getAttribute("x"));
+    const labelY = Number(parentLabel!.getAttribute("y"));
+    const childX1 = Number(childLine!.getAttribute("x1"));
+    const childY1 = Number(childLine!.getAttribute("y1"));
+    const childX2 = Number(childLine!.getAttribute("x2"));
+    const childY2 = Number(childLine!.getAttribute("y2"));
+    const cross = Math.abs(
+      (labelX - childX1) * (childY2 - childY1) -
+        (labelY - childY1) * (childX2 - childX1),
+    );
+    expect(cross).toBeGreaterThan(1e-9);
+  });
+
+  it("深く足しても字下げを抑えて行を折り返し、横へ隠さない", () => {
+    useAppStore.getState().openProposal();
+    const { container } = render(<ProposalWizard />);
+    let current = skeletonRows(
+      useAppStore.getState().proposalSkeleton,
+    )[0].node.id;
+    for (let i = 0; i < 7; i++) current = extendFrom(container, current);
+
+    const dialog = screen.getByRole("dialog");
+    const list = container.querySelector<HTMLElement>("[data-shape-list]");
+    const rows = Array.from(
+      container.querySelectorAll<HTMLElement>("[data-shape-row]"),
+    );
+    const deepest = shapeRow(container, current);
+    expect(dialog.style.width).toBe("calc(100vw - 48px)");
+    expect(dialog.style.maxWidth).toBe("720px");
+    expect(dialog.style.boxSizing).toBe("border-box");
+    expect(dialog.style.overflowX).not.toBe("hidden");
+    expect(list?.style.minWidth).toBe("0px");
+    expect(list?.style.overflowX).not.toBe("hidden");
+    expect(deepest.style.flexWrap).toBe("wrap");
+    expect(deepest.style.boxSizing).toBe("border-box");
+    expect(
+      Math.max(
+        ...rows.map((row) => parseFloat(row.style.marginInlineStart)),
+      ),
+    ).toBe(48);
+    const deepestName = deepest.querySelector<HTMLElement>(".limb-name");
+    expect(deepestName?.style.overflowWrap).toBe("anywhere");
+    expect(deepestName?.style.minWidth).toBe("0px");
+    expect(deepestName?.textContent?.split("›")).toHaveLength(8);
+    const deepestAdd = within(deepest).getByRole("button", {
+      name: /のこの先に足す$/u,
+    });
+    expect(deepestAdd.style.maxWidth).toBe("100%");
+    expect(deepestAdd.style.whiteSpace).toBe("normal");
+    const preview = screen.getByRole("img", { name: "形見本" });
+    expect(preview.style.width).toBe("100%");
+    expect(preview.style.maxWidth).toBe("200px");
+    for (const slider of within(deepest).getAllByRole("slider")) {
+      expect(slider.style.minWidth).toBe("0px");
+      expect(slider.style.maxWidth).toBe("100%");
+    }
+
+    const visibleAndNamed = [
+      dialog.textContent ?? "",
+      ...Array.from(
+        dialog.querySelectorAll<HTMLElement>("[aria-label]"),
+        (node) => node.getAttribute("aria-label") ?? "",
+      ),
+    ].join("\n");
+    expect(visibleAndNamed).not.toMatch(/木|節点|根|深さ/u);
+    expect(leafNodes(useAppStore.getState().proposalSkeleton)).toHaveLength(4);
   });
 
   it("長さのスライダーが骨格に反映される", () => {
@@ -222,6 +476,7 @@ describe("提案ウィザード", () => {
       "soft",
       "warm start",
       "イテレーション",
+      "深さ",
     ];
     const internalMessage = `${internalTerms.join(" / ")} / 角17の円 / 節点ID 42`;
     const visibleMessages = (container: HTMLElement) =>

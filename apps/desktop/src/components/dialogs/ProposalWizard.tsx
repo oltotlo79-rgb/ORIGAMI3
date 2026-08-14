@@ -10,16 +10,18 @@ import {
   MIN_LIMBS,
   WIDTH_RANGE,
   addLimb,
-  limbLabel,
-  limbs,
+  canAddLimb,
+  canRemoveLimb,
+  leafNodes,
   removeLimb,
   setLimb,
+  skeletonRows,
 } from "../../lib/skeleton";
 import { SkeletonPreview } from "./SkeletonPreview";
 import { CpThumbnail } from "./CpThumbnail";
 
 const INTERNAL_PROPOSAL_WORDS =
-  /骨格|充填|ソルバー|ヤコビアン|hard|soft|warm[\s-]+start|イテレーション|内部エラー|節点|木構造|円の中心|角|ID/iu;
+  /骨格|充填|ソルバー|ヤコビアン|hard|soft|warm[\s-]+start|イテレーション|内部エラー|節点|木|根|深さ|円の中心|角|ID/iu;
 const INTERNAL_MESSAGE_SHAPE = /[A-Za-z_{}[\]=]|\d/iu;
 
 type ProposalMessageKind = "initial-error" | "retry-error" | "warning";
@@ -65,74 +67,209 @@ function SkeletonStep() {
   const busy = useAppStore((s) => s.proposalBusy);
   const error = useAppStore((s) => s.proposalError);
   const close = useAppStore((s) => s.closeProposal);
-  const list = limbs(skeleton);
+  const leaves = leafNodes(skeleton);
+  const leafIds = new Set(leaves.map((node) => node.id));
+  const rows = skeletonRows(skeleton);
+  const rowById = new Map(rows.map((row) => [row.node.id, row]));
+  const pathParts = new Map(
+    rows.map((row) => {
+      const labels = [row.label];
+      let parent = row.node.parent;
+      while (parent !== null) {
+        const parentRow = rowById.get(parent);
+        if (!parentRow) break;
+        labels.unshift(parentRow.label);
+        parent = parentRow.node.parent;
+      }
+      return [row.node.id, labels] as const;
+    }),
+  );
+  const lastChildByParent = new Map<number, number>();
+  for (const row of rows) {
+    if (row.node.parent !== null) {
+      lastChildByParent.set(row.node.parent, row.node.id);
+    }
+  }
 
   return (
     <>
       <p>
         頭・尾・足のような「出っぱり」を{MIN_LIMBS}〜{MAX_LIMBS}
-        本まで決められます。長さと太さを変えると、下の絵がそのまま変わります。
+        本まで決められます。それぞれの先へ足すこともでき、長さと先端の太さを変えると下の絵がそのまま変わります。
       </p>
-      <div className="proposal-body">
-        <div role="img" aria-label={`出っぱり${list.length}本の形見本`}>
-          <div aria-hidden="true">
-            <SkeletonPreview skeleton={skeleton} />
-          </div>
+      <div
+        className="proposal-body"
+        style={{ flexWrap: "wrap", minWidth: 0, maxWidth: "100%" }}
+      >
+        <div style={{ flex: "0 1 200px", minWidth: 0, maxWidth: "100%" }}>
+          <SkeletonPreview skeleton={skeleton} />
         </div>
-        <div className="limb-list">
-          {list.map((n, i) => (
-            <div className="limb-row" key={n.id}>
-              <span className="limb-name">{limbLabel(i)}</span>
-              <label>
-                長さ
-                <input
-                  type="range"
-                  aria-label={`${limbLabel(i)}の長さ`}
-                  min={LENGTH_RANGE.min}
-                  max={LENGTH_RANGE.max}
-                  step={LENGTH_RANGE.step}
-                  value={n.length}
-                  onChange={(e) =>
-                    setSkeleton(
-                      setLimb(skeleton, n.id, { length: Number(e.target.value) }),
-                    )
-                  }
-                />
-              </label>
-              <label>
-                太さ
-                <input
-                  type="range"
-                  aria-label={`${limbLabel(i)}の太さ`}
-                  min={WIDTH_RANGE.min}
-                  max={WIDTH_RANGE.max}
-                  step={WIDTH_RANGE.step}
-                  value={n.width_factor}
-                  onChange={(e) =>
-                    setSkeleton(
-                      setLimb(skeleton, n.id, {
-                        width_factor: Number(e.target.value),
-                      }),
-                    )
-                  }
-                />
-              </label>
-              <button
-                type="button"
-                aria-label={`${limbLabel(i)}を減らす`}
-                disabled={list.length <= MIN_LIMBS}
-                onClick={() => setSkeleton(removeLimb(skeleton, n.id))}
+        <div
+          className="limb-list"
+          data-shape-list="nested"
+          role="list"
+          aria-label={`出っぱり${leaves.length}本の並び`}
+          style={{
+            flex: "1 1 360px",
+            minWidth: 0,
+            maxWidth: "100%",
+          }}
+        >
+          <div
+            className="limb-row"
+            data-shape-body="true"
+            role="listitem"
+            style={{ minWidth: 0, maxWidth: "100%", boxSizing: "border-box" }}
+          >
+            <strong>胴</strong>
+          </div>
+          {rows.map(({ node, depth, label }) => {
+            const parts = pathParts.get(node.id) ?? [label];
+            const pathLabel = parts.join("の");
+            // 48px以降は横幅を狭めず、祖先の並びを折り返して親子関係を示す。
+            const visibleLabel = depth > 4 ? parts.join(" › ") : label;
+            const indent = Math.min(Math.max(depth - 1, 0) * 16, 48);
+            const addAllowed = canAddLimb(skeleton, node.id);
+            const connector =
+              lastChildByParent.get(node.parent ?? -1) === node.id ? "└─" : "├─";
+            return (
+              <div
+                className="limb-row"
+                data-shape-row={node.id}
+                data-parent-part={node.parent ?? undefined}
+                data-indent-level={depth}
+                role="listitem"
+                key={node.id}
+                style={{
+                  marginInlineStart: `${indent}px`,
+                  width: `calc(100% - ${indent}px)`,
+                  minWidth: 0,
+                  maxWidth: "100%",
+                  boxSizing: "border-box",
+                  flexWrap: "wrap",
+                  overflowWrap: "anywhere",
+                  borderInlineStart:
+                    depth > 1 ? "2px solid rgba(59, 111, 201, 0.35)" : undefined,
+                  paddingInlineStart: depth > 1 ? "6px" : undefined,
+                }}
               >
-                ✕
-              </button>
-            </div>
-          ))}
+                <span aria-hidden="true" style={{ flex: "none" }}>
+                  {connector}
+                </span>
+                <span
+                  className="limb-name"
+                  style={{
+                    width: "auto",
+                    minWidth: 0,
+                    flex: "1 1 6em",
+                    overflowWrap: "anywhere",
+                  }}
+                >
+                  {visibleLabel}
+                </span>
+                <div
+                  style={{
+                    display: "flex",
+                    flex: "1 1 250px",
+                    flexWrap: "wrap",
+                    alignItems: "center",
+                    gap: "8px",
+                    minWidth: 0,
+                    maxWidth: "100%",
+                  }}
+                >
+                  <label
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      flexWrap: "wrap",
+                      flex: "1 1 112px",
+                      minWidth: 0,
+                      maxWidth: "100%",
+                    }}
+                  >
+                    長さ
+                    <input
+                      type="range"
+                      aria-label={`${pathLabel}の長さ`}
+                      min={LENGTH_RANGE.min}
+                      max={LENGTH_RANGE.max}
+                      step={LENGTH_RANGE.step}
+                      value={node.length}
+                      style={{ flex: "1 1 80px", minWidth: 0, maxWidth: "100%" }}
+                      onChange={(e) =>
+                        setSkeleton(
+                          setLimb(skeleton, node.id, {
+                            length: Number(e.target.value),
+                          }),
+                        )
+                      }
+                    />
+                  </label>
+                  {leafIds.has(node.id) && (
+                    <label
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        flexWrap: "wrap",
+                        flex: "1 1 112px",
+                        minWidth: 0,
+                        maxWidth: "100%",
+                      }}
+                    >
+                      太さ
+                      <input
+                        type="range"
+                        aria-label={`${pathLabel}の太さ`}
+                        min={WIDTH_RANGE.min}
+                        max={WIDTH_RANGE.max}
+                        step={WIDTH_RANGE.step}
+                        value={node.width_factor}
+                        style={{ flex: "1 1 80px", minWidth: 0, maxWidth: "100%" }}
+                        onChange={(e) =>
+                          setSkeleton(
+                            setLimb(skeleton, node.id, {
+                              width_factor: Number(e.target.value),
+                            }),
+                          )
+                        }
+                      />
+                    </label>
+                  )}
+                  <button
+                    type="button"
+                    aria-label={`${pathLabel}のこの先に足す`}
+                    title={addAllowed ? undefined : "先端は12本までです"}
+                    disabled={!addAllowed}
+                    style={{
+                      maxWidth: "100%",
+                      whiteSpace: "normal",
+                      overflowWrap: "anywhere",
+                    }}
+                    onClick={() => setSkeleton(addLimb(skeleton, node.id))}
+                  >
+                    ＋ この先に足す
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`${pathLabel}とその先を消す`}
+                    disabled={!canRemoveLimb(skeleton, node.id)}
+                    style={{ maxWidth: "100%" }}
+                    onClick={() => setSkeleton(removeLimb(skeleton, node.id))}
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
       <div className="button-row">
         <button
           type="button"
-          disabled={list.length >= MAX_LIMBS}
+          disabled={!canAddLimb(skeleton)}
+          title={canAddLimb(skeleton) ? undefined : "先端は12本までです"}
           onClick={() => setSkeleton(addLimb(skeleton))}
         >
           出っぱりを増やす
@@ -271,6 +408,11 @@ export function ProposalWizard() {
         role="dialog"
         aria-modal="true"
         aria-labelledby="proposal-title"
+        style={{
+          width: "calc(100vw - 48px)",
+          maxWidth: "720px",
+          boxSizing: "border-box",
+        }}
       >
         <h2 id="proposal-title">形を決めて展開図を作ってもらう</h2>
         {step === "skeleton" && <SkeletonStep />}
