@@ -23,6 +23,27 @@ function pngSize(bytes: Uint8Array): [number, number] {
   return [view.getUint32(16), view.getUint32(20)];
 }
 
+function expectSameBytes(helpBytes: Uint8Array, manualBytes: Uint8Array, image: string): void {
+  expect(
+    helpBytes.byteLength,
+    `${image}: ヘルプ側と取扱説明書側でバイト数が異なります`,
+  ).toBe(manualBytes.byteLength);
+
+  let differentIndex = -1;
+  for (let index = 0; index < helpBytes.byteLength; index += 1) {
+    if (helpBytes[index] !== manualBytes[index]) {
+      differentIndex = index;
+      break;
+    }
+  }
+
+  const detail =
+    differentIndex < 0
+      ? ""
+      : ` (offset ${differentIndex}: ヘルプ=${helpBytes[differentIndex]}, 取扱説明書=${manualBytes[differentIndex]})`;
+  expect(differentIndex, `${image}: 2か所のPNGのバイト列が一致しません${detail}`).toBe(-1);
+}
+
 describe("取扱説明書向けの実画面図", () => {
   it("7図を派生PNGと元の全画面へ変換し、残る6図だけをSVGで渡す", () => {
     const exported = buildManualExportContent(HELP_CHAPTERS, HELP_DIAGRAMS);
@@ -61,10 +82,10 @@ describe("取扱説明書向けの実画面図", () => {
       const helpBytes = readFileSync(helpPath);
       const manualBytes = readFileSync(manualPath);
 
+      expectSameBytes(helpBytes, manualBytes, image);
       expect(helpBytes.byteLength).toBeGreaterThanOrEqual(4096);
       expect(pngSize(helpBytes)).toEqual([1800, 700]);
       expect(pngSize(manualBytes)).toEqual([1800, 700]);
-      expect(helpBytes.equals(manualBytes)).toBe(true);
     }
   });
 
