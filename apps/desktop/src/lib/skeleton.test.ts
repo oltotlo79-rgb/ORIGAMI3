@@ -20,6 +20,14 @@ import {
 } from "./skeleton";
 import type { Skeleton } from "./types";
 
+function seededRandom(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
+    return state / 0x1_0000_0000;
+  };
+}
+
 describe("骨格の編集", () => {
   it("初期状態は根1つ+出っぱり4本", () => {
     const s = defaultSkeleton();
@@ -145,6 +153,97 @@ describe("骨格の編集", () => {
       ),
     ).toHaveLength(0);
     expect(leafNodes(removed)).toHaveLength(3);
+  });
+
+  it("無作為な追加・削除1,000回の全段階で壊れた形を作らない", () => {
+    const seed = 0xdecafbad;
+    const random = seededRandom(seed);
+    const operations: string[] = [];
+    const passed = { singleBody: 0, noMissingParent: 0, validTipCount: 0 };
+    let added = 0;
+    let removed = 0;
+    let minTips = Number.POSITIVE_INFINITY;
+    let maxTips = Number.NEGATIVE_INFINITY;
+    let maxDepth = 0;
+    let skeleton = defaultSkeleton();
+
+    for (let step = 1; step <= 1_000; step += 1) {
+      let operation: "add" | "remove" = random() < 0.5 ? "add" : "remove";
+      let candidates = skeleton.nodes.filter((node) =>
+        operation === "add"
+          ? canAddLimb(skeleton, node.id)
+          : canRemoveLimb(skeleton, node.id),
+      );
+      if (candidates.length === 0) {
+        operation = operation === "add" ? "remove" : "add";
+        candidates = skeleton.nodes.filter((node) =>
+          operation === "add"
+            ? canAddLimb(skeleton, node.id)
+            : canRemoveLimb(skeleton, node.id),
+        );
+      }
+
+      const target = candidates[Math.floor(random() * candidates.length)];
+      const before = skeleton;
+      skeleton =
+        operation === "add"
+          ? addLimb(skeleton, target.id)
+          : removeLimb(skeleton, target.id);
+      operations.push(`${step}:${operation}(${target.id})`);
+      if (operation === "add") added += 1;
+      else removed += 1;
+
+      const ids = new Set(skeleton.nodes.map((node) => node.id));
+      const bodyCount = skeleton.nodes.filter(
+        (node) => node.parent === null,
+      ).length;
+      const missingParentCount = skeleton.nodes.filter(
+        (node) => node.parent !== null && !ids.has(node.parent),
+      ).length;
+      const tipCount = leafNodes(skeleton).length;
+      const failures = [
+        bodyCount === 1 ? null : `胴の数=${bodyCount}`,
+        missingParentCount === 0
+          ? null
+          : `親が見つからない出っぱり=${missingParentCount}`,
+        tipCount >= MIN_LIMBS && tipCount <= MAX_LIMBS
+          ? null
+          : `本当の先端=${tipCount}`,
+        skeleton === before ? "操作後の状態が変化していない" : null,
+        ids.size === skeleton.nodes.length ? null : "IDが重複している",
+      ].filter((failure): failure is string => failure !== null);
+      if (failures.length > 0) {
+        throw new Error(
+          [
+            `seed=${seed}, ${step}/1000: ${failures.join(", ")}`,
+            `操作列=${JSON.stringify(operations)}`,
+            `状態=${JSON.stringify(skeleton.nodes)}`,
+          ].join("\n"),
+        );
+      }
+
+      passed.singleBody += 1;
+      passed.noMissingParent += 1;
+      passed.validTipCount += 1;
+      minTips = Math.min(minTips, tipCount);
+      maxTips = Math.max(maxTips, tipCount);
+      maxDepth = Math.max(
+        maxDepth,
+        ...skeletonRows(skeleton).map((row) => row.depth),
+      );
+    }
+
+    expect(passed).toEqual({
+      singleBody: 1_000,
+      noMissingParent: 1_000,
+      validTipCount: 1_000,
+    });
+    expect(added + removed).toBe(1_000);
+    expect(added).toBeGreaterThan(0);
+    expect(removed).toBeGreaterThan(0);
+    expect(minTips).toBe(MIN_LIMBS);
+    expect(maxTips).toBe(MAX_LIMBS);
+    expect(maxDepth).toBeGreaterThanOrEqual(3);
   });
 
   it("鎖1本の末端は消せて親が新しい先端になり、最後の1本は消せない", () => {

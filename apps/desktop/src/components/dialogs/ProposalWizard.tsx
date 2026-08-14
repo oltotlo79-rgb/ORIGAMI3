@@ -17,6 +17,14 @@ import {
   setLimb,
   skeletonRows,
 } from "../../lib/skeleton";
+import {
+  PROPOSAL_DIALOG_MAX_WIDTH_PX,
+  PROPOSAL_DIALOG_VIEWPORT_GUTTER_PX,
+  PROPOSAL_LIST_BASIS_PX,
+  PROPOSAL_PREVIEW_MAX_WIDTH_PX,
+  PROPOSAL_ROW_INDENT_MAX_PX,
+  PROPOSAL_ROW_INDENT_STEP_PX,
+} from "../../lib/proposalLayout";
 import { SkeletonPreview } from "./SkeletonPreview";
 import { CpThumbnail } from "./CpThumbnail";
 
@@ -101,7 +109,13 @@ function SkeletonStep() {
         className="proposal-body"
         style={{ flexWrap: "wrap", minWidth: 0, maxWidth: "100%" }}
       >
-        <div style={{ flex: "0 1 200px", minWidth: 0, maxWidth: "100%" }}>
+        <div
+          style={{
+            flex: `0 1 ${PROPOSAL_PREVIEW_MAX_WIDTH_PX}px`,
+            minWidth: 0,
+            maxWidth: "100%",
+          }}
+        >
           <SkeletonPreview skeleton={skeleton} />
         </div>
         <div
@@ -110,7 +124,7 @@ function SkeletonStep() {
           role="list"
           aria-label={`出っぱり${leaves.length}本の並び`}
           style={{
-            flex: "1 1 360px",
+            flex: `1 1 ${PROPOSAL_LIST_BASIS_PX}px`,
             minWidth: 0,
             maxWidth: "100%",
           }}
@@ -128,7 +142,10 @@ function SkeletonStep() {
             const pathLabel = parts.join("の");
             // 48px以降は横幅を狭めず、祖先の並びを折り返して親子関係を示す。
             const visibleLabel = depth > 4 ? parts.join(" › ") : label;
-            const indent = Math.min(Math.max(depth - 1, 0) * 16, 48);
+            const indent = Math.min(
+              Math.max(depth - 1, 0) * PROPOSAL_ROW_INDENT_STEP_PX,
+              PROPOSAL_ROW_INDENT_MAX_PX,
+            );
             const addAllowed = canAddLimb(skeleton, node.id);
             const connector =
               lastChildByParent.get(node.parent ?? -1) === node.id ? "└─" : "├─";
@@ -416,8 +433,8 @@ export function ProposalWizard() {
         aria-modal="true"
         aria-labelledby="proposal-title"
         style={{
-          width: "calc(100vw - 48px)",
-          maxWidth: "720px",
+          width: `calc(100vw - ${PROPOSAL_DIALOG_VIEWPORT_GUTTER_PX}px)`,
+          maxWidth: `${PROPOSAL_DIALOG_MAX_WIDTH_PX}px`,
           boxSizing: "border-box",
         }}
       >
