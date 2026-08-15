@@ -72,7 +72,11 @@ describe("surface owner shader", () => {
       expect(resources.depthMaterial.depthTest).toBe(true);
       expect(resources.depthMaterial.depthWrite).toBe(true);
       expect(resources.depthMaterial.depthFunc).toBe(THREE.LessEqualDepth);
-      expect(resources.depthMaterial.colorWrite).toBe(false);
+      // 最前深度を書いた面の組符号をcolor attachmentへ残し、第2passが読む。
+      expect(resources.depthMaterial.colorWrite).toBe(true);
+      expect(resources.colorMaterial.uniforms.surfaceOwnerGroupMap.value).toBe(
+        resources.depthTarget.texture,
+      );
       expect(resources.colorMaterial.depthTest).toBe(false);
       expect(resources.colorMaterial.depthWrite).toBe(false);
       expect(resources.colorMaterial.blending).toBe(THREE.NoBlending);
@@ -104,6 +108,18 @@ describe("surface owner shader", () => {
       );
       expect(resources.colorMaterial.fragmentShader).toContain(
         "candidateDepth - nearestDepth > surfaceOwnerDepthTolerance",
+      );
+      // 組符号は面ID符号と同じRGBA8 attributeで運び、深度を比べる前に整数で照合する。
+      for (const material of [resources.depthMaterial, resources.colorMaterial]) {
+        expect(material.vertexShader).toContain(
+          "attribute vec4 surfaceOwnerGroupToken;",
+        );
+      }
+      expect(resources.depthMaterial.fragmentShader).toContain(
+        "gl_FragColor = vSurfaceOwnerGroupToken;",
+      );
+      expect(resources.colorMaterial.fragmentShader).toContain(
+        "if ( ! surfaceOwnerSameGroup( nearestGroup, vSurfaceOwnerGroupToken ) ) {",
       );
       expect(binding.map.value).toBe(resources.colorTarget.texture);
 

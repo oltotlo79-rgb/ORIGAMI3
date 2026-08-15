@@ -6,6 +6,7 @@ import type { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import {
   SURFACE_OWNER_DEPTH_PLANE_ATTRIBUTE,
   SURFACE_OWNER_DEPTH_TOLERANCE,
+  SURFACE_OWNER_GROUP_ATTRIBUTE,
   type SurfaceOwnerBinding,
 } from "./surfaceOwner";
 
@@ -144,6 +145,21 @@ float surfaceOwnerCanonicalDepth() {
     vSurfaceOwnerDepthPlane.x * ndc.x +
     vSurfaceOwnerDepthPlane.y * ndc.y +
     vSurfaceOwnerDepthPlane.z;
+}
+`;
+
+/**
+ * 「最前面と同じ支持平面の仲間か」を整数の一致だけで判定する部分。
+ *
+ * 共平面の面は本来まったく同じ深度になるが、実機のGPUでは三角形分割ごとの補間で
+ * 数code分ずれ、2 codeのtie窓から落ちた面が捨てられて下の層の裏面が見えていた。
+ * 組符号が一致する面は深度を比べずに候補へ残し、重なり順だけで所有者を決める。
+ * 組符号0(組が無い面)は一致とみなさない。
+ */
+const OWNER_GROUP_SUPPORT = /* glsl */ `
+bool surfaceOwnerSameGroup( const in vec4 nearestGroup, const in vec4 candidateGroup ) {
+  if ( dot( abs( candidateGroup ), vec4( 1.0 ) ) < ( 0.5 / 255.0 ) ) return false;
+  return all( lessThan( abs( nearestGroup - candidateGroup ), vec4( 0.5 / 255.0 ) ) );
 }
 `;
 
@@ -327,24 +343,30 @@ export function createSurfaceOwnerPassResources(
     },
     vertexShader: /* glsl */ `
       attribute vec4 ${SURFACE_OWNER_DEPTH_PLANE_ATTRIBUTE};
+      attribute vec4 ${SURFACE_OWNER_GROUP_ATTRIBUTE};
       flat varying vec4 vSurfaceOwnerDepthPlane;
+      varying vec4 vSurfaceOwnerGroupToken;
       void main() {
         vSurfaceOwnerDepthPlane = ${SURFACE_OWNER_DEPTH_PLANE_ATTRIBUTE};
+        vSurfaceOwnerGroupToken = ${SURFACE_OWNER_GROUP_ATTRIBUTE};
         gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
       }
     `,
+    // 最前深度を確定すると同時に、その深度を書いた面の組符号もcolor attachmentへ残す。
+    // 第2passはこの符号を読み、同じ支持平面の面を深度差に関わらず候補へ通す。
     fragmentShader: /* glsl */ `
+      varying vec4 vSurfaceOwnerGroupToken;
       ${OWNER_CANONICAL_DEPTH_SUPPORT}
       void main() {
         gl_FragDepthEXT = surfaceOwnerCanonicalDepth();
-        gl_FragColor = vec4( 1.0 );
+        gl_FragColor = vSurfaceOwnerGroupToken;
       }
     `,
     side: THREE.DoubleSide,
     depthTest: true,
     depthWrite: true,
     depthFunc: THREE.LessEqualDepth,
-    colorWrite: false,
+    colorWrite: true,
     blending: THREE.NoBlending,
     toneMapped: false,
   });
@@ -352,31 +374,41 @@ export function createSurfaceOwnerPassResources(
   const colorMaterial = new THREE.ShaderMaterial({
     uniforms: {
       surfaceOwnerDepthMap: { value: depthTexture },
+      surfaceOwnerGroupMap: { value: depthTarget.texture },
       surfaceOwnerResolution: binding.resolution,
       surfaceOwnerDepthTolerance: { value: SURFACE_OWNER_DEPTH_TOLERANCE },
     },
     vertexShader: /* glsl */ `
       attribute vec4 ${SURFACE_OWNER_ATTRIBUTE};
       attribute vec4 ${SURFACE_OWNER_DEPTH_PLANE_ATTRIBUTE};
+      attribute vec4 ${SURFACE_OWNER_GROUP_ATTRIBUTE};
       varying vec4 vSurfaceOwnerToken;
+      varying vec4 vSurfaceOwnerGroupToken;
       flat varying vec4 vSurfaceOwnerDepthPlane;
       void main() {
         vSurfaceOwnerToken = ${SURFACE_OWNER_ATTRIBUTE};
+        vSurfaceOwnerGroupToken = ${SURFACE_OWNER_GROUP_ATTRIBUTE};
         vSurfaceOwnerDepthPlane = ${SURFACE_OWNER_DEPTH_PLANE_ATTRIBUTE};
         gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
       }
     `,
     fragmentShader: /* glsl */ `
       uniform sampler2D surfaceOwnerDepthMap;
+      uniform sampler2D surfaceOwnerGroupMap;
       uniform float surfaceOwnerDepthTolerance;
       varying vec4 vSurfaceOwnerToken;
+      varying vec4 vSurfaceOwnerGroupToken;
       ${OWNER_CANONICAL_DEPTH_SUPPORT}
+      ${OWNER_GROUP_SUPPORT}
       void main() {
         vec2 size = max( surfaceOwnerResolution, vec2( 1.0 ) );
         vec2 uv = clamp( gl_FragCoord.xy / size, vec2( 0.0 ), vec2( 1.0 ) );
-        float nearestDepth = texture2D( surfaceOwnerDepthMap, uv ).x;
-        float candidateDepth = surfaceOwnerCanonicalDepth();
-        if ( candidateDepth - nearestDepth > surfaceOwnerDepthTolerance ) discard;
+        vec4 nearestGroup = texture2D( surfaceOwnerGroupMap, uv );
+        if ( ! surfaceOwnerSameGroup( nearestGroup, vSurfaceOwnerGroupToken ) ) {
+          float nearestDepth = texture2D( surfaceOwnerDepthMap, uv ).x;
+          float candidateDepth = surfaceOwnerCanonicalDepth();
+          if ( candidateDepth - nearestDepth > surfaceOwnerDepthTolerance ) discard;
+        }
         gl_FragColor = vSurfaceOwnerToken;
       }
     `,

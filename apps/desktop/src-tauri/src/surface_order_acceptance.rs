@@ -256,6 +256,9 @@ struct RenderFace {
     plane_normal: V3,
     plane_distance: f64,
     planar: bool,
+    /// 支持平面ごとに付ける組の符号。0は平面をまとめられなかったこと。
+    /// Viewer3Dの `surfaceOwnerGroupToken` と同じ規則で付ける。
+    coplanar_group: u32,
     points: Vec<V3>,
     triangles: Vec<RenderTriangle>,
 }
@@ -1021,6 +1024,7 @@ fn render_faces(
                 plane_normal,
                 plane_distance,
                 planar,
+                coplanar_group: 0,
                 points: polygon,
                 triangles,
             }
@@ -1062,6 +1066,16 @@ fn render_faces(
             members.push(face_index);
         } else {
             strict_groups.push(vec![face_index]);
+        }
+    }
+
+    // Viewer3Dと同じく、支持平面ごとに組符号を配る。共平面の面が補間の丸めで
+    // tie窓から外れても、重なり順で所有者を決められるようにするため。
+    let mut coplanar_group = 0_u32;
+    for members in &strict_groups {
+        coplanar_group += 1;
+        for &index in members {
+            rendered[index].coplanar_group = coplanar_group;
         }
     }
 
@@ -1173,13 +1187,20 @@ fn rasterize(mut visit: impl FnMut(usize, f32), triangle: &RenderTriangle, viewp
 fn visual_image(diagram: &Diagram, frame: &Frame3D, viewport: usize, view: Camera) -> VisualImage {
     let mut faces = render_faces(diagram, frame, viewport, view);
     let max_depth_code = (1_u64 << DEPTH_BITS) - 1;
+    // 第1passの描画順もGPUと同じ所有者順にそろえる。同じ最前深度を書いた面のうち
+    // 最後に描いた面の組符号が残る、GLのLEQUAL + colorWriteと同じ規則にするため。
+    faces.sort_by_key(render_face_owner_key);
     let mut nearest = vec![u32::MAX; viewport * viewport];
+    let mut nearest_group = vec![0_u32; viewport * viewport];
     for face in &faces {
         for triangle in &face.triangles {
             rasterize(
                 |pixel, depth| {
                     let code = (depth.clamp(0.0, 1.0) * max_depth_code as f32).round() as u32;
-                    nearest[pixel] = nearest[pixel].min(code);
+                    if code <= nearest[pixel] {
+                        nearest[pixel] = code;
+                        nearest_group[pixel] = face.coplanar_group;
+                    }
                 },
                 triangle,
                 viewport,
@@ -1187,7 +1208,6 @@ fn visual_image(diagram: &Diagram, frame: &Frame3D, viewport: usize, view: Camer
         }
     }
 
-    faces.sort_by_key(render_face_owner_key);
     let tolerance = DEPTH_TIE_CODES as f32 / max_depth_code as f32;
     let mut owners = vec![None::<(usize, bool)>; viewport * viewport];
     for (face_index, face) in faces.iter().enumerate() {
@@ -1198,8 +1218,11 @@ fn visual_image(diagram: &Diagram, frame: &Frame3D, viewport: usize, view: Camer
                     if nearest_code == u32::MAX {
                         return;
                     }
+                    // 最前面と同じ支持平面の面は、補間の丸めで深度がずれていても候補に残す。
+                    let same_group = face.coplanar_group != 0
+                        && face.coplanar_group == nearest_group[pixel];
                     let nearest_depth = nearest_code as f32 / max_depth_code as f32;
-                    if depth - nearest_depth <= tolerance {
+                    if same_group || depth - nearest_depth <= tolerance {
                         owners[pixel] = Some((face_index, triangle.back_facing));
                     }
                 },

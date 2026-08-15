@@ -4,6 +4,7 @@ import {
   SURFACE_OWNER_BACKGROUND_CODE,
   SURFACE_OWNER_DEPTH_PLANE_ATTRIBUTE,
   SURFACE_OWNER_DEPTH_TOLERANCE,
+  SURFACE_OWNER_GROUP_ATTRIBUTE,
   createSurfaceOwnerBinding,
   createSurfaceOwnerCodes,
   createSurfaceOwnerSurface,
@@ -233,6 +234,73 @@ describe("orderSurfaceOwner", () => {
       }
     } finally {
       disposeSurfaceOwnerSurface(surface);
+    }
+  });
+
+  it("同じ支持平面の面へ、深度に依存しない同じ組符号を配る", () => {
+    const surface = oppositeWindingSurface(10, 20);
+    try {
+      orderSurfaceOwner(surface, cameraAt(2));
+      const tokens = surface.geometry.getAttribute(
+        SURFACE_OWNER_GROUP_ATTRIBUTE,
+      ) as THREE.BufferAttribute;
+      expect(tokens).toBe(surface.groupTokens);
+      expect(tokens.itemSize).toBe(4);
+      expect(tokens.normalized).toBe(true);
+      expect(tokens.usage).toBe(THREE.DynamicDrawUsage);
+      const expected = ownerCodeBytes(1);
+      for (let vertex = 0; vertex < tokens.count; vertex++) {
+        expect([
+          (tokens.array as Uint8Array)[vertex * 4],
+          (tokens.array as Uint8Array)[vertex * 4 + 1],
+          (tokens.array as Uint8Array)[vertex * 4 + 2],
+          (tokens.array as Uint8Array)[vertex * 4 + 3],
+        ]).toEqual(expected);
+      }
+    } finally {
+      disposeSurfaceOwnerSurface(surface);
+    }
+  });
+
+  it("別の平面に乗る面へは別の組符号を配り、非平面faceには配らない", () => {
+    // 0.0002だけ離れた実在の層差。ここを同じ組にすると層が入れ替わる。
+    const position = positionOfTwoOverlappingFaces();
+    for (let vertex = 3; vertex < 6; vertex++) position.setZ(vertex, 0.0002);
+    const separated = createSurfaceOwnerSurface({
+      position,
+      vertexFaces: [10, 10, 10, 20, 20, 20],
+      indices: [0, 1, 2, 3, 4, 5],
+      triangleFaces: [10, 20],
+    });
+    const bent = createSurfaceOwnerSurface({
+      position: new THREE.BufferAttribute(
+        new Float32Array([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0.001]),
+        3,
+      ),
+      vertexFaces: [30, 30, 30, 30],
+      indices: [0, 1, 2, 0, 2, 3],
+      triangleFaces: [30, 30],
+    });
+    try {
+      orderSurfaceOwner(separated, cameraAt(2));
+      orderSurfaceOwner(bent, cameraAt(2));
+      const tokens = separated.groupTokens.array as Uint8Array;
+      const lower = [...tokens.slice(0, 4)];
+      const upper = [...tokens.slice(12, 16)];
+      expect(lower).not.toEqual([0, 0, 0, 0]);
+      expect(upper).not.toEqual([0, 0, 0, 0]);
+      expect(lower).not.toEqual(upper);
+      for (let vertex = 0; vertex < 3; vertex++) {
+        expect([...tokens.slice(vertex * 4, vertex * 4 + 4)]).toEqual(lower);
+        expect([...tokens.slice(12 + vertex * 4, 16 + vertex * 4)]).toEqual(upper);
+      }
+      // 平面に乗らない面は組を作れないので、従来どおり深度だけで判定させる。
+      expect([...(bent.groupTokens.array as Uint8Array)]).toEqual(
+        new Array(4 * 4).fill(0),
+      );
+    } finally {
+      disposeSurfaceOwnerSurface(separated);
+      disposeSurfaceOwnerSurface(bent);
     }
   });
 

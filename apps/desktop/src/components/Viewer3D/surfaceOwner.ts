@@ -16,6 +16,16 @@ export const SURFACE_OWNER_BACKGROUND_CODE = 0;
 /** 共平面のtriangleが共有する、NDC xy→window depthの平面係数。 */
 export const SURFACE_OWNER_DEPTH_PLANE_ATTRIBUTE = "surfaceOwnerDepthPlane";
 
+/**
+ * 支持平面ごとに付ける組の符号。0は「平面が定まらず組を作れなかった」。
+ *
+ * 共平面の面どうしは深度が完全に一致するはずだが、実機のGPUでは三角形分割ごとの
+ * 補間で数code分ずれ、2 codeのtie窓から外れた面が捨てられていた。深度の一致に
+ * 頼らず整数の一致で「同じ平面の仲間」を判定できるよう、面ID符号と同じ
+ * RGBA8 tokenの仕組みで組符号を持たせる。
+ */
+export const SURFACE_OWNER_GROUP_ATTRIBUTE = "surfaceOwnerGroupToken";
+
 /** owner最前深度targetと同じ固定精度。 */
 export const SURFACE_OWNER_DEPTH_BITS = 24;
 /** 共平面の補間丸めだけをtieとして扱う既存の深度code数。 */
@@ -143,6 +153,8 @@ export interface SurfaceOwnerSurface {
   readonly position: THREE.BufferAttribute;
   /** xyz=depth plane係数、w=共通平面を使うとき1。 */
   readonly depthPlanes: THREE.BufferAttribute;
+  /** 同じ支持平面に乗る面の組を表すRGBA8符号。全て0なら組無し。 */
+  readonly groupTokens: THREE.BufferAttribute;
   readonly ownerCodes: Map<number, number>;
   readonly triangleFaces: number[];
   readonly triangleLayers: number[];
@@ -286,6 +298,13 @@ export function createSurfaceOwnerSurface(
   );
   depthPlanes.setUsage(THREE.DynamicDrawUsage);
   geometry.setAttribute(SURFACE_OWNER_DEPTH_PLANE_ATTRIBUTE, depthPlanes);
+  const groupTokens = new THREE.Uint8BufferAttribute(
+    new Uint8Array(input.position.count * 4),
+    4,
+    true,
+  );
+  groupTokens.setUsage(THREE.DynamicDrawUsage);
+  geometry.setAttribute(SURFACE_OWNER_GROUP_ATTRIBUTE, groupTokens);
   const index = new THREE.BufferAttribute(makeIndexArray(indices), 1);
   index.setUsage(THREE.DynamicDrawUsage);
   geometry.setIndex(index);
@@ -314,6 +333,7 @@ export function createSurfaceOwnerSurface(
     geometry,
     position: input.position,
     depthPlanes,
+    groupTokens,
     ownerCodes,
     triangleFaces,
     triangleLayers,
@@ -536,8 +556,12 @@ function depthPlaneFitsGroup(
 }
 
 /**
- * 共平面の別triangle分割へ、同じNDC深度平面を割り当てる。
- * 非平面batchはw=0のままにし、shaderで従来のgl_FragCoord.zへ戻す。
+ * 共平面の別triangle分割へ、同じNDC深度平面と同じ組符号を割り当てる。
+ *
+ * 深度平面はshaderの深度を一致させるための最善手だが、実機のGPUでは一致を
+ * 前提にできないことが分かったため、平面がまとまった面には必ず組符号も配る。
+ * 組符号は整数の一致だけで「同じ支持平面の仲間」を表すので、補間の丸めに左右されない。
+ * 非平面batchはw=0・組符号0のままにし、shaderで従来のgl_FragCoord.zへ戻す。
  */
 function updateSurfaceOwnerDepthPlanes(
   surface: SurfaceOwnerSurface,
@@ -545,6 +569,7 @@ function updateSurfaceOwnerDepthPlanes(
   camera: THREE.Camera,
 ): void {
   (surface.depthPlanes.array as Float32Array).fill(0);
+  (surface.groupTokens.array as Uint8Array).fill(0);
   const groups: {
     normal: THREE.Vector3;
     distance: number;
@@ -585,6 +610,21 @@ function updateSurfaceOwnerDepthPlanes(
       });
     }
   }
+
+  // 支持平面ごとに組符号を配る。同じ平面の面は同じ符号、別の平面の面は別の符号。
+  // 深度平面が使えない場合(下の残差guardで却下された場合を含む)でも、
+  // 「最前面と同じ平面の面だけが候補」という判定が整数の一致だけで成り立つ。
+  const groupBytes = surface.groupTokens.array as Uint8Array;
+  let groupCode = SURFACE_OWNER_BACKGROUND_CODE;
+  for (const group of groups) {
+    groupCode += 1;
+    const bytes = ownerCodeBytes(groupCode);
+    for (const { batch } of group.members) {
+      // 正規化Uint8 attributeなので、面ID符号と同じく生のbyteをそのまま書く。
+      for (const vertex of batch.indices) groupBytes.set(bytes, vertex * 4);
+    }
+  }
+  surface.groupTokens.needsUpdate = true;
 
   for (const group of groups) {
     const triangleCount = group.members.reduce(
