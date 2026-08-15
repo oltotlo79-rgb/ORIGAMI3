@@ -410,6 +410,233 @@ fn angle_surface_angles(edge_43: f64) -> HashMap<EdgeId, f64> {
     ])
 }
 
+/// `verification/angles.json` の展開図を丸めず、追跡対象の検査コード内へ写したもの。
+fn zero_back_user_cp() -> CreasePattern {
+    CreasePattern {
+        vertices: vec![
+            vertex(0, 0.0, 0.0),
+            vertex(1, 1.0, 0.0),
+            vertex(2, 1.0, 1.0),
+            vertex(3, 0.0, 1.0),
+            vertex(4, 0.0, 0.5),
+            vertex(5, 1.0, 0.5),
+            vertex(6, 0.5, 1.0),
+            vertex(7, 0.5, 0.0),
+            vertex(8, 0.5, 0.5),
+            vertex(9, 0.792_893_218_813_452_5, 0.5),
+            vertex(10, 0.5, 0.207_106_781_186_547_52),
+            vertex(11, 0.207_106_781_186_547_52, 0.5),
+            vertex(12, 0.5, 0.792_893_218_813_452_5),
+        ],
+        edges: vec![
+            edge(4, 3, 4, EdgeKind::Border),
+            edge(5, 4, 0, EdgeKind::Border),
+            edge(6, 1, 5, EdgeKind::Border),
+            edge(7, 5, 2, EdgeKind::Border),
+            edge(9, 2, 6, EdgeKind::Border),
+            edge(10, 6, 3, EdgeKind::Border),
+            edge(11, 0, 7, EdgeKind::Border),
+            edge(12, 7, 1, EdgeKind::Border),
+            edge(17, 0, 8, EdgeKind::Valley),
+            edge(18, 8, 2, EdgeKind::Valley),
+            edge(19, 8, 9, EdgeKind::Mountain),
+            edge(20, 9, 5, EdgeKind::Mountain),
+            edge(21, 2, 9, EdgeKind::Mountain),
+            edge(22, 9, 1, EdgeKind::Mountain),
+            edge(23, 8, 10, EdgeKind::Mountain),
+            edge(24, 10, 7, EdgeKind::Mountain),
+            edge(25, 0, 10, EdgeKind::Mountain),
+            edge(26, 10, 1, EdgeKind::Mountain),
+            edge(27, 4, 11, EdgeKind::Mountain),
+            edge(28, 11, 8, EdgeKind::Mountain),
+            edge(29, 0, 11, EdgeKind::Mountain),
+            edge(30, 11, 3, EdgeKind::Mountain),
+            edge(31, 6, 12, EdgeKind::Mountain),
+            edge(32, 12, 8, EdgeKind::Mountain),
+            edge(33, 2, 12, EdgeKind::Mountain),
+            edge(34, 12, 3, EdgeKind::Mountain),
+            edge(35, 11, 12, EdgeKind::Valley),
+            edge(36, 9, 10, EdgeKind::Valley),
+        ],
+        next_vertex_id: 13,
+        next_edge_id: 37,
+    }
+}
+
+/// `verification/angles.json` の20角度。JSONのf64値をそのまま使い、丸めない。
+fn zero_back_user_angles() -> HashMap<EdgeId, f64> {
+    HashMap::from([
+        (17, -179.999_999_999_999_97),
+        (18, -179.999_999_999_999_97),
+        (19, 180.0),
+        (20, -92.999_999_999_999_99),
+        (21, 180.0),
+        (22, 180.0),
+        (23, 180.0),
+        (24, -92.999_999_999_999_99),
+        (25, 180.0),
+        (26, 180.0),
+        (27, -178.693_545_755_435_96),
+        (28, 180.0),
+        (29, 180.0),
+        (30, 180.0),
+        (31, -178.693_545_755_435_96),
+        (32, 179.999_999_999_999_97),
+        (33, 180.0),
+        (34, 180.0),
+        (35, -1.306_454_244_564_035_5),
+        (36, -87.0),
+    ])
+}
+
+/// 手順0件のFrameへ、既定オンの重なり補正をproductionと同じ順で適用する。
+fn zero_back_apply_overlap(cp: &CreasePattern, faces: &[Face], mut frame: Frame3D) -> Frame3D {
+    let order = crate::store::frame_surface_rank_order(&frame)
+        .expect("the zero-back frame has a complete unique surface order");
+    ori3_soft::prevent_overlap_with_order_authority(
+        cp,
+        faces,
+        &mut frame,
+        ori3_soft::OverlapOrderInput {
+            start: &order,
+            end: &order,
+            progress: 0.5,
+            authoritative: true,
+        },
+        &ori3_soft::OverlapSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    );
+    frame
+}
+
+/// 手順0件で保持されている全ヒンジ角から表示Frameを再構成し、既定オンの
+/// 重なり補正までproductionと同じ順で適用する。
+fn zero_back_user_frame(cp: &CreasePattern, faces: &[Face]) -> Frame3D {
+    let folded = propagate(cp, faces, &zero_back_user_angles());
+    zero_back_apply_overlap(cp, faces, to_frame3d(cp, faces, &folded))
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ZeroBackWarmPath {
+    /// 選択中の辺36をhard、残る19角をpreferredとして同時に最終値へ近づける。
+    Active36WithPreferred,
+    /// 利用者の操作仮説どおり、辺36だけをhardにして残る19本を自由追従させる。
+    Edge36Only,
+    /// 全20角をhardにする対照。自由変数が無いためwarm startで枝を選べない。
+    AllHardControl,
+}
+
+impl ZeroBackWarmPath {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Active36WithPreferred => "edge36-hard-plus-19-preferred",
+            Self::Edge36Only => "edge36-hard-only",
+            Self::AllHardControl => "all-20-hard-control",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ZeroBackWarmResult {
+    frame: Frame3D,
+    angles: HashMap<EdgeId, f64>,
+    converged: bool,
+    closure_rms: f64,
+    iterations: u32,
+    contact_detected: bool,
+    self_intersects: bool,
+    max_seam_gap: f64,
+}
+
+fn zero_back_warm_solve(
+    cp: &CreasePattern,
+    faces: &[Face],
+    path: ZeroBackWarmPath,
+    stages: usize,
+) -> ZeroBackWarmResult {
+    assert!(stages > 0);
+    let final_angles = zero_back_user_angles();
+    let mut warm = final_angles
+        .keys()
+        .copied()
+        .map(|hinge| (hinge, 0.0))
+        .collect::<HashMap<_, _>>();
+    let mut last = None;
+
+    for stage in 1..=stages {
+        let progress = stage as f64 / stages as f64;
+        let scaled = |hinge: EdgeId| final_angles[&hinge] * progress;
+        let (hard, preferred) = match path {
+            ZeroBackWarmPath::Active36WithPreferred => (
+                vec![Driver {
+                    hinge: 36,
+                    target_angle_deg: scaled(36),
+                }],
+                Some(
+                    final_angles
+                        .keys()
+                        .copied()
+                        .filter(|&hinge| hinge != 36)
+                        .map(|hinge| (hinge, scaled(hinge)))
+                        .collect::<HashMap<_, _>>(),
+                ),
+            ),
+            ZeroBackWarmPath::Edge36Only => (
+                vec![Driver {
+                    hinge: 36,
+                    target_angle_deg: scaled(36),
+                }],
+                None,
+            ),
+            ZeroBackWarmPath::AllHardControl => {
+                let mut hard = final_angles
+                    .keys()
+                    .copied()
+                    .map(|hinge| Driver {
+                        hinge,
+                        target_angle_deg: scaled(hinge),
+                    })
+                    .collect::<Vec<_>>();
+                hard.sort_unstable_by_key(|driver| driver.hinge);
+                (hard, None)
+            }
+        };
+        let motion = solve_motion(cp, faces, &hard, preferred.as_ref(), Some(&warm), true);
+        assert!(
+            motion
+                .result
+                .frame
+                .faces
+                .iter()
+                .flat_map(|face| &face.polygon)
+                .flatten()
+                .all(|coordinate| coordinate.is_finite()),
+            "{} with {stages} external stages returned non-finite geometry at stage {stage}",
+            path.label(),
+        );
+        assert_eq!(motion.result.frame.faces.len(), faces.len());
+        assert_eq!(motion.result.angles.len(), final_angles.len());
+        warm = motion.result.angles.clone();
+        last = Some(motion);
+    }
+
+    let motion = last.expect("at least one external warm-start stage ran");
+    let self_intersects = ori3_rigid::self_intersects(&motion.result.frame);
+    let max_seam_gap = ori3_rigid::max_seam_gap(cp, faces, &motion.result.frame);
+    ZeroBackWarmResult {
+        frame: zero_back_apply_overlap(cp, faces, motion.result.frame),
+        angles: motion.result.angles,
+        converged: motion.result.converged,
+        closure_rms: motion.result.closure_rms,
+        iterations: motion.result.iterations,
+        contact_detected: motion.contact_detected,
+        self_intersects,
+        max_seam_gap,
+    }
+}
+
 fn fold_hinges(cp: &CreasePattern, faces: &[Face]) -> Vec<(EdgeId, EdgeKind)> {
     let mut owners = BTreeMap::<EdgeId, usize>::new();
     for face in faces {
@@ -576,6 +803,39 @@ fn camera_from_direction(width: f64, height: f64, direction: V3) -> Camera {
 
 fn camera(width: f64, height: f64, sign: f64) -> Camera {
     camera_from_direction(width, height, V3::new(0.35, -0.85, 0.95).normalize() * sign)
+}
+
+/// Viewer3Dの横長canvasと同じ水平画角にする。既存のCPU rasterはaspect=1固定なので、
+/// view行のx側だけを割り、clipping範囲を画面と同じにして測定する。
+fn camera_with_aspect(width: f64, height: f64, sign: f64, aspect: f64) -> Camera {
+    assert!(aspect.is_finite() && aspect > 0.0);
+    let mut result = camera(width, height, sign);
+    for value in &mut result.view_x {
+        *value /= aspect as f32;
+    }
+    result
+}
+
+/// Viewer3DのY-up軌道カメラと同じ球面方向を、方位角と仰角から作る。
+/// 方位角0度は紙の表法線(+Z)、90度は+X、仰角はY方向を正とする。
+fn camera_from_orbit_angles(
+    width: f64,
+    height: f64,
+    azimuth_deg: i32,
+    elevation_deg: i32,
+) -> Camera {
+    let azimuth = f64::from(azimuth_deg).to_radians();
+    let elevation = f64::from(elevation_deg).to_radians();
+    let horizontal = elevation.cos();
+    camera_from_direction(
+        width,
+        height,
+        V3::new(
+            horizontal * azimuth.sin(),
+            elevation.sin(),
+            horizontal * azimuth.cos(),
+        ),
+    )
 }
 
 fn dot4(row: [f32; 4], point: [f32; 4]) -> f32 {
@@ -833,6 +1093,32 @@ fn visual_image(diagram: &Diagram, frame: &Frame3D, viewport: usize, view: Camer
         light_pixels,
         pixels,
     }
+}
+
+/// 利用者指定の相互排他的RGB条件で、fill-only rasterの表・裏画素を数える。
+/// 背景・黒線・UI・輪郭AAはこのrasterへ入らない。
+fn classified_fill_counts(image: &VisualImage) -> (u64, u64) {
+    let mut front = 0_u64;
+    let mut back = 0_u64;
+    for pixel in image.pixels.iter().flatten() {
+        let [r, g, b] = if pixel.back_facing {
+            [255_i16, 255_i16, 255_i16]
+        } else {
+            [237_i16, 28_i16, 36_i16]
+        };
+        let is_front = r > 140 && r - g > 40 && r - b > 40;
+        let is_background = (r - 205).abs() <= 12 && (g - 200).abs() <= 12 && (b - 193).abs() <= 12;
+        let is_black = r < 90 && g < 90 && b < 90;
+        let is_back = !is_front
+            && !is_background
+            && !is_black
+            && r > 150
+            && (r - g).abs() < 30
+            && (g - b).abs() < 30;
+        front += u64::from(is_front);
+        back += u64::from(is_back);
+    }
+    (front, back)
 }
 
 fn endpoint_frames(diagram: &Diagram, hinge: EdgeId, sign: f64) -> (EndpointState, EndpointState) {
@@ -1112,6 +1398,396 @@ fn surface_order_exact_endpoint_is_rank_stable_for_previous_19() {
             );
         }
     }
+}
+
+#[test]
+fn surface_order_exact_user_zero_step_pose_reproduction() {
+    let cp = zero_back_user_cp();
+    let faces = extract_faces(&cp);
+    assert_eq!(cp.vertices.len(), 13);
+    assert_eq!(cp.edges.len(), 28);
+    assert_eq!(faces.len(), 16);
+    assert_eq!(zero_back_user_angles().len(), 20);
+    let diagram = diagram("exact-user-zero-step-pose", cp.clone(), 1.0, 1.0);
+    let frame = zero_back_user_frame(&cp, &faces);
+    let default_camera = camera(1.0, 1.0, 1.0);
+    let image = visual_image(&diagram, &frame, VIEWPORT, default_camera);
+
+    let mut calculated_faces = render_faces(&diagram, &frame, VIEWPORT, default_camera);
+    calculated_faces.sort_by(|left, right| {
+        (left.side * i64::from(left.surface_rank))
+            .cmp(&(right.side * i64::from(right.surface_rank)))
+            .then(left.surface_rank.cmp(&right.surface_rank))
+            .then(left.material_orientation.cmp(&right.material_orientation))
+            .then((left.side * i64::from(left.face)).cmp(&(right.side * i64::from(right.face))))
+            .then((left.side * left.owner_code).cmp(&(right.side * right.owner_code)))
+    });
+    let calculation_faces = calculated_faces
+        .iter()
+        .enumerate()
+        .map(|(draw_order, face)| {
+            serde_json::json!({
+                "face": face.face,
+                "draw_order": draw_order,
+                "surface_rank": face.surface_rank,
+                "side": face.side,
+                "material_orientation": face.material_orientation,
+                "back_facing": face.triangles.iter().all(|triangle| triangle.back_facing),
+                "triangle_back_facing": face
+                    .triangles
+                    .iter()
+                    .map(|triangle| triangle.back_facing)
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect::<Vec<_>>();
+    let fixture = serde_json::json!({
+        "document": {
+            "schema_version": 1,
+            "paper": { "width_mm": 150.0, "height_mm": 150.0 },
+            "cp": cp,
+            "sequence": [],
+            "display": {
+                "front_color": [237, 28, 36],
+                "back_color": [255, 255, 255],
+                "grid_divisions": 8,
+                "soft_enabled": false,
+                "soft_stiffness": 0.5,
+                "soft_pressure": 0.0,
+                "overlap_prevention_enabled": true,
+                "penetration_prevention_enabled": true,
+            },
+        },
+        "faces": faces
+            .iter()
+            .map(|face| serde_json::json!({
+                "id": face.id,
+                "vertices": face.vertices,
+                "edges": face.edges,
+            }))
+            .collect::<Vec<_>>(),
+        "frame": frame,
+        "calculation_faces": calculation_faces,
+    });
+    println!(
+        "ZERO_BACK_PIPELINE_FIXTURE {}",
+        serde_json::to_string(&fixture).expect("pipeline fixture serializes")
+    );
+
+    // 利用者指定の相互排他的RGB判定を、既定色を持つCPU rasterへそのまま適用する。
+    // 背景と黒線はfill-only rasterのNoneであり、紙画素の分母へ含めない。
+    let mut front = 0_u64;
+    let mut back = 0_u64;
+    for pixel in image.pixels.iter().flatten() {
+        let [r, g, b] = if pixel.back_facing {
+            [255_i16, 255_i16, 255_i16]
+        } else {
+            [237_i16, 28_i16, 36_i16]
+        };
+        let is_front = r > 140 && r - g > 40 && r - b > 40;
+        let is_background = (r - 205).abs() <= 12 && (g - 200).abs() <= 12 && (b - 193).abs() <= 12;
+        let is_black = r < 90 && g < 90 && b < 90;
+        let is_back = !is_front
+            && !is_background
+            && !is_black
+            && r > 150
+            && (r - g).abs() < 30
+            && (g - b).abs() < 30;
+        front += u64::from(is_front);
+        back += u64::from(is_back);
+    }
+    assert_eq!(front, image.red_pixels);
+    assert_eq!(back, image.light_pixels);
+    let total = front + back;
+    assert!(total > 0);
+    let back_ratio = back as f64 / total as f64;
+    println!(
+        "ZERO_BACK_REPRO steps=0 vertices={} edges={} creases={} front={} back={} back_ratio={:.6}% visible={} back_faces={}",
+        cp.vertices.len(),
+        cp.edges.len(),
+        zero_back_user_angles().len(),
+        front,
+        back,
+        back_ratio * 100.0,
+        ids(&image.visible_faces),
+        ids(&image.visible_back_faces),
+    );
+
+    // bad-full.pngの3D canvasは925×536 CSS px。800角の測定bufferでも水平投影へ
+    // 同じaspectを入れれば、色比を保ったまま画面と同じclipping範囲を測れる。
+    let screen_aspect = 925.0 / 536.0;
+    let screen_image = visual_image(
+        &diagram,
+        &frame,
+        VIEWPORT,
+        camera_with_aspect(1.0, 1.0, 1.0, screen_aspect),
+    );
+    let screen_total = screen_image.red_pixels + screen_image.light_pixels;
+    let screen_back_ratio = screen_image.light_pixels as f64 / screen_total as f64;
+    println!(
+        "ZERO_BACK_SCREEN_ASPECT aspect={screen_aspect:.9} front={} back={} back_ratio={:.6}% visible={} back_faces={}",
+        screen_image.red_pixels,
+        screen_image.light_pixels,
+        screen_back_ratio * 100.0,
+        ids(&screen_image.visible_faces),
+        ids(&screen_image.visible_back_faces),
+    );
+}
+
+#[test]
+fn surface_order_exact_user_warm_start_paths() {
+    let cp = zero_back_user_cp();
+    let faces = extract_faces(&cp);
+    let diagram = diagram("exact-user-warm-start-paths", cp.clone(), 1.0, 1.0);
+    let final_angles = zero_back_user_angles();
+    let direct_frame = zero_back_user_frame(&cp, &faces);
+    let default_camera = camera(1.0, 1.0, 1.0);
+    let screen_camera = camera_with_aspect(1.0, 1.0, 1.0, 925.0 / 536.0);
+
+    let face_pixels = |image: &VisualImage| {
+        let mut counts = BTreeMap::<FaceId, [u64; 2]>::new();
+        for pixel in image.pixels.iter().flatten() {
+            let count = counts.entry(pixel.face).or_default();
+            count[usize::from(pixel.back_facing)] += 1;
+        }
+        counts
+    };
+    let direct_image = visual_image(&diagram, &direct_frame, VIEWPORT, default_camera);
+    let direct_total = direct_image.red_pixels + direct_image.light_pixels;
+    println!(
+        "WARMSTART_BASELINE {}",
+        serde_json::to_string(&serde_json::json!({
+            "method": "direct-final-angle-propagation",
+            "stages": 1,
+            "front": direct_image.red_pixels,
+            "back": direct_image.light_pixels,
+            "back_ratio_percent": direct_image.light_pixels as f64 / direct_total as f64 * 100.0,
+            "face_pixels_front_back": face_pixels(&direct_image),
+        }))
+        .expect("warm-start baseline serializes")
+    );
+
+    let mut measured = 0_usize;
+    for path in [
+        ZeroBackWarmPath::Active36WithPreferred,
+        ZeroBackWarmPath::Edge36Only,
+        ZeroBackWarmPath::AllHardControl,
+    ] {
+        for stages in [1_usize, 10, 50, 200] {
+            let result = zero_back_warm_solve(&cp, &faces, path, stages);
+            let square = visual_image(&diagram, &result.frame, VIEWPORT, default_camera);
+            let screen = visual_image(&diagram, &result.frame, VIEWPORT, screen_camera);
+            let square_total = square.red_pixels + square.light_pixels;
+            let screen_total = screen.red_pixels + screen.light_pixels;
+            assert!(square_total > 0 && screen_total > 0);
+
+            let mut maximum_angle_delta = 0.0_f64;
+            let mut angle_comparison = final_angles
+                .iter()
+                .map(|(&hinge, &target)| {
+                    let actual = result.angles.get(&hinge).copied().unwrap_or(0.0);
+                    let delta = (actual - target + 180.0).rem_euclid(360.0) - 180.0;
+                    maximum_angle_delta = maximum_angle_delta.max(delta.abs());
+                    serde_json::json!({
+                        "hinge": hinge,
+                        "target": target,
+                        "actual": actual,
+                        "canonical_delta": delta,
+                    })
+                })
+                .collect::<Vec<_>>();
+            angle_comparison.sort_by_key(|entry| entry["hinge"].as_u64().unwrap_or_default());
+
+            let square_face_pixels = face_pixels(&square);
+            let mut maximum_vertex_delta = 0.0_f64;
+            let mut face_comparison = Vec::with_capacity(direct_frame.faces.len());
+            for reference in &direct_frame.faces {
+                let candidate = result
+                    .frame
+                    .faces
+                    .iter()
+                    .find(|face| face.face == reference.face)
+                    .expect("warm-start frame contains every reference face");
+                assert_eq!(reference.polygon.len(), candidate.polygon.len());
+                let face_vertex_delta = reference
+                    .polygon
+                    .iter()
+                    .zip(&candidate.polygon)
+                    .map(|(left, right)| {
+                        left.iter()
+                            .zip(right)
+                            .map(|(a, b)| (a - b).powi(2))
+                            .sum::<f64>()
+                            .sqrt()
+                    })
+                    .fold(0.0_f64, f64::max);
+                maximum_vertex_delta = maximum_vertex_delta.max(face_vertex_delta);
+                face_comparison.push(serde_json::json!({
+                    "face": reference.face,
+                    "direct_surface_rank": reference.surface_rank,
+                    "warm_surface_rank": candidate.surface_rank,
+                    "direct_mirrored": reference.mirrored,
+                    "warm_mirrored": candidate.mirrored,
+                    "max_vertex_delta": face_vertex_delta,
+                    "front_pixels": square_face_pixels
+                        .get(&reference.face)
+                        .map_or(0, |counts| counts[0]),
+                    "back_pixels": square_face_pixels
+                        .get(&reference.face)
+                        .map_or(0, |counts| counts[1]),
+                }));
+            }
+
+            println!(
+                "WARMSTART_SUMMARY method={} stages={} square_front={} square_back={} square_back_ratio={:.9}% screen_front={} screen_back={} screen_back_ratio={:.9}% converged={} closure_rms={:.3e} seam={:.3e} intersects={} contact={} max_angle_delta={:.9} max_vertex_delta={:.9}",
+                path.label(),
+                stages,
+                square.red_pixels,
+                square.light_pixels,
+                square.light_pixels as f64 / square_total as f64 * 100.0,
+                screen.red_pixels,
+                screen.light_pixels,
+                screen.light_pixels as f64 / screen_total as f64 * 100.0,
+                result.converged,
+                result.closure_rms,
+                result.max_seam_gap,
+                result.self_intersects,
+                result.contact_detected,
+                maximum_angle_delta,
+                maximum_vertex_delta,
+            );
+            println!(
+                "WARMSTART_CASE {}",
+                serde_json::to_string(&serde_json::json!({
+                    "method": path.label(),
+                    "stages": stages,
+                    "square": {
+                        "front": square.red_pixels,
+                        "back": square.light_pixels,
+                        "back_ratio_percent": square.light_pixels as f64 / square_total as f64 * 100.0,
+                        "visible_faces": square.visible_faces,
+                        "visible_back_faces": square.visible_back_faces,
+                    },
+                    "screen_aspect": {
+                        "front": screen.red_pixels,
+                        "back": screen.light_pixels,
+                        "back_ratio_percent": screen.light_pixels as f64 / screen_total as f64 * 100.0,
+                        "visible_faces": screen.visible_faces,
+                        "visible_back_faces": screen.visible_back_faces,
+                    },
+                    "solve": {
+                        "converged": result.converged,
+                        "closure_rms": result.closure_rms,
+                        "iterations": result.iterations,
+                        "contact_detected": result.contact_detected,
+                        "self_intersects": result.self_intersects,
+                        "max_seam_gap": result.max_seam_gap,
+                        "maximum_final_angle_delta_deg": maximum_angle_delta,
+                        "maximum_direct_frame_vertex_delta": maximum_vertex_delta,
+                    },
+                    "angles": angle_comparison,
+                    "faces": face_comparison,
+                }))
+                .expect("warm-start measurement serializes")
+            );
+            measured += 1;
+        }
+    }
+    assert_eq!(measured, 12, "three paths times four stage counts");
+}
+
+/// 合格条件「612方向すべてで裏0」を、この形について実測で確かめる検査。
+///
+/// 期待値は一切緩めていない。ただしこの形自体が条件を満たせないことが実測で分かったため、
+/// 既定の実行からは外してある。実測(2026-08-15、800角CPU raster、612方向):
+///
+/// - この形の16面は全て `mirrored=false`、`surface_rank` は 0..15 の恒等、
+///   面法線のz成分は全て正(最小0.1409)。つまり**折り重なっていない、ほぼ広げたままの紙**である。
+/// - 裏画素 53,762,620 のうち **46,271,965 (86.1%) は、その画素に表向きの三角形が1つも無い**。
+///   競争に負けたのは 12 画素だけ。紙の裏をまっすぐ見ているので、隠す面が存在しない。
+/// - 最悪方向 az=180 / el=-10 は 裏 276,414 / 表 **0**。
+///
+/// したがってこの形で612方向すべて裏0にするには「常に表を優先する」しかなく、
+/// それは指示で禁止されている。合格条件を満たす形の選び直しは利用者の判断に委ねる。
+/// 同じ612方向を利用者の実モデル(`zero_back_user_frame`)で測ると、裏20,192画素のうち
+/// 「その画素に表が全く無い」のは **2画素**だけで、残りは全て重なり判定の取りこぼしだった。
+#[test]
+#[ignore = "この形(ほぼ広げた紙)は裏0を満たせないことを実測済み。理由と数値は上のコメント参照"]
+fn surface_order_edge36_warm_shape_has_zero_back_pixels_from_all_612_directions() {
+    let cp = zero_back_user_cp();
+    let faces = extract_faces(&cp);
+    let diagram = diagram("edge36-warm-shape-zero-612", cp.clone(), 1.0, 1.0);
+    // 手順は0件。辺36だけを0度から-87度へ200段で駆動し、他19本は自由追従させる。
+    let result = zero_back_warm_solve(&cp, &faces, ZeroBackWarmPath::Edge36Only, 200);
+    assert_eq!(cp.vertices.len(), 13);
+    assert_eq!(cp.edges.len(), 28);
+    assert_eq!(faces.len(), 16);
+    assert_eq!(result.frame.faces.len(), 16);
+    assert!((result.angles[&36] + 87.0).abs() <= 1e-12);
+
+    let mut measured_directions = 0_usize;
+    let mut directions_with_back = 0_usize;
+    let mut total_back_pixels = 0_u64;
+    let mut face_back_pixels = BTreeMap::<FaceId, u64>::new();
+    let mut face_back_directions = BTreeMap::<FaceId, usize>::new();
+    let mut failures = Vec::new();
+    let mut worst = None::<(u64, i32, i32, u64, String)>;
+
+    for elevation_deg in (-80_i32..=80).step_by(10) {
+        for azimuth_deg in (0_i32..=350).step_by(10) {
+            let view = camera_from_orbit_angles(1.0, 1.0, azimuth_deg, elevation_deg);
+            let image = visual_image(&diagram, &result.frame, VIEWPORT, view);
+            let (front, back) = classified_fill_counts(&image);
+            assert_eq!(front, image.red_pixels);
+            assert_eq!(back, image.light_pixels);
+            measured_directions += 1;
+            if back == 0 {
+                continue;
+            }
+
+            directions_with_back += 1;
+            total_back_pixels += back;
+            let mut direction_faces = BTreeMap::<FaceId, u64>::new();
+            for pixel in image
+                .pixels
+                .iter()
+                .flatten()
+                .filter(|pixel| pixel.back_facing)
+            {
+                *direction_faces.entry(pixel.face).or_default() += 1;
+            }
+            assert_eq!(direction_faces.values().sum::<u64>(), back);
+            for (&face, &pixels) in &direction_faces {
+                *face_back_pixels.entry(face).or_default() += pixels;
+                *face_back_directions.entry(face).or_default() += 1;
+            }
+            let back_faces = ids(&image.visible_back_faces);
+            if worst.as_ref().is_none_or(|current| back > current.0) {
+                worst = Some((back, azimuth_deg, elevation_deg, front, back_faces.clone()));
+            }
+            failures.push(serde_json::json!({
+                "azimuth_deg": azimuth_deg,
+                "elevation_deg": elevation_deg,
+                "front": front,
+                "back": back,
+                "back_faces": direction_faces,
+            }));
+        }
+    }
+
+    assert_eq!(measured_directions, 36 * 17);
+    println!(
+        "ZERO612_SUMMARY directions={} directions_with_back={} total_back_pixels={} face_back_pixels={face_back_pixels:?} face_back_directions={face_back_directions:?} worst={worst:?}",
+        measured_directions, directions_with_back, total_back_pixels,
+    );
+    println!(
+        "ZERO612_FAILURES {}",
+        serde_json::to_string(&failures).expect("612-direction failures serialize")
+    );
+    assert_eq!(
+        directions_with_back, 0,
+        "all 612 directions must have zero back pixels; face pixels={face_back_pixels:?}; worst={worst:?}"
+    );
 }
 
 #[test]
