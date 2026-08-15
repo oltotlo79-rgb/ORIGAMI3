@@ -20,8 +20,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use ori3_cp::Face;
 use ori3_model::{
-    CreasePattern, Document, Driver, EdgeId, EdgeKind, EditOp, FaceId, Frame3D, MAX_GRID_DIVISIONS,
-    MIN_GRID_DIVISIONS, Paper, SCHEMA_VERSION, SeqOp, StepId, TechniqueKind, VertexId,
+    CreasePattern, Document, Driver, EdgeId, EdgeKind, EditOp, FaceId, FoldStep, Frame3D,
+    MAX_GRID_DIVISIONS, MIN_GRID_DIVISIONS, Paper, SCHEMA_VERSION, SavedDocument, SeqOp,
+    StepCreases, StepId, TechniqueKind, VertexId,
 };
 
 /// undo履歴の最大件数。超過時は最古をFIFOで破棄する。
@@ -53,6 +54,10 @@ pub(crate) fn write_atomic(target: &Path, bytes: &[u8]) -> std::io::Result<()> {
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct DocumentView {
     pub doc: Document,
+    /// 手順ごとに展開図へ新しく足した折り線(手順IDで結び付ける)。
+    /// 2D画面が「その手順の時点の展開図」を推測せずに組み立てるための来歴で、
+    /// 作品ファイルにも同じ形で保存する。
+    pub step_creases: Vec<StepCreases>,
     pub faces: Vec<Face>,
     /// 操作固有の警告 + `ori3_cp::validate` + 手順再生の警告(「止めずに警告」原則)
     pub warnings: Vec<String>,
@@ -86,14 +91,25 @@ pub struct DocumentView {
     pub fold_through_proposal: Option<ori3_layers::FoldThroughProposal>,
 }
 
+/// undo/redoで行き来する状態一式。展開図・手順と、その来歴は必ず一緒に戻す。
+#[derive(Clone, Debug, PartialEq)]
+struct Snapshot {
+    doc: Document,
+    step_creases: Vec<StepCreases>,
+}
+
 pub struct DocumentStore {
     doc: Document,
+    /// 手順ごとに展開図へ新しく足した折り線(手順IDで結び付ける)。
+    /// 手順を消しても消さない(並べ替えは削除+挿入で行われるため)。
+    /// 保存時だけ、存在しない手順の分を落として書き出す。
+    step_creases: Vec<StepCreases>,
     /// 現docに対応する導出faces(pose_solveが毎回extract_facesを再実行しない
     /// ためのキャッシュ)。docの変更経路はstore内(new_document/open/commit/
     /// undo/redo)に閉じているため、その全箇所で更新すれば整合が保たれる
     faces: Vec<Face>,
-    undo_stack: Vec<Document>,
-    redo_stack: Vec<Document>,
+    undo_stack: Vec<Snapshot>,
+    redo_stack: Vec<Snapshot>,
     dirty: bool,
     path: Option<PathBuf>,
     /// pose_solveの前回解(次回のwarm start用)。ソルバーは知らない辺IDを
@@ -121,6 +137,7 @@ impl Default for DocumentStore {
         DocumentStore {
             faces: ori3_cp::extract_faces(&doc.cp),
             doc,
+            step_creases: Vec::new(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             dirty: false,
@@ -135,8 +152,9 @@ impl DocumentStore {
     pub fn new_document(&mut self, paper: Paper) -> Result<DocumentView, String> {
         check_paper(&paper)?;
         let doc = Document::new(paper);
-        let view = build_view(&doc, Vec::new());
+        let view = build_view(&doc, &[], Vec::new());
         self.doc = doc;
+        self.step_creases = Vec::new();
         self.faces = view.faces.clone();
         self.undo_stack.clear();
         self.redo_stack.clear();
@@ -150,10 +168,11 @@ impl DocumentStore {
     pub fn open(&mut self, path: &Path) -> Result<DocumentView, String> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| format!("ファイルを開けませんでした: {e}"))?;
-        let doc = parse_document(&text)?;
+        let saved = parse_document(&text)?;
         // 導出を先に済ませ、成功した場合のみ状態を確定する
-        let view = build_view(&doc, Vec::new());
-        self.doc = doc;
+        let view = build_view(&saved.document, &saved.step_creases, Vec::new());
+        self.doc = saved.document;
+        self.step_creases = saved.step_creases;
         self.faces = view.faces.clone();
         self.undo_stack.clear();
         self.redo_stack.clear();
@@ -172,12 +191,23 @@ impl DocumentStore {
                 .clone()
                 .ok_or_else(|| "保存先が指定されていません".to_string())?,
         };
-        let json = serde_json::to_string_pretty(&self.doc)
+        let json = serde_json::to_string_pretty(&self.saved_document())
             .map_err(|e| format!("保存データの作成に失敗しました: {e}"))?;
         write_atomic(&target, json.as_bytes()).map_err(|e| format!("保存に失敗しました: {e}"))?;
         self.path = Some(target);
         self.dirty = false;
         Ok(())
+    }
+
+    /// ファイルへ書き出す形(作品 + 手順ごとの追加折り線の来歴)を作る。
+    ///
+    /// 今は存在しない手順の来歴は書き出さない。書き出さないことで、読み直した
+    /// 作品の新しい手順IDが古い来歴と衝突しなくなる。
+    pub(crate) fn saved_document(&self) -> SavedDocument {
+        SavedDocument {
+            document: self.doc.clone(),
+            step_creases: retain_existing_steps(&self.doc, &self.step_creases),
+        }
     }
 
     /// 編集操作を1つ適用する。実際に変更が起きた場合のみundo履歴に積む。
@@ -203,7 +233,9 @@ impl DocumentStore {
         for op in ops {
             Self::edit_document(&mut doc, op, &mut warnings)?;
         }
-        let view = self.commit(doc, warnings);
+        // 展開図の編集は手順を増やさない。線を引いた時点の来歴は変わらない
+        let step_creases = self.step_creases.clone();
+        let view = self.commit(doc, step_creases, warnings);
         if replaced_crease_pattern {
             // CP全置換前の解は辺IDが偶然一致しても使ってはいけない。
             self.pose_angles = None;
@@ -311,17 +343,24 @@ impl DocumentStore {
         spatial: Option<SpatialFoldSpec>,
     ) -> Result<DocumentView, String> {
         let mut doc = self.doc.clone();
+        let mut step_creases = self.step_creases.clone();
         let mut warnings: Vec<String> = Vec::new();
         let mut fold_through_proposal = None;
         match op {
-            SeqOp::PushStep { step } => doc.sequence.push(step),
+            SeqOp::PushStep { step } => {
+                record_frontend_step(&mut step_creases, &step);
+                doc.sequence.push(step);
+            }
             SeqOp::InsertStep { index, step } => {
                 if index > doc.sequence.len() {
                     return Err(format!("挿入位置 {index} が手順の数を超えています"));
                 }
+                record_frontend_step(&mut step_creases, &step);
                 doc.sequence.insert(index, step);
             }
             SeqOp::RemoveStep { id } => {
+                // 来歴は消さない。手順の並べ替えは削除+挿入で行われるため、
+                // ここで消すと並べ替えただけで折り線の来歴が失われる
                 let before = doc.sequence.len();
                 doc.sequence.retain(|s| s.id != id);
                 if doc.sequence.len() == before {
@@ -368,8 +407,10 @@ impl DocumentStore {
                     let mut result =
                         ori3_layers::fold_from_plane_3d(&doc, &self.faces, up_to, &input);
                     if let Some(mut step) = result.step.take() {
-                        step.id = next_step_id(&doc);
+                        step.id = next_step_id(&doc, &step_creases);
                         step.alignment = alignment;
+                        let lines = added_crease_lines(&doc.cp, &result.cp, &result.added_edges);
+                        record_step_creases(&mut step_creases, step.id, lines);
                         doc.cp = result.cp;
                         doc.sequence.insert(up_to, step);
                     }
@@ -392,8 +433,10 @@ impl DocumentStore {
                                 accept_additional_crease,
                             )?;
                             let mut step = result.step;
-                            step.id = next_step_id(&doc);
+                            step.id = next_step_id(&doc, &step_creases);
                             step.alignment = alignment;
+                            let lines = added_crease_lines(&doc.cp, &cp, &result.added_edges);
+                            record_step_creases(&mut step_creases, step.id, lines);
                             doc.cp = cp;
                             doc.sequence.insert(up_to, step);
                             warnings = state_warnings;
@@ -421,8 +464,11 @@ impl DocumentStore {
                             let mut result =
                                 ori3_layers::fold_from_plane_3d(&doc, &self.faces, up_to, &input);
                             if let Some(mut step) = result.step.take() {
-                                step.id = next_step_id(&doc);
+                                step.id = next_step_id(&doc, &step_creases);
                                 step.alignment = alignment;
+                                let lines =
+                                    added_crease_lines(&doc.cp, &result.cp, &result.added_edges);
+                                record_step_creases(&mut step_creases, step.id, lines);
                                 doc.cp = result.cp;
                                 doc.sequence.insert(up_to, step);
                             }
@@ -513,7 +559,9 @@ impl DocumentStore {
                     },
                 )?;
                 let mut step = result.step;
-                step.id = next_step_id(&doc);
+                step.id = next_step_id(&doc, &step_creases);
+                let lines = added_crease_lines(&doc.cp, &cp, &result.added_edges);
+                record_step_creases(&mut step_creases, step.id, lines);
                 doc.cp = cp;
                 doc.sequence.insert(up_to, step);
                 warnings = state_warnings;
@@ -564,7 +612,9 @@ impl DocumentStore {
                     },
                 )?;
                 let mut step = result.step;
-                step.id = next_step_id(&doc);
+                step.id = next_step_id(&doc, &step_creases);
+                let lines = added_crease_lines(&doc.cp, &cp, &result.added_edges);
+                record_step_creases(&mut step_creases, step.id, lines);
                 doc.cp = cp;
                 doc.sequence.insert(up_to, step);
                 warnings = state_warnings;
@@ -572,7 +622,7 @@ impl DocumentStore {
                 warnings.extend(result.warnings);
             }
         }
-        let mut view = self.commit(doc, warnings);
+        let mut view = self.commit(doc, step_creases, warnings);
         view.fold_through_proposal = fold_through_proposal;
         Ok(view)
     }
@@ -584,9 +634,12 @@ impl DocumentStore {
             .undo_stack
             .last()
             .ok_or_else(|| "これ以上元に戻せません".to_string())?;
-        let view = build_view(prev, Vec::new());
+        let view = build_view(&prev.doc, &prev.step_creases, Vec::new());
         let prev = self.undo_stack.pop().expect("直前にlastで確認済み");
-        self.redo_stack.push(std::mem::replace(&mut self.doc, prev));
+        self.redo_stack.push(Snapshot {
+            doc: std::mem::replace(&mut self.doc, prev.doc),
+            step_creases: std::mem::replace(&mut self.step_creases, prev.step_creases),
+        });
         self.faces = view.faces.clone();
         self.dirty = true;
         Ok(view)
@@ -598,9 +651,12 @@ impl DocumentStore {
             .redo_stack
             .last()
             .ok_or_else(|| "これ以上やり直せません".to_string())?;
-        let view = build_view(next, Vec::new());
+        let view = build_view(&next.doc, &next.step_creases, Vec::new());
         let next = self.redo_stack.pop().expect("直前にlastで確認済み");
-        self.undo_stack.push(std::mem::replace(&mut self.doc, next));
+        self.undo_stack.push(Snapshot {
+            doc: std::mem::replace(&mut self.doc, next.doc),
+            step_creases: std::mem::replace(&mut self.step_creases, next.step_creases),
+        });
         self.faces = view.faces.clone();
         self.dirty = true;
         Ok(view)
@@ -623,19 +679,20 @@ impl DocumentStore {
     /// 未保存フラグを書き換えるため、自動保存ファイルへ書くと本来の保存先が
     /// 乗っ取られ、未保存の印も消えてしまう。ここは複製を返すだけで
     /// `path`/`dirty` を触らず、書き出しはロックの外(autosave.rs)で行う。
-    pub fn autosave_snapshot(&self) -> Option<(Option<PathBuf>, Document)> {
+    pub fn autosave_snapshot(&self) -> Option<(Option<PathBuf>, SavedDocument)> {
         if !self.dirty {
             return None;
         }
-        Some((self.path.clone(), self.doc.clone()))
+        Some((self.path.clone(), self.saved_document()))
     }
 
-    /// 自動保存から読んだDocumentを現在の作品にする(復元)。
+    /// 自動保存から読んだ作品を現在の作品にする(復元)。
     /// 元の保存先を引き継ぎ、まだ書き出していない内容なので未保存扱いにする。
-    pub fn restore(&mut self, doc: Document, path: Option<PathBuf>) -> DocumentView {
+    pub fn restore(&mut self, saved: SavedDocument, path: Option<PathBuf>) -> DocumentView {
         // 導出を先に済ませてから状態を確定する(openと同じ規約)
-        let view = build_view(&doc, Vec::new());
-        self.doc = doc;
+        let view = build_view(&saved.document, &saved.step_creases, Vec::new());
+        self.doc = saved.document;
+        self.step_creases = saved.step_creases;
         self.faces = view.faces.clone();
         self.undo_stack.clear();
         self.redo_stack.clear();
@@ -693,13 +750,23 @@ impl DocumentStore {
     /// 導出(validate/extract_faces)を候補docに対して先に実行し、成功した場合のみ
     /// 状態を入れ替える。導出がpanicしてもstoreは無変更のまま(guardがErr化し、
     /// 「Err⇒無変更」の不変条件を保つ)。
-    fn commit(&mut self, doc: Document, warnings: Vec<String>) -> DocumentView {
-        let view = build_view(&doc, warnings);
-        if doc != self.doc {
+    fn commit(
+        &mut self,
+        doc: Document,
+        step_creases: Vec<StepCreases>,
+        warnings: Vec<String>,
+    ) -> DocumentView {
+        let view = build_view(&doc, &step_creases, warnings);
+        if doc != self.doc || step_creases != self.step_creases {
             if self.undo_stack.len() >= MAX_UNDO {
                 self.undo_stack.remove(0);
             }
-            self.undo_stack.push(std::mem::replace(&mut self.doc, doc));
+            let next = Snapshot { doc, step_creases };
+            let prev = Snapshot {
+                doc: std::mem::replace(&mut self.doc, next.doc),
+                step_creases: std::mem::replace(&mut self.step_creases, next.step_creases),
+            };
+            self.undo_stack.push(prev);
             self.faces = view.faces.clone();
             self.redo_stack.clear();
             self.dirty = true;
@@ -708,9 +775,11 @@ impl DocumentStore {
     }
 }
 
-/// 保存されたJSONをDocumentへ戻す。schema_versionが合わなければErr。
+/// 保存されたJSONを作品へ戻す。schema_versionが合わなければErr。
 /// `open` と自動保存の復元(autosave.rs)で共通に使う。
-pub fn parse_document(text: &str) -> Result<Document, String> {
+///
+/// 手順ごとの追加折り線の来歴を持たない旧形式のファイルも、来歴なしとして読める。
+pub fn parse_document(text: &str) -> Result<SavedDocument, String> {
     let value: serde_json::Value = serde_json::from_str(text)
         .map_err(|e| format!("ファイルの内容を読み取れませんでした: {e}"))?;
     match value.get("schema_version").and_then(|v| v.as_u64()) {
@@ -731,10 +800,15 @@ pub fn parse_document(text: &str) -> Result<Document, String> {
 
 /// Documentから表示用ビューを作る(faces/warningsは毎回導出)。
 /// 立体(`frame`)は入れない。重い手順再生はロックの外で `attach_replay` が行う。
-fn build_view(doc: &Document, mut warnings: Vec<String>) -> DocumentView {
+fn build_view(
+    doc: &Document,
+    step_creases: &[StepCreases],
+    mut warnings: Vec<String>,
+) -> DocumentView {
     warnings.extend(ori3_cp::validate(&doc.cp));
     DocumentView {
         doc: doc.clone(),
+        step_creases: retain_existing_steps(doc, step_creases),
         faces: ori3_cp::extract_faces(&doc.cp),
         warnings,
         violations: ori3_cp::local_violations(&doc.cp),
@@ -1251,12 +1325,62 @@ fn check_insert_point(doc: &Document, up_to: usize) -> Result<Vec<String>, Strin
 }
 
 /// 新しい手順に振るID(既存の最大+1)。手順を消しても再利用しない。
-fn next_step_id(doc: &Document) -> StepId {
+/// 次の手順IDを決める。今ある手順だけでなく、消した手順の来歴が持つIDも避ける。
+/// 避けないと、消した手順の来歴が新しい手順の来歴として読まれてしまう。
+fn next_step_id(doc: &Document, step_creases: &[StepCreases]) -> StepId {
     doc.sequence
         .iter()
         .map(|s| s.id)
+        .chain(step_creases.iter().map(|c| c.step))
         .max()
         .map_or(0, |m| m.saturating_add(1))
+}
+
+/// 今ある手順の分だけを残す(保存とフロントへの受け渡し用)。
+fn retain_existing_steps(doc: &Document, step_creases: &[StepCreases]) -> Vec<StepCreases> {
+    step_creases
+        .iter()
+        .filter(|creases| doc.sequence.iter().any(|step| step.id == creases.step))
+        .cloned()
+        .collect()
+}
+
+/// この折りで展開図へ**新しく足した**折り線を、CP座標の線分として取り出す。
+///
+/// 折る前から在った辺は除く。補助線から折り線へ昇格した辺は辺IDが変わらないので、
+/// 「先に描いてあった線」として折る前の展開図にも残る。
+fn added_crease_lines(
+    before: &CreasePattern,
+    after: &CreasePattern,
+    added: &[EdgeId],
+) -> Vec<[[f64; 2]; 2]> {
+    let existing: HashSet<EdgeId> = before.edges.iter().map(|e| e.id).collect();
+    let pos: HashMap<VertexId, [f64; 2]> = after.vertices.iter().map(|v| (v.id, v.pos)).collect();
+    added
+        .iter()
+        .filter(|id| !existing.contains(id))
+        .filter_map(|id| after.edges.iter().find(|e| e.id == *id))
+        .filter_map(|e| Some([*pos.get(&e.v0)?, *pos.get(&e.v1)?]))
+        .collect()
+}
+
+/// 画面から送られてきた手順の来歴を整える。
+///
+/// 画面が新しく作る手順は「仕上げの角度」(Pose)だけで、折り線は1本も足さない。
+/// 空の来歴を残して、同じIDだった古い手順の来歴を引き継がないようにする。
+/// 折りの手順が送られてくるのは並べ替え(削除+挿入)のときなので、
+/// その場合は既にある来歴をそのまま残す。
+fn record_frontend_step(list: &mut Vec<StepCreases>, step: &FoldStep) {
+    if step.kind == TechniqueKind::Pose {
+        record_step_creases(list, step.id, Vec::new());
+    }
+}
+
+/// 手順1つ分の来歴を記録する。線を1本も足していない手順は空で記録し、
+/// 「この手順は線を足していない」ことを証拠として残す(推測へ落とさない)。
+fn record_step_creases(list: &mut Vec<StepCreases>, step: StepId, lines: Vec<[[f64; 2]; 2]>) {
+    list.retain(|creases| creases.step != step);
+    list.push(StepCreases { step, lines });
 }
 
 fn is_border(cp: &CreasePattern, id: u32) -> bool {
@@ -2559,6 +2683,191 @@ mod tests {
         assert_eq!(view.faces.len(), 2);
     }
 
+    /// D16: 折りが展開図へ新しく足した折り線を、手順ごとの来歴として記録する。
+    #[test]
+    fn fold_records_the_crease_it_adds_to_the_cp() {
+        let mut store = square_store();
+
+        let view = store
+            .apply_seq(fold_op(0, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5]))
+            .unwrap();
+
+        let step_id = view.doc.sequence[0].id;
+        let creases = view
+            .step_creases
+            .iter()
+            .find(|c| c.step == step_id)
+            .expect("折りの来歴を記録する");
+        assert_eq!(creases.lines.len(), 1, "lines={:?}", creases.lines);
+        let [a, b] = creases.lines[0];
+        assert!(
+            (a[0] - 0.5).abs() < 1e-9 && (b[0] - 0.5).abs() < 1e-9,
+            "a={a:?} b={b:?}"
+        );
+        assert!(
+            ((a[1] - b[1]).abs() - 1.0).abs() < 1e-9,
+            "紙の端から端までの1本: a={a:?} b={b:?}"
+        );
+    }
+
+    /// D16: 先に描いておいた折り線で折っても、その手順が線を足したことにはならない。
+    /// 来歴が空になることで、2D画面はその線を「折る前」から出し続けられる。
+    #[test]
+    fn folding_along_a_predrawn_crease_records_no_added_line() {
+        let mut store = square_store();
+        store
+            .apply_edit(EditOp::AddSegment {
+                a: [0.5, 0.0],
+                b: [0.5, 1.0],
+                kind: EdgeKind::Valley,
+            })
+            .expect("先に折り線を描く");
+        let drawn: Vec<EdgeId> = store
+            .doc
+            .cp
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::Valley)
+            .map(|e| e.id)
+            .collect();
+        assert_eq!(drawn.len(), 1, "描いた折り線は1本");
+
+        let view = store
+            .apply_seq(fold_op(0, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5]))
+            .unwrap();
+
+        let step_id = view.doc.sequence[0].id;
+        let creases = view
+            .step_creases
+            .iter()
+            .find(|c| c.step == step_id)
+            .expect("来歴は必ず記録する");
+        assert!(
+            creases.lines.is_empty(),
+            "既にある折り線で折った手順は線を足していない: {:?}",
+            creases.lines
+        );
+        assert!(
+            view.doc.cp.edges.iter().any(|e| e.id == drawn[0]),
+            "描いた折り線はそのまま残る"
+        );
+    }
+
+    /// 元に戻す・やり直しで、展開図と一緒に来歴も行き来する。
+    #[test]
+    fn undo_and_redo_move_the_crease_history_with_the_document() {
+        let mut store = square_store();
+        store
+            .apply_seq(fold_op(0, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5]))
+            .unwrap();
+        assert_eq!(store.step_creases.len(), 1);
+
+        let view = store.undo().unwrap();
+        assert!(view.step_creases.is_empty(), "折る前に来歴は無い");
+        assert!(store.step_creases.is_empty());
+
+        let view = store.redo().unwrap();
+        assert_eq!(view.step_creases.len(), 1, "やり直しで来歴も戻る");
+    }
+
+    /// 手順の並べ替え(削除+挿入)で来歴を落とさない。
+    #[test]
+    fn reordering_steps_keeps_the_crease_history() {
+        let mut store = square_store();
+        store
+            .apply_seq(fold_op(0, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5]))
+            .unwrap();
+        store
+            .apply_seq(fold_op(1, [[0.0, 0.5], [1.0, 0.5]], [0.5, 0.25]))
+            .unwrap();
+        let before = store.step_creases.clone();
+        assert_eq!(before.len(), 2);
+
+        let moved = store.doc.sequence[1].clone();
+        store.apply_seq(SeqOp::RemoveStep { id: moved.id }).unwrap();
+        let view = store
+            .apply_seq(SeqOp::InsertStep {
+                index: 0,
+                step: moved,
+            })
+            .unwrap();
+
+        assert_eq!(view.doc.sequence.len(), 2);
+        let mut after = view.step_creases.clone();
+        after.sort_by_key(|c| c.step);
+        assert_eq!(after, before, "並べ替えても各手順の来歴は変わらない");
+    }
+
+    /// 来歴を持たない旧形式の作品も、これまでどおり開ける。
+    #[test]
+    fn old_files_without_crease_history_still_open() {
+        let mut store = square_store();
+        store.apply_edit(diagonal()).unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "ori3_store_test_{}_old_format.ori3",
+            std::process::id()
+        ));
+        // 旧形式 = Documentだけを書き出したファイル(step_creasesの項目が無い)
+        let text = serde_json::to_string_pretty(&store.doc).unwrap();
+        assert!(!text.contains("step_creases"), "旧形式に来歴は入らない");
+        std::fs::write(&path, &text).unwrap();
+        let expected = store.doc.clone();
+
+        let view = store.open(&path).expect("旧形式の作品を開ける");
+
+        assert_eq!(view.doc, expected, "作品の内容は変わらない");
+        assert!(view.step_creases.is_empty(), "来歴は空として読む");
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// 保存して開き直すと、手順ごとの来歴も元どおりになる。
+    #[test]
+    fn saving_and_opening_keeps_the_crease_history() {
+        let mut store = square_store();
+        store
+            .apply_seq(fold_op(0, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5]))
+            .unwrap();
+        let expected = store.step_creases.clone();
+        let path = std::env::temp_dir().join(format!(
+            "ori3_store_test_{}_history.ori3",
+            std::process::id()
+        ));
+        store.save(Some(&path)).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("step_creases"), "来歴も書き出す");
+
+        let view = store.open(&path).expect("保存した作品を開ける");
+
+        assert_eq!(view.step_creases, expected);
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// 消した手順の来歴は書き出さず、新しい手順IDとも衝突させない。
+    #[test]
+    fn removed_steps_do_not_leave_history_in_the_saved_file() {
+        let mut store = square_store();
+        store
+            .apply_seq(fold_op(0, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5]))
+            .unwrap();
+        let removed = store.doc.sequence[0].id;
+        store.apply_seq(SeqOp::RemoveStep { id: removed }).unwrap();
+
+        let view = store
+            .apply_seq(fold_op(0, [[0.0, 0.5], [1.0, 0.5]], [0.5, 0.25]))
+            .unwrap();
+
+        assert_ne!(
+            view.doc.sequence[0].id, removed,
+            "消した手順の来歴が残る間は同じIDを使わない"
+        );
+        assert_eq!(
+            view.step_creases.len(),
+            1,
+            "書き出す来歴は今ある手順の分だけ"
+        );
+        assert_eq!(view.step_creases[0].step, view.doc.sequence[0].id);
+    }
+
     /// 「この形で仕上げる」に相当する90°のPoseを記録した後も、同じFoldThrough入口で
     /// 次の折りを受け付け、展開図・立体・手順をまとめて更新する。
     #[test]
@@ -3169,7 +3478,7 @@ mod tests {
         let faces = ori3_cp::extract_faces(&store.doc.cp);
         let expected = ori3_layers::saved_layer_order_at(&store.doc, &faces, 1, 1.0)
             .expect("反転した保存順を解決できる");
-        let mut view = build_view(&store.doc, Vec::new());
+        let mut view = build_view(&store.doc, &store.step_creases, Vec::new());
 
         attach_replay(&mut view);
 

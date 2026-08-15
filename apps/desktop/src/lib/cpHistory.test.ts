@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Document, FoldStep, TechniqueKind, Vec2 } from "./types";
-import { documentForCpStep } from "./cpHistory";
+import type { Document, FoldStep, StepCreases, TechniqueKind, Vec2 } from "./types";
+import { documentForCpStep, violationsForCpStep } from "./cpHistory";
 
 function step(
   id: number,
@@ -142,8 +142,7 @@ describe("documentForCpStep", () => {
     expect(edgeIds(documentForCpStep(doc, 0))).toContain(13);
   });
 
-  // D16は次回に直す。
-  it.fails("D16: 先に描いた折り線を後の手順で使っても折る前から表示する", () => {
+  it("D16: 先に描いた折り線を後の手順で使っても折る前から表示する", () => {
     const doc = documentWithHistory();
     doc.sequence[0] = {
       ...doc.sequence[0],
@@ -154,7 +153,87 @@ describe("documentForCpStep", () => {
     };
 
     // existingLineは少なくともこの折りより前に線が存在した証拠になる。
-    // ただし通常の折りには同じ証拠が無く、一般解には作成時点の永続的な来歴が必要。
+    // 来歴を持たない旧形式で使える唯一の証拠なので、推測を打ち切る。
     expect(edgeIds(documentForCpStep(doc, 0))).toContain(13);
+  });
+});
+
+describe("documentForCpStep(来歴つき)", () => {
+  it("線を足していないと記録された手順では、先に描いた折り線を折る前から表示する", () => {
+    const doc = documentWithHistory();
+    // 手順1は既にある線(id 13)で折ったので、新しく足した線は無い
+    const creases: StepCreases[] = [
+      { step: 1, lines: [] },
+      { step: 2, lines: [[[0.75, 0], [0.75, 1]]] },
+    ];
+
+    expect(edgeIds(documentForCpStep(doc, 0, creases))).toEqual([10, 11, 12, 13]);
+    expect(edgeIds(documentForCpStep(doc, 1, creases))).toEqual([10, 11, 12, 13]);
+    expect(edgeIds(documentForCpStep(doc, 2, creases))).toEqual([10, 11, 12, 13, 14]);
+  });
+
+  it("記録された線と、その線が後から分割された断片を同じ手順から表示する", () => {
+    const doc = documentWithHistory();
+    doc.cp.vertices.push({ id: 20, pos: [0.75, 0.4] });
+    doc.cp.edges.push({ id: 20, v0: 6, v1: 20, kind: "Valley" });
+    const creases: StepCreases[] = [
+      { step: 1, lines: [[[0.25, 0], [0.25, 1]]] },
+      { step: 2, lines: [[[0.75, 0], [0.75, 1]]] },
+    ];
+
+    expect(edgeIds(documentForCpStep(doc, 0, creases))).toEqual([10, 11, 12]);
+    expect(edgeIds(documentForCpStep(doc, 1, creases))).toEqual([10, 11, 12, 13]);
+    expect(edgeIds(documentForCpStep(doc, 2, creases))).toContain(20);
+  });
+
+  it("将来の手順で足される線の端点を、過去の手順の点として表示しない", () => {
+    const doc = documentWithHistory();
+    const creases: StepCreases[] = [
+      { step: 1, lines: [[[0.25, 0], [0.25, 1]]] },
+      { step: 2, lines: [[[0.75, 0], [0.75, 1]]] },
+    ];
+
+    const atZero = documentForCpStep(doc, 0, creases);
+    expect(atZero.cp.vertices.map((vertex) => vertex.id)).toEqual([0, 1, 2, 3, 8, 9]);
+    expect(documentForCpStep(doc, 1, creases).cp.vertices.map((v) => v.id)).toEqual([
+      0, 1, 2, 3, 4, 5, 8, 9,
+    ]);
+    // 元Documentは変えない
+    expect(doc.cp.vertices).toHaveLength(10);
+  });
+
+  it("来歴が空の旧形式の作品は、来歴を渡さないときと同じ見え方になる", () => {
+    const doc = documentWithHistory();
+    const old = documentWithHistory();
+
+    for (const step of [0, 1, 2]) {
+      expect(edgeIds(documentForCpStep(doc, step, []))).toEqual(
+        edgeIds(documentForCpStep(old, step)),
+      );
+      expect(documentForCpStep(doc, step, []).cp.vertices).toEqual(
+        documentForCpStep(old, step).cp.vertices,
+      );
+    }
+  });
+});
+
+describe("violationsForCpStep", () => {
+  it("その手順の展開図にある点の違反だけを残す", () => {
+    const doc = documentWithHistory();
+    const creases: StepCreases[] = [
+      { step: 1, lines: [[[0.25, 0], [0.25, 1]]] },
+      { step: 2, lines: [[[0.75, 0], [0.75, 1]]] },
+    ];
+
+    // 4・5は手順1で、6・7は手順2で現れる点
+    expect(violationsForCpStep(documentForCpStep(doc, 0, creases), [4, 6, 8])).toEqual([8]);
+    expect(violationsForCpStep(documentForCpStep(doc, 1, creases), [4, 6, 8])).toEqual([4, 8]);
+  });
+
+  it("最新の展開図では一覧をそのまま返す", () => {
+    const doc = documentWithHistory();
+    const violations = [4, 6, 8];
+
+    expect(violationsForCpStep(doc, violations)).toBe(violations);
   });
 });

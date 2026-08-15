@@ -86,6 +86,7 @@ import type {
   Skeleton,
   SoftMesh,
   SoftSettings,
+  StepCreases,
   TechniqueKind,
   Vec2,
 } from "../lib/types";
@@ -575,6 +576,9 @@ export function poseRecordReason(s: {
 
 interface AppState {
   doc: Document | null;
+  /** 手順ごとに展開図へ新しく足した折り線(作品ファイル由来の来歴)。
+   * 過去の手順の展開図を推測せずに組み立てるために使う */
+  stepCreases: StepCreases[];
   faces: Face[];
   warnings: string[];
   /** 平らにする操作の最新結果で、利用者へ知らせる点(raw violationsとは別) */
@@ -1163,6 +1167,7 @@ export const useAppStore = create<AppState>((set, get) => {
         // 画面側の写し(display)をそろえる。人からもらった作品を開けば、
         // その作品の色と方眼がそのまま出る
         doc: view.doc,
+        stepCreases: view.step_creases ?? [],
         display: view.doc.display,
         foldDraft: null,
         pendingFoldThrough: null,
@@ -2042,6 +2047,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
   return {
     doc: null,
+    stepCreases: [],
     faces: [],
     hinges: new Set<number>(),
     warnings: [],

@@ -97,6 +97,51 @@ fn test_document_json_roundtrip() {
 }
 
 #[test]
+fn saved_document_keeps_step_creases_next_to_the_document_fields() {
+    let saved = SavedDocument {
+        document: sample_document(),
+        step_creases: vec![
+            StepCreases {
+                step: 0,
+                // 既にある折り筋で折った手順。線を1本も足していない
+                lines: Vec::new(),
+            },
+            StepCreases {
+                step: 1,
+                lines: vec![[[0.0, 0.5], [1.0, 0.5]]],
+            },
+        ],
+    };
+
+    let json = serde_json::to_string_pretty(&saved).expect("serialize");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("JSONとして読める");
+    assert!(
+        value.get("schema_version").is_some() && value.get("cp").is_some(),
+        "作品の項目は今までどおり一番外側にある: {json}"
+    );
+    assert_eq!(
+        value["step_creases"][0]["lines"].as_array().map(Vec::len),
+        Some(0)
+    );
+    let back: SavedDocument = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(saved, back);
+}
+
+#[test]
+fn old_files_without_step_creases_load_as_no_history() {
+    // 旧形式 = Documentだけを書き出したファイル
+    let json = serde_json::to_string(&sample_document()).expect("serialize");
+    assert!(!json.contains("step_creases"));
+
+    let saved: SavedDocument = serde_json::from_str(&json).expect("旧形式も読める");
+
+    assert_eq!(saved.document, sample_document());
+    assert!(saved.step_creases.is_empty());
+    // 来歴が無ければ書き出す内容も旧形式と同じ
+    assert_eq!(serde_json::to_string(&saved).expect("serialize"), json);
+}
+
+#[test]
 fn old_face3d_without_mirrored_defaults_to_front() {
     let old = r#"{"face":7,"polygon":[[0.0,0.0,0.0],[1.0,0.0,0.0],[0.0,1.0,0.0]],"layer":2}"#;
     let face: Face3D = serde_json::from_str(old).expect("旧soft geometry frameを読み込む");

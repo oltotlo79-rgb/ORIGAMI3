@@ -324,6 +324,43 @@ impl Document {
     }
 }
 
+/// 1つの手順が展開図へ**新しく足した**折り線(CP座標の線分)。
+///
+/// 「先に描いてあった折り線」と「その手順で足された折り線」は、最終展開図と
+/// driver線分だけからは区別できない(同じ保存値になる)。区別を推測に頼らず
+/// 記録するための来歴で、既にある折り筋で折った手順は `lines` が空になる。
+///
+/// 手順の並べ替え・削除で対応がずれないよう、配列の位置ではなく手順IDで結び付ける。
+/// 線分は後続の折りで分割されるため、辺IDではなく座標で残す(層順序の代表点方式と
+/// 同じ思想)。
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct StepCreases {
+    pub step: StepId,
+    pub lines: Vec<[[f64; 2]; 2]>,
+}
+
+/// `.ori3` ファイルの中身。[`Document`] に、手順ごとの追加折り線の来歴を足した形。
+///
+/// 来歴を持たない旧形式の作品も読めるよう、`step_creases` は既定で空にする。
+/// 空のときは書き出さないので、来歴の無い作品のファイル内容は従来と同じになる。
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SavedDocument {
+    #[serde(flatten)]
+    pub document: Document,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub step_creases: Vec<StepCreases>,
+}
+
+impl SavedDocument {
+    /// 来歴を持たない作品として包む(新規作品・旧形式の読み込み結果)。
+    pub fn new(document: Document) -> SavedDocument {
+        SavedDocument {
+            document,
+            step_creases: Vec::new(),
+        }
+    }
+}
+
 /// edit_apply コマンドの操作enum(これ以外の編集操作を追加しない)
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type")]

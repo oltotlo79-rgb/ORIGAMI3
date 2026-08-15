@@ -12,7 +12,7 @@ import {
   type CurveOptions,
 } from "../../lib/curve";
 import { violationReason } from "../../lib/flatFoldHint";
-import { documentForCpStep } from "../../lib/cpHistory";
+import { documentForCpStep, violationsForCpStep } from "../../lib/cpHistory";
 import {
   mirrorAxisLabel,
   mirrorLineForChoice,
@@ -106,6 +106,7 @@ export function CpEditor({ fitRef }: Props) {
   const activeTool = useAppStore((s) => s.activeTool);
   const docEpoch = useAppStore((s) => s.docEpoch);
   const violations = useAppStore((s) => s.violations);
+  const stepCreases = useAppStore((s) => s.stepCreases);
   const construct = useAppStore((s) => s.construct);
   const curve = useAppStore((s) => s.curve);
   const mirrorDraw = useAppStore((s) => s.mirrorDraw);
@@ -121,6 +122,7 @@ export function CpEditor({ fitRef }: Props) {
     const {
       doc,
       currentStep,
+      stepCreases,
       selection,
       activeTool,
       violations,
@@ -147,7 +149,9 @@ export function CpEditor({ fitRef }: Props) {
       canvas.height = Math.round(h * dpr);
     }
     viewRef.current ??= fitView(doc, w, h);
-    const cpDocument = documentForCpStep(doc, currentStep);
+    const cpDocument = documentForCpStep(doc, currentStep, stepCreases);
+    // その手順の展開図に無い点の丸は出さない(将来の点の違反を過去へ出さない)
+    const cpViolations = violationsForCpStep(cpDocument, violations);
     const st = stateRef.current;
     const captureClean = document.documentElement.hasAttribute(
       "data-origami3-capture-view",
@@ -234,7 +238,7 @@ export function CpEditor({ fitRef }: Props) {
       previewPaths,
       marquee:
         st.marqueeStart && st.marqueeEnd ? { a: st.marqueeStart, b: st.marqueeEnd } : null,
-      violations,
+      violations: cpViolations,
       constructPoints:
         activeTool === "construct" ? st.constructPoints : curveMode ? st.curvePoints : [],
       // 作図補助では次にすることを常に1行で出す(設計原則3b)
@@ -295,7 +299,7 @@ export function CpEditor({ fitRef }: Props) {
   const makeCtx = useCallback((): InteractionCtx | null => {
     const s = useAppStore.getState();
     if (!s.doc || !viewRef.current) return null;
-    const stepDoc = documentForCpStep(s.doc, s.currentStep);
+    const stepDoc = documentForCpStep(s.doc, s.currentStep, s.stepCreases);
     return {
       doc: stepDoc,
       finalDoc: s.doc,
@@ -308,7 +312,7 @@ export function CpEditor({ fitRef }: Props) {
       construct: s.construct,
       curve: s.curve,
       wheelBehavior: s.wheelBehavior,
-      violations: s.violations,
+      violations: violationsForCpStep(stepDoc, s.violations),
       // 点移動の対称位置吸着は、対称描画のオン・オフに関係なく現在の基準を使う。
       // 選んだ線が編集直後に無効なら、画面表示・対称編集と同じ縦中心へ戻す。
       mirrorAxis:
@@ -339,6 +343,7 @@ export function CpEditor({ fitRef }: Props) {
     activeAngleIntent,
     activeTool,
     violations,
+    stepCreases,
     construct,
     curve,
     mirrorDraw,

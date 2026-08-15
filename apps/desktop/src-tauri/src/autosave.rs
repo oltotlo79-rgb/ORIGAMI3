@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, UNIX_EPOCH};
 
-use ori3_model::Document;
+use ori3_model::SavedDocument;
 
 use crate::store::{DocumentStore, DocumentView, parse_document, write_atomic};
 
@@ -137,8 +137,12 @@ pub fn run_once(store: &Mutex<DocumentStore>, app_data: &Path) -> Result<bool, S
     Ok(true)
 }
 
-/// 複製したDocumentを自動保存ファイルへ書き、場所を目印ファイルへ控える。
-fn write_snapshot(doc: &Document, doc_path: Option<&Path>, app_data: &Path) -> Result<(), String> {
+/// 複製した作品を自動保存ファイルへ書き、場所を目印ファイルへ控える。
+fn write_snapshot(
+    doc: &SavedDocument,
+    doc_path: Option<&Path>,
+    app_data: &Path,
+) -> Result<(), String> {
     let target = target_path(doc_path, app_data);
     let json = serde_json::to_string_pretty(doc)
         .map_err(|e| format!("自動保存データの作成に失敗しました: {e}"))?;

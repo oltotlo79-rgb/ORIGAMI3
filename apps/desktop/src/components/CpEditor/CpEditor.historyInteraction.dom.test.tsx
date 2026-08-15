@@ -6,7 +6,7 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import type React from "react";
 import { DEFAULT_CONSTRUCT } from "../../lib/construct";
 import { DEFAULT_CURVE } from "../../lib/curve";
-import type { Document, EditOp, Vec2 } from "../../lib/types";
+import type { Document, EditOp, StepCreases, Vec2 } from "../../lib/types";
 
 const held = vi.hoisted(() => ({
   document: null as unknown,
@@ -93,6 +93,9 @@ function pointerClick(canvas: HTMLCanvasElement, world: Vec2): void {
   });
 }
 
+/** 手順1は先に描いてあった折り線で折った、という来歴。 */
+const PREDRAWN_HISTORY: StepCreases[] = [{ step: 0, lines: [] }];
+
 async function renderEditor(): Promise<HTMLCanvasElement> {
   const fitRef = { current: null } as React.RefObject<(() => void) | null>;
   const view = render(<CpEditor fitRef={fitRef} />);
@@ -143,6 +146,7 @@ beforeEach(() => {
     foldDraft: null,
     pendingFoldThrough: null,
     operationStage: 0,
+    stepCreases: [],
     applyEdit: ORIGINAL_APPLY_EDIT,
   });
 });
@@ -152,6 +156,7 @@ afterEach(() => {
   // 各検査で差し替え得るstore actionを必ず本物へ戻す。
   useAppStore.setState({
     applyEdit: ORIGINAL_APPLY_EDIT,
+    stepCreases: [],
     doc: null,
     currentStep: null,
     selection: { edgeIds: [], vertexIds: [] },
@@ -227,8 +232,7 @@ describe("D06 過去手順の展開図で見えない将来要素を操作しな
 });
 
 describe("D16 過去手順の違反表示", () => {
-  // D16は次回に直す。
-  it.fails("D16: 将来線だけに属する点と、その点の違反丸を手順0へ出さない", async () => {
+  it("D16: 将来線だけに属する点と、その点の違反丸を手順0へ出さない", async () => {
     await renderEditor();
 
     const drawn = held.document as Document;
@@ -239,6 +243,27 @@ describe("D16 過去手順の違反表示", () => {
     }).toEqual({
       vertexIds: [0, 1, 2, 3],
       violationIds: [],
+    });
+  });
+
+  it("D16: 先に描いた折り線で折った手順では、その線と点を折る前から出す", async () => {
+    useAppStore.setState({ stepCreases: PREDRAWN_HISTORY });
+    const fitRef = { current: null } as React.RefObject<(() => void) | null>;
+    render(<CpEditor fitRef={fitRef} />);
+
+    await waitFor(() => {
+      expect(held.document).not.toBeNull();
+    });
+    const drawn = held.document as Document;
+    const overlay = held.overlay as RenderOverlay;
+    expect({
+      edgeIds: drawn.cp.edges.map((edge) => edge.id),
+      vertexIds: drawn.cp.vertices.map((vertex) => vertex.id),
+      violationIds: overlay.violations,
+    }).toEqual({
+      edgeIds: [0, 1, 2, 3, FUTURE_EDGE_ID],
+      vertexIds: [0, 1, 2, 3, ...FUTURE_VERTEX_IDS],
+      violationIds: [FUTURE_VERTEX_IDS[0]],
     });
   });
 });

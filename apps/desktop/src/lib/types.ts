@@ -186,6 +186,19 @@ export interface SoftMesh {
   warnings: string[];
 }
 
+/**
+ * 1つの手順が展開図へ新しく足した折り線(CP座標の線分)。
+ *
+ * 先に描いてあった折り線と、その手順で足された折り線は、最終展開図と手順の
+ * 線分だけからは区別できない。区別を推測に頼らないための来歴で、既にある
+ * 折り筋で折った手順は `lines` が空になる。並べ替え・削除でずれないよう、
+ * 手順の位置ではなく手順IDで結び付ける。
+ */
+export interface StepCreases {
+  step: number;
+  lines: [Vec2, Vec2][];
+}
+
 export interface Document {
   schema_version: number;
   paper: Paper;
@@ -206,6 +219,9 @@ export interface Face {
 /** save以外の全コマンド成功時の戻り値(store.rs::DocumentView) */
 export interface DocumentView {
   doc: Document;
+  /** 手順ごとに新しく足した折り線。作品ファイルにも保存される。
+   * 来歴を持たない旧形式の作品では空になる */
+  step_creases?: StepCreases[];
   faces: Face[];
   warnings: string[];
   /** 今回の平らに畳む操作で知らせる点。rawのviolationsとは別の絞り込み済み結果 */
