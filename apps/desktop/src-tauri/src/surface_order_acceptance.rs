@@ -4,10 +4,7 @@
 //! 24-bit depth target, two-code depth tolerance, and surface-owner ordering.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::io::Write;
 use std::ops::{Add, AddAssign, Div, DivAssign, Mul, Neg, Sub};
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
 
 use ori3_cp::{Face, extract_faces};
 use ori3_model::{
@@ -471,87 +468,82 @@ fn boundary_diagrams() -> Vec<Diagram> {
 }
 
 fn triangulations(cp: &CreasePattern, faces: &[Face]) -> BTreeMap<FaceId, Vec<[usize; 3]>> {
-    const SCRIPT: &str = r#"
-import fs from 'node:fs';
-import * as THREE from 'three';
-
-const polygons = JSON.parse(fs.readFileSync(0, 'utf8'));
-const orient = (points, a, b, c) => {
-  const cross =
-    (points[b][0] - points[a][0]) * (points[c][1] - points[a][1]) -
-    (points[b][1] - points[a][1]) * (points[c][0] - points[a][0]);
-  return cross < 0 ? [a, c, b] : [a, b, c];
-};
-const result = polygons.map((points) => {
-  const contour = points.map((point) => new THREE.Vector2(point[0], point[1]));
-  let raw;
-  try {
-    raw = THREE.ShapeUtils.triangulateShape(contour, []);
-  } catch {
-    raw = [];
-  }
-  const out = [];
-  for (const triangle of raw) {
-    if (triangle.length !== 3) continue;
-    if (triangle.some((index) => index < 0 || index >= points.length)) continue;
-    out.push(orient(points, triangle[0], triangle[1], triangle[2]));
-  }
-  if (out.length === 0) {
-    for (let index = 1; index + 1 < points.length; index += 1) {
-      out.push(orient(points, 0, index, index + 1));
-    }
-  }
-  return out;
-});
-process.stdout.write(JSON.stringify(result));
-"#;
-
     let positions = cp
         .vertices
         .iter()
         .map(|item| (item.id, item.pos))
         .collect::<HashMap<_, _>>();
-    let polygons = faces
-        .iter()
-        .map(|face| {
-            face.vertices
-                .iter()
-                .map(|vertex_id| positions[vertex_id])
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-    let input = serde_json::to_vec(&polygons).expect("serialize face polygons for Three.js");
-    let desktop = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-    let mut child = Command::new("node")
-        .args(["--input-type=module", "-e", SCRIPT])
-        .current_dir(desktop)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("start Node with the checked-in Three.js dependency");
-    child
-        .stdin
-        .take()
-        .expect("Node stdin is piped")
-        .write_all(&input)
-        .expect("send face polygons to Node");
-    let output = child
-        .wait_with_output()
-        .expect("wait for Node triangulation");
-    assert!(
-        output.status.success(),
-        "Three.js triangulation failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let by_face: Vec<Vec<[usize; 3]>> =
-        serde_json::from_slice(&output.stdout).expect("read Three.js triangle indices");
-    assert_eq!(by_face.len(), faces.len());
     faces
         .iter()
-        .zip(by_face)
-        .map(|(face, triangles)| (face.id, triangles))
+        .map(|face| {
+            let polygon = face
+                .vertices
+                .iter()
+                .map(|vertex_id| positions[vertex_id])
+                .collect::<Vec<_>>();
+            (face.id, triangulate_polygon(&polygon))
+        })
         .collect()
+}
+
+/// Viewer3Dと同じく、反時計回りの単純多角形を耳切り法で三角形へ分ける。
+/// スリット等の退化で耳を切れなくなった場合も検査を止めず、残りを扇形に分ける。
+fn triangulate_polygon(points: &[[f64; 2]]) -> Vec<[usize; 3]> {
+    let mut triangles = Vec::with_capacity(points.len().saturating_sub(2));
+    if points.len() < 3 {
+        return triangles;
+    }
+
+    let cross = |a: usize, b: usize, c: usize| {
+        (points[b][0] - points[a][0]) * (points[c][1] - points[a][1])
+            - (points[b][1] - points[a][1]) * (points[c][0] - points[a][0])
+    };
+    let orient = |a: usize, b: usize, c: usize| {
+        if cross(a, b, c) < 0.0 {
+            [a, c, b]
+        } else {
+            [a, b, c]
+        }
+    };
+    let mut remaining = (0..points.len()).collect::<Vec<_>>();
+    while remaining.len() > 3 {
+        let count = remaining.len();
+        let mut ear = None;
+        for index in 0..count {
+            let a = remaining[(index + count - 1) % count];
+            let b = remaining[index];
+            let c = remaining[(index + 1) % count];
+            if cross(a, b, c) <= 0.0 {
+                continue;
+            }
+            let blocked = remaining.iter().any(|&point| {
+                point != a
+                    && point != b
+                    && point != c
+                    && cross(a, b, point) >= 0.0
+                    && cross(b, c, point) >= 0.0
+                    && cross(c, a, point) >= 0.0
+            });
+            if !blocked {
+                ear = Some(index);
+                break;
+            }
+        }
+        let Some(index) = ear else {
+            break;
+        };
+        let count = remaining.len();
+        triangles.push(orient(
+            remaining[(index + count - 1) % count],
+            remaining[index],
+            remaining[(index + 1) % count],
+        ));
+        remaining.remove(index);
+    }
+    for index in 1..remaining.len().saturating_sub(1) {
+        triangles.push(orient(remaining[0], remaining[index], remaining[index + 1]));
+    }
+    triangles
 }
 
 fn camera_from_direction(width: f64, height: f64, direction: V3) -> Camera {
