@@ -29,6 +29,11 @@ import {
   type SoftLayout,
 } from "./softMesh";
 import { paperExtent } from "../CpEditor/snap";
+import {
+  cameraQuaternionLookingAt,
+  orbitCameraOffset,
+  transportCameraScreenUp,
+} from "./viewCube";
 import type { HingeSegment, PaperPickSurface } from "./hingePicker";
 import {
   createSurfaceOwnerBinding,
@@ -101,7 +106,7 @@ export const SUSPECT_HIGHLIGHT_WIDTH_PX = 8;
 /** カメラ画角(度) */
 const CAMERA_FOV = 45;
 /** 初期カメラの向き(紙の中心から見た方向。斜め上=手前上から見下ろす) */
-const CAMERA_DIR = new THREE.Vector3(0.35, -0.85, 0.95).normalize();
+export const CAMERA_DIR = new THREE.Vector3(0.35, -0.85, 0.95).normalize();
 /** 紙全体が収まるための距離の余裕 */
 const CAMERA_MARGIN = 1.35;
 /** 強調表示の伸ばす向き(回転計算に使う) */
@@ -597,6 +602,145 @@ export function updateSoftContent(
 }
 
 // ---------------------------------------------------------------------------
+// 視点のドラッグ回転
+// ---------------------------------------------------------------------------
+
+/** 注視点からカメラへ向かうずれと、そのときの画面の上向き。 */
+export interface CameraOrbitPose {
+  /** 注視点からカメラへ向かうずれ。長さは注視点までの距離。 */
+  offset: THREE.Vector3;
+  /** 画面の上向き(世界座標の単位ベクトル)。視線と直角を保つ。 */
+  screenUp: THREE.Vector3;
+}
+
+/** カメラの向きが定まらないほど注視点に近いときの下限。 */
+const MIN_ORBIT_RADIUS = 1e-9;
+/**
+ * 1段で回してよいドラッグ量の上限(画面高さに対する割合)。
+ *
+ * 回す量は「画面高さいっぱいで1回転(360度)」なので、1/8は45度にあたる。
+ * orbitCameraOffset は上下の角を0〜180度へ収めるため、いまの向き(常に90度)から
+ * 一度に90度を超えて動かすと頭打ちになる。素早いドラッグで1回の通知に
+ * 大きな移動量がまとまっても頭打ちにしないよう、45度ずつに分けて回す。
+ */
+const MAX_ORBIT_STEP_RATIO = 1 / 8;
+
+/** 現在の姿勢から読み取る画面の上向き。 */
+export function cameraScreenUp(camera: THREE.Camera): THREE.Vector3 {
+  return AXIS_Y.clone().applyQuaternion(camera.quaternion).normalize();
+}
+
+/**
+ * ドラッグ量だけ視点を回した後のずれと画面の上向き。
+ *
+ * 回す量の決め方は視点立方体のドラッグと同じ viewCube.ts の orbitCameraOffset を、
+ * 画面の上向きの持ち運びも同じ transportCameraScreenUp を使う。
+ * 回し方を増やさないため、この関数以外に回転の計算を置かない。
+ *
+ * 違いは「どの枠で回すか」だけにした。世界の上下を軸にすると、真上・真下が
+ * 可動域の端になり、そこで止まる(実測: 「視点を戻す」直後の向きからは
+ * 下向きへ49.98度しか回らず、上向きへ130.02度で行き止まりになった)。
+ * そこで、いまの画面の上向きが枠の上になるように移してから回す。
+ * カメラは常に枠の赤道上(上下角90度)にいるので、どちらへ何周しても端に届かない。
+ */
+export function rotateCameraByDrag(
+  offset: THREE.Vector3,
+  screenUp: THREE.Vector3,
+  dragX: number,
+  dragY: number,
+  canvasHeight: number,
+): CameraOrbitPose {
+  const height = Math.max(canvasHeight, 1);
+  const limit = height * MAX_ORBIT_STEP_RATIO;
+  const steps = Math.max(
+    1,
+    Math.ceil(Math.max(Math.abs(dragX), Math.abs(dragY)) / limit),
+  );
+  let currentOffset = offset.clone();
+  let currentUp = screenUp.clone().normalize();
+  for (let i = 0; i < steps; i += 1) {
+    // 画面の上向きを枠の上へそろえる回転。枠を戻せば世界の向きに戻る。
+    const toFrame = new THREE.Quaternion().setFromUnitVectors(currentUp, AXIS_Y);
+    const fromFrame = toFrame.clone().invert();
+    const nextOffset = orbitCameraOffset(
+      currentOffset.clone().applyQuaternion(toFrame),
+      dragX / steps,
+      dragY / steps,
+      height,
+    ).applyQuaternion(fromFrame);
+    currentUp = transportCameraScreenUp(currentOffset, nextOffset, currentUp);
+    currentOffset = nextOffset;
+    // 積み重ねた丸めで視線と直角からずれないよう、毎段そろえ直す。
+    const forward = currentOffset.clone().normalize();
+    const orthogonal = currentUp.clone().projectOnPlane(forward);
+    if (orthogonal.lengthSq() > MIN_ORBIT_RADIUS ** 2) {
+      currentUp = orthogonal.normalize();
+    }
+  }
+  return { offset: currentOffset, screenUp: currentUp };
+}
+
+/**
+ * 注視点を中心に、ドラッグ量だけカメラを回す。
+ * 注視点と距離は変えないので、寄る・平行移動には影響しない。
+ */
+export function applyCameraDragRotation(
+  camera: THREE.PerspectiveCamera,
+  target: THREE.Vector3,
+  dragX: number,
+  dragY: number,
+  canvasHeight: number,
+): void {
+  const offset = camera.position.clone().sub(target);
+  if (offset.lengthSq() <= MIN_ORBIT_RADIUS ** 2) return;
+  const pose = rotateCameraByDrag(
+    offset,
+    cameraScreenUp(camera),
+    dragX,
+    dragY,
+    canvasHeight,
+  );
+  camera.position.copy(target).add(pose.offset);
+  // 上向きを姿勢に合わせて持ち歩くと、寄る・平行移動のあとの
+  // OrbitControls の向き直し(lookAt)でも画面の傾きが失われない。
+  camera.up.copy(pose.screenUp);
+  camera.quaternion.copy(
+    cameraQuaternionLookingAt(camera.position, target, pose.screenUp),
+  );
+  camera.updateMatrixWorld(true);
+}
+
+/** OrbitControls のボタン割り当て(ツールごとに setDrawMode が入れ替える)。 */
+export interface ViewRotationMouseButtons {
+  LEFT?: THREE.MOUSE | null;
+  MIDDLE?: THREE.MOUSE | null;
+  RIGHT?: THREE.MOUSE | null;
+}
+
+/**
+ * 押したボタンが視点回転を始めるかどうか。
+ * OrbitControls の判定(回転ボタン+修飾キーなしで回転、
+ * 平行移動ボタン+修飾キーで回転)をそのまま写す。
+ */
+export function viewRotationStarts(
+  buttons: ViewRotationMouseButtons,
+  button: number,
+  panModifierHeld: boolean,
+): boolean {
+  const action =
+    button === 0
+      ? buttons.LEFT
+      : button === 1
+        ? buttons.MIDDLE
+        : button === 2
+          ? buttons.RIGHT
+          : null;
+  if (action === THREE.MOUSE.ROTATE) return !panModifierHeld;
+  if (action === THREE.MOUSE.PAN) return panModifierHeld;
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // シーン(レンダラ・カメラ・照明・入れ物)
 // ---------------------------------------------------------------------------
 
@@ -1061,6 +1205,10 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
 
   const controls = new OrbitControls(camera, canvas);
   controls.enableDamping = false; // 常時描画ループを持たない(変化時だけ描く)
+  // 視点を回すのは下のドラッグ処理だけにする。OrbitControlsの回転は
+  // 世界の上下を軸にするため真上・真下で行き止まりになる(利用者の指摘)。
+  // 寄る・平行移動・ボタンの割り当て(setDrawMode)はOrbitControlsのまま使う。
+  controls.enableRotate = false;
 
   // 描画は1フレームに1回だけ。連続した変化(座標更新・選択・視点操作)が
   // 同じフレームに重なっても描画は1回にまとまる
@@ -1101,6 +1249,63 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
     if (!disposed && frameHandle === null) frameHandle = requestAnimationFrame(draw);
   };
   controls.addEventListener("change", render);
+
+  // --- 視点のドラッグ回転 -------------------------------------------------
+  // 押した位置からの差分だけを毎回渡す。OrbitControlsの回転と同じ量になる。
+  let rotateDrag: { pointerId: number; x: number; y: number } | null = null;
+
+  /**
+   * カメラのupを、いま画面が上と見なしている向きへそろえる。
+   * 視点立方体で移った直後はupが取り残されるため、操作を始める前に必ず合わせる。
+   * これをしないと、寄る・平行移動のときのOrbitControlsの向き直しで傾きが跳ぶ。
+   */
+  const syncCameraUp = () => {
+    camera.up.copy(cameraScreenUp(camera));
+  };
+
+  const onCanvasPointerDown = (event: PointerEvent) => {
+    syncCameraUp();
+    if (rotateDrag !== null) {
+      // 2本目の指が触れたらOrbitControlsの2本指操作へ譲る。
+      rotateDrag = null;
+      return;
+    }
+    if (!controls.enabled) return;
+    const rotates =
+      event.pointerType === "touch"
+        ? controls.touches.ONE === THREE.TOUCH.ROTATE
+        : viewRotationStarts(
+            controls.mouseButtons,
+            event.button,
+            event.ctrlKey || event.metaKey || event.shiftKey,
+          );
+    if (!rotates) return;
+    rotateDrag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+  };
+
+  const onDocumentPointerMove = (event: PointerEvent) => {
+    if (rotateDrag === null || rotateDrag.pointerId !== event.pointerId) return;
+    const dragX = event.clientX - rotateDrag.x;
+    const dragY = event.clientY - rotateDrag.y;
+    rotateDrag.x = event.clientX;
+    rotateDrag.y = event.clientY;
+    if (dragX === 0 && dragY === 0) return;
+    applyCameraDragRotation(camera, controls.target, dragX, dragY, canvas.clientHeight);
+    render();
+  };
+
+  const onDocumentPointerUp = (event: PointerEvent) => {
+    if (rotateDrag !== null && rotateDrag.pointerId === event.pointerId) {
+      rotateDrag = null;
+    }
+  };
+
+  const documentOf = canvas.ownerDocument;
+  canvas.addEventListener("pointerdown", onCanvasPointerDown);
+  canvas.addEventListener("wheel", syncCameraUp, { capture: true });
+  documentOf.addEventListener("pointermove", onDocumentPointerMove);
+  documentOf.addEventListener("pointerup", onDocumentPointerUp);
+  documentOf.addEventListener("pointercancel", onDocumentPointerUp);
 
   // 描画資源が失われて復帰したときは描き直す(復帰直後は画面が空になるため)
   const onContextRestored = () => render();
@@ -1160,6 +1365,8 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
       const dist =
         (extent / (2 * Math.tan((CAMERA_FOV * Math.PI) / 360))) * CAMERA_MARGIN;
       camera.position.copy(center).addScaledVector(CAMERA_DIR, dist);
+      // 回して傾いたままの上向きを持ち込まないよう、世界の上へ戻してから向き直す。
+      camera.up.set(0, 1, 0);
       controls.target.copy(center);
       controls.update();
       render();
@@ -1263,6 +1470,12 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
         frameHandle = null;
       }
       canvas.removeEventListener("webglcontextrestored", onContextRestored);
+      canvas.removeEventListener("pointerdown", onCanvasPointerDown);
+      canvas.removeEventListener("wheel", syncCameraUp, { capture: true });
+      documentOf.removeEventListener("pointermove", onDocumentPointerMove);
+      documentOf.removeEventListener("pointerup", onDocumentPointerUp);
+      documentOf.removeEventListener("pointercancel", onDocumentPointerUp);
+      rotateDrag = null;
       controls.removeEventListener("change", render);
       controls.dispose();
       api.setSoft(null); // たわみの表示物も片付ける(外していた面・線が入れ物へ戻る)
