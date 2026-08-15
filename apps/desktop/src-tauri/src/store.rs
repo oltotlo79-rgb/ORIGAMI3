@@ -180,11 +180,43 @@ impl DocumentStore {
         Ok(())
     }
 
-    /// 編集操作を適用する。実際に変更が起きた場合のみundo履歴に積む。
+    /// 編集操作を1つ適用する。実際に変更が起きた場合のみundo履歴に積む。
     pub fn apply_edit(&mut self, op: EditOp) -> Result<DocumentView, String> {
-        let replaced_crease_pattern = matches!(&op, EditOp::ReplaceCreasePattern { .. });
+        self.apply_edits(vec![op])
+    }
+
+    /// 複数の編集操作を「利用者の1操作」として適用する。
+    ///
+    /// 元に戻せる履歴は最後に1件だけ積む。曲線1本や左右対称の2本のように、
+    /// 画面では1回の入力でも内部で複数の線になる操作を、元に戻す1回で
+    /// 引く前へ戻せるようにするため(不具合D05)。
+    /// 途中の操作が断られたら何も適用しない(片側だけ引かれた形にしない)。
+    pub fn apply_edits(&mut self, ops: Vec<EditOp>) -> Result<DocumentView, String> {
+        if ops.is_empty() {
+            return Err("編集する内容がありません".to_string());
+        }
+        let replaced_crease_pattern = ops
+            .iter()
+            .any(|op| matches!(op, EditOp::ReplaceCreasePattern { .. }));
         let mut doc = self.doc.clone();
         let mut warnings = Vec::new();
+        for op in ops {
+            Self::edit_document(&mut doc, op, &mut warnings)?;
+        }
+        let view = self.commit(doc, warnings);
+        if replaced_crease_pattern {
+            // CP全置換前の解は辺IDが偶然一致しても使ってはいけない。
+            self.pose_angles = None;
+        }
+        Ok(view)
+    }
+
+    /// 編集操作1つを候補の作品へ反映する(履歴には積まない)。
+    fn edit_document(
+        doc: &mut Document,
+        op: EditOp,
+        warnings: &mut Vec<String>,
+    ) -> Result<(), String> {
         match op {
             EditOp::AddSegment { a, b, kind } => {
                 // 追加辺ゼロ(既存線と完全重複)でも成功扱い
@@ -263,12 +295,7 @@ impl DocumentStore {
                 doc.display = display;
             }
         }
-        let view = self.commit(doc, warnings);
-        if replaced_crease_pattern {
-            // CP全置換前の解は辺IDが偶然一致しても使ってはいけない。
-            self.pose_angles = None;
-        }
-        Ok(view)
+        Ok(())
     }
 
     /// 折り手順操作を適用する。実際に変更が起きた場合のみundo履歴に積む。
@@ -1904,6 +1931,67 @@ mod tests {
         let view = store.redo().unwrap();
         assert_eq!(view.doc, edited);
         assert_eq!(store.doc, edited);
+    }
+
+    /// 画面での1回の入力から出た複数の線を、履歴1件として確定する(不具合D05)。
+    /// 曲線1本の最大は201点・598本なので、上限100を超える本数で確かめる。
+    #[test]
+    fn apply_edits_records_one_history_entry_for_one_gesture() {
+        let mut store = square_store();
+        let before = store.doc.clone();
+        let lines: Vec<EditOp> = (0..598)
+            .map(|i| {
+                let y = 0.001 + 0.001 * f64::from(i);
+                EditOp::AddSegment {
+                    a: [0.0, y],
+                    b: [1.0, y],
+                    kind: EdgeKind::Valley,
+                }
+            })
+            .collect();
+
+        let view = store.apply_edits(lines).unwrap();
+        assert!(view.doc.cp.edges.len() > 598, "598本すべてが入る");
+        assert_eq!(store.undo_stack.len(), 1, "履歴は1件だけ");
+
+        let after = store.doc.clone();
+        let view = store.undo().unwrap();
+        assert_eq!(view.doc, before, "元に戻す1回で引く前へ戻る");
+        assert!(store.undo().is_err(), "1回で戻り切っている");
+
+        let view = store.redo().unwrap();
+        assert_eq!(view.doc, after, "やり直し1回で引いた後へ戻る");
+    }
+
+    /// 途中の操作が断られたら1つも適用しない(片側だけ引かれた形にしない)。
+    #[test]
+    fn apply_edits_rejected_partway_changes_nothing() {
+        let mut store = square_store();
+        let before = store.doc.clone();
+
+        let err = store
+            .apply_edits(vec![
+                diagonal(),
+                // 折り線がある状態では紙サイズを変更できない
+                EditOp::SetPaper {
+                    paper: Paper {
+                        width_mm: 100.0,
+                        height_mm: 100.0,
+                    },
+                },
+            ])
+            .unwrap_err();
+
+        assert!(err.contains("紙サイズ"), "err={err}");
+        assert_eq!(store.doc, before, "断られたら1本も引かれない");
+        assert!(store.undo_stack.is_empty(), "履歴も積まない");
+    }
+
+    #[test]
+    fn apply_edits_rejects_empty_request() {
+        let mut store = square_store();
+        assert!(store.apply_edits(Vec::new()).is_err());
+        assert!(store.undo_stack.is_empty());
     }
 
     #[test]

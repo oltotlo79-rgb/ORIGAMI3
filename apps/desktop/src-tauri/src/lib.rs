@@ -22,6 +22,7 @@ pub fn run() {
             commands::document_open,
             commands::document_save,
             commands::edit_apply,
+            commands::edit_apply_batch,
             commands::edit_undo,
             commands::edit_redo,
             commands::sequence_apply,

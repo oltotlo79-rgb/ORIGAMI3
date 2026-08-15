@@ -12,6 +12,7 @@ vi.mock("../../ipc/client", () => ({
   documentOpen: vi.fn(),
   documentSave: vi.fn(),
   editApply: vi.fn(),
+  editApplyBatch: vi.fn(),
   editUndo: vi.fn(),
   editRedo: vi.fn(),
   sequenceApply: vi.fn(),

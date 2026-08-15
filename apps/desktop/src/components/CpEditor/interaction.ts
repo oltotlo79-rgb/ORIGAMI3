@@ -155,8 +155,12 @@ function onConstructClick(ctx: InteractionCtx, world: Vec2, snapRadius: number):
     stepDeg: ctx.construct.stepDeg,
     paper: paperExtent(ctx.finalDoc),
   });
-  for (const [a, b] of lines) {
-    ctx.applyEdit({ type: "AddSegment", a, b, kind: "Aux" });
+  // 角度線のように何本もまとめて引く作図でも、元に戻す1回で作る前へ戻れるよう
+  // 1回の要求として渡す(不具合D05)
+  if (lines.length > 0) {
+    ctx.applyEdit(
+      lines.map(([a, b]) => ({ type: "AddSegment", a, b, kind: "Aux" }) as const),
+    );
   }
   st.constructPoints = [];
   st.constructSeg = null;
@@ -188,7 +192,9 @@ export interface InteractionCtx {
   mirrorAxis: MirrorLine | null;
   state: EphemeralState; // その場で書き換える
   setView: (view: ViewTransform) => void;
-  applyEdit: (op: EditOp) => void;
+  /** 展開図を変える要求を送る。複数渡すと画面での1回の入力として扱われ、
+   * 元に戻す1回でまとめて戻る(不具合D05) */
+  applyEdit: (op: EditOp | EditOp[]) => void;
   /** 線を1本引く(左右対称のときは反対側にも引かれる。CPE-010) */
   drawSegment: (a: Vec2, b: Vec2, kind: EdgeKind) => void;
   /** 曲線を折れ線として引く(曲がるための線も設定に応じて一緒に引かれる) */

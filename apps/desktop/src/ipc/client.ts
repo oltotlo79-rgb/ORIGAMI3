@@ -1,6 +1,6 @@
-// IPCクライアント: 実装済み13コマンドの型付きラッパー(1関数5行以内)。
+// IPCクライアント: Rust側コマンドの型付きラッパー(1関数5行以内)。
 // 失敗時はErr(string)がPromiseのrejectになる。
-// コマンドは13個で打ち止め。折り図の書き出しはExportKindを増やして対応する。
+// 折り図の書き出しは新しいコマンドを足さずExportKindを増やして対応する。
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
@@ -34,6 +34,11 @@ export function documentSave(path: string | null): Promise<void> {
 
 export function editApply(op: EditOp): Promise<DocumentView> {
   return invoke("edit_apply", { op });
+}
+
+/** 画面での1回の入力から生じた複数の編集を、元に戻す1回で戻せるようにまとめて送る */
+export function editApplyBatch(ops: EditOp[]): Promise<DocumentView> {
+  return invoke("edit_apply_batch", { ops });
 }
 
 export function editUndo(): Promise<DocumentView> {

@@ -8,6 +8,7 @@ vi.mock("../ipc/client", () => ({
   sequenceReplay: vi.fn(),
   poseSolve: vi.fn(),
   editApply: vi.fn(),
+  editApplyBatch: vi.fn(),
 }));
 
 import * as ipc from "../ipc/client";

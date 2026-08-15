@@ -175,7 +175,7 @@ describe("D06 過去手順の展開図で見えない将来要素を操作しな
 
   it("削除: 見えない将来線を削除ツールでクリックしても編集を送らない", async () => {
     const applyEdit = vi
-      .fn<(op: EditOp) => Promise<void>>()
+      .fn<(op: EditOp | EditOp[]) => Promise<void>>()
       .mockResolvedValue(undefined);
     useAppStore.setState({ activeTool: "delete", applyEdit });
     const canvas = await renderEditor();
@@ -198,7 +198,7 @@ describe("D06 過去手順の展開図で見えない将来要素を操作しな
 
   it("作図: 見えない将来線を垂線の基準として使わない", async () => {
     const applyEdit = vi
-      .fn<(op: EditOp) => Promise<void>>()
+      .fn<(op: EditOp | EditOp[]) => Promise<void>>()
       .mockResolvedValue(undefined);
     useAppStore.setState({ activeTool: "construct", applyEdit });
     const canvas = await renderEditor();
@@ -211,7 +211,7 @@ describe("D06 過去手順の展開図で見えない将来要素を操作しな
 
   it("削除キー: 選択済みの将来線が見えない手順では削除しない", async () => {
     const applyEdit = vi
-      .fn<(op: EditOp) => Promise<void>>()
+      .fn<(op: EditOp | EditOp[]) => Promise<void>>()
       .mockResolvedValue(undefined);
     useAppStore.setState({
       activeTool: "select",

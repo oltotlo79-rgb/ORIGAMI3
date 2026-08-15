@@ -1,5 +1,6 @@
 // 曲線の折り目(CPE-011)のストア側テスト。
-// 曲線は折れ線として1本ずつ送られ、設定に応じて「紙が曲がるための線」も続く。
+// 曲線は折れ線として送られ、設定に応じて「紙が曲がるための線」も続く。
+// 1本の曲線から生まれる線は、元に戻す1回で消せるよう1回の要求にまとめて送る(D05)。
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { arcPolyline, DEFAULT_CURVE } from "../lib/curve";
@@ -10,6 +11,7 @@ vi.mock("../ipc/client", () => ({
   documentOpen: vi.fn(),
   documentSave: vi.fn(),
   editApply: vi.fn(),
+  editApplyBatch: vi.fn(),
   editUndo: vi.fn(),
   editRedo: vi.fn(),
   sequenceApply: vi.fn(),
@@ -53,11 +55,23 @@ const VIEW: DocumentView = {
   skipped: [],
 };
 
+/** 送られた線を、1件送りとまとめ送りの両方から集める */
 function addedSegments(): Extract<EditOp, { type: "AddSegment" }>[] {
-  return vi
-    .mocked(ipc.editApply)
-    .mock.calls.map(([op]) => op)
-    .filter((op): op is Extract<EditOp, { type: "AddSegment" }> => op.type === "AddSegment");
+  const ops: EditOp[] = [
+    ...vi.mocked(ipc.editApply).mock.calls.map(([op]) => op),
+    ...vi.mocked(ipc.editApplyBatch).mock.calls.flatMap(([batch]) => batch),
+  ];
+  return ops.filter(
+    (op): op is Extract<EditOp, { type: "AddSegment" }> => op.type === "AddSegment",
+  );
+}
+
+/** 曲線1本を引くために送った要求の回数(=増える履歴の件数) */
+function requestCount(): number {
+  return (
+    vi.mocked(ipc.editApply).mock.calls.length +
+    vi.mocked(ipc.editApplyBatch).mock.calls.length
+  );
 }
 
 const ARC: Vec2[] = arcPolyline([0, 0.25], [0.5, 0.55], [1, 0.25], 0.005);
@@ -66,6 +80,8 @@ describe("曲線の折り目を引く", () => {
   beforeEach(() => {
     vi.mocked(ipc.editApply).mockReset();
     vi.mocked(ipc.editApply).mockResolvedValue(VIEW);
+    vi.mocked(ipc.editApplyBatch).mockReset();
+    vi.mocked(ipc.editApplyBatch).mockResolvedValue(VIEW);
     useAppStore.setState({
       doc: DOC,
       faces: [],
@@ -99,11 +115,18 @@ describe("曲線の折り目を引く", () => {
     expect(addedSegments()).toHaveLength(ARC.length - 1);
   });
 
-  it("途中で断られたら理由を残してそこで止める", async () => {
-    vi.mocked(ipc.editApply).mockRejectedValue("線を引けません");
+  it("断られたら理由を残し、途中まで引かれた形にはしない", async () => {
+    vi.mocked(ipc.editApplyBatch).mockRejectedValue("線を引けません");
     await useAppStore.getState().drawCurve(ARC, "Valley");
-    expect(addedSegments()).toHaveLength(1);
+    // 曲線1本は1回の要求なので、断られたら1本も引かれない
+    expect(requestCount()).toBe(1);
     expect(useAppStore.getState().errorMessage).not.toBeNull();
+  });
+
+  it("曲線1本は、元に戻す1回で消せるよう1回の要求として送る", async () => {
+    await useAppStore.getState().drawCurve(ARC, "Valley");
+    expect(requestCount()).toBe(1);
+    expect(addedSegments().length).toBeGreaterThan(1);
   });
 
   it("左右対称に描く設定なら反対側にも同じ曲線が引かれる", async () => {

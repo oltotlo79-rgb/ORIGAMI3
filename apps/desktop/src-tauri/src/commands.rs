@@ -337,6 +337,21 @@ pub fn edit_apply(
     }))
 }
 
+/// 画面での1回の入力から生じた複数の編集を、元に戻す1回で戻せるようにまとめて適用する。
+/// 曲線1本(折れ線の全区間と曲がるための線)や、左右対称で増える鏡像の線が対象。
+#[tauri::command(async)]
+pub fn edit_apply_batch(
+    state: State<'_, Mutex<DocumentStore>>,
+    ops: Vec<EditOp>,
+) -> Result<DocumentView, String> {
+    guard(AssertUnwindSafe(move || {
+        let mut ops = Some(ops);
+        view_command(&state, || {
+            lock(&state).apply_edits(ops.take().expect("1回だけ呼ばれる"))
+        })
+    }))
+}
+
 #[tauri::command(async)]
 pub fn edit_undo(state: State<'_, Mutex<DocumentStore>>) -> Result<DocumentView, String> {
     guard(AssertUnwindSafe(|| {

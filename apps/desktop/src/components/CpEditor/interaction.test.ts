@@ -147,7 +147,7 @@ function makeCtx(
   curve: Partial<CurveOptions> = {},
 ) {
   const doc = squareDoc();
-  const applyEdit = vi.fn<(op: EditOp) => void>();
+  const applyEdit = vi.fn<(op: EditOp | EditOp[]) => void>();
   const drawSegment = vi.fn<(a: Vec2, b: Vec2, kind: EdgeKind) => void>();
   const drawCurve = vi.fn<(points: Vec2[], kind: EdgeKind) => void>();
   const beginFoldDraft = vi.fn<(line: [Vec2, Vec2], source: "2d" | "3d") => void>();
@@ -178,6 +178,11 @@ function makeCtx(
   return { ctx, applyEdit, drawSegment, drawCurve, beginFoldDraft, pickAlignTarget };
 }
 
+/** applyEditは1回の入力ぶんをまとめて受け取るので、送られた編集を平らに並べ直す */
+function sentEdits(applyEdit: { mock: { calls: [EditOp | EditOp[]][] } }): EditOp[] {
+  return applyEdit.mock.calls.flatMap(([op]) => (Array.isArray(op) ? op : [op]));
+}
+
 describe("作図補助の操作", () => {
   it("作図の点指定は実交点より方眼を優先する", () => {
     const { ctx } = makeCtx({ kind: "bisector" });
@@ -189,11 +194,14 @@ describe("作図補助の操作", () => {
     expect(ctx.state.directionSnap).toBeNull();
   });
 
-  it("角度線は1回のクリックで、刻みの数だけ補助線を引く", () => {
+  it("角度線は1回のクリックで、刻みの数だけ補助線を1回の編集として引く", () => {
     const { ctx, applyEdit } = makeCtx({ kind: "angle", stepDeg: 45 });
     onMouseDown(ctx, toScreen([0.5, 0.5]), 0);
-    expect(applyEdit).toHaveBeenCalledTimes(4);
-    for (const [op] of applyEdit.mock.calls) {
+    // 元に戻す1回で作る前へ戻せるよう、4本を1回の要求として送る(不具合D05)
+    expect(applyEdit).toHaveBeenCalledTimes(1);
+    const edits = sentEdits(applyEdit);
+    expect(edits).toHaveLength(4);
+    for (const op of edits) {
       expect(op.type).toBe("AddSegment");
       expect(op.type === "AddSegment" && op.kind).toBe("Aux");
     }
@@ -428,7 +436,7 @@ describe("点のドラッグ移動(選択ツール)", () => {
 
     onMouseUp(ctx, toScreen(cursor), 0);
     expect(applyEdit).toHaveBeenCalledTimes(1);
-    const edit = applyEdit.mock.calls[0][0];
+    const edit = sentEdits(applyEdit)[0];
     expect(edit.type).toBe("MoveVertex");
     if (edit.type !== "MoveVertex") throw new Error("MoveVertexではない編集が送られた");
     expect(edit.id).toBe(4);
