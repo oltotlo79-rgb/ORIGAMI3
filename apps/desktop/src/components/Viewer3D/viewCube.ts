@@ -6,65 +6,265 @@ export const VIEW_CUBE_SIZE_PX = 96;
 export const VIEW_CUBE_INSET_PX = 12;
 /** 左側の重ね表示が立方体へ入らないために空ける幅。 */
 export const VIEW_CUBE_CLEARANCE_PX = 120;
-/** 面を選んだときの視点移動時間。既存に補間が無いため0.3秒とする。 */
+/** 行き先を選んだときの視点移動時間。既存に補間が無いため0.3秒とする。 */
 export const VIEW_CUBE_TRANSITION_MS = 300;
-/** これを超えて動いたら面クリックではなく視点ドラッグとみなす。 */
+/** これを超えて動いたら選択ではなく視点ドラッグとみなす。 */
 export const VIEW_CUBE_CLICK_MOVE_PX = 4;
+/** 立方体1面の一辺(px)。 */
+export const VIEW_CUBE_FACE_PX = 48;
+/** 面の縁に置く帯の幅(px)。ここが辺と角の押し場所になる。 */
+export const VIEW_CUBE_BAND_PX = 13;
 
 export type ViewCubeFace = "front" | "back" | "left" | "right" | "top" | "bottom";
 
-export interface ViewCubeFaceDefinition {
-  id: ViewCubeFace;
+export type ViewCubeEdge =
+  | "top-front"
+  | "top-back"
+  | "top-right"
+  | "top-left"
+  | "bottom-front"
+  | "bottom-back"
+  | "bottom-right"
+  | "bottom-left"
+  | "front-right"
+  | "front-left"
+  | "back-right"
+  | "back-left";
+
+export type ViewCubeCorner =
+  | "top-front-right"
+  | "top-front-left"
+  | "top-back-right"
+  | "top-back-left"
+  | "bottom-front-right"
+  | "bottom-front-left"
+  | "bottom-back-right"
+  | "bottom-back-left";
+
+/** 面6 + 辺12 + 角8 = 26箇所の行き先。 */
+export type ViewCubeTarget = ViewCubeFace | ViewCubeEdge | ViewCubeCorner;
+
+export type ViewCubeTargetKind = "face" | "edge" | "corner";
+
+export interface ViewCubeTargetDefinition {
+  id: ViewCubeTarget;
+  kind: ViewCubeTargetKind;
+  /** 画面に出す短い呼び名。面だけが立方体の上に文字として出る。 */
   label: string;
-  /** 紙の中心からカメラを置く向き。画面には出さない。 */
-  cameraDirection: readonly [number, number, number];
+  /** 読み上げ・吹き出し用の文。 */
+  actionLabel: string;
+  /** 紙の中心からカメラを置く向き(正規化前)。画面には出さない。 */
+  direction: readonly [number, number, number];
+}
+
+interface AxisPart {
+  readonly axis: "x" | "y" | "z";
+  readonly positive: { readonly id: string; readonly label: string };
+  readonly negative: { readonly id: string; readonly label: string };
 }
 
 /**
- * 紙の表側法線は+zなので、前/後は紙の表/裏に対応させる。
- * 残る4面は紙を正面から見たときの上下左右である。
+ * 呼び名を並べる順序。上下 → 前後 → 左右 の順に読むと日本語として自然になる。
+ * 紙の表側法線は+zなので、前/後は紙の表/裏に対応する。
  */
-export const VIEW_CUBE_FACES: readonly ViewCubeFaceDefinition[] = [
-  { id: "front", label: "前", cameraDirection: [0, 0, 1] },
-  { id: "back", label: "後", cameraDirection: [0, 0, -1] },
-  { id: "left", label: "左", cameraDirection: [-1, 0, 0] },
-  { id: "right", label: "右", cameraDirection: [1, 0, 0] },
-  { id: "top", label: "上", cameraDirection: [0, 1, 0] },
-  { id: "bottom", label: "下", cameraDirection: [0, -1, 0] },
-] as const;
+const AXIS_PARTS: readonly AxisPart[] = [
+  {
+    axis: "y",
+    positive: { id: "top", label: "上" },
+    negative: { id: "bottom", label: "下" },
+  },
+  {
+    axis: "z",
+    positive: { id: "front", label: "前" },
+    negative: { id: "back", label: "後" },
+  },
+  {
+    axis: "x",
+    positive: { id: "right", label: "右" },
+    negative: { id: "left", label: "左" },
+  },
+];
 
-const FACE_BY_ID = new Map(VIEW_CUBE_FACES.map((face) => [face.id, face]));
+const KIND_BY_PART_COUNT: Record<number, ViewCubeTargetKind> = {
+  1: "face",
+  2: "edge",
+  3: "corner",
+};
+
+function describeTarget(x: number, y: number, z: number): ViewCubeTargetDefinition {
+  const value = { x, y, z };
+  const parts = AXIS_PARTS.filter((part) => value[part.axis] !== 0).map((part) =>
+    value[part.axis] > 0 ? part.positive : part.negative,
+  );
+  const names = parts.map((part) => part.label);
+  const kind = KIND_BY_PART_COUNT[parts.length];
+  const actionLabel =
+    kind === "face"
+      ? `${names[0]}を正面にする`
+      : kind === "edge"
+        ? `${names.join("と")}の間の辺を正面にする`
+        : `${names.join("と")}が集まる角を正面にする`;
+  return {
+    id: parts.map((part) => part.id).join("-") as ViewCubeTarget,
+    kind,
+    label: names.join(""),
+    actionLabel,
+    direction: [x, y, z],
+  };
+}
+
+function buildTargets(): readonly ViewCubeTargetDefinition[] {
+  const all: ViewCubeTargetDefinition[] = [];
+  for (const y of [1, 0, -1]) {
+    for (const z of [1, 0, -1]) {
+      for (const x of [1, 0, -1]) {
+        if (x === 0 && y === 0 && z === 0) continue;
+        all.push(describeTarget(x, y, z));
+      }
+    }
+  }
+  const order: Record<ViewCubeTargetKind, number> = { face: 0, edge: 1, corner: 2 };
+  return all.sort((a, b) => order[a.kind] - order[b.kind]);
+}
+
+/** 面・辺・角の26箇所。面 → 辺 → 角 の順に並ぶ。 */
+export const VIEW_CUBE_TARGETS: readonly ViewCubeTargetDefinition[] = buildTargets();
+
+const TARGET_BY_ID = new Map(VIEW_CUBE_TARGETS.map((target) => [target.id, target]));
+
+const FACE_ORDER: readonly ViewCubeFace[] = [
+  "front",
+  "back",
+  "left",
+  "right",
+  "top",
+  "bottom",
+];
+
+/** 6面だけを、前・後・左・右・上・下の順で取り出したもの。 */
+export const VIEW_CUBE_FACES: readonly ViewCubeTargetDefinition[] = FACE_ORDER.map(
+  (id) => {
+    const face = TARGET_BY_ID.get(id);
+    if (!face) throw new Error(`Unknown view-cube face: ${id}`);
+    return face;
+  },
+);
+
 const MIN_CAMERA_DISTANCE = 1e-9;
 const POLAR_EPSILON_RAD = 1e-6;
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
+const CAMERA_BACKWARD = new THREE.Vector3(0, 0, 1);
+const ORIGIN = new THREE.Vector3();
 
-/** 選んだ面を見るため、紙の中心からカメラを置く単位方向。 */
-export function cameraDirectionForFace(face: ViewCubeFace): THREE.Vector3 {
-  const direction = FACE_BY_ID.get(face)?.cameraDirection;
-  if (!direction) throw new Error(`Unknown view-cube face: ${face}`);
-  return new THREE.Vector3(...direction);
+export function viewCubeTarget(id: ViewCubeTarget): ViewCubeTargetDefinition {
+  const target = TARGET_BY_ID.get(id);
+  if (!target) throw new Error(`Unknown view-cube target: ${id}`);
+  return target;
 }
 
-/** 選んだ面から紙の中心へ向かう、期待される視線方向。 */
-export function viewDirectionForFace(face: ViewCubeFace): THREE.Vector3 {
-  return cameraDirectionForFace(face).multiplyScalar(-1);
+export function isViewCubeTarget(value: unknown): value is ViewCubeTarget {
+  return typeof value === "string" && TARGET_BY_ID.has(value as ViewCubeTarget);
 }
 
-/** 上下の真正面でも画面の上下が曖昧にならないための、終端だけの上向き。 */
-export function cameraUpForFace(face: ViewCubeFace): THREE.Vector3 {
-  if (face === "top") return new THREE.Vector3(0, 0, -1);
-  if (face === "bottom") return new THREE.Vector3(0, 0, 1);
-  return new THREE.Vector3(0, 1, 0);
+/** 選んだ場所を見るため、紙の中心からカメラを置く単位方向。 */
+export function cameraDirectionForTarget(id: ViewCubeTarget): THREE.Vector3 {
+  return new THREE.Vector3(...viewCubeTarget(id).direction).normalize();
 }
 
-/** 選んだ面を正面にする終端のカメラ位置。現在の距離は保つ。 */
-export function cameraPositionForFace(
-  face: ViewCubeFace,
+/** 選んだ場所から紙の中心へ向かう、期待される視線方向。 */
+export function viewDirectionForTarget(id: ViewCubeTarget): THREE.Vector3 {
+  return cameraDirectionForTarget(id).multiplyScalar(-1);
+}
+
+/**
+ * 終端の画面上向き。真上・真下だけは紙の上下が決まらないため向きを決め打ちし、
+ * 残る24箇所は世界の上向きを視線と直角な向きへ落とす。
+ * 落とし方はドラッグ操作の上向きの決め方と同じなので、着いた後に姿勢が跳ねない。
+ */
+export function cameraUpForTarget(id: ViewCubeTarget): THREE.Vector3 {
+  if (id === "top") return new THREE.Vector3(0, 0, -1);
+  if (id === "bottom") return new THREE.Vector3(0, 0, 1);
+  const direction = cameraDirectionForTarget(id);
+  return WORLD_UP.clone().projectOnPlane(direction).normalize();
+}
+
+/** 選んだ場所を正面にする終端のカメラ位置。現在の距離は保つ。 */
+export function cameraPositionForTarget(
+  id: ViewCubeTarget,
   target: THREE.Vector3,
   distance: number,
 ): THREE.Vector3 {
   return target
     .clone()
-    .addScaledVector(cameraDirectionForFace(face), Math.max(distance, MIN_CAMERA_DISTANCE));
+    .addScaledVector(cameraDirectionForTarget(id), Math.max(distance, MIN_CAMERA_DISTANCE));
+}
+
+export interface ViewCubeFacePlate {
+  id: ViewCubeFace;
+  label: string;
+  /** 面の外向き。 */
+  normal: readonly [number, number, number];
+  /** 面を正面から見たときに画面の右へ向かう向き。 */
+  right: readonly [number, number, number];
+  /** 面を正面から見たときに画面の上へ向かう向き。 */
+  up: readonly [number, number, number];
+}
+
+/**
+ * 6枚の板の向き。CSSの面の回転(App.css の .view-cube-face-*)と同じ姿勢を、
+ * CSSの下向き+yを上向き+yへ直した世界の向きで持つ。
+ */
+export const VIEW_CUBE_PLATES: readonly ViewCubeFacePlate[] = FACE_ORDER.map((id) => {
+  const label = viewCubeTarget(id).label;
+  switch (id) {
+    case "front":
+      return { id, label, normal: [0, 0, 1], right: [1, 0, 0], up: [0, 1, 0] };
+    case "back":
+      return { id, label, normal: [0, 0, -1], right: [-1, 0, 0], up: [0, 1, 0] };
+    case "left":
+      return { id, label, normal: [-1, 0, 0], right: [0, 0, 1], up: [0, 1, 0] };
+    case "right":
+      return { id, label, normal: [1, 0, 0], right: [0, 0, -1], up: [0, 1, 0] };
+    case "top":
+      return { id, label, normal: [0, 1, 0], right: [1, 0, 0], up: [0, 0, -1] };
+    default:
+      return { id, label, normal: [0, -1, 0], right: [1, 0, 0], up: [0, 0, 1] };
+  }
+});
+
+/** 面を3×3に割ったときの列。-1が画面の左、+1が画面の右。 */
+export const VIEW_CUBE_ZONE_COLUMNS = [-1, 0, 1] as const;
+/** 面を3×3に割ったときの行。+1が画面の上、-1が画面の下。 */
+export const VIEW_CUBE_ZONE_ROWS = [1, 0, -1] as const;
+
+export function viewCubeZoneKind(column: number, row: number): ViewCubeTargetKind {
+  const away = (column === 0 ? 0 : 1) + (row === 0 ? 0 : 1);
+  return away === 0 ? "face" : away === 1 ? "edge" : "corner";
+}
+
+/** 面の3×3の1区画が指す行き先。縁の帯が辺、四隅が角、中央が面になる。 */
+export function viewCubeZoneTarget(
+  plate: ViewCubeFacePlate,
+  column: number,
+  row: number,
+): ViewCubeTarget {
+  const direction = new THREE.Vector3(...plate.normal)
+    .addScaledVector(new THREE.Vector3(...plate.right), column)
+    .addScaledVector(new THREE.Vector3(...plate.up), row);
+  const id = [
+    Math.round(direction.y),
+    Math.round(direction.z),
+    Math.round(direction.x),
+  ];
+  const parts = AXIS_PARTS.map((part, index) => {
+    const sign = id[index];
+    return sign === 0 ? null : sign > 0 ? part.positive.id : part.negative.id;
+  }).filter((part): part is string => part !== null);
+  const target = parts.join("-");
+  if (!isViewCubeTarget(target)) {
+    throw new Error(`Unknown view-cube zone: ${plate.id} ${column},${row}`);
+  }
+  return target;
 }
 
 /** カメラ位置から注視点へ向かう単位視線。 */
@@ -80,54 +280,43 @@ export function directionAngleDeg(a: THREE.Vector3, b: THREE.Vector3): number {
   return THREE.MathUtils.radToDeg(a.angleTo(b));
 }
 
+/** 2つのカメラ姿勢の間の回転角を度で返す。最短経路の検査に使う。 */
+export function attitudeAngleDeg(a: THREE.Quaternion, b: THREE.Quaternion): number {
+  return THREE.MathUtils.radToDeg(a.angleTo(b));
+}
+
 /** 0..1を、始点と終点で速度0になる滑らかな進み方へ変える。 */
 export function smoothViewProgress(progress: number): number {
   const t = THREE.MathUtils.clamp(progress, 0, 1);
   return t * t * (3 - 2 * t);
 }
 
-/**
- * 距離を変えず、球面上の短い経路で2方向を補間する。
- * 真反対の面でも中心を通り抜けない。
- */
-export function interpolateCameraOffset(
-  from: THREE.Vector3,
-  to: THREE.Vector3,
-  progress: number,
-): THREE.Vector3 {
-  const fromDistance = from.length();
-  const toDistance = to.length();
-  if (fromDistance <= MIN_CAMERA_DISTANCE || toDistance <= MIN_CAMERA_DISTANCE) {
-    return from.clone().lerp(to, THREE.MathUtils.clamp(progress, 0, 1));
-  }
-  const t = THREE.MathUtils.clamp(progress, 0, 1);
-  const rotation = new THREE.Quaternion().setFromUnitVectors(
-    from.clone().normalize(),
-    to.clone().normalize(),
+/** 注視点からのずれと画面上向きから、カメラの姿勢を1つ作る。 */
+export function cameraAttitude(
+  offset: THREE.Vector3,
+  screenUp: THREE.Vector3,
+): THREE.Quaternion {
+  return new THREE.Quaternion().setFromRotationMatrix(
+    new THREE.Matrix4().lookAt(offset, ORIGIN, screenUp),
   );
-  const partial = new THREE.Quaternion().slerp(rotation, t);
-  const distance = THREE.MathUtils.lerp(fromDistance, toDistance, t);
-  return from.clone().normalize().applyQuaternion(partial).multiplyScalar(distance);
 }
 
 export interface InterpolatedCameraPose {
   offset: THREE.Vector3;
   /** カメラの画面上方向を表す世界座標の単位ベクトル。 */
   screenUp: THREE.Vector3;
-}
-
-/** 2つの単位ベクトル間で、axis周りの符号付き角度を返す。 */
-function signedAngleAround(
-  from: THREE.Vector3,
-  to: THREE.Vector3,
-  axis: THREE.Vector3,
-): number {
-  return Math.atan2(axis.dot(from.clone().cross(to)), from.dot(to));
+  /** 補間の途中のカメラ姿勢。 */
+  attitude: THREE.Quaternion;
 }
 
 /**
- * 位置と画面上向きを同じ球面回転で運び、最後のrollだけ視線軸周りで補う。
- * これにより反対面への移動中も紙の中心が画面中央から外れない。
+ * 姿勢そのものを最短の回り方で補間し、位置は姿勢から導く。
+ *
+ * 以前は「位置を球面で運ぶ」と「最後に画面の傾きを直す」を別々に足していた。
+ * 別々の軸まわりの回転を重ねるため、合計の回転が最短より大きくなる。
+ * 実測(scratchpad/viewcube2-report.md)では上→下で74.6度、後→上で21.3度余分に回っていた。
+ * 姿勢を1本の回転で補間すれば、回る量は始点と終点の姿勢差そのものに一致し、
+ * 途中で画面の上下が裏返ることもない。
  */
 export function interpolateCameraPose(
   fromOffset: THREE.Vector3,
@@ -138,44 +327,28 @@ export function interpolateCameraPose(
 ): InterpolatedCameraPose {
   const fromDistance = fromOffset.length();
   const toDistance = toOffset.length();
+  const t = THREE.MathUtils.clamp(progress, 0, 1);
   if (fromDistance <= MIN_CAMERA_DISTANCE || toDistance <= MIN_CAMERA_DISTANCE) {
-    return {
-      offset: fromOffset.clone().lerp(toOffset, THREE.MathUtils.clamp(progress, 0, 1)),
-      screenUp: fromScreenUp.clone().lerp(toScreenUp, progress).normalize(),
-    };
+    const screenUp = fromScreenUp.clone().lerp(toScreenUp, t).normalize();
+    const offset = fromOffset.clone().lerp(toOffset, t);
+    return { offset, screenUp, attitude: cameraAttitude(offset, screenUp) };
   }
 
-  const t = THREE.MathUtils.clamp(progress, 0, 1);
-  const fromDirection = fromOffset.clone().normalize();
-  const toDirection = toOffset.clone().normalize();
-  const wholeRotation = new THREE.Quaternion().setFromUnitVectors(
-    fromDirection,
-    toDirection,
+  const attitude = cameraAttitude(fromOffset, fromScreenUp).slerp(
+    cameraAttitude(toOffset, toScreenUp),
+    t,
   );
-  const partialRotation = new THREE.Quaternion().slerp(wholeRotation, t);
-  const offset = fromDirection
-    .clone()
-    .applyQuaternion(partialRotation)
-    .multiplyScalar(THREE.MathUtils.lerp(fromDistance, toDistance, t));
-
-  const transportedUp = fromScreenUp.clone().normalize().applyQuaternion(partialRotation);
-  const transportedEndUp = fromScreenUp.clone().normalize().applyQuaternion(wholeRotation);
-  const endViewDirection = toDirection.clone().multiplyScalar(-1);
-  const roll = signedAngleAround(
-    transportedEndUp,
-    toScreenUp.clone().normalize(),
-    endViewDirection,
-  );
-  const currentViewDirection = offset.clone().normalize().multiplyScalar(-1);
-  const screenUp = transportedUp
-    .applyQuaternion(new THREE.Quaternion().setFromAxisAngle(currentViewDirection, roll * t))
-    .normalize();
-  return { offset, screenUp };
+  const distance = THREE.MathUtils.lerp(fromDistance, toDistance, t);
+  return {
+    offset: CAMERA_BACKWARD.clone().applyQuaternion(attitude).multiplyScalar(distance),
+    screenUp: WORLD_UP.clone().applyQuaternion(attitude),
+    attitude,
+  };
 }
 
 /**
  * ドラッグ前後のカメラ位置を結ぶ回転で、現在の画面上方向も一緒に運ぶ。
- * 面移動の途中からドラッグへ切り替えても、rollを急に失わない。
+ * 移動の途中からドラッグへ切り替えても、画面の傾きを急に失わない。
  */
 export function transportCameraScreenUp(
   fromOffset: THREE.Vector3,

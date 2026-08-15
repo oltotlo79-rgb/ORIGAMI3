@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useRef,
+  useState,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
@@ -9,17 +10,23 @@ import {
 import * as THREE from "three";
 import {
   VIEW_CUBE_CLICK_MOVE_PX,
-  VIEW_CUBE_FACES,
+  VIEW_CUBE_PLATES,
   VIEW_CUBE_TRANSITION_MS,
-  cameraPositionForFace,
+  VIEW_CUBE_ZONE_COLUMNS,
+  VIEW_CUBE_ZONE_ROWS,
+  cameraPositionForTarget,
   cameraQuaternionLookingAt,
-  cameraUpForFace,
+  cameraUpForTarget,
   cubeCssTransform,
   interpolateCameraPose,
+  isViewCubeTarget,
   orbitCameraOffset,
   smoothViewProgress,
   transportCameraScreenUp,
-  type ViewCubeFace,
+  viewCubeTarget,
+  viewCubeZoneKind,
+  viewCubeZoneTarget,
+  type ViewCubeTarget,
 } from "./viewCube";
 
 export interface ViewCubeCameraControl {
@@ -42,7 +49,7 @@ interface DragState {
   pointerId: number;
   startX: number;
   startY: number;
-  face: ViewCubeFace | null;
+  target: ViewCubeTarget | null;
   moved: boolean;
   control: ViewCubeCameraControl;
   initialOffset: THREE.Vector3;
@@ -50,20 +57,63 @@ interface DragState {
   screenUp: THREE.Vector3;
 }
 
-function faceFromTarget(target: EventTarget | null): ViewCubeFace | null {
-  if (!(target instanceof Element)) return null;
-  const value = target.closest<HTMLElement>("[data-view-cube-face]")?.dataset.viewCubeFace;
-  return VIEW_CUBE_FACES.some((face) => face.id === value)
-    ? (value as ViewCubeFace)
-    : null;
+interface ZoneDescriptor {
+  key: string;
+  plateId: string;
+  target: ViewCubeTarget;
+  kind: "face" | "edge" | "corner";
+  label: string;
+  actionLabel: string;
+  /** 同じ行き先を指す区画は立方体上に最大3つ出るため、順路は先頭の1つだけにする。 */
+  focusable: boolean;
 }
 
-/** 3D表示へ重ねる、現在の視点と一緒に回る6面の視点立方体。 */
+/** 6枚の板を3×3へ割り、面6・辺12・角8の押し場所を作る。 */
+function buildZones(): readonly { plateId: string; zones: readonly ZoneDescriptor[] }[] {
+  const focusableSeen = new Set<ViewCubeTarget>();
+  return VIEW_CUBE_PLATES.map((plate) => ({
+    plateId: plate.id,
+    zones: VIEW_CUBE_ZONE_ROWS.flatMap((row) =>
+      VIEW_CUBE_ZONE_COLUMNS.map((column) => {
+        const target = viewCubeZoneTarget(plate, column, row);
+        const definition = viewCubeTarget(target);
+        const focusable = !focusableSeen.has(target);
+        focusableSeen.add(target);
+        return {
+          key: `${plate.id}:${row}:${column}`,
+          plateId: plate.id,
+          target,
+          kind: viewCubeZoneKind(column, row),
+          label: definition.label,
+          actionLabel: definition.actionLabel,
+          focusable,
+        };
+      }),
+    ),
+  }));
+}
+
+const ZONE_LAYOUT = buildZones();
+
+function targetFromEventTarget(target: EventTarget | null): ViewCubeTarget | null {
+  if (!(target instanceof Element)) return null;
+  const value = target.closest<HTMLElement>("[data-view-cube-target]")?.dataset
+    .viewCubeTarget;
+  return isViewCubeTarget(value) ? value : null;
+}
+
+/** 3D表示へ重ねる、現在の視点と一緒に回る立方体。面・辺・角の26箇所を選べる。 */
 export function ViewCube({ getCamera, prepareCameraControl, requestRender }: Props) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const transitionFrameRef = useRef<number | null>(null);
+  // 押す前にどこを指しているかを示すだけの一時状態(表示専用)。
+  const [pointed, setPointed] = useState<ViewCubeTarget | null>(null);
+
+  const pointAt = useCallback((next: ViewCubeTarget | null) => {
+    setPointed((previous) => (previous === next ? previous : next));
+  }, []);
 
   const cancelTransition = useCallback(() => {
     if (transitionFrameRef.current !== null) {
@@ -72,8 +122,8 @@ export function ViewCube({ getCamera, prepareCameraControl, requestRender }: Pro
     }
   }, []);
 
-  const moveToFace = useCallback(
-    (face: ViewCubeFace, prepared?: ViewCubeCameraControl) => {
+  const moveToTarget = useCallback(
+    (id: ViewCubeTarget, prepared?: ViewCubeCameraControl) => {
       cancelTransition();
       const control = prepared ?? prepareCameraControl();
       if (!control) return;
@@ -85,14 +135,10 @@ export function ViewCube({ getCamera, prepareCameraControl, requestRender }: Pro
       const fromPosition = camera.position.clone();
       const fromQuaternion = camera.quaternion.clone();
       const fromScreenUp = new THREE.Vector3(0, 1, 0).applyQuaternion(fromQuaternion);
-      const toPosition = cameraPositionForFace(face, target, distance);
+      const toPosition = cameraPositionForTarget(id, target, distance);
       const toOffset = toPosition.clone().sub(target);
-      const toScreenUp = cameraUpForFace(face);
-      const toQuaternion = cameraQuaternionLookingAt(
-        toPosition,
-        target,
-        toScreenUp,
-      );
+      const toScreenUp = cameraUpForTarget(id);
+      const toQuaternion = cameraQuaternionLookingAt(toPosition, target, toScreenUp);
       let startedAt: number | null = null;
 
       const animate = (now: number) => {
@@ -107,16 +153,14 @@ export function ViewCube({ getCamera, prepareCameraControl, requestRender }: Pro
           progress,
         );
         camera.position.copy(target).add(pose.offset);
-        camera.quaternion.copy(
-          cameraQuaternionLookingAt(camera.position, target, pose.screenUp),
-        );
+        camera.quaternion.copy(pose.attitude);
         camera.updateMatrixWorld(true);
         requestRender();
 
         if (linear < 1) {
           transitionFrameRef.current = requestAnimationFrame(animate);
         } else {
-          // 補間の丸めを終端へ残さず、6面の期待方向へ厳密に合わせる。
+          // 補間の丸めを終端へ残さず、26箇所の期待方向へ厳密に合わせる。
           camera.position.copy(toPosition);
           camera.quaternion.copy(toQuaternion);
           camera.updateMatrixWorld(true);
@@ -182,7 +226,7 @@ export function ViewCube({ getCamera, prepareCameraControl, requestRender }: Pro
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
-      face: faceFromTarget(event.target),
+      target: targetFromEventTarget(event.target),
       moved: false,
       control,
       initialOffset,
@@ -194,11 +238,15 @@ export function ViewCube({ getCamera, prepareCameraControl, requestRender }: Pro
   const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     stopPointerEvent(event);
     const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (!drag || drag.pointerId !== event.pointerId) {
+      pointAt(targetFromEventTarget(event.target));
+      return;
+    }
     const dx = event.clientX - drag.startX;
     const dy = event.clientY - drag.startY;
     if (!drag.moved && Math.hypot(dx, dy) <= VIEW_CUBE_CLICK_MOVE_PX) return;
     drag.moved = true;
+    pointAt(null);
     event.currentTarget.dataset.dragging = "true";
     const offset = orbitCameraOffset(
       drag.initialOffset,
@@ -229,7 +277,7 @@ export function ViewCube({ getCamera, prepareCameraControl, requestRender }: Pro
     if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
-    if (!cancelled && !drag.moved && drag.face) moveToFace(drag.face, drag.control);
+    if (!cancelled && !drag.moved && drag.target) moveToTarget(drag.target, drag.control);
   };
 
   const handleClick = (event: ReactMouseEvent<HTMLDivElement>) => {
@@ -237,8 +285,8 @@ export function ViewCube({ getCamera, prepareCameraControl, requestRender }: Pro
     event.stopPropagation();
     // マウス/タッチはpointerupで処理済み。detail=0のキーボード操作だけ補う。
     if (event.detail !== 0) return;
-    const face = faceFromTarget(event.target);
-    if (face) moveToFace(face);
+    const target = targetFromEventTarget(event.target);
+    if (target) moveToTarget(target);
   };
 
   const stopWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
@@ -251,13 +299,16 @@ export function ViewCube({ getCamera, prepareCameraControl, requestRender }: Pro
       ref={rootRef}
       className="view-cube"
       role="group"
-      aria-label="視点を変える立方体。面を選ぶか、ドラッグして回します"
+      aria-label="視点を変える立方体。面・辺・角を選ぶか、ドラッグして回します"
       data-floating-ui="view-cube"
-      data-tooltip="面を選ぶとその向きへ移動します。ドラッグでも視点を回せます"
+      data-tooltip="面・辺・角を選ぶとその向きへ移動します。ドラッグでも視点を回せます"
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={(event) => finishPointer(event, false)}
       onPointerCancel={(event) => finishPointer(event, true)}
+      onPointerLeave={() => pointAt(null)}
+      onFocusCapture={(event) => pointAt(targetFromEventTarget(event.target))}
+      onBlurCapture={() => pointAt(null)}
       onClick={handleClick}
       onWheel={stopWheel}
       onContextMenu={(event) => {
@@ -266,17 +317,26 @@ export function ViewCube({ getCamera, prepareCameraControl, requestRender }: Pro
       }}
     >
       <div ref={bodyRef} className="view-cube-body">
-        {VIEW_CUBE_FACES.map((face) => (
-          <button
-            type="button"
-            className={`view-cube-face view-cube-face-${face.id}`}
-            data-view-cube-face={face.id}
-            aria-label={`${face.label}を正面にする`}
-            key={face.id}
-            tabIndex={0}
+        {ZONE_LAYOUT.map((plate) => (
+          <div
+            className={`view-cube-face view-cube-face-${plate.plateId}`}
+            key={plate.plateId}
           >
-            {face.label}
-          </button>
+            {plate.zones.map((zone) => (
+              <button
+                type="button"
+                className="view-cube-zone"
+                data-view-cube-target={zone.target}
+                data-view-cube-kind={zone.kind}
+                data-pointed={pointed === zone.target ? "true" : undefined}
+                aria-label={zone.actionLabel}
+                key={zone.key}
+                tabIndex={zone.focusable ? 0 : -1}
+              >
+                {zone.kind === "face" ? zone.label : null}
+              </button>
+            ))}
+          </div>
         ))}
       </div>
     </div>
