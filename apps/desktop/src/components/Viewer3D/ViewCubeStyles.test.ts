@@ -123,22 +123,22 @@ function faceColorToken(face: string): string | null {
 }
 
 describe("視点立方体のCSS契約", () => {
-  it("外接枠を3D区画の右上12px、96px四方に固定する", () => {
+  it("外接枠を3D区画の右上12px、128px四方に固定する", () => {
     const declarationText = cssDeclarations(".view-cube");
     expect(declarationText).toContain("top: 12px;");
     expect(declarationText).toContain("right: 12px;");
-    expect(declarationText).toContain("width: 96px;");
-    expect(declarationText).toContain("height: 96px;");
+    expect(declarationText).toContain("width: 128px;");
+    expect(declarationText).toContain("height: 128px;");
     expect(declarationText).toContain("position: absolute;");
   });
 
-  it("面を3×3へ割り、縁13pxの帯を辺と角の押し場所にする", () => {
+  it("面を3×3へ割り、縁17pxの帯を辺と角の押し場所にする", () => {
     const face = cssDeclarations(".view-cube-face");
-    expect(face).toContain("grid-template-columns: 13px 1fr 13px;");
-    expect(face).toContain("grid-template-rows: 13px 1fr 13px;");
+    expect(face).toContain("grid-template-columns: 17px 1fr 17px;");
+    expect(face).toContain("grid-template-rows: 17px 1fr 17px;");
     expect(face).toContain("box-sizing: border-box;");
-    expect(face).toContain("width: 48px;");
-    expect(face).toContain("height: 48px;");
+    expect(face).toContain("width: 64px;");
+    expect(face).toContain("height: 64px;");
     expect(face).toContain("background: var(--view-cube-face-color);");
   });
 
@@ -160,10 +160,10 @@ describe("視点立方体のCSS契約", () => {
     expect(corner).toContain("var(--color-swatch-highlight-soft)");
   });
 
-  it("左上案内と条件付きの右上通知も120pxを予約する", () => {
-    expect(cssDeclarations(".viewer-operation-hint")).toContain("right: 120px;");
-    expect(cssDeclarations(".status-badge")).toContain("right: 120px;");
-    expect(cssDeclarations(".suspect-hinge-guide")).toContain("right: 120px;");
+  it("左上案内と条件付きの右上通知も152pxを予約する", () => {
+    expect(cssDeclarations(".viewer-operation-hint")).toContain("right: 152px;");
+    expect(cssDeclarations(".status-badge")).toContain("right: 152px;");
+    expect(cssDeclarations(".suspect-hinge-guide")).toContain("right: 152px;");
   });
 });
 

@@ -1,19 +1,28 @@
 import * as THREE from "three";
 
-/** 立方体を収める右上の外接枠。配置検査もこの大きさを使う。 */
-export const VIEW_CUBE_SIZE_PX = 96;
+/**
+ * 立方体を収める右上の外接枠。配置検査もこの大きさを使う。
+ * 左側の重ね表示(VIEW_CUBE_CLEARANCE_PX)と3D表示端からの余白(VIEW_CUBE_INSET_PX)の
+ * 間に立方体が入るので、CLEARANCE_PX(152) - INSET_PX(12) - SIZE_PX(128) = 12px が
+ * 左側の重ね表示との間に残るすき間になる。この12pxはウィンドウ幅によらず一定。
+ */
+export const VIEW_CUBE_SIZE_PX = 128;
 /** 3D表示部分の上端・右端からの距離。 */
 export const VIEW_CUBE_INSET_PX = 12;
-/** 左側の重ね表示が立方体へ入らないために空ける幅。 */
-export const VIEW_CUBE_CLEARANCE_PX = 120;
+/**
+ * 左側の重ね表示が立方体へ入らないために空ける幅。
+ * App.css の `.status-badge` / `.suspect-hinge-guide` / `.viewer-operation-hint` の
+ * `right` と同じ値にそろえる。
+ */
+export const VIEW_CUBE_CLEARANCE_PX = 152;
 /** 行き先を選んだときの視点移動時間。既存に補間が無いため0.3秒とする。 */
 export const VIEW_CUBE_TRANSITION_MS = 300;
 /** これを超えて動いたら選択ではなく視点ドラッグとみなす。 */
 export const VIEW_CUBE_CLICK_MOVE_PX = 4;
-/** 立方体1面の一辺(px)。 */
-export const VIEW_CUBE_FACE_PX = 48;
+/** 立方体1面の一辺(px)。外接枠(VIEW_CUBE_SIZE_PX)の半分。 */
+export const VIEW_CUBE_FACE_PX = 64;
 /** 面の縁に置く帯の幅(px)。ここが辺と角の押し場所になる。 */
-export const VIEW_CUBE_BAND_PX = 13;
+export const VIEW_CUBE_BAND_PX = 17;
 
 export type ViewCubeFace = "front" | "back" | "left" | "right" | "top" | "bottom";
 

@@ -434,12 +434,12 @@ describe("視点立方体の配置", () => {
     {
       window: "1000×700",
       viewer: { left: 535, top: 56, width: 465, height: 335.12 },
-      expectedCubeOnScreen: [892, 68, 988, 164],
+      expectedCubeOnScreen: [860, 68, 988, 196],
     },
     {
       window: "1920×1080",
       viewer: { left: 995, top: 56, width: 925, height: 593.52 },
-      expectedCubeOnScreen: [1812, 68, 1908, 164],
+      expectedCubeOnScreen: [1780, 68, 1908, 196],
     },
   ])("$windowで既存表示と重ならず、横にはみ出さない", ({ viewer, expectedCubeOnScreen }) => {
     const rects = viewCubeOverlayRects(viewer.width, viewer.height);

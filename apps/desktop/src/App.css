@@ -2199,8 +2199,8 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   align-items: center;
   gap: var(--sp-2);
   top: var(--sp-4);
-  right: 120px;
-  max-width: min(430px, calc(100% - 132px));
+  right: 152px;
+  max-width: min(430px, calc(100% - 164px));
   padding: var(--sp-2) var(--sp-5);
   border: var(--floating-border-width) solid var(--color-on-solid);
   border-radius: var(--radius-pill);
@@ -2240,8 +2240,8 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 .suspect-hinge-guide {
   position: absolute;
   top: calc(var(--sp-4) + 42px);
-  right: 120px;
-  max-width: min(330px, calc(100% - 132px));
+  right: 152px;
+  max-width: min(330px, calc(100% - 164px));
   padding: var(--sp-2) var(--sp-4);
   border: var(--floating-border-width) solid var(--color-collision-border);
   border-radius: var(--radius-pill);
@@ -2277,7 +2277,7 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   position: absolute;
   top: var(--sp-5);
   left: var(--sp-5);
-  right: 120px;
+  right: 152px;
   width: auto;
   max-width: 430px;
   box-sizing: border-box;
@@ -2487,8 +2487,8 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   right: 12px;
   z-index: 5;
   display: grid;
-  width: 96px;
-  height: 96px;
+  width: 128px;
+  height: 128px;
   place-items: center;
   perspective: 400px;
   cursor: grab;
@@ -2503,8 +2503,8 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 
 .view-cube-body {
   position: relative;
-  width: 48px;
-  height: 48px;
+  width: 64px;
+  height: 64px;
   transform: rotateX(-22deg) rotateY(35deg);
   transform-style: preserve-3d;
   will-change: transform;
@@ -2532,10 +2532,10 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   inset: 0;
   box-sizing: border-box;
   display: grid;
-  width: 48px;
-  height: 48px;
-  grid-template-columns: 13px 1fr 13px;
-  grid-template-rows: 13px 1fr 13px;
+  width: 64px;
+  height: 64px;
+  grid-template-columns: 17px 1fr 17px;
+  grid-template-rows: 17px 1fr 17px;
   margin: 0;
   padding: 0;
   overflow: hidden;
@@ -2596,27 +2596,27 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 }
 
 .view-cube-face-front {
-  transform: translateZ(24px);
+  transform: translateZ(32px);
 }
 
 .view-cube-face-back {
-  transform: rotateY(180deg) translateZ(24px);
+  transform: rotateY(180deg) translateZ(32px);
 }
 
 .view-cube-face-left {
-  transform: rotateY(-90deg) translateZ(24px);
+  transform: rotateY(-90deg) translateZ(32px);
 }
 
 .view-cube-face-right {
-  transform: rotateY(90deg) translateZ(24px);
+  transform: rotateY(90deg) translateZ(32px);
 }
 
 .view-cube-face-top {
-  transform: rotateX(90deg) translateZ(24px);
+  transform: rotateX(90deg) translateZ(32px);
 }
 
 .view-cube-face-bottom {
-  transform: rotateX(-90deg) translateZ(24px);
+  transform: rotateX(-90deg) translateZ(32px);
 }
 
 /* 下部コンテキストパネル。高さは上端の取っ手で変わり、中身が多いときは
@@ -2908,7 +2908,7 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 @container viewer-operation-help (max-width: 360px) {
   .viewer-operation-hint {
     top: var(--sp-5);
-    right: 120px;
+    right: 152px;
     max-width: none;
     max-height: calc(100% - 2 * var(--sp-5));
     padding: var(--sp-3);
