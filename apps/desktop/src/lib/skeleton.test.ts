@@ -6,19 +6,28 @@ import {
   MAX_LIMBS,
   MIN_LIMBS,
   ROOT_ID,
+  TIP_POS_MAX,
+  TIP_POS_MIN,
   addLimb,
   canAddLimb,
   canRemoveLimb,
+  clampTipPos,
   defaultSkeleton,
   leafNodes,
+  leafTipPositions,
   limbLabel,
   limbs,
   previewLayout,
   removeLimb,
   setLimb,
+  setTipPos,
   skeletonRows,
 } from "./skeleton";
 import type { Skeleton } from "./types";
+// 画面側とRust側が「同じ1つのファイル」を読むことが検査の目的なので、
+// 複製せずに crates/ori3-propose/tests/fixtures/ の追跡対象ファイルを直接読む。
+import legacyFixture from "../../../../crates/ori3-propose/tests/fixtures/legacy-skeleton.json";
+import positionFixture from "../../../../crates/ori3-propose/tests/fixtures/position-skeleton.json";
 
 function seededRandom(seed: number): () => number {
   let state = seed >>> 0;
@@ -308,5 +317,99 @@ describe("骨格の編集", () => {
   it("呼び名は専門用語を使わない", () => {
     expect(limbLabel(0)).toBe("頭");
     expect(limbLabel(11)).toBe("出っぱり12");
+  });
+});
+
+describe("完成形での先端の位置(PRO-006/PRO-007)", () => {
+  // Rust側 crates/ori3-propose/tests/tip_position.rs が読むのと同じ固定JSONを読む。
+  // 期待値の並びも同じ(葉ID昇順)。
+  const expected: { id: number; x: number; y: number }[] = [
+    { id: 2, x: 0.123456789012345, y: 0.987654321098765 },
+    { id: 3, x: -0.876543210987654, y: -0.234567890123456 },
+    { id: 4, x: 0.5, y: -0.75 },
+    { id: 5, x: -0.5, y: -0.75 },
+    { id: 6, x: 1.0, y: -1.0 },
+    { id: 7, x: -1.0, y: 1.0 },
+  ];
+
+  it("Rustと同じ固定JSONを同じ値として読める", () => {
+    const s = positionFixture as Skeleton;
+    expect(s.nodes).toHaveLength(8);
+    // 位置を書いていない節点は「指定なし」のまま
+    expect(s.nodes[0].tip_pos_2d ?? null).toBeNull();
+    expect(s.nodes[1].tip_pos_2d ?? null).toBeNull();
+
+    const got = leafTipPositions(s);
+    expect(got).toHaveLength(expected.length);
+    got.forEach((entry, i) => {
+      expect(entry.id).toBe(expected[i].id);
+      expect(entry.pos.x).toBe(expected[i].x);
+      expect(entry.pos.y).toBe(expected[i].y);
+    });
+  });
+
+  it("位置欄の無い今までのJSONは指定なしとして読める", () => {
+    const s = legacyFixture as Skeleton;
+    expect(s.nodes.every((n) => (n.tip_pos_2d ?? null) === null)).toBe(true);
+    expect(leafTipPositions(s)).toHaveLength(0);
+    // 位置を持たない骨格は、これまでどおり編集できる
+    expect(limbs(s)).toHaveLength(6);
+    expect(previewLayout(s)).toHaveLength(7);
+  });
+
+  it("書いて読み直しても値が変わらない", () => {
+    const s = positionFixture as Skeleton;
+    const back = JSON.parse(JSON.stringify(s)) as Skeleton;
+    let maxErr = 0;
+    leafTipPositions(back).forEach((entry, i) => {
+      maxErr = Math.max(
+        maxErr,
+        Math.abs(entry.pos.x - expected[i].x),
+        Math.abs(entry.pos.y - expected[i].y),
+      );
+    });
+    // 実測: 0(2026-08-16、先端6本12値)。合格条件は1e-12。
+    expect(maxErr).toBeLessThanOrEqual(1e-12);
+    expect(maxErr).toBe(0);
+  });
+
+  it("位置を書き込むと範囲内へ収まり、nullで指定なしへ戻る", () => {
+    const s = defaultSkeleton();
+    const id = limbs(s)[0].id;
+    const put = setTipPos(s, id, { x: 1.5, y: -0.25 });
+    expect(leafTipPositions(put)).toEqual([
+      { id, pos: { x: 1, y: -0.25 } },
+    ]);
+    // 書き込んでいない先端は増えない
+    expect(leafTipPositions(put)).toHaveLength(1);
+
+    const cleared = setTipPos(put, id, null);
+    expect(leafTipPositions(cleared)).toHaveLength(0);
+    expect(JSON.stringify(cleared)).not.toContain("tip_pos_2d");
+    // 位置を消しても長さ・太さは元のまま
+    expect(cleared.nodes).toEqual(s.nodes);
+  });
+
+  it("長さ・太さを変えても位置は残る", () => {
+    const s = setTipPos(defaultSkeleton(), 1, { x: 0.2, y: 0.3 });
+    const wider = setLimb(s, 1, { width_factor: 1.4 });
+    expect(leafTipPositions(wider)).toEqual([{ id: 1, pos: { x: 0.2, y: 0.3 } }]);
+  });
+
+  it("先端でなくなった節点の位置は使わない", () => {
+    let s = setTipPos(defaultSkeleton(), 1, { x: 0.2, y: 0.3 });
+    s = setTipPos(s, 2, { x: -0.2, y: 0.4 });
+    expect(leafTipPositions(s).map((e) => e.id)).toEqual([1, 2]);
+    s = addLimb(s, 1); // 1の先へ足すと1は先端でなくなる
+    expect(leafTipPositions(s).map((e) => e.id)).toEqual([2]);
+  });
+
+  it("範囲外と数値にならない値は範囲内へ収める", () => {
+    expect(clampTipPos({ x: 2, y: -3 })).toEqual({ x: 1, y: -1 });
+    expect(clampTipPos({ x: 0.25, y: -0.5 })).toEqual({ x: 0.25, y: -0.5 });
+    expect(clampTipPos({ x: Infinity, y: -Infinity })).toEqual({ x: 1, y: -1 });
+    expect(clampTipPos({ x: NaN, y: NaN })).toEqual({ x: 0, y: 0 });
+    expect(TIP_POS_MIN).toBe(-1);
+    expect(TIP_POS_MAX).toBe(1);
   });
 });

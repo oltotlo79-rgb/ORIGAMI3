@@ -1,7 +1,7 @@
 // 骨格(PRO-001)の編集とプレビュー配置の計算。純関数だけを置く。
 // 胴から出た部分の先へ、任意の深さと分岐でさらに出っぱりを足せる。
 
-import type { Skeleton, SkeletonNode, Vec2 } from "./types";
+import type { Skeleton, SkeletonNode, TipPos2d, Vec2 } from "./types";
 
 /** 出っぱりの本数の上下限(Rust側のMAX_LEAVESと揃える) */
 export const MIN_LIMBS = 1;
@@ -10,6 +10,13 @@ export const MAX_LIMBS = 12;
 /** 長さ・太さのスライダーの範囲と刻み */
 export const LENGTH_RANGE = { min: 0.2, max: 3, step: 0.1 } as const;
 export const WIDTH_RANGE = { min: 0.3, max: 2, step: 0.1 } as const;
+
+/**
+ * 完成形での先端の位置に指定できる範囲(Rust側のTIP_POS_MIN/TIP_POS_MAXと揃える)。
+ * 原点(0,0)が胴の中心で、1.0は完成形を囲む正方形の中心から辺までの長さ。
+ */
+export const TIP_POS_MIN = -1;
+export const TIP_POS_MAX = 1;
 
 /** 折り紙でよくある出っぱりの呼び名。足りない分は番号で呼ぶ */
 const LIMB_NAMES = [
@@ -203,6 +210,53 @@ export function setLimb(
   return {
     nodes: s.nodes.map((n) => (n.id === id ? { ...n, ...patch } : n)),
   };
+}
+
+/**
+ * 完成形での先端の位置を範囲内へ収める(Rust側の`TipPos2d::clamped`と同じ規則)。
+ * 画面から先端を引っぱって動かすとき用で、数値にならない値は原点の成分0へ寄せる。
+ */
+export function clampTipPos(pos: TipPos2d): TipPos2d {
+  const fit = (v: number): number =>
+    Number.isNaN(v) ? 0 : Math.min(TIP_POS_MAX, Math.max(TIP_POS_MIN, v));
+  return { x: fit(pos.x), y: fit(pos.y) };
+}
+
+/**
+ * 1本の先端に、完成形での位置を書き込む。nullを渡すと「指定なし」へ戻す。
+ * 位置は範囲内へ収めてから書き込む。
+ */
+export function setTipPos(
+  s: Skeleton,
+  id: number,
+  pos: TipPos2d | null,
+): Skeleton {
+  return {
+    nodes: s.nodes.map((n) => {
+      if (n.id !== id) return n;
+      if (pos === null) {
+        const cleared: SkeletonNode = { ...n };
+        delete cleared.tip_pos_2d;
+        return cleared;
+      }
+      return { ...n, tip_pos_2d: clampTipPos(pos) };
+    }),
+  };
+}
+
+/**
+ * 完成形での位置が指定されている先端を、IDの小さい順に取り出す。
+ * 指定のない先端と、先へ枝を足して先端でなくなった節点は入らない
+ * (Rust側の`Skeleton::leaf_tip_positions`と同じ)。
+ */
+export function leafTipPositions(
+  s: Skeleton,
+): { id: number; pos: TipPos2d }[] {
+  return leafNodes(s)
+    .flatMap((n) =>
+      n.tip_pos_2d ? [{ id: n.id, pos: n.tip_pos_2d }] : [],
+    )
+    .sort((a, b) => a.id - b.id);
 }
 
 /** プレビュー1本分: 親側の始点から先端までの線と表示名 */

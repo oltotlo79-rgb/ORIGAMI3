@@ -414,15 +414,29 @@ export interface SolveResult {
 }
 
 /**
+ * 完成形における先端の位置(ori3-propose::TipPos2d)。
+ * 完成した作品を正面から見たときの2D投影上の相対位置で、奥行きは持たない。
+ * 原点(0,0)は胴の中心、xは右が正、yは上が正。範囲は-1.0以上1.0以下で、
+ * 1.0は完成形を囲む正方形の中心から辺までの長さ。
+ * 将来3Dを足す場合は別の欄として追加し、この2つの欄の意味は変えない。
+ */
+export interface TipPos2d {
+  x: number;
+  y: number;
+}
+
+/**
  * 骨格の節点(ori3-propose::SkeletonNode)。
  * parentがnullの節点が根(胴の中心)で、ちょうど1つだけ置く。
  * lengthは親へつながる辺の長さ(根では使わない)、width_factorは太さ(膨らみ)。
+ * tip_pos_2dは完成形での先端の位置。省略でき、省略時は置き場所を提案の計算が決める。
  */
 export interface SkeletonNode {
   id: number;
   parent: number | null;
   length: number;
   width_factor: number;
+  tip_pos_2d?: TipPos2d | null;
 }
 
 /** 骨格全体(ori3-propose::Skeleton) */

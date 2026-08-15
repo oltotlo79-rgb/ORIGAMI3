@@ -7,4 +7,4 @@ pub mod triangulate;
 
 pub use generate::{ProposalResult, generate};
 pub use packing::{Packing, pack};
-pub use skeleton::{MAX_LEAVES, Skeleton, SkeletonNode};
+pub use skeleton::{MAX_LEAVES, Skeleton, SkeletonNode, TIP_POS_MAX, TIP_POS_MIN, TipPos2d};

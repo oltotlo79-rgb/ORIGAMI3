@@ -1,0 +1,48 @@
+{
+  "nodes": [
+    { "id": 0, "parent": null, "length": 0.0, "width_factor": 1.0 },
+    { "id": 1, "parent": 0, "length": 0.4, "width_factor": 1.0 },
+    {
+      "id": 2,
+      "parent": 0,
+      "length": 1.0,
+      "width_factor": 1.0,
+      "tip_pos_2d": { "x": 0.123456789012345, "y": 0.987654321098765 }
+    },
+    {
+      "id": 3,
+      "parent": 1,
+      "length": 1.0,
+      "width_factor": 1.0,
+      "tip_pos_2d": { "x": -0.876543210987654, "y": -0.234567890123456 }
+    },
+    {
+      "id": 4,
+      "parent": 0,
+      "length": 0.7,
+      "width_factor": 1.0,
+      "tip_pos_2d": { "x": 0.5, "y": -0.75 }
+    },
+    {
+      "id": 5,
+      "parent": 0,
+      "length": 0.7,
+      "width_factor": 1.0,
+      "tip_pos_2d": { "x": -0.5, "y": -0.75 }
+    },
+    {
+      "id": 6,
+      "parent": 1,
+      "length": 0.7,
+      "width_factor": 1.0,
+      "tip_pos_2d": { "x": 1.0, "y": -1.0 }
+    },
+    {
+      "id": 7,
+      "parent": 1,
+      "length": 0.7,
+      "width_factor": 1.0,
+      "tip_pos_2d": { "x": -1.0, "y": 1.0 }
+    }
+  ]
+}
