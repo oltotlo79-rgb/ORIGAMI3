@@ -140,6 +140,13 @@ struct VisualImage {
     visible_back_faces: BTreeSet<FaceId>,
     red_pixels: u64,
     light_pixels: u64,
+    pixels: Vec<Option<VisualPixel>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct VisualPixel {
+    face: FaceId,
+    back_facing: bool,
 }
 
 impl VisualImage {
@@ -151,6 +158,75 @@ impl VisualImage {
             self.red_pixels as f64 / total as f64
         }
     }
+
+    fn difference(&self, other: &Self, viewport: usize) -> VisualDifference {
+        assert_eq!(self.pixels.len(), other.pixels.len());
+        assert_eq!(self.pixels.len(), viewport * viewport);
+        let mut owner_pixels = 0;
+        let mut color_pixels = 0;
+        let mut coverage_pixels = 0;
+        let mut side_pixels = 0;
+        let mut face_only_pixels = 0;
+        let mut min_x = viewport;
+        let mut min_y = viewport;
+        let mut max_x = 0;
+        let mut max_y = 0;
+        for (pixel, (before, after)) in self.pixels.iter().zip(&other.pixels).enumerate() {
+            if before != after {
+                owner_pixels += 1;
+            }
+            let color_changed = match (before, after) {
+                (None, None) => false,
+                (None, Some(_)) | (Some(_), None) => {
+                    coverage_pixels += 1;
+                    true
+                }
+                (Some(before), Some(after)) if before.back_facing != after.back_facing => {
+                    side_pixels += 1;
+                    true
+                }
+                (Some(before), Some(after)) => {
+                    if before.face != after.face {
+                        face_only_pixels += 1;
+                    }
+                    false
+                }
+            };
+            if color_changed {
+                color_pixels += 1;
+                let x = pixel % viewport;
+                let y = pixel / viewport;
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x);
+                max_y = max_y.max(y);
+            }
+        }
+        VisualDifference {
+            owner_pixels,
+            color_pixels,
+            coverage_pixels,
+            side_pixels,
+            face_only_pixels,
+            color_bounds: (color_pixels > 0).then_some((min_x, min_y, max_x, max_y)),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct VisualDifference {
+    owner_pixels: usize,
+    color_pixels: usize,
+    coverage_pixels: usize,
+    side_pixels: usize,
+    face_only_pixels: usize,
+    color_bounds: Option<(usize, usize, usize, usize)>,
+}
+
+#[derive(Clone)]
+struct EndpointState {
+    frame: Frame3D,
+    angles: HashMap<EdgeId, f64>,
 }
 
 #[derive(Clone, Copy)]
@@ -735,25 +811,35 @@ fn visual_image(diagram: &Diagram, frame: &Frame3D, viewport: usize, view: Camer
     let mut visible_back_faces = BTreeSet::new();
     let mut red_pixels = 0;
     let mut light_pixels = 0;
-    for (owner, back_facing) in owners.into_iter().flatten() {
-        let face = &faces[owner];
-        visible_faces.insert(face.face);
-        if back_facing {
-            visible_back_faces.insert(face.face);
-            light_pixels += 1;
-        } else {
-            red_pixels += 1;
-        }
-    }
+    let pixels = owners
+        .into_iter()
+        .map(|owner| {
+            owner.map(|(owner, back_facing)| {
+                let face = &faces[owner];
+                visible_faces.insert(face.face);
+                if back_facing {
+                    visible_back_faces.insert(face.face);
+                    light_pixels += 1;
+                } else {
+                    red_pixels += 1;
+                }
+                VisualPixel {
+                    face: face.face,
+                    back_facing,
+                }
+            })
+        })
+        .collect();
     VisualImage {
         visible_faces,
         visible_back_faces,
         red_pixels,
         light_pixels,
+        pixels,
     }
 }
 
-fn endpoint_frames(diagram: &Diagram, hinge: EdgeId, sign: f64) -> (Frame3D, Frame3D) {
+fn endpoint_frames(diagram: &Diagram, hinge: EdgeId, sign: f64) -> (EndpointState, EndpointState) {
     let mut warm = None::<HashMap<EdgeId, f64>>;
     for absolute in WARMUP_ABS {
         let motion = solve_motion(
@@ -798,9 +884,15 @@ fn endpoint_frames(diagram: &Diagram, hinge: EdgeId, sign: f64) -> (Frame3D, Fra
             sign * absolute
         );
         if absolute == 179.999 {
-            before = Some(motion.result.frame.clone());
+            before = Some(EndpointState {
+                frame: motion.result.frame.clone(),
+                angles: motion.result.angles.clone(),
+            });
         } else if absolute == 180.0 {
-            after = Some(motion.result.frame.clone());
+            after = Some(EndpointState {
+                frame: motion.result.frame.clone(),
+                angles: motion.result.angles.clone(),
+            });
         }
         warm = Some(motion.result.angles);
     }
@@ -832,6 +924,36 @@ fn surface_rank_order(frame: &Frame3D) -> Vec<FaceId> {
     ranks.into_iter().map(|(_, face)| face).collect()
 }
 
+fn max_vertex_distance(before: &Frame3D, after: &Frame3D) -> f64 {
+    let after_faces = after
+        .faces
+        .iter()
+        .map(|face| (face.face, face))
+        .collect::<BTreeMap<_, _>>();
+    before
+        .faces
+        .iter()
+        .flat_map(|before_face| {
+            let after_face = after_faces
+                .get(&before_face.face)
+                .expect("endpoint frames contain the same faces");
+            assert_eq!(before_face.polygon.len(), after_face.polygon.len());
+            before_face.polygon.iter().zip(&after_face.polygon).map(
+                |(before_vertex, after_vertex)| {
+                    before_vertex
+                        .iter()
+                        .zip(after_vertex)
+                        .map(|(before_coordinate, after_coordinate)| {
+                            (before_coordinate - after_coordinate).powi(2)
+                        })
+                        .sum::<f64>()
+                        .sqrt()
+                },
+            )
+        })
+        .fold(0.0, f64::max)
+}
+
 #[test]
 #[ignore = "full 110-crease acceptance raster sweep; run explicitly in release mode"]
 fn surface_order_179_999_to_180_all_110_creases() {
@@ -847,25 +969,52 @@ fn surface_order_179_999_to_180_all_110_creases() {
         total_hinges += diagram.hinges.len();
         for &(hinge, kind) in &diagram.hinges {
             for sign in [1.0, -1.0] {
-                let (before_frame, after_frame) = endpoint_frames(diagram, hinge, sign);
-                if surface_rank_order(&before_frame) != surface_rank_order(&after_frame) {
+                let (before_state, after_state) = endpoint_frames(diagram, hinge, sign);
+                let before_order = surface_rank_order(&before_state.frame);
+                let after_order = surface_rank_order(&after_state.frame);
+                if before_order != after_order {
                     rank_changed_hinges.insert((diagram.name, hinge));
                     rank_changed_directions += 1;
                     diagram_rank_changed.insert(hinge);
+                    println!(
+                        "SURFACE_180_RANK_CHANGE diagram={} edge={} kind={kind:?} direction={sign:+} before_order={before_order:?} after_order={after_order:?}",
+                        diagram.name, hinge,
+                    );
                 }
                 let view = camera(diagram.paper_width, diagram.paper_height, 1.0);
-                let before = visual_image(diagram, &before_frame, VIEWPORT, view);
-                let after = visual_image(diagram, &after_frame, VIEWPORT, view);
+                let before = visual_image(diagram, &before_state.frame, VIEWPORT, view);
+                let after = visual_image(diagram, &after_state.frame, VIEWPORT, view);
                 if before.visible_back_faces != after.visible_back_faces {
+                    let difference = before.difference(&after, VIEWPORT);
+                    let max_vertex_distance =
+                        max_vertex_distance(&before_state.frame, &after_state.frame);
+                    let before_exact = before_state
+                        .angles
+                        .values()
+                        .filter(|angle| (angle.abs() - 180.0).abs() <= 1e-6)
+                        .count();
+                    let after_exact = after_state
+                        .angles
+                        .values()
+                        .filter(|angle| (angle.abs() - 180.0).abs() <= 1e-6)
+                        .count();
                     changed_directions += 1;
                     changed_hinges.insert((diagram.name, hinge));
                     diagram_changed.insert(hinge);
                     println!(
-                        "SURFACE_180_CHANGE diagram={} edge={} kind={kind:?} direction={sign:+} before_back={} after_back={}",
+                        "SURFACE_180_CHANGE diagram={} edge={} kind={kind:?} direction={sign:+} before_back={} after_back={} owner_pixels={} color_pixels={} coverage_pixels={} side_pixels={} face_only_pixels={} color_bounds={:?} max_vertex_distance={max_vertex_distance:.9e} before_exact={} after_exact={}",
                         diagram.name,
                         hinge,
                         ids(&before.visible_back_faces),
                         ids(&after.visible_back_faces),
+                        difference.owner_pixels,
+                        difference.color_pixels,
+                        difference.coverage_pixels,
+                        difference.side_pixels,
+                        difference.face_only_pixels,
+                        difference.color_bounds,
+                        before_exact,
+                        after_exact,
                     );
                 }
             }
@@ -899,6 +1048,74 @@ fn surface_order_179_999_to_180_all_110_creases() {
         rank_changed_directions,
     );
     assert_eq!(total_hinges, 110);
+    assert!(
+        rank_changed_hinges.is_empty(),
+        "179.999 and 180 degrees must use the same surface-rank order: {rank_changed_hinges:?}"
+    );
+    assert!(
+        changed_hinges.len() < 80,
+        "stage C must reduce the 80 stage-B endpoint changes: {changed_hinges:?}"
+    );
+}
+
+#[test]
+#[ignore = "folded fixture regression for the 19 stage-B rank discontinuities"]
+fn surface_order_exact_endpoint_is_rank_stable_for_previous_19() {
+    const PREVIOUS_RANK_CHANGES: [EdgeId; 19] = [
+        125, 143, 181, 183, 297, 298, 309, 314, 352, 358, 362, 367, 380, 393, 394, 401, 402, 426,
+        430,
+    ];
+    let diagrams = boundary_diagrams();
+    let diagram = diagrams
+        .iter()
+        .find(|diagram| diagram.name == "folded-sample.ori3")
+        .expect("the folded acceptance fixture exists");
+    for hinge in PREVIOUS_RANK_CHANGES {
+        assert!(diagram.hinges.iter().any(|&(edge, _)| edge == hinge));
+        for sign in [1.0, -1.0] {
+            let (before, after) = endpoint_frames(diagram, hinge, sign);
+            let expected = surface_rank_order(&before.frame);
+            assert_eq!(
+                surface_rank_order(&after.frame),
+                expected,
+                "edge {hinge} {sign:+}"
+            );
+
+            let refreshed = solve_motion(
+                &diagram.cp,
+                &diagram.faces,
+                &[Driver {
+                    hinge,
+                    target_angle_deg: sign * 180.0,
+                }],
+                None,
+                Some(&after.angles),
+                true,
+            );
+            assert_eq!(
+                surface_rank_order(&refreshed.result.frame),
+                expected,
+                "edge {hinge} {sign:+} exact refresh"
+            );
+
+            let cold = solve_motion(
+                &diagram.cp,
+                &diagram.faces,
+                &[Driver {
+                    hinge,
+                    target_angle_deg: sign * 180.0,
+                }],
+                None,
+                None,
+                true,
+            );
+            assert_eq!(
+                surface_rank_order(&cold.result.frame),
+                expected,
+                "edge {hinge} {sign:+} cold exact"
+            );
+        }
+    }
 }
 
 #[test]
@@ -931,8 +1148,8 @@ fn surface_order_minus_94_four_view_conditions() {
     }
     let valley_front = valley_front.expect("the four conditions include valley/front");
     assert!(
-        valley_front.red_ratio() > 0.5,
-        "valley -94 degrees from the front must be majority red: red={} light={}",
+        valley_front.red_ratio() >= 0.909,
+        "valley -94 degrees from the front must be at least 90.9% red: red={} light={}",
         valley_front.red_pixels,
         valley_front.light_pixels,
     );

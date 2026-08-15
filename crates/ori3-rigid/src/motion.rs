@@ -8,10 +8,7 @@ use ori3_model::{CreasePattern, Driver, EdgeId, EdgeKind, FaceId, Frame3D};
 
 use crate::intersect::{ContactMetrics, contact_metrics, contact_witnesses};
 use crate::solver::{self, PreparedTopology, canonical_delta_deg};
-use crate::{
-    AngleRelaxation, SolveResult, max_seam_gap, self_intersects, solve, solve_near,
-    solve_near_exact, tree,
-};
+use crate::{AngleRelaxation, SolveResult, max_seam_gap, self_intersects, solve_near_exact, tree};
 
 /// 小さな作品で使う目標角の刻み。通常の16ms入力はこれより小さいため1段だけになる。
 const TARGET_STEP_DEG: f64 = 5.0;
@@ -24,6 +21,11 @@ const CONTACT_LINE_SEARCH_STEPS: usize = 8;
 /// solverと同じ閉包収束閾値。接触より閉包を常に上位へ置く順位付けに使う。
 const CLOSURE_TOLERANCE: f64 = 1e-13;
 const RELAXATION_EPS_DEG: f64 = 1e-6;
+/// 完全折りの順位だけに使う決定的な進入経路。接触枝を飛び越えず、終端は表示probeと同じ179.999°。
+const SURFACE_CANONICAL_APPROACH_DEG: [f64; 22] = [
+    9.0, 19.0, 29.0, 39.0, 49.0, 59.0, 69.0, 79.0, 90.0, 101.0, 111.0, 121.0, 131.0, 141.0, 151.0,
+    161.0, 171.0, 179.0, 179.5, 179.9, 179.99, 179.999,
+];
 /// 紙が裂けたとみなす辺の離れ(紙の長辺を1とした値)。表示でも検査でも同じ値を使う。
 const SEAM_TEAR_TOLERANCE: f64 = 1e-6;
 const CONTACT_BEST_EFFORT_WARNING: &str =
@@ -38,10 +40,17 @@ pub struct MotionSolveResult {
     pub contact_stopped: bool,
 }
 
+#[derive(Clone, Copy)]
+struct MotionSolveContext<'a> {
+    topology: &'a PreparedTopology,
+    stamp_surface_order: bool,
+}
+
 /// 前回角から要求角までを継続法で追い、接触や有限な不収束では停止しない。
 ///
 /// `targets` が `Some` なら各段で [`solve_near`]、`None` なら [`solve`] を使う。
-/// `detect_contact == false` はソルバーを1回だけ呼び、結果をそのまま返す。
+/// `detect_contact == false` は要求姿勢のソルバーを1回だけ呼び、その物理結果を返す。
+/// 完全折りの表示順位だけに使う近傍probeは、返す角度・物理フレームを変更しない。
 /// 接触判定は剛体フレームへ掛けるため、後段の表示用重なり補正とは独立している。
 #[must_use]
 pub fn solve_motion(
@@ -52,7 +61,39 @@ pub fn solve_motion(
     warm_start: Option<&HashMap<EdgeId, f64>>,
     detect_contact: bool,
 ) -> MotionSolveResult {
-    let followed = solve_motion_from(cp, faces, drivers, targets, warm_start, detect_contact);
+    let topology = solver::prepare_topology(cp, faces);
+    solve_motion_prepared(
+        cp,
+        faces,
+        drivers,
+        targets,
+        warm_start,
+        detect_contact,
+        MotionSolveContext {
+            topology: &topology,
+            stamp_surface_order: true,
+        },
+    )
+}
+
+fn solve_motion_prepared(
+    cp: &CreasePattern,
+    faces: &[Face],
+    drivers: &[Driver],
+    targets: Option<&HashMap<EdgeId, f64>>,
+    warm_start: Option<&HashMap<EdgeId, f64>>,
+    detect_contact: bool,
+    context: MotionSolveContext<'_>,
+) -> MotionSolveResult {
+    let followed = solve_motion_from(
+        cp,
+        faces,
+        drivers,
+        targets,
+        warm_start,
+        detect_contact,
+        context,
+    );
     if !detect_contact
         || warm_start.is_none()
         || !is_finite_result(&followed.result, faces.len())
@@ -65,7 +106,7 @@ pub fn solve_motion(
     // 折る操作では、前の姿勢から追うと29組・食い込み1.053e-1になるのに対し、
     // 平らから追い直すと0組で解ける(指定からのずれも178.1°→102.2°と小さい)。
     // 追い直しは1回だけで、そこでも食い込むなら元の結果を返すので操作は止まらない。
-    let restarted = solve_motion_from(cp, faces, drivers, targets, None, detect_contact);
+    let restarted = solve_motion_from(cp, faces, drivers, targets, None, detect_contact, context);
     let improved = is_finite_result(&restarted.result, faces.len())
         && !self_intersects(&restarted.result.frame)
         && max_seam_gap(cp, faces, &restarted.result.frame)
@@ -80,17 +121,19 @@ fn solve_motion_from(
     targets: Option<&HashMap<EdgeId, f64>>,
     warm_start: Option<&HashMap<EdgeId, f64>>,
     detect_contact: bool,
+    context: MotionSolveContext<'_>,
 ) -> MotionSolveResult {
+    let topology = context.topology;
     if !detect_contact {
-        let requested = solve_requested(cp, faces, drivers, targets, warm_start);
+        let requested = solve_requested_prepared(cp, faces, drivers, targets, warm_start, topology);
         let mut result = if is_finite_result(&requested, faces.len()) {
             requested
         } else {
             let previous = warm_start
-                .map(|warm| solve_warm_pose(cp, faces, warm))
+                .map(|warm| solve_warm_pose_prepared(cp, faces, warm, topology))
                 .filter(|candidate| is_finite_result(candidate, faces.len()))
                 .or_else(|| {
-                    let flat = solve(cp, faces, &[], None);
+                    let flat = solver::solve_prepared(cp, faces, &[], None, topology);
                     is_finite_result(&flat, faces.len()).then_some(flat)
                 });
             let iterations = requested.iterations;
@@ -98,7 +141,17 @@ fn solve_motion_from(
                 previous_with_failure(previous, requested, iterations)
             })
         };
-        stamp_motion_surface_order(cp, faces, drivers, &mut result);
+        if context.stamp_surface_order {
+            stamp_motion_surface_order(
+                cp,
+                faces,
+                drivers,
+                targets,
+                detect_contact,
+                topology,
+                &mut result,
+            );
+        }
         return MotionSolveResult {
             result,
             contact_detected: false,
@@ -108,13 +161,12 @@ fn solve_motion_from(
 
     // warmの全角度を一時hardにして、有限な不収束角も解き直さず正確にt=0へ戻す。
     // warmが無い初回、または有限フレームを作れない場合だけ平らな導出形を使う。
-    let topology = solver::prepare_topology(cp, faces);
     let initial = warm_start.map_or_else(
-        || solver::solve_prepared(cp, faces, &[], None, &topology),
-        |warm| solve_warm_pose_prepared(cp, faces, warm, &topology),
+        || solver::solve_prepared(cp, faces, &[], None, topology),
+        |warm| solve_warm_pose_prepared(cp, faces, warm, topology),
     );
     let flat = (!is_finite_result(&initial, faces.len()))
-        .then(|| solver::solve_prepared(cp, faces, &[], None, &topology));
+        .then(|| solver::solve_prepared(cp, faces, &[], None, topology));
     let mut last_finite = if is_finite_result(&initial, faces.len()) {
         Some(initial)
     } else {
@@ -158,7 +210,7 @@ fn solve_motion_from(
             targets: step_targets.as_ref(),
             start_angles: &start_angles,
             warm: step_warm,
-            topology: &topology,
+            topology,
         };
         // 利用者が指定した角度が全て同時に成り立つなら、それがそのまま答え。
         // ここで先に確かめておかないと、譲った姿勢が次の段の出発点になり、
@@ -173,7 +225,7 @@ fn solve_motion_from(
         }
         let mut candidate = if step == steps && moving_outward {
             step_targets.as_ref().map_or_else(
-                || solver::solve_prepared(cp, faces, &step_drivers, step_warm, &topology),
+                || solver::solve_prepared(cp, faces, &step_drivers, step_warm, topology),
                 |targets| {
                     solver::solve_near_exact_prepared(
                         cp,
@@ -181,7 +233,7 @@ fn solve_motion_from(
                         &step_drivers,
                         targets,
                         step_warm,
-                        &topology,
+                        topology,
                     )
                 },
             )
@@ -192,7 +244,7 @@ fn solve_motion_from(
                 &step_drivers,
                 step_targets.as_ref(),
                 step_warm,
-                &topology,
+                topology,
             )
         };
         if step == steps
@@ -209,7 +261,7 @@ fn solve_motion_from(
                 &step_drivers,
                 targets,
                 step_warm,
-                &topology,
+                topology,
             );
             // 分割の途中で別の枝へ逸れると、最終段の初期値が既に悪くなっていて、
             // そこから解き直しても紙が裂けたままになる。分割前の姿勢を初期値にして
@@ -221,7 +273,7 @@ fn solve_motion_from(
                 &step_drivers,
                 targets,
                 Some(&start_angles),
-                &topology,
+                topology,
             );
             for alternative in [exact, from_start] {
                 if is_finite_result(&alternative, faces.len())
@@ -280,10 +332,7 @@ fn solve_motion_from(
             failed.iterations = iterations;
             (failed, None)
         }
-        (None, None) => (
-            solver::solve_prepared(cp, faces, &[], None, &topology),
-            None,
-        ),
+        (None, None) => (solver::solve_prepared(cp, faces, &[], None, topology), None),
     };
     // resultが直前に診断したFrameそのものなら、その結果を再利用する。接触補正や
     // 非有限fallbackでFrameが変わった場合だけ従来どおり全面診断する。
@@ -292,14 +341,14 @@ fn solve_motion_from(
         // 最終要求へ直接解いた成立・非交差枝があればそれを失わない。接触時だけの
         // 固定1候補で、seam閾値を満たす場合に限って採用する。
         let mut direct =
-            solve_requested_prepared(cp, faces, drivers, targets, warm_start, &topology);
+            solve_requested_prepared(cp, faces, drivers, targets, warm_start, topology);
         if is_finite_result(&direct, faces.len())
             && !self_intersects(&direct.frame)
             && max_seam_gap(cp, faces, &direct.frame) >= 1e-6
             && let Some(targets) = targets
         {
             let exact = solver::solve_near_exact_prepared(
-                cp, faces, drivers, targets, warm_start, &topology,
+                cp, faces, drivers, targets, warm_start, topology,
             );
             if is_finite_result(&exact, faces.len())
                 && !self_intersects(&exact.frame)
@@ -322,7 +371,17 @@ fn solve_motion_from(
         // 改善した有限候補だけを採る。
         result = avoid_contact(cp, faces, drivers, targets, warm_start, result);
     }
-    stamp_motion_surface_order(cp, faces, drivers, &mut result);
+    if context.stamp_surface_order {
+        stamp_motion_surface_order(
+            cp,
+            faces,
+            drivers,
+            targets,
+            detect_contact,
+            topology,
+            &mut result,
+        );
+    }
     MotionSolveResult {
         result,
         contact_detected,
@@ -334,6 +393,9 @@ fn stamp_motion_surface_order(
     cp: &CreasePattern,
     faces: &[Face],
     drivers: &[Driver],
+    targets: Option<&HashMap<EdgeId, f64>>,
+    detect_contact: bool,
+    topology: &PreparedTopology,
     result: &mut SolveResult,
 ) {
     let mut previous_order = faces.iter().map(|face| face.id).collect::<Vec<_>>();
@@ -360,11 +422,16 @@ fn stamp_motion_surface_order(
         .into_values()
         .collect::<Vec<_>>();
 
-    // 完全折りが1本なら、最終角集合そのものをseedに179.999°の閉包姿勢を解き、
-    // canonicalな1軸極限を使う。
-    // 複数本が同時に完全折りなら一意な1軸極限がないため、treeのradial極限を維持する。
-    // hard driverは今回動かす自由度という明示入力として使うが、呼出し元のwarmや
-    // 直前のownerは順位へ使わない。
+    // 完全折りが1本だけの単一hard操作なら、明示driverを平坦状態から179.999°まで
+    // 決定的に再生し、接触枝を含むcanonicalな1軸極限を使う。呼出し元のwarmを
+    // 使わないため、初回、180°での再計算、cold startの順位は同じになる。
+    // 複数hardやpreferred targetを伴う姿勢では0°からの1軸再生が実進入枝を再現しない。
+    // 複数hardは全driverを保ったfinal-angle seed、preferredはcoldの同じtargetsでprobeする。
+    // canonical途中が有限でない場合も同じ1点probeへ戻す。
+    // 複数の明示driverが同時に完全折りなら一意な1軸極限がないため、
+    // treeのradial極限を維持する。閉包で従属hingeもexactになる単一driver操作は対象に含む。
+    // 単一hard・preferredなしのcanonical枝だけは、呼出し元warmや直前ownerを
+    // 順位へ使わない。複数hardのfinal-angle seedは、最終solveが選んだ枝を保持する。
     let order = if !has_exact {
         crate::surface_order::derive_surface_order_from_current_depths(
             faces,
@@ -375,8 +442,35 @@ fn stamp_motion_surface_order(
     } else if approached_drivers.len() != 1 {
         return;
     } else {
-        let approached = solve(cp, faces, &approached_drivers, Some(&result.angles));
-        if is_finite_result(&approached, faces.len()) {
+        let approached_driver = &approached_drivers[0];
+        let direct_probe = || {
+            let probe_drivers = surface_approach_drivers(
+                drivers,
+                approached_driver.hinge,
+                approached_driver.target_angle_deg,
+            );
+            // preferred targetのsolve_nearはwarmを零空間の同順位選択にも使う。
+            // exact結果をseedにすると、coldな179.999°実進入とは別枝になるため、
+            // preferred contextでは同じcold条件(targetsを初期値にする)でprobeする。
+            // warm依存のpreferred進入との連続性は、この局所的な単一driver契約に含めない。
+            let probe_warm = targets.is_none().then_some(&result.angles);
+            solve_requested_prepared(cp, faces, &probe_drivers, targets, probe_warm, topology)
+        };
+        let approached = if drivers.len() == 1 && targets.is_none() {
+            canonical_surface_approach(cp, faces, detect_contact, topology, approached_driver)
+                .unwrap_or_else(direct_probe)
+        } else {
+            direct_probe()
+        };
+        let reached_approach =
+            approached
+                .angles
+                .get(&approached_driver.hinge)
+                .is_some_and(|angle| {
+                    canonical_delta_deg(*angle, approached_driver.target_angle_deg).abs()
+                        <= RELAXATION_EPS_DEG
+                });
+        if is_finite_result(&approached, faces.len()) && reached_approach {
             crate::surface_order::derive_surface_order_from_current_depths(
                 faces,
                 &approached.frame,
@@ -390,9 +484,69 @@ fn stamp_motion_surface_order(
     let _ = crate::surface_order::stamp_surface_order(&mut result.frame, &order);
 }
 
-fn solve_warm_pose(cp: &CreasePattern, faces: &[Face], warm: &HashMap<EdgeId, f64>) -> SolveResult {
-    let topology = solver::prepare_topology(cp, faces);
-    solve_warm_pose_prepared(cp, faces, warm, &topology)
+fn canonical_surface_approach(
+    cp: &CreasePattern,
+    faces: &[Face],
+    detect_contact: bool,
+    topology: &PreparedTopology,
+    approached_driver: &Driver,
+) -> Option<SolveResult> {
+    let direction = approached_driver.target_angle_deg.signum();
+    if direction == 0.0 {
+        return None;
+    }
+    let mut warm = None;
+    let mut approached = None;
+    for absolute in SURFACE_CANONICAL_APPROACH_DEG {
+        let requested_angle = direction * absolute;
+        let checkpoint_drivers = [Driver {
+            hinge: approached_driver.hinge,
+            target_angle_deg: requested_angle,
+        }];
+        let solved = solve_motion_prepared(
+            cp,
+            faces,
+            &checkpoint_drivers,
+            None,
+            warm.as_ref(),
+            detect_contact,
+            MotionSolveContext {
+                topology,
+                stamp_surface_order: false,
+            },
+        )
+        .result;
+        let reached_checkpoint = solved
+            .angles
+            .get(&approached_driver.hinge)
+            .is_some_and(|angle| {
+                canonical_delta_deg(*angle, requested_angle).abs() <= RELAXATION_EPS_DEG
+            });
+        if !is_finite_result(&solved, faces.len()) || !reached_checkpoint {
+            return None;
+        }
+        warm = Some(solved.angles.clone());
+        approached = Some(solved);
+    }
+    approached
+}
+
+fn surface_approach_drivers(
+    drivers: &[Driver],
+    approached_hinge: EdgeId,
+    approached_angle_deg: f64,
+) -> Vec<Driver> {
+    drivers
+        .iter()
+        .map(|driver| Driver {
+            hinge: driver.hinge,
+            target_angle_deg: if driver.hinge == approached_hinge {
+                approached_angle_deg
+            } else {
+                driver.target_angle_deg
+            },
+        })
+        .collect()
 }
 
 fn solve_warm_pose_prepared(
@@ -430,19 +584,6 @@ fn is_finite_result(result: &SolveResult, expected_faces: usize) -> bool {
                 .flatten()
                 .all(|coordinate| coordinate.is_finite())
         })
-}
-
-fn solve_requested(
-    cp: &CreasePattern,
-    faces: &[Face],
-    drivers: &[Driver],
-    targets: Option<&HashMap<EdgeId, f64>>,
-    warm_start: Option<&HashMap<EdgeId, f64>>,
-) -> SolveResult {
-    targets.map_or_else(
-        || solve(cp, faces, drivers, warm_start),
-        |targets| solve_near(cp, faces, drivers, targets, warm_start),
-    )
 }
 
 fn solve_requested_prepared(
@@ -1371,9 +1512,12 @@ fn previous_with_failure(
 
 #[cfg(test)]
 mod tests {
-    use super::{ContactCandidate, angle_priority_costs, continuation_steps};
+    use super::{
+        ContactCandidate, SURFACE_CANONICAL_APPROACH_DEG, angle_priority_costs, continuation_steps,
+        surface_approach_drivers,
+    };
     use crate::{ContactMetrics, SolveResult};
-    use ori3_model::Frame3D;
+    use ori3_model::{Driver, Frame3D};
     use std::collections::{BTreeSet, HashMap};
 
     #[test]
@@ -1385,6 +1529,46 @@ mod tests {
         // 完全に折った状態の近くでは、要求が小さくても上限まで刻む。
         assert_eq!(continuation_steps(20, 1.0, false), 1);
         assert_eq!(continuation_steps(20, 1.0, true), 4);
+    }
+
+    #[test]
+    fn surface_canonical_checkpoints_are_strict_non_exact_approach() {
+        assert!(
+            SURFACE_CANONICAL_APPROACH_DEG
+                .windows(2)
+                .all(|pair| pair[0] < pair[1])
+        );
+        assert!(
+            SURFACE_CANONICAL_APPROACH_DEG
+                .iter()
+                .all(|angle| angle.is_finite() && *angle > 0.0 && *angle < 180.0)
+        );
+        assert_eq!(
+            SURFACE_CANONICAL_APPROACH_DEG.last().copied(),
+            Some(180.0 - crate::surface_order::SURFACE_APPROACH_DEG)
+        );
+    }
+
+    #[test]
+    fn surface_approach_changes_only_the_single_exact_driver() {
+        let drivers = [
+            Driver {
+                hinge: 10,
+                target_angle_deg: 180.0,
+            },
+            Driver {
+                hinge: 20,
+                target_angle_deg: -37.5,
+            },
+        ];
+
+        let checkpoint = surface_approach_drivers(&drivers, 10, 179.999);
+
+        assert_eq!(checkpoint.len(), 2);
+        assert_eq!(checkpoint[0].hinge, 10);
+        assert_eq!(checkpoint[0].target_angle_deg, 179.999);
+        assert_eq!(checkpoint[1].hinge, 20);
+        assert_eq!(checkpoint[1].target_angle_deg, -37.5);
     }
 
     fn ranked_candidate(contact: ContactMetrics, medium_energy: f64) -> ContactCandidate {

@@ -71,30 +71,51 @@ fn derive_surface_order_with(
         .iter()
         .map(|face| (face.face, face))
         .collect::<HashMap<_, _>>();
+    // Each face participates in up to F-1 comparisons. Its normal, local plane,
+    // and projection onto that plane do not depend on the other face.
+    let geometries = faces
+        .iter()
+        .map(|face| {
+            let polygon = frame_faces[&face.id]
+                .polygon
+                .iter()
+                .copied()
+                .map(DVec3::from)
+                .collect::<Vec<_>>();
+            let plane = face_plane(&polygon);
+            let projected = plane.map(|plane| project_polygon(&polygon, plane));
+            FaceGeometry {
+                id: face.id,
+                plane,
+                projected,
+                normal: polygon_normal(&polygon),
+                polygon,
+            }
+        })
+        .collect::<Vec<_>>();
     let mut constraints = BTreeSet::<(FaceId, FaceId)>::new();
 
     for left_index in 0..faces.len() {
         for right_index in left_index + 1..faces.len() {
-            let left = faces[left_index].id;
-            let right = faces[right_index].id;
-            let left_polygon = frame_faces[&left]
-                .polygon
-                .iter()
-                .copied()
-                .map(DVec3::from)
-                .collect::<Vec<_>>();
-            let right_polygon = frame_faces[&right]
-                .polygon
-                .iter()
-                .copied()
-                .map(DVec3::from)
-                .collect::<Vec<_>>();
-            let Some(plane) = common_plane(&left_polygon, &right_polygon, require_coplanar) else {
+            let left_geometry = &geometries[left_index];
+            let right_geometry = &geometries[right_index];
+            let left = left_geometry.id;
+            let right = right_geometry.id;
+            let Some(plane) = common_plane(left_geometry, right_geometry, require_coplanar) else {
                 continue;
             };
-            let left_2d = project_polygon(&left_polygon, plane);
-            let right_2d = project_polygon(&right_polygon, plane);
-            let witnesses = overlap_witnesses(&left_2d, &right_2d)?;
+            let left_2d = left_geometry
+                .projected
+                .as_deref()
+                .expect("a face plane always has a projection");
+            let right_2d = project_polygon(&right_geometry.polygon, plane);
+            // Polygon clipping is only needed when the projected axis intervals
+            // can meet. Expanding by EPS keeps boundary-tolerance cases on the
+            // exact path while rejecting spatially separated faces cheaply.
+            if !projected_bounds_overlap(left_2d, &right_2d) {
+                continue;
+            }
+            let witnesses = overlap_witnesses(left_2d, &right_2d)?;
             let mut left_above = false;
             let mut right_above = false;
             for witness in witnesses {
@@ -179,34 +200,52 @@ struct Plane {
     v: DVec3,
 }
 
-fn common_plane(left: &[DVec3], right: &[DVec3], require_coplanar: bool) -> Option<Plane> {
-    let origin = *left.first()?;
-    let raw_normal = polygon_normal(left)?;
+struct FaceGeometry {
+    id: FaceId,
+    polygon: Vec<DVec3>,
+    normal: Option<DVec3>,
+    plane: Option<Plane>,
+    projected: Option<Vec<DVec2>>,
+}
+
+fn face_plane(polygon: &[DVec3]) -> Option<Plane> {
+    let origin = *polygon.first()?;
+    let raw_normal = polygon_normal(polygon)?;
     let normal = canonical(raw_normal);
-    let u = left
+    let u = polygon
         .iter()
-        .zip(left.iter().cycle().skip(1))
-        .take(left.len())
+        .zip(polygon.iter().cycle().skip(1))
+        .take(polygon.len())
         .map(|(&a, &b)| b - a)
         .max_by(|a, b| a.length_squared().total_cmp(&b.length_squared()))?
         .normalize();
     let v = normal.cross(u).normalize();
-    let right_normal = polygon_normal(right)?;
-    if normal.dot(right_normal).abs() < 1.0 - COPLANAR_EPS
-        || (require_coplanar
-            && left
-                .iter()
-                .chain(right)
-                .any(|point| normal.dot(*point - origin).abs() > COPLANAR_EPS))
-    {
-        return None;
-    }
     Some(Plane {
         origin,
         normal,
         u,
         v,
     })
+}
+
+fn common_plane(
+    left: &FaceGeometry,
+    right: &FaceGeometry,
+    require_coplanar: bool,
+) -> Option<Plane> {
+    let plane = left.plane?;
+    let right_normal = right.normal?;
+    if plane.normal.dot(right_normal).abs() < 1.0 - COPLANAR_EPS
+        || (require_coplanar
+            && left
+                .polygon
+                .iter()
+                .chain(&right.polygon)
+                .any(|point| plane.normal.dot(*point - plane.origin).abs() > COPLANAR_EPS))
+    {
+        return None;
+    }
+    Some(plane)
 }
 
 fn polygon_normal(points: &[DVec3]) -> Option<DVec3> {
@@ -245,6 +284,21 @@ fn project_polygon(points: &[DVec3], plane: Plane) -> Vec<DVec2> {
             DVec2::new(relative.dot(plane.u), relative.dot(plane.v))
         })
         .collect()
+}
+
+fn projected_bounds_overlap(left: &[DVec2], right: &[DVec2]) -> bool {
+    let bounds = |polygon: &[DVec2]| {
+        polygon.iter().copied().fold(
+            (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)),
+            |(minimum, maximum), point| (minimum.min(point), maximum.max(point)),
+        )
+    };
+    let (left_minimum, left_maximum) = bounds(left);
+    let (right_minimum, right_maximum) = bounds(right);
+    left_maximum.x + EPS >= right_minimum.x
+        && right_maximum.x + EPS >= left_minimum.x
+        && left_maximum.y + EPS >= right_minimum.y
+        && right_maximum.y + EPS >= left_minimum.y
 }
 
 fn approached_height(
@@ -476,6 +530,9 @@ fn stable_topological_order(
     previous_order: &[FaceId],
     constraints: &BTreeSet<(FaceId, FaceId)>,
 ) -> Result<Vec<FaceId>, String> {
+    if constraints.is_empty() {
+        return Ok(previous_order.to_vec());
+    }
     let mut outgoing = previous_order
         .iter()
         .copied()

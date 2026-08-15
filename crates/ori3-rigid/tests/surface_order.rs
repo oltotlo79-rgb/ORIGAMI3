@@ -673,3 +673,96 @@ fn mixed_exact_stack_rank_is_independent_of_warm_start() {
     let expected = to_frame3d(&cp, &faces, &propagate(&cp, &faces, &explicit));
     assert_eq!(rank_order(&cold.frame), rank_order(&expected));
 }
+
+#[test]
+fn single_exact_stack_preserves_non_exact_driver_context() {
+    let cp = diagonal_midline_square();
+    let faces = extract_faces(&cp);
+    let exact_hinge = 17;
+    let contextual = mixed_exact_angles()
+        .into_iter()
+        .map(|(hinge, angle)| {
+            let retained = if hinge != exact_hinge && (angle.abs() - 180.0).abs() <= 1e-9 {
+                angle.signum() * 170.0
+            } else {
+                angle
+            };
+            (hinge, retained)
+        })
+        .collect::<HashMap<_, _>>();
+    assert_eq!(
+        contextual
+            .values()
+            .filter(|angle| (angle.abs() - 180.0).abs() <= 1e-9)
+            .count(),
+        1
+    );
+
+    let drivers = |exact_angle| {
+        let mut values = cp
+            .edges
+            .iter()
+            .filter(|edge| matches!(edge.kind, EdgeKind::Mountain | EdgeKind::Valley))
+            .map(|edge| Driver {
+                hinge: edge.id,
+                target_angle_deg: if edge.id == exact_hinge {
+                    exact_angle
+                } else {
+                    contextual.get(&edge.id).copied().unwrap_or(0.0)
+                },
+            })
+            .collect::<Vec<_>>();
+        values.sort_unstable_by_key(|driver| driver.hinge);
+        values
+    };
+
+    let before_hard = solve_motion(&cp, &faces, &drivers(-179.999), None, None, false).result;
+    let exact_hard = solve_motion(&cp, &faces, &drivers(-180.0), None, None, false).result;
+    assert_eq!(
+        rank_order(&exact_hard.frame),
+        rank_order(&before_hard.frame)
+    );
+    for driver in drivers(-180.0) {
+        if driver.hinge != exact_hinge {
+            assert!(
+                (exact_hard.angles[&driver.hinge] - driver.target_angle_deg).abs() <= 1e-12,
+                "non-exact hard hinge {} changed",
+                driver.hinge
+            );
+        }
+    }
+
+    let preferred = contextual
+        .iter()
+        .filter(|(hinge, _)| **hinge != exact_hinge)
+        .map(|(&hinge, &angle)| (hinge, angle))
+        .collect::<HashMap<_, _>>();
+    let before_preferred = solve_motion(
+        &cp,
+        &faces,
+        &[Driver {
+            hinge: exact_hinge,
+            target_angle_deg: -179.999,
+        }],
+        Some(&preferred),
+        None,
+        false,
+    )
+    .result;
+    let exact_preferred = solve_motion(
+        &cp,
+        &faces,
+        &[Driver {
+            hinge: exact_hinge,
+            target_angle_deg: -180.0,
+        }],
+        Some(&preferred),
+        None,
+        false,
+    )
+    .result;
+    assert_eq!(
+        rank_order(&exact_preferred.frame),
+        rank_order(&before_preferred.frame)
+    );
+}
