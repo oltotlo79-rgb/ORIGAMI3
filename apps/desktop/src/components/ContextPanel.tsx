@@ -1498,6 +1498,7 @@ function SelectionContent() {
   if (selection.edgeIds.length > 0) {
     const edges = doc.cp.edges.filter((e) => selection.edgeIds.includes(e.id));
     const kinds = [...new Set(edges.map((e) => KIND_LABEL[e.kind]))].join("・");
+    const includesPaperEdge = edges.some((e) => e.kind === "Border");
     const setKind = (kind: EdgeKind) =>
       applyEdit({ type: "SetEdgeKind", ids: selection.edgeIds, kind });
     return (
@@ -1506,17 +1507,50 @@ function SelectionContent() {
           線を{edges.length}本選択中(種類: {kinds})
         </p>
         <div className="button-row">
-          <button type="button" onClick={() => setKind("Mountain")}>
+          <button
+            type="button"
+            disabled={includesPaperEdge}
+            data-tooltip={
+              includesPaperEdge
+                ? "紙のふちは紙そのものなので、山折りには変えられません"
+                : "選んだ線を山折りに変えます"
+            }
+            onClick={() => setKind("Mountain")}
+          >
             山折りにする
           </button>
-          <button type="button" onClick={() => setKind("Valley")}>
+          <button
+            type="button"
+            disabled={includesPaperEdge}
+            data-tooltip={
+              includesPaperEdge
+                ? "紙のふちは紙そのものなので、谷折りには変えられません"
+                : "選んだ線を谷折りに変えます"
+            }
+            onClick={() => setKind("Valley")}
+          >
             谷折りにする
           </button>
-          <button type="button" onClick={() => setKind("Aux")}>
+          <button
+            type="button"
+            disabled={includesPaperEdge}
+            data-tooltip={
+              includesPaperEdge
+                ? "紙のふちは紙そのものなので、補助線には変えられません"
+                : "選んだ線を補助線に変えます"
+            }
+            onClick={() => setKind("Aux")}
+          >
             補助線にする
           </button>
           <button
             type="button"
+            disabled={includesPaperEdge}
+            data-tooltip={
+              includesPaperEdge
+                ? "紙のふちは紙そのものなので、削除できません"
+                : "選んだ線を削除します"
+            }
             onClick={() =>
               applyEdit({ type: "RemoveEdges", ids: selection.edgeIds })
             }

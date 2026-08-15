@@ -569,6 +569,34 @@ describe("コンテキストパネルの主操作順", () => {
   });
 });
 
+describe("D18: 紙のふちを選んだときの編集操作", () => {
+  it.each([
+    ["山折りにする", "紙のふちは紙そのものなので、山折りには変えられません"],
+    ["谷折りにする", "紙のふちは紙そのものなので、谷折りには変えられません"],
+    ["補助線にする", "紙のふちは紙そのものなので、補助線には変えられません"],
+    ["削除", "紙のふちは紙そのものなので、削除できません"],
+  ])("%sは押す前に理由が分かり、ほかの線では押せる", (label, reason) => {
+    seed(new Map());
+    useAppStore.setState({
+      activeTool: "select",
+      selection: { edgeIds: [0], vertexIds: [] },
+    });
+    render(<ContextPanel />);
+
+    const borderAction = screen.getByRole("button", { name: label }) as HTMLButtonElement;
+    expect(borderAction.disabled).toBe(true);
+    expect(borderAction.getAttribute("data-tooltip")).toBe(reason);
+
+    cleanup();
+    seed(new Map());
+    useAppStore.setState({ activeTool: "select" });
+    render(<ContextPanel />);
+
+    const creaseAction = screen.getByRole("button", { name: label }) as HTMLButtonElement;
+    expect(creaseAction.disabled).toBe(false);
+  });
+});
+
 describe("この形で仕上げる(SIM-009)", () => {
   it("角度が付いていなければ、ボタンは残したまま理由を見せる", () => {
     seed(new Map());
