@@ -331,6 +331,47 @@ export function mirrorSegments(
   return [segment, other];
 }
 
+/** 線分に、同じ位置でも別物として扱う区分(線種など)を添えたもの。 */
+export interface KeyedSegment<K = string> {
+  segment: Segment;
+  key: K;
+}
+
+/**
+ * 1回の入力で引く線をまとめて反対側へ広げる(不具合D13)。
+ *
+ * 1本ずつ `mirrorSegments` を呼ぶと、別々の線どうしが互いの鏡像になっている集合
+ * (基準線をはさんで並ぶ等分の目印や、1点を通る角度線の一式)で、同じ線を二重に
+ * 引いてしまう。ここでは入力の線をそのまま残したうえで、鏡像は集合にまだ無い
+ * ものだけを足す。基準線の上に乗る線には鏡像を作らない。
+ *
+ * 入力がすでに反対側の線を含んでいても結果は変わらない(何回掛けても同じ)ので、
+ * 引く前に自分で反対側を作る経路と重ねて呼んでも線は増えない。
+ *
+ * keyが違う線は、位置が同じでも別の線として扱う(線種の違う線を消さないため)。
+ */
+export function mirrorSegmentSet<K>(
+  items: readonly KeyedSegment<K>[],
+  line: MirrorLine,
+  eps = MIRROR_EPS,
+): KeyedSegment<K>[] {
+  const result: KeyedSegment<K>[] = items.map((item) => ({
+    key: item.key,
+    segment: item.segment,
+  }));
+  if (unitDirection(line) === null) return result;
+  for (const item of items) {
+    if (isOnMirrorAxis(item.segment, line, eps)) continue;
+    const reflected = mirrorSegment(item.segment, line, eps);
+    const duplicate = result.some(
+      (other) =>
+        other.key === item.key && isSameSegment(other.segment, reflected, eps),
+    );
+    if (!duplicate) result.push({ key: item.key, segment: reflected });
+  }
+  return result;
+}
+
 /** 紙の範囲内に見える基準線の両端。Canvasのガイド描画で縦・横・斜めを共用する。 */
 export function mirrorLineInsidePaper(
   paper: Paper,

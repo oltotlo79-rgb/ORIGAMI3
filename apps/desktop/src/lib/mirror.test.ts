@@ -12,6 +12,7 @@ import {
   mirrorLineThrough,
   mirrorPoint,
   mirrorSegment,
+  mirrorSegmentSet,
   mirrorSegments,
   normalizedPaperSize,
   paperMirrorLine,
@@ -155,6 +156,59 @@ describe("対称操作の基準線と計算", () => {
     expect(mirrorSegments([[0.5, 0], [0.5, 1]], VERTICAL)).toHaveLength(1);
     expect(mirrorSegments([[0.2, 0.5], [0.8, 0.5]], VERTICAL)).toHaveLength(1);
     expect(mirrorSegments([[0.2, 0.2], [0.8, 0.8]], DIAGONAL)).toHaveLength(1);
+  });
+
+  it("まとめて引く線は、集合の中で二重にならないように反対側へ広がる", () => {
+    const keyed = (segments: Segment[], key = "Aux") =>
+      segments.map((segment) => ({ segment, key }));
+    const positions = (items: { segment: Segment }[]) =>
+      items.map((item) => item.segment);
+
+    // 片側だけにある線は、本数がちょうど倍になる。
+    const oneSided: Segment[] = [
+      [[0.1, 0.2], [0.1, 0.3]],
+      [[0.2, 0.2], [0.2, 0.3]],
+    ];
+    expect(positions(mirrorSegmentSet(keyed(oneSided), VERTICAL))).toEqual([
+      ...oneSided,
+      [[0.9, 0.2], [0.9, 0.3]],
+      [[0.8, 0.2], [0.8, 0.3]],
+    ]);
+
+    // 基準線をはさんで対になっている集合は増えない(1本ずつなら4本になる)。
+    const paired: Segment[] = [
+      [[0.1, 0.2], [0.1, 0.3]],
+      [[0.9, 0.2], [0.9, 0.3]],
+    ];
+    expect(mirrorSegmentSet(keyed(paired), VERTICAL)).toHaveLength(2);
+
+    // 基準線の上の線・それ自身が対称な線も二重にならない。
+    const onAxis: Segment[] = [
+      [[0.5, 0.1], [0.5, 0.9]],
+      [[0.2, 0.5], [0.8, 0.5]],
+    ];
+    expect(mirrorSegmentSet(keyed(onAxis), VERTICAL)).toHaveLength(2);
+
+    // 位置が同じでも線種が違えば別の線として残す。
+    const sameShape: Segment = [[0.1, 0.2], [0.1, 0.3]];
+    expect(
+      mirrorSegmentSet(
+        [
+          { segment: sameShape, key: "Mountain" },
+          { segment: [[0.9, 0.2], [0.9, 0.3]], key: "Valley" },
+        ],
+        VERTICAL,
+      ),
+    ).toHaveLength(4);
+
+    // 何回掛けても本数は変わらない(反対側を先に作ってある入力でも増えない)。
+    const once = mirrorSegmentSet(keyed(oneSided), VERTICAL);
+    expect(mirrorSegmentSet(once, VERTICAL)).toEqual(once);
+
+    // 基準線が退化していれば、元の線をそのまま返す。
+    expect(
+      mirrorSegmentSet(keyed(oneSided), { p: [0.5, 0.5], d: [0, 0] }),
+    ).toHaveLength(2);
   });
 
   it("退化した基準線はNaNを出さず、元の点・線をそのまま保つ", () => {

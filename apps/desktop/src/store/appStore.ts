@@ -46,6 +46,7 @@ import {
 import {
   DEFAULT_MIRROR_AXIS,
   mirrorLineForChoice,
+  mirrorSegmentSet,
   mirrorSegments,
   paperMirrorLine,
   rebindSelectedMirrorAxis,
@@ -53,6 +54,7 @@ import {
   type MirrorAxisChoice,
   type MirrorAxisPreset,
   type MirrorLine,
+  type Segment,
 } from "../lib/mirror";
 import { withMirrorEdges } from "../lib/mirrorEdit";
 import {
@@ -231,6 +233,31 @@ export interface FoldDraft {
   /** 線を引いた時点で見ていた位置(=折りが挟まる位置)。見る手順を移すと
    * 別の形の上の線になってしまうので、ここが変わった線は捨てる */
   upTo: number;
+}
+
+/** 展開図へ線を1本足す要求。 */
+type AddSegmentOp = Extract<EditOp, { type: "AddSegment" }>;
+
+/**
+ * まだ送っていない線も入れて測るための作業用の写し。
+ * 「紙が曲がるための線」をどこで止めるかは、その曲線で先に引いた線にも
+ * ぶつかったところで決まるので、送る前の形をここで組み立てる。
+ */
+function editableCopy(doc: Document): Document {
+  return {
+    ...doc,
+    cp: { ...doc.cp, vertices: [...doc.cp.vertices], edges: [...doc.cp.edges] },
+  };
+}
+
+/** 作業用の写しへ線を1本足す(交点での分割はしない。止まる位置の判定にしか使わない) */
+function addWorkingEdge(work: Document, a: Vec2, b: Vec2, kind: EdgeKind): void {
+  const v0 = work.cp.next_vertex_id;
+  work.cp.vertices.push({ id: v0, pos: a }, { id: v0 + 1, pos: b });
+  work.cp.next_vertex_id = v0 + 2;
+  const edgeId = work.cp.next_edge_id;
+  work.cp.edges.push({ id: edgeId, v0, v1: v0 + 1, kind });
+  work.cp.next_edge_id = edgeId + 1;
 }
 
 /** 実際に作品へ適用するFoldThrough。事前確認では最後の指定だけを除いて使う。 */
@@ -677,12 +704,14 @@ interface AppState {
   newDocument: (paper: Paper) => Promise<void>;
   openDocument: (path: string) => Promise<void>;
   saveDocument: (path: string | null) => Promise<void>;
-  applyEdit: (op: EditOp) => Promise<void>;
+  /** 展開図を変える要求を送る。複数渡すと、画面での1回の入力として
+   * 元に戻す1回でまとめて戻せるようになる(不具合D05) */
+  applyEdit: (op: EditOp | EditOp[]) => Promise<void>;
   /** 展開図に線を1本引く(CPE-010)。左右対称のときは中心線で折り返した線も
-   * 続けて引く(引いた順に直列化キューへ積むので適用順は変わらない) */
+   * 一緒に引き、2本で元に戻す1回分になる */
   drawSegment: (a: Vec2, b: Vec2, kind: EdgeKind) => Promise<void>;
   /** 曲線の折り目を折れ線として引く(CPE-011)。設定に応じて「紙が曲がるための
-   * 線」も続けて引く。左右対称の指定は drawSegment がそのまま効かせる */
+   * 線」も一緒に引く。左右対称の指定も効き、曲線1本が元に戻す1回分になる */
   drawCurve: (points: Vec2[], kind: EdgeKind) => Promise<void>;
   /** 左右対称に線を引くかを切り替える(次回起動時も同じ設定に戻る) */
   setMirrorDraw: (on: boolean) => void;
@@ -1311,22 +1340,45 @@ export const useAppStore = create<AppState>((set, get) => {
     mirrorLineForChoice(doc, choice) ??
     paperMirrorLine(doc.paper, "paperVertical");
 
-  /** 1回の描画開始時に固定した基準線で、元と反対側の線を順番に追加する。 */
-  const drawSegmentWithAxis = async (
+  /** 1回の描画開始時に固定した基準線で、元と反対側の線も含めた追加要求を作る。
+   * まだ送らずに返すので、呼び出し側が1回の入力ぶんをまとめて確定できる。
+   * 反対側へ広げるのは `applyEdit` でも行うが、そちらは既に反対側を含む並びを
+   * 渡しても線を増やさないので、ここで先に作っても本数は変わらない。 */
+  const segmentEditsWithAxis = (
     a: Vec2,
     b: Vec2,
     kind: EdgeKind,
     axis: MirrorLine | null,
-  ): Promise<void> => {
+  ): AddSegmentOp[] => {
     const segments = axis
       ? mirrorSegments([a, b], axis)
       : ([[a, b]] as [Vec2, Vec2][]);
-    for (const [p, q] of segments) {
-      await get().applyEdit({ type: "AddSegment", a: p, b: q, kind });
-      // 1本目で断られたら理由を残したまま止める(片側だけ引かれた形にしない)
-      if (get().errorMessage !== null) return;
-    }
+    return segments.map(([p, q]) => ({ type: "AddSegment", a: p, b: q, kind }));
   };
+
+  /** この1回の要求が「線を引く」だけでできているか。 */
+  const onlyAddSegments = (ops: EditOp[]): ops is AddSegmentOp[] =>
+    ops.every((one) => one.type === "AddSegment");
+
+  /**
+   * 左右対称のとき、1回の入力で引く線をまとめて反対側へ広げる(不具合D13)。
+   * 手で引く線・曲線だけでなく、作図補助(二等分・垂線・等分・角度線)のように
+   * 何本も同時に引く入力も同じ経路を通る。基準線の上に乗る線や、集合の中で
+   * 互いに鏡像になっている線は二重に引かない。
+   */
+  const addSegmentsWithMirror = (
+    ops: AddSegmentOp[],
+    axis: MirrorLine,
+  ): AddSegmentOp[] =>
+    mirrorSegmentSet(
+      ops.map((one) => ({ key: one.kind, segment: [one.a, one.b] as Segment })),
+      axis,
+    ).map(({ key, segment }) => ({
+      type: "AddSegment",
+      a: segment[0],
+      b: segment[1],
+      kind: key,
+    }));
 
   /** 角度の履歴を捨てる(作品データを変えたとき・別の作品になったとき)。
    * 作品データの変更のほうが新しい操作になるので、「元に戻す」はそちらへ回す */
@@ -2058,43 +2110,50 @@ export const useAppStore = create<AppState>((set, get) => {
       stopPlayback();
       // 提案は現在のCPから計算したもの。編集要求を積んだ時点で応答前でも無効にする。
       invalidateFoldThrough();
-      // 左右対称のときは、消す・種類を変える相手にも同じ操作を効かせる(CPE-010)。
-      // ここで辺IDを増やしておけば、展開図の右クリック消し・Deleteキー・
-      // コンテキストパネルのどこから来ても左右そろって変わる
+      const ops = Array.isArray(op) ? op : [op];
+      if (ops.length === 0) return Promise.resolve();
+      // 左右対称のときは、引く・消す・種類を変えるのどれも反対側へ効かせる。
+      // 引く線をここでそろえるので、手で引く線も作図補助の線も同じ動きになる
+      // (CPE-010 / 不具合D13)。辺IDを増やす消す・種類変更は、展開図の
+      // 右クリック消し・Deleteキー・コンテキストパネルのどこから来ても左右そろう。
       const s = get();
+      const doc = s.doc;
+      const axis =
+        s.mirrorDraw && doc ? activeMirrorLine(doc, s.mirrorAxis) : null;
+      const withOpposite =
+        axis && doc
+          ? ops.map((one) =>
+              one.type === "RemoveEdges" || one.type === "SetEdgeKind"
+                ? { ...one, ids: withMirrorEdges(doc, one.ids, axis) }
+                : one,
+            )
+          : ops;
       const mirrored =
-        s.mirrorDraw &&
-        s.doc &&
-        (op.type === "RemoveEdges" || op.type === "SetEdgeKind")
-          ? {
-              ...op,
-              ids: withMirrorEdges(
-                s.doc,
-                op.ids,
-                activeMirrorLine(s.doc, s.mirrorAxis),
-              ),
-            }
-          : op;
+        axis && onlyAddSegments(withOpposite)
+          ? addSegmentsWithMirror(withOpposite, axis)
+          : withOpposite;
+      // 1件だけなら今までどおり1件用の要求を送る。複数のときだけまとめ送りにして、
+      // 元に戻す1回で入力1回ぶんが戻るようにする(不具合D05)
       return applyDocChange(
-        () => ipc.editApply(mirrored),
-        mirrored.type === "ReplaceCreasePattern",
+        () =>
+          mirrored.length === 1
+            ? ipc.editApply(mirrored[0])
+            : ipc.editApplyBatch(mirrored),
+        mirrored.some((one) => one.type === "ReplaceCreasePattern"),
       );
     },
 
     drawSegment: async (a, b, kind) => {
-      const s = get();
-      if (!s.doc) return;
-      // 1操作の途中で作品が更新されても、開始時と同じ基準線で2本をそろえる。
-      const axis = s.mirrorDraw
-        ? activeMirrorLine(s.doc, s.mirrorAxis)
-        : null;
-      await drawSegmentWithAxis(a, b, kind, axis);
+      if (!get().doc) return;
+      // 反対側の線は applyEdit がまとめて作る(作図補助と同じ経路にするため)。
+      await get().applyEdit({ type: "AddSegment", a, b, kind });
     },
 
     // 曲線は「十分細かい折れ線」として入れる(展開図の辺は直線だけなので)。
     // 曲線の折り目は両側の紙が曲がらないと折れない(平らな板2枚を曲線でつなぐと
     // 角度0以外では紙がちぎれる)ので、既定では「紙が曲がるための線」も一緒に
-    // 引く。曲がるための線は隣の折り目に突き当たったところで止める
+    // 引く。曲がるための線は隣の折り目に突き当たったところで止める。
+    // 曲線1本ぶんの線は全部まとめて確定するので、元に戻す1回で引く前へ戻る
     drawCurve: async (points, kind) => {
       const s = get();
       if (!s.doc || points.length < 2) return;
@@ -2102,26 +2161,34 @@ export const useAppStore = create<AppState>((set, get) => {
       const axis = s.mirrorDraw
         ? activeMirrorLine(s.doc, s.mirrorAxis)
         : null;
+      const ops: EditOp[] = [];
+      // 曲がるための線をどこで止めるかは、この曲線で先に引いた線も数えて決める
+      // (1本ずつ送っていたときと同じ止まり方にするため)。
+      const drawn = editableCopy(s.doc);
+      const add = (a: Vec2, b: Vec2, k: EdgeKind): void => {
+        for (const one of segmentEditsWithAxis(a, b, k, axis)) {
+          ops.push(one);
+          addWorkingEdge(drawn, one.a, one.b, one.kind);
+        }
+      };
       for (let i = 0; i + 1 < points.length; i++) {
-        await drawSegmentWithAxis(points[i], points[i + 1], kind, axis);
-        if (get().errorMessage !== null) return; // 途中で断られたら理由を残して止める
+        add(points[i], points[i + 1], kind);
       }
-      if (!s.curve.rulings || kind === "Aux") return;
-      const long = Math.max(s.doc.paper.width_mm, s.doc.paper.height_mm);
-      const paper: Vec2 = [s.doc.paper.width_mm / long, s.doc.paper.height_mm / long];
-      // 折り目の両側で曲がる向きが逆になるので、へこむ側は反対の線種にする
-      const opposite: EdgeKind = kind === "Mountain" ? "Valley" : "Mountain";
-      for (const r of rulingLines(points, paper)) {
-        for (const [to, k] of [
-          [r.concave, opposite],
-          [r.convex, kind],
-        ] as [Vec2, EdgeKind][]) {
-          const doc = get().doc;
-          if (!doc) return;
-          await drawSegmentWithAxis(r.at, firstCrossing(doc, r.at, to), k, axis);
-          if (get().errorMessage !== null) return;
+      if (s.curve.rulings && kind !== "Aux") {
+        const long = Math.max(s.doc.paper.width_mm, s.doc.paper.height_mm);
+        const paper: Vec2 = [s.doc.paper.width_mm / long, s.doc.paper.height_mm / long];
+        // 折り目の両側で曲がる向きが逆になるので、へこむ側は反対の線種にする
+        const opposite: EdgeKind = kind === "Mountain" ? "Valley" : "Mountain";
+        for (const r of rulingLines(points, paper)) {
+          for (const [to, k] of [
+            [r.concave, opposite],
+            [r.convex, kind],
+          ] as [Vec2, EdgeKind][]) {
+            add(r.at, firstCrossing(drawn, r.at, to), k);
+          }
         }
       }
+      await get().applyEdit(ops);
     },
 
     setMirrorDraw: (on) => {

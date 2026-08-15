@@ -6,6 +6,7 @@ import type {
   Document,
   DocumentView,
   EdgeKind,
+  EditOp,
   FoldStep,
   Vec2,
 } from "../lib/types";
@@ -15,6 +16,7 @@ vi.mock("../ipc/client", () => ({
   documentOpen: vi.fn(),
   documentSave: vi.fn(),
   editApply: vi.fn(),
+  editApplyBatch: vi.fn(),
   editUndo: vi.fn(),
   editRedo: vi.fn(),
   sequenceApply: vi.fn(),
@@ -33,6 +35,14 @@ import {
   MAX_CONTEXT_PANEL_RATIO,
   MIN_CONTEXT_PANEL_RATIO,
 } from "../lib/displayPrefs";
+import { DEFAULT_CONSTRUCT, type ConstructOptions } from "../lib/construct";
+import { DEFAULT_CURVE } from "../lib/curve";
+import { paperMirrorLine } from "../lib/mirror";
+import {
+  initialEphemeralState,
+  onMouseDown,
+  type InteractionCtx,
+} from "../components/CpEditor/interaction";
 
 function step(id: number): FoldStep {
   return { id, kind: "Simple", drivers: [], layer_order: null, note: `手順${id}` };
@@ -304,6 +314,7 @@ function readyMirrorTest(mirrorDraw: boolean): Document {
     faces: [],
   });
   vi.mocked(ipc.editApply).mockResolvedValue(makeView(doc));
+  vi.mocked(ipc.editApplyBatch).mockResolvedValue(makeView(doc));
   return doc;
 }
 
@@ -317,11 +328,27 @@ function chooseMirrorAxis(axis: MirrorAxisTestCase): void {
   }
 }
 
-const editCalls = () => vi.mocked(ipc.editApply).mock.calls.map((call) => call[0]);
+/** 送った編集を、1件送りとまとめ送りの区別なく送った順に並べる。
+ * 左右対称の2本は「元に戻す1回ぶん」としてまとめて送られる(不具合D05)。 */
+const editCalls = (): EditOp[] => {
+  const single = vi.mocked(ipc.editApply).mock;
+  const batch = vi.mocked(ipc.editApplyBatch).mock;
+  const sent: { at: number; ops: EditOp[] }[] = [
+    ...single.calls.map(([op], i) => ({
+      at: single.invocationCallOrder[i],
+      ops: [op],
+    })),
+    ...batch.calls.map(([ops], i) => ({
+      at: batch.invocationCallOrder[i],
+      ops: [...ops],
+    })),
+  ];
+  return sent.sort((a, b) => a.at - b.at).flatMap((one) => one.ops);
+};
 
 const lastEditCall = () => {
-  const calls = vi.mocked(ipc.editApply).mock.calls;
-  return calls[calls.length - 1][0];
+  const calls = editCalls();
+  return calls[calls.length - 1];
 };
 
 describe("基準線を選んで対称に線を引く", () => {
@@ -477,6 +504,7 @@ describe("基準線を選んで対称に消す・線種を変える", () => {
     addMirrorTestEdge(splitAxis, 101, [0, 0], [0.5, 0.5], "Aux");
     addMirrorTestEdge(splitAxis, 102, [0.5, 0.5], [1, 1], "Aux");
     vi.mocked(ipc.editApply).mockResolvedValue(makeView(splitAxis));
+    vi.mocked(ipc.editApplyBatch).mockResolvedValue(makeView(splitAxis));
 
     // 基準線を横切る線を追加すると、実際の編集結果では基準辺が交点で2片に分かれる。
     await useAppStore.getState().drawSegment([0.125, 0.5], [0.875, 0.5], "Aux");
@@ -517,6 +545,7 @@ describe("基準線を選んで対称に消す・線種を変える", () => {
     };
     chooseMirrorAxis(MIRROR_AXIS_CASES[2]);
     vi.mocked(ipc.editApply).mockResolvedValue(makeView(withoutAxis));
+    vi.mocked(ipc.editApplyBatch).mockResolvedValue(makeView(withoutAxis));
 
     await useAppStore.getState().applyEdit({ type: "RemoveEdges", ids: [100] });
 
@@ -573,6 +602,229 @@ describe("作品を切り替えたときの対称基準", () => {
       expect(useAppStore.getState().mirrorAxisNotice).toBeNull();
     });
   }
+});
+
+/** 輪郭だけの正方形(1辺=1.0)。作図補助の点・線のクリック先にする。 */
+function constructTestDoc(): Document {
+  const doc = makeDoc([]);
+  doc.cp = {
+    vertices: [
+      { id: 0, pos: [0, 0] },
+      { id: 1, pos: [1, 0] },
+      { id: 2, pos: [1, 1] },
+      { id: 3, pos: [0, 1] },
+    ],
+    edges: [0, 1, 2, 3].map((i) => ({
+      id: i,
+      v0: i,
+      v1: (i + 1) % 4,
+      kind: "Border" as const,
+    })),
+    next_vertex_id: 4,
+    next_edge_id: 4,
+  };
+  return doc;
+}
+
+/** 正規化座標 → 画面座標(拡大率500、y軸反転)。 */
+const toConstructScreen = (p: Vec2): Vec2 => [p[0] * 500, 500 - p[1] * 500];
+
+/**
+ * 作図補助を、実際の画面と同じクリックの順で1回ぶん操作する。
+ * 送られた線の本数と、要求の回数(=積まれる履歴の件数)を返す。
+ */
+async function runConstruct(
+  options: Partial<ConstructOptions>,
+  clicks: Vec2[],
+  mirrorDraw: boolean,
+): Promise<{ lines: EditOp[]; requests: number }> {
+  const doc = constructTestDoc();
+  useAppStore.setState({
+    doc,
+    mirrorDraw,
+    mirrorAxis: { kind: "paperVertical" },
+    mirrorAxisNotice: null,
+    selection: { edgeIds: [], vertexIds: [] },
+    faces: [],
+  });
+  vi.mocked(ipc.editApply).mockReset();
+  vi.mocked(ipc.editApplyBatch).mockReset();
+  vi.mocked(ipc.editApply).mockResolvedValue(makeView(doc));
+  vi.mocked(ipc.editApplyBatch).mockResolvedValue(makeView(doc));
+
+  const pending: Promise<void>[] = [];
+  const ctx: InteractionCtx = {
+    doc,
+    finalDoc: doc,
+    view: { scale: 500, offsetX: 0, offsetY: 500 },
+    tool: "construct",
+    selection: { edgeIds: [], vertexIds: [] },
+    alignDraft: null,
+    faces: [],
+    frame3d: null,
+    construct: { ...DEFAULT_CONSTRUCT, ...options },
+    curve: { ...DEFAULT_CURVE },
+    wheelBehavior: "scroll",
+    violations: [],
+    mirrorAxis: paperMirrorLine(doc.paper, "paperVertical"),
+    state: initialEphemeralState(),
+    setView: vi.fn(),
+    applyEdit: (op) => {
+      pending.push(useAppStore.getState().applyEdit(op));
+    },
+    drawSegment: vi.fn(),
+    drawCurve: vi.fn(),
+    setSelection: vi.fn(),
+    beginFoldDraft: vi.fn(),
+    pickAlignTarget: vi.fn(),
+  };
+  for (const click of clicks) onMouseDown(ctx, toConstructScreen(click), 0);
+  await Promise.all(pending);
+
+  return {
+    lines: editCalls(),
+    requests:
+      vi.mocked(ipc.editApply).mock.calls.length +
+      vi.mocked(ipc.editApplyBatch).mock.calls.length,
+  };
+}
+
+type ConstructMirrorCase = {
+  label: string;
+  options: Partial<ConstructOptions>;
+  clicks: Vec2[];
+  /** 左右対称OFFの本数。作図は鏡映の経路を通っていなかったので、
+   *  これがそのまま「変更前に左右対称ONで引けていた本数」でもある(不具合D13)。 */
+  alone: number;
+  /** 左右対称ONで引けるべき本数。 */
+  mirrored: number;
+};
+
+const DIVIDE_CLICKS: Vec2[] = [
+  [0.125, 0.25],
+  [0.375, 0.25],
+];
+
+/** 基準線(紙の縦の中心線)の片側だけで作図した場合。本数はちょうど倍になる。 */
+const CONSTRUCT_MIRROR_CASES: ConstructMirrorCase[] = [
+  {
+    label: "二等分",
+    options: { kind: "bisector" },
+    clicks: [
+      [0.125, 0.25],
+      [0.25, 0.25],
+      [0.25, 0.5],
+    ],
+    alone: 1,
+    mirrored: 2,
+  },
+  {
+    label: "垂線",
+    options: { kind: "perpendicular" },
+    clicks: [
+      [0.25, 0],
+      [0.25, 0.5],
+    ],
+    alone: 1,
+    mirrored: 2,
+  },
+  ...[2, 3, 4, 5, 6, 7, 8].map((divisions) => ({
+    label: `${divisions}等分`,
+    options: { kind: "divide" as const, divisions },
+    clicks: DIVIDE_CLICKS,
+    alone: divisions - 1,
+    mirrored: (divisions - 1) * 2,
+  })),
+  // 角度線は0°から刻みごとに180°未満まで並ぶ。水平の1本だけが基準線に対して
+  // 自分自身と重なるので、反対側は刻みの数より1本少ない。
+  ...[15, 22.5, 30, 45].map((stepDeg) => {
+    const alone = Math.ceil(180 / stepDeg);
+    return {
+      label: `${stepDeg}度の角度線`,
+      options: { kind: "angle" as const, stepDeg },
+      clicks: [[0.25, 0.5] as Vec2],
+      alone,
+      mirrored: alone * 2 - 1,
+    };
+  }),
+];
+
+/** 基準線の上に乗る線・基準線をはさんで既に対になっている線を含む作図。 */
+const CONSTRUCT_SELF_SYMMETRIC_CASES: ConstructMirrorCase[] = [
+  {
+    label: "基準線の上にできる二等分線",
+    options: { kind: "bisector" },
+    clicks: [
+      [0.25, 0.25],
+      [0.5, 0.5],
+      [0.75, 0.25],
+    ],
+    alone: 1,
+    mirrored: 1,
+  },
+  {
+    label: "基準線をはさんで対になる4等分の目印",
+    options: { kind: "divide", divisions: 4 },
+    clicks: [
+      [0.125, 0.25],
+      [0.875, 0.25],
+    ],
+    alone: 3,
+    mirrored: 3,
+  },
+  {
+    label: "基準線の上の点から出す22.5度の角度線",
+    options: { kind: "angle", stepDeg: 22.5 },
+    clicks: [[0.5, 0.5]],
+    alone: 8,
+    mirrored: 8,
+  },
+];
+
+describe("D13: 作図で作った線も左右対称に引く", () => {
+  for (const one of [
+    ...CONSTRUCT_MIRROR_CASES,
+    ...CONSTRUCT_SELF_SYMMETRIC_CASES,
+  ]) {
+    it(`${one.label}は左右対称ONで${one.mirrored}本になり、履歴は1件`, async () => {
+      const result = await runConstruct(one.options, one.clicks, true);
+      const added = result.lines.filter((op) => op.type === "AddSegment");
+
+      expect(result.lines).toHaveLength(one.mirrored);
+      expect(added).toHaveLength(one.mirrored);
+      expect(
+        result.requests,
+        `${one.mirrored}本が${result.requests}件の履歴に分裂している`,
+      ).toBe(1);
+    });
+
+    it(`${one.label}は左右対称OFFなら${one.alone}本のまま`, async () => {
+      const result = await runConstruct(one.options, one.clicks, false);
+
+      expect(result.lines).toHaveLength(one.alone);
+      expect(result.requests).toBe(1);
+    });
+  }
+
+  it("左右対称ONの作図線は、元の線と反対側の線が対になっている", async () => {
+    const result = await runConstruct(
+      { kind: "divide", divisions: 4 },
+      DIVIDE_CLICKS,
+      true,
+    );
+    const added = result.lines.flatMap((op) =>
+      op.type === "AddSegment" ? [[op.a, op.b] as [Vec2, Vec2]] : [],
+    );
+    expect(added).toHaveLength(6);
+    for (let i = 0; i < 3; i += 1) {
+      const source = added[i];
+      const reflected = added[i + 3];
+      expect(reflected[0][0]).toBeCloseTo(1 - source[0][0], 12);
+      expect(reflected[1][0]).toBeCloseTo(1 - source[1][0], 12);
+      expect(reflected[0][1]).toBeCloseTo(source[0][1], 12);
+      expect(reflected[1][1]).toBeCloseTo(source[1][1], 12);
+    }
+  });
 });
 
 describe("手順の並べ替え", () => {
