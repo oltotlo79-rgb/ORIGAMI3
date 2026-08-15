@@ -11,7 +11,7 @@ import * as THREE from "three";
 import {
   canFoldNow,
   isSpatialFoldFrame,
-  pullBlockReason,
+  pullBlockedOf,
   type SpatialFoldDrag,
   useAppStore,
 } from "../../store/appStore";
@@ -345,18 +345,6 @@ type GrabState = {
 interface Props {
   /** 「全体表示」用: 親が current を呼ぶと紙全体が見える位置にカメラを戻す */
   fitRef: React.RefObject<(() => void) | null>;
-}
-
-/** 引く操作ができない理由(できるならnull)。ストアの状態から組み立てる */
-function pullBlockedOf(s: ReturnType<typeof useAppStore.getState>): string | null {
-  return pullBlockReason({
-    doc: s.doc,
-    playing: s.playing,
-    playT: s.playT,
-    hingeCount: s.hinges.size,
-    currentStep: s.currentStep,
-    stepCount: s.doc?.sequence.length ?? 0,
-  });
 }
 
 export function Viewer3D({ fitRef }: Props) {

@@ -499,6 +499,53 @@ export function pullBlockReason(s: {
 }
 
 /**
+ * ストアの状態から「引けない理由」を組み立てる。
+ * 3Dビューのカーソル・案内文と、紙をクリックしたときの案内が同じ判断を使う
+ * (別々に書くと、片方だけ押せる入口が残ってしまう)。
+ */
+export function pullBlockedOf(s: {
+  doc: Document | null;
+  playing: boolean;
+  playT: number;
+  hinges: ReadonlySet<number>;
+  currentStep: number | null;
+}): string | null {
+  return pullBlockReason({
+    doc: s.doc,
+    playing: s.playing,
+    playT: s.playT,
+    hingeCount: s.hinges.size,
+    currentStep: s.currentStep,
+    stepCount: s.doc?.sequence.length ?? 0,
+  });
+}
+
+/**
+ * 手順を選んでいて、下のパネルがその手順の設定で埋まっている状態か。
+ * 「折る前」(0)と「最新」(null)は手順を選んでいない扱いにする。
+ */
+export function stepPanelSelected(s: { currentStep: number | null }): boolean {
+  return s.currentStep !== null && s.currentStep >= 1;
+}
+
+/**
+ * ふくらます設定を開けない理由(開けるならnull)。
+ * 丸みのつまみは「何も選んでいないときのパネル」1か所だけに置く決まりなので、
+ * 手順を選んでいる間は同じ場所がその手順の設定で埋まり、開けない。
+ * すでに付けた丸みは、手順を選んでいる間もそのまま表示に効く
+ * (手順の再生も丸みを付けて描くため)。
+ */
+export function inflateBlockReason(s: {
+  doc: Document | null;
+  currentStep: number | null;
+}): string | null {
+  if (!s.doc) return "紙がありません。上の「新規」で紙を出してください";
+  if (stepPanelSelected(s))
+    return "手順を選んでいる間は、ふくらます設定を開けません。手順をいちばん新しい形へ戻してください";
+  return null;
+}
+
+/**
  * 今の形を手順として残せない理由(残せるならnull)。SIM-009。
  * 押せないときもボタンは消さず、この短い日本語を添えて理由を見せる。
  */

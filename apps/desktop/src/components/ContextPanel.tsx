@@ -8,6 +8,7 @@ import {
   nextAlignKind,
   poseRecordReason,
   relaxationNotices,
+  stepPanelSelected,
   useAppStore,
   type AlignDraft,
   type FoldDraft,
@@ -1658,8 +1659,9 @@ export function ContextPanel() {
     flatFoldWarning === null ? [] : [flatFoldWarning],
   );
   const hasRelaxations = relaxationNotices(relaxations).length > 0;
-  // 手順を選んでいる間はその手順の設定を出す(「折る前」「最新」は選択なし扱い)
-  const stepSelected = currentStep !== null && currentStep >= 1;
+  // 手順を選んでいる間はその手順の設定を出す(「折る前」「最新」は選択なし扱い)。
+  // 同じ判断を3Dの紙の案内(ふくらます入口)も使うので、条件はストア側に1つだけ置く。
+  const selectedStep = stepPanelSelected({ currentStep }) ? currentStep : null;
   const hasSelection =
     selection.edgeIds.length > 0 || selection.vertexIds.length > 0;
   const hasSelectedHinge = selection.edgeIds.some((id) => hinges.has(id));
@@ -1674,9 +1676,9 @@ export function ContextPanel() {
             <FoldThroughProposalContent pending={pendingFoldThrough} />
             <OperationSteps />
           </>
-        ) : stepSelected ? (
+        ) : selectedStep !== null ? (
           <>
-            <StepContent number={currentStep} />
+            <StepContent number={selectedStep} />
             <OperationSteps />
           </>
         ) : techniqueDraft ? (

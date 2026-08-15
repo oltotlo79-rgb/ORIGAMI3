@@ -13,6 +13,7 @@ vi.mock("../ipc/client", () => ({
   documentOpen: vi.fn(),
   documentSave: vi.fn(),
   editApply: vi.fn(),
+  editApplyBatch: vi.fn(),
   editUndo: vi.fn(),
   editRedo: vi.fn(),
   sequenceApply: vi.fn(),
@@ -21,7 +22,14 @@ vi.mock("../ipc/client", () => ({
 }));
 
 import * as ipc from "../ipc/client";
-import { pullBlockReason, resetPoseThrottle, useAppStore } from "./appStore";
+import {
+  inflateBlockReason,
+  pullBlockReason,
+  pullBlockedOf,
+  resetPoseThrottle,
+  stepPanelSelected,
+  useAppStore,
+} from "./appStore";
 
 /** 対角線(辺5)で2つの面に分かれた正方形 */
 const DOC: Document = {
@@ -325,5 +333,67 @@ describe("pullBlockReason", () => {
     expect(pullBlockReason({ ...READY, currentStep: 1 })).toContain("前の手順");
     expect(pullBlockReason({ ...READY, hingeCount: 0 })).toContain("折り線");
     expect(pullBlockReason({ ...READY, doc: null })).toContain("紙がありません");
+  });
+});
+
+describe("引く・ふくらますの入口を出せるか", () => {
+  /** 手順を2つ持つ作品。手順1は「過去の手順」になる */
+  const WITH_STEPS: Document = {
+    ...DOC,
+    sequence: [
+      {
+        id: 0,
+        kind: "Simple",
+        drivers: [{ a: [0, 0], b: [1, 1], target_angle_deg: 90 }],
+        layer_order: null,
+        note: "",
+      },
+      {
+        id: 1,
+        kind: "Simple",
+        drivers: [{ a: [0, 0], b: [1, 1], target_angle_deg: 180 }],
+        layer_order: null,
+        note: "",
+      },
+    ],
+  };
+  const READY = {
+    doc: WITH_STEPS,
+    playing: false,
+    playT: 1,
+    hinges: new Set([5]),
+    currentStep: null as number | null,
+  };
+
+  it("最新の形では、引く入口もふくらます入口も出せる", () => {
+    expect(pullBlockedOf(READY)).toBeNull();
+    expect(inflateBlockReason(READY)).toBeNull();
+  });
+
+  it("過去の手順では、どちらも理由を返す", () => {
+    const past = { ...READY, currentStep: 1 };
+    expect(pullBlockedOf(past)).toContain("前の手順の形を見ている間は引けません");
+    expect(inflateBlockReason(past)).toContain(
+      "手順を選んでいる間は、ふくらます設定を開けません",
+    );
+  });
+
+  it("「折る前」と「最新」は手順を選んでいない扱いにする", () => {
+    expect(stepPanelSelected({ currentStep: null })).toBe(false);
+    expect(stepPanelSelected({ currentStep: 0 })).toBe(false);
+    expect(stepPanelSelected({ currentStep: 1 })).toBe(true);
+    // 「折る前」では下のパネルが空くので、ふくらます設定は開ける
+    expect(inflateBlockReason({ ...READY, currentStep: 0 })).toBeNull();
+  });
+
+  it("紙が無ければどちらも理由を返す", () => {
+    expect(pullBlockedOf({ ...READY, doc: null })).toContain("紙がありません");
+    expect(inflateBlockReason({ ...READY, doc: null })).toContain("紙がありません");
+  });
+
+  it("再生中は引けないが、ふくらます設定は開ける", () => {
+    const playing = { ...READY, playing: true };
+    expect(pullBlockedOf(playing)).toContain("再生中");
+    expect(inflateBlockReason(playing)).toBeNull();
   });
 });
