@@ -1,12 +1,13 @@
 //! replay(手順の再生)のテスト: 決定性・展開図編集への耐性・スキップ継続。
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use ori3_cp::extract_faces;
 use ori3_geometry::Isometry2;
 use ori3_layers::flat_state::FlatState;
 use ori3_layers::fold_through::{FoldDirection, FoldThroughInput, fold_through};
-use ori3_layers::replay::{ReplayResult, flat_state_at, replay};
+use ori3_layers::replay::{ReplayResult, flat_state_at, replay, saved_layer_order_at};
 use ori3_layers::resolve_driver_edges;
 use ori3_model::{
     CreasePattern, Document, DriverLine, Edge, EdgeId, EdgeKind, FoldStep, Frame3D, Paper,
@@ -77,6 +78,7 @@ fn frame_bits(frame: &Frame3D) -> Vec<u64> {
     for f in &frame.faces {
         out.push(u64::from(f.face));
         out.push(u64::from(f.layer));
+        out.push(u64::from(f.surface_rank));
         out.push(u64::from(f.mirrored));
         for p in &f.polygon {
             out.extend(p.iter().map(|v| v.to_bits()));
@@ -139,6 +141,10 @@ fn intermediate_frame_carries_both_start_and_completed_layer_orders() {
     assert_eq!(midway.layer_transition.start, order(&before.frame));
     assert_eq!(midway.layer_transition.end, order(&completed.frame));
     assert_eq!(midway.layer_transition.progress, 0.5);
+    assert!(
+        midway.layer_transition.order_is_authoritative,
+        "過去と現在の保存順を含むtransitionは物理順として扱う"
+    );
     assert_eq!(
         order(&midway.frame),
         midway.layer_transition.start,
@@ -620,6 +626,152 @@ fn flat_state_at_matches_fold_through_state() {
             );
         }
     }
+}
+
+#[test]
+fn first_saved_fold_transition_is_authoritative_before_its_order_becomes_visible() {
+    let doc = folded_document(1);
+    let faces = extract_faces(&doc.cp);
+    let midway = replay(&doc, 1, 0.5);
+
+    assert_eq!(
+        saved_layer_order_at(&doc, &faces, 1, 0.5),
+        None,
+        "途中表示のsurface rankは開始側なので、保存済み完了順はまだ正本にしない"
+    );
+    assert!(
+        midway.layer_transition.order_is_authoritative,
+        "接触補正のendは現在手順の解決済み保存順なので、最初の折り途中でも信頼する"
+    );
+}
+
+#[test]
+fn saved_layer_order_authority_follows_the_replay_position() {
+    let mut doc = folded_document(2);
+    let faces = extract_faces(&doc.cp);
+    assert_eq!(
+        saved_layer_order_at(&doc, &faces, 0, 1.0),
+        None,
+        "初期の面ID順は保存手順のauthorityではない"
+    );
+
+    let first = saved_layer_order_at(&doc, &faces, 1, 1.0).expect("1手目の保存順");
+    assert_eq!(
+        saved_layer_order_at(&doc, &faces, 2, 0.5),
+        Some(first.clone()),
+        "2手目の途中は開始前の保存順を保つ"
+    );
+    let second = saved_layer_order_at(&doc, &faces, 2, 1.0).expect("2手目の保存順");
+    assert_ne!(first, second, "2手目で層順序が変わるfixture");
+
+    doc.sequence.push(FoldStep {
+        id: 99,
+        kind: TechniqueKind::Pose,
+        drivers: Vec::new(),
+        layer_order: None,
+        alignment: None,
+        note: String::new(),
+    });
+    assert_eq!(
+        saved_layer_order_at(&doc, &faces, 3, 1.0),
+        Some(second),
+        "layer_orderを持たないPoseは直前authorityを消さない"
+    );
+}
+
+#[test]
+fn missing_or_fully_unresolved_layer_order_does_not_create_authority() {
+    let mut pose_only = Document::new(Paper {
+        width_mm: 100.0,
+        height_mm: 100.0,
+    });
+    pose_only.sequence.push(FoldStep {
+        id: 0,
+        kind: TechniqueKind::Pose,
+        drivers: Vec::new(),
+        layer_order: None,
+        alignment: None,
+        note: String::new(),
+    });
+    let pose_faces = extract_faces(&pose_only.cp);
+    assert_eq!(saved_layer_order_at(&pose_only, &pose_faces, 1, 1.0), None);
+    assert!(
+        !replay(&pose_only, 1, 1.0)
+            .layer_transition
+            .order_is_authoritative,
+        "保存順が履歴中に無いPoseはcanonical fallbackを使う"
+    );
+
+    let mut broken = folded_document(2);
+    let faces = extract_faces(&broken.cp);
+    let first = saved_layer_order_at(&broken, &faces, 1, 1.0).expect("1手目の保存順");
+    broken.sequence[1].layer_order = Some(vec![[-1.0, -1.0], [2.0, 2.0]]);
+    assert_eq!(
+        saved_layer_order_at(&broken, &faces, 2, 1.0),
+        Some(first),
+        "全代表点が未解決なら直前authorityを保つ"
+    );
+}
+
+#[test]
+fn pose_without_saved_order_keeps_the_rigid_canonical_surface_rank() {
+    let rank_order = |frame: &Frame3D| {
+        let mut ranked = frame
+            .faces
+            .iter()
+            .map(|face| (face.surface_rank, face.face))
+            .collect::<Vec<_>>();
+        ranked.sort_unstable();
+        ranked.into_iter().map(|(_, face)| face).collect::<Vec<_>>()
+    };
+    let mut observed_non_face_id_order = false;
+
+    for angle in [180.0, -180.0] {
+        let mut doc = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        ori3_cp::insert_segment(&mut doc.cp, [0.5, 0.0], [0.5, 1.0], EdgeKind::Mountain);
+        let line = DriverLine {
+            a: [0.5, 0.0],
+            b: [0.5, 1.0],
+            target_angle_deg: angle,
+        };
+        let hinges = resolve_driver_edges(&doc.cp, &line);
+        assert_eq!(hinges.len(), 1);
+        doc.sequence.push(FoldStep {
+            id: 0,
+            kind: TechniqueKind::Pose,
+            drivers: vec![line],
+            layer_order: None,
+            alignment: None,
+            note: String::new(),
+        });
+
+        let faces = extract_faces(&doc.cp);
+        let angles = HashMap::from([(hinges[0], angle)]);
+        let expected = ori3_rigid::to_frame3d(
+            &doc.cp,
+            &faces,
+            &ori3_rigid::propagate(&doc.cp, &faces, &angles),
+        );
+        let replayed = replay(&doc, 1, 1.0);
+        assert_eq!(saved_layer_order_at(&doc, &faces, 1, 1.0), None);
+        assert_eq!(
+            rank_order(&replayed.frame),
+            rank_order(&expected),
+            "angle={angle}: 保存順が無いPoseはrigid canonical rankを上書きしない"
+        );
+
+        let mut face_id_order = faces.iter().map(|face| face.id).collect::<Vec<_>>();
+        face_id_order.sort_unstable();
+        observed_non_face_id_order |= rank_order(&expected) != face_id_order;
+    }
+
+    assert!(
+        observed_non_face_id_order,
+        "検査fixtureの少なくとも一方向はFaceId fallbackとcanonical rankを区別できる"
+    );
 }
 
 /// 動かさない側に根面(最小面ID)がある折り方では、fold_throughの状態と完全に一致する

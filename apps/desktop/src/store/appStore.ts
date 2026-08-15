@@ -1423,7 +1423,11 @@ export const useAppStore = create<AppState>((set, get) => {
     const requestGeneration = get().angleIntentGeneration;
     pose.reset();
     const soft = softArg();
-    const call = () => ipc.poseSolve(hard, preferred, soft, warmSeed);
+    const position = get();
+    const total = position.doc?.sequence.length ?? 0;
+    const upTo = position.currentStep ?? total;
+    const replayT = position.currentStep === null ? 1 : position.playT;
+    const call = () => ipc.poseSolve(hard, preferred, soft, warmSeed, upTo, replayT);
     const r = await (coalesce ? queue.runLatest(call) : queue.run(call));
     if (requestGeneration !== get().angleIntentGeneration) return;
     if (!r.ok) {

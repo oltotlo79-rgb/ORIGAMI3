@@ -328,6 +328,18 @@ function primeFakeTimers(): void {
 }
 
 describe("appStore 折り角度の指定", () => {
+  it("pose_solveへ現在の手順位置と途中進行度を渡す", async () => {
+    seedSequence(3, 2);
+    useAppStore.setState({ playT: 0.4 });
+
+    useAppStore.getState().setDriverAngle(5, 75);
+    await vi.waitFor(() => expect(ipc.poseSolve).toHaveBeenCalledTimes(1));
+
+    const call = vi.mocked(ipc.poseSolve).mock.calls[0];
+    expect(call[4]).toBe(2);
+    expect(call[5]).toBe(0.4);
+  });
+
   it("±180度で4点を知らせても角度を反映し、離した後も次の最新結果まで残す", async () => {
     const view = makeHingeView(444);
     useAppStore.setState({

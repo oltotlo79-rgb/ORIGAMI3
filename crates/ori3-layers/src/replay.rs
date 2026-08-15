@@ -80,6 +80,9 @@ pub struct LayerTransition {
     pub end: Vec<FaceId>,
     /// 現在の進行度(0.0〜1.0)。
     pub progress: f64,
+    /// `start` / `end` の少なくとも一方が、解決済みの保存 `layer_order` を
+    /// 経路に含む物理順か。正当な順がFaceId昇順でもfallbackと区別する。
+    pub order_is_authoritative: bool,
 }
 
 /// [`replay`] の結果。
@@ -155,7 +158,11 @@ pub fn replay_with_faces(doc: &Document, faces: &[Face], up_to: usize, t: f64) -
         start: plan.order_start.clone(),
         end: plan.order_end.clone(),
         progress: t,
+        order_is_authoritative: plan.transition_order_is_authoritative,
     };
+    // 保存順が無いPose/自由角だけは、rigidが最終状態から作るcanonical rankを残す。
+    // 保存順がある通常手順は直後にその順を刻印するため、高価な幾何導出を省く。
+    let derive_surface_order = plan.saved_order.is_none();
     let mut warnings = plan.warnings;
 
     let result = match &plan.path {
@@ -168,7 +175,7 @@ pub fn replay_with_faces(doc: &Document, faces: &[Face], up_to: usize, t: f64) -
             } else {
                 Some(replay_with_faces(doc, faces, up_to - 1, 1.0).hinge_angles)
             };
-            solve_along(doc, faces, path, t, warm)
+            solve_along(doc, faces, path, t, warm, derive_surface_order)
         }
         None => {
             // exact角は表示拘束には使わず、全ヒンジを含む決定的なbranch seedにだけ使う。
@@ -184,6 +191,7 @@ pub fn replay_with_faces(doc: &Document, faces: &[Face], up_to: usize, t: f64) -
                 &plan.display_hard,
                 &plan.display_preferred,
                 Some(&warm),
+                derive_surface_order,
             )
         }
     };
@@ -207,7 +215,9 @@ pub fn replay_with_faces(doc: &Document, faces: &[Face], up_to: usize, t: f64) -
         .collect();
     for f in &mut frame.faces {
         f.layer = layer_of.get(&f.face).copied().unwrap_or(0);
-        f.surface_rank = f.layer;
+        if !derive_surface_order {
+            f.surface_rank = f.layer;
+        }
     }
 
     ReplayResult {
@@ -315,6 +325,7 @@ fn solve_along(
     path: &StepPath,
     t: f64,
     mut warm: Option<HashMap<EdgeId, f64>>,
+    derive_surface_order: bool,
 ) -> ori3_rigid::SolveResult {
     let mut last_finite: Option<ori3_rigid::SolveResult> = None;
     let mut final_failure: Option<ori3_rigid::SolveResult> = None;
@@ -334,7 +345,14 @@ fn solve_along(
             .iter()
             .map(|&(hinge, from, to)| (hinge, from + (to - from) * s))
             .collect();
-        let mut candidate = solve_display_near(doc, faces, &drivers, &targets, warm.as_ref());
+        let mut candidate = solve_display_near(
+            doc,
+            faces,
+            &drivers,
+            &targets,
+            warm.as_ref(),
+            derive_surface_order && i == SUBSTEPS,
+        );
         iterations = iterations.saturating_add(candidate.iterations);
         if is_finite_result(&candidate, faces.len()) {
             candidate.iterations = iterations;
@@ -346,7 +364,16 @@ fn solve_along(
         }
     }
     match (last_finite, final_failure) {
-        (Some(previous), Some(failed)) => previous_replay_result(previous, failed, iterations),
+        (Some(previous), Some(failed)) => {
+            let mut recovered = previous_replay_result(previous, failed, iterations);
+            // 最終分割だけcanonical rankを導出するため、そこで非finiteになって直前の
+            // 有限候補へ戻ると、その候補はFaceId fallbackのままになる。返すanglesから
+            // rankだけ再導出し、幾何・角度・警告は直前有限候補をそのまま保つ。
+            if derive_surface_order {
+                stamp_canonical_surface_order_from_angles(doc, faces, &mut recovered);
+            }
+            recovered
+        }
         (Some(mut result), None) => {
             result.iterations = iterations;
             result
@@ -366,8 +393,56 @@ fn solve_display_near(
     drivers: &[Driver],
     targets: &HashMap<EdgeId, f64>,
     warm: Option<&HashMap<EdgeId, f64>>,
+    derive_surface_order: bool,
 ) -> ori3_rigid::SolveResult {
-    ori3_rigid::solve_near_exact_without_surface_order(&doc.cp, faces, drivers, targets, warm)
+    if derive_surface_order {
+        ori3_rigid::solve_near_exact(&doc.cp, faces, drivers, targets, warm)
+    } else {
+        ori3_rigid::solve_near_exact_without_surface_order(&doc.cp, faces, drivers, targets, warm)
+    }
+}
+
+/// 有限なsolver結果の全ヒンジ角からcanonical surface順だけを再導出して刻印する。
+fn stamp_canonical_surface_order_from_angles(
+    doc: &Document,
+    faces: &[Face],
+    result: &mut ori3_rigid::SolveResult,
+) {
+    let folded = ori3_rigid::propagate(&doc.cp, faces, &result.angles);
+    let ranked = ori3_rigid::to_frame3d(&doc.cp, faces, &folded);
+    let mut order = ranked
+        .faces
+        .iter()
+        .map(|face| (face.surface_rank, face.face))
+        .collect::<Vec<_>>();
+    order.sort_unstable();
+    let order = order.into_iter().map(|(_, face)| face).collect::<Vec<_>>();
+    ori3_rigid::stamp_surface_order(&mut result.frame, &order)
+        .expect("同じCP・faces・angles由来のcanonical順はsolver frameへ刻印できる");
+}
+
+/// 保存手順から現在の再生位置で有効な層順序(下→上)を導出する。
+///
+/// 戻り値が`Some`なのは、現在位置までに非空の
+/// [`FoldStep::layer_order`](ori3_model::FoldStep::layer_order)が1点以上、
+/// 現在の面へ解決できた場合だけ。
+/// 平坦でないPoseなど`layer_order=None`の手順と、代表点が全て未解決の手順は
+/// 直前の保存順を保つ。現在手順の途中(`t < 1`)は開始前の順、完了時だけ終了順を返す。
+/// 初期の面ID順は表示用fallbackであって保存手順の権威ではないため`None`を返す。
+#[must_use]
+pub fn saved_layer_order_at(
+    doc: &Document,
+    faces: &[Face],
+    up_to: usize,
+    t: f64,
+) -> Option<Vec<FaceId>> {
+    let up_to = up_to.min(doc.sequence.len());
+    let t = if t.is_finite() {
+        t.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    plan_steps(doc, faces, up_to, t).saved_order
 }
 
 fn is_finite_result(result: &ori3_rigid::SolveResult, expected_faces: usize) -> bool {
@@ -439,10 +514,16 @@ struct StepPlan {
     path: Option<StepPath>,
     /// 層順序(下→上)
     order: Vec<FaceId>,
+    /// 保存済みlayer_orderを1点以上解決して得た、現在位置の権威ある順序。
+    /// 初期の面ID順しか無い場合はNone。
+    saved_order: Option<Vec<FaceId>>,
     /// `up_to` 手順へ入る直前の層順序(接触補正用)。
     order_start: Vec<FaceId>,
     /// `up_to` 手順を完了したときの層順序(接触補正用)。
     order_end: Vec<FaceId>,
+    /// 現在transitionまでに解決済みの保存順を1つ以上含むか。
+    /// 現在手順の途中では表示authorityより先にendだけ解決される場合がある。
+    transition_order_is_authoritative: bool,
     skipped: Vec<StepId>,
     warnings: Vec<String>,
 }
@@ -460,6 +541,9 @@ fn plan_steps(doc: &Document, faces: &[Face], up_to: usize, t: f64) -> StepPlan 
     let mut skipped: Vec<StepId> = Vec::new();
     // 現在の層順序(下→上)。初期状態は面ID昇順。
     let mut order = FlatState::initial(&doc.cp, faces).order;
+    // 初期の面ID順は決定的fallbackであり、折り手順が記録した順序ではない。
+    let mut saved_order: Option<Vec<FaceId>> = None;
+    let mut transition_order_is_authoritative = false;
     let mut order_start = order.clone();
     let mut order_end = order.clone();
     // ヒンジごとの目標角(後から積んだステップが優先される)。BTreeMapなので
@@ -556,15 +640,20 @@ fn plan_steps(doc: &Document, faces: &[Face], up_to: usize, t: f64) -> StepPlan 
                 warnings.append(&mut w);
             }
         }
+        transition_order_is_authoritative |= resolved_order.is_some();
         if last {
             if let Some(next) = resolved_order {
-                order_end = next;
+                order_end = next.clone();
+                if t >= 1.0 {
+                    saved_order = Some(next);
+                }
             }
             if t >= 1.0 {
                 order.clone_from(&order_end);
             }
         } else if let Some(next) = resolved_order {
-            order = next;
+            order = next.clone();
+            saved_order = Some(next);
         }
     }
 
@@ -666,8 +755,10 @@ fn plan_steps(doc: &Document, faces: &[Face], up_to: usize, t: f64) -> StepPlan 
         driver_hinges,
         path,
         order,
+        saved_order,
         order_start,
         order_end,
+        transition_order_is_authoritative,
         skipped,
         warnings,
     }
@@ -902,5 +993,71 @@ mod tests {
         let pose = plan_steps(&pose_document, &pose_faces, 2, 1.0);
         assert!(pose.display_hard.is_empty());
         assert_eq!(pose.display_preferred, HashMap::from([(8, 90.0), (9, 0.0)]));
+    }
+
+    #[test]
+    fn finite_substep_fallback_recovers_canonical_surface_order_from_its_angles() {
+        let mut document = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        ori3_cp::insert_segment(&mut document.cp, [0.5, 0.0], [0.5, 1.0], EdgeKind::Mountain);
+        let faces = extract_faces(&document.cp);
+        let hinge = hinge_edges(&faces)[0];
+        let rank_order = |frame: &Frame3D| {
+            let mut ranked = frame
+                .faces
+                .iter()
+                .map(|face| (face.surface_rank, face.face))
+                .collect::<Vec<_>>();
+            ranked.sort_unstable();
+            ranked.into_iter().map(|(_, face)| face).collect::<Vec<_>>()
+        };
+        let mut observed_change = false;
+
+        for angle in [180.0, -180.0] {
+            let drivers = [Driver {
+                hinge,
+                target_angle_deg: angle,
+            }];
+            let mut previous = ori3_rigid::solve_near_exact_without_surface_order(
+                &document.cp,
+                &faces,
+                &drivers,
+                &HashMap::new(),
+                None,
+            );
+            let before_order = rank_order(&previous.frame);
+            let before_geometry = previous
+                .frame
+                .faces
+                .iter()
+                .map(|face| (face.face, face.polygon.clone(), face.layer, face.mirrored))
+                .collect::<Vec<_>>();
+            let expected = ori3_rigid::to_frame3d(
+                &document.cp,
+                &faces,
+                &ori3_rigid::propagate(&document.cp, &faces, &previous.angles),
+            );
+
+            stamp_canonical_surface_order_from_angles(&document, &faces, &mut previous);
+
+            assert_eq!(rank_order(&previous.frame), rank_order(&expected));
+            assert_eq!(
+                previous
+                    .frame
+                    .faces
+                    .iter()
+                    .map(|face| (face.face, face.polygon.clone(), face.layer, face.mirrored))
+                    .collect::<Vec<_>>(),
+                before_geometry,
+                "fallback補修はrank以外の有限候補を変えない"
+            );
+            observed_change |= before_order != rank_order(&expected);
+        }
+        assert!(
+            observed_change,
+            "検査fixtureの少なくとも一方向はFaceId fallbackとcanonicalを区別できる"
+        );
     }
 }

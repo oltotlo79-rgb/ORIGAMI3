@@ -21,11 +21,6 @@ const CONTACT_LINE_SEARCH_STEPS: usize = 8;
 /// solverと同じ閉包収束閾値。接触より閉包を常に上位へ置く順位付けに使う。
 const CLOSURE_TOLERANCE: f64 = 1e-13;
 const RELAXATION_EPS_DEG: f64 = 1e-6;
-/// 完全折りの順位だけに使う決定的な進入経路。接触枝を飛び越えず、終端は表示probeと同じ179.999°。
-const SURFACE_CANONICAL_APPROACH_DEG: [f64; 22] = [
-    9.0, 19.0, 29.0, 39.0, 49.0, 59.0, 69.0, 79.0, 90.0, 101.0, 111.0, 121.0, 131.0, 141.0, 151.0,
-    161.0, 171.0, 179.0, 179.5, 179.9, 179.99, 179.999,
-];
 /// 紙が裂けたとみなす辺の離れ(紙の長辺を1とした値)。表示でも検査でも同じ値を使う。
 const SEAM_TEAR_TOLERANCE: f64 = 1e-6;
 const CONTACT_BEST_EFFORT_WARNING: &str =
@@ -142,15 +137,7 @@ fn solve_motion_from(
             })
         };
         if context.stamp_surface_order {
-            stamp_motion_surface_order(
-                cp,
-                faces,
-                drivers,
-                targets,
-                detect_contact,
-                topology,
-                &mut result,
-            );
+            stamp_motion_surface_order(cp, faces, drivers, targets, topology, &mut result);
         }
         return MotionSolveResult {
             result,
@@ -372,15 +359,7 @@ fn solve_motion_from(
         result = avoid_contact(cp, faces, drivers, targets, warm_start, result);
     }
     if context.stamp_surface_order {
-        stamp_motion_surface_order(
-            cp,
-            faces,
-            drivers,
-            targets,
-            detect_contact,
-            topology,
-            &mut result,
-        );
+        stamp_motion_surface_order(cp, faces, drivers, targets, topology, &mut result);
     }
     MotionSolveResult {
         result,
@@ -394,7 +373,6 @@ fn stamp_motion_surface_order(
     faces: &[Face],
     drivers: &[Driver],
     targets: Option<&HashMap<EdgeId, f64>>,
-    detect_contact: bool,
     topology: &PreparedTopology,
     result: &mut SolveResult,
 ) {
@@ -405,148 +383,135 @@ fn stamp_motion_surface_order(
             <= crate::surface_order::EXACT_FLAT_EPS_RAD
     };
     let has_exact = result.angles.values().copied().any(is_exact);
-    let approached_drivers = drivers
-        .iter()
-        .filter_map(|driver| {
-            let angle = result.angles.get(&driver.hinge).copied()?;
-            is_exact(angle).then_some((
-                driver.hinge,
-                Driver {
-                    hinge: driver.hinge,
-                    target_angle_deg: angle
-                        - angle.signum() * crate::surface_order::SURFACE_APPROACH_DEG,
-                },
-            ))
-        })
-        .collect::<BTreeMap<_, _>>()
-        .into_values()
-        .collect::<Vec<_>>();
-
-    // 完全折りが1本だけの単一hard操作なら、明示driverを平坦状態から179.999°まで
-    // 決定的に再生し、接触枝を含むcanonicalな1軸極限を使う。呼出し元のwarmを
-    // 使わないため、初回、180°での再計算、cold startの順位は同じになる。
-    // 複数hardやpreferred targetを伴う姿勢では0°からの1軸再生が実進入枝を再現しない。
-    // 複数hardは全driverを保ったfinal-angle seed、preferredはcoldの同じtargetsでprobeする。
-    // canonical途中が有限でない場合も同じ1点probeへ戻す。
-    // 複数の明示driverが同時に完全折りなら一意な1軸極限がないため、
-    // treeのradial極限を維持する。閉包で従属hingeもexactになる単一driver操作は対象に含む。
-    // 単一hard・preferredなしのcanonical枝だけは、呼出し元warmや直前ownerを
-    // 順位へ使わない。複数hardのfinal-angle seedは、最終solveが選んだ枝を保持する。
-    let order = if !has_exact {
-        crate::surface_order::derive_surface_order_from_current_depths(
-            faces,
-            &result.frame,
-            &previous_order,
-        )
-        .unwrap_or(previous_order)
-    } else if approached_drivers.len() != 1 {
+    let canonical_targets = canonical_surface_targets(drivers, targets);
+    let final_checkpoint = crate::surface_order::SURFACE_PATH_CHECKPOINT_DEG
+        .last()
+        .copied()
+        .unwrap_or(180.0);
+    let needs_canonical_path = canonical_targets
+        .values()
+        .any(|angle| angle.abs() >= final_checkpoint - RELAXATION_EPS_DEG);
+    if needs_canonical_path
+        && let Some(order) = canonical_motion_surface_order(cp, faces, topology, &canonical_targets)
+        && crate::surface_order::stamp_surface_order(&mut result.frame, &order).is_ok()
+    {
         return;
-    } else {
-        let approached_driver = &approached_drivers[0];
-        let direct_probe = || {
-            let probe_drivers = surface_approach_drivers(
-                drivers,
-                approached_driver.hinge,
-                approached_driver.target_angle_deg,
-            );
-            // preferred targetのsolve_nearはwarmを零空間の同順位選択にも使う。
-            // exact結果をseedにすると、coldな179.999°実進入とは別枝になるため、
-            // preferred contextでは同じcold条件(targetsを初期値にする)でprobeする。
-            // warm依存のpreferred進入との連続性は、この局所的な単一driver契約に含めない。
-            let probe_warm = targets.is_none().then_some(&result.angles);
-            solve_requested_prepared(cp, faces, &probe_drivers, targets, probe_warm, topology)
-        };
-        let approached = if drivers.len() == 1 && targets.is_none() {
-            canonical_surface_approach(cp, faces, detect_contact, topology, approached_driver)
-                .unwrap_or_else(direct_probe)
-        } else {
-            direct_probe()
-        };
-        let reached_approach =
-            approached
-                .angles
-                .get(&approached_driver.hinge)
-                .is_some_and(|angle| {
-                    canonical_delta_deg(*angle, approached_driver.target_angle_deg).abs()
-                        <= RELAXATION_EPS_DEG
-                });
-        if is_finite_result(&approached, faces.len()) && reached_approach {
-            crate::surface_order::derive_surface_order_from_current_depths(
-                faces,
-                &approached.frame,
-                &previous_order,
-            )
-            .unwrap_or(previous_order)
-        } else {
-            previous_order
-        }
-    };
+    }
+    // canonical probeが有限形を作れない場合も、完全折りではtree::fold_frameが
+    // 全ヒンジのclamp経路から作った順位を保持する。
+    if has_exact {
+        return;
+    }
+    let order = crate::surface_order::derive_surface_order_from_current_depths(
+        faces,
+        &result.frame,
+        &previous_order,
+    )
+    .unwrap_or(previous_order);
     let _ = crate::surface_order::stamp_surface_order(&mut result.frame, &order);
 }
 
-fn canonical_surface_approach(
+/// 呼出し元のhard/preferred区分によらない、明示された最終要求を作る。
+/// 経路上の従属ヒンジは各checkpointのcold連続solveから決まり、順位へ全て参加する。
+fn canonical_surface_targets(
+    drivers: &[Driver],
+    targets: Option<&HashMap<EdgeId, f64>>,
+) -> BTreeMap<EdgeId, f64> {
+    let mut canonical = BTreeMap::new();
+    if let Some(targets) = targets {
+        for (&hinge, &target) in targets {
+            if target.is_finite() {
+                canonical.insert(hinge, target.clamp(-180.0, 180.0));
+            }
+        }
+    }
+    for driver in drivers {
+        if driver.target_angle_deg.is_finite()
+            && (-180.0..=180.0).contains(&driver.target_angle_deg)
+        {
+            canonical.insert(driver.hinge, driver.target_angle_deg);
+        }
+    }
+    canonical
+}
+
+/// 全明示ヒンジを同じ角度checkpointでclampして平らな状態から再生する。
+/// 元のhard/preferred区分は捨て、EdgeId順の同等なdriverとして扱う。
+fn canonical_motion_surface_order(
     cp: &CreasePattern,
     faces: &[Face],
-    detect_contact: bool,
     topology: &PreparedTopology,
-    approached_driver: &Driver,
-) -> Option<SolveResult> {
-    let direction = approached_driver.target_angle_deg.signum();
-    if direction == 0.0 {
+    final_targets: &BTreeMap<EdgeId, f64>,
+) -> Option<Vec<FaceId>> {
+    if final_targets.is_empty() {
         return None;
     }
     let mut warm = None;
-    let mut approached = None;
-    for absolute in SURFACE_CANONICAL_APPROACH_DEG {
-        let requested_angle = direction * absolute;
-        let checkpoint_drivers = [Driver {
-            hinge: approached_driver.hinge,
-            target_angle_deg: requested_angle,
-        }];
-        let solved = solve_motion_prepared(
+    let mut previous_order = faces.iter().map(|face| face.id).collect::<Vec<_>>();
+    previous_order.sort_unstable();
+    let mut path_frames =
+        Vec::with_capacity(crate::surface_order::SURFACE_PATH_CHECKPOINT_DEG.len());
+    for &checkpoint in &crate::surface_order::SURFACE_PATH_CHECKPOINT_DEG {
+        let clamp = |angle: f64| angle.signum() * angle.abs().min(checkpoint);
+        let checkpoint_drivers = final_targets
+            .iter()
+            .map(|(&hinge, &angle)| Driver {
+                hinge,
+                target_angle_deg: clamp(angle),
+            })
+            .collect::<Vec<_>>();
+        let solved = solve_requested_prepared(
             cp,
             faces,
             &checkpoint_drivers,
             None,
             warm.as_ref(),
-            detect_contact,
-            MotionSolveContext {
-                topology,
-                stamp_surface_order: false,
-            },
-        )
-        .result;
-        let reached_checkpoint = solved
-            .angles
-            .get(&approached_driver.hinge)
-            .is_some_and(|angle| {
-                canonical_delta_deg(*angle, requested_angle).abs() <= RELAXATION_EPS_DEG
-            });
-        if !is_finite_result(&solved, faces.len()) || !reached_checkpoint {
+            topology,
+        );
+        if !is_finite_result(&solved, faces.len()) {
             return None;
         }
-        warm = Some(solved.angles.clone());
-        approached = Some(solved);
+        for driver in &checkpoint_drivers {
+            let actual = solved.angles.get(&driver.hinge).copied()?;
+            if canonical_delta_deg(actual, driver.target_angle_deg).abs() > RELAXATION_EPS_DEG {
+                return None;
+            }
+        }
+        path_frames.push(solved.frame);
+        warm = Some(solved.angles);
     }
-    approached
-}
-
-fn surface_approach_drivers(
-    drivers: &[Driver],
-    approached_hinge: EdgeId,
-    approached_angle_deg: f64,
-) -> Vec<Driver> {
-    drivers
+    let final_checkpoint = crate::surface_order::SURFACE_PATH_CHECKPOINT_DEG
+        .last()
+        .copied()
+        .unwrap_or(180.0);
+    let exact_drivers = final_targets
         .iter()
-        .map(|driver| Driver {
-            hinge: driver.hinge,
-            target_angle_deg: if driver.hinge == approached_hinge {
-                approached_angle_deg
+        .map(|(&hinge, &target)| Driver {
+            hinge,
+            target_angle_deg: if target.abs() >= final_checkpoint - RELAXATION_EPS_DEG {
+                target.signum() * 180.0
             } else {
-                driver.target_angle_deg
+                target
             },
         })
-        .collect()
+        .collect::<Vec<_>>();
+    let exact = solve_requested_prepared(cp, faces, &exact_drivers, None, warm.as_ref(), topology);
+    if !is_finite_result(&exact, faces.len()) {
+        return None;
+    }
+    for driver in &exact_drivers {
+        let actual = exact.angles.get(&driver.hinge).copied()?;
+        if canonical_delta_deg(actual, driver.target_angle_deg).abs() > RELAXATION_EPS_DEG {
+            return None;
+        }
+    }
+    crate::surface_order::derive_surface_order_from_frame_path(
+        faces,
+        &path_frames,
+        &exact.frame,
+        &previous_order,
+    )
+    .ok()
 }
 
 fn solve_warm_pose_prepared(
@@ -1512,12 +1477,9 @@ fn previous_with_failure(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ContactCandidate, SURFACE_CANONICAL_APPROACH_DEG, angle_priority_costs, continuation_steps,
-        surface_approach_drivers,
-    };
+    use super::{ContactCandidate, angle_priority_costs, continuation_steps};
     use crate::{ContactMetrics, SolveResult};
-    use ori3_model::{Driver, Frame3D};
+    use ori3_model::Frame3D;
     use std::collections::{BTreeSet, HashMap};
 
     #[test]
@@ -1529,46 +1491,6 @@ mod tests {
         // 完全に折った状態の近くでは、要求が小さくても上限まで刻む。
         assert_eq!(continuation_steps(20, 1.0, false), 1);
         assert_eq!(continuation_steps(20, 1.0, true), 4);
-    }
-
-    #[test]
-    fn surface_canonical_checkpoints_are_strict_non_exact_approach() {
-        assert!(
-            SURFACE_CANONICAL_APPROACH_DEG
-                .windows(2)
-                .all(|pair| pair[0] < pair[1])
-        );
-        assert!(
-            SURFACE_CANONICAL_APPROACH_DEG
-                .iter()
-                .all(|angle| angle.is_finite() && *angle > 0.0 && *angle < 180.0)
-        );
-        assert_eq!(
-            SURFACE_CANONICAL_APPROACH_DEG.last().copied(),
-            Some(180.0 - crate::surface_order::SURFACE_APPROACH_DEG)
-        );
-    }
-
-    #[test]
-    fn surface_approach_changes_only_the_single_exact_driver() {
-        let drivers = [
-            Driver {
-                hinge: 10,
-                target_angle_deg: 180.0,
-            },
-            Driver {
-                hinge: 20,
-                target_angle_deg: -37.5,
-            },
-        ];
-
-        let checkpoint = surface_approach_drivers(&drivers, 10, 179.999);
-
-        assert_eq!(checkpoint.len(), 2);
-        assert_eq!(checkpoint[0].hinge, 10);
-        assert_eq!(checkpoint[0].target_angle_deg, 179.999);
-        assert_eq!(checkpoint[1].hinge, 20);
-        assert_eq!(checkpoint[1].target_angle_deg, -37.5);
     }
 
     fn ranked_candidate(contact: ContactMetrics, medium_energy: f64) -> ContactCandidate {

@@ -71,12 +71,16 @@ export function poseSolve(
   preferred?: Driver[] | null,
   soft?: SoftSettings | null,
   warmSeed?: Driver[] | null,
+  upTo = 0,
+  t = 1,
 ): Promise<SolveResult> {
   return invoke("pose_solve", {
     hard,
     preferred: preferred?.length ? preferred : null,
     warmSeed: warmSeed?.length ? warmSeed : null,
     soft: soft ?? null,
+    upTo,
+    t,
   });
 }
 

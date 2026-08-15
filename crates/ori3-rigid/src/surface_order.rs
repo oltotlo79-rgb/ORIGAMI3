@@ -10,29 +10,42 @@ const COPLANAR_EPS: f64 = 1e-8;
 const DEPTH_ORDER_EPS: f64 = 1e-12;
 const OVERLAP_AREA_EPS: f64 = 1e-14;
 pub(crate) const EXACT_FLAT_EPS_RAD: f64 = 1e-8;
-pub(crate) const SURFACE_APPROACH_DEG: f64 = 0.001;
+/// 平坦な展開図から最終角へ向かう決定的な重なり順経路。
+///
+/// 各値は全ヒンジに共通の角度checkpointである。各ヒンジは符号を保ったまま
+/// `min(|最終角|, checkpoint)` まで動き、部分折りは最終角へ達した後固定される。
+/// 終点だけで分離しない面対も、終点に最も近い分離点まで順に戻って物理的な上下を決める。
+pub(crate) const SURFACE_PATH_CHECKPOINT_DEG: [f64; 22] = [
+    9.0, 19.0, 29.0, 39.0, 49.0, 59.0, 69.0, 79.0, 90.0, 101.0, 111.0, 121.0, 131.0, 141.0, 151.0,
+    161.0, 171.0, 179.0, 179.5, 179.9, 179.99, 179.999,
+];
 
 type Transforms = HashMap<FaceId, (DMat3, DVec3)>;
 
-/// `approached` の実深度を制約、`previous_order` を同値時の順として、下→上を返す。
+/// `path` の実深度を制約、`previous_order` を同値時の順として、下→上を返す。
 ///
 /// `exact_frame` で同一平面かつ実面積が重なる面対だけを比較する。exact上の同一点を
-/// それぞれの材質座標へ戻してからapproach姿勢へ写すため、祖先面の共通剛体運動は
-/// 相殺される。画面履歴やカメラを入力にせず、同じ4入力には常に同じ順を返す。
+/// それぞれの材質座標へ戻してから経路上の各姿勢へ写すため、祖先面の共通剛体運動は
+/// 相殺される。終点に近い点から調べ、まだ同じ深度なら前の点へ戻る。画面履歴や
+/// カメラを入力にせず、同じ4入力には常に同じ順を返す。
 pub(crate) fn derive_surface_order(
     faces: &[Face],
-    approached: &Transforms,
+    path: &[Transforms],
     exact: &Transforms,
     exact_frame: &Frame3D,
     previous_order: &[FaceId],
 ) -> Result<Vec<FaceId>, String> {
     validate_order(faces, exact_frame, previous_order)?;
+    if path.is_empty() {
+        return Ok(previous_order.to_vec());
+    }
     derive_surface_order_with(
         faces,
         exact_frame,
         previous_order,
         true,
-        |face, point, normal| approached_height(face, point, normal, approached, exact),
+        path.len(),
+        |sample, face, point, normal| approached_height(face, point, normal, &path[sample], exact),
     )
 }
 
@@ -53,8 +66,48 @@ pub(crate) fn derive_surface_order_from_current_depths(
         frame,
         previous_order,
         false,
-        |face, point, normal| {
+        1,
+        |_sample, face, point, normal| {
             approached_frame_height(face, point, normal, &frame_faces, &frame_faces)
+        },
+    )
+}
+
+/// `Frame3D` で再生した全ヒンジ経路を、完全折りendpointの同じ材質点で比較する。
+/// solverの各checkpointに含まれる従属ヒンジも、そのまま上下制約へ参加する。
+pub(crate) fn derive_surface_order_from_frame_path(
+    faces: &[Face],
+    path: &[Frame3D],
+    exact_frame: &Frame3D,
+    previous_order: &[FaceId],
+) -> Result<Vec<FaceId>, String> {
+    validate_order(faces, exact_frame, previous_order)?;
+    for frame in path {
+        validate_order(faces, frame, previous_order)?;
+    }
+    let exact_faces = exact_frame
+        .faces
+        .iter()
+        .map(|face| (face.face, face))
+        .collect::<HashMap<_, _>>();
+    let path_faces = path
+        .iter()
+        .map(|frame| {
+            frame
+                .faces
+                .iter()
+                .map(|face| (face.face, face))
+                .collect::<HashMap<_, _>>()
+        })
+        .collect::<Vec<_>>();
+    derive_surface_order_with(
+        faces,
+        exact_frame,
+        previous_order,
+        true,
+        path.len(),
+        |sample, face, point, normal| {
+            approached_frame_height(face, point, normal, &path_faces[sample], &exact_faces)
         },
     )
 }
@@ -64,7 +117,8 @@ fn derive_surface_order_with(
     exact_frame: &Frame3D,
     previous_order: &[FaceId],
     require_coplanar: bool,
-    mut height: impl FnMut(FaceId, DVec3, DVec3) -> Result<f64, String>,
+    sample_count: usize,
+    mut height: impl FnMut(usize, FaceId, DVec3, DVec3) -> Result<f64, String>,
 ) -> Result<Vec<FaceId>, String> {
     let frame_faces = exact_frame
         .faces
@@ -116,26 +170,29 @@ fn derive_surface_order_with(
                 continue;
             }
             let witnesses = overlap_witnesses(left_2d, &right_2d)?;
-            let mut left_above = false;
-            let mut right_above = false;
-            for witness in witnesses {
-                let point = plane.origin + plane.u * witness.x + plane.v * witness.y;
-                let left_height = height(left, point, plane.normal)?;
-                let right_height = height(right, point, plane.normal)?;
-                let difference = left_height - right_height;
-                left_above |= difference > DEPTH_ORDER_EPS;
-                right_above |= difference < -DEPTH_ORDER_EPS;
+            for sample in (0..sample_count).rev() {
+                let mut left_above = false;
+                let mut right_above = false;
+                for &witness in &witnesses {
+                    let point = plane.origin + plane.u * witness.x + plane.v * witness.y;
+                    let left_height = height(sample, left, point, plane.normal)?;
+                    let right_height = height(sample, right, point, plane.normal)?;
+                    let difference = left_height - right_height;
+                    left_above |= difference > DEPTH_ORDER_EPS;
+                    right_above |= difference < -DEPTH_ORDER_EPS;
+                }
+                // 同じ深度なら、経路上の1つ前の姿勢まで戻る。1つの面対が重なり領域内で
+                // 交差する点では面単位rankを決めず、さらに前の非交差姿勢を探す。
+                if left_above == right_above {
+                    continue;
+                }
+                constraints.insert(if left_above {
+                    (right, left)
+                } else {
+                    (left, right)
+                });
+                break;
             }
-            // 1つの面対が重なり領域内で交差する場合、面単位rankでは表現できない。
-            // その対だけ従来順を保ち、表現できる上下制約まで失わない。
-            if left_above == right_above {
-                continue;
-            }
-            constraints.insert(if left_above {
-                (right, left)
-            } else {
-                (left, right)
-            });
         }
     }
 

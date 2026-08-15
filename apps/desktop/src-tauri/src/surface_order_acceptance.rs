@@ -554,9 +554,9 @@ process.stdout.write(JSON.stringify(result));
         .collect()
 }
 
-fn camera(width: f64, height: f64, sign: f64) -> Camera {
+fn camera_from_direction(width: f64, height: f64, direction: V3) -> Camera {
     let center = V3::new(width * 0.5, height * 0.5, 0.0);
-    let direction = V3::new(0.35, -0.85, 0.95).normalize() * sign;
+    let direction = direction.normalize();
     let tan_half_fov = (0.5 * CAMERA_FOV_DEG.to_radians()).tan();
     let distance = width.max(height) / (2.0 * tan_half_fov) * CAMERA_MARGIN;
     let position = center + direction * distance;
@@ -580,6 +580,10 @@ fn camera(width: f64, height: f64, sign: f64) -> Camera {
         projection_depth_a: ((CAMERA_FAR + CAMERA_NEAR) / (CAMERA_FAR - CAMERA_NEAR)) as f32,
         projection_depth_b: (-2.0 * CAMERA_FAR * CAMERA_NEAR / (CAMERA_FAR - CAMERA_NEAR)) as f32,
     }
+}
+
+fn camera(width: f64, height: f64, sign: f64) -> Camera {
+    camera_from_direction(width, height, V3::new(0.35, -0.85, 0.95).normalize() * sign)
 }
 
 fn dot4(row: [f32; 4], point: [f32; 4]) -> f32 {
@@ -1053,8 +1057,8 @@ fn surface_order_179_999_to_180_all_110_creases() {
         "179.999 and 180 degrees must use the same surface-rank order: {rank_changed_hinges:?}"
     );
     assert!(
-        changed_hinges.len() < 80,
-        "stage C must reduce the 80 stage-B endpoint changes: {changed_hinges:?}"
+        changed_hinges.len() < 79,
+        "stage C must reduce the 79 previously measured endpoint changes: {changed_hinges:?}"
     );
 }
 
@@ -1132,15 +1136,34 @@ fn surface_order_minus_94_four_view_conditions() {
         let frame = to_frame3d(&cp, &faces, &folded);
         for (view_name, sign) in [("front", 1.0), ("back", -1.0)] {
             let image = visual_image(&diagram, &frame, VIEWPORT, camera(1.0, 1.0, sign));
+            let (baseline_red, baseline_light) = match (fold, view_name) {
+                ("mountain", "front") => (45_015_u64, 80_u64),
+                ("mountain", "back") => (50_438, 6_244),
+                ("valley", "front") => (45_777, 4_580),
+                ("valley", "back") => (56_603, 79),
+                _ => unreachable!("the four acceptance conditions are exhaustive"),
+            };
+            let baseline_ratio = baseline_red as f64 / (baseline_red + baseline_light) as f64;
             println!(
-                "SURFACE_94 fold={fold} angle={angle:+.0} view={view_name} red={} light={} red_ratio={:.6}% visible={} back_faces={}",
+                "SURFACE_94 fold={fold} angle={angle:+.0} view={view_name} red={} light={} red_ratio={:.6}% baseline_red={} baseline_light={} baseline_red_ratio={:.6}% visible={} back_faces={}",
                 image.red_pixels,
                 image.light_pixels,
                 image.red_ratio() * 100.0,
+                baseline_red,
+                baseline_light,
+                baseline_ratio * 100.0,
                 ids(&image.visible_faces),
                 ids(&image.visible_back_faces),
             );
             assert!(image.red_pixels + image.light_pixels > 0);
+            assert!(
+                image.red_ratio() >= baseline_ratio,
+                "{fold} {angle:+.0} degrees from the {view_name} must not regress below the measured baseline: red={} light={} ratio={:.9}% baseline={:.9}%",
+                image.red_pixels,
+                image.light_pixels,
+                image.red_ratio() * 100.0,
+                baseline_ratio * 100.0,
+            );
             if fold == "valley" && view_name == "front" {
                 valley_front = Some(image);
             }
@@ -1174,4 +1197,31 @@ fn surface_order_same_input_is_deterministic_ten_times() {
         }
     }
     println!("SURFACE_DETERMINISM identical_runs=10 input=edge43:-94");
+}
+
+#[test]
+fn surface_order_user_pose_minus_180_is_deterministic_ten_times() {
+    let cp = angle_surface_cp();
+    let faces = extract_faces(&cp);
+    let diagram = diagram("diagonal-midline-user-pose", cp.clone(), 1.0, 1.0);
+    let angles = angle_surface_angles(-180.0);
+    let mut expected = None::<(Vec<u8>, VisualImage)>;
+    for run in 1..=10 {
+        let frame = to_frame3d(&cp, &faces, &propagate(&cp, &faces, &angles));
+        let serialized = serde_json::to_vec(&frame).expect("serialize deterministic user pose");
+        let image = visual_image(&diagram, &frame, VIEWPORT, camera(1.0, 1.0, 1.0));
+        if let Some(reference) = &expected {
+            assert_eq!(
+                &serialized, &reference.0,
+                "user-pose frame changed on run {run}"
+            );
+            assert_eq!(
+                &image, &reference.1,
+                "user-pose visible result changed on run {run}"
+            );
+        } else {
+            expected = Some((serialized, image));
+        }
+    }
+    println!("SURFACE_DETERMINISM identical_runs=10 input=edge43:-180");
 }

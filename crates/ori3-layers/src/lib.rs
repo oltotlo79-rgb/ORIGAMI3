@@ -49,7 +49,9 @@ pub use pose_oracle::{
 pub use pose_step::{PoseStepInput, PoseStepResult, apply_pose_step};
 pub use precrease_collapse::{PrecreaseCollapseInput, collapse_precrease_network};
 pub use rabbit_ear::{RabbitEarInput, rabbit_ear};
-pub use replay::{LayerTransition, ReplayResult, flat_state_at, replay, replay_with_faces};
+pub use replay::{
+    LayerTransition, ReplayResult, flat_state_at, replay, replay_with_faces, saved_layer_order_at,
+};
 pub use spatial_fold::{SpatialFoldInput, SpatialFoldResult, fold_from_plane_3d};
 pub use techniques::{
     TechniqueInput, inside_reverse, open_sink, outside_reverse, petal, pleat, squash, swivel, twist,

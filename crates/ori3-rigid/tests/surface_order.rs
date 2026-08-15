@@ -37,6 +37,37 @@ fn split_square() -> CreasePattern {
     }
 }
 
+/// 2本の独立した折り目で同じ三層へ畳める帯。どちらを現在のhard driverにしても
+/// 最終角は同じなので、surface rankも同じでなければならない。
+fn three_panel_strip() -> CreasePattern {
+    CreasePattern {
+        vertices: vec![
+            vertex(0, 0.0, 0.0),
+            vertex(1, 1.0 / 3.0, 0.0),
+            vertex(2, 2.0 / 3.0, 0.0),
+            vertex(3, 1.0, 0.0),
+            vertex(4, 1.0, 1.0),
+            vertex(5, 2.0 / 3.0, 1.0),
+            vertex(6, 1.0 / 3.0, 1.0),
+            vertex(7, 0.0, 1.0),
+        ],
+        edges: vec![
+            edge(0, 0, 1, EdgeKind::Border),
+            edge(1, 1, 2, EdgeKind::Border),
+            edge(2, 2, 3, EdgeKind::Border),
+            edge(3, 3, 4, EdgeKind::Border),
+            edge(4, 4, 5, EdgeKind::Border),
+            edge(5, 5, 6, EdgeKind::Border),
+            edge(6, 6, 7, EdgeKind::Border),
+            edge(7, 7, 0, EdgeKind::Border),
+            edge(8, 1, 6, EdgeKind::Mountain),
+            edge(9, 2, 5, EdgeKind::Mountain),
+        ],
+        next_vertex_id: 8,
+        next_edge_id: 10,
+    }
+}
+
 /// 利用者の不具合を再現した、対角線と中線を持つ正方形。
 /// `tree.rs` の再発防止fixtureと同じ頂点・辺で、操作対象は中央のedge 43。
 fn diagonal_midline_square() -> CreasePattern {
@@ -498,32 +529,19 @@ fn mixed_exact_angles() -> HashMap<u32, f64> {
     ])
 }
 
-fn explicit_approach_angles(
-    angles: &HashMap<u32, f64>,
-    move_only_exact: bool,
-) -> HashMap<u32, f64> {
+fn path_checkpoint_angles(angles: &HashMap<u32, f64>, checkpoint_deg: f64) -> HashMap<u32, f64> {
     angles
         .iter()
-        .map(|(&edge, &angle)| {
-            let exact = (angle.abs() - 180.0).abs() <= 1e-9;
-            let should_move = exact || (!move_only_exact && angle != 0.0);
-            let approached = if should_move {
-                angle - angle.signum() * 0.001
-            } else {
-                angle
-            };
-            (edge, approached)
-        })
+        .map(|(&edge, &angle)| (edge, angle.signum() * angle.abs().min(checkpoint_deg)))
         .collect()
 }
 
 #[test]
-fn mixed_exact_stack_uses_only_exact_angles_for_its_approach() {
+fn mixed_exact_stack_uses_every_folded_hinge_on_its_path() {
     let cp = diagonal_midline_square();
     let faces = extract_faces(&cp);
     let exact_angles = mixed_exact_angles();
-    let exact_only_angles = explicit_approach_angles(&exact_angles, true);
-    let legacy_angles = explicit_approach_angles(&exact_angles, false);
+    let path_angles = path_checkpoint_angles(&exact_angles, 179.999);
     assert!(
         exact_angles
             .values()
@@ -537,14 +555,18 @@ fn mixed_exact_stack_uses_only_exact_angles_for_its_approach() {
             .any(|angle| { angle.abs() > 1e-9 && (angle.abs() - 180.0).abs() > 1e-9 })
     );
     for (&hinge, &angle) in &exact_angles {
-        if (angle.abs() - 180.0).abs() > 1e-9 {
-            assert_eq!(exact_only_angles[&hinge], angle, "non-exact hinge {hinge}");
+        if (angle.abs() - 180.0).abs() <= 1e-9 {
+            assert_eq!(path_angles[&hinge], angle.signum() * 179.999);
+        } else {
+            assert_eq!(
+                path_angles[&hinge], angle,
+                "partial hinge {hinge} must stay at its final angle once reached"
+            );
         }
     }
     let exact = propagate(&cp, &faces, &exact_angles);
     let exact_frame = to_frame3d(&cp, &faces, &exact);
-    let expected = propagate(&cp, &faces, &exact_only_angles);
-    let legacy = propagate(&cp, &faces, &legacy_angles);
+    let path = propagate(&cp, &faces, &path_angles);
 
     let rank = |face_id| {
         exact_frame
@@ -575,24 +597,63 @@ fn mixed_exact_stack_uses_only_exact_angles_for_its_approach() {
     // both faces, independent of any solver result.
     let witness = world_centroid(4);
     let normal = canonical_face_normal(&exact_frame, 4);
-    let expected_delta = approach_height(&expected, 4, witness, normal)
-        - approach_height(&expected, 10, witness, normal);
-    let legacy_delta = approach_height(&legacy, 4, witness, normal)
-        - approach_height(&legacy, 10, witness, normal);
+    let path_delta =
+        approach_height(&path, 4, witness, normal) - approach_height(&path, 10, witness, normal);
 
     assert!(
-        expected_delta > 1e-9,
-        "the exact-only approach must put face 4 above face 10: {expected_delta:.3e}"
+        path_delta.abs() > 1e-9,
+        "the all-fold path must separate faces 4 and 10: {path_delta:.3e}"
     );
-    assert!(
-        legacy_delta < -1e-9,
-        "moving non-exact angles would not exercise the old reversed order: {legacy_delta:.3e}"
-    );
-    assert!(
+    assert_eq!(
         rank(4) > rank(10),
-        "exact rank {}/{} must follow the explicit exact-only approach",
+        path_delta > 0.0,
+        "exact rank {}/{} must follow the all-fold path",
         rank(4),
         rank(10)
+    );
+}
+
+#[test]
+fn same_final_angles_have_the_same_rank_for_propagate_and_each_selected_driver() {
+    let cp = three_panel_strip();
+    let faces = extract_faces(&cp);
+    assert_eq!(faces.len(), 3);
+    let final_angles = HashMap::from([(8, 180.0), (9, 180.0)]);
+    let direct = to_frame3d(&cp, &faces, &propagate(&cp, &faces, &final_angles));
+
+    let selected_eight = solve_motion(
+        &cp,
+        &faces,
+        &[Driver {
+            hinge: 8,
+            target_angle_deg: 180.0,
+        }],
+        Some(&HashMap::from([(9, 180.0)])),
+        None,
+        false,
+    )
+    .result;
+    let selected_nine = solve_motion(
+        &cp,
+        &faces,
+        &[Driver {
+            hinge: 9,
+            target_angle_deg: 180.0,
+        }],
+        Some(&HashMap::from([(8, 180.0)])),
+        None,
+        false,
+    )
+    .result;
+
+    for solved in [&selected_eight, &selected_nine] {
+        assert_eq!(solved.angles, final_angles);
+        assert_eq!(rank_order(&solved.frame), rank_order(&direct));
+    }
+    assert_eq!(
+        rank_order(&selected_eight.frame),
+        rank_order(&selected_nine.frame),
+        "surface rank must not depend on which exact hinge is the selected hard driver"
     );
 }
 
@@ -763,6 +824,9 @@ fn single_exact_stack_preserves_non_exact_driver_context() {
     .result;
     assert_eq!(
         rank_order(&exact_preferred.frame),
-        rank_order(&before_preferred.frame)
+        rank_order(&before_preferred.frame),
+        "before angles={:?}; exact angles={:?}",
+        before_preferred.angles,
+        exact_preferred.angles
     );
 }

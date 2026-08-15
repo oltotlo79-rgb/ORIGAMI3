@@ -7,7 +7,7 @@
 //! ロック下ではstoreの状態更新と複製だけを行い、手順の再生や姿勢計算は
 //! ロックを解放してから実行する(`view_command` / `pose_solve` / `sequence_replay`)。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -19,11 +19,12 @@ use tauri::State;
 use crate::autosave;
 use crate::store::{
     DocumentStore, DocumentView, SpatialFoldSpec, add_layer_order_warning,
+    add_layer_order_warning_preserving_surface_authority,
     add_penetration_warning_for_intersections, attach_replay, flat_fold_notice_violations,
-    pose_flat_fold_notice_intersects, replay_flat_fold_notice_violations,
+    frame_surface_rank_order, pose_flat_fold_notice_intersects, replay_flat_fold_notice_violations,
 };
 use ori3_export::{CpSvgOptions, cp_png, cp_svg, diagram_pdf, diagram_svg_pages};
-use ori3_model::{CreasePattern, Driver, EdgeId, EditOp, Paper, SeqOp, VertexId};
+use ori3_model::{CreasePattern, Driver, EdgeId, EditOp, FaceId, Frame3D, Paper, SeqOp, VertexId};
 use ori3_propose::{Skeleton, generate, pack};
 use ori3_soft::{SoftMesh, SoftSettings};
 
@@ -75,6 +76,89 @@ fn soft_mesh(
         return None;
     }
     Some(ori3_soft::relax(cp, faces, frame, settings))
+}
+
+/// 保存手順から解決した完全な下→上順だけを、物理層と表示rankへ刻印する。
+///
+/// 保存済み順はstack liftと同一深度ownerの両方の正本。不完全・重複・別CP由来の
+/// 順序ならフレームを一切変えず、rigid側のcanonical fallbackを保つ。
+fn stamp_saved_layer_order(frame: &mut Frame3D, order: Option<&[FaceId]>) -> bool {
+    let Some(order) = order else {
+        return false;
+    };
+    if order.len() != frame.faces.len() {
+        return false;
+    }
+    let frame_ids = frame
+        .faces
+        .iter()
+        .map(|face| face.face)
+        .collect::<HashSet<_>>();
+    if frame_ids.len() != frame.faces.len() {
+        return false;
+    }
+    let ranks = order
+        .iter()
+        .enumerate()
+        .map(|(rank, &face)| Some((face, u32::try_from(rank).ok()?)))
+        .collect::<Option<HashMap<_, _>>>();
+    let Some(ranks) = ranks else {
+        return false;
+    };
+    if ranks.len() != order.len()
+        || ranks.len() != frame_ids.len()
+        || !frame_ids.iter().all(|face| ranks.contains_key(face))
+    {
+        return false;
+    }
+    for face in &mut frame.faces {
+        let rank = ranks[&face.face];
+        face.layer = rank;
+        face.surface_rank = rank;
+    }
+    true
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct PoseOverlapOrder {
+    order: Vec<FaceId>,
+    authoritative: bool,
+}
+
+fn pose_overlap_order(
+    frame: &Frame3D,
+    saved_order: Option<&[FaceId]>,
+    fallback_order: &[FaceId],
+) -> PoseOverlapOrder {
+    if let Some(saved) = saved_order
+        && saved.len() == frame.faces.len()
+        && {
+            let saved_ids = saved.iter().copied().collect::<HashSet<_>>();
+            let frame_ids = frame
+                .faces
+                .iter()
+                .map(|face| face.face)
+                .collect::<HashSet<_>>();
+            saved_ids.len() == saved.len()
+                && frame_ids.len() == frame.faces.len()
+                && saved_ids == frame_ids
+        }
+    {
+        return PoseOverlapOrder {
+            order: saved.to_vec(),
+            authoritative: true,
+        };
+    }
+    if let Some(canonical) = frame_surface_rank_order(frame) {
+        return PoseOverlapOrder {
+            order: canonical,
+            authoritative: true,
+        };
+    }
+    PoseOverlapOrder {
+        order: fallback_order.to_vec(),
+        authoritative: false,
+    }
 }
 
 /// 全値finiteの最良候補はそのまま表示し、数値が壊れた場合だけ直前形へ戻す。
@@ -318,10 +402,14 @@ pub fn pose_solve(
     preferred: Option<Vec<Driver>>,
     soft: Option<SoftSettings>,
     warm_seed: Option<Vec<Driver>>,
+    up_to: usize,
+    t: f64,
 ) -> Result<PoseOutcome, String> {
     guard(AssertUnwindSafe(|| {
-        let (cp, faces, stored_warm, overlap_enabled, penetration_enabled) =
+        let (doc, faces, stored_warm, overlap_enabled, penetration_enabled) =
             lock(&state).pose_inputs(); // 複製のみ、即ロック解放
+        let cp = &doc.cp;
+        let saved_order = ori3_layers::saved_layer_order_at(&doc, &faces, up_to, t);
         let preferred = preferred.unwrap_or_default();
         // 同じ辺が両方にあれば、現在操作中のhardを後から入れて優先する。
         // warm_seedは出発角であって要求ではないため含めない。
@@ -350,7 +438,7 @@ pub fn pose_solve(
                 .collect()
         });
         let motion = ori3_rigid::solve_motion(
-            &cp,
+            cp,
             &faces,
             &hard,
             targets.as_ref(),
@@ -358,47 +446,57 @@ pub fn pose_solve(
             penetration_enabled,
         );
         let contact_detected = motion.contact_detected;
-        let mut result = fallback_nonfinite_pose(&cp, &faces, warm, motion.result);
-        // 手順を持たない角度操作では初期層順序(面ID順)を上下の契約にする。
-        // 共有網頂点へ補正するので、折り目の接続は切れない。
-        let mut order: Vec<ori3_model::FaceId> = faces.iter().map(|face| face.id).collect();
-        order.sort_unstable();
-        ori3_soft::prevent_overlap(
-            &cp,
+        let mut result = fallback_nonfinite_pose(cp, &faces, warm, motion.result);
+        // 保存順がある形では接触補正も同じ上下契約を使う。無い自由角度操作では
+        // rigid canonical順を使い、それも検証できない場合だけFaceId順へfallbackする。
+        // 共有網頂点へ補正するので折り目は切れない。
+        let mut fallback_order: Vec<ori3_model::FaceId> =
+            faces.iter().map(|face| face.id).collect();
+        fallback_order.sort_unstable();
+        let overlap_order =
+            pose_overlap_order(&result.frame, saved_order.as_deref(), &fallback_order);
+        ori3_soft::prevent_overlap_with_order_authority(
+            cp,
             &faces,
             &mut result.frame,
-            &order,
-            &order,
-            0.5,
+            ori3_soft::OverlapOrderInput {
+                start: &overlap_order.order,
+                end: &overlap_order.order,
+                progress: 0.5,
+                authoritative: overlap_order.authoritative,
+            },
             &ori3_soft::OverlapSettings {
                 enabled: overlap_enabled,
                 ..Default::default()
             },
         );
+        // 接触補正の幾何を変え終えたあと、保存順をstack liftとowner rankの双方へ刻む。
+        // これにより保存順はsolver入力や折り枝にはならず、表示契約だけを決める。
+        stamp_saved_layer_order(&mut result.frame, saved_order.as_deref());
         let intersections = ori3_rigid::self_intersection_pairs(&result.frame);
         let suspect_hinges = ori3_rigid::suspect_hinges_for_intersections(
-            &cp,
+            cp,
             &faces,
             &intersections,
             &driver_hinges,
         );
         let _ = add_penetration_warning_for_intersections(
-            &cp,
+            cp,
             &faces,
             &mut result.frame,
             false,
             &intersections,
         ); // SIM-007
         // たわみもロックの外で計算する(規約どおり)
-        let mesh = soft_mesh(&cp, &faces, &result.frame, soft.as_ref());
+        let mesh = soft_mesh(cp, &faces, &result.frame, soft.as_ref());
         let paper_intersects = pose_flat_fold_notice_intersects(
-            &cp,
+            cp,
             &requested_targets,
             contact_detected,
             !intersections.is_empty(),
         );
         let flat_fold_violations =
-            flat_fold_notice_violations(&cp, &requested_targets, &result.angles, paper_intersects);
+            flat_fold_notice_violations(cp, &requested_targets, &result.angles, paper_intersects);
         if result.closure_rms.is_finite() && result.angles.values().all(|angle| angle.is_finite()) {
             lock(&state).store_pose_angles(result.angles.clone()); // 短いロックで書き戻し
         }
@@ -428,26 +526,70 @@ pub fn sequence_replay(
     guard(AssertUnwindSafe(|| {
         let (doc, faces) = lock(&state).replay_inputs(); // 複製のみ、即ロック解放
         let mut result = ori3_layers::replay_with_faces(&doc, &faces, up_to, t);
+        let saved_order = ori3_layers::saved_layer_order_at(&doc, &faces, up_to, t);
+        let canonical_order = saved_order
+            .is_none()
+            .then(|| frame_surface_rank_order(&result.frame))
+            .flatten();
         let completed = !t.is_finite() || t >= 1.0;
         let mut penetration_warnings: Vec<&'static str> = Vec::new();
-        if completed
-            && let Some(warning) = add_layer_order_warning(&doc.cp, &faces, &mut result.frame)
-        {
-            penetration_warnings.push(warning);
+        if completed && saved_order.is_none() {
+            let warning = if let Some(order) = &canonical_order {
+                add_layer_order_warning_preserving_surface_authority(
+                    &doc.cp,
+                    &faces,
+                    &mut result.frame,
+                    order,
+                )
+            } else {
+                add_layer_order_warning(&doc.cp, &faces, &mut result.frame)
+            };
+            if let Some(warning) = warning {
+                penetration_warnings.push(warning);
+            }
         }
         let transition = result.layer_transition.clone();
-        ori3_soft::prevent_overlap(
-            &doc.cp,
-            &faces,
-            &mut result.frame,
-            &transition.start,
-            &transition.end,
-            transition.progress,
-            &ori3_soft::OverlapSettings {
-                enabled: doc.display.overlap_prevention_enabled,
-                ..Default::default()
-            },
-        );
+        let overlap_settings = ori3_soft::OverlapSettings {
+            enabled: doc.display.overlap_prevention_enabled,
+            ..Default::default()
+        };
+        if transition.order_is_authoritative {
+            ori3_soft::prevent_overlap_with_order_authority(
+                &doc.cp,
+                &faces,
+                &mut result.frame,
+                ori3_soft::OverlapOrderInput {
+                    start: &transition.start,
+                    end: &transition.end,
+                    progress: transition.progress,
+                    authoritative: true,
+                },
+                &overlap_settings,
+            );
+        } else if let Some(order) = &canonical_order {
+            ori3_soft::prevent_overlap_with_order_authority(
+                &doc.cp,
+                &faces,
+                &mut result.frame,
+                ori3_soft::OverlapOrderInput {
+                    start: order,
+                    end: order,
+                    progress: transition.progress,
+                    authoritative: true,
+                },
+                &overlap_settings,
+            );
+        } else {
+            ori3_soft::prevent_overlap(
+                &doc.cp,
+                &faces,
+                &mut result.frame,
+                &transition.start,
+                &transition.end,
+                transition.progress,
+                &overlap_settings,
+            );
+        }
         let intersections = ori3_rigid::self_intersection_pairs(&result.frame);
         let contact_detected = !intersections.is_empty();
         result.suspect_hinges = ori3_rigid::suspect_hinges_for_intersections(
@@ -722,8 +864,8 @@ fn export_files(
 
 #[cfg(test)]
 mod tests {
-    use super::{guard, proposal_generate};
-    use ori3_model::Paper;
+    use super::{guard, pose_overlap_order, proposal_generate, stamp_saved_layer_order};
+    use ori3_model::{Face3D, Frame3D, Paper};
     use ori3_propose::{Skeleton, SkeletonNode};
     use std::panic::AssertUnwindSafe;
 
@@ -900,6 +1042,106 @@ mod tests {
         assert_eq!(mesh.triangles.len(), mesh.triangle_layers.len());
         // 分割しているので、元の面(1枚=三角形2つ)より細かくなる
         assert!(mesh.triangles.len() > 2, "分割されていない");
+    }
+
+    #[test]
+    fn saved_layer_order_stamp_is_validated_and_updates_both_display_fields() {
+        let mut frame = Frame3D {
+            faces: vec![
+                Face3D {
+                    face: 10,
+                    polygon: Vec::new(),
+                    layer: 7,
+                    surface_rank: 0,
+                    mirrored: false,
+                },
+                Face3D {
+                    face: 20,
+                    polygon: Vec::new(),
+                    layer: 3,
+                    surface_rank: 1,
+                    mirrored: true,
+                },
+            ],
+            warnings: Vec::new(),
+        };
+        assert!(stamp_saved_layer_order(&mut frame, Some(&[20, 10])));
+        assert_eq!(frame.faces[0].surface_rank, 1);
+        assert_eq!(frame.faces[1].surface_rank, 0);
+        assert_eq!(
+            frame
+                .faces
+                .iter()
+                .map(|face| face.layer)
+                .collect::<Vec<_>>(),
+            vec![1, 0],
+            "保存順はstack liftにも同じ下→上順を渡す"
+        );
+
+        let before = frame
+            .faces
+            .iter()
+            .map(|face| (face.layer, face.surface_rank))
+            .collect::<Vec<_>>();
+        assert!(!stamp_saved_layer_order(&mut frame, Some(&[10, 10])));
+        assert_eq!(
+            frame
+                .faces
+                .iter()
+                .map(|face| (face.layer, face.surface_rank))
+                .collect::<Vec<_>>(),
+            before,
+            "重複した順序ではcanonical fallbackを変えない"
+        );
+        assert!(!stamp_saved_layer_order(&mut frame, None));
+    }
+
+    #[test]
+    fn pose_overlap_uses_saved_then_canonical_then_untrusted_fallback() {
+        let frame = Frame3D {
+            faces: vec![
+                Face3D {
+                    face: 10,
+                    polygon: Vec::new(),
+                    layer: 0,
+                    surface_rank: 1,
+                    mirrored: false,
+                },
+                Face3D {
+                    face: 20,
+                    polygon: Vec::new(),
+                    layer: 0,
+                    surface_rank: 0,
+                    mirrored: false,
+                },
+            ],
+            warnings: Vec::new(),
+        };
+        let saved = [10, 20];
+        let fallback = [10, 20];
+        let from_saved = pose_overlap_order(&frame, Some(&saved), &fallback);
+        assert_eq!(from_saved.order, saved);
+        assert!(
+            from_saved.authoritative,
+            "FaceId順でも保存authorityを失わない"
+        );
+
+        let from_canonical = pose_overlap_order(&frame, None, &fallback);
+        assert_eq!(from_canonical.order, vec![20, 10]);
+        assert!(from_canonical.authoritative);
+
+        let invalid_saved = pose_overlap_order(&frame, Some(&[10, 10]), &fallback);
+        assert_eq!(
+            invalid_saved, from_canonical,
+            "不正な保存順はcanonicalへ戻す"
+        );
+
+        let mut invalid_rank = frame;
+        invalid_rank.faces[0].surface_rank = 0;
+        invalid_rank.faces[1].surface_rank = 0;
+        let untrusted = pose_overlap_order(&invalid_rank, None, &fallback);
+        assert_eq!(untrusted.order, fallback);
+        assert!(!untrusted.authoritative);
     }
 
     #[test]

@@ -31,8 +31,9 @@ use ori3_model::{CreasePattern, EPS, EdgeId, Face3D, FaceId, Frame3D, VertexId};
 #[derive(Clone, Debug)]
 pub struct FoldedFrame {
     pub transforms: HashMap<FaceId, (DMat3, DVec3)>,
-    /// 現在角から完全折りの各ヒンジだけを0.001°展開側へ戻した、重なり順用の姿勢。
-    pub(crate) surface_probe_transforms: HashMap<FaceId, (DMat3, DVec3)>,
+    /// 平坦な展開図から現在角まで、全ヒンジを同じ角度checkpointまで動かした
+    /// 重なり順用の経路。部分折りは最終角へ達した後、その角度を維持する。
+    pub(crate) surface_path_transforms: Vec<HashMap<FaceId, (DMat3, DVec3)>>,
     /// 完全折りのヒンジがあり、面積を持つ共平面重なりが生じ得るか。
     pub(crate) has_surface_stack: bool,
     /// 根面から折り木をたどった鏡映回数の偶奇。
@@ -244,19 +245,22 @@ pub(crate) fn fold_frame(forest: &Forest, faces: &[Face], angles_rad: &[f64]) ->
         (angle.abs() - std::f64::consts::PI).abs() <= crate::surface_order::EXACT_FLAT_EPS_RAD
     };
     let has_surface_stack = angles_rad.iter().copied().any(is_exact_stack);
-    let probe_tf = if has_surface_stack {
-        let probe_delta = crate::surface_order::SURFACE_APPROACH_DEG.to_radians();
-        let probe_angles = angles_rad
+    let surface_path_transforms = if has_surface_stack {
+        crate::surface_order::SURFACE_PATH_CHECKPOINT_DEG
             .iter()
-            .map(|&angle| {
-                if is_exact_stack(angle) {
-                    angle - angle.signum() * probe_delta
-                } else {
-                    angle
-                }
+            .map(|checkpoint| {
+                let checkpoint = checkpoint.to_radians();
+                let path_angles = angles_rad
+                    .iter()
+                    .map(|angle| angle.signum() * angle.abs().min(checkpoint))
+                    .collect::<Vec<_>>();
+                propagate_with(forest, faces.len(), &path_angles)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, transform)| (faces[index].id, transform))
+                    .collect()
             })
-            .collect::<Vec<_>>();
-        propagate_with(forest, faces.len(), &probe_angles)
+            .collect()
     } else {
         Vec::new()
     };
@@ -280,15 +284,7 @@ pub(crate) fn fold_frame(forest: &Forest, faces: &[Face], angles_rad: &[f64]) ->
             .enumerate()
             .map(|(i, f)| (f.id, tf[i]))
             .collect(),
-        surface_probe_transforms: if has_surface_stack {
-            faces
-                .iter()
-                .enumerate()
-                .map(|(i, f)| (f.id, probe_tf[i]))
-                .collect()
-        } else {
-            HashMap::new()
-        },
+        surface_path_transforms,
         has_surface_stack,
         mirrored: faces
             .iter()
@@ -365,7 +361,7 @@ pub(crate) fn to_frame3d_with_surface_order(
     let order = if derive_surface_order && frame.has_surface_stack {
         crate::surface_order::derive_surface_order(
             faces,
-            &frame.surface_probe_transforms,
+            &frame.surface_path_transforms,
             &frame.transforms,
             &output,
             &previous_order,

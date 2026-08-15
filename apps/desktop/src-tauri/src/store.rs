@@ -14,7 +14,7 @@
 //! 導出(validate/extract_faces)は候補Documentに対して先に実行し、成功した場合のみ
 //! 状態を確定する。導出がpanicしてもstoreは直前の整合状態を保つ(guardがErr化する)。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -618,21 +618,22 @@ impl DocumentStore {
         view
     }
 
-    /// pose_solveの入力(CP・導出済みfaces・前回解・2種類の接触設定)を取り出す。
+    /// pose_solveの入力(Document・導出済みfaces・前回解・2種類の接触設定)を取り出す。
+    /// Documentは現在の再生位置に有効な保存済みlayer_orderを導出するために使う。
     /// facesは編集時に導出済みのキャッシュの流用で、extract_facesを再実行しない。
     /// 設計規約: ロック中に重い計算をしないため、コマンド層はこの複製を取って
     /// 即ロックを解放し、solveはロックの外で実行する。
     pub fn pose_inputs(
         &self,
     ) -> (
-        CreasePattern,
+        Document,
         Vec<Face>,
         Option<HashMap<EdgeId, f64>>,
         bool,
         bool,
     ) {
         (
-            self.doc.cp.clone(),
+            self.doc.clone(),
             self.faces.clone(),
             self.pose_angles.clone(),
             self.doc.display.overlap_prevention_enabled,
@@ -835,6 +836,30 @@ pub(crate) fn replay_flat_fold_notice_violations(
     flat_fold_notice_violations(cp, targets, angles, !intersections.is_empty())
 }
 
+/// `surface_rank` が全面の0始まり連番なら、下→上の面順へ戻す。
+///
+/// 古いsnapshotの全0や、欠落・重複faceを物理順として信頼しないため、face IDとrankの
+/// 両方が完全に一意で、rankがちょうど`0..faces.len()`のときだけ返す。
+pub(crate) fn frame_surface_rank_order(frame: &Frame3D) -> Option<Vec<FaceId>> {
+    let mut face_ids = HashSet::with_capacity(frame.faces.len());
+    let mut ranked = Vec::with_capacity(frame.faces.len());
+    for face in &frame.faces {
+        if !face_ids.insert(face.face) {
+            return None;
+        }
+        ranked.push((face.surface_rank, face.face));
+    }
+    ranked.sort_unstable();
+    if ranked
+        .iter()
+        .enumerate()
+        .any(|(index, (rank, _))| u32::try_from(index).ok() != Some(*rank))
+    {
+        return None;
+    }
+    Some(ranked.into_iter().map(|(_, face)| face).collect())
+}
+
 /// ビューへ手順の自動再生結果(立体・飛ばした手順・警告)を載せる
 /// (SEQ-004「展開図編集後、手順を自動再生して最新状態を表示」)。
 /// 手順が空のときは再生するものが無いので `frame: None` のまま
@@ -849,6 +874,11 @@ pub fn attach_replay(view: &mut DocumentView) {
     }
     let up_to = view.doc.sequence.len();
     let mut replayed = ori3_layers::replay_with_faces(&view.doc, &view.faces, up_to, 1.0);
+    let saved_order = ori3_layers::saved_layer_order_at(&view.doc, &view.faces, up_to, 1.0);
+    let canonical_order = saved_order
+        .is_none()
+        .then(|| frame_surface_rank_order(&replayed.frame))
+        .flatten();
     view.sequence_targets = replayed.sequence_targets.clone();
     view.angles = replayed.hinge_angles.clone();
     view.relaxations = replayed.relaxations.clone();
@@ -859,22 +889,63 @@ pub fn attach_replay(view: &mut DocumentView) {
     view.best_effort = replayed.best_effort;
     view.converged = replayed.converged;
     let mut penetration_warnings: Vec<&'static str> = Vec::new();
-    if let Some(warning) = add_layer_order_warning(&view.doc.cp, &view.faces, &mut replayed.frame) {
-        penetration_warnings.push(warning);
+    if saved_order.is_none() {
+        let warning = if let Some(order) = &canonical_order {
+            add_layer_order_warning_preserving_surface_authority(
+                &view.doc.cp,
+                &view.faces,
+                &mut replayed.frame,
+                order,
+            )
+        } else {
+            add_layer_order_warning(&view.doc.cp, &view.faces, &mut replayed.frame)
+        };
+        if let Some(warning) = warning {
+            penetration_warnings.push(warning);
+        }
     }
     let transition = replayed.layer_transition.clone();
-    ori3_soft::prevent_overlap(
-        &view.doc.cp,
-        &view.faces,
-        &mut replayed.frame,
-        &transition.start,
-        &transition.end,
-        transition.progress,
-        &ori3_soft::OverlapSettings {
-            enabled: view.doc.display.overlap_prevention_enabled,
-            ..Default::default()
-        },
-    );
+    let overlap_settings = ori3_soft::OverlapSettings {
+        enabled: view.doc.display.overlap_prevention_enabled,
+        ..Default::default()
+    };
+    if transition.order_is_authoritative {
+        ori3_soft::prevent_overlap_with_order_authority(
+            &view.doc.cp,
+            &view.faces,
+            &mut replayed.frame,
+            ori3_soft::OverlapOrderInput {
+                start: &transition.start,
+                end: &transition.end,
+                progress: transition.progress,
+                authoritative: true,
+            },
+            &overlap_settings,
+        );
+    } else if let Some(order) = &canonical_order {
+        ori3_soft::prevent_overlap_with_order_authority(
+            &view.doc.cp,
+            &view.faces,
+            &mut replayed.frame,
+            ori3_soft::OverlapOrderInput {
+                start: order,
+                end: order,
+                progress: transition.progress,
+                authoritative: true,
+            },
+            &overlap_settings,
+        );
+    } else {
+        ori3_soft::prevent_overlap(
+            &view.doc.cp,
+            &view.faces,
+            &mut replayed.frame,
+            &transition.start,
+            &transition.end,
+            transition.progress,
+            &overlap_settings,
+        );
+    }
     let intersections = ori3_rigid::self_intersection_pairs(&replayed.frame);
     view.flat_fold_violations = replay_flat_fold_notice_violations(
         &view.doc.cp,
@@ -985,6 +1056,23 @@ pub(crate) fn add_layer_order_warning(
         .warnings
         .push(ori3_layers::FOLD_PENETRATION_WARNING.to_string());
     Some(ori3_layers::FOLD_PENETRATION_WARNING)
+}
+
+/// 形からの旧layer補助を適用しても、検証済みのsurface authorityだけは維持する。
+///
+/// 保存順が無い自由角度では、rigidが最終状態から導出した`surface_rank`が正本。
+/// [`add_layer_order_warning`] はstack lift用の`layer`を補助できる一方でrankも同時に
+/// 書き換えるため、その直後に同じframe由来のcanonical順を戻す。
+pub(crate) fn add_layer_order_warning_preserving_surface_authority(
+    cp: &CreasePattern,
+    faces: &[Face],
+    frame: &mut Frame3D,
+    canonical_order: &[FaceId],
+) -> Option<&'static str> {
+    let warning = add_layer_order_warning(cp, faces, frame);
+    ori3_rigid::stamp_surface_order(frame, canonical_order)
+        .expect("検証済みcanonical順は同じframeへ刻印できる");
+    warning
 }
 
 fn check_paper(paper: &Paper) -> Result<(), String> {
@@ -2206,8 +2294,8 @@ mod tests {
         assert_eq!(store.pose_inputs().2, None);
 
         store.store_pose_angles(HashMap::from([(6u32, 90.0f64)]));
-        let (cp, faces, warm, overlap_enabled, penetration_enabled) = store.pose_inputs();
-        assert_eq!(cp, store.doc.cp);
+        let (doc, faces, warm, overlap_enabled, penetration_enabled) = store.pose_inputs();
+        assert_eq!(doc, store.doc);
         assert_eq!(faces.len(), 1, "正方形1面のはず");
         assert_eq!(warm, Some(HashMap::from([(6u32, 90.0f64)])));
         assert!(overlap_enabled, "重なり防止は既定オン");
@@ -2908,6 +2996,123 @@ mod tests {
                 .any(|warning| warning == ori3_layers::FOLD_PENETRATION_WARNING),
             "直したのに貫通の警告が残っている: {:?}",
             frame.warnings
+        );
+    }
+
+    #[test]
+    fn final_state_layer_heuristic_preserves_rigid_surface_authority() {
+        let mut store = square_store();
+        store
+            .apply_seq(fold_op(0, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5]))
+            .unwrap();
+        let faces = ori3_cp::extract_faces(&store.doc.cp);
+        let mut frame = ori3_layers::replay(&store.doc, 1, 1.0).frame;
+
+        let mut canonical_order = frame_surface_rank_order(&frame).expect("完全なrank順");
+        canonical_order.reverse();
+        ori3_rigid::stamp_surface_order(&mut frame, &canonical_order).unwrap();
+        for face in &mut frame.faces {
+            face.layer = 1 - face.layer;
+        }
+        assert!(
+            ori3_rigid::layer_order_conflicts(&store.doc.cp, &faces, &frame),
+            "旧heuristicが実際にlayerを直すfixture"
+        );
+
+        let _ = add_layer_order_warning_preserving_surface_authority(
+            &store.doc.cp,
+            &faces,
+            &mut frame,
+            &canonical_order,
+        );
+
+        assert!(
+            !ori3_rigid::layer_order_conflicts(&store.doc.cp, &faces, &frame),
+            "stack lift用layerの補助は残す"
+        );
+        assert_eq!(
+            frame_surface_rank_order(&frame),
+            Some(canonical_order),
+            "最終状態heuristicがrigid canonical surface rankを消さない"
+        );
+    }
+
+    #[test]
+    fn frame_surface_rank_order_rejects_non_permutations() {
+        let mut frame = Frame3D {
+            faces: vec![
+                Face3D {
+                    face: 10,
+                    polygon: Vec::new(),
+                    layer: 0,
+                    surface_rank: 1,
+                    mirrored: false,
+                },
+                Face3D {
+                    face: 20,
+                    polygon: Vec::new(),
+                    layer: 0,
+                    surface_rank: 0,
+                    mirrored: false,
+                },
+            ],
+            warnings: Vec::new(),
+        };
+        assert_eq!(frame_surface_rank_order(&frame), Some(vec![20, 10]));
+
+        frame.faces[0].surface_rank = 0;
+        assert_eq!(frame_surface_rank_order(&frame), None, "rank重複を拒否");
+        frame.faces[0].surface_rank = 1;
+        frame.faces[1].face = 10;
+        assert_eq!(frame_surface_rank_order(&frame), None, "face重複を拒否");
+    }
+
+    #[test]
+    fn attach_replay_does_not_replace_saved_layer_order_with_shape_fallback() {
+        let mut store = square_store();
+        store
+            .apply_seq(fold_op(0, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5]))
+            .unwrap();
+        store.doc.sequence[0]
+            .layer_order
+            .as_mut()
+            .expect("平坦折りは保存順を持つ")
+            .reverse();
+        let faces = ori3_cp::extract_faces(&store.doc.cp);
+        let expected = ori3_layers::saved_layer_order_at(&store.doc, &faces, 1, 1.0)
+            .expect("反転した保存順を解決できる");
+        let mut view = build_view(&store.doc, Vec::new());
+
+        attach_replay(&mut view);
+
+        let frame = view.frame.expect("手順を自動再生する");
+        let mut actual_rank = frame
+            .faces
+            .iter()
+            .map(|face| (face.surface_rank, face.face))
+            .collect::<Vec<_>>();
+        actual_rank.sort_unstable();
+        let mut actual_layer = frame
+            .faces
+            .iter()
+            .map(|face| (face.layer, face.face))
+            .collect::<Vec<_>>();
+        actual_layer.sort_unstable();
+        assert_eq!(
+            actual_rank
+                .into_iter()
+                .map(|(_, face)| face)
+                .collect::<Vec<_>>(),
+            expected.clone(),
+            "保存済みlayer_orderをowner rankで形fallbackに上書きしない"
+        );
+        assert_eq!(
+            actual_layer
+                .into_iter()
+                .map(|(_, face)| face)
+                .collect::<Vec<_>>(),
+            expected,
+            "保存済みlayer_orderをstack liftでも形fallbackに上書きしない"
         );
     }
 

@@ -324,10 +324,57 @@ pub fn prevent_overlap(
     progress: f64,
     settings: &OverlapSettings,
 ) -> OverlapReport {
+    prevent_overlap_with_order_authority(
+        cp,
+        faces,
+        frame,
+        OverlapOrderInput {
+            start: start_order,
+            end: end_order,
+            progress,
+            authoritative: false,
+        },
+        settings,
+    )
+}
+
+/// 接触補正へ渡す開始・完了順と、その出所の契約。
+#[derive(Clone, Copy, Debug)]
+pub struct OverlapOrderInput<'a> {
+    /// 補間開始時の下→上順。
+    pub start: &'a [FaceId],
+    /// 補間完了時の下→上順。
+    pub end: &'a [FaceId],
+    /// 開始から完了までの進行度。
+    pub progress: f64,
+    /// 保存済み順または検証済みrigid canonical順なら`true`。
+    pub authoritative: bool,
+}
+
+/// [`prevent_overlap`] と同じ補正を、層順序の出所を明示して行う。
+///
+/// [`OverlapOrderInput::authoritative`] は、保存済み `layer_order` またはrigidの検証済み
+/// `surface_rank` から作った完全順を渡すときだけ `true` にする。正当な物理順が
+/// FaceId昇順と偶然一致しても、値だけからfallbackと誤認して補正を省かないための契約。
+/// 不完全・重複した順序は、この値にかかわらず従来どおり拒否する。
+pub fn prevent_overlap_with_order_authority(
+    cp: &CreasePattern,
+    faces: &[Face],
+    frame: &mut Frame3D,
+    order: OverlapOrderInput<'_>,
+    settings: &OverlapSettings,
+) -> OverlapReport {
+    let OverlapOrderInput {
+        start: start_order,
+        end: end_order,
+        progress,
+        authoritative: order_is_authoritative,
+    } = order;
     if !settings.enabled || settings.iterations == 0 || faces.len() < 2 || is_flat_frame(frame) {
         return OverlapReport::default();
     }
-    if uses_untrusted_face_id_order(faces, frame, start_order, end_order) {
+    if !order_is_authoritative && uses_untrusted_face_id_order(faces, frame, start_order, end_order)
+    {
         return OverlapReport {
             skipped_untrusted_layer_order: true,
             ..OverlapReport::default()
@@ -849,6 +896,100 @@ mod overlap_tests {
             assert!(!report.attempted);
             assert!(!report.applied);
             assert_eq!(after, before, "{order:?}をFaceIdで補完しない");
+        }
+    }
+
+    #[test]
+    fn explicit_face_id_order_authority_is_not_mistaken_for_a_fallback() {
+        let (cp, faces, mut frame) = penetrating_crease();
+        for face in &mut frame.faces {
+            face.layer = 0;
+        }
+        let order = [0, 1];
+
+        let mut inferred = frame.clone();
+        let inferred_report = prevent_overlap(
+            &cp,
+            &faces,
+            &mut inferred,
+            &order,
+            &order,
+            0.5,
+            &OverlapSettings::default(),
+        );
+        assert!(inferred_report.skipped_untrusted_layer_order);
+
+        let report = prevent_overlap_with_order_authority(
+            &cp,
+            &faces,
+            &mut frame,
+            OverlapOrderInput {
+                start: &order,
+                end: &order,
+                progress: 0.5,
+                authoritative: true,
+            },
+            &OverlapSettings::default(),
+        );
+        assert!(
+            !report.skipped_untrusted_layer_order,
+            "保存済み順がFaceId順でも信頼済みとして扱う: {report:?}"
+        );
+        assert!(report.attempted, "信頼済み順で補正候補を作る: {report:?}");
+    }
+
+    #[test]
+    fn explicit_authority_does_not_accept_an_incomplete_or_duplicate_order() {
+        for order in [vec![0], vec![0, 0]] {
+            let (cp, faces, mut frame) = penetrating_crease();
+            for face in &mut frame.faces {
+                face.layer = 0;
+            }
+            let before = frame
+                .faces
+                .iter()
+                .map(|face| {
+                    (
+                        face.face,
+                        face.polygon.clone(),
+                        face.layer,
+                        face.surface_rank,
+                        face.mirrored,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let before_warnings = frame.warnings.clone();
+            let report = prevent_overlap_with_order_authority(
+                &cp,
+                &faces,
+                &mut frame,
+                OverlapOrderInput {
+                    start: &order,
+                    end: &order,
+                    progress: 0.5,
+                    authoritative: true,
+                },
+                &OverlapSettings::default(),
+            );
+            assert!(
+                report.skipped_untrusted_layer_order,
+                "{order:?}: {report:?}"
+            );
+            let after = frame
+                .faces
+                .iter()
+                .map(|face| {
+                    (
+                        face.face,
+                        face.polygon.clone(),
+                        face.layer,
+                        face.surface_rank,
+                        face.mirrored,
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(after, before, "不正な順序ではframeを変えない");
+            assert_eq!(frame.warnings, before_warnings);
         }
     }
 
