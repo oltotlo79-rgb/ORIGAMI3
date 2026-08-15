@@ -972,6 +972,64 @@ describe("Viewer3D(ねじり折りの中央多角形を指す)", () => {
   });
 });
 
+describe("Viewer3D(層操作の開閉軸の案内)", () => {
+  /** 層操作(Simple)を選び、既定の開閉モード(reflect)のまま何も選んでいない状態。 */
+  function seedLayerMotion() {
+    useAppStore.setState({
+      doc: DOC,
+      faces: FACES,
+      hinges: new Set<number>(),
+      frame3d: null,
+      activeTool: "technique",
+      currentStep: null,
+      playT: 1,
+      playing: false,
+      drivers: new Map(),
+      errorMessage: null,
+      foldDraft: null,
+      techniqueDraft: {
+        kind: "Simple",
+        flap: [],
+        flapCandidates: [],
+        flapPickCount: 1,
+        line: null,
+        movingSide: "right",
+        widthMm: 10,
+        polygon: [],
+        center: null,
+        referencePoint: null,
+        twistDeg: 30,
+        openToBack: false,
+        motionMode: "reflect",
+        motionTurn: "Keep",
+        motionDirection: "Up",
+        motionAnchor: 0,
+        motionReverseLayers: false,
+        motionAxisEdgeId: null,
+        motionParts: [],
+        docEpoch: 0,
+        stepCount: 0,
+        upTo: 0,
+      },
+    });
+  }
+
+  beforeEach(() => {
+    stubLayout();
+    seedLayerMotion();
+  });
+  afterEach(() => cleanup());
+
+  it("案内は既にある折り目をクリックすると教え、ドラッグでは軸を決められると読めない", () => {
+    const canvas = renderViewer();
+    const tooltip = canvas.getAttribute("data-tooltip") ?? "";
+    // 実装(appStore.ts)はドラッグで引いた線の折り目IDを空にし、既存の折り目の
+    // クリックだけを開閉軸として受け付ける。案内文もそれに合わせている必要がある。
+    expect(tooltip).toContain("既存の折り目をクリック");
+    expect(tooltip).not.toMatch(/ドラッグ/);
+  });
+});
+
 /**
  * 合わせて折る(基準合わせ)の画面テスト。
  * カメラは紙(0..1の正方形)を真上から見ているので、画面の位置と紙の座標が対応する:

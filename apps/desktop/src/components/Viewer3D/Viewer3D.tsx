@@ -1515,7 +1515,7 @@ export function Viewer3D({ fitRef }: Props) {
             ? "紙をドラッグして全体を連動させます。右ドラッグで視点を回します"
             : activeTool === "technique"
             ? techniqueDraft?.kind === "Simple"
-              ? "紙面を選び、折り目またはドラッグで開閉軸を指定します"
+              ? "紙面をクリックして対象層を選び、開閉なら既存の折り目をクリックして軸を選びます"
               : techniqueDraft?.kind === "Twist"
               ? "中央の形の角を3つ以上、順に選びます"
               : "紙の層を選び、ドラッグで折り線を引きます"
