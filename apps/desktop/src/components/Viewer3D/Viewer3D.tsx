@@ -63,6 +63,8 @@ import {
 import { deriveSelectedEdgeHighlights } from "./edgeHighlight";
 import { ViewerOperationHint } from "./ViewerOperationHint";
 import { PaperActionTip } from "./PaperActionTip";
+import { ViewCube, type ViewCubeCameraControl } from "./ViewCube.jsx";
+import { trackedOrbitTarget } from "./viewCube";
 
 /** 畳み平面の線分列を強調表示用の線分へ(紙より少しだけ浮かせる) */
 function toHighlight(segments: [Vec2, Vec2][]): HingeSegment[] {
@@ -360,6 +362,8 @@ function pullBlockedOf(s: ReturnType<typeof useAppStore.getState>): string | nul
 export function Viewer3D({ fitRef }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const sceneRef = useRef<Viewer3DScene | null>(null);
+  /** OrbitControlsが内部に持つ注視点を、公開済みcameraの変化から追跡する。 */
+  const orbitTargetRef = useRef(new THREE.Vector3());
   /** 表示中のたわみの網(Three.jsの資源なのでストアには入れずrefで持つ) */
   const softRef = useRef<SoftContent | null>(null);
   /** CP上の物理辺を、表示中のたわみ網へ厳密に写す対応。網の形が変わるまで再利用する。 */
@@ -450,7 +454,24 @@ export function Viewer3D({ fitRef }: Props) {
     const scene = createScene(canvas);
     sceneRef.current = scene;
     scene.resize(canvas.clientWidth, canvas.clientHeight);
+    const rememberOrbitTarget = () => {
+      // OrbitControlsのnative listenerが同じイベントを処理し終えた姿勢を読む。
+      queueMicrotask(() => {
+        if (sceneRef.current !== scene) return;
+        orbitTargetRef.current.copy(
+          trackedOrbitTarget(
+            orbitTargetRef.current,
+            scene.camera.position,
+            scene.camera.getWorldDirection(new THREE.Vector3()),
+          ),
+        );
+      });
+    };
+    canvas.addEventListener("pointermove", rememberOrbitTarget);
+    canvas.addEventListener("wheel", rememberOrbitTarget);
     return () => {
+      canvas.removeEventListener("pointermove", rememberOrbitTarget);
+      canvas.removeEventListener("wheel", rememberOrbitTarget);
       sceneRef.current = null;
       softRef.current = null;
       softHighlightRef.current = null;
@@ -815,6 +836,7 @@ export function Viewer3D({ fitRef }: Props) {
     if (!scene || !current) return;
     const [w, h] = paperExtent(current);
     scene.resetCamera(w, h);
+    orbitTargetRef.current.set(w / 2, h / 2, 0);
   }, []);
 
   // 新規作成・ファイルを開いた直後は紙全体が見える位置へカメラを戻す
@@ -829,6 +851,32 @@ export function Viewer3D({ fitRef }: Props) {
       fitRef.current = null;
     };
   }, [fitRef, fitCamera]);
+
+  const getViewCubeCamera = useCallback(
+    () => sceneRef.current?.camera ?? null,
+    [],
+  );
+
+  const prepareViewCubeCamera = useCallback((): ViewCubeCameraControl | null => {
+    const scene = sceneRef.current;
+    if (!scene) return null;
+    orbitTargetRef.current.copy(
+      trackedOrbitTarget(
+        orbitTargetRef.current,
+        scene.camera.position,
+        scene.camera.getWorldDirection(new THREE.Vector3()),
+      ),
+    );
+    return {
+      camera: scene.camera,
+      target: orbitTargetRef.current.clone(),
+      canvasHeight: Math.max(canvasRef.current?.clientHeight ?? 1, 1),
+    };
+  }, []);
+
+  const renderViewCubeCamera = useCallback(() => {
+    sceneRef.current?.render();
+  }, []);
 
   // 区画サイズの変化に追従
   useEffect(() => {
@@ -1502,6 +1550,11 @@ export function Viewer3D({ fitRef }: Props) {
         aligning={alignDraft !== null}
       />
       <PaperActionTip />
+      <ViewCube
+        getCamera={getViewCubeCamera}
+        prepareCameraControl={prepareViewCubeCamera}
+        requestRender={renderViewCubeCamera}
+      />
       {/* 立体だけを最初の視点へ戻す小さなボタン(ツールレールは増やさない)。
           上端は警告バッジが使うので、区画の右下の隅に置く */}
       <button

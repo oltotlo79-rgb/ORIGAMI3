@@ -2183,6 +2183,7 @@ html[data-origami3-capture-view="both"] .main-row {
 
 html[data-origami3-capture-view] .viewer-operation-hint,
 html[data-origami3-capture-view] .paper-action-tip,
+html[data-origami3-capture-view] .view-cube,
 html[data-origami3-capture-view] .viewer-reset,
 html[data-origami3-capture-view] .status-badge,
 html[data-origami3-capture-view] .suspect-hinge-guide {
@@ -2196,8 +2197,8 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   align-items: center;
   gap: var(--sp-2);
   top: var(--sp-4);
-  right: var(--sp-4);
-  max-width: min(430px, calc(100% - 2 * var(--sp-4)));
+  right: 120px;
+  max-width: min(430px, calc(100% - 132px));
   padding: var(--sp-2) var(--sp-5);
   border: var(--floating-border-width) solid var(--color-on-solid);
   border-radius: var(--radius-pill);
@@ -2237,8 +2238,8 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 .suspect-hinge-guide {
   position: absolute;
   top: calc(var(--sp-4) + 42px);
-  right: var(--sp-4);
-  max-width: min(330px, calc(100% - var(--sp-8)));
+  right: 120px;
+  max-width: min(330px, calc(100% - 132px));
   padding: var(--sp-2) var(--sp-4);
   border: var(--floating-border-width) solid var(--color-collision-border);
   border-radius: var(--radius-pill);
@@ -2274,7 +2275,7 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   position: absolute;
   top: var(--sp-5);
   left: var(--sp-5);
-  right: 112px;
+  right: 120px;
   width: auto;
   max-width: 430px;
   box-sizing: border-box;
@@ -2474,6 +2475,104 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 .viewer-reset:active {
   box-shadow: none;
   transform: var(--minor-active-transform);
+}
+
+/* 3D区画右上の視点立方体。常設区画を増やさずcanvasへ重ねる。 */
+.view-cube {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 5;
+  display: grid;
+  width: 96px;
+  height: 96px;
+  place-items: center;
+  perspective: 400px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.view-cube[data-dragging="true"] {
+  cursor: grabbing;
+}
+
+.view-cube-body {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  transform: rotateX(-22deg) rotateY(35deg);
+  transform-style: preserve-3d;
+  will-change: transform;
+}
+
+.view-cube-face {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  width: 48px;
+  min-width: 48px;
+  min-height: 48px;
+  margin: 0;
+  padding: 0;
+  place-items: center;
+  border: var(--control-border-width) solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--viewer-hint-background);
+  color: var(--color-text);
+  font-family: var(--font-body);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-black);
+  line-height: 1;
+  text-shadow: 0 1px 0 var(--color-surface);
+  box-shadow: inset 0 0 0 1px var(--floating-border-color);
+  cursor: pointer;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transition:
+    background var(--t-fast),
+    color var(--t-fast),
+    box-shadow var(--t-fast);
+}
+
+.view-cube[data-dragging="true"] .view-cube-face {
+  cursor: grabbing;
+}
+
+.view-cube-face:hover,
+.view-cube-face:focus-visible {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+  color: var(--color-accent-strong);
+  box-shadow:
+    inset 0 0 0 2px var(--color-accent),
+    var(--shadow-button-hover);
+  outline: none;
+}
+
+.view-cube-face-front {
+  transform: translateZ(24px);
+}
+
+.view-cube-face-back {
+  transform: rotateY(180deg) translateZ(24px);
+}
+
+.view-cube-face-left {
+  transform: rotateY(-90deg) translateZ(24px);
+}
+
+.view-cube-face-right {
+  transform: rotateY(90deg) translateZ(24px);
+}
+
+.view-cube-face-top {
+  transform: rotateX(90deg) translateZ(24px);
+}
+
+.view-cube-face-bottom {
+  transform: rotateX(-90deg) translateZ(24px);
 }
 
 /* 下部コンテキストパネル。高さは上端の取っ手で変わり、中身が多いときは
@@ -2765,7 +2864,7 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 @container viewer-operation-help (max-width: 360px) {
   .viewer-operation-hint {
     top: var(--sp-5);
-    right: var(--sp-5);
+    right: 120px;
     max-width: none;
     max-height: calc(100% - 2 * var(--sp-5));
     padding: var(--sp-3);
