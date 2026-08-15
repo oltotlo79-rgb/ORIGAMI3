@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import * as THREE from "three";
 import {
   SURFACE_OWNER_BACKGROUND_CODE,
+  SURFACE_OWNER_DEPTH_PLANE_ATTRIBUTE,
+  SURFACE_OWNER_DEPTH_TOLERANCE,
   createSurfaceOwnerBinding,
   createSurfaceOwnerCodes,
   createSurfaceOwnerSurface,
@@ -13,6 +15,10 @@ import {
   updateSurfaceOwnerFaceLayers,
   updateSurfaceOwnerTriangleLayers,
 } from "./surfaceOwner";
+import {
+  selectPaperHit,
+  type PaperHitCandidate,
+} from "./hingePicker";
 
 function positionOfTwoOverlappingFaces(): THREE.BufferAttribute {
   return new THREE.BufferAttribute(
@@ -150,6 +156,12 @@ describe("createSurfaceOwnerSurface", () => {
     expect(token).toBeInstanceOf(THREE.Uint8BufferAttribute);
     expect(token.itemSize).toBe(4);
     expect(token.normalized).toBe(true);
+    const depthPlanes = surface.geometry.getAttribute(
+      SURFACE_OWNER_DEPTH_PLANE_ATTRIBUTE,
+    );
+    expect(depthPlanes).toBe(surface.depthPlanes);
+    expect(depthPlanes.itemSize).toBe(4);
+    expect(surface.depthPlanes.usage).toBe(THREE.DynamicDrawUsage);
     // 面ID 10→code 1、面ID 20→code 2。最初の3頂点は面20。
     expect(Array.from(token.array)).toEqual([
       2, 0, 0, 0,
@@ -190,6 +202,141 @@ describe("createSurfaceOwnerSurface", () => {
 });
 
 describe("orderSurfaceOwner", () => {
+  it("共平面の別triangleへ同じwindow-depth平面を割り当てる", () => {
+    const surface = oppositeWindingSurface(10, 20);
+    const camera = cameraAt(2);
+    try {
+      orderSurfaceOwner(surface, camera);
+      const attribute = surface.depthPlanes;
+      const expected = [
+        attribute.getX(0),
+        attribute.getY(0),
+        attribute.getZ(0),
+        1,
+      ];
+      for (let vertex = 0; vertex < attribute.count; vertex++) {
+        expect([
+          attribute.getX(vertex),
+          attribute.getY(vertex),
+          attribute.getZ(vertex),
+          attribute.getW(vertex),
+        ]).toEqual(expected);
+        const projected = new THREE.Vector3()
+          .fromBufferAttribute(surface.position, vertex)
+          .project(camera);
+        const actualDepth = (projected.z + 1) * 0.5;
+        const sharedDepth =
+          expected[0] * projected.x + expected[1] * projected.y + expected[2];
+        expect(Math.abs(sharedDepth - actualDepth)).toBeLessThanOrEqual(
+          SURFACE_OWNER_DEPTH_TOLERANCE,
+        );
+      }
+    } finally {
+      disposeSurfaceOwnerSurface(surface);
+    }
+  });
+
+  it("斜めの支持平面もoff-axis視点のwindow depthへ変換する", () => {
+    const position = new THREE.BufferAttribute(
+      new Float32Array([
+        -0.4, -0.2, 0.15,
+        0.7, -0.1, 0.4,
+        0.1, 0.8, -0.25,
+        -0.4, -0.2, 0.15,
+        0.1, 0.8, -0.25,
+        0.7, -0.1, 0.4,
+      ]),
+      3,
+    );
+    const surface = createSurfaceOwnerSurface({
+      position,
+      vertexFaces: [10, 10, 10, 20, 20, 20],
+      indices: [0, 1, 2, 3, 4, 5],
+      triangleFaces: [10, 20],
+    });
+    const camera = new THREE.PerspectiveCamera(51, 1.3, 0.01, 100);
+    camera.position.set(1.4, -0.8, 2.6);
+    camera.lookAt(0.1, 0.1, 0);
+    camera.updateMatrixWorld(true);
+    try {
+      orderSurfaceOwner(surface, camera);
+      const plane = surface.depthPlanes;
+      expect(plane.getW(0)).toBe(1);
+      for (let vertex = 0; vertex < plane.count; vertex++) {
+        expect([
+          plane.getX(vertex),
+          plane.getY(vertex),
+          plane.getZ(vertex),
+          plane.getW(vertex),
+        ]).toEqual([
+          plane.getX(0),
+          plane.getY(0),
+          plane.getZ(0),
+          1,
+        ]);
+        const projected = new THREE.Vector3()
+          .fromBufferAttribute(position, vertex)
+          .project(camera);
+        const originalDepth = (projected.z + 1) * 0.5;
+        const sharedDepth =
+          plane.getX(vertex) * projected.x +
+          plane.getY(vertex) * projected.y +
+          plane.getZ(vertex);
+        expect(Math.abs(sharedDepth - originalDepth)).toBeLessThanOrEqual(
+          SURFACE_OWNER_DEPTH_TOLERANCE,
+        );
+      }
+    } finally {
+      disposeSurfaceOwnerSurface(surface);
+    }
+  });
+
+  it("実在する0.0002の平面差と非平面faceは共通depthへ丸めない", () => {
+    const separatedPosition = positionOfTwoOverlappingFaces();
+    for (let vertex = 3; vertex < 6; vertex++) {
+      separatedPosition.setZ(vertex, 0.0002);
+    }
+    const separated = createSurfaceOwnerSurface({
+      position: separatedPosition,
+      vertexFaces: [10, 10, 10, 20, 20, 20],
+      indices: [0, 1, 2, 3, 4, 5],
+      triangleFaces: [10, 20],
+    });
+    const bent = createSurfaceOwnerSurface({
+      position: new THREE.BufferAttribute(
+        new Float32Array([
+          0, 0, 0,
+          1, 0, 0,
+          1, 1, 0,
+          0, 1, 0.001,
+        ]),
+        3,
+      ),
+      vertexFaces: [30, 30, 30, 30],
+      indices: [0, 1, 2, 0, 2, 3],
+      triangleFaces: [30, 30],
+    });
+    try {
+      orderSurfaceOwner(separated, cameraAt(2));
+      orderSurfaceOwner(bent, cameraAt(2));
+      expect(
+        Array.from(
+          { length: separated.depthPlanes.count },
+          (_, vertex) => separated.depthPlanes.getW(vertex),
+        ),
+      ).toEqual(new Array(6).fill(0));
+      expect(
+        Array.from(
+          { length: bent.depthPlanes.count },
+          (_, vertex) => bent.depthPlanes.getW(vertex),
+        ),
+      ).toEqual(new Array(4).fill(0));
+    } finally {
+      disposeSurfaceOwnerSurface(separated);
+      disposeSurfaceOwnerSurface(bent);
+    }
+  });
+
   it("同じlayerなら+側は大きいfaceIdを後勝ち、-側は逆にする", () => {
     const surface = overlappingSurface();
     orderSurfaceOwner(surface, cameraAt(2));
@@ -357,6 +504,135 @@ describe("orderSurfaceOwner", () => {
     camera.updateMatrixWorld(true);
     orderSurfaceOwner(surface, camera);
     expect(indicesOf(surface)).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+
+  it("同じ候補表を描画順とpickerへ通して同じ所有面を選ぶ", () => {
+    type Candidate = {
+      face: number;
+      rank: number;
+      normal: readonly [number, number, number];
+    };
+    const cases: {
+      label: string;
+      camera: readonly [number, number, number];
+      candidates: readonly Candidate[];
+      expected: number;
+    }[] = [
+      {
+        label: "+側は大きいrank",
+        camera: [0, 0, 2],
+        candidates: [
+          { face: 10, rank: 1, normal: [0, 0, 1] },
+          { face: 20, rank: 2, normal: [0, 0, 1] },
+        ],
+        expected: 20,
+      },
+      {
+        label: "-側は小さいrank",
+        camera: [0, 0, -2],
+        candidates: [
+          { face: 10, rank: 1, normal: [0, 0, 1] },
+          { face: 20, rank: 2, normal: [0, 0, 1] },
+        ],
+        expected: 10,
+      },
+      {
+        label: "候補ごとのside",
+        camera: [0, 0, 2],
+        candidates: [
+          { face: 10, rank: 1, normal: [1, 0, 0.25] },
+          { face: 20, rank: 2, normal: [1, 0, -0.25] },
+        ],
+        expected: 10,
+      },
+      {
+        label: "rank同値の材質winding",
+        camera: [2, 0, 0],
+        candidates: [
+          { face: 10, rank: 0, normal: [1, 0, -0.25] },
+          { face: 20, rank: 0, normal: [1, 0, 0.25] },
+        ],
+        expected: 20,
+      },
+      {
+        label: "rankと材質同値のface ID",
+        camera: [0, 0, 2],
+        candidates: [
+          { face: 10, rank: 0, normal: [0, 0, 1] },
+          { face: 20, rank: 0, normal: [0, 0, 1] },
+        ],
+        expected: 20,
+      },
+      {
+        label: "front優先へ変えず材質fallbackを維持",
+        camera: [0, 0, -2],
+        candidates: [
+          { face: 30, rank: 0, normal: [0, 0, 1] },
+          { face: 10, rank: 0, normal: [0, 0, -1] },
+        ],
+        expected: 30,
+      },
+    ];
+
+    for (const row of cases) {
+      const positions: number[] = [];
+      const vertexFaces: number[] = [];
+      const indices: number[] = [];
+      const triangleFaces: number[] = [];
+      const ranks = new Map<number, number>();
+      const hits: PaperHitCandidate[] = [];
+      for (const candidate of row.candidates) {
+        const normal = new THREE.Vector3(...candidate.normal).normalize();
+        const helper = Math.abs(normal.z) < 0.9
+          ? new THREE.Vector3(0, 0, 1)
+          : new THREE.Vector3(1, 0, 0);
+        const u = helper.cross(normal).normalize();
+        const v = normal.clone().cross(u).normalize();
+        const points = [u, v, u.clone().add(v).multiplyScalar(-1)];
+        const start = vertexFaces.length;
+        for (const point of points) {
+          positions.push(point.x, point.y, point.z);
+          vertexFaces.push(candidate.face);
+        }
+        indices.push(start, start + 1, start + 2);
+        triangleFaces.push(candidate.face);
+        ranks.set(candidate.face, candidate.rank);
+        hits.push({
+          face: candidate.face,
+          surfaceRank: candidate.rank,
+          distance: new THREE.Vector3(...row.camera).length(),
+          point: new THREE.Vector3(),
+          normal,
+        });
+      }
+      const surface = createSurfaceOwnerSurface({
+        position: new THREE.BufferAttribute(new Float32Array(positions), 3),
+        vertexFaces,
+        indices,
+        triangleFaces,
+      });
+      updateSurfaceOwnerFaceRanks(surface, ranks);
+      const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
+      camera.position.set(...row.camera);
+      camera.lookAt(0, 0, 0);
+      camera.updateMatrixWorld(true);
+      try {
+        orderSurfaceOwner(surface, camera);
+        const orderedIndices = indicesOf(surface);
+        const lastVertex = orderedIndices[orderedIndices.length - 1];
+        const drawnFace = vertexFaces[lastVertex];
+        expect(drawnFace, row.label).toBe(row.expected);
+        expect(selectPaperHit(hits, camera.position)?.face, row.label).toBe(
+          drawnFace,
+        );
+        expect(
+          selectPaperHit([...hits].reverse(), camera.position)?.face,
+          `${row.label}: reverse`,
+        ).toBe(drawnFace);
+      } finally {
+        disposeSurfaceOwnerSurface(surface);
+      }
+    }
   });
 });
 

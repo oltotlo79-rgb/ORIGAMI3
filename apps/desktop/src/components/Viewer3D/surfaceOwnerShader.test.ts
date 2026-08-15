@@ -71,6 +71,8 @@ describe("surface owner shader", () => {
       expect(resources.depthMaterial.side).toBe(THREE.DoubleSide);
       expect(resources.depthMaterial.depthTest).toBe(true);
       expect(resources.depthMaterial.depthWrite).toBe(true);
+      expect(resources.depthMaterial.depthFunc).toBe(THREE.LessEqualDepth);
+      expect(resources.depthMaterial.colorWrite).toBe(false);
       expect(resources.colorMaterial.depthTest).toBe(false);
       expect(resources.colorMaterial.depthWrite).toBe(false);
       expect(resources.colorMaterial.blending).toBe(THREE.NoBlending);
@@ -80,11 +82,28 @@ describe("surface owner shader", () => {
       expect(resources.colorMaterial.uniforms.surfaceOwnerResolution).toBe(
         binding.resolution,
       );
+      expect(resources.depthMaterial.uniforms.surfaceOwnerResolution).toBe(
+        binding.resolution,
+      );
       expect(resources.colorMaterial.uniforms.surfaceOwnerDepthTolerance.value).toBe(
         SURFACE_OWNER_DEPTH_TOLERANCE,
       );
+      for (const material of [resources.depthMaterial, resources.colorMaterial]) {
+        expect(material.vertexShader).toContain(
+          "attribute vec4 surfaceOwnerDepthPlane;",
+        );
+        expect(material.fragmentShader).toContain(
+          "float surfaceOwnerCanonicalDepth()",
+        );
+        expect(material.fragmentShader).toContain(
+          "if ( vSurfaceOwnerDepthPlane.w < 0.5 ) return gl_FragCoord.z;",
+        );
+      }
+      expect(resources.depthMaterial.fragmentShader).toContain(
+        "gl_FragDepthEXT = surfaceOwnerCanonicalDepth();",
+      );
       expect(resources.colorMaterial.fragmentShader).toContain(
-        "gl_FragCoord.z - nearestDepth > surfaceOwnerDepthTolerance",
+        "candidateDepth - nearestDepth > surfaceOwnerDepthTolerance",
       );
       expect(binding.map.value).toBe(resources.colorTarget.texture);
 

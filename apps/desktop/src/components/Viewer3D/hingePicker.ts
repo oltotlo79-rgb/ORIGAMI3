@@ -5,6 +5,10 @@
 // 線分そのもの(edgeId・両端の座標)はsceneBuilderが立体形状から作って持つ。
 
 import * as THREE from "three";
+import {
+  compareSurfaceOwnerPriority,
+  type SurfaceOwnerPriority,
+} from "./surfaceOwner";
 
 /** クリック位置から辺までの許容距離(px) */
 export const PICK_THRESHOLD_PX = 10;
@@ -43,6 +47,11 @@ export interface PaperHitCandidate {
   normal: THREE.Vector3;
 }
 
+interface RankedPaperHit {
+  hit: PaperHitCandidate;
+  priority: SurfaceOwnerPriority;
+}
+
 /**
  * 向きが反対でも同じ平面なら同じ法線にする。
  * 丸め誤差の小さな成分で符号が決まらないよう、絶対値最大の成分を正にする。
@@ -74,35 +83,45 @@ export function selectPaperHit(
   const tied = hits.filter(
     (hit) => hit.distance - minimumDistance <= SURFACE_HIT_DISTANCE_EPS,
   );
-  const reference = tied[0];
-  const normal = canonicalizeHitNormal(reference.normal);
-  const positiveSide = normal.dot(cameraPosition.clone().sub(reference.point)) >= 0;
-  let selected = reference;
+  let selected = rankPaperHit(tied[0], cameraPosition);
   for (let i = 1; i < tied.length; i++) {
-    const candidate = tied[i];
-    const rankOrder = candidate.surfaceRank - selected.surfaceRank;
-    if ((positiveSide && rankOrder > 0) || (!positiveSide && rankOrder < 0)) {
-      selected = candidate;
-      continue;
-    }
-    if (rankOrder !== 0) continue;
-
-    const candidateMaterial = materialOrientation(candidate.normal);
-    const selectedMaterial = materialOrientation(selected.normal);
-    if (candidateMaterial > selectedMaterial) {
-      selected = candidate;
-      continue;
-    }
-    if (candidateMaterial < selectedMaterial) continue;
-
-    const faceOrder = candidate.face - selected.face;
-    if ((positiveSide && faceOrder > 0) || (!positiveSide && faceOrder < 0)) {
-      selected = candidate;
-    } else if (faceOrder === 0 && candidate.distance < selected.distance) {
+    const candidate = rankPaperHit(tied[i], cameraPosition);
+    const order = compareSurfaceOwnerPriority(
+      candidate.priority,
+      selected.priority,
+    );
+    if (
+      order > 0 ||
+      (order === 0 && candidate.hit.distance < selected.hit.distance)
+    ) {
       selected = candidate;
     }
   }
-  return selected;
+  return selected.hit;
+}
+
+function rankPaperHit(
+  hit: PaperHitCandidate,
+  cameraPosition: THREE.Vector3,
+): RankedPaperHit {
+  const materialNormal = hit.normal.clone();
+  const normalLengthSquared = materialNormal.lengthSq();
+  if (!Number.isFinite(normalLengthSquared) || normalLengthSquared <= Number.EPSILON) {
+    materialNormal.set(0, 0, 1);
+  } else {
+    materialNormal.normalize();
+  }
+  const canonicalNormal = canonicalizeHitNormal(materialNormal);
+  const toCamera = cameraPosition.clone().sub(hit.point);
+  return {
+    hit,
+    priority: {
+      faceId: hit.face,
+      surfaceRank: Number.isFinite(hit.surfaceRank) ? hit.surfaceRank : 0,
+      side: canonicalNormal.dot(toCamera) >= 0 ? 1 : -1,
+      materialOrientation: materialOrientation(materialNormal),
+    },
+  };
 }
 
 function materialOrientation(normal: THREE.Vector3): 1 | -1 {

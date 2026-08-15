@@ -13,7 +13,49 @@ import * as THREE from "three";
 /** owner render targetの0は、紙が無い背景として予約する。 */
 export const SURFACE_OWNER_BACKGROUND_CODE = 0;
 
+/** 共平面のtriangleが共有する、NDC xy→window depthの平面係数。 */
+export const SURFACE_OWNER_DEPTH_PLANE_ATTRIBUTE = "surfaceOwnerDepthPlane";
+
+/** owner最前深度targetと同じ固定精度。 */
+export const SURFACE_OWNER_DEPTH_BITS = 24;
+/** 共平面の補間丸めだけをtieとして扱う既存の深度code数。 */
+export const SURFACE_OWNER_DEPTH_TOLERANCE_CODES = 2;
+export const SURFACE_OWNER_DEPTH_TOLERANCE =
+  SURFACE_OWNER_DEPTH_TOLERANCE_CODES / (2 ** SURFACE_OWNER_DEPTH_BITS - 1);
+
+/** 剛体face自身を平面と認めるworld座標誤差。既存rigidity契約と同じ。 */
+export const SURFACE_OWNER_PLANARITY_EPSILON = 1e-6;
+/** 別faceを同じ支持平面へまとめるworld座標誤差。 */
+export const SURFACE_OWNER_COPLANAR_EPSILON = 1e-6;
+/** 単位法線どうしを同じ向きと認める無次元誤差。 */
+export const SURFACE_OWNER_NORMAL_EPSILON = 1e-6;
+
 const MAX_OWNER_CODE = 0xffff_ffff;
+
+/** 同じ深度候補を描く順、またはpickerで選ぶ順を決める純粋な比較入力。 */
+export interface SurfaceOwnerPriority {
+  readonly faceId: number;
+  readonly surfaceRank: number;
+  readonly side: 1 | -1;
+  readonly materialOrientation: 1 | -1;
+}
+
+/**
+ * 昇順の所有者優先順位。正ならaをbより後に描く／aをpickerで選ぶ。
+ * front/backは順位へ入れず、物理的な層順と既存fallbackを保つ。
+ */
+export function compareSurfaceOwnerPriority(
+  a: SurfaceOwnerPriority,
+  b: SurfaceOwnerPriority,
+): number {
+  const signedRank = a.side * a.surfaceRank - b.side * b.surfaceRank;
+  if (signedRank !== 0) return signedRank;
+  const exactRank = a.surfaceRank - b.surfaceRank;
+  if (exactRank !== 0) return exactRank;
+  const material = a.materialOrientation - b.materialOrientation;
+  if (material !== 0) return material;
+  return a.side * a.faceId - b.side * b.faceId;
+}
 
 /** GLSLへそのまま渡せる共有uniform。値だけを書き換え、入れ物は使い回す。 */
 export interface SurfaceOwnerBinding {
@@ -99,6 +141,8 @@ export interface SurfaceOwnerBatch {
 export interface SurfaceOwnerSurface {
   readonly geometry: THREE.BufferGeometry;
   readonly position: THREE.BufferAttribute;
+  /** xyz=depth plane係数、w=共通平面を使うとき1。 */
+  readonly depthPlanes: THREE.BufferAttribute;
   readonly ownerCodes: Map<number, number>;
   readonly triangleFaces: number[];
   readonly triangleLayers: number[];
@@ -236,6 +280,12 @@ export function createSurfaceOwnerSurface(
     "surfaceOwnerToken",
     new THREE.Uint8BufferAttribute(tokens, 4, true),
   );
+  const depthPlanes = new THREE.BufferAttribute(
+    new Float32Array(input.position.count * 4),
+    4,
+  );
+  depthPlanes.setUsage(THREE.DynamicDrawUsage);
+  geometry.setAttribute(SURFACE_OWNER_DEPTH_PLANE_ATTRIBUTE, depthPlanes);
   const index = new THREE.BufferAttribute(makeIndexArray(indices), 1);
   index.setUsage(THREE.DynamicDrawUsage);
   geometry.setIndex(index);
@@ -263,6 +313,7 @@ export function createSurfaceOwnerSurface(
   const surface: SurfaceOwnerSurface = {
     geometry,
     position: input.position,
+    depthPlanes,
     ownerCodes,
     triangleFaces,
     triangleLayers,
@@ -321,11 +372,19 @@ const workAC = new THREE.Vector3();
 const workNormal = new THREE.Vector3();
 const workCenter = new THREE.Vector3();
 const workCameraPosition = new THREE.Vector3();
+const workProjectedA = new THREE.Vector3();
 
 interface BatchViewOrder {
   batch: SurfaceOwnerBatch;
-  side: 1 | -1;
-  materialOrientation: 1 | -1;
+  priority: {
+    faceId: number;
+    surfaceRank: number;
+    side: 1 | -1;
+    materialOrientation: 1 | -1;
+  };
+  planeNormal: THREE.Vector3;
+  planeDistance: number;
+  planar: boolean;
 }
 
 // 面数分の並べ替え要素は生成時に一度だけ確保し、毎フレーム使い回す。
@@ -364,13 +423,199 @@ function updateBatchViewOrder(
     points += 3;
   }
   if (points > 0) workCenter.multiplyScalar(1 / points);
-  if (workNormal.lengthSq() <= Number.EPSILON) workNormal.set(0, 0, 1);
+  const normalIsValid = workNormal.lengthSq() > Number.EPSILON;
+  if (!normalIsValid) workNormal.set(0, 0, 1);
   else workNormal.normalize();
   // The paper is authored in the XY plane, so the rotated material front keeps
   // the sign of its current z component.  This is geometry, not Face3D.mirrored.
-  item.materialOrientation = workNormal.z < 0 ? -1 : 1;
+  item.priority.materialOrientation = workNormal.z < 0 ? -1 : 1;
   canonicalize(workNormal);
-  item.side = workNormal.dot(workA.subVectors(cameraPosition, workCenter)) >= 0 ? 1 : -1;
+  item.priority.side =
+    workNormal.dot(workA.subVectors(cameraPosition, workCenter)) >= 0 ? 1 : -1;
+  item.priority.faceId = batch.faceId;
+  item.priority.surfaceRank = batch.surfaceRank;
+  item.planeNormal.copy(workNormal);
+  item.planeDistance = workNormal.dot(workCenter);
+  let maximumPlaneError = 0;
+  for (const vertex of batch.indices) {
+    workA.fromBufferAttribute(surface.position, vertex);
+    maximumPlaneError = Math.max(
+      maximumPlaneError,
+      Math.abs(workNormal.dot(workA) - item.planeDistance),
+    );
+  }
+  item.planar =
+    normalIsValid && maximumPlaneError <= SURFACE_OWNER_PLANARITY_EPSILON;
+}
+
+interface CanonicalDepthPlane {
+  readonly x: number;
+  readonly y: number;
+  readonly constant: number;
+}
+
+const workViewProjection = new THREE.Matrix4();
+const workInverseTranspose = new THREE.Matrix4();
+const workClipPlane = new THREE.Vector4();
+
+function canonicalDepthPlane(
+  normal: THREE.Vector3,
+  distance: number,
+  camera: THREE.Camera,
+): CanonicalDepthPlane | null {
+  workViewProjection.multiplyMatrices(
+    camera.projectionMatrix,
+    camera.matrixWorldInverse,
+  );
+  workInverseTranspose.copy(workViewProjection).invert().transpose();
+  workClipPlane
+    .set(normal.x, normal.y, normal.z, -distance)
+    .applyMatrix4(workInverseTranspose);
+  const scale = Math.max(
+    Math.abs(workClipPlane.x),
+    Math.abs(workClipPlane.y),
+    Math.abs(workClipPlane.z),
+    Math.abs(workClipPlane.w),
+  );
+  if (
+    !Number.isFinite(scale) ||
+    scale === 0 ||
+    Math.abs(workClipPlane.z) <= Number.EPSILON * scale * 16
+  ) {
+    return null;
+  }
+  // world planeをinverse-transposeでclip spaceへ移し、
+  // z_ndcをx/yの式へ解いて[0,1]のwindow depthへ直す。
+  const x = Math.fround((-0.5 * workClipPlane.x) / workClipPlane.z);
+  const y = Math.fround((-0.5 * workClipPlane.y) / workClipPlane.z);
+  const constant = Math.fround(0.5 - (0.5 * workClipPlane.w) / workClipPlane.z);
+  if (![x, y, constant].every(Number.isFinite)) return null;
+  return { x, y, constant };
+}
+
+function batchFitsPlane(
+  surface: SurfaceOwnerSurface,
+  batch: SurfaceOwnerBatch,
+  normal: THREE.Vector3,
+  distance: number,
+): boolean {
+  return batch.indices.every((vertex) => {
+    workA.fromBufferAttribute(surface.position, vertex);
+    return (
+      Math.abs(normal.dot(workA) - distance) <=
+      SURFACE_OWNER_COPLANAR_EPSILON
+    );
+  });
+}
+
+function depthPlaneFitsGroup(
+  surface: SurfaceOwnerSurface,
+  group: readonly BatchViewOrder[],
+  plane: CanonicalDepthPlane,
+  camera: THREE.Camera,
+): boolean {
+  for (const { batch } of group) {
+    for (const vertex of batch.indices) {
+      workProjectedA.fromBufferAttribute(surface.position, vertex).project(camera);
+      const originalDepth = (workProjectedA.z + 1) * 0.5;
+      const sharedDepth =
+        plane.x * workProjectedA.x +
+        plane.y * workProjectedA.y +
+        plane.constant;
+      if (
+        !Number.isFinite(originalDepth) ||
+        !Number.isFinite(sharedDepth) ||
+        Math.abs(sharedDepth - originalDepth) >
+          SURFACE_OWNER_DEPTH_TOLERANCE
+      ) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+/**
+ * 共平面の別triangle分割へ、同じNDC深度平面を割り当てる。
+ * 非平面batchはw=0のままにし、shaderで従来のgl_FragCoord.zへ戻す。
+ */
+function updateSurfaceOwnerDepthPlanes(
+  surface: SurfaceOwnerSurface,
+  orders: readonly BatchViewOrder[],
+  camera: THREE.Camera,
+): void {
+  (surface.depthPlanes.array as Float32Array).fill(0);
+  const groups: {
+    normal: THREE.Vector3;
+    distance: number;
+    members: BatchViewOrder[];
+  }[] = [];
+  const deterministicOrders = [...orders].sort(
+    (left, right) => left.batch.faceId - right.batch.faceId,
+  );
+  for (const item of deterministicOrders) {
+    if (!item.planar) continue;
+    const group = groups.find((candidate) => {
+      const sameDirection = candidate.normal.dot(item.planeNormal) >= 0;
+      workNormal
+        .copy(item.planeNormal)
+        .multiplyScalar(sameDirection ? 1 : -1);
+      const alignedDistance = sameDirection
+        ? item.planeDistance
+        : -item.planeDistance;
+      return (
+        candidate.normal.distanceToSquared(workNormal) <=
+          SURFACE_OWNER_NORMAL_EPSILON ** 2 &&
+        Math.abs(candidate.distance - alignedDistance) <=
+          SURFACE_OWNER_COPLANAR_EPSILON &&
+        batchFitsPlane(
+          surface,
+          item.batch,
+          candidate.normal,
+          candidate.distance,
+        )
+      );
+    });
+    if (group) group.members.push(item);
+    else {
+      groups.push({
+        normal: item.planeNormal.clone(),
+        distance: item.planeDistance,
+        members: [item],
+      });
+    }
+  }
+
+  for (const group of groups) {
+    const triangleCount = group.members.reduce(
+      (count, item) => count + item.batch.indices.length / 3,
+      0,
+    );
+    if (triangleCount <= 1) continue;
+    const representative = canonicalDepthPlane(
+      group.normal,
+      group.distance,
+      camera,
+    );
+    if (
+      !representative ||
+      !depthPlaneFitsGroup(surface, group.members, representative, camera)
+    ) {
+      continue;
+    }
+    for (const { batch } of group.members) {
+      for (const vertex of batch.indices) {
+        surface.depthPlanes.setXYZW(
+          vertex,
+          representative.x,
+          representative.y,
+          representative.constant,
+          1,
+        );
+      }
+    }
+  }
+  surface.depthPlanes.needsUpdate = true;
 }
 
 /**
@@ -388,25 +633,28 @@ export function orderSurfaceOwner(
   if (!ordered) {
     ordered = surface.batches.map((batch) => ({
       batch,
-      side: 1,
-      materialOrientation: 1,
+      priority: {
+        faceId: batch.faceId,
+        surfaceRank: batch.surfaceRank,
+        side: 1,
+        materialOrientation: 1,
+      },
+      planeNormal: new THREE.Vector3(0, 0, 1),
+      planeDistance: 0,
+      planar: false,
     }));
     viewOrders.set(surface, ordered);
   }
   for (const item of ordered) {
     updateBatchViewOrder(surface, item, workCameraPosition);
   }
+  updateSurfaceOwnerDepthPlanes(surface, ordered, camera);
   ordered.sort((a, b) => {
-    const rank = a.side * a.batch.surfaceRank - b.side * b.batch.surfaceRank;
-    if (rank !== 0) return rank;
-    const exactRank = a.batch.surfaceRank - b.batch.surfaceRank;
-    if (exactRank !== 0) return exactRank;
-    const material = a.materialOrientation - b.materialOrientation;
-    if (material !== 0) return material;
-    const face = a.side * a.batch.faceId - b.side * b.batch.faceId;
-    if (face !== 0) return face;
-    const code = a.side * a.batch.ownerCode - b.side * b.batch.ownerCode;
-    return code;
+    const priority = compareSurfaceOwnerPriority(a.priority, b.priority);
+    if (priority !== 0) return priority;
+    return (
+      a.priority.side * a.batch.ownerCode - b.priority.side * b.batch.ownerCode
+    );
   });
 
   const index = surface.geometry.getIndex();

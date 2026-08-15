@@ -20,6 +20,9 @@ const DEPTH_BITS: u32 = 24;
 const DEPTH_TIE_CODES: u32 = 2;
 const VIEWPORT: usize = 800;
 const RASTER_EPS: f32 = 1e-10;
+const SURFACE_OWNER_PLANARITY_EPSILON: f64 = 1e-6;
+const SURFACE_OWNER_COPLANAR_EPSILON: f64 = 1e-6;
+const SURFACE_OWNER_NORMAL_EPSILON: f64 = 1e-6;
 
 const WARMUP_ABS: [f64; 19] = [
     0.0, 9.0, 19.0, 29.0, 39.0, 49.0, 59.0, 69.0, 79.0, 90.0, 101.0, 111.0, 121.0, 131.0, 141.0,
@@ -250,11 +253,16 @@ struct RenderFace {
     surface_rank: u32,
     side: i64,
     material_orientation: i64,
+    plane_normal: V3,
+    plane_distance: f64,
+    planar: bool,
+    points: Vec<V3>,
     triangles: Vec<RenderTriangle>,
 }
 
 struct RenderTriangle {
     projected: [Projected; 3],
+    depth_plane: Option<[f32; 3]>,
     back_facing: bool,
 }
 
@@ -878,13 +886,60 @@ fn canonicalize(normal: &mut V3) -> bool {
     }
 }
 
+fn camera_plane_depth(camera: Camera, normal: V3, distance: f64) -> Option<[f32; 3]> {
+    let row_vector =
+        |row: [f32; 4]| V3::new(f64::from(row[0]), f64::from(row[1]), f64::from(row[2]));
+    let view_x = row_vector(camera.view_x);
+    let view_y = row_vector(camera.view_y);
+    let view_depth = row_vector(camera.view_depth);
+    let determinant = view_x.dot(view_y.cross(view_depth));
+    if !determinant.is_finite() || determinant.abs() <= SURFACE_OWNER_NORMAL_EPSILON {
+        return None;
+    }
+    // Columns of the inverse view linear transform.  Unlike assuming an
+    // orthonormal basis, this also covers camera_with_aspect's scaled x row.
+    let view_x_dual = view_y.cross(view_depth) / determinant;
+    let view_y_dual = view_depth.cross(view_x) / determinant;
+    let view_depth_dual = view_x.cross(view_y) / determinant;
+    let projection_scale = f64::from(camera.projection_scale);
+    let camera_plane_distance = normal.dot(camera.position) - distance;
+    if !projection_scale.is_finite()
+        || projection_scale.abs() <= f64::EPSILON
+        || camera_plane_distance.abs() <= SURFACE_OWNER_COPLANAR_EPSILON
+    {
+        return None;
+    }
+
+    // CPU equivalent of surfaceOwnerCanonicalDepth in surfaceOwnerShader.ts.
+    let depth_scale = -0.5 * f64::from(camera.projection_depth_b) / camera_plane_distance;
+    let x = depth_scale * normal.dot(view_x_dual) / projection_scale;
+    let y = depth_scale * normal.dot(view_y_dual) / projection_scale;
+    let constant = 0.5 * (f64::from(camera.projection_depth_a) + 1.0)
+        + depth_scale * normal.dot(view_depth_dual);
+    let coefficients = [x as f32, y as f32, constant as f32];
+    coefficients
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(coefficients)
+}
+
+fn render_face_owner_key(face: &RenderFace) -> (i64, u32, i64, i64, i64) {
+    (
+        face.side * i64::from(face.surface_rank),
+        face.surface_rank,
+        face.material_orientation,
+        face.side * i64::from(face.face),
+        face.side * face.owner_code,
+    )
+}
+
 fn render_faces(
     diagram: &Diagram,
     frame: &Frame3D,
     viewport: usize,
     view: Camera,
 ) -> Vec<RenderFace> {
-    frame
+    let mut rendered = frame
         .faces
         .iter()
         .map(|face| {
@@ -913,21 +968,29 @@ fn render_faces(
             if order_points > 0 {
                 order_center /= order_points as f64;
             }
-            if order_normal.length_squared() <= f64::EPSILON {
+            let normal_valid = order_normal.length_squared()
+                > SURFACE_OWNER_NORMAL_EPSILON * SURFACE_OWNER_NORMAL_EPSILON;
+            if !normal_valid {
                 order_normal = V3::Z;
             } else {
                 order_normal = order_normal.normalize();
             }
-            let material_orientation = if canonicalize(&mut order_normal) {
-                -1
-            } else {
-                1
-            };
+            // Match updateBatchViewOrder: material orientation uses the raw
+            // normalized winding, before canonicalizing the plane normal.
+            let material_orientation = if order_normal.z < 0.0 { -1 } else { 1 };
+            canonicalize(&mut order_normal);
             let side = if order_normal.dot(view.position - order_center) >= 0.0 {
                 1
             } else {
                 -1
             };
+            let plane_normal = order_normal;
+            let plane_distance = plane_normal.dot(order_center);
+            let planar = normal_valid
+                && polygon.iter().all(|point| {
+                    (plane_normal.dot(*point) - plane_distance).abs()
+                        <= SURFACE_OWNER_PLANARITY_EPSILON
+                });
             let triangles = diagram.triangles[&face.face]
                 .iter()
                 .filter_map(|indices| {
@@ -944,6 +1007,7 @@ fn render_faces(
                             project(view, points[1], viewport)?,
                             project(view, points[2], viewport)?,
                         ],
+                        depth_plane: None,
                         back_facing: normal.dot(view.position - center) < 0.0,
                     })
                 })
@@ -954,10 +1018,90 @@ fn render_faces(
                 surface_rank: face.surface_rank,
                 side,
                 material_orientation,
+                plane_normal,
+                plane_distance,
+                planar,
+                points: polygon,
                 triangles,
             }
         })
-        .collect()
+        .collect::<Vec<_>>();
+
+    // Match Viewer3D's common supporting-plane rule. Stable face-id traversal
+    // plus a fixed group anchor prevents tolerance chaining from merging
+    // distinct physical layers.
+    let mut face_indices = (0..rendered.len()).collect::<Vec<_>>();
+    face_indices.sort_unstable_by_key(|&index| rendered[index].face);
+    let mut strict_groups = Vec::<Vec<usize>>::new();
+    for face_index in face_indices {
+        if !rendered[face_index].planar {
+            continue;
+        }
+        let matching_group = strict_groups.iter_mut().find(|members| {
+            let anchor = &rendered[members[0]];
+            let candidate = &rendered[face_index];
+            let alignment = if anchor.plane_normal.dot(candidate.plane_normal) < 0.0 {
+                -1.0
+            } else {
+                1.0
+            };
+            let candidate_normal = candidate.plane_normal * alignment;
+            let candidate_distance = candidate.plane_distance * alignment;
+            (candidate_normal - anchor.plane_normal)
+                .length_squared()
+                .sqrt()
+                <= SURFACE_OWNER_NORMAL_EPSILON
+                && (candidate_distance - anchor.plane_distance).abs()
+                    <= SURFACE_OWNER_COPLANAR_EPSILON
+                && candidate.points.iter().all(|point| {
+                    (anchor.plane_normal.dot(*point) - anchor.plane_distance).abs()
+                        <= SURFACE_OWNER_COPLANAR_EPSILON
+                })
+        });
+        if let Some(members) = matching_group {
+            members.push(face_index);
+        } else {
+            strict_groups.push(vec![face_index]);
+        }
+    }
+
+    let maximum_depth_code = ((1_u64 << DEPTH_BITS) - 1) as f32;
+    let residual_tolerance = DEPTH_TIE_CODES as f32 / maximum_depth_code;
+    for members in strict_groups {
+        let triangle_count = members
+            .iter()
+            .map(|&index| rendered[index].triangles.len())
+            .sum::<usize>();
+        if triangle_count <= 1 {
+            continue;
+        }
+        let anchor = &rendered[members[0]];
+        let Some(depth_plane) =
+            camera_plane_depth(view, anchor.plane_normal, anchor.plane_distance)
+        else {
+            continue;
+        };
+        let residuals_valid = members.iter().all(|&index| {
+            rendered[index].triangles.iter().all(|triangle| {
+                triangle.projected.iter().all(|point| {
+                    let ndc_x = point.x / viewport as f32 * 2.0 - 1.0;
+                    let ndc_y = 1.0 - point.y / viewport as f32 * 2.0;
+                    let shared_depth =
+                        depth_plane[0] * ndc_x + depth_plane[1] * ndc_y + depth_plane[2];
+                    (shared_depth - point.depth).abs() <= residual_tolerance
+                })
+            })
+        });
+        if !residuals_valid {
+            continue;
+        }
+        for index in members {
+            for triangle in &mut rendered[index].triangles {
+                triangle.depth_plane = Some(depth_plane);
+            }
+        }
+    }
+    rendered
 }
 
 fn raster_bounds(triangle: &[Projected; 3], viewport: usize) -> (usize, usize, usize, usize) {
@@ -990,13 +1134,15 @@ fn raster_bounds(triangle: &[Projected; 3], viewport: usize) -> (usize, usize, u
     (min_x, max_x, min_y, max_y)
 }
 
-fn rasterize(mut visit: impl FnMut(usize, f32), triangle: &[Projected; 3], viewport: usize) {
-    let [a, b, c] = *triangle;
+fn rasterize(mut visit: impl FnMut(usize, f32), triangle: &RenderTriangle, viewport: usize) {
+    // Preserve the original vertex order for legacy coverage. Only strict
+    // coplanar groups replace barycentric depth with their common NDC plane.
+    let [a, b, c] = triangle.projected;
     let denominator = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
     if denominator.abs() <= RASTER_EPS {
         return;
     }
-    let (min_x, max_x, min_y, max_y) = raster_bounds(triangle, viewport);
+    let (min_x, max_x, min_y, max_y) = raster_bounds(&triangle.projected, viewport);
     if min_x > max_x || min_y > max_y {
         return;
     }
@@ -1008,7 +1154,14 @@ fn rasterize(mut visit: impl FnMut(usize, f32), triangle: &[Projected; 3], viewp
             let wb = ((c.y - a.y) * (px - c.x) + (a.x - c.x) * (py - c.y)) / denominator;
             let wc = 1.0 - wa - wb;
             if wa >= -RASTER_EPS && wb >= -RASTER_EPS && wc >= -RASTER_EPS {
-                let depth = wa * a.depth + wb * b.depth + wc * c.depth;
+                let depth =
+                    if let Some([x_coefficient, y_coefficient, constant]) = triangle.depth_plane {
+                        let ndc_x = px / viewport as f32 * 2.0 - 1.0;
+                        let ndc_y = 1.0 - py / viewport as f32 * 2.0;
+                        x_coefficient * ndc_x + y_coefficient * ndc_y + constant
+                    } else {
+                        wa * a.depth + wb * b.depth + wc * c.depth
+                    };
                 if (0.0..=1.0).contains(&depth) {
                     visit(y * viewport + x, depth);
                 }
@@ -1028,20 +1181,13 @@ fn visual_image(diagram: &Diagram, frame: &Frame3D, viewport: usize, view: Camer
                     let code = (depth.clamp(0.0, 1.0) * max_depth_code as f32).round() as u32;
                     nearest[pixel] = nearest[pixel].min(code);
                 },
-                &triangle.projected,
+                triangle,
                 viewport,
             );
         }
     }
 
-    faces.sort_by(|left, right| {
-        (left.side * i64::from(left.surface_rank))
-            .cmp(&(right.side * i64::from(right.surface_rank)))
-            .then(left.surface_rank.cmp(&right.surface_rank))
-            .then(left.material_orientation.cmp(&right.material_orientation))
-            .then((left.side * i64::from(left.face)).cmp(&(right.side * i64::from(right.face))))
-            .then((left.side * left.owner_code).cmp(&(right.side * right.owner_code)))
-    });
+    faces.sort_by_key(render_face_owner_key);
     let tolerance = DEPTH_TIE_CODES as f32 / max_depth_code as f32;
     let mut owners = vec![None::<(usize, bool)>; viewport * viewport];
     for (face_index, face) in faces.iter().enumerate() {
@@ -1057,7 +1203,7 @@ fn visual_image(diagram: &Diagram, frame: &Frame3D, viewport: usize, view: Camer
                         owners[pixel] = Some((face_index, triangle.back_facing));
                     }
                 },
-                &triangle.projected,
+                triangle,
                 viewport,
             );
         }
@@ -1414,14 +1560,7 @@ fn surface_order_exact_user_zero_step_pose_reproduction() {
     let image = visual_image(&diagram, &frame, VIEWPORT, default_camera);
 
     let mut calculated_faces = render_faces(&diagram, &frame, VIEWPORT, default_camera);
-    calculated_faces.sort_by(|left, right| {
-        (left.side * i64::from(left.surface_rank))
-            .cmp(&(right.side * i64::from(right.surface_rank)))
-            .then(left.surface_rank.cmp(&right.surface_rank))
-            .then(left.material_orientation.cmp(&right.material_orientation))
-            .then((left.side * i64::from(left.face)).cmp(&(right.side * i64::from(right.face))))
-            .then((left.side * left.owner_code).cmp(&(right.side * right.owner_code)))
-    });
+    calculated_faces.sort_by_key(render_face_owner_key);
     let calculation_faces = calculated_faces
         .iter()
         .enumerate()
@@ -1696,97 +1835,405 @@ fn surface_order_exact_user_warm_start_paths() {
     assert_eq!(measured, 12, "three paths times four stage counts");
 }
 
-/// 合格条件「612方向すべてで裏0」を、この形について実測で確かめる検査。
-///
-/// 期待値は一切緩めていない。ただしこの形自体が条件を満たせないことが実測で分かったため、
-/// 既定の実行からは外してある。実測(2026-08-15、800角CPU raster、612方向):
-///
-/// - この形の16面は全て `mirrored=false`、`surface_rank` は 0..15 の恒等、
-///   面法線のz成分は全て正(最小0.1409)。つまり**折り重なっていない、ほぼ広げたままの紙**である。
-/// - 裏画素 53,762,620 のうち **46,271,965 (86.1%) は、その画素に表向きの三角形が1つも無い**。
-///   競争に負けたのは 12 画素だけ。紙の裏をまっすぐ見ているので、隠す面が存在しない。
-/// - 最悪方向 az=180 / el=-10 は 裏 276,414 / 表 **0**。
-///
-/// したがってこの形で612方向すべて裏0にするには「常に表を優先する」しかなく、
-/// それは指示で禁止されている。合格条件を満たす形の選び直しは利用者の判断に委ねる。
-/// 同じ612方向を利用者の実モデル(`zero_back_user_frame`)で測ると、裏20,192画素のうち
-/// 「その画素に表が全く無い」のは **2画素**だけで、残りは全て重なり判定の取りこぼしだった。
+/// 利用者が実際に表示する20角度の形を、固定の36方位角 x 17仰角で測る常設検査。
+/// 旧検査はedge36だけをwarm solveしたほぼ展開状態を測り、裏53,762,620画素のうち
+/// 46,271,965画素に表の覆いが無かったため、612方向で裏0という条件の対象として誤っていた。
+/// この検査は `zero_back_user_frame` へ対象を直し、表triangleが同じpixelを覆う裏だけを
+/// 所有者判定の失敗とする。表の覆いが無い2画素は幾何的露出として座標ごと固定する。
 #[test]
-#[ignore = "この形(ほぼ広げた紙)は裏0を満たせないことを実測済み。理由と数値は上のコメント参照"]
-fn surface_order_edge36_warm_shape_has_zero_back_pixels_from_all_612_directions() {
+fn surface_order_user_frame_has_only_expected_geometric_exposure_from_all_612_directions() {
+    type Exposure = (i32, i32, usize, usize, FaceId);
+    // (azimuth, elevation, x, y, owner face)。CPU rasterの座標原点は左上。
+    const EXPECTED_GEOMETRIC_EXPOSURES: [Exposure; 2] =
+        [(40, 60, 7, 370, 13), (250, -20, 673, 206, 2)];
+
     let cp = zero_back_user_cp();
     let faces = extract_faces(&cp);
-    let diagram = diagram("edge36-warm-shape-zero-612", cp.clone(), 1.0, 1.0);
-    // 手順は0件。辺36だけを0度から-87度へ200段で駆動し、他19本は自由追従させる。
-    let result = zero_back_warm_solve(&cp, &faces, ZeroBackWarmPath::Edge36Only, 200);
+    let diagram = diagram("user-frame-zero-612", cp.clone(), 1.0, 1.0);
+    let frame = zero_back_user_frame(&cp, &faces);
     assert_eq!(cp.vertices.len(), 13);
     assert_eq!(cp.edges.len(), 28);
     assert_eq!(faces.len(), 16);
-    assert_eq!(result.frame.faces.len(), 16);
-    assert!((result.angles[&36] + 87.0).abs() <= 1e-12);
+    assert_eq!(frame.faces.len(), 16);
 
     let mut measured_directions = 0_usize;
+    let mut total_front_pixels = 0_u64;
+    let mut raw_directions_with_back = 0_usize;
+    let mut raw_back_pixels = 0_u64;
+    let mut directions_with_geometric_exposure = 0_usize;
+    // 合否に使う `directions_with_back` は、表の覆いがあるのに裏ownerとなった方向数。
     let mut directions_with_back = 0_usize;
-    let mut total_back_pixels = 0_u64;
-    let mut face_back_pixels = BTreeMap::<FaceId, u64>::new();
-    let mut face_back_directions = BTreeMap::<FaceId, usize>::new();
-    let mut failures = Vec::new();
-    let mut worst = None::<(u64, i32, i32, u64, String)>;
+    let mut geometric_exposures = BTreeSet::<Exposure>::new();
+    let mut unexpected_back_pixels = BTreeSet::<Exposure>::new();
 
     for elevation_deg in (-80_i32..=80).step_by(10) {
         for azimuth_deg in (0_i32..=350).step_by(10) {
             let view = camera_from_orbit_angles(1.0, 1.0, azimuth_deg, elevation_deg);
-            let image = visual_image(&diagram, &result.frame, VIEWPORT, view);
+            let image = visual_image(&diagram, &frame, VIEWPORT, view);
             let (front, back) = classified_fill_counts(&image);
             assert_eq!(front, image.red_pixels);
             assert_eq!(back, image.light_pixels);
             measured_directions += 1;
+            total_front_pixels += front;
             if back == 0 {
                 continue;
             }
 
-            directions_with_back += 1;
-            total_back_pixels += back;
-            let mut direction_faces = BTreeMap::<FaceId, u64>::new();
-            for pixel in image
-                .pixels
-                .iter()
-                .flatten()
-                .filter(|pixel| pixel.back_facing)
-            {
-                *direction_faces.entry(pixel.face).or_default() += 1;
+            raw_directions_with_back += 1;
+            raw_back_pixels += back;
+            let mut front_coverage = vec![false; VIEWPORT * VIEWPORT];
+            for face in render_faces(&diagram, &frame, VIEWPORT, view) {
+                for triangle in face
+                    .triangles
+                    .iter()
+                    .filter(|triangle| !triangle.back_facing)
+                {
+                    rasterize(
+                        |pixel, _depth| front_coverage[pixel] = true,
+                        triangle,
+                        VIEWPORT,
+                    );
+                }
             }
-            assert_eq!(direction_faces.values().sum::<u64>(), back);
-            for (&face, &pixels) in &direction_faces {
-                *face_back_pixels.entry(face).or_default() += pixels;
-                *face_back_directions.entry(face).or_default() += 1;
+
+            let mut has_geometric_exposure = false;
+            let mut has_unexpected_back = false;
+            for (pixel_index, pixel) in image.pixels.iter().enumerate() {
+                let Some(owner) = pixel.filter(|pixel| pixel.back_facing) else {
+                    continue;
+                };
+                let exposure = (
+                    azimuth_deg,
+                    elevation_deg,
+                    pixel_index % VIEWPORT,
+                    pixel_index / VIEWPORT,
+                    owner.face,
+                );
+                if front_coverage[pixel_index] {
+                    unexpected_back_pixels.insert(exposure);
+                    has_unexpected_back = true;
+                } else {
+                    geometric_exposures.insert(exposure);
+                    has_geometric_exposure = true;
+                }
             }
-            let back_faces = ids(&image.visible_back_faces);
-            if worst.as_ref().is_none_or(|current| back > current.0) {
-                worst = Some((back, azimuth_deg, elevation_deg, front, back_faces.clone()));
-            }
-            failures.push(serde_json::json!({
-                "azimuth_deg": azimuth_deg,
-                "elevation_deg": elevation_deg,
-                "front": front,
-                "back": back,
-                "back_faces": direction_faces,
-            }));
+            directions_with_geometric_exposure += usize::from(has_geometric_exposure);
+            directions_with_back += usize::from(has_unexpected_back);
         }
     }
 
     assert_eq!(measured_directions, 36 * 17);
     println!(
-        "ZERO612_SUMMARY directions={} directions_with_back={} total_back_pixels={} face_back_pixels={face_back_pixels:?} face_back_directions={face_back_directions:?} worst={worst:?}",
-        measured_directions, directions_with_back, total_back_pixels,
-    );
-    println!(
-        "ZERO612_FAILURES {}",
-        serde_json::to_string(&failures).expect("612-direction failures serialize")
+        "ZERO612_SUMMARY directions={} total_front_pixels={} raw_directions_with_back={} raw_back_pixels={} directions_with_geometric_exposure={} geometric_exposure_pixels={} directions_with_back={} unexpected_back_pixels={} geometric_exposures={geometric_exposures:?} unexpected={unexpected_back_pixels:?}",
+        measured_directions,
+        total_front_pixels,
+        raw_directions_with_back,
+        raw_back_pixels,
+        directions_with_geometric_exposure,
+        geometric_exposures.len(),
+        directions_with_back,
+        unexpected_back_pixels.len(),
     );
     assert_eq!(
         directions_with_back, 0,
-        "all 612 directions must have zero back pixels; face pixels={face_back_pixels:?}; worst={worst:?}"
+        "all covered back pixels must be eliminated: {unexpected_back_pixels:?}"
+    );
+    assert!(unexpected_back_pixels.is_empty());
+    assert_eq!(raw_back_pixels as usize, geometric_exposures.len());
+    assert_eq!(geometric_exposures.len(), 2);
+    assert_eq!(
+        geometric_exposures,
+        BTreeSet::from(EXPECTED_GEOMETRIC_EXPOSURES),
+        "geometric exposure pixels changed"
+    );
+}
+
+#[test]
+fn surface_order_user_pose_az320_el20_reports_owner_candidates() {
+    #[derive(Clone, Copy)]
+    struct Cover {
+        draw_order: usize,
+        triangle: usize,
+        depth: f32,
+        depth_code: u32,
+        back_facing: bool,
+    }
+
+    let cp = zero_back_user_cp();
+    let faces = extract_faces(&cp);
+    let diagram = diagram("user-pose-owner-diagnosis", cp.clone(), 1.0, 1.0);
+    let frame = zero_back_user_frame(&cp, &faces);
+    println!(
+        "ZERO_OWNER_FRAME_LAYERS {:?}",
+        frame
+            .faces
+            .iter()
+            .map(|face| (face.face, face.layer, face.surface_rank))
+            .collect::<Vec<_>>()
+    );
+    let view = camera_from_orbit_angles(1.0, 1.0, 320, 20);
+    let image = visual_image(&diagram, &frame, VIEWPORT, view);
+    let mut rendered = render_faces(&diagram, &frame, VIEWPORT, view);
+    rendered.sort_by_key(render_face_owner_key);
+
+    let max_depth_code = (1_u64 << DEPTH_BITS) - 1;
+    let back_mask = image
+        .pixels
+        .iter()
+        .map(|pixel| pixel.is_some_and(|pixel| pixel.back_facing))
+        .collect::<Vec<_>>();
+    let mut covers = (0..VIEWPORT * VIEWPORT)
+        .map(|_| Vec::<Cover>::new())
+        .collect::<Vec<_>>();
+    for (draw_order, face) in rendered.iter().enumerate() {
+        for (triangle_index, triangle) in face.triangles.iter().enumerate() {
+            rasterize(
+                |pixel, depth| {
+                    if !back_mask[pixel] {
+                        return;
+                    }
+                    covers[pixel].push(Cover {
+                        draw_order,
+                        triangle: triangle_index,
+                        depth,
+                        depth_code: (depth.clamp(0.0, 1.0) * max_depth_code as f32).round() as u32,
+                        back_facing: triangle.back_facing,
+                    });
+                },
+                triangle,
+                VIEWPORT,
+            );
+        }
+    }
+
+    let mut diagnosed_back_pixels = 0_u64;
+    let mut no_front_at_pixel = 0_u64;
+    let mut front_exists_but_farther = 0_u64;
+    let mut lost_to_eligible_front = 0_u64;
+    let mut same_side = 0_u64;
+    let mut split_side = 0_u64;
+    let mut adjacent_front_covering_current = 0_u64;
+    let mut adjacent_front_not_covering_current = 0_u64;
+    let mut pixels_with_adjacent_front_covering_current = 0_u64;
+    let mut pixels_with_only_adjacent_front_not_covering_current = 0_u64;
+    let mut winner_front_pairs = BTreeMap::<(FaceId, FaceId, u32, u32, i64, i64), u64>::new();
+    let mut nearest_front_pairs = BTreeMap::<(FaceId, FaceId, u32), u64>::new();
+    let mut adjacent_cover_pairs = BTreeMap::<(FaceId, FaceId, u32), u64>::new();
+
+    for (pixel_index, pixel) in image.pixels.iter().enumerate() {
+        let Some(owner) = pixel.filter(|pixel| pixel.back_facing) else {
+            continue;
+        };
+        diagnosed_back_pixels += 1;
+        let pixel_covers = &covers[pixel_index];
+        assert!(
+            !pixel_covers.is_empty(),
+            "owner pixel must have a raster cover"
+        );
+        let minimum_depth_code = pixel_covers
+            .iter()
+            .map(|cover| cover.depth_code)
+            .min()
+            .expect("a back pixel has at least one cover");
+        let minimum_depth = minimum_depth_code as f32 / max_depth_code as f32;
+        let tolerance = DEPTH_TIE_CODES as f32 / max_depth_code as f32;
+        // productionのvisual_imageと同じく、量子化されたnearestに対して
+        // fragmentのraw f32 depthを比較する。丸め後code差だけでは境界がずれる。
+        let eligible = |cover: &Cover| cover.depth - minimum_depth <= tolerance;
+        let expected_owner = pixel_covers
+            .iter()
+            .filter(|cover| eligible(cover))
+            .max_by_key(|cover| cover.draw_order)
+            .expect("the nearest cover is always eligible");
+        assert_eq!(rendered[expected_owner.draw_order].face, owner.face);
+        assert_eq!(expected_owner.back_facing, owner.back_facing);
+        let best_front_any = pixel_covers
+            .iter()
+            .filter(|cover| !cover.back_facing)
+            .max_by_key(|cover| cover.draw_order);
+        let nearest_front = pixel_covers
+            .iter()
+            .filter(|cover| !cover.back_facing)
+            .min_by(|left, right| {
+                left.depth
+                    .total_cmp(&right.depth)
+                    .then(right.draw_order.cmp(&left.draw_order))
+            });
+        let best_front_eligible = pixel_covers
+            .iter()
+            .filter(|cover| !cover.back_facing && eligible(cover))
+            .max_by_key(|cover| cover.draw_order);
+        if let Some(front) = nearest_front {
+            *nearest_front_pairs
+                .entry((
+                    owner.face,
+                    rendered[front.draw_order].face,
+                    front.depth_code.saturating_sub(minimum_depth_code),
+                ))
+                .or_default() += 1;
+        }
+
+        match (best_front_any, best_front_eligible) {
+            (None, _) => no_front_at_pixel += 1,
+            (Some(_), None) => front_exists_but_farther += 1,
+            (Some(_), Some(front)) => {
+                lost_to_eligible_front += 1;
+                let winner = rendered
+                    .iter()
+                    .find(|face| face.face == owner.face)
+                    .expect("the owner face remains in the rendered list");
+                let front_face = &rendered[front.draw_order];
+                if winner.side == front_face.side {
+                    same_side += 1;
+                } else {
+                    split_side += 1;
+                }
+                *winner_front_pairs
+                    .entry((
+                        winner.face,
+                        front_face.face,
+                        winner.surface_rank,
+                        front_face.surface_rank,
+                        winner.side,
+                        front_face.side,
+                    ))
+                    .or_default() += 1;
+            }
+        }
+
+        let x = pixel_index % VIEWPORT;
+        let y = pixel_index / VIEWPORT;
+        let mut adjacent = Vec::new();
+        let mut has_adjacent_front_covering_current = false;
+        let mut has_adjacent_front_not_covering_current = false;
+        for (dx, dy) in [(-1_isize, 0_isize), (1, 0), (0, -1), (0, 1)] {
+            let nx = x.checked_add_signed(dx);
+            let ny = y.checked_add_signed(dy);
+            let Some((nx, ny)) = nx
+                .zip(ny)
+                .filter(|(nx, ny)| *nx < VIEWPORT && *ny < VIEWPORT)
+            else {
+                continue;
+            };
+            let neighbor_index = ny * VIEWPORT + nx;
+            let neighbor = image.pixels[neighbor_index];
+            let covers_current = neighbor.is_some_and(|neighbor| {
+                pixel_covers
+                    .iter()
+                    .any(|cover| rendered[cover.draw_order].face == neighbor.face)
+            });
+            if let Some(neighbor) = neighbor.filter(|neighbor| !neighbor.back_facing) {
+                if covers_current {
+                    adjacent_front_covering_current += 1;
+                    has_adjacent_front_covering_current = true;
+                    if let Some(cover) = pixel_covers
+                        .iter()
+                        .filter(|cover| rendered[cover.draw_order].face == neighbor.face)
+                        .min_by(|left, right| left.depth.total_cmp(&right.depth))
+                    {
+                        *adjacent_cover_pairs
+                            .entry((
+                                owner.face,
+                                neighbor.face,
+                                cover.depth_code.saturating_sub(minimum_depth_code),
+                            ))
+                            .or_default() += 1;
+                    }
+                } else {
+                    adjacent_front_not_covering_current += 1;
+                    has_adjacent_front_not_covering_current = true;
+                }
+                adjacent.push(serde_json::json!({
+                    "dx": dx,
+                    "dy": dy,
+                    "face": neighbor.face,
+                    "back_facing": neighbor.back_facing,
+                    "covers_current_pixel": covers_current,
+                }));
+            }
+        }
+        if has_adjacent_front_covering_current {
+            pixels_with_adjacent_front_covering_current += 1;
+        } else if has_adjacent_front_not_covering_current {
+            pixels_with_only_adjacent_front_not_covering_current += 1;
+        }
+
+        let candidate_json = pixel_covers
+            .iter()
+            .map(|cover| {
+                let face = &rendered[cover.draw_order];
+                serde_json::json!({
+                    "face": face.face,
+                    "surface_rank": face.surface_rank,
+                    "side": face.side,
+                    "side_times_surface_rank": face.side * i64::from(face.surface_rank),
+                    "material_orientation": face.material_orientation,
+                    "triangle": cover.triangle,
+                    "back_facing": cover.back_facing,
+                    "depth_code": cover.depth_code,
+                    "minimum_depth_delta_codes": cover.depth_code.saturating_sub(minimum_depth_code),
+                    "raw_minimum_depth_delta_codes":
+                        (cover.depth - minimum_depth) * max_depth_code as f32,
+                    "eligible": eligible(cover),
+                    "draw_order": cover.draw_order,
+                })
+            })
+            .collect::<Vec<_>>();
+        let front_json = |cover: &Cover| {
+            let face = &rendered[cover.draw_order];
+            serde_json::json!({
+                "face": face.face,
+                "surface_rank": face.surface_rank,
+                "side": face.side,
+                "side_times_surface_rank": face.side * i64::from(face.surface_rank),
+                "material_orientation": face.material_orientation,
+                "depth_code": cover.depth_code,
+                "minimum_depth_delta_codes": cover.depth_code.saturating_sub(minimum_depth_code),
+                "raw_minimum_depth_delta_codes":
+                    (cover.depth - minimum_depth) * max_depth_code as f32,
+                "draw_order": cover.draw_order,
+            })
+        };
+        if std::env::var_os("ZERO_OWNER_VERBOSE").is_some() {
+            println!(
+                "ZERO_OWNER_PIXEL {}",
+                serde_json::to_string(&serde_json::json!({
+                    "x": x,
+                    "y": y,
+                    "winner": {
+                        "face": owner.face,
+                        "back_facing": owner.back_facing,
+                    },
+                    "minimum_depth_code": minimum_depth_code,
+                    "best_front_any": best_front_any.map(front_json),
+                    "best_front_eligible": best_front_eligible.map(front_json),
+                    "candidates": candidate_json,
+                    "adjacent_front_winners": adjacent,
+                }))
+                .expect("owner pixel diagnosis serializes")
+            );
+        }
+    }
+
+    assert_eq!(diagnosed_back_pixels, image.light_pixels);
+    assert_eq!(
+        no_front_at_pixel + front_exists_but_farther + lost_to_eligible_front,
+        diagnosed_back_pixels,
+    );
+    println!(
+        "ZERO_OWNER_SUMMARY azimuth_deg=320 elevation_deg=20 viewport={} front_pixels={} back_pixels={} no_front_at_pixel={} front_exists_but_farther={} lost_to_eligible_front={} same_side={} split_side={} adjacent_front_covering_current={} adjacent_front_not_covering_current={} pixels_with_adjacent_front_covering_current={} pixels_with_only_adjacent_front_not_covering_current={} winner_front_pairs={winner_front_pairs:?} nearest_front_pairs={nearest_front_pairs:?} adjacent_cover_pairs={adjacent_cover_pairs:?}",
+        VIEWPORT,
+        image.red_pixels,
+        image.light_pixels,
+        no_front_at_pixel,
+        front_exists_but_farther,
+        lost_to_eligible_front,
+        same_side,
+        split_side,
+        adjacent_front_covering_current,
+        adjacent_front_not_covering_current,
+        pixels_with_adjacent_front_covering_current,
+        pixels_with_only_adjacent_front_not_covering_current,
     );
 }
 

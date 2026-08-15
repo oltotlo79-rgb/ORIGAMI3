@@ -20,20 +20,21 @@ describe("selectPaperHit", () => {
   const normal = new THREE.Vector3(0, 0, 1);
 
   it("実距離がtie許容差を超えるとsurface rankより近い面を優先する", () => {
-    const selected = selectPaperHit(
-      [
-        { face: 10, surfaceRank: 0, distance: 1, point, normal },
-        {
-          face: 20,
-          surfaceRank: 99,
-          distance: 1 + SURFACE_HIT_DISTANCE_EPS * 2,
-          point,
-          normal,
-        },
-      ],
-      new THREE.Vector3(0, 0, 2),
-    );
-    expect(selected?.face).toBe(10);
+    const hits = [
+      { face: 10, surfaceRank: 0, distance: 1, point, normal },
+      {
+        face: 20,
+        surfaceRank: 99,
+        distance: 1 + SURFACE_HIT_DISTANCE_EPS * 2,
+        point,
+        normal,
+      },
+    ];
+    for (const ordered of [hits, [...hits].reverse()]) {
+      expect(
+        selectPaperHit(ordered, new THREE.Vector3(0, 0, 2))?.face,
+      ).toBe(10);
+    }
   });
 
   it("実距離がtie許容差内のときだけ視点側のsurface rankを使う", () => {
@@ -47,8 +48,52 @@ describe("selectPaperHit", () => {
         normal,
       },
     ];
-    expect(selectPaperHit(hits, new THREE.Vector3(0, 0, 2))?.face).toBe(20);
-    expect(selectPaperHit(hits, new THREE.Vector3(0, 0, -2))?.face).toBe(10);
+    for (const ordered of [hits, [...hits].reverse()]) {
+      expect(selectPaperHit(ordered, new THREE.Vector3(0, 0, 2))?.face).toBe(20);
+      expect(selectPaperHit(ordered, new THREE.Vector3(0, 0, -2))?.face).toBe(10);
+    }
+  });
+
+  it("候補ごとのsideで比較し、交点の並びを反転しても同じ面を選ぶ", () => {
+    const positiveSide = {
+      face: 10,
+      surfaceRank: 1,
+      distance: 1,
+      point,
+      normal: new THREE.Vector3(1, 0, 0.25),
+    };
+    const negativeSide = {
+      face: 20,
+      surfaceRank: 2,
+      distance: 1,
+      point,
+      normal: new THREE.Vector3(1, 0, -0.25),
+    };
+    const cameraPosition = new THREE.Vector3(0, 0, 2);
+
+    expect(selectPaperHit([positiveSide, negativeSide], cameraPosition)?.face).toBe(10);
+    expect(selectPaperHit([negativeSide, positiveSide], cameraPosition)?.face).toBe(10);
+  });
+
+  it("非有限rankと退化法線は描画側と同じ0/+Z fallbackを使う", () => {
+    const fallback = {
+      face: 10,
+      surfaceRank: Number.NaN,
+      distance: 1,
+      point,
+      normal: new THREE.Vector3(),
+    };
+    const ranked = {
+      face: 20,
+      surfaceRank: 1,
+      distance: 1,
+      point,
+      normal,
+    };
+    const cameraPosition = new THREE.Vector3(0, 0, 2);
+
+    expect(selectPaperHit([fallback, ranked], cameraPosition)?.face).toBe(20);
+    expect(selectPaperHit([ranked, fallback], cameraPosition)?.face).toBe(20);
   });
 });
 

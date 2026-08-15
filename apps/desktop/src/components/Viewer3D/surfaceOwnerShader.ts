@@ -3,20 +3,23 @@
 
 import * as THREE from "three";
 import type { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
-import type { SurfaceOwnerBinding } from "./surfaceOwner";
+import {
+  SURFACE_OWNER_DEPTH_PLANE_ATTRIBUTE,
+  SURFACE_OWNER_DEPTH_TOLERANCE,
+  type SurfaceOwnerBinding,
+} from "./surfaceOwner";
+
+export {
+  SURFACE_OWNER_DEPTH_BITS,
+  SURFACE_OWNER_DEPTH_TOLERANCE,
+  SURFACE_OWNER_DEPTH_TOLERANCE_CODES,
+} from "./surfaceOwner";
 
 export const SURFACE_OWNER_ATTRIBUTE = "surfaceOwnerToken";
 export const SURFACE_OWNER_PROBE_ATTRIBUTE = "surfaceOwnerProbe";
 export const SURFACE_OWNER_OTHER_ATTRIBUTE = "surfaceOwnerOther";
 /** 6pxのfocus線を高DPIでも紙の外周まで残せる、近傍探索の固定上限。 */
 export const SURFACE_OWNER_MAX_RADIUS_PX = 12;
-/** owner最前深度targetの固定精度。UnsignedIntType + DepthFormatはDEPTH_COMPONENT24になる。 */
-export const SURFACE_OWNER_DEPTH_BITS = 24;
-/** 別三角形分割の共平面で生じる補間丸めだけをtieとして扱う深度code数。 */
-export const SURFACE_OWNER_DEPTH_TOLERANCE_CODES = 2;
-export const SURFACE_OWNER_DEPTH_TOLERANCE =
-  SURFACE_OWNER_DEPTH_TOLERANCE_CODES / (2 ** SURFACE_OWNER_DEPTH_BITS - 1);
-
 const OWNER_FRAGMENT_SUPPORT = /* glsl */ `
 uniform float surfaceOwnerEnabled;
 uniform sampler2D surfaceOwnerMap;
@@ -127,6 +130,23 @@ bool surfaceOwnerLineVisible( const in vec4 expected ) {
 }
 `;
 
+// Three r185のWebGL2変換で`flat varying`はflat out/inへ、
+// gl_FragDepthEXTはcoreのgl_FragDepthへ展開される。
+const OWNER_CANONICAL_DEPTH_SUPPORT = /* glsl */ `
+uniform vec2 surfaceOwnerResolution;
+flat varying vec4 vSurfaceOwnerDepthPlane;
+
+float surfaceOwnerCanonicalDepth() {
+  if ( vSurfaceOwnerDepthPlane.w < 0.5 ) return gl_FragCoord.z;
+  vec2 size = max( surfaceOwnerResolution, vec2( 1.0 ) );
+  vec2 ndc = gl_FragCoord.xy / size * 2.0 - 1.0;
+  return
+    vSurfaceOwnerDepthPlane.x * ndc.x +
+    vSurfaceOwnerDepthPlane.y * ndc.y +
+    vSurfaceOwnerDepthPlane.z;
+}
+`;
+
 function ownerUniforms(binding: SurfaceOwnerBinding) {
   return {
     surfaceOwnerEnabled: binding.enabled,
@@ -140,7 +160,7 @@ export interface SurfaceOwnerPassResources {
   readonly depthTarget: THREE.WebGLRenderTarget;
   /** 最終的なowner codeを書き、通常材質が読むtarget。depthは持たない。 */
   readonly colorTarget: THREE.WebGLRenderTarget;
-  readonly depthMaterial: THREE.MeshDepthMaterial;
+  readonly depthMaterial: THREE.ShaderMaterial;
   readonly colorMaterial: THREE.ShaderMaterial;
 }
 
@@ -301,13 +321,33 @@ export function createSurfaceOwnerPassResources(
   const depthTarget = createOwnerColorTarget(true);
   depthTarget.depthTexture = depthTexture;
   const colorTarget = createOwnerColorTarget(false);
-  const depthMaterial = new THREE.MeshDepthMaterial({
+  const depthMaterial = new THREE.ShaderMaterial({
+    uniforms: {
+      surfaceOwnerResolution: binding.resolution,
+    },
+    vertexShader: /* glsl */ `
+      attribute vec4 ${SURFACE_OWNER_DEPTH_PLANE_ATTRIBUTE};
+      flat varying vec4 vSurfaceOwnerDepthPlane;
+      void main() {
+        vSurfaceOwnerDepthPlane = ${SURFACE_OWNER_DEPTH_PLANE_ATTRIBUTE};
+        gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      ${OWNER_CANONICAL_DEPTH_SUPPORT}
+      void main() {
+        gl_FragDepthEXT = surfaceOwnerCanonicalDepth();
+        gl_FragColor = vec4( 1.0 );
+      }
+    `,
     side: THREE.DoubleSide,
-    depthPacking: THREE.BasicDepthPacking,
+    depthTest: true,
+    depthWrite: true,
+    depthFunc: THREE.LessEqualDepth,
+    colorWrite: false,
+    blending: THREE.NoBlending,
+    toneMapped: false,
   });
-  depthMaterial.depthTest = true;
-  depthMaterial.depthWrite = true;
-  depthMaterial.depthFunc = THREE.LessEqualDepth;
 
   const colorMaterial = new THREE.ShaderMaterial({
     uniforms: {
@@ -317,22 +357,26 @@ export function createSurfaceOwnerPassResources(
     },
     vertexShader: /* glsl */ `
       attribute vec4 ${SURFACE_OWNER_ATTRIBUTE};
+      attribute vec4 ${SURFACE_OWNER_DEPTH_PLANE_ATTRIBUTE};
       varying vec4 vSurfaceOwnerToken;
+      flat varying vec4 vSurfaceOwnerDepthPlane;
       void main() {
         vSurfaceOwnerToken = ${SURFACE_OWNER_ATTRIBUTE};
+        vSurfaceOwnerDepthPlane = ${SURFACE_OWNER_DEPTH_PLANE_ATTRIBUTE};
         gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
       }
     `,
     fragmentShader: /* glsl */ `
       uniform sampler2D surfaceOwnerDepthMap;
-      uniform vec2 surfaceOwnerResolution;
       uniform float surfaceOwnerDepthTolerance;
       varying vec4 vSurfaceOwnerToken;
+      ${OWNER_CANONICAL_DEPTH_SUPPORT}
       void main() {
         vec2 size = max( surfaceOwnerResolution, vec2( 1.0 ) );
         vec2 uv = clamp( gl_FragCoord.xy / size, vec2( 0.0 ), vec2( 1.0 ) );
         float nearestDepth = texture2D( surfaceOwnerDepthMap, uv ).x;
-        if ( gl_FragCoord.z - nearestDepth > surfaceOwnerDepthTolerance ) discard;
+        float candidateDepth = surfaceOwnerCanonicalDepth();
+        if ( candidateDepth - nearestDepth > surfaceOwnerDepthTolerance ) discard;
         gl_FragColor = vSurfaceOwnerToken;
       }
     `,
