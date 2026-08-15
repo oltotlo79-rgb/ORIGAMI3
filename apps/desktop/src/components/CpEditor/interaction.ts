@@ -721,19 +721,15 @@ export function onMouseDown(
   }
   if (kind || ctx.tool === "fold") {
     // 線ツール・折るツール: 1クリック目=始点、2クリック目=確定
-    // 生のクリック位置が紙外なら、近くの輪郭へ吸着させず同じ段階を保つ。
-    if (kind && !paperWorld) {
-      ctx.state.lineInputHint = OUTSIDE_PAPER_LINE_HINT;
-      ctx.state.hoverSnap = null;
-      ctx.state.directionSnap = null;
-      return;
-    }
+    // 紙外かどうかは吸着させた後の点で決める。角・方眼・輪郭は紙の端にあるため、
+    // 生のカーソル位置で先に断ると、1px外れただけで角が選べなくなる(利用者報告)。
     let pos = refreshLineEndpoint(
       ctx,
       kind && paperWorld ? paperWorld : world,
       snapRadius,
     );
     if (kind) {
+      // 吸着しても紙外に留まる点だけを断る。灰色の余白には線を引けないままにする。
       const bounded = pointOnPaper(ctx.finalDoc, pos);
       if (!bounded) {
         ctx.state.lineInputHint = OUTSIDE_PAPER_LINE_HINT;
@@ -742,6 +738,7 @@ export function onMouseDown(
         return;
       }
       pos = bounded;
+      ctx.state.lineInputHint = null;
     }
     const start = ctx.state.pendingStart;
     if (start === null) {

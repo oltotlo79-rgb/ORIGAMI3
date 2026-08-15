@@ -501,14 +501,71 @@ describe("線ツール", () => {
     expect(applyEdit).not.toHaveBeenCalled();
   });
 
+  it("紙の四隅の少し外側を押しても、角へ吸着して受け付ける", () => {
+    // 吸着半径は画面12px。scale=500なので正規化座標で0.024。
+    // 斜めに0.01ずつ外した点は角から0.0142で、吸着範囲の内側にある。
+    const corners: Vec2[] = [
+      [0, 0],
+      [1, 0],
+      [1, 1],
+      [0, 1],
+    ];
+    let accepted = 0;
+    for (const corner of corners) {
+      const { ctx } = makeCtx();
+      ctx.tool = "mountain";
+      const outside: Vec2 = [
+        corner[0] === 0 ? -0.01 : 1.01,
+        corner[1] === 0 ? -0.01 : 1.01,
+      ];
+
+      onMouseDown(ctx, toScreen(outside), 0);
+
+      expect(ctx.state.hoverSnap, `角${corner}`).toEqual({ pos: corner, kind: "vertex" });
+      expect(ctx.state.pendingStart, `角${corner}`).toEqual(corner);
+      expect(ctx.state.lineInputHint, `角${corner}`).toBeNull();
+      accepted += 1;
+    }
+    expect(accepted).toBe(4);
+  });
+
+  it("紙の輪郭の少し外側を押しても、輪郭上の点として受け付ける", () => {
+    const { ctx, drawSegment } = makeCtx();
+    ctx.tool = "valley";
+
+    // 左辺の外0.01(=5px)。方眼の交点0.125/0.25からは0.0625離しておく。
+    onMouseDown(ctx, toScreen([-0.01, 0.1875]), 0);
+    expect(ctx.state.hoverSnap).toEqual({ pos: [0, 0.1875], kind: "edge" });
+    expect(ctx.state.pendingStart).toEqual([0, 0.1875]);
+    expect(ctx.state.lineInputHint).toBeNull();
+
+    onMouseDown(ctx, toScreen([1.01, 0.8125]), 0);
+    expect(drawSegment).toHaveBeenCalledTimes(1);
+    const [start, end] = drawSegment.mock.calls[0];
+    expect(start).toEqual([0, 0.1875]);
+    expect(end[0]).toBeCloseTo(1, 12);
+    expect(ctx.state.lineInputHint).toBeNull();
+  });
+
+  it("輪郭上の方眼の交点も、少し外側から吸着して受け付ける", () => {
+    const { ctx } = makeCtx();
+    ctx.tool = "aux";
+    // 8等分の方眼で、左辺上の交点(0, 0.25)。角からは0.25離れているので点吸着より方眼が効く。
+    onMouseDown(ctx, toScreen([-0.01, 0.25]), 0);
+
+    expect(ctx.state.hoverSnap).toEqual({ pos: [0, 0.25], kind: "grid" });
+    expect(ctx.state.pendingStart).toEqual([0, 0.25]);
+    expect(ctx.state.lineInputHint).toBeNull();
+  });
+
   it("山・谷・補助の各ツールで紙外の2点を押しても線を引かない", () => {
     for (const tool of ["mountain", "valley", "aux"] as const) {
       const { ctx, drawSegment } = makeCtx();
       ctx.tool = tool;
 
-      // 12pxの吸着範囲内でも、生のクリックが紙外なら輪郭へ引き込まない。
-      onMouseDown(ctx, toScreen([-0.01, 0.2]), 0);
-      onMouseDown(ctx, toScreen([1.01, 0.8]), 0);
+      // 吸着半径(12px=0.024)の外なので、輪郭にも方眼にも吸い付かない。
+      onMouseDown(ctx, toScreen([-0.05, 0.2]), 0);
+      onMouseDown(ctx, toScreen([1.05, 0.8]), 0);
 
       expect(drawSegment, tool).toHaveBeenCalledTimes(0);
       expect(ctx.state.pendingStart, tool).toBeNull();
@@ -527,7 +584,7 @@ describe("線ツール", () => {
     const end: Vec2 = [0.75, 0.75];
 
     onMouseDown(ctx, toScreen(start), 0);
-    onMouseDown(ctx, toScreen([1.01, 0.5]), 0);
+    onMouseDown(ctx, toScreen([1.05, 0.5]), 0);
 
     expect(drawSegment).toHaveBeenCalledTimes(0);
     expect(ctx.state.pendingStart).toEqual(start);
@@ -547,7 +604,7 @@ describe("線ツール", () => {
     ctx.tool = "valley";
     const start: Vec2 = [0.25, 0.25];
 
-    onMouseDown(ctx, toScreen([-0.01, 0.5]), 0);
+    onMouseDown(ctx, toScreen([-0.05, 0.5]), 0);
     onMouseDown(ctx, toScreen(start), 0);
 
     expect(drawSegment).toHaveBeenCalledTimes(0);
