@@ -59,9 +59,18 @@ fn limb_name(skeleton: &Skeleton, id: u32) -> String {
     )
 }
 
-fn outside_paper_warning(name: &str) -> String {
+/// 円が紙からはみ出すこと自体は正常な配置なので警告しない(要件§8-2は
+/// 「円の中心が紙内」を制約としており、円そのものは紙からはみ出してよい)。
+/// `scratchpad/containment-report.md` の実測: 実際に折った鶴・カエルの基本形
+/// 9本すべてで、出っぱりの長さは要求どおり届いており(不足0、最大差
+/// 6.8e-15)、はみ出し量を0%→75%に変えても不足は変わらなかった。
+/// 一方、円の中心そのものが紙の外に出ると、案A(中心が紙内)の制約が
+/// 破れており、軸多角形の頂点が紙の外へ出て展開図が壊れうる。
+/// `pack()` は中心を常に紙内へ収めるため通常は起きないが、壊れた入力に
+/// 対する安全網として警告する。
+fn position_outside_paper_warning(name: &str) -> String {
     format!(
-        "{name}が紙からはみ出しています。「選び直す」で戻り、さらに「形を直す」を選んで、{name}の長さか太さを小さくしてください"
+        "{name}の置き場所が紙からはみ出しています。「選び直す」で戻り、さらに「形を直す」を選んで、出っぱりの数や配置を見直してください"
     )
 }
 
@@ -201,16 +210,17 @@ pub fn generate(
     }
     let mut warnings = Vec::new();
 
-    // 円が紙をはみ出す角は、その角が想定より短くなりうることを伝える。
+    // 円そのものが紙からはみ出すのは正常(上のdocコメント参照)。本当に問題
+    // なのは、案Aの制約である「円の中心が紙内」が破れている場合だけなので、
+    // 中心の位置だけを見て知らせる。
     for &(id, c) in &packing.centers {
-        let r = skeleton.leaf_radius(id) * packing.scale;
-        let out = c[0] - r < -ON_EDGE_TOL
-            || c[0] + r > paper_w + ON_EDGE_TOL
-            || c[1] - r < -ON_EDGE_TOL
-            || c[1] + r > paper_h + ON_EDGE_TOL;
+        let out = c[0] < -ON_EDGE_TOL
+            || c[0] > paper_w + ON_EDGE_TOL
+            || c[1] < -ON_EDGE_TOL
+            || c[1] > paper_h + ON_EDGE_TOL;
         if out {
             let name = limb_name(skeleton, id);
-            warnings.push(outside_paper_warning(&name));
+            warnings.push(position_outside_paper_warning(&name));
         }
     }
 
@@ -300,8 +310,8 @@ mod tests {
     #[test]
     fn generation_messages_use_screen_words_and_explain_the_next_action() {
         assert_eq!(
-            outside_paper_warning("頭"),
-            "頭が紙からはみ出しています。「選び直す」で戻り、さらに「形を直す」を選んで、頭の長さか太さを小さくしてください"
+            position_outside_paper_warning("頭"),
+            "頭の置き場所が紙からはみ出しています。「選び直す」で戻り、さらに「形を直す」を選んで、出っぱりの数や配置を見直してください"
         );
         assert_eq!(
             overlapping_limb_warning("尾"),
@@ -317,7 +327,7 @@ mod tests {
             NO_PLACEMENT_ERROR.to_string(),
             STRAIGHT_LINE_WARNING.to_string(),
             INVALID_CREASES_WARNING.to_string(),
-            outside_paper_warning("頭"),
+            position_outside_paper_warning("頭"),
             overlapping_limb_warning("尾"),
             foldability_warning(3),
         ];
@@ -346,15 +356,39 @@ mod tests {
 
     #[test]
     fn generated_warning_identifies_the_same_limb_name_as_the_screen() {
+        // `pack()`は中心を必ず紙内へclampするため、この状況(中心そのものが
+        // 紙の外)は`generate()`が壊れた入力から利用者を守れているかを見る
+        // ための人為的な構成。案A(中心が紙内)の制約が破れた本当の問題。
         let skeleton = named_limb_skeleton();
         let packing = Packing {
             scale: 1.0,
-            centers: vec![(41, [0.5, 0.5]), (7, [0.75, 0.75])],
+            centers: vec![(41, [-0.1, 0.5]), (7, [0.75, 1.2])],
+            violation: 0.1,
+        };
+        let result = generate(&skeleton, &packing, 1.0, 1.0).unwrap();
+        assert!(result.warnings.contains(&position_outside_paper_warning("頭")));
+        assert!(result.warnings.contains(&position_outside_paper_warning("尾")));
+    }
+
+    /// 円が紙からはみ出しても、中心が紙内にあれば警告しない(案Aは正常な配置)。
+    /// 実測根拠: `scratchpad/containment-report.md` §1.2。鶴・カエルの基本形
+    /// は実際に折った9本すべてで、はみ出しても出っぱりの長さが要求どおり
+    /// 届いていた(不足0)。
+    #[test]
+    fn circle_overflow_with_center_inside_paper_is_not_warned() {
+        let skeleton = named_limb_skeleton();
+        // 半径1.0の円を紙の隅(中心は紙内)に置く。円は紙を大きくはみ出す。
+        let packing = Packing {
+            scale: 1.0,
+            centers: vec![(41, [0.0, 0.0]), (7, [1.0, 1.0])],
             violation: 0.0,
         };
         let result = generate(&skeleton, &packing, 1.0, 1.0).unwrap();
-        assert!(result.warnings.contains(&outside_paper_warning("頭")));
-        assert!(result.warnings.contains(&outside_paper_warning("尾")));
+        assert!(
+            result.warnings.iter().all(|w| !w.contains("はみ出")),
+            "円のはみ出しだけで警告が出た(誤警告): {:?}",
+            result.warnings
+        );
     }
 
     /// 四角形の軸多角形を扇状分割で埋められること(ドロネー分割は三角形しか

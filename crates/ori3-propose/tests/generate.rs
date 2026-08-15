@@ -165,15 +165,73 @@ fn broken_input_is_rejected_with_japanese_message() {
 }
 
 #[test]
-fn oversized_circle_is_reported_as_a_warning_not_an_error() {
-    // 紙に対して角が長すぎる骨格。円は紙からはみ出すが、生成は続行する。
+fn oversized_circle_does_not_trigger_a_false_overflow_warning() {
+    // 紙に対して角が長すぎる骨格。円は紙から大きくはみ出すが、中心は
+    // `pack()`が常に紙内へclampするため、これは正常な配置であって警告
+    // すべき問題ではない(scratchpad/containment-report.md §1.2の実測:
+    // 実際に折った鶴・カエルの基本形は、はみ出しても出っぱりの長さが
+    // 要求どおり届いていた。不足0)。生成そのものは続行する。
     let r = build(&star(2, 5.0), 1.0, 1.0, 3);
     assert!(
-        r.warnings.iter().any(|w| w.contains("はみ出")),
-        "はみ出しの警告が出ていない: {:?}",
+        r.warnings.iter().all(|w| !w.contains("はみ出")),
+        "円のはみ出しだけで誤った警告が出た: {:?}",
         r.warnings
     );
     assert!(extract_faces(&r.cp).len() >= 2);
+}
+
+/// 案Aの本当の制約(円の中心が紙内)が破れた場合には、引き続き警告する。
+/// `pack()`は中心を常にclampするので通常は発生しないが、壊れた入力に
+/// 対する安全網として`generate()`が検知できることを確かめる。
+#[test]
+fn center_outside_paper_still_warns_a_real_problem() {
+    let skeleton = star(1, 0.1);
+    let leaf = skeleton.leaves()[0];
+    let packing = ori3_propose::Packing {
+        scale: 1.0,
+        centers: vec![(leaf, [-0.2, 0.5])],
+        violation: 0.2,
+    };
+    let r = generate(&skeleton, &packing, 1.0, 1.0).unwrap();
+    assert!(
+        r.warnings.iter().any(|w| w.contains("はみ出")),
+        "中心が紙の外にあるのに警告が出ていない: {:?}",
+        r.warnings
+    );
+}
+
+/// 鶴の基本形・カエルの基本形の骨格では、案Aで実際に折れる配置が
+/// 得られる(実測: containment-report.md §1.2〜1.4)ので、誤った
+/// 「はみ出し」警告が出てはならない。実測した9本の出っぱりのうち8本は
+/// 円の中心が紙の隅にあり、円そのものは紙を大きくはみ出す。
+#[test]
+fn bird_and_frog_base_skeletons_produce_no_false_overflow_warning() {
+    const SQRT2: f64 = std::f64::consts::SQRT_2;
+    let bird_base = {
+        let slender = 1.0 - 0.5 * SQRT2;
+        let wide = 0.5 * SQRT2;
+        let mut nodes = vec![SkeletonNode::new(0, None, 0.0)];
+        for (i, len) in [slender, slender, wide, wide].into_iter().enumerate() {
+            nodes.push(SkeletonNode::new(1 + i as u32, Some(0), len));
+        }
+        Skeleton { nodes }
+    };
+    let frog_base = star(5, 0.25 * SQRT2);
+
+    for (name, skeleton) in [("鶴の基本形", &bird_base), ("カエルの基本形", &frog_base)] {
+        for seed in 0..20u64 {
+            let candidates = pack(skeleton, 1.0, 1.0, seed, 8);
+            assert!(!candidates.is_empty(), "{name}: 充填に失敗した(seed {seed})");
+            for p in &candidates {
+                let r = generate(skeleton, p, 1.0, 1.0).expect("生成に失敗した");
+                assert!(
+                    r.warnings.iter().all(|w| !w.contains("はみ出")),
+                    "{name}: seed {seed} で誤ったはみ出し警告が出た: {:?}",
+                    r.warnings
+                );
+            }
+        }
+    }
 }
 
 /// 要件§8の精度目標「頭1・尾1・足4の骨格で鶴系の基本形に相当する折り可能な
