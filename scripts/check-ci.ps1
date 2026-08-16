@@ -481,7 +481,7 @@ function Invoke-CheckedCommand {
 
 $expectedChecksSteps = @(
     [pscustomobject]@{ Command = "npm ci"; WorkingDirectory = "apps/desktop"; Executable = "npm"; Arguments = @("ci") },
-    [pscustomobject]@{ Command = "cargo test --workspace"; WorkingDirectory = "."; Executable = "cargo"; Arguments = @("test", "--workspace") },
+    [pscustomobject]@{ Command = "cargo test --workspace -- --skip surface_order_179_999_to_180_all_110_creases --skip surface_order_exact_endpoint_is_rank_stable_for_previous_19"; WorkingDirectory = "."; Executable = "cargo"; Arguments = @("test", "--workspace", "--", "--skip", "surface_order_179_999_to_180_all_110_creases", "--skip", "surface_order_exact_endpoint_is_rank_stable_for_previous_19") },
     [pscustomobject]@{ Command = "cargo clippy --workspace --all-targets -- -D warnings"; WorkingDirectory = "."; Executable = "cargo"; Arguments = @("clippy", "--workspace", "--all-targets", "--", "-D", "warnings") },
     [pscustomobject]@{ Command = "npm run build"; WorkingDirectory = "apps/desktop"; Executable = "npm"; Arguments = @("run", "build") },
     [pscustomobject]@{ Command = "npm run lint"; WorkingDirectory = "apps/desktop"; Executable = "npm"; Arguments = @("run", "lint") },
@@ -489,7 +489,10 @@ $expectedChecksSteps = @(
 )
 $expectedPerformanceSteps = @(
     [pscustomobject]@{ Command = "cargo test --release -p ori3-soft --test perf_soft -- --nocapture"; WorkingDirectory = "."; Executable = "cargo"; Arguments = @("test", "--release", "-p", "ori3-soft", "--test", "perf_soft", "--", "--nocapture") },
-    [pscustomobject]@{ Command = "cargo test --release -p ori3-rigid --test perf_miura -- --nocapture"; WorkingDirectory = "."; Executable = "cargo"; Arguments = @("test", "--release", "-p", "ori3-rigid", "--test", "perf_miura", "--", "--nocapture") }
+    [pscustomobject]@{ Command = "cargo test --release -p ori3-rigid --test perf_miura -- --nocapture"; WorkingDirectory = "."; Executable = "cargo"; Arguments = @("test", "--release", "-p", "ori3-rigid", "--test", "perf_miura", "--", "--nocapture") },
+    [pscustomobject]@{ Command = "cargo test --release -p ori3-rigid --test perf_yakko --test perf_contact -- --nocapture"; WorkingDirectory = "."; Executable = "cargo"; Arguments = @("test", "--release", "-p", "ori3-rigid", "--test", "perf_yakko", "--test", "perf_contact", "--", "--nocapture") },
+    [pscustomobject]@{ Command = "cargo test --release -p desktop --lib surface_order_179_999_to_180_all_110_creases -- --nocapture"; WorkingDirectory = "."; Executable = "cargo"; Arguments = @("test", "--release", "-p", "desktop", "--lib", "surface_order_179_999_to_180_all_110_creases", "--", "--nocapture") },
+    [pscustomobject]@{ Command = "cargo test --release -p desktop --lib surface_order_exact_endpoint_is_rank_stable_for_previous_19 -- --nocapture"; WorkingDirectory = "."; Executable = "cargo"; Arguments = @("test", "--release", "-p", "desktop", "--lib", "surface_order_exact_endpoint_is_rank_stable_for_previous_19", "--", "--nocapture") }
 )
 $expectedSteps = @($expectedChecksSteps) + @($expectedPerformanceSteps)
 $totalStages = $expectedSteps.Count + 2

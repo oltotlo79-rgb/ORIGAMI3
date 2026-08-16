@@ -32,8 +32,8 @@ function Invoke-Check {
 Push-Location $root
 try {
     # テストが追跡対象のファイルを書き換えていないかを、実行の前後で比べる。
-    # 悪魔のチェックポイントを書くテストが tests/fixtures/devil-025.ori3 を毎回
-    # 上書きしており、テストを走らせるだけで作業ツリーが汚れていた。
+    # 途中経過を書き出すテストが tests/fixtures/ の作品ファイルを毎回上書きしており、
+    # テストを走らせるだけで作業ツリーが汚れていた。
     # 同じファイルを別のテストが読むため、実行順で読む内容が変わる状態でもあった。
     $global:LASTEXITCODE = 0
     $beforeTracked = (& git -C $root status --porcelain --untracked-files=no) -join "`n"

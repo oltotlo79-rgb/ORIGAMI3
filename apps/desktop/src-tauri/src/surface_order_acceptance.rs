@@ -1416,7 +1416,11 @@ fn classified_fill_counts(image: &VisualImage) -> (u64, u64) {
     (front, back)
 }
 
-fn endpoint_frames(diagram: &Diagram, hinge: EdgeId, sign: f64) -> (EndpointState, EndpointState) {
+/// `BOUNDARY_ABS`(179.5°〜180°)を順に送った姿勢を全て返す。
+///
+/// 180°の手前の4点は面どうしが実際に離れているので、重なりの上下を
+/// **姿勢そのものから測れる**。`endpoint_frames` はここから両端点だけを取り出す。
+fn boundary_ladder(diagram: &Diagram, hinge: EdgeId, sign: f64) -> Vec<(f64, EndpointState)> {
     let mut warm = None::<HashMap<EdgeId, f64>>;
     for absolute in WARMUP_ABS {
         let motion = solve_motion(
@@ -1433,8 +1437,7 @@ fn endpoint_frames(diagram: &Diagram, hinge: EdgeId, sign: f64) -> (EndpointStat
         warm = Some(motion.result.angles);
     }
 
-    let mut before = None;
-    let mut after = None;
+    let mut ladder = Vec::with_capacity(BOUNDARY_ABS.len());
     for absolute in BOUNDARY_ABS {
         let motion = solve_motion(
             &diagram.cp,
@@ -1460,23 +1463,26 @@ fn endpoint_frames(diagram: &Diagram, hinge: EdgeId, sign: f64) -> (EndpointStat
             diagram.name,
             sign * absolute
         );
-        if absolute == 179.999 {
-            before = Some(EndpointState {
-                frame: motion.result.frame.clone(),
-                angles: motion.result.angles.clone(),
-            });
-        } else if absolute == 180.0 {
-            after = Some(EndpointState {
-                frame: motion.result.frame.clone(),
-                angles: motion.result.angles.clone(),
-            });
-        }
-        warm = Some(motion.result.angles);
+        warm = Some(motion.result.angles.clone());
+        ladder.push((
+            absolute,
+            EndpointState {
+                frame: motion.result.frame,
+                angles: motion.result.angles,
+            },
+        ));
     }
-    (
-        before.expect("boundary samples include 179.999 degrees"),
-        after.expect("boundary samples include 180 degrees"),
-    )
+    ladder
+}
+
+fn endpoint_frames(diagram: &Diagram, hinge: EdgeId, sign: f64) -> (EndpointState, EndpointState) {
+    let mut ladder = boundary_ladder(diagram, hinge, sign);
+    let after = ladder.pop().expect("boundary samples include 180 degrees").1;
+    let before = ladder
+        .pop()
+        .expect("boundary samples include 179.999 degrees")
+        .1;
+    (before, after)
 }
 
 fn ids(values: &BTreeSet<FaceId>) -> String {
@@ -1531,31 +1537,216 @@ fn max_vertex_distance(before: &Frame3D, after: &Frame3D) -> f64 {
         .fold(0.0, f64::max)
 }
 
+/// 面対の「上」を測る軸が、その姿勢で紙の**巻き方向**とどちらへそろっているか。
+///
+/// `surface_rank` は「その面対が乗る平面の正準法線の向きに、下から上へ」並べた順で
+/// ある(製品側 `surface_order.rs::derive_surface_order_with` は、面対のうち
+/// **先に来るほうの面**の平面を使う。`near_overlaps` も同じ並びで面対を作る)。
+/// 正準法線は `n` と `−n` のうち絶対値が最大の成分が正になる側で、対称に折り切った
+/// 形では2成分の絶対値が厳密に等しくなり、姿勢が 6.6e-6 動くだけで支配的な成分が
+/// 入れ替わる。そのとき順位も入れ替わるが、**紙の重なり方は同じ**である。
+///
+/// 実測(`diag_kome_edge12_canonical_axis` / `diag_kome_edge12_float32_axis_choice`、
+/// `diagonal-midline-square` の辺12、面3と面4):
+///
+/// | 姿勢 | 面3の法線 | \|x\|−\|y\| (f64) | \|x\|−\|y\| (Float32) |
+/// |---|---|---:|---:|
+/// | 179.999° | (0.598072673372, −0.598069066507, 0.533500205298) | +3.607e-6 | +3.603e-6 |
+/// | 180° | (0.598072754669, −0.598072755698, 0.533495978442) | −1.028e-9 | −6.118e-8 |
+///
+/// 裂けはどちらも 3.1e-15 以下(許容 1e-6)で、面4は両方の姿勢で面3の紙の裏側に
+/// あり(179°〜179.999°で −2.057e-3 〜 −2.057e-6、符号は一定)、物理的な上下は
+/// 変わっていない。画面側(Float32でも符号は同じ)も同じ式で `side` を決めるので
+/// 描かれる絵も変わらない。Rust側にだけ「ほぼ同じなら軸の優先順」の帯を入れると
+/// 画面側と食い違い、裏が31,991画素増えることを実測しているので、正準法線の式は
+/// 変えない。**代わりに上下を比べるときだけ、姿勢によらない巻き方向へ直す。**
+/// 巻き方向の法線は展開図の面の定義だけで決まるので、姿勢が変わっても意味が
+/// 変わらない。
+fn winding_sign(polygons: &BTreeMap<FaceId, Vec<V3>>, left: FaceId) -> Option<f64> {
+    let normal = polygon_normal3(polygons.get(&left)?)?;
+    Some(if normal.dot(canonical3(normal)) >= 0.0 {
+        1.0
+    } else {
+        -1.0
+    })
+}
+
+/// 刻印された重なり順を、面対ごとに紙の巻き方向へそろえて読む。
+/// 値が `true` なら `right` は `left` の巻き方向の側にある。
+fn material_sides(frame: &Frame3D, stacks: &[DeterminedStack]) -> BTreeMap<(FaceId, FaceId), bool> {
+    let polygons = frame_polygons(frame);
+    let rank = frame
+        .faces
+        .iter()
+        .map(|face| (face.face, face.surface_rank))
+        .collect::<BTreeMap<_, _>>();
+    stacks
+        .iter()
+        .filter_map(|stack| {
+            let sign = winding_sign(&polygons, stack.left)?;
+            let above = rank.get(&stack.right)? > rank.get(&stack.left)?;
+            Some((
+                (stack.left, stack.right),
+                if sign >= 0.0 { above } else { !above },
+            ))
+        })
+        .collect()
+}
+
+/// 2つの姿勢の間で、紙の重なり方そのものが入れ替わった面対を返す。
+///
+/// 上下は各姿勢の**巻き方向**で読むので、正準法線の反転だけでは入れ替わらない。
+/// `situation` は不合格の説明に差し込む「どこの間で入れ替わったか」である。
+fn stacks_that_differ(
+    before: &Frame3D,
+    after: &Frame3D,
+    stacks: &[DeterminedStack],
+    situation: &str,
+) -> Vec<(FaceId, FaceId, String)> {
+    let before_sides = material_sides(before, stacks);
+    let after_sides = material_sides(after, stacks);
+    stacks
+        .iter()
+        .filter_map(|stack| {
+            let key = (stack.left, stack.right);
+            let (Some(before_side), Some(after_side)) =
+                (before_sides.get(&key), after_sides.get(&key))
+            else {
+                return None;
+            };
+            (before_side != after_side).then(|| {
+                (
+                    stack.left,
+                    stack.right,
+                    format!(
+                        "実測{}段(隙間 {:.3e}〜{:.3e})では面{}が面{}の同じ側にあり続けるのに、\
+                         {situation}で紙の重なり方が入れ替わった",
+                        stack.samples,
+                        stack.smallest_gap,
+                        stack.largest_gap,
+                        stack.right,
+                        stack.left,
+                    ),
+                )
+            })
+        })
+        .collect()
+}
+
+/// 179.999°と180°で、紙の重なり方そのものが入れ替わった面対を返す。
+fn stacks_that_flip_between_endpoints(
+    before: &Frame3D,
+    after: &Frame3D,
+    stacks: &[DeterminedStack],
+) -> Vec<(FaceId, FaceId, String)> {
+    stacks_that_differ(before, after, stacks, "179.999°と180°")
+}
+
+/// 入力の展開図の頂点座標を、全て1 ULPだけ大きい側へ動かした複製。
+///
+/// 作品ファイルの小数の読み方(`serde_json` の `float_roundtrip`)や計算機の違いで
+/// 実際に起きる大きさの入力差である。同じ検査をこの複製でも走らせ、答えが変わる
+/// 面対を主張の対象から外すために使う。
+fn one_ulp_nudged(source: &Diagram) -> Diagram {
+    let mut cp = source.cp.clone();
+    for vertex in &mut cp.vertices {
+        for coordinate in &mut vertex.pos {
+            *coordinate = f64::from_bits(coordinate.to_bits() + 1);
+        }
+    }
+    diagram(source.name, cp, source.paper_width, source.paper_height)
+}
+
+/// 梯子の実測で上下が決まり、**入力を1 ULP動かしても同じ答えになる**面対だけを返す。
+///
+/// 1 ULPで揺れる量の実測(`diag_gap_noise_from_one_ulp_of_input`。
+/// `folded-sample.ori3` の6本×2方向、179.999°の姿勢で対応の取れた467組):
+/// 隙間の差は中央値 **1.399e-10**、p90 **3.102e-7**、p99 **2.267e-5**、
+/// 最大 **6.829e-5**。うち**6組は符号ごと反転**した(いちばん大きいもので
+/// 3.359e-5 → −1.668e-5)。隙間の大きさだけでは丸めの揺れと区別できないので、
+/// 「1 ULP動かしても答えが変わらないこと」を条件にする。
+fn rounding_robust_stacks(
+    base: &Diagram,
+    base_ladder: &[(f64, EndpointState)],
+    nudged: &Diagram,
+    hinge: EdgeId,
+    sign: f64,
+) -> Vec<DeterminedStack> {
+    let nudged_ladder = boundary_ladder(nudged, hinge, sign);
+    let nudged_stacks = determined_stacks(&nudged.cp, &nudged.faces, &nudged_ladder)
+        .into_iter()
+        .map(|stack| ((stack.left, stack.right), stack.right_above_winding))
+        .collect::<BTreeMap<_, _>>();
+    determined_stacks(&base.cp, &base.faces, base_ladder)
+        .into_iter()
+        .filter(|stack| {
+            nudged_stacks.get(&(stack.left, stack.right)) == Some(&stack.right_above_winding)
+        })
+        .collect()
+}
+
+/// 3つの展開図の折り目110本を1本ずつ ±179.999° と ±180° へ送り、
+/// **紙の重なり方が同じである**ことと、見えている裏面が飛ばないことを検査する。
+///
+/// **以前は両端点の `surface_rank` の並びをそのまま比べていた。** 完全に折った
+/// 状態のすぐ近くでは、解が近くの別の折り方へ移るだけで並びが入れ替わるため、
+/// この形は計算機や丸めの違いで落ち得る(CLAUDE.md §10.7.7 が禁じる「solveの
+/// 結果に期待値を結び付けた検査」)。実際、作品ファイルの小数を正確に読む
+/// `serde_json` の `float_roundtrip` を入れただけで、`folded-sample.ori3` の
+/// 辺306(面31と面34)が落ちるようになった。この面対は 179.999°の姿勢での
+/// 隙間が −1.902e-6 しかなく、入力を1 ULP動かすと +3.295e-5 へ**符号ごと**
+/// 変わる(`diag_gap_noise_from_one_ulp_of_input` の `ULPFLIP`)。
+///
+/// いまは次の形にしてある。主張は弱めていない。
+///
+/// 1. 180°の手前の4段(179.5 / 179.9 / 179.99 / 179.999)は面どうしが実際に
+///    離れているので、**その姿勢そのものから**面対の上下を測る。紙はすり抜け
+///    られないので、信号のある段が3段以上あり、すべて同じ側でなければならない。
+/// 2. さらに**入力の座標を1 ULP動かした複製**でも同じ梯子を作り、測った上下が
+///    変わらない面対だけを主張の対象にする。
+/// 3. 対象の面対について、179.999°と180°の刻印が同じ紙の重なり方を表している
+///    ことを主張する。上下は正準法線ではなく姿勢によらない**巻き方向**で読む
+///    ので、軸の反転では入れ替わらない(`winding_sign`)。
+///
+/// 実測: 179.999°の姿勢で法線が平行に重なる面対は 4989組、梯子で上下が決まった
+/// のは 4936組(98.9%)、そのうち1 ULPでも答えが変わらなかったのは **4888組**で
+/// ある。以前の形が主張していた「両端点の並びが完全に一致」は、重なっていない
+/// 面対の並びまで含んでいたが、重なっていない2枚の上下は紙の重なり方を表さない。
 #[test]
-#[ignore = "full 110-crease acceptance raster sweep; run explicitly in release mode"]
 fn surface_order_179_999_to_180_all_110_creases() {
     let diagrams = boundary_diagrams();
+    let nudged_diagrams = diagrams.iter().map(one_ulp_nudged).collect::<Vec<_>>();
     let mut total_hinges = 0;
+    let mut robust_stacks = 0_usize;
     let mut changed_hinges = BTreeSet::<(&'static str, EdgeId)>::new();
     let mut changed_directions = 0;
-    let mut rank_changed_hinges = BTreeSet::<(&'static str, EdgeId)>::new();
-    let mut rank_changed_directions = 0;
-    for diagram in &diagrams {
+    let mut flipped_hinges = BTreeSet::<(&'static str, EdgeId)>::new();
+    let mut flipped_directions = 0;
+    for (diagram, nudged) in diagrams.iter().zip(&nudged_diagrams) {
         let mut diagram_changed = BTreeSet::new();
-        let mut diagram_rank_changed = BTreeSet::new();
+        let mut diagram_flipped = BTreeSet::new();
         total_hinges += diagram.hinges.len();
         for &(hinge, kind) in &diagram.hinges {
             for sign in [1.0, -1.0] {
-                let (before_state, after_state) = endpoint_frames(diagram, hinge, sign);
-                let before_order = surface_rank_order(&before_state.frame);
-                let after_order = surface_rank_order(&after_state.frame);
-                if before_order != after_order {
-                    rank_changed_hinges.insert((diagram.name, hinge));
-                    rank_changed_directions += 1;
-                    diagram_rank_changed.insert(hinge);
+                let ladder = boundary_ladder(diagram, hinge, sign);
+                let stacks = rounding_robust_stacks(diagram, &ladder, nudged, hinge, sign);
+                robust_stacks += stacks.len();
+                let after_state = &ladder[ladder.len() - 1].1;
+                let before_state = &ladder[ladder.len() - 2].1;
+                let flipped = stacks_that_flip_between_endpoints(
+                    &before_state.frame,
+                    &after_state.frame,
+                    &stacks,
+                );
+                if !flipped.is_empty() {
+                    flipped_hinges.insert((diagram.name, hinge));
+                    flipped_directions += 1;
+                    diagram_flipped.insert(hinge);
                     println!(
-                        "SURFACE_180_RANK_CHANGE diagram={} edge={} kind={kind:?} direction={sign:+} before_order={before_order:?} after_order={after_order:?}",
-                        diagram.name, hinge,
+                        "SURFACE_180_RANK_CHANGE diagram={} edge={} kind={kind:?} direction={sign:+} robust_stacks={} flipped={flipped:?}",
+                        diagram.name,
+                        hinge,
+                        stacks.len(),
                     );
                 }
                 let view = camera(diagram.paper_width, diagram.paper_height, 1.0);
@@ -1607,8 +1798,8 @@ fn surface_order_179_999_to_180_all_110_creases() {
             "SURFACE_180_RANK_DIAGRAM diagram={} hinges={} changed_hinges={} changed_ids={}",
             diagram.name,
             diagram.hinges.len(),
-            diagram_rank_changed.len(),
-            ids(&diagram_rank_changed),
+            diagram_flipped.len(),
+            ids(&diagram_flipped),
         );
     }
     println!(
@@ -1620,14 +1811,25 @@ fn surface_order_179_999_to_180_all_110_creases() {
         changed_directions,
     );
     println!(
-        "SURFACE_180_RANK_TOTAL changed_hinges={} changed_directions={} changed_edges={rank_changed_hinges:?}",
-        rank_changed_hinges.len(),
-        rank_changed_directions,
+        "SURFACE_180_RANK_TOTAL robust_stacks={robust_stacks} changed_hinges={} changed_directions={flipped_directions} changed_edges={flipped_hinges:?}",
+        flipped_hinges.len(),
     );
     assert_eq!(total_hinges, 110);
     assert!(
-        rank_changed_hinges.is_empty(),
-        "179.999 and 180 degrees must use the same surface-rank order: {rank_changed_hinges:?}"
+        flipped_hinges.is_empty(),
+        "179.999 and 180 degrees must stack the paper the same way for every pair whose stacking the geometry determines and one ULP of input does not change: {flipped_hinges:?}"
+    );
+    // 主張の対象が空になっていないことの下限。梯子や1 ULPの選別が壊れて対象が
+    // 消えると、この検査は何も主張しないまま緑になってしまう。
+    //
+    // 実測: `float_roundtrip` あり **4888組**、なし **4910組**(どちらもこの
+    // 計算機。梯子で決まった 4936組のうち、1 ULPで答えが変わった 48組 / 26組を
+    // 外した数)。計算機が変わると外れる組はもっと増え得るので、下限は
+    // 「空回りかどうか」だけが分かる 4,000組に置く。実際に空回りすれば0に近い
+    // 値まで落ちるので、これで検知できる。
+    assert!(
+        robust_stacks >= 4_000,
+        "the measured stacking must still cover the paper: robust_stacks={robust_stacks}"
     );
     assert!(
         changed_hinges.len() < 79,
@@ -1635,8 +1837,32 @@ fn surface_order_179_999_to_180_all_110_creases() {
     );
 }
 
+/// 以前に端点で重なり順が変わっていた19本について、完全に折った姿勢でも
+/// **紙の重なり方**が変わらないことを検査する。
+///
+/// **以前は `assert_eq!(surface_rank_order(&after.frame), expected)` の形で、
+/// 2回のsolveの結果の並びをそのまま比べていた。** 完全に折った状態のすぐ近くでは、
+/// 解が近くの別の折り方へ移るだけで並びが入れ替わるので、この形は計算機や丸めの
+/// 違いで落ち得る(CLAUDE.md §10.7.7 が禁じる「solveの結果に期待値を結び付けた
+/// 検査」)。同じ形だった `surface_order_179_999_to_180_all_110_creases` は、
+/// 作品ファイルの小数を正確に読む `serde_json` の `float_roundtrip` を入れただけで
+/// 実際に落ちた(`folded-sample.ori3` の辺306、面31と面34。隙間 −1.902e-6 が
+/// 入力1 ULPで +3.295e-5 へ符号ごと変わる)。**こちらが落ちていなかったのは、
+/// 辺306がこの19本に入っていなかったからにすぎない。**
+///
+/// そこで、110本の掃引と同じ3段の形へ書き直した。主張は弱めていない。
+///
+/// 1. 180°の手前の4段(179.5 / 179.9 / 179.99 / 179.999)は面どうしが実際に
+///    離れているので、**その姿勢そのものから**面対の上下を測る(`determined_stacks`)。
+/// 2. **入力の座標を1 ULP動かした複製**でも同じ梯子を作り、測った上下が変わらない
+///    面対だけを主張の対象にする(`rounding_robust_stacks`)。
+/// 3. 対象の面対について、次の3つの姿勢が**同じ紙の重なり方**を表していることを
+///    主張する。上下は正準法線ではなく姿勢によらない**巻き方向**で読むので、
+///    軸の反転では入れ替わらない(`winding_sign`)。
+///    - 179.999°の姿勢と180°の姿勢
+///    - 180°の姿勢と、そこから同じ180°へ解き直した姿勢
+///    - 180°の姿勢と、warm start無しで解き直した姿勢(同じ形へ収束したときだけ)
 #[test]
-#[ignore = "folded fixture regression for the 19 stage-B rank discontinuities"]
 fn surface_order_exact_endpoint_is_rank_stable_for_previous_19() {
     const PREVIOUS_RANK_CHANGES: [EdgeId; 19] = [
         125, 143, 181, 183, 297, 298, 309, 314, 352, 358, 362, 367, 380, 393, 394, 401, 402, 426,
@@ -1647,16 +1873,20 @@ fn surface_order_exact_endpoint_is_rank_stable_for_previous_19() {
         .iter()
         .find(|diagram| diagram.name == "folded-sample.ori3")
         .expect("the folded acceptance fixture exists");
+    let nudged = one_ulp_nudged(diagram);
+    let mut robust_stacks = 0_usize;
+    let mut cold_compared = 0_usize;
+    let mut flipped_directions = BTreeSet::<(EdgeId, i32)>::new();
     for hinge in PREVIOUS_RANK_CHANGES {
         assert!(diagram.hinges.iter().any(|&(edge, _)| edge == hinge));
         for sign in [1.0, -1.0] {
-            let (before, after) = endpoint_frames(diagram, hinge, sign);
-            let expected = surface_rank_order(&before.frame);
-            assert_eq!(
-                surface_rank_order(&after.frame),
-                expected,
-                "edge {hinge} {sign:+}"
-            );
+            let ladder = boundary_ladder(diagram, hinge, sign);
+            let stacks = rounding_robust_stacks(diagram, &ladder, &nudged, hinge, sign);
+            robust_stacks += stacks.len();
+            let after = &ladder[ladder.len() - 1].1;
+            let before = &ladder[ladder.len() - 2].1;
+            let mut flipped =
+                stacks_that_flip_between_endpoints(&before.frame, &after.frame, &stacks);
 
             let refreshed = solve_motion(
                 &diagram.cp,
@@ -1669,12 +1899,19 @@ fn surface_order_exact_endpoint_is_rank_stable_for_previous_19() {
                 Some(&after.angles),
                 true,
             );
-            assert_eq!(
-                surface_rank_order(&refreshed.result.frame),
-                expected,
-                "edge {hinge} {sign:+} exact refresh"
-            );
+            flipped.extend(stacks_that_differ(
+                &after.frame,
+                &refreshed.result.frame,
+                &stacks,
+                "180°の姿勢とそこから解き直した姿勢",
+            ));
 
+            // warm start無しで解き直すと、同じ折り目を±180°にしても**別の形**へ収束する。
+            // 実測(この19本×2方向=38件、`diag_cold_solve_reaches_the_same_pose`):
+            // 他の折り目の角度は最大 **359.999900 度** ちがい、38件すべてで
+            // 1e-6度を超えてちがった。刻印する重なり順は「いま表示している形」を
+            // 説明するものなので、形がちがえば順がちがうのは正しい。
+            // ここでは「同じ形へ収束したときは同じ重なり方になる」ことだけを検査する。
             let cold = solve_motion(
                 &diagram.cp,
                 &diagram.faces,
@@ -1686,13 +1923,53 @@ fn surface_order_exact_endpoint_is_rank_stable_for_previous_19() {
                 None,
                 true,
             );
-            assert_eq!(
-                surface_rank_order(&cold.result.frame),
-                expected,
-                "edge {hinge} {sign:+} cold exact"
-            );
+            let cold_pose_difference = after
+                .angles
+                .iter()
+                .map(|(edge, angle)| {
+                    (angle - cold.result.angles.get(edge).copied().unwrap_or(f64::NAN)).abs()
+                })
+                .fold(0.0_f64, f64::max);
+            if cold_pose_difference <= 1e-6 {
+                cold_compared += 1;
+                flipped.extend(stacks_that_differ(
+                    &after.frame,
+                    &cold.result.frame,
+                    &stacks,
+                    "180°の姿勢とwarm start無しで解き直した同じ形",
+                ));
+            }
+
+            if !flipped.is_empty() {
+                flipped_directions.insert((hinge, sign as i32));
+                println!(
+                    "SURFACE_19_RANK_CHANGE edge={hinge} direction={sign:+} robust_stacks={} flipped={flipped:?}",
+                    stacks.len(),
+                );
+            }
         }
     }
+    println!(
+        "SURFACE_19_RANK_TOTAL hinges={} directions={} robust_stacks={robust_stacks} cold_compared={cold_compared} changed_directions={} changed_edges={flipped_directions:?}",
+        PREVIOUS_RANK_CHANGES.len(),
+        PREVIOUS_RANK_CHANGES.len() * 2,
+        flipped_directions.len(),
+    );
+    assert!(
+        flipped_directions.is_empty(),
+        "the exact endpoint must stack the paper the same way for every pair whose stacking the geometry determines and one ULP of input does not change: {flipped_directions:?}"
+    );
+    // 主張の対象が空になっていないことの下限。梯子や1 ULPの選別が壊れて対象が
+    // 消えると、この検査は何も主張しないまま緑になってしまう。
+    //
+    // 実測: 19本×2方向で `float_roundtrip` あり **1298組**、なし **1315組**
+    // (どちらもこの計算機。1方向あたり約34組)。計算機が変わると外れる組は
+    // 増え得るので、下限は「空回りかどうか」だけが分かる 1,000組に置く。
+    // 実際に空回りすれば0に近い値まで落ちるので、これで検知できる。
+    assert!(
+        robust_stacks >= 1_000,
+        "the measured stacking must still cover the paper: robust_stacks={robust_stacks}"
+    );
 }
 
 #[test]
@@ -3230,6 +3507,10 @@ fn polygon_normal3(points: &[V3]) -> Option<V3> {
 }
 
 /// 法線の向きの符号を消す。上下の比較を面の巻き方向に依存させないため。
+///
+/// `ori3-rigid` の `surface_order::canonical` と、画面側の
+/// `surfaceOwner.ts::canonicalize` と同じ式。重なり順の「上」がどちらを指すかは
+/// この向きそのものなので、測定側もそろえないと比較できない。
 fn canonical3(mut normal: V3) -> V3 {
     let absolute = V3::new(normal.x.abs(), normal.y.abs(), normal.z.abs());
     let component = if absolute.x >= absolute.y && absolute.x >= absolute.z {
@@ -3897,4 +4178,1340 @@ fn stage2_remaining_mismatch_detail() {
             );
         }
     }
+}
+
+/// 「ほぼ同じ平面に乗っていて、投影で実面積が重なる」面対と、その平面間の隙間。
+/// `coincident_overlaps` は隙間 1e-9 以下しか拾わないため、179.999°のように
+/// 実際に離れている姿勢では0組になる。ここでは隙間を測って返す。
+struct NearOverlap {
+    left: FaceId,
+    right: FaceId,
+    /// 重なりの代表点で、`left` の面から正準法線方向に `right` の面まで進む符号付き距離。
+    /// 正なら `right` が上。楔状に開いていても、この符号は代表点で一意に決まる。
+    gap: f64,
+    /// 正準法線が `left` の巻き方向の法線と同じ向きなら `+1`、逆なら `-1`。
+    ///
+    /// 巻き方向の法線は展開図の面の定義だけで決まる**材質側の向き**なので、
+    /// 姿勢が変わっても連続に動く。正準法線は絶対値が最大の成分で決めるため、
+    /// 対称な姿勢では 1e-9 の違いで反転する。梯子の各段の符号を突き合わせる
+    /// ときは、まず `gap * winding_sign`(材質側の向き)へそろえる。
+    winding_sign: f64,
+}
+
+fn near_overlaps(frame: &Frame3D, max_gap: f64) -> Vec<NearOverlap> {
+    let polygons = frame_polygons(frame);
+    // 面の並びは `Frame3D` が持つ順(= `extract_faces` の順)のままにする。
+    // 製品側 `derive_surface_order_with` も同じ順で面対を作り、**先に来るほうの面**の
+    // 正準法線を「上」の向きに使う。並びを変えると、同じ面対でも上下の向きの基準が
+    // 製品と食い違う。
+    let face_ids = frame.faces.iter().map(|face| face.face).collect::<Vec<_>>();
+    let mut found = Vec::new();
+    for (left_index, &left) in face_ids.iter().enumerate() {
+        for &right in &face_ids[left_index + 1..] {
+            let left_points = &polygons[&left];
+            let right_points = &polygons[&right];
+            let (Some(plane), Some(right_plane)) =
+                (overlap_plane(left_points), overlap_plane(right_points))
+            else {
+                continue;
+            };
+            // 0.001°の傾きは 1.7e-5 rad。これを「平行」として拾う。
+            if plane.normal.dot(right_plane.normal).abs() < 1.0 - 1e-4 {
+                continue;
+            }
+            let left_2d = project2(left_points, &plane);
+            let right_2d = project2(right_points, &plane);
+            let left_triangles = triangulate_polygon(&left_2d);
+            let right_triangles = triangulate_polygon(&right_2d);
+            let Some((witness, _)) =
+                overlap_witness(&left_2d, &left_triangles, &right_2d, &right_triangles)
+            else {
+                continue;
+            };
+            // 重なりの代表点で、左の面から正準法線方向に右の面まで進む距離。
+            // 正なら右が上。楔状に開いていても、この符号は代表点で一意に決まる。
+            let witness3 = plane.origin + plane.u * witness[0] + plane.v * witness[1];
+            let denominator = right_plane.normal.dot(plane.normal);
+            if denominator.abs() < 1e-6 {
+                continue;
+            }
+            let gap = right_plane.normal.dot(right_plane.origin - witness3) / denominator;
+            if !gap.is_finite() || gap.abs() > max_gap {
+                continue;
+            }
+            let Some(winding) = polygon_normal3(left_points) else {
+                continue;
+            };
+            let winding_sign = if winding.dot(plane.normal) >= 0.0 {
+                1.0
+            } else {
+                -1.0
+            };
+            found.push(NearOverlap {
+                left,
+                right,
+                gap,
+                winding_sign,
+            });
+        }
+    }
+    found
+}
+
+/// 梯子の実測だけで上下が決まった面対。`surface_rank` は一度も読んでいない。
+struct DeterminedStack {
+    left: FaceId,
+    right: FaceId,
+    /// `left` の巻き方向の法線に対して `right` が上なら `true`。
+    /// 姿勢が変わっても意味が変わらない材質側の向きで表す。
+    right_above_winding: bool,
+    /// 根拠に使えた段の数。
+    samples: usize,
+    /// 根拠に使えた段のうち、いちばん小さい隙間の大きさ。
+    smallest_gap: f64,
+    /// いちばん大きい隙間の大きさ。
+    largest_gap: f64,
+}
+
+/// 梯子の各段で測った隙間の符号から、丸めに左右されない上下だけを取り出す。
+///
+/// 179.5°/179.9°/179.99°/179.999° の4段は、いずれも面どうしが実際に離れている
+/// 姿勢である。紙はすり抜けられないので、**どの段でも同じ側**にいなければ
+/// ならない。1段だけの符号は、解が近くの別の折り方へ移ると反転し得る
+/// (実測: 入力座標を1 ULP動かしただけで、隙間 3.36e-5 の面対の符号が反転した。
+/// `diag_gap_noise_from_one_ulp_of_input` の `ULPFLIP`)。3段以上で符号が
+/// 一致していることを条件にすると、この揺れは根拠から外れる。
+fn determined_stacks(cp: &CreasePattern, faces: &[Face], ladder: &[(f64, EndpointState)]) -> Vec<DeterminedStack> {
+    let separated = ladder
+        .iter()
+        .filter(|(absolute, _)| *absolute < 180.0)
+        .map(|(_, state)| {
+            let seam = ori3_rigid::max_seam_gap(cp, faces, &state.frame);
+            let pairs = near_overlaps(&state.frame, f64::INFINITY)
+                .into_iter()
+                .map(|pair| ((pair.left, pair.right), pair.gap * pair.winding_sign))
+                .collect::<BTreeMap<_, _>>();
+            (seam, pairs)
+        })
+        .collect::<Vec<_>>();
+    let Some((_, last)) = separated.last() else {
+        return Vec::new();
+    };
+    let mut determined = Vec::new();
+    for &(left, right) in last.keys() {
+        let mut positives = 0_usize;
+        let mut negatives = 0_usize;
+        let mut smallest = f64::INFINITY;
+        let mut largest = 0.0_f64;
+        for (seam, pairs) in &separated {
+            let Some(&oriented) = pairs.get(&(left, right)) else {
+                continue;
+            };
+            // 面が離れている量より紙のちぎれのほうが大きい段には信号がない。
+            if oriented.abs() <= seam.max(1e-9) {
+                continue;
+            }
+            if oriented > 0.0 {
+                positives += 1;
+            } else {
+                negatives += 1;
+            }
+            smallest = smallest.min(oriented.abs());
+            largest = largest.max(oriented.abs());
+        }
+        let samples = positives + negatives;
+        if samples < 3 || (positives != 0 && negatives != 0) {
+            continue;
+        }
+        determined.push(DeterminedStack {
+            left,
+            right,
+            right_above_winding: positives > 0,
+            samples,
+            smallest_gap: smallest,
+            largest_gap: largest,
+        });
+    }
+    determined
+}
+
+/// 刻印された `surface_rank` が、梯子の実測で決まった上下と合っているか。
+///
+/// `surface_rank` は「その面対が乗る平面の**正準法線**の向きに下から上へ」並べた
+/// 順である。正準法線は対称な姿勢で反転し得るので、その姿勢での
+/// `winding_sign` で材質側の向きへ直してから比べる。合わない面対を返す。
+fn stack_disagreements(
+    frame: &Frame3D,
+    determined: &[DeterminedStack],
+) -> Vec<(FaceId, FaceId, String)> {
+    let sides = material_sides(frame, determined);
+    determined
+        .iter()
+        .filter_map(|stack| {
+            let side = sides.get(&(stack.left, stack.right))?;
+            (*side != stack.right_above_winding).then(|| {
+                (
+                    stack.left,
+                    stack.right,
+                    format!(
+                        "実測{}段(隙間 {:.3e}〜{:.3e})では面{}が面{}の反対側にあるのに、重なり順が逆である",
+                        stack.samples,
+                        stack.smallest_gap,
+                        stack.largest_gap,
+                        stack.right,
+                        stack.left,
+                    ),
+                )
+            })
+        })
+        .collect()
+}
+
+/// 調査用。梯子の実測で上下が決まった面対が何組あり、そのうち刻印された
+/// `surface_rank` と食い違う組が両端点でいくつあるかを数える。合否は付けない。
+#[test]
+#[ignore = "調査用の測定。合否ではなく数値の出力が目的"]
+fn diag_determined_stacks_versus_surface_rank() {
+    let diagrams = boundary_diagrams();
+    let mut total_pairs = 0_usize;
+    let mut total_determined = 0_usize;
+    let mut before_bad = 0_usize;
+    let mut after_bad = 0_usize;
+    for diagram in &diagrams {
+        for &(hinge, _) in &diagram.hinges {
+            for sign in [1.0_f64, -1.0] {
+                let ladder = boundary_ladder(diagram, hinge, sign);
+                let determined = determined_stacks(&diagram.cp, &diagram.faces, &ladder);
+                let before = &ladder[ladder.len() - 2].1.frame;
+                let after = &ladder[ladder.len() - 1].1.frame;
+                let pairs = near_overlaps(before, f64::INFINITY).len();
+                let before_disagreements = stack_disagreements(before, &determined)
+                    .into_iter()
+                    .map(|(left, right, _)| (left, right))
+                    .collect::<BTreeSet<_>>();
+                let after_disagreements = stack_disagreements(after, &determined)
+                    .into_iter()
+                    .map(|(left, right, _)| (left, right))
+                    .collect::<BTreeSet<_>>();
+                total_pairs += pairs;
+                total_determined += determined.len();
+                // 両端点で食い違いが同じ面対は、端点の差ではなく最初から
+                // 実測と合っていない面対である。端点の差はその対称差で数える。
+                let only_before = before_disagreements
+                    .difference(&after_disagreements)
+                    .copied()
+                    .collect::<Vec<_>>();
+                let only_after = after_disagreements
+                    .difference(&before_disagreements)
+                    .copied()
+                    .collect::<Vec<_>>();
+                before_bad += only_before.len();
+                after_bad += only_after.len();
+                if !only_before.is_empty() || !only_after.is_empty() {
+                    println!(
+                        "DETSTACK diagram={} edge={hinge} sign={sign:+} pairs={pairs} determined={} shared_bad={} only_before={only_before:?} only_after={only_after:?}",
+                        diagram.name,
+                        determined.len(),
+                        before_disagreements.intersection(&after_disagreements).count(),
+                    );
+                }
+                if diagram.name == "folded-sample.ori3" && (hinge == 306 || hinge == 425) {
+                    println!(
+                        "DETSTACK_FOCUS edge={hinge} sign={sign:+} determined={} focus={:?}",
+                        determined.len(),
+                        determined
+                            .iter()
+                            .filter(|stack| {
+                                [(31, 34), (30, 35), (6, 8), (7, 9)]
+                                    .contains(&(stack.left, stack.right))
+                            })
+                            .map(|stack| (
+                                stack.left,
+                                stack.right,
+                                stack.samples,
+                                stack.smallest_gap,
+                                stack.largest_gap
+                            ))
+                            .collect::<Vec<_>>(),
+                    );
+                }
+            }
+        }
+    }
+    println!(
+        "DETSTACK_TOTAL near_pairs={total_pairs} determined={total_determined} before_disagreements={before_bad} after_disagreements={after_bad}"
+    );
+}
+
+/// 179.999°の姿勢は面どうしが実際に離れているので、重なり順の正解は実測の隙間だけで
+/// 一意に決まる(カメラも履歴も要らない)。その正解と、刻印した `surface_rank` が
+/// 合っているかを数える。合否は付けず、数値を出すだけの測定である。
+#[test]
+#[ignore = "調査用の測定。合否ではなく数値の出力が目的"]
+fn surface_rank_against_the_measured_gap_at_179_999() {
+    let diagrams = boundary_diagrams();
+    let mut total_pairs = 0_usize;
+    let mut total_mismatch = 0_usize;
+    let mut total_mismatch_after = 0_usize;
+    for diagram in &diagrams {
+      for (hinge, _) in diagram.hinges.clone() {
+        for sign in [1.0_f64, -1.0] {
+            let (before, after) = endpoint_frames(diagram, hinge, sign);
+            let ranks = |frame: &Frame3D| {
+                frame
+                    .faces
+                    .iter()
+                    .map(|face| (face.face, face.surface_rank))
+                    .collect::<BTreeMap<_, _>>()
+            };
+            let before_rank = ranks(&before.frame);
+            let after_rank = ranks(&after.frame);
+            let pairs = near_overlaps(&before.frame, 1e-3);
+            let mut mismatch_before = Vec::new();
+            let mut mismatch_after = Vec::new();
+            for pair in &pairs {
+                // 隙間が丸めより十分大きい面対だけを正解の根拠にする。
+                if pair.gap.abs() < 1e-9 {
+                    continue;
+                }
+                total_pairs += 1;
+                let truth_right_above = pair.gap > 0.0;
+                if (before_rank[&pair.right] > before_rank[&pair.left]) != truth_right_above {
+                    mismatch_before.push((pair.left, pair.right, pair.gap));
+                    total_mismatch += 1;
+                }
+                if (after_rank[&pair.right] > after_rank[&pair.left]) != truth_right_above {
+                    mismatch_after.push((pair.left, pair.right, pair.gap));
+                    total_mismatch_after += 1;
+                }
+            }
+            println!(
+                "GAPTRUTH diagram={} edge={hinge} sign={sign:+} near_pairs={} mismatch_at_179_999={} mismatch_at_180={} before_detail={:?} after_detail={:?}",
+                diagram.name,
+                pairs.len(),
+                mismatch_before.len(),
+                mismatch_after.len(),
+                mismatch_before,
+                mismatch_after,
+            );
+        }
+      }
+    }
+    println!(
+        "GAPTRUTH_TOTAL pairs={total_pairs} mismatch_at_179_999={total_mismatch} mismatch_at_180={total_mismatch_after}"
+    );
+}
+
+/// 調査用。`surface_order_exact_endpoint_is_rank_stable_for_previous_19` が使う
+/// 「warm start無しで解き直す」経路が、warm startで到達した姿勢と同じ形になるかを測る。
+/// 形が違えば、重なり順が違うのは当然である(刻印する順は表示している形を説明する)。
+#[test]
+#[ignore = "調査用の測定。合否ではなく数値の出力が目的"]
+fn diag_cold_solve_reaches_the_same_pose() {
+    const PREVIOUS_RANK_CHANGES: [EdgeId; 19] = [
+        125, 143, 181, 183, 297, 298, 309, 314, 352, 358, 362, 367, 380, 393, 394, 401, 402, 426,
+        430,
+    ];
+    let diagrams = boundary_diagrams();
+    let diagram = diagrams
+        .iter()
+        .find(|item| item.name == "folded-sample.ori3")
+        .expect("fixture");
+    let mut worst = 0.0_f64;
+    let mut differing = 0_usize;
+    for hinge in PREVIOUS_RANK_CHANGES {
+        for sign in [1.0_f64, -1.0] {
+            let (_, after) = endpoint_frames(diagram, hinge, sign);
+            let cold = solve_motion(
+                &diagram.cp,
+                &diagram.faces,
+                &[Driver {
+                    hinge,
+                    target_angle_deg: sign * 180.0,
+                }],
+                None,
+                None,
+                true,
+            );
+            let delta = after
+                .angles
+                .iter()
+                .map(|(edge, angle)| {
+                    (angle - cold.result.angles.get(edge).copied().unwrap_or(f64::NAN)).abs()
+                })
+                .fold(0.0_f64, f64::max);
+            let same_rank =
+                surface_rank_order(&after.frame) == surface_rank_order(&cold.result.frame);
+            if !same_rank {
+                differing += 1;
+            }
+            worst = worst.max(delta);
+            println!(
+                "COLDPOSE edge={hinge} sign={sign:+} max_angle_difference_deg={delta:.6e} same_rank={same_rank}"
+            );
+        }
+    }
+    println!(
+        "COLDPOSE_TOTAL cases={} worst_angle_difference_deg={worst:.6e} rank_differs={differing}",
+        PREVIOUS_RANK_CHANGES.len() * 2
+    );
+}
+
+/// 段階1の測定(残った2本)。**規則をいっさい使わず**、裂けていない姿勢の幾何だけから
+/// 上下を決める。折り目を 179.0 → 179.5 → 179.9 → 179.99 → 179.999 → 180.0 と送り、
+/// 各姿勢で(a)裂けの量、(b)隣接2面の重心が基準面の平面からどちら側へ離れているか、
+/// (c)ほぼ平行で実面積が重なる面対の隙間の符号、を並べて印字する。
+#[test]
+#[ignore = "調査用の測定。合否ではなく数値の出力が目的"]
+fn diag_remaining_two_creases_gap_sign_ladder() {
+    let diagrams = boundary_diagrams();
+    for (name, hinge) in [
+        ("diagonal-midline-square", 12_u32),
+        ("folded-sample.ori3", 425_u32),
+    ] {
+        let diagram = diagrams
+            .iter()
+            .find(|diagram| diagram.name == name)
+            .expect("diagram exists");
+        // 折り目に接する2面(展開図の接続だけで決まる。上下の規則は使わない)
+        let adjacent = diagram
+            .faces
+            .iter()
+            .filter(|face| face.edges.contains(&hinge))
+            .map(|face| face.id)
+            .collect::<Vec<_>>();
+        println!("LADDER_SETUP diagram={name} edge={hinge} adjacent_faces={adjacent:?}");
+        for sign in [1.0_f64, -1.0] {
+            let mut warm = None::<HashMap<EdgeId, f64>>;
+            for absolute in WARMUP_ABS {
+                let motion = solve_motion(
+                    &diagram.cp,
+                    &diagram.faces,
+                    &[Driver {
+                        hinge,
+                        target_angle_deg: sign * absolute,
+                    }],
+                    None,
+                    warm.as_ref(),
+                    true,
+                );
+                warm = Some(motion.result.angles);
+            }
+            for absolute in [179.0, 179.5, 179.9, 179.99, 179.999, 180.0] {
+                let motion = solve_motion(
+                    &diagram.cp,
+                    &diagram.faces,
+                    &[Driver {
+                        hinge,
+                        target_angle_deg: sign * absolute,
+                    }],
+                    None,
+                    warm.as_ref(),
+                    true,
+                );
+                let frame = motion.result.frame.clone();
+                let seam = ori3_rigid::max_seam_gap(&diagram.cp, &diagram.faces, &frame);
+                let ranks = frame
+                    .faces
+                    .iter()
+                    .map(|face| (face.face, face.surface_rank))
+                    .collect::<BTreeMap<_, _>>();
+                let polygons = frame_polygons(&frame);
+                // (b) 隣接2面: 基準面の平面から相手の重心までの符号付き高さ。
+                // 折り切る手前ではこの符号が「紙としてどちらが上か」そのものである。
+                let mut adjacent_detail = Vec::new();
+                if adjacent.len() == 2 {
+                    let (left, right) = (adjacent[0], adjacent[1]);
+                    let left_points = &polygons[&left];
+                    let right_points = &polygons[&right];
+                    if let (Some(left_normal), Some(right_normal)) = (
+                        polygon_normal3(left_points),
+                        polygon_normal3(right_points),
+                    ) {
+                        let up = canonical3(left_normal);
+                        let centroid = |points: &[V3]| {
+                            points.iter().fold(V3::ZERO, |sum, &p| sum + p) / points.len() as f64
+                        };
+                        let height =
+                            (centroid(right_points) - centroid(left_points)).dot(up);
+                        adjacent_detail.push((
+                            left,
+                            right,
+                            height,
+                            ranks[&right] > ranks[&left],
+                            left_normal.dot(up),
+                            right_normal.dot(up),
+                        ));
+                        println!(
+                            "LADDER_NORMAL diagram={name} edge={hinge} sign={sign:+} target={absolute} face{left}_normal=({:.12},{:.12},{:.12}) face{right}_normal=({:.12},{:.12},{:.12}) up=({:.12},{:.12},{:.12})",
+                            left_normal.x,
+                            left_normal.y,
+                            left_normal.z,
+                            right_normal.x,
+                            right_normal.y,
+                            right_normal.z,
+                            up.x,
+                            up.y,
+                            up.z,
+                        );
+                    }
+                }
+                // (c) ほぼ平行で実面積が重なる面対の隙間
+                let pairs = near_overlaps(&frame, 1e-3);
+                let detail = pairs
+                    .iter()
+                    .filter(|pair| pair.gap.abs() >= 1e-9)
+                    .map(|pair| {
+                        (
+                            pair.left,
+                            pair.right,
+                            pair.gap,
+                            (ranks[&pair.right] > ranks[&pair.left]) == (pair.gap > 0.0),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let mut near_flat = motion
+                    .result
+                    .angles
+                    .iter()
+                    .filter(|(_, angle)| angle.abs() >= 179.9)
+                    .map(|(&edge, &angle)| (edge, angle))
+                    .collect::<Vec<_>>();
+                near_flat.sort_by_key(|&(edge, _)| edge);
+                let near_flat_faces = near_flat
+                    .iter()
+                    .map(|&(edge, angle)| {
+                        let touching = diagram
+                            .faces
+                            .iter()
+                            .filter(|face| face.edges.contains(&edge))
+                            .map(|face| face.id)
+                            .collect::<Vec<_>>();
+                        (edge, angle, touching)
+                    })
+                    .collect::<Vec<_>>();
+                println!(
+                    "LADDER_FLAT_FACES diagram={name} edge={hinge} sign={sign:+} target={absolute} {near_flat_faces:?}"
+                );
+                println!(
+                    "LADDER diagram={name} edge={hinge} sign={sign:+} target={absolute} driver={:.9} seam={seam:.3e} source={:?} adjacent={adjacent_detail:?} mismatched_pairs={} near_pairs={} ranks={:?} detail={detail:?} near_flat={near_flat:?}",
+                    motion.result.angles.get(&hinge).copied().unwrap_or(f64::NAN),
+                    motion.surface_order,
+                    detail.iter().filter(|item| !item.3).count(),
+                    detail.len(),
+                    if diagram.faces.len() <= 16 {
+                        format!("{ranks:?}")
+                    } else {
+                        String::from("-")
+                    },
+                );
+                if diagram.faces.len() <= 16 {
+                    let mut all = motion
+                        .result
+                        .angles
+                        .iter()
+                        .map(|(&edge, &angle)| (edge, angle))
+                        .collect::<Vec<_>>();
+                    all.sort_by_key(|&(edge, _)| edge);
+                    println!("LADDER_ANGLES diagram={name} edge={hinge} sign={sign:+} target={absolute} angles={all:?}");
+                }
+                warm = Some(motion.result.angles);
+            }
+        }
+    }
+}
+
+/// `motion.rs::canonical_motion_surface_order` と同じ22点のcheckpoint。
+/// 製品側は `surface_order.rs::SURFACE_PATH_CHECKPOINT_DEG`(crate内)にある。
+const CANONICAL_CHECKPOINT_DEG: [f64; 22] = [
+    9.0, 19.0, 29.0, 39.0, 49.0, 59.0, 69.0, 79.0, 90.0, 101.0, 111.0, 121.0, 131.0, 141.0, 151.0,
+    161.0, 171.0, 179.0, 179.5, 179.9, 179.99, 179.999,
+];
+/// `surface_order.rs::STACK_FLAT_THRESHOLD_DEG` と同じ値。
+const CANONICAL_STACK_FLAT_DEG: f64 = 179.99;
+
+/// 製品の `canonical_motion_surface_order` が使う経路と終点を、公開APIだけで再現する。
+fn canonical_path_frames(
+    diagram: &Diagram,
+    final_angles: &HashMap<EdgeId, f64>,
+) -> (Vec<Frame3D>, Frame3D) {
+    let mut sorted = final_angles
+        .iter()
+        .map(|(&hinge, &angle)| (hinge, angle.clamp(-180.0, 180.0)))
+        .collect::<Vec<_>>();
+    sorted.sort_by_key(|&(hinge, _)| hinge);
+    let mut warm = None::<HashMap<EdgeId, f64>>;
+    let mut frames = Vec::new();
+    for checkpoint in CANONICAL_CHECKPOINT_DEG {
+        let drivers = sorted
+            .iter()
+            .map(|&(hinge, angle)| Driver {
+                hinge,
+                target_angle_deg: angle.signum() * angle.abs().min(checkpoint),
+            })
+            .collect::<Vec<_>>();
+        let solved = ori3_rigid::solve(&diagram.cp, &diagram.faces, &drivers, warm.as_ref());
+        frames.push(solved.frame.clone());
+        warm = Some(solved.angles);
+    }
+    let exact_drivers = sorted
+        .iter()
+        .map(|&(hinge, angle)| Driver {
+            hinge,
+            target_angle_deg: if angle.abs() >= CANONICAL_STACK_FLAT_DEG {
+                angle.signum() * 180.0
+            } else {
+                angle
+            },
+        })
+        .collect::<Vec<_>>();
+    let exact = ori3_rigid::solve(&diagram.cp, &diagram.faces, &exact_drivers, warm.as_ref());
+    (frames, exact.frame)
+}
+
+/// 段階1(その2): `folded-sample.ori3` の辺425で食い違う面対が、経路のどの段で
+/// どちらへ決まったのかを追う。製品コードは読むだけで、経路は公開APIで再現する。
+#[test]
+#[ignore = "調査用の測定。合否ではなく数値の出力が目的"]
+fn diag_edge425_canonical_path_decision() {
+    let diagrams = boundary_diagrams();
+    let diagram = diagrams
+        .iter()
+        .find(|diagram| diagram.name == "folded-sample.ori3")
+        .expect("fixture");
+    let hinge = 425_u32;
+    for sign in [-1.0_f64, 1.0] {
+        for target in [179.999_f64, 180.0] {
+            let mut warm = None::<HashMap<EdgeId, f64>>;
+            for absolute in WARMUP_ABS.iter().copied().chain(
+                BOUNDARY_ABS
+                    .iter()
+                    .copied()
+                    .take_while(|&value| value <= target),
+            ) {
+                let motion = solve_motion(
+                    &diagram.cp,
+                    &diagram.faces,
+                    &[Driver {
+                        hinge,
+                        target_angle_deg: sign * absolute,
+                    }],
+                    None,
+                    warm.as_ref(),
+                    true,
+                );
+                warm = Some(motion.result.angles);
+            }
+            let displayed_angles = warm.expect("ladder ran");
+            let (path, exact) = canonical_path_frames(diagram, &displayed_angles);
+            let exact_polygons = frame_polygons(&exact);
+            let path_polygons = path.iter().map(frame_polygons).collect::<Vec<_>>();
+            for (left, right) in [(6_u32, 8_u32), (7_u32, 9_u32)] {
+                let left_points = &exact_polygons[&left];
+                let right_points = &exact_polygons[&right];
+                let (Some(plane), Some(right_normal)) = (
+                    overlap_plane(left_points),
+                    polygon_normal3(right_points).map(canonical3),
+                ) else {
+                    println!("PATHDEC sign={sign:+} target={target} pair=({left},{right}) no_plane");
+                    continue;
+                };
+                let parallel = plane.normal.dot(right_normal);
+                let coplanar_error = left_points
+                    .iter()
+                    .chain(right_points)
+                    .map(|point| plane.normal.dot(*point - plane.origin).abs())
+                    .fold(0.0_f64, f64::max);
+                let left_2d = project2(left_points, &plane);
+                let right_2d = project2(right_points, &plane);
+                let left_triangles = triangulate_polygon(&left_2d);
+                let right_triangles = triangulate_polygon(&right_2d);
+                let Some((witness, area)) =
+                    overlap_witness(&left_2d, &left_triangles, &right_2d, &right_triangles)
+                else {
+                    println!("PATHDEC sign={sign:+} target={target} pair=({left},{right}) no_overlap");
+                    continue;
+                };
+                let overlap = CoincidentOverlap {
+                    left,
+                    right,
+                    normal: plane.normal,
+                    witness: plane.origin + plane.u * witness[0] + plane.v * witness[1],
+                    shared_hinge: None,
+                };
+                let heights = path_polygons
+                    .iter()
+                    .enumerate()
+                    .map(|(index, probe)| {
+                        (
+                            CANONICAL_CHECKPOINT_DEG[index],
+                            probe_height_difference(&exact_polygons, probe, &overlap),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let displayed = frame_polygons(
+                    &solve_motion(
+                        &diagram.cp,
+                        &diagram.faces,
+                        &[Driver {
+                            hinge,
+                            target_angle_deg: sign * target,
+                        }],
+                        None,
+                        Some(&displayed_angles),
+                        true,
+                    )
+                    .result
+                    .frame,
+                );
+                let displayed_difference =
+                    probe_height_difference(&exact_polygons, &displayed, &overlap);
+                println!(
+                    "PATHDEC sign={sign:+} target={target} pair=({left},{right}) parallel={parallel:.12} coplanar_error={coplanar_error:.3e} area={area:.3e} exact_normal=({:.12},{:.12},{:.12}) displayed_height_difference={displayed_difference:?} path={heights:?}",
+                    plane.normal.x, plane.normal.y, plane.normal.z,
+                );
+            }
+        }
+    }
+}
+
+/// 段階1(その3): 米印の辺12で、上下の向きを決める「正準法線」がどの姿勢で
+/// どちらを向くかを並べる。折り目の向きの規則は
+/// **snapした表示姿勢を伝播した形**の面法線を、深度の規則は
+/// **経路の終点(exact frame)**の面法線を使うため、両方を出す。
+#[test]
+#[ignore = "調査用の測定。合否ではなく数値の出力が目的"]
+fn diag_kome_edge12_canonical_axis() {
+    let diagrams = boundary_diagrams();
+    let diagram = diagrams
+        .iter()
+        .find(|diagram| diagram.name == "diagonal-midline-square")
+        .expect("fixture");
+    let hinge = 12_u32;
+    for sign in [1.0_f64, -1.0] {
+        for target in [179.999_f64, 180.0] {
+            let mut warm = None::<HashMap<EdgeId, f64>>;
+            for absolute in WARMUP_ABS.iter().copied().chain(
+                BOUNDARY_ABS
+                    .iter()
+                    .copied()
+                    .take_while(|&value| value <= target),
+            ) {
+                let motion = solve_motion(
+                    &diagram.cp,
+                    &diagram.faces,
+                    &[Driver {
+                        hinge,
+                        target_angle_deg: sign * absolute,
+                    }],
+                    None,
+                    warm.as_ref(),
+                    true,
+                );
+                warm = Some(motion.result.angles);
+            }
+            let displayed_angles = warm.expect("ladder ran");
+            let snapped = displayed_angles
+                .iter()
+                .map(|(&edge, &angle)| {
+                    (
+                        edge,
+                        if angle.abs() >= CANONICAL_STACK_FLAT_DEG {
+                            angle.signum() * 180.0
+                        } else {
+                            angle
+                        },
+                    )
+                })
+                .collect::<HashMap<_, _>>();
+            let propagated = to_frame3d(
+                &diagram.cp,
+                &diagram.faces,
+                &propagate(&diagram.cp, &diagram.faces, &snapped),
+            );
+            let (_, exact) = canonical_path_frames(diagram, &displayed_angles);
+            for (label, frame) in [("snapped_propagated", &propagated), ("canonical_exact", &exact)]
+            {
+                let polygons = frame_polygons(frame);
+                for face in [3_u32, 4_u32] {
+                    let normal = polygon_normal3(&polygons[&face]).expect("normal");
+                    let up = canonical3(normal);
+                    println!(
+                        "AXIS sign={sign:+} target={target} {label} face={face} normal=({:.12},{:.12},{:.12}) up_is_normal={} abs_x_minus_abs_y={:.6e}",
+                        normal.x,
+                        normal.y,
+                        normal.z,
+                        normal.dot(up) > 0.0,
+                        normal.x.abs() - normal.y.abs(),
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// 段階1(その4): 経路の終点(exact frame)で「法線が平行で投影が重なる」面対の
+/// 平面からのずれが、どの桁に分布しているかを数える。
+/// `surface_order.rs::COPLANAR_EPS`(1e-8)がこの分布のどこにあるかを見るための測定。
+#[test]
+#[ignore = "調査用の測定。合否ではなく数値の出力が目的"]
+fn diag_exact_frame_coplanarity_histogram() {
+    let diagrams = boundary_diagrams();
+    let mut histogram = BTreeMap::<i32, usize>::new();
+    let mut worst_same_stack = 0.0_f64;
+    let mut worst_seam = 0.0_f64;
+    for diagram in &diagrams {
+        for &(hinge, _) in &diagram.hinges {
+            for sign in [1.0_f64, -1.0] {
+                let mut warm = None::<HashMap<EdgeId, f64>>;
+                for absolute in WARMUP_ABS.iter().copied().chain(BOUNDARY_ABS) {
+                    let motion = solve_motion(
+                        &diagram.cp,
+                        &diagram.faces,
+                        &[Driver {
+                            hinge,
+                            target_angle_deg: sign * absolute,
+                        }],
+                        None,
+                        warm.as_ref(),
+                        true,
+                    );
+                    warm = Some(motion.result.angles);
+                }
+                let displayed_angles = warm.expect("ladder ran");
+                let (_, exact) = canonical_path_frames(diagram, &displayed_angles);
+                worst_seam =
+                    worst_seam.max(ori3_rigid::max_seam_gap(&diagram.cp, &diagram.faces, &exact));
+                let polygons = frame_polygons(&exact);
+                let mut face_ids = polygons.keys().copied().collect::<Vec<_>>();
+                face_ids.sort_unstable();
+                for (left_index, &left) in face_ids.iter().enumerate() {
+                    for &right in &face_ids[left_index + 1..] {
+                        let left_points = &polygons[&left];
+                        let right_points = &polygons[&right];
+                        let (Some(plane), Some(right_normal)) = (
+                            overlap_plane(left_points),
+                            polygon_normal3(right_points).map(canonical3),
+                        ) else {
+                            continue;
+                        };
+                        if plane.normal.dot(right_normal).abs() < 1.0 - 1e-8 {
+                            continue;
+                        }
+                        let left_2d = project2(left_points, &plane);
+                        let right_2d = project2(right_points, &plane);
+                        let left_triangles = triangulate_polygon(&left_2d);
+                        let right_triangles = triangulate_polygon(&right_2d);
+                        if overlap_witness(&left_2d, &left_triangles, &right_2d, &right_triangles)
+                            .is_none()
+                        {
+                            continue;
+                        }
+                        let error = left_points
+                            .iter()
+                            .chain(right_points)
+                            .map(|point| plane.normal.dot(*point - plane.origin).abs())
+                            .fold(0.0_f64, f64::max);
+                        let decade = if error <= 0.0 {
+                            -99
+                        } else {
+                            error.log10().floor() as i32
+                        };
+                        *histogram.entry(decade).or_default() += 1;
+                        if error < 1e-4 {
+                            worst_same_stack = worst_same_stack.max(error);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    println!(
+        "COPLANARITY_HISTOGRAM worst_exact_seam={worst_seam:.3e} worst_error_below_1e-4={worst_same_stack:.3e} decades={histogram:?}"
+    );
+}
+
+/// 段階1(その5): 画面側 (`surfaceOwner.ts::updateBatchViewOrder`) は
+/// **Float32のposition bufferから読んだ頂点**で法線を組み立て、その絶対値を
+/// 比べて正準法線の向きを決める。対称に折り切った形で \|x\| と \|y\| が
+/// どれだけ違うかを、Float32へ丸めた頂点で測る。
+#[test]
+#[ignore = "調査用の測定。合否ではなく数値の出力が目的"]
+fn diag_kome_edge12_float32_axis_choice() {
+    let diagrams = boundary_diagrams();
+    let diagram = diagrams
+        .iter()
+        .find(|diagram| diagram.name == "diagonal-midline-square")
+        .expect("fixture");
+    let hinge = 12_u32;
+    for sign in [1.0_f64, -1.0] {
+        for target in [179.999_f64, 180.0] {
+            let mut warm = None::<HashMap<EdgeId, f64>>;
+            for absolute in WARMUP_ABS.iter().copied().chain(
+                BOUNDARY_ABS
+                    .iter()
+                    .copied()
+                    .take_while(|&value| value <= target),
+            ) {
+                let motion = solve_motion(
+                    &diagram.cp,
+                    &diagram.faces,
+                    &[Driver {
+                        hinge,
+                        target_angle_deg: sign * absolute,
+                    }],
+                    None,
+                    warm.as_ref(),
+                    true,
+                );
+                warm = Some(motion.result.angles);
+            }
+            let displayed = solve_motion(
+                &diagram.cp,
+                &diagram.faces,
+                &[Driver {
+                    hinge,
+                    target_angle_deg: sign * target,
+                }],
+                None,
+                warm.as_ref(),
+                true,
+            )
+            .result
+            .frame;
+            let polygons = frame_polygons(&displayed);
+            for face in [3_u32, 4_u32] {
+                let exact_points = &polygons[&face];
+                // 画面側と同じ: 頂点はFloat32、そこから先の掛け算・足し算はf64。
+                let float32_points = exact_points
+                    .iter()
+                    .map(|point| {
+                        V3::new(
+                            f64::from(point.x as f32),
+                            f64::from(point.y as f32),
+                            f64::from(point.z as f32),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let triangle_normal = |points: &[V3]| {
+                    let mut normal = V3::ZERO;
+                    for indices in &diagram.triangles[&face] {
+                        let a = points[indices[0]];
+                        let b = points[indices[1]];
+                        let c = points[indices[2]];
+                        normal += (b - a).cross(c - a);
+                    }
+                    normal.normalize()
+                };
+                let exact_normal = triangle_normal(exact_points);
+                let float32_normal = triangle_normal(&float32_points);
+                println!(
+                    "F32AXIS sign={sign:+} target={target} face={face} f64=({:.12},{:.12},{:.12}) f64_abs_x_minus_abs_y={:.6e} f32=({:.12},{:.12},{:.12}) f32_abs_x_minus_abs_y={:.6e} f64_axis={} f32_axis={}",
+                    exact_normal.x,
+                    exact_normal.y,
+                    exact_normal.z,
+                    exact_normal.x.abs() - exact_normal.y.abs(),
+                    float32_normal.x,
+                    float32_normal.y,
+                    float32_normal.z,
+                    float32_normal.x.abs() - float32_normal.y.abs(),
+                    if exact_normal.x.abs() >= exact_normal.y.abs() { "x" } else { "y" },
+                    if float32_normal.x.abs() >= float32_normal.y.abs() { "x" } else { "y" },
+                );
+            }
+        }
+    }
+}
+
+/// `diagonal-midline-square`(米印)の折り目12を ±180° まで送ったときの全8角。
+/// 実測(`diag_remaining_two_creases_gap_sign_ladder` の `LADDER_ANGLES`)を
+/// そのまま入力として埋め込む。閉じた頂点なのでこの8角だけで形が決まる。
+fn kome_edge12_angles(sign: f64) -> HashMap<EdgeId, f64> {
+    HashMap::from([
+        (8, sign * 64.483_939_566_398_75),
+        (9, sign * 45.635_164_732_595_49),
+        (10, sign * 3.788_334_474_960_96),
+        (11, sign * -39.409_800_747_860_28),
+        (12, sign * 180.0),
+        (13, sign * -39.409_800_658_124_02),
+        (14, sign * 3.788_334_481_828_027_6),
+        (15, sign * 45.635_164_727_441_044),
+    ])
+}
+
+
+/// 段階3: **折り目の向きの規則を使わずに**、裂けていない姿勢の隙間の符号だけから
+/// 上下を決め、刻印された `surface_rank` と突き合わせる。
+///
+/// `crates/ori3-rigid/tests/surface_order.rs` の
+/// `exact_folds_agree_with_the_surface_rank` は、`tree::exact_stack_constraints` が
+/// 決めた `surface_rank` を**同じ規則**で照合しているため、規則そのものが誤って
+/// いても違反0になる。ここでは規則をいっさい呼ばず、
+///
+/// 1. 折り切った折り目を**1本だけ**少し戻した姿勢を伝播で作り、
+/// 2. その姿勢が**裂けていない**こと(`max_seam_gap < 1e-6`)を確かめ、
+/// 3. 折り目に接する2面の重心が、表示姿勢の正準法線のどちら側にあるかを測り、
+/// 4. その符号と `surface_rank` の上下が一致すること
+///
+/// だけを検査する。展開図と角度は検査コードへ埋め込んであり、`verification/` などの
+/// 追跡対象外のファイルは読まない。期待値は数値ではなく「2つの実測量が一致する」と
+/// いう関係なので、計算機が変わっても成り立つ(CLAUDE.md §10.7.7)。
+#[test]
+fn surface_rank_agrees_with_the_measured_gap_without_using_the_crease_rule() {
+    let cases: [(&str, CreasePattern, HashMap<EdgeId, f64>); 4] = [
+        ("live-frame", live_frame_cp(), live_frame_angles()),
+        ("zero-back-user", zero_back_user_cp(), zero_back_user_angles()),
+        (
+            "diagonal-midline-square-edge12-mountain",
+            flat_foldable_kome(),
+            kome_edge12_angles(1.0),
+        ),
+        (
+            "diagonal-midline-square-edge12-valley",
+            flat_foldable_kome(),
+            kome_edge12_angles(-1.0),
+        ),
+    ];
+    let mut checked = 0_usize;
+    for (name, cp, angles) in cases {
+        let faces = extract_faces(&cp);
+        let folded = to_frame3d(&cp, &faces, &propagate(&cp, &faces, &angles));
+        checked += assert_exact_creases_follow_the_measured_gap(name, &cp, &faces, &angles, &folded);
+    }
+    // この作業で直した `folded-sample.ori3` の辺425を含む3本。101本の角度はsolveで
+    // 作るが、期待値は「実測の隙間」と「刻印された順位」の一致だけなので、solveの
+    // 結果に数値を結び付けてはいない。
+    let diagrams = boundary_diagrams();
+    let diagram = diagrams
+        .iter()
+        .find(|diagram| diagram.name == "folded-sample.ori3")
+        .expect("the folded acceptance fixture exists");
+    for hinge in [425_u32, 12, 306] {
+        for sign in [1.0_f64, -1.0] {
+            let (_, folded) = endpoint_frames(diagram, hinge, sign);
+            checked += assert_exact_creases_follow_the_measured_gap(
+                &format!("folded-sample.ori3 edge{hinge} {sign:+}"),
+                &diagram.cp,
+                &diagram.faces,
+                &folded.angles,
+                &folded.frame,
+            );
+        }
+    }
+    println!("GAPRULEFREE checked_creases={checked}");
+    // 実測: 埋め込んだ4件と `folded-sample.ori3` の6姿勢で、裂けていない探りを
+    // 作れた折り目は合計 **50本**だった。裂ける探りや別の折り方へ飛んだ探りは
+    // 根拠に使えないので測れない折り目が残る。空回りを見つけるための下限として、
+    // 実測値そのものを条件にする。
+    assert!(
+        checked >= 50,
+        "±180度の折り目をほとんど測れていない: checked={checked}"
+    );
+}
+
+/// 折り切った折り目に接する2面が、少し戻した姿勢でどちら側へ離れるかを測って
+/// `surface_rank` と突き合わせる。測れた折り目の本数を返す。
+///
+/// 戻した姿勢は `solved_unfold_ladder`(全ての折り目を同じ割合で縮めてsolveし、
+/// **裂けた段は捨てる**梯子)を使う。製品の重なり順が使う「全ヒンジを共通の角度で
+/// 頭打ちにする」経路とは刻み方が違う独立の道で、重なり順も刻印させない。
+///
+/// 「上」の向きは**表示する姿勢**での基準面の正準法線に取る。刻印された
+/// `surface_rank` はその向きに下→上で並んでいるからである。戻した姿勢では基準面も
+/// 少し動くので、平面の向きが 8°(内積0.99)以上ずれた段は使わない。また
+/// **高さの差がその段の裂けの量以下**なら、離れている量より紙のちぎれのほうが
+/// 大きいので答えの根拠にしない。
+fn assert_exact_creases_follow_the_measured_gap(
+    name: &str,
+    cp: &CreasePattern,
+    faces: &[Face],
+    angles: &HashMap<EdgeId, f64>,
+    folded: &Frame3D,
+) -> usize {
+    let ranks = folded
+        .faces
+        .iter()
+        .map(|face| (face.face, face.surface_rank))
+        .collect::<BTreeMap<_, _>>();
+    let folded_polygons = frame_polygons(folded);
+    let mut ladder = Vec::new();
+    let mut warm = angles.clone();
+    for probe_abs in [179.999_f64, 179.99, 179.9, 179.0, 175.0] {
+        let mut drivers = angles
+            .iter()
+            .filter(|(_, angle)| angle.abs() > probe_abs)
+            .map(|(&hinge, &angle)| Driver {
+                hinge,
+                target_angle_deg: angle.signum() * probe_abs,
+            })
+            .collect::<Vec<_>>();
+        drivers.sort_unstable_by_key(|driver| driver.hinge);
+        let solved = ori3_rigid::solve(cp, faces, &drivers, Some(&warm));
+        let seam = ori3_rigid::max_seam_gap(cp, faces, &solved.frame);
+        warm = solved.angles.clone();
+        if seam < SEAM_TEAR_TOLERANCE
+            && solved
+                .frame
+                .faces
+                .iter()
+                .flat_map(|face| &face.polygon)
+                .flatten()
+                .all(|coordinate| coordinate.is_finite())
+        {
+            ladder.push((seam, frame_polygons(&solved.frame)));
+        }
+    }
+    let mut hinges = angles
+        .iter()
+        .filter(|(_, angle)| (angle.abs() - 180.0).abs() <= 1e-9)
+        .map(|(&hinge, &angle)| (hinge, angle))
+        .collect::<Vec<_>>();
+    hinges.sort_by_key(|&(hinge, _)| hinge);
+    let mut checked = 0_usize;
+    for (hinge, angle) in hinges {
+        let touching = faces
+            .iter()
+            .filter(|face| face.edges.contains(&hinge))
+            .map(|face| face.id)
+            .collect::<Vec<_>>();
+        let [reference, other] = touching[..] else {
+            continue;
+        };
+        let Some(axis) = folded_polygons
+            .get(&reference)
+            .and_then(|points| polygon_normal3(points))
+            .map(canonical3)
+        else {
+            continue;
+        };
+        // 全ての折り切った折り目をまとめて戻した梯子で足りないときは、
+        // **この折り目だけ**を戻した姿勢をsolveで作って探る。
+        let mut probes = ladder.clone();
+        if !probes.iter().any(|(seam, polygons)| {
+            usable_probe_height(polygons, reference, other, axis, *seam).is_some()
+        }) {
+            let mut warm = angles.clone();
+            for probe_abs in [179.999_f64, 179.99, 179.9, 179.0, 175.0] {
+                let solved = ori3_rigid::solve_near(
+                    cp,
+                    faces,
+                    &[Driver {
+                        hinge,
+                        target_angle_deg: angle.signum() * probe_abs,
+                    }],
+                    angles,
+                    Some(&warm),
+                );
+                let seam = ori3_rigid::max_seam_gap(cp, faces, &solved.frame);
+                let moved = max_vertex_distance(folded, &solved.frame);
+                warm = solved.angles.clone();
+                // 戻した角度が生む動きより桁違いに大きく動いた探りは、別の折り方へ
+                // 飛んでいる。r度戻すと紙は高々 r ラジアン×紙の大きさ(≦1)だけ動く。
+                if seam < SEAM_TEAR_TOLERANCE
+                    && moved <= 20.0 * (angle.abs() - probe_abs).to_radians()
+                    && solved
+                        .frame
+                        .faces
+                        .iter()
+                        .flat_map(|face| &face.polygon)
+                        .flatten()
+                        .all(|coordinate| coordinate.is_finite())
+                {
+                    probes.push((seam, frame_polygons(&solved.frame)));
+                }
+            }
+        }
+        for (seam, polygons) in &probes {
+            let Some(height) = usable_probe_height(polygons, reference, other, axis, *seam) else {
+                continue;
+            };
+            checked += 1;
+            assert_eq!(
+                ranks[&other] > ranks[&reference],
+                height > 0.0,
+                "{name}: 折り目{hinge}({angle:+.3}度)で、面{other}は面{reference}の\
+                 実測で{height:.6e}(その段の裂け{seam:.3e})の側にあるのに、重なり順が逆である"
+            );
+            break;
+        }
+    }
+    checked
+}
+
+/// 調査用。入力座標を1 ULPだけ動かしたときに、179.999°の姿勢で測った面対の
+/// 隙間がどれだけ動くか(＝丸めの雑音の大きさ)を測る。合否は付けない。
+#[test]
+#[ignore = "調査用の測定。合否ではなく数値の出力が目的"]
+fn diag_gap_noise_from_one_ulp_of_input() {
+    let diagrams = boundary_diagrams();
+    let base = diagrams
+        .iter()
+        .find(|item| item.name == "folded-sample.ori3")
+        .expect("the folded acceptance fixture exists");
+    // 入力の展開図の頂点座標を全て1 ULPだけ大きい側へ動かした複製。
+    let mut nudged_cp = base.cp.clone();
+    for vertex in &mut nudged_cp.vertices {
+        for coordinate in &mut vertex.pos {
+            *coordinate = f64::from_bits(coordinate.to_bits() + 1);
+        }
+    }
+    let nudged = diagram(
+        "folded-sample.ori3",
+        nudged_cp,
+        base.paper_width,
+        base.paper_height,
+    );
+
+    let mut noise = Vec::<f64>::new();
+    let mut sign_flips = 0_usize;
+    let mut compared = 0_usize;
+    for hinge in [306_u32, 425, 125, 12, 181, 297] {
+        for sign in [1.0_f64, -1.0] {
+            let (base_before, base_after) = endpoint_frames(base, hinge, sign);
+            let (nudged_before, _) = endpoint_frames(&nudged, hinge, sign);
+            let base_gaps = near_overlaps(&base_before.frame, f64::INFINITY)
+                .into_iter()
+                .map(|pair| ((pair.left, pair.right), pair.gap))
+                .collect::<BTreeMap<_, _>>();
+            let nudged_gaps = near_overlaps(&nudged_before.frame, f64::INFINITY)
+                .into_iter()
+                .map(|pair| ((pair.left, pair.right), pair.gap))
+                .collect::<BTreeMap<_, _>>();
+            for (key, base_gap) in &base_gaps {
+                let Some(nudged_gap) = nudged_gaps.get(key) else {
+                    continue;
+                };
+                compared += 1;
+                noise.push((base_gap - nudged_gap).abs());
+                if (*base_gap > 0.0) != (*nudged_gap > 0.0) {
+                    sign_flips += 1;
+                    println!(
+                        "ULPFLIP edge={hinge} sign={sign:+} pair={key:?} base={base_gap:.6e} nudged={nudged_gap:.6e}"
+                    );
+                }
+            }
+            println!(
+                "ULPNOISE edge={hinge} sign={sign:+} base_pairs={} nudged_pairs={} seam_before={:.3e} seam_after={:.3e}",
+                base_gaps.len(),
+                nudged_gaps.len(),
+                ori3_rigid::max_seam_gap(&base.cp, &base.faces, &base_before.frame),
+                ori3_rigid::max_seam_gap(&base.cp, &base.faces, &base_after.frame),
+            );
+        }
+    }
+    noise.sort_by(f64::total_cmp);
+    let quantile = |ratio: f64| {
+        noise
+            .get(((noise.len() as f64 - 1.0) * ratio) as usize)
+            .copied()
+            .unwrap_or(f64::NAN)
+    };
+    println!(
+        "ULPNOISE_TOTAL compared={compared} sign_flips={sign_flips} median={:.6e} p90={:.6e} p99={:.6e} max={:.6e}",
+        quantile(0.5),
+        quantile(0.9),
+        quantile(0.99),
+        noise.last().copied().unwrap_or(f64::NAN),
+    );
+}
+
+/// 調査用。`surface_order_179_999_to_180_all_110_creases` が落ちる折り目について、
+/// 順位が入れ替わった面対の隙間の実測値を出す。合否は付けない。
+#[test]
+#[ignore = "調査用の測定。合否ではなく数値の出力が目的"]
+fn diag_rank_flip_pairs_measured_gap() {
+    let diagrams = boundary_diagrams();
+    for (name, hinge, sign) in [
+        ("folded-sample.ori3", 306_u32, 1.0_f64),
+        ("folded-sample.ori3", 306, -1.0),
+        ("diagonal-midline-square", 12, 1.0),
+        ("diagonal-midline-square", 12, -1.0),
+    ] {
+        let diagram = diagrams
+            .iter()
+            .find(|diagram| diagram.name == name)
+            .expect("diagram exists");
+        let (before, after) = endpoint_frames(diagram, hinge, sign);
+        let rank_of = |frame: &Frame3D| {
+            frame
+                .faces
+                .iter()
+                .map(|face| (face.face, face.surface_rank))
+                .collect::<BTreeMap<_, _>>()
+        };
+        let before_rank = rank_of(&before.frame);
+        let after_rank = rank_of(&after.frame);
+        let before_gaps = near_overlaps(&before.frame, f64::INFINITY)
+            .into_iter()
+            .map(|pair| ((pair.left, pair.right), pair.gap))
+            .collect::<BTreeMap<_, _>>();
+        let after_gaps = near_overlaps(&after.frame, f64::INFINITY)
+            .into_iter()
+            .map(|pair| ((pair.left, pair.right), pair.gap))
+            .collect::<BTreeMap<_, _>>();
+        println!(
+            "FLIPSETUP diagram={name} edge={hinge} sign={sign:+} seam_before={:.3e} seam_after={:.3e} before_pairs={} after_pairs={}",
+            ori3_rigid::max_seam_gap(&diagram.cp, &diagram.faces, &before.frame),
+            ori3_rigid::max_seam_gap(&diagram.cp, &diagram.faces, &after.frame),
+            before_gaps.len(),
+            after_gaps.len(),
+        );
+        let mut faces = before_rank.keys().copied().collect::<Vec<_>>();
+        faces.sort_unstable();
+        let exact_error = |state: &EndpointState, left: FaceId, right: FaceId| {
+            let (_, exact) = canonical_path_frames(diagram, &state.angles);
+            let polygons = frame_polygons(&exact);
+            let left_points = polygons.get(&left)?.clone();
+            let right_points = polygons.get(&right)?.clone();
+            let plane = overlap_plane(&left_points)?;
+            let right_normal = polygon_normal3(&right_points).map(canonical3)?;
+            let error = left_points
+                .iter()
+                .chain(&right_points)
+                .map(|point| plane.normal.dot(*point - plane.origin).abs())
+                .fold(0.0_f64, f64::max);
+            Some((plane.normal.dot(right_normal), error))
+        };
+        for (left_index, &left) in faces.iter().enumerate() {
+            for &right in &faces[left_index + 1..] {
+                if (before_rank[&right] > before_rank[&left])
+                    == (after_rank[&right] > after_rank[&left])
+                {
+                    continue;
+                }
+                println!(
+                    "FLIPPAIR diagram={name} edge={hinge} sign={sign:+} pair=({left},{right}) before_gap={:?} after_gap={:?} vertex_move={:.3e} before_exact={:?} after_exact={:?}",
+                    before_gaps.get(&(left, right)).map(|gap| format!("{gap:.6e}")),
+                    after_gaps.get(&(left, right)).map(|gap| format!("{gap:.6e}")),
+                    max_vertex_distance(&before.frame, &after.frame),
+                    exact_error(&before, left, right).map(|(parallel, error)| format!("parallel={parallel:.9} coplanar_error={error:.6e}")),
+                    exact_error(&after, left, right).map(|(parallel, error)| format!("parallel={parallel:.9} coplanar_error={error:.6e}")),
+                );
+            }
+        }
+    }
+}
+
+/// 探る姿勢での「基準面から相手面の重心までの符号付き高さ」。使えないとき `None`。
+///
+/// 使えない条件は2つ。基準面の平面が表示姿勢から8度(内積0.99)以上傾いた探りと、
+/// **高さがその探りの裂けの量以下**のもの。後者は、面が離れている量より紙が
+/// ちぎれている量のほうが大きく、符号に信号が無いためである。
+fn usable_probe_height(
+    polygons: &BTreeMap<FaceId, Vec<V3>>,
+    reference: FaceId,
+    other: FaceId,
+    axis: V3,
+    seam: f64,
+) -> Option<f64> {
+    let reference_points = polygons.get(&reference)?;
+    let other_points = polygons.get(&other)?;
+    if polygon_normal3(reference_points)?.dot(axis).abs() < 0.99 {
+        return None;
+    }
+    let centroid = |points: &[V3]| {
+        points.iter().fold(V3::ZERO, |sum, &point| sum + point) / points.len() as f64
+    };
+    let height = (centroid(other_points) - centroid(reference_points)).dot(axis);
+    (height.abs() > seam.max(1e-9)).then_some(height)
 }

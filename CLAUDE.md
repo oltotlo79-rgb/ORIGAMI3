@@ -174,7 +174,11 @@ Co-Authored-By: Codex <noreply@openai.com>
 | 6 | **性能(最適化あり)** | `cargo test --release -p ori3-soft --test perf_soft -- --nocapture` |
 | 7 | **性能(最適化あり)** | `cargo test --release -p ori3-rigid --test perf_miura -- --nocapture` |
 | 8 | **決定性** | 折りに関わるテストを**連続10回以上**実行し、結果が毎回同じであること |
+| 9 | **性能(最適化あり)** | `cargo test --release -p ori3-rigid --test perf_yakko --test perf_contact -- --nocapture` |
+| 10 | **180度の重なり順の全数掃引(最適化あり)** | `cargo test --release -p desktop --lib surface_order_179_999_to_180_all_110_creases -- --nocapture` |
+| 11 | **完全に折った端点の重なり順(最適化あり)** | `cargo test --release -p desktop --lib surface_order_exact_endpoint_is_rank_stable_for_previous_19 -- --nocapture` |
 
+- **#10・#11 について**: この2件は最適化なしでは手元で 476秒 / 175秒 かかる。CIの `checks` ジョブでは `--skip` で外し、`performance` ジョブが最適化ありで走らせる(どちらの検査も消していない)。手元の `cargo test --workspace`(#1)と `scripts/check.ps1` では、いままでどおり最適化なしでも走る。
 - **性能について**: CIの計算機は手元より**約3.6倍遅い**実測がある。手元の測定値が上限の1/3以下でなければ、CIで落ちる可能性が高いとみなす。
 - **`ci.yml` が変わったら、この表も更新する。** 表と `ci.yml` が食い違っていないかを、`scripts/check-ci.ps1` が自動で確認する。
 

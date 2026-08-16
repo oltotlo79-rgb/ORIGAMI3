@@ -42,8 +42,12 @@ jobs:
         working-directory: apps/desktop
         run: npm ci
 
+      # 180度の重なり順を全数で掃引する2件だけは、最適化ありの performance ジョブで
+      # 走らせる。最適化なしでは手元で 476秒 / 175秒 かかり、CIの計算機は手元より
+      # 約3.6倍遅いので、この2件だけでこのジョブが約39分延びる。最適化ありでは
+      # 合わせて手元で1分未満(CI換算 約3.4分)で済む。どちらの検査も消さない。
       - name: Run Rust tests
-        run: cargo test --workspace
+        run: cargo test --workspace -- --skip surface_order_179_999_to_180_all_110_creases --skip surface_order_exact_endpoint_is_rank_stable_for_previous_19
 
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -84,3 +88,12 @@ jobs:
 
       - name: Test rigid-folding performance in release mode
         run: cargo test --release -p ori3-rigid --test perf_miura -- --nocapture
+
+      - name: Test fold-motion performance in release mode
+        run: cargo test --release -p ori3-rigid --test perf_yakko --test perf_contact -- --nocapture
+
+      - name: Test the 180-degree surface order sweep in release mode
+        run: cargo test --release -p desktop --lib surface_order_179_999_to_180_all_110_creases -- --nocapture
+
+      - name: Test the exact endpoint surface order in release mode
+        run: cargo test --release -p desktop --lib surface_order_exact_endpoint_is_rank_stable_for_previous_19 -- --nocapture
