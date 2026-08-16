@@ -1,4 +1,11 @@
 //! 角度操作の継続法と、停止しない接触診断の検査。
+//!
+//! 速さの上限はここでは判定しない。以前は往復スイープの中で
+//! `solve_motion` と自己交差の走査の実時間を330ms・500msと比べていたが、
+//! この検査は最適化なしのビルドでも走るため、計算機の混み具合が
+//! そのまま合否に出てしまう。上限値は緩めずに
+//! `crates/ori3-rigid/tests/perf_contact.rs` へ移し、最適化ありのビルドの
+//! ときだけ判定するようにした(経緯は同ファイルの冒頭)。
 
 use std::collections::HashMap;
 
@@ -272,7 +279,6 @@ fn three_strips_bidirectional_sweep_stays_clear() {
         ("down", (0..=180).rev().collect::<Vec<_>>()),
     ] {
         for angle in angles {
-            let started = std::time::Instant::now();
             let motion = solve_motion(
                 &cp,
                 &faces,
@@ -281,18 +287,7 @@ fn three_strips_bidirectional_sweep_stays_clear() {
                 Some(&warm),
                 true,
             );
-            let solve_time = started.elapsed();
-            let contact_started = std::time::Instant::now();
             let pairs = ori3_rigid::self_intersection_pairs(&motion.result.frame);
-            let contact_time = contact_started.elapsed();
-            assert!(
-                solve_time < std::time::Duration::from_millis(330),
-                "{label} {angle}° solve={solve_time:?}"
-            );
-            assert!(
-                contact_time < std::time::Duration::from_millis(500),
-                "{label} {angle}° contact={contact_time:?}"
-            );
             assert!(!motion.contact_stopped);
             assert!(motion.result.converged, "{label} {angle}°");
             assert!((motion.result.angles[&9] - f64::from(angle)).abs() < 1e-9);
@@ -303,7 +298,7 @@ fn three_strips_bidirectional_sweep_stays_clear() {
             assert!(pairs.is_empty(), "{label} {angle}° pairs={pairs:?}");
             if reported.contains(&angle) {
                 println!(
-                    "three-strips {label} {angle}°: pairs={} yielded={:.6}° solve={solve_time:?} contact={contact_time:?}",
+                    "three-strips {label} {angle}°: pairs={} yielded={:.6}°",
                     pairs.len(),
                     (motion.result.angles[&8] - 150.0).abs()
                 );
@@ -327,7 +322,6 @@ fn three_strips_bidirectional_sixteen_degree_jumps_stay_clear() {
 
     for (direction, angles) in [("up", upward), ("down", downward)] {
         for angle in angles {
-            let started = std::time::Instant::now();
             let motion = solve_motion(
                 &cp,
                 &faces,
@@ -336,19 +330,8 @@ fn three_strips_bidirectional_sixteen_degree_jumps_stay_clear() {
                 Some(&warm),
                 true,
             );
-            let solve_time = started.elapsed();
-            let contact_started = std::time::Instant::now();
             let pairs = ori3_rigid::self_intersection_pairs(&motion.result.frame);
-            let contact_time = contact_started.elapsed();
 
-            assert!(
-                solve_time < std::time::Duration::from_millis(330),
-                "{direction} {angle}° solve={solve_time:?}"
-            );
-            assert!(
-                contact_time < std::time::Duration::from_millis(500),
-                "{direction} {angle}° contact={contact_time:?}"
-            );
             assert!(!motion.contact_stopped, "{direction} {angle}°");
             assert!(motion.result.converged, "{direction} {angle}°");
             assert!((motion.result.angles[&9] - f64::from(angle)).abs() < 1e-9);

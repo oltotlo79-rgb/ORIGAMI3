@@ -413,8 +413,12 @@ fn hinged_faces_touching_along_their_fold_are_not_reported() {
     assert!(!self_intersects(&frame(vec![a, b])));
 }
 
-/// 面400枚(NFR-002の想定規模)を折り途中のように重ねても、判定が現実的な時間で終わる。
-/// 判定は編集のたびに走るので、遅いと画面が引っかかる
+/// 面400枚(NFR-002の想定規模)を折り途中のように重ねても、交差なしと正しく判定する。
+///
+/// 実時間の上限はここでは判定しない。この検査は最適化なしのビルドでも走るため、
+/// 計算機の混み具合がそのまま合否に出てしまう。上限値(500ms)は緩めずに
+/// `crates/ori3-rigid/tests/perf_contact.rs` へ移し、最適化ありのビルドの
+/// ときだけ判定するようにした(経緯は同ファイルの冒頭)。
 #[test]
 fn checks_400_faces_quickly() {
     // 少しずつ傾けて積み重ねた400枚(平らではないが交差はしていない)
@@ -433,14 +437,7 @@ fn checks_400_faces_quickly() {
         })
         .collect();
     let frame = frame(faces);
-    let started = std::time::Instant::now();
     assert!(!self_intersects(&frame));
-    let elapsed = started.elapsed();
-    println!("面400枚の判定: {elapsed:?}");
-    assert!(
-        elapsed < std::time::Duration::from_millis(500),
-        "{elapsed:?}"
-    );
 }
 
 /// 同じ平面(水平でない)に重なった層は、めり込みではなく普通の重なり

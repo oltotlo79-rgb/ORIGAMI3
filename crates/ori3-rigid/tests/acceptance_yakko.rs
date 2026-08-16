@@ -106,6 +106,17 @@ fn full_fold_drivers(cp: &CreasePattern) -> Vec<Driver> {
 }
 
 /// 代表ヒンジを指定系列で動かし、接触回避後もhard・紙の接続・有限性を守ることを検査する。
+///
+/// # 速さの上限をここで測らない理由
+///
+/// 以前はこの中で `solve_motion` と `self_intersection_pairs` の実時間を測り、
+/// 330ms・500msの上限と比べていた。しかしこのテストは最適化なしのビルドでも走る
+/// (`cargo test --workspace`)ため、上限との差が計算機の混み具合でそのまま合否に
+/// 出てしまい、420回の試行で65回落ちた(全件が同じ実時間の行。折り角・裂け・
+/// 自己交差など数値の主張は1件も落ちていない)。実測は330.97ms〜974.82msで、
+/// 何もしていない計算機でも30回中5回落ちた。
+/// 速さの上限は最適化ありで測るものとして `tests/perf_yakko.rs` へ移した。
+/// 上限値は緩めていない。ここには数値の主張だけを残す。
 fn assert_contact_free_sweep(
     cp: &CreasePattern,
     faces: &[Face],
@@ -119,7 +130,6 @@ fn assert_contact_free_sweep(
     assert_ne!(sign, 0.0, "代表ヒンジの完成角には向きが必要");
     for magnitude in magnitudes {
         let requested = sign * f64::from(magnitude);
-        let solve_started = std::time::Instant::now();
         let motion = solve_motion(
             cp,
             faces,
@@ -131,12 +141,7 @@ fn assert_contact_free_sweep(
             Some(&warm),
             true,
         );
-        let solve_time = solve_started.elapsed();
         let result = &motion.result;
-        assert!(
-            solve_time < std::time::Duration::from_millis(330),
-            "{direction} {magnitude}°: solve={solve_time:?}"
-        );
         assert!(
             !motion.contact_stopped,
             "{direction} {magnitude}°: 接触で操作が停止した"
@@ -170,13 +175,7 @@ fn assert_contact_free_sweep(
             "{direction} {magnitude}°: seam={gap:e} rms={:e}",
             result.closure_rms
         );
-        let contact_started = std::time::Instant::now();
         let intersections = self_intersection_pairs(&result.frame);
-        let contact_time = contact_started.elapsed();
-        assert!(
-            contact_time < std::time::Duration::from_millis(500),
-            "{direction} {magnitude}°: contact={contact_time:?}"
-        );
         assert!(
             intersections.is_empty(),
             "{direction} {magnitude}° (要求{requested}°): 交差={intersections:?} relaxations={:?}",
