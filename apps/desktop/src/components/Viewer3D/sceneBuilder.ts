@@ -107,8 +107,14 @@ export const SUSPECT_HIGHLIGHT_WIDTH_PX = 8;
 const CAMERA_FOV = 45;
 /** 初期カメラの向き(紙の中心から見た方向。斜め上=手前上から見下ろす) */
 export const CAMERA_DIR = new THREE.Vector3(0.35, -0.85, 0.95).normalize();
-/** 紙全体が収まるための距離の余裕 */
-const CAMERA_MARGIN = 1.35;
+/**
+ * 直す前の「視点を戻す」が使っていた距離の係数。
+ *
+ * 紙の長辺/(2 tan(画角/2)) にこれを掛けた距離へカメラを置いていた。縦の画角しか
+ * 見ていないので、区画が縦長になると紙が左右へはみ出した(実測: 区画200×600 CSS pxで
+ * 左へ136px・右へ189px)。いまはこの式を「直す前より紙を小さくしない」下限としてだけ使う。
+ */
+const LEGACY_CAMERA_MARGIN = 1.35;
 /** 強調表示の伸ばす向き(回転計算に使う) */
 const AXIS_Y = new THREE.Vector3(0, 1, 0);
 /** 紙の長辺(展開図は長辺=1.0の正規化座標。層のずらし量の基準にする) */
@@ -741,6 +747,301 @@ export function viewRotationStarts(
 }
 
 // ---------------------------------------------------------------------------
+// 紙を3D区画へ収める視点合わせ
+// ---------------------------------------------------------------------------
+
+/** 画面上の四角形(3D区画の左上を原点としたCSS px)。 */
+export interface ScreenBounds {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+
+/** 視点合わせの結果。カメラの距離と、区画へ当てはめる投影の枠。 */
+export interface PaperFraming {
+  /** 紙の中心からカメラまでの距離 */
+  distance: number;
+  /** camera.setViewOffset へ渡す仮想の枠の大きさ */
+  fullWidth: number;
+  fullHeight: number;
+  /** 仮想の枠の中で3D区画が占める位置 */
+  offsetX: number;
+  offsetY: number;
+  /** このとき紙の四隅が画面上で作る四角形 */
+  bounds: ScreenBounds;
+}
+
+/** 紙と3D区画の縁との間に必ず残す隙間(CSS px)。狭い区画では区画の5%まで詰める。 */
+const VIEW_EDGE_PADDING_PX = 8;
+/** 案内の札の下端から、さらに空けたい隙間(CSS px)。 */
+const HINT_CLEARANCE_PX = 8;
+/**
+ * 案内の札の下から紙を出すためだけに許す縮小の下限(直す前の紙の高さに対する割合)。
+ *
+ * 実測(説明書を撮ったときの区画605×439 CSS px): 札の下端107pxより下へ紙の上端を
+ * 逃がすには、紙の高さを326→316px(3.1%減)まで詰める必要があった。0.95を下限にすると
+ * この区画では札を避けられる。札が区画の4割を占める605×261では、いくら詰めても
+ * 避けられないので、この判定で「避けない」側に倒れ、紙は直す前の大きさのまま残る。
+ */
+const HINT_AVOID_MIN_HEIGHT_RATIO = 0.95;
+/** 画角の半分の正接。距離と画面上の大きさを結ぶ係数。 */
+const HALF_FOV_TAN = Math.tan((CAMERA_FOV * Math.PI) / 360);
+
+/** 紙の四隅を、カメラの右向き・上向き・視線方向の成分へ分けた値。 */
+interface PaperCorner {
+  /** 視線方向の成分(手前ほど大きい)。距離から引くと奥行きになる */
+  along: number;
+  /** 画面の右向きの成分 */
+  right: number;
+  /** 画面の上向きの成分 */
+  up: number;
+}
+
+/** 直す前の「視点を戻す」が置いていたカメラ距離。いまは紙の大きさの下限に使う。 */
+export function legacyPaperDistance(paperWidth: number, paperHeight: number): number {
+  return (
+    (Math.max(paperWidth, paperHeight) / (2 * HALF_FOV_TAN)) * LEGACY_CAMERA_MARGIN
+  );
+}
+
+/** 紙の四隅を、紙の中心を原点としてカメラの向きの成分へ分ける。 */
+export function paperCorners(
+  paperWidth: number,
+  paperHeight: number,
+  dir: THREE.Vector3,
+  right: THREE.Vector3,
+  up: THREE.Vector3,
+): PaperCorner[] {
+  const cx = paperWidth / 2;
+  const cy = paperHeight / 2;
+  const points: [number, number][] = [
+    [0, 0],
+    [paperWidth, 0],
+    [paperWidth, paperHeight],
+    [0, paperHeight],
+  ];
+  return points.map(([x, y]) => {
+    const v = new THREE.Vector3(x - cx, y - cy, 0);
+    return { along: v.dot(dir), right: v.dot(right), up: v.dot(up) };
+  });
+}
+
+/**
+ * カメラの軸を区画の上から axisY の高さに置くための、仮想の枠の高さ。
+ * 区画がこの枠の中へ収まる最小の大きさにすると、画面上の倍率が一つに決まる。
+ */
+function framingFullHeight(axisY: number, viewHeight: number): number {
+  return 2 * Math.max(axisY, viewHeight - axisY);
+}
+
+/** 仮想の枠の高さから、世界の長さ1が画面上で何画素になるかの係数を出す。 */
+function framingScale(axisY: number, viewHeight: number): number {
+  return framingFullHeight(axisY, viewHeight) / (2 * HALF_FOV_TAN);
+}
+
+/** 軸を axisY に置いたとき、四隅が区画へ隙間つきで収まる最小の距離。 */
+function framingDistance(
+  corners: readonly PaperCorner[],
+  axisY: number,
+  viewWidth: number,
+  viewHeight: number,
+  padding: number,
+): number {
+  const scale = framingScale(axisY, viewHeight);
+  const roomX = Math.max(viewWidth / 2 - padding, 1e-6);
+  const roomUp = Math.max(axisY - padding, 1e-6);
+  const roomDown = Math.max(viewHeight - padding - axisY, 1e-6);
+  let distance = 0;
+  for (const c of corners) {
+    distance = Math.max(distance, c.along + (Math.abs(c.right) * scale) / roomX);
+    distance = Math.max(
+      distance,
+      c.along + (Math.abs(c.up) * scale) / (c.up > 0 ? roomUp : roomDown),
+    );
+  }
+  return distance;
+}
+
+/** 軸を axisY・距離を distance にしたときの、紙の四隅が作る画面上の四角形。 */
+function framingBounds(
+  corners: readonly PaperCorner[],
+  axisY: number,
+  distance: number,
+  viewWidth: number,
+  viewHeight: number,
+): ScreenBounds {
+  const scale = framingScale(axisY, viewHeight);
+  let left = Infinity;
+  let right = -Infinity;
+  let top = Infinity;
+  let bottom = -Infinity;
+  for (const c of corners) {
+    const depth = Math.max(distance - c.along, 1e-6);
+    const x = viewWidth / 2 + (c.right * scale) / depth;
+    const y = axisY - (c.up * scale) / depth;
+    left = Math.min(left, x);
+    right = Math.max(right, x);
+    top = Math.min(top, y);
+    bottom = Math.max(bottom, y);
+  }
+  return { left, right, top, bottom };
+}
+
+/**
+ * 紙の上端が targetTop まで下がるように軸を下げる。ただし紙の高さが minHeight を
+ * 割る手前で止める。下げるほど紙は小さくなるので、二分探索で境目を求める。
+ */
+function lowerAxis(
+  corners: readonly PaperCorner[],
+  viewWidth: number,
+  viewHeight: number,
+  padding: number,
+  minHeight: number,
+  targetTop: number,
+): number {
+  let lo = viewHeight / 2;
+  let hi = viewHeight - padding;
+  for (let i = 0; i < 60; i++) {
+    const mid = (lo + hi) / 2;
+    const bounds = framingBounds(
+      corners,
+      mid,
+      framingDistance(corners, mid, viewWidth, viewHeight, padding),
+      viewWidth,
+      viewHeight,
+    );
+    if (bounds.bottom - bounds.top >= minHeight && bounds.top <= targetTop) lo = mid;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/**
+ * 紙全体が3D区画へ収まり、できるだけ大きく、できるだけ左上の案内の札に
+ * 隠れない視点を求める。
+ *
+ * 直す前は縦の画角だけで距離を決めていたため、区画の縦横比を無視していた。
+ * ここでは四隅を実際に投影して左右・上下の4方向すべてを見るので、区画が
+ * 縦長でも横長でもはみ出さない。
+ *
+ * 札を避けるのは「紙を小さくしすぎない」範囲だけにする。札が区画の高さの
+ * 大部分を占める低い区画では避けきれないので、そのときは直す前の大きさを保ったまま、
+ * 空いている下側の余りぶんだけ紙を下げる。
+ *
+ * @param hintBottomPx 左上の案内の札の下端(区画の上からのCSS px)。0なら札なし。
+ */
+export function paperFraming(
+  paperWidth: number,
+  paperHeight: number,
+  viewWidth: number,
+  viewHeight: number,
+  hintBottomPx: number,
+  dir: THREE.Vector3,
+  right: THREE.Vector3,
+  up: THREE.Vector3,
+): PaperFraming {
+  const corners = paperCorners(paperWidth, paperHeight, dir, right, up);
+  const padding = Math.min(
+    VIEW_EDGE_PADDING_PX,
+    viewWidth * 0.05,
+    viewHeight * 0.05,
+  );
+  // 直す前の大きさ。ここを下回らないようにする
+  const legacyBounds = framingBounds(
+    corners,
+    viewHeight / 2,
+    legacyPaperDistance(paperWidth, paperHeight),
+    viewWidth,
+    viewHeight,
+  );
+  const legacyHeight = legacyBounds.bottom - legacyBounds.top;
+
+  const centeredAxis = viewHeight / 2;
+  const centeredDistance = framingDistance(
+    corners,
+    centeredAxis,
+    viewWidth,
+    viewHeight,
+    padding,
+  );
+  const centeredBounds = framingBounds(
+    corners,
+    centeredAxis,
+    centeredDistance,
+    viewWidth,
+    viewHeight,
+  );
+  const centeredHeight = centeredBounds.bottom - centeredBounds.top;
+  // 札の下端より下へ紙の上端を置きたい。区画の半分より下げることはしない
+  const targetTop = Math.min(hintBottomPx + HINT_CLEARANCE_PX, viewHeight / 2);
+
+  let axisY = centeredAxis;
+  if (centeredBounds.top < targetTop) {
+    // まず少しだけ縮めてよい条件で避けられるか試す
+    const withShrink = lowerAxis(
+      corners,
+      viewWidth,
+      viewHeight,
+      padding,
+      Math.min(centeredHeight, legacyHeight * HINT_AVOID_MIN_HEIGHT_RATIO),
+      targetTop,
+    );
+    const shrunkTop = framingBounds(
+      corners,
+      withShrink,
+      framingDistance(corners, withShrink, viewWidth, viewHeight, padding),
+      viewWidth,
+      viewHeight,
+    ).top;
+    axisY =
+      shrunkTop >= hintBottomPx
+        ? withShrink // 縮めた甲斐があった(札の下から出た)
+        : lowerAxis(
+            // 避けきれないので縮めない。空いているぶんだけ下げる
+            corners,
+            viewWidth,
+            viewHeight,
+            padding,
+            Math.min(centeredHeight, legacyHeight),
+            targetTop,
+          );
+  }
+
+  const distance = framingDistance(corners, axisY, viewWidth, viewHeight, padding);
+  const fullHeight = framingFullHeight(axisY, viewHeight);
+  return {
+    distance,
+    fullWidth: viewWidth,
+    fullHeight,
+    offsetX: 0,
+    offsetY: fullHeight / 2 - axisY,
+    bounds: framingBounds(corners, axisY, distance, viewWidth, viewHeight),
+  };
+}
+
+/**
+ * 求めた枠をカメラの投影へ入れる。
+ * setViewOffset は「仮想の枠のうち、この四角形だけを区画へ描く」指定で、
+ * 縦横比も同時に決まる。区画の大きさが変わるたびに入れ直す。
+ */
+export function applyPaperFraming(
+  camera: THREE.PerspectiveCamera,
+  framing: PaperFraming,
+  viewWidth: number,
+  viewHeight: number,
+): void {
+  camera.setViewOffset(
+    framing.fullWidth,
+    framing.fullHeight,
+    framing.offsetX,
+    framing.offsetY,
+    viewWidth,
+    viewHeight,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // シーン(レンダラ・カメラ・照明・入れ物)
 // ---------------------------------------------------------------------------
 
@@ -760,9 +1061,17 @@ export interface Viewer3DScene {
   render(): void;
   /** 現在のテーマのCSS変数から背景色を読み直して描画する。 */
   syncTheme(): void;
-  resize(widthPx: number, heightPx: number): void;
-  /** 紙全体が見える斜め上の初期位置へカメラを戻す */
-  resetCamera(paperWidth: number, paperHeight: number): void;
+  /**
+   * 3D区画の大きさが変わったことを伝える。hintBottomPx を渡すと、案内の札の
+   * 高さが変わったぶんも合わせ直しに反映する。
+   */
+  resize(widthPx: number, heightPx: number, hintBottomPx?: number): void;
+  /**
+   * 紙全体が見える斜め上の初期位置へカメラを戻す。
+   * hintBottomPx に左上の案内の札の下端(区画の上からのCSS px)を渡すと、
+   * 紙を小さくしすぎない範囲で札の下から逃がす。
+   */
+  resetCamera(paperWidth: number, paperHeight: number, hintBottomPx?: number): void;
   /** 面と線を差し替える(古い資源は破棄する) */
   setContent(content: Viewer3DContent): void;
   /**
@@ -1210,6 +1519,80 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
   // 寄る・平行移動・ボタンの割り当て(setDrawMode)はOrbitControlsのまま使う。
   controls.enableRotate = false;
 
+  // --- 紙を区画へ収める視点合わせ ------------------------------------------
+  // 区画の大きさが変わったときにも合わせ直せるよう、材料を覚えておく。
+  // 3Dの状態は保存しないので、この記憶はこの画面が生きている間だけのもの。
+  let fitRequest: {
+    paperWidth: number;
+    paperHeight: number;
+    hintBottomPx: number;
+  } | null = null;
+  let viewWidth = 0;
+  let viewHeight = 0;
+  const framingRight = new THREE.Vector3();
+  const framingUp = new THREE.Vector3();
+  const framingDir = new THREE.Vector3();
+  const framingCenter = new THREE.Vector3();
+  const framingOffset = new THREE.Vector3();
+
+  /**
+   * 覚えている紙の大きさと、渡された視線・画面の上向きから枠を求める。
+   * 区画の大きさがまだ届いていない間は求めない(nullを返す)。
+   */
+  const framingFor = (dir: THREE.Vector3, up: THREE.Vector3): PaperFraming | null => {
+    if (fitRequest === null || viewWidth <= 0 || viewHeight <= 0) return null;
+    framingRight.crossVectors(up, dir);
+    if (framingRight.lengthSq() <= MIN_ORBIT_RADIUS ** 2) return null;
+    framingRight.normalize();
+    framingUp.crossVectors(dir, framingRight).normalize();
+    return paperFraming(
+      fitRequest.paperWidth,
+      fitRequest.paperHeight,
+      viewWidth,
+      viewHeight,
+      fitRequest.hintBottomPx,
+      dir,
+      framingRight,
+      framingUp,
+    );
+  };
+
+  /** 枠を求められないとき(紙の大きさがまだ届いていない等)の素直な投影。 */
+  const plainProjection = () => {
+    if (viewWidth <= 0 || viewHeight <= 0) return;
+    camera.clearViewOffset();
+    camera.aspect = viewWidth / viewHeight;
+    camera.updateProjectionMatrix();
+  };
+
+  /**
+   * 区画の大きさが変わったあとに合わせ直す。向きと注視点はそのままにして、
+   * 枠を作り直し、狭くなって紙が収まらなくなったぶんだけカメラを引く。
+   * 利用者が寄せた分を勝手に戻さないよう、寄せる向きへは動かさない。
+   */
+  const refitToViewport = () => {
+    framingDir.copy(camera.position).sub(controls.target);
+    const framing =
+      fitRequest === null || framingDir.lengthSq() <= MIN_ORBIT_RADIUS ** 2
+        ? null
+        : framingFor(framingDir.normalize(), cameraScreenUp(camera));
+    if (framing === null || fitRequest === null) {
+      plainProjection();
+      return;
+    }
+    applyPaperFraming(camera, framing, viewWidth, viewHeight);
+    camera.updateProjectionMatrix();
+    framingCenter.set(fitRequest.paperWidth / 2, fitRequest.paperHeight / 2, 0);
+    const current = framingOffset
+      .copy(camera.position)
+      .sub(framingCenter)
+      .dot(framingDir);
+    if (current < framing.distance) {
+      camera.position.addScaledVector(framingDir, framing.distance - current);
+      controls.update();
+    }
+  };
+
   // 描画は1フレームに1回だけ。連続した変化(座標更新・選択・視点操作)が
   // 同じフレームに重なっても描画は1回にまとまる
   let frameHandle: number | null = null;
@@ -1343,8 +1726,13 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
       scene.background = new THREE.Color(canvas3dBackgroundColor(canvas));
       render();
     },
-    resize(widthPx, heightPx) {
+    resize(widthPx, heightPx, hintBottomPx) {
       if (widthPx === 0 || heightPx === 0) return;
+      viewWidth = widthPx;
+      viewHeight = heightPx;
+      if (fitRequest !== null && hintBottomPx !== undefined) {
+        fitRequest.hintBottomPx = hintBottomPx;
+      }
       // 画面の細かさは移動先の画面で変わることがあるので毎回合わせ直す
       renderer.setPixelRatio(window.devicePixelRatio || 1);
       renderer.setSize(widthPx, heightPx, false);
@@ -1355,19 +1743,24 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
         drawingBufferSize.x,
         drawingBufferSize.y,
       );
-      camera.aspect = widthPx / heightPx;
-      camera.updateProjectionMatrix();
+      // 区画の大きさが変わると収まり方も変わる。向きと注視点はそのままに、
+      // 枠を作り直し、狭くなって収まらなくなったぶんだけカメラを引く。
+      refitToViewport();
       render();
     },
-    resetCamera(paperWidth, paperHeight) {
+    resetCamera(paperWidth, paperHeight, hintBottomPx = 0) {
+      fitRequest = { paperWidth, paperHeight, hintBottomPx };
       const center = new THREE.Vector3(paperWidth / 2, paperHeight / 2, 0);
-      const extent = Math.max(paperWidth, paperHeight);
-      const dist =
-        (extent / (2 * Math.tan((CAMERA_FOV * Math.PI) / 360))) * CAMERA_MARGIN;
-      camera.position.copy(center).addScaledVector(CAMERA_DIR, dist);
       // 回して傾いたままの上向きを持ち込まないよう、世界の上へ戻してから向き直す。
       camera.up.set(0, 1, 0);
       controls.target.copy(center);
+      const framing = framingFor(CAMERA_DIR, camera.up);
+      const distance =
+        framing?.distance ?? legacyPaperDistance(paperWidth, paperHeight);
+      camera.position.copy(center).addScaledVector(CAMERA_DIR, distance);
+      if (framing === null) plainProjection();
+      else applyPaperFraming(camera, framing, viewWidth, viewHeight);
+      camera.updateProjectionMatrix();
       controls.update();
       render();
     },

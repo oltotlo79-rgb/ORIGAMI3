@@ -977,15 +977,29 @@ export function Viewer3D({ fitRef }: Props) {
     }
   }, [pullMode]);
 
+  /**
+   * 左上に重ねている案内の札の下端(canvasの上からのCSS px)。
+   * 札は紙の上に重なるので、視点合わせのときにここより下へ紙を逃がす。
+   * 札が無い・まだ大きさが決まっていないときは0(=避けない)。
+   */
+  const hintBottomPx = useCallback((): number => {
+    const canvas = canvasRef.current;
+    const hint = canvas?.parentElement?.querySelector(".viewer-operation-hint");
+    if (!canvas || !hint) return 0;
+    const canvasTop = canvas.getBoundingClientRect().top;
+    const bottom = hint.getBoundingClientRect().bottom - canvasTop;
+    return Number.isFinite(bottom) && bottom > 0 ? bottom : 0;
+  }, []);
+
   /** 紙全体が見える斜め上の位置へカメラを戻す */
   const fitCamera = useCallback(() => {
     const scene = sceneRef.current;
     const current = useAppStore.getState().doc;
     if (!scene || !current) return;
     const [w, h] = paperExtent(current);
-    scene.resetCamera(w, h);
+    scene.resetCamera(w, h, hintBottomPx());
     orbitTargetRef.current.set(w / 2, h / 2, 0);
-  }, []);
+  }, [hintBottomPx]);
 
   // 新規作成・ファイルを開いた直後は紙全体が見える位置へカメラを戻す
   useEffect(() => {
@@ -1031,11 +1045,15 @@ export function Viewer3D({ fitRef }: Props) {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const observer = new ResizeObserver(() => {
-      sceneRef.current?.resize(canvas.clientWidth, canvas.clientHeight);
+      sceneRef.current?.resize(
+        canvas.clientWidth,
+        canvas.clientHeight,
+        hintBottomPx(),
+      );
     });
     observer.observe(canvas);
     return () => observer.disconnect();
-  }, []);
+  }, [hintBottomPx]);
 
   /** canvas上の位置を畳み平面(z=0)の点へ直し、紙の点・輪郭へ吸着させる */
   const planePoint = useCallback(

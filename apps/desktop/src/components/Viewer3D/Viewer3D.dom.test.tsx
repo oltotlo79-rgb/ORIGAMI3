@@ -1235,8 +1235,9 @@ describe("Viewer3D(視点を戻す)", () => {
     resetCamera.mockClear(); // 表示直後の1回を数えない
     fireEvent.click(screen.getByRole("button", { name: "視点を戻す" }));
     expect(resetCamera).toHaveBeenCalledTimes(1);
-    // 紙の大きさ(150×150mm → 正規化して1×1)で全体が入る位置を求める
-    expect(resetCamera.mock.calls[0]).toEqual([1, 1]);
+    // 紙の大きさ(150×150mm → 正規化して1×1)と、案内の札の下端を渡して位置を求める
+    // (jsdomでは要素の大きさが取れないので札の下端は0)
+    expect(resetCamera.mock.calls[0]).toEqual([1, 1, 0]);
   });
 });
 
