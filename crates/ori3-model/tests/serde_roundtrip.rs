@@ -84,6 +84,185 @@ fn sample_document() -> Document {
     }
 }
 
+/// 種を固定した決定的な擬似乱数(splitmix64)。作品ファイルへ入れる座標を作る。
+///
+/// 実行するたびに同じ値の列を作るので、どの計算機で走らせても同じ検査になる。
+fn splitmix64(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// 0.0以上1.0未満の小数を、仮数部53ビットをすべて使って決定的に作る。
+fn next_unit(state: &mut u64) -> f64 {
+    ((splitmix64(state) >> 11) as f64) / ((1u64 << 53) as f64)
+}
+
+/// 作品ファイルを書き出して読み直したとき、座標が1ビットも変わらないこと。
+///
+/// `serde_json` は既定では小数の読み込みを「およその精度」で行い、最下位1ビットを
+/// 落とすことがある。実測(2026-08-16、20万個の往復)では、既定のままだと
+/// 全範囲で 59,621/200,000 個(29.8%)、0〜1000の範囲で 20,888/200,000 個(10.4%)が
+/// ずれた。ワークスペースの `Cargo.toml` で `serde_json` の `float_roundtrip` を
+/// 有効にすると、同じ測定で 0 個になる。
+///
+/// この検査は、その指定が外れたら落ちる。実際に `float_roundtrip` を外して実行し、
+/// 往復させた 8,752個 の小数のうち 926個 でビットが変わって失敗すること、
+/// 最初の不一致が下の具体値(`0.20710678118654754` → `0.20710678118654752`)であることを
+/// 確認した(2026-08-16)。
+#[test]
+fn saved_document_coordinates_survive_json_roundtrip_bit_for_bit() {
+    // 実際にずれた具体値。既定の読み込みでは ...ef33 が ...ef32 になる。
+    let known_bad = 0.207_106_781_186_547_54_f64;
+    assert_eq!(
+        known_bad.to_bits(),
+        0x3fca_8279_99fc_ef33,
+        "検査に使う具体値のビットが変わっている"
+    );
+
+    let mut state: u64 = 0x0123_4567_89AB_CDEF;
+
+    // 頂点座標: 3,000点 = 6,000個。1点目は必ず上の具体値にする。
+    let mut vertices = vec![Vertex {
+        id: 0,
+        pos: [known_bad, known_bad],
+    }];
+    while vertices.len() < 3_000 {
+        // 展開図の正規化座標(0〜1)と、mm相当の大きさ(0〜1000)の両方を混ぜる
+        let scale = if vertices.len() % 2 == 0 { 1.0 } else { 1000.0 };
+        let x = next_unit(&mut state) * scale;
+        let y = next_unit(&mut state) * scale;
+        vertices.push(Vertex {
+            id: vertices.len() as VertexId,
+            pos: [x, y],
+        });
+    }
+
+    // 折り手順の駆動線(1手順あたり4個)と、手順ごとの追加折り線(1本あたり4個)にも
+    // 同じ検査を効かせる。作品ファイルに入る小数は頂点座標だけではないため。
+    let mut sequence = Vec::new();
+    let mut step_creases = Vec::new();
+    for step in 0..250u32 {
+        sequence.push(FoldStep {
+            id: step,
+            kind: TechniqueKind::Simple,
+            drivers: vec![DriverLine {
+                a: [next_unit(&mut state), next_unit(&mut state)],
+                b: [next_unit(&mut state), next_unit(&mut state)],
+                target_angle_deg: next_unit(&mut state) * 360.0 - 180.0,
+            }],
+            layer_order: Some(vec![[next_unit(&mut state), next_unit(&mut state)]]),
+            alignment: None,
+            note: String::new(),
+        });
+        step_creases.push(StepCreases {
+            step,
+            lines: vec![[
+                [next_unit(&mut state), next_unit(&mut state)],
+                [next_unit(&mut state), next_unit(&mut state)],
+            ]],
+        });
+    }
+
+    let mut document = sample_document();
+    document.paper = Paper {
+        width_mm: next_unit(&mut state) * 300.0,
+        height_mm: next_unit(&mut state) * 300.0,
+    };
+    document.cp.next_vertex_id = vertices.len() as VertexId;
+    document.cp.vertices = vertices;
+    document.cp.edges.clear();
+    document.cp.next_edge_id = 0;
+    document.sequence = sequence;
+    let saved = SavedDocument {
+        document,
+        step_creases,
+    };
+
+    let json = serde_json::to_string_pretty(&saved).expect("serialize");
+    let back: SavedDocument = serde_json::from_str(&json).expect("deserialize");
+
+    // 往復させた小数を1つずつ数え、ビットが違うものを数える。
+    let mut checked = 0usize;
+    let mut changed = 0usize;
+    let mut first_difference: Option<(f64, f64)> = None;
+    let mut compare = |before: f64, after: f64| {
+        checked += 1;
+        if before.to_bits() != after.to_bits() {
+            changed += 1;
+            first_difference.get_or_insert((before, after));
+        }
+    };
+
+    compare(saved.document.paper.width_mm, back.document.paper.width_mm);
+    compare(saved.document.paper.height_mm, back.document.paper.height_mm);
+    for (before, after) in saved
+        .document
+        .cp
+        .vertices
+        .iter()
+        .zip(back.document.cp.vertices.iter())
+    {
+        for axis in 0..2 {
+            compare(before.pos[axis], after.pos[axis]);
+        }
+    }
+    for (before, after) in saved
+        .document
+        .sequence
+        .iter()
+        .zip(back.document.sequence.iter())
+    {
+        for (bd, ad) in before.drivers.iter().zip(after.drivers.iter()) {
+            for axis in 0..2 {
+                compare(bd.a[axis], ad.a[axis]);
+                compare(bd.b[axis], ad.b[axis]);
+            }
+            compare(bd.target_angle_deg, ad.target_angle_deg);
+        }
+        let (Some(bo), Some(ao)) = (&before.layer_order, &after.layer_order) else {
+            panic!("layer_order が往復で失われた");
+        };
+        for (bp, ap) in bo.iter().zip(ao.iter()) {
+            for axis in 0..2 {
+                compare(bp[axis], ap[axis]);
+            }
+        }
+    }
+    for (before, after) in saved.step_creases.iter().zip(back.step_creases.iter()) {
+        for (bl, al) in before.lines.iter().zip(after.lines.iter()) {
+            for end in 0..2 {
+                for axis in 0..2 {
+                    compare(bl[end][axis], al[end][axis]);
+                }
+            }
+        }
+    }
+
+    assert!(
+        checked >= 4_000,
+        "往復させた座標が少なすぎる: {checked}個。4,000個以上を試すこと"
+    );
+    assert_eq!(
+        changed, 0,
+        "作品ファイルを読み直すと座標のビットが変わった: {checked}個中{changed}個。\
+         最初の不一致 {first_difference:?}。ワークスペースの Cargo.toml で serde_json の \
+         float_roundtrip が外れていないか確認する"
+    );
+    // 1点目に入れた具体値が、ビットまでそのまま戻ること。
+    assert_eq!(
+        back.document.cp.vertices[0].pos[0].to_bits(),
+        0x3fca_8279_99fc_ef33
+    );
+    assert_eq!(
+        back.document.cp.vertices[0].pos[1].to_bits(),
+        0x3fca_8279_99fc_ef33
+    );
+    assert_eq!(saved, back, "作品ファイル全体が完全に一致すること");
+}
+
 #[test]
 fn test_document_json_roundtrip() {
     let doc = sample_document();
