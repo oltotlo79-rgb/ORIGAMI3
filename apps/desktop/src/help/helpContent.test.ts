@@ -174,7 +174,9 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
             chapterId: "crease-pattern",
             phrases: [
               "山・谷・補助のまっすぐな線",
-              "紙の外を押しても線は作られず",
+              // v0.4.5で吸着が届く範囲まで受け付けるようになったため、
+              // 「紙の外を押しても線は作られず」から現状の記述へ差し替えた。
+              "吸着が届かないほど外側を押したときだけ、線は作られず画面に理由が出ます",
               "紙のふちにある点は動かせません",
             ],
           },
@@ -261,6 +263,132 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
         for (const phrase of check.phrases) {
           expect(text, `機能#${feature.number}: ${phrase}`).toContain(phrase);
         }
+      }
+    }
+  });
+
+  it("v0.4.5で変わった利用者向けの表示・操作を既存章で説明する", () => {
+    const changes = [
+      {
+        name: "3Dの視点が止まらずに一回りできる",
+        chapterId: "three-dimensional",
+        phrases: [
+          "紙の真上や真下も通り越して一回りできます",
+          "左右のドラッグは画面の上下を軸にして回します",
+          "水平線がだんだん傾いて見えます",
+          "「視点を戻す」を押すと、まっすぐな向きに戻ります",
+        ],
+      },
+      {
+        name: "見る向きを選ぶ立方体",
+        chapterId: "three-dimensional",
+        phrases: [
+          "面6つ・辺12本・角8つの合わせて26箇所",
+          "向かい合う面どうしは同じ色です",
+          "立方体そのものを左ドラッグしても視点を回せます",
+        ],
+      },
+      {
+        name: "3Dの札の下も押せる",
+        chapterId: "three-dimensional",
+        phrases: [
+          "札の下に紙・折り目・点が隠れていても、そのまま押して選べます",
+          "札の中にある開閉のボタンは今までどおり押せます",
+        ],
+      },
+      {
+        name: "折り切った折り目は動かない",
+        chapterId: "angles",
+        phrases: [
+          "0°または±180°まで折り切ってある折り目は、ほかの折り目を動かしてもそのまま保たれます",
+          "指定した角度にならなかった折り目が2本あります",
+          "紙が裂けないいちばん近い形を表示しています",
+        ],
+      },
+      {
+        name: "紙の重なりが正しく見える",
+        chapterId: "three-dimensional",
+        phrases: ["重なった紙は、手前にある紙が必ず手前に描かれます"],
+      },
+      {
+        name: "追従の一覧に上限が無い",
+        chapterId: "angles",
+        phrases: [
+          "追従した折り目は本数にかかわらず全部並ぶので、「ほかN本」で隠れて見えないものはありません",
+        ],
+      },
+      {
+        name: "角・方眼の少し外も吸着で引ける",
+        chapterId: "crease-pattern",
+        phrases: [
+          "紙のふち・角・方眼の交点のすぐ外側を押した場合も、いちばん近い紙の上の点へ吸い付いて線が引けます",
+        ],
+      },
+      {
+        name: "対称描画と1回で戻せる履歴",
+        chapterId: "crease-pattern",
+        phrases: [
+          "二等分・垂線・等分・角度線の作図で作った線も、同じように反対側へ入ります",
+          "その曲線で増えた線がすべて消え",
+        ],
+      },
+      {
+        name: "紙のふちを選んだときの4つのボタン",
+        chapterId: "crease-pattern",
+        phrases: ["紙のふちは紙そのものなので、山折りには変えられません"],
+      },
+      {
+        name: "過去の手順の展開図と押せない操作",
+        chapterId: "timeline",
+        phrases: [
+          "折る前から描いてあった線、補助線、輪郭は、どの手順を見ている間も消えずに残ります",
+          "まだ引いていない先の線が原因の丸が過去の手順に出ることはありません",
+          "いちばん最後の状態なので、これより先へは進めません",
+          "前の手順の形を見ている間は引けません",
+          "書いた直後に「前へ動かす」「後ろへ動かす」を押しても、入れた文はそのまま残ります",
+        ],
+      },
+      {
+        name: "保存した先が画面に出る",
+        chapterId: "save-export",
+        phrases: ["作品を「鶴.ori3」に保存しました"],
+      },
+      {
+        name: "提案を採用する前の断り",
+        chapterId: "proposal",
+        phrases: [
+          "今ある折り手順3件はすべて消えます",
+          "手順がまだ0件のときは、この断りは出ません",
+        ],
+      },
+      {
+        name: "左右対称でも折るの下見は1本",
+        chapterId: "fold",
+        phrases: ["「折る」の下見は1本だけです"],
+      },
+      {
+        name: "4区画の説明に立方体を書き添える",
+        chapterId: "workspace",
+        phrases: ["右上には見る向きを選ぶ立方体、右下には「視点を戻す」があります"],
+      },
+      {
+        name: "警告の札と立方体の場所を区別する",
+        chapterId: "troubleshooting",
+        phrases: [
+          "見る向きを選ぶ立方体の左どなりに出ます",
+          "「指定した角度にならなかった折り目がn本あります」",
+          "押せるのに何も起きないボタンは作らず",
+        ],
+      },
+    ] as const;
+
+    expect(changes).toHaveLength(15);
+    for (const change of changes) {
+      const chapter = HELP_CHAPTERS.find((entry) => entry.id === change.chapterId);
+      expect(chapter, change.name).toBeDefined();
+      const text = helpChapterSearchText(chapter!);
+      for (const phrase of change.phrases) {
+        expect(text, `${change.name}: ${phrase}`).toContain(phrase);
       }
     }
   });
