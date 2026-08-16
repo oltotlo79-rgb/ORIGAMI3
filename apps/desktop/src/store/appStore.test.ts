@@ -404,7 +404,11 @@ describe("appStore 折り角度の指定", () => {
     const state = useAppStore.getState();
     expect(state.drivers.get(5)).toBe(110);
     expect(state.poseAngles.get(5)).toBe(104.75);
-    expect(state.poseWarnings).toEqual([]);
+    // 110度と指定したのに104.75度になったので、その差を利用者へ知らせる
+    expect(state.poseWarnings).toHaveLength(1);
+    expect(state.poseWarnings[0]).toContain("折り目 #5");
+    expect(state.poseWarnings[0]).toContain("110.0°");
+    expect(state.poseWarnings[0]).toContain("104.8°");
     expect(vi.mocked(ipc.poseSolve).mock.calls[0][3]).toEqual([]);
   });
 
@@ -937,6 +941,61 @@ describe("appStore 折り角度の指定", () => {
     expect(useAppStore.getState().drivers.size).toBe(0);
   });
 
+  it("既に折り切ってある折り目は、譲れる希望ではなく厳密に保つ側へ回す", async () => {
+    const view = makeHingeView(446);
+    view.doc.cp.edges.push({ id: 6, v0: 1, v1: 3, kind: "Valley" });
+    useAppStore.setState({
+      doc: view.doc,
+      faces: view.faces,
+      hinges: new Set([5, 6]),
+      // 辺5は180度まで折り切ってある。辺6は途中の角度。
+      sequenceTargets: new Map([
+        [5, 180],
+        [6, -178.265],
+      ]),
+    });
+
+    useAppStore.getState().setDriverAngle(6, -35);
+    await vi.waitFor(() => expect(poseCalls().length).toBeGreaterThan(0));
+
+    // 折り切った辺5は「厳密に保つ」側、折り切っていない辺6の元の希望は残らない
+    // (辺6はいま動かしているので厳密側)。
+    expect(poseCalls()[0].map((d) => d.hinge).sort()).toEqual([5, 6]);
+    expect(poseKeeps()[0]).toEqual([]);
+  });
+
+  it("折り切った折り目まで保つと解けない形では、操作を止めず希望へ戻して解き直す", async () => {
+    const view = makeHingeView(447);
+    view.doc.cp.edges.push({ id: 6, v0: 1, v1: 3, kind: "Valley" });
+    useAppStore.setState({
+      doc: view.doc,
+      faces: view.faces,
+      hinges: new Set([5, 6]),
+      sequenceTargets: new Map([[5, 180]]),
+    });
+    // 1回目(辺5も厳密)は収束しない。2回目(辺5は希望へ戻す)は収束する。
+    vi.mocked(ipc.poseSolve)
+      .mockResolvedValueOnce({
+        ...makeSolveResult({ "5": 180, "6": -35 }),
+        converged: false,
+      })
+      .mockResolvedValueOnce(makeSolveResult({ "5": 170, "6": -35 }));
+
+    useAppStore.getState().setDriverAngle(6, -35);
+    await vi.waitFor(() => expect(poseCalls().length).toBe(2));
+
+    // 1回目は辺5と辺6を厳密に、2回目は辺6だけを厳密にして辺5を希望へ戻す
+    expect(poseCalls()[0].map((d) => d.hinge).sort()).toEqual([5, 6]);
+    expect(poseCalls()[1].map((d) => d.hinge)).toEqual([6]);
+    expect(poseKeeps()[1].map((d) => d.hinge)).toEqual([5]);
+    // 操作は止まらず、2回目の結果が表示に入る
+    const s = useAppStore.getState();
+    expect(s.poseConverged).toBe(true);
+    expect(s.poseAngles.get(5)).toBe(170);
+    // 指定どおりにならなかったことは利用者へ知らせる
+    expect(s.poseWarnings.some((w) => w.includes("折り目 #5"))).toBe(true);
+  });
+
   it("収束しなかった結果は警告と収束フラグに反映される(角度指定)", async () => {
     const result = makeSolveResult({ "5": 90 });
     result.converged = false;
@@ -950,7 +1009,10 @@ describe("appStore 折り角度の指定", () => {
 
     const s = useAppStore.getState();
     expect(s.poseConverged).toBe(false);
-    expect(s.poseWarnings).toEqual(["追従計算が収束していません"]);
+    // 収束しない旨に加えて、0度と指定した折り目が90度のままであることも知らせる
+    expect(s.poseWarnings[0]).toBe("追従計算が収束していません");
+    expect(s.poseWarnings).toHaveLength(2);
+    expect(s.poseWarnings[1]).toContain("折り目 #5");
     expect(s.poseAngles.get(5)).toBe(90);
     expect(s.errorMessage).toBeNull(); // 追従計算の警告はエラーにしない
   });

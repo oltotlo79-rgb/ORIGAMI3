@@ -91,6 +91,11 @@ import type {
   Vec2,
 } from "../lib/types";
 import { defaultSkeleton } from "../lib/skeleton";
+import {
+  foldDeviationNotice,
+  foldDeviations,
+  splitSettledFolds,
+} from "../lib/settledFolds";
 import { loadOnboarding, saveOnboarding } from "../lib/firstRunGuide";
 import type { HelpChapterId } from "../help/helpTypes";
 import {
@@ -1531,9 +1536,25 @@ export const useAppStore = create<AppState>((set, get) => {
     const total = position.doc?.sequence.length ?? 0;
     const upTo = position.currentStep ?? total;
     const replayT = position.currentStep === null ? 1 : position.playT;
-    const call = () => ipc.poseSolve(hard, preferred, soft, warmSeed, upTo, replayT);
-    const r = await (coalesce ? queue.runLatest(call) : queue.run(call));
+    // 既に0°/±180°まで折り切ってある折り目は、希望ではなく厳密に保つ側へ回す。
+    // 譲らせると重なった紙の束がばらけ、重なり順が幾何から決まらなくなって
+    // 見えないはずの紙の裏が出る(根拠と実測は lib/settledFolds.ts)。
+    const { settled, rest } = splitSettledFolds(preferred);
+    const send = (h: Driver[], p: Driver[]) =>
+      ipc.poseSolve(h, p, soft, warmSeed, upTo, replayT);
+    const attempt = (h: Driver[], p: Driver[]) => {
+      const call = () => send(h, p);
+      return coalesce ? queue.runLatest(call) : queue.run(call);
+    };
+    let r = await attempt([...hard, ...settled], rest);
     if (requestGeneration !== get().angleIntentGeneration) return;
+    // 折り切った折り目まで厳密に保つと解けない形もある。そのときは操作を
+    // 止めず、従来どおり全てを希望として解き直す(CLAUDE.md §8「止めずに警告する」)。
+    if (r.ok && r.isLatest && settled.length > 0 && r.value.converged !== true) {
+      const retried = await attempt(hard, preferred);
+      if (requestGeneration !== get().angleIntentGeneration) return;
+      if (retried.ok && retried.isLatest) r = retried;
+    }
     if (!r.ok) {
       if (r.isLatest) fail(r.error);
       return;
@@ -1541,6 +1562,11 @@ export const useAppStore = create<AppState>((set, get) => {
     if (!r.isLatest) return;
     const poseAngles = new Map(
       Object.entries(r.value.angles).map(([id, deg]) => [Number(id), deg]),
+    );
+    // 指定した角度にならなかった折り目を利用者へ知らせる。以前は15.8°違っても
+    // 何も出ていなかった。区画は増やさず、既存の警告の出し口へ1行足す。
+    const deviationNotice = foldDeviationNotice(
+      foldDeviations([...hard, ...preferred], poseAngles),
     );
     set({
       // 出発点合わせ(applyFrame=false)では形は変わらないので、手順再生が
@@ -1553,7 +1579,12 @@ export const useAppStore = create<AppState>((set, get) => {
               get().suspectHinges,
               r.value.suspect_hinges ?? [],
             ),
-            poseWarnings: r.value.frame.warnings,
+            poseWarnings: keepIfSame(
+              get().poseWarnings,
+              deviationNotice === null
+                ? r.value.frame.warnings
+                : [...r.value.frame.warnings, deviationNotice],
+            ),
             flatFoldViolations: keepIfSame(
               get().flatFoldViolations,
               r.value.flat_fold_violations ?? [],

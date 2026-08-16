@@ -412,8 +412,6 @@ fn stamp_motion_surface_order(
     // 完全に重なった束で紙の位置と無関係な上下を表示していた。
     let mut index_order = faces.iter().map(|face| face.id).collect::<Vec<_>>();
     index_order.sort_unstable();
-    // 180°に折り切った折り目が決める厳密な上下。深度より先に効かせる。
-    let exact_constraints = exact_stack_constraints_of(faces, topology, &result.angles);
     let is_exact = |angle: f64| {
         (angle.abs().to_radians() - std::f64::consts::PI).abs()
             <= crate::surface_order::EXACT_FLAT_EPS_RAD
@@ -424,6 +422,18 @@ fn stamp_motion_surface_order(
         .last()
         .copied()
         .unwrap_or(180.0);
+    // 180°に折り切った折り目が決める厳密な上下。深度より先に効かせる。
+    //
+    // どの折り目を折り切ったとみなすかは、経路の終点と**同じ境目**でなければならない。
+    // 終点だけを平らにして折り目の向きを入れないと、同じ形を2つの別の規則で説明する
+    // ことになる。実測では、駆動した折り目1本だけが180°付近にある姿勢
+    // (`folded-sample.ori3` の辺310・361)で、179.999°側にだけ向きの制約が無く、
+    // その1組の上下が180°側と逆になっていた。
+    let stack_angles = canonical_targets
+        .iter()
+        .map(|(&hinge, &angle)| (hinge, crate::surface_order::snap_to_flat(angle)))
+        .collect::<HashMap<_, _>>();
+    let exact_constraints = exact_stack_constraints_of(faces, topology, &stack_angles);
     let needs_canonical_path = canonical_targets
         .values()
         .any(|angle| angle.abs() >= final_checkpoint - RELAXATION_EPS_DEG);
@@ -639,19 +649,13 @@ fn canonical_motion_surface_order(
         path_frames.push(solved.frame);
         warm = Some(solved.angles);
     }
-    let final_checkpoint = crate::surface_order::SURFACE_PATH_CHECKPOINT_DEG
-        .last()
-        .copied()
-        .unwrap_or(180.0);
+    // 経路の終点は、重なっている面対を選ぶための平らな束を作るためだけに使う。
+    // どの折り目を折り切ったとみなすかは `STACK_FLAT_THRESHOLD_DEG` にそろえる。
     let exact_drivers = final_targets
         .iter()
         .map(|(&hinge, &target)| Driver {
             hinge,
-            target_angle_deg: if target.abs() >= final_checkpoint - RELAXATION_EPS_DEG {
-                target.signum() * 180.0
-            } else {
-                target
-            },
+            target_angle_deg: crate::surface_order::snap_to_flat(target),
         })
         .collect::<Vec<_>>();
     let exact = solve_requested_prepared(cp, faces, &exact_drivers, None, warm.as_ref(), topology);

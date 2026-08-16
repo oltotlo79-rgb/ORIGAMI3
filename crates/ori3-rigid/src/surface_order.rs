@@ -7,6 +7,29 @@ use ori3_cp::Face;
 use ori3_model::{EPS, FaceId, Frame3D};
 
 const COPLANAR_EPS: f64 = 1e-8;
+/// 2枚の面を「同じ平面に乗っている」とみなす、頂点から平面までの距離の上限。
+///
+/// 法線の平行判定(`COPLANAR_EPS`)とは別の量なので別の定数にする。以前は同じ
+/// `1e-8` を使っていたが、この平面を作る `exact` frame は**solveの結果**であり、
+/// solve自身の残差より小さい閾値は満たせない。実測(全110本×2方向×5点の終点で
+/// 経路の終点を作り直した測定 `diag_exact_frame_coplanarity_histogram`):
+///
+/// - 終点の裂け(`max_seam_gap`)の最大は **4.908e-8**。`1e-8` はこれより小さい。
+/// - `folded-sample.ori3` の辺425を −180° へ送ると、面6と面8の平面からのずれが
+///   179.999°側で **1.252e-8**、180°側で **6.679e-9** となり、`1e-8` を挟んで
+///   分かれていた。179.999°側では面対が1組も比較されず、上下が面の番号順
+///   (6 < 8)のまま残っていた。実測の隙間は4つの角度(179.9 / 179.99 / 179.999 /
+///   180)すべてで **面8が面6の下**(−9.873e-4 / −9.874e-5 / −1.0013e-5 /
+///   −6.04e-7)で、面の番号順は誤りだった。
+/// - 法線が平行で投影が重なる面対のずれの分布は、≤1e-9 が2509組、
+///   [1e-8,1e-7) が401組、[1e-7,1e-6) が583組、[1e-6,1e-5) が2組、
+///   [1e-5,1e-4) が20組、**1e-4 以上は0組**。紙に厚みが無いので、平行で重なる
+///   面対は必ず同じ束に属する。
+///
+/// 値はリポジトリが「紙が裂けた」とみなす距離 `1e-6` にそろえた。裂けたと
+/// みなさない距離しか離れていない2枚は、同じ平面に乗っているとみなす。
+/// 実測の残差 4.908e-8 の20倍以上あり、solveの残差では跨げない。
+const COPLANAR_DISTANCE_EPS: f64 = 1e-6;
 const DEPTH_ORDER_EPS: f64 = 1e-12;
 const OVERLAP_AREA_EPS: f64 = 1e-14;
 pub(crate) const EXACT_FLAT_EPS_RAD: f64 = 1e-8;
@@ -19,6 +42,30 @@ pub(crate) const SURFACE_PATH_CHECKPOINT_DEG: [f64; 22] = [
     9.0, 19.0, 29.0, 39.0, 49.0, 59.0, 69.0, 79.0, 90.0, 101.0, 111.0, 121.0, 131.0, 141.0, 151.0,
     161.0, 171.0, 179.0, 179.5, 179.9, 179.99, 179.999,
 ];
+
+/// 重なり順を決めるとき「折り切った」とみなす角度(度)。最後から2つめのcheckpoint。
+///
+/// 経路の終点は**重なっている面対を選ぶための平らな束**を作るためだけに使い、
+/// 上下そのものは経路上の実深度と折り目の向きが決める。したがってこの境目は、
+/// 姿勢のわずかな違いでまたがれない程度に粗くなければならない。
+///
+/// 以前は `最後のcheckpoint − 1e-6`(= 179.998999)だった。実測では
+/// `folded-sample.ori3` の辺125を送ったとき、連動する折り目185〜192が
+/// **179.999°の姿勢で 179.998910、180°の姿勢で 179.999753** となり、
+/// ちょうどこの境目をまたいでいた。またいだ側では終点が平らにならず、
+/// `common_plane` の同一平面条件(`COPLANAR_EPS` = 1e-8)を満たす面対が1組も無くなって、
+/// 上下が1つも決まらないまま面の番号順が残っていた。
+pub(crate) const STACK_FLAT_THRESHOLD_DEG: f64 = SURFACE_PATH_CHECKPOINT_DEG
+    [SURFACE_PATH_CHECKPOINT_DEG.len() - 2];
+
+/// 折り切ったとみなせる角度を ±180° へ寄せる。それ以外はそのまま返す。
+pub(crate) fn snap_to_flat(angle_deg: f64) -> f64 {
+    if angle_deg.abs() >= STACK_FLAT_THRESHOLD_DEG {
+        angle_deg.signum() * 180.0
+    } else {
+        angle_deg
+    }
+}
 
 type Transforms = HashMap<FaceId, (DMat3, DVec3)>;
 
@@ -393,7 +440,9 @@ fn common_plane(
                 .polygon
                 .iter()
                 .chain(&right.polygon)
-                .any(|point| plane.normal.dot(*point - plane.origin).abs() > COPLANAR_EPS))
+                .any(|point| {
+                    plane.normal.dot(*point - plane.origin).abs() > COPLANAR_DISTANCE_EPS
+                }))
     {
         return None;
     }
@@ -415,6 +464,18 @@ fn polygon_normal(points: &[DVec3]) -> Option<DVec3> {
 
 /// 平面の2つの法線のうち、絶対値が最大の成分を正にした側を返す。`n` と `-n` に
 /// 同じ向きを返すので、面の並び順によらず同じ「上」の向きを与える。
+///
+/// **画面側 `surfaceOwner.ts::canonicalize` と同じ式でなければならない。**
+/// 画面はこの向きから面の表裏(`side`)を決め、`side * surface_rank` の順に描く。
+/// ここだけ別の規則にすると、重なり順は「上」を+n方向で数えているのに画面は
+/// −n方向で数える、という食い違いが起き、束の中で描く面が入れ替わる。
+///
+/// 実測(`diag_kome_edge12_float32_axis_choice`): 絶対値が最大の成分を「ほぼ同じ
+/// なら軸の優先順(x→y→z)」に変える帯(相対1e-7)を **Rust側だけ**に入れたところ、
+/// `diagonal-midline-square` の辺12を+180°へ送った姿勢で、面4の裏が
+/// **31,991画素**新たに見えるようになった。画面側は頂点をFloat32で読むが、
+/// この姿勢での \|x\|−\|y\| はFloat32でも **−6.118e-8** と符号が変わらないため、
+/// 画面は帯を入れないRustと同じ軸を選ぶ。したがって帯は入れない。
 pub(crate) fn canonical(mut normal: DVec3) -> DVec3 {
     let absolute = normal.abs();
     let component = if absolute.x >= absolute.y && absolute.x >= absolute.z {
