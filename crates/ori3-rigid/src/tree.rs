@@ -39,6 +39,9 @@ pub struct FoldedFrame {
     /// 根面から折り木をたどった鏡映回数の偶奇。
     /// ±90°を越えたヒンジを、最寄りの平坦状態での1回の鏡映として数える。
     pub mirrored: HashMap<FaceId, bool>,
+    /// 完全に折り切った折り目がつなぐ隣接2面の、厳密な上下(下の面, 上の面)。
+    /// 折り目の向きだけで決まり、深度の丸めでは壊れない。
+    pub(crate) exact_stack_constraints: Vec<(FaceId, FaceId)>,
     /// 伝播時の警告(面が折り線で繋がっていない等)。`to_frame3d`でFrame3Dへ引き継ぐ。
     pub warnings: Vec<String>,
 }
@@ -236,6 +239,94 @@ pub(crate) fn propagate_with(
     tf
 }
 
+/// 根面から折り木をたどった鏡映回数の偶奇。±90°を越えたヒンジを、最寄りの平坦
+/// 状態での1回の鏡映として数える。world法線やcameraを使わないため、紙全体を
+/// 剛体回転しても値は変わらない。
+pub(crate) fn mirrored_flags(forest: &Forest, n_faces: usize, angles_rad: &[f64]) -> Vec<bool> {
+    let mut mirrored = vec![false; n_faces];
+    for step in &forest.steps {
+        mirrored[step.child] = mirrored[step.parent] ^ (angles_rad[step.hinge].cos() < 0.0);
+    }
+    mirrored
+}
+
+/// 完全に折り切った折り目がつなぐ2面の、厳密な上下(下の面, 上の面)を作る。
+///
+/// 180°に折られた折り目は、経路を解かなくても上下を決める。谷折り(角度が負)なら
+/// 相手は基準面の紙の表側へ、山折り(正)なら紙の裏側へ来る。
+///
+/// この規則は `ori3-layers::flat_motion::want_kind` と同じで、実測とも一致する
+/// (軸からの距離 0.5・角度 1.735° の折り目で `0.5*sin(1.735°)=0.0151385` に対し
+/// 実測のずれ 0.01513728)。深度の差と違い、丸めでは壊れない。
+///
+/// 「上」の向きは `surface_order` が深度を測るのと同じ軸、つまり2面が乗る平面の
+/// canonical法線(絶対値が最大の成分を正にした向き)で決める。**紙の表が世界の
+/// どちらを向いているかを `mirrored` の偶奇で代用してはならない。** `mirrored` は
+/// 平らな姿勢でしか世界の上下と対応せず、束が傾いた平面に乗る立体姿勢では逆になる。
+/// 実測: `diagonal_midline_square` を edge43 で180°まで送った姿勢(裂け 4.0e-16)で、
+/// 面12の紙の表は `(+0.9976, 0, -0.0692)`(canonical法線と同じ向き)なのに
+/// `mirrored=true` であり、`mirrored` を使うと面12と面13の上下が、裂けていない
+/// 179.999° の実深度(差 1.205e-6)と逆になっていた。
+pub(crate) fn exact_stack_constraints(
+    forest: &Forest,
+    faces: &[Face],
+    angles_rad: &[f64],
+    transforms: &[(DMat3, DVec3)],
+) -> Vec<(FaceId, FaceId)> {
+    let is_exact_stack = |angle: f64| {
+        (angle.abs() - std::f64::consts::PI).abs() <= crate::surface_order::EXACT_FLAT_EPS_RAD
+    };
+    // 角度の符号は「基準面のCCW境界に取った軸」に対して定義されている。
+    // 木辺では親面、非木辺では `LoopClosure::from` 側がその基準面である。
+    // 別の面を基準にすると軸の向きが逆になり、上下が反転する。
+    let mut reference_of = vec![None; forest.hinges.len()];
+    for step in &forest.steps {
+        reference_of[step.hinge] = Some(step.parent);
+    }
+    for closure in &forest.loops {
+        reference_of[closure.hinge] = Some(closure.from);
+    }
+    let mut constraints = Vec::new();
+    for (hinge, occurrences) in forest.hinge_occ.iter().enumerate() {
+        let Some(&angle) = angles_rad.get(hinge) else {
+            continue;
+        };
+        if !is_exact_stack(angle) {
+            continue;
+        }
+        let Some(Some(reference)) = reference_of.get(hinge).copied() else {
+            continue;
+        };
+        let other = if occurrences[0].0 == reference {
+            occurrences[1].0
+        } else {
+            occurrences[0].0
+        };
+        let (Some(reference_face), Some(other_face), Some(&(rotation, _))) = (
+            faces.get(reference),
+            faces.get(other),
+            transforms.get(reference),
+        ) else {
+            continue;
+        };
+        // 展開図の面は反時計回りなので、平らな紙の表は +z。剛体回転で写した
+        // `rotation * z` が、いまの姿勢での基準面の紙の表の向きである。
+        let paper_front = rotation * DVec3::Z;
+        let up = crate::surface_order::canonical(paper_front);
+        if !paper_front.is_finite() || !up.is_finite() {
+            continue;
+        }
+        let front_points_up = paper_front.dot(up) > 0.0;
+        let other_is_above = (angle < 0.0) == front_points_up;
+        constraints.push(if other_is_above {
+            (reference_face.id, other_face.id)
+        } else {
+            (other_face.id, reference_face.id)
+        });
+    }
+    constraints
+}
+
 /// 構築済みの森でヒンジ角(ラジアン、`Forest::hinges` と同順)を伝播し、
 /// FoldedFrameを組み立てる(非連結の警告付与を含む)。solveが最終フレームの
 /// 生成で `build_forest` を再実行しないための入口。
@@ -267,10 +358,7 @@ pub(crate) fn fold_frame(forest: &Forest, faces: &[Face], angles_rad: &[f64]) ->
     // 平坦状態の Isometry2::mirrored と同じ偶奇を、非平坦姿勢にも連続する
     // 「最寄りの平坦枝」として持たせる。world法線やcameraを使わないため、紙全体を
     // 剛体回転しても値は変わらない。山谷の符号によらず±180°は1回、±85°は0回。
-    let mut mirrored = vec![false; faces.len()];
-    for step in &forest.steps {
-        mirrored[step.child] = mirrored[step.parent] ^ (angles_rad[step.hinge].cos() < 0.0);
-    }
+    let mirrored = mirrored_flags(forest, faces.len(), angles_rad);
     let mut warnings = Vec::new();
     if forest.roots.len() > 1 {
         warnings.push(
@@ -278,7 +366,9 @@ pub(crate) fn fold_frame(forest: &Forest, faces: &[Face], angles_rad: &[f64]) ->
                 .to_string(),
         );
     }
+    let exact_stack_constraints = exact_stack_constraints(forest, faces, angles_rad, &tf);
     FoldedFrame {
+        exact_stack_constraints,
         transforms: faces
             .iter()
             .enumerate()
@@ -356,19 +446,22 @@ pub(crate) fn to_frame3d_with_surface_order(
         faces: faces3d,
         warnings: frame.warnings.clone(),
     };
-    let mut previous_order = faces.iter().map(|face| face.id).collect::<Vec<_>>();
-    previous_order.sort_unstable();
+    // 幾何が上下を持たない面(重なっていない面)どうしの並びだけに使う決定的な種。
+    // 重なっている面の上下はこの並びでは決めない。
+    let mut index_order = faces.iter().map(|face| face.id).collect::<Vec<_>>();
+    index_order.sort_unstable();
     let order = if derive_surface_order && frame.has_surface_stack {
         crate::surface_order::derive_surface_order(
             faces,
             &frame.surface_path_transforms,
             &frame.transforms,
             &output,
-            &previous_order,
+            &index_order,
+            &frame.exact_stack_constraints,
         )
-        .unwrap_or(previous_order)
+        .map_or(index_order, |derived| derived.order)
     } else {
-        previous_order
+        index_order
     };
     crate::surface_order::stamp_surface_order(&mut output, &order)
         .expect("rigid surface order contains the same faces as its frame");

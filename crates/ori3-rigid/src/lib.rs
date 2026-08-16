@@ -14,7 +14,7 @@ pub use intersect::{
     contact_witnesses, derive_layer_order, layer_order_conflicts, self_intersection_pairs,
     self_intersects, suspect_hinges, suspect_hinges_for_intersections,
 };
-pub use motion::{MotionSolveResult, solve_motion};
+pub use motion::{MotionSolveResult, SurfaceOrderDiagnostics, SurfaceOrderSource, solve_motion};
 pub use seam::max_seam_gap;
 pub use solver::{
     AngleRelaxation, SolveResult, solve, solve_near, solve_near_exact,

@@ -33,6 +33,8 @@ pub struct MotionSolveResult {
     pub contact_detected: bool,
     /// 旧呼出し元との一時的な互換値。停止契約は廃止したため常にfalse。
     pub contact_stopped: bool,
+    /// 紙の重なり順をどの幾何から決めたか。刻印しない呼出しでは `None`。
+    pub surface_order: Option<SurfaceOrderDiagnostics>,
 }
 
 #[derive(Clone, Copy)]
@@ -136,13 +138,14 @@ fn solve_motion_from(
                 previous_with_failure(previous, requested, iterations)
             })
         };
-        if context.stamp_surface_order {
-            stamp_motion_surface_order(cp, faces, drivers, targets, topology, &mut result);
-        }
+        let surface_order = context.stamp_surface_order.then(|| {
+            stamp_motion_surface_order(cp, faces, topology, &mut result)
+        });
         return MotionSolveResult {
             result,
             contact_detected: false,
             contact_stopped: false,
+            surface_order,
         };
     }
 
@@ -358,32 +361,65 @@ fn solve_motion_from(
         // 改善した有限候補だけを採る。
         result = avoid_contact(cp, faces, drivers, targets, warm_start, result);
     }
-    if context.stamp_surface_order {
-        stamp_motion_surface_order(cp, faces, drivers, targets, topology, &mut result);
-    }
+    let surface_order = context.stamp_surface_order.then(|| {
+        stamp_motion_surface_order(cp, faces, topology, &mut result)
+    });
     MotionSolveResult {
         result,
         contact_detected,
         contact_stopped: false,
+        surface_order,
     }
 }
 
+/// 重なり順をどの幾何から決めたか。どれも面の番号ではなく紙の位置から決める。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SurfaceOrderSource {
+    /// 平らな状態から22点のcheckpointをsolveし直した経路の実深度で決めた。
+    SolvedFlatPath,
+    /// 完全に折り切った面があるため、`tree::fold_frame` が伝播経路から作った順を保つ。
+    FoldFramePath,
+    /// いまの姿勢で、重なっている面どうしの実深度の差で決めた。
+    CurrentDepths,
+    /// 実深度が完全に同じで決まらない面対が残ったため、平らな状態からの伝播経路で決めた。
+    PropagatedFlatPath,
+    /// 面が1つも重なっておらず、決めるべき上下が存在しなかった。
+    NoOverlap,
+}
+
+/// 重なり順をどう決めたかの内訳。利用者へは出さず、検査と調査のために返す。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SurfaceOrderDiagnostics {
+    /// どの幾何から決めたか。面の番号順は選択肢に無い。
+    pub source: SurfaceOrderSource,
+    /// 180°の折り目が決める厳密な上下と食い違ったため捨てた、深度由来の制約の数。
+    pub dropped_depth_constraints: usize,
+    /// 実面積で重なっているのに上下を決められなかった面対の数。
+    pub unresolved_overlaps: usize,
+    /// 上下が輪になっていたため落とした制約の数。
+    pub broken_constraints: usize,
+}
+
+/// `result.frame` へ重なり順を刻印し、どの幾何から決めたかを返す。
 fn stamp_motion_surface_order(
     cp: &CreasePattern,
     faces: &[Face],
-    drivers: &[Driver],
-    targets: Option<&HashMap<EdgeId, f64>>,
     topology: &PreparedTopology,
     result: &mut SolveResult,
-) {
-    let mut previous_order = faces.iter().map(|face| face.id).collect::<Vec<_>>();
-    previous_order.sort_unstable();
+) -> SurfaceOrderDiagnostics {
+    // 重なっていない面どうしの並びだけに使う決定的な種。重なっている面の上下は
+    // この並びでは決めない。以前はここが「決められないときの答え」になっており、
+    // 完全に重なった束で紙の位置と無関係な上下を表示していた。
+    let mut index_order = faces.iter().map(|face| face.id).collect::<Vec<_>>();
+    index_order.sort_unstable();
+    // 180°に折り切った折り目が決める厳密な上下。深度より先に効かせる。
+    let exact_constraints = exact_stack_constraints_of(faces, topology, &result.angles);
     let is_exact = |angle: f64| {
         (angle.abs().to_radians() - std::f64::consts::PI).abs()
             <= crate::surface_order::EXACT_FLAT_EPS_RAD
     };
     let has_exact = result.angles.values().copied().any(is_exact);
-    let canonical_targets = canonical_surface_targets(drivers, targets);
+    let canonical_targets = canonical_surface_targets(&result.angles);
     let final_checkpoint = crate::surface_order::SURFACE_PATH_CHECKPOINT_DEG
         .last()
         .copied()
@@ -391,48 +427,169 @@ fn stamp_motion_surface_order(
     let needs_canonical_path = canonical_targets
         .values()
         .any(|angle| angle.abs() >= final_checkpoint - RELAXATION_EPS_DEG);
+    let report = |source, derived: &crate::surface_order::SurfaceOrder| SurfaceOrderDiagnostics {
+        source,
+        dropped_depth_constraints: derived.dropped_depth_constraints,
+        unresolved_overlaps: derived.unresolved_overlaps,
+        broken_constraints: derived.broken_constraints,
+    };
     if needs_canonical_path
-        && let Some(order) = canonical_motion_surface_order(cp, faces, topology, &canonical_targets)
-        && crate::surface_order::stamp_surface_order(&mut result.frame, &order).is_ok()
+        && let Some(derived) = canonical_motion_surface_order(
+            cp,
+            faces,
+            topology,
+            &canonical_targets,
+            &exact_constraints,
+        )
+        && crate::surface_order::stamp_surface_order(&mut result.frame, &derived.order).is_ok()
     {
-        return;
+        return report(SurfaceOrderSource::SolvedFlatPath, &derived);
     }
     // canonical probeが有限形を作れない場合も、完全折りではtree::fold_frameが
     // 全ヒンジのclamp経路から作った順位を保持する。
     if has_exact {
-        return;
+        return SurfaceOrderDiagnostics {
+            source: SurfaceOrderSource::FoldFramePath,
+            dropped_depth_constraints: 0,
+            unresolved_overlaps: 0,
+            broken_constraints: 0,
+        };
     }
-    let order = crate::surface_order::derive_surface_order_from_current_depths(
+    let derived = crate::surface_order::derive_surface_order_from_current_depths(
         faces,
         &result.frame,
-        &previous_order,
-    )
-    .unwrap_or(previous_order);
-    let _ = crate::surface_order::stamp_surface_order(&mut result.frame, &order);
+        &index_order,
+        &exact_constraints,
+    );
+    // 「決められなかった」「比較できなかった」「上下が輪になった」のどれかが
+    // 残っていれば、その場の深度は答えを持っていない。
+    let needs_path = derived.as_ref().map_or(true, |derived| {
+        derived.unresolved_overlaps > 0
+            || derived.skipped_pairs > 0
+            || derived.broken_constraints > 0
+    });
+    if needs_path {
+        // 実深度が完全に同じ面が重なっている。最終形だけでは物理的な上下を
+        // 決められないので、平らな状態から現在の角度までを伝播し、最後に
+        // 離れていた点の上下で決める。面の番号順へは落とさない。
+        if let Some(propagated) = propagated_flat_path_surface_order(
+            cp,
+            faces,
+            topology,
+            result,
+            &index_order,
+            &exact_constraints,
+        ) && crate::surface_order::stamp_surface_order(&mut result.frame, &propagated.order).is_ok()
+        {
+            return report(SurfaceOrderSource::PropagatedFlatPath, &propagated);
+        }
+    }
+    let Ok(derived) = derived else {
+        // `validate_order` だけがここへ来る。面集合が食い違う呼出しは無いが、
+        // 起きたときも止めずに、いま刻印されている順を残す。
+        return SurfaceOrderDiagnostics {
+            source: SurfaceOrderSource::FoldFramePath,
+            dropped_depth_constraints: 0,
+            unresolved_overlaps: 0,
+            broken_constraints: 0,
+        };
+    };
+    let source = if derived.resolved_overlaps > 0 {
+        SurfaceOrderSource::CurrentDepths
+    } else if derived.unresolved_overlaps > 0
+        || derived.skipped_pairs > 0
+        || derived.broken_constraints > 0
+    {
+        // 経路でも決められなかった。決まった分だけを残し、決まらなかったことを
+        // 呼出し元へ知らせる。面の番号順を答えとして採らない。
+        SurfaceOrderSource::PropagatedFlatPath
+    } else {
+        // 重なっている面が1組も無い。決めるべき上下が存在しない。
+        SurfaceOrderSource::NoOverlap
+    };
+    let _ = crate::surface_order::stamp_surface_order(&mut result.frame, &derived.order);
+    report(source, &derived)
 }
 
-/// 呼出し元のhard/preferred区分によらない、明示された最終要求を作る。
-/// 経路上の従属ヒンジは各checkpointのcold連続solveから決まり、順位へ全て参加する。
-fn canonical_surface_targets(
-    drivers: &[Driver],
-    targets: Option<&HashMap<EdgeId, f64>>,
-) -> BTreeMap<EdgeId, f64> {
-    let mut canonical = BTreeMap::new();
-    if let Some(targets) = targets {
-        for (&hinge, &target) in targets {
-            if target.is_finite() {
-                canonical.insert(hinge, target.clamp(-180.0, 180.0));
-            }
-        }
+/// 平らな状態から現在の角度まで、solveせずに伝播だけで再生した経路で上下を決める。
+///
+/// 完全に重なった束は最終形だけでは上下を決められない。折る途中では必ず離れて
+/// いるので、終点に最も近い「離れていた姿勢」の上下をそのまま採る。
+fn propagated_flat_path_surface_order(
+    cp: &CreasePattern,
+    faces: &[Face],
+    topology: &PreparedTopology,
+    result: &SolveResult,
+    index_order: &[FaceId],
+    exact_constraints: &[(FaceId, FaceId)],
+) -> Option<crate::surface_order::SurfaceOrder> {
+    let forest = topology.forest();
+    let final_rad = forest
+        .hinges
+        .iter()
+        .map(|hinge| {
+            result
+                .angles
+                .get(hinge)
+                .copied()
+                .unwrap_or(0.0)
+                .to_radians()
+        })
+        .collect::<Vec<_>>();
+    if final_rad.iter().any(|angle| !angle.is_finite()) {
+        return None;
     }
-    for driver in drivers {
-        if driver.target_angle_deg.is_finite()
-            && (-180.0..=180.0).contains(&driver.target_angle_deg)
-        {
-            canonical.insert(driver.hinge, driver.target_angle_deg);
-        }
+    let mut path_frames =
+        Vec::with_capacity(crate::surface_order::SURFACE_PATH_CHECKPOINT_DEG.len());
+    for &checkpoint in &crate::surface_order::SURFACE_PATH_CHECKPOINT_DEG {
+        let checkpoint = checkpoint.to_radians();
+        let clamped = final_rad
+            .iter()
+            .map(|angle| angle.signum() * angle.abs().min(checkpoint))
+            .collect::<Vec<_>>();
+        let folded = tree::fold_frame(forest, faces, &clamped);
+        path_frames.push(tree::to_frame3d_with_surface_order(
+            cp, faces, &folded, false,
+        ));
     }
-    canonical
+    crate::surface_order::derive_surface_order_from_frame_path(
+        faces,
+        &path_frames,
+        &result.frame,
+        index_order,
+        exact_constraints,
+    )
+    .ok()
+}
+
+/// 解けた角度から、180°の折り目が決める厳密な上下の組を作る。
+fn exact_stack_constraints_of(
+    faces: &[Face],
+    topology: &PreparedTopology,
+    angles: &HashMap<EdgeId, f64>,
+) -> Vec<(FaceId, FaceId)> {
+    let forest = topology.forest();
+    let angles_rad = forest
+        .hinges
+        .iter()
+        .map(|hinge| angles.get(hinge).copied().unwrap_or(0.0).to_radians())
+        .collect::<Vec<_>>();
+    let transforms = tree::propagate_with(forest, faces.len(), &angles_rad);
+    tree::exact_stack_constraints(forest, faces, &angles_rad, &transforms)
+}
+
+/// 刻印する重なり順は、いま表示している姿勢そのものを説明しなければならない。
+/// そのため経路の終点には、要求した折り目だけでなく**解けた全ヒンジ角**を使う。
+///
+/// 以前は要求した折り目だけを終点にしていた。自由に動く折り目が多い操作では、
+/// 経路の終点が表示している形とは別の形になり、その別の形の重なり順を刻印して
+/// いた。実測では240通り中8通りで、上に来るべき面と表示が食い違っていた。
+fn canonical_surface_targets(angles: &HashMap<EdgeId, f64>) -> BTreeMap<EdgeId, f64> {
+    angles
+        .iter()
+        .filter(|(_, angle)| angle.is_finite())
+        .map(|(&hinge, &angle)| (hinge, angle.clamp(-180.0, 180.0)))
+        .collect()
 }
 
 /// 全明示ヒンジを同じ角度checkpointでclampして平らな状態から再生する。
@@ -442,13 +599,15 @@ fn canonical_motion_surface_order(
     faces: &[Face],
     topology: &PreparedTopology,
     final_targets: &BTreeMap<EdgeId, f64>,
-) -> Option<Vec<FaceId>> {
+    exact_constraints: &[(FaceId, FaceId)],
+) -> Option<crate::surface_order::SurfaceOrder> {
     if final_targets.is_empty() {
         return None;
     }
     let mut warm = None;
-    let mut previous_order = faces.iter().map(|face| face.id).collect::<Vec<_>>();
-    previous_order.sort_unstable();
+    // 重なっていない面どうしの並びだけに使う決定的な種。
+    let mut index_order = faces.iter().map(|face| face.id).collect::<Vec<_>>();
+    index_order.sort_unstable();
     let mut path_frames =
         Vec::with_capacity(crate::surface_order::SURFACE_PATH_CHECKPOINT_DEG.len());
     for &checkpoint in &crate::surface_order::SURFACE_PATH_CHECKPOINT_DEG {
@@ -509,7 +668,8 @@ fn canonical_motion_surface_order(
         faces,
         &path_frames,
         &exact.frame,
-        &previous_order,
+        &index_order,
+        exact_constraints,
     )
     .ok()
 }

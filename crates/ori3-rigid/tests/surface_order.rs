@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use glam::DVec3;
 use ori3_cp::extract_faces;
-use ori3_model::{CreasePattern, Driver, Edge, EdgeKind, FaceId, Vertex};
+use ori3_model::{CreasePattern, Driver, Edge, EdgeId, EdgeKind, FaceId, Vertex};
 use ori3_rigid::{propagate, solve_motion, to_frame3d};
 
 fn vertex(id: u32, x: f64, y: f64) -> Vertex {
@@ -122,6 +122,91 @@ fn diagonal_midline_square() -> CreasePattern {
         next_vertex_id: 14,
         next_edge_id: 44,
     }
+}
+
+/// 利用者の画面で紙の裏が 66.88% 見えていた、実機の展開図と姿勢。
+///
+/// 動作中の `desktop.exe` から読み取った `doc.cp` をそのまま写した(頂点13・辺28)。
+/// `.gitignore` 対象の `verification/` を検査から読まないため、値を検査コードへ
+/// 埋め込んでいる(CLAUDE.md §10.1)。
+fn live_frame_square() -> CreasePattern {
+    CreasePattern {
+        vertices: vec![
+            vertex(0, 0.0, 0.0),
+            vertex(1, 1.0, 0.0),
+            vertex(2, 1.0, 1.0),
+            vertex(3, 0.0, 1.0),
+            vertex(4, 1.0, 0.5),
+            vertex(5, 0.0, 0.5),
+            vertex(6, 0.5, 1.0),
+            vertex(7, 0.5, 0.0),
+            vertex(8, 0.5, 0.5),
+            vertex(9, 0.5, 0.792_893_218_813_452_5),
+            vertex(10, 0.792_893_218_813_452_5, 0.5),
+            vertex(11, 0.5, 0.207_106_781_186_547_52),
+            vertex(12, 0.207_106_781_186_547_52, 0.5),
+        ],
+        edges: vec![
+            edge(4, 1, 4, EdgeKind::Border),
+            edge(5, 4, 2, EdgeKind::Border),
+            edge(6, 3, 5, EdgeKind::Border),
+            edge(7, 5, 0, EdgeKind::Border),
+            edge(9, 2, 6, EdgeKind::Border),
+            edge(10, 6, 3, EdgeKind::Border),
+            edge(11, 0, 7, EdgeKind::Border),
+            edge(12, 7, 1, EdgeKind::Border),
+            edge(17, 0, 8, EdgeKind::Valley),
+            edge(18, 8, 2, EdgeKind::Valley),
+            edge(19, 6, 9, EdgeKind::Mountain),
+            edge(20, 9, 8, EdgeKind::Mountain),
+            edge(21, 2, 9, EdgeKind::Mountain),
+            edge(22, 4, 10, EdgeKind::Mountain),
+            edge(23, 10, 8, EdgeKind::Mountain),
+            edge(24, 2, 10, EdgeKind::Mountain),
+            edge(25, 10, 1, EdgeKind::Mountain),
+            edge(26, 8, 11, EdgeKind::Mountain),
+            edge(27, 11, 7, EdgeKind::Mountain),
+            edge(28, 0, 11, EdgeKind::Mountain),
+            edge(29, 11, 1, EdgeKind::Mountain),
+            edge(30, 8, 12, EdgeKind::Mountain),
+            edge(31, 12, 5, EdgeKind::Mountain),
+            edge(32, 0, 12, EdgeKind::Mountain),
+            edge(33, 12, 3, EdgeKind::Mountain),
+            edge(34, 3, 9, EdgeKind::Mountain),
+            edge(35, 12, 9, EdgeKind::Valley),
+            edge(36, 10, 11, EdgeKind::Valley),
+        ],
+        next_vertex_id: 13,
+        next_edge_id: 37,
+    }
+}
+
+/// 実機が表示していた20本の折り角。`poseAngles` をそのまま写した。
+/// このうち ±180°(誤差 `1e-6` 以内)は **15本** で、修正前は7本が
+/// `surface_rank` と食い違っていた。
+fn live_frame_angles() -> HashMap<EdgeId, f64> {
+    HashMap::from([
+        (17, -180.0),
+        (18, -180.0),
+        (19, -178.265_130_385_534_97),
+        (20, 180.0),
+        (21, 180.0),
+        (22, -3.062_204_584_590_538_5e-15),
+        (23, 180.0),
+        (24, 180.0),
+        (25, 180.0),
+        (26, 180.0),
+        (27, -5.233_885_113_024_099e-15),
+        (28, 180.0),
+        (29, 180.0),
+        (30, 179.999_999_999_999_97),
+        (31, -178.265_130_385_534_97),
+        (32, 180.0),
+        (33, 180.0),
+        (34, 180.0),
+        (35, -1.734_869_614_465_027),
+        (36, -180.0),
+    ])
 }
 
 fn diagonal_midline_drivers(angle: f64) -> Vec<Driver> {
@@ -829,4 +914,155 @@ fn single_exact_stack_preserves_non_exact_driver_context() {
         before_preferred.angles,
         exact_preferred.angles
     );
+}
+
+/// 180°に折り切った折り目がつなぐ2面について、`surface_rank` が折り目の向きと
+/// 一致しているかを数える。カメラも画素も使わず、角度と重なり順の整合だけを見る。
+///
+/// 判定は製品側とは別に、面の世界法線から直に立てている。谷折り(角度が負)なら
+/// 相手は基準面の紙の表側(法線の+側)へ、山折り(正)なら反対側へ来る。
+fn exact_fold_rank_violations(
+    cp: &ori3_model::CreasePattern,
+    faces: &[ori3_cp::Face],
+    angles: &HashMap<EdgeId, f64>,
+    frame: &ori3_model::Frame3D,
+) -> Vec<(EdgeId, FaceId, FaceId, f64)> {
+    let polygons = frame
+        .faces
+        .iter()
+        .map(|face| {
+            (
+                face.face,
+                face.polygon
+                    .iter()
+                    .map(|point| glam::DVec3::from(*point))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let ranks = frame
+        .faces
+        .iter()
+        .map(|face| (face.face, face.surface_rank))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let normal_of = |points: &Vec<glam::DVec3>| {
+        let mut normal = glam::DVec3::ZERO;
+        for index in 0..points.len() {
+            normal += points[index].cross(points[(index + 1) % points.len()]);
+        }
+        normal.normalize()
+    };
+    let mut owners = std::collections::BTreeMap::<EdgeId, Vec<FaceId>>::new();
+    for face in faces {
+        for &edge in &face.edges {
+            owners.entry(edge).or_default().push(face.id);
+        }
+    }
+    let mut violations = Vec::new();
+    for edge in &cp.edges {
+        let Some(&angle) = angles.get(&edge.id) else {
+            continue;
+        };
+        if (angle.abs() - 180.0).abs() > 1e-6 {
+            continue;
+        }
+        let Some(pair) = owners.get(&edge.id).filter(|owners| owners.len() == 2) else {
+            continue;
+        };
+        let (left, right) = (pair[0], pair[1]);
+        let (Some(left_points), Some(right_points)) = (polygons.get(&left), polygons.get(&right))
+        else {
+            continue;
+        };
+        // 面の頂点は展開図で反時計回りなので、この法線が紙の表側を向く。
+        let left_normal = normal_of(left_points);
+        let right_normal = normal_of(right_points);
+        // 完全に折り切っているなら、2面の紙の表は必ず逆を向く。
+        assert!(
+            left_normal.dot(right_normal) < -0.999_999,
+            "折り目 {} は {angle}° なのに面 {left} と面 {right} の表が逆を向いていない",
+            edge.id,
+        );
+        // 「上」は `surface_rank` が深度を測るのと同じ軸、つまり2面が乗る平面の
+        // canonical法線(絶対値が最大の成分を正にした向き)で決める。世界のzで
+        // 代用すると、束が立った平面(法線のzが0に近い姿勢)で判定が反転する。
+        let up = {
+            let absolute = left_normal.abs();
+            let component = if absolute.x >= absolute.y && absolute.x >= absolute.z {
+                left_normal.x
+            } else if absolute.y >= absolute.z {
+                left_normal.y
+            } else {
+                left_normal.z
+            };
+            if component < 0.0 { -left_normal } else { left_normal }
+        };
+        let left_front_is_up = left_normal.dot(up) > 0.0;
+        let right_should_be_above = (angle < 0.0) == left_front_is_up;
+        let right_is_above = ranks[&right] > ranks[&left];
+        if right_is_above != right_should_be_above {
+            violations.push((edge.id, left, right, angle));
+        }
+    }
+    violations
+}
+
+/// 完全に折り切った折り目の上下が、`surface_rank` と必ず一致することを検査する。
+///
+/// 深度の差は丸めで壊れ得るが、折り目の向きは壊れない。実機で紙の裏が 66.88%
+/// 見えていた `live-frame` の姿勢では、180°の折り目15本のうち **7本** がこの関係に
+/// 反しており、それが「見えないはずの裏が見える」不具合の実体だった。
+///
+/// カメラも画素も使わず、明示的に与えた角度と、そこから伝播して得た `surface_rank`
+/// という2つの値の整合だけを見る。solveの収束結果に期待値を結び付けていないので、
+/// 計算機が変わっても結果は変わらない(CLAUDE.md §10.7.7)。
+#[test]
+fn exact_folds_agree_with_the_surface_rank() {
+    let cases: [(&str, ori3_model::CreasePattern, HashMap<EdgeId, f64>, usize); 4] = [
+        (
+            "split-square-mountain",
+            split_square(),
+            HashMap::from([(6, 180.0)]),
+            1,
+        ),
+        (
+            "split-square-valley",
+            split_square(),
+            HashMap::from([(6, -180.0)]),
+            1,
+        ),
+        (
+            "diagonal-midline-mixed",
+            diagonal_midline_square(),
+            mixed_exact_angles(),
+            10,
+        ),
+        (
+            "live-frame",
+            live_frame_square(),
+            live_frame_angles(),
+            15,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (label, cp, angles, expected_exact_folds) in cases {
+        let faces = extract_faces(&cp);
+        let frame = to_frame3d(&cp, &faces, &propagate(&cp, &faces, &angles));
+        let exact_folds = angles
+            .values()
+            .filter(|angle| (angle.abs() - 180.0).abs() <= 1e-6)
+            .count();
+        assert_eq!(
+            exact_folds, expected_exact_folds,
+            "{label}: 180°の折り目の本数が変わっている"
+        );
+        let violations = exact_fold_rank_violations(&cp, &faces, &angles, &frame);
+        if !violations.is_empty() {
+            failures.push(format!(
+                "{label}: 180°の折り目{exact_folds}本中{}本で、surface_rankが折り目の向きに反している detail(edge,下,上,角度)={violations:?}",
+                violations.len(),
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "\n{}", failures.join("\n"));
 }

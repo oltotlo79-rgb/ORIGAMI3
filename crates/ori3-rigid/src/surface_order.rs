@@ -22,6 +22,27 @@ pub(crate) const SURFACE_PATH_CHECKPOINT_DEG: [f64; 22] = [
 
 type Transforms = HashMap<FaceId, (DMat3, DVec3)>;
 
+/// 重なり順の導出結果と、幾何からは決められなかった箇所の数。
+///
+/// 呼出し元は `unresolved_overlaps` を見て「幾何が答えを持っていない」ことを
+/// 知る。面の番号順で当てずっぽうに埋めるのではなく、平らな状態からの経路など
+/// 別の幾何へ切り替えるための判断材料である。
+#[derive(Debug, Clone)]
+pub(crate) struct SurfaceOrder {
+    /// 下→上の面順。
+    pub(crate) order: Vec<FaceId>,
+    /// 実面積で重なっていて、上下を幾何から決められた面対の数。
+    pub(crate) resolved_overlaps: usize,
+    /// 実面積で重なっているのに上下を決められなかった面対の数。
+    pub(crate) unresolved_overlaps: usize,
+    /// 多角形が退化していて比較そのものができなかった面対の数。
+    pub(crate) skipped_pairs: usize,
+    /// 上下の制約が輪になっていたため落とした制約の数。
+    pub(crate) broken_constraints: usize,
+    /// 折り目の向きが決める厳密な上下と食い違ったため捨てた、深度由来の制約の数。
+    pub(crate) dropped_depth_constraints: usize,
+}
+
 /// `path` の実深度を制約、`previous_order` を同値時の順として、下→上を返す。
 ///
 /// `exact_frame` で同一平面かつ実面積が重なる面対だけを比較する。exact上の同一点を
@@ -34,15 +55,24 @@ pub(crate) fn derive_surface_order(
     exact: &Transforms,
     exact_frame: &Frame3D,
     previous_order: &[FaceId],
-) -> Result<Vec<FaceId>, String> {
+    exact_constraints: &[(FaceId, FaceId)],
+) -> Result<SurfaceOrder, String> {
     validate_order(faces, exact_frame, previous_order)?;
     if path.is_empty() {
-        return Ok(previous_order.to_vec());
+        return Ok(SurfaceOrder {
+            order: previous_order.to_vec(),
+            resolved_overlaps: 0,
+            unresolved_overlaps: 0,
+            skipped_pairs: 0,
+            broken_constraints: 0,
+            dropped_depth_constraints: 0,
+        });
     }
     derive_surface_order_with(
         faces,
         exact_frame,
         previous_order,
+        exact_constraints,
         true,
         path.len(),
         |sample, face, point, normal| approached_height(face, point, normal, &path[sample], exact),
@@ -54,7 +84,8 @@ pub(crate) fn derive_surface_order_from_current_depths(
     faces: &[Face],
     frame: &Frame3D,
     previous_order: &[FaceId],
-) -> Result<Vec<FaceId>, String> {
+    exact_constraints: &[(FaceId, FaceId)],
+) -> Result<SurfaceOrder, String> {
     validate_order(faces, frame, previous_order)?;
     let frame_faces = frame
         .faces
@@ -65,6 +96,7 @@ pub(crate) fn derive_surface_order_from_current_depths(
         faces,
         frame,
         previous_order,
+        exact_constraints,
         false,
         1,
         |_sample, face, point, normal| {
@@ -80,7 +112,8 @@ pub(crate) fn derive_surface_order_from_frame_path(
     path: &[Frame3D],
     exact_frame: &Frame3D,
     previous_order: &[FaceId],
-) -> Result<Vec<FaceId>, String> {
+    exact_constraints: &[(FaceId, FaceId)],
+) -> Result<SurfaceOrder, String> {
     validate_order(faces, exact_frame, previous_order)?;
     for frame in path {
         validate_order(faces, frame, previous_order)?;
@@ -104,6 +137,7 @@ pub(crate) fn derive_surface_order_from_frame_path(
         faces,
         exact_frame,
         previous_order,
+        exact_constraints,
         true,
         path.len(),
         |sample, face, point, normal| {
@@ -116,10 +150,11 @@ fn derive_surface_order_with(
     faces: &[Face],
     exact_frame: &Frame3D,
     previous_order: &[FaceId],
+    exact_constraints: &[(FaceId, FaceId)],
     require_coplanar: bool,
     sample_count: usize,
     mut height: impl FnMut(usize, FaceId, DVec3, DVec3) -> Result<f64, String>,
-) -> Result<Vec<FaceId>, String> {
+) -> Result<SurfaceOrder, String> {
     let frame_faces = exact_frame
         .faces
         .iter()
@@ -147,7 +182,22 @@ fn derive_surface_order_with(
             }
         })
         .collect::<Vec<_>>();
-    let mut constraints = BTreeSet::<(FaceId, FaceId)>::new();
+    // 折り目の向きが決める厳密な上下を先に入れる。深度の差は丸めで壊れ得るが、
+    // 折り目の向きは壊れない。あとから来る深度由来の制約がこれと食い違ったら、
+    // 深度側を捨てる(下の `dropped_depth_constraints`)。
+    let known_faces = faces.iter().map(|face| face.id).collect::<BTreeSet<_>>();
+    let exact_pairs = exact_constraints
+        .iter()
+        .copied()
+        .filter(|(below, above)| {
+            below != above && known_faces.contains(below) && known_faces.contains(above)
+        })
+        .collect::<BTreeSet<(FaceId, FaceId)>>();
+    let mut constraints = exact_pairs.clone();
+    let mut dropped_depth_constraints = 0_usize;
+    let mut resolved_overlaps = 0_usize;
+    let mut unresolved_overlaps = 0_usize;
+    let mut skipped_pairs = 0_usize;
 
     for left_index in 0..faces.len() {
         for right_index in left_index + 1..faces.len() {
@@ -169,34 +219,79 @@ fn derive_surface_order_with(
             if !projected_bounds_overlap(left_2d, &right_2d) {
                 continue;
             }
-            let witnesses = overlap_witnesses(left_2d, &right_2d)?;
+            // 1対の多角形が退化していても、他の面対から得た上下は捨てない。
+            // 以前はここで全体をErrにしており、呼出し元が全16面を面の番号順へ
+            // 落としていた。1対の失敗で紙全体の重なり順を失わせない。
+            let Ok(witnesses) = overlap_witnesses(left_2d, &right_2d) else {
+                skipped_pairs += 1;
+                continue;
+            };
+            if witnesses.is_empty() {
+                continue;
+            }
+            let mut resolved = false;
+            let mut sampling_failed = false;
             for sample in (0..sample_count).rev() {
                 let mut left_above = false;
                 let mut right_above = false;
                 for &witness in &witnesses {
                     let point = plane.origin + plane.u * witness.x + plane.v * witness.y;
-                    let left_height = height(sample, left, point, plane.normal)?;
-                    let right_height = height(sample, right, point, plane.normal)?;
+                    let (Ok(left_height), Ok(right_height)) = (
+                        height(sample, left, point, plane.normal),
+                        height(sample, right, point, plane.normal),
+                    ) else {
+                        sampling_failed = true;
+                        break;
+                    };
                     let difference = left_height - right_height;
                     left_above |= difference > DEPTH_ORDER_EPS;
                     right_above |= difference < -DEPTH_ORDER_EPS;
+                }
+                if sampling_failed {
+                    break;
                 }
                 // 同じ深度なら、経路上の1つ前の姿勢まで戻る。1つの面対が重なり領域内で
                 // 交差する点では面単位rankを決めず、さらに前の非交差姿勢を探す。
                 if left_above == right_above {
                     continue;
                 }
-                constraints.insert(if left_above {
+                let depth_constraint = if left_above {
                     (right, left)
                 } else {
                     (left, right)
-                });
+                };
+                if exact_pairs.contains(&(depth_constraint.1, depth_constraint.0)) {
+                    // 180°の折り目が決める上下と逆。折り目の向きは丸めでは壊れないが、
+                    // 経路上の深度差は丸めや、経路が作れなかった中間形で壊れる。
+                    // 折り目側を残し、深度由来のこの1件だけを捨てる。
+                    dropped_depth_constraints += 1;
+                } else {
+                    constraints.insert(depth_constraint);
+                }
+                resolved = true;
                 break;
+            }
+            if sampling_failed {
+                skipped_pairs += 1;
+            } else if resolved {
+                resolved_overlaps += 1;
+            } else {
+                // 実面積で重なっているのに上下が決まらなかった。呼出し元へ
+                // 「この幾何は答えを持っていない」ことを伝える。
+                unresolved_overlaps += 1;
             }
         }
     }
 
-    stable_topological_order(previous_order, &constraints)
+    let (order, broken_constraints) = stable_topological_order(previous_order, &constraints);
+    Ok(SurfaceOrder {
+        order,
+        resolved_overlaps,
+        unresolved_overlaps,
+        skipped_pairs,
+        broken_constraints,
+        dropped_depth_constraints,
+    })
 }
 
 /// 全面を一度ずつ含む下→上順を `surface_rank` へ刻印する。
@@ -318,7 +413,9 @@ fn polygon_normal(points: &[DVec3]) -> Option<DVec3> {
     (normal.length_squared() > EPS * EPS).then(|| normal.normalize())
 }
 
-fn canonical(mut normal: DVec3) -> DVec3 {
+/// 平面の2つの法線のうち、絶対値が最大の成分を正にした側を返す。`n` と `-n` に
+/// 同じ向きを返すので、面の並び順によらず同じ「上」の向きを与える。
+pub(crate) fn canonical(mut normal: DVec3) -> DVec3 {
     let absolute = normal.abs();
     let component = if absolute.x >= absolute.y && absolute.x >= absolute.z {
         normal.x
@@ -583,12 +680,15 @@ fn polygon_area(polygon: &[DVec2]) -> f64 {
         .sum::<f64>()
 }
 
+/// 下→上の制約を満たす順を返す。制約が輪になっていても止まらず、落とした制約の
+/// 数を返す。輪は「紙がすり抜けている」形でだけ起きるので、そこで全体を面の番号順へ
+/// 捨てるより、残りの制約を全て活かした順を返すほうが実際の重なりに近い。
 fn stable_topological_order(
     previous_order: &[FaceId],
     constraints: &BTreeSet<(FaceId, FaceId)>,
-) -> Result<Vec<FaceId>, String> {
+) -> (Vec<FaceId>, usize) {
     if constraints.is_empty() {
-        return Ok(previous_order.to_vec());
+        return (previous_order.to_vec(), 0);
     }
     let mut outgoing = previous_order
         .iter()
@@ -601,33 +701,48 @@ fn stable_topological_order(
         .map(|face| (face, 0usize))
         .collect::<BTreeMap<_, _>>();
     for &(below, above) in constraints {
-        let Some(neighbors) = outgoing.get_mut(&below) else {
-            return Err(format!(
-                "surface constraint references missing face {below}"
-            ));
+        let (Some(neighbors), true) = (outgoing.get_mut(&below), indegree.contains_key(&above))
+        else {
+            // 呼出し元の面集合に無い面を指す制約は作れない(`validate_order` 済み)。
+            continue;
         };
-        if !indegree.contains_key(&above) {
-            return Err(format!(
-                "surface constraint references missing face {above}"
-            ));
-        }
         if neighbors.insert(above) {
             *indegree.get_mut(&above).expect("checked above face") += 1;
         }
     }
     let mut emitted = BTreeSet::new();
     let mut order = Vec::with_capacity(previous_order.len());
+    let mut broken = 0_usize;
     while order.len() < previous_order.len() {
-        let next = previous_order
+        let ready = previous_order
             .iter()
             .copied()
-            .find(|face| !emitted.contains(face) && indegree[face] == 0)
-            .ok_or_else(|| "surface depth constraints contain a cycle".to_string())?;
+            .find(|face| !emitted.contains(face) && indegree[face] == 0);
+        let next = match ready {
+            Some(face) => face,
+            // 輪になった。まだ出していない面のうち、下から押さえる制約が最も少ない
+            // 面を出す。同数なら `previous_order` の並びで決めるので結果は決定的。
+            None => {
+                let Some(face) = previous_order
+                    .iter()
+                    .copied()
+                    .filter(|face| !emitted.contains(face))
+                    .min_by_key(|face| indegree[face])
+                else {
+                    break;
+                };
+                broken += indegree[&face];
+                face
+            }
+        };
         emitted.insert(next);
         order.push(next);
         for &above in &outgoing[&next] {
-            *indegree.get_mut(&above).expect("known above face") -= 1;
+            if !emitted.contains(&above) {
+                let degree = indegree.get_mut(&above).expect("known above face");
+                *degree = degree.saturating_sub(1);
+            }
         }
     }
-    Ok(order)
+    (order, broken)
 }

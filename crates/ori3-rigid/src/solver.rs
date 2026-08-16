@@ -227,6 +227,13 @@ pub(crate) struct PreparedTopology {
     on_loop: Vec<bool>,
 }
 
+impl PreparedTopology {
+    /// 構築済みの全域木。重なり順の導出が `build_forest` を再実行しないための入口。
+    pub(crate) fn forest(&self) -> &tree::Forest {
+        &self.forest
+    }
+}
+
 pub(crate) fn prepare_topology(cp: &CreasePattern, faces: &[Face]) -> PreparedTopology {
     let forest = tree::build_forest(cp, faces);
     let n = forest.hinges.len();
