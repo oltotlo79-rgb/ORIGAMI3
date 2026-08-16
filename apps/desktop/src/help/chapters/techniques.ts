@@ -100,12 +100,12 @@ export const techniquesChapter = {
     {
       type: "screenshot",
       image: "screen-layer-motion-open-close.png",
-      caption: "層を1枚選び、3Dの既存折り目を開閉の軸にした画面。対象の枚数、軸、「この部分を追加」「まとめて適用」を確かめてから一手にできます。",
+      caption: "「層」で紙を押し、候補4枚のうち1枚を対象にした画面。「既存折り目で開閉」を選んだ直後は「軸: 未選択」と出るので、続けて3Dの既存折り目を押して軸を決めます。",
     },
     {
       type: "screenshot",
       image: "screen-layer-motion-restack.png",
-      caption: "紙を動かさない重ね替えを2部分へ指定した画面。追加済み部分、指定面の番号、手前・奥、山谷反転をまとめて確認できます。",
+      caption: "同じ層で「動かさず重ね替え」を選び、「重ね方」を「位置を保つ」にした画面。上の「追加済み0部分 / 現在1層を選択」で、まとめて適用する部分がいくつあるかを確かめられます。",
     },
     {
       type: "callout",

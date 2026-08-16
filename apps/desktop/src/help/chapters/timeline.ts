@@ -20,12 +20,12 @@ export const timelineChapter = {
     {
       type: "screenshot",
       image: "screen-cp-history-step1.png",
-      caption: "3手ある作品で手順1を選んだ画面。2Dは1手目までに付いた折り線だけになり、左上に「手順 1 / 3」と出ます。",
+      caption: "3手ある作品で手順1を選んだ画面。折る前に描いておいた3本の折り線はそのまま残り、2D左上に「手順 1 / 3」と出ます。",
     },
     {
       type: "screenshot",
       image: "screen-cp-history-latest.png",
-      caption: "同じ作品で「最新」を選んだ画面。2Dへ3本すべての折り線が戻り、左上は「手順 3 / 3」になります。",
+      caption: "同じ作品で「最新」を選んだ画面。展開図の折り線は手順1のときと変わらず3本のままで、2D左上だけが「手順 3 / 3」になります。",
     },
     {
       type: "steps",

@@ -619,7 +619,11 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
     expect(allText).toContain("操作方法は共通です");
 
     expect(allText).toContain("動かしている折り目の角度を最優先");
-    expect(allText).toContain("前の希望から譲った折り目は琥珀色");
+    // 追従した折り目に専用の色は無い(2Dは選択の橙・ポインターの紫・操作中の水色・
+    // 食い込みの赤、3Dは選択の黄色・水色・ポインターのコーラル・食い込みの赤の4役だけ)。
+    // 「琥珀色」を期待していた行は、実際の画面に無い色を固定していたので現状の文へ置き換えた。
+    expect(allText).toContain("前の希望から譲った折り目には色が付かない");
+    expect(allText).not.toContain("琥珀色");
     expect(allText).toContain("現在72.0°");
     expect(allText).toContain("希望どおりの形が見つからない場合も操作は止まりません");
 
