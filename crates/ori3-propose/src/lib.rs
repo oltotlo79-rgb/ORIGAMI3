@@ -1,5 +1,6 @@
 ﻿//! ori3-propose: 骨格指定から展開図を自動提案する計算。
 
+pub mod enumerate;
 pub mod finish;
 pub mod generate;
 pub mod packing;
@@ -10,6 +11,10 @@ pub mod skeleton;
 pub mod trace;
 pub mod triangulate;
 
+pub use enumerate::{
+    FoldLine, FoldSession, MAX_SEAM_GAP, MoveReport, PoseProblem, PoseScan, RejectedMove,
+    Unverified, VerifiedMove,
+};
 pub use finish::{
     FinishGaps, FinishTarget, FinishedForm, MeasuredTip, POSITION_GAP_MAX, TargetTip, count_gap,
     finish_gaps, length_gap, position_gap, width_gap,

@@ -2535,7 +2535,9 @@ name = "ori3-propose"
 version = "0.4.4"
 dependencies = [
  "ori3-cp",
+ "ori3-layers",
  "ori3-model",
+ "ori3-rigid",
  "rand",
  "serde",
  "serde_json",
