@@ -12,14 +12,14 @@ use ori3_model::{
     CreasePattern, Document, DriverLine, Edge, EdgeKind, FoldStep, Paper, TechniqueKind, Vertex,
 };
 
-const DEVIL_024: &str = include_str!("fixtures/folded-sample.ori3");
+const FOLDED_SAMPLE: &str = include_str!("fixtures/folded-sample.ori3");
 const TOLERANCE: f64 = 1.0e-9;
 
-fn devil_context() -> (Document, Vec<Face>, FlatState) {
-    let document = parse_devil_fixture(DEVIL_024);
+fn folded_sample_context() -> (Document, Vec<Face>, FlatState) {
+    let document = parse_folded_fixture(FOLDED_SAMPLE);
     let faces = extract_faces(&document.cp);
     let (state, warnings) = flat_state_at(&document, &faces, document.sequence.len())
-        .expect("devil-024 must replay to a flat state");
+        .expect("folded-sample must replay to a flat state");
     assert!(warnings.is_empty(), "fixture replay warnings: {warnings:?}");
     assert_eq!(faces.len(), 46);
     assert_eq!(state.order.len(), faces.len());
@@ -27,8 +27,8 @@ fn devil_context() -> (Document, Vec<Face>, FlatState) {
 }
 
 #[test]
-fn devil_face_geometry_and_local_layers_are_queryable() {
-    let (document, faces, state) = devil_context();
+fn folded_sample_face_geometry_and_local_layers_are_queryable() {
+    let (document, faces, state) = folded_sample_context();
     let query = FoldedQuery::new(&document.cp, &faces, &state).expect("build folded query");
 
     assert_eq!(query.face_geometries().len(), faces.len());
@@ -89,8 +89,8 @@ fn devil_face_geometry_and_local_layers_are_queryable() {
 }
 
 #[test]
-fn devil_extreme_face_vertex_is_really_extreme() {
-    let (document, faces, state) = devil_context();
+fn folded_sample_extreme_face_vertex_is_really_extreme() {
+    let (document, faces, state) = folded_sample_context();
     let query = FoldedQuery::new(&document.cp, &faces, &state).expect("build folded query");
 
     let right = query
@@ -112,7 +112,7 @@ fn devil_extreme_face_vertex_is_really_extreme() {
 
 #[test]
 fn strict_front_selection_reports_outside_empty_and_insufficient_cases() {
-    let (document, faces, state) = devil_context();
+    let (document, faces, state) = folded_sample_context();
     let query = FoldedQuery::new(&document.cp, &faces, &state).expect("build folded query");
     let point = [0.069_035_593_728_849_2, 0.092_724_864_350_673_44];
 
@@ -163,8 +163,8 @@ fn strict_front_selection_reports_outside_empty_and_insufficient_cases() {
 }
 
 #[test]
-fn devil_nearest_edge_returns_an_existing_edge_and_distance() {
-    let (document, faces, state) = devil_context();
+fn folded_sample_nearest_edge_returns_an_existing_edge_and_distance() {
+    let (document, faces, state) = folded_sample_context();
     let query = FoldedQuery::new(&document.cp, &faces, &state).expect("build folded query");
     let point = DVec2::new(1.1, 0.9);
     let nearest = query.nearest_edge(point.to_array()).expect("nearest edge");
@@ -286,7 +286,7 @@ fn assert_point_close(actual: [f64; 2], expected: [f64; 2]) {
 // ori3-layers deliberately has no serde_json dependency.  This small loader
 // reads the fields needed to replay the checked-in fixture without changing
 // the shared Cargo.toml.
-fn parse_devil_fixture(source: &str) -> Document {
+fn parse_folded_fixture(source: &str) -> Document {
     let paper_json = json_field(source, "paper");
     let paper = Paper {
         width_mm: json_f64(json_field(paper_json, "width_mm")),

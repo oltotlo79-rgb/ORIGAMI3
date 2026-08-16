@@ -418,6 +418,44 @@ describe("solveAlign(合わせ方ごとの入口)", () => {
     onLine(far.lines[0], 1, 1, 0);
   });
 
+  it("線と線: 45°でない角でも、二等分線の値が独立に求めた線と一致する", () => {
+    // 紙の下辺(y=0)と対角線(y=x)がなす90°ではなく45°の角。
+    // その二等分線は原点を通る22.5°の線で、傾きは tan22.5° = √2 - 1(無理数)。
+    // 既存の検査は直交する2本(答えが y=±x)しか見ていないため、
+    // 傾きが有理数でない場合に値が正しいかは、ここで初めて照合する。
+    const bottom = [
+      [0, 0],
+      [1, 0],
+    ] as FoldLine;
+    const diagonal = [
+      [0, 0],
+      [1, 1],
+    ] as FoldLine;
+    const out = solveAlign("lineLine", [
+      { kind: "line", a: bottom[0], b: bottom[1] },
+      { kind: "line", a: diagonal[0], b: diagonal[1] },
+    ]);
+    expect(out.reason).toBeNull();
+    expect(out.lines).toHaveLength(2);
+
+    const tan22p5 = Math.SQRT2 - 1; // = tan(22.5°)
+    const tan112p5 = -1 / tan22p5; // 直交するもう1本 = tan(112.5°)
+    // 2本の解は「22.5°の線」と「112.5°の線」。どちらが先頭かは問わない。
+    const slopes = out.lines
+      .map((line) => (line[1][1] - line[0][1]) / (line[1][0] - line[0][0]))
+      .sort((a, b) => a - b);
+    expect(slopes[0]).toBeCloseTo(tan112p5, 12);
+    expect(slopes[1]).toBeCloseTo(tan22p5, 12);
+    // どちらも角の頂点(原点)を通る。
+    for (const line of out.lines) passesThrough(line, [0, 0]);
+    // 22.5°の線は、両方の辺から等しい距離にある点を通る。
+    const onBisector: Vec2 = [1, tan22p5];
+    expect(distanceToLine(bottom, onBisector)).toBeCloseTo(
+      distanceToLine(diagonal, onBisector),
+      12,
+    );
+  });
+
   it("点を線に合わせる: 届かないときは日本語の理由を返す", () => {
     const out = solveAlign("pointLineThrough", [
       { kind: "point", p: [0, 1] },

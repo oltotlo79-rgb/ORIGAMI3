@@ -15,11 +15,11 @@ use ori3_model::{
 
 const ROSE_011: &str = include_str!("fixtures/rose-011.ori3");
 const ROSE_029: &str = include_str!("fixtures/rose-029.ori3");
-const DEVIL_024: &str = include_str!("fixtures/folded-sample.ori3");
+const FOLDED_SAMPLE: &str = include_str!("fixtures/folded-sample.ori3");
 
 #[test]
-fn extracts_features_from_completed_rose_and_devil_fixtures() {
-    for (name, json) in [("rose-029", ROSE_029), ("devil-024", DEVIL_024)] {
+fn extracts_features_from_completed_rose_and_folded_sample_fixtures() {
+    for (name, json) in [("rose-029", ROSE_029), ("folded-sample", FOLDED_SAMPLE)] {
         let document = load_fixture(json);
         let (faces, state) = state_of(&document);
         let features = extract_step_features(&document.cp, &faces, &state);
@@ -107,7 +107,7 @@ fn earlier_rose_is_rejected_by_completed_rose_expectation() {
 
 #[test]
 fn reports_landmark_layer_count_and_visible_fold_sense_differences() {
-    let document = load_fixture(DEVIL_024);
+    let document = load_fixture(FOLDED_SAMPLE);
     let (faces, state) = state_of(&document);
     let features = extract_step_features(&document.cp, &faces, &state);
     let probe = top_face_probe(&document, &faces, &state);
@@ -115,7 +115,7 @@ fn reports_landmark_layer_count_and_visible_fold_sense_differences() {
     let visible = features
         .visible_creases
         .first()
-        .expect("devil-024には可視折り目がある");
+        .expect("折り上がりの標本には可視折り目がある");
     let visible_midpoint = [
         (visible.segment[0][0] + visible.segment[1][0]) * 0.5,
         (visible.segment[0][1] + visible.segment[1][1]) * 0.5,
@@ -173,8 +173,8 @@ fn plane_pullback_matches_flat_state_for_rose_029_fixture() {
 }
 
 #[test]
-fn plane_pullback_matches_flat_state_for_devil_024_fixture() {
-    assert_plane_pullback_matches_flat_fixture("devil-024", DEVIL_024);
+fn plane_pullback_matches_flat_state_for_folded_sample_fixture() {
+    assert_plane_pullback_matches_flat_fixture("folded-sample", FOLDED_SAMPLE);
 }
 
 fn assert_plane_pullback_matches_flat_fixture(label: &str, json: &str) {

@@ -1980,12 +1980,13 @@ mod tests {
 
     #[test]
     fn five_existing_works_have_69_raw_12_filtered_and_zero_notices_for_reached_targets() {
-        let devil: Document = serde_json::from_str(include_str!(
-            "../../../../crates/ori3-layers/tests/fixtures/devil-024.ori3"
+        let folded_sample: Document = serde_json::from_str(include_str!(
+            "../../../../crates/ori3-layers/tests/fixtures/folded-sample.ori3"
         ))
-        .expect("悪魔24を読む");
-        let devil_targets = sequence_targets(&devil);
-        let devil_counts = flat_fold_rule_counts(&devil.cp, &devil_targets);
+        .expect("折り上がりの標本を読む");
+        let folded_sample_targets = sequence_targets(&folded_sample);
+        let folded_sample_counts =
+            flat_fold_rule_counts(&folded_sample.cp, &folded_sample_targets);
 
         let crane = front_fixture_cp(include_str!("../../src/lib/__fixtures__/crane.json"));
         let crane_targets = all_crease_flat_targets(&crane);
@@ -2008,14 +2009,14 @@ mod tests {
 
         // (生の局所違反, ±180°候補, 通知点)。通知規則を姿勢解から切り離し、
         // 指定角到達済み・食い込みなしを入力として明示する。
-        assert_eq!(devil_counts, (6, 2, 0), "悪魔");
+        assert_eq!(folded_sample_counts, (6, 2, 0), "折り上がりの標本");
         assert_eq!(crane_counts, (3, 3, 0), "鶴");
         assert_eq!(frog_counts, (3, 3, 0), "カエル");
         assert_eq!(yakko_counts, (0, 0, 0), "やっこさん");
         assert_eq!(rose_counts, (57, 4, 0), "ローズ");
 
         let total = [
-            devil_counts,
+            folded_sample_counts,
             crane_counts,
             frog_counts,
             yakko_counts,
