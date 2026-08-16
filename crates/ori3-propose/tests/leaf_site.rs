@@ -4,30 +4,10 @@ use std::collections::BTreeSet;
 
 use ori3_propose::skeleton::{Skeleton, SkeletonNode};
 use ori3_propose::{generate, pack};
-use serde::{Deserialize, Serialize};
 
-/// 対応を足す前後で展開図が1文字も変わらないことを照合するための記録。
-///
-/// 展開図は**書き出した文字そのもの**(`cp_json`)で持つ。数値として持たせない
-/// のは、このworkspaceの `serde_json` が17桁の小数を読み戻すときに最後の1桁を
-/// 落とすため(実測: `0.20710678118654754` を書いて読み戻すと
-/// `0.20710678118654752`。ビット表現 `3fca827999fcef33` → `3fca827999fcef32`)。
-/// 文字列のまま持てば読み書きで数値変換が起きず、「1文字も変わらない」を
-/// そのまま照合できる。
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct CpBaseline {
-    leaves: u32,
-    cp_json: String,
-}
+mod support;
 
-/// 記録の保存先。テストは読むだけで、書き込むのは `#[ignore]` の再生成専用テスト
-/// だけにする(CLAUDE.md §10.7.6)。
-fn baseline_path() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures")
-        .join("cp-baseline-1-12.json")
-}
+use support::{CpBaseline, baseline_path, read_baseline};
 
 /// 根に葉を`n`本ぶら下げた星形の骨格。
 fn star(n: u32) -> Skeleton {
@@ -47,13 +27,6 @@ fn build(n: u32) -> (ori3_propose::Packing, ori3_propose::ProposalResult) {
     (ps.into_iter().next().unwrap(), r)
 }
 
-fn read_baseline() -> Vec<CpBaseline> {
-    let path = baseline_path();
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("記録を読めない({}): {e}", path.display()));
-    serde_json::from_str(&text).expect("記録の形が壊れている")
-}
-
 /// 記録の作り直し。展開図をわざと変えたいときだけ、明示的に実行する。
 /// `cargo test -p ori3-propose --test leaf_site -- --ignored regenerate_cp_baseline`
 #[test]
@@ -69,20 +42,39 @@ fn regenerate_cp_baseline() {
     std::fs::write(baseline_path(), text).expect("記録を保存できない");
 }
 
-/// 合格条件5: 対応を足す前と後で、葉1〜12本の12通りの展開図が1文字も変わらない。
+/// 合格条件5: 対応を足す前と後で、葉1〜12本の12通りの展開図が変わらない。
 /// 記録は対応を足す前の実装で作ったもの。
+///
+/// **頂点と辺の個数・番号・並び・つながり・山谷の種類は完全一致**を求める。
+/// **座標だけ** [`support::CP_POS_TOL`] の許容差で比べる
+/// (理由と実測は同定数のコメント。以前はここも書き出した文字列の完全一致で
+/// 比べており、最下位1桁の違いでCIが落ちた)。
 #[test]
 fn crease_patterns_for_one_to_twelve_leaves_are_unchanged() {
     let baseline = read_baseline();
     assert_eq!(baseline.len(), 12, "記録が12件ない");
     let mut same = 0usize;
+    let mut seen_vertices = 0usize;
+    let mut seen_edges = 0usize;
+    let mut worst = 0.0f64;
     for entry in &baseline {
         let (_, r) = build(entry.leaves);
-        let now = serde_json::to_string(&r.cp).expect("今の展開図を書き出せない");
-        assert_eq!(now, entry.cp_json, "葉{}本で展開図が変わった", entry.leaves);
+        let (vertices, edges, gap) = support::assert_cp_matches_baseline(entry, &r.cp);
+        seen_vertices += vertices;
+        seen_edges += edges;
+        worst = worst.max(gap);
         same += 1;
     }
     assert_eq!(same, 12, "展開図が一致した件数が12件でない");
+    // 空回りしていないことの見張り。実測で のべ頂点240個・のべ辺532本。
+    // どちらも記録の中身そのもので、計算機が変わっても変わらない。
+    assert_eq!(seen_vertices, 240, "見た頂点がのべ240個でない");
+    assert_eq!(seen_edges, 532, "見た辺がのべ532本でない");
+    println!(
+        "記録との突き合わせ: 12通り、のべ頂点{seen_vertices}個・のべ辺{seen_edges}本。\
+         座標の差の最大 = {worst:.3e}(許容 {:.0e})",
+        support::CP_POS_TOL
+    );
 }
 
 /// 記録が葉1〜12本を1本ずつ、重複なく覆っていること(記録そのものの点検)。

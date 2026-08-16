@@ -9,6 +9,8 @@ use ori3_propose::{
     generate, pack,
 };
 
+mod support;
+
 /// 根に葉を`n`本ぶら下げた星形の骨格(作業9の記録と同じ形)。
 fn star(n: u32) -> Skeleton {
     let mut nodes = vec![SkeletonNode::new(0, None, 0.0)];
@@ -278,29 +280,37 @@ fn branching_skeleton_separates_stacking_from_sitting_side_by_side() {
 // ---------------------------------------------------------------------------
 
 /// 追跡情報を足す前に取った記録(作業9の `cp-baseline-1-12.json`)と、
-/// 葉1〜12本の12通りの展開図が1文字も変わらないこと。
+/// 葉1〜12本の12通りの展開図が変わっていないこと。
+///
+/// **頂点と辺の個数・番号・並び・つながり・山谷の種類は完全一致**を求める。
+/// **座標だけ** [`support::CP_POS_TOL`] の許容差で比べる
+/// (理由と実測、わざと壊して落ちることを確かめた記録は同定数のコメント)。
 #[test]
 fn crease_patterns_stay_identical_to_the_recorded_baseline() {
-    #[derive(serde::Deserialize)]
-    struct CpBaseline {
-        leaves: u32,
-        cp_json: String,
-    }
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures")
-        .join("cp-baseline-1-12.json");
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("記録を読めない({}): {e}", path.display()));
-    let baseline: Vec<CpBaseline> = serde_json::from_str(&text).expect("記録の形が壊れている");
+    let baseline = support::read_baseline();
     assert_eq!(baseline.len(), 12, "記録が12件ない");
     let mut same = 0usize;
+    let mut seen_vertices = 0usize;
+    let mut seen_edges = 0usize;
+    let mut worst = 0.0f64;
     for entry in &baseline {
-        let now = serde_json::to_string(&build(entry.leaves).cp).expect("展開図を書き出せない");
-        assert_eq!(now, entry.cp_json, "葉{}本で展開図が変わった", entry.leaves);
+        let (vertices, edges, gap) =
+            support::assert_cp_matches_baseline(entry, &build(entry.leaves).cp);
+        seen_vertices += vertices;
+        seen_edges += edges;
+        worst = worst.max(gap);
         same += 1;
     }
     assert_eq!(same, 12, "一致した件数が12件でない");
+    // 空回りしていないことの見張り。実測で のべ頂点240個・のべ辺532本。
+    // どちらも記録の中身そのもので、計算機が変わっても変わらない。
+    assert_eq!(seen_vertices, 240, "見た頂点がのべ240個でない");
+    assert_eq!(seen_edges, 532, "見た辺がのべ532本でない");
+    println!(
+        "記録との突き合わせ: 12通り、のべ頂点{seen_vertices}個・のべ辺{seen_edges}本。\
+         座標の差の最大 = {worst:.3e}(許容 {:.0e})",
+        support::CP_POS_TOL
+    );
 }
 
 // ---------------------------------------------------------------------------
