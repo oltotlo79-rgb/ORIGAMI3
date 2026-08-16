@@ -139,6 +139,18 @@
   --sp-8: 24px;
   --sp-9: 32px;
 
+  /* 行の先頭ラベルの共通の列幅。続けて並ぶ行で操作部品の左端をそろえるために使う。
+     実測(実機・ポップ): 「向き」23.1 /「操作:」29.1 /「描き方」36.1 /「開く側:」37.1 /
+     「動かす側」47.7 /「対象の層」49.9 /「ねじる向き」54.4 /「段になる側」57.9 /
+     「先端(動く側)」68.6 /「合わせて折る」68.9 /「紙の形を変える」80.5px。
+     いちばん長い「紙の形を変える」は書体の違うテーマでは広くなる。
+     実測: ポップ80.5 / シンプル79.5 / 和風81.3 / モダン89.3 / クラシック80.5px。
+     5テーマすべてが収まる96pxとする。 */
+  --row-label-width: 96px;
+  /* 3Dへ重ねる札は幅が360pxしかないため、そこに出る2語だけで決める。
+     実測(5テーマの最大): 「向き」25.8 /「動かす側」51.2px → 56px。 */
+  --tip-label-width: 56px;
+
   /* 角丸 */
   --radius-sm: 10px;
   --radius-md: 14px;
@@ -1039,6 +1051,15 @@ input[type="radio"] {
   vertical-align: -3px;
 }
 
+/* 丸印・チェックと、その言葉の間の隙間。ブラウザ既定は左右とも約3pxで、
+   言葉が印にくっついて読みにくい。左は0にして本文と列をそろえ、右は他の
+   隙間と同じ --sp-3 にする。1か所で決め、各所には書かない。 */
+.app label > input[type="checkbox"],
+.app label > input[type="radio"] {
+  margin-block: 0;
+  margin-inline: 0 var(--sp-3);
+}
+
 /* OSごとの差が大きいnative部品も、意味と操作感を保ったままテーマへ接続する。 */
 .app select {
   appearance: none;
@@ -1190,7 +1211,7 @@ input[type="radio"] {
 .number-stepper {
   display: inline-flex;
   align-items: stretch;
-  gap: var(--sp-1);
+  gap: var(--sp-2);
   min-width: 0;
 }
 
@@ -1201,7 +1222,9 @@ input[type="radio"] {
 .number-stepper-controls {
   display: inline-grid;
   grid-template-columns: repeat(2, 32px);
-  gap: var(--sp-1);
+  /* 入力欄と増減ボタンの隙間(.number-stepper の gap)と同じ値にする。
+     --sp-1(2px)では「▲」と「▼」が1つのボタンに見えていた。 */
+  gap: var(--sp-2);
 }
 
 .app .number-stepper-button {
@@ -1306,6 +1329,35 @@ input[type="radio"] {
 .app strong,
 .app b {
   font-weight: var(--fw-bold);
+}
+
+/* 日本語の折り返し。放っておくと最後の行に数文字だけが残り、変な位置で切れて見える。
+   説明文は行の釣り合いを整える pretty、見出しや2〜3行のボタン名は行の長さをそろえる
+   balance を使う。各所へ幅や改行位置を書き足さず、ここで1回だけ決める。
+   一括指定の text-wrap ではなく text-wrap-style を使う。text-wrap は
+   text-wrap-mode も同時に書き換えるため、1行に保ちたい札の white-space: nowrap を
+   打ち消してしまう(実際に3Dの案内が3行へ広がった)。 */
+.app p,
+.app li,
+.app .hint,
+.app .warning-text,
+.app .error-text {
+  text-wrap-style: pretty;
+  /* 日本語は語の間に空白が無いので、pretty だけでは文節の途中で改行される。
+     auto-phrase は文節の切れ目で折り返すため、「書き / 出せます」のような
+     変な位置での改行が無くなる。 */
+  word-break: auto-phrase;
+}
+
+.app h1,
+.app h2,
+.app h3,
+.app h4,
+.app legend,
+.align-mode-buttons button,
+.paper-action-entrances button {
+  text-wrap-style: balance;
+  word-break: auto-phrase;
 }
 
 .app legend,
@@ -1434,6 +1486,16 @@ input[type="radio"] {
 }
 
 .toolbar-brand-copy strong {
+  /* 字間(letter-spacing)は最後の文字の右にも入るため、そのぶんだけ中身が
+     枠から2pxはみ出していた(実測: scrollWidth 96 / clientWidth 94)。
+     行の箱を中身の幅に合わせて、はみ出しを無くす。 */
+  display: inline-flex;
+  align-items: center;
+  width: max-content;
+  max-width: 100%;
+  /* 字間は最後の文字の右にも入る。「3」の札のぶんを見込んで右の余白を足し、
+     中身が枠からはみ出さないようにする(実測: scrollWidth 96 / clientWidth 94)。 */
+  padding-inline-end: var(--sp-1);
   color: var(--brand-color);
   font-size: 16px;
   font-family: var(--brand-font);
@@ -1595,7 +1657,10 @@ input[type="radio"] {
   display: flex;
   flex-direction: column;
   gap: var(--sp-3);
-  padding: var(--sp-4) var(--sp-3) var(--sp-6);
+  /* 64pxのレールでは左右の余白が道具の名前の幅を直接削る。実測: 左右6pxだと
+     サブメニューの中身が40pxしか残らず「角度線」(33px)が枠に触れていた。
+     4pxにすると44px残り、文字の左右に4.5pxずつ空く。 */
+  padding: var(--sp-4) var(--sp-2) var(--sp-6);
   background: var(--tool-rail-background);
   border-right: var(--panel-border-width) solid var(--panel-separator-color);
   box-shadow: var(--shadow-tool-rail);
@@ -1697,29 +1762,85 @@ input[type="radio"] {
   white-space: nowrap;
 }
 
+/* 道具10個がレールに入りきらないと、上か下の道具が黙って隠れる。
+   実測(ポップ・下部パネル既定): レールの高さは 700px窓で433.8px・860px窓で547px・
+   900px窓で574pxなのに、既定の大きさでは637px要る。窓が低いときだけ絵と高さを詰めて
+   10個を必ず収める。区画も設定項目も増やさない。
+   詰めたあとの実測(折るモード・道具10個/必要な高さ 対 あるレールの高さ):
+   700px窓=434 対 433.8 / 860px窓=540 対 539.9 / 900px窓=567 対 567.1 /
+   1080px窓=690 対 689.5 / 1440px窓=934 対 934.3。隠れる道具は0個になった。
+   ボタンどうしの隙間は --sp-2(4px)のまま詰めていない(2pxではくっついて見えたため)。 */
+@media (max-height: 900px) {
+  .tool-rail {
+    gap: var(--sp-2);
+    padding: var(--sp-1) var(--sp-2);
+  }
+
+  .tool-button {
+    min-height: 44px;
+    gap: var(--sp-1);
+  }
+
+  /* 道具の名前は必ず1行なので、行の高さを詰める。文字の大きさは --fs-xs のまま。 */
+  .tool-button .tool-label {
+    line-height: 1.1;
+  }
+
+  .tool-icon {
+    width: 20px;
+    height: 20px;
+  }
+}
+
+@media (max-height: 760px) {
+  .tool-button {
+    min-height: 36px;
+    gap: 0;
+    padding: var(--sp-1);
+  }
+
+  .tool-icon {
+    width: 16px;
+    height: 16px;
+  }
+}
+
 /* 技法・作図のサブメニュー(そのツールを選んでいる間だけ出る) */
 .tool-submenu {
   flex: none;
   display: flex;
   flex-direction: column;
+  align-items: stretch;
   gap: var(--sp-2);
   margin: 0 0 var(--sp-3);
-  padding: var(--sp-3) var(--sp-1);
+  /* 64pxのレールの中では左右の余白がボタンの文字幅を奪い、「二等分」が
+     1文字ずつ縦に割れていた。左右の余白は取らず、幅をボタンへ回す。 */
+  padding: var(--sp-2) 0;
   border: var(--panel-border-width) solid var(--color-secondary-border-soft);
+  /* 左右の枠は1pxに落として、その2pxぶんをボタンの文字幅へ回す。
+     実測: レールの中身は45px。ここを2pxにすると「角度線」(33px)が入らない。 */
+  border-inline-width: 1px;
   border-radius: var(--radius-md);
   background: var(--color-surface-translucent-submenu);
   box-shadow: var(--shadow-submenu);
 }
 
+/* 上のレールのボタンと同じ「絵が上・言葉が下」にそろえる。横に並べると
+   64pxのレールでは言葉の幅が2文字ぶんしか残らず、必ず縦に割れるため。 */
 .tool-button.small {
-  flex-direction: row;
-  justify-content: flex-start;
-  gap: var(--sp-2);
-  min-height: 30px;
-  padding: var(--sp-2) var(--sp-1);
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--sp-1);
+  min-height: 40px;
+  /* 64pxのレールでは左右の余白が文字幅を直接削る。上下だけ空ける。 */
+  padding: var(--sp-2) 0;
+  /* 「ひだ寄せ」のように1文節で長い名前は、途中でも折り返して枠に収める。 */
+  overflow-wrap: anywhere;
+  word-break: normal;
   font-size: var(--fs-xs);
   font-weight: var(--fw-medium);
   letter-spacing: 0;
+  line-height: var(--lh-tight);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-tool-small);
 }
@@ -1782,17 +1903,26 @@ input[type="radio"] {
 }
 
 /* 新規作成ダイアログの大きさ入力と見本 */
+/* 「よこ」「たて」と紙の見本を下端でそろえる。中央ぞろえだと見本だけが
+   31px高い位置に来て、列がそろって見えなかった(実測: 1000×700)。 */
 .new-paper-row {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: var(--sp-5);
   margin: var(--sp-4) 0;
   font-size: var(--fs-md);
 }
 
+/* 名前と入力欄が成り行きで折り返していたので、縦に積むと決めておく。 */
+.new-paper-row > label {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+}
+
 .new-paper-row input {
   width: 72px;
-  margin-left: var(--sp-2);
 }
 
 .new-paper-preview {
@@ -1834,7 +1964,7 @@ input[type="radio"] {
 .mirror-axis-buttons {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: var(--sp-2);
 }
 
 .mirror-axis-buttons button {
@@ -2316,13 +2446,35 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   transform: rotate(45deg);
 }
 
+/* たたんだ札は3D区画をほとんど取らない。中身の幅にそろえ、丸みも背丈も小さくする。
+   実測(1280×860・ポップ): たたむ前 430×95.1px → たたんだあと 高さ約34px。 */
 .viewer-operation-hint.collapsed {
-  width: auto;
+  width: max-content;
+  max-width: calc(100% - 152px - var(--sp-5));
+  right: auto;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-pill);
+}
+
+/* 丸い札に四角い尻尾は付けない(角がはみ出して見えるため)。 */
+.viewer-operation-hint.collapsed::after {
+  display: none;
 }
 
 .viewer-operation-hint.blocked {
   background: var(--viewer-hint-blocked-background);
   border-color: var(--floating-border-color);
+}
+
+/* 右上の警告の札は案内と同じ高さに出るため、実測で 79×23px 重なり、
+   開閉ボタン(幅115px)の72pxを覆っていた。警告が出ている間は案内を1段下げ、
+   上下に並べる。警告の札(高さ27.4px)と食い込みの案内(同42px)の順に避ける。 */
+.pane-3d-view:has(.status-badge) .viewer-operation-hint {
+  top: calc(var(--sp-4) + 36px);
+}
+
+.pane-3d-view:has(.suspect-hinge-guide) .viewer-operation-hint {
+  top: calc(var(--sp-4) + 78px);
 }
 
 .viewer-operation-heading {
@@ -2399,12 +2551,46 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   margin-top: var(--sp-3);
 }
 
+/* たたんだ札は、道具の絵・モード名・いまできること・開閉ボタンの横1行にする。
+   絵と名前は縮めず、長い案内文だけを詰める。 */
+.viewer-operation-hint.collapsed .viewer-current-row {
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  margin-top: 0;
+}
+
+.viewer-mode-icon.compact {
+  width: 24px;
+  height: 24px;
+}
+
+.viewer-mode-icon.compact .tool-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.viewer-mode-name {
+  min-width: 0;
+  color: var(--color-secondary-strong);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-black);
+  white-space: nowrap;
+}
+
 .viewer-current-action {
   min-width: 0;
   flex: 1;
   margin: 0;
   color: var(--color-text);
   font-weight: var(--fw-bold);
+}
+
+/* 開いた札は縦に余裕があるので、いまできることを最後まで読めるようにする。
+   たたんだ1行の札では今までどおり1行に収め、続きは吹き出しで読む。
+   実測(1280×860): 折るモードの案内は636px必要で、1行だと242pxしか出せなかった。 */
+.viewer-operation-hint.expanded .viewer-current-action {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .viewer-mouse-assignments {
@@ -2432,11 +2618,17 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   flex-direction: column;
 }
 
+/* 開いた札は縦に余裕があるので、割り当ての言葉を「…」で切らずに折り返す。
+   実測(1280×860・430px幅): 「山折り線・谷折り線・補助線・紙の輪郭の辺を選ぶ／視点を
+   回す」は1行に入らず、「山折り線・谷折り線...」までしか読めなかった。 */
 .viewer-mouse-assignment strong {
-  overflow: hidden;
   font-size: var(--fs-xs);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  word-break: auto-phrase;
+}
+
+.viewer-mouse-assignment {
+  align-items: flex-start;
 }
 
 .mouse-glyph {
@@ -2808,10 +3000,13 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   background: var(--color-accent-soft);
 }
 
+/* flex: 1 1 170px だと広い画面で題だけが伸び、右端まで離れた「丸みをつける」が
+   何の設定か分からなくなっていた(実測: 1280×860で題の左端36px・チェック525px)。
+   題は中身の幅で止め、設定を題のすぐ隣へ置く。 */
 .soft-controls-heading {
   display: flex;
   min-width: 0;
-  flex: 1 1 170px;
+  flex: 0 1 170px;
   flex-direction: column;
 }
 
@@ -2847,6 +3042,11 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   width: auto;
   max-width: 360px;
   box-sizing: border-box;
+  /* 題・説明・ボタンの行を縦に積む。行の隙間をここで1回だけ決め、
+     子の margin では作らない(場所ごとに値がばらつくため)。 */
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
   padding: var(--sp-5);
   border: var(--floating-border-width) solid var(--floating-border-color);
   border-radius: var(--radius-lg);
@@ -2865,9 +3065,11 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 }
 
 .paper-action-tip.expanded p {
-  margin: var(--sp-2) var(--sp-7) var(--sp-3) 0;
+  /* 行の隙間は親の gap が作るので、ここでは閉じるボタンを避ける右の余白だけ。 */
+  margin: 0 var(--sp-7) 0 0;
   color: var(--color-text-muted);
   line-height: var(--lh-normal);
+  text-wrap-style: pretty;
 }
 
 .paper-action-tip.compact {
@@ -2901,8 +3103,11 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 
 .paper-action-tip-buttons {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
-  gap: var(--sp-2);
+  /* 下のパネルの .button-row と同じ隙間にする。--sp-2(4px)では影(0 3px 0)が
+     隣のボタンへ掛かり、2つが1つに見えていた。 */
+  gap: var(--sp-3);
 }
 
 .paper-action-tip-buttons > button {
@@ -2936,6 +3141,14 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 
   .viewer-operation-hint::after {
     display: none;
+  }
+
+  /* 狭い3Dでは右上の視点立方体を避ける必要がないので、区画の幅いっぱいまで使える。
+     たたんだ札は中身の幅で止まるため、ここでは上限だけを広げる。 */
+  .viewer-operation-hint.collapsed {
+    max-width: calc(100% - 2 * var(--sp-5));
+    max-height: none;
+    overflow: visible;
   }
 
   /* 紙の詳しい案内も開いた間は、3Dカードを要点1行へ縮めて上下を分ける。 */
@@ -3001,7 +3214,10 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   .cp-operation-hint {
     top: 52px;
     right: var(--sp-4);
-    max-width: none;
+    /* leftとrightの両方を指定すると札が区画いっぱいへ広がり、文字の終わりと
+       「▼」の間に空白が出ていた(実測: 1000×700で181px)。中身の幅にそろえる。 */
+    width: max-content;
+    max-width: calc(100% - var(--sp-4) - var(--sp-4));
   }
 
   .cp-operation-hint.collapsed {
@@ -3253,7 +3469,7 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 .paper-color-swatches {
   display: grid;
   grid-template-columns: repeat(8, 26px);
-  gap: 4px;
+  gap: var(--sp-2);
 }
 
 .paper-color-swatch {
@@ -3518,13 +3734,14 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 }
 
 .grid-divisions-heading output small {
-  margin-left: 2px;
+  margin-left: var(--sp-1);
   font-size: var(--fs-xs);
 }
 
 .grid-division-presets {
   display: flex;
-  gap: 4px;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
 }
 
 .grid-division-presets button {
@@ -3680,12 +3897,33 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   align-self: center;
 }
 
+/* 続けて並ぶ行の「問いの名前」に共通の列幅を与え、答えの操作部品の左端をそろえる。
+   ラベルの無い行(「折る」「やめる」など主操作だけの行)は問いではないので、
+   区画の左端から始めてよい。行ごとに幅の違うラベルを置くと列がずれるため、
+   幅の指定は各所へ書かず、この1か所と --row-label-width だけで決める。 */
+.row-label {
+  flex: none;
+  min-width: var(--row-label-width);
+  align-self: center;
+}
+
+/* 3Dへ重ねる札は幅が狭いので、同じ役割の列を専用の幅でそろえる。 */
+.fold-direction-tip-buttons > .row-label {
+  min-width: var(--tip-label-width);
+}
+
+/* 合わせて折るの途中経過。技法の名前(太字)と進み具合(控えめな色)を見分けられるようにする。 */
+.align-draft-progress {
+  color: var(--color-text-muted);
+}
+
 /* 「合わせて折る」は8種類あるため、長い日本語名をつぶさず並べる。 */
 .align-start-row {
   align-items: flex-start;
 }
 
 .align-start-label {
+  align-self: flex-start;
   padding-top: var(--sp-2);
   white-space: nowrap;
 }
@@ -4537,10 +4775,19 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   font-size: var(--fs-sm);
 }
 
+/* 右の「長さ・太さ」は2行へ折り返るため、align-items:center だと左の名前が
+   2行の間へ来て、左右の列がそろわない(実測: 1000×700で18pxずれ)。
+   上をそろえ、名前は1行目の高さの中で縦中央に置く。 */
 .limb-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--sp-3);
+}
+
+.limb-row > span {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
 }
 
 .limb-name {

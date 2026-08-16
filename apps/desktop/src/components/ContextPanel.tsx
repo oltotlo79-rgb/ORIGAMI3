@@ -555,7 +555,7 @@ function AlignStartRow() {
   const beginAlign = useAppStore((s) => s.beginAlign);
   return (
     <div className="button-row align-start-row">
-      <strong className="align-start-label">合わせて折る</strong>
+      <strong className="align-start-label row-label">合わせて折る</strong>
       <div
         className="align-mode-buttons"
         role="group"
@@ -596,8 +596,9 @@ function AlignDraftContent({
   return (
     <div>
       <div className="button-row">
-        <span>{ALIGN_LABELS[draft.mode]}</span>
-        <span>
+        <strong>{ALIGN_LABELS[draft.mode]}</strong>
+        {/* 進み具合は技法の名前と地続きに読めていたので、控えめな色で区別する */}
+        <span className="align-draft-progress">
           選択 {draft.picks.length} / {need}
           {kind !== null &&
             `(次は${kind === "point" ? "点" : "線"}を展開図または3D表示でクリック)`}
@@ -641,8 +642,11 @@ function FoldDraftContent({ draft }: { draft: FoldDraft }) {
       <p>
         折り線: ({mm(a[0])}, {mm(a[1])}) →({mm(b[0])}, {mm(b[1])}) mm
       </p>
+      {/* 「向き」「対象の層」「動かす側」は別々の問いなので、1行に1問ずつ置く。
+          同じ行へ詰めると問いの切れ目が隙間の違いで分からなくなる。
+          先頭のラベルは .row-label で同じ列幅にし、答えの左端をそろえる。 */}
       <div className="button-row">
-        <span>向き</span>
+        <span className="row-label">向き</span>
         <label>
           <input
             type="radio"
@@ -663,7 +667,9 @@ function FoldDraftContent({ draft }: { draft: FoldDraft }) {
           />
           向こうへ折る(山)
         </label>
-        <span>対象の層</span>
+      </div>
+      <div className="button-row">
+        <span className="row-label">対象の層</span>
         <label>
           <input
             type="radio"
@@ -689,7 +695,7 @@ function FoldDraftContent({ draft }: { draft: FoldDraft }) {
           食い違う。画面に合わせるにはカメラの向きが要るので、言葉では側を
           言い当てず、動く側は立体表示のハイライトで見てもらう */}
       <div className="button-row">
-        <span>動かす側</span>
+        <span className="row-label">動かす側</span>
         <label>
           <input
             type="radio"
@@ -1024,7 +1030,7 @@ function LayerMotionDraftContent({ draft }: { draft: TechniqueDraft }) {
       </p>
       <TechniqueLayerPicker draft={draft} />
       <div className="button-row">
-        <span>操作:</span>
+        <span className="row-label">操作:</span>
         <label>
           <input
             type="radio"
@@ -1226,7 +1232,7 @@ function NamedTechniqueDraftContent({ draft }: { draft: TechniqueDraft }) {
       {/* どちらの技法でも「動く側」を選ぶ。中割り・かぶせでは折り返される先端の側、
           段折りでは段になって送られる側にあたる(反対側の紙はその場に残る) */}
       <div className="button-row">
-        <span>
+        <span className="row-label">
           {draft.kind === "Twist"
             ? "ねじる向き"
             : draft.kind === "Pleat"
@@ -1280,7 +1286,7 @@ function NamedTechniqueDraftContent({ draft }: { draft: TechniqueDraft }) {
       </div>
       {openSide && (
         <div className="button-row">
-          <span>開く側:</span>
+          <span className="row-label">開く側:</span>
           <label>
             <input
               type="radio"
@@ -1385,7 +1391,7 @@ function PaperActionEntrances({ showPull = true }: { showPull?: boolean }) {
 
   return (
     <div className="paper-action-entrances" aria-label="紙の形を変える">
-      <span className="paper-action-entrances-title">紙の形を変える</span>
+      <span className="paper-action-entrances-title row-label">紙の形を変える</span>
       {showPull && (
         <button
           type="button"

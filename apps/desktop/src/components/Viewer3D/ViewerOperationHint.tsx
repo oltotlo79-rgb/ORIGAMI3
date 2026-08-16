@@ -1,5 +1,15 @@
-// 3Dビューへ重ねる操作の吹き出し。現在モードとマウス割り当てを常時見せ、
-// 詳細だけを折りたためるようにする(UI-009 / UI-012)。
+// 3Dビューへ重ねる操作の吹き出し(UI-009 / UI-012)。
+//
+// 札そのものをたためる。たたむと「道具の絵・モード名・いまできること1行・開閉ボタン」の
+// 横1行だけになり、3D区画をほとんど取らない。開くと今までどおり、大きな見出しと
+// マウス操作の割り当て3つが出る。
+//
+// たたんだままでも「いまのモード」は名前で分かるようにしてある(§8「現在の操作状態が
+// 画面から分かる」)。開閉の状態は viewerHintExpanded に覚える。これは端末ごとの
+// 画面の好み(localStorage)で、作品ファイルにも3D状態にも入らないので
+// 「3D状態は保存しない」の決まりには触れない。
+//
+// 常設の区画も設定項目も増やさない。開閉は札の中のボタン1つだけで完結する。
 
 import { useAppStore, type ToolId } from "../../store/appStore";
 import { SELECTABLE_3D_EDGE_TARGETS } from "../../lib/viewerHint";
@@ -125,16 +135,27 @@ export function ViewerOperationHint({ hint, blocked, aligning = false }: Props) 
       aria-label="3Dビューの操作ヒント"
       data-floating-ui="viewer-operation-hint"
     >
-      <div className="viewer-operation-heading">
-        <span className="viewer-mode-icon">
-          <ToolIcon tool={activeTool} />
-        </span>
-        <span className="viewer-mode-copy">
-          <small>いまのモード</small>
-          <strong>{MODE_LABEL[activeTool]}</strong>
-        </span>
-      </div>
+      {/* 開いた間だけ出す大きな見出し。たたんだときは同じ絵と名前を下の1行へ入れる。 */}
+      {expanded && (
+        <div className="viewer-operation-heading">
+          <span className="viewer-mode-icon">
+            <ToolIcon tool={activeTool} />
+          </span>
+          <span className="viewer-mode-copy">
+            <small>いまのモード</small>
+            <strong>{MODE_LABEL[activeTool]}</strong>
+          </span>
+        </div>
+      )}
       <div className="viewer-current-row">
+        {!expanded && (
+          <>
+            <span className="viewer-mode-icon compact">
+              <ToolIcon tool={activeTool} />
+            </span>
+            <strong className="viewer-mode-name">{MODE_LABEL[activeTool]}</strong>
+          </>
+        )}
         <p
           className="viewer-current-action operation-summary-line"
           role="status"
@@ -147,7 +168,11 @@ export function ViewerOperationHint({ hint, blocked, aligning = false }: Props) 
           className="viewer-hint-toggle operation-detail-toggle"
           aria-label={expanded ? "詳しい3D操作方法を折りたたむ" : "詳しい3D操作方法を開く"}
           aria-expanded={expanded}
-          data-tooltip={expanded ? "マウス操作の説明を折りたたみます" : "マウス操作の説明を開きます"}
+          data-tooltip={
+            expanded
+              ? "案内をたたんで、3Dの紙を広く見ます"
+              : "モードの説明とマウス操作の割り当てを開きます"
+          }
           onClick={toggle}
         >
           <span className="operation-detail-label">詳しい3D操作方法</span>

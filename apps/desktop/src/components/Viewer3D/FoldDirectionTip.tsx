@@ -30,7 +30,7 @@ export function FoldDirectionTip() {
     >
       <strong className="paper-action-tip-title">この折り線で折る</strong>
       <div className="paper-action-tip-buttons fold-direction-tip-buttons">
-        <span>向き</span>
+        <span className="row-label">向き</span>
         <button
           type="button"
           aria-pressed={draft.direction === "Up"}
@@ -51,7 +51,7 @@ export function FoldDirectionTip() {
         </button>
       </div>
       <div className="paper-action-tip-buttons fold-direction-tip-buttons">
-        <span>動かす側</span>
+        <span className="row-label">動かす側</span>
         <button
           type="button"
           aria-pressed={draft.movingSide === "right"}
