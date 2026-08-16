@@ -2214,6 +2214,8 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   animation: badge-pop var(--t-entrance) both;
   /* 狭い3D区画では操作案内と重なるため、重要な状態を必ず手前へ出す。 */
   z-index: 6;
+  /* 見せるだけの札で押す場所が無いため、下の紙・線・点のクリックを通す。 */
+  pointer-events: none;
 }
 
 .status-badge.error {
@@ -2291,6 +2293,10 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   box-shadow: var(--shadow-viewer-hint);
   backdrop-filter: var(--floating-backdrop-filter);
   z-index: 4;
+  /* 札は読むためだけのものなので、下の紙・線・点のクリックをそのまま通す。
+     押せるのは中の開閉ボタン(.viewer-hint-toggle)だけで、そこにpointer-events: autoを戻す。
+     展開図側の同じ札(.cp-operation-hint / .cp-help-toggle)と同じやり方にそろえる。 */
+  pointer-events: none;
   transition:
     width var(--t-base),
     background var(--t-fast),
@@ -2381,6 +2387,8 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   white-space: nowrap;
   cursor: pointer;
   box-shadow: var(--shadow-viewer-toggle);
+  /* 札全体はクリックを通すので、押せるこのボタンだけ受け取りへ戻す。 */
+  pointer-events: auto;
 }
 
 .viewer-current-row {
