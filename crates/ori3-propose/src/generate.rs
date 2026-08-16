@@ -23,9 +23,10 @@ use ori3_cp::{insert_segment, local_violations, validate};
 use ori3_model::{CreasePattern, Edge, EdgeKind, Vertex};
 use serde::{Deserialize, Serialize};
 
-use crate::packing::Packing;
+use crate::packing::{LeafCircle, Packing};
 use crate::skeleton::Skeleton;
-use crate::triangulate::{dedup, index_of, triangulate};
+use crate::trace::{FoldPlanTrace, MoleculeCorner, MoleculeShape};
+use crate::triangulate::{MERGE_TOL, dedup, index_of, triangles_at, triangulate};
 
 /// 紙の縁に乗っているとみなす許容誤差。
 const ON_EDGE_TOL: f64 = 1e-9;
@@ -86,6 +87,32 @@ fn foldability_warning(violations: usize) -> String {
     )
 }
 
+/// 先端の材料になる、展開図の上の点(作業9)。
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LeafVertex {
+    /// 展開図の頂点ID。
+    pub id: u32,
+    /// その頂点の座標。
+    pub pos: [f64; 2],
+    /// 円の中心とのずれ。同じ点とみなせるのは [`MERGE_TOL`](crate::triangulate::MERGE_TOL)
+    /// (1e-7)未満のときで、それより離れた点はここに入らない。
+    pub gap: f64,
+}
+
+/// 先端(葉)1本ぶんの、置き場所から展開図までの対応(作業9 / PRO-007)。
+///
+/// 後から幾何の当てはめで推測しなくて済むよう、生成したその場で残す。
+/// 先端ID → 円 → 展開図の材料点 → その先端を囲む分子、が1本につながる。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LeafSite {
+    /// 配置で決まった、この先端の円(先端IDと円の番号もここに入っている)。
+    pub circle: LeafCircle,
+    /// 展開図でこの先端の材料になる点。折り線を1本も引けなかったときだけ `None`。
+    pub vertex: Option<LeafVertex>,
+    /// この先端のまわりを埋めた分子の番号(軸多角形の三角形。昇順)。
+    pub molecules: Vec<usize>,
+}
+
 /// 展開図の自動提案の結果。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProposalResult {
@@ -94,6 +121,35 @@ pub struct ProposalResult {
     pub violations: usize,
     /// 利用者へ見せる日本語の注意書き。
     pub warnings: Vec<String>,
+    /// 先端と展開図の対応(作業9)。骨格の葉1本につきちょうど1件、
+    /// `packing.centers` と同じ並びで入る。
+    #[serde(default)]
+    pub sites: Vec<LeafSite>,
+    /// 折り方の計画に使う追跡情報(作業17)。分子1つにつき1件、軸多角形の
+    /// 三角形と同じ番号で入る。折り順そのものはここには入っていない。
+    #[serde(default)]
+    pub trace: FoldPlanTrace,
+}
+
+/// 円の中心にいちばん近い展開図の頂点を、その先端の材料点として返す。
+///
+/// [`MERGE_TOL`](crate::triangulate::MERGE_TOL)(1e-7)より離れた点しか無ければ
+/// `None`。`insert_segment` は線分の端点を1e-9以内の既存頂点へ吸着させるので、
+/// 円の中心が軸多角形の頂点として使われていれば、ずれは1e-9以内に収まる。
+/// 走査は頂点の並び順で、同じずれなら先に現れた方を採るため結果は決定的。
+fn material_vertex(cp: &CreasePattern, center: [f64; 2]) -> Option<LeafVertex> {
+    let mut best: Option<LeafVertex> = None;
+    for v in &cp.vertices {
+        let gap = (v.pos[0] - center[0]).hypot(v.pos[1] - center[1]);
+        if gap < MERGE_TOL && best.is_none_or(|b| gap < b.gap) {
+            best = Some(LeafVertex {
+                id: v.id,
+                pos: v.pos,
+                gap,
+            });
+        }
+    }
+    best
 }
 
 /// 輪郭4辺だけが入ったCPを作る(左下(0,0)起点の反時計回り)。
@@ -122,7 +178,7 @@ fn border_cp(w: f64, h: f64) -> CreasePattern {
 }
 
 /// 線分が紙の縁と重なっているか(重なる線分は既存のBorder辺なので引き直さない)。
-fn on_paper_edge(p: [f64; 2], q: [f64; 2], w: f64, h: f64) -> bool {
+pub(crate) fn on_paper_edge(p: [f64; 2], q: [f64; 2], w: f64, h: f64) -> bool {
     let same = |a: f64, b: f64, v: f64| (a - v).abs() < ON_EDGE_TOL && (b - v).abs() < ON_EDGE_TOL;
     same(p[0], q[0], 0.0) || same(p[0], q[0], w) || same(p[1], q[1], 0.0) || same(p[1], q[1], h)
 }
@@ -139,7 +195,16 @@ fn foot(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
 }
 
 /// 三角形をウサギ耳分子で埋める。`tri[i]` の対辺の長さを重みにすると内心が出る。
-fn rabbit_ear(cp: &mut CreasePattern, tri: [[f64; 2]; 3], w: f64, h: f64) {
+///
+/// 引いた折り線の形(内心・ちょうつがい線の行き先・軸線を引いた辺)を返す。
+/// 返した値は [`crate::trace`] がそのまま追跡情報にする。折り線を引けなかった
+/// (潰れた三角形・非有限な座標)ときは `None`。
+fn rabbit_ear(
+    cp: &mut CreasePattern,
+    tri: [[f64; 2]; 3],
+    w: f64,
+    h: f64,
+) -> Option<MoleculeShape> {
     let opp = |i: usize| {
         let (a, b) = (tri[(i + 1) % 3], tri[(i + 2) % 3]);
         (a[0] - b[0]).hypot(a[1] - b[1])
@@ -147,17 +212,19 @@ fn rabbit_ear(cp: &mut CreasePattern, tri: [[f64; 2]; 3], w: f64, h: f64) {
     let len = [opp(0), opp(1), opp(2)];
     let sum = len[0] + len[1] + len[2];
     if sum <= 0.0 || !sum.is_finite() {
-        return; // 潰れた三角形・非有限な座標
+        return None; // 潰れた三角形・非有限な座標
     }
     let incenter = [
         (len[0] * tri[0][0] + len[1] * tri[1][0] + len[2] * tri[2][0]) / sum,
         (len[0] * tri[0][1] + len[1] * tri[1][1] + len[2] * tri[2][1]) / sum,
     ];
     // 軸線(谷)。紙の縁と重なるものは既にBorder辺があるので引かない。
+    let mut axial_drawn = [false; 3];
     for i in 0..3 {
         let (p, q) = (tri[i], tri[(i + 1) % 3]);
         if !on_paper_edge(p, q, w, h) {
             insert_segment(cp, p, q, EdgeKind::Valley);
+            axial_drawn[i] = true;
         }
     }
     // 稜線(山): 各頂点から内心へ。二等分線に一致する。
@@ -181,13 +248,26 @@ fn rabbit_ear(cp: &mut CreasePattern, tri: [[f64; 2]; 3], w: f64, h: f64) {
         .unwrap_or(0);
     let f = foot(incenter, tri[(pick + 1) % 3], tri[(pick + 2) % 3]);
     insert_segment(cp, incenter, f, EdgeKind::Valley);
+    Some(MoleculeShape {
+        incenter,
+        // 辺sは tri[s] → tri[s+1]。垂線の行き先は tri[pick+1] → tri[pick+2] の辺。
+        hinge_side: (pick + 1) % 3,
+        foot: f,
+        axial_drawn,
+    })
 }
 
 /// 多角形を簡易分子で埋める。四角形以上は先頭の頂点から扇状に三角形へ割る。
-fn fill_polygon(cp: &mut CreasePattern, poly: &[[f64; 2]], w: f64, h: f64) {
-    for i in 1..poly.len().saturating_sub(1) {
-        rabbit_ear(cp, [poly[0], poly[i], poly[i + 1]], w, h);
-    }
+/// 割った三角形1つにつき1件、分子の形を返す。
+fn fill_polygon(
+    cp: &mut CreasePattern,
+    poly: &[[f64; 2]],
+    w: f64,
+    h: f64,
+) -> Vec<Option<MoleculeShape>> {
+    (1..poly.len().saturating_sub(1))
+        .map(|i| rabbit_ear(cp, [poly[0], poly[i], poly[i + 1]], w, h))
+        .collect()
 }
 
 /// 充填結果から展開図を組み立てる(要件§8-3・§8-4)。
@@ -225,13 +305,14 @@ pub fn generate(
     }
 
     // 軸多角形の頂点候補: 円中心を先に、紙の四隅を後に置いて重複をまとめる。
-    let mut pts: Vec<[f64; 2]> = packing.centers.iter().map(|&(_, c)| c).collect();
-    pts.extend([
+    let paper_corners = [
         [0.0, 0.0],
         [paper_w, 0.0],
         [paper_w, paper_h],
         [0.0, paper_h],
-    ]);
+    ];
+    let mut pts: Vec<[f64; 2]> = packing.centers.iter().map(|&(_, c)| c).collect();
+    pts.extend(paper_corners);
     let pts = dedup(&pts);
     let tris = triangulate(&pts);
     if tris.is_empty() {
@@ -239,13 +320,16 @@ pub fn generate(
     }
 
     let mut cp = border_cp(paper_w, paper_h);
+    let mut shapes: Vec<Option<MoleculeShape>> = Vec::with_capacity(tris.len());
     for t in &tris {
-        fill_polygon(
+        // 三角形1つは分子1つになるので、返るのも1件。番号は三角形の番号と一致する。
+        let made = fill_polygon(
             &mut cp,
             &[pts[t[0]], pts[t[1]], pts[t[2]]],
             paper_w,
             paper_h,
         );
+        shapes.push(made.into_iter().next().flatten());
     }
 
     // 三角形の頂点として使われなかった円中心があれば知らせる。
@@ -264,10 +348,51 @@ pub fn generate(
     for _ in validate(&cp) {
         warnings.push(INVALID_CREASES_WARNING.to_string());
     }
+
+    // 先端と展開図の対応(作業9)。出来上がった展開図を読むだけで、展開図には
+    // 手を入れない。どの先端がどの点・どの分子になったかをここで残しておくと、
+    // 後から幾何を当てはめて推測する必要がなくなる。
+    let sites: Vec<LeafSite> = packing
+        .leaf_circles(skeleton)
+        .into_iter()
+        .map(|circle| LeafSite {
+            vertex: material_vertex(&cp, circle.center),
+            molecules: index_of(&pts, circle.center)
+                .map(|point| triangles_at(&tris, point))
+                .unwrap_or_default(),
+            circle,
+        })
+        .collect();
+
+    // 折り方の計画に使う追跡情報(作業17)。折り線を引いたときに決まっていた値
+    // (分子の角の正体・内心・ちょうつがい線の行き先)をそのまま書き留めるだけで、
+    // 展開図には手を入れない。
+    let mut corner_of = vec![MoleculeCorner::Unknown; pts.len()];
+    for (circle_index, &(leaf_id, center)) in packing.centers.iter().enumerate() {
+        if let Some(i) = index_of(&pts, center)
+            && corner_of[i] == MoleculeCorner::Unknown
+        {
+            corner_of[i] = MoleculeCorner::Leaf {
+                leaf_id,
+                circle_index,
+            };
+        }
+    }
+    for (corner_index, corner) in paper_corners.iter().enumerate() {
+        if let Some(i) = index_of(&pts, *corner)
+            && corner_of[i] == MoleculeCorner::Unknown
+        {
+            corner_of[i] = MoleculeCorner::PaperCorner { corner_index };
+        }
+    }
+    let trace = crate::trace::build(skeleton, &pts, &corner_of, &tris, &shapes);
+
     Ok(ProposalResult {
         cp,
         violations,
         warnings,
+        sites,
+        trace,
     })
 }
 
@@ -364,6 +489,7 @@ mod tests {
             scale: 1.0,
             centers: vec![(41, [-0.1, 0.5]), (7, [0.75, 1.2])],
             violation: 0.1,
+            circles: Vec::new(),
         };
         let result = generate(&skeleton, &packing, 1.0, 1.0).unwrap();
         assert!(result.warnings.contains(&position_outside_paper_warning("頭")));
@@ -382,6 +508,7 @@ mod tests {
             scale: 1.0,
             centers: vec![(41, [0.0, 0.0]), (7, [1.0, 1.0])],
             violation: 0.0,
+            circles: Vec::new(),
         };
         let result = generate(&skeleton, &packing, 1.0, 1.0).unwrap();
         assert!(

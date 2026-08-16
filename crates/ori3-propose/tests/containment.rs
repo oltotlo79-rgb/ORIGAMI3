@@ -335,6 +335,7 @@ fn pack_full(
             scale,
             centers: vec![(p.ids[0], [paper_w * 0.5, paper_h * 0.5])],
             violation: 0.0,
+            circles: Vec::new(),
         }];
     }
     let mut out: Vec<Packing> = Vec::new();
@@ -346,6 +347,7 @@ fn pack_full(
             scale,
             centers: p.ids.iter().copied().zip(centers).collect(),
             violation: 0.0,
+            circles: Vec::new(),
         };
         out.push(Packing {
             violation: violation_full(skeleton, &packing, paper_w, paper_h),
@@ -381,6 +383,7 @@ fn bird_base_measured_flaps_exactly_saturate_center_containment() {
             (4, [0.0, 1.0]), // 広いフラップ(羽)
         ],
         violation: 0.0,
+        circles: Vec::new(),
     };
 
     // 案A: 違反0。しかも6対のうち5対がぴったり(=これ以上大きくできない)。
@@ -422,6 +425,7 @@ fn frog_base_measured_flaps_are_equal_whether_the_circle_overflows_or_not() {
             (5, [0.5, 0.5]),
         ],
         violation: 0.0,
+        circles: Vec::new(),
     };
     assert_eq!(violation_center(&skeleton, &packing, 1.0, 1.0), 0.0);
 
@@ -451,6 +455,7 @@ fn frog_base_measured_flaps_are_equal_whether_the_circle_overflows_or_not() {
             (5, [0.5, 0.5]),
         ],
         violation: 0.0,
+        circles: Vec::new(),
     };
     assert!(
         violation_full(&skeleton, &inner, 1.0, 1.0) <= 1e-15,

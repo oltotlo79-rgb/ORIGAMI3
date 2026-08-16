@@ -244,6 +244,35 @@ impl Skeleton {
             + self.leaf_radius(b)
     }
 
+    /// 2つの葉の間の経路にある骨格の辺(作業17)。
+    ///
+    /// 辺は「その節点と親をつなぐ辺」なので、節点IDでそのまま名指しできる。
+    /// 返す並びは節点IDの昇順で重複はない。同じ葉、または木としてつながって
+    /// いない場合は空を返す。
+    ///
+    /// 完成形では、この経路のぶんだけ紙が軸を占める。2つの分子が作る経路に
+    /// 共通の辺があれば、その2つは完成形で重なる。
+    pub fn path_edges(&self, a: u32, b: u32) -> Vec<u32> {
+        if a == b {
+            return Vec::new();
+        }
+        let up_a = self.ancestors(a);
+        let up_b = self.ancestors(b);
+        let Some(lca) = up_a.iter().find(|x| up_b.contains(x)).copied() else {
+            return Vec::new();
+        };
+        // 共通祖先そのものは経路に含まれないので、そこで打ち切る。
+        let mut out: Vec<u32> = up_a
+            .iter()
+            .take_while(|x| **x != lca)
+            .chain(up_b.iter().take_while(|x| **x != lca))
+            .copied()
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
     fn len_of(&self, id: u32) -> f64 {
         self.node(id).map(|n| n.length).unwrap_or(0.0)
     }

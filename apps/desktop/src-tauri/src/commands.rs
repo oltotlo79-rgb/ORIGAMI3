@@ -25,7 +25,7 @@ use crate::store::{
 };
 use ori3_export::{CpSvgOptions, cp_png, cp_svg, diagram_pdf, diagram_svg_pages};
 use ori3_model::{CreasePattern, Driver, EdgeId, EditOp, FaceId, Frame3D, Paper, SeqOp, VertexId};
-use ori3_propose::{Skeleton, generate, pack};
+use ori3_propose::{LeafSite, Skeleton, generate, pack};
 use ori3_soft::{SoftMesh, SoftSettings};
 
 /// 複数ファイル書き出し用の同名一時ファイルを区別する連番。
@@ -672,6 +672,10 @@ pub struct ProposalCandidate {
     pub scale: f64,
     pub violations: usize,
     pub warnings: Vec<String>,
+    /// 骨格の先端1本ずつが、この展開図のどの点・どの分子になったかの対応
+    /// (作業9 / PRO-007)。候補ごとに配置が違うので候補ごとに持つ。
+    /// 先端1本につきちょうど1件入る。
+    pub sites: Vec<LeafSite>,
 }
 
 /// 骨格から展開図の候補を作る(PRO-001/PRO-005、Task 3-4)。
@@ -703,6 +707,7 @@ pub fn proposal_generate(
                     scale: p.scale,
                     violations: r.violations,
                     warnings: r.warnings,
+                    sites: r.sites,
                 }),
                 Err(e) => last_err = Some(e),
             }
@@ -905,6 +910,44 @@ mod tests {
             // 輪郭4辺だけ、ということはない(折り線が引かれている)
             assert!(c.cp.edges.len() > 4, "辺数={}", c.cp.edges.len());
         }
+    }
+
+    /// 合格条件4: 画面へ渡る候補に、先端と展開図の対応が欠けずに載っていること。
+    /// 先端1〜12本の12通りで、どの候補も先端1本につきちょうど1件を持ち、
+    /// 材料点の欠損が0件であることを見る(作業9 / PRO-007)。
+    #[test]
+    fn proposal_candidates_carry_one_site_per_limb_without_gaps() {
+        use std::collections::BTreeSet;
+        let mut checked_shapes = 0usize;
+        let mut checked_candidates = 0usize;
+        for leaves in 1..=12u32 {
+            let skeleton = star(leaves);
+            let expected: BTreeSet<u32> = skeleton.leaves().into_iter().collect();
+            let out = proposal_generate(skeleton, A4ISH, 2026).expect("候補が返るはず");
+            assert!(!out.is_empty(), "先端{leaves}本で候補が0件");
+            for c in &out {
+                let got: BTreeSet<u32> = c.sites.iter().map(|s| s.circle.leaf_id).collect();
+                assert_eq!(c.sites.len(), leaves as usize, "先端{leaves}本で対応の件数が違う");
+                assert_eq!(got, expected, "先端{leaves}本で対応する先端の顔ぶれが違う");
+                for site in &c.sites {
+                    let v = site
+                        .vertex
+                        .unwrap_or_else(|| panic!("先端{leaves}本: 材料点が欠けている"));
+                    assert!(
+                        c.cp.vertices.iter().any(|x| x.id == v.id),
+                        "材料点{}がこの展開図に無い",
+                        v.id
+                    );
+                    assert!(!site.molecules.is_empty(), "囲む分子が0個");
+                }
+                checked_candidates += 1;
+            }
+            checked_shapes += 1;
+        }
+        assert_eq!(checked_shapes, 12, "12通りすべてを見ていない");
+        // 実測: 先端1〜12本の12通りで候補はのべ45件(先端1本のときだけ候補1件、
+        // 残り11通りは上限の4件)。下限12件は「1通りにつき最低1候補」の意味。
+        assert!(checked_candidates >= 12, "候補が{checked_candidates}件しかない");
     }
 
     #[test]

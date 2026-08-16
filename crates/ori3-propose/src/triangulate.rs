@@ -36,6 +36,18 @@ pub fn index_of(points: &[[f64; 2]], p: [f64; 2]) -> Option<usize> {
         .position(|q| (q[0] - p[0]).hypot(q[1] - p[1]) <= MERGE_TOL)
 }
 
+/// `point` を頂点に持つ三角形の番号を昇順で返す(作業9)。
+///
+/// 三角形1つが簡易分子1つになるので、これが「その先端のまわりを埋めた分子」
+/// の一覧になる。`tris` の並びは入力に対して決定的なので、返す番号も決定的。
+pub fn triangles_at(tris: &[[usize; 3]], point: usize) -> Vec<usize> {
+    tris.iter()
+        .enumerate()
+        .filter(|(_, t)| t.contains(&point))
+        .map(|(i, _)| i)
+        .collect()
+}
+
 /// o→a と o→b の外積(正なら反時計回り)。
 fn cross(o: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])

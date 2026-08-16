@@ -444,6 +444,46 @@ export interface Skeleton {
   nodes: SkeletonNode[];
 }
 
+/**
+ * 先端1本ぶんの紙の上の円(ori3-propose::LeafCircle)。
+ * どの先端がどの円になったかを番号で名指しできるようにしたもの。
+ */
+export interface LeafCircle {
+  /** この円を使う先端(骨格の葉)のID */
+  leaf_id: number;
+  /** 円の番号。同じ候補の中で0から順に振られる */
+  circle_index: number;
+  /** 紙の上での円の中心 */
+  center: Vec2;
+  /** 紙の上での円の半径 */
+  radius: number;
+}
+
+/**
+ * 先端の材料になる、展開図の上の点(ori3-propose::LeafVertex)。
+ */
+export interface LeafVertex {
+  /** 展開図の頂点ID */
+  id: number;
+  /** その頂点の座標 */
+  pos: Vec2;
+  /** 円の中心とのずれ。0に近いほど置き場所どおり */
+  gap: number;
+}
+
+/**
+ * 先端1本ぶんの、置き場所から展開図までの対応(ori3-propose::LeafSite)。
+ * 先端 → 円 → 展開図の材料点 → その先端を囲む分子、がひとつながりになる。
+ */
+export interface LeafSite {
+  /** 配置で決まった、この先端の円 */
+  circle: LeafCircle;
+  /** 展開図でこの先端の材料になる点。折り線を1本も引けなかったときだけnull */
+  vertex: LeafVertex | null;
+  /** この先端のまわりを埋めた分子の番号(昇順) */
+  molecules: number[];
+}
+
 /** proposal_generate が返す展開図の候補1つ分(commands.rs::ProposalCandidate) */
 export interface ProposalCandidate {
   cp: CreasePattern;
@@ -452,6 +492,12 @@ export interface ProposalCandidate {
   /** 平坦に折りにくい頂点の数(0が理想。0でなくても使える) */
   violations: number;
   warnings: string[];
+  /**
+   * 先端1本ずつが、この展開図のどの点・どの分子になったかの対応。
+   * 先端1本につきちょうど1件入る。この欄を読まない今までの画面の処理は
+   * そのまま動くよう、省略できる形にしてある。
+   */
+  sites?: LeafSite[];
 }
 
 /** recovery_check の戻り値。前回の異常終了で残った自動保存の情報(SYS-003) */

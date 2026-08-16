@@ -24,12 +24,62 @@ const BISECT_STEPS: usize = 28;
 const RELAX_SWEEPS: usize = 48;
 const SHAKE_ROUNDS: usize = 3;
 
+/// 先端(葉)1本ぶんの円の記録(作業9)。
+///
+/// どの先端がどの円になったかを、番号で名指しできる形で残すための型。
+/// 展開図側の対応(`crate::generate::LeafSite`)はこの型をそのまま持つので、
+/// 先端 → 円 → 展開図の点、を推測なしにたどれる。
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LeafCircle {
+    /// この円を使う先端(葉)のID。
+    pub leaf_id: u32,
+    /// 円の番号。`Packing::circles` と `Packing::centers` の並び順と同じ。
+    pub circle_index: usize,
+    /// 紙の上での円の中心。
+    pub center: [f64; 2],
+    /// 紙の上での円の半径(骨格の半径に縮尺を掛けた実寸)。
+    pub radius: f64,
+}
+
 /// 充填の結果。`violation` は制約違反の最大量で、0に近いほど良い。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Packing {
     pub scale: f64,
     pub centers: Vec<(u32, [f64; 2])>,
     pub violation: f64,
+    /// 先端と円の対応(作業9)。`centers` と同じ並びの同じ円を、番号と半径を
+    /// 付けて名指しできる形にしたもの。`centers` は今までの呼び出し側が
+    /// そのまま使えるよう形を変えずに残してある。
+    ///
+    /// 手で組み立てた `Packing` や、この欄が無かったころの保存から読んだ
+    /// `Packing` では空になる。空のときは [`Packing::leaf_circles`] が
+    /// `centers` と骨格から同じ内容を組み立てるので、使う側は空かどうかを
+    /// 気にしなくてよい。
+    #[serde(default)]
+    pub circles: Vec<LeafCircle>,
+}
+
+impl Packing {
+    /// 先端と円の対応を取り出す(作業9)。
+    ///
+    /// `circles` が入っていればそれを返し、空(手で組み立てた・古い保存)なら
+    /// `centers` と骨格から同じ内容を組み立てる。どちらの道でも、円の番号は
+    /// `centers` の並び順と一致する。
+    pub fn leaf_circles(&self, skeleton: &Skeleton) -> Vec<LeafCircle> {
+        if self.circles.len() == self.centers.len() {
+            return self.circles.clone();
+        }
+        self.centers
+            .iter()
+            .enumerate()
+            .map(|(circle_index, &(leaf_id, center))| LeafCircle {
+                leaf_id,
+                circle_index,
+                center,
+                radius: self.scale * skeleton.leaf_radius(leaf_id),
+            })
+            .collect()
+    }
 }
 
 /// 最適化しやすい形にほぐした問題。
@@ -90,6 +140,20 @@ impl Problem {
                 .max(p[1] - self.h);
         }
         v.max(0.0)
+    }
+
+    /// 先端と円の対応を、この問題の葉の並び順(=`ids`)で組み立てる(作業9)。
+    fn circles(&self, scale: f64, centers: &[[f64; 2]]) -> Vec<LeafCircle> {
+        self.ids
+            .iter()
+            .enumerate()
+            .map(|(circle_index, &leaf_id)| LeafCircle {
+                leaf_id,
+                circle_index,
+                center: centers[circle_index],
+                radius: scale * self.radii[circle_index],
+            })
+            .collect()
     }
 
     fn clamp(&self, p: &mut [f64; 2]) {
@@ -272,11 +336,12 @@ pub fn pack(
         } else {
             1.0
         };
-        let center = (p.ids[0], [paper_w * 0.5, paper_h * 0.5]);
+        let position = [paper_w * 0.5, paper_h * 0.5];
         return vec![Packing {
             scale,
-            centers: vec![center],
+            centers: vec![(p.ids[0], position)],
             violation: 0.0,
+            circles: p.circles(scale, &[position]),
         }];
     }
     let mut out: Vec<Packing> = Vec::new();
@@ -286,6 +351,7 @@ pub fn pack(
         let (scale, centers) = p.solve_one(start, &mut rng);
         out.push(Packing {
             violation: p.violation_of(scale, &centers),
+            circles: p.circles(scale, &centers),
             centers: p.ids.iter().copied().zip(centers).collect(),
             scale,
         });

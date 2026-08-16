@@ -191,6 +191,7 @@ fn center_outside_paper_still_warns_a_real_problem() {
         scale: 1.0,
         centers: vec![(leaf, [-0.2, 0.5])],
         violation: 0.2,
+        circles: Vec::new(),
     };
     let r = generate(&skeleton, &packing, 1.0, 1.0).unwrap();
     assert!(

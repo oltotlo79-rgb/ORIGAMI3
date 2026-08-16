@@ -137,6 +137,7 @@ fn twelve_leaf_center_containment_lower_bound_is_feasible() {
         scale: LOWER_BOUND,
         centers: (1..=12).zip(centers).collect(),
         violation: 0.0,
+        circles: Vec::new(),
     };
 
     let violation = max_violation(&s, &packing, 1.0, 1.0);
