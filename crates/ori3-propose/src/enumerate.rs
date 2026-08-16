@@ -345,6 +345,23 @@ impl FoldSession {
         }
     }
 
+    /// 手を**1つだけ**、指定した細かさで確かめ直す。
+    ///
+    /// [`Self::verified_moves`] は候補を全部確かめるので、細かく見るほど重くなる。
+    /// 「ざっと見て順位を付け、選んだ手だけを細かく確かめ直す」という使い方が
+    /// できるように、1手だけを確かめる道を開けてある(作業22の探索が使う)。
+    ///
+    /// 見る条件は [`Self::verified_moves`] とまったく同じで、
+    /// 確かめられなければ [`None`] を返す。
+    #[must_use]
+    pub fn verify_move(&self, id: usize, scan: PoseScan) -> Option<VerifiedMove> {
+        let fold_line = self.fold_lines.iter().find(|l| l.id == id)?;
+        if fold_line.mask & !self.folded == 0 {
+            return None; // すべて折り終えている
+        }
+        self.try_fold(fold_line, scan).ok()
+    }
+
     /// 確かめた手を1つ進める。
     ///
     /// # Errors

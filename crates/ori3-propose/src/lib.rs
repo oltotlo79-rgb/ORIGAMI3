@@ -7,6 +7,7 @@ pub mod packing;
 pub mod plan;
 pub mod plan_generic;
 pub mod plan_history;
+pub mod search;
 pub mod skeleton;
 pub mod trace;
 pub mod triangulate;
@@ -26,6 +27,10 @@ pub use plan::{
 };
 pub use plan_generic::GenericPlanner;
 pub use plan_history::HistoryPlanner;
+pub use search::{
+    FLAP_RADIUS, FoldGoal, GapWeights, MIN_TIP_LENGTH, RankedMove, SCORE_QUANTUM, SearchBudget,
+    SearchOutcome, SearchStop, TipSite, search_to_finish,
+};
 pub use skeleton::{MAX_LEAVES, Skeleton, SkeletonNode, TIP_POS_MAX, TIP_POS_MIN, TipPos2d};
 pub use trace::{
     CreaseRole, CreaseTrace, FinishedPart, FoldPlanTrace, MoleculeCorner, MoleculePair,
