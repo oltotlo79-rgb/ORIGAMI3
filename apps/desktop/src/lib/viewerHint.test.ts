@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   DRAG_FOLD_HINT,
+  FOLD_DECIDE_PLACES,
   PULL_HINT,
   SELECTABLE_3D_EDGE_TARGETS,
+  SNAP_POINT_TARGETS,
   foldBlockReason,
   insertPositionHint,
   viewerHint,
@@ -59,6 +61,10 @@ describe("viewerHint", () => {
     expect(hint).toContain("Shift");
     expect(hint).toContain("Alt");
     expect(hint).toContain("Ctrl");
+    // ドラッグしにくい場所でも折り線を決められる2回クリックも案内する
+    expect(hint).toContain("Ctrl+クリック2回");
+    // 引いた折り線は3Dの札からも決められるので、下のパネルだけを案内しない
+    expect(hint).toContain(FOLD_DECIDE_PLACES);
   });
 
   it("折れないときは理由を添える(操作自体は消さない)", () => {
@@ -67,8 +73,31 @@ describe("viewerHint", () => {
     expect(hint).toContain("再生中");
   });
 
-  it("折り線を引いた後はパネルでの決め方を案内する", () => {
-    expect(viewerHint({ ...READY, hasFoldDraft: true })).toContain("折る");
+  it("折り線を引いた後は、3Dの札と下のパネルの両方で決められることを案内する", () => {
+    const hint = viewerHint({ ...READY, hasFoldDraft: true });
+    expect(hint).toContain("折る");
+    expect(hint).toContain(FOLD_DECIDE_PLACES);
+    expect(hint).toContain("向きと動かす側");
+    expect(hint).toContain("やめる");
+  });
+
+  it("折り方を決める場所の言い方は、どの案内でも同じ1つにそろえる", () => {
+    // 3Dの札と下のパネルは同じ内容で連動するので、案内ごとに言い換えない
+    expect(FOLD_DECIDE_PLACES).toBe("3D左下の札か下のパネル");
+    for (const hint of [
+      viewerHint(READY),
+      viewerHint({ ...READY, hasFoldDraft: true }),
+      viewerHint({
+        ...READY,
+        alignMode: "lineLine",
+        alignPickCount: 2,
+        alignSolutionCount: 1,
+      }),
+    ]) {
+      expect(hint).toContain(FOLD_DECIDE_PLACES);
+      // 「下のパネル」だけを指す古い言い方が残っていないこと
+      expect(hint.split("下のパネル")).toHaveLength(2);
+    }
   });
 
   it("技法では選ぶ→層→中心線の順に案内が変わる", () => {
@@ -178,13 +207,58 @@ describe("viewerHint", () => {
     );
   });
 
-  it("選択では3Dで選べる4種類だけを一意に列挙する", () => {
+  it("選択では3Dで選べる4種類だけを一意に列挙し、点も選べることを出す", () => {
     expect(SELECTABLE_3D_EDGE_TARGETS).toBe(
       "山折り線・谷折り線・補助線・紙の輪郭の辺",
     );
-    expect(viewerHint({ ...READY, tool: "select" })).toBe(
-      `3Dの紙を見回し、${SELECTABLE_3D_EDGE_TARGETS}を選べます`,
+    const hint = viewerHint({ ...READY, tool: "select" });
+    expect(hint).toBe(
+      `3Dの紙を見回し、点と${SELECTABLE_3D_EDGE_TARGETS}を選べます(点はCtrl+クリックで足す・外す、ドラッグで動かせます)`,
     );
+    // 4種類の列挙は1回だけ(言い換えや二重列挙をしない)
+    expect(hint.split(SELECTABLE_3D_EDGE_TARGETS)).toHaveLength(2);
+  });
+
+  it("山・谷・補助では、3Dの紙にも同じ線を引けることを線の名前つきで出す", () => {
+    for (const [tool, label] of [
+      ["mountain", "山折り線"],
+      ["valley", "谷折り線"],
+      ["aux", "補助線"],
+    ] as const) {
+      const hint = viewerHint({ ...READY, tool });
+      expect(hint.startsWith(`${label}:`), label).toBe(true);
+      expect(hint).toContain("3Dの紙も2回クリック");
+      expect(hint).toContain(SNAP_POINT_TARGETS);
+      expect(hint).toContain("Esc");
+    }
+  });
+
+  it("作図では、3Dの紙からも点や線を順に選べることを出す", () => {
+    const hint = viewerHint({ ...READY, tool: "construct" });
+    expect(hint).toContain("3Dの紙の上でも");
+    expect(hint).toContain("点や線");
+    expect(hint).toContain(SNAP_POINT_TARGETS);
+    expect(hint).toContain("Esc");
+  });
+
+  it("削除は3Dから線を消せないので、選べるものだけを案内する", () => {
+    const hint = viewerHint({ ...READY, tool: "delete" });
+    expect(hint).toBe(`3Dの紙を見回し、${SELECTABLE_3D_EDGE_TARGETS}を選べます`);
+    expect(hint).not.toContain("点");
+  });
+
+  it("点を指す道具の案内には、点のことが必ず書いてある", () => {
+    // 3Dの逆写像で点を指せる道具(選択・山・谷・補助・作図・折る)を数え漏らさない
+    for (const tool of [
+      "select",
+      "mountain",
+      "valley",
+      "aux",
+      "construct",
+    ] as const) {
+      const hint = viewerHint({ ...READY, tool });
+      expect(hint.includes("点") || hint.includes("クリック"), tool).toBe(true);
+    }
   });
 });
 

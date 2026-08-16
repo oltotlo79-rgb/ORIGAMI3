@@ -393,6 +393,146 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
     }
   });
 
+  it("3D立体表示から点を選べるようになった13通りの操作を既存章で説明する", () => {
+    // 3Dで点を指せるようになって使えるようになった操作を、章ごとに数え漏らさない。
+    // 番号は「3Dから使えるようになった13通り」に対応する。
+    const changes = [
+      {
+        name: "#1 選択-点を選ぶ / #2 点を動かす",
+        chapterId: "three-dimensional",
+        phrases: [
+          "3Dの紙にある点（紙の角、折り目の端、線どうしの交点）もクリックして選べます",
+          "2D展開図でも同じ点が選ばれた状態になります",
+          "立体に折った姿のままでも選べます",
+          "点をCtrl+クリックで選び足したり外したりできます",
+          "そのままドラッグすると点を動かせます",
+          "紙のふちにある点は動かせません",
+        ],
+      },
+      {
+        name: "#3〜#8 山・谷・補助の直線と曲線 / #10〜#13 作図",
+        chapterId: "crease-pattern",
+        phrases: [
+          "山・谷・補助のまっすぐな線、曲線、二等分・垂線・等分・角度線の作図は、3D立体表示の紙の上を押しても同じように引けます",
+          "立体に折った姿のままでも引けます",
+          "引いた線は2D展開図の同じ場所へ出ます",
+          "方眼への吸着と、既存線の延長・角の二等分へ向きをそろえる吸着は2D展開図だけの働きです",
+          "点や線は2D展開図と3D立体表示のどちらから押しても同じです",
+          "端点は3D立体表示の紙の上からもドラッグして動かせます",
+        ],
+      },
+      {
+        name: "#9 折る-2回のクリックで折り線",
+        chapterId: "fold",
+        phrases: [
+          "Ctrlを押しながら紙の上を2回押しても同じ折り線を指定できます",
+          "3D立体表示で押した点は展開図の同じ点なので",
+        ],
+      },
+      {
+        name: "2Dと3Dの対応表",
+        chapterId: "three-dimensional",
+        phrases: [
+          "点を使う操作をどちらの区画からできるか",
+          "折る前の折り線を2回のクリックで指定する",
+          "線を消す、囲んでまとめて選ぶ",
+          "2D展開図で行います",
+          "そこで手前に見えている紙の点が選ばれます",
+        ],
+      },
+      {
+        name: "画面の見かたへの書き添え",
+        chapterId: "workspace",
+        phrases: [
+          "紙の点や線を選んだり、線を引いたりもできます",
+          "3Dの紙にある点も押して選べます",
+        ],
+      },
+    ] as const;
+
+    expect(changes).toHaveLength(5);
+    for (const change of changes) {
+      const chapter = HELP_CHAPTERS.find((entry) => entry.id === change.chapterId);
+      expect(chapter, change.name).toBeDefined();
+      const text = helpChapterSearchText(chapter!);
+      for (const phrase of change.phrases) {
+        expect(text, `${change.name}: ${phrase}`).toContain(phrase);
+      }
+    }
+  });
+
+  it("3D立体表示だけで山折り・谷折りを指定して折れることを既存章で説明する", () => {
+    const changes = [
+      {
+        name: "3D左下の札の文言と押す順番",
+        chapterId: "fold",
+        phrases: [
+          "3D立体表示の左下に「この折り線で折る」という札が出ます",
+          "向き：手前へ折る(谷)",
+          "向き：向こうへ折る(山)",
+          "動かす側：こちら側 / 反対側",
+          "この折り線を捨てます",
+          "3D立体表示だけで折り終える",
+          "今選んでいる方が濃い色になる",
+          "動く側は3Dで黄色く光ります",
+        ],
+      },
+      {
+        name: "8種類すべてを3Dだけで折り終えられる",
+        chapterId: "fold",
+        phrases: [
+          "合わせ方を選んだあとは下のパネルに触れずに3D立体表示だけで折り終えられます",
+          "8種類のどれでも、点や線の指定は3D立体表示だけで済みます",
+        ],
+      },
+      {
+        name: "札と下のパネルが同じ内容で連動する",
+        chapterId: "fold",
+        phrases: [
+          "下のパネルにあるものと同じ言葉・同じ並びです",
+          "もう一方の表示も同じ状態に変わる",
+          "札に無いのは「対象の層」だけで",
+        ],
+      },
+      {
+        name: "選べるものの上ではカーソルが変わり視点が回らない",
+        chapterId: "fold",
+        phrases: [
+          "カーソルが指の形に変わります",
+          "押したあとに手が少し動いても選び直しになりません",
+          "選べるものが無い場所をドラッグしたときは、今までどおり視点が回ります",
+        ],
+      },
+      {
+        name: "第7章にも札とカーソルのことを書く",
+        chapterId: "three-dimensional",
+        phrases: [
+          "3Dの左下に「この折り線で折る」の札が出ます",
+          "カーソルが指の形に変わり、その場所では視点が回りません",
+          "押した時点で選択が決まる",
+        ],
+      },
+      {
+        name: "第2章の案内にも札を書き添える",
+        chapterId: "workspace",
+        phrases: [
+          "折る向きと動かす側をここで選んで「折る」まで進められ",
+          "折り線が決まると左下に札が出て、折る向きもここで決められます",
+        ],
+      },
+    ] as const;
+
+    expect(changes).toHaveLength(6);
+    for (const change of changes) {
+      const chapter = HELP_CHAPTERS.find((entry) => entry.id === change.chapterId);
+      expect(chapter, change.name).toBeDefined();
+      const text = helpChapterSearchText(chapter!);
+      for (const phrase of change.phrases) {
+        expect(text, `${change.name}: ${phrase}`).toContain(phrase);
+      }
+    }
+  });
+
   it("利用者向け文字列に指定された内部用語が0件である", () => {
     const internalTerms = [
       "骨格",

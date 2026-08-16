@@ -21,9 +21,16 @@ export interface FoldReadiness {
   stepCount: number;
 }
 
+/**
+ * 折り線が決まった後に、山折り/谷折りと動かす側を決められる場所。
+ * 3Dの左下に出る札と下のパネルは同じ言葉・同じ並びで、どちらで選んでも同じ状態になる。
+ * 案内ごとに「下のパネルだけ」と書いてしまわないための正本。
+ */
+export const FOLD_DECIDE_PLACES = "3D左下の札か下のパネル";
+
 /** つかんで折る操作の説明(修飾キーの意味は常に出す) */
 export const DRAG_FOLD_HINT =
-  "紙をつかんでドラッグすると折れます(Shift=重なった紙を全部、Alt=いちばん上の1枚だけ、Ctrl+ドラッグ=折り線を引いて下のパネルで決める)";
+  `紙をつかんでドラッグすると折れます(Shift=重なった紙を全部、Alt=いちばん上の1枚だけ、Ctrl+ドラッグかCtrl+クリック2回=折り線を引いて${FOLD_DECIDE_PLACES}で決める)`;
 
 /**
  * 今は折れない理由(折れるならnull)。
@@ -57,6 +64,19 @@ export const SELECTABLE_3D_EDGE_TARGETS =
 function withSelectable3dEdges(prompt: string): string {
   return `${prompt}(${SELECTABLE_3D_EDGE_TARGETS}を選べます)`;
 }
+
+/**
+ * 3Dでも2Dでも、クリックが吸い付く点。案内ごとの言い換えを防ぐ正本。
+ * 3Dの紙は平らな姿でも立体に折った姿でも、同じこの点を指せる。
+ */
+export const SNAP_POINT_TARGETS = "角・折り目の端・交点";
+
+/** 3Dの紙の上へ直接引ける線と、その呼び名(道具ごとの案内の正本) */
+const LINE_TOOL_LABEL: Partial<Record<ToolId, string>> = {
+  mountain: "山折り線",
+  valley: "谷折り線",
+  aux: "補助線",
+};
 
 /** ヒント1行を組み立てる材料 */
 export interface HintState extends FoldReadiness {
@@ -98,11 +118,11 @@ export interface HintState extends FoldReadiness {
 /** 合わせて折るときに、次に何を選べばよいかの案内(選ぶ順にそのまま並べる) */
 const ALIGN_PROMPTS: Record<AlignMode, string[]> = {
   throughTwoPoints: [
-    "折り目が通る1つ目の点をクリックしてください(角・折り目の端・交点に吸着します)",
+    `折り目が通る1つ目の点をクリックしてください(${SNAP_POINT_TARGETS}に吸着します)`,
     "折り目が通る2つ目の点をクリックしてください",
   ],
   pointPoint: [
-    "1つ目の点(動かす方)をクリックしてください(角・折り目の端・交点に吸着します)",
+    `1つ目の点(動かす方)をクリックしてください(${SNAP_POINT_TARGETS}に吸着します)`,
     "2つ目の点(合わせ先)をクリックしてください",
   ],
   lineLine: [
@@ -110,7 +130,7 @@ const ALIGN_PROMPTS: Record<AlignMode, string[]> = {
     withSelectable3dEdges("2つ目の線(合わせ先)をクリックしてください"),
   ],
   pointPerpendicularLine: [
-    "折り目が通る点をクリックしてください(角・折り目の端・交点に吸着します)",
+    `折り目が通る点をクリックしてください(${SNAP_POINT_TARGETS}に吸着します)`,
     withSelectable3dEdges("折り目を垂直にする線をクリックしてください"),
   ],
   pointLineThrough: [
@@ -151,7 +171,7 @@ export function alignHint(s: HintState): string {
     solutionCount >= 2
       ? `解が${solutionCount}つあります。下のパネルの「別の解」で切り替えられます。`
       : "";
-  return `折り線が決まりました。${other}下のパネルで山折り/谷折りを選んで「折る」を押してください${ALIGN_KEYS}`;
+  return `折り線が決まりました。${other}${FOLD_DECIDE_PLACES}で山折り/谷折りを選んで「折る」を押してください${ALIGN_KEYS}`;
 }
 
 /** ねじり折りの中央多角形を指すときの案内(UI-009: 今すべきことを常に出す) */
@@ -172,7 +192,7 @@ export function viewerHint(s: HintState): string {
     // 合わせモードの間は、選ぶ途中経過を常に出す(折り線は選択から決まる)
     if (s.alignMode) return `${alignHint(s)}${where}`;
     if (s.hasFoldDraft)
-      return `折り線を引きました。下のパネルで向きと動かす側を決めて「折る」を押してください(やり直すときは「やめる」)${where}`;
+      return `折り線を引きました。${FOLD_DECIDE_PLACES}で向きと動かす側を決めて「折る」を押してください(やり直すときは「やめる」)${where}`;
     return `${DRAG_FOLD_HINT}${where}`;
   }
   if (s.tool === "pull") {
@@ -220,5 +240,17 @@ export function viewerHint(s: HintState): string {
       ? `中心線を引きました。${reference}下のパネルで向きと開く側を決めて「適用」を押してください`
       : `中心線を引きました。${reference}下のパネルで向きを決めて「適用」を押してください`;
   }
+  // ここから下は、3Dの紙の上の点を指して使う道具(点は平らな姿でも立体の姿でも指せる)
+  if (s.tool === "select") {
+    return `3Dの紙を見回し、点と${SELECTABLE_3D_EDGE_TARGETS}を選べます(点はCtrl+クリックで足す・外す、ドラッグで動かせます)`;
+  }
+  const lineLabel = LINE_TOOL_LABEL[s.tool];
+  if (lineLabel) {
+    return `${lineLabel}: 3Dの紙も2回クリックで引けます(曲線は円弧3回・ベジェ4回。${SNAP_POINT_TARGETS}に吸着、Escでやめる)`;
+  }
+  if (s.tool === "construct") {
+    return `作図: 3Dの紙の上でも、必要な点や線を下の案内の順にクリックできます(${SNAP_POINT_TARGETS}に吸着、Escでやめる)`;
+  }
+  // 「削除」は3Dから線を消せないので、選べるものだけを案内する
   return `3Dの紙を見回し、${SELECTABLE_3D_EDGE_TARGETS}を選べます`;
 }
