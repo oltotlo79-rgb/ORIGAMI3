@@ -126,7 +126,7 @@ describe("3Dビューの操作ヒント", () => {
     expect(within(aligning).getByText("左クリック／ドラッグ")).toBeTruthy();
     expect(
       within(aligning).getByText(
-        `点・${SELECTABLE_3D_EDGE_TARGETS}を選ぶ／視点を回す`,
+        `点・${SELECTABLE_3D_EDGE_TARGETS}の上で選ぶ／他の場所で視点を回す`,
       ),
     ).toBeTruthy();
   });

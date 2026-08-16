@@ -78,6 +78,7 @@ vi.mock("../../ipc/client", () => ({
   documentOpen: vi.fn(),
   documentSave: vi.fn(),
   editApply: vi.fn(),
+  editApplyBatch: vi.fn(),
   editUndo: vi.fn(),
   editRedo: vi.fn(),
   sequenceApply: vi.fn(),
@@ -88,6 +89,8 @@ vi.mock("../../ipc/client", () => ({
 import * as ipc from "../../ipc/client";
 import { useAppStore } from "../../store/appStore";
 import { Viewer3D } from "./Viewer3D";
+import { PICK_TOLERANCE_PX, pickVertex } from "../CpEditor/interaction";
+import type { EditOp, Vec2 } from "../../lib/types";
 
 const initialStoreState = useAppStore.getState();
 
@@ -1208,7 +1211,7 @@ describe("Viewer3D(視点を戻す)", () => {
       { edgeId: 7, ownerFace: 1 },
     ]);
     expect(screen.getByRole("status").textContent).toBe(
-      "3Dの紙を見回し、山折り線・谷折り線・補助線・紙の輪郭の辺を選べます",
+      "3Dの紙を見回し、点と山折り線・谷折り線・補助線・紙の輪郭の辺を選べます(点はCtrl+クリックで足す・外す、ドラッグで動かせます)",
     );
     expect(screen.getByRole("status").textContent).not.toContain("水色");
     expect(canvas.getAttribute("data-tooltip")).toContain(
@@ -1234,5 +1237,404 @@ describe("Viewer3D(視点を戻す)", () => {
     expect(resetCamera).toHaveBeenCalledTimes(1);
     // 紙の大きさ(150×150mm → 正規化して1×1)で全体が入る位置を求める
     expect(resetCamera.mock.calls[0]).toEqual([1, 1]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3Dから展開図の点を指す(選ぶ・動かす・線を引く・作図する)
+// ---------------------------------------------------------------------------
+
+/** 4枚の面・13個の点を持つ展開図。面の内側に落ちている点も混ぜてある。 */
+const GRID_DOC: Document = {
+  schema_version: 1,
+  paper: { width_mm: 150, height_mm: 150 },
+  cp: {
+    vertices: [
+      { id: 0, pos: [0, 0] },
+      { id: 1, pos: [0.5, 0] },
+      { id: 2, pos: [1, 0] },
+      { id: 3, pos: [1, 0.5] },
+      { id: 4, pos: [1, 1] },
+      { id: 5, pos: [0.5, 1] },
+      { id: 6, pos: [0, 1] },
+      { id: 7, pos: [0, 0.5] },
+      { id: 8, pos: [0.5, 0.5] },
+      { id: 9, pos: [0.15, 0.25] },
+      { id: 10, pos: [0.35, 0.25] },
+      { id: 11, pos: [0.65, 0.75] },
+      { id: 12, pos: [0.85, 0.75] },
+    ],
+    edges: [
+      { id: 0, v0: 0, v1: 1, kind: "Border" },
+      { id: 1, v0: 1, v1: 2, kind: "Border" },
+      { id: 2, v0: 2, v1: 3, kind: "Border" },
+      { id: 3, v0: 3, v1: 4, kind: "Border" },
+      { id: 4, v0: 4, v1: 5, kind: "Border" },
+      { id: 5, v0: 5, v1: 6, kind: "Border" },
+      { id: 6, v0: 6, v1: 7, kind: "Border" },
+      { id: 7, v0: 7, v1: 0, kind: "Border" },
+      { id: 8, v0: 1, v1: 8, kind: "Valley" },
+      { id: 9, v0: 3, v1: 8, kind: "Valley" },
+      { id: 10, v0: 5, v1: 8, kind: "Valley" },
+      { id: 11, v0: 7, v1: 8, kind: "Valley" },
+      { id: 12, v0: 9, v1: 10, kind: "Aux" },
+      { id: 13, v0: 11, v1: 12, kind: "Aux" },
+    ],
+    next_vertex_id: 13,
+    next_edge_id: 14,
+  },
+  sequence: [],
+  display: { front_color: [230, 90, 60], back_color: [245, 245, 245], grid_divisions: 8 },
+};
+
+const GRID_FACES: Face[] = [
+  { id: 0, vertices: [0, 1, 8, 7], edges: [0, 8, 11, 7] },
+  { id: 1, vertices: [1, 2, 3, 8], edges: [1, 2, 9, 8] },
+  { id: 2, vertices: [8, 3, 4, 5], edges: [9, 3, 4, 10] },
+  { id: 3, vertices: [7, 8, 5, 6], edges: [11, 10, 5, 6] },
+];
+
+const GRID_VIEW: DocumentView = {
+  doc: GRID_DOC,
+  faces: GRID_FACES,
+  warnings: [],
+  violations: [],
+  frame: null,
+  skipped: [],
+};
+
+/** その道具の1クリック(押して同じ場所で離す)。 */
+function clickAt(canvas: Element, at: { x: number; y: number }, ctrlKey = false) {
+  fireEvent.pointerDown(canvas, {
+    button: 0,
+    pointerId: 1,
+    clientX: at.x,
+    clientY: at.y,
+    ctrlKey,
+  });
+  fireEvent.pointerUp(canvas, {
+    button: 0,
+    pointerId: 1,
+    clientX: at.x,
+    clientY: at.y,
+    ctrlKey,
+  });
+}
+
+/** 展開図の点(平らな表示なので世界座標と同じ)を画面のpxへ。 */
+function gridPoint(pos: Vec2, dx = 0, dy = 0) {
+  const at = canvasPoint([pos[0], pos[1], 0]);
+  return { x: at.x + dx, y: at.y + dy };
+}
+
+/** 直前に送られた展開図の編集要求(1件・まとめ送りのどちらも同じ形で受け取る)。 */
+function lastEditOps(): EditOp[] {
+  const single = vi.mocked(ipc.editApply).mock.calls;
+  const batch = vi.mocked(ipc.editApplyBatch).mock.calls;
+  if (batch.length > 0) return batch[batch.length - 1][0];
+  if (single.length > 0) return [single[single.length - 1][0]];
+  return [];
+}
+
+describe("Viewer3D(3Dから展開図の点を指す)", () => {
+  beforeEach(() => {
+    stubLayout();
+    vi.mocked(ipc.editApply).mockReset();
+    vi.mocked(ipc.editApplyBatch).mockReset();
+    vi.mocked(ipc.editApply).mockResolvedValue(GRID_VIEW);
+    vi.mocked(ipc.editApplyBatch).mockResolvedValue(GRID_VIEW);
+    vi.mocked(ipc.sequenceApply).mockReset();
+    vi.mocked(ipc.sequenceApply).mockResolvedValue(GRID_VIEW);
+    useAppStore.setState({
+      ...initialStoreState,
+      doc: GRID_DOC,
+      faces: GRID_FACES,
+      hinges: new Set([8, 9, 10, 11]),
+      frame3d: null,
+      activeTool: "select",
+      currentStep: null,
+      playT: 1,
+      playing: false,
+      drivers: new Map(),
+      errorMessage: null,
+      selection: { edgeIds: [], vertexIds: [] },
+      mirrorDraw: false,
+      curve: { enabled: false, shape: "arc", segments: 4, rulings: false },
+      construct: { kind: "bisector", divisions: 4, stepDeg: 22.5 },
+    });
+  });
+  afterEach(() => cleanup());
+
+  // 合格条件1・3: 3Dで点を選べること、選んだ点が2Dで選んだ点と同じ頂点を指すこと
+  it("13個すべての点を3Dから選べ、同じ場所を2Dで選んだ結果と頂点IDが一致する", () => {
+    const canvas = renderViewer();
+    // 世界座標1.0あたりの画面px(この表示は真上からの平行に近い見え方)
+    const scalePx = gridPoint([1, 0]).x - gridPoint([0, 0]).x;
+    let picked = 0;
+    let matched = 0;
+    for (const vertex of GRID_DOC.cp.vertices) {
+      // ちょうど真上ではなく少しずらして押し、当たり判定そのものを試す
+      const at = gridPoint(vertex.pos, 3, -3);
+      clickAt(canvas, at);
+      const from3d = useAppStore.getState().selection.vertexIds;
+      if (from3d.length === 1) picked += 1;
+      // 同じ場所を展開図区画で押したときに選ばれる点
+      const world: Vec2 = [vertex.pos[0] + 3 / scalePx, vertex.pos[1] + 3 / scalePx];
+      const from2d = pickVertex(GRID_DOC, world, PICK_TOLERANCE_PX / scalePx);
+      if (from2d !== null && from3d.length === 1 && from3d[0] === from2d) matched += 1;
+    }
+    expect(picked).toBe(GRID_DOC.cp.vertices.length);
+    expect(matched).toBe(GRID_DOC.cp.vertices.length);
+    expect(GRID_DOC.cp.vertices.length).toBeGreaterThanOrEqual(10);
+  });
+
+  // 合格条件1: 立体姿勢(折り角度が0でも±180°でもない)でも点を選べること
+  it("90°起こした立体姿勢でも、見えている面が持つ点を3Dから選べる", async () => {
+    useAppStore.setState({
+      doc: SPATIAL_DOC,
+      faces: SPATIAL_FACES,
+      hinges: new Set([6]),
+      frame3d: SPATIAL_FRAME,
+      activeTool: "select",
+      selection: { edgeIds: [], vertexIds: [] },
+    });
+    const canvas = renderViewer();
+    await waitFor(() => expect(held.scene.content).not.toBeNull());
+    const camera = held.scene.camera as THREE.PerspectiveCamera;
+    camera.position.set(-1.4, -1.6, 1.6);
+    camera.lookAt(0.4, 0.5, 0.2);
+    camera.updateMatrixWorld(true);
+    camera.updateProjectionMatrix();
+
+    // 立てた面(x=0.5から+z方向へ90°)の角と、平らな面の角の両方を試す
+    const tried: { world: [number, number, number]; vertexId: number }[] = [
+      { world: [0.5, 0, 0.5], vertexId: 2 },
+      { world: [0.5, 1, 0.5], vertexId: 3 },
+      { world: [0, 0, 0], vertexId: 0 },
+      { world: [0, 1, 0], vertexId: 5 },
+    ];
+    let picked = 0;
+    for (const one of tried) {
+      useAppStore.getState().setSelection({ edgeIds: [], vertexIds: [] });
+      clickAt(canvas, canvasPoint(one.world));
+      if (useAppStore.getState().selection.vertexIds[0] === one.vertexId) picked += 1;
+    }
+    expect(picked).toBe(tried.length);
+  });
+
+  // 合格条件2の1件目: 選択-点
+  it("選択: 点をクリックすると、その点だけが選ばれる(線の選択は残さない)", () => {
+    const canvas = renderViewer();
+    clickAt(canvas, gridPoint([0.5, 0.5]));
+    expect(useAppStore.getState().selection).toEqual({ edgeIds: [], vertexIds: [8] });
+    // Ctrlクリックで足す・外すができる
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 1,
+      clientX: gridPoint([0.15, 0.25]).x,
+      clientY: gridPoint([0.15, 0.25]).y,
+      ctrlKey: true,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 1,
+      clientX: gridPoint([0.15, 0.25]).x,
+      clientY: gridPoint([0.15, 0.25]).y,
+      ctrlKey: true,
+    });
+    expect(useAppStore.getState().selection.vertexIds).toEqual([8, 9]);
+  });
+
+  // 合格条件2の2件目: 点を動かす
+  it("選択: 点をつかんでドラッグすると、展開図の点が動く", async () => {
+    const canvas = renderViewer();
+    const from = gridPoint([0.5, 0.5]);
+    const to = gridPoint([0.6, 0.55]);
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 1,
+      clientX: from.x,
+      clientY: from.y,
+    });
+    fireEvent.pointerMove(canvas, { pointerId: 1, clientX: to.x, clientY: to.y });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 1,
+      clientX: to.x,
+      clientY: to.y,
+    });
+    await waitFor(() => expect(ipc.editApply).toHaveBeenCalled());
+    const op = lastEditOps()[0];
+    expect(op.type).toBe("MoveVertex");
+    if (op.type !== "MoveVertex") return;
+    expect(op.id).toBe(8);
+    expect(op.to[0]).toBeCloseTo(0.6, 3);
+    expect(op.to[1]).toBeCloseTo(0.55, 3);
+  });
+
+  it("選択: 紙の外形の点は動かさない(展開図区画と同じ規則)", () => {
+    const canvas = renderViewer();
+    const from = gridPoint([0, 0]);
+    const to = gridPoint([0.2, 0.2]);
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 1,
+      clientX: from.x,
+      clientY: from.y,
+    });
+    fireEvent.pointerMove(canvas, { pointerId: 1, clientX: to.x, clientY: to.y });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 1,
+      clientX: to.x,
+      clientY: to.y,
+    });
+    expect(ipc.editApply).not.toHaveBeenCalled();
+  });
+
+  // 合格条件2の3〜5件目: 山・谷・補助の2クリック直線
+  it.each([
+    ["mountain", "Mountain"],
+    ["valley", "Valley"],
+    ["aux", "Aux"],
+  ] as const)("%s: 3Dで2点をクリックすると直線が引ける", async (tool, kind) => {
+    useAppStore.setState({ activeTool: tool });
+    const canvas = renderViewer();
+    clickAt(canvas, gridPoint([0.15, 0.25]));
+    expect(ipc.editApply).not.toHaveBeenCalled(); // 1クリック目では引かない
+    clickAt(canvas, gridPoint([0.35, 0.25]));
+    await waitFor(() => expect(ipc.editApply).toHaveBeenCalledTimes(1));
+    const op = lastEditOps()[0];
+    expect(op.type).toBe("AddSegment");
+    if (op.type !== "AddSegment") return;
+    expect(op.kind).toBe(kind);
+    // 点の上をクリックしたので、展開図の点のちょうどの座標が使われる
+    expect(op.a).toEqual([0.15, 0.25]);
+    expect(op.b).toEqual([0.35, 0.25]);
+  });
+
+  // 合格条件2の6〜8件目: 山・谷・補助の曲線モード
+  it.each([
+    ["mountain", "Mountain"],
+    ["valley", "Valley"],
+    ["aux", "Aux"],
+  ] as const)("%s: 3Dで3点をクリックすると曲線(折れ線)が引ける", async (tool, kind) => {
+    useAppStore.setState({
+      activeTool: tool,
+      curve: { enabled: true, shape: "arc", segments: 4, rulings: false },
+    });
+    const canvas = renderViewer();
+    clickAt(canvas, gridPoint([0.15, 0.25]));
+    clickAt(canvas, gridPoint([0.35, 0.25]));
+    expect(ipc.editApplyBatch).not.toHaveBeenCalled(); // 3点そろうまで引かない
+    clickAt(canvas, gridPoint([0.25, 0.4]));
+    await waitFor(() => expect(ipc.editApplyBatch).toHaveBeenCalledTimes(1));
+    const ops = lastEditOps();
+    // 4分割の円弧なので、折れ線は4本
+    expect(ops).toHaveLength(4);
+    expect(ops.every((one) => one.type === "AddSegment" && one.kind === kind)).toBe(true);
+  });
+
+  // 合格条件2の9件目: 折る-2クリックの折り線
+  it("折る: Ctrl+クリック2回で折り線を決められる", () => {
+    useAppStore.setState({ activeTool: "fold" });
+    const canvas = renderViewer();
+    clickAt(canvas, gridPoint([0.5, 0]), true);
+    expect(useAppStore.getState().foldDraft).toBeNull(); // 1クリック目では決まらない
+    clickAt(canvas, gridPoint([0.5, 1]), true);
+    const draft = useAppStore.getState().foldDraft;
+    expect(draft).not.toBeNull();
+    expect(draft?.line[0][0]).toBeCloseTo(0.5, 6);
+    expect(draft?.line[1][0]).toBeCloseTo(0.5, 6);
+    expect(draft?.line[0][1]).toBeCloseTo(0, 6);
+    expect(draft?.line[1][1]).toBeCloseTo(1, 6);
+  });
+
+  // 合格条件2の10〜13件目: 作図4通り
+  it("作図(二等分): 3点をクリックすると補助線が引ける", async () => {
+    useAppStore.setState({
+      activeTool: "construct",
+      construct: { kind: "bisector", divisions: 4, stepDeg: 22.5 },
+    });
+    const canvas = renderViewer();
+    clickAt(canvas, gridPoint([0.5, 0]));
+    clickAt(canvas, gridPoint([0.5, 0.5]));
+    clickAt(canvas, gridPoint([0, 0.5]));
+    await waitFor(() => expect(ipc.editApply).toHaveBeenCalledTimes(1));
+    const ops = lastEditOps();
+    expect(ops).toHaveLength(1);
+    expect(ops[0].type === "AddSegment" && ops[0].kind).toBe("Aux");
+  });
+
+  it("作図(垂線): 線と点をクリックすると補助線が引ける", async () => {
+    useAppStore.setState({
+      activeTool: "construct",
+      construct: { kind: "perpendicular", divisions: 4, stepDeg: 22.5 },
+    });
+    const canvas = renderViewer();
+    clickAt(canvas, gridPoint([0.5, 0.25])); // 折り目(1)-(8)の上
+    expect(ipc.editApply).not.toHaveBeenCalled();
+    clickAt(canvas, gridPoint([0.15, 0.25]));
+    await waitFor(() => expect(ipc.editApply).toHaveBeenCalledTimes(1));
+    const op = lastEditOps()[0];
+    expect(op.type).toBe("AddSegment");
+    if (op.type !== "AddSegment") return;
+    expect(op.a).toEqual([0.15, 0.25]);
+    expect(op.b[0]).toBeCloseTo(0.5, 6);
+    expect(op.b[1]).toBeCloseTo(0.25, 6);
+  });
+
+  it("作図(等分): 2点をクリックすると等分の目印が引ける", async () => {
+    useAppStore.setState({
+      activeTool: "construct",
+      construct: { kind: "divide", divisions: 4, stepDeg: 22.5 },
+    });
+    const canvas = renderViewer();
+    clickAt(canvas, gridPoint([0.15, 0.25]));
+    clickAt(canvas, gridPoint([0.35, 0.25]));
+    await waitFor(() => expect(ipc.editApplyBatch).toHaveBeenCalledTimes(1));
+    // 4等分なので目印は3本
+    expect(lastEditOps()).toHaveLength(3);
+  });
+
+  it("作図(角度線): 1点をクリックすると方向線がまとめて引ける", async () => {
+    useAppStore.setState({
+      activeTool: "construct",
+      construct: { kind: "angle", divisions: 4, stepDeg: 22.5 },
+    });
+    const canvas = renderViewer();
+    clickAt(canvas, gridPoint([0.5, 0.5]));
+    await waitFor(() => expect(ipc.editApplyBatch).toHaveBeenCalledTimes(1));
+    // 22.5°刻みで180°未満なので8本
+    expect(lastEditOps()).toHaveLength(8);
+  });
+
+  it("Escで選びかけの点を捨てる(次のクリックが思わぬ線にならない)", async () => {
+    useAppStore.setState({ activeTool: "valley" });
+    const canvas = renderViewer();
+    clickAt(canvas, gridPoint([0.15, 0.25]));
+    fireEvent.keyDown(window, { key: "Escape" });
+    clickAt(canvas, gridPoint([0.35, 0.25]));
+    // 1点目が捨てられているので、まだ線にならない
+    await waitFor(() => expect(ipc.editApply).not.toHaveBeenCalled());
+  });
+
+  it("選んだ点は3Dの上に十字で出る(どこを指したか3Dだけで分かる)", async () => {
+    const canvas = renderViewer();
+    clickAt(canvas, gridPoint([0.5, 0.5]));
+    await waitFor(() => {
+      const calls = (held.scene.setHighlight as ReturnType<typeof vi.fn>).mock.calls;
+      const last = calls[calls.length - 1][0] as {
+        edgeId: number;
+        role?: string;
+        a: THREE.Vector3;
+        b: THREE.Vector3;
+      }[];
+      const marks = last.filter((segment) => segment.edgeId === -1);
+      expect(marks).toHaveLength(2); // 縦横1本ずつの十字
+      for (const mark of marks) {
+        expect(mark.a.distanceTo(new THREE.Vector3(0.5, 0.5, 0))).toBeLessThan(0.05);
+      }
+    });
   });
 });

@@ -2912,6 +2912,16 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   white-space: nowrap;
 }
 
+/* 3Dに重ねる「折る向き」の入口。今どちらを選んでいるかを色で示す。
+   下のパネルの「向き」で選んだ丸印と同じ役割なので、他の選択済みボタン
+   (.mirror-axis-buttons / .grid-division-presets)と同じ見た目にそろえる。 */
+.fold-direction-tip-buttons > button[aria-pressed="true"] {
+  border-color: var(--color-accent-strong);
+  background: var(--color-accent);
+  color: var(--color-on-solid);
+  box-shadow: var(--shadow-selected-control);
+}
+
 /* 左右仕切りで3Dだけを狭くした場合。window幅ではなく実際の3D区画幅で切り替える。 */
 @container viewer-operation-help (max-width: 360px) {
   .viewer-operation-hint {

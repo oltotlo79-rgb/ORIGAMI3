@@ -31,7 +31,13 @@ interface Segment3D {
   surfaceProbe?: Vec3;
 }
 
-interface FacePlacement {
+/**
+ * 1つの面について、展開図座標と現在の3D表示位置を結ぶアフィン写像。
+ * `mapPoint` が展開図→3D、`unmapPoint` がその逆。
+ * 3D側の基底 f1・f2 は面の実際の3D辺ベクトルなので、面が立体のどこを向いていても
+ * そのまま使える(zを捨てる・平らな面だけ残すといった前提を持たない)。
+ */
+export interface FacePlacement {
   faceId: number;
   polygon: Vec2[];
   p0: Vec2;
@@ -123,8 +129,12 @@ function sub3(a: Vec3, b: Vec3): Vec3 {
   return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 }
 
+function dot3(a: Vec3, b: Vec3): number {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
 /** 多角形の内部。境界からeps以内もその面に含める。 */
-function pointInPolygon(poly: readonly Vec2[], p: Vec2, eps = POINT_EPS): boolean {
+export function pointInPolygon(poly: readonly Vec2[], p: Vec2, eps = POINT_EPS): boolean {
   if (poly.length < 3) return false;
   const eps2 = eps * eps;
   for (let i = 0; i < poly.length; i++) {
@@ -155,7 +165,7 @@ function pointInPolygon(poly: readonly Vec2[], p: Vec2, eps = POINT_EPS): boolea
 }
 
 /** 面の2D頂点と現在の3D頂点から、面内のアフィン写像を復元する。 */
-function facePlacement(
+export function facePlacement(
   face: Face,
   vertexPositions: ReadonlyMap<number, Vec2>,
   slots: ReadonlyMap<number, FacePositionSlot>,
@@ -199,7 +209,8 @@ function facePlacement(
   return null;
 }
 
-function mapPoint(placement: FacePlacement, p: Vec2): Vec3 | null {
+/** 展開図の点を、その面が現在3Dで置かれている位置へ写す。 */
+export function mapPoint(placement: FacePlacement, p: Vec2): Vec3 | null {
   const d = sub2(p, placement.p0);
   const a = cross2(d, placement.e2) / placement.det;
   const b = cross2(placement.e1, d) / placement.det;
@@ -209,6 +220,43 @@ function mapPoint(placement: FacePlacement, p: Vec2): Vec3 | null {
     placement.q0[2] + placement.f1[2] * a + placement.f2[2] * b,
   ];
   return finite3(q) ? q : null;
+}
+
+/**
+ * `mapPoint` の逆写像。3D表示上の点を、その面の展開図座標へ戻す。
+ *
+ * f1・f2 は面が現在置かれている平面を張る2本の3Dベクトルなので、
+ * 面が傾いていても倒れていても同じ式でよい(zを捨てず、平らな面に限定もしない)。
+ * 面から浮いた点は、面の平面へ垂直に下ろした足として扱う(最小二乗解)。
+ */
+export function unmapPoint(placement: FacePlacement, q: Vec3): Vec2 | null {
+  if (!finite3(q)) return null;
+  const d = sub3(q, placement.q0);
+  const g11 = dot3(placement.f1, placement.f1);
+  const g12 = dot3(placement.f1, placement.f2);
+  const g22 = dot3(placement.f2, placement.f2);
+  const det = g11 * g22 - g12 * g12;
+  // 一直線に潰れた面は面内座標が決まらない。大きさに対する相対値で判定する。
+  if (!Number.isFinite(det) || det <= AFFINE_EPS * g11 * g22) return null;
+  const r1 = dot3(placement.f1, d);
+  const r2 = dot3(placement.f2, d);
+  const a = (r1 * g22 - r2 * g12) / det;
+  const b = (g11 * r2 - g12 * r1) / det;
+  const p: Vec2 = [
+    placement.p0[0] + placement.e1[0] * a + placement.e2[0] * b,
+    placement.p0[1] + placement.e1[1] * a + placement.e2[1] * b,
+  ];
+  return finite2(p) ? p : null;
+}
+
+/** 面の平面(法線)。面が潰れていればnull。 */
+export function facePlaneNormal(placement: FacePlacement): Vec3 | null {
+  const [ax, ay, az] = placement.f1;
+  const [bx, by, bz] = placement.f2;
+  const n: Vec3 = [ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx];
+  const length = Math.hypot(n[0], n[1], n[2]);
+  if (!Number.isFinite(length) || length <= 0) return null;
+  return [n[0] / length, n[1] / length, n[2] / length];
 }
 
 /**

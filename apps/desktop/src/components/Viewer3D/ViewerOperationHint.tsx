@@ -52,10 +52,12 @@ export function viewerAssignments(
   if (tool === "fold") {
     if (aligning) {
       return [
+        // 点・辺の上では押した瞬間に選択が決まり、視点は回らない。
+        // それ以外の場所は今までどおり視点を回す。どちらになるかはカーソルの形で分かる
         {
           control: "left",
           label: "左クリック／ドラッグ",
-          action: `点・${SELECTABLE_3D_EDGE_TARGETS}を選ぶ／視点を回す`,
+          action: `点・${SELECTABLE_3D_EDGE_TARGETS}の上で選ぶ／他の場所で視点を回す`,
         },
         { control: "right", label: "右ドラッグ", action: "視点を動かす" },
         { control: "wheel", label: "ホイール", action: "拡大・縮小" },

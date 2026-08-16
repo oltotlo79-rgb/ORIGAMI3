@@ -2,7 +2,7 @@
 // 「合わせて折る」8方式を、2D/3Dの実pointer選択から折り上がりまで通す画面検査。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type React from "react";
 import { ALIGN_LABELS, type AlignMode, type AlignTarget } from "../lib/alignFold";
 import type {
@@ -415,6 +415,7 @@ const P3 = {
 const pointTarget = (p: Vec2): AlignTarget => ({ kind: "point", p });
 const lineTarget = (a: Vec2, b: Vec2): AlignTarget => ({ kind: "line", a, b });
 const edgeCpPick = (id: number): AlignCpPick => ({ kind: "edge", id });
+const vertexCpPick = (id: number): AlignCpPick => ({ kind: "vertex", id });
 const BL: Vec2 = [0, 0];
 const TL: Vec2 = [0, 1];
 const LEFT_MIDDLE: Vec2 = [0, 0.5];
@@ -431,7 +432,8 @@ const FLOW_CASES: AlignFlowCase[] = [
     kinds: ["point", "point"],
     expectedPicks2d: [pointTarget(RIGHT_MIDDLE), pointTarget(LEFT_MIDDLE)],
     expectedPicks3d: [pointTarget(RIGHT_MIDDLE), pointTarget(LEFT_MIDDLE)],
-    expectedCpPicks3d: [null, null],
+    // 3Dで見えているのは上の層(面1)なので、その層が持つ展開図の頂点が付く。
+    expectedCpPicks3d: [vertexCpPick(4), vertexCpPick(5)],
     clicks2d: [P2.rightMiddle, P2.leftMiddle],
     clicks3d: [P3.rightMiddle, P3.leftMiddle],
     direction2d: "Up",
@@ -443,7 +445,7 @@ const FLOW_CASES: AlignFlowCase[] = [
     kinds: ["point", "point"],
     expectedPicks2d: [pointTarget(TL), pointTarget(BL)],
     expectedPicks3d: [pointTarget(TL), pointTarget(BL)],
-    expectedCpPicks3d: [null, null],
+    expectedCpPicks3d: [vertexCpPick(8), vertexCpPick(2)],
     clicks2d: [P2.tl, P2.bl],
     clicks3d: [P3.tl, P3.bl],
     direction2d: "Down",
@@ -467,7 +469,7 @@ const FLOW_CASES: AlignFlowCase[] = [
     kinds: ["point", "line"],
     expectedPicks2d: [pointTarget(RIGHT_MIDDLE), RIGHT_LOWER_LINE],
     expectedPicks3d: [pointTarget(RIGHT_MIDDLE), RIGHT_LOWER_LINE],
-    expectedCpPicks3d: [null, edgeCpPick(10)],
+    expectedCpPicks3d: [vertexCpPick(4), edgeCpPick(10)],
     clicks2d: [P2.rightMiddle, P2.rightLower],
     clicks3d: [P3.rightMiddle, P3.rightLower],
     direction2d: "Down",
@@ -479,7 +481,7 @@ const FLOW_CASES: AlignFlowCase[] = [
     kinds: ["point", "line", "point"],
     expectedPicks2d: [pointTarget(TL), BOTTOM_LINE, pointTarget(LEFT_MIDDLE)],
     expectedPicks3d: [pointTarget(TL), BOTTOM_LINE, pointTarget(LEFT_MIDDLE)],
-    expectedCpPicks3d: [null, edgeCpPick(1), null],
+    expectedCpPicks3d: [vertexCpPick(8), edgeCpPick(1), vertexCpPick(5)],
     clicks2d: [P2.tl, P2.bottomLine, P2.leftMiddle],
     clicks3d: [P3.tl, P3.bottomLine, P3.leftMiddle],
     direction2d: "Up",
@@ -491,7 +493,12 @@ const FLOW_CASES: AlignFlowCase[] = [
     kinds: ["point", "line", "point", "line"],
     expectedPicks2d: [pointTarget(TL), BOTTOM_LINE, pointTarget(BL), TOP_LINE],
     expectedPicks3d: [pointTarget(TL), BOTTOM_LINE, pointTarget(BL), TOP_LINE],
-    expectedCpPicks3d: [null, edgeCpPick(1), null, edgeCpPick(4)],
+    expectedCpPicks3d: [
+      vertexCpPick(8),
+      edgeCpPick(1),
+      vertexCpPick(2),
+      edgeCpPick(4),
+    ],
     clicks2d: [P2.tl, P2.bottomLine, P2.bl, P2.topLine],
     clicks3d: [P3.tl, P3.bottomLine, P3.bl, P3.topLine],
     direction2d: "Down",
@@ -503,7 +510,7 @@ const FLOW_CASES: AlignFlowCase[] = [
     kinds: ["point", "line", "line"],
     expectedPicks2d: [pointTarget(TL), BOTTOM_LINE, RIGHT_LOWER_LINE],
     expectedPicks3d: [pointTarget(TL), BOTTOM_LINE, RIGHT_LOWER_LINE],
-    expectedCpPicks3d: [null, edgeCpPick(1), edgeCpPick(10)],
+    expectedCpPicks3d: [vertexCpPick(8), edgeCpPick(1), edgeCpPick(10)],
     clicks2d: [P2.tl, P2.bottomLine, P2.rightLower],
     clicks3d: [P3.tl, P3.bottomLine, P3.rightLower],
     direction2d: "Up",
@@ -591,6 +598,35 @@ function seedFixture(fixture: FoldFixture): void {
       ? foldedView(activeFixture, operation)
       : fixtureView(activeFixture),
   );
+}
+
+/** 押してから離すまでに手がぶれた操作(ぶれ幅はpx) */
+function pointerDrag(canvas: HTMLCanvasElement, at: Vec2, movePx: number): void {
+  // 斜めにぶらす(縦横のどちらかだけで判定していないことを見る)
+  const to: Vec2 = [
+    at[0] + movePx * Math.SQRT1_2,
+    at[1] - movePx * Math.SQRT1_2,
+  ];
+  fireEvent.pointerDown(canvas, {
+    button: 0,
+    pointerId: 1,
+    clientX: at[0],
+    clientY: at[1],
+  });
+  fireEvent.pointerMove(canvas, { pointerId: 1, clientX: to[0], clientY: to[1] });
+  fireEvent.pointerUp(canvas, {
+    button: 0,
+    pointerId: 1,
+    clientX: to[0],
+    clientY: to[1],
+  });
+}
+
+/** 視点回転を止めているかどうか(sceneへ最後に伝えた指定) */
+function viewRotationStopped(): boolean {
+  const calls = (held.scene.setDrawMode as ReturnType<typeof vi.fn>).mock.calls;
+  if (calls.length === 0) throw new Error("setDrawModeが一度も呼ばれていない");
+  return calls[calls.length - 1][0] as boolean;
 }
 
 function pointerClick(canvas: HTMLCanvasElement, at: Vec2): void {
@@ -690,6 +726,22 @@ function renderWholeFoldUi(): {
   return { cpCanvas, viewerCanvas };
 }
 
+/** 下のパネルの中だけを見る(3Dへ重ねた同じ言葉のボタンと取り違えないため) */
+function panel(): ReturnType<typeof within> {
+  const node = document.querySelector<HTMLElement>(".context-panel");
+  if (!node) throw new Error("下のパネルがない");
+  return within(node);
+}
+
+/** 3Dへ重ねた「折る向き」の札の中だけを見る */
+function tip3d(): ReturnType<typeof within> {
+  const node = document.querySelector<HTMLElement>(
+    '[data-floating-ui="fold-direction-tip"]',
+  );
+  if (!node) throw new Error("3Dの折る向きの札がない");
+  return within(node);
+}
+
 function chooseModeAndTargets(
   testCase: AlignFlowCase,
   canvas: HTMLCanvasElement,
@@ -720,9 +772,10 @@ function chooseModeAndTargets(
     expect(draft?.cpPicks).toHaveLength(testCase.kinds.length);
     expect(draft?.cpPicks?.every((pick) => pick !== null)).toBe(true);
   } else {
-    // 重なった線では、3Dで実際に見えている前面ownerのCP辺IDを保持する。
-    // 点には3D上の頂点ID対応をまだ持たせないため、従来どおりnullのまま。
+    // 重なった線・重なった点では、3Dで実際に見えている前面ownerのCP辺ID・頂点IDを
+    // 保持する。点も辺と同じ逆写像から拾うので、どちらもnullにならない。
     expect(draft?.cpPicks).toEqual(testCase.expectedCpPicks3d);
+    expect(draft?.cpPicks?.every((pick) => pick !== null)).toBe(true);
   }
   return {
     picks: [...(draft?.picks ?? [])],
@@ -774,6 +827,22 @@ function expectViewerMatchesFrame(content: ViewerContentProbe, frame: Frame3D): 
   }
 }
 
+interface FoldProbe {
+  setContent: ReturnType<typeof vi.fn>;
+  contentCallsBeforeFold: number;
+  positionsBeforeFold: number[];
+}
+
+function probeBeforeFold(): FoldProbe {
+  const scene = held.scene;
+  const setContent = scene.setContent as ReturnType<typeof vi.fn>;
+  return {
+    setContent,
+    contentCallsBeforeFold: setContent.mock.calls.length,
+    positionsBeforeFold: Array.from((scene.content as ViewerContentProbe).positions),
+  };
+}
+
 async function chooseSettingsFoldAndAssert(
   testCase: AlignFlowCase,
   direction: Direction,
@@ -788,13 +857,20 @@ async function chooseSettingsFoldAndAssert(
   fireEvent.click(screen.getByLabelText("全ての層"));
   expect(useAppStore.getState().foldDraft?.target).toBe("all");
 
+  const probe = probeBeforeFold();
+  fireEvent.click(panel().getByRole("button", { name: "折る" }));
+  await expectFoldApplied(testCase, direction, selectedPicks, selectedLine, probe);
+}
+
+async function expectFoldApplied(
+  testCase: AlignFlowCase,
+  direction: Direction,
+  selectedPicks: AlignTarget[],
+  selectedLine: [Vec2, Vec2],
+  probe: FoldProbe,
+): Promise<void> {
+  const { setContent, contentCallsBeforeFold, positionsBeforeFold } = probe;
   const scene = held.scene;
-  const setContent = scene.setContent as ReturnType<typeof vi.fn>;
-  const contentCallsBeforeFold = setContent.mock.calls.length;
-  const positionsBeforeFold = Array.from(
-    (scene.content as ViewerContentProbe).positions,
-  );
-  fireEvent.click(screen.getByRole("button", { name: "折る" }));
 
   const beforeStepCount = activeFixture.doc.sequence.length;
   await waitFor(() =>
@@ -883,6 +959,56 @@ async function chooseSettingsFoldAndAssert(
   });
 }
 
+/**
+ * 3Dへ重ねた札だけで向きを決めて折る。下のパネルには一切触らない。
+ * 「選ぶ→山折り・谷折りを決める→折る」を3Dの中だけで通せることを見る。
+ */
+async function foldWith3dDirectionTip(
+  testCase: AlignFlowCase,
+  direction: Direction,
+  selectedPicks: AlignTarget[],
+  selectedLine: [Vec2, Vec2],
+): Promise<void> {
+  const tip = tip3d();
+  // 動かす側も3Dの札から決める(動く側は3Dの中で黄色く光るので、見る場所と選ぶ場所が同じ)
+  const upper: Vec2 = [0.25, 0.75];
+  const side =
+    (selectedLine[1][0] - selectedLine[0][0]) * (upper[1] - selectedLine[0][1]) -
+    (selectedLine[1][1] - selectedLine[0][1]) * (upper[0] - selectedLine[0][0]);
+  const desired = side > 0 ? "left" : "right";
+  fireEvent.click(
+    tip.getByRole("button", { name: desired === "right" ? "反対側" : "こちら側" }),
+  );
+  fireEvent.click(
+    tip.getByRole("button", { name: desired === "right" ? "こちら側" : "反対側" }),
+  );
+  expect(useAppStore.getState().foldDraft?.movingSide).toBe(desired);
+
+  const valley = tip.getByRole("button", { name: "手前へ折る(谷)" });
+  const mountain = tip.getByRole("button", { name: "向こうへ折る(山)" });
+  // 一度もう一方を押してから戻す(どちらの向きも3Dから指定できることを見る)
+  fireEvent.click(direction === "Up" ? mountain : valley);
+  expect(useAppStore.getState().foldDraft?.direction).toBe(
+    direction === "Up" ? "Down" : "Up",
+  );
+  fireEvent.click(direction === "Up" ? valley : mountain);
+  expect(useAppStore.getState().foldDraft?.direction).toBe(direction);
+  // どちらを選んでいるかが見て分かる(押している側だけがaria-pressed)
+  expect(valley.getAttribute("aria-pressed")).toBe(String(direction === "Up"));
+  expect(mountain.getAttribute("aria-pressed")).toBe(String(direction === "Down"));
+  // 下のパネルの「向き」も同じ状態になる(2Dと3Dで指定がずれない)
+  expect(
+    (panel().getByLabelText("手前へ折る(谷)") as HTMLInputElement).checked,
+  ).toBe(direction === "Up");
+  expect(
+    (panel().getByLabelText("向こうへ折る(山)") as HTMLInputElement).checked,
+  ).toBe(direction === "Down");
+
+  const probe = probeBeforeFold();
+  fireEvent.click(tip.getByRole("button", { name: "折る" }));
+  await expectFoldApplied(testCase, direction, selectedPicks, selectedLine, probe);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   held.cpDocument = null;
@@ -930,4 +1056,127 @@ describe("合わせて折る: 選択から折り上がりまで", () => {
       );
     },
   );
+
+  it.each(FLOW_CASES)(
+    "$label: 3D図だけで選び、山折り・谷折りも3Dで指定して折る",
+    async (testCase) => {
+      seedFixture(
+        baseFixture(testCase.direction3d, testCase.mode === "existingLine"),
+      );
+      const { viewerCanvas } = renderWholeFoldUi();
+      const selected = chooseModeAndTargets(testCase, viewerCanvas, "3d");
+      await foldWith3dDirectionTip(
+        testCase,
+        testCase.direction3d,
+        selected.picks,
+        selected.line,
+      );
+    },
+  );
+});
+
+// 押した場所で選択が決まるので、離すまでに手がぶれても選べる。
+// 逆に、選べるものが無い場所ではぶれ=視点操作のまま(視点は今までどおり回せる)。
+const HAND_SHAKE_PX = [0, 2, 4, 5, 6, 8, 12, 20, 32, 48, 64, 96];
+const EMPTY_SPOT: Vec2 = [370, 40];
+
+describe("合わせて折る: 3Dで選ぶ間のドラッグ", () => {
+  it.each(HAND_SHAKE_PX)(
+    "線と線を合わせる: 押してから%dpxぶれても線を選べる",
+    (movePx) => {
+      seedFixture(baseFixture("Up", false));
+      const { viewerCanvas } = renderWholeFoldUi();
+      fireEvent.click(screen.getByRole("button", { name: ALIGN_LABELS.lineLine }));
+      pointerDrag(viewerCanvas, P3.topLine, movePx);
+      const draft = useAppStore.getState().alignDraft;
+      expect(draft?.picks).toHaveLength(1);
+      expectTargetEquivalent(draft!.picks[0], TOP_LINE);
+      expect(draft?.cpPicks?.[0]).toEqual(edgeCpPick(4));
+    },
+  );
+
+  it.each(HAND_SHAKE_PX)(
+    "点と点を合わせる: 押してから%dpxぶれても点を選べる",
+    (movePx) => {
+      seedFixture(baseFixture("Up", false));
+      const { viewerCanvas } = renderWholeFoldUi();
+      fireEvent.click(screen.getByRole("button", { name: ALIGN_LABELS.pointPoint }));
+      pointerDrag(viewerCanvas, P3.tl, movePx);
+      const draft = useAppStore.getState().alignDraft;
+      expect(draft?.picks).toHaveLength(1);
+      expectTargetEquivalent(draft!.picks[0], pointTarget(TL));
+      expect(draft?.cpPicks?.[0]).toEqual(vertexCpPick(8));
+    },
+  );
+
+  it("線・点の上へ来た間だけ視点回転を止め、紙の外では止めない", () => {
+    seedFixture(baseFixture("Up", false));
+    const { viewerCanvas } = renderWholeFoldUi();
+    fireEvent.click(screen.getByRole("button", { name: ALIGN_LABELS.lineLine }));
+
+    fireEvent.pointerMove(viewerCanvas, {
+      clientX: EMPTY_SPOT[0],
+      clientY: EMPTY_SPOT[1],
+    });
+    expect(viewRotationStopped()).toBe(false);
+    expect(viewerCanvas.style.cursor).toBe("default");
+
+    fireEvent.pointerMove(viewerCanvas, {
+      clientX: P3.topLine[0],
+      clientY: P3.topLine[1],
+    });
+    expect(viewRotationStopped()).toBe(true);
+    expect(viewerCanvas.style.cursor).toBe("pointer");
+
+    fireEvent.pointerMove(viewerCanvas, {
+      clientX: EMPTY_SPOT[0],
+      clientY: EMPTY_SPOT[1],
+    });
+    expect(viewRotationStopped()).toBe(false);
+    expect(viewerCanvas.style.cursor).toBe("default");
+  });
+
+  it.each(HAND_SHAKE_PX)(
+    "紙の上でない場所での%dpxのドラッグは、今までどおり視点操作のまま(何も選ばない)",
+    (movePx) => {
+      seedFixture(baseFixture("Up", false));
+      const { viewerCanvas } = renderWholeFoldUi();
+      fireEvent.click(screen.getByRole("button", { name: ALIGN_LABELS.lineLine }));
+      fireEvent.pointerMove(viewerCanvas, {
+        clientX: EMPTY_SPOT[0],
+        clientY: EMPTY_SPOT[1],
+      });
+      expect(viewRotationStopped()).toBe(false);
+      pointerDrag(viewerCanvas, EMPTY_SPOT, movePx);
+      expect(useAppStore.getState().alignDraft?.picks).toHaveLength(0);
+    },
+  );
+
+  it("押した場所で選択が決まる(離した場所の別の線には移らない)", () => {
+    seedFixture(baseFixture("Up", false));
+    const { viewerCanvas } = renderWholeFoldUi();
+    fireEvent.click(screen.getByRole("button", { name: ALIGN_LABELS.lineLine }));
+    // 上の辺を押し、下の辺の上まで引きずってから離す
+    fireEvent.pointerDown(viewerCanvas, {
+      button: 0,
+      pointerId: 1,
+      clientX: P3.topLine[0],
+      clientY: P3.topLine[1],
+    });
+    fireEvent.pointerMove(viewerCanvas, {
+      pointerId: 1,
+      clientX: P3.bottomLine[0],
+      clientY: P3.bottomLine[1],
+    });
+    fireEvent.pointerUp(viewerCanvas, {
+      button: 0,
+      pointerId: 1,
+      clientX: P3.bottomLine[0],
+      clientY: P3.bottomLine[1],
+    });
+    const draft = useAppStore.getState().alignDraft;
+    expect(draft?.picks).toHaveLength(1);
+    expectTargetEquivalent(draft!.picks[0], TOP_LINE);
+    expect(draft?.cpPicks?.[0]).toEqual(edgeCpPick(4));
+  });
 });

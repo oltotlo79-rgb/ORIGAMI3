@@ -131,7 +131,7 @@ function materialOrientation(normal: THREE.Vector3): 1 | -1 {
 }
 
 /** 世界座標を画面座標(px)へ。カメラの後ろ側ならnull */
-function project(
+export function projectToScreenPx(
   point: THREE.Vector3,
   camera: THREE.Camera,
   widthPx: number,
@@ -244,7 +244,7 @@ export function pickPaper(
 }
 
 /** 点(px, py)から線分(ax,ay)-(bx,by)までの距離(px) */
-function distanceToSegment(
+export function screenDistanceToSegment(
   px: number,
   py: number,
   ax: number,
@@ -325,10 +325,10 @@ export function pickHingeSegment(
     ) {
       continue;
     }
-    const a = project(seg.a, camera, widthPx, heightPx);
-    const b = project(seg.b, camera, widthPx, heightPx);
+    const a = projectToScreenPx(seg.a, camera, widthPx, heightPx);
+    const b = projectToScreenPx(seg.b, camera, widthPx, heightPx);
     if (!a || !b) continue;
-    const dist = distanceToSegment(x, y, a.x, a.y, b.x, b.y);
+    const dist = screenDistanceToSegment(x, y, a.x, a.y, b.x, b.y);
     if (dist > thresholdPx) continue;
     candidates.push({
       segment: seg,
