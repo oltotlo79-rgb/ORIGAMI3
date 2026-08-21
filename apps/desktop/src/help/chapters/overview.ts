@@ -4,11 +4,11 @@ export const overviewChapter = {
   id: "overview",
   number: 1,
   title: "ORIGAMI3でできること",
-  summary: "展開図を描き、紙を折り、完成までの手順を一つの作品として残せます。",
+  summary: "展開図を描き、紙を折り、完成までの手順を1つの作品として残せます。",
   blocks: [
     {
       type: "paragraph",
-      text: "ORIGAMI3は、左の道具、中央左の2D展開図、中央右の3D立体表示と手順タイムライン、下の設定パネルを一つの画面で使う折り紙設計アプリです。紙を直接つかんで折る方法から、折り線・層・角度を数値で指定する方法まで選べます。",
+      text: "ORIGAMI3は、左の道具、中央左の2D展開図、中央右の3D立体表示と手順タイムライン、下部パネルを1つの画面で使う折り紙設計アプリです。紙を直接つかんで折る方法から、折り線・層・角度を数値で指定する方法まで選べます。",
     },
     { type: "figure", diagramId: "overview-flow", image: "screen-overview-guide.png" },
     { type: "heading", text: "作品づくりの流れ" },

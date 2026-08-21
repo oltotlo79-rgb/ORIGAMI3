@@ -244,7 +244,7 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
           {
             chapterId: "three-dimensional",
             phrases: [
-              "「この形で仕上げる」は作業を終えるボタンではなく、一手を記録します",
+              "「この形で仕上げる」は作業を終えるボタンではなく、1手を記録します",
               "その姿から続けて折れます",
               "新しい折り線は2D展開図へ、次の手順はタイムラインへ加わります",
             ],
@@ -314,7 +314,7 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
         name: "追従の一覧に上限が無い",
         chapterId: "angles",
         phrases: [
-          "追従した折り目は本数にかかわらず全部並ぶので、「ほかN本」で隠れて見えないものはありません",
+              "追従した折り目は本数にかかわらずすべて並ぶので、「ほかN本」で隠れて見えないものはありません",
         ],
       },
       {
@@ -481,15 +481,15 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
         name: "8種類すべてを3Dだけで折り終えられる",
         chapterId: "fold",
         phrases: [
-          "合わせ方を選んだあとは下のパネルに触れずに3D立体表示だけで折り終えられます",
+          "合わせ方を選んだあとは下部パネルに触れずに3D立体表示だけで折り終えられます",
           "8種類のどれでも、点や線の指定は3D立体表示だけで済みます",
         ],
       },
       {
-        name: "札と下のパネルが同じ内容で連動する",
+        name: "札と下部パネルが同じ内容で連動する",
         chapterId: "fold",
         phrases: [
-          "下のパネルにあるものと同じ言葉・同じ並びです",
+          "下部パネルにあるものと同じ言葉・同じ並びです",
           "もう一方の表示も同じ状態に変わる",
           "札に無いのは「対象の層」だけで",
         ],
@@ -533,6 +533,74 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
     }
   });
 
+  it("重なり防止と食い込み検出を現行画面と同じ言葉・既定値で説明する", () => {
+    const threeDimensional = HELP_CHAPTERS.find(
+      (chapter) => chapter.id === "three-dimensional",
+    );
+    const troubleshooting = HELP_CHAPTERS.find(
+      (chapter) => chapter.id === "troubleshooting",
+    );
+    expect(threeDimensional).toBeDefined();
+    expect(troubleshooting).toBeDefined();
+
+    const threeDimensionalText = helpChapterSearchText(threeDimensional!);
+    const troubleshootingText = helpChapterSearchText(troubleshooting!);
+    const allText = `${threeDimensionalText}\n${troubleshootingText}`;
+
+    for (const screenText of [
+      "紙どうしの食い込みを減らすように形を補正します",
+      "紙どうしの食い込みを赤い折り目と警告で知らせます。形は変えません",
+      "紙が重なって食い込んでいます",
+    ]) {
+      expect(threeDimensionalText, screenText).toContain(screenText);
+      expect(troubleshootingText, screenText).toContain(screenText);
+    }
+
+    for (const explanation of [
+      "「重なり防止」は既定でオフ、「食い込み検出」は既定でオンです",
+      "既定では、指定した角度のとおりに折れます",
+      "食い込み検出が勝手に形を変えることはありません",
+      "形は変わらず、操作も止まりません",
+      "形を直してほしいときは「重なり防止」を自分でオンにします",
+      "実際の形が指定した角度から変わることがあります",
+    ]) {
+      expect(threeDimensionalText, explanation).toContain(explanation);
+    }
+
+    expect(allText).not.toContain("どちらも既定はオン");
+    expect(allText).not.toContain("どちらもオンとして扱われます");
+  });
+
+  it("紙の上の場所と完成形の場所を画面と同じ言葉で調整・復元できると説明する", () => {
+    const proposal = HELP_CHAPTERS.find((chapter) => chapter.id === "proposal");
+    expect(proposal).toBeDefined();
+    const text = helpChapterSearchText(proposal!);
+
+    for (const screenText of [
+      "紙の上の場所も調整",
+      "紙の上の場所を調整",
+      "丸い印をつまんで、紙の上でその先端を作りたい場所へ動かしてください。",
+      "この場所で作り直す",
+      "この候補の場所に戻す",
+      "候補へ戻る",
+      "完成形と紙の上で場所が違う先が1か所あります。",
+      "完成形で動かした場所を使います。",
+      "紙の上で動かした場所を使います。",
+      "紙の上の場所に戻す",
+      "完成形の場所に戻す",
+      "完成形の場所を取り消す",
+      "元に戻す",
+      "やり直す",
+    ]) {
+      expect(text, screenText).toContain(screenText);
+    }
+
+    expect(text).toContain("先端ごとに最後に動かしたほうが使われます");
+    expect(text).toContain("使っていないほうへ戻すには");
+    expect(text).not.toContain("優先規則");
+    expect(text).not.toContain("葉ごと");
+  });
+
   it("利用者向け文字列に指定された内部用語が0件である", () => {
     const internalTerms = [
       "骨格",
@@ -545,6 +613,8 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
       "hard",
       "soft",
       "warm start",
+      "prevent",
+      "detect",
       "イテレーション",
     ] as const;
     const violations: string[] = [];
@@ -559,6 +629,45 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
     }
 
     expect(violations).toEqual([]);
+  });
+
+  it("章本文の数え方と用語の表記を統一する", () => {
+    const chapterText = HELP_CHAPTERS.map((chapter) =>
+      [
+        chapter.title,
+        chapter.summary,
+        ...chapter.blocks.map((block) =>
+          block.type === "screenshot" ? block.caption : helpBlockText(block),
+        ),
+      ].join(" "),
+    ).join(" ");
+    const proseText = chapterText
+      .replace(/「全て平らに戻す」/g, "")
+      .replace(/「全ての層」/g, "");
+
+    for (const oldForm of [
+      "一こま",
+      "3こま",
+      "こまの内容",
+      "一つの",
+      "一つ目",
+      "一つずつ",
+      "一色",
+      "一手",
+      "一段階",
+      "二つの",
+      "全て",
+      "下のパネル",
+      "下部のパネル",
+      "下の設定パネル",
+      "折り筋",
+    ]) {
+      expect(proseText, oldForm).not.toContain(oldForm);
+    }
+
+    expect(chapterText).toContain("1コマ");
+    expect(chapterText).toContain("下部パネル");
+    expect(chapterText).toContain("すべて");
   });
 
   it("対称描画の目的・3つの基準・画面での選び方を利用者向けに説明する", () => {
