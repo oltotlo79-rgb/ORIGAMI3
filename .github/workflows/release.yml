@@ -145,6 +145,15 @@ jobs:
 
           New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
 
+          # 配布名は半角英数字・ピリオド・ハイフン・アンダースコアだけにする。
+          # GitHubはリリースに添付したファイル名のうち、それ以外の文字を "." へ置き換え、
+          # 連続した "." を1つに畳む。実測: docs/manual/ORIGAMI3取扱説明書.pdf を添付すると、
+          # v0.4.2 / v0.4.4 / v0.4.5 のいずれでも ORIGAMI3.pdf という名前で公開されている。
+          # そのため日本語の配布名は付けられない。例えば
+          #   ORIGAMI3_{版}_インストーラー_Windows用.exe と
+          #   ORIGAMI3_{版}_ポータブル_Windows用.exe は
+          # どちらも ORIGAMI3_{版}_._Windows.exe になり、互いに衝突する。
+          # 初心者向けの案内は、日本語がそのまま残るリリース説明文(下のbody)で行う。
           $setupName = "ORIGAMI3_{0}_setup.exe" -f $env:VERSION
           $msiName = "ORIGAMI3_{0}_x64.msi" -f $env:VERSION
           $portableName = "ORIGAMI3_{0}_portable.exe" -f $env:VERSION
@@ -153,6 +162,17 @@ jobs:
           Copy-Item -LiteralPath $msiFiles[0].FullName -Destination (Join-Path $outputDir $msiName)
           Copy-Item -LiteralPath $portable -Destination (Join-Path $outputDir $portableName)
 
+          # 公開後に名前が変わらないことを、添付する前に確かめる。
+          foreach ($name in @($setupName, $msiName, $portableName)) {
+            if ($name -notmatch '^[A-Za-z0-9._-]+$') {
+              throw "配布ファイル名に、GitHubが置き換える文字が含まれています: $name"
+            }
+            $copied = Join-Path $outputDir $name
+            if (-not (Test-Path -LiteralPath $copied -PathType Leaf)) {
+              throw "配布ファイルを作れませんでした: $copied"
+            }
+          }
+
           Get-ChildItem -LiteralPath $outputDir -File | Select-Object Name, Length
 
       - name: Publish GitHub Release
@@ -160,7 +180,45 @@ jobs:
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: ORIGAMI3 ${{ steps.meta.outputs.tag }}
+          # generate_release_notes と body は併用できる。bodyは自動生成の文の前に置かれる。
+          # 根拠: softprops/action-gh-release の action.yml、generate_release_notes の説明
+          # 「If body is specified, the body will be pre-pended to the automatically generated notes.」
           generate_release_notes: true
+          # ファイル名はGitHubが半角英数字へ直してしまうため、日本語の案内はここに書く。
+          # 表に載せる名前は、公開後に実際に表示される名前と必ず同じにする。
+          # 取扱説明書PDFは ORIGAMI3取扱説明書.pdf として添付しても、
+          # GitHub上では ORIGAMI3.pdf として公開される(v0.4.2/v0.4.4/v0.4.5で実測)。
+          body: |
+            ## どれをダウンロードすればよいですか
+
+            このページの下のほうにある「**Assets**」に、ファイルが並んでいます。
+            ファイル名は英語ですが、下の表のとおりに選べば大丈夫です。
+            **はじめての方は、表のいちばん上のものを選んでください。**
+
+            | あなたの場合 | ダウンロードするもの |
+            | --- | --- |
+            | ふつうにWindowsで使いたい（**おすすめ**） | `ORIGAMI3_${{ steps.meta.outputs.version }}_setup.exe` |
+            | インストールせずに持ち運びたい | `ORIGAMI3_${{ steps.meta.outputs.version }}_portable.exe` |
+            | 会社などで多数の端末へまとめて入れたい | `ORIGAMI3_${{ steps.meta.outputs.version }}_x64.msi` |
+            | 使い方を読みたい | `ORIGAMI3.pdf`（取扱説明書です） |
+            | 中身のプログラムを見たい | `Source code (zip)` または `Source code (tar.gz)` |
+
+            ### ダウンロードしたあとは
+
+            - **`ORIGAMI3_${{ steps.meta.outputs.version }}_setup.exe`（おすすめ）**
+              ダブルクリックして、画面の案内どおりに進めてください。パソコンに入ります。
+              次からはスタートメニューから開けます。ふつうはこれを選べば大丈夫です。
+            - **`ORIGAMI3_${{ steps.meta.outputs.version }}_portable.exe`**
+              パソコンに入れる必要はありません。このファイル1つをダブルクリックすると、そのまま開きます。
+              USBメモリなどに入れて持ち歩けます。
+            - **`ORIGAMI3_${{ steps.meta.outputs.version }}_x64.msi`**
+              会社や学校で、多くのパソコンへまとめて配る担当の方向けです。
+              自分の1台で使うだけなら、これは必要ありません。
+
+            ※ `Source code` の2つはGitHubが自動で付けるもので、名前を変えられません。
+            ※ いまのところWindows用だけです。
+
+            ---
           prerelease: ${{ steps.meta.outputs.prerelease }}
           fail_on_unmatched_files: true
           files: |

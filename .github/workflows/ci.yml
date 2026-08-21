@@ -92,6 +92,15 @@ jobs:
       - name: Test fold-motion performance in release mode
         run: cargo test --release -p ori3-rigid --test perf_yakko --test perf_contact -- --nocapture
 
+      - name: Test curve crease performance in release mode
+        run: cargo test --release -p ori3-cp --test curve -- --nocapture
+
+      - name: Test replay performance in release mode
+        run: cargo test --release -p ori3-layers --test replay -- --nocapture
+
+      - name: Test packing performance in release mode
+        run: cargo test --release -p ori3-propose --test perf_packing -- --ignored --nocapture
+
       - name: Test the 180-degree surface order sweep in release mode
         run: cargo test --release -p desktop --lib surface_order_179_999_to_180_all_110_creases -- --nocapture
 
