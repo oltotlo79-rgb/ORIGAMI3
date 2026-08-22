@@ -3,6 +3,7 @@
 
 import { useAppStore, type ToolId } from "../store/appStore";
 import { ALIGN_LABELS } from "../lib/alignFold";
+import { measureGuide, MEASURE_STEPS } from "../lib/measureGuide";
 
 interface OperationGuide {
   title: string;
@@ -18,6 +19,13 @@ const LINE_LABEL: Partial<Record<ToolId, string>> = {
 
 /** ツールと途中状態から、短い手順と強調位置を組み立てる。 */
 export function operationGuideFor(s: ReturnType<typeof useAppStore.getState>): OperationGuide {
+  if (s.activeTool === "measure") {
+    return {
+      title: measureGuide(s.measureDraft.mode, s.measureDraft.picks.length),
+      steps: MEASURE_STEPS[s.measureDraft.mode],
+      current: s.measureDraft.picks.length,
+    };
+  }
   const lineTitle = LINE_LABEL[s.activeTool];
   if (lineTitle) {
     return {
@@ -138,6 +146,7 @@ export function OperationSteps() {
   const activeTool = useAppStore((s) => s.activeTool);
   const operationStage = useAppStore((s) => s.operationStage);
   const selection = useAppStore((s) => s.selection);
+  const measureDraft = useAppStore((s) => s.measureDraft);
   const foldDraft = useAppStore((s) => s.foldDraft);
   const pendingFoldThrough = useAppStore((s) => s.pendingFoldThrough);
   const alignDraft = useAppStore((s) => s.alignDraft);
@@ -149,6 +158,7 @@ export function OperationSteps() {
     activeTool,
     operationStage,
     selection,
+    measureDraft,
     foldDraft,
     pendingFoldThrough,
     alignDraft,

@@ -41,6 +41,7 @@ function view(doc: Document = DOC): DocumentView {
     violations: [],
     frame: null,
     skipped: [],
+    contact_detected: false,
   };
 }
 

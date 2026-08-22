@@ -1,4 +1,4 @@
-// 左端ツールレール(64px)。ボタンは10個以内に保つ(要件§2)。
+// 左端ツールレール(64px)。道具は既存の同じ縦並びへ追加する。
 // 「技法」を選んだときだけ、どの技法かを選ぶサブメニューを下に出す
 // (常設のボタンは増やさない)。
 
@@ -21,6 +21,11 @@ const TOOLS: { id: ToolId; label: string; tooltip: string }[] = [
     id: "select",
     label: "選択",
     tooltip: "線や点を選びます。Ctrlで複数選択できます",
+  },
+  {
+    id: "measure",
+    label: "測る",
+    tooltip: "角度や長さ、2つの点の距離を測ります",
   },
   { id: "mountain", label: "山", tooltip: "2回クリックして山折り線を引きます" },
   { id: "valley", label: "谷", tooltip: "2回クリックして谷折り線を引きます" },

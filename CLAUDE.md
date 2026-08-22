@@ -180,6 +180,9 @@ Co-Authored-By: Codex <noreply@openai.com>
 | 12 | **性能(最適化あり)** | `cargo test --release -p ori3-propose --test perf_packing -- --ignored --nocapture` |
 | 13 | **180度の重なり順の全数掃引(最適化あり)** | `cargo test --release -p desktop --lib surface_order_179_999_to_180_all_110_creases -- --nocapture` |
 | 14 | **完全に折った端点の重なり順(最適化あり)** | `cargo test --release -p desktop --lib surface_order_exact_endpoint_is_rank_stable_for_previous_19 -- --nocapture` |
+| 15 | **性能(最適化あり)** | `cargo test --release -p ori3-soft --test soft_crane -- --nocapture` |
+| 16 | **性能(最適化あり)** | `cargo test --release -p ori3-propose --test perf_packing -- --nocapture` |
+| 17 | **性能(最適化あり・画面)** | `npm run test -- --maxWorkers=1 --mode=production src/lib/symmetry.test.ts` |
 
 - **#13・#14 について**: この2件は最適化なしでは手元で 476秒 / 175秒 かかる。CIの `checks` ジョブでは `--skip` で外し、`performance` ジョブが最適化ありで走らせる(どちらの検査も消していない)。手元の `cargo test --workspace`(#1)と `scripts/check.ps1` では、いままでどおり最適化なしでも走る。
 - **性能について**: CIの計算機は手元より**約3.6倍遅い**実測がある。手元の測定値が上限の1/3以下でなければ、CIで落ちる可能性が高いとみなす。
@@ -191,10 +194,10 @@ Co-Authored-By: Codex <noreply@openai.com>
 - **起きたこと**: v0.3.0の後に多数の機能追加・不具合修正が入ったが、説明書PDFはv0.3.0時点のままで、ヘルプにも新機能の解説が無かった。利用者の指摘で発覚した。
 - **画像も対象**: 画面の見た目が変わる変更（区画の広さ、色分け、通知の追加など）が入ったら、**既存のスクリーンショットは全て古くなる**。撮り直す。
 - **仕組みでの対策**: `scripts/check-release-ready.ps1` を実行し、次を自動で検査してから タグを打つ。
-  1. バージョン番号が4ファイルで一致している
-  2. 説明書PDFの更新時刻が、`apps/desktop/src/` と説明書の元文書の最終更新より新しい
-  3. 説明書に埋め込まれたバージョン表記がタグと一致している
-  4. ヘルプの章が説明書より新しくない
+  1. バージョン番号が4ファイル・5か所（`Cargo.toml`／`apps/desktop/package.json`／`apps/desktop/package-lock.json`のルート直下と`packages[""]`内の2か所／`apps/desktop/src-tauri/tauri.conf.json`）で一致している（`scripts/check-release-ready.ps1:330-389`）
+  2. 説明書PDFの更新時刻が、`apps/desktop/src/`・`apps/desktop/package.json`・`docs/manual/assets/`の中で最も新しいファイルより新しい（`scripts/check-release-ready.ps1:391-435`）
+  3. 説明書の生成元である`apps/desktop/package.json`のバージョン表記がタグと一致している。PDF本体の文字は図形化されており安定して抽出できないため読んでいない（`scripts/check-release-ready.ps1:8-13, 437-470`）
+  4. ヘルプ（`apps/desktop/src/help/`配下）の章が説明書より新しくない（`scripts/check-release-ready.ps1:472-503`）
 - **リリース手順の順序**: 機能凍結 → ヘルプ・説明書の更新 → 画像の撮り直し → 説明書の再生成 → `check.ps1` → `check-ci.ps1` → `check-release-ready.ps1` → コミット → タグ
 
 ### 11.1 解説に載せる範囲

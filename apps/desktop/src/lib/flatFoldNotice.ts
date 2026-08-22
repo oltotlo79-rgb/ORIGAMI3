@@ -36,6 +36,8 @@ export function statusBadgeText(input: {
   if (input.hasError) return "エラー";
   if (input.flatFoldViolationCount > 0) return `警告 ${input.warningCount}`;
   if (input.followStatus !== null) return input.followStatus;
-  if (!input.poseConverged) return "⚠ 追従計算が収束していません";
+  // 警告の三角印は App 側で1つ描く。ここへ記号や計算側の用語を重ねず、
+  // 利用者が見て分かる「指定との差」だけを短く知らせる。
+  if (!input.poseConverged) return "指定した角度に近い形です";
   return input.warningCount > 0 ? `警告 ${input.warningCount}` : null;
 }

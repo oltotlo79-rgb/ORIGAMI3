@@ -138,6 +138,7 @@
   --sp-7: 20px;
   --sp-8: 24px;
   --sp-9: 32px;
+  --viewer-overlay-scroll-controls-height: 40px;
 
   /* 行の先頭ラベルの共通の列幅。続けて並ぶ行で操作部品の左端をそろえるために使う。
      実測(実機・ポップ): 「向き」23.1 /「操作:」29.1 /「描き方」36.1 /「開く側:」37.1 /
@@ -1991,6 +1992,118 @@ input[type="radio"] {
   outline-offset: 2px;
 }
 
+/* 測る道具は既存の下部パネル内だけに置き、基準線選択と同じ押下色で現在値を示す。 */
+.measure-controls {
+  min-width: 0;
+}
+
+.measure-mode-row {
+  align-items: flex-start;
+}
+
+.measure-mode-buttons,
+.measure-display-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.measure-mode-buttons button,
+.measure-display-buttons button {
+  min-height: 30px;
+  padding: var(--sp-1) var(--sp-3);
+  border: var(--control-border-width) solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.measure-mode-buttons button[aria-pressed="true"],
+.measure-display-buttons button[aria-pressed="true"] {
+  border-color: var(--color-accent-strong);
+  background: var(--color-accent);
+  color: var(--color-on-solid);
+  box-shadow: var(--shadow-selected-control);
+}
+
+.measure-progress {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-4);
+  margin: var(--sp-3) 0 0;
+  color: var(--color-accent-strong);
+}
+
+.measure-progress > span {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.measure-cancel-hint {
+  margin-top: var(--sp-1) !important;
+}
+
+/* 数値カードは折り角度カードと同じ、左の色線・項目名・右寄せの強い値にそろえる。 */
+.measure-result-card {
+  margin-top: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: var(--panel-border-width) solid var(--color-border);
+  border-left: 6px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-translucent);
+}
+
+.measure-result-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  min-width: 0;
+  color: var(--color-secondary-strong);
+}
+
+.measure-result-row + .measure-result-row {
+  margin-top: var(--sp-2);
+  padding-top: var(--sp-2);
+  border-top: var(--control-border-width) dashed var(--color-border);
+}
+
+.measure-result-row output {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  min-width: 0;
+  color: var(--color-accent-strong);
+  font-weight: var(--fw-black);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.measure-result-primary {
+  white-space: nowrap;
+}
+
+.measure-result-secondary {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.measure-display-row {
+  align-items: center;
+}
+
+.measure-result-note {
+  margin-top: var(--sp-1) !important;
+}
+
+.measure-clear-row {
+  margin-top: var(--sp-2);
+}
+
 .mirror-axis-notice {
   margin: 0;
   color: var(--color-accent-strong);
@@ -2012,6 +2125,121 @@ input[type="radio"] {
   min-height: 0;
   overflow: hidden;
   box-shadow: var(--shadow-canvas-3d);
+}
+
+/* 3D上の文字札はすべて同じ領域の1列へ積み、札同士を重ねない。右の視点立方体を
+   避け、高さ不足時だけ上下の送りボタンを出す。DOM上の包みは常設区画を増やさない。 */
+.viewer-overlay-region {
+  position: absolute;
+  top: var(--sp-5);
+  bottom: var(--sp-5);
+  left: var(--sp-5);
+  z-index: 7;
+  width: min(430px, calc(100% - 164px));
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.viewer-overlay-stack {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-3);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  pointer-events: none;
+  scrollbar-gutter: stable;
+}
+
+/* ボタン行を札と重ねず、その上までを送れる表示領域にする。 */
+.viewer-overlay-region[data-overflow="true"] .viewer-overlay-stack {
+  bottom: var(--viewer-overlay-scroll-controls-height);
+}
+
+.viewer-overlay-scroll-controls {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  height: var(--viewer-overlay-scroll-controls-height);
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  pointer-events: none;
+}
+
+.viewer-overlay-scroll-controls > button {
+  min-width: 0;
+  min-height: 30px;
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-translucent-strong);
+  box-shadow: var(--shadow-button);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  pointer-events: auto;
+}
+
+.viewer-overlay-stack > .status-badge,
+.viewer-overlay-stack > .suspect-hinge-guide,
+.viewer-overlay-stack > .viewer-operation-hint,
+.viewer-overlay-stack > .viewer-operation-hint.collapsed,
+.viewer-overlay-stack > .paper-action-tip,
+.viewer-overlay-stack > .paper-action-tip.compact,
+.viewer-overlay-stack > .paper-action-tip.expanded {
+  position: relative;
+  inset: auto;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  left: auto;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  max-height: none;
+  box-sizing: border-box;
+  flex: none;
+  margin: 0;
+}
+
+/* 状態札と操作説明は従来どおり紙のクリックを通す。押せる札だけを受け取りへ戻す。 */
+.viewer-overlay-stack > .suspect-hinge-guide,
+.viewer-overlay-stack > .paper-action-tip {
+  pointer-events: auto;
+}
+
+/* 縦列では吹き出しの尻尾を使わない。張り出した20pxの菱形が次の札へ重ならない。 */
+.viewer-overlay-stack > .viewer-operation-hint::after {
+  display: none;
+}
+
+/* 列では「…」で内容を捨てず、高さ方向へ折り返す。列そのものを送れるので、
+   通知・道具名・紙操作の題とボタンを最後まで読んでも3D区画からはみ出さない。 */
+.viewer-overlay-stack > .status-badge > span,
+.viewer-overlay-stack > .suspect-hinge-guide,
+.viewer-overlay-stack .viewer-mode-copy strong,
+.viewer-overlay-stack .paper-action-tip.expanded > strong,
+.viewer-overlay-stack .paper-action-tip.compact,
+.viewer-overlay-stack .paper-action-tip-buttons > button {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.viewer-overlay-stack .paper-action-tip.expanded > strong {
+  padding-right: calc(28px + var(--sp-3));
 }
 
 /* 手順タイムライン(3D区画の下側・96px) */
@@ -2368,6 +2596,15 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   filter: none;
 }
 
+/* 通知の段が折り返すと、直下の3D操作札へ高さが食い込む。全文は吹き出しで読めるため、
+   札自体は1行に保ち、決めてある40px刻みの縦位置を崩さない。 */
+.status-badge > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* 食い込み候補の案内。押すと最初の赤い折り目を選び、既存の角度欄へつなぐ。 */
 .suspect-hinge-guide {
   position: absolute;
@@ -2382,7 +2619,10 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   font-size: var(--fs-sm);
   font-weight: var(--fw-bold);
   line-height: var(--lh-tight);
+  overflow: hidden;
   box-shadow: var(--shadow-collision-guide);
+  text-overflow: ellipsis;
+  white-space: nowrap;
   cursor: pointer;
   /* 最狭時も操作案内の裏へ隠さず、原因へ進む操作を残す。 */
   z-index: 5;
@@ -3127,42 +3367,57 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   box-shadow: var(--shadow-selected-control);
 }
 
+/* 1000×700の既定分割では3D区画465px・案内札301px。4項目を1行へ押し込むと、
+   要点の実測629px中74pxしか見えなかった。区画が狭い間は詳細を▼へ縮め、
+   要点を2行目以降へ折り返して、文字どうしを重ねず最後まで読めるようにする。 */
+@container viewer-operation-help (max-width: 520px) {
+  .viewer-operation-hint.collapsed .viewer-current-row {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: start;
+  }
+
+  .viewer-operation-hint.collapsed .viewer-mode-icon.compact {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .viewer-operation-hint.collapsed .viewer-mode-name {
+    grid-column: 2;
+    grid-row: 1;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .viewer-operation-hint.collapsed .viewer-current-action {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+  }
+
+  .viewer-operation-hint.collapsed .viewer-hint-toggle {
+    grid-column: 3;
+    grid-row: 1;
+    width: 32px;
+    min-width: 32px;
+    padding-inline: var(--sp-1);
+  }
+
+  .viewer-operation-hint.collapsed .viewer-hint-toggle .operation-detail-label {
+    display: none;
+  }
+}
+
 /* 左右仕切りで3Dだけを狭くした場合。window幅ではなく実際の3D区画幅で切り替える。 */
 @container viewer-operation-help (max-width: 360px) {
   .viewer-operation-hint {
-    top: var(--sp-5);
-    right: 152px;
-    max-width: none;
-    max-height: calc(100% - 2 * var(--sp-5));
     padding: var(--sp-3);
-    overflow-x: hidden;
-    overflow-y: auto;
   }
 
   .viewer-operation-hint::after {
     display: none;
-  }
-
-  /* 狭い3Dでは右上の視点立方体を避ける必要がないので、区画の幅いっぱいまで使える。
-     たたんだ札は中身の幅で止まるため、ここでは上限だけを広げる。 */
-  .viewer-operation-hint.collapsed {
-    max-width: calc(100% - 2 * var(--sp-5));
-    max-height: none;
-    overflow: visible;
-  }
-
-  /* 紙の詳しい案内も開いた間は、3Dカードを要点1行へ縮めて上下を分ける。 */
-  .viewer-operation-hint.paper-action-tip-open .viewer-operation-heading,
-  .viewer-operation-hint.paper-action-tip-open .viewer-mouse-assignments {
-    display: none;
-  }
-
-  .viewer-operation-hint.paper-action-tip-open .viewer-current-row {
-    margin-top: 0;
-  }
-
-  .viewer-operation-hint.paper-action-tip-open {
-    max-height: 48px;
   }
 
   .viewer-hint-toggle {
@@ -3178,34 +3433,16 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   .viewer-mouse-assignments {
     grid-template-columns: minmax(0, 1fr);
   }
-
-  .paper-action-tip {
-    right: var(--sp-5);
-  }
-
-  .paper-action-tip.compact {
-    bottom: 56px;
-    width: auto;
-    max-width: none;
-  }
-
-  .paper-action-tip.expanded {
-    right: var(--sp-5);
-    bottom: 56px;
-    width: auto;
-    max-width: none;
-    /* 通常高さでは上の3Dカード領域を確保し、カードの中だけを送る。 */
-    max-height: calc(100% - 222px);
-    overflow-y: auto;
-  }
 }
 
-/* 最小ウィンドウでは3D区画自体が低くなるため、説明を消さず小さなスクロール枠へ収める。 */
-@media (max-height: 760px) {
-  @container viewer-operation-help (max-width: 360px) {
-    .paper-action-tip.expanded {
-      max-height: calc(100% - 120px);
-    }
+/* 3D幅が360px以下なら、128pxの視点立方体の下から列を始める。右下の
+   「視点を戻す」まで56px空け、186px幅でも横へはみ出さない。 */
+@container viewer-operation-help (max-width: 360px) {
+  .viewer-overlay-region {
+    top: 148px;
+    right: var(--sp-5);
+    bottom: 56px;
+    width: auto;
   }
 }
 
@@ -4139,6 +4376,34 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   padding: var(--sp-1) var(--sp-5);
 }
 
+/* 角度の固定。折り目に付く印(2D・3D)と同じ輪をボタンにも出し、
+   押すと何が起きるかを言葉なしで結び付ける。新しい区画は作らない。 */
+.pin-mark {
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.15em;
+  margin-right: var(--sp-1);
+}
+
+.pin-toggle {
+  display: inline-flex;
+  align-items: center;
+}
+
+.pin-toggle.pinned {
+  border-color: var(--color-text);
+  background: var(--color-text);
+  color: var(--color-surface);
+}
+
+.pinned-count {
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -4215,7 +4480,9 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 .dialog-backdrop {
   position: fixed;
   inset: 0;
-  background: var(--color-scrim);
+  /* モーダルの後ろは操作できない。弱い半透明幕では常設4区画の文字やボタンが
+     読めて手前と混同したため、各テーマの濃い重ね色で明確に分ける。 */
+  background: var(--color-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4228,6 +4495,9 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 .dialog {
   position: relative;
   background: var(--dialog-background);
+  /* ポップテーマの背景はgradientなので、画像化やgradient非対応時にも
+     後ろの画面が透けない不透明な下地を必ず持たせる。 */
+  background-color: var(--color-surface);
   border: var(--panel-border-width) solid var(--panel-border-color);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-dialog);
@@ -4320,6 +4590,12 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   max-width: 720px;
   max-height: 88vh;
   overflow-y: auto;
+}
+
+/* 候補4枚では、88vhだと1000×700で内容が実測19pxだけ余り、すべて見えて
+   いるのに不要な巻物が出る。候補を縮めず、上下18pxの範囲まで使う。 */
+.dialog-wide[data-proposal-step="candidates"] {
+  max-height: calc(100vh - 36px);
 }
 
 /* 詳しいヘルプセンター(UI-011)。4区画の上に重ね、内部だけをスクロールする。 */
@@ -4765,6 +5041,253 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   border-radius: var(--radius-lg);
   background: var(--color-surface);
   box-shadow: var(--shadow-2);
+}
+
+/* 形見本の先端のつまみ。説明を読まなくても「つまんで動かせる」と分かるように、
+   指の形と、押している間の色の変化で示す。 */
+.skeleton-preview .tip-handle {
+  cursor: grab;
+  touch-action: none;
+}
+
+/* 触れている間は輪の色だけを変える。塗りは「場所を決めたかどうか」を表すので変えない。 */
+.skeleton-preview .tip-handle:hover,
+.skeleton-preview .tip-handle:active {
+  stroke: var(--color-accent);
+}
+
+.skeleton-preview .tip-handle:active {
+  cursor: grabbing;
+}
+
+/* 共通の枠線(outline 2px + box-shadow 0 0 0 4px)を、この絵の中では使わない。
+   見本は横3.75の座標を200pxで描くため、絵の中の1は画面上の約53pxにあたり、
+   枠線の2は約107px(見本の幅の半分)に化ける。実測では見本のほぼ全面が塗られ、
+   出っぱりの線も呼び名も見えなくなった。
+   選んでいる先端は、同じ絵の中の長さで描く輪(tip-focus-ring)で示す。 */
+.skeleton-preview .tip-handle:focus,
+.skeleton-preview .tip-handle:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+/* 紙の上の場所は候補の小さな絵とは分け、選んだ1件だけを大きく表示する。 */
+.paper-position-stage {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0 0 var(--sp-4);
+}
+
+.paper-position-editor {
+  display: block;
+  height: auto;
+  min-width: 0;
+  max-width: 100%;
+  border: var(--panel-border-width) solid var(--color-secondary-border-soft);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-2);
+  touch-action: none;
+}
+
+.paper-position-handle {
+  cursor: grab;
+  touch-action: none;
+}
+
+.paper-position-handle:hover,
+.paper-position-handle:active {
+  stroke: var(--color-accent-strong);
+}
+
+.paper-position-handle:active {
+  cursor: grabbing;
+}
+
+.paper-position-editor[data-disabled="true"] .paper-position-handle {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+/* SVG座標で巨大化する共通outlineは使わず、同じSVG内の輪で選択を示す。 */
+.paper-position-handle:focus,
+.paper-position-handle:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+/* 呼び名と引き出し線は表示だけにし、その下のつまみを直接つかめるようにする。 */
+.paper-position-label,
+.paper-position-label-leader {
+  pointer-events: none;
+}
+
+.paper-position-status {
+  padding: var(--sp-3) var(--sp-4);
+  border: var(--control-border-width) solid var(--color-secondary-border-soft);
+  border-radius: var(--radius-md);
+  background: var(--color-secondary-soft);
+  font-weight: var(--fw-bold);
+}
+
+.paper-position-status[data-paper-position-status="changed"] {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.paper-position-actions {
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+
+/* 完成形と紙の上で場所が違う葉だけ、色に加えて破線の輪と文で知らせる。 */
+.tip-position-different-ring,
+.paper-position-different-ring {
+  pointer-events: none;
+}
+
+.proposal-position-notices {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0 0 var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  box-sizing: border-box;
+  border: var(--control-border-width) solid var(--color-danger);
+  border-radius: var(--radius-md);
+  background: var(--color-danger-soft);
+}
+
+.proposal-position-notices > p {
+  margin: 0 0 var(--sp-2);
+  font-weight: var(--fw-bold);
+}
+
+.proposal-position-notices ul {
+  display: grid;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.proposal-position-notices li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-3);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.proposal-position-notices li > span {
+  flex: 1 1 240px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.proposal-position-notices button,
+.proposal-position-history button {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.proposal-position-history {
+  min-width: 0;
+  max-width: 100%;
+  margin-bottom: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+/* 紙位置画面だけは、紙全体と説明・操作を左右に並べる。
+   1000×700で560pxの紙を表示域へ単純に縮めると、つまみ直径が28pxから約18pxへ
+   落ちる。左列を560pxのまま保つことで、4〜12本の位置関係を一度に見渡せる。 */
+.dialog-wide[data-proposal-step="paper-position"] {
+  height: min(668px, calc(100vh - 36px));
+  max-height: min(668px, calc(100vh - 36px));
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.paper-position-step {
+  display: grid;
+  grid-template-columns: 560px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: var(--sp-4) 16px;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.paper-position-sidebar {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.paper-position-sidebar > h2,
+.paper-position-sidebar > .proposal-position-history,
+.paper-position-sidebar > p,
+.paper-position-sidebar > .error-text {
+  flex: none;
+}
+
+/* 12本すべてに知らせが出ても下の3操作を隠さず、知らせ自身だけを送って読める。 */
+.paper-position-sidebar > .proposal-position-notices {
+  min-height: 0;
+  max-height: 112px;
+  flex: 0 1 112px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.paper-position-stage {
+  grid-column: 1;
+  grid-row: 1 / 3;
+  align-self: center;
+  width: 560px;
+  height: 560px;
+  min-height: 560px;
+  max-height: 560px;
+  margin: 0;
+  place-items: center;
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+
+.paper-position-editor {
+  flex: none;
+}
+
+.dialog .paper-position-actions:last-child {
+  grid-column: 2;
+  grid-row: 2;
+  align-self: end;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--sp-2);
+  margin: 0;
+  padding: var(--sp-4) 0 0;
+}
+
+.paper-position-actions > button {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .limb-list {

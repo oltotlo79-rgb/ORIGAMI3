@@ -61,9 +61,9 @@ describe("viewerHint", () => {
     expect(hint).toContain("Shift");
     expect(hint).toContain("Alt");
     expect(hint).toContain("Ctrl");
-    // ドラッグしにくい場所でも折り線を決められる2回クリックも案内する
-    expect(hint).toContain("Ctrl+クリック2回");
-    // 引いた折り線は3Dの札からも決められるので、下のパネルだけを案内しない
+    // ドラッグしにくい場所でも折り線を決められる2回のクリックも案内する
+    expect(hint).toContain("Ctrl+クリックを2回");
+    // 引いた折り線は3Dの札からも決められるので、下部パネルだけを案内しない
     expect(hint).toContain(FOLD_DECIDE_PLACES);
   });
 
@@ -73,7 +73,7 @@ describe("viewerHint", () => {
     expect(hint).toContain("再生中");
   });
 
-  it("折り線を引いた後は、3Dの札と下のパネルの両方で決められることを案内する", () => {
+  it("折り線を引いた後は、3Dの札と下部パネルの両方で決められることを案内する", () => {
     const hint = viewerHint({ ...READY, hasFoldDraft: true });
     expect(hint).toContain("折る");
     expect(hint).toContain(FOLD_DECIDE_PLACES);
@@ -82,8 +82,8 @@ describe("viewerHint", () => {
   });
 
   it("折り方を決める場所の言い方は、どの案内でも同じ1つにそろえる", () => {
-    // 3Dの札と下のパネルは同じ内容で連動するので、案内ごとに言い換えない
-    expect(FOLD_DECIDE_PLACES).toBe("3D左下の札か下のパネル");
+    // 3Dの札と下部パネルは同じ内容で連動するので、案内ごとに言い換えない
+    expect(FOLD_DECIDE_PLACES).toBe("3D左下の札か下部パネル");
     for (const hint of [
       viewerHint(READY),
       viewerHint({ ...READY, hasFoldDraft: true }),
@@ -95,8 +95,8 @@ describe("viewerHint", () => {
       }),
     ]) {
       expect(hint).toContain(FOLD_DECIDE_PLACES);
-      // 「下のパネル」だけを指す古い言い方が残っていないこと
-      expect(hint.split("下のパネル")).toHaveLength(2);
+      // 「下部パネル」だけを指す統一表記を保つこと
+      expect(hint.split("下部パネル")).toHaveLength(2);
     }
   });
 
@@ -145,7 +145,7 @@ describe("viewerHint", () => {
       techniqueCandidateCount: 0,
       techniqueFlapCount: 0,
     });
-    expect(sink).toContain("全ての層");
+    expect(sink).toContain("すべての層");
     expect(sink).toContain("中心線");
 
     const petal = viewerHint({
@@ -177,8 +177,8 @@ describe("viewerHint", () => {
     // まだ足りないうちは「あと何をするか」と今の個数を出す
     const few = viewerHint({ ...t, techniqueVertexCount: 2 });
     expect(few).toContain("角を順にクリック");
-    expect(few).toContain("3つ以上");
-    expect(few).toContain("いま2個");
+    expect(few).toContain("3個以上");
+    expect(few).toContain("現在2個");
     expect(few).toContain("Esc");
     expect(few).toContain("Shift+クリック");
     // 3つそろったら適用の案内へ変わる

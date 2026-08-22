@@ -127,13 +127,13 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
     for (const chapter of HELP_CHAPTERS) {
       expect(chapter.blocks.some(manualImage), `第${chapter.number}章`).toBe(true);
     }
-    expect(screenshots).toHaveLength(21);
+    expect(screenshots).toHaveLength(25);
     for (const screenshot of screenshots) {
       expect(screenshot.image).toMatch(/^screen-[a-z0-9-]+\.png$/);
       expect(screenshot.caption.trim().length).toBeGreaterThan(0);
     }
-    expect(images).toHaveLength(34);
-    expect(new Set(images).size).toBe(34);
+    expect(images).toHaveLength(38);
+    expect(new Set(images).size).toBe(38);
   });
 
   it("本文は表示部品を含まない直列化可能なデータで、題と本文を検索できる", () => {
@@ -599,6 +599,60 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
     expect(text).toContain("使っていないほうへ戻すには");
     expect(text).not.toContain("優先規則");
     expect(text).not.toContain("葉ごと");
+  });
+
+  it("「測る」道具と折り目の「固定」を画面と同じ言葉で説明する", () => {
+    const measure = HELP_CHAPTERS.find((chapter) => chapter.id === "three-dimensional");
+    expect(measure).toBeDefined();
+    const measureText = helpChapterSearchText(measure!);
+
+    for (const screenText of [
+      "測る",
+      "角度や長さ、2つの点の距離を測ります",
+      "測り方",
+      "角度",
+      "線の長さ",
+      "2点の距離",
+      "選び直す",
+      "あと1つの辺を指定してください",
+      "あと1つの点を指定してください",
+      "小数",
+      "度を分数で",
+      "正確な形",
+      "この角度は度を分数で正確に表せないため、小数で表示します。",
+      "この長さは正確な形で表せないため、小数で表示します。",
+      "展開図での距離は正確な形で表せないため、小数で表示します。",
+      "この線では角度を測れません。別の線を選んでください。",
+      "この線では長さを測れません。別の線を選んでください。",
+      "この2つの点では距離を測れません。別の点を選んでください。",
+      "この位置では3D図での距離を測れません。別の点を選んでください。",
+      "展開図での距離",
+      "3D図での距離",
+    ]) {
+      expect(measureText, screenText).toContain(screenText);
+    }
+
+    expect(measureText).toContain("小数点以下4桁以内で割り切れる形にできるときは、小数を既定の表示にします");
+    expect(measureText).toContain("45/2°（22.5°）");
+    expect(measureText).toContain("150√2 mm（およそ 212.1320 mm）");
+    expect(measureText).toContain("平らな状態でも常に「およそ」の小数で表示します");
+    expect(measureText).toContain("別の道具へ切り替える、新しい作品を用意する、別の作品を開く、展開図を編集するといった操作で消えます");
+
+    const angles = HELP_CHAPTERS.find((chapter) => chapter.id === "angles");
+    expect(angles).toBeDefined();
+    const anglesText = helpChapterSearchText(angles!);
+
+    for (const screenText of [
+      "角度を固定",
+      "角度の固定を外す",
+      "角度をまとめて固定",
+      "角度の固定をまとめて外す",
+      "角度を固定中1本",
+      "固定した折り目1本を、紙が裂けないように動かしました: 折り目 #45(固定 -180.0° → いま -48.0°、差 132.0°)。この折り目の固定を外すか、ほかの折り目の角度の指定を減らすと、固定した角度のまま折れることがあります。",
+      "固定を外して現在-48.0°",
+    ]) {
+      expect(anglesText, screenText).toContain(screenText);
+    }
   });
 
   it("利用者向け文字列に指定された内部用語が0件である", () => {

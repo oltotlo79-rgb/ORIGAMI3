@@ -102,8 +102,11 @@ export function CpEditor({ fitRef }: Props) {
   const selection = useAppStore((s) => s.selection);
   const hoveredHinge = useAppStore((s) => s.hoveredHinge);
   const suspectHinges = useAppStore((s) => s.suspectHinges);
+  const pinnedFolds = useAppStore((s) => s.pinnedFolds);
+  const releasedPins = useAppStore((s) => s.releasedPins);
   const activeAngleIntent = useAppStore((s) => s.activeAngleIntent);
   const activeTool = useAppStore((s) => s.activeTool);
+  const measureDraft = useAppStore((s) => s.measureDraft);
   const docEpoch = useAppStore((s) => s.docEpoch);
   const violations = useAppStore((s) => s.violations);
   const stepCreases = useAppStore((s) => s.stepCreases);
@@ -125,6 +128,7 @@ export function CpEditor({ fitRef }: Props) {
       stepCreases,
       selection,
       activeTool,
+      measureDraft,
       violations,
       construct,
       curve,
@@ -132,6 +136,8 @@ export function CpEditor({ fitRef }: Props) {
       mirrorAxis,
       hoveredHinge,
       suspectHinges,
+      pinnedFolds,
+      releasedPins,
       activeAngleIntent,
       alignDraft,
       foldDraft,
@@ -223,7 +229,12 @@ export function CpEditor({ fitRef }: Props) {
             : null);
     const overlay: RenderOverlay = {
       // 作図も通常線と同じhoverSnapを渡し、renderer共通の緑丸で吸着を知らせる。
-      hoverSnap: kind !== undefined || activeTool === "construct" ? st.hoverSnap : null,
+      hoverSnap:
+        kind !== undefined ||
+        activeTool === "construct" ||
+        (activeTool === "measure" && measureDraft.mode === "distance")
+          ? st.hoverSnap
+          : null,
       preview,
       directionGuide,
       mirrorAxis: axisSegment,
@@ -240,7 +251,17 @@ export function CpEditor({ fitRef }: Props) {
         st.marqueeStart && st.marqueeEnd ? { a: st.marqueeStart, b: st.marqueeEnd } : null,
       violations: cpViolations,
       constructPoints:
-        activeTool === "construct" ? st.constructPoints : curveMode ? st.curvePoints : [],
+        activeTool === "measure" && measureDraft.mode === "distance"
+          ? measureDraft.picks.flatMap((pick) =>
+              // 頂点は既存の選択印で描かれる。IDを持たない方眼・任意点だけを
+              // 作図用の点表示へ渡し、同じ位置へ印を二重描画しない。
+              pick.kind === "point" && pick.vertexId === null ? [pick.cp] : [],
+            )
+          : activeTool === "construct"
+            ? st.constructPoints
+            : curveMode
+              ? st.curvePoints
+              : [],
       // 作図補助では次にすることを常に1行で出す(設計原則3b)
       // つかんで動かしている間は、その案内を他より優先して出す
       hint:
@@ -257,6 +278,9 @@ export function CpEditor({ fitRef }: Props) {
       hoveredHinge,
       suspectHinges,
       activeHinges: activeAngleIntent?.hinges ?? [],
+      // 固定した折り目は、選んでいなくても印を出す
+      pinnedHinges: [...pinnedFolds.keys()],
+      releasedPinHinges: releasedPins.map((pin) => pin.hinge),
     };
     if (captureClean) {
       // 撮影画像には作品そのものだけを残し、操作中だけの案内・強調を消す。
@@ -276,6 +300,8 @@ export function CpEditor({ fitRef }: Props) {
       overlay.hoveredHinge = null;
       overlay.suspectHinges = [];
       overlay.activeHinges = [];
+      overlay.pinnedHinges = [];
+      overlay.releasedPinHinges = [];
     }
     const ctx2d = canvas.getContext("2d");
     if (ctx2d) {
@@ -311,6 +337,7 @@ export function CpEditor({ fitRef }: Props) {
       frame3d: s.frame3d,
       construct: s.construct,
       curve: s.curve,
+      measureMode: s.measureDraft.mode,
       wheelBehavior: s.wheelBehavior,
       violations: violationsForCpStep(stepDoc, s.violations),
       // 点移動の対称位置吸着は、対称描画のオン・オフに関係なく現在の基準を使う。
@@ -328,6 +355,8 @@ export function CpEditor({ fitRef }: Props) {
       setSelection: s.setSelection,
       beginFoldDraft: s.beginFoldDraft,
       pickAlignTarget: s.pickAlignTarget,
+      pickMeasureEdge: s.pickMeasureEdge,
+      pickMeasurePoint: s.pickMeasurePoint,
     };
   }, []);
 
@@ -340,8 +369,11 @@ export function CpEditor({ fitRef }: Props) {
     selection,
     hoveredHinge,
     suspectHinges,
+    pinnedFolds,
+    releasedPins,
     activeAngleIntent,
     activeTool,
+    measureDraft,
     violations,
     stepCreases,
     construct,
@@ -388,6 +420,7 @@ export function CpEditor({ fitRef }: Props) {
     construct.kind,
     curve.enabled,
     curve.shape,
+    measureDraft.mode,
     draw,
   ]);
 
@@ -424,6 +457,10 @@ export function CpEditor({ fitRef }: Props) {
       const ctx = makeCtx();
       if (ctx) {
         onKeyDown(ctx, e.key);
+        const s = useAppStore.getState();
+        if (e.key === "Escape" && s.activeTool === "measure") {
+          s.clearMeasurement();
+        }
         draw();
       }
     };

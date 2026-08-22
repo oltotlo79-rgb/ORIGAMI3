@@ -213,45 +213,64 @@ function App() {
         <PaneSplitter />
         <section className="pane pane-3d">
           <div className="pane-3d-view">
-            <Viewer3D fitRef={fit3dRef} />
-            {badgeText !== null && (
-              <div
-                className={
-                  hasError
-                    ? "status-badge error"
-                    : showFollowStatus
-                      ? "status-badge follow"
-                      : "status-badge"
-                }
-                data-floating-ui="status-badge"
-                data-tooltip="詳しい通知を下のパネルで確認できます"
-              >
-                <svg
-                  className="status-icon"
-                  viewBox="0 0 24 24"
-                  aria-hidden="true"
-                  focusable="false"
-                >
-                  <path d="M12 3 22 20H2L12 3Z" fill="none" stroke="currentColor" strokeWidth="2.4" />
-                  <path d="M12 8v6" stroke="currentColor" strokeLinecap="round" strokeWidth="2.4" />
-                  <circle cx="12" cy="17.5" r="1.2" fill="currentColor" />
-                </svg>
-                <span>{badgeText}</span>
-              </div>
-            )}
-            {suspectHinges.length > 0 && (
-              <button
-                type="button"
-                className="suspect-hinge-guide"
-                data-floating-ui="suspect-hinge-guide"
-                data-tooltip="原因候補の折り目を選び、角度を確認します"
-                onClick={() =>
-                  setSelection({ edgeIds: [suspectHinges[0]], vertexIds: [] })
-                }
-              >
-                赤く光る折り目の角度を見直してください
-              </button>
-            )}
+            <Viewer3D
+              fitRef={fit3dRef}
+              statusOverlays={
+                <>
+                  {badgeText !== null && (
+                    <div
+                      className={
+                        hasError
+                          ? "status-badge error"
+                          : showFollowStatus
+                            ? "status-badge follow"
+                            : "status-badge"
+                      }
+                      data-floating-ui="status-badge"
+                      data-tooltip={badgeText}
+                    >
+                      <svg
+                        className="status-icon"
+                        viewBox="0 0 24 24"
+                        aria-hidden="true"
+                        focusable="false"
+                      >
+                        <path
+                          d="M12 3 22 20H2L12 3Z"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.4"
+                        />
+                        <path
+                          d="M12 8v6"
+                          stroke="currentColor"
+                          strokeLinecap="round"
+                          strokeWidth="2.4"
+                        />
+                        <circle cx="12" cy="17.5" r="1.2" fill="currentColor" />
+                      </svg>
+                      <span>{badgeText}</span>
+                    </div>
+                  )}
+                  {suspectHinges.length > 0 && (
+                    <button
+                      type="button"
+                      className="suspect-hinge-guide"
+                      data-floating-ui="suspect-hinge-guide"
+                      data-tooltip="赤く光る折り目の角度を見直してください。押すと原因候補を選びます"
+                      onClick={() =>
+                        setSelection({
+                          edgeIds: [suspectHinges[0]],
+                          vertexIds: [],
+                        })
+                      }
+                    >
+                      赤く光る折り目の角度を見直してください
+                    </button>
+                  )}
+                </>
+              }
+            />
           </div>
           <Timeline />
         </section>

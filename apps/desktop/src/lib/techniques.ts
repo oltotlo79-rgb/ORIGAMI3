@@ -72,7 +72,7 @@ export const SUPPORTED_TECHNIQUES: {
     kind: "OpenSink",
     short: "沈め",
     title:
-      "沈め折り: フラップの先端(角)を袋の内側へ押し込みます。沈める折り線をドラッグし、Ctrl+クリックの基準点で押し込む先端側を指定できます。層を選ばなければ先端側の全ての層が沈みます",
+      "沈め折り: フラップの先端(角)を袋の内側へ押し込みます。沈める折り線をドラッグし、Ctrl+クリックの基準点で押し込む先端側を指定できます。層を選ばなければ先端側のすべての層が沈みます",
   },
   {
     kind: "Swivel",
@@ -136,8 +136,16 @@ const FIX_HINTS: [RegExp, string][] = [
 ];
 
 export function withFixHint(warnings: string[]): string[] {
-  return warnings.map((w) => {
-    const hint = FIX_HINTS.find(([re]) => re.test(w))?.[1];
-    return hint === undefined || w.includes(hint) ? w : `${w}。${hint}`;
+  return warnings.map((source) => {
+    const hint = FIX_HINTS.find(([re]) => re.test(source))?.[1];
+    // 計算結果の生の語はストアには保持しても、画面へはそのまま出さない。
+    // 手順番号など周囲の情報は残し、利用者が判断できる状態へ言い換える。
+    const warning = source.replace(
+      /追従計算が収束していません/gu,
+      "指定した角度に近い形を表示しています",
+    );
+    return hint === undefined || warning.includes(hint)
+      ? warning
+      : `${warning}。${hint}`;
   });
 }

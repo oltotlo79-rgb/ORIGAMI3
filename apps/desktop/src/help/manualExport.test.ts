@@ -57,12 +57,12 @@ describe("取扱説明書向けの実画面図", () => {
     expect(exported.chapters).toHaveLength(13);
     expect(Object.keys(exported.diagrams)).toHaveLength(6);
     expect(figures).toHaveLength(6);
-    expect(screenshots).toHaveLength(35);
-    expect(images).toHaveLength(41);
+    expect(screenshots).toHaveLength(39);
+    expect(images).toHaveLength(45);
     expect(derivedImages).toHaveLength(7);
     expect(new Set(derivedImages).size).toBe(7);
-    expect(screenImages).toHaveLength(34);
-    expect(new Set(screenImages).size).toBe(34);
+    expect(screenImages).toHaveLength(38);
+    expect(new Set(screenImages).size).toBe(38);
 
     for (const id of MANUAL_IMAGE_DIAGRAM_IDS) {
       expect(figures.some((block) => block.diagramId === id)).toBe(false);

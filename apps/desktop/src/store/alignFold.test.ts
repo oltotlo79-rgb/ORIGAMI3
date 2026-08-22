@@ -212,6 +212,7 @@ describe("求まった折り線でFoldThroughを送る", () => {
       violations: [],
       frame: { faces: [], warnings: [] },
       skipped: [],
+      contact_detected: false,
     });
     const s = useAppStore.getState();
     s.beginAlign("pointPoint");

@@ -52,6 +52,7 @@ import { MirrorAxisControls } from "./MirrorAxisControls";
 import { mirrorAxisLabel } from "../lib/mirror";
 import { OperationSteps } from "./OperationSteps";
 import { NumberStepper } from "./NumberStepper";
+import { MeasureControls } from "./MeasureControls";
 
 const KIND_LABEL: Record<EdgeKind, string> = {
   Border: "輪郭",
@@ -174,16 +175,47 @@ function AngleNumberInput({
   );
 }
 
-/** 選択中の折り線1本の角度操作(スライダー+数値入力+解除) */
+/**
+ * 角度を固定した折り目に付ける印。2D展開図・3Dに出る印と同じ形にして、
+ * ボタンと折り目の印が同じものだと言葉なしで分かるようにする。
+ */
+function PinMark({ released }: { released: boolean }) {
+  return (
+    <svg
+      className="pin-mark"
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <circle
+        cx="8"
+        cy="8"
+        r="5.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeDasharray={released ? "3 3" : undefined}
+      />
+      {!released && <circle cx="8" cy="8" r="1.8" fill="currentColor" />}
+    </svg>
+  );
+}
+
+/** 選択中の折り線1本の角度操作(スライダー+数値入力+固定+解除) */
 function HingeAngle({ hinge, only }: { hinge: number; only: boolean }) {
   const drivers = useAppStore((s) => s.drivers);
   const poseAngles = useAppStore((s) => s.poseAngles);
   const sequenceTargets = useAppStore((s) => s.sequenceTargets);
   const relaxations = useAppStore((s) => s.relaxations);
+  const pinnedFolds = useAppStore((s) => s.pinnedFolds);
+  const releasedPins = useAppStore((s) => s.releasedPins);
   const setDriverAngle = useAppStore((s) => s.setDriverAngle);
   const clearDriver = useAppStore((s) => s.clearDriver);
+  const togglePinnedFold = useAppStore((s) => s.togglePinnedFold);
   const setHoveredHinge = useAppStore((s) => s.setHoveredHinge);
   const finishAngleIntent = useAppStore((s) => s.finishAngleIntent);
+  const pinned = pinnedFolds.has(hinge);
+  const released = releasedPins.find((pin) => pin.hinge === hinge);
 
   const relaxation = relaxationNotices(relaxations).find((item) => item.hinge === hinge);
   // 一時指定・保存済み希望は、計算結果が譲っても入力欄へそのまま残す。
@@ -213,8 +245,16 @@ function HingeAngle({ hinge, only }: { hinge: number; only: boolean }) {
         <strong>{only ? "折り角度" : label}</strong>
         <span>
           {value}°
-          {relaxation && (
-            <small className="actual-angle">現在{relaxation.actual_angle_deg.toFixed(1)}°</small>
+          {released ? (
+            <small className="actual-angle">
+              固定を外して現在{released.actual.toFixed(1)}°
+            </small>
+          ) : (
+            relaxation && (
+              <small className="actual-angle">
+                現在{relaxation.actual_angle_deg.toFixed(1)}°
+              </small>
+            )
           )}
         </span>
       </div>
@@ -246,6 +286,20 @@ function HingeAngle({ hinge, only }: { hinge: number; only: boolean }) {
         />
         <button
           type="button"
+          className={`pin-toggle${pinned ? " pinned" : ""}`}
+          aria-pressed={pinned}
+          data-tooltip={
+            pinned
+              ? "この折り目の角度の固定をやめます。ほかの折り目に合わせて動くようになります"
+              : "この折り目の角度を固定します。ほかの折り目を動かしても、この角度のままになります"
+          }
+          onClick={() => togglePinnedFold(hinge)}
+        >
+          <PinMark released={released !== undefined} />
+          {pinned ? "角度の固定を外す" : "角度を固定"}
+        </button>
+        <button
+          type="button"
           data-tooltip="この折り線の角度指定を解除し、形を計算し直します"
           disabled={specified === undefined}
           onClick={() => clearDriver(hinge)}
@@ -265,6 +319,9 @@ function HingeAngleGroup({ hinges }: { hinges: number[] }) {
   const relaxations = useAppStore((s) => s.relaxations);
   const setDriverAngles = useAppStore((s) => s.setDriverAngles);
   const finishAngleIntent = useAppStore((s) => s.finishAngleIntent);
+  const pinnedFolds = useAppStore((s) => s.pinnedFolds);
+  const setPinnedFolds = useAppStore((s) => s.setPinnedFolds);
+  const allPinned = hinges.every((hinge) => pinnedFolds.has(hinge));
   const noticed = relaxationNotices(relaxations);
   const values = hinges.map((hinge) =>
     Math.round(
@@ -325,6 +382,20 @@ function HingeAngleGroup({ hinges }: { hinges: number[] }) {
           onValue={(angle) => setDriverAngles(hinges, angle)}
           onFinish={() => void finishAngleIntent()}
         />
+        <button
+          type="button"
+          className={`pin-toggle${allPinned ? " pinned" : ""}`}
+          aria-pressed={allPinned}
+          data-tooltip={
+            allPinned
+              ? "選んだ折り目の固定をまとめてやめます"
+              : "選んだ折り目の角度をまとめて固定します。ほかの折り目を動かしても、この角度のままになります"
+          }
+          onClick={() => setPinnedFolds(hinges, !allPinned)}
+        >
+          <PinMark released={false} />
+          {allPinned ? "角度の固定をまとめて外す" : "角度をまとめて固定"}
+        </button>
       </div>
     </section>
   );
@@ -362,6 +433,7 @@ function FoldControls({ primary = false }: { primary?: boolean }) {
   const hinges = useAppStore((s) => s.hinges);
   const selection = useAppStore((s) => s.selection);
   const drivers = useAppStore((s) => s.drivers);
+  const pinnedFolds = useAppStore((s) => s.pinnedFolds);
   const clearDrivers = useAppStore((s) => s.clearDrivers);
   const setHoveredHinge = useAppStore((s) => s.setHoveredHinge);
 
@@ -385,6 +457,14 @@ function FoldControls({ primary = false }: { primary?: boolean }) {
             tabIndex={0}
           >
             <strong>折り目を{selected.length}本選択中</strong>
+            {pinnedFolds.size > 0 && (
+              // 選んでいない折り目も含めた「いま固定している本数」。
+              // 新しい区画は作らず、この見出しの中に出す。
+              <span className="pinned-count">
+                <PinMark released={false} />
+                角度を固定中{pinnedFolds.size}本
+              </span>
+            )}
           </div>
           {selected.length > 1 && <HingeAngleGroup hinges={selected} />}
           <div className="hinge-angle-list" aria-label="選択した折り目ごとの角度">
@@ -889,12 +969,13 @@ function TechniqueLayerPicker({ draft }: { draft: TechniqueDraft }) {
       <legend>対象にする層</legend>
       <div className="button-row">
         <span>
-          候補{candidates.length}枚(奥→手前) / 選択{draft.flap.length}枚
+          候補{candidates.length}枚（奥から手前の順） / 選択
+          {draft.flap.length}枚
         </span>
-        <label htmlFor="technique-layer-count">N(枚数・奥行き)</label>
+        <label htmlFor="technique-layer-count">選ぶ枚数</label>
         <NumberInput
           id="technique-layer-count"
-          ariaLabel="対象層の枚数"
+          ariaLabel="選ぶ層の枚数"
           value={draft.flapPickCount}
           min={1}
           max={Math.max(1, candidates.length)}
@@ -908,17 +989,17 @@ function TechniqueLayerPicker({ draft }: { draft: TechniqueDraft }) {
           全部
         </button>
         <button type="button" disabled={!hasCandidates} onClick={() => setPreset("front")}>
-          手前からN枚
+          手前から{draft.flapPickCount}枚
         </button>
         <button type="button" disabled={!hasCandidates} onClick={() => setPreset("back")}>
-          奥からN枚
+          奥から{draft.flapPickCount}枚
         </button>
         <button
           type="button"
           disabled={!hasCandidates}
           onClick={() => setPreset("frontNth")}
         >
-          手前からN枚目
+          手前から{draft.flapPickCount}枚目
         </button>
       </div>
       {hasCandidates ? (
@@ -935,7 +1016,7 @@ function TechniqueLayerPicker({ draft }: { draft: TechniqueDraft }) {
                     checked={selected.has(face)}
                     onChange={() => toggleFlap(face)}
                   />
-                  奥から{fromBack}枚目 / 手前から{fromFront}枚目(面{face})
+                  奥から{fromBack}枚目 / 手前から{fromFront}枚目
                 </label>
               );
             })}
@@ -1005,13 +1086,21 @@ function LayerMotionDraftContent({ draft }: { draft: TechniqueDraft }) {
   const undoLayerMotionPart = useAppStore((s) => s.undoLayerMotionPart);
   const cancelTechnique = useAppStore((s) => s.cancelTechnique);
   const commitTechnique = useAppStore((s) => s.commitTechnique);
+  const motionAnchorIsVisible = draft.flapCandidates.includes(
+    draft.motionAnchor,
+  );
   const current = {
     layers: draft.flap,
     line: draft.line,
     mode: draft.motionMode,
     turn: draft.motionTurn,
     direction: draft.motionDirection,
-    anchor: draft.motionAnchor,
+    // 「隣へ置く面」は候補から選んだときだけ有効にする。内部の面番号を
+    // 利用者へ入力させず、奥・手前の順から選べるようにする。
+    anchor:
+      draft.motionTurn === "Beside" && !motionAnchorIsVisible
+        ? -1
+        : draft.motionAnchor,
     reverseLayers: draft.motionReverseLayers,
   } as const;
   const hasCurrent = hasLayerMotionInput(current);
@@ -1064,7 +1153,7 @@ function LayerMotionDraftContent({ draft }: { draft: TechniqueDraft }) {
             data-tooltip="3Dの既存折り目をクリックして、正確な開閉軸を選びます"
             tabIndex={0}
           >
-            軸: {draft.motionAxisEdgeId === null ? "未選択" : `折り目${draft.motionAxisEdgeId}`}
+            軸: {draft.motionAxisEdgeId === null ? "未選択" : "選んだ折り目"}
           </span>
         </div>
       ) : (
@@ -1073,9 +1162,15 @@ function LayerMotionDraftContent({ draft }: { draft: TechniqueDraft }) {
           <select
             id="layer-motion-turn"
             value={draft.motionTurn}
-            onChange={(e) =>
-              updateTechniqueDraft({ motionTurn: e.target.value as LayerTurnMode })
-            }
+            onChange={(e) => {
+              const motionTurn = e.target.value as LayerTurnMode;
+              updateTechniqueDraft({
+                motionTurn,
+                // 内部の既定値0を暗黙に面0の選択として扱わない。
+                // 「指定面」を選んだら、候補一覧から必ず明示してもらう。
+                ...(motionTurn === "Beside" ? { motionAnchor: -1 } : {}),
+              });
+            }}
           >
             <option value="Keep">位置を保つ</option>
             <option value="Outside">重なり全体の外側</option>
@@ -1084,16 +1179,27 @@ function LayerMotionDraftContent({ draft }: { draft: TechniqueDraft }) {
           </select>
           {draft.motionTurn === "Beside" && (
             <>
-              <label htmlFor="layer-motion-anchor">基準面ID</label>
-              <NumberInput
+              <label htmlFor="layer-motion-anchor">隣に置く面</label>
+              <select
                 id="layer-motion-anchor"
-                ariaLabel="基準面ID"
-                value={draft.motionAnchor}
-                min={0}
-                onPreview={(v) => updateTechniqueDraft({ motionAnchor: v })}
-                onCommit={(v) => updateTechniqueDraft({ motionAnchor: v })}
-                normalizeOnCommit={(v) => Math.max(0, Math.round(v))}
-              />
+                aria-label="隣に置く面"
+                value={motionAnchorIsVisible ? draft.motionAnchor : ""}
+                onChange={(event) =>
+                  updateTechniqueDraft({
+                    motionAnchor: Number(event.target.value),
+                  })
+                }
+              >
+                <option value="" disabled>
+                  面を選んでください
+                </option>
+                {draft.flapCandidates.map((face, index) => (
+                  <option key={face} value={face}>
+                    奥から{index + 1}枚目 / 手前から
+                    {draft.flapCandidates.length - index}枚目
+                  </option>
+                ))}
+              </select>
             </>
           )}
           {draft.motionTurn !== "Keep" && (
@@ -1610,9 +1716,11 @@ function SelectionContent() {
 /** 希望角を譲った折り目。作品を色付けせず、控えめな一覧から選択できるようにする。 */
 function RelaxationMessages() {
   const relaxations = useAppStore((s) => s.relaxations);
+  const releasedPins = useAppStore((s) => s.releasedPins);
   const setSelection = useAppStore((s) => s.setSelection);
   const setHoveredHinge = useAppStore((s) => s.setHoveredHinge);
   const notices = relaxationNotices(relaxations);
+  const released = new Set(releasedPins.map((pin) => pin.hinge));
 
   if (notices.length === 0) return null;
   return (
@@ -1631,7 +1739,8 @@ function RelaxationMessages() {
             setHoveredHinge(item.hinge);
           }}
         >
-          折り目 #{item.hinge}: 指定{item.target_angle_deg.toFixed(1)}° → 現在
+          折り目 #{item.hinge}: {released.has(item.hinge) ? "固定" : "指定"}
+          {item.target_angle_deg.toFixed(1)}° → 現在
           {item.actual_angle_deg.toFixed(1)}°
         </button>
       ))}
@@ -1675,11 +1784,16 @@ export function ContextPanel() {
   return (
     <footer className="context-panel" id="context-panel">
       <div className="context-selection">
-        {/* 手順を選んでいるときはその設定を優先する。折り線は「今見えている形」の
-            上に引くものなので、手順を選んだ時点でストアが捨てている(ここは念のため) */}
+        {/* 未処理の折り方確認を最優先し、測定中は過去の手順を見ていても測定欄を出す。
+            それ以外は、選んでいる手順の設定を優先する。 */}
         {pendingFoldThrough ? (
           <>
             <FoldThroughProposalContent pending={pendingFoldThrough} />
+            <OperationSteps />
+          </>
+        ) : activeTool === "measure" ? (
+          <>
+            <MeasureControls />
             <OperationSteps />
           </>
         ) : selectedStep !== null ? (

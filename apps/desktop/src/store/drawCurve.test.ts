@@ -53,6 +53,7 @@ const VIEW: DocumentView = {
   violations: [],
   frame: null,
   skipped: [],
+  contact_detected: false,
 };
 
 /** 送られた線を、1件送りとまとめ送りの両方から集める */

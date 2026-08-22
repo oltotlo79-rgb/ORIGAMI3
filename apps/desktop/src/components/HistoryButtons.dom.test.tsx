@@ -36,7 +36,9 @@ describe("元に戻す/やり直しのボタン", () => {
   });
 
   it("角度の履歴があれば、折り角度が戻ると知らせる", () => {
-    useAppStore.setState({ angleUndoStack: [new Map([[5, 90]])] });
+    useAppStore.setState({
+      angleUndoStack: [{ drivers: new Map([[5, 90]]), pinned: new Map() }],
+    });
     render(<HistoryButtons />);
     expect(undoButton().getAttribute("data-tooltip")).toContain(
       "折り角度の変更を戻します",
@@ -49,7 +51,7 @@ describe("元に戻す/やり直しのボタン", () => {
   it("やり直しは作品データが先で、その後に折り角度と知らせる", () => {
     useAppStore.setState({
       docUndoDepth: 1,
-      angleRedoStack: [new Map([[5, 90]])],
+      angleRedoStack: [{ drivers: new Map([[5, 90]]), pinned: new Map() }],
     });
     render(<HistoryButtons />);
     expect(redoButton().getAttribute("data-tooltip")).toContain(

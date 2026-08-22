@@ -26,11 +26,11 @@ export interface FoldReadiness {
  * 3Dの左下に出る札と下のパネルは同じ言葉・同じ並びで、どちらで選んでも同じ状態になる。
  * 案内ごとに「下のパネルだけ」と書いてしまわないための正本。
  */
-export const FOLD_DECIDE_PLACES = "3D左下の札か下のパネル";
+export const FOLD_DECIDE_PLACES = "3D左下の札か下部パネル";
 
 /** つかんで折る操作の説明(修飾キーの意味は常に出す) */
 export const DRAG_FOLD_HINT =
-  `紙をつかんでドラッグすると折れます(Shift=重なった紙を全部、Alt=いちばん上の1枚だけ、Ctrl+ドラッグかCtrl+クリック2回=折り線を引いて${FOLD_DECIDE_PLACES}で決める)`;
+  `紙をつかんでドラッグすると折れます(Shift=重なった紙を全部、Alt=いちばん上の1枚だけ、Ctrl+ドラッグかCtrl+クリックを2回=折り線を引いて${FOLD_DECIDE_PLACES}で決める)`;
 
 /**
  * 今は折れない理由(折れるならnull)。
@@ -169,7 +169,7 @@ export function alignHint(s: HintState): string {
   const solutionCount = s.alignSolutionCount ?? 0;
   const other =
     solutionCount >= 2
-      ? `解が${solutionCount}つあります。下のパネルの「別の解」で切り替えられます。`
+      ? `解が${solutionCount}つあります。下部パネルの「別の解」で切り替えられます。`
       : "";
   return `折り線が決まりました。${other}${FOLD_DECIDE_PLACES}で山折り/谷折りを選んで「折る」を押してください${ALIGN_KEYS}`;
 }
@@ -179,8 +179,8 @@ export function twistHint(s: HintState): string {
   const n = s.techniqueVertexCount ?? 0;
   const center = s.techniqueHasCenter ? "中心は指定した点" : "中心は形の重心";
   if (n < MIN_TWIST_VERTICES)
-    return `中央の形の角を順にクリックしてください(3つ以上。いま${n}個)。Ctrl+クリックで中心、Shift+クリックで対象層を指定、Backspaceで1つ戻す、Escでやめる`;
-  return `中央の形を${n}角形で指しました(${center})。角を足すクリック、Ctrl+クリックで中心、Shift+クリックで対象層も指定できます。下のパネルでねじる角・向き・開く側を決めて「適用」を押してください`;
+    return `中央の形の角を順にクリックしてください(3個以上。現在${n}個)。Ctrl+クリックで中心、Shift+クリックで対象層を指定、Backspaceで1つ戻す、Escでやめる`;
+  return `中央の形を${n}角形で指しました(${center})。角を足すクリック、Ctrl+クリックで中心、Shift+クリックで対象層も指定できます。下部パネルでねじる角・向き・開く側を決めて「適用」を押してください`;
 }
 
 /** 立体表示に出す1行の案内。どのツールでも必ず何か返す(空にしない) */
@@ -207,7 +207,7 @@ export function viewerHint(s: HintState): string {
     if (blocked) return `今は折れません: ${blocked}`;
     if (!s.hasTechnique) return "左の一覧から技法を選んでください";
     if (s.techniqueKind === "Simple") {
-      return "層操作: 紙面をクリックして対象層、既存折り目をクリックして正確な開閉軸を選びます。重ね替え・山谷反転・同時操作は下のパネルで指定できます";
+      return "層操作: 紙面をクリックして対象層、既存折り目をクリックして正確な開閉軸を選びます。重ね替え・山谷反転・同時操作は下部パネルで指定できます";
     }
     // ねじり折りは中央の多角形を頂点で指す(層は選ばなくてよい)
     if (s.techniqueKind === "Twist") return twistHint(s);
@@ -217,19 +217,19 @@ export function viewerHint(s: HintState): string {
         return "紙をクリックすると、その場所の重なりをまとめて選べます";
       if (!s.hasTechniqueLine)
         return `重なり${s.techniqueFlapCount}枚を選びました。続けて紙の上をドラッグして中心線を引いてください`;
-      return "中心線を引きました。下のパネルで向きを決めて「適用」を押してください";
+      return "中心線を引きました。下部パネルで向きを決めて「適用」を押してください";
     }
     const minimum = minimumTechniqueFlap(s.techniqueKind);
     const candidates = s.techniqueCandidateCount ?? s.techniqueFlapCount;
     if (s.techniqueFlapCount < minimum) {
       if (candidates === 0)
         return `紙をクリックして候補層を出し、対象を${minimum}枚以上選んでください`;
-      return `候補${candidates}枚のうち${s.techniqueFlapCount}枚を選択中です。下のパネルで対象を${minimum}枚以上にしてください`;
+      return `候補${candidates}枚のうち${s.techniqueFlapCount}枚を選択中です。下部パネルで対象を${minimum}枚以上にしてください`;
     }
     if (!s.hasTechniqueLine) {
       const layers =
         s.techniqueFlapCount === 0
-          ? "層を選ばなければ、その領域の全ての層が対象です。"
+          ? "層を選ばなければ、その領域のすべての層が対象です。"
           : `候補${candidates}枚のうち${s.techniqueFlapCount}枚を選びました。`;
       return `${layers}紙の上をドラッグして中心線を引いてください。Ctrl+クリックで基準点も直接指定できます`;
     }
@@ -237,8 +237,8 @@ export function viewerHint(s: HintState): string {
       ? "基準点も指定しました。"
       : "必要ならCtrl+クリックで基準点を直接指定できます。";
     return techniqueUsesOpenToBack(s.techniqueKind)
-      ? `中心線を引きました。${reference}下のパネルで向きと開く側を決めて「適用」を押してください`
-      : `中心線を引きました。${reference}下のパネルで向きを決めて「適用」を押してください`;
+      ? `中心線を引きました。${reference}下部パネルで向きと開く側を決めて「適用」を押してください`
+      : `中心線を引きました。${reference}下部パネルで向きを決めて「適用」を押してください`;
   }
   // ここから下は、3Dの紙の上の点を指して使う道具(点は平らな姿でも立体の姿でも指せる)
   if (s.tool === "select") {

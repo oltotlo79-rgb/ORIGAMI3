@@ -31,6 +31,16 @@ export const COLORS = {
   suspectGlow: "rgba(255, 36, 56, 0.88)",
   /** いま角度を固定して操作している折り目。 */
   active: "#40cfff",
+  /**
+   * 利用者が角度を固定した折り目に付ける印。
+   *
+   * 線の色は増やさない。既に「赤=食い込み・紫=指している・橙=選択・水色=操作中」の
+   * 4色が同じ線に重なっており、5色目を足すと見分けられなくなるため、
+   * 印(輪)で示す。輪郭を濃い墨色にして、どの線色の上でも読めるようにする。
+   */
+  pinned: "#1b2430",
+  /** 印の下へ敷く白い縁取り。折り線や方眼に重なっても輪の形が読める。 */
+  pinnedHalo: "rgba(255, 255, 255, 0.92)",
   snapMarker: "#2aa02a",
   /** 平らに畳めない点(CPE-009)。操作は止めず色で知らせるだけ */
   violation: "#ff8c00",
@@ -106,6 +116,15 @@ export const DASH_PREVIEW = [6, 4] as const;
 export const SNAP_MARKER_RADIUS = 6;
 /** 選択頂点マーカーの半径(px) */
 export const VERTEX_MARKER_RADIUS = 5;
+/** 角度を固定した折り目に付ける輪の半径(px)。選択した頂点の丸(5px)より大きくして
+ * 「点」と見間違えないようにし、線の太さ(最大13px)の中には収める */
+export const PIN_MARK_RADIUS = 6;
+/** 固定の輪の太さ(px) */
+export const PIN_MARK_LINE_WIDTH = 2;
+/** 固定の輪の中心に打つ点の半径(px)。固定が外れているときは打たない */
+export const PIN_MARK_CENTER_RADIUS = 1.8;
+/** 固定が外れている折り目の輪(破線)のパターン(px) */
+export const PIN_MARK_RELEASED_DASH = [3, 3] as const;
 
 /** 表示変換: scale=1正規化単位あたりのpx、offset=原点の画面位置(px) */
 export interface ViewTransform {
@@ -270,6 +289,10 @@ export interface RenderOverlay {
   suspectHinges?: number[];
   /** いま利用者が角度を操作しているヒンジ */
   activeHinges?: number[];
+  /** 利用者が角度を固定した折り目。選んでいなくても印を出す */
+  pinnedHinges?: number[];
+  /** 固定したまま折れず、動かすことになった折り目。印を破線の輪にする */
+  releasedPinHinges?: number[];
 }
 
 /** 点を動かしている途中のプレビュー: つながる線を破線で新しい位置へ引き直す */
@@ -458,6 +481,58 @@ function drawEdges(
     ctx.strokeStyle = EDGE_COLORS[e.kind];
     ctx.lineWidth = width;
     strokeSegment(ctx, view, a, b);
+  }
+  ctx.setLineDash([]);
+}
+
+/**
+ * 角度を固定した折り目に印を付ける。
+ *
+ * 選んでいるかどうかに関係なく、固定してある折り目すべてに出す
+ * (どれを固定したかが、選び直さなくても分かるようにするため)。
+ * 固定が外れている折り目は同じ輪を破線にし、中心の点を打たない。
+ * 線の色は増やさない(COLORS.pinned のコメントを参照)。
+ */
+export function drawPinnedMarks(
+  ctx: CanvasRenderingContext2D,
+  doc: Document,
+  view: ViewTransform,
+  pinnedHinges: readonly number[],
+  releasedPinHinges: readonly number[],
+): void {
+  const pinned = new Set(pinnedHinges);
+  const released = new Set(releasedPinHinges);
+  if (pinned.size === 0 && released.size === 0) return;
+  const byId = new Map(doc.cp.vertices.map((v) => [v.id, v.pos]));
+  for (const e of doc.cp.edges) {
+    if (!pinned.has(e.id) && !released.has(e.id)) continue;
+    const a = byId.get(e.v0);
+    const b = byId.get(e.v1);
+    if (!a || !b) continue; // 参照切れの線には印を置かない
+    const [sx, sy] = worldToScreen(view, [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]);
+    const isReleased = released.has(e.id);
+    ctx.save();
+    // 白い縁取りを先に敷く: 折り線・方眼・選択の帯に重なっても輪の形が読める
+    ctx.setLineDash([]);
+    ctx.strokeStyle = COLORS.pinnedHalo;
+    ctx.lineWidth = PIN_MARK_LINE_WIDTH + HALO_EXTRA_WIDTH;
+    ctx.beginPath();
+    ctx.arc(sx, sy, PIN_MARK_RADIUS, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash(isReleased ? [...PIN_MARK_RELEASED_DASH] : []);
+    ctx.strokeStyle = COLORS.pinned;
+    ctx.lineWidth = PIN_MARK_LINE_WIDTH;
+    ctx.beginPath();
+    ctx.arc(sx, sy, PIN_MARK_RADIUS, 0, Math.PI * 2);
+    ctx.stroke();
+    if (!isReleased) {
+      ctx.setLineDash([]);
+      ctx.fillStyle = COLORS.pinned;
+      ctx.beginPath();
+      ctx.arc(sx, sy, PIN_MARK_CENTER_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
   }
   ctx.setLineDash([]);
 }
@@ -663,6 +738,14 @@ export function render(
     overlay.hoveredHinge ?? null,
     overlay.suspectHinges ?? [],
     overlay.activeHinges ?? [],
+  );
+  // 固定の印は線の強調の上に置く(選択の帯や食い込みの光に埋もれないように)。
+  drawPinnedMarks(
+    ctx,
+    doc,
+    view,
+    overlay.pinnedHinges ?? [],
+    overlay.releasedPinHinges ?? [],
   );
   // 選んだ既存線を基準にしても、その線の下へ隠れない順番で重ねる。
   if (overlay.mirrorAxis !== null) drawMirrorAxis(ctx, view, overlay.mirrorAxis);

@@ -2,7 +2,7 @@
 // Three.jsのオブジェクトは受け取らず、sceneBuilderが更新済みの頂点バッファだけを読む。
 
 import type { Vec3 } from "../../lib/layerOffset";
-import type { Document, Face, Vec2 } from "../../lib/types";
+import type { Document, Face, Frame3D, Vec2 } from "../../lib/types";
 
 /** 面IDから、表示中の頂点バッファ上の範囲を引くための最小インターフェース。 */
 export interface FacePositionSlot {
@@ -220,6 +220,58 @@ export function mapPoint(placement: FacePlacement, p: Vec2): Vec3 | null {
     placement.q0[2] + placement.f1[2] * a + placement.f2[2] * b,
   ];
   return finite3(q) ? q : null;
+}
+
+/**
+ * 展開図の点を、計算結果そのものの3D座標へ写す。
+ *
+ * `sceneBuilder` のFloat32頂点や、紙を見分けやすくする層のすき間は受け取らない。
+ * `Frame3D.polygon` のf64だけから既存の `facePlacement` / `mapPoint` を通すため、
+ * 測定値へ表示専用のずらしが混ざる入口を作らない。frameがnullなら紙は平らで、
+ * 正規化した展開図座標をそのままz=0へ置く。
+ */
+export function mapCpPointToFrame(
+  doc: Document,
+  faces: readonly Face[],
+  frame: Frame3D | null,
+  cp: Vec2,
+  preferredFaceId: number | null,
+): Vec3 | null {
+  if (!finite2(cp)) return null;
+  if (frame === null) return [cp[0], cp[1], 0];
+
+  const vertexPositions = new Map(doc.cp.vertices.map((vertex) => [vertex.id, vertex.pos]));
+  const preferred =
+    preferredFaceId === null
+      ? []
+      : faces.filter((face) => face.id === preferredFaceId);
+  const candidates = [
+    ...preferred,
+    ...faces.filter((face) => face.id !== preferredFaceId),
+  ];
+  for (const face of candidates) {
+    const polygon = face.vertices.map((id) => vertexPositions.get(id));
+    if (
+      polygon.length < 3 ||
+      polygon.some((point) => point === undefined) ||
+      !pointInPolygon(polygon as Vec2[], cp)
+    ) {
+      continue;
+    }
+    const frameFace = frame.faces.find(
+      (candidate) =>
+        candidate.face === face.id && candidate.polygon.length === face.vertices.length,
+    );
+    if (!frameFace) continue;
+    const positions = frameFace.polygon.flat();
+    const slots = new Map<number, FacePositionSlot>([
+      [face.id, { offset: 0, count: frameFace.polygon.length }],
+    ]);
+    const placement = facePlacement(face, vertexPositions, slots, positions);
+    const world = placement ? mapPoint(placement, cp) : null;
+    if (world) return world;
+  }
+  return null;
 }
 
 /**

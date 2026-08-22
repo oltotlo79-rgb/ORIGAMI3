@@ -542,7 +542,7 @@ describe("surface owner shader", () => {
     expect(binding.resolution.value.toArray()).toEqual([640, 480]);
   });
 
-  it("実行時12材質を役割別に全数えし、owner対象10・赤迂回1・preview維持1にする", () => {
+  it("実行時14材質を役割別に全数えし、owner対象12・赤迂回1・preview維持1にする", () => {
     const display = {
       front_color: [240, 80, 70] as [number, number, number],
       back_color: [245, 245, 245] as [number, number, number],
@@ -605,8 +605,10 @@ describe("surface owner shader", () => {
       expect(soft.owner.triangleLayers).toEqual([7]);
       expect(blackLines).toHaveLength(2);
       expect(blackLines.filter(ownerFiltered)).toHaveLength(2);
-      expect(highlightMaterials).toHaveLength(5);
-      expect(highlightMaterials.filter(ownerFiltered)).toHaveLength(4);
+      // 強調表示は7種類(選択・参照・指している・食い込み・操作中・固定・固定の印)。
+      // 紙面の持ち主で絞り込まないのは食い込みだけなので、絞り込む側は6種類。
+      expect(highlightMaterials).toHaveLength(7);
+      expect(highlightMaterials.filter(ownerFiltered)).toHaveLength(6);
       expect(highlights.suspectHighlightMaterial.depthTest).toBe(false);
       expect(ownerFiltered(highlights.suspectHighlightMaterial)).toBe(false);
       expect(preview.depthTest).toBe(false);
@@ -617,7 +619,7 @@ describe("surface owner shader", () => {
         ...blackLines,
         ...highlightMaterials,
         preview,
-      ]).toHaveLength(12);
+      ]).toHaveLength(14);
     } finally {
       rigid.mesh.geometry.dispose();
       rigid.line.geometry.dispose();

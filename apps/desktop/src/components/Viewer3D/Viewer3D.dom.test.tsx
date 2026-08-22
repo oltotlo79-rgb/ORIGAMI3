@@ -89,7 +89,11 @@ vi.mock("../../ipc/client", () => ({
 import * as ipc from "../../ipc/client";
 import { useAppStore } from "../../store/appStore";
 import { Viewer3D } from "./Viewer3D";
-import { PICK_TOLERANCE_PX, pickVertex } from "../CpEditor/interaction";
+import {
+  PICK_TOLERANCE_PX,
+  pickEdge,
+  pickVertex,
+} from "../CpEditor/interaction";
 import type { EditOp, Vec2 } from "../../lib/types";
 
 const initialStoreState = useAppStore.getState();
@@ -146,6 +150,7 @@ const VIEW: DocumentView = {
   violations: [],
   frame: null,
   skipped: [],
+  contact_detected: false,
 };
 
 /** 中央ヒンジで右半分を90°起こした、実際のraycastを検査する形。 */
@@ -632,6 +637,7 @@ describe("Viewer3D(指している場所のカーソル)", () => {
       techniqueDraft: null,
       selection: { edgeIds: [], vertexIds: [] },
       suspectHinges: [],
+      pinnedFolds: new Map(),
       paperActionTipVisible: false,
       paperActionTipExpanded: false,
     });
@@ -753,6 +759,55 @@ describe("Viewer3D(指している場所のカーソル)", () => {
       const last = calls[calls.length - 1][0] as { edgeId: number; role?: string }[];
       expect(last.find((segment) => segment.edgeId === 5)?.role).toBe("focus");
       expect(last.find((segment) => segment.edgeId === 0)?.role).toBe("reference");
+    });
+  });
+
+  it("固定した折り目は、選んでいなくてもpinned役割で3D強調する", async () => {
+    // どれを固定したかが、選び直さなくても分かるようにする。
+    useAppStore.setState({
+      selection: { edgeIds: [], vertexIds: [] },
+      pinnedFolds: new Map([[5, 45]]),
+    });
+    renderViewer();
+    await waitFor(() => expect(held.scene.content).not.toBeNull());
+
+    await waitFor(() => {
+      const setHighlight = held.scene.setHighlight as ReturnType<typeof vi.fn>;
+      const calls = setHighlight.mock.calls;
+      const last = calls[calls.length - 1]?.[0] as
+        | { edgeId: number; role?: string }[]
+        | undefined;
+      expect(last?.find((segment) => segment.edgeId === 5)?.role).toBe("pinned");
+    });
+
+    act(() => useAppStore.setState({ pinnedFolds: new Map() }));
+
+    await waitFor(() => {
+      const setHighlight = held.scene.setHighlight as ReturnType<typeof vi.fn>;
+      const calls = setHighlight.mock.calls;
+      const last = calls[calls.length - 1]?.[0] as
+        | { edgeId: number; role?: string }[]
+        | undefined;
+      expect(last?.some((segment) => segment.role === "pinned")).toBe(false);
+    });
+  });
+
+  it("固定した折り目が食い込みの原因候補なら、赤い強調を優先する", async () => {
+    useAppStore.setState({
+      pinnedFolds: new Map([[5, 45]]),
+      suspectHinges: [5],
+    });
+    renderViewer();
+    await waitFor(() => expect(held.scene.content).not.toBeNull());
+
+    await waitFor(() => {
+      const setHighlight = held.scene.setHighlight as ReturnType<typeof vi.fn>;
+      const calls = setHighlight.mock.calls;
+      const last = calls[calls.length - 1]?.[0] as
+        | { edgeId: number; role?: string }[]
+        | undefined;
+      expect(last?.find((segment) => segment.edgeId === 5)?.role).toBe("suspect");
+      expect(last?.some((segment) => segment.role === "pinned")).toBe(false);
     });
   });
 
@@ -1302,6 +1357,7 @@ const GRID_VIEW: DocumentView = {
   violations: [],
   frame: null,
   skipped: [],
+  contact_detected: false,
 };
 
 /** その道具の1クリック(押して同じ場所で離す)。 */
@@ -1387,6 +1443,104 @@ describe("Viewer3D(3Dから展開図の点を指す)", () => {
     expect(picked).toBe(GRID_DOC.cp.vertices.length);
     expect(matched).toBe(GRID_DOC.cp.vertices.length);
     expect(GRID_DOC.cp.vertices.length).toBeGreaterThanOrEqual(10);
+  });
+
+  it("測定でも13点と14辺が3Dと展開図で同じ対象になり、食い違いが0件", () => {
+    useAppStore.setState({
+      activeTool: "measure",
+      measureDraft: { mode: "distance", picks: [], display: null },
+    });
+    const canvas = renderViewer();
+    const scalePx = gridPoint([1, 0]).x - gridPoint([0, 0]).x;
+    let checked = 0;
+    let mismatched = 0;
+
+    for (const vertex of GRID_DOC.cp.vertices) {
+      useAppStore.getState().clearMeasurement();
+      const at = gridPoint(vertex.pos, 3, -3);
+      clickAt(canvas, at);
+      const picked = useAppStore.getState().measureDraft.picks[0];
+      const world: Vec2 = [
+        vertex.pos[0] + 3 / scalePx,
+        vertex.pos[1] + 3 / scalePx,
+      ];
+      const from2d = pickVertex(
+        GRID_DOC,
+        world,
+        PICK_TOLERANCE_PX / scalePx,
+      );
+      checked += 1;
+      if (
+        picked?.kind !== "point" ||
+        picked.vertexId === null ||
+        picked.vertexId !== from2d
+      ) {
+        mismatched += 1;
+      }
+    }
+
+    useAppStore.getState().setMeasureMode("length");
+    const positions = new Map(
+      GRID_DOC.cp.vertices.map((vertex) => [vertex.id, vertex.pos]),
+    );
+    for (const edge of GRID_DOC.cp.edges) {
+      const a = positions.get(edge.v0)!;
+      const b = positions.get(edge.v1)!;
+      const midpoint: Vec2 = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      clickAt(canvas, gridPoint(midpoint));
+      const picked = useAppStore.getState().measureDraft.picks[0];
+      const from2d = pickEdge(
+        GRID_DOC,
+        midpoint,
+        PICK_TOLERANCE_PX / scalePx,
+      );
+      checked += 1;
+      if (
+        picked?.kind !== "edge" ||
+        picked.edgeId !== from2d ||
+        picked.edgeId !== edge.id
+      ) {
+        mismatched += 1;
+      }
+    }
+
+    expect(checked).toBe(27);
+    expect(mismatched).toBe(0);
+  });
+
+  it("測定の3方式を3Dから必要数だけ指定でき、方眼点にも吸着する", () => {
+    useAppStore.setState({
+      activeTool: "measure",
+      measureDraft: { mode: "angle", picks: [], display: null },
+    });
+    const canvas = renderViewer();
+
+    clickAt(canvas, gridPoint([0.25, 0]));
+    clickAt(canvas, gridPoint([1, 0.25]));
+    expect(useAppStore.getState().measureDraft.picks).toHaveLength(2);
+
+    useAppStore.getState().setMeasureMode("length");
+    clickAt(canvas, gridPoint([0.75, 1]));
+    expect(useAppStore.getState().measureDraft.picks).toHaveLength(1);
+
+    useAppStore.getState().setMeasureMode("distance");
+    clickAt(canvas, gridPoint([0.253, 0.128]));
+    const first = useAppStore.getState().measureDraft.picks[0];
+    expect(first).toMatchObject({
+      kind: "point",
+      cp: [0.25, 0.125],
+      vertexId: null,
+    });
+    clickAt(canvas, gridPoint([0.75, 0.875]));
+    expect(useAppStore.getState().measureDraft.picks).toHaveLength(2);
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(useAppStore.getState().activeTool).toBe("measure");
+    expect(useAppStore.getState().measureDraft).toEqual({
+      mode: "distance",
+      picks: [],
+      display: null,
+    });
   });
 
   // 合格条件1: 立体姿勢(折り角度が0でも±180°でもない)でも点を選べること

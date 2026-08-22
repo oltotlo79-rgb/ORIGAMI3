@@ -58,6 +58,33 @@ export function frameLayerCount(frame: Frame3D): number {
   return max + 1;
 }
 
+/**
+ * 全面をちょうど1回ずつ並べる有効なsurface rankを返す。
+ *
+ * 古いframeの全0・一部欠落・重複を物理順として混ぜないため、1面でも不正なら
+ * frame全体を従来のlayer順へ戻す。
+ */
+function completeSurfaceRanks(frame: Frame3D): number[] | null {
+  const count = frame.faces.length;
+  const ranks: number[] = [];
+  const seen = new Set<number>();
+  for (const face of frame.faces) {
+    const rank = face.surface_rank;
+    if (
+      typeof rank !== "number" ||
+      !Number.isInteger(rank) ||
+      rank < 0 ||
+      rank >= count ||
+      seen.has(rank)
+    ) {
+      return null;
+    }
+    seen.add(rank);
+    ranks.push(rank);
+  }
+  return ranks;
+}
+
 // ---------------------------------------------------------------------------
 // 重なった面のずらし(平らな状態に限らない)
 // ---------------------------------------------------------------------------
@@ -123,6 +150,8 @@ export function stackLifts(frame: Frame3D, paperScale: number): Vec3[] {
   const faces = frame.faces;
   const lifts: Vec3[] = faces.map(() => [0, 0, 0]);
   const planes = faces.map((f) => facePlane(f.polygon));
+  const surfaceRanks = completeSurfaceRanks(frame);
+  const displayRank = (index: number) => surfaceRanks?.[index] ?? faces[index].layer;
 
   // 同じ平面どうしを貪欲に仲間分けする(面の枚数は多くないので総当たりで足りる)
   const groups: { n: Vec3; d: number; members: number[] }[] = [];
@@ -140,14 +169,15 @@ export function stackLifts(frame: Frame3D, paperScale: number): Vec3[] {
     else groups.push({ n: p.n, d: p.d, members: [i] });
   }
 
-  // かたまりごとに層番号を下から詰め直す(番号が飛んでいても等間隔に見せる)
+  // かたまりごとに表示順位を下から詰め直す(番号が飛んでいても等間隔に見せる)。
+  // 現行frameは幾何由来のsurface_rank、欠落・不正な旧frameだけlayerを使う。
   const ranks = new Array<number>(faces.length).fill(0);
   let depth = 1;
   for (const g of groups) {
-    const sorted = [...new Set(g.members.map((i) => faces[i].layer))].sort(
+    const sorted = [...new Set(g.members.map(displayRank))].sort(
       (a, b) => a - b,
     );
-    for (const i of g.members) ranks[i] = sorted.indexOf(faces[i].layer);
+    for (const i of g.members) ranks[i] = sorted.indexOf(displayRank(i));
     if (sorted.length > depth) depth = sorted.length;
   }
 

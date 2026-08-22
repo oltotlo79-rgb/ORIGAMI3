@@ -48,6 +48,17 @@ export function ToolIcon({ tool }: ToolIconProps) {
           <path d="M17.5 3.5v3M16 5h3" strokeWidth="1.6" />
         </svg>
       );
+    case "measure":
+      return (
+        <svg className="tool-icon" {...svgProps}>
+          <path
+            d="M4 18.5 18.5 4 21 6.5 6.5 21 4 18.5Z"
+            fill="var(--color-pop-yellow-soft)"
+          />
+          <path d="m8 16.5-2-2m5-1-2-2m5-1-2-2m5-1-2-2" strokeWidth="1.5" />
+          <path d="M4 10V4h6M4 10a6 6 0 0 1 6-6" />
+        </svg>
+      );
     case "mountain":
       return (
         <svg className="tool-icon tool-icon-mountain" {...svgProps}>

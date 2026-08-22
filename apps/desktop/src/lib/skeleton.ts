@@ -77,6 +77,29 @@ export interface SkeletonRow {
 }
 
 /**
+ * 各部分を「胴から見た呼び名の並び」で表す。
+ * 例: 頭の先へ足した部分は `["頭", "その先1"]`。
+ * 画面の読み上げ名や見出しで、どの部分かを一意に言うために使う。
+ */
+export function skeletonPathLabels(s: Skeleton): Map<number, string[]> {
+  const rows = skeletonRows(s);
+  const rowById = new Map(rows.map((row) => [row.node.id, row]));
+  const labels = new Map<number, string[]>();
+  for (const row of rows) {
+    const path = [row.label];
+    let parent = row.node.parent;
+    while (parent !== null) {
+      const parentRow = rowById.get(parent);
+      if (!parentRow) break;
+      path.unshift(parentRow.label);
+      parent = parentRow.node.parent;
+    }
+    labels.set(row.node.id, path);
+  }
+  return labels;
+}
+
+/**
  * 親の直後へ子を並べた画面表示用の順序。
  * 胴のすぐ先の呼び名は、その先へ何本足しても変わらない。
  */
@@ -267,6 +290,10 @@ export interface LimbLayout {
   /** 先端の丸(=角の膨らみ)の半径。長さ×太さ係数 */
   radius: number;
   label: string;
+  /** その先へ何も足していない、本当の先端か */
+  isTip: boolean;
+  /** 利用者が決めた完成形での場所。決めていなければnull */
+  tipPos: TipPos2d | null;
 }
 
 /**
@@ -311,12 +338,17 @@ export function previewLayout(s: Skeleton): LimbLayout[] {
     ];
     positions.set(node.id, end);
     angles.set(node.id, angle);
+    const isTip = (children.get(node.id) ?? []).length === 0;
     return {
       id: node.id,
       start,
       end,
       radius: node.length * node.width_factor,
       label,
+      isTip,
+      // 先へ枝を足して先端でなくなった節点に古い場所が残っていても使わない
+      // (Rust側の`Skeleton::leaf_tip_positions`と同じ)。
+      tipPos: isTip ? (node.tip_pos_2d ?? null) : null,
     };
   });
 }

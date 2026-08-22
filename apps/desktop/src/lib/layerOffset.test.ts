@@ -128,6 +128,45 @@ describe("stackLifts(重なった面のずらし)", () => {
     expect(lifts[1][0]).toBeCloseTo(0, 12);
   });
 
+  it("有効なsurface rankがlayerと逆ならrankの順に離れる", () => {
+    const frame: Frame3D = {
+      faces: [
+        { ...flatFace(0, 0), surface_rank: 1 },
+        { ...flatFace(1, 1), surface_rank: 0 },
+      ],
+      warnings: [],
+    };
+    const lifts = stackLifts(frame, 1);
+    expect(lifts[0][2]).toBeCloseTo(step, 12);
+    expect(lifts[1]).toEqual([0, 0, 0]);
+  });
+
+  it("surface rankが欠落・重複・範囲外・非整数ならframe全体をlayer順へ戻す", () => {
+    const cases: Frame3D["faces"][] = [
+      [
+        { ...flatFace(0, 0), surface_rank: 1 },
+        flatFace(1, 1),
+      ],
+      [
+        { ...flatFace(0, 0), surface_rank: 0 },
+        { ...flatFace(1, 1), surface_rank: 0 },
+      ],
+      [
+        { ...flatFace(0, 0), surface_rank: 0 },
+        { ...flatFace(1, 1), surface_rank: 2 },
+      ],
+      [
+        { ...flatFace(0, 0), surface_rank: 0 },
+        { ...flatFace(1, 1), surface_rank: 0.5 },
+      ],
+    ];
+    for (const faces of cases) {
+      const lifts = stackLifts({ faces, warnings: [] }, 1);
+      expect(lifts[0]).toEqual([0, 0, 0]);
+      expect(lifts[1][2]).toBeCloseTo(step, 12);
+    }
+  });
+
   it("層が同じ面は離さない(展開した1枚の紙がばらけない)", () => {
     const frame: Frame3D = {
       faces: [flatFace(0, 0), flatFace(1, 0), flatFace(2, 0)],

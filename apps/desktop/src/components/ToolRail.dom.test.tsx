@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// ツールレールの画面テスト: ボタン数の上限(要件§2で10個以内)と、
+// ツールレールの画面テスト: 既存の同じ区画に並ぶ道具と、
 // 作図補助のサブメニュー(二等分/垂線/等分/角度線)の切り替え。
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -14,9 +14,11 @@ afterEach(() => {
 });
 
 describe("ツールレール", () => {
-  it("常設のボタンは10個以内に収まっている", () => {
+  it("測るを含む10個の道具と全体表示が同じレールに並ぶ", () => {
     render(<ToolRail onFitView={() => {}} />);
-    expect(screen.getAllByRole("button").length).toBeLessThanOrEqual(10);
+    expect(screen.getAllByRole("button")).toHaveLength(11);
+    fireEvent.click(screen.getByRole("button", { name: "測る" }));
+    expect(useAppStore.getState().activeTool).toBe("measure");
   });
 
   it("紙をつかんで引くツールを選べる", () => {

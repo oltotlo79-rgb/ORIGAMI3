@@ -29,6 +29,7 @@ interface Assignment {
 
 const MODE_LABEL: Record<ToolId, string> = {
   select: "見る・選ぶ",
+  measure: "測る",
   mountain: "山折り線",
   valley: "谷折り線",
   aux: "補助線",
@@ -96,6 +97,17 @@ export function viewerAssignments(
         control: "left",
         label: "左クリック／ドラッグ",
         action: `${SELECTABLE_3D_EDGE_TARGETS}を選ぶ／視点を回す`,
+      },
+      { control: "right", label: "右ドラッグ", action: "視点を動かす" },
+      { control: "wheel", label: "ホイール", action: "拡大・縮小" },
+    ];
+  }
+  if (tool === "measure") {
+    return [
+      {
+        control: "left",
+        label: "左クリック／ドラッグ",
+        action: "辺・点を選ぶ／他の場所で視点を回す",
       },
       { control: "right", label: "右ドラッグ", action: "視点を動かす" },
       { control: "wheel", label: "ホイール", action: "拡大・縮小" },

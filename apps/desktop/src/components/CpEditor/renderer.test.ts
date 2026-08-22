@@ -4,11 +4,16 @@ import { describe, expect, it, vi } from "vitest";
 import type { Document, Vec2 } from "../../lib/types";
 import { paperExtent } from "./snap";
 import {
+  COLORS,
   deriveAxisPositionBar,
   deriveViewportPositionBars,
   drawGrid,
+  drawPinnedMarks,
   fitView,
   gridDrawStride,
+  PIN_MARK_RADIUS,
+  PIN_MARK_RELEASED_DASH,
+  worldToScreen,
   type ViewTransform,
 } from "./renderer";
 
@@ -171,5 +176,103 @@ describe("展開図の位置バー", () => {
     expect(bars!.horizontal.thumbLength).toBeLessThan(bars!.horizontal.trackLength);
     expect(bars!.vertical.thumbStart).toBe(bars!.vertical.trackStart);
     expect(bars!.vertical.thumbLength).toBe(bars!.vertical.trackLength);
+  });
+});
+
+/** 印の描画だけを見るための、arc呼び出しを記録する偽の描画先。 */
+function markContext() {
+  const arcs: { x: number; y: number; r: number; dash: number[]; style: string }[] = [];
+  const fills: { x: number; y: number; r: number }[] = [];
+  let dash: number[] = [];
+  let pending: { x: number; y: number; r: number } | null = null;
+  const ctx = {
+    save: vi.fn(),
+    restore: vi.fn(),
+    beginPath: vi.fn(),
+    arc: vi.fn((x: number, y: number, r: number) => {
+      pending = { x, y, r };
+    }),
+    stroke: vi.fn(() => {
+      if (pending) arcs.push({ ...pending, dash: [...dash], style: ctx.strokeStyle });
+    }),
+    fill: vi.fn(() => {
+      if (pending) fills.push({ ...pending });
+    }),
+    setLineDash: vi.fn((next: number[]) => {
+      dash = next;
+    }),
+    strokeStyle: "",
+    fillStyle: "",
+    lineWidth: 0,
+  } as unknown as CanvasRenderingContext2D & { strokeStyle: string };
+  return { ctx, arcs, fills };
+}
+
+/** 紙の中央を横切る折り線を1本足した展開図(辺ID 4)。 */
+function docWithCrease(): Document {
+  const doc = paperDoc();
+  doc.cp.vertices.push({ id: 4, pos: [0, 0.5] }, { id: 5, pos: [1, 0.5] });
+  doc.cp.edges.push({ id: 4, v0: 4, v1: 5, kind: "Mountain" });
+  doc.cp.next_vertex_id = 6;
+  doc.cp.next_edge_id = 5;
+  return doc;
+}
+
+describe("固定した折り目の印(2D)", () => {
+  it("固定していなければ何も描かない", () => {
+    const { ctx, arcs } = markContext();
+    const doc = docWithCrease();
+    drawPinnedMarks(ctx, doc, fitView(doc, 400, 400), [], []);
+    expect(arcs).toEqual([]);
+  });
+
+  it("選んでいなくても、固定した折り目に印を描く", () => {
+    const { ctx, arcs, fills } = markContext();
+    const doc = docWithCrease();
+    const view = fitView(doc, 400, 400);
+    // 選択も、指している折り目も、操作中の折り目も渡さない。
+    drawPinnedMarks(ctx, doc, view, [4], []);
+    // 白い縁取りと本体で2重、中心の点で1つ。
+    expect(arcs).toHaveLength(2);
+    expect(fills).toHaveLength(1);
+    const center = worldToScreen(view, [0.5, 0.5]);
+    for (const arc of arcs) {
+      expect(arc.x).toBeCloseTo(center[0], 6);
+      expect(arc.y).toBeCloseTo(center[1], 6);
+      expect(arc.r).toBe(PIN_MARK_RADIUS);
+    }
+    // 固定中は実線
+    expect(arcs[1].dash).toEqual([]);
+    expect(arcs[1].style).toBe(COLORS.pinned);
+  });
+
+  it("固定が外れている折り目は破線の輪にし、中心の点を打たない", () => {
+    const { ctx, arcs, fills } = markContext();
+    const doc = docWithCrease();
+    drawPinnedMarks(ctx, doc, fitView(doc, 400, 400), [4], [4]);
+    expect(arcs).toHaveLength(2);
+    expect(arcs[1].dash).toEqual([...PIN_MARK_RELEASED_DASH]);
+    expect(fills).toEqual([]);
+  });
+
+  it("線の色を増やしていない(印は既存の4色とは別の仕組み)", () => {
+    // 2Dで線に重なる強調は 食い込み・指している・選択・操作中 の4つのまま。
+    // 固定は5色目を足さず、輪の印で示す。
+    const lineEmphasisColors = [
+      COLORS.suspectGlow,
+      COLORS.hingeHover,
+      COLORS.selection,
+      COLORS.active,
+    ];
+    expect(new Set(lineEmphasisColors).size).toBe(4);
+    expect(lineEmphasisColors).not.toContain(COLORS.pinned);
+  });
+
+  it("参照切れの線には印を置かない", () => {
+    const { ctx, arcs } = markContext();
+    const doc = docWithCrease();
+    doc.cp.edges.push({ id: 9, v0: 90, v1: 91, kind: "Mountain" });
+    drawPinnedMarks(ctx, doc, fitView(doc, 400, 400), [9], []);
+    expect(arcs).toEqual([]);
   });
 });

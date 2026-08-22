@@ -163,6 +163,7 @@ function makeCtx(
     frame3d: null,
     construct: { ...DEFAULT_CONSTRUCT, ...construct },
     curve: { ...DEFAULT_CURVE, ...curve },
+    measureMode: "angle",
     wheelBehavior: "scroll",
     violations,
     mirrorAxis: paperMirrorLine(doc.paper, "paperVertical"),
@@ -174,9 +175,66 @@ function makeCtx(
     setSelection: vi.fn(),
     beginFoldDraft,
     pickAlignTarget,
+    pickMeasureEdge: vi.fn(),
+    pickMeasurePoint: vi.fn(),
   };
   return { ctx, applyEdit, drawSegment, drawCurve, beginFoldDraft, pickAlignTarget };
 }
+
+describe("展開図で測る", () => {
+  it.each([
+    ["angle", [0.5, 0.004] as Vec2, 0],
+    ["length", [0.996, 0.5] as Vec2, 1],
+  ] as const)("%sは既存の辺選択で線を拾う", (mode, point, edgeId) => {
+    const { ctx } = makeCtx();
+    ctx.tool = "measure";
+    ctx.measureMode = mode;
+
+    onMouseDown(ctx, toScreen(point), 0);
+
+    expect(ctx.pickMeasureEdge).toHaveBeenCalledWith(edgeId);
+    expect(ctx.pickMeasurePoint).not.toHaveBeenCalled();
+  });
+
+  it("2点の距離は頂点、方眼の順に吸着し、線上だけには吸着しない", () => {
+    const { ctx } = makeCtx();
+    ctx.tool = "measure";
+    ctx.measureMode = "distance";
+
+    onMouseDown(ctx, toScreen([0.01, 0.01]), 0);
+    expect(ctx.pickMeasurePoint).toHaveBeenLastCalledWith({
+      cp: [0, 0],
+      faceId: null,
+      vertexId: 0,
+    });
+
+    onMouseDown(ctx, toScreen([0.255, 0.255]), 0);
+    expect(ctx.pickMeasurePoint).toHaveBeenLastCalledWith({
+      cp: [0.25, 0.25],
+      faceId: null,
+      vertexId: null,
+    });
+
+    // 下辺は近いが、頂点・方眼は12pxの外。線上へは寄せず押した点を保つ。
+    onMouseDown(ctx, toScreen([0.31, 0.01]), 0);
+    expect(ctx.pickMeasurePoint).toHaveBeenLastCalledWith({
+      cp: [0.31, 0.01],
+      faceId: null,
+      vertexId: null,
+    });
+  });
+
+  it("紙の外は測定点にせず、測定中のカーソルは十字にする", () => {
+    const { ctx } = makeCtx();
+    ctx.tool = "measure";
+    ctx.measureMode = "distance";
+
+    onMouseDown(ctx, toScreen([1.1, 0.5]), 0);
+
+    expect(ctx.pickMeasurePoint).not.toHaveBeenCalled();
+    expect(cursorFor("measure", ctx.state)).toBe("crosshair");
+  });
+});
 
 /** applyEditは1回の入力ぶんをまとめて受け取るので、送られた編集を平らに並べ直す */
 function sentEdits(applyEdit: { mock: { calls: [EditOp | EditOp[]][] } }): EditOp[] {

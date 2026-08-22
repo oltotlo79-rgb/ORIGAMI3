@@ -338,7 +338,7 @@ export function PaperAppearance() {
         <input
           type="checkbox"
           aria-label="重なり防止"
-          data-tooltip="折る途中で紙どうしが突き抜けにくい補正を切り替えます"
+          data-tooltip="紙どうしの食い込みを減らすように形を補正します"
           checked={overlapPrevention}
           onChange={(e) => setDisplay({ overlap_prevention_enabled: e.target.checked })}
         />
@@ -348,7 +348,7 @@ export function PaperAppearance() {
         <input
           type="checkbox"
           aria-label="食い込み検出"
-          data-tooltip="紙の接触を赤い折り目と警告で知らせる検出を切り替えます"
+          data-tooltip="紙どうしの食い込みを赤い折り目と警告で知らせます。形は変えません"
           checked={penetrationPrevention}
           onChange={(e) =>
             setDisplay({ penetration_prevention_enabled: e.target.checked })

@@ -64,6 +64,7 @@ const VIEW: DocumentView = {
   violations: [],
   frame: null,
   skipped: [],
+  contact_detected: false,
 };
 const SOLVED: SolveResult = {
   frame: { faces: [], warnings: [] },
@@ -312,7 +313,10 @@ describe("折り角度の元に戻す/やり直し", () => {
     useAppStore.setState({
       hinges: new Set(allHinges),
       drivers: new Map([[5, 90]]),
-      angleUndoStack: [new Map([[5, 30]]), new Map([[5, 60]])],
+      angleUndoStack: [
+        { drivers: new Map([[5, 30]]), pinned: new Map() },
+        { drivers: new Map([[5, 60]]), pinned: new Map() },
+      ],
       angleRedoStack: [],
       poseAngles: new Map(warmAngles),
       frame3d: solvedFrom(90).frame,
@@ -387,7 +391,7 @@ describe("折り角度の元に戻す/やり直し", () => {
       doc: sequenceDoc,
       hinges: new Set([5, 7, 9]),
       drivers: new Map([[7, 90]]),
-      angleUndoStack: [new Map()],
+      angleUndoStack: [{ drivers: new Map(), pinned: new Map() }],
       angleRedoStack: [],
       currentStep: null,
       playT: 1,
@@ -411,5 +415,236 @@ describe("折り角度の元に戻す/やり直し", () => {
       .getState()
       .frame3d?.faces.flatMap((face) => face.polygon.map((point) => point[2]));
     expect(Math.max(...(zs ?? [0])) - Math.min(...(zs ?? [0]))).toBe(4);
+  });
+
+  it("保存済み手順で固定だけが残るundoも、再生後に固定付きで解き直す", async () => {
+    const sequenceDoc: Document = {
+      ...DOC,
+      sequence: [
+        {
+          id: 1,
+          kind: "Simple",
+          drivers: [{ a: [0, 0], b: [1, 1], target_angle_deg: 60 }],
+          layer_order: null,
+          note: "",
+        },
+      ],
+    };
+    const replayFrame = { faces: [], warnings: ["固定なしの再生形"] };
+    const pinnedFrame = { faces: [], warnings: [] };
+    vi.mocked(ipc.sequenceReplay).mockResolvedValue({
+      frame: replayFrame,
+      skipped: [],
+      warnings: [],
+      sequence_targets: [{ hinge: 5, target_angle_deg: 60 }],
+      angles: { 5: 60 },
+      converged: true,
+    });
+    vi.mocked(ipc.poseSolve).mockImplementation(async (hard, keep) => ({
+      ...SOLVED,
+      frame: pinnedFrame,
+      angles: Object.fromEntries(
+        [...hard, ...(keep ?? [])].map((driver) => [
+          driver.hinge,
+          driver.target_angle_deg,
+        ]),
+      ),
+      closure_rms: 1e-15,
+    }));
+    useAppStore.setState({
+      doc: sequenceDoc,
+      hinges: new Set([5, 7]),
+      drivers: new Map([[7, -48]]),
+      pinnedFolds: new Map(),
+      angleUndoStack: [
+        { drivers: new Map(), pinned: new Map([[5, 45]]) },
+      ],
+      angleRedoStack: [],
+      currentStep: null,
+      playT: 1,
+      poseWarnings: [
+        "42本の折り目が目標の角度に届きませんでした",
+        "固定した折り目2本を動かしました",
+      ],
+      releasedPins: [
+        { hinge: 5, pinned: -180, actual: -48, deviation: 132 },
+      ],
+      releasedPinHinges: [5],
+    });
+
+    await useAppStore.getState().undo();
+
+    expect(vi.mocked(ipc.sequenceReplay)).toHaveBeenCalledWith(1, 1, null);
+    expect(vi.mocked(ipc.poseSolve)).toHaveBeenCalledTimes(1);
+    const poseCall = vi.mocked(ipc.poseSolve).mock.calls[0];
+    expect(poseCall[0]).toContainEqual({ hinge: 5, target_angle_deg: 45 });
+    expect(poseCall[4]).toBe(1);
+    expect(poseCall[5]).toBe(1);
+    const state = useAppStore.getState();
+    expect(state.pinnedFolds.get(5)).toBe(45);
+    expect(Math.abs((state.poseAngles.get(5) ?? Infinity) - 45)).toBeLessThan(1e-9);
+    expect(state.frame3d).toEqual(pinnedFrame);
+    expect(state.poseWarnings).toEqual([]);
+    expect(state.releasedPins).toEqual([]);
+    expect(state.releasedPinHinges).toEqual([]);
+  });
+
+  it("live3のundo状態では固定#45/#132を再生後も-180度に保ち、古い2警告を消す", async () => {
+    const sequenceDoc: Document = {
+      ...DOC,
+      sequence: [
+        {
+          id: 8,
+          kind: "Simple",
+          drivers: [{ a: [0, 0], b: [1, 1], target_angle_deg: -180 }],
+          layer_order: null,
+          note: "",
+        },
+      ],
+    };
+    vi.mocked(ipc.sequenceReplay).mockResolvedValue({
+      frame: { faces: [], warnings: [] },
+      skipped: [],
+      warnings: [],
+      sequence_targets: [
+        { hinge: 45, target_angle_deg: -180 },
+        { hinge: 132, target_angle_deg: -180 },
+      ],
+      angles: { 45: -180, 132: -180 },
+      converged: true,
+      closure_rms: 9.963347703678168e-17,
+    });
+    vi.mocked(ipc.poseSolve).mockImplementation(async (hard, keep) => ({
+      ...SOLVED,
+      angles: Object.fromEntries(
+        [...hard, ...(keep ?? [])].map((driver) => [
+          driver.hinge,
+          driver.target_angle_deg,
+        ]),
+      ),
+      closure_rms: 9.963347703678168e-17,
+    }));
+    useAppStore.setState({
+      doc: sequenceDoc,
+      hinges: new Set([45, 46, 132]),
+      drivers: new Map([[46, -48]]),
+      pinnedFolds: new Map([
+        [45, -180],
+        [132, -180],
+      ]),
+      angleUndoStack: [
+        {
+          drivers: new Map(),
+          pinned: new Map([
+            [45, -180],
+            [132, -180],
+          ]),
+        },
+      ],
+      angleRedoStack: [],
+      currentStep: null,
+      playT: 1,
+      poseWarnings: [
+        "42本の折り目が目標の角度に届きませんでした",
+        "固定した折り目2本を動かしました",
+      ],
+      releasedPins: [
+        { hinge: 45, pinned: -180, actual: -48, deviation: 132 },
+        { hinge: 132, pinned: -180, actual: -48, deviation: 132 },
+      ],
+      releasedPinHinges: [45, 132],
+    });
+
+    await useAppStore.getState().undo();
+
+    expect(vi.mocked(ipc.sequenceReplay)).toHaveBeenCalledWith(1, 1, null);
+    expect(vi.mocked(ipc.poseSolve)).toHaveBeenCalledTimes(1);
+    const hard = vi.mocked(ipc.poseSolve).mock.calls[0][0];
+    expect(hard).toContainEqual({ hinge: 45, target_angle_deg: -180 });
+    expect(hard).toContainEqual({ hinge: 132, target_angle_deg: -180 });
+    const state = useAppStore.getState();
+    expect(Math.abs((state.poseAngles.get(45) ?? Infinity) - -180)).toBeLessThan(
+      1e-9,
+    );
+    expect(Math.abs((state.poseAngles.get(132) ?? Infinity) - -180)).toBeLessThan(
+      1e-9,
+    );
+    expect(state.poseWarnings).toEqual([]);
+    expect(state.releasedPins).toEqual([]);
+    expect(state.releasedPinHinges).toEqual([]);
+  });
+
+  it("手順・固定・driverを戻すundoは1回で解き、未固定の再生frameを表示しない", async () => {
+    const sequenceDoc: Document = {
+      ...DOC,
+      sequence: [
+        {
+          id: 1,
+          kind: "Simple",
+          drivers: [{ a: [0, 0], b: [1, 1], target_angle_deg: 60 }],
+          layer_order: null,
+          note: "",
+        },
+      ],
+    };
+    vi.mocked(ipc.sequenceReplay).mockResolvedValue({
+      frame: { faces: [], warnings: ["未固定の再生frame"] },
+      skipped: [],
+      warnings: [],
+      sequence_targets: [
+        { hinge: 5, target_angle_deg: 60 },
+        { hinge: 7, target_angle_deg: 20 },
+      ],
+      angles: { 5: 60, 7: 20 },
+      converged: true,
+    });
+    vi.mocked(ipc.poseSolve).mockImplementation(async (hard, keep) => ({
+      ...SOLVED,
+      frame: { faces: [], warnings: ["固定とdriverを戻したframe"] },
+      angles: Object.fromEntries(
+        [...hard, ...(keep ?? [])].map((driver) => [
+          driver.hinge,
+          driver.target_angle_deg,
+        ]),
+      ),
+      closure_rms: 1e-15,
+    }));
+    useAppStore.setState({
+      doc: sequenceDoc,
+      hinges: new Set([5, 7]),
+      drivers: new Map([[7, 90]]),
+      pinnedFolds: new Map([[5, 10]]),
+      angleUndoStack: [
+        {
+          drivers: new Map([[7, -48]]),
+          pinned: new Map([[5, 45]]),
+        },
+      ],
+      angleRedoStack: [],
+      currentStep: null,
+      playT: 1,
+      frame3d: { faces: [], warnings: ["undo前のframe"] },
+    });
+    const observedWarnings: string[][] = [];
+    const unsubscribe = useAppStore.subscribe((state) => {
+      observedWarnings.push(state.frame3d?.warnings ?? []);
+    });
+
+    try {
+      await useAppStore.getState().undo();
+    } finally {
+      unsubscribe();
+    }
+
+    expect(vi.mocked(ipc.sequenceReplay)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(ipc.poseSolve)).toHaveBeenCalledTimes(1);
+    const poseCall = vi.mocked(ipc.poseSolve).mock.calls[0];
+    expect(poseCall[0]).toContainEqual({ hinge: 5, target_angle_deg: 45 });
+    expect(poseCall[1]).toContainEqual({ hinge: 7, target_angle_deg: -48 });
+    expect(observedWarnings).not.toContainEqual(["未固定の再生frame"]);
+    const state = useAppStore.getState();
+    expect(state.poseAngles.get(5)).toBe(45);
+    expect(state.poseAngles.get(7)).toBe(-48);
+    expect(state.frame3d?.warnings).toEqual(["固定とdriverを戻したframe"]);
   });
 });

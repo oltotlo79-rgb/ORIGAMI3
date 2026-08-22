@@ -150,10 +150,10 @@ export interface DisplaySettings {
   front_color: [number, number, number];
   back_color: [number, number, number];
   grid_divisions: number;
-  /** 折り動作中の紙どうしの重なりを補正するか。既定はオン。
-   * 古い作品ファイルには無いので省略可とし、falseのときだけ切る */
+  /** 紙どうしの食い込みを減らすように形を補正するか。既定はオフ。
+   * 古い作品ファイルには無いので省略可とし、trueのときだけ使う */
   overlap_prevention_enabled?: boolean;
-  /** 角度を動かす途中で紙どうしが交差したら、ぶつかる直前で止めるか。既定はオン。
+  /** 紙どうしの食い込みを検出して警告するか。形は変えず、既定はオン。
    * 古い作品ファイルには無いので省略可とし、falseのときだけ切る */
   penetration_prevention_enabled?: boolean;
   /** 紙のたわみを表現するか(SIM-012)。既定はオフ。
@@ -231,6 +231,8 @@ export interface DocumentView {
   frame: Frame3D | null;
   /** 自動再生で折り線が見つからず飛ばされたステップID */
   skipped: number[];
+  /** 最終形で紙どうしの接触を検出したか。接触しても操作は止めない */
+  contact_detected: boolean;
   /** 補正後にも残る食い込みの原因候補ヒンジ */
   suspect_hinges?: number[];
   /** 手順から現在の辺IDへ解決した希望角。保存データではなく再生の導出結果 */
@@ -426,6 +428,24 @@ export interface TipPos2d {
 }
 
 /**
+ * 選んだ候補について、紙の上で使いたい場所。
+ *
+ * 完成形の位置(`TipPos2d`)とは別の一時入力で、紙の中心を(0,0)、右と上を正にし、
+ * 紙の長辺の半分を1.0として表す。短辺方向の端は縦横比に応じて1.0未満になる。
+ * 作品へ保存せず、提案ウィザードを閉じると捨てる。
+ */
+export interface PaperPosition2d {
+  x: number;
+  y: number;
+}
+
+/** 紙の上の場所1件。leaf_idで完成形の先端と取り違えずに対応させる。 */
+export interface PaperTipPosition {
+  leaf_id: number;
+  position: PaperPosition2d;
+}
+
+/**
  * 骨格の節点(ori3-propose::SkeletonNode)。
  * parentがnullの節点が根(胴の中心)で、ちょうど1つだけ置く。
  * lengthは親へつながる辺の長さ(根では使わない)、width_factorは太さ(膨らみ)。
@@ -484,6 +504,28 @@ export interface LeafSite {
   molecules: number[];
 }
 
+/** 提案された折り方に共通する、確かめ済みの手順(commands.rs::ProposalFoldPlanDetails)。 */
+interface ProposalFoldPlanData {
+  /** 確かめられた折り手順。先頭から順に折る */
+  steps: FoldStep[];
+  /** その手順を折り込んだ展開図(折る過程で線の種類が決まる) */
+  cp: CreasePattern;
+  /** 見つかった手の数 */
+  planned: number;
+  /** そのうち、通して確かめられた手の数(steps.length と同じ) */
+  checked: number;
+}
+
+/**
+ * 提案された折り方1つ分(commands.rs::ProposalFoldPlan)。
+ *
+ * 完成まで確認できた手順と途中までの手順は、真偽値ではなく判別できる型で分ける。
+ * どちらも `steps` に入るのは通して確かめられた手だけなので、そのまま作品へ入れられる。
+ */
+export type ProposalFoldPlan =
+  | (ProposalFoldPlanData & { status: "checked_to_finish" })
+  | (ProposalFoldPlanData & { status: "partial" });
+
 /** proposal_generate が返す展開図の候補1つ分(commands.rs::ProposalCandidate) */
 export interface ProposalCandidate {
   cp: CreasePattern;
@@ -498,6 +540,11 @@ export interface ProposalCandidate {
    * そのまま動くよう、省略できる形にしてある。
    */
   sites?: LeafSite[];
+  /**
+   * この展開図の折り方。1手も見つからなかったときはnull。
+   * この欄を読まない今までの画面の処理はそのまま動くよう、省略できる形にしてある。
+   */
+  fold_plan?: ProposalFoldPlan | null;
 }
 
 /** recovery_check の戻り値。前回の異常終了で残った自動保存の情報(SYS-003) */

@@ -66,6 +66,7 @@ function makeView(doc: Document): DocumentView {
     violations: [],
     frame: null,
     skipped: [],
+    contact_detected: false,
   };
 }
 
@@ -122,7 +123,7 @@ describe("新規作成の紙の指定", () => {
 });
 
 describe("紙の色と方眼・重なり防止/食い込み検出・区画の分割比", () => {
-  it("色・方眼・2種類の防止設定を作品ごとの設定として保存する", async () => {
+  it("色・方眼・重なり防止/食い込み検出を作品ごとの設定として保存する", async () => {
     // Rust側は受け取った見た目をそのまま作品へ入れて返す
     vi.mocked(ipc.editApply).mockImplementation(async (op) =>
       makeView({
@@ -150,11 +151,11 @@ describe("紙の色と方眼・重なり防止/食い込み検出・区画の分
 
     await useAppStore
       .getState()
-      .setDisplay({ overlap_prevention_enabled: false });
+      .setDisplay({ overlap_prevention_enabled: true });
     const overlap = vi.mocked(ipc.editApply).mock.calls[2][0];
     if (overlap.type !== "SetDisplay") throw new Error("SetDisplayでない");
-    expect(overlap.display.overlap_prevention_enabled).toBe(false);
-    expect(useAppStore.getState().doc?.display.overlap_prevention_enabled).toBe(false);
+    expect(overlap.display.overlap_prevention_enabled).toBe(true);
+    expect(useAppStore.getState().doc?.display.overlap_prevention_enabled).toBe(true);
 
     await useAppStore
       .getState()
@@ -664,6 +665,7 @@ async function runConstruct(
     frame3d: null,
     construct: { ...DEFAULT_CONSTRUCT, ...options },
     curve: { ...DEFAULT_CURVE },
+    measureMode: "angle",
     wheelBehavior: "scroll",
     violations: [],
     mirrorAxis: paperMirrorLine(doc.paper, "paperVertical"),
@@ -677,6 +679,8 @@ async function runConstruct(
     setSelection: vi.fn(),
     beginFoldDraft: vi.fn(),
     pickAlignTarget: vi.fn(),
+    pickMeasureEdge: vi.fn(),
+    pickMeasurePoint: vi.fn(),
   };
   for (const click of clicks) onMouseDown(ctx, toConstructScreen(click), 0);
   await Promise.all(pending);

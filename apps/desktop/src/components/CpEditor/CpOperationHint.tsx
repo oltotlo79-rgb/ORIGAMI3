@@ -2,10 +2,12 @@
 // 現在できることを1行だけ残して、ホイールの詳しい割り当てを畳む。
 
 import { useAppStore, type ToolId } from "../../store/appStore";
+import { measureGuide } from "../../lib/measureGuide";
 import { wheelHint } from "./interaction";
 
 const CURRENT_ACTION: Record<ToolId, string> = {
   select: "線や点を選び、展開図を動かせます",
+  measure: "2つの辺を指定してください",
   mountain: "山折り線: 2回クリックで線を引きます",
   valley: "谷折り線: 2回クリックで線を引きます",
   aux: "補助線: 2回クリックで線を引きます",
@@ -18,9 +20,14 @@ const CURRENT_ACTION: Record<ToolId, string> = {
 
 export function CpOperationHint() {
   const activeTool = useAppStore((s) => s.activeTool);
+  const measureDraft = useAppStore((s) => s.measureDraft);
   const wheelBehavior = useAppStore((s) => s.wheelBehavior);
   const expanded = useAppStore((s) => s.cpHelpExpanded);
   const toggle = useAppStore((s) => s.toggleCpHelp);
+  const currentAction =
+    activeTool === "measure"
+      ? measureGuide(measureDraft.mode, measureDraft.picks.length)
+      : CURRENT_ACTION[activeTool];
 
   return (
     <aside
@@ -32,9 +39,9 @@ export function CpOperationHint() {
         <span>展開図</span>
         <strong
           className="operation-summary-line"
-          data-tooltip={CURRENT_ACTION[activeTool]}
+          data-tooltip={currentAction}
         >
-          {CURRENT_ACTION[activeTool]}
+          {currentAction}
         </strong>
       </div>
       {expanded && <p>{wheelHint(wheelBehavior)}</p>}

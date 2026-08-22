@@ -80,6 +80,8 @@ import type {
   Frame3D,
   MotionPart,
   Paper,
+  PaperPosition2d,
+  PaperTipPosition,
   ProposalCandidate,
   RecoveryInfo,
   SeqOp,
@@ -88,13 +90,36 @@ import type {
   SoftSettings,
   StepCreases,
   TechniqueKind,
+  TipPos2d,
   Vec2,
 } from "../lib/types";
-import { defaultSkeleton } from "../lib/skeleton";
 import {
-  foldDeviationNotice,
-  foldDeviations,
-  splitSettledFolds,
+  clampTipPos,
+  defaultSkeleton,
+  leafNodes,
+  setTipPos,
+} from "../lib/skeleton";
+import {
+  clampPaperPosition,
+  paperBounds,
+} from "../lib/paperPosition";
+import {
+  paperEditorPositions,
+  proposalLeafPositionStates,
+  proposalRequestSkeleton,
+  setLastMovedSource,
+  setSpecifiedPaperPosition,
+  type ProposalPositionLastMoved,
+} from "../lib/proposalPosition";
+import {
+  keptFoldsFailed,
+  MAX_PIN_RELEASES_ON_SETTLE,
+  pinReleaseCandidates,
+  pinReleaseNotice,
+  releasedPins as releasedPinsOf,
+  splitKeptFolds,
+  type ReleasedPin,
+  withFoldDeviationNotice,
 } from "../lib/settledFolds";
 import { loadOnboarding, saveOnboarding } from "../lib/firstRunGuide";
 import type { HelpChapterId } from "../help/helpTypes";
@@ -156,6 +181,18 @@ export function relaxationNotices(
     .sort((a, b) => a.hinge - b.hinge);
 }
 
+/**
+ * 「元に戻す」で戻す1件ぶんの角度の状態。
+ *
+ * 角度の指定と、どの折り目を固定していたかを組にして控える。
+ * 固定の付け外しも1回で戻せるようにするため(片方だけを控えると、
+ * 戻した角度と固定が食い違う)。どちらも作品ファイルには保存しない。
+ */
+export interface AngleSnapshot {
+  drivers: ReadonlyMap<number, number>;
+  pinned: ReadonlyMap<number, number>;
+}
+
 /** 1回の角度操作に属する「いま固定する折り目」。作品には保存しない。 */
 export interface ActiveAngleIntent {
   generation: number;
@@ -171,6 +208,7 @@ export interface ActiveAngleIntent {
 
 export type ToolId =
   | "select"
+  | "measure"
   | "mountain"
   | "valley"
   | "aux"
@@ -185,8 +223,24 @@ export type GuideStep = 0 | 1 | 2 | 3 | 4;
 export type GuideAction = "fold" | "angle" | "pull" | "inflate";
 const GUIDE_ACTIONS: GuideAction[] = ["fold", "angle", "pull", "inflate"];
 
-/** 提案ウィザードの3画面(骨格を作る → 候補を選ぶ → 確認する) */
-export type ProposalStep = "skeleton" | "candidates" | "confirm";
+/** 提案ウィザードの画面。紙位置は選んだ候補だけを大きく出す任意の別画面。 */
+export type ProposalStep =
+  | "skeleton"
+  | "candidates"
+  | "paper-position"
+  | "confirm";
+
+/** 提案画面の場所操作を1回戻すための、作品へ保存しない一時状態。 */
+export interface ProposalPositionSnapshot {
+  step: ProposalStep;
+  skeleton: Skeleton;
+  candidates: ProposalCandidate[];
+  selected: number | null;
+  paperSource: number | null;
+  paperPositions: PaperTipPosition[];
+  paperSpecified: PaperTipPosition[];
+  lastMoved: ProposalPositionLastMoved[];
+}
 
 /** 提案の計算に使う紙(作品が無いときの控え。App.tsxの既定と同じ) */
 const FALLBACK_PAPER: Paper = { width_mm: 150, height_mm: 150 };
@@ -217,6 +271,42 @@ export function draftToPaper(draft: NewPaperDraft): Paper {
 export interface Selection {
   edgeIds: number[];
   vertexIds: number[];
+}
+
+/** 測定中に選ぶ3つのやり方。測定結果と同じく作品には保存しない。 */
+export type MeasureMode = "angle" | "length" | "distance";
+
+/** 結果カードで利用者が選べる表示。nullは値に応じた既定表示を表す。 */
+export type MeasureDisplay = "decimal" | "exact";
+
+/** 角度・線の長さで指定した、展開図と3D表示に共通する辺。 */
+export interface MeasureEdgePick {
+  kind: "edge";
+  edgeId: number;
+}
+
+/**
+ * 2点の距離で指定した点。
+ *
+ * cpは展開図座標、faceIdは3D上の現在位置をそのつど導出するための面である。
+ * 展開図から指定して面がまだ決まっていない場合だけnullにする。worldは姿勢の
+ * 再生で古くなるため持たない。vertexIdは既存の選択表示に同じ点を渡すためだけに使う。
+ */
+export interface MeasurePointPick {
+  kind: "point";
+  cp: Vec2;
+  faceId: number | null;
+  vertexId: number | null;
+}
+
+export type MeasurePick = MeasureEdgePick | MeasurePointPick;
+
+/** 測る道具を使っている間だけの状態。作品・端末設定のどちらにも保存しない。 */
+export interface MeasureDraft {
+  mode: MeasureMode;
+  picks: MeasurePick[];
+  /** nullなら、正確な形の有無と小数の桁数から既定表示を決める。 */
+  display: MeasureDisplay | null;
 }
 
 /** 折る対象の層: 全ての層 / いちばん上の1枚 */
@@ -593,6 +683,8 @@ interface AppState {
   /** 複数スライダーのうち、いま指している折り目。2D/3Dの個別強調に使う。 */
   hoveredHinge: number | null;
   activeTool: ToolId;
+  /** 測る道具の途中指定。表示中だけ共有し、作品・端末設定には保存しない。 */
+  measureDraft: MeasureDraft;
   /** 引いたばかりの折り線と確定前の設定。nullなら折り線を引いていない */
   foldDraft: FoldDraft | null;
   /** 巻き込み用の追加折り目を提案中。2D/3Dのプレビューもこの値を使う */
@@ -643,11 +735,34 @@ interface AppState {
   docEpoch: number;
   /** 利用者が指定した折り角度(度)。キーは辺ID */
   drivers: Map<number, number>;
-  /** 折り角度を変える前のdriversの控え(古い順)。「元に戻す」はまずここを使う。
+  /**
+   * 利用者が角度を固定した折り目と、その角度(度)。キーは辺ID。
+   *
+   * 固定した折り目は、ほかの折り目を動かしても角度が変わらない。
+   * 角度の指定(drivers)と同じ性格の一時的な指定なので、**作品ファイルには
+   * 保存しない**(保存すると、同じ展開図と手順から作り直した形が固定の有無で
+   * 変わってしまい、「展開図+折り手順から導出する」決まりに反する)。
+   * 端末の設定にも書かない。作品を開く・新規作成で捨てる。
+   */
+  pinnedFolds: ReadonlyMap<number, number>;
+  /**
+   * 固定したままでは紙が裂けるため、やむを得ず動かした折り目。
+   * 1回の計算ごとに作り直す診断で、作品には保存しない。
+   */
+  releasedPins: ReleasedPin[];
+  /**
+   * いま「動かさない側」から外している折り目を、外した順に並べたもの。
+   *
+   * つまみを動かしている間ずっと持ち越す(毎コマ探し直すと固定が付いたり
+   * 外れたりして形が揺れる)。戻すときは最後に外した1本から戻す。
+   * 自動で守っている折り切りも含むので、利用者へ知らせる `releasedPins` とは別。
+   */
+  releasedPinHinges: number[];
+  /** 折り角度を変える前の指定の控え(古い順)。「元に戻す」はまずここを使う。
    * 3Dの形は作品データではないので保存せず、作品を開く・新規作成で捨てる */
-  angleUndoStack: ReadonlyMap<number, number>[];
+  angleUndoStack: AngleSnapshot[];
   /** 「元に戻す」で戻した角度をやり直すための控え(古い順) */
-  angleRedoStack: ReadonlyMap<number, number>[];
+  angleRedoStack: AngleSnapshot[];
   /** 作品データ側(edit_undo)を戻した回数。「やり直し」はこちらを先に消化する
    * (線の追加を戻した後は、まず線の追加をやり直すのが自然な順番) */
   docUndoDepth: number;
@@ -683,6 +798,18 @@ interface AppState {
   proposalCandidates: ProposalCandidate[];
   /** 選んでいる候補の添字。まだ選んでいなければnull */
   proposalSelected: number | null;
+  /** 紙位置の大きな別画面を開いた元候補。開いていなければnull */
+  proposalPaperSource: number | null;
+  /** 紙の上で動かしている先端の場所。完成形の位置とは別に保つ一時状態 */
+  proposalPaperPositions: PaperTipPosition[];
+  /** 利用者が紙の画面で実際に動かした場所。候補由来の表示位置は含めない */
+  proposalPaperSpecified: PaperTipPosition[];
+  /** 葉ごとに、完成形と紙の上のどちらを最後に動かしたか */
+  proposalPositionLastMoved: ProposalPositionLastMoved[];
+  /** 提案位置の「元に戻す」履歴（古い順） */
+  proposalPositionUndoStack: ProposalPositionSnapshot[];
+  /** 提案位置の「やり直す」履歴（古い順） */
+  proposalPositionRedoStack: ProposalPositionSnapshot[];
   /** 生成中か(「計算中…」の表示用) */
   proposalBusy: boolean;
   /** 生成に失敗した理由(日本語)。成功したらnull */
@@ -828,6 +955,16 @@ interface AppState {
   /** 再生と一時停止を切り替える */
   togglePlay: () => void;
   setTool: (tool: ToolId) => void;
+  /** 測り方を替え、前の途中指定と結果を捨てる。 */
+  setMeasureMode: (mode: MeasureMode) => void;
+  /** 結果カードの表示形式を1回の操作で替える。 */
+  setMeasureDisplay: (display: MeasureDisplay) => void;
+  /** 展開図または3D表示で拾った辺を、現在の測定へ1本追加する。 */
+  pickMeasureEdge: (edgeId: number) => void;
+  /** 展開図または3D表示で拾った点を、現在の測定へ1点追加する。 */
+  pickMeasurePoint: (pick: Omit<MeasurePointPick, "kind">) => void;
+  /** 測り方を保ったまま、途中指定と結果だけを捨てる。 */
+  clearMeasurement: () => void;
   setSelection: (selection: Selection) => void;
   /** 折り目ごとの角度行を指したときの一時的な強調(nullで解除) */
   setHoveredHinge: (hinge: number | null) => void;
@@ -928,6 +1065,10 @@ interface AppState {
   clearDriver: (hinge: number) => void;
   /** 全ての角度指定を解除して平らに戻す */
   clearDrivers: () => void;
+  /** 折り目1本の角度の固定を、押すたびに付け外しする */
+  togglePinnedFold: (hinge: number) => void;
+  /** 選んだ折り目の角度をまとめて固定する・まとめて外す */
+  setPinnedFolds: (hinges: readonly number[], pinned: boolean) => void;
   /** 今つけている立体的な形を「仕上げの角度」の手順として残す(SIM-009) */
   recordPoseStep: () => Promise<void>;
   /** 起動時に、前回の異常終了で残った作業中の内容があるか調べる */
@@ -942,10 +1083,29 @@ interface AppState {
   setProposalStep: (step: ProposalStep) => void;
   /** 編集した骨格を差し替える(前の候補は作り直しになるので捨てる) */
   setProposalSkeleton: (skeleton: Skeleton) => void;
+  /** 完成形の先端位置1件を動かし、紙位置を保ったまま最後の操作として記録する */
+  setProposalTipPosition: (leafId: number, position: TipPos2d | null) => void;
   /** 今の骨格で候補を作り、候補選びの画面へ進む(PRO-005) */
   generateProposal: () => Promise<void>;
   /** 候補を選ぶ */
   selectProposalCandidate: (index: number) => void;
+  /** 選んだ候補だけを大きく出し、紙の上の場所を動かす画面を開く */
+  openProposalPaperPositionEditor: () => void;
+  /** 紙の上の先端1件を動かす */
+  setProposalPaperPosition: (
+    leafId: number,
+    position: PaperPosition2d,
+  ) => void;
+  /** 紙の上の場所を、別画面を開いたときの候補へ戻す */
+  resetProposalPaperPositions: () => void;
+  /** 場所が違う葉を、いま使っていない側へ戻す */
+  restoreOtherProposalPosition: (leafId: number) => void;
+  /** 提案画面で行った場所操作を1件戻す */
+  undoProposalPosition: () => void;
+  /** 戻した提案画面の場所操作を1件やり直す */
+  redoProposalPosition: () => void;
+  /** 葉ごとに完成形／紙の上の使う場所をまとめた要求を1件送り、候補を作り直す */
+  generateProposalFromPaperPositions: () => Promise<void>;
   /** 選んだ候補を今の作品の展開図にしてウィザードを閉じる(PRO-003) */
   applyProposalCandidate: () => Promise<void>;
   /** 書き出しダイアログを開く(前回の結果表示は消す) */
@@ -994,6 +1154,32 @@ export interface ExportSettings {
 export const DEFAULT_PNG_LONG_SIDE = 2048;
 
 const EMPTY_SELECTION: Selection = { edgeIds: [], vertexIds: [] };
+
+/** 新しい配列を持つ空の測定状態。共有配列を誤って書き換えないよう毎回作る。 */
+function emptyMeasureDraft(mode: MeasureMode = "angle"): MeasureDraft {
+  return { mode, picks: [], display: null };
+}
+
+/** 測定対象を既存の2D/3D選択強調へ渡す。IDを持たない方眼上の点は別描画にする。 */
+function selectionForMeasure(picks: readonly MeasurePick[]): Selection {
+  return {
+    edgeIds: [
+      ...new Set(
+        picks
+          .filter((pick): pick is MeasureEdgePick => pick.kind === "edge")
+          .map((pick) => pick.edgeId),
+      ),
+    ],
+    vertexIds: [
+      ...new Set(
+        picks
+          .filter((pick): pick is MeasurePointPick => pick.kind === "point")
+          .map((pick) => pick.vertexId)
+          .filter((id): id is number => id !== null),
+      ),
+    ],
+  };
+}
 
 /**
  * トレーリングエッジのスロットル。連続呼び出しをintervalMsごと1回に間引き、
@@ -1052,6 +1238,22 @@ function keepIfSame<T>(prev: T[], next: T[]): T[] {
   return same ? prev : next;
 }
 
+/** 中身が同じなら前の配列を使い回す(毎回の計算で画面を描き直さないため)。 */
+function keepIfSameReleasedPins(
+  prev: ReleasedPin[],
+  next: ReleasedPin[],
+): ReleasedPin[] {
+  const same =
+    prev.length === next.length &&
+    prev.every(
+      (pin, i) =>
+        pin.hinge === next[i].hinge &&
+        pin.pinned === next[i].pinned &&
+        pin.actual === next[i].actual,
+    );
+  return same ? prev : next;
+}
+
 /** その手順が再生で飛ばされているか。作品全体の再生結果(DocumentView由来)を見て、
  * 途中まで再生し直したときの結果もあわせて見る。
  * 部分再生の結果だけで判断すると、途中の手順を選んだ瞬間に後ろの手順の印が消える */
@@ -1095,6 +1297,119 @@ export const useAppStore = create<AppState>((set, get) => {
   let foldThroughBusyToken = 0;
   /** 閉じた提案画面へ古い計算結果を戻さないための要求世代。 */
   let proposalGeneration = 0;
+  /** 同じ葉のつまみを続けて動かす間は、ドラッグ1回を履歴1件へまとめる。 */
+  let lastProposalPositionKey: string | null = null;
+  let lastProposalPositionAt = 0;
+
+  const cloneProposalSkeleton = (skeleton: Skeleton): Skeleton => ({
+    nodes: skeleton.nodes.map((node) => ({
+      ...node,
+      ...(node.tip_pos_2d == null
+        ? {}
+        : { tip_pos_2d: { ...node.tip_pos_2d } }),
+    })),
+  });
+
+  const clonePaperPositions = (
+    positions: readonly PaperTipPosition[],
+  ): PaperTipPosition[] =>
+    positions.map((entry) => ({
+      leaf_id: entry.leaf_id,
+      position: { ...entry.position },
+    }));
+
+  const proposalPositionSnapshot = (): ProposalPositionSnapshot => {
+    const s = get();
+    if (s.proposalStep === null) {
+      throw new Error("proposal position snapshot requires an open proposal");
+    }
+    return {
+      step: s.proposalStep,
+      skeleton: cloneProposalSkeleton(s.proposalSkeleton),
+      // 候補は生成後に書き換えず配列ごと交換するため、履歴間で安全に共有できる。
+      candidates: s.proposalCandidates,
+      selected: s.proposalSelected,
+      paperSource: s.proposalPaperSource,
+      paperPositions: clonePaperPositions(s.proposalPaperPositions),
+      paperSpecified: clonePaperPositions(s.proposalPaperSpecified),
+      lastMoved: s.proposalPositionLastMoved.map((entry) => ({ ...entry })),
+    };
+  };
+
+  /** 角度スライダーと同じ700msの作法で、連続ドラッグを1履歴へまとめる。 */
+  const pushProposalPositionUndo = (key: string | null): void => {
+    const now = Date.now();
+    if (
+      key !== null &&
+      key === lastProposalPositionKey &&
+      now - lastProposalPositionAt < ANGLE_GROUP_MS
+    ) {
+      lastProposalPositionAt = now;
+      return;
+    }
+    lastProposalPositionKey = key;
+    lastProposalPositionAt = now;
+    const s = get();
+    set({
+      proposalPositionUndoStack: [
+        ...s.proposalPositionUndoStack,
+        proposalPositionSnapshot(),
+      ].slice(-ANGLE_HISTORY_LIMIT),
+      proposalPositionRedoStack: [],
+    });
+  };
+
+  const undoProposalPositionState = (): boolean => {
+    const s = get();
+    if (s.proposalBusy) return false;
+    const previous =
+      s.proposalPositionUndoStack[s.proposalPositionUndoStack.length - 1];
+    if (!previous) return false;
+    lastProposalPositionKey = null;
+    set({
+      proposalStep: previous.step,
+      proposalSkeleton: cloneProposalSkeleton(previous.skeleton),
+      proposalCandidates: previous.candidates,
+      proposalSelected: previous.selected,
+      proposalPaperSource: previous.paperSource,
+      proposalPaperPositions: clonePaperPositions(previous.paperPositions),
+      proposalPaperSpecified: clonePaperPositions(previous.paperSpecified),
+      proposalPositionLastMoved: previous.lastMoved.map((entry) => ({ ...entry })),
+      proposalPositionUndoStack: s.proposalPositionUndoStack.slice(0, -1),
+      proposalPositionRedoStack: [
+        ...s.proposalPositionRedoStack,
+        proposalPositionSnapshot(),
+      ].slice(-ANGLE_HISTORY_LIMIT),
+      proposalError: null,
+    });
+    return true;
+  };
+
+  const redoProposalPositionState = (): boolean => {
+    const s = get();
+    if (s.proposalBusy) return false;
+    const next =
+      s.proposalPositionRedoStack[s.proposalPositionRedoStack.length - 1];
+    if (!next) return false;
+    lastProposalPositionKey = null;
+    set({
+      proposalStep: next.step,
+      proposalSkeleton: cloneProposalSkeleton(next.skeleton),
+      proposalCandidates: next.candidates,
+      proposalSelected: next.selected,
+      proposalPaperSource: next.paperSource,
+      proposalPaperPositions: clonePaperPositions(next.paperPositions),
+      proposalPaperSpecified: clonePaperPositions(next.paperSpecified),
+      proposalPositionLastMoved: next.lastMoved.map((entry) => ({ ...entry })),
+      proposalPositionRedoStack: s.proposalPositionRedoStack.slice(0, -1),
+      proposalPositionUndoStack: [
+        ...s.proposalPositionUndoStack,
+        proposalPositionSnapshot(),
+      ].slice(-ANGLE_HISTORY_LIMIT),
+      proposalError: null,
+    });
+    return true;
+  };
 
   const invalidateFoldThrough = (): void => {
     foldThroughRevision++;
@@ -1178,6 +1493,10 @@ export const useAppStore = create<AppState>((set, get) => {
         pendingFoldThrough: null,
         alignDraft: null,
         techniqueDraft: null,
+        // 座標や辺が変わった後に古い測定を見せない。測り方だけは編集後も保つ。
+        measureDraft: emptyMeasureDraft(
+          isNewDocument ? "angle" : s.measureDraft.mode,
+        ),
         paperActionTipVisible: false,
         paperActionTipExpanded: false,
         faces: view.faces,
@@ -1207,7 +1526,7 @@ export const useAppStore = create<AppState>((set, get) => {
           total === 0 || s.currentStep === null
             ? null
             : Math.min(s.currentStep, total),
-        selection: isNewDocument
+        selection: isNewDocument || s.activeTool === "measure"
           ? EMPTY_SELECTION
           : pruneSelection(s.selection, view.doc),
         mirrorAxis: resetSelectedAxis
@@ -1222,7 +1541,7 @@ export const useAppStore = create<AppState>((set, get) => {
         hoveredHinge: null,
         errorMessage: null,
         documentSavedPath: null,
-        contactDetected: false,
+        contactDetected: view.contact_detected,
         docEpoch: isNewDocument ? s.docEpoch + 1 : s.docEpoch,
       };
     });
@@ -1255,8 +1574,11 @@ export const useAppStore = create<AppState>((set, get) => {
         clearAngleHistory();
         set({
           drivers: new Map(),
+          // 固定も角度の指定と同じ一時的なものなので、別の作品になったら捨てる
+          pinnedFolds: new Map(),
+          releasedPins: [],
+          releasedPinHinges: [],
           poseWarnings: [],
-          contactDetected: false,
           activeAngleIntent: null,
           angleIntentGeneration: get().angleIntentGeneration + 1,
           pullHinge: null,
@@ -1348,9 +1670,32 @@ export const useAppStore = create<AppState>((set, get) => {
   let lastAngleAt = 0;
 
   /**
-   * 角度を変える直前のdriversを履歴へ積む(角度を変える操作の入口で必ず呼ぶ)。
+   * 固定してある折り目のつまみを利用者自身が動かしたときに、
+   * 固定する角度も同じ値へ更新するための差分。固定していなければ何も返さない。
+   */
+  const repinned = (
+    hinges: readonly number[],
+    deg: number,
+  ): { pinnedFolds?: ReadonlyMap<number, number> } => {
+    const s = get();
+    const target = hinges.filter((hinge) => s.pinnedFolds.has(hinge));
+    if (target.length === 0) return {};
+    const next = new Map(s.pinnedFolds);
+    for (const hinge of target) next.set(hinge, deg);
+    return { pinnedFolds: next };
+  };
+
+  /** いまの角度の指定と固定を、履歴へ積める形にまとめる。 */
+  const angleSnapshot = (): AngleSnapshot => {
+    const s = get();
+    return { drivers: new Map(s.drivers), pinned: new Map(s.pinnedFolds) };
+  };
+
+  /**
+   * 角度を変える直前の指定と固定を履歴へ積む(角度を変える操作の入口で必ず呼ぶ)。
    * keyが同じ操作の続き(スライダーを動かしている最中)なら積み直さないので、
    * ドラッグ1回・スライダー1回の操作が履歴1件になる。keyがnullなら常に1件。
+   * 固定の付け外しは key=null で呼ぶので、1回押すごとに1件戻せる。
    */
   const pushAngleUndo = (key: string | null): void => {
     const now = Date.now();
@@ -1362,7 +1707,7 @@ export const useAppStore = create<AppState>((set, get) => {
     lastAngleAt = now;
     const s = get();
     set({
-      angleUndoStack: [...s.angleUndoStack, new Map(s.drivers)].slice(
+      angleUndoStack: [...s.angleUndoStack, angleSnapshot()].slice(
         -ANGLE_HISTORY_LIMIT,
       ),
       angleRedoStack: [], // 新しい操作をしたらやり直しの先は消える
@@ -1449,6 +1794,29 @@ export const useAppStore = create<AppState>((set, get) => {
   };
 
   /**
+   * いま計算へ送る角度の一覧を作る。
+   *
+   * 後の段が勝つ順に重ねる: 保存手順の希望 → 固定した角度 → 今の指定。
+   * 固定を手順の希望より後に置くのは、利用者が「この角度のままにして」と
+   * 明示したものだから。今の指定を最後に置くのは、固定した折り目の
+   * つまみを利用者自身が動かしたときに、その操作を止めないため
+   * (固定は「ほかの折り目のせいで動かない」という意味であって、
+   * 利用者自身も動かせないという意味ではない)。
+   */
+  const mergedTargets = (s: AppState): Map<number, number> => {
+    const merged = new Map(
+      [...s.sequenceTargets].filter(([hinge]) => s.hinges.has(hinge)),
+    );
+    for (const [hinge, deg] of s.pinnedFolds) {
+      if (s.hinges.has(hinge)) merged.set(hinge, deg);
+    }
+    for (const [hinge, deg] of s.drivers) {
+      merged.set(hinge, deg);
+    }
+    return merged;
+  };
+
+  /**
    * 保存手順 → 同じ作業中の希望 → 現在操作中hard、の順で角度をまとめる。
    * 同じ辺は後の値が勝ち、hardとpreferredへ重複して載せない。
    */
@@ -1468,12 +1836,7 @@ export const useAppStore = create<AppState>((set, get) => {
     const active = new Set(
       s.activeAngleIntent?.fixAll === false ? moving.slice(0, 1) : moving,
     );
-    const merged = new Map(
-      [...s.sequenceTargets].filter(([hinge]) => s.hinges.has(hinge)),
-    );
-    for (const [hinge, deg] of s.drivers) {
-      merged.set(hinge, deg);
-    }
+    const merged = mergedTargets(s);
     const hard: Driver[] = [];
     const preferred: Driver[] = [];
     for (const [hinge, deg] of [...merged].sort(([a], [b]) => a - b)) {
@@ -1488,14 +1851,7 @@ export const useAppStore = create<AppState>((set, get) => {
   /** 明示hardを除いた現在のpreferred一覧。解除の1回だけhardを送る経路で使う。 */
   const preferredWithout = (hardHinges: readonly number[]): Driver[] => {
     const excluded = new Set(hardHinges);
-    const s = get();
-    const merged = new Map(
-      [...s.sequenceTargets].filter(([hinge]) => s.hinges.has(hinge)),
-    );
-    for (const [hinge, deg] of s.drivers) {
-      merged.set(hinge, deg);
-    }
-    return [...merged]
+    return [...mergedTargets(get())]
       .filter(([hinge]) => !excluded.has(hinge))
       .sort(([a], [b]) => a - b)
       .map(([hinge, target_angle_deg]) => ({ hinge, target_angle_deg }));
@@ -1520,12 +1876,42 @@ export const useAppStore = create<AppState>((set, get) => {
     softWarnings: keepIfSame(get().softWarnings, mesh?.warnings ?? []),
   });
 
+  /** 外した折り目の控えを空にする(作品や指定が変わって前提が消えたとき)。 */
+  const clearReleasedPins = (): void => {
+    if (get().releasedPinHinges.length > 0) set({ releasedPinHinges: [] });
+  };
+
+  /** 固定したまま折れず、まだ元へ戻せていない折り目が残っているか。 */
+  const hasReleasedPins = (): boolean => get().releasedPinHinges.length > 0;
+
+  /**
+   * 追従計算を1回送る。固定した折り目は「動かさない側」へ入れる。
+   *
+   * 解き直しの回数は**必ず回数で打ち切る。ミリ秒では打ち切らない**
+   * (時間で打ち切ると計算機の速さで外れる本数が変わり、同じ操作をしても
+   * 同じ形にならなくなる)。
+   *
+   * 流れ:
+   *   1. 試す: 固定を全部そのままにして解く。折れれば終わり(計算1回)。
+   *   2. 診断: 折れなければ、固定を全部「なるべく守る」側にして1回だけ解く。
+   *      折り目ごとの譲り量が返るので、**どの固定が成り立っていないかが1回で分かる**
+   *      (総当たりで1本ずつ試す必要がない)。
+   *   3. 1本だけ外す: 外す順番のいちばん先のものを1本外して解き直す。
+   *      折れれば終わり。折れなければ次の1本(深く探すときだけ)。
+   *   4. どうしても折れないときは、診断の形をそのまま表示する。
+   *      **操作は止めない**(CLAUDE.md §8)。
+   *
+   * `deepSearch=false`(つまみを動かしている最中)は1コマで「試す+診断」までにし、
+   * 外す判断は次のコマへ持ち越す。1コマの計算は最大2回に収まる。
+   */
   const runPoseSolve = async (
     hard: Driver[],
     preferred: Driver[] = [],
     coalesce = false,
     applyFrame = true,
     warmSeed: Driver[] = [],
+    deepSearch = false,
+    replayPosition?: { upTo: number; replayT: number },
   ): Promise<void> => {
     // 次の16ms要求がまだキューへ積まれていない間でも、新しい角度操作が
     // 始まった時点から旧世代の表示結果を採用しない。
@@ -1534,27 +1920,96 @@ export const useAppStore = create<AppState>((set, get) => {
     const soft = softArg();
     const position = get();
     const total = position.doc?.sequence.length ?? 0;
-    const upTo = position.currentStep ?? total;
-    const replayT = position.currentStep === null ? 1 : position.playT;
-    // 既に0°/±180°まで折り切ってある折り目は、希望ではなく厳密に保つ側へ回す。
-    // 譲らせると重なった紙の束がばらけ、重なり順が幾何から決まらなくなって
-    // 見えないはずの紙の裏が出る(根拠と実測は lib/settledFolds.ts)。
-    const { settled, rest } = splitSettledFolds(preferred);
+    const upTo = replayPosition?.upTo ?? position.currentStep ?? total;
+    const replayT =
+      replayPosition?.replayT ?? (position.currentStep === null ? 1 : position.playT);
+    const pinnedHinges = new Set(position.pinnedFolds.keys());
     const send = (h: Driver[], p: Driver[]) =>
       ipc.poseSolve(h, p, soft, warmSeed, upTo, replayT);
     const attempt = (h: Driver[], p: Driver[]) => {
       const call = () => send(h, p);
       return coalesce ? queue.runLatest(call) : queue.run(call);
     };
-    let r = await attempt([...hard, ...settled], rest);
-    if (requestGeneration !== get().angleIntentGeneration) return;
-    // 折り切った折り目まで厳密に保つと解けない形もある。そのときは操作を
-    // 止めず、従来どおり全てを希望として解き直す(CLAUDE.md §8「止めずに警告する」)。
-    if (r.ok && r.isLatest && settled.length > 0 && r.value.converged !== true) {
-      const retried = await attempt(hard, preferred);
-      if (requestGeneration !== get().angleIntentGeneration) return;
-      if (retried.ok && retried.isLatest) r = retried;
+    /** いまの「外した折り目」で、動かさない側と守る側へ分けて1回解く。 */
+    const attemptWithReleased = async (released: ReadonlySet<number>) => {
+      const { kept, rest } = splitKeptFolds(preferred, pinnedHinges, released);
+      return { kept, result: await attempt([...hard, ...kept], rest) };
+    };
+
+    let releasedOrder = [...get().releasedPinHinges];
+    const released = new Set(releasedOrder);
+    // 固定を外した折り目のうち、もう固定されていないものは控えから捨てる。
+    for (const hinge of [...released]) {
+      if (!pinnedHinges.has(hinge) && !preferred.some((d) => d.hinge === hinge)) {
+        released.delete(hinge);
+        releasedOrder = releasedOrder.filter((h) => h !== hinge);
+      }
     }
+    let { kept, result: r } = await attemptWithReleased(released);
+    if (requestGeneration !== get().angleIntentGeneration) return;
+
+    // 深く探すときは、まず「外したままの折り目を1本戻せないか」を試す。
+    // これをしないと、原因になっていた別の指定を直しても固定が戻らない。
+    if (deepSearch && r.ok && r.isLatest && !keptFoldsFailed(r.value) && released.size > 0) {
+      const readmit = [...releasedOrder].reverse().find((h) => released.has(h));
+      if (readmit !== undefined) {
+        const candidate = new Set(released);
+        candidate.delete(readmit);
+        const retry = await attemptWithReleased(candidate);
+        if (requestGeneration !== get().angleIntentGeneration) return;
+        if (retry.result.ok && retry.result.isLatest && !keptFoldsFailed(retry.result.value)) {
+          released.delete(readmit);
+          releasedOrder = releasedOrder.filter((h) => h !== readmit);
+          kept = retry.kept;
+          r = retry.result;
+        }
+      }
+    }
+
+    // 折れなかったときだけ、原因を1回の計算で診断する。
+    if (r.ok && r.isLatest && kept.length > 0 && keptFoldsFailed(r.value)) {
+      const diagnosis = await attempt(hard, preferred);
+      if (requestGeneration !== get().angleIntentGeneration) return;
+      if (diagnosis.ok && diagnosis.isLatest) {
+        const diagnosedAngles = new Map(
+          Object.entries(diagnosis.value.angles).map(([id, deg]) => [
+            Number(id),
+            deg,
+          ]),
+        );
+        // 診断は「固定を全部ゆるめた形」なので、外す候補の並びは
+        // 何本外しても変わらない。1回とった診断を使い回す。
+        const candidates = pinReleaseCandidates(
+          kept,
+          pinnedHinges,
+          diagnosedAngles,
+        );
+        // 折れないあいだ、外す順番の先頭から1本ずつ外して確かめる。
+        // つまみを動かしている最中は1本ぶんの判断だけ残し、次のコマで確かめる。
+        const limit = deepSearch ? MAX_PIN_RELEASES_ON_SETTLE : 1;
+        let attemptsLeft = limit;
+        // 診断の形は必ず解けている(固定を全部ゆるめた形)ので、
+        // どうしても折れなかったときの表示に使う。
+        r = diagnosis;
+        for (const candidate of candidates) {
+          if (attemptsLeft <= 0) break;
+          if (released.has(candidate.hinge)) continue;
+          released.add(candidate.hinge);
+          releasedOrder = [...releasedOrder, candidate.hinge];
+          attemptsLeft--;
+          if (!deepSearch) break; // 確かめるのは次のコマで
+          const verified = await attemptWithReleased(released);
+          if (requestGeneration !== get().angleIntentGeneration) return;
+          if (!verified.result.ok || !verified.result.isLatest) break;
+          if (!keptFoldsFailed(verified.result.value)) {
+            // 1本外しただけで折れた。ここで打ち切るので、外した本数は最小。
+            r = verified.result;
+            break;
+          }
+        }
+      }
+    }
+
     if (!r.ok) {
       if (r.isLatest) fail(r.error);
       return;
@@ -1565,9 +2020,27 @@ export const useAppStore = create<AppState>((set, get) => {
     );
     // 指定した角度にならなかった折り目を利用者へ知らせる。以前は15.8°違っても
     // 何も出ていなかった。区画は増やさず、既存の警告の出し口へ1行足す。
-    const deviationNotice = foldDeviationNotice(
-      foldDeviations([...hard, ...preferred], poseAngles),
+    const deviationWarnings = withFoldDeviationNotice(
+      r.value.frame.warnings,
+      [...hard, ...preferred],
+      poseAngles,
     );
+    // 固定したままでは折れず、動くことになった折り目を知らせる。
+    // 出し口は上と同じで、新しい区画は作らない。
+    //
+    // 「外した」折り目だけを見てはいけない。どうしても折れないときは
+    // 固定を全部ゆるめた形を表示するので、外した覚えのない折り目も動く。
+    // 実機で確かめたところ、そのとき何も知らされないまま固定した折り目が
+    // -180°から100°へ動いていた。表示している形で**実際に動いた固定**を数える。
+    const movedPins = releasedPinsOf(
+      preferred.filter((d) => pinnedHinges.has(d.hinge)),
+      poseAngles,
+    );
+    const pinNotice = pinReleaseNotice(movedPins);
+    const poseWarnings =
+      pinNotice === null
+        ? deviationWarnings
+        : [...deviationWarnings, pinNotice];
     set({
       // 出発点合わせ(applyFrame=false)では形は変わらないので、手順再生が
       // 持っていた層の重なり情報を消さないよう立体表示はそのままにする
@@ -1579,12 +2052,7 @@ export const useAppStore = create<AppState>((set, get) => {
               get().suspectHinges,
               r.value.suspect_hinges ?? [],
             ),
-            poseWarnings: keepIfSame(
-              get().poseWarnings,
-              deviationNotice === null
-                ? r.value.frame.warnings
-                : [...r.value.frame.warnings, deviationNotice],
-            ),
+            poseWarnings: keepIfSame(get().poseWarnings, poseWarnings),
             flatFoldViolations: keepIfSame(
               get().flatFoldViolations,
               r.value.flat_fold_violations ?? [],
@@ -1597,8 +2065,12 @@ export const useAppStore = create<AppState>((set, get) => {
                 : null,
             relaxations: r.value.relaxations ?? [],
             contactDetected: r.value.contact_detected === true,
+            releasedPins: keepIfSameReleasedPins(get().releasedPins, movedPins),
           }
         : {}),
+      // 外している折り目の控えは表示ではなく次の計算の入力なので、
+      // 形を更新しない要求(出発点合わせ)でも必ず残す。
+      releasedPinHinges: keepIfSame(get().releasedPinHinges, releasedOrder),
       poseAngles,
     });
   };
@@ -1612,7 +2084,16 @@ export const useAppStore = create<AppState>((set, get) => {
     applyFrame = true,
     warmSeed: Driver[] = [],
   ): Promise<void> => {
-    const pending = runPoseSolve(hard, preferred, coalesce, applyFrame, warmSeed);
+    // つまみを動かしている最中(coalesce)以外は、1回で決着させたい要求なので
+    // 固定を外す本数まで深く探す。
+    const pending = runPoseSolve(
+      hard,
+      preferred,
+      coalesce,
+      applyFrame,
+      warmSeed,
+      !coalesce,
+    );
     latestPosePromise = pending;
     return pending;
   };
@@ -1640,6 +2121,15 @@ export const useAppStore = create<AppState>((set, get) => {
     const before = get().drivers;
     const kept = new Map([...before].filter(([hinge]) => hinges.has(hinge)));
     if (kept.size !== before.size) set({ drivers: kept });
+    // 折り線でなくなった辺の固定も一緒に捨てる(角度の指定と同じ扱い)
+    const pinnedBefore = get().pinnedFolds;
+    const pinnedKept = new Map(
+      [...pinnedBefore].filter(([hinge]) => hinges.has(hinge)),
+    );
+    if (pinnedKept.size !== pinnedBefore.size) {
+      clearReleasedPins();
+      set({ pinnedFolds: pinnedKept, releasedPins: [] });
+    }
     // 平らのまま(指定も立体形状も無い)なら計算する必要はない
     if (kept.size === 0 && get().frame3d === null) return;
     if (kept.size === 0) {
@@ -1668,6 +2158,19 @@ export const useAppStore = create<AppState>((set, get) => {
     pose.flush();
     const pending = latestPosePromise;
     await pending;
+    // 指を離した時点で、外した固定を戻せないか・外す本数を減らせないかを
+    // もう一巡だけ深く探す。動かしている最中は1コマ2回までに抑えているので、
+    // 落ち着いたここで最小の本数まで詰める。外した固定が無ければ何もしない。
+    if (
+      hasReleasedPins() &&
+      generation !== undefined &&
+      get().activeAngleIntent?.generation === generation
+    ) {
+      const { hard, preferred } = splitDrivers();
+      const settle = runPoseSolve(hard, preferred, false, true, [], true);
+      latestPosePromise = settle;
+      await settle;
+    }
     if (
       generation !== undefined &&
       get().activeAngleIntent?.generation === generation
@@ -1682,39 +2185,28 @@ export const useAppStore = create<AppState>((set, get) => {
    * 明示的なwarm seedにして解く。Rust側に残った直前解を出発点にしないため、
    * 未指定の折り目もundo/redo先の状態へ確実に戻る。
    */
-  const applyAngleSnapshot = async (
-    next: ReadonlyMap<number, number>,
-  ): Promise<void> => {
-    const drivers = new Map(next);
-    set({ drivers });
+  const applyAngleSnapshot = async (next: AngleSnapshot): Promise<void> => {
+    const drivers = new Map(next.drivers);
+    // 固定も一緒に戻す。片方だけ戻すと、戻した角度と固定が食い違う。
+    const pinnedFolds = new Map(next.pinned);
+    clearReleasedPins();
+    set({ drivers, pinnedFolds, releasedPins: [] });
     cancelAngleIntent();
     const restoreGeneration = get().angleIntentGeneration;
     pose.clearAll(); // 予約済みの間引き計算は古い指定なので捨てる
 
     const s = get();
     const total = s.doc?.sequence.length ?? 0;
-    let warmSeed: Driver[];
     if (total > 0) {
       const upTo = s.currentStep ?? total;
       const t = s.currentStep === null ? 1 : s.playT;
-      await runReplay(upTo, t);
+      // 再生の基準角へ、復元するdriverと固定を同じ1回で重ねる。
+      // 未固定の再生frameを一瞬表示してから追従形へ替えることもしない。
+      await runReplay(upTo, t, false, true, drivers);
       // 連打中に次のundo/redoや新しい角度操作が始まった古い復元は打ち切る。
       if (restoreGeneration !== get().angleIntentGeneration) return;
       if (get().errorMessage !== null) return;
-      // driverが無ければ、手順再生の形がそのまま復元結果になる。
-      if (drivers.size === 0) return;
-      // 追従計算が破綻した後の姿勢を出発点にすると、元に戻しても崩れた形から
-      // 計算し直すことになり、戻らない。警告が出ている姿勢は使わず、
-      // 手順再生の形(平らな畳み)から解き直す。
-      const broken = get().warnings.some(
-        (warning) =>
-          warning.includes("収束していません") || warning.includes("食い込"),
-      );
-      warmSeed = broken
-        ? snapshotSeed(drivers, s.hinges)
-        : driverList(new Map(get().poseAngles));
-    } else {
-      warmSeed = snapshotSeed(drivers, s.hinges);
+      return;
     }
 
     await requestPoseSolve(
@@ -1722,7 +2214,7 @@ export const useAppStore = create<AppState>((set, get) => {
       preferredWithout([]),
       false,
       true,
-      warmSeed,
+      snapshotSeed(drivers, s.hinges),
     );
   };
 
@@ -1783,11 +2275,17 @@ export const useAppStore = create<AppState>((set, get) => {
 
   /** 手順の再生結果を3D表示へ反映する。
    * coalesce=true(再生アニメーション)は「最新の形が出れば良い」ので
-   * 待ち行列に最新1件だけを置く(runLatest)。追い越された要求は実行されない */
+   * 待ち行列に最新1件だけを置く(runLatest)。追い越された要求は実行されない。
+   *
+   * 固定があるときは、再生結果を出発点にして既存の追従計算へ渡す。
+   * sequenceReplayには固定を渡す引数が無いため、そのframeを直接表示すると
+   * 手順を選ぶ・再生する・undoで戻す経路だけ固定が効かなくなるためである。 */
   const runReplay = async (
     upTo: number,
     t: number,
     coalesce = false,
+    settlePins = !coalesce,
+    poseOverrides: ReadonlyMap<number, number> | null = null,
   ): Promise<void> => {
     // poseと同じく、次の角度要求がthrottle待ちでも旧再生を表示しない。
     const requestGeneration = get().angleIntentGeneration;
@@ -1804,39 +2302,90 @@ export const useAppStore = create<AppState>((set, get) => {
     }
     if (!r.isLatest) return;
     const s = get();
-    set({
-      frame3d: r.value.frame,
-      ...softResult(r.value.soft),
+    const requestedAngles = [...(r.value.sequence_targets ?? [])].sort(
+      (a, b) => a.hinge - b.hinge,
+    );
+    const sequenceTargets = new Map(
+      requestedAngles.map((driver) => [driver.hinge, driver.target_angle_deg]),
+    );
+    const replayAngles = r.value.angles
+      ? new Map(
+          Object.entries(r.value.angles).map(([id, deg]) => [Number(id), deg]),
+        )
+      : null;
+    const activePins = [...s.pinnedFolds].filter(([hinge]) => s.hinges.has(hinge));
+    const replayState = {
       // upToまでの再生結果なので、作品全体のskippedは上書きしない
       replaySkipped: keepIfSame(s.replaySkipped, r.value.skipped),
       replayWarnings: keepIfSame(s.replayWarnings, r.value.warnings),
-      flatFoldViolations: keepIfSame(
-        s.flatFoldViolations,
-        r.value.flat_fold_violations ?? [],
-      ),
-      suspectHinges: keepIfSame(
-        s.suspectHinges,
-        r.value.suspect_hinges ?? [],
-      ),
-      sequenceTargets: new Map(
-        [...(r.value.sequence_targets ?? [])]
-          .sort((a, b) => a.hinge - b.hinge)
-          .map((driver) => [driver.hinge, driver.target_angle_deg]),
-      ),
-      poseAngles: r.value.angles
-        ? new Map(
-            Object.entries(r.value.angles).map(([id, deg]) => [Number(id), deg]),
-          )
-        : s.poseAngles,
-      relaxations: r.value.relaxations ?? [],
-      poseConverged: r.value.converged ?? true,
-      poseBestEffort: r.value.best_effort === true,
-      poseClosureRms:
-        typeof r.value.closure_rms === "number"
-          ? r.value.closure_rms
-          : null,
-      contactDetected: r.value.contact_detected === true,
+      sequenceTargets,
+    };
+
+    if (activePins.length === 0 && (poseOverrides === null || poseOverrides.size === 0)) {
+      // frameが別の計算結果へ変わるときは、そのframeと組になっていた通知も
+      // 必ず同時に置き換える。これをしないとundo後も「固定が動いた」という
+      // 直前の追従計算の知らせだけが残る。
+      set({
+        ...replayState,
+        frame3d: r.value.frame,
+        ...softResult(r.value.soft),
+        flatFoldViolations: keepIfSame(
+          s.flatFoldViolations,
+          r.value.flat_fold_violations ?? [],
+        ),
+        suspectHinges: keepIfSame(
+          s.suspectHinges,
+          r.value.suspect_hinges ?? [],
+        ),
+        poseAngles: replayAngles ?? s.poseAngles,
+        poseWarnings: keepIfSame(
+          s.poseWarnings,
+          withFoldDeviationNotice(
+            r.value.frame.warnings,
+            requestedAngles,
+            replayAngles ?? new Map(),
+          ),
+        ),
+        releasedPins: keepIfSameReleasedPins(s.releasedPins, []),
+        releasedPinHinges: keepIfSame(s.releasedPinHinges, []),
+        relaxations: r.value.relaxations ?? [],
+        poseConverged: r.value.converged ?? true,
+        poseBestEffort: r.value.best_effort === true,
+        poseClosureRms:
+          typeof r.value.closure_rms === "number"
+            ? r.value.closure_rms
+            : null,
+        contactDetected: r.value.contact_detected === true,
+      });
+      return;
+    }
+
+    // 再生する位置が変われば、以前その形で外した固定は前提が違う。
+    // 全て固定した状態からもう一度試し、外す必要がある場合だけ最小限を診断する。
+    set({
+      ...replayState,
+      poseWarnings: [],
+      releasedPins: [],
+      releasedPinHinges: [],
     });
+    const preferred = new Map(sequenceTargets);
+    for (const [hinge, deg] of activePins) preferred.set(hinge, deg);
+    for (const [hinge, deg] of poseOverrides ?? []) preferred.set(hinge, deg);
+    const pending = runPoseSolve(
+      [],
+      driverList(preferred),
+      coalesce,
+      true,
+      replayAngles === null ? [] : driverList(replayAngles),
+      // 再生中は1コマを軽く保ち、静止した最終形で解除本数を詰める。
+      // 成り立たない指定でも表示は止めない。
+      settlePins,
+      // sequenceReplayと固定付きsolveが必ず同じ再生位置を計算する。
+      // 次のtickが先にstateを進めても、別の時点の形を混ぜない。
+      { upTo, replayT: t },
+    );
+    latestPosePromise = pending;
+    await pending;
   };
 
   // 手順の表示切替中はframe3dが直前の手順を指す。合わせ対象をその古い位置で
@@ -1890,10 +2439,33 @@ export const useAppStore = create<AppState>((set, get) => {
     // 表示中の手順番号はapplyViewで手順数まで詰めてある
     const step = get().currentStep;
     if (step === null) {
+      const hasPins = [...get().pinnedFolds.keys()].some((hinge) =>
+        get().hinges.has(hinge),
+      );
+      // DocumentViewの自動再生frameにも固定は含まれない。固定があるときは
+      // runReplayへ集約し、再生の基準角から固定付きで解き直す。
+      if (hasPins) {
+        set({ replaySkipped: [], replayWarnings: [] });
+        await runReplay(view.doc.sequence.length, 1, true, true);
+        return;
+      }
+      const viewAngles = new Map(
+        Object.entries(view.angles ?? {}).map(([id, deg]) => [Number(id), deg]),
+      );
       set((s) => ({
         frame3d: view.frame,
         replaySkipped: [],
         replayWarnings: [],
+        poseWarnings: keepIfSame(
+          s.poseWarnings,
+          withFoldDeviationNotice(
+            view.frame?.warnings ?? [],
+            view.sequence_targets ?? [],
+            viewAngles,
+          ),
+        ),
+        releasedPins: keepIfSameReleasedPins(s.releasedPins, []),
+        releasedPinHinges: keepIfSame(s.releasedPinHinges, []),
         suspectHinges: keepIfSame(
           s.suspectHinges,
           view.suspect_hinges ?? [],
@@ -1907,7 +2479,7 @@ export const useAppStore = create<AppState>((set, get) => {
     // 描き直すのはその手順を折り終えた形(t=1)。一時停止していた途中の進み具合を
     // 残すと、次に再生したとき表示が一度巻き戻ってから折り直される
     set({ playT: 1 });
-    await runReplay(step, 1, true);
+    await runReplay(step, 1, true, true);
   };
 
   /** 次のコマを予約し、取り消す手続きを返す。画面のある環境では画面更新に
@@ -1947,7 +2519,7 @@ export const useAppStore = create<AppState>((set, get) => {
       total,
     );
     set({ currentStep: next.step, playT: next.t, playing: next.playing });
-    void runReplay(next.step, next.t, true);
+    void runReplay(next.step, next.t, true, !next.playing);
     if (next.playing) cancelFrame = scheduleFrame(tick);
   };
 
@@ -2087,6 +2659,7 @@ export const useAppStore = create<AppState>((set, get) => {
     selection: EMPTY_SELECTION,
     hoveredHinge: null,
     activeTool: "select",
+    measureDraft: emptyMeasureDraft(),
     foldDraft: null,
     pendingFoldThrough: null,
     foldThroughBusy: false,
@@ -2110,6 +2683,9 @@ export const useAppStore = create<AppState>((set, get) => {
     documentSavedPath: null,
     docEpoch: 0,
     drivers: new Map(),
+    pinnedFolds: new Map(),
+    releasedPins: [],
+    releasedPinHinges: [],
     angleUndoStack: [],
     angleRedoStack: [],
     docUndoDepth: 0,
@@ -2128,6 +2704,12 @@ export const useAppStore = create<AppState>((set, get) => {
     proposalSkeleton: defaultSkeleton(),
     proposalCandidates: [],
     proposalSelected: null,
+    proposalPaperSource: null,
+    proposalPaperPositions: [],
+    proposalPaperSpecified: [],
+    proposalPositionLastMoved: [],
+    proposalPositionUndoStack: [],
+    proposalPositionRedoStack: [],
     proposalBusy: false,
     proposalError: null,
     proposalSeed: 1,
@@ -2403,12 +2985,16 @@ export const useAppStore = create<AppState>((set, get) => {
       stopPlayback();
       invalidateFoldThrough();
       const s = get();
+      // 提案ダイアログの場所操作は作品へ保存しないため、開いている間だけ先に戻す。
+      // 計算中は、その要求の入力と画面を食い違わせないため何も戻さない。
+      if (s.proposalStep !== null && s.proposalBusy) return;
+      if (s.proposalStep !== null && undoProposalPositionState()) return;
       const prev = s.angleUndoStack[s.angleUndoStack.length - 1];
       if (prev !== undefined) {
         lastAngleKey = null; // 戻した後の操作は必ず新しい1件にする
         set({
           angleUndoStack: s.angleUndoStack.slice(0, -1),
-          angleRedoStack: [...s.angleRedoStack, new Map(s.drivers)].slice(
+          angleRedoStack: [...s.angleRedoStack, angleSnapshot()].slice(
             -ANGLE_HISTORY_LIMIT,
           ),
           errorMessage: null,
@@ -2424,6 +3010,8 @@ export const useAppStore = create<AppState>((set, get) => {
     redo: async () => {
       stopPlayback();
       invalidateFoldThrough();
+      if (get().proposalStep !== null && get().proposalBusy) return;
+      if (get().proposalStep !== null && redoProposalPositionState()) return;
       // 作品データを戻したぶんが残っていれば、そちらを先にやり直す
       if (get().docUndoDepth > 0) {
         await runViewCommand(() => ipc.editRedo(), false);
@@ -2441,7 +3029,7 @@ export const useAppStore = create<AppState>((set, get) => {
       lastAngleKey = null;
       set({
         angleRedoStack: s.angleRedoStack.slice(0, -1),
-        angleUndoStack: [...s.angleUndoStack, new Map(s.drivers)].slice(
+        angleUndoStack: [...s.angleUndoStack, angleSnapshot()].slice(
           -ANGLE_HISTORY_LIMIT,
         ),
         errorMessage: null,
@@ -2496,6 +3084,8 @@ export const useAppStore = create<AppState>((set, get) => {
         set({
           activeTool: tool,
           selection: EMPTY_SELECTION,
+          // 測定は道具を離れたら残さない。入り直したときも先頭の「角度」から始める。
+          measureDraft: emptyMeasureDraft(),
           hoveredHinge: null,
           foldDraft: null,
           alignDraft: null,
@@ -2508,6 +3098,77 @@ export const useAppStore = create<AppState>((set, get) => {
         });
       }
     },
+
+    setMeasureMode: (mode) => {
+      const s = get();
+      if (s.measureDraft.mode === mode) return;
+      set({
+        measureDraft: emptyMeasureDraft(mode),
+        selection: EMPTY_SELECTION,
+      });
+    },
+
+    setMeasureDisplay: (display) =>
+      set((s) => ({
+        measureDraft: { ...s.measureDraft, display },
+      })),
+
+    pickMeasureEdge: (edgeId) => {
+      const s = get();
+      if (
+        s.activeTool !== "measure" ||
+        s.measureDraft.mode === "distance" ||
+        !s.doc?.cp.edges.some((edge) => edge.id === edgeId)
+      ) {
+        return;
+      }
+      const need = s.measureDraft.mode === "length" ? 1 : 2;
+      const pick: MeasureEdgePick = { kind: "edge", edgeId };
+      const previous = s.measureDraft.picks.filter(
+        (candidate): candidate is MeasureEdgePick => candidate.kind === "edge",
+      );
+      const picks = previous.length >= need ? [pick] : [...previous, pick];
+      set({
+        measureDraft: { ...s.measureDraft, picks, display: null },
+        selection: selectionForMeasure(picks),
+      });
+    },
+
+    pickMeasurePoint: ({ cp, faceId, vertexId }) => {
+      const s = get();
+      if (
+        s.activeTool !== "measure" ||
+        s.measureDraft.mode !== "distance" ||
+        !s.doc ||
+        !Number.isFinite(cp[0]) ||
+        !Number.isFinite(cp[1]) ||
+        (faceId !== null && (!Number.isSafeInteger(faceId) || faceId < 0)) ||
+        (vertexId !== null &&
+          !s.doc.cp.vertices.some((vertex) => vertex.id === vertexId))
+      ) {
+        return;
+      }
+      const pick: MeasurePointPick = {
+        kind: "point",
+        cp: [cp[0], cp[1]],
+        faceId,
+        vertexId,
+      };
+      const previous = s.measureDraft.picks.filter(
+        (candidate): candidate is MeasurePointPick => candidate.kind === "point",
+      );
+      const picks = previous.length >= 2 ? [pick] : [...previous, pick];
+      set({
+        measureDraft: { ...s.measureDraft, picks, display: null },
+        selection: selectionForMeasure(picks),
+      });
+    },
+
+    clearMeasurement: () =>
+      set((s) => ({
+        measureDraft: emptyMeasureDraft(s.measureDraft.mode),
+        selection: EMPTY_SELECTION,
+      })),
 
     setSelection: (selection) =>
       set((s) => {
@@ -3237,7 +3898,9 @@ export const useAppStore = create<AppState>((set, get) => {
       // 画面の反応を優先し、指定はその場で反映してから計算を間引いて依頼する
       const drivers = new Map(get().drivers);
       drivers.set(hinge, deg);
-      set({ drivers });
+      // 固定した折り目のつまみを利用者自身が動かしたときは、固定する角度も
+      // その値へ更新する(固定は「ほかの折り目のせいで動かない」という意味)。
+      set({ drivers, ...repinned([hinge], deg) });
       if (Math.abs(deg - before) >= 1) get().completeGuideAction("angle");
       // いま動かしている1本だけを固定する。以前に指定した折り線まで固定すると
       // 内部頂点まわりの拘束と両立せず、面が離れて紙が切れて見える
@@ -3260,7 +3923,7 @@ export const useAppStore = create<AppState>((set, get) => {
         return Math.abs(deg - before) >= 1;
       });
       for (const hinge of valid) drivers.set(hinge, deg);
-      set({ drivers });
+      set({ drivers, ...repinned(valid, deg) });
       if (changedForGuide) get().completeGuideAction("angle");
       // 動かしている折り目は選んだ全部(3Dで全部が水色に光る)。
       // そのうち角度を固定するのは代表1本だけ(fixAll=false)。
@@ -3297,11 +3960,55 @@ export const useAppStore = create<AppState>((set, get) => {
       stopPlayback();
       const hinges = get().hinges;
       invalidateFoldThrough();
-      if (get().drivers.size > 0) pushAngleUndo(null);
-      set({ drivers: new Map() });
+      if (get().drivers.size > 0 || get().pinnedFolds.size > 0) pushAngleUndo(null);
+      // 全部を平らへ戻すので、角度を固定したままにはできない(0度以外の固定は
+      // 「平らに戻す」と矛盾する)。固定も一緒に外す。
+      clearReleasedPins();
+      set({ drivers: new Map(), pinnedFolds: new Map(), releasedPins: [] });
       cancelAngleIntent();
       // 全ての折り線を0度に固定する形は必ず閉じる(平ら)ので全部hardでよい
       void requestPoseSolve(flatDrivers(hinges));
+    },
+
+    togglePinnedFold: (hinge) => {
+      const s = get();
+      if (!s.hinges.has(hinge)) return;
+      get().setPinnedFolds([hinge], !s.pinnedFolds.has(hinge));
+    },
+
+    setPinnedFolds: (hinges, pinned) => {
+      const s = get();
+      const valid = [...new Set(hinges)].filter((hinge) => s.hinges.has(hinge));
+      if (valid.length === 0) return;
+      const changed = valid.some(
+        (hinge) => s.pinnedFolds.has(hinge) !== pinned,
+      );
+      if (!changed) return;
+      // 固定の付け外しは1回押すごとに1件戻せるようにする(まとめない)
+      pushAngleUndo(null);
+      const next = new Map(s.pinnedFolds);
+      for (const hinge of valid) {
+        if (pinned) {
+          // 固定する角度は、画面のつまみが示している値と同じ決め方で取る。
+          // 表示は整数だが、ここでは丸めずそのままの値を覚える。
+          next.set(
+            hinge,
+            s.drivers.get(hinge) ??
+              s.sequenceTargets.get(hinge) ??
+              s.poseAngles.get(hinge) ??
+              0,
+          );
+        } else {
+          next.delete(hinge);
+        }
+      }
+      // 外した固定の控えは、固定そのものが変わった時点で作り直す
+      clearReleasedPins();
+      set({ pinnedFolds: next, releasedPins: [] });
+      // 固定を付け外しした形をすぐ見せる。動かしている折り目は無いので、
+      // 全部を「なるべく守る」側にして1回だけ解き直す。
+      cancelAngleIntent();
+      void requestPoseSolve([], preferredWithout([]));
     },
 
     recordPoseStep: async () => {
@@ -3384,11 +4091,18 @@ export const useAppStore = create<AppState>((set, get) => {
 
     openProposal: () => {
       proposalGeneration++;
+      lastProposalPositionKey = null;
       set({
         proposalStep: "skeleton",
         proposalSkeleton: defaultSkeleton(),
         proposalCandidates: [],
         proposalSelected: null,
+        proposalPaperSource: null,
+        proposalPaperPositions: [],
+        proposalPaperSpecified: [],
+        proposalPositionLastMoved: [],
+        proposalPositionUndoStack: [],
+        proposalPositionRedoStack: [],
         proposalBusy: false,
         proposalError: null,
       });
@@ -3396,18 +4110,86 @@ export const useAppStore = create<AppState>((set, get) => {
 
     closeProposal: () => {
       proposalGeneration++;
-      set({ proposalStep: null, proposalBusy: false });
+      lastProposalPositionKey = null;
+      set({
+        proposalStep: null,
+        proposalPaperSource: null,
+        proposalPaperPositions: [],
+        proposalPaperSpecified: [],
+        proposalPositionLastMoved: [],
+        proposalPositionUndoStack: [],
+        proposalPositionRedoStack: [],
+        proposalBusy: false,
+      });
     },
 
     setProposalStep: (step) => set({ proposalStep: step }),
 
-    // 骨格を触ったら前の候補は別物になるので捨てる(古い形のまま選べてしまうのを防ぐ)
-    setProposalSkeleton: (skeleton) =>
+    // 長さ・太さ・枝分かれを触ったら前の候補は別物になるので捨てる。
+    // 紙位置は残った葉IDだけ保ち、別の葉の指定まで捨てない。
+    setProposalSkeleton: (skeleton) => {
+      const leafIds = new Set(leafNodes(skeleton).map((node) => node.id));
+      const s = get();
+      lastProposalPositionKey = null;
       set({
         proposalSkeleton: skeleton,
         proposalCandidates: [],
         proposalSelected: null,
-      }),
+        proposalPaperSource: null,
+        proposalPaperPositions: [],
+        proposalPaperSpecified: s.proposalPaperSpecified.filter((entry) =>
+          leafIds.has(entry.leaf_id),
+        ),
+        proposalPositionLastMoved: s.proposalPositionLastMoved.filter((entry) =>
+          leafIds.has(entry.leaf_id),
+        ),
+        // 骨格の構造変更は場所だけの履歴へ混ぜない。
+        proposalPositionUndoStack: [],
+        proposalPositionRedoStack: [],
+      });
+    },
+
+    setProposalTipPosition: (leafId, position) => {
+      const s = get();
+      if (s.proposalBusy) return;
+      const node = leafNodes(s.proposalSkeleton).find((leaf) => leaf.id === leafId);
+      if (!node) return;
+      const fit = position === null ? null : clampTipPos(position);
+      const before = node.tip_pos_2d ?? null;
+      if (
+        (before === null && fit === null) ||
+        (before !== null &&
+          fit !== null &&
+          before.x === fit.x &&
+          before.y === fit.y)
+      ) {
+        return;
+      }
+      pushProposalPositionUndo(`completion:${leafId}`);
+      const paperExists = s.proposalPaperSpecified.some(
+        (entry) => entry.leaf_id === leafId,
+      );
+      set({
+        proposalSkeleton: setTipPos(s.proposalSkeleton, leafId, fit),
+        proposalCandidates: [],
+        proposalSelected: null,
+        proposalPaperSource: null,
+        proposalPaperPositions: [],
+        proposalPositionLastMoved:
+          fit !== null
+            ? setLastMovedSource(
+                s.proposalPositionLastMoved,
+                leafId,
+                "completion",
+              )
+            : paperExists
+              ? setLastMovedSource(s.proposalPositionLastMoved, leafId, "paper")
+              : s.proposalPositionLastMoved.filter(
+                  (entry) => entry.leaf_id !== leafId,
+                ),
+        proposalError: null,
+      });
+    },
 
     generateProposal: async () => {
       const s = get();
@@ -3415,15 +4197,23 @@ export const useAppStore = create<AppState>((set, get) => {
       const paper = s.doc?.paper ?? FALLBACK_PAPER;
       const seed = s.proposalSeed;
       const generation = ++proposalGeneration;
+      const requestSkeleton = proposalRequestSkeleton(
+        s.proposalSkeleton,
+        s.proposalPaperSpecified,
+        s.proposalPositionLastMoved,
+        paper,
+      );
       set({ proposalBusy: true, proposalError: null, proposalSeed: seed + 1 });
       // 提案の計算は作品の状態を読まない独立処理。直列化キューに載せると
       // 数百msの計算の間だけ編集が止まるので、ここは載せずに直接呼ぶ
       try {
-        const list = await ipc.proposalGenerate(s.proposalSkeleton, paper, seed);
+        const list = await ipc.proposalGenerate(requestSkeleton, paper, seed);
         if (generation !== proposalGeneration) return;
         set({
           proposalCandidates: list,
           proposalSelected: list.length > 0 ? 0 : null,
+          proposalPaperSource: null,
+          proposalPaperPositions: [],
           proposalStep: list.length > 0 ? "candidates" : "skeleton",
           proposalError:
             list.length > 0 ? null : "候補を作れませんでした。骨格を変えてみてください",
@@ -3441,7 +4231,208 @@ export const useAppStore = create<AppState>((set, get) => {
     selectProposalCandidate: (index) => {
       const list = get().proposalCandidates;
       if (index < 0 || index >= list.length) return;
-      set({ proposalSelected: index });
+      set({
+        proposalSelected: index,
+        proposalPaperSource: null,
+        proposalPaperPositions: [],
+      });
+    },
+
+    openProposalPaperPositionEditor: () => {
+      const s = get();
+      const source = s.proposalSelected;
+      const candidate = source === null ? undefined : s.proposalCandidates[source];
+      if (!candidate) return;
+      const positions = paperEditorPositions(
+        candidate,
+        s.proposalSkeleton,
+        s.proposalPaperSpecified,
+      );
+      if (positions.length === 0) return;
+      set({
+        proposalStep: "paper-position",
+        proposalPaperSource: source,
+        proposalPaperPositions: positions,
+        proposalError: null,
+      });
+    },
+
+    setProposalPaperPosition: (leafId, position) => {
+      const s = get();
+      if (s.proposalBusy) return;
+      const source = s.proposalPaperSource;
+      const candidate = source === null ? undefined : s.proposalCandidates[source];
+      if (!candidate) return;
+      const index = s.proposalPaperPositions.findIndex(
+        (entry) => entry.leaf_id === leafId,
+      );
+      if (index < 0) return;
+      const fit = clampPaperPosition(position, paperBounds(candidate.cp));
+      const specified = s.proposalPaperSpecified.find(
+        (entry) => entry.leaf_id === leafId,
+      )?.position;
+      if (
+        specified?.x === fit.x &&
+        specified.y === fit.y &&
+        s.proposalPositionLastMoved.find((entry) => entry.leaf_id === leafId)
+          ?.source === "paper"
+      ) {
+        return;
+      }
+      pushProposalPositionUndo(`paper:${leafId}`);
+      const next = s.proposalPaperPositions.map((entry, entryIndex) =>
+        entryIndex === index ? { ...entry, position: fit } : entry,
+      );
+      set({
+        proposalPaperPositions: next,
+        proposalPaperSpecified: setSpecifiedPaperPosition(
+          s.proposalPaperSpecified,
+          leafId,
+          fit,
+        ),
+        proposalPositionLastMoved: setLastMovedSource(
+          s.proposalPositionLastMoved,
+          leafId,
+          "paper",
+        ),
+        proposalError: null,
+      });
+    },
+
+    resetProposalPaperPositions: () => {
+      const s = get();
+      if (s.proposalBusy) return;
+      const source = s.proposalPaperSource;
+      const candidate = source === null ? undefined : s.proposalCandidates[source];
+      if (!candidate) return;
+      const shownIds = new Set(
+        s.proposalPaperPositions.map((entry) => entry.leaf_id),
+      );
+      if (
+        !s.proposalPaperSpecified.some((entry) => shownIds.has(entry.leaf_id))
+      ) {
+        return;
+      }
+      pushProposalPositionUndo(null);
+      const paperSpecified = s.proposalPaperSpecified.filter(
+        (entry) => !shownIds.has(entry.leaf_id),
+      );
+      let lastMoved = s.proposalPositionLastMoved.filter(
+        (entry) => !shownIds.has(entry.leaf_id),
+      );
+      for (const leafId of shownIds) {
+        const completion = s.proposalSkeleton.nodes.find(
+          (node) => node.id === leafId,
+        )?.tip_pos_2d;
+        if (completion != null) {
+          lastMoved = setLastMovedSource(lastMoved, leafId, "completion");
+        }
+      }
+      set({
+        proposalPaperPositions: paperEditorPositions(
+          candidate,
+          s.proposalSkeleton,
+          paperSpecified,
+        ),
+        proposalPaperSpecified: paperSpecified,
+        proposalPositionLastMoved: lastMoved,
+        proposalError: null,
+      });
+    },
+
+    restoreOtherProposalPosition: (leafId) => {
+      const s = get();
+      if (s.proposalBusy) return;
+      const paper = s.doc?.paper ?? FALLBACK_PAPER;
+      const state = proposalLeafPositionStates(
+        s.proposalSkeleton,
+        s.proposalPaperSpecified,
+        s.proposalPositionLastMoved,
+        paper,
+      ).find((entry) => entry.leaf_id === leafId);
+      if (!state || state.kind !== "different" || state.used === null) return;
+      pushProposalPositionUndo(null);
+      let skeleton = s.proposalSkeleton;
+      let paperSpecified = s.proposalPaperSpecified;
+      let lastMoved = s.proposalPositionLastMoved;
+      if (state.used === "paper") {
+        paperSpecified = paperSpecified.filter((entry) => entry.leaf_id !== leafId);
+        lastMoved = setLastMovedSource(lastMoved, leafId, "completion");
+      } else {
+        skeleton = setTipPos(skeleton, leafId, null);
+        lastMoved = setLastMovedSource(lastMoved, leafId, "paper");
+      }
+      const source = s.proposalPaperSource;
+      const candidate =
+        source === null ? undefined : s.proposalCandidates[source];
+      const stayOnPaper = s.proposalStep === "paper-position" && candidate !== undefined;
+      set({
+        proposalSkeleton: skeleton,
+        proposalPaperSpecified: paperSpecified,
+        proposalPositionLastMoved: lastMoved,
+        proposalPaperPositions: stayOnPaper
+          ? paperEditorPositions(candidate, skeleton, paperSpecified)
+          : [],
+        ...(stayOnPaper
+          ? {}
+          : {
+              proposalStep: "skeleton",
+              proposalCandidates: [],
+              proposalSelected: null,
+              proposalPaperSource: null,
+            }),
+        proposalError: null,
+      });
+    },
+
+    undoProposalPosition: () => {
+      undoProposalPositionState();
+    },
+
+    redoProposalPosition: () => {
+      redoProposalPositionState();
+    },
+
+    generateProposalFromPaperPositions: async () => {
+      const s = get();
+      if (s.proposalBusy || s.proposalPaperPositions.length === 0) return;
+      const paper = s.doc?.paper ?? FALLBACK_PAPER;
+      const seed = s.proposalSeed;
+      const generation = ++proposalGeneration;
+      const requestSkeleton = proposalRequestSkeleton(
+        s.proposalSkeleton,
+        s.proposalPaperSpecified,
+        s.proposalPositionLastMoved,
+        paper,
+      );
+      set({ proposalBusy: true, proposalError: null, proposalSeed: seed + 1 });
+      // 葉ごとに決めた側を送信用の複製へまとめ、要求は1件だけ送る。
+      // 完成形と紙の上の元入力はどちらもストアに残す。
+      try {
+        const list = await ipc.proposalGenerate(requestSkeleton, paper, seed);
+        if (generation !== proposalGeneration) return;
+        set({
+          proposalCandidates:
+            list.length > 0 ? list : s.proposalCandidates,
+          proposalSelected:
+            list.length > 0 ? 0 : s.proposalSelected,
+          proposalPaperSource: list.length > 0 ? null : s.proposalPaperSource,
+          proposalPaperPositions:
+            list.length > 0 ? [] : s.proposalPaperPositions,
+          proposalStep: list.length > 0 ? "candidates" : "paper-position",
+          proposalError:
+            list.length > 0
+              ? null
+              : "この場所では候補を作れませんでした。丸い印を少し離してみてください",
+          proposalBusy: false,
+        });
+      } catch (e) {
+        if (generation !== proposalGeneration) return;
+        set({
+          proposalBusy: false,
+          proposalError: typeof e === "string" ? e : String(e),
+        });
+      }
     },
 
     applyProposalCandidate: async () => {
@@ -3452,9 +4443,27 @@ export const useAppStore = create<AppState>((set, get) => {
           : s.proposalCandidates[s.proposalSelected];
       if (!chosen) return;
       // 以後は普通の展開図として自由に編集できる(PRO-003)。
-      // 元に戻せる操作なので、通常の編集と同じ経路(edit_apply)で流し込む
+      // どちらの経路でも確定は1回だけなので、元に戻す1回で入れる前へ戻る
       proposalGeneration++;
-      set({ proposalStep: null });
+      lastProposalPositionKey = null;
+      set({
+        proposalStep: null,
+        proposalPaperSource: null,
+        proposalPaperPositions: [],
+        proposalPaperSpecified: [],
+        proposalPositionLastMoved: [],
+        proposalPositionUndoStack: [],
+        proposalPositionRedoStack: [],
+      });
+      const plan = chosen.fold_plan;
+      if (plan && plan.steps.length > 0) {
+        // 折り方が付いているときは、展開図と折り手順を1回でまとめて入れる。
+        // 別々に入れると、展開図だけ入って手順が無い状態が「元に戻す」の
+        // 対象になってしまう(作業28)。
+        await applyDocChange(() => ipc.proposalApply(plan.cp, plan.steps), true);
+        return;
+      }
+      // 折り方が付いていないときは、今までどおり展開図だけを流し込む
       await get().applyEdit({ type: "ReplaceCreasePattern", cp: chosen.cp });
     },
 

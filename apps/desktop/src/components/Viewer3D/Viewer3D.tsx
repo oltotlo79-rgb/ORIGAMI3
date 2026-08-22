@@ -6,7 +6,7 @@
 //   - 展開図(doc/faces/hinges)が変わったとき: 三角形分割と添字を作り直す
 //   - 立体形状(frame3d)が変わったとき: 頂点座標の上書きだけ(作り直さない)
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import * as THREE from "three";
 import {
   canFoldNow,
@@ -17,14 +17,19 @@ import {
   useAppStore,
 } from "../../store/appStore";
 import { SELECTABLE_3D_EDGE_TARGETS, viewerHint } from "../../lib/viewerHint";
+import { measureGuide } from "../../lib/measureGuide";
 import {
   hingeAnglesFromFrame,
   planPull,
   pullDeltaDeg,
   type PullPlan,
 } from "../../lib/grabDrive";
-import { paperExtent } from "../CpEditor/snap";
-import { foldedAlignPoint, TOOL_KIND } from "../CpEditor/interaction";
+import { paperExtent, snap } from "../CpEditor/snap";
+import {
+  foldedAlignPoint,
+  SNAP_RADIUS_PX,
+  TOOL_KIND,
+} from "../CpEditor/interaction";
 import { planeRadius, screenToPlane } from "../../lib/planeProject";
 import { CONSTRUCT_STEPS, constructLines } from "../../lib/construct";
 import { CURVE_STEPS, curvePolyline } from "../../lib/curve";
@@ -88,6 +93,7 @@ import {
 import { ViewerOperationHint } from "./ViewerOperationHint";
 import { PaperActionTip } from "./PaperActionTip";
 import { FoldDirectionTip } from "./FoldDirectionTip";
+import { ViewerOverlayStack } from "./ViewerOverlayStack";
 import { ViewCube, type ViewCubeCameraControl } from "./ViewCube.jsx";
 import { trackedOrbitTarget } from "./viewCube";
 
@@ -384,9 +390,11 @@ interface AlignPick {
 interface Props {
   /** 「全体表示」用: 親が current を呼ぶと紙全体が見える位置にカメラを戻す */
   fitRef: React.RefObject<(() => void) | null>;
+  /** 3D区画上側の通知。狭い画面では他の案内と同じ列へ入れて重なりを防ぐ。 */
+  statusOverlays?: ReactNode;
 }
 
-export function Viewer3D({ fitRef }: Props) {
+export function Viewer3D({ fitRef, statusOverlays }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const sceneRef = useRef<Viewer3DScene | null>(null);
   /** OrbitControlsが内部に持つ注視点を、公開済みcameraの変化から追跡する。 */
@@ -426,6 +434,8 @@ export function Viewer3D({ fitRef }: Props) {
   /** 合わせて折るで、押した瞬間に決まった選択。離した位置ではなく押した位置で決める
    * (押してから離すまでに手がぶれても、選ぼうとしたものが選ばれるようにする) */
   const alignPressRef = useRef<AlignPick | null>(null);
+  /** 測定で押した瞬間に既存の逆写像が返した点・辺。 */
+  const measurePressRef = useRef<CpPick3D | null>(null);
   /** 紙をつかんで動かしている最中のつかんだ点・今の点・つかんだ面・対象の枚数 */
   const grabRef = useRef<GrabState | null>(null);
   /** 紙を引いている最中の、つかんだ点(世界座標とその画面位置)と駆動する折り線。
@@ -447,9 +457,11 @@ export function Viewer3D({ fitRef }: Props) {
   const selection = useAppStore((s) => s.selection);
   const hoveredHinge = useAppStore((s) => s.hoveredHinge);
   const suspectHinges = useAppStore((s) => s.suspectHinges);
+  const pinnedFolds = useAppStore((s) => s.pinnedFolds);
   const activeAngleIntent = useAppStore((s) => s.activeAngleIntent);
   const docEpoch = useAppStore((s) => s.docEpoch);
   const activeTool = useAppStore((s) => s.activeTool);
+  const measureDraft = useAppStore((s) => s.measureDraft);
   const uiTheme = useAppStore((s) => s.uiTheme);
   const foldDraft = useAppStore((s) => s.foldDraft);
   const pendingFoldThrough = useAppStore((s) => s.pendingFoldThrough);
@@ -468,6 +480,9 @@ export function Viewer3D({ fitRef }: Props) {
     if (s.foldThroughBusy) return "折り方を確認しています。少し待ってください";
     if (s.pendingFoldThrough) {
       return "追加折り目の位置を確認し、下のパネルで折り方を選んでください";
+    }
+    if (s.activeTool === "measure") {
+      return measureGuide(s.measureDraft.mode, s.measureDraft.picks.length);
     }
     return viewerHint({
       pullBlocked: pullBlockedOf(s),
@@ -705,6 +720,17 @@ export function Viewer3D({ fitRef }: Props) {
     const activeSegments: HighlightSegment[] = scene.content.hingeSegments
       .filter((segment) => activeIds.has(segment.edgeId) && !suspectIds.has(segment.edgeId))
       .map((segment) => ({ ...segment, role: "active" as const }));
+    // 角度を固定した折り目は、選んでいなくても光らせる(どれを固定したかが
+    // 選び直さなくても分かるように)。いま動かしている折り目・食い込みの
+    // 原因候補は、そちらの色を優先する。
+    const pinnedSegments: HighlightSegment[] = scene.content.hingeSegments
+      .filter(
+        (segment) =>
+          s.pinnedFolds.has(segment.edgeId) &&
+          !suspectIds.has(segment.edgeId) &&
+          !activeIds.has(segment.edgeId),
+      )
+      .map((segment) => ({ ...segment, role: "pinned" as const }));
     const hoveredSegments: HighlightSegment[] =
       s.hoveredHinge !== null && !s.selection.edgeIds.includes(s.hoveredHinge)
         ? scene.content.hingeSegments
@@ -719,9 +745,21 @@ export function Viewer3D({ fitRef }: Props) {
     const cpMarks: HighlightSegment[] = [];
     if (s.doc) {
       const cpPositions = new Map(s.doc.cp.vertices.map((v) => [v.id, v.pos]));
-      for (const id of s.selection.vertexIds) {
-        const pos = cpPositions.get(id);
-        if (pos) cpMarks.push(...cpPointHighlight(pos));
+      if (s.activeTool !== "measure") {
+        for (const id of s.selection.vertexIds) {
+          const pos = cpPositions.get(id);
+          if (pos) cpMarks.push(...cpPointHighlight(pos));
+        }
+      }
+      for (const pick of s.measureDraft.picks) {
+        if (pick.kind === "point") {
+          cpMarks.push(
+            ...cpPointHighlight(
+              pick.cp,
+              pick.faceId === null ? undefined : pick.faceId,
+            ),
+          );
+        }
       }
       const vertexDrag = vertexDragRef.current;
       if (vertexDrag) cpMarks.push(...cpPointHighlight(vertexDrag.to, vertexDrag.faceId));
@@ -735,8 +773,12 @@ export function Viewer3D({ fitRef }: Props) {
     // 折り線の始点だけは畳み平面の座標で決まるので、従来の折り線表示と同じ面に出す
     if (foldClickRef.current) cpMarks.push(...toHighlight(centerMark(foldClickRef.current)));
     const setHighlight = (segments: HighlightSegment[]) => {
+      const shownIds = new Set(segments.map((segment) => segment.edgeId));
       const physicalSegments = [
         ...suspectSegments,
+        // 選択中の折り目は選択の色を優先する(同じ線を二重に描かない)。
+        // 選んでいない固定の折り目だけを、固定の色で足す。
+        ...pinnedSegments.filter((segment) => !shownIds.has(segment.edgeId)),
         ...segments.filter((segment) => !suspectIds.has(segment.edgeId)),
         ...hoveredSegments,
         ...activeSegments,
@@ -885,6 +927,7 @@ export function Viewer3D({ fitRef }: Props) {
     selection,
     hoveredHinge,
     suspectHinges,
+    pinnedFolds,
     activeAngleIntent,
     doc,
     faces,
@@ -895,6 +938,7 @@ export function Viewer3D({ fitRef }: Props) {
     alignDraft,
     techniqueDraft,
     activeTool,
+    measureDraft,
     pullHinge,
     pullMirrorHinge,
     softMesh,
@@ -1115,6 +1159,76 @@ export function Viewer3D({ fitRef }: Props) {
   );
 
   /**
+   * 3Dで拾った点へ、展開図と同じ頂点・交点・方眼の吸着を適用する。
+   * クリックから展開図へ戻す入口は `pickCpFromPixel` のまま増やさず、返ったcpを
+   * 既存の `snap` へ通す。12pxを現在面の正規化距離へ直しているため、拡大率や
+   * 面の傾きが変わっても吸着の画面上の広さが大きく変わらない。
+   */
+  const measurePointFromPick = useCallback(
+    (pick: CpPick3D, rect: DOMRect, x: number, y: number) => {
+      const s = useAppStore.getState();
+      if (!s.doc) return null;
+      const placement = facePlacementOf(pick.faceId);
+      const center = placement
+        ? cpPointOnFacePlane(
+            placement,
+            sceneRef.current!.camera,
+            rect.width,
+            rect.height,
+            x,
+            y,
+          )
+        : null;
+      const offsets = placement
+        ? [
+            cpPointOnFacePlane(
+              placement,
+              sceneRef.current!.camera,
+              rect.width,
+              rect.height,
+              x + SNAP_RADIUS_PX,
+              y,
+            ),
+            cpPointOnFacePlane(
+              placement,
+              sceneRef.current!.camera,
+              rect.width,
+              rect.height,
+              x,
+              y + SNAP_RADIUS_PX,
+            ),
+          ]
+        : [];
+      const radii = offsets.flatMap((point) =>
+        point && center
+          ? [Math.hypot(point[0] - center[0], point[1] - center[1])]
+          : [],
+      );
+      const radius = radii.length > 0 ? Math.max(...radii) : 0;
+      const candidate = radius > 0 ? snap(s.doc, pick.cp, radius) : null;
+      const polygon = cpIndex()?.polygons.get(pick.faceId);
+      const accepted =
+        candidate &&
+        candidate.kind !== "edge" &&
+        polygon &&
+        pointInPolygon(polygon, candidate.pos)
+          ? candidate
+          : null;
+      const cp: Vec2 = accepted ? [accepted.pos[0], accepted.pos[1]] : pick.cp;
+      const vertexId =
+        accepted?.kind === "vertex"
+          ? (s.doc.cp.vertices.find(
+              (vertex) =>
+                Math.hypot(vertex.pos[0] - cp[0], vertex.pos[1] - cp[1]) <=
+                1e-12,
+            )?.id ?? null)
+          : pick.vertexId;
+      return { cp, faceId: pick.faceId, vertexId };
+    },
+    [cpIndex, facePlacementOf],
+  );
+
+  /**
    * 合わせて折る途中に、その画素で何を選んだことになるかを決める。
    * カーソルの形・視点回転を止めるかの判定・実際の選択が、
    * すべてこの1本の結果を使う(場所によって当たり方が変わることを無くす)。
@@ -1190,6 +1304,7 @@ export function Viewer3D({ fitRef }: Props) {
     constructRef.current = { points: [], seg: null };
     foldClickRef.current = null;
     vertexDragRef.current = null;
+    measurePressRef.current = null;
   }, []);
 
   // 道具を替えたとき・展開図が入れ替わったときは、選びかけの点や作図を捨てる
@@ -1197,7 +1312,7 @@ export function Viewer3D({ fitRef }: Props) {
   useEffect(() => {
     clearCpDrafts();
     drawHighlight();
-  }, [activeTool, docEpoch, clearCpDrafts, drawHighlight]);
+  }, [activeTool, measureDraft.mode, docEpoch, clearCpDrafts, drawHighlight]);
 
   // Escで3Dの選びかけを取り消す(展開図区画のEscと同じ扱い)。
   // 入力欄を打っている間は邪魔しない
@@ -1206,6 +1321,8 @@ export function Viewer3D({ fitRef }: Props) {
       if (e.key !== "Escape") return;
       if (e.target instanceof HTMLElement && e.target.tagName === "INPUT") return;
       clearCpDrafts();
+      const s = useAppStore.getState();
+      if (s.activeTool === "measure") s.clearMeasurement();
       drawHighlight();
     };
     window.addEventListener("keydown", handler);
@@ -1380,7 +1497,18 @@ export function Viewer3D({ fitRef }: Props) {
       const drawsOnCp = TOOL_KIND[s.activeTool] !== undefined || s.activeTool === "construct";
       // 点を使わない道具(削除など)では逆写像を通さない(そのぶん当たり判定を省く)
       const cpPick =
-        drawsOnCp || s.activeTool === "select" ? cpPickAt(rect, x, y) : null;
+        drawsOnCp || s.activeTool === "select" || s.activeTool === "measure"
+          ? cpPickAt(rect, x, y)
+          : null;
+      if (s.activeTool === "measure") {
+        const target =
+          s.measureDraft.mode === "distance"
+            ? cpPick !== null && (cpPick.onPaper || cpPick.vertexId !== null)
+            : cpPick?.edgeId !== null && cpPick?.edgeId !== undefined;
+        setHoverLock(target);
+        canvas.style.cursor = target ? "pointer" : "default";
+        return;
+      }
       // 「選択」で動かせる点の上に来たら、左ドラッグの視点回転を止めておく。
       // 押した瞬間から点をつかめるようにするための先回り(押してから止めても、
       // 視点回転を始める処理はcanvasの入力を先に受け取っているので間に合わない)。
@@ -1564,6 +1692,22 @@ export function Viewer3D({ fitRef }: Props) {
           drawHighlight();
         }
         return;
+      }
+      if (e.button === 0 && s.activeTool === "measure") {
+        const pick = cpPickAt(rect, x, y);
+        const valid =
+          s.measureDraft.mode === "distance"
+            ? pick !== null && (pick.onPaper || pick.vertexId !== null)
+            : pick?.edgeId !== null && pick?.edgeId !== undefined;
+        measurePressRef.current = valid ? pick : null;
+        if (valid) {
+          // 押した瞬間に選べる対象だと分かったら、離すまで視点を回さない。
+          setHoverLock(true);
+          e.currentTarget.setPointerCapture(e.pointerId);
+          e.currentTarget.style.cursor = "pointer";
+          downPosRef.current = { x, y };
+          return;
+        }
       }
       // 「選択」で点の上を押したら、その点を動かす操作として始める(展開図区画と同じ)。
       // 動かさずに離せばただの選択になる
@@ -1860,6 +2004,8 @@ export function Viewer3D({ fitRef }: Props) {
       // 押した場所で決めているので、離すまでにどれだけ手がぶれても選択は成立する
       const pressed = alignPressRef.current;
       alignPressRef.current = null;
+      const measured = measurePressRef.current;
+      measurePressRef.current = null;
       const scene = sceneRef.current;
       if (!down || !scene?.content || e.button !== 0) return;
       const rect = e.currentTarget.getBoundingClientRect();
@@ -1870,6 +2016,24 @@ export function Viewer3D({ fitRef }: Props) {
         if (st.activeTool === "fold" && st.alignDraft && st.doc) {
           st.pickAlignTarget(pressed.target, pressed.cursor, pressed.cpPick);
         }
+        updateHoverCursor(e.currentTarget, x, y, e.ctrlKey);
+        return;
+      }
+      if (st.activeTool === "measure") {
+        if (measured) {
+          if (st.measureDraft.mode === "distance") {
+            const point = measurePointFromPick(
+              measured,
+              rect,
+              down.x,
+              down.y,
+            );
+            if (point) st.pickMeasurePoint(point);
+          } else if (measured.edgeId !== null) {
+            st.pickMeasureEdge(measured.edgeId);
+          }
+        }
+        drawHighlight();
         updateHoverCursor(e.currentTarget, x, y, e.ctrlKey);
         return;
       }
@@ -1959,6 +2123,7 @@ export function Viewer3D({ fitRef }: Props) {
       drawHighlight,
       updateHoverCursor,
       cpPickAt,
+      measurePointFromPick,
       addCpLinePoint,
       addConstructPick,
     ],
@@ -1971,7 +2136,9 @@ export function Viewer3D({ fitRef }: Props) {
         className="viewer3d-canvas"
         style={{
           cursor:
-            pullMode && pullBlocked === null
+            activeTool === "measure"
+              ? "crosshair"
+              : pullMode && pullBlocked === null
               ? "grab"
               : !foldMode || !foldReady
                 ? "default"
@@ -1980,7 +2147,13 @@ export function Viewer3D({ fitRef }: Props) {
                   : "crosshair",
         }}
         data-tooltip={
-          pullMode
+          activeTool === "measure"
+            ? measureDraft.mode === "angle"
+              ? "紙の辺を2本クリックして角度を測ります(Escで選び直し)"
+              : measureDraft.mode === "length"
+                ? "紙の線を1本クリックして長さを測ります(Escで選び直し)"
+                : "紙の上の点を2つクリックして距離を測ります(Escで選び直し)"
+            : pullMode
             ? "紙をドラッグして全体を連動させます。右ドラッグで視点を回します"
             : activeTool === "technique"
             ? techniqueDraft?.kind === "Simple"
@@ -2004,6 +2177,7 @@ export function Viewer3D({ fitRef }: Props) {
         onPointerCancel={() => {
           downPosRef.current = null;
           alignPressRef.current = null;
+          measurePressRef.current = null;
           drawingRef.current = null;
           grabRef.current = null;
           vertexDragRef.current = null;
@@ -2024,13 +2198,16 @@ export function Viewer3D({ fitRef }: Props) {
         }}
         onContextMenu={(e) => e.preventDefault()}
       />
-      <ViewerOperationHint
-        hint={hint}
-        blocked={(foldMode && !foldReady) || (pullMode && pullBlocked !== null)}
-        aligning={alignDraft !== null}
-      />
-      <PaperActionTip />
-      <FoldDirectionTip />
+      <ViewerOverlayStack>
+        {statusOverlays}
+        <ViewerOperationHint
+          hint={hint}
+          blocked={(foldMode && !foldReady) || (pullMode && pullBlocked !== null)}
+          aligning={alignDraft !== null}
+        />
+        <PaperActionTip />
+        <FoldDirectionTip />
+      </ViewerOverlayStack>
       <ViewCube
         getCamera={getViewCubeCamera}
         prepareCameraControl={prepareViewCubeCamera}

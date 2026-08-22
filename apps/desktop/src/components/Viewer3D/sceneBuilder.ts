@@ -75,6 +75,16 @@ const FOCUS_HIGHLIGHT_COLOR = 0xed5c70;
 const SUSPECT_HIGHLIGHT_COLOR = 0xff2038;
 /** いま利用者が角度を固定して動かしている折り目(水色)。 */
 const ACTIVE_HIGHLIGHT_COLOR = 0x40cfff;
+/**
+ * 利用者が角度を固定した折り目(墨色)。
+ *
+ * 2D展開図の印(`CpEditor/renderer.ts` の `COLORS.pinned` = #1b2430)と同じ色にし、
+ * 2Dと3Dで同じものだと分かるようにする。黄・水色・コーラル・赤のどれとも
+ * 明度で見分けられるよう、色相を足さず濃い墨色にする。
+ */
+const PINNED_HIGHLIGHT_COLOR = 0x1b2430;
+/** 固定の印(丸)の色。線と同じ墨色にして、色は増やさない。 */
+const PIN_MARK_COLOR = PINNED_HIGHLIGHT_COLOR;
 /** 折った結果の下見(実行前プレビュー)の色。動く紙と分かるよう青系にする */
 const PREVIEW_COLOR = 0x2f8fff;
 /** 下見の透け具合(下の紙が見える程度) */
@@ -103,6 +113,44 @@ export const HIGHLIGHT_WIDTH_PX = 4;
 export const FOCUS_HIGHLIGHT_WIDTH_PX = 6;
 /** 食い込み原因は警告として最も目立たせる。 */
 export const SUSPECT_HIGHLIGHT_WIDTH_PX = 8;
+/**
+ * 固定した折り目の中点に打つ印の大きさ(CSS px)。
+ *
+ * 折り目の線(4px)や輪郭の線と見分けるには、線より明らかに太い丸が要る。
+ * 実機で普通の大きさ(拡大なし)にして目で見て決めた: 濃い線だけでは輪郭の線と
+ * 見分けにくかったため、2D展開図の印(直径12px)とそろえた16pxにする。
+ */
+export const PIN_MARK_WIDTH_PX = 16;
+/**
+ * 印にする「折り目の真ん中の太い部分」の長さ(折り目の長さに対する割合)。
+ *
+ * 印は**折り目そのものの一部を太く描いたもの**である。折り目に沿った向きにしか
+ * 伸びないので、紙の面から外へは出ない(=紙の重なりを貫通できない)。
+ *
+ * | 量 | 値 | 向き |
+ * |---|---:|---|
+ * | 印の伸び(折り目に沿う) | 折り目の長さの **12%**(下限 1e-4・上限 0.02) | **紙の面の中**。面から外へ出ない |
+ * | 印の太さ | **画面上で16px**(`PIN_MARK_WIDTH_PX`) | 世界座標の厚みを持たない |
+ * | 紙の重なり全体の厚み `MAX_STACK_RATIO` | 0.001 | 紙の面に**垂直** |
+ * | 層と層の間隔 `LAYER_STEP_RATIO` | 0.0002 | 紙の面に**垂直** |
+ * | 事故を起こした円柱の強調線の半径(過去) | 0.006 | **全方向**(だから紙を貫通した) |
+ *
+ * 過去の事故(§10.7.8)は、強調線が**全方向に**半径0.006の円柱を持ち、
+ * それが紙の重なり全体の厚み0.001の6倍あったために起きた。
+ * この印は**面に垂直な厚みを1つも持たない**ので、同じことは起きない。
+ * **紙の厚み(`LAYER_STEP_RATIO` / `MAX_STACK_RATIO`)は1つも変えていない。**
+ */
+export const PIN_MARK_RATIO = 0.12;
+/**
+ * 印の最小の長さ(世界座標)。
+ *
+ * 描画は32ビットの小数で行われる(相対精度 約1.2e-7)。長さが小さすぎると
+ * 線の向きが数値の誤差に埋もれて印が消える。実機で 1e-6 にしたところ
+ * **画面に何も出なかった**ため、桁を上げて 1e-4(誤差の約1000倍)にした。
+ */
+export const PIN_MARK_MIN_LENGTH = 1e-4;
+/** 印の最大の長さ(世界座標)。長い折り目でも印が線全体を覆わないようにする。 */
+export const PIN_MARK_MAX_LENGTH = 0.02;
 /** カメラ画角(度) */
 const CAMERA_FOV = 45;
 /** 初期カメラの向き(紙の中心から見た方向。斜め上=手前上から見下ろす) */
@@ -1108,19 +1156,22 @@ export interface Viewer3DScene {
 
 /** 強調線分。role省略時は従来どおり操作対象の黄色で描く。 */
 export interface HighlightSegment extends HingeSegment {
-  role?: "hinge" | "reference" | "focus" | "suspect" | "active";
+  role?: "hinge" | "reference" | "focus" | "suspect" | "active" | "pinned" | "pinMark";
 }
 
 /** @types/threeがまだ公開していないLineMaterialの実在するlinewidthアクセサ。 */
 export type HighlightLineMaterial = FilteredLineMaterial & { linewidth: number };
 
-/** 強調表示5種類の共有材質。 */
+/** 強調表示7種類の共有材質。 */
 export interface HighlightMaterials {
   highlightMaterial: HighlightLineMaterial;
   referenceHighlightMaterial: HighlightLineMaterial;
   focusHighlightMaterial: HighlightLineMaterial;
   suspectHighlightMaterial: HighlightLineMaterial;
   activeHighlightMaterial: HighlightLineMaterial;
+  pinnedHighlightMaterial: HighlightLineMaterial;
+  /** 固定した折り目の中点に打つ丸。線と同じ材質の仕組みで、太さだけ変える。 */
+  pinMarkMaterial: HighlightLineMaterial;
 }
 
 /** 世界単位の断面を作らず、画面上で一定の太さを保つ線材質を作る。 */
@@ -1143,7 +1194,7 @@ function createHighlightMaterial(
   return material;
 }
 
-/** 強調表示5種類の材質を作る。太さ・深度・surface owner判定を検査できる形にまとめる。 */
+/** 強調表示7種類の材質を作る。太さ・深度・surface owner判定を検査できる形にまとめる。 */
 export function createHighlightMaterials(
   ownerBinding: SurfaceOwnerBinding = createSurfaceOwnerBinding(),
 ): HighlightMaterials {
@@ -1179,12 +1230,28 @@ export function createHighlightMaterials(
     true,
     ownerBinding,
   );
+  // 固定の印は「いま操作している折り目」より控えめにし、紙に隠れる側も
+  // 同じ規則(深度と紙面の持ち主で隠す)にする。手前へ無理に出さない。
+  const pinnedHighlightMaterial = createHighlightMaterial(
+    PINNED_HIGHLIGHT_COLOR,
+    HIGHLIGHT_WIDTH_PX,
+    true,
+    ownerBinding,
+  );
+  const pinMarkMaterial = createHighlightMaterial(
+    PIN_MARK_COLOR,
+    PIN_MARK_WIDTH_PX,
+    true,
+    ownerBinding,
+  );
   return {
     highlightMaterial,
     referenceHighlightMaterial,
     focusHighlightMaterial,
     suspectHighlightMaterial,
     activeHighlightMaterial,
+    pinnedHighlightMaterial,
+    pinMarkMaterial,
   };
 }
 
@@ -1202,7 +1269,7 @@ const HIGHLIGHT_RENDER_ORDER = 5;
 const ACTIVE_HIGHLIGHT_RENDER_ORDER = 6;
 const SUSPECT_HIGHLIGHT_RENDER_ORDER = 7;
 
-/** 5役割を実際に使う材質・描画順へ対応付ける。role省略時はhingeと同じ。 */
+/** 7役割を実際に使う材質・描画順へ対応付ける。role省略時はhingeと同じ。 */
 export function highlightAppearance(
   materials: HighlightMaterials,
   role: HighlightSegment["role"],
@@ -1217,6 +1284,16 @@ export function highlightAppearance(
       return {
         material: materials.activeHighlightMaterial,
         renderOrder: ACTIVE_HIGHLIGHT_RENDER_ORDER,
+      };
+    case "pinned":
+      return {
+        material: materials.pinnedHighlightMaterial,
+        renderOrder: HIGHLIGHT_RENDER_ORDER,
+      };
+    case "pinMark":
+      return {
+        material: materials.pinMarkMaterial,
+        renderOrder: HIGHLIGHT_RENDER_ORDER,
       };
     case "reference":
       return {
@@ -1248,6 +1325,53 @@ export interface HighlightLayer {
 }
 
 /**
+ * 固定した折り目に、真ん中の太い印を足した線分の並びを返す。
+ *
+ * 濃い線だけでは輪郭の線と見分けにくかった(実機で普通の大きさにして確認)ので、
+ * 折り目1本につき印を1つ打つ。同じ折り目が複数の面に分かれているときは、
+ * **いちばん長い線分の真ん中**に1つだけ打つ(面の数だけ印が並ばないように)。
+ *
+ * 印は折り目に沿った短い線分を画面上で太く描いたもので、
+ * **紙の面から外へは出ない**(`PIN_MARK_RATIO` の表を参照)。
+ */
+export function withPinMarks(
+  segments: readonly HighlightSegment[],
+): HighlightSegment[] {
+  const longest = new Map<number, { segment: HighlightSegment; length: number }>();
+  for (const segment of segments) {
+    if (segment.role !== "pinned") continue;
+    const length = segment.a.distanceTo(segment.b);
+    if (!Number.isFinite(length)) continue;
+    const found = longest.get(segment.edgeId);
+    if (found === undefined || length > found.length) {
+      longest.set(segment.edgeId, { segment, length });
+    }
+  }
+  if (longest.size === 0) return [...segments];
+  const marks: HighlightSegment[] = [];
+  for (const { segment, length } of longest.values()) {
+    if (!(length > PIN_MARK_MIN_LENGTH)) continue; // 短すぎる折り目には打たない
+    const markLength = Math.min(
+      Math.max(length * PIN_MARK_RATIO, PIN_MARK_MIN_LENGTH),
+      Math.min(PIN_MARK_MAX_LENGTH, length),
+    );
+    const middle = segment.a.clone().add(segment.b).multiplyScalar(0.5);
+    const along = segment.b
+      .clone()
+      .sub(segment.a)
+      .normalize()
+      .multiplyScalar(markLength / 2);
+    marks.push({
+      ...segment,
+      role: "pinMark",
+      a: middle.clone().sub(along),
+      b: middle.clone().add(along),
+    });
+  }
+  return [...segments, ...marks];
+}
+
+/**
  * 強調線の実描画物を作る。補助関数だけを検査して本番が円柱へ戻る退行を防ぐため、
  * createSceneと単体検査はこの同じ経路を使う。
  */
@@ -1264,7 +1388,9 @@ export function createHighlightLayer(
     group,
     geometry,
     materials,
-    setSegments(segments) {
+    setSegments(rawSegments) {
+      // 固定した折り目には、線に加えて中点の丸い印も描く。
+      const segments = withPinMarks(rawSegments);
       const pool = group.children;
       let used = 0;
       for (const seg of segments) {

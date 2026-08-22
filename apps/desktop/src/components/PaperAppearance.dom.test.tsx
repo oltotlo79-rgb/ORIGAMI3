@@ -283,19 +283,19 @@ describe("画面のデザイン", () => {
 });
 
 describe("重なり防止", () => {
-  it("既定はオンで、切ると作品の表示設定へその場で入る", () => {
+  it("既定はオフで、入れると作品の表示設定へその場で入る", () => {
     render(<PaperAppearance />);
     const box = screen.getByLabelText("重なり防止");
-    expect(box).toHaveProperty("checked", true);
+    expect(box).toHaveProperty("checked", false);
     expect(box.getAttribute("data-tooltip")).toBe(
-      "折る途中で紙どうしが突き抜けにくい補正を切り替えます",
+      "紙どうしの食い込みを減らすように形を補正します",
     );
     expect(box.hasAttribute("title")).toBe(false);
     expect(screen.queryByText(/完全には防げません/)).toBeNull();
 
     fireEvent.click(box);
-    expect(useAppStore.getState().display.overlap_prevention_enabled).toBe(false);
-    expect(box).toHaveProperty("checked", false);
+    expect(useAppStore.getState().display.overlap_prevention_enabled).toBe(true);
+    expect(box).toHaveProperty("checked", true);
   });
 });
 
@@ -305,7 +305,7 @@ describe("食い込み検出", () => {
     const box = screen.getByLabelText("食い込み検出");
     expect(box).toHaveProperty("checked", true);
     expect(box.getAttribute("data-tooltip")).toBe(
-      "紙の接触を赤い折り目と警告で知らせる検出を切り替えます",
+      "紙どうしの食い込みを赤い折り目と警告で知らせます。形は変えません",
     );
     expect(box.hasAttribute("title")).toBe(false);
     expect(screen.queryByText(/角度操作は止めません/)).toBeNull();

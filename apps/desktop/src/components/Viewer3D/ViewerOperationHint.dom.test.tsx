@@ -8,7 +8,6 @@ import { useAppStore, type ToolId } from "../../store/appStore";
 import { SELECTABLE_3D_EDGE_TARGETS } from "../../lib/viewerHint";
 
 const initialStoreState = useAppStore.getState();
-
 function renderHint(tool: ToolId, expanded = true, blocked = false, aligning = false) {
   useAppStore.setState({ activeTool: tool, viewerHintExpanded: expanded });
   return render(
@@ -130,4 +129,5 @@ describe("3Dビューの操作ヒント", () => {
       ),
     ).toBeTruthy();
   });
+
 });

@@ -13,7 +13,12 @@ import { Line2 } from "three/examples/jsm/lines/Line2.js";
 import {
   FOCUS_HIGHLIGHT_WIDTH_PX,
   HIGHLIGHT_WIDTH_PX,
+  PIN_MARK_MAX_LENGTH,
+  PIN_MARK_MIN_LENGTH,
+  PIN_MARK_RATIO,
+  PIN_MARK_WIDTH_PX,
   SUSPECT_HIGHLIGHT_WIDTH_PX,
+  withPinMarks,
   buildTopology,
   clearGroup,
   createContent,
@@ -26,6 +31,7 @@ import {
   updateFrame,
   updateSoftContent,
 } from "./sceneBuilder";
+import { COLORS as CP_COLORS } from "../CpEditor/renderer";
 import {
   LAYER_STEP_RATIO,
   MAX_STACK_RATIO,
@@ -118,22 +124,26 @@ describe("強調表示の太さ・深度判定", () => {
     }
   });
 
-  it("5種類とも世界単位でなくCSSピクセルの見える太さを使う", () => {
+  it("7種類とも世界単位でなくCSSピクセルの見える太さを使う", () => {
     const materials = createHighlightMaterials();
     try {
-      expect(Object.keys(materials)).toHaveLength(5);
+      expect(Object.keys(materials)).toHaveLength(7);
       expect({
         selected: materials.highlightMaterial.linewidth,
         reference: materials.referenceHighlightMaterial.linewidth,
         focus: materials.focusHighlightMaterial.linewidth,
         suspect: materials.suspectHighlightMaterial.linewidth,
         active: materials.activeHighlightMaterial.linewidth,
+        pinned: materials.pinnedHighlightMaterial.linewidth,
+        pinMark: materials.pinMarkMaterial.linewidth,
       }).toEqual({
         selected: HIGHLIGHT_WIDTH_PX,
         reference: HIGHLIGHT_WIDTH_PX,
         focus: FOCUS_HIGHLIGHT_WIDTH_PX,
         suspect: SUSPECT_HIGHLIGHT_WIDTH_PX,
         active: HIGHLIGHT_WIDTH_PX,
+        pinned: HIGHLIGHT_WIDTH_PX,
+        pinMark: PIN_MARK_WIDTH_PX,
       });
       expect(HIGHLIGHT_WIDTH_PX).toBe(4);
       expect(FOCUS_HIGHLIGHT_WIDTH_PX).toBe(6);
@@ -148,7 +158,7 @@ describe("強調表示の太さ・深度判定", () => {
     }
   });
 
-  it("選択・参照・フォーカス・操作中の折り目は紙の裏側なら隠す", () => {
+  it("選択・参照・フォーカス・操作中・固定の折り目は紙の裏側なら隠す", () => {
     const materials = createHighlightMaterials();
     try {
       expect({
@@ -156,7 +166,14 @@ describe("強調表示の太さ・深度判定", () => {
         reference: materials.referenceHighlightMaterial.depthTest,
         focus: materials.focusHighlightMaterial.depthTest,
         active: materials.activeHighlightMaterial.depthTest,
-      }).toEqual({ selected: true, reference: true, focus: true, active: true });
+        pinned: materials.pinnedHighlightMaterial.depthTest,
+      }).toEqual({
+        selected: true,
+        reference: true,
+        focus: true,
+        active: true,
+        pinned: true,
+      });
     } finally {
       for (const material of Object.values(materials)) material.dispose();
     }
@@ -172,7 +189,7 @@ describe("強調表示の太さ・深度判定", () => {
     }
   });
 
-  it("5役割と省略時を実際の材質・描画順へ漏れなく対応付ける", () => {
+  it("7役割と省略時を実際の材質・描画順へ漏れなく対応付ける", () => {
     const materials = createHighlightMaterials();
     try {
       expect([
@@ -180,6 +197,8 @@ describe("強調表示の太さ・深度判定", () => {
         highlightAppearance(materials, "hinge"),
         highlightAppearance(materials, "reference"),
         highlightAppearance(materials, "focus"),
+        highlightAppearance(materials, "pinned"),
+        highlightAppearance(materials, "pinMark"),
         highlightAppearance(materials, "active"),
         highlightAppearance(materials, "suspect"),
       ]).toEqual([
@@ -187,6 +206,9 @@ describe("強調表示の太さ・深度判定", () => {
         { material: materials.highlightMaterial, renderOrder: 5 },
         { material: materials.referenceHighlightMaterial, renderOrder: 5 },
         { material: materials.focusHighlightMaterial, renderOrder: 5 },
+        // 固定の印は、いま操作している折り目(6)・食い込み(7)より下に描く
+        { material: materials.pinnedHighlightMaterial, renderOrder: 5 },
+        { material: materials.pinMarkMaterial, renderOrder: 5 },
         { material: materials.activeHighlightMaterial, renderOrder: 6 },
         { material: materials.suspectHighlightMaterial, renderOrder: 7 },
       ]);
@@ -195,7 +217,7 @@ describe("強調表示の太さ・深度判定", () => {
     }
   });
 
-  it("本番と同じLine2プールを5役割＋省略経路で更新・再利用・破棄する", () => {
+  it("本番と同じLine2プールを6役割＋省略経路で更新・再利用・破棄する", () => {
     const layer = createHighlightLayer();
     let disposed = false;
     try {
@@ -204,6 +226,7 @@ describe("強調表示の太さ・深度判定", () => {
         "hinge",
         "reference",
         "focus",
+        "pinned",
         "active",
         "suspect",
       ] as const;
@@ -215,15 +238,20 @@ describe("強調表示の太さ・深度判定", () => {
       }));
 
       layer.setSegments(segments);
-      expect(layer.group.children).toHaveLength(6);
+      // 固定した折り目には中点の丸が1つ足されるので、線6本+丸1つ=7本…
+      // ではなく、7役割ぶんの線(省略・hinge・reference・focus・pinned・active・
+      // suspect)に丸が1つ足されて8本になる。
+      expect(layer.group.children).toHaveLength(8);
       const firstPool = [...layer.group.children] as Line2[];
       const expected = [
         highlightAppearance(layer.materials, undefined),
         highlightAppearance(layer.materials, "hinge"),
         highlightAppearance(layer.materials, "reference"),
         highlightAppearance(layer.materials, "focus"),
+        highlightAppearance(layer.materials, "pinned"),
         highlightAppearance(layer.materials, "active"),
         highlightAppearance(layer.materials, "suspect"),
+        highlightAppearance(layer.materials, "pinMark"),
       ];
       for (let i = 0; i < firstPool.length; i++) {
         const line = firstPool[i];
@@ -232,9 +260,23 @@ describe("強調表示の太さ・深度判定", () => {
         expect(line.material).toBe(expected[i].material);
         expect(line.renderOrder).toBe(expected[i].renderOrder);
         expect(line.frustumCulled).toBe(false);
-        expect(line.position.toArray()).toEqual([i, 0, 0]);
-        expect(line.scale.toArray()).toEqual([1, i + 1, 1]);
         expect(line.visible).toBe(true);
+        if (i < roles.length) {
+          expect(line.position.toArray()).toEqual([i, 0, 0]);
+          expect(line.scale.toArray()).toEqual([1, i + 1, 1]);
+        } else {
+          // 最後の1本は固定の印。役割 "pinned" の線(x=4、長さ5)の中点にあり、
+          // 世界座標の伸びは PIN_MARK_LENGTH だけ。
+          const pinnedIndex = roles.indexOf("pinned");
+          expect(line.position.x).toBe(pinnedIndex);
+          const pinnedLength = pinnedIndex + 1;
+          const markLength = Math.min(
+            pinnedLength * PIN_MARK_RATIO,
+            PIN_MARK_MAX_LENGTH,
+          );
+          expect(line.position.y).toBeCloseTo(pinnedLength / 2 - markLength / 2, 9);
+          expect(line.scale.y).toBeCloseTo(markLength, 12);
+        }
       }
 
       layer.setSegments(segments.slice(0, 2));
@@ -242,6 +284,8 @@ describe("強調表示の太さ・深度判定", () => {
       expect(firstPool.map((line) => line.visible)).toEqual([
         true,
         true,
+        false,
+        false,
         false,
         false,
         false,
@@ -897,5 +941,161 @@ describe("紙のたわみの表示(SIM-012)", () => {
       expect(Math.abs(content.positions[i * 3 + 2])).toBeCloseTo(step, 6);
     }
     expect([...content.owner.faceSurfaceRanks]).toEqual([[0, 0], [1, 1]]);
+  });
+});
+
+describe("固定した折り目の強調(3D)", () => {
+  it("2D展開図の印と同じ色にする", () => {
+    const materials = createHighlightMaterials();
+    try {
+      // CpEditor/renderer.ts の COLORS.pinned("#1b2430")と同じ色。
+      // 2Dと3Dで別の色にすると、同じものだと分からなくなる。
+      expect(materials.pinnedHighlightMaterial.color.getHex()).toBe(0x1b2430);
+      expect(CP_COLORS.pinned.toLowerCase()).toBe("#1b2430");
+    } finally {
+      for (const material of Object.values(materials)) material.dispose();
+    }
+  });
+
+  it("世界座標の太さを持たない(紙を突き抜けない)", () => {
+    // 強調線が円柱だったころ、半径0.006の線が厚み0.001の紙の重なりを
+    // 幾何的に貫通し、裏側の折り目が手前へ突き出て見えた。固定の印でも
+    // 同じことが起きないよう、画面上の太さだけを使うことを主張する。
+    const materials = createHighlightMaterials();
+    try {
+      expect(materials.pinnedHighlightMaterial.worldUnits).toBe(false);
+      const geometry = createHighlightGeometry();
+      try {
+        const positions = geometry.getAttribute("instanceStart").array;
+        // 中心線は原点から+y方向の線分1本だけ(x/z方向の幅を持たない)
+        expect([...positions]).toEqual([0, 0, 0, 0, 1, 0]);
+      } finally {
+        geometry.dispose();
+      }
+    } finally {
+      for (const material of Object.values(materials)) material.dispose();
+    }
+  });
+});
+
+describe("固定した折り目の中点の印(3D)", () => {
+  const seg = (edgeId: number, ax: number, bx: number, role?: string) => ({
+    edgeId,
+    a: new THREE.Vector3(ax, 0, 0),
+    b: new THREE.Vector3(bx, 0, 0),
+    ...(role ? { role: role as "pinned" } : {}),
+    ownerFace: 3,
+  });
+
+  it("固定した折り目1本につき、中点へ丸を1つ打つ", () => {
+    const out = withPinMarks([seg(5, 0, 2, "pinned")]);
+    expect(out).toHaveLength(2);
+    const mark = out[1];
+    expect(mark.role).toBe("pinMark");
+    expect(mark.edgeId).toBe(5);
+    // 中点にあり、線分の長さは PIN_MARK_LENGTH
+    expect(mark.a.clone().add(mark.b).multiplyScalar(0.5).x).toBeCloseTo(1, 12);
+    // 印の長さは折り目(長さ2)の12%。ただし上限(0.02)で頭打ちになる
+    expect(mark.a.distanceTo(mark.b)).toBeCloseTo(
+      Math.min(2 * PIN_MARK_RATIO, PIN_MARK_MAX_LENGTH),
+      12,
+    );
+    // 面の持ち主を引き継ぐ(紙の裏側なら線と同じように隠れる)
+    expect(mark.ownerFace).toBe(3);
+  });
+
+  it("同じ折り目が面ごとに分かれていても、丸は1つだけ(いちばん長い線分の中点)", () => {
+    const out = withPinMarks([
+      seg(5, 0, 1, "pinned"),
+      seg(5, 1, 4, "pinned"),
+      seg(5, 4, 5, "pinned"),
+    ]);
+    const marks = out.filter((s) => s.role === "pinMark");
+    expect(marks).toHaveLength(1);
+    // いちばん長い線分(1→4)の中点
+    expect(marks[0].a.clone().add(marks[0].b).multiplyScalar(0.5).x).toBeCloseTo(2.5, 12);
+  });
+
+  it("固定していない折り目には丸を打たない", () => {
+    const out = withPinMarks([seg(5, 0, 2), seg(6, 0, 2, "active")]);
+    expect(out.filter((s) => s.role === "pinMark")).toHaveLength(0);
+    expect(out).toHaveLength(2);
+  });
+
+  it("印は折り目に沿った向きにしか伸びない(紙の面から外へ出ない)", () => {
+    // 過去の事故: 強調線が**全方向に**半径0.006の円柱を持ち、それが紙の重なり
+    // 全体の厚み0.001の6倍あったため、裏側の折り目が手前の紙を貫通した(§10.7.8)。
+    // この印は折り目の向きにしか伸びず、面に垂直な厚みを持たない。
+    const a = new THREE.Vector3(0, 0, 0.5);
+    const b = new THREE.Vector3(1, 0, 0.5); // z=0.5 の面の上にある折り目
+    const [, mark] = withPinMarks([
+      { edgeId: 1, a, b, role: "pinned" as const },
+    ]);
+    // 印の両端は、折り目と同じ平面(z=0.5)から1つも外れていない
+    expect(mark.a.z).toBe(0.5);
+    expect(mark.b.z).toBe(0.5);
+    // 折り目の向きと平行(外積が0)
+    expect(
+      mark.b.clone().sub(mark.a).cross(b.clone().sub(a)).length(),
+    ).toBeCloseTo(0, 12);
+    // 紙の厚みの値は1つも変えていない
+    expect(LAYER_STEP_RATIO).toBe(0.0002);
+    expect(MAX_STACK_RATIO).toBe(0.001);
+  });
+
+  it("印の長さは折り目の長さに応じて決め、上限と下限で挟む", () => {
+    const long = withPinMarks([
+      {
+        edgeId: 1,
+        a: new THREE.Vector3(0, 0, 0),
+        b: new THREE.Vector3(10, 0, 0),
+        role: "pinned" as const,
+      },
+    ])[1];
+    expect(long.a.distanceTo(long.b)).toBeCloseTo(PIN_MARK_MAX_LENGTH, 12);
+    const short = withPinMarks([
+      {
+        edgeId: 1,
+        a: new THREE.Vector3(0, 0, 0),
+        b: new THREE.Vector3(2e-4, 0, 0),
+        role: "pinned" as const,
+      },
+    ])[1];
+    // 32ビットの小数で向きが埋もれない下限(1e-4)まで伸ばす
+    expect(short.a.distanceTo(short.b)).toBeCloseTo(PIN_MARK_MIN_LENGTH, 12);
+  });
+
+  it("印は線より太く、色は増やさない(墨色のまま)", () => {
+    const materials = createHighlightMaterials();
+    try {
+      expect(PIN_MARK_WIDTH_PX).toBeGreaterThan(HIGHLIGHT_WIDTH_PX);
+      expect(PIN_MARK_WIDTH_PX).toBeGreaterThan(SUSPECT_HIGHLIGHT_WIDTH_PX);
+      expect(materials.pinMarkMaterial.color.getHex()).toBe(
+        materials.pinnedHighlightMaterial.color.getHex(),
+      );
+      // 紙の裏側なら隠れる(手前へ無理に出さない)
+      expect(materials.pinMarkMaterial.depthTest).toBe(true);
+      expect(materials.pinMarkMaterial.worldUnits).toBe(false);
+    } finally {
+      for (const material of Object.values(materials)) material.dispose();
+    }
+  });
+
+  it("本番の描画経路でも、固定した折り目には線と丸の2本が出る", () => {
+    const layer = createHighlightLayer();
+    try {
+      layer.setSegments([seg(5, 0, 2, "pinned")]);
+      const lines = layer.group.children as Line2[];
+      expect(lines).toHaveLength(2);
+      expect(lines[0].material).toBe(layer.materials.pinnedHighlightMaterial);
+      expect(lines[1].material).toBe(layer.materials.pinMarkMaterial);
+      expect(lines[1].visible).toBe(true);
+      // 印は折り目の真ん中に置かれ、折り目に沿ってだけ伸びる
+      const markLength = Math.min(2 * PIN_MARK_RATIO, PIN_MARK_MAX_LENGTH);
+      expect(lines[1].position.x).toBeCloseTo(1 - markLength / 2, 12);
+      expect(lines[1].scale.y).toBeCloseTo(markLength, 12);
+    } finally {
+      layer.dispose();
+    }
   });
 });

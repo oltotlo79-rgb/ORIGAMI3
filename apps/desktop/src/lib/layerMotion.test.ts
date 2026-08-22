@@ -68,6 +68,22 @@ describe("汎用層操作の入力", () => {
 
   it("追加済みpartを日本語で説明する", () => {
     const result = buildLayerMotionPart(draft({ turn: "Beside", anchor: 7 }));
-    expect(result.ok && describeLayerMotionPart(result.part)).toContain("面7の手前隣");
+    expect(result.ok && describeLayerMotionPart(result.part)).toContain(
+      "選んだ面の手前隣",
+    );
+    expect(result.ok && describeLayerMotionPart(result.part)).not.toContain("面7");
+
+    const allLayers = buildLayerMotionPart(
+      draft({ layers: [], turn: "Outside" }),
+    );
+    expect(allLayers.ok && describeLayerMotionPart(allLayers.part)).toContain(
+      "すべての層",
+    );
+  });
+
+  it("隣へ置く面が未選択なら、内部番号ではなく選択を案内する", () => {
+    const result = buildLayerMotionPart(draft({ turn: "Beside", anchor: -1 }));
+    expect(result).toEqual({ ok: false, error: "隣に置く面を選んでください" });
+    expect(result.ok ? "" : result.error).not.toContain("ID");
   });
 });

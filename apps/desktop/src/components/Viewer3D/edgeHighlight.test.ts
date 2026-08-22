@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { Document, Edge, Face, Vertex } from "../../lib/types";
+import type { Document, Edge, Face, Frame3D, Vertex } from "../../lib/types";
 import {
   deriveSelectedEdgeHighlights,
+  mapCpPointToFrame,
   type FacePositionSlot,
 } from "./edgeHighlight";
 
@@ -30,6 +31,51 @@ const SQUARE_VERTICES: Vertex[] = [
   { id: 2, pos: [1, 1] },
   { id: 3, pos: [0, 1] },
 ];
+
+describe("mapCpPointToFrame", () => {
+  const doc = documentOf(SQUARE_VERTICES, [
+    { id: 10, v0: 0, v1: 1, kind: "Border" },
+    { id: 11, v0: 1, v1: 2, kind: "Border" },
+    { id: 12, v0: 2, v1: 3, kind: "Border" },
+    { id: 13, v0: 3, v1: 0, kind: "Border" },
+  ]);
+  const faces: Face[] = [
+    { id: 7, vertices: [0, 1, 2, 3], edges: [10, 11, 12, 13] },
+  ];
+
+  it("平らな状態は展開図座標をそのまま返す", () => {
+    expect(mapCpPointToFrame(doc, faces, null, [0.25, 0.75], null)).toEqual([
+      0.25,
+      0.75,
+      0,
+    ]);
+  });
+
+  it("raw Frame3Dの傾いた面へ既存の面内写像で移し、表示用のずらしを混ぜない", () => {
+    const frame: Frame3D = {
+      faces: [
+        {
+          face: 7,
+          layer: 9,
+          // (x,y) -> (2,y,x)。layer=9でも測定値へすき間を足さない。
+          polygon: [
+            [2, 0, 0],
+            [2, 0, 1],
+            [2, 1, 1],
+            [2, 1, 0],
+          ],
+        },
+      ],
+      warnings: [],
+    };
+
+    expect(mapCpPointToFrame(doc, faces, frame, [0.25, 0.75], 7)).toEqual([
+      2,
+      0.75,
+      0.25,
+    ]);
+  });
+});
 
 describe("deriveSelectedEdgeHighlights", () => {
   it("境界辺をDocument辺順・面順で返し、共有辺は各所有面の表示座標を保つ", () => {

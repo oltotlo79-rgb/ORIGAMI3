@@ -86,7 +86,7 @@ export function buildLayerMotionPart(
   }
   const turn = layerTurn(draft);
   if (turn === null) {
-    return { ok: false, error: "隣へ置く基準面IDを0以上の整数で指定してください" };
+    return { ok: false, error: "隣に置く面を選んでください" };
   }
   return {
     ok: true,
@@ -102,7 +102,7 @@ export function buildLayerMotionPart(
 
 /** 追加済みpartを短い日本語で表示する。 */
 export function describeLayerMotionPart(part: MotionPart): string {
-  const layers = part.layers.length === 0 ? "全層" : `${part.layers.length}層`;
+  const layers = part.layers.length === 0 ? "すべての層" : `${part.layers.length}層`;
   const reverse = part.reverse_layers ? "・山谷反転" : "";
   if (part.transform !== "Stay") return `${layers}を折り目で開閉${reverse}`;
   if (part.turn === "Keep") {
@@ -114,5 +114,5 @@ export function describeLayerMotionPart(part: MotionPart): string {
   if ("Inside" in part.turn) {
     return `${layers}を元の紙の${part.turn.Inside === "Up" ? "手前隣" : "奥隣"}へ${reverse}`;
   }
-  return `${layers}を面${part.turn.Beside.anchor}の${part.turn.Beside.direction === "Up" ? "手前隣" : "奥隣"}へ${reverse}`;
+  return `${layers}を選んだ面の${part.turn.Beside.direction === "Up" ? "手前隣" : "奥隣"}へ${reverse}`;
 }

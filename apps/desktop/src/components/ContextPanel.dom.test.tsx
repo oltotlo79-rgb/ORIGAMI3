@@ -119,6 +119,9 @@ afterEach(() => {
     mirrorAxis: { kind: "paperVertical" },
     mirrorAxisNotice: null,
     contextHelpExpanded: true,
+    pinnedFolds: new Map(),
+    releasedPins: [],
+    releasedPinHinges: [],
   });
 });
 
@@ -616,6 +619,7 @@ describe("この形で仕上げる(SIM-009)", () => {
       violations: [],
       frame: null,
       skipped: [],
+      contact_detected: false,
     });
     render(<ContextPanel />);
 
@@ -702,6 +706,7 @@ describe("巻き込み折り目の提案", () => {
       violations: [],
       frame: null,
       skipped: [],
+      contact_detected: false,
     };
   }
 
@@ -866,22 +871,22 @@ describe("技法の開く側と対象層", () => {
 
     expect(screen.getAllByText(/候補128枚/).length).toBe(1);
     expect(useAppStore.getState().techniqueDraft?.flap).toHaveLength(128);
-    const count = screen.getByLabelText("N(枚数・奥行き)");
+    const count = screen.getByLabelText("選ぶ層の枚数");
 
     fireEvent.change(count, { target: { value: "51" } });
-    fireEvent.click(screen.getByRole("button", { name: "手前からN枚" }));
+    fireEvent.click(screen.getByRole("button", { name: "手前から51枚" }));
     expect(useAppStore.getState().techniqueDraft?.flap).toEqual(candidates.slice(77));
 
     fireEvent.change(count, { target: { value: "55" } });
-    fireEvent.click(screen.getByRole("button", { name: "奥からN枚" }));
+    fireEvent.click(screen.getByRole("button", { name: "奥から55枚" }));
     expect(useAppStore.getState().techniqueDraft?.flap).toEqual(candidates.slice(0, 55));
 
     fireEvent.change(count, { target: { value: "98" } });
-    fireEvent.click(screen.getByRole("button", { name: "手前からN枚" }));
+    fireEvent.click(screen.getByRole("button", { name: "手前から98枚" }));
     expect(useAppStore.getState().techniqueDraft?.flap).toEqual(candidates.slice(30));
 
     fireEvent.change(count, { target: { value: "128" } });
-    fireEvent.click(screen.getByRole("button", { name: "手前からN枚目" }));
+    fireEvent.click(screen.getByRole("button", { name: "手前から128枚目" }));
     expect(useAppStore.getState().techniqueDraft?.flap).toEqual([0]);
 
     // 個別チェックでも同じ候補順を使える。
@@ -889,6 +894,7 @@ describe("技法の開く側と対象層", () => {
     expect(useAppStore.getState().techniqueDraft?.flap).toEqual([]);
     fireEvent.click(screen.getByRole("button", { name: "全部" }));
     expect(useAppStore.getState().techniqueDraft?.flap).toEqual(candidates);
+    expect(document.body.textContent).not.toMatch(/N\(|面\d|基準面ID/u);
   });
 });
 
@@ -905,7 +911,7 @@ describe("層操作の開閉・重ね替え", () => {
     useAppStore.getState().setLayerMotionAxis(5, LINE);
     render(<ContextPanel />);
 
-    expect(screen.getByText("軸: 折り目5")).toBeTruthy();
+    expect(screen.getByText("軸: 選んだ折り目")).toBeTruthy();
     const apply = screen.getByRole("button", { name: "まとめて適用" });
     expect(apply).toHaveProperty("disabled", false);
     fireEvent.click(screen.getByRole("button", { name: "この部分を追加" }));
@@ -950,6 +956,37 @@ describe("層操作の開閉・重ね替え", () => {
       "disabled",
       false,
     );
+  });
+
+  it("隣へ置く面は内部番号を入力させず、奥・手前の順から選ぶ", () => {
+    seed(new Map());
+    useAppStore.getState().beginTechnique("Simple");
+    // 面0を候補へ含め、内部の既定値0が暗黙選択されないことも確かめる。
+    useAppStore.getState().setTechniqueFlap([0, 7]);
+    render(<ContextPanel />);
+
+    fireEvent.click(screen.getByLabelText("動かさず重ね替え"));
+    fireEvent.change(screen.getByLabelText("重ね方"), {
+      target: { value: "Beside" },
+    });
+
+    const anchor = screen.getByLabelText("隣に置く面");
+    expect(anchor).toHaveProperty("value", "");
+    expect(screen.getByRole("button", { name: "まとめて適用" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(within(anchor).getByRole("option", { name: "奥から1枚目 / 手前から2枚目" })).toHaveProperty(
+      "value",
+      "0",
+    );
+    fireEvent.change(anchor, { target: { value: "7" } });
+    expect(useAppStore.getState().techniqueDraft?.motionAnchor).toBe(7);
+    expect(screen.getByRole("button", { name: "まとめて適用" })).toHaveProperty(
+      "disabled",
+      false,
+    );
+    expect(document.body.textContent).not.toMatch(/基準面ID|\(面\d+\)/u);
   });
 });
 
@@ -1250,5 +1287,123 @@ describe("D25: 作品保存の知らせ", () => {
 
     expect(screen.queryByText(/作品を「.*」に保存しました/)).toBeNull();
     expect(screen.getByText("保存先へ書き込めませんでした")).toBeTruthy();
+  });
+});
+
+describe("折り角度の固定(画面)", () => {
+  /** 固定のボタン(選んだ折り目1本ぶん) */
+  function pinButton(): HTMLButtonElement {
+    return screen.getByRole("button", {
+      name: /角度を固定$|角度の固定を外す/,
+    }) as HTMLButtonElement;
+  }
+
+  it("角度のつまみと同じ行に固定のボタンを出す(新しい区画を作らない)", () => {
+    seed(new Map([[5, 45]]));
+    render(<ContextPanel />);
+
+    const row = screen.getByLabelText("折り目 #5の角度設定");
+    const button = within(row).getByRole("button", { name: "角度を固定" });
+    // 角度を解除するボタンと同じ行にある
+    expect(within(row).getByRole("button", { name: /角度を解除/ })).not.toBeNull();
+    expect(button.getAttribute("aria-pressed")).toBe("false");
+    // 隣の「角度を解除」と言葉が対になっていること(何を固定するのか迷わせない)
+    expect(
+      within(row).getByRole("button", { name: /角度を解除/ }).textContent,
+    ).toContain("角度");
+    expect(button.getAttribute("data-tooltip")).toContain(
+      "ほかの折り目を動かしても、この角度のままになります",
+    );
+  });
+
+  it("ボタンを1回押すだけで固定でき、もう1回で外れる", async () => {
+    seed(new Map([[5, 45]]));
+    render(<ContextPanel />);
+
+    fireEvent.click(pinButton());
+    await waitFor(() =>
+      expect(useAppStore.getState().pinnedFolds.get(5)).toBe(45),
+    );
+    // 押した状態が見た目と読み上げの両方に出る
+    expect(pinButton().getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "角度の固定を外す" })).not.toBeNull();
+
+    fireEvent.click(pinButton());
+    await waitFor(() =>
+      expect(useAppStore.getState().pinnedFolds.has(5)).toBe(false),
+    );
+    expect(screen.getByRole("button", { name: "角度を固定" })).not.toBeNull();
+  });
+
+  it("いま固定している本数を、選んだ本数と同じ見出しに出す", () => {
+    seed(new Map([[5, 45]]));
+    useAppStore.setState({
+      pinnedFolds: new Map([
+        [5, 45],
+        [7, 30],
+      ]),
+    });
+    render(<ContextPanel />);
+
+    expect(screen.getByText("折り目を1本選択中")).not.toBeNull();
+    // 選んでいない折り目も含めた本数を出す
+    expect(screen.getByText(/角度を固定中2本/)).not.toBeNull();
+  });
+
+  it("固定が外れた折り目は、いまの角度をその行に出す", () => {
+    seed(new Map([[5, 45]]));
+    useAppStore.setState({
+      pinnedFolds: new Map([[5, 45]]),
+      releasedPins: [{ hinge: 5, pinned: 45, actual: 12.5, deviation: 32.5 }],
+    });
+    render(<ContextPanel />);
+
+    expect(screen.getByText(/固定を外して現在12.5°/)).not.toBeNull();
+  });
+
+  it("固定が外れた知らせを押すと、その折り目が選ばれる", () => {
+    seed(new Map([[5, 45]]));
+    useAppStore.setState({
+      pinnedFolds: new Map([[5, 45]]),
+      releasedPins: [{ hinge: 7, pinned: 45, actual: 12.5, deviation: 32.5 }],
+      relaxations: [
+        {
+          hinge: 7,
+          target_angle_deg: 45,
+          actual_angle_deg: 12.5,
+          delta_deg: -32.5,
+        },
+      ],
+    });
+    render(<ContextPanel />);
+
+    // 既存の追従の一覧をそのまま使い、固定だと分かる書き方にする
+    const notice = screen.getByRole("button", { name: /折り目 #7: 固定45.0°/ });
+    fireEvent.click(notice);
+    expect(useAppStore.getState().selection.edgeIds).toEqual([7]);
+  });
+
+  it("複数選んだときは、まとめて固定するボタンを出す", async () => {
+    seed(new Map([[5, 30]]));
+    const doc = makeDoc();
+    doc.cp.edges.push({ id: 7, v0: 1, v1: 3, kind: "Valley" });
+    useAppStore.setState({
+      doc,
+      hinges: new Set([5, 7]),
+      selection: { edgeIds: [5, 7], vertexIds: [] },
+      drivers: new Map([
+        [5, 30],
+        [7, 30],
+      ]),
+    });
+    render(<ContextPanel />);
+
+    fireEvent.click(screen.getByRole("button", { name: "角度をまとめて固定" }));
+    await waitFor(() =>
+      expect([...useAppStore.getState().pinnedFolds.keys()]).toEqual([5, 7]),
+    );
+    expect(
+      screen.getByRole("button", { name: "角度の固定をまとめて外す" }),
+    ).not.toBeNull();
   });
 });

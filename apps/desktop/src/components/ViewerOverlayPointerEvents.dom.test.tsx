@@ -105,8 +105,9 @@ function renderPane(expanded = true) {
   const canvas = document.createElement("canvas");
   canvas.className = "viewer3d-canvas";
   pane.appendChild(canvas);
-  // Reactの描画先はcanvasを消してしまうので、重ねる表示だけを別の入れ物へ描く。
+  // Reactの描画先はcanvasを消してしまうので、製品と同じ縦列を別の入れ物へ描く。
   const overlayHost = document.createElement("div");
+  overlayHost.className = "viewer-overlay-stack";
   pane.appendChild(overlayHost);
   document.body.appendChild(pane);
 
@@ -224,6 +225,9 @@ describe("3D区画へ重ねる表示のクリックの通し方", () => {
   // 押す場所が無い札は通す、押せるものは受ける。新しく重ねる表示もこの表へ足す。
   it.each<[string, string, string]>([
     ["紙のcanvas", "viewer3d-canvas", "auto"],
+    ["案内列の領域", "viewer-overlay-region", "none"],
+    ["案内列", "viewer-overlay-stack", "none"],
+    ["案内送り操作行", "viewer-overlay-scroll-controls", "none"],
     ["3Dの操作ヒントの札", "viewer-operation-hint", "none"],
     ["3Dの操作ヒントの開閉ボタン", "viewer-hint-toggle", "auto"],
     ["通知の札", "status-badge", "none"],
@@ -238,8 +242,60 @@ describe("3D区画へ重ねる表示のクリックの通し方", () => {
   ])("%s(.%s)のクリックは%s", (_name, className, expected) => {
     const element = document.createElement("div");
     element.className = className;
-    document.body.appendChild(element);
+    const stackClasses = [
+      "viewer-operation-hint",
+      "status-badge",
+      "suspect-hinge-guide",
+      "paper-action-tip",
+    ];
+    let stack: HTMLDivElement | null = null;
+    if (stackClasses.some((name) => element.classList.contains(name))) {
+      stack = document.createElement("div");
+      stack.className = "viewer-overlay-stack";
+      stack.appendChild(element);
+      document.body.appendChild(stack);
+    } else {
+      document.body.appendChild(element);
+    }
     expect(window.getComputedStyle(element).pointerEvents).toBe(expected);
-    element.remove();
+    if (stack) stack.remove();
+    else element.remove();
   });
+
+  it("案内列と操作行の余白は紙へ通し、上下ボタンだけがクリックを受ける", () => {
+    const region = document.createElement("div");
+    region.className = "viewer-overlay-region";
+    const stack = document.createElement("div");
+    stack.className = "viewer-overlay-stack";
+    const controls = document.createElement("div");
+    controls.className = "viewer-overlay-scroll-controls";
+    const button = document.createElement("button");
+    controls.appendChild(button);
+    region.append(stack, controls);
+    document.body.appendChild(region);
+
+    expect(window.getComputedStyle(region).pointerEvents).toBe("none");
+    expect(window.getComputedStyle(stack).pointerEvents).toBe("none");
+    expect(window.getComputedStyle(controls).pointerEvents).toBe("none");
+    expect(window.getComputedStyle(button).pointerEvents).toBe("auto");
+    region.remove();
+  });
+
+  it.each(["viewer-operation-hint collapsed", "paper-action-tip compact", "paper-action-tip expanded"])(
+    "縦列内の.%sは後勝ちの個別配置で横へずれない",
+    (className) => {
+      const stack = document.createElement("div");
+      stack.className = "viewer-overlay-stack";
+      const card = document.createElement("div");
+      card.className = className;
+      stack.appendChild(card);
+      document.body.appendChild(stack);
+      const style = window.getComputedStyle(card);
+      expect(style.position).toBe("relative");
+      expect(style.right).toBe("auto");
+      expect(style.width).toBe("100%");
+      expect(style.maxWidth).toBe("100%");
+      stack.remove();
+    },
+  );
 });

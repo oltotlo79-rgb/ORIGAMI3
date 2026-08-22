@@ -68,14 +68,14 @@ describe("見た目の好み", () => {
     expect(hexToRgb("あか")).toBeNull();
   });
 
-  it("重なり防止は既定でオンで、項目の無い古い作品もオンとして扱う", () => {
-    expect(overlapPreventionOf(DEFAULT_DISPLAY)).toBe(true);
+  it("重なり防止は既定でオフで、明示したときだけオンとして扱う", () => {
+    expect(overlapPreventionOf(DEFAULT_DISPLAY)).toBe(false);
     const oldDisplay = { ...DEFAULT_DISPLAY };
     delete oldDisplay.overlap_prevention_enabled;
-    expect(overlapPreventionOf(oldDisplay)).toBe(true);
+    expect(overlapPreventionOf(oldDisplay)).toBe(false);
     expect(
-      overlapPreventionOf({ ...DEFAULT_DISPLAY, overlap_prevention_enabled: false }),
-    ).toBe(false);
+      overlapPreventionOf({ ...DEFAULT_DISPLAY, overlap_prevention_enabled: true }),
+    ).toBe(true);
   });
 
   it("食い込み検出は既定でオンで、項目の無い古い作品もオンとして扱う", () => {

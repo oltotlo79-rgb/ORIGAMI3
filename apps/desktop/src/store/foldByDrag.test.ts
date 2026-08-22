@@ -51,6 +51,7 @@ const VIEW: DocumentView = {
   violations: [],
   frame: null,
   skipped: [],
+  contact_detected: false,
 };
 
 const POSE_STEP = {

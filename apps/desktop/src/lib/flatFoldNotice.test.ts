@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   flatFoldNotice,
   flatFoldViolationIds,
+  statusBadgeText,
   warningCount,
 } from "./flatFoldNotice";
 
@@ -34,5 +35,18 @@ describe("平らに畳めない点の利用者向け通知", () => {
         [9, 10, 11, 12, 9],
       ),
     ).toBe(6);
+  });
+
+  it("形を正確に出せないときは警告印を重ねず、利用者の言葉で知らせる", () => {
+    const text = statusBadgeText({
+      hasError: false,
+      followStatus: null,
+      poseConverged: false,
+      warningCount: 0,
+      flatFoldViolationCount: 0,
+    });
+    expect(text).toBe("指定した角度に近い形です");
+    expect(text).not.toMatch(/[⚠収束]/u);
+    expect(text).not.toContain("追従計算");
   });
 });

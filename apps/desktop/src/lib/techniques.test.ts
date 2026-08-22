@@ -97,6 +97,14 @@ describe("withFixHint", () => {
     expect(warningsForStep([out], 3)).toEqual([out]);
   });
 
+  it("計算側の不収束という語を、画面では利用者の状態へ言い換える", () => {
+    const [out] = withFixHint(["追従計算が収束していません"]);
+    expect(out).toBe(
+      "指定した角度に近い形を表示しています。前の角度を自動調整しています。操作は続けられます",
+    );
+    expect(out).not.toMatch(/追従計算|収束/u);
+  });
+
   it("折り線が見つからない手順には、引き直すか削除するよう伝える", () => {
     const [out] = withFixHint([
       "手順2の折り線が見つからないため、この手順を飛ばしました",

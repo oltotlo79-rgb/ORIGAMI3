@@ -42,7 +42,15 @@ function makeDoc(): Document {
 }
 
 function makeView(doc: Document): DocumentView {
-  return { doc, faces: [], warnings: [], violations: [], frame: null, skipped: [] };
+  return {
+    doc,
+    faces: [],
+    warnings: [],
+    violations: [],
+    frame: null,
+    skipped: [],
+    contact_detected: false,
+  };
 }
 
 const MESH: SoftMesh = {

@@ -47,6 +47,8 @@ import {
 const POSE_WAIT_MS = 100;
 /** 間引きが追加で飛ばないことを確かめるために待つ時間(ms) */
 const REAL_WAIT_MS = 200;
+/** Rustの食い込み検出が画面へ運ぶ利用者向け文言 */
+const PENETRATION_WARNING = "紙が重なって食い込んでいます";
 
 /** 手動でresolve/rejectできるPromise */
 function deferred<T>() {
@@ -93,6 +95,7 @@ function makeView(mark: number): DocumentView {
     violations: [],
     frame: null,
     skipped: [],
+    contact_detected: false,
   };
 }
 
@@ -162,6 +165,37 @@ function makeReplayResult(): ReplayResult {
   return { frame: { faces: [], warnings: [] }, skipped: [], warnings: [] };
 }
 
+const REPLAY_DEVIATION_TARGET_DEG = 90;
+const REPLAY_DEVIATION_ACTUAL_DEG = 70;
+const REPLAY_DEVIATION_NOTICE =
+  "指定した角度にならなかった折り目が1本あります: 折り目 #5(指定 90.0° → いま 70.0°、差 20.0°)。" +
+  "ほかの折り目と同時にはその角度にできない形なので、紙が裂けないいちばん近い形を表示しています。" +
+  "動かしたい折り目以外の指定を減らすと、指定どおりに折れることがあります。";
+
+/** 指定90度に対して実際は70度になった、生の手順再生結果。 */
+function makeReplayDeviationResult(frame: ReplayResult["frame"]): ReplayResult {
+  return {
+    ...makeReplayResult(),
+    frame,
+    sequence_targets: [
+      { hinge: 5, target_angle_deg: REPLAY_DEVIATION_TARGET_DEG },
+    ],
+    angles: { "5": REPLAY_DEVIATION_ACTUAL_DEG },
+  };
+}
+
+/** DocumentViewの自動再生結果へ、同じ指定角と実角を明示する。 */
+function setViewReplayDeviation(
+  view: DocumentView,
+  frame: ReplayResult["frame"],
+): void {
+  view.frame = frame;
+  view.sequence_targets = [
+    { hinge: 5, target_angle_deg: REPLAY_DEVIATION_TARGET_DEG },
+  ];
+  view.angles = { "5": REPLAY_DEVIATION_ACTUAL_DEG };
+}
+
 /** 手順count個の作品を表示中の状態にする(IPCは呼ばない) */
 function seedSequence(count: number, currentStep: number | null = null): void {
   const view = makeStepView(1000, count);
@@ -217,6 +251,11 @@ beforeEach(() => {
     foldThroughBusy: false,
     techniqueDraft: null,
     recovery: null,
+    pinnedFolds: new Map(),
+    releasedPins: [],
+    angleUndoStack: [],
+    angleRedoStack: [],
+    docUndoDepth: 0,
   });
   vi.mocked(ipc.recoveryCheck).mockResolvedValue(null);
 });
@@ -308,6 +347,26 @@ describe("appStore 直列化と応答の反映", () => {
     const s = useAppStore.getState();
     expect(s.doc?.cp.next_edge_id).toBe(400); // Bの成功が反映される
     expect(s.errorMessage).toBeNull(); // 古い失敗は報告されない
+  });
+
+  it("DocumentViewの食い込みを型境界で落とさず、警告しながら結果を表示する", async () => {
+    const warning = PENETRATION_WARNING;
+    const frame = { faces: [], warnings: [warning] };
+    const view = makeView(401);
+    view.contact_detected = true;
+    view.warnings = [warning];
+    view.frame = frame;
+    vi.mocked(ipc.documentOpen).mockResolvedValueOnce(view);
+
+    await useAppStore.getState().openDocument("contact.ori3");
+
+    const state = useAppStore.getState();
+    expect(state.contactDetected).toBe(true);
+    expect(state.warnings).toEqual([warning]);
+    expect(state.frame3d).toBe(frame);
+    expect(state.errorMessage).toBeNull();
+    expect(vi.mocked(ipc.sequenceReplay)).not.toHaveBeenCalled();
+    expect(vi.mocked(ipc.poseSolve)).not.toHaveBeenCalled();
   });
 });
 
@@ -697,7 +756,7 @@ describe("appStore 折り角度の指定", () => {
         hinges: new Set([5, 7, 9, 11]),
         drivers: new Map([[9, 25]]),
         angleUndoStack: [],
-        angleRedoStack: [new Map([[9, 10]])],
+        angleRedoStack: [{ drivers: new Map([[9, 10]]), pinned: new Map() }],
       });
       const store = useAppStore.getState();
       const selected = [11, 7, 5, 7, 999];
@@ -722,7 +781,7 @@ describe("appStore 折り角度の指定", () => {
       // 同じ選択組のスライダー操作は、最初の状態だけを1件の履歴に残す。
       const during = useAppStore.getState();
       expect(during.angleUndoStack).toHaveLength(1);
-      expect([...during.angleUndoStack[0]]).toEqual([[9, 25]]);
+      expect([...during.angleUndoStack[0].drivers]).toEqual([[9, 25]]);
       expect(during.angleRedoStack).toEqual([]);
 
       slow.resolve(makeSolveResult());
@@ -1019,6 +1078,368 @@ describe("appStore 折り角度の指定", () => {
 });
 
 describe("appStore 手順の表示と再生", () => {
+  const deviationRoutes = [
+    ["角度履歴の元に戻す", "angle-undo", 1, 0],
+    ["たわみ変更による形の描き直し", "soft-refresh", 1, 0],
+    ["手順の選択", "select-step", 1, 0],
+    ["DocumentView後のたわみ再要求", "view-soft", 1, 1],
+    ["途中手順を表示中のDocumentView更新", "view-intermediate", 1, 1],
+    ["アニメーション再生", "playback", 1, 0],
+    ["最新DocumentViewの直接表示", "view-direct", 0, 1],
+  ] as const;
+
+  it.each(deviationRoutes)(
+    "%sでも、指定角と実角の差を知らせながら結果を表示する",
+    async (name, route, expectedReplayCalls, expectedSequenceApplyCalls) => {
+      const frame = { faces: [], warnings: [`${name}の形`] };
+      vi.mocked(ipc.sequenceReplay).mockResolvedValue(
+        makeReplayDeviationResult(frame),
+      );
+
+      switch (route) {
+        case "angle-undo": {
+          seedSequence(1);
+          useAppStore.setState({
+            drivers: new Map([[5, 30]]),
+            pinnedFolds: new Map(),
+            angleUndoStack: [{ drivers: new Map(), pinned: new Map() }],
+            angleRedoStack: [],
+          });
+          await useAppStore.getState().undo();
+          break;
+        }
+        case "soft-refresh": {
+          primeFakeTimers();
+          // lastRun=0と同じ時計から始めることで、形の16ms間引きだけを進め、
+          // 作品への400ms遅延保存(DocumentView経路)は混ぜない。
+          vi.setSystemTime(0);
+          try {
+            seedSequence(1);
+            const state = useAppStore.getState();
+            const display = {
+              ...state.display,
+              soft_enabled: false,
+              soft_pressure: 0,
+            };
+            useAppStore.setState({
+              display,
+              doc: state.doc === null ? null : { ...state.doc, display },
+            });
+            useAppStore.getState().setSoft({ soft_enabled: true });
+            await vi.advanceTimersByTimeAsync(16);
+            await flushMicrotasks();
+          } finally {
+            resetPoseThrottle();
+            vi.useRealTimers();
+          }
+          break;
+        }
+        case "select-step": {
+          seedSequence(2);
+          await useAppStore.getState().selectStepForCapture(1);
+          break;
+        }
+        case "view-soft": {
+          seedSequence(1);
+          const view = makeStepView(1130, 1);
+          view.doc.display = { ...view.doc.display, soft_enabled: true };
+          vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(view);
+          await useAppStore.getState().applySequenceOp({ type: "RemoveStep", id: 99 });
+          break;
+        }
+        case "view-intermediate": {
+          seedSequence(3, 1);
+          const view = makeStepView(1131, 3);
+          view.doc.display = { ...view.doc.display, soft_enabled: false };
+          vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(view);
+          await useAppStore.getState().applySequenceOp({ type: "RemoveStep", id: 99 });
+          expect(replayCalls()).toEqual([[1, 1]]);
+          break;
+        }
+        case "playback": {
+          primeFakeTimers();
+          try {
+            seedSequence(1);
+            useAppStore.getState().togglePlay();
+            // 最初の1コマだけを進める。警告は再生を止めるゲートにしない。
+            await vi.advanceTimersByTimeAsync(16);
+            await flushMicrotasks();
+            expect(replayCalls()).toEqual([[1, 0]]);
+            expect(useAppStore.getState().playing).toBe(true);
+          } finally {
+            if (useAppStore.getState().playing) useAppStore.getState().togglePlay();
+            resetPoseThrottle();
+            vi.useRealTimers();
+          }
+          break;
+        }
+        case "view-direct": {
+          seedSequence(1);
+          const view = makeStepView(1132, 1);
+          view.doc.display = { ...view.doc.display, soft_enabled: false };
+          setViewReplayDeviation(view, frame);
+          vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(view);
+          await useAppStore.getState().applySequenceOp({ type: "RemoveStep", id: 99 });
+          break;
+        }
+      }
+
+      const state = useAppStore.getState();
+      expect(vi.mocked(ipc.sequenceReplay)).toHaveBeenCalledTimes(
+        expectedReplayCalls,
+      );
+      expect(vi.mocked(ipc.sequenceApply)).toHaveBeenCalledTimes(
+        expectedSequenceApplyCalls,
+      );
+      expect(vi.mocked(ipc.poseSolve)).not.toHaveBeenCalled();
+      expect(state.frame3d).toBe(frame);
+      expect([...state.sequenceTargets]).toEqual([
+        [5, REPLAY_DEVIATION_TARGET_DEG],
+      ]);
+      expect([...state.poseAngles]).toEqual([[5, REPLAY_DEVIATION_ACTUAL_DEG]]);
+      expect(state.poseWarnings).toEqual([`${name}の形`, REPLAY_DEVIATION_NOTICE]);
+      expect(state.errorMessage).toBeNull();
+    },
+  );
+
+  it("固定が無い再生frameへ替えたら、前の固定解除の知らせを残さない", async () => {
+    seedSequence(1);
+    useAppStore.setState({
+      poseWarnings: [
+        "42本の折り目が目標の角度に届きませんでした",
+        "固定した折り目2本を動かしました",
+      ],
+      releasedPins: [
+        { hinge: 5, pinned: -180, actual: -48, deviation: 132 },
+      ],
+      releasedPinHinges: [5],
+    });
+    vi.mocked(ipc.sequenceReplay).mockResolvedValueOnce({
+      ...makeReplayResult(),
+      frame: { faces: [], warnings: [] },
+      sequence_targets: [{ hinge: 5, target_angle_deg: 60 }],
+      angles: { 5: 60 },
+      converged: true,
+    });
+
+    useAppStore.getState().selectStep(1);
+    await vi.waitFor(() => expect(useAppStore.getState().poseAngles.get(5)).toBe(60));
+
+    const state = useAppStore.getState();
+    expect(state.poseWarnings).toEqual([]);
+    expect(state.releasedPins).toEqual([]);
+    expect(state.releasedPinHinges).toEqual([]);
+    expect(vi.mocked(ipc.poseSolve)).not.toHaveBeenCalled();
+  });
+
+  it("手順再生でも固定を動かさない側へ渡し、5通りでずれを1e-9未満に保つ", async () => {
+    const cases: [number, number][][] = [
+      [[6, 45]],
+      [[7, -12.5]],
+      [
+        [6, 45],
+        [7, -60],
+      ],
+      [
+        [5, 180],
+        [8, -75],
+      ],
+      [
+        [5, 0],
+        [6, 47.5],
+        [9, -123.25],
+      ],
+    ];
+
+    for (const [index, pinned] of cases.entries()) {
+      vi.mocked(ipc.sequenceReplay).mockClear();
+      vi.mocked(ipc.poseSolve).mockClear();
+      const hinges = [5, 6, 7, 8, 9];
+      const sequenceTargets = hinges.map((hinge) => ({
+        hinge,
+        target_angle_deg: 20 + hinge,
+      }));
+      const replayAngles = Object.fromEntries(
+        sequenceTargets.map((driver) => [driver.hinge, driver.target_angle_deg]),
+      );
+      vi.mocked(ipc.sequenceReplay).mockResolvedValue({
+        ...makeReplayResult(),
+        sequence_targets: sequenceTargets,
+        angles: replayAngles,
+        converged: true,
+      });
+      vi.mocked(ipc.poseSolve).mockImplementation(async (hard, keep) => {
+        const angles: Record<string, number> = {};
+        for (const driver of [...hard, ...(keep ?? [])]) {
+          angles[String(driver.hinge)] = driver.target_angle_deg;
+        }
+        return {
+          ...makeSolveResult(angles),
+          frame: { faces: [], warnings: [`固定付き再生${index + 1}`] },
+          closure_rms: 1e-15,
+        };
+      });
+      const view = makeManyHingeView(1100 + index, hinges.length);
+      view.doc.sequence = [makeStep(1)];
+      setupPinned(view, hinges, pinned);
+      useAppStore.setState({ currentStep: null, playT: 1 });
+
+      useAppStore.getState().selectStep(1);
+      await vi.waitFor(() => expect(poseCalls()).toHaveLength(1));
+      await vi.waitFor(() =>
+        expect(useAppStore.getState().frame3d?.warnings).toEqual([
+          `固定付き再生${index + 1}`,
+        ]),
+      );
+
+      const hard = poseCalls()[0];
+      const actual = useAppStore.getState().poseAngles;
+      for (const [hinge, pinnedDeg] of pinned) {
+        expect(hard).toContainEqual({ hinge, target_angle_deg: pinnedDeg });
+        expect(Math.abs((actual.get(hinge) ?? Infinity) - pinnedDeg)).toBeLessThan(
+          1e-9,
+        );
+      }
+      const poseCall = vi.mocked(ipc.poseSolve).mock.calls[0];
+      expect(poseCall[4]).toBe(1);
+      expect(poseCall[5]).toBe(1);
+    }
+  });
+
+  it("再生で固定1本だけが成り立たないとき、その1本だけ外して数・ID・差を知らせる", async () => {
+    const hinges = [5, 6, 7, 8, 9, 10, 11];
+    const pinned: [number, number][] = [
+      [6, 30],
+      [7, 45],
+      [8, -20],
+      [9, 60],
+      [10, -75],
+    ];
+    const view = makeManyHingeView(1110, hinges.length);
+    view.doc.sequence = [makeStep(1)];
+    setupPinned(view, hinges, pinned);
+    useAppStore.setState({ currentStep: null, playT: 1 });
+    vi.mocked(ipc.sequenceReplay).mockResolvedValue({
+      ...makeReplayResult(),
+      sequence_targets: pinned.map(([hinge, target_angle_deg]) => ({
+        hinge,
+        target_angle_deg,
+      })),
+      angles: Object.fromEntries(pinned),
+      converged: true,
+    });
+    mockSolverThatCannotHold([7]);
+
+    useAppStore.getState().selectStep(1);
+    await vi.waitFor(() =>
+      expect(useAppStore.getState().releasedPinHinges).toEqual([7]),
+    );
+
+    const state = useAppStore.getState();
+    expect(state.releasedPins).toEqual([
+      { hinge: 7, pinned: 45, actual: 57, deviation: 12 },
+    ]);
+    const notices = state.poseWarnings.filter((warning) =>
+      warning.includes("固定した折り目"),
+    );
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain("固定した折り目1本");
+    expect(notices[0]).toContain("折り目 #7");
+    expect(notices[0]).toContain("固定 45.0°");
+    expect(notices[0]).toContain("いま 57.0°");
+    expect(notices[0]).toContain("差 12.0°");
+    for (const hinge of [6, 8, 9, 10]) {
+      expect(notices[0]).not.toContain(`折り目 #${hinge}`);
+    }
+    expect(state.errorMessage).toBeNull();
+  });
+
+  it("最新のDocumentViewを直接採る経路も、固定があれば再生から固定付きで解き直す", async () => {
+    seedSequence(1);
+    useAppStore.setState({ pinnedFolds: new Map([[5, 45]]) });
+    const nextView = makeStepView(1120, 1);
+    nextView.sequence_targets = [{ hinge: 5, target_angle_deg: 60 }];
+    nextView.angles = { 5: 60 };
+    nextView.frame = { faces: [], warnings: ["固定なしのDocumentView"] };
+    vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(nextView);
+    vi.mocked(ipc.sequenceReplay).mockResolvedValueOnce({
+      ...makeReplayResult(),
+      frame: { faces: [], warnings: ["固定なしの再生frame"] },
+      sequence_targets: [{ hinge: 5, target_angle_deg: 60 }],
+      angles: { 5: 60 },
+      converged: true,
+    });
+    vi.mocked(ipc.poseSolve).mockImplementationOnce(async (hard, keep) => {
+      const angles = Object.fromEntries(
+        [...hard, ...(keep ?? [])].map((driver) => [
+          driver.hinge,
+          driver.target_angle_deg,
+        ]),
+      );
+      return {
+        ...makeSolveResult(angles),
+        frame: { faces: [], warnings: ["固定付きの最終frame"] },
+        closure_rms: 1e-15,
+      };
+    });
+
+    await useAppStore.getState().applySequenceOp({ type: "RemoveStep", id: 99 });
+
+    expect(vi.mocked(ipc.sequenceReplay)).toHaveBeenCalledTimes(1);
+    expect(poseCalls()).toHaveLength(1);
+    expect(poseCalls()[0]).toContainEqual({ hinge: 5, target_angle_deg: 45 });
+    expect(useAppStore.getState().poseAngles.get(5)).toBe(45);
+    expect(useAppStore.getState().frame3d?.warnings).toEqual([
+      "固定付きの最終frame",
+    ]);
+  });
+
+  it("最新のDocumentViewを固定なしで直接採るときも、古い固定解除通知を消す", async () => {
+    seedSequence(1);
+    useAppStore.setState({
+      poseWarnings: ["固定した折り目2本を動かしました"],
+      releasedPins: [
+        { hinge: 5, pinned: -180, actual: -48, deviation: 132 },
+      ],
+      releasedPinHinges: [5],
+    });
+    const nextView = makeStepView(1121, 1);
+    nextView.frame = { faces: [], warnings: [] };
+    vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(nextView);
+
+    await useAppStore.getState().applySequenceOp({ type: "RemoveStep", id: 99 });
+
+    const state = useAppStore.getState();
+    expect(vi.mocked(ipc.sequenceReplay)).not.toHaveBeenCalled();
+    expect(vi.mocked(ipc.poseSolve)).not.toHaveBeenCalled();
+    expect(state.frame3d).toEqual(nextView.frame);
+    expect(state.poseWarnings).toEqual([]);
+    expect(state.releasedPins).toEqual([]);
+    expect(state.releasedPinHinges).toEqual([]);
+  });
+
+  it("最新のDocumentViewを直接採る経路も、食い込みを知らせて再生を止めない", async () => {
+    seedSequence(1);
+    const warning = PENETRATION_WARNING;
+    const frame = { faces: [], warnings: [warning] };
+    const nextView = makeStepView(1122, 1);
+    nextView.contact_detected = true;
+    nextView.warnings = [warning];
+    nextView.frame = frame;
+    vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(nextView);
+
+    await useAppStore.getState().applySequenceOp({ type: "RemoveStep", id: 99 });
+
+    const state = useAppStore.getState();
+    expect(vi.mocked(ipc.sequenceReplay)).not.toHaveBeenCalled();
+    expect(vi.mocked(ipc.poseSolve)).not.toHaveBeenCalled();
+    expect(state.contactDetected).toBe(true);
+    expect(state.warnings).toEqual([warning]);
+    expect(state.poseWarnings).toEqual([warning]);
+    expect(state.frame3d).toBe(frame);
+    expect(state.errorMessage).toBeNull();
+  });
+
   it("4点を知らせても手順を再生し、次の最新再生結果が空なら解除する", async () => {
     seedSequence(3);
     vi.mocked(ipc.sequenceReplay)
@@ -1529,8 +1950,8 @@ describe("展開図の置き換え", () => {
       frame3d: { faces: [], warnings: ["前の手順の形"] },
       drivers: new Map([[5, 90]]),
       poseAngles: new Map([[5, 90]]),
-      angleUndoStack: [new Map([[5, 45]])],
-      angleRedoStack: [new Map([[5, 30]])],
+      angleUndoStack: [{ drivers: new Map([[5, 45]]), pinned: new Map() }],
+      angleRedoStack: [{ drivers: new Map([[5, 30]]), pinned: new Map() }],
       docUndoDepth: 1,
     });
 
@@ -2681,5 +3102,417 @@ describe("立体的な仕上げの形を手順として残す(SIM-009)", () => {
     expect(poseRecordReason(useAppStore.getState())).toBe(
       "折り線がまだありません",
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 折り角度の固定(利用者が選んだ角度を、ほかの折り目を動かしても保つ)
+
+/** 折り線をcount本持つview(辺IDは5から連番)。 */
+function makeManyHingeView(mark: number, count: number): DocumentView {
+  const view = makeHingeView(mark);
+  for (let i = 1; i < count; i++) {
+    view.doc.cp.edges.push({ id: 5 + i, v0: 0, v1: 2, kind: "Mountain" });
+  }
+  return view;
+}
+
+/**
+ * 「動かさない側に入れてはいけない折り目」を決めた偽の計算。
+ *
+ * `impossible` の折り目が動かさない側にあると、紙が閉じずに折れない
+ * (収束せず、閉じ残りも大きい)。守る側にあれば、その折り目だけが
+ * 12度ずれた形で折れる。実際の計算の代わりに、判断の筋道だけを試す。
+ */
+function mockSolverThatCannotHold(impossible: readonly number[]): void {
+  vi.mocked(ipc.poseSolve).mockImplementation(async (hard, keep) => {
+    const held = new Set(hard.map((d) => d.hinge));
+    const blocked = impossible.filter((hinge) => held.has(hinge));
+    const angles: Record<string, number> = {};
+    for (const d of hard) angles[String(d.hinge)] = d.target_angle_deg;
+    for (const d of keep ?? []) {
+      angles[String(d.hinge)] = impossible.includes(d.hinge)
+        ? d.target_angle_deg + 12
+        : d.target_angle_deg;
+    }
+    return {
+      ...makeSolveResult(angles),
+      converged: blocked.length === 0,
+      closure_rms: blocked.length === 0 ? 1e-15 : 0.3,
+    };
+  });
+}
+
+/** 固定と指定を置いた状態を作る。 */
+function setupPinned(
+  view: DocumentView,
+  hinges: number[],
+  pinned: [number, number][],
+): void {
+  useAppStore.setState({
+    doc: view.doc,
+    faces: view.faces,
+    hinges: new Set(hinges),
+    pinnedFolds: new Map(pinned),
+    releasedPins: [],
+    releasedPinHinges: [],
+  });
+}
+
+describe("折り角度の固定", () => {
+  it("固定した折り目は、ほかの折り目を動かしても「動かさない側」へ送る", async () => {
+    // 5通りの組み合わせ(固定の本数と角度・動かす折り目を変える)
+    const cases: { pinned: [number, number][]; move: number; deg: number }[] = [
+      { pinned: [[6, 45]], move: 5, deg: -30 },
+      { pinned: [[6, -12.5]], move: 7, deg: 90 },
+      {
+        pinned: [
+          [6, 45],
+          [7, -60],
+        ],
+        move: 5,
+        deg: 10,
+      },
+      {
+        pinned: [
+          [5, 180],
+          [6, 45],
+        ],
+        move: 7,
+        deg: -75,
+      },
+      {
+        pinned: [
+          [5, 0],
+          [6, 45],
+          [7, -60],
+        ],
+        move: 8,
+        deg: 120,
+      },
+    ];
+    for (const [index, item] of cases.entries()) {
+      vi.mocked(ipc.poseSolve).mockClear();
+      vi.mocked(ipc.poseSolve).mockResolvedValue({
+        ...makeSolveResult(),
+        closure_rms: 1e-15,
+      });
+      const view = makeManyHingeView(600 + index, 5);
+      setupPinned(view, [5, 6, 7, 8, 9], item.pinned);
+
+      useAppStore.getState().setDriverAngle(item.move, item.deg);
+      await vi.waitFor(() => expect(poseCalls().length).toBeGreaterThan(0));
+
+      const hard = poseCalls()[0].map((d) => d.hinge);
+      const keep = poseKeeps()[0].map((d) => d.hinge);
+      for (const [hinge] of item.pinned) {
+        if (hinge === item.move) continue;
+        expect(hard).toContain(hinge); // 固定した折り目は動かさない側
+        expect(keep).not.toContain(hinge);
+      }
+      expect(hard).toContain(item.move); // いま動かしている折り目も動かさない側
+    }
+  });
+
+  it("固定した折り目の角度は、ほかを動かしても変わらない(1e-9未満)", async () => {
+    // 実際の計算は「動かさない側の角度をそのまま返す」ので、それを写す。
+    vi.mocked(ipc.poseSolve).mockImplementation(async (hard, keep) => {
+      const angles: Record<string, number> = {};
+      for (const d of hard) angles[String(d.hinge)] = d.target_angle_deg;
+      // 守る側は少し譲る(実測では1.6度以内)
+      for (const d of keep ?? [])
+        angles[String(d.hinge)] = d.target_angle_deg + 1.6;
+      return { ...makeSolveResult(angles), closure_rms: 1e-15 };
+    });
+    const view = makeManyHingeView(610, 4);
+    setupPinned(view, [5, 6, 7, 8], [
+      [6, 47.5],
+      [7, -123.25],
+    ]);
+    // 折り目8は固定せず、途中の角度の希望だけを持つ(譲れる側に入る)。
+    // 0度や±180度にすると「もう折り切ってある」扱いになり、
+    // 固定していなくても動かさない側へ入るので、途中の角度にする。
+    useAppStore.setState({ sequenceTargets: new Map([[8, 30]]) });
+
+    useAppStore.getState().setDriverAngle(5, -40);
+    await vi.waitFor(() => expect(poseCalls().length).toBeGreaterThan(0));
+
+    const angles = useAppStore.getState().poseAngles;
+    expect(Math.abs((angles.get(6) ?? 0) - 47.5)).toBeLessThan(1e-9);
+    expect(Math.abs((angles.get(7) ?? 0) - -123.25)).toBeLessThan(1e-9);
+    // 固定していない折り目は譲っている(=固定が効いていることの裏返し)
+    expect(Math.abs((angles.get(8) ?? 0) - 30)).toBeGreaterThan(1e-9);
+  });
+
+  it("固定を外すと、また追従して動くようになる", async () => {
+    vi.mocked(ipc.poseSolve).mockResolvedValue({
+      ...makeSolveResult(),
+      closure_rms: 1e-15,
+    });
+    const view = makeManyHingeView(620, 3);
+    setupPinned(view, [5, 6, 7], [[6, 45]]);
+    // 折り目6には角度の指定もある(固定を外しても指定は残る)
+    useAppStore.setState({ drivers: new Map([[6, 45]]) });
+
+    useAppStore.getState().setDriverAngle(5, -30);
+    await vi.waitFor(() => expect(poseCalls().length).toBeGreaterThan(0));
+    expect(poseCalls()[0].map((d) => d.hinge)).toContain(6);
+
+    // 固定を外す
+    vi.mocked(ipc.poseSolve).mockClear();
+    useAppStore.getState().togglePinnedFold(6);
+    await vi.waitFor(() => expect(poseCalls().length).toBeGreaterThan(0));
+    expect(useAppStore.getState().pinnedFolds.has(6)).toBe(false);
+
+    vi.mocked(ipc.poseSolve).mockClear();
+    useAppStore.getState().setDriverAngle(5, -60);
+    await vi.waitFor(() => expect(poseCalls().length).toBeGreaterThan(0));
+    // 動かさない側から外れ、なるべく守る側(=譲れる)へ戻っている
+    expect(poseCalls()[0].map((d) => d.hinge)).not.toContain(6);
+    expect(poseKeeps()[0].map((d) => d.hinge)).toContain(6);
+  });
+
+  it("1本だけ成り立たない形では、外れる固定は1本だけ(全部は外れない)", async () => {
+    mockSolverThatCannotHold([7]); // 折り目7だけが固定したままにできない
+    const view = makeManyHingeView(630, 7);
+    setupPinned(view, [5, 6, 7, 8, 9, 10, 11], [
+      [6, 30],
+      [7, 45],
+      [8, -20],
+      [9, 60],
+      [10, -75],
+    ]);
+
+    useAppStore.getState().setDriverAngle(5, -40);
+    await vi.waitFor(() => expect(poseCalls().length).toBeGreaterThan(0));
+    await useAppStore.getState().finishAngleIntent();
+
+    const s = useAppStore.getState();
+    // 外れたのは1本だけ。ほかの4本の固定はそのまま保たれている。
+    expect(s.releasedPinHinges).toEqual([7]);
+    expect(s.releasedPins.map((pin) => pin.hinge)).toEqual([7]);
+    // 表示に使った計算(折り目7を外し、ほかの4本は動かさない側のまま)を見る。
+    // 指を離したときには「外した固定を戻せないか」も1回試すので、
+    // いちばん最後の呼び出しはその試し(折り目7を含む)になる。
+    const heldCalls = poseCalls().filter(
+      (call) => !call.some((d) => d.hinge === 7),
+    );
+    const adopted = heldCalls[heldCalls.length - 1].map((d) => d.hinge);
+    for (const hinge of [6, 8, 9, 10]) expect(adopted).toContain(hinge);
+    expect(adopted).not.toContain(7);
+    // 固定そのものは5本とも残っている(外したのは今回の計算のあいだだけ)
+    expect(s.pinnedFolds.size).toBe(5);
+  });
+
+  it("どの固定が原因かは1回の診断で分かる(1本ずつ総当たりしない)", async () => {
+    mockSolverThatCannotHold([9]);
+    const many = 20;
+    const hinges = Array.from({ length: many + 1 }, (_, i) => 5 + i);
+    const view = makeManyHingeView(640, many + 1);
+    setupPinned(
+      view,
+      hinges,
+      hinges.slice(1).map((hinge) => [hinge, 30] as [number, number]),
+    );
+
+    useAppStore.getState().setDriverAngle(5, -40);
+    await vi.waitFor(() => expect(poseCalls().length).toBeGreaterThan(0));
+    await useAppStore.getState().finishAngleIntent();
+
+    const calls = poseCalls().length;
+    // 固定20本のうち成り立たないのは1本。総当たり(21回)や
+    // 二分探索(約6回)ではなく、試す+診断+確かめるの数回で済む。
+    expect(calls).toBeLessThanOrEqual(6);
+    expect(useAppStore.getState().releasedPinHinges).toEqual([9]);
+    console.log(`固定20本・成り立たない1本のときの解き直し回数: ${calls}回`);
+  });
+
+  it("固定の本数を増やしても解き直しの回数は変わらない", async () => {
+    const counts: number[] = [];
+    for (const many of [20, 50, 100]) {
+      vi.mocked(ipc.poseSolve).mockClear();
+      mockSolverThatCannotHold([9]);
+      const hinges = Array.from({ length: many + 1 }, (_, i) => 5 + i);
+      const view = makeManyHingeView(650 + many, many + 1);
+      setupPinned(
+        view,
+        hinges,
+        hinges.slice(1).map((hinge) => [hinge, 30] as [number, number]),
+      );
+      useAppStore.getState().setDriverAngle(5, -40);
+      await vi.waitFor(() => expect(poseCalls().length).toBeGreaterThan(0));
+      await useAppStore.getState().finishAngleIntent();
+      counts.push(poseCalls().length);
+      expect(useAppStore.getState().releasedPinHinges).toEqual([9]);
+    }
+    console.log(
+      `固定20本/50本/100本のときの解き直し回数: ${counts.join(" / ")}回`,
+    );
+    expect(new Set(counts).size).toBe(1); // 本数に依存しない
+  });
+
+  it("成り立たない指定でも操作は止まらず、結果と知らせが返る(3通り)", async () => {
+    const cases: number[][] = [[7], [7, 9], [6, 7, 8, 9, 10]];
+    for (const [index, impossible] of cases.entries()) {
+      vi.mocked(ipc.poseSolve).mockClear();
+      mockSolverThatCannotHold(impossible);
+      const view = makeManyHingeView(660 + index, 7);
+      setupPinned(view, [5, 6, 7, 8, 9, 10, 11], [
+        [6, 30],
+        [7, 45],
+        [8, -20],
+        [9, 60],
+        [10, -75],
+      ]);
+
+      useAppStore.getState().setDriverAngle(5, -40);
+      await vi.waitFor(() => expect(poseCalls().length).toBeGreaterThan(0));
+      await useAppStore.getState().finishAngleIntent();
+
+      const s = useAppStore.getState();
+      // 操作は止まらない: 形の結果が返り、エラーは出さない
+      expect(s.errorMessage).toBeNull();
+      expect(s.poseAngles.size).toBeGreaterThan(0);
+      // どの折り目がどれだけ動いたかを知らせる
+      expect(s.releasedPins.length).toBeGreaterThan(0);
+      expect(s.poseWarnings.some((w) => w.includes("固定した折り目"))).toBe(true);
+    }
+  });
+
+  it("固定が外れた知らせに内部用語を出さない", async () => {
+    mockSolverThatCannotHold([7]);
+    const view = makeManyHingeView(670, 4);
+    setupPinned(view, [5, 6, 7, 8], [[7, 45]]);
+
+    useAppStore.getState().setDriverAngle(5, -40);
+    await vi.waitFor(() => expect(poseCalls().length).toBeGreaterThan(0));
+    await useAppStore.getState().finishAngleIntent();
+
+    const notice = useAppStore
+      .getState()
+      .poseWarnings.find((w) => w.includes("固定した折り目"));
+    expect(notice).toBeDefined();
+    for (const word of [
+      "hard",
+      "preferred",
+      "ソルバー",
+      "拘束",
+      "収束",
+      "残差",
+    ]) {
+      expect(notice!.toLowerCase()).not.toContain(word.toLowerCase());
+    }
+    expect(notice).toContain("折り目 #7");
+  });
+
+  it("途中の角度の固定を、折り切った折り目より先に外す", async () => {
+    // 固定を1本外せば折れる形。途中の角度(45度)と折り切り(180度)のどちらを
+    // 外しても折れるが、折り切りを開くと紙の重なりが乱れるので後回しにする。
+    vi.mocked(ipc.poseSolve).mockImplementation(async (hard, keep) => {
+      const held = new Set(hard.map((d) => d.hinge));
+      const failing = held.has(6) && held.has(7);
+      const angles: Record<string, number> = {};
+      for (const d of hard) angles[String(d.hinge)] = d.target_angle_deg;
+      for (const d of keep ?? [])
+        angles[String(d.hinge)] = d.target_angle_deg + 12;
+      return {
+        ...makeSolveResult(angles),
+        converged: !failing,
+        closure_rms: failing ? 0.3 : 1e-15,
+      };
+    });
+    const view = makeManyHingeView(680, 4);
+    // 折り目6は折り切り(180度)、折り目7は途中の角度(45度)。どちらも固定。
+    setupPinned(view, [5, 6, 7, 8], [
+      [6, 180],
+      [7, 45],
+    ]);
+
+    useAppStore.getState().setDriverAngle(5, -40);
+    await vi.waitFor(() => expect(poseCalls().length).toBeGreaterThan(0));
+    await useAppStore.getState().finishAngleIntent();
+
+    expect(useAppStore.getState().releasedPinHinges).toEqual([7]);
+  });
+
+  it("固定の付け外しは「元に戻す」で戻る", async () => {
+    vi.mocked(ipc.poseSolve).mockResolvedValue({
+      ...makeSolveResult(),
+      closure_rms: 1e-15,
+    });
+    const view = makeManyHingeView(690, 3);
+    setupPinned(view, [5, 6, 7], []);
+    useAppStore.setState({ poseAngles: new Map([[6, 45]]) });
+
+    useAppStore.getState().togglePinnedFold(6);
+    await vi.waitFor(() =>
+      expect(useAppStore.getState().pinnedFolds.get(6)).toBe(45),
+    );
+
+    await useAppStore.getState().undo();
+    expect(useAppStore.getState().pinnedFolds.has(6)).toBe(false);
+
+    await useAppStore.getState().redo();
+    expect(useAppStore.getState().pinnedFolds.get(6)).toBe(45);
+  });
+
+  it("折り線でなくなった辺の固定は捨てる", async () => {
+    vi.mocked(ipc.poseSolve).mockResolvedValue(makeSolveResult());
+    const view = makeManyHingeView(695, 3);
+    setupPinned(view, [5, 6, 7], [[6, 45]]);
+    // 辺6が補助線になり、折り線ではなくなった
+    const next = makeManyHingeView(696, 3);
+    next.doc.cp.edges = next.doc.cp.edges.filter((e) => e.id !== 6);
+    vi.mocked(ipc.editApply).mockResolvedValueOnce(next);
+
+    await useAppStore.getState().applyEdit({
+      type: "SetEdgeKind",
+      ids: [6],
+      kind: "Aux",
+    });
+
+    expect(useAppStore.getState().pinnedFolds.has(6)).toBe(false);
+  });
+});
+
+describe("折り角度の固定(どうしても折れないとき)", () => {
+  it("固定を全部ゆるめた形を出すときも、動いた固定を知らせる", async () => {
+    // 実機で見つけた抜け: 何本外しても折れず、固定を全部ゆるめた形を表示したとき、
+    // 固定した折り目が -180° から 100° へ動いたのに何も知らせていなかった。
+    // 「外した」折り目だけでなく、表示している形で実際に動いた固定を知らせる。
+    vi.mocked(ipc.poseSolve).mockImplementation(async (hard, keep) => {
+      // 動かしている折り目(5)以外を1本でも動かさない側に入れると折れない。
+      const held = hard.filter((d) => d.hinge !== 5);
+      const angles: Record<string, number> = {};
+      for (const d of hard) angles[String(d.hinge)] = d.target_angle_deg;
+      for (const d of keep ?? []) angles[String(d.hinge)] = 100;
+      return {
+        ...makeSolveResult(angles),
+        converged: held.length === 0,
+        closure_rms: held.length === 0 ? 1e-15 : 0.3,
+      };
+    });
+    const view = makeManyHingeView(700, 5);
+    setupPinned(view, [5, 6, 7, 8, 9], [
+      [6, -180],
+      [7, -180],
+    ]);
+
+    useAppStore.getState().setDriverAngle(5, 100);
+    await vi.waitFor(() => expect(poseCalls().length).toBeGreaterThan(0));
+    await useAppStore.getState().finishAngleIntent();
+
+    const s = useAppStore.getState();
+    // 表示している形では固定した2本とも100度へ動いている
+    expect(s.poseAngles.get(6)).toBe(100);
+    expect(s.poseAngles.get(7)).toBe(100);
+    // その2本を知らせる(黙って動かさない)
+    expect(s.releasedPins.map((pin) => pin.hinge).sort()).toEqual([6, 7]);
+    const notice = s.poseWarnings.find((w) => w.includes("固定した折り目"));
+    expect(notice).toBeDefined();
+    expect(notice).toContain("折り目 #6");
+    expect(notice).toContain("折り目 #7");
+    // 操作は止まらない
+    expect(s.errorMessage).toBeNull();
   });
 });

@@ -525,3 +525,37 @@ describe("CpEditor 手順時点の展開図", () => {
     });
   });
 });
+
+describe("CpEditor 固定した折り目の印", () => {
+  it("固定した折り目と、固定が外れた折り目を描画へ渡す", async () => {
+    // 選んでいない折り目にも印を出すので、選択は空のままにする。
+    useAppStore.setState({
+      pendingFoldThrough: null,
+      suspectHinges: [],
+      selection: { edgeIds: [], vertexIds: [] },
+      pinnedFolds: new Map([
+        [5, 45],
+        [7, 180],
+      ]),
+      releasedPins: [{ hinge: 7, pinned: 180, actual: 147, deviation: 33 }],
+    });
+    const fitRef = { current: null } as React.RefObject<(() => void) | null>;
+    render(<CpEditor fitRef={fitRef} />);
+
+    await waitFor(() => {
+      const overlay = held.overlay as RenderOverlay | null;
+      expect(overlay?.pinnedHinges).toEqual([5, 7]);
+      expect(overlay?.releasedPinHinges).toEqual([7]);
+    });
+
+    act(() =>
+      useAppStore.setState({ pinnedFolds: new Map(), releasedPins: [] }),
+    );
+
+    await waitFor(() => {
+      const overlay = held.overlay as RenderOverlay | null;
+      expect(overlay?.pinnedHinges).toEqual([]);
+      expect(overlay?.releasedPinHinges).toEqual([]);
+    });
+  });
+});

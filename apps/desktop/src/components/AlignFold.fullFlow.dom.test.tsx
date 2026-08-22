@@ -344,6 +344,7 @@ function fixtureView(fixture: FoldFixture): DocumentView {
     violations: [],
     frame: fixture.frame,
     skipped: [],
+    contact_detected: false,
   };
 }
 
@@ -387,6 +388,7 @@ function foldedView(fixture: FoldFixture, operation: FoldThroughOp): DocumentVie
     violations: [],
     frame: finalFrame(operation.direction),
     skipped: [],
+    contact_detected: false,
   };
 }
 

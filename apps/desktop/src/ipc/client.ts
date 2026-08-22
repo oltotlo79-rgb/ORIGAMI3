@@ -4,11 +4,13 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  CreasePattern,
   DocumentView,
   Driver,
   EditOp,
   ExportKind,
   ExportOptions,
+  FoldStep,
   Paper,
   ProposalCandidate,
   RecoveryInfo,
@@ -99,13 +101,27 @@ export function recoveryRestore(accept: boolean): Promise<DocumentView | null> {
   return invoke("recovery_restore", { accept });
 }
 
-/** 骨格から展開図の候補を作る(最大4件)。seedを変えると別の配置が出る */
+/** 骨格から展開図の候補を作る(最大4件)。seedを変えると別の配置が出る。
+ * 候補ごとに折り方も探して付ける */
 export function proposalGenerate(
   skeleton: Skeleton,
   paper: Paper,
   seed: number,
 ): Promise<ProposalCandidate[]> {
-  return invoke("proposal_generate", { skeleton, paper, seed });
+  return invoke("proposal_generate", {
+    skeleton,
+    paper,
+    seed,
+    withFoldPlan: true,
+  });
+}
+
+/** 提案の展開図と折り手順をまとめて入れる。元に戻す1回で入れる前へ戻る */
+export function proposalApply(
+  cp: CreasePattern,
+  steps: FoldStep[],
+): Promise<DocumentView> {
+  return invoke("proposal_apply", { cp, steps });
 }
 
 /** 展開図を画像ファイルとして保存する(EXP-001 / EXP-002) */

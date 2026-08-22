@@ -81,6 +81,7 @@ function viewOf(doc: Document): DocumentView {
     violations: [],
     frame: null,
     skipped: [],
+    contact_detected: false,
   };
 }
 
@@ -142,6 +143,7 @@ function interactionContext(options: {
     frame3d: null,
     construct: { ...DEFAULT_CONSTRUCT, ...options.construct },
     curve: { ...DEFAULT_CURVE, ...options.curve },
+    measureMode: "angle",
     wheelBehavior: "scroll",
     violations: [],
     mirrorAxis: null,
@@ -159,6 +161,8 @@ function interactionContext(options: {
     setSelection: vi.fn(),
     beginFoldDraft: vi.fn(),
     pickAlignTarget: vi.fn(),
+    pickMeasureEdge: vi.fn(),
+    pickMeasurePoint: vi.fn(),
   };
   return { ctx, pending };
 }

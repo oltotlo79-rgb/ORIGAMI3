@@ -10,7 +10,13 @@ import type { Document, EdgeKind, EditOp, Face, Frame3D, Vec2 } from "../../lib/
 import { ALIGN_STEPS, type AlignMode, type AlignTarget } from "../../lib/alignFold";
 import type { WheelBehavior } from "../../lib/displayPrefs";
 import type { MirrorLine } from "../../lib/mirror";
-import type { AlignCpPick, Selection, ToolId } from "../../store/appStore";
+import type {
+  AlignCpPick,
+  MeasureMode,
+  MeasurePointPick,
+  Selection,
+  ToolId,
+} from "../../store/appStore";
 import { screenToWorld, type ViewTransform } from "./renderer";
 import {
   paperExtent,
@@ -184,6 +190,8 @@ export interface InteractionCtx {
   construct: ConstructOptions;
   /** 曲線の折り目の選び方(直線/曲線・描き方・分割・曲がるための線) */
   curve: CurveOptions;
+  /** 測る道具でいま選んでいるやり方。 */
+  measureMode: MeasureMode;
   /** 修飾キーを押していないときのホイール動作(端末ごとの設定)。 */
   wheelBehavior: WheelBehavior;
   /** 平らに畳めない点のID(Rust側の判定結果)。橙色の丸で知らせる */
@@ -208,6 +216,8 @@ export interface InteractionCtx {
     cursor?: Vec2 | null,
     cpPick?: AlignCpPick | null,
   ) => void;
+  pickMeasureEdge: (edgeId: number) => void;
+  pickMeasurePoint: (pick: Omit<MeasurePointPick, "kind">) => void;
 }
 
 /** 線ツール → 引く線の種類(それ以外のツールは未定義) */
@@ -706,6 +716,24 @@ export function onMouseDown(
   const snapRadius = SNAP_RADIUS_PX / ctx.view.scale;
   const pickTol = PICK_TOLERANCE_PX / ctx.view.scale;
 
+  if (ctx.tool === "measure") {
+    if (ctx.measureMode === "distance") {
+      if (!paperWorld) return;
+      const snapped = snap(ctx.doc, paperWorld, snapRadius);
+      // 測る点の吸着先は、利用者が指定した頂点・交点・方眼だけに限る。
+      // 線上への吸着しか無い場所では、押した紙上の点そのものを使う。
+      const accepted = snapped?.kind === "edge" ? null : snapped;
+      const cp = accepted?.pos ?? paperWorld;
+      const vertexId =
+        accepted?.kind === "vertex" ? pickVertex(ctx.doc, cp, 1e-12) : null;
+      ctx.pickMeasurePoint({ cp, faceId: null, vertexId });
+    } else {
+      const edgeId = pickEdge(ctx.doc, world, pickTol);
+      if (edgeId !== null) ctx.pickMeasureEdge(edgeId);
+    }
+    return;
+  }
+
   const kind = TOOL_KIND[ctx.tool];
   if (kind && ctx.curve.enabled) {
     // 曲線モード(CPE-011): 始点・終点・形を決める点を順にクリックする
@@ -849,8 +877,13 @@ export function onMouseMove(ctx: InteractionCtx, screen: Vec2, shiftHeld?: boole
   const straightKind = TOOL_KIND[ctx.tool];
   if ((straightKind && !ctx.curve.enabled) || ctx.tool === "fold") {
     refreshLineEndpoint(ctx, world, SNAP_RADIUS_PX / ctx.view.scale);
-  } else if (previewKind(ctx.tool) || ctx.tool === "construct") {
-    ctx.state.hoverSnap = snap(ctx.doc, world, SNAP_RADIUS_PX / ctx.view.scale);
+  } else if (
+    previewKind(ctx.tool) ||
+    ctx.tool === "construct" ||
+    (ctx.tool === "measure" && ctx.measureMode === "distance")
+  ) {
+    const candidate = snap(ctx.doc, world, SNAP_RADIUS_PX / ctx.view.scale);
+    ctx.state.hoverSnap = candidate?.kind === "edge" ? null : candidate;
     ctx.state.directionSnap = null;
   } else {
     ctx.state.hoverSnap = null;
@@ -948,7 +981,12 @@ export function isSpaceKey(key: string): boolean {
 export function cursorFor(tool: ToolId, state: EphemeralState): string {
   if (state.panLast) return "grabbing";
   if (state.spaceHeld) return "grab";
-  if (previewKind(tool) !== undefined || tool === "delete" || tool === "construct") {
+  if (
+    previewKind(tool) !== undefined ||
+    tool === "delete" ||
+    tool === "construct" ||
+    tool === "measure"
+  ) {
     return "crosshair";
   }
   return "default";
