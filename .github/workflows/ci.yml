@@ -75,6 +75,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -106,3 +113,17 @@ jobs:
 
       - name: Test the exact endpoint surface order in release mode
         run: cargo test --release -p desktop --lib surface_order_exact_endpoint_is_rank_stable_for_previous_19 -- --nocapture
+
+      - name: Test crane soft-body performance in release mode
+        run: cargo test --release -p ori3-soft --test soft_crane -- --nocapture
+
+      - name: Test packing throughput performance in release mode
+        run: cargo test --release -p ori3-propose --test perf_packing -- --nocapture
+
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Test symmetry performance in production mode
+        working-directory: apps/desktop
+        run: npm run test -- --maxWorkers=1 --mode=production src/lib/symmetry.test.ts

@@ -84,10 +84,10 @@ if (
   exported.chapters.length !== 13 ||
   Object.keys(exported.diagrams).length !== 6 ||
   figureCount !== 6 ||
-  screenshotCount !== 35 ||
+  screenshotCount !== 39 ||
   derivedImageCount !== 7 ||
-  screenImageCount !== 34 ||
-  referencedImages.length !== 41
+  screenImageCount !== 38 ||
+  referencedImages.length !== 45
 ) {
   throw new Error(
     `PDF用内容の件数が不正です: ${exported.chapters.length}章 / ${Object.keys(exported.diagrams).length} SVG図 / ${figureCount} figure / ${screenshotCount} screenshot / ${derivedImageCount}派生PNG / ${screenImageCount}既存PNG`,
