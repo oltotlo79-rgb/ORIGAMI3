@@ -942,6 +942,16 @@ impl FoldSession {
         {
             return Err(format!("packet技法が指定どおりに折れなかった: {blocking}"));
         }
+        // 折り上がった形で紙が裂けている手は、実際には折れない。ここで落とす。
+        let torn = torn_creases(&cp, &result.state);
+        if !torn.is_empty() {
+            return Err(format!(
+                "packet技法の折り上がりで紙が裂ける(折り目 {}本、いちばん離れた距離 {:.3e}): {:?}",
+                torn.len(),
+                torn.iter().map(|&(_, gap)| gap).fold(0.0f64, f64::max),
+                torn.iter().map(|&(edge, _)| edge).collect::<Vec<_>>(),
+            ));
+        }
         Ok((cp, result.step))
     }
 
@@ -2538,6 +2548,88 @@ fn affected_lines(fold_lines: &[FoldLine], ids: &[usize]) -> Vec<usize> {
 /// 鳥の基本形・深さ2の花弁折り2件(面 14 → 15)は、3姿勢すべてで飛ばした手順0・
 /// 警告0だったのに、この1行だけで落ちていた。
 /// 方向付き単線は、鳥の基本形の最初の状態で**49候補中20件(41%)**が同じ理由で落ちていた。
+/// 折り目の両側の紙が「同じ場所にある」とみなす距離(紙の長辺=1)。
+///
+/// `ori3-layers` が技法の中で使う `JOIN_EPS` と同じ値である。
+///
+/// 実測(2026-08-23、鳥の基本形と折り鶴、花弁折り1080回。
+/// `scratchpad/flat-endpoint-converge-report.md` §11.4):
+///
+/// - 裂けていない手では、両端点のずれは丸め誤差の範囲(`1e-16` 台)だった
+/// - 裂けている手のずれは **最小 0.03108 / 中央 0.2242 / 最大 1.275**
+///
+/// つまり「裂けている」と「裂けていない」のあいだは13桁以上あいており、
+/// この境目 `1e-6` は**実測の最小の裂けの3万分の1**、
+/// **丸め誤差の1e10倍**である。どちらの側にも十分な余裕がある。
+const JOINED_TOLERANCE: f64 = 1e-6;
+
+/// 技法が作った平らな形で、**両側の紙が離れてしまった折り目**とその距離(辺ID昇順)。
+///
+/// # なぜ候補の段階で見るのか
+///
+/// 紙が裂ける手は、実際には折れない。`ori3-layers` の技法は
+/// 「止めずに警告する」(`CLAUDE.md` §8)ので裂けても手順を返すが、
+/// **裂けている折り目には山谷も角度も決められない**ため、
+/// その折り目は手順に1本も記録されない
+/// (`crates/ori3-layers/src/flat_motion.rs::settle_creases` の `joined` の判定)。
+/// 記録が欠けた手順は「平らに畳める形」を指さないので、
+/// `replay` は折り上がり(`t = 1.00`)で必ず収束しない。
+///
+/// 実測(2026-08-23、`WITH_EXTRA_CANDIDATES = true`、花弁折り1080回):
+/// **裂けが無かった40回はすべて「開く」を `0°` として記録し、
+/// 裂けた1040回は1本も記録しなかった。例外0件。**
+/// 以前はこの1040回を、21姿勢すべて再生したあげく
+/// いちばん遠い `t = 1.00` の収束判定で捨てていた。
+///
+/// # 数え方
+///
+/// 平らに畳んだ形では、折り目を挟む2つの面は**その折り目の両端点を同じ場所へ写す**。
+/// 面ごとの置き方(`FlatState::placements`)で両端点を写し、
+/// 離れた距離が [`JOINED_TOLERANCE`] を超えたら裂けているとみなす。
+/// 山谷や角度の記録は一切見ない(**文面ではなく、測った形で決める**)。
+fn torn_creases(cp: &CreasePattern, state: &FlatState) -> Vec<(EdgeId, f64)> {
+    let faces = extract_faces(cp);
+    let positions: BTreeMap<VertexId, glam::DVec2> = cp
+        .vertices
+        .iter()
+        .map(|vertex| (vertex.id, glam::DVec2::from(vertex.pos)))
+        .collect();
+    let mut sharing: BTreeMap<EdgeId, Vec<FaceId>> = BTreeMap::new();
+    for face in &faces {
+        for &edge in &face.edges {
+            sharing.entry(edge).or_default().push(face.id);
+        }
+    }
+    let mut torn: Vec<(EdgeId, f64)> = Vec::new();
+    for (edge_id, owners) in sharing {
+        if owners.len() != 2 {
+            continue;
+        }
+        let Some(edge) = cp.edges.iter().find(|edge| edge.id == edge_id) else {
+            continue;
+        };
+        if !matches!(edge.kind, EdgeKind::Mountain | EdgeKind::Valley) {
+            continue;
+        }
+        let (Some(&v0), Some(&v1)) = (positions.get(&edge.v0), positions.get(&edge.v1)) else {
+            continue;
+        };
+        let (Some(&a), Some(&b)) = (
+            state.placements.get(&owners[0]),
+            state.placements.get(&owners[1]),
+        ) else {
+            continue;
+        };
+        let gap = (a.apply(v0) - b.apply(v0))
+            .length()
+            .max((a.apply(v1) - b.apply(v1)).length());
+        if gap > JOINED_TOLERANCE {
+            torn.push((edge_id, gap));
+        }
+    }
+    torn
+}
+
 fn face_count_problem(before: usize, after: usize) -> Option<PoseProblem> {
     (after < before).then_some(PoseProblem::FaceLost {
         expected: before,
@@ -3069,11 +3161,209 @@ mod tests {
     use ori3_model::{Document, DriverLine, EdgeKind, FaceId, FoldStep, Paper, TechniqueKind};
 
     use super::{
-        CandidateKey, FoldSession, MAX_LINES, PacketEdgeRelation, PoseProblem, PoseScan,
-        activated_edges, closed_effect, coincident_line_components, coincident_line_sets,
-        exposed_packets, exposed_packets_until, face_count_problem, folded_bit,
-        folded_bit_is_set, resolve_driver_edges, saved_angle_targets,
+        CandidateKey, FoldSession, MAX_LINES, PacketEdgeRelation, PacketTechnique, PoseProblem,
+        PoseScan, activated_edges, closed_effect, coincident_line_components,
+        coincident_line_sets, exposed_packets, exposed_packets_until, face_count_problem,
+        folded_bit, folded_bit_is_set, resolve_driver_edges, saved_angle_targets, torn_creases,
     };
+
+    use std::collections::BTreeSet;
+    use std::sync::OnceLock;
+
+    use ori3_cp::{Face, extract_faces};
+    use ori3_layers::flat_state::FlatState;
+    use ori3_layers::replay::flat_state_at;
+    use ori3_layers::{
+        FoldDirection, FoldThroughInput, TechniqueInput, fold_through, petal, squash,
+    };
+
+    /// 予備基本形(正方形を半分に2回折り、つぶし折りを2回)。
+    ///
+    /// 実際の紙で花弁折りの土台に使う形で、
+    /// `crates/ori3-layers/tests/flat_endpoint.rs` が作る参照の鳥の基本形の
+    /// 前半4手と同じものである。
+    fn preliminary_base() -> (Document, Vec<Face>, FlatState) {
+        let mut document = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        for (line, keep_side_point) in [
+            ([[0.0, 0.5], [1.0, 0.5]], [0.5, 0.25]),
+            ([[0.5, 0.0], [0.5, 0.5]], [0.25, 0.25]),
+        ] {
+            let faces = extract_faces(&document.cp);
+            let up_to = document.sequence.len();
+            let (state, _) = flat_state_at(&document, &faces, up_to).expect("平らな状態から折る");
+            let mut cp = document.cp.clone();
+            let result = fold_through(
+                &mut cp,
+                &faces,
+                &state,
+                &FoldThroughInput {
+                    line,
+                    keep_side_point,
+                    target_layers: None,
+                    direction: FoldDirection::Up,
+                },
+            )
+            .expect("半分に折れる");
+            let mut step = result.step;
+            step.id = u32::try_from(up_to).expect("手順番号");
+            document.cp = cp;
+            document.sequence.push(step);
+        }
+        for (line, reference_point) in [
+            ([[0.5, 0.0], [0.5, 1.0]], [0.5, 0.1]),
+            ([[0.0, 0.5], [1.0, 0.5]], [0.1, 0.5]),
+        ] {
+            let faces = extract_faces(&document.cp);
+            let up_to = document.sequence.len();
+            let (state, _) = flat_state_at(&document, &faces, up_to).expect("平らな状態から折る");
+            let mut cp = document.cp.clone();
+            let result = squash(
+                &mut cp,
+                &faces,
+                &state,
+                &TechniqueInput {
+                    flap: vec![state.order[0]],
+                    line,
+                    reference_point,
+                    open_to_back: None,
+                    polygon: None,
+                    center: None,
+                },
+            )
+            .expect("つぶし折りできる");
+            let mut step = result.step;
+            step.id = u32::try_from(up_to).expect("手順番号");
+            document.cp = cp;
+            document.sequence.push(step);
+        }
+        let faces = extract_faces(&document.cp);
+        let (state, _) =
+            flat_state_at(&document, &faces, document.sequence.len()).expect("平らに畳める");
+        (document, faces, state)
+    }
+
+    /// この手が `0°`(=開く)として記録した折り線の本数。
+    fn opened_lines(step: &FoldStep) -> usize {
+        step.drivers
+            .iter()
+            .filter(|driver| driver.target_angle_deg.abs() < 90.0)
+            .count()
+    }
+
+    /// 実際に折れる花弁折りは紙を裂かず、開く袋の口を `0°` として記録する。
+    ///
+    /// 裂けを理由に候補を落とす仕組み([`torn_creases`])が、
+    /// **正しい花弁折りまで落としてしまわない**ことを固定する。
+    #[test]
+    fn a_petal_fold_that_lies_flat_records_the_pocket_it_opens() {
+        let (document, faces, state) = preliminary_base();
+        let mut cp = document.cp.clone();
+        let result = petal(
+            &mut cp,
+            &faces,
+            &state,
+            &TechniqueInput {
+                flap: vec![*state.order.last().expect("最前面")],
+                line: [[0.0, 1.0], [0.5, 0.5]],
+                reference_point: [0.0, 1.0],
+                open_to_back: None,
+                polygon: None,
+                center: None,
+            },
+        )
+        .expect("参照どおりの花弁折り");
+        let torn = torn_creases(&cp, &result.state);
+        assert!(
+            torn.is_empty(),
+            "折れる花弁折りを「紙が裂ける」と数えている: {torn:?}"
+        );
+        assert_eq!(
+            result.step.drivers.len(),
+            7,
+            "花弁折りの折り線(斜め2本 + ちょうつがい + 新しく引く線 + 開く袋の口2本)"
+        );
+        assert_eq!(
+            opened_lines(&result.step),
+            2,
+            "開く袋の口2本を0°として記録する(実測 {:?})",
+            result
+                .step
+                .drivers
+                .iter()
+                .map(|driver| driver.target_angle_deg)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// 紙が裂ける技法の手は、姿勢を1つも見ないうちに候補から落とす。
+    ///
+    /// # なぜこの検査が要るか
+    ///
+    /// 裂けている折り目には山谷も角度も決められないので、
+    /// `crates/ori3-layers/src/flat_motion.rs::settle_creases` はその折り目を
+    /// **1本も手順へ記録しない**。記録の欠けた手順は平らに畳める形を指さないため、
+    /// `replay` は折り上がり(`t = 1.00`)で必ず収束しない。
+    ///
+    /// 以前はその収束判定という**いちばん遠い場所**で気づいていた。実測(2026-08-23、
+    /// `scratchpad/flat-endpoint-converge-report.md` §11.4)では、探索が作る
+    /// 花弁折り1080回のうち **1040回が裂けており**、
+    /// **裂けなかった40回はすべて開く動きを `0°` として記録していた(例外0件)**。
+    ///
+    /// # 標本の作り方
+    ///
+    /// 中心線は参照と同じ `[[0,1],[0.5,0.5]]` のまま、**先端の位置だけを
+    /// 中心線の反対の端 `[0.5, 0.5]` にする**と、持ち上げる先が紙の外を向くので裂ける。
+    /// 実測: 裂けた折り目 **2本**、いちばん離れた距離 **1.0**(紙の長辺=1)。
+    /// 判定の境目 `0.8` は実測の約8割(`CLAUDE.md` §10.7.9)で、
+    /// 裂けていない側の実測(`1e-16` 台)とは15桁以上離れている。
+    #[test]
+    fn a_packet_technique_that_tears_the_paper_is_rejected_before_the_pose_scan() {
+        let (document, faces, state) = preliminary_base();
+        let input = TechniqueInput {
+            flap: vec![state.order[0]],
+            line: [[0.0, 1.0], [0.5, 0.5]],
+            reference_point: [0.5, 0.5],
+            open_to_back: None,
+            polygon: None,
+            center: None,
+        };
+
+        // 技法そのものは止めずに手順を返す(`CLAUDE.md` §8「止めずに警告する」)。
+        let mut cp = document.cp.clone();
+        let result = petal(&mut cp, &faces, &state, &input).expect("技法は止めずに続ける");
+        let torn = torn_creases(&cp, &result.state);
+        assert_eq!(torn.len(), 2, "裂けた折り目 {torn:?}");
+        let widest = torn.iter().map(|&(_, gap)| gap).fold(0.0f64, f64::max);
+        assert!(widest > 0.8, "裂けた距離 {widest:.4e}(紙の長辺は1)");
+        assert_eq!(
+            opened_lines(&result.step),
+            0,
+            "裂けている折り目には角度を決められないので、開く動きが1本も記録されない"
+        );
+
+        // 探索は、姿勢を1つも見ないうちにこの手を落とす。
+        let mut session = FoldSession {
+            document,
+            faces,
+            state,
+            lines: Vec::new(),
+            fold_lines: Vec::new(),
+            folded: 0,
+            closed: BTreeSet::new(),
+            network_candidates: OnceLock::new(),
+        };
+        session.rebuild();
+        let error = session
+            .apply_packet_technique(PacketTechnique::Petal, input)
+            .expect_err("紙が裂ける手は候補にしない");
+        assert!(
+            error.contains("紙が裂ける"),
+            "落とした理由が「紙が裂ける」でない: {error}"
+        );
+    }
 
     #[test]
     fn inverted_pure_close_flat_pose_is_a_directional_preparation() {

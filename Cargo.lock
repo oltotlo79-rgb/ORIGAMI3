@@ -2534,6 +2534,7 @@ dependencies = [
 name = "ori3-propose"
 version = "0.4.5"
 dependencies = [
+ "glam",
  "ori3-cp",
  "ori3-layers",
  "ori3-model",
