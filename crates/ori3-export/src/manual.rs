@@ -30,6 +30,10 @@ const TOC_FIRST_ITEM_Y: f64 = 61.0;
 const TOC_ITEM_STEP_Y: f64 = 12.5;
 const DIAGRAM_LONG_SIDE_PX: u32 = 1800;
 const MISSING_CSS_VARIABLE_COLOR: &str = "#27213d";
+const TROUBLESHOOTING_FIGURE_TITLE: &str = "警告時に確認する表示と操作";
+const TROUBLESHOOTING_FIGURE_ALT: &str =
+    "実画面の「警告 1」、詳しい警告文、「元に戻す」「やり直し」ボタン";
+const COMPACT_OPERATION_HELP_CAPTION: &str = "各区画を狭くした画面。幅が足りない区画では、詳しい説明ボタンが▼だけになり、要点1行は残ります。ここでは展開図の案内が▼だけになり、3Dの「詳しい3D操作方法 ▼」には「モードの説明とマウス操作の割り当てを開きます」という吹き出しが出ています。";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -216,7 +220,7 @@ impl BookLayout {
         self.pages.push(Page::content(&self.chapter_label));
         self.y = CONTENT_TOP;
         self.raw(&format!(
-            "  <text x=\"{LEFT}\" y=\"31\" font-family=\"{FONT}\" font-size=\"4.2\" font-weight=\"700\" fill=\"#27213d\">{}（続き）</text>\n\
+            "  <text x=\"{LEFT}\" y=\"31\" font-family=\"{FONT}\" font-size=\"4.2\" font-weight=\"700\" fill=\"#27213d\">{}</text>\n\
                <path d=\"M{LEFT} 35H{RIGHT}\" stroke=\"#7040c9\" stroke-width=\"0.8\"/>\n",
             esc(&self.chapter_label)
         ));
@@ -569,7 +573,9 @@ fn manual_pages_pdf(manual: &ManualPages) -> Result<Vec<u8>, String> {
         );
     }
     let conversion = svg2pdf::ConversionOptions {
-        embed_text: false,
+        // 文字を輪郭線へ変換すると、日本語本文の同じ字形がページごとに大量の
+        // パスとして重複する。使用字形だけを字体へ埋め込み、検索・コピーも保つ。
+        embed_text: true,
         ..Default::default()
     };
 
@@ -713,7 +719,8 @@ fn manual_pages_pdf(manual: &ManualPages) -> Result<Vec<u8>, String> {
 
         for (image_id, image) in image_ids.into_iter().zip(images) {
             let rgb = composite_manual_rgba_over_white(&image.pixels);
-            let compressed = compress_to_vec_zlib(&rgb, 6);
+            // 画素は変えず、PDFへ格納するときだけ最大圧縮する。
+            let compressed = compress_to_vec_zlib(&rgb, 9);
             let mut x_object = pdf.image_xobject(image_id, &compressed);
             x_object.filter(Filter::FlateDecode);
             x_object.width(image.pixel_width as i32);
@@ -789,7 +796,7 @@ fn validate_manual_raster_images(images: &[RasterPlacement]) -> Result<(), Strin
 
 fn composite_manual_rgba_over_white(rgba: &[u8]) -> Vec<u8> {
     let mut rgb = Vec::with_capacity(rgba.len() / 4 * 3);
-    for pixel in rgba.chunks_exact(4) {
+    for pixel in rgba.as_chunks::<4>().0 {
         let white = 255 - pixel[3];
         rgb.push(pixel[0].saturating_add(white));
         rgb.push(pixel[1].saturating_add(white));
@@ -805,7 +812,12 @@ fn manual_svg_pages(json: &str, assets_dir: &Path) -> Result<ManualPages, String
 
     let mut raster_diagrams = HashMap::with_capacity(content.diagrams.len());
     for (id, diagram) in &content.diagrams {
-        raster_diagrams.insert(id.clone(), rasterize_diagram(diagram)?);
+        let raster = if id == "troubleshooting-flow" {
+            troubleshooting_screen_diagram(diagram, assets_dir)?
+        } else {
+            rasterize_diagram(diagram)?
+        };
+        raster_diagrams.insert(id.clone(), raster);
     }
 
     let mut layout = BookLayout::new();
@@ -838,6 +850,11 @@ fn manual_svg_pages(json: &str, assets_dir: &Path) -> Result<ManualPages, String
                 }
                 Block::Screenshot { image, caption } => {
                     if let Some(screenshot) = screenshot_data(assets_dir, image)? {
+                        let caption = if image == "screen-compact-operation-help.png" {
+                            COMPACT_OPERATION_HELP_CAPTION
+                        } else {
+                            caption
+                        };
                         layout.screenshot(image, Some(caption), &screenshot);
                     }
                 }
@@ -982,6 +999,9 @@ fn rasterize_diagram(diagram: &Diagram) -> Result<RasterDiagram, String> {
     // usvgはCSSカスタムプロパティを解決しないため、そのまま渡すとfillは黒、
     // strokeは線なしになる。共有SVGは変えず、PDF用の一時文字列だけ予備値へ直す。
     let printable_svg = resolve_svg_css_variable_fallbacks(&diagram.svg);
+    // marker-end付きの1本のpathへ複数の絶対サブパスを入れると、PDF描画では
+    // 最後のサブパスにしか矢じりが出ない。矢印ごとのpathへ正規化してから描く。
+    let printable_svg = split_marker_end_subpaths(&printable_svg);
     let tree = usvg::Tree::from_str(&printable_svg, &options)
         .map_err(|e| format!("図解「{}」のSVGを読めませんでした: {e}", diagram.id))?;
     let size = tree.size();
@@ -1007,6 +1027,336 @@ fn rasterize_diagram(diagram: &Diagram) -> Result<RasterDiagram, String> {
         pixel_width,
         pixel_height,
         aspect_ratio: f64::from(width / height),
+    })
+}
+
+/// `marker-end`付きのpathに絶対座標のサブパスが複数ある場合、各サブパスを
+/// 独立したpathへ分ける。ブラウザーとPDF変換器で矢じりの数が変わらない形にする。
+fn split_marker_end_subpaths(svg: &str) -> String {
+    let mut output = String::with_capacity(svg.len());
+    let mut remaining = svg;
+
+    while let Some(relative_start) = remaining.find("<path") {
+        output.push_str(&remaining[..relative_start]);
+        let path_and_rest = &remaining[relative_start..];
+        let Some(relative_end) = path_and_rest.find('>') else {
+            output.push_str(path_and_rest);
+            return output;
+        };
+        let element = &path_and_rest[..=relative_end];
+        if let Some(split) = split_marker_end_path_element(element) {
+            output.push_str(&split);
+        } else {
+            output.push_str(element);
+        }
+        remaining = &path_and_rest[relative_end + 1..];
+    }
+
+    output.push_str(remaining);
+    output
+}
+
+fn split_marker_end_path_element(element: &str) -> Option<String> {
+    if !element.contains("marker-end=") {
+        return None;
+    }
+    let (value_start, value_end) = quoted_attribute_value_range(element, "d")?;
+    let data = &element[value_start..value_end];
+    let starts: Vec<_> = data
+        .char_indices()
+        .filter_map(|(index, character)| (character == 'M').then_some(index))
+        .collect();
+    if starts.len() < 2 {
+        return None;
+    }
+
+    let mut split = String::with_capacity(element.len() * starts.len());
+    for (index, start) in starts.iter().copied().enumerate() {
+        let end = starts.get(index + 1).copied().unwrap_or(data.len());
+        let subpath = data[start..end].trim();
+        if subpath.is_empty() {
+            return None;
+        }
+        if index > 0 {
+            split.push('\n');
+        }
+        split.push_str(&element[..value_start]);
+        split.push_str(subpath);
+        split.push_str(&element[value_end..]);
+    }
+    Some(split)
+}
+
+fn quoted_attribute_value_range(element: &str, name: &str) -> Option<(usize, usize)> {
+    let needle = format!("{name}=");
+    let mut search_start = 0;
+    while let Some(relative) = element[search_start..].find(&needle) {
+        let key_start = search_start + relative;
+        let valid_boundary =
+            key_start > 0 && element.as_bytes()[key_start - 1].is_ascii_whitespace();
+        let quote_index = key_start + needle.len();
+        let quote = element.as_bytes().get(quote_index).copied()?;
+        if valid_boundary && matches!(quote, b'\'' | b'"') {
+            let value_start = quote_index + 1;
+            let relative_end = element[value_start..].find(char::from(quote))?;
+            return Some((value_start, value_start + relative_end));
+        }
+        search_start = quote_index.saturating_add(1);
+    }
+    None
+}
+
+fn troubleshooting_screen_diagram(
+    _diagram: &Diagram,
+    assets_dir: &Path,
+) -> Result<RasterDiagram, String> {
+    let source = required_screen_pixmap(assets_dir, "screen-warning.png")?;
+    let detail = troubleshooting_screen_detail(&source)?;
+    Ok(RasterDiagram {
+        title: TROUBLESHOOTING_FIGURE_TITLE.to_string(),
+        alt: TROUBLESHOOTING_FIGURE_ALT.to_string(),
+        pixels: Arc::from(detail.data().to_vec()),
+        pixel_width: detail.width(),
+        pixel_height: detail.height(),
+        aspect_ratio: f64::from(detail.width()) / f64::from(detail.height()),
+    })
+}
+
+fn troubleshooting_screen_detail(source: &tiny_skia::Pixmap) -> Result<tiny_skia::Pixmap, String> {
+    let mut detail = tiny_skia::Pixmap::new(1800, 600)
+        .ok_or_else(|| "警告画面の図解領域を確保できませんでした".to_string())?;
+    detail.fill(tiny_skia::Color::from_rgba8(245, 242, 255, 255));
+    // 実画面から、切れ目のない操作ボタン・警告札・警告欄だけを取り出す。
+    draw_relative_screen_crop(
+        &mut detail,
+        source,
+        [850.0 / 2560.0, 0.0, 410.0 / 2560.0, 105.0 / 1720.0],
+        [50, 5, 900, 230],
+        "元に戻す・やり直しボタン",
+    )?;
+    // 警告札の座標は、実画面写真の画素位置を固定値で埋め込んでいる(内容を解析して
+    // 自動追跡してはいない)。`ViewerOverlayStack`が札の並べ方を変えると、この座標だけ
+    // 空白を切り出すようになり、「警告 n」の文字が消える(2026-08-23に実際に発生)。
+    // 直したときの実測(1280論理px/2倍密度=2560物理px撮影、`.status-badge`の
+    // getBoundingClientRect): x=687,y=68,w=415,h=31(論理px)。ここではその周囲へ
+    // 余白を足した physical px [1330,100,920,130] を切り出す(右は視点キューブの
+    // 開始位置 x=2280 の手前で必ず止め、キューブを巻き込まない)。
+    // 内容追跡(色や文字を画像から検出して札を自動で見つける)への置き換えは、
+    // この関数の他の切り出し(操作ボタン・警告文・警告欄下枠)も含め本ファイル全体が
+    // 同じ「固定座標を実測して埋め込む」方式で統一されており、ここだけを自動追跡へ
+    // 変えると一貫性が崩れ、かつ撮影パイプライン側(scratchpad配下、非コミット)が
+    // 要素の実測値を書き出す仕組みを持たない限り実現できないため見送った。
+    // レイアウトが再び変わったら、この座標もまた壊れる。直すときは
+    // `scratchpad/manual-shots-v046/shot-warning-final.mjs`等でアプリを実際に動かし、
+    // `.status-badge`の`getBoundingClientRect()`を測り直すこと。
+    draw_relative_screen_crop(
+        &mut detail,
+        source,
+        [
+            1330.0 / 2560.0,
+            100.0 / 1720.0,
+            920.0 / 2560.0,
+            130.0 / 1720.0,
+        ],
+        [1000, 65, 708, 100],
+        "警告札",
+    )?;
+    // 警告欄は、本文の下にある無地の空白帯だけを除き、実画面の四辺をつなぎ直す。
+    // 上下を同じ倍率で描くため、文字を縦につぶさず、枠の継ぎ目も無地部分に置く。
+    draw_relative_screen_crop(
+        &mut detail,
+        source,
+        [
+            1280.0 / 2560.0,
+            1218.0 / 1720.0,
+            1270.0 / 2560.0,
+            132.0 / 1720.0,
+        ],
+        [50, 315, 1700, 177],
+        "警告画面の警告文と上枠",
+    )?;
+    draw_relative_screen_crop(
+        &mut detail,
+        source,
+        [
+            1280.0 / 2560.0,
+            1690.0 / 1720.0,
+            1270.0 / 2560.0,
+            28.0 / 1720.0,
+        ],
+        [50, 492, 1700, 37],
+        "警告画面の警告欄下枠",
+    )?;
+    Ok(detail)
+}
+
+fn timeline_screen_detail(source: &tiny_skia::Pixmap) -> Result<tiny_skia::Pixmap, String> {
+    let mut detail = tiny_skia::Pixmap::new(1800, 730)
+        .ok_or_else(|| "タイムラインの図解領域を確保できませんでした".to_string())?;
+    detail.fill(tiny_skia::Color::from_rgba8(245, 242, 255, 255));
+    // 実画面の部品境界に合わせ、タイムラインと前後移動欄を拡大して並べる。
+    draw_relative_screen_crop(
+        &mut detail,
+        source,
+        [
+            1360.0 / 2560.0,
+            1010.0 / 1720.0,
+            860.0 / 2560.0,
+            145.0 / 1720.0,
+        ],
+        [50, 10, 1700, 287],
+        "タイムライン",
+    )?;
+    draw_relative_screen_crop(
+        &mut detail,
+        source,
+        [
+            45.0 / 2560.0,
+            1248.0 / 1720.0,
+            320.0 / 2560.0,
+            210.0 / 1720.0,
+        ],
+        [50, 396, 500, 328],
+        "選択中の手順欄",
+    )?;
+    draw_relative_screen_crop(
+        &mut detail,
+        source,
+        [
+            735.0 / 2560.0,
+            1290.0 / 1720.0,
+            470.0 / 2560.0,
+            100.0 / 1720.0,
+        ],
+        [700, 440, 1000, 213],
+        "手順の前後移動ボタン",
+    )?;
+    Ok(detail)
+}
+
+fn compact_operation_help_detail(source: &tiny_skia::Pixmap) -> Result<tiny_skia::Pixmap, String> {
+    let mut detail = tiny_skia::Pixmap::new(1800, 700)
+        .ok_or_else(|| "狭い画面の操作案内領域を確保できませんでした".to_string())?;
+    detail.fill(tiny_skia::Color::from_rgba8(245, 242, 255, 255));
+    // 狭い画面で変化する2つの操作案内と吹き出しだけを、完全な外枠ごと示す。
+    draw_relative_screen_crop(
+        &mut detail,
+        source,
+        [
+            235.0 / 2560.0,
+            350.0 / 1720.0,
+            870.0 / 2560.0,
+            130.0 / 1720.0,
+        ],
+        [50, 10, 1700, 254],
+        "狭い展開図の操作案内",
+    )?;
+    draw_relative_screen_crop(
+        &mut detail,
+        source,
+        [
+            1520.0 / 2560.0,
+            210.0 / 1720.0,
+            710.0 / 2560.0,
+            160.0 / 1720.0,
+        ],
+        [450, 492, 900, 203],
+        "狭い3Dの操作案内",
+    )?;
+    draw_relative_screen_crop(
+        &mut detail,
+        source,
+        [
+            1600.0 / 2560.0,
+            120.0 / 1720.0,
+            850.0 / 2560.0,
+            100.0 / 1720.0,
+        ],
+        [200, 315, 1400, 165],
+        "3D操作案内の吹き出し",
+    )?;
+    Ok(detail)
+}
+
+fn screen_without_partial_bottom_row(
+    source: &tiny_skia::Pixmap,
+    reference_height: u32,
+    description: &str,
+) -> Result<tiny_skia::Pixmap, String> {
+    let height = (reference_height as f32 / 1720.0 * source.height() as f32).round() as u32;
+    let rect = tiny_skia::IntRect::from_xywh(0, 0, source.width(), height)
+        .ok_or_else(|| format!("{description}の完全な行までを切り出せませんでした"))?;
+    source
+        .clone_rect(rect)
+        .ok_or_else(|| format!("{description}の完全な行までを複製できませんでした"))
+}
+
+fn draw_relative_screen_crop(
+    destination: &mut tiny_skia::Pixmap,
+    source: &tiny_skia::Pixmap,
+    relative_crop: [f32; 4],
+    target: [u32; 4],
+    description: &str,
+) -> Result<(), String> {
+    let source_width = source.width() as f32;
+    let source_height = source.height() as f32;
+    let x = (relative_crop[0] * source_width).round() as i32;
+    let y = (relative_crop[1] * source_height).round() as i32;
+    let width = (relative_crop[2] * source_width).round().max(1.0) as u32;
+    let height = (relative_crop[3] * source_height).round().max(1.0) as u32;
+    let source_bounds = tiny_skia::IntRect::from_xywh(0, 0, source.width(), source.height())
+        .expect("0より大きい画面写真の範囲");
+    let crop_rect = tiny_skia::IntRect::from_xywh(x, y, width, height)
+        .filter(|rect| source_bounds.contains(rect))
+        .ok_or_else(|| format!("{description}の切り出し範囲が画面外です"))?;
+    let crop = source
+        .clone_rect(crop_rect)
+        .ok_or_else(|| format!("{description}を画面から切り出せませんでした"))?;
+    let [target_x, target_y, target_width, target_height] = target;
+    if target_x + target_width > destination.width()
+        || target_y + target_height > destination.height()
+    {
+        return Err(format!("{description}の配置先が図解領域外です"));
+    }
+    let paint = tiny_skia::PixmapPaint {
+        quality: tiny_skia::FilterQuality::Bicubic,
+        ..Default::default()
+    };
+    let transform = tiny_skia::Transform::from_row(
+        target_width as f32 / crop.width() as f32,
+        0.0,
+        0.0,
+        target_height as f32 / crop.height() as f32,
+        target_x as f32,
+        target_y as f32,
+    );
+    destination.draw_pixmap(0, 0, crop.as_ref(), &paint, transform, None);
+    Ok(())
+}
+
+fn required_screen_pixmap(assets_dir: &Path, filename: &str) -> Result<tiny_skia::Pixmap, String> {
+    let full_path = assets_dir.join(filename);
+    let bytes = fs::read(&full_path).map_err(|error| {
+        format!(
+            "実画面に基づく図解に必要な画面写真「{}」を読めませんでした: {error}",
+            full_path.display()
+        )
+    })?;
+    decode_screen_png(&full_path, &bytes)
+}
+
+fn decode_screen_png(full_path: &Path, bytes: &[u8]) -> Result<tiny_skia::Pixmap, String> {
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err(format!(
+            "画面写真「{}」はPNGではありません",
+            full_path.display()
+        ));
+    }
+    tiny_skia::Pixmap::decode_png(bytes).map_err(|error| {
+        format!(
+            "画面写真「{}」を展開できませんでした: {error}",
+            full_path.display()
+        )
     })
 }
 
@@ -1077,9 +1427,24 @@ fn screenshot_data(assets_dir: &Path, filename: &str) -> Result<Option<RasterScr
             "画面写真はassets直下のPNGファイル名で指定してください: {filename}"
         ));
     }
-    let full_path = assets_dir.join(filename);
+    // 過去のタイムライン注釈PNGには説明に使わない枠と交差する枠が焼き込まれて
+    // いるため、同時に保存した実画面から必要な2領域を毎回作り直す。
+    let source_filename = if filename == "figure-timeline-flow.png" {
+        "screen-timeline.png"
+    } else {
+        filename
+    };
+    let full_path = assets_dir.join(source_filename);
     let bytes = match fs::read(&full_path) {
         Ok(bytes) => bytes,
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound && source_filename != filename =>
+        {
+            return Err(format!(
+                "タイムライン図解に必要な実画面「{}」が見つかりません",
+                full_path.display()
+            ));
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             eprintln!(
                 "注意: 画面写真が見つからないため、この画面例を省略します: {}",
@@ -1094,23 +1459,72 @@ fn screenshot_data(assets_dir: &Path, filename: &str) -> Result<Option<RasterScr
             ));
         }
     };
-    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-        return Err(format!(
-            "画面写真「{}」はPNGではありません",
-            full_path.display()
-        ));
+    let mut pixmap = decode_screen_png(&full_path, &bytes)?;
+    if filename == "figure-timeline-flow.png" {
+        pixmap = timeline_screen_detail(&pixmap)?;
+    } else if filename == "screen-compact-operation-help.png" {
+        pixmap = compact_operation_help_detail(&pixmap)?;
+    } else if filename == "screen-fold-drag.png" {
+        pixmap = screen_without_partial_bottom_row(&pixmap, 1644, filename)?;
+    } else if filename == "screen-prevention-settings.png" {
+        pixmap = screen_without_partial_bottom_row(&pixmap, 1580, filename)?;
+    } else if filename == "figure-angle-controls.png" {
+        draw_angle_control_arrow(&mut pixmap)?;
     }
-    let pixmap = tiny_skia::Pixmap::decode_png(&bytes).map_err(|error| {
-        format!(
-            "画面写真「{}」を展開できませんでした: {error}",
-            full_path.display()
-        )
-    })?;
     Ok(Some(RasterScreenshot {
         pixels: Arc::from(pixmap.data().to_vec()),
         pixel_width: pixmap.width(),
         pixel_height: pixmap.height(),
     }))
+}
+
+fn draw_angle_control_arrow(pixmap: &mut tiny_skia::Pixmap) -> Result<(), String> {
+    let width_scale = pixmap.width() as f32 / 1800.0;
+    let height_scale = pixmap.height() as f32 / 700.0;
+    let x = 1120.0 * width_scale;
+    let tip_y = 463.0 * height_scale;
+    let base_y = 482.0 * height_scale;
+    let shaft_y = 520.0 * height_scale;
+
+    let mut paint = tiny_skia::Paint::default();
+    paint.set_color_rgba8(112, 64, 201, 255);
+    paint.anti_alias = true;
+    let stroke = tiny_skia::Stroke {
+        width: (5.0 * width_scale.min(height_scale)).max(1.0),
+        line_cap: tiny_skia::LineCap::Round,
+        ..Default::default()
+    };
+    let mut shaft = tiny_skia::PathBuilder::new();
+    shaft.move_to(x, shaft_y);
+    shaft.line_to(x, base_y - 2.0 * height_scale);
+    let shaft = shaft
+        .finish()
+        .ok_or_else(|| "角度図解の矢印軸を作れませんでした".to_string())?;
+    pixmap.stroke_path(
+        &shaft,
+        &paint,
+        &stroke,
+        tiny_skia::Transform::identity(),
+        None,
+    );
+
+    let half_width = 11.0 * width_scale;
+    let mut head = tiny_skia::PathBuilder::new();
+    head.move_to(x, tip_y);
+    head.line_to(x - half_width, base_y);
+    head.line_to(x + half_width, base_y);
+    head.close();
+    let head = head
+        .finish()
+        .ok_or_else(|| "角度図解の矢じりを作れませんでした".to_string())?;
+    pixmap.fill_path(
+        &head,
+        &paint,
+        tiny_skia::FillRule::Winding,
+        tiny_skia::Transform::identity(),
+        None,
+    );
+    Ok(())
 }
 
 fn cover_page(content: &ManualContent, total_pages: usize) -> Page {
@@ -1280,6 +1694,27 @@ fn character_width(character: char) -> f64 {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    fn pixel_at(pixmap: &tiny_skia::Pixmap, x: u32, y: u32) -> [u8; 4] {
+        let offset = ((y * pixmap.width() + x) * 4) as usize;
+        <[u8; 4]>::try_from(&pixmap.data()[offset..offset + 4]).unwrap()
+    }
+
+    fn fill_test_rect(
+        pixmap: &mut tiny_skia::Pixmap,
+        [x, y, width, height]: [u32; 4],
+        color: [u8; 4],
+    ) {
+        let stride = pixmap.width() as usize * 4;
+        let data = pixmap.data_mut();
+        for row in y..y + height {
+            let start = row as usize * stride + x as usize * 4;
+            let end = start + width as usize * 4;
+            for pixel in data[start..end].as_chunks_mut::<4>().0 {
+                pixel.copy_from_slice(&color);
+            }
+        }
+    }
 
     fn representative_json(image: Option<&str>) -> String {
         representative_json_with_screenshot(image, None)
@@ -1638,6 +2073,7 @@ mod tests {
         let text = String::from_utf8_lossy(&pdf);
         assert_eq!(text.matches("/MediaBox").count(), 4);
         assert!(text.contains("/Count 4"));
+        assert!(text.contains("/FontDescriptor"), "本文は字体として埋め込む");
     }
 
     #[test]
@@ -1664,6 +2100,31 @@ mod tests {
         );
         assert!(pages.pages[1].svg.contains(">3</text>"));
         assert!(pages.pages[1].svg.contains(">4</text>"));
+    }
+
+    #[test]
+    fn continued_page_repeats_the_chapter_title_without_a_continued_suffix() {
+        let chapter = Chapter {
+            id: "continued".to_string(),
+            number: 1,
+            title: "ページをまたぐ章題".to_string(),
+            summary: "要約".to_string(),
+            blocks: Vec::new(),
+        };
+        let mut layout = BookLayout::new();
+        layout.start_chapter(&chapter);
+        layout.y = CONTENT_BOTTOM;
+
+        assert!(layout.ensure_space(1.0));
+
+        let chapter_label = "第1章 ページをまたぐ章題";
+        let continued_page = &layout.pages[1].svg;
+        let continued_header = continued_page
+            .lines()
+            .find(|line| line.contains("y=\"31\""))
+            .expect("続きページの章題がある");
+        assert!(continued_header.contains(chapter_label));
+        assert!(!continued_header.contains("続き"));
     }
 
     #[test]
@@ -1761,6 +2222,138 @@ mod tests {
         .err()
         .expect("assets外は拒否する");
         assert!(error.contains("assets直下"), "{error}");
+    }
+
+    #[test]
+    fn every_absolute_subpath_with_marker_end_gets_its_own_arrow() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg">
+            <path d="M10 10H20M30 10H40" stroke="#7040c9" marker-end="url(#arrow)"/>
+        </svg>"##;
+        let printable = split_marker_end_subpaths(svg);
+        assert_eq!(printable.matches("marker-end=").count(), 2);
+        assert!(printable.contains("d=\"M10 10H20\""));
+        assert!(printable.contains("d=\"M30 10H40\""));
+    }
+
+    #[test]
+    fn timeline_detail_is_rebuilt_from_the_actual_screen_without_annotation_frames() {
+        let mut screen = tiny_skia::Pixmap::new(2560, 1720).unwrap();
+        let excluded = [240, 10, 20, 255];
+        let timeline = [12, 34, 56, 255];
+        let selected_step = [78, 90, 123, 255];
+        let move_buttons = [140, 150, 160, 255];
+        screen.fill(tiny_skia::Color::from_rgba8(
+            excluded[0],
+            excluded[1],
+            excluded[2],
+            excluded[3],
+        ));
+        fill_test_rect(&mut screen, [1360, 1010, 860, 145], timeline);
+        fill_test_rect(&mut screen, [45, 1248, 320, 210], selected_step);
+        fill_test_rect(&mut screen, [735, 1290, 470, 100], move_buttons);
+        let detail = timeline_screen_detail(&screen).unwrap();
+
+        assert_eq!((detail.width(), detail.height()), (1800, 730));
+        assert_eq!(pixel_at(&detail, 0, 0), [245, 242, 255, 255]);
+        assert_eq!(pixel_at(&detail, 100, 100), timeline);
+        assert_eq!(pixel_at(&detail, 100, 500), selected_step);
+        assert_eq!(pixel_at(&detail, 900, 500), move_buttons);
+        assert!(!detail.data().as_chunks::<4>().0.iter().any(|pixel| pixel == &excluded));
+    }
+
+    #[test]
+    fn compact_help_detail_keeps_only_complete_controls_from_the_actual_screen() {
+        let mut screen = tiny_skia::Pixmap::new(2560, 1720).unwrap();
+        let excluded = [240, 10, 20, 255];
+        let crease_help = [12, 34, 56, 255];
+        let three_dimensional_help = [78, 90, 123, 255];
+        let tooltip = [140, 150, 160, 255];
+        screen.fill(tiny_skia::Color::from_rgba8(
+            excluded[0],
+            excluded[1],
+            excluded[2],
+            excluded[3],
+        ));
+        fill_test_rect(&mut screen, [235, 350, 870, 130], crease_help);
+        fill_test_rect(&mut screen, [1520, 210, 710, 160], three_dimensional_help);
+        fill_test_rect(&mut screen, [1600, 120, 850, 100], tooltip);
+        let detail = compact_operation_help_detail(&screen).unwrap();
+
+        assert_eq!((detail.width(), detail.height()), (1800, 700));
+        assert_eq!(pixel_at(&detail, 100, 100), crease_help);
+        assert_eq!(pixel_at(&detail, 900, 600), three_dimensional_help);
+        assert_eq!(pixel_at(&detail, 900, 400), tooltip);
+        assert!(!detail.data().as_chunks::<4>().0.iter().any(|pixel| pixel == &excluded));
+    }
+
+    #[test]
+    fn full_screen_detail_stops_before_a_partial_bottom_row() {
+        let mut screen = tiny_skia::Pixmap::new(2560, 1720).unwrap();
+        let retained = [12, 34, 56, 255];
+        let excluded = [240, 10, 20, 255];
+        screen.fill(tiny_skia::Color::from_rgba8(
+            retained[0],
+            retained[1],
+            retained[2],
+            retained[3],
+        ));
+        fill_test_rect(&mut screen, [0, 1644, 2560, 76], excluded);
+
+        let detail = screen_without_partial_bottom_row(&screen, 1644, "test").unwrap();
+
+        assert_eq!((detail.width(), detail.height()), (2560, 1644));
+        assert_eq!(pixel_at(&detail, 1280, 1643), retained);
+        assert!(!detail.data().as_chunks::<4>().0.iter().any(|pixel| pixel == &excluded));
+    }
+
+    #[test]
+    fn troubleshooting_detail_uses_only_complete_controls_from_the_actual_screen() {
+        let mut screen = tiny_skia::Pixmap::new(2560, 1720).unwrap();
+        let excluded = [240, 10, 20, 255];
+        let history_buttons = [90, 80, 70, 255];
+        let warning_badge = [40, 50, 60, 255];
+        let warning_message_top = [120, 130, 140, 255];
+        let warning_message_bottom = [150, 160, 170, 255];
+        screen.fill(tiny_skia::Color::from_rgba8(
+            excluded[0],
+            excluded[1],
+            excluded[2],
+            excluded[3],
+        ));
+        fill_test_rect(&mut screen, [850, 0, 410, 105], history_buttons);
+        fill_test_rect(&mut screen, [1330, 100, 920, 130], warning_badge);
+        fill_test_rect(&mut screen, [1280, 1218, 1270, 132], warning_message_top);
+        fill_test_rect(&mut screen, [1280, 1690, 1270, 28], warning_message_bottom);
+        let detail = troubleshooting_screen_detail(&screen).unwrap();
+
+        assert_eq!((detail.width(), detail.height()), (1800, 600));
+        assert_eq!(pixel_at(&detail, 100, 100), history_buttons);
+        assert_eq!(pixel_at(&detail, 1350, 110), warning_badge);
+        assert_eq!(pixel_at(&detail, 900, 400), warning_message_top);
+        assert_eq!(pixel_at(&detail, 900, 510), warning_message_bottom);
+        assert!(!detail.data().as_chunks::<4>().0.iter().any(|pixel| pixel == &excluded));
+    }
+
+    #[test]
+    fn static_manual_figures_do_not_claim_an_unshown_sequence() {
+        for text in [
+            TROUBLESHOOTING_FIGURE_TITLE,
+            TROUBLESHOOTING_FIGURE_ALT,
+            COMPACT_OPERATION_HELP_CAPTION,
+        ] {
+            assert!(!text.contains("流れ"));
+            assert!(!text.contains("順に"));
+        }
+    }
+
+    #[test]
+    fn angle_control_annotation_has_a_visible_arrowhead() {
+        let mut annotated = tiny_skia::Pixmap::new(1800, 700).unwrap();
+        annotated.fill(tiny_skia::Color::WHITE);
+        draw_angle_control_arrow(&mut annotated).unwrap();
+
+        assert_eq!(pixel_at(&annotated, 1120, 470), [112, 64, 201, 255]);
+        assert_eq!(pixel_at(&annotated, 1120, 510), [112, 64, 201, 255]);
     }
 
     #[test]

@@ -88,7 +88,7 @@ fn the_four_gaps_are_finite_for_one_to_twelve_leaves() {
     for n in 1..=12u32 {
         let skeleton = star_with_positions(n);
         let (packing, result) = propose(&skeleton);
-        let target = FinishTarget::from_skeleton(&skeleton);
+        let target = FinishTarget::from_skeleton_on_paper(&skeleton);
         let form = FinishedForm::from_proposal(&skeleton, &packing, &result);
 
         assert_eq!(
@@ -161,7 +161,7 @@ fn a_proposal_that_reaches_the_specification_scores_best() {
     for n in 1..=12u32 {
         let skeleton = star_with_positions(n);
         let (packing, result) = propose(&skeleton);
-        let target = FinishTarget::from_skeleton(&skeleton);
+        let target = FinishTarget::from_skeleton_on_paper(&skeleton);
         let (center, points) = tip_points_as_specified(&target);
         let form = FinishedForm::from_proposal(&skeleton, &packing, &result)
             .with_tip_points(&target, center, &points);
@@ -305,7 +305,7 @@ fn limbs_that_sit_too_close_lose_length_and_width() {
         circles: Vec::new(),
     };
     let result = generate(&skeleton, &packing, PAPER.0, PAPER.1).expect("生成に失敗した");
-    let target = FinishTarget::from_skeleton(&skeleton);
+    let target = FinishTarget::from_skeleton_on_paper(&skeleton);
     let form = FinishedForm::from_proposal(&skeleton, &packing, &result);
 
     for tip in &form.tips {
@@ -344,7 +344,7 @@ fn the_same_input_gives_the_same_four_values_ten_times() {
         for run in 1..=10 {
             let skeleton = star_with_positions(n);
             let (packing, result) = propose(&skeleton);
-            let target = FinishTarget::from_skeleton(&skeleton);
+            let target = FinishTarget::from_skeleton_on_paper(&skeleton);
             let (center, points) = tip_points_as_specified(&target);
             let form = FinishedForm::from_proposal(&skeleton, &packing, &result)
                 .with_tip_points(&target, center, &points);

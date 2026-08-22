@@ -23,7 +23,8 @@ fn build(n: u32) -> (ori3_propose::Packing, ori3_propose::ProposalResult) {
     let s = star(n);
     let ps = pack(&s, 1.0, 1.0, 2026, 8);
     assert!(!ps.is_empty(), "葉{n}本の配置に失敗した");
-    let r = generate(&s, &ps[0], 1.0, 1.0).unwrap_or_else(|e| panic!("葉{n}本の生成に失敗した: {e}"));
+    let r =
+        generate(&s, &ps[0], 1.0, 1.0).unwrap_or_else(|e| panic!("葉{n}本の生成に失敗した: {e}"));
     (ps.into_iter().next().unwrap(), r)
 }
 
@@ -96,10 +97,19 @@ fn every_leaf_maps_to_exactly_one_material_point_for_one_to_twelve_leaves() {
         let expected: BTreeSet<u32> = star(n).leaves().into_iter().collect();
         assert_eq!(expected.len(), n as usize, "葉{n}本の骨格の葉が{n}本でない");
 
-        assert_eq!(r.sites.len(), n as usize, "葉{n}本で対応が{}件", r.sites.len());
+        assert_eq!(
+            r.sites.len(),
+            n as usize,
+            "葉{n}本で対応が{}件",
+            r.sites.len()
+        );
         let got: BTreeSet<u32> = r.sites.iter().map(|s| s.circle.leaf_id).collect();
         assert_eq!(got, expected, "葉{n}本で対応する葉IDの顔ぶれが違う");
-        assert_eq!(got.len(), r.sites.len(), "葉{n}本で同じ葉IDの対応が重複した");
+        assert_eq!(
+            got.len(),
+            r.sites.len(),
+            "葉{n}本で同じ葉IDの対応が重複した"
+        );
 
         for site in &r.sites {
             let v = site.vertex.unwrap_or_else(|| {
@@ -147,7 +157,10 @@ fn material_point_sits_on_the_packed_circle_center() {
             worst_here = worst_here.max(measured);
             checked += 1;
         }
-        println!("葉{n}本: 先端{}本、最大のずれ {worst_here:e}", r.sites.len());
+        println!(
+            "葉{n}本: 先端{}本、最大のずれ {worst_here:e}",
+            r.sites.len()
+        );
         worst = worst.max(worst_here);
     }
     println!("12通り合計 先端{checked}本、全体の最大のずれ {worst:e}");

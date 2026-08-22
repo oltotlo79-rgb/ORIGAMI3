@@ -271,7 +271,10 @@ fn branching_skeleton_separates_stacking_from_sitting_side_by_side() {
             }
         }
     }
-    println!("枝分かれの形: 分子{}件、重なる組{stacked}件、並ぶ組{side_by_side}件", r.trace.molecules.len());
+    println!(
+        "枝分かれの形: 分子{}件、重なる組{stacked}件、並ぶ組{side_by_side}件",
+        r.trace.molecules.len()
+    );
     assert!(stacked > 0, "重なる組が0件");
 }
 
@@ -391,12 +394,19 @@ fn four_corner_leaves_have_no_flat_fold_violation_and_no_side_conflict() {
     let r = four_corners();
     assert_eq!(r.violations, 0, "四隅4葉で平坦に折りにくい点がある");
     let checks = check_trace(&r.cp, &r.trace);
-    assert_eq!(checks.unassigned_creases, 0, "四隅4葉で未割当の折り線がある");
+    assert_eq!(
+        checks.unassigned_creases, 0,
+        "四隅4葉で未割当の折り線がある"
+    );
     assert_eq!(
         checks.side_conflicts, 0,
         "四隅4葉で表裏の塗り分けが食い違った"
     );
-    println!("四隅4葉: 分子{}件、折り線{}本", r.trace.molecules.len(), checks.creases);
+    println!(
+        "四隅4葉: 分子{}件、折り線{}本",
+        r.trace.molecules.len(),
+        checks.creases
+    );
 }
 
 /// 表裏の塗り分けが食い違う件数を、平坦に折りにくい点の数と並べて記録する。
@@ -505,8 +515,20 @@ fn skeleton_path_edges_follow_the_tree() {
             SkeletonNode::new(20, Some(0), 1.0),
         ],
     };
-    assert_eq!(s.path_edges(11, 12), vec![11, 12], "共通の親までで止まらない");
-    assert_eq!(s.path_edges(11, 20), vec![10, 11, 20], "根をまたぐ経路が違う");
+    assert_eq!(
+        s.path_edges(11, 12),
+        vec![11, 12],
+        "共通の親までで止まらない"
+    );
+    assert_eq!(
+        s.path_edges(11, 20),
+        vec![10, 11, 20],
+        "根をまたぐ経路が違う"
+    );
     assert_eq!(s.path_edges(11, 11), Vec::<u32>::new(), "同じ葉が空でない");
-    assert_eq!(s.path_edges(11, 999), Vec::<u32>::new(), "無い節点が空でない");
+    assert_eq!(
+        s.path_edges(11, 999),
+        Vec::<u32>::new(),
+        "無い節点が空でない"
+    );
 }

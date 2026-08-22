@@ -50,7 +50,7 @@ const INVALID_CREASES_WARNING: &str =
     "折り線に重なりやつながり方の問題があります。「選び直す」で別の候補を選んでください";
 
 /// 内部IDではなく、提案画面で見分けられる入力行の名前を返す。
-fn limb_name(skeleton: &Skeleton, id: u32) -> String {
+pub(crate) fn limb_name(skeleton: &Skeleton, id: u32) -> String {
     let Some(index) = skeleton.leaves().iter().position(|&leaf_id| leaf_id == id) else {
         return "該当する出っぱり".to_string();
     };
@@ -199,12 +199,7 @@ fn foot(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
 /// 引いた折り線の形(内心・ちょうつがい線の行き先・軸線を引いた辺)を返す。
 /// 返した値は [`crate::trace`] がそのまま追跡情報にする。折り線を引けなかった
 /// (潰れた三角形・非有限な座標)ときは `None`。
-fn rabbit_ear(
-    cp: &mut CreasePattern,
-    tri: [[f64; 2]; 3],
-    w: f64,
-    h: f64,
-) -> Option<MoleculeShape> {
+fn rabbit_ear(cp: &mut CreasePattern, tri: [[f64; 2]; 3], w: f64, h: f64) -> Option<MoleculeShape> {
     let opp = |i: usize| {
         let (a, b) = (tri[(i + 1) % 3], tri[(i + 2) % 3]);
         (a[0] - b[0]).hypot(a[1] - b[1])
@@ -281,14 +276,20 @@ pub fn generate(
     paper_w: f64,
     paper_h: f64,
 ) -> Result<ProposalResult, String> {
-    skeleton.validate()?;
+    // 完成形の位置が枠の外でも止めない。いちばん近い置き方にして知らせる
+    // (`CLAUDE.md` §8、作業10)。骨格の形そのものが壊れているときだけ `Err`。
+    skeleton.validate_structure()?;
     if !(paper_w > 0.0 && paper_h > 0.0 && paper_w.is_finite() && paper_h.is_finite()) {
         return Err(PAPER_SIZE_ERROR.to_string());
     }
     if packing.centers.is_empty() {
         return Err(NO_PLACEMENT_ERROR.to_string());
     }
-    let mut warnings = Vec::new();
+    // 指定した位置に無理があった場合の知らせ(作業10)。位置を指定していなければ
+    // 1件も増えないので、今までの結果は変わらない。
+    let mut warnings: Vec<String> = crate::packing::tip_targets(skeleton, paper_w, paper_h)
+        .map(|t| t.notices)
+        .unwrap_or_default();
 
     // 円そのものが紙からはみ出すのは正常(上のdocコメント参照)。本当に問題
     // なのは、案Aの制約である「円の中心が紙内」が破れている場合だけなので、
@@ -492,8 +493,16 @@ mod tests {
             circles: Vec::new(),
         };
         let result = generate(&skeleton, &packing, 1.0, 1.0).unwrap();
-        assert!(result.warnings.contains(&position_outside_paper_warning("頭")));
-        assert!(result.warnings.contains(&position_outside_paper_warning("尾")));
+        assert!(
+            result
+                .warnings
+                .contains(&position_outside_paper_warning("頭"))
+        );
+        assert!(
+            result
+                .warnings
+                .contains(&position_outside_paper_warning("尾"))
+        );
     }
 
     /// 円が紙からはみ出しても、中心が紙内にあれば警告しない(案Aは正常な配置)。

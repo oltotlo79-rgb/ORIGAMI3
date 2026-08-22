@@ -13,66 +13,289 @@ use std::collections::HashMap;
 
 use ori3_cp::extract_faces;
 use ori3_model::{CreasePattern, Driver, Edge, EdgeKind, Vertex};
-use ori3_rigid::motion::solve_motion;
+use ori3_rigid::motion::{MotionContactOptions, solve_motion_with_contact_options};
 use ori3_rigid::self_intersection_pairs;
 
 /// 利用者の画面から取り出した展開図(2026-08-13)。鳥の基本形を作る途中の形。
 fn user_bird_cp() -> CreasePattern {
     CreasePattern {
         vertices: vec![
-            Vertex { id: 0, pos: [0.0, 0.0] },
-            Vertex { id: 1, pos: [1.0, 0.0] },
-            Vertex { id: 2, pos: [1.0, 1.0] },
-            Vertex { id: 3, pos: [0.0, 1.0] },
-            Vertex { id: 4, pos: [0.0, 0.5] },
-            Vertex { id: 5, pos: [1.0, 0.5] },
-            Vertex { id: 6, pos: [0.5, 0.0] },
-            Vertex { id: 7, pos: [0.5, 1.0] },
-            Vertex { id: 8, pos: [0.5, 0.5] },
-            Vertex { id: 9, pos: [0.5, 0.7928932188134525] },
-            Vertex { id: 10, pos: [0.7928932188134525, 0.5] },
-            Vertex { id: 11, pos: [0.5, 0.20710678118654752] },
-            Vertex { id: 12, pos: [0.20710678118654752, 0.5] },
-            Vertex { id: 13, pos: [0.6464466094067263, 0.35355339059327373] },
-            Vertex { id: 14, pos: [0.2391228982492633, 0.5] },
-            Vertex { id: 15, pos: [0.3535533905932737, 0.6464466094067263] },
+            Vertex {
+                id: 0,
+                pos: [0.0, 0.0],
+            },
+            Vertex {
+                id: 1,
+                pos: [1.0, 0.0],
+            },
+            Vertex {
+                id: 2,
+                pos: [1.0, 1.0],
+            },
+            Vertex {
+                id: 3,
+                pos: [0.0, 1.0],
+            },
+            Vertex {
+                id: 4,
+                pos: [0.0, 0.5],
+            },
+            Vertex {
+                id: 5,
+                pos: [1.0, 0.5],
+            },
+            Vertex {
+                id: 6,
+                pos: [0.5, 0.0],
+            },
+            Vertex {
+                id: 7,
+                pos: [0.5, 1.0],
+            },
+            Vertex {
+                id: 8,
+                pos: [0.5, 0.5],
+            },
+            Vertex {
+                id: 9,
+                pos: [0.5, 0.7928932188134525],
+            },
+            Vertex {
+                id: 10,
+                pos: [0.7928932188134525, 0.5],
+            },
+            Vertex {
+                id: 11,
+                pos: [0.5, 0.20710678118654752],
+            },
+            Vertex {
+                id: 12,
+                pos: [0.20710678118654752, 0.5],
+            },
+            Vertex {
+                id: 13,
+                pos: [0.6464466094067263, 0.35355339059327373],
+            },
+            Vertex {
+                id: 14,
+                pos: [0.2391228982492633, 0.5],
+            },
+            Vertex {
+                id: 15,
+                pos: [0.3535533905932737, 0.6464466094067263],
+            },
         ],
         edges: vec![
-            Edge { id: 4, v0: 3, v1: 4, kind: EdgeKind::Border },
-            Edge { id: 5, v0: 4, v1: 0, kind: EdgeKind::Border },
-            Edge { id: 6, v0: 1, v1: 5, kind: EdgeKind::Border },
-            Edge { id: 7, v0: 5, v1: 2, kind: EdgeKind::Border },
-            Edge { id: 9, v0: 0, v1: 6, kind: EdgeKind::Border },
-            Edge { id: 10, v0: 6, v1: 1, kind: EdgeKind::Border },
-            Edge { id: 11, v0: 2, v1: 7, kind: EdgeKind::Border },
-            Edge { id: 12, v0: 7, v1: 3, kind: EdgeKind::Border },
-            Edge { id: 17, v0: 0, v1: 8, kind: EdgeKind::Valley },
-            Edge { id: 18, v0: 8, v1: 2, kind: EdgeKind::Valley },
-            Edge { id: 21, v0: 8, v1: 9, kind: EdgeKind::Mountain },
-            Edge { id: 22, v0: 9, v1: 7, kind: EdgeKind::Mountain },
-            Edge { id: 23, v0: 3, v1: 9, kind: EdgeKind::Mountain },
-            Edge { id: 24, v0: 9, v1: 2, kind: EdgeKind::Mountain },
-            Edge { id: 25, v0: 8, v1: 10, kind: EdgeKind::Mountain },
-            Edge { id: 26, v0: 10, v1: 5, kind: EdgeKind::Mountain },
-            Edge { id: 27, v0: 2, v1: 10, kind: EdgeKind::Mountain },
-            Edge { id: 28, v0: 10, v1: 1, kind: EdgeKind::Mountain },
-            Edge { id: 29, v0: 6, v1: 11, kind: EdgeKind::Mountain },
-            Edge { id: 30, v0: 11, v1: 8, kind: EdgeKind::Mountain },
-            Edge { id: 31, v0: 1, v1: 11, kind: EdgeKind::Mountain },
-            Edge { id: 32, v0: 0, v1: 11, kind: EdgeKind::Mountain },
-            Edge { id: 33, v0: 4, v1: 12, kind: EdgeKind::Mountain },
-            Edge { id: 35, v0: 0, v1: 12, kind: EdgeKind::Mountain },
-            Edge { id: 36, v0: 12, v1: 3, kind: EdgeKind::Mountain },
-            Edge { id: 37, v0: 8, v1: 13, kind: EdgeKind::Valley },
-            Edge { id: 38, v0: 13, v1: 1, kind: EdgeKind::Valley },
-            Edge { id: 39, v0: 11, v1: 13, kind: EdgeKind::Valley },
-            Edge { id: 40, v0: 13, v1: 10, kind: EdgeKind::Valley },
-            Edge { id: 41, v0: 12, v1: 14, kind: EdgeKind::Mountain },
-            Edge { id: 42, v0: 14, v1: 8, kind: EdgeKind::Mountain },
-            Edge { id: 43, v0: 3, v1: 15, kind: EdgeKind::Valley },
-            Edge { id: 44, v0: 15, v1: 8, kind: EdgeKind::Valley },
-            Edge { id: 45, v0: 9, v1: 15, kind: EdgeKind::Valley },
-            Edge { id: 46, v0: 15, v1: 12, kind: EdgeKind::Valley },
+            Edge {
+                id: 4,
+                v0: 3,
+                v1: 4,
+                kind: EdgeKind::Border,
+            },
+            Edge {
+                id: 5,
+                v0: 4,
+                v1: 0,
+                kind: EdgeKind::Border,
+            },
+            Edge {
+                id: 6,
+                v0: 1,
+                v1: 5,
+                kind: EdgeKind::Border,
+            },
+            Edge {
+                id: 7,
+                v0: 5,
+                v1: 2,
+                kind: EdgeKind::Border,
+            },
+            Edge {
+                id: 9,
+                v0: 0,
+                v1: 6,
+                kind: EdgeKind::Border,
+            },
+            Edge {
+                id: 10,
+                v0: 6,
+                v1: 1,
+                kind: EdgeKind::Border,
+            },
+            Edge {
+                id: 11,
+                v0: 2,
+                v1: 7,
+                kind: EdgeKind::Border,
+            },
+            Edge {
+                id: 12,
+                v0: 7,
+                v1: 3,
+                kind: EdgeKind::Border,
+            },
+            Edge {
+                id: 17,
+                v0: 0,
+                v1: 8,
+                kind: EdgeKind::Valley,
+            },
+            Edge {
+                id: 18,
+                v0: 8,
+                v1: 2,
+                kind: EdgeKind::Valley,
+            },
+            Edge {
+                id: 21,
+                v0: 8,
+                v1: 9,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 22,
+                v0: 9,
+                v1: 7,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 23,
+                v0: 3,
+                v1: 9,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 24,
+                v0: 9,
+                v1: 2,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 25,
+                v0: 8,
+                v1: 10,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 26,
+                v0: 10,
+                v1: 5,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 27,
+                v0: 2,
+                v1: 10,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 28,
+                v0: 10,
+                v1: 1,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 29,
+                v0: 6,
+                v1: 11,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 30,
+                v0: 11,
+                v1: 8,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 31,
+                v0: 1,
+                v1: 11,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 32,
+                v0: 0,
+                v1: 11,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 33,
+                v0: 4,
+                v1: 12,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 35,
+                v0: 0,
+                v1: 12,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 36,
+                v0: 12,
+                v1: 3,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 37,
+                v0: 8,
+                v1: 13,
+                kind: EdgeKind::Valley,
+            },
+            Edge {
+                id: 38,
+                v0: 13,
+                v1: 1,
+                kind: EdgeKind::Valley,
+            },
+            Edge {
+                id: 39,
+                v0: 11,
+                v1: 13,
+                kind: EdgeKind::Valley,
+            },
+            Edge {
+                id: 40,
+                v0: 13,
+                v1: 10,
+                kind: EdgeKind::Valley,
+            },
+            Edge {
+                id: 41,
+                v0: 12,
+                v1: 14,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 42,
+                v0: 14,
+                v1: 8,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 43,
+                v0: 3,
+                v1: 15,
+                kind: EdgeKind::Valley,
+            },
+            Edge {
+                id: 44,
+                v0: 15,
+                v1: 8,
+                kind: EdgeKind::Valley,
+            },
+            Edge {
+                id: 45,
+                v0: 9,
+                v1: 15,
+                kind: EdgeKind::Valley,
+            },
+            Edge {
+                id: 46,
+                v0: 15,
+                v1: 12,
+                kind: EdgeKind::Valley,
+            },
         ],
         next_vertex_id: 16,
         next_edge_id: 47,
@@ -119,7 +342,18 @@ fn sweep(
                 target_angle_deg: angle,
             })
             .collect();
-        let solved = solve_motion(cp, faces, &drivers, Some(targets), Some(&warm), true).result;
+        let solved = solve_motion_with_contact_options(
+            cp,
+            faces,
+            &drivers,
+            Some(targets),
+            Some(&warm),
+            MotionContactOptions {
+                detect: true,
+                prevent: true,
+            },
+        )
+        .result;
 
         assert!(
             solved.converged,
@@ -191,7 +425,18 @@ fn folding_two_more_creases_keeps_the_folded_ones() {
             target_angle_deg,
         })
         .collect();
-    let start = solve_motion(&cp, &faces, &start_drivers, Some(&targets), Some(&flat), true).result;
+    let start = solve_motion_with_contact_options(
+        &cp,
+        &faces,
+        &start_drivers,
+        Some(&targets),
+        Some(&flat),
+        MotionContactOptions {
+            detect: true,
+            prevent: true,
+        },
+    )
+    .result;
     assert!(start.converged, "出発の姿勢が閉じない");
     assert!(
         self_intersection_pairs(&start.frame).is_empty(),
@@ -199,57 +444,252 @@ fn folding_two_more_creases_keeps_the_folded_ones() {
     );
 
     // 谷折り(利用者が報告した向き)と山折りの両方を確かめる
-    sweep(&cp, &faces, &targets, &[40, 45], -1.0, &start.angles, "谷折り");
-    sweep(&cp, &faces, &targets, &[40, 45], 1.0, &start.angles, "山折り");
+    sweep(
+        &cp,
+        &faces,
+        &targets,
+        &[40, 45],
+        -1.0,
+        &start.angles,
+        "谷折り",
+    );
+    sweep(
+        &cp,
+        &faces,
+        &targets,
+        &[40, 45],
+        1.0,
+        &start.angles,
+        "山折り",
+    );
 }
 
 /// 利用者の画面から取り出した展開図(2026-08-13)。鶴の基本形を作る途中。
 fn user_cp2() -> CreasePattern {
     CreasePattern {
         vertices: vec![
-            Vertex { id: 0, pos: [0.0, 0.0] },
-            Vertex { id: 1, pos: [1.0, 0.0] },
-            Vertex { id: 2, pos: [1.0, 1.0] },
-            Vertex { id: 3, pos: [0.0, 1.0] },
-            Vertex { id: 4, pos: [0.0, 0.5] },
-            Vertex { id: 5, pos: [1.0, 0.5] },
-            Vertex { id: 6, pos: [0.5, 1.0] },
-            Vertex { id: 7, pos: [0.5, 0.0] },
-            Vertex { id: 8, pos: [0.5, 0.5] },
-            Vertex { id: 9, pos: [0.7928932188134525, 0.5] },
-            Vertex { id: 10, pos: [0.5, 0.20710678118654752] },
-            Vertex { id: 11, pos: [0.25, 0.5] },
-            Vertex { id: 12, pos: [0.5, 0.7928932188134525] },
+            Vertex {
+                id: 0,
+                pos: [0.0, 0.0],
+            },
+            Vertex {
+                id: 1,
+                pos: [1.0, 0.0],
+            },
+            Vertex {
+                id: 2,
+                pos: [1.0, 1.0],
+            },
+            Vertex {
+                id: 3,
+                pos: [0.0, 1.0],
+            },
+            Vertex {
+                id: 4,
+                pos: [0.0, 0.5],
+            },
+            Vertex {
+                id: 5,
+                pos: [1.0, 0.5],
+            },
+            Vertex {
+                id: 6,
+                pos: [0.5, 1.0],
+            },
+            Vertex {
+                id: 7,
+                pos: [0.5, 0.0],
+            },
+            Vertex {
+                id: 8,
+                pos: [0.5, 0.5],
+            },
+            Vertex {
+                id: 9,
+                pos: [0.7928932188134525, 0.5],
+            },
+            Vertex {
+                id: 10,
+                pos: [0.5, 0.20710678118654752],
+            },
+            Vertex {
+                id: 11,
+                pos: [0.25, 0.5],
+            },
+            Vertex {
+                id: 12,
+                pos: [0.5, 0.7928932188134525],
+            },
         ],
         edges: vec![
-            Edge { id: 4, v0: 3, v1: 4, kind: EdgeKind::Border },
-            Edge { id: 5, v0: 4, v1: 0, kind: EdgeKind::Border },
-            Edge { id: 6, v0: 1, v1: 5, kind: EdgeKind::Border },
-            Edge { id: 7, v0: 5, v1: 2, kind: EdgeKind::Border },
-            Edge { id: 9, v0: 2, v1: 6, kind: EdgeKind::Border },
-            Edge { id: 10, v0: 6, v1: 3, kind: EdgeKind::Border },
-            Edge { id: 11, v0: 0, v1: 7, kind: EdgeKind::Border },
-            Edge { id: 12, v0: 7, v1: 1, kind: EdgeKind::Border },
-            Edge { id: 17, v0: 0, v1: 8, kind: EdgeKind::Valley },
-            Edge { id: 18, v0: 8, v1: 2, kind: EdgeKind::Valley },
-            Edge { id: 19, v0: 8, v1: 9, kind: EdgeKind::Mountain },
-            Edge { id: 20, v0: 9, v1: 5, kind: EdgeKind::Mountain },
-            Edge { id: 21, v0: 2, v1: 9, kind: EdgeKind::Mountain },
-            Edge { id: 22, v0: 9, v1: 1, kind: EdgeKind::Mountain },
-            Edge { id: 23, v0: 8, v1: 10, kind: EdgeKind::Mountain },
-            Edge { id: 24, v0: 10, v1: 7, kind: EdgeKind::Mountain },
-            Edge { id: 25, v0: 0, v1: 10, kind: EdgeKind::Mountain },
-            Edge { id: 26, v0: 10, v1: 1, kind: EdgeKind::Mountain },
-            Edge { id: 27, v0: 4, v1: 11, kind: EdgeKind::Mountain },
-            Edge { id: 28, v0: 11, v1: 8, kind: EdgeKind::Mountain },
-            Edge { id: 29, v0: 0, v1: 11, kind: EdgeKind::Mountain },
-            Edge { id: 30, v0: 11, v1: 3, kind: EdgeKind::Mountain },
-            Edge { id: 31, v0: 6, v1: 12, kind: EdgeKind::Mountain },
-            Edge { id: 32, v0: 12, v1: 8, kind: EdgeKind::Mountain },
-            Edge { id: 33, v0: 2, v1: 12, kind: EdgeKind::Mountain },
-            Edge { id: 34, v0: 12, v1: 3, kind: EdgeKind::Mountain },
-            Edge { id: 35, v0: 11, v1: 12, kind: EdgeKind::Valley },
-            Edge { id: 36, v0: 10, v1: 9, kind: EdgeKind::Valley },
+            Edge {
+                id: 4,
+                v0: 3,
+                v1: 4,
+                kind: EdgeKind::Border,
+            },
+            Edge {
+                id: 5,
+                v0: 4,
+                v1: 0,
+                kind: EdgeKind::Border,
+            },
+            Edge {
+                id: 6,
+                v0: 1,
+                v1: 5,
+                kind: EdgeKind::Border,
+            },
+            Edge {
+                id: 7,
+                v0: 5,
+                v1: 2,
+                kind: EdgeKind::Border,
+            },
+            Edge {
+                id: 9,
+                v0: 2,
+                v1: 6,
+                kind: EdgeKind::Border,
+            },
+            Edge {
+                id: 10,
+                v0: 6,
+                v1: 3,
+                kind: EdgeKind::Border,
+            },
+            Edge {
+                id: 11,
+                v0: 0,
+                v1: 7,
+                kind: EdgeKind::Border,
+            },
+            Edge {
+                id: 12,
+                v0: 7,
+                v1: 1,
+                kind: EdgeKind::Border,
+            },
+            Edge {
+                id: 17,
+                v0: 0,
+                v1: 8,
+                kind: EdgeKind::Valley,
+            },
+            Edge {
+                id: 18,
+                v0: 8,
+                v1: 2,
+                kind: EdgeKind::Valley,
+            },
+            Edge {
+                id: 19,
+                v0: 8,
+                v1: 9,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 20,
+                v0: 9,
+                v1: 5,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 21,
+                v0: 2,
+                v1: 9,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 22,
+                v0: 9,
+                v1: 1,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 23,
+                v0: 8,
+                v1: 10,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 24,
+                v0: 10,
+                v1: 7,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 25,
+                v0: 0,
+                v1: 10,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 26,
+                v0: 10,
+                v1: 1,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 27,
+                v0: 4,
+                v1: 11,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 28,
+                v0: 11,
+                v1: 8,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 29,
+                v0: 0,
+                v1: 11,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 30,
+                v0: 11,
+                v1: 3,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 31,
+                v0: 6,
+                v1: 12,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 32,
+                v0: 12,
+                v1: 8,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 33,
+                v0: 2,
+                v1: 12,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 34,
+                v0: 12,
+                v1: 3,
+                kind: EdgeKind::Mountain,
+            },
+            Edge {
+                id: 35,
+                v0: 11,
+                v1: 12,
+                kind: EdgeKind::Valley,
+            },
+            Edge {
+                id: 36,
+                v0: 10,
+                v1: 9,
+                kind: EdgeKind::Valley,
+            },
         ],
         next_vertex_id: 13,
         next_edge_id: 37,
@@ -289,12 +729,20 @@ fn moving_the_selected_creases_together_keeps_the_paper_closed() {
             hinge: group[0],
             target_angle_deg: angle,
         }];
-        let targets: HashMap<u32, f64> = group
-            .iter()
-            .skip(1)
-            .map(|&hinge| (hinge, angle))
-            .collect();
-        let solved = solve_motion(&cp, &faces, &drivers, Some(&targets), Some(&warm), true).result;
+        let targets: HashMap<u32, f64> =
+            group.iter().skip(1).map(|&hinge| (hinge, angle)).collect();
+        let solved = solve_motion_with_contact_options(
+            &cp,
+            &faces,
+            &drivers,
+            Some(&targets),
+            Some(&warm),
+            MotionContactOptions {
+                detect: true,
+                prevent: true,
+            },
+        )
+        .result;
 
         assert!(
             solved.converged,

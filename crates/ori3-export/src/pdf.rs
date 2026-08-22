@@ -322,7 +322,7 @@ fn validate_raster_images(images: &[RasterPlacement], context: &str) -> Result<(
 /// premultiplied RGBAを白背景へ合成し、PDFのDeviceRGBへ渡すRGB列にする。
 fn composite_rgba_over_white(rgba: &[u8]) -> Vec<u8> {
     let mut rgb = Vec::with_capacity(rgba.len() / 4 * 3);
-    for pixel in rgba.chunks_exact(4) {
+    for pixel in rgba.as_chunks::<4>().0 {
         let white = 255 - pixel[3];
         rgb.push(pixel[0].saturating_add(white));
         rgb.push(pixel[1].saturating_add(white));

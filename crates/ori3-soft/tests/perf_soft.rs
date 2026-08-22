@@ -19,10 +19,21 @@
 //! 分割の細かさを自動で落として目標を保つ」)。このテストが測るのはその
 //! 既定の動きで、目標16msに対しておよそ3倍の余裕がある。
 //!
-//! debugビルドは層16枚で約28ms(release比およそ5倍)。通常のcargo testでは
-//! その数倍を上限にした緩い枠で「大きな性能後退」だけを検出する。release実測は
-//!   cargo test --release -p ori3-soft --test perf_soft -- --nocapture
-//! で確認する。
+//! 通常の`cargo test --workspace`では計算結果だけを確かめ、実時間の上限は
+//! `cargo test --release -p ori3-soft --test perf_soft -- --nocapture`でだけ判定する。
+//! 各計測は同じ入力を3回以上繰り返し、一番良かった回を使う。OSが一時的に
+//! スレッドを止めた時間を判定から除き、性能後退なら全回が遅くなるようにする。
+//!
+//! # 移動後の実測(2026-08-20、Windows 11開発機、release、20回連続、失敗0件)
+//!
+//! | 対象 | 最大 | 中央 | 最小 | 上限 | 最大÷上限 |
+//! |---|---:|---:|---:|---:|---:|
+//! | relax 1層 | 746.9µs | 528.0µs | 469.5µs | 200ms | 0.0038 |
+//! | relax 16層 | 6.4798ms | 5.0966ms | 4.9637ms | 200ms | 0.0324 |
+//! | prevent_overlap 接触0 | 1.2453ms | 792.1µs | 772.4µs | 16ms | 0.0778 |
+//!
+//! いずれも手元の最大値が上限の1/3以下である。CIは開発機より約3.6倍遅い実測が
+//! あるため、実測値をそのまま上限にせず、既存の上限を維持している。
 
 use std::time::{Duration, Instant};
 
@@ -31,10 +42,21 @@ use ori3_model::{CreasePattern, Driver, Edge, EdgeKind, Vertex};
 use ori3_rigid::solve;
 use ori3_soft::{OverlapSettings, SoftSettings, prevent_overlap, relax};
 
-/// debugビルドでの`relax` 1回あたりの上限(モジュール冒頭の計測記録を参照)。
-const DEBUG_BUDGET: Duration = Duration::from_millis(200);
-/// 接触専用経路のdebug実測(約129ms)に対する、CIばらつき込みの退行検知枠。
-const OVERLAP_DEBUG_BUDGET: Duration = Duration::from_millis(300);
+/// `relax` 1回あたりの上限(モジュール冒頭の計測記録を参照)。
+const RELAX_BUDGET: Duration = Duration::from_millis(200);
+/// 接触専用経路の上限。既存のrelease側16ms枠を維持する。
+const OVERLAP_BUDGET: Duration = Duration::from_millis(16);
+
+/// 実時間の上限は最適化ありの性能ジョブだけで判定する。
+fn assert_within_release_budget(elapsed: Duration, budget: Duration, label: &str) {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    assert!(
+        elapsed <= budget,
+        "{label}: {elapsed:?}(上限 {budget:?}。モジュール冒頭の計測記録を参照)"
+    );
+}
 
 /// nc×nr面のミウラ折りCP(`ori3-rigid/tests/perf_miura.rs` と同じ作り方)。
 fn miura_cp(nc: usize, nr: usize) -> CreasePattern {
@@ -147,14 +169,8 @@ fn relax_of_400_faces_fits_in_one_frame() {
         warm.triangles.len(),
         warm.positions.len()
     );
-    assert!(
-        best <= DEBUG_BUDGET,
-        "1回あたり {best:?}(上限 {DEBUG_BUDGET:?})"
-    );
-    assert!(
-        best_layered <= DEBUG_BUDGET,
-        "16層で1回あたり {best_layered:?}(上限 {DEBUG_BUDGET:?})"
-    );
+    assert_within_release_budget(best, RELAX_BUDGET, "relax 1層・1回");
+    assert_within_release_budget(best_layered, RELAX_BUDGET, "relax 16層・1回");
 }
 
 #[test]
@@ -201,10 +217,5 @@ fn contact_free_overlap_check_of_400_faces_fits_in_one_frame() {
         faces.len(),
         settings.iterations
     );
-    let budget = if cfg!(debug_assertions) {
-        OVERLAP_DEBUG_BUDGET
-    } else {
-        Duration::from_millis(16)
-    };
-    assert!(best <= budget, "1フレーム {best:?}(上限 {budget:?})");
+    assert_within_release_budget(best, OVERLAP_BUDGET, "prevent_overlap接触0・1回");
 }

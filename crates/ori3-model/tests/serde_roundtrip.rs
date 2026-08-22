@@ -65,6 +65,7 @@ fn sample_document() -> Document {
                         AlignmentTarget::Point { p: [0.0, 1.0] },
                     ],
                 }),
+                finish_soft: None,
                 note: "半分に折る".to_string(),
             },
             FoldStep {
@@ -77,6 +78,7 @@ fn sample_document() -> Document {
                 }],
                 layer_order: None,
                 alignment: None,
+                finish_soft: None,
                 note: String::new(),
             },
         ],
@@ -155,6 +157,7 @@ fn saved_document_coordinates_survive_json_roundtrip_bit_for_bit() {
             }],
             layer_order: Some(vec![[next_unit(&mut state), next_unit(&mut state)]]),
             alignment: None,
+            finish_soft: None,
             note: String::new(),
         });
         step_creases.push(StepCreases {
@@ -197,7 +200,10 @@ fn saved_document_coordinates_survive_json_roundtrip_bit_for_bit() {
     };
 
     compare(saved.document.paper.width_mm, back.document.paper.width_mm);
-    compare(saved.document.paper.height_mm, back.document.paper.height_mm);
+    compare(
+        saved.document.paper.height_mm,
+        back.document.paper.height_mm,
+    );
     for (before, after) in saved
         .document
         .cp
@@ -273,6 +279,178 @@ fn test_document_json_roundtrip() {
     );
     let back: Document = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(doc, back);
+}
+
+#[test]
+fn old_fold_step_without_finish_soft_loads_as_unrecorded() {
+    let old = r#"{"id":7,"kind":"Pose","drivers":[],"layer_order":null,"note":""}"#;
+    let step: FoldStep = serde_json::from_str(old).expect("旧形式の仕上げ手順を読む");
+
+    assert_eq!(step.finish_soft, None);
+    assert!(
+        !serde_json::to_string(&step)
+            .expect("旧形式相当の手順を書き出す")
+            .contains("finish_soft"),
+        "未記録の任意欄は作品へ書き足さない"
+    );
+}
+
+#[test]
+fn finish_soft_round_trips_three_values_only_with_measured_tolerance() {
+    let values = [
+        FinishSoftSettings {
+            enabled: true,
+            stiffness: 0.17,
+            pressure: 0.08,
+        },
+        FinishSoftSettings {
+            enabled: false,
+            stiffness: 0.52,
+            pressure: 0.41,
+        },
+        FinishSoftSettings {
+            enabled: true,
+            stiffness: 0.88,
+            pressure: 0.76,
+        },
+    ];
+    let mut document = Document::new(Paper {
+        width_mm: 150.0,
+        height_mm: 150.0,
+    });
+    document.sequence = values
+        .iter()
+        .enumerate()
+        .map(|(index, &finish_soft)| FoldStep {
+            id: u32::try_from(index).expect("3手はu32に収まる"),
+            kind: TechniqueKind::Pose,
+            drivers: Vec::new(),
+            layer_order: None,
+            alignment: None,
+            finish_soft: Some(finish_soft),
+            note: String::new(),
+        })
+        .collect();
+    let saved = SavedDocument::new(document);
+
+    let json = serde_json::to_string_pretty(&saved).expect("仕上げ値を保存する");
+    let shape: serde_json::Value = serde_json::from_str(&json).expect("JSONの形を調べる");
+    let expected_keys = std::collections::BTreeSet::from(["enabled", "pressure", "stiffness"]);
+    for (index, step) in shape["sequence"]
+        .as_array()
+        .expect("sequenceは配列")
+        .iter()
+        .enumerate()
+    {
+        let finish = step["finish_soft"]
+            .as_object()
+            .unwrap_or_else(|| panic!("手順{}にfinish_softがある", index + 1));
+        let actual_keys = finish
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            actual_keys, expected_keys,
+            "仕上げ欄には3値だけを保存し、3D頂点や計算設定を含めない"
+        );
+    }
+
+    let restored: SavedDocument = serde_json::from_str(&json).expect("仕上げ値を読み直す");
+    let restored_values = restored
+        .document
+        .sequence
+        .iter()
+        .map(|step| step.finish_soft.expect("3手とも仕上げ値を持つ"))
+        .collect::<Vec<_>>();
+
+    // 実測最大差は0。既往のJSON最下位差1.11e-16に対して1e-12は約9,000倍の
+    // 余裕を持ち、別の記録値どうしの最小差0.33より11桁以上小さいため別物を通さない。
+    const TOLERANCE: f64 = 1e-12;
+    let mut max_difference = 0.0_f64;
+    for (expected, actual) in values.iter().zip(&restored_values) {
+        assert_eq!(actual.enabled, expected.enabled);
+        max_difference = max_difference.max((actual.stiffness - expected.stiffness).abs());
+        max_difference = max_difference.max((actual.pressure - expected.pressure).abs());
+    }
+    let min_distinct_difference = values
+        .windows(2)
+        .flat_map(|pair| {
+            [
+                (pair[1].stiffness - pair[0].stiffness).abs(),
+                (pair[1].pressure - pair[0].pressure).abs(),
+            ]
+        })
+        .fold(f64::INFINITY, f64::min);
+    assert!(
+        min_distinct_difference > 0.32 && min_distinct_difference < 0.34,
+        "別値を区別する最小差の実測は0.33: {min_distinct_difference}"
+    );
+    assert!(TOLERANCE < min_distinct_difference);
+    assert!(
+        max_difference <= TOLERANCE,
+        "仕上げ値のJSON往復差 {max_difference:e} が実測根拠の許容差 {TOLERANCE:e} を超えた"
+    );
+    assert_eq!(max_difference, 0.0, "今回の実測最大差を固定する");
+    assert_eq!(
+        restored.document.schema_version, 1,
+        "加算式の任意欄なので版1を維持する"
+    );
+}
+
+#[test]
+fn finish_soft_replay_uses_the_latest_completed_pose_at_each_position() {
+    let a = FinishSoftSettings {
+        enabled: true,
+        stiffness: 0.17,
+        pressure: 0.08,
+    };
+    let b = FinishSoftSettings {
+        enabled: false,
+        stiffness: 0.52,
+        pressure: 0.41,
+    };
+    let c = FinishSoftSettings {
+        enabled: true,
+        stiffness: 0.88,
+        pressure: 0.76,
+    };
+    let step = |id, kind, finish_soft| FoldStep {
+        id,
+        kind,
+        drivers: Vec::new(),
+        layer_order: None,
+        alignment: None,
+        finish_soft,
+        note: String::new(),
+    };
+    let mut document = Document::new(Paper {
+        width_mm: 150.0,
+        height_mm: 150.0,
+    });
+    document.sequence = vec![
+        step(1, TechniqueKind::Pose, Some(a)),
+        step(2, TechniqueKind::Simple, None),
+        step(3, TechniqueKind::Pose, Some(b)),
+        step(4, TechniqueKind::Pose, Some(c)),
+    ];
+
+    for (up_to, expected) in [(1, a), (2, a), (3, b), (4, c)] {
+        assert_eq!(document.finish_soft_at(up_to, 1.0), Some(expected));
+    }
+    assert_eq!(document.finish_soft_at(3, 0.0), Some(a));
+    assert_eq!(document.finish_soft_at(3, 0.5), Some(a));
+    assert_eq!(document.finish_soft_at(3, 1.0), Some(b));
+    assert_eq!(document.finish_soft_at(3, f64::NAN), Some(b));
+    assert_eq!(document.finish_soft_at(usize::MAX, 1.0), Some(c));
+
+    for step in &mut document.sequence {
+        step.finish_soft = None;
+    }
+    assert_eq!(
+        document.finish_soft_at(usize::MAX, 1.0),
+        None,
+        "全手順に欄がない旧作品は従来のDisplay値へ委ねる"
+    );
 }
 
 #[test]
@@ -387,8 +565,9 @@ fn test_display_settings_defaults_for_old_files() {
     assert!(!d.soft_enabled, "たわみの既定はオフ");
     assert_eq!(d.soft_stiffness, 0.5);
     assert_eq!(d.soft_pressure, 0.0);
-    assert!(d.overlap_prevention_enabled, "重なり防止の既定はオン");
-    assert!(d.penetration_prevention_enabled, "食い込み防止の既定はオン");
+    // 形を変える補正は、古い作品でも利用者の明示選択なしに有効化しない。
+    assert!(!d.overlap_prevention_enabled, "重なり防止の既定はオフ");
+    assert!(d.penetration_prevention_enabled, "食い込み検出の既定はオン");
 }
 
 #[test]

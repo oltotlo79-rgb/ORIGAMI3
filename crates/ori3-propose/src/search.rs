@@ -48,12 +48,13 @@
 //!   (`CLAUDE.md` §10.7.7)。
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::{Duration, Instant};
 
 use ori3_cp::{Face, extract_faces};
 use ori3_layers::replay::replay;
 use ori3_model::{CreasePattern, Document, FaceId, VertexId};
 
-use crate::enumerate::{FoldSession, PoseScan, VerifiedMove};
+use crate::enumerate::{FoldSession, PoseScan, SessionStateKey, VerifiedMove};
 use crate::finish::{FinishGaps, FinishTarget, FinishedForm, MeasuredTip, finish_gaps};
 
 /// 点数を比べるときの刻み。
@@ -331,6 +332,61 @@ impl Default for GapWeights {
     }
 }
 
+/// 「完成した」と判断する、4つの物差しそれぞれの許容値。
+///
+/// 物差しの定義や値を変えるものではなく、作業20の [`FinishGaps`] を
+/// **4項目とも**どこまで許すかを表す。総合点が小さくても1項目だけ大きい形を
+/// 完成とはしない。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CompletionTolerance {
+    pub count: f64,
+    pub length: f64,
+    pub width: f64,
+    pub position: f64,
+}
+
+impl CompletionTolerance {
+    /// 作業24の終点実測を終えてから決めた既定値(作業25、debugビルド)。
+    ///
+    /// 実作品の完成形を独立に固定し、折り鶴・やっこさん・鳥の基本形について、
+    /// まず従来探索の返した手順を21姿勢/手で最後まで折って4値を測った。許容値は
+    /// **その後**に、各項目で最も近い未完成値の80%へ置いた。実測値そのものを境目に
+    /// せず、未完成値との間に20%の分離余裕を残している。
+    ///
+    /// | 物差し | 作業24の実測／離散根拠 | 許容上限 | 根拠値に対する割合 | 余裕 |
+    /// |---|---:|---:|---:|---:|
+    /// | 角の数 | 3終点は`0.0`。最大12葉で1本欠ける最小非0値`1/12 = 0.0833333333` | `0.0666666667` | **80%** | **20%** |
+    /// | 長さ | 鳥の基本形 `0.7071067812` | `0.5656854249` | **80%** | **20%** |
+    /// | 太さ | やっこさん `0.3106601718` | `0.2485281374` | **80%** | **20%** |
+    /// | 位置 | 折り鶴 `0.4326478860` | `0.3461183088` | **80%** | **20%** |
+    ///
+    /// 角数は整数の欠損数を葉数で割る離散値なので、計算機差のある小数を厳密比較
+    /// していない。この上限なら対象範囲1〜12葉で1本欠けた形を完成扱いしない。
+    /// 他3項目も [`Self::contains`] で有限性を確認してから正の上限と比べる。
+    pub const DEFAULT: Self = Self {
+        count: 0.066_666_666_666_666_67,
+        length: 0.565_685_424_949_238_7,
+        width: 0.248_528_137_423_857_1,
+        position: 0.346_118_308_825_409_8,
+    };
+
+    /// 4項目がすべて有限で、それぞれの許容上限以内か。
+    #[must_use]
+    pub fn contains(self, gaps: &FinishGaps) -> bool {
+        gaps.all_finite()
+            && gaps.count <= self.count
+            && gaps.length <= self.length
+            && gaps.width <= self.width
+            && gaps.position <= self.position
+    }
+}
+
+impl Default for CompletionTolerance {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
 /// 探索の打ち切り条件。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SearchBudget {
@@ -349,9 +405,61 @@ pub struct SearchBudget {
     /// 順位の上位に残った手だけをこの細かさで確かめ直し、
     /// 通らなかった手は捨てる。**返る手はすべてこの細かさを通っている。**
     pub scan: PoseScan,
+    /// 1回の探索に使ってよい壁時計時間の上限(ミリ秒)。
+    ///
+    /// 打ち切りは操作を止めない安全弁である。この時間に達しても、
+    /// そこまでに確かめ終えた最善の手順をそのまま返す([`SearchStop::TimeCap`])。
+    /// [`SearchBudget::DEFAULT`] はここへ [`SearchBudget::MAX_MILLIS`]
+    /// (240,000ms・検査用の固定標本を切らない値)を入れる。**呼び出し側は
+    /// 用途に応じてこの項目だけを変えてよい。** 画面から呼ぶ
+    /// `apps/desktop/src-tauri/src/commands.rs::PLAN_BUDGET` は
+    /// 6,000msを使う(根拠は同ファイルのコメントと
+    /// `scratchpad/search-budget-report.md`)。
+    pub max_millis: u64,
 }
 
 impl SearchBudget {
+    /// 1回の探索に使ってよい壁時計時間の上限(ミリ秒)。
+    ///
+    /// これは**すべての `SearchBudget` に共通する安全弁**である。状態数や分岐数を
+    /// 個別に変える呼び出しでも、探索が無制限に走り続けないようにする。
+    ///
+    /// ## この値の決め方（実測、2026-08-22）
+    ///
+    /// 上限は、**正しく完成する探索を途中で切らない**ことが先に要る。切ってしまうと
+    /// 受け入れ検査が `TimeCap` で赤くなり、CIも通らない（実際に600秒で起きた。
+    /// `crate::enumerate` の候補の作り分けのコメントを参照）。
+    /// そこで、いちばん重い正当な探索を測り、そこから余裕を取って決めた。
+    ///
+    /// | 測ったもの | 最適化あり | **最適化なし** |
+    /// |---|---:|---:|
+    /// | 折り鶴（既定12状態・分岐3、完成する） | 2.082秒 | **47.854秒** |
+    /// | 鳥の基本形（同、12状態で打切り） | 0.772秒 | 18.951秒 |
+    /// | やっこさん（同、1状態で完成） | 0.096秒 | 2.450秒 |
+    ///
+    /// CIの `cargo test --workspace` は**最適化なし**で走り、CIの計算機は手元より
+    /// **約3.6倍遅い**実測がある（`CLAUDE.md` §10.6）。したがってCIで想定すべき
+    /// いちばん重い1回は `47.854 × 3.6 = 172.3秒` である。
+    /// このリポジトリの余裕の取り方（実測が上限のおよそ8割以内、`CLAUDE.md` §10.7.9）を
+    /// 当てると `172.3 / 0.8 = 215.4秒` 以上が要る。人に読みやすい単位へ切り上げて
+    /// **4分 = 240,000ms** とした。想定最大はこの **71.8%**、手元の最適化なしでは **19.9%**。
+    ///
+    /// **この値は [`SearchBudget::DEFAULT`] の [`SearchBudget::max_millis`] にだけ入る。**
+    /// 検査用の固定標本(既定12状態)を切らないための値で、利用者の画面での待ち時間の
+    /// 上限ではない。
+    ///
+    /// ## 利用者の待ち時間との関係（2026-08-22に解決）
+    ///
+    /// この定数は検査用の固定標本にも同じように掛かるため、**利用者に許したい
+    /// 待ち時間（数秒）をそのまま入れることはできなかった**。そこで時間上限を
+    /// [`SearchBudget::max_millis`] という**呼び出しごとに変えられる項目**にした。
+    /// 製品の `apps/desktop/src-tauri/src/commands.rs::PLAN_BUDGET`(2状態・2分岐、
+    /// 検査の12状態よりずっと軽い)は、ここだけ独自に **6,000ms** を入れる。
+    /// 根拠(最適化ありの実測)は `commands.rs` のコメントと
+    /// `scratchpad/search-budget-report.md` にある
+    /// (`scratchpad/propose-search-subset-report.md` §16.7.5 の判断待ちに対する回答)。
+    pub const MAX_MILLIS: u64 = 240_000;
+
     /// 既定の打ち切り。**実測を根拠に決めた**(`scratchpad/propose-22-report.md` 段階1)。
     ///
     /// ## なぜ打ち切りが要るか(実測)
@@ -365,9 +473,10 @@ impl SearchBudget {
     ///
     /// | 項目 | 値 | 根拠(実測) |
     /// |---|---:|---|
-    /// | `max_states` | **12** | 折り鶴は3状態(8.0秒)で手が尽きる。やっこさんは尽きるまで28〜40状態かかり、1状態3.02秒なので85〜120秒になる。12に切ると **36.2秒**で、それでも目標の形へ届いた(点 0.000000) |
-    /// | `branch` | **3** | 1つの状態から候補に挙がる手の最大は、やっこさん7・折り鶴1。上位3件に絞ると広がりが 7→3 に下がる |
-    /// | `max_depth` | **8** | 実際に折り切れた手数は折り鶴2・やっこさん4。その2倍 |
+    /// | `max_states` | **12** | 部分集合候補追加後も、折り鶴は6状態、やっこさんは1状態で完成許容へ到達する。鳥の基本形は12状態で安全に打ち切る |
+    /// | `branch` | **3** | 枝刈り前の候補最大は、折り鶴4・やっこさん9・鳥の基本形3。完成許容内の候補を順位の先頭へ置いた上で、保持する子を上位3件に絞る |
+    /// | [`max_millis`](Self::max_millis) | **240,000**([`MAX_MILLIS`](Self::MAX_MILLIS)) | 最適化なしの折り鶴47.854秒。CIは約3.6倍遅いので172.3秒を想定し、8割余裕の215.4秒を4分へ切り上げた。**画面から呼ぶときはここを個別に変える**(`commands.rs::PLAN_BUDGET` は6,000ms) |
+    /// | `max_depth` | **8** | 完成した手数は折り鶴5・やっこさん1。既定予算内で両方を収める |
     /// | `rank_scan` | **3点**(`steps = 2`) | 順位を付けるだけの粗い確認 |
     /// | `scan` | **21点**([`PoseScan::DEFAULT`]) | 作業21が使うのと同じ細かさ。**返す手はすべてこれを通る** |
     ///
@@ -385,6 +494,9 @@ impl SearchBudget {
     /// **速さも測った**。`rank_scan` だけを 3点 と 21点 に変え、
     /// 他は同じにして同じ探索を回した結果は次のとおりで、
     /// **返した手順は両方とも同じ**(折り鶴 `[16, 3]`・やっこさん `[0, 7]`)だった。
+    /// (折り鶴が返す手順は、2026-08-17に候補の集め方を直してから `[3, 16]` に
+    /// 変わっている。手3と手16はどちらも点 0.353553 で並び、折り線の番号が
+    /// 小さいほうを先にするためで、2手折り終えた点はどちらも 0.000000 である。)
     ///
     /// | `rank_scan` | 折り鶴 | やっこさん |
     /// |---|---:|---:|
@@ -398,16 +510,21 @@ impl SearchBudget {
         branch: 3,
         rank_scan: PoseScan { steps: 2 },
         scan: PoseScan::DEFAULT,
+        max_millis: Self::MAX_MILLIS,
     };
 }
 
 /// 探索が止まった理由。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SearchStop {
-    /// 折れる手が尽きた(行ける先を全部見た)。
+    /// 4つの物差しがすべて、探索に指定した [`CompletionTolerance`] 以内になった。
+    GoalReached,
+    /// 設定した枝刈りと重複排除の範囲で、広げる状態が尽きた。
     Exhausted,
     /// 状態の数の上限で打ち切った。
     StateCap,
+    /// 壁時計時間の上限で打ち切った。完了済みの安全な手だけから最善を返す。
+    TimeCap,
     /// 深さの上限で打ち切った。
     DepthCap,
 }
@@ -448,8 +565,42 @@ pub struct SearchOutcome {
     pub stop: SearchStop,
 }
 
-/// 状態を表す鍵。同じ折り目を折り終えた状態は1度しか広げない。
-type StateKey = crate::plan::FoldedMask;
+/// 順位の同点を決める履歴。**折り線の番号も面の番号も1つも使わない。**
+///
+/// 1手ぶんが「動かした直線の端点と、その目標角」の集合である。端点は
+/// [`HISTORY_LINE_TOL`] きざみ、角は100万分の1度きざみの整数へ丸めて持つ。
+///
+/// ## なぜ番号をやめたか
+///
+/// 前は `(手の番号, 閉じた線の番号, 閉鎖mask)` を使っていた。折り線の番号は
+/// 端点の座標順で毎手付け直されるので、**同じ番号が別の線を指しうる**
+/// (実測: 折り鶴の探索経路で折り線のまとまりが 34 → 33 → 32 → 30 → 31 → 28 → 28 と動く)。
+/// 折り目が増える手(花弁折りなど)を扱えるようにしたことで、番号のずれはさらに
+/// 大きくなった。番号どうしを比べる同点解消は、「どちらの状態を先に広げるか」を
+/// 意味の無い値で決めることになり、番号の付き方が変わるだけで結果が揺れうる。
+///
+/// 辺のIDも使わない。折り目が増えるとき、既にある辺は**分割されて別のIDになる**ので、
+/// 辺のIDも安定しないからである。動かした直線の位置と角だけが、
+/// 展開図の作り直しに左右されない。
+///
+/// ## これで区別しきれない組はどうなるか
+///
+/// 同じ直線・同じ角でも対象の層が違う手(つぶし折りなど)は同じ値になりうる。
+/// その場合は [`RankKey`] の最後の [`SessionStateKey`] が決める。あちらは
+/// 展開図の中身・面の置き方・重なり順そのものを持つ**最終的な権威**なので、
+/// ここで取りこぼしても順位が不定になることはない。
+type HistoryKey = Vec<Vec<([i64; 2], [i64; 2], i64)>>;
+
+/// 同じ折り線とみなす、履歴の端点の刻み。
+///
+/// 展開図の座標は長辺=1.0に正規化されており、折り線の端点は生成時に `1e-9` で
+/// 既存頂点へ吸着される。`crate::plan` の同名の許容差と同じ考え方で、
+/// 吸着の刻みより2桁ゆるい値にする。
+const HISTORY_LINE_TOL: f64 = 1e-7;
+
+/// 順位の最後に使う手番号列。部分集合は状態同一性だけに使い、既存契約どおり
+/// 全手番号列を先に比較する。
+type IdKey = Vec<usize>;
 
 /// 探索の途中の1状態。
 #[derive(Clone, Debug)]
@@ -458,15 +609,147 @@ struct Node {
     steps: Vec<RankedMove>,
     score: f64,
     gaps: FinishGaps,
+    /// 形を直接改善しない層準備を、通常候補に飢餓させないための連続深さ。
+    preparation_depth: usize,
 }
 
-/// 順位を決める鍵。点数の刻み → 手数 → 折り線の番号列、の順で比べる。
+/// 分岐上限3の中で、形を変える手・層を組み替える準備手・開き直しを競合させない。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CandidateClass {
+    Regular,
+    Directional,
+    Reactivate,
+    Reopen,
+}
+
+impl CandidateClass {
+    const fn index(self) -> usize {
+        match self {
+            Self::Regular => 0,
+            Self::Directional => 1,
+            Self::Reactivate => 2,
+            Self::Reopen => 3,
+        }
+    }
+
+    const fn is_preparation(self) -> bool {
+        !matches!(self, Self::Regular)
+    }
+}
+
+/// 1つの状態から残す `branch` 件の内訳。
 ///
-/// 点数を刻みへ丸めてから比べるので、最下位の桁の違いで順番が入れ替わらない。
-/// 同じ刻みに入った状態は、**手数が少ないほう**、それも同じなら
-/// **折り線の番号が小さいほう**を先にする。どちらも計算した小数を含まないので、
-/// 並び方は毎回同じになる。
-type RankKey = (i64, usize, Vec<usize>);
+/// [`Self::regular`] と [`Self::preparation`] の合計は常に `branch - 1` である。
+/// 残る1件は**粗順位の全体1位**で、種類を問わずに必ず確かめる
+/// ([`next_candidate_index`] が最初に返す)。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ClassQuotas {
+    /// **形を変える手**([`CandidateClass::Regular`])へ必ず残す枠。
+    regular: usize,
+    /// **準備手**(形をまだ変えない手。方向付き・つぶし折り・花弁折り)へ残す枠。
+    /// 種類は問わず、**粗順位の良いものから**入れる。
+    preparation: usize,
+}
+
+/// 1状態から残す子の内訳を決める。
+///
+/// **規則(2026-08-22に変更)**: 予約枠 `branch - 1` のうち、
+/// **準備手へ1枠**、**残りは形を変える手へ**。準備手の枠は種類で分けず、
+/// 方向付き・つぶし折り・花弁折りが**同じ1枠を粗順位で取り合う**。
+///
+/// # なぜ規則を変えたか(実測)
+///
+/// 前の規則は、つぶし折り／花弁折りの候補が**1件でも挙がった瞬間**に
+/// 「つぶし折り1枠・花弁折り1枠」を予約し、形を変える手の枠を
+/// `branch - 3` にしていた。**`branch = 3`(既定)ではこれが 0 になる。**
+/// 残るのは全体1位の1枠だけで、その1位が準備手だと、
+/// **その状態からは形を変える手が1つも残らない**。
+///
+/// 実際に折り鶴が壊れた(最適化あり・既定12状態・分岐3、
+/// `enumerate.rs` の `WITH_EXTRA_CANDIDATES` を `true` にしたとき)。
+/// 前の規則では `StateCap`・**1手**(ID 16のみ)・長さ **1.142733** で未達だった。
+///
+/// 準備手を捨ててはいない。1枠は必ず残るので、つぶし折りも花弁折りも
+/// 粗順位が良ければ入る。次の状態ではもう片方が1位になり得る。
+/// **上限(状態12・分岐3・深さ8)は1つも上げていない。**
+fn candidate_class_quotas(branch: usize) -> ClassQuotas {
+    let reserved = branch.saturating_sub(1);
+    let preparation = reserved.min(1);
+    ClassQuotas {
+        regular: reserved - preparation,
+        preparation,
+    }
+}
+
+/// 形を変える通常の状態を先に広げ、形を変えない層準備の状態は後回しにする。
+///
+/// 返す最善手の順位は [`rank_key`] のまま変えない。ここで決めるのは
+/// 「状態上限12のうち、どの状態に手を広げるか」だけである。
+///
+/// **実測(2026-08-22、最適化あり、既定12状態・分岐3)**: 準備状態と通常状態を
+/// 1状態ずつ**交互に**広げていたとき、折り鶴は12状態を使い切っても完成せず
+/// (`StateCap`、長さ0.750927・太さ0.471180・位置0.325450)、完成には**13状態**を
+/// 要した。交互を止めて通常状態を先に広げると、同じ12状態の上限で**6状態**で
+/// `GoalReached` になり、長さ0.359121・太さ0.172464・位置0.184029 になる。
+/// やっこさんは1状態の `GoalReached` のまま、鳥の基本形は4指標とも交互ありと
+/// 同じ値(長さ0.707107・太さ7e-16・位置0.250000)で変わらなかった。
+/// つまり交互は折り鶴の完成だけを奪い、他2標本には何も足していなかった。
+///
+/// 準備状態を捨ててはいない。通常状態が尽きれば、同じ順位で準備状態を広げる。
+fn pop_frontier(frontier: &mut BTreeMap<RankKey, Node>) -> Option<(RankKey, Node)> {
+    if let Some(key) = frontier
+        .iter()
+        .find_map(|(key, node)| (node.preparation_depth == 0).then(|| key.clone()))
+    {
+        let node = frontier
+            .remove(&key)
+            .expect("selected regular frontier key disappeared");
+        return Some((key, node));
+    }
+    frontier.pop_first()
+}
+
+fn next_candidate_index(
+    classes: &[CandidateClass],
+    attempted: &BTreeSet<usize>,
+    kept: [usize; 4],
+    quotas: ClassQuotas,
+) -> Option<usize> {
+    if classes.is_empty() {
+        return None;
+    }
+    if attempted.is_empty() {
+        // 粗順位の全体1位は、候補種別の予約枠に関係なく必ず21姿勢で確かめる。
+        return Some(0);
+    }
+    let kept_regular = kept[CandidateClass::Regular.index()];
+    let kept_preparation = kept.iter().sum::<usize>() - kept_regular;
+    classes
+        .iter()
+        .enumerate()
+        .find(|(index, class)| {
+            !attempted.contains(index)
+                && if class.is_preparation() {
+                    // 準備手は種類で分けず、1枠を粗順位で取り合う。
+                    kept_preparation < quotas.preparation
+                } else {
+                    kept_regular < quotas.regular
+                }
+        })
+        .or_else(|| {
+            classes
+                .iter()
+                .enumerate()
+                .find(|(index, _)| !attempted.contains(index))
+        })
+        .map(|(index, _)| index)
+}
+
+/// 順位を決める鍵。
+///
+/// 通常探索では「総合点 → 手数 → 番号列」。完成探索では「許容値からの超過 →
+/// 総合点 → 手数 → 番号列」の順にする。小数はすべて刻みへ丸める。
+type RankKey = (i64, i64, usize, IdKey, HistoryKey, SessionStateKey);
 
 fn quantize(score: f64) -> i64 {
     if !score.is_finite() {
@@ -482,11 +765,89 @@ fn quantize(score: f64) -> i64 {
     }
 }
 
-fn rank_key(node: &Node) -> RankKey {
+fn history_key(node: &Node) -> HistoryKey {
+    let quantize_coordinate = |value: f64| -> i64 {
+        if !value.is_finite() {
+            return if value.is_sign_negative() {
+                i64::MIN
+            } else {
+                i64::MAX
+            };
+        }
+        let scaled = (value / HISTORY_LINE_TOL).round();
+        if scaled >= i64::MAX as f64 {
+            i64::MAX
+        } else if scaled <= i64::MIN as f64 {
+            i64::MIN
+        } else {
+            scaled as i64
+        }
+    };
+    let quantize_point = |point: [f64; 2]| point.map(quantize_coordinate);
+    let sequence = &node.session.document().sequence;
+    // 探索で進めた手だけを見る。渡された作品が既に何手か折られていることがあるので、
+    // 手順の末尾から `node.steps` の数だけを取る。
+    let skip = sequence.len().saturating_sub(node.steps.len());
+    sequence[skip..]
+        .iter()
+        .map(|step| {
+            let mut driven = BTreeSet::new();
+            for driver in &step.drivers {
+                if !driver.target_angle_deg.is_finite() {
+                    continue;
+                }
+                // 同じ直線を逆向きに書いた手を別物にしない。
+                let (mut a, mut b) = (quantize_point(driver.a), quantize_point(driver.b));
+                if b < a {
+                    std::mem::swap(&mut a, &mut b);
+                }
+                let angle = (driver.target_angle_deg * 1_000_000.0).round() as i64;
+                driven.insert((a, b, angle));
+            }
+            driven.into_iter().collect()
+        })
+        .collect()
+}
+
+fn id_key(node: &Node) -> IdKey {
+    node.steps.iter().map(|step| step.mv.id).collect()
+}
+
+/// 4項目が許容値をどれだけ超えたか。0なら4/4を満たす。
+///
+/// 許容値0の項目（角数は欠損0本を要求できる）は [`SCORE_QUANTUM`] を目盛りに使い、
+/// 0除算を避ける。これは物差しや許容値を変えず、完成探索の順番だけを決める値である。
+fn completion_excess(gaps: &FinishGaps, tolerance: CompletionTolerance) -> f64 {
+    let excess = |gap: f64, limit: f64| {
+        if !gap.is_finite() || !limit.is_finite() || limit < 0.0 {
+            f64::INFINITY
+        } else {
+            (gap - limit).max(0.0) / limit.max(SCORE_QUANTUM)
+        }
+    };
+    excess(gaps.count, tolerance.count)
+        + excess(gaps.length, tolerance.length)
+        + excess(gaps.width, tolerance.width)
+        + excess(gaps.position, tolerance.position)
+}
+
+fn rank_key(node: &Node, completion: Option<CompletionTolerance>) -> RankKey {
+    let (primary, secondary) = completion.map_or_else(
+        || (quantize(node.score), 0),
+        |tolerance| {
+            (
+                quantize(completion_excess(&node.gaps, tolerance)),
+                quantize(node.score),
+            )
+        },
+    );
     (
-        quantize(node.score),
+        primary,
+        secondary,
         node.steps.len(),
-        node.steps.iter().map(|s| s.mv.id).collect(),
+        id_key(node),
+        history_key(node),
+        node.session.state_key(),
     )
 }
 
@@ -499,8 +860,8 @@ fn rank_key(node: &Node) -> RankKey {
 /// 途中で目標にいちばん近くなるならそこで返す。打ち切りに達した場合も、
 /// **そこまでで見つけたいちばん良い手順**が同じ規則で返る。
 ///
-/// どの手を折っても目標から遠ざかる展開図では、**手順0件**(折らないのが最良)が返る。
-/// これは異常ではなく、与えた目標が平らな紙ですでに満たされているという意味である。
+/// 見た範囲でどの手を折っても目標から遠ざかる展開図では、**手順0件**
+/// (折らないのが最良)が返る。これは探索失敗ではないが、完成を意味するとは限らない。
 ///
 /// ## どこで4つの物差しが効くか
 ///
@@ -517,6 +878,36 @@ pub fn search_to_finish(
     weights: GapWeights,
     budget: SearchBudget,
 ) -> SearchOutcome {
+    search(session, goal, weights, budget, None)
+}
+
+/// 4つの物差しがすべて指定の許容値以内になるまで探索する。
+///
+/// 許容内の候補を枝刈り前から最優先し、未完成の候補も4項目の許容超過が小さい順に
+/// 広げる。これにより、総合点では4位以下でも4/4を満たす手を捨てない。見つからなければ
+/// 打ち切りまでで許容値に最も近い状態を返す。同点の決め方は [`search_to_finish`] と同じ。
+#[must_use]
+pub fn search_to_completion(
+    session: &FoldSession,
+    goal: &FoldGoal,
+    weights: GapWeights,
+    budget: SearchBudget,
+    tolerance: CompletionTolerance,
+) -> SearchOutcome {
+    search(session, goal, weights, budget, Some(tolerance))
+}
+
+fn search(
+    session: &FoldSession,
+    goal: &FoldGoal,
+    weights: GapWeights,
+    budget: SearchBudget,
+    completion: Option<CompletionTolerance>,
+) -> SearchOutcome {
+    // 壁時計時間の上限は `budget.max_millis` から取る(既定は `SearchBudget::MAX_MILLIS`)。
+    // 呼び出しごとに変えられるのはこの1点だけの目的で、状態数・分岐数などの
+    // 他の打ち切りには影響しない。
+    let deadline = SearchDeadline::new(budget.max_millis);
     let start_form = goal.measure(session.document());
     let start_gaps = finish_gaps(&goal.target, &start_form);
     let start_score = weights.score(&start_gaps);
@@ -526,6 +917,7 @@ pub fn search_to_finish(
         steps: Vec::new(),
         score: start_score,
         gaps: start_gaps,
+        preparation_depth: 0,
     };
     let mut outcome = SearchOutcome {
         steps: Vec::new(),
@@ -539,14 +931,29 @@ pub fn search_to_finish(
         depth_capped: 0,
         stop: SearchStop::Exhausted,
     };
+    if deadline.expired() {
+        outcome.stop = SearchStop::TimeCap;
+        return outcome;
+    }
+    if completion.is_some_and(|tolerance| tolerance.contains(&start_gaps)) {
+        outcome.stop = SearchStop::GoalReached;
+        return outcome;
+    }
     // たどった中でいちばん点数の良かった状態。打ち切りに達してもこれを返す。
-    let mut best: (RankKey, Node) = (rank_key(&root), root.clone());
+    let mut best: (RankKey, Node) = (rank_key(&root, completion), root.clone());
     let mut capped = false;
+    let mut goal_reached = false;
 
-    let mut seen: BTreeSet<StateKey> = BTreeSet::from([session.folded_mask()]);
-    let mut frontier: BTreeMap<RankKey, Node> = BTreeMap::from([(rank_key(&root), root)]);
+    let mut seen = BTreeSet::from([root.session.state_key()]);
+    let mut frontier: BTreeMap<RankKey, Node> =
+        BTreeMap::from([(rank_key(&root, completion), root)]);
 
-    while let Some((_, node)) = frontier.pop_first() {
+    while let Some((_, node)) = pop_frontier(&mut frontier) {
+        if deadline.expired() {
+            outcome.stop = SearchStop::TimeCap;
+            capped = true;
+            break;
+        }
         if node.steps.len() >= budget.max_depth {
             outcome.depth_capped += 1;
             outcome.stop = SearchStop::DepthCap;
@@ -560,21 +967,47 @@ pub fn search_to_finish(
         }
         outcome.states_expanded += 1;
 
-        let (children, candidates) = expand(&node, goal, weights, budget);
+        let (children, candidates, expansion_timed_out) =
+            expand(&node, goal, weights, budget, completion, &deadline, &seen);
         outcome.max_branching = outcome.max_branching.max(candidates);
+        let mut completed: Option<(RankKey, Node)> = None;
         for child in children {
-            if !seen.insert(child.session.folded_mask()) {
+            if !seen.insert(child.session.state_key()) {
                 continue;
             }
             outcome.states_generated += 1;
-            let key = rank_key(&child);
+            let key = rank_key(&child, completion);
             if key < best.0 {
-                best = (key, child.clone());
+                best = (key.clone(), child.clone());
             }
-            frontier.insert(rank_key(&child), child);
+            if completion.is_some_and(|tolerance| tolerance.contains(&child.gaps))
+                && completed.as_ref().is_none_or(|(done, _)| key < *done)
+            {
+                completed = Some((key.clone(), child.clone()));
+            }
+            frontier.insert(key, child);
+        }
+        let timed_out = expansion_timed_out || deadline.expired();
+        if timed_out {
+            // 期限直前に21姿勢を通し終えた子は最善候補へ含める。ただし停止理由は
+            // GoalReachedよりTimeCapを優先し、時間を超えた事実を利用者へ隠さない。
+            if let Some(done) = completed {
+                best = done;
+            }
+            outcome.stop = SearchStop::TimeCap;
+            capped = true;
+            break;
+        }
+        if let Some(done) = completed {
+            // 4項目すべてを満たすことを、総合点の改善より優先する。
+            // 同じ展開で複数見つかった場合は既存の決定的な順位で1つに決める。
+            best = done;
+            outcome.stop = SearchStop::GoalReached;
+            goal_reached = true;
+            break;
         }
     }
-    if !capped {
+    if !capped && !goal_reached {
         outcome.stop = SearchStop::Exhausted;
     }
 
@@ -582,6 +1015,30 @@ pub fn search_to_finish(
     outcome.best_gaps = best.1.gaps;
     outcome.best_score = best.1.score;
     outcome
+}
+
+/// 候補1件の検証を途中で切らず、その前後で壁時計上限を調べる。
+///
+/// `collapse_precrease_network` と21姿勢走査は1候補を安全と認めるための原子的な処理で
+/// あり、途中で止めると未確認の手を返しかねない。このため上限をまたいだ候補だけは
+/// 検証完了まで走らせ、完了した安全な子を最善へ含めた直後に止める。
+#[derive(Clone, Copy, Debug)]
+struct SearchDeadline {
+    started: Instant,
+    max_elapsed: Duration,
+}
+
+impl SearchDeadline {
+    fn new(max_millis: u64) -> Self {
+        Self {
+            started: Instant::now(),
+            max_elapsed: Duration::from_millis(max_millis),
+        }
+    }
+
+    fn expired(self) -> bool {
+        self.started.elapsed() >= self.max_elapsed
+    }
 }
 
 /// 1つの状態から、次に折れる手を順位の良い順に並べて返す。
@@ -595,37 +1052,146 @@ pub fn search_to_finish(
 ///
 /// 返る手はすべて細かい確認を通っているので、
 /// **確かめていない手が手順に入ることはない**。
+///
+/// # 候補は、いまの展開図の折り線を**すべて**試して集める
+///
+/// 1で候補を集めるのに [`FoldSession::verified_moves`] は使わない。あれは
+/// **作業18の見積もり([`crate::plan_generic::GenericPlanner`])に入った手だけ**を
+/// 返し、見積もりの外で折れた手は数([`crate::enumerate::MoveReport::verified_outside_estimate`])
+/// にするだけで捨ててしまう。ところがこの見積もりは
+/// **上限とも下限とも言えない**ことが作業21で実測されている
+/// (検査 `the_estimate_from_task_18_is_neither_an_upper_nor_a_lower_bound`)。
+/// 見積もりで絞ると、**実際に折れる手を探索が見られなくなる**。
+///
+/// 実測(2026-08-17、debugビルド): 折り鶴の `y = 0.5`(紙を端から端まで横切る
+/// 折り目、手3)は姿勢3点でも21点でも折れるのに、見積もりの外にある。
+/// 手16を折った後もこれは変わらないので、絞っていたときの探索は
+/// **2手目の候補が0件**になり、`[16]` の1手で止まっていた
+/// (点 0.353553。`scratchpad/search-fail-report.md`)。
+///
+/// 折る手間は増えない。[`FoldSession::verified_moves`] も、もともと
+/// **すべての折り線を1本ずつ実際に折って**確かめており、見積もりは
+/// 結果を振り分けるのに使われているだけだからである。
+/// ここでは同じ確認を [`FoldSession::verify_move`] で1本ずつ行い、
+/// 見積もりによる振り分けをしない。
 fn expand(
     node: &Node,
     goal: &FoldGoal,
     weights: GapWeights,
     budget: SearchBudget,
-) -> (Vec<Node>, usize) {
-    let report = node.session.verified_moves(budget.rank_scan);
-    let mut ranked: Vec<(usize, FinishGaps, f64)> = Vec::new();
-    for mv in &report.verified {
-        let mut next = node.session.clone();
-        if next.apply(mv).is_err() {
-            continue; // 確かめた直後の状態から動いている場合。止めずに次の手へ。
-        }
-        let gaps = finish_gaps(&goal.target, &goal.measure(next.document()));
-        ranked.push((mv.id, gaps, weights.score(&gaps)));
-    }
-    ranked.sort_by(|a, b| quantize(a.2).cmp(&quantize(b.2)).then_with(|| a.0.cmp(&b.0)));
-    let candidates = ranked.len();
-
-    let mut children: Vec<Node> = Vec::new();
-    for (id, gaps, score) in ranked {
-        if children.len() >= budget.branch {
+    completion: Option<CompletionTolerance>,
+    deadline: &SearchDeadline,
+    seen: &BTreeSet<SessionStateKey>,
+) -> (Vec<Node>, usize, bool) {
+    let mut ranked: Vec<(usize, FinishGaps, f64, CandidateClass)> = Vec::new();
+    let mut safe_single_lines = BTreeSet::new();
+    let mut timed_out = false;
+    for fold_line in node.session.fold_lines() {
+        if deadline.expired() {
+            timed_out = true;
             break;
         }
-        let Some(mv) = node.session.verify_move(id, budget.scan) else {
+        let Some((mv, next)) = node.session.prepare_move(fold_line.id, budget.rank_scan) else {
+            if deadline.expired() {
+                timed_out = true;
+                break;
+            }
+            continue; // もう折り終えている手か、粗く見ても折れない手。止めずに次の手へ。
+        };
+        let gaps = finish_gaps(&goal.target, &goal.measure(next.document()));
+        safe_single_lines.insert(fold_line.id);
+        ranked.push((mv.id, gaps, weights.score(&gaps), CandidateClass::Regular));
+        if deadline.expired() {
+            timed_out = true;
+            break;
+        }
+    }
+    if completion.is_some() && !timed_out {
+        // 単一直線を順に閉じると行き止まる花弁折り等のため、完成探索だけは
+        // 全網と、畳んだ平面で同一直線へ重なる局所部分集合も同じ物差しで順位付けする。
+        // 通常の `search_to_finish` には足さず、作業22の既存結果を変えない。
+        let (network_moves, network_timed_out) = node.session.prepared_completion_moves_until(
+            budget.rank_scan,
+            &safe_single_lines,
+            || deadline.expired(),
+        );
+        for (mv, next) in network_moves {
+            if deadline.expired() {
+                timed_out = true;
+                break;
+            }
+            let gaps = finish_gaps(&goal.target, &goal.measure(next.document()));
+            let edge_changes = node.session.transition_edge_changes(&next);
+            let class = if node.session.move_is_directional_fold(mv.id) {
+                CandidateClass::Directional
+            } else {
+                match edge_changes {
+                    (true, true) => CandidateClass::Reopen,
+                    (false, false) if node.session.move_reactivates_layer_packet(mv.id) => {
+                        CandidateClass::Reactivate
+                    }
+                    _ => CandidateClass::Regular,
+                }
+            };
+            ranked.push((mv.id, gaps, weights.score(&gaps), class));
+            if deadline.expired() {
+                timed_out = true;
+                break;
+            }
+        }
+        timed_out |= network_timed_out || deadline.expired();
+    }
+    ranked.sort_by(|a, b| {
+        let completion_key = |gaps: &FinishGaps| {
+            completion.map_or(0, |tolerance| quantize(completion_excess(gaps, tolerance)))
+        };
+        completion_key(&a.1)
+            .cmp(&completion_key(&b.1))
+            .then_with(|| quantize(a.2).cmp(&quantize(b.2)))
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    let candidates = ranked.len();
+    if timed_out || deadline.expired() {
+        return (Vec::new(), candidates, true);
+    }
+
+    // 幾何点数だけのbeamでは、形をまだ変えない「層を持ち替える準備手」が常に
+    // 単線候補の後ろへ落ち、次の花弁折りへ到達できない。分岐上限は増やさず、
+    // 「全体最良1・準備手1・残りは形を変える手」に層化する
+    // (内訳と、規則を変えた理由は candidate_class_quotas を見ること)。
+    // 粗検査だけ通って21点検査で落ちた候補や既訪問状態は枠へ数えず、次候補で補充する。
+    // 返す最善の順位は変えず、状態上限の配分だけを公平にする。
+    let quotas = candidate_class_quotas(budget.branch);
+    let mut children: Vec<Node> = Vec::new();
+    let mut attempted = BTreeSet::new();
+    let mut child_states = BTreeSet::new();
+    let mut kept = [0usize; 4];
+    let classes = ranked
+        .iter()
+        .map(|(_, _, _, class)| *class)
+        .collect::<Vec<_>>();
+    while attempted.len() < ranked.len() && children.len() < budget.branch {
+        let Some(index) = next_candidate_index(&classes, &attempted, kept, quotas) else {
+            break;
+        };
+        attempted.insert(index);
+        let id = ranked[index].0;
+        if deadline.expired() {
+            timed_out = true;
+            break;
+        }
+        let Some((mv, next)) = node.session.prepare_move(id, budget.scan) else {
             continue; // 粗く見たときは折れたが、細かく見ると折れない手。捨てる。
         };
-        let mut next = node.session.clone();
-        if next.apply(&mv).is_err() {
+        let child_state = next.state_key();
+        if seen.contains(&child_state) || !child_states.insert(child_state) {
+            // 同じ物理状態へ戻るcycleや、別IDから同じ終点へ来る兄弟で分岐枠を使わない。
             continue;
         }
+        // 粗い確認と細かい確認はそれぞれ独立に折り直す。結果へ載せる4値は、
+        // 実際に子状態として保持する細かい確認後の文書から改めて測る。
+        let gaps = finish_gaps(&goal.target, &goal.measure(next.document()));
+        let score = weights.score(&gaps);
         let mut steps = node.steps.clone();
         steps.push(RankedMove { mv, gaps, score });
         children.push(Node {
@@ -633,9 +1199,19 @@ fn expand(
             steps,
             score,
             gaps,
+            preparation_depth: if ranked[index].3.is_preparation() {
+                node.preparation_depth + 1
+            } else {
+                0
+            },
         });
+        kept[ranked[index].3.index()] += 1;
+        if deadline.expired() {
+            timed_out = true;
+            break;
+        }
     }
-    (children, candidates)
+    (children, candidates, timed_out)
 }
 
 /// 材料座標の点を、折り上がりの姿勢の点へ移す。
@@ -695,7 +1271,11 @@ impl Placer {
                 placed: q,
             });
         }
-        if out.is_empty() { None } else { Some(Self { faces: out }) }
+        if out.is_empty() {
+            None
+        } else {
+            Some(Self { faces: out })
+        }
     }
 
     /// 材料座標の点を姿勢の点へ移す。どの面にも入っていなければ `None`。
@@ -823,4 +1403,460 @@ fn scale(a: [f64; 3], k: f64) -> [f64; 3] {
 
 fn norm(a: [f64; 3]) -> f64 {
     (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt()
+}
+
+#[cfg(test)]
+mod tests {
+    use ori3_model::{Document, Paper};
+
+    use super::*;
+    use crate::verify::verify_search_outcome;
+
+    /// 分岐の枠は「全体1位1・準備手1・残りは形を変える手」で、上限は上げない。
+    ///
+    /// **前の規則を置き換えた検査である**(落ちないように緩めたのではない)。
+    /// 前は「つぶし折り1枠・花弁折り1枠」を種類ごとに予約しており、
+    /// 技法候補が1件でも挙がると、既定の `branch = 3` では
+    /// **形を変える手の枠が `3 - 3 = 0` になっていた**。
+    /// そのため折り鶴が1手目から先へ進めなくなった(実測: `StateCap`・1手・
+    /// 長さ 1.142733・未達)。ここで主張するのは、**どの分岐数でも
+    /// 形を変える手の枠が消えないこと**である。
+    #[test]
+    fn every_branch_size_keeps_room_for_a_move_that_changes_the_shape() {
+        // 既定の分岐3: 全体1位1 + 形を変える手1 + 準備手1。
+        assert_eq!(
+            candidate_class_quotas(3),
+            ClassQuotas {
+                regular: 1,
+                preparation: 1
+            }
+        );
+        for branch in 0..=8 {
+            let quotas = candidate_class_quotas(branch);
+            assert_eq!(
+                quotas.regular + quotas.preparation,
+                branch.saturating_sub(1),
+                "予約枠の合計は分岐数-1(全体1位の1枠を差し引く)。上限は上げない"
+            );
+            assert!(
+                quotas.preparation <= 1,
+                "準備手は種類を問わず1枠まで(分岐{branch})"
+            );
+            if branch >= 3 {
+                assert!(
+                    quotas.regular >= 1,
+                    "分岐{branch}で、形を変える手の枠が消えてはいけない"
+                );
+            }
+        }
+    }
+
+    /// 準備手の1枠は、種類ではなく**粗順位**で取り合う。
+    ///
+    /// つぶし折りと花弁折りに別々の枠を与えると、既定の分岐3では
+    /// 形を変える手の枠が無くなる。ここでは、準備手を1つ残した後は
+    /// 別の種類の準備手であっても予約枠では選ばれないことを固定する。
+    /// 角度も解も通さない、枠の配り方だけの検査である。
+    #[test]
+    fn the_single_preparation_slot_is_shared_by_every_preparation_kind() {
+        use CandidateClass::{Directional, Reactivate, Regular, Reopen};
+        let quotas = candidate_class_quotas(3);
+        let classes = [Regular, Reactivate, Reopen, Directional, Regular];
+
+        // 全体1位(index 0、形を変える手)は種類を問わず必ず確かめる。
+        let mut attempted = BTreeSet::new();
+        let mut kept = [0usize; 4];
+        assert_eq!(
+            next_candidate_index(&classes, &attempted, kept, quotas),
+            Some(0)
+        );
+        attempted.insert(0);
+        kept[Regular.index()] += 1;
+
+        // 形を変える手の枠は1で、いま埋まった。次は準備手の枠から選ぶ。
+        assert_eq!(
+            next_candidate_index(&classes, &attempted, kept, quotas),
+            Some(1),
+            "準備手の枠には、粗順位のいちばん良い準備手が入る"
+        );
+        attempted.insert(1);
+        kept[Reactivate.index()] += 1;
+
+        // 準備手の枠は使い切った。別の種類(花弁折り)でも予約では選ばれず、
+        // 予約を使い切った後は粗順位の順に補充する。
+        assert_eq!(
+            next_candidate_index(&classes, &attempted, kept, quotas),
+            Some(2),
+            "予約枠が尽きたら、種類を問わず粗順位の順に補充する"
+        );
+    }
+
+    fn node_with_moves(session: &FoldSession, moves: &[(usize, Vec<usize>)]) -> Node {
+        let steps = moves
+            .iter()
+            .map(|(id, closes)| RankedMove {
+                mv: VerifiedMove {
+                    id: *id,
+                    line: [[0.0, 0.0], [1.0, 0.0]],
+                    closes: closes.clone(),
+                    mask: 0,
+                    max_seam_gap: 0.0,
+                    penetrations: 0,
+                    poses_checked: 1,
+                },
+                gaps: FinishGaps::BEST,
+                score: 0.0,
+            })
+            .collect();
+        Node {
+            session: session.clone(),
+            steps,
+            score: 0.0,
+            gaps: FinishGaps::BEST,
+            preparation_depth: 0,
+        }
+    }
+
+    /// 形を変える通常状態を先に広げ、準備状態は捨てずに後回しにする。
+    ///
+    /// 交互に広げていたときは折り鶴が12状態で完成しなくなった(実測は
+    /// [`pop_frontier`] のコメント)。ここでは「全体順位では準備側が先」という
+    /// 最悪の並びを作り、それでも通常側から広げること、準備側が消えないことを固定する。
+    #[test]
+    fn regular_states_are_expanded_before_preparation_states() {
+        let document = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        let session = FoldSession::new(&document).expect("平らな正方形を読み込めない");
+        let mut preparation_node = node_with_moves(&session, &[(1, vec![1])]);
+        preparation_node.preparation_depth = 2;
+        let regular_node = node_with_moves(&session, &[(2, vec![2])]);
+        let preparation_key = rank_key(&preparation_node, None);
+        let regular_key = rank_key(&regular_node, None);
+        assert!(
+            preparation_key < regular_key,
+            "準備側を全体順位では先にしておく"
+        );
+
+        let mut frontier = BTreeMap::from([
+            (preparation_key.clone(), preparation_node),
+            (regular_key.clone(), regular_node),
+        ]);
+
+        let (selected_regular, _) = pop_frontier(&mut frontier).expect("通常状態を選べない");
+        assert_eq!(
+            selected_regular, regular_key,
+            "全体順位が下でも、形を変える状態を先に広げる"
+        );
+        let (selected_preparation, _) = pop_frontier(&mut frontier).expect("準備状態を選べない");
+        assert_eq!(
+            selected_preparation, preparation_key,
+            "通常状態が尽きたら準備状態を広げる"
+        );
+        assert!(frontier.is_empty());
+        assert!(pop_frontier(&mut frontier).is_none());
+    }
+
+    /// 粗順位の全体1位は、予約枠に関係なく必ず確かめる。
+    ///
+    /// **2026-08-22に主張を1つ足した**。前は「全体1位のあと、つぶし折りと花弁折りが
+    /// それぞれ予約枠を持つ」ことを固定していたが、その規則だと既定の分岐3で
+    /// **形を変える手の枠が0**になり、折り鶴が1手目から進めなくなった
+    /// (理由は [`candidate_class_quotas`])。いまは
+    /// 「全体1位 → 形を変える手 → 準備手」の順で枠が埋まる。
+    #[test]
+    fn overall_best_candidate_is_checked_before_class_quotas() {
+        let classes = [
+            CandidateClass::Directional,
+            CandidateClass::Regular,
+            CandidateClass::Reactivate,
+            CandidateClass::Reopen,
+        ];
+        let quotas = candidate_class_quotas(3);
+        let mut attempted = BTreeSet::new();
+        let mut kept = [0; 4];
+
+        assert_eq!(
+            next_candidate_index(&classes, &attempted, kept, quotas),
+            Some(0),
+            "予約枠を持たない種類でも、粗順位1位を捨てない"
+        );
+        attempted.insert(0);
+        kept[CandidateClass::Directional.index()] = 1;
+        assert_eq!(
+            next_candidate_index(&classes, &attempted, kept, quotas),
+            Some(1),
+            "全体1位が準備手だったときは、次に形を変える手の枠を必ず使う"
+        );
+        attempted.insert(1);
+        kept[CandidateClass::Regular.index()] = 1;
+        assert_eq!(
+            next_candidate_index(&classes, &attempted, kept, quotas),
+            Some(2),
+            "全体1位が準備手でも、準備手の枠はまだ残っている(1位は種類を問わない枠で入った)"
+        );
+    }
+
+    /// 順位の同点解消は「全ID列 → 履歴 → 物理状態」の順である。
+    ///
+    /// 手番号の列を先に比べることは従来どおり。履歴だけを、折り線の番号ではなく
+    /// **動かした直線と目標角**で比べるように変えた([`HistoryKey`])。
+    #[test]
+    fn ranking_compares_the_full_id_sequence_before_subset_identity() {
+        let document = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        let session = FoldSession::new(&document).expect("平らな正方形を読み込めない");
+        let lower_ids = node_with_moves(&session, &[(1, vec![99]), (2, vec![99])]);
+        let higher_ids = node_with_moves(&session, &[(1, vec![0]), (3, vec![0])]);
+        let same_ids_other_subset = node_with_moves(&session, &[(1, vec![0]), (2, vec![0])]);
+
+        assert!(
+            rank_key(&lower_ids, None) < rank_key(&higher_ids, None),
+            "早い手の部分集合ではなく、全ID列[1,2]を[1,3]より先にする"
+        );
+        assert_eq!(id_key(&lower_ids), id_key(&same_ids_other_subset));
+        assert_eq!(
+            lower_ids.session.state_key(),
+            same_ids_other_subset.session.state_key(),
+            "手順履歴が違っても、同じCP・配置・層順・角度なら同じ物理状態"
+        );
+        let mut seen = BTreeSet::new();
+        assert!(seen.insert(lower_ids.session.state_key()));
+        assert!(
+            !seen.insert(same_ids_other_subset.session.state_key()),
+            "履歴だけ違う同じ物理状態を二重に広げた"
+        );
+    }
+
+    /// 折り目が1本増えて**折り線の番号が全部ずれても**、同点解消の履歴は変わらない。
+    ///
+    /// 折る途中で折り目が増える手(花弁折りなど)を扱えるようにしたので、これは
+    /// 実際に起きる。前の履歴は折り線の番号と閉鎖maskを持っていたため、
+    /// 同じ折り方でも番号の付き方が変わるだけで別の値になり、順位が揺れうる形だった。
+    #[test]
+    fn the_ranking_history_does_not_move_when_crease_lines_are_renumbered() {
+        // 対角の谷折り1本だけを持つ紙と、そこへ水平の山折りを1本足した紙。
+        // `crease_lines` の番号は端点の座標順なので、足すと番号の付き方が変わる。
+        let with_one_crease = creased_document(false);
+        let with_extra_crease = creased_document(true);
+        assert_ne!(
+            crate::plan::crease_lines(&with_one_crease.cp).len(),
+            crate::plan::crease_lines(&with_extra_crease.cp).len(),
+            "折り線のまとまりの本数が変わっていない。番号がずれる状況を作れていない"
+        );
+
+        // どちらの紙でも「同じ対角を180°へ閉じる」1手だけを記録する。
+        let plain = node_with_recorded_fold(&with_one_crease);
+        let renumbered = node_with_recorded_fold(&with_extra_crease);
+        assert_eq!(
+            history_key(&plain),
+            history_key(&renumbered),
+            "折り線の番号がずれただけで同点解消の履歴が変わった"
+        );
+
+        // 別の直線を動かした手は、きちんと別物として区別する。
+        let mut other = with_one_crease.clone();
+        other.sequence[0].drivers[0].a = [0.0, 1.0];
+        other.sequence[0].drivers[0].b = [1.0, 0.0];
+        let other = node_with_recorded_fold(&other);
+        assert_ne!(
+            history_key(&plain),
+            history_key(&other),
+            "違う直線を動かした手が同じ履歴になった"
+        );
+
+        // 同じ直線でも目標角が違えば別物である。
+        let mut half = with_one_crease.clone();
+        half.sequence[0].drivers[0].target_angle_deg = 90.0;
+        let half = node_with_recorded_fold(&half);
+        assert_ne!(
+            history_key(&plain),
+            history_key(&half),
+            "目標角が違う手が同じ履歴になった"
+        );
+    }
+
+    /// 対角の谷折りを1本持つ紙。`extra` を立てると水平の山折りを1本足す。
+    /// どちらにも「その対角を180°へ閉じる」手順を1手だけ記録しておく。
+    fn creased_document(extra: bool) -> Document {
+        let mut document = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        ori3_cp::insert_segment(
+            &mut document.cp,
+            [0.0, 0.0],
+            [1.0, 1.0],
+            ori3_model::EdgeKind::Valley,
+        );
+        if extra {
+            ori3_cp::insert_segment(
+                &mut document.cp,
+                [0.0, 0.75],
+                [0.75, 0.0],
+                ori3_model::EdgeKind::Mountain,
+            );
+        }
+        document.sequence.push(ori3_model::FoldStep {
+            id: 0,
+            kind: ori3_model::TechniqueKind::Simple,
+            drivers: vec![ori3_model::DriverLine {
+                a: [0.0, 0.0],
+                b: [1.0, 1.0],
+                target_angle_deg: 180.0,
+            }],
+            layer_order: None,
+            alignment: None,
+            finish_soft: None,
+            note: String::new(),
+        });
+        document
+    }
+
+    /// 1手だけ記録された作品から、探索の1状態を作る。
+    fn node_with_recorded_fold(document: &Document) -> Node {
+        let session = FoldSession::new(document).expect("折り筋のある紙を読み込めない");
+        node_with_moves(&session, &[(0, vec![0])])
+    }
+
+    /// 時間0の決定的な時計で、実時間の速い/遅いに依存せず時間打切りを固定する。
+    /// 空手順も終点を21姿勢検証と同じ最終健全性検査へ通し、有限な最善を返す。
+    #[test]
+    fn time_cap_returns_a_finite_safe_best_so_far_without_panicking() {
+        let document = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        let session = FoldSession::new(&document).expect("平らな正方形を読み込めない");
+        let goal = FoldGoal {
+            target: FinishTarget::default(),
+            body: [0.5, 0.5],
+            sites: Vec::new(),
+        };
+
+        // max_millis: 0 は、時間0の決定的な時計で即座に期限切れにするための値。
+        // 状態数・分岐数などの他の打ち切りは既定のまま変えない。
+        let zero_time_budget = SearchBudget {
+            max_millis: 0,
+            ..SearchBudget::DEFAULT
+        };
+        let outcome = search_to_finish(&session, &goal, GapWeights::DEFAULT, zero_time_budget);
+        assert_eq!(
+            SearchBudget::MAX_MILLIS,
+            240_000,
+            "時間の安全弁を根拠なく変えた"
+        );
+        assert_eq!(
+            SearchBudget::DEFAULT.max_millis,
+            SearchBudget::MAX_MILLIS,
+            "既定のSearchBudgetは既定の安全弁をそのまま使う"
+        );
+        assert_eq!(outcome.stop, SearchStop::TimeCap);
+        assert_eq!(outcome.states_expanded, 0);
+        assert_eq!(outcome.states_generated, 1);
+        assert!(outcome.steps.is_empty());
+        assert!(outcome.start_gaps.all_finite());
+        assert!(outcome.best_gaps.all_finite());
+        assert!(outcome.start_score.is_finite());
+        assert!(outcome.best_score.is_finite());
+
+        let report = verify_search_outcome(
+            &session,
+            &outcome,
+            &goal,
+            GapWeights::DEFAULT,
+            PoseScan::DEFAULT,
+        );
+        assert!(
+            report.passed(),
+            "時間打切りの最善を再生できない: {report:?}"
+        );
+        assert_eq!(report.requested, 0);
+        assert_eq!(report.cleared(), 0);
+        assert_eq!(report.poses_checked, 1);
+        assert_eq!(report.penetrations, 0);
+        assert!(report.final_gaps.all_finite());
+
+        let already_complete = search_to_completion(
+            &session,
+            &goal,
+            GapWeights::DEFAULT,
+            zero_time_budget,
+            CompletionTolerance::DEFAULT,
+        );
+        assert_eq!(
+            already_complete.stop,
+            SearchStop::TimeCap,
+            "初期測定中に期限を超えた事実をGoalReachedで隠した"
+        );
+        assert!(already_complete.steps.is_empty());
+        assert!(already_complete.best_gaps.all_finite());
+    }
+
+    /// `SearchBudget::max_millis` は呼び出しごとに変えられる項目である
+    /// (`apps/desktop/src-tauri/src/commands.rs::PLAN_BUDGET` は6,000ms)。
+    /// 折り線が実在し、候補が複数出る展開図(座布団折り1回ぶん、4本の谷折り)へ
+    /// 極端に小さい値を渡しても、探索ループがpanicせず有限の最善を返すことを、
+    /// 決定的な0ms(必ず即座に期限切れ)と、機械の速さに依存する1msの両方で確かめる。
+    #[test]
+    fn max_millis_can_be_lowered_per_call_and_still_returns_a_finite_result() {
+        let mut document = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        let (m1, m2, m3, m4) = ([0.5, 0.0], [1.0, 0.5], [0.5, 1.0], [0.0, 0.5]);
+        for (a, b) in [(m1, m2), (m2, m3), (m3, m4), (m4, m1)] {
+            ori3_cp::insert_segment(&mut document.cp, a, b, ori3_model::EdgeKind::Valley);
+        }
+        let session = FoldSession::new(&document).expect("座布団折りの展開図を読み込めない");
+        let goal = FoldGoal {
+            target: FinishTarget::default(),
+            body: [0.5, 0.5],
+            sites: Vec::new(),
+        };
+
+        for max_millis in [0_u64, 1] {
+            let budget = SearchBudget {
+                max_millis,
+                max_states: 20,
+                ..SearchBudget::DEFAULT
+            };
+            let outcome = search_to_finish(&session, &goal, GapWeights::DEFAULT, budget);
+            assert!(
+                outcome.best_gaps.all_finite(),
+                "max_millis={max_millis}: 有限でない隔たりが返った"
+            );
+            assert!(
+                outcome.best_score.is_finite(),
+                "max_millis={max_millis}: 有限でない点数が返った"
+            );
+            assert!(outcome.start_gaps.all_finite());
+            assert!(outcome.start_score.is_finite());
+            let report = verify_search_outcome(
+                &session,
+                &outcome,
+                &goal,
+                GapWeights::DEFAULT,
+                PoseScan::DEFAULT,
+            );
+            assert!(
+                report.passed(),
+                "max_millis={max_millis}: 返した手順を再生できない: {report:?}"
+            );
+        }
+
+        // 0msは`SearchDeadline::expired`が経過時間によらず常に真になるので、
+        // 決定的にTimeCapへ入り、状態を1つも広げない。
+        let deterministic = SearchBudget {
+            max_millis: 0,
+            max_states: 20,
+            ..SearchBudget::DEFAULT
+        };
+        let outcome = search_to_finish(&session, &goal, GapWeights::DEFAULT, deterministic);
+        assert_eq!(outcome.stop, SearchStop::TimeCap);
+        assert_eq!(outcome.states_expanded, 0);
+    }
 }

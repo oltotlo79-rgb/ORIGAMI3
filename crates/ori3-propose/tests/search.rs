@@ -117,7 +117,9 @@ fn folded_along(doc: &Document, ids: &[usize]) -> FoldSession {
         let mv = session
             .verify_move(id, PoseScan::DEFAULT)
             .unwrap_or_else(|| panic!("手 {id} は姿勢21点では折れない"));
-        session.apply(&mv).unwrap_or_else(|e| panic!("手 {id}: {e}"));
+        session
+            .apply(&mv)
+            .unwrap_or_else(|e| panic!("手 {id}: {e}"));
     }
     session
 }
@@ -226,7 +228,10 @@ fn a_goal_taken_from_a_folded_shape_scores_zero_on_that_shape() {
         let goal = goal_of_state(&doc, &ids);
         let session = folded_along(&doc, &ids);
         let gaps = finish_gaps(&goal.target, &goal.measure(session.document()));
-        println!("{name} 手順{ids:?} を目標にして測り直す: {}", line(&gaps, 0.0));
+        println!(
+            "{name} 手順{ids:?} を目標にして測り直す: {}",
+            line(&gaps, 0.0)
+        );
         for (label, v) in [
             ("数", gaps.count),
             ("長さ", gaps.length),
@@ -468,7 +473,10 @@ fn the_same_input_gives_the_same_fold_order_three_times() {
             assert_eq!(&runs[0], r, "{name}: {}回目の結果が1回目と違う", i + 1);
         }
         let ids: Vec<usize> = runs[0].steps.iter().map(|s| s.mv.id).collect();
-        println!("{name}: {RUNS}回とも同じ手順 {ids:?}(点 {:.6})", runs[0].best_score);
+        println!(
+            "{name}: {RUNS}回とも同じ手順 {ids:?}(点 {:.6})",
+            runs[0].best_score
+        );
     }
 }
 
@@ -490,7 +498,11 @@ fn the_search_returns_its_best_so_far_when_the_budget_runs_out() {
             "{name} 打ち切り: 手順{ids:?} / {:?} / 広げた状態{} / 作った状態{} / 点 {:.6}(打ち切り前 {:.6})",
             out.stop, out.states_expanded, out.states_generated, out.best_score, out.start_score
         );
-        assert_eq!(out.stop, SearchStop::StateCap, "{name}: 打ち切りが起きていない");
+        assert_eq!(
+            out.stop,
+            SearchStop::StateCap,
+            "{name}: 打ち切りが起きていない"
+        );
         assert_eq!(out.states_expanded, 1, "{name}: 広げた状態の数が予算と違う");
         assert!(
             !out.steps.is_empty(),
@@ -501,20 +513,42 @@ fn the_search_returns_its_best_so_far_when_the_budget_runs_out() {
             "{name}: 打ち切りで返した手順が、折らないときより悪い"
         );
         // 打ち切りで返した手は、最初の手の中でいちばん点数が良いものであること。
+        //
+        // ここで数え直す「最初の手」は、探索が候補にする手と**同じ集め方**で
+        // なければならない。以前は `FoldSession::verified_moves` を使っていたが、
+        // あれは作業18の見積もりに入った手だけを返す。その見積もりは
+        // **上限とも下限とも言えない**ことが作業21で実測されている
+        // (`tests/enumerate.rs` の
+        // `the_estimate_from_task_18_is_neither_an_upper_nor_a_lower_bound`)。
+        //
+        // 実測(2026-08-17、debugビルド): 折り鶴の手3(`y = 0.5`)と手16は
+        // どちらも点 0.353553 で並ぶので、探索は折り線の番号が小さい手3を選ぶ。
+        // ところが手3は見積もりの外にあるため、見積もりで絞った数え直しは
+        // 手16しか見ておらず、`3 != 16` で落ちていた。**探索は正しく、
+        // 数え直す側だけが手を取りこぼしていた。**
+        //
+        // **主張は緩めていない。** 「打ち切りで返した1手目は、最初に折れる手の
+        // 中でいちばん点数が良い」という条件はそのままで、比べる相手の集め方だけを
+        // 探索に合わせた。
         let first = FoldSession::new(&doc).expect("折り始められない");
-        let report = first.verified_moves(tight.rank_scan);
         let mut best: Option<(f64, usize)> = None;
-        for mv in &report.verified {
+        let mut counted = 0usize;
+        for fold_line in first.fold_lines() {
+            let Some(mv) = first.verify_move(fold_line.id, tight.rank_scan) else {
+                continue;
+            };
             let mut next = first.clone();
-            if next.apply(mv).is_err() {
+            if next.apply(&mv).is_err() {
                 continue;
             }
+            counted += 1;
             let g = finish_gaps(&goal.target, &goal.measure(next.document()));
             let s = GapWeights::DEFAULT.score(&g);
             if best.is_none_or(|(b, _)| s < b) {
                 best = Some((s, mv.id));
             }
         }
+        println!("   {name}: 最初に折れる手を {counted} 通り数え直した");
         let (best_score, best_id) = best.expect("折れる手が無い");
         assert_eq!(
             out.steps[0].mv.id, best_id,

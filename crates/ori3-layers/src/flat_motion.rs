@@ -470,18 +470,20 @@ pub(crate) fn run_motion(
 
     // 6. 折り目の山谷を新しい重なり順に合わせ直し、角度が変わる折り目を記録する
     let moved: HashSet<FaceId> = part_of.keys().copied().collect();
-    let angles = settle_creases(
-        &mut work,
-        &new_faces,
-        &wpos,
-        state,
-        &parent_of,
-        &placements,
-        &order,
-        &old_rank,
-        &added,
-        &mut drivers,
-    );
+    let angles = settle_creases(CreaseSettlementContext {
+        work: &mut work,
+        new_faces: &new_faces,
+        positions: &wpos,
+        prior_state: state,
+        resulting_layout: ResultingFlatLayout {
+            parent_of: &parent_of,
+            placements: &placements,
+            order: &order,
+        },
+        prior_rank: &old_rank,
+        added_edges: &added,
+        drivers: &mut drivers,
+    });
     // 引いた折り線の区間へ、決まった線種に合わせて角度を付ける
     for (q0, q1, kind) in cut_intervals {
         record_cut_driver(&work, &angles, q0, q1, kind, &mut drivers);
@@ -505,6 +507,7 @@ pub(crate) fn run_motion(
         drivers,
         layer_order: Some(layer_points),
         alignment: None,
+        finish_soft: None,
         note: String::new(),
     };
     Ok(MotionOutcome {
@@ -924,7 +927,12 @@ fn anchor_of(
 
 /// 折り目でつながった2面の上下から、その折り目のあるべき線種を求める。
 /// 表向き(mirroredでない)の面から見て、相手が上なら谷・下なら山。
-fn want_kind(rank_a: usize, rank_b: usize, a_mirrored: bool) -> EdgeKind {
+///
+/// **この規則はリポジトリで1か所だけにする。** 逆向き(線種と裏返りから上下を
+/// 決める)にも同じ式を使えるので、[`crate::precrease_collapse`] は
+/// `want_kind(0, 1, a_mirrored) == kind` という形でここを呼ぶ。
+/// 3D側の同じ規則は `ori3_rigid::derive_layer_order` にある。
+pub(crate) fn want_kind(rank_a: usize, rank_b: usize, a_mirrored: bool) -> EdgeKind {
     if (rank_b > rank_a) == a_mirrored {
         EdgeKind::Mountain
     } else {
@@ -939,19 +947,47 @@ fn want_kind(rank_a: usize, rank_b: usize, a_mirrored: bool) -> EdgeKind {
 /// 裂けている(技法が複数回の折りを重ねる途中の)折り目に触ると山谷が壊れるため。
 /// この動きで新しく引いた折り線は、重なり順から求めた山谷へそろえる
 /// (折る向きだけでは、回転を含む動きで正しい山谷にならない)。
-#[allow(clippy::too_many_arguments)]
-fn settle_creases(
-    work: &mut CreasePattern,
-    new_faces: &[Face],
-    wpos: &HashMap<VertexId, DVec2>,
-    state: &FlatState,
-    parent_of: &HashMap<FaceId, FaceId>,
-    placements: &HashMap<FaceId, Isometry2>,
-    order: &[FaceId],
-    old_rank: &HashMap<FaceId, usize>,
-    added: &[EdgeId],
-    drivers: &mut Vec<DriverLine>,
-) -> HashMap<EdgeId, f64> {
+/// The resulting layout of faces produced by one flat motion.
+///
+/// `parent_of` relates the newly extracted faces to their pre-motion faces;
+/// placements and order describe that same resulting layout.
+struct ResultingFlatLayout<'a> {
+    parent_of: &'a HashMap<FaceId, FaceId>,
+    placements: &'a HashMap<FaceId, Isometry2>,
+    order: &'a [FaceId],
+}
+
+/// Everything needed to reconcile crease kinds after a flat motion.
+///
+/// This separates the prior flat state from the one resulting layout, so the
+/// settlement code cannot accidentally compare data from different motions.
+struct CreaseSettlementContext<'a> {
+    work: &'a mut CreasePattern,
+    new_faces: &'a [Face],
+    positions: &'a HashMap<VertexId, DVec2>,
+    prior_state: &'a FlatState,
+    resulting_layout: ResultingFlatLayout<'a>,
+    prior_rank: &'a HashMap<FaceId, usize>,
+    added_edges: &'a [EdgeId],
+    drivers: &'a mut Vec<DriverLine>,
+}
+
+fn settle_creases(context: CreaseSettlementContext<'_>) -> HashMap<EdgeId, f64> {
+    let CreaseSettlementContext {
+        work,
+        new_faces,
+        positions: wpos,
+        prior_state: state,
+        resulting_layout:
+            ResultingFlatLayout {
+                parent_of,
+                placements,
+                order,
+            },
+        prior_rank: old_rank,
+        added_edges: added,
+        drivers,
+    } = context;
     let rank: HashMap<FaceId, usize> = order.iter().enumerate().map(|(i, &id)| (id, i)).collect();
     // (辺ID, 新しい線種, 手順へ記録する角度)
     let mut fixes: Vec<(EdgeId, Option<EdgeKind>, Option<f64>)> = Vec::new();

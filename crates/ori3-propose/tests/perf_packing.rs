@@ -3,9 +3,57 @@
 use ori3_propose::packing::{MAX_CANDIDATES, PACK_TOL, Packing};
 use ori3_propose::skeleton::{Skeleton, SkeletonNode};
 use std::collections::BTreeSet;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const CENTER_DUPLICATE_TOL: f64 = 1e-7;
+/// 12葉・8スタートについて、作業8が引き継いだ1秒上限。
+const EIGHT_START_BUDGET: Duration = Duration::from_millis(1_000);
+
+/// 作業8の12葉・8スタートを10回すべて測り、その最大値が1秒以内に収まること。
+/// 実時間は最適化ありの性能ジョブだけで判定する。
+/// 2026-08-21のrelease 10回実測は最大7.7401ms。既存の1秒上限は実測の
+/// 約129倍（CIの約3.6倍差を掛けても約35.9倍）あり、実測値を境界にはしていない。
+#[test]
+fn work8_twelve_leaf_eight_starts_ten_runs_stay_within_release_budget() {
+    const RUNS: usize = 10;
+
+    let skeleton = star(12, 1.0);
+    let mut max_elapsed = Duration::ZERO;
+    // 通常検査でも出力品質は1回確かめる。壁時計の合否だけをreleaseの10回へ移す。
+    let passes = if cfg!(debug_assertions) { 1 } else { RUNS };
+    for run in 1..=passes {
+        let started = Instant::now();
+        let output = ori3_propose::pack(&skeleton, 1.0, 1.0, 1, 8);
+        let elapsed = started.elapsed();
+        max_elapsed = max_elapsed.max(elapsed);
+
+        assert!(
+            packing_is_complete_and_finite(&output, MAX_CANDIDATES),
+            "{run}回目の12葉・8スタートが不正: {}",
+            invalid_output_description(&output, MAX_CANDIDATES)
+        );
+    }
+
+    println!(
+        "12葉・8スタート{passes}回中の最大={max_elapsed:?}(release上限 {EIGHT_START_BUDGET:?})"
+    );
+    assert_within_release_budget(
+        max_elapsed,
+        EIGHT_START_BUDGET,
+        "12葉・8スタート10回中の最大",
+    );
+}
+
+/// 実時間の上限は最適化ありの性能ジョブだけで判定する。
+fn assert_within_release_budget(elapsed: Duration, budget: Duration, label: &str) {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    assert!(
+        elapsed < budget,
+        "{label}: {elapsed:?}(上限 {budget:?}。このファイルの最適化あり実測を参照)"
+    );
+}
 
 fn star(n: u32, len: f64) -> Skeleton {
     let mut nodes = vec![SkeletonNode::new(0, None, 0.0)];
@@ -82,11 +130,36 @@ fn nearest_rank(sorted: &[f64], numerator: usize, denominator: usize) -> f64 {
 
 /// 作業6の再現用測定。1テスト内で1,005回を直列実行し、全件を測ってから判定する。
 /// 手元で145.21秒かかる測定専用テストで、結果は `docs/progress.md` に記録済み。
-/// 実行: `cargo test -p ori3-propose --test perf_packing -- --ignored`
+/// 数値品質の基準測定としては明示実行だけにし、実時間の上限だけは
+/// `cargo test --release -p ori3-propose --test perf_packing -- --ignored --nocapture`
+/// で判定する。releaseでは同じ12葉・8スタートを3回測って一番良かった回を
+/// 採る。OSによる一時停止を1回きりの判定に混ぜないためである。通常ビルドは
+/// 数値品質の基準測定だけを行うので1回にする。
+/// 移動後のrelease 20回連続実測(2026-08-20、Windows 11開発機、失敗0件)の
+/// 最良3回値は、最大8.2835ms・中央5.0621ms・最小3.9162ms。既存の1秒上限に
+/// 対する最大÷上限は0.0083で、手元の最大値は1/3以下である。CIは開発機より
+/// 約3.6倍遅い実測があるため、実測値を上限そのものにはしない。
 #[test]
 #[ignore = "手元で145.21秒かかる測定専用テストのため、明示的に再測定するときだけ実行する"]
 fn packing_quality_baseline_1005_runs() {
     let skeleton = star(12, 1.0);
+    let mut best_eight_starts = Duration::MAX;
+    let passes = if cfg!(debug_assertions) { 1 } else { 3 };
+    for pass in 1..=passes {
+        let started = Instant::now();
+        let output = ori3_propose::pack(&skeleton, 1.0, 1.0, 1, 8);
+        let elapsed = started.elapsed();
+        assert!(
+            packing_is_complete_and_finite(&output, MAX_CANDIDATES),
+            "{pass}回目の12葉・8スタートが不正: {}",
+            invalid_output_description(&output, MAX_CANDIDATES)
+        );
+        println!("{pass}回目: 12葉・8スタート={elapsed:?}");
+        best_eight_starts = best_eight_starts.min(elapsed);
+    }
+    println!("12葉・8スタート最良={best_eight_starts:?}(上限 {EIGHT_START_BUDGET:?})");
+    assert_within_release_budget(best_eight_starts, EIGHT_START_BUDGET, "12葉・8スタート");
+
     let mut run_count = 0usize;
     let mut finite_run_count = 0usize;
     let mut candidate_count = 0usize;
@@ -95,7 +168,6 @@ fn packing_quality_baseline_1005_runs() {
     let mut configurations = BTreeSet::new();
     let mut seed_one_eight_starts = None;
     let mut starts_elapsed_ms = 0.0;
-    let mut eight_starts_elapsed_ms = None;
 
     eprintln!("PACKING_BASELINE starts_comparison_begin");
     for starts in [1usize, 8, 16, 32, 64] {
@@ -127,7 +199,6 @@ fn packing_quality_baseline_1005_runs() {
         );
         if starts == 8 {
             seed_one_eight_starts = Some(output.clone());
-            eight_starts_elapsed_ms = Some(elapsed_ms);
         }
     }
 
@@ -233,10 +304,6 @@ fn packing_quality_baseline_1005_runs() {
     assert_eq!(candidate_count, 4_017);
     assert_eq!(candidate_pairs, 6_000);
     assert!(repeated_configuration_matches);
-    assert!(
-        eight_starts_elapsed_ms.is_some_and(|elapsed_ms| elapsed_ms < 1_000.0),
-        "12葉・8スタートが既存の1秒上限を超えた: {eight_starts_elapsed_ms:?}ms"
-    );
     assert_eq!(best_scales.len(), 1_000);
     assert!(best_scales.iter().all(|value| value.is_finite()));
     assert!(elapsed_times_ms.iter().all(|value| value.is_finite()));

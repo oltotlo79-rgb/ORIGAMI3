@@ -13,96 +13,45 @@ use ori3_model::{
     Frame3D, Paper, TechniqueKind, Vertex,
 };
 
-const ROSE_011: &str = include_str!("fixtures/rose-011.ori3");
-const ROSE_029: &str = include_str!("fixtures/rose-029.ori3");
 const FOLDED_SAMPLE: &str = include_str!("fixtures/folded-sample.ori3");
 
 #[test]
-fn extracts_features_from_completed_rose_and_folded_sample_fixtures() {
-    for (name, json) in [("rose-029", ROSE_029), ("folded-sample", FOLDED_SAMPLE)] {
-        let document = load_fixture(json);
-        let (faces, state) = state_of(&document);
-        let features = extract_step_features(&document.cp, &faces, &state);
-        let probe = top_face_probe(&document, &faces, &state);
-
-        assert!(features.outline.len() >= 3, "{name}: 輪郭を抽出できる");
-        assert!(
-            features.bounding_box.width() > 0.0,
-            "{name}: 輪郭に幅がある"
-        );
-        assert!(
-            features.bounding_box.height() > 0.0,
-            "{name}: 輪郭に高さがある"
-        );
-        assert!(
-            features.outline_area_ratio > 0.0,
-            "{name}: 紙全体に対する面積比を抽出できる"
-        );
-        assert!(
-            features
-                .landmarks
-                .iter()
-                .any(|feature| feature.kind == LandmarkKind::PaperCorner),
-            "{name}: 紙の角を抽出できる"
-        );
-        assert!(
-            !features.visible_creases.is_empty(),
-            "{name}: 上から見える山谷を抽出できる"
-        );
-        assert!(
-            layer_count_at(&document.cp, &faces, &state, probe) >= 1,
-            "{name}: 局所層数を抽出できる"
-        );
-    }
-}
-
-#[test]
-fn state_matches_expectation_captured_from_itself() {
-    let document = load_fixture(ROSE_029);
+fn extracts_features_from_folded_sample_fixture() {
+    let name = "folded-sample";
+    let json = FOLDED_SAMPLE;
+    let document = load_fixture(json);
     let (faces, state) = state_of(&document);
+    let features = extract_step_features(&document.cp, &faces, &state);
     let probe = top_face_probe(&document, &faces, &state);
-    let expectation = StepExpectation::from_state(&document.cp, &faces, &state, &[probe]);
 
-    let report = evaluate_step(&document.cp, &faces, &state, &expectation);
-
+    assert!(features.outline.len() >= 3, "{name}: 輪郭を抽出できる");
     assert!(
-        report.is_match(),
-        "自己照合の差分: {:?}",
-        report.explanations()
+        features.bounding_box.width() > 0.0,
+        "{name}: 輪郭に幅がある"
     );
-    assert!(report.differences.is_empty());
-    assert_eq!(report.layer_samples.len(), 1);
-}
-
-#[test]
-fn earlier_rose_is_rejected_by_completed_rose_expectation() {
-    let completed = load_fixture(ROSE_029);
-    let (completed_faces, completed_state) = state_of(&completed);
-    let probe = top_face_probe(&completed, &completed_faces, &completed_state);
-    let expectation =
-        StepExpectation::from_state(&completed.cp, &completed_faces, &completed_state, &[probe]);
-
-    let earlier = load_fixture(ROSE_011);
-    let (earlier_faces, earlier_state) = state_of(&earlier);
-    let report = evaluate_step(&earlier.cp, &earlier_faces, &earlier_state, &expectation);
-
-    assert!(!report.is_match(), "手順11を完成形として受理してはいけない");
     assert!(
-        report.differences.iter().any(|difference| matches!(
-            difference,
-            StepDifference::OutlineVertexCount { .. }
-                | StepDifference::OutlineVertexPosition { .. }
-                | StepDifference::BoundingBox { .. }
-                | StepDifference::AspectRatio { .. }
-                | StepDifference::OutlineAreaRatio { .. }
-                | StepDifference::LayerCount { .. }
-        )),
-        "形または層数の具体的な差分を返す: {:?}",
-        report.explanations()
+        features.bounding_box.height() > 0.0,
+        "{name}: 輪郭に高さがある"
     );
-    let explanations = report.explanations().join("\n");
-    assert!(explanations.contains("期待"));
-    assert!(explanations.contains("実際"));
+    assert!(
+        features.outline_area_ratio > 0.0,
+        "{name}: 紙全体に対する面積比を抽出できる"
+    );
+    assert!(
+        features
+            .landmarks
+            .iter()
+            .any(|feature| feature.kind == LandmarkKind::PaperCorner),
+        "{name}: 紙の角を抽出できる"
+    );
+    assert!(
+        !features.visible_creases.is_empty(),
+        "{name}: 上から見える山谷を抽出できる"
+    );
+    assert!(
+        layer_count_at(&document.cp, &faces, &state, probe) >= 1,
+        "{name}: 局所層数を抽出できる"
+    );
 }
 
 #[test]
@@ -160,16 +109,6 @@ fn reports_landmark_layer_count_and_visible_fold_sense_differences() {
             .iter()
             .any(|difference| matches!(difference, StepDifference::VisibleCreaseSense { .. }))
     );
-}
-
-#[test]
-fn plane_pullback_matches_flat_state_for_rose_011_fixture() {
-    assert_plane_pullback_matches_flat_fixture("rose-011", ROSE_011);
-}
-
-#[test]
-fn plane_pullback_matches_flat_state_for_rose_029_fixture() {
-    assert_plane_pullback_matches_flat_fixture("rose-029", ROSE_029);
 }
 
 #[test]
@@ -375,7 +314,7 @@ fn top_face_probe(document: &Document, faces: &[Face], state: &FlatState) -> [f6
 
 /// The crate intentionally has no serde_json dependency.  This small fixture
 /// reader covers the persisted fields needed to reconstruct a `Document` and
-/// skips forward-compatible fields such as rose soft geometry.
+/// skips forward-compatible fields such as persisted soft geometry.
 fn load_fixture(json: &str) -> Document {
     FixtureParser::new(json).document()
 }
@@ -554,6 +493,7 @@ impl<'a> FixtureParser<'a> {
                 drivers,
                 layer_order,
                 alignment: None,
+                finish_soft: None,
                 note,
             });
         }

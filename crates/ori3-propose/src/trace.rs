@@ -316,7 +316,9 @@ pub fn check_trace(cp: &CreasePattern, trace: &FoldPlanTrace) -> TraceChecks {
                 EdgeKind::Valley => -180.0,
                 _ => 0.0,
             };
-            if c.target_angle_deg != want || c.regions.len() != c.sides.len() || c.regions.is_empty()
+            if c.target_angle_deg != want
+                || c.regions.len() != c.sides.len()
+                || c.regions.is_empty()
             {
                 out.missing_fields += 1;
             }
@@ -927,7 +929,8 @@ fn attach_regions(tris: &[[usize; 3]], molecules: &mut [MoleculeTrace]) {
                     let prev = (s + 2) % 3;
                     for (r, &a) in axial_sides[m].iter().enumerate() {
                         let span = spans[m][r];
-                        if (a == s && span[0] <= SPAN_TOL) || (a == prev && span[1] >= 1.0 - SPAN_TOL)
+                        if (a == s && span[0] <= SPAN_TOL)
+                            || (a == prev && span[1] >= 1.0 - SPAN_TOL)
                         {
                             refs.push(RegionRef {
                                 molecule: m,
@@ -1004,13 +1007,16 @@ fn build_neighbors(tris: &[[usize; 3]], molecules: &[MoleculeTrace]) -> Vec<Mole
                 })
                 .collect();
             shared_corners.sort_unstable();
-            let shared_edge = (shared_corners.len() == 2)
-                .then(|| [shared_corners[0], shared_corners[1]]);
+            let shared_edge =
+                (shared_corners.len() == 2).then(|| [shared_corners[0], shared_corners[1]]);
 
             let edges_a = body_edges_of(&molecules[a]);
             let edges_b = body_edges_of(&molecules[b]);
-            let shared_body_edges: Vec<u32> =
-                edges_a.iter().copied().filter(|e| edges_b.contains(e)).collect();
+            let shared_body_edges: Vec<u32> = edges_a
+                .iter()
+                .copied()
+                .filter(|e| edges_b.contains(e))
+                .collect();
             let relation = if shared_edge.is_some() || !shared_body_edges.is_empty() {
                 MoleculeRelation::Stacked
             } else {

@@ -87,7 +87,7 @@ fn creases_of(cp: &CreasePattern) -> usize {
 /// | 標本 | 折り目 | まとまり | 直線 | 確かめる前(まとまり) | 確かめる前(直線) | 確かめた後 | 確かめられなかった |
 /// |---|---:|---:|---:|---:|---:|---:|---:|
 /// | 折り鶴 | 43 | 34 | 27 | 18 | 17 | 1 | 16 |
-/// | やっこさん | 20 | 16 | 8 | 12 | 8 | 7 | 1 |
+/// | やっこさん | 20 | 16 | 8 | 12 | 8 | 8 | 0 |
 ///
 /// 「確かめる前(まとまり)」は作業18の [`GenericPlanner`] がそのまま数えた本数で、
 /// 「確かめる前(直線)」は同じ候補を、実際に折る単位(同じ直線に乗る折り目は
@@ -414,22 +414,23 @@ fn verified_moves_can_be_folded_one_after_another() {
     }
 }
 
-/// **確かめ方の取りこぼしを、実測して記録する。**
+/// **左右対称な展開図で、対称な2本の直線が両方とも折れることを確かめる。**
 ///
-/// やっこさんの `y = 0.75` は、この列挙器では「紙がすり抜ける」として落ちる。
-/// ところが、画面が使う普通の折り操作([`fold_through`](ori3_layers::fold_through))で
-/// 同じ直線を折ると、裂け `3.10e-15`・めり込み `0` で折れる。
+/// やっこさんの `y = 0.25` と `y = 0.75` は紙の真ん中を挟んで対称なので、
+/// 片方が折れるならもう片方も折れなければならない。
 ///
-/// 原因は確かめ方の側にある。[`collapse_precrease_network`](ori3_layers::collapse_precrease_network)
-/// は**紙の重なり順を変えない**ので、折り返した紙を相手の上へ回すことができない。
-/// 折り返す先の面の番号がたまたま手前にある `y = 0.25` は通り、
-/// 奥にある `y = 0.75` はめり込みとして出る。左右対称な展開図なのに片方だけ落ちるのは、
-/// この非対称のためである。
+/// この検査はもともと「`y = 0.75` だけが『紙がすり抜ける』として落ちる」という
+/// **取りこぼしの記録**だった(2026-08-13)。原因は
+/// [`collapse_precrease_network`](ori3_layers::collapse_precrease_network) が
+/// **紙の重なり順を組み替えていなかった**ことにある。折り返した紙を相手の上へ回せず、
+/// 折り返す先の面の番号がたまたま手前にある `y = 0.25` だけが通っていた。
 ///
-/// **落とす側の誤りなので、折れない手を折れると返す誤りにはならない**(合格条件3は保たれる)。
-/// 確かめ方を増やすときは、この検査が「まだ取りこぼしている」ことを教える。
+/// 2026-08-17に重なり順を畳んだ形の幾何から決めるよう直したので、
+/// **やっこさんで落ちる手は0件**になった。実測: `y = 0.75` は
+/// 裂け `3.611e-15` / めり込み `0` で折れる。同じ直線を画面が使う普通の折り操作
+/// ([`fold_through`](ori3_layers::fold_through))で折った値もあわせて出す。
 #[test]
-fn one_rejected_move_is_a_limit_of_the_checker_not_of_the_paper() {
+fn the_two_mirror_image_lines_of_yakko_both_fold() {
     let doc = yakko();
     let session = FoldSession::new(&doc).expect("折り始められない");
     let report = session.verified_moves(PoseScan::DEFAULT);
@@ -438,12 +439,24 @@ fn one_rejected_move_is_a_limit_of_the_checker_not_of_the_paper() {
         .iter()
         .filter(|r| matches!(r.reason, Unverified::PaperPassesThrough { .. }))
         .collect();
-    assert_eq!(
-        rejected.len(),
-        1,
-        "やっこさん: めり込みで落ちる手の数が変わった"
+    assert!(
+        rejected.is_empty(),
+        "やっこさん: めり込みで落ちた手がある {:?}",
+        rejected.iter().map(|r| r.line).collect::<Vec<_>>()
     );
-    let line = rejected[0].line;
+
+    // 紙の真ん中を挟んで対称な2本が、どちらも折れる手として返っている。
+    let line = [[0.0, 0.75], [1.0, 0.75]];
+    for wanted in [[[0.0, 0.25], [1.0, 0.25]], line] {
+        assert!(
+            report.verified.iter().any(|mv| {
+                let on = |point: [f64; 2]| (point[1] - wanted[0][1]).abs() <= 1e-9;
+                on(mv.line[0]) && on(mv.line[1])
+            }),
+            "やっこさん: y = {} を折る手が返っていない",
+            wanted[0][1]
+        );
+    }
 
     // 同じ直線を、画面が使う普通の折り操作で折ってみる。
     let faces = ori3_cp::extract_faces(&doc.cp);
@@ -478,9 +491,7 @@ fn one_rejected_move_is_a_limit_of_the_checker_not_of_the_paper() {
         ));
         pairs = pairs.max(self_intersection_pairs(&replayed.frame).len());
     }
-    println!(
-        "やっこさん {line:?}: この列挙器は落とすが、普通の折り操作なら 裂け{gap:.3e} / めり込み{pairs}"
-    );
+    println!("やっこさん {line:?}: 普通の折り操作でも 裂け{gap:.3e} / めり込み{pairs}");
     assert!(gap < MAX_SEAM_GAP, "普通の折り操作でも裂けた: {gap}");
     assert_eq!(pairs, 0, "普通の折り操作でもめり込んだ: {pairs}件");
 }

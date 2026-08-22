@@ -17,16 +17,11 @@ mod curl;
 mod grid;
 mod quality;
 mod solve;
-mod spiral;
 mod subdivide;
 mod symmetry;
 
 pub use cup::{RadialCupError, RadialCupReport, RadialCupSettings, radial_cup_vertices};
 pub use curl::{CurlError, CurlReport, CurlSettings, curl_vertices};
-pub use spiral::{
-    FourfoldPetalOrbit, RadialSpiralError, RadialSpiralReport, RadialSpiralSettings,
-    radial_spiral_vertices,
-};
 pub use symmetry::{
     HalfTurnSymmetryError, HalfTurnSymmetryReport, HalfTurnSymmetrySettings,
     enforce_half_turn_symmetry,

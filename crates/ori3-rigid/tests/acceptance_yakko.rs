@@ -29,7 +29,10 @@ use std::collections::HashMap;
 use glam::{DVec2, DVec3};
 use ori3_cp::{Face, extract_faces, insert_segment, validate};
 use ori3_model::{CreasePattern, Document, Driver, EdgeKind, Frame3D, Paper, VertexId};
-use ori3_rigid::{max_seam_gap, self_intersection_pairs, solve, solve_motion};
+use ori3_rigid::{
+    MotionContactOptions, max_seam_gap, self_intersection_pairs, solve,
+    solve_motion_with_contact_options,
+};
 
 /// UIの1回の線描画操作: 始点・終点・線種。
 type Stroke = ([f64; 2], [f64; 2], EdgeKind);
@@ -130,7 +133,7 @@ fn assert_contact_free_sweep(
     assert_ne!(sign, 0.0, "代表ヒンジの完成角には向きが必要");
     for magnitude in magnitudes {
         let requested = sign * f64::from(magnitude);
-        let motion = solve_motion(
+        let motion = solve_motion_with_contact_options(
             cp,
             faces,
             &[Driver {
@@ -139,7 +142,10 @@ fn assert_contact_free_sweep(
             }],
             Some(medium),
             Some(&warm),
-            true,
+            MotionContactOptions {
+                detect: true,
+                prevent: true,
+            },
         );
         let result = &motion.result;
         assert!(

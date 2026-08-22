@@ -127,7 +127,11 @@ fn reflection_error(
         .iter()
         .map(|(&vertex, &mirror)| (positions[&vertex], positions[&mirror]))
         .collect();
-    assert!(pairs.len() >= 8, "対称性を見る点が少なすぎる: {}", pairs.len());
+    assert!(
+        pairs.len() >= 8,
+        "対称性を見る点が少なすぎる: {}",
+        pairs.len()
+    );
     let &(p0, q0) = pairs
         .iter()
         .max_by(|(a0, b0), (a1, b1)| {
@@ -196,9 +200,7 @@ fn resolve_driver_lines(cp: &CreasePattern, lines: &[DriverLine]) -> Vec<Driver>
             "書き出した線が辺へ解決できない: {line:?} -> {resolved:?}"
         );
         assert!(
-            by_edge
-                .insert(resolved[0], line.target_angle_deg)
-                .is_none(),
+            by_edge.insert(resolved[0], line.target_angle_deg).is_none(),
             "同じ辺へ2本の線が解決された"
         );
     }
@@ -255,15 +257,9 @@ fn solve_paper_stand() -> SolvedStand {
     .into_iter()
     .collect();
 
-    let symmetric = solve_near_with_reflection_symmetry(
-        &cp,
-        &faces,
-        &hard,
-        &targets,
-        Some(&warm),
-        MIRROR_AXIS,
-    )
-    .expect("本立ては左右対称の拘束で解ける");
+    let symmetric =
+        solve_near_with_reflection_symmetry(&cp, &faces, &hard, &targets, Some(&warm), MIRROR_AXIS)
+            .expect("本立ては左右対称の拘束で解ける");
     (cp, faces, symmetric)
 }
 
@@ -282,9 +278,9 @@ fn the_paper_stand_crease_pattern_is_simple_and_mirror_symmetric() {
     for vertex in &cp.vertices {
         let mirrored = [vertex.pos[0], 1.0 - vertex.pos[1]];
         assert!(
-            cp.vertices.iter().any(|other| {
-                (DVec2::from(other.pos) - DVec2::from(mirrored)).length() <= EPS
-            }),
+            cp.vertices
+                .iter()
+                .any(|other| { (DVec2::from(other.pos) - DVec2::from(mirrored)).length() <= EPS }),
             "頂点{}({:?})の鏡像が無い",
             vertex.id,
             vertex.pos
@@ -481,7 +477,10 @@ fn recorded_driver_lines_replay_the_same_shape_without_any_iteration() {
         }
     }
     let replay_gap = max_seam_gap(&cp, &faces, &replayed.frame);
-    assert!(replay_gap < 1e-6, "読み直しの max_seam_gap={replay_gap:.3e}");
+    assert!(
+        replay_gap < 1e-6,
+        "読み直しの max_seam_gap={replay_gap:.3e}"
+    );
 
     println!(
         "書き出し{}本 -> 読み直しの反復{} / gap={replay_gap:.3e}",

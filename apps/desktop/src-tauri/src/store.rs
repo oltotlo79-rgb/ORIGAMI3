@@ -74,6 +74,9 @@ pub struct DocumentView {
     pub skipped: Vec<StepId>,
     /// 補正後にも残る食い込みの原因候補ヒンジ。
     pub suspect_hinges: Vec<EdgeId>,
+    /// 手順再生の最終姿勢で、紙の面どうしの食い込みを検出したか。
+    /// 診断結果を知らせるだけで、再生結果を止める条件には使わない。
+    pub contact_detected: bool,
     /// 保存手順の線分を現在の辺IDへ解決した希望角（永続化しない導出結果）。
     pub sequence_targets: Vec<Driver>,
     /// 自動再生で得た全ヒンジの実角。次の操作のwarm startにも使う。
@@ -240,6 +243,44 @@ impl DocumentStore {
             // CP全置換前の解は辺IDが偶然一致しても使ってはいけない。
             self.pose_angles = None;
         }
+        Ok(view)
+    }
+
+    /// 提案の展開図と折り手順を、利用者の1操作としてまとめて入れる(作業28)。
+    ///
+    /// [`EditOp::ReplaceCreasePattern`] は展開図だけを差し替え、折り手順を必ず空にする。
+    /// 折り方まで付いた提案では、展開図と手順が**そろって初めて意味を持つ**ので、
+    /// 別々の操作にはしない。
+    ///
+    /// - 断る場合は**確定の前**に断るので、途中まで入った状態が残らない。
+    /// - 確定は [`Self::commit`] の1回だけなので、**元に戻す1回**で入れる前へ戻る。
+    ///
+    /// # Errors
+    ///
+    /// 展開図から紙の面を取り出せない場合と、折り手順の番号が重なっている場合。
+    /// どちらも数を数えるだけの確認で、計算した小数を比べていない。
+    pub fn apply_proposal(
+        &mut self,
+        cp: CreasePattern,
+        steps: Vec<FoldStep>,
+    ) -> Result<DocumentView, String> {
+        if ori3_cp::extract_faces(&cp).is_empty() {
+            return Err("この展開図では紙の面が作れませんでした".to_string());
+        }
+        let mut seen = HashSet::new();
+        for step in &steps {
+            if !seen.insert(step.id) {
+                return Err("同じ折り手順が二重に入っています".to_string());
+            }
+        }
+        let mut doc = self.doc.clone();
+        doc.cp = cp;
+        doc.sequence = steps;
+        // 前の展開図に付いていた来歴は、番号がぶつかると無関係の線を指してしまう。
+        // 置き換えは新規作品と同じく、来歴を持たない状態から始める。
+        let view = self.commit(doc, Vec::new(), Vec::new());
+        // 展開図が変わった後は、辺IDが偶然一致しても前の解を使ってはいけない。
+        self.pose_angles = None;
         Ok(view)
     }
 
@@ -622,6 +663,7 @@ impl DocumentStore {
                 warnings.extend(result.warnings);
             }
         }
+        filter_penetration_warnings(&mut warnings, doc.display.penetration_prevention_enabled);
         let mut view = self.commit(doc, step_creases, warnings);
         view.fold_through_proposal = fold_through_proposal;
         Ok(view)
@@ -816,6 +858,7 @@ fn build_view(
         frame: None,
         skipped: Vec::new(),
         suspect_hinges: Vec::new(),
+        contact_detected: false,
         sequence_targets: Vec::new(),
         angles: HashMap::new(),
         relaxations: Vec::new(),
@@ -937,6 +980,12 @@ pub(crate) fn replay_flat_fold_notice_violations(
     flat_fold_notice_violations(cp, targets, angles, !intersections.is_empty())
 }
 
+/// 手順再生で既に得た最終交差組を、DocumentViewの診断値へ運ぶ。
+/// 自己交差判定は呼び出し側の1回だけとし、ここでは結果の有無だけを写す。
+fn attach_replay_contact_diagnostic(view: &mut DocumentView, intersections: &[(FaceId, FaceId)]) {
+    view.contact_detected = !intersections.is_empty();
+}
+
 /// `surface_rank` が全面の0始まり連番なら、下→上の面順へ戻す。
 ///
 /// 古いsnapshotの全0や、欠落・重複faceを物理順として信頼しないため、face IDとrankの
@@ -961,6 +1010,42 @@ pub(crate) fn frame_surface_rank_order(frame: &Frame3D) -> Option<Vec<FaceId>> {
     Some(ranked.into_iter().map(|(_, face)| face).collect())
 }
 
+/// completeな幾何導出のproofと完全rankが両方ある再生結果だけを物理順へ戻す。
+///
+/// `frame_surface_rank_order` は古いframeを弾く構造検査にすぎない。canonical導出に
+/// 失敗したframeにもmaterial seedの完全順列は入るため、provenance無しではPBDや
+/// softのauthorityにしてはならない。
+pub(crate) fn replay_surface_rank_order(
+    replayed: &ori3_layers::ReplayResult,
+) -> Option<Vec<FaceId>> {
+    replayed.surface_order_provenance.as_ref()?;
+    frame_surface_rank_order(&replayed.frame)
+}
+
+/// proof付き再生rankがあるときだけ、表示用の重なり補正を適用する。
+/// 保存layer/orderは編集用の論理状態であり、このfallbackには使わない。
+pub(crate) fn prevent_replay_overlap_if_authoritative(
+    cp: &CreasePattern,
+    faces: &[Face],
+    replayed: &mut ori3_layers::ReplayResult,
+    settings: &ori3_soft::OverlapSettings,
+) -> Option<ori3_soft::OverlapReport> {
+    let order = replay_surface_rank_order(replayed)?;
+    let progress = replayed.layer_transition.progress;
+    Some(ori3_soft::prevent_overlap_with_order_authority(
+        cp,
+        faces,
+        &mut replayed.frame,
+        ori3_soft::OverlapOrderInput {
+            start: &order,
+            end: &order,
+            progress,
+            authoritative: true,
+        },
+        settings,
+    ))
+}
+
 /// ビューへ手順の自動再生結果(立体・飛ばした手順・警告)を載せる
 /// (SEQ-004「展開図編集後、手順を自動再生して最新状態を表示」)。
 /// 手順が空のときは再生するものが無いので `frame: None` のまま
@@ -970,16 +1055,14 @@ pub(crate) fn frame_surface_rank_order(frame: &Frame3D) -> Option<Vec<FaceId>> {
 /// storeのロックを取らないコマンド層から、ロック解放後に呼ぶ。
 /// 再生には `view.faces`(同じdocから導出済み)を渡し、面抽出を二重に行わない。
 pub fn attach_replay(view: &mut DocumentView) {
+    attach_replay_contact_diagnostic(view, &[]);
     if view.doc.sequence.is_empty() {
         return;
     }
     let up_to = view.doc.sequence.len();
     let mut replayed = ori3_layers::replay_with_faces(&view.doc, &view.faces, up_to, 1.0);
     let saved_order = ori3_layers::saved_layer_order_at(&view.doc, &view.faces, up_to, 1.0);
-    let canonical_order = saved_order
-        .is_none()
-        .then(|| frame_surface_rank_order(&replayed.frame))
-        .flatten();
+    let canonical_order = replay_surface_rank_order(&replayed);
     view.sequence_targets = replayed.sequence_targets.clone();
     view.angles = replayed.hinge_angles.clone();
     view.relaxations = replayed.relaxations.clone();
@@ -991,63 +1074,36 @@ pub fn attach_replay(view: &mut DocumentView) {
     view.converged = replayed.converged;
     let mut penetration_warnings: Vec<&'static str> = Vec::new();
     if saved_order.is_none() {
-        let warning = if let Some(order) = &canonical_order {
-            add_layer_order_warning_preserving_surface_authority(
-                &view.doc.cp,
-                &view.faces,
-                &mut replayed.frame,
-                order,
-            )
-        } else {
-            add_layer_order_warning(&view.doc.cp, &view.faces, &mut replayed.frame)
-        };
+        let warning = apply_layer_order_display_settings(
+            &view.doc.cp,
+            &view.faces,
+            &mut replayed.frame,
+            canonical_order.as_deref(),
+            view.doc.display.overlap_prevention_enabled,
+            view.doc.display.penetration_prevention_enabled,
+        );
         if let Some(warning) = warning {
             penetration_warnings.push(warning);
         }
     }
-    let transition = replayed.layer_transition.clone();
+    // 検出と補正は独立した設定である。両方が有効な場合も、補正で消える前の
+    // 利用者指定の姿勢を診断し、その結果を警告と原因候補へ残す。
+    let intersections = if view.doc.display.penetration_prevention_enabled {
+        ori3_rigid::self_intersection_pairs(&replayed.frame)
+    } else {
+        Vec::new()
+    };
+    attach_replay_contact_diagnostic(view, &intersections);
     let overlap_settings = ori3_soft::OverlapSettings {
         enabled: view.doc.display.overlap_prevention_enabled,
         ..Default::default()
     };
-    if transition.order_is_authoritative {
-        ori3_soft::prevent_overlap_with_order_authority(
-            &view.doc.cp,
-            &view.faces,
-            &mut replayed.frame,
-            ori3_soft::OverlapOrderInput {
-                start: &transition.start,
-                end: &transition.end,
-                progress: transition.progress,
-                authoritative: true,
-            },
-            &overlap_settings,
-        );
-    } else if let Some(order) = &canonical_order {
-        ori3_soft::prevent_overlap_with_order_authority(
-            &view.doc.cp,
-            &view.faces,
-            &mut replayed.frame,
-            ori3_soft::OverlapOrderInput {
-                start: order,
-                end: order,
-                progress: transition.progress,
-                authoritative: true,
-            },
-            &overlap_settings,
-        );
-    } else {
-        ori3_soft::prevent_overlap(
-            &view.doc.cp,
-            &view.faces,
-            &mut replayed.frame,
-            &transition.start,
-            &transition.end,
-            transition.progress,
-            &overlap_settings,
-        );
-    }
-    let intersections = ori3_rigid::self_intersection_pairs(&replayed.frame);
+    let _ = prevent_replay_overlap_if_authoritative(
+        &view.doc.cp,
+        &view.faces,
+        &mut replayed,
+        &overlap_settings,
+    );
     view.flat_fold_violations = replay_flat_fold_notice_violations(
         &view.doc.cp,
         &replayed.sequence_targets,
@@ -1074,6 +1130,18 @@ pub fn attach_replay(view: &mut DocumentView) {
             replayed.warnings.push(warning.to_string());
         }
     }
+    filter_penetration_warnings(
+        &mut view.warnings,
+        view.doc.display.penetration_prevention_enabled,
+    );
+    filter_penetration_warnings(
+        &mut replayed.warnings,
+        view.doc.display.penetration_prevention_enabled,
+    );
+    filter_penetration_warnings(
+        &mut replayed.frame.warnings,
+        view.doc.display.penetration_prevention_enabled,
+    );
     view.warnings.extend(replayed.warnings);
     view.skipped = replayed.skipped;
     view.suspect_hinges = replayed.suspect_hinges;
@@ -1120,6 +1188,18 @@ pub fn add_penetration_warning_for_intersections(
     added
 }
 
+/// 食い込み検出がOFFなら、下位層が操作診断として作った貫通警告も画面へ漏らさない。
+/// 収束・裂けなど別種の警告はそのまま残す。
+pub(crate) fn filter_penetration_warnings(warnings: &mut Vec<String>, detect: bool) {
+    if detect {
+        return;
+    }
+    warnings.retain(|warning| {
+        warning != ori3_rigid::PENETRATION_WARNING
+            && warning != ori3_layers::FOLD_PENETRATION_WARNING
+    });
+}
+
 /// 接触補正でzが動く前の平坦フレームで、紙の重なり順を形に合わせる。
 ///
 /// 手順を記録せず角度だけで折ると重なり順が決まらず、同じ平面の面が完全に同じ位置へ
@@ -1130,6 +1210,12 @@ pub(crate) fn add_layer_order_warning(
     faces: &[Face],
     frame: &mut Frame3D,
 ) -> Option<&'static str> {
+    correct_layer_order(cp, faces, frame);
+    add_layer_order_warning_only(cp, faces, frame)
+}
+
+/// 形から導いた層順序を後続手順用の`layer`へ反映する。警告は追加しない。
+fn correct_layer_order(cp: &CreasePattern, faces: &[Face], frame: &mut Frame3D) {
     if ori3_rigid::layer_order_conflicts(cp, faces, frame)
         && let Some(order) = ori3_rigid::derive_layer_order(cp, faces, frame)
     {
@@ -1141,10 +1227,17 @@ pub(crate) fn add_layer_order_warning(
         for face in &mut frame.faces {
             if let Some(&layer) = rank.get(&face.face) {
                 face.layer = layer;
-                face.surface_rank = layer;
             }
         }
     }
+}
+
+/// 現在の層順序の矛盾を警告するだけで、frameの形・layer・surface_rankを変えない。
+fn add_layer_order_warning_only(
+    cp: &CreasePattern,
+    faces: &[Face],
+    frame: &mut Frame3D,
+) -> Option<&'static str> {
     if !ori3_rigid::layer_order_conflicts(cp, faces, frame)
         || frame
             .warnings
@@ -1159,11 +1252,36 @@ pub(crate) fn add_layer_order_warning(
     Some(ori3_layers::FOLD_PENETRATION_WARNING)
 }
 
-/// 形からの旧layer補助を適用しても、検証済みのsurface authorityだけは維持する。
+/// 画面の既存2設定を層順序へ適用する。
+///
+/// `prevent`だけがlayer/surface_rankを補正し、`detect`は警告を追加するだけである。
+/// 検証済みcanonical順の刻印も、利用者が補正を明示した場合に限る。
+pub(crate) fn apply_layer_order_display_settings(
+    cp: &CreasePattern,
+    faces: &[Face],
+    frame: &mut Frame3D,
+    canonical_order: Option<&[FaceId]>,
+    prevent: bool,
+    detect: bool,
+) -> Option<&'static str> {
+    if prevent {
+        correct_layer_order(cp, faces, frame);
+        if let Some(order) = canonical_order {
+            ori3_rigid::stamp_surface_order(frame, order)
+                .expect("検証済みcanonical順は同じframeへ刻印できる");
+        }
+    }
+    detect
+        .then(|| add_layer_order_warning_only(cp, faces, frame))
+        .flatten()
+}
+
+/// 形からの旧layer補助を適用し、検証済みのsurface authorityを維持する。
 ///
 /// 保存順が無い自由角度では、rigidが最終状態から導出した`surface_rank`が正本。
-/// [`add_layer_order_warning`] はstack lift用の`layer`を補助できる一方でrankも同時に
-/// 書き換えるため、その直後に同じframe由来のcanonical順を戻す。
+/// [`add_layer_order_warning`] は後続手順用の`layer`だけを補助する。ここでも呼出し側が
+/// 検証したcanonical順を再確認して刻み、両フィールドの契約を混同させない。
+#[cfg(test)]
 pub(crate) fn add_layer_order_warning_preserving_surface_authority(
     cp: &CreasePattern,
     faces: &[Face],
@@ -1420,6 +1538,7 @@ mod tests {
             drivers: Vec::new(),
             layer_order: None,
             alignment: None,
+            finish_soft: None,
             note: String::new(),
         }
     }
@@ -1875,6 +1994,22 @@ mod tests {
     }
 
     #[test]
+    fn replay_contact_diagnostic_reuses_existing_intersections_and_serializes() {
+        let mut store = square_store();
+        let mut view = store.apply_edit(diagonal()).unwrap();
+
+        attach_replay_contact_diagnostic(&mut view, &[(3, 7)]);
+        assert!(view.contact_detected, "明示した交差組を診断値へ運ぶ");
+        let detected = serde_json::to_value(&view).expect("DocumentViewをJSONへ運べる");
+        assert_eq!(detected["contact_detected"], true);
+
+        attach_replay_contact_diagnostic(&mut view, &[]);
+        assert!(!view.contact_detected, "交差0組なら診断値を戻す");
+        let clear = serde_json::to_value(&view).expect("DocumentViewをJSONへ運べる");
+        assert_eq!(clear["contact_detected"], false);
+    }
+
+    #[test]
     fn pose_flat_fold_notice_filters_only_transient_full_sweep_contacts() {
         let cp = flat_fold_notice_user_cp();
         let partial_targets = user_flat_targets();
@@ -1979,14 +2114,144 @@ mod tests {
     }
 
     #[test]
-    fn five_existing_works_have_69_raw_12_filtered_and_zero_notices_for_reached_targets() {
+    fn crane_closure_rescue_is_independent_of_contact_detection() {
+        let cp = front_fixture_cp(include_str!("../../src/lib/__fixtures__/crane.json"));
+        let faces = ori3_cp::extract_faces(&cp);
+        let creases = cp
+            .edges
+            .iter()
+            .filter(|edge| edge.kind != EdgeKind::Border)
+            .map(|edge| edge.id)
+            .collect::<Vec<_>>();
+        let (driven, wanted) = (creases[17], creases[20]);
+        let initial = creases
+            .iter()
+            .map(|&hinge| (hinge, 0.0))
+            .collect::<HashMap<_, _>>();
+        let mut detected_warm = initial.clone();
+        let mut silent_warm = initial.clone();
+        let mut direct_warm = initial;
+        let mut final_detected = None;
+        let mut final_silent = None;
+        let mut final_direct = None;
+
+        for step in 1..=30_u32 {
+            let angle = -5.0 * f64::from(step);
+            let targets = HashMap::from([(wanted, angle)]);
+            let driver = [Driver {
+                hinge: driven,
+                target_angle_deg: angle,
+            }];
+            let detected = ori3_rigid::solve_motion(
+                &cp,
+                &faces,
+                &driver,
+                Some(&targets),
+                Some(&detected_warm),
+                true,
+            );
+            let silent = ori3_rigid::solve_motion(
+                &cp,
+                &faces,
+                &driver,
+                Some(&targets),
+                Some(&silent_warm),
+                false,
+            );
+            let direct = ori3_rigid::solve_motion_once(
+                &cp,
+                &faces,
+                &driver,
+                Some(&targets),
+                Some(&direct_warm),
+            );
+
+            assert!(!detected.contact_stopped, "{angle}°");
+            assert!(!silent.contact_stopped, "{angle}°");
+            assert_eq!(detected.result.angles, silent.result.angles, "{angle}°");
+            for (detected_face, silent_face) in detected
+                .result
+                .frame
+                .faces
+                .iter()
+                .zip(&silent.result.frame.faces)
+            {
+                assert_eq!(detected_face.face, silent_face.face, "{angle}°");
+                assert_eq!(detected_face.polygon, silent_face.polygon, "{angle}°");
+            }
+            assert!(detected.result.closure_rms.is_finite(), "{angle}°");
+            assert!(
+                detected
+                    .result
+                    .angles
+                    .values()
+                    .all(|value| value.is_finite())
+            );
+            assert!(detected.result.frame.faces.iter().all(|face| {
+                face.polygon
+                    .iter()
+                    .flatten()
+                    .all(|coordinate| coordinate.is_finite())
+            }));
+            detected_warm = detected.result.angles.clone();
+            silent_warm = silent.result.angles.clone();
+            direct_warm = direct.angles.clone();
+            final_detected = Some(detected);
+            final_silent = Some(silent);
+            final_direct = Some(direct);
+        }
+
+        let detected = final_detected.expect("-150°の検出あり結果を返す");
+        let silent = final_silent.expect("-150°の検出なし結果を返す");
+        assert!(detected.result.converged);
+        assert!(detected.result.closure_rms < 1e-9);
+        assert!((detected.result.angles[&driven] + 150.0).abs() < 1e-9);
+        assert!(!detected.contact_detected);
+        assert!(!silent.contact_detected);
+        assert!(ori3_rigid::contact_witnesses(&detected.result.frame).is_empty());
+        assert!(
+            detected
+                .result
+                .frame
+                .warnings
+                .iter()
+                .all(|warning| warning != ori3_rigid::PENETRATION_WARNING)
+        );
+
+        // 旧 `detect=false` が選んでいた単発solveは、同じ入力で紙を閉じられず、
+        // その裂けたFrameに7組の交差を作っていた。これは有効な紙のすり抜けではなく、
+        // 接触設定にclosure rescueまで結合していた不具合である。
+        let direct = final_direct.expect("旧単発経路の-150°結果を返す");
+        assert!(direct.closure_rms > 1e-3, "rms={:.15e}", direct.closure_rms);
+        let witnesses = ori3_rigid::contact_witnesses(&direct.frame);
+        assert_eq!(witnesses.len(), 7, "witnesses={witnesses:?}");
+        let mut reported_pairs = ori3_rigid::self_intersection_pairs(&direct.frame);
+        let mut witness_pairs = witnesses
+            .iter()
+            .map(|witness| witness.faces)
+            .collect::<Vec<_>>();
+        reported_pairs.sort_unstable();
+        witness_pairs.sort_unstable();
+        assert_eq!(reported_pairs, witness_pairs);
+        println!("crane direct -150° closure_rms={:.15e}", direct.closure_rms);
+        for witness in &witnesses {
+            assert!(witness.penetration_depth.is_finite());
+            assert!(witness.penetration_depth > 0.0);
+            println!(
+                "crane -150° faces={}/{} depth={:.15e}",
+                witness.faces.0, witness.faces.1, witness.penetration_depth
+            );
+        }
+    }
+
+    #[test]
+    fn five_works_have_expected_flat_fold_rule_counts_for_reached_targets() {
         let folded_sample: Document = serde_json::from_str(include_str!(
             "../../../../crates/ori3-layers/tests/fixtures/folded-sample.ori3"
         ))
         .expect("折り上がりの標本を読む");
         let folded_sample_targets = sequence_targets(&folded_sample);
-        let folded_sample_counts =
-            flat_fold_rule_counts(&folded_sample.cp, &folded_sample_targets);
+        let folded_sample_counts = flat_fold_rule_counts(&folded_sample.cp, &folded_sample_targets);
 
         let crane = front_fixture_cp(include_str!("../../src/lib/__fixtures__/crane.json"));
         let crane_targets = all_crease_flat_targets(&crane);
@@ -2000,12 +2265,17 @@ mod tests {
         let yakko_targets = all_crease_flat_targets(&yakko);
         let yakko_counts = flat_fold_rule_counts(&yakko, &yakko_targets);
 
-        let rose: Document = serde_json::from_str(include_str!(
-            "../../../../crates/ori3-layers/tests/fixtures/rose-029.ori3"
-        ))
-        .expect("ローズ29を読む");
-        let rose_targets = sequence_targets(&rose);
-        let rose_counts = flat_fold_rule_counts(&rose.cp, &rose_targets);
+        let mut cushion_flower = square_store().doc.cp;
+        for (a, b, kind) in [
+            ([0.0, 0.0], [1.0, 1.0], EdgeKind::Valley),
+            ([0.0, 1.0], [1.0, 0.0], EdgeKind::Valley),
+            ([0.5, 0.0], [0.5, 1.0], EdgeKind::Mountain),
+            ([0.0, 0.5], [1.0, 0.5], EdgeKind::Mountain),
+        ] {
+            ori3_cp::insert_segment(&mut cushion_flower, a, b, kind);
+        }
+        let cushion_flower_targets = all_crease_flat_targets(&cushion_flower);
+        let cushion_flower_counts = flat_fold_rule_counts(&cushion_flower, &cushion_flower_targets);
 
         // (生の局所違反, ±180°候補, 通知点)。通知規則を姿勢解から切り離し、
         // 指定角到達済み・食い込みなしを入力として明示する。
@@ -2013,20 +2283,20 @@ mod tests {
         assert_eq!(crane_counts, (3, 3, 0), "鶴");
         assert_eq!(frog_counts, (3, 3, 0), "カエル");
         assert_eq!(yakko_counts, (0, 0, 0), "やっこさん");
-        assert_eq!(rose_counts, (57, 4, 0), "ローズ");
+        assert_eq!(cushion_flower_counts, (1, 1, 0), "八枚花弁の座布団花");
 
         let total = [
             folded_sample_counts,
             crane_counts,
             frog_counts,
             yakko_counts,
-            rose_counts,
+            cushion_flower_counts,
         ]
         .into_iter()
         .fold((0, 0, 0), |sum, counts| {
             (sum.0 + counts.0, sum.1 + counts.1, sum.2 + counts.2)
         });
-        assert_eq!(total, (69, 12, 0));
+        assert_eq!(total, (13, 9, 0));
     }
 
     fn current_flat_state(store: &DocumentStore) -> ori3_layers::FlatState {
@@ -2110,6 +2380,204 @@ mod tests {
         assert!(err.contains("紙サイズ"), "err={err}");
         assert_eq!(store.doc, before, "断られたら1本も引かれない");
         assert!(store.undo_stack.is_empty(), "履歴も積まない");
+    }
+
+    /// 提案が返す展開図の代わり。折り線が1本入っていて、面を2つ取り出せる。
+    fn proposal_cp() -> CreasePattern {
+        let mut store = square_store();
+        store.apply_edit(diagonal()).unwrap();
+        store.doc.cp.clone()
+    }
+
+    /// 面を1つも取り出せない展開図(わざと失敗させるための入力)。
+    fn cp_without_faces() -> CreasePattern {
+        CreasePattern {
+            vertices: Vec::new(),
+            edges: Vec::new(),
+            next_vertex_id: 0,
+            next_edge_id: 0,
+        }
+    }
+
+    /// 展開図と折り手順が、利用者の1操作としてまとめて入る(作業28)。
+    #[test]
+    fn apply_proposal_puts_the_crease_pattern_and_the_fold_order_in_together() {
+        let mut store = square_store();
+        let before = store.doc.clone();
+        let cp = proposal_cp();
+        let steps = vec![step(0), step(1), step(2)];
+
+        let view = store.apply_proposal(cp.clone(), steps.clone()).unwrap();
+
+        assert_eq!(view.doc.cp, cp, "展開図が入る");
+        assert_eq!(view.doc.sequence, steps, "同じ1回で折り手順も入る");
+        assert_eq!(view.doc.sequence.len(), 3, "手順の数は提案どおり");
+        assert_eq!(store.doc.cp, cp);
+        assert_eq!(store.doc.sequence, steps);
+        assert_eq!(store.undo_stack.len(), 1, "履歴は1件だけ");
+        assert_ne!(store.doc, before);
+    }
+
+    /// 断られたら展開図も折り手順も変わらない(片方だけ入った形にしない)。
+    #[test]
+    fn apply_proposal_rejected_changes_nothing() {
+        let mut store = square_store();
+        store.apply_seq(SeqOp::PushStep { step: step(7) }).unwrap();
+        let before = store.doc.clone();
+        let history = store.undo_stack.len();
+
+        // 折り手順の番号が重なっている
+        let err = store
+            .apply_proposal(proposal_cp(), vec![step(0), step(0)])
+            .unwrap_err();
+        assert!(err.contains("二重"), "err={err}");
+        assert_eq!(store.doc, before, "展開図も手順も入る前のまま");
+        assert_eq!(store.undo_stack.len(), history, "履歴も積まない");
+
+        // 面を1つも取り出せない展開図
+        let err = store
+            .apply_proposal(cp_without_faces(), vec![step(0)])
+            .unwrap_err();
+        assert!(err.contains("面"), "err={err}");
+        assert_eq!(store.doc, before);
+        assert_eq!(store.undo_stack.len(), history);
+    }
+
+    /// 元に戻す1回で、展開図も折り手順も入れる前へ戻る。
+    #[test]
+    fn one_undo_puts_back_both_the_crease_pattern_and_the_fold_order() {
+        let mut store = square_store();
+        store.apply_seq(SeqOp::PushStep { step: step(7) }).unwrap();
+        let before = store.doc.clone();
+
+        store
+            .apply_proposal(proposal_cp(), vec![step(0), step(1)])
+            .unwrap();
+        assert_eq!(store.doc.sequence.len(), 2);
+        assert_ne!(store.doc.cp, before.cp);
+
+        let view = store.undo().unwrap();
+        assert_eq!(view.doc.cp, before.cp, "展開図が戻る");
+        assert_eq!(view.doc.sequence, before.sequence, "折り手順も戻る");
+        assert_eq!(store.doc, before, "1回で入れる前へ戻り切っている");
+    }
+
+    /// 作業30: 名前付き「頭1・尾1・足4」で、完成まで確認済みの提案を
+    /// 端から端まで適用し、元に戻す1回で元の作品一式へ戻す。
+    #[test]
+    fn checked_head_tail_four_legs_proposal_is_consumed_and_one_undo_restores_the_work() {
+        use ori3_propose::skeleton::{Skeleton, SkeletonNode};
+
+        // 正本の標本: 胴0から頭1・尾1（長さ1）と足4（長さ0.7）を出す。
+        let mut nodes = vec![SkeletonNode::new(0, None, 0.0)];
+        nodes.push(SkeletonNode::new(1, Some(0), 1.0));
+        nodes.push(SkeletonNode::new(2, Some(0), 1.0));
+        for id in 3..=6 {
+            nodes.push(SkeletonNode::new(id, Some(0), 0.7));
+        }
+        let candidates = crate::commands::proposal_generate(
+            Skeleton { nodes },
+            Paper {
+                width_mm: 150.0,
+                height_mm: 150.0,
+            },
+            2026,
+            true,
+        )
+        .expect("頭1・尾1・足4の候補を作れるはず");
+        let without_plan = candidates
+            .iter()
+            .filter(|candidate| candidate.fold_plan.is_none())
+            .count();
+        assert!(without_plan >= 1, "0手の候補を折り方ありとして運んでいる");
+        let checked_plans: Vec<_> = candidates
+            .iter()
+            .enumerate()
+            .filter_map(|(index, candidate)| {
+                candidate
+                    .fold_plan
+                    .as_ref()
+                    .filter(|plan| plan.checked_to_finish())
+                    .map(|plan| (index, plan))
+            })
+            .collect();
+        let completion_targets = checked_plans.len();
+        assert!(completion_targets >= 1, "最後まで確認できた候補が1件も無い");
+
+        // 完成確認対象を全て集めたchecked_plansを最後まで走査するため、各対象が
+        // 以下のassertを1件ずつ全て通ることが「対象全件100%」の証拠になる。
+        for (index, plan) in checked_plans {
+            let candidate_no = index + 1;
+            let details = plan.details();
+            assert!(
+                details.planned > 0,
+                "候補{candidate_no}: 完成手順が0手になっている"
+            );
+            assert_eq!(
+                details.checked, details.planned,
+                "候補{candidate_no}: 全手順を確認していない"
+            );
+            assert_eq!(
+                details.steps.len(),
+                details.planned,
+                "候補{candidate_no}: 適用できる手順が探索結果から欠けている"
+            );
+
+            // 対象ごとに新しいstoreを使う。提案を入れる前にも展開図と折り手順を
+            // 持つ作品を用意し、Document全体の一致で紙・表示・展開図・手順を
+            // まとめて検査する。
+            let mut store = square_store();
+            store.apply_edit(diagonal()).unwrap();
+            store.apply_seq(SeqOp::PushStep { step: step(7) }).unwrap();
+            let before = store.doc.clone();
+            let history_before = store.undo_stack.len();
+
+            let mut applied = store
+                .apply_proposal(details.cp.clone(), details.steps.clone())
+                .unwrap_or_else(|error| {
+                    panic!("候補{candidate_no}: 確認済みの提案を適用できない: {error}")
+                });
+            assert_eq!(
+                store.undo_stack.len(),
+                history_before + 1,
+                "候補{candidate_no}: 適用が1操作になっていない"
+            );
+            assert_eq!(
+                applied.doc.cp, details.cp,
+                "候補{candidate_no}: 確認済みの展開図を全て格納"
+            );
+            assert_eq!(
+                applied.doc.sequence, details.steps,
+                "候補{candidate_no}: 確認済みの全手順を同じ操作で格納"
+            );
+
+            attach_replay(&mut applied);
+            assert!(
+                applied.frame.is_some(),
+                "候補{candidate_no}: 手順を最後まで再生した立体が無い"
+            );
+            assert!(
+                applied.skipped.is_empty(),
+                "候補{candidate_no}: 飛ばされた手順がある: {:?}",
+                applied.skipped
+            );
+            let restored = store.undo().unwrap_or_else(|error| {
+                panic!("候補{candidate_no}: 元に戻す1回が失敗した: {error}")
+            });
+            assert_eq!(
+                restored.doc, before,
+                "候補{candidate_no}: 元の作品一式へ戻らない"
+            );
+            assert_eq!(
+                store.doc, before,
+                "候補{candidate_no}: store内部が元の作品一式へ戻らない"
+            );
+            assert_eq!(
+                store.undo_stack.len(),
+                history_before,
+                "候補{candidate_no}: 提案適用の履歴1件だけを消費していない"
+            );
+        }
     }
 
     #[test]
@@ -2511,7 +2979,9 @@ mod tests {
         assert_eq!(doc, store.doc);
         assert_eq!(faces.len(), 1, "正方形1面のはず");
         assert_eq!(warm, Some(HashMap::from([(6u32, 90.0f64)])));
-        assert!(overlap_enabled, "重なり防止は既定オン");
+        // 形を変える補正は、利用者が明示的に選んだ場合だけ有効にする。
+        assert!(!overlap_enabled, "重なり防止は既定オフ");
+        // 形を変えない食い込みの検出と警告は既定で有効。
         assert!(penetration_enabled, "食い込み検出は既定オン");
 
         // 新規作成で前回解は破棄される(別のCPに古い解を引き継がない)
@@ -2578,9 +3048,11 @@ mod tests {
         let mut store = square_store();
         // 手順が無いうちは再生するものが無い
         let mut view = store.apply_edit(diagonal()).unwrap();
+        view.contact_detected = true;
         attach_replay(&mut view);
         assert!(view.frame.is_none());
         assert!(view.skipped.is_empty());
+        assert!(!view.contact_detected, "手順なしは食い込み検出なしに戻す");
 
         // 対角線(山)を±180°まで折る手順を1つ積む
         let mut folding = step(0);
@@ -3357,6 +3829,43 @@ mod tests {
         }));
     }
 
+    #[test]
+    fn fold_penetration_warning_follows_the_detection_setting() {
+        for detect in [false, true] {
+            let mut store = square_store();
+            store.doc.display.penetration_prevention_enabled = detect;
+            store
+                .apply_seq(SeqOp::FoldThrough {
+                    up_to: 0,
+                    line: [[0.25, 0.0], [0.25, 1.0]],
+                    keep_side_point: [0.5, 0.5],
+                    target_layers: None,
+                    direction: ori3_model::FoldDirection::Up,
+                    alignment: None,
+                    accept_additional_crease: false,
+                })
+                .expect("左端を折る");
+            let view = store
+                .apply_seq(SeqOp::FoldThrough {
+                    up_to: 1,
+                    line: [[0.7, 0.0], [0.7, 1.0]],
+                    keep_side_point: [0.6, 0.5],
+                    target_layers: None,
+                    direction: ori3_model::FoldDirection::Up,
+                    alignment: None,
+                    accept_additional_crease: false,
+                })
+                .expect("衝突する単純折りも止めずに適用する");
+            assert_eq!(
+                view.warnings
+                    .iter()
+                    .any(|warning| warning == ori3_layers::FOLD_PENETRATION_WARNING),
+                detect,
+                "食い込み検出={detect}と画面へ出す貫通警告を一致させる"
+            );
+        }
+    }
+
     /// 重なり順が紙の形と食い違っているときは、警告を出す前に正しい順序へ直す。
     ///
     /// 以前は警告を出すだけだったが、角度だけで折ると重なり順が決まらず、同じ平面の
@@ -3436,6 +3945,88 @@ mod tests {
     }
 
     #[test]
+    fn display_contact_flags_separate_layer_warning_from_correction() {
+        let mut store = square_store();
+        store
+            .apply_seq(fold_op(0, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5]))
+            .unwrap();
+        let faces = ori3_cp::extract_faces(&store.doc.cp);
+        let mut conflicted = ori3_layers::replay(&store.doc, 1, 1.0).frame;
+        let canonical_order = frame_surface_rank_order(&conflicted).expect("完全なrank順");
+        for face in &mut conflicted.faces {
+            face.layer = 1 - face.layer;
+        }
+        assert!(
+            ori3_rigid::layer_order_conflicts(&store.doc.cp, &faces, &conflicted),
+            "設定の分離を測れる層矛盾fixture"
+        );
+        let face_state = |frame: &Frame3D| {
+            frame
+                .faces
+                .iter()
+                .map(|face| {
+                    (
+                        face.face,
+                        face.polygon.clone(),
+                        face.layer,
+                        face.surface_rank,
+                        face.mirrored,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let before = face_state(&conflicted);
+
+        let mut detection_only = conflicted.clone();
+        let warning = apply_layer_order_display_settings(
+            &store.doc.cp,
+            &faces,
+            &mut detection_only,
+            Some(&canonical_order),
+            false,
+            true,
+        );
+        assert_eq!(warning, Some(ori3_layers::FOLD_PENETRATION_WARNING));
+        assert_eq!(
+            face_state(&detection_only),
+            before,
+            "食い込み検出はlayer・surface_rank・形を変えない"
+        );
+
+        let mut prevention_only = conflicted.clone();
+        let warning = apply_layer_order_display_settings(
+            &store.doc.cp,
+            &faces,
+            &mut prevention_only,
+            Some(&canonical_order),
+            true,
+            false,
+        );
+        assert_eq!(warning, None, "検出OFFでは貫通警告を足さない");
+        assert!(
+            !ori3_rigid::layer_order_conflicts(&store.doc.cp, &faces, &prevention_only),
+            "重なり防止を明示したときだけlayerを補正する"
+        );
+        assert_eq!(
+            frame_surface_rank_order(&prevention_only),
+            Some(canonical_order.clone()),
+            "明示した補正だけがcanonical surface authorityを刻む"
+        );
+
+        let mut disabled = conflicted;
+        let warning = apply_layer_order_display_settings(
+            &store.doc.cp,
+            &faces,
+            &mut disabled,
+            Some(&canonical_order),
+            false,
+            false,
+        );
+        assert_eq!(warning, None);
+        assert_eq!(face_state(&disabled), before, "両方OFFはframeを変えない");
+    }
+
+    #[test]
     fn frame_surface_rank_order_rejects_non_permutations() {
         let mut frame = Frame3D {
             faces: vec![
@@ -3466,7 +4057,84 @@ mod tests {
     }
 
     #[test]
-    fn attach_replay_does_not_replace_saved_layer_order_with_shape_fallback() {
+    fn replay_physical_order_requires_geometry_proof_in_addition_to_complete_rank() {
+        let mut store = square_store();
+        store
+            .apply_seq(fold_op(0, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5]))
+            .unwrap();
+        let faces = ori3_cp::extract_faces(&store.doc.cp);
+        let mut replayed = ori3_layers::replay_with_faces(&store.doc, &faces, 1, 1.0);
+        assert!(
+            replayed.surface_order_provenance.is_some(),
+            "fixtureはcompleteな幾何導出を持つ"
+        );
+        assert!(frame_surface_rank_order(&replayed.frame).is_some());
+        assert!(
+            replay_surface_rank_order(&replayed).is_some(),
+            "proofと完全rankがそろえば物理順を使える"
+        );
+
+        replayed.surface_order_provenance = None;
+        assert!(
+            frame_surface_rank_order(&replayed.frame).is_some(),
+            "material seed自体は完全順列に見える"
+        );
+        assert_eq!(
+            replay_surface_rank_order(&replayed),
+            None,
+            "完全順列だけをauthorityへ昇格しない"
+        );
+        let before_faces = replayed
+            .frame
+            .faces
+            .iter()
+            .map(|face| {
+                (
+                    face.face,
+                    face.polygon.clone(),
+                    face.layer,
+                    face.surface_rank,
+                    face.mirrored,
+                )
+            })
+            .collect::<Vec<_>>();
+        let before_warnings = replayed.frame.warnings.clone();
+        let report = prevent_replay_overlap_if_authoritative(
+            &store.doc.cp,
+            &faces,
+            &mut replayed,
+            &ori3_soft::OverlapSettings {
+                enabled: true,
+                ..Default::default()
+            },
+        );
+        assert!(
+            report.is_none(),
+            "proofなしではsequence/attach PBDを呼ばない"
+        );
+        let after_faces = replayed
+            .frame
+            .faces
+            .iter()
+            .map(|face| {
+                (
+                    face.face,
+                    face.polygon.clone(),
+                    face.layer,
+                    face.surface_rank,
+                    face.mirrored,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            after_faces, before_faces,
+            "PBDをskipして論理layerを含むframeを変えない"
+        );
+        assert_eq!(replayed.frame.warnings, before_warnings);
+    }
+
+    #[test]
+    fn attach_replay_keeps_saved_layer_but_uses_geometric_surface_rank() {
         let mut store = square_store();
         store
             .apply_seq(fold_op(0, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5]))
@@ -3479,6 +4147,12 @@ mod tests {
         let faces = ori3_cp::extract_faces(&store.doc.cp);
         let expected = ori3_layers::saved_layer_order_at(&store.doc, &faces, 1, 1.0)
             .expect("反転した保存順を解決できる");
+        let mut geometric_doc = store.doc.clone();
+        geometric_doc.sequence[0].layer_order = None;
+        let expected_surface = frame_surface_rank_order(
+            &ori3_layers::replay_with_faces(&geometric_doc, &faces, 1, 1.0).frame,
+        )
+        .expect("同じ幾何から完全なsurface rankを導出できる");
         let mut view = build_view(&store.doc, &store.step_creases, Vec::new());
 
         attach_replay(&mut view);
@@ -3501,8 +4175,8 @@ mod tests {
                 .into_iter()
                 .map(|(_, face)| face)
                 .collect::<Vec<_>>(),
-            expected.clone(),
-            "保存済みlayer_orderをowner rankで形fallbackに上書きしない"
+            expected_surface,
+            "保存済みlayer_orderで幾何由来のowner rankを上書きしない"
         );
         assert_eq!(
             actual_layer
@@ -3510,7 +4184,7 @@ mod tests {
                 .map(|(_, face)| face)
                 .collect::<Vec<_>>(),
             expected,
-            "保存済みlayer_orderをstack liftでも形fallbackに上書きしない"
+            "保存済みlayer_orderは後続手順用layerとして維持する"
         );
     }
 

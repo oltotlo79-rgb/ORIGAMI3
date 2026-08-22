@@ -112,6 +112,26 @@ pub struct FoldAlignment {
     pub picks: Vec<AlignmentTarget>,
 }
 
+/// 仕上げ手順に記録する、紙のたわみの再現値(SIM-015)。
+///
+/// 再生で再計算できる3値だけを保存し、細分数・反復回数・3D頂点は含めない。
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct FinishSoftSettings {
+    pub enabled: bool,
+    pub stiffness: f64,
+    pub pressure: f64,
+}
+
+impl Default for FinishSoftSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            stiffness: default_stiffness(),
+            pressure: 0.0,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FoldStep {
     pub id: StepId,
@@ -124,6 +144,9 @@ pub struct FoldStep {
     /// 合わせ折りで選んだ点・線。旧形式の作品では存在しないため任意。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alignment: Option<FoldAlignment>,
+    /// この仕上げ位置で確定したたわみの3値。旧作品・通常の折り手順では任意。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish_soft: Option<FinishSoftSettings>,
     pub note: String,
 }
 
@@ -204,12 +227,12 @@ fn default_stiffness() -> f64 {
     0.5
 }
 
-/// 重なり防止の既定値。古い作品には項目が無いため、明示的にオンで補う。
+/// 重なり防止の既定値。形を変える補正は利用者が明示的に選んだ場合だけ適用する。
 fn default_overlap_prevention() -> bool {
-    true
+    false
 }
 
-/// 食い込み防止の既定値。古い作品には項目が無いため、明示的にオンで補う。
+/// 食い込み検出の既定値。検出と警告は既定で有効だが、検出だけでは形を変えない。
 fn default_penetration_prevention() -> bool {
     true
 }
@@ -221,8 +244,8 @@ pub struct DisplaySettings {
     pub grid_divisions: u32,
     /// 紙のたわみを表現するか(SIM-012)。**既定はオフ**。
     ///
-    /// たわみは「パラメータだけを残して、頂点の位置そのものは保存しない」決まり
-    /// (SIM-015)なので、作品ごとの見た目の設定としてここに置く。
+    /// 現在の調整値と、手順別の値を持たない旧作品の再生用。仕上げ位置ごとの値は
+    /// [`FoldStep::finish_soft`] に記録し、どちらにも頂点の位置そのものは保存しない。
     #[serde(default)]
     pub soft_enabled: bool,
     /// 紙の硬さ(0.0〜1.0)。大きいほど面の中が平らに保たれる。
@@ -231,13 +254,14 @@ pub struct DisplaySettings {
     /// 膨らみの強さ(0.0〜1.0、SIM-013)。0.0なら膨らませない。
     #[serde(default)]
     pub soft_pressure: f64,
-    /// 折り途中の面どうしへ接触補正を掛けるか。**既定はオン**。
+    /// 折り途中の面どうしへ接触補正を掛けるか。**既定はオフ**。
     ///
+    /// 利用者が明示的に有効化した場合だけ形を変える。
     /// 補正後の頂点そのものは保存せず、表示を求めるたびに剛体解へ後段適用する。
     #[serde(default = "default_overlap_prevention")]
     pub overlap_prevention_enabled: bool,
-    /// 角度を動かす途中で紙どうしが交差したとき、ぶつかる直前で止めるか。
-    /// **既定はオン**。複雑な形では高速な簡易判定が見逃すことがある。
+    /// 角度を動かした結果、紙どうしが交差したことを検出して警告するか。
+    /// **既定はオン**。検出だけでは形を変えない。
     #[serde(default = "default_penetration_prevention")]
     pub penetration_prevention_enabled: bool,
 }
@@ -253,6 +277,16 @@ impl Default for DisplaySettings {
             soft_pressure: 0.0,
             overlap_prevention_enabled: default_overlap_prevention(),
             penetration_prevention_enabled: default_penetration_prevention(),
+        }
+    }
+}
+
+impl From<&DisplaySettings> for FinishSoftSettings {
+    fn from(display: &DisplaySettings) -> Self {
+        Self {
+            enabled: display.soft_enabled,
+            stiffness: display.soft_stiffness,
+            pressure: display.soft_pressure,
         }
     }
 }
@@ -321,6 +355,45 @@ impl Document {
             sequence: Vec::new(),
             display: DisplaySettings::default(),
         }
+    }
+
+    /// 再生位置までに確定した最新の仕上げたわみを返す。
+    ///
+    /// `None` は全Pose手順に記録がない旧作品を表す。呼び出し側は従来どおり
+    /// `DisplaySettings` 由来の設定を使う。記録を1件以上持つ新形式で、指定位置が
+    /// 最初の記録より前なら、たわみを勝手に有効にしない既定値を返す。
+    #[must_use]
+    pub fn finish_soft_at(&self, up_to: usize, t: f64) -> Option<FinishSoftSettings> {
+        let has_recorded_finish = self
+            .sequence
+            .iter()
+            .any(|step| step.kind == TechniqueKind::Pose && step.finish_soft.is_some());
+        if !has_recorded_finish {
+            return None;
+        }
+
+        let up_to = up_to.min(self.sequence.len());
+        let t = if t.is_finite() {
+            t.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        let completed = if up_to > 0 && t < 1.0 {
+            up_to - 1
+        } else {
+            up_to
+        };
+        Some(
+            self.sequence[..completed]
+                .iter()
+                .rev()
+                .find_map(|step| {
+                    (step.kind == TechniqueKind::Pose)
+                        .then_some(step.finish_soft)
+                        .flatten()
+                })
+                .unwrap_or_default(),
+        )
     }
 }
 

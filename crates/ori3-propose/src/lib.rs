@@ -11,6 +11,7 @@ pub mod search;
 pub mod skeleton;
 pub mod trace;
 pub mod triangulate;
+pub mod verify;
 
 pub use enumerate::{
     FoldLine, FoldSession, MAX_SEAM_GAP, MoveReport, PoseProblem, PoseScan, RejectedMove,
@@ -21,18 +22,23 @@ pub use finish::{
     finish_gaps, length_gap, position_gap, width_gap,
 };
 pub use generate::{LeafSite, LeafVertex, ProposalResult, generate};
-pub use packing::{LeafCircle, Packing, pack};
+pub use packing::{LeafCircle, Packing, TipTargets, body_on_paper, pack, tip_targets};
 pub use plan::{
     CreaseLine, FoldedMask, MAX_LINES, SearchLimits, SearchStats, StopReason, crease_lines, search,
 };
 pub use plan_generic::GenericPlanner;
 pub use plan_history::HistoryPlanner;
 pub use search::{
-    FLAP_RADIUS, FoldGoal, GapWeights, MIN_TIP_LENGTH, RankedMove, SCORE_QUANTUM, SearchBudget,
-    SearchOutcome, SearchStop, TipSite, search_to_finish,
+    CompletionTolerance, FLAP_RADIUS, FoldGoal, GapWeights, MIN_TIP_LENGTH, RankedMove,
+    SCORE_QUANTUM, SearchBudget, SearchOutcome, SearchStop, TipSite, search_to_completion,
+    search_to_finish,
 };
 pub use skeleton::{MAX_LEAVES, Skeleton, SkeletonNode, TIP_POS_MAX, TIP_POS_MIN, TipPos2d};
 pub use trace::{
     CreaseRole, CreaseTrace, FinishedPart, FoldPlanTrace, MoleculeCorner, MoleculePair,
     MoleculeRelation, MoleculeTrace, PaperSide, RegionRef, RegionTrace, TraceChecks, check_trace,
+};
+pub use verify::{
+    CheckedToFinish, FinalCheck, PartialPlan, StepCheck, StepFailure, VerifiedPlan, VerifyFailure,
+    VerifyReport, verify_fold_order, verify_search_completion, verify_search_outcome,
 };

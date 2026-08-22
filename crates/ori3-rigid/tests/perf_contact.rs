@@ -53,7 +53,10 @@ use std::time::{Duration, Instant};
 
 use ori3_cp::extract_faces;
 use ori3_model::{CreasePattern, Driver, Edge, EdgeKind, Face3D, Frame3D, Vertex};
-use ori3_rigid::{self_intersection_pairs, self_intersects, solve, solve_motion};
+use ori3_rigid::{
+    MotionContactOptions, self_intersection_pairs, self_intersects, solve,
+    solve_motion_with_contact_options,
+};
 
 /// 折り操作1回(`solve_motion`)の上限。モジュール冒頭の計測記録を参照。
 const SOLVE_BUDGET: Duration = Duration::from_millis(60);
@@ -145,13 +148,16 @@ fn worst_step_of_one_pass() -> (Duration, Duration) {
     ] {
         for angle in angles {
             let started = Instant::now();
-            let motion = solve_motion(
+            let motion = solve_motion_with_contact_options(
                 &cp,
                 &faces,
                 &[d(9, f64::from(angle))],
                 Some(&targets),
                 Some(&warm),
-                true,
+                MotionContactOptions {
+                    detect: true,
+                    prevent: true,
+                },
             );
             let solve_time = started.elapsed();
             let started = Instant::now();

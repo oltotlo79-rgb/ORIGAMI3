@@ -278,7 +278,33 @@ impl Skeleton {
     }
 
     /// 骨格が木として正しいかを調べる。エラーは日本語1文で返す。
+    ///
+    /// 完成形の先端位置が枠(`-1.0`〜`1.0`)の中にあるかも含めて調べる。
+    /// 位置の範囲だけを外して調べたいときは [`Skeleton::validate_structure`] を使う。
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_structure()?;
+        for n in &self.nodes {
+            if let Some(p) = n.tip_pos_2d
+                && !p.is_valid()
+            {
+                return Err(format!(
+                    "節点{}の位置は横も縦も{TIP_POS_MIN}以上{TIP_POS_MAX}以下にしてください(現在 横{}, 縦{})",
+                    n.id, p.x, p.y
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// 骨格が木として正しいかを、**完成形の先端位置の範囲を除いて**調べる。
+    ///
+    /// 位置を分けているのは、提案の計算(`crate::pack` / `crate::generate`)が
+    /// 枠の外の位置でも**止まらない**ようにするため(`CLAUDE.md` §8
+    /// 「止めずに警告する」)。提案の計算は枠の外の指定をいちばん近い縁へ寄せ、
+    /// 寄せたことを日本語の知らせで伝える。
+    /// データを読み書きする側(保存・画面からの受け取り)は [`Skeleton::validate`]
+    /// を使い、範囲外を今までどおりエラーとして断る。
+    pub fn validate_structure(&self) -> Result<(), String> {
         if self.nodes.is_empty() {
             return Err("骨格に節点がありません".to_string());
         }
@@ -320,14 +346,6 @@ impl Skeleton {
                 return Err(format!(
                     "節点{}の太さは0より大きい値にしてください(現在{})",
                     n.id, n.width_factor
-                ));
-            }
-            if let Some(p) = n.tip_pos_2d
-                && !p.is_valid()
-            {
-                return Err(format!(
-                    "節点{}の位置は横も縦も{TIP_POS_MIN}以上{TIP_POS_MAX}以下にしてください(現在 横{}, 縦{})",
-                    n.id, p.x, p.y
                 ));
             }
         }

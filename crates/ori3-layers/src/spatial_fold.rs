@@ -293,6 +293,7 @@ pub fn fold_from_plane_3d(
         drivers,
         layer_order: None,
         alignment: None,
+        finish_soft: None,
         note: String::new(),
     };
     if up_to <= doc.sequence.len() {
@@ -853,6 +854,7 @@ mod tests {
             }],
             layer_order: None,
             alignment: None,
+            finish_soft: None,
             note: String::new(),
         });
         let faces = extract_faces(&document.cp);

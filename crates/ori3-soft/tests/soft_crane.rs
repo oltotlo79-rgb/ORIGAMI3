@@ -16,8 +16,8 @@ use ori3_layers::{
 };
 use ori3_model::{CreasePattern, Document, Driver, EdgeId, FaceId, Frame3D, Paper};
 use ori3_rigid::{
-    SolveResult, contact_metrics, max_seam_gap, self_intersection_pairs, solve, solve_motion,
-    solve_near,
+    MotionContactOptions, SolveResult, contact_metrics, max_seam_gap, self_intersection_pairs,
+    solve, solve_motion_with_contact_options, solve_near,
 };
 use ori3_soft::{OverlapReport, OverlapSettings, SoftMesh, SoftSettings, prevent_overlap, relax};
 
@@ -362,7 +362,17 @@ fn run_bird_base_sweep(
             target_angle_deg: requested,
         }];
         let started = Instant::now();
-        let motion = solve_motion(&doc.cp, faces, &hard, Some(targets), Some(&warm), true);
+        let motion = solve_motion_with_contact_options(
+            &doc.cp,
+            faces,
+            &hard,
+            Some(targets),
+            Some(&warm),
+            MotionContactOptions {
+                detect: true,
+                prevent: true,
+            },
+        );
         let solve_time = started.elapsed();
         assert_within_budget(
             solve_time,
@@ -974,7 +984,17 @@ fn diagnose_follow_strength_when_every_crease_is_specified() {
             hinge: moving,
             target_angle_deg: requested,
         }];
-        let motion = solve_motion(&doc.cp, &faces, &hard, Some(&folded), Some(&folded), true);
+        let motion = solve_motion_with_contact_options(
+            &doc.cp,
+            &faces,
+            &hard,
+            Some(&folded),
+            Some(&folded),
+            MotionContactOptions {
+                detect: true,
+                prevent: true,
+            },
+        );
         let raw = self_intersection_pairs(&motion.result.frame);
         let yielded: Vec<(EdgeId, f64)> = motion
             .result

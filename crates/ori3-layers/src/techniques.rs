@@ -410,33 +410,37 @@ pub fn squash(
     };
     let parts = if spine.curve_ends.is_some() {
         let polys = flap_polygons(cp, faces, state, &state.order);
-        curved_squash_parts(
+        curved_squash_parts(CurvedSquashInput {
             cp,
             faces,
-            &near,
-            &far,
-            &spine.pairs,
+            pairs: &spine.pairs,
             state,
-            &polys,
-            pivot,
-            s_dir,
-            alpha,
-            (tip - pivot).length(),
-            open,
-        )
+            polygons: &polys,
+            motion: SquashMotion {
+                near: &near,
+                far: &far,
+                pivot,
+                spine_direction: s_dir,
+                fold_angle: alpha,
+                reach: (tip - pivot).length(),
+                open,
+            },
+        })
     } else {
-        squash_parts(
-            &flap,
-            &near,
-            &far,
-            pivot,
-            s_dir,
-            c_dir,
-            alpha,
-            (tip - pivot).length(),
-            open,
+        squash_parts(StraightSquashInput {
+            flap: &flap,
+            motion: SquashMotion {
+                near: &near,
+                far: &far,
+                pivot,
+                spine_direction: s_dir,
+                fold_angle: alpha,
+                reach: (tip - pivot).length(),
+                open,
+            },
+            closing_direction: c_dir,
             anchored,
-        )
+        })
     };
     let mut res = flat_motion(
         cp,
@@ -575,13 +579,33 @@ pub fn petal(
             "この{name}では、斜めの折り目がフラップの外へ出る点を読めませんでした。ちょうつがいの位置を縁の長さから見積もっています(指定のまま続行します)"
         ));
     }
-    let hinge = petal_hinge(tip, d, right_stop, left_stop);
-    let sides: Vec<(f64, f64, Vec<FaceId>)> = [right, left]
+    let geometry = PetalGeometry {
+        tip,
+        center_direction: d,
+        hinge: petal_hinge(tip, d, right_stop, left_stop),
+    };
+    let selected_layers = PetalLayerSelection {
+        cp,
+        faces,
+        state,
+        flap: &flap,
+    };
+    let sides: Vec<PetalWing> = [right, left]
         .into_iter()
         .flatten()
         .map(|(ang, reach)| {
-            let ns = wing_neighbors(cp, faces, state, &flap, tip, d, hinge, ang);
-            (ang, reach, ns)
+            let neighbors = wing_neighbors(
+                &selected_layers,
+                WingGeometry {
+                    petal: geometry,
+                    angle: ang,
+                },
+            );
+            PetalWing {
+                angle: ang,
+                reach,
+                neighbors,
+            }
         })
         .collect();
 
@@ -591,7 +615,13 @@ pub fn petal(
         FoldDirection::Up
     };
     let pockets = petal_pockets(cp, faces, state, &flap, l0, u);
-    let parts = petal_parts(&pockets, &polys, tip, d, hinge, &sides, open);
+    let parts = petal_parts(PetalPartsInput {
+        pockets: &pockets,
+        polygons: &polys,
+        geometry,
+        wings: &sides,
+        open,
+    });
     // どの部分にも入らなかった層は動かない。片側だけの層が反対の羽から外れるのは
     // 普通のことだが、指定した層が1つの部分にも入らないのは指定の誤りなので伝える
     // (層を選ぶ側で黙って落とすと、誤った指定が無反応になってしまう)
@@ -1487,6 +1517,7 @@ impl Session {
             drivers: self.drivers,
             layer_order: Some(layer_points),
             alignment: None,
+            finish_soft: None,
             note: String::new(),
         };
         *cp = self.cp;
@@ -1978,21 +2009,53 @@ fn anchored_outside(
 /// 曲線の背では区間ごとに隣接する面の現在配置が違う。手前側を二等分線で
 /// 折り返したあとの配置へ、各区間の奥側facetを個別に開くことで、曲線頂点の
 /// rulingを挟むfacetも共有辺上で同じ位置を保つ。
-#[allow(clippy::too_many_arguments)]
-fn curved_squash_parts(
-    cp: &CreasePattern,
-    faces: &[Face],
-    near: &[FaceId],
-    far: &[FaceId],
-    pairs: &[[FaceId; 2]],
-    state: &FlatState,
-    polys: &HashMap<FaceId, Vec<DVec2>>,
+/// The common moving geometry and layer groups of a squash fold.
+struct SquashMotion<'a> {
+    near: &'a [FaceId],
+    far: &'a [FaceId],
     pivot: DVec2,
-    s_dir: DVec2,
-    alpha: f64,
+    spine_direction: DVec2,
+    fold_angle: f64,
     reach: f64,
     open: FoldDirection,
-) -> Vec<MotionPart> {
+}
+
+/// Inputs specific to a squash fold with a curved spine.
+struct CurvedSquashInput<'a> {
+    cp: &'a CreasePattern,
+    faces: &'a [Face],
+    pairs: &'a [[FaceId; 2]],
+    state: &'a FlatState,
+    polygons: &'a HashMap<FaceId, Vec<DVec2>>,
+    motion: SquashMotion<'a>,
+}
+
+/// Inputs specific to a squash fold with a straight spine.
+struct StraightSquashInput<'a> {
+    flap: &'a [FaceId],
+    motion: SquashMotion<'a>,
+    closing_direction: DVec2,
+    anchored: bool,
+}
+
+fn curved_squash_parts(input: CurvedSquashInput<'_>) -> Vec<MotionPart> {
+    let CurvedSquashInput {
+        cp,
+        faces,
+        pairs,
+        state,
+        polygons: polys,
+        motion:
+            SquashMotion {
+                near,
+                far,
+                pivot,
+                spine_direction: s_dir,
+                fold_angle: alpha,
+                reach,
+                open,
+            },
+    } = input;
     if alpha.abs() <= ANGLE_EPS {
         let mut layers = near.to_vec();
         layers.extend(far.iter().copied());
@@ -2121,19 +2184,22 @@ fn curved_squash_parts(
     parts
 }
 
-#[allow(clippy::too_many_arguments)]
-fn squash_parts(
-    flap: &[FaceId],
-    near: &[FaceId],
-    far: &[FaceId],
-    pivot: DVec2,
-    s_dir: DVec2,
-    c_dir: DVec2,
-    alpha: f64,
-    reach: f64,
-    open: FoldDirection,
-    anchored: bool,
-) -> Vec<MotionPart> {
+fn squash_parts(input: StraightSquashInput<'_>) -> Vec<MotionPart> {
+    let StraightSquashInput {
+        flap,
+        motion:
+            SquashMotion {
+                near,
+                far,
+                pivot,
+                spine_direction: s_dir,
+                fold_angle: alpha,
+                reach,
+                open,
+            },
+        closing_direction: c_dir,
+        anchored,
+    } = input;
     // 退化ケース: 背が向きを変えないので紙は動かない(重なり順と山谷だけが変わる)
     if alpha.abs() <= ANGLE_EPS {
         return vec![MotionPart::restack(flap.to_vec(), LayerTurn::Outside(open))];
@@ -2522,17 +2588,60 @@ fn half_plane(line: [[f64; 2]; 2], inside: DVec2) -> impl Fn(DVec2) -> f64 {
 ///
 /// 花弁折りでは、羽の外側の縁(フラップの層と隣の層をつないでいる折り目)が
 /// **開く**。相手の層の羽も一緒に中心線へ寄せないと、そこで紙が裂ける。
-#[allow(clippy::too_many_arguments)]
-fn wing_neighbors(
-    cp: &CreasePattern,
-    faces: &[Face],
-    state: &FlatState,
-    flap: &[FaceId],
+/// The crease pattern and selected flap layers used to find wing neighbors.
+struct PetalLayerSelection<'a> {
+    cp: &'a CreasePattern,
+    faces: &'a [Face],
+    state: &'a FlatState,
+    flap: &'a [FaceId],
+}
+
+/// The shared geometry of a petal fold.
+#[derive(Clone, Copy)]
+struct PetalGeometry {
     tip: DVec2,
-    d: DVec2,
+    center_direction: DVec2,
     hinge: [[f64; 2]; 2],
-    ang: f64,
-) -> Vec<FaceId> {
+}
+
+/// The geometry of one wing relative to the shared petal geometry.
+struct WingGeometry {
+    petal: PetalGeometry,
+    angle: f64,
+}
+
+/// One wing's extent and the non-flap layers it opens with.
+struct PetalWing {
+    angle: f64,
+    reach: f64,
+    neighbors: Vec<FaceId>,
+}
+
+/// The layer groups and geometry required to build all petal motion parts.
+struct PetalPartsInput<'a> {
+    pockets: &'a [Vec<FaceId>],
+    polygons: &'a HashMap<FaceId, Vec<DVec2>>,
+    geometry: PetalGeometry,
+    wings: &'a [PetalWing],
+    open: FoldDirection,
+}
+
+fn wing_neighbors(selection: &PetalLayerSelection<'_>, wing: WingGeometry) -> Vec<FaceId> {
+    let PetalLayerSelection {
+        cp,
+        faces,
+        state,
+        flap,
+    } = selection;
+    let WingGeometry {
+        petal:
+            PetalGeometry {
+                tip,
+                center_direction: d,
+                hinge,
+            },
+        angle: ang,
+    } = wing;
     let pos = vertex_positions(cp);
     let k = rotate(d, ang * 0.5);
     let near = half_plane(hinge, tip);
@@ -2612,16 +2721,19 @@ fn rotate(d: DVec2, a: f64) -> DVec2 {
 /// ([`LayerTurn::Beside`])。重なり全体の外側へまとめて回すと、袋がいくつも
 /// 重なったフラップ(カエルの基本形など)で袋の紙が入り混じり、
 /// 出来上がった1本の先をつまめなくなる。
-#[allow(clippy::too_many_arguments)]
-fn petal_parts(
-    pockets: &[Vec<FaceId>],
-    polys: &HashMap<FaceId, Vec<DVec2>>,
-    tip: DVec2,
-    d: DVec2,
-    hinge: [[f64; 2]; 2],
-    sides: &[(f64, f64, Vec<FaceId>)],
-    open: FoldDirection,
-) -> Vec<MotionPart> {
+fn petal_parts(input: PetalPartsInput<'_>) -> Vec<MotionPart> {
+    let PetalPartsInput {
+        pockets,
+        polygons: polys,
+        geometry:
+            PetalGeometry {
+                tip,
+                center_direction: d,
+                hinge,
+            },
+        wings,
+        open,
+    } = input;
     let seg = |from: DVec2, dir: DVec2| [[from.x, from.y], [from.x + dir.x, from.y + dir.y]];
     let near_side = HalfPlane {
         line: hinge,
@@ -2629,17 +2741,17 @@ fn petal_parts(
     };
     // 領域の内側を示す点は、左右のうち短いほうの縁を基準に取る
     // (長いほうで取るとちょうつがいの向こう側へはみ出すことがある)
-    let inner = sides
+    let inner = wings
         .iter()
-        .map(|(_, r, _)| *r)
+        .map(|wing| wing.reach)
         .fold(f64::INFINITY, f64::min);
     let mut parts: Vec<MotionPart> = Vec::new();
     let mut middle = vec![near_side.clone()];
-    for (ang, reach, neighbors) in sides {
-        let bisector = seg(tip, rotate(d, ang * 0.5));
-        let outside = tip + rotate(d, *ang) * (reach.min(inner) * 0.5);
+    for wing_input in wings {
+        let bisector = seg(tip, rotate(d, wing_input.angle * 0.5));
+        let outside = tip + rotate(d, wing_input.angle) * (wing_input.reach.min(inner) * 0.5);
         let inside = tip + d * (inner * 0.5);
-        let wing = vec![
+        let wing_region = vec![
             near_side.clone(),
             HalfPlane {
                 line: bisector,
@@ -2653,11 +2765,11 @@ fn petal_parts(
         // 隣の層の羽は中心線へ寄せるだけ(もとの層のすぐ上へ入る)。
         // 羽の領域から全部落ちたら部分を作らない(層の指定が空の [`MotionPart`] は
         // 「全ての層」の意味になり、無関係な層まで動いてしまうため)
-        let near_layers = layers_in_region(polys, neighbors, &wing);
+        let near_layers = layers_in_region(polys, &wing_input.neighbors, &wing_region);
         if !near_layers.is_empty() {
             parts.push(MotionPart {
                 layers: near_layers,
-                region: wing.clone(),
+                region: wing_region.clone(),
                 transform: MotionTransform::Reflect(vec![bisector]),
                 turn: LayerTurn::Inside(open),
                 reverse_layers: None,
@@ -2667,7 +2779,7 @@ fn petal_parts(
             &mut parts,
             polys,
             pockets,
-            &wing,
+            &wing_region,
             MotionTransform::Reflect(vec![bisector, hinge]),
             open,
         );
@@ -3070,9 +3182,30 @@ mod tests {
             ),
         );
         let quarter = std::f64::consts::FRAC_PI_4;
-        let sides = vec![(quarter, 1.0, vec![7]), (-quarter, 1.0, vec![7])];
+        let wings = [
+            PetalWing {
+                angle: quarter,
+                reach: 1.0,
+                neighbors: vec![7],
+            },
+            PetalWing {
+                angle: -quarter,
+                reach: 1.0,
+                neighbors: vec![7],
+            },
+        ];
 
-        let parts = petal_parts(&[vec![1]], &polys, tip, d, hinge, &sides, FoldDirection::Up);
+        let parts = petal_parts(PetalPartsInput {
+            pockets: &[vec![1]],
+            polygons: &polys,
+            geometry: PetalGeometry {
+                tip,
+                center_direction: d,
+                hinge,
+            },
+            wings: &wings,
+            open: FoldDirection::Up,
+        });
 
         assert!(!parts.is_empty(), "紙のある層は動く");
         for p in &parts {

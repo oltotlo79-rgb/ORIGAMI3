@@ -50,6 +50,24 @@ use crate::skeleton::{Skeleton, TipPos2d};
 /// いちばん離れた2点は正方形の対角にあたる `2√2`(約2.828)離れている。
 pub const POSITION_GAP_MAX: f64 = 2.0 * SQRT_2;
 
+/// `2.0`より小さい最大の`f64`。有限の太さ係数を折り上がり目盛りへ写す上限。
+const FOLDED_WIDTH_MAX: f64 = f64::from_bits(2.0_f64.to_bits() - 1);
+
+/// 紙上の太さ係数`tan(theta)`を、折り上がり測定の`2 sin(theta)`へ写す。
+///
+/// `hypot`を使って`width_factor * width_factor`のoverflowを避ける。数学上は有限の
+/// `width_factor`に対して必ず2未満だが、極端に大きい値は丸めで2になりうるため、
+/// その場合だけ2の直前の有限値へ戻す。入力の妥当性は[`Skeleton::validate_structure`]が
+/// 従来どおり検査し、ここでは新しい停止条件を加えない。
+fn folded_width_from_factor(width_factor: f64) -> f64 {
+    let folded = 2.0 * (width_factor / width_factor.hypot(1.0));
+    if folded >= 2.0 {
+        FOLDED_WIDTH_MAX
+    } else {
+        folded
+    }
+}
+
 /// 目標の先端1本ぶん(利用者の指定)。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TargetTip {
@@ -57,7 +75,8 @@ pub struct TargetTip {
     pub leaf_id: u32,
     /// 指定した長さ(骨格の `length`)。
     pub length: f64,
-    /// 指定した太さ(骨格の `width_factor`)。
+    /// 指定した太さ。折り上がり目標では`2 sin(theta)`、紙上測定では
+    /// `width_factor = tan(theta)`の目盛りを使う。作り方は[`FinishTarget`]を参照。
     pub width: f64,
     /// 完成形で指定した位置。`None` は「位置を指定していない」。
     pub pos: Option<TipPos2d>,
@@ -71,9 +90,26 @@ pub struct FinishTarget {
 }
 
 impl FinishTarget {
-    /// 骨格から目標を取り出す。角(葉)でない節点は入らない。
+    /// 骨格から、折り上がり探索の目標を取り出す。角(葉)でない節点は入らない。
+    ///
+    /// 骨格と画面の太さは紙上の比`width_factor = tan(theta)`、
+    /// [`crate::search::FoldGoal::measure`]の太さは`2 sin(theta)`なので、ここで一度だけ
+    /// `folded_width_from_factor`を通す。本番では`plan_folds`がこのconstructorを使う。
     #[must_use]
     pub fn from_skeleton(skeleton: &Skeleton) -> Self {
+        Self::from_skeleton_with_width(skeleton, folded_width_from_factor)
+    }
+
+    /// 紙上の配置だけを測るときの目標を取り出す。
+    ///
+    /// [`FinishedForm::from_proposal`]は紙上円の半径しか見られず、長さと太さを分離できない。
+    /// その経路に限っては、従来どおり生の`width_factor`を同じ目盛りのまま使う。
+    #[must_use]
+    pub fn from_skeleton_on_paper(skeleton: &Skeleton) -> Self {
+        Self::from_skeleton_with_width(skeleton, std::convert::identity)
+    }
+
+    fn from_skeleton_with_width(skeleton: &Skeleton, width_of: impl Fn(f64) -> f64) -> Self {
         let mut ids = skeleton.leaves();
         ids.sort_unstable();
         let tips = ids
@@ -82,7 +118,7 @@ impl FinishTarget {
             .map(|n| TargetTip {
                 leaf_id: n.id,
                 length: n.length,
-                width: n.width_factor,
+                width: width_of(n.width_factor),
                 pos: n.tip_pos_2d,
             })
             .collect();
@@ -105,7 +141,8 @@ pub struct MeasuredTip {
     pub material_vertex: Option<u32>,
     /// 届いた長さ(骨格の `length` と同じ単位)。出ていない先端は `0.0`。
     pub length: f64,
-    /// 届いた太さ(骨格の `width_factor` と同じ単位)。出ていない先端は `0.0`。
+    /// 届いた太さ。折り上がり測定では`2 sin(theta)`、紙上測定では
+    /// `width_factor = tan(theta)`の目盛りを使う。出ていない先端は`0.0`。
     pub width: f64,
     /// 完成形で測った位置。まだ測っていなければ `None`。
     pub pos: Option<TipPos2d>,
@@ -146,7 +183,7 @@ impl FinishedForm {
         }
     }
 
-    /// 提案した展開図から、数・長さ・太さを測る。
+    /// 提案した展開図から、数・長さ・太さを紙上の目盛りで測る。
     ///
     /// どの先端がどの紙の場所になったかは、生成のその場で残した対応
     /// ([`LeafSite`]、作業9)をそのまま使う。座標を突き合わせて当て直すことはしない。
@@ -160,8 +197,9 @@ impl FinishedForm {
     ///   2つを分けられない。足りない割合を長さと太さへ同じだけ配る。折り上げた形で
     ///   別々に測れるようになるのは作業21以降。
     ///
-    /// 完成形での位置はここでは測らない(`pos` は `None`)。紙の上の配置の中心を
-    /// 完成位置として扱わないため(PRO-007)。
+    /// 目標には[`FinishTarget::from_skeleton_on_paper`]を使う。完成形での位置はここでは
+    /// 測らない(`pos`は`None`)。紙の上の配置の中心を完成位置として扱わないため
+    /// (PRO-007)。
     #[must_use]
     pub fn from_proposal(skeleton: &Skeleton, packing: &Packing, result: &ProposalResult) -> Self {
         let sites: &[LeafSite] = &result.sites;
@@ -338,6 +376,9 @@ pub fn length_gap(target: &FinishTarget, form: &FinishedForm) -> f64 {
 /// 【太さ】各角の太さが指定にどれだけ近いか。0.0が最良。
 ///
 /// 数え方は [`length_gap`] と同じで、見るのが太さになる。
+/// 目標と実測は同じ目盛り同士を渡す。折り上がり探索では
+/// [`FinishTarget::from_skeleton`]、紙上測定では
+/// [`FinishTarget::from_skeleton_on_paper`]を使う。
 #[must_use]
 pub fn width_gap(target: &FinishTarget, form: &FinishedForm) -> f64 {
     relative_gap(target, form, |t| t.width, |m| m.width)

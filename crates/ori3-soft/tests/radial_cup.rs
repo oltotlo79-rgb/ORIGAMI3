@@ -2,7 +2,7 @@
 
 use ori3_soft::{RadialCupError, RadialCupSettings, radial_cup_vertices};
 
-// acceptance_rose.rsと同じ、依存追加なしの単独読み込みもコンパイルで保証する。
+// 統合受入検査と同じ、依存追加なしの単独読み込みもコンパイルで保証する。
 #[path = "../src/cup.rs"]
 mod standalone_cup;
 

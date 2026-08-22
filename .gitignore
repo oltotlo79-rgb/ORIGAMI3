@@ -33,3 +33,6 @@ scan-*.pdf
 
 # 別名のビルド出力(実験時に作られる)
 /target-*/
+
+# 説明書の図を直したときの、目視確認用の前後画像（成果物ではない）
+/docs/manual/verification/

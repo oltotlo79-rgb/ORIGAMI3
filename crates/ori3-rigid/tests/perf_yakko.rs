@@ -59,7 +59,9 @@ use std::time::{Duration, Instant};
 
 use ori3_cp::{Face, extract_faces, insert_segment};
 use ori3_model::{CreasePattern, Document, Driver, EdgeKind, Paper};
-use ori3_rigid::{self_intersection_pairs, solve, solve_motion};
+use ori3_rigid::{
+    MotionContactOptions, self_intersection_pairs, solve, solve_motion_with_contact_options,
+};
 
 /// 折り操作1回(`solve_motion`)の上限。上表の実測を参照。
 const SOLVE_BUDGET: Duration = Duration::from_millis(60);
@@ -169,7 +171,7 @@ fn worst_of_sweep(
     for magnitude in magnitudes {
         let requested = sign * f64::from(magnitude);
         let started = Instant::now();
-        let motion = solve_motion(
+        let motion = solve_motion_with_contact_options(
             cp,
             faces,
             &[Driver {
@@ -178,7 +180,10 @@ fn worst_of_sweep(
             }],
             Some(medium),
             Some(&warm),
-            true,
+            MotionContactOptions {
+                detect: true,
+                prevent: true,
+            },
         );
         let solve_time = started.elapsed();
         let result = &motion.result;

@@ -1177,7 +1177,9 @@ fn solve_impl_prepared(
             .push("有限な立体形状を生成できませんでした".to_string());
     } else if !converged {
         let location = r
-            .chunks_exact(12)
+            .as_chunks::<12>()
+            .0
+            .iter()
             .enumerate()
             .map(|(li, residual)| (li, sq_sum(residual)))
             .max_by(|a, b| a.1.total_cmp(&b.1))

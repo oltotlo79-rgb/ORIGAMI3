@@ -25,6 +25,33 @@ fn max_violation(s: &Skeleton, p: &Packing, w: f64, h: f64) -> f64 {
     v.max(0.0)
 }
 
+/// 同じ入力の再計算が浮動小数点のビットまで同じかを、整数だけで比べる。
+/// 固定した計算値との比較ではなく、最初の1回を残り9回の基準にする。
+fn packing_bits(output: &[Packing]) -> Vec<u64> {
+    let mut bits = vec![output.len() as u64];
+    for candidate in output {
+        bits.extend([
+            candidate.scale.to_bits(),
+            candidate.violation.to_bits(),
+            candidate.centers.len() as u64,
+        ]);
+        for &(leaf_id, center) in &candidate.centers {
+            bits.extend([u64::from(leaf_id), center[0].to_bits(), center[1].to_bits()]);
+        }
+        bits.push(candidate.circles.len() as u64);
+        for circle in &candidate.circles {
+            bits.extend([
+                u64::from(circle.leaf_id),
+                circle.circle_index as u64,
+                circle.center[0].to_bits(),
+                circle.center[1].to_bits(),
+                circle.radius.to_bits(),
+            ]);
+        }
+    }
+    bits
+}
+
 #[test]
 fn two_leaves_on_unit_square_reach_half_scale() {
     let s = star(2, 1.0);
@@ -144,6 +171,69 @@ fn twelve_leaf_center_containment_lower_bound_is_feasible() {
     assert_eq!(
         violation, 0.0,
         "中心包含の12葉下限{LOWER_BOUND}を満たさない"
+    );
+}
+
+/// 作業8: 作業6で実在を確認した下限へ探索自身が到達し、10回とも同じ結果になる。
+/// 旧debug壁時計条件は、`perf_packing.rs` の
+/// `work8_twelve_leaf_eight_starts_ten_runs_stay_within_release_budget` が
+/// release 10回の最大値を同じ1秒上限で判定する。
+#[test]
+fn work8_twelve_leaf_search_reaches_the_known_feasible_scale_ten_times() {
+    const REQUIRED_SCALE: f64 = 0.194_277_036;
+    const MAX_VIOLATION: f64 = 1e-9;
+    const RUNS: usize = 10;
+
+    let skeleton = star(12, 1.0);
+    let mut expected_bits = None;
+    let mut passed = 0;
+    let mut achieved = (f64::NAN, f64::NAN, f64::NAN);
+    for run in 1..=RUNS {
+        let output = pack(&skeleton, 1.0, 1.0, 1, 8);
+        assert_eq!(output.len(), MAX_CANDIDATES, "{run}回目の候補数");
+        let best = &output[0];
+        assert!(
+            best.scale.is_finite() && best.scale >= REQUIRED_SCALE,
+            "{run}回目の縮尺{}が下限{REQUIRED_SCALE}へ届かない",
+            best.scale
+        );
+        assert!(
+            best.violation.is_finite() && best.violation <= MAX_VIOLATION,
+            "{run}回目の報告違反量{}",
+            best.violation
+        );
+        let checked_violation = max_violation(&skeleton, best, 1.0, 1.0);
+        if run == 1 {
+            achieved = (best.scale, best.violation, checked_violation);
+        }
+        assert!(
+            checked_violation <= MAX_VIOLATION,
+            "{run}回目の独立検算違反量{checked_violation}"
+        );
+        assert_eq!(best.centers.len(), 12, "{run}回目の中心数");
+        assert_eq!(best.circles.len(), 12, "{run}回目の円数");
+        assert!(
+            best.centers
+                .iter()
+                .enumerate()
+                .all(|(index, (leaf_id, center))| {
+                    *leaf_id == index as u32 + 1 && center[0].is_finite() && center[1].is_finite()
+                }),
+            "{run}回目の葉IDまたは中心座標が不正"
+        );
+
+        let actual_bits = packing_bits(&output);
+        if let Some(expected) = &expected_bits {
+            assert_eq!(&actual_bits, expected, "{run}回目が初回とbit不一致");
+        } else {
+            expected_bits = Some(actual_bits);
+        }
+        passed += 1;
+    }
+    assert_eq!(passed, RUNS);
+    println!(
+        "作業8: scale={:.15}, violation={:.15e}, checked={:.15e}, 決定性={passed}/{RUNS}",
+        achieved.0, achieved.1, achieved.2
     );
 }
 

@@ -1,0 +1,54 @@
+{
+  "fixture_schema_version": 1,
+  "document": {
+    "schema_version": 1,
+    "paper": {
+      "width_mm": 150.0,
+      "height_mm": 150.0
+    },
+    "cp": {
+      "vertices": [
+        { "id": 0, "pos": [0.0, 0.0] },
+        { "id": 1, "pos": [1.0, 0.0] },
+        { "id": 2, "pos": [1.0, 1.0] },
+        { "id": 3, "pos": [0.0, 1.0] }
+      ],
+      "edges": [
+        { "id": 0, "v0": 0, "v1": 1, "kind": "Border" },
+        { "id": 1, "v0": 1, "v1": 2, "kind": "Border" },
+        { "id": 2, "v0": 2, "v1": 3, "kind": "Border" },
+        { "id": 3, "v0": 3, "v1": 0, "kind": "Border" }
+      ],
+      "next_vertex_id": 4,
+      "next_edge_id": 4
+    },
+    "sequence": [],
+    "display": {
+      "front_color": [237, 28, 36],
+      "back_color": [255, 255, 255],
+      "grid_divisions": 8,
+      "soft_enabled": false,
+      "soft_stiffness": 0.5,
+      "soft_pressure": 0.0,
+      "overlap_prevention_enabled": false,
+      "penetration_prevention_enabled": true
+    }
+  },
+  "checkpoint": {
+    "book_step": 3,
+    "instruction": "合成形状の丸みを検査する",
+    "changes_shape": true,
+    "frame": {
+      "faces": [
+        {
+          "face": 0,
+          "polygon": [[0.0, 0.0, 0.125], [1.0, 0.0, -0.25], [0.0, 1.0, 0.5]],
+          "layer": 0,
+          "surface_rank": 0,
+          "mirrored": false
+        }
+      ],
+      "warnings": []
+    }
+  }
+}

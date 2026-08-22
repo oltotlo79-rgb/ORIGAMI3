@@ -2,7 +2,7 @@
 
 use ori3_soft::{CurlError, CurlSettings, SoftMesh, curl_vertices};
 
-// acceptance_rose.rsも依存追加なしで同じ実装を読む。この形で常にコンパイル
+// 統合受入検査も依存追加なしで同じ実装を読む。この形で常にコンパイル
 // できることを、通常の公開APIを使うテストとは別に確認する。
 #[path = "../src/curl.rs"]
 mod standalone_curl;

@@ -7,18 +7,30 @@
 //!
 //! # 計測方法と結果の記録
 //!
-//! - `#[ignore]`なしの通常テストとして、debugビルドでの実測に上限を課す方式。
-//!   release相当の実力値は手元で `cargo test -p ori3-rigid --release --test
-//!   perf_miura -- --nocapture` を実行し、printされる実測値で確認した
+//! - `#[ignore]`なしの通常テストとして計算結果の正しさを確かめ、実時間の上限は
+//!   releaseビルドでだけ判定する。通常の`cargo test --workspace`で実時間を
+//!   合否にすると、最適化なしの速さと計算機の混み具合を測ってしまうためである。
+//!   releaseでは同じ系列を3回測り、一番良かった回で判定する。OSが一時的に
+//!   止めた時間を1回きりの判定へ混ぜないためで、3回とも遅ければ性能後退は
+//!   捕まる。通常ビルドは数値の正しさだけを見るので、従来どおり1回にする。
 //! - 実測(2026-08-05, 開発機 Windows 11 / Task 2-0改修後):
 //!   warm start 1回あたり debug 約85〜95ms / release 約2.7〜6.2ms
 //!   (NFR-002の33msに対し5倍以上の余裕。反復は4〜5回)
 //! - 改修前(M1時点のソルバー)を同一条件・releaseで実測すると1回あたり
 //!   約27〜37秒(目標の約1,000倍)。律速は数値微分の全域再伝播を含む
 //!   密ヤコビアン(m=4332×k=759)と、その正規方程式の密ガウス消去だった
-//! - debug/releaseの速度比は約20倍。debug上限は改修後debug実測の約4倍
-//!   (=release目標33msの10倍)の330msとし、機材やCIのばらつきを吸収しつつ
-//!   大きな性能後退(閉路の疎性やヤコビアンの解析式が壊れた場合など)を検出する
+//! - releaseの上限はNFR-002の33msと、`solve_near`の実測に余裕を取った100ms。
+//!   接触診断込みの操作は既存の16ms枠を維持する。最適化ありの20回実測値と
+//!   上限の比は次のとおり(2026-08-20、Windows 11開発機、20回連続、失敗0件)。
+//!
+//! | 対象 | 最大 | 中央 | 最小 | 上限 | 最大÷上限 |
+//! |---|---:|---:|---:|---:|---:|
+//! | warm start solve | 2.0420ms | 1.6485ms | 1.5559ms | 33ms | 0.0619 |
+//! | solve_near | 9.4964ms | 8.6913ms | 8.1973ms | 100ms | 0.0950 |
+//! | 接触診断込み solve_motion | 4.9204ms | 3.3999ms | 3.2059ms | 16ms | 0.3075 |
+//!
+//! どれも手元の最大値が上限の1/3以下である。CIは開発機より約3.6倍遅い実測が
+//! あるため、実測値をそのまま上限にせず、余裕を取った。
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -28,17 +40,24 @@ use ori3_model::{CreasePattern, Driver, Edge, EdgeKind, Vertex};
 use ori3_rigid::intersect::contact_scan_profile;
 use ori3_rigid::{self_intersection_pairs, solve, solve_motion, solve_near};
 
-/// debugビルドでのsolve 1回あたりの上限(モジュールコメントの計測記録を参照)。
-const DEBUG_BUDGET: Duration = Duration::from_millis(330);
+/// releaseビルドでのsolve 1回あたりの上限(モジュールコメントの計測記録を参照)。
+const SOLVE_BUDGET: Duration = Duration::from_millis(33);
 
-/// 同じくdebugビルドでの `solve_near`(角度を次々に指定する使い方)1回あたりの
-/// 上限。debug実測の最悪値516msの約3倍に取り、機材やCIのばらつきを吸収しつつ
-/// 大きな性能後退を検出する。
-const NEAR_DEBUG_BUDGET: Duration = Duration::from_millis(1500);
-/// 接触診断込みの通常1フレーム。releaseでは16ms、debugでは同じ処理の
-/// 最適化差を見込んだ上限で回帰を検出する。
-const MOTION_DEBUG_BUDGET: Duration = Duration::from_millis(500);
-const MOTION_RELEASE_BUDGET: Duration = Duration::from_millis(16);
+/// `solve_near`(角度を次々に指定する使い方)1回あたりのrelease上限。
+const NEAR_BUDGET: Duration = Duration::from_millis(100);
+/// 接触診断込みの通常1フレームのrelease上限。
+const MOTION_BUDGET: Duration = Duration::from_millis(16);
+
+/// 実時間の上限は最適化ありの性能ジョブだけで判定する。
+fn assert_within_release_budget(elapsed: Duration, budget: Duration, label: &str) {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    assert!(
+        elapsed < budget,
+        "{label}: {elapsed:?}(上限 {budget:?}。モジュール冒頭の計測記録を参照)"
+    );
+}
 
 /// nc×nr面のミウラ折りCP。頂点(i,j)は x=i·dx、y=(j+奇数列なら振れ幅s)·dy。
 /// 縦線はまっすぐ(内部の山谷は列+行のパリティで交互)、横線はジグザグ
@@ -108,50 +127,54 @@ fn miura_cp(nc: usize, nr: usize) -> CreasePattern {
 
 #[test]
 fn miura_20x20_solve_stays_within_frame_budget() {
-    let (nc, nr) = (20, 20);
-    let cp = miura_cp(nc, nr);
-    let faces = extract_faces(&cp);
-    assert_eq!(faces.len(), 400);
-    assert_eq!(cp.edges.len(), 840);
+    let mut best = Duration::MAX;
+    let passes = if cfg!(debug_assertions) { 1 } else { 3 };
+    for pass in 1..=passes {
+        let (nc, nr) = (20, 20);
+        let cp = miura_cp(nc, nr);
+        let faces = extract_faces(&cp);
+        assert_eq!(faces.len(), 400);
+        assert_eq!(cp.edges.len(), 840);
 
-    // 中央付近の縦ヒンジ(山)をdriverにする。縦線分の辺IDは j*(nc+1)+i
-    let hinge = (nr / 2 * (nc + 1) + nc / 2) as u32;
-    assert_eq!(
-        cp.edges[hinge as usize].kind,
-        EdgeKind::Mountain,
-        "駆動ヒンジは山折りのはず"
-    );
-    let drv = |deg: f64| {
-        vec![Driver {
-            hinge,
-            target_angle_deg: deg,
-        }]
-    };
-
-    // 冷間の初回solve(時間制限の対象外。収束は必須)
-    let cold = solve(&cp, &faces, &drv(20.0), None);
-    assert!(cold.converged, "iterations={}", cold.iterations);
-
-    // スライダー操作相当: warm startで2°ずつ進め、1回ごとの時間を測る
-    let mut prev = cold.angles;
-    let mut worst = Duration::ZERO;
-    for step in 1..=5 {
-        let deg = 20.0 + 2.0 * f64::from(step);
-        let t0 = Instant::now();
-        let res = solve(&cp, &faces, &drv(deg), Some(&prev));
-        let dt = t0.elapsed();
-        assert!(res.converged, "step={step} iterations={}", res.iterations);
-        println!(
-            "step={step} deg={deg} iterations={} time={dt:?}",
-            res.iterations
+        // 中央付近の縦ヒンジ(山)をdriverにする。縦線分の辺IDは j*(nc+1)+i
+        let hinge = (nr / 2 * (nc + 1) + nc / 2) as u32;
+        assert_eq!(
+            cp.edges[hinge as usize].kind,
+            EdgeKind::Mountain,
+            "駆動ヒンジは山折りのはず"
         );
-        worst = worst.max(dt);
-        prev = res.angles;
+        let drv = |deg: f64| {
+            vec![Driver {
+                hinge,
+                target_angle_deg: deg,
+            }]
+        };
+
+        // 冷間の初回solve(時間制限の対象外。収束は必須)
+        let cold = solve(&cp, &faces, &drv(20.0), None);
+        assert!(cold.converged, "iterations={}", cold.iterations);
+
+        // スライダー操作相当: warm startで2°ずつ進め、1回ごとの時間を測る
+        let mut prev = cold.angles;
+        let mut worst = Duration::ZERO;
+        for step in 1..=5 {
+            let deg = 20.0 + 2.0 * f64::from(step);
+            let t0 = Instant::now();
+            let res = solve(&cp, &faces, &drv(deg), Some(&prev));
+            let dt = t0.elapsed();
+            assert!(res.converged, "step={step} iterations={}", res.iterations);
+            println!(
+                "{pass}回目 step={step} deg={deg} iterations={} time={dt:?}",
+                res.iterations
+            );
+            worst = worst.max(dt);
+            prev = res.angles;
+        }
+        println!("{pass}回目: warm start solve最悪={worst:?}");
+        best = best.min(worst);
     }
-    assert!(
-        worst < DEBUG_BUDGET,
-        "warm start solveが遅すぎます: worst={worst:?}(モジュールコメントの計測記録を参照)"
-    );
+    println!("warm start solve最良={best:?}(上限 {SOLVE_BUDGET:?})");
+    assert_within_release_budget(best, SOLVE_BUDGET, "warm start solve");
 }
 
 /// 角度スライダーで折り角を次々に指定していく使い方の性能(NFR-002)。
@@ -163,41 +186,46 @@ fn miura_20x20_solve_stays_within_frame_budget() {
 /// 余裕。反復は13〜16回)。warm startなしの初回は debug 720ms / release 20.5ms。
 #[test]
 fn miura_20x20_solve_near_stays_within_frame_budget() {
-    let (nc, nr) = (20, 20);
-    let cp = miura_cp(nc, nr);
-    let faces = extract_faces(&cp);
-    assert_eq!(faces.len(), 400);
+    let mut best = Duration::MAX;
+    let passes = if cfg!(debug_assertions) { 1 } else { 3 };
+    for pass in 1..=passes {
+        let (nc, nr) = (20, 20);
+        let cp = miura_cp(nc, nr);
+        let faces = extract_faces(&cp);
+        assert_eq!(faces.len(), 400);
 
-    // 中央付近の縦ヒンジを左から5本、1本ずつ指定していく
-    let picked: Vec<u32> = (0..5)
-        .map(|k| (nr / 2 * (nc + 1) + nc / 2 + k) as u32)
-        .collect();
-    let goal = |e: u32| if e.is_multiple_of(2) { 24.0 } else { -24.0 };
+        // 中央付近の縦ヒンジを左から5本、1本ずつ指定していく
+        let picked: Vec<u32> = (0..5)
+            .map(|k| (nr / 2 * (nc + 1) + nc / 2 + k) as u32)
+            .collect();
+        let goal = |e: u32| if e.is_multiple_of(2) { 24.0 } else { -24.0 };
 
-    let mut warm: Option<HashMap<u32, f64>> = None;
-    let mut worst = Duration::ZERO;
-    for i in 1..=picked.len() {
-        let h = picked[i - 1];
-        let hard = vec![Driver {
-            hinge: h,
-            target_angle_deg: goal(h),
-        }];
-        let targets: HashMap<u32, f64> = picked[..i - 1].iter().map(|&e| (e, goal(e))).collect();
-        let t0 = Instant::now();
-        let res = solve_near(&cp, &faces, &hard, &targets, warm.as_ref());
-        let dt = t0.elapsed();
-        println!("i={i} iterations={} time={dt:?}", res.iterations);
-        assert!(res.converged, "i={i} iterations={}", res.iterations);
-        // 1本目(warm startなし)は冷間なので時間制限の対象外
-        if i > 1 {
-            worst = worst.max(dt);
+        let mut warm: Option<HashMap<u32, f64>> = None;
+        let mut worst = Duration::ZERO;
+        for i in 1..=picked.len() {
+            let h = picked[i - 1];
+            let hard = vec![Driver {
+                hinge: h,
+                target_angle_deg: goal(h),
+            }];
+            let targets: HashMap<u32, f64> =
+                picked[..i - 1].iter().map(|&e| (e, goal(e))).collect();
+            let t0 = Instant::now();
+            let res = solve_near(&cp, &faces, &hard, &targets, warm.as_ref());
+            let dt = t0.elapsed();
+            println!("{pass}回目 i={i} iterations={} time={dt:?}", res.iterations);
+            assert!(res.converged, "i={i} iterations={}", res.iterations);
+            // 1本目(warm startなし)は冷間なので時間制限の対象外
+            if i > 1 {
+                worst = worst.max(dt);
+            }
+            warm = Some(res.angles);
         }
-        warm = Some(res.angles);
+        println!("{pass}回目: solve_near最悪={worst:?}");
+        best = best.min(worst);
     }
-    assert!(
-        worst < NEAR_DEBUG_BUDGET,
-        "角度を次々に指定する追従計算が遅すぎます: worst={worst:?}(このテストの計測記録を参照)"
-    );
+    println!("solve_near最良={best:?}(上限 {NEAR_BUDGET:?})");
+    assert_within_release_budget(best, NEAR_BUDGET, "solve_near");
 }
 
 #[test]
@@ -252,34 +280,37 @@ fn miura_20x20_contact_check_stays_within_frame_budget() {
     println!("接触診断・要求姿勢走査: {requested_scan:?}");
     println!("接触診断・solve_motion走査回数: 2 (開始姿勢1 + 要求姿勢1)");
 
-    let t0 = Instant::now();
-    let motion = solve_motion(
-        &cp,
-        &faces,
-        &[Driver {
-            hinge,
-            target_angle_deg: 22.0,
-        }],
-        None,
-        Some(&start.angles),
-        true,
-    );
-    let elapsed = t0.elapsed();
-    println!(
-        "面400・接触診断: iterations={} time={elapsed:?}",
-        motion.result.iterations
-    );
-    assert!(motion.result.converged);
-    assert!(!motion.contact_detected);
-    let budget = if cfg!(debug_assertions) {
-        MOTION_DEBUG_BUDGET
-    } else {
-        MOTION_RELEASE_BUDGET
-    };
-    assert!(
-        elapsed < budget,
-        "接触診断込みの追従が遅すぎます: {elapsed:?}"
-    );
+    let mut best = Duration::MAX;
+    let mut first_motion = None;
+    let passes = if cfg!(debug_assertions) { 1 } else { 3 };
+    for pass in 1..=passes {
+        let t0 = Instant::now();
+        let motion = solve_motion(
+            &cp,
+            &faces,
+            &[Driver {
+                hinge,
+                target_angle_deg: 22.0,
+            }],
+            None,
+            Some(&start.angles),
+            true,
+        );
+        let elapsed = t0.elapsed();
+        println!(
+            "{pass}回目 面400・接触診断: iterations={} time={elapsed:?}",
+            motion.result.iterations
+        );
+        assert!(motion.result.converged);
+        assert!(!motion.contact_detected);
+        best = best.min(elapsed);
+        if first_motion.is_none() {
+            first_motion = Some(motion);
+        }
+    }
+    println!("面400・接触診断最良={best:?}(上限 {MOTION_BUDGET:?})");
+    assert_within_release_budget(best, MOTION_BUDGET, "接触診断込みの追従");
+    let motion = first_motion.expect("少なくとも1回の接触診断を実行する");
 
     // 性能変更後も同一入力の交差集合と数値結果が毎回同一であることを、
     // 時間枠の外で確認する（SYS-004）。この姿勢の従来交差集合は空。

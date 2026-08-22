@@ -321,7 +321,10 @@ fn live2_requested_angles_versus_solved_angles() {
     for edge in keys {
         let r = requested[&edge];
         let s = solved[&edge];
-        println!("LIVE2ANGLE edge{edge} 要求={r:+.6} 解={s:+.6} 差={:+.6}", s - r);
+        println!(
+            "LIVE2ANGLE edge{edge} 要求={r:+.6} 解={s:+.6} 差={:+.6}",
+            s - r
+        );
     }
     // 要求どおりの角をそのまま伝播したときの裂け(紙が閉じるか)。
     let requested_frame = frame_of(&cp, &faces, &requested);
@@ -432,7 +435,10 @@ fn live2_solver_reports_versus_actual_driver_error() {
     for h in &hinges {
         let d = result.angles[h] - requested[h];
         if d.abs() > 1e-3 {
-            println!("SOLVE   edge{h} 要求={:+.6} 解={:+.6} 差={d:+.6}", requested[h], result.angles[h]);
+            println!(
+                "SOLVE   edge{h} 要求={:+.6} 解={:+.6} 差={d:+.6}",
+                requested[h], result.angles[h]
+            );
         }
     }
     println!(
@@ -466,7 +472,10 @@ fn live2_hard_preferred_split_changes_the_residual() {
     let cases: Vec<(&str, Vec<EdgeId>)> = vec![
         ("A 全20本がhard", hinges.clone()),
         ("B 辺35だけhard・残り19本preferred", vec![35]),
-        ("C 平らな17本がhard・19/31/35がpreferred", flat_creases.clone()),
+        (
+            "C 平らな17本がhard・19/31/35がpreferred",
+            flat_creases.clone(),
+        ),
         ("D 平らな17本と35がhard・19/31がpreferred", {
             let mut v = flat_creases.clone();
             v.push(35);
@@ -531,8 +540,14 @@ fn live2_dump_frames_for_the_screen_measurement() {
     split_d.push(35);
 
     let mut dumps: Vec<(String, Frame3D)> = Vec::new();
-    dumps.push(("live2-actual".to_string(), frame_of(&cp, &faces, &live2_solved_angles())));
-    dumps.push(("live-frame".to_string(), frame_of(&cp, &faces, &live_frame_angles())));
+    dumps.push((
+        "live2-actual".to_string(),
+        frame_of(&cp, &faces, &live2_solved_angles()),
+    ));
+    dumps.push((
+        "live-frame".to_string(),
+        frame_of(&cp, &faces, &live_frame_angles()),
+    ));
     for (label, hard_ids) in [("split-C", flat_creases.clone()), ("split-D", split_d)] {
         let hard: Vec<_> = hard_ids.iter().copied().map(driver).collect();
         let preferred: Vec<_> = hinges

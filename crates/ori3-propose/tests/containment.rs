@@ -530,7 +530,15 @@ fn compare(label: &str, skeleton: &Skeleton, seeds: u64) -> (Stats, Stats) {
     let (sa, sb) = (stats(&mut a_values), stats(&mut b_values));
     println!(
         "[{label}] 標本{seeds}件 (starts=8, 紙1×1)\n  案A(中心包含)  min={:.9} p50={:.9} p95={:.9} max={:.9}\n  案B(円全体)    min={:.9} p50={:.9} p95={:.9} max={:.9}\n  中央値の比 案B/案A = {:.6}  紙の縁に接する中心 案A {a_on_border}/{a_centers}・案B(円が縁に接する) {b_on_border}/{a_centers}",
-        sa.min, sa.p50, sa.p95, sa.max, sb.min, sb.p50, sb.p95, sb.max, sb.p50 / sa.p50,
+        sa.min,
+        sa.p50,
+        sa.p95,
+        sa.max,
+        sb.min,
+        sb.p50,
+        sb.p95,
+        sb.max,
+        sb.p50 / sa.p50,
     );
     (sa, sb)
 }
@@ -602,7 +610,11 @@ fn measure_center_and_full_containment_on_the_same_thousand_seeds() {
         SkeletonNode::new(3, Some(1), 1.0),
     ];
     for i in 0..4u32 {
-        nodes.push(SkeletonNode::new(4 + i, Some(if i < 2 { 0 } else { 1 }), 0.6));
+        nodes.push(SkeletonNode::new(
+            4 + i,
+            Some(if i < 2 { 0 } else { 1 }),
+            0.6,
+        ));
     }
     compare("頭1・尾1・足4", &Skeleton { nodes }, 200);
 }

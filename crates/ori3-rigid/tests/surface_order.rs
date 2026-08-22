@@ -3,7 +3,10 @@ use std::collections::HashMap;
 use glam::DVec3;
 use ori3_cp::extract_faces;
 use ori3_model::{CreasePattern, Driver, Edge, EdgeId, EdgeKind, FaceId, Vertex};
-use ori3_rigid::{propagate, solve_motion, to_frame3d};
+use ori3_rigid::{
+    propagate, solve_motion, solve_motion_once, surface_order_from_angles,
+    surface_order_from_angles_flat_path, to_frame3d,
+};
 
 fn vertex(id: u32, x: f64, y: f64) -> Vertex {
     Vertex { id, pos: [x, y] }
@@ -743,6 +746,37 @@ fn same_final_angles_have_the_same_rank_for_propagate_and_each_selected_driver()
 }
 
 #[test]
+fn exact_constraint_chain_is_authoritative_without_a_synthetic_history() {
+    let mut cp = three_panel_strip();
+    cp.edges
+        .iter_mut()
+        .find(|edge| edge.id == 9)
+        .expect("second hinge")
+        .kind = EdgeKind::Valley;
+    let faces = extract_faces(&cp);
+    let final_angles = HashMap::from([(8, 180.0), (9, -180.0)]);
+    let direct = to_frame3d(&cp, &faces, &propagate(&cp, &faces, &final_angles));
+
+    let (order, _provenance) = surface_order_from_angles(&cp, &faces, &final_angles, &[], None)
+        .expect("厳密折り目の推移閉包だけで三層すべての上下が決まる");
+
+    assert_eq!(order, rank_order(&direct));
+}
+
+#[test]
+fn loop_closure_never_treats_a_propagated_flat_path_as_physical_authority() {
+    let cp = diagonal_midline_square();
+    let faces = extract_faces(&cp);
+    let error = surface_order_from_angles_flat_path(&cp, &faces, &mixed_exact_angles())
+        .expect_err("非木辺の閉包を解かない伝播経路は重なり順の証明にならない");
+
+    assert!(
+        error.contains("loop surface order"),
+        "閉路専用のauthority gateより前で失敗した: {error}"
+    );
+}
+
+#[test]
 fn mixed_exact_stack_rank_is_independent_of_warm_start() {
     let cp = diagonal_midline_square();
     let faces = extract_faces(&cp);
@@ -862,8 +896,10 @@ fn single_exact_stack_preserves_non_exact_driver_context() {
         values
     };
 
-    let before_hard = solve_motion(&cp, &faces, &drivers(-179.999), None, None, false).result;
-    let exact_hard = solve_motion(&cp, &faces, &drivers(-180.0), None, None, false).result;
+    // この検査は追従経路ではなく、同じ指定を1回で解いた面順位の契約を比較する。
+    // 接触検出のON/OFFへ単発solveの意味を抱き合わせない。
+    let before_hard = solve_motion_once(&cp, &faces, &drivers(-179.999), None, None);
+    let exact_hard = solve_motion_once(&cp, &faces, &drivers(-180.0), None, None);
     assert_eq!(
         rank_order(&exact_hard.frame),
         rank_order(&before_hard.frame)
@@ -883,7 +919,7 @@ fn single_exact_stack_preserves_non_exact_driver_context() {
         .filter(|(hinge, _)| **hinge != exact_hinge)
         .map(|(&hinge, &angle)| (hinge, angle))
         .collect::<HashMap<_, _>>();
-    let before_preferred = solve_motion(
+    let before_preferred = solve_motion_once(
         &cp,
         &faces,
         &[Driver {
@@ -892,10 +928,8 @@ fn single_exact_stack_preserves_non_exact_driver_context() {
         }],
         Some(&preferred),
         None,
-        false,
-    )
-    .result;
-    let exact_preferred = solve_motion(
+    );
+    let exact_preferred = solve_motion_once(
         &cp,
         &faces,
         &[Driver {
@@ -904,9 +938,7 @@ fn single_exact_stack_preserves_non_exact_driver_context() {
         }],
         Some(&preferred),
         None,
-        false,
-    )
-    .result;
+    );
     assert_eq!(
         rank_order(&exact_preferred.frame),
         rank_order(&before_preferred.frame),
@@ -995,7 +1027,11 @@ fn exact_fold_rank_violations(
             } else {
                 left_normal.z
             };
-            if component < 0.0 { -left_normal } else { left_normal }
+            if component < 0.0 {
+                -left_normal
+            } else {
+                left_normal
+            }
         };
         let left_front_is_up = left_normal.dot(up) > 0.0;
         let right_should_be_above = (angle < 0.0) == left_front_is_up;
@@ -1037,12 +1073,7 @@ fn exact_folds_agree_with_the_surface_rank() {
             mixed_exact_angles(),
             10,
         ),
-        (
-            "live-frame",
-            live_frame_square(),
-            live_frame_angles(),
-            15,
-        ),
+        ("live-frame", live_frame_square(), live_frame_angles(), 15),
     ];
     let mut failures = Vec::new();
     for (label, cp, angles, expected_exact_folds) in cases {
@@ -1057,6 +1088,10 @@ fn exact_folds_agree_with_the_surface_rank() {
             "{label}: 180°の折り目の本数が変わっている"
         );
         let violations = exact_fold_rank_violations(&cp, &faces, &angles, &frame);
+        println!(
+            "EXACT_FOLD_RANK case={label} exact_folds={exact_folds} violations={}",
+            violations.len()
+        );
         if !violations.is_empty() {
             failures.push(format!(
                 "{label}: 180°の折り目{exact_folds}本中{}本で、surface_rankが折り目の向きに反している detail(edge,下,上,角度)={violations:?}",

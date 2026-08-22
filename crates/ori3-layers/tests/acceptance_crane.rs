@@ -34,7 +34,7 @@
 //! テスト冒頭にある)。折り上がり(t=1)の形と重なりは正しいので、これらの工程は
 //! 折り目の山谷と層順序の一致([`assert_fold_senses`])で確かめる。
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use glam::{DVec2, DVec3};
 use ori3_cp::{Face, extract_faces};
@@ -44,7 +44,9 @@ use ori3_layers::techniques::TechniqueInput;
 use ori3_layers::{
     FlatState, FoldThroughResult, flat_state_at, inside_reverse, petal, replay, squash,
 };
-use ori3_model::{CreasePattern, Document, Driver, EdgeKind, FaceId, Paper};
+use ori3_model::{
+    CreasePattern, Document, Driver, DriverLine, EdgeKind, FaceId, FoldStep, Paper, TechniqueKind,
+};
 use ori3_rigid::max_seam_gap;
 
 /// 紙の中心から細い先までの距離(鶴の基本形。1 - √2/2)。
@@ -1214,7 +1216,7 @@ fn derived_layer_order_matches_the_recorded_fold() {
 
 /// 完成した鶴の形を検査する。
 ///
-/// 裂けや交差が0でも形が違うことがある(2026-08-12にローズと折り鶴で確認)。
+/// 裂けや交差が0でも形が違うことがある(2026-08-12に折り鶴で確認)。
 /// 数値だけを合格条件にせず、形そのものを条件に入れる。
 ///
 /// 実測(2026-08-12): 外形 幅0.432 × 奥行0.432 × 高さ0.000、面29枚、交差0組。
@@ -1407,4 +1409,171 @@ fn valley_folding_one_crease_to_180_keeps_the_paper_closed() {
         worst_rms < 1e-9,
         "36段すべてで閉じるが、最悪の閉包RMSが大きすぎる: {worst_rms:.3e}"
     );
+}
+
+#[test]
+fn saved_order_never_overrides_geometric_rank_across_angle_buckets() {
+    let (base, _) = crane();
+    let faces = extract_faces(&base.cp);
+    let positions = base
+        .cp
+        .vertices
+        .iter()
+        .map(|vertex| (vertex.id, vertex.pos))
+        .collect::<HashMap<_, _>>();
+    let samples = base
+        .cp
+        .edges
+        .iter()
+        .filter(|edge| edge.kind != EdgeKind::Border)
+        .take(20)
+        .map(|edge| DriverLine {
+            a: positions[&edge.v0],
+            b: positions[&edge.v1],
+            target_angle_deg: 0.0,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        samples.len(),
+        20,
+        "angle sweep needs twenty distinct crane hinges"
+    );
+
+    let other = [
+        -170.0, -150.0, -135.0, -120.0, -75.0, -60.0, -45.0, -30.0, -15.0, -1.0, 1.0, 15.0, 30.0,
+        45.0, 60.0, 75.0, 120.0, 135.0, 150.0, 170.0,
+    ];
+    let fixed = [
+        ("0", 0.0),
+        ("+90", 90.0),
+        ("-90", -90.0),
+        ("+179", 179.0),
+        ("-179", -179.0),
+        ("+180", 180.0),
+        ("-180", -180.0),
+    ];
+    for bucket_index in 0..=fixed.len() {
+        let label = fixed.get(bucket_index).map_or("other", |(label, _)| *label);
+        let mut numbered_cases = 0usize;
+        let mut forced_faces = Vec::new();
+        let mut rank_diff_faces = Vec::new();
+        let mut converged = 0usize;
+        let mut seam_ok = 0usize;
+        let mut authoritative = 0usize;
+        let mut face_id_order_cases = 0usize;
+        let mut max_vertex_delta = 0.0_f64;
+        for (sample_index, template) in samples.iter().enumerate() {
+            let angle = fixed
+                .get(bucket_index)
+                .map_or(other[sample_index], |(_, angle)| *angle);
+            let mut saved_doc = base.clone();
+            let mut driver = template.clone();
+            driver.target_angle_deg = angle;
+            saved_doc.sequence.push(FoldStep {
+                id: u32::try_from(saved_doc.sequence.len()).expect("step count fits"),
+                kind: TechniqueKind::Simple,
+                drivers: vec![driver],
+                layer_order: None,
+                alignment: None,
+                finish_soft: None,
+                note: String::new(),
+            });
+            let mut geometric_doc = saved_doc.clone();
+            for step in &mut geometric_doc.sequence {
+                step.layer_order = None;
+            }
+            let saved = replay(&saved_doc, saved_doc.sequence.len(), 1.0);
+            let geometric = replay(&geometric_doc, geometric_doc.sequence.len(), 1.0);
+            assert_eq!(
+                saved.surface_order_provenance.is_some(),
+                geometric.surface_order_provenance.is_some(),
+                "{label} sample {sample_index}: 保存順の有無で幾何authorityが変わった"
+            );
+            authoritative += usize::from(saved.surface_order_provenance.is_some());
+            assert!(
+                saved.skipped.is_empty() && geometric.skipped.is_empty(),
+                "{label} sample {sample_index}: 比較対象の手順を飛ばした"
+            );
+            let saved_ranks = saved
+                .frame
+                .faces
+                .iter()
+                .map(|face| (face.face, face.surface_rank))
+                .collect::<BTreeMap<_, _>>();
+            let geometric_ranks = geometric
+                .frame
+                .faces
+                .iter()
+                .map(|face| (face.face, face.surface_rank))
+                .collect::<BTreeMap<_, _>>();
+            let complete_ranks = |ranks: &BTreeMap<u32, u32>| {
+                let mut values = ranks.values().copied().collect::<Vec<_>>();
+                values.sort_unstable();
+                values
+                    .iter()
+                    .enumerate()
+                    .all(|(rank, &value)| u32::try_from(rank).ok() == Some(value))
+            };
+            assert!(
+                complete_ranks(&saved_ranks) && complete_ranks(&geometric_ranks),
+                "{label} sample {sample_index}: surface_rankが完全順列でない"
+            );
+            let forced = saved_ranks
+                .iter()
+                .filter(|&(face, rank)| *rank == *face && geometric_ranks[face] != *face)
+                .count();
+            let differences = saved_ranks
+                .iter()
+                .filter(|&(face, rank)| geometric_ranks[face] != *rank)
+                .count();
+            face_id_order_cases +=
+                usize::from(saved_ranks.iter().all(|(face, rank)| *face == *rank));
+            numbered_cases += usize::from(forced > 0);
+            forced_faces.push(forced);
+            rank_diff_faces.push(differences);
+            converged += usize::from(saved.converged && geometric.converged);
+            let saved_seam = max_seam_gap(&base.cp, &faces, &saved.frame);
+            let geometric_seam = max_seam_gap(&base.cp, &faces, &geometric.frame);
+            seam_ok += usize::from(saved_seam < 1e-6 && geometric_seam < 1e-6);
+            for (left, right) in saved.frame.faces.iter().zip(&geometric.frame.faces) {
+                assert_eq!(left.face, right.face);
+                for (a, b) in left.polygon.iter().zip(&right.polygon) {
+                    max_vertex_delta = max_vertex_delta.max(
+                        a.iter()
+                            .zip(b)
+                            .map(|(x, y)| (x - y).abs())
+                            .fold(0.0_f64, f64::max),
+                    );
+                }
+            }
+        }
+        println!(
+            "SURFACE_ORDER_CRANE bucket={label} total=20 numbered_cases={numbered_cases} face_id_order_cases={face_id_order_cases} authoritative={authoritative} forced_faces_min={} forced_faces_max={} forced_faces_sum={} rank_diff_min={} rank_diff_max={} converged={converged} seam_ok={seam_ok} max_vertex_delta={max_vertex_delta:.3e}",
+            forced_faces.iter().copied().min().unwrap_or(0),
+            forced_faces.iter().copied().max().unwrap_or(0),
+            forced_faces.iter().sum::<usize>(),
+            rank_diff_faces.iter().copied().min().unwrap_or(0),
+            rank_diff_faces.iter().copied().max().unwrap_or(0),
+        );
+        assert_eq!(
+            numbered_cases, 0,
+            "{label}: 保存順が幾何には無い面番号一致を作った姿勢がある"
+        );
+        assert_eq!(
+            face_id_order_cases, 0,
+            "{label}: surface_rank全体がFaceId順になった姿勢がある"
+        );
+        assert!(
+            forced_faces.iter().all(|&count| count == 0),
+            "{label}: 保存順が面番号一致を強制した: {forced_faces:?}"
+        );
+        assert!(
+            rank_diff_faces.iter().all(|&count| count == 0),
+            "{label}: 保存順あり/なしでsurface rankが変わった: {rank_diff_faces:?}"
+        );
+        assert_eq!(
+            max_vertex_delta, 0.0,
+            "rank authority must not change geometry"
+        );
+    }
 }

@@ -10,7 +10,10 @@ use ori3_cp::{Face, extract_faces};
 use ori3_model::{
     CreasePattern, Document, Driver, Edge, EdgeId, EdgeKind, FaceId, Frame3D, Vertex,
 };
-use ori3_rigid::{SurfaceOrderSource, propagate, solve_motion, to_frame3d};
+use ori3_rigid::{
+    MotionContactOptions, SurfaceOrderSource, propagate, solve_motion,
+    solve_motion_with_contact_options, to_frame3d,
+};
 
 const CAMERA_FOV_DEG: f64 = 45.0;
 const CAMERA_MARGIN: f64 = 1.35;
@@ -23,6 +26,10 @@ const RASTER_EPS: f32 = 1e-10;
 const SURFACE_OWNER_PLANARITY_EPSILON: f64 = 1e-6;
 const SURFACE_OWNER_COPLANAR_EPSILON: f64 = 1e-6;
 const SURFACE_OWNER_NORMAL_EPSILON: f64 = 1e-6;
+const EXPLICIT_CONTACT_PREVENTION: MotionContactOptions = MotionContactOptions {
+    detect: true,
+    prevent: true,
+};
 
 const WARMUP_ABS: [f64; 19] = [
     0.0, 9.0, 19.0, 29.0, 39.0, 49.0, 59.0, 69.0, 79.0, 90.0, 101.0, 111.0, 121.0, 131.0, 141.0,
@@ -1345,8 +1352,8 @@ fn visual_image(diagram: &Diagram, frame: &Frame3D, viewport: usize, view: Camer
                         return;
                     }
                     // 最前面と同じ支持平面の面は、補間の丸めで深度がずれていても候補に残す。
-                    let same_group = face.coplanar_group != 0
-                        && face.coplanar_group == nearest_group[pixel];
+                    let same_group =
+                        face.coplanar_group != 0 && face.coplanar_group == nearest_group[pixel];
                     let nearest_depth = nearest_code as f32 / max_depth_code as f32;
                     if same_group || depth - nearest_depth <= tolerance {
                         owners[pixel] = Some((face_index, triangle.back_facing));
@@ -1423,7 +1430,7 @@ fn classified_fill_counts(image: &VisualImage) -> (u64, u64) {
 fn boundary_ladder(diagram: &Diagram, hinge: EdgeId, sign: f64) -> Vec<(f64, EndpointState)> {
     let mut warm = None::<HashMap<EdgeId, f64>>;
     for absolute in WARMUP_ABS {
-        let motion = solve_motion(
+        let motion = solve_motion_with_contact_options(
             &diagram.cp,
             &diagram.faces,
             &[Driver {
@@ -1432,14 +1439,17 @@ fn boundary_ladder(diagram: &Diagram, hinge: EdgeId, sign: f64) -> Vec<(f64, End
             }],
             None,
             warm.as_ref(),
-            true,
+            MotionContactOptions {
+                detect: true,
+                prevent: true,
+            },
         );
         warm = Some(motion.result.angles);
     }
 
     let mut ladder = Vec::with_capacity(BOUNDARY_ABS.len());
     for absolute in BOUNDARY_ABS {
-        let motion = solve_motion(
+        let motion = solve_motion_with_contact_options(
             &diagram.cp,
             &diagram.faces,
             &[Driver {
@@ -1448,7 +1458,10 @@ fn boundary_ladder(diagram: &Diagram, hinge: EdgeId, sign: f64) -> Vec<(f64, End
             }],
             None,
             warm.as_ref(),
-            true,
+            MotionContactOptions {
+                detect: true,
+                prevent: true,
+            },
         );
         assert!(
             motion
@@ -1477,7 +1490,10 @@ fn boundary_ladder(diagram: &Diagram, hinge: EdgeId, sign: f64) -> Vec<(f64, End
 
 fn endpoint_frames(diagram: &Diagram, hinge: EdgeId, sign: f64) -> (EndpointState, EndpointState) {
     let mut ladder = boundary_ladder(diagram, hinge, sign);
-    let after = ladder.pop().expect("boundary samples include 180 degrees").1;
+    let after = ladder
+        .pop()
+        .expect("boundary samples include 180 degrees")
+        .1;
     let before = ladder
         .pop()
         .expect("boundary samples include 179.999 degrees")
@@ -1888,7 +1904,7 @@ fn surface_order_exact_endpoint_is_rank_stable_for_previous_19() {
             let mut flipped =
                 stacks_that_flip_between_endpoints(&before.frame, &after.frame, &stacks);
 
-            let refreshed = solve_motion(
+            let refreshed = solve_motion_with_contact_options(
                 &diagram.cp,
                 &diagram.faces,
                 &[Driver {
@@ -1897,7 +1913,10 @@ fn surface_order_exact_endpoint_is_rank_stable_for_previous_19() {
                 }],
                 None,
                 Some(&after.angles),
-                true,
+                MotionContactOptions {
+                    detect: true,
+                    prevent: true,
+                },
             );
             flipped.extend(stacks_that_differ(
                 &after.frame,
@@ -1912,7 +1931,7 @@ fn surface_order_exact_endpoint_is_rank_stable_for_previous_19() {
             // 1e-6度を超えてちがった。刻印する重なり順は「いま表示している形」を
             // 説明するものなので、形がちがえば順がちがうのは正しい。
             // ここでは「同じ形へ収束したときは同じ重なり方になる」ことだけを検査する。
-            let cold = solve_motion(
+            let cold = solve_motion_with_contact_options(
                 &diagram.cp,
                 &diagram.faces,
                 &[Driver {
@@ -1921,7 +1940,10 @@ fn surface_order_exact_endpoint_is_rank_stable_for_previous_19() {
                 }],
                 None,
                 None,
-                true,
+                MotionContactOptions {
+                    detect: true,
+                    prevent: true,
+                },
             );
             let cold_pose_difference = after
                 .angles
@@ -2434,20 +2456,22 @@ fn surface_order_live_frame_has_no_back_pixels_from_all_612_directions() {
                 let exposure = (azimuth_deg, elevation_deg, x, y, owner.face);
                 // 上下左右の隣接画素に裏が1つでもあれば、輪郭の1画素ではなく
                 // 面が裏返って見えている領域である。
-                let isolated = [(-1_i32, 0_i32), (1, 0), (0, -1), (0, 1)]
-                    .into_iter()
-                    .all(|(dx, dy)| {
-                        let (Some(nx), Some(ny)) =
-                            (x.checked_add_signed(dx as isize), y.checked_add_signed(dy as isize))
-                        else {
-                            return true;
-                        };
-                        if nx >= VIEWPORT || ny >= VIEWPORT {
-                            return true;
-                        }
-                        image.pixels[ny * VIEWPORT + nx]
-                            .is_none_or(|neighbour| !neighbour.back_facing)
-                    });
+                let isolated =
+                    [(-1_i32, 0_i32), (1, 0), (0, -1), (0, 1)]
+                        .into_iter()
+                        .all(|(dx, dy)| {
+                            let (Some(nx), Some(ny)) = (
+                                x.checked_add_signed(dx as isize),
+                                y.checked_add_signed(dy as isize),
+                            ) else {
+                                return true;
+                            };
+                            if nx >= VIEWPORT || ny >= VIEWPORT {
+                                return true;
+                            }
+                            image.pixels[ny * VIEWPORT + nx]
+                                .is_none_or(|neighbour| !neighbour.back_facing)
+                        });
                 if isolated {
                     geometric_exposures.insert(exposure);
                 } else {
@@ -3033,12 +3057,15 @@ fn stage1_surface_rank_direct_versus_warm_start() {
         let mut methods: Vec<(String, Frame3D, HashMap<EdgeId, f64>)> = Vec::new();
 
         // A0: 最終角をそのまま propagate して組み立てる基準形。
-        let direct =
-            zero_back_apply_overlap(&cp, &faces, {
-                let folded = propagate(&cp, &faces, &final_angles);
-                to_frame3d(&cp, &faces, &folded)
-            });
-        methods.push(("A0-propagate-direct".to_string(), direct, final_angles.clone()));
+        let direct = zero_back_apply_overlap(&cp, &faces, {
+            let folded = propagate(&cp, &faces, &final_angles);
+            to_frame3d(&cp, &faces, &folded)
+        });
+        methods.push((
+            "A0-propagate-direct".to_string(),
+            direct,
+            final_angles.clone(),
+        ));
 
         // A1: 最終角をいきなり全部hardで1回solveする(warm無し)。
         let mut hard = final_angles
@@ -3374,9 +3401,11 @@ fn sweep_poses(cp: &CreasePattern, faces: &[Face], seed: u64, count: usize) -> V
         let needs_canonical_path = canonical
             .values()
             .any(|angle| angle.abs() >= 179.999 - 1e-6);
-        let has_exact = motion.result.angles.values().any(|angle| {
-            (angle.abs().to_radians() - std::f64::consts::PI).abs() <= 1e-8
-        });
+        let has_exact = motion
+            .result
+            .angles
+            .values()
+            .any(|angle| (angle.abs().to_radians() - std::f64::consts::PI).abs() <= 1e-8);
         let mut summary = hard
             .iter()
             .map(|driver| format!("{}:{:.4}", driver.hinge, driver.target_angle_deg))
@@ -3384,7 +3413,9 @@ fn sweep_poses(cp: &CreasePattern, faces: &[Face], seed: u64, count: usize) -> V
         summary.sort_unstable();
         poses.push(SweepPose {
             label: format!("pose{index:03}-mode{mode}-hard[{}]", summary.join(" ")),
-            source_label: surface_order_source_label(motion.surface_order.map(|order| order.source)),
+            source_label: surface_order_source_label(
+                motion.surface_order.map(|order| order.source),
+            ),
             angles: motion.result.angles,
             frame: motion.result.frame,
             needs_canonical_path,
@@ -3619,9 +3650,9 @@ fn overlap_witness(
             if area <= 1e-12 || intersection.len() < 3 {
                 continue;
             }
-            let sum = intersection
-                .iter()
-                .fold([0.0, 0.0], |sum, point| [sum[0] + point[0], sum[1] + point[1]]);
+            let sum = intersection.iter().fold([0.0, 0.0], |sum, point| {
+                [sum[0] + point[0], sum[1] + point[1]]
+            });
             let count = intersection.len() as f64;
             let center = [sum[0] / count, sum[1] / count];
             if best.is_none_or(|(_, best_area)| area > best_area) {
@@ -3973,6 +4004,7 @@ fn audit_top_faces(
 /// `face-index` として数えられる。
 fn surface_order_source_label(source: Option<SurfaceOrderSource>) -> &'static str {
     match source {
+        Some(SurfaceOrderSource::SolvedMotionPath) => "solved-motion-path",
         Some(SurfaceOrderSource::SolvedFlatPath) => "solved-flat-path",
         Some(SurfaceOrderSource::FoldFramePath) => "fold-frame-path",
         Some(SurfaceOrderSource::CurrentDepths) => "current-depths",
@@ -4081,7 +4113,11 @@ fn stage2_remaining_mismatch_detail() {
         .find(|pose| pose.label.starts_with(&wanted))
         .expect("the requested pose is in the fixed sweep");
     println!("DETAIL pose={} angles={:?}", pose.label, {
-        let mut angles = pose.angles.iter().map(|(&e, &a)| (e, a)).collect::<Vec<_>>();
+        let mut angles = pose
+            .angles
+            .iter()
+            .map(|(&e, &a)| (e, a))
+            .collect::<Vec<_>>();
         angles.sort_by_key(|pair| pair.0);
         angles
     });
@@ -4093,7 +4129,11 @@ fn stage2_remaining_mismatch_detail() {
         .iter()
         .map(|face| (face.face, face.surface_rank))
         .collect::<BTreeMap<_, _>>();
-    println!("DETAIL source={} overlaps={}", pose.source_label, overlaps.len());
+    println!(
+        "DETAIL source={} overlaps={}",
+        pose.source_label,
+        overlaps.len()
+    );
     for overlap in &overlaps {
         let local = local_hinge_truth(&cp, &faces, &pose.angles, &exact, overlap);
         println!(
@@ -4139,9 +4179,7 @@ fn stage2_remaining_mismatch_detail() {
         // 製品側 canonical_motion_surface_order と同じ「共通の角度で頭打ちにして
         // 各点を解き直す」経路。
         let mut solved_warm: Option<HashMap<EdgeId, f64>> = None;
-        for checkpoint in [
-            9.0_f64, 90.0, 171.0, 179.0, 179.5, 179.9, 179.99, 179.999,
-        ] {
+        for checkpoint in [9.0_f64, 90.0, 171.0, 179.0, 179.5, 179.9, 179.99, 179.999] {
             let mut hard = pose
                 .angles
                 .iter()
@@ -4165,9 +4203,7 @@ fn stage2_remaining_mismatch_detail() {
             let clamped = pose
                 .angles
                 .iter()
-                .map(|(&hinge, &angle)| {
-                    (hinge, angle.signum() * angle.abs().min(checkpoint))
-                })
+                .map(|(&hinge, &angle)| (hinge, angle.signum() * angle.abs().min(checkpoint)))
                 .collect::<HashMap<_, _>>();
             let frame = to_frame3d(&cp, &faces, &propagate(&cp, &faces, &clamped));
             let seam = ori3_rigid::max_seam_gap(&cp, &faces, &frame);
@@ -4281,7 +4317,11 @@ struct DeterminedStack {
 /// (実測: 入力座標を1 ULP動かしただけで、隙間 3.36e-5 の面対の符号が反転した。
 /// `diag_gap_noise_from_one_ulp_of_input` の `ULPFLIP`)。3段以上で符号が
 /// 一致していることを条件にすると、この揺れは根拠から外れる。
-fn determined_stacks(cp: &CreasePattern, faces: &[Face], ladder: &[(f64, EndpointState)]) -> Vec<DeterminedStack> {
+fn determined_stacks(
+    cp: &CreasePattern,
+    faces: &[Face],
+    ladder: &[(f64, EndpointState)],
+) -> Vec<DeterminedStack> {
     let separated = ladder
         .iter()
         .filter(|(absolute, _)| *absolute < 180.0)
@@ -4412,7 +4452,9 @@ fn diag_determined_stacks_versus_surface_rank() {
                         "DETSTACK diagram={} edge={hinge} sign={sign:+} pairs={pairs} determined={} shared_bad={} only_before={only_before:?} only_after={only_after:?}",
                         diagram.name,
                         determined.len(),
-                        before_disagreements.intersection(&after_disagreements).count(),
+                        before_disagreements
+                            .intersection(&after_disagreements)
+                            .count(),
                     );
                 }
                 if diagram.name == "folded-sample.ori3" && (hinge == 306 || hinge == 425) {
@@ -4454,48 +4496,48 @@ fn surface_rank_against_the_measured_gap_at_179_999() {
     let mut total_mismatch = 0_usize;
     let mut total_mismatch_after = 0_usize;
     for diagram in &diagrams {
-      for (hinge, _) in diagram.hinges.clone() {
-        for sign in [1.0_f64, -1.0] {
-            let (before, after) = endpoint_frames(diagram, hinge, sign);
-            let ranks = |frame: &Frame3D| {
-                frame
-                    .faces
-                    .iter()
-                    .map(|face| (face.face, face.surface_rank))
-                    .collect::<BTreeMap<_, _>>()
-            };
-            let before_rank = ranks(&before.frame);
-            let after_rank = ranks(&after.frame);
-            let pairs = near_overlaps(&before.frame, 1e-3);
-            let mut mismatch_before = Vec::new();
-            let mut mismatch_after = Vec::new();
-            for pair in &pairs {
-                // 隙間が丸めより十分大きい面対だけを正解の根拠にする。
-                if pair.gap.abs() < 1e-9 {
-                    continue;
+        for (hinge, _) in diagram.hinges.clone() {
+            for sign in [1.0_f64, -1.0] {
+                let (before, after) = endpoint_frames(diagram, hinge, sign);
+                let ranks = |frame: &Frame3D| {
+                    frame
+                        .faces
+                        .iter()
+                        .map(|face| (face.face, face.surface_rank))
+                        .collect::<BTreeMap<_, _>>()
+                };
+                let before_rank = ranks(&before.frame);
+                let after_rank = ranks(&after.frame);
+                let pairs = near_overlaps(&before.frame, 1e-3);
+                let mut mismatch_before = Vec::new();
+                let mut mismatch_after = Vec::new();
+                for pair in &pairs {
+                    // 隙間が丸めより十分大きい面対だけを正解の根拠にする。
+                    if pair.gap.abs() < 1e-9 {
+                        continue;
+                    }
+                    total_pairs += 1;
+                    let truth_right_above = pair.gap > 0.0;
+                    if (before_rank[&pair.right] > before_rank[&pair.left]) != truth_right_above {
+                        mismatch_before.push((pair.left, pair.right, pair.gap));
+                        total_mismatch += 1;
+                    }
+                    if (after_rank[&pair.right] > after_rank[&pair.left]) != truth_right_above {
+                        mismatch_after.push((pair.left, pair.right, pair.gap));
+                        total_mismatch_after += 1;
+                    }
                 }
-                total_pairs += 1;
-                let truth_right_above = pair.gap > 0.0;
-                if (before_rank[&pair.right] > before_rank[&pair.left]) != truth_right_above {
-                    mismatch_before.push((pair.left, pair.right, pair.gap));
-                    total_mismatch += 1;
-                }
-                if (after_rank[&pair.right] > after_rank[&pair.left]) != truth_right_above {
-                    mismatch_after.push((pair.left, pair.right, pair.gap));
-                    total_mismatch_after += 1;
-                }
+                println!(
+                    "GAPTRUTH diagram={} edge={hinge} sign={sign:+} near_pairs={} mismatch_at_179_999={} mismatch_at_180={} before_detail={:?} after_detail={:?}",
+                    diagram.name,
+                    pairs.len(),
+                    mismatch_before.len(),
+                    mismatch_after.len(),
+                    mismatch_before,
+                    mismatch_after,
+                );
             }
-            println!(
-                "GAPTRUTH diagram={} edge={hinge} sign={sign:+} near_pairs={} mismatch_at_179_999={} mismatch_at_180={} before_detail={:?} after_detail={:?}",
-                diagram.name,
-                pairs.len(),
-                mismatch_before.len(),
-                mismatch_after.len(),
-                mismatch_before,
-                mismatch_after,
-            );
         }
-      }
     }
     println!(
         "GAPTRUTH_TOTAL pairs={total_pairs} mismatch_at_179_999={total_mismatch} mismatch_at_180={total_mismatch_after}"
@@ -4522,7 +4564,7 @@ fn diag_cold_solve_reaches_the_same_pose() {
     for hinge in PREVIOUS_RANK_CHANGES {
         for sign in [1.0_f64, -1.0] {
             let (_, after) = endpoint_frames(diagram, hinge, sign);
-            let cold = solve_motion(
+            let cold = solve_motion_with_contact_options(
                 &diagram.cp,
                 &diagram.faces,
                 &[Driver {
@@ -4531,7 +4573,7 @@ fn diag_cold_solve_reaches_the_same_pose() {
                 }],
                 None,
                 None,
-                true,
+                EXPLICIT_CONTACT_PREVENTION,
             );
             let delta = after
                 .angles
@@ -4584,7 +4626,7 @@ fn diag_remaining_two_creases_gap_sign_ladder() {
         for sign in [1.0_f64, -1.0] {
             let mut warm = None::<HashMap<EdgeId, f64>>;
             for absolute in WARMUP_ABS {
-                let motion = solve_motion(
+                let motion = solve_motion_with_contact_options(
                     &diagram.cp,
                     &diagram.faces,
                     &[Driver {
@@ -4593,12 +4635,12 @@ fn diag_remaining_two_creases_gap_sign_ladder() {
                     }],
                     None,
                     warm.as_ref(),
-                    true,
+                    EXPLICIT_CONTACT_PREVENTION,
                 );
                 warm = Some(motion.result.angles);
             }
             for absolute in [179.0, 179.5, 179.9, 179.99, 179.999, 180.0] {
-                let motion = solve_motion(
+                let motion = solve_motion_with_contact_options(
                     &diagram.cp,
                     &diagram.faces,
                     &[Driver {
@@ -4607,7 +4649,7 @@ fn diag_remaining_two_creases_gap_sign_ladder() {
                     }],
                     None,
                     warm.as_ref(),
-                    true,
+                    EXPLICIT_CONTACT_PREVENTION,
                 );
                 let frame = motion.result.frame.clone();
                 let seam = ori3_rigid::max_seam_gap(&diagram.cp, &diagram.faces, &frame);
@@ -4624,16 +4666,14 @@ fn diag_remaining_two_creases_gap_sign_ladder() {
                     let (left, right) = (adjacent[0], adjacent[1]);
                     let left_points = &polygons[&left];
                     let right_points = &polygons[&right];
-                    if let (Some(left_normal), Some(right_normal)) = (
-                        polygon_normal3(left_points),
-                        polygon_normal3(right_points),
-                    ) {
+                    if let (Some(left_normal), Some(right_normal)) =
+                        (polygon_normal3(left_points), polygon_normal3(right_points))
+                    {
                         let up = canonical3(left_normal);
                         let centroid = |points: &[V3]| {
                             points.iter().fold(V3::ZERO, |sum, &p| sum + p) / points.len() as f64
                         };
-                        let height =
-                            (centroid(right_points) - centroid(left_points)).dot(up);
+                        let height = (centroid(right_points) - centroid(left_points)).dot(up);
                         adjacent_detail.push((
                             left,
                             right,
@@ -4695,7 +4735,12 @@ fn diag_remaining_two_creases_gap_sign_ladder() {
                 );
                 println!(
                     "LADDER diagram={name} edge={hinge} sign={sign:+} target={absolute} driver={:.9} seam={seam:.3e} source={:?} adjacent={adjacent_detail:?} mismatched_pairs={} near_pairs={} ranks={:?} detail={detail:?} near_flat={near_flat:?}",
-                    motion.result.angles.get(&hinge).copied().unwrap_or(f64::NAN),
+                    motion
+                        .result
+                        .angles
+                        .get(&hinge)
+                        .copied()
+                        .unwrap_or(f64::NAN),
                     motion.surface_order,
                     detail.iter().filter(|item| !item.3).count(),
                     detail.len(),
@@ -4713,7 +4758,9 @@ fn diag_remaining_two_creases_gap_sign_ladder() {
                         .map(|(&edge, &angle)| (edge, angle))
                         .collect::<Vec<_>>();
                     all.sort_by_key(|&(edge, _)| edge);
-                    println!("LADDER_ANGLES diagram={name} edge={hinge} sign={sign:+} target={absolute} angles={all:?}");
+                    println!(
+                        "LADDER_ANGLES diagram={name} edge={hinge} sign={sign:+} target={absolute} angles={all:?}"
+                    );
                 }
                 warm = Some(motion.result.angles);
             }
@@ -4789,7 +4836,7 @@ fn diag_edge425_canonical_path_decision() {
                     .copied()
                     .take_while(|&value| value <= target),
             ) {
-                let motion = solve_motion(
+                let motion = solve_motion_with_contact_options(
                     &diagram.cp,
                     &diagram.faces,
                     &[Driver {
@@ -4798,7 +4845,7 @@ fn diag_edge425_canonical_path_decision() {
                     }],
                     None,
                     warm.as_ref(),
-                    true,
+                    EXPLICIT_CONTACT_PREVENTION,
                 );
                 warm = Some(motion.result.angles);
             }
@@ -4813,7 +4860,9 @@ fn diag_edge425_canonical_path_decision() {
                     overlap_plane(left_points),
                     polygon_normal3(right_points).map(canonical3),
                 ) else {
-                    println!("PATHDEC sign={sign:+} target={target} pair=({left},{right}) no_plane");
+                    println!(
+                        "PATHDEC sign={sign:+} target={target} pair=({left},{right}) no_plane"
+                    );
                     continue;
                 };
                 let parallel = plane.normal.dot(right_normal);
@@ -4829,7 +4878,9 @@ fn diag_edge425_canonical_path_decision() {
                 let Some((witness, area)) =
                     overlap_witness(&left_2d, &left_triangles, &right_2d, &right_triangles)
                 else {
-                    println!("PATHDEC sign={sign:+} target={target} pair=({left},{right}) no_overlap");
+                    println!(
+                        "PATHDEC sign={sign:+} target={target} pair=({left},{right}) no_overlap"
+                    );
                     continue;
                 };
                 let overlap = CoincidentOverlap {
@@ -4850,7 +4901,7 @@ fn diag_edge425_canonical_path_decision() {
                     })
                     .collect::<Vec<_>>();
                 let displayed = frame_polygons(
-                    &solve_motion(
+                    &solve_motion_with_contact_options(
                         &diagram.cp,
                         &diagram.faces,
                         &[Driver {
@@ -4859,7 +4910,7 @@ fn diag_edge425_canonical_path_decision() {
                         }],
                         None,
                         Some(&displayed_angles),
-                        true,
+                        EXPLICIT_CONTACT_PREVENTION,
                     )
                     .result
                     .frame,
@@ -4897,7 +4948,7 @@ fn diag_kome_edge12_canonical_axis() {
                     .copied()
                     .take_while(|&value| value <= target),
             ) {
-                let motion = solve_motion(
+                let motion = solve_motion_with_contact_options(
                     &diagram.cp,
                     &diagram.faces,
                     &[Driver {
@@ -4906,7 +4957,7 @@ fn diag_kome_edge12_canonical_axis() {
                     }],
                     None,
                     warm.as_ref(),
-                    true,
+                    EXPLICIT_CONTACT_PREVENTION,
                 );
                 warm = Some(motion.result.angles);
             }
@@ -4930,8 +4981,10 @@ fn diag_kome_edge12_canonical_axis() {
                 &propagate(&diagram.cp, &diagram.faces, &snapped),
             );
             let (_, exact) = canonical_path_frames(diagram, &displayed_angles);
-            for (label, frame) in [("snapped_propagated", &propagated), ("canonical_exact", &exact)]
-            {
+            for (label, frame) in [
+                ("snapped_propagated", &propagated),
+                ("canonical_exact", &exact),
+            ] {
                 let polygons = frame_polygons(frame);
                 for face in [3_u32, 4_u32] {
                     let normal = polygon_normal3(&polygons[&face]).expect("normal");
@@ -4965,7 +5018,7 @@ fn diag_exact_frame_coplanarity_histogram() {
             for sign in [1.0_f64, -1.0] {
                 let mut warm = None::<HashMap<EdgeId, f64>>;
                 for absolute in WARMUP_ABS.iter().copied().chain(BOUNDARY_ABS) {
-                    let motion = solve_motion(
+                    let motion = solve_motion_with_contact_options(
                         &diagram.cp,
                         &diagram.faces,
                         &[Driver {
@@ -4974,14 +5027,17 @@ fn diag_exact_frame_coplanarity_histogram() {
                         }],
                         None,
                         warm.as_ref(),
-                        true,
+                        EXPLICIT_CONTACT_PREVENTION,
                     );
                     warm = Some(motion.result.angles);
                 }
                 let displayed_angles = warm.expect("ladder ran");
                 let (_, exact) = canonical_path_frames(diagram, &displayed_angles);
-                worst_seam =
-                    worst_seam.max(ori3_rigid::max_seam_gap(&diagram.cp, &diagram.faces, &exact));
+                worst_seam = worst_seam.max(ori3_rigid::max_seam_gap(
+                    &diagram.cp,
+                    &diagram.faces,
+                    &exact,
+                ));
                 let polygons = frame_polygons(&exact);
                 let mut face_ids = polygons.keys().copied().collect::<Vec<_>>();
                 face_ids.sort_unstable();
@@ -5053,7 +5109,7 @@ fn diag_kome_edge12_float32_axis_choice() {
                     .copied()
                     .take_while(|&value| value <= target),
             ) {
-                let motion = solve_motion(
+                let motion = solve_motion_with_contact_options(
                     &diagram.cp,
                     &diagram.faces,
                     &[Driver {
@@ -5062,11 +5118,11 @@ fn diag_kome_edge12_float32_axis_choice() {
                     }],
                     None,
                     warm.as_ref(),
-                    true,
+                    EXPLICIT_CONTACT_PREVENTION,
                 );
                 warm = Some(motion.result.angles);
             }
-            let displayed = solve_motion(
+            let displayed = solve_motion_with_contact_options(
                 &diagram.cp,
                 &diagram.faces,
                 &[Driver {
@@ -5075,7 +5131,7 @@ fn diag_kome_edge12_float32_axis_choice() {
                 }],
                 None,
                 warm.as_ref(),
-                true,
+                EXPLICIT_CONTACT_PREVENTION,
             )
             .result
             .frame;
@@ -5115,8 +5171,16 @@ fn diag_kome_edge12_float32_axis_choice() {
                     float32_normal.y,
                     float32_normal.z,
                     float32_normal.x.abs() - float32_normal.y.abs(),
-                    if exact_normal.x.abs() >= exact_normal.y.abs() { "x" } else { "y" },
-                    if float32_normal.x.abs() >= float32_normal.y.abs() { "x" } else { "y" },
+                    if exact_normal.x.abs() >= exact_normal.y.abs() {
+                        "x"
+                    } else {
+                        "y"
+                    },
+                    if float32_normal.x.abs() >= float32_normal.y.abs() {
+                        "x"
+                    } else {
+                        "y"
+                    },
                 );
             }
         }
@@ -5139,7 +5203,6 @@ fn kome_edge12_angles(sign: f64) -> HashMap<EdgeId, f64> {
     ])
 }
 
-
 /// 段階3: **折り目の向きの規則を使わずに**、裂けていない姿勢の隙間の符号だけから
 /// 上下を決め、刻印された `surface_rank` と突き合わせる。
 ///
@@ -5160,7 +5223,11 @@ fn kome_edge12_angles(sign: f64) -> HashMap<EdgeId, f64> {
 fn surface_rank_agrees_with_the_measured_gap_without_using_the_crease_rule() {
     let cases: [(&str, CreasePattern, HashMap<EdgeId, f64>); 4] = [
         ("live-frame", live_frame_cp(), live_frame_angles()),
-        ("zero-back-user", zero_back_user_cp(), zero_back_user_angles()),
+        (
+            "zero-back-user",
+            zero_back_user_cp(),
+            zero_back_user_angles(),
+        ),
         (
             "diagonal-midline-square-edge12-mountain",
             flat_foldable_kome(),
@@ -5176,7 +5243,8 @@ fn surface_rank_agrees_with_the_measured_gap_without_using_the_crease_rule() {
     for (name, cp, angles) in cases {
         let faces = extract_faces(&cp);
         let folded = to_frame3d(&cp, &faces, &propagate(&cp, &faces, &angles));
-        checked += assert_exact_creases_follow_the_measured_gap(name, &cp, &faces, &angles, &folded);
+        checked +=
+            assert_exact_creases_follow_the_measured_gap(name, &cp, &faces, &angles, &folded);
     }
     // この作業で直した `folded-sample.ori3` の辺425を含む3本。101本の角度はsolveで
     // 作るが、期待値は「実測の隙間」と「刻印された順位」の一致だけなので、solveの
@@ -5491,11 +5559,19 @@ fn diag_rank_flip_pairs_measured_gap() {
                 }
                 println!(
                     "FLIPPAIR diagram={name} edge={hinge} sign={sign:+} pair=({left},{right}) before_gap={:?} after_gap={:?} vertex_move={:.3e} before_exact={:?} after_exact={:?}",
-                    before_gaps.get(&(left, right)).map(|gap| format!("{gap:.6e}")),
-                    after_gaps.get(&(left, right)).map(|gap| format!("{gap:.6e}")),
+                    before_gaps
+                        .get(&(left, right))
+                        .map(|gap| format!("{gap:.6e}")),
+                    after_gaps
+                        .get(&(left, right))
+                        .map(|gap| format!("{gap:.6e}")),
                     max_vertex_distance(&before.frame, &after.frame),
-                    exact_error(&before, left, right).map(|(parallel, error)| format!("parallel={parallel:.9} coplanar_error={error:.6e}")),
-                    exact_error(&after, left, right).map(|(parallel, error)| format!("parallel={parallel:.9} coplanar_error={error:.6e}")),
+                    exact_error(&before, left, right).map(|(parallel, error)| format!(
+                        "parallel={parallel:.9} coplanar_error={error:.6e}"
+                    )),
+                    exact_error(&after, left, right).map(|(parallel, error)| format!(
+                        "parallel={parallel:.9} coplanar_error={error:.6e}"
+                    )),
                 );
             }
         }
@@ -5524,4 +5600,319 @@ fn usable_probe_height(
     };
     let height = (centroid(other_points) - centroid(reference_points)).dot(axis);
     (height.abs() > seam.max(1e-9)).then_some(height)
+}
+
+/// 保存した層順序は編集用の `layer` にだけ残し、表示用 `surface_rank` は同じ
+/// 8手を幾何だけで再生した順位と一致させる。面ID順を表示順位へ戻さない回帰検査。
+#[test]
+fn saved_layer_order_does_not_override_geometric_surface_rank() {
+    const EXACT_OVERLAPS: [(FaceId, FaceId); 9] = [
+        (4, 5),
+        (8, 9),
+        (14, 15),
+        (24, 29),
+        (25, 28),
+        (26, 32),
+        (27, 33),
+        (30, 35),
+        (31, 34),
+    ];
+
+    let saved_doc: Document =
+        serde_json::from_str(FOLDED_SAMPLE).expect("folded-sample fixture is a Document");
+    assert_eq!(saved_doc.sequence.len(), 8, "保存標本は8手である");
+    let faces = extract_faces(&saved_doc.cp);
+    assert_eq!(faces.len(), 46, "保存標本は46面である");
+
+    let mut geometric_doc = saved_doc.clone();
+    for step in &mut geometric_doc.sequence {
+        step.layer_order = None;
+    }
+    assert_eq!(geometric_doc.sequence.len(), 8, "幾何版も同じ8手を再生する");
+
+    let saved = ori3_layers::replay(&saved_doc, saved_doc.sequence.len(), 1.0);
+    let geometric = ori3_layers::replay(&geometric_doc, geometric_doc.sequence.len(), 1.0);
+    assert!(
+        saved.surface_order_provenance.is_some(),
+        "保存順版のsurface順位はcompleteな幾何導出である"
+    );
+    assert!(
+        geometric.surface_order_provenance.is_some(),
+        "幾何版のsurface順位はcompleteな幾何導出である"
+    );
+    assert!(
+        saved.skipped.is_empty() && geometric.skipped.is_empty(),
+        "8手を1つも飛ばさず再生する"
+    );
+    assert_eq!(saved.frame.faces.len(), 46, "保存順版の表示は46面である");
+    assert_eq!(geometric.frame.faces.len(), 46, "幾何版の表示は46面である");
+    assert_eq!(
+        saved.hinge_angles, geometric.hinge_angles,
+        "保存層順序の有無で再生角を変えない"
+    );
+
+    let ranks_by_face = |frame: &Frame3D| {
+        frame
+            .faces
+            .iter()
+            .map(|face| (face.face, face.surface_rank))
+            .collect::<BTreeMap<_, _>>()
+    };
+    let saved_ranks = ranks_by_face(&saved.frame);
+    let geometric_ranks = ranks_by_face(&geometric.frame);
+    assert_eq!(
+        saved_ranks, geometric_ranks,
+        "保存層順序が表示用surface_rankを上書きした"
+    );
+    let numbered = saved_ranks
+        .iter()
+        .filter(|&(face, rank)| face == rank)
+        .count();
+    assert_eq!(
+        numbered, 0,
+        "surface_rankが面IDと同じ面が残っている: {saved_ranks:?}"
+    );
+
+    let saved_order =
+        ori3_layers::saved_layer_order_at(&saved_doc, &faces, saved_doc.sequence.len(), 1.0)
+            .expect("8手目の保存layer_orderを解決できる");
+    let expected_layers = saved_order
+        .iter()
+        .enumerate()
+        .map(|(layer, &face)| (u32::try_from(layer).expect("46層はu32に収まる"), face))
+        .collect::<Vec<_>>();
+    let mut actual_layers = saved
+        .frame
+        .faces
+        .iter()
+        .map(|face| (face.layer, face.face))
+        .collect::<Vec<_>>();
+    actual_layers.sort_unstable();
+    assert_eq!(
+        actual_layers, expected_layers,
+        "編集用layerは保存layer_orderを保つ"
+    );
+
+    let long = saved_doc.paper.width_mm.max(saved_doc.paper.height_mm);
+    let folded_sample = diagram(
+        "folded-sample-saved-rank",
+        saved_doc.cp.clone(),
+        saved_doc.paper.width_mm / long,
+        saved_doc.paper.height_mm / long,
+    );
+    let exact_pairs = coincident_overlaps(&folded_sample, &geometric.frame)
+        .into_iter()
+        .map(|pair| (pair.left.min(pair.right), pair.left.max(pair.right)))
+        .collect::<BTreeSet<_>>();
+    let required_exact_pairs = EXACT_OVERLAPS.into_iter().collect::<BTreeSet<_>>();
+    assert!(
+        required_exact_pairs.is_subset(&exact_pairs),
+        "指定した完全重なり9組が欠けた: {:?}",
+        required_exact_pairs
+            .difference(&exact_pairs)
+            .collect::<Vec<_>>()
+    );
+    for (left, right) in EXACT_OVERLAPS {
+        assert_ne!(saved_ranks[&left], saved_ranks[&right]);
+        assert_eq!(
+            saved_ranks[&left] < saved_ranks[&right],
+            geometric_ranks[&left] < geometric_ranks[&right],
+            "完全重なり面({left}, {right})の上下が保存層順序で変わった"
+        );
+    }
+
+    // `replay` と独立な直接伝播でも、指定9組の幾何的な上下が一致する。
+    let canonical = to_frame3d(
+        &saved_doc.cp,
+        &faces,
+        &propagate(&saved_doc.cp, &faces, &saved.hinge_angles),
+    );
+    let canonical_ranks = ranks_by_face(&canonical);
+    for (left, right) in EXACT_OVERLAPS {
+        assert_eq!(
+            canonical_ranks[&left] < canonical_ranks[&right],
+            geometric_ranks[&left] < geometric_ranks[&right],
+            "直接伝播と幾何再生で完全重なり面({left}, {right})の上下が違う"
+        );
+    }
+
+    let mut hard = saved
+        .hinge_angles
+        .iter()
+        .map(|(&hinge, &target_angle_deg)| Driver {
+            hinge,
+            target_angle_deg,
+        })
+        .collect::<Vec<_>>();
+    hard.sort_unstable_by_key(|driver| driver.hinge);
+    let motion = solve_motion(
+        &saved_doc.cp,
+        &faces,
+        &hard,
+        None,
+        Some(&saved.hinge_angles),
+        true,
+    );
+    assert!(
+        motion.surface_order_authoritative,
+        "FOLDED_SAMPLEのmotion順はcompleteな幾何導出を刻印できる"
+    );
+    let diagnostics = motion
+        .surface_order
+        .expect("surface順を刻印するmotionは診断を返す");
+    println!("FOLDED_SAMPLE_MOTION_DIAGNOSTICS {diagnostics:?}");
+    // 現在の継続法はlive3の実motion pathだけで23重なり対をcompleteにできる。
+    // flatからのcanonical fallbackへ進む前に、表示した運動そのものを採ることを固定する。
+    assert_eq!(diagnostics.source, SurfaceOrderSource::SolvedMotionPath);
+    // 以前は2件だった。捨てていた2件は「面7が面6より上」「面9が面8より上」で、
+    // すき間の実測(`solved_unfold_ladder`)が示す上下そのものだった。捨てていた理由は、
+    // 主対角 `x = y` 上の11本の折り目のうち7本が `−180°`、4本が `+180°` と
+    // **割れて記録されていた**ことにある。主対角以外の90本はすべて 0.0° なので
+    // 紙は両半分とも1枚の硬い板であり、同じ板どうしを折り重ねる折り目が
+    // 山と谷に割れることは実際の紙では起こらない。
+    // `tree::exact_stack_constraints` が割れを見つけてその板の組の厳密な拘束を
+    // 出さなくなったので、上下は実測の深度が決め、**捨てる理由そのものが消えた**。
+    // 期待値を緩めたのではなく、捨てる対象が無くなった結果である。
+    assert_eq!(diagnostics.dropped_depth_constraints, 0);
+    assert_eq!(diagnostics.unresolved_overlaps, 0);
+    assert_eq!(diagnostics.broken_constraints, 0);
+    let motion_ranks = ranks_by_face(&motion.result.frame);
+    for (left, right) in EXACT_OVERLAPS {
+        assert_eq!(
+            motion_ranks[&left] < motion_ranks[&right],
+            geometric_ranks[&left] < geometric_ranks[&right],
+            "直接solveと幾何再生で完全重なり面({left}, {right})の上下が違う"
+        );
+    }
+
+    println!(
+        "FOLDED_SAMPLE_SAVED_RANK faces={} numbered={} overlaps={} saved_ranks={saved_ranks:?}",
+        saved.frame.faces.len(),
+        numbered,
+        exact_pairs.len(),
+    );
+}
+
+/// 完全に重なっている面対の上下が、**導出の経路によって変わらない**ことを固定する。
+///
+/// 重なり順を出す道は3つあり、どれも同じ答えでなければならない。
+///
+/// 1. `replay`(手順を再生し、その手の追従経路の深度で決める)
+/// 2. `propagate` + `to_frame3d`(手順を通さず、最終角の伝播経路の深度で決める)
+/// 3. `solve_motion`(平らな紙から最終角まで解いた運動の深度で決める)
+///
+/// さらに、この3つと独立した**すき間の実測**(`solved_unfold_ladder` は全ての折り目を
+/// 同じ割合で縮めながら実際に解き、裂けた段を捨てる。重なり順は刻印させない)と
+/// 突き合わせる。
+///
+/// **この検査が捕まえた不具合(2026-08-22)**: `folded-sample.ori3` の手順7で、
+/// `replay` が渡す探り経路の3姿勢が**すべて同じ姿勢**で、終点から 0.5756(紙の長辺=1.0)
+/// 離れたまま1度も動いていなかった。その止まった姿勢の高さの差が、完全重なり4組
+/// (24,29)・(25,28)・(27,33)・(39,43) の上下を、**実際に表示する動きと逆**に決めていた。
+/// 手順8は角度を1本も変えないので手順7の順をそのまま引き継ぎ、誤りが最終形へ残っていた。
+#[test]
+fn coincident_overlap_order_is_the_same_for_every_derivation() {
+    let saved_doc: Document =
+        serde_json::from_str(FOLDED_SAMPLE).expect("folded-sample fixture is a Document");
+    let faces = extract_faces(&saved_doc.cp);
+    let mut geometric_doc = saved_doc.clone();
+    for step in &mut geometric_doc.sequence {
+        step.layer_order = None;
+    }
+    let replayed = ori3_layers::replay(&geometric_doc, geometric_doc.sequence.len(), 1.0);
+    assert!(
+        replayed.surface_order_provenance.is_some(),
+        "再生した重なり順はcompleteな幾何導出である"
+    );
+    let angles = replayed.hinge_angles.clone();
+
+    let propagated = to_frame3d(
+        &saved_doc.cp,
+        &faces,
+        &propagate(&saved_doc.cp, &faces, &angles),
+    );
+
+    let mut hard = angles
+        .iter()
+        .map(|(&hinge, &target_angle_deg)| Driver {
+            hinge,
+            target_angle_deg,
+        })
+        .collect::<Vec<_>>();
+    hard.sort_unstable_by_key(|driver| driver.hinge);
+    let motion = solve_motion(&saved_doc.cp, &faces, &hard, None, Some(&angles), true);
+    assert!(
+        motion.surface_order_authoritative,
+        "同じ最終角のmotionはcompleteな幾何導出を刻印できる"
+    );
+
+    let ranks_of = |frame: &Frame3D| {
+        frame
+            .faces
+            .iter()
+            .map(|face| (face.face, face.surface_rank))
+            .collect::<BTreeMap<_, _>>()
+    };
+    let replayed_ranks = ranks_of(&replayed.frame);
+    let propagated_ranks = ranks_of(&propagated);
+    let motion_ranks = ranks_of(&motion.result.frame);
+
+    let long = saved_doc.paper.width_mm.max(saved_doc.paper.height_mm);
+    let folded_sample = diagram(
+        "folded-sample-every-derivation",
+        saved_doc.cp.clone(),
+        saved_doc.paper.width_mm / long,
+        saved_doc.paper.height_mm / long,
+    );
+    let overlaps = coincident_overlaps(&folded_sample, &replayed.frame);
+    // 主張の対象が空にならないことの下限。実測は23組で、その約8割を下限にする
+    // (CLAUDE.md §10.7.9)。重なりの拾い方が壊れて対象が消えると、この検査は
+    // 何も主張しないまま緑になってしまう。
+    assert!(
+        overlaps.len() >= 18,
+        "完全に重なる面対をほとんど拾えていない: {}",
+        overlaps.len()
+    );
+
+    let exact_polygons = frame_polygons(&replayed.frame);
+    let ladder = solved_unfold_ladder(&saved_doc.cp, &faces, &angles);
+    let mut measured = 0_usize;
+    let mut measured_agrees = 0_usize;
+    for overlap in &overlaps {
+        let (left, right) = (overlap.left, overlap.right);
+        let replayed_above = replayed_ranks[&left] > replayed_ranks[&right];
+        let propagated_above = propagated_ranks[&left] > propagated_ranks[&right];
+        let motion_above = motion_ranks[&left] > motion_ranks[&right];
+        assert_eq!(
+            replayed_above, propagated_above,
+            "手順の再生と直接伝播で、完全重なり面({left}, {right})の上下が違う"
+        );
+        assert_eq!(
+            replayed_above, motion_above,
+            "手順の再生と運動の解で、完全重なり面({left}, {right})の上下が違う"
+        );
+        if let Some((above, _, _)) = ladder_truth(&exact_polygons, &ladder, overlap) {
+            measured += 1;
+            if above == replayed_above {
+                measured_agrees += 1;
+            }
+        }
+    }
+    println!(
+        "EVERY_DERIVATION overlaps={} measured={measured} measured_agrees={measured_agrees}",
+        overlaps.len()
+    );
+    // すき間の実測で上下を読めた面対のうち、いくつが刻印された順位と一致したか。
+    // 実測は 23組中23組を測れて 21組が一致する(残る2組は、折り切った折り目の向きが
+    // 決める上下と実測が逆になる面対 (6,7)・(8,9) で、製品は丸めで壊れない
+    // 折り目の向きを優先し、深度側2件を捨てている。`dropped_depth_constraints = 2`)。
+    // 下限は実測21の約8割にあたる17とする(CLAUDE.md §10.7.9)。
+    assert!(
+        measured >= 18,
+        "すき間から上下を読めた面対が少なすぎる: {measured}"
+    );
+    assert!(
+        measured_agrees >= 17,
+        "刻印された順位が、すき間の実測とほとんど一致していない: {measured_agrees}/{measured}"
+    );
 }

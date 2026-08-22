@@ -2,7 +2,7 @@
 
 use ori3_soft::{HalfTurnSymmetryError, HalfTurnSymmetrySettings, enforce_half_turn_symmetry};
 
-// acceptance_rose.rsから依存追加なしで単独利用できることもコンパイルで保証する。
+// 統合受入検査から依存追加なしで単独利用できることもコンパイルで保証する。
 #[path = "../src/symmetry.rs"]
 mod standalone_symmetry;
 

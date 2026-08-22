@@ -214,11 +214,11 @@ pub fn layers_from_top_at_point(
 }
 
 /// 多角形の内部(境界からEPS以内を含む)に点があるか。
-fn point_in_polygon(poly: &[DVec2], p: DVec2) -> bool {
+pub(crate) fn point_in_polygon(poly: &[DVec2], p: DVec2) -> bool {
     on_boundary(poly, p) || crossing_number_is_odd(poly, p)
 }
 
-fn vertex_positions(cp: &CreasePattern) -> HashMap<VertexId, DVec2> {
+pub(crate) fn vertex_positions(cp: &CreasePattern) -> HashMap<VertexId, DVec2> {
     cp.vertices
         .iter()
         .map(|v| (v.id, DVec2::from(v.pos)))
@@ -227,7 +227,7 @@ fn vertex_positions(cp: &CreasePattern) -> HashMap<VertexId, DVec2> {
 
 /// 面の境界を一周する頂点座標列(CP座標系)。存在しない頂点は飛ばす
 /// (壊れたCPでもpanicさせない。extract_faces / validate と同じ方針)。
-fn face_polygon(pos: &HashMap<VertexId, DVec2>, face: &Face) -> Vec<DVec2> {
+pub(crate) fn face_polygon(pos: &HashMap<VertexId, DVec2>, face: &Face) -> Vec<DVec2> {
     face.vertices
         .iter()
         .filter_map(|id| pos.get(id).copied())

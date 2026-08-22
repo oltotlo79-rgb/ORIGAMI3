@@ -219,10 +219,14 @@ fn bird_and_frog_base_skeletons_produce_no_false_overflow_warning() {
     };
     let frog_base = star(5, 0.25 * SQRT2);
 
-    for (name, skeleton) in [("鶴の基本形", &bird_base), ("カエルの基本形", &frog_base)] {
+    for (name, skeleton) in [("鶴の基本形", &bird_base), ("カエルの基本形", &frog_base)]
+    {
         for seed in 0..20u64 {
             let candidates = pack(skeleton, 1.0, 1.0, seed, 8);
-            assert!(!candidates.is_empty(), "{name}: 充填に失敗した(seed {seed})");
+            assert!(
+                !candidates.is_empty(),
+                "{name}: 充填に失敗した(seed {seed})"
+            );
             for p in &candidates {
                 let r = generate(skeleton, p, 1.0, 1.0).expect("生成に失敗した");
                 assert!(
