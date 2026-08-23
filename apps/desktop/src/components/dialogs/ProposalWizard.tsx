@@ -744,6 +744,64 @@ function ConfirmStep() {
   );
 }
 
+/**
+ * 計算中だけ出す進み具合。
+ *
+ * 常設の区画は増やさない(`CLAUDE.md` §8)。提案の窓の中だけに出て、
+ * 計算が終わると消える一時的な表示である。設定項目も増やしていない。
+ * 候補は同時に計算しているので、出る数字は「終わった件数」である。
+ */
+function ProposalProgressBar() {
+  const busy = useAppStore((s) => s.proposalBusy);
+  const progress = useAppStore((s) => s.proposalProgress);
+  if (!busy) return null;
+  const total = progress?.total ?? 0;
+  const done = Math.min(progress?.done ?? 0, total);
+  const percent = total > 0 ? Math.round((done / total) * 100) : 0;
+  return (
+    <div
+      data-proposal-progress
+      role="status"
+      aria-live="polite"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "0.6rem",
+        margin: "0.4rem 0",
+        padding: "0.5rem 0.7rem",
+        border: "1px solid var(--color-border-strong, #9f93b8)",
+        borderRadius: "0.5rem",
+      }}
+    >
+      <span>折り方を考えています…</span>
+      <span
+        aria-hidden="true"
+        style={{
+          flex: "1 1 8rem",
+          height: "0.6rem",
+          borderRadius: "0.3rem",
+          overflow: "hidden",
+          background: "var(--color-bg, #f5f2ff)",
+          border: "1px solid var(--color-border-strong, #9f93b8)",
+        }}
+      >
+        <span
+          data-proposal-progress-fill={percent}
+          style={{
+            display: "block",
+            width: `${percent}%`,
+            height: "100%",
+            background: "var(--color-accent, #007a70)",
+          }}
+        />
+      </span>
+      <span data-proposal-progress-count>
+        {total > 0 ? `${done}/${total} 件` : "準備中"}
+      </span>
+    </div>
+  );
+}
+
 export function ProposalWizard() {
   const step = useAppStore((s) => s.proposalStep);
   if (step === null) return null;
@@ -772,6 +830,7 @@ export function ProposalWizard() {
       >
         {step !== "paper-position" && <h2 id="proposal-title">{title}</h2>}
         {step !== "paper-position" && <ProposalPositionHistoryButtons />}
+        <ProposalProgressBar />
         {step === "skeleton" && <SkeletonStep />}
         {step === "candidates" && <CandidateStep />}
         {step === "paper-position" && <PaperPositionStep />}

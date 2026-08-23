@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import {
+  boxFraming,
   CAMERA_DIR,
   legacyPaperDistance,
   paperFraming,
@@ -185,6 +186,91 @@ describe("3D区画への紙の収まり", () => {
       [0, 1],
     ]) {
       const ndc = new THREE.Vector3(x, y, 0).project(camera);
+      const px = ((ndc.x + 1) / 2) * 605;
+      const py = ((1 - ndc.y) / 2) * 439;
+      left = Math.min(left, px);
+      right = Math.max(right, px);
+      top = Math.min(top, py);
+      bottom = Math.max(bottom, py);
+    }
+    expect(left).toBeCloseTo(framing.bounds.left, 1);
+    expect(right).toBeCloseTo(framing.bounds.right, 1);
+    expect(top).toBeCloseTo(framing.bounds.top, 1);
+    expect(bottom).toBeCloseTo(framing.bounds.bottom, 1);
+  });
+});
+
+describe("3D区画への立体の収まり(展開図の中心・平面からずれた立体)", () => {
+  // 実際に不具合が起きた例(やっこさんの完成形・鳥の基本形の途中)を模した箱。
+  // 展開図の中心(0.5,0.5,0)にも、展開図の平面(z=0)にも収まっていない
+  // (scratchpad/check3d-new-plans-report.md §6)。直す前は展開図の大きさ
+  // (0,0)〜(1,1)を基準にしており、こういう立体では画面の外へはみ出していた。
+  const OFF_CENTER_BOX = new THREE.Box3(
+    new THREE.Vector3(-0.6, -0.4, -0.2),
+    new THREE.Vector3(0.1, 0.3, 0.5),
+  );
+
+  function offCenterFramingOf(width: number, height: number, hintBottom = HINT_BOTTOM) {
+    return boxFraming(
+      OFF_CENTER_BOX,
+      width,
+      height,
+      hintBottom,
+      CAMERA_DIR,
+      RIGHT,
+      SCREEN_UP,
+    );
+  }
+
+  it.each(PANES)(
+    "窓$window(区画$width×$height)で、中心・平面のずれた立体もはみ出さない",
+    ({ width, height }) => {
+      const { bounds } = offCenterFramingOf(width, height);
+      expect(overflow(bounds, width, height)).toEqual({
+        left: 0,
+        right: 0,
+        top: 0,
+        bottom: 0,
+      });
+    },
+  );
+
+  it("視点は箱自身の中心を向く(展開図の中心(0.5,0.5,0)ではない)", () => {
+    // 箱の8頂点を実際にカメラへ投影した外接四角形の中心が、区画の中心に
+    // (案内の札を避けない設定なら)ほぼ一致することで、箱自身の中心を
+    // 基準にしていることを確かめる。
+    const framing = offCenterFramingOf(605, 439, 0);
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
+    camera.setViewOffset(
+      framing.fullWidth,
+      framing.fullHeight,
+      framing.offsetX,
+      framing.offsetY,
+      605,
+      439,
+    );
+    camera.up.copy(UP);
+    const center = OFF_CENTER_BOX.getCenter(new THREE.Vector3());
+    camera.position.copy(center).addScaledVector(CAMERA_DIR, framing.distance);
+    camera.lookAt(center);
+    camera.updateMatrixWorld(true);
+
+    let left = Infinity;
+    let right = -Infinity;
+    let top = Infinity;
+    let bottom = -Infinity;
+    const corners = [
+      [OFF_CENTER_BOX.min.x, OFF_CENTER_BOX.min.y, OFF_CENTER_BOX.min.z],
+      [OFF_CENTER_BOX.max.x, OFF_CENTER_BOX.min.y, OFF_CENTER_BOX.min.z],
+      [OFF_CENTER_BOX.min.x, OFF_CENTER_BOX.max.y, OFF_CENTER_BOX.min.z],
+      [OFF_CENTER_BOX.max.x, OFF_CENTER_BOX.max.y, OFF_CENTER_BOX.min.z],
+      [OFF_CENTER_BOX.min.x, OFF_CENTER_BOX.min.y, OFF_CENTER_BOX.max.z],
+      [OFF_CENTER_BOX.max.x, OFF_CENTER_BOX.min.y, OFF_CENTER_BOX.max.z],
+      [OFF_CENTER_BOX.min.x, OFF_CENTER_BOX.max.y, OFF_CENTER_BOX.max.z],
+      [OFF_CENTER_BOX.max.x, OFF_CENTER_BOX.max.y, OFF_CENTER_BOX.max.z],
+    ] as const;
+    for (const [x, y, z] of corners) {
+      const ndc = new THREE.Vector3(x, y, z).project(camera);
       const px = ((ndc.x + 1) / 2) * 605;
       const py = ((1 - ndc.y) / 2) * 439;
       left = Math.min(left, px);

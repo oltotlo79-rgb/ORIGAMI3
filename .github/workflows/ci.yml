@@ -46,8 +46,25 @@ jobs:
       # 走らせる。最適化なしでは手元で 476秒 / 175秒 かかり、CIの計算機は手元より
       # 約3.6倍遅いので、この2件だけでこのジョブが約39分延びる。最適化ありでは
       # 合わせて手元で1分未満(CI換算 約3.4分)で済む。どちらの検査も消さない。
+      #
+      # 提案の探索の3件も、最適化ありの performance ジョブで走らせる。花弁折り・
+      # つぶし折りの候補を既定で作るようにした(crates/ori3-propose/src/enumerate.rs の
+      # WITH_EXTRA_CANDIDATES)ため、最適化なしでは手元で
+      # 約7.5時間 / 374秒 / 375秒 かかる(変更前は 587秒 / 30秒 / 6秒)。
+      # 最適化ありでは 1,332秒 / 12秒 / 11秒(CI換算 合わせて約81分)で済む。
+      # 影響を受けるのはこの3件だけで、ほかの探索の検査は search_to_finish を使い、
+      # 追加の候補を1件も作らない(crates/ori3-propose/src/search.rs の
+      # `if completion.is_some()` が、追加の候補を作る場所を囲っている)。
+      # どの検査も消さない。
+      #
+      # the_heaviest_proposal_never_hits_the_time_limit も、最適化ありの performance
+      # ジョブで走らせる。この検査は「時間の打ち切りに当たらないこと」を主張する。
+      # 打ち切りは壁時計なので、最適化なしでは16.8〜20.5倍遅くなり必ず当たる
+      # (実測: 最適化なしで先端12本の4候補すべてが`TimeCap`。最適化ありでは
+      # 0件/10回・最大13.851秒)。最適化ありでのみ成り立つ主張なので、
+      # performanceジョブで最適化ありで走らせる。検査は消していない。
       - name: Run Rust tests
-        run: cargo test --workspace -- --skip surface_order_179_999_to_180_all_110_creases --skip surface_order_exact_endpoint_is_rank_stable_for_previous_19
+        run: cargo test --workspace -- --skip surface_order_179_999_to_180_all_110_creases --skip surface_order_exact_endpoint_is_rank_stable_for_previous_19 --skip completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten --skip named_sample_completes_end_to_end_and_is_deterministic_ten_out_of_ten --skip a_safe_coincident_partial_network_appears_after_the_first_fold --skip the_heaviest_proposal_never_hits_the_time_limit
 
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -119,6 +136,18 @@ jobs:
 
       - name: Test packing throughput performance in release mode
         run: cargo test --release -p ori3-propose --test perf_packing -- --nocapture
+
+      - name: Test the completion search determinism in release mode
+        run: cargo test --release -p ori3-propose --test acceptance -- completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten --exact --nocapture
+
+      - name: Test the end-to-end named sample in release mode
+        run: cargo test --release -p ori3-propose --test end_to_end -- named_sample_completes_end_to_end_and_is_deterministic_ten_out_of_ten --exact --nocapture
+
+      - name: Test the safe partial network candidates in release mode
+        run: cargo test --release -p ori3-propose --test acceptance -- a_safe_coincident_partial_network_appears_after_the_first_fold --exact --nocapture
+
+      - name: Test the heaviest proposal never hits the time limit in release mode
+        run: cargo test --release -p desktop --lib the_heaviest_proposal_never_hits_the_time_limit -- --nocapture
 
       - name: Install frontend dependencies
         working-directory: apps/desktop

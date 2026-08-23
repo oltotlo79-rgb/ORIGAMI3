@@ -1290,9 +1290,45 @@ describe("Viewer3D(視点を戻す)", () => {
     resetCamera.mockClear(); // 表示直後の1回を数えない
     fireEvent.click(screen.getByRole("button", { name: "視点を戻す" }));
     expect(resetCamera).toHaveBeenCalledTimes(1);
-    // 紙の大きさ(150×150mm → 正規化して1×1)と、案内の札の下端を渡して位置を求める
-    // (jsdomでは要素の大きさが取れないので札の下端は0)
-    expect(resetCamera.mock.calls[0]).toEqual([1, 1, 0]);
+    // まだ折っていない(frame3d: null)ので、立体の実測範囲は紙の大きさそのもの
+    // (150×150mm → 正規化して1×1)と一致する。案内の札の下端も渡す
+    // (jsdomでは要素の大きさが取れないので札の下端は0)。
+    const [box, hint] = resetCamera.mock.calls[0] as [THREE.Box3, number];
+    expect(box.min.toArray()).toEqual([0, 0, 0]);
+    expect(box.max.toArray()).toEqual([1, 1, 0]);
+    expect(hint).toBe(0);
+  });
+
+  it("折り上がった立体の実際の広がりを基準にする(展開図の大きさではない)", async () => {
+    // 右半分を90°起こした状態(SPATIAL_FRAME)。展開図(平らな紙)は(0,0)〜(1,1)だが、
+    // 実際に立っている立体の広がりはx:[0,0.5]・y:[0,1]・z:[0,0.5]で、
+    // 展開図の大きさ・中心((0.5,0.5,0))とは一致しない。
+    // 直す前はここで展開図の大きさをそのまま使っており、立体の一部が
+    // 画面の外へ出ることがあった(scratchpad/check3d-new-plans-report.md §6)。
+    useAppStore.setState({
+      doc: SPATIAL_DOC,
+      faces: SPATIAL_FACES,
+      hinges: new Set([6]),
+      frame3d: SPATIAL_FRAME,
+      currentStep: null,
+      playT: 1,
+      playing: false,
+      drivers: new Map(),
+      errorMessage: null,
+      foldDraft: null,
+      alignDraft: null,
+      techniqueDraft: null,
+    });
+    renderViewer();
+    await waitFor(() => expect(held.scene.content).not.toBeNull());
+
+    const resetCamera = held.scene.resetCamera as ReturnType<typeof vi.fn>;
+    resetCamera.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "視点を戻す" }));
+    expect(resetCamera).toHaveBeenCalledTimes(1);
+    const [box] = resetCamera.mock.calls[0] as [THREE.Box3, number];
+    expect(box.min.toArray()).toEqual([0, 0, 0]);
+    expect(box.max.toArray()).toEqual([0.5, 1, 0.5]);
   });
 });
 

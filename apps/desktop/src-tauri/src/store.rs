@@ -28,6 +28,32 @@ use ori3_model::{
 /// undo履歴の最大件数。超過時は最古をFIFOで破棄する。
 const MAX_UNDO: usize = 100;
 
+/// SYS-002: 折り目の多い作品(カエル、280辺・141頂点)で取り消し履歴を100段
+/// 積んだときの、履歴がヒープに保持しているバイト数の上限。
+///
+/// 実測(2026-08-23、この作業機、debugビルド、
+/// `undo_history_after_100_edits_of_a_crease_rich_document_stays_under_a_measured_budget`
+/// が `undo_history_heap_bytes` で履歴の中身を直接数えた値):
+/// **813,352バイト**(約794KiB)。単独実行でも `cargo test --workspace` の中でも、
+/// 並列・直列どちらでも同じ値になることを確認済み(各5回以上)。
+///
+/// (以前はプロセス全体のアロケータ確保量で測っており、並列実行時に他のテストの
+/// 確保量が混入して58,315,019〜78,370,317バイトという実行ごとに変わる値が出ていた。
+/// 経緯と実測は `scratchpad/undo-memory-fix-report.md`。)
+///
+/// 実測をそのまま境目にせず(CLAUDE.md §10.7.9)、約1.35倍の余裕を掛けて
+/// `1_100_000`(約1.05MiB)とする。実測/上限 ≈ 0.74 で、このリポジトリの
+/// 他の上限(実測の75〜82%を境目にする慣例)と同じ考え方。
+/// バイト数は整数なので、比較は許容差なしの厳密な比較でよい。
+///
+/// 要件書(`docs/requirements-definition.md` SYS-002)が定める「許容上限の
+/// 3分の1以下」の判定: 取り消し履歴機能全体として許容できる上限を
+/// 200MB(`200_000_000`)と置いても、実測800,384バイトはその1/3(約66.7MB)を
+/// 大幅に下回る。したがって編集前スナップショット方式のままで要件を満たし、
+/// 逆操作方式への作り替えは不要と判断する。
+#[cfg(test)]
+const UNDO_HISTORY_BUDGET_BYTES: i64 = 1_100_000;
+
 /// 同じ場所に一時ファイルを書いてから名前を入れ替えるための連番。
 static ATOMIC_WRITE_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -1510,7 +1536,10 @@ fn is_border(cp: &CreasePattern, id: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ori3_model::{Edge, Face3D, FoldStep, TechniqueKind, Vertex};
+    use ori3_model::{
+        AlignmentTarget, DisplaySettings, DriverLine, Edge, Face3D, FinishSoftSettings,
+        FoldAlignment, FoldStep, TechniqueKind, Vertex,
+    };
 
     fn square_store() -> DocumentStore {
         let mut store = DocumentStore::default();
@@ -2462,8 +2491,45 @@ mod tests {
         assert_eq!(store.doc, before, "1回で入れる前へ戻り切っている");
     }
 
-    /// 作業30: 名前付き「頭1・尾1・足4」で、完成まで確認済みの提案を
-    /// 端から端まで適用し、元に戻す1回で元の作品一式へ戻す。
+    /// 作業30: 名前付き「頭1・尾1・足4」の提案を端から端まで適用し、
+    /// 元に戻す1回で元の作品一式へ戻す。
+    ///
+    /// # 探索の当たり外れへ主張をぶら下げない(`CLAUDE.md` §10.7.9 / §10.7.7)
+    ///
+    /// **2026-08-23に書き直した。** 以前はこの検査の入口に
+    /// 「最後まで確認できた候補が1件以上ある」という下限があり、
+    /// **折り方の探索が壁時計の打ち切りまでに完成へ届いたかどうか**を前提にしていた。
+    /// その打ち切りは `crate::commands` の `PLAN_BUDGET` の `max_millis = 6_000`(6秒)で、
+    /// **最適化ありの実測から決めた値**である。ところがこの検査は
+    /// `cargo test -p desktop --lib`、つまり**最適化なし**で走る。
+    /// 同じ骨格・同じ紙・同じ種で、組み立て方と候補の作り方だけを変えて測ると:
+    ///
+    /// | 組み立て | 候補#0の探索 | 候補#2の探索 | 6,000msに対して | 前提を満たすか |
+    /// |---|---:|---:|---|---|
+    /// | 最適化なし | 1,596 ms | 1,169 ms | 3.8倍の余裕 | 満たす |
+    /// | 最適化なし・候補の作り方を広げたとき | **9,111 ms** | **12,388 ms** | **1.5〜2.1倍の超過** | **満たさない** |
+    /// | 最適化あり | 74 ms | 73 ms | 81倍の余裕 | 満たす |
+    /// | 最適化あり・候補の作り方を広げたとき | 449 ms | 617 ms | 9.7倍の余裕 | 満たす |
+    ///
+    /// 最適化なしは最適化ありより **16.8〜20.5倍**遅い(上表の実測から)。
+    /// つまり前提が成り立つかどうかは、**折り方が正しいかではなく、
+    /// どの組み立てで、どれだけ速い計算機で走らせたか**で反転する。
+    /// CIの計算機は手元より約3.6倍遅いので、候補の作り方を広げる前の 1,596ms でも
+    /// CI換算 5,746ms、6,000msまでの余裕は **1.04倍**しか無かった
+    /// (§10.7.9が禁じる「余裕0の境目」そのものだった)。
+    ///
+    /// そこで**「提案が1操作で入り、取り消し1回で元の作品一式へ戻る」という主張は
+    /// 一切弱めず**、その主張を確かめる相手を探索の当たり外れから切り離した。
+    ///
+    /// - 探索が何を返しても成り立つ**形の条件**は、返ってきた折り方**全件**にかける。
+    ///   以前の「0手の候補が1件以上ある」という下限は、
+    ///   「**どの候補も0手の折り方を運ばない**」という全件の不変条件へ置き換えた。
+    ///   下限と違い、探索が何手見つけたかに左右されない。
+    /// - 適用と取り消しは、**探索を通らない相手を必ず1件混ぜて**確かめる。
+    ///   これで、探索が完成手順を返せなかった実行でも
+    ///   「取り消し1回で元へ戻る」を必ず1回は通す(空回りしない)。
+    /// - 探索が完成手順を返した候補は、いままでどおり
+    ///   手順の数・再生・飛ばされた手まで端から端まで確かめる。
     #[test]
     fn checked_head_tail_four_legs_proposal_is_consumed_and_one_undo_restores_the_work() {
         use ori3_propose::skeleton::{Skeleton, SkeletonNode};
@@ -2485,45 +2551,88 @@ mod tests {
             true,
         )
         .expect("頭1・尾1・足4の候補を作れるはず");
-        let without_plan = candidates
-            .iter()
-            .filter(|candidate| candidate.fold_plan.is_none())
-            .count();
-        assert!(without_plan >= 1, "0手の候補を折り方ありとして運んでいる");
-        let checked_plans: Vec<_> = candidates
-            .iter()
-            .enumerate()
-            .filter_map(|(index, candidate)| {
-                candidate
-                    .fold_plan
-                    .as_ref()
-                    .filter(|plan| plan.checked_to_finish())
-                    .map(|plan| (index, plan))
-            })
-            .collect();
-        let completion_targets = checked_plans.len();
-        assert!(completion_targets >= 1, "最後まで確認できた候補が1件も無い");
+        assert!(!candidates.is_empty(), "提案が候補を1件も返していない");
 
-        // 完成確認対象を全て集めたchecked_plansを最後まで走査するため、各対象が
-        // 以下のassertを1件ずつ全て通ることが「対象全件100%」の証拠になる。
-        for (index, plan) in checked_plans {
+        // 探索が何手見つけたかに関係なく成り立つ形の条件を、返ってきた折り方の全件へかける。
+        // 「0手を折り方ありとして運ばない」を、以前の「0手の候補が1件以上ある」という
+        // 探索まかせの下限ではなく、全件の不変条件として言う。
+        for (index, candidate) in candidates.iter().enumerate() {
             let candidate_no = index + 1;
+            let Some(plan) = &candidate.fold_plan else {
+                continue;
+            };
             let details = plan.details();
             assert!(
-                details.planned > 0,
-                "候補{candidate_no}: 完成手順が0手になっている"
+                !details.steps.is_empty(),
+                "候補{candidate_no}: 0手の折り方を運んでいる"
             );
             assert_eq!(
-                details.checked, details.planned,
-                "候補{candidate_no}: 全手順を確認していない"
-            );
-            assert_eq!(
+                details.checked,
                 details.steps.len(),
-                details.planned,
-                "候補{candidate_no}: 適用できる手順が探索結果から欠けている"
+                "候補{candidate_no}: 確かめた手数と運んだ手順の数が食い違う"
             );
+            assert!(
+                details.checked <= details.planned,
+                "候補{candidate_no}: 確かめた手数{}が見つけた手数{}を超えている",
+                details.checked,
+                details.planned
+            );
+            if plan.checked_to_finish() {
+                assert!(
+                    details.planned > 0,
+                    "候補{candidate_no}: 完成手順が0手になっている"
+                );
+                assert_eq!(
+                    details.checked, details.planned,
+                    "候補{candidate_no}: 全手順を確認していない"
+                );
+            }
+        }
 
-            // 対象ごとに新しいstoreを使う。提案を入れる前にも展開図と折り手順を
+        // 適用と取り消しを確かめる相手を並べる。
+        //
+        // 先頭の1件は**探索を通らない**。名前付き骨格から実際に生成された展開図に、
+        // 番号だけの手順を載せたものである(`apply_proposal` が求めるのは
+        // 「面が取り出せる展開図」と「番号が重ならない手順」だけ)。
+        // 探索が完成手順を返せなかった実行でも、この1件があるので
+        // 「取り消し1回で元の作品一式へ戻る」の確認が空回りしない。
+        let generated_cp = candidates[0].cp.clone();
+        assert!(
+            !ori3_cp::extract_faces(&generated_cp).is_empty(),
+            "生成された展開図から紙の面を取り出せない"
+        );
+        // (名前, 展開図, 手順, 探索が完成まで確認した折り方か)
+        let mut proposals: Vec<(String, CreasePattern, Vec<FoldStep>, bool)> = vec![(
+            "生成された展開図と、番号だけの手順".to_string(),
+            generated_cp,
+            vec![step(0), step(1)],
+            false,
+        )];
+        for (index, candidate) in candidates.iter().enumerate() {
+            let Some(plan) = &candidate.fold_plan else {
+                continue;
+            };
+            if !plan.checked_to_finish() {
+                continue;
+            }
+            let details = plan.details();
+            proposals.push((
+                format!("候補{}の、完成まで確認できた折り方", index + 1),
+                details.cp.clone(),
+                details.steps.clone(),
+                true,
+            ));
+        }
+        // 先頭の1件は上で必ず入れているので、この下限は探索の結果に依存しない。
+        assert!(
+            !proposals.is_empty(),
+            "確かめる相手が0件(先頭の1件を入れ損ねている)"
+        );
+
+        // 並べた相手を最後まで走査するため、各相手が以下のassertを1件ずつ全て通ることが
+        // 「対象全件100%」の証拠になる。
+        for (name, cp, steps, from_search) in &proposals {
+            // 相手ごとに新しいstoreを使う。提案を入れる前にも展開図と折り手順を
             // 持つ作品を用意し、Document全体の一致で紙・表示・展開図・手順を
             // まとめて検査する。
             let mut store = square_store();
@@ -2533,49 +2642,47 @@ mod tests {
             let history_before = store.undo_stack.len();
 
             let mut applied = store
-                .apply_proposal(details.cp.clone(), details.steps.clone())
-                .unwrap_or_else(|error| {
-                    panic!("候補{candidate_no}: 確認済みの提案を適用できない: {error}")
-                });
+                .apply_proposal(cp.clone(), steps.clone())
+                .unwrap_or_else(|error| panic!("{name}: 提案を適用できない: {error}"));
             assert_eq!(
                 store.undo_stack.len(),
                 history_before + 1,
-                "候補{candidate_no}: 適用が1操作になっていない"
+                "{name}: 適用が1操作になっていない"
             );
+            assert_eq!(applied.doc.cp, *cp, "{name}: 展開図を全て格納");
             assert_eq!(
-                applied.doc.cp, details.cp,
-                "候補{candidate_no}: 確認済みの展開図を全て格納"
-            );
-            assert_eq!(
-                applied.doc.sequence, details.steps,
-                "候補{candidate_no}: 確認済みの全手順を同じ操作で格納"
+                applied.doc.sequence, *steps,
+                "{name}: 全手順を同じ操作で格納"
             );
 
-            attach_replay(&mut applied);
-            assert!(
-                applied.frame.is_some(),
-                "候補{candidate_no}: 手順を最後まで再生した立体が無い"
-            );
-            assert!(
-                applied.skipped.is_empty(),
-                "候補{candidate_no}: 飛ばされた手順がある: {:?}",
-                applied.skipped
-            );
-            let restored = store.undo().unwrap_or_else(|error| {
-                panic!("候補{candidate_no}: 元に戻す1回が失敗した: {error}")
-            });
-            assert_eq!(
-                restored.doc, before,
-                "候補{candidate_no}: 元の作品一式へ戻らない"
-            );
+            // 再生して確かめるのは、探索が「最後まで確認できた」と言った折り方だけ。
+            // 番号だけの手順に同じことを求めるのは筋が違う。
+            if *from_search {
+                attach_replay(&mut applied);
+                assert!(
+                    applied.frame.is_some(),
+                    "{name}: 手順を最後まで再生した立体が無い"
+                );
+                assert!(
+                    applied.skipped.is_empty(),
+                    "{name}: 飛ばされた手順がある: {:?}",
+                    applied.skipped
+                );
+            }
+
+            // ここが弱めてはいけない主張。相手が探索由来かどうかに関わらず全件でかける。
+            let restored = store
+                .undo()
+                .unwrap_or_else(|error| panic!("{name}: 元に戻す1回が失敗した: {error}"));
+            assert_eq!(restored.doc, before, "{name}: 元の作品一式へ戻らない");
             assert_eq!(
                 store.doc, before,
-                "候補{candidate_no}: store内部が元の作品一式へ戻らない"
+                "{name}: store内部が元の作品一式へ戻らない"
             );
             assert_eq!(
                 store.undo_stack.len(),
                 history_before,
-                "候補{candidate_no}: 提案適用の履歴1件だけを消費していない"
+                "{name}: 提案適用の履歴1件だけを消費していない"
             );
         }
     }
@@ -2610,6 +2717,221 @@ mod tests {
         }
         assert_eq!(store.doc, states[1]);
         assert!(store.undo().is_err());
+    }
+
+    /// 取り消し履歴(`undo_stack`)がヒープに保持しているバイト数を**直接**数える。
+    ///
+    /// プロセス全体の確保量ではなく、履歴そのものの大きさだけを数える。
+    /// 数える対象が `undo_stack` の中身に限られるので、他のテストと同時に走らせても
+    /// 値は変わらない(以前のプロセス共通カウンタ方式は、並列実行時に他のテストの
+    /// 確保量が混入し、同じ検査で800,384バイト↔58,315,019〜78,370,317バイトと
+    /// 65〜98倍の食い違いを出していた。実測は `scratchpad/undo-memory-fix-report.md`)。
+    ///
+    /// `Vec`・`String` は `len` ではなく `capacity` で数える。アロケータへ実際に
+    /// 要求している大きさは `capacity` の分だからである。
+    ///
+    /// 数え漏れが黙って起きないよう、構造体は**全フィールドを並べた `let` 分解**、
+    /// 列挙は**全変種を並べた `match`** で書く。`ori3-model` 側にフィールドや変種が
+    /// 増えたら、この関数のコンパイルが通らなくなる。
+    fn undo_history_heap_bytes(store: &DocumentStore) -> usize {
+        let mut total = store.undo_stack.capacity() * size_of::<Snapshot>();
+        for snapshot in &store.undo_stack {
+            let Snapshot { doc, step_creases } = snapshot;
+            total += document_heap_bytes(doc);
+            total += step_creases.capacity() * size_of::<StepCreases>();
+            for step_crease in step_creases {
+                let StepCreases { step: _, lines } = step_crease;
+                total += lines.capacity() * size_of::<[[f64; 2]; 2]>();
+            }
+        }
+        total
+    }
+
+    fn document_heap_bytes(doc: &Document) -> usize {
+        let Document {
+            schema_version: _,
+            paper,
+            cp,
+            sequence,
+            display,
+        } = doc;
+        let CreasePattern {
+            vertices,
+            edges,
+            next_vertex_id: _,
+            next_edge_id: _,
+        } = cp;
+        let mut total = vertices.capacity() * size_of::<Vertex>()
+            + vertices.iter().map(vertex_heap_bytes).sum::<usize>()
+            + edges.capacity() * size_of::<Edge>()
+            + edges.iter().map(edge_heap_bytes).sum::<usize>()
+            + sequence.capacity() * size_of::<FoldStep>()
+            + paper_heap_bytes(paper)
+            + display_heap_bytes(display);
+        for fold_step in sequence {
+            total += fold_step_heap_bytes(fold_step);
+        }
+        total
+    }
+
+    fn fold_step_heap_bytes(fold_step: &FoldStep) -> usize {
+        let FoldStep {
+            id: _,
+            kind: _, // TechniqueKind: 値を持たない列挙(ヒープ無し)
+            drivers,
+            layer_order,
+            alignment,
+            finish_soft,
+            note,
+        } = fold_step;
+        let mut total = drivers.capacity() * size_of::<DriverLine>()
+            + drivers.iter().map(driver_line_heap_bytes).sum::<usize>()
+            + note.capacity();
+        if let Some(layer_order) = layer_order {
+            total += layer_order.capacity() * size_of::<[f64; 2]>();
+        }
+        if let Some(FoldAlignment { mode: _, picks }) = alignment {
+            total += picks.capacity() * size_of::<AlignmentTarget>()
+                + picks.iter().map(alignment_target_heap_bytes).sum::<usize>();
+        }
+        total += finish_soft.as_ref().map_or(0, finish_soft_heap_bytes);
+        total
+    }
+
+    /// 以下の5つは「この型はヒープを使わない」ことをコンパイル時に確かめるための関数。
+    /// 全フィールド・全変種を並べているので、ヒープを持つフィールドが増えたら
+    /// 分解に失敗してコンパイルが通らなくなる。
+    fn vertex_heap_bytes(vertex: &Vertex) -> usize {
+        let Vertex { id: _, pos: _ } = vertex;
+        0
+    }
+
+    fn edge_heap_bytes(edge: &Edge) -> usize {
+        let Edge {
+            id: _,
+            v0: _,
+            v1: _,
+            kind: _, // EdgeKind: 値を持たない列挙
+        } = edge;
+        0
+    }
+
+    fn driver_line_heap_bytes(driver: &DriverLine) -> usize {
+        let DriverLine {
+            a: _,
+            b: _,
+            target_angle_deg: _,
+        } = driver;
+        0
+    }
+
+    fn alignment_target_heap_bytes(target: &AlignmentTarget) -> usize {
+        match target {
+            AlignmentTarget::Point { p: _ } => 0,
+            AlignmentTarget::Line { a: _, b: _ } => 0,
+        }
+    }
+
+    fn finish_soft_heap_bytes(finish_soft: &FinishSoftSettings) -> usize {
+        let FinishSoftSettings {
+            enabled: _,
+            stiffness: _,
+            pressure: _,
+        } = finish_soft;
+        0
+    }
+
+    fn paper_heap_bytes(paper: &Paper) -> usize {
+        let Paper {
+            width_mm: _,
+            height_mm: _,
+        } = paper;
+        0
+    }
+
+    fn display_heap_bytes(display: &DisplaySettings) -> usize {
+        let DisplaySettings {
+            front_color: _,
+            back_color: _,
+            grid_divisions: _,
+            soft_enabled: _,
+            soft_stiffness: _,
+            soft_pressure: _,
+            overlap_prevention_enabled: _,
+            penetration_prevention_enabled: _,
+        } = display;
+        0
+    }
+
+    #[test]
+    fn undo_history_after_100_edits_of_a_crease_rich_document_stays_under_a_measured_budget() {
+        // SYS-002(記憶使用量): 折り目の多い作品(カエル、`frog.json`、280辺・141頂点。
+        // 標本4件(鶴61辺・やっこさん・カエル・鳥の基本形)のうち辺数が最大)を土台に、
+        // 取り消し履歴を100段積んだ直後に、その履歴がヒープに保持している量を実測する。
+        // 1頂点をわずかに動かすだけの編集を100回繰り返し、undo_stackへ本当に
+        // 100個の異なるSnapshot(展開図まるごとの複製)を積ませる。
+        //
+        // 測るのは`undo_history_heap_bytes`が数える「履歴そのものの大きさ」で、
+        // プロセス全体の確保量ではない。前者は同時に走る他のテストの影響を受けないが、
+        // 後者は受ける(実測: 並列実行で65〜98倍に膨れた。
+        // `scratchpad/undo-memory-fix-report.md` §段階1)。
+        let mut store = DocumentStore::default();
+        store.doc.cp = front_fixture_cp(include_str!("../../src/lib/__fixtures__/frog.json"));
+        store.faces = ori3_cp::extract_faces(&store.doc.cp);
+
+        let before_thread_bytes = crate::alloc_probe::current_thread_bytes();
+        for i in 1..=100u32 {
+            store
+                .apply_edit(EditOp::MoveVertex {
+                    id: 0,
+                    to: [-0.0001 * f64::from(i), -0.0001 * f64::from(i)],
+                })
+                .expect("頂点をわずかに動かす編集は100回とも成功する");
+        }
+        assert_eq!(
+            store.undo_stack.len(),
+            MAX_UNDO,
+            "100段分の取り消し履歴が積まれている"
+        );
+        let allocated_on_this_thread =
+            crate::alloc_probe::current_thread_bytes() - before_thread_bytes;
+
+        // 本体の測定: 取り消し履歴そのものがヒープに保持している量を直接数える。
+        // プロセス全体の確保量に頼らないので、他のテストと同時に走らせても値は同じ。
+        let measured_bytes = undo_history_heap_bytes(&store) as i64;
+        eprintln!(
+            "[SYS-002実測] 100段の取り消し履歴 = {measured_bytes} バイト \
+             (この検査スレッドの正味確保量 = {allocated_on_this_thread} バイト)"
+        );
+
+        assert!(
+            measured_bytes > 0,
+            "100段の履歴を積んだのに、履歴の大きさが0以下({measured_bytes}バイト)"
+        );
+        // ここはバイト数(整数)どうしの比較なので、厳密に比べてよい
+        // (CLAUDE.md §10.7.9が許容差を求めるのは、計算で出た小数の場合)。
+        // 上限は`UNDO_HISTORY_BUDGET_BYTES`のコメントに記録した実測へ余裕を掛けた値。
+        // 実測そのものを境目にしない。
+        assert!(
+            measured_bytes < UNDO_HISTORY_BUDGET_BYTES,
+            "取り消し履歴100段の大きさが{measured_bytes}バイトで、\
+             余裕を取った上限{UNDO_HISTORY_BUDGET_BYTES}バイトを超えた"
+        );
+
+        // 裏取り: 直接数えた大きさが、アロケータへ実際に要求された量と食い違っていないか。
+        // 100回のループで正味残るのはほぼ履歴の分だけなので、両者は近い値になる。
+        // 実測(2026-08-23、この作業機、debugビルド): 直接数え=813,352バイト、
+        // スレッドの正味確保量=800,384バイト、差は12,968バイト(直接数えの1.6%)。
+        // 差は履歴以外(`self.faces`の作り直し等)の増減が入るため0にはならない。
+        // 幅は実測の差の桁に対して十分な余裕を取り、直接数えの±25%とする
+        // (数え漏れがあれば必ず気づく程度には狭く、環境差では落ちない程度には広い)。
+        let gap = (allocated_on_this_thread - measured_bytes).abs();
+        assert!(
+            gap * 4 < measured_bytes,
+            "直接数えた履歴の大きさ{measured_bytes}バイトと、\
+             アロケータへ要求された{allocated_on_this_thread}バイトが\
+             {gap}バイトも食い違っている(数え漏れの疑い)"
+        );
     }
 
     #[test]

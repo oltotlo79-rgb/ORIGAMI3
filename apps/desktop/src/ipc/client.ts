@@ -116,6 +116,19 @@ export function proposalGenerate(
   });
 }
 
+/** 提案の計算がどこまで進んだか(commands.rs::ProposalProgress) */
+export interface ProposalProgress {
+  /** 計算が終わった候補の数 */
+  done: number;
+  /** 計算する候補の数。まだ始まっていなければ 0 */
+  total: number;
+}
+
+/** 提案の計算の進み具合を読む。計算中でもすぐ返る */
+export function proposalProgress(): Promise<ProposalProgress> {
+  return invoke("proposal_progress");
+}
+
 /** 提案の展開図と折り手順をまとめて入れる。元に戻す1回で入れる前へ戻る */
 export function proposalApply(
   cp: CreasePattern,

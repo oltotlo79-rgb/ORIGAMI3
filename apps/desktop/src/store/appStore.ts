@@ -812,6 +812,8 @@ interface AppState {
   proposalPositionRedoStack: ProposalPositionSnapshot[];
   /** 生成中か(「計算中…」の表示用) */
   proposalBusy: boolean;
+  /** 生成中の進み具合(「4件中2件め」の表示用)。計算していないときは null */
+  proposalProgress: { done: number; total: number } | null;
   /** 生成に失敗した理由(日本語)。成功したらnull */
   proposalError: string | null;
   /** 次に使う乱数の初期値。作り直すたびに増やして別の配置を出す */
@@ -1297,6 +1299,69 @@ export const useAppStore = create<AppState>((set, get) => {
   let foldThroughBusyToken = 0;
   /** 閉じた提案画面へ古い計算結果を戻さないための要求世代。 */
   let proposalGeneration = 0;
+  /**
+   * 提案の計算中に進み具合を読み直す間隔(ミリ秒)。
+   *
+   * 候補は同時に計算していて、終わった件数だけが増えていく。
+   * いちばん軽い骨格でも計算は0.005秒で終わるので、その場合は
+   * 一度も表示されないまま消える(それでよい)。重い骨格では数秒かかるので、
+   * この間隔なら棒がなめらかに伸びる。
+   */
+  const PROPOSAL_PROGRESS_POLL_MS = 150;
+
+  /**
+   * 計算が終わるまで進み具合を読み続ける。返った関数を呼ぶと止まる。
+   *
+   * 読めなくても計算は止めない(`CLAUDE.md` §8「止めずに警告する」)。
+   * 進み具合はあくまで待ち時間の目安で、これが無くても結果は同じ。
+   */
+  const watchProposalProgress = (isCurrent: () => boolean): (() => void) => {
+    const timer = setInterval(() => {
+      try {
+        void ipc
+          .proposalProgress()
+          .then((progress) => {
+            if (isCurrent()) set({ proposalProgress: progress });
+          })
+          .catch(() => {
+            // 進み具合が読めないだけなら、何も知らせずに計算を続ける
+          });
+      } catch {
+        // 同上。待ち表示のためだけの読み取りなので、計算は止めない
+      }
+    }, PROPOSAL_PROGRESS_POLL_MS);
+    return () => clearInterval(timer);
+  };
+
+  /**
+   * 計算が終わったあと、棒を最後まで伸ばしたまま見せておく時間(ミリ秒)。
+   *
+   * 最後の1件が終わってから計算が返るまでは1ミリ秒ほどしかない。
+   * 読み取りは `PROPOSAL_PROGRESS_POLL_MS` ごとなので、**最後の「4/4 件」に間に合わない**。
+   * 実測(2026-08-24、先端12本、最適化ありのアプリ、100msごとに画面を読んだ)では
+   * `0/4`→`1/4`(4.53秒)→`2/4`(4.88秒)→`3/4`(5.77秒)と伸びたあと、
+   * 6.87秒で**棒が3/4のまま消えた**。利用者には棒が途中で終わったように見えていた。
+   * そこで計算が返った時点で自分で満杯にし、この時間だけ見せてから消す。
+   */
+  const PROPOSAL_PROGRESS_FULL_HOLD_MS = 150;
+
+  /**
+   * 棒を最後まで伸ばして、少しの間だけ見せる。
+   *
+   * 表示のためだけの処理で、候補の中身も計算も変えない。
+   * 進み具合を一度も読めていなければ(総数0。軽い骨格は0.005秒で終わるので
+   * よくある)、棒はそもそも出ていないので何もせずに返る。
+   */
+  const holdFullProposalBar = async (
+    isCurrent: () => boolean,
+  ): Promise<void> => {
+    const total = get().proposalProgress?.total ?? 0;
+    if (total <= 0 || !isCurrent()) return;
+    set({ proposalProgress: { done: total, total } });
+    await new Promise((resolve) =>
+      setTimeout(resolve, PROPOSAL_PROGRESS_FULL_HOLD_MS),
+    );
+  };
   /** 同じ葉のつまみを続けて動かす間は、ドラッグ1回を履歴1件へまとめる。 */
   let lastProposalPositionKey: string | null = null;
   let lastProposalPositionAt = 0;
@@ -2711,6 +2776,7 @@ export const useAppStore = create<AppState>((set, get) => {
     proposalPositionUndoStack: [],
     proposalPositionRedoStack: [],
     proposalBusy: false,
+    proposalProgress: null,
     proposalError: null,
     proposalSeed: 1,
     exportOpen: false,
@@ -4203,11 +4269,23 @@ export const useAppStore = create<AppState>((set, get) => {
         s.proposalPositionLastMoved,
         paper,
       );
-      set({ proposalBusy: true, proposalError: null, proposalSeed: seed + 1 });
+      set({
+        proposalBusy: true,
+        proposalError: null,
+        proposalSeed: seed + 1,
+        proposalProgress: null,
+      });
+      const stopWatching = watchProposalProgress(
+        () => generation === proposalGeneration,
+      );
       // 提案の計算は作品の状態を読まない独立処理。直列化キューに載せると
       // 数百msの計算の間だけ編集が止まるので、ここは載せずに直接呼ぶ
       try {
         const list = await ipc.proposalGenerate(requestSkeleton, paper, seed);
+        if (generation !== proposalGeneration) return;
+        // 棒が途中の数字のまま消えないよう、最後まで伸ばしてから消す
+        stopWatching();
+        await holdFullProposalBar(() => generation === proposalGeneration);
         if (generation !== proposalGeneration) return;
         set({
           proposalCandidates: list,
@@ -4218,13 +4296,17 @@ export const useAppStore = create<AppState>((set, get) => {
           proposalError:
             list.length > 0 ? null : "候補を作れませんでした。骨格を変えてみてください",
           proposalBusy: false,
+          proposalProgress: null,
         });
       } catch (e) {
         if (generation !== proposalGeneration) return;
         set({
           proposalBusy: false,
+          proposalProgress: null,
           proposalError: typeof e === "string" ? e : String(e),
         });
+      } finally {
+        stopWatching();
       }
     },
 
@@ -4405,11 +4487,23 @@ export const useAppStore = create<AppState>((set, get) => {
         s.proposalPositionLastMoved,
         paper,
       );
-      set({ proposalBusy: true, proposalError: null, proposalSeed: seed + 1 });
+      set({
+        proposalBusy: true,
+        proposalError: null,
+        proposalSeed: seed + 1,
+        proposalProgress: null,
+      });
+      const stopWatching = watchProposalProgress(
+        () => generation === proposalGeneration,
+      );
       // 葉ごとに決めた側を送信用の複製へまとめ、要求は1件だけ送る。
       // 完成形と紙の上の元入力はどちらもストアに残す。
       try {
         const list = await ipc.proposalGenerate(requestSkeleton, paper, seed);
+        if (generation !== proposalGeneration) return;
+        // 棒が途中の数字のまま消えないよう、最後まで伸ばしてから消す
+        stopWatching();
+        await holdFullProposalBar(() => generation === proposalGeneration);
         if (generation !== proposalGeneration) return;
         set({
           proposalCandidates:
@@ -4425,13 +4519,17 @@ export const useAppStore = create<AppState>((set, get) => {
               ? null
               : "この場所では候補を作れませんでした。丸い印を少し離してみてください",
           proposalBusy: false,
+          proposalProgress: null,
         });
       } catch (e) {
         if (generation !== proposalGeneration) return;
         set({
           proposalBusy: false,
+          proposalProgress: null,
           proposalError: typeof e === "string" ? e : String(e),
         });
+      } finally {
+        stopWatching();
       }
     },
 

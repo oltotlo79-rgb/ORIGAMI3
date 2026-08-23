@@ -458,7 +458,30 @@ impl SearchBudget {
     /// 根拠(最適化ありの実測)は `commands.rs` のコメントと
     /// `scratchpad/search-budget-report.md` にある
     /// (`scratchpad/propose-search-subset-report.md` §16.7.5 の判断待ちに対する回答)。
-    pub const MAX_MILLIS: u64 = 240_000;
+    ///
+    /// ## 2026-08-23に 240,000 → 600,000 へ上げた(実測)
+    ///
+    /// 花弁折り・つぶし折りの候補を既定で作るようにした
+    /// (`crate::enumerate` の `WITH_EXTRA_CANDIDATES`)ため、1状態を広げる費用が上がった。
+    ///
+    /// | 標本 | 最適化あり(10回) | 最適化なし |
+    /// |---|---|---|
+    /// | 折り鶴 | 平均 92.939秒 / **最大 99.804秒** 完成 | **240秒で打ち切り、完成せず**(必要な10状態のうち5状態しか広げられない) |
+    /// | 鳥の基本形 | 平均 4.958秒 完成 | 87.422秒 完成 |
+    /// | やっこさん | 平均 0.204秒 完成 | 3.473秒 完成 |
+    ///
+    /// **決め方は前と同じ**(いちばん重い標本の実測 → CIは約3.6倍遅い → 8割余裕 → 切り上げ)。
+    /// ただし**最適化ありの値を使う**。最適化なしでは折り鶴が完走せず、
+    /// 対象の検査は最適化ありの `performance` ジョブで走らせるからである。
+    ///
+    /// - 最適化ありの折り鶴の最大 **99.804秒**
+    /// - CI換算 `99.804 × 3.6 = 359.3秒`
+    /// - 8割余裕 `359.3 ÷ 0.8 = 449.1秒`
+    /// - 切り上げて **600,000ms(10分)**。CI換算の実測は上限の **59.9%** に収まる。
+    ///
+    /// **前の 240,000ms のままにできない理由**: CI換算の 359.3秒が 240秒を超えるので、
+    /// **CIの `performance` ジョブで折り鶴が打ち切られる**(手元では95.5秒で通るので気づけない)。
+    pub const MAX_MILLIS: u64 = 600_000;
 
     /// 既定の打ち切り。**実測を根拠に決めた**(`scratchpad/propose-22-report.md` 段階1)。
     ///
@@ -475,7 +498,7 @@ impl SearchBudget {
     /// |---|---:|---|
     /// | `max_states` | **12** | 部分集合候補追加後も、折り鶴は6状態、やっこさんは1状態で完成許容へ到達する。鳥の基本形は12状態で安全に打ち切る |
     /// | `branch` | **3** | 枝刈り前の候補最大は、折り鶴4・やっこさん9・鳥の基本形3。完成許容内の候補を順位の先頭へ置いた上で、保持する子を上位3件に絞る |
-    /// | [`max_millis`](Self::max_millis) | **240,000**([`MAX_MILLIS`](Self::MAX_MILLIS)) | 最適化なしの折り鶴47.854秒。CIは約3.6倍遅いので172.3秒を想定し、8割余裕の215.4秒を4分へ切り上げた。**画面から呼ぶときはここを個別に変える**(`commands.rs::PLAN_BUDGET` は6,000ms) |
+    /// | [`max_millis`](Self::max_millis) | **600,000**([`MAX_MILLIS`](Self::MAX_MILLIS)) | 最適化ありの折り鶴の最大99.804秒。CIは約3.6倍遅いので359.3秒を想定し、8割余裕の449.1秒を10分へ切り上げた(2026-08-23に240,000から変更。根拠は[`MAX_MILLIS`](Self::MAX_MILLIS))。**画面から呼ぶときはここを個別に変える**(`commands.rs::PLAN_BUDGET` は6,000ms) |
     /// | `max_depth` | **8** | 完成した手数は折り鶴5・やっこさん1。既定予算内で両方を収める |
     /// | `rank_scan` | **3点**(`steps = 2`) | 順位を付けるだけの粗い確認 |
     /// | `scan` | **21点**([`PoseScan::DEFAULT`]) | 作業21が使うのと同じ細かさ。**返す手はすべてこれを通る** |
@@ -681,32 +704,92 @@ fn candidate_class_quotas(branch: usize) -> ClassQuotas {
     }
 }
 
+/// 形を変える通常の状態を何件広げるごとに、層準備の状態へ1件ぶんの順番を回すか。
+///
+/// # なぜ「後回し」だけでは足りなかったか(2026-08-23の実測)
+///
+/// 2026-08-22に「通常の状態を必ず先に広げる」規則を入れた。そのときの記録には
+/// 「鳥の基本形は4指標とも変わらなかった」とあるが、**当時は別の欠陥
+/// ([`crate::enumerate`] の `PART_LAYER_SKIP_MARK`)が、鳥を完成させる花弁折りを
+/// 候補の段階で落としていた**ため、差が出ようがなかった。
+///
+/// その欠陥を直したうえで測り直すと、鳥の基本形では次のことが起きていた。
+///
+/// - 予備基本形の状態(手順 `[2, 7]` の後)で、鳥を完成させる花弁折りは
+///   **粗い順位で1位**(許容超過 4.2858。2位も花弁折り、5位以下は 6.2192)。
+///   **枝刈りでは落ちていない。**
+/// - しかしその子は準備状態なので、**通常の状態が尽きるまで一度も広げられない**。
+///   鳥では通常の状態が尽きず、状態上限12に達して打ち切られていた。
+///   **2手目の花弁折りが生成すらされない。**
+/// - 分岐上限を 3 → 6 → 10 と広げても、`length` は `0.7071067811865483` から
+///   **16桁すべて動かなかった**。分岐の問題ではない。
+///
+/// # なぜ「全部やめる」ではなく「間隔」なのか
+///
+/// 後回しを丸ごとやめると、鳥は予備基本形から2状態で `GoalReached`(4指標とも0)に
+/// なるが、**根から探すと 240秒(時間上限)に当たった**。2026-08-22の記録どおり、
+/// 折り鶴も1状態ずつの交互では完成を失う。
+/// そこで**上限(状態12・分岐3・深さ8)は1つも上げず**、
+/// 通常の状態を `PREPARATION_TURN` 件広げるごとに準備状態へ1件ぶんの順番を回す。
+///
+/// # 値の決め方(2026-08-23の掃引。最適化あり、`WITH_EXTRA_CANDIDATES = true`、
+/// 既定の上限、1標本1回)
+///
+/// | 間隔 | 折り鶴 | やっこさん | 鳥の基本形 |
+/// |---:|---|---|---|
+/// | 1(＝後回しをやめる) | TimeCap 240.0秒 長さ0.4178 **未完成** | 完成 0.2秒 | StateCap 229.1秒 長さ0.2929 **未完成** |
+/// | 2(＝1状態ずつ交互) | TimeCap 240.1秒 長さ0.6990 **未完成** | 完成 1.3秒 | StateCap 21.7秒 長さ0.5000 **未完成** |
+/// | 3 | TimeCap 240.0秒 長さ0.7586 **未完成** | 完成 0.2秒 | **完成** 8.3秒 長さ0.3536 |
+/// | **4** | **完成** 207.2秒 長さ0.3591 | 完成 0.2秒 | **完成** 5.4秒 長さ0.3536 |
+/// | 5 | 完成 74.3秒 長さ0.3591 | 完成 0.7秒 | StateCap 103.1秒 長さ0.7071 **未完成** |
+/// | 6 | 完成 67.4秒 | 完成 0.6秒 | StateCap 91.0秒 **未完成** |
+/// | 8 | 完成 23.1秒 | 完成 0.2秒 | StateCap 27.3秒 **未完成** |
+/// | 12 | 完成 27.7秒 | 完成 0.2秒 | StateCap 31.9秒 **未完成** |
+///
+/// **掃引した8つの値のうち、3標本すべてが完成するのは 4 だけだった。**
+/// 小さすぎると準備手が通常の手を押しのけて折り鶴が完成せず、
+/// 大きすぎると鳥の花弁折りが状態上限12までに順番をもらえない。
+///
+/// **この値は、いまの候補の作り方と上限(状態12・分岐3・深さ8)に合わせた実測値である。**
+/// 候補の作り方・順位の付け方・上限のどれかを変えたら、**この表を測り直すこと**。
+/// 幅が狭いので、「動いているから触らない」では済まない。
+const PREPARATION_TURN: usize = 4;
+
 /// 形を変える通常の状態を先に広げ、形を変えない層準備の状態は後回しにする。
+/// ただし [`PREPARATION_TURN`] 回に1回だけ、準備状態へ順番を回す。
 ///
 /// 返す最善手の順位は [`rank_key`] のまま変えない。ここで決めるのは
 /// 「状態上限12のうち、どの状態に手を広げるか」だけである。
+/// どちらの側も、選ぶのは `frontier` の並び順(＝ [`rank_key`])で先頭のものなので、
+/// 同じ入力なら毎回同じ状態を選ぶ。
 ///
 /// **実測(2026-08-22、最適化あり、既定12状態・分岐3)**: 準備状態と通常状態を
 /// 1状態ずつ**交互に**広げていたとき、折り鶴は12状態を使い切っても完成せず
 /// (`StateCap`、長さ0.750927・太さ0.471180・位置0.325450)、完成には**13状態**を
 /// 要した。交互を止めて通常状態を先に広げると、同じ12状態の上限で**6状態**で
 /// `GoalReached` になり、長さ0.359121・太さ0.172464・位置0.184029 になる。
-/// やっこさんは1状態の `GoalReached` のまま、鳥の基本形は4指標とも交互ありと
-/// 同じ値(長さ0.707107・太さ7e-16・位置0.250000)で変わらなかった。
-/// つまり交互は折り鶴の完成だけを奪い、他2標本には何も足していなかった。
+///
+/// **実測(2026-08-23、最適化あり、同じ上限、`WITH_EXTRA_CANDIDATES = true`)**:
+/// 後回しを丸ごとやめる(＝間隔1。毎回いちばん良い状態を広げる)と、鳥の基本形は
+/// 予備基本形から**2状態で `GoalReached`**(4指標とも `0.000000`)になる一方、
+/// **根から探すと240秒の時間上限**に当たり、折り鶴も完成しなくなった。
+/// 間隔ごとの実測は [`PREPARATION_TURN`] の表にある。
 ///
 /// 準備状態を捨ててはいない。通常状態が尽きれば、同じ順位で準備状態を広げる。
-fn pop_frontier(frontier: &mut BTreeMap<RankKey, Node>) -> Option<(RankKey, Node)> {
-    if let Some(key) = frontier
-        .iter()
-        .find_map(|(key, node)| (node.preparation_depth == 0).then(|| key.clone()))
-    {
-        let node = frontier
-            .remove(&key)
-            .expect("selected regular frontier key disappeared");
-        return Some((key, node));
-    }
-    frontier.pop_first()
+fn pop_frontier(frontier: &mut BTreeMap<RankKey, Node>, expanded: usize) -> Option<(RankKey, Node)> {
+    // `expanded` はここまでに手を広げ終えた状態の数。0件目(根)は必ず通常側から取る。
+    let take_preparation = expanded > 0 && expanded.is_multiple_of(PREPARATION_TURN);
+    let pick = |preparation: bool| -> Option<RankKey> {
+        frontier.iter().find_map(|(key, node)| {
+            ((node.preparation_depth > 0) == preparation).then(|| key.clone())
+        })
+    };
+    // 欲しい側が空なら、もう片方から取る(順番を空回りさせない)。
+    let key = pick(take_preparation).or_else(|| pick(!take_preparation))?;
+    let node = frontier
+        .remove(&key)
+        .expect("selected frontier key disappeared");
+    Some((key, node))
 }
 
 fn next_candidate_index(
@@ -948,7 +1031,7 @@ fn search(
     let mut frontier: BTreeMap<RankKey, Node> =
         BTreeMap::from([(rank_key(&root, completion), root)]);
 
-    while let Some((_, node)) = pop_frontier(&mut frontier) {
+    while let Some((_, node)) = pop_frontier(&mut frontier, outcome.states_expanded) {
         if deadline.expired() {
             outcome.stop = SearchStop::TimeCap;
             capped = true;
@@ -1517,45 +1600,91 @@ mod tests {
         }
     }
 
-    /// 形を変える通常状態を先に広げ、準備状態は捨てずに後回しにする。
-    ///
-    /// 交互に広げていたときは折り鶴が12状態で完成しなくなった(実測は
-    /// [`pop_frontier`] のコメント)。ここでは「全体順位では準備側が先」という
-    /// 最悪の並びを作り、それでも通常側から広げること、準備側が消えないことを固定する。
-    #[test]
-    fn regular_states_are_expanded_before_preparation_states() {
-        let document = Document::new(Paper {
-            width_mm: 100.0,
-            height_mm: 100.0,
-        });
-        let session = FoldSession::new(&document).expect("平らな正方形を読み込めない");
-        let mut preparation_node = node_with_moves(&session, &[(1, vec![1])]);
+    /// 「全体順位では準備側が先」という最悪の並びを作る。
+    fn two_state_frontier(
+        session: &FoldSession,
+    ) -> (BTreeMap<RankKey, Node>, RankKey, RankKey) {
+        let mut preparation_node = node_with_moves(session, &[(1, vec![1])]);
         preparation_node.preparation_depth = 2;
-        let regular_node = node_with_moves(&session, &[(2, vec![2])]);
+        let regular_node = node_with_moves(session, &[(2, vec![2])]);
         let preparation_key = rank_key(&preparation_node, None);
         let regular_key = rank_key(&regular_node, None);
         assert!(
             preparation_key < regular_key,
             "準備側を全体順位では先にしておく"
         );
-
-        let mut frontier = BTreeMap::from([
+        let frontier = BTreeMap::from([
             (preparation_key.clone(), preparation_node),
             (regular_key.clone(), regular_node),
         ]);
+        (frontier, preparation_key, regular_key)
+    }
 
-        let (selected_regular, _) = pop_frontier(&mut frontier).expect("通常状態を選べない");
+    fn flat_square_session() -> FoldSession {
+        let document = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        FoldSession::new(&document).expect("平らな正方形を読み込めない")
+    }
+
+    /// 形を変える通常状態を先に広げ、準備状態は捨てずに後回しにする。
+    ///
+    /// 1状態ずつ交互に広げていたときは折り鶴が12状態で完成しなくなった
+    /// (実測は [`pop_frontier`] のコメント)。
+    /// [`PREPARATION_TURN`] の倍数**でない**回では、全体順位が下でも通常側を先に広げる。
+    #[test]
+    fn regular_states_are_expanded_before_preparation_states() {
+        let session = flat_square_session();
+        for expanded in 0..PREPARATION_TURN {
+            let (mut frontier, preparation_key, regular_key) = two_state_frontier(&session);
+            let (selected, _) = pop_frontier(&mut frontier, expanded).expect("通常状態を選べない");
+            assert_eq!(
+                selected, regular_key,
+                "{expanded}件目で、全体順位が下でも形を変える状態を先に広げる"
+            );
+            let (next, _) = pop_frontier(&mut frontier, expanded + 1).expect("準備状態を選べない");
+            assert_eq!(
+                next, preparation_key,
+                "通常状態が尽きたら準備状態を広げる(捨てていない)"
+            );
+            assert!(frontier.is_empty());
+            assert!(pop_frontier(&mut frontier, expanded + 2).is_none());
+        }
+    }
+
+    /// [`PREPARATION_TURN`] 件ごとに、準備状態へ順番が回ること。
+    ///
+    /// # なぜこの検査が要るか
+    ///
+    /// 準備状態(方向付き・つぶし折り・**花弁折り**)を無条件に後回しにしていたため、
+    /// 鳥の基本形を完成させる花弁折りは、**粗い順位で1位に付けていながら
+    /// 一度も広げられず**、状態上限12で打ち切られていた
+    /// (`scratchpad/petal-tear-cause-report.md` 第1部 §2.4.2)。
+    /// 分岐上限を 3 → 6 → 10 と広げても `length` は16桁すべて動かなかった。
+    #[test]
+    fn every_preparation_turn_gives_the_preparation_states_a_turn() {
+        let session = flat_square_session();
+        let (mut frontier, preparation_key, regular_key) = two_state_frontier(&session);
+        let (selected, _) =
+            pop_frontier(&mut frontier, PREPARATION_TURN).expect("準備状態を選べない");
         assert_eq!(
-            selected_regular, regular_key,
-            "全体順位が下でも、形を変える状態を先に広げる"
+            selected, preparation_key,
+            "{PREPARATION_TURN}件ごとの順番で準備状態を広げていない"
         );
-        let (selected_preparation, _) = pop_frontier(&mut frontier).expect("準備状態を選べない");
+        let (next, _) =
+            pop_frontier(&mut frontier, PREPARATION_TURN + 1).expect("通常状態を選べない");
+        assert_eq!(next, regular_key, "次はまた通常状態へ戻る");
+
+        // 準備状態が1つも無いときは、順番を空回りさせずに通常状態を広げる。
+        let (mut only_regular, _, regular_key) = two_state_frontier(&session);
+        only_regular.retain(|key, _| *key == regular_key);
+        let (selected, _) =
+            pop_frontier(&mut only_regular, PREPARATION_TURN).expect("通常状態を選べない");
         assert_eq!(
-            selected_preparation, preparation_key,
-            "通常状態が尽きたら準備状態を広げる"
+            selected, regular_key,
+            "準備状態が無いのに順番を空回りさせた"
         );
-        assert!(frontier.is_empty());
-        assert!(pop_frontier(&mut frontier).is_none());
     }
 
     /// 粗順位の全体1位は、予約枠に関係なく必ず確かめる。
@@ -1744,9 +1873,16 @@ mod tests {
             ..SearchBudget::DEFAULT
         };
         let outcome = search_to_finish(&session, &goal, GapWeights::DEFAULT, zero_time_budget);
+        // 2026-08-23に 240,000 → 600,000 へ上げた。**緩めたのではなく、実測に合わせた。**
+        // 根拠は [`SearchBudget::MAX_MILLIS`] のコメントにある実測
+        // (最適化ありの折り鶴の最大99.804秒 → CI換算359.3秒 → 8割余裕449.1秒 → 10分へ切り上げ)。
+        // 240,000のままだと、CI換算の359.3秒が上限を超えて
+        // **CIの performance ジョブで折り鶴が打ち切られる**(手元では95.5秒で通るので気づけない)。
+        // ここは**値をぴったり固定したまま**にしてあるので、
+        // 次に根拠なく変えたときは、いままでどおりこの検査が落ちる。
         assert_eq!(
             SearchBudget::MAX_MILLIS,
-            240_000,
+            600_000,
             "時間の安全弁を根拠なく変えた"
         );
         assert_eq!(

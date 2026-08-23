@@ -447,7 +447,6 @@ fn run_to_completion(sample: &Sample) -> SearchOutcome {
 #[test]
 fn completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten() {
     let mut completed = 0usize;
-    let mut failed = Vec::new();
     let mut typed_states = 0usize;
     let budget = SearchBudget::DEFAULT;
     assert_eq!(budget.max_states, 12, "状態数上限を緩めた");
@@ -556,11 +555,19 @@ fn completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten() {
             sample.name
         );
 
-        // 状態上限の内側で作った状態の数。**実測(2026-08-22、最適化あり)**は
-        // 折り鶴12・やっこさん4・鳥の基本形15。実測そのものを境目にせず、
-        // 最大15が上限の8割(18.75)に収まる24を境目にする(`CLAUDE.md` §10.7.9)。
+        // 状態上限の内側で作った状態の数。**実測(2026-08-23、最適化あり、
+        // `enumerate.rs::WITH_EXTRA_CANDIDATES = true`)**は
+        // 折り鶴31・やっこさん4・鳥の基本形16。
+        // これは**探索の打ち切りではなく、作った状態の数が増えていないかを見る記録値**
+        // である(打ち切りは `max_states`・`branch`・`max_depth` で、そちらは
+        // 12・3・8 のまま**1つも上げていない**。この検査の冒頭で確かめている)。
+        //
+        // 前は24だった。方向付き単線・つぶし折り・花弁折りの候補を作るように
+        // したので、1状態から作る子の数が増えた(実測: 折り鶴12→31)。
+        // 実測そのものを境目にせず、最大31が上限の8割(38.4)に収まる48を境目にする
+        // (`CLAUDE.md` §10.7.9。前の値も 実測15 → 上限24 と同じ取り方だった)。
         assert!(
-            runs[0].states_generated <= 24,
+            runs[0].states_generated <= 48,
             "{}: 作った状態が{}件へ増えた",
             sample.name,
             runs[0].states_generated
@@ -568,7 +575,14 @@ fn completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten() {
 
         let mut replay = session.clone();
         let mut proper_subset_moves = 0usize;
+        // 層を持ち替える手(つぶし折り・花弁折り・開いて閉じる手)の数。
+        // 鳥の基本形は、この種の手が無いと長さの隔たりが動かない。
+        let mut layer_packet_moves = 0usize;
         for step in &runs[0].steps {
+            if replay.move_uses_layer_packet(step.mv.id) || replay.move_opens_and_closes(step.mv.id)
+            {
+                layer_packet_moves += 1;
+            }
             // 番号ではなく意味で数える。全網でも方向付きでも層packetでもない、
             // 2本以上の折り線を同時に閉じる手だけが「重なりの部分集合」である。
             if step.mv.id != replay.fold_lines().len()
@@ -622,15 +636,33 @@ fn completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten() {
                 );
                 assert_gaps_near(sample.name, report.final_gaps, FinishGaps::BEST);
             }
+            // 2026-08-23に**完成するようになった**。緩めたのではなく、
+            // 直った事実へ書き直したものである(`CLAUDE.md` §5)。
+            //
+            // それまでは長さの隔たりが `0.7071067811865483` から動かなかった。
+            // 理由は2つの取り違えで、どちらも実測で特定して直した
+            // (`scratchpad/petal-tear-cause-report.md`)。
+            //
+            // 1. `enumerate.rs::PART_LAYER_SKIP_MARK` — `flat_motion` が
+            //    **動きの部品ごと**に出す「その部品に掛からない層を外した」知らせを、
+            //    「折り上がりが指定と違う」と誤読して候補を捨てていた。
+            //    鳥を完成させる花弁折りが、これで消えていた。
+            // 2. `search.rs::PREPARATION_TURN` — 花弁折りでできた状態が
+            //    「準備手の状態」として常に後回しにされ、状態上限12に達するまで
+            //    一度も広げられなかった(粗い順位では1位に付けていた)。
+            //
+            // 実測(最適化あり、10回): `GoalReached` 5手 `[2, 13, 7, 154, 13]`、
+            // 数 `0.000000` / 長さ `0.3535533905932740` / 太さ `0.000000000000` /
+            // 位置 `0.125000`。決定性は10/10で、最適化なしでも同じ手順・同じ長さになる。
             "鳥の基本形" => {
-                failed.push(sample.name);
+                completed += 1;
                 typed_states += 1;
-                let VerifiedPlan::Partial(partial) = &verified else {
-                    panic!("鳥の基本形の打ち切り手順が完成手順型になった");
-                };
-                assert_eq!(partial.stop(), SearchStop::StateCap);
-                assert!(!reached, "鳥の基本形の未達項目を隠した");
-                assert_eq!(runs[0].stop, SearchStop::StateCap);
+                assert!(
+                    matches!(&verified, VerifiedPlan::CheckedToFinish(_)),
+                    "鳥の基本形が完成手順型になっていない"
+                );
+                assert!(reached, "鳥の基本形が完成しなくなった");
+                assert_eq!(runs[0].stop, SearchStop::GoalReached);
                 assert!(runs[0].steps.len() >= 2, "鳥の基本形が1手へ戻った");
                 assert!(
                     proper_subset_moves >= 1,
@@ -642,8 +674,15 @@ fn completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten() {
                     report.final_gaps.width
                 );
                 assert!(
-                    report.final_gaps.length > CompletionTolerance::DEFAULT.length,
-                    "鳥の基本形の未達理由を隠した"
+                    CompletionTolerance::DEFAULT.contains(&report.final_gaps),
+                    "鳥の基本形の4指標が完成許容を外れた: {:?}",
+                    report.final_gaps
+                );
+                // 花弁折り(袋を開いて折り返す手)を実際に使っていること。
+                // これを使わない限り、長さの隔たりは `0.7071067811865483` から動かない。
+                assert!(
+                    layer_packet_moves >= 1,
+                    "鳥の基本形が層を持ち替える手を使っていない"
                 );
             }
             other => panic!("{other}: 未知の標本"),
@@ -662,8 +701,9 @@ fn completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten() {
         );
     }
     assert_eq!(typed_states, 3, "3標本すべてを型で区別していない");
-    assert_eq!(completed, 2, "完成許容値を満たした標本数が変わった");
-    assert_eq!(failed, ["鳥の基本形"], "未達標本を隠している");
+    // 2026-08-23に鳥の基本形が完成するようになり、**3標本すべてが完成**になった。
+    // どれか1つでも完成しなくなれば、その標本の枝の主張が先に落ちる。
+    assert_eq!(completed, 3, "完成許容値を満たした標本数が変わった");
 }
 
 /// やっこさんは単線8候補の後ろに、全16折り目を同時に閉じる第9候補を持つ。
@@ -765,6 +805,68 @@ fn a_safe_coincident_partial_network_appears_after_the_first_fold() {
             gaps.length > tolerance.length
                 || gaps.width > tolerance.width
                 || gaps.position > tolerance.position
+        );
+    }
+}
+
+/// 画像確認用の作品ファイルを書き出す(一時的。確認が終わったら削除する)。
+///
+/// `verification/check-crane.ori3` / `check-bird-base.ori3` / `check-yakko.ori3` を、
+/// **探索が実際に返した手順をそのまま `FoldSession::apply` で進めた結果**から作る。
+/// 手で組み立て直してはいない。`Document` をまるごと書き出すので
+/// `display` も入る(製品の読み取り機 `store.rs::parse_document` が要求する項目)。
+#[test]
+#[ignore]
+fn zz_write_check_documents() {
+    for (sample, name) in [
+        (crane_sample(), "check-crane"),
+        (bird_base_sample(), "check-bird-base"),
+        (yakko_sample(), "check-yakko"),
+    ] {
+        let outcome = run_to_completion(&sample);
+        let mut session = FoldSession::new(&sample.document)
+            .unwrap_or_else(|error| panic!("{}: {error}", sample.name));
+        for step in &outcome.steps {
+            session
+                .apply(&step.mv)
+                .unwrap_or_else(|error| panic!("{}: 手順の再適用: {error}", sample.name));
+        }
+        let ids: Vec<_> = outcome.steps.iter().map(|step| step.mv.id).collect();
+        let path = format!(
+            "{}/../../verification/{name}.ori3",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let text = serde_json::to_string_pretty(session.document()).expect("作品を書き出せない");
+        std::fs::write(&path, &text).unwrap_or_else(|error| panic!("{path}: {error}"));
+
+        // 製品の読み取り機と同じ道で読み直す
+        // (`apps/desktop/src-tauri/src/store.rs::parse_document` は、
+        //  `schema_version` を確かめてから `SavedDocument` へ読み込む)。
+        let saved = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{path}: {error}"));
+        let value: serde_json::Value =
+            serde_json::from_str(&saved).unwrap_or_else(|error| panic!("{path}: {error}"));
+        assert_eq!(
+            value.get("schema_version").and_then(serde_json::Value::as_u64),
+            Some(u64::from(ori3_model::SCHEMA_VERSION)),
+            "{path}: 製品の読み取り機が受け付ける版ではない"
+        );
+        let reread: ori3_model::SavedDocument = serde_json::from_value(value)
+            .unwrap_or_else(|error| panic!("{path}: 製品の読み取り機で読めない: {error}"));
+        assert_eq!(
+            &reread.document,
+            session.document(),
+            "{path}: 読み直したら中身が変わった"
+        );
+        println!(
+            "WROTE {name}.ori3 標本={} ids={ids:?} stop={:?} 手数={} 面={} バイト={} length={:.16} width={:.12} position={:.6}",
+            sample.name,
+            outcome.stop,
+            outcome.steps.len(),
+            session.faces().len(),
+            text.len(),
+            outcome.best_gaps.length,
+            outcome.best_gaps.width,
+            outcome.best_gaps.position,
         );
     }
 }

@@ -78,49 +78,55 @@ const PLACEMENT_TOL: f64 = 1e-9;
 
 /// 方向付き単線・層packet・つぶし／花弁の候補を作るか。
 ///
-/// **いまは作らない。理由は実測である**(2026-08-22 再測定、最適化あり、
-/// 既定12状態・分岐3・深さ8)。
+/// **作る。** 利用者の指示(2026-08-23)である。
 ///
-/// | 標本 | 作らない(現在) | 作る |
+/// # なぜ作るのか
+///
+/// 作らないと、**利用者は花弁折りやつぶし折りを使う折り方を一度も提案されない**。
+/// 花弁折り・つぶし折りは実際の紙で普通に折る操作なので、
+/// `docs/requirements-definition.md` §2 の
+/// 「**実際の紙で折れる操作はすべてアプリで表現できなければならない**」に反する。
+///
+/// 2026-08-22 の時点では「作っても3標本のどれも良くならず、時間だけが12.6倍になる」
+/// という実測を根拠に作らない設定にしていた。**その実測は正しかったが、
+/// 良くならなかった理由は2つの取り違えだった**(下記)。取り違えを直したので、
+/// 作ったほうが良くなる。
+///
+/// # 直した2つの取り違え(2026-08-23。`scratchpad/petal-tear-cause-report.md`)
+///
+/// 1. [`PART_LAYER_SKIP_MARK`] — `flat_motion` が**動きの部品ごと**に出す
+///    「その部品に掛からない層を外した」知らせを、「折り上がりが指定と違う」と
+///    誤読して候補を捨てていた。**鳥の基本形を完成させる花弁折りが、これで消えていた。**
+/// 2. [`crate::search`] の `PREPARATION_TURN` — 花弁折りでできた状態が
+///    「準備手の状態」として**常に後回し**にされ、状態上限12に達するまで
+///    一度も広げられなかった。**粗い順位では1位に付けていた。**
+///
+/// # 実測(2026-08-23、最適化あり、既定12状態・分岐3・深さ8、10回)
+///
+/// | 標本 | 作らない | **作る(現在)** |
 /// |---|---|---|
-/// | 折り鶴 | `GoalReached` 5手 `[16,3,28,31,32]` | `GoalReached` 6手 `[16,29,30,3,28,32]` |
-/// | やっこさん | `GoalReached` 1手 `[8]` | `GoalReached` 1手 `[8]` |
-/// | 鳥の基本形 | `StateCap` 長さ **0.7071067811865483** | `StateCap` 長さ **0.7071067811865483** |
-/// | 受け入れ検査の時間 | **21.91秒** | **275.92秒(12.6倍)** |
+/// | 折り鶴 | `GoalReached` 5手 `[16,3,28,31,32]` 長さ0.3591209848302908 | **`GoalReached`** 6手 `[16,29,30,3,28,32]` 長さ**0.3591209848302908** |
+/// | やっこさん | `GoalReached` 1手 `[8]` | **`GoalReached`** 1手 `[8]` |
+/// | 鳥の基本形 | `StateCap` 長さ **0.7071067811865483**(未完成) | **`GoalReached`** 5手 `[2,13,7,154,13]` 長さ **0.3535533905932740**(完成) |
 ///
-/// **3標本のどれも、作ったほうが良くならない。** 完成する2標本は
-/// 4つの隔たりが15桁まで同じ値で、鳥の基本形の長さも1桁も動かない。
-/// 変わるのは時間だけで、**12.6倍**遅くなる。
-/// `crates/ori3-propose/tests/acceptance.rs` の生成状態数の上限24も、
-/// 作ると鳥が36件になって超える(上限は「作らない」ときの実測
-/// 折り鶴12・やっこ4・鳥15から決めた値である)。
+/// **鳥の基本形が初めて完成する。** 4つの隔たりは
+/// 数 `0.000000` / 長さ `0.3535533905932740` / 太さ `0.000000000000` / 位置 `0.125000` で、
+/// すべて [`CompletionTolerance::DEFAULT`](crate::search::CompletionTolerance::DEFAULT) の内側。
+/// 折り鶴・やっこさんの4つの隔たりは**16桁とも作らないときと同じ**である。
 ///
-/// **コードは消していない。** 鳥の基本形の参照手順は、この3種のうち
-/// つぶし折りと花弁折りを必要とする。
+/// # 費用(実測。10回、最適化あり)
 ///
-/// ## 鳥の基本形が完成しない理由(2026-08-23に測り直した。**前の記録は誤りだった**)
+/// | 標本 | 1回の探索 |
+/// |---|---|
+/// | 折り鶴 | 平均 **92.939秒**(最小 89.975 / 最大 99.804) |
+/// | 鳥の基本形 | 平均 **4.958秒**(最小 4.467 / 最大 5.496) |
+/// | やっこさん | 平均 **0.204秒** |
 ///
-/// 前はここに「残っている障害は花弁折りの折り途中の自己交差だけ」と書いてあった。
-/// 測り直した結果、**それは理由ではない**。
-///
-/// 1. 花弁折りの候補が落ちる理由は1つではない。鳥の基本形の探索経路で
-///    「平らに畳めない」**62件**に対し、面の数で落ちていたのは**16件**だった。
-/// 2. 面の数で落とすのをやめても(この版で直した。[`face_count_problem`])、
-///    **鳥の基本形の長さは16桁すべて同じまま動かない**。上限を製品の
-///    状態12・分岐3・深さ8 から 120・8・10 まで広げても変わらなかった
-///    (76状態展開・444状態生成)。**上限が足りないのでもない。**
-/// 3. 参照と同じ形の花弁折り(既存の5本を閉じる手)は、いまは
-///    **`t = 1.00` の1点だけ**で落ちる。`crates/ori3-layers/src/replay.rs` が
-///    「形が展開図から求まりませんでした」と警告する、つまり
-///    **折り上がりの姿勢をソルバーが解けていない**。`t = 0.00` と `t = 0.50` は警告0。
-///
-/// 長さの隔たり `0.70710678` は、4つの先端の長さが**すべて 1.0 のまま**であることを
-/// 意味する(目標は `0.41421356 / 1.0 / 0.41421356 / 1.0`)。
-/// **花弁折りが短くするはずの2本が、一度も短くなっていない。**
-///
-/// 残る障害は `ori3-layers` 側にある。詳細は
-/// `scratchpad/search-growing-creases-report.md`。
-const WITH_EXTRA_CANDIDATES: bool = false;
+/// 作らないときは折り鶴2.213秒・鳥0.579秒・やっこ0.094秒だったので、
+/// **折り鶴で約42倍**重い。上限の見直しは
+/// [`SearchBudget::MAX_MILLIS`](crate::search::SearchBudget::MAX_MILLIS) と
+/// `apps/desktop/src-tauri/src/commands.rs::PLAN_BUDGET` のコメントに実測つきで残した。
+const WITH_EXTRA_CANDIDATES: bool = true;
 
 /// 折る途中の姿勢を何点見るか。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -938,7 +944,7 @@ impl FoldSession {
         if let Some(blocking) = result
             .warnings
             .iter()
-            .find(|warning| warning_means_the_fold_was_not_as_requested(warning))
+            .find(|warning| packet_technique_warning_is_blocking(warning))
         {
             return Err(format!("packet技法が指定どおりに折れなかった: {blocking}"));
         }
@@ -2548,6 +2554,63 @@ fn affected_lines(fold_lines: &[FoldLine], ids: &[usize]) -> Vec<usize> {
 /// 鳥の基本形・深さ2の花弁折り2件(面 14 → 15)は、3姿勢すべてで飛ばした手順0・
 /// 警告0だったのに、この1行だけで落ちていた。
 /// 方向付き単線は、鳥の基本形の最初の状態で**49候補中20件(41%)**が同じ理由で落ちていた。
+/// `flat_motion` が**動きの部品ごと**に出す「その部品の領域に掛からない層を外した」知らせ。
+///
+/// # なぜ、この1件だけを別扱いにするのか
+///
+/// まったく同じ文面が2か所から出るが、**意味が違う**。
+///
+/// | 出どころ | 意味 |
+/// |---|---|
+/// | `crates/ori3-layers/src/fold_through.rs:300` | **1回の折り**で、頼んだ層が折られなかった。本当に「頼んだ手と違う」 |
+/// | `crates/ori3-layers/src/flat_motion.rs:604` | **動きの部品(`MotionPart`)ごと**に、その部品の領域に掛からない層を外した |
+///
+/// [`FoldSession::apply_packet_technique`] が呼ぶ技法(`squash`・`petal`)は、
+/// **`flat_motion` しか呼ばない**(`crates/ori3-layers/src/techniques.rs` の
+/// `squash`・`petal` は、どちらも `flat_motion` を1回呼ぶだけで `fold_through` を呼ばない)。
+/// したがって、この入口へ届くこの文面は**必ず後者の意味**である。
+///
+/// 花弁折りの動きは「右の羽・左の羽・先端・袋」など**複数の部品**でできている。
+/// 掴んだ紙(open panel)の一部の面が、ある部品の領域に掛からないのは**当たり前**で、
+/// それを「折り上がりが指定と違う」と読むのは誤読である。
+///
+/// # 誤読していたことの実測(2026-08-23。`scratchpad/petal-tear-cause-report.md`)
+///
+/// 鳥の基本形で、予備基本形の状態(手順 `[2, 7]` の後)に現れる花弁折りの候補は4件で、
+/// **4件とも裂け0本・折り線7本・そのうち `0°`(袋の口を開く)が2本**、
+/// つまり**参照どおりの花弁折りとまったく同じ記録**だった。
+/// ところが、そのうち2件(掴んだ紙が4面ある側)がこの知らせを出したため落とされていた。
+/// **落とされていた2件が、鳥の基本形を完成させる手だった**
+/// (その2件を通すと、花弁折り2回で4つの隔たりがすべて `0.000000` になる)。
+///
+/// # 取りこぼしを見落とさないための担保
+///
+/// - 「指定した層が**まったく動かなかった**」場合は、`petal` 自身が
+///   **別の警告**を出す(`techniques.rs` の「…折り線の手前側に掛かっていないため動きません」)。
+///   その文面は [`NOT_AS_REQUESTED_MARKS`](ori3_layers::fold_through::NOT_AS_REQUESTED_MARKS) に入っていないので、**もともと落とす理由にしていない**。
+/// - 折り上がりが平らに畳めているかは [`torn_creases`] が**測って**判定する。
+/// - 折り途中で本当に折れるかは [`FoldSession::verify_successor`] の21姿勢の走査
+///   (面の欠け・非有限・裂け・すり抜け・再生の警告)が判定する。
+///
+/// # 文面に頼っていることの後始末
+///
+/// `ori3-layers` は「どの警告か」を型で区別せず、文字列だけを返す。
+/// そのため、ここも文面で見分けるしかない。**文面が変わったときに黙って
+/// 誤読へ戻らないよう**、この定数が [`NOT_AS_REQUESTED_MARKS`](ori3_layers::fold_through::NOT_AS_REQUESTED_MARKS) の中に
+/// 実在し続けることを検査
+/// (`the_part_layer_skip_notice_is_still_one_of_the_not_as_requested_marks`)で固定する。
+/// 見つからなくなったら検査が落ちるので、そのときは文面ではなく
+/// **`flat_motion` 側で知らせの種類を分ける**ことを検討する。
+const PART_LAYER_SKIP_MARK: &str = "折り線の可動側に掛かっていないため除外しました";
+
+/// この警告を理由に、packet技法の候補を落とすか。
+///
+/// [`NOT_AS_REQUESTED_MARKS`](ori3_layers::fold_through::NOT_AS_REQUESTED_MARKS) のうち、[`PART_LAYER_SKIP_MARK`] だけを除く。
+/// 理由は [`PART_LAYER_SKIP_MARK`] のコメントに書いた。
+fn packet_technique_warning_is_blocking(warning: &str) -> bool {
+    warning_means_the_fold_was_not_as_requested(warning) && !warning.contains(PART_LAYER_SKIP_MARK)
+}
+
 /// 折り目の両側の紙が「同じ場所にある」とみなす距離(紙の長辺=1)。
 ///
 /// `ori3-layers` が技法の中で使う `JOIN_EPS` と同じ値である。
@@ -3161,10 +3224,11 @@ mod tests {
     use ori3_model::{Document, DriverLine, EdgeKind, FaceId, FoldStep, Paper, TechniqueKind};
 
     use super::{
-        CandidateKey, FoldSession, MAX_LINES, PacketEdgeRelation, PacketTechnique, PoseProblem,
-        PoseScan, activated_edges, closed_effect, coincident_line_components,
-        coincident_line_sets, exposed_packets, exposed_packets_until, face_count_problem,
-        folded_bit, folded_bit_is_set, resolve_driver_edges, saved_angle_targets, torn_creases,
+        CandidateKey, FoldSession, MAX_LINES, PART_LAYER_SKIP_MARK, PacketEdgeRelation,
+        PacketTechnique, PoseProblem, PoseScan, activated_edges, closed_effect,
+        coincident_line_components, coincident_line_sets, exposed_packets, exposed_packets_until,
+        face_count_problem, folded_bit, folded_bit_is_set, packet_technique_warning_is_blocking,
+        resolve_driver_edges, saved_angle_targets, torn_creases,
     };
 
     use std::collections::BTreeSet;
@@ -3664,5 +3728,176 @@ mod tests {
             Vec::<usize>::new(),
             "この手より前から閉じていた線を、この手の効果として数えた"
         );
+    }
+
+    /// `flat_motion` が部品ごとに出す層の除外は、候補を落とす理由にしない。
+    ///
+    /// 残る4つの目印は、いままでどおり落とす理由にする。
+    /// **どの文面をどう扱うかの一覧**であり、片方だけを直すと落ちる。
+    #[test]
+    fn only_the_notices_that_change_the_finished_shape_stop_a_packet_technique() {
+        // 落とす: 折り上がりが指定と違ってしまうもの。
+        for blocking in [
+            "山谷と重なり順が食い違うため、展開図から折り直したときに形が変わります",
+            "中心線から支点が決められません",
+            "新しくできた面の親面が特定できないため、置き去りにしました",
+            "対象層 7 は現在の面に存在しないため除外しました",
+        ] {
+            assert!(
+                packet_technique_warning_is_blocking(blocking),
+                "折り上がりが変わる知らせを通してしまった: {blocking}"
+            );
+        }
+
+        // 落とさない: 動きの部品ごとに、その部品へ掛からない層を外しただけのもの。
+        let skipped = format!("対象層 10 は{PART_LAYER_SKIP_MARK}");
+        assert!(
+            !packet_technique_warning_is_blocking(&skipped),
+            "部品ごとの層の除外で候補を落としている(鳥の基本形が完成しなくなる): {skipped}"
+        );
+
+        // 「指定どおりに折ったうえでの注意」は、もともと落とす理由にしていない。
+        for passing in [
+            "折り線の一部に反対向きの折り線(山/谷)が既にあります(辺ID 29)。折り上がりは同じです",
+            "この花弁折りでは、指定した層 8 が折り線の手前側に掛かっていないため動きません(指定のまま続行します)",
+            "折り目(辺ID 21)の両側の紙が離れているため、このままでは紙が裂けます(指定のまま続行します)",
+        ] {
+            assert!(
+                !packet_technique_warning_is_blocking(passing),
+                "折れるはずの手を文面だけで落としている: {passing}"
+            );
+        }
+    }
+
+    /// [`PART_LAYER_SKIP_MARK`] が `ori3-layers` の一覧に実在し続けること。
+    ///
+    /// `ori3-layers` は警告の種類を型で分けず、文字列だけを返す。文面が変わると
+    /// この目印は誰にも当たらなくなり、**黙って元の誤読へ戻る**。
+    /// そうなったらここで落として気づけるようにする。
+    #[test]
+    fn the_part_layer_skip_notice_is_still_one_of_the_not_as_requested_marks() {
+        assert!(
+            ori3_layers::fold_through::NOT_AS_REQUESTED_MARKS.contains(&PART_LAYER_SKIP_MARK),
+            "`ori3-layers` の文面が変わった。{PART_LAYER_SKIP_MARK:?} が {:?} の中に無い。\
+             文面で見分けるのをやめ、`flat_motion` 側で知らせの種類を分けることを検討する",
+            ori3_layers::fold_through::NOT_AS_REQUESTED_MARKS
+        );
+    }
+
+    /// 掴んだ紙の一部が動かない花弁折りでも、折り上がりが裂けないなら候補にする。
+    ///
+    /// # なぜこの検査が要るか
+    ///
+    /// 鳥の基本形を完成させる花弁折りは、掴んだ紙(open panel)が4面あり、
+    /// そのうち1面が動きの部品の領域に掛からない。`flat_motion` はその面を外して
+    /// 知らせを出すが、**折り上がりは参照どおりの花弁折りとまったく同じ**である
+    /// (裂け0本・折り線7本・袋の口を `0°` で記録)。
+    /// この知らせで候補を落としていたため、**鳥の基本形が完成しなかった**
+    /// (`scratchpad/petal-tear-cause-report.md`)。
+    ///
+    /// # 標本
+    ///
+    /// `tests/fixtures/cp-bird-base.json`(コミット済み)を、記録の手順の先頭2手
+    /// `[2, 7]` だけ進めた予備基本形の状態。そこで露出した紙の panel をそのまま
+    /// フラップにして、参照と同じ中心線 `[[0,1],[0.5,0.5]]` で花弁折りする。
+    #[test]
+    fn a_petal_that_leaves_part_of_the_panel_still_is_kept_as_a_candidate() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/cp-bird-base.json");
+        let text = std::fs::read_to_string(path).expect("鳥の基本形の展開図を読めない");
+        let cp: ori3_model::CreasePattern =
+            serde_json::from_str(&text).expect("鳥の基本形の展開図を解釈できない");
+        let mut document = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        document.cp = cp;
+
+        let mut session = FoldSession::new(&document).expect("鳥の基本形を読み込めない");
+        for id in [2usize, 7] {
+            let mv = session
+                .verify_move(id, PoseScan { steps: 1 })
+                .unwrap_or_else(|| panic!("記録の手順の {id} 手目が折れない"));
+            session.apply(&mv).expect("記録の手順を進められない");
+        }
+
+        // 露出している紙のまとまり(panel)のうち、2面以上のものを1つ選ぶ。
+        let closed = session.closed.clone();
+        let panels = session
+            .open_panel_map_until(&closed, &mut || false)
+            .expect("紙のまとまりを作れない");
+        let mut panel = panels
+            .values()
+            .filter(|panel| panel.len() >= 2)
+            .cloned()
+            .collect::<Vec<_>>();
+        panel.sort();
+        panel.dedup();
+        let flap = panel
+            .into_iter()
+            .find(|panel| {
+                let input = TechniqueInput {
+                    flap: panel.clone(),
+                    line: [[0.0, 1.0], [0.5, 0.5]],
+                    reference_point: [0.0, 1.0],
+                    open_to_back: Some(false),
+                    polygon: None,
+                    center: None,
+                };
+                let mut cp = session.document.cp.clone();
+                petal(&mut cp, &session.faces, &session.state, &input).is_ok_and(|result| {
+                    result
+                        .warnings
+                        .iter()
+                        .any(|warning| warning.contains(PART_LAYER_SKIP_MARK))
+                })
+            })
+            .expect("掴んだ紙の一部が動かない花弁折りが1つも無い(標本の前提が崩れた)");
+
+        let input = TechniqueInput {
+            flap: flap.clone(),
+            line: [[0.0, 1.0], [0.5, 0.5]],
+            reference_point: [0.0, 1.0],
+            open_to_back: Some(false),
+            polygon: None,
+            center: None,
+        };
+        let mut cp = session.document.cp.clone();
+        let result = petal(&mut cp, &session.faces, &session.state, &input)
+            .expect("参照と同じ中心線の花弁折り");
+
+        // 1. 掴んだ紙の一部が動かないという知らせが、確かに出ている。
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|warning| warning.contains(PART_LAYER_SKIP_MARK)),
+            "この標本ではもう部品ごとの層の除外が起きない(検査の前提が崩れた): {:?}",
+            result.warnings
+        );
+
+        // 2. それでも折り上がりは裂けていない(**測った形**で判定する)。
+        let torn = torn_creases(&cp, &result.state);
+        assert!(
+            torn.is_empty(),
+            "掴んだ紙の一部が動かない花弁折りで紙が裂けた: {torn:?}"
+        );
+
+        // 3. 袋の口を開く動きが記録されている(＝本物の花弁折りである)。
+        assert!(
+            opened_lines(&result.step) >= 1,
+            "袋の口を開く動きが1本も記録されていない(折り線 {}本、角 {:?})",
+            result.step.drivers.len(),
+            result
+                .step
+                .drivers
+                .iter()
+                .map(|driver| driver.target_angle_deg)
+                .collect::<Vec<_>>()
+        );
+
+        // 4. だから、姿勢を見る前に候補から落とさない。
+        session
+            .apply_packet_technique(PacketTechnique::Petal, input)
+            .expect("掴んだ紙の一部が動かないだけの花弁折りを落としている");
     }
 }

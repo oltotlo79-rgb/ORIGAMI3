@@ -27,6 +27,7 @@ vi.mock("../../ipc/client", () => ({
   recoveryCheck: vi.fn(),
   recoveryRestore: vi.fn(),
   proposalGenerate: vi.fn(),
+  proposalProgress: vi.fn(),
   proposalApply: vi.fn(),
 }));
 
@@ -264,6 +265,89 @@ afterEach(() => {
 });
 
 describe("提案ウィザード", () => {
+  it("計算中だけ進み具合を出し、終わったら消す(常設UIを増やさない)", () => {
+    useAppStore.getState().openProposal();
+    // 計算していないときは出さない
+    const idle = render(<ProposalWizard />);
+    expect(
+      idle.container.querySelector("[data-proposal-progress]"),
+    ).toBeNull();
+    cleanup();
+
+    // 計算中は「折り方を考えています…」と「2/4 件」を出す
+    useAppStore.setState({
+      proposalBusy: true,
+      proposalProgress: { done: 2, total: 4 },
+    });
+    const busy = render(<ProposalWizard />);
+    const box = busy.container.querySelector<HTMLElement>(
+      "[data-proposal-progress]",
+    );
+    expect(box).not.toBeNull();
+    expect(box!.textContent).toContain("折り方を考えています…");
+    expect(
+      box!.querySelector("[data-proposal-progress-count]")?.textContent,
+    ).toBe("2/4 件");
+    // 棒の伸びも件数と合う
+    expect(
+      box!
+        .querySelector("[data-proposal-progress-fill]")
+        ?.getAttribute("data-proposal-progress-fill"),
+    ).toBe("50");
+    // 画面に出す文字へ内部用語を出さない(CLAUDE.md §11.1)
+    expect(box!.textContent ?? "").not.toMatch(
+      /検証|ソルバー|探索|骨格|充填|節点|hard|soft|warm[\s-]+start|イテレーション|姿勢|自己交差|裂け/iu,
+    );
+    cleanup();
+
+    // まだ件数が届いていない間は「準備中」
+    useAppStore.setState({ proposalBusy: true, proposalProgress: null });
+    const waiting = render(<ProposalWizard />);
+    expect(
+      waiting.container.querySelector("[data-proposal-progress-count]")
+        ?.textContent,
+    ).toBe("準備中");
+    cleanup();
+
+    // 終わったら消える
+    useAppStore.setState({
+      proposalBusy: false,
+      proposalProgress: null,
+    });
+    const done = render(<ProposalWizard />);
+    expect(done.container.querySelector("[data-proposal-progress]")).toBeNull();
+  });
+
+  it("計算が終わったら、棒を最後まで伸ばしてから消す", async () => {
+    // 最後の1件が終わってから計算が返るまでは1ミリ秒ほどしかないので、
+    // 150msごとの読み取りでは最後の「4/4 件」に間に合わない。
+    // 実測(2026-08-24、先端12本、最適化ありのアプリを100msごとに読んだ)では
+    // 0/4→1/4→2/4→3/4 と伸びたあと、棒が **3/4のまま消えた**。
+    // 利用者には棒が途中で終わったように見えるので、
+    // 計算が返った時点で満杯にしてから消す。
+    useAppStore.getState().openProposal();
+    // 読み取りは最後まで「3/4」しか返さない(実機で起きていた形)
+    vi.mocked(ipc.proposalProgress).mockResolvedValue({ done: 3, total: 4 });
+    vi.mocked(ipc.proposalGenerate).mockImplementation(
+      () => new Promise((resolve) => setTimeout(() => resolve([]), 400)),
+    );
+
+    const seen: { done: number; total: number }[] = [];
+    const unsubscribe = useAppStore.subscribe((s) => {
+      if (s.proposalProgress) seen.push(s.proposalProgress);
+    });
+    await act(async () => {
+      await useAppStore.getState().generateProposal();
+    });
+    unsubscribe();
+
+    expect(seen.length, "棒の数字が一度も入っていない").toBeGreaterThan(0);
+    expect(seen[seen.length - 1], "棒が途中の数字のまま消えている").toEqual({
+      done: 4,
+      total: 4,
+    });
+  });
+
   it("閉じているときは何も出さない(常設UIを増やさない)", () => {
     const { container } = render(<ProposalWizard />);
     expect(container.firstChild).toBeNull();

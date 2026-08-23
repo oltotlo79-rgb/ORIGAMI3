@@ -33,12 +33,25 @@
 ### 0.2 検査(タスク完了条件に常に含む)
 
 ```powershell
-cargo test --workspace
+# 5つの検査をまとめて実行する。個別のコマンドを直に打たず、必ずこれを使う。
+./scripts/check.ps1
+```
+
+**素の `cargo test --workspace` を直に打たないこと。** `CLAUDE.md` §10.6 の #18〜#20 は、
+最適化なしでは現実的な時間で終わらない(いちばん重いもので約7.5時間)。
+`scripts/check.ps1` はその3件だけを `--skip` し、残りはいままでどおり全部走らせる。
+3件は CI の `performance` ジョブと §10.6 の表が**最適化ありで**走らせるので、
+**どの検査も消えていない**。
+
+`scripts/check.ps1` が実行する5つは次のとおり(内訳は同ファイルの先頭コメント)。
+
+```text
+cargo test --workspace -- --skip <§10.6 の #18〜#20 の3件>
 cargo clippy --workspace --all-targets -- -D warnings
 cd apps/desktop; npm run build; npm run lint; npm run test; cd ../..
 ```
 
-上記をまとめた `scripts/check.ps1` をM0で作成する。**検査が通らない状態でコミットしない。**
+**検査が通らない状態でコミットしない。**
 
 ### 0.3 規律(要件定義書§2より。違反する実装はレビューで差し戻し)
 

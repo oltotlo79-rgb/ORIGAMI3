@@ -21,6 +21,7 @@ import {
   withPinMarks,
   buildTopology,
   clearGroup,
+  contentBoundingBox,
   createContent,
   createHighlightGeometry,
   createHighlightLayer,
@@ -595,6 +596,44 @@ describe("createContent / updateFrame(形の更新)", () => {
     // 面1(頂点3〜5)の3点目だけがz=0.5に動いている
     expect([...positions.slice(15, 18)]).toEqual([0, 1, 0.5]);
     expect([...positions.slice(0, 3)]).toEqual([0, 0, 0]); // 面0は平らのまま
+  });
+
+  it("contentBoundingBoxは頂点座標そのものから範囲を求める(展開図の大きさではない)", () => {
+    // 「視点を戻す」は展開図の大きさ(0,0)〜(1,1)ではなく、実際に表示している
+    // 立体の頂点座標から求めた範囲を基準にする。折る・技法で座標は展開図の
+    // 範囲から離れて動くため、ここが展開図の大きさと食い違うことを確かめる。
+    const doc = makeDoc();
+    const topo = buildTopology(doc, FACES, HINGES);
+    const content = createContent(topo, doc.display);
+    updateFrame(content, null);
+
+    // まだ平ら(展開図どおり)なときは、範囲は展開図の(0,0)〜(1,1)と一致する
+    const flatBox = contentBoundingBox(content);
+    expect(flatBox.min.toArray()).toEqual([0, 0, 0]);
+    expect(flatBox.max.toArray()).toEqual([1, 1, 0]);
+
+    // 面1が展開図の範囲外(x=-2, z=3)まで動いた形に更新する
+    updateFrame(content, {
+      faces: [
+        {
+          face: 1,
+          polygon: [
+            [0, 0, 0],
+            [1, 1, 0],
+            [-2, 1, 3],
+          ],
+          layer: 0,
+          surface_rank: 0,
+        },
+      ],
+      warnings: [],
+    });
+
+    const foldedBox = contentBoundingBox(content);
+    // 面0(頂点0〜2)は展開図どおりのまま(0,0)〜(1,1)、面1の動いた頂点が
+    // x=-2・z=3まで範囲を広げる。展開図の大きさ(0,0)〜(1,1)とはもう一致しない。
+    expect(foldedBox.min.toArray()).toEqual([-2, 0, 0]);
+    expect(foldedBox.max.toArray()).toEqual([1, 1, 3]);
   });
 
   it("立体更新後も黒outlineの端点・反対端・内向きprobeを同じsourceへ同期する", () => {

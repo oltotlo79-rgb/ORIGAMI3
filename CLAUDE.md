@@ -183,10 +183,26 @@ Co-Authored-By: Codex <noreply@openai.com>
 | 15 | **性能(最適化あり)** | `cargo test --release -p ori3-soft --test soft_crane -- --nocapture` |
 | 16 | **性能(最適化あり)** | `cargo test --release -p ori3-propose --test perf_packing -- --nocapture` |
 | 17 | **性能(最適化あり・画面)** | `npm run test -- --maxWorkers=1 --mode=production src/lib/symmetry.test.ts` |
+| 18 | **提案の探索の決定性10回(最適化あり)** | `cargo test --release -p ori3-propose --test acceptance -- completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten --exact --nocapture` |
+| 19 | **提案を通しで折る決定性10回(最適化あり)** | `cargo test --release -p ori3-propose --test end_to_end -- named_sample_completes_end_to_end_and_is_deterministic_ten_out_of_ten --exact --nocapture` |
+| 20 | **重なりの部分集合の候補(最適化あり)** | `cargo test --release -p ori3-propose --test acceptance -- a_safe_coincident_partial_network_appears_after_the_first_fold --exact --nocapture` |
+| 21 | **提案の探索が時間の打ち切りに当たらないこと(最適化あり)** | `cargo test --release -p desktop --lib the_heaviest_proposal_never_hits_the_time_limit -- --nocapture` |
 
-- **#13・#14 について**: この2件は最適化なしでは手元で 476秒 / 175秒 かかる。CIの `checks` ジョブでは `--skip` で外し、`performance` ジョブが最適化ありで走らせる(どちらの検査も消していない)。手元の `cargo test --workspace`(#1)と `scripts/check.ps1` では、いままでどおり最適化なしでも走る。
+- **#13・#14 について**: この2件は最適化なしでは手元で 476秒 / 175秒 かかる。CIの `checks` ジョブでは `--skip` で外し、`performance` ジョブが最適化ありで走らせる(どちらの検査も消していない)。**この2件は**手元の `cargo test --workspace`(#1)と `scripts/check.ps1` では、いままでどおり最適化なしでも走る。
+- **#18〜#20 について**: この3件は最適化なしでは手元で **約7.5時間 / 374秒 / 375秒** かかる(変更前は 587秒 / 30秒 / 6秒)。花弁折り・つぶし折りの候補を既定で作るようにした(`crates/ori3-propose/src/enumerate.rs` の `WITH_EXTRA_CANDIDATES`)ためで、最適化ありなら **1,332秒 / 12秒 / 11秒**(CI換算 合わせて約81分)で済む。**#13・#14 と違い、この3件は手元の `cargo test --workspace`(#1)・`scripts/check.ps1`・`scripts/hooks/pre-commit` からも `--skip` で外してある。最適化なしでは現実的な時間で終わらないためである。** 手元で確かめたいときは上表のコマンド(最適化あり)を使う。**探索の検査でも `search_to_finish` を使うもの(作業24の終点測定など)は影響を受けないので外していない**(`crates/ori3-propose/src/search.rs` の `if completion.is_some()` が、追加の候補を作る場所を囲っている)。
+- **#21について**: この検査は「先端12本(`MAX_LEAVES`の上限)の4候補すべてが、`PLAN_BUDGET`の時間の打ち切り(`max_millis`)に当たらないこと」を主張する。**この主張は最適化ありでしか成り立たない。** 打ち切りは壁時計(`Instant::now()`)なので、最適化なしは最適化ありより16.8〜20.5倍遅く、必ず打ち切りに当たる。実測(2026-08-24、この作業機): 最適化なしでは`cargo test -p desktop --lib`実行時に4候補すべてが`TimeCap`(`[TimeCap, TimeCap, TimeCap, TimeCap]`)。実機でも先端12本の「展開図を作ってもらう」を最適化なしのビルドで確認したところ、4候補中3〜4件が「折り方はまだありません」のまま返り、待ち時間は約30〜38秒だった(最適化ありでの実測は0件/10回・最大13.851秒)。**#18〜#20と同じ扱いとし、手元の`cargo test --workspace`(#1)・`scripts/check.ps1`・`scripts/hooks/pre-commit`からも`--skip`で外してある。** 検査は消していない。`PLAN_BUDGET`の値(`max_millis=30_000`・`max_states=2`・`branch=2`)も変更していない。
 - **性能について**: CIの計算機は手元より**約3.6倍遅い**実測がある。手元の測定値が上限の1/3以下でなければ、CIで落ちる可能性が高いとみなす。
 - **`ci.yml` が変わったら、この表も更新する。** 表と `ci.yml` が食い違っていないかを、`scripts/check-ci.ps1` が自動で確認する。
+
+### 10.6.1 手元とCIでCPUの種類が違う（2026-08-23）
+
+- **事実**: この作業機のRustツールチェインは `aarch64-pc-windows-msvc`（ARM64）である。`.github/workflows/ci.yml` は `runs-on: windows-latest` を使っている。
+- **確かめ方**:
+  - 手元のCPUの種類は `rustc -vV` を実行し、`host:` の行を読めば分かる（実行して確認済み: `host: aarch64-pc-windows-msvc`）。
+  - CI側のCPUの種類は、GitHub Actionsの実際のログを見るまでは分からない。「`windows-latest` は通常x86_64ランナーである」は**推測**であり、断定しない。
+  - `scripts/check-ci.ps1` は**手元の計算機**で走る。手元がARM64である以上、この検査はCI側のCPUの種類（推測: x86_64）とは異なる命令セットで実行されており、**この差を検出できない**。
+- **推測（まだ確かめていない）**: 浮動小数の丸め方はCPUの種類（命令セット）によって変わり得る。したがって、§10.7.7（完全に折った状態の近くで解が計算機ごとに変わり得ると記した失敗）と§10.7.9（測れる折り目の本数が手元50・CI49で1本ずれた失敗）は、CPUの種類の違いが一因である**可能性がある**。これは確かめていない推測であり、原因だと断定するものではない。
+- **したがって**（§10.7.7に既にある定めに、理由が1つ増えたものとして記す）: `check-ci.ps1` の合格を「CIに通る」と報告しない。push後にGitHubの実際の結果を見るまで、CIに通ったとは書かない。
 
 ## 11. リリース時に必ず最新化するもの（2026-08-11 利用者指示）
 
@@ -260,7 +276,8 @@ Co-Authored-By: Codex <noreply@openai.com>
      「終点が同じなら同じ」は折り紙では成り立たない。
 - **仕組みでの対策**:
   - `scripts/hooks/pre-commit` を追加した。`.rs` または `Cargo.toml`/`Cargo.lock` を
-    含むコミットでは `cargo test --workspace` を自動実行し、落ちたらコミットを中止する。
+    含むコミットでは `cargo test --workspace`(§10.6 の #18〜#20 だけ `--skip`)を
+    自動実行し、落ちたらコミットを中止する。
     `scripts/install-hooks.ps1` が pre-commit と pre-push の両方を有効化する。
   - **角度の等価性を扱う変更は、平坦な終点だけでなく途中の姿勢で検査する。**
     `assert_display_order` は99%まで折った時点の上下を見ており、この誤りを実際に捕まえた。

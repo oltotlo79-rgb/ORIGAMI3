@@ -387,6 +387,24 @@ export interface Viewer3DContent {
   owner: SurfaceOwnerSurface;
 }
 
+/**
+ * 表示中の立体が実際に占める範囲(頂点座標そのものから求める)。
+ *
+ * 「視点を戻す」は展開図の大きさ・中心ではなく、必ずこの実測の範囲を基準にする。
+ * 折る・技法で頂点は展開図の(0,0)〜(紙の幅,紙の高さ)から離れた場所へ動くため、
+ * 展開図の大きさを基準にすると立体の一部が画面の外へ出ることがある。
+ * 頂点が1つも無いとき(面が無い等)は空のBox3を返す(呼び出し側でフォールバックする)。
+ */
+export function contentBoundingBox(content: Viewer3DContent): THREE.Box3 {
+  const box = new THREE.Box3();
+  const positions = content.positions;
+  const v = new THREE.Vector3();
+  for (let i = 0; i + 2 < positions.length; i += 3) {
+    box.expandByPoint(v.set(positions[i], positions[i + 1], positions[i + 2]));
+  }
+  return box;
+}
+
 /** 0〜255のRGBをThree.jsの色へ */
 function toColor(rgb: [number, number, number]): THREE.Color {
   return new THREE.Color(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255);
@@ -846,14 +864,48 @@ interface PaperCorner {
   up: number;
 }
 
-/** 直す前の「視点を戻す」が置いていたカメラ距離。いまは紙の大きさの下限に使う。 */
-export function legacyPaperDistance(paperWidth: number, paperHeight: number): number {
+/** 直す前の「視点を戻す」が置いていたカメラ距離相当。立体の大きさの下限に使う。 */
+function legacyBoxDistance(size: THREE.Vector3): number {
   return (
-    (Math.max(paperWidth, paperHeight) / (2 * HALF_FOV_TAN)) * LEGACY_CAMERA_MARGIN
+    (Math.max(size.x, size.y, size.z) / (2 * HALF_FOV_TAN)) * LEGACY_CAMERA_MARGIN
   );
 }
 
-/** 紙の四隅を、紙の中心を原点としてカメラの向きの成分へ分ける。 */
+/** 直す前の「視点を戻す」が置いていたカメラ距離。いまは紙の大きさの下限に使う。 */
+export function legacyPaperDistance(paperWidth: number, paperHeight: number): number {
+  return legacyBoxDistance(new THREE.Vector3(paperWidth, paperHeight, 0));
+}
+
+/**
+ * 立体(bounding box)の8頂点を、その中心を原点としてカメラの向きの成分へ分ける。
+ *
+ * 折り上がった立体は展開図の(0,0)〜(紙の幅,紙の高さ)の範囲や中心には収まらない
+ * (折る・技法で座標が動くため)。視点合わせは常に「実際にいま表示している形の
+ * 広がり」を基準にする必要があり、この関数がその基準になる。
+ */
+export function boxCorners(
+  box: THREE.Box3,
+  dir: THREE.Vector3,
+  right: THREE.Vector3,
+  up: THREE.Vector3,
+): PaperCorner[] {
+  const center = box.getCenter(new THREE.Vector3());
+  const xs = [box.min.x, box.max.x];
+  const ys = [box.min.y, box.max.y];
+  const zs = [box.min.z, box.max.z];
+  const corners: PaperCorner[] = [];
+  for (const x of xs) {
+    for (const y of ys) {
+      for (const z of zs) {
+        const v = new THREE.Vector3(x - center.x, y - center.y, z - center.z);
+        corners.push({ along: v.dot(dir), right: v.dot(right), up: v.dot(up) });
+      }
+    }
+  }
+  return corners;
+}
+
+/** 紙(平らな展開図)の四隅を、紙の中心を原点としてカメラの向きの成分へ分ける。 */
 export function paperCorners(
   paperWidth: number,
   paperHeight: number,
@@ -861,18 +913,15 @@ export function paperCorners(
   right: THREE.Vector3,
   up: THREE.Vector3,
 ): PaperCorner[] {
-  const cx = paperWidth / 2;
-  const cy = paperHeight / 2;
-  const points: [number, number][] = [
-    [0, 0],
-    [paperWidth, 0],
-    [paperWidth, paperHeight],
-    [0, paperHeight],
-  ];
-  return points.map(([x, y]) => {
-    const v = new THREE.Vector3(x - cx, y - cy, 0);
-    return { along: v.dot(dir), right: v.dot(right), up: v.dot(up) };
-  });
+  return boxCorners(
+    new THREE.Box3(
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(paperWidth, paperHeight, 0),
+    ),
+    dir,
+    right,
+    up,
+  );
 }
 
 /**
@@ -966,22 +1015,23 @@ function lowerAxis(
 }
 
 /**
- * 紙全体が3D区画へ収まり、できるだけ大きく、できるだけ左上の案内の札に
+ * 立体全体が3D区画へ収まり、できるだけ大きく、できるだけ左上の案内の札に
  * 隠れない視点を求める。
  *
  * 直す前は縦の画角だけで距離を決めていたため、区画の縦横比を無視していた。
  * ここでは四隅を実際に投影して左右・上下の4方向すべてを見るので、区画が
  * 縦長でも横長でもはみ出さない。
  *
- * 札を避けるのは「紙を小さくしすぎない」範囲だけにする。札が区画の高さの
+ * 札を避けるのは「立体を小さくしすぎない」範囲だけにする。札が区画の高さの
  * 大部分を占める低い区画では避けきれないので、そのときは直す前の大きさを保ったまま、
- * 空いている下側の余りぶんだけ紙を下げる。
+ * 空いている下側の余りぶんだけ立体を下げる。
  *
+ * @param box 実際にいま表示している立体(または紙)が占める範囲。展開図の大きさや
+ *   中心ではなく、常にこの実測の範囲を基準にする(折る・技法で座標が動くため)。
  * @param hintBottomPx 左上の案内の札の下端(区画の上からのCSS px)。0なら札なし。
  */
-export function paperFraming(
-  paperWidth: number,
-  paperHeight: number,
+export function boxFraming(
+  box: THREE.Box3,
   viewWidth: number,
   viewHeight: number,
   hintBottomPx: number,
@@ -989,7 +1039,8 @@ export function paperFraming(
   right: THREE.Vector3,
   up: THREE.Vector3,
 ): PaperFraming {
-  const corners = paperCorners(paperWidth, paperHeight, dir, right, up);
+  const corners = boxCorners(box, dir, right, up);
+  const size = box.getSize(new THREE.Vector3());
   const padding = Math.min(
     VIEW_EDGE_PADDING_PX,
     viewWidth * 0.05,
@@ -999,7 +1050,7 @@ export function paperFraming(
   const legacyBounds = framingBounds(
     corners,
     viewHeight / 2,
-    legacyPaperDistance(paperWidth, paperHeight),
+    legacyBoxDistance(size),
     viewWidth,
     viewHeight,
   );
@@ -1069,6 +1120,35 @@ export function paperFraming(
 }
 
 /**
+ * 紙(平らな展開図)全体を基準にした視点合わせ。{@link boxFraming} の薄い包み。
+ * 折り上がった立体には使わない(実際の広がりと合わないため)。テストと
+ * 「まだ立体が無い」ときのフォールバックのために残す。
+ */
+export function paperFraming(
+  paperWidth: number,
+  paperHeight: number,
+  viewWidth: number,
+  viewHeight: number,
+  hintBottomPx: number,
+  dir: THREE.Vector3,
+  right: THREE.Vector3,
+  up: THREE.Vector3,
+): PaperFraming {
+  return boxFraming(
+    new THREE.Box3(
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(paperWidth, paperHeight, 0),
+    ),
+    viewWidth,
+    viewHeight,
+    hintBottomPx,
+    dir,
+    right,
+    up,
+  );
+}
+
+/**
  * 求めた枠をカメラの投影へ入れる。
  * setViewOffset は「仮想の枠のうち、この四角形だけを区画へ描く」指定で、
  * 縦横比も同時に決まる。区画の大きさが変わるたびに入れ直す。
@@ -1115,11 +1195,12 @@ export interface Viewer3DScene {
    */
   resize(widthPx: number, heightPx: number, hintBottomPx?: number): void;
   /**
-   * 紙全体が見える斜め上の初期位置へカメラを戻す。
-   * hintBottomPx に左上の案内の札の下端(区画の上からのCSS px)を渡すと、
-   * 紙を小さくしすぎない範囲で札の下から逃がす。
+   * 立体全体が見える斜め上の初期位置へカメラを戻す。
+   * box には「いま実際に表示している形」が占める範囲(展開図の大きさではない。
+   * 折る・技法で座標は動く)を渡す。hintBottomPx に左上の案内の札の下端
+   * (区画の上からのCSS px)を渡すと、立体を小さくしすぎない範囲で札の下から逃がす。
    */
-  resetCamera(paperWidth: number, paperHeight: number, hintBottomPx?: number): void;
+  resetCamera(box: THREE.Box3, hintBottomPx?: number): void;
   /** 面と線を差し替える(古い資源は破棄する) */
   setContent(content: Viewer3DContent): void;
   /**
@@ -1645,12 +1726,12 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
   // 寄る・平行移動・ボタンの割り当て(setDrawMode)はOrbitControlsのまま使う。
   controls.enableRotate = false;
 
-  // --- 紙を区画へ収める視点合わせ ------------------------------------------
+  // --- 立体を区画へ収める視点合わせ ------------------------------------------
   // 区画の大きさが変わったときにも合わせ直せるよう、材料を覚えておく。
   // 3Dの状態は保存しないので、この記憶はこの画面が生きている間だけのもの。
+  // box は「いま実際に表示している形」の範囲(展開図の大きさではない)。
   let fitRequest: {
-    paperWidth: number;
-    paperHeight: number;
+    box: THREE.Box3;
     hintBottomPx: number;
   } | null = null;
   let viewWidth = 0;
@@ -1662,7 +1743,7 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
   const framingOffset = new THREE.Vector3();
 
   /**
-   * 覚えている紙の大きさと、渡された視線・画面の上向きから枠を求める。
+   * 覚えている立体の範囲と、渡された視線・画面の上向きから枠を求める。
    * 区画の大きさがまだ届いていない間は求めない(nullを返す)。
    */
   const framingFor = (dir: THREE.Vector3, up: THREE.Vector3): PaperFraming | null => {
@@ -1671,9 +1752,8 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
     if (framingRight.lengthSq() <= MIN_ORBIT_RADIUS ** 2) return null;
     framingRight.normalize();
     framingUp.crossVectors(dir, framingRight).normalize();
-    return paperFraming(
-      fitRequest.paperWidth,
-      fitRequest.paperHeight,
+    return boxFraming(
+      fitRequest.box,
       viewWidth,
       viewHeight,
       fitRequest.hintBottomPx,
@@ -1708,7 +1788,7 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
     }
     applyPaperFraming(camera, framing, viewWidth, viewHeight);
     camera.updateProjectionMatrix();
-    framingCenter.set(fitRequest.paperWidth / 2, fitRequest.paperHeight / 2, 0);
+    fitRequest.box.getCenter(framingCenter);
     const current = framingOffset
       .copy(camera.position)
       .sub(framingCenter)
@@ -1874,15 +1954,23 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
       refitToViewport();
       render();
     },
-    resetCamera(paperWidth, paperHeight, hintBottomPx = 0) {
-      fitRequest = { paperWidth, paperHeight, hintBottomPx };
-      const center = new THREE.Vector3(paperWidth / 2, paperHeight / 2, 0);
+    resetCamera(box, hintBottomPx = 0) {
+      // 空の範囲(頂点が1つも無い等)は原点まわりの小さな箱に置き換え、
+      // NaN/Infinityで視点計算が壊れないようにする。
+      const safeBox = box.isEmpty()
+        ? new THREE.Box3(
+            new THREE.Vector3(-0.5, -0.5, 0),
+            new THREE.Vector3(0.5, 0.5, 0),
+          )
+        : box.clone();
+      fitRequest = { box: safeBox, hintBottomPx };
+      const center = safeBox.getCenter(new THREE.Vector3());
       // 回して傾いたままの上向きを持ち込まないよう、世界の上へ戻してから向き直す。
       camera.up.set(0, 1, 0);
       controls.target.copy(center);
       const framing = framingFor(CAMERA_DIR, camera.up);
       const distance =
-        framing?.distance ?? legacyPaperDistance(paperWidth, paperHeight);
+        framing?.distance ?? legacyBoxDistance(safeBox.getSize(new THREE.Vector3()));
       camera.position.copy(center).addScaledVector(CAMERA_DIR, distance);
       if (framing === null) plainProjection();
       else applyPaperFraming(camera, framing, viewWidth, viewHeight);

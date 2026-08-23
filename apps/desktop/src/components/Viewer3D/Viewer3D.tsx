@@ -49,6 +49,7 @@ import {
 } from "./foldDraw";
 import {
   buildTopology,
+  contentBoundingBox,
   createContent,
   createScene,
   createSoftContent,
@@ -1035,14 +1036,32 @@ export function Viewer3D({ fitRef, statusOverlays }: Props) {
     return Number.isFinite(bottom) && bottom > 0 ? bottom : 0;
   }, []);
 
-  /** 紙全体が見える斜め上の位置へカメラを戻す */
+  /**
+   * 立体全体が見える斜め上の位置へカメラを戻す。
+   *
+   * 基準は展開図の大きさ((0,0)〜(紙の幅,紙の高さ))ではなく、いま実際に
+   * 表示している立体の頂点座標そのものから求めた範囲にする。折る・技法で
+   * 座標は展開図の範囲から離れて動くため、展開図の大きさを基準にすると
+   * 立体の一部が画面の外へ出ることがある(「視点を戻す」を押したときに実際に発生)。
+   * 立体がまだ無い(3D内容を作る前)ときだけ、展開図の平らな大きさへ戻す。
+   */
   const fitCamera = useCallback(() => {
     const scene = sceneRef.current;
     const current = useAppStore.getState().doc;
     if (!scene || !current) return;
-    const [w, h] = paperExtent(current);
-    scene.resetCamera(w, h, hintBottomPx());
-    orbitTargetRef.current.set(w / 2, h / 2, 0);
+    const modelBox = scene.content ? contentBoundingBox(scene.content) : null;
+    const box =
+      modelBox && !modelBox.isEmpty()
+        ? modelBox
+        : (() => {
+            const [w, h] = paperExtent(current);
+            return new THREE.Box3(
+              new THREE.Vector3(0, 0, 0),
+              new THREE.Vector3(w, h, 0),
+            );
+          })();
+    scene.resetCamera(box, hintBottomPx());
+    orbitTargetRef.current.copy(box.getCenter(new THREE.Vector3()));
   }, [hintBottomPx]);
 
   // 新規作成・ファイルを開いた直後は紙全体が見える位置へカメラを戻す
