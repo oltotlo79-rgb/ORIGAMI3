@@ -5,11 +5,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   CreasePattern,
+  DocumentExportKind,
   DocumentView,
   Driver,
   EditOp,
-  ExportKind,
   ExportOptions,
+  FoldIssue,
   FoldAllPreviewOutcome,
   FoldStep,
   Paper,
@@ -166,9 +167,9 @@ export function proposalApply(
 
 /** 展開図を画像ファイルとして保存する(EXP-001 / EXP-002) */
 export function documentExport(
-  kind: ExportKind,
+  kind: DocumentExportKind,
   path: string,
   options: ExportOptions,
-): Promise<void> {
+): Promise<FoldIssue[]> {
   return invoke("document_export", { kind, path, options });
 }

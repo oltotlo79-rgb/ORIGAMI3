@@ -3,7 +3,9 @@
     [switch]$Check,
     # ロードマップ本文は触れず、台帳・手動受入・報告だけを再生成する。
     # 状態の食い違いを調査するときに使う。
-    [switch]$WriteTraceability
+    [switch]$WriteTraceability,
+    # 統括・担当者の追記を残したまま、台帳と手動受入だけを再生成する。
+    [switch]$PreserveReport
 )
 
 # 施策7-D2〜D10: 実装ロードマップのcheckboxと、実在する検査又は手動受入を
@@ -87,7 +89,7 @@ $scopeFallbackTests = @{
 # 人が読んで判断するもの、Zは紙を折る実物比較が必要なものとして扱う。
 $b1ManualAcceptanceClassification = [ordered]@{
     "MANUAL.M2.T2-6b.C05.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "つまんで動かす操作とツールレール" }
-    "MANUAL.M2.T2-6b.C06.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "技法サブメニュー5種" }
+    "MANUAL.M2.T2-6b.C06.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "技法サブメニュー9種" }
     "MANUAL.M2.T2-6c.C01.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "層のずらし表示" }
     "MANUAL.M2.T2-6c.C02.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "つかんで動かす操作" }
     "MANUAL.M2.T2-6c.C03.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "実行前プレビュー" }
@@ -104,6 +106,34 @@ $b1ManualAcceptanceClassification = [ordered]@{
     "MANUAL.M4.T4-5.C03.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "手順図書き出しダイアログ" }
 }
 
+# 専用CDP枠で実行済みのX受入。通常のnpm検査名一覧には含めず、実機・fixture・
+# 復元を伴う手動受入IDの実施記録として再生成する。
+$completedCdpAcceptance = [ordered]@{
+    "MANUAL.M2.T2-6b.C06.SCREEN-ACCEPTANCE" = "技法9種の名称と順序が完全一致"
+    "MANUAL.M2.T2-6c.C04.SCREEN-ACCEPTANCE" = "通常時と途中step時の操作ヒント各1件、標準修飾キー名以外の英字語0"
+    "MANUAL.M3.T3-4.C01.SCREEN-ACCEPTANCE" = "skeleton/candidates/confirm各1回、候補4件、違反数文4件、適用後dialog 0"
+    "MANUAL.M3.T3-4.C02.SCREEN-ACCEPTANCE" = "提案前後でツールレール・展開図・3D・下部パネルが各1"
+    "MANUAL.M4.T4-3.C02.SCREEN-ACCEPTANCE" = "書出しradio 4、PNG長辺1024、補助線checkboxを両状態へ切替"
+}
+
+# Task番号だけで「実装完了」と「コミット→プッシュ」を対応させない。
+# 状態差として検出されたCOMMIT-PUSH 12件は、実コミットとorigin/main祖先をここで
+# 明示対応させる。題名が要件を短く表現している場合も、実際のsubjectを台帳へ残す。
+$commitPushEvidence = [ordered]@{
+    "MANUAL.M2.T2-6c.C09.COMMIT-PUSH" = "85b8ca42b473f16312c4431b880bf569f48538f9"
+    "MANUAL.M2.T2-7.C04.COMMIT-PUSH" = "dfd5ca03dce87fa2ae6cfff5cb05aba5b527d478"
+    "MANUAL.M2.T2-9.C03.COMMIT-PUSH" = "f00628a8d365a01a71421cfeb32467e77bb75ebd"
+    "MANUAL.M3.T3-1.C01.COMMIT-PUSH" = "6ce06fb3ac7cb21bf694a12af2db7a1871710f67"
+    "MANUAL.M3.T3-2.C03.COMMIT-PUSH" = "8532fb2dc74fb8cf606569ca6a00ca212677c1c5"
+    "MANUAL.M3.T3-3.C04.COMMIT-PUSH" = "e66e15152b347e7e0db1a77e7927fa7c83cc5d5d"
+    "MANUAL.M4.T4-1.C03.COMMIT-PUSH" = "e2a4dff1ce092417e3ff722a082d010a738efabf"
+    "MANUAL.M4.T4-2.C03.COMMIT-PUSH" = "98e94ad293beb1b81c4c66acead9ff8d47248171"
+    "MANUAL.M4.T4-3.C03.COMMIT-PUSH" = "8ad7be3511f64dce20c8aaa8b4b1a897e4d5d656"
+    "MANUAL.M4.T4-4.C03.COMMIT-PUSH" = "1b1a0e650cd373fc0a877d7fb133452f767739ba"
+    "MANUAL.M4.T4-5.C04.COMMIT-PUSH" = "eb1c2c5904ebe67c15d2e2331c9533cddf91705c"
+    "MANUAL.M4.T4-6.C03.COMMIT-PUSH" = "7c49536e8807074751cebd7852f801b5f24dd79b"
+}
+
 function ConvertTo-LinkSlug([string]$Id) {
     return $Id.ToLowerInvariant().Replace(".", "-")
 }
@@ -113,6 +143,22 @@ function Get-ManualKind([string]$Text) {
     if ($Text -match "手動確認|実機確認") { return "screen-acceptance" }
     if ($Text -match "Canvas|画面|UI|ビュー|ツールレール|コンテキストパネル|タイムライン|ダイアログ|スライダー|ボタン|プレビュー|ドラッグ|ホバー|ツールチップ|サムネイル|レイアウト|パレット|表示") { return "screen-acceptance" }
     return $null
+}
+
+function Get-CommitPushProof([string]$ManualId) {
+    if (-not $commitPushEvidence.Contains($ManualId)) { return $null }
+    $commit = [string]$commitPushEvidence[$ManualId]
+    $subject = @(& git -C $repoRoot show -s --format=%s $commit)
+    if ($LASTEXITCODE -ne 0 -or $subject.Count -ne 1) {
+        throw "COMMIT-PUSH対応のcommitを読めません: $ManualId -> $commit"
+    }
+    & git -C $repoRoot merge-base --is-ancestor $commit origin/main
+    $onMain = $LASTEXITCODE -eq 0
+    return [pscustomobject]@{
+        hash = $commit
+        subject = [string]$subject[0]
+        origin_main_ancestor = $onMain
+    }
 }
 
 function Test-ListedName([string]$Inventory, [string]$Name) {
@@ -207,6 +253,9 @@ for ($index = 0; $index -lt $roadmapLines.Count; $index++) {
                 evidence_type = "preexisting-d1"
                 test_name = $null
                 manual_id = $null
+                commit_hash = $null
+                commit_subject = $null
+                commit_main_ancestor = $null
                 progress_state = "historical-link-in-M0-evidence-table"
                 progress_task_applicable = $false
                 progress_task_id = $null
@@ -232,10 +281,22 @@ for ($index = 0; $index -lt $roadmapLines.Count; $index++) {
         $manualKind = Get-ManualKind $checkboxText
         $testName = $null
         $manualId = $null
+        $commitProof = $null
+        $commitHash = $null
+        $commitSubject = $null
+        $commitMainAncestor = $null
         if ($null -ne $manualKind) {
             $manualId = "MANUAL.$linkId.$($manualKind.ToUpperInvariant())"
             $evidenceId = $manualId
             $evidenceType = "manual"
+            if ($manualKind -eq "commit-push") {
+                $commitProof = Get-CommitPushProof $manualId
+                if ($null -ne $commitProof) {
+                    $commitHash = $commitProof.hash
+                    $commitSubject = $commitProof.subject
+                    $commitMainAncestor = $commitProof.origin_main_ancestor
+                }
+            }
         }
         else {
             if ($taskTests.ContainsKey($taskKey)) { $testName = $taskTests[$taskKey] }
@@ -261,7 +322,23 @@ for ($index = 0; $index -lt $roadmapLines.Count; $index++) {
         }
         $progressState = "consistent"
         $explicitManualConfirmation = $checkboxText -match "手動確認|実機確認"
-        if ($checkboxState -eq "unchecked" -and $progressTaskMatch -and -not $explicitManualConfirmation) {
+        # 本文に手動確認を含むものは、進捗Taskとの状態差ではなく受入未実施として残す。
+        # それ以外のCOMMIT-PUSHだけが、今回のC分類どおり明示commit対応を必要とする。
+        $requiresExplicitCommitProof = $manualKind -eq "commit-push" -and $checkboxState -eq "unchecked" -and $progressTaskMatch -and -not $explicitManualConfirmation
+        if ($requiresExplicitCommitProof) {
+            # 履歴証拠はTask番号では進捗と結ばない。明示したcommitの本線祖先だけを使う。
+            $progressTaskApplicable = $false
+            if ($null -eq $commitProof) {
+                $progressState = "commit-evidence-mapping-required"
+            }
+            elseif (-not $commitProof.origin_main_ancestor) {
+                $progressState = "commit-evidence-not-on-origin-main"
+            }
+            else {
+                $progressState = "commit-evidence-verified"
+            }
+        }
+        elseif ($checkboxState -eq "unchecked" -and $progressTaskMatch -and -not $explicitManualConfirmation) {
             $progressState = "unchecked-but-progress-task-exists"
         }
         elseif ($checkboxState -eq "unchecked" -and $evidenceType -eq "test") {
@@ -282,11 +359,14 @@ for ($index = 0; $index -lt $roadmapLines.Count; $index++) {
             evidence_id = $evidenceId
             evidence_type = $evidenceType
             test_name = $testName
-                manual_id = $manualId
-                progress_state = $progressState
-                progress_task_applicable = $progressTaskApplicable
-                progress_task_id = $progressTaskId
-                progress_task_recorded = $progressTaskMatch
+            manual_id = $manualId
+            commit_hash = $commitHash
+            commit_subject = $commitSubject
+            commit_main_ancestor = $commitMainAncestor
+            progress_state = $progressState
+            progress_task_applicable = $progressTaskApplicable
+            progress_task_id = $progressTaskId
+            progress_task_recorded = $progressTaskMatch
             })
 
         if ($Update) {
@@ -318,6 +398,9 @@ $records.Add([pscustomobject][ordered]@{
     evidence_type = "manual"
     test_name = $null
     manual_id = "MANUAL.M6.ACCEPTANCE.C01.FULL-ACCEPTANCE"
+    commit_hash = $null
+    commit_subject = $null
+    commit_main_ancestor = $null
     progress_state = "manual-acceptance-required"
     progress_task_applicable = $false
     progress_task_id = $null
@@ -343,7 +426,17 @@ $scopeCounts = [ordered]@{}
 foreach ($scopeName in $expectedCheckboxCounts.Keys) {
     $scopeCounts[$scopeName] = @($checkboxRecords | Where-Object { $_.scope -eq $scopeName }).Count
 }
-$statusDisagreements = @($checkboxRecords | Where-Object { $_.progress_state -eq "unchecked-but-progress-task-exists" })
+$statusDisagreements = @($checkboxRecords | Where-Object {
+    $_.progress_state -in @(
+        "unchecked-but-progress-task-exists",
+        "commit-evidence-mapping-required",
+        "commit-evidence-not-on-origin-main"
+    )
+})
+$verifiedCommitEvidence = @($checkboxRecords | Where-Object { $_.progress_state -eq "commit-evidence-verified" })
+$unverifiedCommitEvidence = @($checkboxRecords | Where-Object {
+    $_.progress_state -in @("commit-evidence-mapping-required", "commit-evidence-not-on-origin-main")
+})
 $uncheckedWithTests = @($checkboxRecords | Where-Object { $_.progress_state -eq "unchecked-with-test-link" })
 # 逆方向: ロードマップは完了だが、進捗の日時見出しに同じTaskの完了記録がない。
 # 作業見出しは進捗Taskと一対一に対応しないため、ここでは数えない。
@@ -439,13 +532,28 @@ foreach ($record in ($manualRecords | Sort-Object manual_id)) {
     $manualMarkdown.Add("## $($record.manual_id)")
     if ($record.manual_id -match "COMMIT-PUSH$") {
         $manualMarkdown.Add("1. ``docs/implementation-roadmap.md`` の ``$($record.id)`` と同じTaskを確認する。")
-        $manualMarkdown.Add("2. 統括が指定されたコミット題名と進捗記録を履歴で照合し、リモート本線の祖先であることを確認する。")
-        $manualMarkdown.Add("3. 題名・確認日・結果を記録し、確認不能なら合格にしない。")
+        if ($null -ne $record.commit_hash) {
+            $manualMarkdown.Add("2. 明示対応commit: ``$($record.commit_hash)``（題名: $($record.commit_subject)）。")
+            $manualMarkdown.Add("3. ``git merge-base --is-ancestor $($record.commit_hash) origin/main`` の確認結果: ``$($record.commit_main_ancestor)``。")
+            $manualMarkdown.Add("4. この対応はTask番号だけで推測していない。題名・確認日・結果を記録し、祖先でなければ合格にしない。")
+        }
+        else {
+            $manualMarkdown.Add("2. 統括が指定されたコミット題名と進捗記録を履歴で照合し、リモート本線の祖先であることを確認する。")
+            $manualMarkdown.Add("3. 題名・確認日・結果を記録し、確認不能なら合格にしない。")
+        }
     }
     elseif ($record.manual_id -match "SCREEN-ACCEPTANCE$") {
-        $manualMarkdown.Add("1. 統括が画面を同梱した版を1つだけ起動し、checkbox本文の操作を行う。")
-        $manualMarkdown.Add("2. 本文にある表示、操作結果、日本語の案内を目視し、画面又は撮影記録への参照を残す。")
-        $manualMarkdown.Add("3. 操作不能、英語表示、表示崩れがあれば不合格として進捗を書き換えずに報告する。")
+        if ($completedCdpAcceptance.Contains($record.manual_id)) {
+            $manualMarkdown.Add("1. 2026-08-26に専用CDP枠で実行済み。実行本体: ``apps/desktop/tests-live/doc-link-b1-cdp.mjs``。")
+            $manualMarkdown.Add("2. 実測結果: $($completedCdpAcceptance[$record.manual_id])。")
+            $manualMarkdown.Add("3. PID・実行ファイルSHA-256・fixture SHA-256を照合し、終了時に指定作品、道具、dialog、capture属性、viewportを復元した。")
+            $manualMarkdown.Add("4. 同じ条件で再実行するときも、1つでも操作不能・表示欠落・期待外の画素差があれば不合格にする。")
+        }
+        else {
+            $manualMarkdown.Add("1. 統括が画面を同梱した版を1つだけ起動し、checkbox本文の操作を行う。")
+            $manualMarkdown.Add("2. 本文にある表示、操作結果、日本語の案内を目視し、画面又は撮影記録への参照を残す。")
+            $manualMarkdown.Add("3. 操作不能、英語表示、表示崩れがあれば不合格として進捗を書き換えずに報告する。")
+        }
     }
     else {
         $manualMarkdown.Add("1. クリーンなcommit済みtreeで全品質ゲートを通す。")
@@ -542,10 +650,12 @@ if ($Update -or $WriteTraceability) {
     [System.IO.File]::WriteAllText($jsonPath, $jsonText + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))
     [System.IO.File]::WriteAllLines($markdownPath, $markdown, (New-Object System.Text.UTF8Encoding($false)))
     [System.IO.File]::WriteAllLines($manualPath, $manualMarkdown, (New-Object System.Text.UTF8Encoding($false)))
-    [System.IO.File]::WriteAllLines($reportPath, $report, (New-Object System.Text.UTF8Encoding($false)))
+    if (-not $PreserveReport) {
+        [System.IO.File]::WriteAllLines($reportPath, $report, (New-Object System.Text.UTF8Encoding($false)))
+    }
 }
 
-Write-Output "checkbox=$($checkboxRecords.Count)/182 test=$($testRecords.Count) manual=$($manualRecords.Count) unlinked=$($unresolvedRecords.Count) duplicate=$($duplicateIds.Count) progress_disagreement=$($statusDisagreements.Count) regressed_to_unstarted=$($statusDisagreements.Count) unchecked_with_test=$($uncheckedWithTests.Count) reverse_progress_disagreement=$($reverseDisagreements.Count) hash=$generatedHash"
+Write-Output "checkbox=$($checkboxRecords.Count)/182 test=$($testRecords.Count) manual=$($manualRecords.Count) unlinked=$($unresolvedRecords.Count) duplicate=$($duplicateIds.Count) progress_disagreement=$($statusDisagreements.Count) regressed_to_unstarted=$($statusDisagreements.Count) commit_evidence_verified=$($verifiedCommitEvidence.Count) commit_evidence_unverified=$($unverifiedCommitEvidence.Count) unchecked_with_test=$($uncheckedWithTests.Count) reverse_progress_disagreement=$($reverseDisagreements.Count) hash=$generatedHash"
 if (($statusDisagreements.Count + $reverseDisagreements.Count) -ne 0) {
     Write-Output "STATUS-MISMATCH: roadmap status was preserved; see scratchpad/doc-link-7d-report.md"
     if ($Check) { exit 2 }

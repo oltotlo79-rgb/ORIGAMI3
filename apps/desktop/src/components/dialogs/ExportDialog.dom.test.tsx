@@ -29,6 +29,7 @@ vi.mock("../../ipc/client", () => ({
 import { save } from "@tauri-apps/plugin-dialog";
 import * as ipc from "../../ipc/client";
 import { ExportDialog, EXPORT_CHOICES, NO_STEPS_REASON } from "./ExportDialog";
+import { exportChoicesForReadiness } from "./exportChoices";
 import { useAppStore } from "../../store/appStore";
 import type { Document } from "../../lib/types";
 
@@ -59,7 +60,7 @@ const realRunExport = useAppStore.getState().runExport;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  exportMock.mockResolvedValue(undefined);
+  exportMock.mockResolvedValue([]);
   useAppStore.setState({
     exportOpen: true,
     exportKind: "CpSvg",
@@ -99,6 +100,23 @@ describe("書き出しダイアログ", () => {
     }
     // PNGを選んでいないうちは大きさの入力は出さない
     expect(screen.queryByLabelText(/画像の大きさ/)).toBeNull();
+  });
+
+  it("状態接続後にだけ、既存画面の5番目へほかのソフト用の書き出しを足す", () => {
+    const prepared = exportChoicesForReadiness(true);
+    expect(prepared).toHaveLength(5);
+    expect(prepared[4]).toEqual({
+      kind: "FoldJson",
+      label: "ほかの折り紙ソフトのファイル",
+      ext: "fold",
+      hint:
+        "折り目や折る手順を、対応しているほかの折り紙ソフトで使える形にします。書き出せない内容があるときは、理由をお知らせします。",
+    });
+
+    render(<ExportDialog />);
+    expect(
+      screen.queryByRole("radio", { name: "ほかの折り紙ソフトのファイル" }),
+    ).toBeNull();
   });
 
   it("SVGは補助線の有無だけを引数にして書き出す", async () => {

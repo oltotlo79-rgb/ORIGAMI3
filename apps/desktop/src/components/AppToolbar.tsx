@@ -3,9 +3,13 @@ import { EXPORT_CHOICES } from "./dialogs/exportChoices";
 import { HistoryButtons } from "./HistoryButtons";
 import { ToolbarBrandMark } from "./ToolbarBrandMark";
 import { ToolbarIcon } from "./ToolIcons";
+import {
+  OPEN_FILE_FILTERS,
+  OPEN_FILE_TOOLTIP,
+  SAVE_FILE_FILTERS,
+} from "../lib/foldFileExchange";
 import { useAppStore } from "../store/appStore";
 
-const ORI3_FILTERS = [{ name: "ORIGAMI3作品", extensions: ["ori3"] }];
 const EXPORT_GUIDANCE = `${EXPORT_CHOICES.map((choice) => choice.label).join("、")}を書き出します`;
 
 /** 実際に選べる書き出し形式を、そのまま案内する上部ボタン。 */
@@ -27,14 +31,14 @@ export function AppToolbar({ onOpenHelp }: { onOpenHelp: () => void }) {
   const openNewDialog = useAppStore((s) => s.openNewDialog);
 
   const handleOpen = async () => {
-    const path = await open({ filters: ORI3_FILTERS, multiple: false });
+    const path = await open({ filters: OPEN_FILE_FILTERS, multiple: false });
     if (typeof path === "string") {
       await openDocument(path);
     }
   };
 
   const handleSave = async () => {
-    const path = await save({ filters: ORI3_FILTERS });
+    const path = await save({ filters: SAVE_FILE_FILTERS });
     if (path !== null) {
       await saveDocument(path);
     }
@@ -62,7 +66,7 @@ export function AppToolbar({ onOpenHelp }: { onOpenHelp: () => void }) {
       </button>
       <button
         type="button"
-        data-tooltip="保存した作品(.ori3)を開きます"
+        data-tooltip={OPEN_FILE_TOOLTIP}
         onClick={() => void handleOpen()}
       >
         <ToolbarIcon name="open" />

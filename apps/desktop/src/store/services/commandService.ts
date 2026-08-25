@@ -52,7 +52,7 @@ function pruneSelection(selection: Selection, doc: Document): Selection {
 }
 
 /** command serviceが一括反映する、store全体の構造契約。 */
-export interface CommandHostState {
+interface CommandHostState {
   doc: Document | null;
   stepCreases: StepCreases[];
   faces: Face[];
@@ -106,7 +106,7 @@ export interface CommandHostState {
   mirrorAxisNotice: string | null;
 }
 
-export interface CommandServiceCallbacks {
+interface CommandServiceCallbacks {
   /** 一斉表示を捨て、入口前の道具だけを新しい作品へ引き継ぐ。 */
   discardFoldAllPreview: () => { activeTool: ToolId } | null;
   stopPlayback: () => void;
@@ -117,7 +117,7 @@ export interface CommandServiceCallbacks {
   syncPose: () => Promise<void>;
 }
 
-export interface CommandService<State extends CommandHostState> {
+interface CommandService<State extends CommandHostState> {
   queue: SerialQueue;
   fail: (error: unknown) => void;
   runViewCommandResult: (

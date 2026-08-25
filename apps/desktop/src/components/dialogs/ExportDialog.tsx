@@ -9,7 +9,7 @@ import { useAppStore } from "../../store/appStore";
 import { fileName } from "../RecoveryDialog";
 import { NumberStepper } from "../NumberStepper";
 import { ModalDialog } from "./ModalDialog";
-import { EXPORT_CHOICES } from "./exportChoices";
+import { EXPORT_CHOICES, EXPORT_DIALOG_TITLE } from "./exportChoices";
 
 // 既存の画面・検査のimport先を保つ。choices本体だけはAppでも使えるpure moduleへ置く。
 export { EXPORT_CHOICES } from "./exportChoices";
@@ -68,7 +68,7 @@ export function ExportDialog() {
       escapeAction={busy ? { kind: "stay" } : { kind: "dismiss", run: close }}
       data-floating-ui="export-dialog"
     >
-      <h2 id="export-title">展開図・折り図を書き出す</h2>
+      <h2 id="export-title">{EXPORT_DIALOG_TITLE}</h2>
       <fieldset>
         <legend>何を書き出しますか</legend>
         {EXPORT_CHOICES.map((c) => (

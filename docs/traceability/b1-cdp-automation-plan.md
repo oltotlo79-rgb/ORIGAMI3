@@ -20,7 +20,7 @@
 | `M2.T2-6c.C01` | 多層fixtureを開き、`canvas.viewer3d-canvas`へ固定した視点ドラッグとホイール入力を送る。 | `window.__origami3Capture.captureCanonical3D().readback`上の層ごとの可視色領域・重心間距離。 | 可視層が3以上、隣接重心距離が1物理画素以上、各層領域が共通式以上。 | 新規CDP script。fixtureとreadback追加先`apps/desktop/tests-live/fixtures/`、必要なら`apps/desktop/src/captureApi.ts`。参照`apps/desktop/src/lib/layerOffset.test.ts`、`apps/desktop/src/components/Viewer3D/sceneBuilder.test.ts`。 |
 | `M2.T2-6c.C02` | `canvas.viewer3d-canvas`で、fixtureが定める最前面フラップの正規化座標`(0.50,0.50)`から`(0.65,0.50)`へドラッグし、同じ操作をShift付きで行う。 | 手順数、3D readback、選択層数を返すCDP専用読取値。 | 各操作で手順数がちょうど+1、通常/Shiftの選択層数が異なり、変更画素数が共通式以上。 | 新規CDP script。読取値追加先`apps/desktop/src/captureApi.ts`、操作本体の参照`apps/desktop/src/components/Viewer3D/viewerPointer.ts`。 |
 | `M2.T2-6c.C03` | C02と同じ開始点でpointer down→move後、pointer up前にreadbackを取る。 | 半透明プレビュー、動く層、折り線の各色の画素数と、up後の最終readbackとの差。 | 3種類の色領域が各1以上かつ共通式以上。up後の最終形との差分画素数が共通式以下（プレビューと実行結果の許容差）。 | 新規CDP script。必要な読取口`apps/desktop/src/captureApi.ts`、参照`apps/desktop/src/components/Viewer3D/viewerHighlight.ts`。 |
-| `M2.T2-6c.C04` | `aside[data-floating-ui="viewer-operation-hint"]`と内部`p[role="status"]`を読む。`折る`を選び、折り途中fixtureへ移し、無効理由も読む。 | status要素数、表示文字列、英字だけの語の件数。 | status要素は常に1、通常時と無効時の文が各1、英字だけの利用者向け語が0。 | 新規CDP script。参照`apps/desktop/src/components/Viewer3D/ViewerOperationHint.dom.test.tsx`。 |
+| `M2.T2-6c.C04` | `aside[data-floating-ui="viewer-operation-hint"]`と内部`p[role="status"]`を読む。`折る`を選び、折り途中fixtureへ移し、無効理由も読む。 | status要素数、表示文字列、英字だけの語の件数。 | status要素は常に1、通常時と無効時の文が各1、標準の修飾キー名`Shift`・`Alt`・`Ctrl`以外の英字だけの利用者向け語が0。 | 新規CDP script。参照`apps/desktop/src/components/Viewer3D/Viewer3D.dom.test.tsx`。 |
 | `M2.T2-6c.C05` | `技法`→`[aria-label="段折り"]`を選び、3D canvasでfixtureの指定線をドラッグする。 | `section.operation-steps`の進行表示とTimelineの`button`本文。 | 操作前後で手順数がちょうど+1、追加行が`段折り`を1回だけ含む。 | 新規CDP script。必要ならtimeline selectorを`apps/desktop/src/components/Timeline.tsx`へ追加。参照`apps/desktop/src/components/OperationSteps.dom.test.tsx`。 |
 | `M2.T2-7.C01` | `作図`button→`[role="group"][aria-label="作図の種類を選ぶ"]`を開く。`二等分`、`垂線`、`等分`、`角度`を各1回選び、`[aria-label="いくつに等分するか"]`へ4、`[aria-label="角度の刻み"]`へ22.5を入れる。 | 子button数、select値、`canvas.cp-canvas`の追加線数。 | button数4、等分値4、角度値22.5、各作図後の追加線数が1以上。 | 新規CDP script。selector追加先`apps/desktop/src/components/ToolRail.tsx`、参照`apps/desktop/src/lib/construct.ts`。 |
 | `M2.T2-7.C02` | 前川・川崎違反を持つfixtureを開き、`canvas.cp-canvas`を固定表示する。 | RGBが`#ff8c00`（距離12以下）の画素数と違反頂点数。 | 違反頂点数1以上、橙画素数が共通式以上。 | 新規CDP script。fixture追加先`apps/desktop/tests-live/fixtures/`、参照`apps/desktop/src/components/CpEditor/renderer.ts`、`CpEditor`のDOM test群。 |
@@ -37,3 +37,19 @@
 2. canvas操作の対象位置、層数、警告を安定させる追跡済みfixtureがまだ決まっていない。各fixtureのhashと正規化座標を検査コードへ固定する。
 3. `M2.T2-6c.C01`、`C02`、`C03`は、現在の`window.__origami3Capture`が選択層数・プレビューを返さない。画素だけで推測せず、必要な読取専用値を`apps/desktop/src/captureApi.ts`へ追加する。
 4. toolbarとtool railの主要buttonには専用test IDがない。実装時に`AppToolbar.tsx`と`ToolRail.tsx`へ追加し、表示文言やCSS classだけを恒久selectorにしない。
+
+## 実装状況（2026-08-26）
+
+`apps/desktop/tests-live/doc-link-b1-cdp.mjs`を追加した。これは既存`backface-canonical-cdp.mjs`と同じく、既に起動しているWebView2へCDPだけで接続し、PID・実行ファイルpath・SHA-256・fixture SHA-256を確認してから動く。`ORI3_B1_CDP_RUN=1`、PID、実行ファイル、終了後に開き直す保存済み作品を明示しない限り接続しない。
+
+専用実機枠（desktop.exe PID 28308、CDP 9222、指定SHA-256一致）で2026-08-26に実行し、次の5件が合格した。終了処理では指定された`check-yakko.ori3`の手順0、開始時の道具、dialogなし、capture用属性なし、viewportを復元できたことも確認した。
+
+- `M2.T2-6b.C06`: 技法サブメニュー9個の名称・順序
+- `M2.T2-6c.C04`: 通常時と途中step時の操作ヒント。最初の`\b`検出は日本語に接する`Shift`等を見落としたため訂正した。既存DOM検査が要求する標準修飾キー名`Shift`・`Alt`・`Ctrl`だけを許可し、それ以外の英字語は失敗にする。
+- `M3.T3-4.C01`: 提案の3画面、候補4件、適用後close
+- `M3.T3-4.C02`: 提案dialogの開閉と常設4区画の維持
+- `M4.T4-3.C02`: 書出し種別4個、PNG長辺1024、補助線checkbox
+
+残る10件は、同スクリプトが`blocked`として終了コード2へ出す。現在のAPI/fixtureだけでは、層選択数、プレビュー別readback、安定pick座標、違反/面交差/recovery fixture、又はnative保存先の結果を正しく測れないためである。これらを成功扱いにしない。詳しい実パスと不足理由はスクリプトの`blockedCases`に固定した。
+
+回復画面を作る検査では、起動時に出ている既存の回復画面があれば`復元する`だけを押す。`破棄する`のイベント送信は検査コードに含めない。折り鶴・やっこさん・鳥の基本形の既存fixtureを使う。カエルは追跡済みのJSON fixtureは存在するが、capture APIで直接開ける`.ori3`作品ファイルは無く、残る10件の代用には使わない。

@@ -12,22 +12,36 @@ import type { ReleasedPin } from "../../lib/settledFolds";
 import type { ToolId } from "../toolTypes";
 import type { DocumentSlice, Selection } from "./documentSlice";
 
-/** ヒンジ角の連続操作（スライダー）を間引く間隔（ms）。 */
+/** ヒンジ角の連続操作(スライダー)を間引く間隔(ms) */
+/** 追従計算は60fps相当で最大1回。runLatestが計算待ちを最新1件へまとめる。 */
 export const POSE_THROTTLE_MS = 16;
 
-/** 一斉表示専用の送信間隔（ms）。 */
+/**
+ * 一斉表示専用の送信間隔(ms)。
+ *
+ * 1秒120入力を65回以下へまとめる受入条件に合わせ、60fps相当の16msとする。
+ * 専用queueも同時1件・待機最新1件に保つため、計算が追いつかない場合に
+ * 要求列は増えない。入力値自体はZustandへ直ちに反映し、つまみは遅らせない。
+ */
 export const FOLD_ALL_THROTTLE_MS = 16;
 
-/** 画面更新の仕組みが無い環境（テスト）で1コマを送る間隔（ms）。 */
+/** 画面更新の仕組みが無い環境(テスト)で1コマを送る間隔(ms) */
 export const FALLBACK_FRAME_MS = 16;
 
-/** 折り角度の履歴に残す件数の上限。 */
+/** 折り角度の履歴に残す件数の上限。作品データではないので溜め込みすぎない */
 export const ANGLE_HISTORY_LIMIT = 50;
 
-/** 同じ折り線への続けざまの角度変更を1件にまとめる時間（ms）。 */
+/** 同じ折り線への続けざまの角度変更(スライダーを動かしている間)を
+ * 1件にまとめる時間(ms)。ドラッグ1回=履歴1件にするための間隔 */
 export const ANGLE_GROUP_MS = 700;
 
-/** 角度確定後に、形が大きく変わったことを知らせる境目。 */
+/**
+ * 角度確定後に、形が大きく変わったことを知らせる境目。
+ *
+ * 3D座標は紙の長辺を1としている。実機の通常の末尾補正は0.0488〜0.0674、
+ * 問題になった枝の切替は1.0728〜1.5135だったため、その間の0.1（長辺の10%）を
+ * 通知境界にする。正しさや候補選択には使わず、確定後の非阻害通知だけに使う。
+ */
 export const FINISH_JUMP_NOTICE_THRESHOLD = 0.1;
 
 /** 利用者向けにはsolver内部の用語を出さず、起きた見た目の変化だけを伝える。 */
@@ -54,7 +68,13 @@ export function relaxationNotices(
     .sort((a, b) => a.hinge - b.hinge);
 }
 
-/** 「元に戻す」で戻す1件ぶんの角度と固定の状態。作品には保存しない。 */
+/**
+ * 「元に戻す」で戻す1件ぶんの角度の状態。
+ *
+ * 角度の指定と、どの折り目を固定していたかを組にして控える。
+ * 固定の付け外しも1回で戻せるようにするため(片方だけを控えると、
+ * 戻した角度と固定が食い違う)。どちらも作品ファイルには保存しない。
+ */
 export interface AngleSnapshot {
   drivers: ReadonlyMap<number, number>;
   pinned: ReadonlyMap<number, number>;
@@ -63,9 +83,13 @@ export interface AngleSnapshot {
 /** 1回の角度操作に属する「いま固定する折り目」。作品には保存しない。 */
 export interface ActiveAngleIntent {
   generation: number;
-  /** いま動かしている折り目（3Dで水色に光る）。 */
+  /** いま動かしている折り目(3Dで水色に光る) */
   hinges: number[];
-  /** 紙を引く操作なら全て、まとめ操作なら代表1本だけを固定する。 */
+  /** 全部を「その角度ちょうど」で固定してよいか。
+   *
+   * 紙を引く操作(左右対称の相手を含む)は2本までなので固定してよい。
+   * まとめてスライダーで動かす場合は、全部を同じ角度で固定すると実際の紙では
+   * 成り立たないため、代表1本だけを固定する。 */
   fixAll: boolean;
 }
 

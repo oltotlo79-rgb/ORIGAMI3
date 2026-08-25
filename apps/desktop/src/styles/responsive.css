@@ -217,6 +217,110 @@
   }
 }
 
+/* 1000×700の画面を200%表示すると、利用できるCSS領域は500×350になる。
+   通常表示の配置は変えず、高倍率かつ狭い場合だけ、同じ操作を2段へ並べ直す。
+   文字の大きさは変えず、飾りの仕切りだけを外して5列×2段へ収める。 */
+@media (max-width: 790px) {
+  .toolbar {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-auto-rows: minmax(34px, auto);
+    gap: var(--sp-1);
+    min-height: 0;
+    padding: var(--sp-1) var(--sp-2);
+  }
+
+  .toolbar-brand {
+    grid-column: span 2;
+    min-width: 0;
+    gap: var(--sp-2);
+    margin-right: 0;
+    padding-right: var(--sp-2);
+  }
+
+  .toolbar button {
+    width: 100%;
+    min-width: 0;
+    padding-inline: var(--sp-1);
+  }
+
+  .toolbar-separator {
+    display: none;
+  }
+
+  /* 4つの再生操作は2列で折り返す。手順札も縦へ送り、横送りを作らない。 */
+  .timeline {
+    gap: var(--sp-1);
+    padding: var(--sp-2);
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .pane-3d {
+    grid-template-rows: minmax(0, 1fr) 60px;
+  }
+
+  .timeline-controls {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--sp-1);
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .timeline-controls button {
+    min-width: 0;
+    padding-inline: var(--sp-1);
+  }
+
+  .timeline-steps {
+    min-width: 0;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    gap: var(--sp-1);
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .timeline-slot {
+    flex: 1 1 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .timeline-slot > .timeline-chip {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  /* 時間軸を縦送りできる60pxへして3D本体の高さを確保し、視点操作・戻す操作・
+     案内札を別の矩形へ置く。立方体の中身や文字は縮めない。 */
+  .view-cube {
+    top: var(--sp-2);
+    right: var(--sp-2);
+    width: 104px;
+    height: 104px;
+  }
+
+  .viewer-reset {
+    right: auto;
+    bottom: var(--sp-2);
+    left: var(--sp-2);
+    padding-inline: var(--sp-2);
+  }
+
+  .viewer-overlay-region {
+    top: var(--sp-2);
+    right: 112px;
+    bottom: 40px;
+    left: var(--sp-2);
+    width: auto;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

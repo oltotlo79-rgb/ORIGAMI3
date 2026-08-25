@@ -207,6 +207,30 @@ export interface Document {
   display: DisplaySettings;
 }
 
+/** ほかの折り紙ソフトのファイルを読み書きしたときの注意の種類。 */
+export const FOLD_ISSUE_CODES = [
+  "assignment_downgraded_to_aux",
+  "unsupported_field",
+  "unsupported_geometry",
+  "non_linear_frames",
+  "unrepresentable_face_orders",
+  "invalid_topology",
+  "missing_required_field",
+  "invalid_value",
+] as const;
+
+export type FoldIssueCode = (typeof FOLD_ISSUE_CODES)[number];
+export type FoldIssueSeverity = "warning" | "error";
+
+/** Rust側のFoldIssue。画面にはraw値を出さず、codeを安全な日本語へ変換する。 */
+export interface FoldIssue {
+  severity: FoldIssueSeverity;
+  code: FoldIssueCode;
+  path: string;
+  message: string;
+  original_value?: unknown;
+}
+
 /** 展開図から導出される面(ori3-cp::Face) */
 export interface Face {
   id: number;
@@ -222,6 +246,8 @@ export interface DocumentView {
   /** 手順ごとに新しく足した折り線。作品ファイルにも保存される。
    * 来歴を持たない旧形式の作品では空になる */
   step_creases?: StepCreases[];
+  /** 他形式を読み込んだ際の注意。状態接続まではIPC結果内にだけ保持する。 */
+  fold_issues?: FoldIssue[];
   faces: Face[];
   warnings: string[];
   /** 今回の平らに畳む操作で知らせる点。rawのviolationsとは別の絞り込み済み結果 */
@@ -253,6 +279,9 @@ export interface DocumentView {
    */
   fold_through_proposal?: FoldThroughProposal | null;
 }
+
+/** document_openはRust側でfold_issuesを常に配列として返す。 */
+export type DocumentOpenResult = DocumentView & { fold_issues: FoldIssue[] };
 
 /**
  * 紙の縁へぶつかる単純な1か所を、巻き込み折りで避ける提案。
@@ -614,6 +643,10 @@ export interface RecoveryInfo {
  * 展開図の画像はSVG(実寸mm)とPNGの2つ。折り図はPDF(1ファイル)と
  * ページごとのSVG(複数ファイル)の2つ */
 export type ExportKind = "CpSvg" | "CpPng" | "DiagramPdf" | "DiagramSvg";
+
+/** 状態接続前からIPC境界で受け付ける、ほかの折り紙ソフト向け形式。 */
+export type FoldExportKind = "FoldJson";
+export type DocumentExportKind = ExportKind | FoldExportKind;
 
 /** document_export の細かい指定(commands.rs::ExportOptions) */
 export interface ExportOptions {

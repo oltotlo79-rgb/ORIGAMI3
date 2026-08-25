@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: security-${{ github.workflow }}-${{ github.ref }}
@@ -72,8 +73,25 @@ jobs:
           if ([string]$policy.toolPins.cargoAudit.crateSha256 -ne $env:CARGO_AUDIT_CRATE_SHA256) {
             throw "Workflow cargo-audit checksum differs from security-policy.json."
           }
-          cargo install cargo-audit --version $env:CARGO_AUDIT_VERSION --locked
-          if ($LASTEXITCODE -ne 0) { throw "cargo-audit installation failed" }
+          $runnerArchitecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- cargo-audit runner OS architecture: $runnerArchitecture"
+          if ($runnerArchitecture -ne "X64") {
+            throw "cargo-audit is installed only on an X64 GitHub runner; this runner reported '$runnerArchitecture'."
+          }
+          $bootstrapRoot = Join-Path $env:RUNNER_TEMP "cargo-audit-download-only"
+          $bootstrapManifest = Join-Path $bootstrapRoot "Cargo.toml"
+          New-Item -ItemType Directory -Force -Path $bootstrapRoot | Out-Null
+          @(
+            "[package]",
+            "name = \"ori3-cargo-audit-download-only\"",
+            "version = \"0.0.0\"",
+            "edition = \"2021\"",
+            "",
+            "[dependencies]",
+            "cargo-audit = \"=$env:CARGO_AUDIT_VERSION\""
+          ) | Set-Content -LiteralPath $bootstrapManifest -Encoding UTF8
+          cargo fetch --manifest-path $bootstrapManifest
+          if ($LASTEXITCODE -ne 0) { throw "cargo-audit download-only fetch failed" }
           $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE ".cargo" }
           $archives = @(
             Get-ChildItem -LiteralPath (Join-Path $cargoHome "registry\cache") `
@@ -91,6 +109,8 @@ jobs:
           if ($matchingArchive.Count -eq 0) {
             throw "The downloaded cargo-audit crate checksum does not match security-policy.json."
           }
+          cargo install cargo-audit --version $env:CARGO_AUDIT_VERSION --locked --offline
+          if ($LASTEXITCODE -ne 0) { throw "cargo-audit offline installation failed after checksum verification" }
           $reportedVersion = cargo audit --version
           if ($LASTEXITCODE -ne 0 -or $reportedVersion -notmatch "\b$([regex]::Escape($env:CARGO_AUDIT_VERSION))\b") {
             throw "cargo-audit reported an unexpected version: $reportedVersion"
@@ -162,25 +182,21 @@ jobs:
           $ErrorActionPreference = "Stop"
           $policy = Get-Content -LiteralPath "..\..\.github\security-policy.json" -Raw -Encoding UTF8 |
             ConvertFrom-Json
-          $nodeVersion = [string]$policy.toolPins.npmAudit.nodeVersion
           $npmVersion = [string]$policy.toolPins.npmAudit.version
-          if ($nodeVersion -notmatch "^22\.\d+\.\d+$") {
-            throw "Exact Node 22 version is unresolved in security-policy.json; npm audit did not run."
-          }
           if ($npmVersion -notmatch "^\d+\.\d+\.\d+$") {
             throw "Exact npm version is unresolved in security-policy.json; npm audit did not run."
           }
-          $nodeRoot = Join-Path $env:RUNNER_TOOL_CACHE "node\$nodeVersion\x64"
-          $nodeExe = Join-Path $nodeRoot "node.exe"
-          if (-not (Test-Path -LiteralPath $nodeExe -PathType Leaf)) {
-            throw "Pinned Node $nodeVersion is not present in the hosted runner tool cache; no substitute was used."
-          }
+          $nodeCommand = Get-Command node.exe -CommandType Application -ErrorAction Stop
+          $nodeExe = $nodeCommand.Source
           $reportedNodeVersion = & $nodeExe --version
-          if ($LASTEXITCODE -ne 0 -or $reportedNodeVersion -ne "v$nodeVersion") {
-            throw "Node reported '$reportedNodeVersion', expected 'v$nodeVersion'."
+          if ($LASTEXITCODE -ne 0 -or $reportedNodeVersion -notmatch "^v22\.\d+\.\d+$") {
+            throw "GitHub runner Node must be an exact Node 22 version; runner reported '$reportedNodeVersion'."
           }
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- npm audit runner Node evidence: $reportedNodeVersion"
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- npm audit requested npm version: $npmVersion"
+          $npmCommand = Get-Command npm.cmd -CommandType Application -ErrorAction Stop
           $npmToolRoot = Join-Path $env:RUNNER_TEMP "npm-$npmVersion"
-          & (Join-Path $nodeRoot "npm.cmd") install --prefix $npmToolRoot `
+          & $npmCommand.Source install --prefix $npmToolRoot `
             --no-save --ignore-scripts --no-audit --no-fund "npm@$npmVersion"
           if ($LASTEXITCODE -ne 0) { throw "Pinned npm installation failed" }
           $npmCli = Join-Path $npmToolRoot "node_modules\npm\bin\npm-cli.js"
@@ -236,14 +252,64 @@ jobs:
             throw "npm audit found high/critical advisories: production=$productionBlocking, complete=$completeBlocking"
           }
 
+  codeql_pin_evidence:
+    name: Code analysis action reference evidence
+    runs-on: windows-latest
+    steps:
+      - name: Resolve and record the v3 commit without enabling the action
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $references = @(git ls-remote https://github.com/github/codeql-action.git "refs/tags/v3" "refs/tags/v3^{}")
+          if ($LASTEXITCODE -ne 0 -or $references.Count -eq 0) {
+            throw "Could not resolve github/codeql-action v3 from GitHub. No action was enabled."
+          }
+          $dereferenced = @($references | Where-Object { $_ -match "^[0-9a-f]{40}\s+refs/tags/v3\^\{\}$" })
+          $direct = @($references | Where-Object { $_ -match "^[0-9a-f]{40}\s+refs/tags/v3$" })
+          $selected = if ($dereferenced.Count -eq 1) { $dereferenced[0] } elseif ($direct.Count -eq 1) { $direct[0] } else { $null }
+          if ($null -eq $selected) {
+            throw "github/codeql-action v3 did not resolve to exactly one immutable commit; no action was enabled."
+          }
+          $commitSha = ($selected -split "\s+")[0]
+          if ($commitSha -notmatch "^[0-9a-f]{40}$") {
+            throw "github/codeql-action v3 returned an invalid immutable commit '$commitSha'."
+          }
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- Code analysis action v3 evidence: https://github.com/github/codeql-action/commit/$commitSha"
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- The action remains disabled until this exact value is reviewed and saved in security-policy.json."
+
   codeql_blocker:
     name: CodeQL pin readiness
+    needs: codeql_pin_evidence
+    if: ${{ always() }}
     runs-on: windows-latest
     steps:
       - name: Stop until the CodeQL action has a verified immutable reference
         shell: pwsh
         run: |
-          throw "CodeQL is intentionally not referenced: the verified github/codeql-action v3 40-character commit SHA is unresolved."
+          throw "Code analysis remains disabled until the exact v3 commit recorded by codeql_pin_evidence is reviewed and saved in security-policy.json."
+
+  dependency_update_evidence:
+    name: Dependency update proposal evidence
+    runs-on: windows-latest
+    steps:
+      - name: Record current update proposals without merging them
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $proposals = @(gh pr list --state all --author app/dependabot --limit 100 --json number,title,url,createdAt,mergedAt,closedAt,headRefName,baseRefName,files | ConvertFrom-Json)
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not read dependency update proposals from GitHub. No proposal was merged or approved."
+          }
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- Dependency update proposals found: $($proposals.Count)"
+          if ($proposals.Count -eq 0) {
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- Cargo, JavaScript, and workflow updates: no current proposal."
+          }
+          foreach ($proposal in $proposals) {
+            $paths = @($proposal.files | ForEach-Object { $_.path }) -join ", "
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- #$($proposal.number) $($proposal.title) — $paths — $($proposal.url)"
+          }
 
   distribution_blocker:
     name: SBOM and release hash readiness
@@ -260,7 +326,9 @@ jobs:
     needs:
       - cargo_and_licenses
       - npm_advisories
+      - codeql_pin_evidence
       - codeql_blocker
+      - dependency_update_evidence
       - distribution_blocker
     runs-on: windows-latest
     steps:
@@ -269,13 +337,17 @@ jobs:
         env:
           CARGO_AND_LICENSES: ${{ needs.cargo_and_licenses.result }}
           NPM_ADVISORIES: ${{ needs.npm_advisories.result }}
+          CODEQL_PIN_EVIDENCE: ${{ needs.codeql_pin_evidence.result }}
           CODEQL: ${{ needs.codeql_blocker.result }}
+          DEPENDENCY_UPDATE_EVIDENCE: ${{ needs.dependency_update_evidence.result }}
           DISTRIBUTION: ${{ needs.distribution_blocker.result }}
         run: |
           $results = [ordered]@{
             cargo_and_licenses = $env:CARGO_AND_LICENSES
             npm_advisories = $env:NPM_ADVISORIES
+            codeql_pin_evidence = $env:CODEQL_PIN_EVIDENCE
             codeql = $env:CODEQL
+            dependency_update_evidence = $env:DEPENDENCY_UPDATE_EVIDENCE
             distribution = $env:DISTRIBUTION
           }
           foreach ($entry in $results.GetEnumerator()) {

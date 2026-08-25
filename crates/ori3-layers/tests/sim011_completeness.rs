@@ -11,15 +11,15 @@
 use std::collections::BTreeSet;
 
 use glam::DVec2;
-use ori3_cp::{Face, extract_faces, validate};
-use ori3_geometry::{Isometry2, dist_point_segment};
-use ori3_layers::fold_through::{FoldDirection, FoldThroughInput, FoldThroughResult, fold_through};
+use ori3_cp::{extract_faces, validate, Face};
+use ori3_geometry::{dist_point_segment, Isometry2};
+use ori3_layers::fold_through::{fold_through, FoldDirection, FoldThroughInput, FoldThroughResult};
 use ori3_layers::techniques::TechniqueInput;
 use ori3_layers::{
+    flat_motion, flat_state_at, inside_reverse, layers_at_point, open_sink, outside_reverse, petal,
+    pleat, point_in_face, rabbit_ear, representative_point, squash, swivel, twist,
     CompoundTechnique, FlatMotionInput, FlatState, HalfPlane, LayerTurn, MotionPart,
-    MotionTransform, RabbitEarInput, flat_motion, flat_state_at, inside_reverse, layers_at_point,
-    open_sink, outside_reverse, petal, pleat, point_in_face, rabbit_ear, representative_point,
-    squash, swivel, twist,
+    MotionTransform, RabbitEarInput,
 };
 use ori3_model::{CreasePattern, Document, FaceId, Paper, TechniqueKind};
 
@@ -1809,6 +1809,222 @@ fn fold_for_sample(document: &mut Document, line: [[f64; 2]; 2], keep: [f64; 2])
     step.id = u32::try_from(document.sequence.len()).expect("手順数はu32に収まる");
     document.cp = cp;
     document.sequence.push(step);
+}
+
+fn apply_technique_for_sample(
+    document: &mut Document,
+    technique: NamedTechnique,
+    flap: Vec<FaceId>,
+    line: [[f64; 2]; 2],
+    reference_point: [f64; 2],
+) -> Result<FoldThroughResult, String> {
+    let (faces, state) = state_of(document);
+    let mut cp = document.cp.clone();
+    let result = technique(
+        &mut cp,
+        &faces,
+        &state,
+        &TechniqueInput {
+            flap,
+            line,
+            reference_point,
+            open_to_back: None,
+            polygon: None,
+            center: None,
+        },
+    )?;
+    let mut step = result.step.clone();
+    step.id = u32::try_from(document.sequence.len()).expect("手順数はu32に収まる");
+    document.cp = cp;
+    document.sequence.push(step);
+    Ok(result)
+}
+
+fn front_vertex_displacement(
+    before_cp: &CreasePattern,
+    before: &FlatState,
+    after_cp: &CreasePattern,
+    after: &FlatState,
+    front_faces: &[FaceId],
+) -> f64 {
+    let before_points = before_cp
+        .vertices
+        .iter()
+        .map(|vertex| (vertex.id, DVec2::from(vertex.pos)))
+        .collect::<std::collections::HashMap<_, _>>();
+    let after_points = after_cp
+        .vertices
+        .iter()
+        .map(|vertex| (vertex.id, DVec2::from(vertex.pos)))
+        .collect::<std::collections::HashMap<_, _>>();
+    let before_faces = extract_faces(before_cp);
+    let after_faces = extract_faces(after_cp);
+    after_faces
+        .iter()
+        .flat_map(|after_face| {
+            after_face.vertices.iter().filter_map(|vertex| {
+                let after_point = after_points.get(vertex)?;
+                let before_face = before_faces.iter().find(|before_face| {
+                    front_faces.contains(&before_face.id)
+                        && point_in_face(before_cp, before_face, after_point.to_array())
+                })?;
+                let before_point = before_points.get(vertex).unwrap_or(after_point);
+                Some(
+                    (before.placements[&before_face.id].apply(*before_point)
+                        - after.placements[&after_face.id].apply(*after_point))
+                    .length(),
+                )
+            })
+        })
+        .fold(0.0_f64, f64::max)
+}
+
+fn assert_technique_result_replays(
+    document: &Document,
+    result: &FoldThroughResult,
+    kind: TechniqueKind,
+    label: &str,
+) {
+    let recorded = document.sequence.last().expect("技法手順を記録する");
+    assert_eq!(recorded.kind, kind, "{label}: 技法種別を記録する");
+    assert!(
+        !recorded.drivers.is_empty(),
+        "{label}: 折り線を1本以上記録する"
+    );
+    let faces = extract_faces(&document.cp);
+    let (replayed, warnings) =
+        flat_state_at(document, &faces, document.sequence.len()).expect("手順を再生できる");
+    assert!(warnings.is_empty(), "{label}: 再生の警告なし: {warnings:?}");
+    assert_eq!(
+        replayed.order, result.state.order,
+        "{label}: 層順序を再生する"
+    );
+    for face in &faces {
+        assert!(
+            replayed.placements[&face.id].approx_eq(&result.state.placements[&face.id], RESULT_EPS),
+            "{label}: 面{}の配置を再生する",
+            face.id
+        );
+    }
+}
+
+/// 鶴の基本形の前面に対するつぶし折りと花弁折りは、どちらも実際に紙を動かし、
+/// 記録された折り線と層順序から再生できる。未定義入力以外を受理すべき SIM-011
+/// の二つの代表事例を、名前付き技法の経路検査とは独立に固定する。
+#[test]
+fn bird_base_front_squash_and_petal_lift_and_replay() {
+    let mut squash_document = bird_base_packet_after_folds(4);
+    for (line, reference) in [
+        ([[0.5, 0.0], [0.5, 1.0]], [0.5, 0.1]),
+        ([[0.0, 0.5], [1.0, 0.5]], [0.1, 0.5]),
+    ] {
+        let (_, state) = state_of(&squash_document);
+        let bottom = state.order[0];
+        apply_technique_for_sample(&mut squash_document, squash, vec![bottom], line, reference)
+            .expect("鶴の予備基本形を組み替えるつぶし折り");
+    }
+    let (squash_faces, squash_before) = state_of(&squash_document);
+    let squash_front = vec![squash_before.order[1], squash_before.order[2]];
+    let squash_before_cp = squash_document.cp.clone();
+    let squash_result = apply_technique_for_sample(
+        &mut squash_document,
+        squash,
+        squash_front.clone(),
+        [[0.5, 0.5], [0.5, 1.0]],
+        [
+            0.5 - std::f64::consts::FRAC_1_SQRT_2,
+            0.5 + std::f64::consts::FRAC_1_SQRT_2,
+        ],
+    );
+
+    let mut petal_document = bird_base_packet_after_folds(4);
+    for (line, reference) in [
+        ([[0.5, 0.0], [0.5, 1.0]], [0.5, 0.1]),
+        ([[0.0, 0.5], [1.0, 0.5]], [0.1, 0.5]),
+    ] {
+        let (_, state) = state_of(&petal_document);
+        apply_technique_for_sample(
+            &mut petal_document,
+            squash,
+            vec![state.order[0]],
+            line,
+            reference,
+        )
+        .expect("鶴の予備基本形を組み替えるつぶし折り");
+    }
+    let (_, petal_before) = state_of(&petal_document);
+    let petal_front = *petal_before.order.last().expect("鶴の基本形の前面");
+    let petal_before_cp = petal_document.cp.clone();
+    let petal_result = apply_technique_for_sample(
+        &mut petal_document,
+        petal,
+        vec![petal_front],
+        [[0.0, 1.0], [0.5, 0.5]],
+        [0.0, 1.0],
+    );
+
+    let mut unexpected_errors = Vec::new();
+    let squash_result = match squash_result {
+        Ok(result) => result,
+        Err(error) => {
+            unexpected_errors.push(format!("squash: {error}"));
+            return assert!(
+                unexpected_errors.is_empty(),
+                "未定義入力以外のErrは0件: {unexpected_errors:?}"
+            );
+        }
+    };
+    let petal_result = match petal_result {
+        Ok(result) => result,
+        Err(error) => {
+            unexpected_errors.push(format!("petal: {error}"));
+            return assert!(
+                unexpected_errors.is_empty(),
+                "未定義入力以外のErrは0件: {unexpected_errors:?}"
+            );
+        }
+    };
+    assert!(
+        unexpected_errors.is_empty(),
+        "未定義入力以外のErrは0件: {unexpected_errors:?}"
+    );
+    assert_eq!(squash_faces.len(), 4, "鶴の予備基本形は4面から始める");
+
+    let squash_displacement = front_vertex_displacement(
+        &squash_before_cp,
+        &squash_before,
+        &squash_document.cp,
+        &squash_result.state,
+        &squash_front,
+    );
+    assert!(
+        squash_displacement > RESULT_EPS,
+        "squash: 前面の頂点を1点以上動かす(最大差 {squash_displacement:.3e})"
+    );
+    assert_technique_result_replays(
+        &squash_document,
+        &squash_result,
+        TechniqueKind::Squash,
+        "squash",
+    );
+
+    let petal_displacement = front_vertex_displacement(
+        &petal_before_cp,
+        &petal_before,
+        &petal_document.cp,
+        &petal_result.state,
+        &[petal_front],
+    );
+    assert!(
+        petal_displacement > RESULT_EPS,
+        "petal: 前面の頂点を1点以上動かす(最大差 {petal_displacement:.3e})"
+    );
+    assert_technique_result_replays(
+        &petal_document,
+        &petal_result,
+        TechniqueKind::Petal,
+        "petal",
+    );
 }
 
 fn state_of(document: &Document) -> (Vec<Face>, FlatState) {

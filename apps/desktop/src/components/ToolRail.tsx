@@ -68,11 +68,12 @@ export function ToolRail({ onFitView }: Props) {
   const setConstruct = useAppStore((s) => s.setConstruct);
 
   return (
-    <nav className="tool-rail">
+    <nav className="tool-rail" data-testid="tool-rail">
       {TOOLS.map((t) => (
         <button
           key={t.id}
           type="button"
+          data-testid={`tool-${t.id}`}
           data-tooltip={t.tooltip}
           className={activeTool === t.id ? "tool-button active" : "tool-button"}
           onClick={() => setTool(t.id)}
@@ -82,11 +83,12 @@ export function ToolRail({ onFitView }: Props) {
         </button>
       ))}
       {activeTool === "technique" && (
-        <div className="tool-submenu" role="group" aria-label="技法を選ぶ">
+        <div className="tool-submenu" role="group" aria-label="技法を選ぶ" data-testid="technique-menu">
           {SUPPORTED_TECHNIQUES.map((t) => (
             <button
               key={t.kind}
               type="button"
+              data-testid={`technique-${t.kind.toLowerCase()}`}
               data-tooltip={`${t.kind === "Simple" ? "層操作" : TECHNIQUE_LABEL[t.kind]}を使います`}
               aria-label={t.kind === "Simple" ? "層操作" : TECHNIQUE_LABEL[t.kind]}
               className={
@@ -103,11 +105,12 @@ export function ToolRail({ onFitView }: Props) {
         </div>
       )}
       {activeTool === "construct" && (
-        <div className="tool-submenu" role="group" aria-label="作図の種類を選ぶ">
+        <div className="tool-submenu" role="group" aria-label="作図の種類を選ぶ" data-testid="construct-menu">
           {CONSTRUCT_KINDS.map((k) => (
             <button
               key={k}
               type="button"
+              data-testid={`construct-${k}`}
               data-tooltip={CONSTRUCT_TOOLTIP[k]}
               className={
                 construct.kind === k ? "tool-button small active" : "tool-button small"
@@ -121,6 +124,7 @@ export function ToolRail({ onFitView }: Props) {
           {construct.kind === "divide" && (
             <select
               className="tool-select"
+              data-testid="construct-divisions"
               aria-label="いくつに等分するか"
               data-tooltip="区間を何等分するか選びます"
               value={construct.divisions}
@@ -134,6 +138,7 @@ export function ToolRail({ onFitView }: Props) {
           {construct.kind === "angle" && (
             <select
               className="tool-select"
+              data-testid="construct-angle-step"
               aria-label="角度の刻み"
               data-tooltip="方向線の角度刻みを選びます"
               value={construct.stepDeg}
@@ -148,6 +153,7 @@ export function ToolRail({ onFitView }: Props) {
       )}
       <button
         type="button"
+        data-testid="tool-fit"
         data-tooltip="展開図と3Dを紙全体が見える位置へ戻します"
         className="tool-button"
         onClick={onFitView}

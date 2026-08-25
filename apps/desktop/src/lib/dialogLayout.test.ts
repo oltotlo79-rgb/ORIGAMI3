@@ -21,8 +21,12 @@ const dialogsCss = readFileSync(
   new URL("../styles/dialogs.css", import.meta.url),
   "utf8",
 );
-const appStoreSource = readFileSync(
-  new URL("../store/appStore.ts", import.meta.url),
+const dialogSettingsStoreSource = readFileSync(
+  new URL("../store/slices/dialogSettingsSlice.ts", import.meta.url),
+  "utf8",
+);
+const proposalStoreSource = readFileSync(
+  new URL("../store/slices/proposalSlice.ts", import.meta.url),
   "utf8",
 );
 const proposalSource = readFileSync(
@@ -42,14 +46,14 @@ const colorPickerSource = readFileSync(
   "utf8",
 );
 const proposalStepType = /export type ProposalStep\s*=([\s\S]*?);/u.exec(
-  appStoreSource,
+  proposalStoreSource,
 );
 if (proposalStepType === null) throw new Error("ProposalStepの定義がありません");
 const proposalSteps = [
   ...proposalStepType[1].matchAll(/"([^"]+)"/gu),
 ].map((match) => match[1]);
 const guideStepType = /export type GuideStep\s*=([\s\S]*?);/u.exec(
-  appStoreSource,
+  dialogSettingsStoreSource,
 );
 if (guideStepType === null) throw new Error("GuideStep type is missing");
 const guideSteps = [...guideStepType[1].matchAll(/\d+/gu)].map((match) =>

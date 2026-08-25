@@ -1,4 +1,4 @@
-export interface GenerationGate {
+interface GenerationGate {
   /** 新しい要求世代を発行し、それ以前のtokenを無効にする。 */
   issue: () => number;
   /** tokenが最後に発行した要求だけに属するかを調べる。 */

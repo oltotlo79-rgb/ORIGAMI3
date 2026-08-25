@@ -41,13 +41,15 @@
 use std::collections::HashMap;
 
 use glam::DVec2;
-use ori3_cp::{Face, extract_faces};
-use ori3_layers::fold_through::{FoldDirection, FoldThroughInput, fold_through};
+use ori3_cp::{extract_faces, Face};
+use ori3_layers::fold_through::{fold_through, FoldDirection, FoldThroughInput};
 use ori3_layers::techniques::TechniqueInput;
 use ori3_layers::{
-    FlatState, FoldThroughResult, flat_state_at, inside_reverse, petal, pleat, replay, squash,
+    flat_state_at, inside_reverse, petal, pleat, replay, squash, FlatState, FoldThroughResult,
 };
-use ori3_model::{CreasePattern, Document, EdgeKind, FaceId, Paper};
+use ori3_model::{
+    CreasePattern, Document, EdgeKind, Face3D, FaceId, Frame3D, Paper, TechniqueKind,
+};
 use ori3_rigid::max_seam_gap;
 
 /// 畳んだたこ形の半分の開き角(22.5°)の正接から決まる、袋を開いた後の外形の値。
@@ -151,6 +153,37 @@ fn vertex_pos(cp: &CreasePattern) -> HashMap<u32, DVec2> {
         .iter()
         .map(|v| (v.id, DVec2::from(v.pos)))
         .collect()
+}
+
+fn explicit_flat_frame(document: &Document, faces: &[Face], state: &FlatState) -> Frame3D {
+    let positions = vertex_pos(&document.cp);
+    Frame3D {
+        faces: faces
+            .iter()
+            .map(|face| {
+                let rank = state
+                    .order
+                    .iter()
+                    .position(|id| *id == face.id)
+                    .expect("全ての面が層順序にある");
+                Face3D {
+                    face: face.id,
+                    polygon: face
+                        .vertices
+                        .iter()
+                        .map(|vertex| {
+                            let point = state.placements[&face.id].apply(positions[vertex]);
+                            [point.x, point.y, 0.0]
+                        })
+                        .collect(),
+                    layer: u32::try_from(rank).expect("層順序はu32に収まる"),
+                    surface_rank: u32::try_from(rank).expect("層順序はu32に収まる"),
+                    mirrored: state.placements[&face.id].mirrored,
+                }
+            })
+            .collect(),
+        warnings: Vec::new(),
+    }
 }
 
 /// 面が畳み平面で占める多角形。
@@ -974,6 +1007,111 @@ fn the_frog_is_deterministic() {
     assert_eq!(a.sequence, b.sequence, "手順が一致する");
     let frame = |doc: &Document| format!("{:?}", replay(doc, doc.sequence.len(), 1.0).frame);
     assert_eq!(frame(&a), frame(&b), "折り上がりの3D姿勢がビット一致する");
+}
+
+/// 伝承カエルの受入れ条件を、構築結果そのものから確認する。
+///
+/// 既存の個別検査は足・再生・決定性を別々に確認している。この検査では花弁、
+/// 中割り、段折りを一つの完成形で束ね、同じ操作列を2回構築しても最終の平坦
+/// 再生と紙の接続が変わらないことを確認する。
+#[test]
+fn traditional_frog_has_required_techniques_and_replays_connected_twice() {
+    const POSITION_EPS: f64 = 1e-9;
+    // 2回測定の最大gapは0。明示した平坦層の組立てで出る丸めだけを許すため、
+    // モデル共通EPS(1e-9)を境界にする。可視の裂け(1e-6)より十分小さい。
+    const FLAT_GAP_TOLERANCE: f64 = 1e-9;
+
+    let (first, first_built) = frog();
+    let (second, second_built) = frog();
+    let documents = [
+        (&first, &first_built, "1回目"),
+        (&second, &second_built, "2回目"),
+    ];
+
+    let technique_count = |kind| {
+        first
+            .sequence
+            .iter()
+            .filter(|step| step.kind == kind)
+            .count()
+    };
+    assert!(
+        technique_count(TechniqueKind::Petal) >= 1,
+        "花弁折りを1手以上含む"
+    );
+    assert!(
+        technique_count(TechniqueKind::InsideReverse) >= 1,
+        "中割り折りを1手以上含む"
+    );
+    assert!(
+        technique_count(TechniqueKind::Pleat) >= 1,
+        "段折りを1手以上含む"
+    );
+
+    let mut replayed_signatures = Vec::new();
+    let mut connectivity_violations = 0usize;
+    for (document, built, label) in documents {
+        let faces = extract_faces(&document.cp);
+        let (replayed, warnings) = flat_state_at(document, &faces, document.sequence.len())
+            .expect("完成したカエルを平坦に再生できる");
+        assert!(warnings.is_empty(), "{label}: 再生の警告なし: {warnings:?}");
+        assert!(
+            !replayed.order.is_empty(),
+            "{label}: 完成形の最終層数は1以上"
+        );
+        assert_eq!(
+            replayed.order, built.order,
+            "{label}: 構築時の層順序を再生する"
+        );
+
+        let positions = vertex_pos(&document.cp);
+        let mut signature = Vec::new();
+        for face in &faces {
+            for vertex in face
+                .vertices
+                .iter()
+                .filter_map(|vertex| positions.get(vertex))
+            {
+                let built_position = built.placements[&face.id].apply(*vertex);
+                let replayed_position = replayed.placements[&face.id].apply(*vertex);
+                assert!(
+                    (built_position - replayed_position).length() <= POSITION_EPS,
+                    "{label}: 面{}の再生位置差は {POSITION_EPS:e} 以下",
+                    face.id
+                );
+                signature.push((face.id, *vertex, replayed_position));
+            }
+        }
+        replayed_signatures.push(signature);
+
+        let flat_frame = explicit_flat_frame(document, &faces, &replayed);
+        if max_seam_gap(&document.cp, &faces, &flat_frame) >= FLAT_GAP_TOLERANCE {
+            connectivity_violations += 1;
+        }
+    }
+    assert_eq!(
+        connectivity_violations, 0,
+        "2回の完成形再生で層の接続違反は0件"
+    );
+
+    let (first_signature, second_signature) = (&replayed_signatures[0], &replayed_signatures[1]);
+    assert_eq!(
+        first_signature.len(),
+        second_signature.len(),
+        "2回の完成形の頂点数は一致する"
+    );
+    for (
+        (first_face, first_vertex, first_position),
+        (second_face, second_vertex, second_position),
+    ) in first_signature.iter().zip(second_signature)
+    {
+        assert_eq!(first_face, second_face, "2回の完成形で面IDが一致する");
+        assert_eq!(first_vertex, second_vertex, "2回の完成形で頂点IDが一致する");
+        assert!(
+            (*first_position - *second_position).length() <= POSITION_EPS,
+            "2回の完成形の位置差は {POSITION_EPS:e} 以下"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

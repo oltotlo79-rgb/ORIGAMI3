@@ -417,7 +417,7 @@ export interface DocumentSliceActions {
 export type DocumentSlice = DocumentSliceState & DocumentSliceActions;
 
 /** B2/B4が所有し、B1 actionが同じ1本のstore上で読む構造契約。 */
-export interface DocumentSliceExternalState {
+interface DocumentSliceExternalState {
   foldAllPreview: unknown | null;
   frame3d: Frame3D | null;
   hinges: ReadonlySet<number>;
@@ -442,7 +442,7 @@ export interface DocumentSliceExternalState {
   paperActionTipExpanded: boolean;
 }
 
-export interface DocumentSliceExternalActions {
+interface DocumentSliceExternalActions {
   applySequenceOp: (operation: SeqOp) => Promise<void>;
   completeGuideAction: (action: "fold") => void;
 }
@@ -475,7 +475,7 @@ export interface DocumentSliceDependencies {
   clearZeroOnlyDrivers: () => void;
 }
 
-export interface DocumentSliceInternals {
+interface DocumentSliceInternals {
   invalidateFoldThrough: () => void;
 }
 

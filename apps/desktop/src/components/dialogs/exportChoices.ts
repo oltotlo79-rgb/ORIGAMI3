@@ -1,15 +1,20 @@
-import type { ExportKind } from "../../lib/types";
+import { FOLD_FILE_EXCHANGE_READY } from "../../lib/foldFileExchange";
+import type {
+  DocumentExportKind,
+  ExportKind,
+  FoldExportKind,
+} from "../../lib/types";
 
 /** 種類ごとの表示名・拡張子・ひとこと説明。needsStepsは折り手順が要るもの */
-export type ExportChoice = {
-  kind: ExportKind;
+export type ExportChoice<Kind extends DocumentExportKind = DocumentExportKind> = {
+  kind: Kind;
   label: string;
   ext: string;
   hint: string;
   needsSteps?: boolean;
 };
 
-export const EXPORT_CHOICES: ExportChoice[] = [
+const BASE_EXPORT_CHOICES: ExportChoice<ExportKind>[] = [
   {
     kind: "CpSvg",
     label: "展開図(SVG)",
@@ -41,3 +46,41 @@ export const EXPORT_CHOICES: ExportChoice[] = [
     needsSteps: true,
   },
 ];
+
+export const FOLD_EXPORT_CHOICE: ExportChoice<FoldExportKind> = {
+  kind: "FoldJson",
+  label: "ほかの折り紙ソフトのファイル",
+  ext: "fold",
+  hint:
+    "折り目や折る手順を、対応しているほかの折り紙ソフトで使える形にします。" +
+    "書き出せない内容があるときは、理由をお知らせします。",
+};
+
+export function exportChoicesForReadiness(
+  ready: false,
+): ExportChoice<ExportKind>[];
+export function exportChoicesForReadiness(
+  ready: true,
+): ExportChoice<DocumentExportKind>[];
+export function exportChoicesForReadiness(
+  ready: boolean,
+): ExportChoice<DocumentExportKind>[];
+export function exportChoicesForReadiness(
+  ready: boolean,
+): ExportChoice<DocumentExportKind>[] {
+  return ready
+    ? [...BASE_EXPORT_CHOICES, FOLD_EXPORT_CHOICE]
+    : [...BASE_EXPORT_CHOICES];
+}
+
+export function exportDialogTitleForReadiness(ready: boolean): string {
+  return ready ? "作品を書き出す" : "展開図・折り図を書き出す";
+}
+
+// falseの間はkindが既存ExportKindへ狭まり、store接続なしにFoldJsonを選べない。
+export const EXPORT_CHOICES = exportChoicesForReadiness(
+  FOLD_FILE_EXCHANGE_READY,
+);
+export const EXPORT_DIALOG_TITLE = exportDialogTitleForReadiness(
+  FOLD_FILE_EXCHANGE_READY,
+);

@@ -193,6 +193,7 @@ export function Viewer3D({ fitRef, statusOverlays }: Props) {
       <canvas
         ref={canvasRef}
         className="viewer3d-canvas"
+        data-testid="viewer3d-canvas"
         aria-label={
           foldAllActive
             ? "全部の折り目を同じ割合で動かした形。ドラッグで視点を回せます"

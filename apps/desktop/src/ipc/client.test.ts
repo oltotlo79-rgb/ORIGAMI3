@@ -4,6 +4,8 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 import { invoke } from "@tauri-apps/api/core";
 import {
+  documentExport,
+  documentOpen,
   foldAllPreview,
   poseSolve,
   proposalControl,
@@ -11,7 +13,9 @@ import {
   proposalProgress,
 } from "./client";
 import type {
+  DocumentView,
   Driver,
+  FoldIssue,
   FoldAllPreviewOutcome,
   Paper,
   ProposalJobResult,
@@ -28,6 +32,42 @@ const JOB_ID = "proposal-client-job";
 
 beforeEach(() => {
   vi.mocked(invoke).mockReset();
+});
+
+describe("ほかの折り紙ソフトのファイルのIPC", () => {
+  const issue: FoldIssue = {
+    severity: "warning",
+    code: "unsupported_field",
+    path: "$.x_example",
+    message: "raw message",
+    original_value: true,
+  };
+
+  it("読込結果に含まれる注意を捨てずに返す", async () => {
+    const view = { fold_issues: [issue] } as DocumentView;
+    vi.mocked(invoke).mockResolvedValue(view);
+
+    await expect(documentOpen("C:\\作品\\sample.fold")).resolves.toBe(view);
+    expect(invoke).toHaveBeenCalledWith("document_open", {
+      path: "C:\\作品\\sample.fold",
+    });
+  });
+
+  it("書き出しの種類と注意配列を変えずに往復させる", async () => {
+    vi.mocked(invoke).mockResolvedValue([issue]);
+
+    await expect(
+      documentExport("FoldJson", "C:\\作品\\sample.fold", {
+        include_aux: false,
+        png_long_side: 2048,
+      }),
+    ).resolves.toEqual([issue]);
+    expect(invoke).toHaveBeenCalledWith("document_export", {
+      kind: "FoldJson",
+      path: "C:\\作品\\sample.fold",
+      options: { include_aux: false, png_long_side: 2048 },
+    });
+  });
 });
 
 describe("提案job IPC", () => {

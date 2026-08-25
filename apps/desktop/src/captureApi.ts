@@ -4,7 +4,7 @@ import {
   type Viewer3DReadback,
 } from "./components/Viewer3D/sceneBuilder";
 import { TECHNIQUE_LABEL } from "./lib/techniques";
-import { useAppStore } from "./store/appStore";
+import { useAppStore, type ToolId } from "./store/appStore";
 
 export type CaptureView = "3d" | "cp" | "both" | "normal";
 
@@ -26,6 +26,32 @@ export interface CaptureStatus {
   heartbeat: number;
   url: string;
   title: string;
+}
+
+/**
+ * CDP受入検査用の読み取り専用状態。通常画面の描画・ストア状態は変更しない。
+ * 重い3D readbackは含めず、必要な検査が呼んだときだけ現在のstoreを写す。
+ */
+export interface CaptureInteractionState {
+  readonly version: 1;
+  readonly stepCount: number;
+  readonly currentStep: number | null;
+  readonly activeTool: ToolId;
+  readonly selectedEdgeCount: number;
+  readonly selectedVertexCount: number;
+  readonly fold: {
+    readonly draftActive: boolean;
+    readonly target: "all" | "top" | null;
+    readonly pendingConfirmation: boolean;
+  };
+  readonly technique: {
+    readonly active: boolean;
+    readonly kind: string | null;
+    readonly selectedLayerCount: number;
+    readonly candidateLayerCount: number;
+    readonly completedPartCount: number;
+    readonly guideCreaseCount: number;
+  };
 }
 
 export interface CaptureAngleOperation {
@@ -52,6 +78,8 @@ export interface CaptureCanonical3D {
 export interface Origami3CaptureApi {
   readonly version: 1;
   getStatus(): CaptureStatus;
+  /** 呼び出し時点の入力途中状態を読むだけで返す。 */
+  getInteractionState(): CaptureInteractionState;
   openDocument(path: string): Promise<CaptureDocumentInfo>;
   getDocumentInfo(): CaptureDocumentInfo;
   goToStep(step: number): Promise<CaptureStepInfo>;
@@ -128,6 +156,32 @@ function documentInfo(): CaptureDocumentInfo {
   return { version: 1, stepCount: doc.sequence.length, steps };
 }
 
+function interactionState(): CaptureInteractionState {
+  const state = useAppStore.getState();
+  const technique = state.techniqueDraft;
+  return {
+    version: 1,
+    stepCount: state.doc?.sequence.length ?? 0,
+    currentStep: state.currentStep,
+    activeTool: state.activeTool,
+    selectedEdgeCount: state.selection.edgeIds.length,
+    selectedVertexCount: state.selection.vertexIds.length,
+    fold: {
+      draftActive: state.foldDraft !== null,
+      target: state.foldDraft?.target ?? null,
+      pendingConfirmation: state.pendingFoldThrough !== null,
+    },
+    technique: {
+      active: technique !== null,
+      kind: technique?.kind ?? null,
+      selectedLayerCount: technique?.flap.length ?? 0,
+      candidateLayerCount: technique?.flapCandidates.length ?? 0,
+      completedPartCount: technique?.motionParts.length ?? 0,
+      guideCreaseCount: technique !== null && technique.line !== null ? 1 : 0,
+    },
+  };
+}
+
 function canonicalPairs(values: ReadonlyMap<number, number>): [number, number][] {
   return [...values.entries()].sort((left, right) => left[0] - right[0]);
 }
@@ -182,6 +236,8 @@ export function installCaptureApi({ fit2d, fit3d }: FitRefs): () => void {
         title: document.title,
       };
     },
+
+    getInteractionState: interactionState,
 
     async openDocument(path) {
       setCaptureView("normal");

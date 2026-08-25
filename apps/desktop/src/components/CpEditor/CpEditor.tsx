@@ -560,6 +560,7 @@ export function CpEditor({ fitRef }: Props) {
       <canvas
         ref={canvasRef}
         className="cp-canvas"
+        data-testid="cp-canvas"
         tabIndex={0}
         aria-label={
           (activeTool === "mountain" || activeTool === "valley" || activeTool === "aux") &&

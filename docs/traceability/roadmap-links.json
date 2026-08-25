@@ -15,7 +15,13 @@
                         "evidence_type":  "preexisting-d1",
                         "test_name":  null,
                         "manual_id":  null,
-                        "progress_state":  "historical-link-in-M0-evidence-table"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "historical-link-in-M0-evidence-table",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  null
                     },
                     {
                         "id":  "M0.T0-1.C02",
@@ -29,7 +35,13 @@
                         "evidence_type":  "preexisting-d1",
                         "test_name":  null,
                         "manual_id":  null,
-                        "progress_state":  "historical-link-in-M0-evidence-table"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "historical-link-in-M0-evidence-table",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  null
                     },
                     {
                         "id":  "M0.T0-1.C03",
@@ -43,7 +55,13 @@
                         "evidence_type":  "preexisting-d1",
                         "test_name":  null,
                         "manual_id":  null,
-                        "progress_state":  "historical-link-in-M0-evidence-table"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "historical-link-in-M0-evidence-table",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  null
                     },
                     {
                         "id":  "M0.T0-1.C04",
@@ -57,7 +75,13 @@
                         "evidence_type":  "preexisting-d1",
                         "test_name":  null,
                         "manual_id":  null,
-                        "progress_state":  "historical-link-in-M0-evidence-table"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "historical-link-in-M0-evidence-table",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  null
                     },
                     {
                         "id":  "M0.T0-1.C05",
@@ -71,7 +95,13 @@
                         "evidence_type":  "preexisting-d1",
                         "test_name":  null,
                         "manual_id":  null,
-                        "progress_state":  "historical-link-in-M0-evidence-table"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "historical-link-in-M0-evidence-table",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  null
                     },
                     {
                         "id":  "M0.T0-2.C01",
@@ -85,7 +115,13 @@
                         "evidence_type":  "preexisting-d1",
                         "test_name":  null,
                         "manual_id":  null,
-                        "progress_state":  "historical-link-in-M0-evidence-table"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "historical-link-in-M0-evidence-table",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  null
                     },
                     {
                         "id":  "M0.T0-2.C02",
@@ -99,7 +135,13 @@
                         "evidence_type":  "preexisting-d1",
                         "test_name":  null,
                         "manual_id":  null,
-                        "progress_state":  "historical-link-in-M0-evidence-table"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "historical-link-in-M0-evidence-table",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  null
                     },
                     {
                         "id":  "M0.T0-2.C03",
@@ -113,7 +155,13 @@
                         "evidence_type":  "preexisting-d1",
                         "test_name":  null,
                         "manual_id":  null,
-                        "progress_state":  "historical-link-in-M0-evidence-table"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "historical-link-in-M0-evidence-table",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  null
                     },
                     {
                         "id":  "M0.T0-2.C04",
@@ -127,7 +175,13 @@
                         "evidence_type":  "preexisting-d1",
                         "test_name":  null,
                         "manual_id":  null,
-                        "progress_state":  "historical-link-in-M0-evidence-table"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "historical-link-in-M0-evidence-table",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  null
                     },
                     {
                         "id":  "M0.T0-3.C01",
@@ -141,7 +195,13 @@
                         "evidence_type":  "preexisting-d1",
                         "test_name":  null,
                         "manual_id":  null,
-                        "progress_state":  "historical-link-in-M0-evidence-table"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "historical-link-in-M0-evidence-table",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  null
                     },
                     {
                         "id":  "M0.T0-3.C02",
@@ -155,7 +215,13 @@
                         "evidence_type":  "preexisting-d1",
                         "test_name":  null,
                         "manual_id":  null,
-                        "progress_state":  "historical-link-in-M0-evidence-table"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "historical-link-in-M0-evidence-table",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  null
                     },
                     {
                         "id":  "M1.T1-1.C01",
@@ -169,7 +235,13 @@
                         "evidence_type":  "test",
                         "test_name":  "test_document_json_roundtrip",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-1",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-1.C02",
@@ -183,7 +255,13 @@
                         "evidence_type":  "test",
                         "test_name":  "test_document_json_roundtrip",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-1",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-1.C03",
@@ -197,7 +275,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M1.T1-1.C03.COMMIT-PUSH",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-1",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-10.C01",
@@ -211,7 +295,13 @@
                         "evidence_type":  "test",
                         "test_name":  "yakko_double_blintz_folds_flat_to_half_square",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-10",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-10.C02",
@@ -225,7 +315,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M1.T1-10.C02.SCREEN-ACCEPTANCE",
-                        "progress_state":  "manual-acceptance-pending"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "manual-acceptance-pending",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-10",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-10.C03",
@@ -239,7 +335,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M1.T1-10.C03.COMMIT-PUSH",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-10",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-2.C01",
@@ -253,7 +355,13 @@
                         "evidence_type":  "test",
                         "test_name":  "test_seg_intersection_crossing",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-2",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-2.C02",
@@ -267,7 +375,13 @@
                         "evidence_type":  "test",
                         "test_name":  "test_seg_intersection_crossing",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-2",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-2.C03",
@@ -281,7 +395,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M1.T1-2.C03.COMMIT-PUSH",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-2",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-3.C01",
@@ -295,7 +415,13 @@
                         "evidence_type":  "test",
                         "test_name":  "extraction_is_deterministic",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-3",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-3.C02",
@@ -309,7 +435,13 @@
                         "evidence_type":  "test",
                         "test_name":  "extraction_is_deterministic",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-3",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-3.C03",
@@ -323,7 +455,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M1.T1-3.C03.COMMIT-PUSH",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-3",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-4.C01",
@@ -337,7 +475,13 @@
                         "evidence_type":  "test",
                         "test_name":  "store::tests::add_segment_undo_redo_roundtrip",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-4",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-4.C02",
@@ -351,7 +495,13 @@
                         "evidence_type":  "test",
                         "test_name":  "store::tests::add_segment_undo_redo_roundtrip",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-4",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-4.C03",
@@ -365,7 +515,13 @@
                         "evidence_type":  "test",
                         "test_name":  "store::tests::add_segment_undo_redo_roundtrip",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-4",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-4.C04",
@@ -379,7 +535,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M1.T1-4.C04.COMMIT-PUSH",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-4",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-5.C01",
@@ -393,7 +555,13 @@
                         "evidence_type":  "test",
                         "test_name":  "src/store/ipcQueue.test.ts \u003e createSerialQueue \u003e 前の要求が完了するまで次の要求を開始しない(発行順に直列実行)",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-5",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-5.C02",
@@ -407,7 +575,13 @@
                         "evidence_type":  "test",
                         "test_name":  "src/store/ipcQueue.test.ts \u003e createSerialQueue \u003e 前の要求が完了するまで次の要求を開始しない(発行順に直列実行)",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-5",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-5.C03",
@@ -421,7 +595,13 @@
                         "evidence_type":  "test",
                         "test_name":  "src/store/ipcQueue.test.ts \u003e createSerialQueue \u003e 前の要求が完了するまで次の要求を開始しない(発行順に直列実行)",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-5",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-5.C04",
@@ -435,7 +615,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M1.T1-5.C04.SCREEN-ACCEPTANCE",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-5",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-5.C05",
@@ -449,7 +635,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M1.T1-5.C05.COMMIT-PUSH",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-5",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-6.C01",
@@ -463,7 +655,13 @@
                         "evidence_type":  "test",
                         "test_name":  "src/lib/alignPick.test.ts \u003e 線分の交点 \u003e 十字に交わる2本の交点を返す",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-6",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-6.C02",
@@ -477,7 +675,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M1.T1-6.C02.SCREEN-ACCEPTANCE",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-6",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-6.C03",
@@ -491,7 +695,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M1.T1-6.C03.SCREEN-ACCEPTANCE",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-6",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-6.C04",
@@ -505,7 +715,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M1.T1-6.C04.SCREEN-ACCEPTANCE",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-6",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-6.C05",
@@ -519,7 +735,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M1.T1-6.C05.COMMIT-PUSH",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-6",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-7.C01",
@@ -533,7 +755,13 @@
                         "evidence_type":  "test",
                         "test_name":  "loop_free_cp_converges_immediately",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-7",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-7.C02",
@@ -547,7 +775,13 @@
                         "evidence_type":  "test",
                         "test_name":  "loop_free_cp_converges_immediately",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-7",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-7.C03",
@@ -561,7 +795,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M1.T1-7.C03.COMMIT-PUSH",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-7",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-8.C01",
@@ -575,7 +815,13 @@
                         "evidence_type":  "test",
                         "test_name":  "warm_start_converges_faster_to_same_solution",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-8",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-8.C02",
@@ -589,7 +835,13 @@
                         "evidence_type":  "test",
                         "test_name":  "warm_start_converges_faster_to_same_solution",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-8",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-8.C03",
@@ -603,7 +855,13 @@
                         "evidence_type":  "test",
                         "test_name":  "warm_start_converges_faster_to_same_solution",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-8",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-8.C04",
@@ -617,7 +875,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M1.T1-8.C04.COMMIT-PUSH",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-8",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-9.C01",
@@ -631,7 +895,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M1.T1-9.C01.SCREEN-ACCEPTANCE",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-9",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-9.C02",
@@ -645,7 +915,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M1.T1-9.C02.SCREEN-ACCEPTANCE",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-9",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-9.C03",
@@ -659,7 +935,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M1.T1-9.C03.SCREEN-ACCEPTANCE",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-9",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-9.C04",
@@ -673,7 +955,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M1.T1-9.C04.SCREEN-ACCEPTANCE",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-9",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M1.T1-9.C05",
@@ -687,7 +975,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M1.T1-9.C05.COMMIT-PUSH",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "1-9",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-0.C01",
@@ -701,7 +995,13 @@
                         "evidence_type":  "test",
                         "test_name":  "yakko_hinge_20_sweep_stays_within_frame_budget",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-0",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-0.C02",
@@ -715,7 +1015,13 @@
                         "evidence_type":  "test",
                         "test_name":  "yakko_hinge_20_sweep_stays_within_frame_budget",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-0",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-0.C03",
@@ -729,7 +1035,13 @@
                         "evidence_type":  "test",
                         "test_name":  "yakko_hinge_20_sweep_stays_within_frame_budget",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-0",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-0.C04",
@@ -743,7 +1055,13 @@
                         "evidence_type":  "test",
                         "test_name":  "yakko_hinge_20_sweep_stays_within_frame_budget",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-0",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-0.C05",
@@ -757,7 +1075,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-0.C05.SCREEN-ACCEPTANCE",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-0",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-0.C06",
@@ -771,7 +1095,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-0.C06.COMMIT-PUSH",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-0",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-0.C07",
@@ -785,7 +1115,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-0.C07.SCREEN-ACCEPTANCE",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-0",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-0.C08",
@@ -799,7 +1135,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-0.C08.SCREEN-ACCEPTANCE",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-0",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-0.C09",
@@ -813,7 +1155,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-0.C09.SCREEN-ACCEPTANCE",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-0",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-0.C10",
@@ -827,7 +1175,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-0.C10.SCREEN-ACCEPTANCE",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-0",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-0.C11",
@@ -841,7 +1195,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-0.C11.COMMIT-PUSH",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-0",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-1.C01",
@@ -855,7 +1215,13 @@
                         "evidence_type":  "test",
                         "test_name":  "half_folded_square_is_mirror_pair_with_right_face_on_top",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-1",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-1.C02",
@@ -869,7 +1235,13 @@
                         "evidence_type":  "test",
                         "test_name":  "half_folded_square_is_mirror_pair_with_right_face_on_top",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-1",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-1.C03",
@@ -883,7 +1255,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-1.C03.COMMIT-PUSH",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-1",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-2.C01",
@@ -897,7 +1275,13 @@
                         "evidence_type":  "test",
                         "test_name":  "folding_only_top_layer_keeps_lower_layers_in_place",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-2",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-2.C02",
@@ -911,7 +1295,13 @@
                         "evidence_type":  "test",
                         "test_name":  "folding_only_top_layer_keeps_lower_layers_in_place",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-2",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-2.C03",
@@ -925,7 +1315,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-2.C03.COMMIT-PUSH",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-2",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-2.C04",
@@ -939,7 +1335,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-2.C04.COMMIT-PUSH",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-2",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-3.C01",
@@ -953,7 +1355,13 @@
                         "evidence_type":  "test",
                         "test_name":  "replay_twice_is_bit_identical",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-3",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-3.C02",
@@ -967,7 +1375,13 @@
                         "evidence_type":  "test",
                         "test_name":  "replay_twice_is_bit_identical",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-3",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-3.C03",
@@ -981,7 +1395,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-3.C03.SCREEN-ACCEPTANCE",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-3",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-3.C04",
@@ -995,7 +1415,13 @@
                         "evidence_type":  "test",
                         "test_name":  "replay_twice_is_bit_identical",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-3",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-3.C05",
@@ -1009,7 +1435,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-3.C05.COMMIT-PUSH",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-3",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-3.C06",
@@ -1023,7 +1455,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-3.C06.COMMIT-PUSH",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-3",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-4.C01",
@@ -1037,7 +1475,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-4.C01.SCREEN-ACCEPTANCE",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-4",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-4.C02",
@@ -1051,7 +1495,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-4.C02.SCREEN-ACCEPTANCE",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-4",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-4.C03",
@@ -1065,7 +1515,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-4.C03.SCREEN-ACCEPTANCE",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-4",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-4.C04",
@@ -1079,7 +1535,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-4.C04.COMMIT-PUSH",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-4",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-5.C01",
@@ -1093,7 +1555,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-5.C01.SCREEN-ACCEPTANCE",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-5",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-5.C02",
@@ -1107,7 +1575,13 @@
                         "evidence_type":  "test",
                         "test_name":  "store::tests::cushion_then_cupboard_fold_only_with_fold_through",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-5",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-5.C03",
@@ -1121,7 +1595,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-5.C03.SCREEN-ACCEPTANCE",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-5",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-5.C04",
@@ -1135,7 +1615,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-5.C04.SCREEN-ACCEPTANCE",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-5",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-5.C05",
@@ -1149,7 +1635,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-5.C05.SCREEN-ACCEPTANCE",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-5",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-5.C06",
@@ -1163,7 +1655,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-5.C06.SCREEN-ACCEPTANCE",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-5",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-5.C07",
@@ -1177,7 +1675,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-5.C07.COMMIT-PUSH",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-5",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-6.C01",
@@ -1191,7 +1695,13 @@
                         "evidence_type":  "test",
                         "test_name":  "inside_reverse_on_four_layer_flap",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-6",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-6.C02",
@@ -1205,7 +1715,13 @@
                         "evidence_type":  "test",
                         "test_name":  "inside_reverse_on_four_layer_flap",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-6",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-6.C03",
@@ -1219,7 +1735,13 @@
                         "evidence_type":  "test",
                         "test_name":  "inside_reverse_on_four_layer_flap",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-6",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-6.C04",
@@ -1233,7 +1755,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-6.C04.SCREEN-ACCEPTANCE",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-6",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-6.C05",
@@ -1247,7 +1775,13 @@
                         "evidence_type":  "test",
                         "test_name":  "inside_reverse_on_four_layer_flap",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-6",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-6.C06",
@@ -1261,7 +1795,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-6.C06.COMMIT-PUSH",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-6",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-6b.C01",
@@ -1275,7 +1815,13 @@
                         "evidence_type":  "test",
                         "test_name":  "sim011_completeness_table_and_generic_routes_are_permanent",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-6b",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-6b.C02",
@@ -1289,7 +1835,13 @@
                         "evidence_type":  "test",
                         "test_name":  "sim011_completeness_table_and_generic_routes_are_permanent",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-6b",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-6b.C03",
@@ -1303,7 +1855,13 @@
                         "evidence_type":  "test",
                         "test_name":  "sim011_completeness_table_and_generic_routes_are_permanent",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-6b",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-6b.C04",
@@ -1317,7 +1875,13 @@
                         "evidence_type":  "test",
                         "test_name":  "sim011_completeness_table_and_generic_routes_are_permanent",
                         "manual_id":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-6b",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-6b.C05",
@@ -1331,7 +1895,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-6b.C05.SCREEN-ACCEPTANCE",
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-6b",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-6b.C06",
@@ -1339,13 +1909,19 @@
                         "task":  "Task 2-6b",
                         "checkbox":  true,
                         "roadmap_line":  708,
-                        "checkbox_state":  "unchecked",
-                        "checkbox_text":  "UIの技法サブメニューを5種に(中割り/かぶせ/花弁/つぶし/段)",
+                        "checkbox_state":  "checked",
+                        "checkbox_text":  "UIの技法サブメニューを9種に(層操作/段/中割り/かぶせ/つぶし/花弁/沈め/ひだ寄せ/ねじり)",
                         "evidence_id":  "MANUAL.M2.T2-6b.C06.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-6b.C06.SCREEN-ACCEPTANCE",
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-6b",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-6b.C07",
@@ -1359,7 +1935,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-6b.C07.SCREEN-ACCEPTANCE",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-6b",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-6b.C08",
@@ -1373,7 +1955,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-6b.C08.COMMIT-PUSH",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-6b",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-6c.C01",
@@ -1387,7 +1975,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-6c.C01.SCREEN-ACCEPTANCE",
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-6c",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-6c.C02",
@@ -1401,7 +1995,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-6c.C02.SCREEN-ACCEPTANCE",
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-6c",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-6c.C03",
@@ -1415,7 +2015,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-6c.C03.SCREEN-ACCEPTANCE",
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-6c",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-6c.C04",
@@ -1423,13 +2029,19 @@
                         "task":  "Task 2-6c",
                         "checkbox":  true,
                         "roadmap_line":  721,
-                        "checkbox_state":  "unchecked",
+                        "checkbox_state":  "checked",
                         "checkbox_text":  "**状態の可視化(UI-009)**: 3Dビュー上部に現在のモードと操作ヒントを1行で常時表示(例「紙をドラッグすると折れます / Shiftで1枚だけ」)。できない状態では理由を表示(例「折り途中では折れません。手順の最後に戻してください」)。ボタンは無効化しても消さず、理由をツールチップに出す",
                         "evidence_id":  "MANUAL.M2.T2-6c.C04.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-6c.C04.SCREEN-ACCEPTANCE",
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-6c",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-6c.C05",
@@ -1443,7 +2055,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-6c.C05.SCREEN-ACCEPTANCE",
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-6c",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-6c.C06",
@@ -1457,7 +2075,13 @@
                         "evidence_type":  "test",
                         "test_name":  "src/lib/layerMotion.test.ts \u003e 汎用層操作の入力 \u003e 既存折り目のReflectをregionなし・Keepへ変換する",
                         "manual_id":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-6c",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-6c.C07",
@@ -1471,7 +2095,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-6c.C07.SCREEN-ACCEPTANCE",
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-6c",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-6c.C08",
@@ -1485,7 +2115,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-6c.C08.SCREEN-ACCEPTANCE",
-                        "progress_state":  "manual-acceptance-pending"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "manual-acceptance-pending",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-6c",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-6c.C09",
@@ -1499,7 +2135,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-6c.C09.COMMIT-PUSH",
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  "85b8ca42b473f16312c4431b880bf569f48538f9",
+                        "commit_subject":  "紙をつかんで動かす直感的な折り操作に変更",
+                        "commit_main_ancestor":  true,
+                        "progress_state":  "commit-evidence-verified",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  "2-6c",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-7.C01",
@@ -1513,7 +2155,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-7.C01.SCREEN-ACCEPTANCE",
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-7",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-7.C02",
@@ -1527,7 +2175,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-7.C02.SCREEN-ACCEPTANCE",
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-7",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-7.C03",
@@ -1541,7 +2195,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-7.C03.SCREEN-ACCEPTANCE",
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-7",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-7.C04",
@@ -1555,7 +2215,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-7.C04.COMMIT-PUSH",
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  "dfd5ca03dce87fa2ae6cfff5cb05aba5b527d478",
+                        "commit_subject":  "作図の補助線・折りたたみ可否の注意表示・紙のめり込み警告を追加",
+                        "commit_main_ancestor":  true,
+                        "progress_state":  "commit-evidence-verified",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  "2-7",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-8.C01",
@@ -1569,7 +2235,13 @@
                         "evidence_type":  "test",
                         "test_name":  "autosave::tests::restore_recovers_the_same_document",
                         "manual_id":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-8",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-8.C02",
@@ -1583,7 +2255,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-8.C02.SCREEN-ACCEPTANCE",
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-8",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-8.C03",
@@ -1597,7 +2275,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-8.C03.COMMIT-PUSH",
-                        "progress_state":  "manual-acceptance-pending"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "manual-acceptance-pending",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-8",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-9.C01",
@@ -1605,13 +2289,19 @@
                         "task":  "Task 2-9",
                         "checkbox":  true,
                         "roadmap_line":  749,
-                        "checkbox_state":  "unchecked",
-                        "checkbox_text":  "折り鶴を「fold_through+技法マクロの列」でスクリプト構築し、最終状態の層数・外形寸法・決定性を検証する回帰テスト",
+                        "checkbox_state":  "checked",
+                        "checkbox_text":  "折り鶴を「fold_through+技法マクロの列」でスクリプト構築し、最終状態の層数・外形寸法・決定性を検証する回帰テスト — [証拠:M2.T2-9.C01](traceability/roadmap-links.md#roadmap-evidence-m2-t2-9-c01) \u003c!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-9.C01 evidence=TEST.M2.T2-9.C01 --\u003e \u003c!-- 実行確認: completed_crane_is_flat_and_symmetric (1 passed; 0 failed) --\u003e",
                         "evidence_id":  "TEST.M2.T2-9.C01",
                         "evidence_type":  "test",
                         "test_name":  "completed_crane_is_flat_and_symmetric",
                         "manual_id":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-9",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-9.C02",
@@ -1625,7 +2315,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-9.C02.SCREEN-ACCEPTANCE",
-                        "progress_state":  "manual-acceptance-pending"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "manual-acceptance-pending",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-9",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M2.T2-9.C03",
@@ -1639,7 +2335,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M2.T2-9.C03.COMMIT-PUSH",
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  "f00628a8d365a01a71421cfeb32467e77bb75ebd",
+                        "commit_subject":  "折り鶴が折れることを確認する自動テストを追加",
+                        "commit_main_ancestor":  true,
+                        "progress_state":  "commit-evidence-verified",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  "2-9",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M3.T3-1.C01",
@@ -1653,7 +2355,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M3.T3-1.C01.COMMIT-PUSH",
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  "6ce06fb3ac7cb21bf694a12af2db7a1871710f67",
+                        "commit_subject":  "頭・尾・足などの骨格を指定するためのデータ形式を追加",
+                        "commit_main_ancestor":  true,
+                        "progress_state":  "commit-evidence-verified",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  "3-1",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M3.T3-2.C01",
@@ -1667,7 +2375,13 @@
                         "evidence_type":  "test",
                         "test_name":  "packing_quality_baseline_1005_runs",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "3-2",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M3.T3-2.C02",
@@ -1681,7 +2395,13 @@
                         "evidence_type":  "test",
                         "test_name":  "packing_quality_baseline_1005_runs",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "3-2",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M3.T3-2.C03",
@@ -1695,7 +2415,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M3.T3-2.C03.COMMIT-PUSH",
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  "8532fb2dc74fb8cf606569ca6a00ca212677c1c5",
+                        "commit_subject":  "骨格に合わせて紙の上に必要な領域を自動配置する計算を追加",
+                        "commit_main_ancestor":  true,
+                        "progress_state":  "commit-evidence-verified",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  "3-2",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M3.T3-3.C01",
@@ -1709,7 +2435,13 @@
                         "evidence_type":  "test",
                         "test_name":  "depth_three_branching_skeleton_packs_and_generates_valid_cp",
                         "manual_id":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "3-3",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M3.T3-3.C02",
@@ -1723,7 +2455,13 @@
                         "evidence_type":  "test",
                         "test_name":  "depth_three_branching_skeleton_packs_and_generates_valid_cp",
                         "manual_id":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "3-3",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M3.T3-3.C03",
@@ -1737,7 +2475,13 @@
                         "evidence_type":  "test",
                         "test_name":  "depth_three_branching_skeleton_packs_and_generates_valid_cp",
                         "manual_id":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "3-3",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M3.T3-3.C04",
@@ -1751,7 +2495,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M3.T3-3.C04.COMMIT-PUSH",
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  "e66e15152b347e7e0db1a77e7927fa7c83cc5d5d",
+                        "commit_subject":  "自動配置の結果から展開図を組み立てる機能を追加",
+                        "commit_main_ancestor":  true,
+                        "progress_state":  "commit-evidence-verified",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  "3-3",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M3.T3-4.C01",
@@ -1759,13 +2509,19 @@
                         "task":  "Task 3-4",
                         "checkbox":  true,
                         "roadmap_line":  791,
-                        "checkbox_state":  "unchecked",
+                        "checkbox_state":  "checked",
                         "checkbox_text":  "3画面構成: ①骨格編集(角の追加/削除ボタン+各角の長さ・太さスライダー+2D骨格プレビュー) ②候補選択(生成4候補の展開図サムネイル+違反数表示) ③確認→`edit_apply ReplaceCreasePattern`で流し込み、ダイアログを閉じる",
                         "evidence_id":  "MANUAL.M3.T3-4.C01.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M3.T3-4.C01.SCREEN-ACCEPTANCE",
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "3-4",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M3.T3-4.C02",
@@ -1773,13 +2529,19 @@
                         "task":  "Task 3-4",
                         "checkbox":  true,
                         "roadmap_line":  792,
-                        "checkbox_state":  "unchecked",
+                        "checkbox_state":  "checked",
                         "checkbox_text":  "ツールバーの「提案ウィザード」ボタンから起動。メイン画面に常設UIを追加しない(PRO-004)",
                         "evidence_id":  "MANUAL.M3.T3-4.C02.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M3.T3-4.C02.SCREEN-ACCEPTANCE",
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "3-4",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M3.T3-4.C03",
@@ -1793,7 +2555,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M3.T3-4.C03.SCREEN-ACCEPTANCE",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "3-4",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M3.T3-4.C04",
@@ -1807,12 +2575,18 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M3.T3-4.C04.COMMIT-PUSH",
-                        "progress_state":  "manual-acceptance-pending"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "manual-acceptance-pending",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "3-4",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M3.T3-4.C05",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 1",
                         "checkbox":  true,
                         "roadmap_line":  800,
                         "checkbox_state":  "checked",
@@ -1821,12 +2595,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C06",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 1",
                         "checkbox":  true,
                         "roadmap_line":  801,
                         "checkbox_state":  "checked",
@@ -1835,12 +2615,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C07",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 1",
                         "checkbox":  true,
                         "roadmap_line":  802,
                         "checkbox_state":  "checked",
@@ -1849,12 +2635,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C08",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 1",
                         "checkbox":  true,
                         "roadmap_line":  803,
                         "checkbox_state":  "checked",
@@ -1863,12 +2655,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C09",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 1",
                         "checkbox":  true,
                         "roadmap_line":  805,
                         "checkbox_state":  "checked",
@@ -1877,12 +2675,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C10",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 1",
                         "checkbox":  true,
                         "roadmap_line":  806,
                         "checkbox_state":  "checked",
@@ -1891,12 +2695,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C11",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 6",
                         "checkbox":  true,
                         "roadmap_line":  826,
                         "checkbox_state":  "checked",
@@ -1905,12 +2715,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C12",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 6",
                         "checkbox":  true,
                         "roadmap_line":  827,
                         "checkbox_state":  "checked",
@@ -1919,12 +2735,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C13",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 6",
                         "checkbox":  true,
                         "roadmap_line":  828,
                         "checkbox_state":  "checked",
@@ -1933,12 +2755,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C14",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 6",
                         "checkbox":  true,
                         "roadmap_line":  829,
                         "checkbox_state":  "checked",
@@ -1947,12 +2775,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C15",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 7",
                         "checkbox":  true,
                         "roadmap_line":  833,
                         "checkbox_state":  "checked",
@@ -1961,12 +2795,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C16",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 7",
                         "checkbox":  true,
                         "roadmap_line":  834,
                         "checkbox_state":  "checked",
@@ -1975,12 +2815,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C17",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 7",
                         "checkbox":  true,
                         "roadmap_line":  835,
                         "checkbox_state":  "checked",
@@ -1989,12 +2835,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C18",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 7",
                         "checkbox":  true,
                         "roadmap_line":  836,
                         "checkbox_state":  "checked",
@@ -2003,12 +2855,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C19",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 7",
                         "checkbox":  true,
                         "roadmap_line":  837,
                         "checkbox_state":  "checked",
@@ -2017,12 +2875,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C20",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 7",
                         "checkbox":  true,
                         "roadmap_line":  838,
                         "checkbox_state":  "checked",
@@ -2031,12 +2895,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C21",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 13",
                         "checkbox":  true,
                         "roadmap_line":  842,
                         "checkbox_state":  "checked",
@@ -2045,12 +2915,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C22",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 13",
                         "checkbox":  true,
                         "roadmap_line":  843,
                         "checkbox_state":  "checked",
@@ -2059,12 +2935,18 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M3.T3-4.C22.SCREEN-ACCEPTANCE",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C23",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 13",
                         "checkbox":  true,
                         "roadmap_line":  844,
                         "checkbox_state":  "checked",
@@ -2073,12 +2955,18 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M3.T3-4.C23.SCREEN-ACCEPTANCE",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C24",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 14・15",
                         "checkbox":  true,
                         "roadmap_line":  848,
                         "checkbox_state":  "checked",
@@ -2087,12 +2975,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C25",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 14・15",
                         "checkbox":  true,
                         "roadmap_line":  849,
                         "checkbox_state":  "checked",
@@ -2101,12 +2995,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C26",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 14・15",
                         "checkbox":  true,
                         "roadmap_line":  850,
                         "checkbox_state":  "checked",
@@ -2115,12 +3015,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C27",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 18",
                         "checkbox":  true,
                         "roadmap_line":  863,
                         "checkbox_state":  "unchecked",
@@ -2129,12 +3035,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-with-test-link",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C28",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 18",
                         "checkbox":  true,
                         "roadmap_line":  864,
                         "checkbox_state":  "unchecked",
@@ -2143,12 +3055,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-with-test-link",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C29",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 18",
                         "checkbox":  true,
                         "roadmap_line":  865,
                         "checkbox_state":  "unchecked",
@@ -2157,12 +3075,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-with-test-link",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C30",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 19",
                         "checkbox":  true,
                         "roadmap_line":  869,
                         "checkbox_state":  "checked",
@@ -2171,12 +3095,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C31",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 19",
                         "checkbox":  true,
                         "roadmap_line":  870,
                         "checkbox_state":  "checked",
@@ -2185,12 +3115,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C32",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 19",
                         "checkbox":  true,
                         "roadmap_line":  871,
                         "checkbox_state":  "checked",
@@ -2199,12 +3135,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C33",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 20",
                         "checkbox":  true,
                         "roadmap_line":  877,
                         "checkbox_state":  "checked",
@@ -2213,12 +3155,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C34",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 20",
                         "checkbox":  true,
                         "roadmap_line":  878,
                         "checkbox_state":  "checked",
@@ -2227,12 +3175,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C35",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 20",
                         "checkbox":  true,
                         "roadmap_line":  879,
                         "checkbox_state":  "checked",
@@ -2241,12 +3195,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C36",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 20",
                         "checkbox":  true,
                         "roadmap_line":  880,
                         "checkbox_state":  "checked",
@@ -2255,12 +3215,18 @@
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
                         "manual_id":  null,
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M3.T3-4.C37",
                         "scope":  "M3",
-                        "task":  "Task 3-4",
+                        "task":  "Work 20",
                         "checkbox":  true,
                         "roadmap_line":  881,
                         "checkbox_state":  "checked",
@@ -2269,7 +3235,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M3.T3-4.C37.SCREEN-ACCEPTANCE",
-                        "progress_state":  "consistent"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
                     },
                     {
                         "id":  "M4.T4-1.C01",
@@ -2277,13 +3249,19 @@
                         "task":  "Task 4-1",
                         "checkbox":  true,
                         "roadmap_line":  901,
-                        "checkbox_state":  "unchecked",
-                        "checkbox_text":  "テスト: 鶴の基本形の頂点を沈める→対象領域の全層で山谷が反転し、層順序が沈め込み後の入れ子順になる",
+                        "checkbox_state":  "checked",
+                        "checkbox_text":  "テスト: 鶴の基本形の頂点を沈める→対象領域の全層で山谷が反転し、層順序が沈め込み後の入れ子順になる — [証拠:M4.T4-1.C01](traceability/roadmap-links.md#roadmap-evidence-m4-t4-1-c01) \u003c!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-1.C01 evidence=TEST.M4.T4-1.C01 --\u003e \u003c!-- 実行確認: open_sink_works_on_the_bird_base_apex (1 passed; 0 failed) --\u003e",
                         "evidence_id":  "TEST.M4.T4-1.C01",
                         "evidence_type":  "test",
                         "test_name":  "open_sink_turns_the_tip_of_the_preliminary_base_inside_out",
                         "manual_id":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "4-1",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M4.T4-1.C02",
@@ -2291,13 +3269,19 @@
                         "task":  "Task 4-1",
                         "checkbox":  true,
                         "roadmap_line":  902,
-                        "checkbox_state":  "unchecked",
-                        "checkbox_text":  "実装: `pub fn open_sink(cp, faces, state, region_line: [[f64;2];2]) -\u003e Result\u003cFoldThroughResult, String\u003e`。折り線より先端側の全層について、(a)折り線で各層を分割 (b)先端側の山谷を反転 (c)層順序を内外反転して再挿入",
+                        "checkbox_state":  "checked",
+                        "checkbox_text":  "実装: `pub fn open_sink(cp, faces, state, region_line: [[f64;2];2]) -\u003e Result\u003cFoldThroughResult, String\u003e`。折り線より先端側の全層について、(a)折り線で各層を分割 (b)先端側の山谷を反転 (c)層順序を内外反転して再挿入 — [証拠:M4.T4-1.C02](traceability/roadmap-links.md#roadmap-evidence-m4-t4-1-c02) \u003c!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-1.C02 evidence=TEST.M4.T4-1.C02 --\u003e \u003c!-- 実行確認: open_sink_turns_the_tip_of_the_preliminary_base_inside_out (1 passed; 0 failed) --\u003e",
                         "evidence_id":  "TEST.M4.T4-1.C02",
                         "evidence_type":  "test",
                         "test_name":  "open_sink_turns_the_tip_of_the_preliminary_base_inside_out",
                         "manual_id":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "4-1",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M4.T4-1.C03",
@@ -2311,7 +3295,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M4.T4-1.C03.COMMIT-PUSH",
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  "e2a4dff1ce092417e3ff722a082d010a738efabf",
+                        "commit_subject":  "沈め折りを追加",
+                        "commit_main_ancestor":  true,
+                        "progress_state":  "commit-evidence-verified",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  "4-1",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M4.T4-2.C01",
@@ -2319,13 +3309,19 @@
                         "task":  "Task 4-2",
                         "checkbox":  true,
                         "roadmap_line":  909,
-                        "checkbox_state":  "unchecked",
-                        "checkbox_text":  "`pub fn swivel(...)`: 基準線+寄せ線の2線指定でひだを寄せる(fold_through2回+層併合)",
+                        "checkbox_state":  "checked",
+                        "checkbox_text":  "`pub fn swivel(...)`: 基準線+寄せ線の2線指定でひだを寄せる(fold_through2回+層併合) — [証拠:M4.T4-2.C01](traceability/roadmap-links.md#roadmap-evidence-m4-t4-2-c01) \u003c!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-2.C01 evidence=TEST.M4.T4-2.C01 --\u003e \u003c!-- 実行確認: swivel_works_on_stacked_layers_and_rejects_only_undefined_input (1 passed; 0 failed) --\u003e",
                         "evidence_id":  "TEST.M4.T4-2.C01",
                         "evidence_type":  "test",
                         "test_name":  "twist_works_on_a_triangle_and_rejects_only_undefined_input",
                         "manual_id":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "4-2",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M4.T4-2.C02",
@@ -2333,13 +3329,19 @@
                         "task":  "Task 4-2",
                         "checkbox":  true,
                         "roadmap_line":  910,
-                        "checkbox_state":  "unchecked",
-                        "checkbox_text":  "`pub fn twist(...)`: 多角形領域+周辺ひだ線の指定でねじる(領域回転配置+周辺ひだのfold_through列)",
+                        "checkbox_state":  "checked",
+                        "checkbox_text":  "`pub fn twist(...)`: 多角形領域+周辺ひだ線の指定でねじる(領域回転配置+周辺ひだのfold_through列) — [証拠:M4.T4-2.C02](traceability/roadmap-links.md#roadmap-evidence-m4-t4-2-c02) \u003c!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-2.C02 evidence=TEST.M4.T4-2.C02 --\u003e \u003c!-- 実行確認: twist_works_on_a_triangle_and_rejects_only_undefined_input (1 passed; 0 failed) --\u003e",
                         "evidence_id":  "TEST.M4.T4-2.C02",
                         "evidence_type":  "test",
                         "test_name":  "twist_works_on_a_triangle_and_rejects_only_undefined_input",
                         "manual_id":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "4-2",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M4.T4-2.C03",
@@ -2353,7 +3355,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M4.T4-2.C03.COMMIT-PUSH",
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  "98e94ad293beb1b81c4c66acead9ff8d47248171",
+                        "commit_subject":  "ひだ寄せとねじり折りを追加",
+                        "commit_main_ancestor":  true,
+                        "progress_state":  "commit-evidence-verified",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  "4-2",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M4.T4-3.C01",
@@ -2367,7 +3375,13 @@
                         "evidence_type":  "test",
                         "test_name":  "cp_svg::tests::each_edge_kind_has_its_own_style",
                         "manual_id":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "4-3",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M4.T4-3.C02",
@@ -2375,13 +3389,19 @@
                         "task":  "Task 4-3",
                         "checkbox":  true,
                         "roadmap_line":  918,
-                        "checkbox_state":  "unchecked",
+                        "checkbox_state":  "checked",
                         "checkbox_text":  "実装: SVGは文字列組み立て(`svg`クレート可)。PNGはresvgでSVGをラスタライズ。`document_export`コマンド追加(種別enum: CpSvg/CpPng/DiagramPdf/DiagramSvg)+書き出しダイアログ(補助線含む/含まない、PNG解像度)",
                         "evidence_id":  "MANUAL.M4.T4-3.C02.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M4.T4-3.C02.SCREEN-ACCEPTANCE",
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "4-3",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M4.T4-3.C03",
@@ -2395,7 +3415,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M4.T4-3.C03.COMMIT-PUSH",
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  "8ad7be3511f64dce20c8aaa8b4b1a897e4d5d656",
+                        "commit_subject":  "展開図を画像ファイルとして保存する機能を追加",
+                        "commit_main_ancestor":  true,
+                        "progress_state":  "commit-evidence-verified",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  "4-3",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M4.T4-4.C01",
@@ -2409,7 +3435,13 @@
                         "evidence_type":  "test",
                         "test_name":  "manual::tests::representative_json_makes_four_page_pdf_and_two_toc_items",
                         "manual_id":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "4-4",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M4.T4-4.C02",
@@ -2423,7 +3455,13 @@
                         "evidence_type":  "test",
                         "test_name":  "manual::tests::representative_json_makes_four_page_pdf_and_two_toc_items",
                         "manual_id":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "4-4",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M4.T4-4.C03",
@@ -2437,7 +3475,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M4.T4-4.C03.COMMIT-PUSH",
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  "1b1a0e650cd373fc0a877d7fb133452f767739ba",
+                        "commit_subject":  "折り手順を1コマずつ図にする機能を追加",
+                        "commit_main_ancestor":  true,
+                        "progress_state":  "commit-evidence-verified",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  "4-4",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M4.T4-5.C01",
@@ -2451,7 +3495,13 @@
                         "evidence_type":  "test",
                         "test_name":  "pdf::tests::seven_steps_make_a_cover_and_two_pages",
                         "manual_id":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "4-5",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M4.T4-5.C02",
@@ -2465,7 +3515,13 @@
                         "evidence_type":  "test",
                         "test_name":  "pdf::tests::seven_steps_make_a_cover_and_two_pages",
                         "manual_id":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "4-5",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M4.T4-5.C03",
@@ -2479,7 +3535,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M4.T4-5.C03.SCREEN-ACCEPTANCE",
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "4-5",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M4.T4-5.C04",
@@ -2493,7 +3555,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M4.T4-5.C04.COMMIT-PUSH",
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  "eb1c2c5904ebe67c15d2e2331c9533cddf91705c",
+                        "commit_subject":  "折り図をPDFとして保存する機能を追加",
+                        "commit_main_ancestor":  true,
+                        "progress_state":  "commit-evidence-verified",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  "4-5",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M4.T4-6.C01",
@@ -2507,7 +3575,13 @@
                         "evidence_type":  "test",
                         "test_name":  "the_frog_is_deterministic",
                         "manual_id":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "4-6",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M4.T4-6.C02",
@@ -2521,7 +3595,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M4.T4-6.C02.SCREEN-ACCEPTANCE",
-                        "progress_state":  "manual-acceptance-pending"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "manual-acceptance-pending",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "4-6",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M4.T4-6.C03",
@@ -2535,7 +3615,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M4.T4-6.C03.COMMIT-PUSH",
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  "7c49536e8807074751cebd7852f801b5f24dd79b",
+                        "commit_subject":  "伝承のカエルが完成形まで折れることを確認する自動テストを追加",
+                        "commit_main_ancestor":  true,
+                        "progress_state":  "commit-evidence-verified",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  "4-6",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M5.T5-1.C01",
@@ -2549,7 +3635,13 @@
                         "evidence_type":  "test",
                         "test_name":  "finish_soft_round_trips_three_values_only_with_measured_tolerance",
                         "manual_id":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "M5",
+                        "progress_task_recorded":  true
                     },
                     {
                         "id":  "M6.ACCEPTANCE.C01",
@@ -2563,7 +3655,13 @@
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "manual_id":  "MANUAL.M6.ACCEPTANCE.C01.FULL-ACCEPTANCE",
-                        "progress_state":  "manual-acceptance-required"
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "manual-acceptance-required",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  null
                     }
                 ]
 }
