@@ -9,6 +9,7 @@
 //! 設計規約: ロックは複製を取る一瞬だけ。JSON化とファイル書き出しはロックの外。
 //! `DocumentStore::save` は使わない(保存先パスと未保存フラグを書き換えるため)。
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, UNIX_EPOCH};
@@ -218,7 +219,18 @@ pub fn restore(
 }
 
 /// アプリデータディレクトリ(無題の自動保存と目印ファイルの置き場)。
+///
+/// `ORI3_TEST_APP_DATA_DIR` は起動時のautosave/recovery検査だけが使う隔離入口。
+/// 未設定または空文字なら通常のTauri app-data directoryを使うため、利用者が使う
+/// 保存先は変わらない。
+fn test_app_data_dir_override(value: Option<OsString>) -> Option<PathBuf> {
+    value.filter(|path| !path.is_empty()).map(PathBuf::from)
+}
+
 pub fn app_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    if let Some(dir) = test_app_data_dir_override(std::env::var_os("ORI3_TEST_APP_DATA_DIR")) {
+        return Ok(dir);
+    }
     use tauri::Manager;
     app.path()
         .app_data_dir()
@@ -435,5 +447,15 @@ mod tests {
         let untitled = target_path(None, dir);
         assert_eq!(untitled, dir.join(UNTITLED_FILE));
         assert_eq!(document_path_of(&untitled), None);
+    }
+
+    #[test]
+    fn test_app_data_dir_override_is_opt_in_and_preserves_the_unset_path() {
+        assert_eq!(test_app_data_dir_override(None), None);
+        assert_eq!(test_app_data_dir_override(Some(OsString::new())), None);
+        assert_eq!(
+            test_app_data_dir_override(Some(OsString::from("C:\\隔離\\autosave"))),
+            Some(PathBuf::from("C:\\隔離\\autosave"))
+        );
     }
 }

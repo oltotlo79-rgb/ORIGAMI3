@@ -8,6 +8,23 @@ const OFFICIAL_QUOTA: usize = 6;
 const ORIPA_QUOTA: usize = 8;
 const ORIEDITA_QUOTA: usize = 8;
 const ORIGAMI_SIMULATOR_QUOTA: usize = 8;
+const USER_AUTHORIZED_LICENSE: &str = "LicenseRef-ORIGAMI3-User-Authorized-Samples-2026-08-26";
+const SYNTHETIC_TEST_LICENSE: &str = "LicenseRef-Synthetic-Test-Only";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManifestRightsProfile {
+    UserAuthorizedSamples20260826,
+    SyntheticTestOnly,
+}
+
+impl ManifestRightsProfile {
+    fn approved_content_license(self) -> &'static str {
+        match self {
+            Self::UserAuthorizedSamples20260826 => USER_AUTHORIZED_LICENSE,
+            Self::SyntheticTestOnly => SYNTHETIC_TEST_LICENSE,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestSummary {
@@ -49,8 +66,10 @@ impl std::error::Error for ManifestError {}
 pub fn validate_manifest(
     corpus_root: &Path,
     manifest_path: &Path,
+    rights_profile: ManifestRightsProfile,
 ) -> Result<ManifestSummary, ManifestError> {
     validate_corpus_root(corpus_root)?;
+    validate_manifest_path(corpus_root, manifest_path)?;
     let manifest_bytes = fs::read(manifest_path).map_err(|error| {
         ManifestError::new(format!(
             "manifest could not be read at {}: {error}",
@@ -244,7 +263,7 @@ pub fn validate_manifest(
             .and_then(Value::as_object)
             .ok_or_else(|| ManifestError::new(format!("{context}.observed must be an object")))?;
         validate_observation(observation, &context, &mut summary)?;
-        validate_rights(entry, &context)?;
+        validate_rights(entry, &context, rights_profile)?;
 
         let raw = read_regular_file_without_symlinks(corpus_root, &relative_path, &context)?;
         if raw.len() as u64 != byte_length {
@@ -276,6 +295,31 @@ fn validate_corpus_root(corpus_root: &Path) -> Result<(), ManifestError> {
     }
     if !metadata.file_type().is_dir() {
         return Err(ManifestError::new("corpus root must be a directory"));
+    }
+    Ok(())
+}
+
+fn validate_manifest_path(corpus_root: &Path, manifest_path: &Path) -> Result<(), ManifestError> {
+    let expected_path = corpus_root.join("manifest.json");
+    if manifest_path != expected_path {
+        return Err(ManifestError::new(format!(
+            "manifest path must be exactly {}, found {}",
+            expected_path.display(),
+            manifest_path.display()
+        )));
+    }
+
+    let metadata = fs::symlink_metadata(manifest_path).map_err(|error| {
+        ManifestError::new(format!(
+            "manifest path metadata could not be read at {}: {error}",
+            manifest_path.display()
+        ))
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Err(ManifestError::new("manifest path must not be a symlink"));
+    }
+    if !metadata.file_type().is_file() {
+        return Err(ManifestError::new("manifest path must name a regular file"));
     }
     Ok(())
 }
@@ -351,10 +395,10 @@ fn reserved_source_for_id(id: &str) -> Option<&'static str> {
 
 fn source_directory(source: &str) -> &'static str {
     match source {
-        "official" => "official",
-        "oripa" => "oripa",
-        "oriedita" => "oriedita",
-        "origami_simulator" => "origami-simulator",
+        "official" => "external/official",
+        "oripa" => "external/oripa",
+        "oriedita" => "external/oriedita",
+        "origami_simulator" => "external/origami_simulator",
         _ => unreachable!("source is checked before its directory is requested"),
     }
 }
@@ -364,6 +408,7 @@ fn reserved_index(id: &str, prefix: &str, maximum: usize) -> bool {
         return false;
     };
     index.len() == 2
+        && index.bytes().all(|byte| byte.is_ascii_digit())
         && index
             .parse::<usize>()
             .is_ok_and(|index| (1..=maximum).contains(&index))
@@ -422,7 +467,11 @@ fn require_utc(value: &str, context: &str) -> Result<(), ManifestError> {
     }
 }
 
-fn validate_rights(entry: &Map<String, Value>, context: &str) -> Result<(), ManifestError> {
+fn validate_rights(
+    entry: &Map<String, Value>,
+    context: &str,
+    rights_profile: ManifestRightsProfile,
+) -> Result<(), ManifestError> {
     let rights = entry
         .get("rights")
         .and_then(Value::as_object)
@@ -440,9 +489,10 @@ fn validate_rights(entry: &Map<String, Value>, context: &str) -> Result<(), Mani
     }
     let content_spdx =
         required_resolved_text(rights, "content_spdx", &format!("{context}.rights"))?;
-    if !content_spdx.starts_with("LicenseRef-") {
+    let approved_content_license = rights_profile.approved_content_license();
+    if content_spdx != approved_content_license {
         return Err(ManifestError::new(format!(
-            "{context}.rights.content_spdx must use the approved LicenseRef for user-owned samples"
+            "{context}.rights.content_spdx must use the approved LicenseRef {approved_content_license}"
         )));
     }
     match rights

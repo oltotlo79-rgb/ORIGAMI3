@@ -14,7 +14,7 @@ use ori3_rigid::{max_seam_gap, self_intersection_pairs};
 const LINEAR: &str = include_str!("fixtures/fold/linear-steps.fold");
 const FLAT_ORDERS: &str = include_str!("fixtures/fold/flat-face-orders.fold");
 const FU: &str = include_str!("fixtures/fold/fu-assignments.fold");
-const ORIEDITA_1_1: &str = include_str!("fixtures/fold/corpus/oriedita/oriedita-01.fold");
+const ORIEDITA_1_1: &str = include_str!("fixtures/fold/corpus/external/oriedita/oriedita-01.fold");
 
 #[test]
 fn imported_1_1_document_is_exported_as_exact_1_2() {

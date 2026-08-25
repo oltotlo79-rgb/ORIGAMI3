@@ -490,7 +490,7 @@ export function CpEditor({ fitRef }: Props) {
           e.preventDefault();
           return;
         }
-        if (onKeyboardLineKey(ctx, e.key, e.shiftKey)) {
+        if (onKeyboardLineKey(ctx, e.key, e.shiftKey, e.ctrlKey || e.metaKey)) {
           e.preventDefault();
           draw();
           return;
@@ -566,6 +566,8 @@ export function CpEditor({ fitRef }: Props) {
           (activeTool === "mountain" || activeTool === "valley" || activeTool === "aux") &&
           !curve.enabled
             ? "展開図。矢印キーで位置を動かし、Enterを2回押すと線を引けます。Escapeでやめます"
+            : activeTool === "select"
+              ? "展開図。矢印キーで選ぶ位置を動かし、Enterで折り線または点を選べます"
             : "展開図"
         }
         onFocus={() => withCtx(activateKeyboardCursor)}

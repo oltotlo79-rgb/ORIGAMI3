@@ -774,7 +774,8 @@ function keyboardCursorCenter(ctx: InteractionCtx): Vec2 {
 
 /** Canvasがキーボードで選ばれたとき、現在点を紙の中央へ置く。 */
 export function activateKeyboardCursor(ctx: InteractionCtx): void {
-  if (!TOOL_KIND[ctx.tool] || ctx.curve.enabled) {
+  const lineTool = TOOL_KIND[ctx.tool] !== undefined && !ctx.curve.enabled;
+  if (!lineTool && ctx.tool !== "select") {
     deactivateKeyboardCursor(ctx);
     return;
   }
@@ -782,7 +783,12 @@ export function activateKeyboardCursor(ctx: InteractionCtx): void {
   ctx.state.keyboardCursorActive = true;
   ctx.state.keyboardCursorWorld = center;
   ctx.state.lineInputHint = null;
-  refreshLineEndpoint(ctx, center, SNAP_RADIUS_PX / ctx.view.scale);
+  if (lineTool) {
+    refreshLineEndpoint(ctx, center, SNAP_RADIUS_PX / ctx.view.scale);
+  } else {
+    ctx.state.hoverSnap = null;
+    ctx.state.directionSnap = null;
+  }
 }
 
 /** Canvasから離れたら、キーボード専用の現在点だけを隠す。 */
@@ -808,9 +814,11 @@ export function onKeyboardLineKey(
   ctx: InteractionCtx,
   key: string,
   shiftHeld: boolean,
+  selectionToggle = false,
 ): boolean {
   const kind = TOOL_KIND[ctx.tool];
-  if (!kind || ctx.curve.enabled) return false;
+  const selecting = ctx.tool === "select";
+  if ((!kind && !selecting) || (kind && ctx.curve.enabled)) return false;
   const direction = ARROW_DIRECTION[key];
   if (direction) {
     if (!ctx.state.keyboardCursorActive || !ctx.state.keyboardCursorWorld) {
@@ -826,7 +834,12 @@ export function onKeyboardLineKey(
       Math.max(0, Math.min(height, current[1] + direction[1] * step)),
     ];
     ctx.state.keyboardCursorWorld = next;
-    refreshLineEndpoint(ctx, next, SNAP_RADIUS_PX / ctx.view.scale);
+    if (kind) {
+      refreshLineEndpoint(ctx, next, SNAP_RADIUS_PX / ctx.view.scale);
+    } else {
+      ctx.state.hoverSnap = null;
+      ctx.state.directionSnap = null;
+    }
     return true;
   }
 
@@ -835,7 +848,13 @@ export function onKeyboardLineKey(
   if (!ctx.state.keyboardCursorActive || !ctx.state.keyboardCursorWorld) {
     activateKeyboardCursor(ctx);
   }
-  acceptLinePoint(ctx, ctx.state.keyboardCursorWorld ?? keyboardCursorCenter(ctx));
+  const cursor = ctx.state.keyboardCursorWorld ?? keyboardCursorCenter(ctx);
+  if (selecting) {
+    // 16px刻みの現在点から届かない隙間を作らないよう、既存の12px吸着範囲を使う。
+    selectAtWorld(ctx, cursor, selectionToggle, SNAP_RADIUS_PX);
+  } else {
+    acceptLinePoint(ctx, cursor);
+  }
   return true;
 }
 
@@ -1024,6 +1043,34 @@ function toggleSelectionId(
   };
 }
 
+/** ポインターとキーボードの一点選択を、同じ当たり判定と選択更新へ渡す。 */
+function selectAtWorld(
+  ctx: InteractionCtx,
+  world: Vec2,
+  toggle: boolean,
+  tolerancePx = PICK_TOLERANCE_PX,
+): void {
+  const pickTol = tolerancePx / ctx.view.scale;
+  const vertexId = pickVertex(ctx.doc, world, pickTol);
+  if (vertexId !== null) {
+    ctx.setSelection(
+      toggle
+        ? toggleSelectionId(ctx.selection, "vertex", vertexId)
+        : { edgeIds: [], vertexIds: [vertexId] },
+    );
+    return;
+  }
+  const edgeId = pickEdge(ctx.doc, world, pickTol);
+  if (toggle) {
+    // Ctrl/Command+空白は現在の複数選択を保つ。
+    if (edgeId !== null) {
+      ctx.setSelection(toggleSelectionId(ctx.selection, "edge", edgeId));
+    }
+    return;
+  }
+  ctx.setSelection({ edgeIds: edgeId !== null ? [edgeId] : [], vertexIds: [] });
+}
+
 export function onMouseUp(
   ctx: InteractionCtx,
   screen: Vec2,
@@ -1062,27 +1109,9 @@ export function onMouseUp(
     ctx.setSelection(toggle ? mergeSelection(ctx.selection, inRect) : inRect);
     return;
   }
-  // クリック: 頂点優先で近傍の1つを選択(何もなければ選択解除)
+  // クリック: キーボードと同じ一点選択へ渡す。
   const world = screenToWorld(ctx.view, screen);
-  const pickTol = PICK_TOLERANCE_PX / ctx.view.scale;
-  const vertexId = pickVertex(ctx.doc, world, pickTol);
-  if (vertexId !== null) {
-    ctx.setSelection(
-      toggle
-        ? toggleSelectionId(ctx.selection, "vertex", vertexId)
-        : { edgeIds: [], vertexIds: [vertexId] },
-    );
-    return;
-  }
-  const edgeId = pickEdge(ctx.doc, world, pickTol);
-  if (toggle) {
-    // Ctrl/Command+空白は現在の複数選択を保つ。
-    if (edgeId !== null) {
-      ctx.setSelection(toggleSelectionId(ctx.selection, "edge", edgeId));
-    }
-    return;
-  }
-  ctx.setSelection({ edgeIds: edgeId !== null ? [edgeId] : [], vertexIds: [] });
+  selectAtWorld(ctx, world, toggle);
 }
 
 /** スペースキーとみなす入力(環境によっては"Spacebar"が来る) */

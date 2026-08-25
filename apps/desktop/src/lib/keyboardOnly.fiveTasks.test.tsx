@@ -20,7 +20,10 @@ import {
   waitFor,
 } from "@testing-library/react";
 
-const rendered = vi.hoisted(() => ({ overlay: null as unknown }));
+const rendered = vi.hoisted(() => ({
+  overlay: null as unknown,
+  selection: null as unknown,
+}));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(),
@@ -33,6 +36,7 @@ vi.mock("../components/CpEditor/renderer", async (importOriginal) => {
   return {
     ...actual,
     render: vi.fn((...args: unknown[]) => {
+      rendered.selection = args[6];
       rendered.overlay = args[7];
     }),
   };
@@ -134,6 +138,19 @@ function withCreases(...kinds: EdgeKind[]): Document {
     });
   }
   doc.cp.next_edge_id = 4 + kinds.length;
+  return doc;
+}
+
+/** 400px表示で中心から10px離れ、6pxでは届かず既存12px範囲なら届く折り線。 */
+function withOffsetCrease(): Document {
+  const doc = structuredClone(BASE_DOCUMENT);
+  doc.cp.vertices.push(
+    { id: 4, pos: [0, 0.525] },
+    { id: 5, pos: [1, 0.525] },
+  );
+  doc.cp.edges.push({ id: 4, v0: 4, v1: 5, kind: "Mountain" });
+  doc.cp.next_vertex_id = 6;
+  doc.cp.next_edge_id = 5;
   return doc;
 }
 
@@ -728,9 +745,9 @@ async function exportDiagramPdfPath(): Promise<void> {
  * `docs/usability/tasks.md` の5課題は、前の課題で作った作品を次へ渡す累積課題である。
  * 単独seedの5経路は部品の診断には使えるが、9-B1の合格根拠にはしない。
  *
- * 現製品では、線を引いた後に選択道具でcanvasへTab移動してEnterを押しても
- * 折り線を選べない。そのため、永続する折り→記録→PDFへ進めない。ここは
- * `it.fails` にせず赤を保ち、製品修正後に同じ連続経路を後半まで延ばす。
+ * 線を引いた後も選択道具と同じkeyboard cursorを使い、Enterをpointerと共通の
+ * 一点選択へ渡す。選択後は同じ作品の永続する折り→記録→再生→PDFまで完走する。
+ * この一続きだけを9-B1の合格根拠とし、途中のseedで後半を置き換えない。
  */
 async function cumulativeFiveTasksPath(): Promise<void> {
   seed();
@@ -817,8 +834,7 @@ async function cumulativeFiveTasksPath(): Promise<void> {
   await waitFor(() => expect(useAppStore.getState().doc?.cp.edges).toHaveLength(5));
   expect(useAppStore.getState().doc?.cp.edges[4]?.kind).toBe("Mountain");
 
-  // 課題3の入口: pointerなら線を選んで角度を動かせるが、keyboardのEnterでは
-  // 線選択が起きない。必要箇所はCpEditor.tsx / interaction.tsと選択actionである。
+  // 課題3の入口: 既存cursor上のEnterを、pointerと共通の一点選択へ渡す。
   const select = screen.getByRole("button", { name: "選択" });
   tabTo(select);
   pressEnter(select as HTMLButtonElement);
@@ -828,9 +844,8 @@ async function cumulativeFiveTasksPath(): Promise<void> {
   pressCanvasEnter(canvas);
   expect(
     useAppStore.getState().selection.edgeIds,
-    "累積課題3: Tabで展開図へ入り、Enterで引いた折り線を選べません。" +
-      "apps/desktop/src/components/CpEditor/CpEditor.tsx と interaction.tsに" +
-      "keyboard選択経路が必要です",
+    "累積課題3: Tabで展開図へ入り、Enterで引いた折り線を選ぶ回帰です。" +
+      "失敗時はCpEditor.tsxのキー配送とinteraction.tsの共通選択を確認してください",
   ).toEqual([4]);
 
   // 課題3: 選択で現れた角度操作をEndまで動かし、同じ紙の3D形を折る。
@@ -949,6 +964,7 @@ const CUMULATIVE_TASK_MANIFEST = [
 
 beforeEach(() => {
   rendered.overlay = null;
+  rendered.selection = null;
   vi.clearAllMocks();
   resetPoseThrottle();
   resetFoldAllPreviewRuntime();
@@ -1043,6 +1059,44 @@ describe("施策9-B1の合格判定: 固定5課題を同じ作品で累積する
         ),
         "clickはEnter/Space/矢印のブラウザー既定動作だけ",
       ).toBe(true);
+      expect(audit.focusProblems, "見えない・名前の無いfocus").toEqual([]);
+    }
+  });
+});
+
+describe("選択道具のキーボード経路", () => {
+  it("16px刻みの隙間にある折り線も選べ、Ctrl+Enterで同じ選択を解除する", async () => {
+    seed(withOffsetCrease());
+    const audit = auditKeyboardPath();
+    const fitRef = createRef<(() => void) | null>();
+    const view = render(
+      <main>
+        <ToolRail onFitView={() => undefined} />
+        <CpEditor fitRef={fitRef} />
+      </main>,
+    );
+    try {
+      const canvas = view.container.querySelector("canvas.cp-canvas");
+      if (!(canvas instanceof HTMLCanvasElement)) {
+        throw new Error("展開図がありません");
+      }
+      expect(canvas.getAttribute("aria-label")).toContain("Enterで折り線または点を選べます");
+
+      focusFromBody();
+      tabTo(canvas);
+      await waitFor(() => expect(overlay().keyboardCursor).toEqual([0.5, 0.5]));
+      pressCanvasEnter(canvas);
+      await waitFor(() => expect(useAppStore.getState().selection.edgeIds).toEqual([4]));
+      await waitFor(() =>
+        expect(rendered.selection).toEqual({ edgeIds: [4], vertexIds: [] }),
+      );
+
+      fireEvent.keyDown(canvas, { key: "Enter", ctrlKey: true });
+      fireEvent.keyUp(canvas, { key: "Enter", ctrlKey: true });
+      await waitFor(() => expect(useAppStore.getState().selection.edgeIds).toEqual([]));
+    } finally {
+      audit.stop();
+      expect(audit.lowLevelEvents, "pointer/mouse/wheel/contextmenu入力").toEqual([]);
       expect(audit.focusProblems, "見えない・名前の無いfocus").toEqual([]);
     }
   });

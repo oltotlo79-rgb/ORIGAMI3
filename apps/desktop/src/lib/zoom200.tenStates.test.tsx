@@ -120,6 +120,18 @@ function optionalLastDeclarationBlock(
   return matches[matches.length - 1]?.[1] ?? null;
 }
 
+function optionalDeclarationValue(
+  block: string | null,
+  property: string,
+): string | null {
+  if (block === null) return null;
+  const match = new RegExp(
+    `(?:^|[;\\n])\\s*${escaped(property)}\\s*:\\s*([^;]+)`,
+    "u",
+  ).exec(block);
+  return match?.[1]?.trim() ?? null;
+}
+
 function atRuleBlock(prelude: string, source: string): string {
   const start = source.indexOf(prelude);
   if (start < 0) throw new Error(`CSS規則がありません: ${prelude}`);
@@ -922,6 +934,51 @@ describe("10状態を500×350 CSS pxへ収める所有CSS契約", () => {
       }
     },
   );
+
+  it("展開図の現在操作は、要素の全文と200%で見せる文字を一致させる", () => {
+    const state = TEN_STATES.find(
+      (candidate) => candidate.id === "cp-keyboard-line-start",
+    );
+    if (state === undefined) throw new Error("展開図の固定状態がありません");
+    const root = mountState(state);
+    const summary = root.querySelector<HTMLElement>(".operation-summary-line");
+    if (summary === null) throw new Error("展開図の現在操作の文字がありません");
+
+    const content = summary.textContent?.trim() ?? "";
+    const completeText = summary.dataset.tooltip?.trim() ?? "";
+    const baseRule = lastDeclarationBlock(".operation-summary-line", viewerCss);
+    const zoomRules = atRuleBlock("@media (max-width: 790px)", responsiveCss);
+    const zoomRule = optionalLastDeclarationBlock(
+      ".operation-summary-line",
+      zoomRules,
+    );
+    const effective = (property: string) =>
+      optionalDeclarationValue(zoomRule, property) ??
+      optionalDeclarationValue(baseRule, property);
+    const clippingDeclarations = {
+      overflow: effective("overflow"),
+      textOverflow: effective("text-overflow"),
+      whiteSpace: effective("white-space"),
+      overflowWrap: effective("overflow-wrap"),
+    };
+
+    // jsdomは字形を配置しないため、見えた文字数を捏造しない。実製品DOMの全文と
+    // 実効CSSを照合し、省略記号を作る組合せそのものを200%では禁止する。
+    expect(content.length).toBeGreaterThan(10);
+    expect(
+      { content, completeText, clippingDeclarations },
+      "200%では要素の全文を折り返して見せ、ellipsisやhiddenで一部を捨てません。",
+    ).toEqual({
+      content: completeText,
+      completeText,
+      clippingDeclarations: {
+        overflow: "visible",
+        textOverflow: "clip",
+        whiteSpace: "normal",
+        overflowWrap: "anywhere",
+      },
+    });
+  });
 
   it("紙上12個の場所は固定560pxを500×350へ収める縦横契約を持つ", () => {
     const state = TEN_STATES.find(

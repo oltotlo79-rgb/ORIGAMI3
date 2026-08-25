@@ -1,8 +1,8 @@
 #[path = "support/fold_external_corpus.rs"]
 mod fold_external_corpus;
 
-use fold_external_corpus::{ManifestSummary, sha256_hex, validate_manifest};
-use ori3_export::fold::{fold_to_document, parse_fold_1_2};
+use fold_external_corpus::{ManifestRightsProfile, ManifestSummary, sha256_hex, validate_manifest};
+use ori3_export::fold::{FoldIssue, fold_to_document, parse_fold_1_2};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -71,12 +71,7 @@ fn synthetic_corpus() -> SyntheticCorpus {
     let mut entries = Vec::new();
     let mut global_index = 0_usize;
     for (source, quota) in ACCEPTED_TRANCHE {
-        let source_dir_name = if source == "origami_simulator" {
-            "origami-simulator"
-        } else {
-            source
-        };
-        let source_dir = root.join(source_dir_name);
+        let source_dir = root.join("external").join(source);
         fs::create_dir_all(&source_dir).expect("temp source directoryを作れる");
         for source_index in 1..=quota {
             global_index += 1;
@@ -86,7 +81,7 @@ fn synthetic_corpus() -> SyntheticCorpus {
                 source
             };
             let id = format!("{id_prefix}-{source_index:02}");
-            let relative_path = format!("{source_dir_name}/{id}.fold");
+            let relative_path = format!("external/{source}/{id}.fold");
             let raw = format!("{{\"file_spec\":1.2,\"synthetic_fixture\":{global_index}}}\n")
                 .into_bytes();
             fs::write(root.join(&relative_path), &raw).expect("temp raw fixtureを書ける");
@@ -174,9 +169,13 @@ fn synthetic_corpus() -> SyntheticCorpus {
 }
 
 fn rejection(corpus: &SyntheticCorpus) -> String {
-    validate_manifest(&corpus.root, &corpus.manifest_path)
-        .expect_err("invalid synthetic manifestは拒否される")
-        .to_string()
+    validate_manifest(
+        &corpus.root,
+        &corpus.manifest_path,
+        ManifestRightsProfile::SyntheticTestOnly,
+    )
+    .expect_err("invalid synthetic manifestは拒否される")
+    .to_string()
 }
 
 fn assert_rejected_with(corpus: &SyntheticCorpus, expected: &str) {
@@ -185,6 +184,33 @@ fn assert_rejected_with(corpus: &SyntheticCorpus, expected: &str) {
         message.contains(expected),
         "errorに {expected:?} が必要: {message}"
     );
+}
+
+fn fold_issue_keys(issues: &[FoldIssue]) -> BTreeSet<(String, String)> {
+    issues
+        .iter()
+        .map(|issue| {
+            (
+                serde_json::to_value(issue.code)
+                    .expect("issue codeをserialize")
+                    .as_str()
+                    .expect("serialized issue codeはstring")
+                    .to_string(),
+                issue.path.clone(),
+            )
+        })
+        .collect()
+}
+
+fn warning_keys_match(
+    expected: &BTreeSet<(String, String)>,
+    actual: &BTreeSet<(String, String)>,
+) -> bool {
+    expected == actual
+}
+
+fn rejection_path_matches_frozen_reason(actual_path: &str, frozen_paths: &BTreeSet<&str>) -> bool {
+    actual_path != "$.file_spec" && !frozen_paths.is_empty() && frozen_paths.contains(actual_path)
 }
 
 #[cfg(unix)]
@@ -227,6 +253,7 @@ fn tracked_plan_reserves_exact_quotas_without_preclassifying_entries() {
     let mut ids = BTreeSet::new();
     let mut paths = BTreeSet::new();
     let mut counts = BTreeMap::<&str, usize>::new();
+    let mut reservations = BTreeMap::new();
     for slot in slots {
         let slot = slot.as_object().expect("slotはobject");
         let id = slot["id"].as_str().expect("予約idはstring");
@@ -236,6 +263,7 @@ fn tracked_plan_reserves_exact_quotas_without_preclassifying_entries() {
             .expect("reserved_pathはstring");
         assert!(ids.insert(id), "予約idは一意: {id}");
         assert!(paths.insert(path), "予約pathは一意: {path}");
+        reservations.insert(id.to_string(), (source.to_string(), path.to_string()));
         *counts.entry(source).or_default() += 1;
 
         let reserved_source = if id.starts_with("official-") {
@@ -271,13 +299,37 @@ fn tracked_plan_reserves_exact_quotas_without_preclassifying_entries() {
         }
     }
     assert_eq!(counts, expected_sources);
+
+    let expected_reservations = SOURCE_QUOTAS
+        .into_iter()
+        .flat_map(|(source, quota)| {
+            let id_prefix = if source == "origami_simulator" {
+                "origami-simulator"
+            } else {
+                source
+            };
+            (1..=quota).map(move |index| {
+                let id = format!("{id_prefix}-{index:02}");
+                let path = format!("external/{source}/{id}.fold");
+                (id, (source.to_string(), path))
+            })
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        reservations, expected_reservations,
+        "30件のid・source・path予約を完全一致で固定する"
+    );
 }
 
 #[test]
 fn tracked_sixteen_sample_tranche_reports_frozen_and_observed_counts_separately() {
     let root = tracked_corpus_root();
-    let summary = validate_manifest(&root, &root.join("manifest.json"))
-        .expect("追跡16件のprovenance・rights・SHA-256・byte数は完全");
+    let summary = validate_manifest(
+        &root,
+        &root.join("manifest.json"),
+        ManifestRightsProfile::UserAuthorizedSamples20260826,
+    )
+    .expect("追跡16件のprovenance・rights・SHA-256・byte数は完全");
     assert_eq!(
         summary,
         ManifestSummary {
@@ -301,9 +353,7 @@ fn tracked_sixteen_sample_tranche_reports_frozen_and_observed_counts_separately(
         .map(|slot| {
             let id = slot["id"].as_str().expect("予約idはstring");
             let source = slot["source"].as_str().expect("予約sourceはstring");
-            let path = slot["reserved_path"]
-                .as_str()
-                .expect("予約pathはstring");
+            let path = slot["reserved_path"].as_str().expect("予約pathはstring");
             (id, (source, path))
         })
         .collect::<BTreeMap<_, _>>();
@@ -366,10 +416,16 @@ fn tracked_external_samples_match_blind_frozen_expectations() {
 
         let (actual, detail) = match parse_fold_1_2(&raw) {
             Err(error) => {
-                let reason_matches = error.path != "$.file_spec"
-                    && frozen_unsupported_paths.contains(error.path.as_str());
+                let reason_matches = rejection_path_matches_frozen_reason(
+                    error.path.as_str(),
+                    &frozen_unsupported_paths,
+                );
                 (
-                    "unsupported",
+                    if reason_matches {
+                        "unsupported"
+                    } else {
+                        "unsupported_with_reason_mismatch"
+                    },
                     format!(
                         "parse {:?} @ {}: {}; frozen_reason_matches={reason_matches}",
                         error.kind, error.path, error.message
@@ -405,12 +461,16 @@ fn tracked_external_samples_match_blind_frozen_expectations() {
                     )
                 }
                 Err(error) => {
+                    let actual_warning_keys = fold_issue_keys(&error.warnings);
+                    let warnings_match =
+                        warning_keys_match(&observed_warning_keys, &actual_warning_keys);
                     let actual_error_paths = error
                         .errors
                         .iter()
                         .map(|issue| issue.path.as_str())
                         .collect::<BTreeSet<_>>();
-                    let reason_matches = !actual_error_paths.contains("$.file_spec")
+                    let reason_matches = !frozen_unsupported_paths.is_empty()
+                        && !actual_error_paths.contains("$.file_spec")
                         && frozen_unsupported_paths
                             .iter()
                             .all(|path| actual_error_paths.contains(path));
@@ -423,12 +483,14 @@ fn tracked_external_samples_match_blind_frozen_expectations() {
                         .collect::<Vec<_>>()
                         .join(" | ");
                     (
-                        if reason_matches {
+                        if reason_matches && warnings_match {
                             "unsupported"
                         } else {
-                            "unsupported_with_reason_mismatch"
+                            "unsupported_with_contract_mismatch"
                         },
-                        format!("{details}; frozen_reason_matches={reason_matches}"),
+                        format!(
+                            "{details}; frozen_reason_matches={reason_matches}; warnings_match={warnings_match}; expected_warnings={observed_warning_keys:?}; actual_warnings={actual_warning_keys:?}"
+                        ),
                     )
                 }
             },
@@ -475,8 +537,12 @@ fn complete_temp_manifest_is_accepted_without_rewriting_inputs() {
         })
         .collect::<Vec<_>>();
 
-    let summary = validate_manifest(&corpus.root, &corpus.manifest_path)
-        .expect("complete synthetic corpusはvalid");
+    let summary = validate_manifest(
+        &corpus.root,
+        &corpus.manifest_path,
+        ManifestRightsProfile::SyntheticTestOnly,
+    )
+    .expect("complete synthetic corpusはvalid");
     assert_eq!(
         summary,
         ManifestSummary {
@@ -548,6 +614,15 @@ fn entries_must_keep_the_reserved_id_source_and_fold_path() {
     path.entries_mut()[0]["path"] = json!("raw/official/renamed.json");
     path.write_manifest();
     assert_rejected_with(&path, "reserved path");
+
+    let mut signed_index = synthetic_corpus();
+    let old_path = signed_index.entry_path(0);
+    signed_index.entries_mut()[0]["id"] = json!("oriedita-+1");
+    signed_index.entries_mut()[0]["path"] = json!("external/oriedita/oriedita-+1.fold");
+    let new_path = signed_index.entry_path(0);
+    fs::rename(old_path, new_path).expect("signed index用にtemp rawを移せる");
+    signed_index.write_manifest();
+    assert_rejected_with(&signed_index, "reserved slot");
 }
 
 #[test]
@@ -581,8 +656,12 @@ fn partial_tranches_report_actual_counts_without_a_fixed_classification_quota() 
     partial.entries_mut().pop();
     fs::remove_file(removed_path).expect("removed manifest entryのrawもtempから除ける");
     partial.write_manifest();
-    let summary = validate_manifest(&partial.root, &partial.manifest_path)
-        .expect("予約30件が未完成でも、受入済みtrancheの実数を検査できる");
+    let summary = validate_manifest(
+        &partial.root,
+        &partial.manifest_path,
+        ManifestRightsProfile::SyntheticTestOnly,
+    )
+    .expect("予約30件が未完成でも、受入済みtrancheの実数を検査できる");
     assert_eq!(summary.entries, 15);
     assert_eq!(summary.origami_simulator, 7);
     assert_eq!(summary.expected_supported, 8);
@@ -694,12 +773,55 @@ fn manifest_must_be_the_regular_non_symlink_file_at_the_corpus_root() {
     let alternate_manifest = corpus.root.join("alternate-manifest.json");
     fs::copy(&corpus.manifest_path, &alternate_manifest)
         .expect("alternate manifestをtemp rootへcopyできる");
-    let error = validate_manifest(&corpus.root, &alternate_manifest)
-        .expect_err("root直下の正規manifest以外は拒否される")
-        .to_string();
+    let error = validate_manifest(
+        &corpus.root,
+        &alternate_manifest,
+        ManifestRightsProfile::SyntheticTestOnly,
+    )
+    .expect_err("root直下の正規manifest以外は拒否される")
+    .to_string();
     assert!(
         error.contains("manifest path"),
         "manifest位置の拒否理由が必要: {error}"
+    );
+
+    let directory = synthetic_corpus();
+    fs::remove_file(&directory.manifest_path).expect("temp manifestをdirectoryへ置換できる");
+    fs::create_dir(&directory.manifest_path).expect("manifest位置へtemp directoryを作れる");
+    assert_rejected_with(&directory, "regular file");
+
+    let symlink = synthetic_corpus();
+    let target = symlink.root.join("manifest-symlink-target.json");
+    fs::copy(&symlink.manifest_path, &target).expect("manifest symlink targetをcopyできる");
+    fs::remove_file(&symlink.manifest_path).expect("temp manifestをsymlinkへ置換できる");
+    match try_symlink_file(&target, &symlink.manifest_path) {
+        Ok(()) => assert_rejected_with(&symlink, "symlink"),
+        Err(error) => eprintln!(
+            "manifest symlink creation is unavailable on this host; validator branch remains active: {error}"
+        ),
+    }
+}
+
+#[test]
+fn rejection_reason_and_warning_contracts_do_not_false_green() {
+    let frozen_paths = BTreeSet::from(["$.frame_attributes[0]"]);
+    assert!(rejection_path_matches_frozen_reason(
+        "$.frame_attributes[0]",
+        &frozen_paths
+    ));
+    assert!(
+        !rejection_path_matches_frozen_reason("$.file_spec", &frozen_paths),
+        "版番号だけの拒否を対応範囲外の理由として成功扱いにしない"
+    );
+
+    let expected_warnings = BTreeSet::from([(
+        "assignment_downgraded_to_aux".to_string(),
+        "$.edges_assignment[0]".to_string(),
+    )]);
+    assert!(warning_keys_match(&expected_warnings, &expected_warnings));
+    assert!(
+        !warning_keys_match(&expected_warnings, &BTreeSet::new()),
+        "拒否時でも警告が消えた状態を成功扱いにしない"
     );
 }
 
@@ -747,8 +869,12 @@ fn classifications_are_blindly_frozen_and_observations_stay_separate() {
     assert_rejected_with(&changed_freeze, "must match classification_policy");
 
     let mismatch = synthetic_corpus();
-    let summary = validate_manifest(&mismatch.root, &mismatch.manifest_path)
-        .expect("frozen expectedとexcluded prior observationは一致を強制しない");
+    let summary = validate_manifest(
+        &mismatch.root,
+        &mismatch.manifest_path,
+        ManifestRightsProfile::SyntheticTestOnly,
+    )
+    .expect("frozen expectedとexcluded prior observationは一致を強制しない");
     assert_eq!(summary.expected_supported, 8);
     assert_eq!(summary.observed_supported, 7);
 }
