@@ -21,6 +21,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { save } from "@tauri-apps/plugin-dialog";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ save: vi.fn() }));
 
@@ -526,6 +527,58 @@ function pressRangeArrow(
   return down.defaultPrevented ? before : after;
 }
 
+/** NumberStepperが実装する矢印キー経路を、そのまま製品inputへ送る。 */
+function pressNumberArrow(
+  input: HTMLInputElement,
+  key: "ArrowDown" | "ArrowUp",
+): number {
+  fireEvent.keyDown(input, { key });
+  fireEvent.keyUp(input, { key });
+  return Number(input.value);
+}
+
+/**
+ * jsdomに無いradio groupの矢印キー既定動作だけを補う。
+ * disabledは飛ばし、focus・checked・input/changeの順を製品DOMへ通す。
+ */
+function pressRadioArrow(
+  radio: HTMLInputElement,
+  key: "ArrowLeft" | "ArrowRight",
+): HTMLInputElement {
+  const group = Array.from(
+    document.querySelectorAll<HTMLInputElement>('input[type="radio"]'),
+  ).filter(
+    (candidate) => candidate.name === radio.name && !candidate.disabled,
+  );
+  const currentIndex = group.indexOf(radio);
+  if (currentIndex < 0 || group.length === 0) {
+    throw new Error(`${visibleName(radio)}の選択肢群がありません`);
+  }
+  const down = new KeyboardEvent("keydown", {
+    key,
+    bubbles: true,
+    cancelable: true,
+  });
+  fireEvent(radio, down);
+  const offset = key === "ArrowRight" ? 1 : -1;
+  const next = group[(currentIndex + offset + group.length) % group.length];
+  if (!down.defaultPrevented) {
+    act(() => next.focus({ preventScroll: true }));
+    act(() => next.click());
+  }
+  fireEvent.keyUp(next, { key });
+  return down.defaultPrevented ? radio : next;
+}
+
+function operationKind(target: FocusTarget): string {
+  if (target instanceof HTMLInputElement) return `input:${target.type}`;
+  return target.getAttribute("role") ?? target.tagName.toLocaleLowerCase("en-US");
+}
+
+function operationLedgerId(target: FocusTarget): string {
+  return `${operationKind(target)}:${visibleName(target).replace(/\s+/gu, " ").trim()}`;
+}
+
 function dialog(): HTMLElement {
   return screen.getByRole("dialog");
 }
@@ -864,6 +917,149 @@ const TEN_STATES: readonly TenStateCase[] = [
   },
 ] as const;
 
+const buttonId = (name: string) => `button:${name}`;
+const rangeId = (name: string) => `input:range:${name}`;
+
+const DEEP_LEAF_NAMES = [
+  ...Array.from(
+    { length: 9 },
+    (_, index) => `頭のその先1のその先1のその先${index + 1}`,
+  ),
+  "尾",
+  "右前足",
+  "左前足",
+] as const;
+const DEEP_BRANCH_NAMES = [
+  "頭",
+  "頭のその先1",
+  "頭のその先1のその先1",
+] as const;
+const RADIAL_FOUR_NAMES = ["頭", "尾", "右前足", "左前足"] as const;
+const PAPER_TWELVE_NAMES = [
+  "頭",
+  "尾",
+  "右前足",
+  "左前足",
+  "右後足",
+  "左後足",
+  "右の羽",
+  "左の羽",
+  "出っぱり9",
+  "出っぱり10",
+  "出っぱり11",
+  "出っぱり12",
+] as const;
+const HELP_CHAPTER_LEDGER = [
+  ["1ORIGAMI3でできること", "overview"],
+  ["2画面の見かた", "workspace"],
+  ["3新しい紙を用意する", "new-paper"],
+  ["4展開図に線を引く", "crease-pattern"],
+  ["5折る", "fold"],
+  ["6角度を変える", "angles"],
+  ["7立体にする", "three-dimensional"],
+  ["8技法を使う", "techniques"],
+  ["9手順の記録と再生", "timeline"],
+  ["10形から展開図を提案", "proposal"],
+  ["11保存と書き出し", "save-export"],
+  ["12困ったときは", "troubleshooting"],
+  ["13ショートカット一覧", "shortcuts"],
+] as const;
+
+/**
+ * 147は上限ではなく、この固定標本で2026-08-26に実測した全Tab停止位置の台帳。
+ * 画面へ操作を足した／替えた場合は、同数の入替でもこの名前付き台帳が赤くなり、
+ * 新しい操作結果を検査してから台帳を更新する。存在しない操作は足さない。
+ */
+const EXPECTED_OPERATION_LEDGER: Readonly<Record<number, readonly string[]>> = {
+  1: [
+    "input:radio:正方形(たて・よこが同じ)",
+    "input:number:紙の横の長さ（mm）",
+    buttonId("紙の横の長さ（mm）を増やす"),
+    buttonId("紙の横の長さ（mm）を減らす"),
+    buttonId("折り紙 15cm角の大きさを使います"),
+    buttonId("折り紙 24cm角の大きさを使います"),
+    buttonId("A4の紙の大きさを使います"),
+    buttonId("入力した大きさで新しい作品を始めます"),
+    buttonId("新規作成をやめます"),
+  ],
+  2: [
+    "input:radio:展開図(PNG)",
+    "input:checkbox:補助線(下書きの線)も含める",
+    "input:number:画像の大きさ（長辺の点数）",
+    buttonId("画像の大きさ（長辺の点数）を増やす"),
+    buttonId("画像の大きさ（長辺の点数）を減らす"),
+    buttonId("保存先を選んで書き出す"),
+    buttonId("閉じる"),
+  ],
+  3: [
+    ...DEEP_LEAF_NAMES.map((name) =>
+      buttonId(`${name}を出したい場所（自動）`),
+    ),
+    ...DEEP_BRANCH_NAMES.flatMap((name) => [
+      rangeId(`${name}の長さ`),
+      buttonId(`${name}とその先を消す`),
+    ]),
+    ...DEEP_LEAF_NAMES.flatMap((name) => [
+      rangeId(`${name}の長さ`),
+      rangeId(`${name}の太さ`),
+      buttonId(`${name}のこの先に足す`),
+      buttonId(`${name}とその先を消す`),
+    ]),
+    buttonId("展開図を作ってもらう"),
+    buttonId("やめる"),
+  ],
+  4: [
+    ...Array.from({ length: 4 }, (_, index) => buttonId(`候補${index + 1}`)),
+    buttonId("形を直す"),
+    buttonId("別の置き方も見る"),
+    buttonId("紙の上の場所も調整"),
+    buttonId("これにする"),
+  ],
+  5: [
+    ...PAPER_TWELVE_NAMES.map((name) =>
+      buttonId(`${name}の紙の上の場所（この候補のまま）`),
+    ),
+    buttonId("候補へ戻る"),
+    buttonId("この場所で作り直す"),
+  ],
+  6: [buttonId("選び直す"), buttonId("この展開図を使う")],
+  7: [
+    ...RADIAL_FOUR_NAMES.flatMap((name) => [
+      rangeId(`${name}の長さ`),
+      rangeId(`${name}の太さ`),
+      buttonId(`${name}のこの先に足す`),
+      buttonId(`${name}とその先を消す`),
+    ]),
+    buttonId("出っぱりを増やす"),
+    buttonId("やめる"),
+  ],
+  8: [buttonId("復元する"), buttonId("破棄する")],
+  9: [
+    buttonId("ヘルプセンターを閉じる"),
+    "input:search:章題・本文を検索",
+    ...HELP_CHAPTER_LEDGER.map(([name]) => buttonId(name)),
+    buttonId("基本操作ガイドをもう一度"),
+  ],
+  10: [
+    buttonId("展開図の詳しい操作方法 ▼"),
+    "canvas:展開図。矢印キーで位置を動かし、Enterを2回押すと線を引けます。Escapeでやめます",
+    "div:展開図に表示している手順",
+  ],
+};
+
+interface OperationResultCase {
+  state: TenStateCase;
+  ledgerId: string;
+}
+
+const OPERATION_RESULT_CASES: readonly OperationResultCase[] = TEN_STATES.flatMap(
+  (state) =>
+    (EXPECTED_OPERATION_LEDGER[state.id] ?? []).map((ledgerId) => ({
+      state,
+      ledgerId,
+    })),
+);
+
 beforeEach(() => {
   vi.clearAllMocks();
   useAppStore.setState(initialStoreState, true);
@@ -908,6 +1104,19 @@ afterEach(() => {
 });
 
 describe("5-E: 固定10状態のキーボード検査", () => {
+  it("DIAGNOSTIC: 10状態の操作台帳を採取する", () => {
+    const ledger: Record<string, string[]> = {};
+    for (const state of TEN_STATES) {
+      cleanup();
+      useAppStore.setState(initialStoreState, true);
+      state.arrange();
+      render(state.node());
+      const root = state.root();
+      ledger[String(state.id)] = focusableElements(root).map(operationLedgerId);
+    }
+    console.log(`TEN_STATE_LEDGER=${JSON.stringify(ledger, null, 2)}`);
+  });
+
   it("5-Aで決めた10状態を増減せず、同じ順序と名前で固定する", () => {
     expect(TEN_STATES.map(({ id, label }) => ({ id, label }))).toEqual([
       { id: 1, label: "New・既定の正方形" },

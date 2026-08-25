@@ -518,6 +518,12 @@ function expectFocusVisibleContract(): void {
   expect(canvasRule).toBeDefined();
   expect(canvasRule).toContain("outline-offset: -4px");
   expect(canvasRule).not.toContain("outline: none");
+  const viewerCanvasRule = /\.viewer3d-canvas:focus-visible\s*\{([\s\S]*?)\}/u.exec(
+    viewerCss,
+  )?.[1];
+  expect(viewerCanvasRule).toBeDefined();
+  expect(viewerCanvasRule).toContain("outline-offset: -4px");
+  expect(viewerCanvasRule).not.toContain("outline: none");
 }
 
 function expectAllActionsAreTabStops(root: HTMLElement): void {
@@ -711,6 +717,9 @@ describe("施策9: マウスを使わない一続きの操作", () => {
       const view = render(<KeyboardWorkspace />);
       const root = view.getByTestId("keyboard-workspace");
       await drawDiagonalWithKeys(root);
+      const frameBeforePreview = structuredClone(
+        useAppStore.getState().frame3d,
+      );
 
       const foldAll = screen.getByRole("button", {
         name: /全部いっぺんに折ってみる/,
@@ -756,7 +765,7 @@ describe("施策9: マウスを使わない一続きの操作", () => {
       expect(undoEvent.defaultPrevented).toBe(true);
 
       await waitFor(() => expect(useAppStore.getState().foldAllPreview).toBeNull());
-      expect(useAppStore.getState().frame3d).toEqual(frameAt(0));
+      expect(useAppStore.getState().frame3d).toEqual(frameBeforePreview);
       expect(useAppStore.getState().doc?.cp.edges).toHaveLength(5);
       expect(ipc.editUndo).not.toHaveBeenCalled();
       expect(
@@ -822,6 +831,11 @@ describe("施策9: マウスを使わない一続きの操作", () => {
     const slider = screen.getByRole("slider", {
       name: "全部の折り目を動かす割合",
     }) as HTMLInputElement;
+    tabTo(root, slider);
+    pressTab(root);
+    expect(useAppStore.getState().foldAllPreview?.returning).toBe(false);
+    expect(screen.getByText("これは仮の形です")).toBeTruthy();
+    tabTo(root, slider);
     pressRangeEnd(slider);
     await waitFor(() =>
       expect(useAppStore.getState().foldAllPreview?.appliedPercent).toBe(100),
@@ -837,6 +851,7 @@ describe("施策9: マウスを使わない一続きの操作", () => {
     if (!(viewerCanvas instanceof HTMLCanvasElement)) {
       throw new Error("3D表示がありません");
     }
+    expectFocusVisibleContract();
     expect(viewerCanvas.getAttribute("data-tooltip")).not.toBeNull();
     expectAllActionsAreTabStops(root);
   });

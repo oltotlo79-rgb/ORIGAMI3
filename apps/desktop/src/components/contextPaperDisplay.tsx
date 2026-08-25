@@ -161,8 +161,25 @@ export function FoldAllPreviewContent() {
           aria-valuetext={`${percentText}%`}
           onChange={(event) => setFoldAllPercent(Number(event.target.value))}
           onPointerUp={finishFoldAllPercent}
-          onKeyUp={finishFoldAllPercent}
-          onBlur={finishFoldAllPercent}
+          onKeyUp={(event) => {
+            if (
+              event.key === "ArrowLeft" ||
+              event.key === "ArrowRight" ||
+              event.key === "ArrowUp" ||
+              event.key === "ArrowDown" ||
+              event.key === "PageUp" ||
+              event.key === "PageDown" ||
+              event.key === "Home" ||
+              event.key === "End"
+            ) {
+              finishFoldAllPercent();
+            }
+          }}
+          onBlur={() => {
+            // 開いた直後の0%からTabで離れただけでは「元に戻る」を始めない。
+            // 値を動かした後のblurは、従来どおり保留中の計算を確定する。
+            if (preview.percent !== 0) finishFoldAllPercent();
+          }}
         />
         <span className="fold-all-preview-min">元に戻る 0%</span>
         <span className="fold-all-preview-max">できるところまで 100%</span>

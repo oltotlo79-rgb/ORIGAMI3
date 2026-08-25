@@ -129,11 +129,11 @@ struct RunnerContract {
     functional_search: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     performance_search: Option<String>,
-    // Rust側では用途を明示する。正本再生成までは旧JSON keyを維持し、事前10周で
-    // normalized input hashが変わらないようにする。
+    // 製品性能だけに適用する壁時計上限だとJSON上でも明示する。旧schema v2の
+    // search_watchdog_millisは読み取りaliasとしてだけ残す。
     #[serde(
-        rename = "search_watchdog_millis",
-        alias = "product_search_watchdog_millis"
+        rename = "product_search_watchdog_millis",
+        alias = "search_watchdog_millis"
     )]
     product_search_watchdog_millis: u64,
     gap_weights: GapMetric,
@@ -488,7 +488,8 @@ impl CorpusCandidate {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct CandidateMetric {
     status: String,
     stop_reason: String,
@@ -1482,15 +1483,10 @@ fn distance_relation(recorded: Option<f64>, observed: Option<f64>, tolerance: f6
     }
 }
 
-/// 折り鶴の初回debug実測27秒超に対して約3.3倍、再測定のcase全体43,890ms
-/// （探索は30,000ms watchdog中断）に対して約2.05倍の余裕を取る。
+// 旧暫定値は性能metadataの厳密契約として保持するが、壁時計なしの機能solveには
+// 適用しない。製品探索の実上限は別契約の30,000msであり、これらはenforced=false。
 const MAX_DEBUG_CASE_MILLIS: u64 = 90_000;
-/// 折り鶴release実測5,339msに対して置いた旧暫定値10,000ms。D-04の隔離10回最大は
-/// 9,977ms、E-04は20,316msだったため再較正待ちであり、現在値照合のgateには使わない。
 const MAX_RELEASE_CASE_MILLIS: u64 = 10_000;
-/// 1件10秒を30件へ適用した旧暫定値300,000ms。保存実測494,180ms、旧schemaの最終
-/// 433,004ms、schema v2の全30件431,686msはいずれも超過した。再較正待ちとして
-/// 実測と旧値を両方出力するが、現在値照合のgateには使わない。
 const MAX_RELEASE_CORPUS_MILLIS: u64 = 300_000;
 
 struct ObservedCase {
@@ -1558,7 +1554,11 @@ struct Stage3cRoundRecord {
     phase: String,
     repetition: usize,
     case_count: usize,
-    product_elapsed_millis: u64,
+    #[serde(
+        rename = "phase_elapsed_millis",
+        alias = "product_elapsed_millis"
+    )]
+    phase_elapsed_millis: u64,
     collector_wall_elapsed_millis: u64,
 }
 
@@ -1596,6 +1596,20 @@ struct Stage3cCollectionEnvironment {
 #[derive(Debug, Deserialize, Serialize)]
 struct Stage3cCollectionFinished {
     finished_unix_millis: u64,
+}
+
+#[derive(Debug)]
+struct Stage3cCollectionStart {
+    phase: String,
+    cases: usize,
+    determinism_repetitions: usize,
+    performance_repetitions: usize,
+    profile: String,
+    functional_search: String,
+    performance_search: String,
+    product_watchdog_millis: u64,
+    require_recorded_current: bool,
+    target_met_is_not_implied: bool,
 }
 
 fn corpus_run_guard() -> MutexGuard<'static, ()> {
@@ -1807,12 +1821,15 @@ struct CaseEvaluation {
     expectation_class: String,
     class_pass: bool,
     safety_pass: bool,
-    time_pass: bool,
     completed: bool,
     improvement_ratio: Option<f64>,
 }
 
-fn assert_time_contract(case_id: &str, expectation: &RecordedCurrent, runner: &RunnerContract) {
+fn assert_product_time_metadata_contract(
+    case_id: &str,
+    expectation: &RecordedCurrent,
+    runner: &RunnerContract,
+) {
     assert_eq!(
         expectation.time_budget.product_search_watchdog_millis,
         runner.product_search_watchdog_millis
@@ -1928,18 +1945,11 @@ fn assert_recorded_case(case_id: &str, counts_toward_target: bool) -> CaseEvalua
         case.input.normalized_input_hash
     );
     assert_input_strata(case, &input);
-    assert_time_contract(case_id, &case.recorded_current, &manifest.runner_contract);
     assert_recorded_assessment(
         &case.target,
         &case.recorded_current,
         &manifest.numeric_policy,
     );
-    let current_limit = if cfg!(debug_assertions) {
-        MAX_DEBUG_CASE_MILLIS
-    } else {
-        MAX_RELEASE_CASE_MILLIS
-    };
-    let time_pass = observed.elapsed_millis <= current_limit;
     let expected_execution_failure = case.recorded_current.execution_failure.as_ref();
     let observed_distance = match &observed.outcome {
         ObservedOutcome::Candidates(actual) => {
@@ -1979,7 +1989,7 @@ fn assert_recorded_case(case_id: &str, counts_toward_target: bool) -> CaseEvalua
                     manifest.hash_contract.float_quantum,
                 );
                 println!(
-                    "CORPUS_CASE id={case_id} elapsed_millis={} baseline=matched outcome=execution_failure phase={} reason={:?} failure_hash={} acceptance=false",
+                    "CORPUS_CASE id={case_id} functional_elapsed_millis={} baseline=matched outcome=execution_failure phase={} reason={:?} failure_hash={} acceptance=false",
                     observed.elapsed_millis,
                     actual.contract.phase,
                     actual.contract.reason,
@@ -1990,7 +2000,6 @@ fn assert_recorded_case(case_id: &str, counts_toward_target: bool) -> CaseEvalua
                     expectation_class: case.target.class.clone(),
                     class_pass: false,
                     safety_pass: false,
-                    time_pass,
                     completed: false,
                     improvement_ratio: None,
                 }
@@ -2062,21 +2071,19 @@ fn assert_recorded_case(case_id: &str, counts_toward_target: bool) -> CaseEvalua
                     .then(|| metric.map(|metric| metric.improvement_ratio))
                     .flatten();
                 println!(
-                    "CORPUS_CASE id={case_id} elapsed_millis={} baseline=matched outcome=candidates candidate_hash={} stop_hash={} result_hash={} class_pass={} safety_pass={} time_pass={}",
+                    "CORPUS_CASE id={case_id} functional_elapsed_millis={} baseline=matched outcome=candidates candidate_hash={} stop_hash={} result_hash={} class_pass={} safety_pass={}",
                     observed.elapsed_millis,
                     actual.normalized_candidate_hash,
                     actual.stop_reason_hash,
                     actual.normalized_result_hash,
                     class_pass,
                     safety_pass,
-                    time_pass,
                 );
                 CaseEvaluation {
                     case_id: case_id.to_owned(),
                     expectation_class: case.target.class.clone(),
                     class_pass,
                     safety_pass,
-                    time_pass,
                     completed,
                     improvement_ratio,
                 }
@@ -2118,12 +2125,12 @@ fn collect_stage_3c_phase(
     let mut mismatches_from_recorded_current = 0;
     for repetition in 1..=repetitions {
         let round_started = Instant::now();
-        let mut product_elapsed_millis = 0_u64;
+        let mut phase_elapsed_millis = 0_u64;
         for (case_index, case) in prepared_cases.iter().enumerate() {
             let observed =
                 observe_case_with_mode(&case.input_bytes, &case.input, manifest, execution_mode)
                     .unwrap_or_else(|error| panic!("{}: 3-C実行失敗: {error}", case.case_id));
-            product_elapsed_millis = product_elapsed_millis.saturating_add(observed.elapsed_millis);
+            phase_elapsed_millis = phase_elapsed_millis.saturating_add(observed.elapsed_millis);
             assert_eq!(observed.fixture_checksum, case.fixture_checksum);
             assert_eq!(observed.structure_hash, case.structure_hash);
             assert_eq!(observed.normalized_input_hash, case.normalized_input_hash);
@@ -2164,7 +2171,7 @@ fn collect_stage_3c_phase(
                 phase: phase.to_owned(),
                 repetition,
                 case_count: prepared_cases.len(),
-                product_elapsed_millis,
+                phase_elapsed_millis,
                 collector_wall_elapsed_millis: u64::try_from(round_started.elapsed().as_millis())
                     .unwrap_or(u64::MAX),
             },
@@ -2640,7 +2647,6 @@ fn corpus_all_thirty_cases_match_recorded_current() {
         );
         return;
     }
-    let started = Instant::now();
     let mut baseline_mismatches = Vec::new();
     let mut evaluations = Vec::new();
     for case_id in case_ids {
@@ -2652,7 +2658,6 @@ fn corpus_all_thirty_cases_match_recorded_current() {
             Err(_) => baseline_mismatches.push(case_id),
         }
     }
-    let elapsed_millis = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     let mut target_unmet: Vec<_> = evaluations
         .iter()
         .filter(|evaluation| !(evaluation.class_pass && evaluation.safety_pass))
@@ -2673,10 +2678,6 @@ fn corpus_all_thirty_cases_match_recorded_current() {
     let safety_passed = evaluations
         .iter()
         .filter(|evaluation| evaluation.safety_pass)
-        .count();
-    let time_passed = evaluations
-        .iter()
-        .filter(|evaluation| evaluation.time_pass)
         .count();
     let mut partial_ratios: Vec<_> = evaluations
         .iter()
@@ -2716,11 +2717,8 @@ fn corpus_all_thirty_cases_match_recorded_current() {
         evaluations.len(),
         baseline_mismatches.len(),
     );
-    println!(
-        "PERFORMANCE_OBSERVATION elapsed_millis={elapsed_millis} cases=30 provisional_case_limit_millis={MAX_RELEASE_CASE_MILLIS} provisional_corpus_limit_millis={MAX_RELEASE_CORPUS_MILLIS} cases_within_provisional_limit={time_passed} limit_status=pending_recalibration enforced=false",
-    );
-    // この検査のgreenは「記録済み現在値の再現」だけを表す。目標未達と暫定時間超過は
-    // 上の独立集計に必ず残し、targetをbaselineへ引き下げない。
+    // この検査のgreenは「記録済み機能現在値の再現」だけを表す。目標未達は上の
+    // 独立集計に必ず残す。性能はProductWatchdogの5周証拠だけで扱う。
     assert!(
         baseline_mismatches.is_empty(),
         "recorded-current mismatch cases: {baseline_mismatches:?}"
@@ -2754,6 +2752,13 @@ fn functional_and_product_runners_keep_their_separate_time_contracts() {
     let never_cancelled = || false;
     let product_control = product_search_control(runner, &never_cancelled);
     assert_eq!(product_control.watchdog().max_millis, 30_000);
+    for case in manifest
+        .cases
+        .iter()
+        .filter(|case| case.counts_toward_target)
+    {
+        assert_product_time_metadata_contract(&case.id, &case.recorded_current, runner);
+    }
 }
 
 #[test]
@@ -3646,10 +3651,13 @@ struct Stage3cMetricsFixture {
     schema_version: u32,
     corpus_id: String,
     stage: String,
+    // 機能10周とProduct性能5周の両証拠を包含する収集期間。性能統計そのものには
+    // Product phaseの壁時計値だけを使う。
     measurement_started_unix_millis: u64,
     measurement_finished_unix_millis: u64,
     runner: Stage3cMetricsRunner,
     fixture_integrity: Stage3cMetricsFixtureIntegrity,
+    // Product phaseを実測したmachine。機能fingerprintはmachine非依存契約である。
     machine: Stage3cMetricsMachine,
     cases: Vec<Stage3cMetricsCase>,
     performance: Stage3cMetricsPerformance,
@@ -3724,7 +3732,6 @@ struct Stage3cMetricsPhase {
 #[serde(deny_unknown_fields)]
 struct Stage3cMetricsRun {
     repetition: usize,
-    elapsed_millis: u64,
     matches_first: bool,
     matches_recorded_current: bool,
     fingerprint: Stage3cMetricsFingerprint,
@@ -3894,6 +3901,11 @@ fn stage_3c_median_millis(values: &[u64]) -> f64 {
     }
 }
 
+// elapsedの入力分解能は整数1ms。中央値とTukey fenceだけが除算で小数になるため、
+// その100万分の1である1e-6msを再計算照合の許容差にする。1msの観測境界や
+// P95順位を動かせない幅で、計算小数を厳密一致しないためだけの余裕である。
+const STAGE_3C_DERIVED_MILLIS_TOLERANCE: f64 = 1e-6;
+
 fn stage_3c_nearest_rank(values: &[u64], numerator: usize, denominator: usize) -> u64 {
     assert!(!values.is_empty(), "percentile requires one or more values");
     assert!(numerator > 0 && numerator <= denominator);
@@ -3934,6 +3946,195 @@ where
         .collect()
 }
 
+fn exactly_one_prefixed_json<T>(path: &Path, prefix: &str) -> T
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let mut records = prefixed_json_records(path, prefix);
+    assert_eq!(
+        records.len(),
+        1,
+        "{}には{prefix}がexact 1件必要",
+        path.display()
+    );
+    records.pop().expect("exact 1件を確認済み")
+}
+
+fn optional_one_prefixed_json<T>(path: &Path, prefix: &str) -> Option<T>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let mut records = prefixed_json_records(path, prefix);
+    assert!(
+        records.len() <= 1,
+        "{}には{prefix}を最大1件だけ置ける",
+        path.display()
+    );
+    records.pop()
+}
+
+fn take_collection_start_field(
+    fields: &mut BTreeMap<String, String>,
+    name: &str,
+) -> String {
+    fields
+        .remove(name)
+        .unwrap_or_else(|| panic!("COLLECTION_STARTに{name}がない"))
+}
+
+fn parse_collection_start_usize(fields: &mut BTreeMap<String, String>, name: &str) -> usize {
+    let value = take_collection_start_field(fields, name);
+    value
+        .parse()
+        .unwrap_or_else(|error| panic!("COLLECTION_STARTの{name}={value}がusizeでない: {error}"))
+}
+
+fn parse_collection_start_u64(fields: &mut BTreeMap<String, String>, name: &str) -> u64 {
+    let value = take_collection_start_field(fields, name);
+    value
+        .parse()
+        .unwrap_or_else(|error| panic!("COLLECTION_STARTの{name}={value}がu64でない: {error}"))
+}
+
+fn parse_collection_start_bool(fields: &mut BTreeMap<String, String>, name: &str) -> bool {
+    match take_collection_start_field(fields, name).as_str() {
+        "true" => true,
+        "false" => false,
+        value => panic!("COLLECTION_STARTの{name}={value}がboolでない"),
+    }
+}
+
+fn collection_start(path: &Path) -> Stage3cCollectionStart {
+    const PREFIX: &str = "CORPUS_3C_COLLECTION_START ";
+    let text = fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("{}を読めない: {error}", path.display()));
+    let payloads: Vec<_> = text
+        .lines()
+        .filter_map(|line| line.strip_prefix(PREFIX))
+        .collect();
+    assert_eq!(
+        payloads.len(),
+        1,
+        "{}にはCOLLECTION_STARTがexact 1件必要",
+        path.display()
+    );
+    let mut fields = BTreeMap::new();
+    for token in payloads[0].split_whitespace() {
+        let (name, value) = token
+            .split_once('=')
+            .unwrap_or_else(|| panic!("COLLECTION_START tokenに=がない: {token}"));
+        assert!(
+            fields.insert(name.to_owned(), value.to_owned()).is_none(),
+            "COLLECTION_START fieldが重複: {name}"
+        );
+    }
+    let start = Stage3cCollectionStart {
+        phase: take_collection_start_field(&mut fields, "phase"),
+        cases: parse_collection_start_usize(&mut fields, "cases"),
+        determinism_repetitions: parse_collection_start_usize(
+            &mut fields,
+            "determinism_repetitions",
+        ),
+        performance_repetitions: parse_collection_start_usize(
+            &mut fields,
+            "performance_repetitions",
+        ),
+        profile: take_collection_start_field(&mut fields, "profile"),
+        functional_search: take_collection_start_field(&mut fields, "functional_search"),
+        performance_search: take_collection_start_field(&mut fields, "performance_search"),
+        product_watchdog_millis: parse_collection_start_u64(
+            &mut fields,
+            "product_watchdog_millis",
+        ),
+        require_recorded_current: parse_collection_start_bool(
+            &mut fields,
+            "require_recorded_current",
+        ),
+        target_met_is_not_implied: parse_collection_start_bool(
+            &mut fields,
+            "target_met_is_not_implied",
+        ),
+    };
+    assert!(
+        fields.is_empty(),
+        "COLLECTION_STARTに未知fieldがある: {:?}",
+        fields.keys().collect::<Vec<_>>()
+    );
+    start
+}
+
+fn assert_collection_start(
+    start: &Stage3cCollectionStart,
+    expected_phase: &str,
+    expected_require_recorded_current: bool,
+    manifest: &CorpusManifest,
+) {
+    assert_eq!(start.phase, expected_phase);
+    assert_eq!(start.cases, manifest.planned_slots.len());
+    assert_eq!(start.cases, 30);
+    assert_eq!(
+        start.determinism_repetitions,
+        manifest.repetitions.determinism
+    );
+    assert_eq!(
+        start.performance_repetitions,
+        manifest.repetitions.performance_release
+    );
+    assert_eq!(start.profile, "release");
+    assert_eq!(start.functional_search, FUNCTIONAL_SEARCH_CONTRACT);
+    assert_eq!(start.functional_search, manifest.runner_contract.functional_search());
+    assert_eq!(start.performance_search, PERFORMANCE_SEARCH_CONTRACT);
+    assert_eq!(
+        start.performance_search,
+        manifest.runner_contract.performance_search()
+    );
+    assert_eq!(start.product_watchdog_millis, 30_000);
+    assert_eq!(
+        start.product_watchdog_millis,
+        manifest.runner_contract.product_search_watchdog_millis
+    );
+    assert_eq!(
+        start.require_recorded_current,
+        expected_require_recorded_current
+    );
+    assert!(start.target_met_is_not_implied);
+}
+
+fn evidence_file_time_bounds(path: &Path) -> (u64, u64) {
+    let metadata = fs::metadata(path)
+        .unwrap_or_else(|error| panic!("{}のmetadataを読めない: {error}", path.display()));
+    let modified = metadata.modified().expect("evidence log更新時刻");
+    let created = metadata.created().unwrap_or(modified);
+    (system_time_millis(created), system_time_millis(modified))
+}
+
+fn functional_environment_or_metadata(path: &Path) -> (u64, u64) {
+    let environment: Option<Stage3cCollectionEnvironment> =
+        optional_one_prefixed_json(path, "CORPUS_3C_ENVIRONMENT_JSON=");
+    let finished: Option<Stage3cCollectionFinished> =
+        optional_one_prefixed_json(path, "CORPUS_3C_FINISHED_JSON=");
+    let (started_unix_millis, finished_unix_millis) = match (environment, finished) {
+        (Some(environment), Some(finished)) => {
+            stage_3c_assert_machine(&environment.machine);
+            (
+                environment.started_unix_millis,
+                finished.finished_unix_millis,
+            )
+        }
+        (None, None) => {
+            // 今回のpre-regen 10周はENV/FINISHED追加前のprecompiled binaryで開始した
+            // 可能性がある。その1回だけはlog file metadataを完走時刻の補助証跡にする。
+            // machineはexact ENVを持つ後続performance logだけから採用する。全証拠の
+            // 収集期間にはこのcreated/modifiedも含める。片方だけ存在する不完全logは拒否する。
+            evidence_file_time_bounds(path)
+        }
+        _ => panic!("functional logのENV/FINISHEDが片方しかない"),
+    };
+    assert!(started_unix_millis > 0);
+    assert!(finished_unix_millis >= started_unix_millis);
+    (started_unix_millis, finished_unix_millis)
+}
+
 fn predeclared_target_contract(manifest: &CorpusManifest) -> Value {
     let cases: Vec<_> = manifest
         .cases
@@ -3964,6 +4165,307 @@ fn predeclared_target_contract(manifest: &CorpusManifest) -> Value {
         "planned_slots": &manifest.planned_slots,
         "cases": cases,
     })
+}
+
+fn assert_lower_hex_digest(label: &str, value: &str) {
+    assert_eq!(value.len(), 16, "{label}: digest長が16でない: {value}");
+    assert!(
+        value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()),
+        "{label}: lowercase hexでない: {value}"
+    );
+}
+
+fn assert_gap_metric_finite(label: &str, gaps: GapMetric) {
+    for (name, value) in [
+        ("count", gaps.count),
+        ("length", gaps.length),
+        ("width", gaps.width),
+        ("position", gaps.position),
+    ] {
+        assert!(value.is_finite(), "{label}.{name}: 非有限値");
+    }
+}
+
+fn assert_candidate_recorded_current(
+    case: &CorpusCase,
+    policy: &NumericPolicy,
+    functional_fingerprint: &Stage3cFingerprint,
+    metrics: &[Option<CandidateMetric>],
+) {
+    let current = &case.recorded_current;
+    assert_eq!(current.outcome, RecordedOutcomeKind::Candidates);
+    assert!(current.execution_failure.is_none());
+    assert!(current.candidate_count > 0, "{}: 候補が0件", case.id);
+    assert_eq!(
+        current.candidate_statuses.len(),
+        current.candidate_count,
+        "{}: candidate status数",
+        case.id
+    );
+    assert_eq!(
+        current.stop_reasons.len(),
+        current.candidate_count,
+        "{}: stop reason数",
+        case.id
+    );
+    assert_eq!(metrics.len(), current.candidate_count, "{}: metric数", case.id);
+    assert!(
+        current.selected_candidate_index < current.candidate_count,
+        "{}: selected indexが候補範囲外",
+        case.id
+    );
+    assert!(
+        current
+            .candidate_statuses
+            .iter()
+            .all(|status| matches!(status.as_str(), "checked_to_finish" | "partial" | "no_plan")),
+        "{}: 未知のcandidate status",
+        case.id
+    );
+    assert!(
+        matches!(
+            current.candidate_statuses[current.selected_candidate_index].as_str(),
+            "checked_to_finish" | "partial"
+        ),
+        "{}: selected candidateに利用可能planがない",
+        case.id
+    );
+    assert!(
+        current.all_returned_plans_safe,
+        "{}: 全返却planの安全性がfalse",
+        case.id
+    );
+    for (index, metric) in metrics.iter().enumerate() {
+        let metric = metric
+            .as_ref()
+            .unwrap_or_else(|| panic!("{}: 候補{index}に安全metricがない", case.id));
+        assert_eq!(metric.status, current.candidate_statuses[index]);
+        assert_eq!(
+            Some(metric.stop_reason.as_str()),
+            current.stop_reasons[index].as_deref()
+        );
+        assert_safety_policy(&metric.safety, policy);
+    }
+    let recalculated_selected = selected_candidate(metrics, policy)
+        .unwrap_or_else(|| panic!("{}: pure選択で安全なplanがない", case.id));
+    assert_eq!(
+        recalculated_selected, current.selected_candidate_index,
+        "{}: selected candidateのpure再計算",
+        case.id
+    );
+    assert_metric_baseline(
+        metrics[recalculated_selected]
+            .as_ref()
+            .expect("selected metric"),
+        current,
+        policy,
+    );
+    assert_safety_policy(&current.safety, policy);
+    assert_gap_metric_finite("recorded_current.initial_gaps", current.initial_gaps);
+    assert_gap_metric_finite("recorded_current.final_gaps", current.final_gaps);
+    for (name, value) in [
+        ("initial_weighted_gap", current.initial_weighted_gap),
+        ("final_weighted_gap", current.final_weighted_gap),
+        ("improvement_absolute", current.improvement_absolute),
+        ("improvement_ratio", current.improvement_ratio),
+    ] {
+        assert!(value.is_finite(), "{}: {name}が非有限値", case.id);
+    }
+    let calculated_improvement = current.initial_weighted_gap - current.final_weighted_gap;
+    assert_near(
+        "recorded_current.improvement_absolute",
+        current.improvement_absolute,
+        calculated_improvement,
+        policy.weighted_gap_abs_tolerance,
+    );
+    let calculated_ratio = if current.initial_weighted_gap > 0.0 {
+        calculated_improvement / current.initial_weighted_gap
+    } else {
+        0.0
+    };
+    // 改善率は「差 / 初期値」の計算小数なので厳密比較しない。既存baseline照合と
+    // 同じくweighted gap許容を分子・分母へ1回ずつ伝播したcase固有の幅を使う。
+    let ratio_denominator = current
+        .initial_weighted_gap
+        .abs()
+        .max(policy.weighted_gap_abs_tolerance);
+    let ratio_tolerance = policy.weighted_gap_abs_tolerance / ratio_denominator
+        + calculated_improvement.abs() * policy.weighted_gap_abs_tolerance
+            / ratio_denominator.powi(2);
+    assert_near(
+        "recorded_current.improvement_ratio",
+        current.improvement_ratio,
+        calculated_ratio,
+        ratio_tolerance,
+    );
+    for (name, value) in [
+        (
+            "normalized_candidate_hash",
+            current.normalized_candidate_hash.as_str(),
+        ),
+        ("stop_reason_hash", current.stop_reason_hash.as_str()),
+        (
+            "normalized_result_hash",
+            current.normalized_result_hash.as_str(),
+        ),
+    ] {
+        assert_lower_hex_digest(name, value);
+    }
+    match functional_fingerprint {
+        Stage3cFingerprint::Candidates {
+            normalized_candidate_hash,
+            stop_reason_hash,
+            normalized_result_hash,
+        } => {
+            assert_eq!(
+                current.normalized_candidate_hash.as_str(),
+                normalized_candidate_hash.as_str()
+            );
+            assert_eq!(
+                current.stop_reason_hash.as_str(),
+                stop_reason_hash.as_str()
+            );
+            assert_eq!(
+                current.normalized_result_hash.as_str(),
+                normalized_result_hash.as_str()
+            );
+        }
+        Stage3cFingerprint::ExecutionFailure { .. } => {
+            panic!("{}: 機能10周のfingerprintが実行失敗", case.id)
+        }
+    }
+    assert_eq!(
+        current.time_budget.product_search_watchdog_millis,
+        30_000
+    );
+    assert_recorded_assessment(&case.target, current, policy);
+}
+
+fn corpus_status_counts(manifest: &CorpusManifest) -> (usize, usize) {
+    let target_cases: Vec<_> = manifest
+        .cases
+        .iter()
+        .filter(|case| case.counts_toward_target)
+        .collect();
+    let failures = target_cases
+        .iter()
+        .filter(|case| case.recorded_current.outcome == RecordedOutcomeKind::ExecutionFailure)
+        .count();
+    let target_met = target_cases
+        .iter()
+        .filter(|case| case.recorded_current.assessment.target_met)
+        .count();
+    (failures, target_met)
+}
+
+fn assert_regenerated_manifest(
+    manifest: &CorpusManifest,
+    functional_records: &[Stage3cRunRecord],
+    baseline_metrics: &[Vec<Option<CandidateMetric>>],
+) -> (usize, usize) {
+    assert_eq!(manifest.cases.len(), 31);
+    assert_eq!(manifest.planned_slots.len(), 30);
+    assert_eq!(
+        manifest
+            .cases
+            .iter()
+            .filter(|case| case.counts_toward_target)
+            .count(),
+        30
+    );
+    let planned_case_ids: BTreeSet<_> = manifest
+        .planned_slots
+        .iter()
+        .map(|slot| slot.case_id.as_str())
+        .collect();
+    let target_case_ids: BTreeSet<_> = manifest
+        .cases
+        .iter()
+        .filter(|case| case.counts_toward_target)
+        .map(|case| case.id.as_str())
+        .collect();
+    assert_eq!(planned_case_ids.len(), 30);
+    assert_eq!(target_case_ids.len(), 30);
+    assert_eq!(planned_case_ids, target_case_ids);
+    assert_eq!(functional_records.len(), 300);
+    assert_eq!(baseline_metrics.len(), 30);
+    assert_eq!(
+        manifest.hash_contract.input_normalization,
+        "typed-input-plus-functional-runner-contract-canonical-json-v2"
+    );
+    assert_eq!(
+        manifest.runner_contract.functional_search.as_deref(),
+        Some(FUNCTIONAL_SEARCH_CONTRACT)
+    );
+    assert_eq!(
+        manifest.runner_contract.performance_search.as_deref(),
+        Some(PERFORMANCE_SEARCH_CONTRACT)
+    );
+    assert_eq!(
+        manifest.runner_contract.product_search_watchdog_millis,
+        30_000
+    );
+    // input契約はtarget判定より先に、非算入pilotを含むmanifest全31件で検証する。
+    for case in &manifest.cases {
+        let (input_bytes, input) = load_input(case).expect("input fixtureを読めない");
+        assert_eq!(
+            fixture_checksum(&input_bytes).expect("fixture checksum"),
+            case.input.fixture_checksum.digest,
+            "{}: fixture checksum",
+            case.id
+        );
+        assert_eq!(
+            structure_hash(&input.skeleton, manifest.hash_contract.float_quantum)
+                .expect("structure hash"),
+            case.input.structure_hash,
+            "{}: structure hash",
+            case.id
+        );
+        assert_eq!(
+            normalized_hash(
+                &NormalizedInputContract::new(&input, &manifest.runner_contract),
+                manifest.hash_contract.float_quantum,
+            )
+            .expect("normalized input hash"),
+            case.input.normalized_input_hash,
+            "{}: normalized input hash",
+            case.id
+        );
+    }
+    let mut must_met = 0;
+    let mut partial_met = 0;
+    for (case_index, slot) in manifest.planned_slots.iter().enumerate() {
+        let case = manifest
+            .cases
+            .iter()
+            .find(|case| case.id == slot.case_id)
+            .unwrap_or_else(|| panic!("manifestにcaseがない: {}", slot.case_id));
+        assert!(case.counts_toward_target);
+        let first_record = &functional_records[case_index];
+        assert_eq!(first_record.repetition, 1);
+        assert_eq!(first_record.case_id, case.id);
+        assert_candidate_recorded_current(
+            case,
+            &manifest.numeric_policy,
+            &first_record.fingerprint,
+            &baseline_metrics[case_index],
+        );
+        if case.recorded_current.assessment.target_met {
+            match case.target.class.as_str() {
+                "must_complete" => must_met += 1,
+                "safe_partial_allowed" => partial_met += 1,
+                other => panic!("未知のtarget class: {other}"),
+            }
+        }
+    }
+    let (failure_count, target_met) = corpus_status_counts(manifest);
+    assert_eq!(failure_count, 0);
+    assert_eq!(target_met, 7);
+    assert_eq!(must_met, 2);
+    assert_eq!(partial_met, 5);
+    (failure_count, target_met)
 }
 
 fn metrics_fingerprint(fingerprint: &Stage3cFingerprint) -> Stage3cMetricsFingerprint {
@@ -4075,24 +4577,6 @@ fn system_time_millis(value: SystemTime) -> u64 {
         .ok()
         .and_then(|duration| u64::try_from(duration.as_millis()).ok())
         .unwrap_or(1)
-}
-
-fn evidence_time_bounds(paths: &[&Path]) -> (u64, u64) {
-    let mut starts = Vec::new();
-    let mut finishes = Vec::new();
-    for path in paths {
-        let metadata = fs::metadata(path)
-            .unwrap_or_else(|error| panic!("{}のmetadataを読めない: {error}", path.display()));
-        starts.push(metadata.created().unwrap_or_else(|_| {
-            metadata
-                .modified()
-                .expect("evidence fileに作成・更新時刻がない")
-        }));
-        finishes.push(metadata.modified().expect("evidence fileに更新時刻がない"));
-    }
-    let started = starts.into_iter().min().expect("evidence path");
-    let finished = finishes.into_iter().max().expect("evidence path");
-    (system_time_millis(started), system_time_millis(finished))
 }
 
 fn stage_3c_performance_evidence(
@@ -4229,13 +4713,13 @@ fn stage_3c_performance_evidence(
         .iter()
         .map(|round| Stage3cMetricsCorpusRound {
             repetition: round.repetition,
-            product_elapsed_millis: round.product_elapsed_millis,
+            product_elapsed_millis: round.phase_elapsed_millis,
             collector_wall_elapsed_millis: round.collector_wall_elapsed_millis,
         })
         .collect();
     let corpus_elapsed: Vec<_> = corpus_rounds
         .iter()
-        .map(|round| round.product_elapsed_millis)
+        .map(|round| round.phase_elapsed_millis)
         .collect();
     let performance = Stage3cMetricsPerformance {
         all_median_millis: stage_3c_median_millis(&all_elapsed),
@@ -4281,6 +4765,113 @@ fn stage_3c_performance_evidence(
     (cases, performance, outliers, gate)
 }
 
+fn remove_staged_file(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("{}を消せない: {error}", path.display())),
+    }
+}
+
+fn preflight_canonical_pair(
+    manifest_file: &Path,
+    metrics_file: &Path,
+    manifest_bytes: &[u8],
+    metrics_bytes: &[u8],
+) {
+    // 正本へ1 byteも書く前に、候補pairと現在の30 inputだけから通常validatorと
+    // 同じ完全検証を行う。staged readbackは、この純粋検証済みbytesが実際に同じ
+    // bytesとして書けることだけを続けて確かめる。
+    let candidate_manifest: CorpusManifest =
+        serde_json::from_slice(manifest_bytes).expect("candidate manifest schema");
+    let candidate_metrics: Stage3cMetricsFixture =
+        serde_json::from_slice(metrics_bytes).expect("candidate metrics schema");
+    let mut candidate_immutable = BTreeMap::new();
+    assert!(
+        candidate_immutable
+            .insert(manifest_file.to_path_buf(), manifest_bytes.to_vec())
+            .is_none()
+    );
+    assert!(
+        candidate_immutable
+            .insert(metrics_file.to_path_buf(), metrics_bytes.to_vec())
+            .is_none()
+    );
+    for slot in &candidate_manifest.planned_slots {
+        let case = candidate_manifest
+            .cases
+            .iter()
+            .find(|case| case.id == slot.case_id)
+            .unwrap_or_else(|| panic!("{}: candidate target caseがない", slot.case_id));
+        let path = fixture_path(&case.input.fixture).expect("candidate input path");
+        let bytes = fs::read(&path)
+            .unwrap_or_else(|error| panic!("{}を読めない: {error}", path.display()));
+        assert!(
+            candidate_immutable.insert(path, bytes).is_none(),
+            "candidate input pathが重複"
+        );
+    }
+    assert_eq!(candidate_immutable.len(), 32);
+    stage_3c_assert_metrics_fixture(
+        &candidate_metrics,
+        &candidate_manifest,
+        &candidate_immutable,
+    );
+
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock is before UNIX epoch")
+        .as_nanos();
+    let manifest_name = manifest_file
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("manifest file name");
+    let metrics_name = metrics_file
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("metrics file name");
+    let manifest_staged = manifest_file.with_file_name(format!(
+        ".{manifest_name}.{}.{}.staged",
+        std::process::id(),
+        nonce
+    ));
+    let metrics_staged = metrics_file.with_file_name(format!(
+        ".{metrics_name}.{}.{}.staged",
+        std::process::id(),
+        nonce
+    ));
+    let staged = (|| -> Result<(), String> {
+        fs::write(&manifest_staged, manifest_bytes)
+            .map_err(|error| format!("{}を書けない: {error}", manifest_staged.display()))?;
+        fs::write(&metrics_staged, metrics_bytes)
+            .map_err(|error| format!("{}を書けない: {error}", metrics_staged.display()))?;
+        let manifest_readback = fs::read(&manifest_staged)
+            .map_err(|error| format!("{}を再読込できない: {error}", manifest_staged.display()))?;
+        let metrics_readback = fs::read(&metrics_staged)
+            .map_err(|error| format!("{}を再読込できない: {error}", metrics_staged.display()))?;
+        if manifest_readback.as_slice() != manifest_bytes {
+            return Err(format!("{}のreadbackが不一致", manifest_staged.display()));
+        }
+        if metrics_readback.as_slice() != metrics_bytes {
+            return Err(format!("{}のreadbackが不一致", metrics_staged.display()));
+        }
+        let _: CorpusManifest = serde_json::from_slice(&manifest_readback)
+            .map_err(|error| format!("staged manifest schema: {error}"))?;
+        let _: Stage3cMetricsFixture = serde_json::from_slice(&metrics_readback)
+            .map_err(|error| format!("staged metrics schema: {error}"))?;
+        Ok(())
+    })();
+    let cleanup_manifest = remove_staged_file(&manifest_staged);
+    let cleanup_metrics = remove_staged_file(&metrics_staged);
+    if let Err(error) = staged {
+        panic!(
+            "正本pairの同directory preflight失敗: {error}; cleanup_manifest={cleanup_manifest:?}; cleanup_metrics={cleanup_metrics:?}"
+        );
+    }
+    cleanup_manifest.unwrap_or_else(|error| panic!("staged manifest cleanup失敗: {error}"));
+    cleanup_metrics.unwrap_or_else(|error| panic!("staged metrics cleanup失敗: {error}"));
+}
+
 fn write_canonical_pair(
     manifest_bytes: &[u8],
     metrics_bytes: &[u8],
@@ -4289,13 +4880,47 @@ fn write_canonical_pair(
 ) {
     let manifest_file = manifest_path();
     let metrics_file = stage_3c_metrics_path();
-    fs::write(&manifest_file, manifest_bytes)
-        .unwrap_or_else(|error| panic!("{}を書けない: {error}", manifest_file.display()));
-    if let Err(error) = fs::write(&metrics_file, metrics_bytes) {
-        fs::write(&manifest_file, original_manifest).expect("manifest rollback失敗");
-        panic!("{}を書けない: {error}", metrics_file.display());
-    }
-    let validation = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    preflight_canonical_pair(
+        &manifest_file,
+        &metrics_file,
+        manifest_bytes,
+        metrics_bytes,
+    );
+    // CAS: evidenceを読んだ後に別担当が正本を変えた場合、その変更へ上書きしない。
+    // 2ファイルとも、write直前に最初のsnapshotとbyte完全一致することを要求する。
+    assert_eq!(
+        fs::read(&manifest_file)
+            .expect("write直前manifestを読めない")
+            .as_slice(),
+        original_manifest,
+        "write直前にmanifestが変わった"
+    );
+    assert_eq!(
+        fs::read(&metrics_file)
+            .expect("write直前metricsを読めない")
+            .as_slice(),
+        original_metrics,
+        "write直前にmetricsが変わった"
+    );
+    let replacement = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        fs::write(&manifest_file, manifest_bytes)
+            .unwrap_or_else(|error| panic!("{}を書けない: {error}", manifest_file.display()));
+        fs::write(&metrics_file, metrics_bytes)
+            .unwrap_or_else(|error| panic!("{}を書けない: {error}", metrics_file.display()));
+        assert_eq!(
+            fs::read(&manifest_file)
+                .expect("更新manifestを再読込できない")
+                .as_slice(),
+            manifest_bytes,
+            "更新manifestのreadbackが不一致"
+        );
+        assert_eq!(
+            fs::read(&metrics_file)
+                .expect("更新metricsを再読込できない")
+                .as_slice(),
+            metrics_bytes,
+            "更新metricsのreadbackが不一致"
+        );
         let (_, manifest) = load_manifest().expect("再生成manifestを読めない");
         let immutable = stage_3c_immutable_files(&manifest);
         let metrics: Stage3cMetricsFixture = serde_json::from_slice(
@@ -4306,9 +4931,28 @@ fn write_canonical_pair(
         .expect("再生成metrics schema");
         stage_3c_assert_metrics_fixture(&metrics, &manifest, &immutable);
     }));
-    if let Err(payload) = validation {
-        fs::write(&manifest_file, original_manifest).expect("manifest rollback失敗");
-        fs::write(&metrics_file, original_metrics).expect("metrics rollback失敗");
+    if let Err(payload) = replacement {
+        let manifest_rollback = fs::write(&manifest_file, original_manifest);
+        let metrics_rollback = fs::write(&metrics_file, original_metrics);
+        if manifest_rollback.is_err() || metrics_rollback.is_err() {
+            panic!(
+                "正本pair rollback失敗: manifest={manifest_rollback:?}; metrics={metrics_rollback:?}"
+            );
+        }
+        assert_eq!(
+            fs::read(&manifest_file)
+                .expect("rollback manifestを読めない")
+                .as_slice(),
+            original_manifest,
+            "rollback manifest byte不一致"
+        );
+        assert_eq!(
+            fs::read(&metrics_file)
+                .expect("rollback metricsを読めない")
+                .as_slice(),
+            original_metrics,
+            "rollback metrics byte不一致"
+        );
         std::panic::resume_unwind(payload);
     }
 }
@@ -4323,6 +4967,49 @@ fn regenerate_corpus_from_evidence() {
     let original_metrics = fs::read(&metrics_file).expect("旧metricsを読めない");
     let (_, mut manifest) = load_manifest().expect("旧manifestを解釈できない");
     let target_contract_before = predeclared_target_contract(&manifest);
+    assert_eq!(
+        manifest
+            .cases
+            .iter()
+            .filter(|case| case.counts_toward_target)
+            .count(),
+        30
+    );
+    let (old_failure_count, old_target_met) = corpus_status_counts(&manifest);
+    assert_eq!(old_failure_count, 9);
+    assert_eq!(old_target_met, 6);
+    let functional_start = collection_start(&functional_log);
+    assert_collection_start(
+        &functional_start,
+        "functional_determinism",
+        false,
+        &manifest,
+    );
+    let (functional_started_unix_millis, functional_finished_unix_millis) =
+        functional_environment_or_metadata(&functional_log);
+    let (baseline_started_unix_millis, baseline_finished_unix_millis) =
+        evidence_file_time_bounds(&baseline_log);
+    let performance_start = collection_start(&performance_log);
+    assert_collection_start(
+        &performance_start,
+        "product_performance",
+        false,
+        &manifest,
+    );
+    let performance_environment: Stage3cCollectionEnvironment = exactly_one_prefixed_json(
+        &performance_log,
+        "CORPUS_3C_ENVIRONMENT_JSON=",
+    );
+    let performance_finished: Stage3cCollectionFinished = exactly_one_prefixed_json(
+        &performance_log,
+        "CORPUS_3C_FINISHED_JSON=",
+    );
+    assert!(performance_environment.started_unix_millis > 0);
+    assert!(
+        performance_finished.finished_unix_millis
+            >= performance_environment.started_unix_millis
+    );
+    stage_3c_assert_machine(&performance_environment.machine);
     let input_snapshots: BTreeMap<_, _> = manifest
         .cases
         .iter()
@@ -4343,15 +5030,26 @@ fn regenerate_corpus_from_evidence() {
         &manifest,
         true,
     );
-    let functional_summary: Vec<Stage3cCollectionSummary> =
-        prefixed_json_records(&functional_log, "CORPUS_3C_SUMMARY_JSON=");
-    assert_eq!(functional_summary.len(), 1);
-    assert_eq!(functional_summary[0].determinism_run_count, 300);
-    assert_eq!(functional_summary[0].determinism_mismatches_from_first, 0);
+    let functional_summary: Stage3cCollectionSummary =
+        exactly_one_prefixed_json(&functional_log, "CORPUS_3C_SUMMARY_JSON=");
+    assert_eq!(functional_summary.determinism_run_count, 300);
+    assert_eq!(functional_summary.determinism_mismatches_from_first, 0);
+    assert_eq!(functional_summary.performance_run_count, 0);
+    assert_eq!(functional_summary.performance_mismatches_from_first, 0);
+    assert_eq!(
+        functional_summary.performance_mismatches_from_recorded_current,
+        0
+    );
 
+    let baseline_metrics: Vec<Vec<Option<CandidateMetric>>> =
+        prefixed_json_records(&baseline_log, "CORPUS_3B_METRICS=");
+    assert_eq!(baseline_metrics.len(), manifest.planned_slots.len());
     let evidence_cases: Vec<CorpusCase> =
         prefixed_json_records(&baseline_log, "CORPUS_3B_CASE_JSON=");
     assert_eq!(evidence_cases.len(), manifest.planned_slots.len());
+    for (evidence, slot) in evidence_cases.iter().zip(&manifest.planned_slots) {
+        assert_eq!(evidence.id, slot.case_id, "baseline evidenceの順序");
+    }
     let mut evidence_by_id: BTreeMap<_, _> = evidence_cases
         .into_iter()
         .map(|case| (case.id.clone(), case))
@@ -4381,6 +5079,12 @@ fn regenerate_corpus_from_evidence() {
         assert!(evidence.recorded_current.execution_failure.is_none());
         assert!(evidence.recorded_current.candidate_count > 0);
         assert!(evidence.recorded_current.all_returned_plans_safe);
+        assert_candidate_recorded_current(
+            &evidence,
+            &manifest.numeric_policy,
+            &functional_records[case_index].fingerprint,
+            &baseline_metrics[case_index],
+        );
         assert_eq!(
             stage_3c_metrics_recorded_fingerprint(&evidence.recorded_current),
             metrics_fingerprint(&functional_records[case_index].fingerprint)
@@ -4438,10 +5142,15 @@ fn regenerate_corpus_from_evidence() {
         assert_eq!(round.repetition, index + 1);
         assert_eq!(round.case_count, manifest.planned_slots.len());
     }
-    let performance_summary: Vec<Stage3cCollectionSummary> =
-        prefixed_json_records(&performance_log, "CORPUS_3C_SUMMARY_JSON=");
-    assert_eq!(performance_summary.len(), 1);
-    assert_eq!(performance_summary[0].performance_run_count, 150);
+    let performance_summary: Stage3cCollectionSummary =
+        exactly_one_prefixed_json(&performance_log, "CORPUS_3C_SUMMARY_JSON=");
+    assert_eq!(performance_summary.determinism_run_count, 0);
+    assert_eq!(performance_summary.determinism_mismatches_from_first, 0);
+    assert_eq!(
+        performance_summary.determinism_mismatches_from_recorded_current,
+        0
+    );
+    assert_eq!(performance_summary.performance_run_count, 150);
 
     for (case_index, slot) in manifest.planned_slots.iter().enumerate() {
         let case = manifest
@@ -4478,6 +5187,11 @@ fn regenerate_corpus_from_evidence() {
         target_contract_before,
         predeclared_target_contract(&parsed_manifest)
     );
+    let (new_failure_count, new_target_met) = assert_regenerated_manifest(
+        &parsed_manifest,
+        &functional_records,
+        &baseline_metrics,
+    );
     let (mut cases, performance, outliers, gate_proposal) =
         stage_3c_performance_evidence(&performance_records, &performance_rounds, &parsed_manifest);
     for (case_index, case_metrics) in cases.iter_mut().enumerate() {
@@ -4492,7 +5206,6 @@ fn regenerate_corpus_from_evidence() {
                 assert_eq!(&fingerprint, recorded);
                 Stage3cMetricsRun {
                     repetition,
-                    elapsed_millis: record.elapsed_millis,
                     matches_first: true,
                     matches_recorded_current: true,
                     fingerprint,
@@ -4549,8 +5262,12 @@ fn regenerate_corpus_from_evidence() {
             }
         })
         .collect();
-    let (measurement_started_unix_millis, measurement_finished_unix_millis) =
-        evidence_time_bounds(&[&functional_log, &baseline_log, &performance_log]);
+    let measurement_started_unix_millis = functional_started_unix_millis
+        .min(baseline_started_unix_millis)
+        .min(performance_environment.started_unix_millis);
+    let measurement_finished_unix_millis = functional_finished_unix_millis
+        .max(baseline_finished_unix_millis)
+        .max(performance_finished.finished_unix_millis);
     let metrics = Stage3cMetricsFixture {
         schema_version: 2,
         corpus_id: parsed_manifest.corpus_id.clone(),
@@ -4570,7 +5287,7 @@ fn regenerate_corpus_from_evidence() {
             manifest_checksum: fixture_checksum(&manifest_bytes).expect("manifest checksum"),
             inputs: input_integrity,
         },
-        machine: stage_3c_machine_evidence(),
+        machine: performance_environment.machine,
         cases,
         performance,
         outliers,
@@ -4588,9 +5305,13 @@ fn regenerate_corpus_from_evidence() {
         &original_metrics,
     );
     println!(
-        "CORPUS_REGENERATION_COMPLETE cases=30 old_failure_count=9 new_failure_count=0 old_target_met=6 new_target_met={} target_contract_unchanged=true inputs_unchanged={} functional_runs=300 performance_runs=150",
-        metrics.target_summary.target_met,
-        input_snapshots.len(),
+        "CORPUS_REGENERATION_COMPLETE cases=30 old_failure_count={} new_failure_count={} old_target_met={} new_target_met={} target_contract_unchanged=true target_inputs_unchanged=30 pilot_inputs_unchanged=1 functional_runs={} performance_runs={}",
+        old_failure_count,
+        new_failure_count,
+        old_target_met,
+        new_target_met,
+        functional_summary.determinism_run_count,
+        performance_summary.performance_run_count,
     );
 }
 
@@ -4924,9 +5645,11 @@ fn stage_3c_assert_metrics_fixture(
         .iter()
         .map(|value| value.elapsed_millis)
         .collect();
-    assert_eq!(
+    assert_near(
+        "performance.all_median_millis",
         metrics.performance.all_median_millis,
-        stage_3c_median_millis(&all_elapsed)
+        stage_3c_median_millis(&all_elapsed),
+        STAGE_3C_DERIVED_MILLIS_TOLERANCE,
     );
     assert_eq!(
         metrics.performance.all_p95_millis,
@@ -4944,7 +5667,12 @@ fn stage_3c_assert_metrics_fixture(
             .iter()
             .map(|value| value.elapsed_millis)
             .collect();
-        assert_eq!(band_metrics.median_millis, stage_3c_median_millis(&elapsed));
+        assert_near(
+            "performance.band.median_millis",
+            band_metrics.median_millis,
+            stage_3c_median_millis(&elapsed),
+            STAGE_3C_DERIVED_MILLIS_TOLERANCE,
+        );
         assert_eq!(
             band_metrics.p95_millis,
             stage_3c_nearest_rank(&elapsed, 95, 100)
@@ -4978,9 +5706,11 @@ fn stage_3c_assert_metrics_fixture(
             round.product_elapsed_millis
         })
         .collect();
-    assert_eq!(
+    assert_near(
+        "performance.corpus_median_millis",
         metrics.performance.corpus_median_millis,
-        stage_3c_median_millis(&corpus_elapsed)
+        stage_3c_median_millis(&corpus_elapsed),
+        STAGE_3C_DERIVED_MILLIS_TOLERANCE,
     );
     assert_eq!(
         metrics.performance.corpus_p95_millis,
@@ -5019,11 +5749,33 @@ fn stage_3c_assert_metrics_fixture(
             }
         }
     }
-    assert_eq!(metrics.outliers.values, expected_outliers);
+    assert_eq!(metrics.outliers.values.len(), expected_outliers.len());
+    for (actual, expected) in metrics.outliers.values.iter().zip(&expected_outliers) {
+        assert_eq!(actual.case_id, expected.case_id);
+        assert_eq!(actual.repetition, expected.repetition);
+        assert_eq!(actual.elapsed_millis, expected.elapsed_millis);
+        assert_near(
+            "outlier.lower_fence_millis",
+            actual.lower_fence_millis,
+            expected.lower_fence_millis,
+            STAGE_3C_DERIVED_MILLIS_TOLERANCE,
+        );
+        assert_near(
+            "outlier.upper_fence_millis",
+            actual.upper_fence_millis,
+            expected.upper_fence_millis,
+            STAGE_3C_DERIVED_MILLIS_TOLERANCE,
+        );
+    }
 
     let gate = &metrics.gate_proposal;
     assert_eq!(gate.source, "sum_of_case_elapsed_millis_p95");
-    assert_eq!(gate.performance_baseline_fraction, 0.8);
+    assert_near(
+        "gate.performance_baseline_fraction",
+        gate.performance_baseline_fraction,
+        0.8,
+        f64::EPSILON,
+    );
     assert_eq!(
         gate.reference_p95_millis,
         metrics.performance.corpus_p95_millis

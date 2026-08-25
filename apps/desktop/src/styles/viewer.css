@@ -338,6 +338,11 @@
   touch-action: none; /* ドラッグでの視点操作を優先する */
 }
 
+/* 親区画のoverflowで切れないよう、キーボードfocusの輪をcanvas内側へ出す。 */
+.viewer3d-canvas:focus-visible {
+  outline-offset: -4px;
+}
+
 /*
  * 解説画像の自動撮影時だけ、対象canvasをウィンドウ全面へ広げる。
  * 属性はwindow.__origami3Captureが一時的に付けるため、通常UIには影響しない。
