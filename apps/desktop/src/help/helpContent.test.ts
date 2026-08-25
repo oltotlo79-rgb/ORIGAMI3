@@ -540,6 +540,7 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
       helpChapterSearchText(chapter),
     ).join("\n");
     expect(allHelpText).not.toContain("動かす側");
+    expect(allHelpText).not.toContain("動く側");
     expect(allHelpText).not.toContain("「こちら側」「反対側」");
   });
 
@@ -557,6 +558,8 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
           "いつもの表示に戻る",
           "どの紙が上になるかは決まっていません",
           "仮の形は保存にも、手順タイムラインにも、元に戻す・やり直しの履歴にも加わりません",
+          "履歴を動かさずに仮の形だけを閉じて",
+          "紙を折る・引く・線を描くなどの編集はできません",
         ],
       },
       {
@@ -565,6 +568,8 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
         phrases: [
           "2本目を選ぶと、折る前から折り返す紙が黄色で表示されます",
           "選択をやり直さず「反対側の紙を折り返す」を押して黄色を切り替え",
+          "角度を0°へ戻すと選び直さず続けられます",
+          "選んだ2本の線などを選び直さず",
         ],
       },
       {
@@ -598,6 +603,26 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
         ],
       },
       {
+        name: "確定した角度と元に戻す結果を一定にする",
+        chapterId: "angles",
+        phrases: [
+          "同じ手順位置で同じ折り目を同じ角度へ確定し直すと",
+          "途中でつまみをどちらへ動かしたかにかかわらず",
+          "同じ立体の形、紙の表裏、重なりへ戻ります",
+          "角度を動かす前の立体全体へ戻ります",
+        ],
+      },
+      {
+        name: "提案の形見本を読み上げとキーで操作する",
+        chapterId: "proposal",
+        phrases: [
+          "形見本は読み上げとキー操作に対応しています",
+          "図全体を「形見本」として案内",
+          "丸い先へTabキーで移り",
+          "Shiftを押しながら矢印キーで大きく動かす",
+        ],
+      },
+      {
         name: "手順の入れ替えを1回で戻す",
         chapterId: "timeline",
         phrases: [
@@ -618,7 +643,7 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
       },
     ] as const;
 
-    expect(changes).toHaveLength(7);
+    expect(changes).toHaveLength(9);
     for (const change of changes) {
       const chapter = HELP_CHAPTERS.find((entry) => entry.id === change.chapterId);
       expect(chapter, change.name).toBeDefined();
