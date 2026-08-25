@@ -6,10 +6,52 @@
 // 手順一覧へ積む。再生(Rust側 replay)は線分から折り線を引き当て直すので、
 // 展開図を編集して辺IDが変わっても同じ立体形状に戻る。
 
-import type { Document, DriverLine, FoldStep } from "./types";
+import type {
+  Document,
+  DriverLine,
+  FoldPoseInput,
+  FoldStep,
+} from "./types";
 
 /** これ未満の角度は「平ら」とみなす(度)。計算誤差を立体と誤解しないため */
 export const POSE_MIN_DEG = 0.5;
+
+export type FoldPoseInputResult =
+  | { ok: true; poseBefore: FoldPoseInput | null }
+  | { ok: false; reason: "invalid" | "non-flat" };
+
+/**
+ * 一時的な角度指定を、FoldThroughへ渡せる書類由来の入力へ変換する。
+ * 今回扱うのは厳密な平坦終点(0/+180/-180°)だけ。計算値ではなく利用者の
+ * 宣言値なので完全比較し、+180°と-180°を周期同値にしない。
+ */
+export function foldPoseInputFromDrivers(
+  drivers: ReadonlyMap<number, number>,
+): FoldPoseInputResult {
+  const entries = [...drivers].sort(([left], [right]) => left - right);
+  if (entries.some(([, angle]) => !Number.isFinite(angle))) {
+    return { ok: false, reason: "invalid" };
+  }
+  if (!entries.some(([, angle]) => angle !== 0)) {
+    return { ok: true, poseBefore: null };
+  }
+  if (
+    entries.some(
+      ([, angle]) => angle !== 0 && angle !== 180 && angle !== -180,
+    )
+  ) {
+    return { ok: false, reason: "non-flat" };
+  }
+  return {
+    ok: true,
+    poseBefore: {
+      drivers: entries.map(([edge_id, target_angle_deg]) => ({
+        edge_id,
+        target_angle_deg,
+      })),
+    },
+  };
+}
 
 /**
  * 今の折り角度(折り線の辺ID → 度)。

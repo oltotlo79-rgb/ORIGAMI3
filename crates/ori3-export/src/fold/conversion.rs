@@ -54,7 +54,7 @@ impl fmt::Display for FoldConversionError {
 
 impl Error for FoldConversionError {}
 
-/// Convert a validated FOLD 1.2 limited-profile value into an ORIGAMI3 document.
+/// Convert a validated FOLD 1.1/1.2 limited-profile value into an ORIGAMI3 document.
 ///
 /// The validator is always the first gate. If it reports an error, no `Document`
 /// is constructed and all warnings/errors are returned. F/U assignments become

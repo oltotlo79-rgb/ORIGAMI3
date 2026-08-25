@@ -64,8 +64,8 @@ use ori3_cp::{Face, extract_faces};
 use ori3_geometry::Isometry2;
 use ori3_model::{
     AlignmentTarget, CreasePattern, DisplaySettings, Document, Driver, DriverLine, Edge, EdgeId,
-    FaceId, FinishSoftSettings, FoldAlignment, FoldStep, Frame3D, Paper, StepId, TechniqueKind,
-    Vertex,
+    FaceId, FinishSoftSettings, FoldAlignment, FoldPoseInput, FoldStep, Frame3D, Paper, StepId,
+    TechniqueKind, Vertex,
 };
 
 use crate::flat_state::FlatState;
@@ -74,6 +74,17 @@ use crate::fold_through::resolve_driver_edges;
 /// 平坦判定の許容誤差。ソルバーの表示精度(座標誤差 1e-6 程度)に合わせる。
 /// [`ori3_model::EPS`](1e-9)では厳しすぎて、正しく畳めた状態を弾いてしまう。
 const FLAT_EPS: f64 = 1e-6;
+
+/// 書類から再現した平坦な直前姿勢と、それを保存するPose手順。
+///
+/// `step.id` は呼び出し側が挿入位置の書類に合わせて置き換えるための仮値0。
+/// それ以外は、この結果だけを保存して同じ平坦状態を再生できる。
+#[derive(Clone, Debug)]
+pub struct CanonicalFlatPose {
+    pub state: FlatState,
+    pub step: FoldStep,
+    pub warnings: Vec<String>,
+}
 
 /// 折り途中の接触補正に使う層順序の契約。
 ///
@@ -779,21 +790,10 @@ fn replay_with_faces_impl(
 /// 層順序の代表点など)を添える。折れなくなるほどの問題ではないので止めはしないが、
 /// 捨てると「知らないうちに一部の手順が無視された状態の上に折る」ことになるため、
 /// 呼び出し側へ渡して利用者に見せること(「止めずに警告」原則)。
-pub fn flat_state_at(
-    doc: &Document,
+fn flat_placements(
     faces: &[Face],
-    up_to: usize,
-) -> Result<(FlatState, Vec<String>), String> {
-    let up_to = up_to.min(doc.sequence.len());
-    let plan = plan_steps(doc, faces, up_to, 1.0);
-    // 後から積んだ指定が優先(HashMapへの順次挿入で後勝ちになる)
-    let angles: HashMap<EdgeId, f64> = plan
-        .flat_exact
-        .iter()
-        .map(|d| (d.hinge, d.target_angle_deg))
-        .collect();
-    let folded = ori3_rigid::propagate(&doc.cp, faces, &angles);
-
+    folded: &ori3_rigid::FoldedFrame,
+) -> Result<HashMap<FaceId, Isometry2>, String> {
     let mut placements: HashMap<FaceId, Isometry2> = HashMap::with_capacity(faces.len());
     for f in faces {
         let (r, t) = folded
@@ -823,6 +823,283 @@ pub fn flat_state_at(
             },
         );
     }
+    Ok(placements)
+}
+
+/// 利用者が指定した符号付き角度だけを手掛かりに、書類の現在位置へ平坦な姿勢を再現する。
+///
+/// 画面のFrame・直前solveの値・warm start・branch hintは受け取らない。まず書類の手順を
+/// `up_to` まで再生した角度を決定的な候補seedにし、利用者が明示した0/+180/-180度を
+/// 希望角としてcanonical solveへ渡す。したがって同じ書類・位置・指定なら、操作経路に
+/// 関係なく同じ結果になる。
+///
+/// 完全な平坦姿勢と幾何から証明された全面の重なり順が得られた場合だけ成功する。
+/// `+180` と `-180` は生の値で照合し、周期的に同じ角度とは扱わない。
+pub fn canonical_flat_pose_at(
+    doc: &Document,
+    faces: &[Face],
+    up_to: usize,
+    pose: &FoldPoseInput,
+) -> Result<CanonicalFlatPose, String> {
+    const ENDPOINT_SNAP_EPS_DEG: f64 = 1e-9;
+    const MAX_SEAM_GAP: f64 = 1e-6;
+
+    let up_to = up_to.min(doc.sequence.len());
+    if faces.is_empty() {
+        return Err("紙の面が見つからないため、折った形を再現できません".to_string());
+    }
+    if pose.drivers.is_empty() {
+        return Err("折った形を再現する角度が指定されていません".to_string());
+    }
+
+    let hinges = hinge_edges(faces);
+    let hinge_set = hinges.iter().copied().collect::<BTreeSet<_>>();
+    let mut preferred = HashMap::with_capacity(pose.drivers.len());
+    for requested in &pose.drivers {
+        if !requested.target_angle_deg.is_finite() {
+            return Err(format!(
+                "折り目{}の角度が正しくないため、折った形を再現できません",
+                requested.edge_id
+            ));
+        }
+        if !matches!(requested.target_angle_deg, -180.0 | 0.0 | 180.0) {
+            return Err(format!(
+                "折り目{}は、平らに折り切った角度ではありません",
+                requested.edge_id
+            ));
+        }
+        if !hinge_set.contains(&requested.edge_id) {
+            return Err(format!(
+                "折り目{}は、2つの紙面の境として見つかりません",
+                requested.edge_id
+            ));
+        }
+        if preferred
+            .insert(requested.edge_id, requested.target_angle_deg)
+            .is_some()
+        {
+            return Err(format!(
+                "折り目{}の角度が2回指定されています",
+                requested.edge_id
+            ));
+        }
+    }
+
+    // seedは書類だけから再生する。画面の一時姿勢や直前solveの値は使わない。
+    let prefix = replay_with_faces(doc, faces, up_to, 1.0);
+    if !is_finite_replay_seed(&prefix, faces.len()) {
+        return Err("現在の手順までの形を、書類から再現できません".to_string());
+    }
+    let document_seed = hinges
+        .iter()
+        .map(|&hinge| {
+            (
+                hinge,
+                prefix.hinge_angles.get(&hinge).copied().unwrap_or(0.0),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+
+    let solved = ori3_rigid::motion::solve_canonical_motion_with_contact_options(
+        &doc.cp,
+        faces,
+        &[],
+        Some(&preferred),
+        Some(&document_seed),
+        ori3_rigid::MotionContactOptions {
+            detect: doc.display.penetration_prevention_enabled,
+            // 表示設定の補正値で形を変えず、利用者の符号付き指定をそのまま再現する。
+            prevent: false,
+        },
+    );
+    if !is_finite_result(&solved.result, faces.len())
+        || !solved.result.converged
+        || solved.result.best_effort
+    {
+        return Err("指定した角度で、紙がつながった平らな形を再現できません".to_string());
+    }
+    if !solved.result.relaxations.is_empty() {
+        return Err("指定した角度を変えずには、平らな形を再現できません".to_string());
+    }
+    if !solved.surface_order_authoritative {
+        return Err("紙の重なり順を、折った形から決められません".to_string());
+    }
+    let diagnostics = solved
+        .surface_order
+        .ok_or_else(|| "紙の重なり順を、折った形から決められません".to_string())?;
+    if diagnostics.unresolved_overlaps != 0 || diagnostics.broken_constraints != 0 {
+        return Err("紙の重なり順を最後まで決められません".to_string());
+    }
+    let order = complete_surface_order(&solved.result.frame, faces)?;
+
+    let mut snapped = BTreeMap::new();
+    for &hinge in &hinges {
+        let actual = solved
+            .result
+            .angles
+            .get(&hinge)
+            .copied()
+            .ok_or_else(|| format!("折り目{hinge}の角度を再現できません"))?;
+        let endpoint = [-180.0, 0.0, 180.0]
+            .into_iter()
+            .min_by(|left, right| (actual - *left).abs().total_cmp(&(actual - *right).abs()))
+            .expect("終点候補は3件ある");
+        if (actual - endpoint).abs() > ENDPOINT_SNAP_EPS_DEG {
+            return Err(format!(
+                "折り目{hinge}が平らに折り切った角度へ届いていません"
+            ));
+        }
+        snapped.insert(hinge, endpoint);
+    }
+    for (&edge_id, &target) in &preferred {
+        let actual = snapped
+            .get(&edge_id)
+            .copied()
+            .ok_or_else(|| format!("折り目{edge_id}の角度を再現できません"))?;
+        if actual.to_bits() != target.to_bits() {
+            return Err(format!("折り目{edge_id}を指定した向きのまま再現できません"));
+        }
+    }
+
+    let snapped_angles = snapped.iter().map(|(&id, &angle)| (id, angle)).collect();
+    let folded = ori3_rigid::propagate(&doc.cp, faces, &snapped_angles);
+    let placements = flat_placements(faces, &folded)?;
+    let state = FlatState { placements, order };
+
+    let mut frame = ori3_rigid::to_frame3d(&doc.cp, faces, &folded);
+    ori3_rigid::stamp_surface_order(&mut frame, &state.order)
+        .map_err(|_| "紙の重なり順を3Dの形へ反映できません".to_string())?;
+    let seam_gap = ori3_rigid::max_seam_gap(&doc.cp, faces, &frame);
+    if !seam_gap.is_finite() || seam_gap >= MAX_SEAM_GAP {
+        return Err("折った形で紙のつながりを保てません".to_string());
+    }
+
+    let vertices = doc
+        .cp
+        .vertices
+        .iter()
+        .map(|vertex| (vertex.id, vertex.pos))
+        .collect::<HashMap<_, _>>();
+    let edges = doc
+        .cp
+        .edges
+        .iter()
+        .map(|edge| (edge.id, edge))
+        .collect::<HashMap<_, _>>();
+    let mut drivers = Vec::with_capacity(snapped.len());
+    for (&edge_id, &target_angle_deg) in &snapped {
+        let edge = edges
+            .get(&edge_id)
+            .ok_or_else(|| format!("折り目{edge_id}が展開図に見つかりません"))?;
+        let a = vertices
+            .get(&edge.v0)
+            .copied()
+            .ok_or_else(|| format!("折り目{edge_id}の端が展開図に見つかりません"))?;
+        let b = vertices
+            .get(&edge.v1)
+            .copied()
+            .ok_or_else(|| format!("折り目{edge_id}の端が展開図に見つかりません"))?;
+        drivers.push(DriverLine {
+            a,
+            b,
+            target_angle_deg,
+        });
+    }
+    let step = FoldStep {
+        id: 0,
+        kind: TechniqueKind::Pose,
+        drivers,
+        layer_order: Some(state.to_layer_points(&doc.cp, faces)),
+        alignment: None,
+        finish_soft: None,
+        note: "折った形を再現してから折る".to_string(),
+    };
+
+    // 保存値だけを読み直しても同じ平坦状態になることを、返却前に確かめる。
+    let mut candidate = doc.clone();
+    candidate.sequence.insert(up_to, step.clone());
+    let (replayed, _) = flat_state_at(&candidate, faces, up_to + 1)?;
+    if replayed != state {
+        return Err("保存した折った形を、同じ重なり順で読み直せません".to_string());
+    }
+
+    let mut warnings = prefix.warnings;
+    for warning in prefix
+        .frame
+        .warnings
+        .into_iter()
+        .chain(solved.result.frame.warnings)
+    {
+        if !warnings.contains(&warning) {
+            warnings.push(warning);
+        }
+    }
+    Ok(CanonicalFlatPose {
+        state,
+        step,
+        warnings,
+    })
+}
+
+fn is_finite_replay_seed(replayed: &ReplayResult, expected_faces: usize) -> bool {
+    replayed
+        .hinge_angles
+        .values()
+        .all(|angle| angle.is_finite())
+        && replayed.frame.faces.len() == expected_faces
+        && replayed.frame.faces.iter().all(|face| {
+            face.polygon
+                .iter()
+                .flatten()
+                .all(|coordinate| coordinate.is_finite())
+        })
+}
+
+fn complete_surface_order(frame: &Frame3D, faces: &[Face]) -> Result<Vec<FaceId>, String> {
+    if frame.faces.len() != faces.len() {
+        return Err("紙の全面について重なり順を決められません".to_string());
+    }
+    let expected = faces.iter().map(|face| face.id).collect::<BTreeSet<_>>();
+    let actual = frame
+        .faces
+        .iter()
+        .map(|face| face.face)
+        .collect::<BTreeSet<_>>();
+    if actual != expected {
+        return Err("紙の全面について重なり順を決められません".to_string());
+    }
+    let mut ranked = vec![None; faces.len()];
+    for face in &frame.faces {
+        let rank = usize::try_from(face.surface_rank)
+            .map_err(|_| "紙の重なり順が正しくありません".to_string())?;
+        let slot = ranked
+            .get_mut(rank)
+            .ok_or_else(|| "紙の重なり順が正しくありません".to_string())?;
+        if slot.replace(face.face).is_some() {
+            return Err("紙の重なり順が重複しています".to_string());
+        }
+    }
+    ranked
+        .into_iter()
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| "紙の重なり順が途中で欠けています".to_string())
+}
+
+pub fn flat_state_at(
+    doc: &Document,
+    faces: &[Face],
+    up_to: usize,
+) -> Result<(FlatState, Vec<String>), String> {
+    let up_to = up_to.min(doc.sequence.len());
+    let plan = plan_steps(doc, faces, up_to, 1.0);
+    // 後から積んだ指定が優先(HashMapへの順次挿入で後勝ちになる)
+    let angles: HashMap<EdgeId, f64> = plan
+        .flat_exact
+        .iter()
+        .map(|d| (d.hinge, d.target_angle_deg))
+        .collect();
+    let folded = ori3_rigid::propagate(&doc.cp, faces, &angles);
+    let placements = flat_placements(faces, &folded)?;
     Ok((
         FlatState {
             placements,
@@ -1652,7 +1929,9 @@ fn hinge_edges(faces: &[Face]) -> Vec<EdgeId> {
 
 #[cfg(test)]
 mod tests {
-    use ori3_model::{CreasePattern, DriverLine, Edge, EdgeKind, FoldStep, Paper, Vertex};
+    use ori3_model::{
+        CreasePattern, DriverLine, Edge, EdgeKind, FoldPoseDriver, FoldStep, Paper, Vertex,
+    };
 
     use super::*;
 
@@ -1809,6 +2088,110 @@ mod tests {
             },
         ];
         document
+    }
+
+    #[test]
+    fn canonical_flat_pose_uses_only_document_and_preserves_the_requested_sign() {
+        let mut document = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        document.cp = CreasePattern {
+            vertices: vec![
+                Vertex {
+                    id: 0,
+                    pos: [0.0, 0.0],
+                },
+                Vertex {
+                    id: 1,
+                    pos: [0.5, 0.0],
+                },
+                Vertex {
+                    id: 2,
+                    pos: [1.0, 0.0],
+                },
+                Vertex {
+                    id: 3,
+                    pos: [1.0, 1.0],
+                },
+                Vertex {
+                    id: 4,
+                    pos: [0.5, 1.0],
+                },
+                Vertex {
+                    id: 5,
+                    pos: [0.0, 1.0],
+                },
+            ],
+            edges: vec![
+                Edge {
+                    id: 0,
+                    v0: 0,
+                    v1: 1,
+                    kind: EdgeKind::Border,
+                },
+                Edge {
+                    id: 1,
+                    v0: 1,
+                    v1: 2,
+                    kind: EdgeKind::Border,
+                },
+                Edge {
+                    id: 2,
+                    v0: 2,
+                    v1: 3,
+                    kind: EdgeKind::Border,
+                },
+                Edge {
+                    id: 3,
+                    v0: 3,
+                    v1: 4,
+                    kind: EdgeKind::Border,
+                },
+                Edge {
+                    id: 4,
+                    v0: 4,
+                    v1: 5,
+                    kind: EdgeKind::Border,
+                },
+                Edge {
+                    id: 5,
+                    v0: 5,
+                    v1: 0,
+                    kind: EdgeKind::Border,
+                },
+                Edge {
+                    id: 6,
+                    v0: 1,
+                    v1: 4,
+                    kind: EdgeKind::Mountain,
+                },
+            ],
+            next_vertex_id: 6,
+            next_edge_id: 7,
+        };
+        let faces = extract_faces(&document.cp);
+        let folded = canonical_flat_pose_at(
+            &document,
+            &faces,
+            0,
+            &FoldPoseInput {
+                drivers: vec![FoldPoseDriver {
+                    edge_id: 6,
+                    target_angle_deg: 180.0,
+                }],
+            },
+        )
+        .expect("書類と符号付き指定だけから平坦姿勢を再現できる");
+
+        assert_eq!(folded.state.order.len(), 2);
+        assert_eq!(folded.step.kind, TechniqueKind::Pose);
+        assert_eq!(folded.step.drivers.len(), 1);
+        assert_eq!(
+            folded.step.drivers[0].target_angle_deg.to_bits(),
+            180.0f64.to_bits()
+        );
+        assert_eq!(folded.step.layer_order.as_ref().map(Vec::len), Some(2));
     }
 
     #[test]

@@ -162,6 +162,22 @@ pub enum FoldDirection {
     Down,
 }
 
+/// 畳んだ形の上へ続けて折る直前に、利用者が指定した折り目の角度。
+///
+/// 画面上の計算結果ではなく、書類の折り目IDと利用者が指定した符号付き角度だけを
+/// 渡す。`+180` と `-180` は別の指定としてそのまま保持する。
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct FoldPoseDriver {
+    pub edge_id: EdgeId,
+    pub target_angle_deg: f64,
+}
+
+/// [`SeqOp::FoldThrough`] の直前に書類から再現する折った形の指定。
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct FoldPoseInput {
+    pub drivers: Vec<FoldPoseDriver>,
+}
+
 /// 畳み平面上の半平面。`inside_point` がある側を操作対象にする。
 ///
 /// 汎用層操作([`SeqOp::FlatMotion`])のIPC入力用で、境界線は必要に応じて
@@ -512,6 +528,10 @@ pub enum SeqOp {
         /// 古い作品・画面から省略された場合は従来どおり警告だけで折る。
         #[serde(default, skip_serializing_if = "is_false")]
         accept_additional_crease: bool,
+        /// この折りの直前に、書類から再現する折った形の利用者指定。
+        /// 旧画面から省略された場合は、従来どおり手順だけを再生する。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pose_before: Option<FoldPoseInput>,
     },
     /// [`SeqOp::FoldThrough`] を変更せずに調べ、巻き込み用の追加折り目を提案する。
     ///
@@ -522,6 +542,9 @@ pub enum SeqOp {
         keep_side_point: [f64; 2],
         target_layers: Option<Vec<FaceId>>,
         direction: FoldDirection,
+        /// 確定時と同じ直前形状を、書類から再現して非破壊で調べるための指定。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pose_before: Option<FoldPoseInput>,
     },
     /// 平坦状態から別の平坦状態へ、複数部分を同時に動かす汎用層操作。
     ///
@@ -605,6 +628,8 @@ enum SeqOpDeserialize {
         alignment: Option<FoldAlignment>,
         #[serde(default)]
         accept_additional_crease: bool,
+        #[serde(default)]
+        pose_before: Option<FoldPoseInput>,
     },
     PreviewFoldThrough {
         up_to: usize,
@@ -612,6 +637,8 @@ enum SeqOpDeserialize {
         keep_side_point: [f64; 2],
         target_layers: Option<Vec<FaceId>>,
         direction: FoldDirection,
+        #[serde(default)]
+        pose_before: Option<FoldPoseInput>,
     },
     FlatMotion {
         up_to: usize,
@@ -652,6 +679,7 @@ impl From<SeqOpDeserialize> for SeqOp {
                 direction,
                 alignment,
                 accept_additional_crease,
+                pose_before,
             } => Self::FoldThrough {
                 up_to,
                 line,
@@ -660,6 +688,7 @@ impl From<SeqOpDeserialize> for SeqOp {
                 direction,
                 alignment,
                 accept_additional_crease,
+                pose_before,
             },
             SeqOpDeserialize::PreviewFoldThrough {
                 up_to,
@@ -667,12 +696,14 @@ impl From<SeqOpDeserialize> for SeqOp {
                 keep_side_point,
                 target_layers,
                 direction,
+                pose_before,
             } => Self::PreviewFoldThrough {
                 up_to,
                 line,
                 keep_side_point,
                 target_layers,
                 direction,
+                pose_before,
             },
             SeqOpDeserialize::FlatMotion { up_to, parts, kind } => {
                 Self::FlatMotion { up_to, parts, kind }

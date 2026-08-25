@@ -23,9 +23,18 @@ fn validation_case(name: &str) -> ori3_export::fold::FoldFile {
 }
 
 #[test]
-fn direct_fold_file_still_requires_finite_exact_file_spec_1_2() {
+fn direct_fold_file_accepts_exact_1_1_and_1_2_but_rejects_other_or_non_finite_specs() {
     let mut file = parse_fold_1_2(MINIMAL_SUPPORTED).expect("基準fixtureを読む");
-    for invalid in [1.1, f64::NAN] {
+    for supported in [1.1, 1.2] {
+        file.file_spec = supported;
+        let validation = validate_fold_1_2(&file);
+        assert!(
+            validation.errors.is_empty(),
+            "file_spec {supported}は同じ限定profileとして検証できる: {:?}",
+            validation.errors
+        );
+    }
+    for invalid in [1.0, 1.100_000_1, 1.200_000_1, 2.0, f64::NAN] {
         file.file_spec = invalid;
         let validation = validate_fold_1_2(&file);
         assert!(validation.errors.iter().any(|issue| {

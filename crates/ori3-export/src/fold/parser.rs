@@ -6,9 +6,9 @@ use super::types::{
     FOLD_1_2_PROFILE_NAME, FoldAssignment, FoldFile, FoldFrame, FoldParseError, FoldParseErrorKind,
 };
 
-const FOLD_SPEC_VERSION: f64 = 1.2;
+const READABLE_FOLD_SPEC_VERSIONS: [f64; 2] = [1.1, 1.2];
 
-/// FOLD 1.2 JSONを、限定profileの検証前に使う中立な型へ読み込む。
+/// FOLD 1.1/1.2 JSONを、限定profileの検証前に使う中立な型へ読み込む。
 ///
 /// この関数が拒否するのはJSON構文、既知fieldのJSON型、`file_spec`だけである。
 /// 座標の次元、配列どうしの長さ、参照index、frameのつながり、限定profileの
@@ -52,13 +52,13 @@ fn parse_file(mut object: Map<String, Value>) -> Result<FoldFile, FoldParseError
         Some(value) => finite_number(value, "$.file_spec")?,
     };
 
-    // file_specは幾何計算値ではなくformatの識別子なので、許容差で別版を
-    // 1.2として扱わず、JSON numberとして読み取った値をexactに判定する。
-    if file_spec != FOLD_SPEC_VERSION {
+    // file_specは幾何計算値ではなくformatの識別子なので、許容差で近い別版を
+    // 1.1/1.2として扱わず、JSON numberとして読み取った値をexactに判定する。
+    if !READABLE_FOLD_SPEC_VERSIONS.contains(&file_spec) {
         return Err(FoldParseError::new(
             FoldParseErrorKind::UnsupportedVersion,
             "$.file_spec",
-            format!("{FOLD_1_2_PROFILE_NAME}が読めるfile_specは1.2です（指定: {file_spec}）"),
+            format!("限定profileが読めるfile_specは1.1または1.2です（指定: {file_spec}）"),
         ));
     }
 

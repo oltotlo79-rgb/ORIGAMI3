@@ -111,9 +111,9 @@
     },
     {
       "category": "02_root_and_version",
-      "name": "unsupported_1_1",
+      "name": "unsupported_2_0",
       "expected": "parse",
-      "source": "{\"file_spec\":1.1}"
+      "source": "{\"file_spec\":2.0}"
     },
     {
       "category": "02_root_and_version",

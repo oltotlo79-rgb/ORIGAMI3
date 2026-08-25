@@ -77,7 +77,7 @@ pub struct FoldFrame {
     pub extra_fields: BTreeMap<String, Value>,
 }
 
-/// FOLD 1.2 fileのtyped JSON表現。
+/// FOLD 1.1/1.2入力とFOLD 1.2出力に共通するtyped JSON表現。
 #[derive(Clone, Debug, PartialEq)]
 pub struct FoldFile {
     pub file_spec: f64,

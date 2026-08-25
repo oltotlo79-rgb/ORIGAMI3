@@ -1,4 +1,4 @@
-//! ori3-export: 展開図・折り図の書き出しと「FOLD 1.2 限定」の中立変換。
+//! ori3-export: 展開図・折り図の書き出しとFOLD 1.1/1.2共通取込・1.2書出しの中立変換。
 
 pub mod cp_png;
 pub mod cp_svg;

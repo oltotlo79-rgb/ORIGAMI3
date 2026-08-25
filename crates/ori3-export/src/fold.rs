@@ -1,4 +1,4 @@
-//! FOLD 1.2のうち、ORIGAMI3が扱う限定profileの中立なJSON層。
+//! FOLD 1.1/1.2取込とFOLD 1.2書出しのうち、ORIGAMI3が扱う限定profileの中立なJSON層。
 //!
 //! parse・profile検証・write・canonical比較に加え、ORIGAMI3 modelとの
 //! 警告付き双方向変換を扱う。保存transactionと画面表示は後続段階の責務とする。

@@ -294,6 +294,19 @@ export interface FoldThroughProposal {
   message: string;
 }
 
+/**
+ * FoldThroughの直前に、書類から再現する平坦姿勢の宣言。
+ * 画面の計算結果ではなく、利用者が指定した符号付き角度だけを送る。
+ */
+export interface FoldPoseDriver {
+  edge_id: number;
+  target_angle_deg: number;
+}
+
+export interface FoldPoseInput {
+  drivers: FoldPoseDriver[];
+}
+
 /** edit_apply の操作(serde内部タグ形式: { "type": "..." }) */
 export type EditOp =
   | { type: "AddSegment"; a: Vec2; b: Vec2; kind: EdgeKind }
@@ -328,6 +341,8 @@ export type SeqOp =
       keep_side_point: Vec2;
       target_layers: number[] | null;
       direction: FoldDirection;
+      /** 省略時はup_toの保存済み姿勢をそのまま使う。 */
+      pose_before?: FoldPoseInput | null;
       /** 合わせ折りの説明文に使う点・線。折り計算には影響しない。 */
       alignment?: FoldAlignment | null;
       /** trueなら事前提案された追加折り目を入れて、巻き込みながら折る。 */
@@ -344,6 +359,8 @@ export type SeqOp =
       keep_side_point: Vec2;
       target_layers: number[] | null;
       direction: FoldDirection;
+      /** Applyと同じ不変な姿勢宣言。Preview自体は作品を変更しない。 */
+      pose_before?: FoldPoseInput | null;
     }
   /**
    * 名前付き技法に閉じない層操作。複数partを1手で同時に適用する。

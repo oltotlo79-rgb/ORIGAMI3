@@ -12,6 +12,7 @@ import {
 } from "../../lib/alignFold";
 import type { MirrorAxisChoice, MirrorAxisPreset } from "../../lib/mirror";
 import type { TechniqueLayerPreset } from "../../lib/techniqueLayers";
+import { foldPoseInputFromDrivers } from "../../lib/poseStep";
 import type {
   LayerMotionMode,
   LayerMotionPartDraft,
@@ -298,8 +299,11 @@ export function canFoldNow(state: {
   playT: number;
   playing: boolean;
   drivers: Map<number, number>;
+  activeTool?: ToolId;
 }): boolean {
-  return foldUnavailableMessage(state) === null;
+  return (state.activeTool === "technique"
+    ? foldUnavailableMessage(state)
+    : foldThroughUnavailableMessage(state)) === null;
 }
 
 export function nonZeroDriverCount(
@@ -323,6 +327,27 @@ export function foldUnavailableMessage(state: {
   if (state.playT !== 1) return PARTIAL_PLAYBACK_FOLD_MESSAGE;
   if (nonZeroDriverCount(state.drivers) > 0) return ANGLED_FOLD_MESSAGE;
   return null;
+}
+
+/**
+ * FoldThrough専用の確定条件。0/+180/-180°の平坦姿勢は、符号付き宣言から
+ * Rust側で再現してから折れる。技法はまだ従来の条件を使う。
+ */
+export function foldThroughUnavailableMessage(state: {
+  doc: Document | null;
+  playT: number;
+  playing: boolean;
+  drivers: ReadonlyMap<number, number>;
+}): string | null {
+  if (!state.doc) return "紙がありません。上の「新規」で紙を出してください";
+  if (state.playing) return PLAYING_FOLD_MESSAGE;
+  if (state.playT !== 1) return PARTIAL_PLAYBACK_FOLD_MESSAGE;
+  const pose = foldPoseInputFromDrivers(state.drivers);
+  if (pose.ok) return null;
+  if (pose.reason === "invalid") {
+    return "角度の値を読み取れないため、この折り方を確定できません。選んだ内容は残してあります。角度を入力し直してください";
+  }
+  return ANGLED_FOLD_MESSAGE;
 }
 
 export function foldInsertAt(state: {
@@ -431,6 +456,7 @@ interface DocumentSliceExternalState {
     hinges: number[];
     fixAll: boolean;
   } | null;
+  angleIntentGeneration: number;
   pullHinge: number | null;
   pullMirrorHinge: number | null;
   mirrorDraw: boolean;

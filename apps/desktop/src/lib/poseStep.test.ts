@@ -3,7 +3,13 @@
 // 結んでいて、丸めると再生のたびに「追従計算が収束していません」が出てしまう。
 
 import { describe, expect, it } from "vitest";
-import { buildPoseStep, currentAngles, hasPoseAngle, nextStepId } from "./poseStep";
+import {
+  buildPoseStep,
+  currentAngles,
+  foldPoseInputFromDrivers,
+  hasPoseAngle,
+  nextStepId,
+} from "./poseStep";
 import type { Document } from "./types";
 
 const DOC: Document = {
@@ -96,5 +102,43 @@ describe("currentAngles / hasPoseAngle", () => {
   it("ほぼ平らなら残す意味がない", () => {
     expect(hasPoseAngle(new Map([[5, 0.1]]))).toBe(false);
     expect(hasPoseAngle(new Map([[5, RAW]]))).toBe(true);
+  });
+});
+
+describe("foldPoseInputFromDrivers", () => {
+  it("符号付き平坦終点と明示0°を辺ID順でそのまま渡す", () => {
+    expect(
+      foldPoseInputFromDrivers(
+        new Map([
+          [9, -180],
+          [3, 0],
+          [7, 180],
+        ]),
+      ),
+    ).toEqual({
+      ok: true,
+      poseBefore: {
+        drivers: [
+          { edge_id: 3, target_angle_deg: 0 },
+          { edge_id: 7, target_angle_deg: 180 },
+          { edge_id: 9, target_angle_deg: -180 },
+        ],
+      },
+    });
+  });
+
+  it("0°だけなら従来の平面折り、立体角と有限でない値は別理由で拒否する", () => {
+    expect(foldPoseInputFromDrivers(new Map([[3, -0]]))).toEqual({
+      ok: true,
+      poseBefore: null,
+    });
+    expect(foldPoseInputFromDrivers(new Map([[3, 90]]))).toEqual({
+      ok: false,
+      reason: "non-flat",
+    });
+    expect(foldPoseInputFromDrivers(new Map([[3, Number.NaN]]))).toEqual({
+      ok: false,
+      reason: "invalid",
+    });
   });
 });

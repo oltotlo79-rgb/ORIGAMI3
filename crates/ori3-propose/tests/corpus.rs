@@ -3441,7 +3441,7 @@ fn manifest_materializes_thirty_stratified_cases_without_changing_the_plan() {
 }
 
 #[test]
-fn pilot_uses_product_path_and_matches_the_read_only_baseline() {
+fn pilot_uses_functional_path_and_matches_the_read_only_baseline() {
     let manifest_file = manifest_path();
     let (manifest_before, manifest) = load_manifest().expect("manifestを読めない");
     let case = manifest.cases.first().expect("pilot caseがない");

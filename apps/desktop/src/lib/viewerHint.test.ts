@@ -51,6 +51,28 @@ describe("foldBlockReason", () => {
     expect(foldBlockReason({ ...common, driverAngles: [0, 45] })).toContain("角度");
   });
 
+  it("折る操作だけは符号付きの平坦終点から続けられ、立体角と技法は止める", () => {
+    const common = {
+      hasDoc: true,
+      playing: false,
+      playT: 1,
+      currentStep: null,
+      stepCount: 0,
+    };
+    expect(
+      foldBlockReason(
+        { ...common, driverAngles: [0, 180, -180] },
+        true,
+      ),
+    ).toBeNull();
+    expect(
+      foldBlockReason({ ...common, driverAngles: [180, 90] }, true),
+    ).toContain("角度");
+    expect(
+      foldBlockReason({ ...common, driverAngles: [180, -180] }),
+    ).toContain("角度");
+  });
+
   it("最後の手順でも途中の手順でも折れる(途中なら手順が挟まる。SEQ-006)", () => {
     expect(foldBlockReason({ ...READY, currentStep: 3, stepCount: 3 })).toBeNull();
     expect(foldBlockReason({ ...READY, currentStep: 1, stepCount: 3 })).toBeNull();
@@ -67,6 +89,20 @@ describe("foldBlockReason", () => {
 });
 
 describe("viewerHint", () => {
+  it("折る画面では平坦終点を折れないと誤案内せず、技法には広げない", () => {
+    const { driverCount, ...base } = READY;
+    expect(driverCount).toBe(0);
+    const foldedFlat: HintState = {
+      ...base,
+      driverAngles: [180, -180, 0],
+    };
+    expect(viewerHint(foldedFlat)).toBe(DRAG_FOLD_HINT);
+    expect(viewerHint(foldedFlat)).not.toContain("今は折れません");
+    expect(
+      viewerHint({ ...foldedFlat, tool: "technique" }),
+    ).toContain("今は折れません");
+  });
+
   it("折るツールではドラッグ操作と修飾キーの意味を常に出す", () => {
     const hint = viewerHint(READY);
     expect(hint).toBe(DRAG_FOLD_HINT);

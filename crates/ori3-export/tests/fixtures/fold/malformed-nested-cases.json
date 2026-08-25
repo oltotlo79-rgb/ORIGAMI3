@@ -43,7 +43,7 @@
   },
   {
     "name": "unsupported version",
-    "input": {"file_spec": 1.1},
+    "input": {"file_spec": 2.0},
     "kind": "unsupported_version",
     "path": "$.file_spec"
   },

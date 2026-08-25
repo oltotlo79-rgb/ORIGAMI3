@@ -62,6 +62,18 @@ fn minimal_supported_fixture_is_parsed_into_typed_fields() {
 }
 
 #[test]
+fn exact_1_1_and_1_2_specs_share_the_same_typed_profile() {
+    let current = parse_fold_1_2(MINIMAL_SUPPORTED).expect("1.2の基準fixtureを読める");
+    let legacy_source = MINIMAL_SUPPORTED.replacen("\"file_spec\": 1.2", "\"file_spec\": 1.1", 1);
+    let legacy = parse_fold_1_2(&legacy_source).expect("1.1の同じ限定profileを読める");
+
+    assert_eq!(legacy.file_spec, 1.1);
+    let mut normalized = legacy;
+    normalized.file_spec = 1.2;
+    assert_eq!(normalized, current, "版番号以外のtyped構造は同じであること");
+}
+
+#[test]
 fn malformed_fixtures_return_the_expected_kind_and_path_without_panicking() {
     let cases = [
         (

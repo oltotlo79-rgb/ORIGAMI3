@@ -7,6 +7,7 @@ import {
   topMovingFace,
 } from "../../components/Viewer3D/foldDraw";
 import { planGrabFold } from "../../components/Viewer3D/grabFold";
+import { foldPoseInputFromDrivers } from "../../lib/poseStep";
 import { foldBlockReason } from "../../lib/viewerHint";
 import { DEFAULT_CONSTRUCT } from "../../lib/construct";
 import {
@@ -67,12 +68,12 @@ import {
   editableCopy,
   emptyMeasureDraft,
   foldInsertAt,
+  foldThroughUnavailableMessage,
   foldUnavailableMessage,
   initialMovingSide,
   isAlignComplete,
   isSpatialFoldFrame,
   layerMotionPartDraft,
-  nonZeroDriverCount,
   selectionForMeasure,
   type AddSegmentOp,
   type AlignCpPick,
@@ -163,6 +164,25 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
       kind: key,
     }));
 
+  const poseBeforeMatchesDrivers = (
+    operation: FoldThroughOperation,
+    drivers: ReadonlyMap<number, number>,
+  ): boolean => {
+    const expected = operation.pose_before ?? null;
+    const current = foldPoseInputFromDrivers(drivers);
+    if (!current.ok) return false;
+    const actual = current.poseBefore;
+    if (expected === null || actual === null) return expected === actual;
+    return (
+      expected.drivers.length === actual.drivers.length &&
+      expected.drivers.every(
+        (driver, index) =>
+          driver.edge_id === actual.drivers[index].edge_id &&
+          driver.target_angle_deg === actual.drivers[index].target_angle_deg,
+      )
+    );
+  };
+
   const applyFoldThrough = async (
     operation: FoldThroughOperation,
     acceptAdditionalCrease: boolean,
@@ -178,7 +198,9 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
     const beforeSequenceCount = state.doc.sequence.length;
     set({
       currentStep:
-        operation.up_to === state.doc.sequence.length ? null : operation.up_to + 1,
+        operation.up_to === state.doc.sequence.length
+          ? null
+          : operation.up_to + (operation.pose_before ? 2 : 1),
     });
     try {
       await applyDocChange(() => {
@@ -197,6 +219,16 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
       completed.docEpoch === beforeEpoch &&
       (completed.doc?.sequence.length ?? 0) > beforeSequenceCount
     ) {
+      if (
+        operation.pose_before &&
+        poseBeforeMatchesDrivers(operation, completed.drivers)
+      ) {
+        set((latest) => ({
+          drivers: new Map(),
+          activeAngleIntent: null,
+          angleIntentGeneration: latest.angleIntentGeneration + 1,
+        }));
+      }
       completed.completeGuideAction("fold");
     }
   };
@@ -231,6 +263,9 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
         keep_side_point: operation.keep_side_point,
         target_layers: operation.target_layers,
         direction: operation.direction,
+        ...(operation.pose_before
+          ? { pose_before: operation.pose_before }
+          : {}),
         ...(operation.spatial ? { spatial: operation.spatial } : {}),
       };
       return ipc.sequenceApply(previewOperation);
@@ -263,7 +298,7 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
       set({ foldDraft: null, alignDraft: null, errorMessage: STALE_DRAFT_MESSAGE });
       return;
     }
-    const unavailable = foldUnavailableMessage(current);
+    const unavailable = foldThroughUnavailableMessage(current);
     if (unavailable) {
       finishFoldThroughBusy(busyToken);
       set({ errorMessage: unavailable });
@@ -637,7 +672,7 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
         });
         return;
       }
-      const unavailable = foldUnavailableMessage(s);
+      const unavailable = foldThroughUnavailableMessage(s);
       if (unavailable) {
         set({ errorMessage: unavailable });
         return;
@@ -660,6 +695,11 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
         s.alignDraft && isAlignComplete(s.alignDraft)
           ? { mode: s.alignDraft.mode, picks: [...s.alignDraft.picks] }
           : null;
+      const pose = foldPoseInputFromDrivers(s.drivers);
+      if (!pose.ok) {
+        set({ errorMessage: foldThroughUnavailableMessage(s) });
+        return;
+      }
       await requestFoldThrough({
         type: "FoldThrough",
         up_to: draft.upTo,
@@ -667,6 +707,7 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
         keep_side_point: keep,
         target_layers: targetLayers,
         direction: draft.direction,
+        ...(pose.poseBefore ? { pose_before: pose.poseBefore } : {}),
         ...(alignment ? { alignment } : {}),
       });
     },
@@ -688,7 +729,7 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
         });
         return;
       }
-      const unavailable = foldUnavailableMessage(s);
+      const unavailable = foldThroughUnavailableMessage(s);
       if (unavailable) {
         set({ errorMessage: unavailable });
         return;
@@ -812,16 +853,24 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
       ) {
         return;
       }
-      const reason = foldBlockReason({
-        hasDoc: true,
-        playing: s.playing,
-        playT: s.playT,
-        driverCount: nonZeroDriverCount(s.drivers),
-        currentStep: s.currentStep,
-        stepCount: s.doc.sequence.length,
-      });
+      const reason = foldBlockReason(
+        {
+          hasDoc: true,
+          playing: s.playing,
+          playT: s.playT,
+          driverAngles: [...s.drivers.values()],
+          currentStep: s.currentStep,
+          stepCount: s.doc.sequence.length,
+        },
+        true,
+      );
       if (reason) {
         set({ errorMessage: reason });
+        return;
+      }
+      const pose = foldPoseInputFromDrivers(s.drivers);
+      if (!pose.ok) {
+        set({ errorMessage: foldThroughUnavailableMessage(s) });
         return;
       }
       const upTo = foldInsertAt(s);
@@ -846,6 +895,7 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
           keep_side_point: [0, 1],
           target_layers: null,
           direction,
+          ...(pose.poseBefore ? { pose_before: pose.poseBefore } : {}),
           spatial,
         });
         return;
@@ -873,6 +923,7 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
         keep_side_point: result.plan.keepSidePoint,
         target_layers: result.plan.targetLayers,
         direction: "Up",
+        ...(pose.poseBefore ? { pose_before: pose.poseBefore } : {}),
       });
     },
 

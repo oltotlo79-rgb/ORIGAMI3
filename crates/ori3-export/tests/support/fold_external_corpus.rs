@@ -4,13 +4,10 @@ use std::fmt::{self, Write as _};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-const ENTRY_COUNT: usize = 30;
 const OFFICIAL_QUOTA: usize = 6;
 const ORIPA_QUOTA: usize = 8;
 const ORIEDITA_QUOTA: usize = 8;
 const ORIGAMI_SIMULATOR_QUOTA: usize = 8;
-const SUPPORTED_QUOTA: usize = 20;
-const UNSUPPORTED_QUOTA: usize = 10;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestSummary {
@@ -19,8 +16,10 @@ pub struct ManifestSummary {
     pub oripa: usize,
     pub oriedita: usize,
     pub origami_simulator: usize,
-    pub supported: usize,
-    pub unsupported: usize,
+    pub expected_supported: usize,
+    pub expected_unsupported: usize,
+    pub observed_supported: usize,
+    pub observed_unsupported: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,9 +43,9 @@ impl fmt::Display for ManifestError {
 
 impl std::error::Error for ManifestError {}
 
-/// Validate a completed external-corpus manifest without modifying the manifest
-/// or any raw fixture. Tests pass a private temp root; a future corpus test can
-/// reuse the same boundary after all raw bytes and rights decisions are frozen.
+/// Validate a frozen external-corpus tranche without modifying its manifest or
+/// raw fixtures. The manifest reports actual counts; it does not force a target
+/// supported/unsupported ratio after results are known.
 pub fn validate_manifest(
     corpus_root: &Path,
     manifest_path: &Path,
@@ -65,30 +64,19 @@ pub fn validate_manifest(
         .ok_or_else(|| ManifestError::new("manifest root must be an object"))?;
 
     match manifest.get("schema_version").and_then(Value::as_u64) {
-        Some(1) => {}
-        _ => return Err(ManifestError::new("schema_version must be 1")),
+        Some(2) => {}
+        _ => return Err(ManifestError::new("schema_version must be 2")),
     }
-    match manifest
-        .get("classification_frozen")
-        .and_then(Value::as_bool)
-    {
-        Some(true) => {}
-        _ => {
-            return Err(ManifestError::new(
-                "classification_frozen must be true before corpus validation",
-            ));
-        }
-    }
+    validate_classification_policy(manifest)?;
 
     let entries = manifest
         .get("entries")
         .and_then(Value::as_array)
         .ok_or_else(|| ManifestError::new("entries must be an array"))?;
-    if entries.len() != ENTRY_COUNT {
-        return Err(ManifestError::new(format!(
-            "manifest must contain exactly 30 entries, found {}",
-            entries.len()
-        )));
+    if entries.is_empty() {
+        return Err(ManifestError::new(
+            "manifest entries must contain at least one accepted sample",
+        ));
     }
 
     let mut summary = ManifestSummary {
@@ -97,8 +85,10 @@ pub fn validate_manifest(
         oripa: 0,
         oriedita: 0,
         origami_simulator: 0,
-        supported: 0,
-        unsupported: 0,
+        expected_supported: 0,
+        expected_unsupported: 0,
+        observed_supported: 0,
+        observed_unsupported: 0,
     };
     let mut ids = HashSet::with_capacity(entries.len());
     let mut paths = HashSet::with_capacity(entries.len());
@@ -142,7 +132,7 @@ pub fn validate_manifest(
                 "{context}.source is not the reserved source for {id}: expected {reserved_source}, found {source}"
             )));
         }
-        let reserved_path = format!("external/{reserved_source}/{id}.fold");
+        let reserved_path = format!("{}/{id}.fold", source_directory(reserved_source));
         if path_text != reserved_path {
             return Err(ManifestError::new(format!(
                 "{context}.path is not the reserved path for {id}: expected {reserved_path}, found {path_text}"
@@ -193,6 +183,14 @@ pub fn validate_manifest(
             frozen_at_utc,
             &format!("{context}.classification.frozen_at_utc"),
         )?;
+        let policy_frozen_at_utc = manifest["classification_policy"]["frozen_at_utc"]
+            .as_str()
+            .expect("classification policy was validated before entries");
+        if frozen_at_utc != policy_frozen_at_utc {
+            return Err(ManifestError::new(format!(
+                "{context}.classification.frozen_at_utc must match classification_policy.frozen_at_utc"
+            )));
+        }
         required_resolved_text(
             classification,
             "basis",
@@ -225,7 +223,7 @@ pub fn validate_manifest(
                         "{context}.classification supported entry must not list unsupported paths"
                     )));
                 }
-                summary.supported += 1;
+                summary.expected_supported += 1;
             }
             "unsupported" => {
                 if unsupported_paths.is_empty() {
@@ -233,7 +231,7 @@ pub fn validate_manifest(
                         "{context}.classification requires at least one unsupported path"
                     )));
                 }
-                summary.unsupported += 1;
+                summary.expected_unsupported += 1;
             }
             classification => {
                 return Err(ManifestError::new(format!(
@@ -241,6 +239,11 @@ pub fn validate_manifest(
                 )));
             }
         }
+        let observation = entry
+            .get("observed")
+            .and_then(Value::as_object)
+            .ok_or_else(|| ManifestError::new(format!("{context}.observed must be an object")))?;
+        validate_observation(observation, &context, &mut summary)?;
         validate_rights(entry, &context)?;
 
         let raw = read_regular_file_without_symlinks(corpus_root, &relative_path, &context)?;
@@ -257,28 +260,6 @@ pub fn validate_manifest(
             )));
         }
     }
-
-    validate_quota("official", summary.official, OFFICIAL_QUOTA, "source")?;
-    validate_quota("oripa", summary.oripa, ORIPA_QUOTA, "source")?;
-    validate_quota("oriedita", summary.oriedita, ORIEDITA_QUOTA, "source")?;
-    validate_quota(
-        "origami_simulator",
-        summary.origami_simulator,
-        ORIGAMI_SIMULATOR_QUOTA,
-        "source",
-    )?;
-    validate_quota(
-        "supported",
-        summary.supported,
-        SUPPORTED_QUOTA,
-        "classification",
-    )?;
-    validate_quota(
-        "unsupported",
-        summary.unsupported,
-        UNSUPPORTED_QUOTA,
-        "classification",
-    )?;
 
     Ok(summary)
 }
@@ -299,6 +280,61 @@ fn validate_corpus_root(corpus_root: &Path) -> Result<(), ManifestError> {
     Ok(())
 }
 
+fn validate_classification_policy(manifest: &Map<String, Value>) -> Result<(), ManifestError> {
+    let context = "classification_policy";
+    let policy = manifest
+        .get(context)
+        .and_then(Value::as_object)
+        .ok_or_else(|| ManifestError::new("classification_policy must be an object"))?;
+    match policy.get("frozen").and_then(Value::as_bool) {
+        Some(true) => {}
+        _ => {
+            return Err(ManifestError::new(
+                "classification_policy.frozen must be true before formal acceptance",
+            ));
+        }
+    }
+    let frozen_at_utc = required_resolved_text(policy, "frozen_at_utc", context)?;
+    require_utc(frozen_at_utc, "classification_policy.frozen_at_utc")?;
+    required_resolved_text(policy, "independent_auditor", context)?;
+    match policy
+        .get("auditor_had_runtime_results")
+        .and_then(Value::as_bool)
+    {
+        Some(false) => {}
+        _ => {
+            return Err(ManifestError::new(
+                "classification_policy.auditor_had_runtime_results must be false",
+            ));
+        }
+    }
+    match policy
+        .get("formal_acceptance_runs_after_freeze")
+        .and_then(Value::as_bool)
+    {
+        Some(true) => {}
+        _ => {
+            return Err(ManifestError::new(
+                "classification_policy.formal_acceptance_runs_after_freeze must be true",
+            ));
+        }
+    }
+    let rules = policy
+        .get("rules")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ManifestError::new("classification_policy.rules must be an array"))?;
+    if rules.is_empty()
+        || rules
+            .iter()
+            .any(|rule| rule.as_str().is_none_or(|rule| rule.trim().is_empty()))
+    {
+        return Err(ManifestError::new(
+            "classification_policy.rules must contain non-empty strings",
+        ));
+    }
+    Ok(())
+}
+
 fn reserved_source_for_id(id: &str) -> Option<&'static str> {
     if reserved_index(id, "official-", OFFICIAL_QUOTA) {
         Some("official")
@@ -310,6 +346,16 @@ fn reserved_source_for_id(id: &str) -> Option<&'static str> {
         Some("origami_simulator")
     } else {
         None
+    }
+}
+
+fn source_directory(source: &str) -> &'static str {
+    match source {
+        "official" => "official",
+        "oripa" => "oripa",
+        "oriedita" => "oriedita",
+        "origami_simulator" => "origami-simulator",
+        _ => unreachable!("source is checked before its directory is requested"),
     }
 }
 
@@ -358,8 +404,12 @@ fn validate_provenance(entry: &Map<String, Value>, context: &str) -> Result<(), 
     required_resolved_text(entry, "generator", context)?;
     required_resolved_text(entry, "generator_version", context)?;
     required_resolved_text(entry, "source_uri", context)?;
-    let created_utc = required_resolved_text(entry, "created_utc", context)?;
-    require_utc(created_utc, &format!("{context}.created_utc"))
+    let source_file_last_write_utc =
+        required_resolved_text(entry, "source_file_last_write_utc", context)?;
+    require_utc(
+        source_file_last_write_utc,
+        &format!("{context}.source_file_last_write_utc"),
+    )
 }
 
 fn require_utc(value: &str, context: &str) -> Result<(), ManifestError> {
@@ -380,12 +430,31 @@ fn validate_rights(entry: &Map<String, Value>, context: &str) -> Result<(), Mani
     for field in [
         "content_spdx",
         "content_evidence",
-        "generator_spdx",
-        "generator_evidence",
+        "rights_holder",
+        "authorization_date",
+        "authorization_scope",
         "reviewer",
         "reviewed_on",
     ] {
         required_resolved_text(rights, field, &format!("{context}.rights"))?;
+    }
+    let content_spdx =
+        required_resolved_text(rights, "content_spdx", &format!("{context}.rights"))?;
+    if !content_spdx.starts_with("LicenseRef-") {
+        return Err(ManifestError::new(format!(
+            "{context}.rights.content_spdx must use the approved LicenseRef for user-owned samples"
+        )));
+    }
+    match rights
+        .get("generator_license_used_for_content")
+        .and_then(Value::as_bool)
+    {
+        Some(false) => {}
+        _ => {
+            return Err(ManifestError::new(format!(
+                "{context}.rights.generator_license_used_for_content must be false"
+            )));
+        }
     }
     match rights
         .get("redistribution_allowed")
@@ -396,6 +465,93 @@ fn validate_rights(entry: &Map<String, Value>, context: &str) -> Result<(), Mani
             "{context}.rights.redistribution_allowed must be true"
         ))),
     }
+}
+
+fn validate_observation(
+    observation: &Map<String, Value>,
+    entry_context: &str,
+    summary: &mut ManifestSummary,
+) -> Result<(), ManifestError> {
+    let context = format!("{entry_context}.observed");
+    required_resolved_text(observation, "method", &context)?;
+    let observed_at_utc = required_resolved_text(observation, "observed_at_utc", &context)?;
+    require_utc(observed_at_utc, &format!("{context}.observed_at_utc"))?;
+    match observation
+        .get("excluded_from_frozen_classification")
+        .and_then(Value::as_bool)
+    {
+        Some(true) => {}
+        _ => {
+            return Err(ManifestError::new(format!(
+                "{context}.excluded_from_frozen_classification must be true"
+            )));
+        }
+    }
+
+    validate_observed_issues(observation, "warnings", &context)?;
+    let errors = validate_observed_issues(observation, "errors", &context)?;
+    let result = required_resolved_text(observation, "result", &context)?;
+    match result {
+        "supported" => {
+            if !errors.is_empty() {
+                return Err(ManifestError::new(format!(
+                    "{context} supported result must not contain errors"
+                )));
+            }
+            summary.observed_supported += 1;
+        }
+        "unsupported" => {
+            if errors.is_empty() {
+                return Err(ManifestError::new(format!(
+                    "{context} unsupported result requires at least one error"
+                )));
+            }
+            summary.observed_unsupported += 1;
+        }
+        result => {
+            return Err(ManifestError::new(format!(
+                "{context}.result must be supported or unsupported, found {result}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_observed_issues<'a>(
+    observation: &'a Map<String, Value>,
+    field: &str,
+    context: &str,
+) -> Result<&'a Vec<Value>, ManifestError> {
+    let issues = observation
+        .get(field)
+        .and_then(Value::as_array)
+        .ok_or_else(|| ManifestError::new(format!("{context}.{field} must be an array")))?;
+    for (index, issue) in issues.iter().enumerate() {
+        let issue_context = format!("{context}.{field}[{index}]");
+        let issue = issue
+            .as_object()
+            .ok_or_else(|| ManifestError::new(format!("{issue_context} must be an object")))?;
+        for field in issue.keys() {
+            if !matches!(field.as_str(), "code" | "path" | "value") {
+                return Err(ManifestError::new(format!(
+                    "{issue_context} may contain only code, path, and optional numeric value"
+                )));
+            }
+        }
+        required_resolved_text(issue, "code", &issue_context)?;
+        let path = required_resolved_text(issue, "path", &issue_context)?;
+        if !path.starts_with('$') {
+            return Err(ManifestError::new(format!(
+                "{issue_context}.path must be a JSON path"
+            )));
+        }
+        if issue.get("value").is_some_and(|value| !value.is_number()) {
+            return Err(ManifestError::new(format!(
+                "{issue_context}.value must be numeric when present"
+            )));
+        }
+    }
+    Ok(issues)
 }
 
 fn validate_relative_path(path_text: &str, context: &str) -> Result<PathBuf, ManifestError> {
@@ -483,21 +639,6 @@ fn read_regular_file_without_symlinks(
             current.display()
         ))
     })
-}
-
-fn validate_quota(
-    name: &str,
-    actual: usize,
-    expected: usize,
-    kind: &str,
-) -> Result<(), ManifestError> {
-    if actual == expected {
-        Ok(())
-    } else {
-        Err(ManifestError::new(format!(
-            "{kind} quota mismatch for {name}: expected {expected}, found {actual}"
-        )))
-    }
 }
 
 /// Dependency-free SHA-256 for test corpus byte verification.

@@ -616,6 +616,107 @@ fn test_seq_op_tagged_roundtrip() {
     }
 }
 
+#[test]
+fn fold_through_variants_preserve_declarative_pose_before_exactly() {
+    let pose_before = serde_json::json!({
+        "drivers": [
+            { "edge_id": 4, "target_angle_deg": 180.0 },
+            { "edge_id": 9, "target_angle_deg": -180.0 },
+            { "edge_id": 12, "target_angle_deg": 0.0 }
+        ]
+    });
+    let cases = [
+        serde_json::json!({
+            "type": "FoldThrough",
+            "up_to": 12,
+            "line": [[0.25, 0.0], [0.25, 1.0]],
+            "keep_side_point": [0.1, 0.5],
+            "target_layers": [2, 3, 6, 7, 10, 11, 12, 13, 14, 15],
+            "direction": "Down",
+            "pose_before": pose_before.clone()
+        }),
+        serde_json::json!({
+            "type": "PreviewFoldThrough",
+            "up_to": 12,
+            "line": [[0.25, 0.0], [0.25, 1.0]],
+            "keep_side_point": [0.1, 0.5],
+            "target_layers": [2, 3, 6, 7, 10, 11, 12, 13, 14, 15],
+            "direction": "Down",
+            "pose_before": pose_before.clone()
+        }),
+    ];
+
+    for expected in cases {
+        let op: SeqOp = serde_json::from_value(expected.clone())
+            .expect("pose_before付きの折る要求を読み込める");
+        let actual = serde_json::to_value(op).expect("折る要求を書き戻せる");
+
+        assert_eq!(
+            actual, expected,
+            "+180度・-180度・明示0度を含む利用者指定を欠落・同一視せず保つ"
+        );
+        let drivers = actual["pose_before"]["drivers"]
+            .as_array()
+            .expect("pose_beforeには指定した3本が残る");
+        assert_eq!(drivers.len(), 3, "明示0度を含む3本すべてを残す");
+        assert_eq!(
+            drivers[0]["target_angle_deg"]
+                .as_f64()
+                .expect("+180度は数値")
+                .to_bits(),
+            180.0_f64.to_bits()
+        );
+        assert_eq!(
+            drivers[1]["target_angle_deg"]
+                .as_f64()
+                .expect("-180度は数値")
+                .to_bits(),
+            (-180.0_f64).to_bits()
+        );
+        assert_eq!(
+            drivers[2]["target_angle_deg"]
+                .as_f64()
+                .expect("明示0度は数値")
+                .to_bits(),
+            0.0_f64.to_bits()
+        );
+    }
+}
+
+#[test]
+fn old_fold_through_variants_without_pose_before_remain_readable() {
+    let old_requests = [
+        serde_json::json!({
+            "type": "FoldThrough",
+            "up_to": 2,
+            "line": [[0.0, 0.5], [1.0, 0.5]],
+            "keep_side_point": [0.5, 0.25],
+            "target_layers": [3],
+            "direction": "Down"
+        }),
+        serde_json::json!({
+            "type": "PreviewFoldThrough",
+            "up_to": 1,
+            "line": [[0.7, 0.0], [0.7, 1.0]],
+            "keep_side_point": [0.6, 0.5],
+            "target_layers": [0],
+            "direction": "Up"
+        }),
+    ];
+
+    for old_request in old_requests {
+        let op: SeqOp = serde_json::from_value(old_request.clone())
+            .expect("pose_beforeが無い従来形式も読み込める");
+        let restored = serde_json::to_value(op).expect("従来形式を書き戻せる");
+
+        assert_eq!(restored, old_request, "従来の要求内容を変えない");
+        assert!(
+            restored.get("pose_before").is_none(),
+            "指定が無い従来形式へ新しい欄を勝手に書き足さない"
+        );
+    }
+}
+
 /// 畳んだ状態への折り操作は画面(TypeScript)から送られてくるので、
 /// JSONの形(内部タグ・snake_caseのフィールド名・向きの表記)を固定する。
 #[test]
@@ -628,6 +729,7 @@ fn test_seq_op_fold_through_json_shape() {
         direction: FoldDirection::Down,
         alignment: None,
         accept_additional_crease: false,
+        pose_before: None,
     };
     let json = serde_json::to_string(&op).expect("serialize");
     assert_eq!(
@@ -644,6 +746,7 @@ fn test_seq_op_fold_through_json_shape() {
             direction,
             alignment,
             accept_additional_crease,
+            pose_before,
         } => {
             assert_eq!(up_to, 2);
             assert_eq!(line, [[0.0, 0.5], [1.0, 0.5]]);
@@ -652,6 +755,7 @@ fn test_seq_op_fold_through_json_shape() {
             assert_eq!(direction, FoldDirection::Down);
             assert_eq!(alignment, None);
             assert!(!accept_additional_crease);
+            assert_eq!(pose_before, None);
         }
         other => panic!("unexpected variant: {other:?}"),
     }
@@ -664,6 +768,7 @@ fn test_seq_op_fold_through_json_shape() {
         direction: FoldDirection::Up,
         alignment: None,
         accept_additional_crease: false,
+        pose_before: None,
     })
     .expect("serialize");
     assert!(json.contains(r#""target_layers":null"#), "json = {json}");
@@ -677,6 +782,7 @@ fn test_seq_op_fold_through_json_shape() {
         direction: FoldDirection::Down,
         alignment: None,
         accept_additional_crease: true,
+        pose_before: None,
     })
     .expect("serialize");
     assert!(
@@ -775,6 +881,7 @@ fn test_seq_op_preview_fold_through_json_shape() {
         keep_side_point: [0.6, 0.5],
         target_layers: Some(vec![0]),
         direction: FoldDirection::Up,
+        pose_before: None,
     };
     let json = serde_json::to_string(&op).expect("serialize");
     assert_eq!(

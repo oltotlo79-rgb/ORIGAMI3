@@ -45,14 +45,21 @@ export const DRAG_FOLD_HINT =
  * 今は折れない理由(折れるならnull)。
  * appStoreのcanFoldNowと同じ条件を、同じ順で日本語にする。
  */
-export function foldBlockReason(s: FoldReadiness): string | null {
+export function foldBlockReason(
+  s: FoldReadiness,
+  allowFlatPose = false,
+): string | null {
   if (!s.hasDoc) return "紙がありません。上の「新規」で紙を出してください";
   if (s.playing) return "再生中は折れません。下の再生ボタンで止めてください";
   if (s.playT !== 1)
     return "折り途中の形では折れません。手順を最後まで進めてください";
   const hasNonZeroAngle =
     s.driverAngles !== undefined
-      ? s.driverAngles.some((angle) => angle !== 0)
+      ? s.driverAngles.some(
+          (angle) =>
+            angle !== 0 &&
+            (!allowFlatPose || (angle !== 180 && angle !== -180)),
+        )
       : s.driverCount > 0;
   if (hasNonZeroAngle)
     return "角度を動かして形を変えている間は折れません。下の「全て平らに戻す」で戻せます";
@@ -198,7 +205,9 @@ export function twistHint(s: HintState): string {
 
 /** 立体表示に出す1行の案内。どのツールでも必ず何か返す(空にしない) */
 export function viewerHint(s: HintState): string {
-  const blocked = foldBlockReason(s);
+  // 0/+180/-180°の平坦姿勢はFoldThrough側で書類から再現できる。
+  // 技法はまだ従来の平面入力だけなので、同じ例外を広げない。
+  const blocked = foldBlockReason(s, s.tool === "fold");
   if (s.tool === "fold") {
     if (blocked) return `今は折れません: ${blocked}`;
     const where = insertPositionHint(s);

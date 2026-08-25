@@ -273,6 +273,7 @@ beforeEach(() => {
     replayWarnings: [],
     activeTool: "select",
     foldDraft: null,
+    alignDraft: null,
     pendingFoldThrough: null,
     foldThroughBusy: false,
     techniqueDraft: null,
@@ -2251,6 +2252,12 @@ describe("3D画面での折り操作(折り線を引いて折る)", () => {
 
     useAppStore.setState({ drivers: new Map([[5, 90]]) });
     expect(canFoldNow(useAppStore.getState())).toBe(false); // 角度スライダーで変形中
+
+    useAppStore.setState({ drivers: new Map([[5, 180]]) });
+    expect(canFoldNow(useAppStore.getState())).toBe(true); // 平坦終点は書類から再現して折れる
+
+    useAppStore.setState({ activeTool: "technique" });
+    expect(canFoldNow(useAppStore.getState())).toBe(false); // 技法はまだ従来の平面入力だけ
   });
 
   it("0°以外の角度指定では、合わせる線を消さずに正しい理由を知らせる", async () => {
@@ -2269,6 +2276,232 @@ describe("3D画面での折り操作(折り線を引いて折る)", () => {
     expect(useAppStore.getState().errorMessage).toBe(
       "角度を変えた形からは、この折り方をまだ記録できません。選んだ内容は残してあります。角度を0°に戻すと、このまま折れます",
     );
+  });
+
+  it("利用者標本の±180°12本を符号のまま引き継ぎ、2線合わせをPreviewへ送る", async () => {
+    seedFolded();
+
+    // 利用者の折り鶴標本で宣言されていた12本。Mapの挿入順は
+    // 辺ID順と意図的に変え、要求が一意な辺ID順になることも固定する。
+    useAppStore.setState({
+      drivers: new Map([
+        [21, 180],
+        [22, 180],
+        [25, 180],
+        [26, 180],
+        [29, 180],
+        [30, 180],
+        [33, 180],
+        [34, 180],
+        [35, -180],
+        [36, -180],
+        [17, -180],
+        [18, -180],
+      ]),
+    });
+
+    const first = {
+      kind: "line" as const,
+      a: [0, 0] as Vec2,
+      b: [-0.20710678118654735, 0.5000000000000001] as Vec2,
+    };
+    const second = {
+      kind: "line" as const,
+      a: [1.1102230246251565e-16, 0.5000000000000001] as Vec2,
+      b: [0, 0] as Vec2,
+    };
+    const store = useAppStore.getState();
+    store.beginAlign("lineLine");
+    store.pickAlignTarget(first, null, { kind: "edge", id: 21 });
+    store.pickAlignTarget(second, null, { kind: "edge", id: 7 });
+    // 2候補のうち、利用者記録に残った折り線を選ぶ。
+    store.nextAlignSolution();
+
+    const selectedBefore = useAppStore.getState().alignDraft;
+    const foldBefore = useAppStore.getState().foldDraft;
+    expect(selectedBefore).toMatchObject({
+      mode: "lineLine",
+      picks: [first, second],
+      cpPicks: [
+        { kind: "edge", id: 21 },
+        { kind: "edge", id: 7 },
+      ],
+    });
+    expect(foldBefore).toMatchObject({
+      line: [
+        [0.19509032201612797, -0.9807852804032304],
+        [-0.19509032201612797, 0.9807852804032304],
+      ],
+      direction: "Up",
+      target: "all",
+      movingSide: "left",
+    });
+
+    const preview = deferred<DocumentView>();
+    vi.mocked(ipc.sequenceApply).mockReset().mockReturnValueOnce(preview.promise);
+    const commit = useAppStore.getState().commitFoldDraft();
+    try {
+      await vi.waitFor(() =>
+        expect(vi.mocked(ipc.sequenceApply)).toHaveBeenCalledTimes(1),
+      );
+
+      const previewOp: unknown = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
+      expect(previewOp).toMatchObject({
+        type: "PreviewFoldThrough",
+        up_to: 1,
+        line: foldBefore?.line,
+        keep_side_point: [
+          expect.closeTo(0.4903926402016152, 12),
+          expect.closeTo(0.09754516100806399, 12),
+        ],
+        target_layers: null,
+        direction: "Up",
+        pose_before: {
+          drivers: [
+            { edge_id: 17, target_angle_deg: -180 },
+            { edge_id: 18, target_angle_deg: -180 },
+            { edge_id: 21, target_angle_deg: 180 },
+            { edge_id: 22, target_angle_deg: 180 },
+            { edge_id: 25, target_angle_deg: 180 },
+            { edge_id: 26, target_angle_deg: 180 },
+            { edge_id: 29, target_angle_deg: 180 },
+            { edge_id: 30, target_angle_deg: 180 },
+            { edge_id: 33, target_angle_deg: 180 },
+            { edge_id: 34, target_angle_deg: 180 },
+            { edge_id: 35, target_angle_deg: -180 },
+            { edge_id: 36, target_angle_deg: -180 },
+          ],
+        },
+      });
+
+      // Preview待ちの間も、利用者が選んだ2線と折り線の設定を失わない。
+      expect(useAppStore.getState().alignDraft).toEqual(selectedBefore);
+      expect(useAppStore.getState().foldDraft).toEqual(foldBefore);
+      expect(useAppStore.getState().errorMessage).toBeNull();
+    } finally {
+      preview.resolve(foldThroughProposalView(2999));
+      await commit;
+    }
+    expect(useAppStore.getState().pendingFoldThrough?.operation).toMatchObject({
+      type: "FoldThrough",
+      alignment: { mode: "lineLine", picks: [first, second] },
+      pose_before: {
+        drivers: [
+          { edge_id: 17, target_angle_deg: -180 },
+          { edge_id: 18, target_angle_deg: -180 },
+          { edge_id: 21, target_angle_deg: 180 },
+          { edge_id: 22, target_angle_deg: 180 },
+          { edge_id: 25, target_angle_deg: 180 },
+          { edge_id: 26, target_angle_deg: 180 },
+          { edge_id: 29, target_angle_deg: 180 },
+          { edge_id: 30, target_angle_deg: 180 },
+          { edge_id: 33, target_angle_deg: 180 },
+          { edge_id: 34, target_angle_deg: 180 },
+          { edge_id: 35, target_angle_deg: -180 },
+          { edge_id: 36, target_angle_deg: -180 },
+        ],
+      },
+    });
+  });
+
+  it("平坦終点の姿勢をPreviewと確定で共有し、成功したときだけ一時指定を片づける", async () => {
+    seedFolded();
+    useAppStore.setState({
+      drivers: new Map([[5, -180]]),
+      activeAngleIntent: { generation: 4, hinges: [5], fixAll: true },
+      angleIntentGeneration: 4,
+    });
+    vi.mocked(ipc.sequenceApply)
+      .mockResolvedValueOnce(makeStepView(2998, 1))
+      .mockResolvedValueOnce(makeStepView(2999, 3));
+
+    useAppStore.getState().beginFoldDraft(LINE, "3d");
+    await useAppStore.getState().commitFoldDraft();
+
+    expect(vi.mocked(ipc.sequenceApply)).toHaveBeenCalledTimes(2);
+    const preview = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
+    const apply = vi.mocked(ipc.sequenceApply).mock.calls[1][0];
+    expect(preview).toMatchObject({
+      type: "PreviewFoldThrough",
+      pose_before: {
+        drivers: [{ edge_id: 5, target_angle_deg: -180 }],
+      },
+    });
+    expect(apply).toMatchObject({
+      type: "FoldThrough",
+      pose_before: {
+        drivers: [{ edge_id: 5, target_angle_deg: -180 }],
+      },
+    });
+    expect(useAppStore.getState().doc?.sequence).toHaveLength(3);
+    expect(useAppStore.getState().drivers.size).toBe(0);
+    expect(useAppStore.getState().activeAngleIntent).toBeNull();
+    expect(useAppStore.getState().angleIntentGeneration).toBe(5);
+  });
+
+  it("平坦終点からの折りが失敗したときは、一時指定を消さない", async () => {
+    seedFolded();
+    const drivers = new Map([[5, -180]]);
+    const activeAngleIntent = { generation: 4, hinges: [5], fixAll: true };
+    useAppStore.setState({
+      drivers,
+      activeAngleIntent,
+      angleIntentGeneration: 4,
+    });
+    vi.mocked(ipc.sequenceApply)
+      .mockResolvedValueOnce(makeStepView(2998, 1))
+      .mockRejectedValueOnce("折り線がどの層の面も横切っていません");
+
+    useAppStore.getState().beginFoldDraft(LINE, "3d");
+    await useAppStore.getState().commitFoldDraft();
+
+    expect(useAppStore.getState().errorMessage).toContain("横切っていません");
+    expect(useAppStore.getState().drivers).toEqual(drivers);
+    expect(useAppStore.getState().activeAngleIntent).toEqual(activeAngleIntent);
+    expect(useAppStore.getState().angleIntentGeneration).toBe(4);
+    expect(useAppStore.getState().foldDraft).not.toBeNull();
+  });
+
+  it("提案後も最初の姿勢指定を確定へ渡し、その間に始めた新しい指定は消さない", async () => {
+    seedFolded();
+    useAppStore.setState({
+      drivers: new Map([[5, -180]]),
+      activeAngleIntent: { generation: 4, hinges: [5], fixAll: true },
+      angleIntentGeneration: 4,
+    });
+    vi.mocked(ipc.sequenceApply)
+      .mockResolvedValueOnce(foldThroughProposalView(2998))
+      .mockResolvedValueOnce(makeStepView(2999, 3));
+
+    useAppStore.getState().beginFoldDraft(LINE, "3d");
+    await useAppStore.getState().commitFoldDraft();
+    expect(useAppStore.getState().pendingFoldThrough?.operation).toMatchObject({
+      pose_before: {
+        drivers: [{ edge_id: 5, target_angle_deg: -180 }],
+      },
+    });
+
+    const newerDrivers = new Map([[5, 180]]);
+    const newerIntent = { generation: 5, hinges: [5], fixAll: true };
+    // 通常の角度操作は提案を即時無効化する。ここでは承認処理自身が、
+    // すでに固定した要求を使い、新しい一時指定を消さない最終防衛を検査する。
+    useAppStore.setState({
+      drivers: newerDrivers,
+      activeAngleIntent: newerIntent,
+      angleIntentGeneration: 5,
+    });
+    await useAppStore.getState().resolveFoldThroughProposal(true);
+
+    expect(vi.mocked(ipc.sequenceApply)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(ipc.sequenceApply).mock.calls[1][0]).toMatchObject({
+      type: "FoldThrough",
+      pose_before: {
+        drivers: [{ edge_id: 5, target_angle_deg: -180 }],
+      },
+    });
+    expect(useAppStore.getState().drivers).toEqual(newerDrivers);
+    expect(useAppStore.getState().activeAngleIntent).toEqual(newerIntent);
+    expect(useAppStore.getState().angleIntentGeneration).toBe(5);
   });
 
   it("引いた折り線の設定どおりにFoldThroughを送る(全ての層・向こうへ折る)", async () => {

@@ -12,8 +12,9 @@ use super::types::{
 /// roundtrip tolerance, while still being far below a visibly different outline.
 const NORMALIZED_GEOMETRY_EPS: f64 = 1e-9;
 const ANGLE_EPS_DEG: f64 = 1e-9;
+const READABLE_FOLD_SPEC_VERSIONS: [f64; 2] = [1.1, 1.2];
 
-/// Validate whether a parsed FOLD file belongs to the approved FOLD 1.2 profile.
+/// Validate whether a parsed FOLD file belongs to the approved FOLD 1.1/1.2 profile.
 ///
 /// Parsing and validation are deliberately separate. This function never repairs
 /// topology or discards a field: every lossy or unsupported input produces an
@@ -22,7 +23,7 @@ const ANGLE_EPS_DEG: f64 = 1e-9;
 pub fn validate_fold_1_2(file: &FoldFile) -> FoldValidation {
     let mut validation = FoldValidation::default();
 
-    if !file.file_spec.is_finite() || file.file_spec != 1.2 {
+    if !file.file_spec.is_finite() || !READABLE_FOLD_SPEC_VERSIONS.contains(&file.file_spec) {
         record_issue(
             &mut validation,
             issue(
@@ -30,7 +31,7 @@ pub fn validate_fold_1_2(file: &FoldFile) -> FoldValidation {
                 FoldIssueCode::InvalidValue,
                 "$.file_spec",
                 format!(
-                    "{FOLD_1_2_PROFILE_NAME}が検証できるfile_specは有限の1.2だけです（指定: {}）",
+                    "限定profileが検証できるfile_specは有限の1.1または1.2だけです（指定: {}）",
                     file.file_spec
                 ),
                 if file.file_spec.is_finite() {

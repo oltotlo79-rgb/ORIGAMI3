@@ -14,6 +14,27 @@ use ori3_rigid::{max_seam_gap, self_intersection_pairs};
 const LINEAR: &str = include_str!("fixtures/fold/linear-steps.fold");
 const FLAT_ORDERS: &str = include_str!("fixtures/fold/flat-face-orders.fold");
 const FU: &str = include_str!("fixtures/fold/fu-assignments.fold");
+const ORIEDITA_1_1: &str = include_str!("fixtures/fold/corpus/oriedita/oriedita-01.fold");
+
+#[test]
+fn imported_1_1_document_is_exported_as_exact_1_2() {
+    let legacy = parse_fold_1_2(ORIEDITA_1_1).expect("Orieditaの1.1 fixtureを読める");
+    assert_eq!(legacy.file_spec, 1.1);
+
+    let document = fold_to_document(&legacy)
+        .expect("1.1のlinear fixtureをDocumentへ変換できる")
+        .document;
+    let exported = document_to_fold(&document).expect("取込んだDocumentを書き出せる");
+    assert_eq!(exported.file.file_spec, 1.2, "書出し版は常に1.2へ固定する");
+
+    let json = write_fold_1_2(&exported.file).expect("1.2のFOLD JSONを書ける");
+    assert_eq!(
+        parse_fold_1_2(&json)
+            .expect("書いた1.2 JSONを読める")
+            .file_spec,
+        1.2
+    );
+}
 
 #[test]
 fn document_fold_document_preserves_topology_kinds_angles_steps_and_endpoints() {
