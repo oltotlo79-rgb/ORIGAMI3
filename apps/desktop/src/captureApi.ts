@@ -1,4 +1,8 @@
 import type { RefObject } from "react";
+import {
+  captureViewer3DReadback,
+  type Viewer3DReadback,
+} from "./components/Viewer3D/sceneBuilder";
 import { TECHNIQUE_LABEL } from "./lib/techniques";
 import { useAppStore } from "./store/appStore";
 
@@ -24,6 +28,27 @@ export interface CaptureStatus {
   title: string;
 }
 
+export interface CaptureAngleOperation {
+  hinge: number;
+  deg: number;
+}
+
+export interface CaptureCanonicalFace3D {
+  face: number;
+  polygon: [number, number, number][];
+  layer: number;
+  surfaceRank: number;
+  mirrored: boolean;
+}
+
+export interface CaptureCanonical3D {
+  readonly version: 1;
+  readonly desired: readonly (readonly [number, number])[];
+  readonly actual: readonly (readonly [number, number])[];
+  readonly faces: readonly CaptureCanonicalFace3D[];
+  readonly readback: Viewer3DReadback;
+}
+
 export interface Origami3CaptureApi {
   readonly version: 1;
   getStatus(): CaptureStatus;
@@ -32,6 +57,10 @@ export interface Origami3CaptureApi {
   goToStep(step: number): Promise<CaptureStepInfo>;
   setView(view: CaptureView): Promise<void>;
   waitForStable(): Promise<void>;
+  /** 通常の角度操作と同じ入口を、1操作ずつpointer-up相当まで通す。 */
+  runAnglePath(operations: readonly CaptureAngleOperation[]): Promise<void>;
+  /** productionの3段描画を直ちに通し、CPU状態と実GPU画素を同期して読む。 */
+  captureCanonical3D(): CaptureCanonical3D;
 }
 
 declare global {
@@ -97,6 +126,31 @@ function documentInfo(): CaptureDocumentInfo {
     })),
   ];
   return { version: 1, stepCount: doc.sequence.length, steps };
+}
+
+function canonicalPairs(values: ReadonlyMap<number, number>): [number, number][] {
+  return [...values.entries()].sort((left, right) => left[0] - right[0]);
+}
+
+function canonical3D(): CaptureCanonical3D {
+  const state = useAppStore.getState();
+  if (state.frame3d === null) throw new Error("3D表示フレームがまだありません");
+  const faces = state.frame3d.faces
+    .map((face): CaptureCanonicalFace3D => ({
+      face: face.face,
+      polygon: face.polygon.map(([x, y, z]) => [x, y, z]),
+      layer: face.layer,
+      surfaceRank: face.surface_rank ?? 0,
+      mirrored: face.mirrored === true,
+    }))
+    .sort((left, right) => left.face - right.face);
+  return {
+    version: 1,
+    desired: canonicalPairs(state.drivers),
+    actual: canonicalPairs(state.poseAngles),
+    faces,
+    readback: captureViewer3DReadback(),
+  };
 }
 
 function setCaptureView(view: CaptureView): void {
@@ -165,6 +219,33 @@ export function installCaptureApi({ fit2d, fit3d }: FitRefs): () => void {
     },
 
     waitForStable,
+
+    async runAnglePath(operations) {
+      if (!Array.isArray(operations) || operations.length === 0) {
+        throw new Error("通常角度操作を1件以上指定してください");
+      }
+      for (const operation of operations) {
+        if (
+          operation === null ||
+          typeof operation !== "object" ||
+          !Number.isSafeInteger(operation.hinge) ||
+          !Number.isFinite(operation.deg)
+        ) {
+          throw new Error(`通常角度操作が不正です: ${JSON.stringify(operation)}`);
+        }
+        const before = useAppStore.getState();
+        if (!before.hinges.has(operation.hinge)) {
+          throw new Error(`折り角度を指定できない辺です: ${operation.hinge}`);
+        }
+        before.setDriverAngle(operation.hinge, operation.deg);
+        await useAppStore.getState().finishAngleIntent();
+        const after = useAppStore.getState();
+        if (after.errorMessage !== null) throw new Error(after.errorMessage);
+      }
+      await waitForStable();
+    },
+
+    captureCanonical3D: canonical3D,
   };
 
   window.__origami3Capture = api;

@@ -1235,6 +1235,114 @@ export interface Viewer3DScene {
   dispose(): void;
 }
 
+/**
+ * CDPの恒久検査が、画面に出たものと同じ3段の描画結果を照合するための読取結果。
+ * WebGLのreadPixelsに合わせ、全bufferは左下を先頭にした物理画素順で返す。
+ */
+export interface Viewer3DReadback {
+  readonly version: 1;
+  readonly width: number;
+  readonly height: number;
+  readonly rowOrder: "bottom-to-top";
+  readonly owner: {
+    readonly encoding: "rgba8-base64";
+    readonly data: string;
+    /** owner code 0は背景。紙のcodeだけを [code, face ID] で返す。 */
+    readonly codeToFace: readonly (readonly [number, number])[];
+  };
+  readonly depth: {
+    readonly encoding: "rgba8-packed-depth-base64";
+    readonly data: string;
+  };
+  readonly final: {
+    readonly encoding: "rgba8-base64";
+    readonly data: string;
+  };
+}
+
+type Viewer3DReadbackSource = () => Viewer3DReadback;
+let activeViewer3DReadback: Viewer3DReadbackSource | null = null;
+
+/** Viewer3D.tsxへ検査用refを足さず、現在表示中の実sceneだけを同期して読み取る。 */
+export function captureViewer3DReadback(): Viewer3DReadback {
+  if (activeViewer3DReadback === null) {
+    throw new Error("3D表示の描画資源がまだ用意されていません");
+  }
+  return activeViewer3DReadback();
+}
+
+function bytesAsBase64(bytes: Uint8Array): string {
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
+interface PackedDepthReadbackResources {
+  readonly target: THREE.WebGLRenderTarget;
+  readonly material: THREE.ShaderMaterial;
+  readonly geometry: THREE.PlaneGeometry;
+  readonly scene: THREE.Scene;
+  readonly camera: THREE.Camera;
+}
+
+/** captureを初めて要求された時だけ作り、通常表示にはGPU資源を増やさない。 */
+function createPackedDepthReadbackResources(
+  depthTexture: THREE.DepthTexture | null,
+): PackedDepthReadbackResources {
+  if (depthTexture === null) throw new Error("owner depth textureがありません");
+  const target = new THREE.WebGLRenderTarget(1, 1, {
+    format: THREE.RGBAFormat,
+    type: THREE.UnsignedByteType,
+    minFilter: THREE.NearestFilter,
+    magFilter: THREE.NearestFilter,
+    depthBuffer: false,
+    stencilBuffer: false,
+  });
+  target.texture.generateMipmaps = false;
+  target.texture.colorSpace = THREE.NoColorSpace;
+  const material = new THREE.ShaderMaterial({
+    uniforms: {
+      surfaceOwnerDepthMap: { value: depthTexture },
+    },
+    vertexShader: /* glsl */ `
+      varying vec2 vDepthReadbackUv;
+      void main() {
+        vDepthReadbackUv = uv;
+        gl_Position = vec4( position.xy, 0.0, 1.0 );
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform sampler2D surfaceOwnerDepthMap;
+      varying vec2 vDepthReadbackUv;
+      #include <packing>
+      void main() {
+        gl_FragColor = packDepthToRGBA(
+          texture2D( surfaceOwnerDepthMap, vDepthReadbackUv ).x
+        );
+      }
+    `,
+    depthTest: false,
+    depthWrite: false,
+    blending: THREE.NoBlending,
+    toneMapped: false,
+  });
+  const geometry = new THREE.PlaneGeometry(2, 2);
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.frustumCulled = false;
+  const scene = new THREE.Scene();
+  scene.add(mesh);
+  return { target, material, geometry, scene, camera: new THREE.Camera() };
+}
+
+function disposePackedDepthReadbackResources(resources: PackedDepthReadbackResources): void {
+  resources.geometry.dispose();
+  resources.material.dispose();
+  resources.target.dispose();
+}
+
 /** 強調線分。role省略時は従来どおり操作対象の黄色で描く。 */
 export interface HighlightSegment extends HingeSegment {
   role?: "hinge" | "reference" | "focus" | "suspect" | "active" | "pinned" | "pinMark";
@@ -1682,6 +1790,10 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
   // draw callは面数によらず2回だけ増える。全三角形はどちらも動的index 1本で描く。
   const ownerBinding = createSurfaceOwnerBinding();
   const ownerPass = createSurfaceOwnerPassResources(ownerBinding);
+  // WebView2/ANGLEはdepth attachmentへのDEPTH_COMPONENT readPixelsを
+  // GL_INVALID_ENUMにするため、検査時だけ既存depth textureをRGBA8へGPU copyする。
+  // productionのdepth/owner/final passには入れず、同じtextureを読むだけにする。
+  let depthReadback: PackedDepthReadbackResources | null = null;
   const emptyOwnerGeometry = new THREE.BufferGeometry();
   const ownerMesh = new THREE.Mesh(emptyOwnerGeometry, ownerPass.colorMaterial);
   ownerMesh.frustumCulled = false;
@@ -1803,9 +1915,7 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
   // 同じフレームに重なっても描画は1回にまとまる
   let frameHandle: number | null = null;
   let disposed = false;
-  const draw = () => {
-    frameHandle = null;
-    if (disposed) return;
+  const drawProductionFrame = () => {
     if (ownerSurface !== null) {
       orderSurfaceOwner(ownerSurface, camera);
       const previousTarget = renderer.getRenderTarget();
@@ -1833,6 +1943,11 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
       }
     }
     renderer.render(scene, camera);
+  };
+  const draw = () => {
+    frameHandle = null;
+    if (disposed) return;
+    drawProductionFrame();
   };
   const render = () => {
     if (!disposed && frameHandle === null) frameHandle = requestAnimationFrame(draw);
@@ -1919,6 +2034,121 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
     triangleLayers: surface.triangleLayers,
     faceSurfaceRanks: surface.faceSurfaceRanks,
   });
+
+  const captureReadback: Viewer3DReadbackSource = () => {
+    if (disposed) throw new Error("3D表示の描画資源は破棄済みです");
+    if (ownerSurface === null) throw new Error("読み取れる紙面がありません");
+    renderer.getDrawingBufferSize(drawingBufferSize);
+    const width = Math.floor(drawingBufferSize.x);
+    const height = Math.floor(drawingBufferSize.y);
+    if (width <= 0 || height <= 0) {
+      throw new Error(`3D表示の物理画素数が不正です: ${width}x${height}`);
+    }
+
+    if (frameHandle !== null) {
+      cancelAnimationFrame(frameHandle);
+      frameHandle = null;
+    }
+    const previousTarget = renderer.getRenderTarget();
+    const previousCubeFace = renderer.getActiveCubeFace();
+    const previousMipmapLevel = renderer.getActiveMipmapLevel();
+    const gl = renderer.getContext();
+    if (gl.isContextLost()) throw new Error("3D表示のWebGL contextが失われています");
+    const pixelCount = width * height;
+    const finalPixels = new Uint8Array(pixelCount * 4);
+    const ownerPixels = new Uint8Array(pixelCount * 4);
+    const depthPixels = new Uint8Array(pixelCount * 4);
+    depthReadback ??= createPackedDepthReadbackResources(
+      ownerPass.depthTarget.depthTexture,
+    );
+    depthReadback.target.setSize(width, height);
+    const productionDepthTexture = ownerPass.depthTarget.depthTexture;
+    if (
+      productionDepthTexture === null ||
+      ownerPass.colorMaterial.uniforms.surfaceOwnerDepthMap.value !== productionDepthTexture ||
+      depthReadback.material.uniforms.surfaceOwnerDepthMap.value !== productionDepthTexture
+    ) {
+      throw new Error("depth/owner/captureが同じproduction depth textureを参照していません");
+    }
+    for (const [name, target] of [
+      ["depth", ownerPass.depthTarget],
+      ["owner", ownerPass.colorTarget],
+      ["packed depth", depthReadback.target],
+    ] as const) {
+      if (target.width !== width || target.height !== height) {
+        throw new Error(
+          `${name} targetの物理画素数が違います: ${target.width}x${target.height} != ${width}x${height}`,
+        );
+      }
+    }
+    const ensureReadSucceeded = (kind: string) => {
+      const error = gl.getError();
+      if (error !== gl.NO_ERROR) {
+        throw new Error(`${kind}のWebGL readPixelsに失敗しました: 0x${error.toString(16)}`);
+      }
+    };
+
+    try {
+      // 通常画面と同じ depth -> owner -> final の順を、同じscene/materialで描く。
+      renderer.setRenderTarget(null);
+      drawProductionFrame();
+      gl.finish();
+
+      // preserveDrawingBufferに依存しないよう、default framebufferは描画直後に読む。
+      gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, finalPixels);
+      ensureReadSucceeded("最終RGBA");
+
+      renderer.readRenderTargetPixels(
+        ownerPass.colorTarget,
+        0,
+        0,
+        width,
+        height,
+        ownerPixels,
+      );
+      ensureReadSucceeded("owner token");
+
+      // depth attachmentをCPUから直接読まず、production pass 1のdepth textureを
+      // Three.js標準のpackDepthToRGBAでcapture専用RGBA8 targetへ写して読む。
+      renderer.setRenderTarget(depthReadback.target);
+      renderer.render(depthReadback.scene, depthReadback.camera);
+      gl.finish();
+      renderer.readRenderTargetPixels(
+        depthReadback.target,
+        0,
+        0,
+        width,
+        height,
+        depthPixels,
+      );
+      ensureReadSucceeded("RGBA8へpackしたowner depth");
+      if (gl.isContextLost()) throw new Error("readback中にWebGL contextが失われました");
+    } finally {
+      renderer.setRenderTarget(previousTarget, previousCubeFace, previousMipmapLevel);
+    }
+
+    return {
+      version: 1,
+      width,
+      height,
+      rowOrder: "bottom-to-top",
+      owner: {
+        encoding: "rgba8-base64",
+        data: bytesAsBase64(ownerPixels),
+        codeToFace: [...ownerSurface.ownerCodes.entries()]
+          .map(([face, code]) => [code, face] as const)
+          .sort((left, right) => left[0] - right[0]),
+      },
+      depth: {
+        encoding: "rgba8-packed-depth-base64",
+        data: bytesAsBase64(depthPixels),
+      },
+      final: {
+        encoding: "rgba8-base64",
+        data: bytesAsBase64(finalPixels),
+      },
+    };
+  };
 
   const api: Viewer3DScene = {
     camera,
@@ -2070,6 +2300,7 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
     dispose() {
       if (disposed) return;
       disposed = true;
+      if (activeViewer3DReadback === captureReadback) activeViewer3DReadback = null;
       previewMesh.geometry.dispose();
       previewMaterial.dispose();
       if (frameHandle !== null) {
@@ -2094,9 +2325,14 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
       supplementalEdgeLayer.dispose();
       highlightLayer.dispose();
       emptyOwnerGeometry.dispose();
+      if (depthReadback !== null) {
+        disposePackedDepthReadbackResources(depthReadback);
+        depthReadback = null;
+      }
       disposeSurfaceOwnerPassResources(ownerPass);
       renderer.dispose();
     },
   };
+  activeViewer3DReadback = captureReadback;
   return api;
 }

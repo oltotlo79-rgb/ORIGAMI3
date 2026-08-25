@@ -22,6 +22,7 @@ vi.mock("../ipc/client", () => ({
   recoveryRestore: vi.fn(),
   proposalGenerate: vi.fn(),
   proposalProgress: vi.fn(),
+  proposalControl: vi.fn(),
 }));
 
 import * as ipc from "../ipc/client";

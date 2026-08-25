@@ -2372,6 +2372,10 @@ input[type="radio"] {
   height: 100%;
 }
 
+.cp-canvas:focus-visible {
+  outline-offset: -4px;
+}
+
 /* 展開図へ重ねる操作案内。現在できることだけは、詳細を畳んでも残す。 */
 .cp-operation-hint {
   position: absolute;
@@ -2512,7 +2516,8 @@ html[data-origami3-capture-view] .app > .first-run-guide,
 html[data-origami3-capture-view] .tool-rail,
 html[data-origami3-capture-view] .pane-splitter,
 html[data-origami3-capture-view] .context-panel-splitter,
-html[data-origami3-capture-view] .timeline {
+html[data-origami3-capture-view] .timeline,
+html[data-origami3-capture-view] body > .dialog-backdrop[data-modal-layer="true"] {
   display: none !important;
 }
 
@@ -3065,7 +3070,7 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   display: flex;
   gap: var(--sp-5);
   padding: var(--sp-4) var(--sp-5);
-  background: var(--context-panel-background);
+  background: var(--color-surface);
   border-top: var(--panel-border-width) solid var(--color-accent-border);
   box-shadow: var(--shadow-context-panel);
   line-height: var(--lh-normal);
@@ -3200,6 +3205,7 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
 .paper-action-entrances {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--sp-3);
   margin: var(--sp-3) 0;
   padding: var(--sp-3);
@@ -3224,6 +3230,78 @@ html[data-origami3-capture-view] .suspect-hinge-guide {
   font-weight: var(--fw-bold);
   cursor: pointer;
   box-shadow: var(--shadow-button);
+}
+
+/* 全折り目を同じ割合で動かす操作も、既存のコンテキストパネル1枚に収める。 */
+.fold-all-preview {
+  display: grid;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.fold-all-preview-heading {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  padding-block: var(--sp-1);
+  background: var(--color-surface);
+}
+
+.fold-all-preview-promise {
+  display: inline-flex;
+  padding: var(--sp-1) var(--sp-3);
+  border: var(--control-border-width) solid var(--color-warning-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-warning-surface);
+  color: var(--color-warn);
+  font-size: var(--fs-sm);
+}
+
+.fold-all-preview-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-4);
+  width: min(100%, 620px);
+  padding: var(--sp-3) var(--sp-4);
+  border: var(--panel-border-width) solid var(--color-accent-border);
+  border-radius: var(--radius-md);
+  background: var(--color-accent-soft);
+}
+
+.fold-all-preview-control label,
+.fold-all-preview-control output {
+  font-weight: var(--fw-bold);
+}
+
+.fold-all-preview-control output,
+.fold-all-preview-max {
+  text-align: right;
+}
+
+.fold-all-preview-control input[type="range"] {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-width: 0;
+}
+
+.fold-all-preview-min,
+.fold-all-preview-max {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.fold-all-preview-notices {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.fold-all-preview-notices p {
+  margin: 0;
 }
 
 .soft-controls {

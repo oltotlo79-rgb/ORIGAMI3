@@ -1,0 +1,10 @@
+{
+  "file_spec": 1.2,
+  "frame_classes": ["foldedForm"],
+  "frame_attributes": ["2D"],
+  "vertices_coords": [[10, 20], [10, 24], [8, 24], [8, 20]],
+  "edges_vertices": [[0, 1], [1, 2], [2, 3], [3, 0], [0, 2]],
+  "edges_assignment": ["B", "B", "B", "B", "V"],
+  "edges_foldAngle": [0, 0, 0, 0, 45],
+  "faces_vertices": [[0, 1, 2], [0, 2, 3]]
+}

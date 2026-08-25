@@ -1,5 +1,6 @@
 //! ori3-rigid: 折り線の角度から紙の立体形状を計算する剛体折りソルバー。
 
+pub mod fold_all;
 pub mod intersect;
 pub mod motion;
 pub mod seam;
@@ -9,6 +10,10 @@ mod surface_order;
 pub mod symmetry;
 pub mod tree;
 
+pub use fold_all::{
+    FOLD_ALL_LAYER_ORDER_WARNING, FOLD_ALL_RELAXATION_WARNING, FoldAllPreviewError,
+    FoldAllPreviewResult, fold_all_targets, solve_fold_all_preview,
+};
 pub use intersect::{
     ContactMetrics, ContactWitness, MAX_CONTACT_WITNESSES, PENETRATION_WARNING, contact_metrics,
     contact_witnesses, derive_layer_order, layer_order_conflicts, self_intersection_pairs,

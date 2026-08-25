@@ -3,12 +3,17 @@
 
 import { describe, expect, it, vi } from "vitest";
 import {
+  acceptLinePoint,
+  activateKeyboardCursor,
   constructDone,
   cursorFor,
   curveDraft,
   initialEphemeralState,
+  KEYBOARD_CURSOR_FAST_STEP_PX,
+  KEYBOARD_CURSOR_STEP_PX,
   onKeyDown,
   onKeyUp,
+  onKeyboardLineKey,
   onMouseDown,
   onMouseMove,
   onMouseUp,
@@ -152,6 +157,7 @@ function makeCtx(
   const drawCurve = vi.fn<(points: Vec2[], kind: EdgeKind) => void>();
   const beginFoldDraft = vi.fn<(line: [Vec2, Vec2], source: "2d" | "3d") => void>();
   const pickAlignTarget = vi.fn();
+  const setOperationStage = vi.fn<(stage: number) => void>();
   const ctx: InteractionCtx = {
     doc,
     view: { scale: 500, offsetX: 0, offsetY: 500 },
@@ -168,7 +174,10 @@ function makeCtx(
     violations,
     mirrorAxis: paperMirrorLine(doc.paper, "paperVertical"),
     state: initialEphemeralState(),
+    lineInputStart: null,
     setView: vi.fn(),
+    setLineInputStart: vi.fn(),
+    setOperationStage,
     applyEdit,
     drawSegment,
     drawCurve,
@@ -178,7 +187,18 @@ function makeCtx(
     pickMeasureEdge: vi.fn(),
     pickMeasurePoint: vi.fn(),
   };
-  return { ctx, applyEdit, drawSegment, drawCurve, beginFoldDraft, pickAlignTarget };
+  ctx.setLineInputStart = vi.fn((start) => {
+    ctx.lineInputStart = start;
+  });
+  return {
+    ctx,
+    applyEdit,
+    drawSegment,
+    drawCurve,
+    beginFoldDraft,
+    pickAlignTarget,
+    setOperationStage,
+  };
 }
 
 describe("展開図で測る", () => {
@@ -580,7 +600,7 @@ describe("線ツール", () => {
       onMouseDown(ctx, toScreen(outside), 0);
 
       expect(ctx.state.hoverSnap, `角${corner}`).toEqual({ pos: corner, kind: "vertex" });
-      expect(ctx.state.pendingStart, `角${corner}`).toEqual(corner);
+      expect(ctx.lineInputStart, `角${corner}`).toEqual(corner);
       expect(ctx.state.lineInputHint, `角${corner}`).toBeNull();
       accepted += 1;
     }
@@ -594,7 +614,7 @@ describe("線ツール", () => {
     // 左辺の外0.01(=5px)。方眼の交点0.125/0.25からは0.0625離しておく。
     onMouseDown(ctx, toScreen([-0.01, 0.1875]), 0);
     expect(ctx.state.hoverSnap).toEqual({ pos: [0, 0.1875], kind: "edge" });
-    expect(ctx.state.pendingStart).toEqual([0, 0.1875]);
+    expect(ctx.lineInputStart).toEqual([0, 0.1875]);
     expect(ctx.state.lineInputHint).toBeNull();
 
     onMouseDown(ctx, toScreen([1.01, 0.8125]), 0);
@@ -612,7 +632,7 @@ describe("線ツール", () => {
     onMouseDown(ctx, toScreen([-0.01, 0.25]), 0);
 
     expect(ctx.state.hoverSnap).toEqual({ pos: [0, 0.25], kind: "grid" });
-    expect(ctx.state.pendingStart).toEqual([0, 0.25]);
+    expect(ctx.lineInputStart).toEqual([0, 0.25]);
     expect(ctx.state.lineInputHint).toBeNull();
   });
 
@@ -626,7 +646,7 @@ describe("線ツール", () => {
       onMouseDown(ctx, toScreen([1.05, 0.8]), 0);
 
       expect(drawSegment, tool).toHaveBeenCalledTimes(0);
-      expect(ctx.state.pendingStart, tool).toBeNull();
+      expect(ctx.lineInputStart, tool).toBeNull();
       expect(ctx.state.lineInputHint, tool).toBe(
         "紙の外には線を引けません。紙の上をクリックしてください",
       );
@@ -645,7 +665,7 @@ describe("線ツール", () => {
     onMouseDown(ctx, toScreen([1.05, 0.5]), 0);
 
     expect(drawSegment).toHaveBeenCalledTimes(0);
-    expect(ctx.state.pendingStart).toEqual(start);
+    expect(ctx.lineInputStart).toEqual(start);
     expect(ctx.state.lineInputHint).toBe(
       "紙の外には線を引けません。紙の上をクリックしてください",
     );
@@ -653,7 +673,7 @@ describe("線ツール", () => {
     onMouseDown(ctx, toScreen(end), 0);
     expect(drawSegment).toHaveBeenCalledTimes(1);
     expect(drawSegment).toHaveBeenCalledWith(start, end, "Mountain");
-    expect(ctx.state.pendingStart).toBeNull();
+    expect(ctx.lineInputStart).toBeNull();
     expect(ctx.state.lineInputHint).toBeNull();
   });
 
@@ -666,7 +686,7 @@ describe("線ツール", () => {
     onMouseDown(ctx, toScreen(start), 0);
 
     expect(drawSegment).toHaveBeenCalledTimes(0);
-    expect(ctx.state.pendingStart).toEqual(start);
+    expect(ctx.lineInputStart).toEqual(start);
     expect(ctx.state.lineInputHint).toBeNull();
   });
 
@@ -679,7 +699,7 @@ describe("線ツール", () => {
 
     expect(drawSegment).toHaveBeenCalledTimes(1);
     expect(drawSegment).toHaveBeenCalledWith([0, 0.25], [1, 0.75], "Aux");
-    expect(ctx.state.pendingStart).toBeNull();
+    expect(ctx.lineInputStart).toBeNull();
   });
 
   it("「折る」の点指定は実交点より方眼を優先する", () => {
@@ -936,6 +956,170 @@ describe("線ツール", () => {
   });
 });
 
+describe("線ツールのキーボード操作", () => {
+  it.each([
+    ["mountain", "Mountain"],
+    ["valley", "Valley"],
+    ["aux", "Aux"],
+  ] as const)(
+    "%sはポインタ・キーボード・共通入口で同じ一点とdrawSegmentを使う",
+    (tool, kind) => {
+      const start: Vec2 = [0.25, 0.25];
+      const end: Vec2 = [0.75, 0.625];
+
+      const pointer = makeCtx();
+      pointer.ctx.tool = tool;
+      onMouseDown(pointer.ctx, toScreen(start), 0);
+      onMouseDown(pointer.ctx, toScreen(end), 0);
+
+      const keyboard = makeCtx();
+      keyboard.ctx.tool = tool;
+      activateKeyboardCursor(keyboard.ctx);
+      keyboard.ctx.state.keyboardCursorWorld = start;
+      expect(onKeyboardLineKey(keyboard.ctx, "Enter", false)).toBe(true);
+      keyboard.ctx.state.keyboardCursorWorld = end;
+      expect(onKeyboardLineKey(keyboard.ctx, "Enter", false)).toBe(true);
+
+      const direct = makeCtx();
+      direct.ctx.tool = tool;
+      expect(acceptLinePoint(direct.ctx, start)).toBe("started");
+      expect(acceptLinePoint(direct.ctx, end)).toBe("completed");
+
+      expect(pointer.drawSegment.mock.calls).toEqual([[[0.25, 0.25], [0.75, 0.625], kind]]);
+      expect(keyboard.drawSegment.mock.calls).toEqual(pointer.drawSegment.mock.calls);
+      expect(direct.drawSegment.mock.calls).toEqual(pointer.drawSegment.mock.calls);
+      expect(pointer.applyEdit).not.toHaveBeenCalled();
+      expect(keyboard.applyEdit).not.toHaveBeenCalled();
+      expect(direct.applyEdit).not.toHaveBeenCalled();
+    },
+  );
+
+  it("キーボードの始点とポインタの終点、その逆のどちらでも同じ1本になる", () => {
+    const start: Vec2 = [0.25, 0.25];
+    const end: Vec2 = [0.75, 0.625];
+
+    const keyboardFirst = makeCtx();
+    keyboardFirst.ctx.tool = "mountain";
+    activateKeyboardCursor(keyboardFirst.ctx);
+    keyboardFirst.ctx.state.keyboardCursorWorld = start;
+    onKeyboardLineKey(keyboardFirst.ctx, "Enter", false);
+    onMouseDown(keyboardFirst.ctx, toScreen(end), 0);
+
+    const pointerFirst = makeCtx();
+    pointerFirst.ctx.tool = "mountain";
+    onMouseDown(pointerFirst.ctx, toScreen(start), 0);
+    activateKeyboardCursor(pointerFirst.ctx);
+    pointerFirst.ctx.state.keyboardCursorWorld = end;
+    onKeyboardLineKey(pointerFirst.ctx, "Enter", false);
+
+    expect(keyboardFirst.drawSegment.mock.calls).toEqual([
+      [[0.25, 0.25], [0.75, 0.625], "Mountain"],
+    ]);
+    expect(pointerFirst.drawSegment.mock.calls).toEqual(keyboardFirst.drawSegment.mock.calls);
+    expect(keyboardFirst.ctx.lineInputStart).toBeNull();
+    expect(pointerFirst.ctx.lineInputStart).toBeNull();
+  });
+
+  it("有効な始点の後にEscapeを押すと線・作品・始点を変えず最初へ戻る", () => {
+    const { ctx, drawSegment, setOperationStage } = makeCtx();
+    ctx.tool = "valley";
+    const before = structuredClone(ctx.doc);
+    activateKeyboardCursor(ctx);
+    ctx.state.keyboardCursorWorld = [0.25, 0.25];
+
+    onKeyboardLineKey(ctx, "Enter", false);
+    expect(ctx.lineInputStart).toEqual([0.25, 0.25]);
+    expect(setOperationStage).toHaveBeenLastCalledWith(1);
+
+    onKeyDown(ctx, "Escape");
+
+    expect(drawSegment).not.toHaveBeenCalled();
+    expect(ctx.doc).toEqual(before);
+    expect(ctx.lineInputStart).toBeNull();
+    expect(ctx.state.directionSnap).toBeNull();
+    expect(setOperationStage).toHaveBeenLastCalledWith(0);
+  });
+
+  it("矢印は画面16px、Shift付きは160pxを4方向へ動かし、紙端で止まる", () => {
+    const { ctx } = makeCtx();
+    ctx.tool = "mountain";
+    expect(KEYBOARD_CURSOR_STEP_PX).toBe(16);
+    expect(KEYBOARD_CURSOR_FAST_STEP_PX).toBe(160);
+
+    const cases = [
+      ["ArrowLeft", false, [0.468, 0.5]],
+      ["ArrowRight", false, [0.532, 0.5]],
+      ["ArrowUp", false, [0.5, 0.532]],
+      ["ArrowDown", false, [0.5, 0.468]],
+      ["ArrowLeft", true, [0.18, 0.5]],
+      ["ArrowRight", true, [0.82, 0.5]],
+      ["ArrowUp", true, [0.5, 0.82]],
+      ["ArrowDown", true, [0.5, 0.18]],
+    ] as const;
+    for (const [key, shiftHeld, expected] of cases) {
+      activateKeyboardCursor(ctx);
+      expect(onKeyboardLineKey(ctx, key, shiftHeld)).toBe(true);
+      expect(ctx.state.keyboardCursorWorld?.[0]).toBeCloseTo(expected[0], 12);
+      expect(ctx.state.keyboardCursorWorld?.[1]).toBeCloseTo(expected[1], 12);
+    }
+
+    ctx.state.keyboardCursorWorld = [0.99, 0.01];
+    onKeyboardLineKey(ctx, "ArrowRight", false);
+    onKeyboardLineKey(ctx, "ArrowDown", false);
+    expect(ctx.state.keyboardCursorWorld).toEqual([1, 0]);
+
+    ctx.view = { ...ctx.view, scale: 1000 };
+    activateKeyboardCursor(ctx);
+    onKeyboardLineKey(ctx, "ArrowRight", false);
+    const moved = ctx.state.keyboardCursorWorld?.[0] ?? Number.NaN;
+    expect((moved - 0.5) * ctx.view.scale).toBeCloseTo(16, 12);
+  });
+
+  it("吸着前の現在点を保ったまま頂点・方眼・線へ吸着し、元の候補から抜けられる", () => {
+    const snappingCases: { raw: Vec2; pos: Vec2; kind: "vertex" | "grid" | "edge" }[] = [
+      { raw: [0.01, 0.01], pos: [0, 0], kind: "vertex" },
+      { raw: [0.251, 0.251], pos: [0.25, 0.25], kind: "grid" },
+      { raw: [0.31, 0.01], pos: [0.31, 0], kind: "edge" },
+    ];
+    for (const expected of snappingCases) {
+      const { ctx } = makeCtx();
+      ctx.tool = "aux";
+      activateKeyboardCursor(ctx);
+      ctx.state.keyboardCursorWorld = expected.raw;
+      onKeyboardLineKey(ctx, "Enter", false);
+      expect(ctx.lineInputStart).toEqual(expected.pos);
+      expect(ctx.state.hoverSnap).toEqual({ pos: expected.pos, kind: expected.kind });
+      expect(ctx.state.keyboardCursorWorld).toEqual(expected.raw);
+    }
+
+    const { ctx } = makeCtx();
+    ctx.tool = "aux";
+    activateKeyboardCursor(ctx);
+    ctx.state.keyboardCursorWorld = [0.47, 0.5];
+    onKeyboardLineKey(ctx, "ArrowRight", false);
+    expect(ctx.state.keyboardCursorWorld).toEqual([0.502, 0.5]);
+    expect(ctx.state.hoverSnap).toEqual({ pos: [0.5, 0.5], kind: "grid" });
+    onKeyboardLineKey(ctx, "ArrowRight", false);
+    expect(ctx.state.keyboardCursorWorld).toEqual([0.534, 0.5]);
+    expect(ctx.state.hoverSnap).toBeNull();
+  });
+
+  it("キーボードの終点も既存の方向吸着で角の二等分方向へ決まる", () => {
+    const { ctx, drawSegment } = makeCtx();
+    ctx.tool = "mountain";
+    activateKeyboardCursor(ctx);
+    ctx.state.keyboardCursorWorld = [0, 0];
+    onKeyboardLineKey(ctx, "Enter", false);
+    ctx.state.keyboardCursorWorld = polar(48, 0.57);
+    onKeyboardLineKey(ctx, "Enter", false);
+
+    expect(drawSegment).toHaveBeenCalledTimes(1);
+    const [, end] = drawSegment.mock.calls[0];
+    expect(end[0]).toBeCloseTo(0.57 * Math.SQRT1_2, 10);
+    expect(end[1]).toBeCloseTo(0.57 * Math.SQRT1_2, 10);
+  });
+});
+
 describe("合わせて折るの2D選択", () => {
   it("折った後は、面の対応で点と補助線を現在の平らな位置へ写して記録する", () => {
     const { ctx, pickAlignTarget } = makeCtx();
@@ -997,7 +1181,7 @@ describe("合わせて折るの2D選択", () => {
 
     expect(pickAlignTarget).not.toHaveBeenCalled();
     expect(beginFoldDraft).not.toHaveBeenCalled();
-    expect(ctx.state.pendingStart).toBeNull();
+    expect(ctx.lineInputStart).toBeNull();
   });
 
   it("現在の手順で見えない線は、全体の作品に存在していても拾わない", () => {
@@ -1250,7 +1434,7 @@ describe("展開図をつかんで動かす", () => {
     expect(lastView(ctx)).toEqual({ scale: 500, offsetX: -10, offsetY: 510 });
     onMouseUp(ctx, [90, 110], 2);
     expect(ctx.state.panLast).toBeNull();
-    expect(ctx.state.pendingStart).toBeNull(); // 線引きは始まっていない
+    expect(ctx.lineInputStart).toBeNull(); // 線引きは始まっていない
   });
 
   it("中ボタンドラッグは今までどおり動く", () => {

@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "paper": {
+    "width_mm": 100,
+    "height_mm": 100
+  },
+  "skeleton": {
+    "nodes": [
+      {
+        "id": 0,
+        "parent": null,
+        "length": 0,
+        "width_factor": 1
+      },
+      {
+        "id": 1,
+        "parent": 0,
+        "length": 1,
+        "width_factor": 1
+      },
+      {
+        "id": 2,
+        "parent": 0,
+        "length": 0.72,
+        "width_factor": 0.8
+      },
+      {
+        "id": 3,
+        "parent": 0,
+        "length": 0.43,
+        "width_factor": 1.25
+      }
+    ]
+  },
+  "seed": 2026,
+  "with_fold_plan": true
+}

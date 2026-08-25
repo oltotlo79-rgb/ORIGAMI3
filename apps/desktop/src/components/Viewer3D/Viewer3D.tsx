@@ -459,6 +459,7 @@ export function Viewer3D({ fitRef, statusOverlays }: Props) {
   const hoveredHinge = useAppStore((s) => s.hoveredHinge);
   const suspectHinges = useAppStore((s) => s.suspectHinges);
   const pinnedFolds = useAppStore((s) => s.pinnedFolds);
+  const foldAllActive = useAppStore((s) => s.foldAllPreview !== null);
   const activeAngleIntent = useAppStore((s) => s.activeAngleIntent);
   const docEpoch = useAppStore((s) => s.docEpoch);
   const activeTool = useAppStore((s) => s.activeTool);
@@ -478,6 +479,11 @@ export function Viewer3D({ fitRef, statusOverlays }: Props) {
   // 「今どのモードで何ができるか」を1行で常に出す(UI-009)。
   // 文字列を返す選択なので、内容が変わらない限り再描画は起きない
   const hint = useAppStore((s) => {
+    if (s.foldAllPreview !== null) {
+      return s.foldAllPreview.returning
+        ? "いつもの表示に戻しています。少し待ってください"
+        : "下の「折る割合」を動かすと、全部の折り目が同じ割合で動きます";
+    }
     if (s.foldThroughBusy) return "折り方を確認しています。少し待ってください";
     if (s.pendingFoldThrough) {
       return "追加折り目の位置を確認し、下のパネルで折り方を選んでください";
@@ -711,7 +717,9 @@ export function Viewer3D({ fitRef, statusOverlays }: Props) {
           !outlinedEdgeIds.has(segment.edgeId) && !selectedIds.has(segment.edgeId),
       ),
     );
-    const suspectIds = new Set(s.suspectHinges);
+    // 一斉表示は通常姿勢の固定と貫通候補を計算入力に使わないため、古い色を重ねない。
+    const normalPoseMarksVisible = s.foldAllPreview === null;
+    const suspectIds = new Set(normalPoseMarksVisible ? s.suspectHinges : []);
     const suspectSegments: HighlightSegment[] = scene.content.hingeSegments
       .filter((segment) => suspectIds.has(segment.edgeId))
       .map((segment) => ({ ...segment, role: "suspect" as const }));
@@ -727,6 +735,7 @@ export function Viewer3D({ fitRef, statusOverlays }: Props) {
     const pinnedSegments: HighlightSegment[] = scene.content.hingeSegments
       .filter(
         (segment) =>
+          normalPoseMarksVisible &&
           s.pinnedFolds.has(segment.edgeId) &&
           !suspectIds.has(segment.edgeId) &&
           !activeIds.has(segment.edgeId),
@@ -929,6 +938,7 @@ export function Viewer3D({ fitRef, statusOverlays }: Props) {
     hoveredHinge,
     suspectHinges,
     pinnedFolds,
+    foldAllActive,
     activeAngleIntent,
     doc,
     faces,
@@ -952,10 +962,12 @@ export function Viewer3D({ fitRef, statusOverlays }: Props) {
     // 選べるものの上にカーソルがある間だけ止めていた分も、道具が替わったらここで元へ戻す
     hoverLockRef.current = false;
     sceneRef.current?.setDrawMode(
-      (foldMode && foldReady && !alignDraft) || (pullMode && pullBlocked === null),
-      pullMode,
+      !foldAllActive &&
+        ((foldMode && foldReady && !alignDraft) ||
+          (pullMode && pullBlocked === null)),
+      !foldAllActive && pullMode,
     );
-  }, [foldMode, foldReady, pullMode, pullBlocked, alignDraft, activeTool]);
+  }, [foldMode, foldReady, pullMode, pullBlocked, alignDraft, activeTool, foldAllActive]);
 
   /**
    * つかめる・選べるものの上に来た間だけ、左ドラッグの視点回転を先に止める。
@@ -1584,6 +1596,19 @@ export function Viewer3D({ fitRef, statusOverlays }: Props) {
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
       const s = useAppStore.getState();
+      if (s.foldAllPreview !== null) {
+        // 一斉形は作品編集の入力にしない。OrbitControlsのnative listenerは残し、
+        // 視点操作だけを許す。途中だった紙操作のrefもここで確実に破棄する。
+        pullRef.current = null;
+        grabRef.current = null;
+        drawingRef.current = null;
+        vertexDragRef.current = null;
+        alignPressRef.current = null;
+        measurePressRef.current = null;
+        downPosRef.current = { x, y };
+        if (e.button === 0 || e.button === 2) e.currentTarget.style.cursor = "grabbing";
+        return;
+      }
       const scene0 = sceneRef.current;
       // 紙をつかんで引く(UI-007): つかんだ面から根までの経路のうち、
       // その点をいちばんよく動かす折り線を選び、その角度だけを動かして
@@ -1769,6 +1794,7 @@ export function Viewer3D({ fitRef, statusOverlays }: Props) {
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (useAppStore.getState().foldAllPreview !== null) return;
       const rect = e.currentTarget.getBoundingClientRect();
       const pull = pullRef.current;
       const scene = sceneRef.current;
@@ -1866,6 +1892,17 @@ export function Viewer3D({ fitRef, statusOverlays }: Props) {
   /** クリック(視点操作でない)なら最寄りのヒンジを選ぶ。折り線を引いていたら確定する */
   const handlePointerUp = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (useAppStore.getState().foldAllPreview !== null) {
+        pullRef.current = null;
+        grabRef.current = null;
+        drawingRef.current = null;
+        vertexDragRef.current = null;
+        alignPressRef.current = null;
+        measurePressRef.current = null;
+        downPosRef.current = null;
+        e.currentTarget.style.cursor = "grab";
+        return;
+      }
       if (pullRef.current) {
         // 引いた形はそのまま残る(角度指定として保持される)。色付けだけ消す
         pullRef.current = null;
@@ -2153,9 +2190,16 @@ export function Viewer3D({ fitRef, statusOverlays }: Props) {
       <canvas
         ref={canvasRef}
         className="viewer3d-canvas"
+        aria-label={
+          foldAllActive
+            ? "全部の折り目を同じ割合で動かした形。ドラッグで視点を回せます"
+            : undefined
+        }
         style={{
           cursor:
-            activeTool === "measure"
+            foldAllActive
+              ? "grab"
+              : activeTool === "measure"
               ? "crosshair"
               : pullMode && pullBlocked === null
               ? "grab"
@@ -2166,7 +2210,9 @@ export function Viewer3D({ fitRef, statusOverlays }: Props) {
                   : "crosshair",
         }}
         data-tooltip={
-          activeTool === "measure"
+          foldAllActive
+            ? "形を見る間は、ドラッグで視点を回し、ホイールで拡大縮小できます"
+            : activeTool === "measure"
             ? measureDraft.mode === "angle"
               ? "紙の辺を2本クリックして角度を測ります(Escで選び直し)"
               : measureDraft.mode === "length"

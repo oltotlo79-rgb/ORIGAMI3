@@ -295,7 +295,8 @@ impl PartialPlan {
 /// 探索手順を最初から確認し直した結果。
 ///
 /// `CheckedToFinish` と `Partial` を別variantにすることで、途中までの参考手順と
-/// 完成まで確認できた手順を同じ値として扱えないようにする。
+/// 完成まで確認できた手順を同じ値として扱えないようにする。watchdog/cancelは
+/// [`crate::SearchAbort`] であり、このenumへ入るvariantを持たない。
 #[derive(Clone, Debug, PartialEq)]
 pub enum VerifiedPlan {
     /// 探索・全手順の再検証・完成形の4指標がすべて完成条件を満たした。
@@ -433,6 +434,8 @@ pub fn verify_search_outcome(
 /// 探索時と再検証時では姿勢の粗さが違い得るため、探索時の `best_gaps` だけでは
 /// 完成扱いしない。状態数・深さで打ち切った結果や、再検証で落ちた結果は、
 /// たとえ途中までの手が安全でも必ず [`VerifiedPlan::Partial`] になる。
+/// watchdog/cancelはcontrolled探索の`Err`であり、この関数が受け取る
+/// [`SearchOutcome`] 自体が無いので、どちらのvariantにも到達しない。
 #[must_use]
 pub fn verify_search_completion(
     session: &FoldSession,
@@ -543,7 +546,6 @@ mod tests {
         for stop in [
             SearchStop::Exhausted,
             SearchStop::StateCap,
-            SearchStop::TimeCap,
             SearchStop::DepthCap,
         ] {
             assert!(

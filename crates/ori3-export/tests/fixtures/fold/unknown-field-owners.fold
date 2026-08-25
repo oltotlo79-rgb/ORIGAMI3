@@ -1,0 +1,8 @@
+{
+  "file_spec": 1.2,
+  "file_vendor": {"name": "fixture"},
+  "vendor:root": [1, 2],
+  "file_frames": [
+    {"vendor:child": {"kept": true}}
+  ]
+}

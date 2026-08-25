@@ -570,6 +570,69 @@ describe("コンテキストパネルの主操作順", () => {
     expect(panel.firstElementChild?.textContent).toContain("手順1");
     expect(panel.lastElementChild?.classList.contains("operation-steps")).toBe(true);
   });
+
+  it.each([
+    ["前", "◀ 前へ動かす", { type: "MoveStep", id: 2, to_index: 0 }],
+    ["後ろ", "後ろへ動かす ▶", { type: "MoveStep", id: 2, to_index: 2 }],
+  ] as const)(
+    "中央の手順を%sへ動かすボタンはUndo 1回を案内し、MoveStepを1回だけ送る",
+    async (_direction, buttonName, expectedOperation) => {
+      seed(new Map());
+      const doc = makeDoc();
+      doc.sequence = [1, 2, 3].map((id) => ({
+        id,
+        kind: "Simple" as const,
+        drivers: [],
+        layer_order: null,
+        note: "",
+      }));
+      vi.mocked(ipc.sequenceApply).mockImplementation(async (operation) => {
+        if (operation.type !== "MoveStep") {
+          throw new Error(`MoveStep以外を送信した: ${operation.type}`);
+        }
+        const sequence = [...doc.sequence];
+        const from = sequence.findIndex((step) => step.id === operation.id);
+        const [moved] = sequence.splice(from, 1);
+        sequence.splice(operation.to_index, 0, moved);
+        return {
+          doc: { ...doc, sequence },
+          faces: [],
+          warnings: [],
+          violations: [],
+          frame: null,
+          skipped: [],
+          contact_detected: false,
+        };
+      });
+      vi.mocked(ipc.sequenceReplay).mockResolvedValue({
+        frame: { faces: [], warnings: [] },
+        skipped: [],
+        warnings: [],
+      });
+      useAppStore.setState({
+        doc,
+        activeTool: "select",
+        currentStep: 2,
+        selection: { edgeIds: [], vertexIds: [] },
+      });
+      render(<ContextPanel />);
+
+      const before = screen.getByRole("button", { name: "◀ 前へ動かす" });
+      const after = screen.getByRole("button", { name: "後ろへ動かす ▶" });
+      expect(before.getAttribute("data-tooltip")).toContain(
+        "元に戻す1回で戻せます",
+      );
+      expect(after.getAttribute("data-tooltip")).toContain(
+        "元に戻す1回で戻せます",
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: buttonName }));
+      await waitFor(() => expect(ipc.sequenceApply).toHaveBeenCalledTimes(1));
+      expect(vi.mocked(ipc.sequenceApply).mock.calls[0][0]).toEqual(
+        expectedOperation,
+      );
+    },
+  );
 });
 
 describe("D18: 紙のふちを選んだときの編集操作", () => {

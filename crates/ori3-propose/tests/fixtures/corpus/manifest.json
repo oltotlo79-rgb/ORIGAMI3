@@ -1,0 +1,3929 @@
+{
+  "schema_version": 2,
+  "corpus_id": "proposal-benchmark-corpus-v2",
+  "stage": "3-B",
+  "target_case_count": 30,
+  "anchor_case_count": 4,
+  "neutral_case_count": 26,
+  "pilot_cases_count_toward_target": false,
+  "hash_contract": {
+    "algorithm": "fnv1a64",
+    "digest_encoding": "lowercase-hex-16",
+    "fixture_checksum_scope": "utf8-text-crlf-normalized-to-lf",
+    "input_normalization": "typed-input-plus-runner-contract-canonical-json-v1",
+    "structure_normalization": "rooted-tree-node-order-id-and-uniform-scale-independent-v1",
+    "candidate_normalization": "product-candidate-canonical-json-v1",
+    "result_normalization": "benchmark-result-envelope-canonical-json-v1",
+    "float_quantum": 1e-9,
+    "excluded_result_fields": [
+      "elapsed_millis",
+      "machine"
+    ]
+  },
+  "numeric_policy": {
+    "gap_abs_tolerance": 1e-9,
+    "weighted_gap_abs_tolerance": 6.4e-9,
+    "coordinate_abs_tolerance": 1e-9,
+    "angle_abs_tolerance_degrees": 1e-9,
+    "max_seam_gap": 0.000001,
+    "max_intersection_pairs_all_poses": 0,
+    "final_self_intersection_pairs": 0,
+    "minimum_partial_median_improvement_ratio": 0.2,
+    "performance_baseline_fraction_of_gate": 0.8
+  },
+  "runner_contract": {
+    "product_path": "proposal_generate",
+    "paper_normalization": "long-edge-equals-1",
+    "pack_starts": 8,
+    "packing_max_candidates": 4,
+    "candidate_execution": "parallel-preserve-packing-order",
+    "generation_failure": "omit-candidate; fail-case-if-all",
+    "fold_session_failure": "return-candidate-without-plan-and-stop; corpus-gate-fails",
+    "search_abort": "fail-case",
+    "with_fold_plan": true,
+    "search_budget": {
+      "max_states": 2,
+      "branch": 2,
+      "max_depth": 8,
+      "rank_scan_steps": 2,
+      "scan_steps": 20
+    },
+    "verification_scan_steps": 20,
+    "rebuild_scan_steps": 0,
+    "search_watchdog_millis": 30000,
+    "gap_weights": {
+      "count": 1,
+      "length": 1,
+      "width": 0.2,
+      "position": 1
+    },
+    "completion_tolerance": {
+      "count": 0.06666666666666667,
+      "length": 0.5656854249492387,
+      "width": 0.2485281374238571,
+      "position": 0.3461183088254098
+    }
+  },
+  "repetitions": {
+    "determinism": 10,
+    "performance_release": 5
+  },
+  "case_aggregation": {
+    "completion": "any-candidate-checked-to-finish; ties-use-product-order",
+    "partial": "safe-plan-with-lowest-final-weighted-gap; ties-use-product-order",
+    "safety_scope": "all-returned-plans",
+    "no_plan": "case-failure-if-no-safe-plan"
+  },
+  "classification_contract": {
+    "position_specified": "every leaf has tip_pos_2d",
+    "position_none": "every leaf omits tip_pos_2d",
+    "mixed_position_constraints": "rejected",
+    "symmetry": "a non-identity rooted-tree automorphism preserves normalized lengths, width factors, and mirrored specified positions",
+    "simple": "the independent reference uses only one-line ordinary folds",
+    "compound": "the independent reference contains a multi-driver, layer-packet, open-close, or named compound technique",
+    "required_evidence_field": "classification_basis"
+  },
+  "fixture_contract": {
+    "root": "crates/ori3-propose/tests/fixtures/corpus",
+    "ordinary_tests": "read-only",
+    "regeneration": "separate-ignored-test-only",
+    "absolute_paths_allowed": false,
+    "parent_traversal_allowed": false,
+    "external_runtime_inputs_allowed": false,
+    "checksum_mismatch_allowed": false
+  },
+  "public_metrics": [
+    {
+      "name": "completion_rate",
+      "fields": [
+        "status",
+        "checked",
+        "planned"
+      ]
+    },
+    {
+      "name": "weighted_gap_improvement",
+      "fields": [
+        "initial_gaps",
+        "final_gaps",
+        "initial_weighted_gap",
+        "final_weighted_gap",
+        "improvement_absolute",
+        "improvement_ratio"
+      ]
+    },
+    {
+      "name": "safety",
+      "fields": [
+        "all_finite",
+        "max_seam_gap",
+        "max_intersection_pairs_all_poses",
+        "final_self_intersection_pairs",
+        "layer_warning_count",
+        "final_warning_count",
+        "face_count_matches",
+        "skipped_steps",
+        "verification_failure",
+        "report_passed"
+      ]
+    },
+    {
+      "name": "stop_reasons",
+      "fields": [
+        "candidate_order",
+        "contract_tag",
+        "null_when_search_not_started"
+      ]
+    },
+    {
+      "name": "elapsed_millis",
+      "fields": [
+        "case_total",
+        "release_median",
+        "release_p95"
+      ]
+    },
+    {
+      "name": "determinism_hash",
+      "fields": [
+        "normalized_candidate_hash",
+        "stop_reason_hash",
+        "normalized_result_hash",
+        "normalized_failure_hash"
+      ]
+    }
+  ],
+  "stratification_plan": [
+    {
+      "band": "A",
+      "leaf_min": 3,
+      "leaf_max": 4,
+      "planned_cases": 6,
+      "lower_leaf_cases": 3,
+      "upper_leaf_cases": 3,
+      "symmetric_cases": 3,
+      "asymmetric_cases": 3,
+      "position_specified_cases": 3,
+      "position_none_cases": 3,
+      "simple_cases": 3,
+      "compound_cases": 3,
+      "must_complete_cases": 4,
+      "safe_partial_allowed_cases": 2
+    },
+    {
+      "band": "B",
+      "leaf_min": 5,
+      "leaf_max": 6,
+      "planned_cases": 6,
+      "lower_leaf_cases": 3,
+      "upper_leaf_cases": 3,
+      "symmetric_cases": 3,
+      "asymmetric_cases": 3,
+      "position_specified_cases": 3,
+      "position_none_cases": 3,
+      "simple_cases": 3,
+      "compound_cases": 3,
+      "must_complete_cases": 3,
+      "safe_partial_allowed_cases": 3
+    },
+    {
+      "band": "C",
+      "leaf_min": 7,
+      "leaf_max": 8,
+      "planned_cases": 6,
+      "lower_leaf_cases": 3,
+      "upper_leaf_cases": 3,
+      "symmetric_cases": 3,
+      "asymmetric_cases": 3,
+      "position_specified_cases": 3,
+      "position_none_cases": 3,
+      "simple_cases": 3,
+      "compound_cases": 3,
+      "must_complete_cases": 2,
+      "safe_partial_allowed_cases": 4
+    },
+    {
+      "band": "D",
+      "leaf_min": 9,
+      "leaf_max": 10,
+      "planned_cases": 6,
+      "lower_leaf_cases": 3,
+      "upper_leaf_cases": 3,
+      "symmetric_cases": 3,
+      "asymmetric_cases": 3,
+      "position_specified_cases": 3,
+      "position_none_cases": 3,
+      "simple_cases": 3,
+      "compound_cases": 3,
+      "must_complete_cases": 2,
+      "safe_partial_allowed_cases": 4
+    },
+    {
+      "band": "E",
+      "leaf_min": 11,
+      "leaf_max": 12,
+      "planned_cases": 6,
+      "lower_leaf_cases": 3,
+      "upper_leaf_cases": 3,
+      "symmetric_cases": 3,
+      "asymmetric_cases": 3,
+      "position_specified_cases": 3,
+      "position_none_cases": 3,
+      "simple_cases": 3,
+      "compound_cases": 3,
+      "must_complete_cases": 1,
+      "safe_partial_allowed_cases": 5
+    }
+  ],
+  "planned_slots": [
+    {
+      "slot": "A-01",
+      "case_id": "crane",
+      "anchor": true,
+      "leaf_count": 4,
+      "symmetry": "symmetric",
+      "position_constraint": "specified",
+      "technique_complexity": "compound",
+      "expectation_class": "must_complete"
+    },
+    {
+      "slot": "A-02",
+      "case_id": "yakko",
+      "anchor": true,
+      "leaf_count": 4,
+      "symmetry": "symmetric",
+      "position_constraint": "specified",
+      "technique_complexity": "simple",
+      "expectation_class": "must_complete"
+    },
+    {
+      "slot": "A-03",
+      "case_id": "bird-base",
+      "anchor": true,
+      "leaf_count": 4,
+      "symmetry": "symmetric",
+      "position_constraint": "specified",
+      "technique_complexity": "compound",
+      "expectation_class": "must_complete"
+    },
+    {
+      "slot": "A-04",
+      "case_id": "leaves-03-asymmetric-01",
+      "anchor": false,
+      "leaf_count": 3,
+      "symmetry": "asymmetric",
+      "position_constraint": "none",
+      "technique_complexity": "simple",
+      "expectation_class": "must_complete"
+    },
+    {
+      "slot": "A-05",
+      "case_id": "leaves-03-asymmetric-02",
+      "anchor": false,
+      "leaf_count": 3,
+      "symmetry": "asymmetric",
+      "position_constraint": "none",
+      "technique_complexity": "simple",
+      "expectation_class": "safe_partial_allowed"
+    },
+    {
+      "slot": "A-06",
+      "case_id": "leaves-03-asymmetric-03",
+      "anchor": false,
+      "leaf_count": 3,
+      "symmetry": "asymmetric",
+      "position_constraint": "none",
+      "technique_complexity": "compound",
+      "expectation_class": "safe_partial_allowed"
+    },
+    {
+      "slot": "B-01",
+      "case_id": "frog",
+      "anchor": true,
+      "leaf_count": 5,
+      "symmetry": "symmetric",
+      "position_constraint": "specified",
+      "technique_complexity": "compound",
+      "expectation_class": "must_complete"
+    },
+    {
+      "slot": "B-02",
+      "case_id": "leaves-05-symmetric-01",
+      "anchor": false,
+      "leaf_count": 5,
+      "symmetry": "symmetric",
+      "position_constraint": "none",
+      "technique_complexity": "simple",
+      "expectation_class": "must_complete"
+    },
+    {
+      "slot": "B-03",
+      "case_id": "leaves-05-asymmetric-01",
+      "anchor": false,
+      "leaf_count": 5,
+      "symmetry": "asymmetric",
+      "position_constraint": "specified",
+      "technique_complexity": "simple",
+      "expectation_class": "must_complete"
+    },
+    {
+      "slot": "B-04",
+      "case_id": "leaves-06-symmetric-01",
+      "anchor": false,
+      "leaf_count": 6,
+      "symmetry": "symmetric",
+      "position_constraint": "none",
+      "technique_complexity": "compound",
+      "expectation_class": "safe_partial_allowed"
+    },
+    {
+      "slot": "B-05",
+      "case_id": "leaves-06-asymmetric-01",
+      "anchor": false,
+      "leaf_count": 6,
+      "symmetry": "asymmetric",
+      "position_constraint": "specified",
+      "technique_complexity": "compound",
+      "expectation_class": "safe_partial_allowed"
+    },
+    {
+      "slot": "B-06",
+      "case_id": "leaves-06-asymmetric-02",
+      "anchor": false,
+      "leaf_count": 6,
+      "symmetry": "asymmetric",
+      "position_constraint": "none",
+      "technique_complexity": "simple",
+      "expectation_class": "safe_partial_allowed"
+    },
+    {
+      "slot": "C-01",
+      "case_id": "leaves-07-symmetric-01",
+      "anchor": false,
+      "leaf_count": 7,
+      "symmetry": "symmetric",
+      "position_constraint": "specified",
+      "technique_complexity": "simple",
+      "expectation_class": "must_complete"
+    },
+    {
+      "slot": "C-02",
+      "case_id": "leaves-07-symmetric-02",
+      "anchor": false,
+      "leaf_count": 7,
+      "symmetry": "symmetric",
+      "position_constraint": "none",
+      "technique_complexity": "compound",
+      "expectation_class": "must_complete"
+    },
+    {
+      "slot": "C-03",
+      "case_id": "leaves-07-asymmetric-01",
+      "anchor": false,
+      "leaf_count": 7,
+      "symmetry": "asymmetric",
+      "position_constraint": "specified",
+      "technique_complexity": "compound",
+      "expectation_class": "safe_partial_allowed"
+    },
+    {
+      "slot": "C-04",
+      "case_id": "leaves-08-symmetric-01",
+      "anchor": false,
+      "leaf_count": 8,
+      "symmetry": "symmetric",
+      "position_constraint": "none",
+      "technique_complexity": "simple",
+      "expectation_class": "safe_partial_allowed"
+    },
+    {
+      "slot": "C-05",
+      "case_id": "leaves-08-asymmetric-01",
+      "anchor": false,
+      "leaf_count": 8,
+      "symmetry": "asymmetric",
+      "position_constraint": "specified",
+      "technique_complexity": "simple",
+      "expectation_class": "safe_partial_allowed"
+    },
+    {
+      "slot": "C-06",
+      "case_id": "leaves-08-asymmetric-02",
+      "anchor": false,
+      "leaf_count": 8,
+      "symmetry": "asymmetric",
+      "position_constraint": "none",
+      "technique_complexity": "compound",
+      "expectation_class": "safe_partial_allowed"
+    },
+    {
+      "slot": "D-01",
+      "case_id": "leaves-09-symmetric-01",
+      "anchor": false,
+      "leaf_count": 9,
+      "symmetry": "symmetric",
+      "position_constraint": "specified",
+      "technique_complexity": "simple",
+      "expectation_class": "must_complete"
+    },
+    {
+      "slot": "D-02",
+      "case_id": "leaves-09-symmetric-02",
+      "anchor": false,
+      "leaf_count": 9,
+      "symmetry": "symmetric",
+      "position_constraint": "none",
+      "technique_complexity": "compound",
+      "expectation_class": "must_complete"
+    },
+    {
+      "slot": "D-03",
+      "case_id": "leaves-09-asymmetric-01",
+      "anchor": false,
+      "leaf_count": 9,
+      "symmetry": "asymmetric",
+      "position_constraint": "specified",
+      "technique_complexity": "compound",
+      "expectation_class": "safe_partial_allowed"
+    },
+    {
+      "slot": "D-04",
+      "case_id": "leaves-10-symmetric-01",
+      "anchor": false,
+      "leaf_count": 10,
+      "symmetry": "symmetric",
+      "position_constraint": "none",
+      "technique_complexity": "simple",
+      "expectation_class": "safe_partial_allowed"
+    },
+    {
+      "slot": "D-05",
+      "case_id": "leaves-10-asymmetric-01",
+      "anchor": false,
+      "leaf_count": 10,
+      "symmetry": "asymmetric",
+      "position_constraint": "specified",
+      "technique_complexity": "simple",
+      "expectation_class": "safe_partial_allowed"
+    },
+    {
+      "slot": "D-06",
+      "case_id": "leaves-10-asymmetric-02",
+      "anchor": false,
+      "leaf_count": 10,
+      "symmetry": "asymmetric",
+      "position_constraint": "none",
+      "technique_complexity": "compound",
+      "expectation_class": "safe_partial_allowed"
+    },
+    {
+      "slot": "E-01",
+      "case_id": "leaves-11-symmetric-01",
+      "anchor": false,
+      "leaf_count": 11,
+      "symmetry": "symmetric",
+      "position_constraint": "specified",
+      "technique_complexity": "simple",
+      "expectation_class": "must_complete"
+    },
+    {
+      "slot": "E-02",
+      "case_id": "leaves-11-symmetric-02",
+      "anchor": false,
+      "leaf_count": 11,
+      "symmetry": "symmetric",
+      "position_constraint": "none",
+      "technique_complexity": "compound",
+      "expectation_class": "safe_partial_allowed"
+    },
+    {
+      "slot": "E-03",
+      "case_id": "leaves-11-asymmetric-01",
+      "anchor": false,
+      "leaf_count": 11,
+      "symmetry": "asymmetric",
+      "position_constraint": "specified",
+      "technique_complexity": "compound",
+      "expectation_class": "safe_partial_allowed"
+    },
+    {
+      "slot": "E-04",
+      "case_id": "leaves-12-symmetric-01",
+      "anchor": false,
+      "leaf_count": 12,
+      "symmetry": "symmetric",
+      "position_constraint": "none",
+      "technique_complexity": "simple",
+      "expectation_class": "safe_partial_allowed"
+    },
+    {
+      "slot": "E-05",
+      "case_id": "leaves-12-asymmetric-01",
+      "anchor": false,
+      "leaf_count": 12,
+      "symmetry": "asymmetric",
+      "position_constraint": "specified",
+      "technique_complexity": "simple",
+      "expectation_class": "safe_partial_allowed"
+    },
+    {
+      "slot": "E-06",
+      "case_id": "leaves-12-asymmetric-02",
+      "anchor": false,
+      "leaf_count": 12,
+      "symmetry": "asymmetric",
+      "position_constraint": "none",
+      "technique_complexity": "compound",
+      "expectation_class": "safe_partial_allowed"
+    }
+  ],
+  "cases": [
+    {
+      "id": "pilot-head-tail-four-legs",
+      "display_name": null,
+      "planned_slot": null,
+      "counts_toward_target": false,
+      "source": {
+        "kind": "repository-derived-synthetic",
+        "title": "head-tail-four-legs product-path probe",
+        "uri": "repo:crates/ori3-propose/tests/end_to_end.rs#head_tail_four_legs",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Derived from the existing end-to-end product-path sample."
+      },
+      "input": {
+        "fixture": "pilot-head-tail-four-legs.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "bfefacead700fa9a"
+        },
+        "structure_hash": "2edf5d6a7a0b6d64",
+        "normalized_input_hash": "dae7abd7ae461031"
+      },
+      "strata": {
+        "band": "B",
+        "leaf_count": 6,
+        "symmetry": "symmetric",
+        "position_constraint": "none",
+        "technique_complexity": "simple"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "The rooted star has interchangeable head-tail and four equal leg branches.",
+        "position_evidence": "Every leaf omits tip_pos_2d; mixed position constraints are forbidden.",
+        "technique_reference": "Synthetic one-level radial-tree pilot, preclassified simple only to exercise the schema; it is not one of the 30 works."
+      },
+      "target": {
+        "class": "must_complete",
+        "criterion": "at-least-one-checked-to-finish-and-all-returned-plans-safe"
+      },
+      "recorded_current": {
+        "outcome": "candidates",
+        "execution_failure": null,
+        "selected_candidate_index": 0,
+        "candidate_count": 4,
+        "candidate_statuses": [
+          "checked_to_finish",
+          "no_plan",
+          "checked_to_finish",
+          "no_plan"
+        ],
+        "stop_reasons": [
+          "goal_reached",
+          "goal_reached",
+          "goal_reached",
+          "goal_reached"
+        ],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0.2053430487484339,
+          "width": 0.27406259779752745,
+          "position": 0
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0.2053430487484339,
+          "width": 0.23347375796813508,
+          "position": 0
+        },
+        "initial_weighted_gap": 0.2601555683079394,
+        "final_weighted_gap": 0.2520378003420609,
+        "improvement_absolute": 0.008117767965878486,
+        "improvement_ratio": 0.031203514184519374,
+        "safety": {
+          "all_finite": true,
+          "max_seam_gap": 1.5700924586837752e-16,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": true,
+          "skipped_steps": 0,
+          "verification_failure": false,
+          "report_passed": true
+        },
+        "normalized_candidate_hash": "2c322c9a20f7423b",
+        "stop_reason_hash": "ab89cc13a22c44fd",
+        "normalized_result_hash": "2b95b160c8cc4c81",
+        "all_returned_plans_safe": true,
+        "assessment": {
+          "functional_met": true,
+          "safety_met": true,
+          "improvement_met": null,
+          "target_met": true,
+          "distance_to_target": 0.2520378003420609,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": []
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": 8873,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": null,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "The maximum of three full-product-path debug pilot measurements was 8873ms. Stage 3-B uses the heavier crane observation to set 90000ms debug, 10000ms release, and 300000ms release-corpus limits; stage 3-C will replace single-run evidence with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "crane",
+      "display_name": "折り鶴",
+      "planned_slot": "A-01",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "repository-anchor",
+        "title": "Traditional origami crane benchmark target",
+        "uri": "repo:crates/ori3-propose/tests/acceptance.rs#crane_sample",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Finish target copied from acceptance.rs::crane_sample; independent CP is tests/fixtures/cp-crane.json and the 11-step reference is ori3-layers acceptance_crane.rs::crane."
+      },
+      "input": {
+        "fixture": "crane.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "2716c295dabe6bf1"
+        },
+        "structure_hash": "99f72449bbac0a2c",
+        "normalized_input_hash": "5227759266b3de78"
+      },
+      "strata": {
+        "band": "A",
+        "leaf_count": 4,
+        "symmetry": "symmetric",
+        "position_constraint": "specified",
+        "technique_complexity": "compound"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "At the 1e-9 corpus quantum, leaves 2 and 4 have identical normalized length, width factor, and specified position; swapping that pair is a non-identity rooted-star automorphism.",
+        "position_evidence": "Every leaf copies tip_pos_2d from acceptance.rs::crane_sample.",
+        "technique_reference": "The independent 11-step reference uses squash folds, petal folds, and inside-reverse folds; therefore it is compound."
+      },
+      "target": {
+        "class": "must_complete",
+        "criterion": "at-least-one-checked-to-finish-and-all-returned-plans-safe"
+      },
+      "recorded_current": {
+        "outcome": "candidates",
+        "execution_failure": null,
+        "selected_candidate_index": 1,
+        "candidate_count": 4,
+        "candidate_statuses": [
+          "partial",
+          "partial",
+          "partial",
+          "partial"
+        ],
+        "stop_reasons": [
+          "state_cap",
+          "state_cap",
+          "state_cap",
+          "state_cap"
+        ],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0.508771452475302,
+          "width": 2.1718483343174517,
+          "position": 0.19301862687928262
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0.4318109514068173,
+          "width": 1.0922866559121593,
+          "position": 0.19635169289161605
+        },
+        "initial_weighted_gap": 1.136159746218075,
+        "final_weighted_gap": 0.8466199754808652,
+        "improvement_absolute": 0.2895397707372098,
+        "improvement_ratio": 0.2548407226193309,
+        "safety": {
+          "all_finite": true,
+          "max_seam_gap": 4.127283025443763e-15,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": true,
+          "skipped_steps": 0,
+          "verification_failure": false,
+          "report_passed": true
+        },
+        "normalized_candidate_hash": "637c4163545987c7",
+        "stop_reason_hash": "d9091f98983dac39",
+        "normalized_result_hash": "d8ba4e44b58e4c82",
+        "all_returned_plans_safe": true,
+        "assessment": {
+          "functional_met": false,
+          "safety_met": true,
+          "improvement_met": null,
+          "target_met": false,
+          "distance_to_target": 0.8466199754808652,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": [
+            "not_checked_to_finish"
+          ]
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 5339,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "The initial debug observation exceeded 27000ms. A 2026-08-25 debug remeasurement hit the unchanged 30000ms product search watchdog and the case test ended at 43890ms, below the separate 90000ms outer limit but without a completed debug result. Release completed in 5339ms against the 10000ms case limit; the 30-case release limit is 300000ms. Stage 3-C will replace single-run release evidence with five runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "yakko",
+      "display_name": "やっこさん",
+      "planned_slot": "A-02",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "repository-anchor",
+        "title": "Traditional yakko benchmark target",
+        "uri": "repo:crates/ori3-propose/tests/acceptance.rs#yakko_sample",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Finish target copied from acceptance.rs::yakko_sample; the independent double-blintz reference is ori3-rigid/tests/acceptance_yakko.rs."
+      },
+      "input": {
+        "fixture": "yakko.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "6d50284648fa4865"
+        },
+        "structure_hash": "64779ecee563d22c",
+        "normalized_input_hash": "258ae85eca5047d2"
+      },
+      "strata": {
+        "band": "A",
+        "leaf_count": 4,
+        "symmetry": "symmetric",
+        "position_constraint": "specified",
+        "technique_complexity": "simple"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "All four branches have equal normalized length and width factor, and the four specified positions are square corners preserved by non-identity reflections.",
+        "position_evidence": "Every leaf copies one of the four target positions from acceptance.rs::yakko_sample.",
+        "technique_reference": "The independent design is two blintz stages composed only of ordinary one-line folds; classification follows that reference, not solver driver count."
+      },
+      "target": {
+        "class": "must_complete",
+        "criterion": "at-least-one-checked-to-finish-and-all-returned-plans-safe"
+      },
+      "recorded_current": {
+        "outcome": "candidates",
+        "execution_failure": null,
+        "selected_candidate_index": 0,
+        "candidate_count": 1,
+        "candidate_statuses": [
+          "no_plan"
+        ],
+        "stop_reasons": [
+          "goal_reached"
+        ],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0,
+          "width": 4.710277376051326e-16,
+          "position": 0
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0,
+          "width": 4.710277376051326e-16,
+          "position": 0
+        },
+        "initial_weighted_gap": 9.420554752102651e-17,
+        "final_weighted_gap": 9.420554752102651e-17,
+        "improvement_absolute": 0,
+        "improvement_ratio": 0,
+        "safety": {
+          "all_finite": true,
+          "max_seam_gap": 0,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": true,
+          "skipped_steps": 0,
+          "verification_failure": false,
+          "report_passed": true
+        },
+        "normalized_candidate_hash": "a5e53156e474c4a4",
+        "stop_reason_hash": "44ea6ebd54d09432",
+        "normalized_result_hash": "925cd859ef4a9904",
+        "all_returned_plans_safe": true,
+        "assessment": {
+          "functional_met": false,
+          "safety_met": false,
+          "improvement_met": null,
+          "target_met": false,
+          "distance_to_target": null,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": [
+            "no_usable_plan",
+            "safety_not_verified"
+          ]
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 1,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=1ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "bird-base",
+      "display_name": "鳥の基本形",
+      "planned_slot": "A-03",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "repository-anchor",
+        "title": "Traditional bird-base benchmark target",
+        "uri": "repo:crates/ori3-propose/tests/acceptance.rs#bird_base_sample",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Finish target copied from acceptance.rs::bird_base_sample; independent CP is tests/fixtures/cp-bird-base.json and the six-step reference is acceptance_crane.rs::bird_base."
+      },
+      "input": {
+        "fixture": "bird-base.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "4ddd923c84aa7d51"
+        },
+        "structure_hash": "899ef3ebcb743f84",
+        "normalized_input_hash": "b998833d37342e90"
+      },
+      "strata": {
+        "band": "A",
+        "leaf_count": 4,
+        "symmetry": "symmetric",
+        "position_constraint": "specified",
+        "technique_complexity": "compound"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "Leaves 1/3 and leaves 2/4 form equal normalized attribute pairs; pair swaps preserve the rooted star and specified positions at the corpus quantum.",
+        "position_evidence": "Every leaf copies tip_pos_2d from acceptance.rs::bird_base_sample.",
+        "technique_reference": "The independent six-step reference includes squash and front/back petal folds with open-to-back layer handling; therefore it is compound."
+      },
+      "target": {
+        "class": "must_complete",
+        "criterion": "at-least-one-checked-to-finish-and-all-returned-plans-safe"
+      },
+      "recorded_current": {
+        "outcome": "candidates",
+        "execution_failure": null,
+        "selected_candidate_index": 0,
+        "candidate_count": 4,
+        "candidate_statuses": [
+          "partial",
+          "partial",
+          "partial",
+          "partial"
+        ],
+        "stop_reasons": [
+          "state_cap",
+          "state_cap",
+          "state_cap",
+          "state_cap"
+        ],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0.23060776057517585,
+          "width": 2.674808525052554,
+          "position": 0.22910200463448294
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0.23060776057517585,
+          "width": 2.174452192336924,
+          "position": 0.22910200463448288
+        },
+        "initial_weighted_gap": 0.9946714702201696,
+        "final_weighted_gap": 0.8946002036770435,
+        "improvement_absolute": 0.10007126654312604,
+        "improvement_ratio": 0.10060735583476156,
+        "safety": {
+          "all_finite": true,
+          "max_seam_gap": 2.237726045655905e-16,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": true,
+          "skipped_steps": 0,
+          "verification_failure": false,
+          "report_passed": true
+        },
+        "normalized_candidate_hash": "f00d6438c21fc2ca",
+        "stop_reason_hash": "d9091f98983dac39",
+        "normalized_result_hash": "f6ee3728a6d2801b",
+        "all_returned_plans_safe": true,
+        "assessment": {
+          "functional_met": false,
+          "safety_met": true,
+          "improvement_met": null,
+          "target_met": false,
+          "distance_to_target": 0.8946002036770435,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": [
+            "not_checked_to_finish"
+          ]
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 932,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=932ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "leaves-03-asymmetric-01",
+      "display_name": null,
+      "planned_slot": "A-04",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "repository-authored-synthetic",
+        "title": "Three-tip asymmetric radial target",
+        "uri": "repo:crates/ori3-propose/tests/fixtures/corpus/leaves-03-asymmetric-01.json",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Original neutral Band-A three-tip design authored before proposal execution; no external work copied."
+      },
+      "input": {
+        "fixture": "leaves-03-asymmetric-01.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "269ceb1d49e9a03e"
+        },
+        "structure_hash": "e7dcbf86b9c8971a",
+        "normalized_input_hash": "b934a1320fe1e77b"
+      },
+      "strata": {
+        "band": "A",
+        "leaf_count": 3,
+        "symmetry": "asymmetric",
+        "position_constraint": "none",
+        "technique_complexity": "simple"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "The three direct branches have distinct normalized length and width-factor pairs, so no non-identity rooted-tree automorphism preserves them.",
+        "position_evidence": "All three leaves omit tip_pos_2d; no mixed constraint is present.",
+        "technique_reference": "Pre-execution reference A-04 uses sequential ordinary folds with one driver line per step and no packet, open-close, or named compound operation."
+      },
+      "target": {
+        "class": "must_complete",
+        "criterion": "at-least-one-checked-to-finish-and-all-returned-plans-safe"
+      },
+      "recorded_current": {
+        "outcome": "candidates",
+        "execution_failure": null,
+        "selected_candidate_index": 0,
+        "candidate_count": 4,
+        "candidate_statuses": [
+          "checked_to_finish",
+          "checked_to_finish",
+          "checked_to_finish",
+          "checked_to_finish"
+        ],
+        "stop_reasons": [
+          "goal_reached",
+          "goal_reached",
+          "goal_reached",
+          "goal_reached"
+        ],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0.4448938068876532,
+          "width": 0.2707923764073834,
+          "position": 0
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0.4448938068876532,
+          "width": 0.18004544596289573,
+          "position": 0
+        },
+        "initial_weighted_gap": 0.4990522821691299,
+        "final_weighted_gap": 0.48090289608023234,
+        "improvement_absolute": 0.018149386088897546,
+        "improvement_ratio": 0.036367704822451205,
+        "safety": {
+          "all_finite": true,
+          "max_seam_gap": 3.1401849173675503e-16,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": true,
+          "skipped_steps": 0,
+          "verification_failure": false,
+          "report_passed": true
+        },
+        "normalized_candidate_hash": "295cb4cbf1891458",
+        "stop_reason_hash": "ab89cc13a22c44fd",
+        "normalized_result_hash": "81963e99696aaef9",
+        "all_returned_plans_safe": true,
+        "assessment": {
+          "functional_met": true,
+          "safety_met": true,
+          "improvement_met": null,
+          "target_met": true,
+          "distance_to_target": 0.48090289608023234,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": []
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 1209,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=1209ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "leaves-03-asymmetric-02",
+      "display_name": null,
+      "planned_slot": "A-05",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "repository-authored-synthetic",
+        "title": "Three-tip asymmetric offset-fork target",
+        "uri": "repo:crates/ori3-propose/tests/fixtures/corpus/leaves-03-asymmetric-02.json",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Original neutral Band-A three-tip design authored before proposal execution; no external work copied."
+      },
+      "input": {
+        "fixture": "leaves-03-asymmetric-02.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "1835ef9ae0c8db5c"
+        },
+        "structure_hash": "d1c1555d35d5077d",
+        "normalized_input_hash": "ff43340687a78095"
+      },
+      "strata": {
+        "band": "A",
+        "leaf_count": 3,
+        "symmetry": "asymmetric",
+        "position_constraint": "none",
+        "technique_complexity": "simple"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "The root leaf differs from the internal fork, and the fork's two leaves have distinct normalized length and width-factor pairs; no non-identity rooted-tree automorphism remains.",
+        "position_evidence": "All three leaves omit tip_pos_2d; no mixed constraint is present.",
+        "technique_reference": "Pre-execution reference A-05 uses sequential ordinary one-line folds only, with no packet, open-close, or named compound operation."
+      },
+      "target": {
+        "class": "safe_partial_allowed",
+        "criterion": "safe-verified-plan-with-positive-weighted-gap-improvement"
+      },
+      "recorded_current": {
+        "outcome": "candidates",
+        "execution_failure": null,
+        "selected_candidate_index": 0,
+        "candidate_count": 4,
+        "candidate_statuses": [
+          "checked_to_finish",
+          "checked_to_finish",
+          "checked_to_finish",
+          "checked_to_finish"
+        ],
+        "stop_reasons": [
+          "goal_reached",
+          "goal_reached",
+          "goal_reached",
+          "goal_reached"
+        ],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0.164809732816899,
+          "width": 0.30660282441825565,
+          "position": 0
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0.3232346030612913,
+          "width": 0.24754315640795377,
+          "position": 0
+        },
+        "initial_weighted_gap": 0.22613029770055015,
+        "final_weighted_gap": 0.3727432343428821,
+        "improvement_absolute": -0.14661293664233194,
+        "improvement_ratio": -0.6483560059540631,
+        "safety": {
+          "all_finite": true,
+          "max_seam_gap": 2.737540556079144e-15,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": true,
+          "skipped_steps": 0,
+          "verification_failure": false,
+          "report_passed": true
+        },
+        "normalized_candidate_hash": "c7d62e5d3e36a198",
+        "stop_reason_hash": "ab89cc13a22c44fd",
+        "normalized_result_hash": "5eddf66e4a4788c0",
+        "all_returned_plans_safe": true,
+        "assessment": {
+          "functional_met": false,
+          "safety_met": true,
+          "improvement_met": false,
+          "target_met": false,
+          "distance_to_target": 0.3727432343428821,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": [
+            "non_positive_improvement"
+          ]
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 1299,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=1299ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "leaves-03-asymmetric-03",
+      "display_name": null,
+      "planned_slot": "A-06",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "repository-authored-synthetic",
+        "title": "Three-tip asymmetric compound-pocket target",
+        "uri": "repo:crates/ori3-propose/tests/fixtures/corpus/leaves-03-asymmetric-03.json",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Original neutral Band-A three-tip design authored before proposal execution; no external work copied."
+      },
+      "input": {
+        "fixture": "leaves-03-asymmetric-03.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "d52895ed0e13a3ab"
+        },
+        "structure_hash": "8b65907cd71b91e4",
+        "normalized_input_hash": "360683e2a610d462"
+      },
+      "strata": {
+        "band": "A",
+        "leaf_count": 3,
+        "symmetry": "asymmetric",
+        "position_constraint": "none",
+        "technique_complexity": "compound"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "The root leaf differs from the internal fork, and the fork leaves have distinct normalized length and width-factor pairs; no non-identity rooted-tree automorphism remains.",
+        "position_evidence": "All three leaves omit tip_pos_2d; no mixed constraint is present.",
+        "technique_reference": "Pre-execution reference A-06 requires a layer packet open-close followed by a squash/petal operation, so it is compound."
+      },
+      "target": {
+        "class": "safe_partial_allowed",
+        "criterion": "safe-verified-plan-with-positive-weighted-gap-improvement"
+      },
+      "recorded_current": {
+        "outcome": "candidates",
+        "execution_failure": null,
+        "selected_candidate_index": 0,
+        "candidate_count": 4,
+        "candidate_statuses": [
+          "checked_to_finish",
+          "checked_to_finish",
+          "checked_to_finish",
+          "checked_to_finish"
+        ],
+        "stop_reasons": [
+          "goal_reached",
+          "goal_reached",
+          "goal_reached",
+          "goal_reached"
+        ],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0.08732140585940971,
+          "width": 0.3295710330743967,
+          "position": 0
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0.08732140585940971,
+          "width": 0.15773852341256808,
+          "position": 0
+        },
+        "initial_weighted_gap": 0.15323561247428907,
+        "final_weighted_gap": 0.11886911054192334,
+        "improvement_absolute": 0.034366501932365734,
+        "improvement_ratio": 0.2242722913913499,
+        "safety": {
+          "all_finite": true,
+          "max_seam_gap": 2.2929868617541516e-16,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": true,
+          "skipped_steps": 0,
+          "verification_failure": false,
+          "report_passed": true
+        },
+        "normalized_candidate_hash": "3f00186340c055ce",
+        "stop_reason_hash": "ab89cc13a22c44fd",
+        "normalized_result_hash": "2183ec37a62b2a2c",
+        "all_returned_plans_safe": true,
+        "assessment": {
+          "functional_met": true,
+          "safety_met": true,
+          "improvement_met": true,
+          "target_met": true,
+          "distance_to_target": 0.11886911054192334,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": []
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 119,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=119ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "frog",
+      "display_name": "カエル",
+      "planned_slot": "B-01",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "repository-anchor",
+        "title": "Traditional origami frog benchmark target",
+        "uri": "repo:crates/ori3-propose/tests/containment.rs#frog_skeleton",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Five-tip frog skeleton derived from the repository containment fixture and the independent frog acceptance reference; no external fixture copied."
+      },
+      "input": {
+        "fixture": "frog.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "eea5eb49e961ff95"
+        },
+        "structure_hash": "a47602d5f129bc9c",
+        "normalized_input_hash": "e4753d909193c812"
+      },
+      "strata": {
+        "band": "B",
+        "leaf_count": 5,
+        "symmetry": "symmetric",
+        "position_constraint": "specified",
+        "technique_complexity": "compound"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "Equal branches at four square corners plus the center are preserved by non-identity square reflections and rotations.",
+        "position_evidence": "Every one of the five leaves has a specified tip_pos_2d; no mixed constraint is present.",
+        "technique_reference": "The independent frog reference uses layered squash and petal/open-close operations, so it is compound."
+      },
+      "target": {
+        "class": "must_complete",
+        "criterion": "at-least-one-checked-to-finish-and-all-returned-plans-safe"
+      },
+      "recorded_current": {
+        "outcome": "candidates",
+        "execution_failure": null,
+        "selected_candidate_index": 0,
+        "candidate_count": 1,
+        "candidate_statuses": [
+          "no_plan"
+        ],
+        "stop_reasons": [
+          "state_cap"
+        ],
+        "initial_gaps": {
+          "count": 0.2,
+          "length": 0.2,
+          "width": 0.20000000000000012,
+          "position": 0.2
+        },
+        "final_gaps": {
+          "count": 0.2,
+          "length": 0.2,
+          "width": 0.20000000000000012,
+          "position": 0.2
+        },
+        "initial_weighted_gap": 0.6400000000000001,
+        "final_weighted_gap": 0.6400000000000001,
+        "improvement_absolute": 0,
+        "improvement_ratio": 0,
+        "safety": {
+          "all_finite": true,
+          "max_seam_gap": 0,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": true,
+          "skipped_steps": 0,
+          "verification_failure": false,
+          "report_passed": true
+        },
+        "normalized_candidate_hash": "769b099637dcc4ee",
+        "stop_reason_hash": "be36095e6dac285c",
+        "normalized_result_hash": "f3c90f2349075bd8",
+        "all_returned_plans_safe": true,
+        "assessment": {
+          "functional_met": false,
+          "safety_met": false,
+          "improvement_met": null,
+          "target_met": false,
+          "distance_to_target": null,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": [
+            "no_usable_plan",
+            "safety_not_verified"
+          ]
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 448,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=448ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "leaves-05-symmetric-01",
+      "display_name": null,
+      "planned_slot": "B-02",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "repository-authored-synthetic",
+        "title": "Five-tip paired radial target",
+        "uri": "repo:crates/ori3-propose/tests/fixtures/corpus/leaves-05-symmetric-01.json",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Original neutral Band-B five-tip design authored before proposal execution; no external work copied."
+      },
+      "input": {
+        "fixture": "leaves-05-symmetric-01.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "351f693e7e59ff1d"
+        },
+        "structure_hash": "8e2eeb23ac318e56",
+        "normalized_input_hash": "e240a23d156ee40c"
+      },
+      "strata": {
+        "band": "B",
+        "leaf_count": 5,
+        "symmetry": "symmetric",
+        "position_constraint": "none",
+        "technique_complexity": "simple"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "Two equal branch pairs admit non-identity sibling swaps while preserving normalized length and width factor.",
+        "position_evidence": "All five leaves omit tip_pos_2d; no mixed constraint is present.",
+        "technique_reference": "Pre-execution reference B-02 uses sequential ordinary one-line folds only."
+      },
+      "target": {
+        "class": "must_complete",
+        "criterion": "at-least-one-checked-to-finish-and-all-returned-plans-safe"
+      },
+      "recorded_current": {
+        "outcome": "candidates",
+        "execution_failure": null,
+        "selected_candidate_index": 0,
+        "candidate_count": 4,
+        "candidate_statuses": [
+          "no_plan",
+          "no_plan",
+          "no_plan",
+          "no_plan"
+        ],
+        "stop_reasons": [
+          "goal_reached",
+          "goal_reached",
+          "goal_reached",
+          "goal_reached"
+        ],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0.24082685724629754,
+          "width": 0.1939518378622076,
+          "position": 0
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0.24082685724629754,
+          "width": 0.1939518378622076,
+          "position": 0
+        },
+        "initial_weighted_gap": 0.2796172248187391,
+        "final_weighted_gap": 0.2796172248187391,
+        "improvement_absolute": 0,
+        "improvement_ratio": 0,
+        "safety": {
+          "all_finite": true,
+          "max_seam_gap": 0,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": true,
+          "skipped_steps": 0,
+          "verification_failure": false,
+          "report_passed": true
+        },
+        "normalized_candidate_hash": "0fafd0bffda3007b",
+        "stop_reason_hash": "ab89cc13a22c44fd",
+        "normalized_result_hash": "b2839abc2be98a68",
+        "all_returned_plans_safe": true,
+        "assessment": {
+          "functional_met": false,
+          "safety_met": false,
+          "improvement_met": null,
+          "target_met": false,
+          "distance_to_target": null,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": [
+            "no_usable_plan",
+            "safety_not_verified"
+          ]
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 4,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=4ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "leaves-05-asymmetric-01",
+      "display_name": null,
+      "planned_slot": "B-03",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "repository-derived-synthetic",
+        "title": "Five-tip positioned radial target",
+        "uri": "repo:crates/ori3-propose/tests/finish.rs#star_with_positions",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Topology and pentagonal placement pattern adapted from the repository finish test; leaf attributes were fixed before proposal execution."
+      },
+      "input": {
+        "fixture": "leaves-05-asymmetric-01.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "f944361a417dba31"
+        },
+        "structure_hash": "04501f33976e8401",
+        "normalized_input_hash": "9c2eda4b80e711a9"
+      },
+      "strata": {
+        "band": "B",
+        "leaf_count": 5,
+        "symmetry": "asymmetric",
+        "position_constraint": "specified",
+        "technique_complexity": "simple"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "All five normalized length and width-factor pairs are distinct, so no non-identity rooted-star automorphism preserves the attributed tree even though positions form a pentagon.",
+        "position_evidence": "Every leaf has a specified tip_pos_2d; no mixed constraint is present.",
+        "technique_reference": "Pre-execution reference B-03 uses sequential ordinary one-line folds only."
+      },
+      "target": {
+        "class": "must_complete",
+        "criterion": "at-least-one-checked-to-finish-and-all-returned-plans-safe"
+      },
+      "recorded_current": {
+        "outcome": "candidates",
+        "execution_failure": null,
+        "selected_candidate_index": 0,
+        "candidate_count": 1,
+        "candidate_statuses": [
+          "partial"
+        ],
+        "stop_reasons": [
+          "state_cap"
+        ],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0.09109260304912463,
+          "width": 0.530633995164113,
+          "position": 5.313440584741457e-17
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0.2889422218524545,
+          "width": 0.41319888907574737,
+          "position": 0.3034528236120582
+        },
+        "initial_weighted_gap": 0.1972194020819473,
+        "final_weighted_gap": 0.6750348232796621,
+        "improvement_absolute": -0.4778154211977148,
+        "improvement_ratio": -2.4227607231015544,
+        "safety": {
+          "all_finite": true,
+          "max_seam_gap": 1.375275216425332e-14,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": true,
+          "skipped_steps": 0,
+          "verification_failure": false,
+          "report_passed": true
+        },
+        "normalized_candidate_hash": "a39b73560853cd40",
+        "stop_reason_hash": "be36095e6dac285c",
+        "normalized_result_hash": "df5f8c57ddfb28f3",
+        "all_returned_plans_safe": true,
+        "assessment": {
+          "functional_met": false,
+          "safety_met": true,
+          "improvement_met": null,
+          "target_met": false,
+          "distance_to_target": 0.6750348232796621,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": [
+            "not_checked_to_finish"
+          ]
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 9672,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=9672ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "leaves-06-symmetric-01",
+      "display_name": null,
+      "planned_slot": "B-04",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "repository-derived-synthetic",
+        "title": "Six-tip depth-three branch target",
+        "uri": "repo:crates/ori3-propose/tests/end_to_end.rs#depth_three_branch",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Skeleton topology and attributes copied from the repository end-to-end depth_three_branch fixture under the repository MIT license."
+      },
+      "input": {
+        "fixture": "leaves-06-symmetric-01.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "6769eb9f37fd606e"
+        },
+        "structure_hash": "f9d7a9d89c6d6060",
+        "normalized_input_hash": "3083872562dd1311"
+      },
+      "strata": {
+        "band": "B",
+        "leaf_count": 6,
+        "symmetry": "symmetric",
+        "position_constraint": "none",
+        "technique_complexity": "compound"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "Equal sibling leaves under both root and internal branch admit non-identity rooted-tree swaps preserving all normalized attributes.",
+        "position_evidence": "All six leaves omit tip_pos_2d; no mixed constraint is present.",
+        "technique_reference": "Pre-execution reference B-04 uses a layered packet at the depth-three branch and an open-close operation, so it is compound."
+      },
+      "target": {
+        "class": "safe_partial_allowed",
+        "criterion": "safe-verified-plan-with-positive-weighted-gap-improvement"
+      },
+      "recorded_current": {
+        "outcome": "candidates",
+        "execution_failure": null,
+        "selected_candidate_index": 0,
+        "candidate_count": 4,
+        "candidate_statuses": [
+          "no_plan",
+          "no_plan",
+          "no_plan",
+          "no_plan"
+        ],
+        "stop_reasons": [
+          "goal_reached",
+          "goal_reached",
+          "goal_reached",
+          "goal_reached"
+        ],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0.2122659447156051,
+          "width": 0.22112131549678637,
+          "position": 0
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0.2122659447156051,
+          "width": 0.22112131549678637,
+          "position": 0
+        },
+        "initial_weighted_gap": 0.25649020781496235,
+        "final_weighted_gap": 0.25649020781496235,
+        "improvement_absolute": 0,
+        "improvement_ratio": 0,
+        "safety": {
+          "all_finite": true,
+          "max_seam_gap": 0,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": true,
+          "skipped_steps": 0,
+          "verification_failure": false,
+          "report_passed": true
+        },
+        "normalized_candidate_hash": "7c20bf206149688d",
+        "stop_reason_hash": "ab89cc13a22c44fd",
+        "normalized_result_hash": "a9e3f23824d4a35e",
+        "all_returned_plans_safe": true,
+        "assessment": {
+          "functional_met": false,
+          "safety_met": false,
+          "improvement_met": false,
+          "target_met": false,
+          "distance_to_target": null,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": [
+            "no_usable_plan",
+            "safety_not_verified"
+          ]
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 19,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=19ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "leaves-06-asymmetric-01",
+      "display_name": null,
+      "planned_slot": "B-05",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "repository-derived-synthetic",
+        "title": "Positioned asymmetric depth-three branch reference",
+        "uri": "repo:crates/ori3-propose/tests/end_to_end.rs#depth_three_branch",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Derived from the repository depth_three_branch topology. Its six distinct leaf attributes and radius-0.9 hexagonal positions were fixed before any proposal execution."
+      },
+      "input": {
+        "fixture": "leaves-06-asymmetric-01.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "4f389c5be02d7208"
+        },
+        "structure_hash": "9f7e1310da3a13ad",
+        "normalized_input_hash": "6d0a2934d635385f"
+      },
+      "strata": {
+        "band": "B",
+        "leaf_count": 6,
+        "symmetry": "asymmetric",
+        "position_constraint": "specified",
+        "technique_complexity": "compound"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "Root leaves 2, 4, and 5 have distinct normalized-length/width labels, and node-1 leaves 3, 6, and 7 also have distinct labels. The internal subtree cannot map to a leaf, so only the identity rooted-tree automorphism remains.",
+        "position_evidence": "Every leaf 2 through 7 has exactly one distinct, finite tip_pos_2d inside [-1, 1]; root 0 and internal node 1 omit it.",
+        "technique_reference": "Predeclared authoring reference R-B05 opens and closes the node-1 three-leaf packet, then uses a two-driver pleat to align that packet with the three root leaves. Either operation independently satisfies the compound contract."
+      },
+      "target": {
+        "class": "safe_partial_allowed",
+        "criterion": "safe-verified-plan-with-positive-weighted-gap-improvement"
+      },
+      "recorded_current": {
+        "outcome": "candidates",
+        "execution_failure": null,
+        "selected_candidate_index": 0,
+        "candidate_count": 1,
+        "candidate_statuses": [
+          "partial"
+        ],
+        "stop_reasons": [
+          "state_cap"
+        ],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0.11228025597590807,
+          "width": 0.5251707741183229,
+          "position": 3.925231146709437e-17
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0.16941689894441725,
+          "width": 0.3684404043211588,
+          "position": 0.09722988459870985
+        },
+        "initial_weighted_gap": 0.21731441079957267,
+        "final_weighted_gap": 0.3403348644073589,
+        "improvement_absolute": -0.12302045360778621,
+        "improvement_ratio": -0.5660943200000067,
+        "safety": {
+          "all_finite": true,
+          "max_seam_gap": 3.255842595535261e-15,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": true,
+          "skipped_steps": 0,
+          "verification_failure": false,
+          "report_passed": true
+        },
+        "normalized_candidate_hash": "087d416f66f5aaf1",
+        "stop_reason_hash": "be36095e6dac285c",
+        "normalized_result_hash": "55f00d8b475b8911",
+        "all_returned_plans_safe": true,
+        "assessment": {
+          "functional_met": false,
+          "safety_met": true,
+          "improvement_met": false,
+          "target_met": false,
+          "distance_to_target": 0.3403348644073589,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": [
+            "non_positive_improvement"
+          ]
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 26625,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=26625ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "leaves-06-asymmetric-02",
+      "display_name": null,
+      "planned_slot": "B-06",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "repository-derived-synthetic",
+        "title": "Six-leaf asymmetric radial reference",
+        "uri": "repo:crates/ori3-propose/tests/finish.rs#star_with_positions",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Derived from the six-leaf repository finish-metric radial tree with its positions intentionally omitted before proposal execution; this is a neutral synthetic case."
+      },
+      "input": {
+        "fixture": "leaves-06-asymmetric-02.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "58f67d7221ad7a95"
+        },
+        "structure_hash": "9cc37bc9348ae5e4",
+        "normalized_input_hash": "61a1907014d21f6a"
+      },
+      "strata": {
+        "band": "B",
+        "leaf_count": 6,
+        "symmetry": "asymmetric",
+        "position_constraint": "none",
+        "technique_complexity": "simple"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "Every leaf has a distinct normalized-length and width-factor pair, so no non-identity rooted-tree automorphism preserves the labeled star.",
+        "position_evidence": "All six leaves and the root omit tip_pos_2d; no mixed position constraint exists.",
+        "technique_reference": "Predeclared authoring reference R-B06 forms the six radial leaves with six independent one-line ordinary folds. It contains no multi-driver, packet, open-close, or named compound operation."
+      },
+      "target": {
+        "class": "safe_partial_allowed",
+        "criterion": "safe-verified-plan-with-positive-weighted-gap-improvement"
+      },
+      "recorded_current": {
+        "outcome": "candidates",
+        "execution_failure": null,
+        "selected_candidate_index": 0,
+        "candidate_count": 4,
+        "candidate_statuses": [
+          "checked_to_finish",
+          "checked_to_finish",
+          "checked_to_finish",
+          "partial"
+        ],
+        "stop_reasons": [
+          "goal_reached",
+          "goal_reached",
+          "goal_reached",
+          "state_cap"
+        ],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0.2281261621094527,
+          "width": 0.31040257583196657,
+          "position": 0
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0.33914328365619384,
+          "width": 0.22305944077233,
+          "position": 0
+        },
+        "initial_weighted_gap": 0.29020667727584604,
+        "final_weighted_gap": 0.3837551718106598,
+        "improvement_absolute": -0.09354849453481379,
+        "improvement_ratio": -0.32235128224115417,
+        "safety": {
+          "all_finite": true,
+          "max_seam_gap": 1.0516963306206114e-13,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": true,
+          "skipped_steps": 0,
+          "verification_failure": false,
+          "report_passed": true
+        },
+        "normalized_candidate_hash": "4b48a701a3d6572d",
+        "stop_reason_hash": "46771d506bf32b01",
+        "normalized_result_hash": "14bccd642b76a18e",
+        "all_returned_plans_safe": true,
+        "assessment": {
+          "functional_met": false,
+          "safety_met": true,
+          "improvement_met": false,
+          "target_met": false,
+          "distance_to_target": 0.3837551718106598,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": [
+            "non_positive_improvement"
+          ]
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 6027,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=6027ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "leaves-07-symmetric-01",
+      "display_name": null,
+      "planned_slot": "C-01",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "original-synthetic",
+        "title": "Seven-tip mirrored radial fan",
+        "uri": "repo:crates/ori3-propose/tests/fixtures/corpus/leaves-07-symmetric-01.json",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Original neutral benchmark structure authored for ORIGAMI3 before proposal execution; it does not represent a traditional named work."
+      },
+      "input": {
+        "fixture": "leaves-07-symmetric-01.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "5aba312f809e4957"
+        },
+        "structure_hash": "c300f1e4f9f63983",
+        "normalized_input_hash": "568e0b37f2c76af8"
+      },
+      "strata": {
+        "band": "C",
+        "leaf_count": 7,
+        "symmetry": "symmetric",
+        "position_constraint": "specified",
+        "technique_complexity": "simple"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "Reflection x -> -x fixes leaf 1 and swaps (2,3), (4,5), (6,7) while preserving normalized lengths, widths, and mirrored target positions.",
+        "position_evidence": "All seven leaves specify tip_pos_2d; the root omits it.",
+        "technique_reference": "Pre-execution reference revision 1 uses seven sequential single-driver, one-line ordinary folds only."
+      },
+      "target": {
+        "class": "must_complete",
+        "criterion": "at-least-one-checked-to-finish-and-all-returned-plans-safe"
+      },
+      "recorded_current": {
+        "outcome": "candidates",
+        "execution_failure": null,
+        "selected_candidate_index": 0,
+        "candidate_count": 1,
+        "candidate_statuses": [
+          "partial"
+        ],
+        "stop_reasons": [
+          "state_cap"
+        ],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0.14939151082230445,
+          "width": 0.5383765236950799,
+          "position": 6.156281314430224e-17
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0.12325101257624176,
+          "width": 0.46849033022475567,
+          "position": 0.08706275895208408
+        },
+        "initial_weighted_gap": 0.2570668155613205,
+        "final_weighted_gap": 0.304011837573277,
+        "improvement_absolute": -0.046945022011956494,
+        "improvement_ratio": -0.1826179777792372,
+        "safety": {
+          "all_finite": true,
+          "max_seam_gap": 1.0272563142315817e-14,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": true,
+          "skipped_steps": 0,
+          "verification_failure": false,
+          "report_passed": true
+        },
+        "normalized_candidate_hash": "c4697de16713e2c4",
+        "stop_reason_hash": "be36095e6dac285c",
+        "normalized_result_hash": "3a683f47bc009d14",
+        "all_returned_plans_safe": true,
+        "assessment": {
+          "functional_met": false,
+          "safety_met": true,
+          "improvement_met": null,
+          "target_met": false,
+          "distance_to_target": 0.304011837573277,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": [
+            "not_checked_to_finish"
+          ]
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 18167,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=18167ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "leaves-07-symmetric-02",
+      "display_name": null,
+      "planned_slot": "C-02",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "original-synthetic",
+        "title": "Seven-tip paired hub",
+        "uri": "repo:crates/ori3-propose/tests/fixtures/corpus/leaves-07-symmetric-02.json",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Original neutral benchmark structure authored for ORIGAMI3 before proposal execution; it does not represent a traditional named work."
+      },
+      "input": {
+        "fixture": "leaves-07-symmetric-02.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "95bcbd4d921d17fb"
+        },
+        "structure_hash": "7018991c8a21005c",
+        "normalized_input_hash": "aa0042de3b6f75de"
+      },
+      "strata": {
+        "band": "C",
+        "leaf_count": 7,
+        "symmetry": "symmetric",
+        "position_constraint": "none",
+        "technique_complexity": "compound"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "The rooted star fixes leaf 1 and admits swaps (2,3), (4,5), (6,7) with equal normalized measurements.",
+        "position_evidence": "All seven leaves omit tip_pos_2d.",
+        "technique_reference": "Pre-execution reference revision 1 closes the seven-ray central hub with a layer-packet closed-sink step after radial precreases; this fixes the compound classification independently of generated results."
+      },
+      "target": {
+        "class": "must_complete",
+        "criterion": "at-least-one-checked-to-finish-and-all-returned-plans-safe"
+      },
+      "recorded_current": {
+        "outcome": "candidates",
+        "execution_failure": null,
+        "selected_candidate_index": 2,
+        "candidate_count": 4,
+        "candidate_statuses": [
+          "partial",
+          "partial",
+          "partial",
+          "partial"
+        ],
+        "stop_reasons": [
+          "state_cap",
+          "state_cap",
+          "state_cap",
+          "state_cap"
+        ],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0.025633220654892645,
+          "width": 0.4213920583044275,
+          "position": 0
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0.14083765874011994,
+          "width": 0.37838904010125163,
+          "position": 0
+        },
+        "initial_weighted_gap": 0.10991163231577816,
+        "final_weighted_gap": 0.21651546676037026,
+        "improvement_absolute": -0.1066038344445921,
+        "improvement_ratio": -0.9699049336135532,
+        "safety": {
+          "all_finite": true,
+          "max_seam_gap": 2.482534153247273e-16,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": true,
+          "skipped_steps": 0,
+          "verification_failure": false,
+          "report_passed": true
+        },
+        "normalized_candidate_hash": "c5a28316444265de",
+        "stop_reason_hash": "d9091f98983dac39",
+        "normalized_result_hash": "2d2725e4f31cb873",
+        "all_returned_plans_safe": true,
+        "assessment": {
+          "functional_met": false,
+          "safety_met": true,
+          "improvement_met": null,
+          "target_met": false,
+          "distance_to_target": 0.21651546676037026,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": [
+            "not_checked_to_finish"
+          ]
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 4234,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=4234ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "leaves-07-asymmetric-01",
+      "display_name": null,
+      "planned_slot": "C-03",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "original-synthetic",
+        "title": "Seven-tip offset nested fans",
+        "uri": "repo:crates/ori3-propose/tests/fixtures/corpus/leaves-07-asymmetric-01.json",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Original neutral benchmark structure authored for ORIGAMI3 before proposal execution; it does not represent a traditional named work."
+      },
+      "input": {
+        "fixture": "leaves-07-asymmetric-01.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "1796895dcdb26fcc"
+        },
+        "structure_hash": "5e94b646cff19ea5",
+        "normalized_input_hash": "418b93c091b733bb"
+      },
+      "strata": {
+        "band": "C",
+        "leaf_count": 7,
+        "symmetry": "asymmetric",
+        "position_constraint": "specified",
+        "technique_complexity": "compound"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "The root’s fan-of-3 and nested fan-of-4 subtrees differ topologically; all exchangeable sibling positions also have distinct normalized length/width/target triples, so only the identity automorphism remains.",
+        "position_evidence": "Leaves 1–7 all specify tip_pos_2d; root and internal nodes 10, 20, 21 omit it.",
+        "technique_reference": "Pre-execution reference revision 1 joins the offset fans with an open-close layer-packet swivel, fixing the compound classification."
+      },
+      "target": {
+        "class": "safe_partial_allowed",
+        "criterion": "safe-verified-plan-with-positive-weighted-gap-improvement"
+      },
+      "recorded_current": {
+        "outcome": "execution_failure",
+        "execution_failure": {
+          "phase": "search",
+          "reason": "watchdog_expired",
+          "normalized_failure_hash": "5eb899a874198153"
+        },
+        "selected_candidate_index": 0,
+        "candidate_count": 0,
+        "candidate_statuses": [],
+        "stop_reasons": [],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0,
+          "width": 0,
+          "position": 0
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0,
+          "width": 0,
+          "position": 0
+        },
+        "initial_weighted_gap": 0,
+        "final_weighted_gap": 0,
+        "improvement_absolute": 0,
+        "improvement_ratio": 0,
+        "safety": {
+          "all_finite": false,
+          "max_seam_gap": 0,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": false,
+          "skipped_steps": 0,
+          "verification_failure": true,
+          "report_passed": false
+        },
+        "normalized_candidate_hash": "09612b07b5ecb5a5",
+        "stop_reason_hash": "09612b07b5ecb5a5",
+        "normalized_result_hash": "1c8c8ccd1012b5e2",
+        "all_returned_plans_safe": false,
+        "assessment": {
+          "functional_met": false,
+          "safety_met": false,
+          "improvement_met": false,
+          "target_met": false,
+          "distance_to_target": null,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": [
+            "execution_failure",
+            "safety_not_verified"
+          ]
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 30020,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B release observation hit the unchanged 30000ms product search watchdog (WatchdogExpired), and the test ended at 30020ms. No product candidate response or SearchStop tag exists; candidate/stop/result hashes therefore cover the empty benchmark envelope only. This case remains an explicit failure against the 10000ms release limit and its predeclared safe_partial_allowed class. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "leaves-08-symmetric-01",
+      "display_name": null,
+      "planned_slot": "C-04",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "original-synthetic",
+        "title": "Eight-tip paired radial fan",
+        "uri": "repo:crates/ori3-propose/tests/fixtures/corpus/leaves-08-symmetric-01.json",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Original neutral benchmark structure authored for ORIGAMI3 before proposal execution; it does not represent a traditional named work."
+      },
+      "input": {
+        "fixture": "leaves-08-symmetric-01.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "2baa608b000bbb59"
+        },
+        "structure_hash": "a472ed5fff989236",
+        "normalized_input_hash": "8a949020a84f2944"
+      },
+      "strata": {
+        "band": "C",
+        "leaf_count": 8,
+        "symmetry": "symmetric",
+        "position_constraint": "none",
+        "technique_complexity": "simple"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "The rooted star admits four pair swaps (1,2), (3,4), (5,6), (7,8), each preserving normalized length and width.",
+        "position_evidence": "All eight leaves omit tip_pos_2d.",
+        "technique_reference": "Pre-execution reference revision 1 develops the four radial pairs through eight single-driver, one-line ordinary folds only."
+      },
+      "target": {
+        "class": "safe_partial_allowed",
+        "criterion": "safe-verified-plan-with-positive-weighted-gap-improvement"
+      },
+      "recorded_current": {
+        "outcome": "candidates",
+        "execution_failure": null,
+        "selected_candidate_index": 2,
+        "candidate_count": 4,
+        "candidate_statuses": [
+          "partial",
+          "partial",
+          "partial",
+          "partial"
+        ],
+        "stop_reasons": [
+          "state_cap",
+          "state_cap",
+          "state_cap",
+          "state_cap"
+        ],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0.2542567325566225,
+          "width": 0.42202329699225966,
+          "position": 0
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0.2771856261460885,
+          "width": 0.34050875279085585,
+          "position": 0
+        },
+        "initial_weighted_gap": 0.33866139195507444,
+        "final_weighted_gap": 0.3452873767042597,
+        "improvement_absolute": -0.006625984749185243,
+        "improvement_ratio": -0.019565220325038473,
+        "safety": {
+          "all_finite": true,
+          "max_seam_gap": 1.8075252578203454e-15,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": true,
+          "skipped_steps": 0,
+          "verification_failure": false,
+          "report_passed": true
+        },
+        "normalized_candidate_hash": "2c795da16e6bb76f",
+        "stop_reason_hash": "d9091f98983dac39",
+        "normalized_result_hash": "ae3cb0734da29d49",
+        "all_returned_plans_safe": true,
+        "assessment": {
+          "functional_met": false,
+          "safety_met": true,
+          "improvement_met": false,
+          "target_met": false,
+          "distance_to_target": 0.3452873767042597,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": [
+            "non_positive_improvement"
+          ]
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 12151,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=12151ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "leaves-08-asymmetric-01",
+      "display_name": null,
+      "planned_slot": "C-05",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "original-synthetic",
+        "title": "Eight-tip offset three-five fan",
+        "uri": "repo:crates/ori3-propose/tests/fixtures/corpus/leaves-08-asymmetric-01.json",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Original neutral benchmark structure authored for ORIGAMI3 before proposal execution; it does not represent a traditional named work."
+      },
+      "input": {
+        "fixture": "leaves-08-asymmetric-01.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "439a221cc8f8601b"
+        },
+        "structure_hash": "fca39091fcbdac4e",
+        "normalized_input_hash": "b326a971a7d63234"
+      },
+      "strata": {
+        "band": "C",
+        "leaf_count": 8,
+        "symmetry": "asymmetric",
+        "position_constraint": "specified",
+        "technique_complexity": "simple"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "The root’s fan-of-3 and fan-of-5 subtrees cannot be exchanged; sibling length/width/target triples are distinct and non-mirrored, leaving only the identity automorphism.",
+        "position_evidence": "Leaves 1–8 all specify tip_pos_2d; root and nodes 10, 20 omit it.",
+        "technique_reference": "Pre-execution reference revision 1 develops both offset fans with sequential single-driver, one-line ordinary folds only."
+      },
+      "target": {
+        "class": "safe_partial_allowed",
+        "criterion": "safe-verified-plan-with-positive-weighted-gap-improvement"
+      },
+      "recorded_current": {
+        "outcome": "execution_failure",
+        "execution_failure": {
+          "phase": "search",
+          "reason": "watchdog_expired",
+          "normalized_failure_hash": "5eb899a874198153"
+        },
+        "selected_candidate_index": 0,
+        "candidate_count": 0,
+        "candidate_statuses": [],
+        "stop_reasons": [],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0,
+          "width": 0,
+          "position": 0
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0,
+          "width": 0,
+          "position": 0
+        },
+        "initial_weighted_gap": 0,
+        "final_weighted_gap": 0,
+        "improvement_absolute": 0,
+        "improvement_ratio": 0,
+        "safety": {
+          "all_finite": false,
+          "max_seam_gap": 0,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": false,
+          "skipped_steps": 0,
+          "verification_failure": true,
+          "report_passed": false
+        },
+        "normalized_candidate_hash": "09612b07b5ecb5a5",
+        "stop_reason_hash": "09612b07b5ecb5a5",
+        "normalized_result_hash": "1c8c8ccd1012b5e2",
+        "all_returned_plans_safe": false,
+        "assessment": {
+          "functional_met": false,
+          "safety_met": false,
+          "improvement_met": false,
+          "target_met": false,
+          "distance_to_target": null,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": [
+            "execution_failure",
+            "safety_not_verified"
+          ]
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 30860,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B release observation hit the unchanged 30000ms product search watchdog (WatchdogExpired), and the test ended at 30860ms. No product candidate response or SearchStop tag exists; candidate/stop/result hashes cover the empty benchmark envelope only. This remains an explicit failure against the 10000ms release limit and the predeclared safe_partial_allowed class. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "leaves-08-asymmetric-02",
+      "display_name": null,
+      "planned_slot": "C-06",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "original-synthetic",
+        "title": "Eight-tip nested packet tree",
+        "uri": "repo:crates/ori3-propose/tests/fixtures/corpus/leaves-08-asymmetric-02.json",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Original neutral benchmark structure authored for ORIGAMI3 before proposal execution; it does not represent a traditional named work."
+      },
+      "input": {
+        "fixture": "leaves-08-asymmetric-02.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "b0400b47ceeb6551"
+        },
+        "structure_hash": "bb2d084b6f8f6248",
+        "normalized_input_hash": "b708369f22c20ef6"
+      },
+      "strata": {
+        "band": "C",
+        "leaf_count": 8,
+        "symmetry": "asymmetric",
+        "position_constraint": "none",
+        "technique_complexity": "compound"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "Root children consist of a fan-of-2 branch, a nested fan-of-3 branch, and three direct leaves; their topology or normalized measurements differ, and all remaining sibling measurements are distinct, leaving only the identity automorphism.",
+        "position_evidence": "All eight leaves omit tip_pos_2d.",
+        "technique_reference": "Pre-execution reference revision 1 contains a layer-packet crimp/open-close operation at the nested branch, fixing the compound classification."
+      },
+      "target": {
+        "class": "safe_partial_allowed",
+        "criterion": "safe-verified-plan-with-positive-weighted-gap-improvement"
+      },
+      "recorded_current": {
+        "outcome": "candidates",
+        "execution_failure": null,
+        "selected_candidate_index": 3,
+        "candidate_count": 4,
+        "candidate_statuses": [
+          "partial",
+          "partial",
+          "partial",
+          "partial"
+        ],
+        "stop_reasons": [
+          "state_cap",
+          "state_cap",
+          "state_cap",
+          "state_cap"
+        ],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0.23504273119469854,
+          "width": 0.5185674666246568,
+          "position": 0
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0.25741709217734665,
+          "width": 0.3487935637940465,
+          "position": 0
+        },
+        "initial_weighted_gap": 0.3387562245196299,
+        "final_weighted_gap": 0.32717580493615595,
+        "improvement_absolute": 0.011580419583473944,
+        "improvement_ratio": 0.03418511231755358,
+        "safety": {
+          "all_finite": true,
+          "max_seam_gap": 4.0981674754010424e-15,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": true,
+          "skipped_steps": 0,
+          "verification_failure": false,
+          "report_passed": true
+        },
+        "normalized_candidate_hash": "90a90919ca132ff1",
+        "stop_reason_hash": "d9091f98983dac39",
+        "normalized_result_hash": "1affed5a213159cd",
+        "all_returned_plans_safe": true,
+        "assessment": {
+          "functional_met": true,
+          "safety_met": true,
+          "improvement_met": true,
+          "target_met": true,
+          "distance_to_target": 0.32717580493615595,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": []
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 7091,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=7091ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "leaves-09-symmetric-01",
+      "display_name": null,
+      "planned_slot": "D-01",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "repository-authored-synthetic",
+        "title": "Neutral mirrored radial nine-tip target",
+        "uri": "repo:crates/ori3-propose/tests/fixtures/corpus/leaves-09-symmetric-01.json",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Original neutral Band-D target authored for ORIGAMI3 corpus stage 3-B; no external design or instructions copied."
+      },
+      "input": {
+        "fixture": "leaves-09-symmetric-01.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "d985feb25823bdb0"
+        },
+        "structure_hash": "206015e1b454b38f",
+        "normalized_input_hash": "28702d7a48bedfd1"
+      },
+      "strata": {
+        "band": "D",
+        "leaf_count": 9,
+        "symmetry": "symmetric",
+        "position_constraint": "specified",
+        "technique_complexity": "simple"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "At the 1e-9 corpus quantum, reflection x -> -x fixes leaf 1 and maps (2 3)(4 5)(6 7)(8 9); every paired leaf has identical normalized length and width factor and mirrored tip_pos_2d, giving a non-identity rooted-tree automorphism.",
+        "position_evidence": "Every leaf 1 through 9 has tip_pos_2d; mixed position constraints are absent.",
+        "technique_reference": "The independent reference uses only sequential one-line ordinary folds and contains no multi-driver, layer-packet, open-close, or named compound technique."
+      },
+      "target": {
+        "class": "must_complete",
+        "criterion": "at-least-one-checked-to-finish-and-all-returned-plans-safe"
+      },
+      "recorded_current": {
+        "outcome": "execution_failure",
+        "execution_failure": {
+          "phase": "search",
+          "reason": "watchdog_expired",
+          "normalized_failure_hash": "5eb899a874198153"
+        },
+        "selected_candidate_index": 0,
+        "candidate_count": 0,
+        "candidate_statuses": [],
+        "stop_reasons": [],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0,
+          "width": 0,
+          "position": 0
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0,
+          "width": 0,
+          "position": 0
+        },
+        "initial_weighted_gap": 0,
+        "final_weighted_gap": 0,
+        "improvement_absolute": 0,
+        "improvement_ratio": 0,
+        "safety": {
+          "all_finite": false,
+          "max_seam_gap": 0,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": false,
+          "skipped_steps": 0,
+          "verification_failure": true,
+          "report_passed": false
+        },
+        "normalized_candidate_hash": "09612b07b5ecb5a5",
+        "stop_reason_hash": "09612b07b5ecb5a5",
+        "normalized_result_hash": "1c8c8ccd1012b5e2",
+        "all_returned_plans_safe": false,
+        "assessment": {
+          "functional_met": false,
+          "safety_met": false,
+          "improvement_met": null,
+          "target_met": false,
+          "distance_to_target": null,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": [
+            "execution_failure",
+            "safety_not_verified"
+          ]
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 32890,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B release observation hit the unchanged 30000ms product search watchdog (WatchdogExpired), and the test ended at 32890ms. No product candidate response or SearchStop tag exists; candidate/stop/result hashes cover the empty benchmark envelope only. This remains an explicit failure against the 10000ms release limit and predeclared must_complete class. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "leaves-09-symmetric-02",
+      "display_name": null,
+      "planned_slot": "D-02",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "repository-authored-synthetic",
+        "title": "Neutral paired radial nine-tip packet target",
+        "uri": "repo:crates/ori3-propose/tests/fixtures/corpus/leaves-09-symmetric-02.json",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Original neutral Band-D target authored for ORIGAMI3 corpus stage 3-B; no external design or instructions copied."
+      },
+      "input": {
+        "fixture": "leaves-09-symmetric-02.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "101097091574ffb7"
+        },
+        "structure_hash": "9365d9241cd6ffc2",
+        "normalized_input_hash": "70a9b06559d57f16"
+      },
+      "strata": {
+        "band": "D",
+        "leaf_count": 9,
+        "symmetry": "symmetric",
+        "position_constraint": "none",
+        "technique_complexity": "compound"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "At the 1e-9 corpus quantum, swapping leaves 2 and 3 preserves normalized length, width factor, and omitted position; the same holds for pairs (4 5), (6 7), and (8 9), so the rooted star has a non-identity automorphism.",
+        "position_evidence": "Every leaf 1 through 9 omits tip_pos_2d; mixed position constraints are absent.",
+        "technique_reference": "The independent reference contains an open-close squash of a four-layer packet before ordinary tip-separation folds; therefore it is compound."
+      },
+      "target": {
+        "class": "must_complete",
+        "criterion": "at-least-one-checked-to-finish-and-all-returned-plans-safe"
+      },
+      "recorded_current": {
+        "outcome": "candidates",
+        "execution_failure": null,
+        "selected_candidate_index": 1,
+        "candidate_count": 4,
+        "candidate_statuses": [
+          "partial",
+          "checked_to_finish",
+          "checked_to_finish",
+          "partial"
+        ],
+        "stop_reasons": [
+          "state_cap",
+          "goal_reached",
+          "goal_reached",
+          "state_cap"
+        ],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0.28514714280349934,
+          "width": 0.3025672199065854,
+          "position": 0
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0.317580223475838,
+          "width": 0.2409183703269274,
+          "position": 0
+        },
+        "initial_weighted_gap": 0.3456605867848164,
+        "final_weighted_gap": 0.36576389754122346,
+        "improvement_absolute": -0.020103310756407033,
+        "improvement_ratio": -0.05815910614339701,
+        "safety": {
+          "all_finite": true,
+          "max_seam_gap": 6.353541660708338e-16,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": true,
+          "skipped_steps": 0,
+          "verification_failure": false,
+          "report_passed": true
+        },
+        "normalized_candidate_hash": "58565284a56cb8c9",
+        "stop_reason_hash": "5a985ffb3f9bb2cf",
+        "normalized_result_hash": "004620178c1b4812",
+        "all_returned_plans_safe": true,
+        "assessment": {
+          "functional_met": true,
+          "safety_met": true,
+          "improvement_met": null,
+          "target_met": true,
+          "distance_to_target": 0.36576389754122346,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": []
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 18823,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=18823ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "leaves-09-asymmetric-01",
+      "display_name": null,
+      "planned_slot": "D-03",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "repository-authored-synthetic",
+        "title": "Neutral uneven one-three-five nine-tip target",
+        "uri": "repo:crates/ori3-propose/tests/fixtures/corpus/leaves-09-asymmetric-01.json",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Original neutral Band-D target authored for ORIGAMI3 corpus stage 3-B; no external design or instructions copied."
+      },
+      "input": {
+        "fixture": "leaves-09-asymmetric-01.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "daf304dfbb49602f"
+        },
+        "structure_hash": "5c8de64d52ad51e7",
+        "normalized_input_hash": "5e4b3cc5fc30e754"
+      },
+      "strata": {
+        "band": "D",
+        "leaf_count": 9,
+        "symmetry": "asymmetric",
+        "position_constraint": "specified",
+        "technique_complexity": "compound"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "The root children have descendant-leaf counts 1, 3, and 5 and cannot be permuted. Within both compound branches every leaf has a distinct normalized-length, width-factor, and specified-position tuple, so only the identity rooted-tree automorphism remains.",
+        "position_evidence": "Every leaf 1, 3, 4, 5, 7, 8, 9, 10, and 11 has tip_pos_2d; mixed position constraints are absent.",
+        "technique_reference": "The independent reference handles leaf 1 and the three-leaf branch with ordinary folds, then uses an open-close petal-fold sequence on the five-leaf branch; therefore it is compound."
+      },
+      "target": {
+        "class": "safe_partial_allowed",
+        "criterion": "safe-verified-plan-with-positive-weighted-gap-improvement"
+      },
+      "recorded_current": {
+        "outcome": "execution_failure",
+        "execution_failure": {
+          "phase": "search",
+          "reason": "watchdog_expired",
+          "normalized_failure_hash": "5eb899a874198153"
+        },
+        "selected_candidate_index": 0,
+        "candidate_count": 0,
+        "candidate_statuses": [],
+        "stop_reasons": [],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0,
+          "width": 0,
+          "position": 0
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0,
+          "width": 0,
+          "position": 0
+        },
+        "initial_weighted_gap": 0,
+        "final_weighted_gap": 0,
+        "improvement_absolute": 0,
+        "improvement_ratio": 0,
+        "safety": {
+          "all_finite": false,
+          "max_seam_gap": 0,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": false,
+          "skipped_steps": 0,
+          "verification_failure": true,
+          "report_passed": false
+        },
+        "normalized_candidate_hash": "09612b07b5ecb5a5",
+        "stop_reason_hash": "09612b07b5ecb5a5",
+        "normalized_result_hash": "1c8c8ccd1012b5e2",
+        "all_returned_plans_safe": false,
+        "assessment": {
+          "functional_met": false,
+          "safety_met": false,
+          "improvement_met": false,
+          "target_met": false,
+          "distance_to_target": null,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": [
+            "execution_failure",
+            "safety_not_verified"
+          ]
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 32770,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B release observation hit the unchanged 30000ms product search watchdog (WatchdogExpired), and the test ended at 32770ms. No product candidate response or SearchStop tag exists; candidate/stop/result hashes cover the empty benchmark envelope only. This remains an explicit failure against the 10000ms release limit and predeclared safe_partial_allowed class. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "leaves-10-symmetric-01",
+      "display_name": null,
+      "planned_slot": "D-04",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "repository-authored-synthetic",
+        "title": "Neutral five-pair ten-tip target",
+        "uri": "repo:crates/ori3-propose/tests/fixtures/corpus/leaves-10-symmetric-01.json",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Original neutral Band-D target authored for ORIGAMI3 corpus stage 3-B; no external design or instructions copied."
+      },
+      "input": {
+        "fixture": "leaves-10-symmetric-01.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "209a99527eabb24f"
+        },
+        "structure_hash": "5065caa95ad11c81",
+        "normalized_input_hash": "a74bf892aea62aa4"
+      },
+      "strata": {
+        "band": "D",
+        "leaf_count": 10,
+        "symmetry": "symmetric",
+        "position_constraint": "none",
+        "technique_complexity": "simple"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "Swapping complete branches rooted at nodes 1 and 4 while mapping 2 to 5 and 3 to 6 preserves topology, normalized lengths, width factors, and omitted positions; therefore a non-identity rooted-tree automorphism exists.",
+        "position_evidence": "Every one of the ten leaves omits tip_pos_2d; mixed position constraints are absent.",
+        "technique_reference": "The independent reference processes the five two-leaf branches using only sequential one-line ordinary folds and contains no compound technique."
+      },
+      "target": {
+        "class": "safe_partial_allowed",
+        "criterion": "safe-verified-plan-with-positive-weighted-gap-improvement"
+      },
+      "recorded_current": {
+        "outcome": "candidates",
+        "execution_failure": null,
+        "selected_candidate_index": 0,
+        "candidate_count": 4,
+        "candidate_statuses": [
+          "checked_to_finish",
+          "checked_to_finish",
+          "checked_to_finish",
+          "checked_to_finish"
+        ],
+        "stop_reasons": [
+          "goal_reached",
+          "goal_reached",
+          "goal_reached",
+          "goal_reached"
+        ],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0.2639894499598975,
+          "width": 0.2704514374570623,
+          "position": 0
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0.31090286251405236,
+          "width": 0.23937895542783932,
+          "position": 0
+        },
+        "initial_weighted_gap": 0.31807973745130996,
+        "final_weighted_gap": 0.35877865359962025,
+        "improvement_absolute": -0.04069891614831028,
+        "improvement_ratio": -0.12795192952062928,
+        "safety": {
+          "all_finite": true,
+          "max_seam_gap": 8.95090418262362e-16,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": true,
+          "skipped_steps": 0,
+          "verification_failure": false,
+          "report_passed": true
+        },
+        "normalized_candidate_hash": "246eaf90842e502b",
+        "stop_reason_hash": "ab89cc13a22c44fd",
+        "normalized_result_hash": "c2fb47f19aa508af",
+        "all_returned_plans_safe": true,
+        "assessment": {
+          "functional_met": false,
+          "safety_met": true,
+          "improvement_met": false,
+          "target_met": false,
+          "distance_to_target": 0.35877865359962025,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": [
+            "non_positive_improvement"
+          ]
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 9977,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B D-04 isolated release investigation, ten sequential runs: 9297/9324/9626/9390/9267/9829/9661/9977/9586/9400ms; candidate, stop, normalized-result, and exact candidate-JSON hashes matched 10/10. The recorded measurement is the observed maximum 9977ms. Historical 10000/300000ms limits are retained only as provisional references; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "leaves-10-asymmetric-01",
+      "display_name": null,
+      "planned_slot": "D-05",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "repository-authored-synthetic",
+        "title": "Neutral uneven two-three-five ten-tip target",
+        "uri": "repo:crates/ori3-propose/tests/fixtures/corpus/leaves-10-asymmetric-01.json",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Original neutral Band-D target authored for ORIGAMI3 corpus stage 3-B; no external design or instructions copied."
+      },
+      "input": {
+        "fixture": "leaves-10-asymmetric-01.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "fdd346a2c6318b94"
+        },
+        "structure_hash": "105dca2cccc1a3d8",
+        "normalized_input_hash": "4b7fa8ddb42e41c7"
+      },
+      "strata": {
+        "band": "D",
+        "leaf_count": 10,
+        "symmetry": "asymmetric",
+        "position_constraint": "specified",
+        "technique_complexity": "simple"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "The root children comprise two direct leaves, a three-leaf branch, and a five-leaf branch. The two direct leaves have distinct attribute tuples, the branches have different arity, and every sibling leaf within each branch has distinct normalized length, width factor, and position, leaving only the identity automorphism.",
+        "position_evidence": "Every leaf 1, 2, 4, 5, 6, 8, 9, 10, 11, and 12 has tip_pos_2d; mixed position constraints are absent.",
+        "technique_reference": "The independent reference handles both direct leaves and the three- and five-leaf branches using only sequential one-line ordinary folds."
+      },
+      "target": {
+        "class": "safe_partial_allowed",
+        "criterion": "safe-verified-plan-with-positive-weighted-gap-improvement"
+      },
+      "recorded_current": {
+        "outcome": "execution_failure",
+        "execution_failure": {
+          "phase": "search",
+          "reason": "watchdog_expired",
+          "normalized_failure_hash": "5eb899a874198153"
+        },
+        "selected_candidate_index": 0,
+        "candidate_count": 0,
+        "candidate_statuses": [],
+        "stop_reasons": [],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0,
+          "width": 0,
+          "position": 0
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0,
+          "width": 0,
+          "position": 0
+        },
+        "initial_weighted_gap": 0,
+        "final_weighted_gap": 0,
+        "improvement_absolute": 0,
+        "improvement_ratio": 0,
+        "safety": {
+          "all_finite": false,
+          "max_seam_gap": 0,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": false,
+          "skipped_steps": 0,
+          "verification_failure": true,
+          "report_passed": false
+        },
+        "normalized_candidate_hash": "09612b07b5ecb5a5",
+        "stop_reason_hash": "09612b07b5ecb5a5",
+        "normalized_result_hash": "1c8c8ccd1012b5e2",
+        "all_returned_plans_safe": false,
+        "assessment": {
+          "functional_met": false,
+          "safety_met": false,
+          "improvement_met": false,
+          "target_met": false,
+          "distance_to_target": null,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": [
+            "execution_failure",
+            "safety_not_verified"
+          ]
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 30030,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B release observation hit the unchanged 30000ms product search watchdog (WatchdogExpired), and the test ended at 30030ms. No product candidate response or SearchStop tag exists; candidate/stop/result hashes cover the empty benchmark envelope only. This remains an explicit failure against the 10000ms release limit and predeclared safe_partial_allowed class. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "leaves-10-asymmetric-02",
+      "display_name": null,
+      "planned_slot": "D-06",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "repository-authored-synthetic",
+        "title": "Neutral uneven one-four-five ten-tip packet target",
+        "uri": "repo:crates/ori3-propose/tests/fixtures/corpus/leaves-10-asymmetric-02.json",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Original neutral Band-D target authored for ORIGAMI3 corpus stage 3-B; no external design or instructions copied."
+      },
+      "input": {
+        "fixture": "leaves-10-asymmetric-02.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "0db9d8feb36e4e3f"
+        },
+        "structure_hash": "d1ae56e234df7b44",
+        "normalized_input_hash": "7e365b0ced0307dc"
+      },
+      "strata": {
+        "band": "D",
+        "leaf_count": 10,
+        "symmetry": "asymmetric",
+        "position_constraint": "none",
+        "technique_complexity": "compound"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "The root children have descendant-leaf counts 1, 4, and 5 and cannot be permuted. Every sibling leaf within the four- and five-leaf branches has a distinct normalized-length and width-factor tuple, so only the identity rooted-tree automorphism remains.",
+        "position_evidence": "Every one of the ten leaves omits tip_pos_2d; mixed position constraints are absent.",
+        "technique_reference": "The independent reference handles the direct leaf and four-leaf branch with ordinary folds, then applies a multi-driver closed-sink layer-packet operation to the five-leaf branch; therefore it is compound."
+      },
+      "target": {
+        "class": "safe_partial_allowed",
+        "criterion": "safe-verified-plan-with-positive-weighted-gap-improvement"
+      },
+      "recorded_current": {
+        "outcome": "candidates",
+        "execution_failure": null,
+        "selected_candidate_index": 1,
+        "candidate_count": 4,
+        "candidate_statuses": [
+          "partial",
+          "partial",
+          "partial",
+          "partial"
+        ],
+        "stop_reasons": [
+          "state_cap",
+          "state_cap",
+          "state_cap",
+          "state_cap"
+        ],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0.21702045645094023,
+          "width": 0.39301017167196267,
+          "position": 0
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0.2230769386071107,
+          "width": 0.3604924435703557,
+          "position": 0
+        },
+        "initial_weighted_gap": 0.29562249078533276,
+        "final_weighted_gap": 0.29517542732118185,
+        "improvement_absolute": 0.0004470634641509097,
+        "improvement_ratio": 0.0015122782538069686,
+        "safety": {
+          "all_finite": true,
+          "max_seam_gap": 4.961736870559578e-16,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": true,
+          "skipped_steps": 0,
+          "verification_failure": false,
+          "report_passed": true
+        },
+        "normalized_candidate_hash": "4d7b2baff77fe2c8",
+        "stop_reason_hash": "d9091f98983dac39",
+        "normalized_result_hash": "9add78611090ed19",
+        "all_returned_plans_safe": true,
+        "assessment": {
+          "functional_met": true,
+          "safety_met": true,
+          "improvement_met": true,
+          "target_met": true,
+          "distance_to_target": 0.29517542732118185,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": []
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 13022,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=13022ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "leaves-11-symmetric-01",
+      "display_name": null,
+      "planned_slot": "E-01",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "original-synthetic",
+        "title": "Eleven-tip mirrored radial fan",
+        "uri": "repo:crates/ori3-propose/tests/fixtures/corpus/leaves-11-symmetric-01.json",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Original neutral benchmark structure authored for ORIGAMI3 before proposal execution; it does not represent a traditional named work."
+      },
+      "input": {
+        "fixture": "leaves-11-symmetric-01.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "56e4ef19e2654dcf"
+        },
+        "structure_hash": "0e27077324214eac",
+        "normalized_input_hash": "0e5a0d325e60fc48"
+      },
+      "strata": {
+        "band": "E",
+        "leaf_count": 11,
+        "symmetry": "symmetric",
+        "position_constraint": "specified",
+        "technique_complexity": "simple"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "Reflection x -> -x fixes leaf 1 and swaps (2,3), (4,5), (6,7), (8,9), (10,11), preserving normalized lengths, widths and mirrored positions.",
+        "position_evidence": "All eleven leaves specify tip_pos_2d; only the root omits it.",
+        "technique_reference": "Pre-execution reference revision 1 uses eleven sequential single-driver, one-line ordinary folds only."
+      },
+      "target": {
+        "class": "must_complete",
+        "criterion": "at-least-one-checked-to-finish-and-all-returned-plans-safe"
+      },
+      "recorded_current": {
+        "outcome": "execution_failure",
+        "execution_failure": {
+          "phase": "search",
+          "reason": "watchdog_expired",
+          "normalized_failure_hash": "5eb899a874198153"
+        },
+        "selected_candidate_index": 0,
+        "candidate_count": 0,
+        "candidate_statuses": [],
+        "stop_reasons": [],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0,
+          "width": 0,
+          "position": 0
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0,
+          "width": 0,
+          "position": 0
+        },
+        "initial_weighted_gap": 0,
+        "final_weighted_gap": 0,
+        "improvement_absolute": 0,
+        "improvement_ratio": 0,
+        "safety": {
+          "all_finite": false,
+          "max_seam_gap": 0,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": false,
+          "skipped_steps": 0,
+          "verification_failure": true,
+          "report_passed": false
+        },
+        "normalized_candidate_hash": "09612b07b5ecb5a5",
+        "stop_reason_hash": "09612b07b5ecb5a5",
+        "normalized_result_hash": "1c8c8ccd1012b5e2",
+        "all_returned_plans_safe": false,
+        "assessment": {
+          "functional_met": false,
+          "safety_met": false,
+          "improvement_met": null,
+          "target_met": false,
+          "distance_to_target": null,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": [
+            "execution_failure",
+            "safety_not_verified"
+          ]
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 30040,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B release observation hit the unchanged 30000ms product search watchdog (WatchdogExpired), and the test ended at 30040ms. No product candidate response or SearchStop tag exists; candidate/stop/result hashes cover the empty benchmark envelope only. This remains an explicit failure against the 10000ms release limit and predeclared must_complete class. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "leaves-11-symmetric-02",
+      "display_name": null,
+      "planned_slot": "E-02",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "original-synthetic",
+        "title": "Eleven-tip twin packet fan",
+        "uri": "repo:crates/ori3-propose/tests/fixtures/corpus/leaves-11-symmetric-02.json",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Original neutral benchmark structure authored for ORIGAMI3 before proposal execution; it does not represent a traditional named work."
+      },
+      "input": {
+        "fixture": "leaves-11-symmetric-02.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "6e3924de2eef8cef"
+        },
+        "structure_hash": "e32a5489f8b8c7c1",
+        "normalized_input_hash": "bd280bf9055bec40"
+      },
+      "strata": {
+        "band": "E",
+        "leaf_count": 11,
+        "symmetry": "symmetric",
+        "position_constraint": "none",
+        "technique_complexity": "compound"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "Swapping identical rooted fan-of-5 subtrees 100 and 200, including corresponding leaves, is a non-identity automorphism; leaf 11 remains fixed.",
+        "position_evidence": "All eleven leaves omit tip_pos_2d.",
+        "technique_reference": "Pre-execution reference revision 1 joins the twin fans with a multi-layer packet closed-sink operation, fixing the compound classification independently of generated results."
+      },
+      "target": {
+        "class": "safe_partial_allowed",
+        "criterion": "safe-verified-plan-with-positive-weighted-gap-improvement"
+      },
+      "recorded_current": {
+        "outcome": "candidates",
+        "execution_failure": null,
+        "selected_candidate_index": 0,
+        "candidate_count": 4,
+        "candidate_statuses": [
+          "partial",
+          "partial",
+          "partial",
+          "partial"
+        ],
+        "stop_reasons": [
+          "state_cap",
+          "state_cap",
+          "state_cap",
+          "state_cap"
+        ],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0.13568090574275374,
+          "width": 0.512032697457819,
+          "position": 0
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0.17079045727746772,
+          "width": 0.43006331351762234,
+          "position": 0
+        },
+        "initial_weighted_gap": 0.23808744523431755,
+        "final_weighted_gap": 0.2568031199809922,
+        "improvement_absolute": -0.018715674746674654,
+        "improvement_ratio": -0.07860840679043503,
+        "safety": {
+          "all_finite": true,
+          "max_seam_gap": 6.905937122822064e-15,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": true,
+          "skipped_steps": 0,
+          "verification_failure": false,
+          "report_passed": true
+        },
+        "normalized_candidate_hash": "1dfbcb1481733aba",
+        "stop_reason_hash": "d9091f98983dac39",
+        "normalized_result_hash": "5e3e3207d11c8752",
+        "all_returned_plans_safe": true,
+        "assessment": {
+          "functional_met": false,
+          "safety_met": true,
+          "improvement_met": false,
+          "target_met": false,
+          "distance_to_target": 0.2568031199809922,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": [
+            "non_positive_improvement"
+          ]
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 24698,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=24698ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "leaves-11-asymmetric-01",
+      "display_name": null,
+      "planned_slot": "E-03",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "original-synthetic",
+        "title": "Eleven-tip offset nested cluster",
+        "uri": "repo:crates/ori3-propose/tests/fixtures/corpus/leaves-11-asymmetric-01.json",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Original neutral benchmark structure authored for ORIGAMI3 before proposal execution; it does not represent a traditional named work."
+      },
+      "input": {
+        "fixture": "leaves-11-asymmetric-01.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "da62b545d9c3345b"
+        },
+        "structure_hash": "12997bfcd89c0237",
+        "normalized_input_hash": "bd6be9b1491eb810"
+      },
+      "strata": {
+        "band": "E",
+        "leaf_count": 11,
+        "symmetry": "asymmetric",
+        "position_constraint": "specified",
+        "technique_complexity": "compound"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "The root has fan-of-4, nested fan-of-5, and two direct-leaf branches; topology and all remaining sibling length/width/target triples distinguish every branch, leaving only the identity automorphism.",
+        "position_evidence": "Leaves 1–11 all specify tip_pos_2d; root and internal nodes 100, 200, 210 omit it.",
+        "technique_reference": "Pre-execution reference revision 1 contains an open-close layer-packet swivel at node 210, fixing the compound classification."
+      },
+      "target": {
+        "class": "safe_partial_allowed",
+        "criterion": "safe-verified-plan-with-positive-weighted-gap-improvement"
+      },
+      "recorded_current": {
+        "outcome": "execution_failure",
+        "execution_failure": {
+          "phase": "search",
+          "reason": "watchdog_expired",
+          "normalized_failure_hash": "5eb899a874198153"
+        },
+        "selected_candidate_index": 0,
+        "candidate_count": 0,
+        "candidate_statuses": [],
+        "stop_reasons": [],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0,
+          "width": 0,
+          "position": 0
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0,
+          "width": 0,
+          "position": 0
+        },
+        "initial_weighted_gap": 0,
+        "final_weighted_gap": 0,
+        "improvement_absolute": 0,
+        "improvement_ratio": 0,
+        "safety": {
+          "all_finite": false,
+          "max_seam_gap": 0,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": false,
+          "skipped_steps": 0,
+          "verification_failure": true,
+          "report_passed": false
+        },
+        "normalized_candidate_hash": "09612b07b5ecb5a5",
+        "stop_reason_hash": "09612b07b5ecb5a5",
+        "normalized_result_hash": "1c8c8ccd1012b5e2",
+        "all_returned_plans_safe": false,
+        "assessment": {
+          "functional_met": false,
+          "safety_met": false,
+          "improvement_met": false,
+          "target_met": false,
+          "distance_to_target": null,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": [
+            "execution_failure",
+            "safety_not_verified"
+          ]
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 30030,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B release observation hit the unchanged 30000ms product search watchdog (WatchdogExpired), and the test ended at 30030ms. No product candidate response or SearchStop tag exists; candidate/stop/result hashes cover the empty benchmark envelope only. This remains an explicit failure against the 10000ms release limit and predeclared safe_partial_allowed class. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "leaves-12-symmetric-01",
+      "display_name": null,
+      "planned_slot": "E-04",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "original-synthetic",
+        "title": "Twelve-tip paired radial fan",
+        "uri": "repo:crates/ori3-propose/tests/fixtures/corpus/leaves-12-symmetric-01.json",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Original neutral benchmark structure authored for ORIGAMI3 before proposal execution; it does not represent a traditional named work."
+      },
+      "input": {
+        "fixture": "leaves-12-symmetric-01.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "2e73dd9ee6922b2b"
+        },
+        "structure_hash": "5acad5c77716fe64",
+        "normalized_input_hash": "a11317bdd18d6b00"
+      },
+      "strata": {
+        "band": "E",
+        "leaf_count": 12,
+        "symmetry": "symmetric",
+        "position_constraint": "none",
+        "technique_complexity": "simple"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "The rooted star admits six pair swaps (1,2), (3,4), (5,6), (7,8), (9,10), (11,12), preserving normalized lengths and widths.",
+        "position_evidence": "All twelve leaves omit tip_pos_2d.",
+        "technique_reference": "Pre-execution reference revision 1 develops the six radial pairs using twelve sequential single-driver, one-line ordinary folds only."
+      },
+      "target": {
+        "class": "safe_partial_allowed",
+        "criterion": "safe-verified-plan-with-positive-weighted-gap-improvement"
+      },
+      "recorded_current": {
+        "outcome": "candidates",
+        "execution_failure": null,
+        "selected_candidate_index": 1,
+        "candidate_count": 4,
+        "candidate_statuses": [
+          "partial",
+          "partial",
+          "partial",
+          "partial"
+        ],
+        "stop_reasons": [
+          "state_cap",
+          "state_cap",
+          "state_cap",
+          "state_cap"
+        ],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0.27381429968055854,
+          "width": 0.48004370524423257,
+          "position": 0
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0.2813164160287484,
+          "width": 0.42440591205442996,
+          "position": 0
+        },
+        "initial_weighted_gap": 0.3698230407294051,
+        "final_weighted_gap": 0.3661975984396344,
+        "improvement_absolute": 0.003625442289770686,
+        "improvement_ratio": 0.009803181225864661,
+        "safety": {
+          "all_finite": true,
+          "max_seam_gap": 7.320725906710325e-15,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": true,
+          "skipped_steps": 0,
+          "verification_failure": false,
+          "report_passed": true
+        },
+        "normalized_candidate_hash": "8a4d6c8d2477a293",
+        "stop_reason_hash": "d9091f98983dac39",
+        "normalized_result_hash": "73d090567f11f1e8",
+        "all_returned_plans_safe": true,
+        "assessment": {
+          "functional_met": true,
+          "safety_met": true,
+          "improvement_met": true,
+          "target_met": true,
+          "distance_to_target": 0.3661975984396344,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": []
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 20316,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B E-04 isolated release investigation, ten sequential runs: 18795/18356/18924/18654/18585/18483/18507/19727/20316/20020ms; candidate, stop, normalized-result, and exact candidate-JSON hashes matched 10/10. The recorded measurement is the observed maximum 20316ms. Historical 10000/300000ms limits are retained only as provisional references; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "leaves-12-asymmetric-01",
+      "display_name": null,
+      "planned_slot": "E-05",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "original-synthetic",
+        "title": "Twelve-tip offset five-seven fan",
+        "uri": "repo:crates/ori3-propose/tests/fixtures/corpus/leaves-12-asymmetric-01.json",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Original neutral benchmark structure authored for ORIGAMI3 before proposal execution; it does not represent a traditional named work."
+      },
+      "input": {
+        "fixture": "leaves-12-asymmetric-01.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "2fe4a921aaf35bf4"
+        },
+        "structure_hash": "63cb2b84d3d19ed7",
+        "normalized_input_hash": "31790a7af61793c9"
+      },
+      "strata": {
+        "band": "E",
+        "leaf_count": 12,
+        "symmetry": "asymmetric",
+        "position_constraint": "specified",
+        "technique_complexity": "simple"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "Root subtrees have five versus seven leaves and cannot be exchanged; every sibling length/width/target triple is distinct and non-mirrored, leaving only the identity automorphism.",
+        "position_evidence": "Leaves 1–12 all specify tip_pos_2d; root and nodes 100, 200 omit it.",
+        "technique_reference": "Pre-execution reference revision 1 develops both offset fans using sequential single-driver, one-line ordinary folds only."
+      },
+      "target": {
+        "class": "safe_partial_allowed",
+        "criterion": "safe-verified-plan-with-positive-weighted-gap-improvement"
+      },
+      "recorded_current": {
+        "outcome": "execution_failure",
+        "execution_failure": {
+          "phase": "search",
+          "reason": "watchdog_expired",
+          "normalized_failure_hash": "5eb899a874198153"
+        },
+        "selected_candidate_index": 0,
+        "candidate_count": 0,
+        "candidate_statuses": [],
+        "stop_reasons": [],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0,
+          "width": 0,
+          "position": 0
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0,
+          "width": 0,
+          "position": 0
+        },
+        "initial_weighted_gap": 0,
+        "final_weighted_gap": 0,
+        "improvement_absolute": 0,
+        "improvement_ratio": 0,
+        "safety": {
+          "all_finite": false,
+          "max_seam_gap": 0,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": false,
+          "skipped_steps": 0,
+          "verification_failure": true,
+          "report_passed": false
+        },
+        "normalized_candidate_hash": "09612b07b5ecb5a5",
+        "stop_reason_hash": "09612b07b5ecb5a5",
+        "normalized_result_hash": "1c8c8ccd1012b5e2",
+        "all_returned_plans_safe": false,
+        "assessment": {
+          "functional_met": false,
+          "safety_met": false,
+          "improvement_met": false,
+          "target_met": false,
+          "distance_to_target": null,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": [
+            "execution_failure",
+            "safety_not_verified"
+          ]
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 33530,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B release observation hit the unchanged 30000ms product search watchdog (WatchdogExpired), and the test ended at 33530ms. No product candidate response or SearchStop tag exists; candidate/stop/result hashes cover the empty benchmark envelope only. This remains an explicit failure against the 10000ms release limit and predeclared safe_partial_allowed class. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    },
+    {
+      "id": "leaves-12-asymmetric-02",
+      "display_name": null,
+      "planned_slot": "E-06",
+      "counts_toward_target": true,
+      "source": {
+        "kind": "original-synthetic",
+        "title": "Twelve-tip staggered packet tree",
+        "uri": "repo:crates/ori3-propose/tests/fixtures/corpus/leaves-12-asymmetric-02.json",
+        "author": "ORIGAMI3 contributors",
+        "license_spdx": "MIT",
+        "license_uri": "repo:LICENSE",
+        "attribution": "Original neutral benchmark structure authored for ORIGAMI3 before proposal execution; it does not represent a traditional named work."
+      },
+      "input": {
+        "fixture": "leaves-12-asymmetric-02.json",
+        "fixture_checksum": {
+          "algorithm": "fnv1a64",
+          "digest": "b542868f7192417b"
+        },
+        "structure_hash": "8b63e175e4c3386c",
+        "normalized_input_hash": "a4b460e77491e72e"
+      },
+      "strata": {
+        "band": "E",
+        "leaf_count": 12,
+        "symmetry": "asymmetric",
+        "position_constraint": "none",
+        "technique_complexity": "compound"
+      },
+      "classification_basis": {
+        "symmetry_evidence": "Root branches are a fan-of-3, nested 2+2 fan, nested 3+1 fan, and one direct leaf; their topology or normalized measurements differ, and every remaining sibling measurement is unique, leaving only the identity automorphism.",
+        "position_evidence": "All twelve leaves omit tip_pos_2d.",
+        "technique_reference": "Pre-execution reference revision 1 uses a multi-layer packet crimp followed by an open-close operation across the two nested branches, fixing the compound classification."
+      },
+      "target": {
+        "class": "safe_partial_allowed",
+        "criterion": "safe-verified-plan-with-positive-weighted-gap-improvement"
+      },
+      "recorded_current": {
+        "outcome": "execution_failure",
+        "execution_failure": {
+          "phase": "search",
+          "reason": "watchdog_expired",
+          "normalized_failure_hash": "5eb899a874198153"
+        },
+        "selected_candidate_index": 0,
+        "candidate_count": 0,
+        "candidate_statuses": [],
+        "stop_reasons": [],
+        "initial_gaps": {
+          "count": 0,
+          "length": 0,
+          "width": 0,
+          "position": 0
+        },
+        "final_gaps": {
+          "count": 0,
+          "length": 0,
+          "width": 0,
+          "position": 0
+        },
+        "initial_weighted_gap": 0,
+        "final_weighted_gap": 0,
+        "improvement_absolute": 0,
+        "improvement_ratio": 0,
+        "safety": {
+          "all_finite": false,
+          "max_seam_gap": 0,
+          "max_intersection_pairs_all_poses": 0,
+          "final_self_intersection_pairs": 0,
+          "layer_warning_count": 0,
+          "final_warning_count": 0,
+          "face_count_matches": false,
+          "skipped_steps": 0,
+          "verification_failure": true,
+          "report_passed": false
+        },
+        "normalized_candidate_hash": "09612b07b5ecb5a5",
+        "stop_reason_hash": "09612b07b5ecb5a5",
+        "normalized_result_hash": "1c8c8ccd1012b5e2",
+        "all_returned_plans_safe": false,
+        "assessment": {
+          "functional_met": false,
+          "safety_met": false,
+          "improvement_met": false,
+          "target_met": false,
+          "distance_to_target": null,
+          "time_status": "pending_limit_recalibration",
+          "unmet_reasons": [
+            "execution_failure",
+            "safety_not_verified"
+          ]
+        },
+        "time_budget": {
+          "search_watchdog_millis": 30000,
+          "measured_debug_elapsed_millis": null,
+          "debug_case_limit_millis": 90000,
+          "measured_release_elapsed_millis": 31630,
+          "release_case_limit_millis": 10000,
+          "release_corpus_limit_millis": 300000,
+          "ordinary_test_enforces_elapsed": false,
+          "basis": "Stage 3-B release observation hit the unchanged 30000ms product search watchdog (WatchdogExpired), and the test ended at 31630ms. No product candidate response or SearchStop tag exists; candidate/stop/result hashes cover the empty benchmark envelope only. This remains an explicit failure against the 10000ms release limit and predeclared safe_partial_allowed class. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
+          "limit_status": "pending_recalibration"
+        }
+      }
+    }
+  ]
+}

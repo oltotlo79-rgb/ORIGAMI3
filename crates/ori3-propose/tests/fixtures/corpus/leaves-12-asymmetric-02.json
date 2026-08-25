@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "paper": {
+    "width_mm": 140,
+    "height_mm": 110
+  },
+  "skeleton": {
+    "nodes": [
+      {
+        "id": 0,
+        "parent": null,
+        "length": 0,
+        "width_factor": 1
+      },
+      {
+        "id": 100,
+        "parent": 0,
+        "length": 0.37,
+        "width_factor": 0.95
+      },
+      {
+        "id": 1,
+        "parent": 100,
+        "length": 1,
+        "width_factor": 1
+      },
+      {
+        "id": 2,
+        "parent": 100,
+        "length": 0.82,
+        "width_factor": 0.87
+      },
+      {
+        "id": 3,
+        "parent": 100,
+        "length": 0.63,
+        "width_factor": 0.69
+      },
+      {
+        "id": 200,
+        "parent": 0,
+        "length": 0.51,
+        "width_factor": 0.89
+      },
+      {
+        "id": 210,
+        "parent": 200,
+        "length": 0.29,
+        "width_factor": 0.72
+      },
+      {
+        "id": 4,
+        "parent": 210,
+        "length": 0.91,
+        "width_factor": 0.94
+      },
+      {
+        "id": 5,
+        "parent": 210,
+        "length": 0.7,
+        "width_factor": 0.76
+      },
+      {
+        "id": 6,
+        "parent": 200,
+        "length": 0.78,
+        "width_factor": 0.83
+      },
+      {
+        "id": 7,
+        "parent": 200,
+        "length": 0.57,
+        "width_factor": 0.64
+      },
+      {
+        "id": 300,
+        "parent": 0,
+        "length": 0.46,
+        "width_factor": 0.84
+      },
+      {
+        "id": 310,
+        "parent": 300,
+        "length": 0.34,
+        "width_factor": 0.7
+      },
+      {
+        "id": 8,
+        "parent": 310,
+        "length": 0.86,
+        "width_factor": 0.9
+      },
+      {
+        "id": 9,
+        "parent": 310,
+        "length": 0.67,
+        "width_factor": 0.73
+      },
+      {
+        "id": 10,
+        "parent": 310,
+        "length": 0.49,
+        "width_factor": 0.56
+      },
+      {
+        "id": 11,
+        "parent": 300,
+        "length": 0.74,
+        "width_factor": 0.8
+      },
+      {
+        "id": 12,
+        "parent": 0,
+        "length": 0.59,
+        "width_factor": 0.66
+      }
+    ]
+  },
+  "seed": 12006,
+  "with_fold_plan": true
+}

@@ -4,7 +4,7 @@
 // 正しい引数で飛ぶ、成功・失敗の知らせが日本語で出る。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ save: vi.fn() }));
 vi.mock("../../ipc/client", () => ({
@@ -22,6 +22,7 @@ vi.mock("../../ipc/client", () => ({
   recoveryRestore: vi.fn(),
   proposalGenerate: vi.fn(),
   proposalProgress: vi.fn(),
+  proposalControl: vi.fn(),
   documentExport: vi.fn(),
 }));
 
@@ -54,6 +55,7 @@ function docWithSteps(steps: number): Document {
 
 const saveMock = vi.mocked(save);
 const exportMock = vi.mocked(ipc.documentExport);
+const realRunExport = useAppStore.getState().runExport;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -66,6 +68,7 @@ beforeEach(() => {
     exportBusy: false,
     exportError: null,
     exportSavedPath: null,
+    runExport: realRunExport,
     doc: docWithSteps(3),
   });
 });
@@ -78,8 +81,8 @@ afterEach(() => {
 describe("書き出しダイアログ", () => {
   it("閉じているときは何も出さない", () => {
     useAppStore.setState({ exportOpen: false });
-    const { container } = render(<ExportDialog />);
-    expect(container.firstChild).toBeNull();
+    render(<ExportDialog />);
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("選べる種類は展開図2つと折り図2つ", () => {
@@ -149,11 +152,17 @@ describe("書き出しダイアログ", () => {
   });
 
   it("保存先を選ばずに閉じたら何も書き出さない", async () => {
-    saveMock.mockResolvedValue(null);
     render(<ExportDialog />);
-    fireEvent.click(screen.getByRole("button", { name: "保存先を選んで書き出す" }));
+    const saveButton = screen.getByRole("button", { name: "保存先を選んで書き出す" });
+    saveMock.mockImplementation(async () => {
+      (saveButton as HTMLButtonElement).blur();
+      return null;
+    });
+    saveButton.focus();
+    fireEvent.click(saveButton);
     await waitFor(() => expect(saveMock).toHaveBeenCalled());
     expect(exportMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(document.activeElement).toBe(saveButton));
   });
 
   it("失敗したら日本語の理由を出す", async () => {
@@ -217,5 +226,173 @@ describe("書き出しダイアログ", () => {
       screen.getByRole("dialog", { name: "展開図・折り図を書き出す" }),
     ).not.toBeNull();
     expect(screen.queryByRole("heading", { name: "画像として書き出す" })).toBeNull();
+  });
+
+  it("選択中で有効な書き出し種類を最初に選び、既存の見た目用classを保つ", async () => {
+    useAppStore.setState({ exportKind: "CpPng" });
+    render(<ExportDialog />);
+
+    const dialog = screen.getByRole("dialog", { name: "展開図・折り図を書き出す" });
+    const selected = screen.getByRole("radio", { name: "展開図(PNG)" });
+    await waitFor(() => expect(document.activeElement).toBe(selected));
+    expect(dialog.className).toBe("dialog");
+    expect(dialog.parentElement?.className).toBe("app dialog-backdrop");
+  });
+
+  it("選択中の種類が無効なら最初の有効な種類を最初に選ぶ", async () => {
+    useAppStore.setState({ doc: docWithSteps(0), exportKind: "DiagramPdf" });
+    render(<ExportDialog />);
+
+    const firstEnabled = screen.getByRole("radio", { name: "展開図(SVG)" });
+    await waitFor(() => expect(document.activeElement).toBe(firstEnabled));
+    expect(
+      (screen.getByRole("radio", { name: "折り図(PDF)" }) as HTMLInputElement).checked,
+    ).toBe(true);
+  });
+
+  it("TabとShift+Tabを100回ずつ循環しても画面外へ出ない", async () => {
+    render(<ExportDialog />);
+    const first = screen.getByRole("radio", { name: "展開図(SVG)" });
+    const last = screen.getByRole("button", { name: "閉じる" });
+    await waitFor(() => expect(document.activeElement).toBe(first));
+
+    for (let i = 0; i < 100; i += 1) {
+      last.focus();
+      fireEvent.keyDown(last, { key: "Tab" });
+      expect(document.activeElement).toBe(first);
+      fireEvent.keyDown(first, { key: "Tab", shiftKey: true });
+      expect(document.activeElement).toBe(last);
+    }
+  });
+
+  it("キーボードだけで開いて指定を変え、Escape後の背景と起点復帰を100回確かめる", async () => {
+    useAppStore.setState({ exportOpen: false });
+    const { container } = render(
+      <>
+        <button
+          type="button"
+          onClick={() => useAppStore.getState().openExport()}
+        >
+          書き出しを開く
+        </button>
+        <ExportDialog />
+      </>,
+    );
+    const pointerDown = vi.fn();
+    const mouseDown = vi.fn();
+    document.addEventListener("pointerdown", pointerDown);
+    document.addEventListener("mousedown", mouseDown);
+    const trigger = screen.getByRole("button", { name: "書き出しを開く" });
+    expect(trigger).toBeInstanceOf(HTMLButtonElement);
+    expect((trigger as HTMLButtonElement).disabled).toBe(false);
+
+    try {
+      for (let cycle = 0; cycle < 100; cycle += 1) {
+        trigger.focus();
+        const enter = new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        });
+        fireEvent(trigger, enter);
+        expect(enter.defaultPrevented).toBe(false);
+        // jsdomはbuttonのEnter既定動作を作らないため、ブラウザが発生させるclickだけを代行する。
+        if (!enter.defaultPrevented) act(() => (trigger as HTMLButtonElement).click());
+        fireEvent.keyUp(trigger, { key: "Enter" });
+
+        const first = screen.getByRole("radio", { name: "展開図(SVG)" });
+        expect(document.activeElement).toBe(first);
+        expect(container.hasAttribute("inert")).toBe(true);
+        expect(
+          screen
+            .getByRole("dialog", { name: "展開図・折り図を書き出す" })
+            .parentElement?.hasAttribute("inert"),
+        ).toBe(false);
+
+        if (cycle === 0) {
+          const includeAux = screen.getByLabelText("補助線(下書きの線)も含める");
+          expect(includeAux).toBeInstanceOf(HTMLInputElement);
+          (includeAux as HTMLInputElement).focus();
+          const space = new KeyboardEvent("keydown", {
+            key: " ",
+            bubbles: true,
+            cancelable: true,
+          });
+          fireEvent(includeAux, space);
+          expect(space.defaultPrevented).toBe(false);
+          // jsdomはcheckboxの空白キー既定動作を作らないため、clickだけを代行する。
+          if (!space.defaultPrevented) act(() => (includeAux as HTMLInputElement).click());
+          fireEvent.keyUp(includeAux, { key: " " });
+          expect(useAppStore.getState().exportIncludeAux).toBe(false);
+        }
+
+        fireEvent.keyDown(first, { key: "Escape" });
+        expect(
+          screen.queryByRole("dialog", { name: "展開図・折り図を書き出す" }),
+        ).toBeNull();
+        await Promise.resolve();
+        expect(document.activeElement).toBe(trigger);
+        expect(container.hasAttribute("inert")).toBe(false);
+      }
+
+      expect(pointerDown).toHaveBeenCalledTimes(0);
+      expect(mouseDown).toHaveBeenCalledTimes(0);
+    } finally {
+      document.removeEventListener("pointerdown", pointerDown);
+      document.removeEventListener("mousedown", mouseDown);
+    }
+  }, 15_000);
+
+  it("書き出し中はEscapeで閉じず、既存の閉じるボタンはそのまま使える", async () => {
+    useAppStore.setState({ exportBusy: true });
+    render(<ExportDialog />);
+    const first = screen.getByRole("radio", { name: "展開図(SVG)" });
+    await waitFor(() => expect(document.activeElement).toBe(first));
+
+    fireEvent.keyDown(first, { key: "Escape" });
+    expect(useAppStore.getState().exportOpen).toBe(true);
+    expect(screen.getByRole("dialog", { name: "展開図・折り図を書き出す" })).not.toBeNull();
+
+    const closeButton = screen.getByRole("button", { name: "閉じる" }) as HTMLButtonElement;
+    expect(closeButton.disabled).toBe(false);
+    fireEvent.click(closeButton);
+    expect(useAppStore.getState().exportOpen).toBe(false);
+  });
+
+  it("OSの保存先選択後は処理中の閉じるへ移り、完了後に保存へ戻る", async () => {
+    let finishExport: (() => void) | null = null;
+    const runExport = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          useAppStore.setState({ exportBusy: true });
+          finishExport = () => {
+            useAppStore.setState({ exportBusy: false });
+            resolve();
+          };
+        }),
+    );
+    useAppStore.setState({ runExport });
+    render(<ExportDialog />);
+    const saveButton = screen.getByRole("button", {
+      name: "保存先を選んで書き出す",
+    });
+    const closeButton = screen.getByRole("button", { name: "閉じる" });
+    saveMock.mockImplementation(async () => {
+      expect(document.activeElement).toBe(saveButton);
+      (saveButton as HTMLButtonElement).blur();
+      expect(document.activeElement).toBe(document.body);
+      return "C:\\出力\\鶴.svg";
+    });
+    saveButton.focus();
+
+    fireEvent.click(saveButton);
+    await waitFor(() => expect(saveMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(runExport).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(document.activeElement).toBe(closeButton));
+    expect((saveButton as HTMLButtonElement).disabled).toBe(true);
+
+    act(() => finishExport?.());
+    await waitFor(() => expect(document.activeElement).toBe(saveButton));
+    expect((saveButton as HTMLButtonElement).disabled).toBe(false);
   });
 });

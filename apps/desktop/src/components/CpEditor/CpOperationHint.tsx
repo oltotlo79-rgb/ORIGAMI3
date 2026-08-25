@@ -8,9 +8,9 @@ import { wheelHint } from "./interaction";
 const CURRENT_ACTION: Record<ToolId, string> = {
   select: "線や点を選び、展開図を動かせます",
   measure: "2つの辺を指定してください",
-  mountain: "山折り線: 2回クリックで線を引きます",
-  valley: "谷折り線: 2回クリックで線を引きます",
-  aux: "補助線: 2回クリックで線を引きます",
+  mountain: "山折り線: 2回クリック、または矢印キーで動かしてEnterを2回",
+  valley: "谷折り線: 2回クリック、または矢印キーで動かしてEnterを2回",
+  aux: "補助線: 2回クリック、または矢印キーで動かしてEnterを2回",
   delete: "消したい線をクリックします",
   fold: "折り線や基準にする点・線を選べます",
   pull: "「引く」は3Dの紙をつかんで操作します",

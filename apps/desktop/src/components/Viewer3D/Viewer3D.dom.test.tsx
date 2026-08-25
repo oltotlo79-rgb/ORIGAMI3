@@ -638,6 +638,7 @@ describe("Viewer3D(指している場所のカーソル)", () => {
       selection: { edgeIds: [], vertexIds: [] },
       suspectHinges: [],
       pinnedFolds: new Map(),
+      foldAllPreview: null,
       paperActionTipVisible: false,
       paperActionTipExpanded: false,
     });
@@ -808,6 +809,52 @@ describe("Viewer3D(指している場所のカーソル)", () => {
         | undefined;
       expect(last?.find((segment) => segment.edgeId === 5)?.role).toBe("suspect");
       expect(last?.some((segment) => segment.role === "pinned")).toBe(false);
+    });
+  });
+
+  it("全部をいっぺんに動かす間は専用の案内を出し、通常形の固定色と赤線を隠す", async () => {
+    useAppStore.setState({
+      pinnedFolds: new Map([[5, 45]]),
+      suspectHinges: [5],
+      foldAllPreview: {
+        session: 1,
+        percent: 50,
+        appliedPercent: 50,
+        busy: false,
+        returning: false,
+        error: null,
+        converged: true,
+        bestEffort: false,
+        relaxationCount: 0,
+        flatFoldViolationCount: 0,
+        suspectHingeCount: 0,
+        contactDetected: false,
+        layerOrder: "unavailable_without_sequence",
+        nextWarmSeed: [],
+        returnState: {
+          docEpoch: useAppStore.getState().docEpoch,
+          currentStep: null,
+          playT: 1,
+          activeTool: "select",
+          selection: { edgeIds: [], vertexIds: [] },
+        },
+      },
+    });
+    renderViewer();
+    await waitFor(() => expect(held.scene.content).not.toBeNull());
+
+    expect(
+      screen.getByText("下の「折る割合」を動かすと、全部の折り目が同じ割合で動きます"),
+    ).toBeTruthy();
+    expect(held.scene.setDrawMode).toHaveBeenLastCalledWith(false, false);
+    await waitFor(() => {
+      const setHighlight = held.scene.setHighlight as ReturnType<typeof vi.fn>;
+      const calls = setHighlight.mock.calls;
+      const last = calls[calls.length - 1]?.[0] as
+        | { edgeId: number; role?: string }[]
+        | undefined;
+      expect(last?.some((segment) => segment.role === "pinned")).toBe(false);
+      expect(last?.some((segment) => segment.role === "suspect")).toBe(false);
     });
   });
 
@@ -1661,6 +1708,58 @@ describe("Viewer3D(3Dから展開図の点を指す)", () => {
     expect(op.id).toBe(8);
     expect(op.to[0]).toBeCloseTo(0.6, 3);
     expect(op.to[1]).toBeCloseTo(0.55, 3);
+  });
+
+  it("全部をいっぺんに動かした形では、視点だけを動かせて紙の点は編集しない", () => {
+    useAppStore.setState({
+      foldAllPreview: {
+        session: 2,
+        percent: 50,
+        appliedPercent: 50,
+        busy: false,
+        returning: false,
+        error: null,
+        converged: true,
+        bestEffort: false,
+        relaxationCount: 0,
+        flatFoldViolationCount: 0,
+        suspectHingeCount: 0,
+        contactDetected: false,
+        layerOrder: "unavailable_without_sequence",
+        nextWarmSeed: [],
+        returnState: {
+          docEpoch: useAppStore.getState().docEpoch,
+          currentStep: null,
+          playT: 1,
+          activeTool: "select",
+          selection: { edgeIds: [], vertexIds: [] },
+        },
+      },
+    });
+    const canvas = renderViewer();
+    const from = gridPoint([0.5, 0.5]);
+    const to = gridPoint([0.6, 0.55]);
+
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 1,
+      clientX: from.x,
+      clientY: from.y,
+    });
+    fireEvent.pointerMove(canvas, { pointerId: 1, clientX: to.x, clientY: to.y });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 1,
+      clientX: to.x,
+      clientY: to.y,
+    });
+
+    expect(ipc.editApply).not.toHaveBeenCalled();
+    expect(useAppStore.getState().selection).toEqual({ edgeIds: [], vertexIds: [] });
+    expect(canvas.getAttribute("aria-label")).toBe(
+      "全部の折り目を同じ割合で動かした形。ドラッグで視点を回せます",
+    );
+    expect(canvas.getAttribute("data-tooltip")).not.toContain("点はドラッグで動かせます");
   });
 
   it("選択: 紙の外形の点は動かさない(展開図区画と同じ規則)", () => {

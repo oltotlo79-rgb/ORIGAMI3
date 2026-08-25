@@ -471,7 +471,7 @@ pub enum EditOp {
 }
 
 /// sequence_apply コマンドの操作enum
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize)]
 #[serde(tag = "type")]
 pub enum SeqOp {
     PushStep {
@@ -486,6 +486,10 @@ pub enum SeqOp {
     },
     UpdateStep {
         step: FoldStep,
+    },
+    MoveStep {
+        id: StepId,
+        to_index: usize,
     },
     /// 畳んだ状態の上に折り線を引いてまとめて折る(3D画面・展開図画面のどちらからも使う)。
     ///
@@ -562,6 +566,147 @@ pub enum SeqOp {
         #[serde(default)]
         center: Option<[f64; 2]>,
     },
+}
+
+// Serdeの `deny_unknown_fields` はenum全体には指定できてもvariant単位には
+// 指定できない。既存操作が受け取る `spatial` envelopeを保つため、MoveStepの
+// payloadだけを厳密なstructとして読み、他のvariantは従来どおり余剰fieldを許す。
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MoveStepFields {
+    id: StepId,
+    to_index: usize,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(tag = "type")]
+enum SeqOpDeserialize {
+    PushStep {
+        step: FoldStep,
+    },
+    InsertStep {
+        index: usize,
+        step: FoldStep,
+    },
+    RemoveStep {
+        id: StepId,
+    },
+    UpdateStep {
+        step: FoldStep,
+    },
+    MoveStep(MoveStepFields),
+    FoldThrough {
+        up_to: usize,
+        line: [[f64; 2]; 2],
+        keep_side_point: [f64; 2],
+        target_layers: Option<Vec<FaceId>>,
+        direction: FoldDirection,
+        #[serde(default)]
+        alignment: Option<FoldAlignment>,
+        #[serde(default)]
+        accept_additional_crease: bool,
+    },
+    PreviewFoldThrough {
+        up_to: usize,
+        line: [[f64; 2]; 2],
+        keep_side_point: [f64; 2],
+        target_layers: Option<Vec<FaceId>>,
+        direction: FoldDirection,
+    },
+    FlatMotion {
+        up_to: usize,
+        parts: Vec<MotionPart>,
+        kind: TechniqueKind,
+    },
+    Technique {
+        up_to: usize,
+        kind: TechniqueKind,
+        flap: Vec<FaceId>,
+        line: [[f64; 2]; 2],
+        reference_point: [f64; 2],
+        #[serde(default)]
+        open_to_back: Option<bool>,
+        #[serde(default)]
+        polygon: Option<Vec<[f64; 2]>>,
+        #[serde(default)]
+        center: Option<[f64; 2]>,
+    },
+}
+
+impl From<SeqOpDeserialize> for SeqOp {
+    fn from(op: SeqOpDeserialize) -> Self {
+        match op {
+            SeqOpDeserialize::PushStep { step } => Self::PushStep { step },
+            SeqOpDeserialize::InsertStep { index, step } => Self::InsertStep { index, step },
+            SeqOpDeserialize::RemoveStep { id } => Self::RemoveStep { id },
+            SeqOpDeserialize::UpdateStep { step } => Self::UpdateStep { step },
+            SeqOpDeserialize::MoveStep(fields) => Self::MoveStep {
+                id: fields.id,
+                to_index: fields.to_index,
+            },
+            SeqOpDeserialize::FoldThrough {
+                up_to,
+                line,
+                keep_side_point,
+                target_layers,
+                direction,
+                alignment,
+                accept_additional_crease,
+            } => Self::FoldThrough {
+                up_to,
+                line,
+                keep_side_point,
+                target_layers,
+                direction,
+                alignment,
+                accept_additional_crease,
+            },
+            SeqOpDeserialize::PreviewFoldThrough {
+                up_to,
+                line,
+                keep_side_point,
+                target_layers,
+                direction,
+            } => Self::PreviewFoldThrough {
+                up_to,
+                line,
+                keep_side_point,
+                target_layers,
+                direction,
+            },
+            SeqOpDeserialize::FlatMotion { up_to, parts, kind } => {
+                Self::FlatMotion { up_to, parts, kind }
+            }
+            SeqOpDeserialize::Technique {
+                up_to,
+                kind,
+                flap,
+                line,
+                reference_point,
+                open_to_back,
+                polygon,
+                center,
+            } => Self::Technique {
+                up_to,
+                kind,
+                flap,
+                line,
+                reference_point,
+                open_to_back,
+                polygon,
+                center,
+            },
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SeqOp {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        SeqOpDeserialize::deserialize(deserializer).map(Into::into)
+    }
 }
 
 fn is_false(value: &bool) -> bool {

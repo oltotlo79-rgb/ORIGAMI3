@@ -1,0 +1,606 @@
+{
+  "schema": 1,
+  "cases": [
+    {
+      "category": "01_invalid_json",
+      "name": "empty",
+      "expected": "parse",
+      "source": ""
+    },
+    {
+      "category": "01_invalid_json",
+      "name": "open_object",
+      "expected": "parse",
+      "source": "{"
+    },
+    {
+      "category": "01_invalid_json",
+      "name": "open_array",
+      "expected": "parse",
+      "source": "["
+    },
+    {
+      "category": "01_invalid_json",
+      "name": "missing_value",
+      "expected": "parse",
+      "source": "{\"file_spec\":"
+    },
+    {
+      "category": "01_invalid_json",
+      "name": "trailing_comma",
+      "expected": "parse",
+      "source": "{\"file_spec\":1.2,}"
+    },
+    {
+      "category": "01_invalid_json",
+      "name": "single_quotes",
+      "expected": "parse",
+      "source": "{'file_spec':1.2}"
+    },
+    {
+      "category": "01_invalid_json",
+      "name": "leading_zero",
+      "expected": "parse",
+      "source": "{\"file_spec\":01.2}"
+    },
+    {
+      "category": "01_invalid_json",
+      "name": "nan_token",
+      "expected": "parse",
+      "source": "{\"file_spec\":NaN}"
+    },
+    {
+      "category": "01_invalid_json",
+      "name": "trailing_text",
+      "expected": "parse",
+      "source": "{\"file_spec\":1.2} trailing"
+    },
+    {
+      "category": "01_invalid_json",
+      "name": "missing_comma",
+      "expected": "parse",
+      "source": "{\"file_spec\":1.2 \"vertices_coords\":[]}"
+    },
+    {
+      "category": "02_root_and_version",
+      "name": "root_null",
+      "expected": "parse",
+      "source": "null"
+    },
+    {
+      "category": "02_root_and_version",
+      "name": "root_bool",
+      "expected": "parse",
+      "source": "true"
+    },
+    {
+      "category": "02_root_and_version",
+      "name": "root_number",
+      "expected": "parse",
+      "source": "0"
+    },
+    {
+      "category": "02_root_and_version",
+      "name": "root_string",
+      "expected": "parse",
+      "source": "\"fold\""
+    },
+    {
+      "category": "02_root_and_version",
+      "name": "root_array",
+      "expected": "parse",
+      "source": "[]"
+    },
+    {
+      "category": "02_root_and_version",
+      "name": "missing_file_spec",
+      "expected": "parse",
+      "source": "{}"
+    },
+    {
+      "category": "02_root_and_version",
+      "name": "file_spec_null",
+      "expected": "parse",
+      "source": "{\"file_spec\":null}"
+    },
+    {
+      "category": "02_root_and_version",
+      "name": "file_spec_string",
+      "expected": "parse",
+      "source": "{\"file_spec\":\"1.2\"}"
+    },
+    {
+      "category": "02_root_and_version",
+      "name": "unsupported_1_1",
+      "expected": "parse",
+      "source": "{\"file_spec\":1.1}"
+    },
+    {
+      "category": "02_root_and_version",
+      "name": "unsupported_near_1_2",
+      "expected": "parse",
+      "source": "{\"file_spec\":1.2000001}"
+    },
+    {
+      "category": "03_known_field_types",
+      "name": "file_creator_number",
+      "expected": "parse",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0],\"file_creator\":7}"
+    },
+    {
+      "category": "03_known_field_types",
+      "name": "file_author_bool",
+      "expected": "parse",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0],\"file_author\":true}"
+    },
+    {
+      "category": "03_known_field_types",
+      "name": "file_title_array",
+      "expected": "parse",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0],\"file_title\":[]}"
+    },
+    {
+      "category": "03_known_field_types",
+      "name": "file_description_object",
+      "expected": "parse",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0],\"file_description\":{\"text\":\"x\"}}"
+    },
+    {
+      "category": "03_known_field_types",
+      "name": "file_classes_string",
+      "expected": "parse",
+      "source": "{\"file_spec\":1.2,\"file_classes\":\"singleModel\",\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "03_known_field_types",
+      "name": "file_classes_bad_item",
+      "expected": "parse",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[true],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "03_known_field_types",
+      "name": "frame_title_number",
+      "expected": "parse",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0],\"frame_title\":1}"
+    },
+    {
+      "category": "03_known_field_types",
+      "name": "frame_description_array",
+      "expected": "parse",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0],\"frame_description\":[\"x\"]}"
+    },
+    {
+      "category": "03_known_field_types",
+      "name": "frame_classes_object",
+      "expected": "parse",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":{},\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "03_known_field_types",
+      "name": "frame_attributes_bad_item",
+      "expected": "parse",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[2],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "04_array_element_types",
+      "name": "vertices_not_array",
+      "expected": "parse",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":{},\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "04_array_element_types",
+      "name": "vertex_not_array",
+      "expected": "parse",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[0,[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "04_array_element_types",
+      "name": "vertex_component_string",
+      "expected": "parse",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[\"x\",0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "04_array_element_types",
+      "name": "edges_null",
+      "expected": "parse",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":null,\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "04_array_element_types",
+      "name": "edge_not_array",
+      "expected": "parse",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[\"0-1\",[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "04_array_element_types",
+      "name": "edge_negative_index",
+      "expected": "parse",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[-1,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "04_array_element_types",
+      "name": "assignments_object",
+      "expected": "parse",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":{\"0\":\"B\"},\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "04_array_element_types",
+      "name": "assignment_number",
+      "expected": "parse",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[0,\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "04_array_element_types",
+      "name": "angles_string",
+      "expected": "parse",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":\"zero\"}"
+    },
+    {
+      "category": "04_array_element_types",
+      "name": "angle_bool",
+      "expected": "parse",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[false,0,0,0]}"
+    },
+    {
+      "category": "05_required_and_cardinality",
+      "name": "missing_vertices",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "05_required_and_cardinality",
+      "name": "missing_edges",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "05_required_and_cardinality",
+      "name": "missing_assignments",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "05_required_and_cardinality",
+      "name": "empty_vertices",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "05_required_and_cardinality",
+      "name": "empty_edges",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "05_required_and_cardinality",
+      "name": "empty_assignments",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "05_required_and_cardinality",
+      "name": "short_angle_array",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0]}"
+    },
+    {
+      "category": "05_required_and_cardinality",
+      "name": "one_component_vertex",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "05_required_and_cardinality",
+      "name": "one_endpoint_edge",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "05_required_and_cardinality",
+      "name": "two_vertex_face",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0],\"faces_vertices\":[[0,1]]}"
+    },
+    {
+      "category": "06_topology",
+      "name": "out_of_range_vertex",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,9],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "06_topology",
+      "name": "self_loop",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,0],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "06_topology",
+      "name": "duplicate_reverse_edge",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,0],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "06_topology",
+      "name": "unvertexed_crossing",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0],[0,2],[1,3]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\",\"M\",\"V\"],\"edges_foldAngle\":[0,0,0,0,0,0]}"
+    },
+    {
+      "category": "06_topology",
+      "name": "incomplete_boundary",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"M\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "06_topology",
+      "name": "two_boundary_cycles",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1],[2,0],[3,0],[3,1],[2,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\",\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0,0,0,0,0]}"
+    },
+    {
+      "category": "06_topology",
+      "name": "trapezoid_sheet",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[0.8,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "06_topology",
+      "name": "zero_scale_sheet",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[0,0],[0,0],[0,0]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "06_topology",
+      "name": "vertex_outside_sheet",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1],[2,0.5]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "06_topology",
+      "name": "self_intersecting_boundary",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,1],[0,1],[1,0]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "07_unsupported_profile",
+      "name": "file_animation_class",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"animation\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "07_unsupported_profile",
+      "name": "file_multi_model_class",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"multiModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "07_unsupported_profile",
+      "name": "frame_animation_class",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"animation\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "07_unsupported_profile",
+      "name": "attribute_3d",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"3D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "07_unsupported_profile",
+      "name": "attribute_non_manifold",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"nonManifold\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "07_unsupported_profile",
+      "name": "attribute_non_orientable",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"nonOrientable\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "07_unsupported_profile",
+      "name": "attribute_self_intersecting",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"selfIntersecting\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "07_unsupported_profile",
+      "name": "file_animation_field",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0],\"file_animation\":{\"frames\":[]}}"
+    },
+    {
+      "category": "07_unsupported_profile",
+      "name": "vertices_coords3d_field",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0],\"vertices_coords3d\":[[0,0,0]]}"
+    },
+    {
+      "category": "07_unsupported_profile",
+      "name": "faces_holes_field",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0],\"faces_holes\":[[0]]}"
+    },
+    {
+      "category": "08_frame_sequence",
+      "name": "root_parent",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0],\"frame_parent\":0}"
+    },
+    {
+      "category": "08_frame_sequence",
+      "name": "root_inherit",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0],\"frame_inherit\":true}"
+    },
+    {
+      "category": "08_frame_sequence",
+      "name": "child_missing_parent",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0],\"file_frames\":[{\"frame_classes\":[\"foldedForm\"],\"frame_attributes\":[\"2D\"],\"frame_inherit\":true,\"edges_foldAngle\":[0,0,0,0]}]}"
+    },
+    {
+      "category": "08_frame_sequence",
+      "name": "child_wrong_parent",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0],\"file_frames\":[{\"frame_classes\":[\"foldedForm\"],\"frame_attributes\":[\"2D\"],\"frame_parent\":7,\"frame_inherit\":true,\"edges_foldAngle\":[0,0,0,0]}]}"
+    },
+    {
+      "category": "08_frame_sequence",
+      "name": "child_no_inherit_missing_geometry",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0],\"file_frames\":[{\"frame_classes\":[\"foldedForm\"],\"frame_attributes\":[\"2D\"],\"frame_parent\":0,\"frame_inherit\":false,\"edges_foldAngle\":[0,0,0,0]}]}"
+    },
+    {
+      "category": "08_frame_sequence",
+      "name": "step_changes_edge_topology",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0],\"file_frames\":[{\"frame_classes\":[\"foldedForm\"],\"frame_attributes\":[\"2D\"],\"frame_parent\":0,\"frame_inherit\":true,\"edges_foldAngle\":[0,0,0,0],\"edges_vertices\":[[1,0],[2,1],[3,2],[0,3]]}]}"
+    },
+    {
+      "category": "08_frame_sequence",
+      "name": "step_changes_assignment",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0],\"file_frames\":[{\"frame_classes\":[\"foldedForm\"],\"frame_attributes\":[\"2D\"],\"frame_parent\":0,\"frame_inherit\":true,\"edges_foldAngle\":[0,0,0,0],\"edges_assignment\":[\"B\",\"B\",\"B\",\"M\"]}]}"
+    },
+    {
+      "category": "08_frame_sequence",
+      "name": "step_changes_vertex_count",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0],\"file_frames\":[{\"frame_classes\":[\"foldedForm\"],\"frame_attributes\":[\"2D\"],\"frame_parent\":0,\"frame_inherit\":true,\"edges_foldAngle\":[0,0,0,0],\"vertices_coords\":[[0,0],[1,0],[1,1]]}]}"
+    },
+    {
+      "category": "08_frame_sequence",
+      "name": "second_child_branches_to_root",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0],\"file_frames\":[{\"frame_classes\":[\"foldedForm\"],\"frame_attributes\":[\"2D\"],\"frame_parent\":0,\"frame_inherit\":true,\"edges_foldAngle\":[0,0,0,0]},{\"frame_classes\":[\"foldedForm\"],\"frame_attributes\":[\"2D\"],\"frame_parent\":0,\"frame_inherit\":true,\"edges_foldAngle\":[0,0,0,0]}]}"
+    },
+    {
+      "category": "08_frame_sequence",
+      "name": "step_changes_coordinates",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0],\"file_frames\":[{\"frame_classes\":[\"foldedForm\"],\"frame_attributes\":[\"2D\"],\"frame_parent\":0,\"frame_inherit\":true,\"edges_foldAngle\":[0,0,0,0],\"vertices_coords\":[[0.1,0],[1,0],[1,1],[0,1]]}]}"
+    },
+    {
+      "category": "09_assignment_and_angle",
+      "name": "unknown_assignment",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"X\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "09_assignment_and_angle",
+      "name": "empty_assignment",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0]}"
+    },
+    {
+      "category": "09_assignment_and_angle",
+      "name": "angle_above_180",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[181,0,0,0]}"
+    },
+    {
+      "category": "09_assignment_and_angle",
+      "name": "angle_below_minus_180",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[-181,0,0,0]}"
+    },
+    {
+      "category": "09_assignment_and_angle",
+      "name": "border_nonzero",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[10,0,0,0]}"
+    },
+    {
+      "category": "09_assignment_and_angle",
+      "name": "flat_nonzero",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"F\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[10,0,0,0]}"
+    },
+    {
+      "category": "09_assignment_and_angle",
+      "name": "unassigned_nonzero",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"U\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[-10,0,0,0]}"
+    },
+    {
+      "category": "09_assignment_and_angle",
+      "name": "mountain_positive",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"M\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[10,0,0,0]}"
+    },
+    {
+      "category": "09_assignment_and_angle",
+      "name": "valley_negative",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"V\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[-10,0,0,0]}"
+    },
+    {
+      "category": "09_assignment_and_angle",
+      "name": "step_null_mountain_angle",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0],[0,2]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\",\"M\"],\"edges_foldAngle\":[0,0,0,0,0],\"file_frames\":[{\"frame_classes\":[\"foldedForm\"],\"frame_attributes\":[\"2D\"],\"frame_parent\":0,\"frame_inherit\":true,\"edges_foldAngle\":[0,0,0,0,null]}]}"
+    },
+    {
+      "category": "10_face_orders",
+      "name": "orders_without_faces",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\"],\"edges_foldAngle\":[0,0,0,0],\"faceOrders\":[[0,1,1]]}"
+    },
+    {
+      "category": "10_face_orders",
+      "name": "order_has_two_items",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0],[0,2]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\",\"M\"],\"edges_foldAngle\":[0,0,0,0,0],\"faces_vertices\":[[0,1,2],[0,2,3]],\"faceOrders\":[[0,1]]}"
+    },
+    {
+      "category": "10_face_orders",
+      "name": "order_has_four_items",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0],[0,2]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\",\"M\"],\"edges_foldAngle\":[0,0,0,0,0],\"faces_vertices\":[[0,1,2],[0,2,3]],\"faceOrders\":[[0,1,1,0]]}"
+    },
+    {
+      "category": "10_face_orders",
+      "name": "negative_face_index",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0],[0,2]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\",\"M\"],\"edges_foldAngle\":[0,0,0,0,0],\"faces_vertices\":[[0,1,2],[0,2,3]],\"faceOrders\":[[-1,0,1]]}"
+    },
+    {
+      "category": "10_face_orders",
+      "name": "out_of_range_face_index",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0],[0,2]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\",\"M\"],\"edges_foldAngle\":[0,0,0,0,0],\"faces_vertices\":[[0,1,2],[0,2,3]],\"faceOrders\":[[0,2,1]]}"
+    },
+    {
+      "category": "10_face_orders",
+      "name": "same_face_twice",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0],[0,2]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\",\"M\"],\"edges_foldAngle\":[0,0,0,0,0],\"faces_vertices\":[[0,1,2],[0,2,3]],\"faceOrders\":[[0,0,1]]}"
+    },
+    {
+      "category": "10_face_orders",
+      "name": "invalid_sign_zero",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0],[0,2]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\",\"M\"],\"edges_foldAngle\":[0,0,0,0,0],\"faces_vertices\":[[0,1,2],[0,2,3]],\"faceOrders\":[[0,1,0]]}"
+    },
+    {
+      "category": "10_face_orders",
+      "name": "cyclic_order",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0],[0,2]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\",\"M\"],\"edges_foldAngle\":[0,0,0,0,0],\"faces_vertices\":[[0,1,2],[0,2,3]],\"faceOrders\":[[0,1,1],[1,0,1]]}"
+    },
+    {
+      "category": "10_face_orders",
+      "name": "non_unique_partial_order",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1],[0.5,0.5]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0],[0,4],[1,4],[2,4],[3,4]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\",\"M\",\"M\",\"M\",\"M\"],\"edges_foldAngle\":[0,0,0,0,0,0,0,0],\"faces_vertices\":[[0,1,4],[1,2,4],[2,3,4],[3,0,4]],\"faceOrders\":[[1,0,1]]}"
+    },
+    {
+      "category": "10_face_orders",
+      "name": "redundant_transitive_order",
+      "expected": "convert",
+      "source": "{\"file_spec\":1.2,\"file_classes\":[\"singleModel\"],\"frame_classes\":[\"creasePattern\"],\"frame_attributes\":[\"2D\"],\"vertices_coords\":[[0,0],[1,0],[1,1],[0,1],[0.5,0.5]],\"edges_vertices\":[[0,1],[1,2],[2,3],[3,0],[0,4],[1,4],[2,4],[3,4]],\"edges_assignment\":[\"B\",\"B\",\"B\",\"B\",\"M\",\"M\",\"M\",\"M\"],\"edges_foldAngle\":[0,0,0,0,0,0,0,0],\"faces_vertices\":[[0,1,4],[1,2,4],[2,3,4],[3,0,4]],\"faceOrders\":[[1,0,1],[2,1,1],[3,2,1],[3,0,1]]}"
+    }
+  ]
+}
+

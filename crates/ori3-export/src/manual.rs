@@ -2258,7 +2258,14 @@ mod tests {
         assert_eq!(pixel_at(&detail, 100, 100), timeline);
         assert_eq!(pixel_at(&detail, 100, 500), selected_step);
         assert_eq!(pixel_at(&detail, 900, 500), move_buttons);
-        assert!(!detail.data().as_chunks::<4>().0.iter().any(|pixel| pixel == &excluded));
+        assert!(
+            !detail
+                .data()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel == &excluded)
+        );
     }
 
     #[test]
@@ -2283,7 +2290,14 @@ mod tests {
         assert_eq!(pixel_at(&detail, 100, 100), crease_help);
         assert_eq!(pixel_at(&detail, 900, 600), three_dimensional_help);
         assert_eq!(pixel_at(&detail, 900, 400), tooltip);
-        assert!(!detail.data().as_chunks::<4>().0.iter().any(|pixel| pixel == &excluded));
+        assert!(
+            !detail
+                .data()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel == &excluded)
+        );
     }
 
     #[test]
@@ -2303,7 +2317,14 @@ mod tests {
 
         assert_eq!((detail.width(), detail.height()), (2560, 1644));
         assert_eq!(pixel_at(&detail, 1280, 1643), retained);
-        assert!(!detail.data().as_chunks::<4>().0.iter().any(|pixel| pixel == &excluded));
+        assert!(
+            !detail
+                .data()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel == &excluded)
+        );
     }
 
     #[test]
@@ -2331,7 +2352,14 @@ mod tests {
         assert_eq!(pixel_at(&detail, 1350, 110), warning_badge);
         assert_eq!(pixel_at(&detail, 900, 400), warning_message_top);
         assert_eq!(pixel_at(&detail, 900, 510), warning_message_bottom);
-        assert!(!detail.data().as_chunks::<4>().0.iter().any(|pixel| pixel == &excluded));
+        assert!(
+            !detail
+                .data()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel == &excluded)
+        );
     }
 
     #[test]

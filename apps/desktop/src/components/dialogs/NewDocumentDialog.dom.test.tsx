@@ -3,7 +3,7 @@
 // 閉じていれば何も出さない、形と大きさを選べる、正方形ならたては触らせない。
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { NewDocumentDialog } from "./NewDocumentDialog";
 import { DEFAULT_NEW_PAPER, useAppStore } from "../../store/appStore";
 
@@ -17,8 +17,8 @@ afterEach(() => {
 
 describe("新規作成ダイアログ", () => {
   it("開いていなければ何も出さない", () => {
-    const { container } = render(<NewDocumentDialog />);
-    expect(container.firstChild).toBeNull();
+    render(<NewDocumentDialog />);
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("紙の形と大きさを日本語で選べる", () => {
@@ -103,5 +103,87 @@ describe("新規作成ダイアログ", () => {
     }) as HTMLButtonElement;
     expect(ok.disabled).toBe(true);
     expect(screen.getByText("大きさは0より大きいmmで入れてください")).not.toBeNull();
+  });
+
+  it("キーボードだけで開いて入力し、Tab循環とEscape後の入口復帰を100回確かめる", async () => {
+    const { container } = render(
+      <>
+        <button
+          type="button"
+          onClick={() => useAppStore.getState().openNewDialog()}
+        >
+          新しい紙を開く
+        </button>
+        <NewDocumentDialog />
+      </>,
+    );
+    const pointerDown = vi.fn();
+    const mouseDown = vi.fn();
+    document.addEventListener("pointerdown", pointerDown);
+    document.addEventListener("mousedown", mouseDown);
+    const trigger = screen.getByRole("button", { name: "新しい紙を開く" });
+    expect(trigger).toBeInstanceOf(HTMLButtonElement);
+    expect((trigger as HTMLButtonElement).disabled).toBe(false);
+
+    try {
+      for (let cycle = 0; cycle < 100; cycle += 1) {
+        trigger.focus();
+        const enter = new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        });
+        fireEvent(trigger, enter);
+        expect(enter.defaultPrevented).toBe(false);
+        // jsdomはbuttonのEnter既定動作を作らないため、ブラウザが発生させるclickだけを代行する。
+        if (!enter.defaultPrevented) act(() => (trigger as HTMLButtonElement).click());
+        fireEvent.keyUp(trigger, { key: "Enter" });
+
+        const first = screen.getByLabelText("正方形(たて・よこが同じ)");
+        const last = screen.getByRole("button", { name: "やめる" });
+        expect(document.activeElement).toBe(first);
+        expect(container.hasAttribute("inert")).toBe(true);
+
+        if (cycle === 0) {
+          const width = screen.getByLabelText("紙の横の長さ（mm）");
+          (width as HTMLInputElement).focus();
+          fireEvent.input(width, { target: { value: "160" } });
+          expect(useAppStore.getState().newPaperDraft.widthMm).toBe(160);
+
+          for (let attempt = 0; attempt < 100; attempt += 1) {
+            last.focus();
+            fireEvent.keyDown(last, { key: "Tab" });
+            expect(document.activeElement).toBe(first);
+
+            first.focus();
+            fireEvent.keyDown(first, { key: "Tab", shiftKey: true });
+            expect(document.activeElement).toBe(last);
+          }
+        }
+
+        fireEvent.keyDown(first, { key: "Escape" });
+        expect(screen.queryByRole("dialog")).toBeNull();
+        await Promise.resolve();
+        expect(document.activeElement).toBe(trigger);
+        expect(container.hasAttribute("inert")).toBe(false);
+      }
+
+      expect(pointerDown).toHaveBeenCalledTimes(0);
+      expect(mouseDown).toHaveBeenCalledTimes(0);
+    } finally {
+      document.removeEventListener("pointerdown", pointerDown);
+      document.removeEventListener("mousedown", mouseDown);
+    }
+  }, 15_000);
+
+  it("長方形で開いたときは選択中の形を最初に選ぶ", () => {
+    useAppStore.setState({
+      newDialogOpen: true,
+      newPaperDraft: { widthMm: 297, heightMm: 210, square: false },
+    });
+    render(<NewDocumentDialog />);
+    expect(document.activeElement).toBe(
+      screen.getByLabelText("長方形(たて・よこを別に決める)"),
+    );
   });
 });

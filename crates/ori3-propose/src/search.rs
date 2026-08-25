@@ -387,7 +387,11 @@ impl Default for CompletionTolerance {
     }
 }
 
-/// 探索の打ち切り条件。
+/// 探索結果を決める、決定的な打ち切り条件。
+///
+/// 状態数・深さ・分岐数と候補の走査順だけを持つ。壁時計watchdogと取消しは
+/// [`SearchControl`] に分けてあり、この値を同じにすれば機械の速さにかかわらず
+/// 同じ状態を同じ順で調べる。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SearchBudget {
     /// 手を広げてよい状態の数の上限。
@@ -405,29 +409,29 @@ pub struct SearchBudget {
     /// 順位の上位に残った手だけをこの細かさで確かめ直し、
     /// 通らなかった手は捨てる。**返る手はすべてこの細かさを通っている。**
     pub scan: PoseScan,
-    /// 1回の探索に使ってよい壁時計時間の上限(ミリ秒)。
-    ///
-    /// 打ち切りは操作を止めない安全弁である。この時間に達しても、
-    /// そこまでに確かめ終えた最善の手順をそのまま返す([`SearchStop::TimeCap`])。
-    /// [`SearchBudget::DEFAULT`] はここへ [`SearchBudget::MAX_MILLIS`]
-    /// (240,000ms・検査用の固定標本を切らない値)を入れる。**呼び出し側は
-    /// 用途に応じてこの項目だけを変えてよい。** 画面から呼ぶ
-    /// `apps/desktop/src-tauri/src/commands.rs::PLAN_BUDGET` は
-    /// 6,000msを使う(根拠は同ファイルのコメントと
-    /// `scratchpad/search-budget-report.md`)。
+}
+
+/// 探索が異常に長く走り続けたときだけ中断する壁時計watchdog。
+///
+/// [`SearchBudget`] とは別型なので、watchdog到達を通常の探索結果や
+/// [`SearchStop`] に混ぜることはできない。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SearchWatchdog {
+    /// 1回の探索に許す壁時計時間(ミリ秒)。
     pub max_millis: u64,
 }
 
-impl SearchBudget {
+impl SearchWatchdog {
     /// 1回の探索に使ってよい壁時計時間の上限(ミリ秒)。
     ///
-    /// これは**すべての `SearchBudget` に共通する安全弁**である。状態数や分岐数を
+    /// これは既定のwatchdog安全弁である。状態数や分岐数を
     /// 個別に変える呼び出しでも、探索が無制限に走り続けないようにする。
     ///
     /// ## この値の決め方（実測、2026-08-22）
     ///
     /// 上限は、**正しく完成する探索を途中で切らない**ことが先に要る。切ってしまうと
-    /// 受け入れ検査が `TimeCap` で赤くなり、CIも通らない（実際に600秒で起きた。
+    /// 受け入れ検査が `SearchAbort::WatchdogExpired` で赤くなり、CIも通らない
+    /// （実際に600秒で起きた。
     /// `crate::enumerate` の候補の作り分けのコメントを参照）。
     /// そこで、いちばん重い正当な探索を測り、そこから余裕を取って決めた。
     ///
@@ -444,17 +448,16 @@ impl SearchBudget {
     /// 当てると `172.3 / 0.8 = 215.4秒` 以上が要る。人に読みやすい単位へ切り上げて
     /// **4分 = 240,000ms** とした。想定最大はこの **71.8%**、手元の最適化なしでは **19.9%**。
     ///
-    /// **この値は [`SearchBudget::DEFAULT`] の [`SearchBudget::max_millis`] にだけ入る。**
-    /// 検査用の固定標本(既定12状態)を切らないための値で、利用者の画面での待ち時間の
-    /// 上限ではない。
+    /// **この値は [`SearchWatchdog::DEFAULT`] にだけ入る。** 検査用の固定標本
+    /// (既定12状態)を異常扱いしないための値で、探索結果を決める予算ではない。
     ///
     /// ## 利用者の待ち時間との関係（2026-08-22に解決）
     ///
     /// この定数は検査用の固定標本にも同じように掛かるため、**利用者に許したい
     /// 待ち時間（数秒）をそのまま入れることはできなかった**。そこで時間上限を
-    /// [`SearchBudget::max_millis`] という**呼び出しごとに変えられる項目**にした。
+    /// [`SearchWatchdog::max_millis`] という**呼び出しごとに変えられる項目**にした。
     /// 製品の `apps/desktop/src-tauri/src/commands.rs::PLAN_BUDGET`(2状態・2分岐、
-    /// 検査の12状態よりずっと軽い)は、ここだけ独自に **6,000ms** を入れる。
+    /// 検査の12状態よりずっと軽い)は、別のwatchdog型へ独自に **30,000ms** を入れる。
     /// 根拠(最適化ありの実測)は `commands.rs` のコメントと
     /// `scratchpad/search-budget-report.md` にある
     /// (`scratchpad/propose-search-subset-report.md` §16.7.5 の判断待ちに対する回答)。
@@ -483,6 +486,69 @@ impl SearchBudget {
     /// **CIの `performance` ジョブで折り鶴が打ち切られる**(手元では95.5秒で通るので気づけない)。
     pub const MAX_MILLIS: u64 = 600_000;
 
+    /// 恒久の既定watchdog。値は実測を根拠にした安全弁で、通常停止には使わない。
+    pub const DEFAULT: Self = Self {
+        max_millis: Self::MAX_MILLIS,
+    };
+}
+
+impl Default for SearchWatchdog {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// 探索取消し状態を読む窓口。
+///
+/// 状態の置き場所は所有しない。後続段階のjob registryが持つ単一snapshotをclosureで
+/// 読めるため、取消しだけを別のatomicへ二重管理しない。
+pub trait SearchCancellation: Send + Sync {
+    /// 取消しが通知済みか。
+    fn is_cancelled(&self) -> bool;
+}
+
+impl<F> SearchCancellation for F
+where
+    F: Fn() -> bool + Send + Sync,
+{
+    fn is_cancelled(&self) -> bool {
+        self()
+    }
+}
+
+/// 探索の実行だけを見張る制御。通常結果を決める値は持たない。
+pub struct SearchControl<'a> {
+    watchdog: SearchWatchdog,
+    cancellation: &'a dyn SearchCancellation,
+}
+
+impl<'a> SearchControl<'a> {
+    /// watchdogと、取消し状態を読む窓口を組み合わせる。
+    #[must_use]
+    pub fn new(watchdog: SearchWatchdog, cancellation: &'a dyn SearchCancellation) -> Self {
+        Self {
+            watchdog,
+            cancellation,
+        }
+    }
+
+    /// 設定したwatchdog。
+    #[must_use]
+    pub fn watchdog(&self) -> SearchWatchdog {
+        self.watchdog
+    }
+}
+
+/// 通常の探索結果を返さずに実行を中断した理由。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SearchAbort {
+    /// 壁時計watchdogへ到達した。途中までの候補は返さない。
+    WatchdogExpired,
+    /// 呼び出し側から取消しが通知された。途中までの候補は返さない。
+    Cancelled,
+}
+
+impl SearchBudget {
     /// 既定の打ち切り。**実測を根拠に決めた**(`scratchpad/propose-22-report.md` 段階1)。
     ///
     /// ## なぜ打ち切りが要るか(実測)
@@ -498,7 +564,7 @@ impl SearchBudget {
     /// |---|---:|---|
     /// | `max_states` | **12** | 部分集合候補追加後も、折り鶴は6状態、やっこさんは1状態で完成許容へ到達する。鳥の基本形は12状態で安全に打ち切る |
     /// | `branch` | **3** | 枝刈り前の候補最大は、折り鶴4・やっこさん9・鳥の基本形3。完成許容内の候補を順位の先頭へ置いた上で、保持する子を上位3件に絞る |
-    /// | [`max_millis`](Self::max_millis) | **600,000**([`MAX_MILLIS`](Self::MAX_MILLIS)) | 最適化ありの折り鶴の最大99.804秒。CIは約3.6倍遅いので359.3秒を想定し、8割余裕の449.1秒を10分へ切り上げた(2026-08-23に240,000から変更。根拠は[`MAX_MILLIS`](Self::MAX_MILLIS))。**画面から呼ぶときはここを個別に変える**(`commands.rs::PLAN_BUDGET` は6,000ms) |
+    /// | watchdog | **600,000**([`SearchWatchdog::MAX_MILLIS`]) | 最適化ありの折り鶴の最大99.804秒。CIは約3.6倍遅いので359.3秒を想定し、8割余裕の449.1秒を10分へ切り上げた(2026-08-23に240,000から変更)。**探索結果を決めるこのbudgetには含めない** |
     /// | `max_depth` | **8** | 完成した手数は折り鶴5・やっこさん1。既定予算内で両方を収める |
     /// | `rank_scan` | **3点**(`steps = 2`) | 順位を付けるだけの粗い確認 |
     /// | `scan` | **21点**([`PoseScan::DEFAULT`]) | 作業21が使うのと同じ細かさ。**返す手はすべてこれを通る** |
@@ -533,7 +599,6 @@ impl SearchBudget {
         branch: 3,
         rank_scan: PoseScan { steps: 2 },
         scan: PoseScan::DEFAULT,
-        max_millis: Self::MAX_MILLIS,
     };
 }
 
@@ -546,10 +611,21 @@ pub enum SearchStop {
     Exhausted,
     /// 状態の数の上限で打ち切った。
     StateCap,
-    /// 壁時計時間の上限で打ち切った。完了済みの安全な手だけから最善を返す。
-    TimeCap,
     /// 深さの上限で打ち切った。
     DepthCap,
+}
+
+impl SearchStop {
+    /// 候補の再現性検査でhashへ入れる、固定の通常停止tag。
+    #[must_use]
+    pub const fn contract_tag(self) -> &'static str {
+        match self {
+            Self::GoalReached => "goal_reached",
+            Self::Exhausted => "exhausted",
+            Self::StateCap => "state_cap",
+            Self::DepthCap => "depth_cap",
+        }
+    }
 }
 
 /// 選んだ手1つぶんと、折った後の測り値。
@@ -961,7 +1037,36 @@ pub fn search_to_finish(
     weights: GapWeights,
     budget: SearchBudget,
 ) -> SearchOutcome {
-    search(session, goal, weights, budget, None)
+    search(
+        session,
+        goal,
+        weights,
+        budget,
+        None,
+        SearchExecution::Deterministic,
+    )
+    .expect("決定的探索にはwatchdogも取消しも無い")
+}
+
+/// [`search_to_finish`] をwatchdogと取消しで見張る。
+///
+/// 中断時は途中までの [`SearchOutcome`] を返さず、専用の [`SearchAbort`] だけを返す。
+/// したがって壁時計や取消しが通常の [`SearchStop`] を変えることはない。
+pub fn search_to_finish_with_control(
+    session: &FoldSession,
+    goal: &FoldGoal,
+    weights: GapWeights,
+    budget: SearchBudget,
+    control: &SearchControl<'_>,
+) -> Result<SearchOutcome, SearchAbort> {
+    search(
+        session,
+        goal,
+        weights,
+        budget,
+        None,
+        SearchExecution::controlled(control),
+    )
 }
 
 /// 4つの物差しがすべて指定の許容値以内になるまで探索する。
@@ -977,7 +1082,79 @@ pub fn search_to_completion(
     budget: SearchBudget,
     tolerance: CompletionTolerance,
 ) -> SearchOutcome {
-    search(session, goal, weights, budget, Some(tolerance))
+    search(
+        session,
+        goal,
+        weights,
+        budget,
+        Some(tolerance),
+        SearchExecution::Deterministic,
+    )
+    .expect("決定的探索にはwatchdogも取消しも無い")
+}
+
+/// [`search_to_completion`] をwatchdogと取消しで見張る。
+///
+/// `Ok`だけが通常の探索結果である。`Err`には途中結果を持たせないため、呼び出し側が
+/// watchdog/cancelを [`crate::VerifiedPlan::Partial`] へ変換する経路を作れない。
+pub fn search_to_completion_with_control(
+    session: &FoldSession,
+    goal: &FoldGoal,
+    weights: GapWeights,
+    budget: SearchBudget,
+    tolerance: CompletionTolerance,
+    control: &SearchControl<'_>,
+) -> Result<SearchOutcome, SearchAbort> {
+    search(
+        session,
+        goal,
+        weights,
+        budget,
+        Some(tolerance),
+        SearchExecution::controlled(control),
+    )
+}
+
+/// 決定的探索には時計を持たせず、見張る呼び出しだけが開始時刻を持つ。
+enum SearchExecution<'a> {
+    Deterministic,
+    Controlled {
+        watchdog: SearchWatchdog,
+        cancellation: &'a dyn SearchCancellation,
+        started: Instant,
+    },
+}
+
+impl<'a> SearchExecution<'a> {
+    fn controlled(control: &SearchControl<'a>) -> Self {
+        Self::Controlled {
+            watchdog: control.watchdog,
+            cancellation: control.cancellation,
+            started: Instant::now(),
+        }
+    }
+
+    fn interruption(&self) -> Option<SearchAbort> {
+        let Self::Controlled {
+            watchdog,
+            cancellation,
+            started,
+        } = self
+        else {
+            return None;
+        };
+        if cancellation.is_cancelled() {
+            Some(SearchAbort::Cancelled)
+        } else if started.elapsed() >= Duration::from_millis(watchdog.max_millis) {
+            Some(SearchAbort::WatchdogExpired)
+        } else {
+            None
+        }
+    }
+
+    fn check(&self) -> Result<(), SearchAbort> {
+        self.interruption().map_or(Ok(()), Err)
+    }
 }
 
 fn search(
@@ -986,11 +1163,8 @@ fn search(
     weights: GapWeights,
     budget: SearchBudget,
     completion: Option<CompletionTolerance>,
-) -> SearchOutcome {
-    // 壁時計時間の上限は `budget.max_millis` から取る(既定は `SearchBudget::MAX_MILLIS`)。
-    // 呼び出しごとに変えられるのはこの1点だけの目的で、状態数・分岐数などの
-    // 他の打ち切りには影響しない。
-    let deadline = SearchDeadline::new(budget.max_millis);
+    execution: SearchExecution<'_>,
+) -> Result<SearchOutcome, SearchAbort> {
     let start_form = goal.measure(session.document());
     let start_gaps = finish_gaps(&goal.target, &start_form);
     let start_score = weights.score(&start_gaps);
@@ -1014,13 +1188,10 @@ fn search(
         depth_capped: 0,
         stop: SearchStop::Exhausted,
     };
-    if deadline.expired() {
-        outcome.stop = SearchStop::TimeCap;
-        return outcome;
-    }
+    execution.check()?;
     if completion.is_some_and(|tolerance| tolerance.contains(&start_gaps)) {
         outcome.stop = SearchStop::GoalReached;
-        return outcome;
+        return Ok(outcome);
     }
     // たどった中でいちばん点数の良かった状態。打ち切りに達してもこれを返す。
     let mut best: (RankKey, Node) = (rank_key(&root, completion), root.clone());
@@ -1032,11 +1203,7 @@ fn search(
         BTreeMap::from([(rank_key(&root, completion), root)]);
 
     while let Some((_, node)) = pop_frontier(&mut frontier, outcome.states_expanded) {
-        if deadline.expired() {
-            outcome.stop = SearchStop::TimeCap;
-            capped = true;
-            break;
-        }
+        execution.check()?;
         if node.steps.len() >= budget.max_depth {
             outcome.depth_capped += 1;
             outcome.stop = SearchStop::DepthCap;
@@ -1050,8 +1217,8 @@ fn search(
         }
         outcome.states_expanded += 1;
 
-        let (children, candidates, expansion_timed_out) =
-            expand(&node, goal, weights, budget, completion, &deadline, &seen);
+        let (children, candidates) =
+            expand(&node, goal, weights, budget, completion, &execution, &seen)?;
         outcome.max_branching = outcome.max_branching.max(candidates);
         let mut completed: Option<(RankKey, Node)> = None;
         for child in children {
@@ -1070,17 +1237,7 @@ fn search(
             }
             frontier.insert(key, child);
         }
-        let timed_out = expansion_timed_out || deadline.expired();
-        if timed_out {
-            // 期限直前に21姿勢を通し終えた子は最善候補へ含める。ただし停止理由は
-            // GoalReachedよりTimeCapを優先し、時間を超えた事実を利用者へ隠さない。
-            if let Some(done) = completed {
-                best = done;
-            }
-            outcome.stop = SearchStop::TimeCap;
-            capped = true;
-            break;
-        }
+        execution.check()?;
         if let Some(done) = completed {
             // 4項目すべてを満たすことを、総合点の改善より優先する。
             // 同じ展開で複数見つかった場合は既存の決定的な順位で1つに決める。
@@ -1097,31 +1254,7 @@ fn search(
     outcome.steps = best.1.steps;
     outcome.best_gaps = best.1.gaps;
     outcome.best_score = best.1.score;
-    outcome
-}
-
-/// 候補1件の検証を途中で切らず、その前後で壁時計上限を調べる。
-///
-/// `collapse_precrease_network` と21姿勢走査は1候補を安全と認めるための原子的な処理で
-/// あり、途中で止めると未確認の手を返しかねない。このため上限をまたいだ候補だけは
-/// 検証完了まで走らせ、完了した安全な子を最善へ含めた直後に止める。
-#[derive(Clone, Copy, Debug)]
-struct SearchDeadline {
-    started: Instant,
-    max_elapsed: Duration,
-}
-
-impl SearchDeadline {
-    fn new(max_millis: u64) -> Self {
-        Self {
-            started: Instant::now(),
-            max_elapsed: Duration::from_millis(max_millis),
-        }
-    }
-
-    fn expired(self) -> bool {
-        self.started.elapsed() >= self.max_elapsed
-    }
+    Ok(outcome)
 }
 
 /// 1つの状態から、次に折れる手を順位の良い順に並べて返す。
@@ -1163,46 +1296,43 @@ fn expand(
     weights: GapWeights,
     budget: SearchBudget,
     completion: Option<CompletionTolerance>,
-    deadline: &SearchDeadline,
+    execution: &SearchExecution<'_>,
     seen: &BTreeSet<SessionStateKey>,
-) -> (Vec<Node>, usize, bool) {
+) -> Result<(Vec<Node>, usize), SearchAbort> {
     let mut ranked: Vec<(usize, FinishGaps, f64, CandidateClass)> = Vec::new();
     let mut safe_single_lines = BTreeSet::new();
-    let mut timed_out = false;
     for fold_line in node.session.fold_lines() {
-        if deadline.expired() {
-            timed_out = true;
-            break;
-        }
+        execution.check()?;
         let Some((mv, next)) = node.session.prepare_move(fold_line.id, budget.rank_scan) else {
-            if deadline.expired() {
-                timed_out = true;
-                break;
-            }
+            execution.check()?;
             continue; // もう折り終えている手か、粗く見ても折れない手。止めずに次の手へ。
         };
         let gaps = finish_gaps(&goal.target, &goal.measure(next.document()));
         safe_single_lines.insert(fold_line.id);
         ranked.push((mv.id, gaps, weights.score(&gaps), CandidateClass::Regular));
-        if deadline.expired() {
-            timed_out = true;
-            break;
-        }
+        execution.check()?;
     }
-    if completion.is_some() && !timed_out {
+    if completion.is_some() {
         // 単一直線を順に閉じると行き止まる花弁折り等のため、完成探索だけは
         // 全網と、畳んだ平面で同一直線へ重なる局所部分集合も同じ物差しで順位付けする。
         // 通常の `search_to_finish` には足さず、作業22の既存結果を変えない。
-        let (network_moves, network_timed_out) = node.session.prepared_completion_moves_until(
+        let mut callback_abort = None;
+        let (network_moves, interrupted) = node.session.prepared_completion_moves_until(
             budget.rank_scan,
             &safe_single_lines,
-            || deadline.expired(),
+            || {
+                if callback_abort.is_none() {
+                    callback_abort = execution.interruption();
+                }
+                callback_abort.is_some()
+            },
         );
+        if let Some(abort) = callback_abort {
+            return Err(abort);
+        }
+        debug_assert!(!interrupted, "中断理由を保存せず網候補を打ち切った");
         for (mv, next) in network_moves {
-            if deadline.expired() {
-                timed_out = true;
-                break;
-            }
+            execution.check()?;
             let gaps = finish_gaps(&goal.target, &goal.measure(next.document()));
             let edge_changes = node.session.transition_edge_changes(&next);
             let class = if node.session.move_is_directional_fold(mv.id) {
@@ -1217,12 +1347,8 @@ fn expand(
                 }
             };
             ranked.push((mv.id, gaps, weights.score(&gaps), class));
-            if deadline.expired() {
-                timed_out = true;
-                break;
-            }
+            execution.check()?;
         }
-        timed_out |= network_timed_out || deadline.expired();
     }
     ranked.sort_by(|a, b| {
         let completion_key = |gaps: &FinishGaps| {
@@ -1234,9 +1360,7 @@ fn expand(
             .then_with(|| a.0.cmp(&b.0))
     });
     let candidates = ranked.len();
-    if timed_out || deadline.expired() {
-        return (Vec::new(), candidates, true);
-    }
+    execution.check()?;
 
     // 幾何点数だけのbeamでは、形をまだ変えない「層を持ち替える準備手」が常に
     // 単線候補の後ろへ落ち、次の花弁折りへ到達できない。分岐上限は増やさず、
@@ -1259,11 +1383,9 @@ fn expand(
         };
         attempted.insert(index);
         let id = ranked[index].0;
-        if deadline.expired() {
-            timed_out = true;
-            break;
-        }
+        execution.check()?;
         let Some((mv, next)) = node.session.prepare_move(id, budget.scan) else {
+            execution.check()?;
             continue; // 粗く見たときは折れたが、細かく見ると折れない手。捨てる。
         };
         let child_state = next.state_key();
@@ -1289,12 +1411,9 @@ fn expand(
             },
         });
         kept[ranked[index].3.index()] += 1;
-        if deadline.expired() {
-            timed_out = true;
-            break;
-        }
+        execution.check()?;
     }
-    (children, candidates, timed_out)
+    Ok((children, candidates))
 }
 
 /// 材料座標の点を、折り上がりの姿勢の点へ移す。
@@ -1493,7 +1612,6 @@ mod tests {
     use ori3_model::{Document, Paper};
 
     use super::*;
-    use crate::verify::verify_search_outcome;
 
     /// 分岐の枠は「全体1位1・準備手1・残りは形を変える手」で、上限は上げない。
     ///
@@ -1851,10 +1969,12 @@ mod tests {
         node_with_moves(&session, &[(0, vec![0])])
     }
 
-    /// 時間0の決定的な時計で、実時間の速い/遅いに依存せず時間打切りを固定する。
-    /// 空手順も終点を21姿勢検証と同じ最終健全性検査へ通し、有限な最善を返す。
+    /// 0ms watchdogを100回注入しても、通常結果を1件も返さないこと。
+    ///
+    /// 旧契約は `SearchStop::TimeCap` つきの最善途中値を返していたため、機械の負荷が
+    /// 候補の中身を変えた。新契約は専用Errだけを返し、`SearchOutcome`を作らない。
     #[test]
-    fn time_cap_returns_a_finite_safe_best_so_far_without_panicking() {
+    fn watchdog_injection_returns_one_hundred_aborts_and_no_outcomes() {
         let document = Document::new(Paper {
             width_mm: 100.0,
             height_mm: 100.0,
@@ -1865,134 +1985,62 @@ mod tests {
             body: [0.5, 0.5],
             sites: Vec::new(),
         };
-
-        // max_millis: 0 は、時間0の決定的な時計で即座に期限切れにするための値。
-        // 状態数・分岐数などの他の打ち切りは既定のまま変えない。
-        let zero_time_budget = SearchBudget {
-            max_millis: 0,
-            ..SearchBudget::DEFAULT
-        };
-        let outcome = search_to_finish(&session, &goal, GapWeights::DEFAULT, zero_time_budget);
-        // 2026-08-23に 240,000 → 600,000 へ上げた。**緩めたのではなく、実測に合わせた。**
-        // 根拠は [`SearchBudget::MAX_MILLIS`] のコメントにある実測
-        // (最適化ありの折り鶴の最大99.804秒 → CI換算359.3秒 → 8割余裕449.1秒 → 10分へ切り上げ)。
-        // 240,000のままだと、CI換算の359.3秒が上限を超えて
-        // **CIの performance ジョブで折り鶴が打ち切られる**(手元では95.5秒で通るので気づけない)。
-        // ここは**値をぴったり固定したまま**にしてあるので、
-        // 次に根拠なく変えたときは、いままでどおりこの検査が落ちる。
-        assert_eq!(
-            SearchBudget::MAX_MILLIS,
-            600_000,
-            "時間の安全弁を根拠なく変えた"
-        );
-        assert_eq!(
-            SearchBudget::DEFAULT.max_millis,
-            SearchBudget::MAX_MILLIS,
-            "既定のSearchBudgetは既定の安全弁をそのまま使う"
-        );
-        assert_eq!(outcome.stop, SearchStop::TimeCap);
-        assert_eq!(outcome.states_expanded, 0);
-        assert_eq!(outcome.states_generated, 1);
-        assert!(outcome.steps.is_empty());
-        assert!(outcome.start_gaps.all_finite());
-        assert!(outcome.best_gaps.all_finite());
-        assert!(outcome.start_score.is_finite());
-        assert!(outcome.best_score.is_finite());
-
-        let report = verify_search_outcome(
-            &session,
-            &outcome,
-            &goal,
-            GapWeights::DEFAULT,
-            PoseScan::DEFAULT,
-        );
-        assert!(
-            report.passed(),
-            "時間打切りの最善を再生できない: {report:?}"
-        );
-        assert_eq!(report.requested, 0);
-        assert_eq!(report.cleared(), 0);
-        assert_eq!(report.poses_checked, 1);
-        assert_eq!(report.penetrations, 0);
-        assert!(report.final_gaps.all_finite());
-
-        let already_complete = search_to_completion(
-            &session,
-            &goal,
-            GapWeights::DEFAULT,
-            zero_time_budget,
-            CompletionTolerance::DEFAULT,
-        );
-        assert_eq!(
-            already_complete.stop,
-            SearchStop::TimeCap,
-            "初期測定中に期限を超えた事実をGoalReachedで隠した"
-        );
-        assert!(already_complete.steps.is_empty());
-        assert!(already_complete.best_gaps.all_finite());
+        let watchdog = SearchWatchdog { max_millis: 0 };
+        let mut watchdog_aborts = 0;
+        let mut outcomes = 0;
+        for _ in 0..100 {
+            let not_cancelled = || false;
+            let control = SearchControl::new(watchdog, &not_cancelled);
+            match search_to_completion_with_control(
+                &session,
+                &goal,
+                GapWeights::DEFAULT,
+                SearchBudget::DEFAULT,
+                CompletionTolerance::DEFAULT,
+                &control,
+            ) {
+                Err(SearchAbort::WatchdogExpired) => watchdog_aborts += 1,
+                Err(other) => panic!("watchdog注入が別の理由になった: {other:?}"),
+                Ok(_) => outcomes += 1,
+            }
+        }
+        assert_eq!(watchdog_aborts, 100);
+        assert_eq!(outcomes, 0, "watchdogが通常の探索結果へ化けた");
+        assert_eq!(SearchWatchdog::MAX_MILLIS, 600_000);
+        assert_eq!(SearchWatchdog::DEFAULT.max_millis, 600_000);
     }
 
-    /// `SearchBudget::max_millis` は呼び出しごとに変えられる項目である
-    /// (`apps/desktop/src-tauri/src/commands.rs::PLAN_BUDGET` は6,000ms)。
-    /// 折り線が実在し、候補が複数出る展開図(座布団折り1回ぶん、4本の谷折り)へ
-    /// 極端に小さい値を渡しても、探索ループがpanicせず有限の最善を返すことを、
-    /// 決定的な0ms(必ず即座に期限切れ)と、機械の速さに依存する1msの両方で確かめる。
+    /// 取消し済みの札を100回注入しても、通常結果を1件も返さないこと。
     #[test]
-    fn max_millis_can_be_lowered_per_call_and_still_returns_a_finite_result() {
-        let mut document = Document::new(Paper {
+    fn cancellation_injection_returns_one_hundred_aborts_and_no_outcomes() {
+        let document = Document::new(Paper {
             width_mm: 100.0,
             height_mm: 100.0,
         });
-        let (m1, m2, m3, m4) = ([0.5, 0.0], [1.0, 0.5], [0.5, 1.0], [0.0, 0.5]);
-        for (a, b) in [(m1, m2), (m2, m3), (m3, m4), (m4, m1)] {
-            ori3_cp::insert_segment(&mut document.cp, a, b, ori3_model::EdgeKind::Valley);
-        }
-        let session = FoldSession::new(&document).expect("座布団折りの展開図を読み込めない");
+        let session = FoldSession::new(&document).expect("平らな正方形を読み込めない");
         let goal = FoldGoal {
             target: FinishTarget::default(),
             body: [0.5, 0.5],
             sites: Vec::new(),
         };
-
-        for max_millis in [0_u64, 1] {
-            let budget = SearchBudget {
-                max_millis,
-                max_states: 20,
-                ..SearchBudget::DEFAULT
-            };
-            let outcome = search_to_finish(&session, &goal, GapWeights::DEFAULT, budget);
-            assert!(
-                outcome.best_gaps.all_finite(),
-                "max_millis={max_millis}: 有限でない隔たりが返った"
-            );
-            assert!(
-                outcome.best_score.is_finite(),
-                "max_millis={max_millis}: 有限でない点数が返った"
-            );
-            assert!(outcome.start_gaps.all_finite());
-            assert!(outcome.start_score.is_finite());
-            let report = verify_search_outcome(
+        let mut cancelled = 0;
+        let mut outcomes = 0;
+        for _ in 0..100 {
+            let is_cancelled = || true;
+            let control = SearchControl::new(SearchWatchdog::DEFAULT, &is_cancelled);
+            match search_to_finish_with_control(
                 &session,
-                &outcome,
                 &goal,
                 GapWeights::DEFAULT,
-                PoseScan::DEFAULT,
-            );
-            assert!(
-                report.passed(),
-                "max_millis={max_millis}: 返した手順を再生できない: {report:?}"
-            );
+                SearchBudget::DEFAULT,
+                &control,
+            ) {
+                Err(SearchAbort::Cancelled) => cancelled += 1,
+                Err(other) => panic!("取消し注入が別の理由になった: {other:?}"),
+                Ok(_) => outcomes += 1,
+            }
         }
-
-        // 0msは`SearchDeadline::expired`が経過時間によらず常に真になるので、
-        // 決定的にTimeCapへ入り、状態を1つも広げない。
-        let deterministic = SearchBudget {
-            max_millis: 0,
-            max_states: 20,
-            ..SearchBudget::DEFAULT
-        };
-        let outcome = search_to_finish(&session, &goal, GapWeights::DEFAULT, deterministic);
-        assert_eq!(outcome.stop, SearchStop::TimeCap);
-        assert_eq!(outcome.states_expanded, 0);
+        assert_eq!(cancelled, 100);
+        assert_eq!(outcomes, 0, "取消しが通常の探索結果へ化けた");
     }
 }

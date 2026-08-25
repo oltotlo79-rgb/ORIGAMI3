@@ -124,7 +124,7 @@ const PLACEMENT_TOL: f64 = 1e-9;
 ///
 /// 作らないときは折り鶴2.213秒・鳥0.579秒・やっこ0.094秒だったので、
 /// **折り鶴で約42倍**重い。上限の見直しは
-/// [`SearchBudget::MAX_MILLIS`](crate::search::SearchBudget::MAX_MILLIS) と
+/// [`SearchWatchdog::MAX_MILLIS`](crate::search::SearchWatchdog::MAX_MILLIS) と
 /// `apps/desktop/src-tauri/src/commands.rs::PLAN_BUDGET` のコメントに実測つきで残した。
 const WITH_EXTRA_CANDIDATES: bool = true;
 

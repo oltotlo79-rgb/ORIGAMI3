@@ -1,0 +1,13 @@
+{
+  "file_spec": 1.2,
+  "frame_classes": ["creasePattern"],
+  "frame_attributes": ["3D"],
+  "vertices_coords": [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]],
+  "edges_vertices": [[0, 1], [1, 2], [2, 3], [3, 0]],
+  "edges_assignment": ["B", "B", "B", "B"],
+  "file_frames": [
+    {"frame_parent": 0, "frame_inherit": true, "edges_foldAngle": [0, 0, 0, 0]},
+    {"frame_parent": 1, "frame_inherit": true, "edges_foldAngle": [0, 0, 0, 0]},
+    {"frame_parent": 0, "frame_inherit": true, "edges_foldAngle": [0, 0, 0, 0]}
+  ]
+}

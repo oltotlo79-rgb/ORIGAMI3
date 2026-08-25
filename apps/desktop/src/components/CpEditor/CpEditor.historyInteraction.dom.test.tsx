@@ -201,6 +201,26 @@ describe("D06 過去手順の展開図で見えない将来要素を操作しな
     expect(overlay.hoverSnap).toBeNull();
   });
 
+  it("キーボード吸着: 見えない将来線の12px内へ動かしても、その線へ吸着しない", async () => {
+    useAppStore.setState({ activeTool: "mountain" });
+    const canvas = await renderEditor();
+    canvas.focus();
+    expect(document.activeElement).toBe(canvas);
+    const steps = Math.round(((0.5 - FUTURE_LINE_MIDDLE[0]) * VIEW.scale) / 16);
+
+    for (let index = 0; index < steps; index += 1) {
+      fireEvent.keyDown(canvas, { key: "ArrowLeft" });
+    }
+
+    await waitFor(() => {
+      const current = (held.overlay as RenderOverlay).keyboardCursor;
+      expect(current).not.toBeNull();
+      expect(Math.abs((current?.[0] ?? Number.NaN) - FUTURE_LINE_MIDDLE[0]) * VIEW.scale).toBeLessThan(12);
+      expect(current?.[0]).not.toBeCloseTo(FUTURE_LINE_MIDDLE[0], 12);
+      expect((held.overlay as RenderOverlay).hoverSnap).toBeNull();
+    });
+  });
+
   it("作図: 見えない将来線を垂線の基準として使わない", async () => {
     const applyEdit = vi
       .fn<(op: EditOp | EditOp[]) => Promise<void>>()

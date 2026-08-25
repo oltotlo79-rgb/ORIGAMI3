@@ -283,6 +283,7 @@ export type SeqOp =
   | { type: "PushStep"; step: FoldStep }
   | { type: "InsertStep"; index: number; step: FoldStep }
   | { type: "RemoveStep"; id: number }
+  | { type: "MoveStep"; id: number; to_index: number }
   | { type: "UpdateStep"; step: FoldStep }
   /**
    * 畳んだ状態の上に折り線を引いてまとめて折る。座標は畳み平面(3D表示のxy)。
@@ -416,6 +417,26 @@ export interface SolveResult {
 }
 
 /**
+ * 折る手順を持たない一斉表示では、紙の上下を確定できない。
+ * 画面がこの事実を黙って隠さないための、fold_all_preview専用wire値。
+ */
+export type FoldAllLayerOrder = "unavailable_without_sequence";
+
+/** fold_all_previewの戻り値。一時表示だけに使い、Documentへは入れない。 */
+export interface FoldAllPreviewOutcome extends SolveResult {
+  /** 画面が要求した割合。0..=100。 */
+  requested_percent: number;
+  /** 山谷の符号を含む今回の希望角。表示や次回seedには使わない。 */
+  requested_angles: Driver[];
+  /** 次回計算の出発角。requested_anglesではなく、必ずこちらを渡す。 */
+  next_warm_seed: Driver[];
+  suspect_hinges: number[];
+  contact_detected: boolean;
+  flat_fold_violations: number[];
+  layer_order: FoldAllLayerOrder;
+}
+
+/**
  * 完成形における先端の位置(ori3-propose::TipPos2d)。
  * 完成した作品を正面から見たときの2D投影上の相対位置で、奥行きは持たない。
  * 原点(0,0)は胴の中心、xは右が正、yは上が正。範囲は-1.0以上1.0以下で、
@@ -546,6 +567,38 @@ export interface ProposalCandidate {
    */
   fold_plan?: ProposalFoldPlan | null;
 }
+
+/** 提案計算1件を区別する不透明な値。画面表示には使わない。 */
+export type ProposalJobId = string;
+
+/** backendが返す提案計算の閉じた状態。画面にはこの内部名を直接出さない。 */
+export type ProposalPhase =
+  | "Queued"
+  | "Generating"
+  | "Verifying"
+  | "Finished"
+  | "Cancelled"
+  | "Failed";
+
+/** proposal_generateのjob別戻り値。要求時と同じjob_idをechoする。 */
+export interface ProposalJobResult {
+  job_id: ProposalJobId;
+  candidates: ProposalCandidate[];
+}
+
+/** proposal_progressの1回のlockから得た一貫したsnapshot。 */
+export interface ProposalProgressSnapshot {
+  job_id: ProposalJobId;
+  done: number;
+  total: number;
+  phase: ProposalPhase;
+}
+
+/** proposal_controlへ渡す同種操作の閉じた型。 */
+export type ProposalControl = {
+  type: "Cancel";
+  job_id: ProposalJobId;
+};
 
 /** recovery_check の戻り値。前回の異常終了で残った自動保存の情報(SYS-003) */
 export interface RecoveryInfo {

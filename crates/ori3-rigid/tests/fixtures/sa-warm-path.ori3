@@ -1,0 +1,281 @@
+{
+  "schema_version": 1,
+  "paper": {
+    "width_mm": 150.0,
+    "height_mm": 150.0
+  },
+  "cp": {
+    "vertices": [
+      {
+        "id": 0,
+        "pos": [
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "id": 1,
+        "pos": [
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "id": 2,
+        "pos": [
+          1.0,
+          1.0
+        ]
+      },
+      {
+        "id": 3,
+        "pos": [
+          0.0,
+          1.0
+        ]
+      },
+      {
+        "id": 4,
+        "pos": [
+          0.0,
+          0.5
+        ]
+      },
+      {
+        "id": 5,
+        "pos": [
+          1.0,
+          0.5
+        ]
+      },
+      {
+        "id": 6,
+        "pos": [
+          0.5,
+          1.0
+        ]
+      },
+      {
+        "id": 7,
+        "pos": [
+          0.5,
+          0.0
+        ]
+      },
+      {
+        "id": 8,
+        "pos": [
+          0.5,
+          0.5
+        ]
+      },
+      {
+        "id": 9,
+        "pos": [
+          0.20710678118654752,
+          0.5
+        ]
+      },
+      {
+        "id": 10,
+        "pos": [
+          0.5,
+          0.7928932188134525
+        ]
+      },
+      {
+        "id": 11,
+        "pos": [
+          0.5,
+          0.20710678118654752
+        ]
+      },
+      {
+        "id": 12,
+        "pos": [
+          0.7928932188134525,
+          0.5
+        ]
+      }
+    ],
+    "edges": [
+      {
+        "id": 4,
+        "v0": 3,
+        "v1": 4,
+        "kind": "Border"
+      },
+      {
+        "id": 5,
+        "v0": 4,
+        "v1": 0,
+        "kind": "Border"
+      },
+      {
+        "id": 6,
+        "v0": 1,
+        "v1": 5,
+        "kind": "Border"
+      },
+      {
+        "id": 7,
+        "v0": 5,
+        "v1": 2,
+        "kind": "Border"
+      },
+      {
+        "id": 9,
+        "v0": 2,
+        "v1": 6,
+        "kind": "Border"
+      },
+      {
+        "id": 10,
+        "v0": 6,
+        "v1": 3,
+        "kind": "Border"
+      },
+      {
+        "id": 11,
+        "v0": 0,
+        "v1": 7,
+        "kind": "Border"
+      },
+      {
+        "id": 12,
+        "v0": 7,
+        "v1": 1,
+        "kind": "Border"
+      },
+      {
+        "id": 17,
+        "v0": 0,
+        "v1": 8,
+        "kind": "Valley"
+      },
+      {
+        "id": 18,
+        "v0": 8,
+        "v1": 2,
+        "kind": "Valley"
+      },
+      {
+        "id": 19,
+        "v0": 4,
+        "v1": 9,
+        "kind": "Mountain"
+      },
+      {
+        "id": 20,
+        "v0": 9,
+        "v1": 8,
+        "kind": "Mountain"
+      },
+      {
+        "id": 21,
+        "v0": 0,
+        "v1": 9,
+        "kind": "Mountain"
+      },
+      {
+        "id": 22,
+        "v0": 9,
+        "v1": 3,
+        "kind": "Mountain"
+      },
+      {
+        "id": 23,
+        "v0": 6,
+        "v1": 10,
+        "kind": "Mountain"
+      },
+      {
+        "id": 24,
+        "v0": 10,
+        "v1": 8,
+        "kind": "Mountain"
+      },
+      {
+        "id": 25,
+        "v0": 2,
+        "v1": 10,
+        "kind": "Mountain"
+      },
+      {
+        "id": 26,
+        "v0": 10,
+        "v1": 3,
+        "kind": "Mountain"
+      },
+      {
+        "id": 27,
+        "v0": 8,
+        "v1": 11,
+        "kind": "Mountain"
+      },
+      {
+        "id": 28,
+        "v0": 11,
+        "v1": 7,
+        "kind": "Mountain"
+      },
+      {
+        "id": 29,
+        "v0": 0,
+        "v1": 11,
+        "kind": "Mountain"
+      },
+      {
+        "id": 30,
+        "v0": 11,
+        "v1": 1,
+        "kind": "Mountain"
+      },
+      {
+        "id": 31,
+        "v0": 8,
+        "v1": 12,
+        "kind": "Mountain"
+      },
+      {
+        "id": 32,
+        "v0": 12,
+        "v1": 5,
+        "kind": "Mountain"
+      },
+      {
+        "id": 33,
+        "v0": 2,
+        "v1": 12,
+        "kind": "Mountain"
+      },
+      {
+        "id": 34,
+        "v0": 12,
+        "v1": 1,
+        "kind": "Mountain"
+      }
+    ],
+    "next_vertex_id": 13,
+    "next_edge_id": 35
+  },
+  "sequence": [],
+  "display": {
+    "front_color": [
+      237,
+      28,
+      36
+    ],
+    "back_color": [
+      255,
+      255,
+      255
+    ],
+    "grid_divisions": 8,
+    "soft_enabled": false,
+    "soft_stiffness": 0.5,
+    "soft_pressure": 0.0,
+    "overlap_prevention_enabled": false,
+    "penetration_prevention_enabled": true
+  }
+}

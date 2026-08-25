@@ -10,6 +10,8 @@ import type {
   DocumentView,
   Driver,
   FoldStep,
+  ProposalJobResult,
+  ProposalProgressSnapshot,
   ReplayResult,
   SolveResult,
   TechniqueKind,
@@ -32,6 +34,7 @@ vi.mock("../ipc/client", () => ({
   recoveryRestore: vi.fn(),
   proposalGenerate: vi.fn(),
   proposalProgress: vi.fn(),
+  proposalControl: vi.fn(),
 }));
 
 import * as ipc from "../ipc/client";
@@ -60,6 +63,18 @@ function deferred<T>() {
     reject = rej;
   });
   return { promise, resolve, reject };
+}
+
+function proposalResult(jobId: string): ProposalJobResult {
+  return { job_id: jobId, candidates: [] };
+}
+
+function proposalProgress(
+  jobId: string,
+  done: number,
+  total: number,
+): ProposalProgressSnapshot {
+  return { job_id: jobId, done, total, phase: "Generating" };
 }
 
 /** markで区別できる最小のDocumentView(正方形・線なし) */
@@ -211,12 +226,22 @@ function seedSequence(count: number, currentStep: number | null = null): void {
 }
 
 beforeEach(() => {
+  useAppStore.getState().closeProposal();
   vi.clearAllMocks();
   // 間引きの基準時刻はストア(アプリ全体で1個)が持ち続けるため、
   // テストごとに初期化して前のテストの時計を持ち込まない
   resetPoseThrottle();
   vi.mocked(ipc.poseSolve).mockResolvedValue(makeSolveResult());
   vi.mocked(ipc.sequenceReplay).mockResolvedValue(makeReplayResult());
+  vi.mocked(ipc.proposalProgress).mockResolvedValue(null);
+  vi.mocked(ipc.proposalControl).mockImplementation((operation) =>
+    Promise.resolve({
+      job_id: operation.job_id,
+      done: 0,
+      total: 0,
+      phase: "Cancelled",
+    }),
+  );
   useAppStore.setState({
     doc: null,
     faces: [],
@@ -257,8 +282,163 @@ beforeEach(() => {
     angleUndoStack: [],
     angleRedoStack: [],
     docUndoDepth: 0,
+    proposalStep: null,
+    proposalCandidates: [],
+    proposalBusy: false,
+    proposalJobId: null,
+    proposalProgress: null,
+    proposalProgressWarning: null,
+    proposalError: null,
   });
   vi.mocked(ipc.recoveryCheck).mockResolvedValue(null);
+});
+
+describe("提案のjob別進捗", () => {
+  it("150msごとに同じ仕事だけを読み、閉じた直後にtimerと読取りを0件へ戻す", async () => {
+    vi.useFakeTimers();
+    const pending = deferred<ProposalJobResult>();
+    let jobId = "";
+    vi.mocked(ipc.proposalGenerate).mockImplementation(
+      (_skeleton, _paper, _seed, requestedJobId) => {
+        jobId = requestedJobId;
+        return pending.promise;
+      },
+    );
+    try {
+      useAppStore.getState().openProposal();
+      const request = useAppStore.getState().generateProposal();
+      expect(jobId).not.toBe("");
+      expect(useAppStore.getState().proposalJobId).toBe(jobId);
+      expect(vi.getTimerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(150);
+      expect(ipc.proposalProgress).toHaveBeenCalledTimes(1);
+      expect(ipc.proposalProgress).toHaveBeenLastCalledWith(jobId);
+
+      useAppStore.getState().closeProposal();
+      expect(vi.getTimerCount()).toBe(0);
+      expect(ipc.proposalControl).toHaveBeenCalledWith({
+        type: "Cancel",
+        job_id: jobId,
+      });
+      await vi.advanceTimersByTimeAsync(300);
+      expect(ipc.proposalProgress).toHaveBeenCalledTimes(1);
+
+      pending.resolve({
+        job_id: jobId,
+        candidates: [
+          {
+            cp: makeView(909).doc.cp,
+            scale: 0.4,
+            violations: 0,
+            warnings: [],
+            fold_plan: null,
+          },
+        ],
+      });
+      await request;
+      expect(useAppStore.getState().proposalStep).toBeNull();
+      expect(useAppStore.getState().proposalCandidates).toHaveLength(0);
+      expect(useAppStore.getState().proposalProgress).toBeNull();
+    } finally {
+      useAppStore.getState().closeProposal();
+      vi.useRealTimers();
+    }
+  });
+
+  it("4/4を見せる150msの途中で閉じてもhold timerを0件へ戻す", async () => {
+    vi.useFakeTimers();
+    const pending = deferred<ProposalJobResult>();
+    let jobId = "";
+    vi.mocked(ipc.proposalProgress).mockImplementation((requestedJobId) =>
+      Promise.resolve(proposalProgress(requestedJobId, 3, 4)),
+    );
+    vi.mocked(ipc.proposalGenerate).mockImplementation(
+      (_skeleton, _paper, _seed, requestedJobId) => {
+        jobId = requestedJobId;
+        return pending.promise;
+      },
+    );
+    try {
+      useAppStore.getState().openProposal();
+      const request = useAppStore.getState().generateProposal();
+      await vi.advanceTimersByTimeAsync(150);
+      expect(useAppStore.getState().proposalProgress?.done).toBe(3);
+
+      pending.resolve(proposalResult(jobId));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(useAppStore.getState().proposalProgress?.done).toBe(4);
+      expect(vi.getTimerCount()).toBe(1);
+
+      useAppStore.getState().closeProposal();
+      expect(vi.getTimerCount()).toBe(0);
+      await request;
+      expect(useAppStore.getState().proposalProgress).toBeNull();
+    } finally {
+      useAppStore.getState().closeProposal();
+      vi.useRealTimers();
+    }
+  });
+
+  it("進み具合を読めなくても警告だけを出し、生成処理を止めない", async () => {
+    vi.useFakeTimers();
+    const pending = deferred<ProposalJobResult>();
+    let jobId = "";
+    vi.mocked(ipc.proposalProgress).mockRejectedValue(
+      new Error("progress unavailable"),
+    );
+    vi.mocked(ipc.proposalGenerate).mockImplementation(
+      (_skeleton, _paper, _seed, requestedJobId) => {
+        jobId = requestedJobId;
+        return pending.promise;
+      },
+    );
+    try {
+      useAppStore.getState().openProposal();
+      const request = useAppStore.getState().generateProposal();
+      await vi.advanceTimersByTimeAsync(150);
+
+      expect(useAppStore.getState().proposalBusy).toBe(true);
+      expect(useAppStore.getState().proposalProgressWarning).toBe(
+        "進み具合を読み取れませんでした。計算はそのまま続けています。",
+      );
+      expect(ipc.proposalControl).not.toHaveBeenCalled();
+
+      pending.resolve(proposalResult(jobId));
+      await request;
+      expect(useAppStore.getState().proposalBusy).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      useAppStore.getState().closeProposal();
+      vi.useRealTimers();
+    }
+  });
+
+  it("要求と違う識別子をechoした生成結果を候補へ採用しない", async () => {
+    vi.mocked(ipc.proposalGenerate).mockResolvedValue({
+      job_id: "older-response",
+      candidates: [
+        {
+          cp: makeView(910).doc.cp,
+          scale: 0.4,
+          violations: 0,
+          warnings: [],
+          fold_plan: null,
+        },
+      ],
+    });
+
+    useAppStore.getState().openProposal();
+    await useAppStore.getState().generateProposal();
+
+    expect(useAppStore.getState().proposalCandidates).toHaveLength(0);
+    expect(useAppStore.getState().proposalBusy).toBe(false);
+    expect(useAppStore.getState().proposalJobId).toBeNull();
+    expect(useAppStore.getState().proposalError).toBe(
+      "別の計算結果が届いたため、使いませんでした。もう一度お試しください。",
+    );
+  });
 });
 
 describe("appStore 直列化と応答の反映", () => {

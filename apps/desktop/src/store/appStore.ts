@@ -75,6 +75,7 @@ import type {
   EditOp,
   ExportKind,
   Face,
+  FoldAllLayerOrder,
   FoldDirection,
   FoldThroughProposal,
   Frame3D,
@@ -83,6 +84,8 @@ import type {
   PaperPosition2d,
   PaperTipPosition,
   ProposalCandidate,
+  ProposalJobId,
+  ProposalProgressSnapshot,
   RecoveryInfo,
   SeqOp,
   Skeleton,
@@ -142,6 +145,17 @@ import {
 /** ヒンジ角の連続操作(スライダー)を間引く間隔(ms) */
 /** 追従計算は60fps相当で最大1回。runLatestが計算待ちを最新1件へまとめる。 */
 const POSE_THROTTLE_MS = 16;
+
+/**
+ * 一斉表示専用の送信間隔(ms)。
+ *
+ * 16msで入力→React反映を10回実測した初回値は平均23.467ms・最大35.704msで、
+ * 目標33msを最大だけ2.704ms超えた。Rust側の最大7.913msや計算精度は変えず、
+ * 送信待ちだけを半分にする。専用queueが同時1件・待機最新1件に保つため、
+ * 計算が追いつかない場合にも要求列は増えない。8msへ変更後の同じ10回は
+ * 平均14.575ms・最大19.952msで、33msまで平均18.425ms・最大13.048msの余裕。
+ */
+const FOLD_ALL_THROTTLE_MS = 8;
 
 /** たわみの指定を作品へ書き込むまでの待ち(ms)。つまみを動かしている間の
  * 書き込みをまとめ、元に戻す履歴が細かく埋まらないようにする */
@@ -271,6 +285,40 @@ export function draftToPaper(draft: NewPaperDraft): Paper {
 export interface Selection {
   edgeIds: number[];
   vertexIds: number[];
+}
+
+/** 一斉表示へ入る直前の入力状態。3D座標は保存せず、この入力から作り直す。 */
+export interface FoldAllReturnState {
+  docEpoch: number;
+  currentStep: number | null;
+  playT: number;
+  activeTool: ToolId;
+  selection: Selection;
+}
+
+/** 全折り目を同じ割合で動かしている間だけZustandに置く一時状態。 */
+export interface FoldAllPreviewState {
+  /** 同じ作品内で入り直した古い応答を見分ける番号。 */
+  session: number;
+  /** 最後に利用者が指定した割合。 */
+  percent: number;
+  /** 現在の3D表示へ反映できた割合。まだならnull。 */
+  appliedPercent: number | null;
+  busy: boolean;
+  /** 通常の形を再計算している間も、専用表示の目印と操作制限を残す。 */
+  returning: boolean;
+  /** 更新要求だけが失敗した場合の非阻害の知らせ。 */
+  error: string | null;
+  converged: boolean | null;
+  bestEffort: boolean;
+  relaxationCount: number;
+  flatFoldViolationCount: number;
+  suspectHingeCount: number;
+  contactDetected: boolean;
+  layerOrder: FoldAllLayerOrder;
+  /** 次の要求の出発角。Document・通常姿勢キャッシュには入れない。 */
+  nextWarmSeed: Driver[];
+  returnState: FoldAllReturnState;
 }
 
 /** 測定中に選ぶ3つのやり方。測定結果と同じく作品には保存しない。 */
@@ -701,6 +749,8 @@ interface AppState {
   curve: CurveOptions;
   /** 3D表示フレーム。nullなら平ら(展開図から直接描く) */
   frame3d: Frame3D | null;
+  /** 全折り目を同じ割合で動かす一時表示。作品・設定・Undoには保存しない。 */
+  foldAllPreview: FoldAllPreviewState | null;
   /** 補正後にも残る食い込みの原因候補。2D/3Dの赤い強調で共用する。 */
   suspectHinges: number[];
   /** 表示中の保存手順から現在の辺へ解決した希望角。作品には保存しない。 */
@@ -812,8 +862,12 @@ interface AppState {
   proposalPositionRedoStack: ProposalPositionSnapshot[];
   /** 生成中か(「計算中…」の表示用) */
   proposalBusy: boolean;
-  /** 生成中の進み具合(「4件中2件め」の表示用)。計算していないときは null */
-  proposalProgress: { done: number; total: number } | null;
+  /** 現在の提案計算。画面へ値そのものは出さない。計算していなければnull */
+  proposalJobId: ProposalJobId | null;
+  /** 生成中の一貫した進み具合(「4件中2件め」の表示用)。計算していないときはnull */
+  proposalProgress: ProposalProgressSnapshot | null;
+  /** 進み具合だけを読めなかったときの非阻害の案内。計算自体は続ける。 */
+  proposalProgressWarning: string | null;
   /** 生成に失敗した理由(日本語)。成功したらnull */
   proposalError: string | null;
   /** 次に使う乱数の初期値。作り直すたびに増やして別の配置を出す */
@@ -881,6 +935,8 @@ interface AppState {
   helpQuery: string;
   /** 選択中ツールの手順のうち、いま強調する段階(0始まり)。 */
   operationStage: number;
+  /** 展開図で線を引く途中の始点。ポインタとキーボードで共用し、作品には保存しない。 */
+  lineInputStart: Vec2 | null;
   /** 3Dで紙そのものを選んだときの「引く・膨らます」案内を出しているか。 */
   paperActionTipVisible: boolean;
   /** 紙の操作案内を詳しく開いているか。閉じた後は小さな入口だけ残す。 */
@@ -936,6 +992,8 @@ interface AppState {
   completeGuideAction: (action: GuideAction) => void;
   /** 選択中ツールの手順表示を、指定した段階へ進める/戻す。 */
   setOperationStage: (stage: number) => void;
+  /** 展開図で線を引く始点を更新する。nullで引きかけを取り消す。 */
+  setLineInputStart: (start: Vec2 | null) => void;
   /** 3Dで紙を選んだとき、引く・膨らますへの入口を表示する。 */
   showPaperActionTip: () => void;
   /** 詳しい紙の操作案内を小さな入口へ畳む。 */
@@ -1067,6 +1125,14 @@ interface AppState {
   clearDriver: (hinge: number) => void;
   /** 全ての角度指定を解除して平らに戻す */
   clearDrivers: () => void;
+  /** 全折り目を同じ割合で動かす一時表示へ入る。0%の形を直ちに求める。 */
+  enterFoldAllPreview: () => Promise<void>;
+  /** 一時表示の割合を0..=100へ更新する。連続入力は8msごとにまとめる。 */
+  setFoldAllPercent: (percent: number) => void;
+  /** pointer up等で、予約中の最後の割合を直ちに送る。 */
+  finishFoldAllPercent: () => void;
+  /** 一時表示を閉じ、入る前の手順位置から通常の形を作り直す。 */
+  leaveFoldAllPreview: () => Promise<void>;
   /** 折り目1本の角度の固定を、押すたびに付け外しする */
   togglePinnedFold: (hinge: number) => void;
   /** 選んだ折り目の角度をまとめて固定する・まとめて外す */
@@ -1141,7 +1207,7 @@ interface AppState {
   setContextPanelRatio: (ratio: number) => void;
   /** 2D/3Dと下部パネルの広さを、初めて開いたときの値へ戻す。 */
   resetPaneSizes: () => void;
-  /** 手順の順番を入れ替える(numberは1始まり、deltaは-1で前へ/+1で後ろへ) */
+  /** 手順の順番を入れ替える(numberは1始まり、deltaは-1で前へ/+1で後ろへ、0は同一位置) */
   moveStep: (number: number, delta: number) => Promise<void>;
 }
 
@@ -1233,6 +1299,12 @@ export function resetPoseThrottle(): void {
   resetThrottle();
 }
 
+/** テスト用: 一斉表示の予約と世代を初期化する。 */
+let resetFoldAllRuntime: () => void = () => {};
+export function resetFoldAllPreviewRuntime(): void {
+  resetFoldAllRuntime();
+}
+
 /** 中身が同じなら前の配列を使い回す。再生中は毎コマ結果が届くので、
  * 内容が変わらない限り同じ配列を返して画面の再描画を起こさない */
 function keepIfSame<T>(prev: T[], next: T[]): T[] {
@@ -1276,8 +1348,19 @@ function pruneSelection(selection: Selection, doc: Document): Selection {
   };
 }
 
+/** 1件の提案計算にだけ属する、保存しないruntime資源。 */
+interface ActiveProposalJob {
+  jobId: ProposalJobId;
+  generation: number;
+  stopPolling: (() => void) | null;
+  releaseFullHold: (() => void) | null;
+}
+
 export const useAppStore = create<AppState>((set, get) => {
   const queue = createSerialQueue();
+  // 読み取り専用の一斉表示は作品編集FIFOから独立させる。保存要求が後から
+  // 積まれただけで表示結果を古い扱いにせず、同時実行はこのqueue内で1件に保つ。
+  const foldAllQueue = createSerialQueue();
   /**
    * 直前に開始した作品変更が、返されたDocumentViewをストアへ反映し終えるまでの約束。
    * IPCのFIFOだけでは、後続操作が呼ばれた瞬間に読むdocまでは新しくならないため、
@@ -1297,8 +1380,22 @@ export const useAppStore = create<AppState>((set, get) => {
   let foldThroughRevision = 0;
   /** busyを開始した要求の番号。古い要求のfinallyが新しいbusyを消さないために使う */
   let foldThroughBusyToken = 0;
-  /** 閉じた提案画面へ古い計算結果を戻さないための要求世代。 */
+  /** 一斉表示へ入り直した古い応答を捨てる世代。 */
+  let foldAllSessionGeneration = 0;
+  /** 8ms待ちの間にも新入力が旧応答を追い越せる要求番号。 */
+  let foldAllRequestGeneration = 0;
+  /** 通常表示へ戻す操作を連打したとき、最後の操作だけを完了させる世代。 */
+  let foldAllExitGeneration = 0;
+  /** 保存・書き出しが復帰計算を「古い応答」にしないために待つ約束。 */
+  let latestFoldAllRestorePromise: Promise<void> = Promise.resolve();
+  /** 遅延保存を確定している間の入口二重実行を防ぐ。作品状態ではない実行制御。 */
+  let foldAllEntering = false;
+  /** 入口待機中に新規・開くが始まった場合、その古い入口を打ち切る世代。 */
+  let foldAllEnterGeneration = 0;
+  /** 閉じた／作り直した提案画面へ古い計算結果を戻さないための要求世代。 */
   let proposalGeneration = 0;
+  /** 現在の提案計算だけが所有するpollと満杯表示の時計。 */
+  let activeProposalJob: ActiveProposalJob | null = null;
   /**
    * 提案の計算中に進み具合を読み直す間隔(ミリ秒)。
    *
@@ -1315,22 +1412,118 @@ export const useAppStore = create<AppState>((set, get) => {
    * 読めなくても計算は止めない(`CLAUDE.md` §8「止めずに警告する」)。
    * 進み具合はあくまで待ち時間の目安で、これが無くても結果は同じ。
    */
-  const watchProposalProgress = (isCurrent: () => boolean): (() => void) => {
-    const timer = setInterval(() => {
+  const isCurrentProposalJob = (job: ActiveProposalJob): boolean =>
+    activeProposalJob === job &&
+    job.generation === proposalGeneration &&
+    get().proposalJobId === job.jobId;
+
+  const stopProposalJobTimers = (job: ActiveProposalJob): void => {
+    const stopPolling = job.stopPolling;
+    job.stopPolling = null;
+    stopPolling?.();
+    const releaseFullHold = job.releaseFullHold;
+    job.releaseFullHold = null;
+    releaseFullHold?.();
+  };
+
+  /** cancelの失敗は画面を閉じる処理を止めず、未処理のrejectも残さない。 */
+  const requestProposalCancel = (job: ActiveProposalJob): void => {
+    try {
+      void ipc
+        .proposalControl({ type: "Cancel", job_id: job.jobId })
+        .catch(() => undefined);
+    } catch {
+      // backendのwatchdogが残った計算を回収する。画面側は既に無効化済み。
+    }
+  };
+
+  /** 現在の計算を画面から切り離し、時計を同期的に0件へ戻す。 */
+  const invalidateProposalJob = (cancel: boolean): void => {
+    proposalGeneration++;
+    const job = activeProposalJob;
+    activeProposalJob = null;
+    if (job !== null) {
+      stopProposalJobTimers(job);
+      if (cancel) requestProposalCancel(job);
+    }
+    set({
+      proposalBusy: false,
+      proposalJobId: null,
+      proposalProgress: null,
+      proposalProgressWarning: null,
+    });
+  };
+
+  const startProposalJob = (): ActiveProposalJob => {
+    const job: ActiveProposalJob = {
+      jobId: crypto.randomUUID(),
+      generation: ++proposalGeneration,
+      stopPolling: null,
+      releaseFullHold: null,
+    };
+    activeProposalJob = job;
+    return job;
+  };
+
+  const warnProposalProgress = (job: ActiveProposalJob): void => {
+    if (
+      !isCurrentProposalJob(job) ||
+      get().proposalProgressWarning !== null
+    ) {
+      return;
+    }
+    set({
+      proposalProgressWarning:
+        "進み具合を読み取れませんでした。計算はそのまま続けています。",
+    });
+  };
+
+  const watchProposalProgress = (job: ActiveProposalJob): (() => void) => {
+    let stopped = false;
+    let pollInFlight = false;
+    const poll = (): void => {
+      if (stopped || pollInFlight || !isCurrentProposalJob(job)) return;
+      pollInFlight = true;
       try {
         void ipc
-          .proposalProgress()
+          .proposalProgress(job.jobId)
           .then((progress) => {
-            if (isCurrent()) set({ proposalProgress: progress });
+            if (
+              stopped ||
+              progress === null ||
+              progress.job_id !== job.jobId ||
+              !isCurrentProposalJob(job)
+            ) {
+              return;
+            }
+            const previous = get().proposalProgress;
+            if (
+              previous?.job_id === job.jobId &&
+              progress.done < previous.done
+            ) {
+              return;
+            }
+            set({ proposalProgress: progress });
           })
           .catch(() => {
-            // 進み具合が読めないだけなら、何も知らせずに計算を続ける
+            if (!stopped) warnProposalProgress(job);
+          })
+          .finally(() => {
+            pollInFlight = false;
           });
       } catch {
-        // 同上。待ち表示のためだけの読み取りなので、計算は止めない
+        pollInFlight = false;
+        warnProposalProgress(job);
       }
-    }, PROPOSAL_PROGRESS_POLL_MS);
-    return () => clearInterval(timer);
+    };
+    const timer = setInterval(poll, PROPOSAL_PROGRESS_POLL_MS);
+    const stop = (): void => {
+      if (stopped) return;
+      stopped = true;
+      clearInterval(timer);
+    };
+    job.stopPolling = stop;
+    return stop;
   };
 
   /**
@@ -1352,15 +1545,106 @@ export const useAppStore = create<AppState>((set, get) => {
    * 進み具合を一度も読めていなければ(総数0。軽い骨格は0.005秒で終わるので
    * よくある)、棒はそもそも出ていないので何もせずに返る。
    */
-  const holdFullProposalBar = async (
-    isCurrent: () => boolean,
+  const holdFullProposalBar = async (job: ActiveProposalJob): Promise<void> => {
+    const progress = get().proposalProgress;
+    if (
+      progress === null ||
+      progress.job_id !== job.jobId ||
+      progress.total <= 0 ||
+      !isCurrentProposalJob(job)
+    ) {
+      return;
+    }
+    set({ proposalProgress: { ...progress, done: progress.total } });
+    await new Promise<void>((resolve) => {
+      let finished = false;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const finish = (): void => {
+        if (finished) return;
+        finished = true;
+        if (timer !== null) clearTimeout(timer);
+        if (job.releaseFullHold === finish) job.releaseFullHold = null;
+        resolve();
+      };
+      job.releaseFullHold = finish;
+      timer = setTimeout(finish, PROPOSAL_PROGRESS_FULL_HOLD_MS);
+      if (!isCurrentProposalJob(job)) finish();
+    });
+  };
+
+  /** 2つの生成入口でjob照合・timer回収・古い応答破棄を同じにする。 */
+  const runProposalGeneration = async (
+    requestSkeleton: Skeleton,
+    paper: Paper,
+    seed: number,
+    resultState: (candidates: ProposalCandidate[]) => Partial<AppState>,
   ): Promise<void> => {
-    const total = get().proposalProgress?.total ?? 0;
-    if (total <= 0 || !isCurrent()) return;
-    set({ proposalProgress: { done: total, total } });
-    await new Promise((resolve) =>
-      setTimeout(resolve, PROPOSAL_PROGRESS_FULL_HOLD_MS),
-    );
+    let job: ActiveProposalJob;
+    try {
+      job = startProposalJob();
+    } catch {
+      set({
+        proposalBusy: false,
+        proposalJobId: null,
+        proposalProgress: null,
+        proposalProgressWarning: null,
+        proposalError:
+          "計算を始められませんでした。画面を開き直して、もう一度お試しください。",
+      });
+      return;
+    }
+    set({
+      proposalBusy: true,
+      proposalJobId: job.jobId,
+      proposalProgress: null,
+      proposalProgressWarning: null,
+      proposalError: null,
+      proposalSeed: seed + 1,
+    });
+    const stopWatching = watchProposalProgress(job);
+    try {
+      const result = await ipc.proposalGenerate(
+        requestSkeleton,
+        paper,
+        seed,
+        job.jobId,
+      );
+      if (!isCurrentProposalJob(job)) return;
+      if (result.job_id !== job.jobId) {
+        set({
+          proposalBusy: false,
+          proposalJobId: null,
+          proposalProgress: null,
+          proposalProgressWarning: null,
+          proposalError:
+            "別の計算結果が届いたため、使いませんでした。もう一度お試しください。",
+        });
+        return;
+      }
+      // 発行済みpollもstopped flagで遮断してから、満杯表示を保持する。
+      stopWatching();
+      await holdFullProposalBar(job);
+      if (!isCurrentProposalJob(job)) return;
+      set({
+        ...resultState(result.candidates),
+        proposalBusy: false,
+        proposalJobId: null,
+        proposalProgress: null,
+        proposalProgressWarning: null,
+      });
+    } catch (e) {
+      if (!isCurrentProposalJob(job)) return;
+      set({
+        proposalBusy: false,
+        proposalJobId: null,
+        proposalProgress: null,
+        proposalProgressWarning: null,
+        proposalError: typeof e === "string" ? e : String(e),
+      });
+    } finally {
+      stopProposalJobTimers(job);
+      if (activeProposalJob === job) activeProposalJob = null;
+    }
   };
   /** 同じ葉のつまみを続けて動かす間は、ドラッグ1回を履歴1件へまとめる。 */
   let lastProposalPositionKey: string | null = null;
@@ -1554,6 +1838,8 @@ export const useAppStore = create<AppState>((set, get) => {
         doc: view.doc,
         stepCreases: view.step_creases ?? [],
         display: view.doc.display,
+        operationStage: s.lineInputStart === null ? s.operationStage : 0,
+        lineInputStart: null,
         foldDraft: null,
         pendingFoldThrough: null,
         alignDraft: null,
@@ -1624,12 +1910,17 @@ export const useAppStore = create<AppState>((set, get) => {
    * 直列化により適用順の逆転は起きないため、成功したviewは完了順に全て適用する
    * (途中の成功を捨てると、後続が失敗したときにバックエンドと画面が食い違う)。
    * 失敗の報告だけは最新要求に限る(古い失敗の直後には必ず新しい結果が続く) */
-  const runViewCommand = async (
+  const runViewCommandResult = async (
     task: () => Promise<DocumentView>,
     isNewDocument: boolean,
-  ): Promise<void> => {
+    applySuccessfulView = true,
+  ): Promise<boolean> => {
     const r = await queue.run(task);
     if (r.ok) {
+      const foldAllReturn = isNewDocument ? discardFoldAllPreview() : null;
+      // 同一位置のMoveStepはbackendで成功を確認するが、画面にも同じviewを
+      // 再適用しない。選択・下書き・再生など作品以外の一時状態まで保つため。
+      if (!applySuccessfulView) return true;
       applyView(r.value, isNewDocument);
       if (isNewDocument) {
         // 別の作品になったので角度指定・立体形状・再生位置は捨てる
@@ -1661,6 +1952,8 @@ export const useAppStore = create<AppState>((set, get) => {
           alignDraft: null,
           techniqueDraft: null,
           operationStage: 0,
+          // 一斉表示が一時的に選択道具へ替えた分だけは、新しい作品へ持ち越さない。
+          ...(foldAllReturn === null ? {} : { activeTool: foldAllReturn.activeTool }),
         });
       }
       if (r.value.doc.sequence.length > 0) {
@@ -1668,9 +1961,23 @@ export const useAppStore = create<AppState>((set, get) => {
       } else if (!isNewDocument) {
         await syncPose();
       }
+      return true;
     } else if (r.isLatest) {
       fail(r.error);
     }
+    return false;
+  };
+
+  /** 成否を使わない既存command向けの互換入口。 */
+  const runViewCommand = async (
+    task: () => Promise<DocumentView>,
+    isNewDocument: boolean,
+  ): Promise<void> => {
+    const pending = runViewCommandResult(task, isNewDocument).then(() => undefined);
+    // Undo/Redo・新規・開くも、入口が「作品変更の反映完了」を待てるよう
+    // 展開図編集・手順変更と同じ約束へ載せる。
+    latestDocChange = pending;
+    await pending;
   };
 
   /** driversの配列表現(IPCの引数) */
@@ -1785,18 +2092,36 @@ export const useAppStore = create<AppState>((set, get) => {
    * 「元に戻す」を作品側(edit_undo)へ回す。断られたときは何も変わって
    * いないので角度の履歴はそのまま残す(角度を戻せなくならないように)。
    */
-  const applyDocChange = (
+  const applyDocChangeResult = (
     task: () => Promise<DocumentView>,
     isNewDocument = false,
-  ): Promise<void> => {
+    preserveAngleHistory = false,
+    applySuccessfulView = true,
+  ): Promise<boolean> => {
     const pending = (async () => {
-      await runViewCommand(task, isNewDocument);
-      if (get().errorMessage === null) clearAngleHistory();
+      const succeeded = await runViewCommandResult(
+        task,
+        isNewDocument,
+        applySuccessfulView,
+      );
+      if (succeeded && !preserveAngleHistory) clearAngleHistory();
+      return succeeded;
     })();
     // 後続操作が待つためのPromiseはrejectを外へ漏らさない。呼び出し元には元の
     // pendingを返すので、これまでどおり個別の失敗を観測できる。
-    latestDocChange = pending.catch(() => undefined);
+    latestDocChange = pending.then(
+      () => undefined,
+      () => undefined,
+    );
     return pending;
+  };
+
+  /** 成否を使わない既存の作品変更向けの互換入口。 */
+  const applyDocChange = async (
+    task: () => Promise<DocumentView>,
+    isNewDocument = false,
+  ): Promise<void> => {
+    await applyDocChangeResult(task, isNewDocument);
   };
 
   /** 現在の指定を必ず有効な基準線へ解決する。不正な一時状態は縦中心へ安全に戻す。 */
@@ -1977,7 +2302,7 @@ export const useAppStore = create<AppState>((set, get) => {
     warmSeed: Driver[] = [],
     deepSearch = false,
     replayPosition?: { upTo: number; replayT: number },
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     // 次の16ms要求がまだキューへ積まれていない間でも、新しい角度操作が
     // 始まった時点から旧世代の表示結果を採用しない。
     const requestGeneration = get().angleIntentGeneration;
@@ -2011,7 +2336,7 @@ export const useAppStore = create<AppState>((set, get) => {
       }
     }
     let { kept, result: r } = await attemptWithReleased(released);
-    if (requestGeneration !== get().angleIntentGeneration) return;
+    if (requestGeneration !== get().angleIntentGeneration) return false;
 
     // 深く探すときは、まず「外したままの折り目を1本戻せないか」を試す。
     // これをしないと、原因になっていた別の指定を直しても固定が戻らない。
@@ -2021,7 +2346,7 @@ export const useAppStore = create<AppState>((set, get) => {
         const candidate = new Set(released);
         candidate.delete(readmit);
         const retry = await attemptWithReleased(candidate);
-        if (requestGeneration !== get().angleIntentGeneration) return;
+        if (requestGeneration !== get().angleIntentGeneration) return false;
         if (retry.result.ok && retry.result.isLatest && !keptFoldsFailed(retry.result.value)) {
           released.delete(readmit);
           releasedOrder = releasedOrder.filter((h) => h !== readmit);
@@ -2034,7 +2359,7 @@ export const useAppStore = create<AppState>((set, get) => {
     // 折れなかったときだけ、原因を1回の計算で診断する。
     if (r.ok && r.isLatest && kept.length > 0 && keptFoldsFailed(r.value)) {
       const diagnosis = await attempt(hard, preferred);
-      if (requestGeneration !== get().angleIntentGeneration) return;
+      if (requestGeneration !== get().angleIntentGeneration) return false;
       if (diagnosis.ok && diagnosis.isLatest) {
         const diagnosedAngles = new Map(
           Object.entries(diagnosis.value.angles).map(([id, deg]) => [
@@ -2064,7 +2389,7 @@ export const useAppStore = create<AppState>((set, get) => {
           attemptsLeft--;
           if (!deepSearch) break; // 確かめるのは次のコマで
           const verified = await attemptWithReleased(released);
-          if (requestGeneration !== get().angleIntentGeneration) return;
+          if (requestGeneration !== get().angleIntentGeneration) return false;
           if (!verified.result.ok || !verified.result.isLatest) break;
           if (!keptFoldsFailed(verified.result.value)) {
             // 1本外しただけで折れた。ここで打ち切るので、外した本数は最小。
@@ -2077,9 +2402,9 @@ export const useAppStore = create<AppState>((set, get) => {
 
     if (!r.ok) {
       if (r.isLatest) fail(r.error);
-      return;
+      return false;
     }
-    if (!r.isLatest) return;
+    if (!r.isLatest) return false;
     const poseAngles = new Map(
       Object.entries(r.value.angles).map(([id, deg]) => [Number(id), deg]),
     );
@@ -2138,17 +2463,18 @@ export const useAppStore = create<AppState>((set, get) => {
       releasedPinHinges: keepIfSame(get().releasedPinHinges, releasedOrder),
       poseAngles,
     });
+    return true;
   };
 
   /** record/end操作が「最後に送った計算」まで待てるようPromiseを保持する。 */
-  let latestPosePromise: Promise<void> = Promise.resolve();
+  let latestPosePromise: Promise<boolean> = Promise.resolve(true);
   const requestPoseSolve = (
     hard: Driver[],
     preferred: Driver[] = [],
     coalesce = false,
     applyFrame = true,
     warmSeed: Driver[] = [],
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     // つまみを動かしている最中(coalesce)以外は、1回で決着させたい要求なので
     // 固定を外す本数まで深く探す。
     const pending = runPoseSolve(
@@ -2325,7 +2651,7 @@ export const useAppStore = create<AppState>((set, get) => {
     softPending = false;
     pendingSoftDisplay = null;
     pose.clearAll();
-    latestPosePromise = Promise.resolve();
+    latestPosePromise = Promise.resolve(true);
     softShape.clearAll();
     softSave.clearAll();
     // 角度の履歴のまとめ判定も時計を持つので、一緒に初期化する
@@ -2351,21 +2677,21 @@ export const useAppStore = create<AppState>((set, get) => {
     coalesce = false,
     settlePins = !coalesce,
     poseOverrides: ReadonlyMap<number, number> | null = null,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     // poseと同じく、次の角度要求がthrottle待ちでも旧再生を表示しない。
     const requestGeneration = get().angleIntentGeneration;
     const call = () => ipc.sequenceReplay(upTo, t, softArg());
     const r = await (coalesce ? queue.runLatest(call) : queue.run(call));
-    if (requestGeneration !== get().angleIntentGeneration) return;
+    if (requestGeneration !== get().angleIntentGeneration) return false;
     if (!r.ok) {
       if (r.isLatest) {
         // 再生できない状態のままでは毎コマ失敗するので、止めて理由を知らせる
         stopPlayback();
         fail(r.error);
       }
-      return;
+      return false;
     }
-    if (!r.isLatest) return;
+    if (!r.isLatest) return false;
     const s = get();
     const requestedAngles = [...(r.value.sequence_targets ?? [])].sort(
       (a, b) => a.hinge - b.hinge,
@@ -2422,7 +2748,7 @@ export const useAppStore = create<AppState>((set, get) => {
             : null,
         contactDetected: r.value.contact_detected === true,
       });
-      return;
+      return true;
     }
 
     // 再生する位置が変われば、以前その形で外した固定は前提が違う。
@@ -2450,7 +2776,7 @@ export const useAppStore = create<AppState>((set, get) => {
       { upTo, replayT: t },
     );
     latestPosePromise = pending;
-    await pending;
+    return await pending;
   };
 
   // 手順の表示切替中はframe3dが直前の手順を指す。合わせ対象をその古い位置で
@@ -2570,6 +2896,271 @@ export const useAppStore = create<AppState>((set, get) => {
     if (get().playing) set({ playing: false });
   };
 
+  /** 一斉表示の入力だけを0..=100へ正規化する。非有限値は現在値を保つ。 */
+  const normalizedFoldAllPercent = (percent: number): number | null =>
+    Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : null;
+
+  /**
+   * 一斉表示の計算を専用の最新優先queueへ送る。
+   *
+   * warm seedはtaskが実際に始まる時点で読む。実行中の応答をtask内で先に
+   * Zustandへ置いてからreturnするため、次の待機要求が必ず直前の実角を使える。
+   * frameはsession・request・docEpochがすべて現在のときだけ採用する。
+   */
+  const runFoldAllPreview = async (
+    percent: number,
+    session: number,
+    request: number,
+  ): Promise<void> => {
+    const result = await foldAllQueue.runLatest(async () => {
+      const active = get().foldAllPreview;
+      const warmSeed =
+        active?.session === session ? active.nextWarmSeed : [];
+      const outcome = await ipc.foldAllPreview(percent, warmSeed);
+      set((s) =>
+        s.foldAllPreview?.session === session &&
+        !s.foldAllPreview.returning &&
+        request === foldAllRequestGeneration &&
+        s.docEpoch === s.foldAllPreview.returnState.docEpoch
+          ? {
+              foldAllPreview: {
+                ...s.foldAllPreview,
+                nextWarmSeed: outcome.next_warm_seed,
+              },
+            }
+          : {},
+      );
+      return outcome;
+    });
+
+    const active = get().foldAllPreview;
+    const isCurrent =
+      active?.session === session &&
+      !active.returning &&
+      active.returnState.docEpoch === get().docEpoch &&
+      request === foldAllRequestGeneration;
+    if (!isCurrent) return;
+
+    if (!result.ok) {
+      if (result.isLatest) {
+        set((s) =>
+          s.foldAllPreview?.session === session &&
+          !s.foldAllPreview.returning &&
+          request === foldAllRequestGeneration
+            ? {
+                foldAllPreview: {
+                  ...s.foldAllPreview,
+                  busy: false,
+                  error:
+                    "形を更新できませんでした。つまみはそのまま動かせます。",
+                },
+              }
+            : {},
+        );
+      }
+      return;
+    }
+    if (!result.isLatest) return;
+
+    const outcome = result.value;
+    set((s) =>
+      s.foldAllPreview?.session === session &&
+      !s.foldAllPreview.returning &&
+      request === foldAllRequestGeneration
+        ? {
+            frame3d: outcome.frame,
+            // 一斉表示はたわみの網を返さない。前の網を残すと新しいframeが隠れる。
+            softMesh: null,
+            softWarnings: [],
+            foldAllPreview: {
+              ...s.foldAllPreview,
+              appliedPercent: outcome.requested_percent,
+              busy: false,
+              error: null,
+              converged: outcome.converged,
+              bestEffort: outcome.best_effort === true,
+              relaxationCount: relaxationNotices(
+                outcome.relaxations ?? [],
+              ).length,
+              flatFoldViolationCount:
+                outcome.flat_fold_violations.length,
+              suspectHingeCount: outcome.suspect_hinges.length,
+              contactDetected: outcome.contact_detected,
+              layerOrder: outcome.layer_order,
+              nextWarmSeed: outcome.next_warm_seed,
+            },
+          }
+        : {},
+    );
+  };
+
+  // 入力は8msごとに送り、計算が追いつかなくても待機は最後の1件だけにする。
+  const foldAllShape = createTrailingThrottle(FOLD_ALL_THROTTLE_MS, () => {
+    const active = get().foldAllPreview;
+    if (active === null || active.returning) return;
+    void runFoldAllPreview(
+      active.percent,
+      active.session,
+      foldAllRequestGeneration,
+    );
+  });
+
+  /** 新規・開くの成功時だけ、一斉表示と遅れて届く計算を即時に破棄する。 */
+  const discardFoldAllPreview = (): FoldAllReturnState | null => {
+    const active = get().foldAllPreview;
+    if (active === null) return null;
+    foldAllSessionGeneration++;
+    foldAllRequestGeneration++;
+    foldAllExitGeneration++;
+    foldAllShape.clearAll();
+    cancelAngleIntent();
+    set({ foldAllPreview: null });
+    return active.returnState;
+  };
+
+  /**
+   * 3D座標の控えを使わず、通常表示を展開図・手順・一時角度から作り直す。
+   * 再計算が成功するまでは専用表示の目印と操作制限を残す。連打された場合は、
+   * 最後に始まった復帰だけが目印を消す。
+   */
+  const restoreAfterFoldAllPreviewOnce = async (
+    restoreUi = true,
+  ): Promise<boolean> => {
+    const active = get().foldAllPreview;
+    if (active === null) return true;
+    const previous = active.returnState;
+    const token = ++foldAllExitGeneration;
+    const session = ++foldAllSessionGeneration;
+    foldAllRequestGeneration++;
+    foldAllShape.clearAll();
+    cancelAngleIntent();
+    set({
+      foldAllPreview: {
+        ...active,
+        session,
+        busy: false,
+        returning: true,
+        error: null,
+      },
+    });
+
+    if (previous.docEpoch !== get().docEpoch) {
+      if (token === foldAllExitGeneration) set({ foldAllPreview: null });
+      return token === foldAllExitGeneration;
+    }
+    const s = get();
+    if (s.doc === null) {
+      if (token === foldAllExitGeneration) set({ foldAllPreview: null });
+      return token === foldAllExitGeneration;
+    }
+    const total = s.doc.sequence.length;
+    let restored: boolean;
+    if (total > 0) {
+      const upTo =
+        previous.currentStep === null
+          ? total
+          : Math.max(0, Math.min(previous.currentStep, total));
+      restored = await runReplay(
+        upTo,
+        previous.playT,
+        false,
+        true,
+        new Map(s.drivers),
+      );
+    } else {
+      const normalTargets = preferredWithout([]);
+      restored = await requestPoseSolve(
+        [],
+        normalTargets.length > 0 ? normalTargets : flatDrivers(s.hinges),
+        false,
+        true,
+        snapshotSeed(s.drivers, s.hinges),
+      );
+    }
+
+    if (token !== foldAllExitGeneration) return false;
+    const current = get().foldAllPreview;
+    if (current?.session !== session) return false;
+    if (!restored) {
+      set({
+        errorMessage: null,
+        foldAllPreview: {
+          ...current,
+          returning: false,
+          error:
+            "いつもの表示へ戻せませんでした。これは記録された手順ではない表示を続けています。",
+        },
+      });
+      return false;
+    }
+
+    set({
+      foldAllPreview: null,
+      currentStep: previous.currentStep,
+      playT: previous.playT,
+      ...(restoreUi
+        ? {
+            activeTool: previous.activeTool,
+            selection: {
+              edgeIds: [...previous.selection.edgeIds],
+              vertexIds: [...previous.selection.vertexIds],
+            },
+          }
+        : {}),
+    });
+    return true;
+  };
+
+  const restoreAfterFoldAllPreview = (restoreUi = true): Promise<boolean> => {
+    let announceDone!: () => void;
+    const announced = new Promise<void>((resolve) => {
+      announceDone = resolve;
+    });
+    latestFoldAllRestorePromise = announced;
+    const pending = restoreAfterFoldAllPreviewOnce(restoreUi);
+    void pending.then(announceDone, announceDone);
+    return pending;
+  };
+
+  /** 復帰中に後から保存・書き出しが始まっても、復帰応答を追い越させない。 */
+  const waitForFoldAllRestore = async (): Promise<void> => {
+    while (true) {
+      const pending = latestFoldAllRestorePromise;
+      await pending;
+      if (pending === latestFoldAllRestorePromise) return;
+    }
+  };
+
+  resetFoldAllRuntime = () => {
+    foldAllSessionGeneration++;
+    foldAllRequestGeneration++;
+    foldAllExitGeneration++;
+    foldAllEntering = false;
+    foldAllEnterGeneration++;
+    latestFoldAllRestorePromise = Promise.resolve();
+    foldAllShape.clearAll();
+    set({ foldAllPreview: null });
+  };
+
+  /** 手順操作を1回だけ送り、その要求自身の成否を返す。
+   * 同一位置のMoveStepは成功しても作品を変えないため、再生・提案・角度履歴も
+   * 変更しない。通常操作だけは従来どおり先に再生を止め、角度履歴を消す。 */
+  const applySequenceChange = (
+    op: SeqOp,
+    samePosition = false,
+  ): Promise<boolean> => {
+    if (!samePosition) {
+      stopPlayback();
+      invalidateFoldThrough();
+    }
+    return applyDocChangeResult(
+      () => ipc.sequenceApply(op),
+      false,
+      samePosition,
+      !samePosition,
+    );
+  };
+
   /** 再生の1コマ。進み具合を計算し、その時点の形を(最新1件だけの)要求で描く */
   const tick = (ts: number): void => {
     cancelFrame = null;
@@ -2642,7 +3233,13 @@ export const useAppStore = create<AppState>((set, get) => {
    * これにより、確定前の折り線や編集中の選択を事前確認で失わない。
    */
   const requestFoldThrough = async (operation: FoldThroughOperation): Promise<void> => {
-    if (get().foldThroughBusy || get().pendingFoldThrough) return;
+    if (
+      get().foldAllPreview !== null ||
+      get().foldThroughBusy ||
+      get().pendingFoldThrough
+    ) {
+      return;
+    }
     stopPlayback();
     const started = get();
     const revision = ++foldThroughRevision;
@@ -2733,6 +3330,7 @@ export const useAppStore = create<AppState>((set, get) => {
     construct: DEFAULT_CONSTRUCT,
     curve: DEFAULT_CURVE,
     frame3d: null,
+    foldAllPreview: null,
     suspectHinges: [],
     sequenceTargets: new Map(),
     relaxations: [],
@@ -2776,7 +3374,9 @@ export const useAppStore = create<AppState>((set, get) => {
     proposalPositionUndoStack: [],
     proposalPositionRedoStack: [],
     proposalBusy: false,
+    proposalJobId: null,
     proposalProgress: null,
+    proposalProgressWarning: null,
     proposalError: null,
     proposalSeed: 1,
     exportOpen: false,
@@ -2808,20 +3408,24 @@ export const useAppStore = create<AppState>((set, get) => {
     helpChapterId: "overview",
     helpQuery: "",
     operationStage: 0,
+    lineInputStart: null,
     paperActionTipVisible: false,
     paperActionTipExpanded: false,
 
     newDocument: (paper) => {
       invalidateFoldThrough();
+      foldAllEnterGeneration++;
       return runViewCommand(() => ipc.documentNew(paper), true);
     },
 
     openDocument: (path) => {
       invalidateFoldThrough();
+      foldAllEnterGeneration++;
       return runViewCommand(() => ipc.documentOpen(path), true);
     },
 
     saveDocument: async (path) => {
+      await waitForFoldAllRestore();
       // 次の結果が出るまでは、前回の保存成功を現在の結果として見せない。
       set({ documentSavedPath: null });
       // たわみのつまみを動かした直後でも、保存要求より前に作品データへ確定する。
@@ -2838,12 +3442,16 @@ export const useAppStore = create<AppState>((set, get) => {
 
     // 展開図が変わると再生中の形も変わるので、編集系はいずれも先に再生を止める
     // (止めないと、折り直した形が次のコマですぐ上書きされて一瞬跳ねて見える)
-    applyEdit: (op) => {
+    applyEdit: async (op) => {
+      // 一斉表示の形を編集の出発点にはしない。通常形へ戻してから作品を変える。
+      if (get().foldAllPreview !== null) {
+        if (!(await restoreAfterFoldAllPreview(false))) return;
+      }
       stopPlayback();
       // 提案は現在のCPから計算したもの。編集要求を積んだ時点で応答前でも無効にする。
       invalidateFoldThrough();
       const ops = Array.isArray(op) ? op : [op];
-      if (ops.length === 0) return Promise.resolve();
+      if (ops.length === 0) return;
       // 左右対称のときは、引く・消す・種類を変えるのどれも反対側へ効かせる。
       // 引く線をここでそろえるので、手で引く線も作図補助の線も同じ動きになる
       // (CPE-010 / 不具合D13)。辺IDを増やす消す・種類変更は、展開図の
@@ -2866,7 +3474,7 @@ export const useAppStore = create<AppState>((set, get) => {
           : withOpposite;
       // 1件だけなら今までどおり1件用の要求を送る。複数のときだけまとめ送りにして、
       // 元に戻す1回で入力1回ぶんが戻るようにする(不具合D05)
-      return applyDocChange(
+      await applyDocChange(
         () =>
           mirrored.length === 1
             ? ipc.editApply(mirrored[0])
@@ -3024,6 +3632,10 @@ export const useAppStore = create<AppState>((set, get) => {
       if (get().operationStage !== next) set({ operationStage: next });
     },
 
+    setLineInputStart: (start) => {
+      if (get().lineInputStart !== start) set({ lineInputStart: start });
+    },
+
     showPaperActionTip: () => {
       const firstTime = !onboarding.paperActionTipSeen;
       set((s) => ({
@@ -3048,6 +3660,11 @@ export const useAppStore = create<AppState>((set, get) => {
     // ないので作品側の履歴(edit_undo)に載らない。そこで角度の履歴を先に見て、
     // 残っていればそれを戻す(角度を変えた直後に線の追加が消えないように)
     undo: async () => {
+      if (get().foldAllPreview !== null) {
+        // 一斉表示そのものはUndoへ積まない。最初の1回は通常表示へ戻るだけ。
+        await restoreAfterFoldAllPreview(true);
+        return;
+      }
       stopPlayback();
       invalidateFoldThrough();
       const s = get();
@@ -3074,6 +3691,10 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     redo: async () => {
+      if (get().foldAllPreview !== null) {
+        await restoreAfterFoldAllPreview(true);
+        return;
+      }
       stopPlayback();
       invalidateFoldThrough();
       if (get().proposalStep !== null && get().proposalBusy) return;
@@ -3103,18 +3724,29 @@ export const useAppStore = create<AppState>((set, get) => {
       await applyAngleSnapshot(next);
     },
 
-    applySequenceOp: (op) => {
-      // 手順が入れ替わると再生位置の意味が変わるので、先に止める
-      stopPlayback();
-      invalidateFoldThrough();
-      return applyDocChange(() => ipc.sequenceApply(op));
+    applySequenceOp: async (op) => {
+      if (get().foldAllPreview !== null) {
+        if (!(await restoreAfterFoldAllPreview(true))) return;
+      }
+      await applySequenceChange(op);
     },
 
     selectStep: (step) => {
-      void selectStepAndWait(step);
+      if (get().foldAllPreview === null) {
+        void selectStepAndWait(step);
+        return;
+      }
+      void restoreAfterFoldAllPreview(true).then((restored) => {
+        if (restored) void selectStepAndWait(step);
+      });
     },
 
-    selectStepForCapture: (step) => selectStepAndWait(step),
+    selectStepForCapture: async (step) => {
+      if (get().foldAllPreview !== null) {
+        if (!(await restoreAfterFoldAllPreview(true))) return;
+      }
+      await selectStepAndWait(step);
+    },
 
     stepBy: (delta) => {
       const s = get();
@@ -3127,6 +3759,12 @@ export const useAppStore = create<AppState>((set, get) => {
 
     togglePlay: () => {
       const s = get();
+      if (s.foldAllPreview !== null) {
+        void restoreAfterFoldAllPreview(true).then((restored) => {
+          if (restored) get().togglePlay();
+        });
+        return;
+      }
       if (s.playing) {
         stopPlayback();
         return;
@@ -3143,6 +3781,13 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     setTool: (tool) => {
+      if (get().foldAllPreview !== null) {
+        // 一斉形を直接操作の入力にしない。通常形へ戻った後で、選んだ道具へ移る。
+        void restoreAfterFoldAllPreview(false).then((restored) => {
+          if (restored) get().setTool(tool);
+        });
+        return;
+      }
       // ツール切替時は選択を保つ必要がないので解除する。
       // 引きかけの折り線も、別のツールへ移った時点で意味を失うので捨てる
       if (get().activeTool !== tool) {
@@ -3159,6 +3804,7 @@ export const useAppStore = create<AppState>((set, get) => {
           pullHinge: null,
           pullMirrorHinge: null,
           operationStage: 0,
+          lineInputStart: null,
           paperActionTipVisible: false,
           paperActionTipExpanded: false,
         });
@@ -3236,7 +3882,8 @@ export const useAppStore = create<AppState>((set, get) => {
         selection: EMPTY_SELECTION,
       })),
 
-    setSelection: (selection) =>
+    setSelection: (selection) => {
+      if (get().foldAllPreview !== null) return;
       set((s) => {
         // 「いま動かしている折り目」の水色は、その折り目が選択から外れたら消す。
         // 以前は角度を動かし終えても印が残り、何も選んでいないのに3Dの線が
@@ -3262,7 +3909,8 @@ export const useAppStore = create<AppState>((set, get) => {
               }
             : {}),
         };
-      }),
+      });
+    },
 
     setHoveredHinge: (hinge) =>
       set((s) => ({
@@ -3492,7 +4140,14 @@ export const useAppStore = create<AppState>((set, get) => {
 
     foldByDrag: async (from, to, mode, grabFace = null, direction = "Up") => {
       const s = get();
-      if (!s.doc || s.foldThroughBusy || s.pendingFoldThrough) return;
+      if (
+        s.foldAllPreview !== null ||
+        !s.doc ||
+        s.foldThroughBusy ||
+        s.pendingFoldThrough
+      ) {
+        return;
+      }
       // 折れない状態は「なぜできないか」を短い日本語で伝える(要件UI-009)
       const reason = foldBlockReason({
         hasDoc: true,
@@ -3957,6 +4612,7 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     setDriverAngle: (hinge, deg) => {
+      if (get().foldAllPreview !== null) return;
       invalidateFoldThrough();
       const before = get().drivers.get(hinge) ?? get().poseAngles.get(hinge) ?? 0;
       // スライダーを動かしている間の細かい変更は1件にまとめる
@@ -3975,6 +4631,7 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     setDriverAngles: (hinges, deg) => {
+      if (get().foldAllPreview !== null) return;
       invalidateFoldThrough();
       const valid = [...new Set(hinges)]
         .filter((hinge) => get().hinges.has(hinge))
@@ -4000,6 +4657,7 @@ export const useAppStore = create<AppState>((set, get) => {
     finishAngleIntent: finishCurrentAngleIntent,
 
     clearDriver: (hinge) => {
+      if (get().foldAllPreview !== null) return;
       const drivers = new Map(get().drivers);
       if (!drivers.delete(hinge)) return;
       invalidateFoldThrough();
@@ -4020,6 +4678,7 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     clearDrivers: () => {
+      if (get().foldAllPreview !== null) return;
       // 再生tickがこの0度計算より後に積まれると、正しい平坦結果が古い応答として
       // 捨てられるか、再生結果で折れた形へ上書きされる。予約中のコマを先に止め、
       // 「全て平らに戻す」を最後の表示要求にする。
@@ -4036,14 +4695,151 @@ export const useAppStore = create<AppState>((set, get) => {
       void requestPoseSolve(flatDrivers(hinges));
     },
 
+    enterFoldAllPreview: async () => {
+      const initial = get();
+      if (
+        foldAllEntering ||
+        initial.foldAllPreview !== null ||
+        initial.doc === null ||
+        initial.hinges.size === 0
+      ) {
+        return;
+      }
+
+      foldAllEntering = true;
+      const enterToken = ++foldAllEnterGeneration;
+      try {
+        stopPlayback();
+        invalidateFoldThrough();
+        pose.clearAll();
+        softShape.clearAll();
+        cancelAngleIntent();
+        // 予約済みの丸み変更を、専用表示を公開する前に確定する。公開後に
+        // setDisplayが通常編集として専用表示を閉じる競合を作らないためである。
+        await flushSoftSave();
+        if (enterToken !== foldAllEnterGeneration) return;
+        // 入口を押す前から実行中だった展開図・手順・Undo等の応答を待つ。
+        // 待っている間に別の作品変更が始まった場合も、安定するまで追いかける。
+        while (true) {
+          const changesBeforeEntry = latestDocChange;
+          await changesBeforeEntry;
+          if (enterToken !== foldAllEnterGeneration) return;
+          if (changesBeforeEntry === latestDocChange) break;
+        }
+
+        const before = get();
+        if (
+          before.foldAllPreview !== null ||
+          before.doc === null ||
+          before.hinges.size === 0
+        ) {
+          return;
+        }
+        stopPlayback();
+        invalidateFoldThrough();
+        pose.clearAll();
+        softShape.clearAll();
+        cancelAngleIntent();
+        const session = ++foldAllSessionGeneration;
+        const request = ++foldAllRequestGeneration;
+        const returnState: FoldAllReturnState = {
+          docEpoch: before.docEpoch,
+          currentStep: before.currentStep,
+          playT: before.playT,
+          activeTool: before.activeTool,
+          selection: {
+            edgeIds: [...before.selection.edgeIds],
+            vertexIds: [...before.selection.vertexIds],
+          },
+        };
+        set({
+          foldAllPreview: {
+            session,
+            percent: 0,
+            appliedPercent: null,
+            busy: true,
+            returning: false,
+            error: null,
+            converged: null,
+            bestEffort: false,
+            relaxationCount: 0,
+            flatFoldViolationCount: 0,
+            suspectHingeCount: 0,
+            contactDetected: false,
+            layerOrder: "unavailable_without_sequence",
+            nextWarmSeed: [],
+            returnState,
+          },
+          // 3Dを直接引く道具のまま一斉表示へ入れない。専用表示を閉じたら戻す。
+          activeTool: "select",
+          selection: EMPTY_SELECTION,
+          hoveredHinge: null,
+          foldDraft: null,
+          alignDraft: null,
+          techniqueDraft: null,
+          pullHinge: null,
+          pullMirrorHinge: null,
+          paperActionTipVisible: false,
+          paperActionTipExpanded: false,
+          // 通常姿勢の注意や赤線を一斉形へ重ねない。一斉表示の診断は専用stateで示す。
+          poseWarnings: [],
+          replayWarnings: [],
+          flatFoldViolations: [],
+          suspectHinges: [],
+          relaxations: [],
+          poseConverged: true,
+          poseBestEffort: false,
+          poseClosureRms: null,
+          contactDetected: false,
+          errorMessage: null,
+          documentSavedPath: null,
+        });
+
+        await runFoldAllPreview(0, session, request);
+      } finally {
+        foldAllEntering = false;
+      }
+    },
+
+    setFoldAllPercent: (percent) => {
+      const normalized = normalizedFoldAllPercent(percent);
+      const active = get().foldAllPreview;
+      if (normalized === null || active === null || active.returning) return;
+      if (
+        normalized === active.percent &&
+        active.error === null &&
+        active.busy
+      ) {
+        return;
+      }
+      foldAllRequestGeneration++;
+      set({
+        foldAllPreview: {
+          ...active,
+          percent: normalized,
+          busy: true,
+          error: null,
+        },
+      });
+      foldAllShape.schedule();
+    },
+
+    finishFoldAllPercent: () => foldAllShape.flush(),
+
+    leaveFoldAllPreview: async () => {
+      await restoreAfterFoldAllPreview(true);
+    },
+
     togglePinnedFold: (hinge) => {
       const s = get();
+      if (s.foldAllPreview !== null) return;
       if (!s.hinges.has(hinge)) return;
       get().setPinnedFolds([hinge], !s.pinnedFolds.has(hinge));
     },
 
     setPinnedFolds: (hinges, pinned) => {
       const s = get();
+      if (s.foldAllPreview !== null) return;
       const valid = [...new Set(hinges)].filter((hinge) => s.hinges.has(hinge));
       if (valid.length === 0) return;
       const changed = valid.some(
@@ -4079,6 +4875,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
     recordPoseStep: async () => {
       const before = get();
+      if (before.foldAllPreview !== null) return;
       if (!before.doc || before.playing || before.hinges.size === 0) {
         set({ errorMessage: poseRecordReason(before) });
         return;
@@ -4156,7 +4953,7 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     openProposal: () => {
-      proposalGeneration++;
+      invalidateProposalJob(true);
       lastProposalPositionKey = null;
       set({
         proposalStep: "skeleton",
@@ -4175,7 +4972,7 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     closeProposal: () => {
-      proposalGeneration++;
+      invalidateProposalJob(true);
       lastProposalPositionKey = null;
       set({
         proposalStep: null,
@@ -4262,52 +5059,23 @@ export const useAppStore = create<AppState>((set, get) => {
       if (s.proposalBusy) return;
       const paper = s.doc?.paper ?? FALLBACK_PAPER;
       const seed = s.proposalSeed;
-      const generation = ++proposalGeneration;
       const requestSkeleton = proposalRequestSkeleton(
         s.proposalSkeleton,
         s.proposalPaperSpecified,
         s.proposalPositionLastMoved,
         paper,
       );
-      set({
-        proposalBusy: true,
-        proposalError: null,
-        proposalSeed: seed + 1,
-        proposalProgress: null,
-      });
-      const stopWatching = watchProposalProgress(
-        () => generation === proposalGeneration,
-      );
       // 提案の計算は作品の状態を読まない独立処理。直列化キューに載せると
       // 数百msの計算の間だけ編集が止まるので、ここは載せずに直接呼ぶ
-      try {
-        const list = await ipc.proposalGenerate(requestSkeleton, paper, seed);
-        if (generation !== proposalGeneration) return;
-        // 棒が途中の数字のまま消えないよう、最後まで伸ばしてから消す
-        stopWatching();
-        await holdFullProposalBar(() => generation === proposalGeneration);
-        if (generation !== proposalGeneration) return;
-        set({
-          proposalCandidates: list,
-          proposalSelected: list.length > 0 ? 0 : null,
-          proposalPaperSource: null,
-          proposalPaperPositions: [],
-          proposalStep: list.length > 0 ? "candidates" : "skeleton",
-          proposalError:
-            list.length > 0 ? null : "候補を作れませんでした。骨格を変えてみてください",
-          proposalBusy: false,
-          proposalProgress: null,
-        });
-      } catch (e) {
-        if (generation !== proposalGeneration) return;
-        set({
-          proposalBusy: false,
-          proposalProgress: null,
-          proposalError: typeof e === "string" ? e : String(e),
-        });
-      } finally {
-        stopWatching();
-      }
+      await runProposalGeneration(requestSkeleton, paper, seed, (list) => ({
+        proposalCandidates: list,
+        proposalSelected: list.length > 0 ? 0 : null,
+        proposalPaperSource: null,
+        proposalPaperPositions: [],
+        proposalStep: list.length > 0 ? "candidates" : "skeleton",
+        proposalError:
+          list.length > 0 ? null : "候補を作れませんでした。骨格を変えてみてください",
+      }));
     },
 
     selectProposalCandidate: (index) => {
@@ -4480,57 +5248,26 @@ export const useAppStore = create<AppState>((set, get) => {
       if (s.proposalBusy || s.proposalPaperPositions.length === 0) return;
       const paper = s.doc?.paper ?? FALLBACK_PAPER;
       const seed = s.proposalSeed;
-      const generation = ++proposalGeneration;
       const requestSkeleton = proposalRequestSkeleton(
         s.proposalSkeleton,
         s.proposalPaperSpecified,
         s.proposalPositionLastMoved,
         paper,
       );
-      set({
-        proposalBusy: true,
-        proposalError: null,
-        proposalSeed: seed + 1,
-        proposalProgress: null,
-      });
-      const stopWatching = watchProposalProgress(
-        () => generation === proposalGeneration,
-      );
       // 葉ごとに決めた側を送信用の複製へまとめ、要求は1件だけ送る。
       // 完成形と紙の上の元入力はどちらもストアに残す。
-      try {
-        const list = await ipc.proposalGenerate(requestSkeleton, paper, seed);
-        if (generation !== proposalGeneration) return;
-        // 棒が途中の数字のまま消えないよう、最後まで伸ばしてから消す
-        stopWatching();
-        await holdFullProposalBar(() => generation === proposalGeneration);
-        if (generation !== proposalGeneration) return;
-        set({
-          proposalCandidates:
-            list.length > 0 ? list : s.proposalCandidates,
-          proposalSelected:
-            list.length > 0 ? 0 : s.proposalSelected,
-          proposalPaperSource: list.length > 0 ? null : s.proposalPaperSource,
-          proposalPaperPositions:
-            list.length > 0 ? [] : s.proposalPaperPositions,
-          proposalStep: list.length > 0 ? "candidates" : "paper-position",
-          proposalError:
-            list.length > 0
-              ? null
-              : "この場所では候補を作れませんでした。丸い印を少し離してみてください",
-          proposalBusy: false,
-          proposalProgress: null,
-        });
-      } catch (e) {
-        if (generation !== proposalGeneration) return;
-        set({
-          proposalBusy: false,
-          proposalProgress: null,
-          proposalError: typeof e === "string" ? e : String(e),
-        });
-      } finally {
-        stopWatching();
-      }
+      await runProposalGeneration(requestSkeleton, paper, seed, (list) => ({
+        proposalCandidates: list.length > 0 ? list : s.proposalCandidates,
+        proposalSelected: list.length > 0 ? 0 : s.proposalSelected,
+        proposalPaperSource: list.length > 0 ? null : s.proposalPaperSource,
+        proposalPaperPositions:
+          list.length > 0 ? [] : s.proposalPaperPositions,
+        proposalStep: list.length > 0 ? "candidates" : "paper-position",
+        proposalError:
+          list.length > 0
+            ? null
+            : "この場所では候補を作れませんでした。丸い印を少し離してみてください",
+      }));
     },
 
     applyProposalCandidate: async () => {
@@ -4542,7 +5279,7 @@ export const useAppStore = create<AppState>((set, get) => {
       if (!chosen) return;
       // 以後は普通の展開図として自由に編集できる(PRO-003)。
       // どちらの経路でも確定は1回だけなので、元に戻す1回で入れる前へ戻る
-      proposalGeneration++;
+      invalidateProposalJob(true);
       lastProposalPositionKey = null;
       set({
         proposalStep: null,
@@ -4575,6 +5312,7 @@ export const useAppStore = create<AppState>((set, get) => {
       set({ ...patch, exportError: null, exportSavedPath: null }),
 
     runExport: async (path) => {
+      await waitForFoldAllRestore();
       const s = get();
       if (s.exportBusy) return;
       if (s.exportKind === "CpPng" && !Number.isFinite(s.exportLongSide)) {
@@ -4681,28 +5419,36 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     moveStep: async (number, delta) => {
+      if (foldAllEntering || get().foldAllPreview !== null) return;
       const visibleSteps = get().doc?.sequence ?? [];
       const visibleFrom = number - 1;
-      const visibleTo = visibleFrom + delta;
       const id = visibleSteps[visibleFrom]?.id;
-      if (id === undefined || visibleTo < 0 || visibleTo >= visibleSteps.length) return;
+      if (id === undefined) return;
 
       // 覚え書き・折り方の確定直後は、UpdateStepがFIFOに積まれていてもdocは
       // まだ旧値のことがある。確定結果の反映を待ち、IDから最新の手順を取り直す。
-      const changesBeforeMove = latestDocChange;
-      await changesBeforeMove;
+      // 待っている間に別の作品変更が始まった場合も、最後に始まった変更まで
+      // 追いかける。安定した最新docを読んでからはawaitを挟まず移動を積む。
+      while (true) {
+        const changesBeforeMove = latestDocChange;
+        await changesBeforeMove;
+        if (changesBeforeMove === latestDocChange) break;
+      }
+      // 待機中に一斉表示の入口が先に開くことがある。入口の前だけでなく、
+      // 作品変更が安定した後にも確認し、一時姿勢のまま手順を変更しない。
+      if (foldAllEntering || get().foldAllPreview !== null) return;
       const steps = get().doc?.sequence ?? [];
       const from = steps.findIndex((candidate) => candidate.id === id);
       const to = from + delta;
-      const step = steps[from];
-      if (!step || from < 0 || to < 0 || to >= steps.length) return;
-      // 途中への挿入はSeqOpに用意されているが、折り操作そのものを途中へ
-      // 挟むのは断る仕様なので、既にある手順の位置替えとして使う
-      // (取り除いてから入れ直す。元に戻すは2回ぶんになる)
-      await get().applySequenceOp({ type: "RemoveStep", id: step.id });
-      if (get().errorMessage !== null) return;
-      await get().applySequenceOp({ type: "InsertStep", index: to, step });
-      if (get().errorMessage === null) get().selectStep(to + 1);
+      if (from < 0 || to < 0 || to >= steps.length) return;
+
+      // 既存手順の位置替えは1回のジェスチャーなので、Rust側の原子操作へ
+      // 1回だけ送る。応答前に画面側のsequenceは変更しない。
+      const succeeded = await applySequenceChange(
+        { type: "MoveStep", id, to_index: to },
+        to === from,
+      );
+      if (succeeded && to !== from) get().selectStep(to + 1);
     },
   };
 });

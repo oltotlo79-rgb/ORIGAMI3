@@ -49,7 +49,9 @@ describe("展開図左上の操作案内", () => {
   it("初回は詳しい操作を開き、畳んでも現在できる1行を残して選択を保存する", () => {
     const { unmount } = render(<CpOperationHint />);
 
-    expect(screen.getByText("山折り線: 2回クリックで線を引きます")).toBeTruthy();
+    expect(
+      screen.getByText("山折り線: 2回クリック、または矢印キーで動かしてEnterを2回"),
+    ).toBeTruthy();
     expect(screen.getByText(/Shift\+ホイール: 左右/)).toBeTruthy();
     const close = screen.getByRole("button", {
       name: "展開図の詳しい操作方法 ▲",
@@ -58,7 +60,9 @@ describe("展開図左上の操作案内", () => {
 
     fireEvent.click(close);
     expect(useAppStore.getState().cpHelpExpanded).toBe(false);
-    expect(screen.getByText("山折り線: 2回クリックで線を引きます")).toBeTruthy();
+    expect(
+      screen.getByText("山折り線: 2回クリック、または矢印キーで動かしてEnterを2回"),
+    ).toBeTruthy();
     expect(screen.queryByText(/Shift\+ホイール: 左右/)).toBeNull();
     expect(
       JSON.parse(globalThis.localStorage.getItem("origami3.prefs") ?? "{}"),
@@ -77,7 +81,9 @@ describe("展開図左上の操作案内", () => {
     render(<CpOperationHint />);
     act(() => useAppStore.setState({ activeTool: "aux", wheelBehavior: "zoom" }));
 
-    expect(screen.getByText("補助線: 2回クリックで線を引きます")).toBeTruthy();
+    expect(
+      screen.getByText("補助線: 2回クリック、または矢印キーで動かしてEnterを2回"),
+    ).toBeTruthy();
     expect(screen.getByText(/Ctrl\+Shift\+ホイール: 左右/)).toBeTruthy();
   });
 

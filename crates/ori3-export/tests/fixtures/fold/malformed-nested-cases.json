@@ -1,0 +1,56 @@
+[
+  {
+    "name": "frame class element type",
+    "input": {"file_spec": 1.2, "frame_classes": ["creasePattern", 3]},
+    "kind": "invalid_type",
+    "path": "$.frame_classes[1]"
+  },
+  {
+    "name": "coordinate component type",
+    "input": {"file_spec": 1.2, "vertices_coords": [[0, "x"]]},
+    "kind": "invalid_type",
+    "path": "$.vertices_coords[0][1]"
+  },
+  {
+    "name": "negative vertex index",
+    "input": {"file_spec": 1.2, "edges_vertices": [[0, -1]]},
+    "kind": "invalid_value",
+    "path": "$.edges_vertices[0][1]"
+  },
+  {
+    "name": "fractional face order",
+    "input": {"file_spec": 1.2, "faceOrders": [[0, 1, 1.5]]},
+    "kind": "invalid_value",
+    "path": "$.faceOrders[0][2]"
+  },
+  {
+    "name": "frame is not object",
+    "input": {"file_spec": 1.2, "file_frames": [true]},
+    "kind": "invalid_type",
+    "path": "$.file_frames[0]"
+  },
+  {
+    "name": "fold angle element type",
+    "input": {"file_spec": 1.2, "file_frames": [{"edges_foldAngle": [0, "x"]}]},
+    "kind": "invalid_type",
+    "path": "$.file_frames[0].edges_foldAngle[1]"
+  },
+  {
+    "name": "file spec type",
+    "input": {"file_spec": "1.2"},
+    "kind": "invalid_type",
+    "path": "$.file_spec"
+  },
+  {
+    "name": "unsupported version",
+    "input": {"file_spec": 1.1},
+    "kind": "unsupported_version",
+    "path": "$.file_spec"
+  },
+  {
+    "name": "root is not object",
+    "input": [],
+    "kind": "root_not_object",
+    "path": "$"
+  }
+]

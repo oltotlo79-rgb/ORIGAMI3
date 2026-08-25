@@ -2,7 +2,9 @@
 // 30秒ごとに控えていた作業中の内容を復元するか尋ねる。
 // 専門用語を使わず、何が起きたか・どちらを選ぶとどうなるかを日本語で示す(設計原則3b)。
 
+import { useRef } from "react";
 import { useAppStore } from "../store/appStore";
+import { ModalDialog } from "./dialogs/ModalDialog";
 
 /** 自動保存した時刻の表示(分からなければ空文字) */
 export function formatSavedAt(savedAtMs: number | null): string {
@@ -25,20 +27,19 @@ export function fileName(path: string): string {
 export function RecoveryDialog() {
   const recovery = useAppStore((s) => s.recovery);
   const resolveRecovery = useAppStore((s) => s.resolveRecovery);
+  const restoreButtonRef = useRef<HTMLButtonElement>(null);
   if (!recovery) return null;
 
   const at = formatSavedAt(recovery.saved_at_ms);
   const target = recovery.document_path;
 
   return (
-    <div className="dialog-backdrop">
-      <div
-        className="dialog"
-        data-floating-ui="recovery-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="recovery-title"
-      >
+    <ModalDialog
+      labelledBy="recovery-title"
+      initialFocusRef={restoreButtonRef}
+      escapeAction={{ kind: "stay" }}
+      data-floating-ui="recovery-dialog"
+    >
         <h2 id="recovery-title">前回の終了が正常に行われませんでした</h2>
         <p>
           {at
@@ -55,6 +56,7 @@ export function RecoveryDialog() {
         </p>
         <div className="button-row">
           <button
+            ref={restoreButtonRef}
             type="button"
             className="button-primary"
             onClick={() => void resolveRecovery(true)}
@@ -69,7 +71,6 @@ export function RecoveryDialog() {
             破棄する
           </button>
         </div>
-      </div>
-    </div>
+    </ModalDialog>
   );
 }

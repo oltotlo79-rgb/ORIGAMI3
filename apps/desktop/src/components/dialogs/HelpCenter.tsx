@@ -6,6 +6,7 @@ import { HELP_CHAPTERS, helpChapterSearchText } from "../../help/helpContent";
 import { HELP_DIAGRAMS } from "../../help/helpDiagrams";
 import type { HelpBlock } from "../../help/helpTypes";
 import { useAppStore } from "../../store/appStore";
+import { ModalDialog } from "./ModalDialog";
 
 function normalizeSearch(value: string): string {
   return value.normalize("NFKC").toLocaleLowerCase("ja").trim();
@@ -100,21 +101,13 @@ export function HelpCenter() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "F1") {
-        event.preventDefault();
-        openHelp();
-      } else if (event.key === "Escape" && useAppStore.getState().helpOpen) {
-        event.preventDefault();
-        closeHelp();
-      }
+      if (event.key !== "F1") return;
+      event.preventDefault();
+      openHelp();
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [closeHelp, openHelp]);
-
-  useEffect(() => {
-    if (open) searchRef.current?.focus();
-  }, [open]);
+  }, [openHelp]);
 
   if (!open) return null;
 
@@ -127,117 +120,112 @@ export function HelpCenter() {
   const chapter = matches.find((item) => item.id === chapterId) ?? matches[0] ?? null;
 
   return (
-    <div
-      className="dialog-backdrop help-backdrop"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) closeHelp();
-      }}
+    <ModalDialog
+      labelledBy="help-center-title"
+      initialFocusRef={searchRef}
+      escapeAction={{ kind: "dismiss", run: closeHelp }}
+      backdropClassName="help-backdrop"
+      onBackdropDismiss={closeHelp}
+      className="help-dialog"
+      data-floating-ui="help-dialog"
     >
-      <div
-        className="dialog help-dialog"
-        data-floating-ui="help-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="help-center-title"
-      >
-        <header className="help-header">
-          <div>
-            <span className="help-kicker">ORIGAMI3 取扱ガイド</span>
-            <h2 id="help-center-title">ヘルプセンター</h2>
-          </div>
+      <header className="help-header">
+        <div>
+          <span className="help-kicker">ORIGAMI3 取扱ガイド</span>
+          <h2 id="help-center-title">ヘルプセンター</h2>
+        </div>
+        <button
+          type="button"
+          className="help-close"
+          aria-label="ヘルプセンターを閉じる"
+          onClick={closeHelp}
+        >
+          ×
+        </button>
+      </header>
+
+      <aside className="help-sidebar">
+        <div className="help-search">
+          <label htmlFor="help-search-input">章題・本文を検索</label>
+          <span className="help-search-control">
+            <span aria-hidden="true">⌕</span>
+            <input
+              id="help-search-input"
+              ref={searchRef}
+              type="search"
+              value={query}
+              placeholder="例: 曲線、保存、F1"
+              onChange={(event) => setQuery(event.target.value)}
+            />
+            {query && (
+              <button
+                type="button"
+                className="help-search-clear"
+                aria-label="検索語を消す"
+                data-tooltip="入力した検索語を消します"
+                onClick={() => {
+                  setQuery("");
+                  searchRef.current?.focus();
+                }}
+              >
+                <span aria-hidden="true">×</span>
+              </button>
+            )}
+          </span>
+        </div>
+        <div className="help-result-count" aria-live="polite">
+          {normalizedQuery ? `${matches.length}章が見つかりました` : `全${HELP_CHAPTERS.length}章`}
+        </div>
+        <nav className="help-toc" aria-label="ヘルプの目次">
+          {matches.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={item.id === chapter?.id ? "current" : ""}
+              aria-current={item.id === chapter?.id ? "page" : undefined}
+              onClick={() => selectChapter(item.id)}
+            >
+              <span>{item.number}</span>
+              <span>{item.title}</span>
+            </button>
+          ))}
+        </nav>
+        <section className="help-guide-entry">
+          <strong>手を動かして覚える</strong>
+          <p>折る・角度・引く・ふくらますを画面上で練習できます。</p>
           <button
             type="button"
-            className="help-close"
-            aria-label="ヘルプセンターを閉じる"
-            onClick={closeHelp}
+            onClick={() => {
+              closeHelp();
+              openGuide();
+            }}
           >
-            ×
+            基本操作ガイドをもう一度
           </button>
-        </header>
+        </section>
+      </aside>
 
-        <aside className="help-sidebar">
-          <div className="help-search">
-            <label htmlFor="help-search-input">章題・本文を検索</label>
-            <span className="help-search-control">
-              <span aria-hidden="true">⌕</span>
-              <input
-                id="help-search-input"
-                ref={searchRef}
-                type="search"
-                value={query}
-                placeholder="例: 曲線、保存、F1"
-                onChange={(event) => setQuery(event.target.value)}
-              />
-              {query && (
-                <button
-                  type="button"
-                  className="help-search-clear"
-                  aria-label="検索語を消す"
-                  data-tooltip="入力した検索語を消します"
-                  onClick={() => {
-                    setQuery("");
-                    searchRef.current?.focus();
-                  }}
-                >
-                  <span aria-hidden="true">×</span>
-                </button>
-              )}
-            </span>
-          </div>
-          <div className="help-result-count" aria-live="polite">
-            {normalizedQuery ? `${matches.length}章が見つかりました` : `全${HELP_CHAPTERS.length}章`}
-          </div>
-          <nav className="help-toc" aria-label="ヘルプの目次">
-            {matches.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                className={item.id === chapter?.id ? "current" : ""}
-                aria-current={item.id === chapter?.id ? "page" : undefined}
-                onClick={() => selectChapter(item.id)}
-              >
-                <span>{item.number}</span>
-                <span>{item.title}</span>
-              </button>
-            ))}
-          </nav>
-          <section className="help-guide-entry">
-            <strong>手を動かして覚える</strong>
-            <p>折る・角度・引く・ふくらますを画面上で練習できます。</p>
-            <button
-              type="button"
-              onClick={() => {
-                closeHelp();
-                openGuide();
-              }}
-            >
-              基本操作ガイドをもう一度
-            </button>
-          </section>
-        </aside>
-
-        <main className="help-content" tabIndex={-1}>
-          {chapter ? (
-            <article aria-labelledby={`help-chapter-${chapter.id}`}>
-              <div className="help-chapter-heading">
-                <span>第{chapter.number}章</span>
-                <h3 id={`help-chapter-${chapter.id}`}>{chapter.title}</h3>
-                <p>{chapter.summary}</p>
-              </div>
-              {chapter.blocks.map((block, index) => (
-                <BlockView key={`${chapter.id}-${index}`} block={block} />
-              ))}
-            </article>
-          ) : (
-            <div className="help-empty" role="status">
-              <span aria-hidden="true">◇</span>
-              <h3>見つかりませんでした</h3>
-              <p>言葉を短くするか、別の折り紙の言葉で探してみてください。</p>
-              <button type="button" onClick={() => setQuery("")}>検索を消す</button>
+      <main className="help-content" tabIndex={-1}>
+        {chapter ? (
+          <article aria-labelledby={`help-chapter-${chapter.id}`}>
+            <div className="help-chapter-heading">
+              <span>第{chapter.number}章</span>
+              <h3 id={`help-chapter-${chapter.id}`}>{chapter.title}</h3>
+              <p>{chapter.summary}</p>
             </div>
-          )}
-        </main>
-      </div>
-    </div>
+            {chapter.blocks.map((block, index) => (
+              <BlockView key={`${chapter.id}-${index}`} block={block} />
+            ))}
+          </article>
+        ) : (
+          <div className="help-empty" role="status">
+            <span aria-hidden="true">◇</span>
+            <h3>見つかりませんでした</h3>
+            <p>言葉を短くするか、別の折り紙の言葉で探してみてください。</p>
+            <button type="button" onClick={() => setQuery("")}>検索を消す</button>
+          </div>
+        )}
+      </main>
+    </ModalDialog>
   );
 }

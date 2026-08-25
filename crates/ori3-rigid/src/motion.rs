@@ -112,6 +112,34 @@ pub fn solve_motion_with_contact_options(
     )
 }
 
+/// 手順を持たない一時姿勢を、物理的な重なり順を刻まずに追従計算する。
+///
+/// `fold_all` だけが使うcrate内入口。通常の姿勢操作では、手順や実際に通った経路から
+/// 表示順を導出する既存契約を保つ。一斉折りはその根拠を持たないため、導出処理自体を
+/// 走らせず、返却frameへ偶然の上下関係が混ざることも防ぐ。
+pub(crate) fn solve_motion_without_surface_order(
+    cp: &CreasePattern,
+    faces: &[Face],
+    drivers: &[Driver],
+    targets: Option<&HashMap<EdgeId, f64>>,
+    warm_start: Option<&HashMap<EdgeId, f64>>,
+    contact: MotionContactOptions,
+) -> MotionSolveResult {
+    let topology = solver::prepare_topology(cp, faces);
+    solve_motion_prepared(
+        cp,
+        faces,
+        drivers,
+        targets,
+        warm_start,
+        contact,
+        MotionSolveContext {
+            topology: &topology,
+            stamp_surface_order: false,
+        },
+    )
+}
+
 /// 指定された姿勢を1回だけ解き、その姿勢だけから表示用の重なり順を刻印する。
 ///
 /// 接触の検出や補正、平らな状態からの追従は行わない。追従経路ではなく、同じ指定を

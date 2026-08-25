@@ -8,10 +8,32 @@ import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as testingLibraryRender,
   screen,
   within,
 } from "@testing-library/react";
+
+/**
+ * 共通の画面土台は内容をdocument.body直下へ出す。
+ * 既存の内容検査が確かめる対象を変えないよう、この画面が今回作ったdialogを
+ * 従来どおりcontainerとして返す。閉じている場合は元のcontainerを返す。
+ */
+function render(
+  ...args: Parameters<typeof testingLibraryRender>
+): ReturnType<typeof testingLibraryRender> {
+  const existing = new Set(
+    document.body.querySelectorAll<HTMLElement>(
+      '[data-floating-ui="proposal-dialog"]',
+    ),
+  );
+  const result = testingLibraryRender(...args);
+  const dialog = Array.from(
+    document.body.querySelectorAll<HTMLElement>(
+      '[data-floating-ui="proposal-dialog"]',
+    ),
+  ).find((element) => !existing.has(element));
+  return dialog === undefined ? result : { ...result, container: dialog };
+}
 
 vi.mock("../../ipc/client", () => ({
   documentNew: vi.fn(),
@@ -28,11 +50,13 @@ vi.mock("../../ipc/client", () => ({
   recoveryRestore: vi.fn(),
   proposalGenerate: vi.fn(),
   proposalProgress: vi.fn(),
+  proposalControl: vi.fn(),
   proposalApply: vi.fn(),
 }));
 
 import * as ipc from "../../ipc/client";
 import { ProposalWizard, foldPlanLabel, violationLabel } from "./ProposalWizard";
+import { focusableElements, type FocusTarget } from "./ModalDialog";
 import { useAppStore } from "../../store/appStore";
 import {
   defaultSkeleton,
@@ -47,6 +71,8 @@ import type {
   FoldStep,
   ProposalCandidate,
   ProposalFoldPlan,
+  ProposalJobResult,
+  ProposalProgressSnapshot,
   Skeleton,
 } from "../../lib/types";
 
@@ -78,6 +104,28 @@ function makeCandidate(mark: number, violations: number): ProposalCandidate {
     warnings: [],
     fold_plan: null,
   };
+}
+
+function proposalResult(
+  jobId: string,
+  candidates: ProposalCandidate[],
+): ProposalJobResult {
+  return { job_id: jobId, candidates };
+}
+
+function progressSnapshot(
+  jobId: string,
+  done: number,
+  total: number,
+): ProposalProgressSnapshot {
+  return { job_id: jobId, done, total, phase: "Generating" };
+}
+
+function mockProposalCandidates(candidates: ProposalCandidate[]): void {
+  vi.mocked(ipc.proposalGenerate).mockImplementation(
+    (_skeleton, _paper, _seed, jobId) =>
+      Promise.resolve(proposalResult(jobId, candidates)),
+  );
 }
 
 /** 紙の上の先端対応を持つ候補。12件でも重ならない4×3格子へ並べる。 */
@@ -223,6 +271,134 @@ function showConfirmationWithSteps(count: number) {
   });
 }
 
+type KeyboardProposalStep =
+  | "skeleton"
+  | "candidates"
+  | "paper-position"
+  | "confirm";
+
+const KEYBOARD_PROPOSAL_STEPS: readonly KeyboardProposalStep[] = [
+  "skeleton",
+  "candidates",
+  "paper-position",
+  "confirm",
+];
+
+function ProposalKeyboardHarness() {
+  const open = useAppStore((state) => state.openProposal);
+  return (
+    <>
+      <button type="button" onClick={open}>
+        提案を開く
+      </button>
+      <ProposalWizard />
+    </>
+  );
+}
+
+/** 4段階を、それぞれ実際に到達し得る値で直接表示する。 */
+function prepareKeyboardProposalStep(step: KeyboardProposalStep): void {
+  if (step === "skeleton") {
+    useAppStore.getState().openProposal();
+    return;
+  }
+
+  const candidates = [
+    makeCandidateWithSites(20, 4),
+    makeCandidateWithSites(21, 4),
+  ];
+  useAppStore.setState({
+    proposalStep: "candidates",
+    proposalSkeleton: radialSkeleton(4),
+    proposalCandidates: candidates,
+    proposalSelected: step === "candidates" ? 1 : 0,
+    proposalPaperSource: null,
+    proposalPaperPositions: [],
+    proposalBusy: false,
+    proposalError: null,
+  });
+  if (step === "paper-position") {
+    useAppStore.getState().openProposalPaperPositionEditor();
+    return;
+  }
+  if (step === "confirm") {
+    useAppStore.getState().setProposalStep("confirm");
+  }
+}
+
+function expectedInitialProposalTarget(step: KeyboardProposalStep): FocusTarget {
+  if (step === "skeleton") {
+    return screen.getAllByRole("slider", { name: /の長さ$/u })[0] as FocusTarget;
+  }
+  if (step === "candidates") {
+    const selected = useAppStore.getState().proposalSelected ?? 0;
+    return screen.getByRole("button", {
+      name: `候補${selected + 1}`,
+    }) as FocusTarget;
+  }
+  if (step === "paper-position") {
+    const handle = screen
+      .getByRole("dialog")
+      .querySelector<FocusTarget>(
+        '[data-paper-position-handle][tabindex="0"]:not([aria-disabled="true"])',
+      );
+    expect(handle).not.toBeNull();
+    return handle!;
+  }
+  return screen.getByRole("button", { name: "選び直す" }) as FocusTarget;
+}
+
+/**
+ * jsdomはEnterからbuttonのclickを自動生成しないため、keydownが取り消されなかった
+ * ときだけ、ブラウザーが続けて行うclickを補う。pointer/mousedownは発生させない。
+ */
+function activateButtonWithKeyboard(button: HTMLButtonElement): void {
+  const down = new KeyboardEvent("keydown", {
+    key: "Enter",
+    bubbles: true,
+    cancelable: true,
+  });
+  fireEvent(button, down);
+  expect(down.defaultPrevented).toBe(false);
+  if (!down.defaultPrevented) {
+    act(() => button.click());
+  }
+  fireEvent.keyUp(button, { key: "Enter" });
+}
+
+/** jsdomに無い通常のTab移動だけを補い、端の循環は共通土台へ任せる。 */
+function pressProposalTab(dialog: HTMLElement, shiftKey = false): void {
+  const ordered = focusableElements(dialog);
+  const active = document.activeElement as FocusTarget | null;
+  const down = new KeyboardEvent("keydown", {
+    key: "Tab",
+    shiftKey,
+    bubbles: true,
+    cancelable: true,
+  });
+  fireEvent(active ?? dialog, down);
+  if (!down.defaultPrevented) {
+    const current = active === null ? -1 : ordered.indexOf(active);
+    const next = shiftKey
+      ? current <= 0
+        ? ordered.length - 1
+        : current - 1
+      : current < 0 || current === ordered.length - 1
+        ? 0
+        : current + 1;
+    ordered[next]?.focus();
+  }
+  fireEvent.keyUp(document.activeElement ?? dialog, { key: "Tab", shiftKey });
+}
+
+function tabToProposalTarget(dialog: HTMLElement, target: FocusTarget): void {
+  const limit = focusableElements(dialog).length + 1;
+  for (let index = 0; index < limit && document.activeElement !== target; index += 1) {
+    pressProposalTab(dialog);
+  }
+  expect(document.activeElement).toBe(target);
+}
+
 function shapeRow(container: HTMLElement, id: number): HTMLElement {
   const row = container.querySelector<HTMLElement>(`[data-shape-row="${id}"]`);
   expect(row).not.toBeNull();
@@ -248,23 +424,252 @@ function extendFrom(container: HTMLElement, parentId: number): number {
 }
 
 beforeEach(() => {
+  vi.mocked(ipc.proposalGenerate).mockReset();
+  vi.mocked(ipc.proposalProgress).mockReset();
+  vi.mocked(ipc.proposalControl).mockReset();
   vi.mocked(ipc.editApply).mockResolvedValue(VIEW);
+  mockProposalCandidates([]);
+  vi.mocked(ipc.proposalProgress).mockResolvedValue(null);
+  vi.mocked(ipc.proposalControl).mockImplementation((operation) =>
+    Promise.resolve({
+      job_id: operation.job_id,
+      done: 0,
+      total: 0,
+      phase: "Cancelled",
+    }),
+  );
   useAppStore.getState().closeProposal();
   useAppStore.setState({
     doc: { ...VIEW.doc, sequence: [] },
     proposalSkeleton: defaultSkeleton(),
     proposalCandidates: [],
     proposalSelected: null,
+    proposalJobId: null,
+    proposalProgress: null,
+    proposalProgressWarning: null,
     proposalError: null,
   });
 });
 
 afterEach(() => {
+  useAppStore.getState().closeProposal();
   cleanup();
   vi.clearAllMocks();
 });
 
 describe("提案ウィザード", () => {
+  it.each([
+    ["形", "skeleton"],
+    ["候補", "candidates"],
+    ["紙の上", "paper-position"],
+    ["確認", "confirm"],
+  ] as const)("%sの段階を開くと所定の最初の操作へ移る", (_name, step) => {
+    prepareKeyboardProposalStep(step);
+    render(<ProposalWizard />);
+
+    expect(document.activeElement).toBe(expectedInitialProposalTarget(step));
+  });
+
+  it.each(KEYBOARD_PROPOSAL_STEPS)(
+    "%sの段階でTabを100回循環する",
+    (step) => {
+      prepareKeyboardProposalStep(step);
+      render(<ProposalWizard />);
+      const dialog = screen.getByRole("dialog");
+      const ordered = focusableElements(dialog);
+      expect(ordered.length).toBeGreaterThan(0);
+      const first = ordered[0];
+      const last = ordered[ordered.length - 1];
+
+      for (let index = 0; index < 100; index += 1) {
+        last.focus();
+        pressProposalTab(dialog);
+        expect(document.activeElement, `Tab ${index + 1}回目`).toBe(first);
+      }
+    },
+  );
+
+  it.each(KEYBOARD_PROPOSAL_STEPS)(
+    "%sの段階でShift+Tabを100回循環する",
+    (step) => {
+      prepareKeyboardProposalStep(step);
+      render(<ProposalWizard />);
+      const dialog = screen.getByRole("dialog");
+      const ordered = focusableElements(dialog);
+      expect(ordered.length).toBeGreaterThan(0);
+      const first = ordered[0];
+      const last = ordered[ordered.length - 1];
+
+      for (let index = 0; index < 100; index += 1) {
+        first.focus();
+        pressProposalTab(dialog, true);
+        expect(document.activeElement, `Shift+Tab ${index + 1}回目`).toBe(last);
+      }
+    },
+  );
+
+  it.each([
+    [1, 50],
+    [51, 100],
+  ] as const)(
+    "実際のopenProposalからEscapeで閉じて起点へ戻り、背景を元へ戻す（%i〜%i回目）",
+    async (firstCycle, lastCycle) => {
+      render(<ProposalKeyboardHarness />);
+      const trigger = screen.getByRole("button", {
+        name: "提案を開く",
+      }) as HTMLButtonElement;
+
+      for (let cycle = firstCycle; cycle <= lastCycle; cycle += 1) {
+        trigger.focus();
+        activateButtonWithKeyboard(trigger);
+        const dialog = screen.getByRole("dialog");
+        expect(document.activeElement, `開始 ${cycle}回目`).toBe(
+          expectedInitialProposalTarget("skeleton"),
+        );
+        expect(trigger.closest("[inert]"), `背景停止 ${cycle}回目`).not.toBeNull();
+
+        await act(async () => {
+          fireEvent.keyDown(dialog, { key: "Escape" });
+          await Promise.resolve();
+        });
+
+        expect(screen.queryByRole("dialog"), `終了 ${cycle}回目`).toBeNull();
+        expect(document.activeElement, `起点復帰 ${cycle}回目`).toBe(trigger);
+        expect(trigger.closest("[inert]"), `背景復帰 ${cycle}回目`).toBeNull();
+      }
+    },
+  );
+
+  it("pointerとmouseを使わず4段階を操作し、適用後に起点へ戻る", async () => {
+    mockProposalCandidates([makeCandidateWithSites(20, 4)]);
+    let pointerDownCount = 0;
+    let mouseDownCount = 0;
+    const countPointerDown = () => {
+      pointerDownCount += 1;
+    };
+    const countMouseDown = () => {
+      mouseDownCount += 1;
+    };
+    document.addEventListener("pointerdown", countPointerDown, true);
+    document.addEventListener("mousedown", countMouseDown, true);
+
+    try {
+      render(<ProposalKeyboardHarness />);
+      const trigger = screen.getByRole("button", {
+        name: "提案を開く",
+      }) as HTMLButtonElement;
+      trigger.focus();
+      activateButtonWithKeyboard(trigger);
+
+      let dialog = screen.getByRole("dialog");
+      const length = expectedInitialProposalTarget("skeleton") as HTMLInputElement;
+      expect(document.activeElement).toBe(length);
+      const nextLength = Math.min(
+        Number(length.max),
+        Number(length.value) + Number(length.step),
+      );
+      fireEvent.keyDown(length, { key: "ArrowRight" });
+      fireEvent.change(length, { target: { value: String(nextLength) } });
+      fireEvent.keyUp(length, { key: "ArrowRight" });
+      expect(Number(length.value)).toBe(nextLength);
+
+      const generate = screen.getByRole("button", {
+        name: "展開図を作ってもらう",
+      }) as HTMLButtonElement;
+      tabToProposalTarget(dialog, generate);
+      activateButtonWithKeyboard(generate);
+      await vi.waitFor(() =>
+        expect(screen.getByRole("button", { name: "候補1" })).not.toBeNull(),
+      );
+
+      dialog = screen.getByRole("dialog");
+      const candidate = screen.getByRole("button", {
+        name: "候補1",
+      }) as HTMLButtonElement;
+      expect(document.activeElement).toBe(candidate);
+      activateButtonWithKeyboard(candidate);
+      const openPaper = screen.getByRole("button", {
+        name: "紙の上の場所も調整",
+      }) as HTMLButtonElement;
+      tabToProposalTarget(dialog, openPaper);
+      activateButtonWithKeyboard(openPaper);
+
+      dialog = screen.getByRole("dialog");
+      const paperHandle = expectedInitialProposalTarget("paper-position");
+      expect(document.activeElement).toBe(paperHandle);
+      const positionsBefore = JSON.stringify(
+        useAppStore.getState().proposalPaperPositions,
+      );
+      fireEvent.keyDown(paperHandle, { key: "ArrowRight" });
+      fireEvent.keyUp(paperHandle, { key: "ArrowRight" });
+      expect(JSON.stringify(useAppStore.getState().proposalPaperPositions)).not.toBe(
+        positionsBefore,
+      );
+
+      const back = screen.getByRole("button", {
+        name: "候補へ戻る",
+      }) as HTMLButtonElement;
+      tabToProposalTarget(dialog, back);
+      activateButtonWithKeyboard(back);
+      dialog = screen.getByRole("dialog");
+      expect(document.activeElement).toBe(
+        expectedInitialProposalTarget("candidates"),
+      );
+
+      const confirm = screen.getByRole("button", {
+        name: "これにする",
+      }) as HTMLButtonElement;
+      tabToProposalTarget(dialog, confirm);
+      activateButtonWithKeyboard(confirm);
+      dialog = screen.getByRole("dialog");
+      expect(document.activeElement).toBe(expectedInitialProposalTarget("confirm"));
+
+      const apply = screen.getByRole("button", {
+        name: "この展開図を使う",
+      }) as HTMLButtonElement;
+      tabToProposalTarget(dialog, apply);
+      activateButtonWithKeyboard(apply);
+      await vi.waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(document.activeElement).toBe(trigger);
+      expect(pointerDownCount).toBe(0);
+      expect(mouseDownCount).toBe(0);
+    } finally {
+      document.removeEventListener("pointerdown", countPointerDown, true);
+      document.removeEventListener("mousedown", countMouseDown, true);
+    }
+  });
+
+  it("処理中のEscapeは閉じず、無効になった現在位置だけ画面本体へ退避する", () => {
+    useAppStore.getState().openProposal();
+    render(<ProposalWizard />);
+    const dialog = screen.getByRole("dialog");
+    const length = expectedInitialProposalTarget("skeleton");
+
+    act(() => useAppStore.setState({ proposalBusy: true }));
+    expect(document.activeElement).toBe(length);
+    act(() => useAppStore.setState({ proposalBusy: false }));
+
+    const generate = screen.getByRole("button", {
+      name: "展開図を作ってもらう",
+    });
+    generate.focus();
+    act(() => useAppStore.setState({ proposalBusy: true }));
+    expect(generate.hasAttribute("disabled")).toBe(true);
+    expect(document.activeElement).toBe(dialog);
+
+    for (let index = 0; index < 100; index += 1) {
+      fireEvent.keyDown(dialog, { key: "Escape" });
+      expect(useAppStore.getState().proposalStep, `Escape ${index + 1}回目`).toBe(
+        "skeleton",
+      );
+      expect(screen.getByRole("dialog")).toBe(dialog);
+    }
+  });
+
   it("計算中だけ進み具合を出し、終わったら消す(常設UIを増やさない)", () => {
     useAppStore.getState().openProposal();
     // 計算していないときは出さない
@@ -274,10 +679,13 @@ describe("提案ウィザード", () => {
     ).toBeNull();
     cleanup();
 
-    // 計算中は「折り方を考えています…」と「2/4 件」を出す
+    // 計算中は「折り方を考えています…」と「4件中2件め」を出す
     useAppStore.setState({
       proposalBusy: true,
-      proposalProgress: { done: 2, total: 4 },
+      proposalJobId: "visible-progress",
+      proposalProgress: progressSnapshot("visible-progress", 2, 4),
+      proposalProgressWarning:
+        "進み具合を読み取れませんでした。計算はそのまま続けています。",
     });
     const busy = render(<ProposalWizard />);
     const box = busy.container.querySelector<HTMLElement>(
@@ -287,7 +695,7 @@ describe("提案ウィザード", () => {
     expect(box!.textContent).toContain("折り方を考えています…");
     expect(
       box!.querySelector("[data-proposal-progress-count]")?.textContent,
-    ).toBe("2/4 件");
+    ).toBe("4件中2件め");
     // 棒の伸びも件数と合う
     expect(
       box!
@@ -296,12 +704,20 @@ describe("提案ウィザード", () => {
     ).toBe("50");
     // 画面に出す文字へ内部用語を出さない(CLAUDE.md §11.1)
     expect(box!.textContent ?? "").not.toMatch(
-      /検証|ソルバー|探索|骨格|充填|節点|hard|soft|warm[\s-]+start|イテレーション|姿勢|自己交差|裂け/iu,
+      /job|ID|検証|ソルバー|探索|骨格|充填|節点|hard|soft|warm[\s-]+start|イテレーション|姿勢|自己交差|裂け/iu,
     );
+    expect(
+      busy.container.querySelector("[data-proposal-progress-warning]")
+        ?.textContent,
+    ).toBe("進み具合を読み取れませんでした。計算はそのまま続けています。");
     cleanup();
 
     // まだ件数が届いていない間は「準備中」
-    useAppStore.setState({ proposalBusy: true, proposalProgress: null });
+    useAppStore.setState({
+      proposalBusy: true,
+      proposalProgress: null,
+      proposalProgressWarning: null,
+    });
     const waiting = render(<ProposalWizard />);
     expect(
       waiting.container.querySelector("[data-proposal-progress-count]")
@@ -312,6 +728,7 @@ describe("提案ウィザード", () => {
     // 終わったら消える
     useAppStore.setState({
       proposalBusy: false,
+      proposalJobId: null,
       proposalProgress: null,
     });
     const done = render(<ProposalWizard />);
@@ -325,32 +742,64 @@ describe("提案ウィザード", () => {
     // 0/4→1/4→2/4→3/4 と伸びたあと、棒が **3/4のまま消えた**。
     // 利用者には棒が途中で終わったように見えるので、
     // 計算が返った時点で満杯にしてから消す。
-    useAppStore.getState().openProposal();
-    // 読み取りは最後まで「3/4」しか返さない(実機で起きていた形)
-    vi.mocked(ipc.proposalProgress).mockResolvedValue({ done: 3, total: 4 });
-    vi.mocked(ipc.proposalGenerate).mockImplementation(
-      () => new Promise((resolve) => setTimeout(() => resolve([]), 400)),
+    vi.useFakeTimers();
+    const pending = deferred<ProposalJobResult>();
+    let jobId = "";
+    let request: Promise<void> = Promise.resolve();
+    vi.mocked(ipc.proposalProgress).mockImplementation((requestedJobId) =>
+      Promise.resolve(progressSnapshot(requestedJobId, 3, 4)),
     );
+    vi.mocked(ipc.proposalGenerate).mockImplementation(
+      (_skeleton, _paper, _seed, requestedJobId) => {
+        jobId = requestedJobId;
+        return pending.promise;
+      },
+    );
+    try {
+      useAppStore.getState().openProposal();
+      const view = render(<ProposalWizard />);
+      request = useAppStore.getState().generateProposal();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(150);
+      });
+      expect(
+        view.container.querySelector("[data-proposal-progress-count]")
+          ?.textContent,
+      ).toBe("4件中3件め");
 
-    const seen: { done: number; total: number }[] = [];
-    const unsubscribe = useAppStore.subscribe((s) => {
-      if (s.proposalProgress) seen.push(s.proposalProgress);
-    });
-    await act(async () => {
-      await useAppStore.getState().generateProposal();
-    });
-    unsubscribe();
+      await act(async () => {
+        pending.resolve(proposalResult(jobId, []));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(
+        view.container.querySelector("[data-proposal-progress-count]")
+          ?.textContent,
+      ).toBe("4件中4件め");
+      expect(
+        view.container
+          .querySelector("[data-proposal-progress-fill]")
+          ?.getAttribute("data-proposal-progress-fill"),
+      ).toBe("100");
 
-    expect(seen.length, "棒の数字が一度も入っていない").toBeGreaterThan(0);
-    expect(seen[seen.length - 1], "棒が途中の数字のまま消えている").toEqual({
-      done: 4,
-      total: 4,
-    });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(150);
+        await request;
+      });
+      expect(
+        view.container.querySelector("[data-proposal-progress]"),
+      ).toBeNull();
+    } finally {
+      useAppStore.getState().closeProposal();
+      if (jobId) pending.resolve(proposalResult(jobId, []));
+      await request;
+      vi.useRealTimers();
+    }
   });
 
   it("閉じているときは何も出さない(常設UIを増やさない)", () => {
-    const { container } = render(<ProposalWizard />);
-    expect(container.firstChild).toBeNull();
+    render(<ProposalWizard />);
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("出っぱりを増やす・減らすと本数が変わる", () => {
@@ -469,7 +918,7 @@ describe("提案ウィザード", () => {
   });
 
   it("深さ3以上の形をそのまま候補生成へ渡す", async () => {
-    vi.mocked(ipc.proposalGenerate).mockResolvedValue([makeCandidate(12, 0)]);
+    mockProposalCandidates([makeCandidate(12, 0)]);
     useAppStore.getState().openProposal();
     const { container } = render(<ProposalWizard />);
     const head = skeletonRows(useAppStore.getState().proposalSkeleton)[0];
@@ -592,7 +1041,7 @@ describe("提案ウィザード", () => {
   });
 
   it("作ってもらうと候補が並び、選んで使うと展開図が流し込まれる", async () => {
-    vi.mocked(ipc.proposalGenerate).mockResolvedValue([
+    mockProposalCandidates([
       makeCandidate(10, 0),
       makeCandidate(11, 3),
     ]);
@@ -699,8 +1148,14 @@ describe("提案ウィザード", () => {
   it(
     "D22: 計算中にやめた後、完了しても提案画面を再表示しない",
     async () => {
-      const pending = deferred<ProposalCandidate[]>();
-      vi.mocked(ipc.proposalGenerate).mockReturnValue(pending.promise);
+      const pending = deferred<ProposalJobResult>();
+      let jobId = "";
+      vi.mocked(ipc.proposalGenerate).mockImplementation(
+        (_skeleton, _paper, _seed, requestedJobId) => {
+          jobId = requestedJobId;
+          return pending.promise;
+        },
+      );
       useAppStore.getState().openProposal();
       render(<ProposalWizard />);
 
@@ -711,7 +1166,7 @@ describe("提案ウィザード", () => {
       expect(screen.queryByRole("dialog")).toBeNull();
 
       await act(async () => {
-        pending.resolve([makeCandidate(10, 0)]);
+        pending.resolve(proposalResult(jobId, [makeCandidate(10, 0)]));
         await pending.promise;
         await Promise.resolve();
       });
@@ -722,9 +1177,17 @@ describe("提案ウィザード", () => {
   );
 
   it("D22: 取り消した100要求が逆順に完了しても画面・候補・計算中表示を戻さない", async () => {
-    const pending = Array.from({ length: 100 }, () => deferred<ProposalCandidate[]>());
+    const pending = Array.from({ length: 100 }, () =>
+      deferred<ProposalJobResult>(),
+    );
+    const jobIds: string[] = [];
     let issued = 0;
-    vi.mocked(ipc.proposalGenerate).mockImplementation(() => pending[issued++].promise);
+    vi.mocked(ipc.proposalGenerate).mockImplementation(
+      (_skeleton, _paper, _seed, jobId) => {
+        jobIds.push(jobId);
+        return pending[issued++].promise;
+      },
+    );
     render(<ProposalWizard />);
 
     const requests: Promise<void>[] = [];
@@ -734,10 +1197,13 @@ describe("提案ウィザード", () => {
       useAppStore.getState().closeProposal();
     }
     expect(issued).toBe(100);
+    expect(new Set(jobIds).size).toBe(100);
 
     for (let index = pending.length - 1; index >= 0; index--) {
       await act(async () => {
-        pending[index].resolve([makeCandidate(index + 10, 0)]);
+        pending[index].resolve(
+          proposalResult(jobIds[index], [makeCandidate(index + 10, 0)]),
+        );
         await requests[index];
       });
       const state = useAppStore.getState();
@@ -748,8 +1214,104 @@ describe("提案ウィザード", () => {
     }
   });
 
+  it("古い仕事の遅い進捗を、新しく開いた画面へ戻さない", async () => {
+    vi.useFakeTimers();
+    const generated = [
+      deferred<ProposalJobResult>(),
+      deferred<ProposalJobResult>(),
+    ];
+    const oldProgress = deferred<ProposalProgressSnapshot | null>();
+    const jobIds: string[] = [];
+    let issued = 0;
+    let requestA: Promise<void> = Promise.resolve();
+    let requestB: Promise<void> = Promise.resolve();
+    vi.mocked(ipc.proposalGenerate).mockImplementation(
+      (_skeleton, _paper, _seed, jobId) => {
+        jobIds.push(jobId);
+        return generated[issued++].promise;
+      },
+    );
+    vi.mocked(ipc.proposalProgress).mockImplementation((jobId) =>
+      jobId === jobIds[0]
+        ? oldProgress.promise
+        : Promise.resolve(progressSnapshot(jobId, 2, 4)),
+    );
+    try {
+      useAppStore.getState().openProposal();
+      const view = render(<ProposalWizard />);
+      requestA = useAppStore.getState().generateProposal();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(150);
+      });
+      expect(ipc.proposalProgress).toHaveBeenCalledWith(jobIds[0]);
+
+      useAppStore.getState().closeProposal();
+      expect(vi.getTimerCount()).toBe(0);
+      useAppStore.getState().openProposal();
+      requestB = useAppStore.getState().generateProposal();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(150);
+      });
+
+      const count = view.container.querySelector(
+        "[data-proposal-progress-count]",
+      );
+      expect(count?.textContent).toBe("4件中2件め");
+      expect(
+        view.container
+          .querySelector("[data-proposal-progress-fill]")
+          ?.getAttribute("data-proposal-progress-fill"),
+      ).toBe("50");
+
+      await act(async () => {
+        oldProgress.resolve(progressSnapshot(jobIds[0], 4, 4));
+        await oldProgress.promise;
+        await Promise.resolve();
+      });
+      expect(count?.textContent).toBe("4件中2件め");
+      const visible = view.container.textContent ?? "";
+      expect(visible).not.toContain(jobIds[0]);
+      expect(visible).not.toContain(jobIds[1]);
+      expect(visible).not.toMatch(/job|ID/iu);
+
+      const bPollsBefore = vi
+        .mocked(ipc.proposalProgress)
+        .mock.calls.filter(([jobId]) => jobId === jobIds[1]).length;
+      await act(async () => {
+        generated[0].resolve(
+          proposalResult(jobIds[0], [makeCandidate(777, 0)]),
+        );
+        await requestA;
+        await vi.advanceTimersByTimeAsync(150);
+      });
+      const state = useAppStore.getState();
+      expect(state.proposalJobId).toBe(jobIds[1]);
+      expect(state.proposalBusy).toBe(true);
+      expect(state.proposalCandidates).toHaveLength(0);
+      expect(state.proposalProgress).toEqual(
+        progressSnapshot(jobIds[1], 2, 4),
+      );
+      expect(
+        vi
+          .mocked(ipc.proposalProgress)
+          .mock.calls.filter(([jobId]) => jobId === jobIds[1]).length,
+      ).toBe(bPollsBefore + 1);
+
+      useAppStore.getState().closeProposal();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      useAppStore.getState().closeProposal();
+      if (jobIds[0]) generated[0].resolve(proposalResult(jobIds[0], []));
+      if (jobIds[1]) generated[1].resolve(proposalResult(jobIds[1], []));
+      await Promise.all([requestA, requestB]);
+      vi.useRealTimers();
+    }
+  });
+
   it("提案の警告と生成エラーには内部用語を表示しない", () => {
     const internalTerms = [
+      "job",
+      "探索",
       "骨格",
       "充填",
       "ソルバー",
@@ -1238,7 +1800,7 @@ describe("完成形の先端の場所を直接動かす(PRO-008)", () => {
   });
 
   it("決めた場所は、そのまま展開図の注文へ載る", async () => {
-    vi.mocked(ipc.proposalGenerate).mockResolvedValue([makeCandidate(20, 0)]);
+    mockProposalCandidates([makeCandidate(20, 0)]);
     useAppStore.getState().openProposal();
     const { container } = render(<ProposalWizard />);
     dragTip(container, 1, { x: 0.25, y: 0.5 });
@@ -1545,7 +2107,7 @@ describe("完成形の先端の場所を直接動かす(PRO-008)", () => {
     it("マウス20操作のすべてが再計算へ渡る入力と1e-6以内で一致する", async () => {
       // 候補0件なら同じ大画面に留まる。各操作の直後に本番ストア経路で
       // 再計算を1件ずつ送り、テスト用の純関数で代用しない。
-      vi.mocked(ipc.proposalGenerate).mockResolvedValue([]);
+      mockProposalCandidates([]);
       useAppStore.setState({
         proposalStep: "candidates",
         proposalSkeleton: radialSkeleton(4),
@@ -1601,7 +2163,7 @@ describe("完成形の先端の場所を直接動かす(PRO-008)", () => {
     });
 
     it("キーボード20操作のすべてが再計算へ渡る入力と1e-6以内で一致する", async () => {
-      vi.mocked(ipc.proposalGenerate).mockResolvedValue([]);
+      mockProposalCandidates([]);
       useAppStore.setState({
         proposalStep: "candidates",
         proposalSkeleton: radialSkeleton(4),
@@ -1654,8 +2216,14 @@ describe("完成形の先端の場所を直接動かす(PRO-008)", () => {
     });
 
     it("再計算中は表示中の場所を動かさず、押した時点の入力と食い違わない", async () => {
-      const pending = deferred<ProposalCandidate[]>();
-      vi.mocked(ipc.proposalGenerate).mockReturnValue(pending.promise);
+      const pending = deferred<ProposalJobResult>();
+      let jobId = "";
+      vi.mocked(ipc.proposalGenerate).mockImplementation(
+        (_skeleton, _paper, _seed, requestedJobId) => {
+          jobId = requestedJobId;
+          return pending.promise;
+        },
+      );
       useAppStore.setState({
         proposalStep: "candidates",
         proposalSkeleton: radialSkeleton(4),
@@ -1696,7 +2264,7 @@ describe("完成形の先端の場所を直接動かす(PRO-008)", () => {
       expect(storedPaperPosition(1)).toEqual(sentAt);
 
       await act(async () => {
-        pending.resolve([]);
+        pending.resolve(proposalResult(jobId, []));
         await pending.promise;
         await Promise.resolve();
       });
@@ -1883,7 +2451,7 @@ describe("完成形の先端の場所を直接動かす(PRO-008)", () => {
     });
 
     it("完成位置だけ・紙の上だけ・両方・食い違うの4状態で要求を各1件だけ送る", async () => {
-      vi.mocked(ipc.proposalGenerate).mockResolvedValue([]);
+      mockProposalCandidates([]);
       const completion = { x: 0.2, y: -0.3 };
       const completionSkeleton = withCompletion(1, { 1: completion });
       const automaticPaper = completionPositionsOnPaper(
@@ -1948,7 +2516,7 @@ describe("完成形の先端の場所を直接動かす(PRO-008)", () => {
     });
 
     it("食い違う葉は完成形から紙・紙から完成形の両方向で後から動かした場所を送る", async () => {
-      vi.mocked(ipc.proposalGenerate).mockResolvedValue([]);
+      mockProposalCandidates([]);
       resetPositions(radialSkeleton(1));
       const firstCompletion = { x: -0.25, y: 0.35 };
       const paper = { x: 0.7, y: -0.65 };
@@ -1978,7 +2546,7 @@ describe("完成形の先端の場所を直接動かす(PRO-008)", () => {
     });
 
     it("1つの葉は完成形、別の葉は紙の上を使い、まとめた要求を1件だけ送る", async () => {
-      vi.mocked(ipc.proposalGenerate).mockResolvedValue([]);
+      mockProposalCandidates([]);
       resetPositions(radialSkeleton(2));
       const completion = { x: -0.35, y: -0.25 };
       const paper = { x: 0.6, y: 0.5 };
@@ -2355,7 +2923,7 @@ describe("完成形の先端の場所を直接動かす(PRO-008)", () => {
       },
       skipped: [],
     };
-    vi.mocked(ipc.proposalGenerate).mockResolvedValue([
+    mockProposalCandidates([
       completed,
       makeCandidateWithPlan(31, 3, { planned: 5, status: "partial" }),
       makeCandidate(32, 0),

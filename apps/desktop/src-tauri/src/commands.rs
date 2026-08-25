@@ -10,8 +10,8 @@
 use std::collections::{HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -31,8 +31,9 @@ use ori3_model::{
 };
 use ori3_propose::{
     CompletionTolerance, FinishTarget, FoldGoal, FoldSession, GapWeights, LeafSite, Packing,
-    PoseScan, SearchBudget, Skeleton, TipSite, VerifiedPlan, body_on_paper, generate, pack,
-    search_to_completion, verify_search_completion,
+    PoseScan, SearchAbort, SearchBudget, SearchCancellation, SearchControl, SearchWatchdog,
+    Skeleton, TipSite, VerifiedPlan, body_on_paper, generate, pack,
+    search_to_completion_with_control, verify_search_completion,
 };
 use ori3_soft::{SoftMesh, SoftSettings};
 
@@ -52,6 +53,39 @@ pub struct PoseOutcome {
     pub contact_detected: bool,
     /// 今回の±180°指定に関係し、指定角まで届かなかったか紙が食い込んだ通知対象の点。
     pub flat_fold_violations: Vec<VertexId>,
+}
+
+/// 手順を持たない一斉折りでは、物理的な面の上下を確定できないことを示す。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FoldAllLayerOrder {
+    UnavailableWithoutSequence,
+}
+
+const FOLD_ALL_FLAT_FOLD_WARNING: &str =
+    "平らにたためない折り目の集まりがあります。表示できた形を返しています";
+
+/// 全折り目を同じ割合で動かす、一時表示専用コマンドの戻り値。
+///
+/// `Document`や`FoldStep`を含めず、通常姿勢のcache・保存・Undoも更新しない。
+#[derive(Serialize)]
+pub struct FoldAllPreviewOutcome {
+    #[serde(flatten)]
+    pub result: ori3_rigid::SolveResult,
+    /// 利用者が要求した0〜100の割合。
+    pub requested_percent: f64,
+    /// 有効な山谷ヒンジへ渡した希望角（辺ID昇順）。
+    pub requested_angles: Vec<Driver>,
+    /// 次の割合を連続して解くとき、そのまま入力へ戻せる実角（辺ID昇順）。
+    pub next_warm_seed: Vec<Driver>,
+    /// 最終姿勢で交差に関係した可能性のある折り目。
+    pub suspect_hinges: Vec<EdgeId>,
+    /// 経路上または最終姿勢で紙どうしの接触を検出したか。
+    pub contact_detected: bool,
+    /// 100%要求で、角度未到達または最終交差に関係する通知対象の点。
+    pub flat_fold_violations: Vec<VertexId>,
+    /// 手順がないため重なり順を返さない、という必須の構造化状態。
+    pub layer_order: FoldAllLayerOrder,
 }
 
 /// たわみの計算結果を足した `sequence_replay` の戻り値(SIM-012)。
@@ -283,8 +317,12 @@ fn guard<T>(f: impl FnOnce() -> Result<T, String> + std::panic::UnwindSafe) -> R
 
 /// storeのロックを取る。過去のpanicで毒化されていても中身を取り出して続行する
 /// (storeは「複製に適用→確定」方式のため、panic時も直前の整合状態を保っている)。
-fn lock<'a>(state: &'a State<'_, Mutex<DocumentStore>>) -> MutexGuard<'a, DocumentStore> {
+fn lock_inner(state: &Mutex<DocumentStore>) -> MutexGuard<'_, DocumentStore> {
     state.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn lock<'a>(state: &'a State<'_, Mutex<DocumentStore>>) -> MutexGuard<'a, DocumentStore> {
+    lock_inner(state.inner())
 }
 
 /// DocumentViewを返す操作の共通後処理: 手順を最新ステップまで自動再生して
@@ -292,9 +330,12 @@ fn lock<'a>(state: &'a State<'_, Mutex<DocumentStore>>) -> MutexGuard<'a, Docume
 ///
 /// 設計規約: ロック中に重い計算をしない。`f` の中で取ったロックは `f` を抜けた時点で
 /// 解放されているので、再生(面400・10手順でrelease約23ms)はロックの外で走る。
-fn store_view_pose_angles(state: &State<'_, Mutex<DocumentStore>>, view: &DocumentView) {
+fn store_view_pose_angles(state: &Mutex<DocumentStore>, view: &DocumentView) {
     if view.frame.is_some() && view.angles.values().all(|angle| angle.is_finite()) {
-        lock(state).store_pose_angles(view.angles.clone());
+        state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .store_pose_angles(view.angles.clone());
     }
 }
 
@@ -304,7 +345,7 @@ fn view_command(
 ) -> Result<DocumentView, String> {
     let mut view = f()?; // ここでロックは解放済み
     attach_replay(&mut view);
-    store_view_pose_angles(state, &view);
+    store_view_pose_angles(state.inner(), &view);
     Ok(view)
 }
 
@@ -378,7 +419,7 @@ pub fn recovery_restore(
             return Ok(None);
         };
         attach_replay(&mut view); // 重い再生はロック解放後(view_commandと同じ規約)
-        store_view_pose_angles(&state, &view);
+        store_view_pose_angles(state.inner(), &view);
         Ok(Some(view))
     }))
 }
@@ -444,14 +485,41 @@ pub fn sequence_apply(
     state: State<'_, Mutex<DocumentStore>>,
     op: serde_json::Value,
 ) -> Result<DocumentView, String> {
+    apply_sequence_operation_transactionally(state.inner(), op)
+}
+
+/// JSONの読み取りから候補viewの導出・確定・返却までを1経路にまとめる。
+///
+/// MoveStepはstoreが候補Documentの再生結果を確定前に導出して返すため、`frame`が
+/// 既にあるviewを再導出しない。これにより、導出失敗後にDocumentだけが確定する
+/// 時間差を作らない。この関数はTauriの`State`に依存せず、command契約検査も本番と
+/// 同じtransaction経路を直接通す。
+pub(crate) fn apply_sequence_operation_transactionally(
+    state: &Mutex<DocumentStore>,
+    op: serde_json::Value,
+) -> Result<DocumentView, String> {
     guard(AssertUnwindSafe(|| {
         let (mut operation, spatial) = parse_sequence_operation(op)?;
-        view_command(&state, || {
-            let mut store = lock(&state);
+        let is_move_step = matches!(&operation, SeqOp::MoveStep { .. });
+        let (mut view, move_step_noop) = {
+            let mut store = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let document = store.export_inputs();
             record_finish_soft(&mut operation, &document.display);
-            store.apply_seq_with_spatial(operation, spatial)
-        })
+            let view = store.apply_seq_with_spatial(operation, spatial)?;
+            let move_step_noop = is_move_step && view.doc == document;
+            (view, move_step_noop)
+        };
+        if view.frame.is_none() {
+            attach_replay(&mut view);
+        }
+        // 同一位置MoveStepはDocumentだけでなくpose_anglesを含むstore全体がno-op。
+        // replay済みviewを返すだけで、通常commandのwarm-start保存も行わない。
+        if !move_step_noop {
+            store_view_pose_angles(state, &view);
+        }
+        Ok(view)
     }))
 }
 
@@ -490,9 +558,31 @@ pub fn pose_solve(
     up_to: usize,
     t: f64,
 ) -> Result<PoseOutcome, String> {
+    pose_solve_core(
+        state.inner(),
+        hard,
+        preferred,
+        soft,
+        warm_seed,
+        up_to,
+        t,
+    )
+}
+
+/// Tauriの状態包装と姿勢計算を分ける。製品commandと恒久検査が同じ本体を通り、
+/// 検査だけのsolver模倣を作らないための境界で、計算・cacheの契約は変えない。
+pub(crate) fn pose_solve_core(
+    state: &Mutex<DocumentStore>,
+    hard: Vec<Driver>,
+    preferred: Option<Vec<Driver>>,
+    soft: Option<SoftSettings>,
+    warm_seed: Option<Vec<Driver>>,
+    up_to: usize,
+    t: f64,
+) -> Result<PoseOutcome, String> {
     guard(AssertUnwindSafe(|| {
         let (doc, faces, stored_warm, overlap_enabled, penetration_enabled) =
-            lock(&state).pose_inputs(); // 複製のみ、即ロック解放
+            lock_inner(state).pose_inputs(); // 複製のみ、即ロック解放
         let soft = display_soft_settings(&doc, up_to, t, soft);
         let cp = &doc.cp;
         let saved_order = ori3_layers::saved_layer_order_at(&doc, &faces, up_to, t);
@@ -598,7 +688,7 @@ pub fn pose_solve(
         let flat_fold_violations =
             flat_fold_notice_violations(cp, &requested_targets, &result.angles, paper_intersects);
         if result.closure_rms.is_finite() && result.angles.values().all(|angle| angle.is_finite()) {
-            lock(&state).store_pose_angles(result.angles.clone()); // 短いロックで書き戻し
+            lock_inner(state).store_pose_angles(result.angles.clone()); // 短いロックで書き戻し
         }
         Ok(PoseOutcome {
             result,
@@ -607,6 +697,104 @@ pub fn pose_solve(
             contact_detected,
             flat_fold_violations,
         })
+    }))
+}
+
+fn fold_all_preview_outcome(
+    doc: &Document,
+    faces: &[ori3_cp::Face],
+    percent: f64,
+    warm_seed: Option<Vec<Driver>>,
+) -> Result<FoldAllPreviewOutcome, String> {
+    let warm = warm_seed.map(|seed| {
+        seed.into_iter()
+            .map(|driver| (driver.hinge, driver.target_angle_deg))
+            .collect::<HashMap<_, _>>()
+    });
+    let ori3_rigid::FoldAllPreviewResult {
+        requested_percent,
+        requested_angles,
+        motion,
+    } = ori3_rigid::solve_fold_all_preview(&doc.cp, faces, percent, warm.as_ref())
+        .map_err(|error| error.to_string())?;
+    let mut result = motion.result;
+    let mut next_warm_seed: Vec<Driver> = result
+        .angles
+        .iter()
+        .map(|(&hinge, &target_angle_deg)| Driver {
+            hinge,
+            target_angle_deg,
+        })
+        .collect();
+    next_warm_seed.sort_unstable_by_key(|driver| driver.hinge);
+    let intersections = ori3_rigid::self_intersection_pairs(&result.frame);
+    let contact_detected = motion.contact_detected || !intersections.is_empty();
+    let requested_hinges: Vec<EdgeId> =
+        requested_angles.iter().map(|driver| driver.hinge).collect();
+    let suspect_hinges = ori3_rigid::suspect_hinges_for_intersections(
+        &doc.cp,
+        faces,
+        &intersections,
+        &requested_hinges,
+    );
+    let _ = add_penetration_warning_for_intersections(
+        &doc.cp,
+        faces,
+        &mut result.frame,
+        false,
+        &intersections,
+    );
+    let paper_intersects = pose_flat_fold_notice_intersects(
+        &doc.cp,
+        &requested_angles,
+        contact_detected,
+        !intersections.is_empty(),
+    );
+    let mut flat_fold_violations =
+        flat_fold_notice_violations(&doc.cp, &requested_angles, &result.angles, paper_intersects);
+    if (requested_percent - 100.0).abs() <= f64::EPSILON {
+        flat_fold_violations.extend(ori3_cp::local_violations(&doc.cp));
+        flat_fold_violations.sort_unstable();
+        flat_fold_violations.dedup();
+    }
+    if !flat_fold_violations.is_empty()
+        && !result
+            .frame
+            .warnings
+            .iter()
+            .any(|warning| warning == FOLD_ALL_FLAT_FOLD_WARNING)
+    {
+        result
+            .frame
+            .warnings
+            .push(FOLD_ALL_FLAT_FOLD_WARNING.to_string());
+    }
+    Ok(FoldAllPreviewOutcome {
+        result,
+        requested_percent,
+        requested_angles,
+        next_warm_seed,
+        suspect_hinges,
+        contact_detected,
+        flat_fold_violations,
+        layer_order: FoldAllLayerOrder::UnavailableWithoutSequence,
+    })
+}
+
+/// 全ての有効な山谷ヒンジを0〜100%で同時に動かし、一時姿勢だけを返す。
+///
+/// ロック下では展開図と導出済み面を複製するだけ。手順、保存内容、Undo、通常の
+/// `pose_angles`を変更しない。不収束・平坦条件違反・貫通は結果内の診断として返し、
+/// コマンドを失敗させない。
+#[tauri::command(async)]
+pub fn fold_all_preview(
+    state: State<'_, Mutex<DocumentStore>>,
+    percent: f64,
+    warm_seed: Option<Vec<Driver>>,
+) -> Result<FoldAllPreviewOutcome, String> {
+    guard(AssertUnwindSafe(|| {
+        let (doc, faces) = lock(&state).replay_inputs();
+        fold_all_preview_outcome(&doc, &faces, percent, warm_seed)
     }))
 }
 
@@ -864,7 +1052,7 @@ impl ProposalFoldPlan {
 /// | 先端 10本 | 6.367秒 | 3件 | 6手 | すべて `GoalReached` |
 /// | **先端 12本** | **13.851秒** | **4件** | **8手** | `StateCap` 3 / `GoalReached` 1 |
 ///
-/// **どの大きさでも10回とも同じ結果**で、**`TimeCap` は1件も出ない**。
+/// **どの大きさでも10回とも同じ結果**で、watchdog到達は1件も無かった。
 ///
 /// ## `max_millis`(壁時計時間の上限)は**安全弁**であって、打ち切りに使わない
 ///
@@ -875,8 +1063,8 @@ impl ProposalFoldPlan {
 /// これは `CLAUDE.md` §10.7.7 が禁じる「解の結果を計算機に依存させる」形である。
 /// 速く見えていたのは、**答えを途中で捨てていたから**にすぎない。
 ///
-/// そこで**壁時計では切らず、計算量(`max_states` / `branch`)だけで切る**。
-/// `max_millis` は「何かがおかしくて終わらない」ときのためだけに残す。
+/// そこで通常結果は**計算量(`max_states` / `branch`)だけで決める**。
+/// `max_millis` は別型のwatchdogとして「何かがおかしくて終わらない」ときだけ使う。
 ///
 /// - 実測の最大は **13.851秒**(先端12本、10回の最大)
 /// - その **2.2倍**にあたる **30,000ms(30秒)** を安全弁にする
@@ -886,16 +1074,23 @@ impl ProposalFoldPlan {
 /// (`the_heaviest_proposal_never_hits_the_time_limit`)。将来また重くなったら、
 /// 黙って答えが痩せるのではなく検査が落ちる。
 ///
-/// 打ち切っても操作は止まらない: 打ち切った時点での最善を返し、画面には
-/// 「途中に注意があります」(`ProposalFoldPlanState::Partial`、手数は別表示)と出る
-/// (`apps/desktop/src/components/dialogs/ProposalWizard.tsx::foldPlanLabel`)。
-const PLAN_BUDGET: SearchBudget = SearchBudget {
-    max_states: 2,
-    branch: 2,
-    max_depth: SearchBudget::DEFAULT.max_depth,
-    rank_scan: SearchBudget::DEFAULT.rank_scan,
-    scan: SearchBudget::DEFAULT.scan,
-    max_millis: 30_000,
+/// watchdogに到達した場合は途中の最善を返さず、候補全体を専用の内部エラー経路へ
+/// 送る。`ProposalFoldPlanState::Partial` は状態数・深さなど決定的な通常停止専用である。
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PlanBudget {
+    deterministic: SearchBudget,
+    watchdog: SearchWatchdog,
+}
+
+const PLAN_BUDGET: PlanBudget = PlanBudget {
+    deterministic: SearchBudget {
+        max_states: 2,
+        branch: 2,
+        max_depth: SearchBudget::DEFAULT.max_depth,
+        rank_scan: SearchBudget::DEFAULT.rank_scan,
+        scan: SearchBudget::DEFAULT.scan,
+    },
+    watchdog: SearchWatchdog { max_millis: 30_000 },
 };
 
 /// 確かめ済みの手順から、展開図と手順を組み直すときに見る姿勢の数。
@@ -922,71 +1117,250 @@ pub struct ProposalCandidate {
     pub fold_plan: Option<ProposalFoldPlan>,
 }
 
-/// 提案の計算が、候補いくつぶん終わったかを数える入れ物(1回の計算ぶん)。
+/// 画面が作ってbackendへ渡す、不透明な提案job ID。
 ///
-/// 候補ごとの計算は互いに独立なので同時に走らせている([`generate_candidates`])。
-/// **終わった件数だけ**を数え、どの候補が終わったかは持たない。
+/// backendは値の中身を解釈せず、同じIDの二重登録を拒否するためだけに使う。
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ProposalJobId(String);
+
+impl From<String> for ProposalJobId {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&str> for ProposalJobId {
+    fn from(value: &str) -> Self {
+        Self(value.to_string())
+    }
+}
+
+/// 提案jobの単調な進行段階。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum ProposalPhase {
+    Queued,
+    Generating,
+    Verifying,
+    Finished,
+    Cancelled,
+    Failed,
+}
+
+impl ProposalPhase {
+    fn is_terminal(self) -> bool {
+        matches!(self, Self::Finished | Self::Cancelled | Self::Failed)
+    }
+}
+
+/// 1つのjobについて、同じ時点から読み取った進捗と実行状態。
 ///
-/// # なぜ数を直に置かず、「入れ物」を持ち回るか
-///
-/// 数の置き場をプロセスにひとつしか作らないと、**同時に走る2つの計算が
-/// 同じ数を書き換える**。画面からは一度に1回しか計算できないが
-/// (`apps/desktop/src/components/dialogs/ProposalWizard.tsx` の `disabled={busy}`)、
-/// **検査は既定で同時に走る**ので、これが実際に起きた。
-///
-/// 実測(2026-08-24、`cargo test -p desktop --lib proposal` を12回):
-/// `proposal_progress_counts_every_candidate` が **12回中9回**落ち、
-/// 読めた数は `done = 5 / total = 4`、`done = 1 / total = 0`、
-/// `done = 3 / total = 0` など、**1回の計算では有り得ない組**だった
-/// (総数4件の計算で5件終わることはない)。
-/// つまり数え落としではなく、別の計算の数が混ざっていた。
-///
-/// そこで数の置き場を引数で受け取れるようにした。画面の道すじ
-/// ([`proposal_generate`] → [`PROPOSAL_PROGRESS`] → [`proposal_progress`])は
-/// 今までと同じで、検査だけが**自分専用の入れ物**を渡す。
+/// `cancel_requested` も同じMutexの中に置く。取消しだけを別atomicへ分けると、
+/// phaseと取消し状態が別時点の値になり、後続の探索が古い値を読めてしまう。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ProposalProgressSnapshot {
+    pub job_id: ProposalJobId,
+    pub done: usize,
+    pub total: usize,
+    pub phase: ProposalPhase,
+    #[serde(skip)]
+    cancel_requested: bool,
+}
+
+/// 1つのjobの正本。`done / total / phase / cancel` は常にこのMutexを1回だけlockして扱う。
 struct ProposalProgressCell {
-    /// 計算が終わった候補の数。
-    done: AtomicUsize,
-    /// 計算する候補の総数。まだ始まっていなければ 0。
-    total: AtomicUsize,
+    snapshot: Mutex<ProposalProgressSnapshot>,
 }
 
 impl ProposalProgressCell {
-    const fn new() -> Self {
+    fn new(job_id: ProposalJobId) -> Self {
         Self {
-            done: AtomicUsize::new(0),
-            total: AtomicUsize::new(0),
+            snapshot: Mutex::new(ProposalProgressSnapshot {
+                job_id,
+                done: 0,
+                total: 0,
+                phase: ProposalPhase::Queued,
+                cancel_requested: false,
+            }),
         }
     }
 
-    /// 計算を始めるときに数え直す。
-    ///
-    /// 先に終わった件数を0へ戻してから総数を入れる。逆にすると、
-    /// 読み手が「前回の終わった件数 / 今回の総数」という有り得ない組を見ることがある。
-    fn start(&self, total: usize) {
-        self.done.store(0, Ordering::Relaxed);
-        self.total.store(total, Ordering::Relaxed);
+    fn lock_snapshot(&self) -> MutexGuard<'_, ProposalProgressSnapshot> {
+        self.snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// 候補1件ぶんの計算が終わった。
+    /// 候補総数が決まった時点で生成段階へ進める。cancel済みのjobは戻さない。
+    fn start(&self, total: usize) -> Result<(), SearchAbort> {
+        let mut snapshot = self.lock_snapshot();
+        if snapshot.cancel_requested {
+            return Err(SearchAbort::Cancelled);
+        }
+        snapshot.done = 0;
+        snapshot.total = total;
+        snapshot.phase = ProposalPhase::Generating;
+        Ok(())
+    }
+
+    /// 折り方の検証へ入ったことを記録する。複数workerが呼んでも後戻りしない。
+    fn begin_verifying(&self) -> Result<(), SearchAbort> {
+        let mut snapshot = self.lock_snapshot();
+        if snapshot.cancel_requested {
+            return Err(SearchAbort::Cancelled);
+        }
+        if !snapshot.phase.is_terminal() {
+            snapshot.phase = ProposalPhase::Verifying;
+        }
+        Ok(())
+    }
+
+    fn check_cancelled(&self) -> Result<(), SearchAbort> {
+        if self.lock_snapshot().cancel_requested {
+            Err(SearchAbort::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// 候補1件ぶんの計算が終わった。全ticketを加算し、超過はFailedとして可視化する。
     fn finish_one(&self) {
-        self.done.fetch_add(1, Ordering::Relaxed);
+        let mut snapshot = self.lock_snapshot();
+        let Some(done) = snapshot.done.checked_add(1) else {
+            snapshot.phase = ProposalPhase::Failed;
+            return;
+        };
+        snapshot.done = done;
+        if snapshot.done > snapshot.total && !snapshot.phase.is_terminal() {
+            snapshot.phase = ProposalPhase::Failed;
+        }
     }
 
-    /// いまの数を読み取る。
-    fn snapshot(&self) -> ProposalProgress {
-        ProposalProgress {
-            done: self.done.load(Ordering::Relaxed),
-            total: self.total.load(Ordering::Relaxed),
-        }
+    fn snapshot(&self) -> ProposalProgressSnapshot {
+        self.lock_snapshot().clone()
     }
 }
 
-/// 画面の待ち表示が見る、プロセスにひとつだけの数。
-///
-/// ここを読み書きするのは**2箇所だけ**で、どちらも同じこの入れ物を指している。
-/// 書く側が [`proposal_generate`]、読む側が [`proposal_progress`]。
-static PROPOSAL_PROGRESS: ProposalProgressCell = ProposalProgressCell::new();
+impl SearchCancellation for ProposalProgressCell {
+    fn is_cancelled(&self) -> bool {
+        self.lock_snapshot().cancel_requested
+    }
+}
+
+/// 実行中の提案jobだけを保持するTauri managed state。
+#[derive(Default)]
+pub struct ProposalJobs {
+    jobs: Mutex<HashMap<ProposalJobId, Arc<ProposalProgressCell>>>,
+}
+
+impl ProposalJobs {
+    fn lock_jobs(&self) -> MutexGuard<'_, HashMap<ProposalJobId, Arc<ProposalProgressCell>>> {
+        self.jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn start(&self, job_id: ProposalJobId) -> Result<ProposalJobLease<'_>, String> {
+        let job = Arc::new(ProposalProgressCell::new(job_id.clone()));
+        let mut jobs = self.lock_jobs();
+        if jobs.contains_key(&job_id) {
+            return Err(format!("同じ提案job IDは同時に使えません: {}", job_id.0));
+        }
+        jobs.insert(job_id.clone(), Arc::clone(&job));
+        drop(jobs);
+        Ok(ProposalJobLease {
+            registry: self,
+            job_id,
+            job,
+            active: true,
+        })
+    }
+
+    #[must_use]
+    pub fn snapshot(&self, job_id: &ProposalJobId) -> Option<ProposalProgressSnapshot> {
+        let job = self.lock_jobs().get(job_id).cloned()?;
+        Some(job.snapshot())
+    }
+
+    fn finish(
+        &self,
+        job: &Arc<ProposalProgressCell>,
+        phase: ProposalPhase,
+    ) -> ProposalProgressSnapshot {
+        let mut snapshot = job.lock_snapshot();
+        if phase == ProposalPhase::Cancelled {
+            snapshot.cancel_requested = true;
+        }
+        if snapshot.cancel_requested {
+            snapshot.phase = ProposalPhase::Cancelled;
+        } else if !snapshot.phase.is_terminal() {
+            snapshot.phase = phase;
+        }
+        snapshot.clone()
+    }
+
+    pub fn cancel(&self, job_id: &ProposalJobId) -> Result<ProposalProgressSnapshot, String> {
+        let job = self
+            .lock_jobs()
+            .get(job_id)
+            .cloned()
+            .ok_or_else(|| format!("提案jobが見つかりません: {}", job_id.0))?;
+        let mut snapshot = job.lock_snapshot();
+        match snapshot.phase {
+            ProposalPhase::Finished | ProposalPhase::Failed => {
+                Err(format!("提案jobはすでに終了しています: {}", job_id.0))
+            }
+            ProposalPhase::Cancelled => Ok(snapshot.clone()),
+            ProposalPhase::Queued | ProposalPhase::Generating | ProposalPhase::Verifying => {
+                snapshot.cancel_requested = true;
+                snapshot.phase = ProposalPhase::Cancelled;
+                Ok(snapshot.clone())
+            }
+        }
+    }
+
+    fn prune(&self, job_id: &ProposalJobId, job: &Arc<ProposalProgressCell>) -> bool {
+        let mut jobs = self.lock_jobs();
+        let current_is_same = jobs
+            .get(job_id)
+            .is_some_and(|current| Arc::ptr_eq(current, job));
+        if current_is_same {
+            jobs.remove(job_id);
+        }
+        current_is_same
+    }
+
+    #[cfg(test)]
+    fn registered_count(&self) -> usize {
+        self.lock_jobs().len()
+    }
+}
+
+/// 登録したjobを、正常・Err・cancel・panicのどの出口でも必ず回収する札。
+struct ProposalJobLease<'a> {
+    registry: &'a ProposalJobs,
+    job_id: ProposalJobId,
+    job: Arc<ProposalProgressCell>,
+    active: bool,
+}
+
+impl ProposalJobLease<'_> {
+    fn complete(mut self, phase: ProposalPhase) -> ProposalProgressSnapshot {
+        let snapshot = self.registry.finish(&self.job, phase);
+        self.registry.prune(&self.job_id, &self.job);
+        self.active = false;
+        snapshot
+    }
+}
+
+impl Drop for ProposalJobLease<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            self.registry.finish(&self.job, ProposalPhase::Failed);
+            self.registry.prune(&self.job_id, &self.job);
+        }
+    }
+}
 
 /// 候補1件ぶんの「終わった」を、**うまくいっても、失敗しても、途中で落ちても**
 /// ちょうど1つだけ数えるための札。
@@ -1003,34 +1377,60 @@ impl Drop for CandidateTicket<'_> {
     }
 }
 
-/// 検査のときだけ使う仕切り(製品の実行ファイルには入らない)。
-///
-/// 画面用の入れ物([`PROPOSAL_PROGRESS`])へ書く計算どうしは、同時に走ってよい
-/// ので**読みの鍵**を取る。ただし「画面用の入れ物に本当に数が入るか」を見る検査
-/// (`the_screen_reads_the_numbers_of_the_real_calculation`)だけは、
-/// 計算と読み取りの間に他の計算が割り込むと数がすり替わるので、
-/// **書きの鍵**を取ってその間だけ他の計算を止める。
-#[cfg(test)]
-static SCREEN_PROGRESS_GATE: std::sync::RwLock<()> = std::sync::RwLock::new(());
-
-/// 提案の計算の進み具合(画面の待ち表示に使う)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-pub struct ProposalProgress {
-    /// 計算が終わった候補の数。
-    pub done: usize,
-    /// 計算する候補の数。まだ始まっていなければ 0。
-    pub total: usize,
-}
-
-/// 提案の計算がどこまで進んだかを返す(作業27の待ち表示)。
-///
-/// 計算そのものは [`proposal_generate`] が別の場所で進めている。
-/// この関数は数を読むだけで、作品の状態もロックも触らないので、
-/// 計算中でもすぐ返る。
+/// 指定した提案jobの、同じ時点の進捗snapshotを返す。
+/// 完了後・取消し完了後・未知IDは、registryから回収済みなので`None`になる。
 #[tauri::command]
 #[must_use]
-pub fn proposal_progress() -> ProposalProgress {
-    PROPOSAL_PROGRESS.snapshot()
+pub fn proposal_progress(
+    jobs: State<'_, ProposalJobs>,
+    job_id: ProposalJobId,
+) -> Option<ProposalProgressSnapshot> {
+    jobs.snapshot(&job_id)
+}
+
+/// 同種のjob操作をまとめる入口。1-Bでは取消しだけを持つ。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ProposalControl {
+    Cancel { job_id: ProposalJobId },
+}
+
+#[tauri::command]
+pub fn proposal_control(
+    jobs: State<'_, ProposalJobs>,
+    operation: ProposalControl,
+) -> Result<ProposalProgressSnapshot, String> {
+    match operation {
+        ProposalControl::Cancel { job_id } => jobs.cancel(&job_id),
+    }
+}
+
+/// 候補全体を返さずに終える理由。探索中断を通常の候補生成失敗と混ぜない。
+#[derive(Debug, PartialEq, Eq)]
+enum ProposalGenerationError {
+    Input(String),
+    SearchAborted(SearchAbort),
+}
+
+impl std::fmt::Display for ProposalGenerationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Input(message) => f.write_str(message),
+            Self::SearchAborted(SearchAbort::WatchdogExpired) => f.write_str(
+                "提案の探索が見張り時間を超えたため中断しました(途中の候補は返していません)",
+            ),
+            Self::SearchAborted(SearchAbort::Cancelled) => {
+                f.write_str("提案の計算を取り消しました(途中の候補は返していません)")
+            }
+        }
+    }
+}
+
+/// worker内の回復可能な生成失敗と、候補全体を捨てる探索中断を区別する。
+#[derive(Debug)]
+enum CandidateBuildError {
+    Generation(String),
+    SearchAborted(SearchAbort),
 }
 
 /// 展開図1つぶんの折り方を探し、通して確かめて、画面へ運べる形にする(作業27)。
@@ -1048,15 +1448,18 @@ fn plan_folds(
     cp: &CreasePattern,
     sites: &[LeafSite],
     paper: &Paper,
-    budget: SearchBudget,
-) -> Option<ProposalFoldPlan> {
+    budget: PlanBudget,
+    cancellation: &dyn SearchCancellation,
+) -> Result<Option<ProposalFoldPlan>, SearchAbort> {
     // 紙の長辺を1.0とした大きさ(`ori3_model::Document::new` と同じ正規化)。
     // 呼び出し側とまったく同じ式なので、受け取る代わりにここで出す。
     let long = paper.width_mm.max(paper.height_mm);
     let (paper_w, paper_h) = (paper.width_mm / long, paper.height_mm / long);
     let mut document = Document::new(paper.clone());
     document.cp = cp.clone();
-    let session = FoldSession::new(&document).ok()?;
+    let Ok(session) = FoldSession::new(&document) else {
+        return Ok(None);
+    };
     let goal = FoldGoal {
         target: FinishTarget::from_skeleton(skeleton),
         body: body_on_paper(skeleton, packing, paper_w, paper_h),
@@ -1070,13 +1473,18 @@ fn plan_folds(
             })
             .collect(),
     };
-    let outcome = search_to_completion(
+    let control = SearchControl::new(budget.watchdog, cancellation);
+    let outcome = search_to_completion_with_control(
         &session,
         &goal,
         GapWeights::DEFAULT,
-        budget,
+        budget.deterministic,
         CompletionTolerance::DEFAULT,
-    );
+        &control,
+    )?;
+    if cancellation.is_cancelled() {
+        return Err(SearchAbort::Cancelled);
+    }
     let order: Vec<usize> = outcome.steps.iter().map(|s| s.mv.id).collect();
     let verified = verify_search_completion(
         &session,
@@ -1086,10 +1494,16 @@ fn plan_folds(
         PoseScan::DEFAULT,
         CompletionTolerance::DEFAULT,
     );
+    if cancellation.is_cancelled() {
+        return Err(SearchAbort::Cancelled);
+    }
     let report = verified.report();
     // 通った手だけをもう一度たどって、展開図と手順を取り出す。
     let mut walk = session.clone();
     for step in &report.steps {
+        if cancellation.is_cancelled() {
+            return Err(SearchAbort::Cancelled);
+        }
         let Some(Ok(mv)) = walk.check_move(step.id, PLAN_REBUILD_SCAN) else {
             break;
         };
@@ -1097,9 +1511,12 @@ fn plan_folds(
             break;
         }
     }
+    if cancellation.is_cancelled() {
+        return Err(SearchAbort::Cancelled);
+    }
     let folded = walk.document();
     if folded.sequence.is_empty() {
-        return None;
+        return Ok(None);
     }
     let details = ProposalFoldPlanDetails {
         steps: folded.sequence.clone(),
@@ -1107,7 +1524,7 @@ fn plan_folds(
         planned: order.len(),
         checked: folded.sequence.len(),
     };
-    Some(ProposalFoldPlan::from_verified(verified, details))
+    Ok(Some(ProposalFoldPlan::from_verified(verified, details)))
 }
 
 /// 骨格から展開図の候補を作る(PRO-001/PRO-005、Task 3-4)。
@@ -1121,106 +1538,231 @@ fn plan_folds(
 ///
 /// 設計規約: ロック中に重い計算をしない。この処理は作品の状態を一切見ないので
 /// storeのロックそのものを取らない(充填中も他のコマンドが普通に動く)。
-#[tauri::command(async)]
+/// 1-Bより前からRust内で使われている4引数入口。
+/// `store.rs`の受入検査を壊さず、製品IPCとは別のlocal registryで同じ本体を通す。
 pub fn proposal_generate(
     skeleton: Skeleton,
     paper: Paper,
     seed: u64,
     with_fold_plan: bool,
 ) -> Result<Vec<ProposalCandidate>, String> {
-    guard(AssertUnwindSafe(move || {
-        // 検査のときだけ、画面用の数を見る検査と重ならないようにする(読みの鍵なので、
-        // 普通の計算どうしは今までどおり同時に走る)。製品の実行ファイルには入らない。
-        #[cfg(test)]
-        let _shared = SCREEN_PROGRESS_GATE
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let jobs = ProposalJobs::default();
+    proposal_generate_managed(
+        &jobs,
+        ProposalJobId::from("rust-direct"),
+        skeleton,
+        paper,
+        seed,
+        with_fold_plan,
+    )
+    .map(|result| result.candidates)
+}
+
+/// job IDを結果にもechoし、別要求の応答を取り違えないようにする。
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ProposalJobResult {
+    pub job_id: ProposalJobId,
+    pub candidates: Vec<ProposalCandidate>,
+}
+
+/// Tauri `State`を偽造せず、製品と同じjob lifecycleを検査できる内側。
+fn proposal_generate_managed(
+    jobs: &ProposalJobs,
+    job_id: ProposalJobId,
+    skeleton: Skeleton,
+    paper: Paper,
+    seed: u64,
+    with_fold_plan: bool,
+) -> Result<ProposalJobResult, String> {
+    let result_job_id = job_id.clone();
+    let candidates = run_proposal_job(jobs, job_id, |progress| {
         generate_candidates(
             &skeleton,
             &paper,
             seed,
             with_fold_plan,
             PLAN_BUDGET,
-            &PROPOSAL_PROGRESS,
+            progress,
         )
+    })?;
+    Ok(ProposalJobResult {
+        job_id: result_job_id,
+        candidates,
+    })
+}
+
+/// job本体のpanicをleaseより内側で捕捉し、cancelとの競合も同じterminal値へそろえる。
+fn run_proposal_job<T>(
+    jobs: &ProposalJobs,
+    job_id: ProposalJobId,
+    body: impl FnOnce(&ProposalProgressCell) -> Result<T, ProposalGenerationError>,
+) -> Result<T, String> {
+    guard(AssertUnwindSafe(move || {
+        let lease = jobs.start(job_id)?;
+        let generated = std::panic::catch_unwind(AssertUnwindSafe(|| body(&lease.job)));
+        match generated {
+            Ok(Ok(value)) => {
+                let terminal = lease.complete(ProposalPhase::Finished);
+                if terminal.phase == ProposalPhase::Cancelled {
+                    Err(ProposalGenerationError::SearchAborted(SearchAbort::Cancelled).to_string())
+                } else if terminal.phase == ProposalPhase::Finished {
+                    Ok(value)
+                } else {
+                    Err("提案jobの進捗が不整合になりました".to_string())
+                }
+            }
+            Ok(Err(error)) => {
+                let phase =
+                    if error == ProposalGenerationError::SearchAborted(SearchAbort::Cancelled) {
+                        ProposalPhase::Cancelled
+                    } else {
+                        ProposalPhase::Failed
+                    };
+                let terminal = lease.complete(phase);
+                if terminal.phase == ProposalPhase::Cancelled {
+                    Err(ProposalGenerationError::SearchAborted(SearchAbort::Cancelled).to_string())
+                } else {
+                    Err(error.to_string())
+                }
+            }
+            Err(payload) => {
+                let terminal = lease.complete(ProposalPhase::Failed);
+                if terminal.phase == ProposalPhase::Cancelled {
+                    Err(ProposalGenerationError::SearchAborted(SearchAbort::Cancelled).to_string())
+                } else {
+                    std::panic::resume_unwind(payload)
+                }
+            }
+        }
     }))
+}
+
+/// 画面から呼ぶmanaged入口。Rust名は既存4引数関数と分けるが、IPC名は従来どおり。
+#[tauri::command(async, rename = "proposal_generate")]
+pub fn proposal_generate_job(
+    jobs: State<'_, ProposalJobs>,
+    job_id: ProposalJobId,
+    skeleton: Skeleton,
+    paper: Paper,
+    seed: u64,
+    with_fold_plan: bool,
+) -> Result<ProposalJobResult, String> {
+    proposal_generate_managed(&jobs, job_id, skeleton, paper, seed, with_fold_plan)
 }
 
 /// 候補を作る本体。**進み具合を書き込む先を引数で受け取る**。
 ///
-/// 画面からは [`proposal_generate`] が [`PROPOSAL_PROGRESS`] を渡して呼ぶ。
-/// 検査は自分専用の入れ物を渡し、同時に走る他の検査と数を取り合わないようにする
-/// (理由と実測は [`ProposalProgressCell`] のコメント)。
+/// managed入口は登録済みjobの[`ProposalProgressCell`]を渡す。
+/// registryの鍵を計算中に保持しないため、別jobの生成と進捗読取りは同時に進められる。
 fn generate_candidates(
     skeleton: &Skeleton,
     paper: &Paper,
     seed: u64,
     with_fold_plan: bool,
-    budget: SearchBudget,
+    budget: PlanBudget,
     progress: &ProposalProgressCell,
-) -> Result<Vec<ProposalCandidate>, String> {
-    // 前回の数字が残ったまま読まれないよう、いちばん先に0へ戻す。
-    progress.start(0);
-    skeleton.validate()?;
+) -> Result<Vec<ProposalCandidate>, ProposalGenerationError> {
+    progress
+        .check_cancelled()
+        .map_err(ProposalGenerationError::SearchAborted)?;
+    skeleton
+        .validate()
+        .map_err(ProposalGenerationError::Input)?;
     let long = paper.width_mm.max(paper.height_mm);
     if !(long > 0.0 && long.is_finite()) {
-        return Err("紙のサイズは正の値にしてください".to_string());
+        return Err(ProposalGenerationError::Input(
+            "紙のサイズは正の値にしてください".to_string(),
+        ));
     }
     // CPの座標系は「紙の長辺=1.0」正規化(ori3_model::Document::new と同じ)
     let (w, h) = (paper.width_mm / long, paper.height_mm / long);
     let packings = pack(skeleton, w, h, seed, PACK_STARTS);
+    progress
+        .check_cancelled()
+        .map_err(ProposalGenerationError::SearchAborted)?;
     // 候補は互いに独立なので、同時に計算する(理由と実測は `plan_folds` のコメント)。
     // 進み具合は画面が `proposal_progress` で読む。
-    progress.start(packings.len());
-    let planned: Vec<Result<ProposalCandidate, String>> = std::thread::scope(|scope| {
-        let workers: Vec<_> = packings
-            .iter()
-            .map(|p| {
-                scope.spawn(move || {
-                    // 「終わった」を先に予約しておく。うまくいっても、失敗しても、
-                    // 途中で落ちても、この札が捨てられるときにちょうど1つ数える。
-                    let _ticket = CandidateTicket(progress);
-                    generate(skeleton, p, w, h).map(|r| {
-                        // 折り方は展開図が決まってから探す。見つからなくても候補は返す
-                        // (「止めずに警告する」。画面が「折り方は付いていません」と伝える)
-                        let fold_plan = with_fold_plan
-                            .then(|| {
-                                plan_folds(skeleton, p, &r.cp, &r.sites, paper, budget)
-                            })
-                            .flatten();
-                        ProposalCandidate {
+    progress
+        .start(packings.len())
+        .map_err(ProposalGenerationError::SearchAborted)?;
+    let planned: Vec<Result<ProposalCandidate, CandidateBuildError>> =
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = packings
+                .iter()
+                .map(|p| {
+                    scope.spawn(move || {
+                        // 「終わった」を先に予約しておく。うまくいっても、失敗しても、
+                        // 途中で落ちても、この札が捨てられるときにちょうど1つ数える。
+                        let _ticket = CandidateTicket(progress);
+                        progress
+                            .check_cancelled()
+                            .map_err(CandidateBuildError::SearchAborted)?;
+                        let r =
+                            generate(skeleton, p, w, h).map_err(CandidateBuildError::Generation)?;
+                        progress
+                            .check_cancelled()
+                            .map_err(CandidateBuildError::SearchAborted)?;
+                        // 折り方が見つからない通常結果はNoneで候補を返す。一方watchdog/cancel
+                        // は候補単位の欠落へ変換せず、専用Errのまま全体集約へ渡す。
+                        let fold_plan = if with_fold_plan {
+                            progress
+                                .begin_verifying()
+                                .map_err(CandidateBuildError::SearchAborted)?;
+                            plan_folds(skeleton, p, &r.cp, &r.sites, paper, budget, progress)
+                                .map_err(CandidateBuildError::SearchAborted)?
+                        } else {
+                            None
+                        };
+                        Ok(ProposalCandidate {
                             cp: r.cp,
                             scale: p.scale,
                             violations: r.violations,
                             warnings: r.warnings,
                             sites: r.sites,
                             fold_plan,
-                        }
+                        })
                     })
                 })
-            })
-            .collect();
-        workers
-            .into_iter()
-            // 1件でも内部で落ちたら、直列だったときと同じように外側の
-            // `guard` まで持ち上げる。握りつぶして「候補が作れなかった」に
-            // すり替えない。
-            .map(|worker| worker.join().unwrap_or_else(|payload| std::panic::resume_unwind(payload)))
-            .collect()
-    });
+                .collect();
+            workers
+                .into_iter()
+                // 1件でも内部で落ちたら、直列だったときと同じように外側の
+                // `guard` まで持ち上げる。握りつぶして「候補が作れなかった」に
+                // すり替えない。
+                .map(|worker| {
+                    worker
+                        .join()
+                        .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+                })
+                .collect()
+        });
+    progress
+        .check_cancelled()
+        .map_err(ProposalGenerationError::SearchAborted)?;
     // 返す順番と中身は、直列で回していたときとまったく同じにする。
     let mut out = Vec::new();
     let mut last_err = None;
+    let mut search_abort = None;
     for made in planned {
         match made {
             Ok(candidate) => out.push(candidate),
-            Err(e) => last_err = Some(e),
+            Err(CandidateBuildError::Generation(error)) => last_err = Some(error),
+            Err(CandidateBuildError::SearchAborted(abort)) if search_abort.is_none() => {
+                search_abort = Some(abort);
+            }
+            Err(CandidateBuildError::SearchAborted(_)) => {}
         }
     }
+    if let Some(abort) = search_abort {
+        return Err(ProposalGenerationError::SearchAborted(abort));
+    }
     if out.is_empty() {
-        return Err(last_err.unwrap_or_else(|| {
-            "この骨格を紙の上に配置できませんでした(角を減らすか短くしてみてください)".to_string()
-        }));
+        return Err(ProposalGenerationError::Input(last_err.unwrap_or_else(
+            || {
+                "この骨格を紙の上に配置できませんでした(角を減らすか短くしてみてください)"
+                    .to_string()
+            },
+        )));
     }
     Ok(out)
 }
@@ -1407,29 +1949,33 @@ fn export_files(
 
 #[cfg(test)]
 mod tests {
+    mod movestep_contract;
+
     use super::{
-        CandidateTicket, DocumentStore, PACK_STARTS, PLAN_BUDGET, PROPOSAL_PROGRESS,
+        CandidateTicket, DocumentStore, FoldAllLayerOrder, PACK_STARTS, PLAN_BUDGET, PlanBudget,
         ProposalCandidate, ProposalFoldPlan, ProposalFoldPlanDetails, ProposalFoldPlanState,
-        ProposalProgress, ProposalProgressCell, SCREEN_PROGRESS_GATE, attach_replay,
-        display_soft_settings, frame_surface_rank_order, generate_candidates, guard, plan_folds,
-        pose_motion_contact_options, pose_overlap_order, pose_result_is_finite, proposal_generate,
-        proposal_progress, record_finish_soft, recorded_soft_settings, stamp_saved_layer_order,
+        ProposalGenerationError, ProposalJobId, ProposalJobs, ProposalPhase, ProposalProgressCell,
+        attach_replay, display_soft_settings, fold_all_preview_outcome, frame_surface_rank_order,
+        generate_candidates, guard, plan_folds, pose_motion_contact_options, pose_overlap_order,
+        pose_result_is_finite, proposal_generate, proposal_generate_managed, record_finish_soft,
+        recorded_soft_settings, run_proposal_job, stamp_saved_layer_order,
         usable_pose_surface_order,
     };
     use ori3_model::{
-        DisplaySettings, Document, EdgeKind, Face3D, FaceId, FinishSoftSettings, FoldStep, Frame3D,
-        Paper, SeqOp, TechniqueKind,
+        DisplaySettings, Document, Driver, EdgeId, EdgeKind, Face3D, FaceId, FinishSoftSettings,
+        FoldStep, Frame3D, Paper, SeqOp, TechniqueKind, VertexId,
     };
     use ori3_propose::{
-        CompletionTolerance, FinishTarget, FoldGoal, FoldSession, GapWeights, SearchBudget,
-        SearchStop, Skeleton, SkeletonNode, TipSite, body_on_paper, generate, pack,
-        search_to_completion,
+        CompletionTolerance, FinishTarget, FoldGoal, FoldSession, GapWeights, SearchAbort,
+        SearchControl, SearchStop, SearchWatchdog, Skeleton, SkeletonNode, TipSite, body_on_paper,
+        generate, pack, search_to_completion_with_control,
     };
     use ori3_soft::SoftSettings;
     use std::collections::HashMap;
     use std::panic::AssertUnwindSafe;
     use std::path::{Path, PathBuf};
-
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
 
     /// 「同時に計算しても1件ずつでも同じ答えになる」ことだけを見る検査のための予算。
     ///
@@ -1445,10 +1991,21 @@ mod tests {
     /// **探索1回はどんなに長くても47.7秒を超えない**。上限 3,600,000ms の **1.3%以下**である。
     /// CIの計算機が手元より約3.6倍遅い(§10.6)としても約172秒で、上限の **4.8%以下**。
     /// **打ち切りに当たりようがない。**
-    const TIME_FREE_PLAN_BUDGET: SearchBudget = SearchBudget {
-        max_millis: 3_600_000,
+    const TIME_FREE_PLAN_BUDGET: PlanBudget = PlanBudget {
+        watchdog: SearchWatchdog {
+            max_millis: 3_600_000,
+        },
         ..PLAN_BUDGET
     };
+
+    /// 実行環境のrandom seedを持たない、検査報告用の固定FNV-1a 64bit hash。
+    fn contract_hash(text: &str) -> u64 {
+        text.as_bytes()
+            .iter()
+            .fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+                (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
+            })
+    }
 
     /// 候補を**1件ずつ順番に**計算する参照実装(`proposal_generate` の並列版と突き合わせる用)。
     ///
@@ -1458,13 +2015,14 @@ mod tests {
         skeleton: &Skeleton,
         paper: &Paper,
         seed: u64,
-        budget: SearchBudget,
+        budget: PlanBudget,
     ) -> (Vec<ProposalCandidate>, Vec<SearchStop>) {
         let long = paper.width_mm.max(paper.height_mm);
         let (w, h) = (paper.width_mm / long, paper.height_mm / long);
         let packings = pack(skeleton, w, h, seed, PACK_STARTS);
         let mut out = Vec::new();
         let mut stops = Vec::new();
+        let not_cancelled = || false;
         for p in &packings {
             let Ok(r) = generate(skeleton, p, w, h) else {
                 continue;
@@ -1485,18 +2043,22 @@ mod tests {
                         })
                         .collect(),
                 };
+                let control = SearchControl::new(budget.watchdog, &not_cancelled);
                 stops.push(
-                    search_to_completion(
+                    search_to_completion_with_control(
                         &session,
                         &goal,
                         GapWeights::DEFAULT,
-                        budget,
+                        budget.deterministic,
                         CompletionTolerance::DEFAULT,
+                        &control,
                     )
+                    .expect("比較検査用watchdogへ到達しない")
                     .stop,
                 );
             }
-            let fold_plan = plan_folds(skeleton, p, &r.cp, &r.sites, paper, budget);
+            let fold_plan = plan_folds(skeleton, p, &r.cp, &r.sites, paper, budget, &not_cancelled)
+                .expect("比較検査用watchdogへ到達しない");
             out.push(ProposalCandidate {
                 cp: r.cp,
                 scale: p.scale,
@@ -1524,10 +2086,10 @@ mod tests {
     ///
     /// # なぜ [`PLAN_BUDGET`] をそのまま使わず、この検査専用の予算にするか
     ///
-    /// `PLAN_BUDGET.max_millis`(30,000ms)は**壁時計**の打ち切りである。
-    /// 打ち切りに当たると、当たった側だけ答えが痩せる。つまり
-    /// **答えが機械の速さと混み具合で変わる**。`CLAUDE.md` §10.7.7 が禁じている
-    /// 「解の結果に期待値を結び付けたテスト」がまさにこの形で、実際に落ちた:
+    /// `PLAN_BUDGET.watchdog.max_millis`(30,000ms)は**壁時計**の見張りである。
+    /// 現在は到達すると候補全体が専用Errになり、答えを痩せさせない。ただしこの検査は
+    /// 並列・直列の正常結果を比べる目的なので、異常停止しない1時間watchdogを使う。
+    /// 旧契約では当たった側だけ答えが痩せ、実際に次のflakeが起きた:
     ///
     /// - 実測(2026-08-24): `cargo build --release` を同時に走らせて機械を混ませた状態で
     ///   この検査が**1回落ちた**。そのとき所要時間は **90.22秒**(普段は約50秒)で、
@@ -1538,23 +2100,17 @@ mod tests {
     ///
     /// そこで**この検査の中だけ** `max_millis` を [`TIME_FREE_PLAN_BUDGET`] の
     /// 3,600,000ms(1時間)にして、**どんな機械でも壁時計の打ち切りが起きない**ようにする。
-    /// `max_states` と `branch` は `PLAN_BUDGET` と**同じ 2・2 のまま**なので、
+    /// 決定的な`max_states` と `branch` は `PLAN_BUDGET` と**同じ 2・2 のまま**なので、
     /// 探索する計算量は画面と同じで、**主張の意味は変わらない**。
     /// `PLAN_BUDGET` そのものの値は変更していない。
     #[test]
     fn proposal_candidates_are_the_same_computed_together_or_one_by_one() {
         let skeleton = star(6);
-        let progress = ProposalProgressCell::new();
-        let together = generate_candidates(
-            &skeleton,
-            &A4ISH,
-            1,
-            true,
-            TIME_FREE_PLAN_BUDGET,
-            &progress,
-        )
-        .expect("候補が返るはず");
-        let (one_by_one, _) =
+        let progress = ProposalProgressCell::new(ProposalJobId::from("contract-hash"));
+        let together =
+            generate_candidates(&skeleton, &A4ISH, 1, true, TIME_FREE_PLAN_BUDGET, &progress)
+                .expect("候補が返るはず");
+        let (one_by_one, stops) =
             proposal_generate_one_by_one(&skeleton, &A4ISH, 1, TIME_FREE_PLAN_BUDGET);
         assert_eq!(
             together.len(),
@@ -1566,6 +2122,28 @@ mod tests {
         assert_eq!(
             together, one_by_one,
             "同時に計算した結果が、1件ずつ計算した結果と違う"
+        );
+        let together_json = serde_json::to_string(&together).expect("候補JSONを作れる");
+        let one_by_one_json = serde_json::to_string(&one_by_one).expect("候補JSONを作れる");
+        assert_eq!(together_json, one_by_one_json, "正規化前の候補JSONが違う");
+        let stop_contract = stops
+            .iter()
+            .map(|stop| stop.contract_tag())
+            .collect::<Vec<_>>()
+            .join("|");
+        let candidate_hash = contract_hash(&together_json);
+        let stop_hash = contract_hash(&stop_contract);
+        assert_eq!(
+            candidate_hash, 0xb540_4e82_2ccd_3603,
+            "1-Aで固定した候補JSON契約が変わった"
+        );
+        assert_eq!(
+            stop_hash, 0xea05_a0f8_b887_39bb,
+            "1-Aで固定した通常停止理由契約が変わった"
+        );
+        println!(
+            "candidate_json_fnv1a64={:016x} normal_stop_fnv1a64={:016x} stops={stop_contract}",
+            candidate_hash, stop_hash,
         );
     }
 
@@ -1582,9 +2160,9 @@ mod tests {
     /// [`the_screen_reads_the_numbers_of_the_real_calculation`] が別に見る。
     #[test]
     fn proposal_progress_counts_every_candidate() {
-        let progress = ProposalProgressCell::new();
-        let out =
-            generate_candidates(&star(4), &A4ISH, 1, false, PLAN_BUDGET, &progress).expect("候補が返るはず");
+        let progress = ProposalProgressCell::new(ProposalJobId::from("candidate-count"));
+        let out = generate_candidates(&star(4), &A4ISH, 1, false, PLAN_BUDGET, &progress)
+            .expect("候補が返るはず");
         let counted = progress.snapshot();
         assert_eq!(
             counted.total,
@@ -1604,37 +2182,40 @@ mod tests {
     /// 「折り方が見つからなかった」も「落ちた」も、終わったうちに入れる。
     #[test]
     fn a_candidate_that_blows_up_is_still_counted_as_finished() {
-        let progress = ProposalProgressCell::new();
-        progress.start(1);
+        let progress = ProposalProgressCell::new(ProposalJobId::from("panic-count"));
+        progress.start(1).expect("候補計算を開始できる");
         let fell_over = std::panic::catch_unwind(AssertUnwindSafe(|| {
             let _ticket = CandidateTicket(&progress);
             panic!("候補の計算が落ちた");
         }));
         assert!(fell_over.is_err(), "前提: 落ちること");
-        assert_eq!(
-            progress.snapshot(),
-            ProposalProgress { done: 1, total: 1 },
-            "落ちた候補が『終わった』に数えられていない"
-        );
+        let snapshot = progress.snapshot();
+        assert_eq!((snapshot.done, snapshot.total), (1, 1));
+        assert_eq!(snapshot.phase, ProposalPhase::Generating);
+    }
+
+    #[test]
+    fn candidate_ticket_overflow_is_visible_instead_of_being_clamped() {
+        let progress = ProposalProgressCell::new(ProposalJobId::from("ticket-overflow"));
+        progress.start(1).expect("候補計算を開始できる");
+        drop(CandidateTicket(&progress));
+        drop(CandidateTicket(&progress));
+        let snapshot = progress.snapshot();
+        assert_eq!((snapshot.done, snapshot.total), (2, 1));
+        assert_eq!(snapshot.phase, ProposalPhase::Failed);
     }
 
     /// 画面が読む数が、**本物の計算**が書いた数であること(道すじの確認)。
     ///
-    /// 画面が呼ぶ入口(`proposal_generate`)は `PROPOSAL_PROGRESS` へ数を書き、
-    /// 画面が読む入口(`proposal_progress`)は同じ `PROPOSAL_PROGRESS` を読む。
-    /// この2箇所がつながっていないと、棒がいつまでも「準備中」のままになる。
-    ///
-    /// 計算と読み取りの間に別の検査の計算が割り込むと数がすり替わるので、
-    /// その間だけ `SCREEN_PROGRESS_GATE` の**書きの鍵**で他の計算を止める
-    /// (`proposal_generate` は読みの鍵なので、普段は同時に走れる)。
+    /// managed生成と進捗読取りが、同じjob IDの同じcellへつながっていることを見る。
     #[test]
     fn the_screen_reads_the_numbers_of_the_real_calculation() {
-        let _exclusive = SCREEN_PROGRESS_GATE
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let out = generate_candidates(&star(4), &A4ISH, 1, false, PLAN_BUDGET, &PROPOSAL_PROGRESS)
+        let jobs = ProposalJobs::default();
+        let job_id = ProposalJobId::from("screen-path");
+        let lease = jobs.start(job_id.clone()).expect("jobを登録できる");
+        let out = generate_candidates(&star(4), &A4ISH, 1, false, PLAN_BUDGET, &lease.job)
             .expect("候補が返るはず");
-        let progress = proposal_progress();
+        let progress = jobs.snapshot(&job_id).expect("実行中jobを読める");
         assert_eq!(
             progress.total,
             out.len(),
@@ -1645,6 +2226,9 @@ mod tests {
             progress.done, progress.total,
             "画面が読む数が最後まで伸びていない: {progress:?}"
         );
+        let terminal = lease.complete(ProposalPhase::Finished);
+        assert_eq!(terminal.phase, ProposalPhase::Finished);
+        assert_eq!(jobs.registered_count(), 0, "完了jobが回収されていない");
     }
 
     /// 計算を始めた時点で、前回の数字が残っていないこと。
@@ -1653,23 +2237,294 @@ mod tests {
     /// 骨格が不正で早く止まる場合でも0へ戻っていることを、同じ検査で見る。
     #[test]
     fn proposal_progress_is_cleared_before_the_next_calculation() {
-        let progress = ProposalProgressCell::new();
-        generate_candidates(&star(4), &A4ISH, 1, false, PLAN_BUDGET, &progress).expect("候補が返るはず");
+        let jobs = ProposalJobs::default();
+        let job_id = ProposalJobId::from("reused-after-prune");
+        let first = jobs.start(job_id.clone()).expect("1回目を登録できる");
+        generate_candidates(&star(4), &A4ISH, 1, false, PLAN_BUDGET, &first.job)
+            .expect("候補が返るはず");
         assert!(
-            progress.snapshot().done > 0,
+            first.job.snapshot().done > 0,
             "前提: 1回目で数字が入っていること"
         );
-        let only_root = Skeleton {
-            nodes: vec![SkeletonNode::new(0, None, 0.0)],
-        };
-        generate_candidates(&only_root, &A4ISH, 1, false, PLAN_BUDGET, &progress)
-            .expect_err("角の無い骨格は作れない");
-        let cleared = progress.snapshot();
+        first.complete(ProposalPhase::Finished);
+        assert_eq!(jobs.registered_count(), 0);
+
+        let second = jobs
+            .start(job_id.clone())
+            .expect("回収後は同じIDを再利用できる");
+        let cleared = jobs.snapshot(&job_id).expect("2回目を読める");
         assert_eq!(
             (cleared.done, cleared.total),
             (0, 0),
             "次の計算の前に数字が0へ戻っていない: {cleared:?}"
         );
+        assert_eq!(cleared.phase, ProposalPhase::Queued);
+        second.complete(ProposalPhase::Failed);
+        assert_eq!(jobs.registered_count(), 0);
+    }
+
+    /// 同時に進むA/Bを100組、決定的なbarrierで交錯させてもsnapshotが混ざらない。
+    #[test]
+    fn two_proposal_jobs_keep_independent_snapshots_one_hundred_times() {
+        let mut swaps = 0usize;
+        let mut over_total = 0usize;
+        let mut representative = None;
+
+        for round in 0..100 {
+            let jobs = ProposalJobs::default();
+            let a_id = ProposalJobId::from(format!("job-a-{round}"));
+            let b_id = ProposalJobId::from(format!("job-b-{round}"));
+            let ready = std::sync::Barrier::new(3);
+            let release = std::sync::Barrier::new(3);
+
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    let lease = jobs.start(a_id.clone()).expect("job Aを登録できる");
+                    lease.job.start(2).expect("job Aを開始できる");
+                    drop(CandidateTicket(&lease.job));
+                    ready.wait();
+                    release.wait();
+                    drop(CandidateTicket(&lease.job));
+                    let terminal = lease.complete(ProposalPhase::Finished);
+                    assert_eq!((terminal.done, terminal.total), (2, 2));
+                    assert_eq!(terminal.phase, ProposalPhase::Finished);
+                });
+                scope.spawn(|| {
+                    let lease = jobs.start(b_id.clone()).expect("job Bを登録できる");
+                    lease.job.start(3).expect("job Bを開始できる");
+                    drop(CandidateTicket(&lease.job));
+                    drop(CandidateTicket(&lease.job));
+                    ready.wait();
+                    release.wait();
+                    drop(CandidateTicket(&lease.job));
+                    let terminal = lease.complete(ProposalPhase::Finished);
+                    assert_eq!((terminal.done, terminal.total), (3, 3));
+                    assert_eq!(terminal.phase, ProposalPhase::Finished);
+                });
+
+                ready.wait();
+                let a = jobs.snapshot(&a_id).expect("job Aだけを読める");
+                let b = jobs.snapshot(&b_id).expect("job Bだけを読める");
+                if a.job_id != a_id || (a.done, a.total) != (1, 2) {
+                    swaps += 1;
+                }
+                if b.job_id != b_id || (b.done, b.total) != (2, 3) {
+                    swaps += 1;
+                }
+                over_total += usize::from(a.done > a.total) + usize::from(b.done > b.total);
+                assert_eq!(a.phase, ProposalPhase::Generating);
+                assert_eq!(b.phase, ProposalPhase::Generating);
+                if round == 0 {
+                    representative = Some((a, b));
+                }
+                release.wait();
+            });
+
+            assert_eq!(jobs.registered_count(), 0, "round {round}: jobが残った");
+        }
+
+        let (a, b) = representative.expect("代表snapshotがある");
+        println!(
+            "job A={}/{}/{:?}, job B={}/{}/{:?}, swaps={swaps}, over_total={over_total}",
+            a.done, a.total, a.phase, b.done, b.total, b.phase
+        );
+        assert_eq!(swaps, 0, "A/Bの進捗が入れ替わった");
+        assert_eq!(over_total, 0, "doneがtotalを超えた");
+    }
+
+    /// success・通常Err・panicの各100候補でticketを必ず完了し、jobも回収する。
+    #[test]
+    fn candidate_tickets_and_job_leases_close_every_path_one_hundred_times() {
+        let jobs = ProposalJobs::default();
+        let mut success_done = 0usize;
+        let mut error_done = 0usize;
+        let mut panic_done = 0usize;
+
+        for round in 0..100 {
+            let success_id = ProposalJobId::from(format!("ticket-success-{round}"));
+            let success = jobs.start(success_id).expect("success jobを登録できる");
+            success.job.start(1).expect("success jobを開始できる");
+            let made: Result<(), &str> = {
+                let _ticket = CandidateTicket(&success.job);
+                Ok(())
+            };
+            assert!(made.is_ok());
+            let terminal = success.complete(ProposalPhase::Finished);
+            success_done += usize::from(terminal.done == terminal.total);
+
+            let error_id = ProposalJobId::from(format!("ticket-error-{round}"));
+            let error = jobs.start(error_id).expect("error jobを登録できる");
+            error.job.start(1).expect("error jobを開始できる");
+            let made: Result<(), &str> = {
+                let _ticket = CandidateTicket(&error.job);
+                Err("注入した通常Err")
+            };
+            assert!(made.is_err());
+            let terminal = error.complete(ProposalPhase::Failed);
+            error_done += usize::from(terminal.done == terminal.total);
+
+            let panic_id = ProposalJobId::from(format!("ticket-panic-{round}"));
+            let mut panic_job = None;
+            let fell_over = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                let lease = jobs.start(panic_id).expect("panic jobを登録できる");
+                panic_job = Some(Arc::clone(&lease.job));
+                lease.job.start(1).expect("panic jobを開始できる");
+                let _ticket = CandidateTicket(&lease.job);
+                panic!("注入したcandidate panic");
+            }));
+            assert!(fell_over.is_err());
+            let terminal = panic_job.expect("panic後もsnapshotを検査できる").snapshot();
+            panic_done += usize::from(terminal.done == terminal.total);
+            assert_eq!(terminal.phase, ProposalPhase::Failed);
+            assert_eq!(jobs.registered_count(), 0, "round {round}: jobが残った");
+        }
+
+        println!(
+            "ticket done==total: success={success_done}/100, error={error_done}/100, panic={panic_done}/100"
+        );
+        assert_eq!((success_done, error_done, panic_done), (100, 100, 100));
+        assert_eq!(jobs.registered_count(), 0);
+    }
+
+    /// cancelとcandidate panicが競合しても、registry・phase・返却理由をCancelledへそろえる。
+    #[test]
+    fn cancel_wins_over_candidate_panic_one_hundred_times() {
+        let jobs = ProposalJobs::default();
+        let expected = ProposalGenerationError::SearchAborted(SearchAbort::Cancelled).to_string();
+        for round in 0..100 {
+            let job_id = ProposalJobId::from(format!("cancel-panic-{round}"));
+            let cancel_id = job_id.clone();
+            let result: Result<(), String> = run_proposal_job(&jobs, job_id, |progress| {
+                progress.start(1).expect("candidateを開始できる");
+                jobs.cancel(&cancel_id).expect("panic前にcancelできる");
+                let _ticket = CandidateTicket(progress);
+                panic!("cancel後に注入したcandidate panic");
+            });
+            assert_eq!(
+                result,
+                Err(expected.clone()),
+                "round {round}: 返却理由が不一致"
+            );
+            assert_eq!(jobs.registered_count(), 0, "round {round}: jobが残った");
+        }
+    }
+
+    /// cancelは対象jobだけへ入り、全ticketのDrop後に100回ともregistryから回収される。
+    #[test]
+    fn cancelled_proposal_jobs_are_isolated_and_pruned_one_hundred_times() {
+        let jobs = ProposalJobs::default();
+        for round in 0..100 {
+            let a_id = ProposalJobId::from(format!("cancel-a-{round}"));
+            let b_id = ProposalJobId::from(format!("cancel-b-{round}"));
+            let a = jobs.start(a_id.clone()).expect("job Aを登録できる");
+            let b = jobs.start(b_id.clone()).expect("job Bを登録できる");
+            a.job.start(1).expect("job Aを開始できる");
+            b.job.start(1).expect("job Bを開始できる");
+            let a_ticket = CandidateTicket(&a.job);
+            let b_ticket = CandidateTicket(&b.job);
+
+            let cancelled = jobs.cancel(&a_id).expect("job Aを取り消せる");
+            assert_eq!(cancelled.phase, ProposalPhase::Cancelled);
+            assert_eq!(a.job.check_cancelled(), Err(SearchAbort::Cancelled));
+            assert_eq!(b.job.check_cancelled(), Ok(()), "cancelがjob Bへ混ざった");
+            assert_eq!(
+                jobs.snapshot(&b_id).expect("job Bを読める").phase,
+                ProposalPhase::Generating
+            );
+
+            drop(a_ticket);
+            drop(b_ticket);
+            let a_terminal = a.complete(ProposalPhase::Finished);
+            let b_terminal = b.complete(ProposalPhase::Finished);
+            assert_eq!(a_terminal.phase, ProposalPhase::Cancelled);
+            assert_eq!((a_terminal.done, a_terminal.total), (1, 1));
+            assert_eq!(b_terminal.phase, ProposalPhase::Finished);
+            assert_eq!((b_terminal.done, b_terminal.total), (1, 1));
+            assert_eq!(
+                jobs.registered_count(),
+                0,
+                "round {round}: cancel後にjobが残った"
+            );
+        }
+    }
+
+    /// duplicate拒否とArc identity付きpruneで、古いleaseが再利用IDを消さない。
+    #[test]
+    fn duplicate_and_stale_job_ids_cannot_replace_or_prune_a_live_job() {
+        let jobs = ProposalJobs::default();
+        for round in 0..100 {
+            let job_id = ProposalJobId::from(format!("reused-id-{round}"));
+            let old = jobs.start(job_id.clone()).expect("最初のjobを登録できる");
+            let old_cell = Arc::clone(&old.job);
+            assert!(
+                jobs.start(job_id.clone()).is_err(),
+                "duplicate IDを受け入れた"
+            );
+            old.complete(ProposalPhase::Failed);
+
+            let current = jobs.start(job_id.clone()).expect("回収後は同じIDを使える");
+            assert!(
+                !jobs.prune(&job_id, &old_cell),
+                "古いjobが再利用後のjobを消した"
+            );
+            assert!(jobs.snapshot(&job_id).is_some(), "現在のjobが消えた");
+            current.complete(ProposalPhase::Failed);
+            assert_eq!(jobs.registered_count(), 0);
+        }
+    }
+
+    #[test]
+    fn proposal_job_wire_contains_one_snapshot_and_echoes_the_id() {
+        let jobs = ProposalJobs::default();
+        let job_id = ProposalJobId::from("wire-job");
+        let lease = jobs.start(job_id.clone()).expect("jobを登録できる");
+        lease.job.start(3).expect("jobを開始できる");
+        drop(CandidateTicket(&lease.job));
+        let snapshot = jobs.snapshot(&job_id).expect("snapshotを読める");
+        let json = serde_json::to_value(&snapshot).expect("snapshotをJSONへ運べる");
+        assert_eq!(json["job_id"], "wire-job");
+        assert_eq!(json["done"], 1);
+        assert_eq!(json["total"], 3);
+        assert_eq!(json["phase"], "Generating");
+        assert!(json.get("cancel_requested").is_none());
+        assert_eq!(json.as_object().expect("object").len(), 4);
+
+        let control = serde_json::to_value(super::ProposalControl::Cancel {
+            job_id: job_id.clone(),
+        })
+        .expect("controlをJSONへ運べる");
+        assert_eq!(
+            control,
+            serde_json::json!({"type": "Cancel", "job_id": "wire-job"})
+        );
+        lease.complete(ProposalPhase::Failed);
+        assert_eq!(jobs.registered_count(), 0);
+
+        let result = proposal_generate_managed(&jobs, job_id.clone(), star(2), A4ISH, 7, false)
+            .expect("managed入口が候補を返す");
+        assert_eq!(result.job_id, job_id);
+        assert!(!result.candidates.is_empty());
+        let result_json = serde_json::to_value(&result).expect("job結果をJSONへ運べる");
+        assert_eq!(result_json["job_id"], "wire-job");
+        assert!(result_json["candidates"].is_array());
+        assert_eq!(result_json.as_object().expect("object").len(), 2);
+        assert_eq!(jobs.registered_count(), 0, "結果返却時にjobが残った");
+
+        let only_root = Skeleton {
+            nodes: vec![SkeletonNode::new(0, None, 0.0)],
+        };
+        assert!(
+            proposal_generate_managed(
+                &jobs,
+                ProposalJobId::from("wire-invalid"),
+                only_root,
+                A4ISH,
+                1,
+                false,
+            )
+            .is_err()
+        );
+        assert_eq!(jobs.registered_count(), 0, "入力Err後にjobが残った");
     }
 
     /// 候補ごとの探索の止まり方だけを集める(21姿勢の確認と手順の組み直しはしない)。
@@ -1680,11 +2535,12 @@ mod tests {
         skeleton: &Skeleton,
         paper: &Paper,
         seed: u64,
-        budget: SearchBudget,
-    ) -> Vec<SearchStop> {
+        budget: PlanBudget,
+    ) -> Vec<Result<SearchStop, SearchAbort>> {
         let long = paper.width_mm.max(paper.height_mm);
         let (w, h) = (paper.width_mm / long, paper.height_mm / long);
         let packings = pack(skeleton, w, h, seed, PACK_STARTS);
+        let not_cancelled = || false;
         std::thread::scope(|scope| {
             let workers: Vec<_> = packings
                 .iter()
@@ -1708,15 +2564,17 @@ mod tests {
                                 })
                                 .collect(),
                         };
+                        let control = SearchControl::new(budget.watchdog, &not_cancelled);
                         Some(
-                            search_to_completion(
+                            search_to_completion_with_control(
                                 &session,
                                 &goal,
                                 GapWeights::DEFAULT,
-                                budget,
+                                budget.deterministic,
                                 CompletionTolerance::DEFAULT,
+                                &control,
                             )
-                            .stop,
+                            .map(|outcome| outcome.stop),
                         )
                     })
                 })
@@ -1728,18 +2586,18 @@ mod tests {
         })
     }
 
-    /// **いちばん重い骨格でも、時間の打ち切りに当たらないこと。**
+    /// **いちばん重い骨格でも、watchdogに当たらないこと。**
     ///
     /// # なぜこの検査が要るか
     ///
-    /// 時間の打ち切り([`PLAN_BUDGET`] の `max_millis`)は**壁時計**なので、
-    /// 当たると**同じ入力でも機械の速さと混み具合で答えが変わる**。
+    /// [`PLAN_BUDGET`] のwatchdogは**壁時計**なので、正常完了できるprofileを
+    /// release検査で固定する。到達時は途中候補を返さず、専用Errになる。
     /// 2026-08-23より前は 6,000ms で切っており、先端12本では候補4件のうち
     /// **2件が実際に当たっていた**。同じ計算をもう一度しただけで当たる件数が
     /// 2件→1件と変わることも実測しており、`CLAUDE.md` §10.7.7 が禁じる
     /// 「解の結果を計算機に依存させる」形になっていた。
     ///
-    /// いまは**計算量だけで切り**、時間の上限は安全弁として残している。
+    /// いまは通常結果を**計算量だけで決め**、時間の上限は安全弁として残している。
     /// **その安全弁に当たっていないこと**を、ここで見張る。
     /// 将来また重くなったら、黙って答えが痩せるのではなく**この検査が落ちる**。
     ///
@@ -1747,12 +2605,13 @@ mod tests {
     ///
     /// ## この主張は最適化ありでしか成り立たない(2026-08-24追記)
     ///
-    /// 時間の打ち切り(`PLAN_BUDGET.max_millis`)は壁時計であり、
+    /// watchdog(`PLAN_BUDGET.watchdog.max_millis`)は壁時計であり、
     /// 最適化なしは最適化ありより16.8〜20.5倍遅い(`store.rs` の
     /// `checked_head_tail_four_legs_proposal_is_consumed_and_one_undo_restores_the_work`
     /// で実測済み)。実際に測ると、最適化なし(`cargo test -p desktop --lib`)では
-    /// 先端12本の4候補**すべて**が`TimeCap`に当たる
-    /// (`[TimeCap, TimeCap, TimeCap, TimeCap]`、2026-08-24実測)。
+    /// 変更前の契約では先端12本の4候補**すべて**が`TimeCap`に当たった
+    /// (`[TimeCap, TimeCap, TimeCap, TimeCap]`、2026-08-24実測)。新契約なら
+    /// 4件とも途中候補ではなく`SearchAbort::WatchdogExpired`になる。
     /// 実機(最適化なしビルド)でも、先端12本の「展開図を作ってもらう」で
     /// 4候補中3〜4件が「折り方はまだありません」のまま返り、
     /// 待ち時間は約30〜38秒だった(最適化ありの実測は0件/10回・最大13.851秒)。
@@ -1764,15 +2623,15 @@ mod tests {
     /// 検査は消していない。`PLAN_BUDGET`の値も変更していない。
     #[test]
     fn the_heaviest_proposal_never_hits_the_time_limit() {
-        let stops = proposal_stops_together(&star(12), &A4ISH, 1, PLAN_BUDGET);
-        assert!(!stops.is_empty(), "候補が1件も作られていない");
-        let hit: Vec<_> = stops
+        let results = proposal_stops_together(&star(12), &A4ISH, 1, PLAN_BUDGET);
+        assert!(!results.is_empty(), "候補が1件も作られていない");
+        let hit: Vec<_> = results
             .iter()
-            .filter(|stop| **stop == SearchStop::TimeCap)
+            .filter_map(|result| result.as_ref().err())
             .collect();
         assert!(
             hit.is_empty(),
-            "時間の打ち切りに当たった候補が {}件ある。答えが機械の混み具合で変わる状態に戻っている: {stops:?}",
+            "watchdog/cancelに当たった候補が {}件ある。途中候補は返していない: {results:?}",
             hit.len()
         );
     }
@@ -2260,7 +3119,7 @@ mod tests {
         // 1手でも確かめられたか」に主張をぶら下げる下限で、`CLAUDE.md` §10.7.9 が
         // 禁じる「余裕0の境目」だった。実測(2026-08-23、最適化なし、この骨格):
         // 候補#0の探索は **6,943ms**、候補#2は **6,021ms** で、どちらも
-        // **打ち切りに当たっている**(`SearchStop::TimeCap`)。1手が先に見つかっていた
+        // **打ち切りに当たっていた**(旧`SearchStop::TimeCap`)。1手が先に見つかっていた
         // おかげで `with_plan >= 1` を満たしただけで、余裕は無い。
         // CIの計算機は手元より約3.6倍遅いので、打ち切りはもっと早く来る。
         //
@@ -2328,65 +3187,75 @@ mod tests {
     /// 根拠(最適化ありの実測、`PLAN_BUDGET` のコメント): いちばん重い先端12本の
     /// 待ち時間が **13.851秒**。その **2.2倍** が 30,000ms で、実測は上限の **46.2%**。
     /// 検査用の既定
-    /// [`SearchBudget::MAX_MILLIS`](ori3_propose::SearchBudget::MAX_MILLIS)
+    /// [`SearchWatchdog::MAX_MILLIS`](ori3_propose::SearchWatchdog::MAX_MILLIS)
     /// とは別の値であることも合わせて固定する。
     ///
     /// **値をぴったり固定したままにしてある**ので、次に根拠なく変えれば落ちる。
     #[test]
     fn plan_budget_keeps_the_screen_time_limit_as_a_safety_valve() {
         assert_eq!(
-            PLAN_BUDGET.max_millis,
-            30_000,
+            PLAN_BUDGET.watchdog.max_millis, 30_000,
             "画面用の時間打切りを根拠なく変えた"
         );
         assert_ne!(
-            PLAN_BUDGET.max_millis,
-            SearchBudget::MAX_MILLIS,
+            PLAN_BUDGET.watchdog.max_millis,
+            SearchWatchdog::MAX_MILLIS,
             "画面用の打切りが検査用の既定のままでは、待ち時間の見積もりが立たない"
         );
         assert_eq!(
-            (PLAN_BUDGET.max_states, PLAN_BUDGET.branch),
+            (
+                PLAN_BUDGET.deterministic.max_states,
+                PLAN_BUDGET.deterministic.branch,
+            ),
             (2, 2),
             "計算量の上限を根拠なく変えた(先端12本で 2/2 は8手、1/2 は4手へ半減する)"
         );
     }
 
-    /// `plan_folds` と同じ形の探索(`PLAN_BUDGET` の状態数・分岐数)を、
-    /// 時間だけ0msへ縮めて呼んでも、panicせず有限の最善を返すこと。
-    ///
-    /// 打ち切りは操作を止める仕組みではない(`CLAUDE.md` §8)。時間に当たっても
-    /// そこまでの最善をそのまま返すことを、`plan_folds` が実際に使う
-    /// `max_states = 2` / `branch = 2` の規模で確かめる。
+    /// 0ms watchdogは候補全体の専用Errになり、partial候補を1件も返さないこと。
     #[test]
-    fn a_time_capped_plan_search_returns_a_finite_result_without_panicking() {
-        let document = Document::new(A4ISH);
-        let session = FoldSession::new(&document).expect("平らな正方形を読み込めない");
-        let goal = FoldGoal {
-            target: FinishTarget::default(),
-            body: [0.5, 0.5],
-            sites: Vec::new(),
-        };
-        let zero_time_budget = SearchBudget {
-            max_millis: 0,
+    fn a_watchdog_aborted_plan_search_returns_no_partial_candidate() {
+        let zero_watchdog = PlanBudget {
+            watchdog: SearchWatchdog { max_millis: 0 },
             ..PLAN_BUDGET
         };
-        let outcome = search_to_completion(
-            &session,
-            &goal,
-            GapWeights::DEFAULT,
-            zero_time_budget,
-            CompletionTolerance::DEFAULT,
+        let jobs = ProposalJobs::default();
+        let job_id = ProposalJobId::from("zero-watchdog");
+        let lease = jobs.start(job_id).expect("watchdog jobを登録できる");
+        let result = generate_candidates(&star(4), &A4ISH, 1, true, zero_watchdog, &lease.job);
+        assert_eq!(
+            result,
+            Err(ProposalGenerationError::SearchAborted(
+                SearchAbort::WatchdogExpired
+            )),
+            "watchdogが候補Vecまたは通常の生成失敗へ化けた"
         );
-        assert!(
-            outcome.best_gaps.all_finite(),
-            "時間打切りで有限でない隔たりが返った"
+        let counted = lease.job.snapshot();
+        assert_eq!(counted.done, counted.total, "中断workerの完了数が欠けた");
+        assert!(counted.total > 0, "watchdogを通る候補が作られていない");
+        let terminal = lease.complete(ProposalPhase::Failed);
+        assert_eq!(terminal.phase, ProposalPhase::Failed);
+        assert_eq!(jobs.registered_count(), 0, "watchdog後にjobが残った");
+    }
+
+    #[test]
+    fn a_cancelled_job_returns_no_candidate_and_is_pruned() {
+        let jobs = ProposalJobs::default();
+        let job_id = ProposalJobId::from("cancel-before-generate");
+        let lease = jobs.start(job_id.clone()).expect("cancel jobを登録できる");
+        jobs.cancel(&job_id).expect("生成前にcancelできる");
+        let result = generate_candidates(&star(4), &A4ISH, 1, false, PLAN_BUDGET, &lease.job);
+        assert_eq!(
+            result,
+            Err(ProposalGenerationError::SearchAborted(
+                SearchAbort::Cancelled
+            )),
+            "cancelが候補Vecまたは通常の生成失敗へ化けた"
         );
-        assert!(
-            outcome.best_score.is_finite(),
-            "時間打切りで有限でない点数が返った"
-        );
-        assert!(outcome.start_gaps.all_finite());
-        assert!(outcome.start_score.is_finite());
+        let terminal = lease.complete(ProposalPhase::Cancelled);
+        assert_eq!(terminal.phase, ProposalPhase::Cancelled);
+        assert_eq!((terminal.done, terminal.total), (0, 0));
+        assert_eq!(jobs.registered_count(), 0, "cancel後にjobが残った");
     }
 
     #[test]
@@ -2700,5 +3569,469 @@ mod tests {
         assert_eq!(spatial.from, [0.5, 0.25, -0.25]);
         assert_eq!(spatial.to, [0.5, 0.5, -0.25]);
         assert_eq!(spatial.grab_face, 1);
+    }
+
+    const FOLD_ALL_PERCENTAGES: [f64; 5] = [0.0, 25.0, 50.0, 75.0, 100.0];
+    const FOLD_ALL_FIXTURES: [(&str, &str, usize); 3] = [
+        (
+            "折り鶴",
+            include_str!("../../../../crates/ori3-rigid/tests/fixtures/check-crane.ori3"),
+            43,
+        ),
+        (
+            "鳥の基本形",
+            include_str!("../../../../crates/ori3-rigid/tests/fixtures/check-bird-base.ori3"),
+            18,
+        ),
+        (
+            "やっこさん",
+            include_str!("../../../../crates/ori3-rigid/tests/fixtures/check-yakko.ori3"),
+            20,
+        ),
+    ];
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct FoldAllFaceSignature {
+        face: FaceId,
+        layer: u32,
+        surface_rank: u32,
+        mirrored: bool,
+        polygon: Vec<[u64; 3]>,
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct FoldAllSignature {
+        frame: Vec<FoldAllFaceSignature>,
+        warnings: Vec<String>,
+        converged: bool,
+        angles: Vec<(EdgeId, u64)>,
+        closure_rms: u64,
+        best_effort: bool,
+        relaxations: Vec<(EdgeId, u64, u64, u64)>,
+        iterations: u32,
+        requested_percent: u64,
+        requested_angles: Vec<(EdgeId, u64)>,
+        next_warm_seed: Vec<(EdgeId, u64)>,
+        suspect_hinges: Vec<EdgeId>,
+        contact_detected: bool,
+        flat_fold_violations: Vec<VertexId>,
+        layer_order: FoldAllLayerOrder,
+    }
+
+    fn fold_all_inputs(text: &str) -> (Document, Vec<ori3_cp::Face>) {
+        let document = crate::store::parse_document(text)
+            .expect("一斉折りfixtureを製品readerで読める")
+            .document;
+        let faces = ori3_cp::extract_faces(&document.cp);
+        (document, faces)
+    }
+
+    fn sorted_angle_bits(angles: &HashMap<EdgeId, f64>) -> Vec<(EdgeId, u64)> {
+        let mut sorted: Vec<_> = angles
+            .iter()
+            .map(|(&hinge, &angle)| (hinge, angle.to_bits()))
+            .collect();
+        sorted.sort_unstable_by_key(|(hinge, _)| *hinge);
+        sorted
+    }
+
+    fn driver_bits(drivers: &[Driver]) -> Vec<(EdgeId, u64)> {
+        drivers
+            .iter()
+            .map(|driver| (driver.hinge, driver.target_angle_deg.to_bits()))
+            .collect()
+    }
+
+    fn fold_all_signature(outcome: &super::FoldAllPreviewOutcome) -> FoldAllSignature {
+        FoldAllSignature {
+            frame: outcome
+                .result
+                .frame
+                .faces
+                .iter()
+                .map(|face| FoldAllFaceSignature {
+                    face: face.face,
+                    layer: face.layer,
+                    surface_rank: face.surface_rank,
+                    mirrored: face.mirrored,
+                    polygon: face
+                        .polygon
+                        .iter()
+                        .map(|point| point.map(f64::to_bits))
+                        .collect(),
+                })
+                .collect(),
+            warnings: outcome.result.frame.warnings.clone(),
+            converged: outcome.result.converged,
+            angles: sorted_angle_bits(&outcome.result.angles),
+            closure_rms: outcome.result.closure_rms.to_bits(),
+            best_effort: outcome.result.best_effort,
+            relaxations: outcome
+                .result
+                .relaxations
+                .iter()
+                .map(|relaxation| {
+                    (
+                        relaxation.hinge,
+                        relaxation.target_angle_deg.to_bits(),
+                        relaxation.actual_angle_deg.to_bits(),
+                        relaxation.delta_deg.to_bits(),
+                    )
+                })
+                .collect(),
+            iterations: outcome.result.iterations,
+            requested_percent: outcome.requested_percent.to_bits(),
+            requested_angles: driver_bits(&outcome.requested_angles),
+            next_warm_seed: driver_bits(&outcome.next_warm_seed),
+            suspect_hinges: outcome.suspect_hinges.clone(),
+            contact_detected: outcome.contact_detected,
+            flat_fold_violations: outcome.flat_fold_violations.clone(),
+            layer_order: outcome.layer_order,
+        }
+    }
+
+    fn assert_fold_all_finite_and_complete(
+        name: &str,
+        document: &Document,
+        faces: &[ori3_cp::Face],
+        percent: f64,
+        expected_hinges: usize,
+        outcome: &super::FoldAllPreviewOutcome,
+    ) {
+        assert_eq!(outcome.requested_percent, percent, "{name} {percent}%");
+        assert_eq!(
+            outcome.requested_angles.len(),
+            expected_hinges,
+            "{name} {percent}%: 希望角の本数"
+        );
+        assert_eq!(
+            outcome.next_warm_seed.len(),
+            expected_hinges,
+            "{name} {percent}%: 次回出発角の本数"
+        );
+        assert!(
+            outcome
+                .requested_angles
+                .windows(2)
+                .all(|pair| pair[0].hinge < pair[1].hinge),
+            "{name} {percent}%: 希望角が辺ID順でない"
+        );
+        assert!(
+            outcome
+                .next_warm_seed
+                .windows(2)
+                .all(|pair| pair[0].hinge < pair[1].hinge),
+            "{name} {percent}%: 次回出発角が辺ID順でない"
+        );
+
+        let kinds: HashMap<_, _> = document
+            .cp
+            .edges
+            .iter()
+            .map(|edge| (edge.id, edge.kind))
+            .collect();
+        for driver in &outcome.requested_angles {
+            let expected = match kinds[&driver.hinge] {
+                EdgeKind::Mountain => 180.0 * percent / 100.0,
+                EdgeKind::Valley => -180.0 * percent / 100.0,
+                EdgeKind::Border | EdgeKind::Aux => {
+                    panic!("{name} {percent}%: 輪郭・補助線を希望角に含めた")
+                }
+            };
+            assert_eq!(
+                driver.target_angle_deg, expected,
+                "{name} {percent}%: 辺{}の符号または角度",
+                driver.hinge
+            );
+        }
+
+        assert_eq!(
+            outcome.result.frame.faces.len(),
+            faces.len(),
+            "{name} {percent}%: 面の欠落"
+        );
+        let source_faces: HashMap<_, _> = faces.iter().map(|face| (face.id, face)).collect();
+        for face in &outcome.result.frame.faces {
+            let source = source_faces
+                .get(&face.face)
+                .unwrap_or_else(|| panic!("{name} {percent}%: 未知の面{}", face.face));
+            assert_eq!(
+                face.polygon.len(),
+                source.vertices.len(),
+                "{name} {percent}%: 面{}の頂点欠落",
+                face.face
+            );
+            assert!(
+                face.polygon.iter().flatten().all(|value| value.is_finite()),
+                "{name} {percent}%: 非finite頂点"
+            );
+            assert_eq!((face.layer, face.surface_rank), (0, 0));
+        }
+        assert!(outcome.result.closure_rms.is_finite());
+        assert!(
+            outcome
+                .result
+                .angles
+                .values()
+                .all(|angle| angle.is_finite())
+        );
+        assert!(outcome.result.relaxations.iter().all(|relaxation| {
+            relaxation.target_angle_deg.is_finite()
+                && relaxation.actual_angle_deg.is_finite()
+                && relaxation.delta_deg.is_finite()
+        }));
+        assert!(
+            outcome
+                .next_warm_seed
+                .iter()
+                .all(|driver| driver.target_angle_deg.is_finite())
+        );
+        assert_eq!(
+            outcome.layer_order,
+            FoldAllLayerOrder::UnavailableWithoutSequence
+        );
+        assert!(
+            outcome
+                .result
+                .frame
+                .warnings
+                .iter()
+                .any(|warning| warning == ori3_rigid::FOLD_ALL_LAYER_ORDER_WARNING),
+            "{name} {percent}%: 重なり順不明の警告がない"
+        );
+        if percent == 0.0 {
+            assert!(
+                outcome
+                    .result
+                    .angles
+                    .values()
+                    .all(|angle| angle.abs() <= 1e-9),
+                "{name}: 0%の実角が1e-9度を超えた"
+            );
+        }
+    }
+
+    fn flat_vertex_distance(
+        document: &Document,
+        faces: &[ori3_cp::Face],
+        outcome: &super::FoldAllPreviewOutcome,
+    ) -> f64 {
+        let source_faces: HashMap<_, _> = faces.iter().map(|face| (face.id, face)).collect();
+        let vertices: HashMap<_, _> = document
+            .cp
+            .vertices
+            .iter()
+            .map(|vertex| (vertex.id, vertex.pos))
+            .collect();
+        outcome
+            .result
+            .frame
+            .faces
+            .iter()
+            .flat_map(|face| {
+                let source = source_faces[&face.face];
+                face.polygon
+                    .iter()
+                    .zip(source.vertices.iter())
+                    .map(|(actual, vertex)| {
+                        let expected = vertices[vertex];
+                        let dx = actual[0] - expected[0];
+                        let dy = actual[1] - expected[1];
+                        let dz = actual[2];
+                        (dx * dx + dy * dy + dz * dz).sqrt()
+                    })
+            })
+            .fold(0.0_f64, f64::max)
+    }
+
+    #[test]
+    fn fold_all_three_fixtures_are_finite_flat_and_bit_deterministic() {
+        let mut maximum_flat_distance = 0.0_f64;
+        for (name, text, expected_hinges) in FOLD_ALL_FIXTURES {
+            let (document, faces) = fold_all_inputs(text);
+            let document_before = document.clone();
+            for percent in FOLD_ALL_PERCENTAGES {
+                let first = fold_all_preview_outcome(&document, &faces, percent, None)
+                    .unwrap_or_else(|error| panic!("{name} {percent}%: {error}"));
+                assert_fold_all_finite_and_complete(
+                    name,
+                    &document,
+                    &faces,
+                    percent,
+                    expected_hinges,
+                    &first,
+                );
+                if percent == 0.0 {
+                    maximum_flat_distance =
+                        maximum_flat_distance.max(flat_vertex_distance(&document, &faces, &first));
+                }
+                let expected = fold_all_signature(&first);
+
+                for repetition in 2..=10 {
+                    let repeated = fold_all_preview_outcome(&document, &faces, percent, None)
+                        .unwrap_or_else(|error| {
+                            panic!("{name} {percent}% {repetition}回目: {error}")
+                        });
+                    assert_fold_all_finite_and_complete(
+                        name,
+                        &document,
+                        &faces,
+                        percent,
+                        expected_hinges,
+                        &repeated,
+                    );
+                    if percent == 0.0 {
+                        maximum_flat_distance = maximum_flat_distance
+                            .max(flat_vertex_distance(&document, &faces, &repeated));
+                    }
+                    assert_eq!(
+                        fold_all_signature(&repeated),
+                        expected,
+                        "{name} {percent}% {repetition}回目がbit単位で不一致"
+                    );
+                }
+            }
+            assert_eq!(document, document_before, "{name}: Documentを変更した");
+        }
+
+        println!("一斉折り0%の全頂点最大距離: {maximum_flat_distance:.17e}");
+        // 2026-08-24、指定3標本×0%×10回の実測最大距離は0.0だった。
+        // 0%は恒等変換の経路だが、CPU差の最下位丸めに1e-12の余裕を持たせる。
+        // 1e-9の位置ずれは十分検出でき、実測値を境目そのものにはしていない。
+        const FLAT_VERTEX_TOLERANCE: f64 = 1e-12;
+        assert!(
+            maximum_flat_distance <= FLAT_VERTEX_TOLERANCE,
+            "0%が平面と一致しない: 最大{maximum_flat_distance:e} > {FLAT_VERTEX_TOLERANCE:e}"
+        );
+    }
+
+    #[test]
+    fn fold_all_wire_contract_is_temporary_and_explicit_about_layer_order() {
+        use std::collections::BTreeSet;
+
+        let (document, faces) = fold_all_inputs(FOLD_ALL_FIXTURES[1].1);
+        let outcome =
+            fold_all_preview_outcome(&document, &faces, 50.0, None).expect("鳥の基本形50%を返す");
+        let value = serde_json::to_value(&outcome).expect("一時姿勢をJSONへ運べる");
+        let object = value.as_object().expect("一時姿勢はobject");
+        let actual: BTreeSet<_> = object.keys().map(String::as_str).collect();
+        let expected = BTreeSet::from([
+            "angles",
+            "best_effort",
+            "closure_rms",
+            "contact_detected",
+            "converged",
+            "flat_fold_violations",
+            "frame",
+            "iterations",
+            "layer_order",
+            "next_warm_seed",
+            "relaxations",
+            "requested_angles",
+            "requested_percent",
+            "suspect_hinges",
+        ]);
+        assert_eq!(actual, expected, "wire fieldの増減は明示的に扱う");
+        assert_eq!(value["layer_order"], "unavailable_without_sequence");
+        assert_eq!(value["requested_percent"], 50.0);
+        assert!(value["requested_angles"].is_array());
+        assert!(value["next_warm_seed"].is_array());
+        assert!(object.get("document").is_none());
+        assert!(object.get("sequence").is_none());
+        assert!(object.get("undo").is_none());
+        assert!(object.get("surface_order").is_none());
+    }
+
+    #[test]
+    fn non_flat_foldable_fold_all_returns_a_pose_and_warning_instead_of_blocking() {
+        let mut document = Document::new(A4ISH);
+        let center = [0.5, 0.5];
+        for (endpoint, kind) in [
+            ([1.0, 0.5], EdgeKind::Mountain),
+            ([0.682, 1.0], EdgeKind::Valley),
+            ([0.0, 0.5], EdgeKind::Mountain),
+            ([0.5, 0.0], EdgeKind::Valley),
+        ] {
+            ori3_cp::insert_segment(&mut document.cp, center, endpoint, kind);
+        }
+        let local_violations = ori3_cp::local_violations(&document.cp);
+        assert!(!local_violations.is_empty(), "非平坦標本になっていない");
+        let faces = ori3_cp::extract_faces(&document.cp);
+        let outcome = fold_all_preview_outcome(&document, &faces, 100.0, None)
+            .expect("平らにたためなくても姿勢を返す");
+        assert!(outcome.result.frame.faces.iter().all(|face| {
+            face.polygon
+                .iter()
+                .flatten()
+                .all(|coordinate| coordinate.is_finite())
+        }));
+        assert!(!outcome.flat_fold_violations.is_empty());
+        assert!(
+            outcome
+                .result
+                .frame
+                .warnings
+                .iter()
+                .any(|warning| warning == super::FOLD_ALL_FLAT_FOLD_WARNING)
+        );
+    }
+
+    #[test]
+    fn fold_all_at_once_three_samples_timing() {
+        let mut total = Duration::ZERO;
+        let mut maximum = Duration::ZERO;
+        let mut maximum_context = ("", 0.0_f64, 0_usize);
+        let mut calls = 0_u32;
+
+        for (name, text, _) in FOLD_ALL_FIXTURES {
+            let (document, faces) = fold_all_inputs(text);
+            let warmup = fold_all_preview_outcome(&document, &faces, 0.0, None)
+                .unwrap_or_else(|error| panic!("{name} warm-up: {error}"));
+            let mut warm_seed = Some(warmup.next_warm_seed);
+            let mut sample_total = Duration::ZERO;
+            let mut sample_maximum = Duration::ZERO;
+
+            for sweep in 1..=10 {
+                for percent in FOLD_ALL_PERCENTAGES {
+                    let started = Instant::now();
+                    let outcome =
+                        fold_all_preview_outcome(&document, &faces, percent, warm_seed.take())
+                            .unwrap_or_else(|error| {
+                                panic!("{name} {percent}% sweep{sweep}: {error}")
+                            });
+                    let elapsed = started.elapsed();
+                    warm_seed = Some(outcome.next_warm_seed);
+                    sample_total += elapsed;
+                    sample_maximum = sample_maximum.max(elapsed);
+                    total += elapsed;
+                    calls += 1;
+                    if elapsed > maximum {
+                        maximum = elapsed;
+                        maximum_context = (name, percent, sweep);
+                    }
+                }
+            }
+
+            println!(
+                "一斉折り性能 {name}: 50回 平均={:.3}ms 最大={:.3}ms",
+                sample_total.as_secs_f64() * 1000.0 / 50.0,
+                sample_maximum.as_secs_f64() * 1000.0,
+            );
+        }
+
+        let average_ms = total.as_secs_f64() * 1000.0 / f64::from(calls);
+        let maximum_ms = maximum.as_secs_f64() * 1000.0;
+        println!(
+            "一斉折り性能 全150回: 平均={average_ms:.3}ms 最大={maximum_ms:.3}ms（{} {}% sweep{}）",
+            maximum_context.0, maximum_context.1, maximum_context.2
+        );
+
+        if !cfg!(debug_assertions) {
+            const FRAME_BUDGET: Duration = Duration::from_millis(33);
+            assert!(
+                maximum <= FRAME_BUDGET,
+                "release最大{maximum_ms:.3}msが33msを超えた。精度を下げず停止して報告する"
+            );
+        }
     }
 }

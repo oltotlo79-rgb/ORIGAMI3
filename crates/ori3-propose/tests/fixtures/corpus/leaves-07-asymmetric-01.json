@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "paper": {
+    "width_mm": 120,
+    "height_mm": 100
+  },
+  "skeleton": {
+    "nodes": [
+      {
+        "id": 0,
+        "parent": null,
+        "length": 0,
+        "width_factor": 1
+      },
+      {
+        "id": 10,
+        "parent": 0,
+        "length": 0.36,
+        "width_factor": 0.94
+      },
+      {
+        "id": 1,
+        "parent": 10,
+        "length": 0.91,
+        "width_factor": 1,
+        "tip_pos_2d": {
+          "x": -0.9,
+          "y": 0.65
+        }
+      },
+      {
+        "id": 2,
+        "parent": 10,
+        "length": 0.73,
+        "width_factor": 0.82,
+        "tip_pos_2d": {
+          "x": -0.72,
+          "y": 0.05
+        }
+      },
+      {
+        "id": 3,
+        "parent": 10,
+        "length": 0.57,
+        "width_factor": 0.67,
+        "tip_pos_2d": {
+          "x": -0.45,
+          "y": -0.7
+        }
+      },
+      {
+        "id": 20,
+        "parent": 0,
+        "length": 0.54,
+        "width_factor": 0.88
+      },
+      {
+        "id": 21,
+        "parent": 20,
+        "length": 0.41,
+        "width_factor": 0.76
+      },
+      {
+        "id": 4,
+        "parent": 21,
+        "length": 0.86,
+        "width_factor": 0.93,
+        "tip_pos_2d": {
+          "x": 0.15,
+          "y": 0.85
+        }
+      },
+      {
+        "id": 5,
+        "parent": 21,
+        "length": 0.63,
+        "width_factor": 0.71,
+        "tip_pos_2d": {
+          "x": 0.72,
+          "y": 0.62
+        }
+      },
+      {
+        "id": 6,
+        "parent": 20,
+        "length": 0.77,
+        "width_factor": 0.84,
+        "tip_pos_2d": {
+          "x": 0.88,
+          "y": -0.05
+        }
+      },
+      {
+        "id": 7,
+        "parent": 20,
+        "length": 0.51,
+        "width_factor": 0.59,
+        "tip_pos_2d": {
+          "x": 0.38,
+          "y": -0.82
+        }
+      }
+    ]
+  },
+  "seed": 7003,
+  "with_fold_plan": true
+}

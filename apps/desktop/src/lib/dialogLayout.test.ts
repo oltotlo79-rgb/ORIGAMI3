@@ -10,6 +10,10 @@ const proposalSource = readFileSync(
   new URL("../components/dialogs/ProposalWizard.tsx", import.meta.url),
   "utf8",
 );
+const modalDialogSource = readFileSync(
+  new URL("../components/dialogs/ModalDialog.tsx", import.meta.url),
+  "utf8",
+);
 const firstRunGuideSource = readFileSync(
   new URL("../components/FirstRunGuide.tsx", import.meta.url),
   "utf8",
@@ -37,6 +41,7 @@ const modalScreens = [
   {
     name: "復旧",
     states: 1,
+    usesCommonDialog: true,
     source: readFileSync(
       new URL("../components/RecoveryDialog.tsx", import.meta.url),
       "utf8",
@@ -45,6 +50,7 @@ const modalScreens = [
   {
     name: "新規作成",
     states: 1,
+    usesCommonDialog: true,
     source: readFileSync(
       new URL("../components/dialogs/NewDocumentDialog.tsx", import.meta.url),
       "utf8",
@@ -53,11 +59,13 @@ const modalScreens = [
   {
     name: "提案4画面",
     states: proposalSteps.length,
+    usesCommonDialog: true,
     source: proposalSource,
   },
   {
     name: "書き出し",
     states: 1,
+    usesCommonDialog: true,
     source: readFileSync(
       new URL("../components/dialogs/ExportDialog.tsx", import.meta.url),
       "utf8",
@@ -66,6 +74,7 @@ const modalScreens = [
   {
     name: "ヘルプ",
     states: 1,
+    usesCommonDialog: true,
     source: readFileSync(
       new URL("../components/dialogs/HelpCenter.tsx", import.meta.url),
       "utf8",
@@ -94,6 +103,28 @@ describe("1000×700の全画面と手前・後ろの区別", () => {
     expect(modalScreens).toHaveLength(5);
     expect(modalScreens.reduce((sum, screen) => sum + screen.states, 0)).toBe(8);
     for (const screen of modalScreens) {
+      if (screen.usesCommonDialog) {
+        const usesCommonDialog = screen.source.includes("<ModalDialog");
+        expect(
+          usesCommonDialog && modalDialogSource.includes('"app dialog-backdrop"'),
+          `${screen.name}: 共通の後ろ幕`,
+        ).toBe(true);
+        expect(
+          usesCommonDialog && modalDialogSource.includes('aria-modal="true"'),
+          `${screen.name}: モーダルの明示`,
+        ).toBe(true);
+        expect(screen.source, `${screen.name}: 共通の画面内監査`).toContain(
+          "data-floating-ui=",
+        );
+        expect(
+          usesCommonDialog &&
+            /className=\{className \? `dialog \$\{className\}` : "dialog"\}/u.test(
+              modalDialogSource,
+            ),
+          `${screen.name}: 不透明な共通枠`,
+        ).toBe(true);
+        continue;
+      }
       expect(screen.source, `${screen.name}: 共通の後ろ幕`).toContain(
         'className="dialog-backdrop',
       );
@@ -110,9 +141,13 @@ describe("1000×700の全画面と手前・後ろの区別", () => {
 
     const backdrop = declarationBlock(".dialog-backdrop");
     const dialog = declarationBlock(".dialog");
+    const capturePortalDialog = declarationBlock(
+      'html[data-origami3-capture-view] body > .dialog-backdrop[data-modal-layer="true"]',
+    );
     expect(backdrop).toContain("background: var(--color-overlay)");
     expect(backdrop).not.toContain("background: var(--color-scrim)");
     expect(dialog).toContain("background-color: var(--color-surface)");
+    expect(capturePortalDialog).toContain("display: none !important");
 
     const overlayAlphas = [
       ...css.matchAll(

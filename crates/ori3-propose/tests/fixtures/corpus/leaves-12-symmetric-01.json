@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "paper": {
+    "width_mm": 140,
+    "height_mm": 140
+  },
+  "skeleton": {
+    "nodes": [
+      {
+        "id": 0,
+        "parent": null,
+        "length": 0,
+        "width_factor": 1
+      },
+      {
+        "id": 1,
+        "parent": 0,
+        "length": 1,
+        "width_factor": 1
+      },
+      {
+        "id": 2,
+        "parent": 0,
+        "length": 1,
+        "width_factor": 1
+      },
+      {
+        "id": 3,
+        "parent": 0,
+        "length": 0.92,
+        "width_factor": 0.94
+      },
+      {
+        "id": 4,
+        "parent": 0,
+        "length": 0.92,
+        "width_factor": 0.94
+      },
+      {
+        "id": 5,
+        "parent": 0,
+        "length": 0.84,
+        "width_factor": 0.87
+      },
+      {
+        "id": 6,
+        "parent": 0,
+        "length": 0.84,
+        "width_factor": 0.87
+      },
+      {
+        "id": 7,
+        "parent": 0,
+        "length": 0.75,
+        "width_factor": 0.79
+      },
+      {
+        "id": 8,
+        "parent": 0,
+        "length": 0.75,
+        "width_factor": 0.79
+      },
+      {
+        "id": 9,
+        "parent": 0,
+        "length": 0.66,
+        "width_factor": 0.7
+      },
+      {
+        "id": 10,
+        "parent": 0,
+        "length": 0.66,
+        "width_factor": 0.7
+      },
+      {
+        "id": 11,
+        "parent": 0,
+        "length": 0.56,
+        "width_factor": 0.61
+      },
+      {
+        "id": 12,
+        "parent": 0,
+        "length": 0.56,
+        "width_factor": 0.61
+      }
+    ]
+  },
+  "seed": 12004,
+  "with_fold_plan": true
+}

@@ -10,9 +10,13 @@ import type {
   EditOp,
   ExportKind,
   ExportOptions,
+  FoldAllPreviewOutcome,
   FoldStep,
   Paper,
-  ProposalCandidate,
+  ProposalControl,
+  ProposalJobId,
+  ProposalJobResult,
+  ProposalProgressSnapshot,
   RecoveryInfo,
   ReplayResult,
   SeqOp,
@@ -91,6 +95,20 @@ export function poseSolve(
   });
 }
 
+/**
+ * 全ての山折り・谷折りを同じ割合で動かした一時的な形を求める。
+ * `warmSeed` は直前応答の `next_warm_seed` だけを渡し、作品へ保存しない。
+ */
+export function foldAllPreview(
+  percent: number,
+  warmSeed?: Driver[] | null,
+): Promise<FoldAllPreviewOutcome> {
+  return invoke("fold_all_preview", {
+    percent,
+    warmSeed: warmSeed?.length ? warmSeed : null,
+  });
+}
+
 /** 前回の異常終了で残った自動保存を調べる。無ければnull */
 export function recoveryCheck(): Promise<RecoveryInfo | null> {
   return invoke("recovery_check");
@@ -107,8 +125,10 @@ export function proposalGenerate(
   skeleton: Skeleton,
   paper: Paper,
   seed: number,
-): Promise<ProposalCandidate[]> {
+  jobId: ProposalJobId,
+): Promise<ProposalJobResult> {
   return invoke("proposal_generate", {
+    jobId,
     skeleton,
     paper,
     seed,
@@ -116,17 +136,18 @@ export function proposalGenerate(
   });
 }
 
-/** 提案の計算がどこまで進んだか(commands.rs::ProposalProgress) */
-export interface ProposalProgress {
-  /** 計算が終わった候補の数 */
-  done: number;
-  /** 計算する候補の数。まだ始まっていなければ 0 */
-  total: number;
+/** 指定した提案計算の進み具合を読む。回収済みならnull */
+export function proposalProgress(
+  jobId: ProposalJobId,
+): Promise<ProposalProgressSnapshot | null> {
+  return invoke("proposal_progress", { jobId });
 }
 
-/** 提案の計算の進み具合を読む。計算中でもすぐ返る */
-export function proposalProgress(): Promise<ProposalProgress> {
-  return invoke("proposal_progress");
+/** 同種の実行制御を1入口へまとめる。現在は取消しだけ。 */
+export function proposalControl(
+  operation: ProposalControl,
+): Promise<ProposalProgressSnapshot> {
+  return invoke("proposal_control", { operation });
 }
 
 /** 提案の展開図と折り手順をまとめて入れる。元に戻す1回で入れる前へ戻る */

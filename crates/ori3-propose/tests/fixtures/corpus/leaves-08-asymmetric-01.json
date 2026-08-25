@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "paper": {
+    "width_mm": 120,
+    "height_mm": 100
+  },
+  "skeleton": {
+    "nodes": [
+      {
+        "id": 0,
+        "parent": null,
+        "length": 0,
+        "width_factor": 1
+      },
+      {
+        "id": 10,
+        "parent": 0,
+        "length": 0.34,
+        "width_factor": 0.92
+      },
+      {
+        "id": 1,
+        "parent": 10,
+        "length": 0.96,
+        "width_factor": 1,
+        "tip_pos_2d": {
+          "x": -0.9,
+          "y": 0.72
+        }
+      },
+      {
+        "id": 2,
+        "parent": 10,
+        "length": 0.79,
+        "width_factor": 0.86,
+        "tip_pos_2d": {
+          "x": -0.82,
+          "y": -0.05
+        }
+      },
+      {
+        "id": 3,
+        "parent": 10,
+        "length": 0.58,
+        "width_factor": 0.64,
+        "tip_pos_2d": {
+          "x": -0.48,
+          "y": -0.78
+        }
+      },
+      {
+        "id": 20,
+        "parent": 0,
+        "length": 0.47,
+        "width_factor": 0.83
+      },
+      {
+        "id": 4,
+        "parent": 20,
+        "length": 0.9,
+        "width_factor": 0.95,
+        "tip_pos_2d": {
+          "x": -0.05,
+          "y": 0.88
+        }
+      },
+      {
+        "id": 5,
+        "parent": 20,
+        "length": 0.82,
+        "width_factor": 0.89,
+        "tip_pos_2d": {
+          "x": 0.52,
+          "y": 0.68
+        }
+      },
+      {
+        "id": 6,
+        "parent": 20,
+        "length": 0.71,
+        "width_factor": 0.77,
+        "tip_pos_2d": {
+          "x": 0.9,
+          "y": 0.18
+        }
+      },
+      {
+        "id": 7,
+        "parent": 20,
+        "length": 0.62,
+        "width_factor": 0.69,
+        "tip_pos_2d": {
+          "x": 0.76,
+          "y": -0.55
+        }
+      },
+      {
+        "id": 8,
+        "parent": 20,
+        "length": 0.49,
+        "width_factor": 0.56,
+        "tip_pos_2d": {
+          "x": 0.12,
+          "y": -0.9
+        }
+      }
+    ]
+  },
+  "seed": 8005,
+  "with_fold_plan": true
+}

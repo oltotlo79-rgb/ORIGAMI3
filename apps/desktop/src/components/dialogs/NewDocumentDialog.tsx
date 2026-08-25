@@ -2,8 +2,10 @@
 // 入口は上部ツールバーの「新規」だけで、常設4区画は増やさない。
 // 決めた形はその場で見本の四角に映す(結果をプレビューで見せる。設計原則3b)。
 
+import { useRef } from "react";
 import { draftToPaper, useAppStore } from "../../store/appStore";
 import { NumberStepper } from "../NumberStepper";
+import { ModalDialog } from "./ModalDialog";
 
 /** よく使う紙の大きさ(mm)。押すとその大きさが入る */
 export const PAPER_PRESETS: { label: string; width: number; height: number }[] = [
@@ -21,6 +23,7 @@ export function NewDocumentDialog() {
   const setDraft = useAppStore((s) => s.setNewPaperDraft);
   const confirm = useAppStore((s) => s.confirmNewDocument);
   const close = useAppStore((s) => s.closeNewDialog);
+  const initialFocusRef = useRef<HTMLInputElement>(null);
   if (!open) return null;
 
   const paper = draftToPaper(draft);
@@ -29,19 +32,18 @@ export function NewDocumentDialog() {
   const size = (mm: number) => (valid ? (mm / long) * PREVIEW_LONG_PX : 0);
 
   return (
-    <div className="dialog-backdrop">
-      <div
-        className="dialog"
-        data-floating-ui="new-document-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="new-title"
-      >
+    <ModalDialog
+      labelledBy="new-title"
+      initialFocusRef={initialFocusRef}
+      escapeAction={{ kind: "dismiss", run: close }}
+      data-floating-ui="new-document-dialog"
+    >
         <h2 id="new-title">新しい紙を用意する</h2>
         <fieldset>
           <legend>紙の形</legend>
           <label>
             <input
+              ref={draft.square ? initialFocusRef : undefined}
               type="radio"
               name="paper-shape"
               data-tooltip="正方形の紙を選びます"
@@ -52,6 +54,7 @@ export function NewDocumentDialog() {
           </label>
           <label>
             <input
+              ref={!draft.square ? initialFocusRef : undefined}
               type="radio"
               name="paper-shape"
               data-tooltip="長方形の紙を選びます"
@@ -132,7 +135,6 @@ export function NewDocumentDialog() {
             やめる
           </button>
         </div>
-      </div>
-    </div>
+    </ModalDialog>
   );
 }

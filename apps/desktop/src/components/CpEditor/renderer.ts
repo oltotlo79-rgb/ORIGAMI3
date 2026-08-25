@@ -24,6 +24,9 @@ export const COLORS = {
   paper: "#ffffff",
   paperShadow: "rgba(0, 0, 0, 0.25)",
   selection: "#ff9500",
+  /** キーボードで動かしている現在点。紙・余白・各線色のどこでも読める青。 */
+  keyboardCursor: "#165fbd",
+  keyboardCursorHalo: "rgba(255, 255, 255, 0.96)",
   /** 複数スライダーのうち、指している折り目を選択全体から見分ける色 */
   hingeHover: "#7040c9",
   /** 補正後にも食い込みが残る原因候補。選択の橙・ホバーの紫より外側で光らせる。 */
@@ -260,6 +263,8 @@ export interface RenderOverlay {
   hoverSnap: SnapResult | null;
   /** 描画中のプレビュー線(始点確定後) */
   preview: { a: Vec2; b: Vec2; kind: EdgeKind } | null;
+  /** キーボードで動かしている現在点。既存の呼び出し側では省略できる。 */
+  keyboardCursor?: Vec2 | null;
   /** 方向吸着中に紙を横切って示す補助ガイド。 */
   directionGuide: [Vec2, Vec2] | null;
   /** 対称操作の基準線を、紙の輪郭まで延ばした線分。使わないならnull。 */
@@ -570,6 +575,30 @@ function drawMirrorAxis(
   ctx.setLineDash([]);
 }
 
+/** キーボードで動かしている現在点を、線や紙色に埋もれない輪と十字で描く。 */
+export function drawKeyboardCursor(
+  ctx: CanvasRenderingContext2D,
+  view: ViewTransform,
+  cursor: Vec2,
+): void {
+  const [sx, sy] = worldToScreen(view, cursor);
+  ctx.save();
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.arc(sx, sy, 8, 0, Math.PI * 2);
+  ctx.moveTo(sx - 13, sy);
+  ctx.lineTo(sx + 13, sy);
+  ctx.moveTo(sx, sy - 13);
+  ctx.lineTo(sx, sy + 13);
+  ctx.strokeStyle = COLORS.keyboardCursorHalo;
+  ctx.lineWidth = 5;
+  ctx.stroke();
+  ctx.strokeStyle = COLORS.keyboardCursor;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawOverlay(
   ctx: CanvasRenderingContext2D,
   view: ViewTransform,
@@ -627,6 +656,9 @@ function drawOverlay(
     ctx.strokeStyle = COLORS.marqueeStroke;
     ctx.lineWidth = 1;
     ctx.strokeRect(x, y, w, h);
+  }
+  if (overlay.keyboardCursor) {
+    drawKeyboardCursor(ctx, view, overlay.keyboardCursor);
   }
   if (overlay.hoverSnap) {
     const [sx, sy] = worldToScreen(view, overlay.hoverSnap.pos);

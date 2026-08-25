@@ -587,7 +587,7 @@ function StepContent({ number }: { number: number }) {
           data-tooltip={
             number <= 1
               ? "いちばん最初の手順なので、これより前へは動かせません"
-              : "この手順を1つ前へ動かします(元に戻すは2回押してください)"
+              : "この手順を1つ前へ動かします(元に戻す1回で戻せます)"
           }
           onClick={() => void moveStep(number, -1)}
         >
@@ -599,7 +599,7 @@ function StepContent({ number }: { number: number }) {
           data-tooltip={
             number >= total
               ? "いちばん最後の手順なので、これより後ろへは動かせません"
-              : "この手順を1つ後ろへ動かします(元に戻すは2回押してください)"
+              : "この手順を1つ後ろへ動かします(元に戻す1回で戻せます)"
           }
           onClick={() => void moveStep(number, 1)}
         >
@@ -1480,7 +1480,7 @@ function PullContent() {
 }
 
 /**
- * 紙の形を直接変える2つの入口。ツール名だけでは結果を想像しにくいので、
+ * 紙の形を直接変える3つの入口。ツール名だけでは結果を想像しにくいので、
  * 「何が起きるか」を動詞で並べる。膨らみは設定を開くだけで、強さは利用者が
  * 下のつまみを動かして決める(勝手に作品の形を変えない)。
  */
@@ -1488,6 +1488,8 @@ function PaperActionEntrances({ showPull = true }: { showPull?: boolean }) {
   const setTool = useAppStore((s) => s.setTool);
   const setSelection = useAppStore((s) => s.setSelection);
   const setSoft = useAppStore((s) => s.setSoft);
+  const hingeCount = useAppStore((s) => s.hinges.size);
+  const enterFoldAllPreview = useAppStore((s) => s.enterFoldAllPreview);
 
   const showInflate = () => {
     setTool("select");
@@ -1514,7 +1516,137 @@ function PaperActionEntrances({ showPull = true }: { showPull?: boolean }) {
       >
         ◯ 紙をふくらませる
       </button>
+      <button
+        type="button"
+        disabled={hingeCount === 0}
+        data-tooltip={
+          hingeCount === 0
+            ? "山折りか谷折りを引くと、全部の折り目をいっぺんに動かせます"
+            : "山折りと谷折りを同じ割合で動かし、手順とは別に形を見ます"
+        }
+        onClick={() => void enterFoldAllPreview()}
+      >
+        ◇ 全部いっぺんに折ってみる
+      </button>
     </div>
+  );
+}
+
+/** 全折り目を同じ割合で動かして形だけを見る、一時表示の操作欄。 */
+function FoldAllPreviewContent() {
+  const preview = useAppStore((s) => s.foldAllPreview);
+  const setFoldAllPercent = useAppStore((s) => s.setFoldAllPercent);
+  const finishFoldAllPercent = useAppStore((s) => s.finishFoldAllPercent);
+  const leaveFoldAllPreview = useAppStore((s) => s.leaveFoldAllPreview);
+  const documentSavedPath = useAppStore((s) => s.documentSavedPath);
+  const otherOperationFailed = useAppStore((s) => s.errorMessage !== null);
+
+  if (preview === null) return null;
+  const percentText = Number.isInteger(preview.percent)
+    ? preview.percent.toFixed(0)
+    : preview.percent.toFixed(1);
+
+  return (
+    <section
+      className="fold-all-preview"
+      aria-label="全部いっぺんに折ってみる"
+      data-fold-all-active="true"
+      data-applied-percent={preview.appliedPercent ?? ""}
+      data-returning={preview.returning ? "true" : "false"}
+    >
+      <div className="fold-all-preview-heading">
+        <strong>全部いっぺんに折ってみる</strong>
+        <strong className="fold-all-preview-promise">
+          これは記録された手順ではない
+        </strong>
+      </div>
+      <p className="hint">
+        山折りと谷折りを同じ割合で動かして、形だけを見ます。
+      </p>
+
+      <div className="fold-all-preview-control">
+        <label htmlFor="fold-all-percent">折る割合</label>
+        <output htmlFor="fold-all-percent">{percentText}%</output>
+        <input
+          id="fold-all-percent"
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={preview.percent}
+          disabled={preview.returning}
+          aria-label="全部の折り目を動かす割合"
+          aria-valuetext={`${percentText}%`}
+          onChange={(event) => setFoldAllPercent(Number(event.target.value))}
+          onPointerUp={finishFoldAllPercent}
+          onKeyUp={finishFoldAllPercent}
+          onBlur={finishFoldAllPercent}
+        />
+        <span className="fold-all-preview-min">ひらく 0%</span>
+        <span className="fold-all-preview-max">できるところまで 100%</span>
+      </div>
+
+      <div className="fold-all-preview-notices" aria-live="polite">
+        {preview.returning ? (
+          <p className="hint">いつもの表示に戻しています…</p>
+        ) : (
+          preview.busy && <p className="hint">形を動かしています…</p>
+        )}
+        {preview.layerOrder === "unavailable_without_sequence" && (
+          <p className="warning-text">
+            この形は手順を使わずに動かしているため、紙の重なる順番は決められません。
+          </p>
+        )}
+        {preview.converged === false && (
+          <p className="warning-text">
+            形を最後まで合わせきれませんでした。いちばん近い形を表示しています。
+          </p>
+        )}
+        {preview.relaxationCount > 0 && (
+          <p className="warning-text">
+            全部の折り目を同じ割合にできないため、いちばん近い形を表示しています。
+          </p>
+        )}
+        {preview.flatFoldViolationCount > 0 && (
+          <p className="warning-text">
+            平らにたためない場所があります。このまま形を見ることはできます。
+          </p>
+        )}
+        {preview.suspectHingeCount > 0 && (
+          <p className="warning-text">
+            紙が突き抜けているところがあります。このまま形を見ることはできます。
+          </p>
+        )}
+        {preview.contactDetected && preview.suspectHingeCount === 0 && (
+          <p className="warning-text">
+            紙どうしが触れているところがあります。このまま形を見ることはできます。
+          </p>
+        )}
+        {preview.error !== null && (
+          <p className="warning-text">{preview.error}</p>
+        )}
+        {documentSavedPath !== null && otherOperationFailed === false && (
+          <p className="hint">
+            作品を保存しました。いま見ている形は保存されません。
+          </p>
+        )}
+        {otherOperationFailed && (
+          <p className="warning-text">
+            操作を終えられませんでした。いま見ている形はそのままです。
+          </p>
+        )}
+      </div>
+
+      <div className="button-row">
+        <button
+          type="button"
+          disabled={preview.returning}
+          onClick={() => void leaveFoldAllPreview()}
+        >
+          いつもの表示に戻る
+        </button>
+      </div>
+    </section>
   );
 }
 
@@ -1756,6 +1888,7 @@ export function ContextPanel() {
   const errorMessage = useAppStore((s) => s.errorMessage);
   const documentSavedPath = useAppStore((s) => s.documentSavedPath);
   const mirrorAxisNotice = useAppStore((s) => s.mirrorAxisNotice);
+  const foldAllPreview = useAppStore((s) => s.foldAllPreview);
   const currentStep = useAppStore((s) => s.currentStep);
   const activeTool = useAppStore((s) => s.activeTool);
   const foldDraft = useAppStore((s) => s.foldDraft);
@@ -1786,7 +1919,9 @@ export function ContextPanel() {
       <div className="context-selection">
         {/* 未処理の折り方確認を最優先し、測定中は過去の手順を見ていても測定欄を出す。
             それ以外は、選んでいる手順の設定を優先する。 */}
-        {pendingFoldThrough ? (
+        {foldAllPreview !== null ? (
+          <FoldAllPreviewContent />
+        ) : pendingFoldThrough ? (
           <>
             <FoldThroughProposalContent pending={pendingFoldThrough} />
             <OperationSteps />
@@ -1843,29 +1978,30 @@ export function ContextPanel() {
           </>
         )}
       </div>
-      {(errorMessage !== null ||
-        documentSavedPath !== null ||
-        mirrorAxisNotice !== null ||
-        allWarnings.length > 0 ||
-        hasRelaxations) && (
-        <div className="context-messages">
-          {errorMessage !== null && <p className="error-text">{errorMessage}</p>}
-          {documentSavedPath !== null && errorMessage === null && (
-            <p className="mirror-axis-notice" aria-live="polite">
-              作品を「{fileName(documentSavedPath)}」に保存しました
-            </p>
-          )}
-          {mirrorAxisNotice !== null && (
-            <p className="mirror-axis-notice">{mirrorAxisNotice}</p>
-          )}
-          <RelaxationMessages />
-          {allWarnings.map((w, i) => (
-            <p key={i} className="warning-text">
-              {w}
-            </p>
-          ))}
-        </div>
-      )}
+      {foldAllPreview === null &&
+        (errorMessage !== null ||
+          documentSavedPath !== null ||
+          mirrorAxisNotice !== null ||
+          allWarnings.length > 0 ||
+          hasRelaxations) && (
+          <div className="context-messages">
+            {errorMessage !== null && <p className="error-text">{errorMessage}</p>}
+            {documentSavedPath !== null && errorMessage === null && (
+              <p className="mirror-axis-notice" aria-live="polite">
+                作品を「{fileName(documentSavedPath)}」に保存しました
+              </p>
+            )}
+            {mirrorAxisNotice !== null && (
+              <p className="mirror-axis-notice">{mirrorAxisNotice}</p>
+            )}
+            <RelaxationMessages />
+            {allWarnings.map((w, i) => (
+              <p key={i} className="warning-text">
+                {w}
+              </p>
+            ))}
+          </div>
+        )}
     </footer>
   );
 }

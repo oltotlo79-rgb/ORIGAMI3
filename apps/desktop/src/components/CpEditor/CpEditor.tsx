@@ -23,12 +23,15 @@ import {
 import { isEditableTarget } from "../../lib/keyboard";
 import type { Document, EdgeKind } from "../../lib/types";
 import {
+  activateKeyboardCursor,
   constructDone,
   cursorFor,
   curveDraft,
+  deactivateKeyboardCursor,
   initialEphemeralState,
   isSpaceKey,
   onKeyDown,
+  onKeyboardLineKey,
   onKeyUp,
   onMouseDown,
   onMouseMove,
@@ -98,6 +101,7 @@ export function CpEditor({ fitRef }: Props) {
 
   // 購読はdrawの再実行トリガーとして使う(値の読み出しはgetStateで行う)
   const doc = useAppStore((s) => s.doc);
+  const lineInputStart = useAppStore((s) => s.lineInputStart);
   const currentStep = useAppStore((s) => s.currentStep);
   const selection = useAppStore((s) => s.selection);
   const hoveredHinge = useAppStore((s) => s.hoveredHinge);
@@ -141,6 +145,7 @@ export function CpEditor({ fitRef }: Props) {
       activeAngleIntent,
       alignDraft,
       foldDraft,
+      lineInputStart,
     } = useAppStore.getState();
     if (!canvas) return;
     // カーソルの形は表示専用なので、再描画を起こさずcanvasへ直接反映する
@@ -171,7 +176,10 @@ export function CpEditor({ fitRef }: Props) {
     const axisSegment = axis ? mirrorLineInsidePaper(doc.paper, axis) : null;
     const curveMode = kind !== undefined && curve.enabled && activeTool !== "fold";
     const directionSnap =
-      kind && !curveMode && st.pendingStart ? st.directionSnap : null;
+      kind && !curveMode && lineInputStart ? st.directionSnap : null;
+    const lineCursorWorld = st.keyboardCursorActive
+      ? st.keyboardCursorWorld
+      : st.cursorWorld;
     // 未折りなら展開図と畳み平面が同じなので、求まった折り線も2Dで下見できる。
     // 手順後は座標系が異なるため、既存の3D下見だけに出す。
     const alignPreview =
@@ -184,26 +192,26 @@ export function CpEditor({ fitRef }: Props) {
         : null;
     const preview =
       alignPreview ??
-      (kind && !curveMode && st.pendingStart && st.cursorWorld
+      (kind && !curveMode && lineInputStart && lineCursorWorld
         ? {
-            a: st.pendingStart,
-            b: st.hoverSnap?.pos ?? directionSnap?.pos ?? st.cursorWorld,
+            a: lineInputStart,
+            b: st.hoverSnap?.pos ?? directionSnap?.pos ?? lineCursorWorld,
             kind,
           }
         : null);
     const [paperWidth, paperHeight] = paperExtent(doc);
     const guideReach = 2 * Math.max(paperWidth, paperHeight);
     const directionGuide =
-      directionSnap && st.pendingStart
+      directionSnap && lineInputStart
         ? clipToPaper(
             [
               [
-                st.pendingStart[0] - directionSnap.direction[0] * guideReach,
-                st.pendingStart[1] - directionSnap.direction[1] * guideReach,
+                lineInputStart[0] - directionSnap.direction[0] * guideReach,
+                lineInputStart[1] - directionSnap.direction[1] * guideReach,
               ],
               [
-                st.pendingStart[0] + directionSnap.direction[0] * guideReach,
-                st.pendingStart[1] + directionSnap.direction[1] * guideReach,
+                lineInputStart[0] + directionSnap.direction[0] * guideReach,
+                lineInputStart[1] + directionSnap.direction[1] * guideReach,
               ],
             ],
             paperWidth,
@@ -222,11 +230,21 @@ export function CpEditor({ fitRef }: Props) {
       directionHint ??
       (activeTool === "construct"
         ? constructHint(construct.kind, constructDone(st), construct.divisions)
-        : curveMode
+          : curveMode
           ? curveHint(curve.shape, st.curvePoints.length, curve.rulings)
           : mirrorDraw
             ? `対称にそろえています（基準: ${mirrorAxisLabel(mirrorAxis)}。引く・消す・線種変更）`
             : null);
+    const keyboardLineHint =
+      st.keyboardCursorActive && kind && !curveMode
+        ? lineInputStart
+          ? "矢印キーで終わりの位置を動かし、Enterで決めます。Escapeでやめます"
+          : "矢印キーで始まりの位置を動かし、Enterで決めます。Escapeでやめます"
+        : null;
+    const keyboardCursor =
+      st.keyboardCursorActive && st.keyboardCursorWorld
+        ? st.hoverSnap?.pos ?? directionSnap?.pos ?? st.keyboardCursorWorld
+        : null;
     const overlay: RenderOverlay = {
       // 作図も通常線と同じhoverSnapを渡し、renderer共通の緑丸で吸着を知らせる。
       hoverSnap:
@@ -236,6 +254,7 @@ export function CpEditor({ fitRef }: Props) {
           ? st.hoverSnap
           : null,
       preview,
+      keyboardCursor,
       directionGuide,
       mirrorAxis: axisSegment,
       mirrorPreview:
@@ -268,7 +287,7 @@ export function CpEditor({ fitRef }: Props) {
         panHint(st) ??
         (st.vertexDrag
           ? "点を動かしています(離すと決まります。Escでやめる)"
-          : st.lineInputHint ?? toolHint),
+          : st.lineInputHint ?? directionHint ?? keyboardLineHint ?? toolHint),
       tooltip: violationTooltip(doc, st.hoverViolation),
       vertexDrag: st.vertexDrag
         ? { id: st.vertexDrag.id, to: st.vertexDrag.to }
@@ -286,6 +305,7 @@ export function CpEditor({ fitRef }: Props) {
       // 撮影画像には作品そのものだけを残し、操作中だけの案内・強調を消す。
       overlay.hoverSnap = null;
       overlay.preview = null;
+      overlay.keyboardCursor = null;
       overlay.directionGuide = null;
       overlay.mirrorAxis = null;
       overlay.mirrorPreview = null;
@@ -346,9 +366,12 @@ export function CpEditor({ fitRef }: Props) {
         mirrorLineForChoice(s.doc, s.mirrorAxis) ??
         paperMirrorLine(s.doc.paper, "paperVertical"),
       state: stateRef.current,
+      lineInputStart: s.lineInputStart,
       setView: (v) => {
         viewRef.current = v;
       },
+      setLineInputStart: s.setLineInputStart,
+      setOperationStage: s.setOperationStage,
       applyEdit: s.applyEdit,
       drawSegment: (a, b, kind) => void s.drawSegment(a, b, kind),
       drawCurve: (points, kind) => void s.drawCurve(points, kind),
@@ -365,6 +388,7 @@ export function CpEditor({ fitRef }: Props) {
     draw();
   }, [
     doc,
+    lineInputStart,
     currentStep,
     selection,
     hoveredHinge,
@@ -389,6 +413,11 @@ export function CpEditor({ fitRef }: Props) {
 
   // 新規作成・ファイルを開いた直後は紙全体が見える表示に戻す
   useEffect(() => {
+    const st = stateRef.current;
+    st.keyboardCursorActive = false;
+    st.keyboardCursorWorld = null;
+    st.hoverSnap = null;
+    st.directionSnap = null;
     viewRef.current = null; // 次のdrawが全体表示から作り直す
     draw();
   }, [docEpoch, draw]);
@@ -402,8 +431,10 @@ export function CpEditor({ fitRef }: Props) {
   // 別の入力規則へ古い点や線を引き継ぐ取り違えを防ぐ。
   useEffect(() => {
     const st = stateRef.current;
-    st.pendingStart = null;
+    useAppStore.getState().setLineInputStart(null);
     st.lineInputHint = null;
+    st.keyboardCursorWorld = null;
+    st.keyboardCursorActive = false;
     st.downScreen = null;
     st.marqueeStart = null;
     st.marqueeEnd = null;
@@ -452,9 +483,21 @@ export function CpEditor({ fitRef }: Props) {
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
       if (isEditableTarget(e.target)) return;
+      const ctx = makeCtx();
+      if (ctx && e.target === canvasRef.current) {
+        // Enterの押しっぱなしで、同じ点を始点・終点として2回受け付けない。
+        if (e.key === "Enter" && e.repeat) {
+          e.preventDefault();
+          return;
+        }
+        if (onKeyboardLineKey(ctx, e.key, e.shiftKey)) {
+          e.preventDefault();
+          draw();
+          return;
+        }
+      }
       // スペースは画面のスクロールに使われるので、つかむ操作のために止める
       if (isSpaceKey(e.key)) e.preventDefault();
-      const ctx = makeCtx();
       if (ctx) {
         onKeyDown(ctx, e.key);
         const s = useAppStore.getState();
@@ -478,6 +521,8 @@ export function CpEditor({ fitRef }: Props) {
       stateRef.current.shiftHeld = false;
       stateRef.current.panLast = null;
       stateRef.current.directionSnap = null;
+      stateRef.current.keyboardCursorActive = false;
+      stateRef.current.keyboardCursorWorld = null;
       draw();
     };
     window.addEventListener("keydown", down);
@@ -515,18 +560,20 @@ export function CpEditor({ fitRef }: Props) {
       <canvas
         ref={canvasRef}
         className="cp-canvas"
+        tabIndex={0}
+        aria-label={
+          (activeTool === "mountain" || activeTool === "valley" || activeTool === "aux") &&
+          !curve.enabled
+            ? "展開図。矢印キーで位置を動かし、Enterを2回押すと線を引けます。Escapeでやめます"
+            : "展開図"
+        }
+        onFocus={() => withCtx(activateKeyboardCursor)}
+        onBlur={() => withCtx(deactivateKeyboardCursor)}
         onPointerDown={(e) => {
           e.preventDefault();
-          const hadStart = stateRef.current.pendingStart !== null;
           const constructBefore = constructDone(stateRef.current);
           const s = useAppStore.getState();
-          if (
-            (s.activeTool === "mountain" ||
-              s.activeTool === "valley" ||
-              s.activeTool === "aux" ||
-              s.activeTool === "construct") &&
-            s.operationStage === 2
-          ) {
+          if (s.activeTool === "construct" && s.operationStage === 2) {
             s.setOperationStage(0);
           }
           // ポインタ捕捉: canvas外へ出てもmove/upが届き、ドラッグ状態が残留しない
@@ -540,15 +587,7 @@ export function CpEditor({ fitRef }: Props) {
               e.ctrlKey || e.metaKey,
             ),
           );
-          if (
-            s.activeTool === "mountain" ||
-            s.activeTool === "valley" ||
-            s.activeTool === "aux"
-          ) {
-            const hasStart = stateRef.current.pendingStart !== null;
-            if (!hadStart && hasStart) s.setOperationStage(1);
-            else if (hadStart && !hasStart) s.setOperationStage(2);
-          } else if (s.activeTool === "construct" && e.button === 0) {
+          if (s.activeTool === "construct" && e.button === 0) {
             const constructAfter = constructDone(stateRef.current);
             const required = CONSTRUCT_STEPS[s.construct.kind].length;
             if (constructAfter > 0) s.setOperationStage(1);
@@ -565,10 +604,12 @@ export function CpEditor({ fitRef }: Props) {
         }}
         onPointerLeave={() => {
           // 捕捉中はleaveが飛ばないため、ここに来るのはドラッグしていない時だけ
-          stateRef.current.hoverSnap = null;
-          stateRef.current.directionSnap = null;
-          stateRef.current.cursorWorld = null;
-          stateRef.current.hoverViolation = null;
+          if (!stateRef.current.keyboardCursorActive) {
+            stateRef.current.hoverSnap = null;
+            stateRef.current.directionSnap = null;
+            stateRef.current.cursorWorld = null;
+            stateRef.current.hoverViolation = null;
+          }
           draw();
         }}
         onPointerCancel={() => {

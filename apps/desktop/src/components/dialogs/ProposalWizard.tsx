@@ -3,6 +3,7 @@
 // 常設4区画には何も足さない(入口は上部ツールバーのボタン1つだけ)。
 // 「角」「木構造」「円充填」などの専門用語は画面に出さない(設計原則3b)。
 
+import { useLayoutEffect, useRef, type RefObject } from "react";
 import { useAppStore } from "../../store/appStore";
 import {
   LENGTH_RANGE,
@@ -39,11 +40,14 @@ import {
   proposalLeafPositionStates,
   type ProposalLeafPositionState,
 } from "../../lib/proposalPosition";
+import { ModalDialog, type FocusTarget } from "./ModalDialog";
 
 const PROPOSAL_FALLBACK_PAPER = { width_mm: 150, height_mm: 150 };
 
+type ProposalInitialFocusRef = RefObject<FocusTarget | null>;
+
 const INTERNAL_PROPOSAL_WORDS =
-  /骨格|充填|ソルバー|ヤコビアン|hard|soft|warm[\s-]+start|イテレーション|内部エラー|節点|木|根|深さ|円の中心|角|ID/iu;
+  /job|探索|骨格|充填|ソルバー|ヤコビアン|hard|soft|warm[\s-]+start|イテレーション|内部エラー|節点|木|根|深さ|円の中心|角|ID/iu;
 const INTERNAL_MESSAGE_SHAPE = /[A-Za-z_{}[\]=]|\d/iu;
 
 type ProposalMessageKind =
@@ -200,7 +204,11 @@ function foldPlanStepsLabel(
 }
 
 /** 1画面目: 出っぱりの数と長さ・太さを決める */
-function SkeletonStep() {
+function SkeletonStep({
+  initialFocusRef,
+}: {
+  initialFocusRef: ProposalInitialFocusRef;
+}) {
   const skeleton = useAppStore((s) => s.proposalSkeleton);
   const setSkeleton = useAppStore((s) => s.setProposalSkeleton);
   const setTipPosition = useAppStore((s) => s.setProposalTipPosition);
@@ -275,7 +283,7 @@ function SkeletonStep() {
           >
             <strong>胴</strong>
           </div>
-          {rows.map(({ node, depth, label }) => {
+          {rows.map(({ node, depth, label }, rowIndex) => {
             const parts = pathParts.get(node.id) ?? [label];
             const pathLabel = parts.join("の");
             // 48px以降は横幅を狭めず、祖先の並びを折り返して親子関係を示す。
@@ -345,6 +353,13 @@ function SkeletonStep() {
                   >
                     長さ
                     <input
+                      ref={
+                        rowIndex === 0
+                          ? (element) => {
+                              initialFocusRef.current = element;
+                            }
+                          : undefined
+                      }
                       type="range"
                       aria-label={`${pathLabel}の長さ`}
                       min={LENGTH_RANGE.min}
@@ -472,7 +487,11 @@ function SkeletonStep() {
 }
 
 /** 2画面目: 置き方の違う候補(最大4件)から1つ選ぶ(PRO-005) */
-function CandidateStep() {
+function CandidateStep({
+  initialFocusRef,
+}: {
+  initialFocusRef: ProposalInitialFocusRef;
+}) {
   const candidates = useAppStore((s) => s.proposalCandidates);
   const selected = useAppStore((s) => s.proposalSelected);
   const skeleton = useAppStore((s) => s.proposalSkeleton);
@@ -503,6 +522,13 @@ function CandidateStep() {
       <div className="candidate-grid">
         {candidates.map((c, i) => (
           <button
+            ref={
+              i === (selected ?? 0)
+                ? (element) => {
+                    initialFocusRef.current = element;
+                  }
+                : undefined
+            }
             type="button"
             key={i}
             className={i === selected ? "candidate selected" : "candidate"}
@@ -563,7 +589,11 @@ function CandidateStep() {
 }
 
 /** 選んだ候補だけを大きく出し、紙の上の場所を直接動かす任意画面(作業12) */
-function PaperPositionStep() {
+function PaperPositionStep({
+  initialFocusRef,
+}: {
+  initialFocusRef: ProposalInitialFocusRef;
+}) {
   const source = useAppStore((s) => s.proposalPaperSource);
   const candidate = useAppStore((s) =>
     s.proposalPaperSource === null
@@ -581,11 +611,37 @@ function PaperPositionStep() {
   const setStep = useAppStore((s) => s.setProposalStep);
   const busy = useAppStore((s) => s.proposalBusy);
   const error = useAppStore((s) => s.proposalError);
+  const stepRef = useRef<HTMLDivElement>(null);
+  const backButtonRef = useRef<HTMLButtonElement>(null);
+
+  useLayoutEffect(() => {
+    const stepElement = stepRef.current;
+    const backButton = backButtonRef.current;
+    const firstHandle =
+      stepElement?.querySelector<FocusTarget>(
+        '[data-paper-position-handle][tabindex="0"]:not([aria-disabled="true"])',
+      ) ?? null;
+    initialFocusRef.current = firstHandle ?? backButton;
+
+    return () => {
+      const current = initialFocusRef.current;
+      if (
+        current &&
+        (stepElement?.contains(current) || current === backButton)
+      ) {
+        initialFocusRef.current = null;
+      }
+    };
+  });
 
   if (!candidate || source === null) {
     return (
-      <div className="button-row">
-        <button type="button" onClick={() => setStep("candidates")}>
+      <div ref={stepRef} className="button-row">
+        <button
+          ref={backButtonRef}
+          type="button"
+          onClick={() => setStep("candidates")}
+        >
           候補へ戻る
         </button>
       </div>
@@ -613,7 +669,7 @@ function PaperPositionStep() {
   );
 
   return (
-    <div className="paper-position-step">
+    <div ref={stepRef} className="paper-position-step">
       <div className="paper-position-sidebar">
         <h2 id="proposal-title">紙の上の場所を調整</h2>
         <ProposalPositionHistoryButtons />
@@ -648,6 +704,7 @@ function PaperPositionStep() {
       </div>
       <div className="button-row paper-position-actions">
         <button
+          ref={backButtonRef}
           type="button"
           disabled={busy}
           onClick={() => setStep("candidates")}
@@ -675,7 +732,11 @@ function PaperPositionStep() {
 }
 
 /** 3画面目: 選んだ候補を確かめて、今の作品の展開図として使う(PRO-003) */
-function ConfirmStep() {
+function ConfirmStep({
+  initialFocusRef,
+}: {
+  initialFocusRef: ProposalInitialFocusRef;
+}) {
   const candidate = useAppStore((s) =>
     s.proposalSelected === null
       ? null
@@ -729,7 +790,13 @@ function ConfirmStep() {
         </div>
       </div>
       <div className="button-row">
-        <button type="button" onClick={() => setStep("candidates")}>
+        <button
+          ref={(element) => {
+            initialFocusRef.current = element;
+          }}
+          type="button"
+          onClick={() => setStep("candidates")}
+        >
           選び直す
         </button>
         <button
@@ -754,88 +821,138 @@ function ConfirmStep() {
 function ProposalProgressBar() {
   const busy = useAppStore((s) => s.proposalBusy);
   const progress = useAppStore((s) => s.proposalProgress);
+  const warning = useAppStore((s) => s.proposalProgressWarning);
   if (!busy) return null;
   const total = progress?.total ?? 0;
   const done = Math.min(progress?.done ?? 0, total);
   const percent = total > 0 ? Math.round((done / total) * 100) : 0;
   return (
-    <div
-      data-proposal-progress
-      role="status"
-      aria-live="polite"
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "0.6rem",
-        margin: "0.4rem 0",
-        padding: "0.5rem 0.7rem",
-        border: "1px solid var(--color-border-strong, #9f93b8)",
-        borderRadius: "0.5rem",
-      }}
-    >
-      <span>折り方を考えています…</span>
-      <span
-        aria-hidden="true"
+    <>
+      <div
+        data-proposal-progress
+        role="status"
+        aria-live="polite"
         style={{
-          flex: "1 1 8rem",
-          height: "0.6rem",
-          borderRadius: "0.3rem",
-          overflow: "hidden",
-          background: "var(--color-bg, #f5f2ff)",
+          display: "flex",
+          alignItems: "center",
+          gap: "0.6rem",
+          margin: "0.4rem 0",
+          padding: "0.5rem 0.7rem",
           border: "1px solid var(--color-border-strong, #9f93b8)",
+          borderRadius: "0.5rem",
         }}
       >
+        <span>折り方を考えています…</span>
         <span
-          data-proposal-progress-fill={percent}
+          aria-hidden="true"
           style={{
-            display: "block",
-            width: `${percent}%`,
-            height: "100%",
-            background: "var(--color-accent, #007a70)",
+            flex: "1 1 8rem",
+            height: "0.6rem",
+            borderRadius: "0.3rem",
+            overflow: "hidden",
+            background: "var(--color-bg, #f5f2ff)",
+            border: "1px solid var(--color-border-strong, #9f93b8)",
           }}
-        />
-      </span>
-      <span data-proposal-progress-count>
-        {total > 0 ? `${done}/${total} 件` : "準備中"}
-      </span>
-    </div>
+        >
+          <span
+            data-proposal-progress-fill={percent}
+            style={{
+              display: "block",
+              width: `${percent}%`,
+              height: "100%",
+              background: "var(--color-accent, #007a70)",
+            }}
+          />
+        </span>
+        <span data-proposal-progress-count>
+          {total > 0 ? `${total}件中${done}件め` : "準備中"}
+        </span>
+      </div>
+      {warning && (
+        <p className="warning-text" data-proposal-progress-warning role="status">
+          {warning}
+        </p>
+      )}
+    </>
   );
 }
 
 export function ProposalWizard() {
   const step = useAppStore((s) => s.proposalStep);
+  const busy = useAppStore((s) => s.proposalBusy);
+  const close = useAppStore((s) => s.closeProposal);
+  const initialFocusRef = useRef<FocusTarget>(null);
+  const previousBusyRef = useRef(busy);
+
+  useLayoutEffect(() => {
+    const wasBusy = previousBusyRef.current;
+    previousBusyRef.current = busy;
+    if (wasBusy || !busy || step === null) return;
+
+    const dialog = document.querySelector<HTMLElement>(
+      '[data-floating-ui="proposal-dialog"]',
+    );
+    const active = document.activeElement;
+    if (!dialog || !(active instanceof Element) || !dialog.contains(active)) {
+      return;
+    }
+    if (active === dialog) return;
+
+    const becameUnavailable =
+      active.getAttribute("aria-disabled") === "true" ||
+      ("disabled" in active &&
+        (active as { disabled?: boolean }).disabled === true) ||
+      ("tabIndex" in active &&
+        typeof (active as { tabIndex?: unknown }).tabIndex === "number" &&
+        (active as { tabIndex: number }).tabIndex < 0);
+    if (!becameUnavailable) return;
+
+    try {
+      dialog.focus({ preventScroll: true });
+    } catch {
+      dialog.focus();
+    }
+  }, [busy, step]);
+
   if (step === null) return null;
   const title =
     step === "paper-position"
       ? "紙の上の場所を調整"
       : "形を決めて展開図を作ってもらう";
   return (
-    <div className="dialog-backdrop">
-      <div
-        className="dialog dialog-wide"
-        data-floating-ui="proposal-dialog"
-        data-proposal-step={step}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="proposal-title"
-        style={{
-          width: `calc(100vw - ${PROPOSAL_DIALOG_VIEWPORT_GUTTER_PX}px)`,
-          maxWidth: `${
-            step === "paper-position"
-              ? PROPOSAL_PAPER_DIALOG_MAX_WIDTH_PX
-              : PROPOSAL_DIALOG_MAX_WIDTH_PX
-          }px`,
-          boxSizing: "border-box",
-        }}
-      >
-        {step !== "paper-position" && <h2 id="proposal-title">{title}</h2>}
-        {step !== "paper-position" && <ProposalPositionHistoryButtons />}
-        <ProposalProgressBar />
-        {step === "skeleton" && <SkeletonStep />}
-        {step === "candidates" && <CandidateStep />}
-        {step === "paper-position" && <PaperPositionStep />}
-        {step === "confirm" && <ConfirmStep />}
-      </div>
-    </div>
+    <ModalDialog
+      labelledBy="proposal-title"
+      initialFocusRef={initialFocusRef}
+      initialFocusKey={step}
+      escapeAction={busy ? { kind: "stay" } : { kind: "dismiss", run: close }}
+      className="dialog-wide"
+      data-floating-ui="proposal-dialog"
+      data-proposal-step={step}
+      style={{
+        width: `calc(100vw - ${PROPOSAL_DIALOG_VIEWPORT_GUTTER_PX}px)`,
+        maxWidth: `${
+          step === "paper-position"
+            ? PROPOSAL_PAPER_DIALOG_MAX_WIDTH_PX
+            : PROPOSAL_DIALOG_MAX_WIDTH_PX
+        }px`,
+        boxSizing: "border-box",
+      }}
+    >
+      {step !== "paper-position" && <h2 id="proposal-title">{title}</h2>}
+      {step !== "paper-position" && <ProposalPositionHistoryButtons />}
+      <ProposalProgressBar />
+      {step === "skeleton" && (
+        <SkeletonStep initialFocusRef={initialFocusRef} />
+      )}
+      {step === "candidates" && (
+        <CandidateStep initialFocusRef={initialFocusRef} />
+      )}
+      {step === "paper-position" && (
+        <PaperPositionStep initialFocusRef={initialFocusRef} />
+      )}
+      {step === "confirm" && (
+        <ConfirmStep initialFocusRef={initialFocusRef} />
+      )}
+    </ModalDialog>
   );
 }

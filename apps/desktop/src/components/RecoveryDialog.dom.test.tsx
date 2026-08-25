@@ -3,8 +3,9 @@
 // 残っていないときは何も出さない、あれば文言と2つのボタンを出し、押すと答えが渡る。
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { RecoveryDialog, fileName, formatSavedAt } from "./RecoveryDialog";
+import { focusableElements } from "./dialogs/ModalDialog";
 import { useAppStore } from "../store/appStore";
 
 const INFO = {
@@ -20,8 +21,8 @@ afterEach(() => {
 
 describe("復旧ダイアログ", () => {
   it("前回が正常終了なら何も出さない", () => {
-    const { container } = render(<RecoveryDialog />);
-    expect(container.firstChild).toBeNull();
+    render(<RecoveryDialog />);
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("残っていれば理由と選択肢を日本語で出す", () => {
@@ -53,5 +54,90 @@ describe("復旧ダイアログ", () => {
     expect(formatSavedAt(INFO.saved_at_ms)).toContain("2026");
     expect(fileName("C:\\作品\\鶴.ori3")).toBe("鶴.ori3");
     expect(fileName("/home/作品/鶴.ori3")).toBe("鶴.ori3");
+  });
+
+  it("復元を最初に選び、2ボタンだけを循環し、Escapeでは判断しない", () => {
+    const resolveRecovery = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ recovery: INFO, resolveRecovery });
+    const { container } = render(<RecoveryDialog />);
+
+    const restore = screen.getByRole("button", { name: "復元する" });
+    const discard = screen.getByRole("button", { name: "破棄する" });
+    const dialog = screen.getByRole("dialog");
+    expect(document.activeElement).toBe(restore);
+    expect(focusableElements(dialog)).toEqual([restore, discard]);
+    expect(container.hasAttribute("inert")).toBe(true);
+
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      discard.focus();
+      fireEvent.keyDown(discard, { key: "Tab" });
+      expect(document.activeElement).toBe(restore);
+
+      restore.focus();
+      fireEvent.keyDown(restore, { key: "Tab", shiftKey: true });
+      expect(document.activeElement).toBe(discard);
+
+      fireEvent.keyDown(discard, { key: "Escape" });
+    }
+
+    expect(resolveRecovery).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).not.toBeNull();
+  });
+
+  it.each([
+    ["復元する", true],
+    ["破棄する", false],
+  ] as const)("キーボードで「%s」を決めた後は元の操作へ戻る", async (label, answer) => {
+    const resolveRecovery = vi.fn(async () => {
+      useAppStore.setState({ recovery: null });
+    });
+    render(
+      <>
+        <button type="button">作業へ戻る</button>
+        <RecoveryDialog />
+      </>,
+    );
+    const returnTarget = screen.getByRole("button", { name: "作業へ戻る" });
+    returnTarget.focus();
+    act(() => useAppStore.setState({ recovery: INFO, resolveRecovery }));
+
+    const restore = screen.getByRole("button", { name: "復元する" });
+    const action = screen.getByRole("button", { name: label });
+    expect(document.activeElement).toBe(restore);
+    if (action !== restore) {
+      const tab = new KeyboardEvent("keydown", {
+        key: "Tab",
+        bubbles: true,
+        cancelable: true,
+      });
+      fireEvent(restore, tab);
+      if (!tab.defaultPrevented) action.focus();
+    }
+    expect(document.activeElement).toBe(action);
+
+    const pointerDown = vi.fn();
+    const mouseDown = vi.fn();
+    const layer = screen.getByRole("dialog").parentElement;
+    layer?.addEventListener("pointerdown", pointerDown);
+    layer?.addEventListener("mousedown", mouseDown);
+    expect(action).toBeInstanceOf(HTMLButtonElement);
+    const enter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    fireEvent(action, enter);
+    expect(enter.defaultPrevented).toBe(false);
+    // jsdomはbuttonのEnter既定動作を作らないため、ブラウザが発生させるclickだけを代行する。
+    if (!enter.defaultPrevented) act(() => (action as HTMLButtonElement).click());
+    fireEvent.keyUp(action, { key: "Enter" });
+
+    expect(resolveRecovery).toHaveBeenCalledWith(answer);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(returnTarget),
+    );
+    expect(pointerDown).toHaveBeenCalledTimes(0);
+    expect(mouseDown).toHaveBeenCalledTimes(0);
   });
 });

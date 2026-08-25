@@ -8,12 +8,15 @@ import {
   deriveAxisPositionBar,
   deriveViewportPositionBars,
   drawGrid,
+  drawKeyboardCursor,
   drawPinnedMarks,
   fitView,
   gridDrawStride,
   PIN_MARK_RADIUS,
   PIN_MARK_RELEASED_DASH,
+  render as renderCp,
   worldToScreen,
+  type RenderOverlay,
   type ViewTransform,
 } from "./renderer";
 
@@ -207,6 +210,120 @@ function markContext() {
   } as unknown as CanvasRenderingContext2D & { strokeStyle: string };
   return { ctx, arcs, fills };
 }
+
+describe("キーボードで指している現在位置", () => {
+  it("正しい画面座標へ白い縁と青い輪・十字を重ねて描く", () => {
+    const strokes: { style: string; width: number }[] = [];
+    const arc = vi.fn();
+    const moveTo = vi.fn();
+    const lineTo = vi.fn();
+    const rawContext = {
+      save: vi.fn(),
+      restore: vi.fn(),
+      setLineDash: vi.fn(),
+      beginPath: vi.fn(),
+      arc,
+      moveTo,
+      lineTo,
+      stroke: vi.fn(),
+      strokeStyle: "",
+      lineWidth: 0,
+    };
+    rawContext.stroke.mockImplementation(() =>
+      strokes.push({ style: rawContext.strokeStyle, width: rawContext.lineWidth }),
+    );
+    const ctx = rawContext as unknown as CanvasRenderingContext2D;
+    const view: ViewTransform = { scale: 200, offsetX: 10, offsetY: 210 };
+    const cursor: Vec2 = [0.25, 0.75];
+    const [sx, sy] = worldToScreen(view, cursor);
+
+    drawKeyboardCursor(ctx, view, cursor);
+
+    expect(arc).toHaveBeenCalledWith(sx, sy, 8, 0, Math.PI * 2);
+    expect(moveTo.mock.calls).toEqual([
+      [sx - 13, sy],
+      [sx, sy - 13],
+    ]);
+    expect(lineTo.mock.calls).toEqual([
+      [sx + 13, sy],
+      [sx, sy + 13],
+    ]);
+    expect(strokes).toEqual([
+      { style: COLORS.keyboardCursorHalo, width: 5 },
+      { style: COLORS.keyboardCursor, width: 2 },
+    ]);
+    expect(rawContext.save).toHaveBeenCalledTimes(1);
+    expect(rawContext.restore).toHaveBeenCalledTimes(1);
+  });
+
+  it("吸着中は青い現在位置を先に描き、その上へ緑の吸着輪を描く", () => {
+    const strokeStyles: string[] = [];
+    const rawContext = {
+      canvas: {} as HTMLCanvasElement,
+      arc: vi.fn(),
+      beginPath: vi.fn(),
+      fill: vi.fn(),
+      fillRect: vi.fn(),
+      fillText: vi.fn(),
+      lineTo: vi.fn(),
+      measureText: vi.fn(() => ({ width: 0 }) as TextMetrics),
+      moveTo: vi.fn(),
+      restore: vi.fn(),
+      save: vi.fn(),
+      setLineDash: vi.fn(),
+      setTransform: vi.fn(),
+      stroke: vi.fn(),
+      strokeRect: vi.fn(),
+      fillStyle: "",
+      font: "",
+      lineWidth: 0,
+      shadowBlur: 0,
+      shadowColor: "",
+      strokeStyle: "",
+      textBaseline: "alphabetic" as CanvasTextBaseline,
+    };
+    rawContext.stroke.mockImplementation(() => strokeStyles.push(rawContext.strokeStyle));
+    const ctx = rawContext as unknown as CanvasRenderingContext2D;
+    const doc = paperDoc();
+    const overlay: RenderOverlay = {
+      hoverSnap: { pos: [0.5, 0.5], kind: "grid" },
+      preview: null,
+      keyboardCursor: [0.5, 0.5],
+      directionGuide: null,
+      mirrorAxis: null,
+      mirrorPreview: null,
+      previewPaths: [],
+      marquee: null,
+      violations: [],
+      constructPoints: [],
+      hint: null,
+      tooltip: null,
+      vertexDrag: null,
+    };
+
+    renderCp(
+      ctx,
+      400,
+      400,
+      1,
+      doc,
+      fitView(doc, 400, 400),
+      { edgeIds: [], vertexIds: [] },
+      overlay,
+    );
+
+    const cursorStyles = new Set<string>([
+      COLORS.keyboardCursorHalo,
+      COLORS.keyboardCursor,
+      COLORS.snapMarker,
+    ]);
+    expect(strokeStyles.filter((style) => cursorStyles.has(style))).toEqual([
+      COLORS.keyboardCursorHalo,
+      COLORS.keyboardCursor,
+      COLORS.snapMarker,
+    ]);
+  });
+});
 
 /** 紙の中央を横切る折り線を1本足した展開図(辺ID 4)。 */
 function docWithCrease(): Document {

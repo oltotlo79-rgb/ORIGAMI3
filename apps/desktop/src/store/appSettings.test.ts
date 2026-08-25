@@ -26,6 +26,7 @@ vi.mock("../ipc/client", () => ({
   recoveryRestore: vi.fn(),
   proposalGenerate: vi.fn(),
   proposalProgress: vi.fn(),
+  proposalControl: vi.fn(),
 }));
 
 import * as ipc from "../ipc/client";
@@ -833,92 +834,455 @@ describe("D13: 作図で作った線も左右対称に引く", () => {
 });
 
 describe("手順の並べ替え", () => {
-  async function moveWhileUpdateIsPending(
-    delayMs: number,
-    patch: Partial<Pick<FoldStep, "note" | "kind">>,
-  ): Promise<FoldStep[]> {
+  beforeEach(() => {
+    vi.mocked(ipc.sequenceApply).mockReset();
+    vi.mocked(ipc.editUndo).mockReset();
+    vi.mocked(ipc.editRedo).mockReset();
+    vi.mocked(ipc.sequenceReplay).mockReset().mockResolvedValue({
+      frame: { faces: [], warnings: [] },
+      skipped: [],
+      warnings: [],
+    });
+    useAppStore.setState({
+      doc: null,
+      currentStep: null,
+      errorMessage: null,
+      faces: [],
+      angleUndoStack: [],
+      angleRedoStack: [],
+      docUndoDepth: 0,
+    });
+  });
+
+  it.each([
+    ["後ろから前", 3, -1, { type: "MoveStep", id: 3, to_index: 1 }, [1, 3, 2]],
+    ["前から後ろ", 2, 1, { type: "MoveStep", id: 2, to_index: 2 }, [1, 3, 2]],
+  ] as const)(
+    "%sへ動かす1ジェスチャーはMoveStep・履歴各1件で、Undo/Redo各1回で往復する",
+    async (_direction, number, delta, expectedOperation, expectedIds) => {
+      const initial = makeDoc([step(1), step(2), step(3)]);
+      let backend = structuredClone(initial);
+      const undoStack: Document[] = [];
+      const redoStack: Document[] = [];
+      useAppStore.setState({ doc: structuredClone(backend) });
+
+      vi.mocked(ipc.sequenceApply).mockImplementation(async (operation) => {
+        if (operation.type !== "MoveStep") {
+          throw new Error(`MoveStep以外を送信した: ${operation.type}`);
+        }
+        const sequence = [...backend.sequence];
+        const from = sequence.findIndex((candidate) => candidate.id === operation.id);
+        if (from < 0) throw new Error("対象IDが見つからない");
+        undoStack.push(structuredClone(backend));
+        redoStack.length = 0;
+        const [moved] = sequence.splice(from, 1);
+        sequence.splice(operation.to_index, 0, moved);
+        backend = { ...backend, sequence };
+        return makeView(structuredClone(backend));
+      });
+      vi.mocked(ipc.editUndo).mockImplementation(async () => {
+        const previous = undoStack.pop();
+        if (!previous) throw new Error("戻す履歴がない");
+        redoStack.push(structuredClone(backend));
+        backend = previous;
+        return makeView(structuredClone(backend));
+      });
+      vi.mocked(ipc.editRedo).mockImplementation(async () => {
+        const next = redoStack.pop();
+        if (!next) throw new Error("やり直す履歴がない");
+        undoStack.push(structuredClone(backend));
+        backend = next;
+        return makeView(structuredClone(backend));
+      });
+
+      await useAppStore.getState().moveStep(number, delta);
+
+      expect(ipc.sequenceApply).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(ipc.sequenceApply).mock.calls[0][0]).toEqual(
+        expectedOperation,
+      );
+      expect(undoStack).toHaveLength(1);
+      expect(redoStack).toHaveLength(0);
+      expect(useAppStore.getState().doc?.sequence.map((item) => item.id)).toEqual(
+        expectedIds,
+      );
+
+      await useAppStore.getState().undo();
+      expect(ipc.editUndo).toHaveBeenCalledTimes(1);
+      expect(undoStack).toHaveLength(0);
+      expect(redoStack).toHaveLength(1);
+      expect(useAppStore.getState().doc?.sequence.map((item) => item.id)).toEqual([
+        1, 2, 3,
+      ]);
+
+      await useAppStore.getState().redo();
+      expect(ipc.editRedo).toHaveBeenCalledTimes(1);
+      expect(undoStack).toHaveLength(1);
+      expect(redoStack).toHaveLength(0);
+      expect(useAppStore.getState().doc?.sequence.map((item) => item.id)).toEqual(
+        expectedIds,
+      );
+    },
+  );
+
+  it.each([0, 1, 100])(
+    "D08: pending UpdateStepを待ち、%dms後も最新ID・位置・内容からMoveStepを1回だけ作る",
+    async (delayMs) => {
+      let backend = makeDoc([step(1), step(2), step(3), step(4)]);
+      let releaseUpdate!: () => void;
+      const updateGate = new Promise<void>((resolve) => {
+        releaseUpdate = resolve;
+      });
+      vi.mocked(ipc.sequenceApply).mockImplementation(async (operation) => {
+        if (operation.type === "UpdateStep") {
+          await updateGate;
+          const updated = structuredClone(operation.step);
+          // 応答時点では対象ID 2がindex 0へ動いている。古いindex 1ではなく、
+          // 最新IDを再検索したindex 0からto_index=1を作る契約を固定する。
+          backend = { ...backend, sequence: [updated, step(1), step(3), step(4)] };
+        } else if (operation.type === "MoveStep") {
+          const sequence = [...backend.sequence];
+          const from = sequence.findIndex(
+            (candidate) => candidate.id === operation.id,
+          );
+          const [moved] = sequence.splice(from, 1);
+          sequence.splice(operation.to_index, 0, moved);
+          backend = { ...backend, sequence };
+        } else {
+          throw new Error(`想定外の操作: ${operation.type}`);
+        }
+        return makeView(structuredClone(backend));
+      });
+      useAppStore.setState({ doc: structuredClone(backend) });
+
+      const changed = {
+        ...step(2),
+        note: "書き直した覚え書き",
+        kind: "InsideReverse" as const,
+      };
+      const update = useAppStore
+        .getState()
+        .applySequenceOp({ type: "UpdateStep", step: changed });
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      const move = useAppStore.getState().moveStep(2, 1);
+      releaseUpdate();
+      await Promise.all([update, move]);
+
+      const calls = vi.mocked(ipc.sequenceApply).mock.calls.map(([op]) => op);
+      expect(calls).toHaveLength(2);
+      expect(calls[0]).toEqual({ type: "UpdateStep", step: changed });
+      expect(calls[1]).toEqual({ type: "MoveStep", id: 2, to_index: 1 });
+      expect(calls.filter((operation) => operation.type === "MoveStep")).toHaveLength(
+        1,
+      );
+      const sequence = useAppStore.getState().doc?.sequence ?? [];
+      expect(sequence.map((item) => item.id)).toEqual([1, 2, 3, 4]);
+      expect(sequence[1].note).toBe("書き直した覚え書き");
+      expect(sequence[1].kind).toBe("InsideReverse");
+    },
+  );
+
+  it("pending待機中に後発更新が始まっても、その更新後のID位置まで追いかける", async () => {
+    let backend = makeDoc([step(1), step(2), step(3), step(4)]);
+    let releaseFirstUpdate!: () => void;
+    const firstUpdateGate = new Promise<void>((resolve) => {
+      releaseFirstUpdate = resolve;
+    });
+    vi.mocked(ipc.sequenceApply).mockImplementation(async (operation) => {
+      if (operation.type === "UpdateStep" && operation.step.id === 4) {
+        await firstUpdateGate;
+        backend = {
+          ...backend,
+          sequence: backend.sequence.map((item) =>
+            item.id === 4 ? structuredClone(operation.step) : item,
+          ),
+        };
+      } else if (operation.type === "UpdateStep" && operation.step.id === 2) {
+        // moveStepが最初の更新を待っている間に、この後発更新をFIFOへ積み、
+        // 対象ID 2をindex 0へ動かす。
+        const updated = structuredClone(operation.step);
+        backend = {
+          ...backend,
+          sequence: [
+            updated,
+            backend.sequence.find((item) => item.id === 1)!,
+            backend.sequence.find((item) => item.id === 3)!,
+            backend.sequence.find((item) => item.id === 4)!,
+          ],
+        };
+      } else if (operation.type === "MoveStep") {
+        const sequence = [...backend.sequence];
+        const from = sequence.findIndex((item) => item.id === operation.id);
+        const [moved] = sequence.splice(from, 1);
+        sequence.splice(operation.to_index, 0, moved);
+        backend = { ...backend, sequence };
+      } else {
+        throw new Error(`想定外の操作: ${operation.type}`);
+      }
+      return makeView(structuredClone(backend));
+    });
+    useAppStore.setState({ doc: structuredClone(backend) });
+
+    const firstUpdate = useAppStore
+      .getState()
+      .applySequenceOp({ type: "UpdateStep", step: { ...step(4), note: "先発" } });
+    const move = useAppStore.getState().moveStep(2, 1);
+    const laterUpdate = useAppStore
+      .getState()
+      .applySequenceOp({ type: "UpdateStep", step: { ...step(2), note: "後発" } });
+    releaseFirstUpdate();
+    await Promise.all([firstUpdate, move, laterUpdate]);
+
+    const calls = vi.mocked(ipc.sequenceApply).mock.calls.map(([op]) => op);
+    expect(calls.map((operation) => operation.type)).toEqual([
+      "UpdateStep",
+      "UpdateStep",
+      "MoveStep",
+    ]);
+    expect(calls[2]).toEqual({ type: "MoveStep", id: 2, to_index: 1 });
+    expect(useAppStore.getState().doc?.sequence.map((item) => item.id)).toEqual([
+      1, 2, 3, 4,
+    ]);
+    expect(useAppStore.getState().doc?.sequence[1].note).toBe("後発");
+  });
+
+  it("pending応答で初期の画面端から内側へ移ったIDは、最新位置から合法に動かす", async () => {
     let backend = makeDoc([step(1), step(2), step(3)]);
     let releaseUpdate!: () => void;
     const updateGate = new Promise<void>((resolve) => {
       releaseUpdate = resolve;
     });
-    vi.mocked(ipc.sequenceApply).mockImplementation(async (op) => {
-      if (op.type === "UpdateStep") {
+    vi.mocked(ipc.sequenceApply).mockImplementation(async (operation) => {
+      if (operation.type === "UpdateStep") {
         await updateGate;
-        backend = {
-          ...backend,
-          sequence: backend.sequence.map((item) =>
-            item.id === op.step.id ? structuredClone(op.step) : item,
-          ),
-        };
-      } else if (op.type === "RemoveStep") {
-        backend = {
-          ...backend,
-          sequence: backend.sequence.filter((item) => item.id !== op.id),
-        };
-      } else if (op.type === "InsertStep") {
+        backend = { ...backend, sequence: [step(2), operation.step, step(3)] };
+      } else if (operation.type === "MoveStep") {
         const sequence = [...backend.sequence];
-        sequence.splice(op.index, 0, structuredClone(op.step));
+        const from = sequence.findIndex((candidate) => candidate.id === operation.id);
+        const [moved] = sequence.splice(from, 1);
+        sequence.splice(operation.to_index, 0, moved);
         backend = { ...backend, sequence };
       }
       return makeView(structuredClone(backend));
     });
-    vi.mocked(ipc.sequenceReplay).mockResolvedValue({
-      frame: { faces: [], warnings: [] },
-      skipped: [],
-      warnings: [],
-    });
     useAppStore.setState({ doc: structuredClone(backend) });
 
-    const changed = { ...step(3), ...patch };
+    const changed = { ...step(1), note: "最新の先頭手順" };
     const update = useAppStore
       .getState()
       .applySequenceOp({ type: "UpdateStep", step: changed });
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    const move = useAppStore.getState().moveStep(1, -1);
+    releaseUpdate();
+    await Promise.all([update, move]);
+
+    const calls = vi.mocked(ipc.sequenceApply).mock.calls.map(([op]) => op);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toEqual({ type: "MoveStep", id: 1, to_index: 0 });
+    expect(useAppStore.getState().doc?.sequence.map((item) => item.id)).toEqual([
+      1, 2, 3,
+    ]);
+    expect(useAppStore.getState().doc?.sequence[0].note).toBe("最新の先頭手順");
+  });
+
+  it("pending応答で対象IDが消えたらMoveStepを送らない", async () => {
+    let backend = makeDoc([step(1), step(2), step(3)]);
+    let releaseUpdate!: () => void;
+    const updateGate = new Promise<void>((resolve) => {
+      releaseUpdate = resolve;
+    });
+    vi.mocked(ipc.sequenceApply).mockImplementation(async (operation) => {
+      if (operation.type !== "UpdateStep") {
+        throw new Error(`消えたIDへ送信した: ${operation.type}`);
+      }
+      await updateGate;
+      backend = { ...backend, sequence: [step(1), step(2)] };
+      return makeView(structuredClone(backend));
+    });
+    useAppStore.setState({ doc: structuredClone(backend) });
+
+    const update = useAppStore
+      .getState()
+      .applySequenceOp({ type: "UpdateStep", step: step(3) });
     const move = useAppStore.getState().moveStep(3, -1);
     releaseUpdate();
     await Promise.all([update, move]);
-    return useAppStore.getState().doc?.sequence ?? [];
-  }
 
-  it.each([0, 1, 100])(
-    "D08: 覚え書きの確定から%dms後に前へ動かしても新しい内容を保つ",
-    async (delayMs) => {
-      const sequence = await moveWhileUpdateIsPending(delayMs, { note: "書き直した覚え書き" });
-      expect(sequence.map((item) => item.id)).toEqual([1, 3, 2]);
-      expect(sequence[1].note).toBe("書き直した覚え書き");
-    },
-  );
+    expect(ipc.sequenceApply).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(ipc.sequenceApply).mock.calls[0][0].type).toBe("UpdateStep");
+    expect(useAppStore.getState().doc?.sequence.map((item) => item.id)).toEqual([
+      1, 2,
+    ]);
+  });
 
-  it.each([0, 1, 100])(
-    "D08: 折り方の確定から%dms後に前へ動かしても新しい種類を保つ",
-    async (delayMs) => {
-      const sequence = await moveWhileUpdateIsPending(delayMs, { kind: "InsideReverse" });
-      expect(sequence.map((item) => item.id)).toEqual([1, 3, 2]);
-      expect(sequence[1].kind).toBe("InsideReverse");
-    },
-  );
+  it("pending応答後の最新位置で範囲外になったらMoveStepを送らない", async () => {
+    let backend = makeDoc([step(1), step(2), step(3)]);
+    let releaseUpdate!: () => void;
+    const updateGate = new Promise<void>((resolve) => {
+      releaseUpdate = resolve;
+    });
+    vi.mocked(ipc.sequenceApply).mockImplementation(async (operation) => {
+      if (operation.type !== "UpdateStep") {
+        throw new Error(`範囲外の移動を送信した: ${operation.type}`);
+      }
+      await updateGate;
+      backend = { ...backend, sequence: [step(1), step(3), operation.step] };
+      return makeView(structuredClone(backend));
+    });
+    useAppStore.setState({ doc: structuredClone(backend) });
 
-  it("選んだ手順を前へ動かすと、取り除いてから同じ手順を入れ直す", async () => {
-    const doc = makeDoc([step(1), step(2), step(3)]);
-    useAppStore.setState({ doc });
-    vi.mocked(ipc.sequenceApply).mockResolvedValue(makeView(doc));
-    vi.mocked(ipc.sequenceReplay).mockResolvedValue({
-      frame: { faces: [], warnings: [] },
-      skipped: [],
-      warnings: [],
+    const update = useAppStore
+      .getState()
+      .applySequenceOp({ type: "UpdateStep", step: step(2) });
+    const move = useAppStore.getState().moveStep(2, 1);
+    releaseUpdate();
+    await Promise.all([update, move]);
+
+    expect(ipc.sequenceApply).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(ipc.sequenceApply).mock.calls[0][0].type).toBe("UpdateStep");
+    expect(useAppStore.getState().doc?.sequence.map((item) => item.id)).toEqual([
+      1, 3, 2,
+    ]);
+  });
+
+  it("IPC rejectを100回注入しても楽観的削除0件・2回目invoke 0件", async () => {
+    const initial = makeDoc([step(1), step(2), step(3)]);
+    const beforeBytes = JSON.stringify(initial);
+    let optimisticDeletionCount = 0;
+    useAppStore.setState({ doc: structuredClone(initial) });
+
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      let changedWhilePending = false;
+      vi.mocked(ipc.sequenceApply).mockImplementationOnce(async () => {
+        // IPCが未完了のmicrotaskを1回はさみ、その間にも画面側sequenceを
+        // 先に変えていないことを観測してから、この要求を拒否する。
+        await Promise.resolve();
+        changedWhilePending =
+          JSON.stringify(useAppStore.getState().doc) !== beforeBytes;
+        throw new Error(`注入したMoveStep失敗 ${attempt}`);
+      });
+
+      await useAppStore.getState().moveStep(3, -1);
+      if (changedWhilePending) {
+        optimisticDeletionCount += 1;
+      }
+      expect(JSON.stringify(useAppStore.getState().doc)).toBe(beforeBytes);
+      expect(ipc.sequenceApply).toHaveBeenCalledTimes(attempt + 1);
+    }
+
+    const operations = vi.mocked(ipc.sequenceApply).mock.calls.map(([op]) => op);
+    expect(optimisticDeletionCount).toBe(0);
+    expect(ipc.sequenceApply).toHaveBeenCalledTimes(100);
+    expect(operations).toHaveLength(100);
+    expect(operations.every((operation) => operation.type === "MoveStep")).toBe(
+      true,
+    );
+    expect(
+      operations.filter(
+        (operation) =>
+          operation.type === "RemoveStep" || operation.type === "InsertStep",
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("MoveStep拒否後に別要求が続いても、拒否した移動の選択位置へ進めない", async () => {
+    const initial = makeDoc([step(1), step(2), step(3)]);
+    let backend = structuredClone(initial);
+    let rejectMove!: (reason: unknown) => void;
+    let markMoveStarted!: () => void;
+    const moveStarted = new Promise<void>((resolve) => {
+      markMoveStarted = resolve;
+    });
+    vi.mocked(ipc.sequenceApply).mockImplementation(async (operation) => {
+      if (operation.type === "MoveStep") {
+        markMoveStarted();
+        return new Promise((_resolve, reject) => {
+          rejectMove = reject;
+        });
+      }
+      if (operation.type === "UpdateStep") {
+        backend = {
+          ...backend,
+          sequence: backend.sequence.map((item) =>
+            item.id === operation.step.id
+              ? structuredClone(operation.step)
+              : item,
+          ),
+        };
+        return makeView(structuredClone(backend));
+      }
+      throw new Error(`想定外の操作: ${operation.type}`);
+    });
+    useAppStore.setState({
+      doc: structuredClone(initial),
+      currentStep: 3,
+      angleUndoStack: [
+        { drivers: new Map([[5, 30]]), pinned: new Map() },
+      ],
     });
 
-    await useAppStore.getState().moveStep(3, -1);
+    const move = useAppStore.getState().moveStep(3, -1);
+    await moveStarted;
+    const update = useAppStore
+      .getState()
+      .applySequenceOp({ type: "UpdateStep", step: { ...step(1), note: "後続" } });
+    rejectMove(new Error("注入した競合MoveStep失敗"));
+    await Promise.all([move, update]);
+
+    expect(ipc.sequenceApply).toHaveBeenCalledTimes(2);
+    expect(useAppStore.getState().currentStep).toBe(3);
+    expect(useAppStore.getState().doc?.sequence.map((item) => item.id)).toEqual([
+      1, 2, 3,
+    ]);
+    expect(useAppStore.getState().doc?.sequence[0].note).toBe("後続");
+  });
+
+  it("同じ位置への移動はMoveStep 1回で成功し、表示不変・履歴増分0", async () => {
+    const initial = makeDoc([step(1), step(2), step(3)]);
+    const beforeBytes = JSON.stringify(initial);
+    const angleUndoStack = [
+      { drivers: new Map([[7, 30]]), pinned: new Map([[7, 30]]) },
+    ];
+    const angleRedoStack = [
+      { drivers: new Map([[7, 60]]), pinned: new Map([[7, 60]]) },
+    ];
+    useAppStore.setState({
+      doc: structuredClone(initial),
+      currentStep: 2,
+      playing: true,
+      angleUndoStack,
+      angleRedoStack,
+      selection: { edgeIds: [999], vertexIds: [999] },
+    });
+    vi.mocked(ipc.sequenceApply).mockImplementation(async (operation) => {
+      if (
+        operation.type !== "MoveStep" ||
+        operation.id !== 2 ||
+        operation.to_index !== 1
+      ) {
+        throw new Error("同じ位置のMoveStep契約と異なる");
+      }
+      // backendの同一位置契約ではcommitしないため、履歴も積まない。
+      return makeView(structuredClone(initial));
+    });
+
+    await useAppStore.getState().moveStep(2, 0);
+
+    expect(ipc.sequenceApply).toHaveBeenCalledTimes(1);
     expect(vi.mocked(ipc.sequenceApply).mock.calls[0][0]).toEqual({
-      type: "RemoveStep",
-      id: 3,
+      type: "MoveStep",
+      id: 2,
+      to_index: 1,
     });
-    expect(vi.mocked(ipc.sequenceApply).mock.calls[1][0]).toEqual({
-      type: "InsertStep",
-      index: 1,
-      step: step(3),
+    expect(JSON.stringify(useAppStore.getState().doc)).toBe(beforeBytes);
+    expect(useAppStore.getState().currentStep).toBe(2);
+    expect(useAppStore.getState().playing).toBe(true);
+    expect(useAppStore.getState().angleUndoStack).toEqual(angleUndoStack);
+    expect(useAppStore.getState().angleRedoStack).toEqual(angleRedoStack);
+    expect(useAppStore.getState().selection).toEqual({
+      edgeIds: [999],
+      vertexIds: [999],
     });
+    expect(ipc.sequenceReplay).not.toHaveBeenCalled();
   });
 
   it("端の手順はそれ以上動かさない(要求も送らない)", async () => {

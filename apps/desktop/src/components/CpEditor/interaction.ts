@@ -39,6 +39,10 @@ import {
 export const SNAP_RADIUS_PX = 12;
 /** クリック選択の許容距離(px) */
 export const PICK_TOLERANCE_PX = 6;
+/** 矢印キー1回で現在点を動かす画面上の距離(px) */
+export const KEYBOARD_CURSOR_STEP_PX = 16;
+/** Shift+矢印キー1回で現在点を大きく動かす画面上の距離(px) */
+export const KEYBOARD_CURSOR_FAST_STEP_PX = 160;
 /** これ以上動いたらクリックではなくドラッグとみなす距離(px) */
 const DRAG_THRESHOLD_PX = 4;
 /** ホイール1ノッチあたりのズーム倍率 */
@@ -53,10 +57,12 @@ const OUTSIDE_PAPER_LINE_HINT =
 
 /** 描画・操作の一時状態(ストアに入れない表示専用状態) */
 export interface EphemeralState {
-  /** 線ツールの始点(確定済み1クリック目) */
-  pendingStart: Vec2 | null;
   /** 紙外を押したときにCanvasへ出す一時案内。 */
   lineInputHint: string | null;
+  /** ポインタとは分けて持つ、キーボード操作中の吸着前の現在点。 */
+  keyboardCursorWorld: Vec2 | null;
+  /** Canvasをキーボードで選んで現在点を表示しているか。 */
+  keyboardCursorActive: boolean;
   cursorWorld: Vec2 | null;
   hoverSnap: SnapResult | null;
   /** 既存線の延長または角の二等分へ向きだけを合わせた終点。 */
@@ -88,8 +94,9 @@ export interface EphemeralState {
 
 export function initialEphemeralState(): EphemeralState {
   return {
-    pendingStart: null,
     lineInputHint: null,
+    keyboardCursorWorld: null,
+    keyboardCursorActive: false,
     cursorWorld: null,
     hoverSnap: null,
     directionSnap: null,
@@ -199,7 +206,11 @@ export interface InteractionCtx {
   /** 点を動かすとき、既存頂点を折り返す現在の対称基準線。 */
   mirrorAxis: MirrorLine | null;
   state: EphemeralState; // その場で書き換える
+  /** ポインタとキーボードで共用する、確定済みの線の始点。 */
+  lineInputStart?: Vec2 | null;
   setView: (view: ViewTransform) => void;
+  setLineInputStart?: (start: Vec2 | null) => void;
+  setOperationStage?: (stage: number) => void;
   /** 展開図を変える要求を送る。複数渡すと画面での1回の入力として扱われ、
    * 元に戻す1回でまとめて戻る(不具合D05) */
   applyEdit: (op: EditOp | EditOp[]) => void;
@@ -274,7 +285,7 @@ function resolveLineEndpoint(
   pointSnap: SnapResult | null;
   directionSnap: DirectionSnapResult | null;
 } {
-  const start = ctx.state.pendingStart;
+  const start = ctx.lineInputStart ?? null;
   const straightKind = TOOL_KIND[ctx.tool];
   const directionSnap =
     start && straightKind && !ctx.curve.enabled && !ctx.state.shiftHeld
@@ -695,6 +706,139 @@ function pickAlignFromCp(ctx: InteractionCtx, world: Vec2, pickTol: number): voi
   }
 }
 
+export type LinePointAcceptance = "ignored" | "outside" | "started" | "completed";
+
+/**
+ * 線の一点を受け付ける共通入口。ポインタとキーボードのどちらもここを通し、
+ * 同じ吸着結果と drawSegment を使う。
+ */
+export function acceptLinePoint(ctx: InteractionCtx, world: Vec2): LinePointAcceptance {
+  const kind = TOOL_KIND[ctx.tool];
+  if (!kind && ctx.tool !== "fold") return "ignored";
+  const setLineInputStart = ctx.setLineInputStart;
+  const setOperationStage = ctx.setOperationStage;
+  if (!setLineInputStart || !setOperationStage) {
+    throw new Error("線入力の状態更新先がありません");
+  }
+
+  const paperWorld = pointOnPaper(ctx.finalDoc, world);
+  if (paperWorld) ctx.state.lineInputHint = null;
+  const snapRadius = SNAP_RADIUS_PX / ctx.view.scale;
+
+  // 完了表示の次の一点、または紙外での入力は、まず最初の段階へ戻す。
+  if (kind && (ctx.lineInputStart ?? null) === null) setOperationStage(0);
+
+  // 紙外かどうかは吸着させた後の点で決める。角・方眼・輪郭は紙端にあるため、
+  // 生の位置で先に断ると、わずかに外れただけで角が選べなくなる。
+  let pos = refreshLineEndpoint(
+    ctx,
+    kind && paperWorld ? paperWorld : world,
+    snapRadius,
+  );
+  if (kind) {
+    const bounded = pointOnPaper(ctx.finalDoc, pos);
+    if (!bounded) {
+      ctx.state.lineInputHint = OUTSIDE_PAPER_LINE_HINT;
+      ctx.state.hoverSnap = null;
+      ctx.state.directionSnap = null;
+      return "outside";
+    }
+    pos = bounded;
+    ctx.state.lineInputHint = null;
+  }
+
+  const start = ctx.lineInputStart ?? null;
+  if (start === null) {
+    setLineInputStart(pos);
+    if (kind) setOperationStage(1);
+    return "started";
+  }
+
+  if (dist(start, pos) > 1e-9) {
+    if (kind) {
+      ctx.drawSegment(start, pos, kind);
+    } else {
+      ctx.beginFoldDraft([start, pos], "2d");
+    }
+  }
+  setLineInputStart(null);
+  ctx.state.directionSnap = null;
+  if (kind) setOperationStage(2);
+  return "completed";
+}
+
+function keyboardCursorCenter(ctx: InteractionCtx): Vec2 {
+  const [width, height] = paperExtent(ctx.finalDoc);
+  return [width / 2, height / 2];
+}
+
+/** Canvasがキーボードで選ばれたとき、現在点を紙の中央へ置く。 */
+export function activateKeyboardCursor(ctx: InteractionCtx): void {
+  if (!TOOL_KIND[ctx.tool] || ctx.curve.enabled) {
+    deactivateKeyboardCursor(ctx);
+    return;
+  }
+  const center = keyboardCursorCenter(ctx);
+  ctx.state.keyboardCursorActive = true;
+  ctx.state.keyboardCursorWorld = center;
+  ctx.state.lineInputHint = null;
+  refreshLineEndpoint(ctx, center, SNAP_RADIUS_PX / ctx.view.scale);
+}
+
+/** Canvasから離れたら、キーボード専用の現在点だけを隠す。 */
+export function deactivateKeyboardCursor(ctx: InteractionCtx): void {
+  ctx.state.keyboardCursorActive = false;
+  ctx.state.keyboardCursorWorld = null;
+  ctx.state.hoverSnap = null;
+  ctx.state.directionSnap = null;
+}
+
+const ARROW_DIRECTION: Partial<Record<string, Vec2>> = {
+  ArrowLeft: [-1, 0],
+  ArrowRight: [1, 0],
+  ArrowUp: [0, 1],
+  ArrowDown: [0, -1],
+};
+
+/**
+ * Canvas上の線入力をキーボードで進める。矢印は吸着前の現在点だけを動かし、
+ * Enterはポインタと同じ一点受付へ渡す。
+ */
+export function onKeyboardLineKey(
+  ctx: InteractionCtx,
+  key: string,
+  shiftHeld: boolean,
+): boolean {
+  const kind = TOOL_KIND[ctx.tool];
+  if (!kind || ctx.curve.enabled) return false;
+  const direction = ARROW_DIRECTION[key];
+  if (direction) {
+    if (!ctx.state.keyboardCursorActive || !ctx.state.keyboardCursorWorld) {
+      activateKeyboardCursor(ctx);
+    }
+    ctx.state.shiftHeld = shiftHeld;
+    const current = ctx.state.keyboardCursorWorld ?? keyboardCursorCenter(ctx);
+    const [width, height] = paperExtent(ctx.finalDoc);
+    const stepPx = shiftHeld ? KEYBOARD_CURSOR_FAST_STEP_PX : KEYBOARD_CURSOR_STEP_PX;
+    const step = stepPx / ctx.view.scale;
+    const next: Vec2 = [
+      Math.max(0, Math.min(width, current[0] + direction[0] * step)),
+      Math.max(0, Math.min(height, current[1] + direction[1] * step)),
+    ];
+    ctx.state.keyboardCursorWorld = next;
+    refreshLineEndpoint(ctx, next, SNAP_RADIUS_PX / ctx.view.scale);
+    return true;
+  }
+
+  if (key !== "Enter") return false;
+  ctx.state.shiftHeld = shiftHeld;
+  if (!ctx.state.keyboardCursorActive || !ctx.state.keyboardCursorWorld) {
+    activateKeyboardCursor(ctx);
+  }
+  acceptLinePoint(ctx, ctx.state.keyboardCursorWorld ?? keyboardCursorCenter(ctx));
+  return true;
+}
+
 export function onMouseDown(
   ctx: InteractionCtx,
   screen: Vec2,
@@ -703,6 +847,7 @@ export function onMouseDown(
   selectionToggle = false,
 ): void {
   if (shiftHeld !== undefined) ctx.state.shiftHeld = shiftHeld;
+  deactivateKeyboardCursor(ctx);
   // 表示位置の移動を最優先で拾う(線引き・選択より先に判定する)
   if (isPanStart(ctx.state, button)) {
     ctx.state.panLast = screen;
@@ -743,45 +888,12 @@ export function onMouseDown(
   if (ctx.tool === "fold" && ctx.alignDraft) {
     // 合わせモード中は、方式ごとの点・線選択を通常の2点折りより優先する。
     pickAlignFromCp(ctx, world, pickTol);
-    ctx.state.pendingStart = null;
+    ctx.setLineInputStart?.(null);
     ctx.state.directionSnap = null;
     return;
   }
   if (kind || ctx.tool === "fold") {
-    // 線ツール・折るツール: 1クリック目=始点、2クリック目=確定
-    // 紙外かどうかは吸着させた後の点で決める。角・方眼・輪郭は紙の端にあるため、
-    // 生のカーソル位置で先に断ると、1px外れただけで角が選べなくなる(利用者報告)。
-    let pos = refreshLineEndpoint(
-      ctx,
-      kind && paperWorld ? paperWorld : world,
-      snapRadius,
-    );
-    if (kind) {
-      // 吸着しても紙外に留まる点だけを断る。灰色の余白には線を引けないままにする。
-      const bounded = pointOnPaper(ctx.finalDoc, pos);
-      if (!bounded) {
-        ctx.state.lineInputHint = OUTSIDE_PAPER_LINE_HINT;
-        ctx.state.hoverSnap = null;
-        ctx.state.directionSnap = null;
-        return;
-      }
-      pos = bounded;
-      ctx.state.lineInputHint = null;
-    }
-    const start = ctx.state.pendingStart;
-    if (start === null) {
-      ctx.state.pendingStart = pos;
-    } else {
-      if (dist(start, pos) > 1e-9) {
-        if (kind) {
-          ctx.drawSegment(start, pos, kind);
-        } else {
-          ctx.beginFoldDraft([start, pos], "2d");
-        }
-      }
-      ctx.state.pendingStart = null;
-      ctx.state.directionSnap = null;
-    }
+    acceptLinePoint(ctx, world);
     return;
   }
   if (ctx.tool === "construct") {
@@ -823,6 +935,7 @@ export function onMouseDown(
 
 export function onMouseMove(ctx: InteractionCtx, screen: Vec2, shiftHeld?: boolean): void {
   if (shiftHeld !== undefined) ctx.state.shiftHeld = shiftHeld;
+  deactivateKeyboardCursor(ctx);
   if (ctx.state.panLast) {
     const [lx, ly] = ctx.state.panLast;
     ctx.state.panLast = screen;
@@ -1003,10 +1116,13 @@ export function panHint(state: EphemeralState): string | null {
 export function onKeyDown(ctx: InteractionCtx, key: string): void {
   if (key === "Shift") {
     ctx.state.shiftHeld = true;
-    if (ctx.state.cursorWorld) {
+    const cursor = ctx.state.keyboardCursorActive
+      ? ctx.state.keyboardCursorWorld
+      : ctx.state.cursorWorld;
+    if (cursor) {
       refreshLineEndpoint(
         ctx,
-        ctx.state.cursorWorld,
+        cursor,
         SNAP_RADIUS_PX / ctx.view.scale,
       );
     } else {
@@ -1022,7 +1138,8 @@ export function onKeyDown(ctx: InteractionCtx, key: string): void {
     ctx.state.spaceHeld = false;
     ctx.state.shiftHeld = false;
     ctx.state.panLast = null;
-    ctx.state.pendingStart = null;
+    ctx.setLineInputStart?.(null);
+    ctx.setOperationStage?.(0);
     ctx.state.lineInputHint = null;
     ctx.state.directionSnap = null;
     ctx.state.downScreen = null;
@@ -1047,10 +1164,13 @@ export function onKeyDown(ctx: InteractionCtx, key: string): void {
 export function onKeyUp(ctx: InteractionCtx, key: string): void {
   if (key === "Shift") {
     ctx.state.shiftHeld = false;
-    if (ctx.state.cursorWorld) {
+    const cursor = ctx.state.keyboardCursorActive
+      ? ctx.state.keyboardCursorWorld
+      : ctx.state.cursorWorld;
+    if (cursor) {
       refreshLineEndpoint(
         ctx,
-        ctx.state.cursorWorld,
+        cursor,
         SNAP_RADIUS_PX / ctx.view.scale,
       );
     }

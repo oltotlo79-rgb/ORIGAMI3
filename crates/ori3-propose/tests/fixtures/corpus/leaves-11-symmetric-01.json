@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "paper": {
+    "width_mm": 140,
+    "height_mm": 140
+  },
+  "skeleton": {
+    "nodes": [
+      {
+        "id": 0,
+        "parent": null,
+        "length": 0,
+        "width_factor": 1
+      },
+      {
+        "id": 1,
+        "parent": 0,
+        "length": 0.94,
+        "width_factor": 0.96,
+        "tip_pos_2d": {
+          "x": 0,
+          "y": 0.92
+        }
+      },
+      {
+        "id": 2,
+        "parent": 0,
+        "length": 1,
+        "width_factor": 1,
+        "tip_pos_2d": {
+          "x": -0.56,
+          "y": 0.84
+        }
+      },
+      {
+        "id": 3,
+        "parent": 0,
+        "length": 1,
+        "width_factor": 1,
+        "tip_pos_2d": {
+          "x": 0.56,
+          "y": 0.84
+        }
+      },
+      {
+        "id": 4,
+        "parent": 0,
+        "length": 0.91,
+        "width_factor": 0.91,
+        "tip_pos_2d": {
+          "x": -0.9,
+          "y": 0.48
+        }
+      },
+      {
+        "id": 5,
+        "parent": 0,
+        "length": 0.91,
+        "width_factor": 0.91,
+        "tip_pos_2d": {
+          "x": 0.9,
+          "y": 0.48
+        }
+      },
+      {
+        "id": 6,
+        "parent": 0,
+        "length": 0.82,
+        "width_factor": 0.84,
+        "tip_pos_2d": {
+          "x": -0.92,
+          "y": -0.08
+        }
+      },
+      {
+        "id": 7,
+        "parent": 0,
+        "length": 0.82,
+        "width_factor": 0.84,
+        "tip_pos_2d": {
+          "x": 0.92,
+          "y": -0.08
+        }
+      },
+      {
+        "id": 8,
+        "parent": 0,
+        "length": 0.72,
+        "width_factor": 0.75,
+        "tip_pos_2d": {
+          "x": -0.7,
+          "y": -0.68
+        }
+      },
+      {
+        "id": 9,
+        "parent": 0,
+        "length": 0.72,
+        "width_factor": 0.75,
+        "tip_pos_2d": {
+          "x": 0.7,
+          "y": -0.68
+        }
+      },
+      {
+        "id": 10,
+        "parent": 0,
+        "length": 0.61,
+        "width_factor": 0.66,
+        "tip_pos_2d": {
+          "x": -0.28,
+          "y": -0.92
+        }
+      },
+      {
+        "id": 11,
+        "parent": 0,
+        "length": 0.61,
+        "width_factor": 0.66,
+        "tip_pos_2d": {
+          "x": 0.28,
+          "y": -0.92
+        }
+      }
+    ]
+  },
+  "seed": 11001,
+  "with_fold_plan": true
+}

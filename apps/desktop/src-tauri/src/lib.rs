@@ -71,6 +71,7 @@ use std::sync::Mutex;
 
 use tauri::Manager;
 
+use commands::ProposalJobs;
 use store::DocumentStore;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -79,6 +80,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(Mutex::new(DocumentStore::default()))
+        .manage(ProposalJobs::default())
         .invoke_handler(tauri::generate_handler![
             commands::document_new,
             commands::document_open,
@@ -90,10 +92,12 @@ pub fn run() {
             commands::sequence_apply,
             commands::sequence_replay,
             commands::pose_solve,
+            commands::fold_all_preview,
             commands::recovery_check,
             commands::recovery_restore,
-            commands::proposal_generate,
+            commands::proposal_generate_job,
             commands::proposal_progress,
+            commands::proposal_control,
             commands::proposal_apply,
             commands::document_export,
         ])

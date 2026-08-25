@@ -29,11 +29,6 @@ const PRODUCT_PLAN_BUDGET: SearchBudget = SearchBudget {
     max_depth: SearchBudget::DEFAULT.max_depth,
     rank_scan: SearchBudget::DEFAULT.rank_scan,
     scan: SearchBudget::DEFAULT.scan,
-    // 別作業(2026-08-22)で `max_millis` が `SearchBudget` の項目になったための
-    // コンパイル互換の追加。この複製はcoreの数値を測るためのもので、時間打切りは
-    // 測定対象ではないため、既定(`SearchBudget::MAX_MILLIS` = 240,000ms)をそのまま使う。
-    // 画面(`commands.rs::PLAN_BUDGET`)が実際に使う6,000msはこの定数の対象外。
-    max_millis: SearchBudget::DEFAULT.max_millis,
 };
 
 /// 決定性比較の小数許容差。

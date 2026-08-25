@@ -18,6 +18,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(test)]
+use std::cell::Cell;
+
 use ori3_cp::Face;
 use ori3_model::{
     CreasePattern, Document, Driver, EdgeId, EdgeKind, EditOp, FaceId, FoldStep, Frame3D,
@@ -27,6 +30,43 @@ use ori3_model::{
 
 /// undo履歴の最大件数。超過時は最古をFIFOで破棄する。
 const MAX_UNDO: usize = 100;
+
+#[cfg(test)]
+thread_local! {
+    /// 並列test同士を干渉させず、現在のtest threadだけのcommit呼出し回数を測る。
+    static COMMIT_COUNT_FOR_TEST: Cell<usize> = const { Cell::new(0) };
+    /// 次のMoveStep候補の最終導出後をpanicさせる、製品状態に入らない一回限りの注入口。
+    static FAIL_NEXT_MOVE_STEP_DERIVATION_FOR_TEST: Cell<bool> = const { Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_commit_count_for_test() {
+    COMMIT_COUNT_FOR_TEST.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn commit_count_for_test() -> usize {
+    COMMIT_COUNT_FOR_TEST.with(Cell::get)
+}
+
+#[cfg(test)]
+fn record_commit_for_test() {
+    COMMIT_COUNT_FOR_TEST.with(|count| count.set(count.get() + 1));
+}
+
+#[cfg(not(test))]
+fn record_commit_for_test() {}
+
+#[cfg(test)]
+fn fail_move_step_derivation_if_requested() {
+    let should_fail = FAIL_NEXT_MOVE_STEP_DERIVATION_FOR_TEST.with(|flag| flag.replace(false));
+    if should_fail {
+        panic!("MoveStepの導出に失敗しました");
+    }
+}
+
+#[cfg(not(test))]
+fn fail_move_step_derivation_if_requested() {}
 
 /// SYS-002: 折り目の多い作品(カエル、280辺・141頂点)で取り消し履歴を100段
 /// 積んだときの、履歴がヒープに保持しているバイト数の上限。
@@ -125,6 +165,21 @@ pub struct DocumentView {
 struct Snapshot {
     doc: Document,
     step_creases: Vec<StepCreases>,
+}
+
+/// command境界のpanic検査で、永続状態と全履歴が一切変わらないことを比較する。
+/// test-onlyのfailpointと観測counterは製品状態ではないため含めない。
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct AtomicityProbe {
+    document_bytes: Vec<u8>,
+    step_creases_bytes: Vec<u8>,
+    faces: Vec<Face>,
+    undo_stack: Vec<Snapshot>,
+    redo_stack: Vec<Snapshot>,
+    dirty: bool,
+    path: Option<PathBuf>,
+    pose_angles: Option<HashMap<EdgeId, f64>>,
 }
 
 pub struct DocumentStore {
@@ -433,6 +488,37 @@ impl DocumentStore {
                 if doc.sequence.len() == before {
                     return Err(format!("手順ID {id} が見つかりません"));
                 }
+            }
+            SeqOp::MoveStep { id, to_index } => {
+                // step_creasesをIDへ一意に対応させられないDocumentでは、対象IDに
+                // 重複が無くてもMoveStep全体を拒否する。異常が重なった場合の契約は
+                // duplicate -> missing ID -> range -> no-op の順で固定する。
+                let mut seen = HashSet::with_capacity(doc.sequence.len());
+                if doc.sequence.iter().any(|step| !seen.insert(step.id)) {
+                    return Err("同じ折り手順が二重に入っています".to_string());
+                }
+                let Some(from) = doc.sequence.iter().position(|step| step.id == id) else {
+                    return Err(format!("手順ID {id} が見つかりません"));
+                };
+                if to_index >= doc.sequence.len() {
+                    return Err(format!("移動先 {to_index} が手順の数を超えています"));
+                }
+
+                if from != to_index {
+                    let moved = doc.sequence.remove(from);
+                    // to_indexはremove前の隙間ではなく、移動後sequenceの最終index。
+                    // remove後の長さは元のlen-1なので、契約上の最大len-1にもinsert可能。
+                    doc.sequence.insert(to_index, moved);
+                }
+
+                // MoveStepだけは、commandがErrを返したのにstoreだけ確定済みになる
+                // post-commit replayを作らない。候補cloneの最終view/replayを先に導出し、
+                // 実移動ならその同じviewとDocumentを1回だけ確定する。
+                let view = build_move_step_view(&doc, &step_creases);
+                if from == to_index {
+                    return Ok(view);
+                }
+                return Ok(self.commit_prebuilt(doc, step_creases, view));
             }
             SeqOp::UpdateStep { step } => {
                 let Some(slot) = doc.sequence.iter_mut().find(|s| s.id == step.id) else {
@@ -813,6 +899,28 @@ impl DocumentStore {
         self.pose_angles = Some(angles);
     }
 
+    /// 次のMoveStep候補の最終導出後だけを失敗させる、thread-local注入口。
+    #[cfg(test)]
+    pub(crate) fn fail_next_move_step_derivation_for_test(&mut self) {
+        FAIL_NEXT_MOVE_STEP_DERIVATION_FOR_TEST.with(|flag| flag.set(true));
+    }
+
+    /// commandのpanic変換をまたいで、storeの全製品状態を比較するtest-only snapshot。
+    #[cfg(test)]
+    pub(crate) fn atomicity_probe_for_test(&self) -> AtomicityProbe {
+        AtomicityProbe {
+            document_bytes: serde_json::to_vec(&self.doc).expect("Documentをbytes化できる"),
+            step_creases_bytes: serde_json::to_vec(&self.step_creases)
+                .expect("step_creasesをbytes化できる"),
+            faces: self.faces.clone(),
+            undo_stack: self.undo_stack.clone(),
+            redo_stack: self.redo_stack.clone(),
+            dirty: self.dirty,
+            path: self.path.clone(),
+            pose_angles: self.pose_angles.clone(),
+        }
+    }
+
     /// 変更後Documentを確定する。変更が実際に起きた場合のみundo履歴に積む。
     ///
     /// 導出(validate/extract_faces)を候補docに対して先に実行し、成功した場合のみ
@@ -825,6 +933,18 @@ impl DocumentStore {
         warnings: Vec<String>,
     ) -> DocumentView {
         let view = build_view(&doc, &step_creases, warnings);
+        self.commit_prebuilt(doc, step_creases, view)
+    }
+
+    /// すでに候補Documentから導出し終えたviewと状態を、不可分に確定する。
+    /// MoveStepは重いreplayもここへ来る前に済ませ、確定後に失敗点を残さない。
+    fn commit_prebuilt(
+        &mut self,
+        doc: Document,
+        step_creases: Vec<StepCreases>,
+        view: DocumentView,
+    ) -> DocumentView {
+        record_commit_for_test();
         if doc != self.doc || step_creases != self.step_creases {
             if self.undo_stack.len() >= MAX_UNDO {
                 self.undo_stack.remove(0);
@@ -893,6 +1013,20 @@ fn build_view(
         converged: true,
         fold_through_proposal: None,
     }
+}
+
+/// MoveStep候補の完全な返却viewを、store確定より前に導出する。
+///
+/// 通常操作のreplayはcommandがロック解放後に付けるが、MoveStepではその順序だと
+/// replay panic後に「commandはErr、storeは変更済み」になり得る。この操作だけは
+/// 同じ候補cloneからreplayまで作り終え、そのviewを`commit_prebuilt`へ渡す。
+fn build_move_step_view(doc: &Document, step_creases: &[StepCreases]) -> DocumentView {
+    let mut view = build_view(doc, step_creases, Vec::new());
+    attach_replay(&mut view);
+    // replayを含む全候補導出の直後、commit直前の最終境界へ置く。
+    // panicしてもviewは局所値で、まだselfへ一切触れていない。
+    fail_move_step_derivation_if_requested();
+    view
 }
 
 /// ±180°の指定と実角を照合するときの許容差(度)。
@@ -1077,8 +1211,9 @@ pub(crate) fn prevent_replay_overlap_if_authoritative(
 /// 手順が空のときは再生するものが無いので `frame: None` のまま
 /// (平らな姿勢はフロントが展開図から直接描ける)。
 ///
-/// 設計規約: これは重い計算(面400・10手順でrelease約23ms)なので、
-/// storeのロックを取らないコマンド層から、ロック解放後に呼ぶ。
+/// 設計規約: これは重い計算(面400・10手順でrelease約23ms)なので、通常操作は
+/// storeのロックを取らないコマンド層から、ロック解放後に呼ぶ。例外はMoveStepで、
+/// Err時の原子性を守るため候補cloneへcommit前に呼び、導出済みviewをそのまま返す。
 /// 再生には `view.faces`(同じdocから導出済み)を渡し、面抽出を二重に行わない。
 pub fn attach_replay(view: &mut DocumentView) {
     attach_replay_contact_diagnostic(view, &[]);
@@ -1540,6 +1675,8 @@ mod tests {
         AlignmentTarget, DisplaySettings, DriverLine, Edge, Face3D, FinishSoftSettings,
         FoldAlignment, FoldStep, TechniqueKind, Vertex,
     };
+
+    mod movestep_contract;
 
     fn square_store() -> DocumentStore {
         let mut store = DocumentStore::default();
