@@ -72,8 +72,10 @@ const BASELINE_FUNCTION_BODY_HASHES = {
   PullContent: "e5b0550ea8703fed3086708cb457dc76344e6a156a310e1105f0e1235efabd4a",
   PaperActionEntrances:
     "08b734b6e09a152d15e4b43c2724c718bb4725115d6233c455602499408e75f2",
+  // 2026-08-26: 一斉折りで重なり順を決められない場合の説明文を意図的に追加した。
+  // 旧e413…から実測93de…へ更新し、残る28/29関数の本体hashは不変と確認した。
   FoldAllPreviewContent:
-    "e413e7685e0f12b4eb005c5f2afaaaacf36efd3dfd5c0f301d8440f8ac4d6df5",
+    "93de8f761787d19b7d30f91538edbc2e3d2e83f1c69053cce32c0517ffe3ad2c",
   CurveRow: "c936e1fbd83c3c0bc8fa6266373e792cac8aff01e437c694523f35bef2d11650",
   SelectionContent:
     "9088782fd340d87b8ffbdb2d4671755e7265b141179612d16058a6dba4379d6a",

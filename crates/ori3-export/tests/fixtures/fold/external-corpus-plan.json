@@ -1,0 +1,167 @@
+{
+  "schema_version": 1,
+  "status": "reservations_only",
+  "purpose": "Reserve the 30 external FOLD corpus slots before raw bytes, rights evidence, and profile classifications are complete.",
+  "source_quotas": {
+    "official": 6,
+    "oripa": 8,
+    "oriedita": 8,
+    "origami_simulator": 8
+  },
+  "target_class_quotas": {
+    "supported": 20,
+    "unsupported": 10
+  },
+  "slots": [
+    {
+      "id": "official-01",
+      "source": "official",
+      "reserved_path": "external/official/official-01.fold"
+    },
+    {
+      "id": "official-02",
+      "source": "official",
+      "reserved_path": "external/official/official-02.fold"
+    },
+    {
+      "id": "official-03",
+      "source": "official",
+      "reserved_path": "external/official/official-03.fold"
+    },
+    {
+      "id": "official-04",
+      "source": "official",
+      "reserved_path": "external/official/official-04.fold"
+    },
+    {
+      "id": "official-05",
+      "source": "official",
+      "reserved_path": "external/official/official-05.fold"
+    },
+    {
+      "id": "official-06",
+      "source": "official",
+      "reserved_path": "external/official/official-06.fold"
+    },
+    {
+      "id": "oripa-01",
+      "source": "oripa",
+      "reserved_path": "external/oripa/oripa-01.fold"
+    },
+    {
+      "id": "oripa-02",
+      "source": "oripa",
+      "reserved_path": "external/oripa/oripa-02.fold"
+    },
+    {
+      "id": "oripa-03",
+      "source": "oripa",
+      "reserved_path": "external/oripa/oripa-03.fold"
+    },
+    {
+      "id": "oripa-04",
+      "source": "oripa",
+      "reserved_path": "external/oripa/oripa-04.fold"
+    },
+    {
+      "id": "oripa-05",
+      "source": "oripa",
+      "reserved_path": "external/oripa/oripa-05.fold"
+    },
+    {
+      "id": "oripa-06",
+      "source": "oripa",
+      "reserved_path": "external/oripa/oripa-06.fold"
+    },
+    {
+      "id": "oripa-07",
+      "source": "oripa",
+      "reserved_path": "external/oripa/oripa-07.fold"
+    },
+    {
+      "id": "oripa-08",
+      "source": "oripa",
+      "reserved_path": "external/oripa/oripa-08.fold"
+    },
+    {
+      "id": "oriedita-01",
+      "source": "oriedita",
+      "reserved_path": "external/oriedita/oriedita-01.fold"
+    },
+    {
+      "id": "oriedita-02",
+      "source": "oriedita",
+      "reserved_path": "external/oriedita/oriedita-02.fold"
+    },
+    {
+      "id": "oriedita-03",
+      "source": "oriedita",
+      "reserved_path": "external/oriedita/oriedita-03.fold"
+    },
+    {
+      "id": "oriedita-04",
+      "source": "oriedita",
+      "reserved_path": "external/oriedita/oriedita-04.fold"
+    },
+    {
+      "id": "oriedita-05",
+      "source": "oriedita",
+      "reserved_path": "external/oriedita/oriedita-05.fold"
+    },
+    {
+      "id": "oriedita-06",
+      "source": "oriedita",
+      "reserved_path": "external/oriedita/oriedita-06.fold"
+    },
+    {
+      "id": "oriedita-07",
+      "source": "oriedita",
+      "reserved_path": "external/oriedita/oriedita-07.fold"
+    },
+    {
+      "id": "oriedita-08",
+      "source": "oriedita",
+      "reserved_path": "external/oriedita/oriedita-08.fold"
+    },
+    {
+      "id": "origami-simulator-01",
+      "source": "origami_simulator",
+      "reserved_path": "external/origami_simulator/origami-simulator-01.fold"
+    },
+    {
+      "id": "origami-simulator-02",
+      "source": "origami_simulator",
+      "reserved_path": "external/origami_simulator/origami-simulator-02.fold"
+    },
+    {
+      "id": "origami-simulator-03",
+      "source": "origami_simulator",
+      "reserved_path": "external/origami_simulator/origami-simulator-03.fold"
+    },
+    {
+      "id": "origami-simulator-04",
+      "source": "origami_simulator",
+      "reserved_path": "external/origami_simulator/origami-simulator-04.fold"
+    },
+    {
+      "id": "origami-simulator-05",
+      "source": "origami_simulator",
+      "reserved_path": "external/origami_simulator/origami-simulator-05.fold"
+    },
+    {
+      "id": "origami-simulator-06",
+      "source": "origami_simulator",
+      "reserved_path": "external/origami_simulator/origami-simulator-06.fold"
+    },
+    {
+      "id": "origami-simulator-07",
+      "source": "origami_simulator",
+      "reserved_path": "external/origami_simulator/origami-simulator-07.fold"
+    },
+    {
+      "id": "origami-simulator-08",
+      "source": "origami_simulator",
+      "reserved_path": "external/origami_simulator/origami-simulator-08.fold"
+    }
+  ]
+}

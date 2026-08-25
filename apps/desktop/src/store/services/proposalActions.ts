@@ -446,6 +446,7 @@ export function createProposalSlice<State extends ProposalSliceHostState>(
   };
 
   const setProposalSkeleton = (skeleton: Skeleton): void => {
+    invalidateProposalJob(true);
     const leafIds = new Set(leafNodes(skeleton).map((node) => node.id));
     const state = get();
     lastProposalPositionKey = null;
