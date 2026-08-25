@@ -852,7 +852,10 @@ const PREPARATION_TURN: usize = 4;
 /// 間隔ごとの実測は [`PREPARATION_TURN`] の表にある。
 ///
 /// 準備状態を捨ててはいない。通常状態が尽きれば、同じ順位で準備状態を広げる。
-fn pop_frontier(frontier: &mut BTreeMap<RankKey, Node>, expanded: usize) -> Option<(RankKey, Node)> {
+fn pop_frontier(
+    frontier: &mut BTreeMap<RankKey, Node>,
+    expanded: usize,
+) -> Option<(RankKey, Node)> {
     // `expanded` はここまでに手を広げ終えた状態の数。0件目(根)は必ず通常側から取る。
     let take_preparation = expanded > 0 && expanded.is_multiple_of(PREPARATION_TURN);
     let pick = |preparation: bool| -> Option<RankKey> {
@@ -1742,9 +1745,7 @@ mod tests {
     }
 
     /// 「全体順位では準備側が先」という最悪の並びを作る。
-    fn two_state_frontier(
-        session: &FoldSession,
-    ) -> (BTreeMap<RankKey, Node>, RankKey, RankKey) {
+    fn two_state_frontier(session: &FoldSession) -> (BTreeMap<RankKey, Node>, RankKey, RankKey) {
         let mut preparation_node = node_with_moves(session, &[(1, vec![1])]);
         preparation_node.preparation_depth = 2;
         let regular_node = node_with_moves(session, &[(2, vec![2])]);

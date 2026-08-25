@@ -10,7 +10,7 @@
     "algorithm": "fnv1a64",
     "digest_encoding": "lowercase-hex-16",
     "fixture_checksum_scope": "utf8-text-crlf-normalized-to-lf",
-    "input_normalization": "typed-input-plus-runner-contract-canonical-json-v1",
+    "input_normalization": "typed-input-plus-functional-runner-contract-canonical-json-v2",
     "structure_normalization": "rooted-tree-node-order-id-and-uniform-scale-independent-v1",
     "candidate_normalization": "product-candidate-canonical-json-v1",
     "result_normalization": "benchmark-result-envelope-canonical-json-v1",
@@ -25,7 +25,7 @@
     "weighted_gap_abs_tolerance": 6.4e-9,
     "coordinate_abs_tolerance": 1e-9,
     "angle_abs_tolerance_degrees": 1e-9,
-    "max_seam_gap": 0.000001,
+    "max_seam_gap": 1e-6,
     "max_intersection_pairs_all_poses": 0,
     "final_self_intersection_pairs": 0,
     "minimum_partial_median_improvement_ratio": 0.2,
@@ -50,12 +50,14 @@
     },
     "verification_scan_steps": 20,
     "rebuild_scan_steps": 0,
-    "search_watchdog_millis": 30000,
+    "functional_search": "search_to_completion_no_wall_clock",
+    "performance_search": "search_to_completion_with_control",
+    "product_search_watchdog_millis": 30000,
     "gap_weights": {
-      "count": 1,
-      "length": 1,
+      "count": 1.0,
+      "length": 1.0,
       "width": 0.2,
-      "position": 1
+      "position": 1.0
     },
     "completion_tolerance": {
       "count": 0.06666666666666667,
@@ -559,7 +561,7 @@
           "digest": "bfefacead700fa9a"
         },
         "structure_hash": "2edf5d6a7a0b6d64",
-        "normalized_input_hash": "dae7abd7ae461031"
+        "normalized_input_hash": "1fedd62461216a8e"
       },
       "strata": {
         "band": "B",
@@ -595,16 +597,16 @@
           "goal_reached"
         ],
         "initial_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.2053430487484339,
           "width": 0.27406259779752745,
-          "position": 0
+          "position": 0.0
         },
         "final_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.2053430487484339,
           "width": 0.23347375796813508,
-          "position": 0
+          "position": 0.0
         },
         "initial_weighted_gap": 0.2601555683079394,
         "final_weighted_gap": 0.2520378003420609,
@@ -636,15 +638,15 @@
           "unmet_reasons": []
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": 8873,
           "debug_case_limit_millis": 90000,
           "measured_release_elapsed_millis": null,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "The maximum of three full-product-path debug pilot measurements was 8873ms. Stage 3-B uses the heavier crane observation to set 90000ms debug, 10000ms release, and 300000ms release-corpus limits; stage 3-C will replace single-run evidence with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "The maximum of three full-product-path debug pilot measurements was 8873ms. Stage 3-B uses the heavier crane observation to set 90000ms debug, 10000ms release, and 300000ms release-corpus limits; stage 3-C will replace single-run evidence with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending."
         }
       }
     },
@@ -669,7 +671,7 @@
           "digest": "2716c295dabe6bf1"
         },
         "structure_hash": "99f72449bbac0a2c",
-        "normalized_input_hash": "5227759266b3de78"
+        "normalized_input_hash": "44ef13cf55bcdd79"
       },
       "strata": {
         "band": "A",
@@ -705,13 +707,13 @@
           "state_cap"
         ],
         "initial_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.508771452475302,
           "width": 2.1718483343174517,
           "position": 0.19301862687928262
         },
         "final_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.4318109514068173,
           "width": 1.0922866559121593,
           "position": 0.19635169289161605
@@ -748,15 +750,15 @@
           ]
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 5339,
+          "measured_release_elapsed_millis": 4754,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "The initial debug observation exceeded 27000ms. A 2026-08-25 debug remeasurement hit the unchanged 30000ms product search watchdog and the case test ended at 43890ms, below the separate 90000ms outer limit but without a completed debug result. Release completed in 5339ms against the 10000ms case limit; the 30-case release limit is 300000ms. Stage 3-C will replace single-run release evidence with five runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 4754ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -781,7 +783,7 @@
           "digest": "6d50284648fa4865"
         },
         "structure_hash": "64779ecee563d22c",
-        "normalized_input_hash": "258ae85eca5047d2"
+        "normalized_input_hash": "949eec77e8635d59"
       },
       "strata": {
         "band": "A",
@@ -811,24 +813,24 @@
           "goal_reached"
         ],
         "initial_gaps": {
-          "count": 0,
-          "length": 0,
+          "count": 0.0,
+          "length": 0.0,
           "width": 4.710277376051326e-16,
-          "position": 0
+          "position": 0.0
         },
         "final_gaps": {
-          "count": 0,
-          "length": 0,
+          "count": 0.0,
+          "length": 0.0,
           "width": 4.710277376051326e-16,
-          "position": 0
+          "position": 0.0
         },
         "initial_weighted_gap": 9.420554752102651e-17,
         "final_weighted_gap": 9.420554752102651e-17,
-        "improvement_absolute": 0,
-        "improvement_ratio": 0,
+        "improvement_absolute": 0.0,
+        "improvement_ratio": 0.0,
         "safety": {
           "all_finite": true,
-          "max_seam_gap": 0,
+          "max_seam_gap": 0.0,
           "max_intersection_pairs_all_poses": 0,
           "final_self_intersection_pairs": 0,
           "layer_warning_count": 0,
@@ -855,15 +857,15 @@
           ]
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 1,
+          "measured_release_elapsed_millis": 0,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=1ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 0ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -888,7 +890,7 @@
           "digest": "4ddd923c84aa7d51"
         },
         "structure_hash": "899ef3ebcb743f84",
-        "normalized_input_hash": "b998833d37342e90"
+        "normalized_input_hash": "6e35b9e565235d0f"
       },
       "strata": {
         "band": "A",
@@ -924,13 +926,13 @@
           "state_cap"
         ],
         "initial_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.23060776057517585,
           "width": 2.674808525052554,
           "position": 0.22910200463448294
         },
         "final_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.23060776057517585,
           "width": 2.174452192336924,
           "position": 0.22910200463448288
@@ -967,15 +969,15 @@
           ]
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 932,
+          "measured_release_elapsed_millis": 1051,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=932ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 1051ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -1000,7 +1002,7 @@
           "digest": "269ceb1d49e9a03e"
         },
         "structure_hash": "e7dcbf86b9c8971a",
-        "normalized_input_hash": "b934a1320fe1e77b"
+        "normalized_input_hash": "7279c2cf21e2b934"
       },
       "strata": {
         "band": "A",
@@ -1036,16 +1038,16 @@
           "goal_reached"
         ],
         "initial_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.4448938068876532,
           "width": 0.2707923764073834,
-          "position": 0
+          "position": 0.0
         },
         "final_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.4448938068876532,
           "width": 0.18004544596289573,
-          "position": 0
+          "position": 0.0
         },
         "initial_weighted_gap": 0.4990522821691299,
         "final_weighted_gap": 0.48090289608023234,
@@ -1077,15 +1079,15 @@
           "unmet_reasons": []
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 1209,
+          "measured_release_elapsed_millis": 1455,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=1209ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 1455ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -1110,7 +1112,7 @@
           "digest": "1835ef9ae0c8db5c"
         },
         "structure_hash": "d1c1555d35d5077d",
-        "normalized_input_hash": "ff43340687a78095"
+        "normalized_input_hash": "883fbcd9b2179246"
       },
       "strata": {
         "band": "A",
@@ -1146,16 +1148,16 @@
           "goal_reached"
         ],
         "initial_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.164809732816899,
           "width": 0.30660282441825565,
-          "position": 0
+          "position": 0.0
         },
         "final_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.3232346030612913,
           "width": 0.24754315640795377,
-          "position": 0
+          "position": 0.0
         },
         "initial_weighted_gap": 0.22613029770055015,
         "final_weighted_gap": 0.3727432343428821,
@@ -1189,15 +1191,15 @@
           ]
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 1299,
+          "measured_release_elapsed_millis": 973,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=1299ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 973ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -1222,7 +1224,7 @@
           "digest": "d52895ed0e13a3ab"
         },
         "structure_hash": "8b65907cd71b91e4",
-        "normalized_input_hash": "360683e2a610d462"
+        "normalized_input_hash": "42f8e936330101e3"
       },
       "strata": {
         "band": "A",
@@ -1258,16 +1260,16 @@
           "goal_reached"
         ],
         "initial_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.08732140585940971,
           "width": 0.3295710330743967,
-          "position": 0
+          "position": 0.0
         },
         "final_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.08732140585940971,
           "width": 0.15773852341256808,
-          "position": 0
+          "position": 0.0
         },
         "initial_weighted_gap": 0.15323561247428907,
         "final_weighted_gap": 0.11886911054192334,
@@ -1299,15 +1301,15 @@
           "unmet_reasons": []
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 119,
+          "measured_release_elapsed_millis": 81,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=119ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 81ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -1332,7 +1334,7 @@
           "digest": "eea5eb49e961ff95"
         },
         "structure_hash": "a47602d5f129bc9c",
-        "normalized_input_hash": "e4753d909193c812"
+        "normalized_input_hash": "88fec1ca54987e71"
       },
       "strata": {
         "band": "B",
@@ -1375,11 +1377,11 @@
         },
         "initial_weighted_gap": 0.6400000000000001,
         "final_weighted_gap": 0.6400000000000001,
-        "improvement_absolute": 0,
-        "improvement_ratio": 0,
+        "improvement_absolute": 0.0,
+        "improvement_ratio": 0.0,
         "safety": {
           "all_finite": true,
-          "max_seam_gap": 0,
+          "max_seam_gap": 0.0,
           "max_intersection_pairs_all_poses": 0,
           "final_self_intersection_pairs": 0,
           "layer_warning_count": 0,
@@ -1406,15 +1408,15 @@
           ]
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 448,
+          "measured_release_elapsed_millis": 340,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=448ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 340ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -1439,7 +1441,7 @@
           "digest": "351f693e7e59ff1d"
         },
         "structure_hash": "8e2eeb23ac318e56",
-        "normalized_input_hash": "e240a23d156ee40c"
+        "normalized_input_hash": "71b50a68f2e05459"
       },
       "strata": {
         "band": "B",
@@ -1475,24 +1477,24 @@
           "goal_reached"
         ],
         "initial_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.24082685724629754,
           "width": 0.1939518378622076,
-          "position": 0
+          "position": 0.0
         },
         "final_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.24082685724629754,
           "width": 0.1939518378622076,
-          "position": 0
+          "position": 0.0
         },
         "initial_weighted_gap": 0.2796172248187391,
         "final_weighted_gap": 0.2796172248187391,
-        "improvement_absolute": 0,
-        "improvement_ratio": 0,
+        "improvement_absolute": 0.0,
+        "improvement_ratio": 0.0,
         "safety": {
           "all_finite": true,
-          "max_seam_gap": 0,
+          "max_seam_gap": 0.0,
           "max_intersection_pairs_all_poses": 0,
           "final_self_intersection_pairs": 0,
           "layer_warning_count": 0,
@@ -1519,15 +1521,15 @@
           ]
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 4,
+          "measured_release_elapsed_millis": 2,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=4ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 2ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -1552,7 +1554,7 @@
           "digest": "f944361a417dba31"
         },
         "structure_hash": "04501f33976e8401",
-        "normalized_input_hash": "9c2eda4b80e711a9"
+        "normalized_input_hash": "4423cd472b57ec2c"
       },
       "strata": {
         "band": "B",
@@ -1582,13 +1584,13 @@
           "state_cap"
         ],
         "initial_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.09109260304912463,
           "width": 0.530633995164113,
           "position": 5.313440584741457e-17
         },
         "final_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.2889422218524545,
           "width": 0.41319888907574737,
           "position": 0.3034528236120582
@@ -1625,15 +1627,15 @@
           ]
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 9672,
+          "measured_release_elapsed_millis": 7390,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=9672ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 7390ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -1658,7 +1660,7 @@
           "digest": "6769eb9f37fd606e"
         },
         "structure_hash": "f9d7a9d89c6d6060",
-        "normalized_input_hash": "3083872562dd1311"
+        "normalized_input_hash": "2f96512c75e0e326"
       },
       "strata": {
         "band": "B",
@@ -1694,24 +1696,24 @@
           "goal_reached"
         ],
         "initial_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.2122659447156051,
           "width": 0.22112131549678637,
-          "position": 0
+          "position": 0.0
         },
         "final_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.2122659447156051,
           "width": 0.22112131549678637,
-          "position": 0
+          "position": 0.0
         },
         "initial_weighted_gap": 0.25649020781496235,
         "final_weighted_gap": 0.25649020781496235,
-        "improvement_absolute": 0,
-        "improvement_ratio": 0,
+        "improvement_absolute": 0.0,
+        "improvement_ratio": 0.0,
         "safety": {
           "all_finite": true,
-          "max_seam_gap": 0,
+          "max_seam_gap": 0.0,
           "max_intersection_pairs_all_poses": 0,
           "final_self_intersection_pairs": 0,
           "layer_warning_count": 0,
@@ -1738,15 +1740,15 @@
           ]
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 19,
+          "measured_release_elapsed_millis": 4,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=19ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 4ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -1771,7 +1773,7 @@
           "digest": "4f389c5be02d7208"
         },
         "structure_hash": "9f7e1310da3a13ad",
-        "normalized_input_hash": "6d0a2934d635385f"
+        "normalized_input_hash": "aee97f59941bbaba"
       },
       "strata": {
         "band": "B",
@@ -1801,13 +1803,13 @@
           "state_cap"
         ],
         "initial_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.11228025597590807,
           "width": 0.5251707741183229,
           "position": 3.925231146709437e-17
         },
         "final_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.16941689894441725,
           "width": 0.3684404043211588,
           "position": 0.09722988459870985
@@ -1844,15 +1846,15 @@
           ]
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 26625,
+          "measured_release_elapsed_millis": 20412,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=26625ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 20412ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -1877,7 +1879,7 @@
           "digest": "58f67d7221ad7a95"
         },
         "structure_hash": "9cc37bc9348ae5e4",
-        "normalized_input_hash": "61a1907014d21f6a"
+        "normalized_input_hash": "a24c5f6bde55932d"
       },
       "strata": {
         "band": "B",
@@ -1913,16 +1915,16 @@
           "state_cap"
         ],
         "initial_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.2281261621094527,
           "width": 0.31040257583196657,
-          "position": 0
+          "position": 0.0
         },
         "final_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.33914328365619384,
           "width": 0.22305944077233,
-          "position": 0
+          "position": 0.0
         },
         "initial_weighted_gap": 0.29020667727584604,
         "final_weighted_gap": 0.3837551718106598,
@@ -1956,15 +1958,15 @@
           ]
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 6027,
+          "measured_release_elapsed_millis": 8054,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=6027ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 8054ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -1989,7 +1991,7 @@
           "digest": "5aba312f809e4957"
         },
         "structure_hash": "c300f1e4f9f63983",
-        "normalized_input_hash": "568e0b37f2c76af8"
+        "normalized_input_hash": "e92ba2aa2e2b7d9f"
       },
       "strata": {
         "band": "C",
@@ -2019,13 +2021,13 @@
           "state_cap"
         ],
         "initial_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.14939151082230445,
           "width": 0.5383765236950799,
           "position": 6.156281314430224e-17
         },
         "final_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.12325101257624176,
           "width": 0.46849033022475567,
           "position": 0.08706275895208408
@@ -2062,15 +2064,15 @@
           ]
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 18167,
+          "measured_release_elapsed_millis": 13221,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=18167ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 13221ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -2095,7 +2097,7 @@
           "digest": "95bcbd4d921d17fb"
         },
         "structure_hash": "7018991c8a21005c",
-        "normalized_input_hash": "aa0042de3b6f75de"
+        "normalized_input_hash": "15ec05eac4b9415f"
       },
       "strata": {
         "band": "C",
@@ -2131,16 +2133,16 @@
           "state_cap"
         ],
         "initial_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.025633220654892645,
           "width": 0.4213920583044275,
-          "position": 0
+          "position": 0.0
         },
         "final_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.14083765874011994,
           "width": 0.37838904010125163,
-          "position": 0
+          "position": 0.0
         },
         "initial_weighted_gap": 0.10991163231577816,
         "final_weighted_gap": 0.21651546676037026,
@@ -2174,15 +2176,15 @@
           ]
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 4234,
+          "measured_release_elapsed_millis": 3035,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=4234ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 3035ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -2207,7 +2209,7 @@
           "digest": "1796895dcdb26fcc"
         },
         "structure_hash": "5e94b646cff19ea5",
-        "normalized_input_hash": "418b93c091b733bb"
+        "normalized_input_hash": "4e6c0bc705005488"
       },
       "strata": {
         "band": "C",
@@ -2226,70 +2228,69 @@
         "criterion": "safe-verified-plan-with-positive-weighted-gap-improvement"
       },
       "recorded_current": {
-        "outcome": "execution_failure",
-        "execution_failure": {
-          "phase": "search",
-          "reason": "watchdog_expired",
-          "normalized_failure_hash": "5eb899a874198153"
-        },
+        "outcome": "candidates",
+        "execution_failure": null,
         "selected_candidate_index": 0,
-        "candidate_count": 0,
-        "candidate_statuses": [],
-        "stop_reasons": [],
+        "candidate_count": 1,
+        "candidate_statuses": [
+          "partial"
+        ],
+        "stop_reasons": [
+          "state_cap"
+        ],
         "initial_gaps": {
-          "count": 0,
-          "length": 0,
-          "width": 0,
-          "position": 0
+          "count": 0.0,
+          "length": 0.187732145356305,
+          "width": 0.6389087548127794,
+          "position": 3.3599898707591626e-17
         },
         "final_gaps": {
-          "count": 0,
-          "length": 0,
-          "width": 0,
-          "position": 0
+          "count": 0.0,
+          "length": 0.405584894469508,
+          "width": 0.5064265260979577,
+          "position": 0.22131295404470114
         },
-        "initial_weighted_gap": 0,
-        "final_weighted_gap": 0,
-        "improvement_absolute": 0,
-        "improvement_ratio": 0,
+        "initial_weighted_gap": 0.31551389631886095,
+        "final_weighted_gap": 0.7281831537338006,
+        "improvement_absolute": -0.41266925741493965,
+        "improvement_ratio": -1.3079273598709982,
         "safety": {
-          "all_finite": false,
-          "max_seam_gap": 0,
+          "all_finite": true,
+          "max_seam_gap": 3.2453520572830223e-14,
           "max_intersection_pairs_all_poses": 0,
           "final_self_intersection_pairs": 0,
           "layer_warning_count": 0,
           "final_warning_count": 0,
-          "face_count_matches": false,
+          "face_count_matches": true,
           "skipped_steps": 0,
-          "verification_failure": true,
-          "report_passed": false
+          "verification_failure": false,
+          "report_passed": true
         },
-        "normalized_candidate_hash": "09612b07b5ecb5a5",
-        "stop_reason_hash": "09612b07b5ecb5a5",
-        "normalized_result_hash": "1c8c8ccd1012b5e2",
-        "all_returned_plans_safe": false,
+        "normalized_candidate_hash": "1910c1161a70e1f3",
+        "stop_reason_hash": "be36095e6dac285c",
+        "normalized_result_hash": "c7da51a3f6758334",
+        "all_returned_plans_safe": true,
         "assessment": {
           "functional_met": false,
-          "safety_met": false,
+          "safety_met": true,
           "improvement_met": false,
           "target_met": false,
-          "distance_to_target": null,
+          "distance_to_target": 0.7281831537338006,
           "time_status": "pending_limit_recalibration",
           "unmet_reasons": [
-            "execution_failure",
-            "safety_not_verified"
+            "non_positive_improvement"
           ]
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 30020,
+          "measured_release_elapsed_millis": 22570,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B release observation hit the unchanged 30000ms product search watchdog (WatchdogExpired), and the test ended at 30020ms. No product candidate response or SearchStop tag exists; candidate/stop/result hashes therefore cover the empty benchmark envelope only. This case remains an explicit failure against the 10000ms release limit and its predeclared safe_partial_allowed class. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 22570ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -2314,7 +2315,7 @@
           "digest": "2baa608b000bbb59"
         },
         "structure_hash": "a472ed5fff989236",
-        "normalized_input_hash": "8a949020a84f2944"
+        "normalized_input_hash": "51c4f89d8a8ab2d3"
       },
       "strata": {
         "band": "C",
@@ -2350,16 +2351,16 @@
           "state_cap"
         ],
         "initial_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.2542567325566225,
           "width": 0.42202329699225966,
-          "position": 0
+          "position": 0.0
         },
         "final_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.2771856261460885,
           "width": 0.34050875279085585,
-          "position": 0
+          "position": 0.0
         },
         "initial_weighted_gap": 0.33866139195507444,
         "final_weighted_gap": 0.3452873767042597,
@@ -2393,15 +2394,15 @@
           ]
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 12151,
+          "measured_release_elapsed_millis": 7055,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=12151ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 7055ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -2426,7 +2427,7 @@
           "digest": "439a221cc8f8601b"
         },
         "structure_hash": "fca39091fcbdac4e",
-        "normalized_input_hash": "b326a971a7d63234"
+        "normalized_input_hash": "be31f658ca9afc05"
       },
       "strata": {
         "band": "C",
@@ -2445,70 +2446,69 @@
         "criterion": "safe-verified-plan-with-positive-weighted-gap-improvement"
       },
       "recorded_current": {
-        "outcome": "execution_failure",
-        "execution_failure": {
-          "phase": "search",
-          "reason": "watchdog_expired",
-          "normalized_failure_hash": "5eb899a874198153"
-        },
+        "outcome": "candidates",
+        "execution_failure": null,
         "selected_candidate_index": 0,
-        "candidate_count": 0,
-        "candidate_statuses": [],
-        "stop_reasons": [],
+        "candidate_count": 1,
+        "candidate_statuses": [
+          "partial"
+        ],
+        "stop_reasons": [
+          "state_cap"
+        ],
         "initial_gaps": {
-          "count": 0,
-          "length": 0,
-          "width": 0,
-          "position": 0
+          "count": 0.0,
+          "length": 0.20553508920653424,
+          "width": 0.6435850703374764,
+          "position": 6.158487468364983e-17
         },
         "final_gaps": {
-          "count": 0,
-          "length": 0,
-          "width": 0,
-          "position": 0
+          "count": 0.0,
+          "length": 0.3313411631784865,
+          "width": 0.5027269285860949,
+          "position": 0.18377904874214607
         },
-        "initial_weighted_gap": 0,
-        "final_weighted_gap": 0,
-        "improvement_absolute": 0,
-        "improvement_ratio": 0,
+        "initial_weighted_gap": 0.3342521032740296,
+        "final_weighted_gap": 0.6156655976378516,
+        "improvement_absolute": -0.28141349436382196,
+        "improvement_ratio": -0.8419198910264178,
         "safety": {
-          "all_finite": false,
-          "max_seam_gap": 0,
+          "all_finite": true,
+          "max_seam_gap": 1.3141524982176115e-14,
           "max_intersection_pairs_all_poses": 0,
           "final_self_intersection_pairs": 0,
           "layer_warning_count": 0,
           "final_warning_count": 0,
-          "face_count_matches": false,
+          "face_count_matches": true,
           "skipped_steps": 0,
-          "verification_failure": true,
-          "report_passed": false
+          "verification_failure": false,
+          "report_passed": true
         },
-        "normalized_candidate_hash": "09612b07b5ecb5a5",
-        "stop_reason_hash": "09612b07b5ecb5a5",
-        "normalized_result_hash": "1c8c8ccd1012b5e2",
-        "all_returned_plans_safe": false,
+        "normalized_candidate_hash": "d31bab68c2de9017",
+        "stop_reason_hash": "be36095e6dac285c",
+        "normalized_result_hash": "6ba9ba103d1debd9",
+        "all_returned_plans_safe": true,
         "assessment": {
           "functional_met": false,
-          "safety_met": false,
+          "safety_met": true,
           "improvement_met": false,
           "target_met": false,
-          "distance_to_target": null,
+          "distance_to_target": 0.6156655976378516,
           "time_status": "pending_limit_recalibration",
           "unmet_reasons": [
-            "execution_failure",
-            "safety_not_verified"
+            "non_positive_improvement"
           ]
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 30860,
+          "measured_release_elapsed_millis": 30653,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B release observation hit the unchanged 30000ms product search watchdog (WatchdogExpired), and the test ended at 30860ms. No product candidate response or SearchStop tag exists; candidate/stop/result hashes cover the empty benchmark envelope only. This remains an explicit failure against the 10000ms release limit and the predeclared safe_partial_allowed class. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 30653ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -2533,7 +2533,7 @@
           "digest": "b0400b47ceeb6551"
         },
         "structure_hash": "bb2d084b6f8f6248",
-        "normalized_input_hash": "b708369f22c20ef6"
+        "normalized_input_hash": "5f652a9a980810a3"
       },
       "strata": {
         "band": "C",
@@ -2569,16 +2569,16 @@
           "state_cap"
         ],
         "initial_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.23504273119469854,
           "width": 0.5185674666246568,
-          "position": 0
+          "position": 0.0
         },
         "final_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.25741709217734665,
           "width": 0.3487935637940465,
-          "position": 0
+          "position": 0.0
         },
         "initial_weighted_gap": 0.3387562245196299,
         "final_weighted_gap": 0.32717580493615595,
@@ -2610,15 +2610,15 @@
           "unmet_reasons": []
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 7091,
+          "measured_release_elapsed_millis": 8601,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=7091ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 8601ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -2643,7 +2643,7 @@
           "digest": "d985feb25823bdb0"
         },
         "structure_hash": "206015e1b454b38f",
-        "normalized_input_hash": "28702d7a48bedfd1"
+        "normalized_input_hash": "be0bf15c3b68cf2c"
       },
       "strata": {
         "band": "D",
@@ -2662,70 +2662,69 @@
         "criterion": "at-least-one-checked-to-finish-and-all-returned-plans-safe"
       },
       "recorded_current": {
-        "outcome": "execution_failure",
-        "execution_failure": {
-          "phase": "search",
-          "reason": "watchdog_expired",
-          "normalized_failure_hash": "5eb899a874198153"
-        },
+        "outcome": "candidates",
+        "execution_failure": null,
         "selected_candidate_index": 0,
-        "candidate_count": 0,
-        "candidate_statuses": [],
-        "stop_reasons": [],
+        "candidate_count": 1,
+        "candidate_statuses": [
+          "partial"
+        ],
+        "stop_reasons": [
+          "state_cap"
+        ],
         "initial_gaps": {
-          "count": 0,
-          "length": 0,
-          "width": 0,
-          "position": 0
+          "count": 0.0,
+          "length": 0.3784336744097286,
+          "width": 0.42421104606716004,
+          "position": 1.1207578210269036e-16
         },
         "final_gaps": {
-          "count": 0,
-          "length": 0,
-          "width": 0,
-          "position": 0
+          "count": 0.0,
+          "length": 0.311096312657101,
+          "width": 0.3389620776378507,
+          "position": 0.2690156097367038
         },
-        "initial_weighted_gap": 0,
-        "final_weighted_gap": 0,
-        "improvement_absolute": 0,
-        "improvement_ratio": 0,
+        "initial_weighted_gap": 0.4632758836231607,
+        "final_weighted_gap": 0.6479043379213749,
+        "improvement_absolute": -0.18462845429821423,
+        "improvement_ratio": -0.3985280927085669,
         "safety": {
-          "all_finite": false,
-          "max_seam_gap": 0,
+          "all_finite": true,
+          "max_seam_gap": 1.4930332731830067e-14,
           "max_intersection_pairs_all_poses": 0,
           "final_self_intersection_pairs": 0,
           "layer_warning_count": 0,
           "final_warning_count": 0,
-          "face_count_matches": false,
+          "face_count_matches": true,
           "skipped_steps": 0,
-          "verification_failure": true,
-          "report_passed": false
+          "verification_failure": false,
+          "report_passed": true
         },
-        "normalized_candidate_hash": "09612b07b5ecb5a5",
-        "stop_reason_hash": "09612b07b5ecb5a5",
-        "normalized_result_hash": "1c8c8ccd1012b5e2",
-        "all_returned_plans_safe": false,
+        "normalized_candidate_hash": "3aa433958c7cd0fc",
+        "stop_reason_hash": "be36095e6dac285c",
+        "normalized_result_hash": "889fa9f23f6f640e",
+        "all_returned_plans_safe": true,
         "assessment": {
           "functional_met": false,
-          "safety_met": false,
+          "safety_met": true,
           "improvement_met": null,
           "target_met": false,
-          "distance_to_target": null,
+          "distance_to_target": 0.6479043379213749,
           "time_status": "pending_limit_recalibration",
           "unmet_reasons": [
-            "execution_failure",
-            "safety_not_verified"
+            "not_checked_to_finish"
           ]
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 32890,
+          "measured_release_elapsed_millis": 33538,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B release observation hit the unchanged 30000ms product search watchdog (WatchdogExpired), and the test ended at 32890ms. No product candidate response or SearchStop tag exists; candidate/stop/result hashes cover the empty benchmark envelope only. This remains an explicit failure against the 10000ms release limit and predeclared must_complete class. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 33538ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -2750,7 +2749,7 @@
           "digest": "101097091574ffb7"
         },
         "structure_hash": "9365d9241cd6ffc2",
-        "normalized_input_hash": "70a9b06559d57f16"
+        "normalized_input_hash": "6f5ed3b01fdc3657"
       },
       "strata": {
         "band": "D",
@@ -2786,16 +2785,16 @@
           "state_cap"
         ],
         "initial_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.28514714280349934,
           "width": 0.3025672199065854,
-          "position": 0
+          "position": 0.0
         },
         "final_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.317580223475838,
           "width": 0.2409183703269274,
-          "position": 0
+          "position": 0.0
         },
         "initial_weighted_gap": 0.3456605867848164,
         "final_weighted_gap": 0.36576389754122346,
@@ -2827,15 +2826,15 @@
           "unmet_reasons": []
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 18823,
+          "measured_release_elapsed_millis": 6783,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=18823ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 6783ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -2860,7 +2859,7 @@
           "digest": "daf304dfbb49602f"
         },
         "structure_hash": "5c8de64d52ad51e7",
-        "normalized_input_hash": "5e4b3cc5fc30e754"
+        "normalized_input_hash": "9db8aa043cf583af"
       },
       "strata": {
         "band": "D",
@@ -2879,70 +2878,69 @@
         "criterion": "safe-verified-plan-with-positive-weighted-gap-improvement"
       },
       "recorded_current": {
-        "outcome": "execution_failure",
-        "execution_failure": {
-          "phase": "search",
-          "reason": "watchdog_expired",
-          "normalized_failure_hash": "5eb899a874198153"
-        },
+        "outcome": "candidates",
+        "execution_failure": null,
         "selected_candidate_index": 0,
-        "candidate_count": 0,
-        "candidate_statuses": [],
-        "stop_reasons": [],
+        "candidate_count": 1,
+        "candidate_statuses": [
+          "partial"
+        ],
+        "stop_reasons": [
+          "state_cap"
+        ],
         "initial_gaps": {
-          "count": 0,
-          "length": 0,
-          "width": 0,
-          "position": 0
+          "count": 0.0,
+          "length": 0.20291461425376292,
+          "width": 0.46516249987365543,
+          "position": 4.4807867287163205e-17
         },
         "final_gaps": {
-          "count": 0,
-          "length": 0,
-          "width": 0,
-          "position": 0
+          "count": 0.0,
+          "length": 0.27400130401031253,
+          "width": 0.34002738062258,
+          "position": 0.12895737198897686
         },
-        "initial_weighted_gap": 0,
-        "final_weighted_gap": 0,
-        "improvement_absolute": 0,
-        "improvement_ratio": 0,
+        "initial_weighted_gap": 0.29594711422849407,
+        "final_weighted_gap": 0.4709641521238054,
+        "improvement_absolute": -0.1750170378953113,
+        "improvement_ratio": -0.5913794373415806,
         "safety": {
-          "all_finite": false,
-          "max_seam_gap": 0,
+          "all_finite": true,
+          "max_seam_gap": 2.55214291178206e-13,
           "max_intersection_pairs_all_poses": 0,
           "final_self_intersection_pairs": 0,
           "layer_warning_count": 0,
           "final_warning_count": 0,
-          "face_count_matches": false,
+          "face_count_matches": true,
           "skipped_steps": 0,
-          "verification_failure": true,
-          "report_passed": false
+          "verification_failure": false,
+          "report_passed": true
         },
-        "normalized_candidate_hash": "09612b07b5ecb5a5",
-        "stop_reason_hash": "09612b07b5ecb5a5",
-        "normalized_result_hash": "1c8c8ccd1012b5e2",
-        "all_returned_plans_safe": false,
+        "normalized_candidate_hash": "b2887ac11830b4cb",
+        "stop_reason_hash": "be36095e6dac285c",
+        "normalized_result_hash": "39836f8a1afcc90a",
+        "all_returned_plans_safe": true,
         "assessment": {
           "functional_met": false,
-          "safety_met": false,
+          "safety_met": true,
           "improvement_met": false,
           "target_met": false,
-          "distance_to_target": null,
+          "distance_to_target": 0.4709641521238054,
           "time_status": "pending_limit_recalibration",
           "unmet_reasons": [
-            "execution_failure",
-            "safety_not_verified"
+            "non_positive_improvement"
           ]
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 32770,
+          "measured_release_elapsed_millis": 30009,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B release observation hit the unchanged 30000ms product search watchdog (WatchdogExpired), and the test ended at 32770ms. No product candidate response or SearchStop tag exists; candidate/stop/result hashes cover the empty benchmark envelope only. This remains an explicit failure against the 10000ms release limit and predeclared safe_partial_allowed class. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 30009ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -2967,7 +2965,7 @@
           "digest": "209a99527eabb24f"
         },
         "structure_hash": "5065caa95ad11c81",
-        "normalized_input_hash": "a74bf892aea62aa4"
+        "normalized_input_hash": "88adb81d548edc93"
       },
       "strata": {
         "band": "D",
@@ -3003,16 +3001,16 @@
           "goal_reached"
         ],
         "initial_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.2639894499598975,
           "width": 0.2704514374570623,
-          "position": 0
+          "position": 0.0
         },
         "final_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.31090286251405236,
           "width": 0.23937895542783932,
-          "position": 0
+          "position": 0.0
         },
         "initial_weighted_gap": 0.31807973745130996,
         "final_weighted_gap": 0.35877865359962025,
@@ -3046,15 +3044,15 @@
           ]
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 9977,
+          "measured_release_elapsed_millis": 11061,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B D-04 isolated release investigation, ten sequential runs: 9297/9324/9626/9390/9267/9829/9661/9977/9586/9400ms; candidate, stop, normalized-result, and exact candidate-JSON hashes matched 10/10. The recorded measurement is the observed maximum 9977ms. Historical 10000/300000ms limits are retained only as provisional references; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 11061ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -3079,7 +3077,7 @@
           "digest": "fdd346a2c6318b94"
         },
         "structure_hash": "105dca2cccc1a3d8",
-        "normalized_input_hash": "4b7fa8ddb42e41c7"
+        "normalized_input_hash": "00cbd18c92170bcc"
       },
       "strata": {
         "band": "D",
@@ -3098,70 +3096,69 @@
         "criterion": "safe-verified-plan-with-positive-weighted-gap-improvement"
       },
       "recorded_current": {
-        "outcome": "execution_failure",
-        "execution_failure": {
-          "phase": "search",
-          "reason": "watchdog_expired",
-          "normalized_failure_hash": "5eb899a874198153"
-        },
+        "outcome": "candidates",
+        "execution_failure": null,
         "selected_candidate_index": 0,
-        "candidate_count": 0,
-        "candidate_statuses": [],
-        "stop_reasons": [],
+        "candidate_count": 1,
+        "candidate_statuses": [
+          "partial"
+        ],
+        "stop_reasons": [
+          "state_cap"
+        ],
         "initial_gaps": {
-          "count": 0,
-          "length": 0,
-          "width": 0,
-          "position": 0
+          "count": 0.0,
+          "length": 0.22490872807828616,
+          "width": 0.456280382735682,
+          "position": 2.8677966210391646e-17
         },
         "final_gaps": {
-          "count": 0,
-          "length": 0,
-          "width": 0,
-          "position": 0
+          "count": 0.0,
+          "length": 0.2930665524740213,
+          "width": 0.3840323328975491,
+          "position": 0.13763521505954213
         },
-        "initial_weighted_gap": 0,
-        "final_weighted_gap": 0,
-        "improvement_absolute": 0,
-        "improvement_ratio": 0,
+        "initial_weighted_gap": 0.3161648046254226,
+        "final_weighted_gap": 0.5075082341130732,
+        "improvement_absolute": -0.1913434294876506,
+        "improvement_ratio": -0.6052015489654056,
         "safety": {
-          "all_finite": false,
-          "max_seam_gap": 0,
+          "all_finite": true,
+          "max_seam_gap": 5.533353559548276e-13,
           "max_intersection_pairs_all_poses": 0,
           "final_self_intersection_pairs": 0,
           "layer_warning_count": 0,
           "final_warning_count": 0,
-          "face_count_matches": false,
+          "face_count_matches": true,
           "skipped_steps": 0,
-          "verification_failure": true,
-          "report_passed": false
+          "verification_failure": false,
+          "report_passed": true
         },
-        "normalized_candidate_hash": "09612b07b5ecb5a5",
-        "stop_reason_hash": "09612b07b5ecb5a5",
-        "normalized_result_hash": "1c8c8ccd1012b5e2",
-        "all_returned_plans_safe": false,
+        "normalized_candidate_hash": "216ead18a5b6b0c3",
+        "stop_reason_hash": "be36095e6dac285c",
+        "normalized_result_hash": "0a06272087257eda",
+        "all_returned_plans_safe": true,
         "assessment": {
           "functional_met": false,
-          "safety_met": false,
+          "safety_met": true,
           "improvement_met": false,
           "target_met": false,
-          "distance_to_target": null,
+          "distance_to_target": 0.5075082341130732,
           "time_status": "pending_limit_recalibration",
           "unmet_reasons": [
-            "execution_failure",
-            "safety_not_verified"
+            "non_positive_improvement"
           ]
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 30030,
+          "measured_release_elapsed_millis": 30147,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B release observation hit the unchanged 30000ms product search watchdog (WatchdogExpired), and the test ended at 30030ms. No product candidate response or SearchStop tag exists; candidate/stop/result hashes cover the empty benchmark envelope only. This remains an explicit failure against the 10000ms release limit and predeclared safe_partial_allowed class. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 30147ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -3186,7 +3183,7 @@
           "digest": "0db9d8feb36e4e3f"
         },
         "structure_hash": "d1ae56e234df7b44",
-        "normalized_input_hash": "7e365b0ced0307dc"
+        "normalized_input_hash": "f029f4105467ce21"
       },
       "strata": {
         "band": "D",
@@ -3222,16 +3219,16 @@
           "state_cap"
         ],
         "initial_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.21702045645094023,
           "width": 0.39301017167196267,
-          "position": 0
+          "position": 0.0
         },
         "final_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.2230769386071107,
           "width": 0.3604924435703557,
-          "position": 0
+          "position": 0.0
         },
         "initial_weighted_gap": 0.29562249078533276,
         "final_weighted_gap": 0.29517542732118185,
@@ -3263,15 +3260,15 @@
           "unmet_reasons": []
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 13022,
+          "measured_release_elapsed_millis": 8838,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=13022ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 8838ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -3296,7 +3293,7 @@
           "digest": "56e4ef19e2654dcf"
         },
         "structure_hash": "0e27077324214eac",
-        "normalized_input_hash": "0e5a0d325e60fc48"
+        "normalized_input_hash": "b97684d21d7411c5"
       },
       "strata": {
         "band": "E",
@@ -3315,70 +3312,69 @@
         "criterion": "at-least-one-checked-to-finish-and-all-returned-plans-safe"
       },
       "recorded_current": {
-        "outcome": "execution_failure",
-        "execution_failure": {
-          "phase": "search",
-          "reason": "watchdog_expired",
-          "normalized_failure_hash": "5eb899a874198153"
-        },
+        "outcome": "candidates",
+        "execution_failure": null,
         "selected_candidate_index": 0,
-        "candidate_count": 0,
-        "candidate_statuses": [],
-        "stop_reasons": [],
+        "candidate_count": 1,
+        "candidate_statuses": [
+          "partial"
+        ],
+        "stop_reasons": [
+          "state_cap"
+        ],
         "initial_gaps": {
-          "count": 0,
-          "length": 0,
-          "width": 0,
-          "position": 0
+          "count": 0.0,
+          "length": 0.20144006436026815,
+          "width": 0.5723618685563907,
+          "position": 2.2888428051520882e-17
         },
         "final_gaps": {
-          "count": 0,
-          "length": 0,
-          "width": 0,
-          "position": 0
+          "count": 0.0,
+          "length": 0.24700272983933552,
+          "width": 0.42048671360660134,
+          "position": 0.18411432508482936
         },
-        "initial_weighted_gap": 0,
-        "final_weighted_gap": 0,
-        "improvement_absolute": 0,
-        "improvement_ratio": 0,
+        "initial_weighted_gap": 0.3159124380715463,
+        "final_weighted_gap": 0.5152143976454852,
+        "improvement_absolute": -0.19930195957393887,
+        "improvement_ratio": -0.6308772164545225,
         "safety": {
-          "all_finite": false,
-          "max_seam_gap": 0,
+          "all_finite": true,
+          "max_seam_gap": 1.3406402734145562e-14,
           "max_intersection_pairs_all_poses": 0,
           "final_self_intersection_pairs": 0,
           "layer_warning_count": 0,
           "final_warning_count": 0,
-          "face_count_matches": false,
+          "face_count_matches": true,
           "skipped_steps": 0,
-          "verification_failure": true,
-          "report_passed": false
+          "verification_failure": false,
+          "report_passed": true
         },
-        "normalized_candidate_hash": "09612b07b5ecb5a5",
-        "stop_reason_hash": "09612b07b5ecb5a5",
-        "normalized_result_hash": "1c8c8ccd1012b5e2",
-        "all_returned_plans_safe": false,
+        "normalized_candidate_hash": "edd59d5eff954b81",
+        "stop_reason_hash": "be36095e6dac285c",
+        "normalized_result_hash": "014f830509611e79",
+        "all_returned_plans_safe": true,
         "assessment": {
           "functional_met": false,
-          "safety_met": false,
+          "safety_met": true,
           "improvement_met": null,
           "target_met": false,
-          "distance_to_target": null,
+          "distance_to_target": 0.5152143976454852,
           "time_status": "pending_limit_recalibration",
           "unmet_reasons": [
-            "execution_failure",
-            "safety_not_verified"
+            "not_checked_to_finish"
           ]
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 30040,
+          "measured_release_elapsed_millis": 30020,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B release observation hit the unchanged 30000ms product search watchdog (WatchdogExpired), and the test ended at 30040ms. No product candidate response or SearchStop tag exists; candidate/stop/result hashes cover the empty benchmark envelope only. This remains an explicit failure against the 10000ms release limit and predeclared must_complete class. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 30020ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -3403,7 +3399,7 @@
           "digest": "6e3924de2eef8cef"
         },
         "structure_hash": "e32a5489f8b8c7c1",
-        "normalized_input_hash": "bd280bf9055bec40"
+        "normalized_input_hash": "5fd831607b3e211f"
       },
       "strata": {
         "band": "E",
@@ -3439,16 +3435,16 @@
           "state_cap"
         ],
         "initial_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.13568090574275374,
           "width": 0.512032697457819,
-          "position": 0
+          "position": 0.0
         },
         "final_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.17079045727746772,
           "width": 0.43006331351762234,
-          "position": 0
+          "position": 0.0
         },
         "initial_weighted_gap": 0.23808744523431755,
         "final_weighted_gap": 0.2568031199809922,
@@ -3482,15 +3478,15 @@
           ]
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 24698,
+          "measured_release_elapsed_millis": 19607,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B one-case measurements: debug=not recorded with a 90000ms limit; release=24698ms with a 10000ms limit; the 30-case release limit is 300000ms. The limits come from the crane's initial debug observation above 27000ms and the existing release-speed evidence; stage 3-C will replace these single-run observations with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 19607ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -3515,7 +3511,7 @@
           "digest": "da62b545d9c3345b"
         },
         "structure_hash": "12997bfcd89c0237",
-        "normalized_input_hash": "bd6be9b1491eb810"
+        "normalized_input_hash": "8ff22ba746473293"
       },
       "strata": {
         "band": "E",
@@ -3534,70 +3530,69 @@
         "criterion": "safe-verified-plan-with-positive-weighted-gap-improvement"
       },
       "recorded_current": {
-        "outcome": "execution_failure",
-        "execution_failure": {
-          "phase": "search",
-          "reason": "watchdog_expired",
-          "normalized_failure_hash": "5eb899a874198153"
-        },
+        "outcome": "candidates",
+        "execution_failure": null,
         "selected_candidate_index": 0,
-        "candidate_count": 0,
-        "candidate_statuses": [],
-        "stop_reasons": [],
+        "candidate_count": 1,
+        "candidate_statuses": [
+          "partial"
+        ],
+        "stop_reasons": [
+          "state_cap"
+        ],
         "initial_gaps": {
-          "count": 0,
-          "length": 0,
-          "width": 0,
-          "position": 0
+          "count": 0.0,
+          "length": 0.21042893354182934,
+          "width": 0.6582038182459464,
+          "position": 6.862609311673289e-17
         },
         "final_gaps": {
-          "count": 0,
-          "length": 0,
-          "width": 0,
-          "position": 0
+          "count": 0.0,
+          "length": 0.4008701983358876,
+          "width": 0.48479848009664894,
+          "position": 0.22514030834001894
         },
-        "initial_weighted_gap": 0,
-        "final_weighted_gap": 0,
-        "improvement_absolute": 0,
-        "improvement_ratio": 0,
+        "initial_weighted_gap": 0.3420696971910187,
+        "final_weighted_gap": 0.7229702026952364,
+        "improvement_absolute": -0.38090050550421767,
+        "improvement_ratio": -1.113517241170635,
         "safety": {
-          "all_finite": false,
-          "max_seam_gap": 0,
+          "all_finite": true,
+          "max_seam_gap": 5.576572450336838e-14,
           "max_intersection_pairs_all_poses": 0,
           "final_self_intersection_pairs": 0,
           "layer_warning_count": 0,
           "final_warning_count": 0,
-          "face_count_matches": false,
+          "face_count_matches": true,
           "skipped_steps": 0,
-          "verification_failure": true,
-          "report_passed": false
+          "verification_failure": false,
+          "report_passed": true
         },
-        "normalized_candidate_hash": "09612b07b5ecb5a5",
-        "stop_reason_hash": "09612b07b5ecb5a5",
-        "normalized_result_hash": "1c8c8ccd1012b5e2",
-        "all_returned_plans_safe": false,
+        "normalized_candidate_hash": "1872ca3e483c2a70",
+        "stop_reason_hash": "be36095e6dac285c",
+        "normalized_result_hash": "af82ad7ffabb8851",
+        "all_returned_plans_safe": true,
         "assessment": {
           "functional_met": false,
-          "safety_met": false,
+          "safety_met": true,
           "improvement_met": false,
           "target_met": false,
-          "distance_to_target": null,
+          "distance_to_target": 0.7229702026952364,
           "time_status": "pending_limit_recalibration",
           "unmet_reasons": [
-            "execution_failure",
-            "safety_not_verified"
+            "non_positive_improvement"
           ]
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 30030,
+          "measured_release_elapsed_millis": 30013,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B release observation hit the unchanged 30000ms product search watchdog (WatchdogExpired), and the test ended at 30030ms. No product candidate response or SearchStop tag exists; candidate/stop/result hashes cover the empty benchmark envelope only. This remains an explicit failure against the 10000ms release limit and predeclared safe_partial_allowed class. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 30013ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -3622,7 +3617,7 @@
           "digest": "2e73dd9ee6922b2b"
         },
         "structure_hash": "5acad5c77716fe64",
-        "normalized_input_hash": "a11317bdd18d6b00"
+        "normalized_input_hash": "0c0ad09336e2e16b"
       },
       "strata": {
         "band": "E",
@@ -3658,16 +3653,16 @@
           "state_cap"
         ],
         "initial_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.27381429968055854,
           "width": 0.48004370524423257,
-          "position": 0
+          "position": 0.0
         },
         "final_gaps": {
-          "count": 0,
+          "count": 0.0,
           "length": 0.2813164160287484,
           "width": 0.42440591205442996,
-          "position": 0
+          "position": 0.0
         },
         "initial_weighted_gap": 0.3698230407294051,
         "final_weighted_gap": 0.3661975984396344,
@@ -3699,15 +3694,15 @@
           "unmet_reasons": []
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 20316,
+          "measured_release_elapsed_millis": 21683,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B E-04 isolated release investigation, ten sequential runs: 18795/18356/18924/18654/18585/18483/18507/19727/20316/20020ms; candidate, stop, normalized-result, and exact candidate-JSON hashes matched 10/10. The recorded measurement is the observed maximum 20316ms. Historical 10000/300000ms limits are retained only as provisional references; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 21683ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -3732,7 +3727,7 @@
           "digest": "2fe4a921aaf35bf4"
         },
         "structure_hash": "63cb2b84d3d19ed7",
-        "normalized_input_hash": "31790a7af61793c9"
+        "normalized_input_hash": "93bf4a873be73054"
       },
       "strata": {
         "band": "E",
@@ -3751,70 +3746,69 @@
         "criterion": "safe-verified-plan-with-positive-weighted-gap-improvement"
       },
       "recorded_current": {
-        "outcome": "execution_failure",
-        "execution_failure": {
-          "phase": "search",
-          "reason": "watchdog_expired",
-          "normalized_failure_hash": "5eb899a874198153"
-        },
+        "outcome": "candidates",
+        "execution_failure": null,
         "selected_candidate_index": 0,
-        "candidate_count": 0,
-        "candidate_statuses": [],
-        "stop_reasons": [],
+        "candidate_count": 1,
+        "candidate_statuses": [
+          "partial"
+        ],
+        "stop_reasons": [
+          "state_cap"
+        ],
         "initial_gaps": {
-          "count": 0,
-          "length": 0,
-          "width": 0,
-          "position": 0
+          "count": 0.0,
+          "length": 0.23668537531526004,
+          "width": 0.6807787881616996,
+          "position": 4.7305298170183784e-17
         },
         "final_gaps": {
-          "count": 0,
-          "length": 0,
-          "width": 0,
-          "position": 0
+          "count": 0.0,
+          "length": 0.34217498151458203,
+          "width": 0.5488353732977628,
+          "position": 0.236498065305091
         },
-        "initial_weighted_gap": 0,
-        "final_weighted_gap": 0,
-        "improvement_absolute": 0,
-        "improvement_ratio": 0,
+        "initial_weighted_gap": 0.3728411329476,
+        "final_weighted_gap": 0.6884401214792255,
+        "improvement_absolute": -0.3155989885316255,
+        "improvement_ratio": -0.8464704149903453,
         "safety": {
-          "all_finite": false,
-          "max_seam_gap": 0,
+          "all_finite": true,
+          "max_seam_gap": 2.1698802749829673e-13,
           "max_intersection_pairs_all_poses": 0,
           "final_self_intersection_pairs": 0,
           "layer_warning_count": 0,
           "final_warning_count": 0,
-          "face_count_matches": false,
+          "face_count_matches": true,
           "skipped_steps": 0,
-          "verification_failure": true,
-          "report_passed": false
+          "verification_failure": false,
+          "report_passed": true
         },
-        "normalized_candidate_hash": "09612b07b5ecb5a5",
-        "stop_reason_hash": "09612b07b5ecb5a5",
-        "normalized_result_hash": "1c8c8ccd1012b5e2",
-        "all_returned_plans_safe": false,
+        "normalized_candidate_hash": "a791db946ccd277d",
+        "stop_reason_hash": "be36095e6dac285c",
+        "normalized_result_hash": "3c0a1b904b470350",
+        "all_returned_plans_safe": true,
         "assessment": {
           "functional_met": false,
-          "safety_met": false,
+          "safety_met": true,
           "improvement_met": false,
           "target_met": false,
-          "distance_to_target": null,
+          "distance_to_target": 0.6884401214792255,
           "time_status": "pending_limit_recalibration",
           "unmet_reasons": [
-            "execution_failure",
-            "safety_not_verified"
+            "non_positive_improvement"
           ]
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 33530,
+          "measured_release_elapsed_millis": 32191,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B release observation hit the unchanged 30000ms product search watchdog (WatchdogExpired), and the test ended at 33530ms. No product candidate response or SearchStop tag exists; candidate/stop/result hashes cover the empty benchmark envelope only. This remains an explicit failure against the 10000ms release limit and predeclared safe_partial_allowed class. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 32191ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     },
@@ -3839,7 +3833,7 @@
           "digest": "b542868f7192417b"
         },
         "structure_hash": "8b63e175e4c3386c",
-        "normalized_input_hash": "a4b460e77491e72e"
+        "normalized_input_hash": "8bdf40ff6179cda3"
       },
       "strata": {
         "band": "E",
@@ -3858,70 +3852,73 @@
         "criterion": "safe-verified-plan-with-positive-weighted-gap-improvement"
       },
       "recorded_current": {
-        "outcome": "execution_failure",
-        "execution_failure": {
-          "phase": "search",
-          "reason": "watchdog_expired",
-          "normalized_failure_hash": "5eb899a874198153"
-        },
-        "selected_candidate_index": 0,
-        "candidate_count": 0,
-        "candidate_statuses": [],
-        "stop_reasons": [],
+        "outcome": "candidates",
+        "execution_failure": null,
+        "selected_candidate_index": 1,
+        "candidate_count": 4,
+        "candidate_statuses": [
+          "partial",
+          "partial",
+          "partial",
+          "partial"
+        ],
+        "stop_reasons": [
+          "state_cap",
+          "state_cap",
+          "state_cap",
+          "state_cap"
+        ],
         "initial_gaps": {
-          "count": 0,
-          "length": 0,
-          "width": 0,
-          "position": 0
+          "count": 0.0,
+          "length": 0.27334468799672146,
+          "width": 0.5495112285193281,
+          "position": 0.0
         },
         "final_gaps": {
-          "count": 0,
-          "length": 0,
-          "width": 0,
-          "position": 0
+          "count": 0.0,
+          "length": 0.28421834482246605,
+          "width": 0.433100573758522,
+          "position": 0.0
         },
-        "initial_weighted_gap": 0,
-        "final_weighted_gap": 0,
-        "improvement_absolute": 0,
-        "improvement_ratio": 0,
+        "initial_weighted_gap": 0.3832469337005871,
+        "final_weighted_gap": 0.37083845957417044,
+        "improvement_absolute": 0.012408474126416658,
+        "improvement_ratio": 0.03237723001878162,
         "safety": {
-          "all_finite": false,
-          "max_seam_gap": 0,
+          "all_finite": true,
+          "max_seam_gap": 4.400393604585934e-15,
           "max_intersection_pairs_all_poses": 0,
           "final_self_intersection_pairs": 0,
           "layer_warning_count": 0,
           "final_warning_count": 0,
-          "face_count_matches": false,
+          "face_count_matches": true,
           "skipped_steps": 0,
-          "verification_failure": true,
-          "report_passed": false
+          "verification_failure": false,
+          "report_passed": true
         },
-        "normalized_candidate_hash": "09612b07b5ecb5a5",
-        "stop_reason_hash": "09612b07b5ecb5a5",
-        "normalized_result_hash": "1c8c8ccd1012b5e2",
-        "all_returned_plans_safe": false,
+        "normalized_candidate_hash": "cea04c23304e81bf",
+        "stop_reason_hash": "d9091f98983dac39",
+        "normalized_result_hash": "1d5d061e6b8574b9",
+        "all_returned_plans_safe": true,
         "assessment": {
-          "functional_met": false,
-          "safety_met": false,
-          "improvement_met": false,
-          "target_met": false,
-          "distance_to_target": null,
+          "functional_met": true,
+          "safety_met": true,
+          "improvement_met": true,
+          "target_met": true,
+          "distance_to_target": 0.37083845957417044,
           "time_status": "pending_limit_recalibration",
-          "unmet_reasons": [
-            "execution_failure",
-            "safety_not_verified"
-          ]
+          "unmet_reasons": []
         },
         "time_budget": {
-          "search_watchdog_millis": 30000,
+          "product_search_watchdog_millis": 30000,
           "measured_debug_elapsed_millis": null,
           "debug_case_limit_millis": 90000,
-          "measured_release_elapsed_millis": 31630,
+          "measured_release_elapsed_millis": 30031,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
+          "limit_status": "pending_recalibration",
           "ordinary_test_enforces_elapsed": false,
-          "basis": "Stage 3-B release observation hit the unchanged 30000ms product search watchdog (WatchdogExpired), and the test ended at 31630ms. No product candidate response or SearchStop tag exists; candidate/stop/result hashes cover the empty benchmark envelope only. This remains an explicit failure against the 10000ms release limit and predeclared safe_partial_allowed class. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending.",
-          "limit_status": "pending_recalibration"
+          "basis": "Stage 3-C product-path performance repetition 1 observed 30031ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
       }
     }

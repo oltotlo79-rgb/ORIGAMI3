@@ -1554,10 +1554,7 @@ struct Stage3cRoundRecord {
     phase: String,
     repetition: usize,
     case_count: usize,
-    #[serde(
-        rename = "phase_elapsed_millis",
-        alias = "product_elapsed_millis"
-    )]
+    #[serde(rename = "phase_elapsed_millis", alias = "product_elapsed_millis")]
     phase_elapsed_millis: u64,
     collector_wall_elapsed_millis: u64,
 }
@@ -2366,10 +2363,9 @@ fn collect_stage_3c_release_measurements() {
 fn regenerate_one_corpus_baseline() {
     let _guard = corpus_run_guard();
     if std::env::var("ORI3_REGENERATE_CORPUS_FROM_EVIDENCE").as_deref() == Ok("1") {
-        assert!(
-            !cfg!(debug_assertions),
-            "corpus正本再生成はrelease evidenceでだけ実行する"
-        );
+        if cfg!(debug_assertions) {
+            panic!("corpus正本再生成はrelease evidenceでだけ実行する");
+        }
         regenerate_corpus_from_evidence();
         return;
     }
@@ -3973,10 +3969,7 @@ where
     records.pop()
 }
 
-fn take_collection_start_field(
-    fields: &mut BTreeMap<String, String>,
-    name: &str,
-) -> String {
+fn take_collection_start_field(fields: &mut BTreeMap<String, String>, name: &str) -> String {
     fields
         .remove(name)
         .unwrap_or_else(|| panic!("COLLECTION_STARTに{name}がない"))
@@ -4042,10 +4035,7 @@ fn collection_start(path: &Path) -> Stage3cCollectionStart {
         profile: take_collection_start_field(&mut fields, "profile"),
         functional_search: take_collection_start_field(&mut fields, "functional_search"),
         performance_search: take_collection_start_field(&mut fields, "performance_search"),
-        product_watchdog_millis: parse_collection_start_u64(
-            &mut fields,
-            "product_watchdog_millis",
-        ),
+        product_watchdog_millis: parse_collection_start_u64(&mut fields, "product_watchdog_millis"),
         require_recorded_current: parse_collection_start_bool(
             &mut fields,
             "require_recorded_current",
@@ -4082,7 +4072,10 @@ fn assert_collection_start(
     );
     assert_eq!(start.profile, "release");
     assert_eq!(start.functional_search, FUNCTIONAL_SEARCH_CONTRACT);
-    assert_eq!(start.functional_search, manifest.runner_contract.functional_search());
+    assert_eq!(
+        start.functional_search,
+        manifest.runner_contract.functional_search()
+    );
     assert_eq!(start.performance_search, PERFORMANCE_SEARCH_CONTRACT);
     assert_eq!(
         start.performance_search,
@@ -4210,7 +4203,12 @@ fn assert_candidate_recorded_current(
         "{}: stop reason数",
         case.id
     );
-    assert_eq!(metrics.len(), current.candidate_count, "{}: metric数", case.id);
+    assert_eq!(
+        metrics.len(),
+        current.candidate_count,
+        "{}: metric数",
+        case.id
+    );
     assert!(
         current.selected_candidate_index < current.candidate_count,
         "{}: selected indexが候補範囲外",
@@ -4222,14 +4220,6 @@ fn assert_candidate_recorded_current(
             .iter()
             .all(|status| matches!(status.as_str(), "checked_to_finish" | "partial" | "no_plan")),
         "{}: 未知のcandidate status",
-        case.id
-    );
-    assert!(
-        matches!(
-            current.candidate_statuses[current.selected_candidate_index].as_str(),
-            "checked_to_finish" | "partial"
-        ),
-        "{}: selected candidateに利用可能planがない",
         case.id
     );
     assert!(
@@ -4248,8 +4238,11 @@ fn assert_candidate_recorded_current(
         );
         assert_safety_policy(&metric.safety, policy);
     }
+    // usable planがなければ、3-Bの既存再生成契約と同じく最初の安全metricを
+    // 診断用に記録する。その場合もassessmentはno_usable_planでtarget不達のまま。
     let recalculated_selected = selected_candidate(metrics, policy)
-        .unwrap_or_else(|| panic!("{}: pure選択で安全なplanがない", case.id));
+        .or_else(|| metrics.iter().position(Option::is_some))
+        .unwrap_or_else(|| panic!("{}: pure選択でmetricがない", case.id));
     assert_eq!(
         recalculated_selected, current.selected_candidate_index,
         "{}: selected candidateのpure再計算",
@@ -4323,10 +4316,7 @@ fn assert_candidate_recorded_current(
                 current.normalized_candidate_hash.as_str(),
                 normalized_candidate_hash.as_str()
             );
-            assert_eq!(
-                current.stop_reason_hash.as_str(),
-                stop_reason_hash.as_str()
-            );
+            assert_eq!(current.stop_reason_hash.as_str(), stop_reason_hash.as_str());
             assert_eq!(
                 current.normalized_result_hash.as_str(),
                 normalized_result_hash.as_str()
@@ -4336,10 +4326,7 @@ fn assert_candidate_recorded_current(
             panic!("{}: 機能10周のfingerprintが実行失敗", case.id)
         }
     }
-    assert_eq!(
-        current.time_budget.product_search_watchdog_millis,
-        30_000
-    );
+    assert_eq!(current.time_budget.product_search_watchdog_millis, 30_000);
     assert_recorded_assessment(&case.target, current, policy);
 }
 
@@ -4719,7 +4706,7 @@ fn stage_3c_performance_evidence(
         .collect();
     let corpus_elapsed: Vec<_> = corpus_rounds
         .iter()
-        .map(|round| round.phase_elapsed_millis)
+        .map(|round| round.product_elapsed_millis)
         .collect();
     let performance = Stage3cMetricsPerformance {
         all_median_millis: stage_3c_median_millis(&all_elapsed),
@@ -4804,8 +4791,8 @@ fn preflight_canonical_pair(
             .find(|case| case.id == slot.case_id)
             .unwrap_or_else(|| panic!("{}: candidate target caseがない", slot.case_id));
         let path = fixture_path(&case.input.fixture).expect("candidate input path");
-        let bytes = fs::read(&path)
-            .unwrap_or_else(|error| panic!("{}を読めない: {error}", path.display()));
+        let bytes =
+            fs::read(&path).unwrap_or_else(|error| panic!("{}を読めない: {error}", path.display()));
         assert!(
             candidate_immutable.insert(path, bytes).is_none(),
             "candidate input pathが重複"
@@ -4880,12 +4867,7 @@ fn write_canonical_pair(
 ) {
     let manifest_file = manifest_path();
     let metrics_file = stage_3c_metrics_path();
-    preflight_canonical_pair(
-        &manifest_file,
-        &metrics_file,
-        manifest_bytes,
-        metrics_bytes,
-    );
+    preflight_canonical_pair(&manifest_file, &metrics_file, manifest_bytes, metrics_bytes);
     // CAS: evidenceを読んだ後に別担当が正本を変えた場合、その変更へ上書きしない。
     // 2ファイルとも、write直前に最初のsnapshotとbyte完全一致することを要求する。
     assert_eq!(
@@ -4990,24 +4972,14 @@ fn regenerate_corpus_from_evidence() {
     let (baseline_started_unix_millis, baseline_finished_unix_millis) =
         evidence_file_time_bounds(&baseline_log);
     let performance_start = collection_start(&performance_log);
-    assert_collection_start(
-        &performance_start,
-        "product_performance",
-        false,
-        &manifest,
-    );
-    let performance_environment: Stage3cCollectionEnvironment = exactly_one_prefixed_json(
-        &performance_log,
-        "CORPUS_3C_ENVIRONMENT_JSON=",
-    );
-    let performance_finished: Stage3cCollectionFinished = exactly_one_prefixed_json(
-        &performance_log,
-        "CORPUS_3C_FINISHED_JSON=",
-    );
+    assert_collection_start(&performance_start, "product_performance", false, &manifest);
+    let performance_environment: Stage3cCollectionEnvironment =
+        exactly_one_prefixed_json(&performance_log, "CORPUS_3C_ENVIRONMENT_JSON=");
+    let performance_finished: Stage3cCollectionFinished =
+        exactly_one_prefixed_json(&performance_log, "CORPUS_3C_FINISHED_JSON=");
     assert!(performance_environment.started_unix_millis > 0);
     assert!(
-        performance_finished.finished_unix_millis
-            >= performance_environment.started_unix_millis
+        performance_finished.finished_unix_millis >= performance_environment.started_unix_millis
     );
     stage_3c_assert_machine(&performance_environment.machine);
     let input_snapshots: BTreeMap<_, _> = manifest
@@ -5187,11 +5159,8 @@ fn regenerate_corpus_from_evidence() {
         target_contract_before,
         predeclared_target_contract(&parsed_manifest)
     );
-    let (new_failure_count, new_target_met) = assert_regenerated_manifest(
-        &parsed_manifest,
-        &functional_records,
-        &baseline_metrics,
-    );
+    let (new_failure_count, new_target_met) =
+        assert_regenerated_manifest(&parsed_manifest, &functional_records, &baseline_metrics);
     let (mut cases, performance, outliers, gate_proposal) =
         stage_3c_performance_evidence(&performance_records, &performance_rounds, &parsed_manifest);
     for (case_index, case_metrics) in cases.iter_mut().enumerate() {

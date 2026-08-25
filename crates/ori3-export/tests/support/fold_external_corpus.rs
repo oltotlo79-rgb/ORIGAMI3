@@ -115,7 +115,8 @@ pub fn validate_manifest(
             return Err(ManifestError::new(format!("duplicate id: {id}")));
         }
 
-        match required_text(entry, "source", &context)? {
+        let source = required_text(entry, "source", &context)?;
+        match source {
             "official" => summary.official += 1,
             "oripa" => summary.oripa += 1,
             "oriedita" => summary.oriedita += 1,
@@ -126,18 +127,35 @@ pub fn validate_manifest(
                 )));
             }
         }
+        validate_provenance(entry, &context)?;
 
         let path_text = required_text(entry, "path", &context)?;
         let relative_path = validate_relative_path(path_text, &context)?;
         if !paths.insert(path_text) {
             return Err(ManifestError::new(format!("duplicate path: {path_text}")));
         }
+        let reserved_source = reserved_source_for_id(id).ok_or_else(|| {
+            ManifestError::new(format!("{context}.id is not a reserved slot: {id}"))
+        })?;
+        if source != reserved_source {
+            return Err(ManifestError::new(format!(
+                "{context}.source is not the reserved source for {id}: expected {reserved_source}, found {source}"
+            )));
+        }
+        let reserved_path = format!("external/{reserved_source}/{id}.fold");
+        if path_text != reserved_path {
+            return Err(ManifestError::new(format!(
+                "{context}.path is not the reserved path for {id}: expected {reserved_path}, found {path_text}"
+            )));
+        }
 
         let byte_length = entry
             .get("byte_length")
             .and_then(Value::as_u64)
             .ok_or_else(|| {
-                ManifestError::new(format!("{context}.byte_length must be a non-negative integer"))
+                ManifestError::new(format!(
+                    "{context}.byte_length must be a non-negative integer"
+                ))
             })?;
         let expected_hash = required_text(entry, "sha256", &context)?;
         if expected_hash.len() != 64
@@ -155,9 +173,68 @@ pub fn validate_manifest(
             )));
         }
 
-        match required_text(entry, "classification", &context)? {
-            "supported" => summary.supported += 1,
-            "unsupported" => summary.unsupported += 1,
+        let classification = entry
+            .get("classification")
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                ManifestError::new(format!("{context}.classification must be an object"))
+            })?;
+        let expected = required_resolved_text(
+            classification,
+            "expected",
+            &format!("{context}.classification"),
+        )?;
+        let frozen_at_utc = required_resolved_text(
+            classification,
+            "frozen_at_utc",
+            &format!("{context}.classification"),
+        )?;
+        require_utc(
+            frozen_at_utc,
+            &format!("{context}.classification.frozen_at_utc"),
+        )?;
+        required_resolved_text(
+            classification,
+            "basis",
+            &format!("{context}.classification"),
+        )?;
+        let unsupported_paths = classification
+            .get("unsupported_paths")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                ManifestError::new(format!(
+                    "{context}.classification.unsupported_paths must be an array"
+                ))
+            })?;
+        for (path_index, path) in unsupported_paths.iter().enumerate() {
+            let path = path.as_str().filter(|path| !path.trim().is_empty()).ok_or_else(|| {
+                ManifestError::new(format!(
+                    "{context}.classification.unsupported_paths[{path_index}] must be a non-empty string"
+                ))
+            })?;
+            if !path.starts_with('$') {
+                return Err(ManifestError::new(format!(
+                    "{context}.classification.unsupported_paths[{path_index}] must be a JSON path"
+                )));
+            }
+        }
+        match expected {
+            "supported" => {
+                if !unsupported_paths.is_empty() {
+                    return Err(ManifestError::new(format!(
+                        "{context}.classification supported entry must not list unsupported paths"
+                    )));
+                }
+                summary.supported += 1;
+            }
+            "unsupported" => {
+                if unsupported_paths.is_empty() {
+                    return Err(ManifestError::new(format!(
+                        "{context}.classification requires at least one unsupported path"
+                    )));
+                }
+                summary.unsupported += 1;
+            }
             classification => {
                 return Err(ManifestError::new(format!(
                     "{context}.classification must be supported or unsupported, found {classification}"
@@ -222,6 +299,30 @@ fn validate_corpus_root(corpus_root: &Path) -> Result<(), ManifestError> {
     Ok(())
 }
 
+fn reserved_source_for_id(id: &str) -> Option<&'static str> {
+    if reserved_index(id, "official-", OFFICIAL_QUOTA) {
+        Some("official")
+    } else if reserved_index(id, "oripa-", ORIPA_QUOTA) {
+        Some("oripa")
+    } else if reserved_index(id, "oriedita-", ORIEDITA_QUOTA) {
+        Some("oriedita")
+    } else if reserved_index(id, "origami-simulator-", ORIGAMI_SIMULATOR_QUOTA) {
+        Some("origami_simulator")
+    } else {
+        None
+    }
+}
+
+fn reserved_index(id: &str, prefix: &str, maximum: usize) -> bool {
+    let Some(index) = id.strip_prefix(prefix) else {
+        return false;
+    };
+    index.len() == 2
+        && index
+            .parse::<usize>()
+            .is_ok_and(|index| (1..=maximum).contains(&index))
+}
+
 fn required_text<'a>(
     object: &'a Map<String, Value>,
     field: &str,
@@ -239,18 +340,52 @@ fn required_text<'a>(
     Ok(value)
 }
 
+fn required_resolved_text<'a>(
+    object: &'a Map<String, Value>,
+    field: &str,
+    context: &str,
+) -> Result<&'a str, ManifestError> {
+    let value = required_text(object, field, context)?;
+    if value.trim().eq_ignore_ascii_case("NOASSERTION") {
+        return Err(ManifestError::new(format!(
+            "{context}.{field} must not be NOASSERTION"
+        )));
+    }
+    Ok(value)
+}
+
+fn validate_provenance(entry: &Map<String, Value>, context: &str) -> Result<(), ManifestError> {
+    required_resolved_text(entry, "generator", context)?;
+    required_resolved_text(entry, "generator_version", context)?;
+    required_resolved_text(entry, "source_uri", context)?;
+    let created_utc = required_resolved_text(entry, "created_utc", context)?;
+    require_utc(created_utc, &format!("{context}.created_utc"))
+}
+
+fn require_utc(value: &str, context: &str) -> Result<(), ManifestError> {
+    if value.contains('T') && value.ends_with('Z') {
+        Ok(())
+    } else {
+        Err(ManifestError::new(format!(
+            "{context} must be an explicit UTC timestamp"
+        )))
+    }
+}
+
 fn validate_rights(entry: &Map<String, Value>, context: &str) -> Result<(), ManifestError> {
     let rights = entry
         .get("rights")
         .and_then(Value::as_object)
         .ok_or_else(|| ManifestError::new(format!("{context}.rights must be an object")))?;
-    for field in ["source_url", "license_spdx", "license_url", "attribution"] {
-        let value = required_text(rights, field, &format!("{context}.rights"))?;
-        if value.eq_ignore_ascii_case("NOASSERTION") {
-            return Err(ManifestError::new(format!(
-                "{context}.rights.{field} must not be NOASSERTION"
-            )));
-        }
+    for field in [
+        "content_spdx",
+        "content_evidence",
+        "generator_spdx",
+        "generator_evidence",
+        "reviewer",
+        "reviewed_on",
+    ] {
+        required_resolved_text(rights, field, &format!("{context}.rights"))?;
     }
     match rights
         .get("redistribution_allowed")
@@ -305,9 +440,9 @@ fn read_regular_file_without_symlinks(
     relative_path: &Path,
     context: &str,
 ) -> Result<Vec<u8>, ManifestError> {
-    let components = relative_path.components().collect::<Vec<_>>();
+    let mut components = relative_path.components().peekable();
     let mut current = corpus_root.to_path_buf();
-    for (index, component) in components.iter().enumerate() {
+    while let Some(component) = components.next() {
         let Component::Normal(component) = component else {
             return Err(ManifestError::new(format!(
                 "{context}.path contains an invalid component"
@@ -326,7 +461,7 @@ fn read_regular_file_without_symlinks(
                 current.display()
             )));
         }
-        let is_last = index + 1 == components.len();
+        let is_last = components.peek().is_none();
         if is_last {
             if !metadata.file_type().is_file() {
                 return Err(ManifestError::new(format!(

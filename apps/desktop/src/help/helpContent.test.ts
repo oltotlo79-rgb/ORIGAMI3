@@ -543,6 +543,95 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
     expect(allHelpText).not.toContain("「こちら側」「反対側」");
   });
 
+  it("v0.5.0以降に増えた利用者向けの操作と表示を既存章で説明する", () => {
+    const changes = [
+      {
+        name: "全部の折り目を一時的に動かす",
+        chapterId: "angles",
+        phrases: [
+          "全部いっぺんに折ってみる",
+          "これは仮の形です",
+          "手順には記録されません",
+          "元に戻る",
+          "できるところまで",
+          "いつもの表示に戻る",
+          "どの紙が上になるかは決まっていません",
+          "仮の形は保存にも、手順タイムラインにも、元に戻す・やり直しの履歴にも加わりません",
+        ],
+      },
+      {
+        name: "折り返す紙を確定前に黄色で見る",
+        chapterId: "fold",
+        phrases: [
+          "2本目を選ぶと、折る前から折り返す紙が黄色で表示されます",
+          "選択をやり直さず「反対側の紙を折り返す」を押して黄色を切り替え",
+        ],
+      },
+      {
+        name: "キーボードだけでまっすぐな線を引く",
+        chapterId: "crease-pattern",
+        phrases: [
+          "キーボードだけでまっすぐな線を引く",
+          "矢印キーで始まりの位置を動かし、Enterで決めます",
+          "Enterをもう1回押すと線ができます",
+          "キーで引けるのはまっすぐな線です",
+        ],
+      },
+      {
+        name: "200%表示で並び直す",
+        chapterId: "workspace",
+        phrases: [
+          "文字を200%に拡大した画面",
+          "5列×2段",
+          "タイムラインの再生操作は2列へ折り返し",
+          "説明・紙・決定ボタンを1列へ並べ",
+          "文字を小さくしません",
+        ],
+      },
+      {
+        name: "隠れる強調線と3Dのキー移動",
+        chapterId: "three-dimensional",
+        phrases: [
+          "色付きの線も、手前の紙に隠れる部分は透けて見えません",
+          "Tabキーで3D表示へ移れます",
+          "通常は「3D表示」",
+        ],
+      },
+      {
+        name: "手順の入れ替えを1回で戻す",
+        chapterId: "timeline",
+        phrases: [
+          "入れ替えは1回の操作として行われ",
+          "一部だけ動かさず元の順番を保ちます",
+          "「元に戻す」を1回押すと",
+        ],
+      },
+      {
+        name: "別に開いた画面と一時表示のキー操作",
+        chapterId: "shortcuts",
+        phrases: [
+          "別に開いた画面では、その画面の中を巡回し、閉じると開く前の場所へ戻る",
+          "Shift + 矢印キーでは大きく動かす",
+          "Home / End",
+          "Tabで離れただけでは仮の表示を閉じない",
+        ],
+      },
+    ] as const;
+
+    expect(changes).toHaveLength(7);
+    for (const change of changes) {
+      const chapter = HELP_CHAPTERS.find((entry) => entry.id === change.chapterId);
+      expect(chapter, change.name).toBeDefined();
+      const text = helpChapterSearchText(chapter!);
+      for (const phrase of change.phrases) {
+        expect(text, `${change.name}: ${phrase}`).toContain(phrase);
+      }
+    }
+
+    const allHelpText = HELP_CHAPTERS.map(helpChapterSearchText).join("\n");
+    expect(allHelpText).not.toContain("ほかの折り紙ソフトのファイル");
+  });
+
   it("重なり防止と食い込み検出を現行画面と同じ言葉・既定値で説明する", () => {
     const threeDimensional = HELP_CHAPTERS.find(
       (chapter) => chapter.id === "three-dimensional",
@@ -682,6 +771,19 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
       "prevent",
       "detect",
       "イテレーション",
+      "FOLD 1.2",
+      "schema",
+      "parser",
+      "validator",
+      "faceOrders",
+      "frame",
+      "Aux",
+      "surface_rank",
+      "tabIndex",
+      "axe",
+      "Zustand",
+      "IPC",
+      "CDP",
     ] as const;
     const violations: string[] = [];
 

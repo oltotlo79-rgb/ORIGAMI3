@@ -1,11 +1,12 @@
-mod support;
+#[path = "support/fold_external_corpus.rs"]
+mod fold_external_corpus;
 
+use fold_external_corpus::{ManifestSummary, sha256_hex, validate_manifest};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use support::fold_external_corpus::{ManifestSummary, sha256_hex, validate_manifest};
 
 const PLAN: &str = include_str!("fixtures/fold/external-corpus-plan.json");
 const SOURCE_QUOTAS: [(&str, usize); 4] = [
@@ -52,39 +53,60 @@ impl Drop for SyntheticCorpus {
 
 fn synthetic_corpus() -> SyntheticCorpus {
     let unique = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
-    let root = std::env::temp_dir().join(format!(
-        "ori3-fold-corpus-{}-{unique}",
-        std::process::id()
-    ));
+    let root =
+        std::env::temp_dir().join(format!("ori3-fold-corpus-{}-{unique}", std::process::id()));
     fs::create_dir(&root).expect("専用temp corpus rootを作れる");
 
     let mut entries = Vec::new();
     let mut global_index = 0_usize;
     for (source, quota) in SOURCE_QUOTAS {
-        let source_dir = root.join("raw").join(source);
+        let source_dir = root.join("external").join(source);
         fs::create_dir_all(&source_dir).expect("temp source directoryを作れる");
         for source_index in 1..=quota {
             global_index += 1;
-            let id = format!("{source}-{source_index:02}");
-            let relative_path = format!("raw/{source}/{id}.fold");
-            let raw = format!(
-                "{{\"file_spec\":1.2,\"synthetic_fixture\":{global_index}}}\n"
-            )
-            .into_bytes();
+            let id_prefix = if source == "origami_simulator" {
+                "origami-simulator"
+            } else {
+                source
+            };
+            let id = format!("{id_prefix}-{source_index:02}");
+            let relative_path = format!("external/{source}/{id}.fold");
+            let raw = format!("{{\"file_spec\":1.2,\"synthetic_fixture\":{global_index}}}\n")
+                .into_bytes();
             fs::write(root.join(&relative_path), &raw).expect("temp raw fixtureを書ける");
+            let expected = if global_index <= 20 {
+                "supported"
+            } else {
+                "unsupported"
+            };
 
             entries.push(json!({
                 "id": id,
                 "source": source,
+                "generator": format!("synthetic-{source}"),
+                "generator_version": "test-1.0",
+                "source_uri": format!("https://example.invalid/fold/{id}"),
+                "created_utc": "2026-08-26T00:00:00Z",
                 "path": relative_path,
                 "byte_length": raw.len() as u64,
                 "sha256": sha256_hex(&raw),
-                "classification": if global_index <= 20 { "supported" } else { "unsupported" },
+                "classification": {
+                    "expected": expected,
+                    "frozen_at_utc": "2026-08-26T00:00:00Z",
+                    "basis": "Synthetic validator contract input; not an external-corpus decision.",
+                    "unsupported_paths": if expected == "unsupported" {
+                        vec!["$.synthetic_unsupported_field"]
+                    } else {
+                        Vec::<&str>::new()
+                    }
+                },
                 "rights": {
-                    "source_url": format!("https://example.invalid/fold/{id}"),
-                    "license_spdx": "CC0-1.0",
-                    "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
-                    "attribution": format!("Synthetic test fixture {id}"),
+                    "content_spdx": "CC0-1.0",
+                    "content_evidence": "https://example.invalid/rights/content",
+                    "generator_spdx": "MIT",
+                    "generator_evidence": "https://example.invalid/rights/generator",
+                    "reviewer": "synthetic-validator-test",
+                    "reviewed_on": "2026-08-26",
                     "redistribution_allowed": true
                 }
             }));
@@ -212,13 +234,14 @@ fn pure_rust_sha256_matches_nist_empty_and_abc_vectors() {
 fn complete_temp_manifest_is_accepted_without_rewriting_inputs() {
     let corpus = synthetic_corpus();
     let manifest_before = fs::read(&corpus.manifest_path).expect("manifestをsnapshot");
-    let raw_before = corpus
-        .manifest["entries"]
+    let raw_before = corpus.manifest["entries"]
         .as_array()
         .expect("entriesはarray")
         .iter()
         .map(|entry| {
-            let path = corpus.root.join(entry["path"].as_str().expect("pathはstring"));
+            let path = corpus
+                .root
+                .join(entry["path"].as_str().expect("pathはstring"));
             (path.clone(), fs::read(path).expect("raw fixtureをsnapshot"))
         })
         .collect::<Vec<_>>();
@@ -267,30 +290,50 @@ fn paths_must_be_relative_parent_free_regular_files() {
     parent.write_manifest();
     assert_rejected_with(&parent, "parent");
 
-    let mut missing = synthetic_corpus();
-    missing.entries_mut()[0]["path"] = json!("raw/official/missing.fold");
-    missing.write_manifest();
+    let missing = synthetic_corpus();
+    fs::remove_file(missing.entry_path(0)).expect("reserved temp fixtureを除ける");
     assert_rejected_with(&missing, "metadata");
 
-    let mut directory = synthetic_corpus();
-    directory.entries_mut()[0]["path"] = json!("raw/official");
-    directory.write_manifest();
+    let directory = synthetic_corpus();
+    let directory_path = directory.entry_path(0);
+    fs::remove_file(&directory_path).expect("reserved temp fixtureを除ける");
+    fs::create_dir(&directory_path).expect("reserved pathへdirectoryを作れる");
     assert_rejected_with(&directory, "regular file");
 }
 
 #[test]
+fn entries_must_keep_the_reserved_id_source_and_fold_path() {
+    let mut id = synthetic_corpus();
+    id.entries_mut()[0]["id"] = json!("official-07");
+    id.write_manifest();
+    assert_rejected_with(&id, "reserved slot");
+
+    let mut source = synthetic_corpus();
+    source.entries_mut()[0]["source"] = json!("oripa");
+    source.write_manifest();
+    assert_rejected_with(&source, "reserved source");
+
+    let mut path = synthetic_corpus();
+    path.entries_mut()[0]["path"] = json!("raw/official/renamed.json");
+    path.write_manifest();
+    assert_rejected_with(&path, "reserved path");
+}
+
+#[test]
 fn symlinks_are_rejected_when_the_platform_can_create_one() {
-    let mut corpus = synthetic_corpus();
-    let target = corpus.entry_path(0);
-    let link = corpus.root.join("raw/official/symlink.fold");
+    let corpus = synthetic_corpus();
+    let link = corpus.entry_path(0);
+    let target = corpus.root.join("symlink-target.fold");
+    fs::write(&target, b"symlink target").expect("temp symlink targetを書ける");
+    fs::remove_file(&link).expect("reserved temp fixtureを除ける");
     match try_symlink_file(&target, &link) {
         Ok(()) => {
-            corpus.entries_mut()[0]["path"] = json!("raw/official/symlink.fold");
-            corpus.write_manifest();
             assert_rejected_with(&corpus, "symlink");
         }
         Err(error) => {
-            eprintln!("symlink creation is unavailable on this host; validator branch remains active: {error}");
+            eprintln!(
+                "symlink creation is unavailable on this host; validator branch remains active: {error}"
+            );
         }
     }
 }
@@ -300,10 +343,11 @@ fn exact_source_and_classification_quotas_are_required() {
     let mut source = synthetic_corpus();
     source.entries_mut()[6]["source"] = json!("official");
     source.write_manifest();
-    assert_rejected_with(&source, "source quota");
+    assert_rejected_with(&source, "reserved source");
 
     let mut class = synthetic_corpus();
-    class.entries_mut()[20]["classification"] = json!("supported");
+    class.entries_mut()[20]["classification"]["expected"] = json!("supported");
+    class.entries_mut()[20]["classification"]["unsupported_paths"] = json!([]);
     class.write_manifest();
     assert_rejected_with(&class, "classification quota");
 
@@ -316,17 +360,20 @@ fn exact_source_and_classification_quotas_are_required() {
 #[test]
 fn ids_paths_and_hashes_must_each_be_unique() {
     let mut id = synthetic_corpus();
-    id.entries_mut()[1]["id"] = id.manifest["entries"][0]["id"].clone();
+    let duplicate_id = id.manifest["entries"][0]["id"].clone();
+    id.entries_mut()[1]["id"] = duplicate_id;
     id.write_manifest();
     assert_rejected_with(&id, "duplicate id");
 
     let mut path = synthetic_corpus();
-    path.entries_mut()[1]["path"] = path.manifest["entries"][0]["path"].clone();
+    let duplicate_path = path.manifest["entries"][0]["path"].clone();
+    path.entries_mut()[1]["path"] = duplicate_path;
     path.write_manifest();
     assert_rejected_with(&path, "duplicate path");
 
     let mut hash = synthetic_corpus();
-    hash.entries_mut()[1]["sha256"] = hash.manifest["entries"][0]["sha256"].clone();
+    let duplicate_hash = hash.manifest["entries"][0]["sha256"].clone();
+    hash.entries_mut()[1]["sha256"] = duplicate_hash;
     hash.write_manifest();
     assert_rejected_with(&hash, "duplicate sha256");
 }
@@ -361,10 +408,12 @@ fn raw_byte_lengths_and_sha256_are_checked_without_normalization() {
 #[test]
 fn rights_must_be_complete_resolved_and_redistributable() {
     for field in [
-        "source_url",
-        "license_spdx",
-        "license_url",
-        "attribution",
+        "content_spdx",
+        "content_evidence",
+        "generator_spdx",
+        "generator_evidence",
+        "reviewer",
+        "reviewed_on",
         "redistribution_allowed",
     ] {
         let mut corpus = synthetic_corpus();
@@ -377,7 +426,7 @@ fn rights_must_be_complete_resolved_and_redistributable() {
     }
 
     let mut unresolved = synthetic_corpus();
-    unresolved.entries_mut()[0]["rights"]["license_spdx"] = json!("NOASSERTION");
+    unresolved.entries_mut()[0]["rights"]["content_spdx"] = json!("NOASSERTION");
     unresolved.write_manifest();
     assert_rejected_with(&unresolved, "NOASSERTION");
 
@@ -403,7 +452,52 @@ fn classifications_must_be_present_and_frozen_at_twenty_ten() {
     assert_rejected_with(&missing, "classification");
 
     let mut unknown = synthetic_corpus();
-    unknown.entries_mut()[0]["classification"] = json!("pending");
+    unknown.entries_mut()[0]["classification"]["expected"] = json!("pending");
     unknown.write_manifest();
     assert_rejected_with(&unknown, "supported or unsupported");
+
+    let mut supported_with_unsupported_path = synthetic_corpus();
+    supported_with_unsupported_path.entries_mut()[0]["classification"]["unsupported_paths"] =
+        json!(["$.unexpected"]);
+    supported_with_unsupported_path.write_manifest();
+    assert_rejected_with(&supported_with_unsupported_path, "supported entry");
+
+    let mut non_json_path = synthetic_corpus();
+    non_json_path.entries_mut()[20]["classification"]["unsupported_paths"] =
+        json!(["/not-a-json-path"]);
+    non_json_path.write_manifest();
+    assert_rejected_with(&non_json_path, "JSON path");
+}
+
+#[test]
+fn provenance_and_classification_evidence_are_required() {
+    for field in [
+        "generator",
+        "generator_version",
+        "source_uri",
+        "created_utc",
+    ] {
+        let mut corpus = synthetic_corpus();
+        corpus.entries_mut()[0]
+            .as_object_mut()
+            .expect("entryはobject")
+            .remove(field);
+        corpus.write_manifest();
+        assert_rejected_with(&corpus, field);
+    }
+
+    for field in ["expected", "frozen_at_utc", "basis", "unsupported_paths"] {
+        let mut corpus = synthetic_corpus();
+        corpus.entries_mut()[20]["classification"]
+            .as_object_mut()
+            .expect("classificationはobject")
+            .remove(field);
+        corpus.write_manifest();
+        assert_rejected_with(&corpus, field);
+    }
+
+    let mut unsupported_without_path = synthetic_corpus();
+    unsupported_without_path.entries_mut()[20]["classification"]["unsupported_paths"] = json!([]);
+    unsupported_without_path.write_manifest();
+    assert_rejected_with(&unsupported_without_path, "at least one unsupported path");
 }

@@ -48,7 +48,9 @@ use std::sync::{Arc, OnceLock};
 
 use ori3_cp::{Face, extract_faces};
 use ori3_layers::flat_state::{FlatState, layers_at_point, point_in_face, representative_point};
-use ori3_layers::fold_through::{resolve_driver_edges, warning_means_the_fold_was_not_as_requested};
+use ori3_layers::fold_through::{
+    resolve_driver_edges, warning_means_the_fold_was_not_as_requested,
+};
 use ori3_layers::pose_motion::{
     FlatPoseMotionInput, PoseAngleTarget, PoseEdgeActivation, solve_and_apply_flat_pose_step,
 };
@@ -1591,8 +1593,7 @@ impl FoldSession {
             // fold-throughの「山谷を既存種へ合わせる」経路では表せない。露出packet
             // が一意に決めた線集合だけを既存flat-pose solverへ渡し、符号の冪集合は
             // 列挙しない。
-            if let Some(candidate) =
-                self.flat_pose_candidate(&ids, &relations, closed, false, true)
+            if let Some(candidate) = self.flat_pose_candidate(&ids, &relations, closed, false, true)
                 && seen.insert(candidate.key.clone())
             {
                 out.push(candidate);
@@ -1629,8 +1630,7 @@ impl FoldSession {
             if ids.is_empty() {
                 continue;
             }
-            let Some(supports) =
-                self.panel_closed_support_lines_until(&panel, closed, should_stop)
+            let Some(supports) = self.panel_closed_support_lines_until(&panel, closed, should_stop)
             else {
                 return (Vec::new(), true);
             };
@@ -2546,9 +2546,7 @@ impl FoldSession {
         self.closed = closed_edges(&self.faces, &self.state);
         self.folded = 0;
         for line in &self.lines {
-            if !line.edges.is_empty()
-                && line.edges.iter().all(|e| self.closed.contains(e))
-            {
+            if !line.edges.is_empty() && line.edges.iter().all(|e| self.closed.contains(e)) {
                 self.folded |= folded_bit(line.id);
             }
         }
@@ -2567,11 +2565,7 @@ impl FoldSession {
 /// (印が立たなければ、その線は候補に残り続けるだけで、勝手に完成にはならない)。
 /// 同じ見張りは `crate::plan::full_mask` にもある。
 fn folded_bit(id: usize) -> FoldedMask {
-    if id >= MAX_LINES {
-        0
-    } else {
-        1 << id
-    }
+    if id >= MAX_LINES { 0 } else { 1 << id }
 }
 
 /// 折り終えた印に、その折り線のビットが立っているか。[`folded_bit`] と対になる。
@@ -2870,9 +2864,7 @@ fn closed_effect(
         .copied()
         .filter(|id| closed_now(*id))
         .collect::<BTreeSet<_>>();
-    closes.extend(
-        (0..lines.len()).filter(|id| closed_now(*id) && !folded_bit_is_set(before, *id)),
-    );
+    closes.extend((0..lines.len()).filter(|id| closed_now(*id) && !folded_bit_is_set(before, *id)));
     closes.into_iter().collect()
 }
 
@@ -3854,18 +3846,40 @@ mod tests {
     /// 方向付き単線は最初の状態で49候補中20件)。
     #[test]
     fn only_a_smaller_face_count_means_a_face_was_lost() {
-        assert_eq!(face_count_problem(14, 13), Some(PoseProblem::FaceLost {
-            expected: 14,
-            got: 13,
-        }));
-        assert_eq!(face_count_problem(14, 0), Some(PoseProblem::FaceLost {
-            expected: 14,
-            got: 0,
-        }));
-        assert_eq!(face_count_problem(14, 14), None, "変わらないのは欠けではない");
-        assert_eq!(face_count_problem(14, 15), None, "1枚増えるのは欠けではない");
-        assert_eq!(face_count_problem(14, 25), None, "11枚増えるのは欠けではない");
-        assert_eq!(face_count_problem(29, 47), None, "18枚増えるのは欠けではない");
+        assert_eq!(
+            face_count_problem(14, 13),
+            Some(PoseProblem::FaceLost {
+                expected: 14,
+                got: 13,
+            })
+        );
+        assert_eq!(
+            face_count_problem(14, 0),
+            Some(PoseProblem::FaceLost {
+                expected: 14,
+                got: 0,
+            })
+        );
+        assert_eq!(
+            face_count_problem(14, 14),
+            None,
+            "変わらないのは欠けではない"
+        );
+        assert_eq!(
+            face_count_problem(14, 15),
+            None,
+            "1枚増えるのは欠けではない"
+        );
+        assert_eq!(
+            face_count_problem(14, 25),
+            None,
+            "11枚増えるのは欠けではない"
+        );
+        assert_eq!(
+            face_count_problem(29, 47),
+            None,
+            "18枚増えるのは欠けではない"
+        );
     }
 
     /// 折り終えた印は [`MAX_LINES`] 本ぶんしか幅が無い。上限を超えた折り線は
@@ -4016,7 +4030,10 @@ mod tests {
     /// フラップにして、参照と同じ中心線 `[[0,1],[0.5,0.5]]` で花弁折りする。
     #[test]
     fn a_petal_that_leaves_part_of_the_panel_still_is_kept_as_a_candidate() {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/cp-bird-base.json");
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/cp-bird-base.json"
+        );
         let text = std::fs::read_to_string(path).expect("鳥の基本形の展開図を読めない");
         let cp: ori3_model::CreasePattern =
             serde_json::from_str(&text).expect("鳥の基本形の展開図を解釈できない");
