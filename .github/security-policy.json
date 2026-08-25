@@ -1,0 +1,536 @@
+{
+  "schemaVersion": 1,
+  "policyId": "ORIGAMI3-SUPPLY-CHAIN-10A",
+  "approvedAt": "2026-08-24",
+  "policyOwner": "@oltotlo79-rgb",
+  "scope": {
+    "approvedCapabilities": [
+      "cargo-and-npm-vulnerability-monitoring",
+      "dependency-update-proposals-with-human-review",
+      "code-static-analysis",
+      "four-artifact-sbom-and-sha256-publication",
+      "license-allowlist"
+    ],
+    "excludedCapabilities": [
+      "application-auto-update",
+      "updater-plugin",
+      "update-endpoint",
+      "update-public-or-signing-key",
+      "update-download-or-apply",
+      "update-rollback"
+    ],
+    "applicationAutoUpdate": {
+      "enabled": false,
+      "plugin": false,
+      "endpoint": false,
+      "publicOrSigningKey": false,
+      "download": false,
+      "apply": false,
+      "rollback": false
+    },
+    "releaseArtifacts": [
+      "setup.exe",
+      "x64.msi",
+      "portable.exe",
+      "manual.pdf"
+    ]
+  },
+  "dependencyClasses": {
+    "scanCoverage": "all-locked-packages",
+    "classificationUse": "impact-and-sbom-scope-only-never-severity-suppression",
+    "npm": {
+      "production": "package-lock entries with dev=false-or-absent and devOptional=false-or-absent",
+      "developmentBuild": "package-lock entries with dev=true or devOptional=true",
+      "precedence": [
+        "production",
+        "developmentBuild"
+      ]
+    },
+    "cargo": {
+      "production": "normal dependency closure for the release target",
+      "build": "build-dependency closure",
+      "developmentTest": "dev-dependency-only closure",
+      "precedence": [
+        "production",
+        "build",
+        "developmentTest"
+      ],
+      "licenseGateCoverage": "all Cargo.lock packages independent of target"
+    }
+  },
+  "advisories": {
+    "ecosystems": [
+      "cargo",
+      "npm"
+    ],
+    "severityOrder": [
+      "low",
+      "moderate",
+      "high",
+      "critical"
+    ],
+    "production": {
+      "failAtOrAbove": "high",
+      "unscoredVulnerability": "fail-as-high",
+      "moderateResolutionTargetDays": 30,
+      "lowResolutionTargetDays": 90
+    },
+    "developmentBuild": {
+      "failAtOrAbove": "high",
+      "unscoredVulnerability": "fail-as-high",
+      "moderateResolutionTargetDays": 90,
+      "lowResolutionTargetDays": 90
+    },
+    "rustsecInformational": {
+      "unsound": "fail-as-high",
+      "unmaintained": "report",
+      "yanked": "report",
+      "notice": "report"
+    },
+    "triggers": {
+      "pullRequest": true,
+      "push": true,
+      "schedule": {
+        "interval": "weekly",
+        "day": "sunday",
+        "time": "03:17",
+        "timezone": "UTC",
+        "maximumDaysBetweenRuns": 7
+      },
+      "consecutiveScheduledWeeksAllowedToMiss": 0,
+      "failureNotificationRequired": true
+    }
+  },
+  "advisoryExceptionPolicy": {
+    "defaultDecision": "deny",
+    "maximumDays": 90,
+    "requiredFields": [
+      "exceptionId",
+      "ecosystem",
+      "advisoryId",
+      "package",
+      "affectedVersions",
+      "severity",
+      "dependencyClass",
+      "owner",
+      "reason",
+      "impactScope",
+      "distributionImpact",
+      "compensatingControls",
+      "remediationPlan",
+      "trackingIssue",
+      "createdAt",
+      "approvedAt",
+      "approvedBy",
+      "expiresAt"
+    ],
+    "maximumDaysByClassAndSeverity": {
+      "production": {
+        "critical": 7,
+        "high": 30
+      },
+      "developmentBuild": {
+        "critical": 30,
+        "high": 90
+      }
+    },
+    "wildcardAdvisoryIdAllowed": false,
+    "expiredExceptionAllowed": false,
+    "expiryOnlyRenewalAllowed": false,
+    "renewalRequires": [
+      "new-exception-id",
+      "supersedes",
+      "new-approval",
+      "updated-reason",
+      "updated-impact",
+      "updated-compensating-controls",
+      "updated-remediation-plan"
+    ]
+  },
+  "advisoryExceptions": [],
+  "knownAdvisoryAssessment": {
+    "source": "user-reported-npm-ci-summary",
+    "reportedCount": 1,
+    "reportedSeverity": "high",
+    "status": "blocked-external-audit-endpoint",
+    "package": null,
+    "advisoryId": null,
+    "dependencyPath": null,
+    "dependencyClass": null,
+    "distributionImpact": null,
+    "impactAssessment": null,
+    "remediationVersion": null,
+    "breakingChangeAssessment": null,
+    "resolutionEvidence": null,
+    "exceptionId": null,
+    "blockerReason": "npm audit endpoint was unreachable in the sandbox and the approved retry could not start"
+  },
+  "licensePolicy": {
+    "expressionStandard": "SPDX-2.3",
+    "defaultDecision": "deny",
+    "unknownDecision": "deny",
+    "missingDecision": "deny",
+    "licenseExceptionsAllowed": false,
+    "allowlistChangesRequireHumanReview": true,
+    "allowed": [
+      {
+        "id": "0BSD",
+        "scope": "all"
+      },
+      {
+        "id": "Apache-2.0",
+        "scope": "all",
+        "obligation": "retain-license-and-required-notices"
+      },
+      {
+        "id": "BSD-2-Clause",
+        "scope": "all"
+      },
+      {
+        "id": "BSD-3-Clause",
+        "scope": "all"
+      },
+      {
+        "id": "ISC",
+        "scope": "all"
+      },
+      {
+        "id": "MIT",
+        "scope": "all"
+      },
+      {
+        "id": "MIT-0",
+        "scope": "all"
+      },
+      {
+        "id": "MPL-2.0",
+        "scope": "all",
+        "obligation": "retain-notice-and-make-modified-covered-source-available"
+      },
+      {
+        "id": "Unicode-3.0",
+        "scope": "all",
+        "obligation": "retain-license-notice"
+      },
+      {
+        "id": "Zlib",
+        "scope": "all"
+      },
+      {
+        "id": "BlueOak-1.0.0",
+        "scope": "developmentBuild"
+      },
+      {
+        "id": "CC0-1.0",
+        "scope": "developmentBuild"
+      },
+      {
+        "id": "CC-BY-4.0",
+        "scope": "developmentBuild",
+        "obligation": "record-attribution"
+      }
+    ],
+    "allowedSpdxExceptions": [
+      "LLVM-exception"
+    ],
+    "denied": [
+      "AGPL-1.0-only",
+      "AGPL-1.0-or-later",
+      "AGPL-3.0-only",
+      "AGPL-3.0-or-later",
+      "GPL-1.0-only",
+      "GPL-1.0-or-later",
+      "GPL-2.0-only",
+      "GPL-2.0-or-later",
+      "GPL-3.0-only",
+      "GPL-3.0-or-later",
+      "LGPL-2.0-only",
+      "LGPL-2.0-or-later",
+      "LGPL-2.1-only",
+      "LGPL-2.1-or-later",
+      "LGPL-3.0-only",
+      "LGPL-3.0-or-later",
+      "SSPL-1.0",
+      "BUSL-1.1",
+      "Elastic-2.0",
+      "Commons-Clause",
+      "CPAL-1.0",
+      "CC-BY-SA-4.0",
+      "CC-BY-NC-4.0",
+      "CC-BY-NC-SA-4.0",
+      "Proprietary",
+      "UNLICENSED",
+      "UNKNOWN",
+      "SEE LICENSE IN"
+    ],
+    "legacyAliases": [
+      {
+        "from": "Apache-2.0 / MIT",
+        "to": "Apache-2.0 OR MIT"
+      },
+      {
+        "from": "Apache-2.0/MIT",
+        "to": "Apache-2.0 OR MIT"
+      },
+      {
+        "from": "MIT/Apache-2.0",
+        "to": "MIT OR Apache-2.0"
+      },
+      {
+        "from": "BSD-3-Clause/MIT",
+        "to": "BSD-3-Clause OR MIT"
+      },
+      {
+        "from": "Unlicense/MIT",
+        "to": "Unlicense OR MIT"
+      }
+    ],
+    "multiLicenseSelections": [
+      {
+        "expression": "(MIT OR Apache-2.0) AND Unicode-3.0",
+        "selected": [
+          "MIT",
+          "Unicode-3.0"
+        ]
+      },
+      {
+        "expression": "0BSD OR MIT OR Apache-2.0",
+        "selected": [
+          "MIT"
+        ]
+      },
+      {
+        "expression": "Apache-2.0 AND MIT",
+        "selected": [
+          "Apache-2.0",
+          "MIT"
+        ]
+      },
+      {
+        "expression": "Apache-2.0 OR BSL-1.0",
+        "selected": [
+          "Apache-2.0"
+        ]
+      },
+      {
+        "expression": "Apache-2.0 OR MIT",
+        "selected": [
+          "MIT"
+        ]
+      },
+      {
+        "expression": "Apache-2.0 WITH LLVM-exception",
+        "selected": [
+          "Apache-2.0 WITH LLVM-exception"
+        ]
+      },
+      {
+        "expression": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
+        "selected": [
+          "MIT"
+        ]
+      },
+      {
+        "expression": "BSD-3-Clause AND MIT",
+        "selected": [
+          "BSD-3-Clause",
+          "MIT"
+        ]
+      },
+      {
+        "expression": "BSD-3-Clause OR MIT OR Apache-2.0",
+        "selected": [
+          "MIT"
+        ]
+      },
+      {
+        "expression": "BSD-3-Clause OR MIT",
+        "selected": [
+          "MIT"
+        ]
+      },
+      {
+        "expression": "CC0-1.0 OR MIT-0 OR Apache-2.0",
+        "selected": [
+          "MIT-0"
+        ]
+      },
+      {
+        "expression": "MIT OR Apache-2.0",
+        "selected": [
+          "MIT"
+        ]
+      },
+      {
+        "expression": "MIT OR Apache-2.0 OR LGPL-2.1-or-later",
+        "selected": [
+          "MIT"
+        ]
+      },
+      {
+        "expression": "MIT OR Apache-2.0 OR Zlib",
+        "selected": [
+          "MIT"
+        ]
+      },
+      {
+        "expression": "MIT OR Zlib OR Apache-2.0",
+        "selected": [
+          "MIT"
+        ]
+      },
+      {
+        "expression": "Unlicense OR MIT",
+        "selected": [
+          "MIT"
+        ]
+      },
+      {
+        "expression": "Zlib OR Apache-2.0 OR MIT",
+        "selected": [
+          "MIT"
+        ]
+      }
+    ],
+    "workspaceOwnedMitOverrides": [
+      "ori3-model",
+      "ori3-geometry",
+      "ori3-cp",
+      "ori3-rigid",
+      "ori3-layers",
+      "ori3-soft",
+      "ori3-propose",
+      "ori3-export",
+      "desktop"
+    ],
+    "workspaceOverrideEvidence": [
+      "Cargo.toml:[workspace.package].license=MIT",
+      "LICENSE:MIT"
+    ]
+  },
+  "dependencyUpdates": {
+    "provider": "dependabot",
+    "renovateEnabled": false,
+    "humanReviewRequired": true,
+    "securityUpdatesGrouped": false,
+    "majorUpdatesGrouped": false,
+    "minorAndPatchGroupedWithinEcosystem": true,
+    "automaticActions": {
+      "merge": false,
+      "approve": false,
+      "applyLockfileToDefaultBranch": false,
+      "release": false
+    },
+    "ecosystems": [
+      {
+        "name": "npm",
+        "directory": "/apps/desktop",
+        "interval": "weekly",
+        "day": "monday",
+        "time": "09:00",
+        "timezone": "Asia/Tokyo",
+        "openPullRequestsLimit": 3
+      },
+      {
+        "name": "cargo",
+        "directory": "/",
+        "interval": "weekly",
+        "day": "tuesday",
+        "time": "09:00",
+        "timezone": "Asia/Tokyo",
+        "openPullRequestsLimit": 3
+      },
+      {
+        "name": "github-actions",
+        "directory": "/",
+        "interval": "weekly",
+        "day": "wednesday",
+        "time": "09:00",
+        "timezone": "Asia/Tokyo",
+        "openPullRequestsLimit": 3
+      }
+    ]
+  },
+  "staticAnalysis": {
+    "javascriptTypescript": {
+      "provider": "github-codeql-action",
+      "repository": "github/codeql-action",
+      "versionLine": "v3",
+      "querySuite": "security-extended",
+      "sarifUploadRequired": true,
+      "commitShaRequiredBeforeWorkflowEnablement": true,
+      "enableWithoutCommitSha": false,
+      "commitSha": null,
+      "commitShaVerified": false,
+      "verificationEvidence": null,
+      "commitShaResolutionStage": "10-A"
+    },
+    "rust": {
+      "provider": "cargo-clippy",
+      "existingGateMustRemain": true,
+      "additionalSastSupport": "unverified-do-not-claim"
+    }
+  },
+  "toolPins": {
+    "cargoAudit": {
+      "tool": "cargo-audit",
+      "version": "0.22.2",
+      "pinType": "exact-crate-version-and-checksum",
+      "crateSha256": "700c2b240f7fd330c24b675fe429f73a5b676531fcc6300400b2b67f155ba12a",
+      "evidence": "local-cargo-sparse-index"
+    },
+    "npmAudit": {
+      "tool": "npm",
+      "version": "11.12.1",
+      "nodeVersionLine": "22",
+      "nodeVersion": null,
+      "pinType": "exact-npm-version-on-approved-node-lts-line",
+      "evidence": "locally-installed-npm-version-and-existing-ci-node-line",
+      "nodeVersionResolutionStage": "10-A"
+    },
+    "codeql": {
+      "tool": "github/codeql-action",
+      "versionLine": "v3",
+      "querySuite": "security-extended",
+      "workflowReferenceRule": "full-40-character-commit-sha",
+      "floatingMainMasterLatestAllowed": false,
+      "commitSha": null,
+      "commitShaVerified": false,
+      "verificationEvidence": null,
+      "resolutionStage": "10-A"
+    },
+    "sbom": {
+      "tool": null,
+      "version": null,
+      "pinType": "exact-version-and-sha256",
+      "sha256": null,
+      "verificationEvidence": null,
+      "format": "CycloneDX-1.6-JSON",
+      "pinStatus": "blocked-external-tool-verification",
+      "selectionBlockerReason": "No existing SBOM tool exact version and checksum could be verified without external access",
+      "enableWithoutVerifiedPin": false,
+      "resolutionStage": "10-A",
+      "implementationStage": "10-D"
+    }
+  },
+  "artifactPublication": {
+    "sbom": {
+      "format": "CycloneDX-1.6-JSON",
+      "onePerArtifact": true,
+      "requiredCount": 4,
+      "manifestMissingAllowed": false
+    },
+    "hash": {
+      "algorithm": "SHA-256",
+      "oneSidecarPerArtifact": true,
+      "requiredSidecarCount": 4,
+      "manifestRequired": true,
+      "downloadRecalculationRequired": true
+    },
+    "identityFields": [
+      "artifactName",
+      "version",
+      "buildId"
+    ]
+  }
+}

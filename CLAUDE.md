@@ -16,13 +16,33 @@
 ## 1. 役割分担
 
 - **実作業はすべてCodexが行う。** 実装、レビュー、デザイン、アプリのGUI操作、スクリーンショット撮影、資料の読み取り、PDF作成、環境の調査と修復を含み、作業の種類を理由に例外を作らない。
-- **Claudeは「指示・確認・検査・git操作・報告」だけを行い、自分で成果物を作らない。** 「自分でやったほうが速い」は委譲しない理由にならない。
-- Claudeが行ってよい作業は次の5つに限る。
+- **Claudeは「指示・確認・検査・git操作・アプリの起動と終了・報告」だけを行い、自分で成果物を作らない。** 「自分でやったほうが速い」は委譲しない理由にならない。
+- Claudeが行ってよい作業は次の6つに限る。
   1. Codexへ渡す指示書の作成
   2. Codexの成果物を読んで確認
   3. `scripts/check.ps1` の実行
   4. git操作（Codexは `.git` に書けないため）
-  5. 利用者への報告
+  5. アプリの起動と終了
+  6. 利用者への報告
+- **アプリの起動・終了と実機確認の役割を、実名のコマンドで次のとおり固定する。**
+
+  | 統括が行う | 担当が行う |
+  |---|---|
+  | `Start-Process desktop.exe` | 組み立て（`npm run tauri -- build --no-bundle`） |
+  | `CloseMainWindow()` での終了 | CDPでの操作と撮影 |
+  | git操作（commit / push / tag） | 実装・調査・検査 |
+
+- **担当は `desktop.exe` を起動しない。** 配信サーバーを含むアプリの起動・終了も、担当へ指示・委譲しない。
+- **実機確認は `npm run tauri -- build --no-bundle` で作った同梱版だけを使う。** 配信サーバーが不要になり、
+  「誰かがサーバーを立てる」場面そのものが無くなる。debug版（`cargo build`）を実機確認に使わず、
+  指示書に `cargo build -p desktop --release` と書かない。
+- **担当への指示書に「アプリの起動方法」節を書かない。** 代わりに必ず次を書く。
+
+  ```text
+  アプリの起動と終了は統括が行います。あなたは起動しないでください。
+  昇格承認を求める必要もありません。
+  組み立てが終わったら、実行ファイルの実パスと組み立てコマンドを報告してください。
+  ```
 - 理由: 統括と実作業を分離しないと、確認者が不在になり、委譲すべき作業の抜けや自己判断による仕様変更が起きるため。
 
 ## 2. Codexの起動と使い方
@@ -187,10 +207,15 @@ Co-Authored-By: Codex <noreply@openai.com>
 | 19 | **提案を通しで折る決定性10回(最適化あり)** | `cargo test --release -p ori3-propose --test end_to_end -- named_sample_completes_end_to_end_and_is_deterministic_ten_out_of_ten --exact --nocapture` |
 | 20 | **重なりの部分集合の候補(最適化あり)** | `cargo test --release -p ori3-propose --test acceptance -- a_safe_coincident_partial_network_appears_after_the_first_fold --exact --nocapture` |
 | 21 | **提案の探索が時間の打ち切りに当たらないこと(最適化あり)** | `cargo test --release -p desktop --lib the_heaviest_proposal_never_hits_the_time_limit -- --nocapture` |
+| 22 | **提案matrixのrelease境界(最適化あり)** | `powershell -NoProfile -ExecutionPolicy Bypass -File crates/ori3-propose/tests/run-proposal-matrix.ps1 -Mode Performance` |
 
+- **CIの`checks`実コマンド**: `cargo test --workspace -- --skip surface_order_179_999_to_180_all_110_creases --skip surface_order_exact_endpoint_is_rank_stable_for_previous_19 --skip completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten --skip named_sample_completes_end_to_end_and_is_deterministic_ten_out_of_ten --skip a_safe_coincident_partial_network_appears_after_the_first_fold --skip the_heaviest_proposal_never_hits_the_time_limit`。この既存のworkspace testに、`proposal_matrix_contract`のdebug・1候補・1要求・直列・空き・1回smokeが含まれる。重複するstepは足さず、`checks`の所要時間を延ばさない。
 - **#13・#14 について**: この2件は最適化なしでは手元で 476秒 / 175秒 かかる。CIの `checks` ジョブでは `--skip` で外し、`performance` ジョブが最適化ありで走らせる(どちらの検査も消していない)。**この2件は**手元の `cargo test --workspace`(#1)と `scripts/check.ps1` では、いままでどおり最適化なしでも走る。
 - **#18〜#20 について**: この3件は最適化なしでは手元で **約7.5時間 / 374秒 / 375秒** かかる(変更前は 587秒 / 30秒 / 6秒)。花弁折り・つぶし折りの候補を既定で作るようにした(`crates/ori3-propose/src/enumerate.rs` の `WITH_EXTRA_CANDIDATES`)ためで、最適化ありなら **1,332秒 / 12秒 / 11秒**(CI換算 合わせて約81分)で済む。**#13・#14 と違い、この3件は手元の `cargo test --workspace`(#1)・`scripts/check.ps1`・`scripts/hooks/pre-commit` からも `--skip` で外してある。最適化なしでは現実的な時間で終わらないためである。** 手元で確かめたいときは上表のコマンド(最適化あり)を使う。**探索の検査でも `search_to_finish` を使うもの(作業24の終点測定など)は影響を受けないので外していない**(`crates/ori3-propose/src/search.rs` の `if completion.is_some()` が、追加の候補を作る場所を囲っている)。
-- **#21について**: この検査は「先端12本(`MAX_LEAVES`の上限)の4候補すべてが、`PLAN_BUDGET`の時間の打ち切り(`max_millis`)に当たらないこと」を主張する。**この主張は最適化ありでしか成り立たない。** 打ち切りは壁時計(`Instant::now()`)なので、最適化なしは最適化ありより16.8〜20.5倍遅く、必ず打ち切りに当たる。実測(2026-08-24、この作業機): 最適化なしでは`cargo test -p desktop --lib`実行時に4候補すべてが`TimeCap`(`[TimeCap, TimeCap, TimeCap, TimeCap]`)。実機でも先端12本の「展開図を作ってもらう」を最適化なしのビルドで確認したところ、4候補中3〜4件が「折り方はまだありません」のまま返り、待ち時間は約30〜38秒だった(最適化ありでの実測は0件/10回・最大13.851秒)。**#18〜#20と同じ扱いとし、手元の`cargo test --workspace`(#1)・`scripts/check.ps1`・`scripts/hooks/pre-commit`からも`--skip`で外してある。** 検査は消していない。`PLAN_BUDGET`の値(`max_millis=30_000`・`max_states=2`・`branch=2`)も変更していない。
+- **#21について**: この検査は「先端12本(`MAX_LEAVES`の上限)の4候補すべてが、30,000msのwatchdogに当たらないこと」を主張する。**この主張は最適化ありでしか成り立たない。** watchdogは壁時計(`Instant::now()`)なので、最適化なしは最適化ありより16.8〜20.5倍遅く、必ず`SearchAbort::WatchdogExpired`になる。実測(2026-08-24、この作業機): 最適化なしでは先端12本の4候補すべてがwatchdogに当たり、最適化ありでは0件/10回・最大13.851秒だった。**#18〜#20と同じ扱いとし、手元の`cargo test --workspace`(#1)・`scripts/check.ps1`・`scripts/hooks/pre-commit`からも`--skip`で外してある。** 検査は消していない。決定的な`PLAN_BUDGET`の値(`max_states=2`・`branch=2`)は変更していない。
+  別型のwatchdog値(`max_millis=30_000`)も変更していない。
+- **#22について**: `performance`では、release・4候補・2要求・並列・混雑を1回と、製品の候補JSON／通常停止理由hashを確認する。手元の実測はrunner全体5.146秒(matrix cargo 1.555秒＋製品hash cargo 3.042秒)、CI換算は約18.5秒で、GitHub Actionsの1ジョブ6時間上限内である。これはprofile境界の短時間検査であり、次の全数受入の代用ではない。
+- **リリース前の必須関門(CI外)**: 解決済み3検査×100回だけで手元の見積もりは約37時間39分かかり、さらに32 cell×100回(3,200反復)が加わるため、GitHub Actionsの1ジョブ6時間上限を超える。このためpushごとの表には番号を付けず、ほかの作業と測定をすべて止めたリリース直前に、回数を減らさず1回だけ手元で実行する。開始は `powershell -NoProfile -ExecutionPolicy Bypass -File crates/ori3-propose/tests/run-proposal-matrix.ps1 -Mode Full`、中断後の再開は `powershell -NoProfile -ExecutionPolicy Bypass -File crates/ori3-propose/tests/run-proposal-matrix.ps1 -Mode Full -Resume`。完了するまでリリースしてはならない。
 - **性能について**: CIの計算機は手元より**約3.6倍遅い**実測がある。手元の測定値が上限の1/3以下でなければ、CIで落ちる可能性が高いとみなす。
 - **`ci.yml` が変わったら、この表も更新する。** 表と `ci.yml` が食い違っていないかを、`scripts/check-ci.ps1` が自動で確認する。
 
@@ -276,7 +301,7 @@ Co-Authored-By: Codex <noreply@openai.com>
      「終点が同じなら同じ」は折り紙では成り立たない。
 - **仕組みでの対策**:
   - `scripts/hooks/pre-commit` を追加した。`.rs` または `Cargo.toml`/`Cargo.lock` を
-    含むコミットでは `cargo test --workspace`(§10.6 の #18〜#20 だけ `--skip`)を
+    含むコミットでは `cargo test --workspace`(§10.6 の #18〜#21 の4件を `--skip`)を
     自動実行し、落ちたらコミットを中止する。
     `scripts/install-hooks.ps1` が pre-commit と pre-push の両方を有効化する。
   - **角度の等価性を扱う変更は、平坦な終点だけでなく途中の姿勢で検査する。**
@@ -485,3 +510,34 @@ Co-Authored-By: Codex <noreply@openai.com>
      選んだ理由を利用者への報告に1行で書く。書けないならSonnetを選ぶ。**
   4. **利用者へ報告する前に、稼働しているサブエージェントの数を数える。**
      **0件で、かつ残作業があるなら、報告より先にサブエージェントを投入する**（§10.2の拡張）。
+
+### 10.7.14 画面を同梱していない実行ファイルを起動し、利用者に接続エラーを見せた(2026-08-24)
+
+- **起きたこと**: 利用者の画面に、白い接続エラーの画面が表示された。
+
+  `このページに到達できません
+  localhost 接続が拒否されました
+  ERR_CONNECTION_REFUSED`
+
+- **原因**:
+  1. 統括が `cargo build -p desktop --release` で作った実行ファイルを、配信サーバーが動いていない状態で起動した。
+     `cargo build` はdebug版・release版を問わず画面を同梱しないため、実行ファイルは
+     `apps/desktop/src-tauri/tauri.conf.json` の `devUrl`（`localhost:1420`）を見に行く。
+     同梱版を用いる組み立てと実機確認の役割は§1に定める。
+  2. この事実は既に分かっていたのに指示書へ反映しなかった。同じ日の少し前には、
+     1420番ポートが応答しないため起動しないと正しく止めていたが、次の起動では
+     「release版なら同梱されているはず」と確かめずに思い込んだ。
+- **仕組みでの対策**:
+  1. `desktop.exe` の起動前に、次のAまたはBの少なくとも一方を機械的に確認する。
+     両方を満たさない実行ファイルは起動しない。
+
+     | 条件 | 確認方法 |
+     |---|---|
+     | **A: 配信サーバーが応答する** | `(Test-NetConnection 127.0.0.1 -Port 1420).TcpTestSucceeded` が `True` であること |
+     | **B: 画面を同梱した実行ファイルである** | 担当に組み立てコマンドを明言させる。`npm run tauri -- build` 以外ならBではない。 |
+
+  2. Aが `False` で、Bも確認できないなら起動しない。担当へ差し戻す。
+  3. 起動直後、担当への最初の指示を「画面が出たか」の確認にする。接続エラーなら即座に閉じ、
+     利用者の目に触れる時間を最短にする。
+  4. 指示書に書く組み立てコマンドと「アプリの起動方法」節を置かない定型は§1に従う。
+  5. 配信サーバーの起動（`npm run dev`）も担当にさせない。アプリの起動・終了と実機確認の役割は§1に従う。

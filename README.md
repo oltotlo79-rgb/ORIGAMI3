@@ -23,9 +23,15 @@
 
 ### 初回起動時の注意
 
-現在の配布物にはコード署名がないため、Windows SmartScreenの警告が表示される場合がある。その場合は、内容とダウンロード元を確認してから「詳細情報」→「実行」を選ぶ。
+現在の `setup.exe`、`.msi`、`portable.exe` は署名されていないため、Windows SmartScreenの警告が表示される場合がある。無料の署名プログラムは、まだ利用条件を満たしていないためである。公開実績が積み上がった時点で改めて申請するが、時期は約束しない。有料の署名は採らず、費用が発生する判断は利用者が行う。
 
-Windows Smart App Controlが有効な環境では、署名のないexeが完全にブロックされ、「実行」を選べないことがある。この場合は配布物側にコード署名が必要であり、インストーラー版・ポータブル版とも起動できない可能性がある。
+警告が出たときは、次の順で確認してから導入する。
+
+1. ダウンロード元が上の [GitHub Releases](https://github.com/oltotlo79-rgb/ORIGAMI3/releases) であることと、ファイル名が `ORIGAMI3_x.x.x_setup.exe`、`ORIGAMI3_x.x.x_x64.msi`、または `ORIGAMI3_x.x.x_portable.exe` のいずれかであることを確認する。
+2. 警告画面で「詳細情報」を選び、表示されたアプリ名とダウンロードしたファイルを確認する。
+3. 確認できた場合だけ「実行」を選ぶ。ダウンロード元やファイル名が違う場合は実行せず、削除する。
+
+Windows Smart App Controlが有効な環境では、「実行」を選べずに起動が完全に止まる場合がある。その場合は設定を下げず、端末の管理者へ相談する。
 
 ### 開発者向け: リリース作成
 
@@ -51,13 +57,3 @@ Tauri 2 / React / TypeScript / Three.js / Rust計算コア
 ## ライセンス
 
 [MIT License](LICENSE)
-
-## コード署名について (Code signing policy)
-
-This program uses free code signing provided by [SignPath.io](https://signpath.io), and a free code signing certificate by the [SignPath Foundation](https://signpath.org).
-
-- 配布物(インストーラー・ポータブル版・MSI)は、このリポジトリのソースコードからGitHub Actionsで自動ビルドされたものだけに署名します
-- チーム構成: 個人開発(committer / reviewer / approver を開発者本人が兼任)
-- 本アプリは利用者のデータを収集・送信しません(ファイルの保存はすべて利用者のPC内で完結します)
-
-Free code signing provided by SignPath.io, certificate by SignPath Foundation.

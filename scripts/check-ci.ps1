@@ -277,6 +277,34 @@ function Assert-CiStepsMatch {
     }
 }
 
+function Assert-ClaudeCiContract {
+    param(
+        [Parameter(Mandatory = $true)][string]$ClaudePath,
+        [Parameter(Mandatory = $true)][object[]]$ExpectedSteps
+    )
+
+    $text = Get-Content -LiteralPath $ClaudePath -Raw -Encoding UTF8
+    $start = $text.IndexOf("## 10.6 ", [StringComparison]::Ordinal)
+    $end = $text.IndexOf("### 10.6.1 ", [StringComparison]::Ordinal)
+    if ($start -lt 0 -or $end -le $start) {
+        throw "CLAUDE.md の §10.6 を読めません"
+    }
+    $section = $text.Substring($start, $end - $start)
+    foreach ($step in $ExpectedSteps) {
+        if (-not $section.Contains($step.Command)) {
+            throw "CLAUDE.md §10.6 にCI実コマンドがありません: $($step.Command)"
+        }
+    }
+    foreach ($releaseGateCommand in @(
+        "powershell -NoProfile -ExecutionPolicy Bypass -File crates/ori3-propose/tests/run-proposal-matrix.ps1 -Mode Full",
+        "powershell -NoProfile -ExecutionPolicy Bypass -File crates/ori3-propose/tests/run-proposal-matrix.ps1 -Mode Full -Resume"
+    )) {
+        if (-not $section.Contains($releaseGateCommand)) {
+            throw "CLAUDE.md §10.6 にリリース前必須関門のコマンドがありません: $releaseGateCommand"
+        }
+    }
+}
+
 function Resolve-ExternalCommand {
     param([string]$Executable)
 
@@ -502,6 +530,7 @@ $expectedPerformanceSteps = @(
     [pscustomobject]@{ Command = "cargo test --release -p ori3-propose --test end_to_end -- named_sample_completes_end_to_end_and_is_deterministic_ten_out_of_ten --exact --nocapture"; WorkingDirectory = "."; Executable = "cargo"; Arguments = @("test", "--release", "-p", "ori3-propose", "--test", "end_to_end", "--", "named_sample_completes_end_to_end_and_is_deterministic_ten_out_of_ten", "--exact", "--nocapture") },
     [pscustomobject]@{ Command = "cargo test --release -p ori3-propose --test acceptance -- a_safe_coincident_partial_network_appears_after_the_first_fold --exact --nocapture"; WorkingDirectory = "."; Executable = "cargo"; Arguments = @("test", "--release", "-p", "ori3-propose", "--test", "acceptance", "--", "a_safe_coincident_partial_network_appears_after_the_first_fold", "--exact", "--nocapture") },
     [pscustomobject]@{ Command = "cargo test --release -p desktop --lib the_heaviest_proposal_never_hits_the_time_limit -- --nocapture"; WorkingDirectory = "."; Executable = "cargo"; Arguments = @("test", "--release", "-p", "desktop", "--lib", "the_heaviest_proposal_never_hits_the_time_limit", "--", "--nocapture") },
+    [pscustomobject]@{ Command = "powershell -NoProfile -ExecutionPolicy Bypass -File crates/ori3-propose/tests/run-proposal-matrix.ps1 -Mode Performance"; WorkingDirectory = "."; Executable = "powershell"; Arguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "crates/ori3-propose/tests/run-proposal-matrix.ps1", "-Mode", "Performance") },
     [pscustomobject]@{ Command = "npm ci"; WorkingDirectory = "apps/desktop"; Executable = "npm"; Arguments = @("ci") },
     [pscustomobject]@{ Command = "npm run test -- --maxWorkers=1 --mode=production src/lib/symmetry.test.ts"; WorkingDirectory = "apps/desktop"; Executable = "npm"; Arguments = @("run", "test", "--", "--maxWorkers=1", "--mode=production", "src/lib/symmetry.test.ts") }
 )
@@ -606,6 +635,7 @@ try {
         $ciPerformanceSteps = @(Get-JobRunSteps $workflowPath "performance")
         Assert-CiStepsMatch -Actual $ciChecksSteps -Expected $expectedChecksSteps
         Assert-CiStepsMatch -Actual $ciPerformanceSteps -Expected $expectedPerformanceSteps
+        Assert-ClaudeCiContract -ClaudePath (Join-Path $sourceRoot "CLAUDE.md") -ExpectedSteps $expectedSteps
         $ciSteps = @($ciChecksSteps) + @($ciPerformanceSteps)
 
         if ($InjectMissingIgnoredReferenceForTest) {

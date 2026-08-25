@@ -17,10 +17,47 @@ fi
 
 hook_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$hook_dir/../.." && pwd)
+receipt_script="$repo_root/scripts/check-receipt.ps1"
 
 if ! command -v cargo >/dev/null 2>&1; then
     printf '%s\n' '[NG] cargo が見つからないため commit を中止します' >&2
     exit 127
+fi
+
+# PowerShell helperが使える場合は、同一内容・同一条件のW4合格を
+# 機械内だけで再利用する。helperはmiss/期限切れ/条件違い/判定エラーの
+# すべてで、下と同じcargo argvを実行する。CIではreceiptを使わない。
+powershell_command=
+if command -v powershell.exe >/dev/null 2>&1; then
+    powershell_command=powershell.exe
+elif command -v pwsh >/dev/null 2>&1; then
+    powershell_command=pwsh
+elif command -v powershell >/dev/null 2>&1; then
+    powershell_command=powershell
+fi
+
+if [ -n "$powershell_command" ] && [ -f "$receipt_script" ]; then
+    gate_status_path="$repo_root/.origami3/check-receipts/pre-commit-$$.status"
+    rm -f -- "$gate_status_path"
+    "$powershell_command" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$receipt_script" -RunRustW4 -RepoRoot "$repo_root" -GateStatusPath "$gate_status_path"
+    status=$?
+    gate_state=
+    if [ -f "$gate_status_path" ]; then
+        gate_state=$(cat "$gate_status_path")
+        rm -f -- "$gate_status_path"
+    fi
+    if [ "$status" -eq 0 ]; then
+        exit 0
+    fi
+    if [ "$gate_state" = "cargo-started" ]; then
+        printf '%s\n' "[NG] Rust W4 gateが失敗したため commit を中止します (終了コード: $status)" >&2
+        exit "$status"
+    fi
+    printf '%s\n' "[WARN] receipt helperがcargo開始前に停止したため、従来どおりRust W4を実行します (終了コード: $status)" >&2
+fi
+
+if [ -z "$powershell_command" ] || [ ! -f "$receipt_script" ]; then
+    printf '%s\n' '[WARN] receipt helperを使えないため、従来どおりRust W4を実行します' >&2
 fi
 
 # 提案の探索の重い3件だけは、ここから外す。花弁折り・つぶし折りの候補を既定で
@@ -31,11 +68,18 @@ fi
 # どの検査も消していない。
 #
 # the_heaviest_proposal_never_hits_the_time_limit も同じ理由でここから外す。
-# この検査は「時間の打ち切りに当たらないこと」を主張し、打ち切りは壁時計なので
+# この検査は「watchdogの打ち切りに当たらないこと」を主張し、watchdogは壁時計なので
 # 最適化なしでは16.8〜20.5倍遅くなり必ず当たる(実測: 最適化なしで4候補すべて
-# TimeCap。最適化ありでは0件/10回・最大13.851秒)。CIの performance ジョブと
+# WatchdogExpired。最適化ありでは0件/10回・最大13.851秒)。CIの performance ジョブと
 # CLAUDE.md §10.6 の #21 が最適化ありで走らせる。検査は消していない。
 printf '%s\n' '[..] Rustの変更を含むため、作業ツリー全体のテストを実行します (cargo test --workspace。提案の探索の重い3件と the_heaviest_proposal_never_hits_the_time_limit は最適化ありで別に走らせるため --skip)'
+
+before_tracked=$(git -C "$repo_root" status --porcelain --untracked-files=no)
+status=$?
+if [ "$status" -ne 0 ]; then
+    printf '%s\n' '[NG] 実行前の追跡対象変更guardを確認できないため commit を中止します' >&2
+    exit "$status"
+fi
 
 (cd "$repo_root" && cargo test --workspace -- --skip completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten --skip named_sample_completes_end_to_end_and_is_deterministic_ten_out_of_ten --skip a_safe_coincident_partial_network_appears_after_the_first_fold --skip the_heaviest_proposal_never_hits_the_time_limit)
 status=$?
@@ -43,6 +87,21 @@ status=$?
 if [ "$status" -ne 0 ]; then
     printf '%s\n' "[NG] cargo test --workspace が失敗したため commit を中止します (終了コード: $status)" >&2
     exit "$status"
+fi
+
+after_tracked=$(git -C "$repo_root" status --porcelain --untracked-files=no)
+status=$?
+if [ "$status" -ne 0 ]; then
+    printf '%s\n' '[NG] 実行後の追跡対象変更guardを確認できないため commit を中止します' >&2
+    exit "$status"
+fi
+if [ "$after_tracked" != "$before_tracked" ]; then
+    printf '%s\n' '[NG] Rust W4が追跡対象のファイルを書き換えたため commit を中止します' >&2
+    printf '%s\n' '実行前:' >&2
+    printf '%s\n' "$before_tracked" >&2
+    printf '%s\n' '実行後:' >&2
+    printf '%s\n' "$after_tracked" >&2
+    exit 1
 fi
 
 printf '%s\n' '[OK] 作業ツリー全体のRustテストに合格しました'
