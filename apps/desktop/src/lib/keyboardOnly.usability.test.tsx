@@ -832,6 +832,10 @@ describe("施策9: マウスを使わない一続きの操作", () => {
       name: "全部の折り目を動かす割合",
     }) as HTMLInputElement;
     tabTo(root, slider);
+    pressTab(root, true);
+    expect(useAppStore.getState().foldAllPreview?.returning).toBe(false);
+    expect(screen.getByText("これは仮の形です")).toBeTruthy();
+    tabTo(root, slider);
     pressTab(root);
     expect(useAppStore.getState().foldAllPreview?.returning).toBe(false);
     expect(screen.getByText("これは仮の形です")).toBeTruthy();

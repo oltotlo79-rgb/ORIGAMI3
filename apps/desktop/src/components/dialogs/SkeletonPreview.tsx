@@ -113,7 +113,7 @@ export function SkeletonPreview({
       ref={svgRef}
       className="skeleton-preview"
       viewBox={`${layout.viewBox.x} ${layout.viewBox.y} ${layout.viewBox.width} ${layout.viewBox.height}`}
-      role="img"
+      role="group"
       aria-label="形見本"
       style={{
         width: "100%",

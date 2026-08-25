@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import {
   useAppStore,
   type ToolId,
@@ -119,6 +120,10 @@ export function FoldAllPreviewContent() {
   const leaveFoldAllPreview = useAppStore((s) => s.leaveFoldAllPreview);
   const documentSavedPath = useAppStore((s) => s.documentSavedPath);
   const otherOperationFailed = useAppStore((s) => s.errorMessage !== null);
+  const percentChangePending = useRef(false);
+  useEffect(() => {
+    percentChangePending.current = false;
+  }, [preview?.session]);
 
   if (preview === null) return null;
   const percentText = Number.isInteger(preview.percent)
@@ -159,8 +164,14 @@ export function FoldAllPreviewContent() {
           disabled={preview.returning}
           aria-label="全部の折り目を動かす割合"
           aria-valuetext={`${percentText}%`}
-          onChange={(event) => setFoldAllPercent(Number(event.target.value))}
-          onPointerUp={finishFoldAllPercent}
+          onChange={(event) => {
+            percentChangePending.current = true;
+            setFoldAllPercent(Number(event.target.value));
+          }}
+          onPointerUp={() => {
+            percentChangePending.current = false;
+            finishFoldAllPercent();
+          }}
           onKeyUp={(event) => {
             if (
               event.key === "ArrowLeft" ||
@@ -172,13 +183,16 @@ export function FoldAllPreviewContent() {
               event.key === "Home" ||
               event.key === "End"
             ) {
+              percentChangePending.current = false;
               finishFoldAllPercent();
             }
           }}
           onBlur={() => {
-            // 開いた直後の0%からTabで離れただけでは「元に戻る」を始めない。
-            // 値を動かした後のblurは、従来どおり保留中の計算を確定する。
-            if (preview.percent !== 0) finishFoldAllPercent();
+            // 開いた直後からTabで離れただけなら、変更は保留されていない。
+            // 読み上げ操作などでchangeだけ届いた場合は、blurで確定する。
+            if (!percentChangePending.current) return;
+            percentChangePending.current = false;
+            finishFoldAllPercent();
           }}
         />
         <span className="fold-all-preview-min">元に戻る 0%</span>

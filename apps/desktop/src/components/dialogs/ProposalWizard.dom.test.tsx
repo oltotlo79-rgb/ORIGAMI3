@@ -952,7 +952,7 @@ describe("提案ウィザード", () => {
       `[data-preview-label="${head.node.id}"]`,
     );
 
-    expect(screen.getByRole("img", { name: "形見本" })).not.toBeNull();
+    expect(screen.getByRole("group", { name: "形見本" })).not.toBeNull();
     expect(parentLine).not.toBeNull();
     expect(childLine).not.toBeNull();
     expect(parentLabel).not.toBeNull();
@@ -1013,7 +1013,7 @@ describe("提案ウィザード", () => {
     });
     expect(deepestAdd.style.maxWidth).toBe("100%");
     expect(deepestAdd.style.whiteSpace).toBe("normal");
-    const preview = screen.getByRole("img", { name: "形見本" });
+    const preview = screen.getByRole("group", { name: "形見本" });
     expect(preview.style.width).toBe("100%");
     expect(preview.style.maxWidth).toBe("200px");
     for (const slider of within(deepest).getAllByRole("slider")) {

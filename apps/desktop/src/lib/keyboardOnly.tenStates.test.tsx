@@ -147,6 +147,17 @@ function candidate(mark: number): ProposalCandidate {
   };
 }
 
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 function radialSkeleton(count: number): Skeleton {
   return {
     nodes: [
@@ -364,6 +375,27 @@ function tabTo(root: HTMLElement, target: FocusTarget): void {
 
 function expectFocusPresentation(root: HTMLElement, target: FocusTarget): void {
   focusTarget(target);
+  if (target.matches('.help-search-control input[type="search"]')) {
+    const searchRule =
+      /\.help-search-control\s+input\[type="search"\]\s*\{([\s\S]*?)\}/u.exec(
+        baseLayoutCss,
+      )?.[1];
+    expect(searchRule).toContain("outline: 0");
+    expect(searchRule).toContain("box-shadow: none");
+
+    const focusOwner = target.closest<HTMLElement>(".help-search-control");
+    expect(focusOwner, "検索欄の代わりに選択輪を描く親要素").not.toBeNull();
+    expect(focusOwner?.contains(target)).toBe(true);
+    expect(
+      focusOwner?.matches(":focus-within"),
+      "検索欄を選ぶと親のfocus-withinが成立すること",
+    ).toBe(true);
+    const parentFocusRule =
+      /\.help-search-control:focus-within\s*\{([\s\S]*?)\}/u.exec(dialogsCss)?.[1];
+    expect(parentFocusRule).toContain("border-color: var(--color-accent)");
+    expect(parentFocusRule).toContain("box-shadow: var(--focus-ring)");
+    return;
+  }
   if (target.matches(".skeleton-preview .tip-handle")) {
     const id = target.getAttribute("data-tip-handle");
     expect(id).not.toBeNull();
@@ -1060,9 +1092,694 @@ const OPERATION_RESULT_CASES: readonly OperationResultCase[] = TEN_STATES.flatMa
     })),
 );
 
+function buttonTarget(target: FocusTarget): HTMLButtonElement {
+  expect(target).toBeInstanceOf(HTMLButtonElement);
+  return target as HTMLButtonElement;
+}
+
+function inputTarget(target: FocusTarget, type: string): HTMLInputElement {
+  expect(target).toBeInstanceOf(HTMLInputElement);
+  const input = target as HTMLInputElement;
+  expect(input.type).toBe(type);
+  return input;
+}
+
+function shapeRowId(target: FocusTarget): number {
+  const row = target.closest<HTMLElement>("[data-shape-row]");
+  if (row === null) throw new Error(`${visibleName(target)}の形の行がありません`);
+  const id = Number(row.dataset.shapeRow);
+  if (!Number.isInteger(id)) throw new Error(`${visibleName(target)}の部位番号がありません`);
+  return id;
+}
+
+function expectSkeletonRangeResult(
+  target: FocusTarget,
+  key: "ArrowLeft" | "ArrowRight",
+): void {
+  const range = inputTarget(target, "range");
+  const nodeId = shapeRowId(range);
+  const property = range.getAttribute("aria-label")?.endsWith("の太さ")
+    ? "width_factor"
+    : "length";
+  const before = useAppStore
+    .getState()
+    .proposalSkeleton.nodes.find((node) => node.id === nodeId)?.[property];
+  const expected = pressRangeArrow(range, key);
+  const after = useAppStore
+    .getState()
+    .proposalSkeleton.nodes.find((node) => node.id === nodeId)?.[property];
+  expect(expected, `${visibleName(range)}のDOM結果`).not.toBe(before);
+  expect(after, `${visibleName(range)}の作品状態`).toBe(expected);
+}
+
+function expectSkeletonAddResult(target: FocusTarget): void {
+  const parentId = shapeRowId(target);
+  const before = useAppStore.getState().proposalSkeleton.nodes;
+  const beforeIds = new Set(before.map((node) => node.id));
+  pressEnter(buttonTarget(target));
+  const after = useAppStore.getState().proposalSkeleton.nodes;
+  const added = after.filter((node) => !beforeIds.has(node.id));
+  expect(added, `${visibleName(target)}で足された部位`).toHaveLength(1);
+  expect(added[0].parent).toBe(parentId);
+}
+
+function expectSkeletonRemoveResult(target: FocusTarget): void {
+  const removedId = shapeRowId(target);
+  const before = useAppStore.getState().proposalSkeleton.nodes;
+  const removedIds = new Set([removedId]);
+  let foundDescendant = true;
+  while (foundDescendant) {
+    foundDescendant = false;
+    for (const node of before) {
+      if (
+        node.parent !== null &&
+        removedIds.has(node.parent) &&
+        !removedIds.has(node.id)
+      ) {
+        removedIds.add(node.id);
+        foundDescendant = true;
+      }
+    }
+  }
+  pressEnter(buttonTarget(target));
+  const after = useAppStore.getState().proposalSkeleton.nodes;
+  for (const id of removedIds) {
+    expect(
+      after.some((node) => node.id === id),
+      `${visibleName(target)}で対象とその先の部位${id}が消えること`,
+    ).toBe(false);
+  }
+  expect(after).toHaveLength(before.length - removedIds.size);
+}
+
+async function expectProposalGeneration(target: FocusTarget): Promise<void> {
+  pressEnter(buttonTarget(target));
+  await waitFor(() => expect(ipc.proposalGenerate).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(useAppStore.getState().proposalBusy).toBe(false));
+  expect(useAppStore.getState().proposalStep).toBe("candidates");
+  expect(useAppStore.getState().proposalCandidates).toHaveLength(1);
+  expect(useAppStore.getState().proposalCandidates[0].cp.next_edge_id).toBe(91);
+}
+
+async function expectNewStateOperation(
+  target: FocusTarget,
+  ledgerId: string,
+): Promise<void> {
+  if (ledgerId.startsWith("input:radio:")) {
+    const next = pressRadioArrow(inputTarget(target, "radio"), "ArrowRight");
+    expect(visibleName(next)).toContain("長方形");
+    expect(useAppStore.getState().newPaperDraft.square).toBe(false);
+    return;
+  }
+  if (ledgerId.startsWith("input:number:")) {
+    expect(pressNumberArrow(inputTarget(target, "number"), "ArrowUp")).toBe(151);
+    expect(useAppStore.getState().newPaperDraft.widthMm).toBe(151);
+    return;
+  }
+  if (ledgerId.includes("を増やす")) {
+    pressEnter(buttonTarget(target));
+    expect(useAppStore.getState().newPaperDraft.widthMm).toBe(151);
+    return;
+  }
+  if (ledgerId.includes("を減らす")) {
+    pressEnter(buttonTarget(target));
+    expect(useAppStore.getState().newPaperDraft.widthMm).toBe(149);
+    return;
+  }
+  if (ledgerId.includes("折り紙 15cm角")) {
+    pressNumberArrow(
+      screen.getByLabelText("紙の横の長さ（mm）") as HTMLInputElement,
+      "ArrowUp",
+    );
+    pressEnter(buttonTarget(target));
+    expect(useAppStore.getState().newPaperDraft).toEqual({
+      widthMm: 150,
+      heightMm: 150,
+      square: true,
+    });
+    return;
+  }
+  if (ledgerId.includes("折り紙 24cm角")) {
+    pressEnter(buttonTarget(target));
+    expect(useAppStore.getState().newPaperDraft).toEqual({
+      widthMm: 240,
+      heightMm: 240,
+      square: true,
+    });
+    return;
+  }
+  if (ledgerId.includes("A4の紙")) {
+    pressEnter(buttonTarget(target));
+    expect(useAppStore.getState().newPaperDraft).toEqual({
+      widthMm: 297,
+      heightMm: 210,
+      square: false,
+    });
+    return;
+  }
+  if (ledgerId.includes("新しい作品を始めます")) {
+    pressEnter(buttonTarget(target));
+    await waitFor(() => expect(ipc.documentNew).toHaveBeenCalledTimes(1));
+    expect(ipc.documentNew).toHaveBeenCalledWith({
+      width_mm: 150,
+      height_mm: 150,
+    });
+    expect(useAppStore.getState().newDialogOpen).toBe(false);
+    return;
+  }
+  if (ledgerId.includes("新規作成をやめます")) {
+    pressEnter(buttonTarget(target));
+    expect(useAppStore.getState().newDialogOpen).toBe(false);
+    return;
+  }
+  throw new Error(`新規作成の結果が未定義です: ${ledgerId}`);
+}
+
+async function expectExportStateOperation(
+  target: FocusTarget,
+  ledgerId: string,
+): Promise<void> {
+  if (ledgerId.startsWith("input:radio:")) {
+    const next = pressRadioArrow(inputTarget(target, "radio"), "ArrowLeft");
+    expect(visibleName(next)).toContain("展開図(SVG)");
+    expect(useAppStore.getState().exportKind).toBe("CpSvg");
+    return;
+  }
+  if (ledgerId.startsWith("input:checkbox:")) {
+    pressSpace(inputTarget(target, "checkbox"));
+    expect(useAppStore.getState().exportIncludeAux).toBe(true);
+    return;
+  }
+  if (ledgerId.startsWith("input:number:")) {
+    expect(pressNumberArrow(inputTarget(target, "number"), "ArrowDown")).toBe(
+      16128,
+    );
+    expect(useAppStore.getState().exportLongSide).toBe(16128);
+    return;
+  }
+  if (ledgerId.includes("を増やす")) {
+    const number = screen.getByLabelText(
+      "画像の大きさ（長辺の点数）",
+    ) as HTMLInputElement;
+    expect(pressNumberArrow(number, "ArrowDown")).toBe(16128);
+    pressEnter(buttonTarget(target));
+    expect(useAppStore.getState().exportLongSide).toBe(16384);
+    return;
+  }
+  if (ledgerId.includes("を減らす")) {
+    pressEnter(buttonTarget(target));
+    expect(useAppStore.getState().exportLongSide).toBe(16128);
+    return;
+  }
+  if (ledgerId.includes("保存先を選んで書き出す")) {
+    pressEnter(buttonTarget(target));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(ipc.documentExport).toHaveBeenCalledTimes(1));
+    expect(ipc.documentExport).toHaveBeenCalledWith(
+      "CpPng",
+      "C:\\検査\\keyboard-ledger.png",
+      { include_aux: false, png_long_side: 16384 },
+    );
+    await waitFor(() =>
+      expect(useAppStore.getState().exportSavedPath).toBe(
+        "C:\\検査\\keyboard-ledger.png",
+      ),
+    );
+    return;
+  }
+  if (ledgerId === buttonId("閉じる")) {
+    pressEnter(buttonTarget(target));
+    expect(useAppStore.getState().exportOpen).toBe(false);
+    return;
+  }
+  throw new Error(`書き出しの結果が未定義です: ${ledgerId}`);
+}
+
+async function expectDeepProposalOperation(
+  target: FocusTarget,
+  ledgerId: string,
+): Promise<void> {
+  if (target.hasAttribute("data-tip-handle")) {
+    const leafId = Number(target.getAttribute("data-tip-handle"));
+    expect(
+      useAppStore.getState().proposalSkeleton.nodes.find((node) => node.id === leafId)
+        ?.tip_pos_2d,
+    ).toBeUndefined();
+    fireEvent.keyDown(target, { key: "ArrowRight" });
+    fireEvent.keyUp(target, { key: "ArrowRight" });
+    expect(
+      useAppStore.getState().proposalSkeleton.nodes.find((node) => node.id === leafId)
+        ?.tip_pos_2d,
+    ).toBeDefined();
+    expect(useAppStore.getState().proposalPositionUndoStack).toHaveLength(1);
+    return;
+  }
+  if (ledgerId.startsWith("input:range:")) {
+    expectSkeletonRangeResult(target, "ArrowLeft");
+    return;
+  }
+  if (ledgerId.endsWith("のこの先に足す")) {
+    expectSkeletonAddResult(target);
+    return;
+  }
+  if (ledgerId.endsWith("とその先を消す")) {
+    expectSkeletonRemoveResult(target);
+    return;
+  }
+  if (ledgerId === buttonId("展開図を作ってもらう")) {
+    await expectProposalGeneration(target);
+    return;
+  }
+  if (ledgerId === buttonId("やめる")) {
+    const pending = deferred<Awaited<ReturnType<typeof ipc.proposalGenerate>>>();
+    let requestedJobId = "";
+    vi.mocked(ipc.proposalGenerate).mockImplementation(
+      (_skeleton, _paper, _seed, jobId) => {
+        requestedJobId = jobId;
+        return pending.promise;
+      },
+    );
+    vi.mocked(ipc.proposalControl).mockImplementation((operation) =>
+      Promise.resolve({
+        job_id: operation.job_id,
+        done: 0,
+        total: 0,
+        phase: "Cancelled",
+      }),
+    );
+    let generation!: Promise<void>;
+    act(() => {
+      useAppStore.setState({
+        proposalBusy: false,
+        proposalJobId: null,
+        proposalProgress: null,
+      });
+      generation = useAppStore.getState().generateProposal();
+    });
+    await waitFor(() => expect(useAppStore.getState().proposalBusy).toBe(true));
+    const close = screen.getByRole("button", { name: "やめる" });
+    expect(close).toBeInstanceOf(HTMLButtonElement);
+    focusTarget(close as HTMLButtonElement);
+    pressEnter(close as HTMLButtonElement);
+    await waitFor(() =>
+      expect(ipc.proposalControl).toHaveBeenCalledWith({
+        type: "Cancel",
+        job_id: requestedJobId,
+      }),
+    );
+    expect(useAppStore.getState().proposalStep).toBeNull();
+    expect(useAppStore.getState().proposalCandidates).toEqual([]);
+    await act(async () => {
+      pending.resolve({
+        job_id: requestedJobId,
+        candidates: [candidate(778)],
+      });
+      await generation;
+    });
+    expect(useAppStore.getState().proposalStep).toBeNull();
+    expect(useAppStore.getState().proposalCandidates).toEqual([]);
+    return;
+  }
+  throw new Error(`形を決める画面の結果が未定義です: ${ledgerId}`);
+}
+
+async function expectCandidateOperation(
+  target: FocusTarget,
+  ledgerId: string,
+): Promise<void> {
+  const candidateMatch = /^button:候補([1-4])$/u.exec(ledgerId);
+  if (candidateMatch !== null) {
+    const expected = Number(candidateMatch[1]) - 1;
+    if (expected === 0) {
+      pressEnter(screen.getByRole("button", { name: "候補2" }));
+      expect(useAppStore.getState().proposalSelected).toBe(1);
+    }
+    pressEnter(buttonTarget(target));
+    expect(useAppStore.getState().proposalSelected).toBe(expected);
+    expect(target.getAttribute("aria-pressed")).toBe("true");
+    return;
+  }
+  if (ledgerId === buttonId("形を直す")) {
+    pressEnter(buttonTarget(target));
+    expect(useAppStore.getState().proposalStep).toBe("skeleton");
+    return;
+  }
+  if (ledgerId === buttonId("別の置き方も見る")) {
+    await expectProposalGeneration(target);
+    return;
+  }
+  if (ledgerId === buttonId("紙の上の場所も調整")) {
+    pressEnter(buttonTarget(target));
+    expect(useAppStore.getState().proposalStep).toBe("paper-position");
+    expect(useAppStore.getState().proposalPaperPositions).toHaveLength(4);
+    return;
+  }
+  if (ledgerId === buttonId("これにする")) {
+    pressEnter(buttonTarget(target));
+    expect(useAppStore.getState().proposalStep).toBe("confirm");
+    return;
+  }
+  throw new Error(`候補画面の結果が未定義です: ${ledgerId}`);
+}
+
+async function expectPaperPositionOperation(
+  target: FocusTarget,
+  ledgerId: string,
+): Promise<void> {
+  if (target.hasAttribute("data-paper-position-handle")) {
+    const leafId = Number(target.getAttribute("data-paper-position-handle"));
+    const before = useAppStore
+      .getState()
+      .proposalPaperPositions.find((entry) => entry.leaf_id === leafId)?.position.x;
+    fireEvent.keyDown(target, { key: "ArrowRight" });
+    fireEvent.keyUp(target, { key: "ArrowRight" });
+    const state = useAppStore.getState();
+    const after = state.proposalPaperPositions.find(
+      (entry) => entry.leaf_id === leafId,
+    )?.position.x;
+    expect(after).toBeGreaterThan(before ?? Number.POSITIVE_INFINITY);
+    expect(
+      state.proposalPaperSpecified.some((entry) => entry.leaf_id === leafId),
+    ).toBe(true);
+    expect(target.getAttribute("data-paper-position-changed")).toBe("true");
+    return;
+  }
+  if (ledgerId === buttonId("候補へ戻る")) {
+    pressEnter(buttonTarget(target));
+    expect(useAppStore.getState().proposalStep).toBe("candidates");
+    return;
+  }
+  if (ledgerId === buttonId("この場所で作り直す")) {
+    await expectProposalGeneration(target);
+    return;
+  }
+  throw new Error(`紙上の場所画面の結果が未定義です: ${ledgerId}`);
+}
+
+async function expectConfirmOperation(
+  target: FocusTarget,
+  ledgerId: string,
+): Promise<void> {
+  if (ledgerId === buttonId("選び直す")) {
+    pressEnter(buttonTarget(target));
+    expect(useAppStore.getState().proposalStep).toBe("candidates");
+    return;
+  }
+  if (ledgerId === buttonId("この展開図を使う")) {
+    pressEnter(buttonTarget(target));
+    await waitFor(() => expect(ipc.editApply).toHaveBeenCalledTimes(1));
+    expect(ipc.editApply).toHaveBeenCalledWith({
+      type: "ReplaceCreasePattern",
+      cp: expect.objectContaining({ next_edge_id: 40 }),
+    });
+    expect(useAppStore.getState().proposalStep).toBeNull();
+    return;
+  }
+  throw new Error(`確認画面の結果が未定義です: ${ledgerId}`);
+}
+
+async function expectBusyProposalOperation(
+  target: FocusTarget,
+  ledgerId: string,
+): Promise<void> {
+  if (ledgerId.startsWith("input:range:")) {
+    expectSkeletonRangeResult(target, "ArrowRight");
+    return;
+  }
+  if (ledgerId.endsWith("のこの先に足す")) {
+    expectSkeletonAddResult(target);
+    return;
+  }
+  if (ledgerId.endsWith("とその先を消す")) {
+    expectSkeletonRemoveResult(target);
+    return;
+  }
+  if (ledgerId === buttonId("出っぱりを増やす")) {
+    const beforeIds = new Set(
+      useAppStore.getState().proposalSkeleton.nodes.map((node) => node.id),
+    );
+    pressEnter(buttonTarget(target));
+    const added = useAppStore
+      .getState()
+      .proposalSkeleton.nodes.filter((node) => !beforeIds.has(node.id));
+    expect(added).toHaveLength(1);
+    expect(added[0].parent).toBe(0);
+    return;
+  }
+  if (ledgerId === buttonId("やめる")) {
+    pressEnter(buttonTarget(target));
+    expect(useAppStore.getState().proposalStep).toBeNull();
+    return;
+  }
+  throw new Error(`処理中画面の結果が未定義です: ${ledgerId}`);
+}
+
+async function expectRecoveryOperation(
+  target: FocusTarget,
+  ledgerId: string,
+): Promise<void> {
+  const accept = ledgerId === buttonId("復元する");
+  if (!accept && ledgerId !== buttonId("破棄する")) {
+    throw new Error(`復旧画面の結果が未定義です: ${ledgerId}`);
+  }
+  pressEnter(buttonTarget(target));
+  await waitFor(() => expect(ipc.recoveryRestore).toHaveBeenCalledWith(accept));
+  expect(useAppStore.getState().recovery).toBeNull();
+}
+
+async function expectHelpOperation(
+  target: FocusTarget,
+  ledgerId: string,
+): Promise<void> {
+  if (ledgerId === buttonId("ヘルプセンターを閉じる")) {
+    pressEnter(buttonTarget(target));
+    expect(useAppStore.getState().helpOpen).toBe(false);
+    return;
+  }
+  if (ledgerId.startsWith("input:search:")) {
+    const search = inputTarget(target, "search");
+    fireEvent.keyDown(search, { key: "折" });
+    fireEvent.change(search, { target: { value: "折" } });
+    fireEvent.keyUp(search, { key: "折" });
+    expect(useAppStore.getState().helpQuery).toBe("折");
+    expect(search.value).toBe("折");
+    return;
+  }
+  const chapter = HELP_CHAPTER_LEDGER.find(
+    ([name]) => ledgerId === buttonId(name),
+  );
+  if (chapter !== undefined) {
+    if (chapter[1] === "overview") {
+      const other = screen.getByRole("button", {
+        name: /ショートカット一覧/u,
+      });
+      expect(other).toBeInstanceOf(HTMLButtonElement);
+      pressEnter(other as HTMLButtonElement);
+      expect(useAppStore.getState().helpChapterId).toBe("shortcuts");
+      focusTarget(target);
+    }
+    pressEnter(buttonTarget(target));
+    expect(useAppStore.getState().helpChapterId).toBe(chapter[1]);
+    expect(target.getAttribute("aria-current")).toBe("page");
+    return;
+  }
+  if (ledgerId === buttonId("基本操作ガイドをもう一度")) {
+    pressEnter(buttonTarget(target));
+    expect(useAppStore.getState().helpOpen).toBe(false);
+    expect(useAppStore.getState().guideOpen).toBe(true);
+    expect(useAppStore.getState().guideStep).toBe(0);
+    return;
+  }
+  throw new Error(`ヘルプ画面の結果が未定義です: ${ledgerId}`);
+}
+
+async function expectCpOperation(
+  target: FocusTarget,
+  ledgerId: string,
+): Promise<void> {
+  if (ledgerId === buttonId("展開図の詳しい操作方法 ▼")) {
+    expect(target.getAttribute("aria-expanded")).toBe("false");
+    pressEnter(buttonTarget(target));
+    expect(useAppStore.getState().cpHelpExpanded).toBe(true);
+    expect(target.getAttribute("aria-expanded")).toBe("true");
+    return;
+  }
+  if (target instanceof HTMLCanvasElement) {
+    const start = useAppStore.getState().lineInputStart;
+    expect(start).not.toBeNull();
+    fireEvent.keyDown(target, { key: "ArrowRight" });
+    fireEvent.keyUp(target, { key: "ArrowRight" });
+    fireEvent.keyDown(target, { key: "Enter" });
+    fireEvent.keyUp(target, { key: "Enter" });
+    await waitFor(() => expect(ipc.editApply).toHaveBeenCalledTimes(1));
+    const operation = vi.mocked(ipc.editApply).mock.calls[0][0];
+    expect(operation.type).toBe("AddSegment");
+    if (operation.type !== "AddSegment") {
+      throw new Error("展開図からAddSegment以外が送られました");
+    }
+    expect(operation.a).toEqual(start);
+    expect(operation.b).not.toEqual(start);
+    await waitFor(() => expect(useAppStore.getState().lineInputStart).toBeNull());
+    expect(useAppStore.getState().operationStage).toBe(2);
+    return;
+  }
+  if (ledgerId === "div:展開図に表示している手順") {
+    // これは実行操作ではなく、キーボード利用者が現在の手順を読めるfocus対象。
+    const before = {
+      lineInputStart: useAppStore.getState().lineInputStart,
+      operationStage: useAppStore.getState().operationStage,
+    };
+    fireEvent.keyDown(target, { key: "Enter" });
+    fireEvent.keyUp(target, { key: "Enter" });
+    expect(ipc.editApply).not.toHaveBeenCalled();
+    expect({
+      lineInputStart: useAppStore.getState().lineInputStart,
+      operationStage: useAppStore.getState().operationStage,
+    }).toEqual(before);
+    return;
+  }
+  throw new Error(`展開図の結果が未定義です: ${ledgerId}`);
+}
+
+async function expectOperationResult(
+  stateId: number,
+  target: FocusTarget,
+  ledgerId: string,
+): Promise<void> {
+  switch (stateId) {
+    case 1:
+      return expectNewStateOperation(target, ledgerId);
+    case 2:
+      return expectExportStateOperation(target, ledgerId);
+    case 3:
+      return expectDeepProposalOperation(target, ledgerId);
+    case 4:
+      return expectCandidateOperation(target, ledgerId);
+    case 5:
+      return expectPaperPositionOperation(target, ledgerId);
+    case 6:
+      return expectConfirmOperation(target, ledgerId);
+    case 7:
+      return expectBusyProposalOperation(target, ledgerId);
+    case 8:
+      return expectRecoveryOperation(target, ledgerId);
+    case 9:
+      return expectHelpOperation(target, ledgerId);
+    case 10:
+      return expectCpOperation(target, ledgerId);
+    default:
+      throw new Error(`未知の固定状態です: ${stateId}`);
+  }
+}
+
+interface RadioChoiceCase {
+  stateId: 1 | 2;
+  id: string;
+  label: string;
+  expected: boolean | "CpSvg" | "CpPng";
+  disabled: boolean;
+}
+
+const RADIO_CHOICE_CASES: readonly RadioChoiceCase[] = [
+  {
+    stateId: 1,
+    id: "1:input:radio:正方形(たて・よこが同じ)",
+    label: "正方形(たて・よこが同じ)",
+    expected: true,
+    disabled: false,
+  },
+  {
+    stateId: 1,
+    id: "1:input:radio:長方形(たて・よこを別に決める)",
+    label: "長方形(たて・よこを別に決める)",
+    expected: false,
+    disabled: false,
+  },
+  {
+    stateId: 2,
+    id: "2:input:radio:展開図(SVG)",
+    label: "展開図(SVG)",
+    expected: "CpSvg",
+    disabled: false,
+  },
+  {
+    stateId: 2,
+    id: "2:input:radio:展開図(PNG)",
+    label: "展開図(PNG)",
+    expected: "CpPng",
+    disabled: false,
+  },
+  {
+    stateId: 2,
+    id: "2:input:radio:折り図(PDF)",
+    label: "折り図(PDF)",
+    expected: "CpPng",
+    disabled: true,
+  },
+  {
+    stateId: 2,
+    id: "2:input:radio:折り図(ページごとのSVG)",
+    label: "折り図(ページごとのSVG)",
+    expected: "CpPng",
+    disabled: true,
+  },
+];
+
+function mountRadioState(stateId: 1 | 2): TenStateCase {
+  cleanup();
+  useAppStore.setState(initialStoreState, true);
+  const state = TEN_STATES.find((candidate) => candidate.id === stateId);
+  if (state === undefined) throw new Error(`radioの固定状態${stateId}がありません`);
+  state.arrange();
+  render(state.node());
+  state.root();
+  return state;
+}
+
+function namedRadio(label: string): HTMLInputElement {
+  const radio = screen.getByLabelText(label);
+  expect(radio).toBeInstanceOf(HTMLInputElement);
+  return radio as HTMLInputElement;
+}
+
+function expectRadioStoreResult(testCase: RadioChoiceCase): void {
+  if (testCase.stateId === 1) {
+    expect(useAppStore.getState().newPaperDraft.square).toBe(testCase.expected);
+  } else {
+    expect(useAppStore.getState().exportKind).toBe(testCase.expected);
+  }
+}
+
+function selectRadioByArrow(target: HTMLInputElement): void {
+  let current = Array.from(
+    document.querySelectorAll<HTMLInputElement>('input[type="radio"]'),
+  ).find((radio) => radio.name === target.name && radio.checked && !radio.disabled);
+  if (current === undefined) throw new Error(`${visibleName(target)}の現在値がありません`);
+  for (let index = 0; index <= 8; index += 1) {
+    if (current === target) return;
+    current = pressRadioArrow(current, "ArrowRight");
+  }
+  throw new Error(`${visibleName(target)}へ矢印キーで到達できません`);
+}
+
+function radioChoiceId(stateId: 1 | 2, radio: HTMLInputElement): string {
+  return `${stateId}:${operationLedgerId(radio)}`;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   useAppStore.setState(initialStoreState, true);
+  vi.mocked(save).mockResolvedValue("C:\\検査\\keyboard-ledger.png");
+  vi.mocked(ipc.documentNew).mockResolvedValue(viewOf());
+  vi.mocked(ipc.documentExport).mockResolvedValue([]);
+  vi.mocked(ipc.editApply).mockResolvedValue(viewOf());
+  vi.mocked(ipc.proposalApply).mockResolvedValue(viewOf());
+  vi.mocked(ipc.proposalGenerate).mockImplementation(
+    async (_skeleton, _paper, _seed, jobId) => ({
+      job_id: jobId,
+      candidates: [candidate(91)],
+    }),
+  );
   vi.mocked(ipc.recoveryRestore).mockResolvedValue(viewOf());
   vi.mocked(ipc.proposalProgress).mockResolvedValue(null);
   Object.defineProperty(HTMLCanvasElement.prototype, "clientWidth", {
@@ -1104,19 +1821,6 @@ afterEach(() => {
 });
 
 describe("5-E: 固定10状態のキーボード検査", () => {
-  it("DIAGNOSTIC: 10状態の操作台帳を採取する", () => {
-    const ledger: Record<string, string[]> = {};
-    for (const state of TEN_STATES) {
-      cleanup();
-      useAppStore.setState(initialStoreState, true);
-      state.arrange();
-      render(state.node());
-      const root = state.root();
-      ledger[String(state.id)] = focusableElements(root).map(operationLedgerId);
-    }
-    console.log(`TEN_STATE_LEDGER=${JSON.stringify(ledger, null, 2)}`);
-  });
-
   it("5-Aで決めた10状態を増減せず、同じ順序と名前で固定する", () => {
     expect(TEN_STATES.map(({ id, label }) => ({ id, label }))).toEqual([
       { id: 1, label: "New・既定の正方形" },
@@ -1179,4 +1883,184 @@ describe("5-E: 固定10状態のキーボード検査", () => {
       }
     },
   );
+
+  it.each(TEN_STATES)(
+    "$id $label: 全Tab停止位置を名前付き台帳と照合し、同数の入替も見逃さない",
+    (state) => {
+      state.arrange();
+      render(state.node());
+      const actual = focusableElements(state.root()).map(operationLedgerId);
+      expect(new Set(actual).size, `${state.label}の重複しない操作ID`).toBe(
+        actual.length,
+      );
+      expect(actual).toEqual(EXPECTED_OPERATION_LEDGER[state.id]);
+    },
+  );
+
+  it("現在の台帳は10状態の全147停止位置で、1件は読むためだけのfocus対象と明記する", () => {
+    expect(OPERATION_RESULT_CASES).toHaveLength(147);
+    expect(
+      OPERATION_RESULT_CASES.filter(
+        ({ ledgerId }) => ledgerId === "div:展開図に表示している手順",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("radioの全6選択肢は、名前付き台帳と無効状態まで完全一致する", () => {
+    const actual = ([1, 2] as const).flatMap((stateId) => {
+      mountRadioState(stateId);
+      return Array.from(
+        document.querySelectorAll<HTMLInputElement>('input[type="radio"]'),
+      ).map((radio) => ({
+        id: radioChoiceId(stateId, radio),
+        disabled: radio.disabled,
+      }));
+    });
+    const expected = RADIO_CHOICE_CASES.map(({ id, disabled }) => ({
+      id,
+      disabled,
+    }));
+    expect(new Set(actual.map(({ id }) => id)).size).toBe(actual.length);
+    expect(actual).toEqual(expected);
+  });
+
+  it.each(OPERATION_RESULT_CASES)(
+    "$ledgerId: 状態を独立mountし、配送だけでなく製品の操作結果まで確かめる",
+    async ({ state, ledgerId }) => {
+      state.arrange();
+      const audit = auditInput();
+      try {
+        render(state.node());
+        const root = state.root();
+        const targets = focusableElements(root).filter(
+          (candidate) => operationLedgerId(candidate) === ledgerId,
+        );
+        expect(targets, `${state.label}の${ledgerId}`).toHaveLength(1);
+        const target = targets[0];
+        focusTarget(target);
+        await expectOperationResult(state.id, target, ledgerId);
+        expect(audit.lowLevelEvents, "pointer/mouse/wheel/contextmenu").toEqual([]);
+        expect(
+          audit.clicks.filter(
+            (click) => click.detail > 0 || click.pointerType !== "",
+          ),
+          "pointer由来click",
+        ).toEqual([]);
+      } finally {
+        audit.stop();
+      }
+    },
+  );
+
+  it.each(RADIO_CHOICE_CASES)(
+    "radio $stateId $label: 全選択肢の矢印キー・Space結果を別々のmountで確かめる",
+    (testCase) => {
+      mountRadioState(testCase.stateId);
+      let target = namedRadio(testCase.label);
+      expect(target.disabled).toBe(testCase.disabled);
+
+      if (testCase.disabled) {
+        const selected = Array.from(
+          document.querySelectorAll<HTMLInputElement>('input[type="radio"]'),
+        ).find((radio) => radio.name === target.name && radio.checked);
+        if (selected === undefined) throw new Error("現在の選択肢がありません");
+        const moved = pressRadioArrow(selected, "ArrowRight");
+        expect(moved).not.toBe(target);
+        const beforeDisabledSpace = useAppStore.getState().exportKind;
+        act(() => target.focus());
+        pressSpace(target);
+        expect(target.checked).toBe(false);
+        expect(useAppStore.getState().exportKind).toBe(beforeDisabledSpace);
+        return;
+      }
+
+      if (target.checked) {
+        const other = Array.from(
+          document.querySelectorAll<HTMLInputElement>('input[type="radio"]'),
+        ).find(
+          (radio) =>
+            radio.name === target.name &&
+            !radio.disabled &&
+            radio !== target,
+        );
+        if (other === undefined) {
+          throw new Error(`${testCase.id}を矢印で選び直す別選択肢がありません`);
+        }
+        selectRadioByArrow(other);
+        expect(other.checked).toBe(true);
+        target = namedRadio(testCase.label);
+      }
+      selectRadioByArrow(target);
+      expect(target.checked).toBe(true);
+      expect(document.activeElement).toBe(target);
+      expectRadioStoreResult(testCase);
+
+      mountRadioState(testCase.stateId);
+      target = namedRadio(testCase.label);
+      const other = Array.from(
+        document.querySelectorAll<HTMLInputElement>('input[type="radio"]'),
+      ).find(
+        (radio) =>
+          radio.name === target.name &&
+          !radio.disabled &&
+          radio !== target,
+      );
+      if (other !== undefined && target.checked) {
+        selectRadioByArrow(other);
+        expect(other.checked).toBe(true);
+      }
+      act(() => target.focus({ preventScroll: true }));
+      pressSpace(target);
+      expect(target.checked).toBe(true);
+      expectRadioStoreResult(testCase);
+    },
+  );
+
+  it("処理中に形をキーボードで変えた場合、変更前の形から届いた候補を採用しない", async () => {
+    const state = TEN_STATES.find(({ id }) => id === 3);
+    if (state === undefined) throw new Error("Proposal・skeleton状態がありません");
+    state.arrange();
+    render(state.node());
+    state.root();
+
+    const pending = deferred<Awaited<ReturnType<typeof ipc.proposalGenerate>>>();
+    let requestedJobId = "";
+    vi.mocked(ipc.proposalGenerate).mockImplementation(
+      (_skeleton, _paper, _seed, jobId) => {
+        requestedJobId = jobId;
+        return pending.promise;
+      },
+    );
+
+    let generation!: Promise<void>;
+    act(() => {
+      generation = useAppStore.getState().generateProposal();
+    });
+    await waitFor(() => expect(useAppStore.getState().proposalBusy).toBe(true));
+
+    const target = screen.getAllByRole("slider", { name: /の長さ$/ })[0];
+    expect(target).toBeInstanceOf(HTMLInputElement);
+    const input = target as HTMLInputElement;
+    const before = Number(input.value);
+    focusTarget(input);
+    const after = pressRangeArrow(input, "ArrowLeft");
+    expect(after, "処理中の形編集が実際に製品状態へ反映されたこと").not.toBe(
+      before,
+    );
+    expect(useAppStore.getState().proposalSkeleton.nodes[1]?.length).toBe(after);
+
+    await act(async () => {
+      pending.resolve({
+        job_id: requestedJobId,
+        candidates: [candidate(777)],
+      });
+      await generation;
+    });
+
+    expect(
+      useAppStore.getState().proposalCandidates,
+      "入力変更前の形を使った古い計算結果は、現在の形の候補として採用しない",
+    ).toEqual([]);
+    expect(useAppStore.getState().proposalStep).toBe("skeleton");
+  });
 });
