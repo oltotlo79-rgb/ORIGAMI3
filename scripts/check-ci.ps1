@@ -1,5 +1,6 @@
 ﻿# ORIGAMI3 CI再現検査スクリプト (Windows PowerShell 5.1対応)
-# 現在のHEADだけを新しいフォルダへ複製し、CIの全ジョブと同じコマンドを同じ順で実行する。
+# 現在のHEADだけを新しいフォルダへ複製し、push用2ジョブを同じ順で実行する。
+# nightly / 手動の文書差分ジョブは定義同期だけを検査し、push前には実行しない。
 
 [CmdletBinding()]
 param(
@@ -149,8 +150,8 @@ function Get-JobRunSteps {
         if ($lines[$i] -match '^    defaults:\s*(?:#.*)?$') {
             throw "ci.yml の jobs.$JobName.defaults には未対応です。check-ci.ps1 を同期してください"
         }
-        if ($lines[$i] -match '^    (if|continue-on-error):') {
-            throw "ci.yml の jobs.$JobName.$($Matches[1]) には未対応です。check-ci.ps1 を同期してください"
+        if ($lines[$i] -match '^    continue-on-error:') {
+            throw "ci.yml の jobs.$JobName.continue-on-error には未対応です。check-ci.ps1 を同期してください"
         }
         if ($lines[$i] -match '^        (if|continue-on-error|timeout-minutes):') {
             throw "ci.yml のステップ固有 $($Matches[1]) には未対応です。check-ci.ps1 を同期してください"
@@ -251,6 +252,128 @@ function Get-WorkflowJobNames {
     return $jobNames.ToArray()
 }
 
+function Get-JobScalarValue {
+    param([string]$WorkflowPath, [string]$JobName, [string]$Property)
+
+    $lines = @(Get-Content -LiteralPath $WorkflowPath -Encoding UTF8)
+    $jobStart = -1
+    $jobEnd = $lines.Count
+    $escapedJobName = [Regex]::Escape($JobName)
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match "^  ${escapedJobName}:\s*(?:#.*)?$") {
+            if ($jobStart -ne -1) {
+                throw "ci.yml に jobs.$JobName が複数あります"
+            }
+            $jobStart = $i
+        }
+    }
+    if ($jobStart -eq -1) {
+        throw "ci.yml に jobs.$JobName が見つかりません"
+    }
+    for ($i = $jobStart + 1; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^  [A-Za-z0-9_-]+:\s*(?:#.*)?$') {
+            $jobEnd = $i
+            break
+        }
+    }
+
+    $escapedProperty = [Regex]::Escape($Property)
+    $values = New-Object System.Collections.Generic.List[string]
+    for ($i = $jobStart + 1; $i -lt $jobEnd; $i++) {
+        if ($lines[$i] -match "^    ${escapedProperty}:\s*(?<value>.+?)\s*$") {
+            $values.Add((ConvertFrom-SimpleYamlValue $Matches['value']))
+        }
+    }
+    if ($values.Count -ne 1) {
+        throw "ci.yml の jobs.$JobName.$Property を1つに特定できません(count=$($values.Count))"
+    }
+    return $values[0]
+}
+
+function Get-JobMappingScalarValue {
+    param(
+        [string]$WorkflowPath,
+        [string]$JobName,
+        [string]$Mapping,
+        [string]$Property
+    )
+
+    $lines = @(Get-Content -LiteralPath $WorkflowPath -Encoding UTF8)
+    $escapedJobName = [Regex]::Escape($JobName)
+    $jobStart = -1
+    $jobEnd = $lines.Count
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match "^  ${escapedJobName}:\s*(?:#.*)?$") {
+            if ($jobStart -ne -1) {
+                throw "ci.yml に jobs.$JobName が複数あります"
+            }
+            $jobStart = $i
+        }
+    }
+    if ($jobStart -eq -1) {
+        throw "ci.yml に jobs.$JobName が見つかりません"
+    }
+    for ($i = $jobStart + 1; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^  [A-Za-z0-9_-]+:\s*(?:#.*)?$') {
+            $jobEnd = $i
+            break
+        }
+    }
+
+    $escapedMapping = [Regex]::Escape($Mapping)
+    $mappingStart = -1
+    $mappingEnd = $jobEnd
+    for ($i = $jobStart + 1; $i -lt $jobEnd; $i++) {
+        if ($lines[$i] -match "^    ${escapedMapping}:\s*(?:#.*)?$") {
+            if ($mappingStart -ne -1) {
+                throw "ci.yml に jobs.$JobName.$Mapping が複数あります"
+            }
+            $mappingStart = $i
+        }
+    }
+    if ($mappingStart -eq -1) {
+        throw "ci.yml に jobs.$JobName.$Mapping が見つかりません"
+    }
+    for ($i = $mappingStart + 1; $i -lt $jobEnd; $i++) {
+        if ($lines[$i] -match '^    [A-Za-z0-9_-]+:\s*(?:#.*)?$') {
+            $mappingEnd = $i
+            break
+        }
+    }
+
+    $escapedProperty = [Regex]::Escape($Property)
+    $values = New-Object System.Collections.Generic.List[string]
+    for ($i = $mappingStart + 1; $i -lt $mappingEnd; $i++) {
+        if ($lines[$i] -match "^      ${escapedProperty}:\s*(?<value>.+?)\s*$") {
+            $values.Add((ConvertFrom-SimpleYamlValue $Matches['value']))
+        }
+    }
+    if ($values.Count -ne 1) {
+        throw "ci.yml の jobs.$JobName.$Mapping.$Property を1つに特定できません(count=$($values.Count))"
+    }
+    return $values[0]
+}
+
+function Assert-WorkflowTriggerContract {
+    param([string]$WorkflowPath)
+
+    $text = Get-Content -LiteralPath $WorkflowPath -Raw -Encoding UTF8
+    $match = [regex]::Match($text, '(?ms)^on:\s*\r?\n(?<body>.*?)(?=^[A-Za-z][A-Za-z0-9_-]*:\s*(?:#.*)?$)')
+    if (-not $match.Success) {
+        throw "ci.yml のon triggerを読めません"
+    }
+    $body = $match.Groups['body'].Value
+    $actual = @([regex]::Matches($body, '(?m)^  (?<name>[A-Za-z0-9_-]+):\s*(?:#.*)?$') | ForEach-Object { $_.Groups['name'].Value })
+    $expected = @('push', 'pull_request', 'schedule', 'workflow_dispatch')
+    if ($actual.Count -ne $expected.Count -or @(Compare-Object -ReferenceObject $expected -DifferenceObject $actual).Count -ne 0) {
+        throw "ci.yml のtrigger一覧が変わりました(actual=$($actual -join ','), expected=$($expected -join ','))"
+    }
+    $cronMatches = [regex]::Matches($body, '(?m)^    - cron:\s*["''](?<value>[^"'']+)["'']\s*$')
+    if ($cronMatches.Count -ne 1 -or $cronMatches[0].Groups['value'].Value -cne '17 18 * * *') {
+        throw "ci.yml のnightly cronが一致しません"
+    }
+}
+
 function Normalize-RelativePath {
     param([string]$Path)
 
@@ -301,6 +424,15 @@ function Assert-ClaudeCiContract {
     )) {
         if (-not $section.Contains($releaseGateCommand)) {
             throw "CLAUDE.md §10.6 にリリース前必須関門のコマンドがありません: $releaseGateCommand"
+        }
+    }
+    foreach ($currentStatusContractLine in @(
+        '次の検査はpushごとの通常検査には含めず、cleanなcommit済みtreeを対象にnightlyまたはリリース前の手動CIで実行する。',
+        '| 毎日03:17 JST / リリース前の`workflow_dispatch` | **実装から生成した6指標と文書marker・登録mirrorの一致（full 2-pass）** | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate-current-status.ps1 -Check` |'
+    )) {
+        $occurrences = [regex]::Matches($section, [regex]::Escape($currentStatusContractLine)).Count
+        if ($occurrences -ne 1) {
+            throw "CLAUDE.md §10.6 のnightly文書検査契約が一致しません(count=$occurrences): $currentStatusContractLine"
         }
     }
 }
@@ -534,7 +666,11 @@ $expectedPerformanceSteps = @(
     [pscustomobject]@{ Command = "npm ci"; WorkingDirectory = "apps/desktop"; Executable = "npm"; Arguments = @("ci") },
     [pscustomobject]@{ Command = "npm run test -- --maxWorkers=1 --mode=production src/lib/symmetry.test.ts"; WorkingDirectory = "apps/desktop"; Executable = "npm"; Arguments = @("run", "test", "--", "--maxWorkers=1", "--mode=production", "src/lib/symmetry.test.ts") }
 )
+$expectedCurrentStatusSteps = @(
+    [pscustomobject]@{ Command = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate-current-status.ps1 -Check"; WorkingDirectory = "." }
+)
 $expectedSteps = @($expectedChecksSteps) + @($expectedPerformanceSteps)
+$allContractSteps = @($expectedSteps) + @($expectedCurrentStatusSteps)
 $totalStages = $expectedSteps.Count + 2
 
 try {
@@ -623,19 +759,43 @@ try {
         $script:failureExitCode = 0
     }
     else {
-        Write-Stage 2 $totalStages "ci.yml の checks / performance と実行定義を同期確認"
+        Write-Stage 2 $totalStages "ci.yml のpush 2ジョブとnightly文書ジョブの実行定義を同期確認"
         $workflowPath = Join-Path $sourceRoot ".github\workflows\ci.yml"
+        Assert-WorkflowTriggerContract $workflowPath
         $actualJobNames = @(Get-WorkflowJobNames $workflowPath)
-        $expectedJobNames = @("checks", "performance")
+        $expectedJobNames = @("checks", "performance", "current_status")
         if ($actualJobNames.Count -ne $expectedJobNames.Count -or
             @(Compare-Object -ReferenceObject $expectedJobNames -DifferenceObject $actualJobNames).Count -ne 0) {
             throw "ci.yml のジョブ一覧が変わりました (ci.yml: $($actualJobNames -join ', '), check-ci.ps1: $($expectedJobNames -join ', '))"
         }
+        $expectedPushCondition = "github.event_name == 'push' || github.event_name == 'pull_request'"
+        $expectedCurrentStatusCondition = "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'"
+        foreach ($pushJob in @("checks", "performance")) {
+            $actualCondition = Get-JobScalarValue $workflowPath $pushJob "if"
+            if ($actualCondition -cne $expectedPushCondition) {
+                throw "ci.yml のjobs.$pushJob.ifが一致しません(actual='$actualCondition', expected='$expectedPushCondition')"
+            }
+        }
+        $currentStatusCondition = Get-JobScalarValue $workflowPath "current_status" "if"
+        if ($currentStatusCondition -cne $expectedCurrentStatusCondition) {
+            throw "ci.yml のjobs.current_status.ifが一致しません(actual='$currentStatusCondition', expected='$expectedCurrentStatusCondition')"
+        }
+        $currentStatusCargoColor = Get-JobMappingScalarValue $workflowPath "current_status" "env" "CARGO_TERM_COLOR"
+        if ($currentStatusCargoColor -cne "never") {
+            throw "ci.yml のjobs.current_status.env.CARGO_TERM_COLORが一致しません(actual='$currentStatusCargoColor', expected='never')"
+        }
+        $expectedCurrentStatusCargoTarget = '${{ runner.temp }}\ori3-target-docs7b'
+        $currentStatusCargoTarget = Get-JobMappingScalarValue $workflowPath "current_status" "env" "CARGO_TARGET_DIR"
+        if ($currentStatusCargoTarget -cne $expectedCurrentStatusCargoTarget) {
+            throw "ci.yml のjobs.current_status.env.CARGO_TARGET_DIRが一致しません(actual='$currentStatusCargoTarget', expected='$expectedCurrentStatusCargoTarget')"
+        }
         $ciChecksSteps = @(Get-JobRunSteps $workflowPath "checks")
         $ciPerformanceSteps = @(Get-JobRunSteps $workflowPath "performance")
+        $ciCurrentStatusSteps = @(Get-JobRunSteps $workflowPath "current_status")
         Assert-CiStepsMatch -Actual $ciChecksSteps -Expected $expectedChecksSteps
         Assert-CiStepsMatch -Actual $ciPerformanceSteps -Expected $expectedPerformanceSteps
-        Assert-ClaudeCiContract -ClaudePath (Join-Path $sourceRoot "CLAUDE.md") -ExpectedSteps $expectedSteps
+        Assert-CiStepsMatch -Actual $ciCurrentStatusSteps -Expected $expectedCurrentStatusSteps
+        Assert-ClaudeCiContract -ClaudePath (Join-Path $sourceRoot "CLAUDE.md") -ExpectedSteps $allContractSteps
         $ciSteps = @($ciChecksSteps) + @($ciPerformanceSteps)
 
         if ($InjectMissingIgnoredReferenceForTest) {
@@ -672,7 +832,7 @@ try {
         }
 
         Write-Host ""
-        Write-Host "[OK] HEADの内容だけでCI checks / performance両ジョブの全検査に合格しました" -ForegroundColor Green
+        Write-Host "[OK] HEADの内容だけでCI push 2ジョブの全検査に合格し、nightly文書ジョブの定義同期を確認しました" -ForegroundColor Green
         $script:failureExitCode = 0
     }
 }

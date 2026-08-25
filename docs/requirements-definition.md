@@ -344,13 +344,14 @@ ORIGAMI3はコードを引き継がず新規に開発し、**「実用上正し�
 | `ori3-cp` | 展開図の平面グラフ管理、交点分割、面抽出、スナップ、作図補助、局所平坦判定 | geometry |
 | `ori3-rigid` | 剛体折りソルバー(§7.1) | cp |
 | `ori3-layers` | 平坦状態・層順序・折り操作・技法(§7.2) | cp |
+| `ori3-soft` | たわみ・膨らみ・層順序拘束の計算(SIM-012〜015) | model, cp, rigid, layers |
 | `ori3-propose` | 骨格→円充填→展開図生成(§8)、および配置案P1の折り手順計画(PRO-009)。手順計画は同クレート内の分離可能なモジュールとして置き、新クレートは作らない | cp(現行。P1でlayers依存が必要な場合は変更前に承認) |
 | `ori3-export` | SVG/PNG/折り図PDF生成 | layers, rigid |
 | `apps/desktop/src-tauri` | Tauriホスト。ドキュメント保持・Undo/Redo・IPCコマンド(薄いファサードに徹する) | 全部 |
 
 PRO-009は依存クレート追加を承認するものではない。配置案P1で `ori3-layers` への依存が必要になった場合は、`Cargo.toml`・`Cargo.lock` を変更する前に承認を得る。
 
-### 9.3 IPCコマンド(現在15個。個数上限なし=2026-08-08改訂。追加時は本表を更新すること)
+### 9.3 IPCコマンド(現在18個。個数上限なし=2026-08-08改訂。追加時は本表を更新すること)
 
 | コマンド | 内容 |
 |---|---|
@@ -364,13 +365,16 @@ PRO-009は依存クレート追加を承認するものではない。配置案P
 | `sequence_apply` | 手順編集(SeqOp enum: PushStep/RemoveStep/UpdateStep/InsertStep) |
 | `sequence_replay` | ステップ位置+補間係数 → 3Dフレーム |
 | `pose_solve` | driver角集合 → 3Dフレーム(Frame3D) |
+| `fold_all_preview` | 全折り目を共通の0〜100%で一時表示(手順・保存・Undo/Redoには残さない) |
 | `recovery_check` | 自動保存の確認 |
 | `recovery_restore` | 自動保存の復元 |
 | `proposal_generate` | 骨格 → 展開図候補(複数) |
+| `proposal_progress` | job IDごとの提案進捗snapshotを取得 |
+| `proposal_control` | 提案jobの実行制御(取消し) |
 | `proposal_apply` | 提案の展開図と検証済み手順を1回の原子的な適用として反映 |
 | `document_export` | 書き出し(種別enum: CpSvg/CpPng/DiagramPdf/DiagramSvg) |
 
-15個であること自体は違反ではない。個数上限は撤廃済みであり、追加時は既存コマンドの操作enumへ集約できないかを先に検討する。
+18個であること自体は違反ではない。個数上限は撤廃済みであり、追加時は既存コマンドの操作enumへ集約できないかを先に検討する。
 
 ## 10. 非機能要件 (NFR)
 

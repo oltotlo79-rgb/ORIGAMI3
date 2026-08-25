@@ -2,6 +2,7 @@
 param(
     [string]$OutputDirectory,
     [switch]$Check,
+    [switch]$MarkerFixtures,
     [string]$CargoTargetDir = $env:CARGO_TARGET_DIR
 )
 
@@ -13,7 +14,8 @@ param(
 # - 同じsnapshotで2回収集し、JSON/Markdownのbyte一致を確かめる。
 # - 追跡文書は書かず、verification配下の生成物だけを書き換える。
 #
-# 段階7-Cの責務であるCI配置、docs/progress.md markerの更新、fixture gateは行わない。
+# 段階7-Cでは-Check時にdocs/progress.mdのmarkerを照合する。markerの更新と
+# CI配置はこのscript自身では行わず、MarkerFixturesは生成物・実文書をgateしない。
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
@@ -31,6 +33,7 @@ $script:TrackedSet = $null
 $script:SelectedSourcePaths = $null
 $script:SnapshotRoot = $null
 $script:FrontendPrepared = $false
+$script:LastTestInventoryTimings = $null
 
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     $OutputDirectory = Join-Path $script:Root ($script:GeneratedRelativeRoot.Replace("/", "\"))
@@ -39,14 +42,32 @@ else {
     $OutputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)
 }
 
-$requiredCargoTargetDir = "C:\Users\oltot\AppData\Local\Temp\ori3-target-docs7b"
+$cargoTargetLeaf = "ori3-target-docs7b"
+$allowedCargoTargetParents = New-Object System.Collections.Generic.List[string]
+[void]$allowedCargoTargetParents.Add([System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd([char[]]"\/"))
+if ([string]::Equals($env:GITHUB_ACTIONS, "true", [System.StringComparison]::OrdinalIgnoreCase) -and
+    -not [string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
+    $runnerTemp = [System.IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd([char[]]"\/")
+    if (-not @($allowedCargoTargetParents | Where-Object { [string]::Equals($_, $runnerTemp, [System.StringComparison]::OrdinalIgnoreCase) }).Count) {
+        [void]$allowedCargoTargetParents.Add($runnerTemp)
+    }
+}
+$defaultCargoTargetDir = Join-Path $allowedCargoTargetParents[0] $cargoTargetLeaf
 $script:CargoTargetError = $null
 if ([string]::IsNullOrWhiteSpace($CargoTargetDir)) {
-    $CargoTargetDir = $requiredCargoTargetDir
+    $CargoTargetDir = $defaultCargoTargetDir
 }
 $CargoTargetDir = [System.IO.Path]::GetFullPath($CargoTargetDir)
-if (-not [string]::Equals($CargoTargetDir.TrimEnd([char[]]"\/"), $requiredCargoTargetDir.TrimEnd([char[]]"\/"), [System.StringComparison]::OrdinalIgnoreCase)) {
-    $script:CargoTargetError = "7-B requires CARGO_TARGET_DIR=$requiredCargoTargetDir"
+$cargoTargetParent = [System.IO.Path]::GetFullPath((Split-Path -Parent $CargoTargetDir)).TrimEnd([char[]]"\/")
+$cargoTargetName = Split-Path -Leaf $CargoTargetDir
+$cargoTargetParentAllowed = @($allowedCargoTargetParents | Where-Object { [string]::Equals($_, $cargoTargetParent, [System.StringComparison]::OrdinalIgnoreCase) }).Count -eq 1
+$cargoTargetInsideRepository = [string]::Equals($CargoTargetDir.TrimEnd([char[]]"\/"), $script:Root, [System.StringComparison]::OrdinalIgnoreCase) -or
+    $CargoTargetDir.StartsWith($script:Root + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)
+if (-not $cargoTargetParentAllowed -or
+    -not [string]::Equals($cargoTargetName, $cargoTargetLeaf, [System.StringComparison]::Ordinal) -or
+    $cargoTargetInsideRepository) {
+    $allowedTargets = @($allowedCargoTargetParents | ForEach-Object { Join-Path $_ $cargoTargetLeaf }) -join ", "
+    $script:CargoTargetError = "current-status collector requires CARGO_TARGET_DIR to be one of: $allowedTargets"
 }
 
 function ConvertTo-NativeArgument {
@@ -216,6 +237,7 @@ function Get-TrackedEntries {
         "docs/requirements-definition.md",
         "docs/implementation-roadmap.md",
         "docs/improvement-roadmap-2026-08-24.md",
+        "docs/progress.md",
         "docs/manual/ORIGAMI3取扱説明書.pdf"
     )
     $result = Invoke-GitCapture (@("ls-files", "-z", "--stage", "--") + $pathSpecs)
@@ -342,6 +364,7 @@ function Get-SelectedSourcePaths {
             $path -eq "docs/requirements-definition.md" -or
             $path -eq "docs/implementation-roadmap.md" -or
             $path -eq "docs/improvement-roadmap-2026-08-24.md" -or
+            $path -eq "docs/progress.md" -or
             $path -eq "docs/manual/ORIGAMI3取扱説明書.pdf"
         if ($include) {
             if (Test-ForbiddenSourcePath $path) {
@@ -742,7 +765,7 @@ function Get-WorkspaceMembers {
         [void]$observedMembers.Add((ConvertTo-RepositoryPath $member))
     }
     $memberSetMatches = Test-OrdinalSetEqual $members $observedMembers.ToArray()
-    $script:MirrorSetDiagnostics["requirements-crate-table"] = "source_set=[$($members -join ',')]; observed_set=[$($observedMembers -join ',')]"
+        $script:MirrorSetDiagnostics["requirements-crate-table"] = "source_value_set=[$($members -join ',')]; observed_value_set=[$($observedMembers -join ',')]"
 
     return [ordered]@{
         profile = "cargo-workspace"
@@ -1025,7 +1048,7 @@ function Get-TauriCommands {
     $requirementsAfterTable = $requirementsSection.Body.Substring($requirementsLastRow.Index + $requirementsLastRow.Length)
     $requirementsParagraphMatch = Get-UniqueRegexMatch $requirementsAfterTable '(?m)^[ \t]*(?<count>[0-9]+)個であること自体は[^\r\n]*$' "requirements §9.3 following current-count paragraph"
     $requirementsParagraphCount = [int]$requirementsParagraphMatch.Groups["count"].Value
-    $script:MirrorSetDiagnostics["requirements-command-table"] = "heading_count=$requirementsCount; paragraph_count=$requirementsParagraphCount; source_set=[$($handlerIpcNames -join ',')]; observed_set=[$($requirementsNames -join ',')]"
+        $script:MirrorSetDiagnostics["requirements-command-table"] = "heading_count=$requirementsCount; paragraph_count=$requirementsParagraphCount; source_value_set=[$($handlerIpcNames -join ',')]; observed_value_set=[$($requirementsNames -join ',')]"
 
     $implementation = Read-TrackedText "docs/implementation-roadmap.md" $script:SnapshotRoot
     $fileMapSection = Get-MarkdownSection $implementation '## 1\. 最終ファイル構成マップ' "implementation §1 file map"
@@ -1041,7 +1064,7 @@ function Get-TauriCommands {
     $ipcAfterList = $ipcSection.Body.Substring($ipcListMatch.Index + $ipcListMatch.Length)
     $ipcParagraphMatch = Get-UniqueRegexMatch $ipcAfterList '(?m)^[ \t]*(?<count>[0-9]+)個であること自体は[^\r\n]*$' "implementation IPC following current-count paragraph"
     $ipcParagraphCount = [int]$ipcParagraphMatch.Groups["count"].Value
-    $script:MirrorSetDiagnostics["implementation-ipc-list"] = "heading_count=$ipcCount; paragraph_count=$ipcParagraphCount; source_set=[$($handlerIpcNames -join ',')]; observed_set=[$($ipcNames -join ',')]"
+        $script:MirrorSetDiagnostics["implementation-ipc-list"] = "heading_count=$ipcCount; paragraph_count=$ipcParagraphCount; source_value_set=[$($handlerIpcNames -join ',')]; observed_value_set=[$($ipcNames -join ',')]"
     $commonSection = Get-MarkdownSection $implementation '## 3\. マイルストーン完了時の共通チェック' "implementation §3"
     $commonCount = [int](Get-UniqueRegexMatch $commonSection.Body '(?m)^[ \t]*3\.[^\r\n]*IPC[^\r\n]*現在の(?<count>[0-9]+)個' "implementation §3 item 3").Groups["count"].Value
 
@@ -2096,14 +2119,32 @@ process.stdout.write(JSON.stringify(counts));
 }
 
 function Get-TestInventory {
-    $rustStatic = Get-RustStaticInventory
-    $frontendStatic = Get-FrontendStaticSites
+    $script:LastTestInventoryTimings = $null
+    $inventoryWatch = [System.Diagnostics.Stopwatch]::StartNew()
 
+    $stepWatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $rustStatic = Get-RustStaticInventory
+    $stepWatch.Stop()
+    $rustStaticMs = [double]$stepWatch.Elapsed.TotalMilliseconds
+
+    $stepWatch.Restart()
+    $frontendStatic = Get-FrontendStaticSites
+    $stepWatch.Stop()
+    $frontendStaticMs = [double]$stepWatch.Elapsed.TotalMilliseconds
+
+    $stepWatch.Restart()
     $defaultVitest = Get-VitestInventory
+    $stepWatch.Stop()
+    $vitestDefaultMs = [double]$stepWatch.Elapsed.TotalMilliseconds
+
+    $stepWatch.Restart()
     $productionVitest = Get-VitestInventory -ProductionSymmetry
+    $stepWatch.Stop()
+    $vitestProductionMs = [double]$stepWatch.Elapsed.TotalMilliseconds
     $default = $defaultVitest.Inventory
     $production = $productionVitest.Inventory
 
+    $stepWatch.Restart()
     $symmetryPath = "apps/desktop/src/lib/symmetry.test.ts"
     if (-not $script:TrackedSet.Contains($symmetryPath)) {
         throw "production symmetry testが追跡されていません: $symmetryPath"
@@ -2127,9 +2168,20 @@ function Get-TestInventory {
 
     Write-Host ("frontend runner inventory: default={0}/{1} files; production_symmetry={2}; union={3}; static_sites={4}" -f $default.Cases.Count, $default.Files.Count, $production.Cases.Count, $unionCases, $frontendStatic.Sites)
     Write-Host ("Rust tracked static test attributes: {0}" -f $rustStatic.Sites)
+    $stepWatch.Stop()
+    $profileMergeMs = [double]$stepWatch.Elapsed.TotalMilliseconds
 
+    $stepWatch.Restart()
     $registeredCargo = Get-CargoRunnerInventory
+    $stepWatch.Stop()
+    $cargoRegisteredMs = [double]$stepWatch.Elapsed.TotalMilliseconds
+
+    $stepWatch.Restart()
     $ignoredCargo = Get-CargoRunnerInventory -IgnoredOnly
+    $stepWatch.Stop()
+    $cargoIgnoredMs = [double]$stepWatch.Elapsed.TotalMilliseconds
+
+    $stepWatch.Restart()
     if ($ignoredCargo.Tests -gt $registeredCargo.Tests) {
         throw "ignored Rust test数がregisteredを超えました($($ignoredCargo.Tests) > $($registeredCargo.Tests))"
     }
@@ -2141,7 +2193,7 @@ function Get-TestInventory {
         throw "Vitest default file inventory and tracked test files differ(runner=$($default.Files.Count), tracked=$trackedFrontendFiles)"
     }
 
-    return [ordered]@{
+    $result = [ordered]@{
         profile = "runner-discovery"
         rust = [ordered]@{
             selection = "windows-test-debug-default-features-no-name-filter"
@@ -2187,6 +2239,21 @@ function Get-TestInventory {
         )
         mirrors = @()
     }
+    $stepWatch.Stop()
+    $validationAndShapeMs = [double]$stepWatch.Elapsed.TotalMilliseconds
+    $inventoryWatch.Stop()
+    $script:LastTestInventoryTimings = [ordered]@{
+        rust_static = $rustStaticMs
+        frontend_static_ast = $frontendStaticMs
+        vitest_default = $vitestDefaultMs
+        vitest_production_symmetry = $vitestProductionMs
+        frontend_profile_merge = $profileMergeMs
+        cargo_registered = $cargoRegisteredMs
+        cargo_ignored = $cargoIgnoredMs
+        validation_and_shape = $validationAndShapeMs
+        total = [double]$inventoryWatch.Elapsed.TotalMilliseconds
+    }
+    return $result
 }
 
 function Assert-ExactKeys {
@@ -2546,6 +2613,9 @@ function New-CurrentStatusCollection {
         Write-Host "collection pass ${Pass}: test_inventory"
         $tests = Invoke-MetricCollector "test_inventory" { Get-TestInventory }
         $metricTimings.test_inventory = $tests.ElapsedMs
+        if ($null -eq $script:LastTestInventoryTimings) {
+            throw "test inventory timing diagnostics were not recorded"
+        }
 
         $status = [ordered]@{
             schema_version = 1
@@ -2570,6 +2640,7 @@ function New-CurrentStatusCollection {
             Status = $status
             ElapsedMs = [double]$watch.Elapsed.TotalMilliseconds
             MetricTimings = $metricTimings
+            TestInventoryTimings = $script:LastTestInventoryTimings
         }
     }
     finally {
@@ -2682,6 +2753,7 @@ function ConvertTo-GeneratedMarkdown {
     foreach ($line in @(
         '<!-- ORIGAMI3-CURRENT-STATUS:BEGIN schema=1 -->',
         '## 現在値（機械生成・手編集禁止）',
+        'この現在値表は、HTMLコメント形式の「ORIGAMI3-CURRENT-STATUS」開始・終了印で囲み、実装から再生成した値との一致を自動検査します。',
         '',
         '| 指標 | 現在値 | profile | 正本 |',
         '|---|---:|---|---|',
@@ -2712,6 +2784,477 @@ function ConvertTo-GeneratedMarkdown {
         '<!-- ORIGAMI3-CURRENT-STATUS:END -->'
     )) { [void]$lines.Add([string]$line) }
     return ($lines -join "`n") + "`n"
+}
+
+function Get-OrdinalOccurrenceCount {
+    param([string]$Text, [string]$Needle)
+
+    if ([string]::IsNullOrEmpty($Needle)) {
+        throw "occurrence needle must not be empty"
+    }
+    $count = 0
+    $search = 0
+    while ($search -lt $Text.Length) {
+        $found = $Text.IndexOf($Needle, $search, [System.StringComparison]::Ordinal)
+        if ($found -lt 0) { break }
+        $count++
+        $search = $found + $Needle.Length
+    }
+    return [int]$count
+}
+
+function Get-ProgressCurrentStatusMarkerBlock {
+    param([string]$ProgressText)
+
+    $beginToken = '<!-- ORIGAMI3-CURRENT-STATUS:BEGIN'
+    $beginLine = '<!-- ORIGAMI3-CURRENT-STATUS:BEGIN schema=1 -->'
+    $endToken = '<!-- ORIGAMI3-CURRENT-STATUS:END'
+    $endLine = '<!-- ORIGAMI3-CURRENT-STATUS:END -->'
+    $beginCount = Get-OrdinalOccurrenceCount $ProgressText $beginToken
+    $endCount = Get-OrdinalOccurrenceCount $ProgressText $endToken
+    if ($beginCount -ne 1 -or $endCount -ne 1) {
+        throw "docs/progress.md current-status marker must have exactly one BEGIN and one END (BEGIN=$beginCount, END=$endCount)"
+    }
+
+    $beginIndex = $ProgressText.IndexOf($beginLine, [System.StringComparison]::Ordinal)
+    $endIndex = $ProgressText.IndexOf($endLine, [System.StringComparison]::Ordinal)
+    if ($beginIndex -lt 0 -or $endIndex -lt 0) {
+        throw "docs/progress.md current-status marker delimiter differs from schema 1"
+    }
+    if ($endIndex -le $beginIndex) {
+        throw "docs/progress.md current-status marker END precedes BEGIN"
+    }
+    if ($beginIndex -gt 0 -and $ProgressText[$beginIndex - 1] -ne "`n") {
+        throw "docs/progress.md current-status BEGIN is not at the start of a line"
+    }
+    $beginLineEnd = $beginIndex + $beginLine.Length
+    if ($beginLineEnd -ge $ProgressText.Length -or $ProgressText[$beginLineEnd] -ne "`n") {
+        throw "docs/progress.md current-status BEGIN must be followed immediately by LF"
+    }
+    if ($endIndex -gt 0 -and $ProgressText[$endIndex - 1] -ne "`n") {
+        throw "docs/progress.md current-status END is not at the start of a line"
+    }
+    $endLineEnd = $endIndex + $endLine.Length
+    if ($endLineEnd -ge $ProgressText.Length -or $ProgressText[$endLineEnd] -ne "`n") {
+        throw "docs/progress.md current-status END must be followed immediately by LF"
+    }
+
+    $h1Matches = [regex]::Matches($ProgressText, '(?m)^# [^\r\n]+\r?$')
+    if ($h1Matches.Count -ne 1 -or $h1Matches[0].Index -ne 0) {
+        throw "docs/progress.md must have exactly one H1 at byte zero"
+    }
+    $h1LineFeed = $ProgressText.IndexOf("`n", $h1Matches[0].Index)
+    if ($h1LineFeed -lt 0 -or $beginIndex -le $h1LineFeed) {
+        throw "docs/progress.md current-status marker is not after the H1"
+    }
+    $betweenH1AndMarker = $ProgressText.Substring($h1LineFeed + 1, $beginIndex - $h1LineFeed - 1)
+    if ($betweenH1AndMarker -ne "`n" -and $betweenH1AndMarker -ne "`r`n") {
+        throw "docs/progress.md current-status marker must be the first block immediately after the H1"
+    }
+
+    return $ProgressText.Substring($beginIndex, $endLineEnd - $beginIndex + 1)
+}
+
+function Get-FirstDifferingMarkdownLine {
+    param([string]$Expected, [string]$Observed)
+
+    $expectedLines = @($Expected.Split([char]"`n"))
+    $observedLines = @($Observed.Split([char]"`n"))
+    $common = [Math]::Min($expectedLines.Count, $observedLines.Count)
+    for ($index = 0; $index -lt $common; $index++) {
+        if (-not [string]::Equals($expectedLines[$index], $observedLines[$index], [System.StringComparison]::Ordinal)) {
+            return [PSCustomObject][ordered]@{
+                Line = [int]($index + 1)
+                Expected = [string]$expectedLines[$index]
+                Observed = [string]$observedLines[$index]
+            }
+        }
+    }
+    if ($expectedLines.Count -ne $observedLines.Count) {
+        $expectedLine = if ($common -lt $expectedLines.Count) { [string]$expectedLines[$common] } else { "<end-of-marker>" }
+        $observedLine = if ($common -lt $observedLines.Count) { [string]$observedLines[$common] } else { "<end-of-marker>" }
+        return [PSCustomObject][ordered]@{
+            Line = [int]($common + 1)
+            Expected = $expectedLine
+            Observed = $observedLine
+        }
+    }
+    throw "first differing line was requested for identical marker blocks"
+}
+
+function Get-MetricMarkdownEvidence {
+    param([string]$Markdown, [string]$MetricId)
+
+    $rowPrefix = switch ($MetricId) {
+        "workspace_version" { "| version |" }
+        "workspace_members" { "| workspace |" }
+        "tauri_commands" { "| Tauri commands |" }
+        "test_inventory" { "| tests |" }
+        "proposal_budgets" { "| proposal budgets |" }
+        "manual_pages" { "| manual |" }
+        default { throw "unknown metric for Markdown evidence: $MetricId" }
+    }
+    $lines = @($Markdown.Split([char]"`n"))
+    $rowMatches = @($lines | Where-Object { $_.StartsWith($rowPrefix, [System.StringComparison]::Ordinal) })
+    $row = if ($rowMatches.Count -eq 1) { [string]$rowMatches[0] } else { "<metric-row-count:$($rowMatches.Count)>" }
+
+    if ($MetricId -eq "test_inventory") {
+        $start = [Array]::IndexOf($lines, "### test inventory内訳")
+        $end = [Array]::IndexOf($lines, "### proposal budget内訳")
+        if ($start -ge 0 -and $end -gt $start) {
+            return $row + "`n" + (($lines[$start..($end - 1)]) -join "`n")
+        }
+        return $row + "`n<test-inventory-section-missing>"
+    }
+    if ($MetricId -eq "proposal_budgets") {
+        $start = [Array]::IndexOf($lines, "### proposal budget内訳")
+        $end = [Array]::IndexOf($lines, '<!-- ORIGAMI3-CURRENT-STATUS:END -->')
+        if ($start -ge 0 -and $end -gt $start) {
+            return $row + "`n" + (($lines[$start..($end - 1)]) -join "`n")
+        }
+        return $row + "`n<proposal-budget-section-missing>"
+    }
+    return $row
+}
+
+function Get-MetricSourceSet {
+    param([System.Collections.IDictionary]$Status, [string]$MetricId)
+
+    $metric = $Status.metrics[$MetricId]
+    $candidates = New-Object System.Collections.Generic.List[object]
+    if (Test-DictionaryKey $metric "source") {
+        [void]$candidates.Add($metric.source)
+    }
+    if (Test-DictionaryKey $metric "sources") {
+        foreach ($source in @($metric.sources)) { [void]$candidates.Add($source) }
+    }
+    if (Test-DictionaryKey $metric "cross_check_sources") {
+        foreach ($source in @($metric.cross_check_sources)) { [void]$candidates.Add($source) }
+    }
+    if (Test-DictionaryKey $metric "generator_sources") {
+        foreach ($source in @($metric.generator_sources)) { [void]$candidates.Add($source) }
+    }
+    if (Test-DictionaryKey $metric "profiles") {
+        foreach ($profile in @($metric.profiles)) {
+            if (Test-DictionaryKey $profile "sources") {
+                foreach ($source in @($profile.sources)) { [void]$candidates.Add($source) }
+            }
+        }
+    }
+
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ($script:Ordinal)
+    $result = New-Object System.Collections.Generic.List[object]
+    foreach ($source in $candidates) {
+        if ($source -isnot [System.Collections.IDictionary] -or
+            -not (Test-DictionaryKey $source "path") -or
+            -not (Test-DictionaryKey $source "selector")) {
+            throw "metric source lacks path/selector: $MetricId"
+        }
+        $identity = [string]$source.path + [char]0 + [string]$source.selector
+        if ($seen.Add($identity)) { [void]$result.Add($source) }
+    }
+    if ($result.Count -eq 0) { throw "metric has no source set: $MetricId" }
+    return $result.ToArray()
+}
+
+function Get-MetricPrimarySource {
+    param([System.Collections.IDictionary]$Status, [string]$MetricId)
+
+    return @(Get-MetricSourceSet $Status $MetricId)[0]
+}
+
+function ConvertTo-MetricSourceSetDiagnostic {
+    param([System.Collections.IDictionary]$Status, [string]$MetricId)
+
+    $parts = New-Object System.Collections.Generic.List[string]
+    foreach ($source in @(Get-MetricSourceSet $Status $MetricId)) {
+        [void]$parts.Add(('path="{0}",selector="{1}"' -f
+            (ConvertTo-MarkerDiagnosticText ([string]$source.path)),
+            (ConvertTo-MarkerDiagnosticText ([string]$source.selector))))
+    }
+    return "[" + ($parts -join ";") + "]"
+}
+
+function ConvertTo-MarkerDiagnosticText {
+    param([AllowEmptyString()][string]$Value)
+
+    return $Value.Replace("\", "\\").Replace('"', '\"').Replace("`r", "\r").Replace("`n", "\n")
+}
+
+function Invoke-CurrentStatusMarkerGate {
+    param(
+        [string]$ExpectedMarkdown,
+        [System.Collections.IDictionary]$Status,
+        [string]$ProgressText
+    )
+
+    try {
+        $observedMarker = Get-ProgressCurrentStatusMarkerBlock $ProgressText
+    }
+    catch {
+        return [PSCustomObject][ordered]@{
+            ExitCode = 2
+            MetricIds = @()
+            Diagnostics = @("marker structure error: $($_.Exception.Message)")
+        }
+    }
+
+    if ([string]::Equals($ExpectedMarkdown, $observedMarker, [System.StringComparison]::Ordinal)) {
+        return [PSCustomObject][ordered]@{
+            ExitCode = 0
+            MetricIds = @()
+            Diagnostics = @()
+        }
+    }
+
+    $expectedHash = Get-TextSha256 $ExpectedMarkdown
+    $observedHash = Get-TextSha256 $observedMarker
+    $firstDifference = Get-FirstDifferingMarkdownLine $ExpectedMarkdown $observedMarker
+    $metricIds = New-Object System.Collections.Generic.List[string]
+    $diagnostics = New-Object System.Collections.Generic.List[string]
+    foreach ($metricId in @("workspace_version", "workspace_members", "tauri_commands", "test_inventory", "proposal_budgets", "manual_pages")) {
+        $generatedEvidence = Get-MetricMarkdownEvidence $ExpectedMarkdown $metricId
+        $markerEvidence = Get-MetricMarkdownEvidence $observedMarker $metricId
+        if ([string]::Equals($generatedEvidence, $markerEvidence, [System.StringComparison]::Ordinal)) { continue }
+        [void]$metricIds.Add($metricId)
+        $metric = $Status.metrics[$metricId]
+        $primary = Get-MetricPrimarySource $Status $metricId
+        $sourceSet = ConvertTo-MetricSourceSetDiagnostic $Status $metricId
+        [void]$diagnostics.Add((
+            'marker drift metric={0} profile={1} primary_path={2} primary_selector={3} source_set={4} generated="{5}" marker="{6}" expected_sha256={7} observed_sha256={8} first_differing_line={9} expected_line="{10}" observed_line="{11}"' -f
+                $metricId,
+                $metric.profile,
+                $primary.path,
+                $primary.selector,
+                $sourceSet,
+                (ConvertTo-MarkerDiagnosticText $generatedEvidence),
+                (ConvertTo-MarkerDiagnosticText $markerEvidence),
+                $expectedHash,
+                $observedHash,
+                $firstDifference.Line,
+                (ConvertTo-MarkerDiagnosticText $firstDifference.Expected),
+                (ConvertTo-MarkerDiagnosticText $firstDifference.Observed)
+        ))
+    }
+    if ($metricIds.Count -eq 0) {
+        [void]$diagnostics.Add((
+            'marker drift metric=marker_document profile=generated-current-status primary_path=docs/progress.md primary_selector=H1/current-status-marker generated="{0}" marker="{1}" expected_sha256={2} observed_sha256={3} first_differing_line={4} expected_line="{5}" observed_line="{6}"' -f
+                (ConvertTo-MarkerDiagnosticText $ExpectedMarkdown),
+                (ConvertTo-MarkerDiagnosticText $observedMarker),
+                $expectedHash,
+                $observedHash,
+                $firstDifference.Line,
+                (ConvertTo-MarkerDiagnosticText $firstDifference.Expected),
+                (ConvertTo-MarkerDiagnosticText $firstDifference.Observed)
+        ))
+    }
+    return [PSCustomObject][ordered]@{
+        ExitCode = 1
+        MetricIds = @($metricIds.ToArray())
+        Diagnostics = @($diagnostics.ToArray())
+    }
+}
+
+function New-MarkerFixtureStatus {
+    return [ordered]@{
+        metrics = [ordered]@{
+            workspace_version = [ordered]@{
+                profile = "workspace-manifest-current"
+                source = [ordered]@{ path = "Cargo.toml"; selector = "[workspace.package].version" }
+            }
+            workspace_members = [ordered]@{
+                profile = "cargo-workspace"
+                source = [ordered]@{ path = "Cargo.toml"; selector = "[workspace].members" }
+            }
+            tauri_commands = [ordered]@{
+                profile = "desktop.invoke_handler"
+                source = [ordered]@{ path = "apps/desktop/src-tauri/src/lib.rs"; selector = "run/tauri::generate_handler!" }
+                cross_check_sources = @(
+                    [ordered]@{ path = "apps/desktop/src-tauri/src/commands.rs"; selector = "top-level-function/attribute:tauri::command" },
+                    [ordered]@{ path = "apps/desktop/src/ipc/client.ts"; selector = "top-level-export-function/body:single-direct-return-invoke-string-literal" }
+                )
+            }
+            test_inventory = [ordered]@{
+                profile = "runner-discovery"
+                sources = @(
+                    [ordered]@{ path = "Cargo.toml"; selector = "[workspace].members" },
+                    [ordered]@{ path = "apps/desktop/package.json"; selector = "/scripts/test" },
+                    [ordered]@{ path = "apps/desktop/package-lock.json"; selector = '/packages["node_modules/vitest"]/version' },
+                    [ordered]@{ path = "apps/desktop/src"; selector = "tracked test sources discovered by Vitest" }
+                )
+            }
+            proposal_budgets = [ordered]@{
+                profile = "resolved-operational-budgets"
+                profiles = @(
+                    [ordered]@{
+                        id = "library_default"
+                        sources = @(
+                            [ordered]@{ path = "crates/ori3-propose/src/search.rs"; selector = "SearchBudget::DEFAULT+SearchWatchdog::{MAX_MILLIS,DEFAULT}" },
+                            [ordered]@{ path = "crates/ori3-propose/src/enumerate.rs"; selector = "PoseScan::DEFAULT" }
+                        )
+                    },
+                    [ordered]@{
+                        id = "desktop_product"
+                        sources = @(
+                            [ordered]@{ path = "apps/desktop/src-tauri/src/commands.rs"; selector = "PLAN_BUDGET" },
+                            [ordered]@{ path = "crates/ori3-propose/src/enumerate.rs"; selector = "PoseScan::DEFAULT" }
+                        )
+                    },
+                    [ordered]@{
+                        id = "desktop_test_time_free"
+                        sources = @(
+                            [ordered]@{ path = "apps/desktop/src-tauri/src/commands.rs"; selector = "tests::TIME_FREE_PLAN_BUDGET" },
+                            [ordered]@{ path = "apps/desktop/src-tauri/src/commands.rs"; selector = "PLAN_BUDGET inherited fields" }
+                        )
+                    }
+                )
+            }
+            manual_pages = [ordered]@{
+                profile = "published-pdf"
+                source = [ordered]@{ path = "docs/manual/ORIGAMI3取扱説明書.pdf"; selector = "%PDF- signature+/MediaBox+/Type /Page+page-tree /Count" }
+                generator_sources = @(
+                    [ordered]@{ path = "crates/ori3-export/src/manual.rs"; selector = "manual_pdf_with_stats+manual_svg_pages+ManualPdfStats.page_count" },
+                    [ordered]@{ path = "scripts/build-manual.ps1"; selector = "PDF signature and /MediaBox count" }
+                )
+            }
+        }
+    }
+}
+
+function New-MarkerFixtureMarkdown {
+    param([System.Collections.IDictionary]$Tokens)
+
+    $lines = @(
+        '<!-- ORIGAMI3-CURRENT-STATUS:BEGIN schema=1 -->',
+        '## 現在値（機械生成・手編集禁止）',
+        '',
+        '| 指標 | fixture value |',
+        '|---|---|',
+        ('| version | {0} |' -f $Tokens.workspace_version),
+        ('| workspace | {0} |' -f $Tokens.workspace_members),
+        ('| Tauri commands | {0} |' -f $Tokens.tauri_commands),
+        ('| tests | {0} |' -f $Tokens.test_inventory),
+        ('| proposal budgets | {0} |' -f $Tokens.proposal_budgets),
+        ('| manual | {0} |' -f $Tokens.manual_pages),
+        '',
+        '### test inventory内訳',
+        '',
+        ('fixture-test-detail={0}' -f $Tokens.test_inventory),
+        '',
+        '### proposal budget内訳',
+        '',
+        ('fixture-budget-detail={0}' -f $Tokens.proposal_budgets),
+        '',
+        '<!-- ORIGAMI3-CURRENT-STATUS:END -->'
+    )
+    return ($lines -join "`n") + "`n"
+}
+
+function Assert-MarkerFixtureResult {
+    param(
+        [string]$Name,
+        [object]$Result,
+        [int]$ExpectedExitCode,
+        [string]$ExpectedMetricId = ""
+    )
+
+    if ([int]$Result.ExitCode -ne $ExpectedExitCode) {
+        throw "marker fixture $Name exit differs(actual=$($Result.ExitCode), expected=$ExpectedExitCode): $($Result.Diagnostics -join '; ')"
+    }
+    if ([string]::IsNullOrEmpty($ExpectedMetricId)) {
+        if (@($Result.MetricIds).Count -ne 0) {
+            throw "marker fixture $Name unexpectedly reported metrics: $($Result.MetricIds -join ',')"
+        }
+        return
+    }
+    if (@($Result.MetricIds).Count -ne 1 -or -not [string]::Equals([string]$Result.MetricIds[0], $ExpectedMetricId, [System.StringComparison]::Ordinal)) {
+        throw "marker fixture $Name metric diagnostic differs: $($Result.MetricIds -join ',')"
+    }
+    $diagnostic = @($Result.Diagnostics) -join "`n"
+    if ($diagnostic.IndexOf("System.Object[]", [System.StringComparison]::Ordinal) -ge 0) {
+        throw "marker fixture $Name diagnostic flattened a source set to System.Object[]"
+    }
+    foreach ($required in @(
+        "metric=$ExpectedMetricId",
+        "profile=",
+        "primary_path=",
+        "primary_selector=",
+        "source_set=",
+        "generated=",
+        "marker=",
+        "expected_sha256=",
+        "observed_sha256=",
+        "first_differing_line="
+    )) {
+        if ($diagnostic.IndexOf($required, [System.StringComparison]::Ordinal) -lt 0) {
+            throw "marker fixture $Name diagnostic omitted: $required"
+        }
+    }
+}
+
+function Invoke-MarkerFixtureSuite {
+    $baselineStatus = New-MarkerFixtureStatus
+    $nonce = [Guid]::NewGuid().ToString("N")
+    $tokens = [ordered]@{}
+    foreach ($metricId in @("workspace_version", "workspace_members", "tauri_commands", "test_inventory", "proposal_budgets", "manual_pages")) {
+        $tokens[$metricId] = "marker-fixture-$metricId-$nonce"
+    }
+    $baselineMarkdown = New-MarkerFixtureMarkdown $tokens
+    $fixtureH1 = "# marker fixture progress"
+    $cleanProgress = $fixtureH1 + "`n`n" + $BaselineMarkdown + "`nfixture body`n"
+    $clean = Invoke-CurrentStatusMarkerGate $BaselineMarkdown $BaselineStatus $cleanProgress
+    Assert-MarkerFixtureResult "clean" $clean 0
+    $passed = 1
+
+    $metricIds = @("workspace_version", "workspace_members", "tauri_commands", "test_inventory", "proposal_budgets", "manual_pages")
+    $expectedSourceCounts = [ordered]@{
+        workspace_version = 1
+        workspace_members = 1
+        tauri_commands = 3
+        test_inventory = 4
+        proposal_budgets = 5
+        manual_pages = 3
+    }
+    foreach ($metricId in $metricIds) {
+        $fixtureSources = @(Get-MetricSourceSet $BaselineStatus $metricId)
+        if ($fixtureSources.Count -ne [int]$expectedSourceCounts[$metricId]) {
+            throw "marker fixture source set differs(metric=$metricId, actual=$($fixtureSources.Count), expected=$($expectedSourceCounts[$metricId]))"
+        }
+        $baselineToken = [string]$tokens[$metricId]
+        $changedToken = $baselineToken + "-relative-delta"
+        $mutatedMarkdown = $BaselineMarkdown.Replace($baselineToken, $changedToken)
+        if ([string]::Equals($mutatedMarkdown, $BaselineMarkdown, [System.StringComparison]::Ordinal)) {
+            throw "marker fixture could not mutate runtime token: $metricId"
+        }
+        $mutatedProgress = $fixtureH1 + "`n`n" + $mutatedMarkdown + "`nfixture body`n"
+        $result = Invoke-CurrentStatusMarkerGate $BaselineMarkdown $BaselineStatus $mutatedProgress
+        Assert-MarkerFixtureResult $metricId $result 1 $metricId
+        $diagnostic = @($result.Diagnostics) -join "`n"
+        foreach ($source in $fixtureSources) {
+            foreach ($field in @("path", "selector")) {
+                $expectedSourcePart = ConvertTo-MarkerDiagnosticText ([string]$source[$field])
+                if ($diagnostic.IndexOf($expectedSourcePart, [System.StringComparison]::Ordinal) -lt 0) {
+                    throw "marker fixture $metricId diagnostic omitted source $field=$expectedSourcePart"
+                }
+            }
+        }
+        $passed++
+    }
+
+    $endWithLf = '<!-- ORIGAMI3-CURRENT-STATUS:END -->' + "`n"
+    $malformedProgress = $cleanProgress.Replace($endWithLf, "")
+    if ([string]::Equals($malformedProgress, $cleanProgress, [System.StringComparison]::Ordinal)) {
+        throw "marker fixture could not remove END"
+    }
+    $malformed = Invoke-CurrentStatusMarkerGate $BaselineMarkdown $BaselineStatus $malformedProgress
+    Assert-MarkerFixtureResult "missing-END" $malformed 2
+    $passed++
+
+    return [PSCustomObject][ordered]@{
+        Passed = [int]$passed
+        Total = 8
+        MetricDrifts = [int]$metricIds.Count
+    }
 }
 
 function Get-AllMirrorDrifts {
@@ -2827,11 +3370,22 @@ function Write-GeneratedFilesAtomically {
 # from measured timings (CLAUDE.md sections 9 and 10.7.9).
 $scriptExitCode = 2
 $snapshotCreated = $false
+$jobWatch = [System.Diagnostics.Stopwatch]::StartNew()
 try {
-    if ($null -ne $script:CargoTargetError) {
-        throw $script:CargoTargetError
+    if ($Check -and $MarkerFixtures) {
+        throw "-Check and -MarkerFixtures cannot be used together"
     }
-    $rootResult = Invoke-GitCapture @("rev-parse", "--show-toplevel")
+    if ($MarkerFixtures) {
+        $fixtureResult = Invoke-MarkerFixtureSuite
+        Write-Host ("marker fixtures: {0}/{1} passed; metric drift diagnostics: {2}/6" -f $fixtureResult.Passed, $fixtureResult.Total, $fixtureResult.MetricDrifts)
+        Write-Host "tracked sources, real progress marker, mirrors, Cargo, and generated outputs: bypassed in MarkerFixtures"
+        $scriptExitCode = 0
+    }
+    else {
+        if ($null -ne $script:CargoTargetError) {
+            throw $script:CargoTargetError
+        }
+        $rootResult = Invoke-GitCapture @("rev-parse", "--show-toplevel")
     $gitRoot = [System.IO.Path]::GetFullPath($rootResult.StdOut.Trim()).TrimEnd([char[]]"\/")
     if (-not [string]::Equals($gitRoot, $script:Root, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "script root and git root differ"
@@ -2880,6 +3434,24 @@ try {
         $averageMs = ($elapsed[0] + $elapsed[1]) / 2.0
         $maximumMs = [Math]::Max($elapsed[0], $elapsed[1])
 
+        $markerGate = [PSCustomObject][ordered]@{
+            ExitCode = 0
+            MetricIds = @()
+            Diagnostics = @()
+        }
+        if ($Check) {
+            $progressText = Read-TrackedText "docs/progress.md" $script:SnapshotRoot
+            $markerGate = Invoke-CurrentStatusMarkerGate $firstMarkdown $first.Status $progressText
+            foreach ($diagnostic in @($markerGate.Diagnostics)) {
+                if ([int]$markerGate.ExitCode -eq 2) {
+                    [Console]::Error.WriteLine([string]$diagnostic)
+                }
+                else {
+                    Write-Warning ([string]$diagnostic)
+                }
+            }
+        }
+
         if (-not $Check) {
             Write-GeneratedFilesAtomically $firstJson $firstMarkdown
         }
@@ -2888,6 +3460,7 @@ try {
         foreach ($drift in $mirrorDrifts) {
             $mirror = $drift.Mirror
             $metricObject = $first.Status.metrics[$drift.Metric]
+            $metricSourceSet = ConvertTo-MetricSourceSetDiagnostic $first.Status $drift.Metric
             $sourceValue = if (Test-DictionaryKey $mirror "source_value") { $mirror.source_value } elseif (Test-DictionaryKey $mirror "source_count") { $mirror.source_count } elseif (Test-DictionaryKey $metricObject "count") { $metricObject.count } else { $metricObject.value }
             $observedValue = if (Test-DictionaryKey $mirror "observed_value") { $mirror.observed_value } elseif (Test-DictionaryKey $mirror "observed_count") { $mirror.observed_count } else { "unknown" }
             $setDetail = if ($script:MirrorSetDiagnostics.ContainsKey([string]$mirror.id)) {
@@ -2895,18 +3468,30 @@ try {
             }
             elseif ((Test-DictionaryKey $mirror "observed_names") -and @($mirror.observed_names).Count -gt 0) {
                 $sourceNames = @($metricObject.commands | ForEach-Object { $_.ipc_name })
-                " source_set=[$($sourceNames -join ',')]; observed_set=[$($mirror.observed_names -join ',')]"
+                " source_value_set=[$($sourceNames -join ',')]; observed_value_set=[$($mirror.observed_names -join ',')]"
             }
             else { "" }
-            Write-Warning (("metric={0} profile={1} path={2} selector={3} source={4} observed={5}" -f $drift.Metric, $drift.Profile, $mirror.path, $mirror.selector, $sourceValue, $observedValue) + $setDetail)
+            Write-Warning (('metric={0} profile={1} source_set={2} mirror_path={3} mirror_selector={4} source={5} observed={6}' -f $drift.Metric, $drift.Profile, $metricSourceSet, $mirror.path, $mirror.selector, $sourceValue, $observedValue) + $setDetail)
         }
 
         $m = $first.Status.metrics
         Write-Host ("6/6 collected: version={0}; workspace={1}; tauri={2}; rust={3}; frontend={4}/{5} files; manual={6}" -f $m.workspace_version.value, $m.workspace_members.count, $m.tauri_commands.count, $m.test_inventory.rust.registered_cases, $m.test_inventory.frontend.default.runnable_cases, $m.test_inventory.frontend.default.files, $m.manual_pages.page_count)
         Write-Host ("determinism: json={0}; markdown={1}; json_sha256={2}; markdown_sha256={3}" -f $jsonEqual, $markdownEqual, $jsonHash, $markdownHash)
         Write-Host ("collection elapsed_ms: first={0:F1}; second={1:F1}; average={2:F1}; maximum={3:F1}; tooling_setup={4:F1}" -f $elapsed[0], $elapsed[1], $averageMs, $maximumMs, $toolingWatch.Elapsed.TotalMilliseconds)
+        foreach ($metricId in @("workspace_version", "workspace_members", "tauri_commands", "test_inventory", "proposal_budgets", "manual_pages")) {
+            $firstSeconds = [double]$first.MetricTimings[$metricId] / 1000.0
+            $secondSeconds = [double]$second.MetricTimings[$metricId] / 1000.0
+            Write-Host ("metric timing_seconds: id={0}; first={1:F3}; second={2:F3}; average={3:F3}; maximum={4:F3}" -f $metricId, $firstSeconds, $secondSeconds, (($firstSeconds + $secondSeconds) / 2.0), ([Math]::Max($firstSeconds, $secondSeconds)))
+        }
+        foreach ($stepId in @("rust_static", "frontend_static_ast", "vitest_default", "vitest_production_symmetry", "frontend_profile_merge", "cargo_registered", "cargo_ignored", "validation_and_shape", "total")) {
+            $firstSeconds = [double]$first.TestInventoryTimings[$stepId] / 1000.0
+            $secondSeconds = [double]$second.TestInventoryTimings[$stepId] / 1000.0
+            Write-Host ("test_inventory timing_seconds: step={0}; first={1:F3}; second={2:F3}; average={3:F3}; maximum={4:F3}" -f $stepId, $firstSeconds, $secondSeconds, (($firstSeconds + $secondSeconds) / 2.0), ([Math]::Max($firstSeconds, $secondSeconds)))
+        }
         Write-Host ("mirror drift anchors: {0}" -f $mirrorDrifts.Count)
-        $scriptExitCode = if ($mirrorDrifts.Count -gt 0) { 1 } else { 0 }
+        $mirrorExitCode = if ($mirrorDrifts.Count -gt 0) { 1 } else { 0 }
+        $scriptExitCode = [Math]::Max([int]$markerGate.ExitCode, [int]$mirrorExitCode)
+    }
     }
 }
 catch {
@@ -2921,5 +3506,7 @@ finally {
         try { Remove-SafeTemporaryTree $script:SnapshotRoot }
         catch { Write-Warning "temporary source cleanup failed: $($_.Exception.Message)"; $scriptExitCode = 2 }
     }
+    $jobWatch.Stop()
+    Write-Host ("total job elapsed_ms (including cleanup): {0:F1}" -f $jobWatch.Elapsed.TotalMilliseconds)
 }
 exit $scriptExitCode

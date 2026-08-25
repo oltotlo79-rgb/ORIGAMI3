@@ -116,12 +116,12 @@ ORIGAMI3/
    ├─ src-tauri/src/
    │   ├─ lib.rs                   # コマンド登録のみ(薄く保つ)
    │   ├─ store.rs                 # DocumentStore(現ドキュメント+Undo/Redo)
-   │   ├─ commands.rs              # Tauriコマンド15個(全てstore/クレートへ委譲)
+   │   ├─ commands.rs              # Tauriコマンド18個(全てstore/クレートへ委譲)
    │   └─ autosave.rs              # 自動保存+復旧
    └─ src/
        ├─ main.tsx / App.tsx       # 4区画レイアウト
        ├─ store/appStore.ts        # Zustandストア(唯一の状態置き場)
-       ├─ ipc/client.ts            # invokeラッパー15関数(1関数=1コマンド)
+       ├─ ipc/client.ts            # invokeラッパー18関数(1関数=1コマンド)
        ├─ components/
        │   ├─ ToolRail.tsx         # ツールレール(関連する道具は整理して表示)
        │   ├─ CpEditor/            # 2D展開図エディタ(Canvas 2D)
@@ -247,11 +247,11 @@ pub struct Face3D { pub face: FaceId, pub polygon: Vec<[f64; 3]>, pub layer: u32
 pub struct Frame3D { pub faces: Vec<Face3D>, pub warnings: Vec<String> }
 ```
 
-### IPCコマンド一覧(現在15個。個数上限なし)
+### IPCコマンド一覧(現在18個。個数上限なし)
 
-`document_new / document_open / document_save / edit_apply / edit_apply_batch / edit_undo / edit_redo / sequence_apply / sequence_replay / pose_solve / recovery_check / recovery_restore / proposal_generate / proposal_apply / document_export`
+`document_new / document_open / document_save / edit_apply / edit_apply_batch / edit_undo / edit_redo / sequence_apply / sequence_replay / pose_solve / fold_all_preview / recovery_check / recovery_restore / proposal_generate / proposal_progress / proposal_control / proposal_apply / document_export`
 
-15個であること自体は違反ではない。追加時は既存コマンドの操作enumへ集約できないかを先に検討し、実装登録と本一覧を同時に更新する。
+18個であること自体は違反ではない。追加時は既存コマンドの操作enumへ集約できないかを先に検討し、実装登録と本一覧を同時に更新する。
 
 全コマンドの戻り値は `Result<T, String>` とし、内部panicは `std::panic::catch_unwind` で捕捉してErrに変換する(SYS-005)。
 
@@ -953,7 +953,7 @@ UI-011〜013の実装経路と画面検査はある。M6の完成判定は、F1�
 
 1. `scripts/check.ps1` 全通過
 2. NFR-004に従い、新しく足したコードが1ファイルへ無計画に積み増されていないことを確認する。行数は合否条件にしない
-3. IPCの実装登録と§2の一覧が現在の15個で一致し、追加分を既存の操作enumへ集約できないかを確認する
+3. IPCの実装登録と§2の一覧が現在の18個で一致し、追加分を既存の操作enumへ集約できないかを確認する
 4. `docs/progress.md` に完了内容・既知の問題を3〜10行で追記(長文の経緯記録は禁止。要件定義書NFR-006)
 5. 要件定義書の該当要件IDに対する充足状況を確認し、未達があればタスク化
 

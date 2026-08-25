@@ -27,7 +27,7 @@
 | 4 | `ProposalProgressCell` の中には `done` と `total` の2つの `AtomicUsize` があり（`apps/desktop/src-tauri/src/commands.rs:947-952`）、製品用 `static PROPOSAL_PROGRESS` は依然1個だけである（`:985-989`）。`proposal_generate` が同じセルへ書き（`:1124-1145`）、引数なしの `proposal_progress` が読む（`:1030-1033`）。`apps/desktop/src/ipc/client.ts:119-129` も `done/total` だけで、対象ソースに `job_id` / `jobId` / `phase` はない。 | 同時2要求を識別できず、一方の進捗を他方が読める。2原子値を別々に読むため、同一時点の一貫したsnapshotも型では保証されない。 | 施策1のjob別Tauri managed state、`{job_id, done, total, phase}`、終了後の回収へ限定して実施する。 |
 | 5 | `PLAN_BUDGET` は `max_states=2`、`branch=2`、`max_millis=30_000`（`apps/desktop/src-tauri/src/commands.rs:892-899`）。意図は実測最大13.851秒に対する約2.2倍のハング用安全弁（`:869-887`）である。一方、`crates/ori3-propose/src/search.rs:990-993` は `SearchDeadline` を作り、期限到達で `SearchStop::TimeCap` にする（`:1017-1019,1034-1038,1073-1082`）。`crates/ori3-propose/src/verify.rs:437-452` がそれを `VerifiedPlan::Partial` へ入れ、`ProposalFoldPlan::from_verified` が画面用 `partial` へ変換する（`apps/desktop/src-tauri/src/commands.rs:802-815`）。 | `SearchStop::TimeCap` という理由名自体はIPCへSerializeされないが、壁時計が手順内容と `partial` / 提案なしを変える。したがって製品結果はまだ負荷非依存ではない。 | 施策1で、決定的探索結果とwatchdog/cancel/internal errorを別の型・別の経路にする。単に30,000を延ばす修正にはしない。 |
 
-追加の同期不良として、`crates/ori3-propose/src/search.rs:415-417` には画面用budgetを6,000 msとする古い説明が残る。実値30,000 msとの不一致は施策7で解消する。
+追加の同期不良として記録した、`crates/ori3-propose/src/search.rs` の画面用budget説明は現在30,000 msへ同期済みである。旧6,000 msと実値30,000 msの不一致は施策7で解消した。
 
 ## 0A. 利用者が決めたこと（2026-08-24・25）
 
@@ -271,7 +271,7 @@ codex exec --model gpt-5.6-sol -c model_reasoning_effort=ultra --sandbox workspa
 | 1 | 施策2 原子的 `MoveStep` | 0.5.0で現在も残る具体的な手順消失・Undo 2回の危険で、対象が小さく早く閉じられる。レビュー時の提案3検査は既に赤ではないため順番を入れ替える。 | 手順・storeの大規模分割 |
 | 2 | 施策11 一斉折りの一時表示（案B） | 設計文書が安全とする「施策2の画面側完了後」の位置である。画面側は完了済みなので、施策4が未着手の間に単独変更として閉じる。 | 一斉折りの受入を施策4のpure move基準へ含められる |
 | 3 | 施策1 提案の残る負荷依存とjob別進捗 | release検査配置は直ったが、製品結果へ壁時計が混ざり、大域progressも残る。corpusの基準を固定する前に意味を安定させる。 | 30作品の決定性hashと性能baseline |
-| 4 | 施策7 機械検証付き文書 | 現時点で6,000/30,000 msとroadmap checkboxの不一致が実在する。後続の大変更で再び陳腐化しない生成境界を先に置く。 | 後続施策の自動status反映 |
+| 4 | 施策7 機械検証付き文書 | `search.rs`/製品budgetは30,000/30,000 msへ同期済みである。roadmap checkboxの不一致を含む後続の大変更で再び陳腐化しない生成境界を先に置く。 | 後続施策の自動status反映 |
 | 5 | 施策3 30作品corpus | 提案の意味が安定した後、大規模分割前の振る舞い安全網を作る。 | store/Viewer分割の一般化証拠 |
 | 6 | 施策5 共通 `AccessibleModal` | 実利用者検証の前提。5ダイアログの責務境界も作り、後のUI分割を助ける。 | keyboard-only受入、利用者試験 |
 | 7 | 施策4 巨大境界分割 | 原子性、提案corpus、Modal契約という安全網を得てから22,589行の主要境界を分ける。 | 安定したlazy-load境界 |
@@ -865,9 +865,9 @@ npm --prefix apps/desktop run lint
 
 ### 11.1 目的と方針
 
-version、workspace数、Tauri command数、テスト数、提案budget、manualページ数の6種類を実装・成果物から生成し、数値の手複写を止める。`crates/ori3-propose/src/search.rs:415-417` の6,000 msと `PLAN_BUDGET.max_millis=30_000` のような不一致を0にする。
+version、workspace数、Tauri command数、テスト数、提案budget、manualページ数の6種類を実装・成果物から生成し、数値の手複写を止める。`crates/ori3-propose/src/search.rs` の画面用budget説明は現在30,000 msで、`PLAN_BUDGET.max_millis=30_000` と一致する。この一致を機械検証する。
 
-新しい恒久 `docs/current-status.md` は、現要件の文書構成を利用者判断なしに増やすため採らない。`docs/progress.md` の先頭に機械生成領域を置き、詳細JSONは `verification/improvement-roadmap/07-docs/current-status.json` に置く。利用者が別文書を承認した場合だけ保存先を変更する。さらに `docs/requirements-definition.md:333-353` はTauri commandを15個と記すが、現行 `apps/desktop/src-tauri/src/lib.rs:82-99` のhandlerには `proposal_progress` を含む16個がある。この不一致も最初のdrift fixtureにする。
+新しい恒久 `docs/current-status.md` は、現要件の文書構成を利用者判断なしに増やすため採らない。`docs/progress.md` の先頭に機械生成領域を置き、詳細JSONは `verification/improvement-roadmap/07-docs/current-status.json` に置く。利用者が別文書を承認した場合だけ保存先を変更する。さらに、`docs/requirements-definition.md` の表はTauri commandを18個と記し、現行 `apps/desktop/src-tauri/src/lib.rs` のhandlerも `fold_all_preview`、`proposal_progress`、`proposal_control` を含む18個で一致する。この一致をdrift fixtureで継続検査する。
 
 ### 11.2 対象ファイルと関数
 
@@ -907,7 +907,7 @@ version、workspace数、Tauri command数、テスト数、提案budget、manual
 ### 11.4 数値の合格条件
 
 1. version、workspace数、Tauri command数、Rust/frontend test数、提案budget、manualページ数の6/6を生成する。
-2. 現行のTauri command 16個を16個として生成し、要件表の記載数・行数との不一致を0にする。追加時は表も同時更新する。
+2. 現行のTauri command 18個を18個として生成し、要件表の記載数・行数との不一致を0にする。追加時は表も同時更新する。
 3. 6,000/30,000 msのように同じ役割を異なる値で記す不一致0。library default、製品override、test-only値は役割名を付けて別値として表示する。
 4. generatorを連続2回実行し、JSON hashとMarkdown markerが100%同一、marker外差分0。
 5. CIが一時生成した内容と正本の差分0。6指標それぞれの故意のdrift fixture 6/6でnon-zero終了する。
@@ -929,7 +929,7 @@ version、workspace数、Tauri command数、テスト数、提案budget、manual
 - `CLAUDE.md:207-217`: 版更新後の機能がHelp/PDFへ載らない期間があった。原因は複数の手更新と鮮度検査不足。
 - `CLAUDE.md:147-158`: PDFが生成できたことを内容確認と誤認した。ページ数は6指標の1つに過ぎず、内容検査を置換しない。
 - `CLAUDE.md:116-124`（§10.1）: 手元とCIで入力集合が違った。generatorは追跡sourceだけを読み、CIと同じcommandを使う。
-- 現在の `search.rs` 6,000 ms記述と製品30,000 msは、測定値をcode commentへ複製した結果である。
+- 現在の `search.rs` の画面用budget説明は30,000 msで製品30,000 msと一致する。旧6,000 ms記述は、測定値をcode commentへ複製したことで陳腐化した過去の失敗である。
 
 ### 11.7 道具、コマンド、確認方法
 

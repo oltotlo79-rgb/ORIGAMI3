@@ -5,6 +5,10 @@ on:
     branches:
       - main
   pull_request:
+  # 18:17 UTC = 翌日03:17 JST。時刻の重なりを避けて毎日実行する。
+  schedule:
+    - cron: "17 18 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -12,6 +16,7 @@ permissions:
 jobs:
   checks:
     name: Tests, lint, and desktop checks
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: windows-latest
 
     env:
@@ -56,11 +61,13 @@ jobs:
       # 追加の候補を1件も作らない(crates/ori3-propose/src/search.rs の
       # `if completion.is_some()` が、追加の候補を作る場所を囲っている)。
       # どの検査も消さない。
+      # proposal_matrix_contract のdebug・1候補・1要求・直列・空き・1回smokeは、
+      # このworkspace testに既に含まれる。重複するstepは足さず、checksの時間を延ばさない。
       #
       # the_heaviest_proposal_never_hits_the_time_limit も、最適化ありの performance
-      # ジョブで走らせる。この検査は「時間の打ち切りに当たらないこと」を主張する。
-      # 打ち切りは壁時計なので、最適化なしでは16.8〜20.5倍遅くなり必ず当たる
-      # (実測: 最適化なしで先端12本の4候補すべてが`TimeCap`。最適化ありでは
+      # ジョブで走らせる。この検査は「watchdogの打ち切りに当たらないこと」を主張する。
+      # watchdogは壁時計なので、最適化なしでは16.8〜20.5倍遅くなり必ず当たる
+      # (実測: 最適化なしで先端12本の4候補すべてが`WatchdogExpired`。最適化ありでは
       # 0件/10回・最大13.851秒)。最適化ありでのみ成り立つ主張なので、
       # performanceジョブで最適化ありで走らせる。検査は消していない。
       - name: Run Rust tests
@@ -83,6 +90,7 @@ jobs:
 
   performance:
     name: Release performance tests
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: windows-latest
 
     env:
@@ -149,6 +157,13 @@ jobs:
       - name: Test the heaviest proposal never hits the time limit in release mode
         run: cargo test --release -p desktop --lib the_heaviest_proposal_never_hits_the_time_limit -- --nocapture
 
+      # 解決済み3検査×100回だけで約37時間39分かかり、さらに32 cell×100回を
+      # 加えるFullはGitHub Actionsの1ジョブ6時間上限を超える。ここではprofile両端のうち、
+      # release・4候補・2要求・並列・混雑を1回と製品hashだけ確認する。
+      # Fullはほかの作業を止めたリリース直前に手元で1回だけ実行する。
+      - name: Test the proposal matrix release boundary
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File crates/ori3-propose/tests/run-proposal-matrix.ps1 -Mode Performance
+
       - name: Install frontend dependencies
         working-directory: apps/desktop
         run: npm ci
@@ -156,3 +171,29 @@ jobs:
       - name: Test symmetry performance in production mode
         working-directory: apps/desktop
         run: npm run test -- --maxWorkers=1 --mode=production src/lib/symmetry.test.ts
+
+  current_status:
+    name: Nightly and pre-release document drift check
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_TARGET_DIR: ${{ runner.temp }}\ori3-target-docs7b
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify implementation-derived document status
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate-current-status.ps1 -Check

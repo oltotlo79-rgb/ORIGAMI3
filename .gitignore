@@ -34,5 +34,8 @@ scan-*.pdf
 # 別名のビルド出力(実験時に作られる)
 /target-*/
 
+# 同一内容・同一条件の手元検査receipt(機械・利用者固有、配布しない)
+/.origami3/check-receipts/
+
 # 説明書の図を直したときの、目視確認用の前後画像（成果物ではない）
 /docs/manual/verification/

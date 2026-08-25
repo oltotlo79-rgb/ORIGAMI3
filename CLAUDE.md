@@ -209,6 +209,12 @@ Co-Authored-By: Codex <noreply@openai.com>
 | 21 | **提案の探索が時間の打ち切りに当たらないこと(最適化あり)** | `cargo test --release -p desktop --lib the_heaviest_proposal_never_hits_the_time_limit -- --nocapture` |
 | 22 | **提案matrixのrelease境界(最適化あり)** | `powershell -NoProfile -ExecutionPolicy Bypass -File crates/ori3-propose/tests/run-proposal-matrix.ps1 -Mode Performance` |
 
+次の検査はpushごとの通常検査には含めず、cleanなcommit済みtreeを対象にnightlyまたはリリース前の手動CIで実行する。
+
+| 実行時期 | 確認 | コマンド |
+|---|---|---|
+| 毎日03:17 JST / リリース前の`workflow_dispatch` | **実装から生成した6指標と文書marker・登録mirrorの一致（full 2-pass）** | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate-current-status.ps1 -Check` |
+
 - **CIの`checks`実コマンド**: `cargo test --workspace -- --skip surface_order_179_999_to_180_all_110_creases --skip surface_order_exact_endpoint_is_rank_stable_for_previous_19 --skip completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten --skip named_sample_completes_end_to_end_and_is_deterministic_ten_out_of_ten --skip a_safe_coincident_partial_network_appears_after_the_first_fold --skip the_heaviest_proposal_never_hits_the_time_limit`。この既存のworkspace testに、`proposal_matrix_contract`のdebug・1候補・1要求・直列・空き・1回smokeが含まれる。重複するstepは足さず、`checks`の所要時間を延ばさない。
 - **#13・#14 について**: この2件は最適化なしでは手元で 476秒 / 175秒 かかる。CIの `checks` ジョブでは `--skip` で外し、`performance` ジョブが最適化ありで走らせる(どちらの検査も消していない)。**この2件は**手元の `cargo test --workspace`(#1)と `scripts/check.ps1` では、いままでどおり最適化なしでも走る。
 - **#18〜#20 について**: この3件は最適化なしでは手元で **約7.5時間 / 374秒 / 375秒** かかる(変更前は 587秒 / 30秒 / 6秒)。花弁折り・つぶし折りの候補を既定で作るようにした(`crates/ori3-propose/src/enumerate.rs` の `WITH_EXTRA_CANDIDATES`)ためで、最適化ありなら **1,332秒 / 12秒 / 11秒**(CI換算 合わせて約81分)で済む。**#13・#14 と違い、この3件は手元の `cargo test --workspace`(#1)・`scripts/check.ps1`・`scripts/hooks/pre-commit` からも `--skip` で外してある。最適化なしでは現実的な時間で終わらないためである。** 手元で確かめたいときは上表のコマンド(最適化あり)を使う。**探索の検査でも `search_to_finish` を使うもの(作業24の終点測定など)は影響を受けないので外していない**(`crates/ori3-propose/src/search.rs` の `if completion.is_some()` が、追加の候補を作る場所を囲っている)。

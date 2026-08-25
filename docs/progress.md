@@ -1,5 +1,37 @@
 # 開発進捗
 
+<!-- ORIGAMI3-CURRENT-STATUS:BEGIN schema=1 -->
+## 現在値（機械生成・手編集禁止）
+この現在値表は、HTMLコメント形式の「ORIGAMI3-CURRENT-STATUS」開始・終了印で囲み、実装から再生成した値との一致を自動検査します。
+
+| 指標 | 現在値 | profile | 正本 |
+|---|---:|---|---|
+| version | `0.5.0` | `workspace-manifest-current` | `Cargo.toml [workspace.package].version` |
+| workspace | 9 member（計算crate 8 + desktop Tauri host 1） | `cargo-workspace` | `Cargo.toml [workspace].members` |
+| Tauri commands | handler 18（command属性18、frontend wrapper 18） | `desktop.invoke_handler` | `apps/desktop/src-tauri/src/lib.rs::run/tauri::generate_handler!` |
+| tests | Rust 976（runnable 932、ignored 44）／frontend default 1,836 case・114 file | `runner-discovery` | Cargo test inventory／Vitest list inventory |
+| proposal budgets | library `12/8/3/2/20/600000ms`、product `2/8/2/2/20/30000ms`、test-only `2/8/2/2/20/3600000ms` | `resolved-operational-budgets` | `SearchBudget::DEFAULT`／`PLAN_BUDGET`／`TIME_FREE_PLAN_BUDGET` |
+| manual | 82ページ（3方式一致） | `published-pdf` | `docs/manual/ORIGAMI3取扱説明書.pdf` |
+
+### test inventory内訳
+
+| profile | case | file | 補足 |
+|---|---:|---:|---|
+| Rust registered | 976 | - | default runnable 932、ignored 44、benchmark 0 |
+| frontend default | 1,836 | 114 | `symmetry.test.ts`は12 case |
+| frontend production symmetry | 13 | 1 | production-only 1 case |
+| frontend cross-profile union | 1,837 | 114 | 同一location内ordinalを含めcase multiplicityを保持 |
+
+### proposal budget内訳
+
+| profile | max states | max depth | branch | rank scan | final scan | watchdog |
+|---|---:|---:|---:|---:|---:|---:|
+| library default | 12 | 8 | 3 | steps 2（3点） | steps 20（21点） | 600,000ms |
+| desktop product | 2 | 8 | 2 | steps 2（3点） | steps 20（21点） | 30,000ms |
+| desktop test-only | 2 | 8 | 2 | steps 2（3点） | steps 20（21点） | 3,600,000ms |
+
+<!-- ORIGAMI3-CURRENT-STATUS:END -->
+
 各タスク完了時に新しい記録を上に追記する。1件3〜10行以内(要件定義書NFR-006: 長文の経緯記録は禁止)。
 
 ## 2026-08-25 - Windowsの警告について配布案内を更新
