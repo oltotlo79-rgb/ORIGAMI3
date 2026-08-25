@@ -89,13 +89,15 @@ export function poseSolve(
   mode: PoseSolveMode = "Follow",
 ): Promise<SolveResult> {
   return invoke("pose_solve", {
-    hard,
-    preferred: preferred?.length ? preferred : null,
-    warmSeed: warmSeed?.length ? warmSeed : null,
-    soft: soft ?? null,
-    upTo,
-    t,
-    mode,
+    request: {
+      hard,
+      preferred: preferred?.length ? preferred : null,
+      warmSeed: warmSeed?.length ? warmSeed : null,
+      soft: soft ?? null,
+      upTo,
+      t,
+      mode,
+    },
   });
 }
 

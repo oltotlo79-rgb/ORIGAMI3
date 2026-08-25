@@ -1,0 +1,1053 @@
+//! Temporary stage-3 diagnostic. Unregistered after measurement.
+
+use std::collections::HashMap;
+
+use ori3_cp::extract_faces;
+use ori3_model::{
+    CreasePattern, Document, Driver, Edge, EdgeKind, Face3D, Frame3D, Paper, Vertex,
+};
+use ori3_rigid::{MotionContactOptions, max_seam_gap, solve_motion_with_contact_options};
+use ori3_rigid::motion::solve_canonical_motion_with_contact_options;
+
+const DESIRED: [(u32, f64); 3] = [(17, -90.0), (19, 90.0), (21, 90.0)];
+
+fn v(id: u32, x: f64, y: f64) -> Vertex {
+    Vertex { id, pos: [x, y] }
+}
+
+fn e(id: u32, v0: u32, v1: u32, kind: EdgeKind) -> Edge {
+    Edge { id, v0, v1, kind }
+}
+
+fn sa_document() -> Document {
+    let mut document = Document::new(Paper { width_mm: 150.0, height_mm: 150.0 });
+    document.cp = CreasePattern {
+        vertices: vec![
+            v(0, 0.0, 0.0),
+            v(1, 1.0, 0.0),
+            v(2, 1.0, 1.0),
+            v(3, 0.0, 1.0),
+            v(4, 0.0, 0.5),
+            v(5, 1.0, 0.5),
+            v(6, 0.5, 1.0),
+            v(7, 0.5, 0.0),
+            v(8, 0.5, 0.5),
+            v(9, 0.207_106_781_186_547_52, 0.5),
+            v(10, 0.5, 0.792_893_218_813_452_5),
+            v(11, 0.5, 0.207_106_781_186_547_52),
+            v(12, 0.792_893_218_813_452_5, 0.5),
+        ],
+        edges: vec![
+            e(4, 3, 4, EdgeKind::Border),
+            e(5, 4, 0, EdgeKind::Border),
+            e(6, 1, 5, EdgeKind::Border),
+            e(7, 5, 2, EdgeKind::Border),
+            e(9, 2, 6, EdgeKind::Border),
+            e(10, 6, 3, EdgeKind::Border),
+            e(11, 0, 7, EdgeKind::Border),
+            e(12, 7, 1, EdgeKind::Border),
+            e(17, 0, 8, EdgeKind::Valley),
+            e(18, 8, 2, EdgeKind::Valley),
+            e(19, 4, 9, EdgeKind::Mountain),
+            e(20, 9, 8, EdgeKind::Mountain),
+            e(21, 0, 9, EdgeKind::Mountain),
+            e(22, 9, 3, EdgeKind::Mountain),
+            e(23, 6, 10, EdgeKind::Mountain),
+            e(24, 10, 8, EdgeKind::Mountain),
+            e(25, 2, 10, EdgeKind::Mountain),
+            e(26, 10, 3, EdgeKind::Mountain),
+            e(27, 8, 11, EdgeKind::Mountain),
+            e(28, 11, 7, EdgeKind::Mountain),
+            e(29, 0, 11, EdgeKind::Mountain),
+            e(30, 11, 1, EdgeKind::Mountain),
+            e(31, 8, 12, EdgeKind::Mountain),
+            e(32, 12, 5, EdgeKind::Mountain),
+            e(33, 2, 12, EdgeKind::Mountain),
+            e(34, 12, 1, EdgeKind::Mountain),
+        ],
+        next_vertex_id: 13,
+        next_edge_id: 35,
+    };
+    document
+}
+
+fn canonical_delta(actual: f64, target: f64) -> f64 {
+    let wrapped = (actual - target + 180.0).rem_euclid(360.0) - 180.0;
+    if wrapped == -180.0 { 180.0 } else { wrapped }
+}
+
+fn all_hinges(document: &Document) -> Vec<(u32, EdgeKind)> {
+    let mut hinges: Vec<_> = document
+        .cp
+        .edges
+        .iter()
+        .filter(|edge| edge.kind != EdgeKind::Border)
+        .map(|edge| (edge.id, edge.kind))
+        .collect();
+    hinges.sort_unstable_by_key(|&(hinge, _)| hinge);
+    hinges
+}
+
+fn snapshot_seed(document: &Document, desired: &HashMap<u32, f64>) -> HashMap<u32, f64> {
+    all_hinges(document)
+        .into_iter()
+        .map(|(hinge, _)| (hinge, desired.get(&hinge).copied().unwrap_or(0.0)))
+        .collect()
+}
+
+fn kind_seed(document: &Document, magnitude: f64) -> HashMap<u32, f64> {
+    all_hinges(document)
+        .into_iter()
+        .map(|(hinge, kind)| {
+            let sign = if kind == EdgeKind::Valley { -1.0 } else { 1.0 };
+            (hinge, sign * magnitude)
+        })
+        .collect()
+}
+
+fn uniform_seed(document: &Document, angle: f64) -> HashMap<u32, f64> {
+    all_hinges(document)
+        .into_iter()
+        .map(|(hinge, _)| (hinge, angle))
+        .collect()
+}
+
+fn driver(hinge: u32, target_angle_deg: f64) -> Driver {
+    Driver { hinge, target_angle_deg }
+}
+
+fn solve(
+    document: &Document,
+    faces: &[ori3_cp::Face],
+    hard: &[Driver],
+    preferred: Option<&HashMap<u32, f64>>,
+    seed: Option<&HashMap<u32, f64>>,
+) -> ori3_rigid::MotionSolveResult {
+    solve_motion_with_contact_options(
+        &document.cp,
+        faces,
+        hard,
+        preferred,
+        seed,
+        MotionContactOptions { detect: true, prevent: false },
+    )
+}
+
+fn max_vertex_delta(left: &Frame3D, right: &Frame3D) -> f64 {
+    fn ordered(frame: &Frame3D) -> Vec<&Face3D> {
+        let mut faces: Vec<_> = frame.faces.iter().collect();
+        faces.sort_unstable_by_key(|face| face.face);
+        faces
+    }
+    let mut maximum = 0.0_f64;
+    for (left_face, right_face) in ordered(left).into_iter().zip(ordered(right)) {
+        assert_eq!(left_face.face, right_face.face);
+        for (left_point, right_point) in left_face.polygon.iter().zip(&right_face.polygon) {
+            for axis in 0..3 {
+                maximum = maximum.max((left_point[axis] - right_point[axis]).abs());
+            }
+        }
+    }
+    maximum
+}
+
+fn report(
+    label: &str,
+    document: &Document,
+    desired: &HashMap<u32, f64>,
+    follow: &ori3_rigid::SolveResult,
+    result: &ori3_rigid::SolveResult,
+) {
+    let selected: Vec<_> = DESIRED
+        .iter()
+        .map(|&(hinge, target)| {
+            let actual = result.angles.get(&hinge).copied().unwrap_or(0.0);
+            (hinge, actual, canonical_delta(actual, target).abs())
+        })
+        .collect();
+    let max_error = selected.iter().map(|item| item.2).fold(0.0_f64, f64::max);
+    let error_l2 = selected.iter().map(|item| item.2 * item.2).sum::<f64>().sqrt();
+    let follow_angle_l2 = DESIRED
+        .iter()
+        .map(|&(hinge, _)| {
+            canonical_delta(
+                result.angles.get(&hinge).copied().unwrap_or(0.0),
+                follow.angles.get(&hinge).copied().unwrap_or(0.0),
+            )
+            .powi(2)
+        })
+        .sum::<f64>()
+        .sqrt();
+    let mut sorted_angles: Vec<_> = result.angles.iter().map(|(&h, &a)| (h, a)).collect();
+    sorted_angles.sort_unstable_by_key(|&(hinge, _)| hinge);
+    println!(
+        "CANDIDATE {label}: selected={selected:?} closure={:.17e} seam={:.17e} converged={} best_effort={} iterations={} target_max={:.12} target_l2={:.12} follow_angle_l2={:.12} follow_vertex_max={:.12} all_angles={sorted_angles:?}",
+        result.closure_rms,
+        max_seam_gap(&document.cp, &extract_faces(&document.cp), &result.frame),
+        result.converged,
+        result.best_effort,
+        result.iterations,
+        max_error,
+        error_l2,
+        follow_angle_l2,
+        max_vertex_delta(&follow.frame, &result.frame),
+    );
+    let _ = desired;
+}
+
+fn report_follow_pair(
+    label: &str,
+    follow19: &ori3_rigid::SolveResult,
+    follow21: &ori3_rigid::SolveResult,
+    result: &ori3_rigid::SolveResult,
+) {
+    println!(
+        "FOLLOW_PAIR {label}: hinge19_vertex_max={:.15} hinge21_vertex_max={:.15}",
+        max_vertex_delta(&follow19.frame, &result.frame),
+        max_vertex_delta(&follow21.frame, &result.frame),
+    );
+}
+
+#[test]
+fn probe_document_derived_canonical_candidates() {
+    let document = sa_document();
+    let faces = extract_faces(&document.cp);
+    let desired: HashMap<_, _> = DESIRED.into_iter().collect();
+
+    // Reproduce the revised UI path: Follow for 17, canonical; Follow for 19, canonical;
+    // then the 5-degree hinge-21 Follow samples through 90 degrees.
+    let mut stored: Option<HashMap<u32, f64>> = None;
+    let mut ui_prefix_total_iterations = 0u32;
+    for step in 1..=18 {
+        let deg = -(step as f64 * 5.0);
+        let outcome = solve(&document, &faces, &[driver(17, deg)], None, stored.as_ref());
+        ui_prefix_total_iterations += outcome.result.iterations;
+        stored = Some(outcome.result.angles);
+    }
+    let desired17 = HashMap::from([(17, -90.0)]);
+    let settle17 = solve(
+        &document,
+        &faces,
+        &[],
+        Some(&desired17),
+        Some(&snapshot_seed(&document, &desired17)),
+    );
+    ui_prefix_total_iterations += settle17.result.iterations;
+    stored = Some(settle17.result.angles);
+    for deg in (15..=90).step_by(5) {
+        let outcome = solve(
+            &document,
+            &faces,
+            &[driver(19, deg as f64)],
+            Some(&desired17),
+            stored.as_ref(),
+        );
+        ui_prefix_total_iterations += outcome.result.iterations;
+        stored = Some(outcome.result.angles);
+    }
+    let desired17_19 = HashMap::from([(17, -90.0), (19, 90.0)]);
+    let settle17_19 = solve(
+        &document,
+        &faces,
+        &[],
+        Some(&desired17_19),
+        Some(&snapshot_seed(&document, &desired17_19)),
+    );
+    ui_prefix_total_iterations += settle17_19.result.iterations;
+    stored = Some(settle17_19.result.angles);
+    let mut follow = None;
+    for deg in (5..=90).step_by(5) {
+        let outcome = solve(
+            &document,
+            &faces,
+            &[driver(21, deg as f64)],
+            Some(&desired17_19),
+            stored.as_ref(),
+        );
+        ui_prefix_total_iterations += outcome.result.iterations;
+        stored = Some(outcome.result.angles.clone());
+        follow = Some(outcome.result);
+    }
+    let follow = follow.expect("hinge 21 Follow");
+    let active19_preferred: HashMap<_, _> = desired
+        .iter()
+        .filter(|&(&hinge, _)| hinge != 19)
+        .map(|(&hinge, &angle)| (hinge, angle))
+        .collect();
+    let active19_follow = solve(
+        &document,
+        &faces,
+        &[driver(19, 90.0)],
+        Some(&active19_preferred),
+        Some(&follow.angles),
+    )
+    .result;
+    let active21_preferred: HashMap<_, _> = desired
+        .iter()
+        .filter(|&(&hinge, _)| hinge != 21)
+        .map(|(&hinge, &angle)| (hinge, angle))
+        .collect();
+    let active21_follow = solve(
+        &document,
+        &faces,
+        &[driver(21, 90.0)],
+        Some(&active21_preferred),
+        Some(&follow.angles),
+    )
+    .result;
+    println!("TOTAL_ITERATIONS sorted-prefix-checkpoint-terminal={ui_prefix_total_iterations}");
+    println!("FOLLOW selected={:?} closure={:.17e} iterations={}", DESIRED.iter().map(|&(h, t)| (h, follow.angles[&h], canonical_delta(follow.angles[&h], t).abs())).collect::<Vec<_>>(), follow.closure_rms, follow.iterations);
+    report(
+        "sorted-prefix-checkpoint-terminal",
+        &document,
+        &desired,
+        &follow,
+        &follow,
+    );
+    let from_follow_seed = solve(
+        &document,
+        &faces,
+        &[],
+        Some(&desired),
+        Some(&follow.angles),
+    );
+    report(
+        "sorted-prefix-terminal-as-final-seed",
+        &document,
+        &desired,
+        &follow,
+        &from_follow_seed.result,
+    );
+
+    let fixed_seeds: Vec<(&str, Option<HashMap<u32, f64>>)> = vec![
+        ("none", None),
+        ("snapshot-desired-zero", Some(snapshot_seed(&document, &desired))),
+        ("kind-signed-90", Some(kind_seed(&document, 90.0))),
+        ("uniform-plus-90", Some(uniform_seed(&document, 90.0))),
+        ("uniform-minus-90", Some(uniform_seed(&document, -90.0))),
+        ("kind-signed-180", Some(kind_seed(&document, 180.0))),
+        ("uniform-plus-180", Some(uniform_seed(&document, 180.0))),
+        ("uniform-minus-180", Some(uniform_seed(&document, -180.0))),
+    ];
+    for (label, seed) in fixed_seeds {
+        let outcome = solve(&document, &faces, &[], Some(&desired), seed.as_ref());
+        report(label, &document, &desired, &follow, &outcome.result);
+    }
+
+    let all_hard: Vec<_> = DESIRED
+        .iter()
+        .map(|&(hinge, target)| driver(hinge, target))
+        .collect();
+    let all_hard_seeds = [
+        ("none", None),
+        ("snapshot", Some(snapshot_seed(&document, &desired))),
+        ("kind90", Some(kind_seed(&document, 90.0))),
+        ("plus90", Some(uniform_seed(&document, 90.0))),
+        ("minus90", Some(uniform_seed(&document, -90.0))),
+        ("kind180", Some(kind_seed(&document, 180.0))),
+        ("plus180", Some(uniform_seed(&document, 180.0))),
+        ("minus180", Some(uniform_seed(&document, -180.0))),
+        ("follow", Some(follow.angles.clone())),
+    ];
+    for (seed_label, seed) in all_hard_seeds {
+        let outcome = solve(&document, &faces, &all_hard, None, seed.as_ref());
+        report(
+            &format!("all-three-hard-{seed_label}"),
+            &document,
+            &desired,
+            &follow,
+            &outcome.result,
+        );
+    }
+
+    // A canonical candidate set may also anchor each requested hinge in edge-ID order while
+    // treating the other requested hinges as preferred. The set is independent of which slider
+    // was touched last; probe which Document-only seed reaches the measured Follow branch.
+    for &(anchor, anchor_target) in &DESIRED {
+        let preferred: HashMap<_, _> = desired
+            .iter()
+            .filter(|&(&hinge, _)| hinge != anchor)
+            .map(|(&hinge, &angle)| (hinge, angle))
+            .collect();
+        let anchor_seeds = [
+            ("none", None),
+            ("snapshot", Some(snapshot_seed(&document, &desired))),
+            ("kind90", Some(kind_seed(&document, 90.0))),
+            ("plus90", Some(uniform_seed(&document, 90.0))),
+            ("minus90", Some(uniform_seed(&document, -90.0))),
+        ];
+        for (seed_label, seed) in anchor_seeds {
+            let outcome = solve(
+                &document,
+                &faces,
+                &[driver(anchor, anchor_target)],
+                Some(&preferred),
+                seed.as_ref(),
+            );
+            report(
+                &format!("anchor-{anchor}-{seed_label}"),
+                &document,
+                &desired,
+                &follow,
+                &outcome.result,
+            );
+            report_follow_pair(
+                &format!("anchor-{anchor}-{seed_label}"),
+                &active19_follow,
+                &active21_follow,
+                &outcome.result,
+            );
+        }
+
+        let from_prefix = solve(
+            &document,
+            &faces,
+            &[driver(anchor, anchor_target)],
+            Some(&preferred),
+            Some(&follow.angles),
+        );
+        report(
+            &format!("active-{anchor}-from-prefix-canonical"),
+            &document,
+            &desired,
+            &follow,
+            &from_prefix.result,
+        );
+    }
+
+    // Deterministic 5-degree path from flat: every checkpoint is defined only by Document
+    // edge IDs and the sorted desired map. Its terminal result and one final re-solve are both
+    // useful candidates.
+    let mut checkpoint_warm: Option<HashMap<u32, f64>> = Some(uniform_seed(&document, 0.0));
+    let mut checkpoint_result = None;
+    let mut checkpoint_total_iterations = 0u32;
+    for step in 1..=18 {
+        let t = step as f64 / 18.0;
+        let checkpoint_targets: HashMap<_, _> = desired
+            .iter()
+            .map(|(&hinge, &angle)| (hinge, angle * t))
+            .collect();
+        let outcome = solve(
+            &document,
+            &faces,
+            &[],
+            Some(&checkpoint_targets),
+            checkpoint_warm.as_ref(),
+        );
+        checkpoint_total_iterations += outcome.result.iterations;
+        checkpoint_warm = Some(outcome.result.angles.clone());
+        checkpoint_result = Some(outcome.result);
+    }
+    let checkpoint_result = checkpoint_result.expect("checkpoint terminal");
+    println!("TOTAL_ITERATIONS checkpoint-terminal={checkpoint_total_iterations}");
+    report("checkpoint-terminal", &document, &desired, &follow, &checkpoint_result);
+    report_follow_pair(
+        "checkpoint-terminal",
+        &active19_follow,
+        &active21_follow,
+        &checkpoint_result,
+    );
+    let checkpoint_resolved = solve(
+        &document,
+        &faces,
+        &[],
+        Some(&desired),
+        checkpoint_warm.as_ref(),
+    );
+    println!(
+        "TOTAL_ITERATIONS checkpoint-as-final-seed={}",
+        checkpoint_total_iterations + checkpoint_resolved.result.iterations
+    );
+    println!(
+        "PAIR_VERTEX checkpoint-terminal-to-final-seed={:.15}",
+        max_vertex_delta(&checkpoint_result.frame, &checkpoint_resolved.result.frame)
+    );
+    report(
+        "checkpoint-as-final-seed",
+        &document,
+        &desired,
+        &follow,
+        &checkpoint_resolved.result,
+    );
+    report_follow_pair(
+        "checkpoint-as-final-seed",
+        &active19_follow,
+        &active21_follow,
+        &checkpoint_resolved.result,
+    );
+
+    // Cheaper sorted-prefix variants. Each requested hinge is introduced by exactly one
+    // solve_motion call at its terminal target (the motion solver performs its own bounded
+    // continuation). The UI-like variant settles the accumulated desired map from its
+    // deterministic desired/zero seed before advancing to the next edge, but preserves the
+    // terminal Follow of the final edge as the candidate.
+    let mut prefix_desired = HashMap::new();
+    let mut prefix_stored: Option<HashMap<u32, f64>> = None;
+    let mut prefix_terminal = None;
+    let mut prefix_total_iterations = 0u32;
+    for (index, &(hinge, target)) in DESIRED.iter().enumerate() {
+        let outcome = solve(
+            &document,
+            &faces,
+            &[driver(hinge, target)],
+            if prefix_desired.is_empty() { None } else { Some(&prefix_desired) },
+            prefix_stored.as_ref(),
+        );
+        prefix_total_iterations += outcome.result.iterations;
+        prefix_stored = Some(outcome.result.angles.clone());
+        prefix_terminal = Some(outcome.result);
+        prefix_desired.insert(hinge, target);
+
+        if index + 1 < DESIRED.len() {
+            let settle = solve(
+                &document,
+                &faces,
+                &[],
+                Some(&prefix_desired),
+                Some(&snapshot_seed(&document, &prefix_desired)),
+            );
+            prefix_total_iterations += settle.result.iterations;
+            prefix_stored = Some(settle.result.angles);
+        }
+    }
+    let prefix_terminal = prefix_terminal.expect("single-call prefix terminal");
+    println!("TOTAL_ITERATIONS single-call-prefix-terminal={prefix_total_iterations}");
+    report(
+        "single-call-prefix-terminal",
+        &document,
+        &desired,
+        &follow,
+        &prefix_terminal,
+    );
+    report_follow_pair(
+        "single-call-prefix-terminal",
+        &active19_follow,
+        &active21_follow,
+        &prefix_terminal,
+    );
+    let prefix_final_seed = solve(
+        &document,
+        &faces,
+        &[],
+        Some(&desired),
+        Some(&prefix_terminal.angles),
+    );
+    println!(
+        "TOTAL_ITERATIONS single-call-prefix-as-final-seed={}",
+        prefix_total_iterations + prefix_final_seed.result.iterations
+    );
+    println!(
+        "PAIR_VERTEX single-call-prefix-terminal-to-final-seed={:.15}",
+        max_vertex_delta(&prefix_terminal.frame, &prefix_final_seed.result.frame)
+    );
+    report(
+        "single-call-prefix-as-final-seed",
+        &document,
+        &desired,
+        &follow,
+        &prefix_final_seed.result,
+    );
+    report_follow_pair(
+        "single-call-prefix-as-final-seed",
+        &active19_follow,
+        &active21_follow,
+        &prefix_final_seed.result,
+    );
+
+    // Also report the result if the last edge is followed by the same deterministic settle.
+    let prefix_final_settle = solve(
+        &document,
+        &faces,
+        &[],
+        Some(&desired),
+        Some(&snapshot_seed(&document, &desired)),
+    );
+    println!(
+        "TOTAL_ITERATIONS single-call-prefix-final-snapshot-settle={}",
+        prefix_total_iterations + prefix_final_settle.result.iterations
+    );
+    report(
+        "single-call-prefix-final-snapshot-settle",
+        &document,
+        &desired,
+        &follow,
+        &prefix_final_settle.result,
+    );
+    report_follow_pair(
+        "single-call-prefix-final-snapshot-settle",
+        &active19_follow,
+        &active21_follow,
+        &prefix_final_settle.result,
+    );
+
+    // Control: one terminal hard call per requested edge, preserving only the warm result,
+    // with no deterministic settle between edges.
+    let mut no_settle_desired = HashMap::new();
+    let mut no_settle_warm: Option<HashMap<u32, f64>> = None;
+    let mut no_settle_terminal = None;
+    let mut no_settle_total_iterations = 0u32;
+    for &(hinge, target) in &DESIRED {
+        let outcome = solve(
+            &document,
+            &faces,
+            &[driver(hinge, target)],
+            if no_settle_desired.is_empty() { None } else { Some(&no_settle_desired) },
+            no_settle_warm.as_ref(),
+        );
+        no_settle_total_iterations += outcome.result.iterations;
+        no_settle_warm = Some(outcome.result.angles.clone());
+        no_settle_terminal = Some(outcome.result);
+        no_settle_desired.insert(hinge, target);
+    }
+    let no_settle_terminal = no_settle_terminal.expect("no-settle prefix terminal");
+    println!("TOTAL_ITERATIONS single-call-prefix-no-settle={no_settle_total_iterations}");
+    report(
+        "single-call-prefix-no-settle",
+        &document,
+        &desired,
+        &follow,
+        &no_settle_terminal,
+    );
+    report_follow_pair(
+        "single-call-prefix-no-settle",
+        &active19_follow,
+        &active21_follow,
+        &no_settle_terminal,
+    );
+}
+
+#[derive(Clone)]
+struct ScanCandidate {
+    label: String,
+    result: ori3_rigid::SolveResult,
+    calls: u32,
+    iterations: u32,
+}
+
+fn scan_document_seed(document: &Document) -> HashMap<u32, f64> {
+    all_hinges(document)
+        .into_iter()
+        .map(|(hinge, _)| (hinge, 0.0))
+        .collect()
+}
+
+fn scan_canonical(
+    document: &Document,
+    faces: &[ori3_cp::Face],
+    desired: &HashMap<u32, f64>,
+    document_seed: &HashMap<u32, f64>,
+) -> ori3_rigid::MotionSolveResult {
+    solve_canonical_motion_with_contact_options(
+        &document.cp,
+        faces,
+        &[],
+        Some(desired),
+        Some(document_seed),
+        MotionContactOptions { detect: true, prevent: false },
+    )
+}
+
+fn scan_active_reference(
+    document: &Document,
+    faces: &[ori3_cp::Face],
+    active: u32,
+    document_seed: &HashMap<u32, f64>,
+) -> ori3_rigid::SolveResult {
+    let preferred: HashMap<_, _> = DESIRED
+        .iter()
+        .filter(|&&(hinge, _)| hinge != active)
+        .copied()
+        .collect();
+    let canonical = scan_canonical(document, faces, &preferred, document_seed);
+    solve(
+        document,
+        faces,
+        &[driver(active, DESIRED.iter().find(|&&(hinge, _)| hinge == active).unwrap().1)],
+        Some(&preferred),
+        Some(&canonical.result.angles),
+    )
+    .result
+}
+
+fn scan_wrap_angle(angle: f64) -> f64 {
+    let wrapped = (angle + 180.0).rem_euclid(360.0) - 180.0;
+    if wrapped == -180.0 && angle > 0.0 { 180.0 } else { wrapped }
+}
+
+fn scan_prefix_5deg(
+    document: &Document,
+    faces: &[ori3_cp::Face],
+    desired: &HashMap<u32, f64>,
+    document_seed: &HashMap<u32, f64>,
+    order: &[u32],
+) -> ScanCandidate {
+    let initial = solve(document, faces, &[], None, Some(document_seed));
+    let mut calls = 1u32;
+    let mut iterations = initial.result.iterations;
+    let mut warm = initial.result.angles;
+    let mut introduced = HashMap::new();
+    let mut terminal = None;
+    for (order_index, &hinge) in order.iter().enumerate() {
+        let target = desired[&hinge];
+        let start = warm.get(&hinge).copied().unwrap_or(0.0);
+        let delta = -canonical_delta(start, target);
+        let step_count = (delta.abs() / 5.0).ceil().max(1.0) as usize;
+        for step in 1..=step_count {
+            let checkpoint = if step == step_count {
+                target
+            } else {
+                scan_wrap_angle(start + delta * step as f64 / step_count as f64)
+            };
+            let solved = solve(
+                document,
+                faces,
+                &[driver(hinge, checkpoint)],
+                (!introduced.is_empty()).then_some(&introduced),
+                Some(&warm),
+            );
+            calls += 1;
+            iterations = iterations.saturating_add(solved.result.iterations);
+            warm = solved.result.angles.clone();
+            terminal = Some(solved.result);
+        }
+        introduced.insert(hinge, target);
+        if order_index + 1 < order.len() {
+            let mut settle_seed = document_seed.clone();
+            settle_seed.extend(introduced.iter().map(|(&edge, &angle)| (edge, angle)));
+            let settled = solve(
+                document,
+                faces,
+                &[],
+                Some(&introduced),
+                Some(&settle_seed),
+            );
+            calls += 1;
+            iterations = iterations.saturating_add(settled.result.iterations);
+            warm = settled.result.angles;
+        }
+    }
+    ScanCandidate {
+        label: format!("prefix-{}", order.iter().map(u32::to_string).collect::<Vec<_>>().join("-")),
+        result: terminal.expect("prefix terminal"),
+        calls,
+        iterations,
+    }
+}
+
+fn scan_single_call_prefix(
+    document: &Document,
+    faces: &[ori3_cp::Face],
+    desired: &HashMap<u32, f64>,
+    document_seed: &HashMap<u32, f64>,
+    settle_between: bool,
+) -> ScanCandidate {
+    let mut calls = 0u32;
+    let mut iterations = 0u32;
+    let mut warm = None;
+    let mut introduced = HashMap::new();
+    let mut terminal = None;
+    for (index, &(hinge, target)) in DESIRED.iter().enumerate() {
+        let solved = solve(
+            document,
+            faces,
+            &[driver(hinge, target)],
+            (!introduced.is_empty()).then_some(&introduced),
+            warm.as_ref(),
+        );
+        calls += 1;
+        iterations = iterations.saturating_add(solved.result.iterations);
+        warm = Some(solved.result.angles.clone());
+        terminal = Some(solved.result);
+        introduced.insert(hinge, desired[&hinge]);
+        if settle_between && index + 1 < DESIRED.len() {
+            let mut settle_seed = document_seed.clone();
+            settle_seed.extend(introduced.iter().map(|(&edge, &angle)| (edge, angle)));
+            let settled = solve(
+                document,
+                faces,
+                &[],
+                Some(&introduced),
+                Some(&settle_seed),
+            );
+            calls += 1;
+            iterations = iterations.saturating_add(settled.result.iterations);
+            warm = Some(settled.result.angles);
+        }
+    }
+    ScanCandidate {
+        label: if settle_between {
+            "single-call-prefix-terminal".to_string()
+        } else {
+            "single-call-prefix-no-settle".to_string()
+        },
+        result: terminal.expect("single-call prefix terminal"),
+        calls,
+        iterations,
+    }
+}
+
+fn scan_metrics(
+    candidate: &ScanCandidate,
+    document: &Document,
+    desired: &HashMap<u32, f64>,
+    references: &[(u32, ori3_rigid::SolveResult)],
+) -> (bool, f64, f64, f64, f64, Vec<(u32, f64)>) {
+    let errors: Vec<_> = DESIRED
+        .iter()
+        .map(|&(hinge, target)| canonical_delta(candidate.result.angles[&hinge], target).abs())
+        .collect();
+    let maximum = errors.iter().copied().fold(0.0_f64, f64::max);
+    let l2 = errors.iter().map(|error| error * error).sum::<f64>().sqrt();
+    let seam = max_seam_gap(&document.cp, &extract_faces(&document.cp), &candidate.result.frame);
+    let closed = candidate.result.closure_rms <= 1e-13 && seam < 1e-6;
+    let jumps: Vec<_> = references
+        .iter()
+        .map(|(active, reference)| (*active, max_vertex_delta(&reference.frame, &candidate.result.frame)))
+        .collect();
+    let worst = jumps.iter().map(|(_, jump)| *jump).fold(0.0_f64, f64::max);
+    let _ = desired;
+    (closed, maximum, l2, candidate.result.closure_rms, worst, jumps)
+}
+
+#[test]
+fn probe_product_order_candidate_minimax() {
+    let document = sa_document();
+    let faces = extract_faces(&document.cp);
+    let desired: HashMap<_, _> = DESIRED.into_iter().collect();
+    let document_seed = scan_document_seed(&document);
+
+    // The reported product order. Canonical has no previous-pose input, so the final
+    // {17,21} canonical result is fully determined by this map and the document seed.
+    let finish17 = scan_canonical(
+        &document,
+        &faces,
+        &HashMap::from([(17, -90.0)]),
+        &document_seed,
+    );
+    let finish17_21 = scan_canonical(
+        &document,
+        &faces,
+        &HashMap::from([(17, -90.0), (21, 90.0)]),
+        &document_seed,
+    );
+    println!(
+        "REFERENCE_FINISH finish17_iter={} finish17_21_iter={}",
+        finish17.result.iterations, finish17_21.result.iterations
+    );
+    let follow19 = solve(
+        &document,
+        &faces,
+        &[driver(19, 90.0)],
+        Some(&HashMap::from([(17, -90.0), (21, 90.0)])),
+        Some(&finish17_21.result.angles),
+    )
+    .result;
+
+    let references = vec![
+        (17, scan_active_reference(&document, &faces, 17, &document_seed)),
+        (19, follow19),
+        (21, scan_active_reference(&document, &faces, 21, &document_seed)),
+    ];
+    for (active, reference) in &references {
+        let selected: Vec<_> = DESIRED
+            .iter()
+            .map(|&(hinge, target)| (hinge, reference.angles[&hinge], canonical_delta(reference.angles[&hinge], target).abs()))
+            .collect();
+        println!("REFERENCE active={active} selected={selected:?} closure={:.17e} iterations={}", reference.closure_rms, reference.iterations);
+    }
+
+    let mut candidates = Vec::new();
+    let fixed_seeds: Vec<(&str, Option<HashMap<u32, f64>>)> = vec![
+        ("direct-none", None),
+        ("document-seed", Some(document_seed.clone())),
+        ("document-overlay", Some(snapshot_seed(&document, &desired))),
+        ("kind-plus90", Some(kind_seed(&document, 90.0))),
+        ("kind-minus90", Some(kind_seed(&document, -90.0))),
+        ("kind-plus180", Some(kind_seed(&document, 180.0))),
+        ("kind-minus180", Some(kind_seed(&document, -180.0))),
+        ("uniform-plus90", Some(uniform_seed(&document, 90.0))),
+        ("uniform-minus90", Some(uniform_seed(&document, -90.0))),
+        ("uniform-plus180", Some(uniform_seed(&document, 180.0))),
+        ("uniform-minus180", Some(uniform_seed(&document, -180.0))),
+    ];
+    for (label, seed) in &fixed_seeds {
+        let solved = solve(&document, &faces, &[], Some(&desired), seed.as_ref());
+        candidates.push(ScanCandidate {
+            label: (*label).to_string(),
+            calls: 1,
+            iterations: solved.result.iterations,
+            result: solved.result,
+        });
+    }
+
+    let orders = [
+        [17, 19, 21],
+        [19, 21, 17],
+        [21, 17, 19],
+        [21, 19, 17],
+        [19, 17, 21],
+        [17, 21, 19],
+    ];
+    for order in orders {
+        candidates.push(scan_prefix_5deg(
+            &document,
+            &faces,
+            &desired,
+            &document_seed,
+            &order,
+        ));
+    }
+    candidates.push(scan_single_call_prefix(
+        &document,
+        &faces,
+        &desired,
+        &document_seed,
+        true,
+    ));
+    candidates.push(scan_single_call_prefix(
+        &document,
+        &faces,
+        &desired,
+        &document_seed,
+        false,
+    ));
+
+    for &(anchor, anchor_target) in &DESIRED {
+        let preferred: HashMap<_, _> = desired
+            .iter()
+            .filter(|&(&hinge, _)| hinge != anchor)
+            .map(|(&hinge, &angle)| (hinge, angle))
+            .collect();
+        for (seed_label, seed) in &fixed_seeds {
+            let solved = solve(
+                &document,
+                &faces,
+                &[driver(anchor, anchor_target)],
+                Some(&preferred),
+                seed.as_ref(),
+            );
+            candidates.push(ScanCandidate {
+                label: format!("anchor-{anchor}-{seed_label}"),
+                calls: 1,
+                iterations: solved.result.iterations,
+                result: solved.result,
+            });
+        }
+    }
+
+    let mut measurements = Vec::new();
+    for candidate in &candidates {
+        let (closed, maximum, l2, closure, worst, jumps) =
+            scan_metrics(candidate, &document, &desired, &references);
+        let follow19_jump = jumps.iter().find(|(active, _)| *active == 19).unwrap().1;
+        println!(
+            "SCAN\t{}\tclosed={}\tmax={:.12}\tl2={:.12}\tclosure={:.17e}\tfollow19_jump={:.12}\tworst={:.12}\tjumps={:?}\tcalls={}\titerations={}",
+            candidate.label,
+            closed,
+            maximum,
+            l2,
+            closure,
+            follow19_jump,
+            worst,
+            jumps,
+            candidate.calls,
+            candidate.iterations,
+        );
+        measurements.push((candidate.label.clone(), closed, maximum, l2, follow19_jump, worst));
+    }
+
+    let best_closed = measurements.iter().any(|(_, closed, _, _, _, _)| *closed);
+    let best_max = measurements
+        .iter()
+        .filter(|(_, closed, _, _, _, _)| !best_closed || *closed)
+        .map(|(_, _, maximum, _, _, _)| *maximum)
+        .fold(f64::INFINITY, f64::min);
+    let best_l2 = measurements
+        .iter()
+        .filter(|(_, closed, maximum, _, _, _)| {
+            (!best_closed || *closed) && (*maximum - best_max).abs() <= 1e-9
+        })
+        .map(|(_, _, _, l2, _, _)| *l2)
+        .fold(f64::INFINITY, f64::min);
+    for (label, closed, maximum, l2, follow19_jump, worst) in &measurements {
+        if (!best_closed || *closed)
+            && (*maximum - best_max).abs() <= 1e-9
+            && (*l2 * *l2 - best_l2 * best_l2).abs() <= 1e-9
+        {
+            println!(
+                "ELIGIBLE\t{label}\tfollow19_jump={follow19_jump:.12}\tworst={worst:.12}\tbelow_0637774={}",
+                *follow19_jump < 0.637_774
+            );
+        }
+    }
+}
+
+fn scan_frame_bits_equal(left: &Frame3D, right: &Frame3D) -> bool {
+    let mut left_faces: Vec<_> = left.faces.iter().collect();
+    let mut right_faces: Vec<_> = right.faces.iter().collect();
+    left_faces.sort_unstable_by_key(|face| face.face);
+    right_faces.sort_unstable_by_key(|face| face.face);
+    left_faces.len() == right_faces.len()
+        && left_faces.into_iter().zip(right_faces).all(|(left, right)| {
+            left.face == right.face
+                && left.layer == right.layer
+                && left.surface_rank == right.surface_rank
+                && left.mirrored == right.mirrored
+                && left.polygon.len() == right.polygon.len()
+                && left.polygon.iter().zip(&right.polygon).all(|(left, right)| {
+                    (0..3).all(|axis| left[axis].to_bits() == right[axis].to_bits())
+                })
+        })
+}
+
+#[test]
+fn probe_anchor19_detail_and_bit_determinism() {
+    let document = sa_document();
+    let faces = extract_faces(&document.cp);
+    let desired: HashMap<_, _> = DESIRED.into_iter().collect();
+    let preferred = HashMap::from([(17, -90.0), (21, 90.0)]);
+    let seeds = [
+        ("document-overlay", snapshot_seed(&document, &desired)),
+        ("uniform-minus90", uniform_seed(&document, -90.0)),
+    ];
+    for (label, seed) in seeds {
+        let first = solve(
+            &document,
+            &faces,
+            &[driver(19, 90.0)],
+            Some(&preferred),
+            Some(&seed),
+        );
+        let second = solve(
+            &document,
+            &faces,
+            &[driver(19, 90.0)],
+            Some(&preferred),
+            Some(&seed),
+        );
+        let bit_equal = first.result.angles.iter().all(|(&hinge, &angle)| {
+            second.result.angles[&hinge].to_bits() == angle.to_bits()
+        }) && scan_frame_bits_equal(&first.result.frame, &second.result.frame);
+        let seam = max_seam_gap(&document.cp, &faces, &first.result.frame);
+        let mut ranks: Vec<_> = first
+            .result
+            .frame
+            .faces
+            .iter()
+            .map(|face| (face.face, face.surface_rank, face.layer, face.mirrored))
+            .collect();
+        ranks.sort_unstable_by_key(|item| item.0);
+        println!(
+            "DETAIL\t{label}\tselected={:?}\tclosure={:.17e}\tseam={:.17e}\titerations={}\tbit_equal={}\tranks={ranks:?}",
+            DESIRED
+                .iter()
+                .map(|&(hinge, target)| (hinge, first.result.angles[&hinge], canonical_delta(first.result.angles[&hinge], target).abs()))
+                .collect::<Vec<_>>(),
+            first.result.closure_rms,
+            seam,
+            first.result.iterations,
+            bit_equal,
+        );
+        assert!(bit_equal);
+    }
+}

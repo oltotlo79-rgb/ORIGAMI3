@@ -54,7 +54,7 @@ use ori3_cp::{Face, extract_faces};
 use ori3_layers::replay::replay;
 use ori3_model::{CreasePattern, Document, FaceId, VertexId};
 
-use crate::enumerate::{FoldSession, PoseScan, SessionStateKey, VerifiedMove};
+use crate::enumerate::{FoldSession, PoseScan, PreparedMove, SessionStateKey, VerifiedMove};
 use crate::finish::{FinishGaps, FinishTarget, FinishedForm, MeasuredTip, finish_gaps};
 
 /// 点数を比べるときの刻み。
@@ -1299,17 +1299,22 @@ fn expand(
     execution: &SearchExecution<'_>,
     seen: &BTreeSet<SessionStateKey>,
 ) -> Result<(Vec<Node>, usize), SearchAbort> {
-    let mut ranked: Vec<(usize, FinishGaps, f64, CandidateClass)> = Vec::new();
+    let mut ranked: Vec<(Option<PreparedMove>, FinishGaps, f64, CandidateClass)> = Vec::new();
     let mut safe_single_lines = BTreeSet::new();
     for fold_line in node.session.fold_lines() {
         execution.check()?;
-        let Some((mv, next)) = node.session.prepare_move(fold_line.id, budget.rank_scan) else {
+        let Some(prepared) = node.session.prepare_move(fold_line.id, budget.rank_scan) else {
             execution.check()?;
             continue; // もう折り終えている手か、粗く見ても折れない手。止めずに次の手へ。
         };
-        let gaps = finish_gaps(&goal.target, &goal.measure(next.document()));
+        let gaps = finish_gaps(&goal.target, &goal.measure(prepared.successor().document()));
         safe_single_lines.insert(fold_line.id);
-        ranked.push((mv.id, gaps, weights.score(&gaps), CandidateClass::Regular));
+        ranked.push((
+            Some(prepared),
+            gaps,
+            weights.score(&gaps),
+            CandidateClass::Regular,
+        ));
         execution.check()?;
     }
     if completion.is_some() {
@@ -1331,22 +1336,23 @@ fn expand(
             return Err(abort);
         }
         debug_assert!(!interrupted, "中断理由を保存せず網候補を打ち切った");
-        for (mv, next) in network_moves {
+        for prepared in network_moves {
             execution.check()?;
-            let gaps = finish_gaps(&goal.target, &goal.measure(next.document()));
-            let edge_changes = node.session.transition_edge_changes(&next);
-            let class = if node.session.move_is_directional_fold(mv.id) {
+            let gaps = finish_gaps(&goal.target, &goal.measure(prepared.successor().document()));
+            let edge_changes = node.session.transition_edge_changes(prepared.successor());
+            let id = prepared.verified().id;
+            let class = if node.session.move_is_directional_fold(id) {
                 CandidateClass::Directional
             } else {
                 match edge_changes {
                     (true, true) => CandidateClass::Reopen,
-                    (false, false) if node.session.move_reactivates_layer_packet(mv.id) => {
+                    (false, false) if node.session.move_reactivates_layer_packet(id) => {
                         CandidateClass::Reactivate
                     }
                     _ => CandidateClass::Regular,
                 }
             };
-            ranked.push((mv.id, gaps, weights.score(&gaps), class));
+            ranked.push((Some(prepared), gaps, weights.score(&gaps), class));
             execution.check()?;
         }
     }
@@ -1357,7 +1363,18 @@ fn expand(
         completion_key(&a.1)
             .cmp(&completion_key(&b.1))
             .then_with(|| quantize(a.2).cmp(&quantize(b.2)))
-            .then_with(|| a.0.cmp(&b.0))
+            .then_with(|| {
+                a.0.as_ref()
+                    .expect("順位付け前の候補が消費された")
+                    .verified()
+                    .id
+                    .cmp(
+                        &b.0.as_ref()
+                            .expect("順位付け前の候補が消費された")
+                            .verified()
+                            .id,
+                    )
+            })
     });
     let candidates = ranked.len();
     execution.check()?;
@@ -1382,19 +1399,25 @@ fn expand(
             break;
         };
         attempted.insert(index);
-        let id = ranked[index].0;
+        let prepared = ranked[index]
+            .0
+            .take()
+            .expect("順位付け済み候補は1回だけ細走査する");
         execution.check()?;
-        let Some((mv, next)) = node.session.prepare_move(id, budget.scan) else {
-            execution.check()?;
-            continue; // 粗く見たときは折れたが、細かく見ると折れない手。捨てる。
+        let fine = match node.session.reverify_prepared_move(prepared, budget.scan) {
+            Ok(fine) => fine,
+            Err(_) => {
+                execution.check()?;
+                continue; // 粗く見たときは折れたが、細かく見ると折れない手。捨てる。
+            }
         };
+        let (mv, next) = fine.into_parts();
         let child_state = next.state_key();
         if seen.contains(&child_state) || !child_states.insert(child_state) {
             // 同じ物理状態へ戻るcycleや、別IDから同じ終点へ来る兄弟で分岐枠を使わない。
             continue;
         }
-        // 粗い確認と細かい確認はそれぞれ独立に折り直す。結果へ載せる4値は、
-        // 実際に子状態として保持する細かい確認後の文書から改めて測る。
+        // 結果へ載せる4値は、実際に子状態として保持する細かい確認後の文書から改めて測る。
         let gaps = finish_gaps(&goal.target, &goal.measure(next.document()));
         let score = weights.score(&gaps);
         let mut steps = node.steps.clone();

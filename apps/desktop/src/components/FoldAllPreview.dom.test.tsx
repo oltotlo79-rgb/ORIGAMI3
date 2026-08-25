@@ -250,6 +250,44 @@ describe("全部いっぺんに折ってみる画面", () => {
     expect(slider).toHaveProperty("disabled", false);
   });
 
+  for (const [label, patch, extraWarningCount] of [
+    ["追加警告0件", {}, 0],
+    ["追加警告1件", { converged: false }, 1],
+    [
+      "追加警告2件",
+      { converged: false, flat_fold_violations: [2] },
+      2,
+    ],
+  ] as Array<[string, Partial<FoldAllPreviewOutcome>, number]>) {
+    it(`${label}でも戻る操作をつまみの直後に置く`, async () => {
+      vi.mocked(ipc.foldAllPreview).mockImplementation(async (percent) =>
+        outcome(percent, patch),
+      );
+      render(<ContextPanel />);
+      await enter();
+
+      const section = document.querySelector(
+        "[data-fold-all-active]",
+      ) as HTMLElement;
+      const control = section.querySelector(
+        ".fold-all-preview-control",
+      ) as HTMLElement;
+      const notices = section.querySelector(
+        ".fold-all-preview-notices",
+      ) as HTMLElement;
+      const returnRow = screen
+        .getByRole("button", { name: "いつもの表示に戻る" })
+        .closest(".button-row");
+
+      // 重なり順未確定の恒常注意1件に、可変警告が0〜2件加わる。
+      expect(notices.querySelectorAll(".warning-text")).toHaveLength(
+        extraWarningCount + 1,
+      );
+      expect(control.nextElementSibling).toBe(returnRow);
+      expect(returnRow?.nextElementSibling).toBe(notices);
+    });
+  }
+
   it("いつもの表示へ戻ると専用表示を閉じて元の手順位置を再計算する", async () => {
     render(<ContextPanel />);
     await enter();

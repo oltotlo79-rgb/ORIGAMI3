@@ -10,6 +10,7 @@
     "export-help": "node ./node_modules/tsx/dist/cli.mjs scripts/export-help-content.ts",
     "lint": "eslint .",
     "test": "vitest run --configLoader runner",
+    "test:backface-canonical-cdp": "node tests-live/backface-canonical-cdp.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },

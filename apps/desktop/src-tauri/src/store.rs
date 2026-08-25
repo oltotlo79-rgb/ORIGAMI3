@@ -15,6 +15,7 @@
 //! 状態を確定する。導出がpanicしてもstoreは直前の整合状態を保つ(guardがErr化する)。
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -22,6 +23,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::cell::Cell;
 
 use ori3_cp::Face;
+use ori3_export::fold::{FoldConversionError, FoldImport, FoldIssue, FoldParseError};
 use ori3_model::{
     CreasePattern, Document, Driver, EdgeId, EdgeKind, EditOp, FaceId, FoldStep, Frame3D,
     MAX_GRID_DIVISIONS, MIN_GRID_DIVISIONS, Paper, SCHEMA_VERSION, SavedDocument, SeqOp,
@@ -124,6 +126,9 @@ pub struct DocumentView {
     /// 2D画面が「その手順の時点の展開図」を推測せずに組み立てるための来歴で、
     /// 作品ファイルにも同じ形で保存する。
     pub step_creases: Vec<StepCreases>,
+    /// FOLD 1.2 限定の読込で置き換えた内容。確認待ちのgateには使わず、
+    /// 読込済みの作品と一緒に画面へ返す。
+    pub fold_issues: Vec<FoldIssue>,
     pub faces: Vec<Face>,
     /// 操作固有の警告 + `ori3_cp::validate` + 手順再生の警告(「止めずに警告」原則)
     pub warnings: Vec<String>,
@@ -159,6 +164,53 @@ pub struct DocumentView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fold_through_proposal: Option<ori3_layers::FoldThroughProposal>,
 }
+
+/// FOLDの読込を確定する前に起きた失敗。
+///
+/// parse時はstoreへ触れず、変換時はそれまでに集めたwarningとblocking errorを
+/// [`FoldConversionError`]のまま保持する。
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum FoldImportError {
+    Parse(FoldParseError),
+    Conversion(FoldConversionError),
+}
+
+impl FoldImportError {
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn warnings(&self) -> &[FoldIssue] {
+        match self {
+            Self::Parse(_) => &[],
+            Self::Conversion(error) => &error.warnings,
+        }
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn errors(&self) -> &[FoldIssue] {
+        match self {
+            Self::Parse(_) => &[],
+            Self::Conversion(error) => &error.errors,
+        }
+    }
+}
+
+impl fmt::Display for FoldImportError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Parse(_) => write!(
+                formatter,
+                "FOLD 1.2 限定のファイルを読み取れませんでした。ファイルの内容を確認してください。"
+            ),
+            Self::Conversion(_) => write!(
+                formatter,
+                "このFOLD 1.2 限定ファイルには、ORIGAMI3で扱えない内容があります。"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for FoldImportError {}
 
 /// undo/redoで行き来する状態一式。展開図・手順と、その来歴は必ず一緒に戻す。
 #[derive(Clone, Debug, PartialEq)]
@@ -264,6 +316,26 @@ impl DocumentStore {
         self.path = Some(path.to_path_buf());
         self.pose_angles = None;
         Ok(view)
+    }
+
+    /// FOLD 1.2 限定を、既存undoで1回に戻せる未保存作品として読み込む。
+    ///
+    /// command層がlock外でparse・限定profile変換を終えた候補値を受け取り、
+    /// [`Self::commit_prebuilt`]を1回だけ通す。warningは確認gateにせず、
+    /// [`DocumentView::fold_issues`]へ全件載せて読込結果と同時に返す。
+    pub(crate) fn import_fold(&mut self, import: FoldImport) -> DocumentView {
+        let FoldImport { document, warnings } = import;
+        // FOLD frameは同じ紙・同じedge topologyの角度snapshotであり、各手順で
+        // 展開図へ新しい線を足した来歴はない。旧`.ori3`と同じ空の来歴で保持する。
+        let step_creases = Vec::new();
+        let mut view = build_view(&document, &step_creases, Vec::new());
+        view.fold_issues = warnings;
+
+        let view = self.commit_prebuilt(document, step_creases, view);
+        self.dirty = true;
+        self.path = None;
+        self.pose_angles = None;
+        view
     }
 
     /// `.ori3`ファイル(pretty JSON)へ保存する。`None`なら前回のパスへ上書き。
@@ -997,6 +1069,7 @@ fn build_view(
     DocumentView {
         doc: doc.clone(),
         step_creases: retain_existing_steps(doc, step_creases),
+        fold_issues: Vec::new(),
         faces: ori3_cp::extract_faces(&doc.cp),
         warnings,
         violations: ori3_cp::local_violations(&doc.cp),
@@ -1671,12 +1744,61 @@ fn is_border(cp: &CreasePattern, id: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use ori3_export::fold::{fold_to_document, parse_fold_1_2};
     use ori3_model::{
         AlignmentTarget, DisplaySettings, DriverLine, Edge, Face3D, FinishSoftSettings,
         FoldAlignment, FoldStep, TechniqueKind, Vertex,
     };
+    use serde::Deserialize;
 
     mod movestep_contract;
+
+    const FOLD_IMPORT_SUCCESS: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../crates/ori3-export/tests/fixtures/fold/flat-face-orders.fold"
+    ));
+    const FOLD_IMPORT_WARNINGS_20: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../crates/ori3-export/tests/fixtures/fold/unsupported-extensions.fold"
+    ));
+    const FOLD_IMPORT_WARNING_AND_ERROR: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../crates/ori3-export/tests/fixtures/fold/fu-assignments.fold"
+    ));
+    const FOLD_MALFORMED_100: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../crates/ori3-export/tests/fixtures/fold/malformed-store-cases.json"
+    ));
+
+    const MALFORMED_CATEGORY_COUNT: usize = 10;
+    const MALFORMED_CASES_PER_CATEGORY: usize = 10;
+    const MALFORMED_TOTAL: usize = MALFORMED_CATEGORY_COUNT * MALFORMED_CASES_PER_CATEGORY;
+    // 追跡manifestの実測最大は526 bytes。実測を境目にせず約7.8倍の余裕を取り、
+    // 巨大入力検査と混ざらない4 KiB未満をこの検査の上限にする。
+    const MALFORMED_MAX_CASE_BYTES: usize = 4 * 1024;
+
+    #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+    #[serde(rename_all = "snake_case")]
+    enum FoldRejectAt {
+        Parse,
+        Convert,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct FoldMalformedCase {
+        category: String,
+        name: String,
+        expected: FoldRejectAt,
+        source: String,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct FoldMalformedManifest {
+        schema: u32,
+        cases: Vec<FoldMalformedCase>,
+    }
 
     fn square_store() -> DocumentStore {
         let mut store = DocumentStore::default();
@@ -1687,6 +1809,249 @@ mod tests {
             })
             .unwrap();
         store
+    }
+
+    fn seeded_fold_import_store() -> DocumentStore {
+        let mut store = square_store();
+        let mut recorded_step = step(40);
+        recorded_step.kind = TechniqueKind::Pose;
+        store
+            .apply_seq(SeqOp::PushStep {
+                step: recorded_step,
+            })
+            .expect("seedの手順を通常操作で追加できる");
+        store
+            .apply_edit(diagonal())
+            .expect("seedの展開図を通常操作で変更できる");
+        store.undo().expect("redo内容を通常操作で作れる");
+        store.dirty = false;
+        store.path = Some(PathBuf::from("seed-before-fold.ori3"));
+        assert!(!store.doc.sequence.is_empty());
+        assert!(!store.step_creases.is_empty());
+        assert!(!store.undo_stack.is_empty());
+        assert!(!store.redo_stack.is_empty());
+        store
+    }
+
+    fn malformed_fold_cases() -> Vec<FoldMalformedCase> {
+        let manifest: FoldMalformedManifest =
+            serde_json::from_str(FOLD_MALFORMED_100).expect("追跡済み100件manifestを読める");
+        assert_eq!(manifest.schema, 1, "malformed manifest schema");
+        manifest.cases
+    }
+
+    #[test]
+    fn fold_import_is_one_undoable_dirty_unsaved_operation() {
+        let file = parse_fold_1_2(FOLD_IMPORT_SUCCESS).expect("成功fixtureをparseできる");
+        let expected = fold_to_document(&file).expect("成功fixtureを変換できる");
+        assert!(expected.warnings.is_empty());
+
+        let mut store = seeded_fold_import_store();
+        let before_document = store.doc.clone();
+        let before_step_creases = store.step_creases.clone();
+        let before_undo_len = store.undo_stack.len();
+        reset_commit_count_for_test();
+
+        let view = store.import_fold(expected.clone());
+        assert_eq!(view.doc, expected.document);
+        assert!(
+            view.step_creases.is_empty(),
+            "FOLDは追加折り線の来歴を持たない"
+        );
+        assert!(store.step_creases.is_empty());
+        assert!(view.fold_issues.is_empty());
+        assert_eq!(commit_count_for_test(), 1, "FOLD読込のcommitはexactに1回");
+        assert_eq!(store.undo_stack.len(), before_undo_len + 1);
+        assert!(store.redo_stack.is_empty(), "新しい読込でredoを消す");
+        assert!(store.is_dirty(), "FOLD読込後は未保存");
+        assert_eq!(store.current_path(), None, "読込元.foldを保存先にしない");
+
+        let imported_document = store.doc.clone();
+        let imported_step_creases = store.step_creases.clone();
+        store.undo().expect("既存undoでFOLD読込を1回で戻せる");
+        assert_eq!(store.doc, before_document);
+        assert_eq!(store.step_creases, before_step_creases);
+        assert_eq!(store.current_path(), None, "既存undoは保存先を履歴化しない");
+        store.redo().expect("既存redoでFOLD読込をやり直せる");
+        assert_eq!(store.doc, imported_document);
+        assert_eq!(store.step_creases, imported_step_creases);
+    }
+
+    #[test]
+    fn fold_import_with_warnings_commits_without_a_confirmation_gate() {
+        let file = parse_fold_1_2(FOLD_IMPORT_WARNINGS_20).expect("警告fixtureをparseできる");
+        let expected = fold_to_document(&file).expect("警告だけなら変換できる");
+        assert_eq!(expected.warnings.len(), 20);
+        assert!(expected.warnings.iter().all(|issue| !issue.path.is_empty()));
+        assert!(
+            expected
+                .warnings
+                .iter()
+                .all(|issue| issue.original_value.is_some())
+        );
+
+        let mut store = seeded_fold_import_store();
+        let before = store.atomicity_probe_for_test();
+        reset_commit_count_for_test();
+        let view = store.import_fold(expected.clone());
+
+        assert_ne!(
+            store.atomicity_probe_for_test(),
+            before,
+            "警告をgateにしない"
+        );
+        assert_eq!(view.doc, expected.document);
+        assert_eq!(view.fold_issues, expected.warnings);
+        assert_eq!(view.fold_issues.len(), 20);
+        assert_eq!(commit_count_for_test(), 1, "警告付き読込もcommitは1回");
+        assert!(store.is_dirty());
+        assert_eq!(store.current_path(), None);
+    }
+
+    #[test]
+    fn fold_conversion_failure_keeps_the_complete_store_and_all_issues() {
+        let file = parse_fold_1_2(FOLD_IMPORT_WARNING_AND_ERROR).expect("変換段階まで進むfixture");
+        let expected = fold_to_document(&file).expect_err("警告とerrorが同居するfixture");
+        assert!(!expected.warnings.is_empty());
+        assert!(!expected.errors.is_empty());
+
+        let store = seeded_fold_import_store();
+        let before = store.atomicity_probe_for_test();
+        reset_commit_count_for_test();
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            fold_to_document(&file).map_err(FoldImportError::Conversion)
+        }));
+        let error = caught
+            .expect("変換拒否でpanicしない")
+            .expect_err("意味を変えるFOLDは読み込まない");
+
+        assert_eq!(store.atomicity_probe_for_test(), before);
+        assert_eq!(commit_count_for_test(), 0, "拒否時commitは0回");
+        assert_eq!(error.warnings(), expected.warnings);
+        assert_eq!(error.errors(), expected.errors);
+    }
+
+    #[test]
+    fn fold_import_errors_use_only_user_facing_text() {
+        let parse_error = parse_fold_1_2("{").expect_err("壊れたJSONは拒否する");
+        assert_eq!(
+            FoldImportError::Parse(parse_error).to_string(),
+            "FOLD 1.2 限定のファイルを読み取れませんでした。ファイルの内容を確認してください。"
+        );
+
+        let file = parse_fold_1_2(FOLD_IMPORT_WARNING_AND_ERROR).expect("変換段階まで進むfixture");
+        let conversion_error = fold_to_document(&file).expect_err("対応範囲外は拒否する");
+        assert_eq!(
+            FoldImportError::Conversion(conversion_error).to_string(),
+            "このFOLD 1.2 限定ファイルには、ORIGAMI3で扱えない内容があります。"
+        );
+    }
+
+    #[test]
+    fn fold_import_rejects_malformed_100_without_panic_or_store_change() {
+        let cases = malformed_fold_cases();
+        assert_eq!(cases.len(), MALFORMED_TOTAL);
+
+        let mut category_counts = BTreeMap::<String, usize>::new();
+        let mut expected_stage_counts = BTreeMap::<FoldRejectAt, usize>::new();
+        let mut names = BTreeSet::new();
+        let mut identities = BTreeSet::new();
+        let mut sources = BTreeSet::new();
+        for case in &cases {
+            *category_counts.entry(case.category.clone()).or_default() += 1;
+            *expected_stage_counts.entry(case.expected).or_default() += 1;
+            assert!(names.insert(case.name.clone()), "name重複: {}", case.name);
+            assert!(identities.insert((case.category.clone(), case.name.clone())));
+            assert!(
+                sources.insert(case.source.clone()),
+                "source重複: {}",
+                case.name
+            );
+            assert!(
+                case.source.len() < MALFORMED_MAX_CASE_BYTES,
+                "巨大caseは禁止: {} bytes ({})",
+                case.source.len(),
+                case.name
+            );
+        }
+        assert_eq!(category_counts.len(), MALFORMED_CATEGORY_COUNT);
+        assert_eq!(
+            category_counts
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec![
+                "01_invalid_json",
+                "02_root_and_version",
+                "03_known_field_types",
+                "04_array_element_types",
+                "05_required_and_cardinality",
+                "06_topology",
+                "07_unsupported_profile",
+                "08_frame_sequence",
+                "09_assignment_and_angle",
+                "10_face_orders",
+            ]
+        );
+        assert!(
+            category_counts
+                .values()
+                .all(|&count| count == MALFORMED_CASES_PER_CATEGORY)
+        );
+        assert_eq!(expected_stage_counts.get(&FoldRejectAt::Parse), Some(&40));
+        assert_eq!(expected_stage_counts.get(&FoldRejectAt::Convert), Some(&60));
+
+        let mut actual_stage_counts = BTreeMap::<FoldRejectAt, usize>::new();
+        let mut panic_count = 0_usize;
+        for case in &cases {
+            let actual_stage = match parse_fold_1_2(&case.source) {
+                Err(_) => FoldRejectAt::Parse,
+                Ok(file) => {
+                    let typed_before = file.clone();
+                    let converted = fold_to_document(&file);
+                    assert_eq!(file, typed_before, "typed入力を変更した: {}", case.name);
+                    assert!(converted.is_err(), "不正入力が変換成功: {}", case.name);
+                    FoldRejectAt::Convert
+                }
+            };
+            assert_eq!(actual_stage, case.expected, "拒否段階: {}", case.name);
+            *actual_stage_counts.entry(actual_stage).or_default() += 1;
+
+            let mut store = seeded_fold_import_store();
+            let before = store.atomicity_probe_for_test();
+            reset_commit_count_for_test();
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                parse_fold_1_2(&case.source)
+                    .map_err(FoldImportError::Parse)
+                    .and_then(|file| fold_to_document(&file).map_err(FoldImportError::Conversion))
+                    .map(|import| store.import_fold(import))
+            }));
+            let result = match caught {
+                Ok(result) => result,
+                Err(_) => {
+                    panic_count += 1;
+                    assert_eq!(
+                        store.atomicity_probe_for_test(),
+                        before,
+                        "panic時にもstoreを部分更新しない: {}",
+                        case.name
+                    );
+                    continue;
+                }
+            };
+            assert!(result.is_err(), "不正入力が成功: {}", case.name);
+            assert_eq!(
+                store.atomicity_probe_for_test(),
+                before,
+                "拒否時store完全不変: {}",
+                case.name
+            );
+            assert_eq!(commit_count_for_test(), 0, "拒否時commit: {}", case.name);
+        }
+
+        assert_eq!(actual_stage_counts.get(&FoldRejectAt::Parse), Some(&40));
+        assert_eq!(actual_stage_counts.get(&FoldRejectAt::Convert), Some(&60));
+        assert_eq!(panic_count, 0, "malformed 100件のpanicは0");
     }
 
     fn diagonal() -> EditOp {

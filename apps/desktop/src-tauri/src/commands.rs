@@ -18,16 +18,19 @@ use tauri::State;
 
 use crate::autosave;
 use crate::store::{
-    DocumentStore, DocumentView, SpatialFoldSpec, add_penetration_warning_for_intersections,
-    apply_layer_order_display_settings, attach_replay, filter_penetration_warnings,
-    flat_fold_notice_violations, frame_surface_rank_order, pose_flat_fold_notice_intersects,
-    prevent_replay_overlap_if_authoritative, replay_flat_fold_notice_violations,
-    replay_surface_rank_order,
+    DocumentStore, DocumentView, FoldImportError, SpatialFoldSpec,
+    add_penetration_warning_for_intersections, apply_layer_order_display_settings, attach_replay,
+    filter_penetration_warnings, flat_fold_notice_violations, frame_surface_rank_order,
+    pose_flat_fold_notice_intersects, prevent_replay_overlap_if_authoritative,
+    replay_flat_fold_notice_violations, replay_surface_rank_order,
+};
+use ori3_export::fold::{
+    FoldExport, FoldIssue, document_to_fold, fold_to_document, parse_fold_1_2, write_fold_1_2,
 };
 use ori3_export::{CpSvgOptions, cp_png, cp_svg, diagram_pdf, diagram_svg_pages};
 use ori3_model::{
-    CreasePattern, DisplaySettings, Document, Driver, EdgeId, EditOp, FaceId, FinishSoftSettings,
-    FoldStep, Frame3D, Paper, SeqOp, TechniqueKind, VertexId,
+    CreasePattern, DisplaySettings, Document, Driver, EdgeId, EdgeKind, EditOp, FaceId,
+    FinishSoftSettings, FoldStep, Frame3D, Paper, SeqOp, TechniqueKind, VertexId,
 };
 use ori3_propose::{
     CompletionTolerance, FinishTarget, FoldGoal, FoldSession, GapWeights, LeafSite, Packing,
@@ -39,6 +42,8 @@ use ori3_soft::{SoftMesh, SoftSettings};
 
 /// 複数ファイル書き出し用の同名一時ファイルを区別する連番。
 static EXPORT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+type ExportPayloads = Vec<(String, Vec<u8>)>;
+type ExportBuild = (ExportPayloads, Vec<FoldIssue>);
 
 /// たわみの計算結果を足した `pose_solve` の戻り値(SIM-012)。
 /// 既存の中身は `#[serde(flatten)]` でそのまま並べるので、たわみを使わない
@@ -53,6 +58,40 @@ pub struct PoseOutcome {
     pub contact_detected: bool,
     /// 今回の±180°指定に関係し、指定角まで届かなかったか紙が食い込んだ通知対象の点。
     pub flat_fold_violations: Vec<VertexId>,
+}
+
+/// 通常の連続操作と、Documentから同じ姿勢を再導出する確定操作を区別する。
+///
+/// IPCで省略された場合も既存呼出しと同じ [`Self::Follow`] にする。
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+pub enum PoseSolveMode {
+    #[default]
+    Follow,
+    Canonical,
+}
+
+/// 画面から姿勢計算へ渡す値。Tauriの1引数へまとめるだけで、各値の意味は変えない。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PoseSolveRequest {
+    hard: Vec<Driver>,
+    preferred: Option<Vec<Driver>>,
+    soft: Option<SoftSettings>,
+    warm_seed: Option<Vec<Driver>>,
+    up_to: usize,
+    t: f64,
+    mode: Option<PoseSolveMode>,
+}
+
+/// IPC境界の省略可能なmodeを確定した、姿勢計算本体への入力。
+pub(crate) struct PoseSolveInput {
+    pub(crate) hard: Vec<Driver>,
+    pub(crate) preferred: Option<Vec<Driver>>,
+    pub(crate) soft: Option<SoftSettings>,
+    pub(crate) warm_seed: Option<Vec<Driver>>,
+    pub(crate) up_to: usize,
+    pub(crate) t: f64,
+    pub(crate) mode: PoseSolveMode,
 }
 
 /// 手順を持たない一斉折りでは、物理的な面の上下を確定できないことを示す。
@@ -365,7 +404,24 @@ pub fn document_open(
     path: String,
 ) -> Result<DocumentView, String> {
     guard(AssertUnwindSafe(|| {
-        view_command(&state, || lock(&state).open(Path::new(&path)))
+        let path = Path::new(&path);
+        if path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("fold"))
+        {
+            // I/O・parse・変換はstore lockの外で終え、候補値を組み立ててから
+            // storeの既存commit境界へ渡す。失敗時はstoreへ一度も触れない。
+            let source = std::fs::read_to_string(path)
+                .map_err(|error| format!("ファイルを開けませんでした: {error}"))?;
+            let file = parse_fold_1_2(&source)
+                .map_err(|error| FoldImportError::Parse(error).to_string())?;
+            let import = fold_to_document(&file)
+                .map_err(|error| FoldImportError::Conversion(error).to_string())?;
+            view_command(&state, || Ok(lock(&state).import_fold(import)))
+        } else {
+            view_command(&state, || lock(&state).open(path))
+        }
     }))
 }
 
@@ -534,6 +590,37 @@ fn pose_motion_contact_options(
     }
 }
 
+/// Canonical候補へ渡すDocument由来seedを、全折りヒンジを含む形へ正規化する。
+/// 手順のない書類は全0度、手順のある書類は再生角を上書きし、不足hingeは0度にする。
+fn canonical_document_seed(
+    doc: &Document,
+    faces: &[ori3_cp::Face],
+    up_to: usize,
+    t: f64,
+) -> HashMap<EdgeId, f64> {
+    let replay_angles = (!doc.sequence.is_empty())
+        .then(|| ori3_layers::replay_with_faces(doc, faces, up_to, t).hinge_angles);
+    let mut hinges: Vec<EdgeId> = doc
+        .cp
+        .edges
+        .iter()
+        .filter(|edge| matches!(edge.kind, EdgeKind::Mountain | EdgeKind::Valley))
+        .map(|edge| edge.id)
+        .collect();
+    hinges.sort_unstable();
+    hinges
+        .into_iter()
+        .map(|hinge| {
+            let angle = replay_angles
+                .as_ref()
+                .and_then(|angles| angles.get(&hinge))
+                .copied()
+                .unwrap_or(0.0);
+            (hinge, angle)
+        })
+        .collect()
+}
+
 /// 折り角度の追従計算(Task 1-8)。driver角を固定して残りのヒンジ角を解き、
 /// 3D表示用フレームを返す。前回解はstoreが保持し、warm startとして使う。
 /// facesは編集時に導出済みのstoreのキャッシュを流用する(extract_faces再実行なし)。
@@ -551,22 +638,34 @@ fn pose_motion_contact_options(
 #[tauri::command(async)]
 pub fn pose_solve(
     state: State<'_, Mutex<DocumentStore>>,
-    hard: Vec<Driver>,
-    preferred: Option<Vec<Driver>>,
-    soft: Option<SoftSettings>,
-    warm_seed: Option<Vec<Driver>>,
-    up_to: usize,
-    t: f64,
+    request: PoseSolveRequest,
 ) -> Result<PoseOutcome, String> {
-    pose_solve_core(
-        state.inner(),
+    let PoseSolveRequest {
         hard,
         preferred,
         soft,
         warm_seed,
         up_to,
         t,
-    )
+        mode,
+    } = request;
+    match mode.unwrap_or_default() {
+        PoseSolveMode::Follow => {
+            pose_solve_core(state.inner(), hard, preferred, soft, warm_seed, up_to, t)
+        }
+        PoseSolveMode::Canonical => pose_solve_core_with_mode(
+            state.inner(),
+            PoseSolveInput {
+                hard,
+                preferred,
+                soft,
+                warm_seed,
+                up_to,
+                t,
+                mode: PoseSolveMode::Canonical,
+            },
+        ),
+    }
 }
 
 /// Tauriの状態包装と姿勢計算を分ける。製品commandと恒久検査が同じ本体を通り、
@@ -580,6 +679,34 @@ pub(crate) fn pose_solve_core(
     up_to: usize,
     t: f64,
 ) -> Result<PoseOutcome, String> {
+    pose_solve_core_with_mode(
+        state,
+        PoseSolveInput {
+            hard,
+            preferred,
+            soft,
+            warm_seed,
+            up_to,
+            t,
+            mode: PoseSolveMode::Follow,
+        },
+    )
+}
+
+/// [`pose_solve_core`] の互換経路と、確定時のcanonical再導出を同じ後処理へ通す。
+pub(crate) fn pose_solve_core_with_mode(
+    state: &Mutex<DocumentStore>,
+    input: PoseSolveInput,
+) -> Result<PoseOutcome, String> {
+    let PoseSolveInput {
+        hard,
+        preferred,
+        soft,
+        warm_seed,
+        up_to,
+        t,
+        mode,
+    } = input;
     guard(AssertUnwindSafe(|| {
         let (doc, faces, stored_warm, overlap_enabled, penetration_enabled) =
             lock_inner(state).pose_inputs(); // 複製のみ、即ロック解放
@@ -590,18 +717,27 @@ pub(crate) fn pose_solve_core(
         // 同じ辺が両方にあれば、現在操作中のhardを後から入れて優先する。
         // warm_seedは出発角であって要求ではないため含めない。
         let requested_targets: Vec<Driver> = preferred.iter().chain(&hard).cloned().collect();
-        let explicit_warm: Option<HashMap<EdgeId, f64>> = warm_seed.map(|seed| {
-            seed.into_iter()
-                .map(|driver| (driver.hinge, driver.target_angle_deg))
-                .collect()
-        });
-        if explicit_warm
-            .as_ref()
-            .is_some_and(|seed| seed.values().any(|angle| !angle.is_finite()))
+        // CanonicalはDocumentと希望値だけから候補を作る。呼出し元やstoreに残る
+        // warmは値の検査にも使わず、非有限結果のfallbackにも渡さない。
+        let explicit_warm: Option<HashMap<EdgeId, f64>> = match mode {
+            PoseSolveMode::Follow => warm_seed.map(|seed| {
+                seed.into_iter()
+                    .map(|driver| (driver.hinge, driver.target_angle_deg))
+                    .collect()
+            }),
+            PoseSolveMode::Canonical => None,
+        };
+        if mode == PoseSolveMode::Follow
+            && explicit_warm
+                .as_ref()
+                .is_some_and(|seed| seed.values().any(|angle| !angle.is_finite()))
         {
             return Err("追従計算の出発角に有限でない値があります".to_string());
         }
-        let warm = explicit_warm.as_ref().or(stored_warm.as_ref());
+        let warm = match mode {
+            PoseSolveMode::Follow => explicit_warm.as_ref().or(stored_warm.as_ref()),
+            PoseSolveMode::Canonical => None,
+        };
         let driver_hinges: Vec<EdgeId> = hard
             .iter()
             .chain(&preferred)
@@ -613,14 +749,29 @@ pub(crate) fn pose_solve_core(
                 .map(|d| (d.hinge, d.target_angle_deg))
                 .collect()
         });
-        let motion = ori3_rigid::solve_motion_with_contact_options(
-            cp,
-            &faces,
-            &hard,
-            targets.as_ref(),
-            warm,
-            pose_motion_contact_options(overlap_enabled, penetration_enabled),
-        );
+        let contact = pose_motion_contact_options(overlap_enabled, penetration_enabled);
+        let document_seed = (mode == PoseSolveMode::Canonical)
+            .then(|| canonical_document_seed(&doc, &faces, up_to, t));
+        let motion = match mode {
+            PoseSolveMode::Follow => ori3_rigid::solve_motion_with_contact_options(
+                cp,
+                &faces,
+                &hard,
+                targets.as_ref(),
+                warm,
+                contact,
+            ),
+            PoseSolveMode::Canonical => {
+                ori3_rigid::motion::solve_canonical_motion_with_contact_options(
+                    cp,
+                    &faces,
+                    &hard,
+                    targets.as_ref(),
+                    document_seed.as_ref(),
+                    contact,
+                )
+            }
+        };
         let mut contact_detected = motion.contact_detected;
         let surface_order_authoritative =
             usable_pose_surface_order(motion.surface_order_authoritative, &motion.result);
@@ -1799,6 +1950,8 @@ pub enum ExportKind {
     DiagramPdf,
     /// 折り図の画像(SVG。ページごとに別ファイル)
     DiagramSvg,
+    /// FOLD 1.2 限定(JSON、単一ファイル)
+    FoldJson,
 }
 
 /// 書き出しの細かい指定。
@@ -1840,15 +1993,16 @@ pub fn document_export(
     kind: ExportKind,
     path: String,
     options: ExportOptions,
-) -> Result<(), String> {
+) -> Result<Vec<FoldIssue>, String> {
     guard(AssertUnwindSafe(move || {
         let doc = lock(&state).export_inputs(); // 複製のみ、即ロック解放
         // 先に全ページぶんを作り切る。途中の手順で失敗しても、その時点では
         // まだ1つもファイルを作っていないので中途半端な結果が残らない
         // 全ページを先にメモリへ作り、次に全て一時ファイルへ書く。途中で失敗しても
         // 既存の完成ファイルには触れない。
-        let files = export_files(&doc, kind, options)?;
-        write_export_files(Path::new(&path), &files)
+        let (files, fold_issues) = export_files(&doc, kind, options)?;
+        write_export_files(Path::new(&path), &files)?;
+        Ok(fold_issues)
     }))
 }
 
@@ -1928,11 +2082,12 @@ fn export_files(
     doc: &ori3_model::Document,
     kind: ExportKind,
     options: ExportOptions,
-) -> Result<Vec<(String, Vec<u8>)>, String> {
+) -> Result<ExportBuild, String> {
     let opts = CpSvgOptions {
         include_aux: options.include_aux,
     };
-    Ok(match kind {
+    let mut fold_issues = Vec::new();
+    let files = match kind {
         ExportKind::CpSvg => vec![(String::new(), cp_svg(doc, &opts).into_bytes())],
         ExportKind::CpPng => {
             let px = png_long_side(options.png_long_side)?;
@@ -1944,11 +2099,24 @@ fn export_files(
             .enumerate()
             .map(|(i, page)| (format!("-{:02}", i + 1), page.into_bytes()))
             .collect(),
-    })
+        ExportKind::FoldJson => {
+            let user_error = || {
+                "この作品はFOLD 1.2 限定として書き出せません。作品の内容を確認してください。"
+                    .to_string()
+            };
+            let FoldExport { file, warnings } = document_to_fold(doc).map_err(|_| user_error())?;
+            let json = write_fold_1_2(&file).map_err(|_| user_error())?;
+            fold_issues = warnings;
+            vec![(String::new(), json.into_bytes())]
+        }
+    };
+    Ok((files, fold_issues))
 }
 
 #[cfg(test)]
 mod tests {
+    #[path = "canonical_pose_contract.rs"]
+    mod canonical_pose_contract;
     mod movestep_contract;
 
     use super::{
@@ -1961,6 +2129,34 @@ mod tests {
         recorded_soft_settings, run_proposal_job, stamp_saved_layer_order,
         usable_pose_surface_order,
     };
+
+    #[test]
+    fn pose_solve_request_keeps_all_seven_ipc_values() {
+        use super::{PoseSolveMode, PoseSolveRequest};
+
+        let request: PoseSolveRequest = serde_json::from_value(serde_json::json!({
+            "hard": [{ "hinge": 19, "target_angle_deg": 90.0 }],
+            "preferred": [{ "hinge": 17, "target_angle_deg": -90.0 }],
+            "soft": null,
+            "warmSeed": [{ "hinge": 21, "target_angle_deg": 45.0 }],
+            "upTo": 2,
+            "t": 0.4,
+            "mode": "Canonical"
+        }))
+        .expect("画面の7値をrequestから復元できる");
+
+        assert_eq!(request.hard.len(), 1);
+        assert_eq!(request.hard[0].hinge, 19);
+        assert_eq!(request.hard[0].target_angle_deg, 90.0);
+        assert_eq!(request.preferred.as_ref().map(Vec::len), Some(1));
+        assert!(request.soft.is_none());
+        assert_eq!(request.warm_seed.as_ref().map(Vec::len), Some(1));
+        assert_eq!(request.up_to, 2);
+        // JSON literal 0.4 の復元実測差は0。計算値のexact比較を避け、
+        // wire値を取り違えれば十分検出できる1e-12を境界にする。
+        assert!((request.t - 0.4).abs() <= 1e-12);
+        assert_eq!(request.mode, Some(PoseSolveMode::Canonical));
+    }
     use ori3_model::{
         DisplaySettings, Document, Driver, EdgeId, EdgeKind, Face3D, FaceId, FinishSoftSettings,
         FoldStep, Frame3D, Paper, SeqOp, TechniqueKind, VertexId,
@@ -3266,13 +3462,15 @@ mod tests {
             include_aux: true,
             png_long_side: 128,
         };
-        let svg = export_files(&doc, ExportKind::CpSvg, opts).unwrap();
+        let (svg, svg_issues) = export_files(&doc, ExportKind::CpSvg, opts).unwrap();
+        assert!(svg_issues.is_empty());
         assert_eq!(svg.len(), 1);
         assert!(svg[0].0.is_empty(), "1つのファイルなので番号は付かない");
         let text = String::from_utf8(svg[0].1.clone()).unwrap();
         assert!(text.contains("viewBox=\"0 0 150 150\""), "{text}");
 
-        let png = export_files(&doc, ExportKind::CpPng, opts).unwrap();
+        let (png, png_issues) = export_files(&doc, ExportKind::CpPng, opts).unwrap();
+        assert!(png_issues.is_empty());
         assert_eq!(&png[0].1[0..8], b"\x89PNG\r\n\x1a\n");
 
         // 点数が0など無理な指定は日本語のErr(パニックにしない)
@@ -3281,6 +3479,90 @@ mod tests {
             png_long_side: 0,
         };
         assert!(export_files(&doc, ExportKind::CpPng, bad).is_err());
+    }
+
+    #[test]
+    fn fold_export_returns_parseable_bytes_and_structured_warnings() {
+        use super::{ExportKind, ExportOptions, export_files};
+        use ori3_export::fold::{FoldIssueCode, parse_fold_1_2};
+
+        let mut doc = ori3_model::Document::new(A4ISH);
+        ori3_cp::insert_segment(&mut doc.cp, [0.5, 0.0], [0.5, 1.0], EdgeKind::Aux);
+        let options = ExportOptions {
+            include_aux: false,
+            png_long_side: 128,
+        };
+
+        let (files, issues) =
+            export_files(&doc, ExportKind::FoldJson, options).expect("FOLDを書き出せる");
+        assert_eq!(files.len(), 1);
+        assert!(files[0].0.is_empty(), "単一ファイルは既存の空suffixを使う");
+        let text = std::str::from_utf8(&files[0].1).expect("FOLD JSONはUTF-8");
+        parse_fold_1_2(text).expect("製品writerのFOLDを製品parserで読める");
+        let aux = issues
+            .iter()
+            .find(|issue| issue.code == FoldIssueCode::AssignmentDowngradedToAux)
+            .expect("AuxからUへの変更を警告する");
+        assert!(!aux.path.is_empty());
+        assert!(aux.original_value.is_some());
+        let wire = serde_json::to_value(aux).expect("FoldIssueをそのままIPCへ渡せる");
+        assert_eq!(
+            wire.get("path").and_then(serde_json::Value::as_str),
+            Some(aux.path.as_str())
+        );
+        assert!(wire.get("original_value").is_some());
+    }
+
+    #[test]
+    fn fold_export_uses_the_existing_single_file_writer() {
+        use super::{ExportKind, ExportOptions, export_files, write_export_files};
+
+        let doc = ori3_model::Document::new(A4ISH);
+        let options = ExportOptions {
+            include_aux: false,
+            png_long_side: 128,
+        };
+        let (files, _) =
+            export_files(&doc, ExportKind::FoldJson, options).expect("FOLDを書き出せる");
+        let dir = std::env::temp_dir().join(format!(
+            "ori3_fold_export_{}_{}",
+            std::process::id(),
+            super::EXPORT_TEMP_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).expect("検査用directoryを作れる");
+        let target = dir.join("roundtrip.fold");
+        write_export_files(&target, &files).expect("既存writerで単一FOLDを書ける");
+        let text = std::fs::read_to_string(&target).expect("書いたFOLDを読める");
+        ori3_export::fold::parse_fold_1_2(&text).expect("書いたFOLDをparseできる");
+        std::fs::remove_dir_all(&dir).expect("検査用directoryを片付けられる");
+    }
+
+    #[test]
+    fn fold_export_conversion_failure_never_touches_an_existing_file() {
+        use super::{ExportKind, ExportOptions, export_files};
+
+        let mut doc = ori3_model::Document::new(A4ISH);
+        doc.paper.width_mm = f64::NAN;
+        let options = ExportOptions {
+            include_aux: false,
+            png_long_side: 128,
+        };
+        let dir = std::env::temp_dir().join(format!(
+            "ori3_fold_export_failure_{}_{}",
+            std::process::id(),
+            super::EXPORT_TEMP_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).expect("検査用directoryを作れる");
+        let target = dir.join("sentinel.fold");
+        let sentinel = b"previous completed FOLD";
+        std::fs::write(&target, sentinel).expect("sentinelを書ける");
+
+        assert_eq!(
+            export_files(&doc, ExportKind::FoldJson, options).expect_err("非有限値を拒否する"),
+            "この作品はFOLD 1.2 限定として書き出せません。作品の内容を確認してください。"
+        );
+        assert_eq!(std::fs::read(&target).expect("sentinelを読める"), sentinel);
+        std::fs::remove_dir_all(&dir).expect("検査用directoryを片付けられる");
     }
 
     /// 折り図は手順が無いと書き出せず、理由を日本語で返す(EXP-003 / EXP-004)。

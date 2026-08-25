@@ -3,8 +3,9 @@
 //! 3-Aで事前固定した30 slotを3-Bで1件ずつ物質化し、製品と同じcore経路で
 //! 完成または安全な改善、停止理由、決定性hashをread-onlyで照合する。
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::thread;
@@ -21,6 +22,32 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const MANIFEST_NAME: &str = "manifest.json";
+
+/// 明示的なignored測定だけに使う長時間watchdog。時間無制限ではなく、
+/// 停止不能な探索を1時間で回収する。通常検査と製品相当runnerは30,000msのままにする。
+const TIME_FREE_SEARCH_WATCHDOG_MILLIS: u64 = 3_600_000;
+
+#[derive(Clone, Copy)]
+enum CorpusExecutionMode {
+    ProductWatchdog,
+    TimeFreeMeasurement,
+}
+
+impl CorpusExecutionMode {
+    fn contract_tag(self) -> &'static str {
+        match self {
+            Self::ProductWatchdog => "product_watchdog",
+            Self::TimeFreeMeasurement => "time_free_measurement",
+        }
+    }
+
+    fn search_watchdog_millis(self, runner: &RunnerContract) -> u64 {
+        match self {
+            Self::ProductWatchdog => runner.search_watchdog_millis,
+            Self::TimeFreeMeasurement => TIME_FREE_SEARCH_WATCHDOG_MILLIS,
+        }
+    }
+}
 
 /// 小数のbaseline照合とhash量子化に使う幅。
 ///
@@ -744,6 +771,7 @@ fn elapsed_micros(started: Instant) -> u64 {
 fn calculate_candidate(
     input: &CorpusInput,
     runner: &RunnerContract,
+    execution_mode: CorpusExecutionMode,
     packing: &Packing,
     paper_w: f64,
     paper_h: f64,
@@ -823,7 +851,7 @@ fn calculate_candidate(
     let never_cancelled = || false;
     let control = SearchControl::new(
         SearchWatchdog {
-            max_millis: runner.search_watchdog_millis,
+            max_millis: execution_mode.search_watchdog_millis(runner),
         },
         &never_cancelled,
     );
@@ -954,6 +982,14 @@ fn run_corpus_case(
     input: &CorpusInput,
     runner: &RunnerContract,
 ) -> Result<CorpusRun, CorpusRunError> {
+    run_corpus_case_with_mode(input, runner, CorpusExecutionMode::ProductWatchdog)
+}
+
+fn run_corpus_case_with_mode(
+    input: &CorpusInput,
+    runner: &RunnerContract,
+    execution_mode: CorpusExecutionMode,
+) -> Result<CorpusRun, CorpusRunError> {
     if input.schema_version != 1 {
         return Err(CorpusRunError::Infrastructure(format!(
             "未対応input schema: {}",
@@ -1003,7 +1039,14 @@ fn run_corpus_case(
             .enumerate()
             .map(|(index, packing)| {
                 scope.spawn(move || {
-                    match calculate_candidate(input, runner, packing, paper_w, paper_h) {
+                    match calculate_candidate(
+                        input,
+                        runner,
+                        execution_mode,
+                        packing,
+                        paper_w,
+                        paper_h,
+                    ) {
                         Ok(candidate) => Ok(Some((index, candidate))),
                         Err(CandidateRunError::Generation(_error)) => Ok(None),
                         Err(CandidateRunError::SearchAborted(abort)) => {
@@ -1388,6 +1431,75 @@ enum ObservedOutcome {
     ExecutionFailure(ObservedExecutionFailure),
 }
 
+/// 3-Cの決定性比較に使うoutcome全体の指紋。
+///
+/// 候補を返したrunと30秒watchdogで提案全体が失敗したrunを同一視しない。
+/// 小数は既存の1e-9量子化hashで比較し、候補・停止理由・手順の配列順は
+/// canonical JSON内でそのまま保持する。
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+enum Stage3cFingerprint {
+    Candidates {
+        normalized_candidate_hash: String,
+        stop_reason_hash: String,
+        normalized_result_hash: String,
+    },
+    ExecutionFailure {
+        phase: String,
+        reason: AbortKind,
+        normalized_failure_hash: String,
+    },
+}
+
+#[derive(Debug, Serialize)]
+struct Stage3cRunRecord {
+    phase: String,
+    repetition: usize,
+    case_index: usize,
+    case_id: String,
+    planned_slot: String,
+    band: String,
+    leaf_count: usize,
+    elapsed_millis: u64,
+    matches_first_in_phase: bool,
+    matches_recorded_current: bool,
+    fingerprint: Stage3cFingerprint,
+}
+
+#[derive(Debug, Serialize)]
+struct Stage3cRoundRecord {
+    phase: String,
+    repetition: usize,
+    case_count: usize,
+    product_elapsed_millis: u64,
+    collector_wall_elapsed_millis: u64,
+}
+
+#[derive(Debug)]
+struct Stage3cPreparedCase {
+    case_id: String,
+    planned_slot: String,
+    band: String,
+    leaf_count: usize,
+    input_file: PathBuf,
+    input_bytes: Vec<u8>,
+    input: CorpusInput,
+    fixture_checksum: String,
+    structure_hash: String,
+    normalized_input_hash: String,
+    recorded_fingerprint: Stage3cFingerprint,
+}
+
+#[derive(Debug, Serialize)]
+struct Stage3cCollectionSummary {
+    determinism_run_count: usize,
+    determinism_mismatches_from_first: usize,
+    determinism_mismatches_from_recorded_current: usize,
+    performance_run_count: usize,
+    performance_mismatches_from_first: usize,
+    performance_mismatches_from_recorded_current: usize,
+}
+
 fn corpus_run_guard() -> MutexGuard<'static, ()> {
     static RUN_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     RUN_LOCK
@@ -1401,6 +1513,20 @@ fn observe_case(
     input: &CorpusInput,
     manifest: &CorpusManifest,
 ) -> Result<ObservedCase, String> {
+    observe_case_with_mode(
+        input_bytes,
+        input,
+        manifest,
+        CorpusExecutionMode::ProductWatchdog,
+    )
+}
+
+fn observe_case_with_mode(
+    input_bytes: &[u8],
+    input: &CorpusInput,
+    manifest: &CorpusManifest,
+    execution_mode: CorpusExecutionMode,
+) -> Result<ObservedCase, String> {
     let quantum = manifest.hash_contract.float_quantum;
     let fixture_checksum = fixture_checksum(input_bytes)?;
     let input_structure_hash = structure_hash(&input.skeleton, quantum)?;
@@ -1412,7 +1538,7 @@ fn observe_case(
         quantum,
     )?;
     let started = Instant::now();
-    let run = run_corpus_case(input, &manifest.runner_contract);
+    let run = run_corpus_case_with_mode(input, &manifest.runner_contract, execution_mode);
     let elapsed_millis = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     let outcome = match run {
         Ok(run) => {
@@ -1453,6 +1579,56 @@ fn observe_case(
         elapsed_millis,
         outcome,
     })
+}
+
+fn observed_fingerprint(outcome: &ObservedOutcome) -> Stage3cFingerprint {
+    match outcome {
+        ObservedOutcome::Candidates(observed) => Stage3cFingerprint::Candidates {
+            normalized_candidate_hash: observed.normalized_candidate_hash.clone(),
+            stop_reason_hash: observed.stop_reason_hash.clone(),
+            normalized_result_hash: observed.normalized_result_hash.clone(),
+        },
+        ObservedOutcome::ExecutionFailure(observed) => Stage3cFingerprint::ExecutionFailure {
+            phase: observed.contract.phase.clone(),
+            reason: observed.contract.reason,
+            normalized_failure_hash: observed.normalized_failure_hash.clone(),
+        },
+    }
+}
+
+fn recorded_fingerprint(current: &RecordedCurrent) -> Stage3cFingerprint {
+    match current.outcome {
+        RecordedOutcomeKind::Candidates => {
+            assert!(
+                current.execution_failure.is_none(),
+                "候補baselineにexecution_failureがある"
+            );
+            Stage3cFingerprint::Candidates {
+                normalized_candidate_hash: current.normalized_candidate_hash.clone(),
+                stop_reason_hash: current.stop_reason_hash.clone(),
+                normalized_result_hash: current.normalized_result_hash.clone(),
+            }
+        }
+        RecordedOutcomeKind::ExecutionFailure => {
+            let failure = current
+                .execution_failure
+                .as_ref()
+                .expect("実行失敗baselineにfailure契約がない");
+            Stage3cFingerprint::ExecutionFailure {
+                phase: failure.phase.clone(),
+                reason: failure.reason,
+                normalized_failure_hash: failure.normalized_failure_hash.clone(),
+            }
+        }
+    }
+}
+
+fn print_stage_3c_json<T: Serialize>(prefix: &str, value: &T) {
+    println!(
+        "{prefix}={}",
+        serde_json::to_string(value).expect("3-C JSONを直列化できない")
+    );
+    io::stdout().flush().expect("3-C進捗をflushできない");
 }
 
 fn assert_input_strata(case: &CorpusCase, input: &CorpusInput) {
@@ -1834,11 +2010,194 @@ fn assert_recorded_case(case_id: &str, counts_toward_target: bool) -> CaseEvalua
     }
 }
 
+fn collect_stage_3c_phase(
+    phase: &str,
+    repetitions: usize,
+    prepared_cases: &[Stage3cPreparedCase],
+    manifest: &CorpusManifest,
+) -> (usize, usize, usize) {
+    let mut first_fingerprints = vec![None; prepared_cases.len()];
+    let mut run_count = 0;
+    let mut mismatches_from_first = 0;
+    let mut mismatches_from_recorded_current = 0;
+    for repetition in 1..=repetitions {
+        let round_started = Instant::now();
+        let mut product_elapsed_millis = 0_u64;
+        for (case_index, case) in prepared_cases.iter().enumerate() {
+            let observed = observe_case(&case.input_bytes, &case.input, manifest)
+                .unwrap_or_else(|error| panic!("{}: 3-C実行失敗: {error}", case.case_id));
+            product_elapsed_millis = product_elapsed_millis.saturating_add(observed.elapsed_millis);
+            assert_eq!(observed.fixture_checksum, case.fixture_checksum);
+            assert_eq!(observed.structure_hash, case.structure_hash);
+            assert_eq!(observed.normalized_input_hash, case.normalized_input_hash);
+            let fingerprint = observed_fingerprint(&observed.outcome);
+            let matches_first_in_phase = first_fingerprints[case_index]
+                .as_ref()
+                .is_none_or(|first| first == &fingerprint);
+            if first_fingerprints[case_index].is_none() {
+                first_fingerprints[case_index] = Some(fingerprint.clone());
+            } else if !matches_first_in_phase {
+                mismatches_from_first += 1;
+            }
+            let matches_recorded_current = fingerprint == case.recorded_fingerprint;
+            if !matches_recorded_current {
+                mismatches_from_recorded_current += 1;
+            }
+            run_count += 1;
+            print_stage_3c_json(
+                "CORPUS_3C_RUN_JSON",
+                &Stage3cRunRecord {
+                    phase: phase.to_owned(),
+                    repetition,
+                    case_index: case_index + 1,
+                    case_id: case.case_id.clone(),
+                    planned_slot: case.planned_slot.clone(),
+                    band: case.band.clone(),
+                    leaf_count: case.leaf_count,
+                    elapsed_millis: observed.elapsed_millis,
+                    matches_first_in_phase,
+                    matches_recorded_current,
+                    fingerprint,
+                },
+            );
+        }
+        print_stage_3c_json(
+            "CORPUS_3C_ROUND_JSON",
+            &Stage3cRoundRecord {
+                phase: phase.to_owned(),
+                repetition,
+                case_count: prepared_cases.len(),
+                product_elapsed_millis,
+                collector_wall_elapsed_millis: u64::try_from(round_started.elapsed().as_millis())
+                    .unwrap_or(u64::MAX),
+            },
+        );
+    }
+    (
+        run_count,
+        mismatches_from_first,
+        mismatches_from_recorded_current,
+    )
+}
+
+/// 3-Cの数値収集専用入口。失敗標本を通常検査から外す`ignore`ではない。
+///
+/// `--release --ignored --exact`で明示したときだけ、同じ30作品・同じseed・同じ
+/// 製品runnerを10回と、別系列で5回実行する。stdoutへ固定JSON行を出すだけで、
+/// manifestやfixtureは書き換えない。通常検査は後で確定する3-C結果fixtureを読む。
+#[test]
+#[ignore = "3-Cの30×10決定性・30×5 release性能の明示収集専用"]
+fn collect_stage_3c_release_measurements() {
+    if cfg!(debug_assertions) {
+        panic!("3-C collectorは--releaseでだけ実行する");
+    }
+    let _guard = corpus_run_guard();
+    let manifest_file = manifest_path();
+    let (manifest_before, manifest) = load_manifest().expect("manifestを読めない");
+    assert_eq!(manifest.repetitions.determinism, 10);
+    assert_eq!(manifest.repetitions.performance_release, 5);
+
+    let prepared_cases: Vec<_> = manifest
+        .planned_slots
+        .iter()
+        .map(|slot| {
+            let case = manifest
+                .cases
+                .iter()
+                .find(|case| case.id == slot.case_id)
+                .unwrap_or_else(|| panic!("manifestにcaseがない: {}", slot.case_id));
+            assert!(case.counts_toward_target);
+            let input_file = fixture_path(&case.input.fixture).expect("corpus input pathが不正");
+            let (input_bytes, input) = load_input(case).expect("corpus inputを読めない");
+            let checksum = fixture_checksum(&input_bytes).expect("fixture checksum失敗");
+            let input_structure_hash =
+                structure_hash(&input.skeleton, manifest.hash_contract.float_quantum)
+                    .expect("structure hash失敗");
+            let input_hash = normalized_hash(
+                &NormalizedInputContract {
+                    input: &input,
+                    runner: &manifest.runner_contract,
+                },
+                manifest.hash_contract.float_quantum,
+            )
+            .expect("normalized input hash失敗");
+            assert_eq!(checksum, case.input.fixture_checksum.digest);
+            assert_eq!(input_structure_hash, case.input.structure_hash);
+            assert_eq!(input_hash, case.input.normalized_input_hash);
+            Stage3cPreparedCase {
+                case_id: case.id.clone(),
+                planned_slot: slot.slot.clone(),
+                band: case.strata.band.clone(),
+                leaf_count: case.strata.leaf_count,
+                input_file,
+                input_bytes,
+                input,
+                fixture_checksum: checksum,
+                structure_hash: input_structure_hash,
+                normalized_input_hash: input_hash,
+                recorded_fingerprint: recorded_fingerprint(&case.recorded_current),
+            }
+        })
+        .collect();
+    assert_eq!(prepared_cases.len(), 30);
+
+    println!(
+        "CORPUS_3C_COLLECTION_START cases=30 determinism_repetitions={} performance_repetitions={} profile=release watchdog_millis={} target_met_is_not_implied=true",
+        manifest.repetitions.determinism,
+        manifest.repetitions.performance_release,
+        manifest.runner_contract.search_watchdog_millis,
+    );
+    io::stdout().flush().expect("3-C開始行をflushできない");
+
+    let collection = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let determinism = collect_stage_3c_phase(
+            "determinism",
+            manifest.repetitions.determinism,
+            &prepared_cases,
+            &manifest,
+        );
+        let performance = collect_stage_3c_phase(
+            "performance",
+            manifest.repetitions.performance_release,
+            &prepared_cases,
+            &manifest,
+        );
+        Stage3cCollectionSummary {
+            determinism_run_count: determinism.0,
+            determinism_mismatches_from_first: determinism.1,
+            determinism_mismatches_from_recorded_current: determinism.2,
+            performance_run_count: performance.0,
+            performance_mismatches_from_first: performance.1,
+            performance_mismatches_from_recorded_current: performance.2,
+        }
+    }));
+
+    let manifest_after = fs::read(&manifest_file).expect("manifest再読込失敗");
+    assert_eq!(
+        manifest_after, manifest_before,
+        "3-C collectorがmanifestを変えた"
+    );
+    for case in &prepared_cases {
+        let input_after = fs::read(&case.input_file).expect("corpus input再読込失敗");
+        assert_eq!(
+            input_after, case.input_bytes,
+            "3-C collectorが{}のinput fixtureを変えた",
+            case.case_id
+        );
+    }
+    match collection {
+        Ok(summary) => print_stage_3c_json("CORPUS_3C_SUMMARY_JSON", &summary),
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
 /// 3-Bで1件ずつbaselineを確定する専用入口。通常検査からは呼ばない。
 ///
 /// `ORI3_CORPUS_CASE`で明示した1件だけを製品相当経路へ通す。debugは90,000ms、
 /// releaseは10,000msを超えても失敗baselineをJSONへ残し、debugだけ90,000msで停止する。実測と両profileの上限、
 /// release全30件300,000msを`time_budget.basis`へ残す。fixtureへは書かない。
+/// `ORI3_CORPUS_TIME_FREE=1`を明示した測定だけ探索watchdogを3,600,000msにするが、
+/// runner契約とnormalized input hashは製品相当の30,000msから変更しない。
 #[test]
 #[ignore = "3-B baselineの明示的な再生成専用"]
 fn regenerate_one_corpus_baseline() {
@@ -1898,7 +2257,23 @@ fn regenerate_one_corpus_baseline() {
         );
         return;
     }
-    let observed = observe_case(&input_bytes, &input, &manifest).expect("corpus case実行失敗");
+    let execution_mode = match std::env::var("ORI3_CORPUS_TIME_FREE") {
+        Ok(value) => {
+            assert_eq!(
+                value, "1",
+                "ORI3_CORPUS_TIME_FREEは1を明示するか、未設定にする"
+            );
+            CorpusExecutionMode::TimeFreeMeasurement
+        }
+        Err(std::env::VarError::NotPresent) => CorpusExecutionMode::ProductWatchdog,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            panic!("ORI3_CORPUS_TIME_FREEはUnicodeの1を明示する")
+        }
+    };
+    let actual_search_watchdog_millis =
+        execution_mode.search_watchdog_millis(&manifest.runner_contract);
+    let observed = observe_case_with_mode(&input_bytes, &input, &manifest, execution_mode)
+        .expect("corpus case実行失敗");
     let profile = if cfg!(debug_assertions) {
         "debug"
     } else {
@@ -2039,7 +2414,7 @@ fn regenerate_one_corpus_baseline() {
                     .expect("phase timing JSONを作れない")
             );
             println!(
-                "CORPUS_3B_TARGET_STATUS case={} class={} selected_status={} all_returned_plans_safe={} target_met={} profile={} provisional_time_limit_met={} elapsed_millis={}",
+                "CORPUS_3B_TARGET_STATUS case={} class={} selected_status={} all_returned_plans_safe={} target_met={} profile={} provisional_time_limit_met={} elapsed_millis={} mode={} actual_search_watchdog_millis={}",
                 case_id,
                 expected_class,
                 metric.status,
@@ -2048,6 +2423,8 @@ fn regenerate_one_corpus_baseline() {
                 profile,
                 time_limit_met,
                 elapsed_millis,
+                execution_mode.contract_tag(),
+                actual_search_watchdog_millis,
             );
         }
         ObservedOutcome::ExecutionFailure(actual) => {
@@ -2110,12 +2487,14 @@ fn regenerate_one_corpus_baseline() {
                 &manifest.numeric_policy,
             );
             println!(
-                "CORPUS_3B_TARGET_STATUS case={} class={} outcome=execution_failure target_met=false profile={} provisional_time_limit_met={} elapsed_millis={}",
+                "CORPUS_3B_TARGET_STATUS case={} class={} outcome=execution_failure target_met=false profile={} provisional_time_limit_met={} elapsed_millis={} mode={} actual_search_watchdog_millis={}",
                 case_id,
                 expected_class,
                 profile,
                 time_limit_met,
                 elapsed_millis,
+                execution_mode.contract_tag(),
+                actual_search_watchdog_millis,
             );
             println!(
                 "CORPUS_3B_EXECUTION_FAILURE_JSON={}",
@@ -3090,6 +3469,726 @@ fn pilot_uses_product_path_and_matches_the_read_only_baseline() {
         "通常検査がmanifestを変えた"
     );
     assert_eq!(input_after, input_before, "通常検査がinput fixtureを変えた");
+}
+
+// Stage 3-C stores measurements in a separate read-only fixture. The values
+// reproduce recorded_current; they do not claim that target classes are met.
+const STAGE_3C_METRICS_NAME: &str = "stage-3c-release-metrics.json";
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Stage3cMetricsFixture {
+    schema_version: u32,
+    corpus_id: String,
+    stage: String,
+    measurement_started_local: String,
+    measurement_finished_local: String,
+    runner: Stage3cMetricsRunner,
+    fixture_integrity: Stage3cMetricsFixtureIntegrity,
+    machine: Stage3cMetricsMachine,
+    cases: Vec<Stage3cMetricsCase>,
+    performance: Stage3cMetricsPerformance,
+    outliers: Stage3cMetricsOutliers,
+    gate_proposal: Stage3cMetricsGateProposal,
+    target_summary: Stage3cMetricsTargetSummary,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Stage3cMetricsRunner {
+    profile: String,
+    determinism_repetitions: usize,
+    performance_repetitions: usize,
+    search_watchdog_millis: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Stage3cMetricsFixtureIntegrity {
+    algorithm: String,
+    manifest_checksum: String,
+    inputs: Vec<Stage3cMetricsInputChecksum>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Stage3cMetricsInputChecksum {
+    case_id: String,
+    checksum: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Stage3cMetricsMachine {
+    operating_system: Option<String>,
+    architecture: Option<String>,
+    logical_cpu_count: Option<usize>,
+    physical_core_count: Option<usize>,
+    cpu_model: Option<String>,
+    physical_memory_bytes: Option<u64>,
+    rust_version: Option<String>,
+    rust_host: Option<String>,
+    cargo_version: Option<String>,
+    target_dir: Option<String>,
+    profile: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Stage3cMetricsCase {
+    case_id: String,
+    planned_slot: String,
+    band: String,
+    leaf_count: usize,
+    recorded_current_fingerprint: Stage3cMetricsFingerprint,
+    determinism: Stage3cMetricsPhase,
+    performance: Stage3cMetricsPhase,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Stage3cMetricsPhase {
+    runs: Vec<Stage3cMetricsRun>,
+    mismatches_from_first: usize,
+    mismatches_from_recorded_current: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Stage3cMetricsRun {
+    repetition: usize,
+    elapsed_millis: u64,
+    matches_first: bool,
+    matches_recorded_current: bool,
+    fingerprint: Stage3cMetricsFingerprint,
+}
+
+#[derive(Debug, Deserialize, Eq, PartialEq)]
+#[serde(tag = "outcome", rename_all = "snake_case", deny_unknown_fields)]
+enum Stage3cMetricsFingerprint {
+    Candidates {
+        normalized_candidate_hash: String,
+        stop_reason_hash: String,
+        normalized_result_hash: String,
+    },
+    ExecutionFailure {
+        phase: String,
+        reason: AbortKind,
+        normalized_failure_hash: String,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct Stage3cMetricsElapsed {
+    case_id: String,
+    repetition: usize,
+    elapsed_millis: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Stage3cMetricsBand {
+    band: String,
+    values: Vec<Stage3cMetricsElapsed>,
+    median_millis: f64,
+    p95_millis: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Stage3cMetricsCorpusRound {
+    repetition: usize,
+    product_elapsed_millis: u64,
+    collector_wall_elapsed_millis: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Stage3cMetricsPerformance {
+    all_values: Vec<Stage3cMetricsElapsed>,
+    all_median_millis: f64,
+    all_p95_millis: u64,
+    bands: Vec<Stage3cMetricsBand>,
+    corpus_rounds: Vec<Stage3cMetricsCorpusRound>,
+    corpus_median_millis: f64,
+    corpus_p95_millis: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Stage3cMetricsOutliers {
+    method: String,
+    scope: String,
+    excluded_from_aggregates: bool,
+    values: Vec<Stage3cMetricsOutlier>,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct Stage3cMetricsOutlier {
+    case_id: String,
+    repetition: usize,
+    elapsed_millis: u64,
+    lower_fence_millis: f64,
+    upper_fence_millis: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Stage3cMetricsGateProposal {
+    source: String,
+    performance_baseline_fraction: f64,
+    reference_p95_millis: u64,
+    raw_gate_millis: u64,
+    proposed_gate_seconds: u64,
+    proposed_gate_millis: u64,
+    case_source: String,
+    case_reference_p95_millis: u64,
+    case_raw_gate_millis: u64,
+    proposed_case_gate_seconds: u64,
+    proposed_case_gate_millis: u64,
+    enforced: bool,
+    status: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Stage3cMetricsTargetSummary {
+    basis: String,
+    target_met: usize,
+    target_unmet: usize,
+    must_complete_met: usize,
+    must_complete_total: usize,
+    safe_partial_met: usize,
+    safe_partial_total: usize,
+}
+
+fn stage_3c_metrics_path() -> PathBuf {
+    corpus_fixture_root().join(STAGE_3C_METRICS_NAME)
+}
+
+fn stage_3c_metrics_recorded_fingerprint(current: &RecordedCurrent) -> Stage3cMetricsFingerprint {
+    match current.outcome {
+        RecordedOutcomeKind::Candidates => {
+            assert!(current.execution_failure.is_none());
+            Stage3cMetricsFingerprint::Candidates {
+                normalized_candidate_hash: current.normalized_candidate_hash.clone(),
+                stop_reason_hash: current.stop_reason_hash.clone(),
+                normalized_result_hash: current.normalized_result_hash.clone(),
+            }
+        }
+        RecordedOutcomeKind::ExecutionFailure => {
+            let failure = current
+                .execution_failure
+                .as_ref()
+                .expect("recorded execution failure requires its contract");
+            Stage3cMetricsFingerprint::ExecutionFailure {
+                phase: failure.phase.clone(),
+                reason: failure.reason,
+                normalized_failure_hash: failure.normalized_failure_hash.clone(),
+            }
+        }
+    }
+}
+
+fn stage_3c_median_millis(values: &[u64]) -> f64 {
+    assert!(!values.is_empty(), "median requires one or more values");
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    let middle = sorted.len() / 2;
+    if !sorted.len().is_multiple_of(2) {
+        sorted[middle] as f64
+    } else {
+        (sorted[middle - 1] as f64 + sorted[middle] as f64) / 2.0
+    }
+}
+
+fn stage_3c_nearest_rank(values: &[u64], numerator: usize, denominator: usize) -> u64 {
+    assert!(!values.is_empty(), "percentile requires one or more values");
+    assert!(numerator > 0 && numerator <= denominator);
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    let rank = sorted.len().saturating_mul(numerator).div_ceil(denominator);
+    sorted[rank.saturating_sub(1)]
+}
+
+fn stage_3c_gate_from_p95(p95_millis: u64) -> (u64, u64, u64) {
+    // Keep the measured P95 and this 80%-of-gate proposal distinct. The
+    // proposal is ceil(P95 / 0.8), followed by a whole-second ceiling.
+    let raw_gate_millis = p95_millis.saturating_mul(5).div_ceil(4);
+    let proposed_gate_seconds = raw_gate_millis.div_ceil(1_000);
+    let proposed_gate_millis = proposed_gate_seconds.saturating_mul(1_000);
+    (raw_gate_millis, proposed_gate_seconds, proposed_gate_millis)
+}
+
+fn stage_3c_assert_machine(machine: &Stage3cMetricsMachine) {
+    assert_eq!(machine.profile, "release");
+    let strings = [
+        machine.operating_system.as_deref(),
+        machine.architecture.as_deref(),
+        machine.cpu_model.as_deref(),
+        machine.rust_version.as_deref(),
+        machine.rust_host.as_deref(),
+        machine.cargo_version.as_deref(),
+        machine.target_dir.as_deref(),
+    ];
+    for value in strings.into_iter().flatten() {
+        assert!(
+            !value.trim().is_empty(),
+            "machine information must not be blank"
+        );
+    }
+    for value in [machine.logical_cpu_count, machine.physical_core_count]
+        .into_iter()
+        .flatten()
+    {
+        assert!(value > 0, "machine CPU count must be positive");
+    }
+    if let Some(bytes) = machine.physical_memory_bytes {
+        assert!(bytes > 0, "machine physical memory must be positive");
+    }
+    assert!(
+        strings
+            .into_iter()
+            .flatten()
+            .any(|value| !value.trim().is_empty())
+            || machine.logical_cpu_count.is_some()
+            || machine.physical_core_count.is_some()
+            || machine.physical_memory_bytes.is_some(),
+        "machine information must contain at least one observed value"
+    );
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Stage3cMismatchCounts {
+    from_first: usize,
+    from_recorded_current: usize,
+}
+
+fn stage_3c_assert_phase(
+    phase: &Stage3cMetricsPhase,
+    repetitions: usize,
+    recorded: &Stage3cMetricsFingerprint,
+    case_id: &str,
+) -> Stage3cMismatchCounts {
+    assert_eq!(phase.runs.len(), repetitions, "{case_id}: repetition count");
+    let first = phase
+        .runs
+        .first()
+        .map(|run| &run.fingerprint)
+        .expect("nonzero repetitions require a first fingerprint");
+    let mut mismatches_from_first = 0;
+    let mut mismatches_from_recorded = 0;
+    for (index, run) in phase.runs.iter().enumerate() {
+        assert_eq!(run.repetition, index + 1, "{case_id}: repetition order");
+        let matches_first = &run.fingerprint == first;
+        let matches_recorded = &run.fingerprint == recorded;
+        assert_eq!(
+            run.matches_first, matches_first,
+            "{case_id}: first mismatch flag"
+        );
+        assert_eq!(
+            run.matches_recorded_current, matches_recorded,
+            "{case_id}: recorded-current mismatch flag"
+        );
+        if !matches_first {
+            mismatches_from_first += 1;
+        }
+        if !matches_recorded {
+            mismatches_from_recorded += 1;
+        }
+    }
+    assert_eq!(phase.mismatches_from_first, mismatches_from_first);
+    assert_eq!(
+        phase.mismatches_from_recorded_current,
+        mismatches_from_recorded
+    );
+    Stage3cMismatchCounts {
+        from_first: mismatches_from_first,
+        from_recorded_current: mismatches_from_recorded,
+    }
+}
+
+fn stage_3c_immutable_files(manifest: &CorpusManifest) -> BTreeMap<PathBuf, Vec<u8>> {
+    let mut files = BTreeMap::new();
+    for path in [manifest_path(), stage_3c_metrics_path()] {
+        let bytes = fs::read(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        assert!(files.insert(path, bytes).is_none());
+    }
+    for slot in &manifest.planned_slots {
+        let case = manifest
+            .cases
+            .iter()
+            .find(|case| case.id == slot.case_id)
+            .unwrap_or_else(|| panic!("{}: materialized case is missing", slot.case_id));
+        let path = fixture_path(&case.input.fixture).expect("target fixture path");
+        let bytes = fs::read(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        assert!(
+            files.insert(path, bytes).is_none(),
+            "duplicate target fixture"
+        );
+    }
+    assert_eq!(files.len(), 32, "manifest, metrics, and 30 target inputs");
+    files
+}
+
+fn stage_3c_assert_fixture_integrity(
+    integrity: &Stage3cMetricsFixtureIntegrity,
+    manifest: &CorpusManifest,
+    immutable: &BTreeMap<PathBuf, Vec<u8>>,
+) {
+    assert_eq!(integrity.algorithm, "fnv1a64");
+    let manifest_bytes = immutable
+        .get(&manifest_path())
+        .expect("manifest bytes were snapshotted");
+    assert_eq!(
+        integrity.manifest_checksum,
+        fixture_checksum(manifest_bytes).expect("manifest checksum")
+    );
+    assert_eq!(integrity.inputs.len(), manifest.planned_slots.len());
+    for (entry, slot) in integrity.inputs.iter().zip(&manifest.planned_slots) {
+        assert_eq!(entry.case_id, slot.case_id);
+        let case = manifest
+            .cases
+            .iter()
+            .find(|case| case.id == slot.case_id)
+            .expect("materialized case");
+        let path = fixture_path(&case.input.fixture).expect("fixture path");
+        let bytes = immutable.get(&path).expect("input bytes were snapshotted");
+        let checksum = fixture_checksum(bytes).expect("input checksum");
+        assert_eq!(entry.checksum, checksum, "{}: metrics checksum", case.id);
+        assert_eq!(
+            checksum, case.input.fixture_checksum.digest,
+            "{}: manifest checksum",
+            case.id
+        );
+    }
+}
+
+fn stage_3c_assert_target_summary(
+    summary: &Stage3cMetricsTargetSummary,
+    manifest: &CorpusManifest,
+) {
+    assert_eq!(
+        summary.basis,
+        "recorded_current_reproduction_not_target_acceptance"
+    );
+    let target_cases: Vec<_> = manifest
+        .cases
+        .iter()
+        .filter(|case| case.counts_toward_target)
+        .collect();
+    let target_met = target_cases
+        .iter()
+        .filter(|case| case.recorded_current.assessment.target_met)
+        .count();
+    let must_cases: Vec<_> = target_cases
+        .iter()
+        .filter(|case| case.target.class == "must_complete")
+        .collect();
+    let partial_cases: Vec<_> = target_cases
+        .iter()
+        .filter(|case| case.target.class == "safe_partial_allowed")
+        .collect();
+    assert_eq!(summary.target_met, target_met);
+    assert_eq!(summary.target_unmet, target_cases.len() - target_met);
+    assert_eq!(summary.must_complete_total, must_cases.len());
+    assert_eq!(
+        summary.must_complete_met,
+        must_cases
+            .iter()
+            .filter(|case| case.recorded_current.assessment.target_met)
+            .count()
+    );
+    assert_eq!(summary.safe_partial_total, partial_cases.len());
+    assert_eq!(
+        summary.safe_partial_met,
+        partial_cases
+            .iter()
+            .filter(|case| case.recorded_current.assessment.target_met)
+            .count()
+    );
+    assert_eq!((summary.target_met, summary.target_unmet), (6, 24));
+    assert_eq!(
+        (summary.must_complete_met, summary.must_complete_total),
+        (2, 12)
+    );
+    assert_eq!(
+        (summary.safe_partial_met, summary.safe_partial_total),
+        (4, 18)
+    );
+}
+
+fn stage_3c_assert_metrics_fixture(
+    metrics: &Stage3cMetricsFixture,
+    manifest: &CorpusManifest,
+    immutable: &BTreeMap<PathBuf, Vec<u8>>,
+) {
+    assert_eq!(metrics.schema_version, 1);
+    assert_eq!(metrics.corpus_id, manifest.corpus_id);
+    assert_eq!(metrics.corpus_id, "proposal-benchmark-corpus-v2");
+    assert_eq!(metrics.stage, "3-C");
+    assert!(!metrics.measurement_started_local.trim().is_empty());
+    assert!(!metrics.measurement_finished_local.trim().is_empty());
+    assert_eq!(metrics.runner.profile, "release");
+    assert_eq!(metrics.runner.determinism_repetitions, 10);
+    assert_eq!(metrics.runner.performance_repetitions, 5);
+    assert_eq!(
+        metrics.runner.determinism_repetitions,
+        manifest.repetitions.determinism
+    );
+    assert_eq!(
+        metrics.runner.performance_repetitions,
+        manifest.repetitions.performance_release
+    );
+    assert_eq!(
+        metrics.runner.search_watchdog_millis,
+        manifest.runner_contract.search_watchdog_millis
+    );
+    stage_3c_assert_fixture_integrity(&metrics.fixture_integrity, manifest, immutable);
+    stage_3c_assert_machine(&metrics.machine);
+    assert_eq!(metrics.cases.len(), manifest.planned_slots.len());
+
+    let mut expected_all_values = Vec::new();
+    let mut expected_band_values: BTreeMap<&str, Vec<Stage3cMetricsElapsed>> = BTreeMap::new();
+    let mut case_p95_values = Vec::new();
+    let mut determinism_mismatch_cases = Vec::new();
+    let mut determinism_recorded_mismatch_cases = Vec::new();
+    let mut performance_mismatch_cases = Vec::new();
+    let mut performance_recorded_mismatch_cases = Vec::new();
+    for (case_metrics, slot) in metrics.cases.iter().zip(&manifest.planned_slots) {
+        assert_eq!(case_metrics.case_id, slot.case_id);
+        assert_eq!(case_metrics.planned_slot, slot.slot);
+        let case = manifest
+            .cases
+            .iter()
+            .find(|case| case.id == slot.case_id)
+            .expect("materialized case");
+        assert_eq!(case_metrics.band, case.strata.band);
+        assert_eq!(case_metrics.leaf_count, case.strata.leaf_count);
+        let recorded = stage_3c_metrics_recorded_fingerprint(&case.recorded_current);
+        assert_eq!(case_metrics.recorded_current_fingerprint, recorded);
+        let determinism_mismatches = stage_3c_assert_phase(
+            &case_metrics.determinism,
+            metrics.runner.determinism_repetitions,
+            &case_metrics.recorded_current_fingerprint,
+            &case_metrics.case_id,
+        );
+        if determinism_mismatches.from_first > 0 {
+            determinism_mismatch_cases.push(case_metrics.case_id.as_str());
+        }
+        if determinism_mismatches.from_recorded_current > 0 {
+            determinism_recorded_mismatch_cases.push(case_metrics.case_id.as_str());
+        }
+        let performance_mismatches = stage_3c_assert_phase(
+            &case_metrics.performance,
+            metrics.runner.performance_repetitions,
+            &case_metrics.recorded_current_fingerprint,
+            &case_metrics.case_id,
+        );
+        if performance_mismatches.from_first > 0 {
+            performance_mismatch_cases.push(case_metrics.case_id.as_str());
+        }
+        if performance_mismatches.from_recorded_current > 0 {
+            performance_recorded_mismatch_cases.push(case_metrics.case_id.as_str());
+        }
+        let elapsed: Vec<_> = case_metrics
+            .performance
+            .runs
+            .iter()
+            .map(|run| run.elapsed_millis)
+            .collect();
+        case_p95_values.push(stage_3c_nearest_rank(&elapsed, 95, 100));
+    }
+    for repetition in 1..=metrics.runner.performance_repetitions {
+        for case_metrics in &metrics.cases {
+            let run = &case_metrics.performance.runs[repetition - 1];
+            let value = Stage3cMetricsElapsed {
+                case_id: case_metrics.case_id.clone(),
+                repetition,
+                elapsed_millis: run.elapsed_millis,
+            };
+            expected_band_values
+                .entry(case_metrics.band.as_str())
+                .or_default()
+                .push(value.clone());
+            expected_all_values.push(value);
+        }
+    }
+    assert_eq!(metrics.performance.all_values, expected_all_values);
+    assert_eq!(metrics.performance.all_values.len(), 150);
+    let all_elapsed: Vec<_> = metrics
+        .performance
+        .all_values
+        .iter()
+        .map(|value| value.elapsed_millis)
+        .collect();
+    assert_eq!(
+        metrics.performance.all_median_millis,
+        stage_3c_median_millis(&all_elapsed)
+    );
+    assert_eq!(
+        metrics.performance.all_p95_millis,
+        stage_3c_nearest_rank(&all_elapsed, 95, 100)
+    );
+    assert_eq!(metrics.performance.bands.len(), 5);
+    for band_metrics in &metrics.performance.bands {
+        let expected = expected_band_values
+            .remove(band_metrics.band.as_str())
+            .unwrap_or_else(|| panic!("unexpected band {}", band_metrics.band));
+        assert_eq!(band_metrics.values, expected);
+        assert_eq!(band_metrics.values.len(), 30);
+        let elapsed: Vec<_> = band_metrics
+            .values
+            .iter()
+            .map(|value| value.elapsed_millis)
+            .collect();
+        assert_eq!(band_metrics.median_millis, stage_3c_median_millis(&elapsed));
+        assert_eq!(
+            band_metrics.p95_millis,
+            stage_3c_nearest_rank(&elapsed, 95, 100)
+        );
+    }
+    assert!(expected_band_values.is_empty());
+    assert_eq!(metrics.performance.corpus_rounds.len(), 5);
+    let corpus_elapsed: Vec<_> = metrics
+        .performance
+        .corpus_rounds
+        .iter()
+        .enumerate()
+        .map(|(index, round)| {
+            assert_eq!(round.repetition, index + 1);
+            let repetition = index + 1;
+            let expected_product_elapsed: u64 = metrics
+                .performance
+                .all_values
+                .iter()
+                .filter(|value| value.repetition == repetition)
+                .map(|value| value.elapsed_millis)
+                .sum();
+            assert_eq!(
+                round.product_elapsed_millis, expected_product_elapsed,
+                "round {repetition}: product elapsed must be the sum of 30 case measurements"
+            );
+            assert!(
+                round.collector_wall_elapsed_millis >= round.product_elapsed_millis,
+                "round {repetition}: collector wall time cannot be shorter than product time"
+            );
+            round.product_elapsed_millis
+        })
+        .collect();
+    assert_eq!(
+        metrics.performance.corpus_median_millis,
+        stage_3c_median_millis(&corpus_elapsed)
+    );
+    assert_eq!(
+        metrics.performance.corpus_p95_millis,
+        stage_3c_nearest_rank(&corpus_elapsed, 95, 100)
+    );
+
+    assert_eq!(
+        metrics.outliers.method,
+        "tukey_per_case_nearest_rank_1_5_iqr"
+    );
+    assert_eq!(metrics.outliers.scope, "each_case_five_release_values");
+    assert!(!metrics.outliers.excluded_from_aggregates);
+    let mut expected_outliers = Vec::new();
+    for case_metrics in &metrics.cases {
+        let elapsed: Vec<_> = case_metrics
+            .performance
+            .runs
+            .iter()
+            .map(|run| run.elapsed_millis)
+            .collect();
+        let q1 = stage_3c_nearest_rank(&elapsed, 25, 100) as f64;
+        let q3 = stage_3c_nearest_rank(&elapsed, 75, 100) as f64;
+        let iqr = q3 - q1;
+        let lower_fence_millis = q1 - 1.5 * iqr;
+        let upper_fence_millis = q3 + 1.5 * iqr;
+        for run in &case_metrics.performance.runs {
+            let value = run.elapsed_millis as f64;
+            if value < lower_fence_millis || value > upper_fence_millis {
+                expected_outliers.push(Stage3cMetricsOutlier {
+                    case_id: case_metrics.case_id.clone(),
+                    repetition: run.repetition,
+                    elapsed_millis: run.elapsed_millis,
+                    lower_fence_millis,
+                    upper_fence_millis,
+                });
+            }
+        }
+    }
+    assert_eq!(metrics.outliers.values, expected_outliers);
+
+    let gate = &metrics.gate_proposal;
+    assert_eq!(gate.source, "sum_of_case_elapsed_millis_p95");
+    assert_eq!(gate.performance_baseline_fraction, 0.8);
+    assert_eq!(
+        gate.reference_p95_millis,
+        metrics.performance.corpus_p95_millis
+    );
+    let (raw_gate_millis, gate_seconds, gate_millis) =
+        stage_3c_gate_from_p95(gate.reference_p95_millis);
+    assert_eq!(gate.raw_gate_millis, raw_gate_millis);
+    assert_eq!(gate.proposed_gate_seconds, gate_seconds);
+    assert_eq!(gate.proposed_gate_millis, gate_millis);
+    assert_eq!(gate.case_source, "maximum_case_p95_millis");
+    let case_p95 = case_p95_values
+        .into_iter()
+        .max()
+        .expect("30 case P95 values");
+    assert_eq!(gate.case_reference_p95_millis, case_p95);
+    let (case_raw_gate_millis, case_gate_seconds, case_gate_millis) =
+        stage_3c_gate_from_p95(case_p95);
+    assert_eq!(gate.case_raw_gate_millis, case_raw_gate_millis);
+    assert_eq!(gate.proposed_case_gate_seconds, case_gate_seconds);
+    assert_eq!(gate.proposed_case_gate_millis, case_gate_millis);
+    assert!(!gate.enforced);
+    assert_eq!(gate.status, "awaiting_coordinator");
+    stage_3c_assert_target_summary(&metrics.target_summary, manifest);
+    assert!(
+        determinism_mismatch_cases.is_empty()
+            && determinism_recorded_mismatch_cases.is_empty()
+            && performance_mismatch_cases.is_empty()
+            && performance_recorded_mismatch_cases.is_empty(),
+        "3-C fingerprint acceptance failed: determinism={determinism_mismatch_cases:?}; \
+         determinism_vs_recorded_current={determinism_recorded_mismatch_cases:?}; \
+         performance={performance_mismatch_cases:?}; \
+         performance_vs_recorded_current={performance_recorded_mismatch_cases:?}"
+    );
+}
+
+#[test]
+fn stage_3c_release_metrics_fixture_is_strict_read_only_evidence() {
+    let (manifest_before, manifest) = load_manifest().expect("manifest");
+    let immutable = stage_3c_immutable_files(&manifest);
+    let metrics_path = stage_3c_metrics_path();
+    let metrics_bytes = immutable
+        .get(&metrics_path)
+        .expect("3-C metrics bytes were snapshotted");
+    let metrics: Stage3cMetricsFixture =
+        serde_json::from_slice(metrics_bytes).expect("3-C metrics schema");
+    let verification = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        stage_3c_assert_metrics_fixture(&metrics, &manifest, &immutable);
+    }));
+    for (path, before) in immutable {
+        let after = fs::read(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        assert_eq!(
+            after,
+            before,
+            "3-C read-only test changed {}",
+            path.display()
+        );
+    }
+    assert_eq!(
+        fs::read(manifest_path()).expect("manifest after"),
+        manifest_before,
+        "3-C read-only test changed manifest"
+    );
+    if let Err(payload) = verification {
+        std::panic::resume_unwind(payload);
+    }
 }
 
 #[test]

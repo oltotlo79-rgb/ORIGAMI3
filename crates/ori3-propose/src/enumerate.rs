@@ -192,6 +192,32 @@ pub struct VerifiedMove {
     pub poses_checked: usize,
 }
 
+/// 探索内部でだけ使う、検証済みの手と、その検証で作った終点の組。
+///
+/// 2つを別々に持つと、別候補の終点を細走査へ渡せてしまう。この型はfieldを非公開にし、
+/// `Clone` も実装しないことで、粗走査を通った1候補を細走査で1回だけ消費させる。
+pub(crate) struct PreparedMove {
+    verified: VerifiedMove,
+    successor: FoldSession,
+}
+
+impl PreparedMove {
+    #[must_use]
+    pub(crate) fn verified(&self) -> &VerifiedMove {
+        &self.verified
+    }
+
+    #[must_use]
+    pub(crate) fn successor(&self) -> &FoldSession {
+        &self.successor
+    }
+
+    #[must_use]
+    pub(crate) fn into_parts(self) -> (VerifiedMove, FoldSession) {
+        (self.verified, self.successor)
+    }
+}
+
 /// 途中の姿勢が成り立たなかった中身。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PoseProblem {
@@ -303,6 +329,17 @@ pub struct FoldSession {
     closed: BTreeSet<EdgeId>,
     /// 同じ状態で粗走査・21姿勢再走査・applyが繰り返す候補記述を1回だけ作る。
     network_candidates: OnceLock<Arc<[NetworkCandidate]>>,
+}
+
+/// 同じ[`FoldSession`]で折り線の姿勢線分を作るときに共有する幾何index。
+///
+/// 頂点・辺・面の所有関係は1状態の候補生成中には変わらない。FoldLineごとに
+/// 作り直すと、葉数が多い作品ほど同じ全走査を何十回も繰り返すため、候補生成1回に
+/// 1つだけ作る。`edges`は従来の線形探索と同じく、同じIDがあれば先頭を保持する。
+struct FoldedSegmentGeometry<'a> {
+    positions: BTreeMap<VertexId, [f64; 2]>,
+    owners: BTreeMap<EdgeId, Vec<FaceId>>,
+    edges: BTreeMap<EdgeId, &'a Edge>,
 }
 
 /// 探索で同じ候補集合を持つ状態を1回だけ広げるための決定的な鍵。
@@ -514,17 +551,14 @@ impl FoldSession {
     /// 確かめられなければ [`None`] を返す。
     #[must_use]
     pub fn verify_move(&self, id: usize, scan: PoseScan) -> Option<VerifiedMove> {
-        self.prepare_move(id, scan).map(|(mv, _)| mv)
+        self.prepare_move(id, scan)
+            .map(|prepared| prepared.into_parts().0)
     }
 
-    /// 探索内部向け。21姿勢を通した手と、その検証で既に作った終点を一緒に返す。
+    /// 探索内部向け。指定走査を通した手と、その検証で既に作った終点を一緒に返す。
     /// 同じsolverを直後の採点・子状態作成で再実行しないためのもので、公開手順は従来どおり
     /// [`VerifiedMove`] だけを持ち、最終検証では独立に再適用する。
-    pub(crate) fn prepare_move(
-        &self,
-        id: usize,
-        scan: PoseScan,
-    ) -> Option<(VerifiedMove, FoldSession)> {
+    pub(crate) fn prepare_move(&self, id: usize, scan: PoseScan) -> Option<PreparedMove> {
         if id >= self.fold_lines.len() {
             return self
                 .network_candidates()
@@ -537,6 +571,30 @@ impl FoldSession {
             return None;
         }
         self.try_fold_prepared(fold_line, scan).ok()
+    }
+
+    /// 粗走査を通った候補の終点へ、細走査の全姿勢を最初から適用し直す。
+    ///
+    /// collapse・網実行・終点生成は走査点に依存しないため繰り返さない。一方、裂け・めり込み・
+    /// 有限性は粗走査の結果を流用せず、`scan` が指定する全点で改めて確認する。
+    pub(crate) fn reverify_prepared_move(
+        &self,
+        prepared: PreparedMove,
+        scan: PoseScan,
+    ) -> Result<PreparedMove, Unverified> {
+        let (max_seam_gap, penetrations) =
+            self.verify_successor_poses(&prepared.successor, scan)?;
+        let PreparedMove {
+            mut verified,
+            successor,
+        } = prepared;
+        verified.max_seam_gap = max_seam_gap;
+        verified.penetrations = penetrations;
+        verified.poses_checked = scan.points();
+        Ok(PreparedMove {
+            verified,
+            successor,
+        })
     }
 
     /// まだ閉じていない複数の直線を、1つの既存折り線網として同時に閉じられるか確かめる。
@@ -560,7 +618,7 @@ impl FoldSession {
         self.prepared_network_moves_until(scan, || false)
             .0
             .into_iter()
-            .map(|(mv, _)| mv)
+            .map(|prepared| prepared.into_parts().0)
             .collect()
     }
 
@@ -573,7 +631,7 @@ impl FoldSession {
         &self,
         scan: PoseScan,
         mut should_stop: impl FnMut() -> bool,
-    ) -> (Vec<(VerifiedMove, FoldSession)>, bool) {
+    ) -> (Vec<PreparedMove>, bool) {
         self.prepared_network_moves_filtered(scan, None, &mut should_stop)
     }
 
@@ -587,7 +645,7 @@ impl FoldSession {
         scan: PoseScan,
         preferred_directional_parents: &BTreeSet<usize>,
         mut should_stop: impl FnMut() -> bool,
-    ) -> (Vec<(VerifiedMove, FoldSession)>, bool) {
+    ) -> (Vec<PreparedMove>, bool) {
         self.prepared_network_moves_filtered(
             scan,
             Some(preferred_directional_parents),
@@ -600,7 +658,7 @@ impl FoldSession {
         scan: PoseScan,
         preferred_directional_parents: Option<&BTreeSet<usize>>,
         should_stop: &mut impl FnMut() -> bool,
-    ) -> (Vec<(VerifiedMove, FoldSession)>, bool) {
+    ) -> (Vec<PreparedMove>, bool) {
         if self.network_candidates.get().is_none() {
             let (candidates, timed_out) = self.build_network_candidates_until(should_stop);
             if timed_out {
@@ -671,13 +729,19 @@ impl FoldSession {
                 .network_candidates()
                 .iter()
                 .find(|network| network.id == id)
-                .map(|network| self.try_network_prepared(network, scan).map(|(mv, _)| mv));
+                .map(|network| {
+                    self.try_network_prepared(network, scan)
+                        .map(|prepared| prepared.into_parts().0)
+                });
         }
         let fold_line = self.fold_lines.iter().find(|l| l.id == id)?;
         if fold_line.mask & !self.folded == 0 {
             return None; // すべて折り終えている
         }
-        Some(self.try_fold_prepared(fold_line, scan).map(|(mv, _)| mv))
+        Some(
+            self.try_fold_prepared(fold_line, scan)
+                .map(|prepared| prepared.into_parts().0),
+        )
     }
 
     /// その番号の折り線が、いまの展開図にあるか。
@@ -1024,14 +1088,15 @@ impl FoldSession {
 
     /// 1つの候補を実際に折って、4つの条件をすべて見る。
     fn try_fold(&self, fold_line: &FoldLine, scan: PoseScan) -> Result<VerifiedMove, Unverified> {
-        self.try_fold_prepared(fold_line, scan).map(|(mv, _)| mv)
+        self.try_fold_prepared(fold_line, scan)
+            .map(|prepared| prepared.into_parts().0)
     }
 
     fn try_fold_prepared(
         &self,
         fold_line: &FoldLine,
         scan: PoseScan,
-    ) -> Result<(VerifiedMove, FoldSession), Unverified> {
+    ) -> Result<PreparedMove, Unverified> {
         let collapsed = self
             .collapse([fold_line.a, fold_line.b])
             .map_err(|_| Unverified::CannotCollapse)?;
@@ -1056,14 +1121,15 @@ impl FoldSession {
         network: &NetworkCandidate,
         scan: PoseScan,
     ) -> Result<VerifiedMove, Unverified> {
-        self.try_network_prepared(network, scan).map(|(mv, _)| mv)
+        self.try_network_prepared(network, scan)
+            .map(|prepared| prepared.into_parts().0)
     }
 
     fn try_network_prepared(
         &self,
         network: &NetworkCandidate,
         scan: PoseScan,
-    ) -> Result<(VerifiedMove, FoldSession), Unverified> {
+    ) -> Result<PreparedMove, Unverified> {
         let collapsed = self
             .execute_network(network)
             .map_err(|_| Unverified::CannotCollapse)?;
@@ -1108,7 +1174,30 @@ impl FoldSession {
         affected: Vec<usize>,
         successor: FoldSession,
         scan: PoseScan,
-    ) -> Result<(VerifiedMove, FoldSession), Unverified> {
+    ) -> Result<PreparedMove, Unverified> {
+        let (worst_gap, worst_pairs) = self.verify_successor_poses(&successor, scan)?;
+        let closes = closed_effect(&self.lines, &affected, self.folded, &successor.closed);
+        let verified = VerifiedMove {
+            id,
+            line,
+            closes,
+            mask: successor.folded,
+            max_seam_gap: worst_gap,
+            penetrations: worst_pairs,
+            poses_checked: scan.points(),
+        };
+        Ok(PreparedMove {
+            verified,
+            successor,
+        })
+    }
+
+    /// 作成済みの終点を変えず、指定された途中姿勢すべての安全性だけを確かめる。
+    fn verify_successor_poses(
+        &self,
+        successor: &FoldSession,
+        scan: PoseScan,
+    ) -> Result<(f64, usize), Unverified> {
         let candidate = &successor.document;
         let faces = &successor.faces;
         if let Some(problem) = face_count_problem(self.faces.len(), faces.len()) {
@@ -1155,17 +1244,7 @@ impl FoldSession {
         if worst_pairs > 0 {
             return Err(Unverified::PaperPassesThrough { pairs: worst_pairs });
         }
-        let closes = closed_effect(&self.lines, &affected, self.folded, &successor.closed);
-        let mv = VerifiedMove {
-            id,
-            line,
-            closes,
-            mask: successor.folded,
-            max_seam_gap: worst_gap,
-            penetrations: worst_pairs,
-            poses_checked: scan.points(),
-        };
-        Ok((mv, successor))
+        Ok((worst_gap, worst_pairs))
     }
 
     /// 現在まだ閉じていない直線を、決定的な順番の1つの網にまとめる。
@@ -1210,13 +1289,31 @@ impl FoldSession {
             .filter(|line| line.mask & !self.folded != 0)
             .map(|line| line.id)
             .collect();
-        let mut folded_segments = Vec::new();
-        for &id in &remaining {
-            let Some(segments) = self.folded_segments_until(&self.fold_lines[id], should_stop)
+        let Some(segment_geometry) = self.folded_segment_geometry_until(should_stop) else {
+            return (Vec::new(), true);
+        };
+        let mut folded_segments_by_line = Vec::with_capacity(self.fold_lines.len());
+        for fold_line in &self.fold_lines {
+            let Some(segments) =
+                self.folded_segments_until(fold_line, &segment_geometry, should_stop)
             else {
                 return (Vec::new(), true);
             };
-            folded_segments.extend(segments.into_iter().map(|segment| (id, segment)));
+            folded_segments_by_line.push(segments);
+        }
+        let mut folded_segments = Vec::new();
+        for (fold_line, segments) in self.fold_lines.iter().zip(&folded_segments_by_line) {
+            if should_stop() {
+                return (Vec::new(), true);
+            }
+            if fold_line.mask & !self.folded != 0 {
+                folded_segments.extend(
+                    segments
+                        .iter()
+                        .copied()
+                        .map(|segment| (fold_line.id, segment)),
+                );
+            }
         }
         if should_stop() {
             return (Vec::new(), true);
@@ -1261,25 +1358,16 @@ impl FoldSession {
         // collapseは終点配置を解くが、同じ配置へ至る「どちら側を動かすか」と
         // 「層山の上/下へ回すか」は区別しない。つぶし折り前の2手のように層順が
         // 次の可否を決める場合があるため、既存fold_throughの4通りも候補にする。
-        let Some(directional) = self.directional_fold_candidates_until(should_stop) else {
+        let Some(directional) =
+            self.directional_fold_candidates_until(&folded_segments_by_line, should_stop)
+        else {
             return (Vec::new(), true);
         };
         out.extend(directional);
 
-        // packet候補は、既存のNone候補をすべて並べた後ろへ足す。これにより従来候補の
-        // IDと順位を保ったまま、閉じた線の再作動と開き直しだけを追加できる。
-        let mut all_segments = Vec::new();
-        for line in &self.fold_lines {
-            let Some(segments) = self.folded_segments_until(line, should_stop) else {
-                return (Vec::new(), true);
-            };
-            all_segments.extend(segments.into_iter().map(|segment| (line.id, segment)));
-        }
-        if should_stop() {
-            return (Vec::new(), true);
-        }
         // まだ1本も閉じていない紙には物理的な重なり層packetが無い。初手の通常単線と
         // 全網候補を保ち、同じ平面を別FaceIdで分けただけの重複packetは作らない。
+        // この判定を全線分の平坦化より先に置き、既に共有済みの線分を再走査しない。
         let closed = &self.closed;
         if closed.is_empty() {
             for (ordinal, candidate) in out.iter_mut().enumerate() {
@@ -1290,6 +1378,24 @@ impl FoldSession {
             } else {
                 (out, false)
             };
+        }
+
+        // packet候補は、既存のNone候補をすべて並べた後ろへ足す。これにより従来候補の
+        // IDと順位を保ったまま、閉じた線の再作動と開き直しだけを追加できる。
+        let mut all_segments = Vec::new();
+        for (fold_line, segments) in self.fold_lines.iter().zip(&folded_segments_by_line) {
+            if should_stop() {
+                return (Vec::new(), true);
+            }
+            all_segments.extend(
+                segments
+                    .iter()
+                    .copied()
+                    .map(|segment| (fold_line.id, segment)),
+            );
+        }
+        if should_stop() {
+            return (Vec::new(), true);
         }
         let Some(panel_of) = self.open_panel_map_until(closed, should_stop) else {
             return (Vec::new(), true);
@@ -1633,11 +1739,13 @@ impl FoldSession {
     /// 整数量子化したkeyにより決定的に1件へまとめる。
     fn directional_fold_candidates_until(
         &self,
+        folded_segments_by_line: &[Vec<[[f64; 2]; 2]>],
         should_stop: &mut impl FnMut() -> bool,
     ) -> Option<Vec<NetworkCandidate>> {
+        debug_assert_eq!(self.fold_lines.len(), folded_segments_by_line.len());
         let mut seen = BTreeSet::new();
         let mut out = Vec::new();
-        for fold_line in &self.fold_lines {
+        for (fold_line, segments) in self.fold_lines.iter().zip(folded_segments_by_line) {
             if should_stop() {
                 return None;
             }
@@ -1645,8 +1753,10 @@ impl FoldSession {
                 continue;
             }
             let mut supports: Vec<[[f64; 2]; 2]> = Vec::new();
-            let segments = self.folded_segments_until(fold_line, should_stop)?;
-            for segment in segments {
+            for &segment in segments {
+                if should_stop() {
+                    return None;
+                }
                 if let Some(existing) = supports
                     .iter_mut()
                     .find(|known| supporting_lines_match(**known, segment))
@@ -2328,41 +2438,70 @@ impl FoldSession {
         })
     }
 
+    /// 折り線の姿勢線分を作る全FoldLine共通の幾何indexを1回だけ組み立てる。
+    fn folded_segment_geometry_until(
+        &self,
+        should_stop: &mut impl FnMut() -> bool,
+    ) -> Option<FoldedSegmentGeometry<'_>> {
+        let mut positions = BTreeMap::new();
+        for vertex in &self.document.cp.vertices {
+            if should_stop() {
+                return None;
+            }
+            // 従来の`collect::<BTreeMap<_, _>>()`と同じく、重複IDなら後ろを保持する。
+            positions.insert(vertex.id, vertex.pos);
+        }
+        if should_stop() {
+            return None;
+        }
+        let owners = face_owners(&self.faces);
+        if should_stop() {
+            return None;
+        }
+        let mut edges = BTreeMap::new();
+        for edge in &self.document.cp.edges {
+            if should_stop() {
+                return None;
+            }
+            // 従来の`iter().find(...)`と同じく、重複IDなら先頭を保持する。
+            edges.entry(edge.id).or_insert(edge);
+        }
+        if should_stop() {
+            None
+        } else {
+            Some(FoldedSegmentGeometry {
+                positions,
+                owners,
+                edges,
+            })
+        }
+    }
+
     /// 1本の材料折り線が、現在の畳み平面で占める線分を集める。
     fn folded_segments_until(
         &self,
         line: &FoldLine,
+        geometry: &FoldedSegmentGeometry<'_>,
         should_stop: &mut impl FnMut() -> bool,
     ) -> Option<Vec<[[f64; 2]; 2]>> {
         if should_stop() {
             return None;
         }
-        let positions: BTreeMap<VertexId, [f64; 2]> = self
-            .document
-            .cp
-            .vertices
-            .iter()
-            .map(|vertex| (vertex.id, vertex.pos))
-            .collect();
-        let owners = face_owners(&self.faces);
         let mut segments = Vec::new();
         for edge_id in &line.edges {
             if should_stop() {
                 return None;
             }
-            let Some(edge) = self
-                .document
-                .cp
-                .edges
-                .iter()
-                .find(|edge| edge.id == *edge_id)
-            else {
+            let Some(edge) = geometry.edges.get(edge_id) else {
                 continue;
             };
-            let (Some(&a), Some(&b)) = (positions.get(&edge.v0), positions.get(&edge.v1)) else {
+            let (Some(&a), Some(&b)) = (
+                geometry.positions.get(&edge.v0),
+                geometry.positions.get(&edge.v1),
+            ) else {
                 continue;
             };
-            for face_id in owners.get(edge_id).into_iter().flatten() {
+            for face_id in geometry.owners.get(edge_id).into_iter().flatten() {
                 if should_stop() {
                     return None;
                 }
@@ -3225,7 +3364,7 @@ mod tests {
 
     use super::{
         CandidateKey, FoldSession, MAX_LINES, PART_LAYER_SKIP_MARK, PacketEdgeRelation,
-        PacketTechnique, PoseProblem, PoseScan, activated_edges, closed_effect,
+        PacketTechnique, PoseProblem, PoseScan, PreparedMove, activated_edges, closed_effect,
         coincident_line_components, coincident_line_sets, exposed_packets, exposed_packets_until,
         face_count_problem, folded_bit, folded_bit_is_set, packet_technique_warning_is_blocking,
         resolve_driver_edges, saved_angle_targets, torn_creases,
@@ -3315,6 +3454,81 @@ mod tests {
             .iter()
             .filter(|driver| driver.target_angle_deg.abs() < 90.0)
             .count()
+    }
+
+    fn assert_same_fine_result(reverified: &PreparedMove, fresh: &PreparedMove) {
+        assert_eq!(
+            reverified.verified(),
+            fresh.verified(),
+            "粗走査の終点を再検証した手と、細走査で折り直した手が違う"
+        );
+        assert_eq!(
+            reverified.successor().document().cp,
+            fresh.successor().document().cp,
+            "粗走査と細走査で終点の展開図が違う"
+        );
+        assert_eq!(
+            reverified.successor().document().sequence,
+            fresh.successor().document().sequence,
+            "粗走査と細走査で終点の手順が違う"
+        );
+        assert_eq!(
+            reverified.successor().state_key(),
+            fresh.successor().state_key(),
+            "粗走査と細走査で終点の物理状態が違う"
+        );
+        assert_eq!(reverified.verified().poses_checked, 21);
+        assert_eq!(reverified.verified().id, fresh.verified().id);
+        assert_eq!(reverified.verified().mask, fresh.verified().mask);
+    }
+
+    #[test]
+    fn fine_reverification_of_a_single_line_matches_a_fresh_full_scan() {
+        let mut document = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        insert_segment(&mut document.cp, [0.0, 0.5], [1.0, 0.5], EdgeKind::Mountain);
+        let session = FoldSession::new(&document).expect("中央折りのsessionを作れない");
+        let id = session.fold_lines.first().expect("中央折り線がない").id;
+        let coarse = session
+            .prepare_move(id, PoseScan { steps: 2 })
+            .expect("3姿勢の粗走査を通らない");
+        assert_eq!(coarse.verified().poses_checked, 3);
+
+        let reverified = session
+            .reverify_prepared_move(coarse, PoseScan::DEFAULT)
+            .expect("粗走査の終点が21姿勢を通らない");
+        let fresh = session
+            .prepare_move(id, PoseScan::DEFAULT)
+            .expect("同じ手を折り直した21姿勢検査が通らない");
+        assert_same_fine_result(&reverified, &fresh);
+    }
+
+    #[test]
+    fn fine_reverification_of_a_network_move_matches_a_fresh_full_scan() {
+        let mut document = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        for x in [0.25, 0.75] {
+            insert_segment(&mut document.cp, [x, 0.0], [x, 1.0], EdgeKind::Valley);
+        }
+        let session = FoldSession::new(&document).expect("平行な2本折りのsessionを作れない");
+        let network_id = session.fold_lines.len();
+        let coarse = session
+            .prepare_move(network_id, PoseScan { steps: 2 })
+            .expect("2本を同時に閉じる網が3姿勢の粗走査を通らない");
+        assert!(coarse.verified().closes.len() >= 2);
+        assert_eq!(coarse.verified().poses_checked, 3);
+
+        let reverified = session
+            .reverify_prepared_move(coarse, PoseScan::DEFAULT)
+            .expect("粗走査の網終点が21姿勢を通らない");
+        let fresh = session
+            .prepare_move(network_id, PoseScan::DEFAULT)
+            .expect("同じ網を折り直した21姿勢検査が通らない");
+        assert_same_fine_result(&reverified, &fresh);
     }
 
     /// 実際に折れる花弁折りは紙を裂かず、開く袋の口を `0°` として記録する。

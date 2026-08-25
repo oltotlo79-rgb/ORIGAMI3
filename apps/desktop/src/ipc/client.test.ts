@@ -137,25 +137,29 @@ describe("角度姿勢の計算mode IPC", () => {
       poseSolve(hard, preferred, null, warmSeed, 2, 0.4),
     ).resolves.toBe(result);
     expect(invoke).toHaveBeenCalledWith("pose_solve", {
-      hard,
-      preferred,
-      warmSeed,
-      soft: null,
-      upTo: 2,
-      t: 0.4,
-      mode: "Follow",
+      request: {
+        hard,
+        preferred,
+        warmSeed,
+        soft: null,
+        upTo: 2,
+        t: 0.4,
+        mode: "Follow",
+      },
     });
 
     vi.mocked(invoke).mockClear();
     await poseSolve(hard, preferred, null, warmSeed, 2, 0.4, "Canonical");
     expect(invoke).toHaveBeenCalledWith("pose_solve", {
-      hard,
-      preferred,
-      warmSeed,
-      soft: null,
-      upTo: 2,
-      t: 0.4,
-      mode: "Canonical",
+      request: {
+        hard,
+        preferred,
+        warmSeed,
+        soft: null,
+        upTo: 2,
+        t: 0.4,
+        mode: "Canonical",
+      },
     });
   });
 });

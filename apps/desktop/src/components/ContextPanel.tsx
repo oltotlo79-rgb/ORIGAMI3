@@ -1560,6 +1560,16 @@ function FoldAllPreviewContent() {
         <span className="fold-all-preview-max">できるところまで 100%</span>
       </div>
 
+      <div className="button-row">
+        <button
+          type="button"
+          disabled={preview.returning}
+          onClick={() => void leaveFoldAllPreview()}
+        >
+          いつもの表示に戻る
+        </button>
+      </div>
+
       <div className="fold-all-preview-notices" aria-live="polite">
         {preview.returning ? (
           <p className="hint">いつもの表示に戻しています…</p>
@@ -1609,16 +1619,6 @@ function FoldAllPreviewContent() {
             操作を終えられませんでした。いま見ている形はそのままです。
           </p>
         )}
-      </div>
-
-      <div className="button-row">
-        <button
-          type="button"
-          disabled={preview.returning}
-          onClick={() => void leaveFoldAllPreview()}
-        >
-          いつもの表示に戻る
-        </button>
       </div>
     </section>
   );

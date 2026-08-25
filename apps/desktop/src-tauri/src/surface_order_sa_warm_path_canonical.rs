@@ -1,15 +1,13 @@
 //! `sa-warm-path.ori3` の実 solver 出力を、Viewer3D と同じ CPU raster で測る契約。
-//!
-//! 共有 suite を赤くしないため通常は未登録にする。赤を測るときだけ
-//! `surface_order_acceptance.rs` の末尾へ次を追加し、測定後に必ず外す。
+//! 段階1で赤を確認し、案1で緑になったため通常suiteへ登録する。
 //!
 //! ```text
-//! #[path = "surface_order_sa_warm_path_canonical.rs.pending"]
+//! #[path = "surface_order_sa_warm_path_canonical.rs"]
 //! mod surface_order_sa_warm_path_canonical;
 //! ```
 
 use super::*;
-use crate::commands::pose_solve_core;
+use crate::commands::{PoseSolveInput, PoseSolveMode, pose_solve_core, pose_solve_core_with_mode};
 use crate::store::DocumentStore;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -145,6 +143,37 @@ fn solve_ui_gesture(
     .expect("sa の通常UI姿勢計算は有限の応答を返すはず")
 }
 
+/// pointer-up相当。明示seedを添えてもCanonical modeがそれを候補生成へ使わず、
+/// 書類＋希望値から同じ形を再導出する契約を実solverと612方向で通す。
+fn solve_canonical(
+    store: &Mutex<DocumentStore>,
+    mut desired: Vec<Driver>,
+) -> crate::commands::PoseOutcome {
+    desired.sort_unstable_by_key(|item| item.hinge);
+    let seed = (17..=34)
+        .map(|hinge| Driver {
+            hinge,
+            target_angle_deg: desired
+                .iter()
+                .find(|item| item.hinge == hinge)
+                .map_or(0.0, |item| item.target_angle_deg),
+        })
+        .collect();
+    pose_solve_core_with_mode(
+        store,
+        PoseSolveInput {
+            hard: Vec::new(),
+            preferred: Some(desired),
+            soft: None,
+            warm_seed: Some(seed),
+            up_to: 0,
+            t: 1.0,
+            mode: PoseSolveMode::Canonical,
+        },
+    )
+    .expect("sa のcanonical姿勢計算は有限の応答を返すはず")
+}
+
 fn solve_path(order: [EdgeId; 3]) -> SolvedPath {
     let store = fresh_store();
     let mut desired = Vec::<Driver>::new();
@@ -162,11 +191,10 @@ fn solve_path(order: [EdgeId; 3]) -> SolvedPath {
             desired.push(hard);
             desired.sort_unstable_by_key(|item| item.hinge);
         }
+        let _ = solve_canonical(&store, desired.clone());
     }
 
-    // 6経路の最後のhardが違う影響を比較へ混ぜない。全経路の末尾へ同じUI payloadを
-    // 送り、違いを暗黙のstored warm（そこへ至った途中経路）だけに限定する。
-    let outcome = solve_ui_gesture(&store, driver(17), vec![driver(19), driver(21)]);
+    let outcome = solve_canonical(&store, desired);
     let mut angles: Vec<_> = outcome
         .result
         .angles
