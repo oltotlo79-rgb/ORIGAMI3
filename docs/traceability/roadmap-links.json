@@ -234,6 +234,9 @@
                         "evidence_id":  "TEST.M1.T1-1.C01",
                         "evidence_type":  "test",
                         "test_name":  "test_document_json_roundtrip",
+                        "test_names":  [
+                                           "test_document_json_roundtrip"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -254,6 +257,9 @@
                         "evidence_id":  "TEST.M1.T1-1.C02",
                         "evidence_type":  "test",
                         "test_name":  "test_document_json_roundtrip",
+                        "test_names":  [
+                                           "test_document_json_roundtrip"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -274,6 +280,9 @@
                         "evidence_id":  "MANUAL.M1.T1-1.C03.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M1.T1-1.C03.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -294,6 +303,9 @@
                         "evidence_id":  "TEST.M1.T1-10.C01",
                         "evidence_type":  "test",
                         "test_name":  "yakko_double_blintz_folds_flat_to_half_square",
+                        "test_names":  [
+                                           "yakko_double_blintz_folds_flat_to_half_square"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -314,6 +326,9 @@
                         "evidence_id":  "MANUAL.M1.T1-10.C02.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M1.T1-10.C02.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -334,6 +349,9 @@
                         "evidence_id":  "MANUAL.M1.T1-10.C03.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M1.T1-10.C03.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -354,6 +372,9 @@
                         "evidence_id":  "TEST.M1.T1-2.C01",
                         "evidence_type":  "test",
                         "test_name":  "test_seg_intersection_crossing",
+                        "test_names":  [
+                                           "test_seg_intersection_crossing"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -374,6 +395,9 @@
                         "evidence_id":  "TEST.M1.T1-2.C02",
                         "evidence_type":  "test",
                         "test_name":  "test_seg_intersection_crossing",
+                        "test_names":  [
+                                           "test_seg_intersection_crossing"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -394,6 +418,9 @@
                         "evidence_id":  "MANUAL.M1.T1-2.C03.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M1.T1-2.C03.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -414,6 +441,9 @@
                         "evidence_id":  "TEST.M1.T1-3.C01",
                         "evidence_type":  "test",
                         "test_name":  "extraction_is_deterministic",
+                        "test_names":  [
+                                           "extraction_is_deterministic"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -434,6 +464,9 @@
                         "evidence_id":  "TEST.M1.T1-3.C02",
                         "evidence_type":  "test",
                         "test_name":  "extraction_is_deterministic",
+                        "test_names":  [
+                                           "extraction_is_deterministic"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -454,6 +487,9 @@
                         "evidence_id":  "MANUAL.M1.T1-3.C03.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M1.T1-3.C03.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -474,6 +510,9 @@
                         "evidence_id":  "TEST.M1.T1-4.C01",
                         "evidence_type":  "test",
                         "test_name":  "store::tests::add_segment_undo_redo_roundtrip",
+                        "test_names":  [
+                                           "store::tests::add_segment_undo_redo_roundtrip"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -494,6 +533,9 @@
                         "evidence_id":  "TEST.M1.T1-4.C02",
                         "evidence_type":  "test",
                         "test_name":  "store::tests::add_segment_undo_redo_roundtrip",
+                        "test_names":  [
+                                           "store::tests::add_segment_undo_redo_roundtrip"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -514,6 +556,9 @@
                         "evidence_id":  "TEST.M1.T1-4.C03",
                         "evidence_type":  "test",
                         "test_name":  "store::tests::add_segment_undo_redo_roundtrip",
+                        "test_names":  [
+                                           "store::tests::add_segment_undo_redo_roundtrip"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -534,6 +579,9 @@
                         "evidence_id":  "MANUAL.M1.T1-4.C04.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M1.T1-4.C04.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -554,6 +602,9 @@
                         "evidence_id":  "TEST.M1.T1-5.C01",
                         "evidence_type":  "test",
                         "test_name":  "src/store/ipcQueue.test.ts \u003e createSerialQueue \u003e 前の要求が完了するまで次の要求を開始しない(発行順に直列実行)",
+                        "test_names":  [
+                                           "src/store/ipcQueue.test.ts \u003e createSerialQueue \u003e 前の要求が完了するまで次の要求を開始しない(発行順に直列実行)"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -574,6 +625,9 @@
                         "evidence_id":  "TEST.M1.T1-5.C02",
                         "evidence_type":  "test",
                         "test_name":  "src/store/ipcQueue.test.ts \u003e createSerialQueue \u003e 前の要求が完了するまで次の要求を開始しない(発行順に直列実行)",
+                        "test_names":  [
+                                           "src/store/ipcQueue.test.ts \u003e createSerialQueue \u003e 前の要求が完了するまで次の要求を開始しない(発行順に直列実行)"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -594,6 +648,9 @@
                         "evidence_id":  "TEST.M1.T1-5.C03",
                         "evidence_type":  "test",
                         "test_name":  "src/store/ipcQueue.test.ts \u003e createSerialQueue \u003e 前の要求が完了するまで次の要求を開始しない(発行順に直列実行)",
+                        "test_names":  [
+                                           "src/store/ipcQueue.test.ts \u003e createSerialQueue \u003e 前の要求が完了するまで次の要求を開始しない(発行順に直列実行)"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -614,6 +671,9 @@
                         "evidence_id":  "MANUAL.M1.T1-5.C04.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M1.T1-5.C04.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -634,6 +694,9 @@
                         "evidence_id":  "MANUAL.M1.T1-5.C05.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M1.T1-5.C05.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -654,6 +717,9 @@
                         "evidence_id":  "TEST.M1.T1-6.C01",
                         "evidence_type":  "test",
                         "test_name":  "src/lib/alignPick.test.ts \u003e 線分の交点 \u003e 十字に交わる2本の交点を返す",
+                        "test_names":  [
+                                           "src/lib/alignPick.test.ts \u003e 線分の交点 \u003e 十字に交わる2本の交点を返す"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -674,6 +740,9 @@
                         "evidence_id":  "MANUAL.M1.T1-6.C02.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M1.T1-6.C02.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -694,6 +763,9 @@
                         "evidence_id":  "MANUAL.M1.T1-6.C03.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M1.T1-6.C03.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -714,6 +786,9 @@
                         "evidence_id":  "MANUAL.M1.T1-6.C04.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M1.T1-6.C04.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -734,6 +809,9 @@
                         "evidence_id":  "MANUAL.M1.T1-6.C05.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M1.T1-6.C05.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -754,6 +832,9 @@
                         "evidence_id":  "TEST.M1.T1-7.C01",
                         "evidence_type":  "test",
                         "test_name":  "loop_free_cp_converges_immediately",
+                        "test_names":  [
+                                           "loop_free_cp_converges_immediately"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -774,6 +855,9 @@
                         "evidence_id":  "TEST.M1.T1-7.C02",
                         "evidence_type":  "test",
                         "test_name":  "loop_free_cp_converges_immediately",
+                        "test_names":  [
+                                           "loop_free_cp_converges_immediately"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -794,6 +878,9 @@
                         "evidence_id":  "MANUAL.M1.T1-7.C03.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M1.T1-7.C03.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -814,6 +901,9 @@
                         "evidence_id":  "TEST.M1.T1-8.C01",
                         "evidence_type":  "test",
                         "test_name":  "warm_start_converges_faster_to_same_solution",
+                        "test_names":  [
+                                           "warm_start_converges_faster_to_same_solution"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -834,6 +924,9 @@
                         "evidence_id":  "TEST.M1.T1-8.C02",
                         "evidence_type":  "test",
                         "test_name":  "warm_start_converges_faster_to_same_solution",
+                        "test_names":  [
+                                           "warm_start_converges_faster_to_same_solution"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -854,6 +947,9 @@
                         "evidence_id":  "TEST.M1.T1-8.C03",
                         "evidence_type":  "test",
                         "test_name":  "warm_start_converges_faster_to_same_solution",
+                        "test_names":  [
+                                           "warm_start_converges_faster_to_same_solution"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -874,6 +970,9 @@
                         "evidence_id":  "MANUAL.M1.T1-8.C04.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M1.T1-8.C04.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -894,6 +993,9 @@
                         "evidence_id":  "MANUAL.M1.T1-9.C01.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M1.T1-9.C01.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -914,6 +1016,9 @@
                         "evidence_id":  "MANUAL.M1.T1-9.C02.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M1.T1-9.C02.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -934,6 +1039,9 @@
                         "evidence_id":  "MANUAL.M1.T1-9.C03.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M1.T1-9.C03.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -954,6 +1062,9 @@
                         "evidence_id":  "MANUAL.M1.T1-9.C04.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M1.T1-9.C04.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -974,6 +1085,9 @@
                         "evidence_id":  "MANUAL.M1.T1-9.C05.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M1.T1-9.C05.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -994,6 +1108,9 @@
                         "evidence_id":  "TEST.M2.T2-0.C01",
                         "evidence_type":  "test",
                         "test_name":  "yakko_hinge_20_sweep_stays_within_frame_budget",
+                        "test_names":  [
+                                           "yakko_hinge_20_sweep_stays_within_frame_budget"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1014,6 +1131,9 @@
                         "evidence_id":  "TEST.M2.T2-0.C02",
                         "evidence_type":  "test",
                         "test_name":  "yakko_hinge_20_sweep_stays_within_frame_budget",
+                        "test_names":  [
+                                           "yakko_hinge_20_sweep_stays_within_frame_budget"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1034,6 +1154,9 @@
                         "evidence_id":  "TEST.M2.T2-0.C03",
                         "evidence_type":  "test",
                         "test_name":  "yakko_hinge_20_sweep_stays_within_frame_budget",
+                        "test_names":  [
+                                           "yakko_hinge_20_sweep_stays_within_frame_budget"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1054,6 +1177,9 @@
                         "evidence_id":  "TEST.M2.T2-0.C04",
                         "evidence_type":  "test",
                         "test_name":  "yakko_hinge_20_sweep_stays_within_frame_budget",
+                        "test_names":  [
+                                           "yakko_hinge_20_sweep_stays_within_frame_budget"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1074,6 +1200,9 @@
                         "evidence_id":  "MANUAL.M2.T2-0.C05.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-0.C05.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1094,6 +1223,9 @@
                         "evidence_id":  "MANUAL.M2.T2-0.C06.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-0.C06.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1114,6 +1246,9 @@
                         "evidence_id":  "MANUAL.M2.T2-0.C07.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-0.C07.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1134,6 +1269,9 @@
                         "evidence_id":  "MANUAL.M2.T2-0.C08.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-0.C08.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1154,6 +1292,9 @@
                         "evidence_id":  "MANUAL.M2.T2-0.C09.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-0.C09.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1174,6 +1315,9 @@
                         "evidence_id":  "MANUAL.M2.T2-0.C10.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-0.C10.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1194,6 +1338,9 @@
                         "evidence_id":  "MANUAL.M2.T2-0.C11.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-0.C11.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1214,6 +1361,9 @@
                         "evidence_id":  "TEST.M2.T2-1.C01",
                         "evidence_type":  "test",
                         "test_name":  "half_folded_square_is_mirror_pair_with_right_face_on_top",
+                        "test_names":  [
+                                           "half_folded_square_is_mirror_pair_with_right_face_on_top"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1234,6 +1384,9 @@
                         "evidence_id":  "TEST.M2.T2-1.C02",
                         "evidence_type":  "test",
                         "test_name":  "half_folded_square_is_mirror_pair_with_right_face_on_top",
+                        "test_names":  [
+                                           "half_folded_square_is_mirror_pair_with_right_face_on_top"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1254,6 +1407,9 @@
                         "evidence_id":  "MANUAL.M2.T2-1.C03.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-1.C03.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1274,6 +1430,9 @@
                         "evidence_id":  "TEST.M2.T2-2.C01",
                         "evidence_type":  "test",
                         "test_name":  "folding_only_top_layer_keeps_lower_layers_in_place",
+                        "test_names":  [
+                                           "folding_only_top_layer_keeps_lower_layers_in_place"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1294,6 +1453,9 @@
                         "evidence_id":  "TEST.M2.T2-2.C02",
                         "evidence_type":  "test",
                         "test_name":  "folding_only_top_layer_keeps_lower_layers_in_place",
+                        "test_names":  [
+                                           "folding_only_top_layer_keeps_lower_layers_in_place"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1314,6 +1476,9 @@
                         "evidence_id":  "MANUAL.M2.T2-2.C03.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-2.C03.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1334,6 +1499,9 @@
                         "evidence_id":  "MANUAL.M2.T2-2.C04.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-2.C04.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1354,6 +1522,9 @@
                         "evidence_id":  "TEST.M2.T2-3.C01",
                         "evidence_type":  "test",
                         "test_name":  "replay_twice_is_bit_identical",
+                        "test_names":  [
+                                           "replay_twice_is_bit_identical"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1374,6 +1545,9 @@
                         "evidence_id":  "TEST.M2.T2-3.C02",
                         "evidence_type":  "test",
                         "test_name":  "replay_twice_is_bit_identical",
+                        "test_names":  [
+                                           "replay_twice_is_bit_identical"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1394,6 +1568,9 @@
                         "evidence_id":  "MANUAL.M2.T2-3.C03.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-3.C03.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1414,6 +1591,9 @@
                         "evidence_id":  "TEST.M2.T2-3.C04",
                         "evidence_type":  "test",
                         "test_name":  "replay_twice_is_bit_identical",
+                        "test_names":  [
+                                           "replay_twice_is_bit_identical"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1434,6 +1614,9 @@
                         "evidence_id":  "MANUAL.M2.T2-3.C05.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-3.C05.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1454,6 +1637,9 @@
                         "evidence_id":  "MANUAL.M2.T2-3.C06.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-3.C06.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1474,6 +1660,9 @@
                         "evidence_id":  "MANUAL.M2.T2-4.C01.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-4.C01.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1494,6 +1683,9 @@
                         "evidence_id":  "MANUAL.M2.T2-4.C02.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-4.C02.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1514,6 +1706,9 @@
                         "evidence_id":  "MANUAL.M2.T2-4.C03.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-4.C03.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1534,6 +1729,9 @@
                         "evidence_id":  "MANUAL.M2.T2-4.C04.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-4.C04.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1554,6 +1752,9 @@
                         "evidence_id":  "MANUAL.M2.T2-5.C01.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-5.C01.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1574,6 +1775,9 @@
                         "evidence_id":  "TEST.M2.T2-5.C02",
                         "evidence_type":  "test",
                         "test_name":  "store::tests::cushion_then_cupboard_fold_only_with_fold_through",
+                        "test_names":  [
+                                           "store::tests::cushion_then_cupboard_fold_only_with_fold_through"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1594,6 +1798,9 @@
                         "evidence_id":  "MANUAL.M2.T2-5.C03.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-5.C03.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1614,6 +1821,9 @@
                         "evidence_id":  "MANUAL.M2.T2-5.C04.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-5.C04.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1634,6 +1844,9 @@
                         "evidence_id":  "MANUAL.M2.T2-5.C05.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-5.C05.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1654,6 +1867,9 @@
                         "evidence_id":  "MANUAL.M2.T2-5.C06.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-5.C06.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1674,6 +1890,9 @@
                         "evidence_id":  "MANUAL.M2.T2-5.C07.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-5.C07.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1694,6 +1913,9 @@
                         "evidence_id":  "TEST.M2.T2-6.C01",
                         "evidence_type":  "test",
                         "test_name":  "inside_reverse_on_four_layer_flap",
+                        "test_names":  [
+                                           "inside_reverse_on_four_layer_flap"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1714,6 +1936,9 @@
                         "evidence_id":  "TEST.M2.T2-6.C02",
                         "evidence_type":  "test",
                         "test_name":  "inside_reverse_on_four_layer_flap",
+                        "test_names":  [
+                                           "inside_reverse_on_four_layer_flap"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1734,6 +1959,9 @@
                         "evidence_id":  "TEST.M2.T2-6.C03",
                         "evidence_type":  "test",
                         "test_name":  "inside_reverse_on_four_layer_flap",
+                        "test_names":  [
+                                           "inside_reverse_on_four_layer_flap"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1754,6 +1982,9 @@
                         "evidence_id":  "MANUAL.M2.T2-6.C04.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-6.C04.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1774,6 +2005,9 @@
                         "evidence_id":  "TEST.M2.T2-6.C05",
                         "evidence_type":  "test",
                         "test_name":  "inside_reverse_on_four_layer_flap",
+                        "test_names":  [
+                                           "inside_reverse_on_four_layer_flap"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1794,6 +2028,9 @@
                         "evidence_id":  "MANUAL.M2.T2-6.C06.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-6.C06.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1814,6 +2051,9 @@
                         "evidence_id":  "TEST.M2.T2-6b.C01",
                         "evidence_type":  "test",
                         "test_name":  "sim011_completeness_table_and_generic_routes_are_permanent",
+                        "test_names":  [
+                                           "sim011_completeness_table_and_generic_routes_are_permanent"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1834,6 +2074,9 @@
                         "evidence_id":  "TEST.M2.T2-6b.C02",
                         "evidence_type":  "test",
                         "test_name":  "sim011_completeness_table_and_generic_routes_are_permanent",
+                        "test_names":  [
+                                           "sim011_completeness_table_and_generic_routes_are_permanent"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1854,6 +2097,9 @@
                         "evidence_id":  "TEST.M2.T2-6b.C03",
                         "evidence_type":  "test",
                         "test_name":  "sim011_completeness_table_and_generic_routes_are_permanent",
+                        "test_names":  [
+                                           "sim011_completeness_table_and_generic_routes_are_permanent"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1869,16 +2115,19 @@
                         "task":  "Task 2-6b",
                         "checkbox":  true,
                         "roadmap_line":  706,
-                        "checkbox_state":  "unchecked",
+                        "checkbox_state":  "checked",
                         "checkbox_text":  "**`squash`(開いてつぶす)・`petal`(花弁折り)を実装**。鶴の基本形の前面が持ち上がることをテスト",
                         "evidence_id":  "TEST.M2.T2-6b.C04",
                         "evidence_type":  "test",
                         "test_name":  "sim011_completeness_table_and_generic_routes_are_permanent",
+                        "test_names":  [
+                                           "sim011_completeness_table_and_generic_routes_are_permanent"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
                         "commit_main_ancestor":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_state":  "consistent",
                         "progress_task_applicable":  true,
                         "progress_task_id":  "2-6b",
                         "progress_task_recorded":  true
@@ -1894,6 +2143,9 @@
                         "evidence_id":  "MANUAL.M2.T2-6b.C05.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-6b.C05.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1914,6 +2166,9 @@
                         "evidence_id":  "MANUAL.M2.T2-6b.C06.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-6b.C06.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1934,6 +2189,9 @@
                         "evidence_id":  "MANUAL.M2.T2-6b.C07.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-6b.C07.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1954,6 +2212,9 @@
                         "evidence_id":  "MANUAL.M2.T2-6b.C08.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-6b.C08.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1969,16 +2230,19 @@
                         "task":  "Task 2-6c",
                         "checkbox":  true,
                         "roadmap_line":  718,
-                        "checkbox_state":  "unchecked",
+                        "checkbox_state":  "checked",
                         "checkbox_text":  "**層のずらし表示(UI-010 / SIM-004)**: 平坦状態では層ごとに微小オフセット(表示専用)を付けて重なりを見せる。層の枚数が多いときも潰れないよう、視点距離に応じてオフセット量を調整。**これが無いと畳んだ紙が1枚に見えて選択操作が理解できない**ため最初に実装する",
                         "evidence_id":  "MANUAL.M2.T2-6c.C01.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-6c.C01.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
                         "commit_main_ancestor":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_state":  "consistent",
                         "progress_task_applicable":  true,
                         "progress_task_id":  "2-6c",
                         "progress_task_recorded":  true
@@ -1994,6 +2258,9 @@
                         "evidence_id":  "MANUAL.M2.T2-6c.C02.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-6c.C02.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2014,6 +2281,9 @@
                         "evidence_id":  "MANUAL.M2.T2-6c.C03.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-6c.C03.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2034,6 +2304,9 @@
                         "evidence_id":  "MANUAL.M2.T2-6c.C04.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-6c.C04.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2054,6 +2327,9 @@
                         "evidence_id":  "MANUAL.M2.T2-6c.C05.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-6c.C05.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2074,6 +2350,9 @@
                         "evidence_id":  "TEST.M2.T2-6c.C06",
                         "evidence_type":  "test",
                         "test_name":  "src/lib/layerMotion.test.ts \u003e 汎用層操作の入力 \u003e 既存折り目のReflectをregionなし・Keepへ変換する",
+                        "test_names":  [
+                                           "src/lib/layerMotion.test.ts \u003e 汎用層操作の入力 \u003e 既存折り目のReflectをregionなし・Keepへ変換する"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2094,6 +2373,9 @@
                         "evidence_id":  "MANUAL.M2.T2-6c.C07.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-6c.C07.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2114,6 +2396,9 @@
                         "evidence_id":  "MANUAL.M2.T2-6c.C08.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-6c.C08.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2134,6 +2419,9 @@
                         "evidence_id":  "MANUAL.M2.T2-6c.C09.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-6c.C09.COMMIT-PUSH",
                         "commit_hash":  "85b8ca42b473f16312c4431b880bf569f48538f9",
                         "commit_subject":  "紙をつかんで動かす直感的な折り操作に変更",
@@ -2149,16 +2437,19 @@
                         "task":  "Task 2-7",
                         "checkbox":  true,
                         "roadmap_line":  732,
-                        "checkbox_state":  "unchecked",
+                        "checkbox_state":  "checked",
                         "checkbox_text":  "作図補助(テスト先行): `bisector(角の3点)` / `perpendicular(点, 辺)` / `divide_points(辺, n)` / `direction_lines(点, 22.5°刻み)`。ツールレールのサブメニューから利用",
                         "evidence_id":  "MANUAL.M2.T2-7.C01.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-7.C01.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
                         "commit_main_ancestor":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_state":  "consistent",
                         "progress_task_applicable":  true,
                         "progress_task_id":  "2-7",
                         "progress_task_recorded":  true
@@ -2169,16 +2460,19 @@
                         "task":  "Task 2-7",
                         "checkbox":  true,
                         "roadmap_line":  733,
-                        "checkbox_state":  "unchecked",
+                        "checkbox_state":  "checked",
                         "checkbox_text":  "局所平坦判定: 内部頂点ごとに前川(山−谷=±2)・川崎(交互角和=180°)を検査し違反頂点を返す→2Dで橙色表示(CPE-009)",
                         "evidence_id":  "MANUAL.M2.T2-7.C02.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-7.C02.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
                         "commit_main_ancestor":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_state":  "consistent",
                         "progress_task_applicable":  true,
                         "progress_task_id":  "2-7",
                         "progress_task_recorded":  true
@@ -2194,6 +2488,9 @@
                         "evidence_id":  "MANUAL.M2.T2-7.C03.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-7.C03.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2214,6 +2511,9 @@
                         "evidence_id":  "MANUAL.M2.T2-7.C04.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-7.C04.COMMIT-PUSH",
                         "commit_hash":  "dfd5ca03dce87fa2ae6cfff5cb05aba5b527d478",
                         "commit_subject":  "作図の補助線・折りたたみ可否の注意表示・紙のめり込み警告を追加",
@@ -2234,6 +2534,9 @@
                         "evidence_id":  "TEST.M2.T2-8.C01",
                         "evidence_type":  "test",
                         "test_name":  "autosave::tests::restore_recovers_the_same_document",
+                        "test_names":  [
+                                           "autosave::tests::restore_recovers_the_same_document"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2254,6 +2557,9 @@
                         "evidence_id":  "MANUAL.M2.T2-8.C02.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-8.C02.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2274,6 +2580,9 @@
                         "evidence_id":  "MANUAL.M2.T2-8.C03.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-8.C03.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2294,6 +2603,9 @@
                         "evidence_id":  "TEST.M2.T2-9.C01",
                         "evidence_type":  "test",
                         "test_name":  "completed_crane_is_flat_and_symmetric",
+                        "test_names":  [
+                                           "completed_crane_is_flat_and_symmetric"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2314,6 +2626,9 @@
                         "evidence_id":  "MANUAL.M2.T2-9.C02.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-9.C02.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2334,6 +2649,9 @@
                         "evidence_id":  "MANUAL.M2.T2-9.C03.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M2.T2-9.C03.COMMIT-PUSH",
                         "commit_hash":  "f00628a8d365a01a71421cfeb32467e77bb75ebd",
                         "commit_subject":  "折り鶴が折れることを確認する自動テストを追加",
@@ -2354,6 +2672,9 @@
                         "evidence_id":  "MANUAL.M3.T3-1.C01.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M3.T3-1.C01.COMMIT-PUSH",
                         "commit_hash":  "6ce06fb3ac7cb21bf694a12af2db7a1871710f67",
                         "commit_subject":  "頭・尾・足などの骨格を指定するためのデータ形式を追加",
@@ -2374,6 +2695,9 @@
                         "evidence_id":  "TEST.M3.T3-2.C01",
                         "evidence_type":  "test",
                         "test_name":  "packing_quality_baseline_1005_runs",
+                        "test_names":  [
+                                           "packing_quality_baseline_1005_runs"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2394,6 +2718,9 @@
                         "evidence_id":  "TEST.M3.T3-2.C02",
                         "evidence_type":  "test",
                         "test_name":  "packing_quality_baseline_1005_runs",
+                        "test_names":  [
+                                           "packing_quality_baseline_1005_runs"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2414,6 +2741,9 @@
                         "evidence_id":  "MANUAL.M3.T3-2.C03.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M3.T3-2.C03.COMMIT-PUSH",
                         "commit_hash":  "8532fb2dc74fb8cf606569ca6a00ca212677c1c5",
                         "commit_subject":  "骨格に合わせて紙の上に必要な領域を自動配置する計算を追加",
@@ -2434,6 +2764,9 @@
                         "evidence_id":  "TEST.M3.T3-3.C01",
                         "evidence_type":  "test",
                         "test_name":  "depth_three_branching_skeleton_packs_and_generates_valid_cp",
+                        "test_names":  [
+                                           "depth_three_branching_skeleton_packs_and_generates_valid_cp"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2454,6 +2787,9 @@
                         "evidence_id":  "TEST.M3.T3-3.C02",
                         "evidence_type":  "test",
                         "test_name":  "depth_three_branching_skeleton_packs_and_generates_valid_cp",
+                        "test_names":  [
+                                           "depth_three_branching_skeleton_packs_and_generates_valid_cp"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2474,6 +2810,9 @@
                         "evidence_id":  "TEST.M3.T3-3.C03",
                         "evidence_type":  "test",
                         "test_name":  "depth_three_branching_skeleton_packs_and_generates_valid_cp",
+                        "test_names":  [
+                                           "depth_three_branching_skeleton_packs_and_generates_valid_cp"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2494,6 +2833,9 @@
                         "evidence_id":  "MANUAL.M3.T3-3.C04.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M3.T3-3.C04.COMMIT-PUSH",
                         "commit_hash":  "e66e15152b347e7e0db1a77e7927fa7c83cc5d5d",
                         "commit_subject":  "自動配置の結果から展開図を組み立てる機能を追加",
@@ -2514,6 +2856,9 @@
                         "evidence_id":  "MANUAL.M3.T3-4.C01.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M3.T3-4.C01.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2534,6 +2879,9 @@
                         "evidence_id":  "MANUAL.M3.T3-4.C02.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M3.T3-4.C02.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2554,6 +2902,9 @@
                         "evidence_id":  "MANUAL.M3.T3-4.C03.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M3.T3-4.C03.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2574,6 +2925,9 @@
                         "evidence_id":  "MANUAL.M3.T3-4.C04.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M3.T3-4.C04.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2594,6 +2948,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C05",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2614,6 +2971,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C06",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2634,6 +2994,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C07",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2654,6 +3017,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C08",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2674,6 +3040,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C09",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2694,6 +3063,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C10",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2714,6 +3086,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C11",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2734,6 +3109,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C12",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2754,6 +3132,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C13",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2774,6 +3155,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C14",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2794,6 +3178,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C15",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2814,6 +3201,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C16",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2834,6 +3224,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C17",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2854,6 +3247,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C18",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2874,6 +3270,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C19",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2894,6 +3293,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C20",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2914,6 +3316,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C21",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2934,6 +3339,9 @@
                         "evidence_id":  "MANUAL.M3.T3-4.C22.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M3.T3-4.C22.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2954,6 +3362,9 @@
                         "evidence_id":  "MANUAL.M3.T3-4.C23.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M3.T3-4.C23.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2974,6 +3385,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C24",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2994,6 +3408,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C25",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3014,6 +3431,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C26",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3034,6 +3454,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C27",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3054,6 +3477,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C28",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3074,6 +3500,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C29",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3094,6 +3523,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C30",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3114,6 +3546,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C31",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3134,6 +3569,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C32",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3154,6 +3592,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C33",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3174,6 +3615,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C34",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3194,6 +3638,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C35",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3214,6 +3661,9 @@
                         "evidence_id":  "TEST.M3.T3-4.C36",
                         "evidence_type":  "test",
                         "test_name":  "proposal_matrix_contract",
+                        "test_names":  [
+                                           "proposal_matrix_contract"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3234,6 +3684,9 @@
                         "evidence_id":  "MANUAL.M3.T3-4.C37.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M3.T3-4.C37.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3254,6 +3707,9 @@
                         "evidence_id":  "TEST.M4.T4-1.C01",
                         "evidence_type":  "test",
                         "test_name":  "open_sink_turns_the_tip_of_the_preliminary_base_inside_out",
+                        "test_names":  [
+                                           "open_sink_turns_the_tip_of_the_preliminary_base_inside_out"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3274,6 +3730,9 @@
                         "evidence_id":  "TEST.M4.T4-1.C02",
                         "evidence_type":  "test",
                         "test_name":  "open_sink_turns_the_tip_of_the_preliminary_base_inside_out",
+                        "test_names":  [
+                                           "open_sink_turns_the_tip_of_the_preliminary_base_inside_out"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3294,6 +3753,9 @@
                         "evidence_id":  "MANUAL.M4.T4-1.C03.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M4.T4-1.C03.COMMIT-PUSH",
                         "commit_hash":  "e2a4dff1ce092417e3ff722a082d010a738efabf",
                         "commit_subject":  "沈め折りを追加",
@@ -3314,6 +3776,9 @@
                         "evidence_id":  "TEST.M4.T4-2.C01",
                         "evidence_type":  "test",
                         "test_name":  "twist_works_on_a_triangle_and_rejects_only_undefined_input",
+                        "test_names":  [
+                                           "twist_works_on_a_triangle_and_rejects_only_undefined_input"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3334,6 +3799,9 @@
                         "evidence_id":  "TEST.M4.T4-2.C02",
                         "evidence_type":  "test",
                         "test_name":  "twist_works_on_a_triangle_and_rejects_only_undefined_input",
+                        "test_names":  [
+                                           "twist_works_on_a_triangle_and_rejects_only_undefined_input"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3354,6 +3822,9 @@
                         "evidence_id":  "MANUAL.M4.T4-2.C03.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M4.T4-2.C03.COMMIT-PUSH",
                         "commit_hash":  "98e94ad293beb1b81c4c66acead9ff8d47248171",
                         "commit_subject":  "ひだ寄せとねじり折りを追加",
@@ -3374,6 +3845,9 @@
                         "evidence_id":  "TEST.M4.T4-3.C01",
                         "evidence_type":  "test",
                         "test_name":  "cp_svg::tests::each_edge_kind_has_its_own_style",
+                        "test_names":  [
+                                           "cp_svg::tests::each_edge_kind_has_its_own_style"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3394,6 +3868,9 @@
                         "evidence_id":  "MANUAL.M4.T4-3.C02.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M4.T4-3.C02.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3414,6 +3891,9 @@
                         "evidence_id":  "MANUAL.M4.T4-3.C03.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M4.T4-3.C03.COMMIT-PUSH",
                         "commit_hash":  "8ad7be3511f64dce20c8aaa8b4b1a897e4d5d656",
                         "commit_subject":  "展開図を画像ファイルとして保存する機能を追加",
@@ -3434,6 +3914,9 @@
                         "evidence_id":  "TEST.M4.T4-4.C01",
                         "evidence_type":  "test",
                         "test_name":  "manual::tests::representative_json_makes_four_page_pdf_and_two_toc_items",
+                        "test_names":  [
+                                           "manual::tests::representative_json_makes_four_page_pdf_and_two_toc_items"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3454,6 +3937,9 @@
                         "evidence_id":  "TEST.M4.T4-4.C02",
                         "evidence_type":  "test",
                         "test_name":  "manual::tests::representative_json_makes_four_page_pdf_and_two_toc_items",
+                        "test_names":  [
+                                           "manual::tests::representative_json_makes_four_page_pdf_and_two_toc_items"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3474,6 +3960,9 @@
                         "evidence_id":  "MANUAL.M4.T4-4.C03.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M4.T4-4.C03.COMMIT-PUSH",
                         "commit_hash":  "1b1a0e650cd373fc0a877d7fb133452f767739ba",
                         "commit_subject":  "折り手順を1コマずつ図にする機能を追加",
@@ -3494,6 +3983,9 @@
                         "evidence_id":  "TEST.M4.T4-5.C01",
                         "evidence_type":  "test",
                         "test_name":  "pdf::tests::seven_steps_make_a_cover_and_two_pages",
+                        "test_names":  [
+                                           "pdf::tests::seven_steps_make_a_cover_and_two_pages"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3514,6 +4006,9 @@
                         "evidence_id":  "TEST.M4.T4-5.C02",
                         "evidence_type":  "test",
                         "test_name":  "pdf::tests::seven_steps_make_a_cover_and_two_pages",
+                        "test_names":  [
+                                           "pdf::tests::seven_steps_make_a_cover_and_two_pages"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3534,6 +4029,9 @@
                         "evidence_id":  "MANUAL.M4.T4-5.C03.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M4.T4-5.C03.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3554,6 +4052,9 @@
                         "evidence_id":  "MANUAL.M4.T4-5.C04.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M4.T4-5.C04.COMMIT-PUSH",
                         "commit_hash":  "eb1c2c5904ebe67c15d2e2331c9533cddf91705c",
                         "commit_subject":  "折り図をPDFとして保存する機能を追加",
@@ -3569,16 +4070,19 @@
                         "task":  "Task 4-6",
                         "checkbox":  true,
                         "roadmap_line":  942,
-                        "checkbox_state":  "unchecked",
+                        "checkbox_state":  "checked",
                         "checkbox_text":  "伝承のカエル(花弁折り・中割り折り・段折りを含む)をスクリプト構築する回帰テスト(最終層数・決定性)",
                         "evidence_id":  "TEST.M4.T4-6.C01",
                         "evidence_type":  "test",
-                        "test_name":  "the_frog_is_deterministic",
+                        "test_name":  "traditional_frog_has_required_techniques_and_replays_connected_twice",
+                        "test_names":  [
+                                           "traditional_frog_has_required_techniques_and_replays_connected_twice"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
                         "commit_main_ancestor":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_state":  "consistent",
                         "progress_task_applicable":  true,
                         "progress_task_id":  "4-6",
                         "progress_task_recorded":  true
@@ -3594,6 +4098,9 @@
                         "evidence_id":  "MANUAL.M4.T4-6.C02.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M4.T4-6.C02.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3614,6 +4121,9 @@
                         "evidence_id":  "MANUAL.M4.T4-6.C03.COMMIT-PUSH",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M4.T4-6.C03.COMMIT-PUSH",
                         "commit_hash":  "7c49536e8807074751cebd7852f801b5f24dd79b",
                         "commit_subject":  "伝承のカエルが完成形まで折れることを確認する自動テストを追加",
@@ -3629,16 +4139,22 @@
                         "task":  "Task 5-1",
                         "checkbox":  true,
                         "roadmap_line":  952,
-                        "checkbox_state":  "unchecked",
+                        "checkbox_state":  "checked",
                         "checkbox_text":  "SIM-015を満たすよう、仕上げ手順ごとの有効・硬さ・膨らみの強さを記録して再生し、頂点座標を保存しないこと、風船と折り鶴の受け入れ条件を検査で固定する。現在の作品全体設定だけではこの条件を満たさない。",
                         "evidence_id":  "TEST.M5.T5-1.C01",
                         "evidence_type":  "test",
                         "test_name":  "finish_soft_round_trips_three_values_only_with_measured_tolerance",
+                        "test_names":  [
+                                           "finish_soft_round_trips_three_values_only_with_measured_tolerance",
+                                           "finish_soft_replay_uses_the_latest_completed_pose_at_each_position",
+                                           "crane_replays_with_finish_soft_on_and_off_three_times_without_penetration",
+                                           "balloon_replays_with_finish_soft_on_and_off_three_times_without_penetration"
+                                       ],
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
                         "commit_main_ancestor":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_state":  "consistent",
                         "progress_task_applicable":  true,
                         "progress_task_id":  "M5",
                         "progress_task_recorded":  true
@@ -3654,6 +4170,9 @@
                         "evidence_id":  "MANUAL.M6.ACCEPTANCE.C01.FULL-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
+                        "test_names":  [
+
+                                       ],
                         "manual_id":  "MANUAL.M6.ACCEPTANCE.C01.FULL-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,

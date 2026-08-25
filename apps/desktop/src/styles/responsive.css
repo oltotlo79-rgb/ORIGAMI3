@@ -319,6 +319,46 @@
     left: var(--sp-2);
     width: auto;
   }
+
+  /* 通常表示では560pxの紙を保つ。200%相当の狭い表示だけ、紙・説明・操作を
+     1列へ送り、紙を区画幅へ合わせる。決定操作は横送り領域へ入れない。 */
+  .dialog-wide[data-proposal-step="paper-position"] {
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .paper-position-step {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .paper-position-sidebar {
+    grid-column: 1;
+    grid-row: 1;
+    max-width: 100%;
+    overflow: visible;
+  }
+
+  .paper-position-stage {
+    grid-column: 1;
+    grid-row: 2;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    height: auto;
+    min-height: 0;
+    max-height: none;
+    aspect-ratio: 1 / 1;
+  }
+
+  .dialog .paper-position-actions:last-child {
+    grid-column: 1;
+    grid-row: 3;
+    width: 100%;
+    max-width: 100%;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -73,7 +73,7 @@ $taskTests = @{
     "M4|Task 4-3" = "cp_svg::tests::each_edge_kind_has_its_own_style"
     "M4|Task 4-4" = "manual::tests::representative_json_makes_four_page_pdf_and_two_toc_items"
     "M4|Task 4-5" = "pdf::tests::seven_steps_make_a_cover_and_two_pages"
-    "M4|Task 4-6" = "the_frog_is_deterministic"
+    "M4|Task 4-6" = @("traditional_frog_has_required_techniques_and_replays_connected_twice")
 }
 
 $scopeFallbackTests = @{
@@ -81,7 +81,14 @@ $scopeFallbackTests = @{
     M2 = "full_replay_folds_flat_and_layers_are_a_permutation"
     M3 = "proposal_matrix_contract"
     M4 = "the_frog_is_deterministic"
-    M5 = "finish_soft_round_trips_three_values_only_with_measured_tolerance"
+    # M5.T5-1.C01は保存形式だけでなく、手順位置・鶴・水風船の再生までを同時に
+    # 立証する。1つの検査名だけへ縮約せず、実在する4検査を明示対応する。
+    M5 = @(
+        "finish_soft_round_trips_three_values_only_with_measured_tolerance"
+        "finish_soft_replay_uses_the_latest_completed_pose_at_each_position"
+        "crane_replays_with_finish_soft_on_and_off_three_times_without_penetration"
+        "balloon_replays_with_finish_soft_on_and_off_three_times_without_penetration"
+    )
 }
 
 # 施策7の状態差B1で、実行記録がまだない手動受入を区分する。
@@ -110,10 +117,19 @@ $b1ManualAcceptanceClassification = [ordered]@{
 # 復元を伴う手動受入IDの実施記録として再生成する。
 $completedCdpAcceptance = [ordered]@{
     "MANUAL.M2.T2-6b.C06.SCREEN-ACCEPTANCE" = "技法9種の名称と順序が完全一致"
+    "MANUAL.M2.T2-6c.C01.SCREEN-ACCEPTANCE" = "固定1280×860で主要3層が各14,000物理画素以上、層重心間80画素以上。固定drag/wheel後も同条件、視点差50画素以上"
     "MANUAL.M2.T2-6c.C04.SCREEN-ACCEPTANCE" = "通常時と途中step時の操作ヒント各1件、標準修飾キー名以外の英字語0"
+    "MANUAL.M2.T2-7.C01.SCREEN-ACCEPTANCE" = "作図4種各1、等分4、角度22.5°、補助線画素の増分が角度4,000・垂線45・等分55・二等分20以上"
+    "MANUAL.M2.T2-7.C02.SCREEN-ACCEPTANCE" = "違反fixtureの橙(#ff8c00、RGB距離12以内)画素412、合格境界320以上"
     "MANUAL.M3.T3-4.C01.SCREEN-ACCEPTANCE" = "skeleton/candidates/confirm各1回、候補4件、違反数文4件、適用後dialog 0"
     "MANUAL.M3.T3-4.C02.SCREEN-ACCEPTANCE" = "提案前後でツールレール・展開図・3D・下部パネルが各1"
     "MANUAL.M4.T4-3.C02.SCREEN-ACCEPTANCE" = "書出しradio 4、PNG長辺1024、補助線checkboxを両状態へ切替"
+}
+
+$completedCdpAcceptanceScripts = @{
+    "MANUAL.M2.T2-6c.C01.SCREEN-ACCEPTANCE" = "apps/desktop/tests-live/doc-link-b1-remaining-cdp.mjs"
+    "MANUAL.M2.T2-7.C01.SCREEN-ACCEPTANCE" = "apps/desktop/tests-live/doc-link-b1-remaining-cdp.mjs"
+    "MANUAL.M2.T2-7.C02.SCREEN-ACCEPTANCE" = "apps/desktop/tests-live/doc-link-b1-remaining-cdp.mjs"
 }
 
 # Task番号だけで「実装完了」と「コミット→プッシュ」を対応させない。
@@ -280,6 +296,7 @@ for ($index = 0; $index -lt $roadmapLines.Count; $index++) {
         $linkId = "$scope.T$taskNumber.C{0:D2}" -f $taskOrdinals[$taskKey]
         $manualKind = Get-ManualKind $checkboxText
         $testName = $null
+        $testNames = @()
         $manualId = $null
         $commitProof = $null
         $commitHash = $null
@@ -299,9 +316,12 @@ for ($index = 0; $index -lt $roadmapLines.Count; $index++) {
             }
         }
         else {
-            if ($taskTests.ContainsKey($taskKey)) { $testName = $taskTests[$taskKey] }
-            else { $testName = $scopeFallbackTests[$scope] }
-            if ([string]::IsNullOrWhiteSpace($testName)) { throw "検査名を割り当てられません: $linkId" }
+            if ($taskTests.ContainsKey($taskKey)) { $testNames = @($taskTests[$taskKey]) }
+            else { $testNames = @($scopeFallbackTests[$scope]) }
+            $testNames = @($testNames | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            if ($testNames.Count -eq 0) { throw "検査名を割り当てられません: $linkId" }
+            # 互換性のため先頭名は従来のtest_nameにも残し、全件はtest_namesに保存する。
+            $testName = $testNames[0]
             $evidenceId = "TEST.$linkId"
             $evidenceType = "test"
         }
@@ -359,6 +379,7 @@ for ($index = 0; $index -lt $roadmapLines.Count; $index++) {
             evidence_id = $evidenceId
             evidence_type = $evidenceType
             test_name = $testName
+            test_names = $testNames
             manual_id = $manualId
             commit_hash = $commitHash
             commit_subject = $commitSubject
@@ -397,6 +418,7 @@ $records.Add([pscustomobject][ordered]@{
     evidence_id = "MANUAL.M6.ACCEPTANCE.C01.FULL-ACCEPTANCE"
     evidence_type = "manual"
     test_name = $null
+    test_names = @()
     manual_id = "MANUAL.M6.ACCEPTANCE.C01.FULL-ACCEPTANCE"
     commit_hash = $null
     commit_subject = $null
@@ -445,8 +467,10 @@ $reverseDisagreements = @($checkboxRecords | Where-Object {
 })
 
 foreach ($record in $testRecords) {
-    if (-not (Test-ListedName $testInventory $record.test_name)) {
-        throw "保存済み一覧に無い検査名です: $($record.id) -> $($record.test_name)"
+    foreach ($testName in @($record.test_names)) {
+        if (-not (Test-ListedName $testInventory $testName)) {
+            throw "保存済み一覧に無い検査名です: $($record.id) -> $testName"
+        }
     }
 }
 if ($checkboxRecords.Count -ne 182) { throw "checkbox総数が182ではありません: $($checkboxRecords.Count)" }
@@ -495,7 +519,7 @@ $markdown.Add("| link ID | evidence | checkbox | progress |")
 $markdown.Add("|---|---|---|---|")
 foreach ($record in $canonicalRecords) {
     $slug = ConvertTo-LinkSlug $record.id
-    $evidence = if ($record.evidence_type -eq "test") { "自動 ``$($record.test_name)``" } elseif ($record.evidence_type -eq "manual") { "手動 ``$($record.manual_id)``" } else { "既存 ``$($record.evidence_id)``" }
+    $evidence = if ($record.evidence_type -eq "test") { "自動 ``$($record.test_names -join ' / ')``" } elseif ($record.evidence_type -eq "manual") { "手動 ``$($record.manual_id)``" } else { "既存 ``$($record.evidence_id)``" }
     $markdown.Add(('| <a id="roadmap-evidence-{0}"></a>`{1}` | {2} | {3} | {4} |' -f $slug, $record.id, (ConvertTo-MarkdownCell $evidence), $record.checkbox_state, $record.progress_state))
 }
 
@@ -544,7 +568,8 @@ foreach ($record in ($manualRecords | Sort-Object manual_id)) {
     }
     elseif ($record.manual_id -match "SCREEN-ACCEPTANCE$") {
         if ($completedCdpAcceptance.Contains($record.manual_id)) {
-            $manualMarkdown.Add("1. 2026-08-26に専用CDP枠で実行済み。実行本体: ``apps/desktop/tests-live/doc-link-b1-cdp.mjs``。")
+            $cdpScript = if ($completedCdpAcceptanceScripts.ContainsKey($record.manual_id)) { $completedCdpAcceptanceScripts[$record.manual_id] } else { "apps/desktop/tests-live/doc-link-b1-cdp.mjs" }
+            $manualMarkdown.Add("1. 2026-08-26に専用CDP枠で実行済み。実行本体: ``$cdpScript``。")
             $manualMarkdown.Add("2. 実測結果: $($completedCdpAcceptance[$record.manual_id])。")
             $manualMarkdown.Add("3. PID・実行ファイルSHA-256・fixture SHA-256を照合し、終了時に指定作品、道具、dialog、capture属性、viewportを復元した。")
             $manualMarkdown.Add("4. 同じ条件で再実行するときも、1つでも操作不能・表示欠落・期待外の画素差があれば不合格にする。")
@@ -611,7 +636,7 @@ if ($statusDisagreements.Count -eq 0) {
 }
 else {
     foreach ($record in ($statusDisagreements | Sort-Object id)) {
-        $reportEvidence = if ($record.evidence_type -eq "test") { $record.test_name } elseif ($record.evidence_type -eq "manual") { $record.manual_id } else { $record.evidence_id }
+        $reportEvidence = if ($record.evidence_type -eq "test") { $record.test_names -join ' / ' } elseif ($record.evidence_type -eq "manual") { $record.manual_id } else { $record.evidence_id }
         $report.Add("- ``$($record.id)``: roadmap=$($record.checkbox_state), progress=$($record.progress_state), evidence=``$reportEvidence``")
     }
 }

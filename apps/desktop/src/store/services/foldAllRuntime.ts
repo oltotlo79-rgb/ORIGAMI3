@@ -1,6 +1,6 @@
 import type { StoreApi } from "zustand";
 import * as ipc from "../../ipc/client";
-import type { AngleRelaxation } from "../../lib/types";
+import type { AngleRelaxation, Frame3D } from "../../lib/types";
 import { createSerialQueue } from "../ipcQueue";
 import { EMPTY_SELECTION } from "../slices/documentSlice";
 import {
@@ -46,6 +46,20 @@ export interface FoldAllRuntime {
 }
 
 let resetRuntime: () => void = () => {};
+
+/** 一斉表示のframe更新と参照を共有しない、復帰専用の数値コピーを作る。 */
+function cloneFoldAllReturnFrame(frame: Frame3D | null): Frame3D | null {
+  if (frame === null) return null;
+  return {
+    faces: frame.faces.map((face) => ({
+      ...face,
+      polygon: face.polygon.map(
+        ([x, y, z]) => [x, y, z] as [number, number, number],
+      ),
+    })),
+    warnings: [...frame.warnings],
+  };
+}
 
 /** テスト用: 一斉表示の予約・専用queue・世代を初期化する。 */
 export function resetFoldAllPreviewRuntime(): void {
@@ -222,6 +236,7 @@ export function createFoldAllRuntime<State extends FoldAllHostState>(
       return token === foldAllExitGeneration;
     }
     const total = state.doc.sequence.length;
+    const hasEntryFrame = active.entryFrame3d !== undefined;
     let restored: boolean;
     if (total > 0) {
       const upTo =
@@ -235,7 +250,12 @@ export function createFoldAllRuntime<State extends FoldAllHostState>(
         true,
         new Map(state.drivers),
       );
+    } else if (hasEntryFrame) {
+      // 手順0件は別solveへ通すと、同じ入力でも別の閉包枝を選び得る。
+      // 入口で控えたframeをそのまま戻し、カメラや作品状態には触れない。
+      restored = true;
     } else {
+      // 分割前のテスト用stateなど、入口snapshotを持たない状態だけの互換経路。
       const normalTargets = poseRuntime.preferredWithout([]);
       restored = await poseRuntime.requestPoseSolve(
         [],
@@ -266,6 +286,9 @@ export function createFoldAllRuntime<State extends FoldAllHostState>(
       foldAllPreview: null,
       currentStep: previous.currentStep,
       playT: previous.playT,
+      ...(total === 0 && hasEntryFrame
+        ? { frame3d: cloneFoldAllReturnFrame(active.entryFrame3d ?? null) }
+        : {}),
       ...(restoreUi
         ? {
             activeTool: previous.activeTool,
@@ -370,6 +393,7 @@ export function createFoldAllRuntime<State extends FoldAllHostState>(
           layerOrder: "unavailable_without_sequence",
           nextWarmSeed: [],
           returnState,
+          entryFrame3d: cloneFoldAllReturnFrame(before.frame3d),
         },
         activeTool: "select",
         selection: EMPTY_SELECTION,

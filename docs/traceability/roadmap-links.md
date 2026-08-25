@@ -3,7 +3,7 @@
 この台帳は `scripts/doc-link-audit.ps1` が生成する。各checkboxの本文にある証拠リンクと同じIDを持ち、検査名は `scratchpad/doc-link-testnames.txt` の取得結果で照合する。
 
 - checkbox: 182件
-- 生成hash: `ff5fbb25ab0f5e0ec69e884547c23ee285383e7aa59b8be121d54cde2096ec98`
+- 生成hash: `4b58ee0e61b06d40a516f43c44b62642cdcd140de0e1c838f2a8bd3c76723c6c`
 - M6受入: checkbox外の手動受入1件
 
 | link ID | evidence | checkbox | progress |
@@ -101,12 +101,12 @@
 | <a id="roadmap-evidence-m2-t2-6b-c01"></a>`M2.T2-6b.C01` | 自動 `sim011_completeness_table_and_generic_routes_are_permanent` | checked | consistent |
 | <a id="roadmap-evidence-m2-t2-6b-c02"></a>`M2.T2-6b.C02` | 自動 `sim011_completeness_table_and_generic_routes_are_permanent` | checked | consistent |
 | <a id="roadmap-evidence-m2-t2-6b-c03"></a>`M2.T2-6b.C03` | 自動 `sim011_completeness_table_and_generic_routes_are_permanent` | checked | consistent |
-| <a id="roadmap-evidence-m2-t2-6b-c04"></a>`M2.T2-6b.C04` | 自動 `sim011_completeness_table_and_generic_routes_are_permanent` | unchecked | unchecked-but-progress-task-exists |
+| <a id="roadmap-evidence-m2-t2-6b-c04"></a>`M2.T2-6b.C04` | 自動 `sim011_completeness_table_and_generic_routes_are_permanent` | checked | consistent |
 | <a id="roadmap-evidence-m2-t2-6b-c05"></a>`M2.T2-6b.C05` | 手動 `MANUAL.M2.T2-6b.C05.SCREEN-ACCEPTANCE` | unchecked | unchecked-but-progress-task-exists |
 | <a id="roadmap-evidence-m2-t2-6b-c06"></a>`M2.T2-6b.C06` | 手動 `MANUAL.M2.T2-6b.C06.SCREEN-ACCEPTANCE` | checked | consistent |
 | <a id="roadmap-evidence-m2-t2-6b-c07"></a>`M2.T2-6b.C07` | 手動 `MANUAL.M2.T2-6b.C07.SCREEN-ACCEPTANCE` | checked | consistent |
 | <a id="roadmap-evidence-m2-t2-6b-c08"></a>`M2.T2-6b.C08` | 手動 `MANUAL.M2.T2-6b.C08.COMMIT-PUSH` | checked | consistent |
-| <a id="roadmap-evidence-m2-t2-6c-c01"></a>`M2.T2-6c.C01` | 手動 `MANUAL.M2.T2-6c.C01.SCREEN-ACCEPTANCE` | unchecked | unchecked-but-progress-task-exists |
+| <a id="roadmap-evidence-m2-t2-6c-c01"></a>`M2.T2-6c.C01` | 手動 `MANUAL.M2.T2-6c.C01.SCREEN-ACCEPTANCE` | checked | consistent |
 | <a id="roadmap-evidence-m2-t2-6c-c02"></a>`M2.T2-6c.C02` | 手動 `MANUAL.M2.T2-6c.C02.SCREEN-ACCEPTANCE` | unchecked | unchecked-but-progress-task-exists |
 | <a id="roadmap-evidence-m2-t2-6c-c03"></a>`M2.T2-6c.C03` | 手動 `MANUAL.M2.T2-6c.C03.SCREEN-ACCEPTANCE` | unchecked | unchecked-but-progress-task-exists |
 | <a id="roadmap-evidence-m2-t2-6c-c04"></a>`M2.T2-6c.C04` | 手動 `MANUAL.M2.T2-6c.C04.SCREEN-ACCEPTANCE` | checked | consistent |
@@ -115,8 +115,8 @@
 | <a id="roadmap-evidence-m2-t2-6c-c07"></a>`M2.T2-6c.C07` | 手動 `MANUAL.M2.T2-6c.C07.SCREEN-ACCEPTANCE` | unchecked | unchecked-but-progress-task-exists |
 | <a id="roadmap-evidence-m2-t2-6c-c08"></a>`M2.T2-6c.C08` | 手動 `MANUAL.M2.T2-6c.C08.SCREEN-ACCEPTANCE` | unchecked | manual-acceptance-pending |
 | <a id="roadmap-evidence-m2-t2-6c-c09"></a>`M2.T2-6c.C09` | 手動 `MANUAL.M2.T2-6c.C09.COMMIT-PUSH` | unchecked | commit-evidence-verified |
-| <a id="roadmap-evidence-m2-t2-7-c01"></a>`M2.T2-7.C01` | 手動 `MANUAL.M2.T2-7.C01.SCREEN-ACCEPTANCE` | unchecked | unchecked-but-progress-task-exists |
-| <a id="roadmap-evidence-m2-t2-7-c02"></a>`M2.T2-7.C02` | 手動 `MANUAL.M2.T2-7.C02.SCREEN-ACCEPTANCE` | unchecked | unchecked-but-progress-task-exists |
+| <a id="roadmap-evidence-m2-t2-7-c01"></a>`M2.T2-7.C01` | 手動 `MANUAL.M2.T2-7.C01.SCREEN-ACCEPTANCE` | checked | consistent |
+| <a id="roadmap-evidence-m2-t2-7-c02"></a>`M2.T2-7.C02` | 手動 `MANUAL.M2.T2-7.C02.SCREEN-ACCEPTANCE` | checked | consistent |
 | <a id="roadmap-evidence-m2-t2-7-c03"></a>`M2.T2-7.C03` | 手動 `MANUAL.M2.T2-7.C03.SCREEN-ACCEPTANCE` | unchecked | unchecked-but-progress-task-exists |
 | <a id="roadmap-evidence-m2-t2-7-c04"></a>`M2.T2-7.C04` | 手動 `MANUAL.M2.T2-7.C04.COMMIT-PUSH` | unchecked | commit-evidence-verified |
 | <a id="roadmap-evidence-m2-t2-8-c01"></a>`M2.T2-8.C01` | 自動 `autosave::tests::restore_recovers_the_same_document` | unchecked | unchecked-but-progress-task-exists |
@@ -186,8 +186,8 @@
 | <a id="roadmap-evidence-m4-t4-5-c02"></a>`M4.T4-5.C02` | 自動 `pdf::tests::seven_steps_make_a_cover_and_two_pages` | unchecked | unchecked-but-progress-task-exists |
 | <a id="roadmap-evidence-m4-t4-5-c03"></a>`M4.T4-5.C03` | 手動 `MANUAL.M4.T4-5.C03.SCREEN-ACCEPTANCE` | unchecked | unchecked-but-progress-task-exists |
 | <a id="roadmap-evidence-m4-t4-5-c04"></a>`M4.T4-5.C04` | 手動 `MANUAL.M4.T4-5.C04.COMMIT-PUSH` | unchecked | commit-evidence-verified |
-| <a id="roadmap-evidence-m4-t4-6-c01"></a>`M4.T4-6.C01` | 自動 `the_frog_is_deterministic` | unchecked | unchecked-but-progress-task-exists |
+| <a id="roadmap-evidence-m4-t4-6-c01"></a>`M4.T4-6.C01` | 自動 `traditional_frog_has_required_techniques_and_replays_connected_twice` | checked | consistent |
 | <a id="roadmap-evidence-m4-t4-6-c02"></a>`M4.T4-6.C02` | 手動 `MANUAL.M4.T4-6.C02.SCREEN-ACCEPTANCE` | unchecked | manual-acceptance-pending |
 | <a id="roadmap-evidence-m4-t4-6-c03"></a>`M4.T4-6.C03` | 手動 `MANUAL.M4.T4-6.C03.COMMIT-PUSH` | unchecked | commit-evidence-verified |
-| <a id="roadmap-evidence-m5-t5-1-c01"></a>`M5.T5-1.C01` | 自動 `finish_soft_round_trips_three_values_only_with_measured_tolerance` | unchecked | unchecked-but-progress-task-exists |
+| <a id="roadmap-evidence-m5-t5-1-c01"></a>`M5.T5-1.C01` | 自動 `finish_soft_round_trips_three_values_only_with_measured_tolerance / finish_soft_replay_uses_the_latest_completed_pose_at_each_position / crane_replays_with_finish_soft_on_and_off_three_times_without_penetration / balloon_replays_with_finish_soft_on_and_off_three_times_without_penetration` | checked | consistent |
 | <a id="roadmap-evidence-m6-acceptance-c01"></a>`M6.ACCEPTANCE.C01` | 手動 `MANUAL.M6.ACCEPTANCE.C01.FULL-ACCEPTANCE` | not-a-checkbox | manual-acceptance-required |

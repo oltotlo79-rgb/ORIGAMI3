@@ -39,6 +39,25 @@ export interface CaptureInteractionState {
   readonly activeTool: ToolId;
   readonly selectedEdgeCount: number;
   readonly selectedVertexCount: number;
+  /** 作品そのものの要素数。CDPから作図の前後差だけを読むために使う。 */
+  readonly document: {
+    readonly vertexCount: number;
+    readonly edgeCount: number;
+  };
+  /** 診断とnative dialogの状態を、内容・保存先を露出せず件数/有無だけで返す。 */
+  readonly diagnosis: {
+    readonly cpViolationCount: number;
+    readonly flatFoldViolationCount: number;
+    readonly warningCount: number;
+    readonly recoveryVisible: boolean;
+    readonly exportOpen: boolean;
+    readonly exportCompleted: boolean;
+  };
+  /** 引く操作の対象。値の変更や操作開始は行わない。 */
+  readonly pull: {
+    readonly hinge: number | null;
+    readonly mirrorHinge: number | null;
+  };
   readonly fold: {
     readonly draftActive: boolean;
     readonly target: "all" | "top" | null;
@@ -166,6 +185,22 @@ function interactionState(): CaptureInteractionState {
     activeTool: state.activeTool,
     selectedEdgeCount: state.selection.edgeIds.length,
     selectedVertexCount: state.selection.vertexIds.length,
+    document: {
+      vertexCount: state.doc?.cp.vertices.length ?? 0,
+      edgeCount: state.doc?.cp.edges.length ?? 0,
+    },
+    diagnosis: {
+      cpViolationCount: state.violations.length,
+      flatFoldViolationCount: state.flatFoldViolations.length,
+      warningCount: state.warnings.length,
+      recoveryVisible: state.recovery !== null,
+      exportOpen: state.exportOpen,
+      exportCompleted: state.exportSavedPath !== null,
+    },
+    pull: {
+      hinge: state.pullHinge,
+      mirrorHinge: state.pullMirrorHinge,
+    },
     fold: {
       draftActive: state.foldDraft !== null,
       target: state.foldDraft?.target ?? null,

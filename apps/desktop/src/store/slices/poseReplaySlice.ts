@@ -93,7 +93,10 @@ export interface ActiveAngleIntent {
   fixAll: boolean;
 }
 
-/** 一斉表示へ入る直前の入力状態。3D座標は保存せず、この入力から作り直す。 */
+/**
+ * 一斉表示へ入る直前の入力状態。
+ * カメラ視点は保存せず、利用者が一斉表示中に変えた視点を復帰後も保つ。
+ */
 export interface FoldAllReturnState {
   docEpoch: number;
   currentStep: number | null;
@@ -125,6 +128,11 @@ export interface FoldAllPreviewState {
   /** 次の要求の出発角。Document・通常姿勢キャッシュには入れない。 */
   nextWarmSeed: Driver[];
   returnState: FoldAllReturnState;
+  /**
+   * 手順が無い作品を入口と同じ座標へ戻すための一時コピー。
+   * Document・保存・Undo/Redoには入れない。古いテスト状態との互換だけ省略可。
+   */
+  entryFrame3d?: Frame3D | null;
 }
 
 /**

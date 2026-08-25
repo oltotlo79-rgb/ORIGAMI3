@@ -71,6 +71,36 @@ function frameAt(marker: number): Frame3D {
   };
 }
 
+function entryFrameWithoutSequence(): Frame3D {
+  return {
+    faces: [
+      {
+        face: 0,
+        polygon: [
+          [0.125, 0.25, 0.375],
+          [0.875, 0.25, -0.125],
+          [0.125, 0.75, 0.625],
+        ],
+        layer: 7,
+        surface_rank: 11,
+        mirrored: true,
+      },
+      {
+        face: 1,
+        polygon: [
+          [0.875, 0.25, -0.125],
+          [0.875, 0.75, 0.5],
+          [0.125, 0.75, 0.625],
+        ],
+        layer: 3,
+        surface_rank: 5,
+        mirrored: false,
+      },
+    ],
+    warnings: ["入口前の表示だけにある知らせ"],
+  };
+}
+
 function outcome(
   percent: number,
   patch: Partial<FoldAllPreviewOutcome> = {},
@@ -335,34 +365,91 @@ describe("全部の折り目をいっぺんに動かす一時表示", () => {
     expect(ipc.editRedo).not.toHaveBeenCalled();
   });
 
-  it("手順が無い作品も一時角度と固定を変えず、追従計算から通常形へ戻す", async () => {
-    const doc = seed();
-    doc.sequence = [];
-    const drivers = new Map([[5, 30]]);
-    const pinnedFolds = new Map([[5, 30]]);
-    const driverEntries = [...drivers.entries()];
-    const pinnedEntries = [...pinnedFolds.entries()];
-    useAppStore.setState({
-      currentStep: null,
-      playT: 1,
-      drivers,
-      pinnedFolds,
-      sequenceTargets: new Map(),
-    });
-    await useAppStore.getState().enterFoldAllPreview();
+  it.each(["戻る操作", "0%操作"] as const)(
+    "手順が無い作品も%sで入口frame・一時角度・固定を厳密に戻す",
+    async (returnBy) => {
+      const doc = seed();
+      doc.sequence = [];
+      const expectedEntryFrame = entryFrameWithoutSequence();
+      const entryFrame = entryFrameWithoutSequence();
+      const drivers = new Map([[5, 30]]);
+      const pinnedFolds = new Map([[5, 30]]);
+      const poseAngles = new Map([[5, 30]]);
+      const { undo, redo } = nonEmptyAngleHistories();
+      const driverEntries = [...drivers.entries()];
+      const pinnedEntries = [...pinnedFolds.entries()];
+      const documentJson = JSON.stringify(doc);
+      useAppStore.setState({
+        frame3d: entryFrame,
+        currentStep: null,
+        playT: 1,
+        activeTool: "mountain",
+        selection: { edgeIds: [5], vertexIds: [] },
+        drivers,
+        pinnedFolds,
+        poseAngles,
+        angleUndoStack: undo,
+        angleRedoStack: redo,
+        docUndoDepth: 2,
+        sequenceTargets: new Map(),
+      });
+      await useAppStore.getState().enterFoldAllPreview();
+      const snapshot = useAppStore.getState().foldAllPreview?.entryFrame3d;
+      expect(snapshot).toEqual(expectedEntryFrame);
+      expect(snapshot).not.toBe(entryFrame);
+      expect(snapshot?.faces).not.toBe(entryFrame.faces);
+      expect(snapshot?.faces[0]?.polygon).not.toBe(
+        entryFrame.faces[0].polygon,
+      );
+      expect(snapshot?.warnings).not.toBe(entryFrame.warnings);
 
-    await useAppStore.getState().leaveFoldAllPreview();
+      // 入口frameの元参照が後から変わっても、復帰用copyへ波及させない。
+      entryFrame.faces[0].polygon[0][2] = 999;
+      entryFrame.warnings.push("入口後に追加された知らせ");
 
-    expect(useAppStore.getState().foldAllPreview).toBeNull();
-    expect(useAppStore.getState().drivers).toBe(drivers);
-    expect(useAppStore.getState().pinnedFolds).toBe(pinnedFolds);
-    expect([...useAppStore.getState().drivers.entries()]).toEqual(driverEntries);
-    expect([...useAppStore.getState().pinnedFolds.entries()]).toEqual(
-      pinnedEntries,
-    );
-    expect(ipc.poseSolve).toHaveBeenCalled();
-    expect(ipc.sequenceReplay).not.toHaveBeenCalled();
-  });
+      useAppStore.getState().setFoldAllPercent(50);
+      useAppStore.getState().finishFoldAllPercent();
+      await vi.waitFor(() =>
+        expect(useAppStore.getState().foldAllPreview?.appliedPercent).toBe(50),
+      );
+
+      if (returnBy === "戻る操作") {
+        await useAppStore.getState().leaveFoldAllPreview();
+      } else {
+        useAppStore.getState().setFoldAllPercent(0);
+        useAppStore.getState().finishFoldAllPercent();
+        await vi.waitFor(() =>
+          expect(useAppStore.getState().foldAllPreview).toBeNull(),
+        );
+      }
+
+      expect(useAppStore.getState().foldAllPreview).toBeNull();
+      expect(useAppStore.getState().frame3d).toEqual(expectedEntryFrame);
+      expect(useAppStore.getState().frame3d).not.toBe(snapshot);
+      expect(JSON.stringify(useAppStore.getState().doc)).toBe(documentJson);
+      expect(useAppStore.getState().currentStep).toBeNull();
+      expect(useAppStore.getState().playT).toBe(1);
+      expect(useAppStore.getState().activeTool).toBe("mountain");
+      expect(useAppStore.getState().selection).toEqual({
+        edgeIds: [5],
+        vertexIds: [],
+      });
+      expect(useAppStore.getState().drivers).toBe(drivers);
+      expect(useAppStore.getState().pinnedFolds).toBe(pinnedFolds);
+      expect(useAppStore.getState().poseAngles).toBe(poseAngles);
+      expect(useAppStore.getState().angleUndoStack).toBe(undo);
+      expect(useAppStore.getState().angleRedoStack).toBe(redo);
+      expect(useAppStore.getState().docUndoDepth).toBe(2);
+      expect([...useAppStore.getState().drivers.entries()]).toEqual(
+        driverEntries,
+      );
+      expect([...useAppStore.getState().pinnedFolds.entries()]).toEqual(
+        pinnedEntries,
+      );
+      expect(ipc.poseSolve).not.toHaveBeenCalled();
+      expect(ipc.sequenceReplay).not.toHaveBeenCalled();
+    },
+  );
 
   it("連続100入力を同時1件・待機最新1件にまとめ、最後の割合と直前実角を使う", async () => {
     seed();
@@ -826,6 +913,8 @@ describe("全部の折り目をいっぺんに動かす一時表示", () => {
       "requested_percent",
       "requested_angles",
       "next_warm_seed",
+      "entryFrame3d",
+      "entry_frame3d",
       "suspect_hinges",
       "flat_fold_violations",
     ]) {

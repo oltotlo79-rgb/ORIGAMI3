@@ -703,7 +703,7 @@ pub fn outside_reverse(...) -> Result<FoldThroughResult, String>;
   - **手順再生との整合(検証済み)**: `DriverLine.target_angle_deg` は任意の値を取れ、`plan_steps`(replay.rs)・`flat_state_at`・ソルバー(solver.rs)がいずれも「後のステップが勝つ」ため、「既存の折り目を0°へ駆動する」は再生で正しく効く。土台の追加改修は不要
   - **Errで断るのは幾何的に定義不能な入力だけ**: 退化した直線 / 内側を示す点が線上 / 平坦状態に配置の無い面 / 動かす対象が1つも無い / 折り線が面を横切っているのに面を分割できなかった
 - [x] **既存技法の作り直し**: `fold_through` を `flat_motion` への薄い委譲に再実装(`pleat`・`inside_reverse`・`outside_reverse` は `fold_through` 経由で自動的にその上に乗る)。層数の偶奇による制限は無し。既存テストは1件も変更せず全て合格 — [証拠:M2.T2-6b.C03](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6b-c03) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6b.C03 evidence=TEST.M2.T2-6b.C03 -->
-- [ ] **`squash`(開いてつぶす)・`petal`(花弁折り)を実装**。鶴の基本形の前面が持ち上がることをテスト — [証拠:M2.T2-6b.C04](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6b-c04) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6b.C04 evidence=TEST.M2.T2-6b.C04 -->
+- [x] **`squash`(開いてつぶす)・`petal`(花弁折り)を実装**。鶴の基本形の前面が持ち上がることをテスト — [証拠:M2.T2-6b.C04](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6b-c04) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6b.C04 evidence=TEST.M2.T2-6b.C04 -->
 - [ ] **UI: 「つまんで動かす」ツール**(SIM-011)。畳んだ状態で層を選び、目標位置へドラッグすると必要な折り線を自動で求めて折る。技法として名前が付いていない動きもこれで行える。関連する道具としてツールレールへ整理して追加する — [証拠:M2.T2-6b.C05](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6b-c05) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6b.C05 evidence=MANUAL.M2.T2-6b.C05.SCREEN-ACCEPTANCE -->
 - [x] UIの技法サブメニューを9種に(層操作/段/中割り/かぶせ/つぶし/花弁/沈め/ひだ寄せ/ねじり) — [証拠:M2.T2-6b.C06](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6b-c06) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6b.C06 evidence=MANUAL.M2.T2-6b.C06.SCREEN-ACCEPTANCE -->
 - [x] テスト: 上記の設計フェーズで洗い出した全ケース、表示上の重なり順検証(t=0.99のz読み取り方式)、記録した手順からの再生一致、奇数層・部分フラップ、原子性(`crates/ori3-layers/tests/flat_motion.rs` 9件) — [証拠:M2.T2-6b.C07](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6b-c07) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6b.C07 evidence=MANUAL.M2.T2-6b.C07.SCREEN-ACCEPTANCE -->
@@ -715,7 +715,7 @@ pub fn outside_reverse(...) -> Result<FoldThroughResult, String>;
 
 要件定義書の**設計原則3b(直感的に触れること)とUI-007〜010**を実現する。現状は「折り線を引く→パネルで方向・対象層・動かす側を選ぶ→折るボタン」という手数の多い操作になっており、これを**紙を直接つかんで動かす**操作に置き換える。
 
-- [ ] **層のずらし表示(UI-010 / SIM-004)**: 平坦状態では層ごとに微小オフセット(表示専用)を付けて重なりを見せる。層の枚数が多いときも潰れないよう、視点距離に応じてオフセット量を調整。**これが無いと畳んだ紙が1枚に見えて選択操作が理解できない**ため最初に実装する — [証拠:M2.T2-6c.C01](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6c-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6c.C01 evidence=MANUAL.M2.T2-6c.C01.SCREEN-ACCEPTANCE -->
+- [x] **層のずらし表示(UI-010 / SIM-004)**: 平坦状態では層ごとに微小オフセット(表示専用)を付けて重なりを見せる。層の枚数が多いときも潰れないよう、視点距離に応じてオフセット量を調整。**これが無いと畳んだ紙が1枚に見えて選択操作が理解できない**ため最初に実装する — [証拠:M2.T2-6c.C01](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6c-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6c.C01 evidence=MANUAL.M2.T2-6c.C01.SCREEN-ACCEPTANCE -->
 - [ ] **つかんで動かす操作(UI-007)**: 3Dビューで紙の上をドラッグすると、(a)つかんだ点にある層のうち最も手前のフラップを自動選択 (b)ドラッグ方向から折り線を推定(つかんだ点と離した点の垂直二等分線、または既存の折り目・紙の縁へのスナップ)(c)離すと折れる。Shift等の修飾キーで「その点の全層」「1枚だけ」を切り替え — [証拠:M2.T2-6c.C02](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6c-c02) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6c.C02 evidence=MANUAL.M2.T2-6c.C02.SCREEN-ACCEPTANCE -->
 - [ ] **実行前プレビュー(UI-008)**: ドラッグ中に折った結果の形を半透明で重ねて表示。動く層を色分け、折り線を明示。プレビューは `flat_motion` を実際に呼んで得た結果を使う(見た目と実際が食い違わないようにする) — [証拠:M2.T2-6c.C03](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6c-c03) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6c.C03 evidence=MANUAL.M2.T2-6c.C03.SCREEN-ACCEPTANCE -->
 - [x] **状態の可視化(UI-009)**: 3Dビュー上部に現在のモードと操作ヒントを1行で常時表示(例「紙をドラッグすると折れます / Shiftで1枚だけ」)。できない状態では理由を表示(例「折り途中では折れません。手順の最後に戻してください」)。ボタンは無効化しても消さず、理由をツールチップに出す — [証拠:M2.T2-6c.C04](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6c-c04) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6c.C04 evidence=MANUAL.M2.T2-6c.C04.SCREEN-ACCEPTANCE -->
@@ -729,8 +729,8 @@ pub fn outside_reverse(...) -> Result<FoldThroughResult, String>;
 
 **Files:** `crates/ori3-cp/src/{construct,flatfold}.rs`, `crates/ori3-rigid/src/lib.rs`(交差検査), 各tests
 
-- [ ] 作図補助(テスト先行): `bisector(角の3点)` / `perpendicular(点, 辺)` / `divide_points(辺, n)` / `direction_lines(点, 22.5°刻み)`。ツールレールのサブメニューから利用 — [証拠:M2.T2-7.C01](traceability/roadmap-links.md#roadmap-evidence-m2-t2-7-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-7.C01 evidence=MANUAL.M2.T2-7.C01.SCREEN-ACCEPTANCE -->
-- [ ] 局所平坦判定: 内部頂点ごとに前川(山−谷=±2)・川崎(交互角和=180°)を検査し違反頂点を返す→2Dで橙色表示(CPE-009) — [証拠:M2.T2-7.C02](traceability/roadmap-links.md#roadmap-evidence-m2-t2-7-c02) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-7.C02 evidence=MANUAL.M2.T2-7.C02.SCREEN-ACCEPTANCE -->
+- [x] 作図補助(テスト先行): `bisector(角の3点)` / `perpendicular(点, 辺)` / `divide_points(辺, n)` / `direction_lines(点, 22.5°刻み)`。ツールレールのサブメニューから利用 — [証拠:M2.T2-7.C01](traceability/roadmap-links.md#roadmap-evidence-m2-t2-7-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-7.C01 evidence=MANUAL.M2.T2-7.C01.SCREEN-ACCEPTANCE -->
+- [x] 局所平坦判定: 内部頂点ごとに前川(山−谷=±2)・川崎(交互角和=180°)を検査し違反頂点を返す→2Dで橙色表示(CPE-009) — [証拠:M2.T2-7.C02](traceability/roadmap-links.md#roadmap-evidence-m2-t2-7-c02) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-7.C02 evidence=MANUAL.M2.T2-7.C02.SCREEN-ACCEPTANCE -->
 - [ ] めり込み簡易警告: Frame3Dの面ペアの三角形交差を総当たり検査(面数400まで想定、rayonで並列化)→交差ありなら3Dビューに警告バッジ(SIM-007) — [証拠:M2.T2-7.C03](traceability/roadmap-links.md#roadmap-evidence-m2-t2-7-c03) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-7.C03 evidence=MANUAL.M2.T2-7.C03.SCREEN-ACCEPTANCE -->
 - [ ] テスト成功確認 → コミット `作図の補助線・折りたたみ可否の注意表示・紙のめり込み警告を追加` → プッシュ — [証拠:M2.T2-7.C04](traceability/roadmap-links.md#roadmap-evidence-m2-t2-7-c04) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-7.C04 evidence=MANUAL.M2.T2-7.C04.COMMIT-PUSH -->
 
@@ -939,7 +939,7 @@ impl Skeleton {
 
 **Files:** `crates/ori3-layers/tests/acceptance_frog.rs`
 
-- [ ] 伝承のカエル(花弁折り・中割り折り・段折りを含む)をスクリプト構築する回帰テスト(最終層数・決定性) — [証拠:M4.T4-6.C01](traceability/roadmap-links.md#roadmap-evidence-m4-t4-6-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-6.C01 evidence=TEST.M4.T4-6.C01 -->
+- [x] 伝承のカエル(花弁折り・中割り折り・段折りを含む)をスクリプト構築する回帰テスト(最終層数・決定性) — [証拠:M4.T4-6.C01](traceability/roadmap-links.md#roadmap-evidence-m4-t4-6-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-6.C01 evidence=TEST.M4.T4-6.C01 -->
 - [ ] 手動確認: アプリでカエルを折って完成→折り図PDFを書き出し、内容を目視確認 — [証拠:M4.T4-6.C02](traceability/roadmap-links.md#roadmap-evidence-m4-t4-6-c02) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-6.C02 evidence=MANUAL.M4.T4-6.C02.SCREEN-ACCEPTANCE -->
 - [ ] コミット `伝承のカエルが折れて折り図を出せることを確認する自動テストを追加` → プッシュ — [証拠:M4.T4-6.C03](traceability/roadmap-links.md#roadmap-evidence-m4-t4-6-c03) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-6.C03 evidence=MANUAL.M4.T4-6.C03.COMMIT-PUSH -->
 
@@ -949,7 +949,7 @@ impl Skeleton {
 
 ### Task 5-1: たわみの手順記録と受け入れ
 
-- [ ] SIM-015を満たすよう、仕上げ手順ごとの有効・硬さ・膨らみの強さを記録して再生し、頂点座標を保存しないこと、風船と折り鶴の受け入れ条件を検査で固定する。現在の作品全体設定だけではこの条件を満たさない。 — [証拠:M5.T5-1.C01](traceability/roadmap-links.md#roadmap-evidence-m5-t5-1-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M5.T5-1.C01 evidence=TEST.M5.T5-1.C01 -->
+- [x] SIM-015を満たすよう、仕上げ手順ごとの有効・硬さ・膨らみの強さを記録して再生し、頂点座標を保存しないこと、風船と折り鶴の受け入れ条件を検査で固定する。現在の作品全体設定だけではこの条件を満たさない。 — [証拠:M5.T5-1.C01](traceability/roadmap-links.md#roadmap-evidence-m5-t5-1-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M5.T5-1.C01 evidence=TEST.M5.T5-1.C01 -->
 
 ## M6: ヘルプ・初回ガイド・テーマ
 

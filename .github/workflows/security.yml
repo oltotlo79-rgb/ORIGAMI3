@@ -189,10 +189,10 @@ jobs:
           $nodeCommand = Get-Command node.exe -CommandType Application -ErrorAction Stop
           $nodeExe = $nodeCommand.Source
           $reportedNodeVersion = & $nodeExe --version
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- npm audit runner Node evidence: $reportedNodeVersion"
           if ($LASTEXITCODE -ne 0 -or $reportedNodeVersion -notmatch "^v22\.\d+\.\d+$") {
             throw "GitHub runner Node must be an exact Node 22 version; runner reported '$reportedNodeVersion'."
           }
-          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- npm audit runner Node evidence: $reportedNodeVersion"
           Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- npm audit requested npm version: $npmVersion"
           $npmCommand = Get-Command npm.cmd -CommandType Application -ErrorAction Stop
           $npmToolRoot = Join-Path $env:RUNNER_TEMP "npm-$npmVersion"
