@@ -1,0 +1,287 @@
+name: Security
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  schedule:
+    # Sunday 03:17 UTC. This is separate from the existing daily CI schedule.
+    - cron: "17 3 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  cargo_and_licenses:
+    name: Cargo advisories and dependency licenses
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_TARGET_DIR: ${{ runner.temp }}\ori3-target-security
+      CARGO_AUDIT_VERSION: "0.22.2"
+      CARGO_AUDIT_CRATE_SHA256: 700c2b240f7fd330c24b675fe429f73a5b676531fcc6300400b2b67f155ba12a
+
+    steps:
+      # A floating checkout action is not used. The exact event revision is fetched and verified.
+      - name: Check out the exact event revision
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          git init .
+          if ($LASTEXITCODE -ne 0) { throw "git init failed" }
+          git remote add origin "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY.git"
+          if ($LASTEXITCODE -ne 0) { throw "git remote add failed" }
+          $credentials = [Convert]::ToBase64String(
+            [Text.Encoding]::ASCII.GetBytes("x-access-token:$env:GH_TOKEN")
+          )
+          git -c "http.extraheader=AUTHORIZATION: basic $credentials" `
+            -c protocol.version=2 fetch --no-tags --prune --depth=1 origin `
+            "+$env:GITHUB_REF`:refs/remotes/origin/security-event"
+          if ($LASTEXITCODE -ne 0) { throw "git fetch failed" }
+          git checkout --detach --force FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { throw "git checkout failed" }
+          $actualRevision = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $actualRevision -ne $env:GITHUB_SHA) {
+            throw "Checked-out revision '$actualRevision' does not match GITHUB_SHA '$env:GITHUB_SHA'."
+          }
+
+      - name: Fetch locked Cargo dependency metadata
+        shell: pwsh
+        run: |
+          cargo fetch --locked
+          if ($LASTEXITCODE -ne 0) { throw "cargo fetch --locked failed" }
+
+      - name: Install and verify the pinned cargo-audit
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $policy = Get-Content -LiteralPath ".github/security-policy.json" -Raw -Encoding UTF8 |
+            ConvertFrom-Json
+          if ([string]$policy.toolPins.cargoAudit.version -ne $env:CARGO_AUDIT_VERSION) {
+            throw "Workflow cargo-audit version differs from security-policy.json."
+          }
+          if ([string]$policy.toolPins.cargoAudit.crateSha256 -ne $env:CARGO_AUDIT_CRATE_SHA256) {
+            throw "Workflow cargo-audit checksum differs from security-policy.json."
+          }
+          cargo install cargo-audit --version $env:CARGO_AUDIT_VERSION --locked
+          if ($LASTEXITCODE -ne 0) { throw "cargo-audit installation failed" }
+          $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE ".cargo" }
+          $archives = @(
+            Get-ChildItem -LiteralPath (Join-Path $cargoHome "registry\cache") `
+              -Recurse -File -Filter "cargo-audit-$env:CARGO_AUDIT_VERSION.crate"
+          )
+          if ($archives.Count -eq 0) {
+            throw "The downloaded cargo-audit crate archive was not found for checksum verification."
+          }
+          $matchingArchive = @(
+            $archives | Where-Object {
+              (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash -eq `
+                $env:CARGO_AUDIT_CRATE_SHA256
+            }
+          )
+          if ($matchingArchive.Count -eq 0) {
+            throw "The downloaded cargo-audit crate checksum does not match security-policy.json."
+          }
+          $reportedVersion = cargo audit --version
+          if ($LASTEXITCODE -ne 0 -or $reportedVersion -notmatch "\b$([regex]::Escape($env:CARGO_AUDIT_VERSION))\b") {
+            throw "cargo-audit reported an unexpected version: $reportedVersion"
+          }
+
+      - name: Validate policy, exceptions, and Cargo/npm licenses
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass `
+            -File scripts/check-supply-chain.ps1 -Mode PolicyAndLicenses
+          if ($LASTEXITCODE -ne 0) { throw "Supply-chain policy/license validation failed" }
+
+      - name: Audit the Cargo lockfile
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $policy = Get-Content -LiteralPath ".github/security-policy.json" -Raw -Encoding UTF8 |
+            ConvertFrom-Json
+          $arguments = @("audit", "--file", "Cargo.lock")
+          foreach ($exception in @($policy.advisoryExceptions | Where-Object { $_.ecosystem -eq "cargo" })) {
+            $arguments += @("--ignore", [string]$exception.advisoryId)
+          }
+          & cargo @arguments
+          if ($LASTEXITCODE -ne 0) { throw "cargo audit found an advisory that is not covered by an active policy exception" }
+
+      # The full readiness check deliberately remains red while an exact Node version,
+      # the CodeQL commit SHA, the SBOM tool pin, or the known npm high assessment is unresolved.
+      - name: Report unresolved supply-chain readiness blockers
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-supply-chain.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Supply-chain readiness remains incomplete; see the blocker list above" }
+
+  npm_advisories:
+    name: npm production and complete lockfile advisories
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out the exact event revision
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          git init .
+          if ($LASTEXITCODE -ne 0) { throw "git init failed" }
+          git remote add origin "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY.git"
+          if ($LASTEXITCODE -ne 0) { throw "git remote add failed" }
+          $credentials = [Convert]::ToBase64String(
+            [Text.Encoding]::ASCII.GetBytes("x-access-token:$env:GH_TOKEN")
+          )
+          git -c "http.extraheader=AUTHORIZATION: basic $credentials" `
+            -c protocol.version=2 fetch --no-tags --prune --depth=1 origin `
+            "+$env:GITHUB_REF`:refs/remotes/origin/security-event"
+          if ($LASTEXITCODE -ne 0) { throw "git fetch failed" }
+          git checkout --detach --force FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { throw "git checkout failed" }
+          $actualRevision = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $actualRevision -ne $env:GITHUB_SHA) {
+            throw "Checked-out revision '$actualRevision' does not match GITHUB_SHA '$env:GITHUB_SHA'."
+          }
+
+      - name: Audit production and complete npm lockfiles with exact tools
+        shell: pwsh
+        working-directory: apps/desktop
+        run: |
+          $ErrorActionPreference = "Stop"
+          $policy = Get-Content -LiteralPath "..\..\.github\security-policy.json" -Raw -Encoding UTF8 |
+            ConvertFrom-Json
+          $nodeVersion = [string]$policy.toolPins.npmAudit.nodeVersion
+          $npmVersion = [string]$policy.toolPins.npmAudit.version
+          if ($nodeVersion -notmatch "^22\.\d+\.\d+$") {
+            throw "Exact Node 22 version is unresolved in security-policy.json; npm audit did not run."
+          }
+          if ($npmVersion -notmatch "^\d+\.\d+\.\d+$") {
+            throw "Exact npm version is unresolved in security-policy.json; npm audit did not run."
+          }
+          $nodeRoot = Join-Path $env:RUNNER_TOOL_CACHE "node\$nodeVersion\x64"
+          $nodeExe = Join-Path $nodeRoot "node.exe"
+          if (-not (Test-Path -LiteralPath $nodeExe -PathType Leaf)) {
+            throw "Pinned Node $nodeVersion is not present in the hosted runner tool cache; no substitute was used."
+          }
+          $reportedNodeVersion = & $nodeExe --version
+          if ($LASTEXITCODE -ne 0 -or $reportedNodeVersion -ne "v$nodeVersion") {
+            throw "Node reported '$reportedNodeVersion', expected 'v$nodeVersion'."
+          }
+          $npmToolRoot = Join-Path $env:RUNNER_TEMP "npm-$npmVersion"
+          & (Join-Path $nodeRoot "npm.cmd") install --prefix $npmToolRoot `
+            --no-save --ignore-scripts --no-audit --no-fund "npm@$npmVersion"
+          if ($LASTEXITCODE -ne 0) { throw "Pinned npm installation failed" }
+          $npmCli = Join-Path $npmToolRoot "node_modules\npm\bin\npm-cli.js"
+          $reportedNpmVersion = & $nodeExe $npmCli --version
+          if ($LASTEXITCODE -ne 0 -or $reportedNpmVersion -ne $npmVersion) {
+            throw "npm reported '$reportedNpmVersion', expected '$npmVersion'."
+          }
+          $npmExceptions = @($policy.advisoryExceptions | Where-Object { $_.ecosystem -eq "npm" })
+          if ($npmExceptions.Count -ne 0) {
+            throw "npm advisory exceptions are not silently applied; add exact result-to-exception matching before enabling one."
+          }
+
+          function Invoke-NpmAudit {
+            param(
+              [string]$Label,
+              [string[]]$AdditionalArguments
+            )
+            $stderrPath = Join-Path $env:RUNNER_TEMP "npm-audit-$Label.stderr.txt"
+            $arguments = @(
+              $npmCli,
+              "audit",
+              "--package-lock-only",
+              "--audit-level=high",
+              "--json"
+            ) + $AdditionalArguments
+            $stdout = @(& $nodeExe @arguments 2> $stderrPath)
+            $auditExitCode = $LASTEXITCODE
+            $auditText = $stdout -join [Environment]::NewLine
+            $auditPath = Join-Path $env:RUNNER_TEMP "npm-audit-$Label.json"
+            [IO.File]::WriteAllText($auditPath, $auditText, [Text.UTF8Encoding]::new($false))
+            try {
+              $audit = $auditText | ConvertFrom-Json
+            }
+            catch {
+              $stderrText = if (Test-Path -LiteralPath $stderrPath) {
+                Get-Content -LiteralPath $stderrPath -Raw -Encoding UTF8
+              } else { "" }
+              throw "npm audit $Label did not return JSON (exit $auditExitCode): $stderrText"
+            }
+            $high = [int]$audit.metadata.vulnerabilities.high
+            $critical = [int]$audit.metadata.vulnerabilities.critical
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY `
+              -Value "- npm ${Label}: high=$high, critical=$critical, exit=$auditExitCode"
+            if ($auditExitCode -gt 1) {
+              throw "npm audit $Label failed operationally with exit code $auditExitCode"
+            }
+            return ($high + $critical)
+          }
+
+          $productionBlocking = Invoke-NpmAudit -Label "production" -AdditionalArguments @("--omit=dev")
+          $completeBlocking = Invoke-NpmAudit -Label "complete" -AdditionalArguments @()
+          if ($productionBlocking -gt 0 -or $completeBlocking -gt 0) {
+            throw "npm audit found high/critical advisories: production=$productionBlocking, complete=$completeBlocking"
+          }
+
+  codeql_blocker:
+    name: CodeQL pin readiness
+    runs-on: windows-latest
+    steps:
+      - name: Stop until the CodeQL action has a verified immutable reference
+        shell: pwsh
+        run: |
+          throw "CodeQL is intentionally not referenced: the verified github/codeql-action v3 40-character commit SHA is unresolved."
+
+  distribution_blocker:
+    name: SBOM and release hash readiness
+    runs-on: windows-latest
+    steps:
+      - name: Stop until the SBOM pin and release integration are approved
+        shell: pwsh
+        run: |
+          throw "SBOM/hash publication is intentionally not enabled: the SBOM tool pin is unresolved and release.yml is outside this task's allowed files."
+
+  security_status:
+    name: Security status and failure notification surface
+    if: ${{ always() }}
+    needs:
+      - cargo_and_licenses
+      - npm_advisories
+      - codeql_blocker
+      - distribution_blocker
+    runs-on: windows-latest
+    steps:
+      - name: Summarize all security jobs
+        shell: pwsh
+        env:
+          CARGO_AND_LICENSES: ${{ needs.cargo_and_licenses.result }}
+          NPM_ADVISORIES: ${{ needs.npm_advisories.result }}
+          CODEQL: ${{ needs.codeql_blocker.result }}
+          DISTRIBUTION: ${{ needs.distribution_blocker.result }}
+        run: |
+          $results = [ordered]@{
+            cargo_and_licenses = $env:CARGO_AND_LICENSES
+            npm_advisories = $env:NPM_ADVISORIES
+            codeql = $env:CODEQL
+            distribution = $env:DISTRIBUTION
+          }
+          foreach ($entry in $results.GetEnumerator()) {
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- $($entry.Key): $($entry.Value)"
+          }
+          $notSuccessful = @($results.GetEnumerator() | Where-Object { $_.Value -ne "success" })
+          if ($notSuccessful.Count -ne 0) {
+            throw "One or more security jobs did not succeed. GitHub Actions records this failed check and sends the repository's configured workflow-failure notifications."
+          }

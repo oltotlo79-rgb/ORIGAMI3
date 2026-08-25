@@ -16,14 +16,14 @@
 ## 1. 役割分担
 
 - **実作業はすべてCodexが行う。** 実装、レビュー、デザイン、アプリのGUI操作、スクリーンショット撮影、資料の読み取り、PDF作成、環境の調査と修復を含み、作業の種類を理由に例外を作らない。
-- **Claudeは「指示・確認・検査・git操作・アプリの起動と終了・報告」だけを行い、自分で成果物を作らない。** 「自分でやったほうが速い」は委譲しない理由にならない。
+- **Claudeは「指示・確認・検査・git操作・アプリの起動と終了・利用者への報告と報告記録」だけを行い、自分で成果物を作らない。** 「自分でやったほうが速い」は委譲しない理由にならない。
 - Claudeが行ってよい作業は次の6つに限る。
   1. Codexへ渡す指示書の作成
   2. Codexの成果物を読んで確認
   3. `scripts/check.ps1` の実行
   4. git操作（Codexは `.git` に書けないため）
   5. アプリの起動と終了
-  6. 利用者への報告
+  6. **利用者への報告と、`docs/報告記録.md` への記録**（報告しただけでは完了ではなく、記録を書いて初めて完了）
 - **アプリの起動・終了と実機確認の役割を、実名のコマンドで次のとおり固定する。**
 
   | 統括が行う | 担当が行う |
@@ -202,7 +202,7 @@ Co-Authored-By: Codex <noreply@openai.com>
 | 14 | **完全に折った端点の重なり順(最適化あり)** | `cargo test --release -p desktop --lib surface_order_exact_endpoint_is_rank_stable_for_previous_19 -- --nocapture` |
 | 15 | **性能(最適化あり)** | `cargo test --release -p ori3-soft --test soft_crane -- --nocapture` |
 | 16 | **性能(最適化あり)** | `cargo test --release -p ori3-propose --test perf_packing -- --nocapture` |
-| 17 | **性能(最適化あり・画面)** | `npm run test -- --maxWorkers=1 --mode=production src/lib/symmetry.test.ts` |
+| 17 | **性能(最適化あり・画面・checks)** | `npm run test -- --maxWorkers=1 --mode=production src/lib/symmetry.test.ts` |
 | 18 | **提案の探索の決定性10回(最適化あり)** | `cargo test --release -p ori3-propose --test acceptance -- completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten --exact --nocapture` |
 | 19 | **提案を通しで折る決定性10回(最適化あり)** | `cargo test --release -p ori3-propose --test end_to_end -- named_sample_completes_end_to_end_and_is_deterministic_ten_out_of_ten --exact --nocapture` |
 | 20 | **重なりの部分集合の候補(最適化あり)** | `cargo test --release -p ori3-propose --test acceptance -- a_safe_coincident_partial_network_appears_after_the_first_fold --exact --nocapture` |
@@ -216,6 +216,7 @@ Co-Authored-By: Codex <noreply@openai.com>
 | 毎日03:17 JST / リリース前の`workflow_dispatch` | **実装から生成した6指標と文書marker・登録mirrorの一致（full 2-pass）** | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate-current-status.ps1 -Check` |
 
 - **CIの`checks`実コマンド**: `cargo test --workspace -- --skip surface_order_179_999_to_180_all_110_creases --skip surface_order_exact_endpoint_is_rank_stable_for_previous_19 --skip completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten --skip named_sample_completes_end_to_end_and_is_deterministic_ten_out_of_ten --skip a_safe_coincident_partial_network_appears_after_the_first_fold --skip the_heaviest_proposal_never_hits_the_time_limit`。この既存のworkspace testに、`proposal_matrix_contract`のdebug・1候補・1要求・直列・空き・1回smokeが含まれる。重複するstepは足さず、`checks`の所要時間を延ばさない。
+- **#17について**: production専用のsymmetry性能検査は、Node.jsと依存部品を既に用意する`checks`の末尾で、表と同じコマンドの別processとして走らせる。長い`performance`でNode setupと2回目の`npm ci`を重ねないためであり、検査数・production mode・`--maxWorkers=1`は変更していない。
 - **#13・#14 について**: この2件は最適化なしでは手元で 476秒 / 175秒 かかる。CIの `checks` ジョブでは `--skip` で外し、`performance` ジョブが最適化ありで走らせる(どちらの検査も消していない)。**この2件は**手元の `cargo test --workspace`(#1)と `scripts/check.ps1` では、いままでどおり最適化なしでも走る。
 - **#18〜#20 について**: この3件は最適化なしでは手元で **約7.5時間 / 374秒 / 375秒** かかる(変更前は 587秒 / 30秒 / 6秒)。花弁折り・つぶし折りの候補を既定で作るようにした(`crates/ori3-propose/src/enumerate.rs` の `WITH_EXTRA_CANDIDATES`)ためで、最適化ありなら **1,332秒 / 12秒 / 11秒**(CI換算 合わせて約81分)で済む。**#13・#14 と違い、この3件は手元の `cargo test --workspace`(#1)・`scripts/check.ps1`・`scripts/hooks/pre-commit` からも `--skip` で外してある。最適化なしでは現実的な時間で終わらないためである。** 手元で確かめたいときは上表のコマンド(最適化あり)を使う。**探索の検査でも `search_to_finish` を使うもの(作業24の終点測定など)は影響を受けないので外していない**(`crates/ori3-propose/src/search.rs` の `if completion.is_some()` が、追加の候補を作る場所を囲っている)。
 - **#21について**: この検査は「先端12本(`MAX_LEAVES`の上限)の4候補すべてが、30,000msのwatchdogに当たらないこと」を主張する。**この主張は最適化ありでしか成り立たない。** watchdogは壁時計(`Instant::now()`)なので、最適化なしは最適化ありより16.8〜20.5倍遅く、必ず`SearchAbort::WatchdogExpired`になる。実測(2026-08-24、この作業機): 最適化なしでは先端12本の4候補すべてがwatchdogに当たり、最適化ありでは0件/10回・最大13.851秒だった。**#18〜#20と同じ扱いとし、手元の`cargo test --workspace`(#1)・`scripts/check.ps1`・`scripts/hooks/pre-commit`からも`--skip`で外してある。** 検査は消していない。決定的な`PLAN_BUDGET`の値(`max_states=2`・`branch=2`)は変更していない。
@@ -547,3 +548,12 @@ Co-Authored-By: Codex <noreply@openai.com>
      利用者の目に触れる時間を最短にする。
   4. 指示書に書く組み立てコマンドと「アプリの起動方法」節を置かない定型は§1に従う。
   5. 配信サーバーの起動（`npm run dev`）も担当にさせない。アプリの起動・終了と実機確認の役割は§1に従う。
+
+### 10.7.15 利用者への報告が会話の中だけで流れた(2026-08-25)
+
+- **起きたこと**: 会話が流れると利用者への報告内容が見えなくなり、判断・原因・実測値・未確認事項が失われた。同じ調査を繰り返すことになった。
+- **原因**: 報告を会話の中だけで行っていた。残す仕組みが無かった。
+- **仕組みでの対策**:
+  1. `scripts/check-report-log.ps1` が `docs/報告記録.md` の存在、1件以上の記録、機械可読な見出し、日付降順、本文、`apps/` または `crates/` の最新コミット日との関係を検査する。既定では同じ日の記録を要求し、許容日数は引数で変えられる。
+  2. `scripts/hooks/pre-commit` が、`apps/` または `crates/` を含むコミットで、同じコミットに `docs/報告記録.md` の変更が無ければ、重いRust検査を始める前に中止する。
+  3. `scripts/check-release-ready.ps1` が、リリース日に `docs/報告記録.md` の最新記録があることを第5検査として確認する。

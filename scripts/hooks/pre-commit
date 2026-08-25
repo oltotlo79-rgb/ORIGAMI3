@@ -10,6 +10,16 @@
 # crate単位の合格は、他のcrateの合格を意味しない。
 
 staged=$(git diff --cached --name-only --diff-filter=ACMR)
+staged_for_report=$(git diff --cached --name-only --diff-filter=ACMRD)
+
+# 実装を進めたのに利用者への報告を書かない状態を、重いRust検査の前に止める。
+if printf '%s\n' "$staged_for_report" | grep -qE '^(apps|crates)/'; then
+    if ! printf '%s\n' "$staged" | grep -Fxq 'docs/報告記録.md'; then
+        printf '%s\n' '[NG] apps/ または crates/ を変更するコミットには、docs/報告記録.md の追記が必要です。' >&2
+        printf '%s\n' '     利用者への報告を、日時とともに docs/報告記録.md へ書いてからコミットしてください。' >&2
+        exit 1
+    fi
+fi
 
 if ! printf '%s\n' "$staged" | grep -qE '(\.rs$|(^|/)Cargo\.(toml|lock)$)'; then
     exit 0

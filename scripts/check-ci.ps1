@@ -645,7 +645,8 @@ $expectedChecksSteps = @(
     [pscustomobject]@{ Command = "cargo clippy --workspace --all-targets -- -D warnings"; WorkingDirectory = "."; Executable = "cargo"; Arguments = @("clippy", "--workspace", "--all-targets", "--", "-D", "warnings") },
     [pscustomobject]@{ Command = "npm run build"; WorkingDirectory = "apps/desktop"; Executable = "npm"; Arguments = @("run", "build") },
     [pscustomobject]@{ Command = "npm run lint"; WorkingDirectory = "apps/desktop"; Executable = "npm"; Arguments = @("run", "lint") },
-    [pscustomobject]@{ Command = "npm run test"; WorkingDirectory = "apps/desktop"; Executable = "npm"; Arguments = @("run", "test") }
+    [pscustomobject]@{ Command = "npm run test"; WorkingDirectory = "apps/desktop"; Executable = "npm"; Arguments = @("run", "test") },
+    [pscustomobject]@{ Command = "npm run test -- --maxWorkers=1 --mode=production src/lib/symmetry.test.ts"; WorkingDirectory = "apps/desktop"; Executable = "npm"; Arguments = @("run", "test", "--", "--maxWorkers=1", "--mode=production", "src/lib/symmetry.test.ts") }
 )
 $expectedPerformanceSteps = @(
     [pscustomobject]@{ Command = "cargo test --release -p ori3-soft --test perf_soft -- --nocapture"; WorkingDirectory = "."; Executable = "cargo"; Arguments = @("test", "--release", "-p", "ori3-soft", "--test", "perf_soft", "--", "--nocapture") },
@@ -662,9 +663,7 @@ $expectedPerformanceSteps = @(
     [pscustomobject]@{ Command = "cargo test --release -p ori3-propose --test end_to_end -- named_sample_completes_end_to_end_and_is_deterministic_ten_out_of_ten --exact --nocapture"; WorkingDirectory = "."; Executable = "cargo"; Arguments = @("test", "--release", "-p", "ori3-propose", "--test", "end_to_end", "--", "named_sample_completes_end_to_end_and_is_deterministic_ten_out_of_ten", "--exact", "--nocapture") },
     [pscustomobject]@{ Command = "cargo test --release -p ori3-propose --test acceptance -- a_safe_coincident_partial_network_appears_after_the_first_fold --exact --nocapture"; WorkingDirectory = "."; Executable = "cargo"; Arguments = @("test", "--release", "-p", "ori3-propose", "--test", "acceptance", "--", "a_safe_coincident_partial_network_appears_after_the_first_fold", "--exact", "--nocapture") },
     [pscustomobject]@{ Command = "cargo test --release -p desktop --lib the_heaviest_proposal_never_hits_the_time_limit -- --nocapture"; WorkingDirectory = "."; Executable = "cargo"; Arguments = @("test", "--release", "-p", "desktop", "--lib", "the_heaviest_proposal_never_hits_the_time_limit", "--", "--nocapture") },
-    [pscustomobject]@{ Command = "powershell -NoProfile -ExecutionPolicy Bypass -File crates/ori3-propose/tests/run-proposal-matrix.ps1 -Mode Performance"; WorkingDirectory = "."; Executable = "powershell"; Arguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "crates/ori3-propose/tests/run-proposal-matrix.ps1", "-Mode", "Performance") },
-    [pscustomobject]@{ Command = "npm ci"; WorkingDirectory = "apps/desktop"; Executable = "npm"; Arguments = @("ci") },
-    [pscustomobject]@{ Command = "npm run test -- --maxWorkers=1 --mode=production src/lib/symmetry.test.ts"; WorkingDirectory = "apps/desktop"; Executable = "npm"; Arguments = @("run", "test", "--", "--maxWorkers=1", "--mode=production", "src/lib/symmetry.test.ts") }
+    [pscustomobject]@{ Command = "powershell -NoProfile -ExecutionPolicy Bypass -File crates/ori3-propose/tests/run-proposal-matrix.ps1 -Mode Performance"; WorkingDirectory = "."; Executable = "powershell"; Arguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "crates/ori3-propose/tests/run-proposal-matrix.ps1", "-Mode", "Performance") }
 )
 $expectedCurrentStatusSteps = @(
     [pscustomobject]@{ Command = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate-current-status.ps1 -Check"; WorkingDirectory = "." }

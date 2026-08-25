@@ -2,7 +2,11 @@
 param(
     [string]$PolicyPath,
     [string]$CargoLockPath,
-    [string]$PackageLockPath
+    [string]$PackageLockPath,
+    [string]$DependabotPath,
+    [string]$SecurityWorkflowPath,
+    [ValidateSet("FullReadiness", "PolicyAndLicenses")]
+    [string]$Mode = "FullReadiness"
 )
 
 Set-StrictMode -Version Latest
@@ -17,11 +21,18 @@ if ([string]::IsNullOrWhiteSpace($CargoLockPath)) {
 if ([string]::IsNullOrWhiteSpace($PackageLockPath)) {
     $PackageLockPath = Join-Path $PSScriptRoot "..\apps\desktop\package-lock.json"
 }
+if ([string]::IsNullOrWhiteSpace($DependabotPath)) {
+    $DependabotPath = Join-Path $PSScriptRoot "..\.github\dependabot.yml"
+}
+if ([string]::IsNullOrWhiteSpace($SecurityWorkflowPath)) {
+    $SecurityWorkflowPath = Join-Path $PSScriptRoot "..\.github\workflows\security.yml"
+}
 
-# 10-A only: validate the policy, exceptions, and current lockfile licenses.
-# Advisory downloads/workflows, CodeQL execution, SBOM generation/publication,
-# artifact hashes, and Dependabot activation belong to 10-B through 10-E.
-$ScriptVersion = "1.0.0"
+# Validate the policy, exceptions, and current lockfile licenses. FullReadiness
+# also preserves the 10-A blockers for immutable tool pins and the known high
+# advisory assessment. PolicyAndLicenses is the CI entry point used before
+# applying policy exceptions to ecosystem-specific audit tools.
+$ScriptVersion = "1.2.0"
 $Failures = New-Object System.Collections.Generic.List[string]
 $ToolPinBlockers = New-Object System.Collections.Generic.List[string]
 $AdvisoryAssessmentBlockers = New-Object System.Collections.Generic.List[string]
@@ -397,6 +408,19 @@ function Test-PolicyShape {
     foreach ($capability in $expectedApproved) {
         Assert-True ($approved -contains $capability) "Approved capability '$capability' is missing."
     }
+    $excluded = @($Policy.scope.excludedCapabilities)
+    $expectedExcluded = @(
+        "application-auto-update",
+        "updater-plugin",
+        "update-endpoint",
+        "update-public-or-signing-key",
+        "update-download-or-apply",
+        "update-rollback"
+    )
+    Assert-True ($excluded.Count -eq $expectedExcluded.Count) "Exactly six excluded automatic-update capabilities are required."
+    foreach ($capability in $expectedExcluded) {
+        Assert-True ($excluded -contains $capability) "Excluded capability '$capability' is missing."
+    }
 
     $autoUpdateProperties = @($Policy.scope.applicationAutoUpdate.PSObject.Properties.Name)
     Assert-True ($autoUpdateProperties.Count -eq $ExpectedAutoUpdateFields.Count) "applicationAutoUpdate must contain exactly the required false fields."
@@ -406,8 +430,12 @@ function Test-PolicyShape {
             Assert-True ($Policy.scope.applicationAutoUpdate.$field -eq $false) "applicationAutoUpdate.$field must be false."
         }
     }
-    Assert-True (@($Policy.scope.releaseArtifacts).Count -eq 4) "Exactly four release artifacts are required."
-    Test-DuplicateValues @($Policy.scope.releaseArtifacts) "releaseArtifacts"
+    $releaseArtifacts = @($Policy.scope.releaseArtifacts)
+    Assert-True ($releaseArtifacts.Count -eq 4) "Exactly four release artifacts are required."
+    Test-DuplicateValues $releaseArtifacts "releaseArtifacts"
+    foreach ($artifact in @("setup.exe", "x64.msi", "portable.exe", "manual.pdf")) {
+        Assert-True ($releaseArtifacts -contains $artifact) "Release artifact '$artifact' is missing."
+    }
 
     $ecosystems = @($Policy.advisories.ecosystems)
     Assert-True ($ecosystems.Count -eq 2 -and $ecosystems -contains "cargo" -and $ecosystems -contains "npm") "Advisories must cover Cargo and npm."
@@ -473,6 +501,163 @@ function Test-PolicyShape {
     Assert-True ($Policy.artifactPublication.sbom.requiredCount -eq 4) "Four SBOMs are required."
     Assert-True ($Policy.artifactPublication.hash.requiredSidecarCount -eq 4) "Four SHA-256 sidecars are required."
     Assert-True ($Policy.artifactPublication.hash.algorithm -eq "SHA-256") "Artifact hashes must use SHA-256."
+    $identityFields = @($Policy.artifactPublication.identityFields)
+    Assert-True ($identityFields.Count -eq 3) "Artifact publication must use exactly three identity fields."
+    foreach ($field in @("artifactName", "version", "buildId")) {
+        Assert-True ($identityFields -contains $field) "Artifact publication identity field '$field' is missing."
+    }
+}
+
+function ConvertFrom-YamlScalar {
+    param([string]$Value)
+
+    $trimmed = $Value.Trim()
+    if ($trimmed.Length -ge 2 -and (
+        ($trimmed.StartsWith('"') -and $trimmed.EndsWith('"')) -or
+        ($trimmed.StartsWith("'") -and $trimmed.EndsWith("'"))
+    )) {
+        return $trimmed.Substring(1, $trimmed.Length - 2)
+    }
+    return $trimmed
+}
+
+function Get-YamlScalarValues {
+    param(
+        [string]$Text,
+        [string]$Key
+    )
+
+    $escapedKey = [regex]::Escape($Key)
+    $matches = @([regex]::Matches(
+        $Text,
+        "(?m)^\s+$escapedKey\s*:\s*(?<value>[^\r\n#]+?)(?:\s+#.*)?\s*$"
+    ))
+    return @($matches | ForEach-Object { ConvertFrom-YamlScalar $_.Groups["value"].Value })
+}
+
+function Assert-YamlScalarEquals {
+    param(
+        [string]$Text,
+        [string]$Key,
+        [string]$Expected,
+        [string]$Label
+    )
+
+    $values = @(Get-YamlScalarValues -Text $Text -Key $Key)
+    Assert-True ($values.Count -eq 1) "$Label must contain exactly one '$Key' value."
+    if ($values.Count -eq 1) {
+        Assert-True ($values[0] -eq $Expected) "$Label '$Key' must be '$Expected', not '$($values[0])'."
+    }
+}
+
+function Test-DependabotConfiguration {
+    param(
+        [object]$Policy,
+        [string]$Path
+    )
+
+    $text = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+    Assert-True ($text -match '(?m)^version:[ \t]*2[ \t]*$') "dependabot.yml must declare version 2."
+    Assert-True ($text -notmatch '(?m)^\t') "dependabot.yml may not use tab indentation."
+    Assert-True ($text -notmatch '(?im)^\s*(auto-merge|auto_merge|automatic-merge)\s*:') "dependabot.yml may not enable automatic merging."
+
+    $updateBlocks = @([regex]::Matches(
+        $text,
+        '(?ms)^  - package-ecosystem:[ \t]*(?<ecosystem>[^\r\n#]+?)[ \t]*(?:#.*)?\r?$\r?\n(?<body>.*?)(?=^  - package-ecosystem:|\z)'
+    ))
+    Assert-True ($updateBlocks.Count -eq 3) "dependabot.yml must define exactly three update ecosystems."
+
+    $expectedByEcosystem = @{}
+    foreach ($ecosystem in @($Policy.dependencyUpdates.ecosystems)) {
+        $expectedByEcosystem[[string]$ecosystem.name] = $ecosystem
+    }
+    $actualEcosystems = @()
+    foreach ($block in $updateBlocks) {
+        $ecosystemName = ConvertFrom-YamlScalar $block.Groups["ecosystem"].Value
+        $actualEcosystems += $ecosystemName
+        Assert-True ($expectedByEcosystem.ContainsKey($ecosystemName)) "dependabot.yml has unapproved ecosystem '$ecosystemName'."
+        if (-not $expectedByEcosystem.ContainsKey($ecosystemName)) {
+            continue
+        }
+
+        $expected = $expectedByEcosystem[$ecosystemName]
+        $body = $block.Groups["body"].Value
+        $label = "dependabot '$ecosystemName'"
+        Assert-YamlScalarEquals -Text $body -Key "directory" -Expected ([string]$expected.directory) -Label $label
+        Assert-YamlScalarEquals -Text $body -Key "interval" -Expected ([string]$expected.interval) -Label $label
+        Assert-YamlScalarEquals -Text $body -Key "day" -Expected ([string]$expected.day) -Label $label
+        Assert-YamlScalarEquals -Text $body -Key "time" -Expected ([string]$expected.time) -Label $label
+        Assert-YamlScalarEquals -Text $body -Key "timezone" -Expected ([string]$expected.timezone) -Label $label
+        Assert-YamlScalarEquals -Text $body -Key "open-pull-requests-limit" -Expected ([string]$expected.openPullRequestsLimit) -Label $label
+
+        $groupName = "$ecosystemName-minor-and-patch"
+        $escapedGroupName = [regex]::Escape($groupName)
+        $groupMatch = [regex]::Match(
+            $body,
+            "(?ms)^      ${escapedGroupName}:[ \t]*\r?$\r?\n(?<groupBody>.*?)(?=^      [^ \t]|\z)"
+        )
+        Assert-True ($groupMatch.Success) "$label must group minor and patch updates as '$groupName'."
+        if ($groupMatch.Success) {
+            $groupBody = $groupMatch.Groups["groupBody"].Value
+            Assert-YamlScalarEquals -Text $groupBody -Key "applies-to" -Expected "version-updates" -Label "$label group '$groupName'"
+            $updateTypes = @([regex]::Matches(
+                $groupBody,
+                '(?m)^          - (?<value>[^\r\n#]+?)[ \t]*(?:#.*)?$'
+            ) | ForEach-Object { ConvertFrom-YamlScalar $_.Groups["value"].Value })
+            Assert-True ($updateTypes.Count -eq 2) "$label group '$groupName' must list exactly minor and patch update types."
+            Assert-True ($updateTypes -contains "minor") "$label group '$groupName' must include minor updates."
+            Assert-True ($updateTypes -contains "patch") "$label group '$groupName' must include patch updates."
+        }
+    }
+    Test-DuplicateValues $actualEcosystems "dependabot.yml package-ecosystem"
+    foreach ($required in @("cargo", "npm", "github-actions")) {
+        Assert-True ($actualEcosystems -contains $required) "dependabot.yml is missing '$required'."
+    }
+}
+
+function Test-SecurityWorkflowConfiguration {
+    param(
+        [object]$Policy,
+        [string]$Path
+    )
+
+    $text = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+    Assert-True ($text -match '(?m)^name:[ \t]*Security[ \t]*$') "security.yml must be named Security."
+    Assert-True ($text -match '(?m)^on:[ \t]*$') "security.yml must declare workflow triggers."
+    Assert-True ($text -match '(?m)^  pull_request:[ \t]*$') "security.yml must run for pull requests."
+    Assert-True ($text -match '(?m)^  workflow_dispatch:[ \t]*$') "security.yml must allow manual execution."
+    Assert-True ($text -match '(?ms)^  push:[ \t]*\r?\n[ \t]*branches:[ \t]*\r?\n[ \t]*- main[ \t]*(?:\r?\n|$)') "security.yml must run for pushes to main."
+
+    $schedule = $Policy.advisories.triggers.schedule
+    $dayToCron = @{ sunday = "0"; monday = "1"; tuesday = "2"; wednesday = "3"; thursday = "4"; friday = "5"; saturday = "6" }
+    $day = ([string]$schedule.day).ToLowerInvariant()
+    Assert-True ($dayToCron.ContainsKey($day)) "security-policy.json has unsupported scheduled day '$($schedule.day)'."
+    $timeParts = ([string]$schedule.time).Split(":")
+    Assert-True ($timeParts.Count -eq 2 -and $timeParts[0] -match '^\d{2}$' -and $timeParts[1] -match '^\d{2}$') "security-policy.json schedule time must use HH:mm."
+    if ($dayToCron.ContainsKey($day) -and $timeParts.Count -eq 2 -and $timeParts[0] -match '^\d{2}$' -and $timeParts[1] -match '^\d{2}$') {
+        $expectedCron = "$([int]$timeParts[1]) $([int]$timeParts[0]) * * $($dayToCron[$day])"
+        $escapedCron = [regex]::Escape($expectedCron)
+        $cronPattern = '(?m)^    - cron:[ \t]*"' + $escapedCron + '"[ \t]*$'
+        Assert-True ($text -match $cronPattern) "security.yml weekly schedule must match security-policy.json ('$expectedCron' UTC)."
+    }
+    Assert-True ([string]$schedule.timezone -eq "UTC") "security.yml only accepts the policy schedule in UTC."
+
+    foreach ($job in @("cargo_and_licenses", "npm_advisories", "codeql_blocker", "distribution_blocker", "security_status")) {
+        Assert-True ($text -match "(?m)^  ${job}:[ \t]*$") "security.yml is missing job '$job'."
+    }
+    Assert-True ($text -match '(?ms)^permissions:[ \t]*\r?\n[ \t]*contents:[ \t]*read[ \t]*(?:\r?\n|$)') "security.yml must keep read-only contents permission."
+    Assert-True ($text -match 'scripts/check-supply-chain\.ps1 -Mode PolicyAndLicenses') "security.yml must validate policy and licenses before Cargo advisory exceptions."
+    Assert-True ($text -match 'security-policy\.json') "security.yml must read security-policy.json instead of duplicating policy decisions."
+    Assert-True ($text -match 'cargo audit --version') "security.yml must verify the installed Cargo advisory tool before use."
+    Assert-True ($text -match 'npm audit') "security.yml must audit npm lockfiles."
+    Assert-True ($text -match 'security_status:[\s\S]*if: \$\{\{ always\(\) \}\}') "security.yml must summarize failures even when a preceding job fails."
+    Assert-True ($text -match 'One or more security jobs did not succeed') "security.yml must fail the summary job when an audit job is unsuccessful."
+    Assert-True ($text -notmatch '(?im)^\s*uses:\s*[^\r\n@]+@(main|master|latest)\b') "security.yml may not use floating action references."
+
+    $workflowCargoAuditVersions = @(Get-YamlScalarValues -Text $text -Key "CARGO_AUDIT_VERSION")
+    Assert-True ($workflowCargoAuditVersions.Count -eq 1 -and $workflowCargoAuditVersions[0] -eq [string]$Policy.toolPins.cargoAudit.version) "security.yml Cargo advisory version must match security-policy.json."
+    $workflowCargoAuditHashes = @(Get-YamlScalarValues -Text $text -Key "CARGO_AUDIT_CRATE_SHA256")
+    Assert-True ($workflowCargoAuditHashes.Count -eq 1 -and $workflowCargoAuditHashes[0] -eq [string]$Policy.toolPins.cargoAudit.crateSha256) "security.yml Cargo advisory checksum must match security-policy.json."
 }
 
 function Test-Exceptions {
@@ -969,7 +1154,7 @@ function Test-CargoLicenses {
     return [pscustomobject]@{ Total = $total; Registry = $registry; Workspace = $workspace; UnsupportedSource = $unsupported }
 }
 
-foreach ($requiredPath in @($PolicyPath, $CargoLockPath, $PackageLockPath)) {
+foreach ($requiredPath in @($PolicyPath, $CargoLockPath, $PackageLockPath, $DependabotPath, $SecurityWorkflowPath)) {
     if (-not (Test-Path -LiteralPath $requiredPath)) {
         throw "Required file not found: $requiredPath"
     }
@@ -978,22 +1163,37 @@ foreach ($requiredPath in @($PolicyPath, $CargoLockPath, $PackageLockPath)) {
 $policyText = Get-Content -LiteralPath $PolicyPath -Raw -Encoding UTF8
 $policy = $policyText | ConvertFrom-Json
 
+$configurationFailureBaseline = $Failures.Count
 Test-PolicyShape $policy
+Test-DependabotConfiguration -Policy $policy -Path $DependabotPath
+Test-SecurityWorkflowConfiguration -Policy $policy -Path $SecurityWorkflowPath
+$configurationFailureCount = $Failures.Count - $configurationFailureBaseline
 Test-Exceptions $policy
 Initialize-LicensePolicy $policy
 $npmResult = Test-NpmLicenses $PackageLockPath
 $cargoResult = Test-CargoLicenses -LockPath $CargoLockPath -Policy $policy
-Test-ToolPinReadiness $policy
-Test-KnownAdvisoryAssessment $policy
+if ($Mode -eq "FullReadiness") {
+    Test-ToolPinReadiness $policy
+    Test-KnownAdvisoryAssessment $policy
+}
 
 Write-Host "ORIGAMI3 supply-chain 10-A policy check v$ScriptVersion"
+Write-Host "Mode: $Mode"
 Write-Host "Policy: $PolicyPath"
+Write-Host "Dependabot configuration: $DependabotPath"
+Write-Host "Security workflow configuration: $SecurityWorkflowPath"
+if ($configurationFailureCount -eq 0) {
+    Write-Host "Offline configuration checks: PASSED (policy, Dependabot, security workflow)" -ForegroundColor Green
+}
+else {
+    Write-Host "Offline configuration checks: FAILED ($configurationFailureCount violation(s))" -ForegroundColor Red
+}
 Write-Host "npm packages: total=$($npmResult.Total), production=$($npmResult.Production), development/build=$($npmResult.DevelopmentBuild)"
 Write-Host "Cargo packages: total=$($cargoResult.Total), registry=$($cargoResult.Registry), workspace=$($cargoResult.Workspace), unsupported-source=$($cargoResult.UnsupportedSource)"
 Write-Host "License results: scanned=$($LicenseMetrics.Scanned), unknown=$($LicenseMetrics.Unknown), outside-allowlist=$($LicenseMetrics.OutsideAllowlist), denied=$($LicenseMetrics.Denied), unselected-multi=$($LicenseMetrics.UnselectedMultiLicense), scope-violation=$($LicenseMetrics.ScopeViolation)"
 Write-Host "Advisory exceptions: $(@($policy.advisoryExceptions).Count), expired=0 (validated), maximum-days=90"
 Write-Host "Policy declarations for automatic dependency actions: merge=0, approve=0, apply-lockfile-to-default-branch=0, release=0"
-Write-Host "10-B through 10-E execution: not run by this 10-A checker"
+Write-Host "10-B through 10-E external audit/static-analysis/publication execution: not run by this policy/license checker"
 
 $policyDataFailed = $Failures.Count -gt 0
 if ($policyDataFailed) {
@@ -1005,7 +1205,10 @@ if ($policyDataFailed) {
 else {
     Write-Host "10-A POLICY/LICENSE DATA: PASSED" -ForegroundColor Green
 }
-if ($ToolPinBlockers.Count -eq 0) {
+if ($Mode -eq "PolicyAndLicenses") {
+    Write-Host "10-A TOOL PINS: NOT CHECKED IN PolicyAndLicenses MODE"
+}
+elseif ($ToolPinBlockers.Count -eq 0) {
     Write-Host "10-A TOOL PINS: PASSED" -ForegroundColor Green
 }
 else {
@@ -1014,7 +1217,10 @@ else {
         Write-Host " - $blocker" -ForegroundColor Yellow
     }
 }
-if ($AdvisoryAssessmentBlockers.Count -eq 0) {
+if ($Mode -eq "PolicyAndLicenses") {
+    Write-Host "KNOWN HIGH ADVISORY ASSESSMENT: NOT CHECKED IN PolicyAndLicenses MODE"
+}
+elseif ($AdvisoryAssessmentBlockers.Count -eq 0) {
     Write-Host "KNOWN HIGH ADVISORY ASSESSMENT: PASSED" -ForegroundColor Green
 }
 else {
@@ -1026,12 +1232,14 @@ else {
 
 if ($policyDataFailed) {
     Write-Host "10-A OVERALL: FAILED" -ForegroundColor Red
-    Write-Host "10-B1/B2/C/D/E: NOT STARTED (expected for this task)"
     exit 1
+}
+elseif ($Mode -eq "PolicyAndLicenses") {
+    Write-Host "POLICY/LICENSE CHECK: PASSED" -ForegroundColor Green
+    exit 0
 }
 elseif ($ToolPinBlockers.Count -gt 0 -or $AdvisoryAssessmentBlockers.Count -gt 0) {
     Write-Host "10-A OVERALL: INCOMPLETE" -ForegroundColor Yellow
-    Write-Host "10-B1/B2/C/D/E: NOT STARTED (expected for this task)"
     exit 2
 }
 

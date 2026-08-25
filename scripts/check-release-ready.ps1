@@ -22,13 +22,14 @@ $srcPath = Join-Path $desktopPath "src"
 $helpPath = Join-Path $srcPath "help"
 $packageJsonPath = Join-Path $desktopPath "package.json"
 $manualAssetsPath = Join-Path $root "docs\manual\assets"
+$reportLogPath = Join-Path $root "docs\報告記録.md"
 $script:failureCount = 0
 
 function Write-Stage {
     param([int]$Number, [string]$Name)
 
     Write-Host ""
-    Write-Host "=== ($Number/4) $Name ===" -ForegroundColor Cyan
+    Write-Host "=== ($Number/5) $Name ===" -ForegroundColor Cyan
 }
 
 function Write-Ok {
@@ -327,6 +328,32 @@ function Format-Time {
     return $Value.ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss.fffffff 'UTC'")
 }
 
+function Get-LatestReportLogDate {
+    param([string]$Path)
+
+    $content = Read-Utf8Text $Path
+    $headerPattern = [regex]::new(
+        '(?m)^## (?<date>\d{4}-\d{2}-\d{2}) (?<time>(?:[01]\d|2[0-3]):[0-5]\d) — (?<title>\S(?:.*\S)?)$'
+    )
+    $match = $headerPattern.Match($content)
+    if (-not $match.Success) {
+        throw "機械可読な報告記録の見出しがありません。scripts/check-report-log.ps1 を先に通してください。"
+    }
+
+    $reportDate = [datetime]::MinValue
+    $dateText = $match.Groups["date"].Value
+    if (-not [datetime]::TryParseExact(
+        $dateText,
+        "yyyy-MM-dd",
+        [System.Globalization.CultureInfo]::InvariantCulture,
+        [System.Globalization.DateTimeStyles]::None,
+        [ref]$reportDate
+    )) {
+        throw "最新の報告記録の日付が実在しません: $dateText"
+    }
+    return $reportDate.Date
+}
+
 # 検査1: 4ファイル・5か所の版数を読む。
 Write-Stage 1 "バージョン番号の一致"
 $cargoVersion = $null
@@ -502,11 +529,31 @@ catch {
     Write-Host '  修正: ヘルプと説明書PDFを確認し、`scripts/build-manual.ps1` で説明書を作り直してください。'
 }
 
+# 検査5: リリース日に、利用者へ報告した記録が残っていること。
+Write-Stage 5 "利用者への報告記録がリリース日と同じこと"
+try {
+    $latestReportDate = Get-LatestReportLogDate $reportLogPath
+    $releaseDate = (Get-Date).Date
+    if ($latestReportDate -ne $releaseDate) {
+        Write-Ng "利用者への報告記録の最新の日付がリリース日と同じではありません。"
+        Write-Host "  最新の報告: $($latestReportDate.ToString('yyyy-MM-dd'))"
+        Write-Host "  リリース日: $($releaseDate.ToString('yyyy-MM-dd'))"
+        Write-Host '  修正: 利用者への報告を日時とともに docs/報告記録.md へ追記してください。'
+    }
+    else {
+        Write-Ok "利用者への報告記録の最新の日付はリリース日 $($releaseDate.ToString('yyyy-MM-dd')) と一致しています。"
+    }
+}
+catch {
+    Write-Ng "利用者への報告記録を検査できませんでした: $($_.Exception.Message)"
+    Write-Host '  修正: docs/報告記録.md を確認し、scripts/check-report-log.ps1 を通してください。'
+}
+
 Write-Host ""
 if ($script:failureCount -gt 0) {
     Write-Host "[NG] リリース準備の検査で $script:failureCount 件の問題が見つかりました。" -ForegroundColor Red
     exit 1
 }
 
-Write-Host "[OK] リリース準備の4検査に合格しました。" -ForegroundColor Green
+Write-Host "[OK] リリース準備の5検査に合格しました。" -ForegroundColor Green
 exit 0

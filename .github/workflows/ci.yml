@@ -88,6 +88,13 @@ jobs:
         working-directory: apps/desktop
         run: npm run test
 
+      # production専用のsymmetry性能検査も、Node.jsと依存部品を既に用意したこのjobで
+      # 完全に同じ別processとして走らせる。長いperformance jobでNode setupとnpm ciを
+      # 重ねず、検査数・production mode・worker数は変えない。
+      - name: Test symmetry performance in production mode
+        working-directory: apps/desktop
+        run: npm run test -- --maxWorkers=1 --mode=production src/lib/symmetry.test.ts
+
   performance:
     name: Release performance tests
     if: github.event_name == 'push' || github.event_name == 'pull_request'
@@ -99,13 +106,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -163,14 +163,6 @@ jobs:
       # Fullはほかの作業を止めたリリース直前に手元で1回だけ実行する。
       - name: Test the proposal matrix release boundary
         run: powershell -NoProfile -ExecutionPolicy Bypass -File crates/ori3-propose/tests/run-proposal-matrix.ps1 -Mode Performance
-
-      - name: Install frontend dependencies
-        working-directory: apps/desktop
-        run: npm ci
-
-      - name: Test symmetry performance in production mode
-        working-directory: apps/desktop
-        run: npm run test -- --maxWorkers=1 --mode=production src/lib/symmetry.test.ts
 
   current_status:
     name: Nightly and pre-release document drift check
