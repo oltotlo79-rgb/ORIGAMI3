@@ -3,14 +3,36 @@ import { describe, expect, it } from "vitest";
 import { contrastRatio, type Rgb } from "../../lib/cpColors";
 import { UI_THEMES, hexToRgb } from "../../lib/displayPrefs";
 
-const appCss = readFileSync(new URL("../../App.css", import.meta.url), "utf8").replace(
-  /\r\n/g,
-  "\n",
-);
+const tokensCss = readFileSync(
+  new URL("../../styles/tokens.css", import.meta.url),
+  "utf8",
+).replace(/\r\n/g, "\n");
+const themesCss = readFileSync(
+  new URL("../../styles/themes.css", import.meta.url),
+  "utf8",
+).replace(/\r\n/g, "\n");
+const baseLayoutCss = readFileSync(
+  new URL("../../styles/base-layout.css", import.meta.url),
+  "utf8",
+).replace(/\r\n/g, "\n");
+const viewerCss = readFileSync(
+  new URL("../../styles/viewer.css", import.meta.url),
+  "utf8",
+).replace(/\r\n/g, "\n");
+
+const baseSelectors = new Set([".view-cube-zone", ".suspect-hinge-guide"]);
 
 function cssDeclarations(selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return appCss.match(new RegExp(`(?:^|\\n)${escaped}\\s*\\{([^}]*)\\}`, "s"))?.[1] ?? "";
+  const ownerCss =
+    selector === ":root"
+      ? tokensCss
+      : selector.startsWith('.app[data-theme="')
+        ? themesCss
+        : baseSelectors.has(selector)
+          ? baseLayoutCss
+          : viewerCss;
+  return ownerCss.match(new RegExp(`(?:^|\\n)${escaped}\\s*\\{([^}]*)\\}`, "s"))?.[1] ?? "";
 }
 
 interface CssRule {
@@ -20,7 +42,7 @@ interface CssRule {
 
 // 注釈を外してから規則へ割る。選び手は複数行に分かれるため、各行の末尾だけを見る。
 const CSS_RULES: CssRule[] = [
-  ...appCss.replace(/\/\*[\s\S]*?\*\//g, "\n").matchAll(/([^{}]+)\{([^{}]*)\}/g),
+  ...viewerCss.replace(/\/\*[\s\S]*?\*\//g, "\n").matchAll(/([^{}]+)\{([^{}]*)\}/g),
 ].map((match) => ({
   selectors: match[1]
     .split(",")
@@ -146,7 +168,7 @@ describe("視点立方体のCSS契約", () => {
     const zone = cssDeclarations(".view-cube-zone");
     expect(zone).toContain("cursor: pointer;");
     expect(zone).toContain("color: var(--color-on-solid);");
-    expect(appCss).toMatch(
+    expect(viewerCss).toMatch(
       /\.view-cube-zone:hover,\n\.view-cube-zone:focus-visible,\n\.view-cube-zone\[data-pointed="true"\] \{[\s\S]*?background: var\(--color-accent-soft\);[\s\S]*?box-shadow: inset 0 0 0 2px var\(--color-accent\);/,
     );
   });
@@ -180,7 +202,7 @@ describe("視点立方体の面の色", () => {
     expect(tokens.size).toBe(6);
     expect(new Set(tokens.values()).size).toBe(3);
     // 色は直に書かず、必ずテーマの変数を指す。
-    expect(appCss).not.toMatch(/--view-cube-face-color:\s*#/);
+    expect(viewerCss).not.toMatch(/--view-cube-face-color:\s*#/);
   });
 
   it.each([...UI_THEMES])("%sのテーマで3色が互いに見分けられる", (theme) => {

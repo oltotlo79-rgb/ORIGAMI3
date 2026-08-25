@@ -35,6 +35,7 @@ import {
   type WheelBehavior,
 } from "../lib/displayPrefs";
 import {
+  ALIGN_EPS,
   ALIGN_STEPS,
   alignRefPoint,
   movingSideOf,
@@ -149,13 +150,11 @@ const POSE_THROTTLE_MS = 16;
 /**
  * 一斉表示専用の送信間隔(ms)。
  *
- * 16msで入力→React反映を10回実測した初回値は平均23.467ms・最大35.704msで、
- * 目標33msを最大だけ2.704ms超えた。Rust側の最大7.913msや計算精度は変えず、
- * 送信待ちだけを半分にする。専用queueが同時1件・待機最新1件に保つため、
- * 計算が追いつかない場合にも要求列は増えない。8msへ変更後の同じ10回は
- * 平均14.575ms・最大19.952msで、33msまで平均18.425ms・最大13.048msの余裕。
+ * 1秒120入力を65回以下へまとめる受入条件に合わせ、60fps相当の16msとする。
+ * 専用queueも同時1件・待機最新1件に保つため、計算が追いつかない場合に
+ * 要求列は増えない。入力値自体はZustandへ直ちに反映し、つまみは遅らせない。
  */
-const FOLD_ALL_THROTTLE_MS = 8;
+const FOLD_ALL_THROTTLE_MS = 16;
 
 /** たわみの指定を作品へ書き込むまでの待ち(ms)。つまみを動かしている間の
  * 書き込みをまとめ、元に戻す履歴が細かく埋まらないようにする */
@@ -170,6 +169,19 @@ const ANGLE_HISTORY_LIMIT = 50;
 /** 同じ折り線への続けざまの角度変更(スライダーを動かしている間)を
  * 1件にまとめる時間(ms)。ドラッグ1回=履歴1件にするための間隔 */
 const ANGLE_GROUP_MS = 700;
+
+/**
+ * 角度確定後に、形が大きく変わったことを知らせる境目。
+ *
+ * 3D座標は紙の長辺を1としている。実機の通常の末尾補正は0.0488〜0.0674、
+ * 問題になった枝の切替は1.0728〜1.5135だったため、その間の0.1（長辺の10%）を
+ * 通知境界にする。正しさや候補選択には使わず、確定後の非阻害通知だけに使う。
+ */
+export const FINISH_JUMP_NOTICE_THRESHOLD = 0.1;
+
+/** 利用者向けにはsolver内部の用語を出さず、起きた見た目の変化だけを伝える。 */
+export const FINISH_JUMP_NOTICE =
+  "角度を確定したときに紙の形が大きく変わりました。意図した折り方になっているか確認してください。";
 
 /** 希望角との差がこの値以上なら、画面で「追従した」と知らせる。 */
 export const RELAX_NOTICE_EPS_DEG = 0.1;
@@ -431,6 +443,56 @@ export function isSpatialFoldFrame(frame: Frame3D | null): boolean {
 }
 
 /**
+ * 同じ面・同じpolygon頂点の、確定前後の最大移動量を返す。
+ * 面配列の順番は表示都合で変わり得るため、face IDで対応付ける。
+ * 比較できない不完全frameを「移動0」と誤認しないよう、その場合はnullにする。
+ */
+export function maximumFrameVertexMovement(
+  before: Frame3D,
+  after: Frame3D,
+): number | null {
+  if (before.faces.length !== after.faces.length) return null;
+  const afterByFace = new Map(after.faces.map((face) => [face.face, face]));
+  if (afterByFace.size !== after.faces.length) return null;
+  const seen = new Set<number>();
+  let maximum = 0;
+  for (const beforeFace of before.faces) {
+    if (seen.has(beforeFace.face)) return null;
+    seen.add(beforeFace.face);
+    const afterFace = afterByFace.get(beforeFace.face);
+    if (!afterFace || beforeFace.polygon.length !== afterFace.polygon.length) {
+      return null;
+    }
+    for (let index = 0; index < beforeFace.polygon.length; index++) {
+      const beforePoint = beforeFace.polygon[index];
+      const afterPoint = afterFace.polygon[index];
+      const distance = Math.hypot(
+        beforePoint[0] - afterPoint[0],
+        beforePoint[1] - afterPoint[1],
+        beforePoint[2] - afterPoint[2],
+      );
+      if (!Number.isFinite(distance)) return null;
+      maximum = Math.max(maximum, distance);
+    }
+  }
+  return seen.size === afterByFace.size ? maximum : null;
+}
+
+/** Followのframeは候補計算へ渡さず、確定後の通知比較だけに使う数値コピーにする。 */
+function finishComparisonFrame(frame: Frame3D | null): Frame3D | null {
+  if (frame === null) return null;
+  return {
+    faces: frame.faces.map((face) => ({
+      ...face,
+      polygon: face.polygon.map(
+        ([x, y, z]) => [x, y, z] as [number, number, number],
+      ),
+    })),
+    warnings: [],
+  };
+}
+
+/**
  * 縁への衝突が1か所だけ見つかり、巻き込み用の追加折り目を選べる状態。
  * 元の折り入力も保持し、利用者の答えを同じ条件へ適用する。
  */
@@ -550,9 +612,54 @@ function clearCurrentLayerMotion(draft: TechniqueDraft): TechniqueDraft {
 }
 
 /**
+ * 1つ目に選んだ対象が、求まった折り線のどちら側にあるかを返す。
+ * 点が折り線上にあるとき、または線が折り線をまたぐときは片側に決め付けずnullにする。
+ */
+export function automaticMovingSide(
+  line: FoldLine,
+  first: AlignTarget | null | undefined,
+): FoldDraft["movingSide"] | null {
+  if (!first) return null;
+  const dx = line[1][0] - line[0][0];
+  const dy = line[1][1] - line[0][1];
+  const length = Math.hypot(dx, dy);
+  if (length < ALIGN_EPS) return null;
+  // 長さで割った符号付き距離を使う。線分が長いほど判定だけが厳しくなることを防ぐ。
+  const signedDistance = (point: Vec2): number =>
+    (dx * (point[1] - line[0][1]) - dy * (point[0] - line[0][0])) / length;
+  const sideOf = (point: Vec2): FoldDraft["movingSide"] | null => {
+    const distance = signedDistance(point);
+    if (distance > ALIGN_EPS) return "left";
+    if (distance < -ALIGN_EPS) return "right";
+    return null;
+  };
+
+  if (first.kind === "point") return sideOf(first.p);
+  const a = sideOf(first.a);
+  const b = sideOf(first.b);
+  // 片端が折り線上なら、紙があるもう一端の側を使う。両端が反対側なら
+  // 選んだ線そのものが折り線をまたぐので、片側だと決め付けない。
+  if (a === null) return b;
+  if (b === null) return a;
+  return a === b ? a : null;
+}
+
+/**
+ * 自動判定できない入力では従来の中点判定を使い、既存の折り方を変えない。
+ * 判定不能であること自体はautomaticMovingSideのnullを使って画面に説明する。
+ */
+export function initialMovingSide(
+  line: FoldLine,
+  first: AlignTarget | null | undefined,
+): FoldDraft["movingSide"] {
+  if (!first) return "right";
+  return automaticMovingSide(line, first) ?? movingSideOf(line, alignRefPoint(first));
+}
+
+/**
  * 合わせて求まった折り線から、確定前の折り(FoldDraft)を作る。
- * 動く側は「1つ目に選んだ対象がある側」にする(その対象が相手に重なる)。
- * 向き・対象の層は既存の折り操作と同じ既定にして、あとはパネルで決めてもらう。
+ * 折り返す紙は「1つ目に選んだ対象がある側」にする(その対象が相手に重なる)。
+ * 向き・対象の層は既存の折り操作と同じ既定にする。
  */
 export function alignFoldDraft(
   s: { docEpoch: number; doc: Document | null; currentStep: number | null },
@@ -564,7 +671,9 @@ export function alignFoldDraft(
     line,
     direction: "Up",
     target: "all",
-    movingSide: movingSideOf(line, alignRefPoint(picks[0])),
+    // 判定不能時は従来と同じ側を保つ。画面では黄色と理由を必ず示し、
+    // 利用者が二択へ答えなくても単一の反転操作だけで直せるようにする。
+    movingSide: initialMovingSide(line, picks[0]),
     docEpoch: s.docEpoch,
     stepCount: s.doc.sequence.length,
     upTo: foldInsertAt(s),
@@ -585,17 +694,26 @@ export function nextAlignKind(draft: AlignDraft): "point" | "line" | null {
 /** 段折りの段の幅の初期値(mm) */
 const DEFAULT_PLEAT_WIDTH_MM = 10;
 
-/** 引きかけの折り線が今の形に合わなくなったときの案内 */
+/** 選んだ後に作品または手順の位置が変わり、古い入力を使えなくなったときの案内 */
 const STALE_DRAFT_MESSAGE =
-  "引いた折り線は今の紙の形に合わなくなったため取り消しました。もう一度線を引いてください";
+  "折り方を決めた後に作品または表示する手順が変わったため、選んだ内容を取り消しました。今の形でもう一度選んでください";
+
+/** 一時的な画面状態のため、選択を残したまま確定だけ待ってもらう案内 */
+const PLAYING_FOLD_MESSAGE =
+  "手順を再生している間は、この折り方を確定できません。選んだ内容は残してあります。再生を止めてください";
+const PARTIAL_PLAYBACK_FOLD_MESSAGE =
+  "手順の途中の形からは、この折り方をまだ記録できません。選んだ内容は残してあります。手順を最後まで進めてください";
+const ANGLED_FOLD_MESSAGE =
+  "角度を変えた形からは、この折り方をまだ記録できません。選んだ内容は残してあります。角度を0°に戻すと、このまま折れます";
 
 /** 技法が使えない形だったときに添える案内(要件§12) */
 const TECHNIQUE_FALLBACK_HINT = "手動の折り操作で代替してください";
 
 /**
  * 折る操作ができる状態か(平らに畳んだ状態を表示しているか)。
- * 再生中・折り途中(playT≠1)・角度スライダーでの変形中は、画面の形と
- * 畳み平面の座標が食い違うので折れない。
+ * 再生中・折り途中(playT≠1)・0°以外の角度指定がある間は、画面の形と
+ * 平らな手順境界へ記録する折りの入力が食い違うので、そのまま確定しない。
+ * 0°だけの角度指定は紙を変形させないため、指定がMapに残っていても折れる。
  *
  * 途中の手順を選んでいる間も折れる(SEQ-006)。そこで折ると、その手順の前へ
  * 折りが挟まり、後ろの手順はそのまま残って折り直される。
@@ -607,7 +725,32 @@ export function canFoldNow(s: {
   playing: boolean;
   drivers: Map<number, number>;
 }): boolean {
-  return !(!s.doc || s.playing || s.playT !== 1 || s.drivers.size > 0);
+  return foldUnavailableMessage(s) === null;
+}
+
+/** 0°は「平ら」を明示しただけなので、折る操作を妨げる角度指定に数えない。 */
+function nonZeroDriverCount(drivers: ReadonlyMap<number, number>): number {
+  let count = 0;
+  for (const angle of drivers.values()) {
+    if (angle !== 0) count++;
+  }
+  return count;
+}
+
+/** 古い下書きとは分けて、いま確定できない理由を利用者の言葉で返す。 */
+function foldUnavailableMessage(s: {
+  doc: Document | null;
+  playT: number;
+  playing: boolean;
+  drivers: ReadonlyMap<number, number>;
+}): string | null {
+  if (!s.doc) return "紙がありません。上の「新規」で紙を出してください";
+  if (s.playing) return PLAYING_FOLD_MESSAGE;
+  // playTは計算結果ではなく、終端を必ず1へ正規化する再生状態の印。
+  // 許容差を入れると、一時停止した1未満の途中形を誤って通してしまう。
+  if (s.playT !== 1) return PARTIAL_PLAYBACK_FOLD_MESSAGE;
+  if (nonZeroDriverCount(s.drivers) > 0) return ANGLED_FOLD_MESSAGE;
+  return null;
 }
 
 /** 折り操作を挟む位置(=この折りの直前までの手順数)。
@@ -1030,7 +1173,7 @@ interface AppState {
   setHoveredHinge: (hinge: number | null) => void;
   /** 引いた折り線を確定前の状態として置く(source="2d"は手順がある間は断る) */
   beginFoldDraft: (line: [Vec2, Vec2], source: "2d" | "3d") => void;
-  /** 確定前の折りの設定(向き・対象層・動かす側)を変える */
+  /** 確定前の折りの設定(向き・対象層・折り返す紙)を変える */
   updateFoldDraft: (patch: Partial<FoldDraft>) => void;
   /** 引いた折り線を捨てる */
   cancelFoldDraft: () => void;
@@ -1127,9 +1270,9 @@ interface AppState {
   clearDrivers: () => void;
   /** 全折り目を同じ割合で動かす一時表示へ入る。0%の形を直ちに求める。 */
   enterFoldAllPreview: () => Promise<void>;
-  /** 一時表示の割合を0..=100へ更新する。連続入力は8msごとにまとめる。 */
+  /** 一時表示の割合を0..=100へ更新する。連続入力は16msごとにまとめる。 */
   setFoldAllPercent: (percent: number) => void;
-  /** pointer up等で、予約中の最後の割合を直ちに送る。 */
+  /** pointer up等で最後の割合を確定する。0%なら入口前の通常表示へ戻る。 */
   finishFoldAllPercent: () => void;
   /** 一時表示を閉じ、入る前の手順位置から通常の形を作り直す。 */
   leaveFoldAllPreview: () => Promise<void>;
@@ -1382,7 +1525,7 @@ export const useAppStore = create<AppState>((set, get) => {
   let foldThroughBusyToken = 0;
   /** 一斉表示へ入り直した古い応答を捨てる世代。 */
   let foldAllSessionGeneration = 0;
-  /** 8ms待ちの間にも新入力が旧応答を追い越せる要求番号。 */
+  /** 16ms待ちの間にも新入力が旧応答を追い越せる要求番号。 */
   let foldAllRequestGeneration = 0;
   /** 通常表示へ戻す操作を連打したとき、最後の操作だけを完了させる世代。 */
   let foldAllExitGeneration = 0;
@@ -1765,6 +1908,17 @@ export const useAppStore = create<AppState>((set, get) => {
     if (get().pendingFoldThrough !== null) set({ pendingFoldThrough: null });
   };
 
+  /**
+   * 0°だけの角度指定は形を変えない。折りを確定する時点で空へ正規化し、
+   * 折った後も「角度を変えているため折れない」という古い案内を残さない。
+   */
+  const clearZeroOnlyDrivers = (): void => {
+    const drivers = get().drivers;
+    if (drivers.size > 0 && nonZeroDriverCount(drivers) === 0) {
+      set({ drivers: new Map() });
+    }
+  };
+
   const finishFoldThroughBusy = (token: number): void => {
     if (foldThroughBusyToken === token && get().foldThroughBusy) {
       set({ foldThroughBusy: false });
@@ -1982,28 +2136,36 @@ export const useAppStore = create<AppState>((set, get) => {
 
   /** driversの配列表現(IPCの引数) */
   const driverList = (drivers: Map<number, number>): Driver[] =>
-    [...drivers].map(([hinge, deg]) => ({ hinge, target_angle_deg: deg }));
+    [...drivers]
+      .sort(([left], [right]) => left - right)
+      .map(([hinge, deg]) => ({ hinge, target_angle_deg: deg }));
 
   /** 全ての折り線に0度(平ら)を指定したdriver列。
    * 何も指定せずに送るとRust側が前回解(warm start)を引き継ぎ、折れたままの
    * 形が返る。平らに戻したいときは必ず0度を明示する必要がある */
   const flatDrivers = (hinges: ReadonlySet<number>): Driver[] =>
-    [...hinges].map((hinge) => ({ hinge, target_angle_deg: 0 }));
+    [...hinges]
+      .sort((left, right) => left - right)
+      .map((hinge) => ({ hinge, target_angle_deg: 0 }));
 
-  /** 元に戻す・やり直しの出発点。戻した先の指定角そのものを出発点にし、
-   * 指定の無い折り線だけ平らにする。
-   *
-   * 以前は全ての折り線を0度にしていたため、角度の表示だけが戻って
-   * 3Dは完全な平らのままになっていた(手順を記録していない作品で発生)。
-   * 前回の姿勢を引き継がないので、崩れた形から解き直す問題も起きない。 */
+  /**
+   * 角度Undo/Redoで戻した希望角から作る明示seed。
+   * CanonicalではRustがこの値を候補入力に使わないが、Followとのwire互換と、
+   * どの状態を復元しようとしたかの診断を保つ。権威はDocument＋希望角である。
+   */
   const snapshotSeed = (
     drivers: ReadonlyMap<number, number>,
     hinges: ReadonlySet<number>,
   ): Driver[] =>
-    [...hinges].map((hinge) => ({
-      hinge,
-      target_angle_deg: drivers.get(hinge) ?? 0,
-    }));
+    [...hinges]
+      .sort((left, right) => left - right)
+      .map((hinge) => ({
+        hinge,
+        target_angle_deg: drivers.get(hinge) ?? 0,
+      }));
+
+  /** 選択から外れて強調表示だけ消えた後も、確定待ちの計算世代を保持する。 */
+  let unfinishedAngleIntentGeneration: number | null = null;
 
   /** 新しい角度操作をZustandへ世代付きで載せる。 */
   const activateAngleIntent = (
@@ -2019,11 +2181,13 @@ export const useAppStore = create<AppState>((set, get) => {
         fixAll,
       },
     });
+    unfinishedAngleIntentGeneration = generation;
     return generation;
   };
 
   /** 古い結果が同じ世代番号を再利用しないよう、解除時も番号を進める。 */
   const cancelAngleIntent = (): void => {
+    unfinishedAngleIntentGeneration = null;
     set((s) => ({
       angleIntentGeneration: s.angleIntentGeneration + 1,
       activeAngleIntent: null,
@@ -2271,9 +2435,6 @@ export const useAppStore = create<AppState>((set, get) => {
     if (get().releasedPinHinges.length > 0) set({ releasedPinHinges: [] });
   };
 
-  /** 固定したまま折れず、まだ元へ戻せていない折り目が残っているか。 */
-  const hasReleasedPins = (): boolean => get().releasedPinHinges.length > 0;
-
   /**
    * 追従計算を1回送る。固定した折り目は「動かさない側」へ入れる。
    *
@@ -2302,6 +2463,7 @@ export const useAppStore = create<AppState>((set, get) => {
     warmSeed: Driver[] = [],
     deepSearch = false,
     replayPosition?: { upTo: number; replayT: number },
+    mode: ipc.PoseSolveMode = "Follow",
   ): Promise<boolean> => {
     // 次の16ms要求がまだキューへ積まれていない間でも、新しい角度操作が
     // 始まった時点から旧世代の表示結果を採用しない。
@@ -2315,7 +2477,9 @@ export const useAppStore = create<AppState>((set, get) => {
       replayPosition?.replayT ?? (position.currentStep === null ? 1 : position.playT);
     const pinnedHinges = new Set(position.pinnedFolds.keys());
     const send = (h: Driver[], p: Driver[]) =>
-      ipc.poseSolve(h, p, soft, warmSeed, upTo, replayT);
+      mode === "Follow"
+        ? ipc.poseSolve(h, p, soft, warmSeed, upTo, replayT)
+        : ipc.poseSolve(h, p, soft, warmSeed, upTo, replayT, mode);
     const attempt = (h: Driver[], p: Driver[]) => {
       const call = () => send(h, p);
       return coalesce ? queue.runLatest(call) : queue.run(call);
@@ -2474,6 +2638,7 @@ export const useAppStore = create<AppState>((set, get) => {
     coalesce = false,
     applyFrame = true,
     warmSeed: Driver[] = [],
+    mode: ipc.PoseSolveMode = "Follow",
   ): Promise<boolean> => {
     // つまみを動かしている最中(coalesce)以外は、1回で決着させたい要求なので
     // 固定を外す本数まで深く探す。
@@ -2484,6 +2649,8 @@ export const useAppStore = create<AppState>((set, get) => {
       applyFrame,
       warmSeed,
       !coalesce,
+      undefined,
+      mode,
     );
     latestPosePromise = pending;
     return pending;
@@ -2543,40 +2710,76 @@ export const useAppStore = create<AppState>((set, get) => {
     latestPosePromise = runPoseSolve(hard, preferred, true);
   });
 
-  /** pointer up / blur / Enterでは末尾要求を必ず送り、その結果の後でactiveを消す。 */
+  /**
+   * pointer up / blur / Enterでは末尾のFollow要求を必ず送り、その後に1回だけ
+   * document-derived seedからcanonical再導出する。ドラッグ中の16ms Follow経路は
+   * 変えず、確定した状態だけを操作順・backend warm cacheから独立させる。
+   */
   const finishCurrentAngleIntent = async (): Promise<void> => {
-    const generation = get().activeAngleIntent?.generation;
+    const generation = unfinishedAngleIntentGeneration;
+    // pointer up / blur / Enterはジェスチャーの境界でもある。同じスライダーを
+    // 700ms以内にもう一度動かしても、次の1ジェスチャーを同じ履歴へ混ぜない。
+    lastAngleKey = null;
+    if (generation === null || generation !== get().angleIntentGeneration) {
+      if (unfinishedAngleIntentGeneration === generation) {
+        unfinishedAngleIntentGeneration = null;
+      }
+      return;
+    }
+    const errorBeforeFollow = get().errorMessage;
     pose.flush();
     const pending = latestPosePromise;
-    await pending;
-    // 指を離した時点で、外した固定を戻せないか・外す本数を減らせないかを
-    // もう一巡だけ深く探す。動かしている最中は1コマ2回までに抑えているので、
-    // 落ち着いたここで最小の本数まで詰める。外した固定が無ければ何もしない。
+    const followSucceeded = await pending;
     if (
-      hasReleasedPins() &&
-      generation !== undefined &&
-      get().activeAngleIntent?.generation === generation
+      generation !== get().angleIntentGeneration ||
+      unfinishedAngleIntentGeneration !== generation
     ) {
-      const { hard, preferred } = splitDrivers();
-      const settle = runPoseSolve(hard, preferred, false, true, [], true);
-      latestPosePromise = settle;
-      await settle;
+      return;
     }
+
+    // Followだけが失敗しても、同じ希望からの最終canonicalが成功すれば操作は
+    // 完了している。無関係な後発エラーは消さないよう、Followが残した同じ文面だけ
+    // 成功後に取り除く。
+    const errorAfterFollow = get().errorMessage;
+    const followError =
+      !followSucceeded && errorAfterFollow !== errorBeforeFollow ? errorAfterFollow : null;
+    // Followの形は候補生成や選択へ渡さない。確定後に利用者へ見た目の移動を
+    // 知らせるためだけ、対応頂点の数値をこのローカル変数へコピーする。
+    const followFrame = followSucceeded ? finishComparisonFrame(get().frame3d) : null;
+
+    // Undo/Redoと同じ入口を使う。RustのCanonical計算がDocumentと希望角から
+    // 固定候補を作る。released pinも先に捨て、最後に触ったhinge・stored warm・
+    // frontendのFollow frameを入力へ残さない。
+    // applyAngleSnapshotはawaitより前にactiveを解除するため、pointerupとblurが
+    // 同時にこの入口を呼んでも同じ世代のcanonical solveは1回だけになる。
+    const canonicalSucceeded = await applyAngleSnapshot(angleSnapshot());
     if (
-      generation !== undefined &&
-      get().activeAngleIntent?.generation === generation
+      canonicalSucceeded &&
+      followError !== null &&
+      get().errorMessage === followError
     ) {
-      cancelAngleIntent();
+      set({ errorMessage: null });
+    }
+    const canonicalFrame = get().frame3d;
+    if (canonicalSucceeded && followFrame !== null && canonicalFrame !== null) {
+      const movement = maximumFrameVertexMovement(followFrame, canonicalFrame);
+      if (movement !== null && movement >= FINISH_JUMP_NOTICE_THRESHOLD) {
+        set((s) => ({
+          poseWarnings: s.poseWarnings.includes(FINISH_JUMP_NOTICE)
+            ? s.poseWarnings
+            : [...s.poseWarnings, FINISH_JUMP_NOTICE],
+        }));
+      }
     }
   };
 
   /**
    * 履歴から取り出したdriversへ戻し、その形を展開図と手順から作り直す。
-   * 追従角や3D頂点は履歴へ保存せず、手順なしなら平ら、手順ありなら再生結果を
-   * 明示的なwarm seedにして解く。Rust側に残った直前解を出発点にしないため、
-   * 未指定の折り目もundo/redo先の状態へ確実に戻る。
+   * 追従角や3D頂点は履歴へ保存しない。RustのCanonical計算がDocumentと戻した
+   * 希望角だけから固定候補を作り、stored warmを読まないため、undo/redo先を
+   * 操作経路に依存せず同じ形へ戻せる。
    */
-  const applyAngleSnapshot = async (next: AngleSnapshot): Promise<void> => {
+  const applyAngleSnapshot = async (next: AngleSnapshot): Promise<boolean> => {
     const drivers = new Map(next.drivers);
     // 固定も一緒に戻す。片方だけ戻すと、戻した角度と固定が食い違う。
     const pinnedFolds = new Map(next.pinned);
@@ -2593,19 +2796,26 @@ export const useAppStore = create<AppState>((set, get) => {
       const t = s.currentStep === null ? 1 : s.playT;
       // 再生の基準角へ、復元するdriverと固定を同じ1回で重ねる。
       // 未固定の再生frameを一瞬表示してから追従形へ替えることもしない。
-      await runReplay(upTo, t, false, true, drivers);
+      const restored = await runReplay(
+        upTo,
+        t,
+        false,
+        true,
+        drivers,
+        "Canonical",
+      );
       // 連打中に次のundo/redoや新しい角度操作が始まった古い復元は打ち切る。
-      if (restoreGeneration !== get().angleIntentGeneration) return;
-      if (get().errorMessage !== null) return;
-      return;
+      if (restoreGeneration !== get().angleIntentGeneration) return false;
+      return restored;
     }
 
-    await requestPoseSolve(
+    return await requestPoseSolve(
       [],
       preferredWithout([]),
       false,
       true,
       snapshotSeed(drivers, s.hinges),
+      "Canonical",
     );
   };
 
@@ -2677,6 +2887,7 @@ export const useAppStore = create<AppState>((set, get) => {
     coalesce = false,
     settlePins = !coalesce,
     poseOverrides: ReadonlyMap<number, number> | null = null,
+    mode: ipc.PoseSolveMode = "Follow",
   ): Promise<boolean> => {
     // poseと同じく、次の角度要求がthrottle待ちでも旧再生を表示しない。
     const requestGeneration = get().angleIntentGeneration;
@@ -2774,6 +2985,7 @@ export const useAppStore = create<AppState>((set, get) => {
       // sequenceReplayと固定付きsolveが必ず同じ再生位置を計算する。
       // 次のtickが先にstateを進めても、別の時点の形を混ぜない。
       { upTo, replayT: t },
+      mode,
     );
     latestPosePromise = pending;
     return await pending;
@@ -2994,7 +3206,7 @@ export const useAppStore = create<AppState>((set, get) => {
     );
   };
 
-  // 入力は8msごとに送り、計算が追いつかなくても待機は最後の1件だけにする。
+  // 入力は16msごとに送り、計算が追いつかなくても待機は最後の1件だけにする。
   const foldAllShape = createTrailingThrottle(FOLD_ALL_THROTTLE_MS, () => {
     const active = get().foldAllPreview;
     if (active === null || active.returning) return;
@@ -3074,7 +3286,6 @@ export const useAppStore = create<AppState>((set, get) => {
         normalTargets.length > 0 ? normalTargets : flatDrivers(s.hinges),
         false,
         true,
-        snapshotSeed(s.drivers, s.hinges),
       );
     }
 
@@ -3087,8 +3298,7 @@ export const useAppStore = create<AppState>((set, get) => {
         foldAllPreview: {
           ...current,
           returning: false,
-          error:
-            "いつもの表示へ戻せませんでした。これは記録された手順ではない表示を続けています。",
+          error: "いつもの表示へ戻せませんでした。仮の形を表示したままです。",
         },
       });
       return false;
@@ -3240,6 +3450,7 @@ export const useAppStore = create<AppState>((set, get) => {
     ) {
       return;
     }
+    clearZeroOnlyDrivers();
     stopPlayback();
     const started = get();
     const revision = ++foldThroughRevision;
@@ -3279,15 +3490,24 @@ export const useAppStore = create<AppState>((set, get) => {
       return;
     }
     const current = get();
-    if (
-      !current.doc ||
-      !canFoldNow(current) ||
+    if (!current.doc) {
+      finishFoldThroughBusy(busyToken);
+      set({ foldDraft: null, alignDraft: null, errorMessage: STALE_DRAFT_MESSAGE });
+      return;
+    }
+    const stale =
       current.docEpoch !== started.docEpoch ||
       current.doc.sequence.length !== started.doc?.sequence.length ||
-      foldInsertAt(current) !== operation.up_to
-    ) {
+      foldInsertAt(current) !== operation.up_to;
+    if (stale) {
       finishFoldThroughBusy(busyToken);
-      set({ errorMessage: STALE_DRAFT_MESSAGE });
+      set({ foldDraft: null, alignDraft: null, errorMessage: STALE_DRAFT_MESSAGE });
+      return;
+    }
+    const unavailable = foldUnavailableMessage(current);
+    if (unavailable) {
+      finishFoldThroughBusy(busyToken);
+      set({ errorMessage: unavailable });
       return;
     }
     const proposal = r.value.fold_through_proposal ?? null;
@@ -3885,10 +4105,8 @@ export const useAppStore = create<AppState>((set, get) => {
     setSelection: (selection) => {
       if (get().foldAllPreview !== null) return;
       set((s) => {
-        // 「いま動かしている折り目」の水色は、その折り目が選択から外れたら消す。
-        // 以前は角度を動かし終えても印が残り、何も選んでいないのに3Dの線が
-        // 水色に光ったままになっていた(実機で確認)。
-        // 紙を引いている間は選択と関係なく動かしているので、そのときは残す。
+        // 選択から外れた折り目の水色はすぐ消す。ただし選択は希望角を変える
+        // 操作ではないため計算世代は進めず、blur側のcanonical確定を続ける。
         const stillMoving =
           s.pullHinge !== null ||
           (s.activeAngleIntent?.hinges ?? []).some((hinge) =>
@@ -3902,12 +4120,7 @@ export const useAppStore = create<AppState>((set, get) => {
             s.hoveredHinge !== null && selection.edgeIds.includes(s.hoveredHinge)
               ? s.hoveredHinge
               : null,
-          ...(dropActive
-            ? {
-                activeAngleIntent: null,
-                angleIntentGeneration: s.angleIntentGeneration + 1,
-              }
-            : {}),
+          ...(dropActive ? { activeAngleIntent: null } : {}),
         };
       });
     },
@@ -3956,7 +4169,7 @@ export const useAppStore = create<AppState>((set, get) => {
       if (draft) {
         set({
           foldDraft: { ...draft, ...patch },
-          // 向きや動かす側へ触れたら、最後の「折るで確定」を強調する。
+          // 向きや折り返す紙へ触れたら、最後の「折るで確定」を強調する。
           operationStage:
             patch.direction !== undefined ||
             patch.movingSide !== undefined ||
@@ -3977,15 +4190,19 @@ export const useAppStore = create<AppState>((set, get) => {
       const s = get();
       const draft = s.foldDraft;
       if (!draft || !s.doc) return;
-      // 線を引いた時点と今とで形が違えば、そのまま折ると黙って違う位置に折り目が
-      // 入る。折らずに捨てて、引き直してもらう
+      // 作品・手順・挿入位置が変わった古い入力だけを捨てる。一時的に再生中、
+      // または角度を変えた形なら、入力を残して確定できない理由を伝える。
       if (
-        !canFoldNow(s) ||
         draft.docEpoch !== s.docEpoch ||
         draft.stepCount !== s.doc.sequence.length ||
         draft.upTo !== foldInsertAt(s)
       ) {
         set({ foldDraft: null, alignDraft: null, errorMessage: STALE_DRAFT_MESSAGE });
+        return;
+      }
+      const unavailable = foldUnavailableMessage(s);
+      if (unavailable) {
+        set({ errorMessage: unavailable });
         return;
       }
       const keep = keepSidePoint(draft.line, draft.movingSide);
@@ -3994,7 +4211,10 @@ export const useAppStore = create<AppState>((set, get) => {
         const layers = foldLayers(s.frame3d, s.doc, s.faces);
         const top = topMovingFace(layers, draft.line, keep);
         if (top === null) {
-          set({ errorMessage: "折り線の動く側に紙がありません" });
+          set({
+            errorMessage:
+              "黄色で示した側に、折り返せる紙がありません。「反対側の紙を折り返す」を押して、もう一度試してください",
+          });
           return;
         }
         targetLayers = [top];
@@ -4020,7 +4240,6 @@ export const useAppStore = create<AppState>((set, get) => {
       if (!pending || s.foldThroughBusy) return;
       if (
         !s.doc ||
-        !canFoldNow(s) ||
         pending.docEpoch !== s.docEpoch ||
         pending.stepCount !== s.doc.sequence.length ||
         pending.operation.up_to !== foldInsertAt(s)
@@ -4030,6 +4249,11 @@ export const useAppStore = create<AppState>((set, get) => {
           foldThroughBusy: false,
           errorMessage: STALE_DRAFT_MESSAGE,
         });
+        return;
+      }
+      const unavailable = foldUnavailableMessage(s);
+      if (unavailable) {
+        set({ errorMessage: unavailable });
         return;
       }
       const busyToken = ++foldThroughBusyToken;
@@ -4107,12 +4331,12 @@ export const useAppStore = create<AppState>((set, get) => {
       const line = draft.solutions[index];
       set({
         alignDraft: { ...draft, solutionIndex: index },
-        // 向き・対象の層など、パネルで決めた設定は引き継ぐ(線と動く側だけ入れ替える)
+        // 向き・対象の層など、パネルで決めた設定は引き継ぐ(線と折り返す紙だけ入れ替える)
         foldDraft: s.foldDraft
           ? {
               ...s.foldDraft,
               line,
-              movingSide: movingSideOf(line, alignRefPoint(draft.picks[0])),
+              movingSide: initialMovingSide(line, draft.picks[0]),
             }
           : alignFoldDraft(s, line, draft.picks),
       });
@@ -4153,7 +4377,7 @@ export const useAppStore = create<AppState>((set, get) => {
         hasDoc: true,
         playing: s.playing,
         playT: s.playT,
-        driverCount: s.drivers.size,
+        driverCount: nonZeroDriverCount(s.drivers),
         currentStep: s.currentStep,
         stepCount: s.doc.sequence.length,
       });
@@ -4415,7 +4639,6 @@ export const useAppStore = create<AppState>((set, get) => {
       // 「層操作」入口として使う。FlatMotionは名前付き技法とは入力形が違う。
       if (draft.kind === "Simple") {
         if (
-          !canFoldNow(s) ||
           draft.docEpoch !== s.docEpoch ||
           draft.stepCount !== s.doc.sequence.length ||
           draft.upTo !== foldInsertAt(s)
@@ -4423,6 +4646,12 @@ export const useAppStore = create<AppState>((set, get) => {
           set({ techniqueDraft: null, errorMessage: STALE_DRAFT_MESSAGE });
           return;
         }
+        const unavailable = foldUnavailableMessage(s);
+        if (unavailable) {
+          set({ errorMessage: unavailable });
+          return;
+        }
+        clearZeroOnlyDrivers();
         const parts = [...draft.motionParts];
         const current = layerMotionPartDraft(draft);
         if (hasLayerMotionInput(current)) {
@@ -4474,7 +4703,6 @@ export const useAppStore = create<AppState>((set, get) => {
       }
       // 選んだ時点と今とで形が違えば、そのまま折ると違う位置に折り目が入る
       if (
-        !canFoldNow(s) ||
         draft.docEpoch !== s.docEpoch ||
         draft.stepCount !== s.doc.sequence.length ||
         draft.upTo !== foldInsertAt(s)
@@ -4482,6 +4710,12 @@ export const useAppStore = create<AppState>((set, get) => {
         set({ techniqueDraft: null, errorMessage: STALE_DRAFT_MESSAGE });
         return;
       }
+      const unavailable = foldUnavailableMessage(s);
+      if (unavailable) {
+        set({ errorMessage: unavailable });
+        return;
+      }
+      clearZeroOnlyDrivers();
       // Rust側と同じ層数規約にする。中割り・かぶせだけ2枚以上、つぶし・花弁は
       // 1枚以上。段・沈め・ひだ寄せ・ねじりは空なら領域の全層を対象にする。
       const minimumFlap = minimumTechniqueFlap(draft.kind);
@@ -4824,7 +5058,17 @@ export const useAppStore = create<AppState>((set, get) => {
       foldAllShape.schedule();
     },
 
-    finishFoldAllPercent: () => foldAllShape.flush(),
+    finishFoldAllPercent: () => {
+      const active = get().foldAllPreview;
+      if (active === null || active.returning) return;
+      if (active.percent === 0) {
+        // 0%は単なる平面計算ではなく、利用者が一斉表示へ入る直前に見ていた
+        // 手順位置・角度指定・選択から通常形を作り直す契約である。
+        void restoreAfterFoldAllPreview(true);
+        return;
+      }
+      foldAllShape.flush();
+    },
 
     leaveFoldAllPreview: async () => {
       await restoreAfterFoldAllPreview(true);

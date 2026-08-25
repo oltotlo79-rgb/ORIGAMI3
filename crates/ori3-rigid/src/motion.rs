@@ -8,7 +8,7 @@ use ori3_model::{CreasePattern, Driver, EdgeId, EdgeKind, FaceId, Frame3D};
 
 use crate::intersect::{ContactMetrics, PENETRATION_WARNING, contact_metrics, contact_witnesses};
 use crate::solver::{self, PreparedTopology, canonical_delta_deg};
-use crate::{AngleRelaxation, SolveResult, max_seam_gap, self_intersects, solve_near_exact, tree};
+use crate::{AngleRelaxation, SolveResult, max_seam_gap, self_intersects, tree};
 
 /// 小さな作品で使う目標角の刻み。通常の16ms入力はこれより小さいため1段だけになる。
 const TARGET_STEP_DEG: f64 = 5.0;
@@ -21,6 +21,8 @@ const CONTACT_LINE_SEARCH_STEPS: usize = 8;
 /// solverと同じ閉包収束閾値。接触より閉包を常に上位へ置く順位付けに使う。
 const CLOSURE_TOLERANCE: f64 = 1e-13;
 const RELAXATION_EPS_DEG: f64 = 1e-6;
+const CANONICAL_MAX_ERROR_TIE_EPS_DEG: f64 = 1e-9;
+const CANONICAL_SQUARED_ERROR_TIE_EPS: f64 = 1e-9;
 /// 紙が裂けたとみなす辺の離れ(紙の長辺を1とした値)。表示でも検査でも同じ値を使う。
 const SEAM_TEAR_TOLERANCE: f64 = 1e-6;
 const CONTACT_BEST_EFFORT_WARNING: &str =
@@ -109,6 +111,508 @@ pub fn solve_motion_with_contact_options(
             topology: &topology,
             stamp_surface_order: true,
         },
+    )
+}
+
+/// Solves a pose from a fixed, document-derived candidate set.
+///
+/// Unlike [`solve_motion_with_contact_options`], this API intentionally has no Follow/store
+/// warm-start input. Every candidate depends only on the crease pattern, invariant hard pins,
+/// preferred targets, and the optional document seed. This makes the selected closure branch
+/// independent of gesture order and stale IPC responses.
+#[must_use]
+pub fn solve_canonical_motion_with_contact_options(
+    cp: &CreasePattern,
+    faces: &[Face],
+    invariant_hard: &[Driver],
+    preferred_targets: Option<&HashMap<EdgeId, f64>>,
+    document_seed: Option<&HashMap<EdgeId, f64>>,
+    contact: MotionContactOptions,
+) -> MotionSolveResult {
+    solve_canonical_motion_prepared(
+        cp,
+        faces,
+        invariant_hard,
+        preferred_targets,
+        document_seed,
+        contact,
+    )
+    .0
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CanonicalCandidateKind {
+    AnchoredUniformMinus90 { hinge: EdgeId, sample_index: u8 },
+    AnchoredUniformPlus90 { hinge: EdgeId, sample_index: u8 },
+    Direct,
+    DocumentSeed,
+    DocumentOverlay,
+    KindSignedPlus90,
+    KindSignedMinus90,
+    KindSignedPlus180,
+    KindSignedMinus180,
+    UniformPlus90,
+    UniformMinus90,
+    UniformPlus180,
+    UniformMinus180,
+}
+
+impl CanonicalCandidateKind {
+    const fn ordinal(self) -> u8 {
+        match self {
+            // These bounded, symmetric alternatives come first inside an exact score tie. They
+            // pin a document-requested hinge without using the Follow frame as candidate input.
+            Self::AnchoredUniformMinus90 { sample_index, .. } => sample_index,
+            Self::AnchoredUniformPlus90 { sample_index, .. } => 3 + sample_index,
+            Self::Direct => 6,
+            Self::DocumentSeed => 7,
+            Self::DocumentOverlay => 8,
+            Self::KindSignedPlus90 => 9,
+            Self::KindSignedMinus90 => 10,
+            Self::KindSignedPlus180 => 11,
+            Self::KindSignedMinus180 => 12,
+            Self::UniformPlus90 => 13,
+            Self::UniformMinus90 => 14,
+            Self::UniformPlus180 => 15,
+            Self::UniformMinus180 => 16,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CanonicalCandidateScore {
+    finite: bool,
+    closed: bool,
+    max_target_error: f64,
+    squared_target_error: f64,
+    ordinal: u8,
+}
+
+impl CanonicalCandidateScore {
+    fn is_better_than(self, other: Self) -> bool {
+        match self.closed.cmp(&other.closed) {
+            Ordering::Greater => return true,
+            Ordering::Less => return false,
+            Ordering::Equal => {}
+        }
+        match self.finite.cmp(&other.finite) {
+            Ordering::Greater => return true,
+            Ordering::Less => return false,
+            Ordering::Equal => {}
+        }
+        let max_difference = self.max_target_error - other.max_target_error;
+        if max_difference.is_finite() && max_difference.abs() > CANONICAL_MAX_ERROR_TIE_EPS_DEG {
+            return max_difference < 0.0;
+        }
+        let squared_difference = self.squared_target_error - other.squared_target_error;
+        if squared_difference.is_finite()
+            && squared_difference.abs() > CANONICAL_SQUARED_ERROR_TIE_EPS
+        {
+            return squared_difference < 0.0;
+        }
+        self.ordinal < other.ordinal
+    }
+}
+
+struct CanonicalCandidate {
+    kind: CanonicalCandidateKind,
+    hard: Vec<Driver>,
+    preferred: Option<HashMap<EdgeId, f64>>,
+    seed: Option<HashMap<EdgeId, f64>>,
+    score: CanonicalCandidateScore,
+}
+
+struct CanonicalCandidateSpec {
+    kind: CanonicalCandidateKind,
+    hard: Vec<Driver>,
+    preferred: Option<HashMap<EdgeId, f64>>,
+    seed: Option<HashMap<EdgeId, f64>>,
+}
+
+fn canonical_candidate_specs(
+    cp: &CreasePattern,
+    invariant_hard: &[Driver],
+    preferred_targets: Option<&HashMap<EdgeId, f64>>,
+    document_seed: Option<&HashMap<EdgeId, f64>>,
+) -> Vec<CanonicalCandidateSpec> {
+    let invariant_hard = canonical_hard_drivers(cp, invariant_hard);
+    let invariant_hard = invariant_hard.as_slice();
+    let preferred_targets = canonical_fold_targets(cp, preferred_targets);
+    let preferred_targets = preferred_targets.as_ref();
+    let mut specs = Vec::with_capacity(17);
+    for (sample_index, hinge) in canonical_anchor_samples(cp, invariant_hard, preferred_targets)
+        .into_iter()
+        .enumerate()
+    {
+        let target = preferred_targets
+            .and_then(|targets| targets.get(&hinge))
+            .copied()
+            .expect("sampled anchors come from preferred targets");
+        let mut hard = invariant_hard.to_vec();
+        hard.push(Driver {
+            hinge,
+            target_angle_deg: target,
+        });
+        hard.sort_unstable_by_key(|driver| driver.hinge);
+        let mut remaining = preferred_targets.cloned().unwrap_or_default();
+        remaining.remove(&hinge);
+        let preferred = (!remaining.is_empty()).then_some(remaining);
+        for (kind, angle) in [
+            (
+                CanonicalCandidateKind::AnchoredUniformMinus90 {
+                    hinge,
+                    sample_index: sample_index as u8,
+                },
+                -90.0,
+            ),
+            (
+                CanonicalCandidateKind::AnchoredUniformPlus90 {
+                    hinge,
+                    sample_index: sample_index as u8,
+                },
+                90.0,
+            ),
+        ] {
+            specs.push(CanonicalCandidateSpec {
+                kind,
+                hard: hard.clone(),
+                preferred: preferred.clone(),
+                seed: Some(canonical_uniform_seed(cp, angle)),
+            });
+        }
+    }
+
+    let mut seeds: Vec<(CanonicalCandidateKind, Option<HashMap<EdgeId, f64>>)> =
+        vec![(CanonicalCandidateKind::Direct, None)];
+    if let Some(document_seed) = document_seed {
+        let document_seed = canonical_document_seed(cp, document_seed);
+        seeds.push((
+            CanonicalCandidateKind::DocumentSeed,
+            Some(document_seed.clone()),
+        ));
+        let mut overlaid = document_seed.clone();
+        if let Some(preferred_targets) = preferred_targets {
+            let mut ordered_targets: Vec<_> = preferred_targets.iter().collect();
+            ordered_targets.sort_unstable_by_key(|(hinge, _)| **hinge);
+            for (&hinge, &target) in ordered_targets {
+                if target.is_finite()
+                    && cp
+                        .edges
+                        .iter()
+                        .any(|edge| edge.id == hinge && is_fold_kind(edge.kind))
+                {
+                    overlaid.insert(hinge, target);
+                }
+            }
+        }
+        seeds.push((CanonicalCandidateKind::DocumentOverlay, Some(overlaid)));
+    }
+    seeds.extend([
+        (
+            CanonicalCandidateKind::KindSignedPlus90,
+            Some(canonical_kind_seed(cp, 90.0)),
+        ),
+        (
+            CanonicalCandidateKind::KindSignedMinus90,
+            Some(canonical_kind_seed(cp, -90.0)),
+        ),
+        (
+            CanonicalCandidateKind::KindSignedPlus180,
+            Some(canonical_kind_seed(cp, 180.0)),
+        ),
+        (
+            CanonicalCandidateKind::KindSignedMinus180,
+            Some(canonical_kind_seed(cp, -180.0)),
+        ),
+        (
+            CanonicalCandidateKind::UniformPlus90,
+            Some(canonical_uniform_seed(cp, 90.0)),
+        ),
+        (
+            CanonicalCandidateKind::UniformMinus90,
+            Some(canonical_uniform_seed(cp, -90.0)),
+        ),
+        (
+            CanonicalCandidateKind::UniformPlus180,
+            Some(canonical_uniform_seed(cp, 180.0)),
+        ),
+        (
+            CanonicalCandidateKind::UniformMinus180,
+            Some(canonical_uniform_seed(cp, -180.0)),
+        ),
+    ]);
+    specs.extend(
+        seeds
+            .into_iter()
+            .map(|(kind, seed)| CanonicalCandidateSpec {
+                kind,
+                hard: invariant_hard.to_vec(),
+                preferred: preferred_targets.cloned(),
+                seed,
+            }),
+    );
+    specs
+}
+
+fn solve_canonical_motion_prepared(
+    cp: &CreasePattern,
+    faces: &[Face],
+    invariant_hard: &[Driver],
+    preferred_targets: Option<&HashMap<EdgeId, f64>>,
+    document_seed: Option<&HashMap<EdgeId, f64>>,
+    contact: MotionContactOptions,
+) -> (MotionSolveResult, CanonicalCandidateKind) {
+    let topology = solver::prepare_topology(cp, faces);
+    let no_stamp = MotionSolveContext {
+        topology: &topology,
+        stamp_surface_order: false,
+    };
+    let invariant_hard = canonical_hard_drivers(cp, invariant_hard);
+    let invariant_hard = invariant_hard.as_slice();
+    let preferred_targets = canonical_fold_targets(cp, preferred_targets);
+    let preferred_targets = preferred_targets.as_ref();
+    let specs = canonical_candidate_specs(cp, invariant_hard, preferred_targets, document_seed);
+
+    let mut selected = None::<CanonicalCandidate>;
+    for spec in specs {
+        let solved = solve_motion_prepared(
+            cp,
+            faces,
+            &spec.hard,
+            spec.preferred.as_ref(),
+            spec.seed.as_ref(),
+            contact,
+            no_stamp,
+        );
+        let score = canonical_candidate_score(
+            cp,
+            faces,
+            invariant_hard,
+            preferred_targets,
+            &solved.result,
+            spec.kind.ordinal(),
+        );
+        let candidate = CanonicalCandidate {
+            kind: spec.kind,
+            hard: spec.hard,
+            preferred: spec.preferred,
+            seed: spec.seed,
+            score,
+        };
+        if selected
+            .as_ref()
+            .is_none_or(|current| candidate.score.is_better_than(current.score))
+        {
+            selected = Some(candidate);
+        }
+    }
+    let selected = selected.expect("canonical candidate set always includes direct solve");
+    let stamped = solve_motion_prepared(
+        cp,
+        faces,
+        &selected.hard,
+        selected.preferred.as_ref(),
+        selected.seed.as_ref(),
+        contact,
+        MotionSolveContext {
+            topology: &topology,
+            stamp_surface_order: true,
+        },
+    );
+    (stamped, selected.kind)
+}
+
+fn canonical_anchor_samples(
+    cp: &CreasePattern,
+    invariant_hard: &[Driver],
+    preferred_targets: Option<&HashMap<EdgeId, f64>>,
+) -> Vec<EdgeId> {
+    let hard: BTreeSet<_> = invariant_hard.iter().map(|driver| driver.hinge).collect();
+    let folds: BTreeSet<_> = cp
+        .edges
+        .iter()
+        .filter(|edge| is_fold_kind(edge.kind))
+        .map(|edge| edge.id)
+        .collect();
+    let mut requested: Vec<_> = preferred_targets
+        .into_iter()
+        .flat_map(|targets| targets.iter())
+        .filter_map(|(&hinge, &target)| {
+            (target.is_finite() && folds.contains(&hinge) && !hard.contains(&hinge))
+                .then_some(hinge)
+        })
+        .collect();
+    requested.sort_unstable();
+    requested.dedup();
+    if requested.len() <= 3 {
+        return requested;
+    }
+    let last = requested.len() - 1;
+    vec![
+        requested[0],
+        requested[requested.len() / 2],
+        requested[last],
+    ]
+}
+
+const fn is_fold_kind(kind: EdgeKind) -> bool {
+    matches!(kind, EdgeKind::Mountain | EdgeKind::Valley)
+}
+
+fn canonical_hard_drivers(cp: &CreasePattern, invariant_hard: &[Driver]) -> Vec<Driver> {
+    let folds: BTreeSet<_> = cp
+        .edges
+        .iter()
+        .filter(|edge| is_fold_kind(edge.kind))
+        .map(|edge| edge.id)
+        .collect();
+    let mut hard: Vec<_> = invariant_hard
+        .iter()
+        .filter(|driver| folds.contains(&driver.hinge) && driver.target_angle_deg.is_finite())
+        .cloned()
+        .collect();
+    hard.sort_unstable_by(|left, right| {
+        left.hinge
+            .cmp(&right.hinge)
+            .then_with(|| left.target_angle_deg.total_cmp(&right.target_angle_deg))
+    });
+    hard
+}
+
+fn canonical_document_seed(
+    cp: &CreasePattern,
+    document_seed: &HashMap<EdgeId, f64>,
+) -> HashMap<EdgeId, f64> {
+    cp.edges
+        .iter()
+        .filter(|edge| is_fold_kind(edge.kind))
+        .filter_map(|edge| {
+            document_seed
+                .get(&edge.id)
+                .copied()
+                .filter(|angle| angle.is_finite())
+                .map(|angle| (edge.id, angle))
+        })
+        .collect()
+}
+
+fn canonical_fold_targets(
+    cp: &CreasePattern,
+    preferred_targets: Option<&HashMap<EdgeId, f64>>,
+) -> Option<HashMap<EdgeId, f64>> {
+    let targets: HashMap<_, _> = cp
+        .edges
+        .iter()
+        .filter(|edge| is_fold_kind(edge.kind))
+        .filter_map(|edge| {
+            preferred_targets?
+                .get(&edge.id)
+                .copied()
+                .filter(|target| target.is_finite())
+                .map(|target| (edge.id, target))
+        })
+        .collect();
+    (!targets.is_empty()).then_some(targets)
+}
+
+fn canonical_kind_seed(cp: &CreasePattern, signed_magnitude: f64) -> HashMap<EdgeId, f64> {
+    cp.edges
+        .iter()
+        .filter(|edge| is_fold_kind(edge.kind))
+        .map(|edge| {
+            let fold_sign = if edge.kind == EdgeKind::Valley {
+                -1.0
+            } else {
+                1.0
+            };
+            (edge.id, fold_sign * signed_magnitude)
+        })
+        .collect()
+}
+
+fn canonical_uniform_seed(cp: &CreasePattern, angle: f64) -> HashMap<EdgeId, f64> {
+    cp.edges
+        .iter()
+        .filter(|edge| is_fold_kind(edge.kind))
+        .map(|edge| (edge.id, angle))
+        .collect()
+}
+
+fn canonical_candidate_score(
+    cp: &CreasePattern,
+    faces: &[Face],
+    invariant_hard: &[Driver],
+    preferred_targets: Option<&HashMap<EdgeId, f64>>,
+    result: &SolveResult,
+    ordinal: u8,
+) -> CanonicalCandidateScore {
+    let (max_target_error, squared_target_error, target_errors_finite) =
+        canonical_requested_errors(&result.angles, invariant_hard, preferred_targets);
+    let finite = target_errors_finite
+        && max_target_error.is_finite()
+        && squared_target_error.is_finite()
+        && is_finite_result(result, faces.len());
+    let seam = if finite {
+        max_seam_gap(cp, faces, &result.frame)
+    } else {
+        f64::INFINITY
+    };
+    let closed = finite
+        && result.closure_rms <= CLOSURE_TOLERANCE
+        && seam.is_finite()
+        && seam < SEAM_TEAR_TOLERANCE;
+    CanonicalCandidateScore {
+        finite,
+        closed,
+        max_target_error: if target_errors_finite {
+            max_target_error
+        } else {
+            f64::INFINITY
+        },
+        squared_target_error: if target_errors_finite {
+            squared_target_error
+        } else {
+            f64::INFINITY
+        },
+        ordinal,
+    }
+}
+
+fn canonical_requested_errors(
+    angles: &HashMap<EdgeId, f64>,
+    invariant_hard: &[Driver],
+    preferred_targets: Option<&HashMap<EdgeId, f64>>,
+) -> (f64, f64, bool) {
+    let mut requested = BTreeMap::new();
+    if let Some(preferred_targets) = preferred_targets {
+        for (&hinge, &target) in preferred_targets {
+            requested.insert(hinge, target);
+        }
+    }
+    let mut ordered_hard: Vec<_> = invariant_hard.iter().collect();
+    ordered_hard.sort_unstable_by(|left, right| {
+        left.hinge
+            .cmp(&right.hinge)
+            .then_with(|| left.target_angle_deg.total_cmp(&right.target_angle_deg))
+    });
+    for driver in ordered_hard {
+        requested.insert(driver.hinge, driver.target_angle_deg);
+    }
+
+    let mut max_target_error = 0.0_f64;
+    let mut squared_target_error = 0.0_f64;
+    let mut finite = true;
+    for (hinge, target) in requested {
+        let actual = angles.get(&hinge).copied().unwrap_or(0.0);
+        let error = canonical_delta_deg(actual, target).abs();
+        finite &= error.is_finite();
+        max_target_error = max_target_error.max(error);
+        squared_target_error += error * error;
+    }
+    (
+        max_target_error,
+        squared_target_error,
+        finite && max_target_error.is_finite() && squared_target_error.is_finite(),
     )
 }
 
@@ -357,11 +861,14 @@ fn solve_motion_from(
         // 最終点は必ず補正し、小作品だけは途中点も同じ非交差枝へ乗せる。
         if contact.prevent && raw_contact && (step == steps || faces.len() <= 100) {
             candidate = avoid_contact(
-                cp,
-                faces,
-                &step_drivers,
-                step_targets.as_ref(),
-                last_finite.as_ref().map(|result| &result.angles),
+                ContactAvoidanceContext {
+                    cp,
+                    faces,
+                    drivers: &step_drivers,
+                    targets: step_targets.as_ref(),
+                    warm: last_finite.as_ref().map(|result| &result.angles),
+                    topology,
+                },
                 candidate,
                 contact.detect,
             );
@@ -437,11 +944,14 @@ fn solve_motion_from(
         // 非木ヒンジが現れる。小作品だけ固定2pass目を許し、同じ辞書式順位で
         // 改善した有限候補だけを採る。
         result = avoid_contact(
-            cp,
-            faces,
-            drivers,
-            targets,
-            warm_start,
+            ContactAvoidanceContext {
+                cp,
+                faces,
+                drivers,
+                targets,
+                warm: warm_start,
+                topology,
+            },
             result,
             contact.detect,
         );
@@ -1440,15 +1950,28 @@ impl Reseed<'_> {
 /// 閉路外ヒンジは閉包残差へ影響しないので直接動かせる。閉路上のヒンジを含む場合
 /// だけ既存の疎ソルバーへ1回再投影し、hard→閉包→接触→medium→freeの順位で通常解
 /// と比較する。どの候補も有限でなくなる場合は通常解を返すため操作を止めない。
+struct ContactAvoidanceContext<'a> {
+    cp: &'a CreasePattern,
+    faces: &'a [Face],
+    drivers: &'a [Driver],
+    targets: Option<&'a HashMap<EdgeId, f64>>,
+    warm: Option<&'a HashMap<EdgeId, f64>>,
+    topology: &'a PreparedTopology,
+}
+
 fn avoid_contact(
-    cp: &CreasePattern,
-    faces: &[Face],
-    drivers: &[Driver],
-    targets: Option<&HashMap<EdgeId, f64>>,
-    warm: Option<&HashMap<EdgeId, f64>>,
+    context: ContactAvoidanceContext<'_>,
     original: SolveResult,
     report_contact: bool,
 ) -> SolveResult {
+    let ContactAvoidanceContext {
+        cp,
+        faces,
+        drivers,
+        targets,
+        warm,
+        topology,
+    } = context;
     let Some(original_rank) = ContactCandidate::new(original.clone(), drivers, targets, warm)
     else {
         return original;
@@ -1457,13 +1980,13 @@ fn avoid_contact(
         return original;
     }
 
-    let forest = tree::build_forest(cp, faces);
+    let forest = topology.forest();
     let hard: BTreeSet<EdgeId> = drivers.iter().map(|driver| driver.hinge).collect();
     let pairs: Vec<_> = contact_witnesses(&original.frame)
         .into_iter()
         .map(|witness| witness.faces)
         .collect();
-    let candidates = contact_hinge_candidates(&forest, faces, &pairs, &hard, targets);
+    let candidates = contact_hinge_candidates(forest, faces, &pairs, &hard, targets);
     if candidates.is_empty() {
         return with_contact_warning(original, report_contact);
     }
@@ -1471,7 +1994,7 @@ fn avoid_contact(
     let search = ContactAngleSearch {
         cp,
         faces,
-        forest: &forest,
+        forest,
         warnings: &original.frame.warnings,
         hard: &hard,
         targets,
@@ -1543,14 +2066,14 @@ fn avoid_contact(
         // 折り目を動かして接触を解ける。直接指標が同値でも共同0°anchorを1回は
         // 再投影することで、その解を候補から落とさない。
         best.angles.clone_from(&together_anchor);
-        best.frame = frame_from_angles(cp, faces, &forest, &best.angles, &original.frame.warnings);
+        best.frame = frame_from_angles(cp, faces, forest, &best.angles, &original.frame.warnings);
     }
     if faces.len() <= 100 && best.contact.pair_count > 0 && loop_anchor != original.angles {
         // 非木ヒンジはtree直接配置では幾何へ現れない。接触経路上で最も深く
         // 折れている1本を主anchorにし、閉包再投影による周辺ヒンジの譲歩を評価する。
         // 共同anchorは固定2候補目として残す。
         best.angles.clone_from(&loop_anchor);
-        best.frame = frame_from_angles(cp, faces, &forest, &best.angles, &original.frame.warnings);
+        best.frame = frame_from_angles(cp, faces, forest, &best.angles, &original.frame.warnings);
     }
 
     // 非交差まで到達できたなら、接触側との間を固定回数で二分し、medium/freeが譲る
@@ -1589,7 +2112,7 @@ fn avoid_contact(
         for _ in 0..CONTACT_LINE_SEARCH_STEPS {
             let mid = 0.5 * (low + high);
             let angles = interpolate_angle_maps(&original.angles, goal, mid);
-            let frame = frame_from_angles(cp, faces, &forest, &angles, &original.frame.warnings);
+            let frame = frame_from_angles(cp, faces, forest, &angles, &original.frame.warnings);
             if contact_metrics(&frame).pair_count == 0 {
                 high = mid;
                 best.angles = angles;
@@ -1600,7 +2123,7 @@ fn avoid_contact(
         }
     }
 
-    let on_cycle = hinges_on_cycles(&forest, faces.len());
+    let on_cycle = hinges_on_cycles(forest, faces.len());
     let changed: Vec<EdgeId> = best
         .angles
         .iter()
@@ -1616,7 +2139,14 @@ fn avoid_contact(
                 contact_targets.insert(hinge, angle);
             }
         }
-        let mut solved = solve_near_exact(cp, faces, drivers, &contact_targets, Some(&best.angles));
+        let mut solved = solver::solve_near_exact_prepared(
+            cp,
+            faces,
+            drivers,
+            &contact_targets,
+            Some(&best.angles),
+            topology,
+        );
         solved.iterations = original.iterations.saturating_add(solved.iterations);
         solved.relaxations = collect_relaxations(&solved.angles, drivers, targets);
         solved
@@ -1653,7 +2183,14 @@ fn avoid_contact(
                     contact_targets.insert(hinge, angle);
                 }
             }
-            let mut solved = solve_near_exact(cp, faces, drivers, &contact_targets, Some(&goal));
+            let mut solved = solver::solve_near_exact_prepared(
+                cp,
+                faces,
+                drivers,
+                &contact_targets,
+                Some(&goal),
+                topology,
+            );
             solved.iterations = original.iterations.saturating_add(solved.iterations);
             solved.relaxations = collect_relaxations(&solved.angles, drivers, targets);
             solved
@@ -1661,7 +2198,7 @@ fn avoid_contact(
             let mut direct = original.clone();
             direct.angles = goal;
             direct.frame =
-                frame_from_angles(cp, faces, &forest, &direct.angles, &original.frame.warnings);
+                frame_from_angles(cp, faces, forest, &direct.angles, &original.frame.warnings);
             direct.relaxations = collect_relaxations(&direct.angles, drivers, targets);
             direct
         };
@@ -2022,12 +2559,16 @@ fn previous_with_failure(
 #[cfg(test)]
 mod tests {
     use super::{
-        ContactCandidate, angle_priority_costs, continuation_steps, solve_motion,
-        stamp_motion_surface_order,
+        CanonicalCandidateKind, CanonicalCandidateScore, ContactCandidate, angle_priority_costs,
+        canonical_anchor_samples, canonical_candidate_specs, canonical_document_seed,
+        canonical_kind_seed, canonical_requested_errors, canonical_uniform_seed,
+        continuation_steps, interpolate_angle_maps, interpolated_drivers, interpolated_targets,
+        max_requested_delta, solve_canonical_motion_prepared, solve_motion,
+        solve_motion_with_contact_options, stamp_motion_surface_order,
     };
     use crate::{ContactMetrics, SolveResult, solver};
     use ori3_cp::extract_faces;
-    use ori3_model::{Document, Frame3D, Paper};
+    use ori3_model::{CreasePattern, Document, Driver, Edge, EdgeKind, Frame3D, Paper, Vertex};
     use std::collections::{BTreeSet, HashMap};
 
     #[test]
@@ -2069,6 +2610,21 @@ mod tests {
             !authoritative,
             "nonfinite fallbackは物理順のauthorityではない"
         );
+
+        let (canonical, kind) = solve_canonical_motion_prepared(
+            &document.cp,
+            &faces,
+            &[],
+            None,
+            None,
+            super::MotionContactOptions {
+                detect: false,
+                prevent: false,
+            },
+        );
+        assert_eq!(kind, CanonicalCandidateKind::Direct);
+        assert!(canonical.surface_order.is_some());
+        assert!(canonical.surface_order_authoritative);
     }
 
     fn ranked_candidate(contact: ContactMetrics, medium_energy: f64) -> ContactCandidate {
@@ -2163,5 +2719,517 @@ mod tests {
 
         assert_eq!(forward.0.to_bits(), reverse.0.to_bits());
         assert_eq!(forward.1.to_bits(), reverse.1.to_bits());
+    }
+
+    #[test]
+    fn canonical_candidate_rank_prefers_closed_then_error_then_stable_ordinal() {
+        let ordered_kinds = [
+            CanonicalCandidateKind::AnchoredUniformMinus90 {
+                hinge: 17,
+                sample_index: 0,
+            },
+            CanonicalCandidateKind::AnchoredUniformMinus90 {
+                hinge: 19,
+                sample_index: 1,
+            },
+            CanonicalCandidateKind::AnchoredUniformMinus90 {
+                hinge: 21,
+                sample_index: 2,
+            },
+            CanonicalCandidateKind::AnchoredUniformPlus90 {
+                hinge: 17,
+                sample_index: 0,
+            },
+            CanonicalCandidateKind::AnchoredUniformPlus90 {
+                hinge: 19,
+                sample_index: 1,
+            },
+            CanonicalCandidateKind::AnchoredUniformPlus90 {
+                hinge: 21,
+                sample_index: 2,
+            },
+            CanonicalCandidateKind::Direct,
+            CanonicalCandidateKind::DocumentSeed,
+            CanonicalCandidateKind::DocumentOverlay,
+            CanonicalCandidateKind::KindSignedPlus90,
+            CanonicalCandidateKind::KindSignedMinus90,
+            CanonicalCandidateKind::KindSignedPlus180,
+            CanonicalCandidateKind::KindSignedMinus180,
+            CanonicalCandidateKind::UniformPlus90,
+            CanonicalCandidateKind::UniformMinus90,
+            CanonicalCandidateKind::UniformPlus180,
+            CanonicalCandidateKind::UniformMinus180,
+        ];
+        for (ordinal, kind) in ordered_kinds.into_iter().enumerate() {
+            assert_eq!(usize::from(kind.ordinal()), ordinal);
+        }
+
+        let closed = CanonicalCandidateScore {
+            finite: true,
+            closed: true,
+            max_target_error: 90.0,
+            squared_target_error: 8_100.0,
+            ordinal: 9,
+        };
+        let open_exact = CanonicalCandidateScore {
+            finite: true,
+            closed: false,
+            max_target_error: 0.0,
+            squared_target_error: 0.0,
+            ordinal: 0,
+        };
+        assert!(closed.is_better_than(open_exact));
+
+        let smaller_l2 = CanonicalCandidateScore {
+            max_target_error: 90.0 + 0.5e-9,
+            squared_target_error: 8_000.0,
+            ordinal: 10,
+            ..closed
+        };
+        assert!(smaller_l2.is_better_than(closed));
+
+        let stable_earlier = CanonicalCandidateScore {
+            ordinal: 3,
+            ..closed
+        };
+        assert!(stable_earlier.is_better_than(closed));
+    }
+
+    #[test]
+    fn canonical_requested_error_includes_hard_and_hard_overrides_preferred() {
+        let angles = HashMap::from([(17, 10.0), (19, 0.0)]);
+        let preferred = HashMap::from([(17, -90.0), (19, 90.0)]);
+        let hard = [Driver {
+            hinge: 17,
+            target_angle_deg: 20.0,
+        }];
+
+        let (maximum, squared, finite) =
+            canonical_requested_errors(&angles, &hard, Some(&preferred));
+
+        assert!(finite);
+        assert_eq!(maximum, 90.0);
+        assert_eq!(squared, 10.0_f64.powi(2) + 90.0_f64.powi(2));
+    }
+
+    #[test]
+    fn canonical_anchor_sampling_is_bounded_and_excludes_aux_and_hard() {
+        let mut document = sa_document();
+        document.cp.edges.push(Edge {
+            id: 35,
+            v0: 0,
+            v1: 1,
+            kind: EdgeKind::Aux,
+        });
+        let requested = HashMap::from([
+            (17, -90.0),
+            (19, 90.0),
+            (21, 90.0),
+            (23, 90.0),
+            (25, 90.0),
+            (35, 45.0),
+        ]);
+        let hard = [
+            Driver {
+                hinge: 17,
+                target_angle_deg: -90.0,
+            },
+            Driver {
+                hinge: 35,
+                target_angle_deg: 45.0,
+            },
+        ];
+        assert_eq!(
+            canonical_anchor_samples(&document.cp, &hard, Some(&requested)),
+            vec![19, 23, 25]
+        );
+
+        let raw_seed = HashMap::from([(17, 1.0), (19, 2.0), (35, 3.0), (999, 4.0)]);
+        let sanitized = canonical_document_seed(&document.cp, &raw_seed);
+        assert_eq!(sanitized, HashMap::from([(17, 1.0), (19, 2.0)]));
+        assert!(!canonical_kind_seed(&document.cp, 90.0).contains_key(&35));
+        assert!(!canonical_uniform_seed(&document.cp, -90.0).contains_key(&35));
+
+        let specs =
+            canonical_candidate_specs(&document.cp, &hard, Some(&requested), Some(&raw_seed));
+        assert_eq!(specs.len(), 17);
+        assert!(specs.iter().all(|spec| {
+            spec.seed
+                .as_ref()
+                .is_none_or(|seed| !seed.contains_key(&35) && !seed.contains_key(&999))
+                && spec
+                    .preferred
+                    .as_ref()
+                    .is_none_or(|targets| !targets.contains_key(&35))
+                && spec.hard.iter().all(|driver| driver.hinge != 35)
+        }));
+    }
+
+    #[test]
+    fn continuation_preserves_signed_path_across_180() {
+        let start = HashMap::from([(17, 180.0)]);
+        let drivers = [Driver {
+            hinge: 17,
+            target_angle_deg: -175.0,
+        }];
+        let targets = HashMap::from([(17, -175.0)]);
+        let fractions = [0.25, 0.5, 0.75, 1.0];
+        let expected = [91.25, 2.5, -86.25, -175.0].map(f64::to_bits);
+
+        assert_eq!(max_requested_delta(&start, &drivers, None), 355.0);
+        assert_eq!(max_requested_delta(&start, &[], Some(&targets)), 355.0);
+
+        let driver_checkpoints = fractions.map(|t| {
+            interpolated_drivers(&drivers, &start, t)[0]
+                .target_angle_deg
+                .to_bits()
+        });
+        let target_checkpoints = fractions.map(|t| {
+            interpolated_targets(Some(&targets), &start, t).expect("targets are present")[&17]
+                .to_bits()
+        });
+        let contact_checkpoints =
+            fractions.map(|t| interpolate_angle_maps(&start, &targets, t)[&17].to_bits());
+
+        assert_eq!(driver_checkpoints, expected);
+        assert_eq!(target_checkpoints, expected);
+        assert_eq!(
+            contact_checkpoints, expected,
+            "接触回避の二分探索も同じ符号付き経路を通る"
+        );
+    }
+
+    fn sa_document() -> Document {
+        fn vertex(id: u32, x: f64, y: f64) -> Vertex {
+            Vertex { id, pos: [x, y] }
+        }
+        fn edge(id: u32, v0: u32, v1: u32, kind: EdgeKind) -> Edge {
+            Edge { id, v0, v1, kind }
+        }
+
+        let mut document = Document::new(Paper {
+            width_mm: 150.0,
+            height_mm: 150.0,
+        });
+        document.cp = CreasePattern {
+            vertices: vec![
+                vertex(0, 0.0, 0.0),
+                vertex(1, 1.0, 0.0),
+                vertex(2, 1.0, 1.0),
+                vertex(3, 0.0, 1.0),
+                vertex(4, 0.0, 0.5),
+                vertex(5, 1.0, 0.5),
+                vertex(6, 0.5, 1.0),
+                vertex(7, 0.5, 0.0),
+                vertex(8, 0.5, 0.5),
+                vertex(9, 0.207_106_781_186_547_52, 0.5),
+                vertex(10, 0.5, 0.792_893_218_813_452_5),
+                vertex(11, 0.5, 0.207_106_781_186_547_52),
+                vertex(12, 0.792_893_218_813_452_5, 0.5),
+            ],
+            edges: vec![
+                edge(4, 3, 4, EdgeKind::Border),
+                edge(5, 4, 0, EdgeKind::Border),
+                edge(6, 1, 5, EdgeKind::Border),
+                edge(7, 5, 2, EdgeKind::Border),
+                edge(9, 2, 6, EdgeKind::Border),
+                edge(10, 6, 3, EdgeKind::Border),
+                edge(11, 0, 7, EdgeKind::Border),
+                edge(12, 7, 1, EdgeKind::Border),
+                edge(17, 0, 8, EdgeKind::Valley),
+                edge(18, 8, 2, EdgeKind::Valley),
+                edge(19, 4, 9, EdgeKind::Mountain),
+                edge(20, 9, 8, EdgeKind::Mountain),
+                edge(21, 0, 9, EdgeKind::Mountain),
+                edge(22, 9, 3, EdgeKind::Mountain),
+                edge(23, 6, 10, EdgeKind::Mountain),
+                edge(24, 10, 8, EdgeKind::Mountain),
+                edge(25, 2, 10, EdgeKind::Mountain),
+                edge(26, 10, 3, EdgeKind::Mountain),
+                edge(27, 8, 11, EdgeKind::Mountain),
+                edge(28, 11, 7, EdgeKind::Mountain),
+                edge(29, 0, 11, EdgeKind::Mountain),
+                edge(30, 11, 1, EdgeKind::Mountain),
+                edge(31, 8, 12, EdgeKind::Mountain),
+                edge(32, 12, 5, EdgeKind::Mountain),
+                edge(33, 2, 12, EdgeKind::Mountain),
+                edge(34, 12, 1, EdgeKind::Mountain),
+            ],
+            next_vertex_id: 13,
+            next_edge_id: 35,
+        };
+        document
+    }
+
+    fn max_vertex_delta(left: &Frame3D, right: &Frame3D) -> f64 {
+        let mut left_faces: Vec<_> = left.faces.iter().collect();
+        let mut right_faces: Vec<_> = right.faces.iter().collect();
+        left_faces.sort_unstable_by_key(|face| face.face);
+        right_faces.sort_unstable_by_key(|face| face.face);
+        left_faces
+            .into_iter()
+            .zip(right_faces)
+            .flat_map(|(left_face, right_face)| {
+                assert_eq!(left_face.face, right_face.face);
+                left_face.polygon.iter().zip(&right_face.polygon).flat_map(
+                    |(left_point, right_point)| {
+                        (0..3).map(move |axis| (left_point[axis] - right_point[axis]).abs())
+                    },
+                )
+            })
+            .fold(0.0_f64, f64::max)
+    }
+
+    fn assert_pose_bits_eq(left: &SolveResult, right: &SolveResult) {
+        let mut left_angles: Vec<_> = left.angles.iter().collect();
+        let mut right_angles: Vec<_> = right.angles.iter().collect();
+        left_angles.sort_unstable_by_key(|(hinge, _)| **hinge);
+        right_angles.sort_unstable_by_key(|(hinge, _)| **hinge);
+        assert_eq!(left_angles.len(), right_angles.len());
+        for ((left_hinge, left_angle), (right_hinge, right_angle)) in
+            left_angles.into_iter().zip(right_angles)
+        {
+            assert_eq!(left_hinge, right_hinge);
+            assert_eq!(left_angle.to_bits(), right_angle.to_bits());
+        }
+
+        let mut left_faces: Vec<_> = left.frame.faces.iter().collect();
+        let mut right_faces: Vec<_> = right.frame.faces.iter().collect();
+        left_faces.sort_unstable_by_key(|face| face.face);
+        right_faces.sort_unstable_by_key(|face| face.face);
+        assert_eq!(left_faces.len(), right_faces.len());
+        for (left_face, right_face) in left_faces.into_iter().zip(right_faces) {
+            assert_eq!(left_face.face, right_face.face);
+            assert_eq!(left_face.layer, right_face.layer);
+            assert_eq!(left_face.surface_rank, right_face.surface_rank);
+            assert_eq!(left_face.mirrored, right_face.mirrored);
+            assert_eq!(left_face.polygon.len(), right_face.polygon.len());
+            for (left_point, right_point) in left_face.polygon.iter().zip(&right_face.polygon) {
+                for axis in 0..3 {
+                    assert_eq!(left_point[axis].to_bits(), right_point[axis].to_bits());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn canonical_sa_selects_bounded_anchor_and_is_seed_order_independent() {
+        let document = sa_document();
+        let faces = extract_faces(&document.cp);
+        let targets_forward = HashMap::from([(17, -90.0), (19, 90.0), (21, 90.0)]);
+        let targets_reverse = HashMap::from([(21, 90.0), (19, 90.0), (17, -90.0)]);
+        let document_seed_forward: HashMap<_, _> = document
+            .cp
+            .edges
+            .iter()
+            .filter(|edge| matches!(edge.kind, EdgeKind::Mountain | EdgeKind::Valley))
+            .map(|edge| (edge.id, 0.0))
+            .collect();
+        let document_seed_reverse: HashMap<_, _> = document
+            .cp
+            .edges
+            .iter()
+            .rev()
+            .filter(|edge| matches!(edge.kind, EdgeKind::Mountain | EdgeKind::Valley))
+            .map(|edge| (edge.id, 0.0))
+            .collect();
+        let contact = super::MotionContactOptions {
+            detect: true,
+            prevent: false,
+        };
+        let specs = canonical_candidate_specs(
+            &document.cp,
+            &[],
+            Some(&targets_forward),
+            Some(&document_seed_forward),
+        );
+        assert_eq!(specs.len(), 17);
+        assert_eq!(
+            canonical_anchor_samples(&document.cp, &[], Some(&targets_forward)),
+            vec![17, 19, 21]
+        );
+        let anchor_19_minus = specs
+            .iter()
+            .find(|spec| {
+                spec.kind
+                    == CanonicalCandidateKind::AnchoredUniformMinus90 {
+                        hinge: 19,
+                        sample_index: 1,
+                    }
+            })
+            .expect("sampled hinge 19 minus candidate");
+        assert_eq!(
+            anchor_19_minus.hard,
+            vec![Driver {
+                hinge: 19,
+                target_angle_deg: 90.0,
+            }]
+        );
+        assert_eq!(
+            anchor_19_minus.preferred,
+            Some(HashMap::from([(17, -90.0), (21, 90.0)]))
+        );
+        assert_eq!(anchor_19_minus.seed.as_ref().unwrap()[&19], -90.0);
+
+        let (first, selected) = solve_canonical_motion_prepared(
+            &document.cp,
+            &faces,
+            &[],
+            Some(&targets_forward),
+            Some(&document_seed_forward),
+            contact,
+        );
+        assert_eq!(
+            selected,
+            CanonicalCandidateKind::AnchoredUniformMinus90 {
+                hinge: 19,
+                sample_index: 1,
+            }
+        );
+        let (second, selected_again) = solve_canonical_motion_prepared(
+            &document.cp,
+            &faces,
+            &[],
+            Some(&targets_reverse),
+            Some(&document_seed_reverse),
+            contact,
+        );
+        assert_eq!(selected_again, selected);
+        assert_pose_bits_eq(&first.result, &second.result);
+        assert_eq!(first.result.iterations, second.result.iterations);
+
+        let max_error = targets_forward
+            .iter()
+            .map(|(&hinge, &target)| {
+                super::canonical_delta_deg(first.result.angles[&hinge], target).abs()
+            })
+            .fold(0.0_f64, f64::max);
+        assert!((max_error - 90.0).abs() <= 1e-9, "max_error={max_error}");
+
+        let desired_17 = HashMap::from([(17, -90.0)]);
+        let finish_17 = solve_canonical_motion_prepared(
+            &document.cp,
+            &faces,
+            &[],
+            Some(&desired_17),
+            Some(&document_seed_forward),
+            contact,
+        )
+        .0;
+        let desired_17_21 = HashMap::from([(17, -90.0), (21, 90.0)]);
+        let finish_21 = solve_canonical_motion_prepared(
+            &document.cp,
+            &faces,
+            &[],
+            Some(&desired_17_21),
+            Some(&document_seed_forward),
+            contact,
+        )
+        .0;
+        assert_pose_bits_eq(
+            &finish_17.result,
+            &solve_canonical_motion_prepared(
+                &document.cp,
+                &faces,
+                &[],
+                Some(&desired_17),
+                Some(&document_seed_forward),
+                contact,
+            )
+            .0
+            .result,
+        );
+        let hard_19 = [Driver {
+            hinge: 19,
+            target_angle_deg: 90.0,
+        }];
+        let follow_19 = solve_motion_with_contact_options(
+            &document.cp,
+            &faces,
+            &hard_19,
+            Some(&desired_17_21),
+            Some(&finish_21.result.angles),
+            contact,
+        );
+        let jump = max_vertex_delta(&follow_19.result.frame, &first.result.frame);
+        assert!(jump < 0.637_774, "hard19 jump={jump}");
+    }
+
+    #[test]
+    fn canonical_sa_is_never_worse_than_follow_at_all_18_gesture_boundaries() {
+        let document = sa_document();
+        let faces = extract_faces(&document.cp);
+        let document_seed: HashMap<_, _> = document
+            .cp
+            .edges
+            .iter()
+            .filter(|edge| matches!(edge.kind, EdgeKind::Mountain | EdgeKind::Valley))
+            .map(|edge| (edge.id, 0.0))
+            .collect();
+        let target = |hinge| match hinge {
+            17 => -90.0,
+            19 | 21 => 90.0,
+            _ => unreachable!("sa scan only uses hinges 17, 19, and 21"),
+        };
+        let orders = [
+            [17, 19, 21],
+            [17, 21, 19],
+            [19, 17, 21],
+            [19, 21, 17],
+            [21, 17, 19],
+            [21, 19, 17],
+        ];
+        let contact = super::MotionContactOptions {
+            detect: false,
+            prevent: false,
+        };
+        let mut checked = 0usize;
+
+        for order in orders {
+            let mut desired = HashMap::new();
+            let mut warm = document_seed.clone();
+            for active in order {
+                let driver = [Driver {
+                    hinge: active,
+                    target_angle_deg: target(active),
+                }];
+                let follow = solve_motion_with_contact_options(
+                    &document.cp,
+                    &faces,
+                    &driver,
+                    (!desired.is_empty()).then_some(&desired),
+                    Some(&warm),
+                    contact,
+                );
+                desired.insert(active, target(active));
+                let canonical = solve_canonical_motion_prepared(
+                    &document.cp,
+                    &faces,
+                    &[],
+                    Some(&desired),
+                    Some(&document_seed),
+                    contact,
+                )
+                .0;
+                let wrapped_max_error = |result: &SolveResult| {
+                    desired
+                        .iter()
+                        .map(|(&hinge, &wanted)| {
+                            super::canonical_delta_deg(result.angles[&hinge], wanted).abs()
+                        })
+                        .fold(0.0_f64, f64::max)
+                };
+                let follow_error = wrapped_max_error(&follow.result);
+                let canonical_error = wrapped_max_error(&canonical.result);
+                assert!(
+                    canonical_error <= follow_error + 1e-9,
+                    "order={order:?} boundary={} active={active} canonical={canonical_error} follow={follow_error}",
+                    desired.len()
+                );
+                warm = canonical.result.angles;
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 18);
     }
 }

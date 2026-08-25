@@ -7,8 +7,69 @@ import { describe, expect, it } from "vitest";
 import { EDGE_COLORS, contrastRatio, type Rgb } from "./cpColors";
 import { UI_THEMES, hexToRgb } from "./displayPrefs";
 
-// vitest は .css の取り込みを空にするため、App.css は文字として直に読む。
-const css = readFileSync(new URL("../App.css", import.meta.url), "utf8");
+// vitest は .css のimportを空にする。selectorごとに所有ファイルを直読し、
+// App.cssの@importを辿る模擬や全CSSの連結は行わない。
+const tokensCss = readFileSync(
+  new URL("../styles/tokens.css", import.meta.url),
+  "utf8",
+);
+const themesCss = readFileSync(
+  new URL("../styles/themes.css", import.meta.url),
+  "utf8",
+);
+const baseLayoutCss = readFileSync(
+  new URL("../styles/base-layout.css", import.meta.url),
+  "utf8",
+);
+const viewerCss = readFileSync(
+  new URL("../styles/viewer.css", import.meta.url),
+  "utf8",
+);
+const contextCss = readFileSync(
+  new URL("../styles/context.css", import.meta.url),
+  "utf8",
+);
+const dialogsCss = readFileSync(
+  new URL("../styles/dialogs.css", import.meta.url),
+  "utf8",
+);
+const responsiveCss = readFileSync(
+  new URL("../styles/responsive.css", import.meta.url),
+  "utf8",
+);
+const cssSources = [
+  ["tokens", tokensCss],
+  ["themes", themesCss],
+  ["base-layout", baseLayoutCss],
+  ["viewer", viewerCss],
+  ["context", contextCss],
+  ["dialogs", dialogsCss],
+  ["responsive", responsiveCss],
+] as const;
+
+const baseLayoutSelectors = new Set([
+  ".app :where(button)",
+  ".app select",
+  '.app input[type="checkbox"]',
+  '.app input[type="radio"]',
+  '.app input[type="range"]',
+  '.app input[type="color"]',
+  '[data-floating-ui="tooltip"]',
+  ".tool-button.active:hover:not(:disabled)",
+  ".app :where(button):disabled",
+  ".first-run-guide-prepare:hover:not(:disabled),\n.first-run-guide-done:hover:not(:disabled),\n.first-run-guide-prepare:active:not(:disabled),\n.first-run-guide-done:active:not(:disabled)",
+]);
+const viewerSelectors = new Set([
+  ".viewer-reset:hover,\n.viewer-reset:focus-visible",
+  ".suspect-hinge-guide:hover,\n.suspect-hinge-guide:focus-visible",
+]);
+function selectorOwnerCss(selector: string): string {
+  if (selector === ":root") return tokensCss;
+  if (selector.startsWith('.app[data-theme="')) return themesCss;
+  if (baseLayoutSelectors.has(selector)) return baseLayoutCss;
+  if (viewerSelectors.has(selector)) return viewerCss;
+  return responsiveCss;
+}
 const rendererSource = readFileSync(
   new URL("../components/CpEditor/renderer.ts", import.meta.url),
   "utf8",
@@ -46,7 +107,8 @@ function declarationBlock(selector: string): string {
     .split(/\s+/)
     .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
     .join("\\s+");
-  const match = new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\}`).exec(css);
+  const ownerCss = selectorOwnerCss(selector);
+  const match = new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\}`).exec(ownerCss);
   if (match === null) throw new Error(`CSSブロックがありません: ${selector}`);
   return match[1];
 }
@@ -57,7 +119,8 @@ function declarationBlocks(selector: string): string[] {
     .split(/\s+/)
     .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
     .join("\\s+");
-  return [...css.matchAll(new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\}`, "g"))].map(
+  const ownerCss = selectorOwnerCss(selector);
+  return [...ownerCss.matchAll(new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\}`, "g"))].map(
     (match) => match[1],
   );
 }
@@ -283,7 +346,7 @@ describe("設計トークン", () => {
       expect(theme!.selector, id).not.toBeNull();
       const ownTokens = declarations(declarationBlock(theme!.selector!));
       const background = ownTokens.get("--app-background-image") ?? "";
-      expect(background, id).toContain(`url("./assets/themes/${fileName}")`);
+      expect(background, id).toContain(`url("../assets/themes/${fileName}")`);
       expect(background, id).not.toContain("data:image");
 
       const file = new URL(`../assets/themes/${fileName}`, import.meta.url);
@@ -294,7 +357,7 @@ describe("設計トークン", () => {
     }
 
     expect(Object.values(assets).every((name) => name.endsWith(".webp"))).toBe(true);
-    expect(css).not.toMatch(/assets\/themes\/[^"')]*(?:\.png|\.jpe?g)/i);
+    expect(themesCss).not.toMatch(/assets\/themes\/[^"')]*(?:\.png|\.jpe?g)/i);
   });
 
   it("和風とモダンの品質を決める色・形・影・速さを固定する", () => {
@@ -325,9 +388,13 @@ describe("設計トークン", () => {
   });
 
   it("動く部品へSVGフィルタを掛けず、背景は静的なローカル画像だけを使う", () => {
-    expect(css).not.toMatch(/filter\s*:\s*url\(/i);
-    expect(css).not.toMatch(/--app-background-image\s*:[^;]*https?:/i);
-    expect(css).not.toMatch(/animation(?:-name)?\s*:[^;]*app-background/i);
+    for (const [owner, source] of cssSources) {
+      expect(source, owner).not.toMatch(/filter\s*:\s*url\(/i);
+      expect(source, owner).not.toMatch(/--app-background-image\s*:[^;]*https?:/i);
+      expect(source, owner).not.toMatch(
+        /animation(?:-name)?\s*:[^;]*app-background/i,
+      );
+    }
   });
 
   it("色・余白・角丸・影・文字の大きさの段階が定義されている", () => {
@@ -361,8 +428,10 @@ describe("設計トークン", () => {
 
   it("使っているトークンはすべて :root で定義されている", () => {
     const rootTokens = tokens();
-    for (const match of css.matchAll(/var\((--[\w-]+)\)/g)) {
-      expect(rootTokens.has(match[1]), match[1]).toBe(true);
+    for (const [owner, source] of cssSources) {
+      for (const match of source.matchAll(/var\((--[\w-]+)\)/g)) {
+        expect(rootTokens.has(match[1]), `${owner}: ${match[1]}`).toBe(true);
+      }
     }
   });
 
@@ -377,7 +446,9 @@ describe("設計トークン", () => {
     );
     expect(buttonBase).toMatch(/border-radius\s*:\s*var\(--radius-md\)\s*;/);
     expect(buttonBase).toMatch(/box-shadow\s*:\s*var\(--shadow-button\)\s*;/);
-    expect(css).not.toMatch(/\b(?:outset|inset-button)\b/i);
+    for (const [owner, source] of cssSources) {
+      expect(source, owner).not.toMatch(/\b(?:outset|inset-button)\b/i);
+    }
   });
 
   it("選択肢・チェック・スライダー・色入力はOS既定appearanceを使わない", () => {
@@ -534,7 +605,9 @@ describe("設計トークン", () => {
     expect(rendererSource).not.toMatch(/\brelaxed\s*:/);
     expect(sceneSource).not.toMatch(/RELAXED_HIGHLIGHT_COLOR/);
     expect(sceneSource).not.toMatch(/"relaxed"/);
-    expect(css).not.toMatch(/--color-relaxation\s*:/);
+    for (const [owner, source] of cssSources) {
+      expect(source, owner).not.toMatch(/--color-relaxation\s*:/);
+    }
 
     const semanticColors = ["#40cfff", "#ff2038"].map(
       (value) => hexToRgb(value) as Rgb,

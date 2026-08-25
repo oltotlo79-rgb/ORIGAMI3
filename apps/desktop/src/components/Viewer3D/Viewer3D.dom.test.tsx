@@ -304,6 +304,29 @@ describe("Viewer3D(画面)", () => {
     expect(screen.getByRole("status").textContent).toContain("再生中");
   });
 
+  it("0°の角度指定だけが残っていても、上部案内は折れないと言わない", () => {
+    useAppStore.setState({
+      doc: EDGE_DOC,
+      faces: EDGE_FACES,
+      hinges: new Set([5]),
+      drivers: new Map([[5, 45]]),
+    });
+    renderViewer();
+
+    // 0°以外を指定している間は、今の立体姿勢から折れないと正しく案内する。
+    const hint = screen.getByRole("status");
+    expect(hint.textContent).toContain("今は折れません");
+    expect(hint.textContent).toContain("角度を動かして形を変えている間");
+
+    // 数値欄で0°へ戻した直後と同じく、指定そのものはMapに残す。
+    act(() => useAppStore.setState({ drivers: new Map([[5, 0]]) }));
+    expect([...useAppStore.getState().drivers]).toEqual([[5, 0]]);
+
+    expect(hint.textContent).not.toContain("今は折れません");
+    expect(hint.textContent).not.toContain("角度を動かして形を変えている間");
+    expect(hint.textContent).toContain("紙をつかんでドラッグ");
+  });
+
   it("テーマ変更時にCSS変数から3D背景を読み直す", () => {
     renderViewer();
     const syncTheme = held.scene.syncTheme as ReturnType<typeof vi.fn>;

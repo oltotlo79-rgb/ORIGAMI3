@@ -1,0 +1,230 @@
+@layer responsive {
+/* 道具10個がレールに入りきらないと、上か下の道具が黙って隠れる。
+   実測(ポップ・下部パネル既定): レールの高さは 700px窓で433.8px・860px窓で547px・
+   900px窓で574pxなのに、既定の大きさでは637px要る。窓が低いときだけ絵と高さを詰めて
+   10個を必ず収める。区画も設定項目も増やさない。
+   詰めたあとの実測(折るモード・道具10個/必要な高さ 対 あるレールの高さ):
+   700px窓=434 対 433.8 / 860px窓=540 対 539.9 / 900px窓=567 対 567.1 /
+   1080px窓=690 対 689.5 / 1440px窓=934 対 934.3。隠れる道具は0個になった。
+   ボタンどうしの隙間は --sp-2(4px)のまま詰めていない(2pxではくっついて見えたため)。 */
+@media (max-height: 900px) {
+  .tool-rail {
+    gap: var(--sp-2);
+    padding: var(--sp-1) var(--sp-2);
+  }
+
+  .tool-button {
+    min-height: 44px;
+    gap: var(--sp-1);
+  }
+
+  /* 道具の名前は必ず1行なので、行の高さを詰める。文字の大きさは --fs-xs のまま。 */
+  .tool-button .tool-label {
+    line-height: 1.1;
+  }
+
+  .tool-icon {
+    width: 20px;
+    height: 20px;
+  }
+}
+
+@media (max-height: 760px) {
+  .tool-button {
+    min-height: 36px;
+    gap: 0;
+    padding: var(--sp-1);
+  }
+
+  .tool-icon {
+    width: 16px;
+    height: 16px;
+  }
+}
+
+/* 1000×700の既定分割では3D区画465px・案内札301px。4項目を1行へ押し込むと、
+   要点の実測629px中74pxしか見えなかった。区画が狭い間は詳細を▼へ縮め、
+   要点を2行目以降へ折り返して、文字どうしを重ねず最後まで読めるようにする。 */
+@container viewer-operation-help (max-width: 520px) {
+  .viewer-operation-hint.collapsed .viewer-current-row {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: start;
+  }
+
+  .viewer-operation-hint.collapsed .viewer-mode-icon.compact {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .viewer-operation-hint.collapsed .viewer-mode-name {
+    grid-column: 2;
+    grid-row: 1;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .viewer-operation-hint.collapsed .viewer-current-action {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+  }
+
+  .viewer-operation-hint.collapsed .viewer-hint-toggle {
+    grid-column: 3;
+    grid-row: 1;
+    width: 32px;
+    min-width: 32px;
+    padding-inline: var(--sp-1);
+  }
+
+  .viewer-operation-hint.collapsed .viewer-hint-toggle .operation-detail-label {
+    display: none;
+  }
+}
+
+/* 左右仕切りで3Dだけを狭くした場合。window幅ではなく実際の3D区画幅で切り替える。 */
+@container viewer-operation-help (max-width: 360px) {
+  .viewer-operation-hint {
+    padding: var(--sp-3);
+  }
+
+  .viewer-operation-hint::after {
+    display: none;
+  }
+
+  .viewer-hint-toggle {
+    width: 32px;
+    min-width: 32px;
+    padding-inline: var(--sp-1);
+  }
+
+  .viewer-hint-toggle .operation-detail-label {
+    display: none;
+  }
+
+  .viewer-mouse-assignments {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* 3D幅が360px以下なら、128pxの視点立方体の下から列を始める。右下の
+   「視点を戻す」まで56px空け、186px幅でも横へはみ出さない。 */
+@container viewer-operation-help (max-width: 360px) {
+  .viewer-overlay-region {
+    top: 148px;
+    right: var(--sp-5);
+    bottom: 56px;
+    width: auto;
+  }
+}
+
+/* 2Dを下限まで狭くした場合は、右上の状態表示の下へ案内を移す。 */
+@container cp-operation-help (max-width: 520px) {
+  .cp-operation-hint {
+    top: 52px;
+    right: var(--sp-4);
+    /* leftとrightの両方を指定すると札が区画いっぱいへ広がり、文字の終わりと
+       「▼」の間に空白が出ていた(実測: 1000×700で181px)。中身の幅にそろえる。 */
+    width: max-content;
+    max-width: calc(100% - var(--sp-4) - var(--sp-4));
+  }
+
+  .cp-operation-hint.collapsed {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .cp-help-toggle {
+    width: 32px;
+    min-width: 32px;
+    padding-inline: var(--sp-1);
+  }
+
+  .cp-help-toggle .operation-detail-label {
+    display: none;
+  }
+}
+
+/* 下部パネル自身が狭い場合も、文言を潰さずアイコンへ切り替える。 */
+@container context-operation-help (max-width: 480px) {
+  .operation-steps-heading {
+    flex-wrap: nowrap;
+  }
+
+  .operation-help-toggle,
+  .paper-help-toggle {
+    width: 32px;
+    min-width: 32px;
+    padding-inline: var(--sp-1);
+  }
+
+  .operation-help-toggle .operation-detail-label,
+  .paper-help-toggle .operation-detail-label {
+    display: none;
+  }
+
+  .soft-controls-heading {
+    flex-basis: 100%;
+  }
+}
+
+@media (max-width: 1100px) {
+  .help-dialog {
+    width: 92vw;
+    height: 90vh;
+    grid-template-columns: minmax(220px, 0.38fr) minmax(0, 1fr);
+  }
+
+  .help-sidebar,
+  .help-content {
+    padding: var(--sp-5);
+  }
+
+  .toolbar {
+    gap: var(--sp-2);
+    padding-inline: var(--sp-5);
+  }
+
+  .toolbar button {
+    padding-inline: var(--sp-4);
+  }
+
+  .toolbar-brand {
+    gap: var(--sp-2);
+    margin-right: 0;
+    padding-right: var(--sp-4);
+  }
+
+  .toolbar-brand-mark {
+    width: 34px;
+    height: 34px;
+  }
+
+  .toolbar-brand-copy strong {
+    font-size: 14px;
+  }
+
+  .toolbar-brand-copy small {
+    display: none;
+  }
+
+  .context-panel {
+    gap: var(--sp-4);
+    padding-inline: var(--sp-4);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+}

@@ -239,6 +239,31 @@ describe("全部の折り目をいっぺんに動かす一時表示", () => {
     expect(ipc.editRedo).not.toHaveBeenCalled();
   });
 
+  it("50%から0%へつまみを戻し終えると、閉じる操作と同じく元の表示と選択へ戻る", async () => {
+    seed();
+    useAppStore.setState({ selection: { edgeIds: [5], vertexIds: [] } });
+
+    await useAppStore.getState().enterFoldAllPreview();
+    useAppStore.getState().setFoldAllPercent(50);
+    useAppStore.getState().finishFoldAllPercent();
+    await vi.waitFor(() =>
+      expect(useAppStore.getState().foldAllPreview?.appliedPercent).toBe(50),
+    );
+
+    useAppStore.getState().setFoldAllPercent(0);
+    useAppStore.getState().finishFoldAllPercent();
+
+    await vi.waitFor(() =>
+      expect(useAppStore.getState().foldAllPreview).toBeNull(),
+    );
+    const restored = useAppStore.getState();
+    expect(restored.frame3d).toEqual(frameAt(-1));
+    expect(restored.currentStep).toBe(1);
+    expect(restored.playT).toBe(0.4);
+    expect(restored.activeTool).toBe("mountain");
+    expect(restored.selection).toEqual({ edgeIds: [5], vertexIds: [] });
+  });
+
   it("手順が無い作品も一時角度と固定を変えず、追従計算から通常形へ戻す", async () => {
     const doc = seed();
     doc.sequence = [];
@@ -303,6 +328,30 @@ describe("全部の折り目をいっぺんに動かす一時表示", () => {
 
     expect(maxActive).toBe(1);
     expect(calls[1]).toEqual({ percent: 100, warm: 0 });
+  });
+
+  it("1秒120入力を16msごとに間引き、IPCを65回以下にして最後の割合を採用する", async () => {
+    vi.useFakeTimers();
+    try {
+      seed();
+      await useAppStore.getState().enterFoldAllPreview();
+
+      for (let index = 0; index < 120; index++) {
+        const percent = index === 119 ? 100 : (index % 99) + 1;
+        useAppStore.getState().setFoldAllPercent(percent);
+        await vi.advanceTimersByTimeAsync(1000 / 120);
+      }
+      useAppStore.getState().finishFoldAllPercent();
+      await vi.runAllTimersAsync();
+      await Promise.resolve();
+
+      const calls = vi.mocked(ipc.foldAllPreview).mock.calls;
+      expect(calls.length).toBeLessThanOrEqual(65);
+      expect(calls[calls.length - 1]?.[0]).toBe(100);
+      expect(useAppStore.getState().foldAllPreview?.appliedPercent).toBe(100);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("不収束・平坦条件・接触・貫通を受けても次の割合を計算する", async () => {
@@ -439,8 +488,7 @@ describe("全部の折り目をいっぺんに動かす一時表示", () => {
 
     expect(useAppStore.getState().foldAllPreview).toMatchObject({
       returning: false,
-      error:
-        "いつもの表示へ戻せませんでした。これは記録された手順ではない表示を続けています。",
+      error: "いつもの表示へ戻せませんでした。仮の形を表示したままです。",
     });
     useAppStore.getState().setFoldAllPercent(50);
     useAppStore.getState().finishFoldAllPercent();

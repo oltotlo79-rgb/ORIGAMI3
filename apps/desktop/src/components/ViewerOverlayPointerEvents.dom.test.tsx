@@ -3,7 +3,7 @@
 //
 // 利用者の指摘(2026-08-16): 「合わせて折る」で3D図の線を指定できない。
 // 原因は左上の操作ヒントの札で、押す場所が無いのにクリックを受け取っていた。
-// ここではApp.cssを実際にjsdomへ読み込ませ、計算後のpointer-eventsで当たり判定を作り、
+// ここでは所有元のviewer.cssをjsdomへ読み込ませ、計算後のpointer-eventsで当たり判定を作り、
 // 札の内側で押した回数のうち紙に届いた回数を数える。
 
 import { readFileSync } from "node:fs";
@@ -14,12 +14,84 @@ import { cleanup, fireEvent, render } from "@testing-library/react";
 import { ViewerOperationHint } from "./Viewer3D/ViewerOperationHint";
 import { useAppStore } from "../store/appStore";
 
-// 画面で実際に効いているApp.cssを、そのままjsdomへ読み込ませて確かめる。
+// jsdomは@layer内の規則を計算済みstyleへ反映しないため、製品CSSは変えず、
+// この検査へ注入するときだけ既知の外側wrapperを検証して外す。
 // vitestは.cssの取り込みを空にするため、既存のuiTokens.test.tsと同じく直に読む。
-// jsdom環境のURLはページの位置を基準にしてしまうので、node側の場所へ直してから読む。
-const appCss = readFileSync(
-  join(dirname(fileURLToPath(import.meta.url)), "..", "App.css"),
-  "utf8",
+function extractLayerBody(source: string, layerName: string): string {
+  const css = source.replace(/\r\n/g, "\n").trim();
+  const opening = `@layer ${layerName} {`;
+  const openingIndex = css.indexOf(opening);
+  if (openingIndex < 0 || css.indexOf(opening, openingIndex + 1) >= 0) {
+    throw new Error(`${layerName}の@layerが1つではありません`);
+  }
+
+  let depth = 1;
+  let quote: '"' | "'" | null = null;
+  let inComment = false;
+  let closing = -1;
+  for (
+    let index = openingIndex + opening.length;
+    index < css.length;
+    index += 1
+  ) {
+    const char = css[index];
+    const next = css[index + 1];
+    if (inComment) {
+      if (char === "*" && next === "/") {
+        inComment = false;
+        index += 1;
+      }
+      continue;
+    }
+    if (quote !== null) {
+      if (char === "\\") index += 1;
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      inComment = true;
+      index += 1;
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        closing = index;
+        break;
+      }
+    }
+  }
+  if (closing < 0) {
+    throw new Error(`${layerName}の@layerが正しく閉じていません`);
+  }
+  return css.slice(openingIndex + opening.length, closing);
+}
+
+const baseCss = extractLayerBody(
+  readFileSync(
+    join(
+      dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "styles",
+      "base-layout.css",
+    ),
+    "utf8",
+  ),
+  "base",
+);
+const viewerCss = extractLayerBody(
+  readFileSync(
+    join(
+      dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "styles",
+      "viewer.css",
+    ),
+    "utf8",
+  ),
+  "viewer",
 );
 const initialStoreState = useAppStore.getState();
 
@@ -32,6 +104,7 @@ interface Rect {
 
 const rects = new Map<Element, Rect>();
 const originalGetBoundingClientRect = Element.prototype.getBoundingClientRect;
+const injectedStyles: HTMLStyleElement[] = [];
 
 function setRect(element: Element, rect: Rect) {
   rects.set(element, rect);
@@ -68,9 +141,12 @@ function hitTest(root: Element, x: number, y: number): Element | null {
 }
 
 beforeAll(() => {
-  const style = document.createElement("style");
-  style.textContent = appCss;
-  document.head.appendChild(style);
+  for (const ownerCss of [baseCss, viewerCss]) {
+    const style = document.createElement("style");
+    style.textContent = ownerCss;
+    document.head.appendChild(style);
+    injectedStyles.push(style);
+  }
   Element.prototype.getBoundingClientRect = function (this: Element) {
     const rect = rects.get(this) ?? { left: 0, top: 0, width: 0, height: 0 };
     return {
@@ -89,6 +165,7 @@ beforeAll(() => {
 
 afterAll(() => {
   Element.prototype.getBoundingClientRect = originalGetBoundingClientRect;
+  for (const style of injectedStyles) style.remove();
 });
 
 afterEach(() => {

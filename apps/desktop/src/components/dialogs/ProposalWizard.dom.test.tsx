@@ -1405,6 +1405,90 @@ describe("提案ウィザード", () => {
   });
 });
 
+describe("提案画面の初回準備表示（6-C）", () => {
+  it("閉じている間は読まず、100回開いてもpayloadは最初の1回だけ読む", async () => {
+    vi.resetModules();
+    const proposalPayload = {
+      load: vi.fn(() => new Promise<never>(() => {})),
+    };
+
+    vi.doMock("../../components/ToolRail", () => ({ ToolRail: () => null }));
+    vi.doMock("../../components/ContextPanel", () => ({ ContextPanel: () => null }));
+    vi.doMock("../../components/CpEditor/CpEditor", () => ({
+      CpEditor: () => null,
+    }));
+    vi.doMock("../../components/Viewer3D/Viewer3D", () => ({
+      Viewer3D: () => null,
+    }));
+    vi.doMock("../../components/Timeline", () => ({ Timeline: () => null }));
+    vi.doMock("../../components/RecoveryDialog", () => ({
+      RecoveryDialog: () => null,
+    }));
+    vi.doMock("../../components/PaneSplitter", () => ({
+      PaneSplitter: () => null,
+    }));
+    vi.doMock("../../components/ContextPanelSplitter", () => ({
+      ContextPanelSplitter: () => null,
+    }));
+    vi.doMock("../../components/dialogs/NewDocumentDialog", () => ({
+      NewDocumentDialog: () => null,
+    }));
+    vi.doMock("../../components/HistoryButtons", () => ({
+      HistoryButtons: () => null,
+    }));
+    vi.doMock("../../components/HistoryShortcuts", () => ({
+      HistoryShortcuts: () => null,
+    }));
+    vi.doMock("../../components/ToolIcons", () => ({
+      ToolbarIcon: () => null,
+    }));
+    vi.doMock("../../components/ToolbarBrandMark", () => ({
+      ToolbarBrandMark: () => null,
+    }));
+    vi.doMock("../../components/FirstRunGuide", () => ({
+      FirstRunGuide: () => null,
+    }));
+    vi.doMock("../../components/dialogs/HelpCenter", () => ({
+      HelpCenter: () => null,
+    }));
+    vi.doMock("../../components/ThemeRoot", () => ({
+      ThemeRoot: ({ children }: { children: unknown }) => children,
+    }));
+    vi.doMock("../../components/Tooltip", () => ({ TooltipHost: () => null }));
+    vi.doMock("../../captureApi", () => ({ installCaptureApi: vi.fn() }));
+    vi.doMock("./ProposalWizard", () => proposalPayload.load());
+
+    const [{ default: App }, { useAppStore: appStore }] = await Promise.all([
+      import("../../App"),
+      import("../../store/appStore"),
+    ]);
+    appStore.setState({
+      proposalStep: null,
+      newDocument: vi.fn().mockResolvedValue(undefined),
+      checkRecovery: vi.fn().mockResolvedValue(undefined),
+    });
+
+    render(<App />);
+    const open = screen.getByRole("button", { name: "提案" });
+    expect(proposalPayload.load).not.toHaveBeenCalled();
+
+    for (let index = 0; index < 100; index += 1) {
+      fireEvent.click(open);
+      if (index === 0) {
+        await vi.waitFor(() =>
+          expect(proposalPayload.load).toHaveBeenCalledTimes(1),
+        );
+        expect(screen.getByRole("status").textContent).toBe(
+          "提案の準備をしています…",
+        );
+      }
+      appStore.getState().closeProposal();
+    }
+
+    expect(proposalPayload.load).toHaveBeenCalledTimes(1);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // 完成形での先端の場所を、見本の絵の上で直接動かす(PRO-006〜PRO-008)
 // ---------------------------------------------------------------------------

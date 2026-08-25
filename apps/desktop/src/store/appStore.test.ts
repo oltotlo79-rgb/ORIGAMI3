@@ -594,6 +594,22 @@ describe("appStore 折り角度の指定", () => {
         frame: { faces: [], warnings: ["180度へ動かした形"] },
         flat_fold_violations: [9, 10, 11, 12],
       })
+      // pointer up後のcanonicalも本番と同じSolveResultを1件返す。
+      // ±180°は本番でもsettled foldとしてhardへ送られ、実角も180°になる。
+      // 4点＋最終接触はbackendの実標本
+      // `flat_fold_notice_reports_four_reached_points_when_paper_intersects` と同じ契約。
+      // ここでは通知を画面へ運ぶstoreだけを最小frameで検査する。
+      .mockResolvedValueOnce({
+        ...makeSolveResult({ "5": 180 }),
+        frame: { faces: [], warnings: ["180度へ動かした形"] },
+        closure_rms: 0,
+        best_effort: false,
+        relaxations: [],
+        soft: null,
+        suspect_hinges: [],
+        contact_detected: true,
+        flat_fold_violations: [9, 10, 11, 12],
+      })
       .mockResolvedValueOnce({
         ...makeSolveResult({ "5": 90 }),
         frame: { faces: [], warnings: ["次の形"] },
@@ -613,7 +629,19 @@ describe("appStore 折り角度の指定", () => {
 
     await state.finishAngleIntent();
     expect(useAppStore.getState().activeAngleIntent).toBeNull();
+    expect(useAppStore.getState().poseAngles.get(5)).toBe(180);
+    expect(useAppStore.getState().contactDetected).toBe(true);
     expect(useAppStore.getState().flatFoldViolations).toEqual([9, 10, 11, 12]);
+    expect(vi.mocked(ipc.poseSolve)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(ipc.poseSolve).mock.calls[1]?.[0]).toEqual([
+      { hinge: 5, target_angle_deg: 180 },
+    ]);
+    expect(vi.mocked(ipc.poseSolve).mock.calls[1]?.[1]).toEqual([]);
+    // 診断用の復元seedをwireへ残しても、Canonical backendは候補入力に使わない。
+    expect(vi.mocked(ipc.poseSolve).mock.calls[1]?.[3]).toEqual([
+      { hinge: 5, target_angle_deg: 180 },
+    ]);
+    expect(vi.mocked(ipc.poseSolve).mock.calls[1]?.[6]).toBe("Canonical");
 
     useAppStore.getState().setDriverAngle(5, 90);
     await vi.waitFor(() =>
@@ -2218,8 +2246,29 @@ describe("3D画面での折り操作(折り線を引いて折る)", () => {
     expect(canFoldNow(useAppStore.getState())).toBe(true); // 最終手順=最新の形
     expect(foldInsertAt(useAppStore.getState())).toBe(1);
 
+    useAppStore.setState({ drivers: new Map([[5, 0]]) });
+    expect(canFoldNow(useAppStore.getState())).toBe(true); // 0°の指定は平らな形のまま
+
     useAppStore.setState({ drivers: new Map([[5, 90]]) });
     expect(canFoldNow(useAppStore.getState())).toBe(false); // 角度スライダーで変形中
+  });
+
+  it("0°以外の角度指定では、合わせる線を消さずに正しい理由を知らせる", async () => {
+    seedFolded();
+    const store = useAppStore.getState();
+    store.beginAlign("lineLine");
+    store.pickAlignTarget({ kind: "line", a: [0, 0], b: [1, 0] });
+    store.pickAlignTarget({ kind: "line", a: [0, 1], b: [1, 1] });
+    useAppStore.setState({ drivers: new Map([[5, 45]]) });
+
+    await useAppStore.getState().commitFoldDraft();
+
+    expect(vi.mocked(ipc.sequenceApply)).not.toHaveBeenCalled();
+    expect(useAppStore.getState().alignDraft?.picks).toHaveLength(2);
+    expect(useAppStore.getState().foldDraft).not.toBeNull();
+    expect(useAppStore.getState().errorMessage).toBe(
+      "角度を変えた形からは、この折り方をまだ記録できません。選んだ内容は残してあります。角度を0°に戻すと、このまま折れます",
+    );
   });
 
   it("引いた折り線の設定どおりにFoldThroughを送る(全ての層・向こうへ折る)", async () => {
@@ -2288,7 +2337,19 @@ describe("3D画面での折り操作(折り線を引いて折る)", () => {
 
     expect(ipc.sequenceApply).not.toHaveBeenCalled();
     expect(useAppStore.getState().foldDraft).toBeNull();
-    expect(useAppStore.getState().errorMessage).toContain("もう一度線を引いて");
+    expect(useAppStore.getState().errorMessage).toContain("表示する手順が変わった");
+  });
+
+  it("線を選んだ後に別の作品へ替わっていたら、前の作品の線は使わない", async () => {
+    seedFolded();
+    useAppStore.getState().beginFoldDraft(LINE, "3d");
+    useAppStore.setState({ docEpoch: useAppStore.getState().docEpoch + 1 });
+
+    await useAppStore.getState().commitFoldDraft();
+
+    expect(ipc.sequenceApply).not.toHaveBeenCalled();
+    expect(useAppStore.getState().foldDraft).toBeNull();
+    expect(useAppStore.getState().errorMessage).toContain("作品または表示する手順が変わった");
   });
 
   it("「いちばん上の1枚」ではその層の面IDだけを対象にする", async () => {
@@ -2303,6 +2364,33 @@ describe("3D画面での折り操作(折り線を引いて折る)", () => {
     if (op.type !== "FoldThrough") throw new Error("FoldThroughでない");
     expect(op.target_layers).toEqual([1]); // 重なり順がいちばん上の面
     expect(op.keep_side_point[0]).toBeGreaterThan(0.5); // 左を動かすので右が残る
+  });
+
+  it("黄色側に紙がないときは反対側への直し方を知らせ、入力を残す", async () => {
+    seedFolded();
+    vi.mocked(ipc.sequenceApply).mockResolvedValue(makeStepView(3011, 2));
+    const outsideLine: [Vec2, Vec2] = [
+      [2, 0],
+      [2, 1],
+    ];
+
+    useAppStore.getState().beginFoldDraft(outsideLine, "3d");
+    useAppStore.getState().updateFoldDraft({ target: "top", movingSide: "right" });
+    await useAppStore.getState().commitFoldDraft();
+
+    expect(vi.mocked(ipc.sequenceApply)).not.toHaveBeenCalled();
+    expect(useAppStore.getState().foldDraft).not.toBeNull();
+    expect(useAppStore.getState().errorMessage).toBe(
+      "黄色で示した側に、折り返せる紙がありません。「反対側の紙を折り返す」を押して、もう一度試してください",
+    );
+
+    // 案内どおり反対側へ替えれば、同じ線と設定を選び直さずに確定へ進める。
+    useAppStore.getState().updateFoldDraft({ movingSide: "left" });
+    await useAppStore.getState().commitFoldDraft();
+    expect(vi.mocked(ipc.sequenceApply).mock.calls.map(([op]) => op.type)).toEqual([
+      "PreviewFoldThrough",
+      "FoldThrough",
+    ]);
   });
 
   it("折れなかったときは折り線を残し、やめると捨てる", async () => {
@@ -2363,7 +2451,7 @@ describe("3D画面での折り操作(折り線を引いて折る)", () => {
 
     expect(vi.mocked(ipc.sequenceApply)).not.toHaveBeenCalled();
     expect(useAppStore.getState().foldDraft).toBeNull();
-    expect(useAppStore.getState().errorMessage).toContain("もう一度線を引いて");
+    expect(useAppStore.getState().errorMessage).toContain("表示する手順が変わった");
   });
 
   it("折れる状態でなくなったら(途中の手順を表示中)、折らずに捨てる", async () => {
@@ -2376,7 +2464,7 @@ describe("3D画面での折り操作(折り線を引いて折る)", () => {
 
     expect(vi.mocked(ipc.sequenceApply)).not.toHaveBeenCalled();
     expect(useAppStore.getState().foldDraft).toBeNull();
-    expect(useAppStore.getState().errorMessage).toContain("もう一度線を引いて");
+    expect(useAppStore.getState().errorMessage).toContain("表示する手順が変わった");
   });
 
   it("手順を選ぶ・再生を始めると引きかけの折り線を捨てる", async () => {
@@ -2451,8 +2539,8 @@ describe("3D画面での折り操作(折り線を引いて折る)", () => {
     await useAppStore.getState().resolveFoldThroughProposal(true);
 
     expect(ipc.sequenceApply).toHaveBeenCalledTimes(1);
-    expect(useAppStore.getState().pendingFoldThrough).toBeNull();
-    expect(useAppStore.getState().errorMessage).toContain("もう一度線を引いて");
+    expect(useAppStore.getState().pendingFoldThrough).not.toBeNull();
+    expect(useAppStore.getState().errorMessage).toContain("再生を止めて");
   });
 
   it("提案後に別の手順を選んだ時点で、古いプレビューをすぐ消す", async () => {
@@ -2921,7 +3009,7 @@ describe("技法(選ぶだけで折る)", () => {
 
     expect(vi.mocked(ipc.sequenceApply)).not.toHaveBeenCalled();
     expect(useAppStore.getState().techniqueDraft).toBeNull();
-    expect(useAppStore.getState().errorMessage).toContain("もう一度線を引いて");
+    expect(useAppStore.getState().errorMessage).toContain("表示する手順が変わった");
   });
 
   it("ツールの切り替え・手順の選択で下ごしらえを捨てる", () => {

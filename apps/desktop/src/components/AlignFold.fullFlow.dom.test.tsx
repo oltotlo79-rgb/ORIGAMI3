@@ -809,10 +809,17 @@ function chooseUpperMovingSide(line: [Vec2, Vec2]): void {
     (line[1][0] - line[0][0]) * (upper[1] - line[0][1]) -
     (line[1][1] - line[0][1]) * (upper[0] - line[0][0]);
   const desired = side > 0 ? "left" : "right";
-  const desiredLabel = desired === "right" ? "こちら側" : "反対側";
-  const otherLabel = desired === "right" ? "反対側" : "こちら側";
-  fireEvent.click(screen.getByLabelText(otherLabel));
-  fireEvent.click(screen.getByLabelText(desiredLabel));
+  const initial = useAppStore.getState().foldDraft?.movingSide;
+  if (!initial) throw new Error("折り返す紙が決まっていない");
+  const reverse = tip3d().getByRole("button", { name: "反対側の紙を折り返す" });
+  // 単一の反転操作が往復とも働くことを全経路で確かめてから、backend fixtureの側へそろえる。
+  fireEvent.click(reverse);
+  expect(useAppStore.getState().foldDraft?.movingSide).toBe(
+    initial === "right" ? "left" : "right",
+  );
+  fireEvent.click(reverse);
+  expect(useAppStore.getState().foldDraft?.movingSide).toBe(initial);
+  if (initial !== desired) fireEvent.click(reverse);
   expect(useAppStore.getState().foldDraft?.movingSide).toBe(desired);
 }
 
@@ -974,19 +981,8 @@ async function foldWith3dDirectionTip(
   selectedLine: [Vec2, Vec2],
 ): Promise<void> {
   const tip = tip3d();
-  // 動かす側も3Dの札から決める(動く側は3Dの中で黄色く光るので、見る場所と選ぶ場所が同じ)
-  const upper: Vec2 = [0.25, 0.75];
-  const side =
-    (selectedLine[1][0] - selectedLine[0][0]) * (upper[1] - selectedLine[0][1]) -
-    (selectedLine[1][1] - selectedLine[0][1]) * (upper[0] - selectedLine[0][0]);
-  const desired = side > 0 ? "left" : "right";
-  fireEvent.click(
-    tip.getByRole("button", { name: desired === "right" ? "反対側" : "こちら側" }),
-  );
-  fireEvent.click(
-    tip.getByRole("button", { name: desired === "right" ? "こちら側" : "反対側" }),
-  );
-  expect(useAppStore.getState().foldDraft?.movingSide).toBe(desired);
+  // 折り返す紙は自動で決まり、必要な反転も黄色が見える3Dの札だけで行える。
+  chooseUpperMovingSide(selectedLine);
 
   const valley = tip.getByRole("button", { name: "手前へ折る(谷)" });
   const mountain = tip.getByRole("button", { name: "向こうへ折る(山)" });
@@ -1027,6 +1023,122 @@ afterEach(() => {
 });
 
 describe("合わせて折る: 選択から折り上がりまで", () => {
+  it("1つ目の線がある側を自動で黄色表示し、質問せず反対側へ切り替えて折れる", async () => {
+    const testCase = FLOW_CASES.find((candidate) => candidate.mode === "lineLine");
+    if (!testCase) throw new Error("線と線を合わせる検査条件がない");
+    seedFixture(baseFixture("Up", false));
+    const { viewerCanvas } = renderWholeFoldUi();
+
+    const selected = chooseModeAndTargets(testCase, viewerCanvas, "3d");
+    // 平行な上下線の1つ目は折り線より上にあり、線の向きに対するleft側が自動選択される。
+    expect(useAppStore.getState().foldDraft?.movingSide).toBe("left");
+
+    // 同じ内容を二択で聞き直さない。黄色の結果と、必要時の反転操作だけを出す。
+    expect(screen.queryAllByText("動かす側")).toHaveLength(0);
+    expect(screen.queryAllByText("こちら側")).toHaveLength(0);
+    expect(screen.queryAllByText("反対側")).toHaveLength(0);
+    expect(document.querySelectorAll('input[name="fold-side"]')).toHaveLength(0);
+    const tip = tip3d();
+    expect(
+      tip.getByText("1つ目に選んだものがある紙を黄色で示しています"),
+    ).toBeTruthy();
+    const reverse = tip.getByRole("button", { name: "反対側の紙を折り返す" });
+
+    type HighlightProbe = {
+      a: { x: number; y: number; z: number };
+      b: { x: number; y: number; z: number };
+      role?: string;
+    };
+    const highlight = (): HighlightProbe[] => {
+      const calls = (held.scene.setHighlight as ReturnType<typeof vi.fn>).mock.calls;
+      return calls[calls.length - 1][0] as HighlightProbe[];
+    };
+    const coordinates = (segments: HighlightProbe[]) =>
+      segments.map(({ a, b }) => [a.x, a.y, a.z, b.x, b.y, b.z]);
+    const automaticSegments = highlight();
+    const automaticHighlight = coordinates(automaticSegments);
+    // 先頭2本は選んだ線、3本目は候補の折り線。それより後ろが自動側の紙の輪郭。
+    const automaticOutline = automaticSegments.slice(3);
+    expect(automaticOutline.length).toBeGreaterThan(0);
+    expect(automaticOutline.every((segment) => segment.role === undefined)).toBe(true);
+    expect(
+      automaticOutline.every(
+        ({ a, b }) => a.y >= 0.5 - 1e-9 && b.y >= 0.5 - 1e-9,
+      ),
+    ).toBe(true);
+    fireEvent.click(reverse);
+    expect(useAppStore.getState().foldDraft?.movingSide).toBe("right");
+    const reversedSegments = highlight();
+    expect(coordinates(reversedSegments)).not.toEqual(automaticHighlight);
+    expect(
+      reversedSegments
+        .slice(3)
+        .every(({ a, b }) => a.y <= 0.5 + 1e-9 && b.y <= 0.5 + 1e-9),
+    ).toBe(true);
+    expect(
+      tip.getByText("反対側へ切り替えた紙を黄色で示しています"),
+    ).toBeTruthy();
+    fireEvent.click(reverse);
+    expect(useAppStore.getState().foldDraft?.movingSide).toBe("left");
+    expect(coordinates(highlight())).toEqual(automaticHighlight);
+    expect(
+      tip.getByText("1つ目に選んだものがある紙を黄色で示しています"),
+    ).toBeTruthy();
+
+    await chooseSettingsFoldAndAssert(
+      testCase,
+      testCase.direction3d,
+      selected.picks,
+      selected.line,
+    );
+  });
+
+  it("1つ目が折り線上で自動判定できないときは、黄色の既定と変更方法を説明する", () => {
+    const testCase = FLOW_CASES.find(
+      (candidate) => candidate.mode === "throughTwoPoints",
+    );
+    if (!testCase) throw new Error("2点を通る検査条件がない");
+    seedFixture(baseFixture("Up", false));
+    const { viewerCanvas } = renderWholeFoldUi();
+
+    chooseModeAndTargets(testCase, viewerCanvas, "3d");
+
+    // 1つ目の点は折り線そのものを決める点なので、左右のどちらとも判定できない。
+    // 従来どおりrightを既定にするが、黄色と理由を出し、黙って選んだように見せない。
+    expect(useAppStore.getState().foldDraft?.movingSide).toBe("right");
+    const tip = tip3d();
+    expect(
+      tip.getByText(
+        "自動で決められません。今は黄色で示した紙を折り返します",
+      ),
+    ).toBeTruthy();
+    expect(
+      tip.getByRole("button", { name: "反対側の紙を折り返す" }),
+    ).toBeTruthy();
+  });
+
+  it("0°の角度指定が残っていても、3Dで線と線を合わせて折れる", async () => {
+    const testCase = FLOW_CASES.find((candidate) => candidate.mode === "lineLine");
+    if (!testCase) throw new Error("線と線を合わせる検査条件がない");
+    seedFixture(baseFixture(testCase.direction3d, false));
+    // 角度欄で折り目10を0°へ戻した直後と同じ一時状態。0°も指定値として残る。
+    useAppStore.setState({
+      hinges: new Set([10, 11]),
+      drivers: new Map([[10, 0]]),
+    });
+    expect([...useAppStore.getState().drivers]).toEqual([[10, 0]]);
+
+    const { viewerCanvas } = renderWholeFoldUi();
+    const selected = chooseModeAndTargets(testCase, viewerCanvas, "3d");
+    await chooseSettingsFoldAndAssert(
+      testCase,
+      testCase.direction3d,
+      selected.picks,
+      selected.line,
+    );
+    expect(useAppStore.getState().drivers.size).toBe(0);
+  });
+
   it.each(FLOW_CASES)(
     "$label: 2Dで選び、指定方向・全層で2D/3D/手順へ反映する",
     async (testCase) => {

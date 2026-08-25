@@ -77,6 +77,8 @@ export function sequenceReplay(
  * preferredを渡すと閉包を満たす形のうち目標にいちばん近いものが返る。
  * `warmSeed` は現在表示中の実角を初期値として渡すだけで、固定条件にはしない。
  * softを渡すとたわみの網も一緒に返る(省略時は従来どおり) */
+export type PoseSolveMode = "Follow" | "Canonical";
+
 export function poseSolve(
   hard: Driver[],
   preferred?: Driver[] | null,
@@ -84,6 +86,7 @@ export function poseSolve(
   warmSeed?: Driver[] | null,
   upTo = 0,
   t = 1,
+  mode: PoseSolveMode = "Follow",
 ): Promise<SolveResult> {
   return invoke("pose_solve", {
     hard,
@@ -92,6 +95,7 @@ export function poseSolve(
     soft: soft ?? null,
     upTo,
     t,
+    mode,
   });
 }
 

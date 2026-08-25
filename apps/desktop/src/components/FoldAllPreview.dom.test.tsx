@@ -171,7 +171,7 @@ async function enter() {
   fireEvent.click(
     screen.getByRole("button", { name: /全部いっぺんに折ってみる/ }),
   );
-  await screen.findByText("これは記録された手順ではない");
+  await screen.findByText("これは仮の形です");
   await waitFor(() =>
     expect(
       document.querySelector("[data-fold-all-active]")?.getAttribute(
@@ -194,11 +194,16 @@ describe("全部いっぺんに折ってみる画面", () => {
     expect(slider).toHaveProperty("min", "0");
     expect(slider).toHaveProperty("max", "100");
     expect(slider).toHaveProperty("value", "0");
-    expect(screen.getByText("ひらく 0%")).toBeTruthy();
+    expect(screen.getByText("元に戻る 0%")).toBeTruthy();
     expect(screen.getByText("できるところまで 100%")).toBeTruthy();
     expect(
       screen.getByText(
-        "この形は手順を使わずに動かしているため、紙の重なる順番は決められません。",
+        "山折りと谷折りを同じ割合で動かして、形だけを見ます。手順には記録されません。",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "紙を順番に折った形ではないため、どの紙が上になるかは決まっていません。",
       ),
     ).toBeTruthy();
   });
@@ -252,7 +257,36 @@ describe("全部いっぺんに折ってみる画面", () => {
     fireEvent.click(screen.getByRole("button", { name: "いつもの表示に戻る" }));
 
     await waitFor(() =>
-      expect(screen.queryByText("これは記録された手順ではない")).toBeNull(),
+      expect(screen.queryByText("これは仮の形です")).toBeNull(),
+    );
+    expect(ipc.sequenceReplay).toHaveBeenCalledWith(1, 1, null);
+    expect(
+      screen.getByRole("button", { name: /全部いっぺんに折ってみる/ }),
+    ).toBeTruthy();
+  });
+
+  it("50%から0%へ戻して操作を終えると、いつもの表示へ戻る", async () => {
+    render(<ContextPanel />);
+    await enter();
+    const slider = screen.getByRole("slider", {
+      name: "全部の折り目を動かす割合",
+    });
+
+    fireEvent.change(slider, { target: { value: "50" } });
+    fireEvent.pointerUp(slider);
+    await waitFor(() =>
+      expect(
+        document.querySelector("[data-fold-all-active]")?.getAttribute(
+          "data-applied-percent",
+        ),
+      ).toBe("50"),
+    );
+
+    fireEvent.change(slider, { target: { value: "0" } });
+    fireEvent.pointerUp(slider);
+
+    await waitFor(() =>
+      expect(screen.queryByText("これは仮の形です")).toBeNull(),
     );
     expect(ipc.sequenceReplay).toHaveBeenCalledWith(1, 1, null);
     expect(
@@ -277,14 +311,19 @@ describe("全部いっぺんに折ってみる画面", () => {
         element.getAttribute("title") ?? "",
       );
     }
+    const text = visible.join("\n").toLowerCase();
     for (const forbidden of [
       "ソルバー",
       "剛体",
       "シミュレーション",
       "探索",
       "プレビュー",
+      "layer_order",
+      "preview",
+      "solver",
+      "target",
     ]) {
-      expect(visible.join("\n")).not.toContain(forbidden);
+      expect(text).not.toContain(forbidden.toLowerCase());
     }
   });
 
@@ -305,7 +344,7 @@ describe("全部いっぺんに折ってみる画面", () => {
         document.querySelector("[data-fold-all-active]")?.getAttribute("data-returning"),
       ).toBe("true"),
     );
-    expect(screen.getByText("これは記録された手順ではない")).toBeTruthy();
+    expect(screen.getByText("これは仮の形です")).toBeTruthy();
     expect(screen.getByRole("slider")).toHaveProperty("disabled", true);
 
     release({
@@ -317,7 +356,7 @@ describe("全部いっぺんに折ってみる画面", () => {
       converged: true,
     });
     await waitFor(() =>
-      expect(screen.queryByText("これは記録された手順ではない")).toBeNull(),
+      expect(screen.queryByText("これは仮の形です")).toBeNull(),
     );
   });
 
@@ -330,10 +369,10 @@ describe("全部いっぺんに折ってみる画面", () => {
 
     expect(
       await screen.findByText(
-        "いつもの表示へ戻せませんでした。これは記録された手順ではない表示を続けています。",
+        "いつもの表示へ戻せませんでした。仮の形を表示したままです。",
       ),
     ).toBeTruthy();
-    expect(screen.getByText("これは記録された手順ではない")).toBeTruthy();
+    expect(screen.getByText("これは仮の形です")).toBeTruthy();
     expect(screen.getByRole("slider")).toHaveProperty("disabled", false);
   });
 
@@ -347,7 +386,7 @@ describe("全部いっぺんに折ってみる画面", () => {
     expect(
       await screen.findByText("作品を保存しました。いま見ている形は保存されません。"),
     ).toBeTruthy();
-    expect(screen.getByText("これは記録された手順ではない")).toBeTruthy();
+    expect(screen.getByText("これは仮の形です")).toBeTruthy();
   });
 
   it("入力からReact反映まで10回の平均・最大が33ms以内", async () => {

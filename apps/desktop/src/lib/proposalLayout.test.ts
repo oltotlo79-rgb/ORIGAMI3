@@ -28,6 +28,11 @@ import {
 } from "./proposalLayout";
 import type { Skeleton } from "./types";
 
+const dialogsCss = readFileSync(
+  new URL("../styles/dialogs.css", import.meta.url),
+  "utf8",
+);
+
 function boundsIntersect(
   first: { left: number; top: number; right: number; bottom: number },
   second: { left: number; top: number; right: number; bottom: number },
@@ -433,7 +438,7 @@ describe("提案画面の純粋な配置計算", () => {
     // が絵の中では「2」「4」を絵の座標として扱われ、200pxの見本のほぼ全面が
     // 塗りつぶされた(実測: 見本の枠の半径1.875に対し、半径約2.5の塗り)。
     // 選んでいる先端は、絵の中の長さで描く輪(tip-focus-ring)で示す。
-    const css = readFileSync(new URL("../App.css", import.meta.url), "utf8");
+    const css = dialogsCss;
     const rule = css.match(
       /\.skeleton-preview \.tip-handle:focus,\s*\n\s*\.skeleton-preview \.tip-handle:focus-visible \{([^}]*)\}/u,
     );
@@ -443,7 +448,7 @@ describe("提案画面の純粋な配置計算", () => {
   });
 
   it("紙位置の大きな絵でもつまみに共通の枠線を出さない", () => {
-    const css = readFileSync(new URL("../App.css", import.meta.url), "utf8");
+    const css = dialogsCss;
     const rule = css.match(
       /\.paper-position-handle:focus,\s*\n\s*\.paper-position-handle:focus-visible \{([^}]*)\}/u,
     );
@@ -453,7 +458,7 @@ describe("提案画面の純粋な配置計算", () => {
   });
 
   it("紙位置の呼び名と引き出し線はつまみの操作を遮らない", () => {
-    const css = readFileSync(new URL("../App.css", import.meta.url), "utf8");
+    const css = dialogsCss;
     const rule = css.match(
       /\.paper-position-label,\s*\n\s*\.paper-position-label-leader \{([^}]*)\}/u,
     );
@@ -462,7 +467,7 @@ describe("提案画面の純粋な配置計算", () => {
   });
 
   it("1000×700では紙全体と説明・操作を2列に収める", () => {
-    const css = readFileSync(new URL("../App.css", import.meta.url), "utf8");
+    const css = dialogsCss;
     const dialog = css.match(
       /\.dialog-wide\[data-proposal-step="paper-position"\] \{([^}]*)\}/u,
     );
@@ -512,7 +517,7 @@ describe("提案画面の純粋な配置計算", () => {
   });
 
   it("場所が違う葉を12件出しても、1000×700の既存ダイアログ幅で横へ折り返す", () => {
-    const css = readFileSync(new URL("../App.css", import.meta.url), "utf8");
+    const css = dialogsCss;
     const notice = css.match(/\.proposal-position-notices \{([^}]*)\}/u);
     const row = css.match(/\.proposal-position-notices li \{([^}]*)\}/u);
     const text = css.match(

@@ -5,16 +5,19 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 import { invoke } from "@tauri-apps/api/core";
 import {
   foldAllPreview,
+  poseSolve,
   proposalControl,
   proposalGenerate,
   proposalProgress,
 } from "./client";
 import type {
+  Driver,
   FoldAllPreviewOutcome,
   Paper,
   ProposalJobResult,
   ProposalProgressSnapshot,
   Skeleton,
+  SolveResult,
 } from "../lib/types";
 
 const SKELETON: Skeleton = {
@@ -113,6 +116,46 @@ describe("全折り目をいっぺんに動かすIPC", () => {
     expect(invoke).toHaveBeenCalledWith("fold_all_preview", {
       percent: 0,
       warmSeed: null,
+    });
+  });
+});
+
+describe("角度姿勢の計算mode IPC", () => {
+  it("省略時はFollowを送り、Canonicalは末尾引数で明示できる", async () => {
+    const hard: Driver[] = [{ hinge: 19, target_angle_deg: 90 }];
+    const preferred: Driver[] = [{ hinge: 17, target_angle_deg: -90 }];
+    const warmSeed: Driver[] = [{ hinge: 21, target_angle_deg: 45 }];
+    const result: SolveResult = {
+      frame: { faces: [], warnings: [] },
+      converged: true,
+      angles: {},
+      iterations: 3,
+    };
+    vi.mocked(invoke).mockResolvedValue(result);
+
+    await expect(
+      poseSolve(hard, preferred, null, warmSeed, 2, 0.4),
+    ).resolves.toBe(result);
+    expect(invoke).toHaveBeenCalledWith("pose_solve", {
+      hard,
+      preferred,
+      warmSeed,
+      soft: null,
+      upTo: 2,
+      t: 0.4,
+      mode: "Follow",
+    });
+
+    vi.mocked(invoke).mockClear();
+    await poseSolve(hard, preferred, null, warmSeed, 2, 0.4, "Canonical");
+    expect(invoke).toHaveBeenCalledWith("pose_solve", {
+      hard,
+      preferred,
+      warmSeed,
+      soft: null,
+      upTo: 2,
+      t: 0.4,
+      mode: "Canonical",
     });
   });
 });

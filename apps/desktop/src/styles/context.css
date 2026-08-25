@@ -1,0 +1,1091 @@
+@layer context {
+/* 紙の色・方眼の数(何も選んでいないときだけ出す) */
+.paper-appearance {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-5);
+  margin-top: var(--sp-3);
+  font-size: var(--fs-sm);
+}
+
+.paper-appearance input[type="number"] {
+  width: 56px;
+  margin-left: var(--sp-2);
+}
+
+.paper-appearance input[type="color"] {
+  width: 34px;
+  height: 28px;
+  margin-left: var(--sp-2);
+  padding: 0;
+  border: var(--control-border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-control);
+  vertical-align: middle;
+  cursor: pointer;
+}
+
+/* 対称描画は切替・3種類の基準・現在値を1枚にまとめる。線選択時も同じ部品を使う。 */
+.mirror-draw-controls {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+  padding: var(--sp-3);
+  border: var(--control-border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-translucent-medium);
+}
+
+.mirror-draw-toggle {
+  font-weight: var(--fw-bold);
+}
+
+.mirror-axis-heading {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+
+.mirror-axis-heading span {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.mirror-axis-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+
+.mirror-axis-buttons button[aria-pressed="true"] {
+  border-color: var(--color-accent-strong);
+  background: var(--color-accent);
+  color: var(--color-on-solid);
+  box-shadow: var(--shadow-selected-control);
+}
+
+.mirror-axis-disabled-tooltip {
+  display: inline-flex;
+  border-radius: var(--radius-sm);
+}
+
+.mirror-axis-disabled-tooltip:focus-visible {
+  outline: 2px solid var(--color-accent-strong);
+  outline-offset: 2px;
+}
+
+/* 測る道具は既存の下部パネル内だけに置き、基準線選択と同じ押下色で現在値を示す。 */
+.measure-controls {
+  min-width: 0;
+}
+
+.measure-mode-row {
+  align-items: flex-start;
+}
+
+.measure-mode-buttons,
+.measure-display-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+
+.measure-mode-buttons button[aria-pressed="true"],
+.measure-display-buttons button[aria-pressed="true"] {
+  border-color: var(--color-accent-strong);
+  background: var(--color-accent);
+  color: var(--color-on-solid);
+  box-shadow: var(--shadow-selected-control);
+}
+
+.measure-progress {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-4);
+  margin: var(--sp-3) 0 0;
+  color: var(--color-accent-strong);
+}
+
+.measure-progress > span {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.measure-cancel-hint {
+  margin-top: var(--sp-1) !important;
+}
+
+/* 数値カードは折り角度カードと同じ、左の色線・項目名・右寄せの強い値にそろえる。 */
+.measure-result-card {
+  margin-top: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: var(--panel-border-width) solid var(--color-border);
+  border-left: 6px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-translucent);
+}
+
+.measure-result-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  min-width: 0;
+  color: var(--color-secondary-strong);
+}
+
+.measure-result-row + .measure-result-row {
+  margin-top: var(--sp-2);
+  padding-top: var(--sp-2);
+  border-top: var(--control-border-width) dashed var(--color-border);
+}
+
+.measure-result-row output {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  min-width: 0;
+  color: var(--color-accent-strong);
+  font-weight: var(--fw-black);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.measure-result-primary {
+  white-space: nowrap;
+}
+
+.measure-result-secondary {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.measure-display-row {
+  align-items: center;
+}
+
+.measure-result-note {
+  margin-top: var(--sp-1) !important;
+}
+
+.measure-clear-row {
+  margin-top: var(--sp-2);
+}
+
+.mirror-axis-notice {
+  margin: 0;
+  color: var(--color-accent-strong);
+  font-weight: var(--fw-bold);
+}
+
+/* 下部コンテキストパネル。高さは上端の取っ手で変わり、中身が多いときは
+   左右それぞれの列の中でスクロールさせる(パネルの外へはみ出させない) */
+.context-panel {
+  display: flex;
+  gap: var(--sp-5);
+  padding: var(--sp-4) var(--sp-5);
+  background: var(--color-surface);
+  border-top: var(--panel-border-width) solid var(--color-accent-border);
+  box-shadow: var(--shadow-context-panel);
+  line-height: var(--lh-normal);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.context-panel p {
+  margin: var(--sp-1) 0;
+}
+
+.context-selection {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  container: context-operation-help / inline-size;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-accent) transparent;
+  padding: var(--sp-3) var(--sp-5);
+  border: var(--panel-border-width) solid var(--color-accent-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-translucent);
+  box-shadow: var(--shadow-context-card);
+}
+
+/* 選択中ツールの手順。現在できる1行を残し、詳しい段階だけを畳む。 */
+.operation-steps {
+  margin: var(--sp-3) calc(-1 * var(--sp-5)) 0;
+  padding: var(--sp-3) var(--sp-5);
+  border-top: var(--panel-border-width) solid var(--color-accent-border);
+  background: var(--operation-steps-background);
+}
+
+.operation-steps-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.operation-steps-heading > span {
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: var(--radius-pill);
+  background: var(--color-secondary);
+  color: var(--color-on-solid);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+}
+
+.operation-steps-heading strong {
+  flex: 1 1 140px;
+  min-width: 0;
+  color: var(--color-accent-strong);
+}
+
+
+.operation-steps ol {
+  display: flex;
+  align-items: stretch;
+  gap: var(--sp-2);
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.operation-steps li {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border: var(--control-border-width) solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+}
+
+.operation-steps li.current {
+  border-color: var(--color-accent);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-weight: var(--fw-bold);
+  box-shadow: var(--shadow-1);
+}
+
+.operation-steps li.completed {
+  color: var(--color-accent-strong);
+  background: var(--color-surface-translucent-light);
+}
+
+.operation-step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--color-surface-sunken);
+  color: var(--color-text-muted);
+  font-weight: var(--fw-black);
+}
+
+.operation-steps li.current .operation-step-number {
+  background: var(--color-pop-yellow);
+  color: var(--color-on-gold);
+}
+
+.operation-steps li.completed .operation-step-number {
+  background: var(--color-accent);
+  color: var(--color-on-solid);
+}
+
+.paper-action-entrances {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  margin: var(--sp-3) 0;
+  padding: var(--sp-3);
+  border: var(--control-border-width) dashed var(--panel-border-color);
+  border-radius: var(--radius-md);
+  background: var(--color-secondary-soft);
+}
+
+.paper-action-entrances-title {
+  color: var(--color-secondary-strong);
+  font-weight: var(--fw-bold);
+}
+
+/* 全折り目を同じ割合で動かす操作も、既存のコンテキストパネル1枚に収める。 */
+.fold-all-preview {
+  display: grid;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.fold-all-preview-heading {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  padding-block: var(--sp-1);
+  background: var(--color-surface);
+}
+
+.fold-all-preview-promise {
+  display: inline-flex;
+  padding: var(--sp-1) var(--sp-3);
+  border: var(--control-border-width) solid var(--color-warning-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-warning-surface);
+  color: var(--color-warn);
+  font-size: var(--fs-sm);
+}
+
+.fold-all-preview-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-4);
+  width: min(100%, 620px);
+  padding: var(--sp-3) var(--sp-4);
+  border: var(--panel-border-width) solid var(--color-accent-border);
+  border-radius: var(--radius-md);
+  background: var(--color-accent-soft);
+}
+
+.fold-all-preview-control label,
+.fold-all-preview-control output {
+  font-weight: var(--fw-bold);
+}
+
+.fold-all-preview-control output,
+.fold-all-preview-max {
+  text-align: right;
+}
+
+.fold-all-preview-control input[type="range"] {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-width: 0;
+}
+
+.fold-all-preview-min,
+.fold-all-preview-max {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.fold-all-preview-notices {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.fold-all-preview-notices p {
+  margin: 0;
+}
+
+.soft-controls {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3) var(--sp-5);
+  padding: var(--sp-3) var(--sp-4);
+  border: var(--panel-border-width) solid var(--color-accent-border);
+  border-radius: var(--radius-md);
+  background: var(--color-accent-soft);
+}
+
+/* flex: 1 1 170px だと広い画面で題だけが伸び、右端まで離れた「丸みをつける」が
+   何の設定か分からなくなっていた(実測: 1280×860で題の左端36px・チェック525px)。
+   題は中身の幅で止め、設定を題のすぐ隣へ置く。 */
+.soft-controls-heading {
+  display: flex;
+  min-width: 0;
+  flex: 0 1 170px;
+  flex-direction: column;
+}
+
+.soft-controls-heading strong {
+  color: var(--color-accent-strong);
+}
+
+.soft-controls-heading > span {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.soft-controls-heading .paper-help-toggle {
+  align-self: flex-start;
+  margin: var(--sp-2) 0 0;
+}
+
+.soft-controls > .hint {
+  min-width: 0;
+  flex: 1 0 100%;
+}
+
+.paper-color-settings {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--sp-3);
+}
+
+.paper-color-section {
+  display: grid;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+
+.paper-color-current,
+.paper-color-current > span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.paper-color-current {
+  gap: var(--sp-3);
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.paper-color-current i,
+.paper-custom-color-preview {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border: var(--control-border-width) solid var(--color-border-strong);
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px var(--color-swatch-highlight-soft);
+}
+
+.paper-color-palette {
+  min-width: 0;
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
+  border: var(--panel-border-width) solid var(--color-palette-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-translucent-medium);
+  box-shadow: var(--shadow-settings-card);
+}
+
+.paper-color-palette legend {
+  padding: 0 var(--sp-2);
+  color: var(--heading-color);
+  font-weight: var(--fw-black);
+}
+
+.paper-color-swatches {
+  display: grid;
+  grid-template-columns: repeat(8, 26px);
+  gap: var(--sp-2);
+}
+
+
+.paper-color-swatch:hover {
+  z-index: 1;
+  border-color: var(--color-secondary-strong);
+  transform: var(--swatch-hover-transform);
+}
+
+.paper-color-swatch[aria-pressed="true"] {
+  border-color: var(--color-accent-strong);
+  box-shadow:
+    0 0 0 3px var(--color-accent-soft),
+    inset 0 0 0 1px var(--color-swatch-highlight);
+}
+
+.paper-color-swatch:focus-visible {
+  outline-offset: 2px;
+}
+
+
+.paper-custom-color-preview {
+  width: 18px;
+  height: 18px;
+}
+
+/* OSの色選択窓ではなく、アプリ内に置く非モーダルの色選択。 */
+.color-picker-popover {
+  position: fixed;
+  z-index: 1000;
+  display: grid;
+  gap: var(--sp-4);
+  width: min(320px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: var(--sp-5);
+  border: var(--floating-border-width) solid var(--floating-border-color);
+  border-radius: var(--radius-lg);
+  background: var(--dialog-background);
+  color: var(--color-text);
+  box-shadow: var(--shadow-dialog);
+  scrollbar-color: var(--color-secondary) transparent;
+}
+
+.color-picker-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  color: var(--heading-color);
+  font-size: var(--fs-lg);
+}
+
+
+.color-saturation-value {
+  position: relative;
+  width: 100%;
+  height: 150px;
+  overflow: hidden;
+  border: var(--control-border-width) solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(to top, #000000, transparent),
+    linear-gradient(to right, #ffffff, var(--picker-hue));
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.color-saturation-value:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.color-saturation-value-thumb {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border: 2px solid #ffffff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.72);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.color-hue-row,
+.color-hex-row {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr) 48px;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-bold);
+}
+
+.color-hue-row input[type="range"] {
+  width: 100%;
+  min-width: 0;
+}
+
+.color-hue-row input[type="range"]::-webkit-slider-runnable-track {
+  background: linear-gradient(
+    90deg,
+    hsl(0 100% 50%),
+    hsl(60 100% 50%),
+    hsl(120 100% 42%),
+    hsl(180 100% 42%),
+    hsl(240 100% 55%),
+    hsl(300 100% 50%),
+    hsl(360 100% 50%)
+  );
+}
+
+
+.color-hue-row output {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.color-hex-row {
+  grid-template-columns: 54px 30px minmax(0, 1fr);
+}
+
+.color-hex-row input {
+  width: 100%;
+  min-width: 0;
+  text-transform: uppercase;
+  font-family: Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+
+.color-picker-result,
+.color-picker-result > span {
+  display: block;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+}
+
+.color-picker-result {
+  border: var(--control-border-width) solid var(--color-border-strong);
+  overflow: hidden;
+}
+
+.color-picker-error {
+  color: var(--color-danger);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+}
+
+.color-picker-actions {
+  display: flex;
+  justify-content: flex-start;
+  gap: var(--sp-3);
+  margin-top: var(--sp-2);
+  padding-top: var(--sp-5);
+  border-top: var(--control-border-width) dashed var(--color-border);
+}
+
+.color-picker-actions .button-primary {
+  order: -1;
+}
+
+
+.color-picker-key-help {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  text-align: center;
+}
+
+.grid-divisions-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: var(--panel-border-width) solid var(--color-grid-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-translucent-medium);
+  box-shadow: var(--shadow-settings-card);
+}
+
+.grid-divisions-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  color: var(--color-accent-strong);
+  font-weight: var(--fw-black);
+}
+
+.grid-divisions-heading output {
+  min-width: 76px;
+  padding: 2px var(--sp-3);
+  border-radius: var(--radius-pill);
+  background: var(--color-pop-yellow);
+  color: var(--color-on-gold);
+  font-size: var(--fs-xl);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--lh-tight);
+  text-align: center;
+  box-shadow: var(--shadow-decoration);
+}
+
+.grid-divisions-heading output small {
+  margin-left: var(--sp-1);
+  font-size: var(--fs-xs);
+}
+
+.grid-division-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+
+.grid-division-presets button:hover {
+  border-color: var(--color-secondary);
+  background: var(--color-secondary-soft);
+}
+
+.grid-division-presets button[aria-pressed="true"] {
+  border-color: var(--color-accent-strong);
+  background: var(--color-accent);
+  color: var(--color-on-solid);
+  box-shadow: var(--shadow-selected-control);
+}
+
+.grid-division-custom {
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+}
+
+/* 警告・エラーの置き場。左の操作の並びと混ざらないよう区切って少し沈める */
+.context-messages {
+  flex: 1;
+  min-width: 0;
+  padding: var(--sp-3) var(--sp-5);
+  border: var(--panel-border-width) solid var(--color-warning-border);
+  border-radius: var(--radius-md);
+  background: var(--color-warning-surface);
+  box-shadow: var(--shadow-message-card);
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-warn-badge) transparent;
+}
+
+.button-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.button-row button {
+  padding: var(--sp-2) var(--sp-5);
+}
+
+.button-row label {
+  align-self: center;
+}
+
+/* 3Dへ重ねる札は幅が狭いので、同じ役割の列を専用の幅でそろえる。 */
+.fold-direction-tip-buttons > .row-label {
+  min-width: var(--tip-label-width);
+}
+
+/* 合わせて折るの途中経過。技法の名前(太字)と進み具合(控えめな色)を見分けられるようにする。 */
+.align-draft-progress {
+  color: var(--color-text-muted);
+}
+
+/* 「合わせて折る」は8種類あるため、長い日本語名をつぶさず並べる。 */
+.align-start-row {
+  align-items: flex-start;
+}
+
+.align-start-label {
+  align-self: flex-start;
+  padding-top: var(--sp-2);
+  white-space: nowrap;
+}
+
+.align-mode-buttons {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  flex: 1 1 720px;
+  gap: var(--sp-2);
+}
+
+.align-mode-buttons button {
+  min-width: 0;
+  padding-inline: var(--sp-3);
+  text-align: left;
+}
+
+.align-start-row > .hint {
+  flex-basis: 100%;
+}
+
+/* 技法の対象層。数十〜百層でも4つの指定ボタンを先に使えるようにし、
+   個別チェックは必要なときだけdetailsを開いてスクロールする。 */
+.technique-layer-picker {
+  margin-top: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: var(--control-border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.technique-layer-picker .button-row {
+  margin-top: 0;
+}
+
+.technique-layer-candidates {
+  margin-top: var(--sp-2);
+}
+
+.technique-layer-candidates summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-sm);
+  list-style: none;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  font-weight: var(--fw-medium);
+  transition:
+    background var(--t-fast),
+    color var(--t-fast);
+}
+
+.technique-layer-candidates summary::-webkit-details-marker {
+  display: none;
+}
+
+.technique-layer-candidates summary::before {
+  content: "▶";
+  color: var(--color-accent);
+  font-size: var(--fs-xs);
+  transition: transform var(--t-fast);
+}
+
+.technique-layer-candidates[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.technique-layer-candidates summary:hover,
+.technique-layer-candidates summary:focus-visible {
+  background: var(--button-hover-background);
+  color: var(--button-hover-color);
+}
+
+.technique-layer-candidate-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--sp-1) var(--sp-3);
+  max-height: 112px;
+  margin-top: var(--sp-2);
+  overflow-y: auto;
+}
+
+.technique-layer-candidate-list label {
+  white-space: nowrap;
+}
+
+/* 折り角度の操作(折り線を選んだとき) */
+.fold-controls {
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: var(--control-border-width) dashed var(--color-border);
+}
+
+.fold-controls-primary {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.fold-controls-heading,
+.hinge-angle-name {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.fold-controls-heading {
+  margin-bottom: var(--sp-2);
+}
+
+.fold-controls-heading strong {
+  color: var(--color-secondary-strong);
+}
+
+.bulk-angle-row {
+  margin-bottom: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border: var(--panel-border-width) solid var(--color-pop-yellow);
+  border-radius: var(--radius-lg);
+  background: var(--color-pop-yellow-soft);
+}
+
+.hinge-angle-list {
+  display: grid;
+  gap: var(--sp-2);
+  max-height: 180px;
+  padding: 2px var(--sp-2) 2px 2px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-secondary) transparent;
+}
+
+.hinge-angle-item {
+  padding: var(--sp-2) var(--sp-3);
+  border: var(--panel-border-width) solid var(--color-border);
+  border-left: 6px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-translucent);
+  transition:
+    border-color var(--t-fast),
+    background var(--t-fast),
+    box-shadow var(--t-fast);
+}
+
+.hinge-angle-item:hover,
+.hinge-angle-item:focus-within {
+  border-color: var(--color-pop-coral);
+  background: var(--color-surface);
+  box-shadow: 0 0 0 3px var(--color-danger-soft);
+}
+
+.hinge-angle-name {
+  margin-bottom: var(--sp-1);
+  color: var(--color-secondary-strong);
+}
+
+.hinge-angle-name > span {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  min-width: 76px;
+  color: var(--color-accent-strong);
+  font-weight: var(--fw-black);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.actual-angle {
+  display: inline;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  font-weight: 400;
+  line-height: var(--lh-tight);
+  white-space: nowrap;
+}
+
+/* 紙の縁を巻き込むための追加折り目。下部パネル内の非モーダル通知として出す。 */
+.fold-through-proposal {
+  border: var(--panel-border-width) solid var(--color-warning-border);
+  border-left: 7px solid var(--color-warn-badge);
+  border-radius: var(--radius-md);
+  padding: var(--sp-3) var(--sp-5);
+  background: var(--color-pop-yellow-soft);
+  box-shadow: var(--shadow-1);
+}
+
+.fold-through-proposal-title {
+  color: var(--color-warn);
+  font-weight: var(--fw-bold);
+}
+
+.angle-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+
+.angle-row input[type="range"] {
+  flex: 1;
+  min-width: 120px;
+  max-width: 320px;
+}
+
+.angle-number {
+  width: 64px;
+}
+
+.angle-row button {
+  padding: var(--sp-1) var(--sp-5);
+}
+
+/* 角度の固定。折り目に付く印(2D・3D)と同じ輪をボタンにも出し、
+   押すと何が起きるかを言葉なしで結び付ける。新しい区画は作らない。 */
+.pin-mark {
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.15em;
+  margin-right: var(--sp-1);
+}
+
+.pin-toggle {
+  display: inline-flex;
+  align-items: center;
+}
+
+.pin-toggle.pinned {
+  border-color: var(--color-text);
+  background: var(--color-text);
+  color: var(--color-surface);
+}
+
+.pinned-count {
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.vertex-list {
+  margin: var(--sp-2) 0 0;
+  padding-left: 18px;
+}
+
+/* 説明・警告・エラーの文字(どれも背景に対して4.5:1以上) */
+.hint {
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+}
+
+.error-text {
+  color: var(--color-danger);
+  font-weight: var(--fw-bold);
+}
+
+.warning-text {
+  color: var(--color-warn);
+  font-weight: var(--fw-medium);
+}
+
+/* 追従した角度は、既存の通知欄から選択できる控えめな行として示す。 */
+.relaxation-messages {
+  display: grid;
+  gap: var(--sp-1);
+  margin-bottom: var(--sp-2);
+}
+
+
+.relaxation-message:hover,
+.relaxation-message:focus-visible {
+  border-color: var(--color-border-strong);
+  background: var(--color-control-hover);
+  outline: none;
+}
+
+.relaxation-message:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+.relaxation-more {
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+}
+
+}

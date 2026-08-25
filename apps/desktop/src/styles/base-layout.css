@@ -1,0 +1,1313 @@
+@layer base {
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  font-family: var(--font-body);
+  font-size: var(--fs-md);
+  line-height: var(--lh-tight);
+  font-weight: 500;
+  color: var(--color-text);
+  background: var(--color-bg);
+  overflow: hidden;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+/* 文字・数値・選択の入力欄はどこでも同じ見た目にする */
+input[type="text"],
+input[type="number"],
+input[type="search"],
+select,
+textarea {
+  min-height: 32px;
+  padding: var(--sp-2) var(--sp-4);
+  border: var(--control-border-width) solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-control);
+  color: var(--color-text);
+  font-size: var(--fs-md);
+  line-height: var(--lh-tight);
+  box-shadow: var(--shadow-input);
+  transition:
+    border-color var(--t-fast),
+    box-shadow var(--t-fast),
+    background var(--t-fast);
+}
+
+input[type="text"]:hover:not(:disabled),
+input[type="number"]:hover:not(:disabled),
+input[type="search"]:hover:not(:disabled),
+select:hover:not(:disabled),
+textarea:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
+}
+
+input[type="text"]:focus,
+input[type="number"]:focus,
+input[type="search"]:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--color-accent);
+  box-shadow: var(--focus-ring);
+}
+
+input:disabled,
+select:disabled {
+  background: var(--color-surface-sunken);
+  border-color: var(--color-border);
+  color: var(--color-text-muted);
+}
+
+/* つまみ・チェックの色も効き色に揃える(展開図の山赤・谷青と混ざらない深緑) */
+input[type="checkbox"],
+input[type="radio"],
+input[type="range"] {
+  accent-color: var(--color-accent);
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  vertical-align: -3px;
+}
+
+/* 丸印・チェックと、その言葉の間の隙間。ブラウザ既定は左右とも約3pxで、
+   言葉が印にくっついて読みにくい。左は0にして本文と列をそろえ、右は他の
+   隙間と同じ --sp-3 にする。1か所で決め、各所には書かない。 */
+.app label > input[type="checkbox"],
+.app label > input[type="radio"] {
+  margin-block: 0;
+  margin-inline: 0 var(--sp-3);
+}
+
+/* OSごとの差が大きいnative部品も、意味と操作感を保ったままテーマへ接続する。 */
+.app select {
+  appearance: none;
+  padding-right: calc(var(--sp-8) + var(--sp-2));
+  background-color: var(--color-control);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--color-text-muted) 50%),
+    linear-gradient(135deg, var(--color-text-muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 13px) 50%,
+    calc(100% - 8px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.app select option {
+  background: var(--color-control);
+  color: var(--color-text);
+}
+
+.app input[type="checkbox"] {
+  appearance: none;
+  display: inline-grid;
+  place-content: center;
+  border: var(--control-border-width) solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-control);
+  box-shadow: var(--shadow-input);
+  cursor: pointer;
+  transition:
+    background var(--t-fast),
+    border-color var(--t-fast),
+    box-shadow var(--t-fast);
+}
+
+.app input[type="checkbox"]::before {
+  width: 9px;
+  height: 9px;
+  background: var(--color-on-solid);
+  clip-path: polygon(14% 44%, 0 62%, 40% 100%, 100% 20%, 82% 4%, 38% 70%);
+  content: "";
+  transform: scale(0);
+  transition: transform var(--t-fast);
+}
+
+.app input[type="checkbox"]:checked {
+  border-color: var(--color-accent-strong);
+  background: var(--color-accent);
+}
+
+.app input[type="checkbox"]:checked::before {
+  transform: scale(1);
+}
+
+.app input[type="radio"] {
+  appearance: none;
+  display: inline-grid;
+  place-content: center;
+  border: var(--control-border-width) solid var(--color-border-strong);
+  border-radius: 50%;
+  background: var(--color-control);
+  box-shadow: var(--shadow-input);
+  cursor: pointer;
+}
+
+.app input[type="radio"]::before {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-on-solid);
+  content: "";
+  transform: scale(0);
+  transition: transform var(--t-fast);
+}
+
+.app input[type="radio"]:checked {
+  border-color: var(--color-accent-strong);
+  background: var(--color-accent);
+}
+
+.app input[type="radio"]:checked::before {
+  transform: scale(1);
+}
+
+.app input[type="range"] {
+  appearance: none;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.app input[type="range"]::-webkit-slider-runnable-track {
+  height: 5px;
+  border: var(--control-border-width) solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-sunken);
+  box-shadow: var(--shadow-input);
+}
+
+.app input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 17px;
+  height: 17px;
+  margin-top: calc(-6px - var(--control-border-width) / 2);
+  border: var(--control-border-width) solid var(--color-accent-strong);
+  border-radius: 50%;
+  background: var(--color-accent);
+  box-shadow: var(--shadow-button);
+}
+
+.app input[type="range"]:hover:not(:disabled)::-webkit-slider-thumb {
+  background: var(--color-accent-strong);
+}
+
+.app input[type="color"] {
+  appearance: none;
+  min-width: 34px;
+  min-height: 30px;
+  padding: var(--sp-1);
+  border: var(--control-border-width) solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-control);
+  box-shadow: var(--shadow-input);
+  cursor: pointer;
+}
+
+.app input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.app input[type="color"]::-webkit-color-swatch {
+  border: 0;
+  border-radius: calc(var(--radius-sm) / 2);
+}
+
+.app input[type="number"] {
+  appearance: textfield;
+}
+
+.app input[type="number"]::-webkit-inner-spin-button,
+.app input[type="number"]::-webkit-outer-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+/* OS標準spinnerの代わりに、全テーマ共通の押しやすい増減操作を置く。 */
+.number-stepper {
+  display: inline-flex;
+  align-items: stretch;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.number-stepper-input {
+  min-width: 0;
+}
+
+.number-stepper-controls {
+  display: inline-grid;
+  grid-template-columns: repeat(2, 32px);
+  /* 入力欄と増減ボタンの隙間(.number-stepper の gap)と同じ値にする。
+     --sp-1(2px)では「▲」と「▼」が1つのボタンに見えていた。 */
+  gap: var(--sp-2);
+}
+
+.app .number-stepper-button {
+  display: grid;
+  place-items: center;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: var(--control-border-width) solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-sunken);
+  color: var(--color-text-muted);
+  box-shadow: var(--shadow-tool-small);
+  font-size: var(--fs-xs);
+  line-height: 1;
+}
+
+.app .number-stepper-button:hover:not(:disabled) {
+  border-color: var(--button-hover-border);
+  background: var(--button-hover-background);
+  color: var(--button-hover-color);
+  box-shadow: var(--shadow-button-hover);
+}
+
+.app .number-stepper-button:active:not(:disabled) {
+  box-shadow: var(--shadow-button-active);
+}
+
+.app input[type="search"] {
+  appearance: none;
+}
+
+.app input[type="checkbox"]:disabled,
+.app input[type="radio"]:disabled {
+  border-color: var(--color-border);
+  background: var(--color-surface-sunken);
+  box-shadow: none;
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.app input[type="range"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+
+.app input[type="range"]:disabled::-webkit-slider-thumb {
+  border-color: var(--color-border-strong);
+  background: var(--color-text-muted);
+  box-shadow: none;
+}
+
+/* キーボードで辿っているときだけ、どこにいるかをはっきり出す */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  box-shadow: var(--focus-ring);
+}
+
+/* Tooltip.tsxはbodyへportalし既存のinline基底を持つため、テーマ橋渡し値で明示上書きする。 */
+[data-floating-ui="tooltip"] {
+  padding: var(--sp-2) var(--tooltip-padding-inline) !important;
+  border: var(--tooltip-border-width) solid var(--color-tooltip-border) !important;
+  border-radius: var(--radius-tooltip) !important;
+  background: var(--color-tooltip-background) !important;
+  color: var(--color-tooltip-text) !important;
+  box-shadow: var(--shadow-tooltip) !important;
+  font-family: var(--tooltip-font-family) !important;
+  font-weight: var(--tooltip-font-weight) !important;
+}
+
+/* 中央行は minmax(0, fr) にする。fr の下限は中身の高さなので、
+   狭い画面ではツールレールの高さで行が伸び、下のパネルを画面外へ押し出して
+   文字が重なって見えていた。下限を0にして、はみ出しは各区画の中で処理する。
+   2つのfrはThemeRootが端末保存した下部パネル比率から設定する。 */
+.app {
+  display: grid;
+  grid-template-rows:
+    auto
+    minmax(0, var(--main-row-share, 0.68fr))
+    10px
+    minmax(0, var(--context-panel-share, 0.32fr));
+  height: 100%;
+  color: var(--color-text);
+  background-color: var(--color-bg);
+  background-image: var(--app-background-image);
+  background-size: var(--app-background-size);
+  background-repeat: var(--app-background-repeat);
+  background-position: var(--app-background-position);
+  font-family: var(--font-body);
+  font-weight: var(--body-font-weight);
+  letter-spacing: var(--body-letter-spacing);
+}
+
+.app h1,
+.app h2,
+.app h3,
+.app h4,
+.app h5,
+.app h6,
+.app legend,
+.app strong,
+.app b {
+  font-weight: var(--fw-bold);
+}
+
+/* 日本語の折り返し。放っておくと最後の行に数文字だけが残り、変な位置で切れて見える。
+   説明文は行の釣り合いを整える pretty、見出しや2〜3行のボタン名は行の長さをそろえる
+   balance を使う。各所へ幅や改行位置を書き足さず、ここで1回だけ決める。
+   一括指定の text-wrap ではなく text-wrap-style を使う。text-wrap は
+   text-wrap-mode も同時に書き換えるため、1行に保ちたい札の white-space: nowrap を
+   打ち消してしまう(実際に3Dの案内が3行へ広がった)。 */
+.app p,
+.app li,
+.app .hint,
+.app .warning-text,
+.app .error-text {
+  text-wrap-style: pretty;
+  /* 日本語は語の間に空白が無いので、pretty だけでは文節の途中で改行される。
+     auto-phrase は文節の切れ目で折り返すため、「書き / 出せます」のような
+     変な位置での改行が無くなる。 */
+  word-break: auto-phrase;
+}
+
+.app h1,
+.app h2,
+.app h3,
+.app h4,
+.app legend,
+.align-mode-buttons button,
+.paper-action-entrances button {
+  text-wrap-style: balance;
+  word-break: auto-phrase;
+}
+
+.app legend,
+.app .dialog h2,
+.app .dialog h3,
+.app .dialog h4,
+.app .first-run-guide h2,
+.app .paper-color-palette legend {
+  font-family: var(--font-heading);
+  letter-spacing: var(--heading-letter-spacing);
+}
+
+/* ボタンの共通の見た目。どのボタンも「ふつう / 指を乗せた / 選択中 / 押せない」が
+   同じ約束で見分けられるようにする(設計原則3b) */
+.app :where(button) {
+  appearance: none;
+  min-height: 32px;
+  padding: var(--sp-2) var(--sp-5);
+  border: var(--control-border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-control);
+  color: var(--color-text);
+  font-size: var(--fs-md);
+  line-height: var(--lh-tight);
+  font-weight: var(--fw-medium);
+  box-shadow: var(--shadow-button);
+  cursor: pointer;
+  transition:
+    background var(--t-fast),
+    border-color var(--t-fast),
+    color var(--t-fast),
+    box-shadow var(--t-fast),
+    transform var(--t-fast),
+    filter var(--t-fast);
+}
+
+.app :where(button):hover:where(:not(:disabled)) {
+  background: var(--button-hover-background);
+  border-color: var(--button-hover-border);
+  color: var(--button-hover-color);
+  box-shadow: var(--shadow-button-hover);
+  transform: var(--button-hover-transform);
+}
+
+.app :where(button):active:where(:not(:disabled)) {
+  background: var(--color-accent-soft);
+  box-shadow: var(--shadow-button-active);
+  transform: var(--button-active-transform);
+}
+
+/* 押せないボタンは消さずに残す決まりなので、平らな見た目で「今は押せない」を出す */
+.app :where(button):disabled {
+  background: var(--color-surface-sunken);
+  border-color: var(--color-border);
+  color: var(--color-text-muted);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+/* 操作の役割はこの4分類に集約する。class無しの既存ボタンは補助操作を既定とする。 */
+.button-secondary {
+  border-color: var(--color-border);
+  background: var(--color-control);
+  color: var(--color-text);
+  box-shadow: var(--shadow-button);
+}
+
+.button-icon {
+  display: inline-grid;
+  width: 32px;
+  min-height: 32px;
+  padding: 0;
+  place-content: center;
+  border-radius: var(--radius-md);
+}
+
+.toolbar button {
+  min-height: 34px;
+  padding-inline: var(--sp-5);
+  background: var(--toolbar-button-background);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  white-space: nowrap;
+}
+
+.tool-button {
+  flex: none; /* 縦に詰まってもボタンを潰さない(文字が読めなくなるため) */
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  min-height: 52px;
+  padding: var(--sp-2) var(--sp-1);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+  letter-spacing: 0.04em;
+  border-width: var(--control-border-width);
+  border-color: var(--color-tool-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  box-shadow: var(--shadow-tool-button);
+}
+
+/* サブメニューの中の数選び(等分の数・角度の刻み) */
+.tool-select {
+  margin-top: var(--sp-1);
+  width: 100%;
+  min-height: 30px;
+  padding: var(--sp-1) var(--sp-2);
+  border: var(--control-border-width) solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-control);
+  font-size: var(--fs-xs);
+}
+
+.viewer-overlay-scroll-controls > button {
+  min-width: 0;
+  min-height: 30px;
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-translucent-strong);
+  box-shadow: var(--shadow-button);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  pointer-events: auto;
+}
+
+.timeline-controls button {
+  min-height: 25px;
+  padding: var(--sp-1) var(--sp-4);
+  font-size: var(--fs-sm);
+  border-radius: var(--radius-pill);
+  font-variant-numeric: tabular-nums;
+  box-shadow: var(--shadow-timeline-control);
+}
+
+/* 手順の前へ折りを挟む導線(SEQ-006)。細く控えめにして常設の区画を増やさない */
+.timeline-insert {
+  flex: none;
+  padding: 0 var(--sp-1);
+  border: var(--control-border-width) dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-translucent-light);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  line-height: 1;
+  transition:
+    background var(--t-fast),
+    border-color var(--t-fast),
+    color var(--t-fast),
+    transform var(--t-fast);
+}
+
+.cp-help-toggle {
+  min-height: 26px;
+  padding: var(--sp-1) var(--sp-3);
+  border: var(--control-border-width) solid var(--color-secondary-soft);
+  border-radius: var(--radius-pill);
+  background: var(--color-control);
+  color: var(--color-secondary-strong);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+  white-space: nowrap;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+/* 食い込み候補の案内。押すと最初の赤い折り目を選び、既存の角度欄へつなぐ。 */
+.suspect-hinge-guide {
+  position: absolute;
+  top: calc(var(--sp-4) + 42px);
+  right: 152px;
+  max-width: min(330px, calc(100% - 164px));
+  padding: var(--sp-2) var(--sp-4);
+  border: var(--floating-border-width) solid var(--color-collision-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-collision-surface);
+  color: var(--color-collision-text);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-tight);
+  overflow: hidden;
+  box-shadow: var(--shadow-collision-guide);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  /* 最狭時も操作案内の裏へ隠さず、原因へ進む操作を残す。 */
+  z-index: 5;
+}
+
+.viewer-hint-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  flex: none;
+  padding: var(--sp-1) var(--sp-3);
+  border: var(--control-border-width) solid var(--color-secondary-soft);
+  border-radius: var(--radius-pill);
+  background: var(--color-control);
+  color: var(--color-secondary-strong);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: var(--shadow-viewer-toggle);
+  /* 札全体はクリックを通すので、押せるこのボタンだけ受け取りへ戻す。 */
+  pointer-events: auto;
+}
+
+/* 3D区画右下の「視点を戻す」。常設区画・ツールレールを増やさずに置く小さなボタン */
+.viewer-reset {
+  position: absolute;
+  right: var(--sp-4);
+  bottom: var(--sp-4);
+  min-height: 30px;
+  padding: var(--sp-1) var(--sp-5);
+  border: var(--control-border-width) solid var(--floating-border-color);
+  border-radius: var(--radius-pill);
+  background: var(--color-overlay);
+  color: var(--color-on-solid);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-tight);
+  cursor: pointer;
+  font-weight: var(--fw-bold);
+  box-shadow: var(--shadow-overlay-button);
+  transition:
+    background var(--t-fast),
+    transform var(--t-fast),
+    box-shadow var(--t-fast);
+}
+
+.view-cube-zone {
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--color-on-solid);
+  font-family: var(--font-body);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-black);
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px var(--color-swatch-highlight-soft);
+  transition:
+    background var(--t-fast),
+    color var(--t-fast),
+    box-shadow var(--t-fast);
+}
+
+.paper-action-entrances button,
+.paper-action-tip button {
+  min-height: 30px;
+  padding: var(--sp-2) var(--sp-4);
+  border: var(--control-border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-control);
+  color: var(--color-text);
+  font-weight: var(--fw-bold);
+  cursor: pointer;
+  box-shadow: var(--shadow-button);
+}
+
+.mirror-axis-buttons button {
+  min-height: 30px;
+  padding: var(--sp-1) var(--sp-3);
+  border: var(--control-border-width) solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.measure-mode-buttons button,
+.measure-display-buttons button {
+  min-height: 30px;
+  padding: var(--sp-1) var(--sp-3);
+  border: var(--control-border-width) solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.operation-help-toggle,
+.paper-help-toggle {
+  min-height: 28px;
+  margin-left: auto;
+  padding: var(--sp-1) var(--sp-3);
+  border: var(--control-border-width) solid var(--color-accent-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-control);
+  color: var(--color-accent-strong);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.paper-color-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  min-height: 34px;
+  padding: var(--sp-2) var(--sp-4);
+  border: var(--control-border-width) solid var(--color-palette-border);
+  border-radius: var(--radius-md);
+  background: var(--color-control);
+  color: var(--color-accent-strong);
+  font-weight: var(--fw-black);
+  box-shadow: var(--shadow-settings-card);
+  cursor: pointer;
+}
+
+.paper-color-swatch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  min-height: 0;
+  padding: 0;
+  border: var(--control-border-width) solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  font-weight: var(--fw-black);
+  line-height: 1;
+  box-shadow: inset 0 0 0 1px var(--color-swatch-highlight-soft);
+  cursor: pointer;
+  transition:
+    transform var(--t-fast),
+    border-color var(--t-fast),
+    box-shadow var(--t-fast);
+}
+
+.paper-custom-color {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  min-height: 30px;
+  padding: var(--sp-1) var(--sp-3);
+  border: var(--control-border-width) solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-control);
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+  box-shadow: var(--shadow-tool-small);
+  cursor: pointer;
+}
+
+.color-picker-close {
+  width: 30px;
+  min-height: 30px;
+  padding: 0;
+  border: var(--control-border-width) solid var(--color-border);
+  border-radius: 50%;
+  background: var(--color-control);
+  color: var(--color-text-muted);
+  font-size: var(--fs-lg);
+  cursor: pointer;
+}
+
+.grid-division-presets button {
+  min-width: 34px;
+  min-height: 30px;
+  padding: var(--sp-1) var(--sp-2);
+  border: var(--control-border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-control);
+  color: var(--color-text);
+  font-weight: var(--fw-black);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.relaxation-message {
+  width: 100%;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  line-height: var(--lh-normal);
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+  box-shadow: none;
+}
+
+.color-hue-row input[type="range"]::-webkit-slider-thumb {
+  border-color: var(--color-text);
+  background: var(--color-surface);
+}
+
+.color-hex-row input[aria-invalid="true"] {
+  border-color: var(--color-danger);
+}
+
+.first-run-guide button {
+  min-height: 34px;
+  border: var(--control-border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+  font-family: inherit;
+  font-weight: var(--fw-bold);
+  cursor: pointer;
+}
+
+.first-run-guide-close {
+  position: absolute;
+  top: var(--sp-4);
+  right: var(--sp-4);
+  width: 32px;
+  padding: 0;
+  border-radius: 50% !important;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  box-shadow: var(--shadow-guide-close);
+}
+
+.first-run-guide-prepare,
+.first-run-guide-done {
+  width: 100%;
+  margin-top: var(--sp-3);
+  padding: var(--sp-3) var(--sp-5);
+  border-color: var(--color-accent-strong) !important;
+  background: var(--button-primary-background);
+  color: var(--button-primary-color);
+  box-shadow: var(--shadow-guide-primary);
+}
+
+.first-run-guide-prepare:hover:not(:disabled),
+.first-run-guide-done:hover:not(:disabled),
+.first-run-guide-prepare:active:not(:disabled),
+.first-run-guide-done:active:not(:disabled) {
+  border-color: var(--color-accent-strong) !important;
+  background: var(--color-accent-strong);
+  color: var(--button-primary-color);
+  box-shadow: var(--shadow-guide-primary);
+}
+
+.first-run-guide-skip {
+  display: block;
+  margin: var(--sp-4) auto var(--sp-2);
+  padding: var(--sp-2) var(--sp-5);
+  border-color: transparent !important;
+  background: transparent;
+  color: var(--color-text-muted);
+  text-decoration: underline;
+  box-shadow: none;
+}
+
+.first-run-guide-skip:hover:not(:disabled),
+.first-run-guide-skip:active:not(:disabled) {
+  border-color: transparent !important;
+  background: transparent;
+  color: var(--color-accent-strong);
+  box-shadow: none;
+  transform: none;
+}
+
+.color-picker-actions button {
+  min-height: 34px;
+  padding: var(--sp-2) var(--sp-5);
+  font-weight: var(--fw-bold);
+}
+
+.button-primary,
+.button-primary:hover:not(:disabled) {
+  border-color: var(--color-accent-strong);
+  background: var(--button-primary-background);
+  color: var(--button-primary-color);
+  font-weight: var(--fw-bold);
+  box-shadow: var(--shadow-button-primary);
+}
+
+.button-danger,
+.button-danger:hover:not(:disabled) {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+  background: var(--color-danger-soft);
+}
+
+.help-close,
+.help-guide-entry button,
+.help-empty button {
+  min-height: 34px;
+  padding: var(--sp-3) var(--sp-5);
+  border: var(--control-border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-control);
+  color: var(--color-text);
+  font-weight: var(--fw-bold);
+  box-shadow: var(--shadow-button);
+  cursor: pointer;
+}
+
+.help-close {
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border-radius: var(--radius-pill);
+  color: var(--color-secondary-strong);
+  font-size: var(--fs-xl);
+}
+
+.help-search-control input[type="search"] {
+  width: 100%;
+  min-width: 0;
+  padding: var(--sp-2) 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--color-text);
+  box-shadow: none;
+}
+
+.help-toc button {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  padding: var(--sp-3) var(--sp-4);
+  border: var(--control-border-width) solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text);
+  text-align: left;
+  line-height: var(--lh-normal);
+  font-weight: var(--fw-medium);
+  cursor: pointer;
+}
+
+.help-guide-entry button {
+  width: 100%;
+  color: var(--color-secondary-strong);
+}
+
+.candidate {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-4);
+  background: var(--color-surface);
+  border: var(--floating-border-width) solid var(--color-secondary-soft);
+  border-radius: var(--radius-lg);
+  color: var(--color-text);
+  cursor: pointer;
+  box-shadow: var(--shadow-candidate);
+  transition:
+    background var(--t-fast),
+    border-color var(--t-fast),
+    box-shadow var(--t-fast),
+    transform var(--t-fast);
+}
+
+}
+
+@layer layout {
+/* 上部ツールバー: 作品全体に効く操作の場所 */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 52px;
+  padding: var(--sp-4) var(--sp-6);
+  background: var(--toolbar-background);
+  border-bottom: var(--panel-border-width) solid var(--panel-separator-color);
+  box-shadow: var(--shadow-toolbar);
+  position: relative;
+  z-index: 3;
+}
+
+.toolbar-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex: none;
+  margin-right: var(--sp-2);
+  padding-right: var(--sp-5);
+  border-right: var(--brand-divider);
+}
+
+.toolbar-brand-mark {
+  width: 38px;
+  height: 38px;
+  flex: none;
+  overflow: visible;
+  filter: var(--brand-mark-filter);
+  transform: var(--brand-mark-transform);
+}
+
+.toolbar-brand-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1;
+}
+
+.toolbar-brand-copy strong {
+  /* 字間(letter-spacing)は最後の文字の右にも入るため、そのぶんだけ中身が
+     枠から2pxはみ出していた(実測: scrollWidth 96 / clientWidth 94)。
+     行の箱を中身の幅に合わせて、はみ出しを無くす。 */
+  display: inline-flex;
+  align-items: center;
+  width: max-content;
+  max-width: 100%;
+  /* 字間は最後の文字の右にも入る。「3」の札のぶんを見込んで右の余白を足し、
+     中身が枠からはみ出さないようにする(実測: scrollWidth 96 / clientWidth 94)。 */
+  padding-inline-end: var(--sp-1);
+  color: var(--brand-color);
+  font-size: 16px;
+  font-family: var(--brand-font);
+  font-weight: var(--brand-font-weight);
+  letter-spacing: var(--brand-letter-spacing);
+}
+
+.toolbar-brand-copy strong span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--brand-digit-width);
+  height: var(--brand-digit-height);
+  margin-left: var(--brand-digit-margin);
+  border-radius: var(--brand-digit-radius);
+  background: var(--brand-digit-background);
+  color: var(--brand-digit-color);
+  transform: var(--brand-digit-transform);
+}
+
+.toolbar-brand-copy small {
+  display: var(--brand-subtitle-display);
+  margin-top: 3px;
+  color: var(--color-text-muted);
+  font-size: 9px;
+  font-weight: var(--fw-bold);
+  font-family: var(--brand-subtitle-font);
+  letter-spacing: var(--brand-subtitle-letter-spacing);
+}
+
+.toolbar-icon {
+  width: 17px;
+  height: 17px;
+  flex: none;
+  color: var(--color-secondary);
+  transition:
+    color var(--t-fast),
+    transform var(--t-fast);
+}
+
+.toolbar button:hover:not(:disabled) .toolbar-icon {
+  color: var(--color-accent-strong);
+  transform: var(--icon-hover-transform);
+}
+
+.toolbar-separator {
+  width: var(--toolbar-separator-width);
+  height: var(--toolbar-separator-height);
+  border-radius: var(--toolbar-separator-radius);
+  background: var(--toolbar-separator-background);
+  margin: 0 var(--sp-1);
+  box-shadow: var(--shadow-decoration);
+}
+
+/* 中央行: ツールレール + 2D + 境目 + 3D。
+   2Dと3Dの割合はApp.tsxがストアの値で上書きする(UI-004) */
+.main-row {
+  display: grid;
+  grid-template-columns: 64px 1fr 6px 1fr;
+  min-height: 0;
+}
+
+/* 2Dと3Dの境目(左右にドラッグして広さを変える) */
+.pane-splitter {
+  position: relative;
+  background: var(--splitter-background);
+  cursor: col-resize;
+  touch-action: none;
+  box-shadow: var(--shadow-splitter);
+  transition: filter var(--t-fast);
+  z-index: 2;
+}
+
+.pane-splitter::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 4px;
+  height: 48px;
+  border: var(--control-border-width) solid var(--color-border-strong);
+  border-radius: var(--radius-pill);
+  background: repeating-linear-gradient(
+    to bottom,
+    var(--color-surface-translucent-strong) 0 3px,
+    transparent 3px 7px
+  );
+  content: "";
+  opacity: 0.9;
+  transform: translate(-50%, -50%);
+  transition: height var(--t-fast);
+}
+
+.pane-splitter:hover,
+.pane-splitter:focus-visible {
+  filter: var(--splitter-hover-filter);
+  outline: none;
+}
+
+.pane-splitter:hover::after,
+.pane-splitter:focus-visible::after {
+  height: 64px;
+}
+
+.pane-splitter:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+/* 作業画面と「今できる操作」の境目。既存の左右仕切りと同じ色を使い、
+   中央の白いグリップがhover/focusで広がるため、説明なしでもつかめる。 */
+.context-panel-splitter {
+  position: relative;
+  min-height: 10px;
+  background: var(--splitter-background);
+  cursor: row-resize;
+  touch-action: none;
+  box-shadow: var(--shadow-splitter);
+  transition: filter var(--t-fast);
+  z-index: 3;
+}
+
+.context-panel-splitter::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 58px;
+  height: 4px;
+  border: var(--control-border-width) solid var(--color-border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-translucent-strong);
+  box-shadow: var(--shadow-1);
+  transform: translate(-50%, -50%);
+  transition:
+    width var(--t-fast),
+    height var(--t-fast),
+    background var(--t-fast);
+}
+
+.context-panel-splitter:hover,
+.context-panel-splitter:focus-visible {
+  filter: var(--splitter-hover-filter);
+  outline: none;
+}
+
+.context-panel-splitter:hover::after,
+.context-panel-splitter:focus-visible::after {
+  width: 86px;
+  height: 6px;
+  background: var(--color-surface);
+}
+
+.context-panel-splitter:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+/* 10個のボタンが縦に入りきらない画面では、レールの中だけを縦にスクロールさせる。
+   2列にしたりボタンを縮めたりすると押しにくくなるので、大きさは変えずに送る */
+.tool-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  /* 64pxのレールでは左右の余白が道具の名前の幅を直接削る。実測: 左右6pxだと
+     サブメニューの中身が40pxしか残らず「角度線」(33px)が枠に触れていた。
+     4pxにすると44px残り、文字の左右に4.5pxずつ空く。 */
+  padding: var(--sp-4) var(--sp-2) var(--sp-6);
+  background: var(--tool-rail-background);
+  border-right: var(--panel-border-width) solid var(--panel-separator-color);
+  box-shadow: var(--shadow-tool-rail);
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-secondary) transparent;
+  position: relative;
+  z-index: 2;
+}
+
+.tool-rail::-webkit-scrollbar,
+.timeline-steps::-webkit-scrollbar,
+.context-selection::-webkit-scrollbar,
+.context-messages::-webkit-scrollbar,
+.dialog::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+.tool-rail::-webkit-scrollbar-thumb,
+.timeline-steps::-webkit-scrollbar-thumb,
+.context-selection::-webkit-scrollbar-thumb,
+.context-messages::-webkit-scrollbar-thumb,
+.dialog::-webkit-scrollbar-thumb {
+  border-radius: var(--radius-pill);
+  background: var(--color-secondary);
+}
+
+/* 選択中のツールは面で塗る(縁の色だけでは何を選んでいるか分かりにくい) */
+.tool-button.active {
+  background: var(--tool-active-background);
+  border-color: var(--tool-active-border);
+  color: var(--tool-active-color);
+  box-shadow: var(--shadow-tool-active);
+}
+
+.tool-button.active:hover:not(:disabled) {
+  background: var(--tool-active-hover-background);
+  border-color: var(--tool-active-hover-border);
+  color: var(--tool-active-hover-color);
+}
+
+.tool-icon {
+  display: block;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  color: var(--color-secondary);
+  filter: var(--tool-icon-filter);
+  transition:
+    transform var(--t-fast),
+    color var(--t-fast),
+    filter var(--t-fast);
+}
+
+.tool-button:hover:not(:disabled) .tool-icon {
+  transform: var(--tool-icon-hover-transform);
+}
+
+.tool-button.active .tool-icon {
+  color: var(--color-on-solid);
+  filter: var(--tool-icon-active-filter);
+}
+
+.tool-button:not(.active):nth-of-type(3n + 2) .tool-icon {
+  color: var(--color-accent);
+}
+
+.tool-button:not(.active):nth-of-type(3n) .tool-icon {
+  color: var(--color-pop-coral);
+}
+
+.tool-label {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 技法・作図のサブメニュー(そのツールを選んでいる間だけ出る) */
+.tool-submenu {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-3);
+  /* 64pxのレールの中では左右の余白がボタンの文字幅を奪い、「二等分」が
+     1文字ずつ縦に割れていた。左右の余白は取らず、幅をボタンへ回す。 */
+  padding: var(--sp-2) 0;
+  border: var(--panel-border-width) solid var(--color-secondary-border-soft);
+  /* 左右の枠は1pxに落として、その2pxぶんをボタンの文字幅へ回す。
+     実測: レールの中身は45px。ここを2pxにすると「角度線」(33px)が入らない。 */
+  border-inline-width: 1px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-translucent-submenu);
+  box-shadow: var(--shadow-submenu);
+}
+
+/* 上のレールのボタンと同じ「絵が上・言葉が下」にそろえる。横に並べると
+   64pxのレールでは言葉の幅が2文字ぶんしか残らず、必ず縦に割れるため。 */
+.tool-button.small {
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--sp-1);
+  min-height: 40px;
+  /* 64pxのレールでは左右の余白が文字幅を直接削る。上下だけ空ける。 */
+  padding: var(--sp-2) 0;
+  /* 「ひだ寄せ」のように1文節で長い名前は、途中でも折り返して枠に収める。 */
+  overflow-wrap: anywhere;
+  word-break: normal;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  letter-spacing: 0;
+  line-height: var(--lh-tight);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-tool-small);
+}
+
+.tool-sub-icon {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+
+.pane {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pane-2d {
+  background: var(--color-canvas-2d);
+  box-shadow: var(--shadow-canvas-2d);
+}
+}

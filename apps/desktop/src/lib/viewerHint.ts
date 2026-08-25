@@ -11,22 +11,31 @@ import {
   techniqueUsesOpenToBack,
 } from "./techniqueLayers";
 
-/** 折れる状態かどうかを決める材料(canFoldNowと同じ条件を文章にするため) */
-export interface FoldReadiness {
+/** 折れる状態かどうかを決める共通材料(canFoldNowと同じ条件を文章にするため) */
+interface FoldReadinessBase {
   hasDoc: boolean;
   playing: boolean;
   playT: number;
-  driverCount: number;
   currentStep: number | null;
   stepCount: number;
 }
 
 /**
- * 折り線が決まった後に、山折り/谷折りと動かす側を決められる場所。
- * 3Dの左下に出る札と下のパネルは同じ言葉・同じ並びで、どちらで選んでも同じ状態になる。
- * 案内ごとに「下のパネルだけ」と書いてしまわないための正本。
+ * 画面は角度の値を渡し、0°だけなら折れると判定する。
+ * store内ですでに0°以外の件数を計算済みの経路だけは、その件数を渡せる。
  */
-export const FOLD_DECIDE_PLACES = "3D左下の札か下部パネル";
+export type FoldReadiness = FoldReadinessBase &
+  (
+    | { driverAngles: readonly number[]; driverCount?: never }
+    | { driverCount: number; driverAngles?: never }
+  );
+
+/**
+ * 折り線が決まった後に山折り/谷折りを決められる場所。
+ * 画面に見える札の見出しを目印にし、案内ごとに言い換えないための正本。
+ */
+export const FOLD_DECIDE_PLACES =
+  "3Dの「この折り線で折る」の札か下部パネル";
 
 /** つかんで折る操作の説明(修飾キーの意味は常に出す) */
 export const DRAG_FOLD_HINT =
@@ -41,7 +50,11 @@ export function foldBlockReason(s: FoldReadiness): string | null {
   if (s.playing) return "再生中は折れません。下の再生ボタンで止めてください";
   if (s.playT !== 1)
     return "折り途中の形では折れません。手順を最後まで進めてください";
-  if (s.driverCount > 0)
+  const hasNonZeroAngle =
+    s.driverAngles !== undefined
+      ? s.driverAngles.some((angle) => angle !== 0)
+      : s.driverCount > 0;
+  if (hasNonZeroAngle)
     return "角度を動かして形を変えている間は折れません。下の「全て平らに戻す」で戻せます";
   // 途中の手順を見ている間も折れる(その手順の前へ挟まる。SEQ-006)
   return null;
@@ -79,7 +92,7 @@ const LINE_TOOL_LABEL: Partial<Record<ToolId, string>> = {
 };
 
 /** ヒント1行を組み立てる材料 */
-export interface HintState extends FoldReadiness {
+export type HintState = FoldReadiness & {
   tool: ToolId;
   /** 引く操作ができない理由(できるならnull) */
   pullBlocked: string | null;
@@ -113,7 +126,7 @@ export interface HintState extends FoldReadiness {
   alignSolutionCount?: number;
   /** 折り線が求まらなかった理由(求まったならnull) */
   alignReason?: string | null;
-}
+};
 
 /** 合わせて折るときに、次に何を選べばよいかの案内(選ぶ順にそのまま並べる) */
 const ALIGN_PROMPTS: Record<AlignMode, string[]> = {
@@ -192,7 +205,7 @@ export function viewerHint(s: HintState): string {
     // 合わせモードの間は、選ぶ途中経過を常に出す(折り線は選択から決まる)
     if (s.alignMode) return `${alignHint(s)}${where}`;
     if (s.hasFoldDraft)
-      return `折り線を引きました。${FOLD_DECIDE_PLACES}で向きと動かす側を決めて「折る」を押してください(やり直すときは「やめる」)${where}`;
+      return `折り線を引きました。折り返す紙は3Dの「この折り線で折る」の札で確かめ、向きは同じ札か下部パネルで選んで「折る」を押してください(やり直すときは「やめる」)${where}`;
     return `${DRAG_FOLD_HINT}${where}`;
   }
   if (s.tool === "pull") {

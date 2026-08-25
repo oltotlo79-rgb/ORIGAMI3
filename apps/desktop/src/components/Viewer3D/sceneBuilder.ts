@@ -1648,8 +1648,8 @@ export function createHighlightLayer(
           line.userData.surfaceOwnerProbe = null;
         }
         // 紙と同じ深度の表面では強調線を見せるため、紙より後に描く。
-        // 非赤4種類は深度とsurface ownerの両方で紙の裏側なら隠れ、食い込みの赤だけは
-        // 両判定を通さず最後に描くため、内側でも原因を見つけられる。
+        // 食い込み以外の6種類は深度とsurface ownerの両方で紙の裏側なら隠れ、
+        // 食い込みの赤だけは両判定を通さず最後に描くため、内側でも原因を見つけられる。
         line.renderOrder = appearance.renderOrder;
         line.position.copy(seg.a);
         line.quaternion.setFromUnitVectors(AXIS_Y, dir.normalize());

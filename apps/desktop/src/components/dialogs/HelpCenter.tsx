@@ -1,7 +1,7 @@
 // UI-011: 目次・検索・章表示を備えた詳しいヘルプセンター。
 // 内容はhelp/の構造化データだけを描画し、このコンポーネントには説明文を持たせない。
 
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import { HELP_CHAPTERS, helpChapterSearchText } from "../../help/helpContent";
 import { HELP_DIAGRAMS } from "../../help/helpDiagrams";
 import type { HelpBlock } from "../../help/helpTypes";
@@ -92,22 +92,11 @@ export function HelpCenter() {
   const open = useAppStore((s) => s.helpOpen);
   const chapterId = useAppStore((s) => s.helpChapterId);
   const query = useAppStore((s) => s.helpQuery);
-  const openHelp = useAppStore((s) => s.openHelp);
   const closeHelp = useAppStore((s) => s.closeHelp);
   const selectChapter = useAppStore((s) => s.selectHelpChapter);
   const setQuery = useAppStore((s) => s.setHelpQuery);
   const openGuide = useAppStore((s) => s.openGuide);
   const searchRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "F1") return;
-      event.preventDefault();
-      openHelp();
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [openHelp]);
 
   if (!open) return null;
 

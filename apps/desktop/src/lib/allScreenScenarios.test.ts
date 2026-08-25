@@ -29,7 +29,22 @@ import {
   type ScreenScenarioCoverage,
 } from "./allScreenScenarios";
 
-const css = readFileSync(new URL("../App.css", import.meta.url), "utf8");
+const baseLayoutCss = readFileSync(
+  new URL("../styles/base-layout.css", import.meta.url),
+  "utf8",
+);
+const viewerCss = readFileSync(
+  new URL("../styles/viewer.css", import.meta.url),
+  "utf8",
+);
+const contextCss = readFileSync(
+  new URL("../styles/context.css", import.meta.url),
+  "utf8",
+);
+const dialogsCss = readFileSync(
+  new URL("../styles/dialogs.css", import.meta.url),
+  "utf8",
+);
 const tooltipSource = readFileSync(
   new URL("../components/Tooltip.tsx", import.meta.url),
   "utf8",
@@ -65,10 +80,10 @@ function expectSameMembers(
   expect(uniqueSorted(actual)).toEqual(uniqueSorted(expected));
 }
 
-function declarationBlock(selector: string): string {
+function declarationBlock(selector: string, ownerCss = dialogsCss): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const matches = [
-    ...css.matchAll(new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\}`, "gu")),
+    ...ownerCss.matchAll(new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\}`, "gu")),
   ];
   if (matches.length === 0) throw new Error(`CSSブロックがありません: ${selector}`);
   // 同じselectorを後ろで上書きするCSSもある。両方を結合し、最終的な契約を
@@ -77,7 +92,7 @@ function declarationBlock(selector: string): string {
 }
 
 function rootViewportBlock(): string {
-  const match = /html,\s*body,\s*#root\s*\{([\s\S]*?)\}/u.exec(css);
+  const match = /html,\s*body,\s*#root\s*\{([\s\S]*?)\}/u.exec(baseLayoutCss);
   if (match === null) throw new Error("html/body/#rootのCSSブロックがありません");
   return match[1];
 }
@@ -95,33 +110,33 @@ const layoutChecks: Record<ScreenLayoutContract, AxisContractCheck> = {
   workspace: {
     horizontal: () => {
       expectTokens(rootViewportBlock(), ["overflow: hidden"]);
-      expectTokens(declarationBlock(".pane"), ["min-width: 0", "overflow: hidden"]);
-      expectTokens(declarationBlock(".tool-rail"), ["overflow-x: hidden"]);
-      expectTokens(declarationBlock(".timeline"), ["min-width: 0", "overflow: hidden"]);
-      expectTokens(declarationBlock(".timeline-controls"), ["min-width: 0", "overflow-x: auto"]);
-      expectTokens(declarationBlock(".timeline-steps"), ["overflow-x: auto", "overflow-y: hidden"]);
-      expectTokens(declarationBlock(".context-selection"), ["min-width: 0"]);
-      expectTokens(declarationBlock(".context-messages"), ["min-width: 0"]);
+      expectTokens(declarationBlock(".pane", baseLayoutCss), ["min-width: 0", "overflow: hidden"]);
+      expectTokens(declarationBlock(".tool-rail", baseLayoutCss), ["overflow-x: hidden"]);
+      expectTokens(declarationBlock(".timeline", viewerCss), ["min-width: 0", "overflow: hidden"]);
+      expectTokens(declarationBlock(".timeline-controls", viewerCss), ["min-width: 0", "overflow-x: auto"]);
+      expectTokens(declarationBlock(".timeline-steps", viewerCss), ["overflow-x: auto", "overflow-y: hidden"]);
+      expectTokens(declarationBlock(".context-selection", contextCss), ["min-width: 0"]);
+      expectTokens(declarationBlock(".context-messages", contextCss), ["min-width: 0"]);
     },
     vertical: () => {
       expectTokens(rootViewportBlock(), ["height: 100%", "overflow: hidden"]);
-      expectTokens(declarationBlock(".app"), ["minmax(0, var(--main-row-share", "minmax(0, var(--context-panel-share", "height: 100%"]);
-      expectTokens(declarationBlock(".main-row"), ["min-height: 0"]);
-      expectTokens(declarationBlock(".pane"), ["min-height: 0", "overflow: hidden"]);
-      expectTokens(declarationBlock(".tool-rail"), ["min-height: 0", "overflow-y: auto"]);
-      expectTokens(declarationBlock(".context-panel"), ["min-height: 0", "overflow: hidden"]);
-      expectTokens(declarationBlock(".context-selection"), ["min-height: 0", "overflow-y: auto"]);
-      expectTokens(declarationBlock(".context-messages"), ["min-height: 0", "overflow-y: auto"]);
+      expectTokens(declarationBlock(".app", baseLayoutCss), ["minmax(0, var(--main-row-share", "minmax(0, var(--context-panel-share", "height: 100%"]);
+      expectTokens(declarationBlock(".main-row", baseLayoutCss), ["min-height: 0"]);
+      expectTokens(declarationBlock(".pane", baseLayoutCss), ["min-height: 0", "overflow: hidden"]);
+      expectTokens(declarationBlock(".tool-rail", baseLayoutCss), ["min-height: 0", "overflow-y: auto"]);
+      expectTokens(declarationBlock(".context-panel", contextCss), ["min-height: 0", "overflow: hidden"]);
+      expectTokens(declarationBlock(".context-selection", contextCss), ["min-height: 0", "overflow-y: auto"]);
+      expectTokens(declarationBlock(".context-messages", contextCss), ["min-height: 0", "overflow-y: auto"]);
     },
   },
   "viewer-overlay": {
     horizontal: () => {
-      expectTokens(declarationBlock(".viewer-overlay-region"), ["width: min(430px, calc(100% - 164px))", "min-width: 0", "overflow: hidden"]);
-      expectTokens(declarationBlock(".viewer-overlay-stack"), ["min-width: 0", "overflow-x: hidden"]);
+      expectTokens(declarationBlock(".viewer-overlay-region", viewerCss), ["width: min(430px, calc(100% - 164px))", "min-width: 0", "overflow: hidden"]);
+      expectTokens(declarationBlock(".viewer-overlay-stack", viewerCss), ["min-width: 0", "overflow-x: hidden"]);
     },
     vertical: () => {
-      expectTokens(declarationBlock(".viewer-overlay-region"), ["top: var(--sp-5)", "bottom: var(--sp-5)", "min-height: 0", "overflow: hidden"]);
-      expectTokens(declarationBlock(".viewer-overlay-stack"), ["min-height: 0", "overflow-y: auto"]);
+      expectTokens(declarationBlock(".viewer-overlay-region", viewerCss), ["top: var(--sp-5)", "bottom: var(--sp-5)", "min-height: 0", "overflow: hidden"]);
+      expectTokens(declarationBlock(".viewer-overlay-stack", viewerCss), ["min-height: 0", "overflow-y: auto"]);
     },
   },
   tooltip: {
@@ -194,10 +209,10 @@ const layoutChecks: Record<ScreenLayoutContract, AxisContractCheck> = {
   },
   "color-picker": {
     horizontal: () => {
-      expectTokens(declarationBlock(".color-picker-popover"), ["width: min(320px, calc(100vw - 16px))", "overflow-x: hidden"]);
+      expectTokens(declarationBlock(".color-picker-popover", contextCss), ["width: min(320px, calc(100vw - 16px))", "overflow-x: hidden"]);
     },
     vertical: () => {
-      expectTokens(declarationBlock(".color-picker-popover"), ["max-height: calc(100vh - 16px)", "overflow-y: auto"]);
+      expectTokens(declarationBlock(".color-picker-popover", contextCss), ["max-height: calc(100vh - 16px)", "overflow-y: auto"]);
     },
   },
 };

@@ -1,0 +1,1029 @@
+@layer dialogs {
+/* 新規作成ダイアログの大きさ入力と見本 */
+/* 「よこ」「たて」と紙の見本を下端でそろえる。中央ぞろえだと見本だけが
+   31px高い位置に来て、列がそろって見えなかった(実測: 1000×700)。 */
+.new-paper-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-5);
+  margin: var(--sp-4) 0;
+  font-size: var(--fs-md);
+}
+
+/* 名前と入力欄が成り行きで折り返していたので、縦に積むと決めておく。 */
+.new-paper-row > label {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+}
+
+.new-paper-row input {
+  width: 72px;
+}
+
+.new-paper-preview {
+  display: inline-block;
+  background: var(--color-surface);
+  border: var(--panel-border-width) solid var(--color-secondary-soft);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-preview);
+}
+
+/* UI-012 初回ガイド。全画面を塞がず、左上の隅に置くカードだけがクリックを受ける。 */
+.first-run-guide {
+  position: fixed;
+  top: 68px;
+  left: clamp(16px, 8vw, 80px);
+  width: min(340px, calc(100vw - 32px));
+  max-height: calc(100vh - 84px);
+  overflow-y: auto;
+  padding: var(--sp-6);
+  border: var(--floating-border-width) solid var(--floating-border-color);
+  border-radius: var(--radius-xl);
+  background: var(--guide-background);
+  box-shadow: var(--shadow-guide);
+  z-index: 30;
+  animation: guide-pop var(--t-entrance) both;
+}
+
+.first-run-guide::before {
+  content: "";
+  position: absolute;
+  top: -8px;
+  left: 52px;
+  width: 22px;
+  height: 22px;
+  border-top: var(--floating-border-width) solid var(--floating-border-color);
+  border-left: var(--floating-border-width) solid var(--floating-border-color);
+  background: var(--color-surface);
+  transform: rotate(45deg);
+}
+
+.first-run-guide-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-right: var(--sp-8);
+  color: var(--color-secondary-strong);
+}
+
+.first-run-guide-header > span {
+  font-weight: var(--fw-black);
+  letter-spacing: 0.06em;
+}
+
+.first-run-guide-header > strong {
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: var(--radius-pill);
+  background: var(--color-pop-yellow);
+  color: var(--color-on-gold);
+  font-variant-numeric: tabular-nums;
+}
+
+.first-run-guide-progress {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: var(--sp-4) 0 var(--sp-5);
+  padding: 0;
+  list-style: none;
+}
+
+.first-run-guide-progress li {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: var(--control-border-width) solid var(--color-border);
+  border-radius: 50%;
+  background: var(--color-surface-sunken);
+  color: var(--color-text-muted);
+  font-weight: var(--fw-black);
+}
+
+.first-run-guide-progress li + li::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: calc(100% + 2px);
+  width: 55px;
+  height: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--color-border);
+  transform: translateY(-50%);
+}
+
+.first-run-guide-progress li.current {
+  border-color: var(--color-secondary);
+  background: var(--color-pop-yellow);
+  color: var(--color-on-gold);
+  box-shadow: 0 0 0 4px var(--color-secondary-soft);
+}
+
+.first-run-guide-progress li.completed {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: var(--color-on-solid);
+}
+
+.first-run-guide-try {
+  display: inline-block;
+  padding: var(--sp-1) var(--sp-4);
+  border-radius: var(--radius-pill);
+  background: var(--color-pop-coral);
+  color: var(--color-on-coral);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-black);
+  transform: var(--label-transform);
+}
+
+.first-run-guide h2 {
+  margin: var(--sp-3) 0;
+  color: var(--heading-color);
+  font-size: var(--fs-xl);
+  line-height: var(--lh-tight);
+}
+
+.first-run-guide p {
+  margin: var(--sp-3) 0;
+  line-height: var(--lh-body);
+}
+
+.first-run-guide-note {
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius-md);
+  background: var(--color-pop-yellow-soft);
+  color: var(--color-warn);
+  font-size: var(--fs-sm);
+}
+
+
+
+
+
+
+
+.first-run-guide-auto {
+  display: block;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.first-run-guide.complete {
+  text-align: center;
+}
+
+.first-run-guide-celebration {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  margin-bottom: var(--sp-3);
+  border-radius: 50%;
+  background: var(--button-primary-background);
+  color: var(--button-primary-color);
+  font-size: 34px;
+  font-weight: var(--fw-black);
+  box-shadow: var(--shadow-guide-celebration);
+}
+
+@keyframes guide-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* 復旧ダイアログ(SYS-003)。常設4区画の上に重ねて出す */
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  /* モーダルの後ろは操作できない。弱い半透明幕では常設4区画の文字やボタンが
+     読めて手前と混同したため、各テーマの濃い重ね色で明確に分ける。 */
+  background: var(--color-overlay);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-6);
+  backdrop-filter: var(--scrim-backdrop-filter);
+  z-index: 100;
+}
+
+/* 独立ダイアログで同じ枠・同じ余白を使う */
+.dialog {
+  position: relative;
+  background: var(--dialog-background);
+  /* ポップテーマの背景はgradientなので、画像化やgradient非対応時にも
+     後ろの画面が透けない不透明な下地を必ず持たせる。 */
+  background-color: var(--color-surface);
+  border: var(--panel-border-width) solid var(--panel-border-color);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-dialog);
+  padding: var(--sp-7);
+  max-width: 460px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  scrollbar-color: var(--color-secondary) transparent;
+  animation: dialog-in var(--t-base) both;
+}
+
+/* 見出しは下に細い線を敷いて、題と中身の区切りを見せる */
+.dialog h2 {
+  color: var(--heading-color);
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-black);
+  line-height: var(--lh-tight);
+  margin: 0 0 var(--sp-6);
+  padding-bottom: var(--sp-4);
+  border-bottom: var(--heading-rule-width) solid var(--color-pop-yellow);
+  letter-spacing: var(--heading-letter-spacing);
+}
+
+.dialog p {
+  margin: 0 0 var(--sp-4);
+  font-size: var(--fs-md);
+  line-height: var(--lh-body);
+}
+
+/* 選択肢のまとまり(紙の形・書き出す種類)は枠で囲って一目で分かるようにする */
+.dialog fieldset {
+  margin: 0 0 var(--sp-5);
+  padding: var(--sp-3) var(--sp-5) var(--sp-5);
+  border: var(--panel-border-width) solid var(--color-secondary-border-soft);
+  border-radius: var(--radius-md);
+  background: var(--dialog-fieldset-background);
+}
+
+.dialog legend {
+  padding: 0 var(--sp-2);
+  color: var(--heading-color);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-bold);
+}
+
+.dialog fieldset label,
+.dialog > label {
+  display: block;
+  margin-top: var(--sp-2);
+}
+
+/* ダイアログの決定・取り消しは下端にまとめ、上の説明と線で分ける */
+.dialog .button-row:last-child {
+  margin-top: var(--sp-5);
+  padding-top: var(--sp-5);
+  border-top: var(--control-border-width) dashed var(--color-border);
+}
+
+
+.button-primary:hover:not(:disabled) {
+  filter: var(--primary-hover-filter);
+}
+
+.button-primary:active:not(:disabled) {
+  background: var(--color-accent-strong);
+  box-shadow: var(--shadow-button-primary-active);
+}
+
+
+.dialog > :last-child {
+  margin-bottom: 0;
+}
+
+/* 提案ウィザード(PRO-004)。骨格の絵・候補の見本を並べるため復旧ダイアログより広い */
+.dialog-wide {
+  max-width: 720px;
+  max-height: 88vh;
+  overflow-y: auto;
+}
+
+/* 候補4枚では、88vhだと1000×700で内容が実測19pxだけ余り、すべて見えて
+   いるのに不要な巻物が出る。候補を縮めず、上下18pxの範囲まで使う。 */
+.dialog-wide[data-proposal-step="candidates"] {
+  max-height: calc(100vh - 36px);
+}
+
+/* 詳しいヘルプセンター(UI-011)。4区画の上に重ね、内部だけをスクロールする。 */
+.help-dialog {
+  width: min(1180px, 84vw);
+  height: 84vh;
+  max-width: none;
+  max-height: none;
+  padding: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: minmax(250px, 0.31fr) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  background: var(--color-surface);
+}
+
+.help-header {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-6);
+  min-height: 84px;
+  padding: var(--sp-5) var(--sp-7);
+  background: var(--help-header-background);
+  border-bottom: var(--panel-border-width) solid var(--color-border);
+}
+
+.help-header .help-kicker {
+  display: block;
+  margin-bottom: var(--sp-1);
+  color: var(--color-accent-strong);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-black);
+  letter-spacing: 0.13em;
+}
+
+.help-header h2 {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+
+
+.help-close:hover,
+.help-guide-entry button:hover,
+.help-empty button:hover {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.help-sidebar {
+  min-height: 0;
+  padding: var(--sp-6);
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: var(--sp-4);
+  background: var(--help-sidebar-background);
+  border-right: var(--panel-border-width) solid var(--color-border);
+}
+
+.help-search > label {
+  display: block;
+  margin-bottom: var(--sp-2);
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-bold);
+}
+
+.help-search-control {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 40px;
+  padding-inline: var(--sp-4);
+  border: var(--control-border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-control);
+  box-shadow: var(--shadow-input);
+}
+
+.help-search-control:focus-within {
+  border-color: var(--color-accent);
+  box-shadow: var(--focus-ring);
+}
+
+.help-search-control > span {
+  color: var(--color-secondary);
+  font-size: var(--fs-xl);
+}
+
+
+.app .help-search-clear {
+  flex: 0 0 auto;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border-color: var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-sunken);
+  color: var(--color-text-muted);
+  box-shadow: none;
+}
+
+.help-result-count {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.help-toc {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2) var(--sp-2) 0;
+  scrollbar-color: var(--color-secondary) transparent;
+}
+
+
+.help-toc button > span:first-child {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-pill);
+  background: var(--color-secondary-soft);
+  color: var(--color-secondary-strong);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-black);
+}
+
+.help-toc button:hover {
+  border-color: var(--button-hover-border);
+  background: var(--button-hover-background);
+  color: var(--button-hover-color);
+  box-shadow: var(--shadow-button-hover);
+}
+
+.help-toc button.current {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+  box-shadow: var(--shadow-1);
+}
+
+.help-toc button.current > span:first-child {
+  background: var(--color-accent);
+  color: var(--color-surface);
+}
+
+.help-guide-entry {
+  padding: var(--sp-5);
+  border: var(--panel-border-width) dashed var(--color-secondary);
+  border-radius: var(--radius-lg);
+  background: var(--color-secondary-soft);
+}
+
+.help-guide-entry > strong {
+  color: var(--color-secondary-strong);
+}
+
+.help-guide-entry p {
+  margin: var(--sp-2) 0 var(--sp-4);
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+}
+
+
+.help-content {
+  min-width: 0;
+  overflow-y: auto;
+  padding: var(--sp-8) clamp(var(--sp-7), 4vw, 52px) 56px;
+  scroll-behavior: smooth;
+  scrollbar-color: var(--color-secondary) transparent;
+}
+
+.help-content article {
+  max-width: 780px;
+  margin-inline: auto;
+}
+
+.help-chapter-heading {
+  margin-bottom: var(--sp-7);
+}
+
+.help-chapter-heading > span {
+  display: inline-block;
+  padding: var(--sp-2) var(--sp-4);
+  border-radius: var(--radius-pill);
+  background: var(--color-pop-yellow-soft);
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-black);
+}
+
+.help-chapter-heading h3 {
+  margin: var(--sp-4) 0 var(--sp-2);
+  color: var(--color-secondary-strong);
+  font-size: 28px;
+  line-height: var(--lh-tight);
+}
+
+.help-chapter-heading p {
+  color: var(--color-text-muted);
+  font-size: var(--fs-lg);
+}
+
+.help-content h4 {
+  margin: var(--sp-8) 0 var(--sp-4);
+  color: var(--color-text);
+  font-size: var(--fs-lg);
+  line-height: var(--lh-normal);
+}
+
+.help-content article > p,
+.help-block-list li,
+.help-block-steps li,
+.help-callout p,
+.help-table-wrap td {
+  font-size: var(--fs-md);
+  line-height: var(--lh-body);
+}
+
+.help-content article > p {
+  margin: 0 0 var(--sp-5);
+}
+
+.help-block-list ul {
+  margin: 0 0 var(--sp-6);
+  padding-left: var(--sp-8);
+}
+
+.help-block-list li {
+  margin-bottom: var(--sp-3);
+  padding-left: var(--sp-2);
+}
+
+.help-block-list li::marker {
+  color: var(--color-accent);
+}
+
+.help-block-steps ol {
+  margin: 0 0 var(--sp-7);
+  padding: 0;
+  list-style: none;
+  counter-reset: help-step;
+}
+
+.help-block-steps li {
+  position: relative;
+  min-height: 48px;
+  margin-bottom: var(--sp-4);
+  padding: var(--sp-4) var(--sp-5) var(--sp-4) 60px;
+  counter-increment: help-step;
+  border: var(--panel-border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-1);
+}
+
+.help-block-steps li::before {
+  content: counter(help-step);
+  position: absolute;
+  top: var(--sp-4);
+  left: var(--sp-4);
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+  color: var(--color-surface);
+  font-weight: var(--fw-black);
+}
+
+.help-block-steps li strong,
+.help-block-steps li span {
+  display: block;
+}
+
+.help-block-steps li strong {
+  color: var(--color-accent-strong);
+}
+
+.help-callout {
+  margin: var(--sp-6) 0;
+  padding: var(--sp-5) var(--sp-6);
+  border: var(--panel-border-width) solid var(--color-accent);
+  border-left-width: 7px;
+  border-radius: var(--radius-md);
+  background: var(--color-accent-soft);
+}
+
+.help-callout.note {
+  border-color: var(--color-secondary);
+  background: var(--color-secondary-soft);
+}
+
+.help-callout.warning {
+  border-color: var(--color-warn);
+  background: var(--color-pop-yellow-soft);
+}
+
+.help-callout p {
+  margin: var(--sp-2) 0 0;
+}
+
+.help-figure {
+  margin: var(--sp-7) 0;
+  padding: var(--sp-4);
+  border: var(--panel-border-width) solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg);
+}
+
+.help-figure-image svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.help-figure figcaption {
+  margin-top: var(--sp-3);
+  color: var(--color-text-muted);
+  text-align: center;
+  font-size: var(--fs-sm);
+}
+
+.help-table-wrap {
+  margin: var(--sp-6) 0;
+  overflow-x: auto;
+}
+
+.help-table-wrap table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: var(--panel-border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.help-table-wrap th,
+.help-table-wrap td {
+  padding: var(--sp-4) var(--sp-5);
+  border-bottom: 1px solid var(--color-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.help-table-wrap th {
+  background: var(--color-secondary-soft);
+  color: var(--color-secondary-strong);
+}
+
+.help-table-wrap tr:last-child td {
+  border-bottom: 0;
+}
+
+.help-empty {
+  min-height: 100%;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  text-align: center;
+}
+
+.help-empty > span {
+  color: var(--color-secondary);
+  font-size: 52px;
+}
+
+.help-empty h3 {
+  margin: var(--sp-4) 0 var(--sp-2);
+  font-size: var(--fs-xl);
+}
+
+.proposal-body {
+  display: flex;
+  gap: var(--sp-5);
+  align-items: flex-start;
+}
+
+.skeleton-preview,
+.cp-thumb {
+  width: 200px;
+  height: 200px;
+  flex: none;
+  border: var(--panel-border-width) solid var(--color-secondary-border-soft);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-2);
+}
+
+/* 形見本の先端のつまみ。説明を読まなくても「つまんで動かせる」と分かるように、
+   指の形と、押している間の色の変化で示す。 */
+.skeleton-preview .tip-handle {
+  cursor: grab;
+  touch-action: none;
+}
+
+/* 触れている間は輪の色だけを変える。塗りは「場所を決めたかどうか」を表すので変えない。 */
+.skeleton-preview .tip-handle:hover,
+.skeleton-preview .tip-handle:active {
+  stroke: var(--color-accent);
+}
+
+.skeleton-preview .tip-handle:active {
+  cursor: grabbing;
+}
+
+/* 共通の枠線(outline 2px + box-shadow 0 0 0 4px)を、この絵の中では使わない。
+   見本は横3.75の座標を200pxで描くため、絵の中の1は画面上の約53pxにあたり、
+   枠線の2は約107px(見本の幅の半分)に化ける。実測では見本のほぼ全面が塗られ、
+   出っぱりの線も呼び名も見えなくなった。
+   選んでいる先端は、同じ絵の中の長さで描く輪(tip-focus-ring)で示す。 */
+.skeleton-preview .tip-handle:focus,
+.skeleton-preview .tip-handle:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+/* 紙の上の場所は候補の小さな絵とは分け、選んだ1件だけを大きく表示する。 */
+.paper-position-stage {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0 0 var(--sp-4);
+}
+
+.paper-position-editor {
+  display: block;
+  height: auto;
+  min-width: 0;
+  max-width: 100%;
+  border: var(--panel-border-width) solid var(--color-secondary-border-soft);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-2);
+  touch-action: none;
+}
+
+.paper-position-handle {
+  cursor: grab;
+  touch-action: none;
+}
+
+.paper-position-handle:hover,
+.paper-position-handle:active {
+  stroke: var(--color-accent-strong);
+}
+
+.paper-position-handle:active {
+  cursor: grabbing;
+}
+
+.paper-position-editor[data-disabled="true"] .paper-position-handle {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+/* SVG座標で巨大化する共通outlineは使わず、同じSVG内の輪で選択を示す。 */
+.paper-position-handle:focus,
+.paper-position-handle:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+/* 呼び名と引き出し線は表示だけにし、その下のつまみを直接つかめるようにする。 */
+.paper-position-label,
+.paper-position-label-leader {
+  pointer-events: none;
+}
+
+.paper-position-status {
+  padding: var(--sp-3) var(--sp-4);
+  border: var(--control-border-width) solid var(--color-secondary-border-soft);
+  border-radius: var(--radius-md);
+  background: var(--color-secondary-soft);
+  font-weight: var(--fw-bold);
+}
+
+.paper-position-status[data-paper-position-status="changed"] {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.paper-position-actions {
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+
+/* 完成形と紙の上で場所が違う葉だけ、色に加えて破線の輪と文で知らせる。 */
+.tip-position-different-ring,
+.paper-position-different-ring {
+  pointer-events: none;
+}
+
+.proposal-position-notices {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0 0 var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  box-sizing: border-box;
+  border: var(--control-border-width) solid var(--color-danger);
+  border-radius: var(--radius-md);
+  background: var(--color-danger-soft);
+}
+
+.proposal-position-notices > p {
+  margin: 0 0 var(--sp-2);
+  font-weight: var(--fw-bold);
+}
+
+.proposal-position-notices ul {
+  display: grid;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.proposal-position-notices li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-3);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.proposal-position-notices li > span {
+  flex: 1 1 240px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.proposal-position-notices button,
+.proposal-position-history button {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.proposal-position-history {
+  min-width: 0;
+  max-width: 100%;
+  margin-bottom: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+/* 紙位置画面だけは、紙全体と説明・操作を左右に並べる。
+   1000×700で560pxの紙を表示域へ単純に縮めると、つまみ直径が28pxから約18pxへ
+   落ちる。左列を560pxのまま保つことで、4〜12本の位置関係を一度に見渡せる。 */
+.dialog-wide[data-proposal-step="paper-position"] {
+  height: min(668px, calc(100vh - 36px));
+  max-height: min(668px, calc(100vh - 36px));
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.paper-position-step {
+  display: grid;
+  grid-template-columns: 560px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: var(--sp-4) 16px;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.paper-position-sidebar {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.paper-position-sidebar > h2,
+.paper-position-sidebar > .proposal-position-history,
+.paper-position-sidebar > p,
+.paper-position-sidebar > .error-text {
+  flex: none;
+}
+
+/* 12本すべてに知らせが出ても下の3操作を隠さず、知らせ自身だけを送って読める。 */
+.paper-position-sidebar > .proposal-position-notices {
+  min-height: 0;
+  max-height: 112px;
+  flex: 0 1 112px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.paper-position-stage {
+  grid-column: 1;
+  grid-row: 1 / 3;
+  align-self: center;
+  width: 560px;
+  height: 560px;
+  min-height: 560px;
+  max-height: 560px;
+  margin: 0;
+  place-items: center;
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+
+.paper-position-editor {
+  flex: none;
+}
+
+.dialog .paper-position-actions:last-child {
+  grid-column: 2;
+  grid-row: 2;
+  align-self: end;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--sp-2);
+  margin: 0;
+  padding: var(--sp-4) 0 0;
+}
+
+.paper-position-actions > button {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.limb-list {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+}
+
+/* 右の「長さ・太さ」は2行へ折り返るため、align-items:center だと左の名前が
+   2行の間へ来て、左右の列がそろわない(実測: 1000×700で18pxずれ)。
+   上をそろえ、名前は1行目の高さの中で縦中央に置く。 */
+.limb-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+}
+
+.limb-row > span {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.limb-name {
+  width: 4.5em;
+  flex: none;
+}
+
+.limb-row input[type="range"] {
+  width: 80px;
+}
+
+.candidate-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--sp-5);
+}
+
+
+.candidate:hover {
+  border-color: var(--color-secondary);
+  background: var(--color-secondary-soft);
+  box-shadow: var(--shadow-candidate-hover);
+  transform: var(--candidate-hover-transform);
+}
+
+.candidate.selected,
+.candidate.selected:hover {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+  box-shadow: var(--shadow-candidate-selected);
+}
+
+.candidate .cp-thumb {
+  width: 150px;
+  height: 150px;
+}
+
+.candidate-caption {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-tight);
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+}

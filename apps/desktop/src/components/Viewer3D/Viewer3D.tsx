@@ -498,7 +498,9 @@ export function Viewer3D({ fitRef, statusOverlays }: Props) {
       hasDoc: s.doc !== null,
       playing: s.playing,
       playT: s.playT,
-      driverCount: s.drivers.size,
+      // 指定の有無ではなく値を渡す。0°へ戻した指定がMapに残っていても、
+      // 平らな形を「折れない」と案内しない。
+      driverAngles: [...s.drivers.values()],
       currentStep: s.currentStep,
       stepCount: s.doc?.sequence.length ?? 0,
       tool: s.activeTool,

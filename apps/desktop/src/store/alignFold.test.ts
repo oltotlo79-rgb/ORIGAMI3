@@ -4,6 +4,7 @@
 //  - 解が2つあるときの切り替え・1つ戻す・やめる
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ALIGN_STEPS, type AlignMode, type AlignTarget } from "../lib/alignFold";
 import type { DocumentView, ReplayResult, Vec2 } from "../lib/types";
 
 vi.mock("../ipc/client", () => ({
@@ -25,7 +26,7 @@ vi.mock("../ipc/client", () => ({
 }));
 
 import * as ipc from "../ipc/client";
-import { useAppStore } from "./appStore";
+import { automaticMovingSide, initialMovingSide, useAppStore } from "./appStore";
 
 /** 単位正方形1枚・手順1つの、平らに畳んだ状態(折る操作ができる状態) */
 function seedFlat(): void {
@@ -91,6 +92,52 @@ function seedFlat(): void {
 
 const XAXIS = { kind: "line" as const, a: [0, 0] as Vec2, b: [1, 0] as Vec2 };
 const YAXIS = { kind: "line" as const, a: [0, 0] as Vec2, b: [0, 1] as Vec2 };
+const TOP_AXIS = { kind: "line" as const, a: [0, 1] as Vec2, b: [1, 1] as Vec2 };
+
+/** 8つの合わせ方を、折り線が一意に求まる代表入力で漏れなく走査する。 */
+const AUTOMATIC_SIDE_CASES: { mode: AlignMode; picks: AlignTarget[] }[] = [
+  {
+    mode: "throughTwoPoints",
+    picks: [
+      { kind: "point", p: [0, 0] },
+      { kind: "point", p: [1, 0] },
+    ],
+  },
+  {
+    mode: "pointPoint",
+    picks: [
+      { kind: "point", p: [0, 0] },
+      { kind: "point", p: [1, 0] },
+    ],
+  },
+  { mode: "lineLine", picks: [XAXIS, TOP_AXIS] },
+  {
+    mode: "pointPerpendicularLine",
+    picks: [{ kind: "point", p: [0.25, 0.5] }, XAXIS],
+  },
+  {
+    mode: "pointLineThrough",
+    picks: [
+      { kind: "point", p: [0, 2] },
+      XAXIS,
+      { kind: "point", p: [0, 1] },
+    ],
+  },
+  {
+    mode: "pointToLinePointToLine",
+    picks: [
+      { kind: "point", p: [0, 1] },
+      XAXIS,
+      { kind: "point", p: [0, 0] },
+      TOP_AXIS,
+    ],
+  },
+  {
+    mode: "pointLinePerpendicular",
+    picks: [{ kind: "point", p: [0, 1] }, XAXIS, YAXIS],
+  },
+  { mode: "existingLine", picks: [XAXIS] },
+];
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -247,6 +294,79 @@ describe("求まった折り線でFoldThroughを送る", () => {
     // 折り終えたら合わせの途中経過も捨てる
     expect(useAppStore.getState().alignDraft).toBeNull();
     expect(useAppStore.getState().foldDraft).toBeNull();
+  });
+});
+
+describe("折り返す紙の自動決定", () => {
+  it("8方式を走査し、1つ目から決まる5方式と決められない3方式を区別する", () => {
+    const coveredModes = AUTOMATIC_SIDE_CASES.map(({ mode }) => mode);
+    const allModes = Object.keys(ALIGN_STEPS) as AlignMode[];
+    // 合わせ方が増えたとき、検査表へ足さないまま合格させない。
+    expect(new Set(coveredModes).size).toBe(AUTOMATIC_SIDE_CASES.length);
+    expect([...coveredModes].sort()).toEqual([...allModes].sort());
+
+    const determined: AlignMode[] = [];
+    const undetermined: AlignMode[] = [];
+    for (const { mode, picks } of AUTOMATIC_SIDE_CASES) {
+      useAppStore.getState().beginAlign(mode);
+      for (const pick of picks) useAppStore.getState().pickAlignTarget(pick);
+
+      const draft = useAppStore.getState().foldDraft;
+      expect(draft, `${mode}で折り線が求まる`).not.toBeNull();
+      if (!draft) continue;
+      const automatic = automaticMovingSide(draft.line, picks[0]);
+      // 自動で決められないときは従来の中点判定を保ちつつ、黄色と説明を出す。
+      expect(draft.movingSide, mode).toBe(initialMovingSide(draft.line, picks[0]));
+      (automatic === null ? undetermined : determined).push(mode);
+    }
+
+    expect(determined).toHaveLength(5);
+    expect(undetermined).toEqual([
+      "throughTwoPoints",
+      "pointPerpendicularLine",
+      "existingLine",
+    ]);
+  });
+
+  it("線が折り線をまたぐと決め付けず、片端だけが折り線上ならもう一端の側を使う", () => {
+    const foldLine: [Vec2, Vec2] = [
+      [-1, 0],
+      [1, 0],
+    ];
+    expect(
+      automaticMovingSide(foldLine, {
+        kind: "line",
+        a: [0, 1],
+        b: [0, -1],
+      }),
+    ).toBeNull();
+    expect(
+      automaticMovingSide(foldLine, {
+        kind: "line",
+        a: [0, 0],
+        b: [0, 1],
+      }),
+    ).toBe("left");
+    expect(
+      automaticMovingSide(foldLine, {
+        kind: "line",
+        a: [0, 0],
+        b: [0, -1],
+      }),
+    ).toBe("right");
+
+    // またぐ線は判定不能と説明する一方、既存の折り結果は旧来の中点側に保つ。
+    const verticalFold: [Vec2, Vec2] = [
+      [0, -1],
+      [0, 1],
+    ];
+    const crossing = {
+      kind: "line" as const,
+      a: [-2, 0] as Vec2,
+      b: [1, 0] as Vec2,
+    };
+    expect(automaticMovingSide(verticalFold, crossing)).toBeNull();
+    expect(initialMovingSide(verticalFold, crossing)).toBe("left");
   });
 });
 

@@ -78,8 +78,9 @@ bool surfaceOwnerVisible( const in vec4 expected ) {
 `;
 
 /**
- * 画面幅を持つLine2は、fragment中心ではなく中心線が属する面で可視性を決める。
- * これにより上面の外周は全幅を保ち、下面の線は外周近傍へにじまない。
+ * 画面幅を持つLine2は、まず中心線が論理的に見える辺かを調べ、その後に描く
+ * fragment自身のownerも照合する。中心線だけで4〜16pxの全幅を許可すると、
+ * 接面の内側1pxが見えているだけで別の紙面上まで強調色が広がるためである。
  */
 const OWNER_LINE_FRAGMENT_SUPPORT = /* glsl */ `
 uniform vec2 surfaceOwnerLineStart;
@@ -89,7 +90,7 @@ uniform float surfaceOwnerLineProbeSupplied;
 uniform float surfaceOwnerLineCenterValid;
 uniform float surfaceOwnerLineInwardValid;
 
-bool surfaceOwnerLineVisible( const in vec4 expected ) {
+bool surfaceOwnerLineCenterVisible( const in vec4 expected ) {
   if ( surfaceOwnerEnabled < 0.5 || surfaceOwnerMode < 0.5 ) return true;
   if ( surfaceOwnerMode < 1.5 && surfaceOwnerLineProbeSupplied > 0.5 ) {
     // A caller-provided physical-edge probe is an exact contract.  If its
@@ -127,6 +128,13 @@ bool surfaceOwnerLineVisible( const in vec4 expected ) {
     }
     return false;
   }
+  return true;
+}
+
+bool surfaceOwnerLineVisible( const in vec4 expected ) {
+  if ( ! surfaceOwnerLineCenterVisible( expected ) ) return false;
+  // 中心線が見えていても、Line2の全幅を一括で通さない。各fragmentについて
+  // expected owner（または紙の外周に接する背景）だけを残し、foreign paperは捨てる。
   return surfaceOwnerVisible( expected );
 }
 `;

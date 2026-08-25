@@ -1,7 +1,26 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const css = readFileSync(new URL("../App.css", import.meta.url), "utf8");
+const tokensCss = readFileSync(
+  new URL("../styles/tokens.css", import.meta.url),
+  "utf8",
+);
+const themesCss = readFileSync(
+  new URL("../styles/themes.css", import.meta.url),
+  "utf8",
+);
+const viewerCss = readFileSync(
+  new URL("../styles/viewer.css", import.meta.url),
+  "utf8",
+);
+const contextCss = readFileSync(
+  new URL("../styles/context.css", import.meta.url),
+  "utf8",
+);
+const dialogsCss = readFileSync(
+  new URL("../styles/dialogs.css", import.meta.url),
+  "utf8",
+);
 const appStoreSource = readFileSync(
   new URL("../store/appStore.ts", import.meta.url),
   "utf8",
@@ -82,9 +101,9 @@ const modalScreens = [
   },
 ] as const;
 
-function declarationBlock(selector: string): string {
+function declarationBlock(selector: string, ownerCss = dialogsCss): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\}`).exec(css);
+  const match = new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\}`).exec(ownerCss);
   if (match === null) throw new Error(`CSSブロックがありません: ${selector}`);
   return match[1];
 }
@@ -143,17 +162,20 @@ describe("1000×700の全画面と手前・後ろの区別", () => {
     const dialog = declarationBlock(".dialog");
     const capturePortalDialog = declarationBlock(
       'html[data-origami3-capture-view] body > .dialog-backdrop[data-modal-layer="true"]',
+      viewerCss,
     );
     expect(backdrop).toContain("background: var(--color-overlay)");
     expect(backdrop).not.toContain("background: var(--color-scrim)");
     expect(dialog).toContain("background-color: var(--color-surface)");
     expect(capturePortalDialog).toContain("display: none !important");
 
-    const overlayAlphas = [
-      ...css.matchAll(
-        /--color-overlay:\s*rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+)\s*\)/gu,
-      ),
-    ].map((match) => Number(match[1]));
+    const overlayAlphas = [tokensCss, themesCss].flatMap((ownerCss) =>
+      [
+        ...ownerCss.matchAll(
+          /--color-overlay:\s*rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+)\s*\)/gu,
+        ),
+      ].map((match) => Number(match[1])),
+    );
     expect(overlayAlphas).toHaveLength(5);
     // 修正前の実測0.38〜0.46では後ろが54〜62%残った。0.8以上なら
     // 後ろは高々20%となり、手前の不透明な面と明確に分かれる。
@@ -168,7 +190,7 @@ describe("1000×700の全画面と手前・後ろの区別", () => {
     );
     const help = declarationBlock(".help-dialog");
     const guide = declarationBlock(".first-run-guide");
-    const colorPicker = declarationBlock(".color-picker-popover");
+    const colorPicker = declarationBlock(".color-picker-popover", contextCss);
 
     expect(dialog).toContain("max-height: calc(100vh - 32px)");
     expect(dialog).toContain("overflow-y: auto");

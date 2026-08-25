@@ -39,6 +39,18 @@ describe("foldBlockReason", () => {
     expect(foldBlockReason({ ...READY, playT: 0.5 })).toContain("折り途中");
   });
 
+  it("角度の値を受け取り、0°だけなら折れるが0°以外があれば止める", () => {
+    const common = {
+      hasDoc: true,
+      playing: false,
+      playT: 1,
+      currentStep: null,
+      stepCount: 0,
+    };
+    expect(foldBlockReason({ ...common, driverAngles: [0, -0] })).toBeNull();
+    expect(foldBlockReason({ ...common, driverAngles: [0, 45] })).toContain("角度");
+  });
+
   it("最後の手順でも途中の手順でも折れる(途中なら手順が挟まる。SEQ-006)", () => {
     expect(foldBlockReason({ ...READY, currentStep: 3, stepCount: 3 })).toBeNull();
     expect(foldBlockReason({ ...READY, currentStep: 1, stepCount: 3 })).toBeNull();
@@ -73,20 +85,23 @@ describe("viewerHint", () => {
     expect(hint).toContain("再生中");
   });
 
-  it("折り線を引いた後は、3Dの札と下部パネルの両方で決められることを案内する", () => {
+  it("折り返す紙は3D札で確かめ、向きは3D札と下部パネルの両方で決めると案内する", () => {
     const hint = viewerHint({ ...READY, hasFoldDraft: true });
     expect(hint).toContain("折る");
-    expect(hint).toContain(FOLD_DECIDE_PLACES);
-    expect(hint).toContain("向きと動かす側");
+    expect(hint).toContain(
+      "折り返す紙は3Dの「この折り線で折る」の札で確かめ",
+    );
+    expect(hint).toContain("向きは同じ札か下部パネルで選んで");
+    expect(hint).not.toContain("動かす側");
     expect(hint).toContain("やめる");
   });
 
-  it("折り方を決める場所の言い方は、どの案内でも同じ1つにそろえる", () => {
-    // 3Dの札と下部パネルは同じ内容で連動するので、案内ごとに言い換えない
-    expect(FOLD_DECIDE_PLACES).toBe("3D左下の札か下部パネル");
+  it("折り方を決める場所は、画面に見える札の見出しで案内する", () => {
+    expect(FOLD_DECIDE_PLACES).toBe(
+      "3Dの「この折り線で折る」の札か下部パネル",
+    );
     for (const hint of [
       viewerHint(READY),
-      viewerHint({ ...READY, hasFoldDraft: true }),
       viewerHint({
         ...READY,
         alignMode: "lineLine",
@@ -98,6 +113,14 @@ describe("viewerHint", () => {
       // 「下部パネル」だけを指す統一表記を保つこと
       expect(hint.split("下部パネル")).toHaveLength(2);
     }
+
+    // 折り線を引いた後は、直前に固有見出しを示した同じ札を短く指せる。
+    const decided = viewerHint({ ...READY, hasFoldDraft: true });
+    expect(decided).toContain(
+      "折り返す紙は3Dの「この折り線で折る」の札で確かめ",
+    );
+    expect(decided).toContain("向きは同じ札か下部パネルで選んで");
+    expect(decided.split("下部パネル")).toHaveLength(2);
   });
 
   it("技法では選ぶ→層→中心線の順に案内が変わる", () => {

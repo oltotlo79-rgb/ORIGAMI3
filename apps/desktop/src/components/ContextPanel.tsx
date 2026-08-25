@@ -705,7 +705,7 @@ function AlignDraftContent({
   );
 }
 
-/** 引いた折り線の確定UI(向き・対象の層・動かす側を決めて折る) */
+/** 引いた折り線の確定UI(向き・対象の層を決めて折る) */
 function FoldDraftContent({ draft }: { draft: FoldDraft }) {
   const paper = useAppStore((s) => s.doc?.paper ?? null);
   const updateFoldDraft = useAppStore((s) => s.updateFoldDraft);
@@ -722,7 +722,7 @@ function FoldDraftContent({ draft }: { draft: FoldDraft }) {
       <p>
         折り線: ({mm(a[0])}, {mm(a[1])}) →({mm(b[0])}, {mm(b[1])}) mm
       </p>
-      {/* 「向き」「対象の層」「動かす側」は別々の問いなので、1行に1問ずつ置く。
+      {/* 「向き」「対象の層」は別々の問いなので、1行に1問ずつ置く。
           同じ行へ詰めると問いの切れ目が隙間の違いで分からなくなる。
           先頭のラベルは .row-label で同じ列幅にし、答えの左端をそろえる。 */}
       <div className="button-row">
@@ -771,34 +771,8 @@ function FoldDraftContent({ draft }: { draft: FoldDraft }) {
           いちばん上の1枚
         </label>
       </div>
-      {/* 「左/右」は畳み平面の向きで決まるため、カメラを回すと画面の左右と
-          食い違う。画面に合わせるにはカメラの向きが要るので、言葉では側を
-          言い当てず、動く側は立体表示のハイライトで見てもらう */}
-      <div className="button-row">
-        <span className="row-label">動かす側</span>
-        <label>
-          <input
-            type="radio"
-            name="fold-side"
-            data-tooltip="黄色く光る側の紙を動かします"
-            disabled={busy}
-            checked={draft.movingSide === "right"}
-            onChange={() => updateFoldDraft({ movingSide: "right" })}
-          />
-          こちら側
-        </label>
-        <label>
-          <input
-            type="radio"
-            name="fold-side"
-            data-tooltip="黄色く光る側の紙を動かします"
-            disabled={busy}
-            checked={draft.movingSide === "left"}
-            onChange={() => updateFoldDraft({ movingSide: "left" })}
-          />
-          反対側
-        </label>
-      </div>
+      {/* 折り返す紙は1つ目の選択から自動で決め、黄色が見える3D上の札で示す。
+          このパネルで同じ内容を二択として聞き直さない。 */}
       <div className="button-row">
         <button type="button" disabled={busy} onClick={() => void commitFoldDraft()}>
           {busy ? "折り方を確認中…" : "折る"}
@@ -1557,11 +1531,11 @@ function FoldAllPreviewContent() {
       <div className="fold-all-preview-heading">
         <strong>全部いっぺんに折ってみる</strong>
         <strong className="fold-all-preview-promise">
-          これは記録された手順ではない
+          これは仮の形です
         </strong>
       </div>
       <p className="hint">
-        山折りと谷折りを同じ割合で動かして、形だけを見ます。
+        山折りと谷折りを同じ割合で動かして、形だけを見ます。手順には記録されません。
       </p>
 
       <div className="fold-all-preview-control">
@@ -1582,7 +1556,7 @@ function FoldAllPreviewContent() {
           onKeyUp={finishFoldAllPercent}
           onBlur={finishFoldAllPercent}
         />
-        <span className="fold-all-preview-min">ひらく 0%</span>
+        <span className="fold-all-preview-min">元に戻る 0%</span>
         <span className="fold-all-preview-max">できるところまで 100%</span>
       </div>
 
@@ -1594,7 +1568,7 @@ function FoldAllPreviewContent() {
         )}
         {preview.layerOrder === "unavailable_without_sequence" && (
           <p className="warning-text">
-            この形は手順を使わずに動かしているため、紙の重なる順番は決められません。
+            紙を順番に折った形ではないため、どの紙が上になるかは決まっていません。
           </p>
         )}
         {preview.converged === false && (

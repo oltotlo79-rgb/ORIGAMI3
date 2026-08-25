@@ -4,11 +4,26 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 // vitestは.cssのimportを空にするため、既存のuiTokens.test.tsと同じく直に読む。
-const appCss = readFileSync(new URL("../App.css", import.meta.url), "utf8").replace(
-  /\r\n/g,
-  "\n",
+const baseLayoutCss = readFileSync(
+  new URL("../styles/base-layout.css", import.meta.url),
+  "utf8",
+).replace(/\r\n/g, "\n");
+const viewerCss = readFileSync(
+  new URL("../styles/viewer.css", import.meta.url),
+  "utf8",
+).replace(/\r\n/g, "\n");
+const contextCss = readFileSync(
+  new URL("../styles/context.css", import.meta.url),
+  "utf8",
+).replace(/\r\n/g, "\n");
+const responsiveCss = readFileSync(
+  new URL("../styles/responsive.css", import.meta.url),
+  "utf8",
+).replace(/\r\n/g, "\n");
+const viewerStatusOverlaysSource = readFileSync(
+  new URL("./ViewerStatusOverlays.tsx", import.meta.url),
+  "utf8",
 );
-const appSource = readFileSync(new URL("../App.tsx", import.meta.url), "utf8");
 const viewerSource = readFileSync(
   new URL("./Viewer3D/Viewer3D.tsx", import.meta.url),
   "utf8",
@@ -18,10 +33,16 @@ const overlayStackSource = readFileSync(
   "utf8",
 );
 
+const baseSelectors = new Set([
+  ".viewer-overlay-scroll-controls > button",
+  ".suspect-hinge-guide",
+]);
+
 function cssDeclarations(selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const ownerCss = baseSelectors.has(selector) ? baseLayoutCss : viewerCss;
   return (
-    appCss.match(new RegExp(`(?:^|\\n)\\s*${escaped}\\s*\\{([^}]*)\\}`, "s"))?.[1] ??
+    ownerCss.match(new RegExp(`(?:^|\\n)\\s*${escaped}\\s*\\{([^}]*)\\}`, "s"))?.[1] ??
     ""
   );
 }
@@ -54,18 +75,18 @@ describe("操作案内の狭幅CSS", () => {
   });
 
   it("2D・3D・下部パネルそれぞれの実幅で省スペース表示へ切り替える", () => {
-    expect(appCss).toMatch(
+    expect(viewerCss).toMatch(
       /\.pane-3d-view\s*\{[^}]*container:\s*viewer-operation-help\s*\/\s*inline-size/s,
     );
-    expect(appCss).toMatch(
+    expect(viewerCss).toMatch(
       /\.cp-editor\s*\{[^}]*container:\s*cp-operation-help\s*\/\s*inline-size/s,
     );
-    expect(appCss).toMatch(
+    expect(contextCss).toMatch(
       /\.context-selection\s*\{[^}]*container:\s*context-operation-help\s*\/\s*inline-size/s,
     );
-    expect(appCss).toMatch(/@container\s+viewer-operation-help\s*\(max-width:/);
-    expect(appCss).toMatch(/@container\s+cp-operation-help\s*\(max-width:/);
-    expect(appCss).toMatch(/@container\s+context-operation-help\s*\(max-width:/);
+    expect(responsiveCss).toMatch(/@container\s+viewer-operation-help\s*\(max-width:/);
+    expect(responsiveCss).toMatch(/@container\s+cp-operation-help\s*\(max-width:/);
+    expect(responsiveCss).toMatch(/@container\s+context-operation-help\s*\(max-width:/);
   });
 
   it("3D幅にかかわらず通知・操作・紙・折り方の札を1本の縦列へ入れる", () => {
@@ -91,25 +112,25 @@ describe("操作案内の狭幅CSS", () => {
     expect(stack).toContain("flex-direction: column;");
     expect(stack).toContain("overflow-y: auto;");
     expect(stack).toContain("pointer-events: none;");
-    expect(appCss).toMatch(
+    expect(responsiveCss).toMatch(
       /@container\s+viewer-operation-help\s*\(max-width:\s*520px\)[\s\S]*\.viewer-operation-hint\.collapsed \.viewer-current-row\s*\{[^}]*grid-template-columns:\s*auto minmax\(0, 1fr\) auto/,
     );
-    expect(appCss).toMatch(
+    expect(responsiveCss).toMatch(
       /\.viewer-operation-hint\.collapsed \.viewer-current-action\s*\{[^}]*grid-column:\s*1 \/ -1[^}]*white-space:\s*normal[^}]*overflow:\s*visible[^}]*text-overflow:\s*clip/,
     );
-    expect(appCss).toMatch(
+    expect(viewerCss).toMatch(
       /\.viewer-overlay-stack > \.viewer-operation-hint\.collapsed,[\s\S]*?\.viewer-overlay-stack > \.paper-action-tip\.expanded\s*\{[^}]*position:\s*relative[^}]*inset:\s*auto[^}]*width:\s*100%[^}]*max-width:\s*100%/,
     );
-    expect(appCss).toMatch(
+    expect(responsiveCss).toMatch(
       /@container\s+viewer-operation-help\s*\(max-width:\s*360px\)[\s\S]*\.viewer-overlay-region\s*\{[^}]*top:\s*148px[^}]*right:\s*var\(--sp-5\)[^}]*bottom:\s*56px/,
     );
-    expect(appCss).toMatch(
+    expect(viewerCss).toMatch(
       /\.viewer-overlay-stack > \.viewer-operation-hint::after\s*\{[^}]*display:\s*none/,
     );
-    expect(appCss).toMatch(
+    expect(viewerCss).toMatch(
       /\.viewer-overlay-stack > \.suspect-hinge-guide,[\s\S]*\.viewer-overlay-stack > \.paper-action-tip\s*\{[^}]*pointer-events:\s*auto/,
     );
-    const stackedCards = appCss.match(
+    const stackedCards = viewerCss.match(
       /\.viewer-overlay-stack > \.status-badge,[\s\S]*?\.viewer-overlay-stack > \.paper-action-tip\.expanded\s*\{([^}]*)\}/,
     )?.[1];
     expect(stackedCards).toBeDefined();
@@ -124,7 +145,7 @@ describe("操作案内の狭幅CSS", () => {
     expect(overlayStackSource).toContain('data-tooltip="3Dの案内を上へ送る"');
     expect(overlayStackSource).toContain('aria-label="3Dの案内を下へ送る"');
     expect(overlayStackSource).toContain('data-tooltip="3Dの案内を下へ送る"');
-    expect(appCss).toMatch(
+    expect(viewerCss).toMatch(
       /\.viewer-overlay-region\[data-overflow="true"\] \.viewer-overlay-stack\s*\{[^}]*bottom:\s*var\(--viewer-overlay-scroll-controls-height\)/,
     );
     expect(cssDeclarations(".viewer-overlay-scroll-controls")).toContain(
@@ -144,14 +165,14 @@ describe("操作案内の狭幅CSS", () => {
       expect(declarations).toContain("white-space: nowrap;");
     }
     expect(statusText).toContain("min-width: 0;");
-    expect(appSource).toContain("data-tooltip={badgeText}");
-    expect(appSource).toContain(
+    expect(viewerStatusOverlaysSource).toContain("data-tooltip={badgeText}");
+    expect(viewerStatusOverlaysSource).toContain(
       'data-tooltip="赤く光る折り目の角度を見直してください。押すと原因候補を選びます"',
     );
-    expect(appCss).toMatch(
+    expect(viewerCss).toMatch(
       /\.viewer-overlay-stack > \.status-badge > span,[\s\S]*\.viewer-overlay-stack \.paper-action-tip-buttons > button\s*\{[^}]*overflow:\s*visible[^}]*text-overflow:\s*clip[^}]*white-space:\s*normal[^}]*overflow-wrap:\s*anywhere/,
     );
-    expect(appCss).toMatch(
+    expect(viewerCss).toMatch(
       /\.viewer-overlay-stack \.paper-action-tip\.expanded > strong\s*\{[^}]*padding-right:\s*calc\(28px \+ var\(--sp-3\)\)/,
     );
   });

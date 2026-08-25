@@ -1,26 +1,40 @@
 // 3Dビューへ重ねる「折り方を決める」札。折り線が決まった間だけ出す。
 //
-// 下のパネルと同じ言葉・同じ順番にそろえる。パネルの並びは
-// 「向き(手前へ折る(谷)/向こうへ折る(山))」→「動かす側(こちら側/反対側)」→「折る」で、
-// ここでも同じ言葉・同じ順番にし、今どちらを選んでいるかは色で分かるようにする。
-//
-// 動かす側を3Dにも置くのは、動く側が黄色く光って見えるのが3Dの中だからで、
-// 見ている場所と選ぶ場所を離さないため。
+// 折り返す紙は1つ目の選択から自動で決め、黄色で見せる。二択として聞き直さず、
+// 意図と違うときだけ単一の「反対側の紙を折り返す」で直せるようにする。
+// 黄色を見る場所と切り替える場所を離さないため、この操作は3Dの札だけに置く。
 //
 // 固定の区画も設定の項目も増やさない。既にある浮かぶ札(PaperActionTip)と
 // 同じ見た目・同じ置き場所を使い、3Dだけで「選ぶ→折り方を決める→折る」まで進めるようにする。
 
-import { useAppStore } from "../../store/appStore";
+import {
+  automaticMovingSide,
+  initialMovingSide,
+  useAppStore,
+} from "../../store/appStore";
 
 export function FoldDirectionTip() {
   const activeTool = useAppStore((s) => s.activeTool);
   const draft = useAppStore((s) => s.foldDraft);
+  const alignDraft = useAppStore((s) => s.alignDraft);
   const busy = useAppStore((s) => s.foldThroughBusy);
   const updateFoldDraft = useAppStore((s) => s.updateFoldDraft);
   const cancelFoldDraft = useAppStore((s) => s.cancelFoldDraft);
   const commitFoldDraft = useAppStore((s) => s.commitFoldDraft);
 
   if (activeTool !== "fold" || !draft) return null;
+
+  const automaticSide = automaticMovingSide(draft.line, alignDraft?.picks[0]);
+  const changedFromAutomatic =
+    alignDraft !== null &&
+    draft.movingSide !== initialMovingSide(draft.line, alignDraft.picks[0]);
+  const sideMessage = !alignDraft
+    ? "黄色で示した紙を折り返します"
+    : changedFromAutomatic
+      ? "反対側へ切り替えた紙を黄色で示しています"
+      : automaticSide === null
+        ? "自動で決められません。今は黄色で示した紙を折り返します"
+        : "1つ目に選んだものがある紙を黄色で示しています";
 
   return (
     <aside
@@ -51,24 +65,21 @@ export function FoldDirectionTip() {
         </button>
       </div>
       <div className="paper-action-tip-buttons fold-direction-tip-buttons">
-        <span className="row-label">動かす側</span>
+        <span className="row-label">折り返す紙</span>
+        <span aria-live="polite">
+          {sideMessage}
+        </span>
         <button
           type="button"
-          aria-pressed={draft.movingSide === "right"}
           disabled={busy}
-          data-tooltip="黄色く光る側の紙を動かします"
-          onClick={() => updateFoldDraft({ movingSide: "right" })}
+          data-tooltip="黄色で示す紙を反対側へ切り替えます"
+          onClick={() =>
+            updateFoldDraft({
+              movingSide: draft.movingSide === "right" ? "left" : "right",
+            })
+          }
         >
-          こちら側
-        </button>
-        <button
-          type="button"
-          aria-pressed={draft.movingSide === "left"}
-          disabled={busy}
-          data-tooltip="黄色く光る側の紙を動かします"
-          onClick={() => updateFoldDraft({ movingSide: "left" })}
-        >
-          反対側
+          反対側の紙を折り返す
         </button>
       </div>
       <div className="paper-action-tip-buttons">

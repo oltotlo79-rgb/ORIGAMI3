@@ -1,0 +1,935 @@
+@layer viewer {
+/* 3D区画は内側を上下に分ける(立体表示 + 手順タイムライン)。
+   常設区画は4つのままで、タイムラインは3D区画の一部として置く */
+.pane-3d {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) 96px;
+  background: var(--color-canvas-3d);
+}
+
+.pane-3d-view {
+  position: relative;
+  container: viewer-operation-help / inline-size;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  box-shadow: var(--shadow-canvas-3d);
+}
+
+/* 3D上の文字札はすべて同じ領域の1列へ積み、札同士を重ねない。右の視点立方体を
+   避け、高さ不足時だけ上下の送りボタンを出す。DOM上の包みは常設区画を増やさない。 */
+.viewer-overlay-region {
+  position: absolute;
+  top: var(--sp-5);
+  bottom: var(--sp-5);
+  left: var(--sp-5);
+  z-index: 7;
+  width: min(430px, calc(100% - 164px));
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.viewer-overlay-stack {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-3);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  pointer-events: none;
+  scrollbar-gutter: stable;
+}
+
+/* ボタン行を札と重ねず、その上までを送れる表示領域にする。 */
+.viewer-overlay-region[data-overflow="true"] .viewer-overlay-stack {
+  bottom: var(--viewer-overlay-scroll-controls-height);
+}
+
+.viewer-overlay-scroll-controls {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  height: var(--viewer-overlay-scroll-controls-height);
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  pointer-events: none;
+}
+
+.viewer-overlay-stack > .status-badge,
+.viewer-overlay-stack > .suspect-hinge-guide,
+.viewer-overlay-stack > .viewer-operation-hint,
+.viewer-overlay-stack > .viewer-operation-hint.collapsed,
+.viewer-overlay-stack > .paper-action-tip,
+.viewer-overlay-stack > .paper-action-tip.compact,
+.viewer-overlay-stack > .paper-action-tip.expanded {
+  position: relative;
+  inset: auto;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  left: auto;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  max-height: none;
+  box-sizing: border-box;
+  flex: none;
+  margin: 0;
+}
+
+/* 状態札と操作説明は従来どおり紙のクリックを通す。押せる札だけを受け取りへ戻す。 */
+.viewer-overlay-stack > .suspect-hinge-guide,
+.viewer-overlay-stack > .paper-action-tip {
+  pointer-events: auto;
+}
+
+/* 縦列では吹き出しの尻尾を使わない。張り出した20pxの菱形が次の札へ重ならない。 */
+.viewer-overlay-stack > .viewer-operation-hint::after {
+  display: none;
+}
+
+/* 列では「…」で内容を捨てず、高さ方向へ折り返す。列そのものを送れるので、
+   通知・道具名・紙操作の題とボタンを最後まで読んでも3D区画からはみ出さない。 */
+.viewer-overlay-stack > .status-badge > span,
+.viewer-overlay-stack > .suspect-hinge-guide,
+.viewer-overlay-stack .viewer-mode-copy strong,
+.viewer-overlay-stack .paper-action-tip.expanded > strong,
+.viewer-overlay-stack .paper-action-tip.compact,
+.viewer-overlay-stack .paper-action-tip-buttons > button {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.viewer-overlay-stack .paper-action-tip.expanded > strong {
+  padding-right: calc(28px + var(--sp-3));
+}
+
+/* 手順タイムライン(3D区画の下側・96px) */
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-5) var(--sp-2);
+  background: var(--timeline-background);
+  border-top: var(--panel-border-width) solid var(--panel-border-color);
+  box-shadow: var(--shadow-timeline);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.timeline-controls {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: center;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.timeline-steps {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: var(--sp-2);
+}
+
+/* 手順1つぶんの枠(「ここに挿入」ボタン+手順チップ) */
+.timeline-slot {
+  display: inline-flex;
+  align-items: stretch;
+  gap: var(--sp-1);
+  flex: none;
+}
+
+.timeline-insert:hover {
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent);
+  color: var(--color-accent-strong);
+  transform: var(--minor-hover-transform);
+}
+
+.timeline-insert.active {
+  border-style: solid;
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+  color: var(--color-accent-strong);
+}
+
+/* 手順の札。番号と技法名が読めるよう、選択中は面で塗って区別する */
+.timeline-chip {
+  flex: none;
+  padding: var(--sp-2) var(--sp-4);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline-chip.selected,
+.timeline-chip.selected:hover:not(:disabled) {
+  background: var(--color-accent);
+  border-color: var(--color-accent-strong);
+  color: var(--color-on-solid);
+  font-weight: var(--fw-bold);
+  box-shadow: var(--shadow-2);
+}
+
+/* 飛ばされた手順は赤系で知らせる(展開図の線ではないので慣例色とは別物) */
+.timeline-chip.skipped,
+.timeline-chip.skipped:hover:not(:disabled) {
+  background: var(--color-danger-soft);
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+
+.timeline-chip.skipped.selected,
+.timeline-chip.skipped.selected:hover:not(:disabled) {
+  background: var(--color-danger);
+  border-color: var(--color-danger);
+  color: var(--color-on-solid);
+}
+
+.note-input {
+  min-width: 180px;
+}
+
+.cp-editor {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  container: cp-operation-help / inline-size;
+}
+
+.cp-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.cp-canvas:focus-visible {
+  outline-offset: -4px;
+}
+
+/* 展開図へ重ねる操作案内。現在できることだけは、詳細を畳んでも残す。 */
+.cp-operation-hint {
+  position: absolute;
+  top: var(--sp-4);
+  left: var(--sp-4);
+  z-index: 3;
+  max-width: min(520px, calc(100% - 150px));
+  box-sizing: border-box;
+  overflow: hidden;
+  padding: var(--sp-2) var(--sp-3);
+  border: var(--floating-border-width) solid var(--floating-border-color);
+  border-radius: var(--radius-md);
+  background: var(--viewer-hint-background);
+  color: var(--color-text);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-tight);
+  box-shadow: var(--shadow-viewer-hint);
+  backdrop-filter: var(--floating-backdrop-filter);
+  pointer-events: none;
+}
+
+.cp-operation-current {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.cp-operation-current > span {
+  flex: none;
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-pill);
+  background: var(--color-secondary);
+  color: var(--color-on-solid);
+  font-weight: var(--fw-bold);
+}
+
+.cp-operation-current > strong {
+  min-width: 0;
+}
+
+.cp-operation-hint p {
+  margin: var(--sp-2) 0;
+  color: var(--color-text-muted);
+}
+
+/* 4か所の詳しい操作ボタンは、flex内でも文字1字分まで縮ませない。
+   入らない区画では下のcontainer queryが文言をアイコンへ置き換える。 */
+.operation-detail-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operation-detail-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operation-detail-icon {
+  flex: none;
+}
+
+/* 詳細を畳んでも残す要点は常に1行。全文は同じ要素のdata-tooltipで読める。 */
+.operation-summary-line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cp-operation-hint.collapsed {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+/* 展開図区画の中で、現在どこまで折った状態かを常に示す。 */
+.cp-step-indicator {
+  position: absolute;
+  top: var(--sp-4);
+  right: var(--sp-4);
+  z-index: 3;
+  padding: var(--sp-2) var(--sp-4);
+  border: var(--floating-border-width) solid var(--floating-border-color);
+  border-radius: var(--radius-pill);
+  background: var(--viewer-hint-background);
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-tight);
+  box-shadow: var(--shadow-viewer-hint);
+  backdrop-filter: var(--floating-backdrop-filter);
+  cursor: help;
+}
+
+.viewer3d-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none; /* ドラッグでの視点操作を優先する */
+}
+
+/*
+ * 解説画像の自動撮影時だけ、対象canvasをウィンドウ全面へ広げる。
+ * 属性はwindow.__origami3Captureが一時的に付けるため、通常UIには影響しない。
+ */
+html[data-origami3-capture-view] .app {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+html[data-origami3-capture-view] .app > .toolbar,
+html[data-origami3-capture-view] .app > .context-panel,
+html[data-origami3-capture-view] .app > .dialog-backdrop,
+html[data-origami3-capture-view] .app > .first-run-guide,
+html[data-origami3-capture-view] .tool-rail,
+html[data-origami3-capture-view] .pane-splitter,
+html[data-origami3-capture-view] .context-panel-splitter,
+html[data-origami3-capture-view] .timeline,
+html[data-origami3-capture-view] body > .dialog-backdrop[data-modal-layer="true"] {
+  display: none !important;
+}
+
+html[data-origami3-capture-view] .main-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) !important;
+  height: 100%;
+}
+
+html[data-origami3-capture-view] .pane,
+html[data-origami3-capture-view] .pane-3d-view {
+  width: 100%;
+  height: 100%;
+}
+
+html[data-origami3-capture-view] .pane-3d {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+html[data-origami3-capture-view="3d"] .pane-2d,
+html[data-origami3-capture-view="cp"] .pane-3d {
+  display: none;
+}
+
+html[data-origami3-capture-view="both"] .main-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+
+html[data-origami3-capture-view] .viewer-operation-hint,
+html[data-origami3-capture-view] .paper-action-tip,
+html[data-origami3-capture-view] .view-cube,
+html[data-origami3-capture-view] .viewer-reset,
+html[data-origami3-capture-view] .status-badge,
+html[data-origami3-capture-view] .suspect-hinge-guide {
+  display: none !important;
+}
+
+/* 3D区画右上の警告/エラーバッジ */
+.status-badge {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  top: var(--sp-4);
+  right: 152px;
+  max-width: min(430px, calc(100% - 164px));
+  padding: var(--sp-2) var(--sp-5);
+  border: var(--floating-border-width) solid var(--color-on-solid);
+  border-radius: var(--radius-pill);
+  background: var(--color-warn-badge);
+  color: var(--color-on-solid);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-tight);
+  letter-spacing: 0.02em;
+  box-shadow: var(--shadow-status);
+  animation: badge-pop var(--t-entrance) both;
+  /* 狭い3D区画では操作案内と重なるため、重要な状態を必ず手前へ出す。 */
+  z-index: 6;
+  /* 見せるだけの札で押す場所が無いため、下の紙・線・点のクリックを通す。 */
+  pointer-events: none;
+}
+
+.status-badge.error {
+  background: var(--color-danger);
+  box-shadow: var(--shadow-status-danger);
+}
+
+/* 自然追従は警告ではなく補助情報なので、作品より目立たない札にする。 */
+.status-badge.follow {
+  border-color: var(--color-border);
+  background: var(--color-surface-raised);
+  color: var(--color-text-muted);
+  font-weight: 400;
+  letter-spacing: 0;
+  box-shadow: var(--shadow-1);
+}
+
+.status-badge.follow .status-icon {
+  opacity: 0.55;
+  filter: none;
+}
+
+/* 通知の段が折り返すと、直下の3D操作札へ高さが食い込む。全文は吹き出しで読めるため、
+   札自体は1行に保ち、決めてある40px刻みの縦位置を崩さない。 */
+.status-badge > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.suspect-hinge-guide:hover,
+.suspect-hinge-guide:focus-visible {
+  background: var(--color-collision-surface-hover);
+  color: var(--color-collision-text);
+  box-shadow: var(--shadow-collision-guide-hover);
+}
+
+.status-icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--color-on-solid);
+  filter: var(--status-icon-filter);
+}
+
+/* 3D操作の吹き出し(UI-009/UI-012)。現在モードとマウス割り当てをカードで示す。
+   区画は増やさず立体表示へ重ね、詳しい割り当てだけを折りたためる。 */
+.viewer-operation-hint {
+  position: absolute;
+  top: var(--sp-5);
+  left: var(--sp-5);
+  right: 152px;
+  width: auto;
+  max-width: 430px;
+  box-sizing: border-box;
+  padding: var(--sp-4);
+  border: var(--floating-border-width) solid var(--floating-border-color);
+  border-radius: var(--radius-lg);
+  background: var(--viewer-hint-background);
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-tight);
+  box-shadow: var(--shadow-viewer-hint);
+  backdrop-filter: var(--floating-backdrop-filter);
+  z-index: 4;
+  /* 札は読むためだけのものなので、下の紙・線・点のクリックをそのまま通す。
+     押せるのは中の開閉ボタン(.viewer-hint-toggle)だけで、そこにpointer-events: autoを戻す。
+     展開図側の同じ札(.cp-operation-hint / .cp-help-toggle)と同じやり方にそろえる。 */
+  pointer-events: none;
+  transition:
+    width var(--t-base),
+    background var(--t-fast),
+    transform var(--t-fast);
+}
+
+.viewer-operation-hint::after {
+  content: "";
+  position: absolute;
+  left: var(--sp-8);
+  bottom: -13px;
+  width: 20px;
+  height: 20px;
+  border-right: var(--floating-border-width) solid var(--floating-border-color);
+  border-bottom: var(--floating-border-width) solid var(--floating-border-color);
+  background: inherit;
+  transform: rotate(45deg);
+}
+
+/* たたんだ札は3D区画をほとんど取らない。中身の幅にそろえ、丸みも背丈も小さくする。
+   実測(1280×860・ポップ): たたむ前 430×95.1px → たたんだあと 高さ約34px。 */
+.viewer-operation-hint.collapsed {
+  width: max-content;
+  max-width: calc(100% - 152px - var(--sp-5));
+  right: auto;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-pill);
+}
+
+/* 丸い札に四角い尻尾は付けない(角がはみ出して見えるため)。 */
+.viewer-operation-hint.collapsed::after {
+  display: none;
+}
+
+.viewer-operation-hint.blocked {
+  background: var(--viewer-hint-blocked-background);
+  border-color: var(--floating-border-color);
+}
+
+/* 右上の警告の札は案内と同じ高さに出るため、実測で 79×23px 重なり、
+   開閉ボタン(幅115px)の72pxを覆っていた。警告が出ている間は案内を1段下げ、
+   上下に並べる。警告の札(高さ27.4px)と食い込みの案内(同42px)の順に避ける。 */
+.pane-3d-view:has(.status-badge) .viewer-operation-hint {
+  top: calc(var(--sp-4) + 36px);
+}
+
+.pane-3d-view:has(.suspect-hinge-guide) .viewer-operation-hint {
+  top: calc(var(--sp-4) + 78px);
+}
+
+.viewer-operation-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.viewer-mode-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border-radius: 50%;
+  background: linear-gradient(145deg, var(--color-secondary-soft), var(--color-accent-soft));
+  color: var(--color-secondary);
+}
+
+.viewer-mode-icon .tool-icon {
+  width: 24px;
+  height: 24px;
+}
+
+.viewer-mode-copy {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.viewer-mode-copy small,
+.viewer-mouse-assignment small {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.viewer-mode-copy strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-secondary-strong);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-black);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.viewer-current-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+}
+
+/* たたんだ札は、道具の絵・モード名・いまできること・開閉ボタンの横1行にする。
+   絵と名前は縮めず、長い案内文だけを詰める。 */
+.viewer-operation-hint.collapsed .viewer-current-row {
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  margin-top: 0;
+}
+
+.viewer-mode-icon.compact {
+  width: 24px;
+  height: 24px;
+}
+
+.viewer-mode-icon.compact .tool-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.viewer-mode-name {
+  min-width: 0;
+  color: var(--color-secondary-strong);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-black);
+  white-space: nowrap;
+}
+
+.viewer-current-action {
+  min-width: 0;
+  flex: 1;
+  margin: 0;
+  color: var(--color-text);
+  font-weight: var(--fw-bold);
+}
+
+/* 開いた札は縦に余裕があるので、いまできることを最後まで読めるようにする。
+   たたんだ1行の札では今までどおり1行に収め、続きは吹き出しで読む。
+   実測(1280×860): 折るモードの案内は636px必要で、1行だと242pxしか出せなかった。 */
+.viewer-operation-hint.expanded .viewer-current-action {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.viewer-mouse-assignments {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+  padding-top: var(--sp-3);
+  border-top: var(--control-border-width) dashed var(--color-secondary-soft);
+}
+
+.viewer-mouse-assignment {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-secondary-soft);
+}
+
+.viewer-mouse-assignment > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+/* 開いた札は縦に余裕があるので、割り当ての言葉を「…」で切らずに折り返す。
+   実測(1280×860・430px幅): 「山折り線・谷折り線・補助線・紙の輪郭の辺を選ぶ／視点を
+   回す」は1行に入らず、「山折り線・谷折り線...」までしか読めなかった。 */
+.viewer-mouse-assignment strong {
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+  word-break: auto-phrase;
+}
+
+.viewer-mouse-assignment {
+  align-items: flex-start;
+}
+
+.mouse-glyph {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  fill: var(--color-on-solid);
+  stroke: var(--color-secondary-strong);
+  stroke-width: 1.7;
+}
+
+.mouse-glyph-active {
+  fill: var(--color-pop-yellow);
+  stroke: var(--color-secondary-strong);
+}
+
+.viewer-reset:hover,
+.viewer-reset:focus-visible {
+  background: var(--color-accent);
+  color: var(--color-on-solid);
+  transform: var(--minor-hover-transform);
+}
+
+.viewer-reset:active {
+  box-shadow: none;
+  transform: var(--minor-active-transform);
+}
+
+/* 3D区画右上の視点立方体。常設区画を増やさずcanvasへ重ねる。
+   1面を3×3に割り、中央が面、縁の帯が辺、四隅が角の押し場所になる。 */
+.view-cube {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 5;
+  display: grid;
+  width: 128px;
+  height: 128px;
+  place-items: center;
+  perspective: 400px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.view-cube[data-dragging="true"] {
+  cursor: grabbing;
+}
+
+.view-cube-body {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  transform: rotateX(-22deg) rotateY(35deg);
+  transform-style: preserve-3d;
+  will-change: transform;
+}
+
+/* 面ごとの色。向かい合う面どうしは同じ色にし、色は既存のテーマの変数から取る
+   ので、テーマを切り替えると立方体の色も一緒に変わる。 */
+.view-cube-face-front,
+.view-cube-face-back {
+  --view-cube-face-color: var(--color-accent);
+}
+
+.view-cube-face-left,
+.view-cube-face-right {
+  --view-cube-face-color: var(--color-secondary);
+}
+
+.view-cube-face-top,
+.view-cube-face-bottom {
+  --view-cube-face-color: var(--color-warn-badge);
+}
+
+.view-cube-face {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  display: grid;
+  width: 64px;
+  height: 64px;
+  grid-template-columns: 17px 1fr 17px;
+  grid-template-rows: 17px 1fr 17px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: var(--control-border-width) solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--view-cube-face-color);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+/* 辺は面より明るく、角はさらに明るくして、押す場所の違いを押す前から見せる。 */
+.view-cube-zone[data-view-cube-kind="edge"] {
+  background: var(--color-swatch-highlight-soft);
+}
+
+.view-cube-zone[data-view-cube-kind="corner"] {
+  background-color: var(--color-swatch-highlight);
+  background-image: linear-gradient(
+    var(--color-swatch-highlight-soft),
+    var(--color-swatch-highlight-soft)
+  );
+}
+
+.view-cube[data-dragging="true"] .view-cube-zone {
+  cursor: grabbing;
+}
+
+.view-cube-zone:hover,
+.view-cube-zone:focus-visible,
+.view-cube-zone[data-pointed="true"] {
+  background: var(--color-accent-soft);
+  background-image: none;
+  color: var(--color-accent-strong);
+  box-shadow: inset 0 0 0 2px var(--color-accent);
+  outline: none;
+}
+
+.view-cube-face-front {
+  transform: translateZ(32px);
+}
+
+.view-cube-face-back {
+  transform: rotateY(180deg) translateZ(32px);
+}
+
+.view-cube-face-left {
+  transform: rotateY(-90deg) translateZ(32px);
+}
+
+.view-cube-face-right {
+  transform: rotateY(90deg) translateZ(32px);
+}
+
+.view-cube-face-top {
+  transform: rotateX(90deg) translateZ(32px);
+}
+
+.view-cube-face-bottom {
+  transform: rotateX(-90deg) translateZ(32px);
+}
+
+/* 紙をクリックした初回に出す操作の吹き出し。畳むと同じ場所の小さな入口になる。 */
+.paper-action-tip {
+  position: absolute;
+  left: var(--sp-5);
+  bottom: var(--sp-5);
+  z-index: 5;
+}
+
+.paper-action-tip.expanded {
+  right: 104px;
+  width: auto;
+  max-width: 360px;
+  box-sizing: border-box;
+  /* 題・説明・ボタンの行を縦に積む。行の隙間をここで1回だけ決め、
+     子の margin では作らない(場所ごとに値がばらつくため)。 */
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-5);
+  border: var(--floating-border-width) solid var(--floating-border-color);
+  border-radius: var(--radius-lg);
+  background: var(--paper-tip-background);
+  box-shadow: var(--shadow-paper-tip);
+}
+
+.paper-action-tip.expanded > strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-secondary-strong);
+  font-size: var(--fs-lg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.paper-action-tip.expanded p {
+  /* 行の隙間は親の gap が作るので、ここでは閉じるボタンを避ける右の余白だけ。 */
+  margin: 0 var(--sp-7) 0 0;
+  color: var(--color-text-muted);
+  line-height: var(--lh-normal);
+  text-wrap-style: pretty;
+}
+
+.paper-action-tip.compact {
+  box-sizing: border-box;
+  max-width: calc(100% - 40px);
+  min-height: 32px;
+  overflow: hidden;
+  padding: var(--sp-2) var(--sp-5);
+  border: var(--control-border-width) solid var(--color-pop-yellow);
+  border-radius: var(--radius-pill);
+  border-color: var(--color-pop-yellow);
+  background: var(--color-surface-translucent-strong);
+  color: var(--color-text);
+  font-family: inherit;
+  font-weight: var(--fw-bold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: var(--shadow-button);
+}
+
+.paper-action-tip-close {
+  position: absolute;
+  top: var(--sp-3);
+  right: var(--sp-3);
+  width: 28px;
+  min-height: 28px !important;
+  padding: 0 !important;
+  border-radius: 50% !important;
+}
+
+.paper-action-tip-buttons {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  /* 下のパネルの .button-row と同じ隙間にする。--sp-2(4px)では影(0 3px 0)が
+     隣のボタンへ掛かり、2つが1つに見えていた。 */
+  gap: var(--sp-3);
+}
+
+.paper-action-tip-buttons > button {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 3Dに重ねる「折る向き」の入口。今どちらを選んでいるかを色で示す。
+   下のパネルの「向き」で選んだ丸印と同じ役割なので、他の選択済みボタン
+   (.mirror-axis-buttons / .grid-division-presets)と同じ見た目にそろえる。 */
+.fold-direction-tip-buttons > button[aria-pressed="true"] {
+  border-color: var(--color-accent-strong);
+  background: var(--color-accent);
+  color: var(--color-on-solid);
+  box-shadow: var(--shadow-selected-control);
+}
+
+/* 続けて並ぶ行の「問いの名前」に共通の列幅を与え、答えの操作部品の左端をそろえる。
+   ラベルの無い行(「折る」「やめる」など主操作だけの行)は問いではないので、
+   区画の左端から始めてよい。行ごとに幅の違うラベルを置くと列がずれるため、
+   幅の指定は各所へ書かず、この1か所と --row-label-width だけで決める。 */
+.row-label {
+  flex: none;
+  min-width: var(--row-label-width);
+  align-self: center;
+}
+
+@keyframes badge-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.86);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+}

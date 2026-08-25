@@ -1,0 +1,15 @@
+/*
+ * 4-D の cascade/import 契約。
+ * layer の強さはここで1回だけ宣言し、import もこの順序から動かさない。
+ * 各leafは担当する @layer の中だけへ規則を置き、index自身にはselectorを書かない。
+ * base-layout.cssだけが base/layout の2層を持つため、leafはplain importとする。
+ */
+@layer tokens, themes, base, layout, viewer, context, dialogs, responsive;
+
+@import "./tokens.css";
+@import "./themes.css";
+@import "./base-layout.css";
+@import "./viewer.css";
+@import "./context.css";
+@import "./dialogs.css";
+@import "./responsive.css";

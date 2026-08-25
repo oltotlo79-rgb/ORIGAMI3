@@ -6,27 +6,95 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { UI_THEMES } from "../lib/displayPrefs";
 
-const appCss = readFileSync(new URL("../App.css", import.meta.url), "utf8").replace(
-  /\r\n/g,
-  "\n",
-);
+const tokensCss = readFileSync(
+  new URL("../styles/tokens.css", import.meta.url),
+  "utf8",
+).replace(/\r\n/g, "\n");
+const themesCss = readFileSync(
+  new URL("../styles/themes.css", import.meta.url),
+  "utf8",
+).replace(/\r\n/g, "\n");
+const baseLayoutCss = readFileSync(
+  new URL("../styles/base-layout.css", import.meta.url),
+  "utf8",
+).replace(/\r\n/g, "\n");
+const viewerCss = readFileSync(
+  new URL("../styles/viewer.css", import.meta.url),
+  "utf8",
+).replace(/\r\n/g, "\n");
+const contextCss = readFileSync(
+  new URL("../styles/context.css", import.meta.url),
+  "utf8",
+).replace(/\r\n/g, "\n");
+const dialogsCss = readFileSync(
+  new URL("../styles/dialogs.css", import.meta.url),
+  "utf8",
+).replace(/\r\n/g, "\n");
+const responsiveCss = readFileSync(
+  new URL("../styles/responsive.css", import.meta.url),
+  "utf8",
+).replace(/\r\n/g, "\n");
+
+const baseLayoutSelectors = new Set([
+  '.app label > input\\[type="radio"\\]',
+  ".number-stepper",
+  ".number-stepper-controls",
+  ".tool-button.small",
+  ".tool-submenu",
+]);
+const viewerSelectors = new Set([
+  ".row-label",
+  ".paper-action-tip-buttons",
+  ".paper-action-tip.expanded",
+  ".viewer-operation-hint.collapsed",
+  ".viewer-operation-hint.collapsed .viewer-current-row",
+  ".viewer-operation-hint.expanded .viewer-current-action",
+  ".viewer-mode-name",
+  ".viewer-mode-icon.compact",
+]);
+const contextSelectors = new Set([
+  ".button-row",
+  ".fold-direction-tip-buttons > .row-label",
+]);
 
 function cssDeclarations(selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return appCss.match(new RegExp(`(?:^|\\n)${escaped}\\s*\\{([^}]*)\\}`, "s"))?.[1] ?? "";
+  const ownerCss =
+    selector === ":root"
+      ? tokensCss
+      : selector.startsWith('.app[data-theme="')
+        ? themesCss
+        : baseLayoutSelectors.has(selector)
+          ? baseLayoutCss
+          : viewerSelectors.has(selector)
+            ? viewerCss
+            : contextSelectors.has(selector)
+              ? contextCss
+              : responsiveCss;
+  return ownerCss.match(new RegExp(`(?:^|\\n)${escaped}\\s*\\{([^}]*)\\}`, "s"))?.[1] ?? "";
 }
 
 /** 注釈を外し、宣言の中に出てくる生のpx値だけを拾う。 */
 function rawPixelDeclarations(property: string): string[] {
-  const withoutComments = appCss.replace(/\/\*[\s\S]*?\*\//g, "\n");
   const found: string[] = [];
-  for (const match of withoutComments.matchAll(
-    new RegExp(`^\\s*${property}\\s*:\\s*([^;]+);`, "gm"),
-  )) {
-    const value = match[1].trim();
-    if (value.includes("var(--")) continue;
-    if (/^0(px)?$/.test(value)) continue;
-    if (/-?\d+(\.\d+)?px/.test(value)) found.push(`${property}: ${value}`);
+  for (const [owner, source] of [
+    ["base-layout", baseLayoutCss],
+    ["viewer", viewerCss],
+    ["context", contextCss],
+    ["dialogs", dialogsCss],
+    ["responsive", responsiveCss],
+  ] as const) {
+    const withoutComments = source.replace(/\/\*[\s\S]*?\*\//g, "\n");
+    for (const match of withoutComments.matchAll(
+      new RegExp(`^\\s*${property}\\s*:\\s*([^;]+);`, "gm"),
+    )) {
+      const value = match[1].trim();
+      if (value.includes("var(--")) continue;
+      if (/^0(px)?$/.test(value)) continue;
+      if (/-?\d+(\.\d+)?px/.test(value)) {
+        found.push(`${owner}: ${property}: ${value}`);
+      }
+    }
   }
   return found;
 }
@@ -48,7 +116,7 @@ describe("行の列ぞろえ", () => {
   });
 
   it("幅は1か所だけで決め、各所へ書き足さない", () => {
-    const uses = appCss.match(/var\(--row-label-width\)/g) ?? [];
+    const uses = viewerCss.match(/var\(--row-label-width\)/g) ?? [];
     expect(uses.length).toBe(1);
   });
 });
@@ -59,7 +127,7 @@ describe("文字と枠・隣の要素の隙間", () => {
       '.app label > input\\[type="radio"\\]',
     );
     // 実際の宣言は checkbox と radio をまとめて書いてある。
-    expect(appCss).toMatch(
+    expect(baseLayoutCss).toMatch(
       /\.app label > input\[type="checkbox"\],\s*\n\.app label > input\[type="radio"\] \{[^}]*margin-inline: 0 var\(--sp-3\);/s,
     );
     expect(declarations === "" || declarations.includes("margin-inline")).toBe(true);
@@ -94,15 +162,23 @@ describe("余白は設計トークンで決める", () => {
 
 describe("日本語の折り返し", () => {
   it("一括指定の text-wrap は使わない(white-space を打ち消すため)", () => {
-    const withoutComments = appCss.replace(/\/\*[\s\S]*?\*\//g, "\n");
-    expect(withoutComments).not.toMatch(/^\s*text-wrap\s*:/m);
+    for (const [owner, source] of [
+      ["base-layout", baseLayoutCss],
+      ["viewer", viewerCss],
+      ["context", contextCss],
+      ["dialogs", dialogsCss],
+      ["responsive", responsiveCss],
+    ] as const) {
+      const withoutComments = source.replace(/\/\*[\s\S]*?\*\//g, "\n");
+      expect(withoutComments, owner).not.toMatch(/^\s*text-wrap\s*:/m);
+    }
   });
 
   it("説明文は pretty、短い名前は balance でそろえる", () => {
-    expect(appCss).toMatch(/\.app p,[\s\S]*?text-wrap-style: pretty;/);
-    expect(appCss).toMatch(/\.align-mode-buttons button,[\s\S]*?text-wrap-style: balance;/);
+    expect(baseLayoutCss).toMatch(/\.app p,[\s\S]*?text-wrap-style: pretty;/);
+    expect(baseLayoutCss).toMatch(/\.align-mode-buttons button,[\s\S]*?text-wrap-style: balance;/);
     // 日本語は語の間に空白が無いので、文節で折り返す指定も一緒に置く。
-    expect(appCss).toMatch(/\.app p,[\s\S]*?word-break: auto-phrase;/);
+    expect(baseLayoutCss).toMatch(/\.app p,[\s\S]*?word-break: auto-phrase;/);
   });
 });
 
@@ -134,7 +210,7 @@ describe("3Dの操作案内はたためる", () => {
 
 describe("2Dの操作案内", () => {
   it("狭い区画でも中身の幅で止まり、右端まで伸びない", () => {
-    expect(appCss).toMatch(
+    expect(responsiveCss).toMatch(
       /@container cp-operation-help \(max-width: 520px\) \{[\s\S]*?\.cp-operation-hint \{[^}]*width: max-content;/,
     );
   });
@@ -142,8 +218,8 @@ describe("2Dの操作案内", () => {
 
 describe("道具レール", () => {
   it("窓が低いときは道具10個が収まる大きさへ詰める", () => {
-    expect(appCss).toMatch(/@media \(max-height: 900px\) \{[\s\S]*?\.tool-button \{[^}]*min-height: 44px;/);
-    expect(appCss).toMatch(/@media \(max-height: 760px\) \{[\s\S]*?\.tool-button \{[^}]*min-height: 36px;/);
+    expect(responsiveCss).toMatch(/@media \(max-height: 900px\) \{[\s\S]*?\.tool-button \{[^}]*min-height: 44px;/);
+    expect(responsiveCss).toMatch(/@media \(max-height: 760px\) \{[\s\S]*?\.tool-button \{[^}]*min-height: 36px;/);
   });
 
   it("サブメニューの道具はレールの道具と同じ「絵が上・言葉が下」にする", () => {

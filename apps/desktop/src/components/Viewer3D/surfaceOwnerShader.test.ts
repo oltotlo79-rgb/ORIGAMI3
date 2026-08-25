@@ -309,6 +309,21 @@ describe("surface owner shader", () => {
     expect(material.fragmentShader).toContain(
       "if ( surfaceOwnerLineInwardValid < 0.5 ) return false;",
     );
+    // 中心線が見える場合でも、その判定だけでLine2の全幅を許可してはいけない。
+    // 最後に各fragmentのgl_FragCoordを使うsurfaceOwnerVisibleへ必ず通す。
+    const centerContract = material.fragmentShader.indexOf(
+      "bool surfaceOwnerLineCenterVisible( const in vec4 expected )",
+    );
+    const fragmentContract = material.fragmentShader.indexOf(
+      "if ( ! surfaceOwnerLineCenterVisible( expected ) ) return false;",
+    );
+    const fragmentOwnerCheck = material.fragmentShader.indexOf(
+      "return surfaceOwnerVisible( expected );",
+      fragmentContract,
+    );
+    expect(centerContract).toBeGreaterThan(-1);
+    expect(fragmentContract).toBeGreaterThan(centerContract);
+    expect(fragmentOwnerCheck).toBeGreaterThan(fragmentContract);
     const centerForeignGuard = material.fragmentShader.indexOf(
       "if ( ! surfaceOwnerIsBackground( centerOwner ) ) {",
     );
@@ -608,7 +623,18 @@ describe("surface owner shader", () => {
       // 強調表示は7種類(選択・参照・指している・食い込み・操作中・固定・固定の印)。
       // 紙面の持ち主で絞り込まないのは食い込みだけなので、絞り込む側は6種類。
       expect(highlightMaterials).toHaveLength(7);
-      expect(highlightMaterials.filter(ownerFiltered)).toHaveLength(6);
+      const ownerFilteredHighlights = highlightMaterials.filter(ownerFiltered);
+      expect(ownerFilteredHighlights).toHaveLength(6);
+      expect(
+        ownerFilteredHighlights.every(
+          (material) =>
+            material instanceof LineMaterial &&
+            material.fragmentShader.includes(
+              "if ( ! surfaceOwnerLineCenterVisible( expected ) ) return false;",
+            ) &&
+            material.fragmentShader.includes("return surfaceOwnerVisible( expected );"),
+        ),
+      ).toBe(true);
       expect(highlights.suspectHighlightMaterial.depthTest).toBe(false);
       expect(ownerFiltered(highlights.suspectHighlightMaterial)).toBe(false);
       expect(preview.depthTest).toBe(false);

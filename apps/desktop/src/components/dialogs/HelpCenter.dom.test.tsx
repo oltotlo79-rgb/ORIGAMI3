@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { HelpCenter } from "./HelpCenter";
@@ -23,16 +23,35 @@ function showHelp(): void {
 function HelpKeyboardHarness() {
   return (
     <>
+      <HelpShortcutHarness />
       <button type="button">ヘルプの起点</button>
       <HelpCenter />
     </>
   );
 }
 
+/** Appが常駐させるF1入口を、Help本体のfocus回帰検査でも再現する。 */
+function HelpShortcutHarness() {
+  const openHelp = useAppStore((s) => s.openHelp);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "F1") return;
+      event.preventDefault();
+      openHelp();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [openHelp]);
+
+  return null;
+}
+
 function LowerModalWithHelp() {
   const initialFocusRef = useRef<HTMLButtonElement>(null);
   return (
     <>
+      <HelpShortcutHarness />
       <ModalDialog
         labelledBy="lower-help-test-title"
         initialFocusRef={initialFocusRef}
@@ -289,7 +308,7 @@ describe("ヘルプセンター", () => {
 
   it("閉じた状態からF1で開き、Escで閉じる", () => {
     act(() => useAppStore.setState({ helpOpen: false }));
-    render(<HelpCenter />);
+    render(<HelpKeyboardHarness />);
     expect(screen.queryByRole("dialog")).toBeNull();
 
     const f1 = new KeyboardEvent("keydown", { key: "F1", bubbles: true, cancelable: true });
