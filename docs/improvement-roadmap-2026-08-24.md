@@ -35,7 +35,7 @@
 
 | # | 項目 | 決めた範囲 | 決めなかった／範囲外としたもの |
 |---:|---|---|---|
-| 1 | FOLD 1.2 | **限定profileを承認。** 2D `vertices_coords`、edge topology、B/M/V、`edges_foldAngle`、表現可能な非循環 `faceOrders`、線形step frameを対象にする。F/Uは`Aux`へ縮退し、元指定を警告として残す。 | **F/U完全往復の41～62人日案は不採用。** 3D座標、枝分かれした手順、動画、名前付き技法の意味、注記、仕上げの丸み、FOLDのF/U区別は対象外。画面と文書で必ず「FOLD 1.2 限定」と表示し、「FOLD対応」「FOLD完全対応」とは表示しない。 |
+| 1 | FOLD 1.2 | **限定profileを承認。** 2D `vertices_coords`、edge topology、B/M/V、`edges_foldAngle`、表現可能な非循環 `faceOrders`、線形step frameを対象にする。F/Uは`Aux`へ縮退し、元指定を警告として残す。 | **F/U完全往復の41～62人日案は不採用。** 3D座標、枝分かれした手順、動画、名前付き技法の意味、注記、仕上げの丸み、FOLDのF/U区別は対象外。画面と利用者向け文書では「ほかの折り紙ソフトのファイル」と説明し、形式名や内部の構造名を表示しない。 |
 | 2 | 実利用者15名 | **準備だけを承認。** 課題文、同意文、集計様式、観察手順、keyboard-only自動検査、拡大200%自動検査までを作る。 | 15名sessionの実施は利用者の都合がつく時まで保留する。準備完了や自動検査を15名の実施に代えず、`session 0/15`の間はUI・NFRの点数を上げない。 |
 | 3 | supply-chainと配布保守 | **監視と公開までを承認。** 脆弱性の自動監視、依存更新の提案、静的解析、4配布物のSBOMとSHA-256の公開、license allowlistを対象にする。依存更新は人がreviewし、自動で取り込まない。 | **アプリの自動更新機構は範囲外。** 署名鍵管理、rollback、更新失敗時の継続を別途設計しない限り導入しない。本施策のN/A条件や将来オプションにも含めない。 |
 | 4 | Linux対応 | **見送る。** GUIを使えるLinux環境（実機またはVM）を用意できず、全機能を確認できない。利用者基準「確実にLinuxで全ての機能が使えないなら対応しない」に従う。 | 技術的に不可能だからではない。再開条件を満たすまで、実装・要件改訂・工数計上をしない。対応環境3/10は据え置く。 |
@@ -43,9 +43,9 @@
 | 6 | リリースの範囲 | **施策9は準備までを完了とみなして今版をリリースする。** 施策1〜8、10、11は全単位の合格が必要であり、施策12は見送りのまま条件外とする。 | 施策9の外部実施5単位・7～12人日は**次の版で必ず実施する繰越**であり、やらないことにはしない。外部参加者15名が完了するまで、施策9ぶんのUI・NFR加点は0とする。 |
 | 7 | コード署名 | **2026-08-25から当面は未署名のまま配布する。** Windowsの警告は、理由と安全な導入手順を丁寧に案内する。公開実績が積み上がった時点で、無料の署名プログラムへ改めて申請する。 | 有料の署名（サブスクリプション、証明書の購入、他社サービス）は採らない。費用が発生する判断は利用者が行う。時期は約束しない。 |
 
-### 0A.1 FOLD 1.2 限定表示の利用者約束
+### 0A.1 ほかの折り紙ソフトのファイルの利用者向け説明の約束
 
-施策8の全ての画面、警告、Help、書出し選択、利用者向け文書は、機能名を**「FOLD 1.2 限定」**とする。利用者から見える対応外一覧には、3D座標、枝分かれした手順、動画、名前付き技法の意味、注記、仕上げの丸み、FOLDのF/U区別の7項目を省略なく出す。F/Uは`Aux`へ縮退し、JSON pathと元assignmentを警告へ残す。黙って捨てる経路を1件も許さない。
+施策8の全ての画面、警告、Help、書出し選択、利用者向け文書は、機能を**「ほかの折り紙ソフトのファイル」**として説明し、形式名や内部の構造名を表示しない。利用者から見える対応外一覧には、3D座標、枝分かれした手順、動画、名前付き技法の意味、注記、仕上げの丸み、元ファイルの「平ら」と「未指定」の区別の7項目を省略なく出す。入力中のF/Uは内部で`Aux`へ縮退し、元assignmentとJSON pathを構造化警告へ保持する。画面では安全な日本語で伝え、黙って捨てる経路を1件も許さない。
 
 ### 0A.2 Linux対応を見送る
 
@@ -139,7 +139,7 @@ codex exec --model gpt-5.6-sol -c model_reasoning_effort=ultra --sandbox workspa
 1. **追加:** 現在の `docs/requirements-definition.md:55`（§4.1最後の`.ori3`項目）の直後へ、次の1項目を追加する。
 
 ```markdown
-- **FOLD 1.2 限定**profileの入出力。対象は2D頂点座標、edge topology、B/M/V、`edges_foldAngle`、表現可能な非循環`faceOrders`、線形step frameとする。画面と文書には必ず「FOLD 1.2 限定」と表示し、「FOLD対応」「FOLD完全対応」と表示しない。3D座標、枝分かれした手順、動画、名前付き技法の意味、注記、仕上げの丸み、FOLDの「平ら(F)」「未指定(U)」の区別は対応外一覧として利用者から見える場所に示す。F/Uは`Aux`へ縮退し、元の指定を警告として残して黙って捨てない。
+- **FOLD 1.2限定profile**の入出力。対象は2D頂点座標、edge topology、B/M/V、`edges_foldAngle`、表現可能な非循環`faceOrders`、線形step frameとする。画面と利用者向け文書では「ほかの折り紙ソフトのファイル」と説明し、形式名や内部の構造名を表示しない。3D座標、枝分かれした手順、動画、名前付き技法の意味、注記、仕上げの丸み、元ファイルの「平ら」と「未指定」の区別を、利用者が理解できる日本語で示す。F/Uは内部では`Aux`へ縮退して元指定とJSON pathを構造化警告へ残し、利用者には安全な日本語で知らせる。警告があっても取込を止めず、未保存作品として即時反映し、既存のUndo 1回で戻せるようにする。
 ```
 
 2. **削除と置換:** 現在の `docs/requirements-definition.md:66` の1行を削除し、次の1行を同じ位置へ入れる。FOLDだけを非目標から外し、DXF / OBJ / STL / glTFは非目標のまま残す。
@@ -985,8 +985,8 @@ generatorの通常実行は一時ファイルへ出し、`-Check` がmarkerと�
 | FOLD-002 | 対応edgeの `edges_foldAngle` をf64で読み書きし、B/M/VとORIGAMI3の線種・driver角の対応および角度の符号規則を1つの変換表で固定する。 | MUST | M7 |
 | FOLD-003 | 現行 `FoldStep.layer_order` へ損失なく変換できる非循環 `faceOrders` だけを読み書きする。変換不能な制約を近似して成功扱いにしない。 | MUST | M7 |
 | FOLD-004 | 線形なstep frameだけを読み書きする。枝分かれした手順、動画、任意の継承関係は対応外として警告する。 | MUST | M7 |
-| FOLD-005 | 画面と利用者向け文書には対応名称を必ず「FOLD 1.2 限定」と表示し、「FOLD対応」「FOLD完全対応」と表示しない。3D座標、枝分かれした手順、動画、名前付き技法の意味、注記、仕上げの丸み、FOLDの「平ら(F)」「未指定(U)」の区別を、利用者から見える対応外一覧へ表示する。入力中のF/Uは`Aux`へ縮退し、どのedgeがFまたはUだったかをpath付き警告として残す。無言で捨てる件数を0とする。 | MUST | M7 |
-| FOLD-006 | FOLD取込は元ファイルを`.ori3`の上書き先にせず、未保存の新規ORIGAMI3作品として扱う。対応外fieldと表現不能構造をpath付き警告一覧で返し、利用者が取込中止または明示的な限定取込を選べるようにする。通常の3D頂点は保存しない。 | MUST | M7 |
+| FOLD-005 | 画面と利用者向け文書では、このprofileを「ほかの折り紙ソフトのファイル」と説明し、`FOLD 1.2`、`schema`、`parser`、`validator`、`faceOrders`、`frame`、`Aux`、JSON pathなどの内部用語を表示しない。3D座標、枝分かれした手順、動画、名前付き技法の意味、注記、仕上げの丸み、元ファイルの「平ら」と「未指定」の区別の7項目を、利用者が理解できる日本語で表示する。入力中のF/Uは内部では`Aux`へ縮退し、元assignmentとJSON pathを`FoldIssue`へ全件保持するが、画面では安全な日本語へ変換する。無言で捨てる件数を0とする。 | MUST | M7 |
+| FOLD-006 | FOLD取込は元ファイルを`.ori3`の上書き先にせず、未保存の新規ORIGAMI3作品として扱う。取込可能な警告は作品と同じ結果へ含め、確認tokenや利用者の承認を待つgateを設けずに作品を即時反映する。取込は既存履歴の1操作として記録し、既存のUndo 1回で取込前の作品へ戻せるようにする。表現不能構造または不正入力で失敗した場合は部分反映せずstoreを変更しない。通常の3D頂点は保存しない。 | MUST | M7 |
 
 #### §9.2 Rustクレート表を変える案
 
@@ -1048,7 +1048,7 @@ generatorの通常実行は一時ファイルへ出し、`-Check` がmarkerと�
 | 8-A 承認反映 | **1件、非コード**（1～2人日） | **terra:** 利用者が決めたprofileを要件・roadmap・progress差分へそのまま反映する文書作業で、新しい範囲判断はしない。 | §0B.2と§12.2の確定条文、対応外、4出所corpus条件を正本へ反映する。 | 採用profile、条文差分、FOLD-001～006/M7の100%対応、未決事項0。 |
 | 8-B core | **4委譲**（各2～3人日） | **B1 sol ultra:** parserの欠落・不正値契約を決める。<br>**B2 sol ultra:** 表現可否とpath付きwarning/reject境界を決める。<br>**B3 sol ultra:** writerのfield/frame/assignment表現の正しさを決める。<br>**B4 sol ultra:** canonical JSONとroundtrip比較の意味を決める。 | B1 typed parser、B2限定profile validator/unsupported path、B3 writer、B4 canonicalizer。parser+validator、writer+canonicalizerを一括にしない。 | 各回のfield対応表、malformed case、canonical JSON、silent drop数、公開API。 |
 | 8-C backend | **2委譲**（各3～4人日） | **C1 sol ultra:** B/M/V、F/U→Aux+警告、角度、step frame、faceOrdersの幾何・数値変換を決める。<br>**C2 sol ultra:** store/import/open/exportの原子transactionと失敗契約を設計する。 | C1 model/converterのB/M/V/F/U、angle、step frame、face order対応、C2 `DocumentStore::import_fold` + 既存open/export IPCの原子transaction。 | C1は変換表と終点/層制約、C2は取込前後document、dirty/path、warning、失敗時store不変。 |
-| 8-D frontend | **1委譲**（3～4人日） | **sol ultra:** filter、警告、限定名称、対応外一覧をfrontend全体で一貫させる仕様変更である。 | filter、export choice、警告一覧、対応範囲説明。 | keyboard操作、4区画不変、名称表示、対応外7/7、既存open/export回帰。 |
+| 8-D frontend | **1委譲**（3～4人日） | **sol ultra:** filter、警告、利用者向け説明、対応外一覧をfrontend全体で一貫させる仕様変更である。 | filter、export choice、警告一覧、対応範囲説明。 | keyboard操作、4区画不変、利用者向け説明、対応外7/7、既存open/export回帰。 |
 | 8-E corpus | **6委譲**（各2～3人日） | **E1～E6 terra:** 各5 fixtureを既定quota/schemaに従い取得・checksum・license・分類する反復作業である。 | E1～E6が各5 fixtureを取得・正規化・manifest化する。4出所の最終quotaは8-E開始前に予約し、各fixtureのsource/license/checksumを持つ。 | 各5件の出所、supported/unsupported分類、panic、roundtrip差、未対応field、累計quota。 |
 | 8-F 統合 | **1委譲**（3～4人日） | **terra:** 30外部・4内部・100 malformedと全gateを実行、集計、文書生成する手順作業である。 | 30件、内部4件、100 malformed、UI/backend/full gateを同一buildで集計し、要件・roadmap・progressの差分を閉じる。 | 4出所quota、全数値、license未決0、生成report、既存形式回帰、未実行0。 |
 
@@ -1064,7 +1064,7 @@ generatorの通常実行は一時ファイルへ出し、`-Check` がmarkerと�
 6. 未対応field総数に対する表示率100%、path欠落0、silent drop 0。未知extensionを最低20種類含む。
 7. malformed/巨大でない不正JSON 100件でpanic 0、現Document、step_creases、history、dirty、pathの変更0。
 8. 折り鶴、やっこさん、カエル、鳥の基本形の内部4 fixtureで100回連続のimport→export→importを行い、上記全数値を100/100で満たす。
-9. file-open filter、書出し選択、取込結果/警告、Help、要件文、利用者向け説明書の6/6で名称を正確に**「FOLD 1.2 限定」**と表示する。単独の「FOLD対応」または「FOLD完全対応」という名称は0件。
+9. file-open filter、書出し選択、取込結果/警告、Help、要件文、利用者向け説明書の6/6で、利用者へ**「ほかの折り紙ソフトのファイル」**と説明する。`FOLD 1.2`、`FOLD対応`、`FOLD完全対応`などの形式名・内部用語の表示は0件。
 10. 利用者から見える対応外一覧に、3D座標、枝分かれした手順、動画、名前付き技法の意味、注記、仕上げの丸み、FOLDの「平ら(F)」「未指定(U)」の区別を7/7表示し、Helpと取込/書出し入口の双方から1操作以内で到達できる。
 11. F/Uを含む外部・内部fixtureではF/U edgeの`Aux`縮退率100%、元のF/U値とJSON pathを持つ警告率100%、警告なしの取込成功0。対応外一覧でもF/Uの区別を保持できないことを表示する。
 
@@ -1105,7 +1105,7 @@ rg -n "FoldJson|parse_fold_1_2|write_fold_1_2|unsupported_fields|import_fold|fac
 - **見積:** **承認済み限定profileへ33～48人日で確定する。** 現行11ファイル・合計11,908行（要件/roadmap/progress 2,335行、converter到達先8コードファイル9,573行）と新規2コード/testファイル、30外部fixtureを対象にし、parser/malformed、writer/canonical、model変換、store原子性、UI、4出所30件、内部4件×100回の7検査群を15委譲で閉じる。段階和は8-A 1～2、8-B 8～12、8-C 6～8、8-D 3～4、8-E 12～18、8-F 3～4人日である。利用者が不採用としたF/U完全往復41～62人日は足さず、追加工数0とする。
 - **依存:** 利用者の範囲承認は2026-08-24に完了した。コード着手前に§0B.2/§12.2の要件正本改訂を完了し、その後は施策1、3、4、6完了後に実装する。
 - **リスク:** `faceOrders` と現行modelが非同型。表現不能なfileは対応外としてpath付きで拒否し、意味を近似しない。schema拡張や承認profile縮小が必要になった場合は停止し、新しい利用者判断へ戻す。
-- **リスク:** 限定名称が全仕様を扱うように誤読されること。6表示面の名称100%、対応外7/7、F/U警告100%のいずれか1件でも欠けたら公開しない。
+- **リスク:** 利用者向け説明が全仕様を扱うように誤読されること。6表示面の説明100%、対応外7/7、F/U警告100%のいずれか1件でも欠けたら公開しない。
 - **点数:** 利用者承認だけ、または要件正本未改訂の現在は+0。要件改訂と全実装・検査後は**推測**でEXP +0.5、SYS +0.5、Docs +0.5。レビュー上は12分野点より競争劣位解消の意味が大きい。
 
 ## 13. 施策9 実利用者15名で検証する

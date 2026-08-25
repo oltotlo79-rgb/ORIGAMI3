@@ -184,28 +184,108 @@ async function enter() {
 describe("全部いっぺんに折ってみる画面", () => {
   it("既存パネルの入口から0〜100%のつまみと記録でない約束を常時表示する", async () => {
     render(<ContextPanel />);
+    const panelBefore = document.querySelector("#context-panel");
 
     await enter();
 
     expect(document.querySelectorAll("#context-panel")).toHaveLength(1);
+    const panel = document.querySelector("#context-panel") as HTMLElement;
+    const foldAllSection = document.querySelector(
+      "[data-fold-all-active]",
+    ) as HTMLElement;
+    expect(panel).toBe(panelBefore);
+    expect(foldAllSection.closest("#context-panel")).toBe(panelBefore);
+    expect(document.querySelector('dialog, [role="dialog"]')).toBeNull();
+    const notices = foldAllSection.querySelector(
+      ".fold-all-preview-notices",
+    ) as HTMLElement;
+    const heading = foldAllSection.querySelector(
+      ".fold-all-preview-heading",
+    ) as HTMLElement;
+    const control = foldAllSection.querySelector(
+      ".fold-all-preview-control",
+    ) as HTMLElement;
+    expect(notices.getAttribute("aria-live")).toBe("polite");
+    expect(heading.nextElementSibling).toBe(control);
     const slider = screen.getByRole("slider", {
       name: "全部の折り目を動かす割合",
     });
     expect(slider).toHaveProperty("min", "0");
     expect(slider).toHaveProperty("max", "100");
+    expect(slider).toHaveProperty("step", "1");
     expect(slider).toHaveProperty("value", "0");
     expect(screen.getByText("元に戻る 0%")).toBeTruthy();
     expect(screen.getByText("できるところまで 100%")).toBeTruthy();
+    expect(heading.textContent).toContain("手順には記録されません。");
     expect(
-      screen.getByText(
-        "山折りと谷折りを同じ割合で動かして、形だけを見ます。手順には記録されません。",
-      ),
-    ).toBeTruthy();
-    expect(
-      screen.getByText(
-        "紙を順番に折った形ではないため、どの紙が上になるかは決まっていません。",
-      ),
-    ).toBeTruthy();
+      heading.querySelector(".fold-all-layer-order-note")?.textContent,
+    ).toBe(
+      "紙を順番に折った形ではないため、どの紙が上になるかは決まっていません。",
+    );
+    expect(notices.textContent).not.toContain(
+      "どの紙が上になるかは決まっていません",
+    );
+  });
+
+  it("native rangeの0〜100%・1%刻みとキーボード操作の完了経路を保つ", async () => {
+    const originalFinish = useAppStore.getState().finishFoldAllPercent;
+    const finish = vi.fn(originalFinish);
+    useAppStore.setState({ finishFoldAllPercent: finish });
+    try {
+      render(<ContextPanel />);
+      await enter();
+      const slider = screen.getByRole("slider", {
+        name: "全部の折り目を動かす割合",
+      });
+
+      expect(slider).toHaveProperty("type", "range");
+      expect(slider).toHaveProperty("min", "0");
+      expect(slider).toHaveProperty("max", "100");
+      expect(slider).toHaveProperty("step", "1");
+
+      fireEvent.change(slider, { target: { value: "100" } });
+      fireEvent.keyUp(slider, { key: "End" });
+      expect(finish).toHaveBeenCalledTimes(1);
+      await waitFor(() =>
+        expect(
+          document.querySelector("[data-fold-all-active]")?.getAttribute(
+            "data-applied-percent",
+          ),
+        ).toBe("100"),
+      );
+      expect(slider.getAttribute("aria-valuetext")).toBe("100%");
+      expect(screen.getAllByText("これは仮の形です")).toHaveLength(1);
+      expect(
+        screen.getAllByText(
+          "紙を順番に折った形ではないため、どの紙が上になるかは決まっていません。",
+        ),
+      ).toHaveLength(1);
+
+      fireEvent.change(slider, { target: { value: "99" } });
+      fireEvent.keyUp(slider, { key: "ArrowLeft" });
+      expect(finish).toHaveBeenCalledTimes(2);
+      await waitFor(() =>
+        expect(
+          document.querySelector("[data-fold-all-active]")?.getAttribute(
+            "data-applied-percent",
+          ),
+        ).toBe("99"),
+      );
+      expect(slider.getAttribute("aria-valuetext")).toBe("99%");
+
+      fireEvent.change(slider, { target: { value: "0" } });
+      fireEvent.keyUp(slider, { key: "Home" });
+      expect(finish).toHaveBeenCalledTimes(3);
+      await waitFor(() =>
+        expect(document.querySelector("[data-fold-all-active]"),
+      ).toBeNull());
+      expect(ipc.sequenceReplay).toHaveBeenCalledWith(1, 1, null);
+      expect(
+        screen.getByRole("button", { name: /全部いっぺんに折ってみる/ }),
+      ).toBeTruthy();
+    } finally {
+      useAppStore.setState({ finishFoldAllPercent: originalFinish });
+    }
   });
 
   it("不収束・平坦条件・貫通を知らせてもつまみを止めない", async () => {
@@ -275,14 +355,24 @@ describe("全部いっぺんに折ってみる画面", () => {
       const notices = section.querySelector(
         ".fold-all-preview-notices",
       ) as HTMLElement;
+      const layerOrderNote = section.querySelector(
+        ".fold-all-layer-order-note",
+      );
       const returnRow = screen
         .getByRole("button", { name: "いつもの表示に戻る" })
         .closest(".button-row");
 
-      // 重なり順未確定の恒常注意1件に、可変警告が0〜2件加わる。
-      expect(notices.querySelectorAll(".warning-text")).toHaveLength(
-        extraWarningCount + 1,
+      expect(layerOrderNote?.textContent).toBe(
+        "紙を順番に折った形ではないため、どの紙が上になるかは決まっていません。",
       );
+      expect(notices.querySelectorAll(".warning-text")).toHaveLength(
+        extraWarningCount,
+      );
+      expect(
+        section.querySelectorAll(
+          ".fold-all-layer-order-note, .fold-all-preview-notices .warning-text",
+        ),
+      ).toHaveLength(extraWarningCount + 1);
       expect(control.nextElementSibling).toBe(returnRow);
       expect(returnRow?.nextElementSibling).toBe(notices);
     });
@@ -303,7 +393,7 @@ describe("全部いっぺんに折ってみる画面", () => {
     ).toBeTruthy();
   });
 
-  it("50%から0%へ戻して操作を終えると、いつもの表示へ戻る", async () => {
+  it("50%から0%へ戻すと、利用者が変えた視点を除くいつもの表示へ戻る", async () => {
     render(<ContextPanel />);
     await enter();
     const slider = screen.getByRole("slider", {

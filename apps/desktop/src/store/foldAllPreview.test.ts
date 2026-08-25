@@ -23,10 +23,34 @@ import type {
   ReplayResult,
 } from "../lib/types";
 import {
+  type AngleSnapshot,
   resetFoldAllPreviewRuntime,
   resetPoseThrottle,
   useAppStore,
 } from "./appStore";
+
+function angleHistoryValues(history: readonly AngleSnapshot[]) {
+  return history.map((snapshot) => ({
+    drivers: [...snapshot.drivers.entries()],
+    pinned: [...snapshot.pinned.entries()],
+  }));
+}
+
+function nonEmptyAngleHistories() {
+  const undo: AngleSnapshot[] = [
+    {
+      drivers: new Map([[5, 25]]),
+      pinned: new Map([[5, 25]]),
+    },
+  ];
+  const redo: AngleSnapshot[] = [
+    {
+      drivers: new Map([[6, -35]]),
+      pinned: new Map([[6, -35]]),
+    },
+  ];
+  return { undo, redo };
+}
 
 function frameAt(marker: number): Frame3D {
   return {
@@ -206,13 +230,24 @@ describe("全部の折り目をいっぺんに動かす一時表示", () => {
     expect(vertices.every((vertex) => vertex[2] === 0)).toBe(true);
   });
 
-  it("戻った後も手順の参照・JSON・履歴をbit同一に保つ", async () => {
+  it("利用者が自分で変えた視点を除き、戻った後も手順・選択・道具・角度・履歴を保つ", async () => {
     const doc = seed();
-    useAppStore.setState({ selection: { edgeIds: [5], vertexIds: [] } });
+    const poseAngles = new Map([
+      [5, 60],
+      [6, 0],
+    ]);
+    useAppStore.setState({
+      selection: { edgeIds: [5], vertexIds: [] },
+      poseAngles,
+    });
     const sequence = doc.sequence;
     const sequenceJson = JSON.stringify(sequence);
     const undo = useAppStore.getState().angleUndoStack;
     const redo = useAppStore.getState().angleRedoStack;
+    const docUndoDepth = useAppStore.getState().docUndoDepth;
+    const poseAngleEntries = [...poseAngles.entries()];
+    // カメラはViewer3D内で利用者が直接動かす状態なので、この復帰契約には含めない。
+    // ここではストアが所有する手順位置・選択・道具・角度を従来どおり厳密に検査する。
 
     await useAppStore.getState().enterFoldAllPreview();
     useAppStore.getState().setFoldAllPercent(50);
@@ -229,19 +264,40 @@ describe("全部の折り目をいっぺんに動かす一時表示", () => {
     expect(JSON.stringify(restored.doc?.sequence)).toBe(sequenceJson);
     expect(restored.angleUndoStack).toBe(undo);
     expect(restored.angleRedoStack).toBe(redo);
+    expect(restored.docUndoDepth).toBe(docUndoDepth);
     expect(restored.currentStep).toBe(1);
     expect(restored.playT).toBe(0.4);
     expect(restored.activeTool).toBe("mountain");
     expect(restored.selection).toEqual({ edgeIds: [5], vertexIds: [] });
+    expect(restored.drivers).toEqual(new Map());
+    expect(restored.pinnedFolds).toEqual(new Map());
+    expect(restored.sequenceTargets).toEqual(new Map([[5, 60]]));
+    expect([...restored.poseAngles.entries()]).toEqual(poseAngleEntries);
     expect(restored.frame3d).toEqual(frameAt(-1));
     expect(ipc.sequenceApply).not.toHaveBeenCalled();
     expect(ipc.editUndo).not.toHaveBeenCalled();
     expect(ipc.editRedo).not.toHaveBeenCalled();
   });
 
-  it("50%から0%へつまみを戻し終えると、閉じる操作と同じく元の表示と選択へ戻る", async () => {
-    seed();
-    useAppStore.setState({ selection: { edgeIds: [5], vertexIds: [] } });
+  it("50%から0%へ戻すと、利用者が変えた視点を除く手順・選択・道具・角度が戻る", async () => {
+    const doc = seed();
+    const poseAngles = new Map([
+      [5, 60],
+      [6, 0],
+    ]);
+    const { undo, redo } = nonEmptyAngleHistories();
+    useAppStore.setState({
+      selection: { edgeIds: [5], vertexIds: [] },
+      poseAngles,
+      angleUndoStack: undo,
+      angleRedoStack: redo,
+      docUndoDepth: 2,
+    });
+    const sequence = doc.sequence;
+    const sequenceJson = JSON.stringify(sequence);
+    const poseAngleEntries = [...poseAngles.entries()];
+    const undoValues = angleHistoryValues(undo);
+    const redoValues = angleHistoryValues(redo);
 
     await useAppStore.getState().enterFoldAllPreview();
     useAppStore.getState().setFoldAllPercent(50);
@@ -257,11 +313,26 @@ describe("全部の折り目をいっぺんに動かす一時表示", () => {
       expect(useAppStore.getState().foldAllPreview).toBeNull(),
     );
     const restored = useAppStore.getState();
+    expect(restored.doc).toBe(doc);
+    expect(restored.doc?.sequence).toBe(sequence);
+    expect(JSON.stringify(restored.doc?.sequence)).toBe(sequenceJson);
     expect(restored.frame3d).toEqual(frameAt(-1));
     expect(restored.currentStep).toBe(1);
     expect(restored.playT).toBe(0.4);
     expect(restored.activeTool).toBe("mountain");
     expect(restored.selection).toEqual({ edgeIds: [5], vertexIds: [] });
+    expect(restored.drivers).toEqual(new Map());
+    expect(restored.pinnedFolds).toEqual(new Map());
+    expect(restored.sequenceTargets).toEqual(new Map([[5, 60]]));
+    expect([...restored.poseAngles.entries()]).toEqual(poseAngleEntries);
+    expect(restored.docUndoDepth).toBe(2);
+    expect(restored.angleUndoStack).toBe(undo);
+    expect(restored.angleRedoStack).toBe(redo);
+    expect(angleHistoryValues(restored.angleUndoStack)).toEqual(undoValues);
+    expect(angleHistoryValues(restored.angleRedoStack)).toEqual(redoValues);
+    expect(ipc.sequenceApply).not.toHaveBeenCalled();
+    expect(ipc.editUndo).not.toHaveBeenCalled();
+    expect(ipc.editRedo).not.toHaveBeenCalled();
   });
 
   it("手順が無い作品も一時角度と固定を変えず、追従計算から通常形へ戻す", async () => {
@@ -269,6 +340,8 @@ describe("全部の折り目をいっぺんに動かす一時表示", () => {
     doc.sequence = [];
     const drivers = new Map([[5, 30]]);
     const pinnedFolds = new Map([[5, 30]]);
+    const driverEntries = [...drivers.entries()];
+    const pinnedEntries = [...pinnedFolds.entries()];
     useAppStore.setState({
       currentStep: null,
       playT: 1,
@@ -283,6 +356,10 @@ describe("全部の折り目をいっぺんに動かす一時表示", () => {
     expect(useAppStore.getState().foldAllPreview).toBeNull();
     expect(useAppStore.getState().drivers).toBe(drivers);
     expect(useAppStore.getState().pinnedFolds).toBe(pinnedFolds);
+    expect([...useAppStore.getState().drivers.entries()]).toEqual(driverEntries);
+    expect([...useAppStore.getState().pinnedFolds.entries()]).toEqual(
+      pinnedEntries,
+    );
     expect(ipc.poseSolve).toHaveBeenCalled();
     expect(ipc.sequenceReplay).not.toHaveBeenCalled();
   });
@@ -349,6 +426,38 @@ describe("全部の折り目をいっぺんに動かす一時表示", () => {
       expect(calls.length).toBeLessThanOrEqual(65);
       expect(calls[calls.length - 1]?.[0]).toBe(100);
       expect(useAppStore.getState().foldAllPreview?.appliedPercent).toBe(100);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("異なる連続入力120回で、各回の最後の割合を120/120採用する", async () => {
+    vi.useFakeTimers();
+    try {
+      seed();
+      await useAppStore.getState().enterFoldAllPreview();
+      let adopted = 0;
+
+      for (let trial = 0; trial < 120; trial++) {
+        const finalPercent = ((trial * 37) % 100) + 1;
+        for (let offset = 7; offset >= 1; offset--) {
+          useAppStore
+            .getState()
+            .setFoldAllPercent(Math.max(1, finalPercent - offset));
+        }
+        useAppStore.getState().setFoldAllPercent(finalPercent);
+        useAppStore.getState().finishFoldAllPercent();
+        await vi.runAllTimersAsync();
+        await Promise.resolve();
+
+        if (
+          useAppStore.getState().foldAllPreview?.appliedPercent === finalPercent
+        ) {
+          adopted++;
+        }
+      }
+
+      expect(adopted).toBe(120);
     } finally {
       vi.useRealTimers();
     }
@@ -470,13 +579,59 @@ describe("全部の折り目をいっぺんに動かす一時表示", () => {
   it("Undoは作品履歴を進めず、通常表示へ戻るだけ", async () => {
     const doc = seed();
     const before = JSON.stringify(doc.sequence);
+    const { undo: angleUndo, redo: angleRedo } = nonEmptyAngleHistories();
+    useAppStore.setState({
+      docUndoDepth: 2,
+      angleUndoStack: angleUndo,
+      angleRedoStack: angleRedo,
+    });
+    const undoValues = angleHistoryValues(angleUndo);
+    const redoValues = angleHistoryValues(angleRedo);
     await useAppStore.getState().enterFoldAllPreview();
 
     await useAppStore.getState().undo();
 
     expect(useAppStore.getState().foldAllPreview).toBeNull();
     expect(JSON.stringify(useAppStore.getState().doc?.sequence)).toBe(before);
+    expect(useAppStore.getState().docUndoDepth).toBe(2);
+    expect(useAppStore.getState().angleUndoStack).toBe(angleUndo);
+    expect(useAppStore.getState().angleRedoStack).toBe(angleRedo);
+    expect(angleHistoryValues(useAppStore.getState().angleUndoStack)).toEqual(
+      undoValues,
+    );
+    expect(angleHistoryValues(useAppStore.getState().angleRedoStack)).toEqual(
+      redoValues,
+    );
     expect(ipc.editUndo).not.toHaveBeenCalled();
+  });
+
+  it("Redoは作品履歴を進めず、通常表示へ戻るだけ", async () => {
+    const doc = seed();
+    const before = JSON.stringify(doc.sequence);
+    const { undo: angleUndo, redo: angleRedo } = nonEmptyAngleHistories();
+    useAppStore.setState({
+      docUndoDepth: 2,
+      angleUndoStack: angleUndo,
+      angleRedoStack: angleRedo,
+    });
+    const undoValues = angleHistoryValues(angleUndo);
+    const redoValues = angleHistoryValues(angleRedo);
+    await useAppStore.getState().enterFoldAllPreview();
+
+    await useAppStore.getState().redo();
+
+    expect(useAppStore.getState().foldAllPreview).toBeNull();
+    expect(JSON.stringify(useAppStore.getState().doc?.sequence)).toBe(before);
+    expect(useAppStore.getState().docUndoDepth).toBe(2);
+    expect(useAppStore.getState().angleUndoStack).toBe(angleUndo);
+    expect(useAppStore.getState().angleRedoStack).toBe(angleRedo);
+    expect(angleHistoryValues(useAppStore.getState().angleUndoStack)).toEqual(
+      undoValues,
+    );
+    expect(angleHistoryValues(useAppStore.getState().angleRedoStack)).toEqual(
+      redoValues,
+    );
+    expect(ipc.editRedo).not.toHaveBeenCalled();
   });
 
   it("通常形の再計算に失敗したら、目印と操作可能なつまみを残す", async () => {
@@ -645,16 +800,38 @@ describe("全部の折り目をいっぺんに動かす一時表示", () => {
     const doc = seed();
     const sequence = doc.sequence;
     const sequenceJson = JSON.stringify(sequence);
+    const documentJson = JSON.stringify(doc);
+    const docUndoDepth = useAppStore.getState().docUndoDepth;
+    const angleUndo = useAppStore.getState().angleUndoStack;
+    const angleRedo = useAppStore.getState().angleRedoStack;
     vi.mocked(ipc.documentSave).mockResolvedValue(undefined);
     await useAppStore.getState().enterFoldAllPreview();
 
-    await useAppStore.getState().saveDocument("C:\\work\\fold-all-save.ori3");
+    const path = "C:\\work\\fold-all-save.ori3";
+    await useAppStore.getState().saveDocument(path);
 
     const state = useAppStore.getState();
     expect(state.foldAllPreview).not.toBeNull();
     expect(state.doc).toBe(doc);
     expect(state.doc?.sequence).toBe(sequence);
     expect(JSON.stringify(state.doc?.sequence)).toBe(sequenceJson);
+    const currentDocumentJson = JSON.stringify(state.doc);
+    expect(currentDocumentJson).toBe(documentJson);
+    expect(state.docUndoDepth).toBe(docUndoDepth);
+    expect(state.angleUndoStack).toBe(angleUndo);
+    expect(state.angleRedoStack).toBe(angleRedo);
+    for (const temporaryField of [
+      "foldAllPreview",
+      "fold_all_preview",
+      "requested_percent",
+      "requested_angles",
+      "next_warm_seed",
+      "suspect_hinges",
+      "flat_fold_violations",
+    ]) {
+      expect(currentDocumentJson).not.toContain(`"${temporaryField}"`);
+    }
+    expect(ipc.documentSave).toHaveBeenCalledWith(path);
     expect(ipc.sequenceApply).not.toHaveBeenCalled();
   });
 

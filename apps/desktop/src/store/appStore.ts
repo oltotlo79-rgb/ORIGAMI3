@@ -7,19 +7,49 @@
 import { create } from "zustand";
 import * as ipc from "../ipc/client";
 import { createSerialQueue } from "./ipcQueue";
-import { hingeEdgeIds } from "../lib/hinges";
-import { advancePlayback, startPlayback } from "../lib/playback";
+import type { ToolId } from "./toolTypes";
+export type { ToolId } from "./toolTypes";
 import {
-  foldLayers,
-  keepSidePoint,
-  offsetPoint,
-  topMovingFace,
-} from "../components/Viewer3D/foldDraw";
-import { planGrabFold, type GrabMode } from "../components/Viewer3D/grabFold";
-import { foldBlockReason } from "../lib/viewerHint";
+  createCommandService,
+  keepIfSame,
+} from "./services/commandService";
+export { MIRROR_AXIS_REMOVED_NOTICE } from "./services/commandService";
+import {
+  EMPTY_SELECTION,
+} from "./slices/documentSlice";
+import { createDocumentSlice } from "./services/documentActions";
+import type {
+  DocumentSlice,
+  Selection,
+} from "./slices/documentSlice";
+export type {
+  AlignCpPick,
+  AlignDraft,
+  FoldDraft,
+  FoldTarget,
+  MeasureDisplay,
+  MeasureDraft,
+  MeasureEdgePick,
+  MeasureMode,
+  MeasurePick,
+  MeasurePointPick,
+  PendingFoldThrough,
+  Selection,
+  SpatialFoldDrag,
+  TechniqueDraft,
+} from "./slices/documentSlice";
+export {
+  alignFoldDraft,
+  automaticMovingSide,
+  canFoldNow,
+  foldInsertAt,
+  initialMovingSide,
+  isAlignComplete,
+  isSpatialFoldFrame,
+  nextAlignKind,
+} from "./slices/documentSlice";
+import { advancePlayback, startPlayback } from "../lib/playback";
 import { buildPoseStep, currentAngles, hasPoseAngle } from "../lib/poseStep";
-import { DEFAULT_CONSTRUCT, type ConstructOptions } from "../lib/construct";
-import { DEFAULT_CURVE, firstCrossing, rulingLines, type CurveOptions } from "../lib/curve";
 import {
   DEFAULT_DISPLAY,
   DEFAULT_CONTEXT_PANEL_RATIO,
@@ -34,53 +64,16 @@ import {
   type UiTheme,
   type WheelBehavior,
 } from "../lib/displayPrefs";
-import {
-  ALIGN_EPS,
-  ALIGN_STEPS,
-  alignRefPoint,
-  movingSideOf,
-  solveAlign,
-  type AlignMode,
-  type AlignTarget,
-  type FoldLine,
-} from "../lib/alignFold";
-import {
-  DEFAULT_MIRROR_AXIS,
-  mirrorLineForChoice,
-  mirrorSegmentSet,
-  mirrorSegments,
-  paperMirrorLine,
-  rebindSelectedMirrorAxis,
-  selectedEdgeMirrorLine,
-  type MirrorAxisChoice,
-  type MirrorAxisPreset,
-  type MirrorLine,
-  type Segment,
-} from "../lib/mirror";
-import { withMirrorEdges } from "../lib/mirrorEdit";
-import {
-  DEFAULT_TWIST_DEG,
-  addTwistVertex,
-  isTwistPolygonReady,
-  polygonCentroid,
-  twistReferencePoint,
-  undoTwistVertex,
-} from "../lib/twistPolygon";
+import type { MirrorAxisChoice } from "../lib/mirror";
 import type {
   AngleRelaxation,
   Document,
   DisplaySettings,
   DocumentView,
   Driver,
-  EdgeKind,
-  EditOp,
   ExportKind,
-  Face,
   FoldAllLayerOrder,
-  FoldDirection,
-  FoldThroughProposal,
   Frame3D,
-  MotionPart,
   Paper,
   PaperPosition2d,
   PaperTipPosition,
@@ -92,8 +85,6 @@ import type {
   Skeleton,
   SoftMesh,
   SoftSettings,
-  StepCreases,
-  TechniqueKind,
   TipPos2d,
   Vec2,
 } from "../lib/types";
@@ -127,21 +118,6 @@ import {
 } from "../lib/settledFolds";
 import { loadOnboarding, saveOnboarding } from "../lib/firstRunGuide";
 import type { HelpChapterId } from "../help/helpTypes";
-import {
-  clampTechniqueLayerCount,
-  minimumTechniqueFlap,
-  techniqueFlapForPreset,
-  techniqueUsesOpenToBack,
-  toggleTechniqueFlap as toggleTechniqueFlapSelection,
-  type TechniqueLayerPreset,
-} from "../lib/techniqueLayers";
-import {
-  buildLayerMotionPart,
-  hasLayerMotionInput,
-  type LayerMotionMode,
-  type LayerMotionPartDraft,
-  type LayerTurnMode,
-} from "../lib/layerMotion";
 
 /** ヒンジ角の連続操作(スライダー)を間引く間隔(ms) */
 /** 追従計算は60fps相当で最大1回。runLatestが計算待ちを最新1件へまとめる。 */
@@ -186,10 +162,6 @@ export const FINISH_JUMP_NOTICE =
 /** 希望角との差がこの値以上なら、画面で「追従した」と知らせる。 */
 export const RELAX_NOTICE_EPS_DEG = 0.1;
 
-/** 選んだ基準線が編集後に無くなったとき、既存の通知欄へ出す文言。 */
-export const MIRROR_AXIS_REMOVED_NOTICE =
-  "基準にしていた線が無くなったので、紙の縦の中心線に戻しました";
-
 /** 0.1°を10進入力から計算したときの丸め誤差だけを吸収する比較余裕。 */
 const RELAX_NOTICE_COMPARE_EPS_DEG = 1e-12;
 
@@ -231,18 +203,6 @@ export interface ActiveAngleIntent {
    * 成り立たないため、代表1本だけを固定する。 */
   fixAll: boolean;
 }
-
-export type ToolId =
-  | "select"
-  | "measure"
-  | "mountain"
-  | "valley"
-  | "aux"
-  | "delete"
-  | "fold"
-  | "pull"
-  | "technique"
-  | "construct";
 
 /** UI-012の4操作と、全てできた後の完了画面。 */
 export type GuideStep = 0 | 1 | 2 | 3 | 4;
@@ -293,12 +253,6 @@ export function draftToPaper(draft: NewPaperDraft): Paper {
   };
 }
 
-/** 選択中の線・頂点(ID)。DOMのSelectionと紛れないよう注意 */
-export interface Selection {
-  edgeIds: number[];
-  vertexIds: number[];
-}
-
 /** 一斉表示へ入る直前の入力状態。3D座標は保存せず、この入力から作り直す。 */
 export interface FoldAllReturnState {
   docEpoch: number;
@@ -331,115 +285,6 @@ export interface FoldAllPreviewState {
   /** 次の要求の出発角。Document・通常姿勢キャッシュには入れない。 */
   nextWarmSeed: Driver[];
   returnState: FoldAllReturnState;
-}
-
-/** 測定中に選ぶ3つのやり方。測定結果と同じく作品には保存しない。 */
-export type MeasureMode = "angle" | "length" | "distance";
-
-/** 結果カードで利用者が選べる表示。nullは値に応じた既定表示を表す。 */
-export type MeasureDisplay = "decimal" | "exact";
-
-/** 角度・線の長さで指定した、展開図と3D表示に共通する辺。 */
-export interface MeasureEdgePick {
-  kind: "edge";
-  edgeId: number;
-}
-
-/**
- * 2点の距離で指定した点。
- *
- * cpは展開図座標、faceIdは3D上の現在位置をそのつど導出するための面である。
- * 展開図から指定して面がまだ決まっていない場合だけnullにする。worldは姿勢の
- * 再生で古くなるため持たない。vertexIdは既存の選択表示に同じ点を渡すためだけに使う。
- */
-export interface MeasurePointPick {
-  kind: "point";
-  cp: Vec2;
-  faceId: number | null;
-  vertexId: number | null;
-}
-
-export type MeasurePick = MeasureEdgePick | MeasurePointPick;
-
-/** 測る道具を使っている間だけの状態。作品・端末設定のどちらにも保存しない。 */
-export interface MeasureDraft {
-  mode: MeasureMode;
-  picks: MeasurePick[];
-  /** nullなら、正確な形の有無と小数の桁数から既定表示を決める。 */
-  display: MeasureDisplay | null;
-}
-
-/** 折る対象の層: 全ての層 / いちばん上の1枚 */
-export type FoldTarget = "all" | "top";
-
-/** 引いた折り線と、確定前の設定(コンテキストパネルで変える) */
-export interface FoldDraft {
-  /** 折り線(畳み平面座標=3D表示のxy)。始点→終点の向きが左右の基準になる */
-  line: [Vec2, Vec2];
-  /** 折る向き(Up=手前へ折る/谷、Down=向こうへ折る/山) */
-  direction: FoldDirection;
-  target: FoldTarget;
-  /** 折り線のどちら側を動かすか(線の進行方向に対する左右) */
-  movingSide: "left" | "right";
-  /** 線を引いた時点の作品の世代番号(新規・開くで変わる) */
-  docEpoch: number;
-  /** 線を引いた時点の手順の数。線は「その形の上」で引いたものなので、
-   * 手順が増減していたら別の形に対する線になってしまう */
-  stepCount: number;
-  /** 線を引いた時点で見ていた位置(=折りが挟まる位置)。見る手順を移すと
-   * 別の形の上の線になってしまうので、ここが変わった線は捨てる */
-  upTo: number;
-}
-
-/** 展開図へ線を1本足す要求。 */
-type AddSegmentOp = Extract<EditOp, { type: "AddSegment" }>;
-
-/**
- * まだ送っていない線も入れて測るための作業用の写し。
- * 「紙が曲がるための線」をどこで止めるかは、その曲線で先に引いた線にも
- * ぶつかったところで決まるので、送る前の形をここで組み立てる。
- */
-function editableCopy(doc: Document): Document {
-  return {
-    ...doc,
-    cp: { ...doc.cp, vertices: [...doc.cp.vertices], edges: [...doc.cp.edges] },
-  };
-}
-
-/** 作業用の写しへ線を1本足す(交点での分割はしない。止まる位置の判定にしか使わない) */
-function addWorkingEdge(work: Document, a: Vec2, b: Vec2, kind: EdgeKind): void {
-  const v0 = work.cp.next_vertex_id;
-  work.cp.vertices.push({ id: v0, pos: a }, { id: v0 + 1, pos: b });
-  work.cp.next_vertex_id = v0 + 2;
-  const edgeId = work.cp.next_edge_id;
-  work.cp.edges.push({ id: edgeId, v0, v1: v0 + 1, kind });
-  work.cp.next_edge_id = edgeId + 1;
-}
-
-/** 実際に作品へ適用するFoldThrough。事前確認では最後の指定だけを除いて使う。 */
-type FoldThroughApplyOp = Extract<SeqOp, { type: "FoldThrough" }>;
-type FoldThroughInput = Omit<FoldThroughApplyOp, "accept_additional_crease">;
-
-/** 立体姿勢の紙をつかんだドラッグ。座標は3D表示と同じ世界座標。 */
-export type SpatialFoldDrag = {
-  from: [number, number, number];
-  to: [number, number, number];
-  grab_face: number;
-  mode: GrabMode;
-};
-
-/** 平坦用FoldThroughに、立体姿勢の入力を必要なときだけ添える。 */
-type FoldThroughOperation = FoldThroughInput & { spatial?: SpatialFoldDrag };
-
-/**
- * Frame3Dが従来の畳み平面から外れているか。
- * flat用のfoldLayersと同じ許容差を使い、平坦経路の選択を変えない。
- */
-export function isSpatialFoldFrame(frame: Frame3D | null): boolean {
-  return (
-    frame !== null &&
-    frame.faces.some((face) => face.polygon.some(([, , z]) => Math.abs(z) > 1e-6))
-  );
 }
 
 /**
@@ -492,242 +337,6 @@ function finishComparisonFrame(frame: Frame3D | null): Frame3D | null {
   };
 }
 
-/**
- * 縁への衝突が1か所だけ見つかり、巻き込み用の追加折り目を選べる状態。
- * 元の折り入力も保持し、利用者の答えを同じ条件へ適用する。
- */
-export interface PendingFoldThrough {
-  proposal: FoldThroughProposal;
-  operation: FoldThroughOperation;
-  docEpoch: number;
-  stepCount: number;
-}
-
-/**
- * 「合わせて折る」の途中経過(折り紙の基準合わせ)。
- * 展開図または3D表示で点・線を順に選び、そろった時点で折り線を計算してFoldDraftを作る。
- * 折り方の決定(山谷・対象の層・折る/やめる)は既存の折り確定UIをそのまま使う。
- */
-export interface AlignDraft {
-  /** 藤田・羽鳥の7基本作図、または既存線をそのまま使う合わせ方 */
-  mode: AlignMode;
-  /** 選んだ対象(ALIGN_STEPSの順。まだ足りない間は途中まで) */
-  picks: AlignTarget[];
-  /** 展開図から選んだ対象のID。3Dで選んだ段階はnull。picksと同じ順に並ぶ。 */
-  cpPicks?: (AlignCpPick | null)[];
-  /** 求まった折り線(0〜3本。カーソルに近い順) */
-  solutions: FoldLine[];
-  /** 今使っている解の番号(「別の解」で切り替える) */
-  solutionIndex: number;
-  /** 解が求まらなかった理由(求まったならnull) */
-  reason: string | null;
-}
-
-/** 展開図側で既存の選択強調へ対応付けるための、選んだ対象のID。 */
-export type AlignCpPick =
-  | { kind: "vertex"; id: number }
-  | { kind: "edge"; id: number };
-
-/** 技法の下ごしらえ(選んだ技法・フラップ・折り線)。確定するまで保持する */
-export interface TechniqueDraft {
-  /** 選んだ技法(実装済みのものだけ。lib/techniques.tsのSUPPORTED_TECHNIQUESを参照) */
-  kind: TechniqueKind;
-  /** 対象フラップ(3D表示でクリックした場所に重なっている層の面ID) */
-  flap: number[];
-  /** クリック地点に重なる候補層。facesAtPointと同じ奥→手前の順 */
-  flapCandidates: number[];
-  /** 「手前/奥からN枚」「手前からN枚目」で使う枚数・奥行き */
-  flapPickCount: number;
-  /** 折り線(畳み平面座標)。まだ引いていなければnull */
-  line: [Vec2, Vec2] | null;
-  /** 折り線のどちら側が動くか(線の進行方向に対する左右) */
-  movingSide: "left" | "right";
-  /** 段折りの段の幅(mm) */
-  widthMm: number;
-  /** ねじり折りの中央多角形(畳み平面座標)。3D画面で順にクリックした頂点。
-   * 3点以上そろうと、この形のまま折る(辺の数も長さも仮定しない) */
-  polygon: Vec2[];
-  /** ねじり折りの中心(畳み平面座標)。nullなら多角形の重心を使う */
-  center: Vec2 | null;
-  /**
-   * 名前付き技法へ渡す基準点(畳み平面座標)。nullなら折り線と動かす側から
-   * 自動で決める。技法ごとの意味は、つぶす先・持ち上げる先端・沈める先端・
-   * 寄せる先など。ねじり折りの中心は上のcenterを使う。
-   */
-  referencePoint: Vec2 | null;
-  /** ねじり折りのねじる角(度)。動かす側の指定で向きが決まる */
-  twistDeg: number;
-  /** 対応技法で、動かした紙を向こう側(重なりの下)へ入れるか */
-  openToBack: boolean;
-  /** kind=Simpleを「層操作」入口として使うときの現在partの変換。 */
-  motionMode: LayerMotionMode;
-  /** Stayで紙を動かさず重ね替えるときの置き場所。 */
-  motionTurn: LayerTurnMode;
-  /** Outside/Inside/Besideの手前(Up)・奥(Down)。 */
-  motionDirection: FoldDirection;
-  /** Besideで隣へ置く基準面ID。 */
-  motionAnchor: number;
-  /** 現在part内の重なり順を反転するか。 */
-  motionReverseLayers: boolean;
-  /** クリックで正確に選んだ既存折り目。手描き軸ならnull。 */
-  motionAxisEdgeId: number | null;
-  /** 1手として同時に適用する、追加済みのpart。 */
-  motionParts: MotionPart[];
-  /** 選んだ時点の作品の世代番号(新規・開くで変わる) */
-  docEpoch: number;
-  /** 選んだ時点の手順の数 */
-  stepCount: number;
-  /** 選んだ時点で見ていた位置(=技法が挟まる位置)。FoldDraftと同じ意味 */
-  upTo: number;
-}
-
-/** 技法下書きの共通項目から、汎用層操作の現在partだけを取り出す。 */
-function layerMotionPartDraft(draft: TechniqueDraft): LayerMotionPartDraft {
-  return {
-    layers: draft.flap,
-    line: draft.line,
-    mode: draft.motionMode,
-    turn: draft.motionTurn,
-    direction: draft.motionDirection,
-    anchor: draft.motionAnchor,
-    reverseLayers: draft.motionReverseLayers,
-  };
-}
-
-/** part追加後、次の部分を選べる空の状態へ戻す。追加済みpartは呼び出し側で保つ。 */
-function clearCurrentLayerMotion(draft: TechniqueDraft): TechniqueDraft {
-  return {
-    ...draft,
-    flap: [],
-    flapCandidates: [],
-    flapPickCount: 1,
-    line: null,
-    motionMode: "reflect",
-    motionTurn: "Keep",
-    motionDirection: "Up",
-    motionAnchor: 0,
-    motionReverseLayers: false,
-    motionAxisEdgeId: null,
-  };
-}
-
-/**
- * 1つ目に選んだ対象が、求まった折り線のどちら側にあるかを返す。
- * 点が折り線上にあるとき、または線が折り線をまたぐときは片側に決め付けずnullにする。
- */
-export function automaticMovingSide(
-  line: FoldLine,
-  first: AlignTarget | null | undefined,
-): FoldDraft["movingSide"] | null {
-  if (!first) return null;
-  const dx = line[1][0] - line[0][0];
-  const dy = line[1][1] - line[0][1];
-  const length = Math.hypot(dx, dy);
-  if (length < ALIGN_EPS) return null;
-  // 長さで割った符号付き距離を使う。線分が長いほど判定だけが厳しくなることを防ぐ。
-  const signedDistance = (point: Vec2): number =>
-    (dx * (point[1] - line[0][1]) - dy * (point[0] - line[0][0])) / length;
-  const sideOf = (point: Vec2): FoldDraft["movingSide"] | null => {
-    const distance = signedDistance(point);
-    if (distance > ALIGN_EPS) return "left";
-    if (distance < -ALIGN_EPS) return "right";
-    return null;
-  };
-
-  if (first.kind === "point") return sideOf(first.p);
-  const a = sideOf(first.a);
-  const b = sideOf(first.b);
-  // 片端が折り線上なら、紙があるもう一端の側を使う。両端が反対側なら
-  // 選んだ線そのものが折り線をまたぐので、片側だと決め付けない。
-  if (a === null) return b;
-  if (b === null) return a;
-  return a === b ? a : null;
-}
-
-/**
- * 自動判定できない入力では従来の中点判定を使い、既存の折り方を変えない。
- * 判定不能であること自体はautomaticMovingSideのnullを使って画面に説明する。
- */
-export function initialMovingSide(
-  line: FoldLine,
-  first: AlignTarget | null | undefined,
-): FoldDraft["movingSide"] {
-  if (!first) return "right";
-  return automaticMovingSide(line, first) ?? movingSideOf(line, alignRefPoint(first));
-}
-
-/**
- * 合わせて求まった折り線から、確定前の折り(FoldDraft)を作る。
- * 折り返す紙は「1つ目に選んだ対象がある側」にする(その対象が相手に重なる)。
- * 向き・対象の層は既存の折り操作と同じ既定にする。
- */
-export function alignFoldDraft(
-  s: { docEpoch: number; doc: Document | null; currentStep: number | null },
-  line: FoldLine,
-  picks: AlignTarget[],
-): FoldDraft | null {
-  if (!s.doc || picks.length === 0) return null;
-  return {
-    line,
-    direction: "Up",
-    target: "all",
-    // 判定不能時は従来と同じ側を保つ。画面では黄色と理由を必ず示し、
-    // 利用者が二択へ答えなくても単一の反転操作だけで直せるようにする。
-    movingSide: initialMovingSide(line, picks[0]),
-    docEpoch: s.docEpoch,
-    stepCount: s.doc.sequence.length,
-    upTo: foldInsertAt(s),
-  };
-}
-
-/** 選び終えたかどうか(合わせ方ごとに必要な数だけ選べたか) */
-export function isAlignComplete(draft: AlignDraft): boolean {
-  return draft.picks.length >= ALIGN_STEPS[draft.mode].length;
-}
-
-/** 次に選ぶべき対象の種類(選び終えていればnull) */
-export function nextAlignKind(draft: AlignDraft): "point" | "line" | null {
-  const steps = ALIGN_STEPS[draft.mode];
-  return draft.picks.length < steps.length ? steps[draft.picks.length] : null;
-}
-
-/** 段折りの段の幅の初期値(mm) */
-const DEFAULT_PLEAT_WIDTH_MM = 10;
-
-/** 選んだ後に作品または手順の位置が変わり、古い入力を使えなくなったときの案内 */
-const STALE_DRAFT_MESSAGE =
-  "折り方を決めた後に作品または表示する手順が変わったため、選んだ内容を取り消しました。今の形でもう一度選んでください";
-
-/** 一時的な画面状態のため、選択を残したまま確定だけ待ってもらう案内 */
-const PLAYING_FOLD_MESSAGE =
-  "手順を再生している間は、この折り方を確定できません。選んだ内容は残してあります。再生を止めてください";
-const PARTIAL_PLAYBACK_FOLD_MESSAGE =
-  "手順の途中の形からは、この折り方をまだ記録できません。選んだ内容は残してあります。手順を最後まで進めてください";
-const ANGLED_FOLD_MESSAGE =
-  "角度を変えた形からは、この折り方をまだ記録できません。選んだ内容は残してあります。角度を0°に戻すと、このまま折れます";
-
-/** 技法が使えない形だったときに添える案内(要件§12) */
-const TECHNIQUE_FALLBACK_HINT = "手動の折り操作で代替してください";
-
-/**
- * 折る操作ができる状態か(平らに畳んだ状態を表示しているか)。
- * 再生中・折り途中(playT≠1)・0°以外の角度指定がある間は、画面の形と
- * 平らな手順境界へ記録する折りの入力が食い違うので、そのまま確定しない。
- * 0°だけの角度指定は紙を変形させないため、指定がMapに残っていても折れる。
- *
- * 途中の手順を選んでいる間も折れる(SEQ-006)。そこで折ると、その手順の前へ
- * 折りが挟まり、後ろの手順はそのまま残って折り直される。
- */
-export function canFoldNow(s: {
-  doc: Document | null;
-  currentStep: number | null;
-  playT: number;
-  playing: boolean;
-  drivers: Map<number, number>;
-}): boolean {
-  return foldUnavailableMessage(s) === null;
-}
-
 /** 0°は「平ら」を明示しただけなので、折る操作を妨げる角度指定に数えない。 */
 function nonZeroDriverCount(drivers: ReadonlyMap<number, number>): number {
   let count = 0;
@@ -735,32 +344,6 @@ function nonZeroDriverCount(drivers: ReadonlyMap<number, number>): number {
     if (angle !== 0) count++;
   }
   return count;
-}
-
-/** 古い下書きとは分けて、いま確定できない理由を利用者の言葉で返す。 */
-function foldUnavailableMessage(s: {
-  doc: Document | null;
-  playT: number;
-  playing: boolean;
-  drivers: ReadonlyMap<number, number>;
-}): string | null {
-  if (!s.doc) return "紙がありません。上の「新規」で紙を出してください";
-  if (s.playing) return PLAYING_FOLD_MESSAGE;
-  // playTは計算結果ではなく、終端を必ず1へ正規化する再生状態の印。
-  // 許容差を入れると、一時停止した1未満の途中形を誤って通してしまう。
-  if (s.playT !== 1) return PARTIAL_PLAYBACK_FOLD_MESSAGE;
-  if (nonZeroDriverCount(s.drivers) > 0) return ANGLED_FOLD_MESSAGE;
-  return null;
-}
-
-/** 折り操作を挟む位置(=この折りの直前までの手順数)。
- * 「最新」を見ているなら末尾へ、途中の手順を見ているならその位置へ挟む */
-export function foldInsertAt(s: {
-  doc: Document | null;
-  currentStep: number | null;
-}): number {
-  const total = s.doc?.sequence.length ?? 0;
-  return s.currentStep === null ? total : Math.min(s.currentStep, total);
 }
 
 /**
@@ -860,36 +443,7 @@ export function poseRecordReason(s: {
   return null;
 }
 
-interface AppState {
-  doc: Document | null;
-  /** 手順ごとに展開図へ新しく足した折り線(作品ファイル由来の来歴)。
-   * 過去の手順の展開図を推測せずに組み立てるために使う */
-  stepCreases: StepCreases[];
-  faces: Face[];
-  warnings: string[];
-  /** 平らにする操作の最新結果で、利用者へ知らせる点(raw violationsとは別) */
-  flatFoldViolations: number[];
-  violations: number[];
-  selection: Selection;
-  /** 複数スライダーのうち、いま指している折り目。2D/3Dの個別強調に使う。 */
-  hoveredHinge: number | null;
-  activeTool: ToolId;
-  /** 測る道具の途中指定。表示中だけ共有し、作品・端末設定には保存しない。 */
-  measureDraft: MeasureDraft;
-  /** 引いたばかりの折り線と確定前の設定。nullなら折り線を引いていない */
-  foldDraft: FoldDraft | null;
-  /** 巻き込み用の追加折り目を提案中。2D/3Dのプレビューもこの値を使う */
-  pendingFoldThrough: PendingFoldThrough | null;
-  /** 折りの事前確認または、提案への答えを適用している途中 */
-  foldThroughBusy: boolean;
-  /** 「合わせて折る」の途中経過。nullなら合わせモードに入っていない */
-  alignDraft: AlignDraft | null;
-  /** 選んだ技法と、その下ごしらえ(フラップ・折り線)。nullなら技法を選んでいない */
-  techniqueDraft: TechniqueDraft | null;
-  /** 作図補助の選択(どの作図か・等分数・角度の刻み)。CpEditorが使う */
-  construct: ConstructOptions;
-  /** 曲線の折り目(CPE-011)の選択(直線/曲線・描き方・分割・曲がるための線) */
-  curve: CurveOptions;
+interface AppState extends DocumentSlice {
   /** 3D表示フレーム。nullなら平ら(展開図から直接描く) */
   frame3d: Frame3D | null;
   /** 全折り目を同じ割合で動かす一時表示。作品・設定・Undoには保存しない。 */
@@ -921,11 +475,6 @@ interface AppState {
   replaySkipped: number[];
   /** 手順再生からの警告(飛ばした理由など)。展開図・追従計算の警告とは別に持つ */
   replayWarnings: string[];
-  errorMessage: string | null;
-  /** 直近に保存できた作品ファイルの場所。編集・次の保存開始・失敗で消す。 */
-  documentSavedPath: string | null;
-  /** 作品の世代番号。新規/開くの成功で増える(エディタの表示リセット合図) */
-  docEpoch: number;
   /** 利用者が指定した折り角度(度)。キーは辺ID */
   drivers: Map<number, number>;
   /**
@@ -1084,25 +633,6 @@ interface AppState {
   paperActionTipVisible: boolean;
   /** 紙の操作案内を詳しく開いているか。閉じた後は小さな入口だけ残す。 */
   paperActionTipExpanded: boolean;
-
-  newDocument: (paper: Paper) => Promise<void>;
-  openDocument: (path: string) => Promise<void>;
-  saveDocument: (path: string | null) => Promise<void>;
-  /** 展開図を変える要求を送る。複数渡すと、画面での1回の入力として
-   * 元に戻す1回でまとめて戻せるようになる(不具合D05) */
-  applyEdit: (op: EditOp | EditOp[]) => Promise<void>;
-  /** 展開図に線を1本引く(CPE-010)。左右対称のときは中心線で折り返した線も
-   * 一緒に引き、2本で元に戻す1回分になる */
-  drawSegment: (a: Vec2, b: Vec2, kind: EdgeKind) => Promise<void>;
-  /** 曲線の折り目を折れ線として引く(CPE-011)。設定に応じて「紙が曲がるための
-   * 線」も一緒に引く。左右対称の指定も効き、曲線1本が元に戻す1回分になる */
-  drawCurve: (points: Vec2[], kind: EdgeKind) => Promise<void>;
-  /** 左右対称に線を引くかを切り替える(次回起動時も同じ設定に戻る) */
-  setMirrorDraw: (on: boolean) => void;
-  /** 紙の縦・横の中心線を基準にする。端末設定へ保存する。 */
-  setMirrorAxisPreset: (preset: MirrorAxisPreset) => void;
-  /** 展開図で選んでいる折り線・補助線1本を基準にする。作品をまたいで保存しない。 */
-  setSelectedLineAsMirrorAxis: () => void;
   /** 3Dで引くとき左右同時に動かすかを切り替える(次回起動時も同じ設定に戻る) */
   setPullMirror: (on: boolean) => void;
   /** 2D展開図のホイール動作を切り替える(次回起動時も同じ設定に戻る) */
@@ -1157,91 +687,6 @@ interface AppState {
   stepBy: (delta: number) => void;
   /** 再生と一時停止を切り替える */
   togglePlay: () => void;
-  setTool: (tool: ToolId) => void;
-  /** 測り方を替え、前の途中指定と結果を捨てる。 */
-  setMeasureMode: (mode: MeasureMode) => void;
-  /** 結果カードの表示形式を1回の操作で替える。 */
-  setMeasureDisplay: (display: MeasureDisplay) => void;
-  /** 展開図または3D表示で拾った辺を、現在の測定へ1本追加する。 */
-  pickMeasureEdge: (edgeId: number) => void;
-  /** 展開図または3D表示で拾った点を、現在の測定へ1点追加する。 */
-  pickMeasurePoint: (pick: Omit<MeasurePointPick, "kind">) => void;
-  /** 測り方を保ったまま、途中指定と結果だけを捨てる。 */
-  clearMeasurement: () => void;
-  setSelection: (selection: Selection) => void;
-  /** 折り目ごとの角度行を指したときの一時的な強調(nullで解除) */
-  setHoveredHinge: (hinge: number | null) => void;
-  /** 引いた折り線を確定前の状態として置く(source="2d"は手順がある間は断る) */
-  beginFoldDraft: (line: [Vec2, Vec2], source: "2d" | "3d") => void;
-  /** 確定前の折りの設定(向き・対象層・折り返す紙)を変える */
-  updateFoldDraft: (patch: Partial<FoldDraft>) => void;
-  /** 引いた折り線を捨てる */
-  cancelFoldDraft: () => void;
-  /** 引いた折り線で実際に折る(sequence_apply FoldThrough)。成功したら折り線を捨てる */
-  commitFoldDraft: () => Promise<void>;
-  /** 巻き込み用の追加折り目を入れるか答え、元の折りを確定する */
-  resolveFoldThroughProposal: (accept: boolean) => Promise<void>;
-  /** 「合わせて折る」を始める(合わせ方を選ぶ)。同じ合わせ方をもう一度押すとやめる */
-  beginAlign: (mode: AlignMode) => void;
-  /** 合わせる対象(点・線)を1つ選ぶ。cursorは解が2つあるときの既定を決めるのに使う */
-  pickAlignTarget: (
-    target: AlignTarget,
-    cursor?: Vec2 | null,
-    cpPick?: AlignCpPick | null,
-  ) => void;
-  /** 解が2つあるときに別の解へ切り替える */
-  nextAlignSolution: () => void;
-  /** 直前の選択を取り消す(選択が無ければ何もしない) */
-  undoAlignPick: () => void;
-  /** 合わせモードをやめる(選択も求まった折り線も捨てる) */
-  cancelAlign: () => void;
-  /**
-   * 紙をつかんで動かす折り操作(UI-007)。つかんだ点fromから離した点toへの
-   * ドラッグを折り線・対象の層に翻訳して、そのまま折る(パネル操作は要らない)。
-   * grabFaceは立体表示で実際につかんだ面(raycastで拾えなければnull)。
-   * directionは立体で180°になったとき、ドラッグ途中に通った表裏の側を保つ。
-   */
-  foldByDrag: (
-    from: Vec2 | [number, number, number],
-    to: Vec2 | [number, number, number],
-    mode: GrabMode,
-    grabFace?: number | null,
-    direction?: FoldDirection,
-  ) => Promise<void>;
-  /** 技法を選ぶ(ツールレールのサブメニュー)。下ごしらえを作り直す */
-  beginTechnique: (kind: TechniqueKind) => void;
-  /** 3D表示でクリックした場所の層をフラップとして選ぶ */
-  setTechniqueFlap: (faces: number[]) => void;
-  /** 候補層を「全部/手前・奥からN枚/手前からN枚目」で選ぶ */
-  setTechniqueFlapPreset: (preset: TechniqueLayerPreset) => void;
-  /** 候補層1枚のチェックを切り替える */
-  toggleTechniqueFlap: (face: number) => void;
-  /** 技法の折り線を引く */
-  setTechniqueLine: (line: [Vec2, Vec2]) => void;
-  /** 層操作で、3D上の既存折り目を正確な開閉軸として選ぶ。 */
-  setLayerMotionAxis: (edgeId: number, line: [Vec2, Vec2]) => void;
-  /** 現在の層操作partを同時操作の一覧へ追加する。 */
-  addLayerMotionPart: () => void;
-  /** 同時操作の一覧から直前のpartを外す。 */
-  undoLayerMotionPart: () => void;
-  /** ねじり折りの中央多角形へ頂点を1つ足す(3D画面のクリック) */
-  addTechniqueVertex: (p: Vec2) => void;
-  /** 直前に足した頂点を取り消す(頂点が無ければ何もしない) */
-  undoTechniqueVertex: () => void;
-  /** ねじり折りの中心を指定する(nullで多角形の重心へ戻す) */
-  setTechniqueCenter: (p: Vec2 | null) => void;
-  /** 名前付き技法の基準点を明示する(nullで自動へ戻す) */
-  setTechniqueReferencePoint: (p: Vec2 | null) => void;
-  /** 技法の設定(動かす側・段の幅)を変える */
-  updateTechniqueDraft: (patch: Partial<TechniqueDraft>) => void;
-  /** 作図補助(CPE-005)の選び方を変える(どの作図か・等分数・角度の刻み) */
-  setConstruct: (patch: Partial<ConstructOptions>) => void;
-  /** 曲線の折り目(CPE-011)の選び方を変える */
-  setCurve: (patch: Partial<CurveOptions>) => void;
-  /** 技法の下ごしらえを捨てる */
-  cancelTechnique: () => void;
-  /** 選んだ技法を実際に適用する(sequence_apply Technique) */
-  commitTechnique: () => Promise<void>;
   /**
    * 3Dで紙をつかんで引く操作を始める(UI-007)。
    * 今見えている形の全ヒンジ角(anglesは lib/grabDrive の読み取り結果)を
@@ -1364,34 +809,6 @@ export interface ExportSettings {
 /** PNGの既定の長辺(点)。Rust側のDEFAULT_LONG_SIDE_PXと揃える(EXP-002) */
 export const DEFAULT_PNG_LONG_SIDE = 2048;
 
-const EMPTY_SELECTION: Selection = { edgeIds: [], vertexIds: [] };
-
-/** 新しい配列を持つ空の測定状態。共有配列を誤って書き換えないよう毎回作る。 */
-function emptyMeasureDraft(mode: MeasureMode = "angle"): MeasureDraft {
-  return { mode, picks: [], display: null };
-}
-
-/** 測定対象を既存の2D/3D選択強調へ渡す。IDを持たない方眼上の点は別描画にする。 */
-function selectionForMeasure(picks: readonly MeasurePick[]): Selection {
-  return {
-    edgeIds: [
-      ...new Set(
-        picks
-          .filter((pick): pick is MeasureEdgePick => pick.kind === "edge")
-          .map((pick) => pick.edgeId),
-      ),
-    ],
-    vertexIds: [
-      ...new Set(
-        picks
-          .filter((pick): pick is MeasurePointPick => pick.kind === "point")
-          .map((pick) => pick.vertexId)
-          .filter((id): id is number => id !== null),
-      ),
-    ],
-  };
-}
-
 /**
  * トレーリングエッジのスロットル。連続呼び出しをintervalMsごと1回に間引き、
  * 最後の呼び出しは必ず実行する(スライダーを離した位置の角度が捨てられない)。
@@ -1448,13 +865,6 @@ export function resetFoldAllPreviewRuntime(): void {
   resetFoldAllRuntime();
 }
 
-/** 中身が同じなら前の配列を使い回す。再生中は毎コマ結果が届くので、
- * 内容が変わらない限り同じ配列を返して画面の再描画を起こさない */
-function keepIfSame<T>(prev: T[], next: T[]): T[] {
-  const same = prev.length === next.length && prev.every((v, i) => v === next[i]);
-  return same ? prev : next;
-}
-
 /** 中身が同じなら前の配列を使い回す(毎回の計算で画面を描き直さないため)。 */
 function keepIfSameReleasedPins(
   prev: ReleasedPin[],
@@ -1481,16 +891,6 @@ export function isStepSkipped(
   return s.skipped.includes(stepId) || s.replaySkipped.includes(stepId);
 }
 
-/** ドキュメント更新後、存在しなくなったIDを選択から取り除く */
-function pruneSelection(selection: Selection, doc: Document): Selection {
-  const edgeIds = new Set(doc.cp.edges.map((e) => e.id));
-  const vertexIds = new Set(doc.cp.vertices.map((v) => v.id));
-  return {
-    edgeIds: selection.edgeIds.filter((id) => edgeIds.has(id)),
-    vertexIds: selection.vertexIds.filter((id) => vertexIds.has(id)),
-  };
-}
-
 /** 1件の提案計算にだけ属する、保存しないruntime資源。 */
 interface ActiveProposalJob {
   jobId: ProposalJobId;
@@ -1500,29 +900,26 @@ interface ActiveProposalJob {
 }
 
 export const useAppStore = create<AppState>((set, get) => {
-  const queue = createSerialQueue();
+  const commandService = createCommandService<AppState>(set, get, {
+    discardFoldAllPreview: () => discardFoldAllPreview(),
+    stopPlayback: () => stopPlayback(),
+    resetPoseSchedule: () => pose.reset(),
+    clearAngleHistory: () => clearAngleHistory(),
+    syncSequence: (view) => syncSequence(view),
+    syncPose: () => syncPose(),
+  });
+  const {
+    queue,
+    fail,
+    runViewCommand,
+    applyDocChangeResult,
+    applyDocChange,
+  } = commandService;
   // 読み取り専用の一斉表示は作品編集FIFOから独立させる。保存要求が後から
   // 積まれただけで表示結果を古い扱いにせず、同時実行はこのqueue内で1件に保つ。
   const foldAllQueue = createSerialQueue();
-  /**
-   * 直前に開始した作品変更が、返されたDocumentViewをストアへ反映し終えるまでの約束。
-   * IPCのFIFOだけでは、後続操作が呼ばれた瞬間に読むdocまでは新しくならないため、
-   * 現在値を材料に次の操作を組み立てる箇所はこれを待つ。
-   */
-  let latestDocChange: Promise<void> = Promise.resolve();
   const prefs = loadPrefs();
   let onboarding = loadOnboarding();
-
-  /**
-   * FoldThroughの事前確認を無効にする世代番号。
-   *
-   * 提案は作品を止めない非モーダルUIなので、確認IPCの待機中にも利用者は
-   * 手順表示やツールを変えられる。その場合、古い形から返った候補を採用しない。
-   * 表示する状態ではないためZustandへ公開せず、このストア1本の内部で管理する。
-   */
-  let foldThroughRevision = 0;
-  /** busyを開始した要求の番号。古い要求のfinallyが新しいbusyを消さないために使う */
-  let foldThroughBusyToken = 0;
   /** 一斉表示へ入り直した古い応答を捨てる世代。 */
   let foldAllSessionGeneration = 0;
   /** 16ms待ちの間にも新入力が旧応答を追い越せる要求番号。 */
@@ -1903,11 +1300,6 @@ export const useAppStore = create<AppState>((set, get) => {
     return true;
   };
 
-  const invalidateFoldThrough = (): void => {
-    foldThroughRevision++;
-    if (get().pendingFoldThrough !== null) set({ pendingFoldThrough: null });
-  };
-
   /**
    * 0°だけの角度指定は形を変えない。折りを確定する時点で空へ正規化し、
    * 折った後も「角度を変えているため折れない」という古い案内を残さない。
@@ -1916,12 +1308,6 @@ export const useAppStore = create<AppState>((set, get) => {
     const drivers = get().drivers;
     if (drivers.size > 0 && nonZeroDriverCount(drivers) === 0) {
       set({ drivers: new Map() });
-    }
-  };
-
-  const finishFoldThroughBusy = (token: number): void => {
-    if (foldThroughBusyToken === token && get().foldThroughBusy) {
-      set({ foldThroughBusy: false });
     }
   };
 
@@ -1959,179 +1345,6 @@ export const useAppStore = create<AppState>((set, get) => {
       paperHelpExpanded,
       paperColorExpanded,
     });
-  };
-
-  /** DocumentViewの内容で状態を一括更新する(成功時共通処理)。
-   * isNewDocument=true(新規/開く)なら選択を解除しdocEpochを進める。
-   * 手順が減ったときは表示中の手順番号を手順数まで詰める。
-   *
-   * 引きかけの折り線はここで必ず捨てる。線は「引いた時点の形」の上の座標なので、
-   * 展開図の編集・元に戻す・やり直し・手順の増減があった後に使うと、別の形の上で
-   * 引いた線が黙って今の形へ適用されてしまう(折る操作自体の成功時も同じ経路を
-   * 通るので、折り終わった線がそのまま残ることもない) */
-  const applyView = (view: DocumentView, isNewDocument: boolean) => {
-    const total = view.doc.sequence.length;
-    set((s) => {
-      const reboundSelectedAxis =
-        !isNewDocument &&
-        s.doc !== null &&
-        s.mirrorAxis.kind === "selectedLine"
-          ? rebindSelectedMirrorAxis(s.doc, view.doc, s.mirrorAxis)
-          : null;
-      const selectedAxisMissing =
-        s.mirrorAxis.kind === "selectedLine" &&
-        !isNewDocument &&
-        reboundSelectedAxis === null;
-      const resetSelectedAxis =
-        s.mirrorAxis.kind === "selectedLine" &&
-        (isNewDocument || selectedAxisMissing);
-      return {
-        // 紙の色・方眼は作品ごとの設定(doc.display)。ここを唯一の拠り所にして
-        // 画面側の写し(display)をそろえる。人からもらった作品を開けば、
-        // その作品の色と方眼がそのまま出る
-        doc: view.doc,
-        stepCreases: view.step_creases ?? [],
-        display: view.doc.display,
-        operationStage: s.lineInputStart === null ? s.operationStage : 0,
-        lineInputStart: null,
-        foldDraft: null,
-        pendingFoldThrough: null,
-        alignDraft: null,
-        techniqueDraft: null,
-        // 座標や辺が変わった後に古い測定を見せない。測り方だけは編集後も保つ。
-        measureDraft: emptyMeasureDraft(
-          isNewDocument ? "angle" : s.measureDraft.mode,
-        ),
-        paperActionTipVisible: false,
-        paperActionTipExpanded: false,
-        faces: view.faces,
-        hinges: hingeEdgeIds(view.doc, view.faces),
-        warnings: view.warnings,
-        flatFoldViolations: keepIfSame(
-          s.flatFoldViolations,
-          view.flat_fold_violations ?? [],
-        ),
-        violations: view.violations,
-        skipped: view.skipped,
-        suspectHinges: keepIfSame(s.suspectHinges, view.suspect_hinges ?? []),
-        sequenceTargets: new Map(
-          [...(view.sequence_targets ?? [])]
-            .sort((a, b) => a.hinge - b.hinge)
-            .map((driver) => [driver.hinge, driver.target_angle_deg]),
-        ),
-        poseAngles: new Map(
-          Object.entries(view.angles ?? {}).map(([id, deg]) => [Number(id), deg]),
-        ),
-        relaxations: view.relaxations ?? [],
-        poseConverged: view.converged ?? true,
-        poseBestEffort: view.best_effort === true,
-        poseClosureRms:
-          typeof view.closure_rms === "number" ? view.closure_rms : null,
-        currentStep:
-          total === 0 || s.currentStep === null
-            ? null
-            : Math.min(s.currentStep, total),
-        selection: isNewDocument || s.activeTool === "measure"
-          ? EMPTY_SELECTION
-          : pruneSelection(s.selection, view.doc),
-        mirrorAxis: resetSelectedAxis
-          ? DEFAULT_MIRROR_AXIS
-          : reboundSelectedAxis ?? s.mirrorAxis,
-        mirrorAxisNotice:
-          !isNewDocument && selectedAxisMissing
-            ? MIRROR_AXIS_REMOVED_NOTICE
-            : isNewDocument
-              ? null
-              : s.mirrorAxisNotice,
-        hoveredHinge: null,
-        errorMessage: null,
-        documentSavedPath: null,
-        contactDetected: view.contact_detected,
-        docEpoch: isNewDocument ? s.docEpoch + 1 : s.docEpoch,
-      };
-    });
-  };
-
-  /** IPC失敗(reject)をerrorMessageへ反映する */
-  const fail = (e: unknown) => {
-    set({
-      errorMessage: typeof e === "string" ? e : String(e),
-      documentSavedPath: null,
-    });
-  };
-
-  /** DocumentViewを返すコマンドを直列化キュー経由で実行し、結果を反映する。
-   * 直列化により適用順の逆転は起きないため、成功したviewは完了順に全て適用する
-   * (途中の成功を捨てると、後続が失敗したときにバックエンドと画面が食い違う)。
-   * 失敗の報告だけは最新要求に限る(古い失敗の直後には必ず新しい結果が続く) */
-  const runViewCommandResult = async (
-    task: () => Promise<DocumentView>,
-    isNewDocument: boolean,
-    applySuccessfulView = true,
-  ): Promise<boolean> => {
-    const r = await queue.run(task);
-    if (r.ok) {
-      const foldAllReturn = isNewDocument ? discardFoldAllPreview() : null;
-      // 同一位置のMoveStepはbackendで成功を確認するが、画面にも同じviewを
-      // 再適用しない。選択・下書き・再生など作品以外の一時状態まで保つため。
-      if (!applySuccessfulView) return true;
-      applyView(r.value, isNewDocument);
-      if (isNewDocument) {
-        // 別の作品になったので角度指定・立体形状・再生位置は捨てる
-        stopPlayback();
-        pose.reset();
-        // 角度の履歴は作品データではないので、別の作品になったら捨てる
-        clearAngleHistory();
-        set({
-          drivers: new Map(),
-          // 固定も角度の指定と同じ一時的なものなので、別の作品になったら捨てる
-          pinnedFolds: new Map(),
-          releasedPins: [],
-          releasedPinHinges: [],
-          poseWarnings: [],
-          activeAngleIntent: null,
-          angleIntentGeneration: get().angleIntentGeneration + 1,
-          pullHinge: null,
-          pullMirrorHinge: null,
-          frame3d: r.value.frame,
-          softMesh: null,
-          softWarnings: [],
-          currentStep: null,
-          playT: 1,
-          replaySkipped: [],
-          replayWarnings: [],
-          foldDraft: null,
-          pendingFoldThrough: null,
-          foldThroughBusy: false,
-          alignDraft: null,
-          techniqueDraft: null,
-          operationStage: 0,
-          // 一斉表示が一時的に選択道具へ替えた分だけは、新しい作品へ持ち越さない。
-          ...(foldAllReturn === null ? {} : { activeTool: foldAllReturn.activeTool }),
-        });
-      }
-      if (r.value.doc.sequence.length > 0) {
-        await syncSequence(r.value);
-      } else if (!isNewDocument) {
-        await syncPose();
-      }
-      return true;
-    } else if (r.isLatest) {
-      fail(r.error);
-    }
-    return false;
-  };
-
-  /** 成否を使わない既存command向けの互換入口。 */
-  const runViewCommand = async (
-    task: () => Promise<DocumentView>,
-    isNewDocument: boolean,
-  ): Promise<void> => {
-    const pending = runViewCommandResult(task, isNewDocument).then(() => undefined);
-    // Undo/Redo・新規・開くも、入口が「作品変更の反映完了」を待てるよう
-    // 展開図編集・手順変更と同じ約束へ載せる。
-    latestDocChange = pending;
-    await pending;
   };
 
   /** driversの配列表現(IPCの引数) */
@@ -2249,92 +1462,6 @@ export const useAppStore = create<AppState>((set, get) => {
       angleRedoStack: [], // 新しい操作をしたらやり直しの先は消える
     });
   };
-
-  /**
-   * 作品データを変える要求(展開図の編集・手順の変更)を送る。
-   * 成功したらそれが「直前にした操作」になるので、角度の履歴は捨てて
-   * 「元に戻す」を作品側(edit_undo)へ回す。断られたときは何も変わって
-   * いないので角度の履歴はそのまま残す(角度を戻せなくならないように)。
-   */
-  const applyDocChangeResult = (
-    task: () => Promise<DocumentView>,
-    isNewDocument = false,
-    preserveAngleHistory = false,
-    applySuccessfulView = true,
-  ): Promise<boolean> => {
-    const pending = (async () => {
-      const succeeded = await runViewCommandResult(
-        task,
-        isNewDocument,
-        applySuccessfulView,
-      );
-      if (succeeded && !preserveAngleHistory) clearAngleHistory();
-      return succeeded;
-    })();
-    // 後続操作が待つためのPromiseはrejectを外へ漏らさない。呼び出し元には元の
-    // pendingを返すので、これまでどおり個別の失敗を観測できる。
-    latestDocChange = pending.then(
-      () => undefined,
-      () => undefined,
-    );
-    return pending;
-  };
-
-  /** 成否を使わない既存の作品変更向けの互換入口。 */
-  const applyDocChange = async (
-    task: () => Promise<DocumentView>,
-    isNewDocument = false,
-  ): Promise<void> => {
-    await applyDocChangeResult(task, isNewDocument);
-  };
-
-  /** 現在の指定を必ず有効な基準線へ解決する。不正な一時状態は縦中心へ安全に戻す。 */
-  const activeMirrorLine = (
-    doc: Document,
-    choice: MirrorAxisChoice,
-  ): MirrorLine =>
-    mirrorLineForChoice(doc, choice) ??
-    paperMirrorLine(doc.paper, "paperVertical");
-
-  /** 1回の描画開始時に固定した基準線で、元と反対側の線も含めた追加要求を作る。
-   * まだ送らずに返すので、呼び出し側が1回の入力ぶんをまとめて確定できる。
-   * 反対側へ広げるのは `applyEdit` でも行うが、そちらは既に反対側を含む並びを
-   * 渡しても線を増やさないので、ここで先に作っても本数は変わらない。 */
-  const segmentEditsWithAxis = (
-    a: Vec2,
-    b: Vec2,
-    kind: EdgeKind,
-    axis: MirrorLine | null,
-  ): AddSegmentOp[] => {
-    const segments = axis
-      ? mirrorSegments([a, b], axis)
-      : ([[a, b]] as [Vec2, Vec2][]);
-    return segments.map(([p, q]) => ({ type: "AddSegment", a: p, b: q, kind }));
-  };
-
-  /** この1回の要求が「線を引く」だけでできているか。 */
-  const onlyAddSegments = (ops: EditOp[]): ops is AddSegmentOp[] =>
-    ops.every((one) => one.type === "AddSegment");
-
-  /**
-   * 左右対称のとき、1回の入力で引く線をまとめて反対側へ広げる(不具合D13)。
-   * 手で引く線・曲線だけでなく、作図補助(二等分・垂線・等分・角度線)のように
-   * 何本も同時に引く入力も同じ経路を通る。基準線の上に乗る線や、集合の中で
-   * 互いに鏡像になっている線は二重に引かない。
-   */
-  const addSegmentsWithMirror = (
-    ops: AddSegmentOp[],
-    axis: MirrorLine,
-  ): AddSegmentOp[] =>
-    mirrorSegmentSet(
-      ops.map((one) => ({ key: one.kind, segment: [one.a, one.b] as Segment })),
-      axis,
-    ).map(({ key, segment }) => ({
-      type: "AddSegment",
-      a: segment[0],
-      b: segment[1],
-      kind: key,
-    }));
 
   /** 角度の履歴を捨てる(作品データを変えたとき・別の作品になったとき)。
    * 作品データの変更のほうが新しい操作になるので、「元に戻す」はそちらへ回す */
@@ -3003,7 +2130,7 @@ export const useAppStore = create<AppState>((set, get) => {
    */
   const selectStepAndWait = async (step: number | null): Promise<void> => {
     stopPlayback();
-    invalidateFoldThrough();
+    documentSlice.internals.invalidateFoldThrough();
     // 別の手順の形を見せる操作なので、その前の形の上に引いた折り線は捨てる
     // (残すとコンテキストパネルに折りUIが出たままになり、手順の設定も出せない)
     if (get().foldDraft || get().alignDraft) {
@@ -3361,7 +2488,7 @@ export const useAppStore = create<AppState>((set, get) => {
   ): Promise<boolean> => {
     if (!samePosition) {
       stopPlayback();
-      invalidateFoldThrough();
+    documentSlice.internals.invalidateFoldThrough();
     }
     return applyDocChangeResult(
       () => ipc.sequenceApply(op),
@@ -3395,160 +2522,27 @@ export const useAppStore = create<AppState>((set, get) => {
     saveOnboarding(onboarding);
   };
 
-  /** FoldThroughを作品へ適用する。事前提案の有無にかかわらず最後はこの経路を通る。 */
-  const applyFoldThrough = async (
-    operation: FoldThroughOperation,
-    acceptAdditionalCrease: boolean,
-    busyToken: number,
-  ): Promise<void> => {
-    const s = get();
-    if (!s.doc) {
-      set({ pendingFoldThrough: null });
-      finishFoldThroughBusy(busyToken);
-      return;
-    }
-    const beforeEpoch = s.docEpoch;
-    const beforeSequenceCount = s.doc.sequence.length;
-    // 末尾へ足すなら最新表示、途中へ挟むなら挟んだ手順を表示する。
-    set({
-      currentStep:
-        operation.up_to === s.doc.sequence.length ? null : operation.up_to + 1,
-    });
-    try {
-      await applyDocChange(() => {
-        const applyOperation: FoldThroughApplyOp & { spatial?: SpatialFoldDrag } = {
-          ...operation,
-          accept_additional_crease: acceptAdditionalCrease,
-        };
-        return ipc.sequenceApply(applyOperation);
-      });
-    } finally {
-      // 最新でない失敗は共通処理が画面へ出さない。その場合も確認中のままにしない。
-      // tokenを照合し、後から始まった別の確認のbusyは消さない。
-      finishFoldThroughBusy(busyToken);
-    }
-    const completed = get();
-    if (
-      completed.errorMessage === null &&
-      completed.docEpoch === beforeEpoch &&
-      (completed.doc?.sequence.length ?? 0) > beforeSequenceCount
-    ) {
-      completed.completeGuideAction("fold");
-    }
-  };
-
-  /**
-   * 折りを適用する前に、縁へぶつかる典型ケースだけを非破壊で調べる。
-   * PreviewFoldThroughのDocumentViewは作品更新として反映せず、提案だけを取り出す。
-   * これにより、確定前の折り線や編集中の選択を事前確認で失わない。
-   */
-  const requestFoldThrough = async (operation: FoldThroughOperation): Promise<void> => {
-    if (
-      get().foldAllPreview !== null ||
-      get().foldThroughBusy ||
-      get().pendingFoldThrough
-    ) {
-      return;
-    }
-    clearZeroOnlyDrivers();
-    stopPlayback();
-    const started = get();
-    const revision = ++foldThroughRevision;
-    const busyToken = ++foldThroughBusyToken;
-    set({
-      pendingFoldThrough: null,
-      foldThroughBusy: true,
-      errorMessage: null,
-    });
-    const r = await queue.run(() => {
-      const previewOperation: Extract<SeqOp, { type: "PreviewFoldThrough" }> & {
-        spatial?: SpatialFoldDrag;
-      } = {
-        type: "PreviewFoldThrough",
-        up_to: operation.up_to,
-        line: operation.line,
-        keep_side_point: operation.keep_side_point,
-        target_layers: operation.target_layers,
-        direction: operation.direction,
-        ...(operation.spatial ? { spatial: operation.spatial } : {}),
-      };
-      return ipc.sequenceApply(previewOperation);
-    });
-    // ツール切替など、IPCを伴わない操作でも確認を取り消せるよう世代を先に見る。
-    if (revision !== foldThroughRevision) {
-      finishFoldThroughBusy(busyToken);
-      return;
-    }
-    if (!r.ok) {
-      if (r.isLatest) fail(r.error);
-      finishFoldThroughBusy(busyToken);
-      return;
-    }
-    // 後続の編集要求がすでに積まれたなら、その編集前の形に対する候補は使わない。
-    if (!r.isLatest) {
-      finishFoldThroughBusy(busyToken);
-      return;
-    }
-    const current = get();
-    if (!current.doc) {
-      finishFoldThroughBusy(busyToken);
-      set({ foldDraft: null, alignDraft: null, errorMessage: STALE_DRAFT_MESSAGE });
-      return;
-    }
-    const stale =
-      current.docEpoch !== started.docEpoch ||
-      current.doc.sequence.length !== started.doc?.sequence.length ||
-      foldInsertAt(current) !== operation.up_to;
-    if (stale) {
-      finishFoldThroughBusy(busyToken);
-      set({ foldDraft: null, alignDraft: null, errorMessage: STALE_DRAFT_MESSAGE });
-      return;
-    }
-    const unavailable = foldUnavailableMessage(current);
-    if (unavailable) {
-      finishFoldThroughBusy(busyToken);
-      set({ errorMessage: unavailable });
-      return;
-    }
-    const proposal = r.value.fold_through_proposal ?? null;
-    if (proposal) {
-      set({
-        pendingFoldThrough: {
-          proposal,
-          operation,
-          docEpoch: current.docEpoch,
-          stepCount: current.doc.sequence.length,
-        },
-        // 元の入力はoperationへ移したので、折り線の確定UIは提案UIへ切り替える。
-        foldDraft: null,
-        alignDraft: null,
-        foldThroughBusy: false,
-      });
-      return;
-    }
-    // 単純な衝突が無い、または複雑で提案できない場合は従来の折りを続ける。
-    await applyFoldThrough(operation, false, busyToken);
-  };
+  const documentSlice = createDocumentSlice<AppState>(set, get, {
+    queue,
+    runViewCommand,
+    applyDocChange,
+    fail,
+    invalidateFoldAllEntry: () => {
+      foldAllEnterGeneration++;
+    },
+    flushSoftSave,
+    waitForFoldAllRestore,
+    restoreAfterFoldAllPreview,
+    stopPlayback,
+    isStepReplayPending: () => stepReplayPending,
+    persistPrefs,
+    relaxationNotices,
+    clearZeroOnlyDrivers,
+  });
 
   return {
-    doc: null,
-    stepCreases: [],
-    faces: [],
+    ...documentSlice.slice,
     hinges: new Set<number>(),
-    warnings: [],
-    flatFoldViolations: [],
-    violations: [],
-    selection: EMPTY_SELECTION,
-    hoveredHinge: null,
-    activeTool: "select",
-    measureDraft: emptyMeasureDraft(),
-    foldDraft: null,
-    pendingFoldThrough: null,
-    foldThroughBusy: false,
-    alignDraft: null,
-    techniqueDraft: null,
-    construct: DEFAULT_CONSTRUCT,
-    curve: DEFAULT_CURVE,
     frame3d: null,
     foldAllPreview: null,
     suspectHinges: [],
@@ -3562,9 +2556,6 @@ export const useAppStore = create<AppState>((set, get) => {
     skipped: [],
     replaySkipped: [],
     replayWarnings: [],
-    errorMessage: null,
-    documentSavedPath: null,
-    docEpoch: 0,
     drivers: new Map(),
     pinnedFolds: new Map(),
     releasedPins: [],
@@ -3631,153 +2622,6 @@ export const useAppStore = create<AppState>((set, get) => {
     lineInputStart: null,
     paperActionTipVisible: false,
     paperActionTipExpanded: false,
-
-    newDocument: (paper) => {
-      invalidateFoldThrough();
-      foldAllEnterGeneration++;
-      return runViewCommand(() => ipc.documentNew(paper), true);
-    },
-
-    openDocument: (path) => {
-      invalidateFoldThrough();
-      foldAllEnterGeneration++;
-      return runViewCommand(() => ipc.documentOpen(path), true);
-    },
-
-    saveDocument: async (path) => {
-      await waitForFoldAllRestore();
-      // 次の結果が出るまでは、前回の保存成功を現在の結果として見せない。
-      set({ documentSavedPath: null });
-      // たわみのつまみを動かした直後でも、保存要求より前に作品データへ確定する。
-      await flushSoftSave();
-      // 保存も直列化する(直前の編集が確定してから保存されることを保証)。
-      // 状態の更新はないので、応答の新旧に関わらず結果を報告する
-      const r = await queue.run(() => ipc.documentSave(path));
-      if (r.ok) {
-        set({ errorMessage: null, documentSavedPath: path });
-      } else {
-        fail(r.error);
-      }
-    },
-
-    // 展開図が変わると再生中の形も変わるので、編集系はいずれも先に再生を止める
-    // (止めないと、折り直した形が次のコマですぐ上書きされて一瞬跳ねて見える)
-    applyEdit: async (op) => {
-      // 一斉表示の形を編集の出発点にはしない。通常形へ戻してから作品を変える。
-      if (get().foldAllPreview !== null) {
-        if (!(await restoreAfterFoldAllPreview(false))) return;
-      }
-      stopPlayback();
-      // 提案は現在のCPから計算したもの。編集要求を積んだ時点で応答前でも無効にする。
-      invalidateFoldThrough();
-      const ops = Array.isArray(op) ? op : [op];
-      if (ops.length === 0) return;
-      // 左右対称のときは、引く・消す・種類を変えるのどれも反対側へ効かせる。
-      // 引く線をここでそろえるので、手で引く線も作図補助の線も同じ動きになる
-      // (CPE-010 / 不具合D13)。辺IDを増やす消す・種類変更は、展開図の
-      // 右クリック消し・Deleteキー・コンテキストパネルのどこから来ても左右そろう。
-      const s = get();
-      const doc = s.doc;
-      const axis =
-        s.mirrorDraw && doc ? activeMirrorLine(doc, s.mirrorAxis) : null;
-      const withOpposite =
-        axis && doc
-          ? ops.map((one) =>
-              one.type === "RemoveEdges" || one.type === "SetEdgeKind"
-                ? { ...one, ids: withMirrorEdges(doc, one.ids, axis) }
-                : one,
-            )
-          : ops;
-      const mirrored =
-        axis && onlyAddSegments(withOpposite)
-          ? addSegmentsWithMirror(withOpposite, axis)
-          : withOpposite;
-      // 1件だけなら今までどおり1件用の要求を送る。複数のときだけまとめ送りにして、
-      // 元に戻す1回で入力1回ぶんが戻るようにする(不具合D05)
-      await applyDocChange(
-        () =>
-          mirrored.length === 1
-            ? ipc.editApply(mirrored[0])
-            : ipc.editApplyBatch(mirrored),
-        mirrored.some((one) => one.type === "ReplaceCreasePattern"),
-      );
-    },
-
-    drawSegment: async (a, b, kind) => {
-      if (!get().doc) return;
-      // 反対側の線は applyEdit がまとめて作る(作図補助と同じ経路にするため)。
-      await get().applyEdit({ type: "AddSegment", a, b, kind });
-    },
-
-    // 曲線は「十分細かい折れ線」として入れる(展開図の辺は直線だけなので)。
-    // 曲線の折り目は両側の紙が曲がらないと折れない(平らな板2枚を曲線でつなぐと
-    // 角度0以外では紙がちぎれる)ので、既定では「紙が曲がるための線」も一緒に
-    // 引く。曲がるための線は隣の折り目に突き当たったところで止める。
-    // 曲線1本ぶんの線は全部まとめて確定するので、元に戻す1回で引く前へ戻る
-    drawCurve: async (points, kind) => {
-      const s = get();
-      if (!s.doc || points.length < 2) return;
-      // 選んだ基準線が交点で分割されても、曲線1回の途中で基準を切り替えない。
-      const axis = s.mirrorDraw
-        ? activeMirrorLine(s.doc, s.mirrorAxis)
-        : null;
-      const ops: EditOp[] = [];
-      // 曲がるための線をどこで止めるかは、この曲線で先に引いた線も数えて決める
-      // (1本ずつ送っていたときと同じ止まり方にするため)。
-      const drawn = editableCopy(s.doc);
-      const add = (a: Vec2, b: Vec2, k: EdgeKind): void => {
-        for (const one of segmentEditsWithAxis(a, b, k, axis)) {
-          ops.push(one);
-          addWorkingEdge(drawn, one.a, one.b, one.kind);
-        }
-      };
-      for (let i = 0; i + 1 < points.length; i++) {
-        add(points[i], points[i + 1], kind);
-      }
-      if (s.curve.rulings && kind !== "Aux") {
-        const long = Math.max(s.doc.paper.width_mm, s.doc.paper.height_mm);
-        const paper: Vec2 = [s.doc.paper.width_mm / long, s.doc.paper.height_mm / long];
-        // 折り目の両側で曲がる向きが逆になるので、へこむ側は反対の線種にする
-        const opposite: EdgeKind = kind === "Mountain" ? "Valley" : "Mountain";
-        for (const r of rulingLines(points, paper)) {
-          for (const [to, k] of [
-            [r.concave, opposite],
-            [r.convex, kind],
-          ] as [Vec2, EdgeKind][]) {
-            add(r.at, firstCrossing(drawn, r.at, to), k);
-          }
-        }
-      }
-      await get().applyEdit(ops);
-    },
-
-    setMirrorDraw: (on) => {
-      set({ mirrorDraw: on });
-      persistPrefs();
-    },
-
-    setMirrorAxisPreset: (preset) => {
-      set({ mirrorAxis: { kind: preset }, mirrorAxisNotice: null });
-      persistPrefs();
-    },
-
-    setSelectedLineAsMirrorAxis: () => {
-      const s = get();
-      if (!s.doc) return;
-      const selected = [...new Set(s.selection.edgeIds)];
-      if (
-        selected.length !== 1 ||
-        selectedEdgeMirrorLine(s.doc, selected[0]) === null
-      ) {
-        return;
-      }
-      set({
-        mirrorAxis: { kind: "selectedLine", edgeId: selected[0] },
-        mirrorAxisNotice: null,
-      });
-      // 辺IDは保存せず、次回起動時の戻り先として縦中心を覚える。
-      persistPrefs();
-    },
 
     setPullMirror: (on) => {
       set({ pullMirror: on });
@@ -3886,7 +2730,7 @@ export const useAppStore = create<AppState>((set, get) => {
         return;
       }
       stopPlayback();
-      invalidateFoldThrough();
+    documentSlice.internals.invalidateFoldThrough();
       const s = get();
       // 提案ダイアログの場所操作は作品へ保存しないため、開いている間だけ先に戻す。
       // 計算中は、その要求の入力と画面を食い違わせないため何も戻さない。
@@ -3916,7 +2760,7 @@ export const useAppStore = create<AppState>((set, get) => {
         return;
       }
       stopPlayback();
-      invalidateFoldThrough();
+    documentSlice.internals.invalidateFoldThrough();
       if (get().proposalStep !== null && get().proposalBusy) return;
       if (get().proposalStep !== null && redoProposalPositionState()) return;
       // 作品データを戻したぶんが残っていれば、そちらを先にやり直す
@@ -3992,7 +2836,7 @@ export const useAppStore = create<AppState>((set, get) => {
       const total = s.doc?.sequence.length ?? 0;
       const next = startPlayback(s.currentStep, s.playT, total);
       if (!next.playing) return;
-      invalidateFoldThrough();
+    documentSlice.internals.invalidateFoldThrough();
       // 再生中は形が刻々と変わるので、引きかけの折り線・技法の下ごしらえは捨てる
       set({ foldDraft: null, alignDraft: null, techniqueDraft: null });
       set({ currentStep: next.step, playT: next.t, playing: true });
@@ -4000,794 +2844,9 @@ export const useAppStore = create<AppState>((set, get) => {
       cancelFrame = scheduleFrame(tick);
     },
 
-    setTool: (tool) => {
-      if (get().foldAllPreview !== null) {
-        // 一斉形を直接操作の入力にしない。通常形へ戻った後で、選んだ道具へ移る。
-        void restoreAfterFoldAllPreview(false).then((restored) => {
-          if (restored) get().setTool(tool);
-        });
-        return;
-      }
-      // ツール切替時は選択を保つ必要がないので解除する。
-      // 引きかけの折り線も、別のツールへ移った時点で意味を失うので捨てる
-      if (get().activeTool !== tool) {
-        invalidateFoldThrough();
-        set({
-          activeTool: tool,
-          selection: EMPTY_SELECTION,
-          // 測定は道具を離れたら残さない。入り直したときも先頭の「角度」から始める。
-          measureDraft: emptyMeasureDraft(),
-          hoveredHinge: null,
-          foldDraft: null,
-          alignDraft: null,
-          techniqueDraft: null,
-          pullHinge: null,
-          pullMirrorHinge: null,
-          operationStage: 0,
-          lineInputStart: null,
-          paperActionTipVisible: false,
-          paperActionTipExpanded: false,
-        });
-      }
-    },
-
-    setMeasureMode: (mode) => {
-      const s = get();
-      if (s.measureDraft.mode === mode) return;
-      set({
-        measureDraft: emptyMeasureDraft(mode),
-        selection: EMPTY_SELECTION,
-      });
-    },
-
-    setMeasureDisplay: (display) =>
-      set((s) => ({
-        measureDraft: { ...s.measureDraft, display },
-      })),
-
-    pickMeasureEdge: (edgeId) => {
-      const s = get();
-      if (
-        s.activeTool !== "measure" ||
-        s.measureDraft.mode === "distance" ||
-        !s.doc?.cp.edges.some((edge) => edge.id === edgeId)
-      ) {
-        return;
-      }
-      const need = s.measureDraft.mode === "length" ? 1 : 2;
-      const pick: MeasureEdgePick = { kind: "edge", edgeId };
-      const previous = s.measureDraft.picks.filter(
-        (candidate): candidate is MeasureEdgePick => candidate.kind === "edge",
-      );
-      const picks = previous.length >= need ? [pick] : [...previous, pick];
-      set({
-        measureDraft: { ...s.measureDraft, picks, display: null },
-        selection: selectionForMeasure(picks),
-      });
-    },
-
-    pickMeasurePoint: ({ cp, faceId, vertexId }) => {
-      const s = get();
-      if (
-        s.activeTool !== "measure" ||
-        s.measureDraft.mode !== "distance" ||
-        !s.doc ||
-        !Number.isFinite(cp[0]) ||
-        !Number.isFinite(cp[1]) ||
-        (faceId !== null && (!Number.isSafeInteger(faceId) || faceId < 0)) ||
-        (vertexId !== null &&
-          !s.doc.cp.vertices.some((vertex) => vertex.id === vertexId))
-      ) {
-        return;
-      }
-      const pick: MeasurePointPick = {
-        kind: "point",
-        cp: [cp[0], cp[1]],
-        faceId,
-        vertexId,
-      };
-      const previous = s.measureDraft.picks.filter(
-        (candidate): candidate is MeasurePointPick => candidate.kind === "point",
-      );
-      const picks = previous.length >= 2 ? [pick] : [...previous, pick];
-      set({
-        measureDraft: { ...s.measureDraft, picks, display: null },
-        selection: selectionForMeasure(picks),
-      });
-    },
-
-    clearMeasurement: () =>
-      set((s) => ({
-        measureDraft: emptyMeasureDraft(s.measureDraft.mode),
-        selection: EMPTY_SELECTION,
-      })),
-
-    setSelection: (selection) => {
-      if (get().foldAllPreview !== null) return;
-      set((s) => {
-        // 選択から外れた折り目の水色はすぐ消す。ただし選択は希望角を変える
-        // 操作ではないため計算世代は進めず、blur側のcanonical確定を続ける。
-        const stillMoving =
-          s.pullHinge !== null ||
-          (s.activeAngleIntent?.hinges ?? []).some((hinge) =>
-            selection.edgeIds.includes(hinge),
-          );
-        const dropActive = s.activeAngleIntent !== null && !stillMoving;
-        return {
-          selection,
-          // スライダー行が消える選択変更なら、残ったホバー色も一緒に消す。
-          hoveredHinge:
-            s.hoveredHinge !== null && selection.edgeIds.includes(s.hoveredHinge)
-              ? s.hoveredHinge
-              : null,
-          ...(dropActive ? { activeAngleIntent: null } : {}),
-        };
-      });
-    },
-
-    setHoveredHinge: (hinge) =>
-      set((s) => ({
-        hoveredHinge:
-          hinge !== null &&
-          s.hinges.has(hinge) &&
-          (s.selection.edgeIds.includes(hinge) ||
-            relaxationNotices(s.relaxations).some((item) => item.hinge === hinge))
-            ? hinge
-            : null,
-      })),
-
-    beginFoldDraft: (line, source) => {
-      const s = get();
-      // 事前確認中の折りAへ、別の折りBを上書きしない。回答後に改めて引ける。
-      if (!s.doc || s.foldThroughBusy || s.pendingFoldThrough) return;
-      // 展開図の座標と畳み平面の座標が一致するのは1回も折っていないときだけ
-      if (source === "2d" && s.doc.sequence.length > 0) {
-        set({
-          errorMessage:
-            "折る操作は3D画面から行ってください(展開図の位置と畳んだ紙の位置が食い違うため)",
-        });
-        return;
-      }
-      set({
-        foldDraft: {
-          line,
-          direction: "Up",
-          target: "all",
-          movingSide: "right",
-          // 線を引いた時点の形を覚えておき、折るときに食い違いを見つける
-          docEpoch: s.docEpoch,
-          stepCount: s.doc.sequence.length,
-          upTo: foldInsertAt(s),
-        },
-        errorMessage: null,
-        operationStage: 1,
-      });
-    },
-
-    updateFoldDraft: (patch) => {
-      const draft = get().foldDraft;
-      if (draft) {
-        set({
-          foldDraft: { ...draft, ...patch },
-          // 向きや折り返す紙へ触れたら、最後の「折るで確定」を強調する。
-          operationStage:
-            patch.direction !== undefined ||
-            patch.movingSide !== undefined ||
-            patch.target !== undefined
-              ? 2
-              : get().operationStage,
-        });
-      }
-    },
-
-    cancelFoldDraft: () => {
-      // 「やめる」は合わせて折るの途中経過もまとめて捨てる(選び直しは合わせ方から)
-      if (get().foldDraft || get().alignDraft)
-        set({ foldDraft: null, alignDraft: null });
-    },
-
-    commitFoldDraft: async () => {
-      const s = get();
-      const draft = s.foldDraft;
-      if (!draft || !s.doc) return;
-      // 作品・手順・挿入位置が変わった古い入力だけを捨てる。一時的に再生中、
-      // または角度を変えた形なら、入力を残して確定できない理由を伝える。
-      if (
-        draft.docEpoch !== s.docEpoch ||
-        draft.stepCount !== s.doc.sequence.length ||
-        draft.upTo !== foldInsertAt(s)
-      ) {
-        set({ foldDraft: null, alignDraft: null, errorMessage: STALE_DRAFT_MESSAGE });
-        return;
-      }
-      const unavailable = foldUnavailableMessage(s);
-      if (unavailable) {
-        set({ errorMessage: unavailable });
-        return;
-      }
-      const keep = keepSidePoint(draft.line, draft.movingSide);
-      let targetLayers: number[] | null = null;
-      if (draft.target === "top") {
-        const layers = foldLayers(s.frame3d, s.doc, s.faces);
-        const top = topMovingFace(layers, draft.line, keep);
-        if (top === null) {
-          set({
-            errorMessage:
-              "黄色で示した側に、折り返せる紙がありません。「反対側の紙を折り返す」を押して、もう一度試してください",
-          });
-          return;
-        }
-        targetLayers = [top];
-      }
-      const alignment =
-        s.alignDraft && isAlignComplete(s.alignDraft)
-          ? { mode: s.alignDraft.mode, picks: [...s.alignDraft.picks] }
-          : null;
-      await requestFoldThrough({
-        type: "FoldThrough",
-        up_to: draft.upTo,
-        line: draft.line,
-        keep_side_point: keep,
-        target_layers: targetLayers,
-        direction: draft.direction,
-        ...(alignment ? { alignment } : {}),
-      });
-    },
-
-    resolveFoldThroughProposal: async (accept) => {
-      const s = get();
-      const pending = s.pendingFoldThrough;
-      if (!pending || s.foldThroughBusy) return;
-      if (
-        !s.doc ||
-        pending.docEpoch !== s.docEpoch ||
-        pending.stepCount !== s.doc.sequence.length ||
-        pending.operation.up_to !== foldInsertAt(s)
-      ) {
-        set({
-          pendingFoldThrough: null,
-          foldThroughBusy: false,
-          errorMessage: STALE_DRAFT_MESSAGE,
-        });
-        return;
-      }
-      const unavailable = foldUnavailableMessage(s);
-      if (unavailable) {
-        set({ errorMessage: unavailable });
-        return;
-      }
-      const busyToken = ++foldThroughBusyToken;
-      set({ foldThroughBusy: true, errorMessage: null });
-      await applyFoldThrough(pending.operation, accept, busyToken);
-    },
-
-    beginAlign: (mode) => {
-      const s = get();
-      if (!s.doc) return;
-      invalidateFoldThrough();
-      if (stepReplayPending) {
-        set({
-          errorMessage:
-            "表示を切り替えています。切り替わってから、もう一度合わせ方を選んでください",
-        });
-        return;
-      }
-      // 同じ合わせ方をもう一度押したらやめる(入る・出るを1つのボタンで済ませる)
-      if (s.alignDraft?.mode === mode) {
-        set({ alignDraft: null, foldDraft: null });
-        return;
-      }
-      set({
-        activeTool: "fold",
-        selection: EMPTY_SELECTION,
-        foldDraft: null,
-        techniqueDraft: null,
-        alignDraft: {
-          mode,
-          picks: [],
-          cpPicks: [],
-          solutions: [],
-          solutionIndex: 0,
-          reason: null,
-        },
-        errorMessage: null,
-      });
-    },
-
-    pickAlignTarget: (target, cursor = null, cpPick = null) => {
-      const s = get();
-      const draft = s.alignDraft;
-      if (!draft || !s.doc) return;
-      const steps = ALIGN_STEPS[draft.mode];
-      // 選び終えたあとにもう一度選んだら、1つ目から選び直す
-      const picks = isAlignComplete(draft) ? [target] : [...draft.picks, target];
-      if (steps[picks.length - 1] !== target.kind) return; // 種類違いは受け付けない
-      const previousCpPicks =
-        draft.cpPicks ?? draft.picks.map((): AlignCpPick | null => null);
-      const cpPicks = isAlignComplete(draft)
-        ? [cpPick]
-        : [...previousCpPicks, cpPick];
-      const solved = solveAlign(draft.mode, picks, cursor);
-      const line = solved.lines[0] ?? null;
-      set({
-        alignDraft: {
-          mode: draft.mode,
-          picks,
-          cpPicks,
-          solutions: solved.lines,
-          solutionIndex: 0,
-          reason: solved.reason,
-        },
-        foldDraft: line ? alignFoldDraft(s, line, picks) : null,
-        errorMessage: null,
-      });
-    },
-
-    nextAlignSolution: () => {
-      const s = get();
-      const draft = s.alignDraft;
-      if (!draft || draft.solutions.length < 2) return;
-      const index = (draft.solutionIndex + 1) % draft.solutions.length;
-      const line = draft.solutions[index];
-      set({
-        alignDraft: { ...draft, solutionIndex: index },
-        // 向き・対象の層など、パネルで決めた設定は引き継ぐ(線と折り返す紙だけ入れ替える)
-        foldDraft: s.foldDraft
-          ? {
-              ...s.foldDraft,
-              line,
-              movingSide: initialMovingSide(line, draft.picks[0]),
-            }
-          : alignFoldDraft(s, line, draft.picks),
-      });
-    },
-
-    undoAlignPick: () => {
-      const draft = get().alignDraft;
-      if (!draft || draft.picks.length === 0) return;
-      set({
-        alignDraft: {
-          ...draft,
-          picks: draft.picks.slice(0, -1),
-          cpPicks: draft.cpPicks?.slice(0, -1),
-          solutions: [],
-          solutionIndex: 0,
-          reason: null,
-        },
-        foldDraft: null,
-      });
-    },
-
-    cancelAlign: () => {
-      if (get().alignDraft) set({ alignDraft: null, foldDraft: null });
-    },
-
-    foldByDrag: async (from, to, mode, grabFace = null, direction = "Up") => {
-      const s = get();
-      if (
-        s.foldAllPreview !== null ||
-        !s.doc ||
-        s.foldThroughBusy ||
-        s.pendingFoldThrough
-      ) {
-        return;
-      }
-      // 折れない状態は「なぜできないか」を短い日本語で伝える(要件UI-009)
-      const reason = foldBlockReason({
-        hasDoc: true,
-        playing: s.playing,
-        playT: s.playT,
-        driverCount: nonZeroDriverCount(s.drivers),
-        currentStep: s.currentStep,
-        stepCount: s.doc.sequence.length,
-      });
-      if (reason) {
-        set({ errorMessage: reason });
-        return;
-      }
-      const upTo = foldInsertAt(s);
-      if (isSpatialFoldFrame(s.frame3d)) {
-        // 非平坦では単一の上下順やXY投影を使えない。実際につかんだ3D点を
-        // Rustへ渡し、再生した形の上で折り平面・つながった対象面・山谷を決める。
-        const spatial: SpatialFoldDrag = {
-          from: [from[0], from[1], from[2] ?? 0],
-          to: [to[0], to[1], to[2] ?? 0],
-          grab_face: grabFace ?? s.frame3d!.faces[0]?.face ?? 0,
-          mode,
-        };
-        set({
-          foldDraft: null,
-          alignDraft: null,
-        });
-        await requestFoldThrough({
-          type: "FoldThrough",
-          up_to: upTo,
-          // spatial分岐ではRustが使わない。旧serde形を保つ有限・非退化な値。
-          line: [
-            [0, 0],
-            [1, 0],
-          ],
-          keep_side_point: [0, 1],
-          target_layers: null,
-          direction,
-          spatial,
-        });
-        return;
-      }
-      const result = planGrabFold(
-        foldLayers(s.frame3d, s.doc, s.faces),
-        s.faces,
-        [from[0], from[1]],
-        [to[0], to[1]],
-        mode,
-        grabFace,
-      );
-      if (!result.ok) {
-        set({ errorMessage: result.error });
-        return;
-      }
-      // つかんだ紙は離した位置へ倒れてくる(=手前へ折る)。
-      // 引きかけの折り線が残っていても、この操作で決着させる
-      set({
-        foldDraft: null,
-        alignDraft: null,
-      });
-      await requestFoldThrough({
-        type: "FoldThrough",
-        up_to: upTo,
-        line: result.plan.line,
-        keep_side_point: result.plan.keepSidePoint,
-        target_layers: result.plan.targetLayers,
-        direction: "Up",
-      });
-    },
-
-    beginTechnique: (kind) => {
-      const s = get();
-      if (!s.doc) return;
-      invalidateFoldThrough();
-      set({
-        activeTool: "technique",
-        selection: EMPTY_SELECTION,
-        foldDraft: null,
-        alignDraft: null,
-        techniqueDraft: {
-          kind,
-          flap: [],
-          flapCandidates: [],
-          flapPickCount: 1,
-          line: null,
-          movingSide: "right",
-          widthMm: DEFAULT_PLEAT_WIDTH_MM,
-          polygon: [],
-          center: null,
-          referencePoint: null,
-          twistDeg: DEFAULT_TWIST_DEG,
-          openToBack: false,
-          motionMode: "reflect",
-          motionTurn: "Keep",
-          motionDirection: "Up",
-          motionAnchor: 0,
-          motionReverseLayers: false,
-          motionAxisEdgeId: null,
-          motionParts: [],
-          docEpoch: s.docEpoch,
-          stepCount: s.doc.sequence.length,
-          upTo: foldInsertAt(s),
-        },
-        errorMessage: null,
-      });
-    },
-
-    setTechniqueFlap: (faces) => {
-      const draft = get().techniqueDraft;
-      if (!draft) return;
-      const candidates = [...new Set(faces)];
-      set({
-        techniqueDraft: {
-          ...draft,
-          flap: candidates,
-          flapCandidates: candidates,
-          flapPickCount: clampTechniqueLayerCount(
-            draft.flapPickCount,
-            candidates.length,
-          ),
-        },
-      });
-    },
-
-    setTechniqueFlapPreset: (preset) => {
-      const draft = get().techniqueDraft;
-      if (!draft) return;
-      set({
-        techniqueDraft: {
-          ...draft,
-          flap: techniqueFlapForPreset(
-            draft.flapCandidates,
-            preset,
-            draft.flapPickCount,
-          ),
-        },
-      });
-    },
-
-    toggleTechniqueFlap: (face) => {
-      const draft = get().techniqueDraft;
-      if (!draft) return;
-      set({
-        techniqueDraft: {
-          ...draft,
-          flap: toggleTechniqueFlapSelection(
-            draft.flapCandidates,
-            draft.flap,
-            face,
-          ),
-        },
-      });
-    },
-
-    setTechniqueLine: (line) => {
-      const draft = get().techniqueDraft;
-      if (draft) {
-        set({
-          techniqueDraft: {
-            ...draft,
-            line,
-            // ドラッグで引いた軸は既存折り目IDを保証できない。
-            motionAxisEdgeId: draft.kind === "Simple" ? null : draft.motionAxisEdgeId,
-          },
-        });
-      }
-    },
-
-    setLayerMotionAxis: (edgeId, line) => {
-      const draft = get().techniqueDraft;
-      if (!draft || draft.kind !== "Simple") return;
-      set({
-        techniqueDraft: {
-          ...draft,
-          line,
-          motionAxisEdgeId: edgeId,
-          motionMode: "reflect",
-        },
-        errorMessage: null,
-      });
-    },
-
-    addLayerMotionPart: () => {
-      const draft = get().techniqueDraft;
-      if (!draft || draft.kind !== "Simple") return;
-      if (draft.motionMode === "reflect" && draft.motionAxisEdgeId === null) {
-        set({
-          errorMessage:
-            "立体表示で既存の折り目をクリックして、正確な開閉軸を選んでください",
-        });
-        return;
-      }
-      const built = buildLayerMotionPart(layerMotionPartDraft(draft));
-      if (!built.ok) {
-        set({ errorMessage: built.error });
-        return;
-      }
-      set({
-        techniqueDraft: {
-          ...clearCurrentLayerMotion(draft),
-          motionParts: [...draft.motionParts, built.part],
-        },
-        errorMessage: null,
-        operationStage: 1,
-      });
-    },
-
-    undoLayerMotionPart: () => {
-      const draft = get().techniqueDraft;
-      if (!draft || draft.kind !== "Simple" || draft.motionParts.length === 0) return;
-      set({
-        techniqueDraft: {
-          ...draft,
-          motionParts: draft.motionParts.slice(0, -1),
-        },
-        errorMessage: null,
-      });
-    },
-
-    addTechniqueVertex: (p) => {
-      const draft = get().techniqueDraft;
-      if (draft) {
-        set({ techniqueDraft: { ...draft, polygon: addTwistVertex(draft.polygon, p) } });
-      }
-    },
-
-    undoTechniqueVertex: () => {
-      const draft = get().techniqueDraft;
-      if (draft && draft.polygon.length > 0) {
-        set({ techniqueDraft: { ...draft, polygon: undoTwistVertex(draft.polygon) } });
-      }
-    },
-
-    setTechniqueCenter: (p) => {
-      const draft = get().techniqueDraft;
-      if (draft) set({ techniqueDraft: { ...draft, center: p } });
-    },
-
-    setTechniqueReferencePoint: (p) => {
-      const draft = get().techniqueDraft;
-      if (draft && draft.kind !== "Simple" && draft.kind !== "Twist") {
-        set({ techniqueDraft: { ...draft, referencePoint: p } });
-      }
-    },
-
-    updateTechniqueDraft: (patch) => {
-      const draft = get().techniqueDraft;
-      if (draft) set({ techniqueDraft: { ...draft, ...patch } });
-    },
-
-    setConstruct: (patch) =>
-      set((s) => ({ construct: { ...s.construct, ...patch } })),
-
-    setCurve: (patch) => set((s) => ({ curve: { ...s.curve, ...patch } })),
-
-    cancelTechnique: () => {
-      if (get().techniqueDraft) set({ techniqueDraft: null });
-    },
-
-    commitTechnique: async () => {
-      const s = get();
-      const draft = s.techniqueDraft;
-      if (!draft || !s.doc) return;
-      // TechniqueKind::Simpleは通常の単純折りではなく、技法メニュー内の
-      // 「層操作」入口として使う。FlatMotionは名前付き技法とは入力形が違う。
-      if (draft.kind === "Simple") {
-        if (
-          draft.docEpoch !== s.docEpoch ||
-          draft.stepCount !== s.doc.sequence.length ||
-          draft.upTo !== foldInsertAt(s)
-        ) {
-          set({ techniqueDraft: null, errorMessage: STALE_DRAFT_MESSAGE });
-          return;
-        }
-        const unavailable = foldUnavailableMessage(s);
-        if (unavailable) {
-          set({ errorMessage: unavailable });
-          return;
-        }
-        clearZeroOnlyDrivers();
-        const parts = [...draft.motionParts];
-        const current = layerMotionPartDraft(draft);
-        if (hasLayerMotionInput(current)) {
-          if (draft.motionMode === "reflect" && draft.motionAxisEdgeId === null) {
-            set({
-              errorMessage:
-                "立体表示で既存の折り目をクリックして、正確な開閉軸を選んでください",
-            });
-            return;
-          }
-          const built = buildLayerMotionPart(current);
-          if (!built.ok) {
-            set({ errorMessage: built.error });
-            return;
-          }
-          parts.push(built.part);
-        }
-        if (parts.length === 0) {
-          set({
-            errorMessage:
-              "既存折り目と対象層を選ぶか、重ね方・山谷反転を指定してください",
-          });
-          return;
-        }
-        set({
-          currentStep: draft.upTo === s.doc.sequence.length ? null : draft.upTo + 1,
-        });
-        await get().applySequenceOp({
-          type: "FlatMotion",
-          up_to: draft.upTo,
-          parts,
-          kind: "Simple",
-        });
-        if (get().errorMessage === null) set({ techniqueDraft: null });
-        return;
-      }
-      // ねじり折りは中央多角形を頂点で指せる(辺の数も長さも仮定しない)。
-      // 3点以上そろっていれば、折り線1本の指し方(正多角形)より優先する
-      const byPolygon =
-        draft.kind === "Twist" && isTwistPolygonReady(draft.polygon);
-      if (!draft.line && !byPolygon) {
-        set({
-          errorMessage:
-            draft.kind === "Twist"
-              ? "中央の形が決まっていません。立体表示で角を3つ以上クリックしてください"
-              : "折り線がありません。立体表示の紙の上をドラッグして折り線を引いてください",
-        });
-        return;
-      }
-      // 選んだ時点と今とで形が違えば、そのまま折ると違う位置に折り目が入る
-      if (
-        draft.docEpoch !== s.docEpoch ||
-        draft.stepCount !== s.doc.sequence.length ||
-        draft.upTo !== foldInsertAt(s)
-      ) {
-        set({ techniqueDraft: null, errorMessage: STALE_DRAFT_MESSAGE });
-        return;
-      }
-      const unavailable = foldUnavailableMessage(s);
-      if (unavailable) {
-        set({ errorMessage: unavailable });
-        return;
-      }
-      clearZeroOnlyDrivers();
-      // Rust側と同じ層数規約にする。中割り・かぶせだけ2枚以上、つぶし・花弁は
-      // 1枚以上。段・沈め・ひだ寄せ・ねじりは空なら領域の全層を対象にする。
-      const minimumFlap = minimumTechniqueFlap(draft.kind);
-      if (draft.flap.length < minimumFlap) {
-        set({
-          errorMessage:
-            `先に立体表示で紙をクリックし、対象の層(フラップ)を${minimumFlap}枚以上選んでください`,
-        });
-        return;
-      }
-      // 基準点の意味は技法ごとに違う。段折りは2本目の折り線の位置(段の幅ぶん
-      // 動く側へ離した点)、中割り・かぶせは先端が向かう側(動かない側)の点、
-      // 多角形で指したねじり折りはねじる角(向きは「動かす側」で決める)
-      const scale = Math.max(s.doc.paper.width_mm, s.doc.paper.height_mm);
-      const twistCenter = byPolygon
-        ? (draft.center ?? polygonCentroid(draft.polygon))
-        : null;
-      const twistRef = twistCenter
-        ? twistReferencePoint(
-            draft.polygon,
-            twistCenter,
-            draft.movingSide === "right" ? draft.twistDeg : -draft.twistDeg,
-          )
-        : null;
-      // 多角形を指したときは1辺目をlineとして送る(エンジンはpolygonを優先する)
-      const line: [Vec2, Vec2] =
-        draft.line ?? [draft.polygon[0], draft.polygon[1]];
-      const lineLength = Math.hypot(
-        line[1][0] - line[0][0],
-        line[1][1] - line[0][1],
-      );
-      // 沈め折りのreference_pointは「沈める先端側」そのもの。他の技法で使う
-      // keepSidePoint(動かさない側・行き先)とは意味が逆なので、未指定時も
-      // movingSideと同じ側へ点を置く。Ctrl+クリックの明示点は全技法で優先する。
-      const automaticReference =
-        draft.kind === "Pleat"
-          ? offsetPoint(line, draft.movingSide, draft.widthMm / scale)
-          : draft.kind === "OpenSink"
-            ? offsetPoint(line, draft.movingSide, Math.max(0.01, lineLength * 0.25))
-            : keepSidePoint(line, draft.movingSide);
-      const reference =
-        twistRef ??
-        draft.referencePoint ??
-        automaticReference;
-      // 折った結果を見せる。末尾へ足したなら最新、途中へ挟んだなら挟んだ手順
-      set({ currentStep: draft.upTo === s.doc.sequence.length ? null : draft.upTo + 1 });
-      await get().applySequenceOp({
-        type: "Technique",
-        up_to: draft.upTo,
-        kind: draft.kind,
-        flap: draft.flap,
-        line,
-        reference_point: reference,
-        ...(techniqueUsesOpenToBack(draft.kind)
-          ? { open_to_back: draft.openToBack }
-          : {}),
-        ...(byPolygon && twistCenter
-          ? { polygon: draft.polygon, center: twistCenter }
-          : {}),
-      });
-      const error = get().errorMessage;
-      if (error === null) {
-        set({ techniqueDraft: null });
-      } else if (!error.includes(TECHNIQUE_FALLBACK_HINT)) {
-        // 技法が当てはまらない形だったときは代わりの手を案内する(要件§12)
-        set({ errorMessage: `${error}(${TECHNIQUE_FALLBACK_HINT})` });
-      }
-    },
-
     beginPull: (hinge, angles, mirrorHinge = null) => {
       if (!get().doc) return;
-      invalidateFoldThrough();
+    documentSlice.internals.invalidateFoldThrough();
       pullPushed = false; // このドラッグではまだ履歴を積んでいない
       pullMovedForGuide = false;
       pullGuideStartAngle =
@@ -4847,7 +2906,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
     setDriverAngle: (hinge, deg) => {
       if (get().foldAllPreview !== null) return;
-      invalidateFoldThrough();
+    documentSlice.internals.invalidateFoldThrough();
       const before = get().drivers.get(hinge) ?? get().poseAngles.get(hinge) ?? 0;
       // スライダーを動かしている間の細かい変更は1件にまとめる
       pushAngleUndo(`angle:${hinge}`);
@@ -4866,7 +2925,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
     setDriverAngles: (hinges, deg) => {
       if (get().foldAllPreview !== null) return;
-      invalidateFoldThrough();
+    documentSlice.internals.invalidateFoldThrough();
       const valid = [...new Set(hinges)]
         .filter((hinge) => get().hinges.has(hinge))
         .sort((a, b) => a - b);
@@ -4894,7 +2953,7 @@ export const useAppStore = create<AppState>((set, get) => {
       if (get().foldAllPreview !== null) return;
       const drivers = new Map(get().drivers);
       if (!drivers.delete(hinge)) return;
-      invalidateFoldThrough();
+    documentSlice.internals.invalidateFoldThrough();
       pushAngleUndo(null); // 1回押すごとに履歴1件
       set({ drivers });
       const generation = activateAngleIntent([hinge]);
@@ -4918,7 +2977,7 @@ export const useAppStore = create<AppState>((set, get) => {
       // 「全て平らに戻す」を最後の表示要求にする。
       stopPlayback();
       const hinges = get().hinges;
-      invalidateFoldThrough();
+    documentSlice.internals.invalidateFoldThrough();
       if (get().drivers.size > 0 || get().pinnedFolds.size > 0) pushAngleUndo(null);
       // 全部を平らへ戻すので、角度を固定したままにはできない(0度以外の固定は
       // 「平らに戻す」と矛盾する)。固定も一緒に外す。
@@ -4944,7 +3003,7 @@ export const useAppStore = create<AppState>((set, get) => {
       const enterToken = ++foldAllEnterGeneration;
       try {
         stopPlayback();
-        invalidateFoldThrough();
+    documentSlice.internals.invalidateFoldThrough();
         pose.clearAll();
         softShape.clearAll();
         cancelAngleIntent();
@@ -4955,10 +3014,10 @@ export const useAppStore = create<AppState>((set, get) => {
         // 入口を押す前から実行中だった展開図・手順・Undo等の応答を待つ。
         // 待っている間に別の作品変更が始まった場合も、安定するまで追いかける。
         while (true) {
-          const changesBeforeEntry = latestDocChange;
+          const changesBeforeEntry = commandService.latestDocChange();
           await changesBeforeEntry;
           if (enterToken !== foldAllEnterGeneration) return;
-          if (changesBeforeEntry === latestDocChange) break;
+          if (changesBeforeEntry === commandService.latestDocChange()) break;
         }
 
         const before = get();
@@ -4970,7 +3029,7 @@ export const useAppStore = create<AppState>((set, get) => {
           return;
         }
         stopPlayback();
-        invalidateFoldThrough();
+    documentSlice.internals.invalidateFoldThrough();
         pose.clearAll();
         softShape.clearAll();
         cancelAngleIntent();
@@ -5674,9 +3733,9 @@ export const useAppStore = create<AppState>((set, get) => {
       // 待っている間に別の作品変更が始まった場合も、最後に始まった変更まで
       // 追いかける。安定した最新docを読んでからはawaitを挟まず移動を積む。
       while (true) {
-        const changesBeforeMove = latestDocChange;
+        const changesBeforeMove = commandService.latestDocChange();
         await changesBeforeMove;
-        if (changesBeforeMove === latestDocChange) break;
+        if (changesBeforeMove === commandService.latestDocChange()) break;
       }
       // 待機中に一斉表示の入口が先に開くことがある。入口の前だけでなく、
       // 作品変更が安定した後にも確認し、一時姿勢のまま手順を変更しない。

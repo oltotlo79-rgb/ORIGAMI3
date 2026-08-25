@@ -117,7 +117,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "cargo audit found an advisory that is not covered by an active policy exception" }
 
       # The full readiness check deliberately remains red while an exact Node version,
-      # the CodeQL commit SHA, the SBOM tool pin, or the known npm high assessment is unresolved.
+      # the CodeQL commit SHA, release publication integration, or the known npm high assessment is unresolved.
       - name: Report unresolved supply-chain readiness blockers
         if: ${{ always() }}
         shell: pwsh
@@ -249,10 +249,10 @@ jobs:
     name: SBOM and release hash readiness
     runs-on: windows-latest
     steps:
-      - name: Stop until the SBOM pin and release integration are approved
+      - name: Stop until the published records are verified
         shell: pwsh
         run: |
-          throw "SBOM/hash publication is intentionally not enabled: the SBOM tool pin is unresolved and release.yml is outside this task's allowed files."
+          throw "Component inventory and hash publication remain unverified until one release creates the four records and downloaded assets are checked."
 
   security_status:
     name: Security status and failure notification surface

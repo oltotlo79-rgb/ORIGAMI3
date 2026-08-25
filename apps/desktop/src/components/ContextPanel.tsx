@@ -1533,10 +1533,13 @@ function FoldAllPreviewContent() {
         <strong className="fold-all-preview-promise">
           これは仮の形です
         </strong>
+        <span className="hint">手順には記録されません。</span>
+        {preview.layerOrder === "unavailable_without_sequence" && (
+          <span className="hint fold-all-layer-order-note">
+            紙を順番に折った形ではないため、どの紙が上になるかは決まっていません。
+          </span>
+        )}
       </div>
-      <p className="hint">
-        山折りと谷折りを同じ割合で動かして、形だけを見ます。手順には記録されません。
-      </p>
 
       <div className="fold-all-preview-control">
         <label htmlFor="fold-all-percent">折る割合</label>
@@ -1575,11 +1578,6 @@ function FoldAllPreviewContent() {
           <p className="hint">いつもの表示に戻しています…</p>
         ) : (
           preview.busy && <p className="hint">形を動かしています…</p>
-        )}
-        {preview.layerOrder === "unavailable_without_sequence" && (
-          <p className="warning-text">
-            紙を順番に折った形ではないため、どの紙が上になるかは決まっていません。
-          </p>
         )}
         {preview.converged === false && (
           <p className="warning-text">

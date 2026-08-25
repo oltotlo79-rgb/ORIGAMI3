@@ -3,11 +3,18 @@ param(
     [string]$CargoLockPath,
     [string]$PackageLockPath,
     [Parameter(Mandatory = $true)]
-    [string]$DestinationPath
+    [string]$DestinationPath,
+    [string]$ArtifactName,
+    [string]$BuildId
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$ScriptVersion = "1.1.0"
+
+if ([string]::IsNullOrWhiteSpace($ArtifactName) -xor [string]::IsNullOrWhiteSpace($BuildId)) {
+    throw "ArtifactName and BuildId must either both be supplied or both be omitted."
+}
 
 if ([string]::IsNullOrWhiteSpace($CargoLockPath)) {
     $CargoLockPath = Join-Path $PSScriptRoot "..\Cargo.lock"
@@ -153,6 +160,17 @@ if (-not $workspaceVersionMatch.Success) {
     throw "Cannot read the workspace version from Cargo.toml."
 }
 
+$metadataProperties = @(
+    [ordered]@{ name = "ori3:source"; value = "Cargo.lock and apps/desktop/package-lock.json only" },
+    [ordered]@{ name = "ori3:external-network"; value = "not-used" },
+    [ordered]@{ name = "ori3:cargo-component-count"; value = [string]$cargoComponents.Count },
+    [ordered]@{ name = "ori3:npm-component-count"; value = [string]$npmComponents.Count }
+)
+if (-not [string]::IsNullOrWhiteSpace($ArtifactName)) {
+    $metadataProperties += [ordered]@{ name = "ori3:artifact-name"; value = $ArtifactName }
+    $metadataProperties += [ordered]@{ name = "ori3:build-id"; value = $BuildId }
+}
+
 $document = [ordered]@{
     bomFormat = "CycloneDX"
     specVersion = "1.6"
@@ -163,7 +181,7 @@ $document = [ordered]@{
                 [ordered]@{
                     type = "application"
                     name = "ORIGAMI3 offline lockfile inventory generator"
-                    version = "1.0.0"
+                    version = $ScriptVersion
                 }
             )
         }
@@ -172,12 +190,7 @@ $document = [ordered]@{
             name = "ORIGAMI3"
             version = $workspaceVersionMatch.Groups[1].Value
         }
-        properties = @(
-            [ordered]@{ name = "ori3:source"; value = "Cargo.lock and apps/desktop/package-lock.json only" },
-            [ordered]@{ name = "ori3:external-network"; value = "not-used" },
-            [ordered]@{ name = "ori3:cargo-component-count"; value = [string]$cargoComponents.Count },
-            [ordered]@{ name = "ori3:npm-component-count"; value = [string]$npmComponents.Count }
-        )
+        properties = $metadataProperties
     }
     components = $allComponents
 }
@@ -201,10 +214,24 @@ $duplicateReferences = @($writtenComponents | Group-Object { [string]$_.'bom-ref
 if ($duplicateReferences.Count -ne 0) {
     throw "Generated component inventory has $($duplicateReferences.Count) duplicate component reference(s)."
 }
+if (-not [string]::IsNullOrWhiteSpace($ArtifactName)) {
+    $writtenProperties = @($written.metadata.properties)
+    $writtenArtifactName = @($writtenProperties | Where-Object { $_.name -eq "ori3:artifact-name" })
+    $writtenBuildId = @($writtenProperties | Where-Object { $_.name -eq "ori3:build-id" })
+    if ($writtenArtifactName.Count -ne 1 -or $writtenArtifactName[0].value -ne $ArtifactName) {
+        throw "Generated component inventory did not retain the artifact name."
+    }
+    if ($writtenBuildId.Count -ne 1 -or $writtenBuildId[0].value -ne $BuildId) {
+        throw "Generated component inventory did not retain the build ID."
+    }
+}
 
 $hash = (Get-FileHash -LiteralPath $DestinationPath -Algorithm SHA256).Hash.ToLowerInvariant()
 Write-Host "Generated offline component inventory: $DestinationPath"
 Write-Host "Cargo components: $($cargoComponents.Count)"
 Write-Host "npm components: $($npmComponents.Count)"
 Write-Host "total components: $($allComponents.Count)"
+if (-not [string]::IsNullOrWhiteSpace($ArtifactName)) {
+    Write-Host "artifact: $ArtifactName (build ID: $BuildId)"
+}
 Write-Host "SHA-256: $hash"

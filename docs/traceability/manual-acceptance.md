@@ -2,6 +2,43 @@
 
 この文書のIDは `roadmap-links.json` の手動証拠と1対1で対応する。実施者はID、日付、結果、確認した画面又は履歴を記録する。担当者はアプリを起動せず、画面確認は統括が同梱版で行う。
 
+## B1未実施受入の自動化可否（2026-08-26）
+
+XはCDPで画面操作、表示文字列、画素又は領域の有無を確認できる。Yは検査が主張する範囲を人が読んで判断する。Z（実際に紙を折る比較が必要な項目）は、この16件にはない。
+
+| ID | 区分 | 確認対象 |
+|---|---|---|
+| `MANUAL.M2.T2-6b.C05.SCREEN-ACCEPTANCE` | X | つまんで動かす操作とツールレール |
+| `MANUAL.M2.T2-6b.C06.SCREEN-ACCEPTANCE` | X | 技法サブメニュー5種 |
+| `MANUAL.M2.T2-6c.C01.SCREEN-ACCEPTANCE` | X | 層のずらし表示 |
+| `MANUAL.M2.T2-6c.C02.SCREEN-ACCEPTANCE` | X | つかんで動かす操作 |
+| `MANUAL.M2.T2-6c.C03.SCREEN-ACCEPTANCE` | X | 実行前プレビュー |
+| `MANUAL.M2.T2-6c.C04.SCREEN-ACCEPTANCE` | X | 状態と操作理由の表示 |
+| `MANUAL.M2.T2-6c.C05.SCREEN-ACCEPTANCE` | X | 技法の自動判定と記録 |
+| `MANUAL.M2.T2-6c.C07.SCREEN-ACCEPTANCE` | Y | DOM検査基盤と主要経路の検査 |
+| `MANUAL.M2.T2-7.C01.SCREEN-ACCEPTANCE` | X | 4種類の作図補助 |
+| `MANUAL.M2.T2-7.C02.SCREEN-ACCEPTANCE` | X | 局所平坦違反の橙表示 |
+| `MANUAL.M2.T2-7.C03.SCREEN-ACCEPTANCE` | X | めり込み警告バッジ |
+| `MANUAL.M2.T2-8.C02.SCREEN-ACCEPTANCE` | X | 復旧ダイアログ |
+| `MANUAL.M3.T3-4.C01.SCREEN-ACCEPTANCE` | X | 提案ウィザード3画面 |
+| `MANUAL.M3.T3-4.C02.SCREEN-ACCEPTANCE` | X | 提案ウィザードの起動位置 |
+| `MANUAL.M4.T4-3.C02.SCREEN-ACCEPTANCE` | X | 展開図書き出しダイアログ |
+| `MANUAL.M4.T4-5.C03.SCREEN-ACCEPTANCE` | X | 手順図書き出しダイアログ |
+
+### X: CDP自動化の共通手順
+
+1. 専用の検査環境で同梱版を1つだけ起動し、CDP接続後に該当IDの操作を再現する。
+2. 指定された文字列、要素領域、状態ごとのスクリーンショットを取得し、期待する画素領域又は文字列と比較する。
+3. ID、操作列、取得画像、比較結果を保存する。1つでも操作不能・表示欠落・期待外の画素差があれば不合格にする。
+
+### Y: 人が判断する手順
+
+#### `MANUAL.M2.T2-6c.C07.SCREEN-ACCEPTANCE`
+
+1. 担当: 画面検査の担当者とは別のレビュー担当者。
+2. `apps/desktop/src/lib/layerMotion.test.ts` とテスト設定を読み、jsdomとTesting Libraryの基盤、およびプレビュー・ヒント・ドラッグの主要経路を検査する実在testがあることを確認する。
+3. 担当者が指定する検査名一覧の取得又は対象test実行の結果を確認し、ID、確認日、確認したtest名、結果を記録する。画面上の見た目だけ、又はtest名だけでは合格にしない。
+
 ## MANUAL.M1.T1-1.C03.COMMIT-PUSH
 1. `docs/implementation-roadmap.md` の `M1.T1-1.C03` と同じTaskを確認する。
 2. 統括が指定されたコミット題名と進捗記録を履歴で照合し、リモート本線の祖先であることを確認する。

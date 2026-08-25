@@ -200,11 +200,11 @@ impl fmt::Display for FoldImportError {
         match self {
             Self::Parse(_) => write!(
                 formatter,
-                "FOLD 1.2 限定のファイルを読み取れませんでした。ファイルの内容を確認してください。"
+                "ほかの折り紙ソフトのファイルを読み取れませんでした。ファイルの内容を確認してください。"
             ),
             Self::Conversion(_) => write!(
                 formatter,
-                "このFOLD 1.2 限定ファイルには、ORIGAMI3で扱えない内容があります。"
+                "このファイルには、ORIGAMI3で扱えない内容があります。"
             ),
         }
     }
@@ -1936,14 +1936,14 @@ mod tests {
         let parse_error = parse_fold_1_2("{").expect_err("壊れたJSONは拒否する");
         assert_eq!(
             FoldImportError::Parse(parse_error).to_string(),
-            "FOLD 1.2 限定のファイルを読み取れませんでした。ファイルの内容を確認してください。"
+            "ほかの折り紙ソフトのファイルを読み取れませんでした。ファイルの内容を確認してください。"
         );
 
         let file = parse_fold_1_2(FOLD_IMPORT_WARNING_AND_ERROR).expect("変換段階まで進むfixture");
         let conversion_error = fold_to_document(&file).expect_err("対応範囲外は拒否する");
         assert_eq!(
             FoldImportError::Conversion(conversion_error).to_string(),
-            "このFOLD 1.2 限定ファイルには、ORIGAMI3で扱えない内容があります。"
+            "このファイルには、ORIGAMI3で扱えない内容があります。"
         );
     }
 

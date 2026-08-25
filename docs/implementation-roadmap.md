@@ -705,7 +705,7 @@ pub fn outside_reverse(...) -> Result<FoldThroughResult, String>;
 - [x] **既存技法の作り直し**: `fold_through` を `flat_motion` への薄い委譲に再実装(`pleat`・`inside_reverse`・`outside_reverse` は `fold_through` 経由で自動的にその上に乗る)。層数の偶奇による制限は無し。既存テストは1件も変更せず全て合格 — [証拠:M2.T2-6b.C03](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6b-c03) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6b.C03 evidence=TEST.M2.T2-6b.C03 -->
 - [ ] **`squash`(開いてつぶす)・`petal`(花弁折り)を実装**。鶴の基本形の前面が持ち上がることをテスト — [証拠:M2.T2-6b.C04](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6b-c04) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6b.C04 evidence=TEST.M2.T2-6b.C04 -->
 - [ ] **UI: 「つまんで動かす」ツール**(SIM-011)。畳んだ状態で層を選び、目標位置へドラッグすると必要な折り線を自動で求めて折る。技法として名前が付いていない動きもこれで行える。関連する道具としてツールレールへ整理して追加する — [証拠:M2.T2-6b.C05](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6b-c05) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6b.C05 evidence=MANUAL.M2.T2-6b.C05.SCREEN-ACCEPTANCE -->
-- [ ] UIの技法サブメニューを5種に(中割り/かぶせ/花弁/つぶし/段) — [証拠:M2.T2-6b.C06](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6b-c06) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6b.C06 evidence=MANUAL.M2.T2-6b.C06.SCREEN-ACCEPTANCE -->
+- [ ] UIの技法サブメニューを9種に(層操作/段/中割り/かぶせ/つぶし/花弁/沈め/ひだ寄せ/ねじり) — [証拠:M2.T2-6b.C06](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6b-c06) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6b.C06 evidence=MANUAL.M2.T2-6b.C06.SCREEN-ACCEPTANCE -->
 - [x] テスト: 上記の設計フェーズで洗い出した全ケース、表示上の重なり順検証(t=0.99のz読み取り方式)、記録した手順からの再生一致、奇数層・部分フラップ、原子性(`crates/ori3-layers/tests/flat_motion.rs` 9件) — [証拠:M2.T2-6b.C07](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6b-c07) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6b.C07 evidence=MANUAL.M2.T2-6b.C07.SCREEN-ACCEPTANCE -->
 - [x] コミット `どんな折り方でも表せる汎用の折り操作を追加` → プッシュ — [証拠:M2.T2-6b.C08](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6b-c08) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6b.C08 evidence=MANUAL.M2.T2-6b.C08.COMMIT-PUSH -->
 
@@ -746,7 +746,7 @@ pub fn outside_reverse(...) -> Result<FoldThroughResult, String>;
 
 **Files:** `crates/ori3-layers/tests/acceptance_crane.rs`
 
-- [ ] 折り鶴を「fold_through+技法マクロの列」でスクリプト構築し、最終状態の層数・外形寸法・決定性を検証する回帰テスト — [証拠:M2.T2-9.C01](traceability/roadmap-links.md#roadmap-evidence-m2-t2-9-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-9.C01 evidence=TEST.M2.T2-9.C01 -->
+- [x] 折り鶴を「fold_through+技法マクロの列」でスクリプト構築し、最終状態の層数・外形寸法・決定性を検証する回帰テスト — [証拠:M2.T2-9.C01](traceability/roadmap-links.md#roadmap-evidence-m2-t2-9-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-9.C01 evidence=TEST.M2.T2-9.C01 --> <!-- 実行確認: completed_crane_is_flat_and_symmetric (1 passed; 0 failed) -->
 - [ ] 手動確認: アプリで鶴を1折りずつ折って完成→展開図の一部を修正→自動再生で形が追従 — [証拠:M2.T2-9.C02](traceability/roadmap-links.md#roadmap-evidence-m2-t2-9-c02) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-9.C02 evidence=MANUAL.M2.T2-9.C02.SCREEN-ACCEPTANCE -->
 - [ ] コミット `折り鶴が折れることを確認する自動テストを追加` → プッシュ — [証拠:M2.T2-9.C03](traceability/roadmap-links.md#roadmap-evidence-m2-t2-9-c03) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-9.C03 evidence=MANUAL.M2.T2-9.C03.COMMIT-PUSH -->
 
@@ -898,16 +898,16 @@ impl Skeleton {
 
 **Files:** `crates/ori3-layers/src/techniques.rs`(追加), `tests/sink.rs`
 
-- [ ] テスト: 鶴の基本形の頂点を沈める→対象領域の全層で山谷が反転し、層順序が沈め込み後の入れ子順になる — [証拠:M4.T4-1.C01](traceability/roadmap-links.md#roadmap-evidence-m4-t4-1-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-1.C01 evidence=TEST.M4.T4-1.C01 -->
-- [ ] 実装: `pub fn open_sink(cp, faces, state, region_line: [[f64;2];2]) -> Result<FoldThroughResult, String>`。折り線より先端側の全層について、(a)折り線で各層を分割 (b)先端側の山谷を反転 (c)層順序を内外反転して再挿入 — [証拠:M4.T4-1.C02](traceability/roadmap-links.md#roadmap-evidence-m4-t4-1-c02) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-1.C02 evidence=TEST.M4.T4-1.C02 -->
+- [x] テスト: 鶴の基本形の頂点を沈める→対象領域の全層で山谷が反転し、層順序が沈め込み後の入れ子順になる — [証拠:M4.T4-1.C01](traceability/roadmap-links.md#roadmap-evidence-m4-t4-1-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-1.C01 evidence=TEST.M4.T4-1.C01 --> <!-- 実行確認: open_sink_works_on_the_bird_base_apex (1 passed; 0 failed) -->
+- [x] 実装: `pub fn open_sink(cp, faces, state, region_line: [[f64;2];2]) -> Result<FoldThroughResult, String>`。折り線より先端側の全層について、(a)折り線で各層を分割 (b)先端側の山谷を反転 (c)層順序を内外反転して再挿入 — [証拠:M4.T4-1.C02](traceability/roadmap-links.md#roadmap-evidence-m4-t4-1-c02) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-1.C02 evidence=TEST.M4.T4-1.C02 --> <!-- 実行確認: open_sink_turns_the_tip_of_the_preliminary_base_inside_out (1 passed; 0 failed) -->
 - [ ] テスト成功確認 → コミット `沈め折りを選ぶだけで折れる機能を追加` → プッシュ — [証拠:M4.T4-1.C03](traceability/roadmap-links.md#roadmap-evidence-m4-t4-1-c03) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-1.C03 evidence=MANUAL.M4.T4-1.C03.COMMIT-PUSH -->
 
 ### Task 4-2: ひだ寄せ・ねじり折り
 
 **Files:** `crates/ori3-layers/src/techniques.rs`(追加), `tests/{swivel,twist}.rs`
 
-- [ ] `pub fn swivel(...)`: 基準線+寄せ線の2線指定でひだを寄せる(fold_through2回+層併合) — [証拠:M4.T4-2.C01](traceability/roadmap-links.md#roadmap-evidence-m4-t4-2-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-2.C01 evidence=TEST.M4.T4-2.C01 -->
-- [ ] `pub fn twist(...)`: 多角形領域+周辺ひだ線の指定でねじる(領域回転配置+周辺ひだのfold_through列) — [証拠:M4.T4-2.C02](traceability/roadmap-links.md#roadmap-evidence-m4-t4-2-c02) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-2.C02 evidence=TEST.M4.T4-2.C02 -->
+- [x] `pub fn swivel(...)`: 基準線+寄せ線の2線指定でひだを寄せる(fold_through2回+層併合) — [証拠:M4.T4-2.C01](traceability/roadmap-links.md#roadmap-evidence-m4-t4-2-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-2.C01 evidence=TEST.M4.T4-2.C01 --> <!-- 実行確認: swivel_works_on_stacked_layers_and_rejects_only_undefined_input (1 passed; 0 failed) -->
+- [x] `pub fn twist(...)`: 多角形領域+周辺ひだ線の指定でねじる(領域回転配置+周辺ひだのfold_through列) — [証拠:M4.T4-2.C02](traceability/roadmap-links.md#roadmap-evidence-m4-t4-2-c02) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-2.C02 evidence=TEST.M4.T4-2.C02 --> <!-- 実行確認: twist_works_on_a_triangle_and_rejects_only_undefined_input (1 passed; 0 failed) -->
 - [ ] 各テスト(層数・順序・CP追加線の検証)→実装→コミット `ひだ寄せとねじり折りを選ぶだけで折れる機能を追加` → プッシュ — [証拠:M4.T4-2.C03](traceability/roadmap-links.md#roadmap-evidence-m4-t4-2-c03) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-2.C03 evidence=MANUAL.M4.T4-2.C03.COMMIT-PUSH -->
 
 ### Task 4-3: 展開図SVG/PNG書き出し

@@ -5,7 +5,7 @@
 import { ALIGN_STEPS, type AlignMode } from "./alignFold";
 import { MIN_TWIST_VERTICES } from "./twistPolygon";
 import type { TechniqueKind } from "./types";
-import type { ToolId } from "../store/appStore";
+import type { ToolId } from "../store/toolTypes";
 import {
   minimumTechniqueFlap,
   techniqueUsesOpenToBack,

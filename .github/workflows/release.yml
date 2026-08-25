@@ -175,6 +175,101 @@ jobs:
 
           Get-ChildItem -LiteralPath $outputDir -File | Select-Object Name, Length
 
+      - name: Prepare component lists and download verification records
+        id: publication_files
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $outputDir = Join-Path $env:GITHUB_WORKSPACE "release-artifacts"
+          $version = $env:VERSION
+          $buildId = [string]$env:GITHUB_RUN_ID
+          $setupName = "ORIGAMI3_{0}_setup.exe" -f $version
+          $msiName = "ORIGAMI3_{0}_x64.msi" -f $version
+          $portableName = "ORIGAMI3_{0}_portable.exe" -f $version
+          $manualSource = Join-Path $env:GITHUB_WORKSPACE "docs\manual\ORIGAMI3取扱説明書.pdf"
+          $publishedNames = @($setupName, $msiName, $portableName, "ORIGAMI3.pdf")
+          $statusName = "ORIGAMI3_{0}_component-list-status.json" -f $version
+          $statusPath = Join-Path $outputDir $statusName
+          $recordsState = "unavailable"
+          $summaryMessage = "配布物の中身の一覧と照合用ファイルを作成できませんでした。通常の配布物4件だけを公開します。"
+          $technicalFailure = $null
+
+          try {
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+              -File scripts\supply-chain-generate-release-hashes.ps1 `
+              -Version $version `
+              -BuildId $buildId `
+              -SetupPath (Join-Path $outputDir $setupName) `
+              -MsiPath (Join-Path $outputDir $msiName) `
+              -PortablePath (Join-Path $outputDir $portableName) `
+              -ManualPath $manualSource `
+              -DestinationDirectory $outputDir
+            if ($LASTEXITCODE -ne 0) { throw "Hash record generator exited with $LASTEXITCODE." }
+
+            foreach ($artifactName in $publishedNames) {
+              $inventoryPath = Join-Path $outputDir ("{0}.components.cdx.json" -f $artifactName)
+              & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+                -File scripts\supply-chain-generate-sbom.ps1 `
+                -DestinationPath $inventoryPath `
+                -ArtifactName $artifactName `
+                -BuildId $buildId
+              if ($LASTEXITCODE -ne 0) { throw "Component list generator failed for $artifactName with $LASTEXITCODE." }
+            }
+
+            $recordsState = "complete"
+            $summaryMessage = "配布物4件それぞれの中身の一覧と照合用ファイルを作成しました。"
+          }
+          catch {
+            $technicalFailure = $_.Exception.Message
+          }
+
+          $status = [ordered]@{
+            schema = 1
+            version = $version
+            buildId = $buildId
+            state = $recordsState
+            message = $summaryMessage
+            componentListCount = if ($recordsState -eq "complete") { 4 } else { 0 }
+            hashSidecarCount = if ($recordsState -eq "complete") { 4 } else { 0 }
+            failureRecordedIn = if ($recordsState -eq "complete") { $null } else { "GitHub Actionsの実行記録と要約" }
+          }
+          [IO.File]::WriteAllText(
+            $statusPath,
+            ($status | ConvertTo-Json -Depth 5) + [Environment]::NewLine,
+            [Text.UTF8Encoding]::new($false)
+          )
+
+          $releaseFiles = @(
+            "release-artifacts/$setupName",
+            "release-artifacts/$msiName",
+            "release-artifacts/$portableName",
+            "docs/manual/ORIGAMI3取扱説明書.pdf",
+            "release-artifacts/$statusName"
+          )
+          if ($recordsState -eq "complete") {
+            foreach ($artifactName in $publishedNames) {
+              $releaseFiles += "release-artifacts/$artifactName.components.cdx.json"
+              $releaseFiles += "release-artifacts/$artifactName.sha256"
+            }
+            $releaseFiles += "release-artifacts/ORIGAMI3_${version}_SHA256SUMS.txt"
+            $releaseFiles += "release-artifacts/ORIGAMI3_${version}_artifact-record.json"
+          }
+
+          $delimiter = "ORI3_RELEASE_FILES_" + [guid]::NewGuid().ToString("N")
+          "files<<$delimiter" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          $releaseFiles | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          $delimiter | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "component_records_state=$recordsState" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "## 配布物に添える確認記録"
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- 状態: $recordsState"
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- $summaryMessage"
+          if ($null -ne $technicalFailure) {
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- 詳細: $technicalFailure"
+          }
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -201,6 +296,7 @@ jobs:
             | インストールせずに持ち運びたい | `ORIGAMI3_${{ steps.meta.outputs.version }}_portable.exe` |
             | 会社などで多数の端末へまとめて入れたい | `ORIGAMI3_${{ steps.meta.outputs.version }}_x64.msi` |
             | 使い方を読みたい | `ORIGAMI3.pdf`（取扱説明書です） |
+            | 配布物の中身と照合情報を確認したい | `ORIGAMI3_${{ steps.meta.outputs.version }}_component-list-status.json` |
             | 中身のプログラムを見たい | `Source code (zip)` または `Source code (tar.gz)` |
 
             ### ダウンロードしたあとは
@@ -217,7 +313,7 @@ jobs:
 
             ### Windowsの警告が出たとき
 
-            これらの配布物は署名されていないため、Windows SmartScreenの警告が表示される場合があります。無料の署名プログラムは、まだ利用条件を満たしていません。
+            これらの配布物には署名を付けていません。署名を追加する予定はありません。Windows SmartScreenの警告が表示される場合があります。
 
             1. このページの配布物であることと、上の表のファイル名と一致することを確認します。
             2. 警告画面で「詳細情報」を選び、表示されたアプリ名とダウンロードしたファイルを確認します。
@@ -231,8 +327,4 @@ jobs:
             ---
           prerelease: ${{ steps.meta.outputs.prerelease }}
           fail_on_unmatched_files: true
-          files: |
-            release-artifacts/ORIGAMI3_${{ steps.meta.outputs.version }}_setup.exe
-            release-artifacts/ORIGAMI3_${{ steps.meta.outputs.version }}_x64.msi
-            release-artifacts/ORIGAMI3_${{ steps.meta.outputs.version }}_portable.exe
-            docs/manual/ORIGAMI3取扱説明書.pdf
+          files: ${{ steps.publication_files.outputs.files }}

@@ -288,6 +288,30 @@ describe("Viewer3D(画面)", () => {
       uiTheme: "pop",
     });
   });
+
+  it("mountしたsceneとcanvas listenerをunmountで各1回だけ終了する", () => {
+    const add = vi.spyOn(HTMLCanvasElement.prototype, "addEventListener");
+    const remove = vi.spyOn(HTMLCanvasElement.prototype, "removeEventListener");
+    const fitRef = { current: null } as React.RefObject<(() => void) | null>;
+    const view = render(<Viewer3D fitRef={fitRef} />);
+    const scene = held.scene;
+    const dispose = scene.dispose as ReturnType<typeof vi.fn>;
+    const ownedAdds = add.mock.calls.filter(
+      ([type]) => type === "pointermove" || type === "wheel",
+    );
+
+    expect(ownedAdds).toHaveLength(2);
+    expect(dispose).not.toHaveBeenCalled();
+
+    view.unmount();
+
+    expect(dispose).toHaveBeenCalledTimes(1);
+    for (const [type, callback] of ownedAdds) {
+      expect(remove).toHaveBeenCalledWith(type, callback);
+    }
+    add.mockRestore();
+    remove.mockRestore();
+  });
   afterEach(() => cleanup());
 
   it("今できることを1行で常に出す(修飾キーの意味つき)", () => {

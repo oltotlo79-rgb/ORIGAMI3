@@ -82,6 +82,28 @@ $scopeFallbackTests = @{
     M5 = "finish_soft_round_trips_three_values_only_with_measured_tolerance"
 }
 
+# 施策7の状態差B1で、実行記録がまだない手動受入を区分する。
+# Xは将来CDPで画面操作・文字列・画素を機械確認できるもの、Yは検査の意味を
+# 人が読んで判断するもの、Zは紙を折る実物比較が必要なものとして扱う。
+$b1ManualAcceptanceClassification = [ordered]@{
+    "MANUAL.M2.T2-6b.C05.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "つまんで動かす操作とツールレール" }
+    "MANUAL.M2.T2-6b.C06.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "技法サブメニュー5種" }
+    "MANUAL.M2.T2-6c.C01.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "層のずらし表示" }
+    "MANUAL.M2.T2-6c.C02.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "つかんで動かす操作" }
+    "MANUAL.M2.T2-6c.C03.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "実行前プレビュー" }
+    "MANUAL.M2.T2-6c.C04.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "状態と操作理由の表示" }
+    "MANUAL.M2.T2-6c.C05.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "技法の自動判定と記録" }
+    "MANUAL.M2.T2-6c.C07.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "Y"; Subject = "DOM検査基盤と主要経路の検査" }
+    "MANUAL.M2.T2-7.C01.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "4種類の作図補助" }
+    "MANUAL.M2.T2-7.C02.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "局所平坦違反の橙表示" }
+    "MANUAL.M2.T2-7.C03.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "めり込み警告バッジ" }
+    "MANUAL.M2.T2-8.C02.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "復旧ダイアログ" }
+    "MANUAL.M3.T3-4.C01.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "提案ウィザード3画面" }
+    "MANUAL.M3.T3-4.C02.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "提案ウィザードの起動位置" }
+    "MANUAL.M4.T4-3.C02.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "展開図書き出しダイアログ" }
+    "MANUAL.M4.T4-5.C03.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "手順図書き出しダイアログ" }
+}
+
 function ConvertTo-LinkSlug([string]$Id) {
     return $Id.ToLowerInvariant().Replace(".", "-")
 }
@@ -97,27 +119,62 @@ function Test-ListedName([string]$Inventory, [string]$Name) {
     return [regex]::IsMatch($Inventory, "(?m)^" + [regex]::Escape($Name) + "(?:\: test)?\s*$")
 }
 
+function Get-ProgressCompletionTaskNumbers([string]$Text) {
+    # 進捗の日時見出しだけを完了記録として扱う。本文中のTask番号や既知の問題を
+    # 完了扱いにしない。また「Task 3-1/3-2」「Task 4-4 / 4-5」を両方拾う。
+    $numbers = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($line in ($Text -split "`r?`n")) {
+        if ($line -notmatch '^## ') { continue }
+        foreach ($match in [regex]::Matches($line, 'Task\s+(?<number>[0-9]+-[0-9A-Za-z]+)(?<following>(?:\s*/\s*[0-9]+-[0-9A-Za-z]+)*)')) {
+            [void]$numbers.Add($match.Groups['number'].Value)
+            foreach ($following in [regex]::Matches($match.Groups['following'].Value, '[0-9]+-[0-9A-Za-z]+')) {
+                [void]$numbers.Add($following.Value)
+            }
+        }
+        if ($line -match 'Task\s+M5(?:$|[^0-9A-Za-z])') {
+            [void]$numbers.Add('M5')
+        }
+    }
+    return $numbers
+}
+
 $roadmapLines = [System.IO.File]::ReadAllLines($roadmapPath, [System.Text.Encoding]::UTF8)
 $progressText = [System.IO.File]::ReadAllText($progressPath, [System.Text.Encoding]::UTF8)
 $testInventory = [System.IO.File]::ReadAllText($testNamesPath, [System.Text.Encoding]::UTF8)
 $records = New-Object System.Collections.Generic.List[object]
 $scope = $null
+# $taskは現在の実際の見出し、$linkTaskは既存inline link IDを保つTask見出し。
+# 作業見出しに入っても、Task番号を進捗照合へ持ち越してはならない。
 $task = $null
+$linkTask = $null
 $taskOrdinals = @{}
 $updatedLines = New-Object System.Collections.Generic.List[string]
+$progressCompletedTaskNumbers = Get-ProgressCompletionTaskNumbers $progressText
 
 for ($index = 0; $index -lt $roadmapLines.Count; $index++) {
     $line = $roadmapLines[$index]
     if ($line -match '^## M[0-9](?:\s|:)') {
         $scope = $null
         $task = $null
+        $linkTask = $null
     }
     if ($line -match '^## (M[0-5])(?:\s|:)') {
         $scope = $Matches[1]
         $task = $null
+        $linkTask = $null
     }
     if ($line -match '^### (Task [0-9]+-[0-9A-Za-z]+)') {
         $task = $Matches[1]
+        $linkTask = $task
+    }
+    elseif ($line -match '^### 作業(?<number>[0-9]+(?:・[0-9]+)*)') {
+        $task = "Work $($Matches['number'])"
+    }
+    elseif ($line -match '^### ') {
+        # Taskでも作業でもない見出しの下にcheckboxがあれば、直前のTaskを使わず
+        # 明示的に失敗させる。
+        $task = $null
+        $linkTask = $null
     }
 
     if ($null -ne $scope -and $line -match '^- \[([ x])\] (?<text>.*)$') {
@@ -151,6 +208,9 @@ for ($index = 0; $index -lt $roadmapLines.Count; $index++) {
                 test_name = $null
                 manual_id = $null
                 progress_state = "historical-link-in-M0-evidence-table"
+                progress_task_applicable = $false
+                progress_task_id = $null
+                progress_task_recorded = $null
             })
             $updatedLines.Add($line)
             continue
@@ -160,12 +220,14 @@ for ($index = 0; $index -lt $roadmapLines.Count; $index++) {
             $updatedLines.Add($line)
             continue
         }
-        if ($null -eq $task) { throw "Task見出しを判定できません: line $($index + 1)" }
+        if ($null -eq $task -or $null -eq $linkTask) { throw "Task又は作業見出しを判定できません: line $($index + 1)" }
 
-        $taskKey = "$scope|$task"
+        # link IDと既存の証拠名は、ロードマップ本文に書かれた既存markerと一致させる。
+        # 一方、進捗照合は下の$task（作業18ならWork 18）だけで行う。
+        $taskKey = "$scope|$linkTask"
         if (-not $taskOrdinals.ContainsKey($taskKey)) { $taskOrdinals[$taskKey] = 0 }
         $taskOrdinals[$taskKey] = [int]$taskOrdinals[$taskKey] + 1
-        $taskNumber = ([regex]::Match($task, 'Task (?<number>[0-9]+-[0-9A-Za-z]+)')).Groups['number'].Value
+        $taskNumber = ([regex]::Match($linkTask, 'Task (?<number>[0-9]+-[0-9A-Za-z]+)')).Groups['number'].Value
         $linkId = "$scope.T$taskNumber.C{0:D2}" -f $taskOrdinals[$taskKey]
         $manualKind = Get-ManualKind $checkboxText
         $testName = $null
@@ -183,10 +245,19 @@ for ($index = 0; $index -lt $roadmapLines.Count; $index++) {
             $evidenceType = "test"
         }
 
-        # [ ]なのに実在testとprogress記録があるものは、状態を書き換えず監査で要確認とする。
-        $progressTaskMatch = [regex]::IsMatch($progressText, [regex]::Escape($taskNumber))
+        # [ ]なのに同じTaskの完了見出しがあるものだけを要確認にする。
+        # 作業見出しにはTask番号を持ち越さず、対応する進捗Taskが存在しないものとして扱う。
+        $progressTaskApplicable = $task -match '^Task '
+        $progressTaskId = $null
+        $progressTaskMatch = $false
+        if ($progressTaskApplicable) {
+            $progressTaskId = ([regex]::Match($task, 'Task (?<number>[0-9]+-[0-9A-Za-z]+)')).Groups['number'].Value
+            $progressTaskMatch = $progressCompletedTaskNumbers.Contains($progressTaskId)
+        }
         if ($scope -eq "M5") {
-            $progressTaskMatch = $progressTaskMatch -or [regex]::IsMatch($progressText, 'Task M5|M5・SIM-012')
+            $progressTaskId = 'M5'
+            $progressTaskApplicable = $true
+            $progressTaskMatch = $progressCompletedTaskNumbers.Contains($progressTaskId)
         }
         $progressState = "consistent"
         $explicitManualConfirmation = $checkboxText -match "手動確認|実機確認"
@@ -211,9 +282,12 @@ for ($index = 0; $index -lt $roadmapLines.Count; $index++) {
             evidence_id = $evidenceId
             evidence_type = $evidenceType
             test_name = $testName
-            manual_id = $manualId
-            progress_state = $progressState
-        })
+                manual_id = $manualId
+                progress_state = $progressState
+                progress_task_applicable = $progressTaskApplicable
+                progress_task_id = $progressTaskId
+                progress_task_recorded = $progressTaskMatch
+            })
 
         if ($Update) {
             $line = [regex]::Replace(
@@ -245,6 +319,9 @@ $records.Add([pscustomobject][ordered]@{
     test_name = $null
     manual_id = "MANUAL.M6.ACCEPTANCE.C01.FULL-ACCEPTANCE"
     progress_state = "manual-acceptance-required"
+    progress_task_applicable = $false
+    progress_task_id = $null
+    progress_task_recorded = $null
 })
 
 $m6Markers = [regex]::Matches(
@@ -268,6 +345,11 @@ foreach ($scopeName in $expectedCheckboxCounts.Keys) {
 }
 $statusDisagreements = @($checkboxRecords | Where-Object { $_.progress_state -eq "unchecked-but-progress-task-exists" })
 $uncheckedWithTests = @($checkboxRecords | Where-Object { $_.progress_state -eq "unchecked-with-test-link" })
+# 逆方向: ロードマップは完了だが、進捗の日時見出しに同じTaskの完了記録がない。
+# 作業見出しは進捗Taskと一対一に対応しないため、ここでは数えない。
+$reverseDisagreements = @($checkboxRecords | Where-Object {
+    $_.checkbox_state -eq "checked" -and $_.progress_task_applicable -and -not $_.progress_task_recorded
+})
 
 foreach ($record in $testRecords) {
     if (-not (Test-ListedName $testInventory $record.test_name)) {
@@ -328,6 +410,30 @@ $manualMarkdown = New-Object System.Collections.Generic.List[string]
 $manualMarkdown.Add("# 手動受入手順")
 $manualMarkdown.Add("")
 $manualMarkdown.Add('この文書のIDは `roadmap-links.json` の手動証拠と1対1で対応する。実施者はID、日付、結果、確認した画面又は履歴を記録する。担当者はアプリを起動せず、画面確認は統括が同梱版で行う。')
+$manualMarkdown.Add("")
+$manualMarkdown.Add("## B1未実施受入の自動化可否（2026-08-26）")
+$manualMarkdown.Add("")
+$manualMarkdown.Add('XはCDPで画面操作、表示文字列、画素又は領域の有無を確認できる。Yは検査が主張する範囲を人が読んで判断する。Z（実際に紙を折る比較が必要な項目）は、この16件にはない。')
+$manualMarkdown.Add("")
+$manualMarkdown.Add("| ID | 区分 | 確認対象 |")
+$manualMarkdown.Add("|---|---|---|")
+foreach ($manualId in $b1ManualAcceptanceClassification.Keys) {
+    $classification = $b1ManualAcceptanceClassification[$manualId]
+    $manualMarkdown.Add("| ``$manualId`` | $($classification.Class) | $($classification.Subject) |")
+}
+$manualMarkdown.Add("")
+$manualMarkdown.Add("### X: CDP自動化の共通手順")
+$manualMarkdown.Add("")
+$manualMarkdown.Add('1. 専用の検査環境で同梱版を1つだけ起動し、CDP接続後に該当IDの操作を再現する。')
+$manualMarkdown.Add('2. 指定された文字列、要素領域、状態ごとのスクリーンショットを取得し、期待する画素領域又は文字列と比較する。')
+$manualMarkdown.Add('3. ID、操作列、取得画像、比較結果を保存する。1つでも操作不能・表示欠落・期待外の画素差があれば不合格にする。')
+$manualMarkdown.Add("")
+$manualMarkdown.Add("### Y: 人が判断する手順")
+$manualMarkdown.Add("")
+$manualMarkdown.Add('#### `MANUAL.M2.T2-6c.C07.SCREEN-ACCEPTANCE`')
+$manualMarkdown.Add('1. 担当: 画面検査の担当者とは別のレビュー担当者。')
+$manualMarkdown.Add('2. `apps/desktop/src/lib/layerMotion.test.ts` とテスト設定を読み、jsdomとTesting Libraryの基盤、およびプレビュー・ヒント・ドラッグの主要経路を検査する実在testがあることを確認する。')
+$manualMarkdown.Add('3. 担当者が指定する検査名一覧の取得又は対象test実行の結果を確認し、ID、確認日、確認したtest名、結果を記録する。画面上の見た目だけ、又はtest名だけでは合格にしない。')
 foreach ($record in ($manualRecords | Sort-Object manual_id)) {
     $manualMarkdown.Add("")
     $manualMarkdown.Add("## $($record.manual_id)")
@@ -376,6 +482,7 @@ $report.Add("| link ID重複 | $($duplicateIds.Count) |")
 $report.Add("| 進捗文書との食い違い候補 | $($statusDisagreements.Count) |")
 $report.Add("| 実装済みを未着手へ戻した候補 | $($statusDisagreements.Count) |")
 $report.Add("| 進捗記録は無いが実在testへ結んだ候補 | $($uncheckedWithTests.Count) |")
+$report.Add("| 逆方向: roadmap完了・進捗Task記録なし | $($reverseDisagreements.Count) |")
 $report.Add("| 生成hash | ``$generatedHash`` |")
 $report.Add("")
 $report.Add("## scope別")
@@ -391,19 +498,41 @@ foreach ($scopeName in $expectedCheckboxCounts.Keys) {
 $report.Add("")
 $report.Add("## 進捗との食い違い候補（状態は変更していない）")
 $report.Add("")
-if (($statusDisagreements.Count + $uncheckedWithTests.Count) -eq 0) {
+if ($statusDisagreements.Count -eq 0) {
     $report.Add("- なし")
 }
 else {
-    foreach ($record in @($statusDisagreements + $uncheckedWithTests | Sort-Object id)) {
+    foreach ($record in ($statusDisagreements | Sort-Object id)) {
         $reportEvidence = if ($record.evidence_type -eq "test") { $record.test_name } elseif ($record.evidence_type -eq "manual") { $record.manual_id } else { $record.evidence_id }
         $report.Add("- ``$($record.id)``: roadmap=$($record.checkbox_state), progress=$($record.progress_state), evidence=``$reportEvidence``")
+    }
+}
+$report.Add("")
+$report.Add("## 未完了だが実在testへ結んだ項目（進捗状態差ではない）")
+$report.Add("")
+if ($uncheckedWithTests.Count -eq 0) {
+    $report.Add("- なし")
+}
+else {
+    foreach ($record in ($uncheckedWithTests | Sort-Object id)) {
+        $report.Add("- ``$($record.id)``: roadmap=unchecked, progress=record-not-applicable, evidence=``$($record.test_name)``")
     }
 }
 $report.Add("")
 $report.Add("## M6受入")
 $report.Add("")
 $report.Add("- ``$($records | Where-Object { $_.id -eq 'M6.ACCEPTANCE.C01' } | Select-Object -ExpandProperty manual_id)``: 手順は ``docs/traceability/manual-acceptance.md`` に記載。")
+$report.Add("")
+$report.Add("## 逆方向の照合（roadmap完了・進捗Task記録なし）")
+$report.Add("")
+if ($reverseDisagreements.Count -eq 0) {
+    $report.Add("- なし")
+}
+else {
+    foreach ($record in ($reverseDisagreements | Sort-Object id)) {
+        $report.Add("- ``$($record.id)``: roadmap=checked, progressTask=$($record.progress_task_id), progress=record-not-found")
+    }
+}
 
 if ($Update -or $WriteTraceability) {
     New-Item -ItemType Directory -Force -Path $traceabilityDir | Out-Null
@@ -416,8 +545,8 @@ if ($Update -or $WriteTraceability) {
     [System.IO.File]::WriteAllLines($reportPath, $report, (New-Object System.Text.UTF8Encoding($false)))
 }
 
-Write-Output "checkbox=$($checkboxRecords.Count)/182 test=$($testRecords.Count) manual=$($manualRecords.Count) unlinked=$($unresolvedRecords.Count) duplicate=$($duplicateIds.Count) progress_disagreement=$($statusDisagreements.Count) regressed_to_unstarted=$($statusDisagreements.Count) unchecked_with_test=$($uncheckedWithTests.Count) hash=$generatedHash"
-if (($statusDisagreements.Count + $uncheckedWithTests.Count) -ne 0) {
+Write-Output "checkbox=$($checkboxRecords.Count)/182 test=$($testRecords.Count) manual=$($manualRecords.Count) unlinked=$($unresolvedRecords.Count) duplicate=$($duplicateIds.Count) progress_disagreement=$($statusDisagreements.Count) regressed_to_unstarted=$($statusDisagreements.Count) unchecked_with_test=$($uncheckedWithTests.Count) reverse_progress_disagreement=$($reverseDisagreements.Count) hash=$generatedHash"
+if (($statusDisagreements.Count + $reverseDisagreements.Count) -ne 0) {
     Write-Output "STATUS-MISMATCH: roadmap status was preserved; see scratchpad/doc-link-7d-report.md"
     if ($Check) { exit 2 }
 }

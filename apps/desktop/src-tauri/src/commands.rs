@@ -2101,7 +2101,7 @@ fn export_files(
             .collect(),
         ExportKind::FoldJson => {
             let user_error = || {
-                "この作品はFOLD 1.2 限定として書き出せません。作品の内容を確認してください。"
+                "この作品は、ほかの折り紙ソフトで使えるファイルとして書き出せません。作品の内容を確認してください。"
                     .to_string()
             };
             let FoldExport { file, warnings } = document_to_fold(doc).map_err(|_| user_error())?;
@@ -3559,7 +3559,7 @@ mod tests {
 
         assert_eq!(
             export_files(&doc, ExportKind::FoldJson, options).expect_err("非有限値を拒否する"),
-            "この作品はFOLD 1.2 限定として書き出せません。作品の内容を確認してください。"
+            "この作品は、ほかの折り紙ソフトで使えるファイルとして書き出せません。作品の内容を確認してください。"
         );
         assert_eq!(std::fs::read(&target).expect("sentinelを読める"), sentinel);
         std::fs::remove_dir_all(&dir).expect("検査用directoryを片付けられる");
