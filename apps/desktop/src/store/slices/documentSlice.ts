@@ -26,6 +26,7 @@ import type {
   EditOp,
   Face,
   FoldDirection,
+  FoldTargetInfo,
   FoldThroughProposal,
   Frame3D,
   MotionPart,
@@ -66,17 +67,35 @@ export interface MeasureDraft {
   display: MeasureDisplay | null;
 }
 
-export type FoldTarget = "all" | "top";
+export type FoldTargetSelection =
+  | { target: "all"; topPleatCount?: never }
+  | { target: "top"; topPleatCount?: never }
+  | { target: "topPleats"; topPleatCount: number };
 
-export interface FoldDraft {
+export type FoldTarget = FoldTargetSelection["target"];
+
+interface FoldDraftCore {
   line: [Vec2, Vec2];
   direction: FoldDirection;
-  target: FoldTarget;
   movingSide: "left" | "right";
   docEpoch: number;
   stepCount: number;
   upTo: number;
+  /** 保存しない照会結果。古い検査fixtureでは省略されるため、読む側はnull相当として扱う。 */
+  foldTargetInfo?: FoldTargetInfo | null;
+  /** `PreviewFoldTargets`の応答待ち。作品や折り手順には保存しない。 */
+  foldTargetBusy?: boolean;
 }
+
+export type FoldDraft = FoldDraftCore & FoldTargetSelection;
+
+type FoldDraftEditablePatch = Partial<
+  Pick<FoldDraftCore, "direction" | "movingSide">
+>;
+
+export type FoldDraftPatch =
+  | (FoldDraftEditablePatch & { target?: never; topPleatCount?: never })
+  | (FoldDraftEditablePatch & FoldTargetSelection);
 
 export type AddSegmentOp = Extract<EditOp, { type: "AddSegment" }>;
 export type FoldThroughApplyOp = Extract<SeqOp, { type: "FoldThrough" }>;
@@ -400,7 +419,9 @@ export interface DocumentSliceActions {
   setSelection: (selection: Selection) => void;
   setHoveredHinge: (hinge: number | null) => void;
   beginFoldDraft: (line: [Vec2, Vec2], source: "2d" | "3d") => void;
-  updateFoldDraft: (patch: Partial<FoldDraft>) => void;
+  updateFoldDraft: (patch: FoldDraftPatch) => void;
+  setFoldTarget: (selection: FoldTargetSelection) => void;
+  requestFoldTargetInfo: () => Promise<void>;
   cancelFoldDraft: () => void;
   commitFoldDraft: () => Promise<void>;
   resolveFoldThroughProposal: (accept: boolean) => Promise<void>;

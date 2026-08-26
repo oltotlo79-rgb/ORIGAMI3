@@ -22,7 +22,19 @@ const SNAP_ANGLE = (12 * Math.PI) / 180;
 const SNAP_BALANCE = 0.3;
 
 /** 何枚の紙を動かすか。flap=つかんだひとかたまり / all=重なった紙を全部 / single=1枚だけ */
-export type GrabMode = "flap" | "all" | "single";
+export type LegacyGrabMode = "flap" | "all" | "single";
+
+/**
+ * Future selection contract for fold lines created by an alignment operation.
+ * `topPleatCount` is resolved by Rust from the document; never derive target
+ * faces from `selectedLayerCount`, `2 * K`, face-id order, or `surface_rank`.
+ */
+export type GrabSelection =
+  | { readonly mode: LegacyGrabMode; readonly topPleatCount?: never }
+  | { readonly mode: "topPleats"; readonly topPleatCount: number };
+
+/** Raw 3D dragging intentionally keeps its existing three runtime modes. */
+export type GrabMode = LegacyGrabMode;
 
 /** 単位ベクトル(長さ0ならnull) */
 function unit(a: Vec2, b: Vec2): Vec2 | null {

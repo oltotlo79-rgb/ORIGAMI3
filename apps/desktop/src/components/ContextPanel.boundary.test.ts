@@ -51,8 +51,10 @@ const BASELINE_FUNCTION_BODY_HASHES = {
   NoteInput: "8a02a4acde38a272c4c131a33904cc0de48cd043b9b0539570473069fca11e5b",
   StepContent: "8d44729207be32e996f6fdd067e5305ee8853d0799bf399d89103973745ddf05",
   AlignStartRow: "6fc665317013b3edb22e9115a119ad5f8e5aa3938e75a1831ddf35f116345a47",
-  AlignDraftContent: "4afcee3637082b2c9dc5bfaf3e535712c7de2291d2c0eb5e1c7f889c68b9f8ee",
-  FoldDraftContent: "3816ccbcae0089ac9343bd46f6da5ad8cb9823838918e9c8b9f993f736d6bc5e",
+  // 2026-08-26: 8つの合わせ方だけが共有の上からKひだUIを使う印を追加した。
+  AlignDraftContent: "25b5125b17d43c56e6a83b7adb6d275fce9d844508aeecb02435e8d0fb31f7b3",
+  // 2026-08-26: 合わせ操作ではK UI、非alignでは従来all/topを保つ分岐を追加した。
+  FoldDraftContent: "feb73ae15ebe799d85bfe46b6fb979a25844724b9d395aedcb6abaeea61d944c",
   FoldThroughProposalContent:
     "f8a21e2d0822ab100102e9f048439bf5804a5bc14ebea34e4af7db63c6a913b6",
   NumberInput: "41a9968b9562363e6c00de91ab83be0fc6a376ed78b3882bee985fc14ff9b6d7",

@@ -53,6 +53,7 @@ import type {
   Document,
   EdgeKind,
   EditOp,
+  FoldTargetInfo,
   SeqOp,
   Vec2,
 } from "../../lib/types";
@@ -81,6 +82,9 @@ import {
   type DocumentSliceDependencies,
   type DocumentSliceFactoryResult,
   type DocumentSliceHostState,
+  type FoldDraft,
+  type FoldDraftPatch,
+  type FoldTargetSelection,
   type FoldThroughApplyOp,
   type FoldThroughOperation,
   type MeasureEdgePick,
@@ -116,9 +120,11 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
   } = dependencies;
   const foldThroughGate = createGenerationGate();
   const foldThroughBusyGate = createGenerationGate();
+  const foldTargetGate = createGenerationGate();
 
   const invalidateFoldThrough = (): void => {
     foldThroughGate.issue();
+    foldTargetGate.issue();
     if (get().pendingFoldThrough !== null) set({ pendingFoldThrough: null });
   };
 
@@ -127,6 +133,120 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
       set({ foldThroughBusy: false });
     }
   };
+
+  const unavailableFoldTargetInfo = (reason: string | null = null): FoldTargetInfo => ({
+    status: "unavailable",
+    availableCount: null,
+    reason,
+    topAction: null,
+  });
+
+  const sameFoldTargetQuery = (
+    current: DocumentSliceHostState["foldDraft"],
+    started: NonNullable<DocumentSliceHostState["foldDraft"]>,
+  ): current is NonNullable<DocumentSliceHostState["foldDraft"]> =>
+    current !== null &&
+    current.docEpoch === started.docEpoch &&
+    current.stepCount === started.stepCount &&
+    current.upTo === started.upTo &&
+    current.movingSide === started.movingSide &&
+    current.line[0][0] === started.line[0][0] &&
+    current.line[0][1] === started.line[0][1] &&
+    current.line[1][0] === started.line[1][0] &&
+    current.line[1][1] === started.line[1][1];
+
+  const loadFoldTargetInfo = async (): Promise<void> => {
+    const startedState = get();
+    const started = startedState.foldDraft;
+    if (
+      !startedState.doc ||
+      !started ||
+      started.foldTargetBusy === true ||
+      started.foldTargetInfo != null
+    ) {
+      return;
+    }
+
+    const revision = foldTargetGate.issue();
+    set((state) =>
+      sameFoldTargetQuery(state.foldDraft, started)
+        ? { foldDraft: { ...state.foldDraft, foldTargetBusy: true } }
+        : {},
+    );
+
+    const pose = foldPoseInputFromDrivers(startedState.drivers);
+    if (!pose.ok) {
+      if (!foldTargetGate.isCurrent(revision)) return;
+      set((state) =>
+        sameFoldTargetQuery(state.foldDraft, started)
+          ? {
+              foldDraft: {
+                ...state.foldDraft,
+                foldTargetBusy: false,
+                foldTargetInfo: unavailableFoldTargetInfo(),
+              },
+            }
+          : {},
+      );
+      return;
+    }
+
+    const operation: Extract<SeqOp, { type: "PreviewFoldTargets" }> = {
+      type: "PreviewFoldTargets",
+      up_to: started.upTo,
+      line: started.line,
+      keep_side_point: keepSidePoint(started.line, started.movingSide),
+      ...(pose.poseBefore ? { pose_before: pose.poseBefore } : {}),
+    };
+    const result = await queue.run(() => ipc.sequenceApply(operation));
+    if (!foldTargetGate.isCurrent(revision)) return;
+
+    const info = result.ok
+      ? (result.value.fold_target_info ?? unavailableFoldTargetInfo())
+      : unavailableFoldTargetInfo();
+    set((state) =>
+      sameFoldTargetQuery(state.foldDraft, started)
+        ? {
+            foldDraft: {
+              ...state.foldDraft,
+              foldTargetBusy: false,
+              foldTargetInfo: info,
+            },
+          }
+        : {},
+    );
+  };
+
+  const clearFoldTargetQuery = (draft: FoldDraft): FoldDraft => {
+    const {
+      foldTargetInfo: _oldInfo,
+      foldTargetBusy: _oldBusy,
+      ...withoutQuery
+    } = draft;
+    void _oldInfo;
+    void _oldBusy;
+    return withoutQuery as FoldDraft;
+  };
+
+  const patchFoldDraft = (draft: FoldDraft, patch: FoldDraftPatch): FoldDraft => {
+    const sideChanged =
+      patch.movingSide !== undefined && patch.movingSide !== draft.movingSide;
+    const base = sideChanged ? clearFoldTargetQuery(draft) : draft;
+    if (patch.target === "topPleats") {
+      return { ...base, ...patch } as FoldDraft;
+    }
+    if (patch.target === "all" || patch.target === "top") {
+      const { topPleatCount: _oldCount, ...withoutPleatCount } = base;
+      void _oldCount;
+      return { ...withoutPleatCount, ...patch } as FoldDraft;
+    }
+    return { ...base, ...patch } as FoldDraft;
+  };
+
+  const selectFoldTarget = (
+    draft: FoldDraft,
+    selection: FoldTargetSelection,
+  ): FoldDraft => patchFoldDraft(draft, selection);
 
   const activeMirrorLine = (
     doc: Document,
@@ -262,6 +382,9 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
         line: operation.line,
         keep_side_point: operation.keep_side_point,
         target_layers: operation.target_layers,
+        ...(operation.target_pleat_count != null
+          ? { target_pleat_count: operation.target_pleat_count }
+          : {}),
         direction: operation.direction,
         ...(operation.pose_before
           ? { pose_before: operation.pose_before }
@@ -639,8 +762,12 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
     updateFoldDraft: (patch) => {
       const draft = get().foldDraft;
       if (draft) {
+        const sideChanged =
+          patch.movingSide !== undefined &&
+          patch.movingSide !== draft.movingSide;
+        if (sideChanged) foldTargetGate.issue();
         set({
-          foldDraft: { ...draft, ...patch },
+          foldDraft: patchFoldDraft(draft, patch),
           operationStage:
             patch.direction !== undefined ||
             patch.movingSide !== undefined ||
@@ -651,9 +778,23 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
       }
     },
 
+    setFoldTarget: (selection) => {
+      const draft = get().foldDraft;
+      if (!draft) return;
+      set({
+        foldDraft: selectFoldTarget(draft, selection),
+        operationStage: 2,
+        errorMessage: null,
+      });
+    },
+
+    requestFoldTargetInfo: loadFoldTargetInfo,
+
     cancelFoldDraft: () => {
-      if (get().foldDraft || get().alignDraft)
+      if (get().foldDraft || get().alignDraft) {
+        foldTargetGate.issue();
         set({ foldDraft: null, alignDraft: null });
+      }
     },
 
     commitFoldDraft: async () => {
@@ -677,8 +818,19 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
         set({ errorMessage: unavailable });
         return;
       }
+      if (draft.foldTargetInfo?.status === "crease_only_top") {
+        // 現行wireは照会結果だけで、crease-onlyを確定する入力をまだ持たない。
+        // K=0や既存target_layersへ代用すると別の折りになるため送信しない。
+        set({
+          errorMessage:
+            draft.foldTargetInfo.reason ??
+            "いちばん上の紙に折り目だけを付ける処理は、まだ確定できません。",
+        });
+        return;
+      }
       const keep = keepSidePoint(draft.line, draft.movingSide);
       let targetLayers: number[] | null = null;
+      let targetPleatCount: number | null = null;
       if (draft.target === "top") {
         const layers = foldLayers(s.frame3d, s.doc, s.faces);
         const top = topMovingFace(layers, draft.line, keep);
@@ -690,6 +842,35 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
           return;
         }
         targetLayers = [top];
+      } else if (draft.target === "topPleats") {
+        const status = draft.foldTargetInfo?.status ?? null;
+        if (
+          status !== null &&
+          status !== "ready" &&
+          status !== "limited"
+        ) {
+          set({
+            errorMessage:
+              draft.foldTargetInfo?.reason ??
+              "この折り線で同時に折れるひだを確認できません。",
+          });
+          return;
+        }
+        const available = draft.foldTargetInfo?.availableCount ?? null;
+        if (
+          !Number.isSafeInteger(draft.topPleatCount) ||
+          draft.topPleatCount < 1 ||
+          (available !== null && draft.topPleatCount > available)
+        ) {
+          set({
+            errorMessage:
+              available !== null
+                ? `選んだ${draft.topPleatCount}枚は、今同時に折れる${available}枚を超えています。1枚から${available}枚までで選び直してください。`
+                : "同時に折るひだの枚数を1枚以上で選び直してください。",
+          });
+          return;
+        }
+        targetPleatCount = draft.topPleatCount;
       }
       const alignment =
         s.alignDraft && isAlignComplete(s.alignDraft)
@@ -706,6 +887,11 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
         line: draft.line,
         keep_side_point: keep,
         target_layers: targetLayers,
+        // Kはひだ数であって面数ではない。selectedLayerCount、2 * K、
+        // Face ID順、surface_rankから対象面を推測せず、RustへKだけを渡す。
+        ...(targetPleatCount !== null
+          ? { target_pleat_count: targetPleatCount }
+          : {}),
         direction: draft.direction,
         ...(pose.poseBefore ? { pose_before: pose.poseBefore } : {}),
         ...(alignment ? { alignment } : {}),
@@ -805,11 +991,12 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
       if (!draft || draft.solutions.length < 2) return;
       const index = (draft.solutionIndex + 1) % draft.solutions.length;
       const line = draft.solutions[index];
+      foldTargetGate.issue();
       set({
         alignDraft: { ...draft, solutionIndex: index },
         foldDraft: s.foldDraft
           ? {
-              ...s.foldDraft,
+              ...clearFoldTargetQuery(s.foldDraft),
               line,
               movingSide: initialMovingSide(line, draft.picks[0]),
             }
@@ -820,6 +1007,7 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
     undoAlignPick: () => {
       const draft = get().alignDraft;
       if (!draft || draft.picks.length === 0) return;
+      foldTargetGate.issue();
       set({
         alignDraft: {
           ...draft,
@@ -834,7 +1022,10 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
     },
 
     cancelAlign: () => {
-      if (get().alignDraft) set({ alignDraft: null, foldDraft: null });
+      if (get().alignDraft) {
+        foldTargetGate.issue();
+        set({ alignDraft: null, foldDraft: null });
+      }
     },
 
     foldByDrag: async (

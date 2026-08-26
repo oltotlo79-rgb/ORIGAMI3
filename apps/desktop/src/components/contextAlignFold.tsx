@@ -11,6 +11,11 @@ import {
   ALIGN_STEPS,
   type AlignMode,
 } from "../lib/alignFold";
+import {
+  FoldTargetControl,
+  foldTargetCommitBlocked,
+  isCreaseOnlyFoldTarget,
+} from "./FoldTargetControl";
 
 /** 「合わせて折る」の入口(折るツールのときだけ出す。ツールレールは増やさない) */
 const ALIGN_MODES: AlignMode[] = [
@@ -93,18 +98,26 @@ export function AlignDraftContent({
         </button>
       </div>
       {draft.reason !== null && <p className="warning-text">{draft.reason}</p>}
-      {foldDraft && <FoldDraftContent draft={foldDraft} />}
+      {foldDraft && <FoldDraftContent draft={foldDraft} showPleatTargets />}
     </div>
   );
 }
 
 /** 引いた折り線の確定UI(向き・対象の層を決めて折る) */
-export function FoldDraftContent({ draft }: { draft: FoldDraft }) {
+export function FoldDraftContent({
+  draft,
+  showPleatTargets = false,
+}: {
+  draft: FoldDraft;
+  showPleatTargets?: boolean;
+}) {
   const paper = useAppStore((s) => s.doc?.paper ?? null);
   const updateFoldDraft = useAppStore((s) => s.updateFoldDraft);
   const cancelFoldDraft = useAppStore((s) => s.cancelFoldDraft);
   const commitFoldDraft = useAppStore((s) => s.commitFoldDraft);
   const busy = useAppStore((s) => s.foldThroughBusy);
+  const creaseOnly = isCreaseOnlyFoldTarget(draft);
+  const commitDisabled = busy || foldTargetCommitBlocked(draft);
   const [a, b] = draft.line;
   // 座標は「紙の長辺=1」に正規化された値なので、紙の寸法を掛けてmmで見せる
   const scale = paper ? Math.max(paper.width_mm, paper.height_mm) : 1;
@@ -141,34 +154,42 @@ export function FoldDraftContent({ draft }: { draft: FoldDraft }) {
           向こうへ折る(山)
         </label>
       </div>
-      <div className="button-row">
-        <span className="row-label">対象の層</span>
-        <label>
-          <input
-            type="radio"
-            name="fold-target"
-            disabled={busy}
-            checked={draft.target === "all"}
-            onChange={() => updateFoldDraft({ target: "all" })}
-          />
-          全ての層
-        </label>
-        <label>
-          <input
-            type="radio"
-            name="fold-target"
-            disabled={busy}
-            checked={draft.target === "top"}
-            onChange={() => updateFoldDraft({ target: "top" })}
-          />
-          いちばん上の1枚
-        </label>
-      </div>
+      {showPleatTargets ? (
+        <FoldTargetControl draft={draft} disabled={busy} variant="context" />
+      ) : (
+        <div className="button-row">
+          <span className="row-label">対象の層</span>
+          <label>
+            <input
+              type="radio"
+              name="fold-target"
+              disabled={busy}
+              checked={draft.target === "all"}
+              onChange={() => updateFoldDraft({ target: "all" })}
+            />
+            全ての層
+          </label>
+          <label>
+            <input
+              type="radio"
+              name="fold-target"
+              disabled={busy}
+              checked={draft.target === "top"}
+              onChange={() => updateFoldDraft({ target: "top" })}
+            />
+            いちばん上の1枚
+          </label>
+        </div>
+      )}
       {/* 折り返す紙は1つ目の選択から自動で決め、黄色が見える3D上の札で示す。
           このパネルで同じ内容を二択として聞き直さない。 */}
       <div className="button-row">
-        <button type="button" disabled={busy} onClick={() => void commitFoldDraft()}>
-          {busy ? "折り方を確認中…" : "折る"}
+        <button
+          type="button"
+          disabled={commitDisabled}
+          onClick={() => void commitFoldDraft()}
+        >
+          {busy ? "折り方を確認中…" : creaseOnly ? "折り目を付ける" : "折る"}
         </button>
         <button type="button" disabled={busy} onClick={() => cancelFoldDraft()}>
           やめる

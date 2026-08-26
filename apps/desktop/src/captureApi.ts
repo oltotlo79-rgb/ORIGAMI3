@@ -114,7 +114,7 @@ export interface CaptureInteractionState {
   };
   readonly fold: {
     readonly draftActive: boolean;
-    readonly target: "all" | "top" | null;
+    readonly target: "all" | "top" | "topPleats" | null;
     readonly pendingConfirmation: boolean;
   };
   readonly technique: {

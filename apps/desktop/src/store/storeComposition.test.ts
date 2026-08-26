@@ -165,6 +165,7 @@ const FACADE_CONTRACT = [
   "FoldAllReturnState|type|./slices/poseReplaySlice",
   "FoldDraft|type|./slices/documentSlice",
   "FoldTarget|type|./slices/documentSlice",
+  "FoldTargetSelection|type|./slices/documentSlice",
   "GuideAction|type|./slices/dialogSettingsSlice",
   "GuideStep|type|./slices/dialogSettingsSlice",
   "MIRROR_AXIS_REMOVED_NOTICE|value|./services/commandService",
@@ -616,8 +617,9 @@ describe("store composition boundary", () => {
   it("keeps the exact runtime store key order", async () => {
     const keys = Object.keys(useAppStore.getInitialState());
     const hash = await sha256(JSON.stringify(keys));
-    expect(keys).toHaveLength(219);
-    expect(hash).toBe("251180A3657CDD81F6A1D4BF16AC8131C795DC501906EE03AA137D708BDD31CF");
+    // 上からKひだの非永続照会・選択actionをB1へ2件追加した。
+    expect(keys).toHaveLength(221);
+    expect(hash).toBe("B5E6CC924D8AFA7CC29BC4DD5F9772AC29EABA6E94CF623DBB52C0D13651683C");
   });
 
   it("keeps all production TypeScript imports and re-exports acyclic", () => {

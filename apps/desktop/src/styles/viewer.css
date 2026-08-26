@@ -388,6 +388,14 @@ html[data-origami3-capture-view="both"] .main-row {
   grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
 }
 
+/* 実機ではfocus輪だけが四辺4px以内・6,752画素の撮影差になった。通常表示の輪は残す。 */
+html[data-origami3-capture-view] .viewer3d-canvas:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+/* TooltipHostはbody portalなので、撮影属性の付いた各paneだけでは除外できない。 */
+html[data-origami3-capture-view] [data-floating-ui="tooltip"],
 html[data-origami3-capture-view] .viewer-operation-hint,
 html[data-origami3-capture-view] .paper-action-tip,
 html[data-origami3-capture-view] .view-cube,

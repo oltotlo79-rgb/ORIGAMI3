@@ -118,6 +118,8 @@ $b1ManualAcceptanceClassification = [ordered]@{
 $completedCdpAcceptance = [ordered]@{
     "MANUAL.M2.T2-6b.C06.SCREEN-ACCEPTANCE" = "技法9種の名称と順序が完全一致"
     "MANUAL.M2.T2-6c.C01.SCREEN-ACCEPTANCE" = "固定1280×860で主要3層が各14,000物理画素以上、層重心間80画素以上。固定drag/wheel後も同条件、視点差50画素以上"
+    "MANUAL.M2.T2-6c.C02.SCREEN-ACCEPTANCE" = "通常dragの対象面13、Shift dragの対象面17、両方とも手順をちょうど1件追加"
+    "MANUAL.M2.T2-6c.C03.SCREEN-ACCEPTANCE" = "通常dragのプレビュー多角形13・線分49、Shift dragの多角形17・線分61、release後grab inactive"
     "MANUAL.M2.T2-6c.C04.SCREEN-ACCEPTANCE" = "通常時と途中step時の操作ヒント各1件、標準修飾キー名以外の英字語0"
     "MANUAL.M2.T2-7.C01.SCREEN-ACCEPTANCE" = "作図4種各1、等分4、角度22.5°、補助線画素の増分が角度4,000・垂線45・等分55・二等分20以上"
     "MANUAL.M2.T2-7.C02.SCREEN-ACCEPTANCE" = "違反fixtureの橙(#ff8c00、RGB距離12以内)画素412、合格境界320以上"
@@ -128,6 +130,8 @@ $completedCdpAcceptance = [ordered]@{
 
 $completedCdpAcceptanceScripts = @{
     "MANUAL.M2.T2-6c.C01.SCREEN-ACCEPTANCE" = "apps/desktop/tests-live/doc-link-b1-remaining-cdp.mjs"
+    "MANUAL.M2.T2-6c.C02.SCREEN-ACCEPTANCE" = "apps/desktop/tests-live/doc-link-b1-grab-cdp.mjs"
+    "MANUAL.M2.T2-6c.C03.SCREEN-ACCEPTANCE" = "apps/desktop/tests-live/doc-link-b1-grab-cdp.mjs"
     "MANUAL.M2.T2-7.C01.SCREEN-ACCEPTANCE" = "apps/desktop/tests-live/doc-link-b1-remaining-cdp.mjs"
     "MANUAL.M2.T2-7.C02.SCREEN-ACCEPTANCE" = "apps/desktop/tests-live/doc-link-b1-remaining-cdp.mjs"
 }

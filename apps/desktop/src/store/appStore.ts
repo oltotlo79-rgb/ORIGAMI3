@@ -40,6 +40,7 @@ export type {
   AlignDraft,
   FoldDraft,
   FoldTarget,
+  FoldTargetSelection,
   MeasureDisplay,
   MeasureDraft,
   MeasureEdgePick,

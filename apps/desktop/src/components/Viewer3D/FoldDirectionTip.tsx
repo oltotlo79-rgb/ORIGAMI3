@@ -12,6 +12,11 @@ import {
   initialMovingSide,
   useAppStore,
 } from "../../store/appStore";
+import {
+  FoldTargetControl,
+  foldTargetCommitBlocked,
+  isCreaseOnlyFoldTarget,
+} from "../FoldTargetControl";
 
 export function FoldDirectionTip() {
   const activeTool = useAppStore((s) => s.activeTool);
@@ -24,6 +29,8 @@ export function FoldDirectionTip() {
 
   if (activeTool !== "fold" || !draft) return null;
 
+  const creaseOnly = isCreaseOnlyFoldTarget(draft);
+  const commitDisabled = busy || foldTargetCommitBlocked(draft);
   const automaticSide = automaticMovingSide(draft.line, alignDraft?.picks[0]);
   const changedFromAutomatic =
     alignDraft !== null &&
@@ -82,14 +89,21 @@ export function FoldDirectionTip() {
           反対側の紙を折り返す
         </button>
       </div>
+      {alignDraft && (
+        <FoldTargetControl draft={draft} disabled={busy} variant="viewer3d" />
+      )}
       <div className="paper-action-tip-buttons">
         <button
           type="button"
-          disabled={busy}
-          data-tooltip="選んだ向きでこの折り線を折ります"
+          disabled={commitDisabled}
+          data-tooltip={
+            creaseOnly
+              ? "いちばん上の紙に折り目だけを付けます"
+              : "選んだ向きでこの折り線を折ります"
+          }
           onClick={() => void commitFoldDraft()}
         >
-          {busy ? "折り方を確認中…" : "折る"}
+          {busy ? "折り方を確認中…" : creaseOnly ? "折り目を付ける" : "折る"}
         </button>
         <button
           type="button"

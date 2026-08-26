@@ -92,6 +92,7 @@ function prepare() {
   assert.ok(!existsSync(paths.marker), `refusing to overwrite autosave marker: ${paths.marker}`);
   copyFileSync(fixture.path, paths.autosave);
   writeFileSync(paths.marker, paths.autosave, { encoding: "utf8", flag: "wx" });
+  process.stdout.write("M2.T2-8.C02 PREPARE READY\n");
   process.stdout.write(
     `${JSON.stringify({
       prepared: true,
@@ -174,6 +175,32 @@ async function evaluate(connection, expression) {
   return reply.result.value;
 }
 
+function assertViewer3dInteractionCapture(value, label) {
+  assert.equal(typeof value?.grab?.active, "boolean", `${label}.grab.active must be boolean`);
+  assert.ok(
+    value.grab.spatial === true || value.grab.spatial === false || value.grab.spatial === null,
+    `${label}.grab.spatial must be boolean or null`,
+  );
+  assert.ok(value.grab.face === null || Number.isInteger(value.grab.face), `${label}.grab.face must be an integer or null`);
+  assert.ok(
+    value.grab.mode === "flap" || value.grab.mode === "all" || value.grab.mode === "single" || value.grab.mode === null,
+    `${label}.grab.mode must be flap, all, single, or null`,
+  );
+  assert.ok(
+    Number.isInteger(value.grab.selectedLayerCount) && value.grab.selectedLayerCount >= 0,
+    `${label}.grab.selectedLayerCount must be a nonnegative integer`,
+  );
+  assert.equal(typeof value?.preview?.visible, "boolean", `${label}.preview.visible must be boolean`);
+  assert.ok(
+    Number.isInteger(value.preview.polygonCount) && value.preview.polygonCount >= 0,
+    `${label}.preview.polygonCount must be a nonnegative integer`,
+  );
+  assert.ok(
+    Number.isInteger(value.preview.segmentCount) && value.preview.segmentCount >= 0,
+    `${label}.preview.segmentCount must be a nonnegative integer`,
+  );
+}
+
 async function verify() {
   const directory = isolatedDirectory();
   const paths = recoveryPaths(directory);
@@ -204,6 +231,11 @@ async function verify() {
         if (!restore) throw new Error("recovery dialog has no Restore button");
         const before = api.getInteractionState();
         if (!before.diagnosis.recoveryVisible) throw new Error("capture state does not report recovery visibility");
+        // setView waits for the deferred 3D reader.  The following snapshot reads
+        // all eight Viewer3D interaction fields.  selectedLayerCount is checked
+        // only as a target-face count; this test never treats it as a pleat count.
+        await api.setView("normal");
+        const viewer3dBeforeRecovery = api.getInteractionState().viewer3d;
         restore.click();
         for (let attempt = 0; attempt < 100; attempt += 1) {
           if (!document.querySelector('[data-floating-ui="recovery-dialog"]')) break;
@@ -211,26 +243,46 @@ async function verify() {
         }
         await api.waitForStable();
         if (document.querySelector('[data-floating-ui="recovery-dialog"]')) throw new Error("recovery dialog did not close after Restore");
-        return { labels, before, after: api.getInteractionState(), info: api.getDocumentInfo() };
+        return {
+          labels,
+          before,
+          viewer3dBeforeRecovery,
+          after: api.getInteractionState(),
+          info: api.getDocumentInfo(),
+        };
       }})()`,
     );
     assert.deepEqual(result.labels, ["復元する", "破棄する"], "recovery choices changed");
+    assertViewer3dInteractionCapture(result.viewer3dBeforeRecovery, "before recovery");
+    assertViewer3dInteractionCapture(result.after.viewer3d, "after recovery");
     assert.equal(result.after.diagnosis.recoveryVisible, false, "recovery remains visible after Restore");
     assert.equal(result.after.document.vertexCount, fixture.vertices, "restored vertex count differs from fixture");
     assert.equal(result.after.document.edgeCount, fixture.edges, "restored edge count differs from fixture");
     assert.equal(result.info.stepCount, fixture.steps, "restored step count differs from fixture");
     assert.ok(!existsSync(paths.autosave), "autosave remains after real recovery_restore");
     assert.ok(!existsSync(paths.marker), "autosave marker remains after real recovery_restore");
+    process.stdout.write("M2.T2-8.C02 VERIFY PASSED\n");
     process.stdout.write(`${JSON.stringify({ passed: true, id: "M2.T2-8.C02", result }, null, 2)}\n`);
   } finally {
     connection.close();
   }
 }
 
-if (phase === "--prepare") prepare();
-else if (phase === "--verify") await verify();
-else if (phase === "--describe") {
-  process.stdout.write(`${JSON.stringify({ id: "M2.T2-8.C02", phases: ["--prepare", "--verify"], executed: false }, null, 2)}\n`);
-} else {
-  throw new Error(`unknown phase: ${phase}`);
+async function main() {
+  if (phase === "--prepare") prepare();
+  else if (phase === "--verify") await verify();
+  else if (phase === "--describe") {
+    process.stdout.write("M2.T2-8.C02 PREPARE/VERIFY NOT EXECUTED\n");
+    process.stdout.write(`${JSON.stringify({ id: "M2.T2-8.C02", phases: ["--prepare", "--verify"], executed: false }, null, 2)}\n`);
+  } else {
+    throw new Error(`unknown phase: ${phase}`);
+  }
+}
+
+try {
+  await main();
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  process.stderr.write(`M2.T2-8.C02 ${phase} FAILED: ${message}\n`);
+  process.exitCode = 1;
 }

@@ -98,6 +98,51 @@ interface Bounds {
 /** 境界からこの距離以内は「面の上」に含める(展開図は長辺=1の正規化座標)。 */
 const ON_FACE_EPS = 1e-9;
 
+/**
+ * 材料座標と3D座標はいずれも紙の長辺を1とする正規化座標。
+ * Float64の逆写像で面上かを確かめるため、表示用Float32頂点の丸めより十分小さく、
+ * かつ演算誤差より大きい距離を許す。
+ */
+const MATERIAL_COORD_EPS = 1e-9;
+const WORLD_PLANE_EPS = 1e-8;
+
+function distanceSquared2(a: Vec2, b: Vec2): number {
+  return (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2;
+}
+
+function distanceSquared3(a: Vec3, b: Vec3): number {
+  return (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
+}
+
+function pointSegmentDistanceSquared(p: Vec2, a: Vec2, b: Vec2): number {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const lengthSquared = dx * dx + dy * dy;
+  const t =
+    lengthSquared === 0
+      ? 0
+      : Math.max(
+          0,
+          Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / lengthSquared),
+        );
+  const q: Vec2 = [a[0] + dx * t, a[1] + dy * t];
+  return distanceSquared2(p, q);
+}
+
+function strictlyInsidePolygon(polygon: readonly Vec2[], point: Vec2): boolean {
+  if (!pointInPolygon(polygon, point, MATERIAL_COORD_EPS)) return false;
+  const epsSquared = MATERIAL_COORD_EPS * MATERIAL_COORD_EPS;
+  for (let i = 0; i < polygon.length; i++) {
+    if (
+      pointSegmentDistanceSquared(point, polygon[i], polygon[(i + 1) % polygon.length]) <=
+      epsSquared
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function boundsOf(polygon: readonly Vec2[]): Bounds {
   let minX = Number.POSITIVE_INFINITY;
   let minY = Number.POSITIVE_INFINITY;
@@ -190,6 +235,79 @@ export function placementOf(
   const face = index.facesById.get(faceId);
   if (!face) return null;
   return facePlacement(face, index.vertexPositions, slots, positions);
+}
+
+/** Rustへ渡せる、材料座標だけで表した折り線と残す側の内部点。 */
+export interface MaterialFoldLine {
+  material_line: [Vec2, Vec2];
+  material_keep_side_point: Vec2;
+}
+
+function materialPointOnPlacement(placement: FacePlacement, world: Vec3): Vec2 | null {
+  const material = unmapPoint(placement, world);
+  if (!material) return null;
+  const remapped = mapPoint(placement, material);
+  if (!remapped) return null;
+  const worldScale = Math.max(
+    1,
+    Math.hypot(...placement.f1),
+    Math.hypot(...placement.f2),
+  );
+  if (distanceSquared3(remapped, world) > (WORLD_PLANE_EPS * worldScale) ** 2) {
+    return null;
+  }
+  return material;
+}
+
+/**
+ * 表示中の同じ面にある折り線上の2点と、残す側の厳密な内部点を材料座標へ戻す。
+ *
+ * `unmapPoint` は3D基底2本を使うため、傾斜面・垂直面でもglobal XYへ潰さない。
+ * 3点をすべて説明できる面が一意でない場合は、Face ID順などで推測せずnullを返す。
+ * 返すのは材料座標だけであり、Face ID・surface_rank・selectedLayerCount・2 * Kから
+ * 作った面数は絶対にwireへ運ばない。ひだ数と対象面はRustが同じ書類から再計算する。
+ */
+export function materialFoldLineFrom3D(
+  placements: readonly FacePlacement[],
+  lineWorld: readonly [Vec3, Vec3],
+  keepSideWorld: Vec3,
+): MaterialFoldLine | null {
+  if (distanceSquared3(lineWorld[0], lineWorld[1]) <= MATERIAL_COORD_EPS ** 2) {
+    return null;
+  }
+
+  const candidates: MaterialFoldLine[] = [];
+  for (const placement of placements) {
+    const a = materialPointOnPlacement(placement, lineWorld[0]);
+    const b = materialPointOnPlacement(placement, lineWorld[1]);
+    const keep = materialPointOnPlacement(placement, keepSideWorld);
+    if (!a || !b || !keep) continue;
+    if (
+      !pointInPolygon(placement.polygon, a, MATERIAL_COORD_EPS) ||
+      !pointInPolygon(placement.polygon, b, MATERIAL_COORD_EPS) ||
+      !strictlyInsidePolygon(placement.polygon, keep)
+    ) {
+      continue;
+    }
+
+    const materialLengthSquared = distanceSquared2(a, b);
+    if (materialLengthSquared <= MATERIAL_COORD_EPS ** 2) continue;
+    const side =
+      (b[0] - a[0]) * (keep[1] - a[1]) -
+      (b[1] - a[1]) * (keep[0] - a[0]);
+    if (Math.abs(side) <= MATERIAL_COORD_EPS * Math.sqrt(materialLengthSquared)) continue;
+
+    candidates.push({
+      material_line: [
+        [a[0], a[1]],
+        [b[0], b[1]],
+      ],
+      material_keep_side_point: [keep[0], keep[1]],
+    });
+  }
+
+  // 同じ3D点を複数の材料面が説明できるときも、Face ID順では選ばない。
+  return candidates.length === 1 ? candidates[0] : null;
 }
 
 /**

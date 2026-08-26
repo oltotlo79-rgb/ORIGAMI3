@@ -1247,15 +1247,15 @@ CodeQLは実施時点の正式対応言語を確認し、少なくともJavaScri
 | 10-B1 脆弱性監視 | 1件（1～2人日） | **terra:** Cargo/npmの監視を10-Aのpolicyどおり定期実行・通知するworkflow設定である。 | Cargo/npm advisoryをscheduleとPR/pushで検査し、期限付き例外だけを許す。 | 実行契機、2 ecosystem結果、通知先、未説明critical/high、所要時間。 |
 | 10-B2 依存更新提案 | 1件（1～2人日） | **terra:** 選んだbotで更新提案だけを作り、自動取込み0を検査する設定作業である。 | DependabotかRenovateの一方をCargo/npm/GitHub Actionsへ設定し、merge/applyは必ず人のreview後にする。 | 3 ecosystem、提案作成3/3、自動merge/apply 0、二重bot 0。 |
 | 10-C 静的解析 | 1件（2～3人日） | **terra:** 10-AでpinしたCodeQL/SAST queryを実行・公開する機械設定で、例外をこの単位で勝手に決めない。 | 正式対応言語のworkflow、結果upload、既存lint/clippyとの重複整理。 | 言語、query suite、検出件数、10-A例外との照合、floating reference 0。 |
-| 10-D SBOM公開 | 1件（2～3人日） | **terra:** 4配布物へpin済みtoolでSBOMを生成しasset公開・対応表を集計する作業である。 | 4成果物ごとに同じpin済みtoolでSBOMを生成し、artifact名/version/build IDへ結ぶ。 | 4×SBOM対応表、component数、tool/version、欠落、公開asset 4/4。 |
-| 10-E hash公開 | 1件（3～4人日） | **terra:** 4配布物のSHA-256 sidecar/manifestを生成・公開しdownload後に再照合する数値作業である。 | 4 SHA-256 sidecarと1 manifestをrelease workflowへ結び、download後の再計算を検査する。 | 4×hash、asset名、version/build ID、download照合、公開asset 4/4。 |
+| 10-D SBOM公開 | 1件（2～3人日） | **terra:** 4配布物へpin済みtoolでSBOMを生成しasset公開・対応表を集計する作業である。 | 今版のリリース後に、4成果物ごとに同じpin済みtoolでSBOMを生成し、artifact名/version/build IDへ結ぶ。 | **状態: リリース後。** 4×SBOM対応表、component数、tool/version、欠落、公開asset 4/4を実公開後に確認する。 |
+| 10-E hash公開 | 1件（3～4人日） | **terra:** 4配布物のSHA-256 sidecar/manifestを生成・公開しdownload後に再照合する数値作業である。 | 今版のリリース後に、4 SHA-256 sidecarと1 manifestをrelease workflowへ結び、download後の再計算を検査する。 | **状態: リリース後。** 4×hash、asset名、version/build ID、download照合、公開asset 4/4を実公開後に確認する。 |
 
-6単位を一括にしない。SBOMとhashも、生成物・失敗位置・公開照合が異なるため別委譲にする。自動更新の委譲は0件である。
+6単位を一括にしない。SBOMとhashも、生成物・失敗位置・公開照合が異なるため別委譲にする。自動更新の委譲は0件である。**10-Dと10-Eはリリースしないと確かめられないため、今版のリリース条件から外し、`docs/リリース後の確認.md`で実公開後に確認する。完了とは数えない。**
 
 ### 14.4 数値の合格条件
 
-1. setup.exe、x64.msi、portable.exe、取扱説明書PDFの4/4にCycloneDXまたはSPDX SBOMとSHA-256を1対1で公開し、manifest欠落0。
-2. download後に4/4のSHA-256を再計算し、sidecar/manifest一致4/4。artifact名・version・build IDの不一致0。
+1. **リリース後に** setup.exe、x64.msi、portable.exe、取扱説明書PDFの4/4にCycloneDXまたはSPDX SBOMとSHA-256を1対1で公開し、manifest欠落0を確認する。これは今版のリリース条件ではない。
+2. **リリース後に** download後の4/4のSHA-256を再計算し、sidecar/manifest一致4/4、artifact名・version・build IDの不一致0を確認する。これは今版のリリース条件ではない。
 3. production依存のcritical/high未解決0。dev/build依存もcritical/high未説明0。
 4. 例外は100% owner、advisory ID、理由、影響範囲、作成日、期限を持ち、期限は承認日から最大90日、期限切れ例外0。
 5. license allowlistにないlicense 0、deny license 0、UNKNOWN 0。dual licenseは実際に採用する側を記録する。

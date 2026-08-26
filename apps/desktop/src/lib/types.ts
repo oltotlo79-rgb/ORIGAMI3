@@ -278,6 +278,8 @@ export interface DocumentView {
    * 通常のDocumentViewでは未指定またはnullになる。
    */
   fold_through_proposal?: FoldThroughProposal | null;
+  /** 新しい折り線の直下で、同時に折れるひだを数えた非破壊照会結果。 */
+  fold_target_info?: FoldTargetInfo | null;
 }
 
 /** document_openはRust側でfold_issuesを常に配列として返す。 */
@@ -292,6 +294,28 @@ export interface FoldThroughProposal {
   folded_line: [Vec2, Vec2];
   crease_segments: [Vec2, Vec2][];
   message: string;
+}
+
+/** 新しい折り線の直下で、上から何枚のひだを同時に折れるか。 */
+export type FoldTargetStatus =
+  | "ready"
+  | "limited"
+  | "crease_only_top"
+  | "varies"
+  | "unavailable";
+
+/** 一番上の紙が完全に折り重なっていないときの処置。 */
+export type FoldTargetTopAction = "crease_only_top";
+
+/**
+ * 書類と折り手順だけから再計算した、保存を伴わないひだ照会結果。
+ * availableCountはFace数ではなく、上から連続して同時に折れるひだの枚数。
+ */
+export interface FoldTargetInfo {
+  status: FoldTargetStatus;
+  availableCount: number | null;
+  reason: string | null;
+  topAction: FoldTargetTopAction | null;
 }
 
 /**
@@ -340,6 +364,8 @@ export type SeqOp =
       line: [Vec2, Vec2];
       keep_side_point: Vec2;
       target_layers: number[] | null;
+      /** 上から同時に折るひだの枚数。Face IDは送らず、Rustが書類から再計算する。 */
+      target_pleat_count?: number | null;
       direction: FoldDirection;
       /** 省略時はup_toの保存済み姿勢をそのまま使う。 */
       pose_before?: FoldPoseInput | null;
@@ -358,8 +384,45 @@ export type SeqOp =
       line: [Vec2, Vec2];
       keep_side_point: Vec2;
       target_layers: number[] | null;
+      /** Applyと同じK。省略時は従来どおりtarget_layersを使う。 */
+      target_pleat_count?: number | null;
       direction: FoldDirection;
       /** Applyと同じ不変な姿勢宣言。Preview自体は作品を変更しない。 */
+      pose_before?: FoldPoseInput | null;
+    }
+  /**
+   * 新しい折り線の直下で同時に折れるひだを、作品を変更せずに数える。
+   * 結果はDocumentView.fold_target_infoに入る。
+   */
+  | {
+      type: "PreviewFoldTargets";
+      up_to: number;
+      line: [Vec2, Vec2];
+      keep_side_point: Vec2;
+      /** FoldThroughと同じ、利用者が指定した符号付き角度だけを送る。 */
+      pose_before?: FoldPoseInput | null;
+    }
+  /**
+   * 非平坦な最上紙へ、3Dの形を動かさず材料上の折り目だけを付ける。
+   * 表示座標・Face ID・K=0ではなく、CP材料座標と利用者のsigned角度だけを送る。
+   */
+  | {
+      type: "CreaseOnlyTop";
+      up_to: number;
+      material_line: [Vec2, Vec2];
+      /** 対象材料面の厳密な内部点で、折り目の残す側も示す。 */
+      material_keep_side_point: Vec2;
+      direction: FoldDirection;
+      pose_before?: FoldPoseInput | null;
+      /** 合わせ折りの説明だけに使い、Rustの折り計算には使わない。 */
+      alignment?: FoldAlignment | null;
+    }
+  /** 非平坦な材料直線の最上紙だけ処理を、作品を変えずに照会する。 */
+  | {
+      type: "PreviewFoldTargetsOnMaterial";
+      up_to: number;
+      material_line: [Vec2, Vec2];
+      material_keep_side_point: Vec2;
       pose_before?: FoldPoseInput | null;
     }
   /**
