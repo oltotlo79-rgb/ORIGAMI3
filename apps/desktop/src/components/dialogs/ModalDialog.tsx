@@ -43,6 +43,10 @@ const inertBeforeModal = new Map<HTMLElement, boolean>();
 let bodyObserver: MutationObserver | null = null;
 let listenersInstalled = false;
 
+// 共通のfocus輪は2px + 外向き2px。SVGの丸い操作は、別要素で
+// より大きい輪を描くため、対象半径ぶんの余白を取る。
+const FOCUS_REVEAL_MARGIN_PX = 4;
+
 const FOCUSABLE_SELECTOR = [
   "a[href]",
   "area[href]",
@@ -181,6 +185,54 @@ function focusWithoutScroll(element: FocusTarget): void {
   }
 }
 
+function focusRevealMargin(element: FocusTarget, rect: DOMRect): number {
+  const hasLargerSvgRing =
+    element.hasAttribute("data-paper-position-handle") ||
+    element.hasAttribute("data-tip-handle");
+  return hasLargerSvgRing
+    ? Math.max(FOCUS_REVEAL_MARGIN_PX, rect.height / 2)
+    : FOCUS_REVEAL_MARGIN_PX;
+}
+
+/**
+ * Tabで選ばれた項目を、ダイアログ内の各縦送り領域へfocus輪ごと表示する。
+ * 横位置・window・ダイアログを開く前の背景位置は動かさない。
+ */
+function revealFocusedTarget(dialog: HTMLElement, target: FocusTarget): void {
+  if (target === dialog || !dialog.contains(target)) return;
+
+  let scroller = target.parentElement;
+  while (scroller && dialog.contains(scroller)) {
+    const style = window.getComputedStyle(scroller);
+    const canScrollVertically =
+      (style.overflowY === "auto" || style.overflowY === "scroll") &&
+      scroller.clientHeight > 0 &&
+      scroller.scrollHeight > scroller.clientHeight;
+    if (canScrollVertically) {
+      const view = scroller.getBoundingClientRect();
+      const item = target.getBoundingClientRect();
+      const wantedMargin = focusRevealMargin(target, item);
+      const margin = Math.min(
+        wantedMargin,
+        Math.max(0, (scroller.clientHeight - item.height) / 2),
+      );
+      const viewTop = view.top + scroller.clientTop;
+      const viewBottom = viewTop + scroller.clientHeight;
+      let next = scroller.scrollTop;
+      if (item.top < viewTop + margin) {
+        next += item.top - (viewTop + margin);
+      } else if (item.bottom > viewBottom - margin) {
+        next += item.bottom - (viewBottom - margin);
+      }
+      const max = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+      next = Math.min(max, Math.max(0, next));
+      if (next !== scroller.scrollTop) scroller.scrollTop = next;
+    }
+    if (scroller === dialog) break;
+    scroller = scroller.parentElement;
+  }
+}
+
 function initialTarget(entry: StackEntry): FocusTarget {
   const requested = entry.initialFocusRef?.current ?? null;
   if (
@@ -250,6 +302,7 @@ function handleDocumentFocusIn(event: FocusEvent): void {
   if (!entry || !target) return;
   if (entry.dialog.contains(target)) {
     entry.lastFocused = target;
+    revealFocusedTarget(entry.dialog, target);
     return;
   }
   const fallback =

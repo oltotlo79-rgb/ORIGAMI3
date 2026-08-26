@@ -188,6 +188,16 @@ pub fn validate_manifest(
             .ok_or_else(|| {
                 ManifestError::new(format!("{context}.classification must be an object"))
             })?;
+        for field in classification.keys() {
+            if !matches!(
+                field.as_str(),
+                "expected" | "frozen_at_utc" | "basis" | "unsupported_paths" | "adjudication"
+            ) {
+                return Err(ManifestError::new(format!(
+                    "{context}.classification contains an unsupported field: {field}"
+                )));
+            }
+        }
         let expected = required_resolved_text(
             classification,
             "expected",
@@ -258,6 +268,11 @@ pub fn validate_manifest(
                 )));
             }
         }
+        validate_classification_adjudication(
+            classification,
+            &format!("{context}.classification"),
+            expected,
+        )?;
         let observation = entry
             .get("observed")
             .and_then(Value::as_object)
@@ -563,6 +578,73 @@ fn validate_observation(
                 "{context}.result must be supported or unsupported, found {result}"
             )));
         }
+    }
+    Ok(())
+}
+
+fn validate_classification_adjudication(
+    classification: &Map<String, Value>,
+    context: &str,
+    expected: &str,
+) -> Result<(), ManifestError> {
+    let Some(adjudication) = classification.get("adjudication") else {
+        return Ok(());
+    };
+    let adjudication = adjudication
+        .as_object()
+        .ok_or_else(|| ManifestError::new(format!("{context}.adjudication must be an object")))?;
+    const FIELDS: [&str; 7] = [
+        "from_expected",
+        "to_expected",
+        "authorized_by",
+        "authorized_at_utc",
+        "runtime_results_known",
+        "raw_geometry_basis",
+        "product_threshold_changed",
+    ];
+    for field in adjudication.keys() {
+        if !FIELDS.contains(&field.as_str()) {
+            return Err(ManifestError::new(format!(
+                "{context}.adjudication contains an unsupported field: {field}"
+            )));
+        }
+    }
+    let from_expected = required_resolved_text(adjudication, "from_expected", context)?;
+    let to_expected = required_resolved_text(adjudication, "to_expected", context)?;
+    if from_expected != "supported" || to_expected != "unsupported" || expected != to_expected {
+        return Err(ManifestError::new(format!(
+            "{context}.adjudication may only record an authorized supported-to-unsupported correction"
+        )));
+    }
+    let authorized_by = required_resolved_text(adjudication, "authorized_by", context)?;
+    if authorized_by != "統括（Claude）" {
+        return Err(ManifestError::new(format!(
+            "{context}.adjudication.authorized_by must be 統括（Claude）"
+        )));
+    }
+    let authorized_at_utc = required_resolved_text(adjudication, "authorized_at_utc", context)?;
+    require_utc(
+        authorized_at_utc,
+        &format!("{context}.adjudication.authorized_at_utc"),
+    )?;
+    required_resolved_text(adjudication, "raw_geometry_basis", context)?;
+    if adjudication
+        .get("runtime_results_known")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err(ManifestError::new(format!(
+            "{context}.adjudication.runtime_results_known must be true"
+        )));
+    }
+    if adjudication
+        .get("product_threshold_changed")
+        .and_then(Value::as_bool)
+        != Some(false)
+    {
+        return Err(ManifestError::new(format!(
+            "{context}.adjudication.product_threshold_changed must be false"
+        )));
     }
     Ok(())
 }

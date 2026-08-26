@@ -338,11 +338,36 @@ fn tracked_sixteen_sample_tranche_reports_frozen_and_observed_counts_separately(
             oripa: 0,
             oriedita: 8,
             origami_simulator: 8,
-            expected_supported: 8,
-            expected_unsupported: 8,
+            expected_supported: 7,
+            expected_unsupported: 9,
             observed_supported: 7,
             observed_unsupported: 9,
         }
+    );
+
+    let tracked = tracked_manifest();
+    let oriedita_08 = tracked["entries"]
+        .as_array()
+        .expect("tracked entriesはarray")
+        .iter()
+        .find(|entry| entry["id"] == "oriedita-08")
+        .expect("oriedita-08を追跡する");
+    assert_eq!(oriedita_08["classification"]["expected"], "unsupported");
+    assert_eq!(
+        oriedita_08["classification"]["unsupported_paths"],
+        json!(["$"])
+    );
+    assert_eq!(
+        oriedita_08["classification"]["adjudication"]["from_expected"],
+        "supported"
+    );
+    assert_eq!(
+        oriedita_08["classification"]["adjudication"]["to_expected"],
+        "unsupported"
+    );
+    assert_eq!(
+        oriedita_08["classification"]["adjudication"]["product_threshold_changed"],
+        false
     );
 
     let plan: Value = serde_json::from_str(PLAN).expect("予約計画はvalid JSON");
@@ -373,7 +398,7 @@ fn tracked_sixteen_sample_tranche_reports_frozen_and_observed_counts_separately(
 }
 
 #[test]
-fn tracked_external_samples_match_blind_frozen_expectations() {
+fn tracked_external_samples_match_authorized_classifications() {
     let root = tracked_corpus_root();
     let manifest = tracked_manifest();
     let mut mismatches = Vec::new();
@@ -504,7 +529,7 @@ fn tracked_external_samples_match_blind_frozen_expectations() {
 
     assert!(
         mismatches.is_empty(),
-        "独立raw規則で凍結した期待を、実行後に変更しない:\n{}",
+        "凍結分類または明記された統括裁定と製品結果が一致する:\n{}",
         mismatches.join("\n")
     );
 }
@@ -867,6 +892,46 @@ fn classifications_are_blindly_frozen_and_observations_stay_separate() {
         json!("2026-08-26T00:11:00Z");
     changed_freeze.write_manifest();
     assert_rejected_with(&changed_freeze, "must match classification_policy");
+
+    let mut authorized_correction = synthetic_corpus();
+    authorized_correction.entries_mut()[0]["classification"]["expected"] = json!("unsupported");
+    authorized_correction.entries_mut()[0]["classification"]["unsupported_paths"] = json!(["$"]);
+    authorized_correction.entries_mut()[0]["classification"]["adjudication"] = json!({
+        "from_expected": "supported",
+        "to_expected": "unsupported",
+        "authorized_by": "統括（Claude）",
+        "authorized_at_utc": "2026-08-26T01:02:00Z",
+        "runtime_results_known": true,
+        "raw_geometry_basis": "Synthetic raw-geometry adjudication contract.",
+        "product_threshold_changed": false
+    });
+    authorized_correction.write_manifest();
+    let summary = validate_manifest(
+        &authorized_correction.root,
+        &authorized_correction.manifest_path,
+        ManifestRightsProfile::SyntheticTestOnly,
+    )
+    .expect("明記されたsupported-to-unsupported裁定だけを受理する");
+    assert_eq!(summary.expected_supported, 7);
+    assert_eq!(summary.expected_unsupported, 9);
+
+    let mut weakened_threshold = synthetic_corpus();
+    weakened_threshold.entries_mut()[0]["classification"]["expected"] = json!("unsupported");
+    weakened_threshold.entries_mut()[0]["classification"]["unsupported_paths"] = json!(["$"]);
+    weakened_threshold.entries_mut()[0]["classification"]["adjudication"] = json!({
+        "from_expected": "supported",
+        "to_expected": "unsupported",
+        "authorized_by": "統括（Claude）",
+        "authorized_at_utc": "2026-08-26T01:02:00Z",
+        "runtime_results_known": true,
+        "raw_geometry_basis": "Synthetic invalid threshold change.",
+        "product_threshold_changed": true
+    });
+    weakened_threshold.write_manifest();
+    assert_rejected_with(
+        &weakened_threshold,
+        "product_threshold_changed must be false",
+    );
 
     let mismatch = synthetic_corpus();
     let summary = validate_manifest(

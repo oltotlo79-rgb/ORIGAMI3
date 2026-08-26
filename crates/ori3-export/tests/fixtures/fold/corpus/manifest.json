@@ -11,7 +11,7 @@
       "FOLD 1.1 is within the approved compatibility target for this tranche.",
       "A 2D rectangular single-sheet graph using B/M/V with structurally consistent topology is expected supported; metadata extensions are warnings.",
       "A frame declaring 3D or vertices with three coordinates is expected unsupported; F assignments remain warnings and do not decide the class.",
-      "Prior diagnostic outcomes are recorded separately and never rewrite the frozen expected classification."
+      "Prior diagnostic outcomes do not automatically rewrite the frozen expected classification. The coordinator-authorized oriedita-08 correction is recorded explicitly, is supported by raw-geometry evidence, and changes no product threshold."
     ]
   },
   "count_policy": "Report actual expected and observed counts; do not force the former 20 supported / 10 unsupported target after results are known.",
@@ -398,10 +398,21 @@
       "byte_length": 616,
       "sha256": "8ec6b70673009e68ce8e4811c3760a8d3ddef897a5b6f573253c6aaed434a08c",
       "classification": {
-        "expected": "supported",
+        "expected": "unsupported",
         "frozen_at_utc": "2026-08-25T22:30:00Z",
-        "basis": "blind_2d_static_rule: all vertices are 2D; assignments are B/M/V; mountain/valley angle signs and declared topology are structurally consistent; metadata extensions are warnings only.",
-        "unsupported_paths": []
+        "basis": "coordinator_adjudication_2026-08-26: faces 0 and 3 share two non-collinear nonzero-angle hinges (edges 7 and 11), so one relative rigid transform cannot satisfy both declared 180-degree endpoints; rejecting the endpoint at the document root preserves topology and angles.",
+        "unsupported_paths": [
+          "$"
+        ],
+        "adjudication": {
+          "from_expected": "supported",
+          "to_expected": "unsupported",
+          "authorized_by": "統括（Claude）",
+          "authorized_at_utc": "2026-08-26T01:02:00Z",
+          "runtime_results_known": true,
+          "raw_geometry_basis": "Faces 0 and 3 share edges 7 (6-8, M, -180 degrees) and 11 (5-8, V, +180 degrees); the hinge axes meet at about 36.87 degrees and cannot define one simultaneous rigid endpoint.",
+          "product_threshold_changed": false
+        }
       },
       "observed": {
         "result": "unsupported",
