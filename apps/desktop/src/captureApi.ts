@@ -30,7 +30,7 @@ export interface CaptureStatus {
 
 /**
  * 3D画面の入力途中状態を、描画資源を起動せず同期で読むための軽量snapshot。
- * `selectedLayerCount` は通常grabで実際に選ばれた層数であり、完全折りの「ひだ数」ではない。
+ * `selectedLayerCount` は通常grabの実対象面数。`technique.selectedLayerCount`や完全折りの「ひだ数」とは別物。
  */
 export interface Viewer3DInteractionCapture {
   readonly grab: {
@@ -120,6 +120,7 @@ export interface CaptureInteractionState {
   readonly technique: {
     readonly active: boolean;
     readonly kind: string | null;
+    /** 技法draftの選択層数。同名の`viewer3d.grab.selectedLayerCount`や完全折りの「ひだ数」とは別物。 */
     readonly selectedLayerCount: number;
     readonly candidateLayerCount: number;
     readonly completedPartCount: number;
@@ -266,6 +267,7 @@ function interactionState(): CaptureInteractionState {
     technique: {
       active: technique !== null,
       kind: technique?.kind ?? null,
+      // 技法draftの選択層数。同名のviewer3d grab実対象面数や完全折りの「ひだ数」とは別物。
       selectedLayerCount: technique?.flap.length ?? 0,
       candidateLayerCount: technique?.flapCandidates.length ?? 0,
       completedPartCount: technique?.motionParts.length ?? 0,

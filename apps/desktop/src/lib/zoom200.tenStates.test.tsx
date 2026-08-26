@@ -892,6 +892,40 @@ describe("10状態を500×350 CSS pxへ収める所有CSS契約", () => {
     );
   });
 
+  it("Helpの目次は52pxのfocus帯を確保し、狭幅ではsidebarだけが縦送りになる", () => {
+    const state = TEN_STATES.find(
+      (candidate) => candidate.id === "help-all-thirteen-chapters",
+    );
+    if (state === undefined) throw new Error("Help状態がありません");
+    const root = mountState(state);
+    expect(root.querySelectorAll(".help-toc > button")).toHaveLength(13);
+
+    const baseSidebar = declarationBlock(".help-sidebar", dialogsCss);
+    const narrowRules = atRuleBlock("@media (max-width: 790px)", responsiveCss);
+    const narrowSidebar = optionalLastDeclarationBlock(
+      ".help-sidebar",
+      narrowRules,
+    );
+    const narrowToc = optionalLastDeclarationBlock(".help-toc", narrowRules);
+
+    expect({
+      baseFocusBand:
+        /grid-template-rows:\s*auto\s+auto\s+minmax\(52px,\s*1fr\)\s+auto/u.test(
+          baseSidebar,
+        ),
+      narrowSidebarScroller:
+        narrowSidebar !== null &&
+        /overflow-x:\s*hidden/u.test(narrowSidebar) &&
+        /overflow-y:\s*auto/u.test(narrowSidebar),
+      tocIsNotSecondScroller:
+        narrowToc !== null && /overflow:\s*visible/u.test(narrowToc),
+    }).toEqual({
+      baseFocusBand: true,
+      narrowSidebarScroller: true,
+      tocIsNotSecondScroller: true,
+    });
+  });
+
   it.each(TEN_STATES)(
     "$label: 決定操作を横送りだけの領域へ置かず、操作自身を固定配置にしない",
     (state) => {
@@ -1028,6 +1062,13 @@ describe("10状態を500×350 CSS pxへ収める所有CSS契約", () => {
       narrowStepRule !== null &&
       /overflow-x:\s*hidden/u.test(narrowStepRule) &&
       /overflow-y:\s*auto/u.test(narrowStepRule);
+    const narrowStepReservesFocusBand =
+      narrowStepRule !== null &&
+      /grid-template-rows:\s*max-content\s+max-content\s+max-content/u.test(
+        narrowStepRule,
+      ) &&
+      /box-sizing:\s*border-box/u.test(narrowStepRule) &&
+      /padding:\s*24px\s+10px\s+10px/u.test(narrowStepRule);
     const stage = root.querySelector(".paper-position-stage");
     const actions = Array.from(
       root.querySelectorAll<HTMLButtonElement>(".paper-position-actions > button"),
@@ -1052,6 +1093,7 @@ describe("10状態を500×350 CSS pxへ収める所有CSS契約", () => {
         flexibleStageWidth,
         narrowDialogScrollsVertically,
         narrowStepScrollsVertically,
+        narrowStepReservesFocusBand,
         actionCount: actions.length,
         actionsOutsideStage: actions.every((action) => !stage?.contains(action)),
         actionsFollowHandlesInTabOrder: firstActionIndex > lastHandleIndex,
@@ -1063,6 +1105,7 @@ describe("10状態を500×350 CSS pxへ収める所有CSS契約", () => {
       flexibleStageWidth: true,
       narrowDialogScrollsVertically: true,
       narrowStepScrollsVertically: true,
+      narrowStepReservesFocusBand: true,
       actionCount: 3,
       actionsOutsideStage: true,
       actionsFollowHandlesInTabOrder: true,

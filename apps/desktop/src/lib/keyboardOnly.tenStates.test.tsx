@@ -203,6 +203,42 @@ function deepTwelveTipBranch(): Skeleton {
   return withLargestParts(skeleton);
 }
 
+function expectSeparatedTipHandles(root: HTMLElement): void {
+  const tipHandles = Array.from(
+    root.querySelectorAll<SVGCircleElement>("[data-tip-handle]"),
+  );
+  expect(tipHandles).toHaveLength(12);
+  for (let firstIndex = 0; firstIndex < tipHandles.length; firstIndex += 1) {
+    const first = tipHandles[firstIndex];
+    const firstRadius = Number(first.getAttribute("r"));
+    const firstX = Number(first.getAttribute("cx"));
+    const firstY = Number(first.getAttribute("cy"));
+    for (
+      let secondIndex = firstIndex + 1;
+      secondIndex < tipHandles.length;
+      secondIndex += 1
+    ) {
+      const second = tipHandles[secondIndex];
+      const secondRadius = Number(second.getAttribute("r"));
+      const requiredSeparation = (firstRadius + secondRadius) / 0.8;
+      const separated =
+        Math.abs(firstX - Number(second.getAttribute("cx"))) >=
+          requiredSeparation ||
+        Math.abs(firstY - Number(second.getAttribute("cy"))) >=
+          requiredSeparation;
+      expect(
+        separated,
+        `先端${first.dataset.tipHandle}と${second.dataset.tipHandle}の操作丸は、` +
+          "実径を枠の80%以内に収める余裕を持って重ならない: " +
+          `first=(${firstX},${firstY},r=${firstRadius}), ` +
+          `second=(${second.getAttribute("cx")},${second.getAttribute("cy")},r=${secondRadius}), ` +
+          `required=${requiredSeparation}`,
+      ).toBe(true);
+    }
+  }
+  expect(root.querySelectorAll("[data-tip-handle-leader]").length).toBeGreaterThan(0);
+}
+
 function candidateWithSites(mark: number, count: number): ProposalCandidate {
   return {
     ...candidate(mark),
@@ -811,6 +847,7 @@ const TEN_STATES: readonly TenStateCase[] = [
       expect(leafNodes(skeleton)).toHaveLength(12);
       expect(Math.max(...skeletonRows(skeleton).map((row) => row.depth))).toBe(4);
       expect(root.querySelectorAll("[data-shape-row]")).toHaveLength(15);
+      expectSeparatedTipHandles(root);
     },
     target: () => screen.getAllByRole("slider", { name: /の長さ$/u })[0] as FocusTarget,
     activateAndVerify: async (target) => {
@@ -941,9 +978,25 @@ const TEN_STATES: readonly TenStateCase[] = [
     },
     node: () => <ProposalWizard />,
     root: dialog,
-    assertState: () => {
+    assertState: (root) => {
       expect(screen.getByRole("status").textContent).toContain("4件中2件め");
       expect(screen.getByText("計算中…")).toBeTruthy();
+      expect(root.querySelectorAll("[data-tip-handle-leader]")).toHaveLength(0);
+      for (const handle of root.querySelectorAll<SVGCircleElement>(
+        "[data-tip-handle]",
+      )) {
+        const id = handle.dataset.tipHandle;
+        const line = root.querySelector<SVGLineElement>(
+          `[data-preview-part="${id}"]`,
+        );
+        expect(line, `通常4本の先端${id}`).not.toBeNull();
+        expect(handle.getAttribute("cx"), `通常4本の先端${id}の横位置`).toBe(
+          line?.getAttribute("x2"),
+        );
+        expect(handle.getAttribute("cy"), `通常4本の先端${id}の縦位置`).toBe(
+          line?.getAttribute("y2"),
+        );
+      }
     },
     target: () => screen.getByRole("button", { name: "やめる" }) as FocusTarget,
     activateAndVerify: async (target) => {
@@ -1922,6 +1975,46 @@ afterEach(() => {
 });
 
 describe("5-E: 固定10状態のキーボード検査", () => {
+  it("深い形の先端12個は大きさを変えず、余裕を持って重ならない", () => {
+    const state = TEN_STATES[2];
+    state.arrange();
+    render(state.node());
+    const root = state.root();
+    state.assertState(root);
+    expectSeparatedTipHandles(root);
+  });
+
+  it("深い形の先端を1つ決めた後も、12個の操作丸は余裕を持って重ならない", () => {
+    const state = TEN_STATES[2];
+    state.arrange();
+    render(state.node());
+    const root = state.root();
+    const firstHandle = root.querySelector<SVGCircleElement>("[data-tip-handle]");
+    if (firstHandle === null) throw new Error("先端の操作丸がありません");
+    const leafId = Number(firstHandle.dataset.tipHandle);
+
+    fireEvent.keyDown(firstHandle, { key: "ArrowRight" });
+    fireEvent.keyUp(firstHandle, { key: "ArrowRight" });
+
+    const decidedHandle = root.querySelector<SVGCircleElement>(
+      `[data-tip-handle="${leafId}"]`,
+    );
+    const limb = root.querySelector<SVGLineElement>(
+      `[data-preview-part="${leafId}"]`,
+    );
+    if (decidedHandle === null || limb === null) {
+      throw new Error(`先端${leafId}の操作丸または枝線がありません`);
+    }
+    expect(decidedHandle.dataset.tipDecided).toBe("true");
+    expect(Number(decidedHandle.getAttribute("cx"))).toBeCloseTo(
+      Number(limb.getAttribute("x2")),
+    );
+    expect(Number(decidedHandle.getAttribute("cy"))).toBeCloseTo(
+      Number(limb.getAttribute("y2")),
+    );
+    expectSeparatedTipHandles(root);
+  });
+
   it("5-Aで決めた10状態を増減せず、同じ順序と名前で固定する", () => {
     expect(TEN_STATES.map(({ id, label }) => ({ id, label }))).toEqual([
       { id: 1, label: "New・既定の正方形" },

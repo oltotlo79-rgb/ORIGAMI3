@@ -330,6 +330,27 @@
     width: auto;
   }
 
+  /* 500×350 CSS px・DPR2の実WebViewでgetBoundingClientRect()とclient矩形を
+     比較すると、目次の表示域は6pxまで潰れた。必要なfocus高は章40px・
+     基本ガイド42.844px。実測227pxのsidebar全体を1本の送り領域にし、
+     最大でも18.9%の使用率に留める。文字や操作面は縮めない。 */
+  .help-sidebar {
+    grid-template-rows: auto auto max-content auto;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scroll-padding-block: var(--sp-3);
+  }
+
+  .help-toc {
+    overflow: visible;
+  }
+
+  .help-toc button,
+  .help-guide-entry button {
+    scroll-margin-block: var(--sp-3);
+  }
+
   /* 通常表示では560pxの紙を保つ。200%相当の狭い表示だけ、紙・説明・操作を
      1列へ送り、紙を区画幅へ合わせる。決定操作は横送り領域へ入れない。 */
   .dialog-wide[data-proposal-step="paper-position"] {
@@ -339,7 +360,14 @@
 
   .paper-position-step {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto auto auto;
+    /* 500×350 CSS px・DPR2の実WebViewでstage/handle/focusの矩形とstepの
+       client矩形を比較。修正前はstage実体401pxに対して割当行74pxで、上下へ
+       327pxはみ出した。狭幅後の実体381pxをmax-content行へ確保する。上は
+       必要19.005pxに対して24px（使用率79.2%、余り4.995px）、左右は
+       outline 2px + offset 2pxのfocus輪4pxに対して10px（余り6px）を確保する。 */
+    grid-template-rows: max-content max-content max-content;
+    box-sizing: border-box;
+    padding: 24px 10px 10px;
     overflow-x: hidden;
     overflow-y: auto;
   }

@@ -8,7 +8,7 @@
 // DeleteやBackSpaceで自動の場所へ戻せる。場所そのものの計算は
 // `proposalLayout.ts` と `skeleton.ts` の純関数に置き、ここには描画と入力だけを置く。
 
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
   PROPOSAL_PREVIEW_MAX_WIDTH_PX,
@@ -25,6 +25,167 @@ import type { ProposalLeafPositionState } from "../../lib/proposalPosition";
 
 const BODY_COLOR = "#8a5a2b";
 const LIMB_COLOR = "#3b6fc9";
+const TIP_FOCUS_RING_SCALE = 1.8;
+/**
+ * 先端の操作丸とfocus輪を、割り当てた領域の80%以内に収める。
+ * 実機の最大重なりは13.582×17.106 CSS px、操作丸は17.640px、
+ * focus輪は31.752pxだった。実測値を境目にせず、同時に12個存在する
+ * 操作丸を割当枠の80%以内に収める。focus輪は同時に1個だけなので、
+ * 丸同士の間隔へ12個分を足さず、外枠との間だけ輪の実寸を確保する。
+ */
+const TIP_HANDLE_SLOT_OCCUPANCY = 0.8;
+
+type PreviewPoint = readonly [number, number];
+
+interface PlacedTipHandle {
+  center: PreviewPoint;
+  reservedRadius: number;
+}
+
+function squaresOverlap(
+  first: PlacedTipHandle,
+  secondCenter: PreviewPoint,
+  secondRadius: number,
+): boolean {
+  return (
+    Math.abs(first.center[0] - secondCenter[0]) <
+      first.reservedRadius + secondRadius &&
+    Math.abs(first.center[1] - secondCenter[1]) <
+      first.reservedRadius + secondRadius
+  );
+}
+
+function candidateIntersectsLabel(
+  center: PreviewPoint,
+  radius: number,
+  part: PreviewPartLayout,
+): boolean {
+  const labelTop = Math.max(part.labelBounds.top, part.labelBounds.bottom);
+  const labelBottom = Math.min(part.labelBounds.top, part.labelBounds.bottom);
+  return (
+    center[0] + radius > part.labelBounds.left &&
+    center[0] - radius < part.labelBounds.right &&
+    center[1] + radius > labelBottom &&
+    center[1] - radius < labelTop
+  );
+}
+
+/**
+ * 込み入った形でも、操作丸だけを決定的な空き位置へ並べる。
+ * 線の実先端 `part.end` は変えず、空いている形では従来位置をそのまま使う。
+ */
+function placeTipHandles(
+  parts: readonly PreviewPartLayout[],
+  frameRadius: number,
+): Map<number, PreviewPoint> {
+  const hasDecidedPosition = (part: PreviewPartLayout) =>
+    part.tipPos !== null && part.tipPos !== undefined;
+  // 決めた場所は保存値と同じ点へ表示する既存契約を守る。先にその場所を
+  // 予約し、まだ自動配置の丸だけを空き位置へ逃がす。
+  const tips = parts
+    .filter((part) => part.isTip)
+    .sort((first, second) =>
+      !hasDecidedPosition(first) && hasDecidedPosition(second)
+        ? 1
+        : hasDecidedPosition(first) && !hasDecidedPosition(second)
+          ? -1
+          : first.id - second.id,
+    );
+  const originalCentersDoNotOverlap = tips.every((part, index) =>
+    tips.slice(index + 1).every((other) => {
+      const partRadius = part.handleRadius + part.handleStrokeWidth / 2;
+      const otherRadius = other.handleRadius + other.handleStrokeWidth / 2;
+      return (
+        Math.abs(part.end[0] - other.end[0]) >= partRadius + otherRadius ||
+        Math.abs(part.end[1] - other.end[1]) >= partRadius + otherRadius
+      );
+    }),
+  );
+  if (originalCentersDoNotOverlap) {
+    return new Map(tips.map((part) => [part.id, part.end]));
+  }
+  const placed: PlacedTipHandle[] = [];
+  const result = new Map<number, PreviewPoint>();
+  const largestReservedRadius = Math.max(
+    ...tips.map(
+      (part) =>
+        (part.handleRadius + part.handleStrokeWidth / 2) /
+        TIP_HANDLE_SLOT_OCCUPANCY,
+    ),
+    0,
+  );
+  const largestVisibleRadius = Math.max(
+    ...tips.map(
+      (part) =>
+        part.handleRadius * TIP_FOCUS_RING_SCALE + part.handleStrokeWidth,
+    ),
+    0,
+  );
+  const gridStep = Math.max(largestReservedRadius * 2, frameRadius * 0.1);
+
+  for (const part of tips) {
+    const visibleRadius =
+      part.handleRadius * TIP_FOCUS_RING_SCALE + part.handleStrokeWidth;
+    const reservedRadius =
+      (part.handleRadius + part.handleStrokeWidth / 2) /
+      TIP_HANDLE_SLOT_OCCUPANCY;
+    if (hasDecidedPosition(part)) {
+      placed.push({ center: part.end, reservedRadius });
+      result.set(part.id, part.end);
+      continue;
+    }
+    const gridCandidates: PreviewPoint[] = [];
+    for (
+      let y = -frameRadius + largestVisibleRadius;
+      y <= frameRadius - largestVisibleRadius + 1e-9;
+      y += gridStep
+    ) {
+      for (
+        let x = -frameRadius + largestVisibleRadius;
+        x <= frameRadius - largestVisibleRadius + 1e-9;
+        x += gridStep
+      ) {
+        gridCandidates.push([x, y]);
+      }
+    }
+    gridCandidates.sort(
+      (first, second) =>
+        Math.hypot(first[0] - part.end[0], first[1] - part.end[1]) -
+          Math.hypot(second[0] - part.end[0], second[1] - part.end[1]) ||
+        first[1] - second[1] ||
+        first[0] - second[0],
+    );
+    const candidates = gridCandidates;
+
+    const insideFrame = (center: PreviewPoint) =>
+      Math.abs(center[0]) + visibleRadius <= frameRadius &&
+      Math.abs(center[1]) + visibleRadius <= frameRadius;
+    const hasHandleSpace = (center: PreviewPoint) =>
+      !placed.some((other) =>
+        squaresOverlap(other, center, reservedRadius),
+      );
+    const hasLabelSpace = (center: PreviewPoint) =>
+      !parts.some((other) =>
+        candidateIntersectsLabel(center, visibleRadius, other),
+      );
+    const center =
+      candidates.find(
+        (candidate) =>
+          insideFrame(candidate) &&
+          hasHandleSpace(candidate) &&
+          hasLabelSpace(candidate),
+      ) ??
+      candidates.find(
+        (candidate) => insideFrame(candidate) && hasHandleSpace(candidate),
+      ) ??
+      part.end;
+
+    placed.push({ center, reservedRadius });
+    result.set(part.id, center);
+  }
+
+  return result;
+}
 
 export interface SkeletonPreviewProps {
   skeleton: Skeleton;
@@ -43,7 +204,7 @@ export function SkeletonPreview({
   positionStates = [],
   onTipPosChange,
 }: SkeletonPreviewProps) {
-  const layout = calculatePreviewFrame(skeleton);
+  const layout = useMemo(() => calculatePreviewFrame(skeleton), [skeleton]);
   const pathLabels = skeletonPathLabels(skeleton);
   const svgRef = useRef<SVGSVGElement | null>(null);
   // つまんでいる最中か、どの先端を選んでいるかだけの一時的な表示状態。
@@ -51,6 +212,10 @@ export function SkeletonPreview({
   const [draggingId, setDraggingId] = useState<number | null>(null);
   const [focusedId, setFocusedId] = useState<number | null>(null);
   const canMove = onTipPosChange !== undefined && !disabled;
+  const tipHandleCenters = useMemo(
+    () => placeTipHandles(layout.parts, layout.frameRadius),
+    [layout],
+  );
   const positionStateByLeaf = new Map(
     positionStates.map((state) => [state.leaf_id, state]),
   );
@@ -171,6 +336,10 @@ export function SkeletonPreview({
       {layout.parts
         .filter((part) => part.isTip)
         .map((part) => {
+          const handleCenter = tipHandleCenters.get(part.id) ?? part.end;
+          const handleWasMoved =
+            Math.abs(handleCenter[0] - part.end[0]) > 1e-9 ||
+            Math.abs(handleCenter[1] - part.end[1]) > 1e-9;
           const decided = part.tipPos !== null;
           const name = (pathLabels.get(part.id) ?? [part.label]).join("の");
           const positionState = positionStateByLeaf.get(part.id);
@@ -181,13 +350,38 @@ export function SkeletonPreview({
               : "紙の上で動かした場所を使います";
           return (
             <g key={part.id}>
+              {handleWasMoved && (
+                <>
+                  <line
+                    data-tip-handle-leader={part.id}
+                    x1={part.end[0]}
+                    y1={-part.end[1]}
+                    x2={handleCenter[0]}
+                    y2={-handleCenter[1]}
+                    stroke="var(--color-text-muted)"
+                    strokeWidth={part.handleStrokeWidth}
+                    strokeDasharray={`${part.handleStrokeWidth * 2} ${part.handleStrokeWidth * 2}`}
+                    pointerEvents="none"
+                    aria-hidden="true"
+                  />
+                  <circle
+                    data-tip-handle-origin={part.id}
+                    cx={part.end[0]}
+                    cy={-part.end[1]}
+                    r={part.handleStrokeWidth * 1.5}
+                    fill={LIMB_COLOR}
+                    pointerEvents="none"
+                    aria-hidden="true"
+                  />
+                </>
+              )}
               {different && (
                 <circle
                   className="tip-position-different-ring"
                   data-tip-position-different={part.id}
                   data-position-used={positionState?.used ?? "automatic"}
-                  cx={part.end[0]}
-                  cy={-part.end[1]}
+                  cx={handleCenter[0]}
+                  cy={-handleCenter[1]}
                   r={part.handleRadius * 1.45}
                   fill="none"
                   stroke="var(--color-danger)"
@@ -202,9 +396,9 @@ export function SkeletonPreview({
                 <circle
                   data-tip-focus-ring={part.id}
                   className="tip-focus-ring"
-                  cx={part.end[0]}
-                  cy={-part.end[1]}
-                  r={part.handleRadius * 1.8}
+                  cx={handleCenter[0]}
+                  cy={-handleCenter[1]}
+                  r={part.handleRadius * TIP_FOCUS_RING_SCALE}
                   fill="none"
                   stroke="var(--color-accent)"
                   strokeWidth={part.handleStrokeWidth * 2}
@@ -216,8 +410,8 @@ export function SkeletonPreview({
                 }
                 data-tip-handle={part.id}
                 data-tip-decided={decided ? "true" : "false"}
-                cx={part.end[0]}
-                cy={-part.end[1]}
+                cx={handleCenter[0]}
+                cy={-handleCenter[1]}
                 r={part.handleRadius}
                 fill={decided ? "var(--color-accent)" : "var(--color-surface)"}
                 stroke={decided ? "var(--color-surface)" : LIMB_COLOR}
