@@ -9,8 +9,8 @@
 # だけを取り出した複製で検査するまで気づかなかった。
 # crate単位の合格は、他のcrateの合格を意味しない。
 
-staged=$(git diff --cached --name-only --diff-filter=ACMR)
-staged_for_report=$(git diff --cached --name-only --diff-filter=ACMRD)
+staged=$(git -c core.quotePath=false diff --cached --name-only --diff-filter=ACMR)
+staged_for_report=$(git -c core.quotePath=false diff --cached --name-only --diff-filter=ACMRD)
 
 # 実装を進めたのに利用者への報告を書かない状態を、重いRust検査の前に止める。
 if printf '%s\n' "$staged_for_report" | grep -qE '^(apps|crates)/'; then

@@ -177,7 +177,7 @@ function Test-GitTrackedPath {
     try {
         $ErrorActionPreference = "Continue"
         $global:LASTEXITCODE = [int]::MinValue
-        $output = @(& git -C $script:Root ls-files --error-unmatch -- $RelativePath 2>$null)
+        $output = @(& git -C $script:Root -c core.quotePath=false ls-files --error-unmatch -- $RelativePath 2>$null)
         $exitCode = $LASTEXITCODE
     }
     finally {
