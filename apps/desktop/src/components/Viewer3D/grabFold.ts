@@ -187,6 +187,8 @@ export interface GrabFoldPlan {
   keepSidePoint: Vec2;
   /** 折る対象の面ID。nullは「動く側に掛かる全ての層」 */
   targetLayers: number[] | null;
+  /** 通常grabで実際に選ばれた層数。完全折りの「ひだ数」ではない。 */
+  selectedLayerCount: number;
   /** 折った後に紙が着地する多角形(半透明で重ねて見せる) */
   preview: Vec2[][];
   /** 折り線と、これから動く範囲の輪郭 */
@@ -247,5 +249,15 @@ export function planGrabFold(
     }
     preview.push(clipped.map((p) => reflectPoint(p, line)));
   }
-  return { ok: true, plan: { line, keepSidePoint, targetLayers, preview, segments } };
+  return {
+    ok: true,
+    plan: {
+      line,
+      keepSidePoint,
+      targetLayers,
+      selectedLayerCount: shown.length,
+      preview,
+      segments,
+    },
+  };
 }

@@ -6,8 +6,9 @@
 //   - 展開図(doc/faces/hinges)が変わったとき: 三角形分割と添字を作り直す
 //   - 立体形状(frame3d)が変わったとき: 頂点座標の上書きだけ(作り直さない)
 
-import { useRef, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import * as THREE from "three";
+import { registerViewer3DInteractionReader } from "../../captureApi";
 import { useAppStore } from "../../store/appStore";
 import { SELECTABLE_3D_EDGE_TARGETS } from "../../lib/viewerHint";
 import { TOOL_KIND } from "../CpEditor/interaction";
@@ -28,7 +29,10 @@ import { ViewCube } from "./ViewCube.jsx";
 import { useViewerCamera } from "./viewerCamera";
 import { useViewerLifecycle } from "./viewerLifecycle";
 import { useViewerPicking } from "./viewerPicking";
-import { useViewerHighlight } from "./viewerHighlight";
+import {
+  deriveViewer3DInteractionCapture,
+  useViewerHighlight,
+} from "./viewerHighlight";
 import {
   useViewerPointer,
   useViewerPointerPrelude,
@@ -87,6 +91,20 @@ export function Viewer3D({ fitRef, statusOverlays }: Props) {
   const techniqueDraft = useAppStore((s) => s.techniqueDraft);
   const pullHinge = useAppStore((s) => s.pullHinge);
   const pullMirrorHinge = useAppStore((s) => s.pullMirrorHinge);
+
+  useEffect(
+    () =>
+      registerViewer3DInteractionReader(() => {
+        const state = useAppStore.getState();
+        return deriveViewer3DInteractionCapture({
+          grab: pointerRefs.grabRef.current,
+          frame: state.frame3d,
+          doc: state.doc,
+          faces: state.faces,
+        });
+      }),
+    [pointerRefs.grabRef],
+  );
 
   useViewerLifecycle({
     canvasRef,

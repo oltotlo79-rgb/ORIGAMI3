@@ -29,6 +29,60 @@ export interface CaptureStatus {
 }
 
 /**
+ * 3D画面の入力途中状態を、描画資源を起動せず同期で読むための軽量snapshot。
+ * `selectedLayerCount` は通常grabで実際に選ばれた層数であり、完全折りの「ひだ数」ではない。
+ */
+export interface Viewer3DInteractionCapture {
+  readonly grab: {
+    readonly active: boolean;
+    readonly spatial: boolean | null;
+    readonly face: number | null;
+    readonly mode: "flap" | "all" | "single" | null;
+    readonly selectedLayerCount: number;
+  };
+  readonly preview: {
+    readonly visible: boolean;
+    readonly polygonCount: number;
+    readonly segmentCount: number;
+  };
+}
+
+export type Viewer3DInteractionReader = () => Viewer3DInteractionCapture;
+
+export const EMPTY_VIEWER3D_INTERACTION_CAPTURE: Viewer3DInteractionCapture =
+  Object.freeze({
+    grab: Object.freeze({
+      active: false,
+      spatial: null,
+      face: null,
+      mode: null,
+      selectedLayerCount: 0,
+    }),
+    preview: Object.freeze({
+      visible: false,
+      polygonCount: 0,
+      segmentCount: 0,
+    }),
+  });
+
+let viewer3DInteractionReader: Viewer3DInteractionReader | null = null;
+
+/** 遅れてmountしたViewerだけがreaderを登録する。古いcleanupは新しい登録を消さない。 */
+export function registerViewer3DInteractionReader(
+  reader: Viewer3DInteractionReader,
+): () => void {
+  viewer3DInteractionReader = reader;
+  return () => {
+    if (viewer3DInteractionReader === reader) viewer3DInteractionReader = null;
+  };
+}
+
+/** reader未登録時は3Dを要求せず、呼ばれた時だけ現在値を読む。 */
+export function captureViewer3DInteraction(): Viewer3DInteractionCapture {
+  return viewer3DInteractionReader?.() ?? EMPTY_VIEWER3D_INTERACTION_CAPTURE;
+}
+
+/**
  * CDP受入検査用の読み取り専用状態。通常画面の描画・ストア状態は変更しない。
  * 重い3D readbackは含めず、必要な検査が呼んだときだけ現在のstoreを写す。
  */
@@ -71,6 +125,7 @@ export interface CaptureInteractionState {
     readonly completedPartCount: number;
     readonly guideCreaseCount: number;
   };
+  readonly viewer3d: Viewer3DInteractionCapture;
 }
 
 export interface CaptureAngleOperation {
@@ -216,6 +271,7 @@ function interactionState(): CaptureInteractionState {
       completedPartCount: technique?.motionParts.length ?? 0,
       guideCreaseCount: technique !== null && technique.line !== null ? 1 : 0,
     },
+    viewer3d: captureViewer3DInteraction(),
   };
 }
 

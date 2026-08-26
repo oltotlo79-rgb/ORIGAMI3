@@ -5,7 +5,14 @@ import {
   useAppStore,
 } from "../../store/appStore";
 import { twistPreviewSegments } from "../../lib/twistPolygon";
-import type { Face, FoldDirection, Frame3D, Vec2 } from "../../lib/types";
+import type {
+  Document as OrigamiDocument,
+  Face,
+  FoldDirection,
+  Frame3D,
+  Vec2,
+} from "../../lib/types";
+import type { Viewer3DInteractionCapture } from "../../captureApi";
 import {
   foldLayers,
   foldPreviewSegments,
@@ -235,6 +242,110 @@ export type GrabState = {
       direction: FoldDirection;
     }
 );
+
+const inactiveViewer3DInteraction = (): Viewer3DInteractionCapture => ({
+  grab: {
+    active: false,
+    spatial: null,
+    face: null,
+    mode: null,
+    selectedLayerCount: 0,
+  },
+  preview: {
+    visible: false,
+    polygonCount: 0,
+    segmentCount: 0,
+  },
+});
+
+function spatialSelectedLayerCount(
+  frame: Frame3D | null,
+  faces: readonly Face[],
+  grab: Extract<GrabState, { spatial: true }>,
+): number {
+  if (!frame) return 0;
+  const from = new THREE.Vector3(...grab.a);
+  const to = new THREE.Vector3(...grab.b);
+  const normal = to.clone().sub(from);
+  if (normal.lengthSq() <= SPATIAL_PREVIEW_EPS ** 2) return 0;
+  normal.normalize();
+  const origin = from.clone().add(to).multiplyScalar(0.5);
+  const signed = normal.dot(from.clone().sub(origin));
+  const movingSign = Math.abs(signed) > SPATIAL_PREVIEW_EPS ? Math.sign(signed) : -1;
+  return spatialPreviewFaces(frame, faces, grab, origin, normal, movingSign).size;
+}
+
+/**
+ * captureから要求された時だけ、現在の通常grabと実際に表示するpreviewを再計算する。
+ * selectedLayerCountは選択層数であり、完全折りの表裏組を数える「ひだ数」ではない。
+ */
+export function deriveViewer3DInteractionCapture({
+  grab,
+  frame,
+  doc,
+  faces,
+}: {
+  readonly grab: GrabState | null;
+  readonly frame: Frame3D | null;
+  readonly doc: OrigamiDocument | null;
+  readonly faces: Face[];
+}): Viewer3DInteractionCapture {
+  if (!grab) return inactiveViewer3DInteraction();
+
+  const capturedGrab = {
+    active: true,
+    spatial: grab.spatial,
+    face: grab.face,
+    mode: grab.mode,
+  } as const;
+
+  if (grab.spatial) {
+    const segments = spatialFoldPreview(frame, faces, grab);
+    const selectedLayerCount = spatialSelectedLayerCount(frame, faces, grab);
+    return {
+      grab: { ...capturedGrab, selectedLayerCount },
+      preview: {
+        visible: segments.length > 0,
+        polygonCount: 0,
+        segmentCount: segments.length,
+      },
+    };
+  }
+
+  if (!doc) {
+    return {
+      grab: { ...capturedGrab, selectedLayerCount: 0 },
+      preview: { visible: false, polygonCount: 0, segmentCount: 0 },
+    };
+  }
+  const plan = planGrabFold(
+    foldLayers(frame, doc, faces),
+    faces,
+    grab.a,
+    grab.b,
+    grab.mode,
+    grab.face,
+  );
+  if (!plan.ok) {
+    return {
+      grab: { ...capturedGrab, selectedLayerCount: 0 },
+      preview: { visible: false, polygonCount: 0, segmentCount: 0 },
+    };
+  }
+  const polygonCount = plan.plan.preview.length;
+  const segmentCount = plan.plan.segments.length;
+  return {
+    grab: {
+      ...capturedGrab,
+      selectedLayerCount: plan.plan.selectedLayerCount,
+    },
+    preview: {
+      visible: polygonCount > 0 || segmentCount > 0,
+      polygonCount,
+      segmentCount,
+    },
+  };
+}
 
 
 export interface ViewerHighlightRefresh {

@@ -63,18 +63,29 @@ describe("6-E 3D遅延読込の静的境界", () => {
     ).toHaveLength(1);
   });
 
-  it("captureApiはThree側でなく軽量bridgeだけからreadbackを読む", () => {
+  it("captureApiはViewer interaction registryを内包し、Three・scene・WebGLへ静的参照しない", () => {
     const imports = staticImports("./captureApi.ts");
     expect(imports).toContain("./captureReadbackBridge");
     expect(
       imports.filter(
-        (specifier) =>
-          specifier.includes("components/Viewer3D") ||
-          specifier.includes("sceneBuilder") ||
-          specifier.includes("sceneFacade") ||
-          specifier === "three",
+        (specifier) => {
+          const lower = specifier.toLowerCase();
+          return (
+            specifier.includes("components/Viewer3D") ||
+            specifier === "three" ||
+            specifier.startsWith("three/") ||
+            lower.includes("scene") ||
+            lower.includes("webgl")
+          );
+        },
       ),
     ).toEqual([]);
+    expect(source("./captureApi.ts")).toContain(
+      "registerViewer3DInteractionReader",
+    );
+    expect(staticImports("./components/Viewer3D/Viewer3D.tsx")).toContain(
+      "../../captureApi",
+    );
   });
 
   it("軽量bridgeはViewer・scene・Threeへ逆参照しない", () => {

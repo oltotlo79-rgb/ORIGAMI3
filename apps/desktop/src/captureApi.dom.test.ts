@@ -12,7 +12,10 @@ vi.mock("./captureReadbackBridge", () => ({
   captureViewer3DReadback: bridge.capture,
 }));
 
-import { installCaptureApi } from "./captureApi";
+import {
+  installCaptureApi,
+  registerViewer3DInteractionReader,
+} from "./captureApi";
 import { useAppStore } from "./store/appStore";
 
 function refs(ensureViewer3d: () => Promise<void> = async () => {}) {
@@ -163,7 +166,8 @@ describe("遅れて準備する3D表示と撮影APIの順序", () => {
 
   it("getStatus.readyとgetInteractionStateを3D準備状態へ流用しない", () => {
     const neverReady = new Promise<void>(() => {});
-    const dispose = installCaptureApi(refs(() => neverReady));
+    const ensureViewer3d = vi.fn(() => neverReady);
+    const dispose = installCaptureApi(refs(ensureViewer3d));
     const api = window.__origami3Capture;
     const before = api?.getInteractionState();
 
@@ -181,8 +185,59 @@ describe("遅れて準備する3D表示と撮影APIの順序", () => {
       "pull",
       "fold",
       "technique",
+      "viewer3d",
     ]);
+    expect(before?.viewer3d).toEqual({
+      grab: {
+        active: false,
+        spatial: null,
+        face: null,
+        mode: null,
+        selectedLayerCount: 0,
+      },
+      preview: {
+        visible: false,
+        polygonCount: 0,
+        segmentCount: 0,
+      },
+    });
+    expect(ensureViewer3d).not.toHaveBeenCalled();
     expect(api?.getInteractionState()).toEqual(before);
+    expect(ensureViewer3d).not.toHaveBeenCalled();
     dispose();
+  });
+
+  it("Viewer readerは登録・API設置・statusでは計算せず、interactionを読んだ時だけ計算する", () => {
+    const ensureViewer3d = vi.fn(async () => {});
+    const viewer3d = {
+      grab: {
+        active: true,
+        spatial: false,
+        face: 8,
+        mode: "all" as const,
+        // 通常grabで実際に選ばれた層数。完全折りの「ひだ」数ではない。
+        selectedLayerCount: 3,
+      },
+      preview: {
+        visible: true,
+        polygonCount: 3,
+        segmentCount: 13,
+      },
+    } as const;
+    const reader = vi.fn(() => viewer3d);
+    const unregister = registerViewer3DInteractionReader(reader);
+    const dispose = installCaptureApi(refs(ensureViewer3d));
+    try {
+      expect(reader).not.toHaveBeenCalled();
+      window.__origami3Capture?.getStatus();
+      expect(reader).not.toHaveBeenCalled();
+
+      expect(window.__origami3Capture?.getInteractionState().viewer3d).toEqual(viewer3d);
+      expect(reader).toHaveBeenCalledTimes(1);
+      expect(ensureViewer3d).not.toHaveBeenCalled();
+    } finally {
+      dispose();
+      unregister();
+    }
   });
 });

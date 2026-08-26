@@ -87,6 +87,7 @@ vi.mock("../../ipc/client", () => ({
 }));
 
 import * as ipc from "../../ipc/client";
+import { captureViewer3DInteraction } from "../../captureApi";
 import { useAppStore } from "../../store/appStore";
 import { Viewer3D } from "./Viewer3D";
 import {
@@ -407,9 +408,26 @@ describe("Viewer3D(画面)", () => {
     const calls = setPreview.mock.calls;
     const preview = calls[calls.length - 1][0] as number[][][];
     expect(preview.length).toBeGreaterThan(0);
+    expect(captureViewer3DInteraction()).toEqual({
+      grab: {
+        active: true,
+        spatial: false,
+        face: 0,
+        mode: "flap",
+        // 選択層数であり、完全折りの「ひだ数」ではない。
+        selectedLayerCount: 1,
+      },
+      preview: {
+        visible: true,
+        polygonCount: preview.length,
+        segmentCount: expect.any(Number),
+      },
+    });
+    expect(captureViewer3DInteraction().preview.segmentCount).toBeGreaterThan(0);
     expect(ipc.sequenceApply).not.toHaveBeenCalled();
 
     fireEvent.pointerUp(canvas, { button: 0, pointerId: 1, clientX: 250, clientY: 200 });
+    expect(captureViewer3DInteraction().grab.active).toBe(false);
     await waitFor(() => expect(ipc.sequenceApply).toHaveBeenCalledTimes(2));
     const op = vi.mocked(ipc.sequenceApply).mock.calls[1][0];
     expect(op.type).toBe("FoldThrough");
@@ -476,6 +494,22 @@ describe("Viewer3D(画面)", () => {
       | undefined;
     expect(previewSegments?.some((segment) => segment.role === "reference")).toBe(true);
     expect(previewSegments?.some((segment) => segment.role === "active")).toBe(true);
+    expect(captureViewer3DInteraction()).toMatchObject({
+      grab: {
+        active: true,
+        spatial: true,
+        face: 1,
+        mode: "flap",
+      },
+      preview: {
+        visible: true,
+        polygonCount: 0,
+        segmentCount: previewSegments?.length,
+      },
+    });
+    // 共有辺6でつながる面0・面1がともに移動側なので、実選択は{0, 1}の2層。
+    // 完全折りの「ひだ数」や技法draftの選択数ではない。
+    expect(captureViewer3DInteraction().grab.selectedLayerCount).toBe(2);
     const currentPoints = SPATIAL_FRAME.faces.flatMap((face) =>
       face.polygon.map((point) => new THREE.Vector3(...point)),
     );
