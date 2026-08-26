@@ -1,6 +1,10 @@
 // 3Dビューの外向けscene facade。scene資源の所有権と破棄を一か所に集める。
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import {
+  registerViewer3DReadback,
+  type Viewer3DReadback,
+} from "../../captureReadbackBridge";
 import type { Vec2 } from "../../lib/types";
 import type { HingeSegment, PaperPickSurface } from "./hingePicker";
 import {
@@ -123,37 +127,10 @@ export interface Viewer3DScene {
  * CDPの恒久検査が、画面に出たものと同じ3段の描画結果を照合するための読取結果。
  * WebGLのreadPixelsに合わせ、全bufferは左下を先頭にした物理画素順で返す。
  */
-export interface Viewer3DReadback {
-  readonly version: 1;
-  readonly width: number;
-  readonly height: number;
-  readonly rowOrder: "bottom-to-top";
-  readonly owner: {
-    readonly encoding: "rgba8-base64";
-    readonly data: string;
-    /** owner code 0は背景。紙のcodeだけを [code, face ID] で返す。 */
-    readonly codeToFace: readonly (readonly [number, number])[];
-  };
-  readonly depth: {
-    readonly encoding: "rgba8-packed-depth-base64";
-    readonly data: string;
-  };
-  readonly final: {
-    readonly encoding: "rgba8-base64";
-    readonly data: string;
-  };
-}
-
 type Viewer3DReadbackSource = () => Viewer3DReadback;
-let activeViewer3DReadback: Viewer3DReadbackSource | null = null;
 
-/** Viewer3D.tsxへ検査用refを足さず、現在表示中の実sceneだけを同期して読み取る。 */
-export function captureViewer3DReadback(): Viewer3DReadback {
-  if (activeViewer3DReadback === null) {
-    throw new Error("3D表示の描画資源がまだ用意されていません");
-  }
-  return activeViewer3DReadback();
-}
+export { captureViewer3DReadback } from "../../captureReadbackBridge";
+export type { Viewer3DReadback } from "../../captureReadbackBridge";
 
 function bytesAsBase64(bytes: Uint8Array): string {
   const chunkSize = 0x8000;
@@ -749,7 +726,7 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
     dispose() {
       if (disposed) return;
       disposed = true;
-      if (activeViewer3DReadback === captureReadback) activeViewer3DReadback = null;
+      unregisterReadback();
       previewMesh.geometry.dispose();
       previewMaterial.dispose();
       if (frameHandle !== null) {
@@ -782,6 +759,6 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
       renderer.dispose();
     },
   };
-  activeViewer3DReadback = captureReadback;
+  const unregisterReadback = registerViewer3DReadback(captureReadback);
   return api;
 }

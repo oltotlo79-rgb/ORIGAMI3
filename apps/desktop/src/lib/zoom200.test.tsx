@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 import App from "../App";
 import { useAppStore } from "../store/appStore";
+import type { Document } from "./types";
 
 /*
  * jsdom has no layout engine: getBoundingClientRect(), clientWidth and
@@ -96,6 +97,40 @@ const TIMELINE_CONTROL_LABELS = [
   "次へ ▶",
   "⏸ 一時停止",
 ] as const;
+const TIMELINE_LAYOUT_DOCUMENT: Document = {
+  schema_version: 1,
+  paper: { width_mm: 150, height_mm: 150 },
+  cp: {
+    vertices: [
+      { id: 0, pos: [0, 0] },
+      { id: 1, pos: [1, 0] },
+      { id: 2, pos: [1, 1] },
+      { id: 3, pos: [0, 1] },
+    ],
+    edges: [
+      { id: 0, v0: 0, v1: 1, kind: "Border" },
+      { id: 1, v0: 1, v1: 2, kind: "Border" },
+      { id: 2, v0: 2, v1: 3, kind: "Border" },
+      { id: 3, v0: 3, v1: 0, kind: "Border" },
+    ],
+    next_vertex_id: 4,
+    next_edge_id: 4,
+  },
+  sequence: [
+    {
+      id: 1,
+      kind: "Simple",
+      drivers: [],
+      layer_order: null,
+      note: "",
+    },
+  ],
+  display: {
+    front_color: [237, 28, 36],
+    back_color: [255, 255, 255],
+    grid_divisions: 8,
+  },
+};
 
 function escaped(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
@@ -107,6 +142,25 @@ function declarationBlock(selector: string, source: string): string {
   );
   if (match === null) throw new Error(`CSSブロックがありません: ${selector}`);
   return match[1];
+}
+
+function selectorDeclarationBlocks(selector: string, source: string): string[] {
+  return Array.from(source.matchAll(/([^{}]+)\{([^{}]*)\}/gu))
+    .filter((match) =>
+      (match[1] ?? "")
+        .split(",")
+        .map((candidate) => candidate.trim())
+        .includes(selector),
+    )
+    .map((match) => match[2] ?? "");
+}
+
+function selectorDoesNotShrink(selector: string, source: string): boolean {
+  const declarations = selectorDeclarationBlocks(selector, source).join("\n");
+  return (
+    /(?:^|[;\n])\s*flex\s*:\s*none\s*(?:;|$)/u.test(declarations) ||
+    /(?:^|[;\n])\s*flex-shrink\s*:\s*0\s*(?:;|$)/u.test(declarations)
+  );
 }
 
 function atRuleBlocks(prelude: string, source: string): string[] {
@@ -193,6 +247,8 @@ const zoom200Rules = atRuleBlock(ZOOM_200_MEDIA, responsiveCss);
 const originalNewDocument = useAppStore.getState().newDocument;
 const originalCheckRecovery = useAppStore.getState().checkRecovery;
 const originalUiTheme = useAppStore.getState().uiTheme;
+const originalDocument = useAppStore.getState().doc;
+const originalCurrentStep = useAppStore.getState().currentStep;
 const originalViewport = {
   innerWidth: Object.getOwnPropertyDescriptor(window, "innerWidth"),
   innerHeight: Object.getOwnPropertyDescriptor(window, "innerHeight"),
@@ -218,6 +274,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   useAppStore.setState({
+    doc: originalDocument,
+    currentStep: originalCurrentStep,
     uiTheme: originalUiTheme,
     exportOpen: false,
     helpOpen: false,
@@ -229,6 +287,32 @@ afterEach(() => {
     if (descriptor !== undefined) Object.defineProperty(window, property, descriptor);
   }
 });
+
+interface ModeledInteractiveRect {
+  name: string;
+  group: "controls" | "steps";
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+function rectangleOverlap(
+  first: ModeledInteractiveRect,
+  second: ModeledInteractiveRect,
+): { width: number; height: number; area: number } {
+  const width = Math.max(
+    0,
+    Math.min(first.left + first.width, second.left + second.width) -
+      Math.max(first.left, second.left),
+  );
+  const height = Math.max(
+    0,
+    Math.min(first.top + first.height, second.top + second.height) -
+      Math.max(first.top, second.top),
+  );
+  return { width, height, area: width * height };
+}
 
 function renderProductApp(): HTMLElement {
   const { container } = render(<App />);
@@ -695,6 +779,130 @@ describe("物理1000×700を200%表示した製品画面", () => {
         resetToCube: expect.any(Number),
       },
       missingOverlayHeight: 0,
+    });
+  });
+
+  it("時間軸の全押しどころを非収縮の矩形として縦送りし、交差を0にする", () => {
+    useAppStore.setState({
+      doc: structuredClone(TIMELINE_LAYOUT_DOCUMENT),
+      currentStep: null,
+    });
+    const app = renderProductApp();
+    const timeline = app.querySelector<HTMLElement>("[data-testid='timeline']");
+    if (timeline === null) {
+      throw new Error("実製品の時間軸がありません");
+    }
+    const controls = timeline.querySelector<HTMLElement>(".timeline-controls");
+    const steps = timeline.querySelector<HTMLElement>(".timeline-steps");
+    if (controls === null || steps === null) {
+      throw new Error("実製品の時間軸と押しどころがありません");
+    }
+
+    const controlButtons = Array.from(
+      controls.querySelectorAll<HTMLButtonElement>("button"),
+    );
+    const stepButtons = Array.from(
+      steps.querySelectorAll<HTMLButtonElement>("button"),
+    );
+    expect(controlButtons).toHaveLength(4);
+    expect(stepButtons.length).toBeGreaterThanOrEqual(3);
+
+    const workspace = workspaceMetrics(app);
+    const timelineRule = declarationBlock(".timeline", zoom200Rules);
+    const controlsRule = declarationBlock(".timeline-controls", zoom200Rules);
+    const padding = axisSpacing(declarationValue(timelineRule, "padding"));
+    const gap = pxValue(declarationValue(timelineRule, "gap"));
+    const controlGap = pxValue(declarationValue(controlsRule, "gap"));
+    const columns = Number(
+      /^repeat\(([0-9]+),/u.exec(
+        declarationValue(controlsRule, "grid-template-columns"),
+      )?.[1] ?? "0",
+    );
+    if (columns <= 0) throw new Error("時間軸操作の列数が読めません");
+    const contentWidth = workspace.pane3dWidth - padding.horizontal * 2;
+    const controlWidth =
+      (contentWidth - controlGap * (columns - 1)) / columns;
+    const controlHeight = pxValue(
+      declarationValue(
+        declarationBlock(".timeline-controls button", baseLayoutCss),
+        "min-height",
+      ),
+    );
+    const controlRows = Math.ceil(controlButtons.length / columns);
+    const controlsBaseHeight =
+      controlRows * controlHeight + (controlRows - 1) * controlGap;
+    const stepHeight = pxValue(
+      declarationValue(
+        declarationBlock(".app :where(button)", baseLayoutCss),
+        "min-height",
+      ),
+    );
+    const controlsDoNotShrink = selectorDoesNotShrink(
+      ".timeline-controls",
+      zoom200Rules,
+    );
+    const stepsDoNotShrink = selectorDoesNotShrink(
+      ".timeline-steps",
+      zoom200Rules,
+    );
+    const availableChildrenHeight =
+      workspace.timelineHeight - padding.vertical * 2 - gap;
+    const baseChildrenHeight = controlsBaseHeight + stepHeight;
+    const shrinkRatio =
+      controlsDoNotShrink && stepsDoNotShrink
+        ? 1
+        : Math.min(1, availableChildrenHeight / baseChildrenHeight);
+    const controlsBoxHeight = controlsBaseHeight * shrinkRatio;
+    const stepsTop = controlsBoxHeight + gap;
+
+    // jsdomに実配置はない。ここで作る矩形は実機値ではなく、実DOMの全button数と
+    // 出荷CSSの列・gap・min-height・flex-shrinkから一意に作る回帰モデルである。
+    const rectangles: ModeledInteractiveRect[] = [
+      ...controlButtons.map((button, index) => ({
+        name: button.textContent?.trim() ?? "",
+        group: "controls" as const,
+        left: (index % columns) * (controlWidth + controlGap),
+        top: Math.floor(index / columns) * (controlHeight + controlGap),
+        width: controlWidth,
+        height: controlHeight,
+      })),
+      ...stepButtons.map((button, index) => ({
+        name: button.textContent?.trim() ?? "",
+        group: "steps" as const,
+        left: 0,
+        top: stepsTop + index * (stepHeight + controlGap),
+        width: Math.min(
+          contentWidth,
+          [...(button.textContent?.trim() ?? "")].length * tokenPx("--fs-sm") +
+            tokenPx("--sp-4") * 2 +
+            tokenPx("--control-border-width") * 2,
+        ),
+        height: stepHeight,
+      })),
+    ];
+    const overlaps = rectangles.flatMap((first, firstIndex) =>
+      rectangles.slice(firstIndex + 1).flatMap((second) => {
+        const overlap = rectangleOverlap(first, second);
+        return overlap.area > 0
+          ? [{ first: first.name, second: second.name, ...overlap }]
+          : [];
+      }),
+    );
+
+    expect(declarationValue(timelineRule, "overflow-y")).toBe("auto");
+    expect(
+      {
+        interactionCount: rectangles.length,
+        controlsDoNotShrink,
+        stepsDoNotShrink,
+        overlaps,
+      },
+      "60pxの時間軸では子を縮めて重ねず、内容高を保ったまま縦送りにします。",
+    ).toEqual({
+      interactionCount: controlButtons.length + stepButtons.length,
+      controlsDoNotShrink: true,
+      stepsDoNotShrink: true,
+      overlaps: [],
     });
   });
 

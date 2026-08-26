@@ -818,9 +818,9 @@ manual previewは実在確認後だけ7件目として追加する。現時点�
 2. 全minified JS chunkをraw byteで測り、単一chunk最大500,000 bytes以下にする。
 3. Proposal、Export、Helpはclosed初回render 100回でdynamic import開始0、各open 100回でload成功100、module評価は各session 1回以下。
 4. F1を100回のopen/close反復で100回Help表示へつなぎ、入口消失0、二重dialog 0。
-5. Viewer fallbackと実Viewerの割当区画寸法差を縦横各1 px以下とし、4区画のlayout shiftによる操作要素欠落0。
-6. 同一release build・同一機・同じ測定器で変更前後各30回cold startし、変更後median `<=` 変更前median、変更後P95 `<=` 変更前P95、全実行3,000 ms以内とする。P95 baselineは実装前に新規取得する。
-7. 起動値がtimer分解能内で逆転した場合だけ30回を1セット追加し、合計60回で再判定する。上限を緩めない。
+5. Viewer fallbackと実Viewerの割当区画寸法差を縦横各1 px以下とし、4区画のlayout shiftによる操作要素欠落0。初回3D表示が利用可能になるまでの時間は、初期JSの大きさから推測せず、同一release build・同一機・同じ測定器で実装前後各30回を別に測る。`App → captureApi → sceneBuilder → sceneFacade → Three.js`の静的経路を切る前の初期JS raw 487,912 bytes / gzip約156,185 bytesは予測値であり、合格値に使わない。
+6. 同一release build・同一機・同じ測定器で、起動から最初の2D編集を受け付け、その結果が画面へ反映されるまでを変更前後各30回測る。画面が見えただけの時刻は使わない。変更後median `<=` 変更前median、変更後P95 `<=` 変更前P95、全30回3,000 ms以内とする。実装前の30回を先に基準として取得する。
+7. 起動値がtimer分解能内で逆転した場合だけ30回を1セット追加し、合計60回で再判定する。上限を緩めない。6-Fの測定器には、実装前30回の中央値・P95・最大値、3,000 msの既存上限、`3,000 - 実装前最大値`の余裕をコメントと記録へ残す。
 8. build-time `manualExport.ts` をinitial graphへ新たに入れない。runtime manual previewと誤認した追加chunk 0。
 
 ### 10.5 変更・緩和してはいけないもの
@@ -829,7 +829,7 @@ manual previewは実在確認後だけ7件目として追加する。現時点�
 - lazy化のため機能や画像を削除、圧縮品質を無断低下、Help章を減らすこと。
 - initial gzipを全outputサイズ、Vite表示の丸めkB、unminifiedサイズと混同しない。
 - Three.jsを分けるため複数versionをbundleしない。
-- 3秒要件と現行起動中央値の証拠。gzipだけ通して起動回帰を無視しない。
+- 起動から最初の2D編集を受け付け、その結果が画面へ反映されるまでの実装前後各30回分の記録。画面が見えた時刻だけで合格にしない。中央値・P95・全回の値・release SHA-256・3,000 msまでの余裕を残す。初期JS gzipと最大raw chunkは、起動回帰を見逃さない参考値として残す。
 - `manualExport.ts` の説明書生成/test経路。
 
 ### 10.6 過去の失敗と原因
@@ -850,7 +850,7 @@ npm --prefix apps/desktop test -- src/components/Viewer3D/Viewer3D.dom.test.tsx
 npm --prefix apps/desktop run lint
 ```
 
-`check-bundle-budget.mjs` はgzipをmemory上で計算し、Viteのwarning文字列をgrepしない。起動計測は明示許可された別工程でreleaseアプリを使い、本書作成中は実行しない。結果を `verification/improvement-roadmap/06-bundle/manifest.json`、`verification/improvement-roadmap/06-bundle/before-startup.json`、`verification/improvement-roadmap/06-bundle/after-startup.json` に保存する。
+`check-bundle-budget.mjs` はgzipをmemory上で計算し、Viteのwarning文字列をgrepしない。起動計測は明示許可された別工程で同一release build・同一機・同じ測定器を使う。起動から最初の2D編集を受け付け、その結果が画面へ反映される時刻を30回ずつ記録し、画面が見えた時刻だけを合格に使わない。初回3D表示が利用可能になる時刻は別に実装前後各30回を測り、初期サイズから推測しない。結果を `verification/improvement-roadmap/06-bundle/manifest.json`、`verification/improvement-roadmap/06-bundle/before-startup.json`、`verification/improvement-roadmap/06-bundle/after-startup.json`、`verification/improvement-roadmap/06-bundle/viewer-startup-before-after.json` に保存する。
 
 ### 10.8 成果物、見積、依存、リスク、点数
 
@@ -1427,7 +1427,7 @@ SBOM toolは10-Aで1つに決めversion pinし、複数toolを無根拠に追加
 | 3 30作品corpus | 18～26 | 8 | 1 | 5 | 1 | 1 |
 | 4 巨大境界 | 56～82 | 36 | 36 | 0 | 0 | 0 |
 | 5 Modal a11y | 9～15 | 6 | 5 | 0 | 1 | 0 |
-| 6 bundle | 8～13 | 6 | 4 | 0 | 0 | 2 |
+| 6 起動時の待ち時間と初期サイズ | 8～13 | 6 | 4 | 0 | 0 | 2 |
 | 7 文書機械検証 | 12～23 | 13 | 11 | 0 | 2 | 0 |
 | 8 FOLD 1.2 限定profile | 33～48 | 15 | 7 | 0 | 1 | 7 |
 | 9 実利用者（今版の準備） | 6～9 | 3 | 1 | 1 | 1 | 0 |

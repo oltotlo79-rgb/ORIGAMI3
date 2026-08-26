@@ -11,6 +11,7 @@ import {
 import { EXPORT_CHOICES } from "./components/dialogs/exportChoices";
 import { statusBadgeText, warningCount } from "./lib/flatFoldNotice";
 import { useAppStore } from "./store/appStore";
+import { installCaptureApi } from "./captureApi";
 
 const exportDialogPayload = vi.hoisted(() => ({
   load: vi.fn(() => new Promise(() => {})),
@@ -18,11 +19,29 @@ const exportDialogPayload = vi.hoisted(() => ({
 const helpCenterPayload = vi.hoisted(() => ({
   load: vi.fn(() => new Promise(() => {})),
 }));
+const viewerPayload = vi.hoisted(() => ({
+  render: vi.fn(),
+}));
 
 vi.mock("./components/ToolRail", () => ({ ToolRail: () => null }));
 vi.mock("./components/ContextPanel", () => ({ ContextPanel: () => null }));
 vi.mock("./components/CpEditor/CpEditor", () => ({ CpEditor: () => null }));
-vi.mock("./components/Viewer3D/Viewer3D", () => ({ Viewer3D: () => null }));
+vi.mock("./components/Viewer3D/Viewer3D", () => ({
+  Viewer3D: (props: {
+    fitRef: React.RefObject<(() => void) | null>;
+    statusOverlays?: React.ReactNode;
+  }) => {
+    viewerPayload.render(props);
+    return (
+      <canvas
+        className="viewer3d-canvas"
+        data-testid="viewer3d-canvas"
+        tabIndex={0}
+        aria-label="3D表示"
+      />
+    );
+  },
+}));
 vi.mock("./components/Timeline", () => ({ Timeline: () => null }));
 vi.mock("./components/RecoveryDialog", () => ({ RecoveryDialog: () => null }));
 vi.mock("./components/PaneSplitter", () => ({ PaneSplitter: () => null }));
@@ -62,6 +81,8 @@ const initialStatusState = {
 beforeEach(() => {
   exportDialogPayload.load.mockClear();
   helpCenterPayload.load.mockClear();
+  viewerPayload.render.mockClear();
+  vi.mocked(installCaptureApi).mockClear();
   useAppStore.setState({
     exportOpen: false,
     helpOpen: false,
@@ -186,6 +207,35 @@ describe("ヘルプ画面の遅延読み込み", () => {
       act(() => useAppStore.setState({ helpOpen: false }));
       expect(screen.queryByRole("status")).toBeNull();
     }
+  });
+});
+
+describe("3D表示の遅延読み込み", () => {
+  it("同じ区画とTab位置で準備を知らせ、読込後も撮影用fit refを引き継ぐ", async () => {
+    const { container } = render(<App />);
+    const loading = screen.getByTestId("viewer3d-loading");
+
+    expect(loading.closest(".pane-3d-view")).not.toBeNull();
+    expect(loading.textContent).toBe("3D表示を準備しています…");
+    expect(loading.tabIndex).toBe(0);
+    expect(loading.getAttribute("aria-live")).toBe("polite");
+    expect(container.querySelectorAll('[data-testid="viewer3d-loading"]')).toHaveLength(1);
+    expect(screen.queryByTestId("viewer3d-canvas")).toBeNull();
+
+    loading.focus();
+    expect(document.activeElement).toBe(loading);
+
+    const canvas = await screen.findByTestId("viewer3d-canvas");
+    expect(screen.queryByTestId("viewer3d-loading")).toBeNull();
+    expect(canvas.tabIndex).toBe(0);
+    expect(canvas.getAttribute("aria-label")).toBe("3D表示");
+    expect(document.activeElement).toBe(canvas);
+
+    await waitFor(() => expect(viewerPayload.render).toHaveBeenCalledTimes(1));
+    const viewerProps = viewerPayload.render.mock.calls[0][0];
+    const captureArgs = vi.mocked(installCaptureApi).mock.calls[0][0];
+    expect(viewerProps.fitRef).toBe(captureArgs.fit3d);
+    expect(viewerProps.statusOverlays).toBeTruthy();
   });
 });
 

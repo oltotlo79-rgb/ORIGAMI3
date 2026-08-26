@@ -43,8 +43,40 @@ import {
 import { ModalDialog, type FocusTarget } from "./ModalDialog";
 
 const PROPOSAL_FALLBACK_PAPER = { width_mm: 150, height_mm: 150 };
+const PROPOSAL_NARROW_VIEWPORT_MAX_WIDTH_PX = 790;
 
 type ProposalInitialFocusRef = RefObject<FocusTarget | null>;
+
+/** 狭い表示で選んだ丸印とそのfocus輪を、紙の段階自身の縦送り内へ戻す。 */
+function revealFocusedPaperPositionHandle(
+  scroller: HTMLDivElement,
+  handle: Element,
+): void {
+  if (window.innerWidth > PROPOSAL_NARROW_VIEWPORT_MAX_WIDTH_PX) return;
+
+  const viewport = scroller.getBoundingClientRect();
+  const item = handle.getBoundingClientRect();
+  const visibleTop = Math.max(0, viewport.top + scroller.clientTop);
+  const visibleBottom = Math.min(window.innerHeight, viewport.bottom);
+  const visibleHeight = Math.max(0, visibleBottom - visibleTop);
+  const itemHeight = Math.max(0, item.bottom - item.top);
+  if (visibleHeight <= 0) return;
+
+  // focus輪は丸印の1.75倍の半径なので、丸印半径ぶんの余白があれば輪も収まる。
+  const wantedPadding = Math.max(8, itemHeight / 2);
+  const padding = Math.min(
+    wantedPadding,
+    Math.max(0, (visibleHeight - itemHeight) / 2),
+  );
+  const delta =
+    item.top < visibleTop + padding
+      ? item.top - (visibleTop + padding)
+      : item.bottom > visibleBottom - padding
+        ? item.bottom - (visibleBottom - padding)
+        : 0;
+
+  if (delta !== 0) scroller.scrollTop += delta;
+}
 
 const INTERNAL_PROPOSAL_WORDS =
   /job|探索|骨格|充填|ソルバー|ヤコビアン|hard|soft|warm[\s-]+start|イテレーション|内部エラー|節点|木|根|深さ|円の中心|角|ID/iu;
@@ -669,7 +701,19 @@ function PaperPositionStep({
   );
 
   return (
-    <div ref={stepRef} className="paper-position-step">
+    <div
+      ref={stepRef}
+      className="paper-position-step"
+      onFocusCapture={(event) => {
+        const target = event.target;
+        if (
+          target instanceof Element &&
+          target.matches("[data-paper-position-handle]")
+        ) {
+          revealFocusedPaperPositionHandle(event.currentTarget, target);
+        }
+      }}
+    >
       <div className="paper-position-sidebar">
         <h2 id="proposal-title">紙の上の場所を調整</h2>
         <ProposalPositionHistoryButtons />

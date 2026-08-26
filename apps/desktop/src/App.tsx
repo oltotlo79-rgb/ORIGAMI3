@@ -1,13 +1,16 @@
 // 4区画レイアウト: 上部ツールバー / 左ツールレール / 中央(2D+3D) / 下部コンテキストパネル。
 // 手順タイムラインは3D区画の内側を上下に分けて置く(常設区画は増やさない)。
 // このファイルはレイアウト構成のみ(200行以内を維持)。
-import { lazy, Suspense, useEffect, useRef } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef } from "react";
 import { useAppStore } from "./store/appStore";
 import { AppToolbar } from "./components/AppToolbar";
 import { ToolRail } from "./components/ToolRail";
 import { ContextPanel } from "./components/ContextPanel";
 import { CpEditor } from "./components/CpEditor/CpEditor";
-import { Viewer3D } from "./components/Viewer3D/Viewer3D";
+import {
+  DeferredViewer3D,
+  type DeferredViewer3DHandle,
+} from "./components/Viewer3D/DeferredViewer3D";
 import { ViewerStatusOverlays } from "./components/ViewerStatusOverlays";
 import { Timeline } from "./components/Timeline";
 import { RecoveryDialog } from "./components/RecoveryDialog";
@@ -45,6 +48,13 @@ function App() {
   // 「全体表示」は2D・3D両方を紙全体が収まる表示に戻す(ボタンは増やさない)
   const fit2dRef = useRef<(() => void) | null>(null);
   const fit3dRef = useRef<(() => void) | null>(null);
+  const deferredViewerRef = useRef<DeferredViewer3DHandle | null>(null);
+
+  const ensureViewer3d = useCallback(async () => {
+    const viewer = deferredViewerRef.current;
+    if (viewer === null) throw new Error("3D表示の準備口がまだありません");
+    await viewer.ensureReady();
+  }, []);
 
   // 起動時に150×150mmの新規作品を開き、続けて前回の異常終了の有無を調べる
   // (残っていれば復旧ダイアログが出る。SYS-003)
@@ -65,8 +75,13 @@ function App() {
 
   // 解説画像の自動撮影口。DOM上のボタンは増やさず、WebView2/CDPからだけ使う。
   useEffect(
-    () => installCaptureApi({ fit2d: fit2dRef, fit3d: fit3dRef }),
-    [fit2dRef, fit3dRef],
+    () =>
+      installCaptureApi({
+        fit2d: fit2dRef,
+        fit3d: fit3dRef,
+        ensureViewer3d,
+      }),
+    [ensureViewer3d],
   );
 
   return (
@@ -83,7 +98,11 @@ function App() {
         <ToolRail
           onFitView={() => {
             fit2dRef.current?.();
-            fit3dRef.current?.();
+            if (fit3dRef.current) {
+              fit3dRef.current();
+            } else {
+              void ensureViewer3d().then(() => fit3dRef.current?.());
+            }
           }}
         />
         <section className="pane pane-2d">
@@ -92,7 +111,8 @@ function App() {
         <PaneSplitter />
         <section className="pane pane-3d">
           <div className="pane-3d-view">
-            <Viewer3D
+            <DeferredViewer3D
+              ref={deferredViewerRef}
               fitRef={fit3dRef}
               statusOverlays={<ViewerStatusOverlays />}
             />

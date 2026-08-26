@@ -168,6 +168,7 @@ vi.mock("./sceneLayers", async () => {
 });
 
 import {
+  captureViewer3DReadback,
   createPackedDepthReadbackResources,
   createScene,
   disposePackedDepthReadbackResources,
@@ -292,6 +293,21 @@ beforeEach(() => {
 });
 
 describe("scene facade の資源所有", () => {
+  it("現在のsceneだけを撮影bridgeへ登録し、古い終了で新しいsceneを消さない", () => {
+    vi.stubGlobal("requestAnimationFrame", vi.fn(() => 1));
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const first = createScene(canvasForScene());
+    const second = createScene(canvasForScene());
+
+    first.dispose();
+    expect(() => captureViewer3DReadback()).toThrow("読み取れる紙面がありません");
+
+    second.dispose();
+    expect(() => captureViewer3DReadback()).toThrow(
+      "3D表示の描画資源がまだ用意されていません",
+    );
+  });
+
   it("100回の生成・preview更新・終了でも全資源のcreate/dispose数が一致する", () => {
     let nextFrame = 1;
     vi.stubGlobal("requestAnimationFrame", vi.fn(() => nextFrame++));

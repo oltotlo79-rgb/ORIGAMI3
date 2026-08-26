@@ -611,6 +611,107 @@ function operationLedgerId(target: FocusTarget): string {
   return `${operationKind(target)}:${visibleName(target).replace(/\s+/gu, " ").trim()}`;
 }
 
+interface FocusViewportIssue {
+  state: string;
+  operation: string;
+  reason: string;
+  top?: number;
+  bottom?: number;
+  scrollTop?: number;
+}
+
+function modeledRect(top: number, height: number, width = 20): DOMRect {
+  return {
+    x: 0,
+    y: top,
+    left: 0,
+    right: width,
+    top,
+    bottom: top + height,
+    width,
+    height,
+    toJSON: () => ({}),
+  } as DOMRect;
+}
+
+/**
+ * 147件すべてが必ず通るviewport判定入口。jsdomは配置計算を持たないため、
+ * HTML操作について座標0を合格根拠にせず、表示中・root内・fixedでないという
+ * native focus scrollの前提を検査する。実機で外れた紙の12番目だけは、CDP実測
+ * top=-32.16 / bottom=-12.31を回帰モデルにし、製品のfocus handlerが最寄りの
+ * .paper-position-step.scrollTopを動かしてfocus輪ぶん8pxまで画面内へ戻すかを見る。
+ */
+function auditFocusViewport(
+  state: TenStateCase,
+  root: HTMLElement,
+  target: FocusTarget,
+): FocusViewportIssue | null {
+  const operation = operationLedgerId(target);
+  if (!root.contains(target)) {
+    return { state: state.label, operation, reason: "状態rootの外にあります" };
+  }
+  if (!isDisplayedFocusTarget(target)) {
+    return { state: state.label, operation, reason: "表示されていません" };
+  }
+  if (
+    (target instanceof HTMLElement || target instanceof SVGElement) &&
+    target.style.position === "fixed"
+  ) {
+    return { state: state.label, operation, reason: "fixed配置です" };
+  }
+
+  const isTwelfthPaperHandle =
+    target.getAttribute("data-paper-position-handle") === "12";
+  if (!isTwelfthPaperHandle) {
+    focusTarget(target);
+    return null;
+  }
+
+  const step = target.closest<HTMLElement>(".paper-position-step");
+  if (step === null) {
+    return { state: state.label, operation, reason: "縦送りの親がありません" };
+  }
+  const initialScrollTop = 100;
+  const measuredTop = -32.16;
+  const measuredHeight = 19.85;
+  const focusRingInset = 8;
+  step.scrollTop = initialScrollTop;
+  Object.defineProperty(step, "getBoundingClientRect", {
+    configurable: true,
+    value: () => modeledRect(0, 350, 500),
+  });
+  Object.defineProperty(target, "getBoundingClientRect", {
+    configurable: true,
+    value: () =>
+      modeledRect(
+        measuredTop - (step.scrollTop - initialScrollTop),
+        measuredHeight,
+      ),
+  });
+
+  const active = document.activeElement as HTMLElement | SVGElement | null;
+  if (active !== null && "blur" in active && typeof active.blur === "function") {
+    act(() => active.blur());
+  }
+  focusTarget(target);
+  const viewport = step.getBoundingClientRect();
+  const focused = target.getBoundingClientRect();
+  if (
+    focused.top < viewport.top + focusRingInset ||
+    focused.bottom > viewport.bottom - focusRingInset
+  ) {
+    return {
+      state: state.label,
+      operation,
+      reason: "focus後もfocus輪を含めて表示範囲内へ戻りません",
+      top: focused.top,
+      bottom: focused.bottom,
+      scrollTop: step.scrollTop,
+    };
+  }
+  return null;
+}
+
 function dialog(): HTMLElement {
   return screen.getByRole("dialog");
 }
@@ -1904,6 +2005,108 @@ describe("5-E: 固定10状態のキーボード検査", () => {
         ({ ledgerId }) => ledgerId === "div:展開図に表示している手順",
       ),
     ).toHaveLength(1);
+  });
+
+  it("10状態の147 Tab停止位置を構造監査し、既知の負座標focusを表示範囲へ戻す", () => {
+    const audited: string[] = [];
+    const issues: FocusViewportIssue[] = [];
+    const originalInnerWidth = Object.getOwnPropertyDescriptor(
+      window,
+      "innerWidth",
+    );
+    const originalInnerHeight = Object.getOwnPropertyDescriptor(
+      window,
+      "innerHeight",
+    );
+
+    try {
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        value: 500,
+      });
+      Object.defineProperty(window, "innerHeight", {
+        configurable: true,
+        value: 350,
+      });
+      for (const state of TEN_STATES) {
+        cleanup();
+        useAppStore.setState(initialStoreState, true);
+        state.arrange();
+        render(state.node());
+        const root = state.root();
+        const targets = focusableElements(root);
+        expect(targets.map(operationLedgerId)).toEqual(
+          EXPECTED_OPERATION_LEDGER[state.id],
+        );
+        for (const target of targets) {
+          audited.push(`${state.id}:${operationLedgerId(target)}`);
+          const issue = auditFocusViewport(state, root, target);
+          if (issue !== null) issues.push(issue);
+        }
+      }
+
+      // 同じ画面外モデルでも通常幅では製品側が縦位置を動かさないことを固定する。
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        value: 1000,
+      });
+      cleanup();
+      useAppStore.setState(initialStoreState, true);
+      const paperState = TEN_STATES.find(
+        (state) => state.id === 5,
+      );
+      if (paperState === undefined)
+        throw new Error("紙上12個の固定状態がありません");
+      paperState.arrange();
+      render(paperState.node());
+      const paperRoot = paperState.root();
+      const paperHandle = paperRoot.querySelector<FocusTarget>(
+        '[data-paper-position-handle="12"]',
+      );
+      const paperStep = paperRoot.querySelector<HTMLElement>(
+        ".paper-position-step",
+      );
+      if (paperHandle === null || paperStep === null)
+        throw new Error("通常幅を確認する紙の丸印と縦送り領域がありません");
+      paperStep.scrollTop = 100;
+      Object.defineProperty(paperStep, "getBoundingClientRect", {
+        configurable: true,
+        value: () => modeledRect(0, 350, 500),
+      });
+      Object.defineProperty(paperHandle, "getBoundingClientRect", {
+        configurable: true,
+        value: () => modeledRect(-32.16, 19.85),
+      });
+      const activeAtNormalWidth = document.activeElement as
+        | HTMLElement
+        | SVGElement
+        | null;
+      if (
+        activeAtNormalWidth !== null &&
+        "blur" in activeAtNormalWidth &&
+        typeof activeAtNormalWidth.blur === "function"
+      ) {
+        act(() => activeAtNormalWidth.blur());
+      }
+      focusTarget(paperHandle);
+      expect(paperStep.scrollTop, "通常1000pxでは縦位置を変えません").toBe(
+        100,
+      );
+    } finally {
+      if (originalInnerWidth === undefined)
+        Reflect.deleteProperty(window, "innerWidth");
+      else Object.defineProperty(window, "innerWidth", originalInnerWidth);
+      if (originalInnerHeight === undefined)
+        Reflect.deleteProperty(window, "innerHeight");
+      else Object.defineProperty(window, "innerHeight", originalInnerHeight);
+    }
+
+    expect(audited).toHaveLength(147);
+    expect(new Set(audited).size).toBe(147);
+    expect(
+      issues,
+      "構造147件を全数監査し、実機で再現した負座標モデル1件はfocus後に表示範囲へ戻します。実座標全数はCDPで測ります。",
+    ).toEqual([]);
   });
 
   it("radioの全6選択肢は、名前付き台帳と無効状態まで完全一致する", () => {

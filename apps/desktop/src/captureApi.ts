@@ -2,7 +2,7 @@ import type { RefObject } from "react";
 import {
   captureViewer3DReadback,
   type Viewer3DReadback,
-} from "./components/Viewer3D/sceneBuilder";
+} from "./captureReadbackBridge";
 import { TECHNIQUE_LABEL } from "./lib/techniques";
 import { useAppStore, type ToolId } from "./store/appStore";
 
@@ -120,6 +120,8 @@ declare global {
 interface FitRefs {
   fit2d: RefObject<(() => void) | null>;
   fit3d: RefObject<(() => void) | null>;
+  /** 遅れて読む3D本体を要求し、実sceneの登録完了まで待つ。 */
+  ensureViewer3d: () => Promise<void>;
 }
 
 const CAPTURE_VIEW_ATTRIBUTE = "data-origami3-capture-view";
@@ -254,7 +256,11 @@ function setCaptureView(view: CaptureView): void {
  * 通常UIには見た目も操作も足さず、CDPのRuntime.evaluateから呼ぶ口だけを公開する。
  * React StrictModeの再マウントでも、cleanupが自分のAPIだけを取り外す。
  */
-export function installCaptureApi({ fit2d, fit3d }: FitRefs): () => void {
+export function installCaptureApi({
+  fit2d,
+  fit3d,
+  ensureViewer3d,
+}: FitRefs): () => void {
   const generation = createCaptureGeneration();
   let heartbeat = 0;
   const api: Origami3CaptureApi = {
@@ -299,6 +305,9 @@ export function installCaptureApi({ fit2d, fit3d }: FitRefs): () => void {
 
     async setView(view) {
       setCaptureView(view);
+      if (view === "3d" || view === "both" || view === "normal") {
+        await ensureViewer3d();
+      }
       await nextPaint();
       if (view === "3d" || view === "both" || view === "normal") {
         fit3d.current?.();
