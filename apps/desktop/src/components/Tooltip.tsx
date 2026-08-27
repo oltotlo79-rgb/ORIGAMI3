@@ -188,6 +188,19 @@ export function TooltipHost() {
       reveal(focusedElement ?? hoveredElement);
     };
 
+    const hideIfActiveAnchorWasRemoved = () => {
+      const element = activeElementRef.current;
+      if (!element || element.isConnected) return;
+      if (hoveredElement === element) hoveredElement = null;
+      if (focusedElement === element) focusedElement = null;
+      activeElementRef.current = null;
+      activeTextRef.current = "";
+      setActive(null);
+    };
+
+    const observer = new MutationObserver(hideIfActiveAnchorWasRemoved);
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+
     document.addEventListener("mouseover", onMouseOver);
     document.addEventListener("mouseout", onMouseOut);
     document.addEventListener("focusin", onFocusIn);
@@ -197,6 +210,7 @@ export function TooltipHost() {
       document.removeEventListener("mouseout", onMouseOut);
       document.removeEventListener("focusin", onFocusIn);
       document.removeEventListener("focusout", onFocusOut);
+      observer.disconnect();
     };
   }, []);
 

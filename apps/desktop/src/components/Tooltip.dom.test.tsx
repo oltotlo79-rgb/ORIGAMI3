@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { TooltipHost } from "./Tooltip";
 
 function rect(
@@ -114,5 +114,35 @@ describe("共通の操作吹き出し", () => {
     expect(Number.parseFloat(tooltip.style.top)).toBeGreaterThanOrEqual(8);
     expect(Number.parseFloat(tooltip.style.left) + 100).toBeLessThanOrEqual(232);
     expect(Number.parseFloat(tooltip.style.top) + 40).toBeLessThanOrEqual(132);
+  });
+
+  it("hides without pointer movement when the displayed anchor unmounts", async () => {
+    const { rerender } = render(
+      <>
+        <div>
+          <button type="button" data-tooltip="全部の折り目を動かす割合">
+            一斉折りの割合
+          </button>
+        </div>
+        <TooltipHost />
+      </>,
+    );
+
+    const anchor = screen.getByRole("button", { name: "一斉折りの割合" });
+    fireEvent.mouseOver(anchor);
+    expect(screen.getByRole("tooltip").textContent).toBe(
+      "全部の折り目を動かす割合",
+    );
+
+    rerender(
+      <>
+        <div />
+        <TooltipHost />
+      </>,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryAllByRole("tooltip")).toHaveLength(0);
+    });
   });
 });
