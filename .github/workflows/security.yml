@@ -13,6 +13,7 @@ on:
 permissions:
   contents: read
   pull-requests: read
+  security-events: write
 
 concurrency:
   group: security-${{ github.workflow }}-${{ github.ref }}
@@ -137,7 +138,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "cargo audit found an advisory that is not covered by an active policy exception" }
 
       # The readiness-only check deliberately remains red while an exact Node version,
-      # the CodeQL commit SHA, release publication integration, or the known npm high assessment is unresolved.
+      # release publication integration, or the known npm high assessment is unresolved.
       - name: Report unresolved supply-chain readiness blockers
         if: ${{ always() }}
         shell: pwsh
@@ -257,37 +258,66 @@ jobs:
     name: Code analysis action reference evidence
     runs-on: windows-latest
     steps:
-      - name: Resolve and record the v3 commit without enabling the action
+      - name: Confirm the reviewed v3 action reference
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $references = @(git ls-remote https://github.com/github/codeql-action.git "refs/tags/v3" "refs/tags/v3^{}")
-          if ($LASTEXITCODE -ne 0 -or $references.Count -eq 0) {
-            throw "Could not resolve github/codeql-action v3 from GitHub. No action was enabled."
+          $policy = Get-Content -LiteralPath ".github/security-policy.json" -Raw -Encoding UTF8 |
+            ConvertFrom-Json
+          $expectedSha = "6f5948dfacef28e207b48d0905cf90c03365536d"
+          $toolPin = $policy.toolPins.codeql
+          $analysis = $policy.staticAnalysis.javascriptTypescript
+          if ($toolPin.commitSha -ne $expectedSha -or $analysis.commitSha -ne $expectedSha) {
+            throw "security-policy.json does not contain the reviewed CodeQL v3 commit SHA."
           }
-          $dereferenced = @($references | Where-Object { $_ -match "^[0-9a-f]{40}\s+refs/tags/v3\^\{\}$" })
-          $direct = @($references | Where-Object { $_ -match "^[0-9a-f]{40}\s+refs/tags/v3$" })
-          $selected = if ($dereferenced.Count -eq 1) { $dereferenced[0] } elseif ($direct.Count -eq 1) { $direct[0] } else { $null }
-          if ($null -eq $selected) {
-            throw "github/codeql-action v3 did not resolve to exactly one immutable commit; no action was enabled."
+          if ($toolPin.commitShaVerified -ne $true -or $analysis.commitShaVerified -ne $true -or
+              $toolPin.querySuite -ne "security-extended" -or $analysis.querySuite -ne "security-extended") {
+            throw "CodeQL policy record is not verified security-extended configuration."
           }
-          $commitSha = ($selected -split "\s+")[0]
-          if ($commitSha -notmatch "^[0-9a-f]{40}$") {
-            throw "github/codeql-action v3 returned an invalid immutable commit '$commitSha'."
-          }
-          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- Code analysis action v3 evidence: https://github.com/github/codeql-action/commit/$commitSha"
-          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- The action remains disabled until this exact value is reviewed and saved in security-policy.json."
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- Code analysis action v3 evidence: https://github.com/github/codeql-action/commit/$expectedSha"
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- CodeQL query suite: security-extended"
 
   codeql_blocker:
-    name: CodeQL pin readiness
+    name: CodeQL security-extended analysis
     needs: codeql_pin_evidence
     if: ${{ always() }}
     runs-on: windows-latest
     steps:
-      - name: Stop until the CodeQL action has a verified immutable reference
+      - name: Check out the exact event revision
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          throw "Code analysis remains disabled until the exact v3 commit recorded by codeql_pin_evidence is reviewed and saved in security-policy.json."
+          $ErrorActionPreference = "Stop"
+          git init .
+          if ($LASTEXITCODE -ne 0) { throw "git init failed" }
+          git remote add origin "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY.git"
+          if ($LASTEXITCODE -ne 0) { throw "git remote add failed" }
+          $credentials = [Convert]::ToBase64String(
+            [Text.Encoding]::ASCII.GetBytes("x-access-token:$env:GH_TOKEN")
+          )
+          git -c "http.extraheader=AUTHORIZATION: basic $credentials" `
+            -c protocol.version=2 fetch --no-tags --prune --depth=1 origin `
+            "+$env:GITHUB_REF`:refs/remotes/origin/security-event"
+          if ($LASTEXITCODE -ne 0) { throw "git fetch failed" }
+          git checkout --detach --force FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { throw "git checkout failed" }
+          $actualRevision = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $actualRevision -ne $env:GITHUB_SHA) {
+            throw "Checked-out revision '$actualRevision' does not match GITHUB_SHA '$env:GITHUB_SHA'."
+          }
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@6f5948dfacef28e207b48d0905cf90c03365536d # v3 (2026-08-26)
+        with:
+          languages: javascript-typescript
+          queries: security-extended
+
+      - name: Build CodeQL database
+        uses: github/codeql-action/autobuild@6f5948dfacef28e207b48d0905cf90c03365536d # v3 (2026-08-26)
+
+      - name: Analyze CodeQL database
+        uses: github/codeql-action/analyze@6f5948dfacef28e207b48d0905cf90c03365536d # v3 (2026-08-26)
 
   dependency_update_evidence:
     name: Dependency update proposal evidence

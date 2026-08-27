@@ -460,9 +460,9 @@
       "sarifUploadRequired": true,
       "commitShaRequiredBeforeWorkflowEnablement": true,
       "enableWithoutCommitSha": false,
-      "commitSha": null,
-      "commitShaVerified": false,
-      "verificationEvidence": null,
+      "commitSha": "6f5948dfacef28e207b48d0905cf90c03365536d",
+      "commitShaVerified": true,
+      "verificationEvidence": "2026-08-27 GitHub public API: GET https://api.github.com/repos/github/codeql-action/git/ref/tags/v3 returned annotated tag object 5ba2889ada762081db2c4f32a729827dce632c7b; GET https://api.github.com/repos/github/codeql-action/git/tags/5ba2889ada762081db2c4f32a729827dce632c7b returned v3 tagger.date 2026-08-26T17:07:17Z and commit 6f5948dfacef28e207b48d0905cf90c03365536d",
       "commitShaResolutionStage": "10-A"
     },
     "rust": {
@@ -494,9 +494,9 @@
       "querySuite": "security-extended",
       "workflowReferenceRule": "full-40-character-commit-sha",
       "floatingMainMasterLatestAllowed": false,
-      "commitSha": null,
-      "commitShaVerified": false,
-      "verificationEvidence": null,
+      "commitSha": "6f5948dfacef28e207b48d0905cf90c03365536d",
+      "commitShaVerified": true,
+      "verificationEvidence": "2026-08-27 GitHub public API: GET https://api.github.com/repos/github/codeql-action/git/ref/tags/v3 returned annotated tag object 5ba2889ada762081db2c4f32a729827dce632c7b; GET https://api.github.com/repos/github/codeql-action/git/tags/5ba2889ada762081db2c4f32a729827dce632c7b returned v3 tagger.date 2026-08-26T17:07:17Z and commit 6f5948dfacef28e207b48d0905cf90c03365536d",
       "resolutionStage": "10-A"
     },
     "sbom": {
