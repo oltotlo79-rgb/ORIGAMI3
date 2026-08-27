@@ -1,4 +1,4 @@
-// M2.T2-6b.C05: automatic pull gesture acceptance.
+// M2.T2-6b.C05: direct grab-to-fold acceptance.
 // `prepare` is offline. `verify` connects only to an already-running dedicated desktop.exe.
 
 import assert from "node:assert/strict";
@@ -28,15 +28,17 @@ async function verify() {
       await api.openDocument(input.fixturePath);
       await api.setView("normal");
       await api.waitForStable();
-      const tool = document.querySelector('[data-testid="tool-pull"]');
-      if (!(tool instanceof HTMLButtonElement)) throw new Error("pull tool is unavailable");
+      const tool = document.querySelector('[data-testid="tool-fold"]');
+      if (!(tool instanceof HTMLButtonElement)) throw new Error("fold tool is unavailable");
       tool.click();
       await api.waitForStable();
+      if (api.getInteractionState().activeTool !== "fold") throw new Error("fold tool did not become active");
       const canvas = document.querySelector('canvas[data-testid="viewer3d-canvas"]');
       if (!(canvas instanceof HTMLCanvasElement)) throw new Error("3D canvas is unavailable");
       const box = canvas.getBoundingClientRect();
       if (!(box.width > 0 && box.height > 0)) throw new Error("3D canvas has no measurable area");
-      const before = api.getDocumentInfo();
+      const interaction = api.getInteractionState();
+      const before = { ...api.getDocumentInfo(), edgeCount: interaction.document.edgeCount };
       return { before, box: { left: box.left, top: box.top, width: box.width, height: box.height } };
     }})(${JSON.stringify(runtime)})`);
     const point = (normalized) => ({ x: setup.box.left + setup.box.width * normalized[0], y: setup.box.top + setup.box.height * normalized[1] });
@@ -48,13 +50,23 @@ async function verify() {
     const result = await evaluate(connection, `(${async function read(before) {
       const api = window.__origami3Capture;
       await api.waitForStable();
-      const after = api.getDocumentInfo();
       const interaction = api.getInteractionState();
-      return { before, after, pull: interaction.pull };
+      const after = { ...api.getDocumentInfo(), edgeCount: interaction.document.edgeCount };
+      const expectedStep = before.stepCount + 1;
+      const timelineStep = document.querySelector(`[data-testid="timeline-step-${expectedStep}"]`);
+      return {
+        before,
+        after,
+        activeTool: interaction.activeTool,
+        grab: interaction.viewer3d.grab,
+        timelineStep: timelineStep instanceof HTMLButtonElement ? (timelineStep.textContent ?? "").replace(/\s+/gu, " ").trim() : null,
+      };
     }})(${JSON.stringify(setup.before)})`);
-    assert.equal(result.after.stepCount, result.before.stepCount + 1, "pull gesture must add exactly one step");
-    assert.ok(result.after.edgeCount > result.before.edgeCount, "pull gesture must add at least one crease edge");
-    assert.ok(result.pull.hinge === null || Number.isInteger(result.pull.hinge), "pull hinge capture is invalid");
+    assert.equal(result.after.stepCount, result.before.stepCount + 1, "direct grab must add exactly one step");
+    assert.ok(result.after.edgeCount > result.before.edgeCount, "direct grab must add at least one crease edge");
+    assert.equal(result.activeTool, "fold", "fold tool changed unexpectedly");
+    assert.equal(result.grab.active, false, "grab remained active after release");
+    assert.ok(result.timelineStep, "the added step is missing from the timeline");
     const restored = await restoreBlank(connection);
     passed(id, { runtime, result, restored });
   } finally {

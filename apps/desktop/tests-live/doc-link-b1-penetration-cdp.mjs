@@ -42,7 +42,8 @@ async function verify() {
     assert.equal(result.badgeCount, 1, "intersection fixture must show exactly one warning badge");
     assert.equal(result.guideCount, 1, "intersection fixture must show exactly one suspect-hinge guide");
     assert.ok(result.warningCount >= 1, "capture API must report at least one warning");
-    assert.ok(result.badgeClasses[0].includes("error"), "warning badge must use its error state");
+    assert.ok(result.badgeClasses[0].split(/\s+/u).includes("status-badge"), "intersection warning badge must use the status-badge state");
+    assert.ok(!result.badgeClasses[0].split(/\s+/u).includes("error"), "intersection warning badge must not use the operation-error state");
     assert.ok(result.badgeText[0].length > 0, "warning badge text must not be empty");
     const restored = await restoreBlank(connection);
     passed(id, { runtime, result, restored });
