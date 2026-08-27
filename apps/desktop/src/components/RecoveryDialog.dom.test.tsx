@@ -12,11 +12,19 @@ const INFO = {
   autosave_path: "C:\\作品\\鶴.ori3.autosave",
   document_path: "C:\\作品\\鶴.ori3",
   saved_at_ms: Date.UTC(2026, 7, 6, 3, 4),
+  candidate_id: 11,
+  step_count: 3,
 };
 
 afterEach(() => {
   cleanup();
-  useAppStore.setState({ recovery: null });
+  useAppStore.setState({
+    recovery: null,
+    recoveryChoices: [],
+    recoveryDismissed: false,
+    recoveryBusy: false,
+    recoveryOverflowNotice: null,
+  });
 });
 
 describe("復旧ダイアログ", () => {
@@ -32,8 +40,10 @@ describe("復旧ダイアログ", () => {
       screen.getByText("前回の終了が正常に行われませんでした"),
     ).not.toBeNull();
     // 更新時刻と元の作品名を添える(どの内容が戻るのか分かるように)
-    expect(screen.getByRole("dialog").textContent).toContain("復元しますか?");
+    expect(screen.getByRole("dialog").textContent).toContain("どうしますか?");
     expect(screen.getByRole("dialog").textContent).toContain("鶴.ori3");
+    expect(screen.getByRole("dialog").textContent).toContain("手順数: 3件");
+    expect(screen.getByRole("dialog").textContent).toContain(":00");
     expect(screen.getByRole("button", { name: "復元する" })).not.toBeNull();
     expect(screen.getByRole("button", { name: "破棄する" })).not.toBeNull();
   });
@@ -44,9 +54,9 @@ describe("復旧ダイアログ", () => {
     render(<RecoveryDialog />);
 
     fireEvent.click(screen.getByRole("button", { name: "復元する" }));
-    expect(resolveRecovery).toHaveBeenLastCalledWith(true);
+    expect(resolveRecovery).toHaveBeenLastCalledWith(true, 11);
     fireEvent.click(screen.getByRole("button", { name: "破棄する" }));
-    expect(resolveRecovery).toHaveBeenLastCalledWith(false);
+    expect(resolveRecovery).toHaveBeenLastCalledWith(false, 11);
   });
 
   it("時刻が分からなくても案内は出す", () => {
@@ -56,28 +66,29 @@ describe("復旧ダイアログ", () => {
     expect(fileName("/home/作品/鶴.ori3")).toBe("鶴.ori3");
   });
 
-  it("復元を最初に選び、2ボタンだけを循環し、Escapeでは判断しない", () => {
+  it("復元を最初に選び、3ボタンを循環し、Escapeでは判断しない", () => {
     const resolveRecovery = vi.fn().mockResolvedValue(undefined);
     useAppStore.setState({ recovery: INFO, resolveRecovery });
     const { container } = render(<RecoveryDialog />);
 
     const restore = screen.getByRole("button", { name: "復元する" });
     const discard = screen.getByRole("button", { name: "破棄する" });
+    const later = screen.getByRole("button", { name: "あとで確認する" });
     const dialog = screen.getByRole("dialog");
     expect(document.activeElement).toBe(restore);
-    expect(focusableElements(dialog)).toEqual([restore, discard]);
+    expect(focusableElements(dialog)).toEqual([restore, discard, later]);
     expect(container.hasAttribute("inert")).toBe(true);
 
     for (let attempt = 0; attempt < 100; attempt += 1) {
-      discard.focus();
-      fireEvent.keyDown(discard, { key: "Tab" });
+      later.focus();
+      fireEvent.keyDown(later, { key: "Tab" });
       expect(document.activeElement).toBe(restore);
 
       restore.focus();
       fireEvent.keyDown(restore, { key: "Tab", shiftKey: true });
-      expect(document.activeElement).toBe(discard);
+      expect(document.activeElement).toBe(later);
 
-      fireEvent.keyDown(discard, { key: "Escape" });
+      fireEvent.keyDown(later, { key: "Escape" });
     }
 
     expect(resolveRecovery).not.toHaveBeenCalled();
@@ -132,12 +143,35 @@ describe("復旧ダイアログ", () => {
     if (!enter.defaultPrevented) act(() => (action as HTMLButtonElement).click());
     fireEvent.keyUp(action, { key: "Enter" });
 
-    expect(resolveRecovery).toHaveBeenCalledWith(answer);
+    expect(resolveRecovery).toHaveBeenCalledWith(answer, 11);
     expect(screen.queryByRole("dialog")).toBeNull();
     await waitFor(() =>
       expect(document.activeElement).toBe(returnTarget),
     );
     expect(pointerDown).toHaveBeenCalledTimes(0);
     expect(mouseDown).toHaveBeenCalledTimes(0);
+  });
+
+  it("複数の前回の作業を区別して出し、あとで確認すると内容を消さずに閉じる", () => {
+    const second = {
+      autosave_path: "C:\\作品\\やっこさん.ori3.autosave",
+      document_path: null,
+      saved_at_ms: Date.UTC(2026, 7, 6, 3, 5, 6),
+      candidate_id: 12,
+      step_count: 8,
+    };
+    const dismissRecovery = vi.fn();
+    useAppStore.setState({
+      recovery: INFO,
+      recoveryChoices: [INFO, second],
+      dismissRecovery,
+    });
+    render(<RecoveryDialog />);
+
+    expect(screen.getByRole("dialog").textContent).toContain("2件残っています");
+    expect(screen.getByRole("dialog").textContent).toContain("まだ保存していない作品");
+    expect(screen.getByRole("dialog").textContent).toContain("手順数: 8件");
+    fireEvent.click(screen.getByRole("button", { name: "あとで確認する" }));
+    expect(dismissRecovery).toHaveBeenCalledTimes(1);
   });
 });

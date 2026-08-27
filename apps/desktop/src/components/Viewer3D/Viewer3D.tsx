@@ -123,6 +123,7 @@ export function Viewer3D({ fitRef, statusOverlays }: Props) {
   const {
     cpIndex,
     facePlacementOf,
+    facePlacements,
     planePoint,
     rawPoint,
     cpPickAt,
@@ -199,6 +200,7 @@ export function Viewer3D({ fitRef, statusOverlays }: Props) {
       measurePointFromPick,
       resolveAlignPick,
       facePlacementOf,
+      facePlacements,
     },
     view: pointerView,
     docEpoch,

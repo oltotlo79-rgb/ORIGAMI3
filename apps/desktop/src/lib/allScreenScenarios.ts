@@ -6,7 +6,11 @@ import type {
 } from "../store/appStore";
 import type { HelpChapterId } from "../help/helpTypes";
 import type { ConstructKind } from "./construct";
-import type { AlignMode, ExportKind, TechniqueKind } from "./types";
+import type {
+  AlignMode,
+  DocumentExportKind,
+  TechniqueKind,
+} from "./types";
 
 /** 実画素点検と恒久検査が共有する、製品の最小画面。 */
 export const MINIMUM_APP_VIEWPORT = { width: 1000, height: 700 } as const;
@@ -82,7 +86,8 @@ export const AUDITED_EXPORT_KINDS = [
   "CpPng",
   "DiagramPdf",
   "DiagramSvg",
-] as const satisfies readonly ExportKind[];
+  "FoldJson",
+] as const satisfies readonly DocumentExportKind[];
 
 export const AUDITED_PROPOSAL_STEPS = [
   "skeleton",
@@ -149,7 +154,7 @@ export const HELP_CHAPTER_IDS_ARE_EXHAUSTIVE: ExactCoverage<
   typeof AUDITED_HELP_CHAPTER_IDS
 > = true;
 export const EXPORT_KINDS_ARE_EXHAUSTIVE: ExactCoverage<
-  ExportKind,
+  DocumentExportKind,
   typeof AUDITED_EXPORT_KINDS
 > = true;
 export const PROPOSAL_STEPS_ARE_EXHAUSTIVE: ExactCoverage<
@@ -180,7 +185,7 @@ export interface ScreenScenarioCoverage {
   techniqueKinds?: readonly AuditedTechniqueKind[];
   alignModes?: readonly AlignMode[];
   helpChapterIds?: readonly HelpChapterId[];
-  exportKinds?: readonly ExportKind[];
+  exportKinds?: readonly DocumentExportKind[];
   proposalSteps?: readonly ProposalStep[];
   guideSteps?: readonly GuideStep[];
   floatingUiIds?: readonly FloatingUiId[];
@@ -207,7 +212,7 @@ function scenario<const Id extends string>(
 }
 
 /**
- * 1000×700で実画素点検する100状態。
+ * 1000×700で実画素点検する101状態。
  * P=主要操作、A=案内・展開、L=手順、N=知らせ、O=開く重ね表示。
  */
 export const ALL_SCREEN_SCENARIOS = [
@@ -517,6 +522,17 @@ export const ALL_SCREEN_SCENARIOS = [
   scenario("O35", "その他の色", "color-picker", "不正な16進数の追加行も出す最大高さで見る。", {
     floatingUiIds: ["color-picker"], branches: ["color-picker-invalid-hex"],
   }),
+  scenario(
+    "O36",
+    "書き出し・ほかの折り紙ソフトのファイル",
+    "dialog",
+    "折り目や折る手順を、ほかの折り紙ソフトで使える形にする説明を表示する。",
+    {
+      floatingUiIds: ["export-dialog"],
+      exportKinds: ["FoldJson"],
+      branches: ["export-fold-json"],
+    },
+  ),
 ] as const;
 
 export type ScreenScenarioId = (typeof ALL_SCREEN_SCENARIOS)[number]["id"];

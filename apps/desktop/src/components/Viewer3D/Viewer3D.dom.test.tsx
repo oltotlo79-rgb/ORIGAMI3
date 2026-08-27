@@ -1286,12 +1286,14 @@ describe("Viewer3D(合わせて折る)", () => {
   it("線と線を選ぶと、解が2つあることをヒントに出す", () => {
     useAppStore.getState().beginAlign("lineLine");
     const canvas = renderViewer();
-    click(canvas, 200, 321); // 下の辺 (0,0)-(1,0)
-    click(canvas, 79, 200); // 左の辺 (0,1)-(0,0)
+    // 下辺と左辺では外角二等分線が紙と1点でしか交わらず、正長clipできない。
+    // 紙内部で両方の二等分線を正長にできる補助線と対角線を使う。
+    clickCanvas(canvas, [0.5, 0.1, 0]);
+    clickCanvas(canvas, [0.5, 0.5, 0]);
     expect(useAppStore.getState().alignDraft?.solutions).toHaveLength(2);
     expect(useAppStore.getState().alignDraft?.cpPicks).toEqual([
-      { kind: "edge", id: 0 },
-      { kind: "edge", id: 3 },
+      { kind: "edge", id: 6 },
+      { kind: "edge", id: 5 },
     ]);
     expect(screen.getByRole("status").textContent).toContain("解が2つ");
   });

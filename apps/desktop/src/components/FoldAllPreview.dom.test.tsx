@@ -222,6 +222,14 @@ describe("全部いっぺんに折ってみる画面", () => {
     ).toBe(
       "紙を順番に折った形ではないため、どの紙が上になるかは決まっていません。",
     );
+    const sameShapeExplanation =
+      "折り目の組み合わせによっては、途中でつまみを動かしても同じ形に見えることがあります。そのまま操作を続けられます。";
+    const exactTextMatches = (container: Element) =>
+      Array.from(container.querySelectorAll("*")).filter(
+        (element) => element.textContent === sameShapeExplanation,
+      );
+    expect(exactTextMatches(heading)).toHaveLength(1);
+    expect(exactTextMatches(notices)).toHaveLength(0);
     expect(notices.textContent).not.toContain(
       "どの紙が上になるかは決まっていません",
     );

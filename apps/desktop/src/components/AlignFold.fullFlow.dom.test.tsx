@@ -92,6 +92,7 @@ import { ContextPanel } from "./ContextPanel";
 import { CpEditor } from "./CpEditor/CpEditor";
 import { Timeline } from "./Timeline";
 import { Viewer3D } from "./Viewer3D/Viewer3D";
+import { keepSidePoint } from "./Viewer3D/foldDraw";
 
 type FoldThroughOp = Extract<SeqOp, { type: "FoldThrough" }>;
 type Direction = "Up" | "Down";
@@ -352,15 +353,22 @@ function fixtureView(fixture: FoldFixture): DocumentView {
 
 function foldedView(fixture: FoldFixture, operation: FoldThroughOp): DocumentView {
   // static backend snapshotを返す前に入力を検査し、operationから都合のよい結果を作らない。
+  const lineLength = Math.hypot(
+    operation.line[1][0] - operation.line[0][0],
+    operation.line[1][1] - operation.line[0][1],
+  );
+  const legacyExtended =
+    lineLength > 1 &&
+    Math.min(operation.line[0][0], operation.line[1][0]) <= 0 &&
+    Math.max(operation.line[0][0], operation.line[1][0]) >= 0.5;
+  const spatialFoldedPlane =
+    Math.abs(lineLength - 0.5) < 1e-8 &&
+    Math.abs(Math.min(operation.line[0][0], operation.line[1][0])) < 1e-8 &&
+    Math.abs(Math.max(operation.line[0][0], operation.line[1][0]) - 0.5) < 1e-8; // 旧legacy延長線だけ → z=0支持面で証明した正長0.5も同じ無限直線。
   const horizontal =
     Math.abs(operation.line[0][1] - 0.5) < 1e-8 &&
     Math.abs(operation.line[1][1] - 0.5) < 1e-8 &&
-    Math.hypot(
-      operation.line[1][0] - operation.line[0][0],
-      operation.line[1][1] - operation.line[0][1],
-    ) > 1 &&
-    Math.min(operation.line[0][0], operation.line[1][0]) <= 0 &&
-    Math.max(operation.line[0][0], operation.line[1][0]) >= 0.5;
+    (legacyExtended || spatialFoldedPlane);
   if (!horizontal || operation.keep_side_point[1] >= 0.5 || operation.target_layers !== null) {
     throw new Error("通し検査のbackend snapshotと異なるFoldThrough入力");
   }
@@ -428,6 +436,12 @@ const BOTTOM_LINE = lineTarget([0, 0], [0.5, 0]);
 const TOP_LINE = lineTarget([0, 1], [0.5, 1]);
 const RIGHT_LOWER_LINE = lineTarget([0.5, 0], [0.5, 0.5]);
 const MIDDLE_LEFT_LINE = lineTarget([0, 0.5], [0.5, 0.5]);
+const MATERIAL_BL: Vec2 = [1, 0]; // 旧folded BL [0,0] → owner面の材料vertex 2 [1,0]。
+const MATERIAL_TL: Vec2 = [1, 1]; // 旧folded TL [0,1] → owner面の材料vertex 8 [1,1]。
+const MATERIAL_LEFT_MIDDLE: Vec2 = [1, 0.5]; // 旧folded [0,.5] → owner面の材料vertex 5 [1,.5]。
+const MATERIAL_BOTTOM_LINE = lineTarget([0.5, 0], [1, 0]); // 旧world XY x=[0,.5] → 材料edge 1 x=[.5,1]。
+const MATERIAL_TOP_LINE = lineTarget([0.5, 1], [1, 1]); // 旧world XY x=[0,.5] → 材料edge 4 x=[.5,1]。
+const MATERIAL_MIDDLE_LINE = lineTarget([0.5, 0.5], [1, 0.5]); // 旧world XY x=[0,.5] → 材料edge 9 x=[.5,1]。
 
 const FLOW_CASES: AlignFlowCase[] = [
   {
@@ -435,7 +449,7 @@ const FLOW_CASES: AlignFlowCase[] = [
     label: "2点を通る",
     kinds: ["point", "point"],
     expectedPicks2d: [pointTarget(RIGHT_MIDDLE), pointTarget(LEFT_MIDDLE)],
-    expectedPicks3d: [pointTarget(RIGHT_MIDDLE), pointTarget(LEFT_MIDDLE)],
+    expectedPicks3d: [pointTarget(RIGHT_MIDDLE), pointTarget(MATERIAL_LEFT_MIDDLE)], // 旧第2点[0,.5] → 材料vertex 5 [1,.5]。
     // 3Dで見えているのは上の層(面1)なので、その層が持つ展開図の頂点が付く。
     expectedCpPicks3d: [vertexCpPick(4), vertexCpPick(5)],
     clicks2d: [P2.rightMiddle, P2.leftMiddle],
@@ -448,7 +462,7 @@ const FLOW_CASES: AlignFlowCase[] = [
     label: "点と点を合わせる",
     kinds: ["point", "point"],
     expectedPicks2d: [pointTarget(TL), pointTarget(BL)],
-    expectedPicks3d: [pointTarget(TL), pointTarget(BL)],
+    expectedPicks3d: [pointTarget(MATERIAL_TL), pointTarget(MATERIAL_BL)], // 旧folded点[0,1]/[0,0] → owner面の材料点[1,1]/[1,0]。
     expectedCpPicks3d: [vertexCpPick(8), vertexCpPick(2)],
     clicks2d: [P2.tl, P2.bl],
     clicks3d: [P3.tl, P3.bl],
@@ -460,7 +474,7 @@ const FLOW_CASES: AlignFlowCase[] = [
     label: "線と線を合わせる",
     kinds: ["line", "line"],
     expectedPicks2d: [TOP_LINE, BOTTOM_LINE],
-    expectedPicks3d: [TOP_LINE, BOTTOM_LINE],
+    expectedPicks3d: [MATERIAL_TOP_LINE, MATERIAL_BOTTOM_LINE], // 旧world XY上下辺 x=[0,.5] → CP材料辺 x=[.5,1]。
     expectedCpPicks3d: [edgeCpPick(4), edgeCpPick(1)],
     clicks2d: [P2.topLine, P2.bottomLine],
     clicks3d: [P3.topLine, P3.bottomLine],
@@ -484,7 +498,11 @@ const FLOW_CASES: AlignFlowCase[] = [
     label: "点を線に合わせる(折り目が通る点を指定)",
     kinds: ["point", "line", "point"],
     expectedPicks2d: [pointTarget(TL), BOTTOM_LINE, pointTarget(LEFT_MIDDLE)],
-    expectedPicks3d: [pointTarget(TL), BOTTOM_LINE, pointTarget(LEFT_MIDDLE)],
+    expectedPicks3d: [
+      pointTarget(MATERIAL_TL), // 旧folded [0,1] → owner面の材料vertex 8 [1,1]。
+      MATERIAL_BOTTOM_LINE, // 旧world XY x=[0,.5] → 材料edge 1 x=[.5,1]。
+      pointTarget(MATERIAL_LEFT_MIDDLE), // 旧folded [0,.5] → owner面の材料vertex 5 [1,.5]。
+    ],
     expectedCpPicks3d: [vertexCpPick(8), edgeCpPick(1), vertexCpPick(5)],
     clicks2d: [P2.tl, P2.bottomLine, P2.leftMiddle],
     clicks3d: [P3.tl, P3.bottomLine, P3.leftMiddle],
@@ -496,7 +514,12 @@ const FLOW_CASES: AlignFlowCase[] = [
     label: "2組を同時に合わせる",
     kinds: ["point", "line", "point", "line"],
     expectedPicks2d: [pointTarget(TL), BOTTOM_LINE, pointTarget(BL), TOP_LINE],
-    expectedPicks3d: [pointTarget(TL), BOTTOM_LINE, pointTarget(BL), TOP_LINE],
+    expectedPicks3d: [
+      pointTarget(MATERIAL_TL), // 旧folded [0,1] → owner面の材料vertex 8 [1,1]。
+      MATERIAL_BOTTOM_LINE, // 旧world XY x=[0,.5] → 材料edge 1 x=[.5,1]。
+      pointTarget(MATERIAL_BL), // 旧folded [0,0] → owner面の材料vertex 2 [1,0]。
+      MATERIAL_TOP_LINE, // 旧world XY x=[0,.5] → 材料edge 4 x=[.5,1]。
+    ],
     expectedCpPicks3d: [
       vertexCpPick(8),
       edgeCpPick(1),
@@ -513,7 +536,11 @@ const FLOW_CASES: AlignFlowCase[] = [
     label: "点を線に合わせて別の線と垂直に",
     kinds: ["point", "line", "line"],
     expectedPicks2d: [pointTarget(TL), BOTTOM_LINE, RIGHT_LOWER_LINE],
-    expectedPicks3d: [pointTarget(TL), BOTTOM_LINE, RIGHT_LOWER_LINE],
+    expectedPicks3d: [
+      pointTarget(MATERIAL_TL), // 旧folded [0,1] → owner面の材料vertex 8 [1,1]。
+      MATERIAL_BOTTOM_LINE, // 旧world XY x=[0,.5] → 材料edge 1 x=[.5,1]。
+      RIGHT_LOWER_LINE,
+    ],
     expectedCpPicks3d: [vertexCpPick(8), edgeCpPick(1), edgeCpPick(10)],
     clicks2d: [P2.tl, P2.bottomLine, P2.rightLower],
     clicks3d: [P3.tl, P3.bottomLine, P3.rightLower],
@@ -525,7 +552,7 @@ const FLOW_CASES: AlignFlowCase[] = [
     label: "既存の線に沿って折る",
     kinds: ["line"],
     expectedPicks2d: [MIDDLE_LEFT_LINE],
-    expectedPicks3d: [MIDDLE_LEFT_LINE],
+    expectedPicks3d: [MATERIAL_MIDDLE_LINE], // 旧world XY x=[0,.5] → 材料edge 9 x=[.5,1]。
     expectedCpPicks3d: [edgeCpPick(9)],
     clicks2d: [P2.middleLine],
     clicks3d: [P3.middleLine],
@@ -677,9 +704,17 @@ function expectTargetEquivalent(actual: AlignTarget, expected: AlignTarget): voi
   throw new Error("選択対象の種類が期待と異なる");
 }
 
-function expectSolutionPosition(line: [Vec2, Vec2]): void {
+function expectSolutionPosition(line: [Vec2, Vec2], source: "2d" | "3d"): void {
   expect(line[0][1]).toBeCloseTo(0.5, 8);
   expect(line[1][1]).toBeCloseTo(0.5, 8);
+  if (source === "3d") {
+    expect(
+      Math.hypot(line[1][0] - line[0][0], line[1][1] - line[0][1]),
+    ).toBeCloseTo(0.5, 8); // 旧legacy無限線 >1 → 共通支持面内へ正長clipした材料線0.5。
+    expect(Math.min(line[0][0], line[1][0])).toBeCloseTo(0.5, 8); // 旧min<=0 → owner面の材料境界x=.5。
+    expect(Math.max(line[0][0], line[1][0])).toBeCloseTo(1, 8); // 旧max>=.5 → owner面の材料境界x=1。
+    return;
+  }
   expect(Math.hypot(line[1][0] - line[0][0], line[1][1] - line[0][1])).toBeGreaterThan(
     1,
   );
@@ -750,7 +785,7 @@ function chooseModeAndTargets(
   testCase: AlignFlowCase,
   canvas: HTMLCanvasElement,
   source: "2d" | "3d",
-): { picks: AlignTarget[]; line: [Vec2, Vec2] } {
+): { picks: AlignTarget[]; line: [Vec2, Vec2]; foldThroughLine: [Vec2, Vec2] } {
   const clicks = source === "2d" ? testCase.clicks2d : testCase.clicks3d;
   const expectedPicks =
     source === "2d" ? testCase.expectedPicks2d : testCase.expectedPicks3d;
@@ -771,7 +806,7 @@ function chooseModeAndTargets(
   expect(draft?.solutions.length).toBeGreaterThan(0);
   const foldDraft = useAppStore.getState().foldDraft;
   if (!foldDraft) throw new Error("折り線が確定していない");
-  expectSolutionPosition(foldDraft.line);
+  expectSolutionPosition(foldDraft.line, source);
   if (source === "2d") {
     expect(draft?.cpPicks).toHaveLength(testCase.kinds.length);
     expect(draft?.cpPicks?.every((pick) => pick !== null)).toBe(true);
@@ -781,11 +816,30 @@ function chooseModeAndTargets(
     expect(draft?.cpPicks).toEqual(testCase.expectedCpPicks3d);
     expect(draft?.cpPicks?.every((pick) => pick !== null)).toBe(true);
   }
+  const foldThroughLine =
+    source === "3d"
+      ? foldDraft.spatialTarget?.foldedPlane?.line ?? null
+      : foldDraft.line;
+  if (foldThroughLine === null) {
+    throw new Error(
+      `平坦な通し検査の3D解にz=0畳み平面の証明値がない: ${JSON.stringify(foldDraft.spatialTarget)}`,
+    );
+  }
+  if (source === "3d") {
+    expectLineEquivalent(foldThroughLine, [
+      [0, 0.5],
+      [0.5, 0.5],
+    ]); // 旧material表示線x=[.5,1] → FoldThrough wireは証明済みworld x=[0,.5]。
+  }
   return {
     picks: [...(draft?.picks ?? [])],
     line: [
       [...foldDraft.line[0]] as Vec2,
       [...foldDraft.line[1]] as Vec2,
+    ],
+    foldThroughLine: [
+      [...foldThroughLine[0]] as Vec2,
+      [...foldThroughLine[1]] as Vec2,
     ],
   };
 }
@@ -803,7 +857,9 @@ function chooseDirection(direction: Direction): void {
   expect(useAppStore.getState().foldDraft?.direction).toBe(direction);
 }
 
-function chooseUpperMovingSide(line: [Vec2, Vec2]): void {
+async function chooseUpperMovingSide(
+  line: [Vec2, Vec2],
+): Promise<("left" | "right")[]> {
   const upper: Vec2 = [0.25, 0.75];
   const side =
     (line[1][0] - line[0][0]) * (upper[1] - line[0][1]) -
@@ -811,16 +867,59 @@ function chooseUpperMovingSide(line: [Vec2, Vec2]): void {
   const desired = side > 0 ? "left" : "right";
   const initial = useAppStore.getState().foldDraft?.movingSide;
   if (!initial) throw new Error("折り返す紙が決まっていない");
+  const history: ("left" | "right")[] = [];
+  const targetQueries = () =>
+    vi
+      .mocked(ipc.sequenceApply)
+      .mock.calls.map(([operation]) => operation)
+      .filter(
+        (operation): operation is Extract<SeqOp, { type: "PreviewFoldTargets" }> =>
+          operation.type === "PreviewFoldTargets",
+      );
+  const settleTargetQueryFor = async (side: "left" | "right", after: number) => {
+    const spatial = useAppStore.getState().foldDraft?.spatialTarget;
+    const hasCertifiedKeep =
+      spatial?.foldedPlane === undefined ||
+      spatial.foldedPlane === null ||
+      spatial.foldedPlane.keepPointForMovingSide[side] !== null;
+    await waitFor(() => {
+      const draft = useAppStore.getState().foldDraft;
+      const queries = targetQueries();
+      expect(draft?.foldTargetBusy).not.toBe(true);
+      expect(draft?.foldTargetInfo).not.toBeNull();
+      expect(draft?.foldTargetInfo).not.toBeUndefined();
+      if (!hasCertifiedKeep) {
+        expect(queries).toHaveLength(after); // 旧「movingSide変更ごとに1件」→ keep証人なしはIPC 0件・unavailable。反対側の値で補わない。
+        expect(draft?.foldTargetInfo?.status).toBe("unavailable");
+        return;
+      }
+      expect(queries.length).toBeGreaterThan(after);
+      expectVec2(
+        queries[queries.length - 1].keep_side_point,
+        keepSidePoint(line, side),
+      );
+    });
+    if (hasCertifiedKeep) history.push(side);
+  };
+  await settleTargetQueryFor(initial, 0);
   const reverse = tip3d().getByRole("button", { name: "反対側の紙を折り返す" });
   // 単一の反転操作が往復とも働くことを全経路で確かめてから、backend fixtureの側へそろえる。
+  let queryCount = targetQueries().length;
   fireEvent.click(reverse);
-  expect(useAppStore.getState().foldDraft?.movingSide).toBe(
-    initial === "right" ? "left" : "right",
-  );
+  const reversed = initial === "right" ? "left" : "right";
+  expect(useAppStore.getState().foldDraft?.movingSide).toBe(reversed);
+  await settleTargetQueryFor(reversed, queryCount);
+  queryCount = targetQueries().length;
   fireEvent.click(reverse);
   expect(useAppStore.getState().foldDraft?.movingSide).toBe(initial);
-  if (initial !== desired) fireEvent.click(reverse);
+  await settleTargetQueryFor(initial, queryCount);
+  if (initial !== desired) {
+    queryCount = targetQueries().length;
+    fireEvent.click(reverse);
+    await settleTargetQueryFor(desired, queryCount);
+  }
   expect(useAppStore.getState().foldDraft?.movingSide).toBe(desired);
+  return history;
 }
 
 function expectViewerMatchesFrame(content: ViewerContentProbe, frame: Frame3D): void {
@@ -858,26 +957,39 @@ async function chooseSettingsFoldAndAssert(
   testCase: AlignFlowCase,
   direction: Direction,
   selectedPicks: AlignTarget[],
-  selectedLine: [Vec2, Vec2],
+  foldThroughLine: [Vec2, Vec2],
+  previousQuerySides: ("left" | "right")[] = [],
 ): Promise<void> {
-  chooseUpperMovingSide(selectedLine);
+  const currentQuerySides = await chooseUpperMovingSide(foldThroughLine); // 旧material表示線 → 実際にFoldThroughへ渡す証明済み線。同じworld線でも鏡映owner面では端点方向が逆になるため。
+  const querySides =
+    previousQuerySides.length === 0
+      ? currentQuerySides
+      : [...previousQuerySides, ...currentQuerySides.slice(1)];
   chooseDirection(direction);
 
-  fireEvent.click(screen.getByLabelText("いちばん上の1枚"));
+  fireEvent.click(screen.getByLabelText("いちばん上の紙だけ")); // 旧「いちばん上の1枚」→最上紙とひだ1枚を区別するK枚UI文言。
   expect(useAppStore.getState().foldDraft?.target).toBe("top");
-  fireEvent.click(screen.getByLabelText("全ての層"));
+  fireEvent.click(screen.getByLabelText("この線にかかる紙を全部（既定）")); // 旧「全ての層」→K枚UIのall選択文言。
   expect(useAppStore.getState().foldDraft?.target).toBe("all");
 
   const probe = probeBeforeFold();
   fireEvent.click(panel().getByRole("button", { name: "折る" }));
-  await expectFoldApplied(testCase, direction, selectedPicks, selectedLine, probe);
+  await expectFoldApplied(
+    testCase,
+    direction,
+    selectedPicks,
+    foldThroughLine,
+    querySides,
+    probe,
+  );
 }
 
 async function expectFoldApplied(
   testCase: AlignFlowCase,
   direction: Direction,
   selectedPicks: AlignTarget[],
-  selectedLine: [Vec2, Vec2],
+  foldThroughLine: [Vec2, Vec2],
+  querySides: ("left" | "right")[],
   probe: FoldProbe,
 ): Promise<void> {
   const { setContent, contentCallsBeforeFold, positionsBeforeFold } = probe;
@@ -887,10 +999,25 @@ async function expectFoldApplied(
   await waitFor(() =>
     expect(useAppStore.getState().doc?.sequence).toHaveLength(beforeStepCount + 1),
   );
-  expect(vi.mocked(ipc.sequenceApply).mock.calls.map(([op]) => op.type)).toEqual([
+  const operations = vi.mocked(ipc.sequenceApply).mock.calls.map(([op]) => op);
+  expect(operations.map((op) => op.type)).toEqual([
+    ...querySides.map(() => "PreviewFoldTargets" as const), // 旧0回 → mount 1回＋movingSide変更ごと。all/top切替では増えない。
     "PreviewFoldThrough",
     "FoldThrough",
   ]);
+  operations.slice(0, querySides.length).forEach((operation, index) => {
+    expect(operation.type).toBe("PreviewFoldTargets");
+    if (operation.type !== "PreviewFoldTargets") return;
+    expect(Object.keys(operation).sort()).toEqual([
+      "keep_side_point",
+      "line",
+      "type",
+      "up_to",
+    ]);
+    expect(operation.up_to).toBe(beforeStepCount);
+    expect(operation.line).toEqual(foldThroughLine);
+    expectVec2(operation.keep_side_point, keepSidePoint(foldThroughLine, querySides[index]));
+  });
   const operation = vi
     .mocked(ipc.sequenceApply)
     .mock.calls.map(([op]) => op)
@@ -898,7 +1025,7 @@ async function expectFoldApplied(
   if (!operation) throw new Error("FoldThroughが送られていない");
   expect(operation.direction).toBe(direction);
   expect(operation.up_to).toBe(beforeStepCount);
-  expectLineEquivalent(operation.line, selectedLine);
+  expect(operation.line).toEqual(foldThroughLine); // 旧3D material表示線 → z=0支持面から証明したFoldThrough線。2Dは同値のまま。
   expect(operation.keep_side_point[1]).toBeLessThan(0.5);
   expect(operation.target_layers).toBeNull();
   expect(operation.accept_additional_crease).toBe(false);
@@ -978,11 +1105,11 @@ async function foldWith3dDirectionTip(
   testCase: AlignFlowCase,
   direction: Direction,
   selectedPicks: AlignTarget[],
-  selectedLine: [Vec2, Vec2],
+  foldThroughLine: [Vec2, Vec2],
 ): Promise<void> {
   const tip = tip3d();
   // 折り返す紙は自動で決まり、必要な反転も黄色が見える3Dの札だけで行える。
-  chooseUpperMovingSide(selectedLine);
+  const querySides = await chooseUpperMovingSide(foldThroughLine); // 旧material表示線 → 実際のFoldThrough線。鏡映owner面でも黄色側とkeep点を同じ向きで照合する。
 
   const valley = tip.getByRole("button", { name: "手前へ折る(谷)" });
   const mountain = tip.getByRole("button", { name: "向こうへ折る(山)" });
@@ -1006,7 +1133,14 @@ async function foldWith3dDirectionTip(
 
   const probe = probeBeforeFold();
   fireEvent.click(tip.getByRole("button", { name: "折る" }));
-  await expectFoldApplied(testCase, direction, selectedPicks, selectedLine, probe);
+  await expectFoldApplied(
+    testCase,
+    direction,
+    selectedPicks,
+    foldThroughLine,
+    querySides,
+    probe,
+  );
 }
 
 beforeEach(() => {
@@ -1089,7 +1223,8 @@ describe("合わせて折る: 選択から折り上がりまで", () => {
       testCase,
       testCase.direction3d,
       selected.picks,
-      selected.line,
+      selected.foldThroughLine,
+      ["left", "right", "left"],
     );
   });
 
@@ -1134,7 +1269,7 @@ describe("合わせて折る: 選択から折り上がりまで", () => {
       testCase,
       testCase.direction3d,
       selected.picks,
-      selected.line,
+      selected.foldThroughLine,
     );
     expect(useAppStore.getState().drivers.size).toBe(0);
   });
@@ -1151,7 +1286,7 @@ describe("合わせて折る: 選択から折り上がりまで", () => {
         testCase,
         testCase.direction2d,
         selected.picks,
-        selected.line,
+        selected.foldThroughLine,
       );
     },
   );
@@ -1168,7 +1303,7 @@ describe("合わせて折る: 選択から折り上がりまで", () => {
         testCase,
         testCase.direction3d,
         selected.picks,
-        selected.line,
+        selected.foldThroughLine,
       );
     },
   );
@@ -1185,7 +1320,7 @@ describe("合わせて折る: 選択から折り上がりまで", () => {
         testCase,
         testCase.direction3d,
         selected.picks,
-        selected.line,
+        selected.foldThroughLine,
       );
     },
   );
@@ -1206,7 +1341,7 @@ describe("合わせて折る: 3Dで選ぶ間のドラッグ", () => {
       pointerDrag(viewerCanvas, P3.topLine, movePx);
       const draft = useAppStore.getState().alignDraft;
       expect(draft?.picks).toHaveLength(1);
-      expectTargetEquivalent(draft!.picks[0], TOP_LINE);
+      expectTargetEquivalent(draft!.picks[0], MATERIAL_TOP_LINE); // 旧world XY TOP_LINE → 材料edge 4。
       expect(draft?.cpPicks?.[0]).toEqual(edgeCpPick(4));
     },
   );
@@ -1220,7 +1355,7 @@ describe("合わせて折る: 3Dで選ぶ間のドラッグ", () => {
       pointerDrag(viewerCanvas, P3.tl, movePx);
       const draft = useAppStore.getState().alignDraft;
       expect(draft?.picks).toHaveLength(1);
-      expectTargetEquivalent(draft!.picks[0], pointTarget(TL));
+      expectTargetEquivalent(draft!.picks[0], pointTarget(MATERIAL_TL)); // 旧folded TL → 材料vertex 8。
       expect(draft?.cpPicks?.[0]).toEqual(vertexCpPick(8));
     },
   );
@@ -1292,7 +1427,7 @@ describe("合わせて折る: 3Dで選ぶ間のドラッグ", () => {
     });
     const draft = useAppStore.getState().alignDraft;
     expect(draft?.picks).toHaveLength(1);
-    expectTargetEquivalent(draft!.picks[0], TOP_LINE);
+    expectTargetEquivalent(draft!.picks[0], MATERIAL_TOP_LINE); // 旧world XY TOP_LINE → 材料edge 4。押下保持の期待は不変。
     expect(draft?.cpPicks?.[0]).toEqual(edgeCpPick(4));
   });
 });

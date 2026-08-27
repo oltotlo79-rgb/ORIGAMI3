@@ -11,6 +11,10 @@ import {
   type FoldLine,
 } from "../../lib/alignFold";
 import type { MirrorAxisChoice, MirrorAxisPreset } from "../../lib/mirror";
+import type {
+  SpatialAlignTarget,
+  SpatialFoldTarget,
+} from "../../lib/spatialAlignTypes";
 import type { TechniqueLayerPreset } from "../../lib/techniqueLayers";
 import { foldPoseInputFromDrivers } from "../../lib/poseStep";
 import type {
@@ -26,6 +30,7 @@ import type {
   EditOp,
   Face,
   FoldDirection,
+  FoldIssue,
   FoldTargetInfo,
   FoldThroughProposal,
   Frame3D,
@@ -74,6 +79,29 @@ export type FoldTargetSelection =
 
 export type FoldTarget = FoldTargetSelection["target"];
 
+/** 3D担当が同じspatial solutionから得る、保存しない材料wire入力。 */
+export interface SpatialMaterialFoldInput {
+  materialLine: [Vec2, Vec2];
+  materialKeepSidePoint: Vec2;
+}
+
+/** 動かす側を選んだ後も同じsolutionの材料値を使うための一時組。 */
+export interface SpatialMaterialForMovingSide {
+  left: SpatialMaterialFoldInput | null;
+  right: SpatialMaterialFoldInput | null;
+}
+
+/**
+ * `pickAlignTarget()`第4引数。3D側で同じ共通chartを解いた結果だけを受ける。
+ * 配列はlegacy `solveAlign()`の解と同じindexで、欠落はnullとしてfail-closedにする。
+ */
+export interface SpatialAlignPickResult {
+  target: SpatialAlignTarget | null;
+  solutions: (SpatialFoldTarget | null)[];
+  materialSolutions?: (SpatialMaterialForMovingSide | null)[];
+  reason: string | null;
+}
+
 interface FoldDraftCore {
   line: [Vec2, Vec2];
   direction: FoldDirection;
@@ -85,6 +113,10 @@ interface FoldDraftCore {
   foldTargetInfo?: FoldTargetInfo | null;
   /** `PreviewFoldTargets`の応答待ち。作品や折り手順には保存しない。 */
   foldTargetBusy?: boolean;
+  /** 3D表示用の選択解。propertyの存在がspatial経路を表し、nullならfallback禁止。 */
+  spatialTarget?: SpatialFoldTarget | null;
+  /** 選択解と同じindexから得た材料wire値。Documentへは保存しない。 */
+  spatialMaterialForMovingSide?: SpatialMaterialForMovingSide | null;
 }
 
 export type FoldDraft = FoldDraftCore & FoldTargetSelection;
@@ -121,9 +153,19 @@ export interface AlignDraft {
   mode: AlignMode;
   picks: AlignTarget[];
   cpPicks?: (AlignCpPick | null)[];
+  /** 3Dで選んだ値。legacy入力を混ぜた位置はnullのまま保持する。 */
+  spatialPicks?: (SpatialAlignTarget | null)[];
+  /** legacy解、または材料値を証明できたspatial解の一時2D線。 */
   solutions: FoldLine[];
+  /** `solutions`と同じindexの3D解。欠落した解はnullでfallbackしない。 */
+  spatialSolutions?: (SpatialFoldTarget | null)[];
+  /** `spatialSolutions`と同じindexの材料wire値。 */
+  spatialMaterialSolutions?: (SpatialMaterialForMovingSide | null)[];
+  /** denseな`solutions` indexからraw spatial arraysの同一indexへの対応。 */
+  spatialSolutionIndices?: number[];
   solutionIndex: number;
   reason: string | null;
+  spatialReason?: string | null;
 }
 
 export type AlignCpPick =
@@ -279,13 +321,14 @@ export function alignFoldDraft(
   state: { docEpoch: number; doc: Document | null; currentStep: number | null },
   line: FoldLine,
   picks: AlignTarget[],
+  movingSideOverride?: FoldDraft["movingSide"],
 ): FoldDraft | null {
   if (!state.doc || picks.length === 0) return null;
   return {
     line,
     direction: "Up",
     target: "all",
-    movingSide: initialMovingSide(line, picks[0]),
+    movingSide: movingSideOverride ?? initialMovingSide(line, picks[0]),
     docEpoch: state.docEpoch,
     stepCount: state.doc.sequence.length,
     upTo: foldInsertAt(state),
@@ -382,6 +425,8 @@ export interface DocumentSliceState {
   stepCreases: StepCreases[];
   faces: Face[];
   warnings: string[];
+  /** ほかの折り紙ソフトのファイルを読み込んだ際の注意。通常警告と混ぜない。 */
+  foldIssues: FoldIssue[];
   flatFoldViolations: number[];
   violations: number[];
   selection: Selection;
@@ -430,6 +475,7 @@ export interface DocumentSliceActions {
     target: AlignTarget,
     cursor?: Vec2 | null,
     cpPick?: AlignCpPick | null,
+    spatial?: SpatialAlignPickResult,
   ) => void;
   nextAlignSolution: () => void;
   undoAlignPick: () => void;

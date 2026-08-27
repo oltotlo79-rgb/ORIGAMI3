@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   DocumentView,
   Driver,
+  FoldIssue,
   FoldStep,
   ProposalJobResult,
   ProposalProgressSnapshot,
@@ -23,6 +24,7 @@ vi.mock("../ipc/client", () => ({
   documentNew: vi.fn(),
   documentOpen: vi.fn(),
   documentSave: vi.fn(),
+  documentExport: vi.fn(),
   editApply: vi.fn(),
   editApplyBatch: vi.fn(),
   editUndo: vi.fn(),
@@ -233,6 +235,7 @@ beforeEach(() => {
   resetPoseThrottle();
   vi.mocked(ipc.poseSolve).mockResolvedValue(makeSolveResult());
   vi.mocked(ipc.sequenceReplay).mockResolvedValue(makeReplayResult());
+  vi.mocked(ipc.documentExport).mockResolvedValue([]);
   vi.mocked(ipc.proposalProgress).mockResolvedValue(null);
   vi.mocked(ipc.proposalControl).mockImplementation((operation) =>
     Promise.resolve({
@@ -247,6 +250,7 @@ beforeEach(() => {
     faces: [],
     hinges: new Set<number>(),
     warnings: [],
+    foldIssues: [],
     violations: [],
     flatFoldViolations: [],
     selection: { edgeIds: [], vertexIds: [] },
@@ -278,6 +282,14 @@ beforeEach(() => {
     foldThroughBusy: false,
     techniqueDraft: null,
     recovery: null,
+    exportOpen: false,
+    exportKind: "CpSvg",
+    exportIncludeAux: true,
+    exportLongSide: 2048,
+    exportBusy: false,
+    exportError: null,
+    exportSavedPath: null,
+    exportFoldIssues: [],
     pinnedFolds: new Map(),
     releasedPins: [],
     angleUndoStack: [],
@@ -292,6 +304,122 @@ beforeEach(() => {
     proposalError: null,
   });
   vi.mocked(ipc.recoveryCheck).mockResolvedValue(null);
+});
+
+describe("書き出し注意の状態", () => {
+  const previousIssue: FoldIssue = {
+    severity: "warning",
+    code: "unsupported_field",
+    path: "$.previous",
+    message: "前回の書き出しで届いた生の注意",
+    original_value: "previous-raw",
+  };
+  const writtenIssues: FoldIssue[] = [
+    {
+      severity: "warning",
+      code: "unsupported_field",
+      path: "$.first",
+      message: "同じ種類の生の注意",
+      original_value: { order: 1 },
+    },
+    {
+      severity: "warning",
+      code: "unsupported_field",
+      path: "$.second",
+      message: "同じ種類の生の注意",
+      original_value: { order: 2 },
+    },
+    {
+      severity: "warning",
+      code: "unsupported_geometry",
+      path: "$.third",
+      message: "位置を調整した生の注意",
+      original_value: { order: 3 },
+    },
+  ];
+
+  it("書き出し注意は成功時に順序と重複を変えず保持する", async () => {
+    useAppStore.setState({ exportKind: "FoldJson" });
+    vi.mocked(ipc.documentExport).mockResolvedValueOnce(writtenIssues);
+
+    await useAppStore.getState().runExport("C:/出力/作品.fold");
+
+    expect(vi.mocked(ipc.documentExport)).toHaveBeenCalledWith(
+      "FoldJson",
+      "C:/出力/作品.fold",
+      { include_aux: true, png_long_side: 2048 },
+    );
+    const state = useAppStore.getState();
+    expect(state.exportFoldIssues).toEqual(writtenIssues);
+    expect(state.exportFoldIssues).toHaveLength(3);
+    expect(state.exportFoldIssues.map((issue) => issue.path)).toEqual([
+      "$.first",
+      "$.second",
+      "$.third",
+    ]);
+    expect(state.exportSavedPath).toBe("C:/出力/作品.fold");
+    expect(state.exportError).toBeNull();
+    expect(state.exportBusy).toBe(false);
+  });
+
+  it("書き出し注意は開き直しと指定変更で前回分を消す", () => {
+    useAppStore.setState({ exportFoldIssues: [previousIssue] });
+    useAppStore.getState().openExport();
+    expect(useAppStore.getState().exportFoldIssues).toEqual([]);
+
+    useAppStore.setState({ exportFoldIssues: [previousIssue] });
+    useAppStore.getState().setExportOption({ exportIncludeAux: false });
+    expect(useAppStore.getState().exportFoldIssues).toEqual([]);
+  });
+
+  it("書き出し注意は次の処理開始時に消え、完了後は新しい分だけになる", async () => {
+    const pending = deferred<FoldIssue[]>();
+    vi.mocked(ipc.documentExport).mockReturnValueOnce(pending.promise);
+    useAppStore.setState({
+      exportKind: "FoldJson",
+      exportFoldIssues: [previousIssue],
+      exportError: "前回の失敗",
+      exportSavedPath: "C:/出力/前回.fold",
+    });
+
+    const request = useAppStore.getState().runExport("C:/出力/今回.fold");
+    await flushMicrotasks();
+
+    try {
+      expect(vi.mocked(ipc.documentExport)).toHaveBeenCalledTimes(1);
+      expect(useAppStore.getState().exportBusy).toBe(true);
+      expect(useAppStore.getState().exportFoldIssues).toEqual([]);
+      expect(useAppStore.getState().exportError).toBeNull();
+      expect(useAppStore.getState().exportSavedPath).toBeNull();
+    } finally {
+      // 途中の期待が失敗しても直列化キューを塞がず、後続検査を独立させる。
+      pending.resolve([writtenIssues[2]]);
+      await request;
+    }
+    expect(useAppStore.getState().exportFoldIssues).toEqual([
+      writtenIssues[2],
+    ]);
+    expect(useAppStore.getState().exportSavedPath).toBe(
+      "C:/出力/今回.fold",
+    );
+  });
+
+  it("書き出し注意は失敗時に前回分を残さず、失敗理由と分離する", async () => {
+    useAppStore.setState({
+      exportKind: "FoldJson",
+      exportFoldIssues: [previousIssue],
+      exportSavedPath: "C:/出力/前回.fold",
+    });
+    vi.mocked(ipc.documentExport).mockRejectedValueOnce("書き込めません");
+
+    await useAppStore.getState().runExport("C:/出力/失敗.fold");
+
+    const state = useAppStore.getState();
+    expect(state.exportFoldIssues).toEqual([]);
+    expect(state.exportSavedPath).toBeNull();
+    expect(state.exportError).toBe("書き込めません");
+    expect(state.exportBusy).toBe(false);
+  });
 });
 
 describe("提案のjob別進捗", () => {
@@ -549,6 +677,85 @@ describe("appStore 直列化と応答の反映", () => {
     expect(state.errorMessage).toBeNull();
     expect(vi.mocked(ipc.sequenceReplay)).not.toHaveBeenCalled();
     expect(vi.mocked(ipc.poseSolve)).not.toHaveBeenCalled();
+  });
+
+  it("ほかの折り紙ソフトの読込注意を通常警告と分けて即時反映し、元に戻す1回で消す", async () => {
+    const restored = makeView(402);
+    const imported = makeView(403);
+    const normalWarning = "通常の計算から届いた警告";
+    const foldIssues: FoldIssue[] = [
+      {
+        severity: "warning",
+        code: "assignment_downgraded_to_aux",
+        path: "$.edges_assignment[0]",
+        message: "元の種類を補助線として読み込みました",
+        original_value: "F",
+      },
+      {
+        severity: "warning",
+        code: "assignment_downgraded_to_aux",
+        path: "$.edges_assignment[1]",
+        message: "元の種類を補助線として読み込みました",
+        original_value: "U",
+      },
+    ];
+    imported.warnings = [normalWarning];
+    imported.fold_issues = foldIssues;
+    useAppStore.setState({
+      doc: restored.doc,
+      faces: restored.faces,
+      warnings: restored.warnings,
+      foldIssues: [],
+    });
+    vi.mocked(ipc.documentOpen).mockResolvedValueOnce(imported);
+
+    await useAppStore.getState().openDocument("other.fold");
+
+    const opened = useAppStore.getState();
+    expect(opened.doc?.cp.next_edge_id).toBe(403);
+    expect(opened.foldIssues).toEqual(foldIssues);
+    expect(opened.foldIssues).toHaveLength(2);
+    expect(opened.warnings).toEqual([normalWarning]);
+    expect(opened.errorMessage).toBeNull();
+    expect(vi.mocked(ipc.editUndo)).not.toHaveBeenCalled();
+    expect(vi.mocked(ipc.sequenceReplay)).not.toHaveBeenCalled();
+    expect(vi.mocked(ipc.poseSolve)).not.toHaveBeenCalled();
+
+    vi.mocked(ipc.editUndo).mockResolvedValueOnce(restored);
+    await useAppStore.getState().undo();
+
+    const undone = useAppStore.getState();
+    expect(vi.mocked(ipc.editUndo)).toHaveBeenCalledTimes(1);
+    expect(undone.doc?.cp.next_edge_id).toBe(402);
+    expect(undone.foldIssues).toEqual([]);
+    expect(undone.warnings).toEqual([]);
+  });
+
+  it("ほかの折り紙ソフトの読込失敗では作品と以前の注意を変えない", async () => {
+    const kept = makeView(404);
+    const keptIssue: FoldIssue = {
+      severity: "warning",
+      code: "unsupported_field",
+      path: "$.file_creator",
+      message: "以前の読込で保持した注意",
+      original_value: "kept",
+    };
+    useAppStore.setState({
+      doc: kept.doc,
+      faces: kept.faces,
+      warnings: ["以前の通常警告"],
+      foldIssues: [keptIssue],
+    });
+    vi.mocked(ipc.documentOpen).mockRejectedValueOnce("読み込めませんでした");
+
+    await useAppStore.getState().openDocument("broken.fold");
+
+    const state = useAppStore.getState();
+    expect(state.doc).toBe(kept.doc);
+    expect(state.faces).toBe(kept.faces);
+    expect(state.warnings).toEqual(["以前の通常警告"]);
+    expect(state.foldIssues).toEqual([keptIssue]);
+    expect(state.errorMessage).toBe("読み込めませんでした");
   });
 });
 
@@ -2230,6 +2437,239 @@ describe("3D画面での折り操作(折り線を引いて折る)", () => {
     return view;
   }
 
+  const MATERIAL_RIGHT = {
+    materialLine: [
+      [0.1, 0.25],
+      [0.7, 0.25],
+    ] as [Vec2, Vec2],
+    materialKeepSidePoint: [0.4, 0.75] as Vec2,
+  };
+
+  function seedSpatialMaterialFold(
+    foldTargetInfo: DocumentView["fold_target_info"] = null,
+  ): void {
+    seedFolded();
+    const store = useAppStore.getState();
+    store.beginAlign("existingLine");
+    store.pickAlignTarget(
+      { kind: "line", a: LINE[0], b: LINE[1] },
+      null,
+      null,
+      {
+        target: {
+          kind: "line",
+          aWorld: [0.1, 0.25, 0.5],
+          bWorld: [0.7, 0.25, 0.5],
+          supportPlanes: [{ point: [0, 0, 0.5], normal: [0, 0, 1] }],
+          foldedLine: null,
+        },
+        solutions: [
+          {
+            lineWorld: [
+              [0.1, 0.25, 0.5],
+              [0.7, 0.25, 0.5],
+            ],
+            keepWorldForMovingSide: {
+              left: [0.4, -0.25, 0.5],
+              right: [0.4, 0.75, 0.5],
+            },
+            foldedPlane: null,
+            sideForFirstPick: { automatic: null, initial: "right" },
+          },
+        ],
+        materialSolutions: [
+          {
+            left: {
+              materialLine: [
+                [0.1, 0.25],
+                [0.7, 0.25],
+              ],
+              materialKeepSidePoint: [0.4, -0.25],
+            },
+            right: MATERIAL_RIGHT,
+          },
+        ],
+        reason: null,
+      },
+    );
+    useAppStore.getState().updateFoldDraft({ movingSide: "right" });
+    const draft = useAppStore.getState().foldDraft!;
+    useAppStore.setState({
+      foldDraft: {
+        ...draft,
+        foldTargetInfo,
+      },
+    });
+  }
+
+  const CREASE_ONLY_INFO = {
+    status: "crease_only_top" as const,
+    availableCount: 0,
+    reason: "一番上に折り目だけ。3Dでは折れない",
+    topAction: "crease_only_top" as const,
+  };
+
+  const SIGNED_MATERIAL_DRIVERS = new Map([
+    [30, 0],
+    [10, 180],
+    [50, -90],
+    [20, -180],
+    [40, 90],
+  ]);
+
+  it("3D材料照会は選択側の材料値とsigned 5角度だけを送り、world値へfallbackしない", async () => {
+    seedSpatialMaterialFold();
+    useAppStore.setState({
+      drivers: new Map(SIGNED_MATERIAL_DRIVERS),
+      poseAngles: new Map([[999, 37.25]]),
+    });
+    const response = makeStepView(2981, 1);
+    response.fold_target_info = CREASE_ONLY_INFO;
+    vi.mocked(ipc.sequenceApply).mockResolvedValue(response);
+
+    await useAppStore.getState().requestFoldTargetInfo();
+
+    expect(vi.mocked(ipc.sequenceApply)).toHaveBeenCalledTimes(1);
+    const operation = vi.mocked(ipc.sequenceApply).mock.calls[0][0];
+    expect(operation).toEqual({
+      type: "PreviewFoldTargetsOnMaterial",
+      up_to: 1,
+      material_line: MATERIAL_RIGHT.materialLine,
+      material_keep_side_point: MATERIAL_RIGHT.materialKeepSidePoint,
+      pose_before: {
+        drivers: [
+          { edge_id: 10, target_angle_deg: 180 },
+          { edge_id: 20, target_angle_deg: -180 },
+          { edge_id: 30, target_angle_deg: 0 },
+          { edge_id: 40, target_angle_deg: 90 },
+          { edge_id: 50, target_angle_deg: -90 },
+        ],
+      },
+    });
+    for (const forbidden of [
+      "line",
+      "keep_side_point",
+      "frame3d",
+      "poseAngles",
+      "warm",
+      "face",
+      "surface_rank",
+      "spatial",
+    ]) {
+      expect(operation).not.toHaveProperty(forbidden);
+    }
+    expect(useAppStore.getState().foldDraft?.foldTargetInfo).toEqual(CREASE_ONLY_INFO);
+
+    vi.clearAllMocks();
+    const draft = useAppStore.getState().foldDraft!;
+    useAppStore.setState({
+      foldDraft: {
+        ...draft,
+        foldTargetInfo: null,
+        spatialTarget: null,
+      } as unknown as typeof draft,
+    });
+    await useAppStore.getState().requestFoldTargetInfo();
+    expect(ipc.sequenceApply).not.toHaveBeenCalled();
+    expect(useAppStore.getState().foldDraft?.foldTargetInfo?.status).toBe("unavailable");
+  });
+
+  it("foldedPlane欠落は材料経路を使い、壊れた非null companionはIPCなしでfail-closedする", async () => {
+    seedSpatialMaterialFold();
+    let draft = useAppStore.getState().foldDraft!;
+    const withoutFoldedPlane = {
+      ...draft.spatialTarget!,
+    };
+    Reflect.deleteProperty(withoutFoldedPlane, "foldedPlane");
+    useAppStore.setState({
+      foldDraft: {
+        ...draft,
+        spatialTarget: withoutFoldedPlane,
+      },
+    });
+    vi.mocked(ipc.sequenceApply).mockResolvedValue(makeStepView(2983, 1));
+
+    await useAppStore.getState().requestFoldTargetInfo();
+
+    expect(vi.mocked(ipc.sequenceApply)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(ipc.sequenceApply).mock.calls[0][0]).toMatchObject({
+      type: "PreviewFoldTargetsOnMaterial",
+      material_line: MATERIAL_RIGHT.materialLine,
+      material_keep_side_point: MATERIAL_RIGHT.materialKeepSidePoint,
+    });
+
+    vi.clearAllMocks();
+    useAppStore.getState().cancelAlign();
+    seedSpatialMaterialFold();
+    draft = useAppStore.getState().foldDraft!;
+    const malformedFoldedPlane = { ...draft.spatialTarget! };
+    Reflect.set(malformedFoldedPlane, "foldedPlane", {
+      line: [[0, 0], [1, 0]],
+    });
+    useAppStore.setState({
+      foldDraft: {
+        ...draft,
+        spatialTarget: malformedFoldedPlane,
+      },
+    });
+
+    await useAppStore.getState().requestFoldTargetInfo();
+
+    expect(ipc.sequenceApply).not.toHaveBeenCalled();
+    expect(useAppStore.getState().foldDraft?.foldTargetInfo?.status).toBe(
+      "unavailable",
+    );
+  });
+
+  it("crease_only_topはPreviewなしの1要求で確定し、失敗時はdraft・drivers・Documentを保つ", async () => {
+    seedSpatialMaterialFold(CREASE_ONLY_INFO);
+    useAppStore.setState({ drivers: new Map(SIGNED_MATERIAL_DRIVERS) });
+    vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(makeStepView(2982, 3));
+
+    await useAppStore.getState().commitFoldDraft();
+
+    expect(vi.mocked(ipc.sequenceApply)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(ipc.sequenceApply).mock.calls[0][0]).toEqual({
+      type: "CreaseOnlyTop",
+      up_to: 1,
+      material_line: MATERIAL_RIGHT.materialLine,
+      material_keep_side_point: MATERIAL_RIGHT.materialKeepSidePoint,
+      direction: "Up",
+      pose_before: {
+        drivers: [
+          { edge_id: 10, target_angle_deg: 180 },
+          { edge_id: 20, target_angle_deg: -180 },
+          { edge_id: 30, target_angle_deg: 0 },
+          { edge_id: 40, target_angle_deg: 90 },
+          { edge_id: 50, target_angle_deg: -90 },
+        ],
+      },
+      alignment: {
+        mode: "existingLine",
+        picks: [{ kind: "line", a: LINE[0], b: LINE[1] }],
+      },
+    });
+    expect(useAppStore.getState().doc?.sequence).toHaveLength(3);
+    expect(useAppStore.getState().drivers.size).toBe(0);
+    expect(useAppStore.getState().foldDraft).toBeNull();
+
+    vi.clearAllMocks();
+    seedSpatialMaterialFold(CREASE_ONLY_INFO);
+    const drivers = new Map(SIGNED_MATERIAL_DRIVERS);
+    useAppStore.setState({ drivers });
+    const beforeDoc = useAppStore.getState().doc;
+    const beforeDraft = useAppStore.getState().foldDraft;
+    vi.mocked(ipc.sequenceApply).mockRejectedValueOnce("cold replayで元の紙が動きました");
+
+    await useAppStore.getState().commitFoldDraft();
+
+    expect(vi.mocked(ipc.sequenceApply)).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().doc).toEqual(beforeDoc);
+    expect(useAppStore.getState().foldDraft).toEqual(beforeDraft);
+    expect(useAppStore.getState().drivers).toEqual(drivers);
+    expect(useAppStore.getState().errorMessage).toContain("cold replay");
+  });
+
   it("平らに畳んだ状態なら、途中の手順を見ていても折れる", () => {
     seedFolded();
     expect(canFoldNow(useAppStore.getState())).toBe(true);
@@ -3321,6 +3761,35 @@ describe("自動保存からの復旧(SYS-003)", () => {
     await useAppStore.getState().resolveRecovery(true);
 
     expect(useAppStore.getState().errorMessage).toContain("見つかりませんでした");
+  });
+
+  it("複数候補では選んだ1件だけを復元し、残りはあとで確認できる", async () => {
+    const first = { ...INFO, candidate_id: 101, step_count: 4 };
+    const second = {
+      ...INFO,
+      autosave_path: "C:/作品/やっこさん.ori3.autosave",
+      document_path: null,
+      candidate_id: 102,
+      step_count: 9,
+    };
+    const view = makeView(702);
+    vi.mocked(ipc.recoveryCheck)
+      .mockResolvedValueOnce({ choices: [first, second], overflow_count: 0 })
+      .mockResolvedValueOnce({ choices: [second], overflow_count: 0 });
+    vi.mocked(ipc.recoveryRestore).mockResolvedValue(view);
+
+    await useAppStore.getState().checkRecovery();
+    expect(useAppStore.getState().recoveryChoices).toEqual([first, second]);
+
+    await useAppStore.getState().resolveRecovery(true, 101);
+    expect(vi.mocked(ipc.recoveryRestore)).toHaveBeenCalledWith(true, 101);
+    expect(useAppStore.getState().recoveryChoices).toEqual([second]);
+
+    useAppStore.getState().dismissRecovery();
+    expect(useAppStore.getState().recovery).toEqual(second);
+    expect(useAppStore.getState().recoveryDismissed).toBe(true);
+    useAppStore.getState().openRecovery();
+    expect(useAppStore.getState().recoveryDismissed).toBe(false);
   });
 });
 

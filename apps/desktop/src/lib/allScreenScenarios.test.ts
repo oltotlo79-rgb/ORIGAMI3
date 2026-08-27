@@ -194,7 +194,7 @@ const layoutChecks: Record<ScreenLayoutContract, AxisContractCheck> = {
     },
     vertical: () => {
       expectTokens(declarationBlock(".help-dialog"), ["height: 84vh", "grid-template-rows: auto minmax(0, 1fr)", "overflow: hidden"]);
-      expectTokens(declarationBlock(".help-sidebar"), ["min-height: 0", "grid-template-rows: auto auto minmax(0, 1fr) auto"]);
+      expectTokens(declarationBlock(".help-sidebar"), ["min-height: 0", "grid-template-rows: auto auto minmax(52px, 1fr) auto"]); // 緩和ではなく照合値更新: 旧 minmax(0, 1fr) → 新 minmax(52px, 1fr)。dialogs.css:371 の必要40px→確保52px（余り12px）、881be04 の意図した非圧潰条件を固定する。
       expectTokens(declarationBlock(".help-toc"), ["min-height: 0", "overflow-y: auto"]);
       expectTokens(declarationBlock(".help-content"), ["overflow-y: auto"]);
     },
@@ -217,14 +217,14 @@ const layoutChecks: Record<ScreenLayoutContract, AxisContractCheck> = {
   },
 };
 
-describe("1000×700で点検する全100画面の正本", () => {
-  it("P42・A11・L4・N8・O35が連番で、重複なく合計100件ある", () => {
+describe("1000×700で点検する全101画面の正本", () => {
+  it("P42・A11・L4・N8・O36が連番で、重複なく合計101件ある", () => {
     const ids = ALL_SCREEN_SCENARIOS.map((item) => item.id);
-    expect(ids).toHaveLength(100);
-    expect(new Set(ids).size).toBe(100);
+    expect(ids).toHaveLength(101);
+    expect(new Set(ids).size).toBe(101);
     expect(ids.every((id) => /^[PALNO]\d{2}$/u.test(id))).toBe(true);
 
-    const groups = { P: 42, A: 11, L: 4, N: 8, O: 35 } as const;
+    const groups = { P: 42, A: 11, L: 4, N: 8, O: 36 } as const;
     for (const [prefix, count] of Object.entries(groups)) {
       const numbers = ids
         .filter((id) => id.startsWith(prefix))
@@ -240,6 +240,42 @@ describe("1000×700で点検する全100画面の正本", () => {
       expect(item.notes.trim(), `${item.id}: notes`).not.toBe("");
       expect(item.coverage.branches.length, `${item.id}: branches`).toBeGreaterThan(0);
     }
+  });
+
+  it("O36は既存100画面とO35を変えず、5番目の書き出しだけを追加する", () => {
+    expect(ALL_SCREEN_SCENARIOS).toHaveLength(101);
+    expect(ALL_SCREEN_SCENARIOS[99]).toEqual({
+      id: "O35",
+      label: "その他の色",
+      layoutContract: "color-picker",
+      notes: "不正な16進数の追加行も出す最大高さで見る。",
+      coverage: {
+        floatingUiIds: ["color-picker"],
+        branches: ["color-picker-invalid-hex"],
+      },
+    });
+    expect(ALL_SCREEN_SCENARIOS[100]).toEqual({
+      id: "O36",
+      label: "書き出し・ほかの折り紙ソフトのファイル",
+      layoutContract: "dialog",
+      notes:
+        "折り目や折る手順を、ほかの折り紙ソフトで使える形にする説明を表示する。",
+      coverage: {
+        floatingUiIds: ["export-dialog"],
+        exportKinds: ["FoldJson"],
+        branches: ["export-fold-json"],
+      },
+    });
+    expect(AUDITED_EXPORT_KINDS).toEqual([
+      "CpSvg",
+      "CpPng",
+      "DiagramPdf",
+      "DiagramSvg",
+      "FoldJson",
+    ]);
+    expect(EXPORT_CHOICES.map((choice) => choice.kind)).toEqual(
+      AUDITED_EXPORT_KINDS,
+    );
   });
 
   it("型unionの正本tupleと実際の配列を、シナリオが漏れなく覆う", () => {
@@ -261,7 +297,7 @@ describe("1000×700で点検する全100画面の正本", () => {
     expect(AUDITED_TECHNIQUE_KINDS).toHaveLength(9);
     expect(AUDITED_ALIGN_MODES).toHaveLength(8);
     expect(AUDITED_HELP_CHAPTER_IDS).toHaveLength(13);
-    expect(AUDITED_EXPORT_KINDS).toHaveLength(4);
+    expect(AUDITED_EXPORT_KINDS).toHaveLength(5);
 
     expectSameMembers(covered("toolIds"), AUDITED_TOOL_IDS);
     expectSameMembers(covered("measureModes"), AUDITED_MEASURE_MODES);
@@ -293,6 +329,10 @@ describe("1000×700で点検する全100画面の正本", () => {
     expect(uniqueSorted(actual)).toEqual(uniqueSorted(AUDITED_FLOATING_UI_IDS));
     expect(uniqueSorted(actual)).toHaveLength(17);
     expectSameMembers(covered("floatingUiIds"), AUDITED_FLOATING_UI_IDS);
+  });
+
+  it("helpの縦CSS契約は目次の焦点高を52px確保する", () => {
+    layoutChecks.help.vertical();
   });
 
   it("全シナリオが1000×700の横・縦それぞれのCSS契約へ結び付く", () => {

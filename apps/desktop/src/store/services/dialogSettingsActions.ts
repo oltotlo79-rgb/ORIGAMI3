@@ -112,6 +112,10 @@ export function createDialogSettingsSlice<State extends DialogSettingsHostState>
 
   const slice: DialogSettingsSlice = {
     recovery: null,
+    recoveryChoices: [],
+    recoveryDismissed: false,
+    recoveryOverflowNotice: null,
+    recoveryBusy: false,
     exportOpen: false,
     exportKind: "CpSvg",
     exportIncludeAux: true,
@@ -119,6 +123,7 @@ export function createDialogSettingsSlice<State extends DialogSettingsHostState>
     exportBusy: false,
     exportError: null,
     exportSavedPath: null,
+    exportFoldIssues: [],
     newDialogOpen: false,
     newPaperDraft: DEFAULT_NEW_PAPER,
     display: DEFAULT_DISPLAY,
@@ -243,62 +248,144 @@ export function createDialogSettingsSlice<State extends DialogSettingsHostState>
     checkRecovery: async () => {
       // 見つからなくても普通の起動なので、失敗しても利用者へ何も出さない
       const result = await queue.run(() => ipc.recoveryCheck());
-      if (result.ok && result.value) set({ recovery: result.value });
+      if (!result.ok) return;
+      if (result.value === null) {
+        set({
+          recovery: null,
+          recoveryChoices: [],
+          recoveryDismissed: false,
+          recoveryOverflowNotice: null,
+        });
+        return;
+      }
+      const response = result.value;
+      const { choices, overflow_count: overflowCount } =
+        "choices" in response
+          ? response
+          : { choices: [response], overflow_count: 0 };
+      set({
+        recovery: choices[0] ?? null,
+        recoveryChoices: choices,
+        recoveryDismissed: false,
+        recoveryOverflowNotice:
+          overflowCount > 0
+            ? "前回までの作業を4件以上控えています。今の作業は引き続き控えています。不要な内容は「前回の作業を確認」から破棄できます。"
+            : null,
+      });
     },
 
-    resolveRecovery: async (accept) => {
-      if (get().recovery === null) return;
-      // 答えは1回きり。先に閉じてダイアログの二度押しを防ぐ
-      set({ recovery: null });
+    resolveRecovery: async (accept, candidateId) => {
+      const state = get();
+      if (state.recovery === null || state.recoveryBusy) return;
+      const choice =
+        state.recoveryChoices.find(
+          (candidate) => candidate.candidate_id === candidateId,
+        ) ?? state.recovery;
+      set({ recoveryBusy: true });
       if (!accept) {
-        const result = await queue.run(() => ipc.recoveryRestore(false));
-        if (!result.ok) fail(result.error);
+        const result = await queue.run(() =>
+          choice.candidate_id === undefined || choice.candidate_id === null
+            ? ipc.recoveryRestore(false)
+            : ipc.recoveryRestore(false, choice.candidate_id),
+        );
+        if (!result.ok) {
+          set({ recoveryBusy: false });
+          fail(result.error);
+          return;
+        }
+        await get().checkRecovery();
+        set({ recoveryBusy: false });
         return;
       }
       // 別の作品に入れ替わるので、新規・開くと同じ扱いで反映する
-      await runViewCommand(async () => {
-        const view = await ipc.recoveryRestore(true);
-        if (!view) throw "作業中だった内容が見つかりませんでした";
-        return view;
-      }, true);
+      try {
+        await runViewCommand(async () => {
+          const view =
+            choice.candidate_id === undefined || choice.candidate_id === null
+              ? await ipc.recoveryRestore(true)
+              : await ipc.recoveryRestore(true, choice.candidate_id);
+          if (!view) throw "作業中だった内容が見つかりませんでした";
+          return view;
+        }, true);
+        await get().checkRecovery();
+      } finally {
+        set({ recoveryBusy: false });
+      }
+    },
+
+    dismissRecovery: () => set({ recoveryDismissed: true }),
+
+    openRecovery: () => {
+      if (get().recoveryChoices.length > 0) set({ recoveryDismissed: false });
     },
 
     openExport: () =>
-      set({ exportOpen: true, exportError: null, exportSavedPath: null }),
+      set({
+        exportOpen: true,
+        exportError: null,
+        exportSavedPath: null,
+        exportFoldIssues: [],
+      }),
 
-    closeExport: () => set({ exportOpen: false, exportBusy: false }),
+    // 閉じても処理は続く。busyの解除は開始したrunExportだけが行う。
+    closeExport: () => set({ exportOpen: false }),
 
     // 指定を変えたら前回の「保存しました」は別の話になるので消す
     setExportOption: (patch) =>
-      set({ ...patch, exportError: null, exportSavedPath: null }),
+      set({
+        ...patch,
+        exportError: null,
+        exportSavedPath: null,
+        exportFoldIssues: [],
+      }),
 
     runExport: async (path) => {
-      await waitForFoldAllRestore();
       const state = get();
       if (state.exportBusy) return;
       if (
         state.exportKind === "CpPng" &&
         !Number.isFinite(state.exportLongSide)
       ) {
-        set({ exportError: "画像の大きさを数で入れてください" });
+        set({
+          exportError: "画像の大きさを数で入れてください",
+          exportSavedPath: null,
+          exportFoldIssues: [],
+        });
         return;
       }
-      set({ exportBusy: true, exportError: null, exportSavedPath: null });
+      // 保存filterと同じ時点の種類・指定を固定し、復帰待ち中も二重開始を防ぐ。
+      const request = {
+        kind: state.exportKind,
+        includeAux: state.exportIncludeAux,
+        pngLongSide: Math.round(state.exportLongSide),
+      };
+      set({
+        exportBusy: true,
+        exportError: null,
+        exportSavedPath: null,
+        exportFoldIssues: [],
+      });
+      await waitForFoldAllRestore();
       // 書き出しは作品を書き換えないが、直前の編集が反映された内容を出したいので
       // 直列化キューに載せる(編集 → 書き出しの順が守られる)
       const result = await queue.run(() =>
-        ipc.documentExport(state.exportKind, path, {
-          include_aux: state.exportIncludeAux,
-          png_long_side: Math.round(state.exportLongSide),
+        ipc.documentExport(request.kind, path, {
+          include_aux: request.includeAux,
+          png_long_side: request.pngLongSide,
         }),
       );
       if (result.ok) {
-        set({ exportBusy: false, exportSavedPath: path });
+        set({
+          exportBusy: false,
+          exportSavedPath: path,
+          exportFoldIssues: result.value,
+        });
       } else {
         const error = result.error;
         set({
           exportBusy: false,
           exportError: typeof error === "string" ? error : String(error),
+          exportFoldIssues: [],
         });
       }
     },

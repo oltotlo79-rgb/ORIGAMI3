@@ -4,7 +4,7 @@
 //  - 膨らみのつまみは16ms間引き経由で送られ、最後の値が必ず届く
 //  - 設定は作品(.ori3)へ保存され、「この形で仕上げる」でも一緒に確定する
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Document, DocumentView, SoftMesh, SolveResult } from "../lib/types";
 
 vi.mock("../ipc/client", () => ({
@@ -31,7 +31,9 @@ import { DEFAULT_DISPLAY } from "../lib/displayPrefs";
 
 /** 間引き(16ms)と保存待ち(400ms)の両方を過ぎるまで待つ */
 const WAIT_MS = 600;
-const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const wait = (ms: number) => vi.advanceTimersByTimeAsync(ms);
+const waitForRealClock = (ms: number) =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 function makeDoc(): Document {
   return {
@@ -80,6 +82,7 @@ function solveResult(soft: SoftMesh | null): SolveResult {
 beforeEach(() => {
   vi.clearAllMocks();
   resetPoseThrottle();
+  vi.useFakeTimers();
   useAppStore.setState({
     doc: makeDoc(),
     display: DEFAULT_DISPLAY,
@@ -97,6 +100,12 @@ beforeEach(() => {
       display: op.type === "SetDisplay" ? op.display : DEFAULT_DISPLAY,
     }),
   );
+});
+
+afterEach(() => {
+  resetPoseThrottle();
+  if (vi.isFakeTimers()) vi.clearAllTimers();
+  vi.useRealTimers();
 });
 
 describe("紙のたわみ(SIM-012)", () => {
@@ -130,13 +139,15 @@ describe("紙のたわみ(SIM-012)", () => {
 
 describe("膨らませる操作(SIM-013)", () => {
   it("つまみを続けて動かしても送るのは間引いた最後の値だけ", async () => {
+    // 間引きの実時間経路は1件だけ残し、他は偽時計で同じ契約を検査する。
+    vi.useRealTimers();
     useAppStore.setState({ display: { ...DEFAULT_DISPLAY, soft_enabled: true } });
     for (const p of [0.2, 0.4, 0.6, 0.8]) {
       useAppStore.getState().setSoft({ soft_pressure: p });
     }
     // つまみの位置はその場で映る(結果を見ながら調整できる)
     expect(useAppStore.getState().display.soft_pressure).toBe(0.8);
-    await wait(WAIT_MS);
+    await waitForRealClock(WAIT_MS);
     // 途中の値(0.2〜0.6)は1回も送られず、最後の値だけが届く
     const sent = vi
       .mocked(ipc.poseSolve)

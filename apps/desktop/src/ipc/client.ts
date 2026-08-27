@@ -18,6 +18,7 @@ import type {
   ProposalJobId,
   ProposalJobResult,
   ProposalProgressSnapshot,
+  RecoveryChoices,
   RecoveryInfo,
   ReplayResult,
   SeqOp,
@@ -116,14 +117,20 @@ export function foldAllPreview(
   });
 }
 
-/** 前回の異常終了で残った自動保存を調べる。無ければnull */
-export function recoveryCheck(): Promise<RecoveryInfo | null> {
+/** 前回の異常終了で残った、利用者が選べる作業をすべて調べる。 */
+export function recoveryCheck(): Promise<RecoveryChoices | RecoveryInfo | null> {
   return invoke("recovery_check");
 }
 
-/** accept=trueなら自動保存の内容を復元、falseなら自動保存ファイルを捨てる */
-export function recoveryRestore(accept: boolean): Promise<DocumentView | null> {
-  return invoke("recovery_restore", { accept });
+/** accept=trueなら選んだ内容を復元、falseなら選んだ内容だけを捨てる。 */
+export function recoveryRestore(
+  accept: boolean,
+  candidateId?: number | null,
+): Promise<DocumentView | null> {
+  if (candidateId === undefined || candidateId === null) {
+    return invoke("recovery_restore", { accept });
+  }
+  return invoke("recovery_restore", { accept, candidateId });
 }
 
 /** 骨格から展開図の候補を作る(最大4件)。seedを変えると別の配置が出る。

@@ -4,6 +4,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -13,12 +14,14 @@ import {
 } from "@testing-library/react";
 import { ContextPanel } from "./ContextPanel";
 import { resetPoseThrottle, useAppStore } from "../store/appStore";
-import type { Document } from "../lib/types";
+import type { Document, FoldIssue } from "../lib/types";
 import { DEFAULT_CURVE } from "../lib/curve";
 import { ALIGN_LABELS } from "../lib/alignFold";
 
 vi.mock("../ipc/client", () => ({
   documentSave: vi.fn(),
+  recoveryCheck: vi.fn(),
+  recoveryRestore: vi.fn(),
   sequenceApply: vi.fn(),
   sequenceReplay: vi.fn(),
   poseSolve: vi.fn(),
@@ -81,6 +84,7 @@ function seed(drivers: Map<number, number>, poseAngles = new Map<number, number>
     foldThroughBusy: false,
     techniqueDraft: null,
     warnings: [],
+    foldIssues: [],
     poseWarnings: [],
     replayWarnings: [],
     flatFoldViolations: [],
@@ -88,6 +92,10 @@ function seed(drivers: Map<number, number>, poseAngles = new Map<number, number>
     documentSavedPath: null,
     mirrorAxis: { kind: "paperVertical" },
     mirrorAxisNotice: null,
+    recovery: null,
+    recoveryChoices: [],
+    recoveryDismissed: false,
+    recoveryOverflowNotice: null,
     contextHelpExpanded: true,
   });
 }
@@ -113,11 +121,16 @@ afterEach(() => {
     sequenceTargets: new Map(),
     relaxations: [],
     flatFoldViolations: [],
+    foldIssues: [],
     activeAngleIntent: null,
     hoveredHinge: null,
     documentSavedPath: null,
     mirrorAxis: { kind: "paperVertical" },
     mirrorAxisNotice: null,
+    recovery: null,
+    recoveryChoices: [],
+    recoveryDismissed: false,
+    recoveryOverflowNotice: null,
     contextHelpExpanded: true,
     pinnedFolds: new Map(),
     releasedPins: [],
@@ -1321,6 +1334,135 @@ describe("平らに畳めない点の警告欄", () => {
     expect(rows[0].classList.contains("warning-text")).toBe(true);
     expect(rows[0].textContent).not.toContain("山と谷の本数");
     expect(rows[0].textContent).not.toContain("向かい合う角の和");
+  });
+});
+
+describe("ほかの折り紙ソフトのファイルを読み込んだ際の注意", () => {
+  it("作品を開いたまま全件を安全に示し、rawを出さず復旧超過通知も残す", () => {
+    seed(new Map());
+    const overflowNotice =
+      "前回までの作業を4件以上控えています。今の作業は引き続き控えています。不要な内容は「前回の作業を確認」から破棄できます。";
+    const issues: FoldIssue[] = [
+      {
+        severity: "warning",
+        code: "unsupported_field",
+        path: "$.file_frames[0].secret",
+        message: "FOLD 1.2 parser schema パーサ スキーマ raw-message",
+        original_value: { sentinel: "raw-value" },
+      },
+      {
+        severity: "warning",
+        code: "unsupported_field",
+        path: "$.file_frames[1].secret",
+        message: "FOLD 1.1 parser schema パーサ スキーマ raw-message-2",
+        original_value: { sentinel: "raw-value-2" },
+      },
+    ];
+    useAppStore.setState({
+      foldIssues: issues,
+      recoveryOverflowNotice: overflowNotice,
+    });
+
+    render(<ContextPanel />);
+
+    const status = screen.getByRole("status");
+    expect(
+      within(status).getByText(
+        "ほかの折り紙ソフトのファイルを読み込みました（注意2件）",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(status).getByText(
+        "読み込んだ内容について、次の点をご確認ください。作品は開いています。",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(status).getAllByText(
+        "このファイルに含まれる付加情報の一部は読み込まれませんでした。",
+      ),
+    ).toHaveLength(2);
+    expect(within(status).getAllByRole("listitem")).toHaveLength(2);
+    expect(screen.getByText(overflowNotice, { exact: false })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "前回の作業を確認" }),
+    ).toBeTruthy();
+    expect(useAppStore.getState().doc).not.toBeNull();
+    expect(useAppStore.getState().foldIssues).toEqual(issues);
+
+    const rendered = status.innerHTML.toLowerCase();
+    for (const forbidden of [
+      "fold 1.1",
+      "fold 1.2",
+      "parser",
+      "schema",
+      "パーサ",
+      "スキーマ",
+      "unsupported_field",
+      "file_frames",
+      "secret",
+      "raw-message",
+      "raw-value",
+    ]) {
+      expect(rendered).not.toContain(forbidden.toLowerCase());
+    }
+  });
+});
+
+describe("前回までの作業が4件以上ある知らせ", () => {
+  const notice =
+    "前回までの作業を4件以上控えています。今の作業は引き続き控えています。不要な内容は「前回の作業を確認」から破棄できます。";
+
+  function choices(count: number) {
+    return Array.from({ length: count }, (_, index) => ({
+      autosave_path: `C:\\作品\\控え${index + 1}.ori3.autosave`,
+      document_path: `C:\\作品\\控え${index + 1}.ori3`,
+      saved_at_ms: Date.UTC(2026, 7, 26, 12, 0, index),
+      candidate_id: index + 1,
+      step_count: index,
+    }));
+  }
+
+  function noticeRows(): HTMLElement[] {
+    return Array.from(
+      document.querySelectorAll<HTMLElement>(".context-messages p"),
+    ).filter((row) => row.textContent?.includes(notice));
+  }
+
+  it("持ち越しが4件以上なら既存の下部通知欄へ1件だけ出す", async () => {
+    seed(new Map());
+    vi.mocked(ipc.recoveryCheck).mockResolvedValue({
+      choices: choices(4),
+      overflow_count: 1,
+    });
+    render(<ContextPanel />);
+
+    await act(async () => {
+      await useAppStore.getState().checkRecovery();
+    });
+
+    expect(noticeRows()).toHaveLength(1);
+    act(() => useAppStore.getState().dismissRecovery());
+    expect(useAppStore.getState().recoveryDismissed).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "前回の作業を確認" }));
+    expect(useAppStore.getState().recoveryDismissed).toBe(false);
+  });
+
+  it("持ち越しが3件以下なら超過通知を出さない", async () => {
+    seed(new Map());
+    vi.mocked(ipc.recoveryCheck).mockResolvedValue({
+      choices: choices(3),
+      overflow_count: 0,
+    });
+    render(<ContextPanel />);
+
+    await act(async () => {
+      await useAppStore.getState().checkRecovery();
+    });
+
+    expect(noticeRows()).toHaveLength(0);
+    expect(
+      screen.queryByRole("button", { name: "前回の作業を確認" }),
+    ).toBeNull();
   });
 });
 

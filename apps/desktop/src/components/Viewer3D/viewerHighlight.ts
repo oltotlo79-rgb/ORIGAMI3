@@ -13,6 +13,10 @@ import type {
   Vec2,
 } from "../../lib/types";
 import type { Viewer3DInteractionCapture } from "../../captureApi";
+import type {
+  SpatialAlignTarget,
+  SpatialFoldTarget,
+} from "../../lib/spatialAlignTypes";
 import {
   foldLayers,
   foldPreviewSegments,
@@ -37,6 +41,7 @@ import {
   cpMarkSegments,
   type CpFaceIndex,
 } from "./cpPick3d";
+import { SPATIAL_REPROJECTION_EPS } from "./spatialAlign";
 
 /** 畳み平面の線分列を強調表示用の線分へ(紙より少しだけ浮かせる) */
 function toHighlight(segments: [Vec2, Vec2][]): HingeSegment[] {
@@ -45,6 +50,118 @@ function toHighlight(segments: [Vec2, Vec2][]): HingeSegment[] {
     a: new THREE.Vector3(a[0], a[1], PREVIEW_LIFT),
     b: new THREE.Vector3(b[0], b[1], PREVIEW_LIFT),
   }));
+}
+
+interface SpatialMarkPlane {
+  normal: THREE.Vector3;
+  offset: number;
+}
+
+function normalizedMarkPlane(
+  plane: Extract<SpatialAlignTarget, { kind: "point" }>["supportPlanes"][number],
+): SpatialMarkPlane | null {
+  const normal = new THREE.Vector3(...plane.normal);
+  const point = new THREE.Vector3(...plane.point);
+  const length = normal.length();
+  if (!Number.isFinite(length) || length <= 1e-18 || !point.toArray().every(Number.isFinite)) {
+    return null;
+  }
+  normal.multiplyScalar(1 / length);
+  const components = normal.toArray();
+  let largestAxis = 0;
+  for (let axis = 1; axis < 3; axis++) {
+    if (Math.abs(components[axis]) > Math.abs(components[largestAxis])) largestAxis = axis;
+  }
+  if (components[largestAxis] < 0) normal.multiplyScalar(-1);
+  const offset = normal.dot(point);
+  return Number.isFinite(offset) ? { normal, offset } : null;
+}
+
+function markPlaneForPoint(
+  target: Extract<SpatialAlignTarget, { kind: "point" }>,
+  foldTarget: SpatialFoldTarget | null,
+): SpatialMarkPlane | null {
+  const world = new THREE.Vector3(...target.world);
+  const candidates = target.supportPlanes
+    .map(normalizedMarkPlane)
+    .filter((plane): plane is SpatialMarkPlane => plane !== null)
+    .filter((plane) => {
+      if (Math.abs(plane.normal.dot(world) - plane.offset) > SPATIAL_REPROJECTION_EPS) {
+        return false;
+      }
+      return (
+        foldTarget === null ||
+        foldTarget.lineWorld.every(
+          (point) =>
+            Math.abs(plane.normal.dot(new THREE.Vector3(...point)) - plane.offset) <=
+            SPATIAL_REPROJECTION_EPS,
+        )
+      );
+    });
+  if (candidates.length === 0) return null;
+  const equivalent = (a: SpatialMarkPlane, b: SpatialMarkPlane): boolean =>
+    a.normal.distanceTo(b.normal) <= SPATIAL_REPROJECTION_EPS &&
+    Math.abs(a.offset - b.offset) <= SPATIAL_REPROJECTION_EPS;
+  for (let a = 0; a < candidates.length; a++) {
+    for (let b = a + 1; b < candidates.length; b++) {
+      if (!equivalent(candidates[a], candidates[b])) return null;
+    }
+  }
+  return [...candidates].sort((a, b) => {
+    for (const axis of ["x", "y", "z"] as const) {
+      if (a.normal[axis] !== b.normal[axis]) return a.normal[axis] - b.normal[axis];
+    }
+    return a.offset - b.offset;
+  })[0];
+}
+
+function spatialPointMark(
+  target: Extract<SpatialAlignTarget, { kind: "point" }>,
+  foldTarget: SpatialFoldTarget | null,
+): HingeSegment[] {
+  const plane = markPlaneForPoint(target, foldTarget);
+  if (!plane) return [];
+  const normal = plane.normal;
+  const reference =
+    Math.abs(normal.x) < 0.9
+      ? new THREE.Vector3(1, 0, 0)
+      : new THREE.Vector3(0, 1, 0);
+  const u = new THREE.Vector3().crossVectors(normal, reference).normalize();
+  const v = new THREE.Vector3().crossVectors(normal, u).normalize();
+  const center = new THREE.Vector3(...target.world);
+  return [u, v].map((axis) => ({
+    edgeId: -1,
+    a: center.clone().addScaledVector(axis, -CENTER_MARK),
+    b: center.clone().addScaledVector(axis, CENTER_MARK),
+  }));
+}
+
+/** spatial cycleの選択値と解を、global XYへ落とさずworld線のまま表示する。 */
+export function spatialAlignHighlightSegments(
+  picks: readonly (SpatialAlignTarget | null)[],
+  foldTarget: SpatialFoldTarget | null,
+): HingeSegment[] {
+  const segments: HingeSegment[] = [];
+  for (const target of picks) {
+    if (target === null) continue;
+    if (target.kind === "point") {
+      segments.push(...spatialPointMark(target, foldTarget));
+    } else {
+      segments.push({
+        edgeId: -1,
+        a: new THREE.Vector3(...target.aWorld),
+        b: new THREE.Vector3(...target.bWorld),
+      });
+    }
+  }
+  if (foldTarget !== null) {
+    segments.push({
+      edgeId: -1,
+      a: new THREE.Vector3(...foldTarget.lineWorld[0]),
+      b: new THREE.Vector3(...foldTarget.lineWorld[1]),
+    });
+  }
+  return segments;
 }
 
 const SPATIAL_PREVIEW_EPS = 1e-9;
@@ -625,6 +742,38 @@ export function useViewerHighlight({
     }
     // 合わせて折る: 選んだ点(十字)・線を光らせ、求まった折り線は下見に重ねる
     if (s.activeTool === "fold" && s.alignDraft && s.doc) {
+      if (s.alignDraft.spatialPicks !== undefined) {
+        const spatialTarget =
+          s.foldDraft &&
+          Object.prototype.hasOwnProperty.call(s.foldDraft, "spatialTarget")
+            ? (s.foldDraft.spatialTarget ?? null)
+            : null;
+        const spatialSegments = spatialAlignHighlightSegments(
+          s.alignDraft.spatialPicks,
+          spatialTarget,
+        );
+        const foldedPlane = spatialTarget?.foldedPlane ?? null;
+        const keep =
+          foldedPlane && s.foldDraft
+            ? foldedPlane.keepPointForMovingSide[s.foldDraft.movingSide]
+            : null;
+        if (foldedPlane && keep && s.foldDraft) {
+          // raw Frame3Dでもz=0畳み平面へ一意に戻せたときだけ、従来の黄色い紙輪郭を足す。
+          // 先頭の解線はworld表示済みなので除き、非平坦面をXYへfallbackしない。
+          spatialSegments.push(
+            ...toHighlight(
+              foldPreviewSegments(
+                foldLayers(s.frame3d, s.doc, s.faces),
+                foldedPlane.line,
+                keep,
+                s.foldDraft.target === "top",
+              ).slice(1),
+            ),
+          );
+        }
+        setHighlight(spatialSegments);
+        return;
+      }
       const segments: [Vec2, Vec2][] = [];
       for (const t of s.alignDraft.picks) {
         if (t.kind === "point") segments.push(...centerMark(t.p));

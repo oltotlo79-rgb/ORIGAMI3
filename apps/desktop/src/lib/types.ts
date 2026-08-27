@@ -717,6 +717,16 @@ export interface RecoveryInfo {
   document_path: string | null;
   /** 最後に自動保存した時刻(1970年からのミリ秒)。分からなければnull */
   saved_at_ms: number | null;
+  /** 復旧する内容を選ぶための番号。画面には表示しない。 */
+  candidate_id?: number | null;
+  /** 控えた時点の折り手順数。 */
+  step_count?: number;
+}
+
+/** recovery_check の戻り値。利用者が選べる前回までの作業と、超過件数。 */
+export interface RecoveryChoices {
+  choices: RecoveryInfo[];
+  overflow_count: number;
 }
 
 /** document_export の書き出しの種類(commands.rs::ExportKind)。

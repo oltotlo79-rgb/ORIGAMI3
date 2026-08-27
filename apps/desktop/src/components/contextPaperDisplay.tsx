@@ -144,6 +144,9 @@ export function FoldAllPreviewContent() {
           これは仮の形です
         </strong>
         <span className="hint">手順には記録されません。</span>
+        <span className="hint">
+          折り目の組み合わせによっては、途中でつまみを動かしても同じ形に見えることがあります。そのまま操作を続けられます。
+        </span>
         {preview.layerOrder === "unavailable_without_sequence" && (
           <span className="hint fold-all-layer-order-note">
             紙を順番に折った形ではないため、どの紙が上になるかは決まっていません。

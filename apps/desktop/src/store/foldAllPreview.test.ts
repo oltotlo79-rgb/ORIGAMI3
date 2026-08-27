@@ -3,6 +3,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../ipc/client", () => ({
+  documentExport: vi.fn(),
   documentSave: vi.fn(),
   documentNew: vi.fn(),
   documentOpen: vi.fn(),
@@ -786,6 +787,65 @@ describe("全部の折り目をいっぺんに動かす一時表示", () => {
     await saving;
     expect(useAppStore.getState().foldAllPreview).toBeNull();
     expect(ipc.documentSave).toHaveBeenCalledOnce();
+  });
+
+  it("復帰待ちの書き出しは開始時の種類を固定し、閉じても二重開始を許さない", async () => {
+    seed();
+    await useAppStore.getState().enterFoldAllPreview();
+    let release!: (value: ReplayResult) => void;
+    vi.mocked(ipc.sequenceReplay).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    vi.mocked(ipc.documentExport).mockResolvedValueOnce([]);
+    useAppStore.setState({
+      exportOpen: true,
+      exportKind: "FoldJson",
+      exportBusy: false,
+      exportError: null,
+      exportSavedPath: null,
+      exportFoldIssues: [],
+    });
+
+    const leaving = useAppStore.getState().leaveFoldAllPreview();
+    await vi.waitFor(() => expect(ipc.sequenceReplay).toHaveBeenCalledTimes(1));
+    const exporting = useAppStore
+      .getState()
+      .runExport("C:\\work\\after-return.fold");
+    let duplicate: Promise<void> | null = null;
+
+    try {
+      await Promise.resolve();
+      expect(useAppStore.getState().exportBusy).toBe(true);
+      expect(ipc.documentExport).not.toHaveBeenCalled();
+
+      useAppStore.getState().closeExport();
+      expect(useAppStore.getState()).toMatchObject({
+        exportOpen: false,
+        exportBusy: true,
+      });
+
+      duplicate = useAppStore
+        .getState()
+        .runExport("C:\\work\\duplicate.svg");
+      await Promise.resolve();
+      expect(ipc.documentExport).not.toHaveBeenCalled();
+    } finally {
+      release(normalReplay());
+      await leaving;
+      await exporting;
+      await duplicate;
+    }
+
+    expect(ipc.documentExport).toHaveBeenCalledOnce();
+    expect(ipc.documentExport).toHaveBeenCalledWith(
+      "FoldJson",
+      "C:\\work\\after-return.fold",
+      { include_aux: true, png_long_side: 2048 },
+    );
+    expect(useAppStore.getState().exportBusy).toBe(false);
   });
 
   it("復帰中に手順を連打しても、最後に選んだ位置だけへ移る", async () => {

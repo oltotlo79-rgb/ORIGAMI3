@@ -28,10 +28,16 @@ vi.mock("../../ipc/client", () => ({
 
 import { save } from "@tauri-apps/plugin-dialog";
 import * as ipc from "../../ipc/client";
-import { ExportDialog, EXPORT_CHOICES, NO_STEPS_REASON } from "./ExportDialog";
+import {
+  ExportDialog,
+  ExportFoldIssueNotices,
+  EXPORT_CHOICES,
+  EXPORT_FOLD_ISSUE_CONFIRMATION,
+  NO_STEPS_REASON,
+} from "./ExportDialog";
 import { exportChoicesForReadiness } from "./exportChoices";
 import { useAppStore } from "../../store/appStore";
-import type { Document } from "../../lib/types";
+import type { Document, FoldIssue } from "../../lib/types";
 
 /** 手順が `steps` 個ある作品(折り図が書き出せる状態にするための土台) */
 function docWithSteps(steps: number): Document {
@@ -69,6 +75,7 @@ beforeEach(() => {
     exportBusy: false,
     exportError: null,
     exportSavedPath: null,
+    exportFoldIssues: [],
     runExport: realRunExport,
     doc: docWithSteps(3),
   });
@@ -86,14 +93,19 @@ describe("書き出しダイアログ", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("選べる種類は展開図2つと折り図2つ", () => {
+  it("選べる種類は展開図2つ・折り図2つ・ほかのソフト用1つ", () => {
     render(<ExportDialog />);
-    expect(EXPORT_CHOICES).toHaveLength(4);
+    expect(EXPORT_CHOICES).toHaveLength(5);
     expect(EXPORT_CHOICES.map(({ kind, label, ext }) => ({ kind, label, ext }))).toEqual([
       { kind: "CpSvg", label: "展開図(SVG)", ext: "svg" },
       { kind: "CpPng", label: "展開図(PNG)", ext: "png" },
       { kind: "DiagramPdf", label: "折り図(PDF)", ext: "pdf" },
       { kind: "DiagramSvg", label: "折り図(ページごとのSVG)", ext: "svg" },
+      {
+        kind: "FoldJson",
+        label: "ほかの折り紙ソフトのファイル",
+        ext: "fold",
+      },
     ]);
     for (const c of EXPORT_CHOICES) {
       expect(screen.getByRole("radio", { name: c.label })).not.toBeNull();
@@ -102,9 +114,9 @@ describe("書き出しダイアログ", () => {
     expect(screen.queryByLabelText(/画像の大きさ/)).toBeNull();
   });
 
-  it("状態接続後にだけ、既存画面の5番目へほかのソフト用の書き出しを足す", () => {
+  it("接続完了後は既存画面の5番目で安全な説明とともに選べる", () => {
     const prepared = exportChoicesForReadiness(true);
-    expect(prepared).toHaveLength(5);
+    expect(EXPORT_CHOICES).toEqual(prepared);
     expect(prepared[4]).toEqual({
       kind: "FoldJson",
       label: "ほかの折り紙ソフトのファイル",
@@ -113,10 +125,175 @@ describe("書き出しダイアログ", () => {
         "折り目や折る手順を、対応しているほかの折り紙ソフトで使える形にします。書き出せない内容があるときは、理由をお知らせします。",
     });
 
-    render(<ExportDialog />);
+    const { container } = render(<ExportDialog />);
+    expect(screen.getByRole("dialog", { name: "作品を書き出す" })).not.toBeNull();
+    const foldChoice = screen.getByRole("radio", {
+      name: "ほかの折り紙ソフトのファイル",
+    }) as HTMLInputElement;
+    expect(foldChoice.disabled).toBe(false);
+    fireEvent.click(foldChoice);
+    expect(foldChoice.checked).toBe(true);
+    expect(useAppStore.getState().exportKind).toBe("FoldJson");
+    expect(screen.getByText(prepared[4].hint)).not.toBeNull();
+    for (const forbidden of [
+      "FOLD 1.1",
+      "FOLD 1.2",
+      "parser",
+      "schema",
+      "パーサ",
+      "スキーマ",
+      "バリデータ",
+    ]) {
+      expect(container.innerHTML).not.toContain(forbidden);
+    }
+  });
+
+  it("書き出し注意の安全表示は確認文と全件を示し内部用語を出さない", () => {
+    const issues = [
+      {
+        code: "unsupported_field",
+        severity: "warning",
+        message: "FOLD 1.1 FOLD 1.2 パーサ スキーマ parser schema",
+        path: "$.file_frames[0].faceOrders",
+        original_value: { assignment: "Aux", secret: "raw-value" },
+      },
+      {
+        code: "unsupported_field",
+        severity: "warning",
+        message: "同じ注意も省略しない sentinel-message",
+        path: "$.file_frames[1].faceOrders",
+        original_value: "sentinel-original-value",
+      },
+    ] as const;
+
+    const { container, rerender } = render(
+      <ExportFoldIssueNotices issues={[]} />,
+    );
+    expect(screen.queryByRole("status")).toBeNull();
+
+    rerender(<ExportFoldIssueNotices issues={issues} />);
+
+    expect(screen.getByRole("status")).not.toBeNull();
     expect(
-      screen.queryByRole("radio", { name: "ほかの折り紙ソフトのファイル" }),
-    ).toBeNull();
+      screen.getByText(
+        "ほかの折り紙ソフトのファイルを書き出しました（注意2件）",
+      ),
+    ).not.toBeNull();
+    expect(EXPORT_FOLD_ISSUE_CONFIRMATION).toBe(
+      "書き出した内容について、次の点をご確認ください。元の作品は変更されていません。",
+    );
+    expect(
+      screen.getByText(
+        "書き出した内容について、次の点をご確認ください。元の作品は変更されていません。",
+      ),
+    ).not.toBeNull();
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+    expect(
+      screen.getAllByText(
+        "作品固有の表示や説明の一部は書き出されませんでした。",
+      ),
+    ).toHaveLength(2);
+
+    const displayed = container.innerHTML;
+    for (const forbidden of [
+      "FOLD 1.1",
+      "FOLD 1.2",
+      "パーサ",
+      "スキーマ",
+      "parser",
+      "schema",
+      "unsupported_field",
+      "file_frames",
+      "faceOrders",
+      "Aux",
+      "raw-value",
+      "sentinel-message",
+      "sentinel-original-value",
+    ]) {
+      expect(displayed).not.toContain(forbidden);
+    }
+  });
+
+  it("書き出し注意は保存成功を止めず安全文だけを出し、次の開始時に消える", async () => {
+    const firstPath = "C:\\出力\\交換.fold";
+    const secondPath = "C:\\出力\\再交換.fold";
+    const issue: FoldIssue = {
+      severity: "warning",
+      code: "unsupported_field",
+      path: "$.raw",
+      message: "FOLD 1.2 パーサ スキーマ raw-message",
+      original_value: "raw-value",
+    };
+    let finishSecond: ((issues: FoldIssue[]) => void) | null = null;
+    saveMock
+      .mockResolvedValueOnce(firstPath)
+      .mockResolvedValueOnce(secondPath);
+    exportMock
+      .mockResolvedValueOnce([issue])
+      .mockImplementationOnce(
+        () =>
+          new Promise<FoldIssue[]>((resolve) => {
+            finishSecond = resolve;
+          }),
+      );
+    const { container } = render(<ExportDialog />);
+    const foldChoice = screen.getByRole("radio", {
+      name: "ほかの折り紙ソフトのファイル",
+    }) as HTMLInputElement;
+    fireEvent.click(foldChoice);
+    expect(foldChoice.checked).toBe(true);
+    const saveButton = screen.getByRole("button", {
+      name: "保存先を選んで書き出す",
+    });
+    fireEvent.click(saveButton);
+
+    await waitFor(() =>
+      expect(saveMock).toHaveBeenCalledWith({
+        filters: [
+          {
+            name: "ほかの折り紙ソフトのファイル",
+            extensions: ["fold"],
+          },
+        ],
+      }),
+    );
+    await waitFor(() =>
+      expect(exportMock).toHaveBeenCalledWith("FoldJson", firstPath, {
+        include_aux: true,
+        png_long_side: 2048,
+      }),
+    );
+    expect(await screen.findByText(/保存しました/)).not.toBeNull();
+    expect(screen.getByRole("status")).not.toBeNull();
+    expect(
+      screen.getByText(
+        "作品固有の表示や説明の一部は書き出されませんでした。",
+      ),
+    ).not.toBeNull();
+    expect(useAppStore.getState().exportFoldIssues).toEqual([issue]);
+    expect(useAppStore.getState().exportError).toBeNull();
+    for (const forbidden of [
+      "FOLD 1.2",
+      "パーサ",
+      "スキーマ",
+      "$.raw",
+      "raw-message",
+      "raw-value",
+    ]) {
+      expect(container.innerHTML).not.toContain(forbidden);
+    }
+
+    fireEvent.click(saveButton);
+    await waitFor(() => expect(exportMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+    expect(screen.queryByText(/保存しました/)).toBeNull();
+    expect(useAppStore.getState().exportFoldIssues).toEqual([]);
+    expect(useAppStore.getState().exportSavedPath).toBeNull();
+    expect(useAppStore.getState().exportBusy).toBe(true);
+
+    act(() => finishSecond?.([]));
+    await waitFor(() => expect(useAppStore.getState().exportBusy).toBe(false));
+    expect(useAppStore.getState().exportSavedPath).toBe(secondPath);
   });
 
   it("SVGは補助線の有無だけを引数にして書き出す", async () => {
@@ -191,6 +368,76 @@ describe("書き出しダイアログ", () => {
     expect(await screen.findByText(/保存できませんでした/)).not.toBeNull();
     expect(screen.getByText(/書き込めません/)).not.toBeNull();
   });
+
+  it("ほかのソフト用書き出し中は閉じて開き直しても形式を固定し、失敗の内部情報を出さない", async () => {
+    const path = "C:\\出力\\交換.fold";
+    const rawError =
+      "FOLD 1.2 parser schema パーサ スキーマ $.file_frames raw-value";
+    let rejectExport: ((reason: unknown) => void) | null = null;
+    saveMock.mockResolvedValue(path);
+    exportMock.mockImplementationOnce(
+      () =>
+        new Promise<FoldIssue[]>((_resolve, reject) => {
+          rejectExport = reject;
+        }),
+    );
+    const { container } = render(<ExportDialog />);
+    const foldChoice = screen.getByRole("radio", {
+      name: "ほかの折り紙ソフトのファイル",
+    }) as HTMLInputElement;
+    fireEvent.click(foldChoice);
+    expect(foldChoice.checked).toBe(true);
+    fireEvent.click(
+      screen.getByRole("button", { name: "保存先を選んで書き出す" }),
+    );
+
+    await waitFor(() => expect(exportMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(useAppStore.getState().exportBusy).toBe(true));
+    const svgChoice = screen.getByRole("radio", {
+      name: "展開図(SVG)",
+    }) as HTMLInputElement;
+    try {
+      expect(svgChoice.disabled).toBe(true);
+      act(() => svgChoice.click());
+      expect(useAppStore.getState().exportKind).toBe("FoldJson");
+
+      fireEvent.click(screen.getByRole("button", { name: "閉じる" }));
+      expect(useAppStore.getState().exportOpen).toBe(false);
+      expect(useAppStore.getState().exportBusy).toBe(true);
+
+      act(() => useAppStore.getState().openExport());
+      const reopenedSvgChoice = screen.getByRole("radio", {
+        name: "展開図(SVG)",
+      }) as HTMLInputElement;
+      expect(reopenedSvgChoice.disabled).toBe(true);
+      act(() => reopenedSvgChoice.click());
+      expect(useAppStore.getState().exportKind).toBe("FoldJson");
+    } finally {
+      act(() => rejectExport?.(rawError));
+      await waitFor(() => expect(useAppStore.getState().exportBusy).toBe(false));
+    }
+
+    expect(
+      await screen.findByText(
+        /ほかの折り紙ソフトのファイルを書き出せませんでした。作品の内容と保存先を確認してください。/,
+      ),
+    ).not.toBeNull();
+    expect(screen.queryByText(/保存しました/)).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(useAppStore.getState().exportError).toBe(rawError);
+    for (const forbidden of [
+      "FOLD 1.2",
+      "parser",
+      "schema",
+      "パーサ",
+      "スキーマ",
+      "file_frames",
+      "raw-value",
+    ]) {
+      expect(container.innerHTML).not.toContain(forbidden);
+    }
+  });
+
   it("折り図(PDF)を選ぶと種類だけを変えて書き出す", async () => {
     saveMock.mockResolvedValue("C:/出力/鶴の折り図.pdf");
     render(<ExportDialog />);
@@ -241,7 +488,7 @@ describe("書き出しダイアログ", () => {
   it("PDFを画像と呼ばず、展開図と折り図の書き出し画面だと示す", () => {
     render(<ExportDialog />);
     expect(
-      screen.getByRole("dialog", { name: "展開図・折り図を書き出す" }),
+      screen.getByRole("dialog", { name: "作品を書き出す" }),
     ).not.toBeNull();
     expect(screen.queryByRole("heading", { name: "画像として書き出す" })).toBeNull();
   });
@@ -250,7 +497,7 @@ describe("書き出しダイアログ", () => {
     useAppStore.setState({ exportKind: "CpPng" });
     render(<ExportDialog />);
 
-    const dialog = screen.getByRole("dialog", { name: "展開図・折り図を書き出す" });
+    const dialog = screen.getByRole("dialog", { name: "作品を書き出す" });
     const selected = screen.getByRole("radio", { name: "展開図(PNG)" });
     await waitFor(() => expect(document.activeElement).toBe(selected));
     expect(dialog.className).toBe("dialog");
@@ -323,7 +570,7 @@ describe("書き出しダイアログ", () => {
         expect(container.hasAttribute("inert")).toBe(true);
         expect(
           screen
-            .getByRole("dialog", { name: "展開図・折り図を書き出す" })
+            .getByRole("dialog", { name: "作品を書き出す" })
             .parentElement?.hasAttribute("inert"),
         ).toBe(false);
 
@@ -346,7 +593,7 @@ describe("書き出しダイアログ", () => {
 
         fireEvent.keyDown(first, { key: "Escape" });
         expect(
-          screen.queryByRole("dialog", { name: "展開図・折り図を書き出す" }),
+          screen.queryByRole("dialog", { name: "作品を書き出す" }),
         ).toBeNull();
         await Promise.resolve();
         expect(document.activeElement).toBe(trigger);
@@ -369,7 +616,7 @@ describe("書き出しダイアログ", () => {
 
     fireEvent.keyDown(first, { key: "Escape" });
     expect(useAppStore.getState().exportOpen).toBe(true);
-    expect(screen.getByRole("dialog", { name: "展開図・折り図を書き出す" })).not.toBeNull();
+    expect(screen.getByRole("dialog", { name: "作品を書き出す" })).not.toBeNull();
 
     const closeButton = screen.getByRole("button", { name: "閉じる" }) as HTMLButtonElement;
     expect(closeButton.disabled).toBe(false);

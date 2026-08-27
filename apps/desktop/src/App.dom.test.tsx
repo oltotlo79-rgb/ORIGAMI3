@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { open } from "@tauri-apps/plugin-dialog";
 import App from "./App";
 import { AppToolbar, ExportButton } from "./components/AppToolbar";
 import {
@@ -23,6 +24,7 @@ const viewerPayload = vi.hoisted(() => ({
   render: vi.fn(),
 }));
 
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
 vi.mock("./components/ToolRail", () => ({ ToolRail: () => null }));
 vi.mock("./components/ContextPanel", () => ({ ContextPanel: () => null }));
 vi.mock("./components/CpEditor/CpEditor", () => ({ CpEditor: () => null }));
@@ -60,6 +62,7 @@ vi.mock("./components/Tooltip", () => ({ TooltipHost: () => null }));
 vi.mock("./captureApi", () => ({ installCaptureApi: vi.fn() }));
 vi.mock("./components/dialogs/ExportDialog", () => exportDialogPayload.load());
 
+const openMock = vi.mocked(open);
 const realNewDocument = useAppStore.getState().newDocument;
 const realCheckRecovery = useAppStore.getState().checkRecovery;
 const realOpenNewDialog = useAppStore.getState().openNewDialog;
@@ -83,6 +86,8 @@ beforeEach(() => {
   helpCenterPayload.load.mockClear();
   viewerPayload.render.mockClear();
   vi.mocked(installCaptureApi).mockClear();
+  openMock.mockReset();
+  openMock.mockResolvedValue(null);
   useAppStore.setState({
     exportOpen: false,
     helpOpen: false,
@@ -150,19 +155,65 @@ describe("上部ツールバーの操作順(D8)", () => {
       "ヘルプセンターを開く",
     );
   });
+
+  it("開くは保存作品とほかのソフト用の2形式を安全な案内で渡す", async () => {
+    render(<AppToolbar onOpenHelp={vi.fn()} />);
+    const openButton = screen.getByRole("button", { name: "開く" });
+    const tooltip = openButton.getAttribute("data-tooltip") ?? "";
+    expect(tooltip).toBe(
+      "保存した作品または、ほかの折り紙ソフトのファイルを開きます",
+    );
+
+    fireEvent.click(openButton);
+    await waitFor(() =>
+      expect(openMock).toHaveBeenCalledWith({
+        filters: [
+          { name: "ORIGAMI3作品", extensions: ["ori3"] },
+          {
+            name: "ほかの折り紙ソフトのファイル",
+            extensions: ["fold"],
+          },
+        ],
+        multiple: false,
+      }),
+    );
+
+    const displayed = `${tooltip} ORIGAMI3作品 ほかの折り紙ソフトのファイル`;
+    for (const forbidden of [
+      "FOLD 1.2",
+      "パーサ",
+      "スキーマ",
+      "バリデータ",
+    ]) {
+      expect(displayed).not.toContain(forbidden);
+    }
+  });
 });
 
 describe("上部の書き出し案内(D27)", () => {
-  it("実際に選べる4形式だけを、選択肢と同じ順で案内する", () => {
+  it("実際に選べる5形式だけを、安全な文言で選択肢と同じ順に案内する", () => {
     render(<ExportButton onClick={vi.fn()} />);
 
     const formats = EXPORT_CHOICES.map((choice) => choice.label);
     const button = screen.getByRole("button", { name: "書き出し" });
-    expect(formats).toHaveLength(4);
-    expect(button.getAttribute("data-tooltip")).toBe(
-      `${formats.join("、")}を書き出します`,
-    );
-    expect(button.getAttribute("data-tooltip")).not.toContain("3D");
+    expect(formats).toEqual([
+      "展開図(SVG)",
+      "展開図(PNG)",
+      "折り図(PDF)",
+      "折り図(ページごとのSVG)",
+      "ほかの折り紙ソフトのファイル",
+    ]);
+    const tooltip = button.getAttribute("data-tooltip") ?? "";
+    expect(tooltip).toBe(`${formats.join("、")}を書き出します`);
+    for (const forbidden of [
+      "3D",
+      "FOLD 1.2",
+      "パーサ",
+      "スキーマ",
+      "バリデータ",
+    ]) {
+      expect(tooltip).not.toContain(forbidden);
+    }
   });
 });
 

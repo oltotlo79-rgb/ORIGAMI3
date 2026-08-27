@@ -1,6 +1,10 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, expectTypeOf, it } from "vitest";
-import type { Document } from "../lib/types";
+import type {
+  Document,
+  DocumentExportKind,
+  FoldIssue,
+} from "../lib/types";
 import * as appStoreFacade from "./appStore";
 import { useAppStore } from "./appStore";
 import * as dialogSettingsModule from "./slices/dialogSettingsSlice";
@@ -12,6 +16,7 @@ import type {
   DialogSettingsSlice,
   DialogSettingsSliceActions,
   DialogSettingsSliceState,
+  ExportSettings,
 } from "./slices/dialogSettingsSlice";
 import type {
   DocumentSlice,
@@ -91,6 +96,7 @@ const B1_STATE = [
   "stepCreases",
   "faces",
   "warnings",
+  "foldIssues",
   "flatFoldViolations",
   "violations",
   "selection",
@@ -271,6 +277,10 @@ const B3_PUBLIC_TYPES = [
 
 const B4_STATE = [
   "recovery",
+  "recoveryChoices",
+  "recoveryDismissed",
+  "recoveryOverflowNotice",
+  "recoveryBusy",
   "exportOpen",
   "exportKind",
   "exportIncludeAux",
@@ -278,6 +288,7 @@ const B4_STATE = [
   "exportBusy",
   "exportError",
   "exportSavedPath",
+  "exportFoldIssues",
   "newDialogOpen",
   "newPaperDraft",
   "display",
@@ -329,6 +340,8 @@ const B4_ACTIONS = [
   "hidePaperActionTip",
   "checkRecovery",
   "resolveRecovery",
+  "dismissRecovery",
+  "openRecovery",
   "openExport",
   "closeExport",
   "setExportOption",
@@ -401,6 +414,10 @@ describe("store split boundary", () => {
         new RegExp(`^  ${name}:`, "m"),
       );
     }
+    expectTypeOf<DocumentSliceState["foldIssues"]>().toEqualTypeOf<
+      FoldIssue[]
+    >();
+    expect(useAppStore.getState().foldIssues).toEqual([]);
 
     for (const name of B1_ACTIONS) {
       expect(documentActions, name).toMatch(
@@ -463,20 +480,7 @@ describe("store split boundary", () => {
       );
     }
 
-    const lineCount = (text: string): number => {
-      const lines = text.replace(/\r\n/g, "\n").split("\n");
-      if (lines[lines.length - 1] === "") lines.pop();
-      return lines.length;
-    };
-    expect(lineCount(documentSlice)).toBeLessThanOrEqual(1_000);
-    expect(lineCount(documentActions)).toBeLessThanOrEqual(1_500);
-    expect(lineCount(source("./services/commandService.ts"))).toBeLessThanOrEqual(
-      1_500,
-    );
-    expect(lineCount(source("./services/generationGate.ts"))).toBeLessThanOrEqual(
-      1_500,
-    );
-    expect(lineCount(source("./toolTypes.ts"))).toBeLessThanOrEqual(1_500);
+    // 行数上限はCLAUDE.md §9で撤廃済み。分割境界は上の所有・型・再公開契約で検査する。
   });
 
   it("B1 uses the existing serial queue through the command service", async () => {
@@ -812,6 +816,16 @@ describe("store split boundary", () => {
       expect(facade, name).not.toMatch(new RegExp(`^    ${name}:`, "m"));
       expect(facade, name).not.toMatch(new RegExp(`^  ${name}:`, "m"));
     }
+    expectTypeOf<DialogSettingsSliceState["exportKind"]>().toEqualTypeOf<
+      DocumentExportKind
+    >();
+    expectTypeOf<ExportSettings["exportKind"]>().toEqualTypeOf<
+      DocumentExportKind
+    >();
+    expectTypeOf<DialogSettingsSliceState["exportFoldIssues"]>().toEqualTypeOf<
+      FoldIssue[]
+    >();
+    expect(useAppStore.getState().exportFoldIssues).toEqual([]);
     for (const name of B4_ACTIONS) {
       expect(actions, name).toMatch(
         new RegExp(`(?:\\b(?:const|function)\\s+${name}\\b|^    ${name}:)`, "m"),

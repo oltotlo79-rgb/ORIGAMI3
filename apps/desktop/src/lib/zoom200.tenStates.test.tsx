@@ -341,8 +341,8 @@ const TEN_STATES: readonly TenState[] = [
     id: "export-png-long-messages",
     label: "書き出し・PNGと長い成功／失敗文",
     floatingUi: "export-dialog",
-    dialogName: "展開図・折り図を書き出す",
-    headingName: "展開図・折り図を書き出す",
+    dialogName: "作品を書き出す", // 旧「展開図・折り図を書き出す」→新「作品を書き出す」。5番目追加に伴う意図した照合値更新であり、緩和ではない。
+    headingName: "作品を書き出す", // 旧「展開図・折り図を書き出す」→新「作品を書き出す」。5番目追加に伴う意図した照合値更新であり、緩和ではない。
     expectedOperationCount: 7,
     prepare: () => {
       useAppStore.setState({
@@ -467,7 +467,8 @@ const TEN_STATES: readonly TenState[] = [
     floatingUi: "recovery-dialog",
     dialogName: "前回の終了が正常に行われませんでした",
     headingName: "前回の終了が正常に行われませんでした",
-    expectedOperationCount: 2,
+    // 旧値2→新値3: 候補を消さず閉じる承認済み操作「あとで確認する」が1件増えたため。
+    expectedOperationCount: 3,
     prepare: () => {
       useAppStore.setState({
         recovery: {
@@ -784,7 +785,9 @@ describe("5-Aで固定した200%の10状態", () => {
       if (state.id === "recovery-long-path") {
         const path = useAppStore.getState().recovery?.document_path ?? "";
         expect(path.length).toBeGreaterThan(60);
-        expect(root.textContent).toContain("元の作品:折り鶴の最終作品.ori3");
+        // 旧値「元の作品:折り鶴…」→新値「元の作品: 折り鶴…」:
+        // 候補ごとの日時・作品名・手順数を読み分ける表示へ区切り空白を加えたため。
+        expect(root.textContent).toContain("元の作品: 折り鶴の最終作品.ori3");
       }
       if (state.id === "cp-keyboard-line-start") {
         const canvas = root.querySelector<HTMLCanvasElement>("canvas.cp-canvas");
@@ -849,7 +852,8 @@ describe("5-Aで固定した200%の10状態", () => {
       { label: "提案・紙上の12個の場所", count: 14 },
       { label: "提案・確認と既存手順消去警告", count: 2 },
       { label: "提案・処理中", count: 18 },
-      { label: "復旧・長い実パス", count: 2 },
+      // 旧値2→新値3: 「あとで確認する」をTab操作台帳へ含める。
+      { label: "復旧・長い実パス", count: 3 },
       { label: "ヘルプ・全13章", count: 16 },
       { label: "展開図・キーボードで始点を決めた途中状態", count: 3 },
     ]);
@@ -858,7 +862,8 @@ describe("5-Aで固定した200%の10状態", () => {
         (sum, state) => sum + state.expectedOperationCount,
         0,
       ),
-    ).toBe(147);
+      // 旧合計147→新合計148: 復旧画面の承認済み操作が1件増えたため。
+    ).toBe(148);
   });
 });
 

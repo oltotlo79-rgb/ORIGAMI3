@@ -18,6 +18,7 @@ import {
 import {
   ALIGN_STEPS,
   solveAlign,
+  type FoldLine,
 } from "../../lib/alignFold";
 import {
   mirrorLineForChoice,
@@ -53,10 +54,15 @@ import type {
   Document,
   EdgeKind,
   EditOp,
+  FoldPoseInput,
   FoldTargetInfo,
   SeqOp,
   Vec2,
 } from "../../lib/types";
+import type {
+  SpatialAlignTarget,
+  SpatialFoldTarget,
+} from "../../lib/spatialAlignTypes";
 import { createGenerationGate } from "./generationGate";
 import {
   DEFAULT_PLEAT_WIDTH_MM,
@@ -90,7 +96,302 @@ import {
   type MeasureEdgePick,
   type MeasurePointPick,
   type SpatialFoldDrag,
+  type SpatialAlignPickResult,
+  type SpatialMaterialFoldInput,
+  type SpatialMaterialForMovingSide,
 } from "../slices/documentSlice";
+
+interface FoldThroughCoordinateInput {
+  line: FoldLine;
+  keepSidePoint: Vec2;
+}
+
+type SpatialFoldRoute =
+  | { kind: "legacy" | "folded"; input: FoldThroughCoordinateInput | null }
+  | { kind: "material"; input: SpatialMaterialFoldInput | null };
+
+type MaterialPoseInputResult =
+  | { ok: true; poseBefore: FoldPoseInput | null }
+  | { ok: false };
+
+function finiteVec2(point: Vec2): boolean {
+  return Number.isFinite(point[0]) && Number.isFinite(point[1]);
+}
+
+function validSpatialMaterialInput(
+  input: SpatialMaterialFoldInput | null | undefined,
+): input is SpatialMaterialFoldInput {
+  if (
+    !input ||
+    !finiteVec2(input.materialLine[0]) ||
+    !finiteVec2(input.materialLine[1]) ||
+    !finiteVec2(input.materialKeepSidePoint)
+  ) {
+    return false;
+  }
+  return (
+    input.materialLine[0][0] !== input.materialLine[1][0] ||
+    input.materialLine[0][1] !== input.materialLine[1][1]
+  );
+}
+
+function validFoldThroughCoordinateInput(
+  input: FoldThroughCoordinateInput | null,
+): input is FoldThroughCoordinateInput {
+  return (
+    input !== null &&
+    finiteVec2(input.line[0]) &&
+    finiteVec2(input.line[1]) &&
+    finiteVec2(input.keepSidePoint) &&
+    (input.line[0][0] !== input.line[1][0] ||
+      input.line[0][1] !== input.line[1][1])
+  );
+}
+
+function finiteVec2Value(value: unknown): value is Vec2 {
+  return (
+    Array.isArray(value) &&
+    value.length === 2 &&
+    typeof value[0] === "number" &&
+    Number.isFinite(value[0]) &&
+    typeof value[1] === "number" &&
+    Number.isFinite(value[1])
+  );
+}
+
+function foldedCoordinateInput(
+  value: unknown,
+  movingSide: "left" | "right",
+): FoldThroughCoordinateInput | null {
+  if (typeof value !== "object" || value === null) return null;
+  if (!("line" in value) || !Array.isArray(value.line) || value.line.length !== 2) {
+    return null;
+  }
+  const [a, b] = value.line;
+  if (!finiteVec2Value(a) || !finiteVec2Value(b)) return null;
+  if (!("keepPointForMovingSide" in value)) return null;
+  const keepBySide = value.keepPointForMovingSide;
+  if (typeof keepBySide !== "object" || keepBySide === null) return null;
+  const keep =
+    movingSide === "left"
+      ? "left" in keepBySide
+        ? keepBySide.left
+        : null
+      : "right" in keepBySide
+        ? keepBySide.right
+        : null;
+  if (!finiteVec2Value(keep)) return null;
+  const input: FoldThroughCoordinateInput = {
+    line: [a, b],
+    keepSidePoint: keep,
+  };
+  return validFoldThroughCoordinateInput(input) ? input : null;
+}
+
+function spatialFoldRoute(draft: FoldDraft): SpatialFoldRoute {
+  if (!Object.prototype.hasOwnProperty.call(draft, "spatialTarget")) {
+    return {
+      kind: "legacy",
+      input: {
+        line: draft.line,
+        keepSidePoint: keepSidePoint(draft.line, draft.movingSide),
+      },
+    };
+  }
+  const spatialTarget = draft.spatialTarget;
+  if (spatialTarget === null || spatialTarget === undefined) {
+    return { kind: "material", input: null };
+  }
+  const folded: unknown = spatialTarget.foldedPlane;
+  if (folded !== null && folded !== undefined) {
+    return {
+      kind: "folded",
+      input: foldedCoordinateInput(folded, draft.movingSide),
+    };
+  }
+  const input = draft.spatialMaterialForMovingSide?.[draft.movingSide] ?? null;
+  return {
+    kind: "material",
+    input: validSpatialMaterialInput(input) ? input : null,
+  };
+}
+
+/** 材料経路だけが使う、利用者のsigned宣言を丸めず保存するPose入力。 */
+function materialPoseInputFromDrivers(
+  drivers: ReadonlyMap<number, number>,
+): MaterialPoseInputResult {
+  const entries = [...drivers].sort(([left], [right]) => left - right);
+  if (
+    entries.some(
+      ([edge, angle]) =>
+        !Number.isSafeInteger(edge) || edge < 0 || !Number.isFinite(angle),
+    )
+  ) {
+    return { ok: false };
+  }
+  return {
+    ok: true,
+    poseBefore:
+      entries.length === 0
+        ? null
+        : {
+            drivers: entries.map(([edge_id, target_angle_deg]) => ({
+              edge_id,
+              target_angle_deg,
+            })),
+          },
+  };
+}
+
+function sameFoldThroughCoordinateInput(
+  a: FoldThroughCoordinateInput | null,
+  b: FoldThroughCoordinateInput | null,
+): boolean {
+  if (a === null || b === null) return a === b;
+  return (
+    a.line[0][0] === b.line[0][0] &&
+    a.line[0][1] === b.line[0][1] &&
+    a.line[1][0] === b.line[1][0] &&
+    a.line[1][1] === b.line[1][1] &&
+    a.keepSidePoint[0] === b.keepSidePoint[0] &&
+    a.keepSidePoint[1] === b.keepSidePoint[1]
+  );
+}
+
+function sameSpatialMaterialInput(
+  a: SpatialMaterialFoldInput | null,
+  b: SpatialMaterialFoldInput | null,
+): boolean {
+  if (a === null || b === null) return a === b;
+  return (
+    a.materialLine[0][0] === b.materialLine[0][0] &&
+    a.materialLine[0][1] === b.materialLine[0][1] &&
+    a.materialLine[1][0] === b.materialLine[1][0] &&
+    a.materialLine[1][1] === b.materialLine[1][1] &&
+    a.materialKeepSidePoint[0] === b.materialKeepSidePoint[0] &&
+    a.materialKeepSidePoint[1] === b.materialKeepSidePoint[1]
+  );
+}
+
+function sameSpatialFoldRoute(left: FoldDraft, right: FoldDraft): boolean {
+  const a = spatialFoldRoute(left);
+  const b = spatialFoldRoute(right);
+  if (a.kind !== b.kind) return false;
+  if (a.kind === "material" && b.kind === "material") {
+    return sameSpatialMaterialInput(a.input, b.input);
+  }
+  if (a.kind === "material" || b.kind === "material") return false;
+  return sameFoldThroughCoordinateInput(a.input, b.input);
+}
+
+interface NormalizedSpatialAlignResult {
+  solutions: (SpatialFoldTarget | null)[];
+  materialSolutions: (SpatialMaterialForMovingSide | null)[];
+  lines: FoldLine[];
+  solutionIndices: number[];
+  reason: string | null;
+}
+
+function unavailableSpatialSolutions(count: number): null[] {
+  return Array.from({ length: count }, () => null);
+}
+
+function sameMaterialLine(left: FoldLine, right: FoldLine): boolean {
+  return (
+    left[0][0] === right[0][0] &&
+    left[0][1] === right[0][1] &&
+    left[1][0] === right[1][0] &&
+    left[1][1] === right[1][1]
+  );
+}
+
+function materialLineOf(
+  material: SpatialMaterialForMovingSide | null,
+): FoldLine | null {
+  if (material === null) return null;
+  if (
+    (material.left !== null && !validSpatialMaterialInput(material.left)) ||
+    (material.right !== null && !validSpatialMaterialInput(material.right))
+  ) {
+    return null;
+  }
+  const left = material.left?.materialLine ?? null;
+  const right = material.right?.materialLine ?? null;
+  if (left !== null && right !== null && !sameMaterialLine(left, right)) {
+    return null;
+  }
+  const line = left ?? right;
+  return line === null
+    ? null
+    : [
+        [...line[0]],
+        [...line[1]],
+      ];
+}
+
+function spatialMovingSide(
+  material: SpatialMaterialForMovingSide | null | undefined,
+  preferred: FoldDraft["movingSide"] = "right",
+): FoldDraft["movingSide"] {
+  if (validSpatialMaterialInput(material?.[preferred])) return preferred;
+  const other = preferred === "left" ? "right" : "left";
+  return validSpatialMaterialInput(material?.[other]) ? other : preferred;
+}
+
+/**
+ * 3D solverが返した配列長とindexだけを正本にする。材料配列の欠落・長さ違い・
+ * left/right不一致を並べ替えたり別解で補ったりせず、そのindexをnullにする。
+ */
+function normalizeSpatialAlignResult(
+  update: SpatialAlignPickResult | undefined,
+  spatialPicks: readonly (SpatialAlignTarget | null)[],
+): NormalizedSpatialAlignResult {
+  const solutionCount = update?.solutions.length ?? 0;
+  const unavailable = unavailableSpatialSolutions(solutionCount);
+  const picksAreComplete = spatialPicks.every((pick) => pick !== null);
+  const providedMaterials = update?.materialSolutions;
+  const solutions = picksAreComplete ? [...(update?.solutions ?? [])] : [...unavailable];
+  const materialSolutions =
+    picksAreComplete && providedMaterials?.length === solutionCount
+      ? [...providedMaterials]
+      : [...unavailable];
+  const lines: FoldLine[] = [];
+  const solutionIndices: number[] = [];
+  materialSolutions.forEach((material, index) => {
+    if (solutions[index] === null) return;
+    const line = materialLineOf(material);
+    if (line === null) return;
+    lines.push(line);
+    solutionIndices.push(index);
+  });
+  return {
+    solutions,
+    materialSolutions,
+    lines,
+    solutionIndices,
+    reason: update?.reason ?? null,
+  };
+}
+
+function withSpatialFoldSelection(
+  draft: FoldDraft | null,
+  spatialSolutions: readonly (SpatialFoldTarget | null)[] | undefined,
+  materialSolutions: readonly (SpatialMaterialForMovingSide | null)[] | undefined,
+  index: number,
+): FoldDraft | null {
+  if (
+    draft === null ||
+    spatialSolutions === undefined ||
+    spatialSolutions[index] == null
+  ) {
+    return spatialSolutions === undefined ? draft : null;
+  }
+  return {
+    ...draft,
+    spatialTarget: spatialSolutions[index] ?? null,
+    spatialMaterialForMovingSide: materialSolutions?.[index] ?? null,
+  };
+}
 
 /**
  * document/CP状態を同じZustand storeへ合成するfactory。
@@ -153,7 +454,8 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
     current.line[0][0] === started.line[0][0] &&
     current.line[0][1] === started.line[0][1] &&
     current.line[1][0] === started.line[1][0] &&
-    current.line[1][1] === started.line[1][1];
+    current.line[1][1] === started.line[1][1] &&
+    sameSpatialFoldRoute(current, started);
 
   const loadFoldTargetInfo = async (): Promise<void> => {
     const startedState = get();
@@ -174,8 +476,11 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
         : {},
     );
 
-    const pose = foldPoseInputFromDrivers(startedState.drivers);
-    if (!pose.ok) {
+    const foldRoute = spatialFoldRoute(started);
+    const pose = foldRoute.kind === "material"
+      ? materialPoseInputFromDrivers(startedState.drivers)
+      : foldPoseInputFromDrivers(startedState.drivers);
+    if (foldRoute.input === null || !pose.ok) {
       if (!foldTargetGate.isCurrent(revision)) return;
       set((state) =>
         sameFoldTargetQuery(state.foldDraft, started)
@@ -191,13 +496,28 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
       return;
     }
 
-    const operation: Extract<SeqOp, { type: "PreviewFoldTargets" }> = {
-      type: "PreviewFoldTargets",
-      up_to: started.upTo,
-      line: started.line,
-      keep_side_point: keepSidePoint(started.line, started.movingSide),
-      ...(pose.poseBefore ? { pose_before: pose.poseBefore } : {}),
-    };
+    let operation: SeqOp;
+    if (foldRoute.kind === "material") {
+      const input = foldRoute.input;
+      if (input === null) return;
+      operation = {
+        type: "PreviewFoldTargetsOnMaterial",
+        up_to: started.upTo,
+        material_line: input.materialLine,
+        material_keep_side_point: input.materialKeepSidePoint,
+        ...(pose.poseBefore ? { pose_before: pose.poseBefore } : {}),
+      };
+    } else {
+      const input = foldRoute.input;
+      if (input === null) return;
+      operation = {
+        type: "PreviewFoldTargets",
+        up_to: started.upTo,
+        line: input.line,
+        keep_side_point: input.keepSidePoint,
+        ...(pose.poseBefore ? { pose_before: pose.poseBefore } : {}),
+      };
+    }
     const result = await queue.run(() => ipc.sequenceApply(operation));
     if (!foldTargetGate.isCurrent(revision)) return;
 
@@ -303,6 +623,25 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
     );
   };
 
+  const materialPoseBeforeMatchesDrivers = (
+    operation: Extract<SeqOp, { type: "CreaseOnlyTop" }>,
+    drivers: ReadonlyMap<number, number>,
+  ): boolean => {
+    const expected = operation.pose_before ?? null;
+    const current = materialPoseInputFromDrivers(drivers);
+    if (!current.ok) return false;
+    const actual = current.poseBefore;
+    if (expected === null || actual === null) return expected === actual;
+    return (
+      expected.drivers.length === actual.drivers.length &&
+      expected.drivers.every(
+        (driver, index) =>
+          driver.edge_id === actual.drivers[index].edge_id &&
+          driver.target_angle_deg === actual.drivers[index].target_angle_deg,
+      )
+    );
+  };
+
   const applyFoldThrough = async (
     operation: FoldThroughOperation,
     acceptAdditionalCrease: boolean,
@@ -342,6 +681,59 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
       if (
         operation.pose_before &&
         poseBeforeMatchesDrivers(operation, completed.drivers)
+      ) {
+        set((latest) => ({
+          drivers: new Map(),
+          activeAngleIntent: null,
+          angleIntentGeneration: latest.angleIntentGeneration + 1,
+        }));
+      }
+      completed.completeGuideAction("fold");
+    }
+  };
+
+  const applyCreaseOnlyTop = async (
+    operation: Extract<SeqOp, { type: "CreaseOnlyTop" }>,
+  ): Promise<void> => {
+    const state = get();
+    if (
+      state.foldAllPreview !== null ||
+      state.foldThroughBusy ||
+      state.pendingFoldThrough ||
+      !state.doc
+    ) {
+      return;
+    }
+    stopPlayback();
+    foldThroughGate.issue();
+    foldTargetGate.issue();
+    const busyToken = foldThroughBusyGate.issue();
+    const beforeEpoch = state.docEpoch;
+    const beforeSequenceCount = state.doc.sequence.length;
+    set({
+      pendingFoldThrough: null,
+      foldThroughBusy: true,
+      errorMessage: null,
+      currentStep:
+        operation.up_to === state.doc.sequence.length
+          ? null
+          : operation.up_to + (operation.pose_before ? 2 : 1),
+    });
+    try {
+      await applyDocChange(() => ipc.sequenceApply(operation));
+    } finally {
+      finishFoldThroughBusy(busyToken);
+    }
+
+    const completed = get();
+    if (
+      completed.errorMessage === null &&
+      completed.docEpoch === beforeEpoch &&
+      (completed.doc?.sequence.length ?? 0) > beforeSequenceCount
+    ) {
+      if (
+        operation.pose_before &&
+        materialPoseBeforeMatchesDrivers(operation, completed.drivers)
       ) {
         set((latest) => ({
           drivers: new Map(),
@@ -450,6 +842,7 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
     stepCreases: [],
     faces: [],
     warnings: [],
+    foldIssues: [],
     flatFoldViolations: [],
     violations: [],
     selection: EMPTY_SELECTION,
@@ -813,6 +1206,69 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
         });
         return;
       }
+      const foldRoute = spatialFoldRoute(draft);
+      if (foldRoute.kind === "material") {
+        const unavailable = foldBlockReason({
+          hasDoc: true,
+          playing: s.playing,
+          playT: s.playT,
+          driverAngles: [],
+          currentStep: s.currentStep,
+          stepCount: s.doc.sequence.length,
+        });
+        if (unavailable) {
+          set({ errorMessage: unavailable });
+          return;
+        }
+        if (foldRoute.input === null) {
+          set({
+            errorMessage:
+              draft.foldTargetInfo?.reason ??
+              "3Dの折り線を材料上の1本の線へ戻せないため、変更しませんでした。",
+          });
+          return;
+        }
+        if (
+          draft.foldTargetInfo?.status !== "crease_only_top" ||
+          draft.foldTargetInfo.topAction !== "crease_only_top"
+        ) {
+          set({
+            errorMessage:
+              draft.foldTargetInfo?.reason ??
+              "この3Dの折り線は、最上紙へ折り目だけを付ける操作として確定できません。",
+          });
+          return;
+        }
+        const pose = materialPoseInputFromDrivers(s.drivers);
+        if (!pose.ok) {
+          set({
+            errorMessage:
+              "利用者が指定した折り角度をそのまま保存できないため、変更しませんでした。",
+          });
+          return;
+        }
+        const alignment =
+          s.alignDraft && isAlignComplete(s.alignDraft)
+            ? { mode: s.alignDraft.mode, picks: [...s.alignDraft.picks] }
+            : null;
+        await applyCreaseOnlyTop({
+          type: "CreaseOnlyTop",
+          up_to: draft.upTo,
+          material_line: foldRoute.input.materialLine,
+          material_keep_side_point: foldRoute.input.materialKeepSidePoint,
+          direction: draft.direction,
+          ...(pose.poseBefore ? { pose_before: pose.poseBefore } : {}),
+          alignment,
+        });
+        return;
+      }
+      if (foldRoute.input === null) {
+        set({
+          errorMessage:
+            "3Dの折り線を畳み平面上の1本の線として証明できないため、変更しませんでした。",
+        });
+        return;
+      }
       const unavailable = foldThroughUnavailableMessage(s);
       if (unavailable) {
         set({ errorMessage: unavailable });
@@ -828,12 +1284,13 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
         });
         return;
       }
-      const keep = keepSidePoint(draft.line, draft.movingSide);
+      const foldLine = foldRoute.input.line;
+      const keep = foldRoute.input.keepSidePoint;
       let targetLayers: number[] | null = null;
       let targetPleatCount: number | null = null;
       if (draft.target === "top") {
         const layers = foldLayers(s.frame3d, s.doc, s.faces);
-        const top = topMovingFace(layers, draft.line, keep);
+        const top = topMovingFace(layers, foldLine, keep);
         if (top === null) {
           set({
             errorMessage:
@@ -884,7 +1341,7 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
       await requestFoldThrough({
         type: "FoldThrough",
         up_to: draft.upTo,
-        line: draft.line,
+        line: foldLine,
         keep_side_point: keep,
         target_layers: targetLayers,
         // Kはひだ数であって面数ではない。selectedLayerCount、2 * K、
@@ -957,30 +1414,76 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
       });
     },
 
-    pickAlignTarget: (target, cursor = null, cpPick = null) => {
+    pickAlignTarget: (target, cursor = null, cpPick = null, spatial) => {
       const s = get();
       const draft = s.alignDraft;
       if (!draft || !s.doc) return;
       const steps = ALIGN_STEPS[draft.mode];
-      const picks = isAlignComplete(draft) ? [target] : [...draft.picks, target];
+      const restarting = isAlignComplete(draft);
+      const picks = restarting ? [target] : [...draft.picks, target];
       if (steps[picks.length - 1] !== target.kind) return;
       const previousCpPicks =
         draft.cpPicks ?? draft.picks.map((): AlignCpPick | null => null);
-      const cpPicks = isAlignComplete(draft)
+      const cpPicks = restarting
         ? [cpPick]
         : [...previousCpPicks, cpPick];
-      const solved = solveAlign(draft.mode, picks, cursor);
-      const line = solved.lines[0] ?? null;
+      const continuesSpatialCycle = !restarting && draft.spatialPicks !== undefined;
+      const usesSpatialCycle = spatial !== undefined || continuesSpatialCycle;
+      const previousSpatialPicks = restarting
+        ? []
+        : (draft.spatialPicks ??
+          draft.picks.map((): SpatialAlignTarget | null => null));
+      const currentSpatialTarget =
+        spatial?.target?.kind === target.kind ? spatial.target : null;
+      const spatialPicks = usesSpatialCycle
+        ? [...previousSpatialPicks, currentSpatialTarget]
+        : undefined;
+      const normalizedSpatial = spatialPicks
+        ? normalizeSpatialAlignResult(spatial, spatialPicks)
+        : null;
+      const solved = usesSpatialCycle ? null : solveAlign(draft.mode, picks, cursor);
+      const solutions = solved?.lines ?? normalizedSpatial?.lines ?? [];
+      const line = solutions[0] ?? null;
+      const selectedSpatialIndex = normalizedSpatial?.solutionIndices[0] ?? 0;
+      foldTargetGate.issue();
+      const nextFoldDraft = withSpatialFoldSelection(
+        line
+          ? alignFoldDraft(
+              s,
+              line,
+              picks,
+              usesSpatialCycle
+                ? spatialMovingSide(
+                    normalizedSpatial?.materialSolutions[selectedSpatialIndex],
+                    normalizedSpatial?.solutions[selectedSpatialIndex]
+                      ?.sideForFirstPick.initial ?? "right",
+                  )
+                : undefined,
+            )
+          : null,
+        normalizedSpatial?.solutions,
+        normalizedSpatial?.materialSolutions,
+        selectedSpatialIndex,
+      );
       set({
         alignDraft: {
           mode: draft.mode,
           picks,
           cpPicks,
-          solutions: solved.lines,
+          solutions,
           solutionIndex: 0,
-          reason: solved.reason,
+          reason: normalizedSpatial?.reason ?? solved?.reason ?? null,
+          ...(spatialPicks === undefined || normalizedSpatial === null
+            ? {}
+            : {
+                spatialPicks,
+                spatialSolutions: normalizedSpatial.solutions,
+                spatialMaterialSolutions: normalizedSpatial.materialSolutions,
+                spatialSolutionIndices: normalizedSpatial.solutionIndices,
+                spatialReason: normalizedSpatial.reason,
+              }),
         },
-        foldDraft: line ? alignFoldDraft(s, line, picks) : null,
+        foldDraft: nextFoldDraft,
         errorMessage: null,
       });
     },
@@ -988,19 +1491,44 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
     nextAlignSolution: () => {
       const s = get();
       const draft = s.alignDraft;
-      if (!draft || draft.solutions.length < 2) return;
-      const index = (draft.solutionIndex + 1) % draft.solutions.length;
+      const solutionCount = draft?.solutions.length ?? 0;
+      if (!draft || solutionCount < 2) return;
+      const index = (draft.solutionIndex + 1) % solutionCount;
+      const usesSpatialCycle = draft.spatialSolutionIndices !== undefined;
+      const spatialIndex = draft.spatialSolutionIndices?.[index] ?? index;
       const line = draft.solutions[index];
       foldTargetGate.issue();
-      set({
-        alignDraft: { ...draft, solutionIndex: index },
-        foldDraft: s.foldDraft
+      const nextFoldDraft = withSpatialFoldSelection(
+        s.foldDraft
           ? {
               ...clearFoldTargetQuery(s.foldDraft),
               line,
-              movingSide: initialMovingSide(line, draft.picks[0]),
+              movingSide: usesSpatialCycle
+                ? spatialMovingSide(
+                    draft.spatialMaterialSolutions?.[spatialIndex],
+                    s.foldDraft.movingSide,
+                  )
+                : initialMovingSide(line, draft.picks[0]),
             }
-          : alignFoldDraft(s, line, draft.picks),
+          : alignFoldDraft(
+              s,
+              line,
+              draft.picks,
+              usesSpatialCycle
+                ? spatialMovingSide(
+                    draft.spatialMaterialSolutions?.[spatialIndex],
+                    draft.spatialSolutions?.[spatialIndex]?.sideForFirstPick.initial ??
+                      "right",
+                  )
+                : undefined,
+            ),
+        draft.spatialSolutions,
+        draft.spatialMaterialSolutions,
+        spatialIndex,
+      );
+      set({
+        alignDraft: { ...draft, solutionIndex: index },
+        foldDraft: nextFoldDraft,
       });
     },
 
@@ -1008,14 +1536,31 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
       const draft = get().alignDraft;
       if (!draft || draft.picks.length === 0) return;
       foldTargetGate.issue();
+      const picks = draft.picks.slice(0, -1);
+      const cpPicks = draft.cpPicks?.slice(0, -1);
+      const spatialPicks = draft.spatialPicks?.slice(0, -1);
+      const spatialReset =
+        spatialPicks === undefined || spatialPicks.length === 0
+          ? {}
+          : {
+              spatialPicks,
+              spatialSolutions: [] as (SpatialFoldTarget | null)[],
+              spatialMaterialSolutions: [] as (
+                | SpatialMaterialForMovingSide
+                | null
+              )[],
+              spatialSolutionIndices: [] as number[],
+              spatialReason: null,
+            };
       set({
         alignDraft: {
-          ...draft,
-          picks: draft.picks.slice(0, -1),
-          cpPicks: draft.cpPicks?.slice(0, -1),
+          mode: draft.mode,
+          picks,
+          cpPicks,
           solutions: [],
           solutionIndex: 0,
           reason: null,
+          ...spatialReset,
         },
         foldDraft: null,
       });

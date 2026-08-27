@@ -15,6 +15,7 @@ export function formatSavedAt(savedAtMs: number | null): string {
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
+    second: "2-digit",
   });
 }
 
@@ -26,12 +27,14 @@ export function fileName(path: string): string {
 
 export function RecoveryDialog() {
   const recovery = useAppStore((s) => s.recovery);
+  const recoveryChoices = useAppStore((s) => s.recoveryChoices);
+  const recoveryDismissed = useAppStore((s) => s.recoveryDismissed);
+  const recoveryBusy = useAppStore((s) => s.recoveryBusy);
   const resolveRecovery = useAppStore((s) => s.resolveRecovery);
+  const dismissRecovery = useAppStore((s) => s.dismissRecovery);
   const restoreButtonRef = useRef<HTMLButtonElement>(null);
-  if (!recovery) return null;
-
-  const at = formatSavedAt(recovery.saved_at_ms);
-  const target = recovery.document_path;
+  if (!recovery || recoveryDismissed) return null;
+  const choices = recoveryChoices.length > 0 ? recoveryChoices : [recovery];
 
   return (
     <ModalDialog
@@ -40,37 +43,68 @@ export function RecoveryDialog() {
       escapeAction={{ kind: "stay" }}
       data-floating-ui="recovery-dialog"
     >
-        <h2 id="recovery-title">前回の終了が正常に行われませんでした</h2>
-        <p>
-          {at
-            ? `作業中だった内容(${at}時点)が残っています。復元しますか?`
-            : "作業中だった内容が残っています。復元しますか?"}
-        </p>
-        <p className="hint">
-          {target
-            ? `元の作品:${fileName(target)}(復元しても、保存するまで元のファイルは変わりません)`
-            : "まだ保存していない作品です(復元しても、保存するまでファイルは作られません)"}
-        </p>
-        <p className="hint">
-          「破棄する」を選ぶと、控えていた内容は消えて元に戻せません。
-        </p>
-        <div className="button-row">
-          <button
-            ref={restoreButtonRef}
-            type="button"
-            className="button-primary"
-            onClick={() => void resolveRecovery(true)}
-          >
-            復元する
-          </button>
-          <button
-            type="button"
-            className="button-danger"
-            onClick={() => void resolveRecovery(false)}
-          >
-            破棄する
-          </button>
-        </div>
+      <h2 id="recovery-title">前回の終了が正常に行われませんでした</h2>
+      <p>
+        {choices.length === 1
+          ? "作業中だった内容が残っています。どうしますか?"
+          : `作業中だった内容が${choices.length}件残っています。内容ごとに選べます。`}
+      </p>
+      <ul aria-label="前回の作業">
+        {choices.map((choice, index) => {
+          const at = formatSavedAt(choice.saved_at_ms);
+          const target = choice.document_path;
+          return (
+            <li key={choice.candidate_id ?? `current-${index}`}>
+              <p>
+                {at ? `保存した日時: ${at}` : "保存した日時: 分かりません"}
+              </p>
+              <p className="hint">
+                {target
+                  ? `元の作品: ${fileName(target)}`
+                  : "元の作品: まだ保存していない作品"}
+              </p>
+              <p className="hint">
+                手順数: {choice.step_count === undefined ? "分かりません" : `${choice.step_count}件`}
+              </p>
+              <div className="button-row">
+                <button
+                  ref={index === 0 ? restoreButtonRef : undefined}
+                  type="button"
+                  className="button-primary"
+                  disabled={recoveryBusy}
+                  onClick={() =>
+                    void resolveRecovery(true, choice.candidate_id)
+                  }
+                >
+                  復元する
+                </button>
+                <button
+                  type="button"
+                  className="button-danger"
+                  disabled={recoveryBusy}
+                  onClick={() =>
+                    void resolveRecovery(false, choice.candidate_id)
+                  }
+                >
+                  破棄する
+                </button>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="hint">
+        復元しても、保存するまで元のファイルは変わりません。「破棄する」を選ぶと、控えていた内容は消えて元に戻せません。
+      </p>
+      <div className="button-row">
+        <button
+          type="button"
+          disabled={recoveryBusy}
+          onClick={dismissRecovery}
+        >
+          あとで確認する
+        </button>
+      </div>
     </ModalDialog>
   );
 }

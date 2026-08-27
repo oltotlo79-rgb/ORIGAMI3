@@ -9,7 +9,11 @@ import {
   SNAP_RADIUS_PX,
 } from "../CpEditor/interaction";
 import { planeRadius, screenToPlane } from "../../lib/planeProject";
-import type { Vec2 } from "../../lib/types";
+import type { Document, Face, Frame3D, Vec2 } from "../../lib/types";
+import type {
+  SpatialAlignTarget,
+  SpatialVec3,
+} from "../../lib/spatialAlignTypes";
 import { ALIGN_STEPS, type AlignTarget } from "../../lib/alignFold";
 import { nearestAlignPoint } from "../../lib/alignPick";
 import { foldLayers, snapFoldPoint } from "./foldDraw";
@@ -19,7 +23,10 @@ import {
   type PaperPickSurface,
 } from "./hingePicker";
 import {
+  facePlacement,
+  mapPoint,
   pointInPolygon,
+  type FacePositionSlot,
   type FacePlacement,
 } from "./edgeHighlight";
 import {
@@ -31,6 +38,11 @@ import {
   type CpPick3D,
 } from "./cpPick3d";
 import type { Viewer3DScene } from "./sceneBuilder";
+import {
+  SPATIAL_REPROJECTION_EPS,
+  spatialLineTargetFromHinge,
+  spatialPointTargetFromPick,
+} from "./spatialAlign";
 
 /** 折り線の端点を紙の点・輪郭へ吸着させる距離(px) */
 const FOLD_SNAP_PX = 14;
@@ -64,6 +76,10 @@ export interface AlignPick {
   cursor: Vec2 | null;
   /** 展開図側の識別子。展開図の頂点・辺として拾えたときだけ入る */
   cpPick: AlignCpPick | null;
+  /** 3D値を落とさず保持した一時入力。支持面を一意に説明できなければnull。 */
+  spatialTarget: SpatialAlignTarget | null;
+  /** 解の順を決めるクリック位置。紙面に当たらなければglobal XYで補わずnull。 */
+  spatialCursorWorld: SpatialVec3 | null;
 }
 
 /** 測定へ渡す、3D上の点を展開図へ逆写像した結果。 */
@@ -82,6 +98,7 @@ export interface ViewerPickingOptions {
 export interface ViewerPickingApi {
   cpIndex: () => CpFaceIndex | null;
   facePlacementOf: (faceId: number) => FacePlacement | null;
+  facePlacements: (materialPoint?: Vec2 | null) => FacePlacement[];
   planePoint: (rect: DOMRect, x: number, y: number) => Vec2 | null;
   rawPoint: (rect: DOMRect, x: number, y: number) => Vec2 | null;
   cpPickAt: (
@@ -101,6 +118,138 @@ export interface ViewerPickingApi {
     x: number,
     y: number,
   ) => AlignPick | null;
+}
+
+/** 同じCP edgeを説明する材料端点が一意な場合だけ、保存用の2D targetにする。 */
+export function materialAlignLineTarget(
+  index: CpFaceIndex | null,
+  edgeId: number,
+): Extract<AlignTarget, { kind: "line" }> | null {
+  if (index === null) return null;
+  let found: Extract<AlignTarget, { kind: "line" }> | null = null;
+  for (const edges of index.edges.values()) {
+    for (const edge of edges) {
+      if (edge.id !== edgeId) continue;
+      const candidate: Extract<AlignTarget, { kind: "line" }> = {
+        kind: "line",
+        a: [edge.a[0], edge.a[1]],
+        b: [edge.b[0], edge.b[1]],
+      };
+      if (found === null) {
+        found = candidate;
+        continue;
+      }
+      const sameDirection =
+        found.a[0] === candidate.a[0] &&
+        found.a[1] === candidate.a[1] &&
+        found.b[0] === candidate.b[0] &&
+        found.b[1] === candidate.b[1];
+      const reverseDirection =
+        found.a[0] === candidate.b[0] &&
+        found.a[1] === candidate.b[1] &&
+        found.b[0] === candidate.a[0] &&
+        found.b[1] === candidate.a[1];
+      if (!sameDirection && !reverseDirection) return null;
+    }
+  }
+  return found;
+}
+
+/**
+ * 選んだowner面そのもののraw Frame3Dだけから、z=0面上の説明値を作る。
+ * 別の面・layer・Face ID順の代表値へは落とさない。表示用の層offsetも読まない。
+ */
+export function foldedEvidenceOnSelectedFace(
+  doc: Document,
+  faces: readonly Face[],
+  frame3d: Frame3D | null,
+  faceId: number | null,
+  materialPoints: readonly Vec2[],
+): Vec2[] | null {
+  if (faceId === null || materialPoints.length === 0) return null;
+  const matchingFaces = faces.filter((face) => face.id === faceId);
+  if (matchingFaces.length !== 1) return null;
+  const face = matchingFaces[0];
+  const vertexPositions = new Map(
+    doc.cp.vertices.map((vertex) => [vertex.id, vertex.pos]),
+  );
+  const polygon: Vec2[] = [];
+  for (const vertexId of face.vertices) {
+    const point = vertexPositions.get(vertexId);
+    if (point === undefined) return null;
+    polygon.push(point);
+  }
+  if (
+    polygon.length < 3 ||
+    materialPoints.some(
+      (point) =>
+        !Number.isFinite(point[0]) ||
+        !Number.isFinite(point[1]) ||
+        !pointInPolygon(polygon, point, SPATIAL_REPROJECTION_EPS),
+    )
+  ) {
+    return null;
+  }
+  if (frame3d === null) {
+    return materialPoints.map((point) => [point[0], point[1]]);
+  }
+
+  const frameFaces = frame3d.faces.filter((candidate) => candidate.face === faceId);
+  if (frameFaces.length !== 1) return null;
+  const rawPolygon = frameFaces[0].polygon;
+  if (rawPolygon.length !== face.vertices.length) return null;
+  if (
+    rawPolygon.some(
+      (point) =>
+        !Number.isFinite(point[0]) ||
+        !Number.isFinite(point[1]) ||
+        !Number.isFinite(point[2]) ||
+        Math.abs(point[2]) > SPATIAL_REPROJECTION_EPS,
+    )
+  ) {
+    return null;
+  }
+  const positions = rawPolygon.flat();
+  const slots = new Map<number, FacePositionSlot>([
+    [faceId, { offset: 0, count: rawPolygon.length }],
+  ]);
+  const placement = facePlacement(face, vertexPositions, slots, positions);
+  if (placement === null) return null;
+  const evidence: Vec2[] = [];
+  for (const point of materialPoints) {
+    const mapped = mapPoint(placement, point);
+    if (mapped === null) return null;
+    evidence.push([mapped[0], mapped[1]]);
+  }
+  return evidence;
+}
+
+/** 非平坦面でもCpPick3D.cp/worldが同じ面を証明できれば点pickを失わない。 */
+export function alignPointPickFromCp(
+  pick: CpPick3D,
+  folded: Vec2 | null,
+  placements: readonly FacePlacement[],
+  foldedEvidence: Vec2 | null = null,
+): AlignPick | null {
+  if (pick.vertexId === null) return null;
+  const spatialTarget = spatialPointTargetFromPick(
+    pick,
+    placements,
+    foldedEvidence,
+  );
+  const point: Vec2 | null = spatialTarget
+    ? [pick.cp[0], pick.cp[1]]
+    : folded === null
+      ? null
+      : [folded[0], folded[1]];
+  if (point === null) return null;
+  return {
+    target: { kind: "point", p: point },
+    cursor: point,
+    cpPick: { kind: "vertex", id: pick.vertexId },
+    spatialTarget,
+    spatialCursorWorld: [pick.world[0], pick.world[1], pick.world[2]],
+  };
 }
 
 /**
@@ -139,6 +288,31 @@ export function useViewerPicking({
     },
     [cpIndex, sceneRef],
   );
+
+  /** 現在表示中の全FacePlacement。同じ表示頂点を使い、Frame3Dの別座標源と混ぜない。 */
+  const facePlacements = useCallback((materialPoint: Vec2 | null = null): FacePlacement[] => {
+    const scene = sceneRef.current;
+    const index = cpIndex();
+    if (!scene?.content || !index) return [];
+    const content = scene.content;
+    return index.faces.flatMap((face) => {
+      const polygon = index.polygons.get(face.id);
+      if (
+        materialPoint !== null &&
+        (!polygon ||
+          !pointInPolygon(polygon, materialPoint, SPATIAL_REPROJECTION_EPS))
+      ) {
+        return [];
+      }
+      const placement = placementOf(
+        index,
+        face.id,
+        content.topology.slots,
+        content.positions,
+      );
+      return placement ? [placement] : [];
+    });
+  }, [cpIndex, sceneRef]);
 
   /** canvas上の位置を畳み平面(z=0)の点へ直し、紙の点・輪郭へ吸着させる */
   const planePoint = useCallback(
@@ -304,12 +478,21 @@ export function useViewerPicking({
           vertexId === null
             ? null
             : foldedAlignPoint(s.doc, s.faces, s.frame3d, vertexId);
-        if (vertexId !== null && folded) {
-          return {
-            target: { kind: "point", p: folded },
-            cursor: folded,
-            cpPick: { kind: "vertex", id: vertexId },
-          };
+        if (vertexId !== null && pick) {
+          const foldedEvidence = foldedEvidenceOnSelectedFace(
+            s.doc,
+            s.faces,
+            s.frame3d,
+            pick.faceId,
+            [pick.cp],
+          )?.[0] ?? null;
+          const selected = alignPointPickFromCp(
+            pick,
+            folded,
+            facePlacements(pick.cp),
+            foldedEvidence,
+          );
+          if (selected !== null) return selected;
         }
         const p = rawPoint(rect, x, y);
         if (!p) return null;
@@ -327,7 +510,15 @@ export function useViewerPicking({
           ),
         );
         return hit
-          ? { target: { kind: "point", p: hit }, cursor: p, cpPick: null }
+          ? {
+              target: { kind: "point", p: hit },
+              cursor: p,
+              cpPick: null,
+              // nearestAlignPointはlegacy z=0候補。実worldの同一点を証明できないため補わない。
+              spatialTarget: null,
+              // cpPickAtで同じ画素の紙面hitを得られた場合だけ、raw 3D値を保持する。
+              spatialCursorWorld: pick ? [...pick.world] : null,
+            }
           : null;
       }
       const hit = pickHingeSegment(
@@ -341,22 +532,72 @@ export function useViewerPicking({
         displayedPickSurface(scene) ?? undefined,
       );
       if (!hit) return null;
+      const ownerPlacement =
+        hit.ownerFace === undefined ? null : facePlacementOf(hit.ownerFace);
+      const materialTarget = materialAlignLineTarget(cpIndex(), hit.edgeId);
+      const foldedLine =
+        materialTarget === null
+          ? null
+          : foldedEvidenceOnSelectedFace(
+              s.doc,
+              s.faces,
+              s.frame3d,
+              hit.ownerFace ?? null,
+              [materialTarget.a, materialTarget.b],
+            );
+      const spatialTarget = spatialLineTargetFromHinge(
+        hit,
+        ownerPlacement ? [ownerPlacement] : facePlacements(),
+        foldedLine === null ? null : [foldedLine[0], foldedLine[1]],
+      );
+      const cursorMaterial = ownerPlacement
+        ? cpPointOnFacePlane(
+            ownerPlacement,
+            scene.camera,
+            rect.width,
+            rect.height,
+            x,
+            y,
+          )
+        : null;
+      const cursorWorld =
+        ownerPlacement && cursorMaterial
+          ? mapPoint(ownerPlacement, cursorMaterial)
+          : null;
       return {
-        target: {
-          kind: "line",
-          a: [hit.a.x, hit.a.y],
-          b: [hit.b.x, hit.b.y],
-        },
-        cursor: rawPoint(rect, x, y),
+        target:
+          materialTarget ??
+          ({
+            kind: "line",
+            a: [hit.a.x, hit.a.y],
+            b: [hit.b.x, hit.b.y],
+          } as const),
+        cursor: materialTarget && cursorMaterial
+          ? [cursorMaterial[0], cursorMaterial[1]]
+          : rawPoint(rect, x, y),
         cpPick: { kind: "edge", id: hit.edgeId },
+        // CP材料端点を説明できない線はalignmentへworld XYを混ぜずfail-closedにする。
+        spatialTarget: materialTarget ? spatialTarget : null,
+        // 選んだowner面のchartへ直接投影し、global XYでは補わない。
+        spatialCursorWorld:
+          materialTarget && cursorWorld ? [...cursorWorld] : null,
       };
     },
-    [cpPickAt, rawPoint, sceneRef, selectableEdgeSegmentsRef],
+    [
+      cpIndex,
+      cpPickAt,
+      facePlacementOf,
+      facePlacements,
+      rawPoint,
+      sceneRef,
+      selectableEdgeSegmentsRef,
+    ],
   );
 
   return {
     cpIndex,
     facePlacementOf,
+    facePlacements,
     planePoint,
     rawPoint,
     cpPickAt,

@@ -11,6 +11,7 @@ import type {
   DisplaySettings,
   DocumentView,
   Face,
+  FoldIssue,
   Frame3D,
   SoftMesh,
   StepCreases,
@@ -58,6 +59,7 @@ interface CommandHostState {
   faces: Face[];
   hinges: ReadonlySet<number>;
   warnings: string[];
+  foldIssues: FoldIssue[];
   flatFoldViolations: number[];
   violations: number[];
   selection: Selection;
@@ -190,6 +192,7 @@ export function createCommandService<State extends CommandHostState>(
         faces: view.faces,
         hinges: hingeEdgeIds(view.doc, view.faces),
         warnings: view.warnings,
+        foldIssues: view.fold_issues ?? [],
         flatFoldViolations: keepIfSame(
           state.flatFoldViolations,
           view.flat_fold_violations ?? [],

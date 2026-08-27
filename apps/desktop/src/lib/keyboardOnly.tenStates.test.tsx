@@ -671,7 +671,8 @@ function modeledRect(top: number, height: number, width = 20): DOMRect {
 }
 
 /**
- * 147件すべてが必ず通るviewport判定入口。jsdomは配置計算を持たないため、
+ * 148件（旧147件）すべてが必ず通るviewport判定入口。「あとで確認する」追加で1件増えた。
+ * jsdomは配置計算を持たないため、
  * HTML操作について座標0を合格根拠にせず、表示中・root内・fixedでないという
  * native focus scrollの前提を検査する。実機で外れた紙の12番目だけは、CDP実測
  * top=-32.16 / bottom=-12.31を回帰モデルにし、製品のfocus handlerが最寄りの
@@ -813,7 +814,11 @@ const TEN_STATES: readonly TenStateCase[] = [
     node: () => <ExportDialog />,
     root: dialog,
     assertState: () => {
-      expect(screen.getByRole("heading", { name: "展開図・折り図を書き出す" })).toBeTruthy();
+      expect(
+        screen.getByRole("heading", {
+          name: "作品を書き出す", // 旧「展開図・折り図を書き出す」→新「作品を書き出す」。5番目追加に伴う意図した照合値更新であり、緩和ではない。
+        }),
+      ).toBeTruthy();
       expect(screen.getByText(`保存しました:${LONG_NAME}`)).toBeTruthy();
       expect(screen.getByText(`保存できませんでした:${LONG_ERROR}`)).toBeTruthy();
       expect((screen.getByLabelText("展開図(PNG)") as HTMLInputElement).checked).toBe(true);
@@ -1025,7 +1030,9 @@ const TEN_STATES: readonly TenStateCase[] = [
           name: "前回の終了が正常に行われませんでした",
         }),
       ).toBeTruthy();
-      expect(screen.getByText(/元の作品:折り鶴\.ori3/u)).toBeTruthy();
+      // 旧値「元の作品:折り鶴…」→新値「元の作品: 折り鶴…」:
+      // 候補一覧の日時・作品名・手順数を読み分ける区切り空白を加えたため。
+      expect(screen.getByText(/元の作品: 折り鶴\.ori3/u)).toBeTruthy();
     },
     target: () => screen.getByRole("button", { name: "復元する" }) as FocusTarget,
     activateAndVerify: async (target) => {
@@ -1152,7 +1159,8 @@ const HELP_CHAPTER_LEDGER = [
 ] as const;
 
 /**
- * 147は上限ではなく、この固定標本で2026-08-26に実測した全Tab停止位置の台帳。
+ * 148は上限ではなく、この固定標本で実測した全Tab停止位置の台帳。
+ * 旧値147→新値148: 復旧画面へ「あとで確認する」が1停止位置増えたため。
  * 画面へ操作を足した／替えた場合は、同数の入替でもこの名前付き台帳が赤くなり、
  * 新しい操作結果を検査してから台帳を更新する。存在しない操作は足さない。
  */
@@ -1219,7 +1227,12 @@ const EXPECTED_OPERATION_LEDGER: Readonly<Record<number, readonly string[]>> = {
     buttonId("出っぱりを増やす"),
     buttonId("やめる"),
   ],
-  8: [buttonId("復元する"), buttonId("破棄する")],
+  // 旧台帳2件→新台帳3件: 候補を保持して閉じる「あとで確認する」を追加したため。
+  8: [
+    buttonId("復元する"),
+    buttonId("破棄する"),
+    buttonId("あとで確認する"),
+  ],
   9: [
     buttonId("ヘルプセンターを閉じる"),
     "input:search:章題・本文を検索",
@@ -1692,6 +1705,14 @@ async function expectRecoveryOperation(
   target: FocusTarget,
   ledgerId: string,
 ): Promise<void> {
+  if (ledgerId === buttonId("あとで確認する")) {
+    // 旧台帳には未登録→新台帳では、候補を消すIPCを呼ばず画面だけ閉じる結果を固定する。
+    pressEnter(buttonTarget(target));
+    expect(useAppStore.getState().recoveryDismissed).toBe(true);
+    expect(useAppStore.getState().recovery).not.toBeNull();
+    expect(ipc.recoveryRestore).not.toHaveBeenCalled();
+    return;
+  }
   const accept = ledgerId === buttonId("復元する");
   if (!accept && ledgerId !== buttonId("破棄する")) {
     throw new Error(`復旧画面の結果が未定義です: ${ledgerId}`);
@@ -1830,7 +1851,7 @@ interface RadioChoiceCase {
   stateId: 1 | 2;
   id: string;
   label: string;
-  expected: boolean | "CpSvg" | "CpPng";
+  expected: boolean | "CpSvg" | "CpPng" | "FoldJson";
   disabled: boolean;
 }
 
@@ -1876,6 +1897,14 @@ const RADIO_CHOICE_CASES: readonly RadioChoiceCase[] = [
     label: "折り図(ページごとのSVG)",
     expected: "CpPng",
     disabled: true,
+  },
+  // 旧: 新規2＋書き出し4＝全6 → 新: 新規2＋書き出し5＝全7。5番目の正式追加を照合する更新であり、緩和ではない。
+  {
+    stateId: 2,
+    id: "2:input:radio:ほかの折り紙ソフトのファイル",
+    label: "ほかの折り紙ソフトのファイル",
+    expected: "FoldJson",
+    disabled: false,
   },
 ];
 
@@ -1934,6 +1963,9 @@ beforeEach(() => {
       candidates: [candidate(91)],
     }),
   );
+  // 旧mock未設定（undefined）→新mock null: 復元・破棄後は残存候補を再照会し、
+  // この固定状態では「残りなし」をIPC契約どおり表すため。
+  vi.mocked(ipc.recoveryCheck).mockResolvedValue(null);
   vi.mocked(ipc.recoveryRestore).mockResolvedValue(viewOf());
   vi.mocked(ipc.proposalProgress).mockResolvedValue(null);
   Object.defineProperty(HTMLCanvasElement.prototype, "clientWidth", {
@@ -2091,8 +2123,9 @@ describe("5-E: 固定10状態のキーボード検査", () => {
     },
   );
 
-  it("現在の台帳は10状態の全147停止位置で、1件は読むためだけのfocus対象と明記する", () => {
-    expect(OPERATION_RESULT_CASES).toHaveLength(147);
+  it("現在の台帳は10状態の全148停止位置で、1件は読むためだけのfocus対象と明記する", () => {
+    // 旧値147→新値148: 復旧画面の「あとで確認する」1件を追加したため。
+    expect(OPERATION_RESULT_CASES).toHaveLength(148);
     expect(
       OPERATION_RESULT_CASES.filter(
         ({ ledgerId }) => ledgerId === "div:展開図に表示している手順",
@@ -2100,7 +2133,7 @@ describe("5-E: 固定10状態のキーボード検査", () => {
     ).toHaveLength(1);
   });
 
-  it("10状態の147 Tab停止位置を構造監査し、既知の負座標focusを表示範囲へ戻す", () => {
+  it("10状態の148 Tab停止位置を構造監査し、既知の負座標focusを表示範囲へ戻す", () => {
     const audited: string[] = [];
     const issues: FocusViewportIssue[] = [];
     const originalInnerWidth = Object.getOwnPropertyDescriptor(
@@ -2194,15 +2227,17 @@ describe("5-E: 固定10状態のキーボード検査", () => {
       else Object.defineProperty(window, "innerHeight", originalInnerHeight);
     }
 
-    expect(audited).toHaveLength(147);
-    expect(new Set(audited).size).toBe(147);
+    // 旧値147→新値148: 復旧画面の保留操作も全数構造監査へ含める。
+    expect(audited).toHaveLength(148);
+    expect(new Set(audited).size).toBe(148);
     expect(
       issues,
-      "構造147件を全数監査し、実機で再現した負座標モデル1件はfocus後に表示範囲へ戻します。実座標全数はCDPで測ります。",
+      "構造148件を全数監査し、実機で再現した負座標モデル1件はfocus後に表示範囲へ戻します。実座標全数はCDPで測ります。",
     ).toEqual([]);
   });
 
-  it("radioの全6選択肢は、名前付き台帳と無効状態まで完全一致する", () => {
+  // 旧「全6」→新「全7」。書き出しの5番目を加えた意図変更の照合であり、期待値の緩和ではない。
+  it("radioの全7選択肢は、名前付き台帳と無効状態まで完全一致する", () => {
     const actual = ([1, 2] as const).flatMap((stateId) => {
       mountRadioState(stateId);
       return Array.from(

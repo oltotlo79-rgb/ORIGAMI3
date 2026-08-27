@@ -3,7 +3,8 @@ import type { HelpChapterId } from "../../help/helpTypes";
 import type { MirrorAxisChoice } from "../../lib/mirror";
 import type {
   DisplaySettings,
-  ExportKind,
+  DocumentExportKind,
+  FoldIssue,
   Paper,
   RecoveryInfo,
   SoftMesh,
@@ -39,7 +40,7 @@ export function draftToPaper(draft: NewPaperDraft): Paper {
 
 /** 書き出しダイアログで変えられる指定 */
 export interface ExportSettings {
-  exportKind: ExportKind;
+  exportKind: DocumentExportKind;
   exportIncludeAux: boolean;
   exportLongSide: number;
 }
@@ -51,10 +52,18 @@ export const DEFAULT_PNG_LONG_SIDE = 2048;
 export interface DialogSettingsSliceState {
   /** 前回の異常終了で残った作業中の内容。あれば復旧ダイアログを出す(SYS-003) */
   recovery: RecoveryInfo | null;
+  /** 利用者が選べる前回までの作業。閉じても「前回の作業を確認」から再表示できる。 */
+  recoveryChoices: RecoveryInfo[];
+  /** 「あとで確認する」を選んだ後は、候補を消さずに復旧ダイアログだけを閉じる。 */
+  recoveryDismissed: boolean;
+  /** 持ち越しが4件以上あることを既存の下部メッセージ領域へ出すための状態。 */
+  recoveryOverflowNotice: string | null;
+  /** 復元・破棄の二度押しを防ぐ。 */
+  recoveryBusy: boolean;
   /** 書き出しダイアログを開いているか(常設UIは増やさない。EXP-001/EXP-002) */
   exportOpen: boolean;
   /** 書き出す種類 */
-  exportKind: ExportKind;
+  exportKind: DocumentExportKind;
   /** 補助線も含めるか */
   exportIncludeAux: boolean;
   /** PNGのときの長いほうの辺の点数 */
@@ -65,6 +74,8 @@ export interface DialogSettingsSliceState {
   exportError: string | null;
   /** 保存できたファイルの場所。まだならnull(「保存しました」の表示用) */
   exportSavedPath: string | null;
+  /** 書き出しは続行できたが、利用者へ知らせる必要がある点。 */
+  exportFoldIssues: FoldIssue[];
   /** 新規作成ダイアログを開いているか(常設UIは増やさない。PAP-001) */
   newDialogOpen: boolean;
   /** 新規作成ダイアログで決めている紙の形と大きさ */
@@ -127,7 +138,9 @@ export interface DialogSettingsSliceActions {
   expandPaperActionTip: () => void;
   hidePaperActionTip: () => void;
   checkRecovery: () => Promise<void>;
-  resolveRecovery: (accept: boolean) => Promise<void>;
+  resolveRecovery: (accept: boolean, candidateId?: number | null) => Promise<void>;
+  dismissRecovery: () => void;
+  openRecovery: () => void;
   openExport: () => void;
   closeExport: () => void;
   setExportOption: (patch: Partial<ExportSettings>) => void;

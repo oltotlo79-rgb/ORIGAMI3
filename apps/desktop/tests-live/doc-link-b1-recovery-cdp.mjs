@@ -5,7 +5,7 @@
 // 1. Prepare an empty, isolated app-data directory before the dedicated app starts:
 //
 //    $env:ORI3_TEST_APP_DATA_DIR = "$env:TEMP\\ori3-doclink-recovery"
-//    node apps/desktop/tests-live/doc-link-b1-recovery-cdp.mjs --prepare
+//    node apps/desktop/tests-live/doc-link-b1-recovery-cdp.mjs prepare
 //
 // 2. Start a dedicated desktop.exe with the same ORI3_TEST_APP_DATA_DIR, then verify:
 //
@@ -13,7 +13,7 @@
 //    $env:ORI3_DESKTOP_PID = "<PID>"
 //    $env:ORI3_DESKTOP_EXE = "<absolute desktop.exe path>"
 //    $env:ORI3_DESKTOP_SHA256 = "<SHA-256>"
-//    node apps/desktop/tests-live/doc-link-b1-recovery-cdp.mjs --verify
+//    node apps/desktop/tests-live/doc-link-b1-recovery-cdp.mjs verify
 //
 // The preparation phase refuses a nonempty directory and never deletes anything.
 // The verification phase only chooses "復元する"; it never sends "破棄する".
@@ -80,6 +80,24 @@ function verifyFixture() {
 }
 
 function prepare() {
+  // The offline preflight must be usable before the coordinator allocates an
+  // app-data directory.  It verifies the pinned source fixture but does not
+  // create an autosave until ORI3_TEST_APP_DATA_DIR is explicitly supplied.
+  if (!isolationValue) {
+    verifyFixture();
+    process.stdout.write("M2.T2-8.C02 PREPARE READY\n");
+    process.stdout.write(
+      `${JSON.stringify({
+        prepared: false,
+        cdpConnected: false,
+        desktopStarted: false,
+        fixture: { path: fixture.path, sha256: fixture.sha256 },
+        requiredForMaterialize: "ORI3_TEST_APP_DATA_DIR below the system temp directory",
+        next: "Set ORI3_TEST_APP_DATA_DIR, run prepare again, then start a dedicated desktop.exe with that same value and run verify.",
+      }, null, 2)}\n`,
+    );
+    return;
+  }
   const directory = isolatedDirectory();
   verifyFixture();
   if (existsSync(directory)) {
@@ -100,7 +118,7 @@ function prepare() {
       autosave: paths.autosave,
       marker: paths.marker,
       fixture: { path: fixture.path, sha256: fixture.sha256 },
-      next: "Start a dedicated desktop.exe with this same ORI3_TEST_APP_DATA_DIR, then run --verify.",
+      next: "Start a dedicated desktop.exe with this same ORI3_TEST_APP_DATA_DIR, then run verify.",
     }, null, 2)}\n`,
   );
 }
@@ -269,11 +287,11 @@ async function verify() {
 }
 
 async function main() {
-  if (phase === "--prepare") prepare();
-  else if (phase === "--verify") await verify();
-  else if (phase === "--describe") {
+  if (phase === "prepare" || phase === "--prepare") prepare();
+  else if (phase === "verify" || phase === "--verify") await verify();
+  else if (phase === "describe" || phase === "--describe") {
     process.stdout.write("M2.T2-8.C02 PREPARE/VERIFY NOT EXECUTED\n");
-    process.stdout.write(`${JSON.stringify({ id: "M2.T2-8.C02", phases: ["--prepare", "--verify"], executed: false }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ id: "M2.T2-8.C02", phases: ["prepare", "verify"], executed: false }, null, 2)}\n`);
   } else {
     throw new Error(`unknown phase: ${phase}`);
   }

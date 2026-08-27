@@ -205,6 +205,9 @@ export function createFoldAllRuntime<State extends FoldAllHostState>(
     return active.returnState;
   };
 
+  // 一斉表示からの復帰契約: 通常形・手順位置・選択・道具・角度は完全に復帰する。
+  // 一斉表示中に利用者が変えた視点は保つため、カメラはsnapshotも復元もしない。
+  // 視点を変えない場合の0%画素一致は維持する。
   const restoreAfterFoldAllPreviewOnce = async (
     restoreUi = true,
   ): Promise<boolean> => {

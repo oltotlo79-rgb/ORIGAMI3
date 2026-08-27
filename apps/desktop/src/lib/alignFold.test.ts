@@ -19,7 +19,7 @@ import {
   sortByCursor,
   type FoldLine,
 } from "./alignFold";
-import type { Vec2 } from "./types";
+import type { AlignMode, AlignTarget, Vec2 } from "./types";
 
 /** 線が直線 c0*x + c1*y = c2 の上に乗っているか(両端点で確かめる) */
 function onLine(line: FoldLine, c0: number, c1: number, c2: number) {
@@ -31,6 +31,72 @@ function onLine(line: FoldLine, c0: number, c1: number, c2: number) {
 /** 線が点を通るか */
 function passesThrough(line: FoldLine, p: Vec2) {
   expect(distanceToLine(line, p)).toBeCloseTo(0, 9);
+}
+
+interface ChartIsometry {
+  name: string;
+  matrix: [[number, number], [number, number]];
+  offset: Vec2;
+}
+
+function mapChartPoint(transform: ChartIsometry, point: Vec2): Vec2 {
+  return [
+    transform.matrix[0][0] * point[0] +
+      transform.matrix[0][1] * point[1] +
+      transform.offset[0],
+    transform.matrix[1][0] * point[0] +
+      transform.matrix[1][1] * point[1] +
+      transform.offset[1],
+  ];
+}
+
+function unmapChartPoint(transform: ChartIsometry, point: Vec2): Vec2 {
+  const x = point[0] - transform.offset[0];
+  const y = point[1] - transform.offset[1];
+  return [
+    transform.matrix[0][0] * x + transform.matrix[1][0] * y,
+    transform.matrix[0][1] * x + transform.matrix[1][1] * y,
+  ];
+}
+
+function mapChartTarget(transform: ChartIsometry, target: AlignTarget): AlignTarget {
+  return target.kind === "point"
+    ? { kind: "point", p: mapChartPoint(transform, target.p) }
+    : {
+        kind: "line",
+        a: mapChartPoint(transform, target.a),
+        b: mapChartPoint(transform, target.b),
+      };
+}
+
+function lineSignature(line: FoldLine): [number, number, number] {
+  const dx = line[1][0] - line[0][0];
+  const dy = line[1][1] - line[0][1];
+  const length = Math.hypot(dx, dy);
+  let nx = -dy / length;
+  let ny = dx / length;
+  let offset = nx * line[0][0] + ny * line[0][1];
+  if (nx < -1e-12 || (Math.abs(nx) <= 1e-12 && ny < 0)) {
+    nx = -nx;
+    ny = -ny;
+    offset = -offset;
+  }
+  return [nx, ny, offset];
+}
+
+function expectSameInfiniteLineSet(actual: FoldLine[], expected: FoldLine[], label: string) {
+  expect(actual, label).toHaveLength(expected.length);
+  const unmatched = actual.map(lineSignature);
+  for (const expectedLine of expected) {
+    const signature = lineSignature(expectedLine);
+    const match = unmatched.findIndex(
+      (candidate) =>
+        Math.max(...candidate.map((value, index) => Math.abs(value - signature[index]))) <=
+        1e-7,
+    );
+    expect(match, label).toBeGreaterThanOrEqual(0);
+    unmatched.splice(match, 1);
+  }
 }
 
 describe("perpendicularBisector(点と点を合わせる)", () => {
@@ -515,5 +581,122 @@ describe("solveAlign(合わせ方ごとの入口)", () => {
     ]);
     expect(perpendicular.lines).toHaveLength(1);
     onLine(perpendicular.lines[0], 0, 1, 1);
+  });
+});
+
+describe("solveAlignの共通等長2D chart契約", () => {
+  const angle = 0.37;
+  const cosine = Math.cos(angle);
+  const sine = Math.sin(angle);
+  const transforms: ChartIsometry[] = [
+    {
+      name: "回転+平行移動",
+      matrix: [
+        [cosine, -sine],
+        [sine, cosine],
+      ],
+      offset: [2.5, -1.25],
+    },
+    {
+      name: "鏡映+回転+平行移動",
+      matrix: [
+        [cosine, sine],
+        [sine, -cosine],
+      ],
+      offset: [-1.75, 2.25],
+    },
+  ];
+  const cases: { mode: AlignMode; picks: AlignTarget[]; cursor: Vec2 }[] = [
+    {
+      mode: "throughTwoPoints",
+      picks: [
+        { kind: "point", p: [0.1, 0.2] },
+        { kind: "point", p: [0.8, 0.6] },
+      ],
+      cursor: [0.4, 0.9],
+    },
+    {
+      mode: "pointPoint",
+      picks: [
+        { kind: "point", p: [0, 0] },
+        { kind: "point", p: [1, 1] },
+      ],
+      cursor: [0.8, 0.2],
+    },
+    {
+      mode: "lineLine",
+      picks: [
+        { kind: "line", a: [-1, 0], b: [2, 0] },
+        { kind: "line", a: [0, -1], b: [0, 2] },
+      ],
+      cursor: [0.8, 0.9],
+    },
+    {
+      mode: "pointPerpendicularLine",
+      picks: [
+        { kind: "point", p: [0.25, 0.75] },
+        { kind: "line", a: [-1, 0], b: [2, 0] },
+      ],
+      cursor: [0.5, 0.5],
+    },
+    {
+      mode: "pointLineThrough",
+      picks: [
+        { kind: "point", p: [0, 1] },
+        { kind: "line", a: [-2, 0], b: [2, 0] },
+        { kind: "point", p: [0, 0] },
+      ],
+      cursor: [0.75, 0.75],
+    },
+    {
+      mode: "pointToLinePointToLine",
+      picks: [
+        { kind: "point", p: [0, 0] },
+        { kind: "line", a: [1, -1], b: [1, 2] },
+        { kind: "point", p: [-1, 1] },
+        { kind: "line", a: [1, 0], b: [2, 1] },
+      ],
+      cursor: [0.5, 0.75],
+    },
+    {
+      mode: "pointLinePerpendicular",
+      picks: [
+        { kind: "point", p: [0, 2] },
+        { kind: "line", a: [-1, 0], b: [1, 0] },
+        { kind: "line", a: [0, -1], b: [0, 1] },
+      ],
+      cursor: [0.25, 1.25],
+    },
+    {
+      mode: "existingLine",
+      picks: [{ kind: "line", a: [0, 0.4], b: [1, 0.4] }],
+      cursor: [0.5, 0.75],
+    },
+  ];
+
+  it.each(cases)("$modeはchartの回転・平行移動・鏡映後も同じworld直線へ戻る", ({
+    mode,
+    picks,
+    cursor,
+  }) => {
+    const baseline = solveAlign(mode, picks, cursor);
+    expect(baseline.reason, mode).toBeNull();
+    expect(baseline.lines.length, mode).toBeGreaterThan(0);
+
+    for (const transform of transforms) {
+      const chart = solveAlign(
+        mode,
+        picks.map((pick) => mapChartTarget(transform, pick)),
+        mapChartPoint(transform, cursor),
+      );
+      expect(chart.reason, `${mode}: ${transform.name}`).toBeNull();
+      const returnedToWorld = chart.lines.map(
+        (line): FoldLine => [
+          unmapChartPoint(transform, line[0]),
+          unmapChartPoint(transform, line[1]),
+        ],
+      );
+      expectSameInfiniteLineSet(returnedToWorld, baseline.lines, `${mode}: ${transform.name}`);
+    }
   });
 });

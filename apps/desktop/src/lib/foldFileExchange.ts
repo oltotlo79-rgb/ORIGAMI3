@@ -18,7 +18,7 @@ const FOLD_FILE_FILTER: FileDialogFilter = {
  * ContextPanel/ExportDialogがfoldIssueNoticeだけを表示するまでfalseを維持する。
  * trueへ変えると、既存の「開く」「書き出し」に準備済みの選択肢が加わる。
  */
-export const FOLD_FILE_EXCHANGE_READY = false as const;
+export const FOLD_FILE_EXCHANGE_READY = true as const;
 
 export function openFileFiltersForReadiness(
   ready: boolean,

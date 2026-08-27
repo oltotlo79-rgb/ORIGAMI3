@@ -387,6 +387,17 @@
   min-width: 0;
 }
 
+/* 1000×700実測: button下端702.58pxはviewport 700pxを必要2.58px超過した。
+   bottom 8px（必要量に対する使用率32%）を確保し、下端を692px以下に保つ。 */
+.fold-all-preview > .button-row {
+  display: flex;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  position: sticky;
+  bottom: var(--sp-3);
+  z-index: 1;
+}
+
 .fold-all-preview-min,
 .fold-all-preview-max {
   color: var(--color-text-muted);

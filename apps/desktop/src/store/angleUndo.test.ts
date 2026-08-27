@@ -3,7 +3,7 @@
 // 角度の変更は作品データではないのでedit_undoの履歴に載らず、直前の
 // 「線の追加」が取り消されていた。角度の履歴を画面側に持って直した。
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Document, DocumentView, Face, SolveResult } from "../lib/types";
 
 vi.mock("../ipc/client", () => ({
@@ -73,12 +73,13 @@ const SOLVED: SolveResult = {
   iterations: 1,
 };
 
-/** 実機の操作を待つ(間引きの実行と応答の反映) */
-const settle = () => new Promise((r) => setTimeout(r, POSE_WAIT_MS));
+/** 間引きの実行と応答の反映まで偽時計を進める */
+const settle = () => vi.advanceTimersByTimeAsync(POSE_WAIT_MS);
 
 beforeEach(() => {
   vi.clearAllMocks();
   resetPoseThrottle();
+  vi.useFakeTimers();
   vi.mocked(ipc.poseSolve).mockResolvedValue(SOLVED);
   vi.mocked(ipc.editUndo).mockResolvedValue(VIEW);
   vi.mocked(ipc.editRedo).mockResolvedValue(VIEW);
@@ -97,6 +98,12 @@ beforeEach(() => {
     currentStep: null,
     errorMessage: null,
   });
+});
+
+afterEach(() => {
+  resetPoseThrottle();
+  if (vi.isFakeTimers()) vi.clearAllTimers();
+  vi.useRealTimers();
 });
 
 describe("折り角度の元に戻す/やり直し", () => {

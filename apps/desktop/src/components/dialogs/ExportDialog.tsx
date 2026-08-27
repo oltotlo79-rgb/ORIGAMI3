@@ -5,6 +5,10 @@
 
 import { save } from "@tauri-apps/plugin-dialog";
 import { useRef } from "react";
+import {
+  foldIssueNotice,
+  type FoldIssueNoticeInput,
+} from "../../lib/foldNotices";
 import { useAppStore } from "../../store/appStore";
 import { fileName } from "../RecoveryDialog";
 import { NumberStepper } from "../NumberStepper";
@@ -18,6 +22,39 @@ export { EXPORT_CHOICES } from "./exportChoices";
 export const NO_STEPS_REASON =
   "折り手順がまだありません。紙を折って手順を作ると折り図を書き出せます。";
 
+export const EXPORT_FOLD_ISSUE_CONFIRMATION =
+  "書き出した内容について、次の点をご確認ください。元の作品は変更されていません。";
+
+const FOLD_EXPORT_FAILURE_NOTICE =
+  "ほかの折り紙ソフトのファイルを書き出せませんでした。作品の内容と保存先を確認してください。";
+
+/**
+ * 書き出し結果の注意を、raw値を使わない安全な日本語だけで全件表示する。
+ * storeには原情報を保ち、この表示境界では閉じた文言表だけを使う。
+ */
+export function ExportFoldIssueNotices({
+  issues,
+}: {
+  issues: readonly FoldIssueNoticeInput[];
+}) {
+  if (issues.length === 0) return null;
+
+  return (
+    <div className="hint" role="status" aria-live="polite">
+      <p>
+        ほかの折り紙ソフトのファイルを書き出しました（注意
+        {issues.length}件）
+      </p>
+      <p>{EXPORT_FOLD_ISSUE_CONFIRMATION}</p>
+      <ul>
+        {issues.map((issue, index) => (
+          <li key={index}>{foldIssueNotice(issue, "export")}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export function ExportDialog() {
   const initialChoiceRef = useRef<HTMLInputElement>(null);
   const saveButtonRef = useRef<HTMLButtonElement>(null);
@@ -29,6 +66,7 @@ export function ExportDialog() {
   const busy = useAppStore((s) => s.exportBusy);
   const error = useAppStore((s) => s.exportError);
   const savedPath = useAppStore((s) => s.exportSavedPath);
+  const foldIssues = useAppStore((s) => s.exportFoldIssues);
   const setOption = useAppStore((s) => s.setExportOption);
   const runExport = useAppStore((s) => s.runExport);
   const close = useAppStore((s) => s.closeExport);
@@ -36,6 +74,8 @@ export function ExportDialog() {
   if (!open) return null;
 
   const choice = EXPORT_CHOICES.find((c) => c.kind === kind) ?? EXPORT_CHOICES[0];
+  // 失敗の原情報はstoreへ残し、ほかのソフト用だけは画面境界で内部語を隠す。
+  const visibleError = kind === "FoldJson" ? FOLD_EXPORT_FAILURE_NOTICE : error;
   // 折り図は手順が要る。選べないときも選択肢は残し、理由を出す
   const blocked = (c: (typeof EXPORT_CHOICES)[number]) =>
     c.needsSteps === true && stepCount === 0;
@@ -78,7 +118,7 @@ export function ExportDialog() {
               type="radio"
               name="export-kind"
               checked={kind === c.kind}
-              disabled={blocked(c)}
+              disabled={(busy && kind !== c.kind) || blocked(c)}
               onChange={() => setOption({ exportKind: c.kind })}
             />
             {c.label}
@@ -113,7 +153,8 @@ export function ExportDialog() {
         </label>
       )}
       {savedPath && <p className="hint">保存しました:{fileName(savedPath)}</p>}
-      {error && <p className="error-text">保存できませんでした:{error}</p>}
+      <ExportFoldIssueNotices issues={foldIssues} />
+      {error && <p className="error-text">保存できませんでした:{visibleError}</p>}
       <div className="button-row">
         <button
           ref={saveButtonRef}

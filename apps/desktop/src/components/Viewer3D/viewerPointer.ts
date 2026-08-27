@@ -19,6 +19,7 @@ import {
   type ToolId,
   useAppStore,
 } from "../../store/appStore";
+import type { SpatialAlignPickResult } from "../../store/slices/documentSlice";
 import { viewerHint } from "../../lib/viewerHint";
 import { measureGuide } from "../../lib/measureGuide";
 import {
@@ -38,6 +39,7 @@ import type {
   Vec2,
 } from "../../lib/types";
 import { facesAtPoint, foldLayers } from "./foldDraw";
+import type { FacePlacement } from "./edgeHighlight";
 import { type GrabMode } from "./grabFold";
 import {
   pickFace,
@@ -58,6 +60,8 @@ import {
   type AlignPick,
   type ViewerPickingApi,
 } from "./viewerPicking";
+import { ALIGN_STEPS } from "../../lib/alignFold";
+import { solveSpatialAlignOnCommonPlane } from "./spatialAlign";
 
 /** これ以上動かしたら「クリック」ではなく視点操作とみなす(px) */
 const CLICK_MOVE_PX = 4;
@@ -158,6 +162,7 @@ export type ViewerPointerPickingPort = Pick<
   | "measurePointFromPick"
   | "resolveAlignPick"
   | "facePlacementOf"
+  | "facePlacements"
 >;
 
 export interface UseViewerPointerArgs {
@@ -277,6 +282,51 @@ export function useViewerPointerState(): ViewerPointerViewState {
 /** 2点の距離(展開図・畳み平面のどちらの座標でも使う) */
 function distance2(a: Vec2, b: Vec2): number {
   return Math.hypot(a[0] - b[0], a[1] - b[1]);
+}
+
+/**
+ * 1回のpointer-upでstore第4引数へ渡すraw spatial結果を作る。
+ * 未完成pickはtargetだけ、完成pickはsolverのnull slotを圧縮せずそのまま渡す。
+ */
+export function buildSpatialAlignPickResult(
+  draft: AlignDraft,
+  pressed: AlignPick,
+  placements: readonly FacePlacement[],
+): SpatialAlignPickResult {
+  const stepCount = ALIGN_STEPS[draft.mode].length;
+  const restarting = draft.picks.length >= stepCount;
+  const previousSpatialPicks = restarting
+    ? []
+    : (draft.spatialPicks ?? draft.picks.map(() => null));
+  const picks = [...previousSpatialPicks, pressed.spatialTarget];
+  if (picks.length < stepCount) {
+    return {
+      target: pressed.spatialTarget,
+      solutions: [],
+      materialSolutions: [],
+      reason: null,
+    };
+  }
+  if (picks.some((pick) => pick === null)) {
+    return {
+      target: pressed.spatialTarget,
+      solutions: [],
+      materialSolutions: [],
+      reason: "3Dで選んだ点・線を同じ支持面の値として説明できません",
+    };
+  }
+  const solved = solveSpatialAlignOnCommonPlane({
+    mode: draft.mode,
+    picks: picks.filter((pick): pick is NonNullable<typeof pick> => pick !== null),
+    cursorWorld: pressed.spatialCursorWorld,
+    placements,
+  });
+  return {
+    target: pressed.spatialTarget,
+    solutions: solved.solutions,
+    materialSolutions: solved.materialSolutions,
+    reason: solved.reason,
+  };
 }
 
 /** 修飾キーから「何枚の紙を動かすか」を決める(説明は常にヒント行に出す) */
@@ -453,6 +503,7 @@ export function useViewerPointer({
     measurePointFromPick,
     resolveAlignPick,
     facePlacementOf,
+    facePlacements,
   } = picking;
   const {
     activeTool,
@@ -1218,7 +1269,17 @@ export function useViewerPointer({
       const st = useAppStore.getState();
       if (pressed) {
         if (st.activeTool === "fold" && st.alignDraft && st.doc) {
-          st.pickAlignTarget(pressed.target, pressed.cursor, pressed.cpPick);
+          const spatial = buildSpatialAlignPickResult(
+            st.alignDraft,
+            pressed,
+            facePlacements(),
+          );
+          st.pickAlignTarget(
+            pressed.target,
+            pressed.cursor,
+            pressed.cpPick,
+            spatial,
+          );
         }
         updateHoverCursor(e.currentTarget, x, y, e.ctrlKey);
         return;
@@ -1324,6 +1385,7 @@ export function useViewerPointer({
       drawHighlight,
       drawingRef,
       foldClickRef,
+      facePlacements,
       grabRef,
       measurePointFromPick,
       measurePressRef,

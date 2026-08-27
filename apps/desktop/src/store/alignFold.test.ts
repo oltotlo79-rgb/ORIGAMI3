@@ -4,8 +4,34 @@
 //  - 解が2つあるときの切り替え・1つ戻す・やめる
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ALIGN_STEPS, type AlignMode, type AlignTarget } from "../lib/alignFold";
+
+const solveAlignCounter = vi.hoisted(() => ({ count: 0 }));
+
+vi.mock("../lib/alignFold", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/alignFold")>();
+  return {
+    ...actual,
+    solveAlign: (...args: Parameters<typeof actual.solveAlign>) => {
+      solveAlignCounter.count += 1;
+      return actual.solveAlign(...args);
+    },
+  };
+});
+
+import {
+  ALIGN_STEPS,
+  solveAlign,
+  type AlignMode,
+  type AlignTarget,
+  type FoldLine,
+} from "../lib/alignFold";
+import type {
+  SpatialAlignTarget,
+  SpatialFoldTarget,
+  SpatialSupportPlane,
+} from "../lib/spatialAlignTypes";
 import type { DocumentView, ReplayResult, Vec2 } from "../lib/types";
+import type { SpatialMaterialForMovingSide } from "./slices/documentSlice";
 
 vi.mock("../ipc/client", () => ({
   documentNew: vi.fn(),
@@ -93,6 +119,85 @@ function seedFlat(): void {
 const XAXIS = { kind: "line" as const, a: [0, 0] as Vec2, b: [1, 0] as Vec2 };
 const YAXIS = { kind: "line" as const, a: [0, 0] as Vec2, b: [0, 1] as Vec2 };
 const TOP_AXIS = { kind: "line" as const, a: [0, 1] as Vec2, b: [1, 1] as Vec2 };
+const SPATIAL_SUPPORT: SpatialSupportPlane = {
+  point: [0, 0, 0],
+  normal: [0, 0, 1],
+};
+const SPATIAL_XAXIS: SpatialAlignTarget = {
+  kind: "line",
+  aWorld: [0, 0, 0],
+  bWorld: [1, 0, 0],
+  supportPlanes: [SPATIAL_SUPPORT],
+  foldedLine: null,
+};
+const SPATIAL_YAXIS: SpatialAlignTarget = {
+  kind: "line",
+  aWorld: [0, 0, 0],
+  bWorld: [0, 1, 0],
+  supportPlanes: [SPATIAL_SUPPORT],
+  foldedLine: null,
+};
+const SPATIAL_LINE_SOLUTIONS: [SpatialFoldTarget, SpatialFoldTarget] = [
+  {
+    lineWorld: [
+      [-1, -1, 0],
+      [1, 1, 0],
+    ],
+    keepWorldForMovingSide: {
+      left: [-0.25, 0.25, 0],
+      right: [0.25, -0.25, 0],
+    },
+    foldedPlane: null,
+    sideForFirstPick: { automatic: null, initial: "right" },
+  },
+  {
+    lineWorld: [
+      [-1, 1, 0],
+      [1, -1, 0],
+    ],
+    keepWorldForMovingSide: {
+      left: [0.25, 0.25, 0],
+      right: [-0.25, -0.25, 0],
+    },
+    foldedPlane: null,
+    sideForFirstPick: { automatic: null, initial: "right" },
+  },
+];
+const SPATIAL_MATERIAL_LINES: [FoldLine, FoldLine] = [
+  [
+    [0, 0.2],
+    [1, 0.2],
+  ],
+  [
+    [0.8, 0],
+    [0.8, 1],
+  ],
+];
+const SPATIAL_MATERIAL_SOLUTIONS: [
+  SpatialMaterialForMovingSide,
+  SpatialMaterialForMovingSide,
+] = [
+  {
+    left: {
+      materialLine: SPATIAL_MATERIAL_LINES[0],
+      materialKeepSidePoint: [0.5, 0.6],
+    },
+    right: {
+      materialLine: SPATIAL_MATERIAL_LINES[0],
+      materialKeepSidePoint: [0.5, 0],
+    },
+  },
+  {
+    left: {
+      materialLine: SPATIAL_MATERIAL_LINES[1],
+      materialKeepSidePoint: [0.4, 0.5],
+    },
+    right: {
+      materialLine: SPATIAL_MATERIAL_LINES[1],
+      materialKeepSidePoint: [0.95, 0.5],
+    },
+  },
+];
 
 /** 8つの合わせ方を、折り線が一意に求まる代表入力で漏れなく走査する。 */
 const AUTOMATIC_SIDE_CASES: { mode: AlignMode; picks: AlignTarget[] }[] = [
@@ -141,6 +246,7 @@ const AUTOMATIC_SIDE_CASES: { mode: AlignMode; picks: AlignTarget[] }[] = [
 
 beforeEach(() => {
   vi.clearAllMocks();
+  solveAlignCounter.count = 0;
   seedFlat();
 });
 
@@ -158,10 +264,26 @@ describe("選択の進行", () => {
     const draft = useAppStore.getState().alignDraft!;
     expect(draft.picks).toHaveLength(2);
     expect(draft.solutions).toHaveLength(1);
+    expect(draft.spatialPicks).toBeUndefined();
+    expect(draft.spatialSolutions).toBeUndefined();
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        useAppStore.getState().foldDraft,
+        "spatialTarget",
+      ),
+    ).toBe(false);
     // 折り線は y = 1 - x(両端点で x + y = 1)
     for (const p of useAppStore.getState().foldDraft!.line) {
       expect(p[0] + p[1]).toBeCloseTo(1, 9);
     }
+  });
+
+  it("第4引数を省略したlegacy cycleだけはstoreで1回解く", () => {
+    const s = useAppStore.getState();
+    s.beginAlign("existingLine");
+    s.pickAlignTarget(XAXIS);
+    expect(solveAlignCounter.count).toBe(1);
+    expect(useAppStore.getState().foldDraft).not.toBeNull();
   });
 
   it("種類の違う対象は受け付けない(点を選ぶところで線を選んでも進まない)", () => {
@@ -404,6 +526,107 @@ describe("解が2つあるとき", () => {
     expect(useAppStore.getState().foldDraft?.direction).toBe("Down");
     expect(useAppStore.getState().foldDraft?.target).toBe("top");
   });
+
+  it("spatial solve 1回だけで3D解と材料値を同じindexで往復する", () => {
+    // 3D担当が共通chartで行う唯一のsolve。以後storeへ第4引数として渡す。
+    expect(solveAlign("lineLine", [XAXIS, YAXIS], [1, 1]).lines).toHaveLength(2);
+    expect(solveAlignCounter.count).toBe(1);
+    const s = useAppStore.getState();
+    s.beginAlign("lineLine");
+    s.pickAlignTarget(XAXIS, [1, 1], null, {
+      target: SPATIAL_XAXIS,
+      solutions: [],
+      materialSolutions: [],
+      reason: null,
+    });
+    s.pickAlignTarget(YAXIS, [1, 1], null, {
+      target: SPATIAL_YAXIS,
+      solutions: SPATIAL_LINE_SOLUTIONS,
+      materialSolutions: SPATIAL_MATERIAL_SOLUTIONS,
+      reason: "共通3D平面の2解",
+    });
+    // storeは材料値を正本にし、傾斜面のlegacy XYをもう一度解かない。
+    expect(solveAlignCounter.count).toBe(1);
+
+    let align = useAppStore.getState().alignDraft!;
+    let fold = useAppStore.getState().foldDraft!;
+    expect(align.spatialPicks).toEqual([SPATIAL_XAXIS, SPATIAL_YAXIS]);
+    expect(align.spatialSolutions).toEqual(SPATIAL_LINE_SOLUTIONS);
+    expect(align.spatialMaterialSolutions).toEqual(SPATIAL_MATERIAL_SOLUTIONS);
+    expect(align.solutions).toEqual(SPATIAL_MATERIAL_LINES);
+    expect(align.spatialSolutionIndices).toEqual([0, 1]);
+    expect(align.spatialReason).toBe("共通3D平面の2解");
+    expect(fold.line).toEqual(SPATIAL_MATERIAL_LINES[0]);
+    expect(fold.spatialTarget).toEqual(SPATIAL_LINE_SOLUTIONS[0]);
+    expect(fold.spatialMaterialForMovingSide).toEqual(
+      SPATIAL_MATERIAL_SOLUTIONS[0],
+    );
+
+    useAppStore.getState().updateFoldDraft({ direction: "Down", target: "top" });
+    useAppStore.getState().nextAlignSolution();
+    align = useAppStore.getState().alignDraft!;
+    fold = useAppStore.getState().foldDraft!;
+    expect(align.solutionIndex).toBe(1);
+    expect(fold.line).toEqual(SPATIAL_MATERIAL_LINES[1]);
+    expect(fold.spatialTarget).toEqual(SPATIAL_LINE_SOLUTIONS[1]);
+    expect(fold.spatialMaterialForMovingSide).toEqual(
+      SPATIAL_MATERIAL_SOLUTIONS[1],
+    );
+    expect(fold.direction).toBe("Down");
+    expect(fold.target).toBe("top");
+
+    useAppStore.getState().nextAlignSolution();
+    fold = useAppStore.getState().foldDraft!;
+    expect(useAppStore.getState().alignDraft?.solutionIndex).toBe(0);
+    expect(fold.spatialTarget).toEqual(SPATIAL_LINE_SOLUTIONS[0]);
+    expect(fold.spatialMaterialForMovingSide).toEqual(
+      SPATIAL_MATERIAL_SOLUTIONS[0],
+    );
+  });
+
+  it("raw spatialのnull slotを詰めず、dense解から同じraw indexへ対応する", () => {
+    const s = useAppStore.getState();
+    s.beginAlign("lineLine");
+    s.pickAlignTarget(XAXIS, [1, 1], null, {
+      target: SPATIAL_XAXIS,
+      solutions: [],
+      materialSolutions: [],
+      reason: null,
+    });
+    const rawSolutions = [
+      SPATIAL_LINE_SOLUTIONS[0],
+      null,
+      SPATIAL_LINE_SOLUTIONS[1],
+    ];
+    const rawMaterials = [
+      SPATIAL_MATERIAL_SOLUTIONS[0],
+      null,
+      SPATIAL_MATERIAL_SOLUTIONS[1],
+    ];
+    s.pickAlignTarget(YAXIS, [1, 1], null, {
+      target: SPATIAL_YAXIS,
+      solutions: rawSolutions,
+      materialSolutions: rawMaterials,
+      reason: null,
+    });
+
+    const align = useAppStore.getState().alignDraft!;
+    expect(align.spatialSolutions).toEqual(rawSolutions);
+    expect(align.spatialMaterialSolutions).toEqual(rawMaterials);
+    expect(align.solutions).toEqual(SPATIAL_MATERIAL_LINES);
+    expect(align.spatialSolutionIndices).toEqual([0, 2]);
+    expect(useAppStore.getState().foldDraft?.spatialTarget).toEqual(
+      SPATIAL_LINE_SOLUTIONS[0],
+    );
+
+    useAppStore.getState().nextAlignSolution();
+    expect(useAppStore.getState().alignDraft?.solutionIndex).toBe(1);
+    expect(useAppStore.getState().foldDraft).toMatchObject({
+      line: SPATIAL_MATERIAL_LINES[1],
+      spatialTarget: SPATIAL_LINE_SOLUTIONS[1],
+      spatialMaterialForMovingSide: SPATIAL_MATERIAL_SOLUTIONS[1],
+    });
+  });
 });
 
 describe("折れないとき・やり直し", () => {
@@ -416,6 +639,37 @@ describe("折れないとき・やり直し", () => {
     const draft = useAppStore.getState().alignDraft!;
     expect(draft.solutions).toHaveLength(0);
     expect(draft.reason).toContain("届きません");
+    expect(useAppStore.getState().foldDraft).toBeNull();
+  });
+
+  it("3D入力がnullならlegacy XY解へfallbackせず材料照会も送らない", async () => {
+    const s = useAppStore.getState();
+    s.beginAlign("lineLine");
+    s.pickAlignTarget(XAXIS, [1, 1], null, {
+      target: SPATIAL_XAXIS,
+      solutions: [],
+      materialSolutions: [],
+      reason: null,
+    });
+    s.pickAlignTarget(YAXIS, [1, 1], null, {
+      target: null,
+      // 呼出側が誤って解を添えても、null pickがあるcycleでは全て拒否する。
+      solutions: SPATIAL_LINE_SOLUTIONS,
+      materialSolutions: SPATIAL_MATERIAL_SOLUTIONS,
+      reason: "支持面を一意に決められません",
+    });
+
+    const align = useAppStore.getState().alignDraft!;
+    expect(align.solutions).toEqual([]);
+    expect(align.spatialPicks).toEqual([SPATIAL_XAXIS, null]);
+    expect(align.spatialSolutions).toEqual([null, null]);
+    expect(align.spatialMaterialSolutions).toEqual([null, null]);
+    expect(align.spatialSolutionIndices).toEqual([]);
+    expect(align.spatialReason).toBe("支持面を一意に決められません");
+    expect(useAppStore.getState().foldDraft).toBeNull();
+
+    await useAppStore.getState().requestFoldTargetInfo();
+    expect(ipc.sequenceApply).not.toHaveBeenCalled();
     expect(useAppStore.getState().foldDraft).toBeNull();
   });
 
@@ -436,6 +690,97 @@ describe("折れないとき・やり直し", () => {
     // 何も選んでいなければ何も起きない
     useAppStore.getState().undoAlignPick();
     expect(useAppStore.getState().alignDraft?.picks).toHaveLength(0);
+  });
+
+  it("3D選択を戻す・完成後に選び直すとspatial一時値も同時に消す", () => {
+    const s = useAppStore.getState();
+    s.beginAlign("lineLine");
+    s.pickAlignTarget(XAXIS, [1, 1], null, {
+      target: SPATIAL_XAXIS,
+      solutions: [],
+      materialSolutions: [],
+      reason: null,
+    });
+    s.pickAlignTarget(YAXIS, [1, 1], null, {
+      target: SPATIAL_YAXIS,
+      solutions: SPATIAL_LINE_SOLUTIONS,
+      materialSolutions: SPATIAL_MATERIAL_SOLUTIONS,
+      reason: "古い3D解",
+    });
+
+    useAppStore.getState().undoAlignPick();
+    let draft = useAppStore.getState().alignDraft!;
+    expect(draft.picks).toEqual([XAXIS]);
+    expect(draft.spatialPicks).toEqual([SPATIAL_XAXIS]);
+    expect(draft.spatialSolutions).toEqual([]);
+    expect(draft.spatialMaterialSolutions).toEqual([]);
+    expect(draft.spatialSolutionIndices).toEqual([]);
+    expect(draft.spatialReason).toBeNull();
+    expect(useAppStore.getState().foldDraft).toBeNull();
+
+    useAppStore.getState().pickAlignTarget(YAXIS, [1, 1], null, {
+      target: SPATIAL_YAXIS,
+      solutions: SPATIAL_LINE_SOLUTIONS,
+      materialSolutions: SPATIAL_MATERIAL_SOLUTIONS,
+      reason: "新しい3D解",
+    });
+    expect(useAppStore.getState().alignDraft?.spatialReason).toBe("新しい3D解");
+
+    useAppStore.getState().pickAlignTarget(TOP_AXIS, null, null, {
+      target: {
+        ...SPATIAL_XAXIS,
+        aWorld: [0, 1, 0],
+        bWorld: [1, 1, 0],
+      },
+      solutions: [],
+      materialSolutions: [],
+      reason: "新しい1件目",
+    });
+    draft = useAppStore.getState().alignDraft!;
+    expect(draft.picks).toEqual([TOP_AXIS]);
+    expect(draft.spatialPicks).toEqual([
+      {
+        ...SPATIAL_XAXIS,
+        aWorld: [0, 1, 0],
+        bWorld: [1, 1, 0],
+      },
+    ]);
+    expect(draft.spatialSolutions).toEqual([]);
+    expect(draft.spatialMaterialSolutions).toEqual([]);
+    expect(draft.spatialSolutionIndices).toEqual([]);
+    expect(draft.spatialReason).toBe("新しい1件目");
+    expect(useAppStore.getState().foldDraft).toBeNull();
+  });
+
+  it("spatial pickを0件まで戻した後は純2D cycleとして再開する", () => {
+    const s = useAppStore.getState();
+    const point = { kind: "point" as const, p: [0, 0] as Vec2 };
+    s.beginAlign("pointPoint");
+    s.pickAlignTarget(point, null, null, {
+      target: {
+        kind: "point",
+          world: [0, 0, 0],
+          supportPlanes: [SPATIAL_SUPPORT],
+          foldedPoint: null,
+      },
+      solutions: [],
+      materialSolutions: [],
+      reason: null,
+    });
+    expect(solveAlignCounter.count).toBe(0);
+
+    useAppStore.getState().undoAlignPick();
+    let draft = useAppStore.getState().alignDraft!;
+    expect(draft.picks).toEqual([]);
+    expect(draft.spatialPicks).toBeUndefined();
+    expect(draft.spatialSolutions).toBeUndefined();
+    expect(draft.spatialMaterialSolutions).toBeUndefined();
+    expect(draft.spatialSolutionIndices).toBeUndefined();
+
+    useAppStore.getState().pickAlignTarget(point);
+    draft = useAppStore.getState().alignDraft!;
+    expect(solveAlignCounter.count).toBe(1);
+    expect(draft.spatialPicks).toBeUndefined();
   });
 
   it("やめると途中経過も折り線も消える", () => {

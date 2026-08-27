@@ -8,6 +8,7 @@ import {
   useAppStore,
 } from "../store/appStore";
 import { flatFoldNotice } from "../lib/flatFoldNotice";
+import { foldIssueNotice } from "../lib/foldNotices";
 import { uniqueWarnings } from "../lib/techniques";
 import { fileName } from "./RecoveryDialog";
 import { MeasureControls } from "./MeasureControls";
@@ -34,12 +35,15 @@ import { TechniqueDraftContent } from "./contextTechniques";
 
 export function ContextPanel() {
   const warnings = useAppStore((s) => s.warnings);
+  const foldIssues = useAppStore((s) => s.foldIssues);
   const poseWarnings = useAppStore((s) => s.poseWarnings);
   const replayWarnings = useAppStore((s) => s.replayWarnings);
   const flatFoldViolations = useAppStore((s) => s.flatFoldViolations);
   const errorMessage = useAppStore((s) => s.errorMessage);
   const documentSavedPath = useAppStore((s) => s.documentSavedPath);
   const mirrorAxisNotice = useAppStore((s) => s.mirrorAxisNotice);
+  const recoveryOverflowNotice = useAppStore((s) => s.recoveryOverflowNotice);
+  const openRecovery = useAppStore((s) => s.openRecovery);
   const foldAllPreview = useAppStore((s) => s.foldAllPreview);
   const currentStep = useAppStore((s) => s.currentStep);
   const activeTool = useAppStore((s) => s.activeTool);
@@ -134,6 +138,8 @@ export function ContextPanel() {
         (errorMessage !== null ||
           documentSavedPath !== null ||
           mirrorAxisNotice !== null ||
+          recoveryOverflowNotice !== null ||
+          foldIssues.length > 0 ||
           allWarnings.length > 0 ||
           hasRelaxations) && (
           <div className="context-messages">
@@ -145,6 +151,30 @@ export function ContextPanel() {
             )}
             {mirrorAxisNotice !== null && (
               <p className="mirror-axis-notice">{mirrorAxisNotice}</p>
+            )}
+            {recoveryOverflowNotice !== null && (
+              <p className="mirror-axis-notice" aria-live="polite">
+                {recoveryOverflowNotice}{" "}
+                <button type="button" onClick={openRecovery}>
+                  前回の作業を確認
+                </button>
+              </p>
+            )}
+            {foldIssues.length > 0 && (
+              <div className="warning-text" role="status" aria-live="polite">
+                <p>
+                  ほかの折り紙ソフトのファイルを読み込みました（注意
+                  {foldIssues.length}件）
+                </p>
+                <p>
+                  読み込んだ内容について、次の点をご確認ください。作品は開いています。
+                </p>
+                <ul>
+                  {foldIssues.map((issue, index) => (
+                    <li key={index}>{foldIssueNotice(issue, "import")}</li>
+                  ))}
+                </ul>
+              </div>
             )}
             <RelaxationMessages />
             {allWarnings.map((w, i) => (

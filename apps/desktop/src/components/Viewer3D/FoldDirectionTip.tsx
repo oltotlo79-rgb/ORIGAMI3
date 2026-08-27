@@ -31,10 +31,31 @@ export function FoldDirectionTip() {
 
   const creaseOnly = isCreaseOnlyFoldTarget(draft);
   const commitDisabled = busy || foldTargetCommitBlocked(draft);
-  const automaticSide = automaticMovingSide(draft.line, alignDraft?.picks[0]);
+  const spatialSide = draft.spatialTarget?.sideForFirstPick ?? null;
+  const spatialSideAvailable = (side: "left" | "right"): boolean => {
+    const folded = draft.spatialTarget?.foldedPlane;
+    return folded
+      ? folded.keepPointForMovingSide[side] !== null
+      : draft.spatialMaterialForMovingSide?.[side] != null;
+  };
+  const preferredSpatialSide = spatialSide?.initial ?? null;
+  const otherSpatialSide =
+    preferredSpatialSide === "left" ? "right" : "left";
+  const effectiveSpatialSide =
+    preferredSpatialSide &&
+    !spatialSideAvailable(preferredSpatialSide) &&
+    spatialSideAvailable(otherSpatialSide)
+      ? otherSpatialSide
+      : preferredSpatialSide;
+  const automaticSide = spatialSide
+    ? effectiveSpatialSide === spatialSide.initial
+      ? spatialSide.automatic
+      : null
+    : automaticMovingSide(draft.line, alignDraft?.picks[0]);
+  const initialSide =
+    effectiveSpatialSide ?? initialMovingSide(draft.line, alignDraft?.picks[0]);
   const changedFromAutomatic =
-    alignDraft !== null &&
-    draft.movingSide !== initialMovingSide(draft.line, alignDraft.picks[0]);
+    alignDraft !== null && draft.movingSide !== initialSide;
   const sideMessage = !alignDraft
     ? "黄色で示した紙を折り返します"
     : changedFromAutomatic
