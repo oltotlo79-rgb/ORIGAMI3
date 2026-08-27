@@ -171,9 +171,11 @@ jobs:
 
     env:
       CARGO_TERM_COLOR: never
-      CARGO_TARGET_DIR: ${{ runner.temp }}\ori3-target-docs7b
 
     steps:
+      - name: Set the build directory
+        shell: pwsh
+        run: '"CARGO_TARGET_DIR=$env:RUNNER_TEMP\ori3-target-docs7b" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8'
       - name: Checkout repository
         uses: actions/checkout@v4
 

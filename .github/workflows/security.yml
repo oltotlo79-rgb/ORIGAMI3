@@ -26,11 +26,13 @@ jobs:
     timeout-minutes: 90
     env:
       CARGO_TERM_COLOR: always
-      CARGO_TARGET_DIR: ${{ runner.temp }}\ori3-target-security
       CARGO_AUDIT_VERSION: "0.22.2"
       CARGO_AUDIT_CRATE_SHA256: 700c2b240f7fd330c24b675fe429f73a5b676531fcc6300400b2b67f155ba12a
 
     steps:
+      - name: Set the build directory
+        shell: pwsh
+        run: '"CARGO_TARGET_DIR=$env:RUNNER_TEMP\ori3-target-security" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8'
       # A floating checkout action is not used. The exact event revision is fetched and verified.
       - name: Check out the exact event revision
         shell: pwsh
