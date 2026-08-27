@@ -580,3 +580,11 @@ Co-Authored-By: Codex <noreply@openai.com>
      `release\desktop.exe`・中の最新ファイル・使用中プロセス・判定・理由を削除前に表示する。
   7. `scripts/clean-build-dirs.test.ps1` が、古いフォルダー内の新しい実行ファイル／最新ファイル、
      既定のプレビュー、`.git`、排他ロック、実行中プロセス、証拠ファイル、対象範囲を隔離一時領域で検査する。
+
+### 10.7.17 アプリを二重起動した（2026-08-27）
+
+- **起きたこと**: 実機確認の版を切り替えるとき、`CloseMainWindow()` の後に旧プロセスが残っている（直前の書出し試験で開いた OS の保存ダイアログが窓を閉じるのを妨げていた）のに次の版を `Start-Process` し、約1分間 `desktop.exe` が2つになった。後から起動した方はデバッグポート 9222 を取れなかった。§5 の「二重起動しない」に反した。
+- **原因**: 起動スクリプトが「閉じたかどうか」の結果を見ずに起動へ進んでいた。
+- **仕組みでの対策**:
+  1. 起動の PowerShell は、`Get-Process desktop` が**空**であることを確認できない限り `Start-Process` しない。閉じないときは原因（ダイアログ等）を記録してから `Stop-Process -Force` で終了し、空になってから起動する。
+  2. 実機確認（CDP）用の起動は `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=9222 …"` を必ず設定し（`scripts/capture-steps.ps1:657-685` と同じ）、起動後に `Get-NetTCPConnection -LocalPort 9222 -State Listen` の OwningProcess の**親 PID が新しい `desktop.exe`** であることを確認してから PID を担当へ送る（同日、ポート指定を付け忘れて担当の接続が `ECONNREFUSED` になった失敗も同じ対策で防ぐ）。
