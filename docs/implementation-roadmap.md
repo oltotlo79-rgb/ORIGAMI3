@@ -721,7 +721,7 @@ pub fn outside_reverse(...) -> Result<FoldThroughResult, String>;
 - [x] **状態の可視化(UI-009)**: 3Dビュー上部に現在のモードと操作ヒントを1行で常時表示(例「紙をドラッグすると折れます / Shiftで1枚だけ」)。できない状態では理由を表示(例「折り途中では折れません。手順の最後に戻してください」)。ボタンは無効化しても消さず、理由をツールチップに出す — [証拠:M2.T2-6c.C04](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6c-c04) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6c.C04 evidence=MANUAL.M2.T2-6c.C04.SCREEN-ACCEPTANCE -->
 - [ ] **技法の選び方を簡素化**: 技法サブメニューを常時表示のパレットにせず、**つかんで動かした結果に応じて自動判定**した技法名を手順に記録する。手動で技法を指定したい場合のみサブメニューを使う — [証拠:M2.T2-6c.C05](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6c-c05) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6c.C05 evidence=MANUAL.M2.T2-6c.C05.SCREEN-ACCEPTANCE -->
 - [ ] 既存の「折り線を引いてパネルで確定」する操作は残す(細かい指定をしたいとき用)が、主操作ではなくする — [証拠:M2.T2-6c.C06](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6c-c06) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6c.C06 evidence=TEST.M2.T2-6c.C06 -->
-- [ ] **DOM環境のテスト基盤を導入**(jsdom + @testing-library/react)。プレビュー・ヒント表示・ドラッグ操作の主要経路にテストを付ける(これまで目視確認のみだった領域) — [証拠:M2.T2-6c.C07](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6c-c07) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6c.C07 evidence=MANUAL.M2.T2-6c.C07.SCREEN-ACCEPTANCE -->
+- [x] **DOM環境のテスト基盤を導入**(jsdom + @testing-library/react)。プレビュー・ヒント表示・ドラッグ操作の主要経路にテストを付ける(これまで目視確認のみだった領域) — [証拠:M2.T2-6c.C07](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6c-c07) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6c.C07 evidence=MANUAL.M2.T2-6c.C07.SCREEN-ACCEPTANCE --> <!-- 独立レビュー 2026-08-26: Viewer3D.dom.test.tsx:402-431がjsdom上のpointer down/move/up・半透明preview・releaseを確認、ViewerOperationHint.dom.test.tsx:83-122とOperationSteps.dom.test.tsx:83-157が利用者向け案内を確認。npm.cmd run test -- --run（5 file）=93 passed、skip/todo=0。確認実行: Vitest 4.1.10。 -->
 - [ ] 実機確認: **説明なしで座布団折り→鶴の基本形まで折れるか**を操作しながら確認し、詰まった箇所をprogress.mdに記録 — [証拠:M2.T2-6c.C08](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6c-c08) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6c.C08 evidence=MANUAL.M2.T2-6c.C08.SCREEN-ACCEPTANCE -->
 - [ ] コミット `紙をつかんで動かす直感的な折り操作に変更` → プッシュ — [証拠:M2.T2-6c.C09](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6c-c09) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6c.C09 evidence=MANUAL.M2.T2-6c.C09.COMMIT-PUSH -->
 
@@ -959,9 +959,9 @@ UI-011〜013の実装経路と画面検査はある。M6の完成判定は、F1�
 
 利用者の承認により、次の2項目を目標へ加える。実装順と数値による受け入れ条件は`docs/improvement-roadmap-2026-08-24.md`の§12および§15を正とする。
 
-### FOLD 1.2 限定の読み書き
+### FOLD 1.1と1.2の共通取込および1.2書出し
 
-- [ ] FOLD 1.2限定で、対応する展開図・折り角・重なりの情報・線形の手順を読み書きする。対応外の内容は利用者に示し、FOLD-001〜006およびM7の受け入れ基準を満たす。
+- [ ] FOLD 1.1と1.2の共通限定profileから、対応する展開図・折り角・重なりの情報・線形の手順を読み込み、FOLD 1.2として書き出す。対応外の内容は利用者に示し、FOLD-001〜006およびM7の受け入れ基準を満たす。
 
 ### 全部の折り目を一斉に折る一時表示
 

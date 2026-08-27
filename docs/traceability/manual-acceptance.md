@@ -307,9 +307,11 @@ XはCDPで画面操作、表示文字列、画素又は領域の有無を確認�
 3. 操作不能、英語表示、表示崩れがあれば不合格として進捗を書き換えずに報告する。
 
 ## MANUAL.M2.T2-6c.C07.SCREEN-ACCEPTANCE
-1. 統括が画面を同梱した版を1つだけ起動し、checkbox本文の操作を行う。
-2. 本文にある表示、操作結果、日本語の案内を目視し、画面又は撮影記録への参照を残す。
-3. 操作不能、英語表示、表示崩れがあれば不合格として進捗を書き換えずに報告する。
+1. 担当: このDOM検査を実装していないレビュー担当者（画面の目視確認をした人とも別の人）。
+2. 対象: `apps/desktop/src/components/Viewer3D/Viewer3D.dom.test.tsx`、`ViewerOperationHint.dom.test.tsx`、`PaperActionTip.dom.test.tsx`、`apps/desktop/src/components/OperationSteps.dom.test.tsx`、`apps/desktop/src/lib/layerMotion.test.ts`、およびテスト設定。プレビュー表示、操作理由、ドラッグの開始・移動・終了、手順表示のそれぞれが、画面部品を実際に組み立てた検査で確認されているかを読む。
+3. 実行: `cd apps/desktop; npm.cmd run test -- --run src/components/Viewer3D/Viewer3D.dom.test.tsx src/components/Viewer3D/ViewerOperationHint.dom.test.tsx src/components/Viewer3D/PaperActionTip.dom.test.tsx src/components/OperationSteps.dom.test.tsx src/lib/layerMotion.test.ts`。実行結果で全対象がpassし、skipが0であることを確認する。
+4. 合格: 各観点に対応するtest名・実行結果・確認日を記録する。入力変換だけ、test名だけ、又は画面の見た目だけでは合格にしない。少なくとも1本はDOM上のpointer down/move/upを通し、少なくとも1本はプレビュー又は操作理由のDOMを確認していなければ不合格とする。
+5. 不合格: 対応する検査が無い、skipがある、又は上のコマンドが失敗したときは、文書の状態を変えず不足した観点と実パスを統括へ報告する。
 
 ## MANUAL.M2.T2-6c.C08.SCREEN-ACCEPTANCE
 1. 統括が画面を同梱した版を1つだけ起動し、checkbox本文の操作を行う。
@@ -452,9 +454,11 @@ XはCDPで画面操作、表示文字列、画素又は領域の有無を確認�
 4. この対応はTask番号だけで推測していない。題名・確認日・結果を記録し、祖先でなければ合格にしない。
 
 ## MANUAL.M4.T4-5.C03.SCREEN-ACCEPTANCE
-1. 統括が画面を同梱した版を1つだけ起動し、checkbox本文の操作を行う。
-2. 本文にある表示、操作結果、日本語の案内を目視し、画面又は撮影記録への参照を残す。
-3. 操作不能、英語表示、表示崩れがあれば不合格として進捗を書き換えずに報告する。
+1. 担当: 受入担当者（必要なら利用者）。折り鶴ではない、保存済みで手順を2件以上含む作品を1つ開く。所要時間の目安は10分。
+2. 画面上部の「書き出し」を開き、「折り図(PDF)」を選ぶ。保存先は空の作業用フォルダーを選び、保存する。保存後、そのフォルダーに`.pdf`ファイルがちょうど1個あり、サイズが0より大きく、通常のPDF閲覧ソフトで開けることを確認する。
+3. 同じ作品で再び「書き出し」を開き、「折り図(ページごとのSVG)」を選ぶ。PDFとは別の空の作業用フォルダーを選び、保存する。`.svg`ファイルが手順数以上あり、すべてサイズが0より大きく、少なくとも最初と最後のファイルを開いて図と手順番号が表示されることを確認する。
+4. 合格: 2種類の選択肢をそれぞれ選べ、保存操作後に上記のファイル数・拡張子・サイズ・内容を満たす。確認日、作品の手順数、各フォルダーのファイル名とサイズ、確認者を記録する。
+5. 不合格: 選択肢が無い、保存画面へ進めない、保存が失敗する、ファイル数・拡張子・サイズ・表示のいずれかが条件を満たさない場合は、状態を変えずに統括へ報告する。
 
 ## MANUAL.M4.T4-5.C04.COMMIT-PUSH
 1. `docs/implementation-roadmap.md` の `M4.T4-5.C04` と同じTaskを確認する。

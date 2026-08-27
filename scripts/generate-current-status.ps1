@@ -9,10 +9,10 @@ param(
 # ORIGAMI3 現在値generator (Windows PowerShell 5.1 / PowerShell 7対応)
 #
 # 段階7-Bの責務:
-# - gitで追跡されているsourceだけを隔離treeへ複写する。
+# - gitで追跡されているsourceだけを排他制御した隔離cacheへ同期する。
 # - 6指標を実装・runner・PDF成果物から収集する。
 # - 同じsnapshotで2回収集し、JSON/Markdownのbyte一致を確かめる。
-# - 追跡文書は書かず、verification配下の生成物だけを書き換える。
+# - 追跡文書は書かず、TEMPのcacheとverification配下の生成物だけを書き換える。
 #
 # 段階7-Cでは-Check時にdocs/progress.mdのmarkerを照合する。markerの更新と
 # CI配置はこのscript自身では行わず、MarkerFixturesは生成物・実文書をgateしない。
@@ -25,6 +25,7 @@ $script:Latin1 = [System.Text.Encoding]::GetEncoding(28591)
 $script:Ordinal = [System.StringComparer]::Ordinal
 $script:MirrorSetDiagnostics = New-Object 'System.Collections.Generic.Dictionary[string,string]' ($script:Ordinal)
 $script:Root = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot)).TrimEnd([char[]]"\/")
+$script:CollectorPath = [System.IO.Path]::GetFullPath($MyInvocation.MyCommand.Path)
 $script:GeneratedRelativeRoot = "verification/improvement-roadmap/07-docs"
 $script:ForbiddenRelativePath = "docs/competitive-review-2026-08-20.md"
 $script:ForbiddenPrefixes = @("verification/", "scratchpad/", "vendor/")
@@ -32,6 +33,11 @@ $script:TrackedEntries = $null
 $script:TrackedSet = $null
 $script:SelectedSourcePaths = $null
 $script:SnapshotRoot = $null
+$script:SnapshotCacheLock = $null
+$script:SnapshotCacheLeaf = "ori3-current-status-source-cache"
+$script:SnapshotCacheMetadataLeaf = "ori3-current-status-source-cache.metadata.json"
+$script:SnapshotCacheLockLeaf = "ori3-current-status-source-cache.lock"
+$script:SnapshotCacheSchemaVersion = 1
 $script:FrontendPrepared = $false
 $script:LastTestInventoryTimings = $null
 
@@ -490,59 +496,447 @@ function Get-SourceManifestHash {
     }
 }
 
-function Get-NewSnapshotPath {
-    $leaf = "ori3-current-status-source-" + [Guid]::NewGuid().ToString("N")
-    return [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), $leaf)
+function Get-SnapshotCachePaths {
+    $temp = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd([char[]]"\/")
+    return [PSCustomObject][ordered]@{
+        Root = [System.IO.Path]::Combine($temp, $script:SnapshotCacheLeaf)
+        Metadata = [System.IO.Path]::Combine($temp, $script:SnapshotCacheMetadataLeaf)
+        Lock = [System.IO.Path]::Combine($temp, $script:SnapshotCacheLockLeaf)
+    }
 }
 
-function Assert-SafeTemporaryTreePath {
-    param([string]$Path)
+function Assert-SafeSnapshotCachePath {
+    param([string]$Path, [string]$ExpectedLeaf)
 
     $full = [System.IO.Path]::GetFullPath($Path).TrimEnd([char[]]"\/")
     $temp = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd([char[]]"\/")
     $parent = [System.IO.Path]::GetDirectoryName($full).TrimEnd([char[]]"\/")
     $leaf = [System.IO.Path]::GetFileName($full)
     if (-not [string]::Equals($parent, $temp, [System.StringComparison]::OrdinalIgnoreCase) -or
-        -not $leaf.StartsWith("ori3-current-status-source-", [System.StringComparison]::Ordinal) -or
-        $leaf.Length -le "ori3-current-status-source-".Length) {
-        throw "安全な一時source pathではありません: $Path"
+        -not [string]::Equals($leaf, $ExpectedLeaf, [System.StringComparison]::Ordinal)) {
+        throw "安全なcurrent-status cache pathではありません: $Path"
     }
-    if ([System.IO.Directory]::Exists($full)) {
+    if ([System.IO.File]::Exists($full) -or [System.IO.Directory]::Exists($full)) {
         $item = Get-Item -LiteralPath $full -Force
         if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "一時source rootがreparse pointです: $full"
+            throw "current-status cache pathがreparse pointです: $full"
         }
     }
     return $full
 }
 
-function Remove-SafeTemporaryTree {
-    param([string]$Path)
+function Assert-SnapshotCacheTreeHasNoReparsePoints {
+    param([string]$Root)
 
-    $safe = Assert-SafeTemporaryTreePath $Path
-    if ([System.IO.Directory]::Exists($safe)) {
-        [System.IO.Directory]::Delete($safe, $true)
+    if (-not [System.IO.Directory]::Exists($Root)) {
+        return
+    }
+    $pending = New-Object System.Collections.Generic.Stack[string]
+    $pending.Push($Root)
+    while ($pending.Count -gt 0) {
+        $directory = $pending.Pop()
+        foreach ($entry in (Get-ChildItem -LiteralPath $directory -Force)) {
+            if (($entry.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "current-status cache内にreparse pointがあります: $($entry.FullName)"
+            }
+            if ($entry.PSIsContainer) {
+                $pending.Push($entry.FullName)
+            }
+        }
     }
 }
 
-function New-TrackedSourceSnapshot {
-    $destinationRoot = Assert-SafeTemporaryTreePath (Get-NewSnapshotPath)
-    Remove-SafeTemporaryTree $destinationRoot
-    [void][System.IO.Directory]::CreateDirectory($destinationRoot)
+function Remove-SnapshotCacheTree {
+    param([string]$Root, [string]$MetadataPath)
+
+    $safeRoot = Assert-SafeSnapshotCachePath $Root $script:SnapshotCacheLeaf
+    $safeMetadata = Assert-SafeSnapshotCachePath $MetadataPath $script:SnapshotCacheMetadataLeaf
+    Assert-SnapshotCacheTreeHasNoReparsePoints $safeRoot
+    if ([System.IO.Directory]::Exists($safeRoot)) {
+        [System.IO.Directory]::Delete($safeRoot, $true)
+    }
+    if ([System.IO.File]::Exists($safeMetadata)) {
+        [System.IO.File]::Delete($safeMetadata)
+    }
+}
+
+function Enter-SnapshotCacheLock {
+    param([string]$LockPath)
+
+    $safeLock = Assert-SafeSnapshotCachePath $LockPath $script:SnapshotCacheLockLeaf
+    $stream = $null
     try {
-        foreach ($relative in $script:SelectedSourcePaths) {
-            $destination = Get-AbsoluteRepositoryPath $relative $destinationRoot
+        $stream = [System.IO.File]::Open(
+            $safeLock,
+            [System.IO.FileMode]::OpenOrCreate,
+            [System.IO.FileAccess]::ReadWrite,
+            [System.IO.FileShare]::None
+        )
+        $stream.SetLength(0)
+        $owner = $script:Utf8NoBom.GetBytes("pid=$PID`nstarted_utc=$([datetime]::UtcNow.ToString('o'))`n")
+        $stream.Write($owner, 0, $owner.Length)
+        $stream.Flush($true)
+        return $stream
+    }
+    catch {
+        if ($null -ne $stream) {
+            $stream.Dispose()
+        }
+        throw "current-status snapshot cacheの排他lockを取得できません。別の収集が実行中か確認してください: $($_.Exception.Message)"
+    }
+}
+
+function Invoke-CacheToolIdentity {
+    param([string]$FilePath, [string[]]$Arguments, [string]$Label)
+
+    $result = Invoke-NativeCapture $FilePath $Arguments $script:Root
+    if ($result.ExitCode -ne 0) {
+        throw "snapshot cache key用の$Label取得に失敗しました(exit $($result.ExitCode)): $($result.StdErr.Trim())"
+    }
+    return "$Label`0$($result.StdOut.Trim())`0$($result.StdErr.Trim())"
+}
+
+function Get-SnapshotCacheIdentity {
+    $nodeCommand = Get-Command "node.exe" -ErrorAction Stop
+    $npmCommand = Get-Command "npm.cmd" -ErrorAction Stop
+    $nodeDirectory = Split-Path -Parent $npmCommand.Source
+    $npmCli = Join-Path $nodeDirectory "node_modules\npm\bin\npm-cli.js"
+    if (-not [System.IO.File]::Exists($npmCli)) {
+        throw "snapshot cache key用のnpm-cli.jsがありません: $npmCli"
+    }
+
+    $toolchainParts = @(
+        (Invoke-CacheToolIdentity "rustc.exe" @("-vV") "rustc"),
+        (Invoke-CacheToolIdentity "cargo.exe" @("-vV") "cargo"),
+        (Invoke-CacheToolIdentity $nodeCommand.Source @("--version") "node"),
+        (Invoke-CacheToolIdentity $nodeCommand.Source @($npmCli, "--version") "npm")
+    )
+    $toolchainHash = Get-TextSha256 ($toolchainParts -join "`0")
+
+    $profileLines = @(
+        "cache_contract=snapshot-cache-v1",
+        "cargo_registered=cargo test --workspace --locked -- --list --format terse",
+        "cargo_ignored=cargo test --workspace --locked -- --list --ignored --format terse",
+        "cargo_target_dir=$CargoTargetDir",
+        "cargo_incremental=0",
+        "cargo_term_color=never",
+        "vitest_default=vitest list --json --includeTaskLocation --configLoader runner",
+        "vitest_production=vitest list --json --includeTaskLocation --configLoader runner --mode=production src/lib/symmetry.test.ts"
+    )
+    foreach ($name in @(
+        "CARGO_BUILD_TARGET",
+        "CARGO_ENCODED_RUSTFLAGS",
+        "NODE_OPTIONS",
+        "RUSTC_WRAPPER",
+        "RUSTC_WORKSPACE_WRAPPER",
+        "RUSTFLAGS",
+        "RUSTUP_TOOLCHAIN"
+    )) {
+        $profileLines += "$name=$([Environment]::GetEnvironmentVariable($name))"
+    }
+    $profileHash = Get-TextSha256 ($profileLines -join "`n")
+    $cargoLockHash = ConvertTo-Hex (Get-Sha256Bytes (Read-TrackedBytes "Cargo.lock"))
+    $npmLockHash = ConvertTo-Hex (Get-Sha256Bytes (Read-TrackedBytes "apps/desktop/package-lock.json"))
+    $collectorHash = ConvertTo-Hex (Get-Sha256Bytes ([System.IO.File]::ReadAllBytes($script:CollectorPath)))
+    $cacheKey = Get-TextSha256 ("$toolchainHash`n$profileHash`n$cargoLockHash`n$npmLockHash`n$collectorHash")
+
+    return [PSCustomObject][ordered]@{
+        CacheKey = $cacheKey
+        ToolchainHash = $toolchainHash
+        ProfileHash = $profileHash
+        CargoLockHash = $cargoLockHash
+        NpmLockHash = $npmLockHash
+        CollectorHash = $collectorHash
+    }
+}
+
+function Test-ByteSequenceEqual {
+    param([byte[]]$Left, [byte[]]$Right)
+
+    if ($Left.Length -ne $Right.Length) {
+        return $false
+    }
+    for ($index = 0; $index -lt $Left.Length; $index++) {
+        if ($Left[$index] -ne $Right[$index]) {
+            return $false
+        }
+    }
+    return $true
+}
+
+function Get-SnapshotCacheSourcePaths {
+    param([string]$Root)
+
+    if (-not [System.IO.Directory]::Exists($Root)) {
+        return @()
+    }
+    $paths = New-Object System.Collections.Generic.List[string]
+    $pending = New-Object System.Collections.Generic.Stack[string]
+    $pending.Push($Root)
+    while ($pending.Count -gt 0) {
+        $directory = $pending.Pop()
+        foreach ($entry in (Get-ChildItem -LiteralPath $directory -Force)) {
+            if (($entry.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "current-status cache内にreparse pointがあります: $($entry.FullName)"
+            }
+            $relative = Get-RelativePathUnder $Root $entry.FullName "snapshot cache entry"
+            if ($entry.PSIsContainer) {
+                if ([string]::Equals($relative, "apps/desktop/node_modules", [System.StringComparison]::Ordinal)) {
+                    continue
+                }
+                $pending.Push($entry.FullName)
+            }
+            else {
+                [void]$paths.Add((ConvertTo-RepositoryPath $relative))
+            }
+        }
+    }
+    return Get-OrdinalSortedStrings $paths.ToArray()
+}
+
+function Get-CachedSourceManifestHash {
+    param([string]$Root, [string[]]$Paths)
+
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        foreach ($relative in $Paths) {
+            $safeRelative = ConvertTo-RepositoryPath $relative
+            if (Test-ForbiddenSourcePath $safeRelative) {
+                throw "禁止pathがsnapshot cache metadataへ入りました: $safeRelative"
+            }
+            $path = Get-AbsoluteRepositoryPath $safeRelative $Root
+            Assert-NoReparsePathChain $Root $path "snapshot cache $safeRelative"
+            if (-not [System.IO.File]::Exists($path)) {
+                throw "snapshot cache sourceがありません: $safeRelative"
+            }
+            $pathBytes = $script:Utf8NoBom.GetBytes($safeRelative)
+            [void]$sha.TransformBlock($pathBytes, 0, $pathBytes.Length, $pathBytes, 0)
+            $separator = [byte[]](0)
+            [void]$sha.TransformBlock($separator, 0, 1, $separator, 0)
+            $bytes = [System.IO.File]::ReadAllBytes($path)
+            if ($bytes.Length -gt 0) {
+                [void]$sha.TransformBlock($bytes, 0, $bytes.Length, $bytes, 0)
+            }
+            [void]$sha.TransformBlock($separator, 0, 1, $separator, 0)
+        }
+        [void]$sha.TransformFinalBlock((New-Object byte[] 0), 0, 0)
+        return ConvertTo-Hex $sha.Hash
+    }
+    finally {
+        $sha.Dispose()
+    }
+}
+
+function Read-SnapshotCacheMetadata {
+    param([string]$MetadataPath)
+
+    $safeMetadata = Assert-SafeSnapshotCachePath $MetadataPath $script:SnapshotCacheMetadataLeaf
+    if (-not [System.IO.File]::Exists($safeMetadata)) {
+        return $null
+    }
+    $text = [System.IO.File]::ReadAllText($safeMetadata, $script:Utf8NoBom)
+    $metadata = ConvertFrom-JsonStrict $text "current-status snapshot cache metadata"
+    if ($metadata -isnot [System.Collections.IDictionary]) {
+        throw "current-status snapshot cache metadataはobjectではありません"
+    }
+    Assert-ExactKeys $metadata @(
+        "schema_version",
+        "cache_key",
+        "toolchain_sha256",
+        "profile_sha256",
+        "cargo_lock_sha256",
+        "npm_lock_sha256",
+        "collector_sha256",
+        "source_manifest_sha256",
+        "source_paths"
+    ) "snapshot cache metadata"
+    if ([int]$metadata["schema_version"] -ne $script:SnapshotCacheSchemaVersion) {
+        throw "current-status snapshot cache metadataのschemaが一致しません"
+    }
+    foreach ($key in @(
+        "cache_key",
+        "toolchain_sha256",
+        "profile_sha256",
+        "cargo_lock_sha256",
+        "npm_lock_sha256",
+        "collector_sha256",
+        "source_manifest_sha256"
+    )) {
+        $value = Get-RequiredString $metadata[$key] "snapshot cache metadata.$key"
+        if ($value -notmatch '^[0-9a-f]{64}$') {
+            throw "current-status snapshot cache metadataのhashが不正です: $key"
+        }
+    }
+    $paths = @($metadata["source_paths"] | ForEach-Object { ConvertTo-RepositoryPath ([string]$_) })
+    $sorted = @(Get-OrdinalSortedStrings $paths)
+    if (-not (Test-OrdinalSequenceEqual $paths $sorted) -or @($paths | Select-Object -Unique).Count -ne $paths.Count) {
+        throw "current-status snapshot cache metadataのsource_pathsがsort済み一意集合ではありません"
+    }
+    $metadata["source_paths"] = $paths
+    return $metadata
+}
+
+function Write-SnapshotCacheMetadata {
+    param(
+        [string]$MetadataPath,
+        [object]$Identity,
+        [string]$SourceManifestHash,
+        [string[]]$SourcePaths
+    )
+
+    $safeMetadata = Assert-SafeSnapshotCachePath $MetadataPath $script:SnapshotCacheMetadataLeaf
+    $metadata = [ordered]@{
+        schema_version = $script:SnapshotCacheSchemaVersion
+        cache_key = $Identity.CacheKey
+        toolchain_sha256 = $Identity.ToolchainHash
+        profile_sha256 = $Identity.ProfileHash
+        cargo_lock_sha256 = $Identity.CargoLockHash
+        npm_lock_sha256 = $Identity.NpmLockHash
+        collector_sha256 = $Identity.CollectorHash
+        source_manifest_sha256 = $SourceManifestHash
+        source_paths = @($SourcePaths)
+    }
+    $json = (ConvertTo-Json -InputObject $metadata -Compress -Depth 10) + "`n"
+    [void](ConvertFrom-JsonStrict $json "new current-status snapshot cache metadata")
+    $temporary = "$safeMetadata.tmp.$PID.$([Guid]::NewGuid().ToString('N'))"
+    $backup = "$safeMetadata.bak.$PID.$([Guid]::NewGuid().ToString('N'))"
+    try {
+        [System.IO.File]::WriteAllBytes($temporary, $script:Utf8NoBom.GetBytes($json))
+        if ([System.IO.File]::Exists($safeMetadata)) {
+            [System.IO.File]::Replace($temporary, $safeMetadata, $backup)
+            [System.IO.File]::Delete($backup)
+        }
+        else {
+            [System.IO.File]::Move($temporary, $safeMetadata)
+        }
+    }
+    finally {
+        if ([System.IO.File]::Exists($temporary)) {
+            [System.IO.File]::Delete($temporary)
+        }
+        if ([System.IO.File]::Exists($backup)) {
+            [System.IO.File]::Delete($backup)
+        }
+    }
+}
+
+function Sync-TrackedSourceSnapshot {
+    param([object]$Identity, [string]$ExpectedSourceManifestHash)
+
+    $paths = Get-SnapshotCachePaths
+    $root = Assert-SafeSnapshotCachePath $paths.Root $script:SnapshotCacheLeaf
+    $metadataPath = Assert-SafeSnapshotCachePath $paths.Metadata $script:SnapshotCacheMetadataLeaf
+    $metadata = $null
+    $rebuildReason = $null
+    try {
+        $metadata = Read-SnapshotCacheMetadata $metadataPath
+        if ($null -eq $metadata) {
+            if ([System.IO.Directory]::Exists($root)) {
+                $rebuildReason = "metadata missing"
+            }
+        }
+        elseif (-not [System.IO.Directory]::Exists($root)) {
+            $rebuildReason = "cache root missing"
+        }
+        elseif (-not [string]::Equals([string]$metadata["cache_key"], [string]$Identity.CacheKey, [System.StringComparison]::Ordinal)) {
+            $rebuildReason = "toolchain/profile/lockfile/collector key changed"
+        }
+        elseif (-not [string]::Equals([string]$metadata["toolchain_sha256"], [string]$Identity.ToolchainHash, [System.StringComparison]::Ordinal) -or
+            -not [string]::Equals([string]$metadata["profile_sha256"], [string]$Identity.ProfileHash, [System.StringComparison]::Ordinal) -or
+            -not [string]::Equals([string]$metadata["cargo_lock_sha256"], [string]$Identity.CargoLockHash, [System.StringComparison]::Ordinal) -or
+            -not [string]::Equals([string]$metadata["npm_lock_sha256"], [string]$Identity.NpmLockHash, [System.StringComparison]::Ordinal) -or
+            -not [string]::Equals([string]$metadata["collector_sha256"], [string]$Identity.CollectorHash, [System.StringComparison]::Ordinal)) {
+            $rebuildReason = "cache identity fields differ from the current toolchain/profile/lockfiles/collector"
+        }
+        else {
+            $metadataPaths = [string[]]@($metadata["source_paths"])
+            $actualCachePaths = [string[]]@(Get-SnapshotCacheSourcePaths $root)
+            if (-not (Test-OrdinalSequenceEqual $metadataPaths $actualCachePaths)) {
+                $rebuildReason = "cached source path set differs from metadata"
+            }
+            else {
+                $cachedHash = Get-CachedSourceManifestHash $root $metadataPaths
+                if (-not [string]::Equals($cachedHash, [string]$metadata["source_manifest_sha256"], [System.StringComparison]::Ordinal)) {
+                    $rebuildReason = "cached source bytes differ from metadata"
+                }
+            }
+        }
+    }
+    catch {
+        $rebuildReason = "metadata/cache validation failed: $($_.Exception.Message)"
+    }
+
+    if ($null -ne $rebuildReason) {
+        Write-Host "snapshot cache rebuild: $rebuildReason"
+        Remove-SnapshotCacheTree $root $metadataPath
+        $metadata = $null
+    }
+    if (-not [System.IO.Directory]::Exists($root)) {
+        [void][System.IO.Directory]::CreateDirectory($root)
+    }
+
+    $previousPaths = if ($null -eq $metadata) { @() } else { [string[]]@($metadata["source_paths"]) }
+    $currentPaths = [string[]]@($script:SelectedSourcePaths)
+    $currentSet = New-Object 'System.Collections.Generic.HashSet[string]' ($script:Ordinal)
+    foreach ($relative in $currentPaths) { [void]$currentSet.Add($relative) }
+
+    $removed = 0
+    foreach ($relative in $previousPaths) {
+        if (-not $currentSet.Contains($relative)) {
+            $obsolete = Get-AbsoluteRepositoryPath $relative $root
+            Assert-NoReparsePathChain $root $obsolete "obsolete snapshot source $relative"
+            if ([System.IO.File]::Exists($obsolete)) {
+                [System.IO.File]::Delete($obsolete)
+                $removed++
+            }
+        }
+    }
+
+    $added = 0
+    $rewritten = 0
+    $unchanged = 0
+    foreach ($relative in $currentPaths) {
+        $destination = Get-AbsoluteRepositoryPath $relative $root
+        Assert-NoReparsePathChain $root $destination "snapshot source $relative"
+        $sourceBytes = [byte[]](Read-TrackedBytes $relative)
+        if ([System.IO.File]::Exists($destination)) {
+            $cachedBytes = [System.IO.File]::ReadAllBytes($destination)
+            if (Test-ByteSequenceEqual $sourceBytes $cachedBytes) {
+                $unchanged++
+                continue
+            }
+            [System.IO.File]::WriteAllBytes($destination, $sourceBytes)
+            $rewritten++
+        }
+        else {
             $parent = [System.IO.Path]::GetDirectoryName($destination)
             if (-not [System.IO.Directory]::Exists($parent)) {
                 [void][System.IO.Directory]::CreateDirectory($parent)
             }
-            [System.IO.File]::WriteAllBytes($destination, (Read-TrackedBytes $relative))
+            [System.IO.File]::WriteAllBytes($destination, $sourceBytes)
+            $added++
         }
-        return $destinationRoot
     }
-    catch {
-        Remove-SafeTemporaryTree $destinationRoot
-        throw
+
+    $actualPaths = [string[]]@(Get-SnapshotCacheSourcePaths $root)
+    if (-not (Test-OrdinalSequenceEqual $currentPaths $actualPaths)) {
+        throw "snapshot cache同期後のsource path集合がtracked manifestと一致しません"
+    }
+    $actualHash = Get-SourceManifestHash $root
+    if (-not [string]::Equals($ExpectedSourceManifestHash, $actualHash, [System.StringComparison]::Ordinal)) {
+        throw "snapshot cache同期後の全byte manifest hashが作業treeと一致しません"
+    }
+    Write-SnapshotCacheMetadata $metadataPath $Identity $actualHash $currentPaths
+
+    return [PSCustomObject][ordered]@{
+        Root = $root
+        Key = $Identity.CacheKey
+        Rebuilt = ($null -ne $rebuildReason)
+        Added = [int]$added
+        Rewritten = [int]$rewritten
+        Removed = [int]$removed
+        Unchanged = [int]$unchanged
+        SourceManifestHash = $actualHash
     }
 }
 
@@ -3369,7 +3763,6 @@ function Write-GeneratedFilesAtomically {
 # reported here; this collector neither relaxes nor derives new thresholds
 # from measured timings (CLAUDE.md sections 9 and 10.7.9).
 $scriptExitCode = 2
-$snapshotCreated = $false
 $jobWatch = [System.Diagnostics.Stopwatch]::StartNew()
 try {
     if ($Check -and $MarkerFixtures) {
@@ -3396,8 +3789,19 @@ try {
     $script:SelectedSourcePaths = @(Get-SelectedSourcePaths)
     Assert-NoUntrackedMetricCandidates
     $sourceHashBefore = Get-SourceManifestHash
-    $script:SnapshotRoot = New-TrackedSourceSnapshot
-    $snapshotCreated = $true
+    $cacheIdentity = Get-SnapshotCacheIdentity
+    $cachePaths = Get-SnapshotCachePaths
+    $script:SnapshotCacheLock = Enter-SnapshotCacheLock $cachePaths.Lock
+    $cacheState = Sync-TrackedSourceSnapshot $cacheIdentity $sourceHashBefore
+    $script:SnapshotRoot = $cacheState.Root
+    Write-Host ("snapshot cache: rebuilt={0}; key={1}; added={2}; rewritten={3}; removed={4}; unchanged={5}; source_sha256={6}" -f
+        $cacheState.Rebuilt,
+        $cacheState.Key,
+        $cacheState.Added,
+        $cacheState.Rewritten,
+        $cacheState.Removed,
+        $cacheState.Unchanged,
+        $cacheState.SourceManifestHash)
     $sourceHashAfterCopy = Get-SourceManifestHash
     $snapshotHashBefore = Get-SourceManifestHash $script:SnapshotRoot
     if (-not [string]::Equals($sourceHashBefore, $sourceHashAfterCopy, [System.StringComparison]::Ordinal) -or
@@ -3416,6 +3820,10 @@ try {
     $secondJson = ConvertTo-CanonicalJson $second.Status
     $secondMarkdown = ConvertTo-GeneratedMarkdown $second.Status
 
+    $snapshotPathsAfter = [string[]]@(Get-SnapshotCacheSourcePaths $script:SnapshotRoot)
+    if (-not (Test-OrdinalSequenceEqual ([string[]]@($script:SelectedSourcePaths)) $snapshotPathsAfter)) {
+        throw "isolated tracked source snapshot path set changed during collection"
+    }
     $snapshotHashAfter = Get-SourceManifestHash $script:SnapshotRoot
     if (-not [string]::Equals($snapshotHashBefore, $snapshotHashAfter, [System.StringComparison]::Ordinal)) {
         throw "isolated tracked source snapshot changed during collection"
@@ -3502,9 +3910,10 @@ catch {
     $scriptExitCode = 2
 }
 finally {
-    if ($snapshotCreated -and $null -ne $script:SnapshotRoot) {
-        try { Remove-SafeTemporaryTree $script:SnapshotRoot }
-        catch { Write-Warning "temporary source cleanup failed: $($_.Exception.Message)"; $scriptExitCode = 2 }
+    if ($null -ne $script:SnapshotCacheLock) {
+        try { $script:SnapshotCacheLock.Dispose() }
+        catch { Write-Warning "snapshot cache lock release failed: $($_.Exception.Message)"; $scriptExitCode = 2 }
+        $script:SnapshotCacheLock = $null
     }
     $jobWatch.Stop()
     Write-Host ("total job elapsed_ms (including cleanup): {0:F1}" -f $jobWatch.Elapsed.TotalMilliseconds)

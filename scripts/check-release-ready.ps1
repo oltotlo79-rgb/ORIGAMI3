@@ -206,16 +206,27 @@ function Test-IsExcludedPath {
 }
 
 function Get-IncludedDirectoryFiles {
-    param([string]$Directory, [object[]]$ParentRules)
+    param(
+        [string]$Directory,
+        [object[]]$ParentRules,
+        [System.Collections.Generic.List[object]]$DirectoryStates = $null
+    )
 
     $rules = @($ParentRules)
     $rules += @(Read-IgnoreRules (Join-Path $Directory ".gitignore"))
+    if ($null -ne $DirectoryStates) {
+        $directoryItem = Get-Item -LiteralPath $Directory -Force
+        [void]$DirectoryStates.Add([PSCustomObject]@{
+            FullName = $directoryItem.FullName
+            LastWriteTimeUtcTicks = $directoryItem.LastWriteTimeUtc.Ticks
+        })
+    }
     foreach ($entry in (Get-ChildItem -LiteralPath $Directory -Force)) {
         if (Test-IsExcludedPath $entry.FullName $rules) {
             continue
         }
         if ($entry.PSIsContainer) {
-            Get-IncludedDirectoryFiles $entry.FullName $rules
+            Get-IncludedDirectoryFiles $entry.FullName $rules $DirectoryStates
         }
         else {
             $entry
@@ -224,7 +235,10 @@ function Get-IncludedDirectoryFiles {
 }
 
 function Get-IncludedFiles {
-    param([string]$Path)
+    param(
+        [string]$Path,
+        [System.Collections.Generic.List[object]]$DirectoryStates = $null
+    )
 
     if (-not (Test-Path -LiteralPath $Path)) {
         return @()
@@ -232,7 +246,7 @@ function Get-IncludedFiles {
     $item = Get-Item -LiteralPath $Path -Force
     if ($item.PSIsContainer) {
         $parentRules = @(Get-AncestorIgnoreRules (Split-Path -Parent $item.FullName))
-        return @(Get-IncludedDirectoryFiles $item.FullName $parentRules)
+        return @(Get-IncludedDirectoryFiles $item.FullName $parentRules $DirectoryStates)
     }
 
     $rules = @(Get-AncestorIgnoreRules (Split-Path -Parent $item.FullName))
@@ -240,6 +254,33 @@ function Get-IncludedFiles {
         return @()
     }
     return @($item)
+}
+
+function Test-IncludedTreeSnapshotUnchanged {
+    param([object[]]$FileStates, [object[]]$DirectoryStates)
+
+    foreach ($state in $DirectoryStates) {
+        if (-not (Test-Path -LiteralPath $state.FullName -PathType Container)) {
+            return $false
+        }
+        $item = Get-Item -LiteralPath $state.FullName -Force
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            $item.LastWriteTimeUtc.Ticks -ne [long]$state.LastWriteTimeUtcTicks) {
+            return $false
+        }
+    }
+    foreach ($state in $FileStates) {
+        if (-not (Test-Path -LiteralPath $state.FullName -PathType Leaf)) {
+            return $false
+        }
+        $item = Get-Item -LiteralPath $state.FullName -Force
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            $item.Length -ne [long]$state.Length -or
+            $item.LastWriteTimeUtc.Ticks -ne [long]$state.LastWriteTimeUtcTicks) {
+            return $false
+        }
+    }
+    return $true
 }
 
 function Get-CargoWorkspaceVersion {
@@ -417,6 +458,9 @@ else {
 
 # 検査2: PDFが画面ソース・共通ヘルプ・画面写真・版数源より厳密に新しいこと。
 Write-Stage 2 "説明書が画面と生成元より新しいこと"
+$stage2SourceFiles = $null
+$stage2SourceDirectoryStates = $null
+$stage2HelpFileStates = $null
 try {
     if (-not (Test-Path -LiteralPath $pdfPath -PathType Leaf)) {
         throw "説明書PDFがありません: $(Get-DisplayPath $pdfPath)"
@@ -425,8 +469,20 @@ try {
         throw "画面ソースがありません: $(Get-DisplayPath $srcPath)"
     }
 
+    $sourceDirectoryStates = New-Object System.Collections.Generic.List[object]
+    $stage2SourceFiles = @(Get-IncludedFiles $srcPath $sourceDirectoryStates)
+    $stage2SourceDirectoryStates = @($sourceDirectoryStates.ToArray())
+    $stage2HelpFileStates = @($stage2SourceFiles | Where-Object {
+        $null -ne (Get-RelativePath $helpPath $_.FullName)
+    } | ForEach-Object {
+        [PSCustomObject]@{
+            FullName = $_.FullName
+            Length = $_.Length
+            LastWriteTimeUtcTicks = $_.LastWriteTimeUtc.Ticks
+        }
+    })
     $comparisonFiles = @()
-    $comparisonFiles += @(Get-IncludedFiles $srcPath)
+    $comparisonFiles += $stage2SourceFiles
     $comparisonFiles += @(Get-IncludedFiles $packageJsonPath)
     $comparisonFiles += @(Get-IncludedFiles $manualAssetsPath)
 
@@ -505,7 +561,33 @@ try {
     if (-not (Test-Path -LiteralPath $helpPath -PathType Container)) {
         throw "ヘルプがありません: $(Get-DisplayPath $helpPath)"
     }
-    $helpFiles = @(Get-IncludedFiles $helpPath)
+    $helpRelativeToSource = Get-RelativePath $srcPath $helpPath
+    if (-not [string]::Equals($helpRelativeToSource, "help", [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "ヘルプpathが検査2の画面source配下ではありません: $(Get-DisplayPath $helpPath)"
+    }
+
+    $canReuseStage2 = $null -ne $stage2SourceFiles -and
+        $null -ne $stage2SourceDirectoryStates -and
+        $null -ne $stage2HelpFileStates -and
+        (Test-IncludedTreeSnapshotUnchanged $stage2HelpFileStates $stage2SourceDirectoryStates)
+    if (-not $canReuseStage2) {
+        # 検査2が列挙前に失敗した場合や、その後source treeが変化した場合も、
+        # 従来の再列挙へ戻して検査4固有の診断を失わない。
+        $helpFiles = @(Get-IncludedFiles $helpPath)
+        Write-Host "  検査2の列挙結果が無いかsource treeが変化したため、ヘルプだけを再列挙しました。"
+    }
+    else {
+        # helpはsrcの厳密な部分集合であることを上で確認し、同じ列挙結果を再利用する。
+        $helpFiles = @($stage2SourceFiles | Where-Object {
+            $null -ne (Get-RelativePath $helpPath $_.FullName)
+        })
+        foreach ($helpFile in $helpFiles) {
+            if ($null -eq (Get-RelativePath $srcPath $helpFile.FullName)) {
+                throw "検査2の列挙結果に画面source外のヘルプfileがあります: $(Get-DisplayPath $helpFile.FullName)"
+            }
+        }
+        Write-Host "  検査2で列挙した画面sourceからヘルプを抽出しました。"
+    }
     if ($helpFiles.Count -eq 0) {
         throw "比較対象のヘルプファイルがありません"
     }

@@ -5,7 +5,7 @@ param(
     [string]$PackageLockPath,
     [string]$DependabotPath,
     [string]$SecurityWorkflowPath,
-    [ValidateSet("FullReadiness", "PolicyAndLicenses")]
+    [ValidateSet("FullReadiness", "PolicyAndLicenses", "ReadinessOnly")]
     [string]$Mode = "FullReadiness"
 )
 
@@ -30,9 +30,9 @@ if ([string]::IsNullOrWhiteSpace($SecurityWorkflowPath)) {
 
 # Validate the policy, exceptions, and current lockfile licenses. FullReadiness
 # also preserves the 10-A blockers for immutable tool pins and the known high
-# advisory assessment. PolicyAndLicenses is the CI entry point used before
-# applying policy exceptions to ecosystem-specific audit tools.
-$ScriptVersion = "1.2.0"
+# advisory assessment. CI runs PolicyAndLicenses before ecosystem-specific
+# audit tools and ReadinessOnly afterwards, without scanning licenses twice.
+$ScriptVersion = "1.3.0"
 $Failures = New-Object System.Collections.Generic.List[string]
 $ToolPinBlockers = New-Object System.Collections.Generic.List[string]
 $AdvisoryAssessmentBlockers = New-Object System.Collections.Generic.List[string]
@@ -646,7 +646,11 @@ function Test-SecurityWorkflowConfiguration {
         Assert-True ($text -match "(?m)^  ${job}:[ \t]*$") "security.yml is missing job '$job'."
     }
     Assert-True ($text -match '(?ms)^permissions:[ \t]*\r?\n[ \t]*contents:[ \t]*read[ \t]*(?:\r?\n|$)') "security.yml must keep read-only contents permission."
-    Assert-True ($text -match 'scripts/check-supply-chain\.ps1 -Mode PolicyAndLicenses') "security.yml must validate policy and licenses before Cargo advisory exceptions."
+    $supplyChainInvocationLines = @($text -split '\r?\n' | Where-Object { $_ -match 'scripts/check-supply-chain\.ps1' })
+    $policyAndLicenseCallCount = @($supplyChainInvocationLines | Where-Object { $_ -match '-Mode[ \t]+PolicyAndLicenses(?:[ \t]|$)' }).Count
+    $readinessOnlyCallCount = @($supplyChainInvocationLines | Where-Object { $_ -match '-Mode[ \t]+ReadinessOnly(?:[ \t]|$)' }).Count
+    $readinessStepPattern = '(?ms)^      - name:[ \t]*Report unresolved supply-chain readiness blockers[ \t]*\r?\n        if:[ \t]*\$\{\{ always\(\) \}\}[ \t]*\r?\n(?:        [^\r\n]*\r?\n)*?          [^\r\n]*scripts/check-supply-chain\.ps1 -Mode ReadinessOnly[ \t]*$'
+    Assert-True ($supplyChainInvocationLines.Count -eq 2 -and $policyAndLicenseCallCount -eq 1 -and $readinessOnlyCallCount -eq 1 -and $text -match $readinessStepPattern) "security.yml must run PolicyAndLicenses once before Cargo advisory exceptions and ReadinessOnly once in the always() readiness step."
     Assert-True ($text -match 'security-policy\.json') "security.yml must read security-policy.json instead of duplicating policy decisions."
     Assert-True ($text -match 'cargo audit --version') "security.yml must verify the installed Cargo advisory tool before use."
     Assert-True ($text -match 'npm audit') "security.yml must audit npm lockfiles."
@@ -1154,49 +1158,88 @@ function Test-CargoLicenses {
     return [pscustomobject]@{ Total = $total; Registry = $registry; Workspace = $workspace; UnsupportedSource = $unsupported }
 }
 
-foreach ($requiredPath in @($PolicyPath, $CargoLockPath, $PackageLockPath, $DependabotPath, $SecurityWorkflowPath)) {
+$requiredPaths = @($PolicyPath)
+if ($Mode -ne "ReadinessOnly") {
+    $requiredPaths += @($CargoLockPath, $PackageLockPath, $DependabotPath, $SecurityWorkflowPath)
+}
+foreach ($requiredPath in $requiredPaths) {
     if (-not (Test-Path -LiteralPath $requiredPath)) {
         throw "Required file not found: $requiredPath"
     }
 }
 
-$policyText = Get-Content -LiteralPath $PolicyPath -Raw -Encoding UTF8
-$policy = $policyText | ConvertFrom-Json
+try {
+    $policyText = Get-Content -LiteralPath $PolicyPath -Raw -Encoding UTF8
+    $policy = $policyText | ConvertFrom-Json
+}
+catch {
+    Write-Host "ORIGAMI3 supply-chain 10-A policy check v$ScriptVersion"
+    Write-Host "Mode: $Mode"
+    Write-Host "Policy: $PolicyPath"
+    Write-Host "POLICY PARSE: FAILED ($($_.Exception.Message))" -ForegroundColor Red
+    Write-Host "10-A OVERALL: FAILED" -ForegroundColor Red
+    exit 1
+}
 
-$configurationFailureBaseline = $Failures.Count
-Test-PolicyShape $policy
-Test-DependabotConfiguration -Policy $policy -Path $DependabotPath
-Test-SecurityWorkflowConfiguration -Policy $policy -Path $SecurityWorkflowPath
-$configurationFailureCount = $Failures.Count - $configurationFailureBaseline
-Test-Exceptions $policy
-Initialize-LicensePolicy $policy
-$npmResult = Test-NpmLicenses $PackageLockPath
-$cargoResult = Test-CargoLicenses -LockPath $CargoLockPath -Policy $policy
-if ($Mode -eq "FullReadiness") {
-    Test-ToolPinReadiness $policy
-    Test-KnownAdvisoryAssessment $policy
+$configurationFailureCount = 0
+$npmResult = $null
+$cargoResult = $null
+if ($Mode -ne "ReadinessOnly") {
+    $configurationFailureBaseline = $Failures.Count
+    Test-PolicyShape $policy
+    Test-DependabotConfiguration -Policy $policy -Path $DependabotPath
+    Test-SecurityWorkflowConfiguration -Policy $policy -Path $SecurityWorkflowPath
+    $configurationFailureCount = $Failures.Count - $configurationFailureBaseline
+    Test-Exceptions $policy
+    Initialize-LicensePolicy $policy
+    $npmResult = Test-NpmLicenses $PackageLockPath
+    $cargoResult = Test-CargoLicenses -LockPath $CargoLockPath -Policy $policy
+}
+if ($Mode -ne "PolicyAndLicenses") {
+    try {
+        Test-ToolPinReadiness $policy
+        Test-KnownAdvisoryAssessment $policy
+    }
+    catch {
+        Add-Failure "Readiness policy data could not be evaluated: $($_.Exception.Message)"
+    }
 }
 
 Write-Host "ORIGAMI3 supply-chain 10-A policy check v$ScriptVersion"
 Write-Host "Mode: $Mode"
 Write-Host "Policy: $PolicyPath"
-Write-Host "Dependabot configuration: $DependabotPath"
-Write-Host "Security workflow configuration: $SecurityWorkflowPath"
-if ($configurationFailureCount -eq 0) {
-    Write-Host "Offline configuration checks: PASSED (policy, Dependabot, security workflow)" -ForegroundColor Green
+if ($Mode -eq "ReadinessOnly") {
+    Write-Host "Offline configuration checks: NOT CHECKED IN ReadinessOnly MODE"
+    Write-Host "10-A POLICY/LICENSE DATA: NOT CHECKED IN ReadinessOnly MODE"
 }
 else {
-    Write-Host "Offline configuration checks: FAILED ($configurationFailureCount violation(s))" -ForegroundColor Red
+    Write-Host "Dependabot configuration: $DependabotPath"
+    Write-Host "Security workflow configuration: $SecurityWorkflowPath"
+    if ($configurationFailureCount -eq 0) {
+        Write-Host "Offline configuration checks: PASSED (policy, Dependabot, security workflow)" -ForegroundColor Green
+    }
+    else {
+        Write-Host "Offline configuration checks: FAILED ($configurationFailureCount violation(s))" -ForegroundColor Red
+    }
+    Write-Host "npm packages: total=$($npmResult.Total), production=$($npmResult.Production), development/build=$($npmResult.DevelopmentBuild)"
+    Write-Host "Cargo packages: total=$($cargoResult.Total), registry=$($cargoResult.Registry), workspace=$($cargoResult.Workspace), unsupported-source=$($cargoResult.UnsupportedSource)"
+    Write-Host "License results: scanned=$($LicenseMetrics.Scanned), unknown=$($LicenseMetrics.Unknown), outside-allowlist=$($LicenseMetrics.OutsideAllowlist), denied=$($LicenseMetrics.Denied), unselected-multi=$($LicenseMetrics.UnselectedMultiLicense), scope-violation=$($LicenseMetrics.ScopeViolation)"
+    Write-Host "Advisory exceptions: $(@($policy.advisoryExceptions).Count), expired=0 (validated), maximum-days=90"
+    Write-Host "Policy declarations for automatic dependency actions: merge=0, approve=0, apply-lockfile-to-default-branch=0, release=0"
 }
-Write-Host "npm packages: total=$($npmResult.Total), production=$($npmResult.Production), development/build=$($npmResult.DevelopmentBuild)"
-Write-Host "Cargo packages: total=$($cargoResult.Total), registry=$($cargoResult.Registry), workspace=$($cargoResult.Workspace), unsupported-source=$($cargoResult.UnsupportedSource)"
-Write-Host "License results: scanned=$($LicenseMetrics.Scanned), unknown=$($LicenseMetrics.Unknown), outside-allowlist=$($LicenseMetrics.OutsideAllowlist), denied=$($LicenseMetrics.Denied), unselected-multi=$($LicenseMetrics.UnselectedMultiLicense), scope-violation=$($LicenseMetrics.ScopeViolation)"
-Write-Host "Advisory exceptions: $(@($policy.advisoryExceptions).Count), expired=0 (validated), maximum-days=90"
-Write-Host "Policy declarations for automatic dependency actions: merge=0, approve=0, apply-lockfile-to-default-branch=0, release=0"
 Write-Host "10-B through 10-E external audit/static-analysis/publication execution: not run by this policy/license checker"
 
 $policyDataFailed = $Failures.Count -gt 0
-if ($policyDataFailed) {
+if ($Mode -eq "ReadinessOnly" -and $policyDataFailed) {
+    Write-Host "10-A READINESS DATA: FAILED ($($Failures.Count) violation(s))" -ForegroundColor Red
+    foreach ($failure in $Failures) {
+        Write-Host " - $failure" -ForegroundColor Red
+    }
+}
+elseif ($Mode -eq "ReadinessOnly") {
+    Write-Host "10-A READINESS DATA: PASSED" -ForegroundColor Green
+}
+elseif ($policyDataFailed) {
     Write-Host "10-A POLICY/LICENSE DATA: FAILED ($($Failures.Count) violation(s))" -ForegroundColor Red
     foreach ($failure in $Failures) {
         Write-Host " - $failure" -ForegroundColor Red

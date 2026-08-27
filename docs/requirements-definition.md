@@ -349,7 +349,7 @@ ORIGAMI3はコードを引き継がず新規に開発し、**「実用上正し�
 | `ori3-layers` | 平坦状態・層順序・折り操作・技法(§7.2) | cp |
 | `ori3-soft` | たわみ・膨らみ・層順序拘束の計算(SIM-012〜015) | model, cp, rigid, layers |
 | `ori3-propose` | 骨格→円充填→展開図生成(§8)、および配置案P1の折り手順計画(PRO-009)。手順計画は同クレート内の分離可能なモジュールとして置き、新クレートは作らない | cp(現行。P1でlayers依存が必要な場合は変更前に承認) |
-| `ori3-export` | SVG/PNG/折り図PDF生成 | layers, rigid |
+| `ori3-export` | SVG/PNG/折り図PDF生成、およびFOLD 1.1/1.2共通限定profileの取込とFOLD 1.2書出し | layers, rigid |
 | `apps/desktop/src-tauri` | Tauriホスト。ドキュメント保持・Undo/Redo・IPCコマンド(薄いファサードに徹する) | 全部 |
 
 PRO-009は依存クレート追加を承認するものではない。配置案P1で `ori3-layers` への依存が必要になった場合は、`Cargo.toml`・`Cargo.lock` を変更する前に承認を得る。
@@ -359,7 +359,7 @@ PRO-009は依存クレート追加を承認するものではない。配置案P
 | コマンド | 内容 |
 |---|---|
 | `document_new` | 新規作成(紙寸法・色) |
-| `document_open` | .ori3の読込 |
+| `document_open` | .ori3およびFOLD 1.1/1.2共通限定profileの読込(FOLD取込は未保存作品として即時反映) |
 | `document_save` | .ori3の保存 |
 | `edit_apply` | 展開図編集(EditOp enum: AddSegment/RemoveEdges/SetEdgeKind/MoveVertex/SetPaper/ReplaceCreasePattern) |
 | `edit_apply_batch` | 複数の展開図編集を1回の原子的な適用として実行 |
@@ -375,7 +375,7 @@ PRO-009は依存クレート追加を承認するものではない。配置案P
 | `proposal_progress` | job IDごとの提案進捗snapshotを取得 |
 | `proposal_control` | 提案jobの実行制御(取消し) |
 | `proposal_apply` | 提案の展開図と検証済み手順を1回の原子的な適用として反映 |
-| `document_export` | 書き出し(種別enum: CpSvg/CpPng/DiagramPdf/DiagramSvg) |
+| `document_export` | 書き出し(種別enum: CpSvg/CpPng/DiagramPdf/DiagramSvg/FoldJson。FoldJsonはFOLD 1.2) |
 
 18個であること自体は違反ではない。個数上限は撤廃済みであり、追加時は既存コマンドの操作enumへ集約できないかを先に検討する。
 
