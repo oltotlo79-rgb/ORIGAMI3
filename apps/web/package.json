@@ -1,0 +1,9 @@
+{
+  "name": "origami3-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "npm --prefix ../desktop run build -- --config ../web/vite.web.config.ts",
+    "test": "npm --prefix ../desktop run test -- --config ../web/vite.web.config.ts src/webShell.test.ts --maxWorkers=1"
+  }
+}

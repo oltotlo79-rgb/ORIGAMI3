@@ -254,18 +254,39 @@ describe("1000×700で点検する全101画面の正本", () => {
         branches: ["color-picker-invalid-hex"],
       },
     });
+    // 旧「折り目や折る手順の説明」→新「対応内容＋対応外7項目」。O36の監査範囲を広げる更新で、緩和ではない。
     expect(ALL_SCREEN_SCENARIOS[100]).toEqual({
       id: "O36",
       label: "書き出し・ほかの折り紙ソフトのファイル",
       layoutContract: "dialog",
       notes:
-        "折り目や折る手順を、ほかの折り紙ソフトで使える形にする説明を表示する。",
+        "ほかの折り紙ソフトのファイルで使える内容と、そのまま扱えない7項目を安全な文で表示する。",
       coverage: {
         floatingUiIds: ["export-dialog"],
         exportKinds: ["FoldJson"],
         branches: ["export-fold-json"],
       },
     });
+    const o36Text = `${ALL_SCREEN_SCENARIOS[100]?.label} ${ALL_SCREEN_SCENARIOS[100]?.notes}`;
+    expect(o36Text).toContain("ほかの折り紙ソフトのファイル");
+    expect(o36Text).toContain("扱えない7項目");
+    for (const forbidden of [
+      "FOLD 1.1",
+      "FOLD 1.2",
+      "parser",
+      "schema",
+      "validator",
+      "パーサ",
+      "スキーマ",
+      "バリデータ",
+      "faceOrders",
+      "frame",
+      "Aux",
+      "JSON path",
+      "$.",
+    ]) {
+      expect(o36Text).not.toContain(forbidden);
+    }
     expect(AUDITED_EXPORT_KINDS).toEqual([
       "CpSvg",
       "CpPng",

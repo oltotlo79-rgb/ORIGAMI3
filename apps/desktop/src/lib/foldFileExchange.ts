@@ -1,3 +1,8 @@
+import {
+  FOLD_FILE_DISPLAY_NAME,
+  FOLD_OPEN_FILE_GUIDANCE,
+} from "./foldNotices";
+
 export type FileDialogFilter = {
   name: string;
   extensions: string[];
@@ -9,7 +14,7 @@ const ORI3_FILE_FILTER: FileDialogFilter = {
 };
 
 const FOLD_FILE_FILTER: FileDialogFilter = {
-  name: "ほかの折り紙ソフトのファイル",
+  name: FOLD_FILE_DISPLAY_NAME,
   extensions: ["fold"],
 };
 
@@ -28,7 +33,7 @@ export function openFileFiltersForReadiness(
 
 export function openFileTooltipForReadiness(ready: boolean): string {
   return ready
-    ? "保存した作品または、ほかの折り紙ソフトのファイルを開きます"
+    ? FOLD_OPEN_FILE_GUIDANCE
     : "保存した作品(.ori3)を開きます";
 }
 

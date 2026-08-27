@@ -8,6 +8,35 @@ export { FOLD_ISSUE_CODES } from "./types";
 
 export type FoldNoticeDirection = "import" | "export";
 
+export const FOLD_FILE_DISPLAY_NAME = "ほかの折り紙ソフトのファイル";
+
+export const FOLD_OPEN_FILE_GUIDANCE =
+  `保存した作品または、${FOLD_FILE_DISPLAY_NAME}を開きます。` +
+  "読み込めない内容があるときは、理由をお知らせします";
+
+export const FOLD_FILE_SCOPE_SUMMARY =
+  "紙の形、折り目、折る角度、1つずつ順番に並んだ折る手順、" +
+  "意味を変えずに扱える紙の重なりを読み込み・書き出しできます。" +
+  "扱えない内容があるときは、理由をお知らせします。";
+
+export const FOLD_EXPORT_CHOICE_HINT =
+  "紙の形、折り目、折る角度、1つずつ順番に並んだ折る手順、" +
+  "意味を変えずに扱える紙の重なりを、対応しているほかの折り紙ソフトで使える形にします。" +
+  "書き出せない内容があるときは、理由をお知らせします。";
+
+export const FOLD_UNSUPPORTED_CONTENT_TITLE =
+  `${FOLD_FILE_DISPLAY_NAME}でそのまま扱えない内容（7項目）`;
+
+export const FOLD_UNSUPPORTED_CONTENT_ITEMS = [
+  "立体になったときの点の位置",
+  "途中から複数の流れに分かれる折る手順",
+  "動画として記録された動き",
+  "名前の付いた折り方が何を意味するか",
+  "作品につけたメモや説明",
+  "仕上げにつけた丸み",
+  "元のファイルで「平らな折り目」と「種類が指定されていない折り目」を区別すること",
+] as const;
+
 export type FoldIssueNoticeInput = {
   code: string;
   severity: string;

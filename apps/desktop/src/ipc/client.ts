@@ -2,7 +2,7 @@
 // 失敗時はErr(string)がPromiseのrejectになる。
 // 折り図の書き出しは新しいコマンドを足さずExportKindを増やして対応する。
 
-import { invoke } from "@tauri-apps/api/core";
+import { callBackend as invoke } from "./runtime";
 import type {
   CreasePattern,
   DocumentExportKind,

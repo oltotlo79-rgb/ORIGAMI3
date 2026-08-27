@@ -2,7 +2,14 @@
 
 import { useEffect, useRef } from "react";
 import { afterEach, describe, expect, it } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { HelpCenter } from "./HelpCenter";
 import { ModalDialog, focusableElements, type FocusTarget } from "./ModalDialog";
 import { useAppStore } from "../../store/appStore";
@@ -350,6 +357,59 @@ describe("ヘルプセンター", () => {
     expect(timeline.getAttribute("aria-current")).toBe("page");
     expect(screen.getByRole("heading", { name: "手順の記録と再生" })).toBeTruthy();
     expect(screen.getByText("途中へ新しい折りを挿入する")).toBeTruthy();
+  });
+
+  it("保存と書き出し章はほかのソフト用の説明と対応外7項目を安全に表示する", () => {
+    showHelp();
+    render(<HelpCenter />);
+
+    fireEvent.click(screen.getByRole("button", { name: /保存と書き出し/ }));
+    const article = screen.getByRole("article", { name: "保存と書き出し" });
+    expect(
+      within(article).getByRole("heading", { name: "5つの書き出し形式" }),
+    ).toBeTruthy();
+    expect(
+      within(article).getByText("ほかの折り紙ソフトのファイル", {
+        exact: true,
+      }),
+    ).toBeTruthy();
+    const scopeHeading = within(article).getByRole("heading", {
+      name: "ほかの折り紙ソフトのファイルでそのまま扱えない内容（7項目）",
+    });
+    const scope = scopeHeading.closest("section");
+    expect(scope).not.toBeNull();
+    expect(
+      within(scope as HTMLElement)
+        .getAllByRole("listitem")
+        .map((item) => item.textContent),
+    ).toEqual([
+      "立体になったときの点の位置",
+      "途中から複数の流れに分かれる折る手順",
+      "動画として記録された動き",
+      "名前の付いた折り方が何を意味するか",
+      "作品につけたメモや説明",
+      "仕上げにつけた丸み",
+      "元のファイルで「平らな折り目」と「種類が指定されていない折り目」を区別すること",
+    ]);
+
+    const displayed = article.innerHTML;
+    for (const forbidden of [
+      "FOLD 1.1",
+      "FOLD 1.2",
+      "parser",
+      "schema",
+      "validator",
+      "パーサ",
+      "スキーマ",
+      "バリデータ",
+      "faceOrders",
+      "frame",
+      "Aux",
+      "JSON path",
+      "$.",
+    ]) {
+      expect(displayed).not.toContain(forbidden);
+    }
   });
 
   it("章題と本文の単純な文字列一致で目次と章表示を絞り込む", () => {

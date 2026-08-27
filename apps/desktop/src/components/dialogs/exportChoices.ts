@@ -1,4 +1,8 @@
 import { FOLD_FILE_EXCHANGE_READY } from "../../lib/foldFileExchange";
+import {
+  FOLD_EXPORT_CHOICE_HINT,
+  FOLD_FILE_DISPLAY_NAME,
+} from "../../lib/foldNotices";
 import type {
   DocumentExportKind,
   ExportKind,
@@ -49,11 +53,9 @@ const BASE_EXPORT_CHOICES: ExportChoice<ExportKind>[] = [
 
 export const FOLD_EXPORT_CHOICE: ExportChoice<FoldExportKind> = {
   kind: "FoldJson",
-  label: "ほかの折り紙ソフトのファイル",
+  label: FOLD_FILE_DISPLAY_NAME,
   ext: "fold",
-  hint:
-    "折り目や折る手順を、対応しているほかの折り紙ソフトで使える形にします。" +
-    "書き出せない内容があるときは、理由をお知らせします。",
+  hint: FOLD_EXPORT_CHOICE_HINT,
 };
 
 export function exportChoicesForReadiness(

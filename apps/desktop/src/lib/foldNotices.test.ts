@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import noticeContract from "../../../../crates/ori3-export/tests/fixtures/fold/fold-issue-notices.json";
 import {
+  FOLD_EXPORT_CHOICE_HINT,
+  FOLD_FILE_DISPLAY_NAME,
+  FOLD_FILE_SCOPE_SUMMARY,
   FOLD_ISSUE_CODES,
+  FOLD_OPEN_FILE_GUIDANCE,
+  FOLD_UNSUPPORTED_CONTENT_ITEMS,
+  FOLD_UNSUPPORTED_CONTENT_TITLE,
   foldIssueNotice,
   type FoldNoticeDirection,
 } from "./foldNotices";
@@ -30,6 +36,47 @@ const NOTICE_CASES = [
 ] as const;
 
 describe("ほかの折り紙ソフトのファイルに関する注意文", () => {
+  it("対応外7項目を平易な固定文で順序どおり保持し、内部用語を含めない", () => {
+    expect(FOLD_UNSUPPORTED_CONTENT_ITEMS).toEqual([
+      "立体になったときの点の位置",
+      "途中から複数の流れに分かれる折る手順",
+      "動画として記録された動き",
+      "名前の付いた折り方が何を意味するか",
+      "作品につけたメモや説明",
+      "仕上げにつけた丸み",
+      "元のファイルで「平らな折り目」と「種類が指定されていない折り目」を区別すること",
+    ]);
+    expect(FOLD_UNSUPPORTED_CONTENT_ITEMS).toHaveLength(7);
+    expect(new Set(FOLD_UNSUPPORTED_CONTENT_ITEMS).size).toBe(7);
+
+    const displayed = [
+      FOLD_FILE_DISPLAY_NAME,
+      FOLD_OPEN_FILE_GUIDANCE,
+      FOLD_FILE_SCOPE_SUMMARY,
+      FOLD_EXPORT_CHOICE_HINT,
+      FOLD_UNSUPPORTED_CONTENT_TITLE,
+      ...FOLD_UNSUPPORTED_CONTENT_ITEMS,
+    ].join("\n");
+    expect(displayed).toContain("ほかの折り紙ソフトのファイル");
+    for (const forbidden of [
+      "FOLD 1.1",
+      "FOLD 1.2",
+      "parser",
+      "schema",
+      "validator",
+      "パーサ",
+      "スキーマ",
+      "バリデータ",
+      "faceOrders",
+      "frame",
+      "Aux",
+      "JSON path",
+      "$.",
+    ]) {
+      expect(displayed).not.toContain(forbidden);
+    }
+  });
+
   it("Rust側の追跡対象契約と8種類・20文・予備2文が一致する", () => {
     expect(noticeContract.schema).toBe(1);
     expect(noticeContract.notices.map(({ code }) => code)).toEqual(
@@ -94,7 +141,8 @@ describe("ほかの折り紙ソフトのファイルに関する注意文", () =
       {
         code: "unsupported_field",
         severity: "warning",
-        message: "faceOrders frame parser validator schema FOLD 1.2",
+        message:
+          "faceOrders frame parser validator schema FOLD 1.1 FOLD 1.2 パーサ スキーマ バリデータ Aux",
         path: "$.file_frames[0].frame_parent",
         original_value: { secret: "raw-value" },
       },
@@ -107,7 +155,12 @@ describe("ほかの折り紙ソフトのファイルに関する注意文", () =
       "parser",
       "validator",
       "schema",
+      "FOLD 1.1",
       "FOLD 1.2",
+      "パーサ",
+      "スキーマ",
+      "バリデータ",
+      "Aux",
       "file_frames",
       "raw-value",
     ]) {

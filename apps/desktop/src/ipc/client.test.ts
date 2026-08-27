@@ -1,25 +1,39 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("./runtime", () => ({ callBackend: vi.fn() }));
 
-import { invoke } from "@tauri-apps/api/core";
+import { callBackend as invoke } from "./runtime";
 import {
+  documentNew,
   documentExport,
   documentOpen,
+  documentSave,
+  editApply,
+  editApplyBatch,
+  editRedo,
+  editUndo,
   foldAllPreview,
   poseSolve,
+  proposalApply,
   proposalControl,
   proposalGenerate,
   proposalProgress,
+  recoveryCheck,
+  recoveryRestore,
+  sequenceApply,
+  sequenceReplay,
 } from "./client";
 import type {
+  CreasePattern,
   DocumentView,
   Driver,
+  EditOp,
   FoldIssue,
   FoldAllPreviewOutcome,
   Paper,
   ProposalJobResult,
   ProposalProgressSnapshot,
+  SeqOp,
   Skeleton,
   SolveResult,
 } from "../lib/types";
@@ -32,6 +46,90 @@ const JOB_ID = "proposal-client-job";
 
 beforeEach(() => {
   vi.mocked(invoke).mockReset();
+});
+
+describe("IPCクライアントの公開契約", () => {
+  it("18関数が従来と同じ名前と引数でbackendを呼ぶ", () => {
+    const editOp = { type: "test-edit" } as unknown as EditOp;
+    const sequenceOp = { type: "test-sequence" } as unknown as SeqOp;
+    const creasePattern = { vertices_coords: [] } as unknown as CreasePattern;
+    const hard: Driver[] = [{ hinge: 3, target_angle_deg: 90 }];
+
+    documentNew(PAPER);
+    documentOpen("C:\\作品\\sample.ori3");
+    documentSave(null);
+    editApply(editOp);
+    editApplyBatch([editOp]);
+    editUndo();
+    editRedo();
+    sequenceApply(sequenceOp);
+    sequenceReplay(2, 0.5);
+    poseSolve(hard);
+    foldAllPreview(75);
+    recoveryCheck();
+    recoveryRestore(true, 42);
+    proposalGenerate(SKELETON, PAPER, 7, JOB_ID);
+    proposalProgress(JOB_ID);
+    proposalControl({ type: "Cancel", job_id: JOB_ID });
+    proposalApply(creasePattern, []);
+    documentExport("FoldJson", "C:\\作品\\sample.fold", {
+      include_aux: false,
+      png_long_side: 2048,
+    });
+
+    expect(vi.mocked(invoke).mock.calls).toEqual([
+      ["document_new", { paper: PAPER }],
+      ["document_open", { path: "C:\\作品\\sample.ori3" }],
+      ["document_save", { path: null }],
+      ["edit_apply", { op: editOp }],
+      ["edit_apply_batch", { ops: [editOp] }],
+      ["edit_undo"],
+      ["edit_redo"],
+      ["sequence_apply", { op: sequenceOp }],
+      ["sequence_replay", { upTo: 2, t: 0.5, soft: null }],
+      [
+        "pose_solve",
+        {
+          request: {
+            hard,
+            preferred: null,
+            warmSeed: null,
+            soft: null,
+            upTo: 0,
+            t: 1,
+            mode: "Follow",
+          },
+        },
+      ],
+      ["fold_all_preview", { percent: 75, warmSeed: null }],
+      ["recovery_check"],
+      ["recovery_restore", { accept: true, candidateId: 42 }],
+      [
+        "proposal_generate",
+        {
+          jobId: JOB_ID,
+          skeleton: SKELETON,
+          paper: PAPER,
+          seed: 7,
+          withFoldPlan: true,
+        },
+      ],
+      ["proposal_progress", { jobId: JOB_ID }],
+      [
+        "proposal_control",
+        { operation: { type: "Cancel", job_id: JOB_ID } },
+      ],
+      ["proposal_apply", { cp: creasePattern, steps: [] }],
+      [
+        "document_export",
+        {
+          kind: "FoldJson",
+          path: "C:\\作品\\sample.fold",
+          options: { include_aux: false, png_long_side: 2048 },
+        },
+      ],
+    ]);
+  });
 });
 
 describe("ほかの折り紙ソフトのファイルのIPC", () => {

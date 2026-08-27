@@ -15,8 +15,9 @@ describe("ほかの折り紙ソフトのファイルを既存導線へ混ぜる"
       { name: "ORIGAMI3作品", extensions: ["ori3"] },
       { name: "ほかの折り紙ソフトのファイル", extensions: ["fold"] },
     ]);
+    // 旧「…開きます」→新「…開きます。読み込めない内容…」。8-Dで失敗理由の案内を足した照合で、緩和ではない。
     expect(OPEN_FILE_TOOLTIP).toBe(
-      "保存した作品または、ほかの折り紙ソフトのファイルを開きます",
+      "保存した作品または、ほかの折り紙ソフトのファイルを開きます。読み込めない内容があるときは、理由をお知らせします",
     );
 
     const displayed = [
@@ -26,9 +27,17 @@ describe("ほかの折り紙ソフトのファイルを既存導線へ混ぜる"
     for (const internalTerm of [
       "FOLD 1.1",
       "FOLD 1.2",
+      "parser",
+      "schema",
+      "validator",
       "パーサ",
       "スキーマ",
       "バリデータ",
+      "faceOrders",
+      "frame",
+      "Aux",
+      "JSON path",
+      "$.",
     ]) {
       expect(displayed).not.toContain(internalTerm);
     }
@@ -45,8 +54,9 @@ describe("ほかの折り紙ソフトのファイルを既存導線へ混ぜる"
     expect(openFileTooltipForReadiness(false)).toBe(
       "保存した作品(.ori3)を開きます",
     );
+    // 旧「…開きます」→新「…開きます。読み込めない内容…」。true分岐も製品案内と同じにする意図変更である。
     expect(openFileTooltipForReadiness(true)).toBe(
-      "保存した作品または、ほかの折り紙ソフトのファイルを開きます",
+      "保存した作品または、ほかの折り紙ソフトのファイルを開きます。読み込めない内容があるときは、理由をお知らせします",
     );
     expect(SAVE_FILE_FILTERS).toEqual([
       { name: "ORIGAMI3作品", extensions: ["ori3"] },

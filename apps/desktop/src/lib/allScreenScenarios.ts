@@ -526,7 +526,7 @@ export const ALL_SCREEN_SCENARIOS = [
     "O36",
     "書き出し・ほかの折り紙ソフトのファイル",
     "dialog",
-    "折り目や折る手順を、ほかの折り紙ソフトで使える形にする説明を表示する。",
+    "ほかの折り紙ソフトのファイルで使える内容と、そのまま扱えない7項目を安全な文で表示する。",
     {
       floatingUiIds: ["export-dialog"],
       exportKinds: ["FoldJson"],

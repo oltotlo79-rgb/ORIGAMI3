@@ -4,7 +4,15 @@
 // 正しい引数で飛ぶ、成功・失敗の知らせが日本語で出る。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ save: vi.fn() }));
 vi.mock("../../ipc/client", () => ({
@@ -114,15 +122,16 @@ describe("書き出しダイアログ", () => {
     expect(screen.queryByLabelText(/画像の大きさ/)).toBeNull();
   });
 
-  it("接続完了後は既存画面の5番目で安全な説明とともに選べる", () => {
+  it("接続完了後は既存画面の5番目で安全な説明と対応外7項目を選べる", () => {
     const prepared = exportChoicesForReadiness(true);
     expect(EXPORT_CHOICES).toEqual(prepared);
+    // 旧「折り目や折る手順」→新「紙の形・角度・重なりまで」。8-Dの対応範囲を明示する照合で、緩和ではない。
     expect(prepared[4]).toEqual({
       kind: "FoldJson",
       label: "ほかの折り紙ソフトのファイル",
       ext: "fold",
       hint:
-        "折り目や折る手順を、対応しているほかの折り紙ソフトで使える形にします。書き出せない内容があるときは、理由をお知らせします。",
+        "紙の形、折り目、折る角度、1つずつ順番に並んだ折る手順、意味を変えずに扱える紙の重なりを、対応しているほかの折り紙ソフトで使える形にします。書き出せない内容があるときは、理由をお知らせします。",
     });
 
     const { container } = render(<ExportDialog />);
@@ -135,14 +144,36 @@ describe("書き出しダイアログ", () => {
     expect(foldChoice.checked).toBe(true);
     expect(useAppStore.getState().exportKind).toBe("FoldJson");
     expect(screen.getByText(prepared[4].hint)).not.toBeNull();
+    const scope = screen.getByRole("region", {
+      name: "ほかの折り紙ソフトのファイルでそのまま扱えない内容（7項目）",
+    });
+    expect(
+      within(scope)
+        .getAllByRole("listitem")
+        .map((item) => item.textContent),
+    ).toEqual([
+      "立体になったときの点の位置",
+      "途中から複数の流れに分かれる折る手順",
+      "動画として記録された動き",
+      "名前の付いた折り方が何を意味するか",
+      "作品につけたメモや説明",
+      "仕上げにつけた丸み",
+      "元のファイルで「平らな折り目」と「種類が指定されていない折り目」を区別すること",
+    ]);
     for (const forbidden of [
       "FOLD 1.1",
       "FOLD 1.2",
       "parser",
       "schema",
+      "validator",
       "パーサ",
       "スキーマ",
       "バリデータ",
+      "faceOrders",
+      "frame",
+      "Aux",
+      "JSON path",
+      "$.",
     ]) {
       expect(container.innerHTML).not.toContain(forbidden);
     }
@@ -200,12 +231,17 @@ describe("書き出しダイアログ", () => {
       "FOLD 1.2",
       "パーサ",
       "スキーマ",
+      "バリデータ",
       "parser",
       "schema",
+      "validator",
       "unsupported_field",
       "file_frames",
       "faceOrders",
+      "frame",
       "Aux",
+      "JSON path",
+      "$.",
       "raw-value",
       "sentinel-message",
       "sentinel-original-value",

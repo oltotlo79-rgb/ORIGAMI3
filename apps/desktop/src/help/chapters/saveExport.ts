@@ -1,10 +1,18 @@
+import {
+  FOLD_FILE_DISPLAY_NAME,
+  FOLD_FILE_SCOPE_SUMMARY,
+  FOLD_UNSUPPORTED_CONTENT_ITEMS,
+  FOLD_UNSUPPORTED_CONTENT_TITLE,
+} from "../../lib/foldNotices";
 import type { HelpChapter } from "../helpTypes";
 
 export const saveExportChapter = {
   id: "save-export",
   number: 11,
   title: "保存と書き出し",
-  summary: "編集を続ける.ori3作品と、見たり配ったりするSVG・PNG・折り図を使い分けます。",
+  summary:
+    "編集を続ける.ori3作品と、見たり配ったりするSVG・PNG・折り図、" +
+    `${FOLD_FILE_DISPLAY_NAME}を使い分けます。`,
   blocks: [
     {
       type: "paragraph",
@@ -28,20 +36,33 @@ export const saveExportChapter = {
     },
     {
       type: "table",
-      title: "4つの書き出し形式",
+      title: "5つの書き出し形式",
       columns: ["形式", "向いている用途"],
       rows: [
         ["展開図の画像(SVG)", "実寸mmを保った線の画像です。輪郭は実線、山折りは一点鎖線、谷折りは破線で区別され、印刷や、拡大してもぼやけない図に向きます。補助線を含めるかは選べます。"],
         ["展開図の画像(PNG)", "多くのアプリで開ける点の集まりの画像です。長い辺の点数を指定でき、最初は2048、最大16384です。"],
         ["折り図(PDF)", "A4の表紙と、1ページあたり2列×3コマの折る手順を1つのPDFにします。各コマには折る前の形、今回の折り線、動かす向きの矢印、手順番号、説明が入ります。"],
         ["折り図(画像・ページごと)", "折り図の各ページをSVGにし、ファイル名へ-01、-02…を付けて保存します。"],
+        [FOLD_FILE_DISPLAY_NAME, FOLD_FILE_SCOPE_SUMMARY],
       ],
+    },
+    {
+      type: "paragraph",
+      text:
+        `上部の「開く」では、保存した作品に加えて${FOLD_FILE_DISPLAY_NAME}も選べます。` +
+        "読み込める内容は未保存の新しい作品として開き、注意があっても作品を表示します。" +
+        "読み込み前へ戻すときは「元に戻す」を1回押します。",
+    },
+    {
+      type: "bulletList",
+      title: FOLD_UNSUPPORTED_CONTENT_TITLE,
+      items: FOLD_UNSUPPORTED_CONTENT_ITEMS,
     },
     {
       type: "steps",
       title: "展開図の画像を書き出す",
       items: [
-        { title: "上部の「書き出し」を押す", description: "「画像として書き出す」画面が開きます。" },
+        { title: "上部の「書き出し」を押す", description: "「作品を書き出す」画面が開きます。" },
         { title: "SVGまたはPNGを選ぶ", description: "印刷や編集にはSVG、手軽に共有する画像にはPNGを選びます。PNGでは長い辺の点数も決めます。" },
         { title: "線の種類を確認する", description: "SVGでは輪郭が実線、山折りが一点鎖線、谷折りが破線になります。下書きも見せたいときは「補助線(下書きの線)も含める」を入れます。" },
         { title: "保存先を選ぶ", description: "「保存先を選んで書き出す」を押し、OSの画面で場所と名前を決めます。処理中は「書き出しています…」に変わります。" },

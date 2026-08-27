@@ -641,9 +641,22 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
           "Tabで離れただけでは仮の表示を閉じない",
         ],
       },
+      {
+        name: "ほかの折り紙ソフトのファイルを安全な範囲説明とともに使う",
+        chapterId: "save-export",
+        phrases: [
+          "5つの書き出し形式",
+          "ほかの折り紙ソフトのファイル",
+          "扱えない内容があるときは、理由をお知らせします",
+          "元に戻す」を1回押します",
+          "作品を書き出す",
+          "そのまま扱えない内容（7項目）",
+        ],
+      },
     ] as const;
 
-    expect(changes).toHaveLength(9);
+    // 旧9件→新10件。8-DのHelp説明を既存章へ加えた全数照合であり、期待値の緩和ではない。
+    expect(changes).toHaveLength(10);
     for (const change of changes) {
       const chapter = HELP_CHAPTERS.find((entry) => entry.id === change.chapterId);
       expect(chapter, change.name).toBeDefined();
@@ -654,7 +667,43 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
     }
 
     const allHelpText = HELP_CHAPTERS.map(helpChapterSearchText).join("\n");
-    expect(allHelpText).not.toContain("ほかの折り紙ソフトのファイル");
+    // 旧「名称0件」→新「名称あり」。Helpを5表示面へ含める8-D要件への反転であり、赤を消す緩和ではない。
+    expect(allHelpText).toContain("ほかの折り紙ソフトのファイル");
+  });
+
+  it("保存と書き出し章は5形式と対応外7項目を順序どおり説明する", () => {
+    const chapter = HELP_CHAPTERS.find((entry) => entry.id === "save-export");
+    expect(chapter).toBeDefined();
+
+    const formats = chapter!.blocks.find(
+      (block) => block.type === "table" && block.title === "5つの書き出し形式",
+    );
+    expect(formats).toBeDefined();
+    expect(formats?.type).toBe("table");
+    if (formats?.type !== "table") throw new Error("5形式の表がありません");
+    expect(formats.rows).toHaveLength(5);
+    expect(formats.rows[4]?.[0]).toBe("ほかの折り紙ソフトのファイル");
+
+    const scope = chapter!.blocks.find(
+      (block) =>
+        block.type === "bulletList" &&
+        block.title ===
+          "ほかの折り紙ソフトのファイルでそのまま扱えない内容（7項目）",
+    );
+    expect(scope).toBeDefined();
+    expect(scope?.type).toBe("bulletList");
+    if (scope?.type !== "bulletList") throw new Error("対応外一覧がありません");
+    expect(scope.items).toEqual([
+      "立体になったときの点の位置",
+      "途中から複数の流れに分かれる折る手順",
+      "動画として記録された動き",
+      "名前の付いた折り方が何を意味するか",
+      "作品につけたメモや説明",
+      "仕上げにつけた丸み",
+      "元のファイルで「平らな折り目」と「種類が指定されていない折り目」を区別すること",
+    ]);
+    expect(scope.items).toHaveLength(7);
+    expect(new Set(scope.items).size).toBe(7);
   });
 
   it("重なり防止と食い込み検出を現行画面と同じ言葉・既定値で説明する", () => {
@@ -796,13 +845,18 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
       "prevent",
       "detect",
       "イテレーション",
+      "FOLD 1.1",
       "FOLD 1.2",
       "schema",
       "parser",
       "validator",
+      "パーサ",
+      "スキーマ",
+      "バリデータ",
       "faceOrders",
       "frame",
       "Aux",
+      "JSON path",
       "surface_rank",
       "tabIndex",
       "axe",

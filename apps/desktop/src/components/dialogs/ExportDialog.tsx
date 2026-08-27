@@ -6,6 +6,8 @@
 import { save } from "@tauri-apps/plugin-dialog";
 import { useRef } from "react";
 import {
+  FOLD_UNSUPPORTED_CONTENT_ITEMS,
+  FOLD_UNSUPPORTED_CONTENT_TITLE,
   foldIssueNotice,
   type FoldIssueNoticeInput,
 } from "../../lib/foldNotices";
@@ -126,6 +128,21 @@ export function ExportDialog() {
         ))}
       </fieldset>
       <p className="hint">{choice.hint}</p>
+      {kind === "FoldJson" && (
+        <section
+          className="hint"
+          aria-labelledby="fold-unsupported-content-title"
+        >
+          <p id="fold-unsupported-content-title">
+            {FOLD_UNSUPPORTED_CONTENT_TITLE}
+          </p>
+          <ul>
+            {FOLD_UNSUPPORTED_CONTENT_ITEMS.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </section>
+      )}
       {stepCount === 0 && (
         <p className="hint">折り図について:{NO_STEPS_REASON}</p>
       )}

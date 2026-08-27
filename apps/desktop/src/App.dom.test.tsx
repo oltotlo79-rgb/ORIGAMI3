@@ -160,8 +160,9 @@ describe("上部ツールバーの操作順(D8)", () => {
     render(<AppToolbar onOpenHelp={vi.fn()} />);
     const openButton = screen.getByRole("button", { name: "開く" });
     const tooltip = openButton.getAttribute("data-tooltip") ?? "";
+    // 旧「…開きます」→新「…開きます。読み込めない内容…」。8-Dの理由案内を照合する更新で、緩和ではない。
     expect(tooltip).toBe(
-      "保存した作品または、ほかの折り紙ソフトのファイルを開きます",
+      "保存した作品または、ほかの折り紙ソフトのファイルを開きます。読み込めない内容があるときは、理由をお知らせします",
     );
 
     fireEvent.click(openButton);
@@ -180,10 +181,19 @@ describe("上部ツールバーの操作順(D8)", () => {
 
     const displayed = `${tooltip} ORIGAMI3作品 ほかの折り紙ソフトのファイル`;
     for (const forbidden of [
+      "FOLD 1.1",
       "FOLD 1.2",
+      "parser",
+      "schema",
+      "validator",
       "パーサ",
       "スキーマ",
       "バリデータ",
+      "faceOrders",
+      "frame",
+      "Aux",
+      "JSON path",
+      "$.",
     ]) {
       expect(displayed).not.toContain(forbidden);
     }
@@ -207,10 +217,19 @@ describe("上部の書き出し案内(D27)", () => {
     expect(tooltip).toBe(`${formats.join("、")}を書き出します`);
     for (const forbidden of [
       "3D",
+      "FOLD 1.1",
       "FOLD 1.2",
+      "parser",
+      "schema",
+      "validator",
       "パーサ",
       "スキーマ",
       "バリデータ",
+      "faceOrders",
+      "frame",
+      "Aux",
+      "JSON path",
+      "$.",
     ]) {
       expect(tooltip).not.toContain(forbidden);
     }
