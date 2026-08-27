@@ -26,6 +26,7 @@ jobs:
     timeout-minutes: 90
     env:
       CARGO_TERM_COLOR: always
+      CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
       CARGO_AUDIT_VERSION: "0.22.2"
       CARGO_AUDIT_CRATE_SHA256: 700c2b240f7fd330c24b675fe429f73a5b676531fcc6300400b2b67f155ba12a
 
@@ -139,8 +140,7 @@ jobs:
           & cargo @arguments
           if ($LASTEXITCODE -ne 0) { throw "cargo audit found an advisory that is not covered by an active policy exception" }
 
-      # The readiness-only check deliberately remains red while an exact Node version,
-      # release publication integration, or the known npm high assessment is unresolved.
+      # Always surface pin or assessment evidence even when an earlier Cargo step fails.
       - name: Report unresolved supply-chain readiness blockers
         if: ${{ always() }}
         shell: pwsh
@@ -179,6 +179,11 @@ jobs:
             throw "Checked-out revision '$actualRevision' does not match GITHUB_SHA '$env:GITHUB_SHA'."
           }
 
+      - name: Set up the exact Node.js version
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4 (verified 2026-08-27)
+        with:
+          node-version: "22.23.2"
+
       - name: Audit production and complete npm lockfiles with exact tools
         shell: pwsh
         working-directory: apps/desktop
@@ -187,15 +192,20 @@ jobs:
           $policy = Get-Content -LiteralPath "..\..\.github\security-policy.json" -Raw -Encoding UTF8 |
             ConvertFrom-Json
           $npmVersion = [string]$policy.toolPins.npmAudit.version
+          $expectedNodeVersion = [string]$policy.toolPins.npmAudit.nodeVersion
           if ($npmVersion -notmatch "^\d+\.\d+\.\d+$") {
             throw "Exact npm version is unresolved in security-policy.json; npm audit did not run."
+          }
+          if ($expectedNodeVersion -notmatch "^22\.\d+\.\d+$" -or
+              [string]$policy.toolPins.npmAudit.nodeVersionLine -ne $expectedNodeVersion) {
+            throw "Exact Node version is unresolved or inconsistent in security-policy.json; npm audit did not run."
           }
           $nodeCommand = Get-Command node.exe -CommandType Application -ErrorAction Stop
           $nodeExe = $nodeCommand.Source
           $reportedNodeVersion = & $nodeExe --version
           Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- npm audit runner Node evidence: $reportedNodeVersion"
-          if ($LASTEXITCODE -ne 0 -or $reportedNodeVersion -notmatch "^v22\.\d+\.\d+$") {
-            throw "GitHub runner Node must be an exact Node 22 version; runner reported '$reportedNodeVersion'."
+          if ($LASTEXITCODE -ne 0 -or $reportedNodeVersion -ne "v$expectedNodeVersion") {
+            throw "GitHub runner Node must be v$expectedNodeVersion; runner reported '$reportedNodeVersion'."
           }
           Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- npm audit requested npm version: $npmVersion"
           $npmCommand = Get-Command npm.cmd -CommandType Application -ErrorAction Stop
@@ -260,6 +270,30 @@ jobs:
     name: Code analysis action reference evidence
     runs-on: windows-latest
     steps:
+      - name: Check out the exact event revision
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          git init .
+          if ($LASTEXITCODE -ne 0) { throw "git init failed" }
+          git remote add origin "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY.git"
+          if ($LASTEXITCODE -ne 0) { throw "git remote add failed" }
+          $credentials = [Convert]::ToBase64String(
+            [Text.Encoding]::ASCII.GetBytes("x-access-token:$env:GH_TOKEN")
+          )
+          git -c "http.extraheader=AUTHORIZATION: basic $credentials" `
+            -c protocol.version=2 fetch --no-tags --prune --depth=1 origin `
+            "+$env:GITHUB_REF`:refs/remotes/origin/security-event"
+          if ($LASTEXITCODE -ne 0) { throw "git fetch failed" }
+          git checkout --detach --force FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { throw "git checkout failed" }
+          $actualRevision = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $actualRevision -ne $env:GITHUB_SHA) {
+            throw "Checked-out revision '$actualRevision' does not match GITHUB_SHA '$env:GITHUB_SHA'."
+          }
+
       - name: Confirm the reviewed v3 action reference
         shell: pwsh
         run: |

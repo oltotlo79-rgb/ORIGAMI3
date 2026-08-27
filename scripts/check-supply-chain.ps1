@@ -491,6 +491,9 @@ function Test-PolicyShape {
     Assert-True ([string]$Policy.toolPins.cargoAudit.version -match "^\d+\.\d+\.\d+$") "cargo-audit must have an exact semantic version."
     Assert-True ([string]$Policy.toolPins.cargoAudit.crateSha256 -match "^[0-9a-f]{64}$") "cargo-audit must have a 64-character lowercase SHA-256."
     Assert-True ([string]$Policy.toolPins.npmAudit.version -match "^\d+\.\d+\.\d+$") "npm must have an exact semantic version."
+    Assert-True ([string]$Policy.toolPins.npmAudit.nodeVersionLine -match "^22\.\d+\.\d+$") "npm audit Node versionLine must be an exact Node 22 semantic version."
+    Assert-True ([string]$Policy.toolPins.npmAudit.nodeVersion -match "^22\.\d+\.\d+$") "npm audit Node version must be an exact Node 22 semantic version."
+    Assert-True ([string]$Policy.toolPins.npmAudit.nodeVersionLine -eq [string]$Policy.toolPins.npmAudit.nodeVersion) "npm audit Node versionLine and exact version must match."
     Assert-True ($Policy.toolPins.codeql.workflowReferenceRule -eq "full-40-character-commit-sha") "CodeQL workflow references must use a full commit SHA."
     Assert-True ($Policy.toolPins.codeql.floatingMainMasterLatestAllowed -eq $false) "Floating main/master/latest references must be forbidden."
     Assert-True ($Policy.toolPins.sbom.format -eq "CycloneDX-1.6-JSON") "SBOM format must be CycloneDX 1.6 JSON."
@@ -658,6 +661,14 @@ function Test-SecurityWorkflowConfiguration {
     Assert-True ($text -match 'One or more security jobs did not succeed') "security.yml must fail the summary job when an audit job is unsuccessful."
     Assert-True ($text -notmatch '(?im)^\s*uses:\s*[^\r\n@]+@(main|master|latest)\b') "security.yml may not use floating action references."
 
+    $workflowNodeVersions = @(Get-YamlScalarValues -Text $text -Key "node-version")
+    Assert-True ($workflowNodeVersions.Count -eq 1 -and $workflowNodeVersions[0] -eq [string]$Policy.toolPins.npmAudit.nodeVersion) "security.yml exact Node version must occur once and match security-policy.json."
+    $cargoRegistryProtocols = @(Get-YamlScalarValues -Text $text -Key "CARGO_REGISTRIES_CRATES_IO_PROTOCOL")
+    Assert-True ($cargoRegistryProtocols.Count -eq 1 -and $cargoRegistryProtocols[0] -eq "sparse") "security.yml must fetch crates.io through the sparse protocol used by cargo-audit pin evidence."
+    $cargoAuditInstallIndex = $text.IndexOf("      - name: Install and verify the pinned cargo-audit", [StringComparison]::Ordinal)
+    $readinessIndex = $text.IndexOf("      - name: Report unresolved supply-chain readiness blockers", [StringComparison]::Ordinal)
+    Assert-True ($cargoAuditInstallIndex -ge 0 -and $readinessIndex -gt $cargoAuditInstallIndex) "security.yml must run ReadinessOnly after the pinned cargo-audit fetch/install step."
+
     $workflowCargoAuditVersions = @(Get-YamlScalarValues -Text $text -Key "CARGO_AUDIT_VERSION")
     Assert-True ($workflowCargoAuditVersions.Count -eq 1 -and $workflowCargoAuditVersions[0] -eq [string]$Policy.toolPins.cargoAudit.version) "security.yml Cargo advisory version must match security-policy.json."
     $workflowCargoAuditHashes = @(Get-YamlScalarValues -Text $text -Key "CARGO_AUDIT_CRATE_SHA256")
@@ -745,6 +756,61 @@ function Test-KnownAdvisoryAssessment {
         return
     }
 
+    if ($status -eq "reassessed-no-current-high") {
+        foreach ($field in @(
+            "package",
+            "advisoryId",
+            "dependencyPath",
+            "dependencyClass",
+            "distributionImpact",
+            "exceptionId",
+            "blockerReason"
+        )) {
+            if ($null -ne $assessment.$field -and -not [string]::IsNullOrWhiteSpace([string]$assessment.$field)) {
+                Add-AdvisoryAssessmentBlocker "A zero-current-high reassessment may not claim '$field'."
+            }
+        }
+        foreach ($field in @(
+            "source",
+            "impactAssessment",
+            "remediationVersion",
+            "breakingChangeAssessment",
+            "resolutionEvidence"
+        )) {
+            if ($null -eq $assessment.$field -or [string]::IsNullOrWhiteSpace([string]$assessment.$field)) {
+                Add-AdvisoryAssessmentBlocker "A zero-current-high reassessment is missing '$field'."
+            }
+        }
+
+        $evidence = [string]$assessment.resolutionEvidence
+        $npmVersion = [regex]::Escape([string]$Policy.toolPins.npmAudit.version)
+        if ($evidence -notmatch "(?:^|;\s*)npm=$npmVersion(?:;|$)") {
+            Add-AdvisoryAssessmentBlocker "Zero-current-high evidence must name the pinned npm version."
+        }
+        $auditCommands = @{
+            production = "npm.cmd audit --package-lock-only --audit-level=high --json --omit=dev"
+            complete = "npm.cmd audit --package-lock-only --audit-level=high --json"
+        }
+        if ([regex]::Matches($evidence, '\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\b').Count -lt 4) {
+            Add-AdvisoryAssessmentBlocker "Zero-current-high evidence must record UTC start and end timestamps for both audits."
+        }
+        foreach ($scope in @("production", "complete")) {
+            $scopeEvidence = [regex]::Match($evidence, "(?:^|;\s*)${scope} UTC=(?<value>[^;]+)")
+            if (-not $scopeEvidence.Success -or
+                $scopeEvidence.Groups["value"].Value.IndexOf("command=$($auditCommands[$scope])", [StringComparison]::Ordinal) -lt 0) {
+                Add-AdvisoryAssessmentBlocker "Zero-current-high evidence is missing the exact $scope audit command."
+            }
+            if (-not $scopeEvidence.Success -or
+                $scopeEvidence.Groups["value"].Value -notmatch "result: exit=0,[^;]*high=0,[^;]*critical=0,[^;]*total=0") {
+                Add-AdvisoryAssessmentBlocker "Zero-current-high evidence must record exit=0 and zero high, critical, and total vulnerabilities for $scope audit."
+            }
+        }
+        if ($evidence -notmatch 'package-lock\.json SHA-256=[0-9a-f]{64}') {
+            Add-AdvisoryAssessmentBlocker "Zero-current-high evidence must identify the audited package-lock.json by SHA-256."
+        }
+        return
+    }
+
     if (@("not-affected", "excepted") -notcontains $status) {
         Add-AdvisoryAssessmentBlocker "Known npm high assessment has unsupported status '$status'."
         return
@@ -818,8 +884,9 @@ function Test-ToolPinReadiness {
     Test-CargoAuditPinEvidence $Policy
 
     $nodeVersion = [string]$Policy.toolPins.npmAudit.nodeVersion
-    if ($nodeVersion -notmatch '^22\.\d+\.\d+$') {
-        Add-ToolPinBlocker "Exact Node 22 version is not verified; versionLine '22' is not immutable."
+    $nodeVersionLine = [string]$Policy.toolPins.npmAudit.nodeVersionLine
+    if ($nodeVersion -notmatch '^22\.\d+\.\d+$' -or $nodeVersionLine -ne $nodeVersion) {
+        Add-ToolPinBlocker "Exact Node 22 version is not verified consistently by nodeVersionLine and nodeVersion."
     }
 
     $codeqlSha = [string]$Policy.toolPins.codeql.commitSha

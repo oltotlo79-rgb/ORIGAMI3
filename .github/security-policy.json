@@ -149,21 +149,21 @@
   },
   "advisoryExceptions": [],
   "knownAdvisoryAssessment": {
-    "source": "user-reported-npm-ci-summary",
+    "source": "user-reported-npm-ci-summary followed by pinned npm network reassessment",
     "reportedCount": 1,
     "reportedSeverity": "high",
-    "status": "blocked-external-audit-endpoint",
+    "status": "reassessed-no-current-high",
     "package": null,
     "advisoryId": null,
     "dependencyPath": null,
     "dependencyClass": null,
     "distributionImpact": null,
-    "impactAssessment": null,
-    "remediationVersion": null,
-    "breakingChangeAssessment": null,
-    "resolutionEvidence": null,
+    "impactAssessment": "The historical one-high summary did not identify an advisory. Current production and complete package-lock audits returned no vulnerabilities, so no affected package or dependency path is presently observable.",
+    "remediationVersion": "not applicable: no current advisory was returned and no dependency update was performed",
+    "breakingChangeAssessment": "not applicable: package.json and package-lock.json were unchanged by the reassessment",
+    "resolutionEvidence": "npm=11.12.1; local runtime node=v25.9.0; registry=https://registry.npmjs.org/; production UTC=2026-08-27T15:02:53.595Z..2026-08-27T15:02:56.634Z command=npm.cmd audit --package-lock-only --audit-level=high --json --omit=dev result: exit=0, info=0, low=0, moderate=0, high=0, critical=0, total=0; complete UTC=2026-08-27T15:03:04.671Z..2026-08-27T15:03:07.037Z command=npm.cmd audit --package-lock-only --audit-level=high --json result: exit=0, info=0, low=0, moderate=0, high=0, critical=0, total=0; package-lock.json SHA-256=8e28d9f52e5930e8b19e39d2e01d876b90081b86cf698daba5b70cf15b903a39; package.json SHA-256=6895df719f32f05df54ea344196048b830825817a56d6327d9b3562a94a65771",
     "exceptionId": null,
-    "blockerReason": "npm audit endpoint was unreachable in the sandbox and the approved retry could not start"
+    "blockerReason": null
   },
   "licensePolicy": {
     "expressionStandard": "SPDX-2.3",
@@ -482,10 +482,10 @@
     "npmAudit": {
       "tool": "npm",
       "version": "11.12.1",
-      "nodeVersionLine": "22",
-      "nodeVersion": null,
-      "pinType": "exact-npm-version-on-approved-node-lts-line",
-      "evidence": "locally-installed-npm-version-and-existing-ci-node-line",
+      "nodeVersionLine": "22.23.2",
+      "nodeVersion": "22.23.2",
+      "pinType": "exact-npm-version-on-exact-node-version",
+      "evidence": "2026-08-27T15:03:19.668Z actions/node-versions public manifest: 22.23.2 stable=true, lts=Jod, win32-x64 asset node-22.23.2-win32-x64.7z; npm 11.12.1 already verified locally",
       "nodeVersionResolutionStage": "10-A"
     },
     "codeql": {
