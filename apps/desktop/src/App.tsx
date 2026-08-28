@@ -10,6 +10,7 @@ import { CpEditor } from "./components/CpEditor/CpEditor";
 import {
   DeferredViewer3D,
   type DeferredViewer3DHandle,
+  type Viewer3DModuleLoader,
 } from "./components/Viewer3D/DeferredViewer3D";
 import { ViewerStatusOverlays } from "./components/ViewerStatusOverlays";
 import { Timeline } from "./components/Timeline";
@@ -36,7 +37,12 @@ const LazyHelpCenter = lazy(async () => ({
   default: (await import("./components/dialogs/HelpCenter")).HelpCenter,
 }));
 
-function App() {
+interface AppProps {
+  /** 製品では省略する。遅延境界をThreeなしで決定的に検査するための注入口。 */
+  viewerModuleLoader?: Viewer3DModuleLoader;
+}
+
+function App({ viewerModuleLoader }: AppProps) {
   const newDocument = useAppStore((s) => s.newDocument);
   const checkRecovery = useAppStore((s) => s.checkRecovery);
   const proposalOpen = useAppStore((s) => s.proposalStep !== null);
@@ -101,7 +107,10 @@ function App() {
             if (fit3dRef.current) {
               fit3dRef.current();
             } else {
-              void ensureViewer3d().then(() => fit3dRef.current?.());
+              void ensureViewer3d()
+                .then(() => fit3dRef.current?.())
+                // 読込失敗は同寸法のViewer区画が案内する。UIイベントに未処理rejectを残さない。
+                .catch(() => undefined);
             }
           }}
         />
@@ -115,6 +124,7 @@ function App() {
               ref={deferredViewerRef}
               fitRef={fit3dRef}
               statusOverlays={<ViewerStatusOverlays />}
+              moduleLoader={viewerModuleLoader}
             />
           </div>
           <Timeline />

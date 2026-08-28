@@ -4,7 +4,10 @@ import react from "@vitejs/plugin-react";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
+// 仕様で固定された上限であり、実測をそのまま境界にはしていない。
+// 変更前initial gzipは166359 bytes、余裕は83641 bytes (33.4564%)。
 const INITIAL_GZIP_LIMIT = 250_000;
+// 変更前最大rawは349725 bytes、余裕は150275 bytes (30.055%)。
 const MAX_RAW_CHUNK_LIMIT = 500_000;
 const INITIAL_VIEWER_ALLOWLIST = new Set([
   "DeferredViewer3D.tsx",
@@ -72,6 +75,7 @@ function bundleBudget(): Plugin {
         Object.keys(chunk.modules).flatMap((id) => {
           const normalized = id.replaceAll("\\", "/");
           if (normalized.includes("/node_modules/three/")) return [normalized];
+          if (normalized.includes("/src/help/manualExport.ts")) return [normalized];
           const marker = "/src/components/Viewer3D/";
           const markerAt = normalized.indexOf(marker);
           if (markerAt < 0) return [];
@@ -96,7 +100,7 @@ function bundleBudget(): Plugin {
       }
       if (forbiddenInitialModules.length > 0) {
         this.error(
-          `初期集合へViewer/Threeが戻りました:\n${forbiddenInitialModules.join("\n")}`,
+          `初期集合へViewer/Three/manualExportが戻りました:\n${forbiddenInitialModules.join("\n")}`,
         );
       }
     },
@@ -107,6 +111,7 @@ function bundleBudget(): Plugin {
 export default defineConfig(async () => ({
   plugins: [react(), bundleBudget()],
   build: {
+    manifest: true,
     rollupOptions: {
       output: {
         manualChunks: manualChunk,

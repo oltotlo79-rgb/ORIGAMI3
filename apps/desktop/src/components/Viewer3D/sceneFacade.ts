@@ -757,6 +757,9 @@ export function createScene(canvas: HTMLCanvasElement): Viewer3DScene {
       }
       disposeSurfaceOwnerPassResources(ownerPass);
       renderer.dispose();
+      // Viewerはunmount後に同じcanvas/contextを再利用しない。driver側へcontextを
+      // 明示的に返し、remountを繰り返しても生存contextが積み上がらないようにする。
+      renderer.forceContextLoss();
     },
   };
   const unregisterReadback = registerViewer3DReadback(captureReadback);

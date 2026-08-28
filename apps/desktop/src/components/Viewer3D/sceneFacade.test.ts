@@ -6,6 +6,7 @@ import * as THREE from "three";
 const held = vi.hoisted(() => ({
   renderersCreated: 0,
   renderersDisposed: 0,
+  rendererContextsLost: 0,
   controlsCreated: 0,
   controlsDisposed: 0,
   controlAdds: [] as Array<[string, EventListener]>,
@@ -46,6 +47,10 @@ vi.mock("three", async (importOriginal) => {
     setSize() {}
     dispose() {
       held.renderersDisposed += 1;
+    }
+
+    forceContextLoss() {
+      held.rendererContextsLost += 1;
     }
   }
 
@@ -273,6 +278,7 @@ beforeEach(() => {
   for (const key of [
     "renderersCreated",
     "renderersDisposed",
+    "rendererContextsLost",
     "controlsCreated",
     "controlsDisposed",
     "ownerPassCreated",
@@ -327,6 +333,7 @@ describe("scene facade の資源所有", () => {
     expect(held.previewMaterialsDisposed).toBe(held.previewMaterialsCreated);
     expect(held.renderersCreated).toBe(100);
     expect(held.renderersDisposed).toBe(held.renderersCreated);
+    expect(held.rendererContextsLost).toBe(held.renderersCreated);
     expect(held.controlsCreated).toBe(100);
     expect(held.controlsDisposed).toBe(held.controlsCreated);
     expect(held.ownerPassCreated).toBe(100);
@@ -369,6 +376,7 @@ describe("scene facade の資源所有", () => {
     expect(held.previewMaterialsDisposed).toBe(held.previewMaterialsCreated);
     expect(held.renderersCreated).toBe(1);
     expect(held.renderersDisposed).toBe(held.renderersCreated);
+    expect(held.rendererContextsLost).toBe(held.renderersCreated);
     expect(held.controlsCreated).toBe(1);
     expect(held.controlsDisposed).toBe(held.controlsCreated);
     expect(held.ownerPassCreated).toBe(1);
