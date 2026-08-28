@@ -42,6 +42,9 @@ $Targets = [ordered]@{
     "collapse"        = Join-Path $Temp "ori3-wt-collapse"
     "viewer"          = Join-Path $Temp "ori3-wt-viewer"
     "cifix"           = Join-Path $Temp "ori3-wt-cifix"
+    "crane2"          = Join-Path $Temp "ori3-wt-crane2"
+    "web"             = Join-Path $Temp "ori3-wt-web"
+    "rules"           = Join-Path $Temp "ori3-wt-rules"
 }
 
 $Excluded = @(
