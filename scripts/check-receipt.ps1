@@ -455,7 +455,7 @@ function Get-Ori3MachineCondition {
 
 function Get-Ori3RustW4Arguments {
     return @(
-        "test", "--workspace", "--",
+        "test", "--workspace", "--no-fail-fast", "--",
         "--skip", "completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten",
         "--skip", "named_sample_completes_end_to_end_and_is_deterministic_ten_out_of_ten",
         "--skip", "a_safe_coincident_partial_network_appears_after_the_first_fold",

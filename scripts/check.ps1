@@ -12,7 +12,7 @@ $root = Split-Path -Parent $PSScriptRoot
 $receiptHelper = Join-Path $PSScriptRoot "check-receipt.ps1"
 $receiptAvailable = $false
 $rustW4Arguments = @(
-    "test", "--workspace", "--",
+    "test", "--workspace", "--no-fail-fast", "--",
     "--skip", "completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten",
     "--skip", "named_sample_completes_end_to_end_and_is_deterministic_ten_out_of_ten",
     "--skip", "a_safe_coincident_partial_network_appears_after_the_first_fold",
@@ -37,6 +37,18 @@ try {
 }
 catch {
     Write-Host "[WARN] receipt判定を使えないため、従来どおり全5検査を実行します: $($_.Exception.Message)" -ForegroundColor Yellow
+}
+
+# receipt helperを引数の正本として使う場合も、失敗したtest targetの後ろを
+# cargoに続行させ、workspace内の赤を1回の実行ですべて列挙する。
+if ($rustW4Arguments -notcontains "--no-fail-fast") {
+    $testArgumentSeparator = [Array]::IndexOf([object[]]$rustW4Arguments, "--")
+    if ($testArgumentSeparator -lt 0) {
+        throw "cargo test引数にtest harnessとの区切り（--）がありません"
+    }
+    $rustArgumentPrefix = @($rustW4Arguments[0..($testArgumentSeparator - 1)])
+    $rustArgumentSuffix = @($rustW4Arguments[$testArgumentSeparator..($rustW4Arguments.Length - 1)])
+    $rustW4Arguments = @($rustArgumentPrefix + "--no-fail-fast" + $rustArgumentSuffix)
 }
 
 function Invoke-Check {

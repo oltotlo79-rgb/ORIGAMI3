@@ -91,7 +91,7 @@ if [ "$status" -ne 0 ]; then
     exit "$status"
 fi
 
-(cd "$repo_root" && cargo test --workspace -- --skip completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten --skip named_sample_completes_end_to_end_and_is_deterministic_ten_out_of_ten --skip a_safe_coincident_partial_network_appears_after_the_first_fold --skip the_heaviest_proposal_never_hits_the_time_limit)
+(cd "$repo_root" && cargo test --workspace --no-fail-fast -- --skip completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten --skip named_sample_completes_end_to_end_and_is_deterministic_ten_out_of_ten --skip a_safe_coincident_partial_network_appears_after_the_first_fold --skip the_heaviest_proposal_never_hits_the_time_limit)
 status=$?
 
 if [ "$status" -ne 0 ]; then
