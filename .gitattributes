@@ -2,3 +2,43 @@
 # CRLFになると1行目の #!/bin/sh が壊れ、フックが動かないまま
 # コミットやpushが通ってしまう。
 scripts/hooks/* text eol=lf
+
+# ほかの折り紙ソフトから受け取った見本は、1バイトも変えずに取り出す。
+# manifest.json はこのファイルのbyte数とSHA-256を凍結値として持っており、
+# この設定が無いと `core.autocrlf=true` のWindowsで取り出したときだけ
+# 改行がLFからCRLFへ変わり、凍結値と実体が一致しなくなる。
+# 実測(2026-08-29): origami_simulatorの8件が改行の数だけ大きくなり、
+# fold_external_corpus_intake が byte_length mismatch で落ちていた。
+crates/ori3-export/tests/fixtures/fold/corpus/external/** -text
+
+# 同じ理由で、生成物とバイト単位で突き合わせる基準ファイルも変換しない。
+# penetration_fixture.rs は「CRを1つも含まないこと」と「作り直した結果と
+# 完全一致すること」を主張するので、CRLFへ変わると必ず落ちる。
+# 実測(2026-08-29): blob 1647 byte に対しディスクは 1699 byte、CRはちょうど
+# 改行の数の52個で、「fixture must use LF newlines」で落ちていた。
+#
+# 追加するときの目安: **ディスクの生バイトを凍結値や生成物と比べる**
+# 追跡ファイルは、ここへ書いて `-text` にする。中身をJSONとして読むだけの
+# fixtureは対象外でよい。ハッシュを取る前に CRLF を LF へ直す書き方
+# (`crates/ori3-propose/tests/corpus.rs` の `fixture_checksum`) でも防げる。
+crates/ori3-layers/tests/fixtures/penetration-warning.ori3 -text
+
+# 画面側にも同じ問題がある。次の検査は、製品のソースそのものを読んで
+# byte数・改行の数・本体のSHA-256を凍結値と比べる。
+#   apps/desktop/src/store/storeComposition.test.ts（ipcQueue.ts の byte数・改行数・SHA-256）
+#   apps/desktop/src/store/storeBoundary.test.ts（同じく ipcQueue.ts）
+#   apps/desktop/src/components/ContextPanel.boundary.test.ts
+#     （移した関数29本の本体SHA-256、複数行のconst初期化子）
+# 実測(2026-08-29): ipcQueue.ts は blob 4627 byte に対しディスク 4732 byte、
+# CRはちょうど改行の数の105個で、「expected 4732 to be 4627」で落ちていた。
+# ContextPanel系5ファイルも同じ形で、SHA-256が29件全て不一致になっていた。
+#
+# ここは製品のソースなので `-text` ではなく `text eol=lf` を使う。
+# 取り出しをLFにするだけでなく、CRLFで書く編集器から入ってきた場合も
+# コミット時にLFへ直すためである。
+apps/desktop/src/store/ipcQueue.ts text eol=lf
+apps/desktop/src/components/ContextPanel.tsx text eol=lf
+apps/desktop/src/components/contextAngleSteps.tsx text eol=lf
+apps/desktop/src/components/contextAlignFold.tsx text eol=lf
+apps/desktop/src/components/contextTechniques.tsx text eol=lf
+apps/desktop/src/components/contextPaperDisplay.tsx text eol=lf
