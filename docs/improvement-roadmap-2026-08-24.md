@@ -1049,14 +1049,15 @@ generatorの通常実行は一時ファイルへ出し、`-Check` がmarkerと�
 | 8-B core | **4委譲**（各2～3人日） | **B1 sol ultra:** parserの欠落・不正値契約を決める。<br>**B2 sol ultra:** 表現可否とpath付きwarning/reject境界を決める。<br>**B3 sol ultra:** writerのfield/frame/assignment表現の正しさを決める。<br>**B4 sol ultra:** canonical JSONとroundtrip比較の意味を決める。 | B1 typed parser、B2限定profile validator/unsupported path、B3 writer、B4 canonicalizer。parser+validator、writer+canonicalizerを一括にしない。 | 各回のfield対応表、malformed case、canonical JSON、silent drop数、公開API。 |
 | 8-C backend | **2委譲**（各3～4人日） | **C1 sol ultra:** B/M/V、F/U→Aux+警告、角度、step frame、faceOrdersの幾何・数値変換を決める。<br>**C2 sol ultra:** store/import/open/exportの原子transactionと失敗契約を設計する。 | C1 model/converterのB/M/V/F/U、angle、step frame、face order対応、C2 `DocumentStore::import_fold` + 既存open/export IPCの原子transaction。 | C1は変換表と終点/層制約、C2は取込前後document、dirty/path、warning、失敗時store不変。 |
 | 8-D frontend | **1委譲**（3～4人日） | **sol ultra:** filter、警告、利用者向け説明、対応外一覧をfrontend全体で一貫させる仕様変更である。 | filter、export choice、警告一覧、対応範囲説明。 | keyboard操作、4区画不変、利用者向け説明、対応外7/7、既存open/export回帰。 |
-| 8-E corpus | **6委譲**（各2～3人日） | **E1～E6 terra:** 各5 fixtureを既定quota/schemaに従い取得・checksum・license・分類する反復作業である。 | E1～E6が各5 fixtureを取得・正規化・manifest化する。4出所の最終quotaは8-E開始前に予約し、各fixtureのsource/license/checksumを持つ。 | 各5件の出所、supported/unsupported分類、panic、roundtrip差、未対応field、累計quota。 |
+| 8-E corpus | **6委譲**（各2～3人日） | **E1～E6 terra:** 各5 fixtureを既定quota/schemaに従い取得・checksum・license・分類する反復作業である。 | E1～E6が各5 fixtureを取得・正規化・manifest化する。4出所の最終quotaは8-E開始前に予約し、各fixtureのsource/license/checksumを持つ。**4番目の出所は利用者の決定（2026-08-29）でORIPAから `origamimagiro/flat-folder` へ差し替えた**（ORIPAの配布物に `.fold` が無いため。件数8は変えない）。 | 各5件の出所、supported/unsupported分類、panic、roundtrip差、未対応field、累計quota。 |
 | 8-F 統合 | **1委譲**（3～4人日） | **terra:** 30外部・4内部・100 malformedと全gateを実行、集計、文書生成する手順作業である。 | 30件、内部4件、100 malformed、UI/backend/full gateを同一buildで集計し、要件・roadmap・progressの差分を閉じる。 | 4出所quota、全数値、license未決0、生成report、既存形式回帰、未実行0。 |
 
 全体一括不可。承認済み限定profileの15単位は、どれも4人日を超える1回の委譲にしない。F/U完全往復案は不採用なので、追加委譲は0件である。
 
 ### 12.6 数値の合格条件
 
-1. FOLD 1.2公式sample 6件、ORIPA出力8件、Oriedita出力8件、Origami Simulator出力8件の4出所・合計30件を製品実行前に固定・分類し、FOLD 1.1を16件以上、FOLD 1.2を6件以上含める。対応範囲内・対応範囲外の実数を報告し、30/30でpanic 0、分類結果の10回不一致0とする。出所/licenseを確認できないquotaを別出所の水増しで埋めない。
+1. FOLD公式sample **2件**、`origamimagiro/flat-folder` 出力**12件**、Oriedita出力8件、Origami Simulator出力8件の4出所・合計30件を製品実行前に固定・分類し、FOLD 1.1を16件以上含める。**出所ごとの件数は実際の供給量に合わせた実測値である。公式 `edemaine/FOLD` が公開する見本のうちFOLD 1.1以上は2件しかなく、残る3件はFOLD 1.0**（限定profileが読める版ではないため、`$.file_spec` だけを理由にした拒否になり、対応範囲外の理由として数えられない）。対応範囲内・対応範囲外の実数を報告し、30/30でpanic 0、分類結果の10回不一致0とする。出所/licenseを確認できないquotaを別出所の水増しで埋めない。**FOLD 1.2は外部見本では数えない。**代わりに自前で書き出したFOLD 1.2を読み戻して完全に一致することで満たし、その担保は下記8の内部4標本・100回連続の往復とする。
+    - **利用者の決定（2026-08-29）**: 「FOLD 1.2を6件以上含める」を削除し、4番目の出所をORIPAから `origamimagiro/flat-folder` へ差し替えた。根拠は実測で、**FOLD 1.2で書かれた外部見本が見つからないこと**（公式 `edemaine/FOLD` の5件は1.0が3件・1.1が2件、先に取得済みの16件は16件とも1.1、`origamimagiro/flat-folder` の755件も1.1、`robbykraft/Origami` は `.fold` 0件）と、**ORIPAの配布物に `.fold` が無いこと**（`.opx` が4件だけで、書き出すにはORIPA本体を動かす必要がある）である。ほかの合格条件は1つも緩めていない。
 2. 対応範囲内の実数は全件で取込成功とする。対応範囲外の実数は全件を理由付きで拒否し、無言の成功0とする。
 3. ORIGAMI3→FOLD→ORIGAMI3で、canonicalized vertex/edge topology完全一致、B/M/V一致率100%、2D座標最大誤差 `<=1e-9`、fold angle最大誤差 `<=1e-9` degree。F/Uは`Aux`へ縮退し、入力中のF/U edge全件で元assignmentとpathを警告へ残す率100%、無言の破棄0。
 4. 線形step frameの各終点で全頂点finite、対応終点距離 `<=1e-6`、seam `<=1e-6`、penetration 0。step数・順序一致率100%。
