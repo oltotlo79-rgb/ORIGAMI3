@@ -7,6 +7,16 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
+# `& git show` の出力はネイティブコマンドの標準出力としてPowerShellへ渡り、
+# [Console]::OutputEncoding で文字列へ復号される。既定は起動元セッションの
+# コンソール既定コードページ（この作業機ではShift_JIS系）で、UTF-8のgit出力の
+# 日本語見出しが化ける。実測で確認した重要な点: 復号に効くのは
+# [Console]::OutputEncoding であり、$OutputEncoding 変数（PowerShellが外部
+# プログラムへ渡すときの符号化）は無関係（設定しても効果が無いことを4通りの
+# 組み合わせで実測・特定した、2026-08-30）。両方明示しておく（$OutputEncodingは
+# 将来ほかのネイティブコマンド呼び出しが増えた場合の保険）。
+$OutputEncoding = [Text.UTF8Encoding]::new()
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new()
 $script:FailureCount = 0
 $script:Utf8NoBom = [Text.UTF8Encoding]::new($false)
 

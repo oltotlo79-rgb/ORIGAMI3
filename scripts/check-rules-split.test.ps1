@@ -5,6 +5,12 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
+# 168行目付近の `& git ... show` の復号は [Console]::OutputEncoding に依存し、
+# 既定（この作業機ではShift_JIS系）だとbaseline fixtureの日本語見出しが化け、
+# [1/9]（正しい分割は成功する）まで巻き添えでNGになることを実測した
+# （check-rules-split.ps1本体と同じ原因、2026-08-30）。$OutputEncoding変数は
+# この経路に無関係であることも実測済みのため設定しない（本体側コメント参照）。
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new()
 $script:AssertionCount = 0
 $script:Utf8NoBom = [Text.UTF8Encoding]::new($false)
 
@@ -118,6 +124,36 @@ function Invoke-IsolatedChecker {
     }
 }
 
+function ConvertTo-CheckerLiteral {
+    param([Parameter(Mandatory = $true)][string]$Value)
+
+    return "'" + $Value.Replace("'", "''") + "'"
+}
+
+# -BaselinePath を使わず、本体の既定経路（`& git show`、check-rules-split.ps1の
+# Get-BaselineText）を実際に通す。本体リポジトリを対象にする必要がある
+# （New-CaseFixtureのサンドボックスには.gitが無く、git showそのものが失敗するため）。
+# 起動する子processの[Console]::OutputEncodingを呼び出し元から明示的に強制し、
+# 復号がそれに依存しないこと（本体側の対策で上書きされること）を検査する。
+function Invoke-CheckerAgainstRepositoryWithForcedConsoleEncoding {
+    param(
+        [Parameter(Mandatory = $true)][string]$PowerShellPath,
+        [Parameter(Mandatory = $true)][string]$EncodingWebName
+    )
+
+    $childCommand = '[Console]::OutputEncoding = [Text.Encoding]::GetEncoding(' +
+        (ConvertTo-CheckerLiteral $EncodingWebName) + '); & ' + (ConvertTo-CheckerLiteral $CheckerPath) +
+        ' -Root ' + (ConvertTo-CheckerLiteral $RepositoryRoot) + '; exit $LASTEXITCODE'
+    $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childCommand))
+    $global:LASTEXITCODE = 0
+    $output = @(& $PowerShellPath -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encodedCommand)
+    $exitCode = $LASTEXITCODE
+    [pscustomobject]@{
+        ExitCode = $exitCode
+        Output = ($output -join "`n")
+    }
+}
+
 function Assert-ExitCode {
     param(
         [Parameter(Mandatory = $true)]$Result,
@@ -182,12 +218,12 @@ try {
     }
     Write-Utf8Fixture $BaselinePath (($baselineLines -join "`n") + "`n")
 
-    Write-Host "[1/9] 正しい分割は成功する"
+    Write-Host "[1/10] 正しい分割は成功する"
     $caseRoot = New-CaseFixture "valid"
     $result = Invoke-IsolatedChecker $caseRoot $PowerShellPath
     Assert-ExitCode $result $true "正しい分割を拒否してはならない"
 
-    Write-Host "[2/9] 存続見出しを1つ消すと失敗する"
+    Write-Host "[2/10] 存続見出しを1つ消すと失敗する"
     $caseRoot = New-CaseFixture "missing-heading"
     $target = Join-Path $caseRoot "docs/rules/01-役割と委譲.md"
     $text = [IO.File]::ReadAllText($target, $script:Utf8NoBom)
@@ -197,7 +233,7 @@ try {
     Assert-OutputContains $result "分割前の見出しが欠落" "見出し検査そのものが故障を検出すること"
     Assert-ExitCode $result $false "見出し欠落を成功扱いしてはならない"
 
-    Write-Host "[3/9] リンク切れがあると失敗する"
+    Write-Host "[3/10] リンク切れがあると失敗する"
     $caseRoot = New-CaseFixture "broken-link"
     $target = Join-Path $caseRoot "CLAUDE.md"
     $text = [IO.File]::ReadAllText($target, $script:Utf8NoBom)
@@ -207,7 +243,7 @@ try {
     Assert-OutputContains $result "リンク先が存在しません" "リンク検査そのものが故障を検出すること"
     Assert-ExitCode $result $false "リンク切れを成功扱いしてはならない"
 
-    Write-Host "[4/9] CLAUDE.md が151行なら失敗する"
+    Write-Host "[4/10] CLAUDE.md が151行なら失敗する"
     $caseRoot = New-CaseFixture "too-many-lines"
     $target = Join-Path $caseRoot "CLAUDE.md"
     $lines = [Collections.Generic.List[string]]::new()
@@ -223,7 +259,7 @@ try {
     Assert-OutputContains $result "CLAUDE.md が150行を超えています" "入口行数検査そのものが故障を検出すること"
     Assert-ExitCode $result $false "151行の入口を成功扱いしてはならない"
 
-    Write-Host "[5/9] コード片を変えると失敗する"
+    Write-Host "[5/10] コード片を変えると失敗する"
     $caseRoot = New-CaseFixture "missing-code-block"
     $target = Join-Path $caseRoot "docs/rules/01-役割と委譲.md"
     $text = [IO.File]::ReadAllText($target, $script:Utf8NoBom)
@@ -234,7 +270,7 @@ try {
     Assert-OutputContains $result "分割前のコード片が欠落しています" "コード片検査そのものが故障を検出すること"
     Assert-ExitCode $result $false "コード片欠落を成功扱いしてはならない"
 
-    Write-Host "[6/9] 参照されない rules ファイルがあると失敗する"
+    Write-Host "[6/10] 参照されない rules ファイルがあると失敗する"
     $caseRoot = New-CaseFixture "unreferenced-rule"
     Write-Utf8Fixture (Join-Path $caseRoot "docs/rules/99-未参照.md") "# 未参照の故障注入`n"
     $result = Invoke-IsolatedChecker $caseRoot $PowerShellPath
@@ -243,7 +279,7 @@ try {
 
     $integratedHeading = '### 10.7.18 「裂け0・自己交差0」だけを見て、鶴になっていない作品を正しいと判断した（2026-08-28）'
 
-    Write-Host "[7/9] 欠落済み旧見出しの統合対応行を消すと失敗する"
+    Write-Host "[7/10] 欠落済み旧見出しの統合対応行を消すと失敗する"
     $caseRoot = New-CaseFixture "missing-correspondence-row"
     Assert-True (-not (Test-CaseHasExactHeading $caseRoot $integratedHeading)) "故障対象の旧見出しは本文から統合済みであること"
     $target = Join-Path $caseRoot "docs/rules/00-旧規約対応と施行.md"
@@ -260,7 +296,7 @@ try {
     Assert-OutputContains $result "変更対応表にもありません" "変更対応表の行欠落検査そのものが故障を検出すること"
     Assert-ExitCode $result $false "欠落旧見出しの対応行削除を成功扱いしてはならない"
 
-    Write-Host "[8/9] 変更対応表の統合先が空なら失敗する"
+    Write-Host "[8/10] 変更対応表の統合先が空なら失敗する"
     $caseRoot = New-CaseFixture "empty-correspondence-target"
     Assert-True (-not (Test-CaseHasExactHeading $caseRoot $integratedHeading)) "故障対象の旧見出しは本文から統合済みであること"
     $target = Join-Path $caseRoot "docs/rules/00-旧規約対応と施行.md"
@@ -277,7 +313,7 @@ try {
     Assert-OutputContains $result "変更対応表の統合先が空です" "空の統合先検査そのものが故障を検出すること"
     Assert-ExitCode $result $false "空の統合先を成功扱いしてはならない"
 
-    Write-Host "[9/9] 規約総量が651行なら失敗する"
+    Write-Host "[9/10] 規約総量が651行なら失敗する"
     $caseRoot = New-CaseFixture "total-651-lines"
     $totalBefore = Get-CaseTotalLineCount $caseRoot
     Assert-True ($totalBefore -le 650) "故障注入前の規約総量は650行以下であること"
@@ -296,7 +332,19 @@ try {
     Assert-OutputContains $result "合計が650行を超えています" "規約総量検査そのものが境界値を検出すること"
     Assert-ExitCode $result $false "651行の規約総量を成功扱いしてはならない"
 
-    Write-Host "[OK] 規約分割の隔離テスト: 9/9件、$script:AssertionCount assertions"
+    Write-Host "[10/10] git show の復号は起動元セッションの Console.OutputEncoding に依存しない"
+    # 本体リポジトリ(実際の.gitとebae7d8を持つ)を対象に、-BaselinePathを使わず
+    # 既定経路(Get-BaselineTextの`& git show`)を実際に通す。呼び出し元のセッションで
+    # Console.OutputEncodingをASCIIに強制しても、UTF-8に強制した場合と同じ結果になる
+    # ことを検査する(2026-08-30に実測したcheck-rules-split.ps1本体の欠陥の回帰試験)。
+    $asciiResult = Invoke-CheckerAgainstRepositoryWithForcedConsoleEncoding $PowerShellPath "us-ascii"
+    $utf8Result = Invoke-CheckerAgainstRepositoryWithForcedConsoleEncoding $PowerShellPath "utf-8"
+    Assert-True ($asciiResult.ExitCode -eq $utf8Result.ExitCode) `
+        "ASCII強制とUTF-8強制で終了コードが一致すること(実測: ascii=$($asciiResult.ExitCode) utf8=$($utf8Result.ExitCode))"
+    Assert-True ($asciiResult.ExitCode -eq 0) `
+        "本体リポジトリの現在の分割状態はConsole.OutputEncoding=ASCII強制下でも検査に合格すること"
+
+    Write-Host "[OK] 規約分割の隔離テスト: 10/10件、$script:AssertionCount assertions"
 }
 finally {
     Remove-TestSandbox
