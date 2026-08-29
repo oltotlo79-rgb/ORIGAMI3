@@ -85,14 +85,22 @@ jobs:
           $bootstrapRoot = Join-Path $env:RUNNER_TEMP "cargo-audit-download-only"
           $bootstrapManifest = Join-Path $bootstrapRoot "Cargo.toml"
           New-Item -ItemType Directory -Force -Path $bootstrapRoot | Out-Null
+          # PowerShell does not treat backslash as a string-escape character (double-quoted
+          # strings escape an embedded '"' with a doubled '""' or a backtick, never '\"'), so
+          # the previous '\"'-escaped lines here were a parse error, not valid Cargo.toml
+          # content: `"name = \"ori3-cargo-audit-download-only\""` closes the string at the
+          # first unescaped '\"' and leaves a bareword token behind. Lines with no variable
+          # interpolation are single-quoted (no escaping needed); the one line that
+          # interpolates $env:CARGO_AUDIT_VERSION keeps double quotes and doubles the
+          # embedded '"' characters instead.
           @(
-            "[package]",
-            "name = \"ori3-cargo-audit-download-only\"",
-            "version = \"0.0.0\"",
-            "edition = \"2021\"",
-            "",
-            "[dependencies]",
-            "cargo-audit = \"=$env:CARGO_AUDIT_VERSION\""
+            '[package]',
+            'name = "ori3-cargo-audit-download-only"',
+            'version = "0.0.0"',
+            'edition = "2021"',
+            '',
+            '[dependencies]',
+            "cargo-audit = ""=$env:CARGO_AUDIT_VERSION"""
           ) | Set-Content -LiteralPath $bootstrapManifest -Encoding UTF8
           cargo fetch --manifest-path $bootstrapManifest
           if ($LASTEXITCODE -ne 0) { throw "cargo-audit download-only fetch failed" }
@@ -365,10 +373,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = "Stop"
-          $proposals = @(gh pr list --state all --author app/dependabot --limit 100 --json number,title,url,createdAt,mergedAt,closedAt,headRefName,baseRefName,files | ConvertFrom-Json)
+          # ConvertFrom-Json writes its parsed value as a single pipeline object, so wrapping
+          # the pipe expression itself directly in @(...) would nest the real array inside a
+          # 1-element array instead of flattening it (Count would always read 1 whenever gh
+          # returned one or more proposals, and the loop below would iterate once over the
+          # whole array instead of once per proposal). Bind the parsed value to a plain
+          # variable first, then wrap that variable.
+          $proposalsRaw = gh pr list --state all --author app/dependabot --limit 100 --json number,title,url,createdAt,mergedAt,closedAt,headRefName,baseRefName,files | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0) {
             throw "Could not read dependency update proposals from GitHub. No proposal was merged or approved."
           }
+          $proposals = @($proposalsRaw)
           Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- Dependency update proposals found: $($proposals.Count)"
           if ($proposals.Count -eq 0) {
             Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- Cargo, JavaScript, and workflow updates: no current proposal."
@@ -382,10 +397,106 @@ jobs:
     name: SBOM and release hash readiness
     runs-on: windows-latest
     steps:
-      - name: Stop until the published records are verified
+      # release.yml が公開後に配布物を取得し直して照合すると(scripts/supply-chain-verify-release-hashes.ps1)、
+      # 結果を ORIGAMI3_<version>_release-verification-result.json としてそのリリースへ追加で添付する。
+      # ここでは、過去に公開したリリースをすべて調べ、この記録を持つものが1件でもあり、
+      # かつ中身が「4件・名前重複なし・全件一致・sha256が正しい形」を満たすかを確認する。
+      # 満たす記録が無ければ「未検証」と明記して通す(検証済みだと騙らない)。一覧取得そのものが
+      # 失敗した場合は「未検証」に丸めず、このジョブを失敗させる(確認できないことを黙って見逃さない)。
+      - name: Confirm whether a release has ever had its published artifacts verified
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          throw "Component inventory and hash publication remain unverified until one release creates the four records and downloaded assets are checked."
+          $ErrorActionPreference = "Stop"
+          $repo = $env:GITHUB_REPOSITORY
+          $resultAssetPattern = '^ORIGAMI3_.+_release-verification-result\.json$'
+
+          # ConvertFrom-Json writes its parsed value as a single pipeline object, so
+          # @(gh ... | ConvertFrom-Json) directly would nest the real array inside a
+          # 1-element array instead of flattening it. Bind first, then wrap.
+          $releasesRaw = gh release list --repo $repo --limit 100 --json tagName,isDraft | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) {
+            throw "リリース一覧を取得できず、配布物の公開後照合の状態を確認できませんでした。これは「未検証」ではなく検査不能であるため、このジョブを失敗させます。"
+          }
+          $releases = @($releasesRaw)
+
+          $verified = $false
+          $verifiedEvidence = $null
+          $checkedReleaseCount = 0
+          $notes = New-Object System.Collections.Generic.List[string]
+
+          foreach ($release in $releases) {
+            if ([bool]$release.isDraft) { continue }
+            $tag = [string]$release.tagName
+            if ([string]::IsNullOrWhiteSpace($tag)) { continue }
+
+            try {
+              $assets = @((gh release view $tag --repo $repo --json assets | ConvertFrom-Json).assets)
+              if ($LASTEXITCODE -ne 0) { throw "gh release view exited with $LASTEXITCODE" }
+            }
+            catch {
+              $notes.Add("release ${tag}: could not list assets ($($_.Exception.Message))")
+              continue
+            }
+            $checkedReleaseCount++
+
+            $resultAsset = @($assets | Where-Object { [string]$_.name -match $resultAssetPattern }) | Select-Object -First 1
+            if ($null -eq $resultAsset) {
+              $notes.Add("release ${tag}: no verification-result asset published")
+              continue
+            }
+
+            try {
+              $downloadDir = Join-Path $env:RUNNER_TEMP ("dist-verify-{0}" -f ([guid]::NewGuid().ToString("N")))
+              New-Item -ItemType Directory -Path $downloadDir -Force | Out-Null
+              gh release download $tag --repo $repo --dir $downloadDir --pattern $resultAsset.name --clobber
+              if ($LASTEXITCODE -ne 0) { throw "gh release download exited with $LASTEXITCODE" }
+              $resultPath = Join-Path $downloadDir $resultAsset.name
+              # Same @()-around-a-pipe pitfall as above: bind first, then wrap.
+              $entriesRaw = Get-Content -LiteralPath $resultPath -Raw -Encoding UTF8 | ConvertFrom-Json
+              $entries = @($entriesRaw)
+            }
+            catch {
+              $notes.Add("release ${tag}: could not read $($resultAsset.name) ($($_.Exception.Message))")
+              continue
+            }
+
+            $names = @($entries | ForEach-Object { [string]$_.artifactName })
+            # -notmatch is case-insensitive by default in PowerShell, so it would accept an
+            # uppercase-hex sha256 as "shaped like" one. The real script only ever emits
+            # lowercase hex (ToLowerInvariant()), so -cnotmatch (case-sensitive) is used here
+            # to keep this check as strict as what a genuine result can actually contain.
+            $isValid = (
+              $entries.Count -eq 4 -and
+              (@($names | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count -eq 0) -and
+              (@($names | Select-Object -Unique).Count -eq 4) -and
+              (@($entries | Where-Object { [string]$_.result -ne "match" }).Count -eq 0) -and
+              (@($entries | Where-Object { [string]$_.sha256 -cnotmatch '^[0-9a-f]{64}$' }).Count -eq 0)
+            )
+            if ($isValid) {
+              $verified = $true
+              $verifiedEvidence = "release $tag, asset $($resultAsset.name)"
+              break
+            }
+            $notes.Add("release ${tag}: $($resultAsset.name) did not show four matching artifacts")
+          }
+
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "## 配布物の公開後照合の状態"
+          if ($verified) {
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- 状態: 検証済み"
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- 根拠: $verifiedEvidence (公開済み配布物を取得し直し、4件すべての一致を確認した記録)"
+            Write-Host "distribution readiness: verified ($verifiedEvidence)"
+          }
+          else {
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- 状態: 未検証"
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- 確認したリリース数: $checkedReleaseCount"
+            foreach ($note in $notes) {
+              Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "  - $note"
+            }
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- この関門は「検証済み」を主張していません。タグ付きリリースを1回発行し、release.yml の公開後照合(scripts/supply-chain-verify-release-hashes.ps1)が成功すれば、この関門は次回実行から自動的に「検証済み」へ切り替わります。"
+            Write-Host "distribution readiness: unverified (no release has a valid, matching verification-result asset yet)"
+          }
 
   security_status:
     name: Security status and failure notification surface

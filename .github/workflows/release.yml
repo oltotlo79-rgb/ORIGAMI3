@@ -328,3 +328,87 @@ jobs:
           prerelease: ${{ steps.meta.outputs.prerelease }}
           fail_on_unmatched_files: true
           files: ${{ steps.publication_files.outputs.files }}
+
+      # 「公開されたものが正しい」ことを確かめるのが目的なので、直前のbuildで作った
+      # release-artifacts/ のローカルファイルは使い回さず、公開先(GitHub Releases)から
+      # 改めて取得する。ハッシュ/SBOM記録が作れていなければ何とも照合できないため、
+      # component_records_state=complete でなければここで明確に失敗させる。
+      - name: Download published release artifacts for verification
+        id: verify_download
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          RECORDS_STATE: ${{ steps.publication_files.outputs.component_records_state }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          if ($env:RECORDS_STATE -ne "complete") {
+            throw "配布物の中身の一覧と照合用ファイルが作成されなかったため(component_records_state=$($env:RECORDS_STATE))、公開後の照合を実行できません。記録が無いまま「公開後に照合した」とは扱いません。"
+          }
+
+          $downloadDir = Join-Path $env:GITHUB_WORKSPACE "release-verify-download"
+          New-Item -ItemType Directory -Path $downloadDir -Force | Out-Null
+
+          $setupName = "ORIGAMI3_{0}_setup.exe" -f $env:VERSION
+          $msiName = "ORIGAMI3_{0}_x64.msi" -f $env:VERSION
+          $portableName = "ORIGAMI3_{0}_portable.exe" -f $env:VERSION
+          $manifestName = "ORIGAMI3_{0}_SHA256SUMS.txt" -f $env:VERSION
+          $recordName = "ORIGAMI3_{0}_artifact-record.json" -f $env:VERSION
+
+          foreach ($assetName in @($setupName, $msiName, $portableName, "ORIGAMI3.pdf", $manifestName, $recordName)) {
+            & gh release download $env:TAG --repo $env:GITHUB_REPOSITORY --dir $downloadDir --pattern $assetName --clobber
+            if ($LASTEXITCODE -ne 0) { throw "公開済み配布物を取得し直せませんでした: $assetName" }
+            $downloadedPath = Join-Path $downloadDir $assetName
+            if (-not (Test-Path -LiteralPath $downloadedPath -PathType Leaf)) {
+              throw "取得し直した配布物が見つかりません: $downloadedPath"
+            }
+          }
+
+          "download_dir=$downloadDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "manifest_path=$(Join-Path $downloadDir $manifestName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "record_path=$(Join-Path $downloadDir $recordName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Verify downloaded release artifacts against the published hash records
+        id: verify_hashes
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          DOWNLOAD_DIR: ${{ steps.verify_download.outputs.download_dir }}
+          MANIFEST_PATH: ${{ steps.verify_download.outputs.manifest_path }}
+          RECORD_PATH: ${{ steps.verify_download.outputs.record_path }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $resultPath = Join-Path $env:DOWNLOAD_DIR ("ORIGAMI3_{0}_release-verification-result.json" -f $env:VERSION)
+
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File scripts\supply-chain-verify-release-hashes.ps1 `
+            -ManifestPath $env:MANIFEST_PATH `
+            -DownloadedDirectory $env:DOWNLOAD_DIR `
+            -RecordPath $env:RECORD_PATH `
+            -ResultPath $resultPath
+          if ($LASTEXITCODE -ne 0) {
+            throw "公開済みの配布物が、公開したハッシュ記録と一致しませんでした。タグ $env:TAG のリリースを確認してください。"
+          }
+
+          "result_path=$resultPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "## 公開後の配布物照合"
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- タグ $env:TAG で公開された4件の配布物を、公開先(GitHub Releases)から取得し直し、公開したハッシュ記録と一致することを確認しました。"
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value '```json'
+          Get-Content -LiteralPath $resultPath -Raw -Encoding UTF8 | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value '```'
+
+      - name: Publish the verification result as a release asset
+        shell: pwsh
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          RESULT_PATH: ${{ steps.verify_hashes.outputs.result_path }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          & gh release upload $env:TAG $env:RESULT_PATH --repo $env:GITHUB_REPOSITORY --clobber
+          if ($LASTEXITCODE -ne 0) { throw "公開後の照合結果をリリースへ添付できませんでした。" }
+          Write-Host "Uploaded verification result: $env:RESULT_PATH"
