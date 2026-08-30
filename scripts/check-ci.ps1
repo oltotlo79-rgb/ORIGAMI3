@@ -9,13 +9,35 @@ param(
 
     # 複製検証そのものの退行確認専用。どちらも新規複製の中だけを変更する。
     [ValidateSet("None", "Normal", "MissingGit", "IgnoredFile")]
-    [string]$CloneValidationTestCase = "None"
+    [string]$CloneValidationTestCase = "None",
+
+    # 一覧・各入口・CI・ignore属性の同期だけを、cargo/npm/gitを起動せず確認する。
+    [switch]$StaticContractOnly,
+
+    # 隔離self-test専用。StaticContractOnlyを付けたときだけ参照先を差し替えられる。
+    [string]$StaticContractRoot,
+
+    # bashの -File 起動では $PSScriptRoot が空になる環境があるため、hookは明示指定する。
+    [string]$RepositoryRoot = ""
 )
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
 
-$repoRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
+$scriptDirectory = [string]$PSScriptRoot
+if ([string]::IsNullOrWhiteSpace($scriptDirectory)) {
+    $invocationPath = [string]$MyInvocation.MyCommand.Path
+    if (-not [string]::IsNullOrWhiteSpace($invocationPath)) {
+        $scriptDirectory = Split-Path -Parent ([IO.Path]::GetFullPath($invocationPath))
+    }
+}
+if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
+    if ([string]::IsNullOrWhiteSpace($scriptDirectory)) {
+        throw "RepositoryRoot was not supplied and the script directory could not be determined."
+    }
+    $RepositoryRoot = Split-Path -Parent $scriptDirectory
+}
+$repoRoot = [IO.Path]::GetFullPath($RepositoryRoot).TrimEnd([char[]]"\\/")
 $reproRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot "verification\ci-repro"))
 $sourceName = "source-$([Guid]::NewGuid().ToString('N'))"
 $sourceRoot = [IO.Path]::GetFullPath((Join-Path $reproRoot $sourceName))
@@ -103,6 +125,7 @@ function Add-RunStepIfPresent {
         Name = [string]$Step.Name
         WorkingDirectory = [string]$Step.WorkingDirectory
         Command = [string]$Step.Run
+        Shell = [string]$Step.Shell
     })
 }
 
@@ -170,6 +193,7 @@ function Get-JobRunSteps {
                 Name = ""
                 WorkingDirectory = "."
                 Run = $null
+                Shell = ""
             }
             $firstProperty = $Matches[1]
             if ($firstProperty -match '^name:\s*(.+)$') {
@@ -208,7 +232,10 @@ function Get-JobRunSteps {
             }
             $current.Run = ConvertFrom-SimpleYamlValue $runValue
         }
-        elseif ($line -match '^        (shell|env|timeout-minutes):') {
+        elseif ($line -match '^        shell:\s*(.+)$') {
+            $current.Shell = ConvertFrom-SimpleYamlValue $Matches[1]
+        }
+        elseif ($line -match '^        (env|timeout-minutes):') {
             throw "ci.yml のステップ固有 $($Matches[1]) には未対応です。check-ci.ps1 を同期してください"
         }
     }
@@ -394,28 +421,32 @@ function Assert-CiStepsMatch {
     for ($i = 0; $i -lt $Expected.Count; $i++) {
         $actualDirectory = Normalize-RelativePath $Actual[$i].WorkingDirectory
         $expectedDirectory = Normalize-RelativePath $Expected[$i].WorkingDirectory
-        if ($Actual[$i].Command -cne $Expected[$i].Command -or $actualDirectory -cne $expectedDirectory) {
-            throw "ci.yml のrunステップ $($i + 1) が不一致です (ci.yml: '$($Actual[$i].Command)' at '$actualDirectory', check-ci.ps1: '$($Expected[$i].Command)' at '$expectedDirectory')"
+        $actualShell = if ($null -ne $Actual[$i].PSObject.Properties['Shell']) { [string]$Actual[$i].Shell } else { "" }
+        $expectedShell = if ($null -ne $Expected[$i].PSObject.Properties['Shell']) { [string]$Expected[$i].Shell } else { "" }
+        if ($Actual[$i].Command -cne $Expected[$i].Command -or
+            $actualDirectory -cne $expectedDirectory -or
+            $actualShell -cne $expectedShell) {
+            throw "ci.yml のrunステップ $($i + 1) が不一致です (ci.yml: '$($Actual[$i].Command)' at '$actualDirectory' shell='$actualShell', check-ci.ps1: '$($Expected[$i].Command)' at '$expectedDirectory' shell='$expectedShell')"
         }
     }
 }
 
-function Assert-ClaudeCiContract {
+function Assert-QualityGateDocumentContract {
     param(
-        [Parameter(Mandatory = $true)][string]$ClaudePath,
+        [Parameter(Mandatory = $true)][string]$RulesPath,
         [Parameter(Mandatory = $true)][object[]]$ExpectedSteps
     )
 
-    $text = Get-Content -LiteralPath $ClaudePath -Raw -Encoding UTF8
+    $text = Get-Content -LiteralPath $RulesPath -Raw -Encoding UTF8
     $start = $text.IndexOf("## 10.6 ", [StringComparison]::Ordinal)
     $end = $text.IndexOf("### 10.6.1 ", [StringComparison]::Ordinal)
     if ($start -lt 0 -or $end -le $start) {
-        throw "CLAUDE.md の §10.6 を読めません"
+        throw "docs/rules/03-品質ゲート.md の §10.6 を読めません"
     }
     $section = $text.Substring($start, $end - $start)
     foreach ($step in $ExpectedSteps) {
         if (-not $section.Contains($step.Command)) {
-            throw "CLAUDE.md §10.6 にCI実コマンドがありません: $($step.Command)"
+            throw "docs/rules/03-品質ゲート.md §10.6 にCI実コマンドがありません: $($step.Command)"
         }
     }
     foreach ($releaseGateCommand in @(
@@ -423,7 +454,7 @@ function Assert-ClaudeCiContract {
         "powershell -NoProfile -ExecutionPolicy Bypass -File crates/ori3-propose/tests/run-proposal-matrix.ps1 -Mode Full -Resume"
     )) {
         if (-not $section.Contains($releaseGateCommand)) {
-            throw "CLAUDE.md §10.6 にリリース前必須関門のコマンドがありません: $releaseGateCommand"
+            throw "docs/rules/03-品質ゲート.md §10.6 にリリース前必須関門のコマンドがありません: $releaseGateCommand"
         }
     }
     foreach ($currentStatusContractLine in @(
@@ -432,8 +463,219 @@ function Assert-ClaudeCiContract {
     )) {
         $occurrences = [regex]::Matches($section, [regex]::Escape($currentStatusContractLine)).Count
         if ($occurrences -ne 1) {
-            throw "CLAUDE.md §10.6 のnightly文書検査契約が一致しません(count=$occurrences): $currentStatusContractLine"
+            throw "docs/rules/03-品質ゲート.md §10.6 のnightly文書検査契約が一致しません(count=$occurrences): $currentStatusContractLine"
         }
+    }
+}
+
+function Get-StaticContractText {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$RelativePath,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$Warnings
+    )
+
+    try {
+        $fullRoot = [IO.Path]::GetFullPath($Root).TrimEnd([char[]]"\/")
+        $fullPath = [IO.Path]::GetFullPath((Join-Path $fullRoot $RelativePath))
+        $rootPrefix = $fullRoot + [IO.Path]::DirectorySeparatorChar
+        if (-not $fullPath.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "参照先がcontract rootの外です: $fullPath"
+        }
+        if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
+            throw "ファイルがありません"
+        }
+        return Get-Content -LiteralPath $fullPath -Raw -Encoding UTF8
+    }
+    catch {
+        [void]$Warnings.Add("$RelativePath を読めません: $($_.Exception.Message)")
+        return $null
+    }
+}
+
+function Get-StaticQuotedArguments {
+    param(
+        [Parameter(Mandatory = $true)][string]$Text,
+        [Parameter(Mandatory = $true)][string]$BlockPattern
+    )
+
+    $block = [regex]::Match($Text, $BlockPattern)
+    if (-not $block.Success) {
+        return [pscustomobject]@{ Parsed = $false; Arguments = @() }
+    }
+    $arguments = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($argument in @([regex]::Matches($block.Groups['body'].Value, '"(?<value>[^"\r\n]*)"'))) {
+        $arguments.Add($argument.Groups['value'].Value)
+    }
+    return [pscustomobject]@{ Parsed = $true; Arguments = [string[]]$arguments.ToArray() }
+}
+
+function Test-StaticStringArrayEqual {
+    param([string[]]$Actual, [string[]]$Expected)
+
+    if ($Actual.Count -ne $Expected.Count) {
+        return $false
+    }
+    for ($index = 0; $index -lt $Expected.Count; $index++) {
+        if ($Actual[$index] -cne $Expected[$index]) {
+            return $false
+        }
+    }
+    return $true
+}
+
+function Get-StaticYamlRunCommands {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    $commands = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($match in @([regex]::Matches($Text, '(?m)^\s+run:\s*(?<value>.*?)\s*$'))) {
+        $value = $match.Groups['value'].Value.Trim()
+        if ([string]::IsNullOrWhiteSpace($value) -or $value -in @('|', '>', '|-', '>-', '|+', '>+')) {
+            return [pscustomobject]@{ Parsed = $false; Commands = @() }
+        }
+        $commands.Add((ConvertFrom-SimpleYamlValue $value))
+    }
+    return [pscustomobject]@{ Parsed = $true; Commands = [string[]]$commands.ToArray() }
+}
+
+function Invoke-StaticQualityGateContracts {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $warnings = New-Object 'System.Collections.Generic.List[string]'
+    $violations = New-Object 'System.Collections.Generic.List[string]'
+    $checked = 0
+    try {
+        $rules = Get-StaticContractText $Root 'docs/rules/03-品質ゲート.md' $warnings
+        $checkScript = Get-StaticContractText $Root 'scripts/check.ps1' $warnings
+        $receiptScript = Get-StaticContractText $Root 'scripts/check-receipt.ps1' $warnings
+        $preCommit = Get-StaticContractText $Root 'scripts/hooks/pre-commit' $warnings
+        $workflow = Get-StaticContractText $Root '.github/workflows/ci.yml' $warnings
+        $endpointHeavy = Get-StaticContractText $Root 'apps/desktop/src-tauri/src/surface_order_sa_endpoint_heavy.rs' $warnings
+        $endpointAcceptance = Get-StaticContractText $Root 'apps/desktop/src-tauri/src/surface_order_acceptance.rs' $warnings
+
+        $localMarker = '**手元の通常Rust検査の3入口**'
+        if ($null -ne $rules -and $null -ne $checkScript) {
+            $checked += 1
+            $parsed = Get-StaticQuotedArguments $checkScript '(?ms)\$rustW4Arguments\s*=\s*@\((?<body>.*?)\r?\n\)'
+            $documented = $rules.Contains($localMarker) -and
+                $rules.Contains('`scripts/check.ps1`') -and
+                $rules.Contains("``$script:expectedLocalRustCommand``")
+            if (-not $parsed.Parsed -or
+                -not (Test-StaticStringArrayEqual @($parsed.Arguments) @($script:expectedLocalRustArguments)) -or
+                -not $documented) {
+                [void]$violations.Add("C01|scripts/check.ps1 のargvまたは品質ゲート一覧が不一致です")
+            }
+        }
+
+        if ($null -ne $rules -and $null -ne $receiptScript) {
+            $checked += 1
+            $parsed = Get-StaticQuotedArguments $receiptScript '(?ms)function\s+Get-Ori3RustW4Arguments\s*\{.*?return\s+@\((?<body>.*?)\r?\n\s*\)\s*\r?\n\}'
+            $documented = $rules.Contains($localMarker) -and $rules.Contains('`scripts/check-receipt.ps1`')
+            if (-not $parsed.Parsed -or
+                -not (Test-StaticStringArrayEqual @($parsed.Arguments) @($script:expectedLocalRustArguments)) -or
+                -not $documented) {
+                [void]$violations.Add("C02|scripts/check-receipt.ps1 のargvまたは品質ゲート一覧が不一致です")
+            }
+        }
+
+        if ($null -ne $rules -and $null -ne $preCommit) {
+            $checked += 1
+            $commands = @([regex]::Matches($preCommit, '(?m)^\s*\(cd "\$repo_root" && (?<command>cargo test [^\r\n]+)\)\s*$'))
+            $documented = $rules.Contains($localMarker) -and $rules.Contains('`scripts/hooks/pre-commit`')
+            if ($commands.Count -ne 1 -or
+                $commands[0].Groups['command'].Value -cne $script:expectedLocalRustCommand -or
+                -not $documented) {
+                [void]$violations.Add("C03|scripts/hooks/pre-commit の直接fallback argvまたは品質ゲート一覧が不一致です")
+            }
+        }
+
+        $workflowRuns = $null
+        if ($null -ne $workflow) {
+            $workflowRuns = Get-StaticYamlRunCommands $workflow
+            if (-not $workflowRuns.Parsed) {
+                [void]$warnings.Add('.github/workflows/ci.yml の複数行runは静的契約検査の対象外です')
+                $workflowRuns = $null
+            }
+        }
+
+        if ($null -ne $rules -and $null -ne $workflowRuns) {
+            $checked += 1
+            $ciMatches = @($workflowRuns.Commands | Where-Object { $_ -ceq $script:expectedCiRustCommand })
+            if ($ciMatches.Count -ne 1 -or
+                -not $rules.Contains('**CIの`checks`実コマンド**') -or
+                -not $rules.Contains("``$script:expectedCiRustCommand``")) {
+                [void]$violations.Add("C04|CI checks のworkspace test argvまたは品質ゲート一覧が不一致です")
+            }
+        }
+
+        if ($null -ne $rules -and $null -ne $endpointHeavy) {
+            $checked += 1
+            $active = [regex]::Match(
+                $endpointHeavy,
+                '(?ms)#\[test\]\s*\r?\nfn\s+surface_order_179_999_to_180_all_110_creases\s*\('
+            )
+            $ignored = [regex]::IsMatch(
+                $endpointHeavy,
+                '(?ms)#\[ignore(?:\s*=\s*"[^"\r\n]*")?\]\s*\r?\nfn\s+surface_order_179_999_to_180_all_110_creases\s*\('
+            )
+            $ruleLines = @($rules -split "`r?`n" | Where-Object { $_.Contains('**#13 の一時 `#[ignore]` は解除済み**') })
+            if (-not $active.Success -or
+                $ignored -or
+                $ruleLines.Count -ne 1 -or
+                -not $ruleLines[0].Contains('`robust_stacks=4888`') -or
+                -not $ruleLines[0].Contains('`changed_directions=0`')) {
+                [void]$violations.Add("C05|#13 の有効化状態・実測値と品質ゲート一覧が不一致です")
+            }
+        }
+
+        if ($null -ne $rules -and $null -ne $endpointAcceptance) {
+            $checked += 1
+            $active = [regex]::Match(
+                $endpointAcceptance,
+                '(?ms)#\[test\]\s*\r?\nfn\s+surface_order_exact_endpoint_is_rank_stable_for_previous_19\s*\('
+            )
+            $ignored = [regex]::IsMatch(
+                $endpointAcceptance,
+                '(?ms)#\[ignore(?:\s*=\s*"[^"\r\n]*")?\]\s*\r?\nfn\s+surface_order_exact_endpoint_is_rank_stable_for_previous_19\s*\('
+            )
+            $ruleLines = @($rules -split "`r?`n" | Where-Object { $_.Contains('**#14 の一時 `#[ignore]` も解除済み**') })
+            if (-not $active.Success -or
+                $ignored -or
+                $ruleLines.Count -ne 1 -or
+                -not $ruleLines[0].Contains('`robust_stacks=1298`') -or
+                -not $ruleLines[0].Contains('`changed_directions=0`')) {
+                [void]$violations.Add("C06|#14 の有効化状態・実測値と品質ゲート一覧が不一致です")
+            }
+        }
+
+        if ($null -ne $rules -and $null -ne $workflowRuns) {
+            $checked += 1
+            $matrixMatches = @($workflowRuns.Commands | Where-Object { $_ -ceq $script:proposalMatrixPerformanceCommand })
+            if ($matrixMatches.Count -ne 1 -or -not $rules.Contains("``$script:proposalMatrixPerformanceCommand``")) {
+                [void]$violations.Add("C07|proposal matrix Performanceコマンドが品質ゲート一覧とCIの両方に厳密に1件ありません")
+            }
+        }
+    }
+    catch {
+        [void]$warnings.Add("静的契約検査の内部エラー: $($_.Exception.Message)")
+    }
+
+    foreach ($violation in $violations) {
+        $separator = $violation.IndexOf('|')
+        $contractId = $violation.Substring(0, $separator)
+        $message = $violation.Substring($separator + 1)
+        Write-Host "[NG][$contractId] $message" -ForegroundColor Red
+    }
+    foreach ($warning in $warnings) {
+        Write-Host "[WARN] ORIGAMI3_CI_CONTRACT_FAIL_OPEN $warning" -ForegroundColor Yellow
+    }
+    $summaryLevel = if ($violations.Count -eq 0 -and $warnings.Count -eq 0) { '[OK]' } elseif ($violations.Count -gt 0) { '[NG]' } else { '[WARN]' }
+    Write-Host "$summaryLevel CI static contracts: checked=$checked/7 violations=$($violations.Count) warnings=$($warnings.Count)"
+    Write-Host "GATE_DRIFT_DETECTED $checked / 7"
+    return [pscustomobject]@{
+        Checked = $checked
+        Violations = $violations.Count
+        Warnings = $warnings.Count
     }
 }
 
@@ -639,9 +881,29 @@ function Invoke-CheckedCommand {
     }
 }
 
+$script:expectedLocalRustArguments = @(
+    "test", "--workspace", "--no-fail-fast", "--",
+    "--skip", "completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten",
+    "--skip", "named_sample_completes_end_to_end_and_is_deterministic_ten_out_of_ten",
+    "--skip", "a_safe_coincident_partial_network_appears_after_the_first_fold",
+    "--skip", "the_heaviest_proposal_never_hits_the_time_limit"
+)
+$script:expectedLocalRustCommand = "cargo $($script:expectedLocalRustArguments -join ' ')"
+$script:expectedCiRustArguments = @(
+    "test", "--workspace", "--no-fail-fast", "--",
+    "--skip", "surface_order_179_999_to_180_all_110_creases",
+    "--skip", "surface_order_exact_endpoint_is_rank_stable_for_previous_19",
+    "--skip", "completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten",
+    "--skip", "named_sample_completes_end_to_end_and_is_deterministic_ten_out_of_ten",
+    "--skip", "a_safe_coincident_partial_network_appears_after_the_first_fold",
+    "--skip", "the_heaviest_proposal_never_hits_the_time_limit"
+)
+$script:expectedCiRustCommand = "cargo $($script:expectedCiRustArguments -join ' ')"
+$script:proposalMatrixPerformanceCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File crates/ori3-propose/tests/run-proposal-matrix.ps1 -Mode Performance"
+
 $expectedChecksSteps = @(
     [pscustomobject]@{ Command = "npm ci"; WorkingDirectory = "apps/desktop"; Executable = "npm"; Arguments = @("ci") },
-    [pscustomobject]@{ Command = "cargo test --workspace -- --skip surface_order_179_999_to_180_all_110_creases --skip surface_order_exact_endpoint_is_rank_stable_for_previous_19 --skip completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten --skip named_sample_completes_end_to_end_and_is_deterministic_ten_out_of_ten --skip a_safe_coincident_partial_network_appears_after_the_first_fold --skip the_heaviest_proposal_never_hits_the_time_limit"; WorkingDirectory = "."; Executable = "cargo"; Arguments = @("test", "--workspace", "--", "--skip", "surface_order_179_999_to_180_all_110_creases", "--skip", "surface_order_exact_endpoint_is_rank_stable_for_previous_19", "--skip", "completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten", "--skip", "named_sample_completes_end_to_end_and_is_deterministic_ten_out_of_ten", "--skip", "a_safe_coincident_partial_network_appears_after_the_first_fold", "--skip", "the_heaviest_proposal_never_hits_the_time_limit") },
+    [pscustomobject]@{ Command = $script:expectedCiRustCommand; WorkingDirectory = "."; Executable = "cargo"; Arguments = @($script:expectedCiRustArguments) },
     [pscustomobject]@{ Command = "cargo clippy --workspace --all-targets -- -D warnings"; WorkingDirectory = "."; Executable = "cargo"; Arguments = @("clippy", "--workspace", "--all-targets", "--", "-D", "warnings") },
     [pscustomobject]@{ Command = "npm run build"; WorkingDirectory = "apps/desktop"; Executable = "npm"; Arguments = @("run", "build") },
     [pscustomobject]@{ Command = "npm run lint"; WorkingDirectory = "apps/desktop"; Executable = "npm"; Arguments = @("run", "lint") },
@@ -663,14 +925,117 @@ $expectedPerformanceSteps = @(
     [pscustomobject]@{ Command = "cargo test --release -p ori3-propose --test end_to_end -- named_sample_completes_end_to_end_and_is_deterministic_ten_out_of_ten --exact --nocapture"; WorkingDirectory = "."; Executable = "cargo"; Arguments = @("test", "--release", "-p", "ori3-propose", "--test", "end_to_end", "--", "named_sample_completes_end_to_end_and_is_deterministic_ten_out_of_ten", "--exact", "--nocapture") },
     [pscustomobject]@{ Command = "cargo test --release -p ori3-propose --test acceptance -- a_safe_coincident_partial_network_appears_after_the_first_fold --exact --nocapture"; WorkingDirectory = "."; Executable = "cargo"; Arguments = @("test", "--release", "-p", "ori3-propose", "--test", "acceptance", "--", "a_safe_coincident_partial_network_appears_after_the_first_fold", "--exact", "--nocapture") },
     [pscustomobject]@{ Command = "cargo test --release -p desktop --lib the_heaviest_proposal_never_hits_the_time_limit -- --nocapture"; WorkingDirectory = "."; Executable = "cargo"; Arguments = @("test", "--release", "-p", "desktop", "--lib", "the_heaviest_proposal_never_hits_the_time_limit", "--", "--nocapture") },
-    [pscustomobject]@{ Command = "powershell -NoProfile -ExecutionPolicy Bypass -File crates/ori3-propose/tests/run-proposal-matrix.ps1 -Mode Performance"; WorkingDirectory = "."; Executable = "powershell"; Arguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "crates/ori3-propose/tests/run-proposal-matrix.ps1", "-Mode", "Performance") }
+    [pscustomobject]@{ Command = $script:proposalMatrixPerformanceCommand; WorkingDirectory = "."; Executable = "powershell"; Arguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "crates/ori3-propose/tests/run-proposal-matrix.ps1", "-Mode", "Performance") }
 )
 $expectedCurrentStatusSteps = @(
-    [pscustomobject]@{ Command = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate-current-status.ps1 -Check"; WorkingDirectory = "." }
+    [pscustomobject]@{ Command = '"CARGO_TARGET_DIR=$env:RUNNER_TEMP\ori3-target-docs7b" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8'; WorkingDirectory = "."; Shell = "pwsh" },
+    [pscustomobject]@{ Command = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate-current-status.ps1 -Check"; WorkingDirectory = "."; Shell = "" }
 )
 $expectedSteps = @($expectedChecksSteps) + @($expectedPerformanceSteps)
-$allContractSteps = @($expectedSteps) + @($expectedCurrentStatusSteps)
+$documentedContractSteps = @($expectedSteps) + @($expectedCurrentStatusSteps[1])
 $totalStages = $expectedSteps.Count + 2
+
+function Assert-CiDefinitionContract {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $workflowPath = Join-Path $Root ".github\workflows\ci.yml"
+    $insideJobEnvironment = $false
+    $jobLevelRunnerReferences = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($line in @(Get-Content -LiteralPath $workflowPath -Encoding UTF8)) {
+        if ($line -match '^    env:\s*$') {
+            $insideJobEnvironment = $true
+            continue
+        }
+        if (-not $insideJobEnvironment) {
+            continue
+        }
+        if ($line -match '^      [A-Za-z_][A-Za-z0-9_]*:\s*(?<value>.*)$') {
+            if ($Matches['value'] -match '\$\{\{\s*runner\.') {
+                [void]$jobLevelRunnerReferences.Add($line.Trim())
+            }
+            continue
+        }
+        if ($line -notmatch '^\s*$' -and $line -notmatch '^\s*#') {
+            $insideJobEnvironment = $false
+        }
+    }
+    if ($jobLevelRunnerReferences.Count -ne 0) {
+        throw "ci.yml のjob-level envにrunner contextを書けません: $($jobLevelRunnerReferences -join '; ')"
+    }
+    Assert-WorkflowTriggerContract $workflowPath
+    $actualJobNames = @(Get-WorkflowJobNames $workflowPath)
+    $expectedJobNames = @("checks", "performance", "current_status")
+    if ($actualJobNames.Count -ne $expectedJobNames.Count -or
+        @(Compare-Object -ReferenceObject $expectedJobNames -DifferenceObject $actualJobNames).Count -ne 0) {
+        throw "ci.yml のジョブ一覧が変わりました (ci.yml: $($actualJobNames -join ', '), check-ci.ps1: $($expectedJobNames -join ', '))"
+    }
+    $expectedPushCondition = "github.event_name == 'push' || github.event_name == 'pull_request'"
+    $expectedCurrentStatusCondition = "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'"
+    foreach ($pushJob in @("checks", "performance")) {
+        $actualCondition = Get-JobScalarValue $workflowPath $pushJob "if"
+        if ($actualCondition -cne $expectedPushCondition) {
+            throw "ci.yml のjobs.$pushJob.ifが一致しません(actual='$actualCondition', expected='$expectedPushCondition')"
+        }
+    }
+    $currentStatusCondition = Get-JobScalarValue $workflowPath "current_status" "if"
+    if ($currentStatusCondition -cne $expectedCurrentStatusCondition) {
+        throw "ci.yml のjobs.current_status.ifが一致しません(actual='$currentStatusCondition', expected='$expectedCurrentStatusCondition')"
+    }
+    $currentStatusCargoColor = Get-JobMappingScalarValue $workflowPath "current_status" "env" "CARGO_TERM_COLOR"
+    if ($currentStatusCargoColor -cne "never") {
+        throw "ci.yml のjobs.current_status.env.CARGO_TERM_COLORが一致しません(actual='$currentStatusCargoColor', expected='never')"
+    }
+
+    $ciChecksSteps = @(Get-JobRunSteps $workflowPath "checks")
+    $ciPerformanceSteps = @(Get-JobRunSteps $workflowPath "performance")
+    $ciCurrentStatusSteps = @(Get-JobRunSteps $workflowPath "current_status")
+    Assert-CiStepsMatch -Actual $ciChecksSteps -Expected $expectedChecksSteps
+    Assert-CiStepsMatch -Actual $ciPerformanceSteps -Expected $expectedPerformanceSteps
+    Assert-CiStepsMatch -Actual $ciCurrentStatusSteps -Expected $expectedCurrentStatusSteps
+    Assert-QualityGateDocumentContract `
+        -RulesPath (Join-Path $Root "docs\rules\03-品質ゲート.md") `
+        -ExpectedSteps $documentedContractSteps
+
+    return [pscustomobject]@{
+        Checks = [object[]]$ciChecksSteps
+        Performance = [object[]]$ciPerformanceSteps
+        CurrentStatus = [object[]]$ciCurrentStatusSteps
+    }
+}
+
+if ($StaticContractOnly) {
+    $contractRoot = if ([string]::IsNullOrWhiteSpace($StaticContractRoot)) {
+        $repoRoot
+    }
+    else {
+        [IO.Path]::GetFullPath($StaticContractRoot)
+    }
+    try {
+        $contractResult = Invoke-StaticQualityGateContracts $contractRoot
+        if ($contractResult.Violations -ne 0) {
+            throw "7件の静的契約に $($contractResult.Violations) 件の不一致があります"
+        }
+        if ($contractResult.Warnings -eq 0) {
+            [void](Assert-CiDefinitionContract $contractRoot)
+            Write-Host "[OK] 品質ゲート一覧とCI 3ジョブの実コマンドが一致しました" -ForegroundColor Green
+        }
+        else {
+            Write-Host "[WARN] ORIGAMI3_CI_CONTRACT_FAIL_OPEN 内部エラーがあるため7件以外の厳密照合は未確認です" -ForegroundColor Yellow
+        }
+        $script:failureExitCode = 0
+    }
+    catch {
+        Write-Host "[NG] $($_.Exception.Message)" -ForegroundColor Red
+        $script:failureExitCode = 1
+    }
+    $stopwatch.Stop()
+    Write-Host ("所要時間: {0:hh\:mm\:ss}" -f $stopwatch.Elapsed)
+    exit $script:failureExitCode
+}
+if (-not [string]::IsNullOrWhiteSpace($StaticContractRoot)) {
+    Write-Host "[NG] -StaticContractRoot は -StaticContractOnly と同時にだけ使えます" -ForegroundColor Red
+    exit 1
+}
 
 try {
     $verificationRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot "verification"))
@@ -759,43 +1124,12 @@ try {
     }
     else {
         Write-Stage 2 $totalStages "ci.yml のpush 2ジョブとnightly文書ジョブの実行定義を同期確認"
-        $workflowPath = Join-Path $sourceRoot ".github\workflows\ci.yml"
-        Assert-WorkflowTriggerContract $workflowPath
-        $actualJobNames = @(Get-WorkflowJobNames $workflowPath)
-        $expectedJobNames = @("checks", "performance", "current_status")
-        if ($actualJobNames.Count -ne $expectedJobNames.Count -or
-            @(Compare-Object -ReferenceObject $expectedJobNames -DifferenceObject $actualJobNames).Count -ne 0) {
-            throw "ci.yml のジョブ一覧が変わりました (ci.yml: $($actualJobNames -join ', '), check-ci.ps1: $($expectedJobNames -join ', '))"
+        $staticContractResult = Invoke-StaticQualityGateContracts $sourceRoot
+        if ($staticContractResult.Violations -ne 0) {
+            throw "一覧・各入口・CI・ignore属性の静的契約に $($staticContractResult.Violations) 件の不一致があります"
         }
-        $expectedPushCondition = "github.event_name == 'push' || github.event_name == 'pull_request'"
-        $expectedCurrentStatusCondition = "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'"
-        foreach ($pushJob in @("checks", "performance")) {
-            $actualCondition = Get-JobScalarValue $workflowPath $pushJob "if"
-            if ($actualCondition -cne $expectedPushCondition) {
-                throw "ci.yml のjobs.$pushJob.ifが一致しません(actual='$actualCondition', expected='$expectedPushCondition')"
-            }
-        }
-        $currentStatusCondition = Get-JobScalarValue $workflowPath "current_status" "if"
-        if ($currentStatusCondition -cne $expectedCurrentStatusCondition) {
-            throw "ci.yml のjobs.current_status.ifが一致しません(actual='$currentStatusCondition', expected='$expectedCurrentStatusCondition')"
-        }
-        $currentStatusCargoColor = Get-JobMappingScalarValue $workflowPath "current_status" "env" "CARGO_TERM_COLOR"
-        if ($currentStatusCargoColor -cne "never") {
-            throw "ci.yml のjobs.current_status.env.CARGO_TERM_COLORが一致しません(actual='$currentStatusCargoColor', expected='never')"
-        }
-        $expectedCurrentStatusCargoTarget = '${{ runner.temp }}\ori3-target-docs7b'
-        $currentStatusCargoTarget = Get-JobMappingScalarValue $workflowPath "current_status" "env" "CARGO_TARGET_DIR"
-        if ($currentStatusCargoTarget -cne $expectedCurrentStatusCargoTarget) {
-            throw "ci.yml のjobs.current_status.env.CARGO_TARGET_DIRが一致しません(actual='$currentStatusCargoTarget', expected='$expectedCurrentStatusCargoTarget')"
-        }
-        $ciChecksSteps = @(Get-JobRunSteps $workflowPath "checks")
-        $ciPerformanceSteps = @(Get-JobRunSteps $workflowPath "performance")
-        $ciCurrentStatusSteps = @(Get-JobRunSteps $workflowPath "current_status")
-        Assert-CiStepsMatch -Actual $ciChecksSteps -Expected $expectedChecksSteps
-        Assert-CiStepsMatch -Actual $ciPerformanceSteps -Expected $expectedPerformanceSteps
-        Assert-CiStepsMatch -Actual $ciCurrentStatusSteps -Expected $expectedCurrentStatusSteps
-        Assert-ClaudeCiContract -ClaudePath (Join-Path $sourceRoot "CLAUDE.md") -ExpectedSteps $allContractSteps
-        $ciSteps = @($ciChecksSteps) + @($ciPerformanceSteps)
+        $definition = Assert-CiDefinitionContract $sourceRoot
+        $ciSteps = @($definition.Checks) + @($definition.Performance)
 
         if ($InjectMissingIgnoredReferenceForTest) {
             $testTarget = Join-Path $sourceRoot "apps\desktop\src-tauri\src\lib.rs"

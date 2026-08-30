@@ -5,6 +5,8 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
 
 $ScriptPath = Join-Path $PSScriptRoot "test-claim-scope-warning.ps1"
+$HealthScriptPath = Join-Path $PSScriptRoot "hook-health.ps1"
+$HookPath = Join-Path $PSScriptRoot "..\pre-commit"
 $PowerShellPath = (Get-Process -Id $PID).Path
 $TempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([char[]]"\\/")
 $SandboxName = "ori3-test-claim-scope-warning-test-{0}" -f [Guid]::NewGuid().ToString("N")
@@ -39,6 +41,19 @@ function Assert-Contains {
     }
 }
 
+function Assert-NotContains {
+    param(
+        [Parameter(Mandatory = $true)][string]$Text,
+        [Parameter(Mandatory = $true)][string]$Unexpected,
+        [Parameter(Mandatory = $true)][string]$Message
+    )
+
+    $script:AssertionCount += 1
+    if ($Text.Contains($Unexpected)) {
+        throw "ASSERTION FAILED: $Message (unexpected='$Unexpected')`n$Text"
+    }
+}
+
 function ConvertTo-ProcessArgumentString {
     param([Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Values)
 
@@ -55,7 +70,8 @@ function Invoke-Process {
     param(
         [Parameter(Mandatory = $true)][string]$FileName,
         [Parameter(Mandatory = $true)][string[]]$Arguments,
-        [Parameter(Mandatory = $true)][string]$WorkingDirectory
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory,
+        [hashtable]$EnvironmentVariables = @{}
     )
 
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo
@@ -67,6 +83,9 @@ function Invoke-Process {
     $startInfo.RedirectStandardError = $true
     $startInfo.StandardOutputEncoding = [Text.Encoding]::UTF8
     $startInfo.StandardErrorEncoding = [Text.Encoding]::UTF8
+    foreach ($key in $EnvironmentVariables.Keys) {
+        $startInfo.EnvironmentVariables[[string]$key] = [string]$EnvironmentVariables[$key]
+    }
     $process = [Diagnostics.Process]::Start($startInfo)
     $stdout = $process.StandardOutput.ReadToEnd()
     $stderr = $process.StandardError.ReadToEnd()
@@ -120,6 +139,48 @@ function New-TestRepository {
     return $repository
 }
 
+function New-HookTestRepository {
+    $repository = Join-Path $SandboxRoot "hook"
+    [void][IO.Directory]::CreateDirectory($repository)
+    Invoke-Git $repository @("init", "--quiet")
+    $emptyIgnore = Join-Path $repository "empty-global-ignore"
+    [IO.File]::WriteAllText($emptyIgnore, "", [Text.UTF8Encoding]::new($false))
+    Invoke-Git $repository @("config", "core.excludesFile", $emptyIgnore)
+    Invoke-Git $repository @("config", "user.email", "scope-hook-test@example.invalid")
+    Invoke-Git $repository @("config", "user.name", "Scope Hook Test")
+
+    $testPath = Join-Path $repository "scripts\demo.test.ps1"
+    Write-TestFile $testPath @'
+Describe "all values" {
+    It "checks every value" {
+        foreach ($value in $values) { Assert-True $value }
+        Assert-True $first
+        Assert-True $second
+    }
+}
+'@
+    Invoke-Git $repository @("add", "--", "scripts\demo.test.ps1")
+    Invoke-Git $repository @("commit", "--quiet", "-m", "baseline")
+
+    Write-TestFile $testPath @'
+Describe "selected values" {
+    It "checks one value" {
+        Assert-True $first
+    }
+}
+'@
+    Invoke-Git $repository @("add", "--", "scripts\demo.test.ps1")
+
+    $checkerDestination = Join-Path $repository "scripts\hooks\checks\test-claim-scope-warning.ps1"
+    $healthDestination = Join-Path $repository "scripts\hooks\checks\hook-health.ps1"
+    $hookDestination = Join-Path $repository "scripts\hooks\pre-commit"
+    [void][IO.Directory]::CreateDirectory((Split-Path -Parent $checkerDestination))
+    [IO.File]::Copy($ScriptPath, $checkerDestination, $true)
+    [IO.File]::Copy($HealthScriptPath, $healthDestination, $true)
+    [IO.File]::Copy($HookPath, $hookDestination, $true)
+    return $repository
+}
+
 function Invoke-ScopeWarning {
     param([Parameter(Mandatory = $true)][string]$Repository)
 
@@ -128,7 +189,72 @@ function Invoke-ScopeWarning {
     ) -WorkingDirectory $Repository
 }
 
+function Get-GitBashPath {
+    $gitCommand = Get-Command git -ErrorAction Stop
+    $gitDirectory = Split-Path -Parent $gitCommand.Source
+    $gitRoot = Split-Path -Parent $gitDirectory
+    $candidate = Join-Path $gitRoot "bin\sh.exe"
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        return $candidate
+    }
+    $shCommand = Get-Command sh -ErrorAction SilentlyContinue
+    if ($null -ne $shCommand) {
+        return $shCommand.Source
+    }
+    throw "Git Bash sh.exe was not found."
+}
+
+function Invoke-GitBash {
+    param(
+        [Parameter(Mandatory = $true)][string]$GitBashPath,
+        [Parameter(Mandatory = $true)][string]$Repository,
+        [Parameter(Mandatory = $true)][string]$Command
+    )
+
+    $shellRepository = $Repository.Replace("\\", "/")
+    if ($shellRepository.Contains("'")) {
+        throw "The temporary repository path cannot contain a single quote."
+    }
+    return Invoke-Process -FileName $GitBashPath -Arguments @("-lc", "cd '$shellRepository' && $Command") -WorkingDirectory $Repository
+}
+
+function Invoke-HookHealthCheck {
+    param(
+        [Parameter(Mandatory = $true)][string]$Repository,
+        [Parameter(Mandatory = $true)][int]$ExpectedExitCode
+    )
+
+    $result = Invoke-Process -FileName $PowerShellPath -Arguments @(
+        "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-File", $HealthScriptPath,
+        "-Action", "Check",
+        "-RepositoryRoot", $Repository,
+        "-Threshold", "2"
+    ) -WorkingDirectory $Repository
+    Assert-Equal $result.ExitCode $ExpectedExitCode "hook health check exit code must match the expected state" $result.Output
+    return $result
+}
+
+function Get-HookHealthStatePath {
+    param([Parameter(Mandatory = $true)][string]$Repository)
+
+    $normalized = [IO.Path]::GetFullPath($Repository).Replace("\", "/").TrimEnd("/").ToLowerInvariant()
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        $key = -join ($sha256.ComputeHash([Text.Encoding]::UTF8.GetBytes($normalized)) | ForEach-Object { $_.ToString("x2") })
+    }
+    finally {
+        $sha256.Dispose()
+    }
+    return Join-Path (Join-Path ([IO.Path]::GetTempPath()) "ori3-hook-health") ("{0}-test-claim-scope-warning.json" -f $key)
+}
+
 function Remove-TestSandbox {
+    $hookRepository = Join-Path $SandboxRoot "hook"
+    $healthStatePath = Get-HookHealthStatePath -Repository $hookRepository
+    if (Test-Path -LiteralPath $healthStatePath -PathType Leaf) {
+        Remove-Item -LiteralPath $healthStatePath -Force
+    }
     if (-not (Test-Path -LiteralPath $SandboxRoot)) { return }
     $fullSandbox = [IO.Path]::GetFullPath($SandboxRoot).TrimEnd([char[]]"\\/")
     if ([IO.Path]::GetDirectoryName($fullSandbox) -ne $TempRoot -or [IO.Path]::GetFileName($fullSandbox) -notmatch '^ori3-test-claim-scope-warning-test-[0-9a-f]{32}$') {
@@ -140,7 +266,7 @@ function Remove-TestSandbox {
 [void][IO.Directory]::CreateDirectory($SandboxRoot)
 
 try {
-    Write-Host "[1/3] dynamic iteration changed to a literal emits a warning"
+    Write-Host "[1/5] dynamic iteration changed to a literal emits a warning"
     $dynamicRepository = New-TestRepository -Name "dynamic" -InitialContent @'
 #[test]
 fn covers_all_values() {
@@ -160,7 +286,7 @@ fn covers_all_values() {
     Assert-Equal $dynamicResult.ExitCode 0 "warning scan must remain nonblocking" $dynamicResult.Output
     Assert-Contains $dynamicResult.Output "dynamic iteration may have become a fixed literal" "dynamic-to-literal signal must be reported"
 
-    Write-Host "[2/3] removed assertion calls emit a warning"
+    Write-Host "[2/5] removed assertion calls emit a warning"
     $assertionRepository = New-TestRepository -Name "assertion" -InitialContent @'
 #[test]
 fn verifies_result() {
@@ -177,7 +303,7 @@ fn verifies_result() {
     Assert-Equal $assertionResult.ExitCode 0 "assertion warning scan must remain nonblocking" $assertionResult.Output
     Assert-Contains $assertionResult.Output "assertion calls decreased" "removed assertion signal must be reported"
 
-    Write-Host "[3/3] unchanged assertion count has no warning"
+    Write-Host "[3/5] unchanged assertion count has no warning"
     $cleanRepository = New-TestRepository -Name "clean" -InitialContent @'
 #[test]
 fn verifies_result() {
@@ -191,9 +317,59 @@ fn verifies_result() {
 '@
     $cleanResult = Invoke-ScopeWarning $cleanRepository
     Assert-Equal $cleanResult.ExitCode 0 "clean warning scan must exit 0" $cleanResult.Output
-    Assert-Contains $cleanResult.Output "No staged test-claim narrowing signal" "no signal must be stated"
+    Assert-Contains $cleanResult.Output "test-claim-scope scan completed: targets=1, findings=0" "no-signal completion must state target and finding counts"
 
-    Write-Host "[EVIDENCE] dynamic exit=$($dynamicResult.ExitCode); assertion exit=$($assertionResult.ExitCode); clean exit=$($cleanResult.ExitCode)"
+    Write-Host "[4/5] Git Bash -File fallback and pre-commit invocation both run the scanner"
+    $hookRepository = New-HookTestRepository
+    $gitBashPath = Get-GitBashPath
+    $emptyRootCommand = @'
+if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+    throw "The PSScriptRoot-empty fixture did not start with an empty value."
+}
+$source = [IO.File]::ReadAllText($env:ORI3_SCOPE_WARNING_SCRIPT)
+& ([ScriptBlock]::Create($source)) -RepositoryRoot $env:ORI3_SCOPE_WARNING_REPOSITORY
+'@
+    $emptyRootResult = Invoke-Process -FileName $PowerShellPath -Arguments @(
+        "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", $emptyRootCommand
+    ) -WorkingDirectory $hookRepository -EnvironmentVariables @{
+        ORI3_SCOPE_WARNING_SCRIPT = (Join-Path $hookRepository "scripts\hooks\checks\test-claim-scope-warning.ps1")
+        ORI3_SCOPE_WARNING_REPOSITORY = $hookRepository
+    }
+    Assert-Equal $emptyRootResult.ExitCode 0 "an empty PSScriptRoot process must run the scanner when RepositoryRoot is explicit" $emptyRootResult.Output
+    Assert-Contains $emptyRootResult.Output "assertion calls decreased" "the empty-root fixture must scan staged test content"
+
+    $directBashResult = Invoke-GitBash -GitBashPath $gitBashPath -Repository $hookRepository -Command 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/hooks/checks/test-claim-scope-warning.ps1 -Verbose'
+    Assert-Equal $directBashResult.ExitCode 0 "Git Bash -File invocation without RepositoryRoot must scan successfully" $directBashResult.Output
+    Assert-Contains $directBashResult.Output "Default RepositoryRoot resolved through `$PSScriptRoot" "default root calculation must occur after parameter binding"
+    Assert-Contains $directBashResult.Output "assertion calls decreased" "fallback invocation must scan staged test content"
+
+    $hookResult = Invoke-GitBash -GitBashPath $gitBashPath -Repository $hookRepository -Command 'sh scripts/hooks/pre-commit'
+    Assert-Equal $hookResult.ExitCode 0 "pre-commit must remain nonblocking after a scope warning" $hookResult.Output
+    Assert-Contains $hookResult.Output "assertion calls decreased" "pre-commit must actually emit the scanner result"
+    Assert-NotContains $hookResult.Output "scope warning scan could not run" "pre-commit must not hide a scanner startup failure"
+
+    Write-Host "[5/5] two unavailable PowerShell starts persist degraded health, then one success restores it"
+    $gitCommandDirectory = [IO.Path]::GetDirectoryName((Get-Command git -ErrorAction Stop).Source)
+    $gitBashCommandDirectory = [regex]::Replace($gitCommandDirectory, '^([A-Za-z]):\\', '/$1/').Replace("\\", "/")
+    $withoutPowerShellCommand = "PATH='${gitBashCommandDirectory}:/usr/bin'; export PATH; sh scripts/hooks/pre-commit"
+    $unavailableFirst = Invoke-GitBash -GitBashPath $gitBashPath -Repository $hookRepository -Command $withoutPowerShellCommand
+    Assert-Equal $unavailableFirst.ExitCode 0 "PowerShell absence must not block the commit" $unavailableFirst.Output
+    Assert-Contains $unavailableFirst.Output "PowerShell is unavailable" "the unavailable path must be visible"
+    Assert-Contains $unavailableFirst.Output "HOOK_HEALTH_DEGRADED" "the unavailable path must record health degradation"
+    $firstHealth = Invoke-HookHealthCheck -Repository $hookRepository -ExpectedExitCode 0
+    Assert-Contains $firstHealth.Output "failures=1" "first unavailable start must record one failure"
+
+    $unavailableSecond = Invoke-GitBash -GitBashPath $gitBashPath -Repository $hookRepository -Command $withoutPowerShellCommand
+    Assert-Equal $unavailableSecond.ExitCode 0 "a repeated unavailable PowerShell state must keep the commit nonblocking" $unavailableSecond.Output
+    $degradedHealth = Invoke-HookHealthCheck -Repository $hookRepository -ExpectedExitCode 2
+    Assert-Contains $degradedHealth.Output "failures=2" "second unavailable start must reach the threshold"
+
+    $recoveredHook = Invoke-GitBash -GitBashPath $gitBashPath -Repository $hookRepository -Command 'sh scripts/hooks/pre-commit'
+    Assert-Equal $recoveredHook.ExitCode 0 "a healthy scanner must restore the nonblocking hook" $recoveredHook.Output
+    $restoredHealth = Invoke-HookHealthCheck -Repository $hookRepository -ExpectedExitCode 0
+    Assert-Contains $restoredHealth.Output "failures=0" "one successful scanner run must reset health"
+
+    Write-Host "[EVIDENCE] dynamic exit=$($dynamicResult.ExitCode); assertion exit=$($assertionResult.ExitCode); clean exit=$($cleanResult.ExitCode); empty-root fixture exit=$($emptyRootResult.ExitCode); bash fallback exit=$($directBashResult.ExitCode); pre-commit exit=$($hookResult.ExitCode); unavailable-first=$($unavailableFirst.ExitCode); unavailable-second=$($unavailableSecond.ExitCode); restored=$($recoveredHook.ExitCode)"
     Write-Host "test-claim-scope-warning self-test passed: $script:AssertionCount assertions"
 }
 finally {

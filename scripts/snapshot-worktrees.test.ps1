@@ -67,7 +67,8 @@ function Invoke-Process {
     param(
         [Parameter(Mandatory = $true)][string]$FileName,
         [Parameter(Mandatory = $true)][string[]]$Arguments,
-        [Parameter(Mandatory = $true)][string]$WorkingDirectory
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory,
+        [hashtable]$EnvironmentVariables = @{}
     )
 
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo
@@ -79,6 +80,9 @@ function Invoke-Process {
     $startInfo.RedirectStandardError = $true
     $startInfo.StandardOutputEncoding = [Text.Encoding]::UTF8
     $startInfo.StandardErrorEncoding = [Text.Encoding]::UTF8
+    foreach ($key in $EnvironmentVariables.Keys) {
+        $startInfo.EnvironmentVariables[[string]$key] = [string]$EnvironmentVariables[$key]
+    }
     $process = [Diagnostics.Process]::Start($startInfo)
     $stdout = $process.StandardOutput.ReadToEnd()
     $stderr = $process.StandardError.ReadToEnd()
@@ -140,11 +144,40 @@ function New-DisposableWorktreeFixture {
     }
 }
 
+function New-ZeroTargetFixture {
+    $fixtureRoot = Join-Path $SandboxRoot "zero-target"
+    $repository = Join-Path $fixtureRoot "repo"
+    $verificationCopy = Join-Path $repository "verification\push-tree"
+    $fakeGitDirectory = Join-Path $fixtureRoot "fake-git"
+    [void][IO.Directory]::CreateDirectory($verificationCopy)
+    [void][IO.Directory]::CreateDirectory((Join-Path $repository "scripts"))
+    [void][IO.Directory]::CreateDirectory($fakeGitDirectory)
+    Copy-Item -LiteralPath $SourceScriptPath -Destination (Join-Path $repository "scripts\snapshot-worktrees.ps1") -Force
+    $fakeGit = @(
+        '@echo off',
+        'if /I "%~1"=="worktree" (',
+        ('  echo worktree {0}' -f $verificationCopy),
+        '  echo HEAD 0000000000000000000000000000000000000000',
+        '  echo detached',
+        '  exit /b 0',
+        ')',
+        'echo unexpected git invocation: %* 1>&2',
+        'exit /b 1'
+    ) -join "`r`n"
+    [IO.File]::WriteAllText((Join-Path $fakeGitDirectory "git.cmd"), $fakeGit, [Text.UTF8Encoding]::new($false))
+    return [PSCustomObject]@{
+        Repository = $repository
+        ScriptPath = Join-Path $repository "scripts\snapshot-worktrees.ps1"
+        FakeGitDirectory = $fakeGitDirectory
+    }
+}
+
 function Invoke-SnapshotProcess {
     param(
         [Parameter(Mandatory = $true)]$Fixture,
         [switch]$Check,
-        [string]$Name
+        [string]$Name,
+        [hashtable]$EnvironmentVariables = @{}
     )
 
     $arguments = New-Object System.Collections.Generic.List[string]
@@ -154,12 +187,14 @@ function Invoke-SnapshotProcess {
     $arguments.Add("Bypass")
     $arguments.Add("-File")
     $arguments.Add($Fixture.ScriptPath)
+    $arguments.Add("-RepositoryRoot")
+    $arguments.Add($Fixture.Repository)
     if ($Check) { $arguments.Add("-Check") }
     if (-not [string]::IsNullOrWhiteSpace($Name)) {
         $arguments.Add("-Name")
         $arguments.Add($Name)
     }
-    return Invoke-Process -FileName $PowerShellPath -Arguments $arguments.ToArray() -WorkingDirectory $Fixture.Repository
+    return Invoke-Process -FileName $PowerShellPath -Arguments $arguments.ToArray() -WorkingDirectory $Fixture.Repository -EnvironmentVariables $EnvironmentVariables
 }
 
 function Remove-TestSandbox {
@@ -177,26 +212,29 @@ function Remove-TestSandbox {
 [void][IO.Directory]::CreateDirectory($SandboxRoot)
 
 try {
-    Write-Host "[1/3] derived worktree name snapshots and passes freshness check"
+    Write-Host "[1/4] the main worktree and derived worktree names snapshot and pass freshness check"
     $freshFixture = New-DisposableWorktreeFixture "fresh"
-    $snapshotResult = Invoke-SnapshotProcess -Fixture $freshFixture -Name "merge"
+    $snapshotResult = Invoke-SnapshotProcess -Fixture $freshFixture
     Assert-Equal $snapshotResult.ExitCode 0 "snapshot process must exit 0" $snapshotResult.Output
     $freshCheck = Invoke-SnapshotProcess -Fixture $freshFixture -Check
     Assert-Equal $freshCheck.ExitCode 0 "fresh snapshot check must exit 0" $freshCheck.Output
+    Assert-Contains $freshCheck.Output "snapshot targets=2, excluded=1, mode=check" "check output must disclose target and exclusion counts"
+    Assert-Contains $freshCheck.Output "snapshot check completed: targets=2, findings=0" "check output must disclose a zero-finding success"
+    Assert-Contains $freshCheck.Output "[EXCLUDE]" "check output must disclose excluded worktrees"
     $derivedRef = Invoke-TestGit $freshFixture.Repository @("rev-parse", "--verify", "refs/wip/merge")
     Assert-True ($derivedRef.Trim() -match '^[0-9a-f]{40}$') "ori3-wt-merge must derive refs/wip/merge" $derivedRef
-    $rootRef = Invoke-Process -FileName "git" -Arguments @("-C", $freshFixture.Repository, "show-ref", "--verify", "--quiet", "refs/wip/repo") -WorkingDirectory $freshFixture.Repository
-    Assert-True ($rootRef.ExitCode -ne 0) "the repository root must be excluded rather than snapshotted" $rootRef.Output
+    $rootRef = Invoke-TestGit $freshFixture.Repository @("rev-parse", "--verify", "refs/wip/main")
+    Assert-True ($rootRef.Trim() -match '^[0-9a-f]{40}$') "the repository root must be snapshotted as refs/wip/main" $rootRef
     $checkCopyRef = Invoke-Process -FileName "git" -Arguments @("-C", $freshFixture.Repository, "show-ref", "--verify", "--quiet", "refs/wip/ori3-push-check") -WorkingDirectory $freshFixture.Repository
     Assert-True ($checkCopyRef.ExitCode -ne 0) "a registered check copy outside the ori3-wt-* convention must be excluded" $checkCopyRef.Output
 
-    Write-Host "[2/3] a worktree without a snapshot fails in a new process"
+    Write-Host "[2/4] a worktree without a snapshot fails in a new process"
     $missingFixture = New-DisposableWorktreeFixture "missing"
     $missingCheck = Invoke-SnapshotProcess -Fixture $missingFixture -Check
     Assert-True ($missingCheck.ExitCode -ne 0) "missing snapshot check must have a nonzero process exit code" $missingCheck.Output
     Assert-Contains $missingCheck.Output "refs/wip/merge" "missing snapshot output must name the derived reference"
 
-    Write-Host "[3/3] a snapshot older than source fails in a new process"
+    Write-Host "[3/4] a snapshot older than source fails in a new process"
     $staleFixture = New-DisposableWorktreeFixture "stale"
     $staleSnapshot = Invoke-SnapshotProcess -Fixture $staleFixture -Name "merge"
     Assert-Equal $staleSnapshot.ExitCode 0 "stale fixture must first create a snapshot" $staleSnapshot.Output
@@ -207,7 +245,15 @@ try {
     Assert-True ($staleCheck.ExitCode -ne 0) "stale snapshot check must have a nonzero process exit code" $staleCheck.Output
     Assert-Contains $staleCheck.Output "refs/wip/merge" "stale snapshot output must name the derived reference"
 
-    Write-Host "[EVIDENCE] child snapshot exit=$($snapshotResult.ExitCode); fresh check exit=$($freshCheck.ExitCode); missing check exit=$($missingCheck.ExitCode); stale check exit=$($staleCheck.ExitCode)"
+    Write-Host "[4/4] a discovery result with no includable target fails visibly"
+    $zeroFixture = New-ZeroTargetFixture
+    $zeroCheck = Invoke-SnapshotProcess -Fixture $zeroFixture -Check -EnvironmentVariables @{ PATH = ($zeroFixture.FakeGitDirectory + ";" + $env:PATH) }
+    Assert-True ($zeroCheck.ExitCode -ne 0) "zero targets must have a nonzero process exit code" $zeroCheck.Output
+    Assert-Contains $zeroCheck.Output "snapshot targets=0" "zero-target check must report zero targets"
+    Assert-Contains $zeroCheck.Output "snapshot check completed: targets=0, findings=1" "zero-target check must report an abnormal finding"
+    Assert-Contains $zeroCheck.Output "[EXCLUDE]" "zero-target check must disclose why its only worktree was excluded"
+
+    Write-Host "[EVIDENCE] child snapshot exit=$($snapshotResult.ExitCode); fresh check exit=$($freshCheck.ExitCode); missing check exit=$($missingCheck.ExitCode); stale check exit=$($staleCheck.ExitCode); zero-target check exit=$($zeroCheck.ExitCode)"
     Write-Host "snapshot-worktrees self-test passed: $script:AssertionCount assertions"
 }
 finally {

@@ -15,6 +15,7 @@ staged_for_report=$(git -c core.quotePath=false diff --cached --name-only --diff
 hook_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$hook_dir/../.." && pwd)
 scope_warning_script="$repo_root/scripts/hooks/checks/test-claim-scope-warning.ps1"
+scope_health_script="$repo_root/scripts/hooks/checks/hook-health.ps1"
 scope_powershell=
 if command -v powershell.exe >/dev/null 2>&1; then
     scope_powershell=powershell.exe
@@ -23,14 +24,91 @@ elif command -v pwsh >/dev/null 2>&1; then
 elif command -v powershell >/dev/null 2>&1; then
     scope_powershell=powershell
 fi
+
+record_scope_health_fallback() {
+    fallback_exit_code=$1
+    fallback_reason=$2
+    if ! command -v sha256sum >/dev/null 2>&1; then
+        printf '%s\n' "[WARN] HOOK_HEALTH_DEGRADED check=test-claim-scope-warning failures=unknown reason=$fallback_reason health-state=not-recorded (sha256sum unavailable)" >&2
+        return
+    fi
+    fallback_temp=${TEMP:-${TMPDIR:-/tmp}}
+    if command -v cygpath >/dev/null 2>&1; then
+        fallback_temp=$(cygpath -u "$fallback_temp")
+    fi
+    fallback_health_dir="${fallback_temp%/}/ori3-hook-health"
+    fallback_identity=$(git -C "$repo_root" rev-parse --show-toplevel 2>/dev/null | tr '\\' '/' | tr '[:upper:]' '[:lower:]')
+    if [ -z "$fallback_identity" ]; then
+        printf '%s\n' "[WARN] HOOK_HEALTH_DEGRADED check=test-claim-scope-warning failures=unknown reason=$fallback_reason health-state=not-recorded (repository identity unavailable)" >&2
+        return
+    fi
+    fallback_key=$(printf '%s' "$fallback_identity" | sha256sum | awk '{print $1}')
+    fallback_state="$fallback_health_dir/${fallback_key}-test-claim-scope-warning.json"
+    if ! mkdir -p "$fallback_health_dir"; then
+        printf '%s\n' "[WARN] HOOK_HEALTH_DEGRADED check=test-claim-scope-warning failures=unknown reason=$fallback_reason health-state=not-recorded (directory unavailable)" >&2
+        return
+    fi
+    fallback_previous=$(sed -n 's/.*"consecutiveFailures"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$fallback_state" 2>/dev/null | head -n 1)
+    case $fallback_previous in
+        ''|*[!0-9]*) fallback_previous=0 ;;
+    esac
+    fallback_failures=$((fallback_previous + 1))
+    fallback_last_success=$(sed -n 's/.*"lastSuccessAtUtc"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$fallback_state" 2>/dev/null | head -n 1)
+    fallback_last_success_json=null
+    if [ -n "$fallback_last_success" ]; then
+        fallback_last_success_json=$(printf '"%s"' "$fallback_last_success")
+    fi
+    fallback_now=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+    fallback_temporary="$fallback_state.$$.tmp"
+    if ! printf '%s\n' "{\"schemaVersion\":1,\"checkId\":\"test-claim-scope-warning\",\"consecutiveFailures\":$fallback_failures,\"lastAttemptAtUtc\":\"$fallback_now\",\"lastSuccessAtUtc\":$fallback_last_success_json,\"lastFailureAtUtc\":\"$fallback_now\",\"lastFailureExitCode\":$fallback_exit_code,\"lastFailureKind\":\"$fallback_reason\"}" > "$fallback_temporary" || ! mv -f "$fallback_temporary" "$fallback_state"; then
+        rm -f "$fallback_temporary"
+        printf '%s\n' "[WARN] HOOK_HEALTH_DEGRADED check=test-claim-scope-warning failures=unknown reason=$fallback_reason health-state=not-recorded (atomic write failed)" >&2
+        return
+    fi
+    printf '%s\n' "[WARN] HOOK_HEALTH_DEGRADED check=test-claim-scope-warning failures=$fallback_failures threshold=2 lastSuccess=${fallback_last_success:-never} lastFailure=$fallback_now reason=$fallback_reason" >&2
+}
+
+record_scope_health_failure() {
+    health_exit_code=$1
+    health_reason=$2
+    if [ -n "$scope_powershell" ] && [ -f "$scope_health_script" ]; then
+        "$scope_powershell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$scope_health_script" -Action RecordFailure -RepositoryRoot "$repo_root" -FailureExitCode "$health_exit_code" -FailureKind "$health_reason"
+        health_record_status=$?
+        if [ "$health_record_status" -eq 0 ]; then
+            return
+        fi
+        printf '%s\n' "[WARN] HOOK_HEALTH_DEGRADED check=test-claim-scope-warning failures=unknown reason=$health_reason health-state=not-recorded (helper exit $health_record_status)" >&2
+    fi
+    record_scope_health_fallback "$health_exit_code" "$health_reason"
+}
+
+record_scope_health_success() {
+    if [ -n "$scope_powershell" ] && [ -f "$scope_health_script" ]; then
+        "$scope_powershell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$scope_health_script" -Action RecordSuccess -RepositoryRoot "$repo_root"
+        health_record_status=$?
+        if [ "$health_record_status" -ne 0 ]; then
+            printf '%s\n' "[WARN] HOOK_HEALTH_DEGRADED check=test-claim-scope-warning failures=unknown reason=success-state-not-recorded health-state=not-recorded (helper exit $health_record_status)" >&2
+        fi
+    else
+        printf '%s\n' '[WARN] HOOK_HEALTH_DEGRADED check=test-claim-scope-warning failures=unknown reason=success-state-not-recorded health-state=not-recorded (helper unavailable)' >&2
+    fi
+}
+
 if [ -n "$scope_powershell" ] && [ -f "$scope_warning_script" ]; then
-    "$scope_powershell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$scope_warning_script"
+    "$scope_powershell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$scope_warning_script" -RepositoryRoot "$repo_root"
     scope_warning_status=$?
     if [ "$scope_warning_status" -ne 0 ]; then
+        record_scope_health_failure "$scope_warning_status" scanner-exit
         printf '%s\n' "[WARN] test-claim scope warning scan could not run (exit $scope_warning_status); commit remains nonblocking" >&2
+    else
+        record_scope_health_success
     fi
 elif [ -f "$scope_warning_script" ]; then
+    record_scope_health_failure 127 powershell-unavailable
     printf '%s\n' '[WARN] PowerShell is unavailable; test-claim scope warning scan was skipped' >&2
+else
+    record_scope_health_failure 127 scanner-script-missing
+    printf '%s\n' '[WARN] test-claim scope warning scan script is unavailable; commit remains nonblocking' >&2
 fi
 
 # 実装を進めたのに利用者への報告を書かない状態を、重いRust検査の前に止める。

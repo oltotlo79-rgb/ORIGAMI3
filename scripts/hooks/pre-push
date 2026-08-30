@@ -26,7 +26,7 @@ else
     exit 127
 fi
 
-"$powershell_command" -NoProfile -ExecutionPolicy Bypass -File "$check_script"
+"$powershell_command" -NoProfile -ExecutionPolicy Bypass -File "$check_script" -RepositoryRoot "$repo_root"
 check_status=$?
 
 if [ "$check_status" -ne 0 ]; then
@@ -34,7 +34,7 @@ if [ "$check_status" -ne 0 ]; then
     exit "$check_status"
 fi
 
-"$powershell_command" -NoProfile -ExecutionPolicy Bypass -File "$check_ci_script"
+"$powershell_command" -NoProfile -ExecutionPolicy Bypass -File "$check_ci_script" -RepositoryRoot "$repo_root"
 check_ci_status=$?
 
 if [ "$check_ci_status" -ne 0 ]; then

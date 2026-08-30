@@ -31,7 +31,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$DefinitionPath,
 
-    [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
+    [string]$RepositoryRoot = "",
 
     [ValidateRange(1, 1440)]
     [int]$IntervalMinutes = 10,
@@ -44,6 +44,20 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
+
+if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
+    $scriptDirectory = [string]$PSScriptRoot
+    if ([string]::IsNullOrWhiteSpace($scriptDirectory)) {
+        $invocationPath = [string]$MyInvocation.MyCommand.Path
+        if (-not [string]::IsNullOrWhiteSpace($invocationPath)) {
+            $scriptDirectory = Split-Path -Parent ([IO.Path]::GetFullPath($invocationPath))
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($scriptDirectory)) {
+        throw "RepositoryRoot was not supplied and the script directory could not be determined."
+    }
+    $RepositoryRoot = Split-Path -Parent $scriptDirectory
+}
 
 function Resolve-WatchPath {
     param(

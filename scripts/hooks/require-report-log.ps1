@@ -10,6 +10,65 @@
 $ErrorActionPreference = 'Stop'
 
 $StaleMinutes = 90
+$HookHealthThreshold = 2
+
+function ConvertTo-ProcessArgumentString {
+    param([Parameter(Mandatory = $true)][string[]]$Values)
+
+    $parts = foreach ($value in $Values) {
+        $escaped = [regex]::Replace($value, '(\\*)"', '$1$1\\"')
+        $trailingBackslashes = [regex]::Match($escaped, '\\*$').Value
+        $escaped = $escaped + $trailingBackslashes
+        '"' + $escaped + '"'
+    }
+    return ($parts -join ' ')
+}
+
+function Invoke-HookHealthCheck {
+    param(
+        [Parameter(Mandatory = $true)][string]$ScriptPath,
+        [Parameter(Mandatory = $true)][string]$RepositoryRoot,
+        [Parameter(Mandatory = $true)][int]$Threshold
+    )
+
+    $powerShellPath = (Get-Process -Id $PID).Path
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $powerShellPath
+    $startInfo.Arguments = ConvertTo-ProcessArgumentString -Values @(
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+        '-File', $ScriptPath,
+        '-Action', 'Check',
+        '-RepositoryRoot', $RepositoryRoot,
+        '-Threshold', [string]$Threshold
+    )
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.StandardOutputEncoding = [Text.Encoding]::UTF8
+    $startInfo.StandardErrorEncoding = [Text.Encoding]::UTF8
+    $process = [Diagnostics.Process]::Start($startInfo)
+    $stdout = $process.StandardOutput.ReadToEnd()
+    $stderr = $process.StandardError.ReadToEnd()
+    $process.WaitForExit()
+    return [PSCustomObject]@{
+        ExitCode = $process.ExitCode
+        Output = ($stdout + $stderr).Trim()
+    }
+}
+
+function Write-ToolDeny {
+    param([Parameter(Mandatory = $true)][string]$Reason)
+
+    $out = [ordered]@{
+        hookSpecificOutput = [ordered]@{
+            hookEventName            = 'PreToolUse'
+            permissionDecision       = 'deny'
+            permissionDecisionReason = $Reason
+        }
+    }
+    $out | ConvertTo-Json -Depth 5 -Compress | Write-Output
+    exit 0
+}
 
 try {
     $raw = [Console]::In.ReadToEnd()
@@ -36,6 +95,25 @@ try {
     $log = Join-Path $root 'docs/報告記録.md'
     if (-not (Test-Path -LiteralPath $log -PathType Leaf)) { exit 0 }
 
+    $healthScript = Join-Path $root 'scripts\hooks\checks\hook-health.ps1'
+    if (-not (Test-Path -LiteralPath $healthScript -PathType Leaf)) {
+        Write-ToolDeny 'HOOK_HEALTH_DEGRADED: フック健全性検査台本が見つかりません。担当への次の指示を出す前に scripts/hooks/checks/hook-health.ps1 を復旧してください。'
+    }
+    $health = Invoke-HookHealthCheck -ScriptPath $healthScript -RepositoryRoot $root -Threshold $HookHealthThreshold
+    if ($health.ExitCode -ne 0) {
+        $healthDetail = [regex]::Replace($health.Output, '\s+', ' ').Trim()
+        if ([string]::IsNullOrWhiteSpace($healthDetail)) {
+            $healthDetail = "HOOK_HEALTH_DEGRADED: health checker exit=$($health.ExitCode)"
+        }
+        Write-ToolDeny (
+            "$healthDetail 担当への次の指示を出す前に、該当する検査を正常に1回実行して連続失敗数を0へ戻してください。"
+        )
+    }
+    if ($health.Output -match 'HOOK_HEALTH_RELEASED') {
+        # 解除は作業継続を許すが、次の成功まで解除済みであることを隠さない。
+        Write-Warning ([regex]::Replace($health.Output, '\s+', ' ').Trim())
+    }
+
     $age = (New-TimeSpan -Start (Get-Item -LiteralPath $log).LastWriteTime -End (Get-Date)).TotalMinutes
     if ($age -le $StaleMinutes) { exit 0 }
 
@@ -46,15 +124,7 @@ try {
         "記録そのもの（Bash / Write / Edit）はこの検査で止まりません。"
     ) -join ' '
 
-    $out = [ordered]@{
-        hookSpecificOutput = [ordered]@{
-            hookEventName            = 'PreToolUse'
-            permissionDecision       = 'deny'
-            permissionDecisionReason = $reason
-        }
-    }
-    $out | ConvertTo-Json -Depth 5 -Compress | Write-Output
-    exit 0
+    Write-ToolDeny $reason
 }
 catch {
     # 検査自身の誤りで作業を止めない（fail-open）。ただし理由は見えるようにする。

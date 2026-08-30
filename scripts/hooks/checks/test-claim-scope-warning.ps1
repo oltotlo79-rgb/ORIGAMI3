@@ -10,13 +10,29 @@ fixed collection literal. It cannot prove that a test contract was weakened.
 #>
 [CmdletBinding()]
 param(
-    [string]$RepositoryRoot = (Join-Path $PSScriptRoot "..\..\.."),
+    [string]$RepositoryRoot = "",
     [string[]]$Files = @()
 )
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
 
+if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
+    $scriptDirectory = [string]$PSScriptRoot
+    $scriptDirectorySource = '$PSScriptRoot'
+    if ([string]::IsNullOrWhiteSpace($scriptDirectory)) {
+        $invocationPath = [string]$MyInvocation.MyCommand.Path
+        if (-not [string]::IsNullOrWhiteSpace($invocationPath)) {
+            $scriptDirectory = Split-Path -Parent ([IO.Path]::GetFullPath($invocationPath))
+            $scriptDirectorySource = '$MyInvocation.MyCommand.Path'
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($scriptDirectory)) {
+        throw "RepositoryRoot was not supplied and the script directory could not be determined."
+    }
+    $RepositoryRoot = Join-Path $scriptDirectory "..\..\.."
+    Write-Verbose "Default RepositoryRoot resolved through $scriptDirectorySource."
+}
 $repositoryRoot = [IO.Path]::GetFullPath($RepositoryRoot).TrimEnd([char[]]"\\/")
 $assertionPattern = [regex]::new('(?:\bassert(?:_eq|_ne)?!\s*\(|\bexpect\s*\(|\bAssert-[A-Za-z][A-Za-z-]*)')
 $dynamicLoopPattern = [regex]::new('(?:\bfor\b[^\r\n]*(?:\.iter\s*\(|\.collect\s*\(|\.values\s*\(|\.keys\s*\(|\.entries\s*\(|read_dir\s*\(|glob\s*\())')
@@ -59,7 +75,8 @@ function Get-StagedTestPaths {
 }
 
 $findings = New-Object System.Collections.Generic.List[object]
-foreach ($path in @(Get-StagedTestPaths)) {
+$stagedTestPaths = @(Get-StagedTestPaths)
+foreach ($path in $stagedTestPaths) {
     $diffLines = Invoke-GitText -Arguments @("diff", "--cached", "--no-color", "--no-ext-diff", "--unified=0", "--", $path)
     $addedAssertions = 0
     $removedAssertions = 0
@@ -95,7 +112,7 @@ foreach ($path in @(Get-StagedTestPaths)) {
 }
 
 if ($findings.Count -eq 0) {
-    Write-Host "[OK] No staged test-claim narrowing signal was found."
+    Write-Host "[OK] test-claim-scope scan completed: targets=$($stagedTestPaths.Count), findings=0"
     exit 0
 }
 
@@ -103,4 +120,5 @@ foreach ($finding in $findings) {
     Write-Warning "Test claim scope may have narrowed: $($finding.Path) - $($finding.Signal) ($($finding.Detail))"
 }
 Write-Warning "This is nonblocking. Review the staged diff and confirm that every removed assertion or narrowed iteration is intentional."
+Write-Host "[OK] test-claim-scope scan completed: targets=$($stagedTestPaths.Count), findings=$($findings.Count)"
 exit 0

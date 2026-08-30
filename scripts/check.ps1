@@ -8,8 +8,26 @@
 #   (4) apps/desktop で npm run lint
 #   (5) apps/desktop で npm run test (vitest)
 
-$root = Split-Path -Parent $PSScriptRoot
-$receiptHelper = Join-Path $PSScriptRoot "check-receipt.ps1"
+[CmdletBinding()]
+param(
+    [string]$RepositoryRoot = ""
+)
+
+$scriptDirectory = [string]$PSScriptRoot
+if ([string]::IsNullOrWhiteSpace($scriptDirectory)) {
+    $invocationPath = [string]$MyInvocation.MyCommand.Path
+    if (-not [string]::IsNullOrWhiteSpace($invocationPath)) {
+        $scriptDirectory = Split-Path -Parent ([IO.Path]::GetFullPath($invocationPath))
+    }
+}
+if ([string]::IsNullOrWhiteSpace($scriptDirectory)) {
+    throw "The script directory could not be determined."
+}
+if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
+    $RepositoryRoot = Split-Path -Parent $scriptDirectory
+}
+$root = [IO.Path]::GetFullPath($RepositoryRoot).TrimEnd([char[]]"\\/")
+$receiptHelper = Join-Path $scriptDirectory "check-receipt.ps1"
 $receiptAvailable = $false
 $rustW4Arguments = @(
     "test", "--workspace", "--no-fail-fast", "--",

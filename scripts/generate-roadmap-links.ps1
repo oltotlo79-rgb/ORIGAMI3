@@ -527,7 +527,7 @@ function Test-CiRustChecksAndPerformanceComplements {
     $performance = Get-ExactYamlJobBlock $Text "performance"
     if ($null -eq $checks -or $null -eq $performance) { return $false }
     foreach ($line in @(
-        "        run: cargo test --workspace -- --skip surface_order_179_999_to_180_all_110_creases --skip surface_order_exact_endpoint_is_rank_stable_for_previous_19 --skip completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten --skip named_sample_completes_end_to_end_and_is_deterministic_ten_out_of_ten --skip a_safe_coincident_partial_network_appears_after_the_first_fold --skip the_heaviest_proposal_never_hits_the_time_limit",
+        "        run: cargo test --workspace --no-fail-fast -- --skip surface_order_179_999_to_180_all_110_creases --skip surface_order_exact_endpoint_is_rank_stable_for_previous_19 --skip completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten --skip named_sample_completes_end_to_end_and_is_deterministic_ten_out_of_ten --skip a_safe_coincident_partial_network_appears_after_the_first_fold --skip the_heaviest_proposal_never_hits_the_time_limit",
         "        run: cargo clippy --workspace --all-targets -- -D warnings"
     )) {
         if (-not (Test-ExactTextLine $checks $line)) { return $false }

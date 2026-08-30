@@ -25,13 +25,28 @@ param(
 
     [string]$TempRoot = [IO.Path]::GetTempPath(),
 
-    [string]$RepositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..")),
+    [string]$RepositoryRoot = "",
 
     [string]$TestSandboxRoot
 )
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
+
+$scriptDirectory = [string]$PSScriptRoot
+if ([string]::IsNullOrWhiteSpace($scriptDirectory)) {
+    $invocationPath = [string]$MyInvocation.MyCommand.Path
+    if (-not [string]::IsNullOrWhiteSpace($invocationPath)) {
+        $scriptDirectory = Split-Path -Parent ([IO.Path]::GetFullPath($invocationPath))
+    }
+}
+if ([string]::IsNullOrWhiteSpace($scriptDirectory)) {
+    throw "RepositoryRoot was not supplied and the script directory could not be determined."
+}
+$defaultRepositoryRootCandidate = [IO.Path]::GetFullPath((Join-Path $scriptDirectory ".."))
+if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
+    $RepositoryRoot = $defaultRepositoryRootCandidate
+}
 
 function Get-NormalizedPath {
     param(
@@ -628,7 +643,7 @@ function Show-CandidateAssessment {
 }
 
 $defaultTempRoot = Get-NormalizedPath ([IO.Path]::GetTempPath())
-$defaultRepositoryRoot = Get-NormalizedPath (Join-Path $PSScriptRoot "..")
+$defaultRepositoryRoot = Get-NormalizedPath $defaultRepositoryRootCandidate
 $normalizedTempRoot = Get-NormalizedPath $TempRoot
 $normalizedRepositoryRoot = Get-NormalizedPath $RepositoryRoot
 $normalizedVerificationRoot = Get-NormalizedPath (Join-Path $normalizedRepositoryRoot "verification")

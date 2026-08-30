@@ -6,7 +6,8 @@ Snapshots registered worktrees into refs/wip/<derived-name> and checks freshness
 The target list is derived exclusively from `git worktree list --porcelain`. The
 repository root itself, worktrees located under the root's verification/ directory,
 and registered check copies whose leaf does not begin ori3-wt- are excluded by
-rules. All assigned ori3-wt-* worktrees are included.
+rules. The repository root is always included as refs/wip/main; all assigned
+ori3-wt-* worktrees are included.
 For example, the directory ori3-wt-merge becomes refs/wip/merge.
 
 Normal execution records each worktree with git plumbing only. -Check requires a
@@ -22,13 +23,25 @@ Verify freshness only. Exit nonzero for a missing or stale refs/wip snapshot.
 [CmdletBinding()]
 param(
     [string]$Name,
-    [switch]$Check
+    [switch]$Check,
+    [string]$RepositoryRoot
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$RepositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..")).TrimEnd([char[]]"\\/")
+if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
+    $scriptDirectory = $PSScriptRoot
+    if ([string]::IsNullOrWhiteSpace($scriptDirectory)) {
+        $scriptPath = $MyInvocation.MyCommand.Path
+        if ([string]::IsNullOrWhiteSpace($scriptPath)) {
+            throw "Cannot determine the snapshot script location; pass -RepositoryRoot explicitly."
+        }
+        $scriptDirectory = Split-Path -Parent $scriptPath
+    }
+    $RepositoryRoot = Join-Path $scriptDirectory ".."
+}
+$RepositoryRoot = [IO.Path]::GetFullPath($RepositoryRoot).TrimEnd([char[]]"\\/")
 $ExcludedPaths = @(
     "docs/competitive-review-2026-08-20.md",
     "traditional_crane_math_bundle",
@@ -116,23 +129,34 @@ function ConvertTo-SnapshotName {
     return $name
 }
 
-function Get-WorktreeTargets {
+function Get-WorktreeInventory {
     $lines = Invoke-Git -WorkingDirectory $RepositoryRoot -Arguments @("worktree", "list", "--porcelain")
     $targets = New-Object System.Collections.Generic.List[object]
+    $excluded = New-Object System.Collections.Generic.List[object]
     $names = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     foreach ($line in $lines) {
         if (-not $line.StartsWith("worktree ", [StringComparison]::Ordinal)) { continue }
         $worktree = Normalize-DirectoryPath $line.Substring("worktree ".Length)
-        if ([string]::Equals($worktree, $RepositoryRoot, [StringComparison]::OrdinalIgnoreCase)) { continue }
-        if (Test-IsVerificationCopy -Worktree $worktree) { continue }
-        if (-not (Split-Path -Leaf $worktree).StartsWith("ori3-wt-", [StringComparison]::OrdinalIgnoreCase)) { continue }
-        $snapshotName = ConvertTo-SnapshotName $worktree
+        if ([string]::Equals($worktree, $RepositoryRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            $snapshotName = "main"
+        }
+        elseif (Test-IsVerificationCopy -Worktree $worktree) {
+            $excluded.Add([PSCustomObject]@{ Worktree = $worktree; Reason = "under repository verification/ directory" })
+            continue
+        }
+        elseif (-not (Split-Path -Leaf $worktree).StartsWith("ori3-wt-", [StringComparison]::OrdinalIgnoreCase)) {
+            $excluded.Add([PSCustomObject]@{ Worktree = $worktree; Reason = "leaf does not follow the assigned ori3-wt-* convention" })
+            continue
+        }
+        else {
+            $snapshotName = ConvertTo-SnapshotName $worktree
+        }
         if (-not $names.Add($snapshotName)) {
             throw "Multiple worktrees derive the same refs/wip name: $snapshotName"
         }
         $targets.Add([PSCustomObject]@{ Name = $snapshotName; Worktree = $worktree })
     }
-    return $targets.ToArray()
+    return [PSCustomObject]@{ Targets = $targets.ToArray(); Excluded = $excluded.ToArray() }
 }
 
 function Get-LatestSourceFile {
@@ -216,7 +240,7 @@ function Test-SnapshotFreshness {
     foreach ($target in $Targets) {
         $latestSource = Get-LatestSourceFile -Worktree $target.Worktree
         if ($null -eq $latestSource) {
-            Write-Output "[SKIP] $($target.Name): no source file in the monitored directories"
+            Write-Host "[SKIP] $($target.Name): no source file in the monitored directories"
             continue
         }
         $snapshotTime = Get-SnapshotCommitTimeUtc -SnapshotName $target.Name
@@ -228,19 +252,33 @@ function Test-SnapshotFreshness {
             $problems.Add("$($target.Name): refs/wip/$($target.Name) is stale; snapshot $($snapshotTime.ToString('o')) UTC <= source $($latestSource.FullName) $($latestSource.LastWriteTimeUtc.ToString('o')) UTC")
             continue
         }
-        Write-Output "[OK] $($target.Name): snapshot $($snapshotTime.ToString('o')) UTC > latest source $($latestSource.LastWriteTimeUtc.ToString('o')) UTC"
+        Write-Host "[OK] $($target.Name): snapshot $($snapshotTime.ToString('o')) UTC > latest source $($latestSource.LastWriteTimeUtc.ToString('o')) UTC"
     }
     # Write-Error obeys the script-wide Stop preference and would abort at the first
     # missing snapshot. Emit every affected worktree before returning a nonzero exit.
     foreach ($problem in $problems) { Write-Host "[NG] $problem" -ForegroundColor Red }
+    Write-Host "[INFO] snapshot check completed: targets=$($Targets.Count), findings=$($problems.Count)"
     return $problems.Count
 }
 
-$targets = @(Get-WorktreeTargets)
+$inventory = Get-WorktreeInventory
+$targets = @($inventory.Targets)
+$excluded = @($inventory.Excluded)
+foreach ($item in $excluded) {
+    Write-Output "[EXCLUDE] $($item.Worktree): $($item.Reason)"
+}
+Write-Output "[INFO] snapshot targets=$($targets.Count), excluded=$($excluded.Count), mode=$(if ($Check) { 'check' } else { 'save' })"
+if ($targets.Count -eq 0) {
+    Write-Host "[NG] snapshot targets=0; worktree discovery produced no snapshot target" -ForegroundColor Red
+    if ($Check) {
+        Write-Output "[INFO] snapshot check completed: targets=0, findings=1"
+    }
+    exit 1
+}
 if ($Name) {
     $targets = @($targets | Where-Object { $_.Name -eq $Name })
     if ($targets.Count -ne 1) {
-        $available = @((Get-WorktreeTargets | ForEach-Object Name)) -join ', '
+        $available = @($inventory.Targets | ForEach-Object Name) -join ', '
         throw "Unknown or ambiguous snapshot name '$Name'. Available: $available"
     }
 }
