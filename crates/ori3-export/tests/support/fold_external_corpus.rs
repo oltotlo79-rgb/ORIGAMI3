@@ -1,15 +1,29 @@
 use serde_json::{Map, Value};
 use std::collections::HashSet;
-use std::fmt::{self, Write as _};
+use std::fmt;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-const OFFICIAL_QUOTA: usize = 6;
-const ORIPA_QUOTA: usize = 8;
+#[path = "fold_sha256.rs"]
+mod fold_sha256;
+
+pub use fold_sha256::sha256_hex;
+
+/// 公式リポジトリ`edemaine/FOLD`にはFOLD 1.1以上の見本が2件しかない
+/// (残り3件はFOLD 1.0で、限定profileが読める版ではない)。実測どおりの2件にする。
+const OFFICIAL_QUOTA: usize = 2;
+/// 4番目の出所。利用者の決定(2026-08-29)でORIPAから`origamimagiro/flat-folder`へ
+/// 差し替えた。ORIPAの配布物に`.fold`が無く(`.opx`のみ)、書き出すにはORIPA本体を
+/// 動かす必要があるためである。公式が2件しか無い分をここで持ち、合計30件を保つ。
+const FLAT_FOLDER_QUOTA: usize = 12;
 const ORIEDITA_QUOTA: usize = 8;
 const ORIGAMI_SIMULATOR_QUOTA: usize = 8;
 const USER_AUTHORIZED_LICENSE: &str = "LicenseRef-ORIGAMI3-User-Authorized-Samples-2026-08-26";
 const SYNTHETIC_TEST_LICENSE: &str = "LicenseRef-Synthetic-Test-Only";
+/// Upstream licence reviewed on 2026-08-29 for `edemaine/FOLD` and
+/// `origamimagiro/flat-folder`. Both ship the same MIT text, copied beside the
+/// samples as `LICENSE-FOLD.txt` and `LICENSE-flat-folder.txt`.
+const REVIEWED_UPSTREAM_LICENSE: &str = "MIT";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManifestRightsProfile {
@@ -18,10 +32,18 @@ pub enum ManifestRightsProfile {
 }
 
 impl ManifestRightsProfile {
-    fn approved_content_license(self) -> &'static str {
+    /// Every SPDX id this profile accepts for sample content.
+    ///
+    /// The user-authorized LicenseRef covers samples the ORIGAMI3 user made and
+    /// authorized. `MIT` covers upstream samples whose own licence permits
+    /// redistribution; the licence text ships next to those samples so the
+    /// required notice travels with them.
+    fn approved_content_licenses(self) -> &'static [&'static str] {
         match self {
-            Self::UserAuthorizedSamples20260826 => USER_AUTHORIZED_LICENSE,
-            Self::SyntheticTestOnly => SYNTHETIC_TEST_LICENSE,
+            Self::UserAuthorizedSamples20260826 => {
+                &[USER_AUTHORIZED_LICENSE, REVIEWED_UPSTREAM_LICENSE]
+            }
+            Self::SyntheticTestOnly => &[SYNTHETIC_TEST_LICENSE],
         }
     }
 }
@@ -30,7 +52,7 @@ impl ManifestRightsProfile {
 pub struct ManifestSummary {
     pub entries: usize,
     pub official: usize,
-    pub oripa: usize,
+    pub flat_folder: usize,
     pub oriedita: usize,
     pub origami_simulator: usize,
     pub expected_supported: usize,
@@ -101,7 +123,7 @@ pub fn validate_manifest(
     let mut summary = ManifestSummary {
         entries: entries.len(),
         official: 0,
-        oripa: 0,
+        flat_folder: 0,
         oriedita: 0,
         origami_simulator: 0,
         expected_supported: 0,
@@ -127,7 +149,7 @@ pub fn validate_manifest(
         let source = required_text(entry, "source", &context)?;
         match source {
             "official" => summary.official += 1,
-            "oripa" => summary.oripa += 1,
+            "flat_folder" => summary.flat_folder += 1,
             "oriedita" => summary.oriedita += 1,
             "origami_simulator" => summary.origami_simulator += 1,
             source => {
@@ -212,12 +234,12 @@ pub fn validate_manifest(
             frozen_at_utc,
             &format!("{context}.classification.frozen_at_utc"),
         )?;
-        let policy_frozen_at_utc = manifest["classification_policy"]["frozen_at_utc"]
-            .as_str()
-            .expect("classification policy was validated before entries");
-        if frozen_at_utc != policy_frozen_at_utc {
+        // An entry may only carry a freeze time that the policy itself declares.
+        // Tranches arrive on different days, so the policy lists every freeze it
+        // authorises; an entry still cannot invent a timestamp of its own.
+        if !declared_freeze_times(manifest).iter().any(|declared| declared == frozen_at_utc) {
             return Err(ManifestError::new(format!(
-                "{context}.classification.frozen_at_utc must match classification_policy.frozen_at_utc"
+                "{context}.classification.frozen_at_utc must match classification_policy.frozen_at_utc or one of classification_policy.additional_frozen_at_utc"
             )));
         }
         required_resolved_text(
@@ -339,6 +361,29 @@ fn validate_manifest_path(corpus_root: &Path, manifest_path: &Path) -> Result<()
     Ok(())
 }
 
+/// Every freeze time the policy authorises, in declaration order. The policy is
+/// validated before entries, so both fields are already known to be UTC strings.
+fn declared_freeze_times(manifest: &Map<String, Value>) -> Vec<String> {
+    let policy = &manifest["classification_policy"];
+    let mut times = vec![
+        policy["frozen_at_utc"]
+            .as_str()
+            .expect("classification policy was validated before entries")
+            .to_string(),
+    ];
+    if let Some(additional) = policy.get("additional_frozen_at_utc").and_then(Value::as_array) {
+        for value in additional {
+            times.push(
+                value
+                    .as_str()
+                    .expect("classification policy was validated before entries")
+                    .to_string(),
+            );
+        }
+    }
+    times
+}
+
 fn validate_classification_policy(manifest: &Map<String, Value>) -> Result<(), ManifestError> {
     let context = "classification_policy";
     let policy = manifest
@@ -355,6 +400,30 @@ fn validate_classification_policy(manifest: &Map<String, Value>) -> Result<(), M
     }
     let frozen_at_utc = required_resolved_text(policy, "frozen_at_utc", context)?;
     require_utc(frozen_at_utc, "classification_policy.frozen_at_utc")?;
+    // Later tranches are frozen on later days. Each additional freeze must be
+    // declared here, as an explicit UTC instant, before any entry may use it.
+    if let Some(additional) = policy.get("additional_frozen_at_utc") {
+        let additional = additional.as_array().ok_or_else(|| {
+            ManifestError::new("classification_policy.additional_frozen_at_utc must be an array")
+        })?;
+        let mut seen = HashSet::with_capacity(additional.len() + 1);
+        seen.insert(frozen_at_utc);
+        for (index, value) in additional.iter().enumerate() {
+            let context = format!("classification_policy.additional_frozen_at_utc[{index}]");
+            let value = value
+                .as_str()
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| {
+                    ManifestError::new(format!("{context} must be a non-empty string"))
+                })?;
+            require_utc(value, &context)?;
+            if !seen.insert(value) {
+                return Err(ManifestError::new(format!(
+                    "{context} repeats a freeze time already declared"
+                )));
+            }
+        }
+    }
     required_resolved_text(policy, "independent_auditor", context)?;
     match policy
         .get("auditor_had_runtime_results")
@@ -397,8 +466,8 @@ fn validate_classification_policy(manifest: &Map<String, Value>) -> Result<(), M
 fn reserved_source_for_id(id: &str) -> Option<&'static str> {
     if reserved_index(id, "official-", OFFICIAL_QUOTA) {
         Some("official")
-    } else if reserved_index(id, "oripa-", ORIPA_QUOTA) {
-        Some("oripa")
+    } else if reserved_index(id, "flat-folder-", FLAT_FOLDER_QUOTA) {
+        Some("flat_folder")
     } else if reserved_index(id, "oriedita-", ORIEDITA_QUOTA) {
         Some("oriedita")
     } else if reserved_index(id, "origami-simulator-", ORIGAMI_SIMULATOR_QUOTA) {
@@ -411,7 +480,7 @@ fn reserved_source_for_id(id: &str) -> Option<&'static str> {
 fn source_directory(source: &str) -> &'static str {
     match source {
         "official" => "external/official",
-        "oripa" => "external/oripa",
+        "flat_folder" => "external/flat_folder",
         "oriedita" => "external/oriedita",
         "origami_simulator" => "external/origami_simulator",
         _ => unreachable!("source is checked before its directory is requested"),
@@ -504,10 +573,11 @@ fn validate_rights(
     }
     let content_spdx =
         required_resolved_text(rights, "content_spdx", &format!("{context}.rights"))?;
-    let approved_content_license = rights_profile.approved_content_license();
-    if content_spdx != approved_content_license {
+    let approved = rights_profile.approved_content_licenses();
+    if !approved.contains(&content_spdx) {
         return Err(ManifestError::new(format!(
-            "{context}.rights.content_spdx must use the approved LicenseRef {approved_content_license}"
+            "{context}.rights.content_spdx must use the approved LicenseRef or a reviewed upstream licence, one of: {}",
+            approved.join(", ")
         )));
     }
     match rights
@@ -771,165 +841,4 @@ fn read_regular_file_without_symlinks(
             current.display()
         ))
     })
-}
-
-/// Dependency-free SHA-256 for test corpus byte verification.
-pub fn sha256_hex(input: &[u8]) -> String {
-    let digest = sha256(input);
-    let mut output = String::with_capacity(64);
-    for byte in digest {
-        write!(&mut output, "{byte:02x}").expect("writing to String cannot fail");
-    }
-    output
-}
-
-fn sha256(input: &[u8]) -> [u8; 32] {
-    const INITIAL: [u32; 8] = [
-        0x6a09_e667,
-        0xbb67_ae85,
-        0x3c6e_f372,
-        0xa54f_f53a,
-        0x510e_527f,
-        0x9b05_688c,
-        0x1f83_d9ab,
-        0x5be0_cd19,
-    ];
-    const ROUND: [u32; 64] = [
-        0x428a_2f98,
-        0x7137_4491,
-        0xb5c0_fbcf,
-        0xe9b5_dba5,
-        0x3956_c25b,
-        0x59f1_11f1,
-        0x923f_82a4,
-        0xab1c_5ed5,
-        0xd807_aa98,
-        0x1283_5b01,
-        0x2431_85be,
-        0x550c_7dc3,
-        0x72be_5d74,
-        0x80de_b1fe,
-        0x9bdc_06a7,
-        0xc19b_f174,
-        0xe49b_69c1,
-        0xefbe_4786,
-        0x0fc1_9dc6,
-        0x240c_a1cc,
-        0x2de9_2c6f,
-        0x4a74_84aa,
-        0x5cb0_a9dc,
-        0x76f9_88da,
-        0x983e_5152,
-        0xa831_c66d,
-        0xb003_27c8,
-        0xbf59_7fc7,
-        0xc6e0_0bf3,
-        0xd5a7_9147,
-        0x06ca_6351,
-        0x1429_2967,
-        0x27b7_0a85,
-        0x2e1b_2138,
-        0x4d2c_6dfc,
-        0x5338_0d13,
-        0x650a_7354,
-        0x766a_0abb,
-        0x81c2_c92e,
-        0x9272_2c85,
-        0xa2bf_e8a1,
-        0xa81a_664b,
-        0xc24b_8b70,
-        0xc76c_51a3,
-        0xd192_e819,
-        0xd699_0624,
-        0xf40e_3585,
-        0x106a_a070,
-        0x19a4_c116,
-        0x1e37_6c08,
-        0x2748_774c,
-        0x34b0_bcb5,
-        0x391c_0cb3,
-        0x4ed8_aa4a,
-        0x5b9c_ca4f,
-        0x682e_6ff3,
-        0x748f_82ee,
-        0x78a5_636f,
-        0x84c8_7814,
-        0x8cc7_0208,
-        0x90be_fffa,
-        0xa450_6ceb,
-        0xbef9_a3f7,
-        0xc671_78f2,
-    ];
-
-    let bit_length = (input.len() as u64).wrapping_mul(8);
-    let mut padded = Vec::with_capacity(input.len() + 72);
-    padded.extend_from_slice(input);
-    padded.push(0x80);
-    while padded.len() % 64 != 56 {
-        padded.push(0);
-    }
-    padded.extend_from_slice(&bit_length.to_be_bytes());
-
-    let mut state = INITIAL;
-    for chunk in padded.chunks_exact(64) {
-        let mut words = [0_u32; 64];
-        for (index, word) in words[..16].iter_mut().enumerate() {
-            let offset = index * 4;
-            *word = u32::from_be_bytes([
-                chunk[offset],
-                chunk[offset + 1],
-                chunk[offset + 2],
-                chunk[offset + 3],
-            ]);
-        }
-        for index in 16..64 {
-            let sigma0 = words[index - 15].rotate_right(7)
-                ^ words[index - 15].rotate_right(18)
-                ^ (words[index - 15] >> 3);
-            let sigma1 = words[index - 2].rotate_right(17)
-                ^ words[index - 2].rotate_right(19)
-                ^ (words[index - 2] >> 10);
-            words[index] = words[index - 16]
-                .wrapping_add(sigma0)
-                .wrapping_add(words[index - 7])
-                .wrapping_add(sigma1);
-        }
-
-        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = state;
-        for index in 0..64 {
-            let choose = (e & f) ^ ((!e) & g);
-            let majority = (a & b) ^ (a & c) ^ (b & c);
-            let big_sigma0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
-            let big_sigma1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
-            let temporary1 = h
-                .wrapping_add(big_sigma1)
-                .wrapping_add(choose)
-                .wrapping_add(ROUND[index])
-                .wrapping_add(words[index]);
-            let temporary2 = big_sigma0.wrapping_add(majority);
-            h = g;
-            g = f;
-            f = e;
-            e = d.wrapping_add(temporary1);
-            d = c;
-            c = b;
-            b = a;
-            a = temporary1.wrapping_add(temporary2);
-        }
-
-        state[0] = state[0].wrapping_add(a);
-        state[1] = state[1].wrapping_add(b);
-        state[2] = state[2].wrapping_add(c);
-        state[3] = state[3].wrapping_add(d);
-        state[4] = state[4].wrapping_add(e);
-        state[5] = state[5].wrapping_add(f);
-        state[6] = state[6].wrapping_add(g);
-        state[7] = state[7].wrapping_add(h);
-    }
-
-    let mut digest = [0_u8; 32];
-    for (index, word) in state.iter().enumerate() {
-        digest[index * 4..index * 4 + 4].copy_from_slice(&word.to_be_bytes());
-    }
-    digest
 }

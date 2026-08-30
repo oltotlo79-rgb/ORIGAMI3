@@ -3,8 +3,8 @@
   "status": "reservations_with_partial_acceptance",
   "purpose": "Keep all 30 source slots reserved while accepted tranches report their actual frozen expectations and observed results without a post-result class quota.",
   "source_quotas": {
-    "official": 6,
-    "oripa": 8,
+    "official": 2,
+    "flat_folder": 12,
     "oriedita": 8,
     "origami_simulator": 8
   },
@@ -20,64 +20,64 @@
       "reserved_path": "external/official/official-02.fold"
     },
     {
-      "id": "official-03",
-      "source": "official",
-      "reserved_path": "external/official/official-03.fold"
+      "id": "flat-folder-01",
+      "source": "flat_folder",
+      "reserved_path": "external/flat_folder/flat-folder-01.fold"
     },
     {
-      "id": "official-04",
-      "source": "official",
-      "reserved_path": "external/official/official-04.fold"
+      "id": "flat-folder-02",
+      "source": "flat_folder",
+      "reserved_path": "external/flat_folder/flat-folder-02.fold"
     },
     {
-      "id": "official-05",
-      "source": "official",
-      "reserved_path": "external/official/official-05.fold"
+      "id": "flat-folder-03",
+      "source": "flat_folder",
+      "reserved_path": "external/flat_folder/flat-folder-03.fold"
     },
     {
-      "id": "official-06",
-      "source": "official",
-      "reserved_path": "external/official/official-06.fold"
+      "id": "flat-folder-04",
+      "source": "flat_folder",
+      "reserved_path": "external/flat_folder/flat-folder-04.fold"
     },
     {
-      "id": "oripa-01",
-      "source": "oripa",
-      "reserved_path": "external/oripa/oripa-01.fold"
+      "id": "flat-folder-05",
+      "source": "flat_folder",
+      "reserved_path": "external/flat_folder/flat-folder-05.fold"
     },
     {
-      "id": "oripa-02",
-      "source": "oripa",
-      "reserved_path": "external/oripa/oripa-02.fold"
+      "id": "flat-folder-06",
+      "source": "flat_folder",
+      "reserved_path": "external/flat_folder/flat-folder-06.fold"
     },
     {
-      "id": "oripa-03",
-      "source": "oripa",
-      "reserved_path": "external/oripa/oripa-03.fold"
+      "id": "flat-folder-07",
+      "source": "flat_folder",
+      "reserved_path": "external/flat_folder/flat-folder-07.fold"
     },
     {
-      "id": "oripa-04",
-      "source": "oripa",
-      "reserved_path": "external/oripa/oripa-04.fold"
+      "id": "flat-folder-08",
+      "source": "flat_folder",
+      "reserved_path": "external/flat_folder/flat-folder-08.fold"
     },
     {
-      "id": "oripa-05",
-      "source": "oripa",
-      "reserved_path": "external/oripa/oripa-05.fold"
+      "id": "flat-folder-09",
+      "source": "flat_folder",
+      "reserved_path": "external/flat_folder/flat-folder-09.fold"
     },
     {
-      "id": "oripa-06",
-      "source": "oripa",
-      "reserved_path": "external/oripa/oripa-06.fold"
+      "id": "flat-folder-10",
+      "source": "flat_folder",
+      "reserved_path": "external/flat_folder/flat-folder-10.fold"
     },
     {
-      "id": "oripa-07",
-      "source": "oripa",
-      "reserved_path": "external/oripa/oripa-07.fold"
+      "id": "flat-folder-11",
+      "source": "flat_folder",
+      "reserved_path": "external/flat_folder/flat-folder-11.fold"
     },
     {
-      "id": "oripa-08",
-      "source": "oripa",
-      "reserved_path": "external/oripa/oripa-08.fold"
+      "id": "flat-folder-12",
+      "source": "flat_folder",
+      "reserved_path": "external/flat_folder/flat-folder-12.fold"
     },
     {
       "id": "oriedita-01",
@@ -159,5 +159,7 @@
       "source": "origami_simulator",
       "reserved_path": "external/origami_simulator/origami-simulator-08.fold"
     }
-  ]
+  ],
+  "fourth_source_change_2026_08_29": "User decision 2026-08-29: the fourth source is origamimagiro/flat-folder instead of ORIPA. The ORIPA distribution ships no .fold files (only .opx), so filling the quota would require running ORIPA itself. The reserved count of 8 is unchanged.",
+  "source_allocation_change_2026_08_29": "Reserved counts follow the measured supply: edemaine/FOLD publishes only two samples at file_spec 1.1 or later (the other three are FOLD 1.0, a version the limited profile does not read), so official holds 2 and origamimagiro/flat-folder holds 12. Four sources and 30 slots in total are unchanged."
 }

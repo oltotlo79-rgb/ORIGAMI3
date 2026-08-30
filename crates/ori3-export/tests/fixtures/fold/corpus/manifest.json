@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "tranche_status": "partial_16_of_reserved_30",
+  "tranche_status": "complete_30_of_reserved_30",
   "classification_policy": {
     "frozen": true,
     "frozen_at_utc": "2026-08-25T22:30:00Z",
@@ -11,11 +11,832 @@
       "FOLD 1.1 is within the approved compatibility target for this tranche.",
       "A 2D rectangular single-sheet graph using B/M/V with structurally consistent topology is expected supported; metadata extensions are warnings.",
       "A frame declaring 3D or vertices with three coordinates is expected unsupported; F assignments remain warnings and do not decide the class.",
-      "Prior diagnostic outcomes do not automatically rewrite the frozen expected classification. The coordinator-authorized oriedita-08 correction is recorded explicitly, is supported by raw-geometry evidence, and changes no product threshold."
+      "Prior diagnostic outcomes do not automatically rewrite the frozen expected classification. The coordinator-authorized oriedita-08 correction is recorded explicitly, is supported by raw-geometry evidence, and changes no product threshold.",
+      "Tranche 2 (2026-08-29; ids official-01..02 and flat-folder-01..07) was classified by the FOLD worker from the raw JSON and these rules. The acceptance diagnostic had already run, so this tranche is not blind in the sense tranche 1 was; each entry's basis names the raw fact that decides it, so the classification can be re-derived without any runtime result."
+    ],
+    "additional_frozen_at_utc": [
+      "2026-08-29T10:45:00Z"
     ]
   },
   "count_policy": "Report actual expected and observed counts; do not force the former 20 supported / 10 unsupported target after results are known.",
   "entries": [
+    {
+      "id": "official-01",
+      "source": "official",
+      "generator": "FOLD specification examples (edemaine/FOLD)",
+      "generator_version": "repository main branch as fetched 2026-08-29",
+      "source_uri": "https://raw.githubusercontent.com/edemaine/FOLD/main/examples/diagonal-cp.fold",
+      "source_file_last_write_utc": "2026-08-29T10:25:03Z",
+      "path": "external/official/official-01.fold",
+      "byte_length": 703,
+      "sha256": "415ec153c98f54b86239325e64be6784772f13d72f74b408cfc3b48a40a714f9",
+      "classification": {
+        "expected": "supported",
+        "frozen_at_utc": "2026-08-29T10:45:00Z",
+        "basis": "blind_2d_static_rule: the frame declares creasePattern; every vertices_coords row has two components; assignments are B/M/V; the cpedit:page, vertices_edges and faces_edges extensions are warnings only.",
+        "unsupported_paths": []
+      },
+      "observed": {
+        "result": "supported",
+        "observed_at_utc": "2026-08-29T10:47:00Z",
+        "method": "Acceptance diagnostic on 2026-08-29: the raw bytes were read unchanged and passed to parse_fold_1_2, validate_fold_1_2, and fold_to_document through crates/ori3-export/tests/fold_corpus_diagnostic.rs. Only code and JSON path are kept.",
+        "excluded_from_frozen_classification": true,
+        "warnings": [
+          {
+            "code": "unsupported_field",
+            "path": "$.faces_edges"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_creator"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_title"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.vertices_edges"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$[\"cpedit:page\"]"
+          }
+        ],
+        "errors": []
+      },
+      "rights": {
+        "content_spdx": "MIT",
+        "content_evidence": "Upstream MIT licence, copied verbatim to external/official/LICENSE-FOLD.txt and reviewed on 2026-08-29.",
+        "rights_holder": "Erik Demaine, Jason Ku, Robert Lang (Copyright (c) 2016)",
+        "authorization_date": "2026-08-29",
+        "authorization_scope": "Repository inclusion, test execution, and redistribution with ORIGAMI3 source copies under the upstream MIT licence.",
+        "generator_license_used_for_content": false,
+        "reviewer": "ORIGAMI3 fold external-corpus intake (tranche 2)",
+        "reviewed_on": "2026-08-29",
+        "redistribution_allowed": true
+      }
+    },
+    {
+      "id": "official-02",
+      "source": "official",
+      "generator": "FOLD specification examples (edemaine/FOLD)",
+      "generator_version": "repository main branch as fetched 2026-08-29",
+      "source_uri": "https://raw.githubusercontent.com/edemaine/FOLD/main/examples/diagonal-folded.fold",
+      "source_file_last_write_utc": "2026-08-29T10:25:04Z",
+      "path": "external/official/official-02.fold",
+      "byte_length": 1009,
+      "sha256": "3b85e267b49dfef4053eee0c7c72649b0a9330b51207c3855a7b11979a1e93bb",
+      "classification": {
+        "expected": "unsupported",
+        "frozen_at_utc": "2026-08-29T10:45:00Z",
+        "basis": "blind_folded_form_rule: the frame declares foldedForm and carries faces_flatFoldTransform and vertices_flatUnfoldCoords, so vertices_coords holds the folded state instead of a flat sheet. The two folded faces coincide, so edges_vertices repeats hinges and edges_assignment cannot describe a flat crease pattern. The frozen path is the index-free edges_assignment.",
+        "unsupported_paths": [
+          "$.edges_assignment"
+        ]
+      },
+      "observed": {
+        "result": "unsupported",
+        "observed_at_utc": "2026-08-29T10:47:00Z",
+        "method": "Acceptance diagnostic on 2026-08-29: the raw bytes were read unchanged and passed to parse_fold_1_2, validate_fold_1_2, and fold_to_document through crates/ori3-export/tests/fold_corpus_diagnostic.rs. Only code and JSON path are kept.",
+        "excluded_from_frozen_classification": true,
+        "warnings": [
+          {
+            "code": "unsupported_field",
+            "path": "$.edges_faces"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.faces_edges"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.faces_flatFoldOrientation"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.faces_flatFoldTransform"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_creator"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_title"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.vertices_edges"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.vertices_flatUnfoldCoords"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$[\"cpedit:page\"]"
+          }
+        ],
+        "errors": [
+          {
+            "code": "unsupported_geometry",
+            "path": "$.edges_assignment"
+          },
+          {
+            "code": "invalid_topology",
+            "path": "$.edges_vertices[2]"
+          },
+          {
+            "code": "invalid_topology",
+            "path": "$.edges_vertices[3]"
+          }
+        ]
+      },
+      "rights": {
+        "content_spdx": "MIT",
+        "content_evidence": "Upstream MIT licence, copied verbatim to external/official/LICENSE-FOLD.txt and reviewed on 2026-08-29.",
+        "rights_holder": "Erik Demaine, Jason Ku, Robert Lang (Copyright (c) 2016)",
+        "authorization_date": "2026-08-29",
+        "authorization_scope": "Repository inclusion, test execution, and redistribution with ORIGAMI3 source copies under the upstream MIT licence.",
+        "generator_license_used_for_content": false,
+        "reviewer": "ORIGAMI3 fold external-corpus intake (tranche 2)",
+        "reviewed_on": "2026-08-29",
+        "redistribution_allowed": true
+      }
+    },
+    {
+      "id": "flat-folder-01",
+      "source": "flat_folder",
+      "generator": "flat-folder (origamimagiro/flat-folder)",
+      "generator_version": "repository main branch as fetched 2026-08-29",
+      "source_uri": "https://raw.githubusercontent.com/origamimagiro/flat-folder/main/examples/grids/000_brown_2x2_A1.fold",
+      "source_file_last_write_utc": "2026-08-29T10:31:53Z",
+      "path": "external/flat_folder/flat-folder-01.fold",
+      "byte_length": 588,
+      "sha256": "b57287e8be798670c4ee743340a0bf02a3050ea5f0bf3a3e80bca48f1be72993",
+      "classification": {
+        "expected": "supported",
+        "frozen_at_utc": "2026-08-29T10:45:00Z",
+        "basis": "blind_2d_static_rule: every vertices_coords row has two components; assignments are B/M/V and any U stays a warning that does not decide the class; the declared topology is structurally consistent; metadata and editor extensions are warnings only.",
+        "unsupported_paths": []
+      },
+      "observed": {
+        "result": "supported",
+        "observed_at_utc": "2026-08-29T10:47:00Z",
+        "method": "Acceptance diagnostic on 2026-08-29: the raw bytes were read unchanged and passed to parse_fold_1_2, validate_fold_1_2, and fold_to_document through crates/ori3-export/tests/fold_corpus_diagnostic.rs. Only code and JSON path are kept.",
+        "excluded_from_frozen_classification": true,
+        "warnings": [
+          {
+            "code": "unsupported_field",
+            "path": "$.file_author"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_creator"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_title"
+          },
+          {
+            "code": "unsupported_geometry",
+            "path": "$.vertices_coords"
+          }
+        ],
+        "errors": []
+      },
+      "rights": {
+        "content_spdx": "MIT",
+        "content_evidence": "Upstream MIT licence, copied verbatim to external/flat_folder/LICENSE-flat-folder.txt and reviewed on 2026-08-29.",
+        "rights_holder": "Jason S. Ku / origamimagiro (Copyright (c) 2022)",
+        "authorization_date": "2026-08-29",
+        "authorization_scope": "Repository inclusion, test execution, and redistribution with ORIGAMI3 source copies under the upstream MIT licence.",
+        "generator_license_used_for_content": false,
+        "reviewer": "ORIGAMI3 fold external-corpus intake (tranche 2)",
+        "reviewed_on": "2026-08-29",
+        "redistribution_allowed": true
+      }
+    },
+    {
+      "id": "flat-folder-02",
+      "source": "flat_folder",
+      "generator": "flat-folder (origamimagiro/flat-folder)",
+      "generator_version": "repository main branch as fetched 2026-08-29",
+      "source_uri": "https://raw.githubusercontent.com/origamimagiro/flat-folder/main/examples/grids/024_brown_4x4_A2.fold",
+      "source_file_last_write_utc": "2026-08-29T10:31:54Z",
+      "path": "external/flat_folder/flat-folder-02.fold",
+      "byte_length": 2136,
+      "sha256": "fa27e69d5dee73a70bd569f08950e309110851f6f1fde87c3b6f32a45fdca8c8",
+      "classification": {
+        "expected": "supported",
+        "frozen_at_utc": "2026-08-29T10:45:00Z",
+        "basis": "blind_2d_static_rule: every vertices_coords row has two components; assignments are B/M/V and any U stays a warning that does not decide the class; the declared topology is structurally consistent; metadata and editor extensions are warnings only.",
+        "unsupported_paths": []
+      },
+      "observed": {
+        "result": "supported",
+        "observed_at_utc": "2026-08-29T10:47:00Z",
+        "method": "Acceptance diagnostic on 2026-08-29: the raw bytes were read unchanged and passed to parse_fold_1_2, validate_fold_1_2, and fold_to_document through crates/ori3-export/tests/fold_corpus_diagnostic.rs. Only code and JSON path are kept.",
+        "excluded_from_frozen_classification": true,
+        "warnings": [
+          {
+            "code": "unsupported_field",
+            "path": "$.file_author"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_creator"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_title"
+          },
+          {
+            "code": "unsupported_geometry",
+            "path": "$.vertices_coords"
+          }
+        ],
+        "errors": []
+      },
+      "rights": {
+        "content_spdx": "MIT",
+        "content_evidence": "Upstream MIT licence, copied verbatim to external/flat_folder/LICENSE-flat-folder.txt and reviewed on 2026-08-29.",
+        "rights_holder": "Jason S. Ku / origamimagiro (Copyright (c) 2022)",
+        "authorization_date": "2026-08-29",
+        "authorization_scope": "Repository inclusion, test execution, and redistribution with ORIGAMI3 source copies under the upstream MIT licence.",
+        "generator_license_used_for_content": false,
+        "reviewer": "ORIGAMI3 fold external-corpus intake (tranche 2)",
+        "reviewed_on": "2026-08-29",
+        "redistribution_allowed": true
+      }
+    },
+    {
+      "id": "flat-folder-03",
+      "source": "flat_folder",
+      "generator": "flat-folder (origamimagiro/flat-folder)",
+      "generator_version": "repository main branch as fetched 2026-08-29",
+      "source_uri": "https://raw.githubusercontent.com/origamimagiro/flat-folder/main/examples/grids/003_brown_3x3_A2.fold",
+      "source_file_last_write_utc": "2026-08-29T10:31:55Z",
+      "path": "external/flat_folder/flat-folder-03.fold",
+      "byte_length": 2248,
+      "sha256": "9fad6291f90df327ae3d60baa1a56379754e05f8d0381b3a67237fc2ab059e62",
+      "classification": {
+        "expected": "supported",
+        "frozen_at_utc": "2026-08-29T10:45:00Z",
+        "basis": "blind_2d_static_rule: every vertices_coords row has two components; assignments are B/M/V and any U stays a warning that does not decide the class; the declared topology is structurally consistent; metadata and editor extensions are warnings only.",
+        "unsupported_paths": []
+      },
+      "observed": {
+        "result": "supported",
+        "observed_at_utc": "2026-08-29T10:47:00Z",
+        "method": "Acceptance diagnostic on 2026-08-29: the raw bytes were read unchanged and passed to parse_fold_1_2, validate_fold_1_2, and fold_to_document through crates/ori3-export/tests/fold_corpus_diagnostic.rs. Only code and JSON path are kept.",
+        "excluded_from_frozen_classification": true,
+        "warnings": [
+          {
+            "code": "unsupported_field",
+            "path": "$.file_author"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_creator"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_title"
+          },
+          {
+            "code": "unsupported_geometry",
+            "path": "$.vertices_coords"
+          }
+        ],
+        "errors": []
+      },
+      "rights": {
+        "content_spdx": "MIT",
+        "content_evidence": "Upstream MIT licence, copied verbatim to external/flat_folder/LICENSE-flat-folder.txt and reviewed on 2026-08-29.",
+        "rights_holder": "Jason S. Ku / origamimagiro (Copyright (c) 2022)",
+        "authorization_date": "2026-08-29",
+        "authorization_scope": "Repository inclusion, test execution, and redistribution with ORIGAMI3 source copies under the upstream MIT licence.",
+        "generator_license_used_for_content": false,
+        "reviewer": "ORIGAMI3 fold external-corpus intake (tranche 2)",
+        "reviewed_on": "2026-08-29",
+        "redistribution_allowed": true
+      }
+    },
+    {
+      "id": "flat-folder-04",
+      "source": "flat_folder",
+      "generator": "flat-folder (origamimagiro/flat-folder)",
+      "generator_version": "repository main branch as fetched 2026-08-29",
+      "source_uri": "https://raw.githubusercontent.com/origamimagiro/flat-folder/main/examples/unsatisfiable/008_tachioripa_not_foldable.fold",
+      "source_file_last_write_utc": "2026-08-29T10:31:57Z",
+      "path": "external/flat_folder/flat-folder-04.fold",
+      "byte_length": 1295,
+      "sha256": "8559235d46e1e105ebb84a099398aa10d3e358703eb8b526eb09a094b7ea021f",
+      "classification": {
+        "expected": "supported",
+        "frozen_at_utc": "2026-08-29T10:45:00Z",
+        "basis": "blind_2d_static_rule: every vertices_coords row has two components; assignments are B/M/V and any U stays a warning that does not decide the class; the declared topology is structurally consistent; metadata and editor extensions are warnings only.",
+        "unsupported_paths": []
+      },
+      "observed": {
+        "result": "supported",
+        "observed_at_utc": "2026-08-29T10:47:00Z",
+        "method": "Acceptance diagnostic on 2026-08-29: the raw bytes were read unchanged and passed to parse_fold_1_2, validate_fold_1_2, and fold_to_document through crates/ori3-export/tests/fold_corpus_diagnostic.rs. Only code and JSON path are kept.",
+        "excluded_from_frozen_classification": true,
+        "warnings": [
+          {
+            "code": "unsupported_field",
+            "path": "$.file_author"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_creator"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_title"
+          },
+          {
+            "code": "unsupported_geometry",
+            "path": "$.vertices_coords"
+          }
+        ],
+        "errors": []
+      },
+      "rights": {
+        "content_spdx": "MIT",
+        "content_evidence": "Upstream MIT licence, copied verbatim to external/flat_folder/LICENSE-flat-folder.txt and reviewed on 2026-08-29.",
+        "rights_holder": "Jason S. Ku / origamimagiro (Copyright (c) 2022)",
+        "authorization_date": "2026-08-29",
+        "authorization_scope": "Repository inclusion, test execution, and redistribution with ORIGAMI3 source copies under the upstream MIT licence.",
+        "generator_license_used_for_content": false,
+        "reviewer": "ORIGAMI3 fold external-corpus intake (tranche 2)",
+        "reviewed_on": "2026-08-29",
+        "redistribution_allowed": true
+      }
+    },
+    {
+      "id": "flat-folder-05",
+      "source": "flat_folder",
+      "generator": "flat-folder (origamimagiro/flat-folder)",
+      "generator_version": "repository main branch as fetched 2026-08-29",
+      "source_uri": "https://raw.githubusercontent.com/origamimagiro/flat-folder/main/examples/unsatisfiable/001_ku_Bad_Twist.fold",
+      "source_file_last_write_utc": "2026-08-29T10:31:58Z",
+      "path": "external/flat_folder/flat-folder-05.fold",
+      "byte_length": 2419,
+      "sha256": "fb786fd82004e294b6c5437039d16d31a29424e85f4a965b1aab476595d373bd",
+      "classification": {
+        "expected": "supported",
+        "frozen_at_utc": "2026-08-29T10:45:00Z",
+        "basis": "blind_2d_static_rule: every vertices_coords row has two components; assignments are B/M/V and any U stays a warning that does not decide the class; the declared topology is structurally consistent; metadata and editor extensions are warnings only.",
+        "unsupported_paths": []
+      },
+      "observed": {
+        "result": "supported",
+        "observed_at_utc": "2026-08-29T10:47:00Z",
+        "method": "Acceptance diagnostic on 2026-08-29: the raw bytes were read unchanged and passed to parse_fold_1_2, validate_fold_1_2, and fold_to_document through crates/ori3-export/tests/fold_corpus_diagnostic.rs. Only code and JSON path are kept.",
+        "excluded_from_frozen_classification": true,
+        "warnings": [
+          {
+            "code": "unsupported_field",
+            "path": "$.file_author"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_creator"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_title"
+          },
+          {
+            "code": "unsupported_geometry",
+            "path": "$.vertices_coords"
+          }
+        ],
+        "errors": []
+      },
+      "rights": {
+        "content_spdx": "MIT",
+        "content_evidence": "Upstream MIT licence, copied verbatim to external/flat_folder/LICENSE-flat-folder.txt and reviewed on 2026-08-29.",
+        "rights_holder": "Jason S. Ku / origamimagiro (Copyright (c) 2022)",
+        "authorization_date": "2026-08-29",
+        "authorization_scope": "Repository inclusion, test execution, and redistribution with ORIGAMI3 source copies under the upstream MIT licence.",
+        "generator_license_used_for_content": false,
+        "reviewer": "ORIGAMI3 fold external-corpus intake (tranche 2)",
+        "reviewed_on": "2026-08-29",
+        "redistribution_allowed": true
+      }
+    },
+    {
+      "id": "flat-folder-06",
+      "source": "flat_folder",
+      "generator": "flat-folder (origamimagiro/flat-folder)",
+      "generator_version": "repository main branch as fetched 2026-08-29",
+      "source_uri": "https://raw.githubusercontent.com/origamimagiro/flat-folder/main/examples/unsatisfiable/007_tanakaoripa_fish_base_%28old%29.fold",
+      "source_file_last_write_utc": "2026-08-29T10:31:59Z",
+      "path": "external/flat_folder/flat-folder-06.fold",
+      "byte_length": 22354,
+      "sha256": "4139f669abefe87764a384154404e47549ece27ed668d838490140d5937bd3e7",
+      "classification": {
+        "expected": "supported",
+        "frozen_at_utc": "2026-08-29T10:45:00Z",
+        "basis": "blind_2d_static_rule: every vertices_coords row has two components; assignments are B/M/V and any U stays a warning that does not decide the class; the declared topology is structurally consistent; metadata and editor extensions are warnings only.",
+        "unsupported_paths": []
+      },
+      "observed": {
+        "result": "supported",
+        "observed_at_utc": "2026-08-29T10:47:00Z",
+        "method": "Acceptance diagnostic on 2026-08-29: the raw bytes were read unchanged and passed to parse_fold_1_2, validate_fold_1_2, and fold_to_document through crates/ori3-export/tests/fold_corpus_diagnostic.rs. Only code and JSON path are kept.",
+        "excluded_from_frozen_classification": true,
+        "warnings": [
+          {
+            "code": "unsupported_field",
+            "path": "$.file_author"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_creator"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_title"
+          },
+          {
+            "code": "unsupported_geometry",
+            "path": "$.vertices_coords"
+          }
+        ],
+        "errors": []
+      },
+      "rights": {
+        "content_spdx": "MIT",
+        "content_evidence": "Upstream MIT licence, copied verbatim to external/flat_folder/LICENSE-flat-folder.txt and reviewed on 2026-08-29.",
+        "rights_holder": "Jason S. Ku / origamimagiro (Copyright (c) 2022)",
+        "authorization_date": "2026-08-29",
+        "authorization_scope": "Repository inclusion, test execution, and redistribution with ORIGAMI3 source copies under the upstream MIT licence.",
+        "generator_license_used_for_content": false,
+        "reviewer": "ORIGAMI3 fold external-corpus intake (tranche 2)",
+        "reviewed_on": "2026-08-29",
+        "redistribution_allowed": true
+      }
+    },
+    {
+      "id": "flat-folder-07",
+      "source": "flat_folder",
+      "generator": "flat-folder (origamimagiro/flat-folder)",
+      "generator_version": "repository main branch as fetched 2026-08-29",
+      "source_uri": "https://raw.githubusercontent.com/origamimagiro/flat-folder/main/examples/instagram/318_boxhard_Unassigned_Split.fold",
+      "source_file_last_write_utc": "2026-08-29T10:32:00Z",
+      "path": "external/flat_folder/flat-folder-07.fold",
+      "byte_length": 1647,
+      "sha256": "a583ae757917a3a04d7ba7a87209d15931ec0aef8fa4902ad0fb9b52f5c4ee05",
+      "classification": {
+        "expected": "supported",
+        "frozen_at_utc": "2026-08-29T10:45:00Z",
+        "basis": "blind_2d_static_rule: every vertices_coords row has two components; assignments are B/M/V and any U stays a warning that does not decide the class; the declared topology is structurally consistent; metadata and editor extensions are warnings only.",
+        "unsupported_paths": []
+      },
+      "observed": {
+        "result": "supported",
+        "observed_at_utc": "2026-08-29T10:47:00Z",
+        "method": "Acceptance diagnostic on 2026-08-29: the raw bytes were read unchanged and passed to parse_fold_1_2, validate_fold_1_2, and fold_to_document through crates/ori3-export/tests/fold_corpus_diagnostic.rs. Only code and JSON path are kept.",
+        "excluded_from_frozen_classification": true,
+        "warnings": [
+          {
+            "code": "assignment_downgraded_to_aux",
+            "path": "$.edges_assignment[0]"
+          },
+          {
+            "code": "assignment_downgraded_to_aux",
+            "path": "$.edges_assignment[10]"
+          },
+          {
+            "code": "assignment_downgraded_to_aux",
+            "path": "$.edges_assignment[11]"
+          },
+          {
+            "code": "assignment_downgraded_to_aux",
+            "path": "$.edges_assignment[13]"
+          },
+          {
+            "code": "assignment_downgraded_to_aux",
+            "path": "$.edges_assignment[14]"
+          },
+          {
+            "code": "assignment_downgraded_to_aux",
+            "path": "$.edges_assignment[1]"
+          },
+          {
+            "code": "assignment_downgraded_to_aux",
+            "path": "$.edges_assignment[2]"
+          },
+          {
+            "code": "assignment_downgraded_to_aux",
+            "path": "$.edges_assignment[3]"
+          },
+          {
+            "code": "assignment_downgraded_to_aux",
+            "path": "$.edges_assignment[4]"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_author"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_creator"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_title"
+          },
+          {
+            "code": "unsupported_geometry",
+            "path": "$.vertices_coords"
+          }
+        ],
+        "errors": []
+      },
+      "rights": {
+        "content_spdx": "MIT",
+        "content_evidence": "Upstream MIT licence, copied verbatim to external/flat_folder/LICENSE-flat-folder.txt and reviewed on 2026-08-29.",
+        "rights_holder": "Jason S. Ku / origamimagiro (Copyright (c) 2022)",
+        "authorization_date": "2026-08-29",
+        "authorization_scope": "Repository inclusion, test execution, and redistribution with ORIGAMI3 source copies under the upstream MIT licence.",
+        "generator_license_used_for_content": false,
+        "reviewer": "ORIGAMI3 fold external-corpus intake (tranche 2)",
+        "reviewed_on": "2026-08-29",
+        "redistribution_allowed": true
+      }
+    },
+    {
+      "id": "flat-folder-08",
+      "source": "flat_folder",
+      "generator": "flat-folder (origamimagiro/flat-folder)",
+      "generator_version": "repository main branch as fetched 2026-08-29",
+      "source_uri": "https://raw.githubusercontent.com/origamimagiro/flat-folder/main/examples/grids/001_brown_2x2_C1.fold",
+      "source_file_last_write_utc": "2026-08-29T10:56:02Z",
+      "path": "external/flat_folder/flat-folder-08.fold",
+      "byte_length": 3380,
+      "sha256": "2d4ad5f04e6ccf11c6ae4afe83c57e1e129a8973e40e4752254a7eec406e7a23",
+      "classification": {
+        "expected": "supported",
+        "frozen_at_utc": "2026-08-29T10:45:00Z",
+        "basis": "blind_2d_static_rule: every vertices_coords row has two components; assignments are B/M/V and any U stays a warning that does not decide the class; the declared topology is structurally consistent; metadata and editor extensions are warnings only.",
+        "unsupported_paths": []
+      },
+      "observed": {
+        "result": "supported",
+        "observed_at_utc": "2026-08-29T11:00:00Z",
+        "method": "Acceptance diagnostic on 2026-08-29: the raw bytes were read unchanged and passed to parse_fold_1_2, validate_fold_1_2, and fold_to_document through crates/ori3-export/tests/fold_corpus_diagnostic.rs. Only code and JSON path are kept.",
+        "excluded_from_frozen_classification": true,
+        "warnings": [
+          {
+            "code": "unsupported_field",
+            "path": "$.file_author"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_creator"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_title"
+          },
+          {
+            "code": "unsupported_geometry",
+            "path": "$.vertices_coords"
+          }
+        ],
+        "errors": []
+      },
+      "rights": {
+        "content_spdx": "MIT",
+        "content_evidence": "Upstream MIT licence, copied verbatim to external/flat_folder/LICENSE-flat-folder.txt and reviewed on 2026-08-29.",
+        "rights_holder": "Jason S. Ku / origamimagiro (Copyright (c) 2022)",
+        "authorization_date": "2026-08-29",
+        "authorization_scope": "Repository inclusion, test execution, and redistribution with ORIGAMI3 source copies under the upstream MIT licence.",
+        "generator_license_used_for_content": false,
+        "reviewer": "ORIGAMI3 fold external-corpus intake (tranche 2)",
+        "reviewed_on": "2026-08-29",
+        "redistribution_allowed": true
+      }
+    },
+    {
+      "id": "flat-folder-09",
+      "source": "flat_folder",
+      "generator": "flat-folder (origamimagiro/flat-folder)",
+      "generator_version": "repository main branch as fetched 2026-08-29",
+      "source_uri": "https://raw.githubusercontent.com/origamimagiro/flat-folder/main/examples/grids/002_brown_2x2_D1.fold",
+      "source_file_last_write_utc": "2026-08-29T10:56:03Z",
+      "path": "external/flat_folder/flat-folder-09.fold",
+      "byte_length": 4469,
+      "sha256": "0fb153f3c6d3534bc25cd01250e798cc3b935cc22994a6060874274ab076d465",
+      "classification": {
+        "expected": "supported",
+        "frozen_at_utc": "2026-08-29T10:45:00Z",
+        "basis": "blind_2d_static_rule: every vertices_coords row has two components; assignments are B/M/V and any U stays a warning that does not decide the class; the declared topology is structurally consistent; metadata and editor extensions are warnings only.",
+        "unsupported_paths": []
+      },
+      "observed": {
+        "result": "supported",
+        "observed_at_utc": "2026-08-29T11:00:00Z",
+        "method": "Acceptance diagnostic on 2026-08-29: the raw bytes were read unchanged and passed to parse_fold_1_2, validate_fold_1_2, and fold_to_document through crates/ori3-export/tests/fold_corpus_diagnostic.rs. Only code and JSON path are kept.",
+        "excluded_from_frozen_classification": true,
+        "warnings": [
+          {
+            "code": "unsupported_field",
+            "path": "$.file_author"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_creator"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_title"
+          },
+          {
+            "code": "unsupported_geometry",
+            "path": "$.vertices_coords"
+          }
+        ],
+        "errors": []
+      },
+      "rights": {
+        "content_spdx": "MIT",
+        "content_evidence": "Upstream MIT licence, copied verbatim to external/flat_folder/LICENSE-flat-folder.txt and reviewed on 2026-08-29.",
+        "rights_holder": "Jason S. Ku / origamimagiro (Copyright (c) 2022)",
+        "authorization_date": "2026-08-29",
+        "authorization_scope": "Repository inclusion, test execution, and redistribution with ORIGAMI3 source copies under the upstream MIT licence.",
+        "generator_license_used_for_content": false,
+        "reviewer": "ORIGAMI3 fold external-corpus intake (tranche 2)",
+        "reviewed_on": "2026-08-29",
+        "redistribution_allowed": true
+      }
+    },
+    {
+      "id": "flat-folder-10",
+      "source": "flat_folder",
+      "generator": "flat-folder (origamimagiro/flat-folder)",
+      "generator_version": "repository main branch as fetched 2026-08-29",
+      "source_uri": "https://raw.githubusercontent.com/origamimagiro/flat-folder/main/examples/grids/004_brown_3x3_A3.fold",
+      "source_file_last_write_utc": "2026-08-29T10:56:04Z",
+      "path": "external/flat_folder/flat-folder-10.fold",
+      "byte_length": 5493,
+      "sha256": "ddaf31622a68635670bf5a95479bdfb376857f2cd049e172c17f0198aa7b166d",
+      "classification": {
+        "expected": "supported",
+        "frozen_at_utc": "2026-08-29T10:45:00Z",
+        "basis": "blind_2d_static_rule: every vertices_coords row has two components; assignments are B/M/V and any U stays a warning that does not decide the class; the declared topology is structurally consistent; metadata and editor extensions are warnings only.",
+        "unsupported_paths": []
+      },
+      "observed": {
+        "result": "supported",
+        "observed_at_utc": "2026-08-29T11:00:00Z",
+        "method": "Acceptance diagnostic on 2026-08-29: the raw bytes were read unchanged and passed to parse_fold_1_2, validate_fold_1_2, and fold_to_document through crates/ori3-export/tests/fold_corpus_diagnostic.rs. Only code and JSON path are kept.",
+        "excluded_from_frozen_classification": true,
+        "warnings": [
+          {
+            "code": "unsupported_field",
+            "path": "$.file_author"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_creator"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_title"
+          },
+          {
+            "code": "unsupported_geometry",
+            "path": "$.vertices_coords"
+          }
+        ],
+        "errors": []
+      },
+      "rights": {
+        "content_spdx": "MIT",
+        "content_evidence": "Upstream MIT licence, copied verbatim to external/flat_folder/LICENSE-flat-folder.txt and reviewed on 2026-08-29.",
+        "rights_holder": "Jason S. Ku / origamimagiro (Copyright (c) 2022)",
+        "authorization_date": "2026-08-29",
+        "authorization_scope": "Repository inclusion, test execution, and redistribution with ORIGAMI3 source copies under the upstream MIT licence.",
+        "generator_license_used_for_content": false,
+        "reviewer": "ORIGAMI3 fold external-corpus intake (tranche 2)",
+        "reviewed_on": "2026-08-29",
+        "redistribution_allowed": true
+      }
+    },
+    {
+      "id": "flat-folder-11",
+      "source": "flat_folder",
+      "generator": "flat-folder (origamimagiro/flat-folder)",
+      "generator_version": "repository main branch as fetched 2026-08-29",
+      "source_uri": "https://raw.githubusercontent.com/origamimagiro/flat-folder/main/examples/grids/005_brown_3x3_A4.fold",
+      "source_file_last_write_utc": "2026-08-29T10:56:21Z",
+      "path": "external/flat_folder/flat-folder-11.fold",
+      "byte_length": 3416,
+      "sha256": "21a56826dae7f746fa8bd2e9f59d6ae46bfa2128911b593fbc836addc5caf308",
+      "classification": {
+        "expected": "supported",
+        "frozen_at_utc": "2026-08-29T10:45:00Z",
+        "basis": "blind_2d_static_rule: every vertices_coords row has two components; assignments are B/M/V and any U stays a warning that does not decide the class; the declared topology is structurally consistent; metadata and editor extensions are warnings only.",
+        "unsupported_paths": []
+      },
+      "observed": {
+        "result": "supported",
+        "observed_at_utc": "2026-08-29T11:00:00Z",
+        "method": "Acceptance diagnostic on 2026-08-29: the raw bytes were read unchanged and passed to parse_fold_1_2, validate_fold_1_2, and fold_to_document through crates/ori3-export/tests/fold_corpus_diagnostic.rs. Only code and JSON path are kept.",
+        "excluded_from_frozen_classification": true,
+        "warnings": [
+          {
+            "code": "unsupported_field",
+            "path": "$.file_author"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_creator"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_title"
+          },
+          {
+            "code": "unsupported_geometry",
+            "path": "$.vertices_coords"
+          }
+        ],
+        "errors": []
+      },
+      "rights": {
+        "content_spdx": "MIT",
+        "content_evidence": "Upstream MIT licence, copied verbatim to external/flat_folder/LICENSE-flat-folder.txt and reviewed on 2026-08-29.",
+        "rights_holder": "Jason S. Ku / origamimagiro (Copyright (c) 2022)",
+        "authorization_date": "2026-08-29",
+        "authorization_scope": "Repository inclusion, test execution, and redistribution with ORIGAMI3 source copies under the upstream MIT licence.",
+        "generator_license_used_for_content": false,
+        "reviewer": "ORIGAMI3 fold external-corpus intake (tranche 2)",
+        "reviewed_on": "2026-08-29",
+        "redistribution_allowed": true
+      }
+    },
+    {
+      "id": "flat-folder-12",
+      "source": "flat_folder",
+      "generator": "flat-folder (origamimagiro/flat-folder)",
+      "generator_version": "repository main branch as fetched 2026-08-29",
+      "source_uri": "https://raw.githubusercontent.com/origamimagiro/flat-folder/main/examples/grids/006_brown_3x3_A5.fold",
+      "source_file_last_write_utc": "2026-08-29T10:56:22Z",
+      "path": "external/flat_folder/flat-folder-12.fold",
+      "byte_length": 12029,
+      "sha256": "2d024c4406f0d0c0d8106ea6c039af109779ece48acdbfb080c65897b774b3e9",
+      "classification": {
+        "expected": "supported",
+        "frozen_at_utc": "2026-08-29T10:45:00Z",
+        "basis": "blind_2d_static_rule: every vertices_coords row has two components; assignments are B/M/V and any U stays a warning that does not decide the class; the declared topology is structurally consistent; metadata and editor extensions are warnings only.",
+        "unsupported_paths": []
+      },
+      "observed": {
+        "result": "supported",
+        "observed_at_utc": "2026-08-29T11:00:00Z",
+        "method": "Acceptance diagnostic on 2026-08-29: the raw bytes were read unchanged and passed to parse_fold_1_2, validate_fold_1_2, and fold_to_document through crates/ori3-export/tests/fold_corpus_diagnostic.rs. Only code and JSON path are kept.",
+        "excluded_from_frozen_classification": true,
+        "warnings": [
+          {
+            "code": "unsupported_field",
+            "path": "$.file_author"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_creator"
+          },
+          {
+            "code": "unsupported_field",
+            "path": "$.file_title"
+          },
+          {
+            "code": "unsupported_geometry",
+            "path": "$.vertices_coords"
+          }
+        ],
+        "errors": []
+      },
+      "rights": {
+        "content_spdx": "MIT",
+        "content_evidence": "Upstream MIT licence, copied verbatim to external/flat_folder/LICENSE-flat-folder.txt and reviewed on 2026-08-29.",
+        "rights_holder": "Jason S. Ku / origamimagiro (Copyright (c) 2022)",
+        "authorization_date": "2026-08-29",
+        "authorization_scope": "Repository inclusion, test execution, and redistribution with ORIGAMI3 source copies under the upstream MIT licence.",
+        "generator_license_used_for_content": false,
+        "reviewer": "ORIGAMI3 fold external-corpus intake (tranche 2)",
+        "reviewed_on": "2026-08-29",
+        "redistribution_allowed": true
+      }
+    },
     {
       "id": "oriedita-01",
       "source": "oriedita",

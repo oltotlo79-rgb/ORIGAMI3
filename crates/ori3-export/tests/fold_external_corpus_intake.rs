@@ -12,14 +12,26 @@ use std::sync::atomic::{AtomicU64, Ordering};
 const PLAN: &str = include_str!("fixtures/fold/external-corpus-plan.json");
 const TRACKED_MANIFEST: &str = include_str!("fixtures/fold/corpus/manifest.json");
 const SOURCE_QUOTAS: [(&str, usize); 4] = [
-    ("official", 6),
-    ("oripa", 8),
+    ("official", 2),
+    ("flat_folder", 12),
     ("oriedita", 8),
     ("origami_simulator", 8),
 ];
 const ACCEPTED_TRANCHE: [(&str, usize); 2] = [("oriedita", 8), ("origami_simulator", 8)];
 
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
+/// 予約idの接頭辞。directory名は`_`、id・file名は`-`で区切る既存の書き方を
+/// 1か所に集める。片方だけ直して予約表がずれることを防ぐためである。
+fn id_prefix(source: &str) -> &'static str {
+    match source {
+        "official" => "official",
+        "flat_folder" => "flat-folder",
+        "oriedita" => "oriedita",
+        "origami_simulator" => "origami-simulator",
+        source => panic!("予約外のsource: {source}"),
+    }
+}
 
 fn tracked_corpus_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fold/corpus")
@@ -75,12 +87,7 @@ fn synthetic_corpus() -> SyntheticCorpus {
         fs::create_dir_all(&source_dir).expect("temp source directoryを作れる");
         for source_index in 1..=quota {
             global_index += 1;
-            let id_prefix = if source == "origami_simulator" {
-                "origami-simulator"
-            } else {
-                source
-            };
-            let id = format!("{id_prefix}-{source_index:02}");
+            let id = format!("{}-{source_index:02}", id_prefix(source));
             let relative_path = format!("external/{source}/{id}.fold");
             let raw = format!("{{\"file_spec\":1.2,\"synthetic_fixture\":{global_index}}}\n")
                 .into_bytes();
@@ -268,8 +275,8 @@ fn tracked_plan_reserves_exact_quotas_without_preclassifying_entries() {
 
         let reserved_source = if id.starts_with("official-") {
             "official"
-        } else if id.starts_with("oripa-") {
-            "oripa"
+        } else if id.starts_with("flat-folder-") {
+            "flat_folder"
         } else if id.starts_with("oriedita-") {
             "oriedita"
         } else if id.starts_with("origami-simulator-") {
@@ -303,13 +310,9 @@ fn tracked_plan_reserves_exact_quotas_without_preclassifying_entries() {
     let expected_reservations = SOURCE_QUOTAS
         .into_iter()
         .flat_map(|(source, quota)| {
-            let id_prefix = if source == "origami_simulator" {
-                "origami-simulator"
-            } else {
-                source
-            };
+            let prefix = id_prefix(source);
             (1..=quota).map(move |index| {
-                let id = format!("{id_prefix}-{index:02}");
+                let id = format!("{prefix}-{index:02}");
                 let path = format!("external/{source}/{id}.fold");
                 (id, (source.to_string(), path))
             })
@@ -322,26 +325,31 @@ fn tracked_plan_reserves_exact_quotas_without_preclassifying_entries() {
 }
 
 #[test]
-fn tracked_sixteen_sample_tranche_reports_frozen_and_observed_counts_separately() {
+fn tracked_thirty_sample_corpus_reports_frozen_and_observed_counts_separately() {
     let root = tracked_corpus_root();
     let summary = validate_manifest(
         &root,
         &root.join("manifest.json"),
         ManifestRightsProfile::UserAuthorizedSamples20260826,
     )
-    .expect("追跡16件のprovenance・rights・SHA-256・byte数は完全");
+    .expect("追跡30件のprovenance・rights・SHA-256・byte数は完全");
+    // 出所ごとの枠は実際の供給量に合わせてある。公式`edemaine/FOLD`が公開する
+    // 見本のうちFOLD 1.1以上は2件だけで、残る3件はFOLD 1.0である。限定profileが
+    // 読めるのは1.1と1.2だけなので、1.0を混ぜると`$.file_spec`だけを理由にした
+    // 拒否になり、`rejection_path_matches_frozen_reason`が対応範囲外の理由として
+    // 認めない。水増しではなく、公式2件・flat-folder 12件が実測の分布である。
     assert_eq!(
         summary,
         ManifestSummary {
-            entries: 16,
-            official: 0,
-            oripa: 0,
+            entries: 30,
+            official: 2,
+            flat_folder: 12,
             oriedita: 8,
             origami_simulator: 8,
-            expected_supported: 7,
-            expected_unsupported: 9,
-            observed_supported: 7,
-            observed_unsupported: 9,
+            expected_supported: 20,
+            expected_unsupported: 10,
+            observed_supported: 20,
+            observed_unsupported: 10,
         }
     );
 
@@ -573,7 +581,7 @@ fn complete_temp_manifest_is_accepted_without_rewriting_inputs() {
         ManifestSummary {
             entries: 16,
             official: 0,
-            oripa: 0,
+            flat_folder: 0,
             oriedita: 8,
             origami_simulator: 8,
             expected_supported: 8,
@@ -626,12 +634,12 @@ fn paths_must_be_relative_parent_free_regular_files() {
 #[test]
 fn entries_must_keep_the_reserved_id_source_and_fold_path() {
     let mut id = synthetic_corpus();
-    id.entries_mut()[0]["id"] = json!("official-07");
+    id.entries_mut()[0]["id"] = json!("official-03");
     id.write_manifest();
     assert_rejected_with(&id, "reserved slot");
 
     let mut source = synthetic_corpus();
-    source.entries_mut()[0]["source"] = json!("oripa");
+    source.entries_mut()[0]["source"] = json!("flat_folder");
     source.write_manifest();
     assert_rejected_with(&source, "reserved source");
 

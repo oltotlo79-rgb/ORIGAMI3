@@ -1,5 +1,7 @@
 //! ori3-model: 作品データの型定義(紙・展開図・折り手順)と許容誤差定数。
 
+pub mod clock;
+
 pub const SCHEMA_VERSION: u32 = 1;
 /// 幾何計算の許容誤差。座標は「紙の長辺 = 1.0」に正規化した系で扱い、
 /// mm値は入出力時のみ使用する。
@@ -176,6 +178,35 @@ pub struct FoldPoseDriver {
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FoldPoseInput {
     pub drivers: Vec<FoldPoseDriver>,
+}
+
+/// 新しい折り線の直下で、同時に折れるひだを数えた結果の状態。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FoldTargetStatus {
+    Ready,
+    Limited,
+    CreaseOnlyTop,
+    Varies,
+    Unavailable,
+}
+
+/// 一番上の紙が完全に折り重なっていないときの処置。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FoldTargetTopAction {
+    CreaseOnlyTop,
+}
+
+/// 書類と折り手順だけから再計算した、保存を伴わないひだ照会結果。
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FoldTargetInfo {
+    pub status: FoldTargetStatus,
+    /// Face数ではなく、上から連続して同時に折れるひだの枚数。
+    pub available_count: Option<usize>,
+    pub reason: Option<String>,
+    pub top_action: Option<FoldTargetTopAction>,
 }
 
 /// 畳み平面上の半平面。`inside_point` がある側を操作対象にする。
@@ -520,6 +551,9 @@ pub enum SeqOp {
         keep_side_point: [f64; 2],
         /// 折る対象の層。None = 折り線の可動側に掛かる全ての層
         target_layers: Option<Vec<FaceId>>,
+        /// 上から同時に折るひだの枚数。Face IDは送らず、Rustが書類から再計算する。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_pleat_count: Option<usize>,
         direction: FoldDirection,
         /// 合わせ折りで選んだ点・線。説明文生成用で、折り計算には影響しない。
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -533,6 +567,26 @@ pub enum SeqOp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pose_before: Option<FoldPoseInput>,
     },
+    /// 非平坦な形のいちばん上の紙へ、立体を動かさず折り目だけを付ける。
+    ///
+    /// `material_line` と `material_keep_side_point` は展開図（材料）座標であり、
+    /// 畳み平面座標を受け取る [`SeqOp::FoldThrough`] とは座標の意味が異なる。
+    CreaseOnlyTop {
+        /// この操作の直前までの手順数。
+        up_to: usize,
+        /// 展開図（材料）座標の折り線。2点を通る無限直線として扱う。
+        material_line: [[f64; 2]; 2],
+        /// 展開図（材料）座標で、動かさず残す側を示す紙内の点。
+        material_keep_side_point: [f64; 2],
+        /// 折り目の山谷。折り角を0度にしても説明上の向きは失わない。
+        direction: FoldDirection,
+        /// この折りの直前に、書類から再現する利用者指定の非平坦な形。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pose_before: Option<FoldPoseInput>,
+        /// 合わせ折りで選んだ点・線。説明用だけに保存し、計算には使わない。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        alignment: Option<FoldAlignment>,
+    },
     /// [`SeqOp::FoldThrough`] を変更せずに調べ、巻き込み用の追加折り目を提案する。
     ///
     /// コマンドの戻り値だけに提案を載せ、展開図・手順・undo履歴は変更しない。
@@ -541,8 +595,30 @@ pub enum SeqOp {
         line: [[f64; 2]; 2],
         keep_side_point: [f64; 2],
         target_layers: Option<Vec<FaceId>>,
+        /// 確定時と同じ、上から同時に折るひだの枚数。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_pleat_count: Option<usize>,
         direction: FoldDirection,
         /// 確定時と同じ直前形状を、書類から再現して非破壊で調べるための指定。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pose_before: Option<FoldPoseInput>,
+    },
+    /// 新しい折り線の直下で同時に折れるひだを、作品を変更せずに数える。
+    PreviewFoldTargets {
+        up_to: usize,
+        line: [[f64; 2]; 2],
+        keep_side_point: [f64; 2],
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pose_before: Option<FoldPoseInput>,
+    },
+    /// 材料座標の新しい折り線について、作品を変更せず折り対象を調べる。
+    ///
+    /// 3D表示から材料座標へ引き戻した入力専用で、既存の
+    /// [`SeqOp::PreviewFoldTargets`] の座標の意味は変更しない。
+    PreviewFoldTargetsOnMaterial {
+        up_to: usize,
+        material_line: [[f64; 2]; 2],
+        material_keep_side_point: [f64; 2],
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pose_before: Option<FoldPoseInput>,
     },
@@ -623,6 +699,8 @@ enum SeqOpDeserialize {
         line: [[f64; 2]; 2],
         keep_side_point: [f64; 2],
         target_layers: Option<Vec<FaceId>>,
+        #[serde(default)]
+        target_pleat_count: Option<usize>,
         direction: FoldDirection,
         #[serde(default)]
         alignment: Option<FoldAlignment>,
@@ -631,12 +709,38 @@ enum SeqOpDeserialize {
         #[serde(default)]
         pose_before: Option<FoldPoseInput>,
     },
+    CreaseOnlyTop {
+        up_to: usize,
+        material_line: [[f64; 2]; 2],
+        material_keep_side_point: [f64; 2],
+        direction: FoldDirection,
+        #[serde(default)]
+        pose_before: Option<FoldPoseInput>,
+        #[serde(default)]
+        alignment: Option<FoldAlignment>,
+    },
     PreviewFoldThrough {
         up_to: usize,
         line: [[f64; 2]; 2],
         keep_side_point: [f64; 2],
         target_layers: Option<Vec<FaceId>>,
+        #[serde(default)]
+        target_pleat_count: Option<usize>,
         direction: FoldDirection,
+        #[serde(default)]
+        pose_before: Option<FoldPoseInput>,
+    },
+    PreviewFoldTargets {
+        up_to: usize,
+        line: [[f64; 2]; 2],
+        keep_side_point: [f64; 2],
+        #[serde(default)]
+        pose_before: Option<FoldPoseInput>,
+    },
+    PreviewFoldTargetsOnMaterial {
+        up_to: usize,
+        material_line: [[f64; 2]; 2],
+        material_keep_side_point: [f64; 2],
         #[serde(default)]
         pose_before: Option<FoldPoseInput>,
     },
@@ -676,6 +780,7 @@ impl From<SeqOpDeserialize> for SeqOp {
                 line,
                 keep_side_point,
                 target_layers,
+                target_pleat_count,
                 direction,
                 alignment,
                 accept_additional_crease,
@@ -685,16 +790,33 @@ impl From<SeqOpDeserialize> for SeqOp {
                 line,
                 keep_side_point,
                 target_layers,
+                target_pleat_count,
                 direction,
                 alignment,
                 accept_additional_crease,
                 pose_before,
+            },
+            SeqOpDeserialize::CreaseOnlyTop {
+                up_to,
+                material_line,
+                material_keep_side_point,
+                direction,
+                pose_before,
+                alignment,
+            } => Self::CreaseOnlyTop {
+                up_to,
+                material_line,
+                material_keep_side_point,
+                direction,
+                pose_before,
+                alignment,
             },
             SeqOpDeserialize::PreviewFoldThrough {
                 up_to,
                 line,
                 keep_side_point,
                 target_layers,
+                target_pleat_count,
                 direction,
                 pose_before,
             } => Self::PreviewFoldThrough {
@@ -702,7 +824,30 @@ impl From<SeqOpDeserialize> for SeqOp {
                 line,
                 keep_side_point,
                 target_layers,
+                target_pleat_count,
                 direction,
+                pose_before,
+            },
+            SeqOpDeserialize::PreviewFoldTargets {
+                up_to,
+                line,
+                keep_side_point,
+                pose_before,
+            } => Self::PreviewFoldTargets {
+                up_to,
+                line,
+                keep_side_point,
+                pose_before,
+            },
+            SeqOpDeserialize::PreviewFoldTargetsOnMaterial {
+                up_to,
+                material_line,
+                material_keep_side_point,
+                pose_before,
+            } => Self::PreviewFoldTargetsOnMaterial {
+                up_to,
+                material_line,
+                material_keep_side_point,
                 pose_before,
             },
             SeqOpDeserialize::FlatMotion { up_to, parts, kind } => {

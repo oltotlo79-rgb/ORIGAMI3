@@ -8,32 +8,96 @@ use ori3_export::fold::{
     write_fold_1_2,
 };
 use ori3_layers::{FlatState, replay};
-use ori3_model::{Document, EdgeKind, FinishSoftSettings, TechniqueKind};
+use ori3_model::{AlignmentTarget, Document, EdgeKind, FinishSoftSettings, TechniqueKind};
 use ori3_rigid::{max_seam_gap, self_intersection_pairs};
 
 const LINEAR: &str = include_str!("fixtures/fold/linear-steps.fold");
 const FLAT_ORDERS: &str = include_str!("fixtures/fold/flat-face-orders.fold");
 const FU: &str = include_str!("fixtures/fold/fu-assignments.fold");
-const ORIEDITA_1_1: &str = include_str!("fixtures/fold/corpus/external/oriedita/oriedita-01.fold");
+// 2026-08-26実測（座標比較数/角度比較数）:
+// 01=0e0/0e0 (18/1), 02=0e0/0e0 (14/1), 03=0e0/0e0 (28/4),
+// 04=0e0/0e0 (36/4), 05=0e0/0e0 (34/3), 06=0e0/0e0 (34/4),
+// 07=0e0/0e0 (52/8)。合計216/25値を比較した。実測0を厳密一致の境目にせず、
+// model・変換・canonical比較が共有する1e-9を、座標・角度とも余裕ある境目にする。
+const DOCUMENT_ROUND_TRIP_COORDINATE_EPS: f64 = 1e-9;
+const DOCUMENT_ROUND_TRIP_ANGLE_EPS: f64 = 1e-9;
+const ORIEDITA_SUPPORTED_1_1: [(&str, &str); 7] = [
+    (
+        "oriedita-01",
+        include_str!("fixtures/fold/corpus/external/oriedita/oriedita-01.fold"),
+    ),
+    (
+        "oriedita-02",
+        include_str!("fixtures/fold/corpus/external/oriedita/oriedita-02.fold"),
+    ),
+    (
+        "oriedita-03",
+        include_str!("fixtures/fold/corpus/external/oriedita/oriedita-03.fold"),
+    ),
+    (
+        "oriedita-04",
+        include_str!("fixtures/fold/corpus/external/oriedita/oriedita-04.fold"),
+    ),
+    (
+        "oriedita-05",
+        include_str!("fixtures/fold/corpus/external/oriedita/oriedita-05.fold"),
+    ),
+    (
+        "oriedita-06",
+        include_str!("fixtures/fold/corpus/external/oriedita/oriedita-06.fold"),
+    ),
+    (
+        "oriedita-07",
+        include_str!("fixtures/fold/corpus/external/oriedita/oriedita-07.fold"),
+    ),
+];
 
 #[test]
-fn imported_1_1_document_is_exported_as_exact_1_2() {
-    let legacy = parse_fold_1_2(ORIEDITA_1_1).expect("Orieditaの1.1 fixtureを読める");
-    assert_eq!(legacy.file_spec, 1.1);
+fn all_seven_imported_1_1_documents_round_trip_through_exact_1_2_json() {
+    for (id, source) in ORIEDITA_SUPPORTED_1_1 {
+        let legacy = parse_fold_1_2(source).unwrap_or_else(|error| panic!("{id}: {error}"));
+        assert_eq!(legacy.file_spec, 1.1, "{id}: 取込元は1.1");
 
-    let document = fold_to_document(&legacy)
-        .expect("1.1のlinear fixtureをDocumentへ変換できる")
-        .document;
-    let exported = document_to_fold(&document).expect("取込んだDocumentを書き出せる");
-    assert_eq!(exported.file.file_spec, 1.2, "書出し版は常に1.2へ固定する");
+        let first = fold_to_document(&legacy)
+            .unwrap_or_else(|error| panic!("{id}: 1.1をDocumentへ変換できる: {error}"))
+            .document;
+        let exported = document_to_fold(&first)
+            .unwrap_or_else(|error| panic!("{id}: 取込んだDocumentを書き出せる: {error}"));
+        assert!(
+            exported.warnings.is_empty(),
+            "{id}: 取込後のDocumentに書出し損失はない: {:?}",
+            exported.warnings
+        );
+        assert_eq!(exported.file.file_spec, 1.2, "{id}: 書出し版は常に1.2");
 
-    let json = write_fold_1_2(&exported.file).expect("1.2のFOLD JSONを書ける");
-    assert_eq!(
-        parse_fold_1_2(&json)
-            .expect("書いた1.2 JSONを読める")
-            .file_spec,
-        1.2
-    );
+        let json = write_fold_1_2(&exported.file)
+            .unwrap_or_else(|error| panic!("{id}: 1.2 JSONを書ける: {error}"));
+        let reparsed = parse_fold_1_2(&json)
+            .unwrap_or_else(|error| panic!("{id}: 書いた1.2 JSONを読める: {error}"));
+        assert_eq!(reparsed.file_spec, 1.2, "{id}: 再読込元は1.2");
+        let second = fold_to_document(&reparsed)
+            .unwrap_or_else(|error| panic!("{id}: 書いた1.2をDocumentへ戻せる: {error}"))
+            .document;
+
+        let drift = measure_document_round_trip_drift(&first, &second);
+        assert!(
+            drift.coordinate_comparisons > 0,
+            "{id}: 座標比較を1件以上行う"
+        );
+        assert!(drift.angle_comparisons > 0, "{id}: 角度比較を1件以上行う");
+        assert!(
+            drift.coordinate_max <= DOCUMENT_ROUND_TRIP_COORDINATE_EPS,
+            "{id}: coordinate drift={:e}, epsilon={:e}",
+            drift.coordinate_max,
+            DOCUMENT_ROUND_TRIP_COORDINATE_EPS
+        );
+        assert!(
+            drift.angle_max <= DOCUMENT_ROUND_TRIP_ANGLE_EPS,
+            "{id}: angle drift={:e}, epsilon={:e}",
+            drift.angle_max,
+            DOCUMENT_ROUND_TRIP_ANGLE_EPS
+        );
+    }
 }
 
 #[test]
@@ -352,6 +416,218 @@ fn import_linear_without_non_flat_orders() -> Document {
     fold_to_document(&file)
         .expect("partial-angle linear framesを取込める")
         .document
+}
+
+#[derive(Debug, Default)]
+struct DocumentRoundTripDrift {
+    coordinate_max: f64,
+    coordinate_comparisons: usize,
+    angle_max: f64,
+    angle_comparisons: usize,
+}
+
+fn measure_document_round_trip_drift(
+    before: &Document,
+    after: &Document,
+) -> DocumentRoundTripDrift {
+    let mut before = before.clone();
+    let mut after = after.clone();
+    let mut drift = DocumentRoundTripDrift::default();
+
+    measure_and_zero(
+        &mut before.paper.width_mm,
+        &mut after.paper.width_mm,
+        &mut drift.coordinate_max,
+        &mut drift.coordinate_comparisons,
+        "paper.width_mm",
+    );
+    measure_and_zero(
+        &mut before.paper.height_mm,
+        &mut after.paper.height_mm,
+        &mut drift.coordinate_max,
+        &mut drift.coordinate_comparisons,
+        "paper.height_mm",
+    );
+
+    assert_eq!(before.cp.vertices.len(), after.cp.vertices.len());
+    for (index, (before_vertex, after_vertex)) in before
+        .cp
+        .vertices
+        .iter_mut()
+        .zip(&mut after.cp.vertices)
+        .enumerate()
+    {
+        for component in 0..2 {
+            measure_and_zero(
+                &mut before_vertex.pos[component],
+                &mut after_vertex.pos[component],
+                &mut drift.coordinate_max,
+                &mut drift.coordinate_comparisons,
+                &format!("cp.vertices[{index}].pos[{component}]"),
+            );
+        }
+    }
+
+    assert_eq!(before.sequence.len(), after.sequence.len());
+    for (step_index, (before_step, after_step)) in before
+        .sequence
+        .iter_mut()
+        .zip(&mut after.sequence)
+        .enumerate()
+    {
+        assert_eq!(before_step.drivers.len(), after_step.drivers.len());
+        for (driver_index, (before_driver, after_driver)) in before_step
+            .drivers
+            .iter_mut()
+            .zip(&mut after_step.drivers)
+            .enumerate()
+        {
+            for component in 0..2 {
+                measure_and_zero(
+                    &mut before_driver.a[component],
+                    &mut after_driver.a[component],
+                    &mut drift.coordinate_max,
+                    &mut drift.coordinate_comparisons,
+                    &format!("sequence[{step_index}].drivers[{driver_index}].a[{component}]"),
+                );
+                measure_and_zero(
+                    &mut before_driver.b[component],
+                    &mut after_driver.b[component],
+                    &mut drift.coordinate_max,
+                    &mut drift.coordinate_comparisons,
+                    &format!("sequence[{step_index}].drivers[{driver_index}].b[{component}]"),
+                );
+            }
+            measure_and_zero(
+                &mut before_driver.target_angle_deg,
+                &mut after_driver.target_angle_deg,
+                &mut drift.angle_max,
+                &mut drift.angle_comparisons,
+                &format!("sequence[{step_index}].drivers[{driver_index}].target_angle_deg"),
+            );
+        }
+
+        match (
+            before_step.layer_order.as_mut(),
+            after_step.layer_order.as_mut(),
+        ) {
+            (None, None) => {}
+            (Some(before_points), Some(after_points)) => {
+                assert_eq!(before_points.len(), after_points.len());
+                for (point_index, (before_point, after_point)) in
+                    before_points.iter_mut().zip(after_points).enumerate()
+                {
+                    for component in 0..2 {
+                        measure_and_zero(
+                            &mut before_point[component],
+                            &mut after_point[component],
+                            &mut drift.coordinate_max,
+                            &mut drift.coordinate_comparisons,
+                            &format!(
+                                "sequence[{step_index}].layer_order[{point_index}][{component}]"
+                            ),
+                        );
+                    }
+                }
+            }
+            _ => panic!("sequence[{step_index}].layer_orderの有無を保持する"),
+        }
+
+        match (
+            before_step.alignment.as_mut(),
+            after_step.alignment.as_mut(),
+        ) {
+            (None, None) => {}
+            (Some(before_alignment), Some(after_alignment)) => {
+                assert_eq!(before_alignment.picks.len(), after_alignment.picks.len());
+                for (pick_index, (before_pick, after_pick)) in before_alignment
+                    .picks
+                    .iter_mut()
+                    .zip(&mut after_alignment.picks)
+                    .enumerate()
+                {
+                    match (before_pick, after_pick) {
+                        (
+                            AlignmentTarget::Point { p: before_point },
+                            AlignmentTarget::Point { p: after_point },
+                        ) => {
+                            measure_point(
+                                before_point,
+                                after_point,
+                                &mut drift,
+                                &format!("sequence[{step_index}].alignment.picks[{pick_index}].p"),
+                            );
+                        }
+                        (
+                            AlignmentTarget::Line {
+                                a: before_a,
+                                b: before_b,
+                            },
+                            AlignmentTarget::Line {
+                                a: after_a,
+                                b: after_b,
+                            },
+                        ) => {
+                            measure_point(
+                                before_a,
+                                after_a,
+                                &mut drift,
+                                &format!("sequence[{step_index}].alignment.picks[{pick_index}].a"),
+                            );
+                            measure_point(
+                                before_b,
+                                after_b,
+                                &mut drift,
+                                &format!("sequence[{step_index}].alignment.picks[{pick_index}].b"),
+                            );
+                        }
+                        _ => panic!(
+                            "sequence[{step_index}].alignment.picks[{pick_index}]の種類を保持する"
+                        ),
+                    }
+                }
+            }
+            _ => panic!("sequence[{step_index}].alignmentの有無を保持する"),
+        }
+    }
+
+    assert_eq!(
+        before, after,
+        "座標・角度以外のDocument全項目を完全一致で保持する"
+    );
+    drift
+}
+
+fn measure_point(
+    before: &mut [f64; 2],
+    after: &mut [f64; 2],
+    drift: &mut DocumentRoundTripDrift,
+    path: &str,
+) {
+    for component in 0..2 {
+        measure_and_zero(
+            &mut before[component],
+            &mut after[component],
+            &mut drift.coordinate_max,
+            &mut drift.coordinate_comparisons,
+            &format!("{path}[{component}]"),
+        );
+    }
+}
+
+fn measure_and_zero(
+    before: &mut f64,
+    after: &mut f64,
+    maximum: &mut f64,
+    comparisons: &mut usize,
+    path: &str,
+) {
+    assert!(before.is_finite(), "往復前の{path}は有限");
+    assert!(after.is_finite(), "往復後の{path}は有限");
+    *maximum = maximum.max((*before - *after).abs());
+    *comparisons += 1;
+    *before = 0.0;
+    *after = 0.0;
 }
 
 fn assert_document_cp_equivalent(before: &Document, after: &Document) {

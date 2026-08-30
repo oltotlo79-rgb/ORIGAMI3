@@ -714,6 +714,269 @@ fn old_fold_through_variants_without_pose_before_remain_readable() {
             restored.get("pose_before").is_none(),
             "指定が無い従来形式へ新しい欄を勝手に書き足さない"
         );
+        assert!(
+            restored.get("target_pleat_count").is_none(),
+            "ひだ枚数指定が無い従来形式へ新しい欄を勝手に書き足さない"
+        );
+    }
+}
+
+#[test]
+fn fold_through_variants_preserve_target_pleat_count_exactly() {
+    let cases = [
+        serde_json::json!({
+            "type": "FoldThrough",
+            "up_to": 12,
+            "line": [[0.25, 0.0], [0.25, 1.0]],
+            "keep_side_point": [0.1, 0.5],
+            "target_layers": null,
+            "target_pleat_count": 2,
+            "direction": "Down"
+        }),
+        serde_json::json!({
+            "type": "PreviewFoldThrough",
+            "up_to": 12,
+            "line": [[0.25, 0.0], [0.25, 1.0]],
+            "keep_side_point": [0.1, 0.5],
+            "target_layers": null,
+            "target_pleat_count": 2,
+            "direction": "Down"
+        }),
+    ];
+
+    for expected in cases {
+        let op: SeqOp =
+            serde_json::from_value(expected.clone()).expect("ひだ枚数付きの折る要求を読み込める");
+        let actual = serde_json::to_value(op).expect("ひだ枚数を欠落させず書き戻せる");
+
+        assert_eq!(actual, expected, "Face IDではないひだ枚数Kを保つ");
+    }
+}
+
+#[test]
+fn preview_fold_targets_json_shape_and_optional_pose_roundtrip() {
+    let pose_before = FoldPoseInput {
+        drivers: vec![
+            FoldPoseDriver {
+                edge_id: 4,
+                target_angle_deg: 180.0,
+            },
+            FoldPoseDriver {
+                edge_id: 9,
+                target_angle_deg: -180.0,
+            },
+        ],
+    };
+    let op = SeqOp::PreviewFoldTargets {
+        up_to: 12,
+        line: [[0.25, 0.0], [0.25, 1.0]],
+        keep_side_point: [0.1, 0.5],
+        pose_before: Some(pose_before.clone()),
+    };
+    let expected = serde_json::json!({
+        "type": "PreviewFoldTargets",
+        "up_to": 12,
+        "line": [[0.25, 0.0], [0.25, 1.0]],
+        "keep_side_point": [0.1, 0.5],
+        "pose_before": {
+            "drivers": [
+                { "edge_id": 4, "target_angle_deg": 180.0 },
+                { "edge_id": 9, "target_angle_deg": -180.0 }
+            ]
+        }
+    });
+
+    assert_eq!(
+        serde_json::to_value(&op).expect("ひだ照会要求を保存できる"),
+        expected,
+        "PreviewFoldTargetsのwire形を保つ"
+    );
+    let restored: SeqOp = serde_json::from_value(expected).expect("ひだ照会要求を読み直せる");
+    match restored {
+        SeqOp::PreviewFoldTargets {
+            up_to,
+            line,
+            keep_side_point,
+            pose_before: Some(restored_pose),
+        } => {
+            assert_eq!(up_to, 12);
+            assert_eq!(line, [[0.25, 0.0], [0.25, 1.0]]);
+            assert_eq!(keep_side_point, [0.1, 0.5]);
+            assert_eq!(restored_pose, pose_before);
+        }
+        other => panic!("unexpected variant: {other:?}"),
+    }
+
+    let old_shape = serde_json::json!({
+        "type": "PreviewFoldTargets",
+        "up_to": 0,
+        "line": [[0.0, 0.5], [1.0, 0.5]],
+        "keep_side_point": [0.5, 0.25]
+    });
+    let without_pose: SeqOp =
+        serde_json::from_value(old_shape.clone()).expect("pose_before無しのひだ照会も読める");
+    assert_eq!(
+        serde_json::to_value(without_pose).expect("省略形を書き戻せる"),
+        old_shape,
+        "任意のpose_beforeを勝手に追加しない"
+    );
+}
+
+fn stage3_material_pose_before() -> serde_json::Value {
+    serde_json::json!({
+        "drivers": [
+            { "edge_id": 4, "target_angle_deg": 180.0 },
+            { "edge_id": 9, "target_angle_deg": -180.0 },
+            { "edge_id": 12, "target_angle_deg": 90.0 },
+            { "edge_id": 15, "target_angle_deg": -90.0 },
+            { "edge_id": 18, "target_angle_deg": 0.0 }
+        ]
+    })
+}
+
+fn assert_stage3_material_wire_roundtrip(expected: serde_json::Value) {
+    let op: SeqOp = serde_json::from_value(expected.clone())
+        .expect("材料座標で指定した段階3の操作を読み込める");
+    let actual = serde_json::to_value(op).expect("材料座標で指定した段階3の操作を書き戻せる");
+
+    assert_eq!(
+        actual, expected,
+        "段階3の材料座標・利用者指定・説明用情報を欠落や追加なしで保つ"
+    );
+
+    let drivers = actual["pose_before"]["drivers"]
+        .as_array()
+        .expect("pose_beforeには利用者が指定した5本が残る");
+    let signed_angles = [180.0_f64, -180.0, 90.0, -90.0, 0.0];
+    assert_eq!(drivers.len(), signed_angles.len(), "明示0度を含む5本を保つ");
+    for (driver, expected_angle) in drivers.iter().zip(signed_angles) {
+        assert_eq!(
+            driver["target_angle_deg"]
+                .as_f64()
+                .expect("利用者指定の角度は数値")
+                .to_bits(),
+            expected_angle.to_bits(),
+            "+180度・-180度・+90度・-90度・明示0度を同一視しない"
+        );
+    }
+}
+
+#[test]
+fn stage3_crease_only_top_material_wire_roundtrips_exactly() {
+    let expected = serde_json::json!({
+        "type": "CreaseOnlyTop",
+        "up_to": 12,
+        "material_line": [[0.2, 0.1], [0.8, 0.9]],
+        "material_keep_side_point": [0.35, 0.45],
+        "direction": "Down",
+        "pose_before": stage3_material_pose_before(),
+        "alignment": {
+            "mode": "lineLine",
+            "picks": [
+                { "kind": "line", "a": [0.1, 0.2], "b": [0.9, 0.2] },
+                { "kind": "line", "a": [0.1, 0.8], "b": [0.9, 0.8] }
+            ]
+        }
+    });
+
+    assert_stage3_material_wire_roundtrip(expected);
+}
+
+#[test]
+fn stage3_preview_fold_targets_on_material_wire_roundtrips_exactly() {
+    let expected = serde_json::json!({
+        "type": "PreviewFoldTargetsOnMaterial",
+        "up_to": 12,
+        "material_line": [[0.2, 0.1], [0.8, 0.9]],
+        "material_keep_side_point": [0.35, 0.45],
+        "pose_before": stage3_material_pose_before()
+    });
+
+    assert_stage3_material_wire_roundtrip(expected);
+}
+
+#[test]
+fn fold_target_info_uses_camel_case_fields_and_snake_case_values() {
+    let cases = [
+        (
+            FoldTargetInfo {
+                status: FoldTargetStatus::Ready,
+                available_count: Some(3),
+                reason: None,
+                top_action: None,
+            },
+            serde_json::json!({
+                "status": "ready",
+                "availableCount": 3,
+                "reason": null,
+                "topAction": null
+            }),
+        ),
+        (
+            FoldTargetInfo {
+                status: FoldTargetStatus::Limited,
+                available_count: Some(2),
+                reason: Some("その下の紙との折り目が最後まで折られていません".to_owned()),
+                top_action: None,
+            },
+            serde_json::json!({
+                "status": "limited",
+                "availableCount": 2,
+                "reason": "その下の紙との折り目が最後まで折られていません",
+                "topAction": null
+            }),
+        ),
+        (
+            FoldTargetInfo {
+                status: FoldTargetStatus::CreaseOnlyTop,
+                available_count: Some(0),
+                reason: None,
+                top_action: Some(FoldTargetTopAction::CreaseOnlyTop),
+            },
+            serde_json::json!({
+                "status": "crease_only_top",
+                "availableCount": 0,
+                "reason": null,
+                "topAction": "crease_only_top"
+            }),
+        ),
+        (
+            FoldTargetInfo {
+                status: FoldTargetStatus::Varies,
+                available_count: None,
+                reason: Some("折り線の場所によって枚数が異なります".to_owned()),
+                top_action: None,
+            },
+            serde_json::json!({
+                "status": "varies",
+                "availableCount": null,
+                "reason": "折り線の場所によって枚数が異なります",
+                "topAction": null
+            }),
+        ),
+        (
+            FoldTargetInfo {
+                status: FoldTargetStatus::Unavailable,
+                available_count: None,
+                reason: Some("今はひだを数えられません".to_owned()),
+                top_action: None,
+            },
+            serde_json::json!({
+                "status": "unavailable",
+                "availableCount": null,
+                "reason": "今はひだを数えられません",
+                "topAction": null
+            }),
+        ),
+    ];
+
+    for (info, expected) in cases {
+        let actual = serde_json::to_value(&info).expect("ひだ照会結果を保存できる");
+        assert_eq!(actual, expected, "TSと同じwire表記を使う");
+        assert_eq!(
+            serde_json::from_value::<FoldTargetInfo>(expected).expect("ひだ照会結果を読み直せる"),
+            info
+        );
     }
 }
 
@@ -726,6 +989,7 @@ fn test_seq_op_fold_through_json_shape() {
         line: [[0.0, 0.5], [1.0, 0.5]],
         keep_side_point: [0.5, 0.25],
         target_layers: Some(vec![3]),
+        target_pleat_count: None,
         direction: FoldDirection::Down,
         alignment: None,
         accept_additional_crease: false,
@@ -743,6 +1007,7 @@ fn test_seq_op_fold_through_json_shape() {
             line,
             keep_side_point,
             target_layers,
+            target_pleat_count,
             direction,
             alignment,
             accept_additional_crease,
@@ -752,6 +1017,7 @@ fn test_seq_op_fold_through_json_shape() {
             assert_eq!(line, [[0.0, 0.5], [1.0, 0.5]]);
             assert_eq!(keep_side_point, [0.5, 0.25]);
             assert_eq!(target_layers, Some(vec![3]));
+            assert_eq!(target_pleat_count, None);
             assert_eq!(direction, FoldDirection::Down);
             assert_eq!(alignment, None);
             assert!(!accept_additional_crease);
@@ -765,6 +1031,7 @@ fn test_seq_op_fold_through_json_shape() {
         line: [[0.0, 0.0], [1.0, 1.0]],
         keep_side_point: [1.0, 0.0],
         target_layers: None,
+        target_pleat_count: None,
         direction: FoldDirection::Up,
         alignment: None,
         accept_additional_crease: false,
@@ -779,6 +1046,7 @@ fn test_seq_op_fold_through_json_shape() {
         line: [[0.0, 0.5], [1.0, 0.5]],
         keep_side_point: [0.5, 0.25],
         target_layers: Some(vec![3]),
+        target_pleat_count: None,
         direction: FoldDirection::Down,
         alignment: None,
         accept_additional_crease: true,
@@ -880,6 +1148,7 @@ fn test_seq_op_preview_fold_through_json_shape() {
         line: [[0.7, 0.0], [0.7, 1.0]],
         keep_side_point: [0.6, 0.5],
         target_layers: Some(vec![0]),
+        target_pleat_count: None,
         direction: FoldDirection::Up,
         pose_before: None,
     };
