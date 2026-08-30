@@ -75,6 +75,7 @@ else {
         $content = Read-Utf8Text $reportPath
         $lines = [regex]::Split($content, "\r\n|\n|\r")
         $records = New-Object System.Collections.Generic.List[object]
+        $reportLastWriteTime = (Get-Item -LiteralPath $reportPath -Force).LastWriteTime
 
         for ($lineIndex = 0; $lineIndex -lt $lines.Count; $lineIndex++) {
             $line = $lines[$lineIndex]
@@ -101,9 +102,23 @@ else {
                 continue
             }
 
+            $recordTimestamp = [datetime]::MinValue
+            $timestampText = "{0} {1}" -f $dateText, $match.Groups["time"].Value
+            if (-not [datetime]::TryParseExact(
+                $timestampText,
+                "yyyy-MM-dd HH:mm",
+                [System.Globalization.CultureInfo]::InvariantCulture,
+                [System.Globalization.DateTimeStyles]::AssumeLocal,
+                [ref]$recordTimestamp
+            )) {
+                Add-FormatProblem "Report heading timestamp cannot be read at line $($lineIndex + 1): $timestampText"
+                continue
+            }
+
             $records.Add([PSCustomObject]@{
                 LineIndex = $lineIndex
                 Date      = $recordDate.Date
+                Timestamp = $recordTimestamp
                 Header    = $line
             })
         }
@@ -128,6 +143,12 @@ else {
                 $olderRecord = $records[$recordIndex]
                 if ($olderRecord.Date -gt $newerRecord.Date) {
                     Add-FormatProblem "日付が降順ではありません: $($newerRecord.Date.ToString('yyyy-MM-dd')) の後に $($olderRecord.Date.ToString('yyyy-MM-dd')) があります。"
+                }
+            }
+
+            foreach ($record in $records) {
+                if ($record.Timestamp -gt $reportLastWriteTime) {
+                    Add-FormatProblem "Report heading at line $($record.LineIndex + 1) is later than the file update time: heading=$($record.Timestamp.ToString('yyyy-MM-dd HH:mm')), file=$($reportLastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))"
                 }
             }
 

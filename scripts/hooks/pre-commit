@@ -12,6 +12,27 @@
 staged=$(git -c core.quotePath=false diff --cached --name-only --diff-filter=ACMR)
 staged_for_report=$(git -c core.quotePath=false diff --cached --name-only --diff-filter=ACMRD)
 
+hook_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+repo_root=$(CDPATH= cd -- "$hook_dir/../.." && pwd)
+scope_warning_script="$repo_root/scripts/hooks/checks/test-claim-scope-warning.ps1"
+scope_powershell=
+if command -v powershell.exe >/dev/null 2>&1; then
+    scope_powershell=powershell.exe
+elif command -v pwsh >/dev/null 2>&1; then
+    scope_powershell=pwsh
+elif command -v powershell >/dev/null 2>&1; then
+    scope_powershell=powershell
+fi
+if [ -n "$scope_powershell" ] && [ -f "$scope_warning_script" ]; then
+    "$scope_powershell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$scope_warning_script"
+    scope_warning_status=$?
+    if [ "$scope_warning_status" -ne 0 ]; then
+        printf '%s\n' "[WARN] test-claim scope warning scan could not run (exit $scope_warning_status); commit remains nonblocking" >&2
+    fi
+elif [ -f "$scope_warning_script" ]; then
+    printf '%s\n' '[WARN] PowerShell is unavailable; test-claim scope warning scan was skipped' >&2
+fi
+
 # 実装を進めたのに利用者への報告を書かない状態を、重いRust検査の前に止める。
 if printf '%s\n' "$staged_for_report" | grep -qE '^(apps|crates)/'; then
     if ! printf '%s\n' "$staged" | grep -Fxq 'docs/報告記録.md'; then
@@ -25,8 +46,6 @@ if ! printf '%s\n' "$staged" | grep -qE '(\.rs$|(^|/)Cargo\.(toml|lock)$)'; then
     exit 0
 fi
 
-hook_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-repo_root=$(CDPATH= cd -- "$hook_dir/../.." && pwd)
 receipt_script="$repo_root/scripts/check-receipt.ps1"
 
 if ! command -v cargo >/dev/null 2>&1; then

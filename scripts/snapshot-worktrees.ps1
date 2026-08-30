@@ -1,53 +1,35 @@
-﻿<#
+<#
 .SYNOPSIS
-作業ツリーの未コミット状態を refs/wip/<name> へ退避する（中断・再開用）。
+Snapshots registered worktrees into refs/wip/<derived-name> and checks freshness.
 
 .DESCRIPTION
-hook を通さない plumbing（read-tree / add / write-tree / commit-tree / update-ref）で、
-各作業ツリーの「追跡対象の変更＋未追跡ファイル＋scratchpad の報告書」を1つの commit として
-refs/wip/<name> に記録する。作業ツリー自体は一切変更しない。push もされない。
+The target list is derived exclusively from `git worktree list --porcelain`. The
+repository root itself, worktrees located under the root's verification/ directory,
+and registered check copies whose leaf does not begin ori3-wt- are excluded by
+rules. All assigned ori3-wt-* worktrees are included.
+For example, the directory ori3-wt-merge becomes refs/wip/merge.
 
-作業ツリー（%TEMP%\ori3-wt-*）が消えても、次のコマンドで内容を復元できる。
-    git worktree add <path> refs/wip/<name>
-    git checkout refs/wip/<name> -- <path>
-
-除外するもの（利用者指示・規約）:
-  docs/competitive-review-2026-08-20.md   触らない（読まない・参照しない・コミットしない）
-  traditional_crane_math_bundle/          リポジトリ直下の受領物（追跡対象外のまま置く）
-  traditional_crane_complete_cp.png       同上
+Normal execution records each worktree with git plumbing only. -Check requires a
+snapshot newer than the latest source file in crates/, apps/, docs/, or scripts/.
+The source walk excludes target/, .git/, and node_modules/ directories.
 
 .PARAMETER Name
-退避先の名前（refs/wip/<Name>）。省略時は既定の6ツリーをすべて処理する。
+The derived snapshot name to operate on. Omit it to operate on every target.
 
-.EXAMPLE
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/snapshot-worktrees.ps1
-.EXAMPLE
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/snapshot-worktrees.ps1 -Name cifix
+.PARAMETER Check
+Verify freshness only. Exit nonzero for a missing or stale refs/wip snapshot.
 #>
 [CmdletBinding()]
 param(
-    [string]$Name
+    [string]$Name,
+    [switch]$Check
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$Temp = [Environment]::GetEnvironmentVariable("TEMP")
-
-$Targets = [ordered]@{
-    "main-rust-slice" = $RepositoryRoot
-    "fixb"            = Join-Path $Temp "ori3-wt-fixb"
-    "layer1"          = Join-Path $Temp "ori3-wt-layer1"
-    "collapse"        = Join-Path $Temp "ori3-wt-collapse"
-    "viewer"          = Join-Path $Temp "ori3-wt-viewer"
-    "cifix"           = Join-Path $Temp "ori3-wt-cifix"
-    "crane2"          = Join-Path $Temp "ori3-wt-crane2"
-    "web"             = Join-Path $Temp "ori3-wt-web"
-    "rules"           = Join-Path $Temp "ori3-wt-rules"
-}
-
-$Excluded = @(
+$RepositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..")).TrimEnd([char[]]"\\/")
+$ExcludedPaths = @(
     "docs/competitive-review-2026-08-20.md",
     "traditional_crane_math_bundle",
     "traditional_crane_complete_cp.png"
@@ -58,16 +40,21 @@ function Invoke-Git {
         [Parameter(Mandatory = $true)][string]$WorkingDirectory,
         [Parameter(Mandatory = $true)][string[]]$Arguments,
         [string]$IndexFile,
+        [hashtable]$Environment,
         [switch]$AllowFailure
     )
 
     $previousIndex = $env:GIT_INDEX_FILE
+    $previousEnvironment = @{}
     if ($IndexFile) { $env:GIT_INDEX_FILE = $IndexFile }
+    if ($null -ne $Environment) {
+        foreach ($key in $Environment.Keys) {
+            $previousEnvironment[$key] = [Environment]::GetEnvironmentVariable($key, "Process")
+            [Environment]::SetEnvironmentVariable($key, [string]$Environment[$key], "Process")
+        }
+    }
     $previousPreference = $ErrorActionPreference
     try {
-        # 改行コードの予告など git の警告は stderr へ出る。PowerShell 5.1 では
-        # 外部コマンドの stderr を畳み込むと ErrorRecord になるため、
-        # 畳み込まずに終了コードだけで成否を判定する。
         $ErrorActionPreference = "Continue"
         Push-Location -LiteralPath $WorkingDirectory
         try {
@@ -81,11 +68,12 @@ function Invoke-Git {
     finally {
         $ErrorActionPreference = $previousPreference
         if ($IndexFile) {
-            if ($null -eq $previousIndex) {
-                Remove-Item Env:GIT_INDEX_FILE -ErrorAction SilentlyContinue
-            }
-            else {
-                $env:GIT_INDEX_FILE = $previousIndex
+            if ($null -eq $previousIndex) { Remove-Item Env:GIT_INDEX_FILE -ErrorAction SilentlyContinue }
+            else { $env:GIT_INDEX_FILE = $previousIndex }
+        }
+        if ($null -ne $Environment) {
+            foreach ($key in $Environment.Keys) {
+                [Environment]::SetEnvironmentVariable($key, $previousEnvironment[$key], "Process")
             }
         }
     }
@@ -95,60 +83,172 @@ function Invoke-Git {
     return ($output | Where-Object { $_ -ne $null } | ForEach-Object { $_.ToString() })
 }
 
+function Normalize-DirectoryPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    return [IO.Path]::GetFullPath($Path).TrimEnd([char[]]"\\/")
+}
+
+function Test-IsVerificationCopy {
+    param([Parameter(Mandatory = $true)][string]$Worktree)
+
+    if (-not $Worktree.StartsWith($RepositoryRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+        return $false
+    }
+    $relative = $Worktree.Substring($RepositoryRoot.Length).TrimStart([char[]]"\\/")
+    return $relative -match '^(?i:verification)(?:[\\/]|$)'
+}
+
+function ConvertTo-SnapshotName {
+    param([Parameter(Mandatory = $true)][string]$Worktree)
+
+    $leaf = Split-Path -Leaf $Worktree
+    if ($leaf.StartsWith("ori3-wt-", [StringComparison]::OrdinalIgnoreCase)) {
+        $leaf = $leaf.Substring("ori3-wt-".Length)
+    }
+    $name = [regex]::Replace($leaf, '[^A-Za-z0-9._-]', '-')
+    $name = [regex]::Replace($name, '\.{2,}', '.')
+    $name = $name.Trim([char[]]".-")
+    if ($name.EndsWith(".lock", [StringComparison]::OrdinalIgnoreCase)) { $name = $name + "-worktree" }
+    if ([string]::IsNullOrWhiteSpace($name)) {
+        throw "Cannot derive a refs/wip name from worktree: $Worktree"
+    }
+    return $name
+}
+
+function Get-WorktreeTargets {
+    $lines = Invoke-Git -WorkingDirectory $RepositoryRoot -Arguments @("worktree", "list", "--porcelain")
+    $targets = New-Object System.Collections.Generic.List[object]
+    $names = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($line in $lines) {
+        if (-not $line.StartsWith("worktree ", [StringComparison]::Ordinal)) { continue }
+        $worktree = Normalize-DirectoryPath $line.Substring("worktree ".Length)
+        if ([string]::Equals($worktree, $RepositoryRoot, [StringComparison]::OrdinalIgnoreCase)) { continue }
+        if (Test-IsVerificationCopy -Worktree $worktree) { continue }
+        if (-not (Split-Path -Leaf $worktree).StartsWith("ori3-wt-", [StringComparison]::OrdinalIgnoreCase)) { continue }
+        $snapshotName = ConvertTo-SnapshotName $worktree
+        if (-not $names.Add($snapshotName)) {
+            throw "Multiple worktrees derive the same refs/wip name: $snapshotName"
+        }
+        $targets.Add([PSCustomObject]@{ Name = $snapshotName; Worktree = $worktree })
+    }
+    return $targets.ToArray()
+}
+
+function Get-LatestSourceFile {
+    param([Parameter(Mandatory = $true)][string]$Worktree)
+
+    $latest = $null
+    foreach ($directoryName in @("crates", "apps", "docs", "scripts")) {
+        $directory = Join-Path $Worktree $directoryName
+        if (-not (Test-Path -LiteralPath $directory -PathType Container)) { continue }
+        foreach ($file in @(Get-ChildItem -LiteralPath $directory -File -Recurse -Force -ErrorAction Stop)) {
+            $relative = $file.FullName.Substring($directory.Length).TrimStart([char[]]"\\/")
+            if ($relative -match '(^|[\\/])(?:target|\.git|node_modules)(?:[\\/]|$)') { continue }
+            if ($null -eq $latest -or $file.LastWriteTimeUtc -gt $latest.LastWriteTimeUtc) { $latest = $file }
+        }
+    }
+    return $latest
+}
+
+function Get-SnapshotCommitTimeUtc {
+    param([Parameter(Mandatory = $true)][string]$SnapshotName)
+
+    $ref = "refs/wip/$SnapshotName"
+    $commit = (Invoke-Git -WorkingDirectory $RepositoryRoot -Arguments @("rev-parse", "--verify", "--quiet", "${ref}^{commit}") -AllowFailure) -join ""
+    if ($commit -notmatch '^[0-9a-f]{40}$') { return $null }
+    $secondsText = (Invoke-Git -WorkingDirectory $RepositoryRoot -Arguments @("show", "-s", "--format=%ct", $commit)) -join ""
+    [long]$seconds = 0
+    if (-not [long]::TryParse($secondsText.Trim(), [ref]$seconds)) {
+        throw "Cannot read commit timestamp for ${ref}: $secondsText"
+    }
+    return [DateTimeOffset]::FromUnixTimeSeconds($seconds).UtcDateTime
+}
+
 function Save-Snapshot {
     param(
         [Parameter(Mandatory = $true)][string]$SnapshotName,
-        [Parameter(Mandatory = $true)][string]$WorkTree
+        [Parameter(Mandatory = $true)][string]$Worktree
     )
-
-    if (-not (Test-Path -LiteralPath $WorkTree -PathType Container)) {
-        Write-Output "[SKIP] $SnapshotName : 作業ツリーがありません ($WorkTree)"
-        return
-    }
 
     $indexFile = Join-Path ([IO.Path]::GetTempPath()) ("ori3-snapshot-" + [Guid]::NewGuid().ToString("N") + ".index")
     try {
-        Invoke-Git -WorkingDirectory $WorkTree -Arguments @("read-tree", "HEAD") -IndexFile $indexFile | Out-Null
-        Invoke-Git -WorkingDirectory $WorkTree -Arguments @("add", "-A", ".") -IndexFile $indexFile -AllowFailure | Out-Null
-        foreach ($path in $Excluded) {
-            Invoke-Git -WorkingDirectory $WorkTree -Arguments @("rm", "-r", "-q", "--cached", "--ignore-unmatch", $path) -IndexFile $indexFile -AllowFailure | Out-Null
+        Invoke-Git -WorkingDirectory $Worktree -Arguments @("read-tree", "HEAD") -IndexFile $indexFile | Out-Null
+        Invoke-Git -WorkingDirectory $Worktree -Arguments @("add", "-A", ".") -IndexFile $indexFile -AllowFailure | Out-Null
+        foreach ($path in $ExcludedPaths) {
+            Invoke-Git -WorkingDirectory $Worktree -Arguments @("rm", "-r", "-q", "--cached", "--ignore-unmatch", $path) -IndexFile $indexFile -AllowFailure | Out-Null
         }
-        # 報告書は .gitignore の対象でも必ず残す（引き継ぎの正本のため）。
-        # 画像・フレーム・組み立て成果物まで取り込まないよう、文書と差分だけに限る。
         foreach ($pattern in @("scratchpad/*.md", "scratchpad/*.patch", "scratchpad/*.txt", "scratchpad/**/*.md")) {
-            Invoke-Git -WorkingDirectory $WorkTree -Arguments @("add", "-f", "--", $pattern) -IndexFile $indexFile -AllowFailure | Out-Null
+            Invoke-Git -WorkingDirectory $Worktree -Arguments @("add", "-f", "--", $pattern) -IndexFile $indexFile -AllowFailure | Out-Null
         }
+        $tree = (Invoke-Git -WorkingDirectory $Worktree -Arguments @("write-tree") -IndexFile $indexFile) -join ""
+        if ($tree -notmatch "^[0-9a-f]{40}$") { throw "write-tree did not return a tree id: $tree" }
+        $head = (Invoke-Git -WorkingDirectory $Worktree -Arguments @("rev-parse", "HEAD")) -join ""
 
-        $tree = (Invoke-Git -WorkingDirectory $WorkTree -Arguments @("write-tree") -IndexFile $indexFile) -join ""
-        if ($tree -notmatch "^[0-9a-f]{40}$") {
-            throw "write-tree が木のIDを返しませんでした: $tree"
+        $latestSource = Get-LatestSourceFile -Worktree $Worktree
+        $snapshotSeconds = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        if ($null -ne $latestSource) {
+            # Commit timestamps are second-granularity. Record at least the second after the
+            # latest source file so freshness remains a strict, reproducible comparison.
+            $sourceSeconds = ([DateTimeOffset]$latestSource.LastWriteTimeUtc).ToUnixTimeSeconds()
+            $snapshotSeconds = [Math]::Max($snapshotSeconds, $sourceSeconds + 1)
         }
-        $head = (Invoke-Git -WorkingDirectory $WorkTree -Arguments @("rev-parse", "HEAD")) -join ""
-        $stamp = Get-Date -Format "yyyy-MM-dd HH:mm"
-        $message = "WIP snapshot $SnapshotName $stamp (no hooks; for resume)"
-        $commit = (Invoke-Git -WorkingDirectory $WorkTree -Arguments @("commit-tree", $tree, "-p", $head, "-m", $message)) -join ""
-        if ($commit -notmatch "^[0-9a-f]{40}$") {
-            throw "commit-tree がコミットのIDを返しませんでした: $commit"
-        }
+        $snapshotDate = "@$snapshotSeconds +0000"
+        $environment = @{ GIT_AUTHOR_DATE = $snapshotDate; GIT_COMMITTER_DATE = $snapshotDate }
+        $message = "WIP snapshot $SnapshotName $([DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm')) UTC (no hooks; for resume)"
+        $commit = (Invoke-Git -WorkingDirectory $Worktree -Arguments @("commit-tree", $tree, "-p", $head, "-m", $message) -IndexFile $indexFile -Environment $environment) -join ""
+        if ($commit -notmatch "^[0-9a-f]{40}$") { throw "commit-tree did not return a commit id: $commit" }
         Invoke-Git -WorkingDirectory $RepositoryRoot -Arguments @("update-ref", "refs/wip/$SnapshotName", $commit) | Out-Null
 
         $summary = (Invoke-Git -WorkingDirectory $RepositoryRoot -Arguments @("diff", "--shortstat", $head, $commit)) -join " "
-        if ([string]::IsNullOrWhiteSpace($summary)) { $summary = "HEAD と同じ内容" }
-        Write-Output "[OK]   $SnapshotName -> $($commit.Substring(0,7))  (HEAD $($head.Substring(0,7)))  $($summary.Trim())"
+        if ([string]::IsNullOrWhiteSpace($summary)) { $summary = "same tree as HEAD" }
+        Write-Output "[OK] $SnapshotName -> $($commit.Substring(0,7)) (HEAD $($head.Substring(0,7))) $($summary.Trim())"
     }
     finally {
         if (Test-Path -LiteralPath $indexFile) { Remove-Item -LiteralPath $indexFile -Force }
     }
 }
 
+function Test-SnapshotFreshness {
+    param([Parameter(Mandatory = $true)][object[]]$Targets)
+
+    $problems = New-Object System.Collections.Generic.List[string]
+    foreach ($target in $Targets) {
+        $latestSource = Get-LatestSourceFile -Worktree $target.Worktree
+        if ($null -eq $latestSource) {
+            Write-Output "[SKIP] $($target.Name): no source file in the monitored directories"
+            continue
+        }
+        $snapshotTime = Get-SnapshotCommitTimeUtc -SnapshotName $target.Name
+        if ($null -eq $snapshotTime) {
+            $problems.Add("$($target.Name): refs/wip/$($target.Name) is missing; latest source is $($latestSource.FullName) at $($latestSource.LastWriteTimeUtc.ToString('o')) UTC")
+            continue
+        }
+        if ($snapshotTime -le $latestSource.LastWriteTimeUtc) {
+            $problems.Add("$($target.Name): refs/wip/$($target.Name) is stale; snapshot $($snapshotTime.ToString('o')) UTC <= source $($latestSource.FullName) $($latestSource.LastWriteTimeUtc.ToString('o')) UTC")
+            continue
+        }
+        Write-Output "[OK] $($target.Name): snapshot $($snapshotTime.ToString('o')) UTC > latest source $($latestSource.LastWriteTimeUtc.ToString('o')) UTC"
+    }
+    # Write-Error obeys the script-wide Stop preference and would abort at the first
+    # missing snapshot. Emit every affected worktree before returning a nonzero exit.
+    foreach ($problem in $problems) { Write-Host "[NG] $problem" -ForegroundColor Red }
+    return $problems.Count
+}
+
+$targets = @(Get-WorktreeTargets)
 if ($Name) {
-    if (-not $Targets.Contains($Name)) {
-        throw "未知の退避名です: $Name（使える名前: $($Targets.Keys -join ', ')）"
-    }
-    Save-Snapshot -SnapshotName $Name -WorkTree $Targets[$Name]
-}
-else {
-    foreach ($key in $Targets.Keys) {
-        Save-Snapshot -SnapshotName $key -WorkTree $Targets[$key]
+    $targets = @($targets | Where-Object { $_.Name -eq $Name })
+    if ($targets.Count -ne 1) {
+        $available = @((Get-WorktreeTargets | ForEach-Object Name)) -join ', '
+        throw "Unknown or ambiguous snapshot name '$Name'. Available: $available"
     }
 }
+
+if ($Check) {
+    $problemCount = Test-SnapshotFreshness -Targets $targets
+    if ($problemCount -gt 0) { exit 1 }
+    exit 0
+}
+
+foreach ($target in $targets) { Save-Snapshot -SnapshotName $target.Name -Worktree $target.Worktree }

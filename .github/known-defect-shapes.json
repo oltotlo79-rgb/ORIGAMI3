@@ -1,8 +1,47 @@
 {
   "schemaVersion": 1,
-  "measuredAtHead": "1808488+main-working-tree",
-  "measuredAtDate": "2026-08-28",
+  "measuredAtHead": "c6fc95b+main-working-tree",
+  "measuredAtDate": "2026-08-30",
   "patterns": [
+    {
+      "id": "hardcoded-worktree-target-inventory",
+      "reason": "A fixed worktree target table silently omits newly registered worktrees. snapshot-worktrees.ps1 must derive targets from git worktree list.",
+      "roots": [
+        "scripts/snapshot-worktrees.ps1"
+      ],
+      "filePattern": "snapshot-worktrees\\.ps1$",
+      "regex": "(?m)^\\s*\\$Targets\\s*=\\s*\\[ordered\\]@\\{",
+      "registeredCount": 0,
+      "measuredRawCount": 0,
+      "measurement": "2026-08-30: the old fixed [ordered] target map is absent; target discovery is git worktree list --porcelain.",
+      "exceptions": []
+    },
+    {
+      "id": "report-heading-obviously-future-date",
+      "reason": "B-2 report headings may not name a future time. check-report-log.ps1 compares every parsed heading timestamp with the report file update time.",
+      "roots": [
+        "docs/報告記録.md"
+      ],
+      "filePattern": "報告記録\\.md$",
+      "regex": "(?m)^##\\s+(?:20[3-9]\\d|[3-9]\\d{3})-\\d{2}-\\d{2}\\s+(?:[01]\\d|2[0-3]):[0-5]\\d\\s+—",
+      "registeredCount": 0,
+      "measuredRawCount": 0,
+      "measurement": "2026-08-30: no implausibly distant future heading exists. Same-day future minutes require the timestamp-versus-file-time semantic check.",
+      "exceptions": []
+    },
+    {
+      "id": "test-claim-scope-narrowing",
+      "reason": "C-1 can occur when assertions are removed or dynamic coverage is replaced by a fixed small collection. The staged-diff warning is deliberately nonblocking and requires review.",
+      "roots": [
+        "scripts/hooks/checks/test-claim-scope-warning.ps1"
+      ],
+      "filePattern": "test-claim-scope-warning\\.ps1$",
+      "regex": "(?m)^\\s*\\$findings\\.Add\\(",
+      "registeredCount": 2,
+      "measuredRawCount": 2,
+      "measurement": "2026-08-30: two independent warning signals are implemented: assertion-count decrease and dynamic-loop to literal-collection replacement.",
+      "exceptions": []
+    },
     {
       "id": "negated-partial-order-comparison",
       "reason": "浮動小数の `!(x < y)` 型の否定比較は NaN を含む順序を読み違えやすく、clippy::neg_cmp_op_on_partial_ord 相当の不具合を再発させるため。",
@@ -32,17 +71,15 @@
       ],
       "filePattern": "\\.rs$",
       "regex": "\\bassert_(?:eq|ne)!\\s*\\(",
-      "registeredCount": 48,
-      "measuredRawCount": 811,
-      "measurement": "本体HEAD 1808488の未コミットRustを含む crates/ori3-propose/tests/**/*.rs 21ファイルで assert_eq!/assert_ne! を実測。raw 811件、計算小数候補48件（assert_eq! 45件、assert_ne! 3件）、許可例外763件。HEAD ebae7d8時点のraw 783件から追加35件・削除7件。追加のうち計算f64を含む生成recordの厳密一致2件を候補へ登録し、整数・文字列・ID・byte同一性・固定定数等28件はline/macro/regex付きの個別exceptionsへ登録した。corpusの旧離散assert削除2件は包括枠411から差し引き、409件とした。",
+      "registeredCount": 46,
+      "measuredRawCount": 809,
+      "measurement": "本体HEAD c6fc95bの未コミットRustを含む crates/ori3-propose/tests/**/*.rs 21ファイルで assert_eq!/assert_ne! を実測。raw 809件、計算小数候補46件（assert_eq! 43件、assert_ne! 3件）、許可例外763件。旧台帳のraw 811件・候補48件から、計算f64を含むTask24CompletionRecordの厳密一致2件を許容差比較へ直して各2件減らした。整数・文字列・ID・byte同一性・固定定数等の個別exceptionsは維持した。",
       "registeredBreakdown": {
-        "assert_eq!": 45,
+        "assert_eq!": 43,
         "assert_ne!": 3
       },
-      "quotaLimitation": "登録時からある許可例外735件は実パス別の固定許容数を差し引くため、同じファイル内の同数置換を総数だけでは検出できない。今回分類した28件はline/macro/regex付き個別exceptionsにして置換を検出し、候補48件のpath/line/macro/shape台帳も併記する。",
+      "quotaLimitation": "登録時からある許可例外735件は実パス別の固定許容数を差し引くため、同じファイル内の同数置換を総数だけでは検出できない。今回分類した28件はline/macro/regex付き個別exceptionsにして置換を検出し、候補46件のpath/line/macro/shape台帳も併記する。",
       "candidateInventory": [
-        { "path": "crates/ori3-propose/tests/acceptance.rs", "line": 867, "macro": "assert_eq!", "shape": "計算f64を含むTask24CompletionRecordのJSON round-trip object" },
-        { "path": "crates/ori3-propose/tests/acceptance.rs", "line": 935, "macro": "assert_eq!", "shape": "再生成した計算f64 recordと通常readerのobject" },
         { "path": "crates/ori3-propose/tests/acceptance.rs", "line": 1452, "macro": "assert_eq!", "shape": "JSON再読後のdocumentとsession document" },
         { "path": "crates/ori3-propose/tests/containment.rs", "line": 390, "macro": "assert_eq!", "shape": "violation_center計算値と0.0" },
         { "path": "crates/ori3-propose/tests/containment.rs", "line": 430, "macro": "assert_eq!", "shape": "violation_center計算値と0.0" },
