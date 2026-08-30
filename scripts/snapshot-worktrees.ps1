@@ -189,6 +189,26 @@ function Get-SnapshotCommitTimeUtc {
     return [DateTimeOffset]::FromUnixTimeSeconds($seconds).UtcDateTime
 }
 
+function Get-SnapshotScratchpadPaths {
+    param([Parameter(Mandatory = $true)][string]$Worktree)
+
+    $scratchpad = Join-Path $Worktree "scratchpad"
+    if (-not (Test-Path -LiteralPath $scratchpad -PathType Container)) {
+        return @()
+    }
+
+    $paths = New-Object System.Collections.Generic.List[string]
+    foreach ($file in @(Get-ChildItem -LiteralPath $scratchpad -File -Recurse -Force -ErrorAction Stop)) {
+        $relative = $file.FullName.Substring($scratchpad.Length).TrimStart([char[]]"\\/")
+        $isDirectChild = $relative -notmatch '[\\/]'
+        $extension = $file.Extension
+        if ($extension -ieq ".md" -or ($isDirectChild -and ($extension -ieq ".patch" -or $extension -ieq ".txt"))) {
+            $paths.Add((Join-Path "scratchpad" $relative))
+        }
+    }
+    return $paths.ToArray()
+}
+
 function Save-Snapshot {
     param(
         [Parameter(Mandatory = $true)][string]$SnapshotName,
@@ -202,8 +222,9 @@ function Save-Snapshot {
         foreach ($path in $ExcludedPaths) {
             Invoke-Git -WorkingDirectory $Worktree -Arguments @("rm", "-r", "-q", "--cached", "--ignore-unmatch", $path) -IndexFile $indexFile -AllowFailure | Out-Null
         }
-        foreach ($pattern in @("scratchpad/*.md", "scratchpad/*.patch", "scratchpad/*.txt", "scratchpad/**/*.md")) {
-            Invoke-Git -WorkingDirectory $Worktree -Arguments @("add", "-f", "--", $pattern) -IndexFile $indexFile -AllowFailure | Out-Null
+        $scratchpadPaths = @(Get-SnapshotScratchpadPaths -Worktree $Worktree)
+        if ($scratchpadPaths.Count -gt 0) {
+            Invoke-Git -WorkingDirectory $Worktree -Arguments (@("add", "-f", "--") + $scratchpadPaths) -IndexFile $indexFile | Out-Null
         }
         $tree = (Invoke-Git -WorkingDirectory $Worktree -Arguments @("write-tree") -IndexFile $indexFile) -join ""
         if ($tree -notmatch "^[0-9a-f]{40}$") { throw "write-tree did not return a tree id: $tree" }

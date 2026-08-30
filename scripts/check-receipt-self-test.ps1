@@ -12,6 +12,20 @@ function Assert-Ori3SelfTest {
     }
 }
 
+$ReceiptTempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([char[]]"\\/")
+$ReceiptSandbox = Join-Path $ReceiptTempBase ("ori3-receipt-self-test-" + [Guid]::NewGuid().ToString("N"))
+$ReceiptSandboxRoot = Join-Path $ReceiptSandbox "repo"
+
+function Remove-Ori3ReceiptSelfTestSandbox {
+    if (-not (Test-Path -LiteralPath $ReceiptSandbox)) { return }
+    $fullSandbox = [IO.Path]::GetFullPath($ReceiptSandbox).TrimEnd([char[]]"\\/")
+    if ([IO.Path]::GetDirectoryName($fullSandbox) -ne $ReceiptTempBase -or
+        [IO.Path]::GetFileName($fullSandbox) -notmatch '^ori3-receipt-self-test-[0-9a-f]{32}$') {
+        throw "Refusing unsafe receipt self-test cleanup: $fullSandbox"
+    }
+    Remove-Item -LiteralPath $fullSandbox -Recurse -Force
+}
+
 $arguments = @(Get-Ori3RustW4Arguments)
 $expectedArguments = @(
     "test", "--workspace", "--no-fail-fast", "--",
@@ -163,16 +177,9 @@ $safeDisplay = [ordered]@{
     EnvironmentNames = "ORI3_RECEIPT_TEST_MARKER"
 }
 $conditions = [pscustomobject]@{ Sha256 = ("c" * 64); SafeDisplay = $safeDisplay }
-$context = [pscustomobject]@{
-    Kind = $kind
-    Root = $root
-    Content = $content
-    Recipe = $recipe
-    Conditions = $conditions
-    EligibilitySha256 = ("d" * 64)
-}
-$receiptPath = Get-Ori3ReceiptPath $context
-$key = [byte[]](Get-Ori3SigningKey $root -Create)
+$context = $null
+$receiptPath = $null
+$key = $null
 
 function New-Ori3SyntheticReceipt {
     param([DateTime]$PassedAt, [DateTime]$ExpiresAt)
@@ -212,6 +219,23 @@ function New-Ori3SyntheticReceipt {
 }
 
 try {
+    [void][IO.Directory]::CreateDirectory($ReceiptSandboxRoot)
+    $global:LASTEXITCODE = 0
+    & git init --quiet $ReceiptSandboxRoot
+    if ($LASTEXITCODE -ne 0) { throw "receipt self-test temporary repository initialization failed: exit=$LASTEXITCODE" }
+    [IO.File]::WriteAllText((Join-Path $ReceiptSandboxRoot ".gitignore"), ".origami/`n", [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $ReceiptSandboxRoot "fixture.txt"), "receipt self-test fixture`n", [Text.UTF8Encoding]::new($false))
+
+    $context = [pscustomobject]@{
+        Kind = $kind
+        Root = $ReceiptSandboxRoot
+        Content = $content
+        Recipe = $recipe
+        Conditions = $conditions
+        EligibilitySha256 = ("d" * 64)
+    }
+    $receiptPath = Get-Ori3ReceiptPath $context
+    $key = [byte[]](Get-Ori3SigningKey $ReceiptSandboxRoot -Create)
     $now = [DateTime]::UtcNow
     $valid = New-Ori3SyntheticReceipt $now $now.AddHours(24)
     Invoke-Ori3AtomicJsonWrite $receiptPath $valid
@@ -249,7 +273,7 @@ try {
 
     $changedContext = [pscustomobject]@{
         Kind = $kind
-        Root = $root
+        Root = $ReceiptSandboxRoot
         Content = [pscustomobject]@{ Sha256 = ("e" * 64); FileCount = 2; TotalBytes = 3 }
         Recipe = $recipe
         Conditions = $conditions
@@ -279,11 +303,24 @@ try {
     $miss = Find-Ori3CheckReceipt $context
     Assert-Ori3SelfTest (-not $miss.IsHit -and $miss.Reason.Contains("未来")) "future receipt hit"
     Write-Host "[OK] future receipt => miss"
+
+    $fallbackContext = New-Ori3ReceiptContext "rust-w4" $ReceiptSandboxRoot $null
+    [void](Write-Ori3CheckReceipt $fallbackContext)
+    $invalidKeyPath = Join-Path (Get-Ori3ReceiptStorePath $ReceiptSandboxRoot) "local-signing-key.dpapi"
+    [IO.File]::WriteAllBytes($invalidKeyPath, [byte[]](1, 2, 3, 4, 5, 6, 7, 8))
+    $unreadableHit = Find-Ori3CheckReceipt $fallbackContext
+    Assert-Ori3SelfTest (-not $unreadableHit.IsHit) "unreadable signing key must not reuse a receipt"
+    Assert-Ori3SelfTest ($unreadableHit.Reason -eq "署名鍵を復号できないためreceiptを再利用せず、通常検査を実行します") "unreadable signing key must report the stable fallback reason"
+    $normalCheckRequired = -not $unreadableHit.IsHit
+    Assert-Ori3SelfTest $normalCheckRequired "unreadable signing key must require the normal check path"
+    Write-Ori3ReceiptMissMessage "synthetic unreadable-key fallback" $unreadableHit
+    Write-Host "[OK] unreadable signing key => visible receipt miss and normal-check required"
 }
 finally {
-    if (Test-Path -LiteralPath $receiptPath -PathType Leaf) {
+    if ($null -ne $receiptPath -and (Test-Path -LiteralPath $receiptPath -PathType Leaf)) {
         Remove-Item -LiteralPath $receiptPath -Force
     }
+    Remove-Ori3ReceiptSelfTestSandbox
 }
 
 Write-Host "[OK] synthetic receipt removed; no rust-w4/check-all pass receipt created"

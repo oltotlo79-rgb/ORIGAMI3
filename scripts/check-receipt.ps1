@@ -844,6 +844,22 @@ function Read-Ori3ReceiptJson {
     return $text | ConvertFrom-Json -ErrorAction Stop
 }
 
+function Test-Ori3ExceptionChainContains {
+    param(
+        [Parameter(Mandatory = $true)][System.Exception]$Exception,
+        [Parameter(Mandatory = $true)][Type]$Type
+    )
+
+    $current = $Exception
+    while ($null -ne $current) {
+        if ($Type.IsInstanceOfType($current)) {
+            return $true
+        }
+        $current = $current.InnerException
+    }
+    return $false
+}
+
 function Find-Ori3CheckReceipt {
     param($Context)
 
@@ -891,7 +907,20 @@ function Find-Ori3CheckReceipt {
             if ($expiresAt -gt $componentExpiresAt) { throw "複合receiptがcomponentより長く有効です" }
         }
 
-        $key = Get-Ori3SigningKey $Context.Root
+        try {
+            $key = Get-Ori3SigningKey $Context.Root
+        }
+        catch {
+            if (Test-Ori3ExceptionChainContains -Exception $_.Exception -Type ([System.Security.Cryptography.CryptographicException])) {
+                return [pscustomobject]@{
+                    IsHit = $false
+                    Reason = "署名鍵を復号できないためreceiptを再利用せず、通常検査を実行します"
+                    Receipt = $null
+                    Path = $path
+                }
+            }
+            throw
+        }
         $expectedSignature = Get-Ori3ReceiptSignature $receipt $key
         if (-not (Test-Ori3FixedTimeHexEqual ([string]$receipt.signatureHmacSha256) $expectedSignature)) {
             throw "この機械・利用者の署名を検証できません"

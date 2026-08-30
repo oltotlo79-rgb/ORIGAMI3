@@ -51,6 +51,19 @@ function Assert-Contains {
     }
 }
 
+function Assert-NotContains {
+    param(
+        [Parameter(Mandatory = $true)][string]$Text,
+        [Parameter(Mandatory = $true)][string]$Unexpected,
+        [Parameter(Mandatory = $true)][string]$Message
+    )
+
+    $script:AssertionCount += 1
+    if ($Text.Contains($Unexpected)) {
+        throw "ASSERTION FAILED: $Message (unexpected='$Unexpected')`n$Text"
+    }
+}
+
 function ConvertTo-ProcessArgumentString {
     param([Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Values)
 
@@ -106,6 +119,16 @@ function Invoke-TestGit {
     return $result.Output
 }
 
+function Test-GitPathAtRef {
+    param(
+        [Parameter(Mandatory = $true)][string]$Repository,
+        [Parameter(Mandatory = $true)][string]$ObjectName
+    )
+
+    $result = Invoke-Process -FileName "git" -Arguments @("-C", $Repository, "cat-file", "-e", $ObjectName) -WorkingDirectory $Repository
+    return $result.ExitCode -eq 0
+}
+
 function New-TestFile {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -129,9 +152,10 @@ function New-DisposableWorktreeFixture {
     Invoke-TestGit $repository @("config", "user.name", "Snapshot Test") | Out-Null
     New-TestFile (Join-Path $repository "crates\demo\src\lib.rs") "pub fn snapshot_fixture() {}"
     New-TestFile (Join-Path $repository "docs\guide.md") "# fixture"
+    New-TestFile (Join-Path $repository ".gitignore") "scratchpad/"
     [void][IO.Directory]::CreateDirectory((Join-Path $repository "scripts"))
     Copy-Item -LiteralPath $SourceScriptPath -Destination (Join-Path $repository "scripts\snapshot-worktrees.ps1") -Force
-    Invoke-TestGit $repository @("add", "--", "crates", "docs", "scripts") | Out-Null
+    Invoke-TestGit $repository @("add", "--", "crates", "docs", "scripts", ".gitignore") | Out-Null
     Invoke-TestGit $repository @("commit", "--quiet", "-m", "fixture baseline") | Out-Null
     Invoke-TestGit $repository @("worktree", "add", "--detach", $worktree, "HEAD") | Out-Null
     Invoke-TestGit $repository @("worktree", "add", "--detach", $checkCopy, "HEAD") | Out-Null
@@ -214,8 +238,14 @@ function Remove-TestSandbox {
 try {
     Write-Host "[1/4] the main worktree and derived worktree names snapshot and pass freshness check"
     $freshFixture = New-DisposableWorktreeFixture "fresh"
+    New-TestFile (Join-Path $freshFixture.Worktree "scratchpad\note.md") "included markdown"
+    New-TestFile (Join-Path $freshFixture.Worktree "scratchpad\nested\note.md") "included nested markdown"
+    New-TestFile (Join-Path $freshFixture.Worktree "scratchpad\resume.patch") "included direct patch"
+    New-TestFile (Join-Path $freshFixture.Worktree "scratchpad\resume.txt") "included direct text"
+    New-TestFile (Join-Path $freshFixture.Worktree "scratchpad\nested\not-included.patch") "excluded nested patch"
     $snapshotResult = Invoke-SnapshotProcess -Fixture $freshFixture
     Assert-Equal $snapshotResult.ExitCode 0 "snapshot process must exit 0" $snapshotResult.Output
+    Assert-NotContains $snapshotResult.Output "fatal: pathspec" "an absent optional scratchpad class must not emit a git fatal"
     $freshCheck = Invoke-SnapshotProcess -Fixture $freshFixture -Check
     Assert-Equal $freshCheck.ExitCode 0 "fresh snapshot check must exit 0" $freshCheck.Output
     Assert-Contains $freshCheck.Output "snapshot targets=2, excluded=1, mode=check" "check output must disclose target and exclusion counts"
@@ -225,6 +255,11 @@ try {
     Assert-True ($derivedRef.Trim() -match '^[0-9a-f]{40}$') "ori3-wt-merge must derive refs/wip/merge" $derivedRef
     $rootRef = Invoke-TestGit $freshFixture.Repository @("rev-parse", "--verify", "refs/wip/main")
     Assert-True ($rootRef.Trim() -match '^[0-9a-f]{40}$') "the repository root must be snapshotted as refs/wip/main" $rootRef
+    Assert-True (Test-GitPathAtRef $freshFixture.Repository "refs/wip/merge:scratchpad/note.md") "direct scratchpad markdown must be snapshotted"
+    Assert-True (Test-GitPathAtRef $freshFixture.Repository "refs/wip/merge:scratchpad/nested/note.md") "nested scratchpad markdown must be snapshotted"
+    Assert-True (Test-GitPathAtRef $freshFixture.Repository "refs/wip/merge:scratchpad/resume.patch") "direct scratchpad patch must be snapshotted"
+    Assert-True (Test-GitPathAtRef $freshFixture.Repository "refs/wip/merge:scratchpad/resume.txt") "direct scratchpad text must be snapshotted"
+    Assert-True (-not (Test-GitPathAtRef $freshFixture.Repository "refs/wip/merge:scratchpad/nested/not-included.patch")) "nested scratchpad patch must keep the documented exclusion rule"
     $checkCopyRef = Invoke-Process -FileName "git" -Arguments @("-C", $freshFixture.Repository, "show-ref", "--verify", "--quiet", "refs/wip/ori3-push-check") -WorkingDirectory $freshFixture.Repository
     Assert-True ($checkCopyRef.ExitCode -ne 0) "a registered check copy outside the ori3-wt-* convention must be excluded" $checkCopyRef.Output
 
