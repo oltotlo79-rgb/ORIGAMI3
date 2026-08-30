@@ -7,6 +7,7 @@
 [CmdletBinding()]
 param(
     [switch]$RunRustW4,
+    [switch]$RepairSigningKey,
     [string]$RepoRoot,
     [string]$GateStatusPath
 )
@@ -759,6 +760,53 @@ function Get-Ori3SigningKey {
     return $keyBytes
 }
 
+function Test-Ori3SigningKeyNeedsRepair {
+    param([System.Exception]$Exception)
+
+    if (Test-Ori3ExceptionChainContains -Exception $Exception -Type ([System.Security.Cryptography.CryptographicException])) {
+        return $true
+    }
+    return $Exception.Message -in @(
+        "署名鍵ファイルの大きさが不正です",
+        "署名鍵の形式が不正です"
+    )
+}
+
+function Repair-Ori3SigningKey {
+    param([string]$Root)
+
+    Test-Ori3ReceiptEnvironmentAllowed
+    $store = Get-Ori3ReceiptStorePath $Root
+    $keyPath = Join-Path $store "local-signing-key.dpapi"
+    if (-not (Test-Path -LiteralPath $keyPath -PathType Leaf)) {
+        [void](Get-Ori3SigningKey $Root -Create)
+        Write-Host "[OK] 署名鍵が無かったため、新しい署名鍵を明示修復として作成しました" -ForegroundColor Green
+        return
+    }
+
+    try {
+        [void](Get-Ori3SigningKey $Root)
+        Write-Host "[OK] 署名鍵は読めるため、修復で置き換えませんでした: $keyPath" -ForegroundColor Green
+        return
+    }
+    catch {
+        if (-not (Test-Ori3SigningKeyNeedsRepair $_.Exception)) {
+            throw
+        }
+    }
+
+    $stamp = [DateTime]::UtcNow.ToString("yyyyMMddTHHmmssfffffffZ", [Globalization.CultureInfo]::InvariantCulture)
+    $backupPath = "$keyPath.invalid-$stamp-$([Guid]::NewGuid().ToString('N')).dpapi"
+    [System.IO.File]::Move($keyPath, $backupPath)
+    try {
+        [void](Get-Ori3SigningKey $Root -Create)
+    }
+    catch {
+        throw "読めない署名鍵を退避した後、新しい署名鍵を作成できませんでした。退避先: $backupPath; 原因: $($_.Exception.Message)"
+    }
+    Write-Host "[WARN] 読めない署名鍵を退避して新鍵を作成しました。旧領収書は再利用できず、次の通常検査まで再実行されます。退避先: $backupPath" -ForegroundColor Yellow
+}
+
 function Get-Ori3ReceiptDisplayHash {
     param($Receipt)
     $fields = [ordered]@{
@@ -1205,6 +1253,17 @@ function Invoke-Ori3RustW4Gate {
 # pre-commit W4 gate, so a future argv change cannot diverge between the hook,
 # the receipt recipe, and check.ps1.
 if ($MyInvocation.InvocationName -ne ".") {
+    if ($RepairSigningKey) {
+        try {
+            $resolvedCliRoot = Resolve-Ori3RepoRoot $RepoRoot
+            Repair-Ori3SigningKey $resolvedCliRoot
+            exit 0
+        }
+        catch {
+            Write-Host "[NG] 署名鍵の明示修復が停止しました: $($_.Exception.Message)" -ForegroundColor Red
+            exit 125
+        }
+    }
     if (-not $RunRustW4) {
         Write-Host "[NG] -RunRustW4を指定してください" -ForegroundColor Red
         exit 64

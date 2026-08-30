@@ -8,13 +8,64 @@
             "type": "command",
             "command": "powershell.exe",
             "args": [
-              "-NoLogo",
-              "-NoProfile",
-              "-NonInteractive",
-              "-ExecutionPolicy",
-              "Bypass",
-              "-File",
-              "${CLAUDE_PROJECT_DIR}/scripts/hooks/require-report-log.ps1"
+              "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+              "-File", "${CLAUDE_PROJECT_DIR}/scripts/hooks/check-agent-watch.ps1",
+              "-Action", "Hook"
+            ],
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": [
+              "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+              "-File", "${CLAUDE_PROJECT_DIR}/scripts/hooks/require-report-log.ps1"
+            ],
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": [
+              "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+              "-File", "${CLAUDE_PROJECT_DIR}/scripts/hooks/enforce-coordinator-boundary.ps1"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": [
+              "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+              "-File", "${CLAUDE_PROJECT_DIR}/scripts/hooks/enforce-coordinator-boundary.ps1"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": [
+              "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+              "-File", "${CLAUDE_PROJECT_DIR}/scripts/hooks/enforce-coordinator-boundary.ps1"
             ],
             "timeout": 5
           }

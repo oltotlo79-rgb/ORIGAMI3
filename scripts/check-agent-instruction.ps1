@@ -4,13 +4,14 @@
 
 .DESCRIPTION
 docs/rules/01-役割と委譲.md の §2〜§4、docs/rules/03-品質ゲート.md §10.6、
-docs/rules/06-過去の失敗と対策.md §10.7.11 の条文から起こした11項目を、
+docs/rules/06-過去の失敗と対策.md §10.7.11 の条文から起こした14項目を、
 指示文のテキストから検出します。検出は「該当する記述らしきものが
-あるか」を確かめるヒューリスティックであり、実ファイル・実関数が本当に存在するかの
-確認そのものは行いません（実在確認は統括が rg 等で行う。01-役割と委譲.md:43）。
-このため本検査は単独で「自動」ではなく「半自動」の位置づけです。
+あるか」を確かめるヒューリスティックを基本とします。ただし項目14は、構造化された
+実在確認証拠のpath・line・body・symbolをRepositoryRootの実ファイルと照合します。
+項目13も -VerifyLiveBaseline 指定時はHEADと未コミット件数をread-onlyで再取得します。
+対象検査の実測結果そのものは再実行しないため、本検査単独では「半自動」です。
 
-検査する11項目と根拠（行番号は2026-08-29時点）:
+検査する14項目と根拠（行番号は2026-08-31時点）:
   1. 実ファイルパスと関数名の実名記載            docs/rules/01-役割と委譲.md:43
   2. 合格条件の数値記載                          docs/rules/01-役割と委譲.md:44
   3. やってはいけないことの列挙（6件）           docs/rules/01-役割と委譲.md:45 ほか
@@ -19,21 +20,22 @@ docs/rules/06-過去の失敗と対策.md §10.7.11 の条文から起こした1
   6. 道具の具体的な使い方                        docs/rules/01-役割と委譲.md:48
   7. 成果物の保存先パス                          docs/rules/01-役割と委譲.md:49
   8. 割り当てた作業ツリーの絶対パス              docs/rules/01-役割と委譲.md:30
-  9. 報告書ファイルへの継続記録                  docs/rules/01-役割と委譲.md:57
- 10. 長時間検査の --skip 4件（cargo test記載時のみ） docs/rules/03-品質ゲート.md:61
- 11. 専用のCARGO_TARGET_DIR指定（cargo記載時のみ）    docs/rules/06-過去の失敗と対策.md:241-242
+ 9. 報告書ファイルへの継続記録                  docs/rules/01-役割と委譲.md:57
+10. 長時間検査の --skip 4件（cargo test記載時のみ） docs/rules/03-品質ゲート.md:61
+11. 専用のCARGO_TARGET_DIR指定（cargo記載時のみ）    docs/rules/06-過去の失敗と対策.md:241-242
+ 12. opus/sonnet/gpt-5.6-solのモデル選択と同一行の理由 docs/rules/01-役割と委譲.md:31
+ 13. worktreeのHEAD・未コミット件数・検査baseline  docs/rules/01-役割と委譲.md:33
+ 14. 対象実名ごとのrg/grepコマンドと実在出力        docs/rules/01-役割と委譲.md:43
 
 【2026-08-29 追加指示】`.claude/settings.json` のPreToolUse hookが利用者の決定で
 外され、`cargo`/`npm`直接実行の自動阻止（§10.7.13）は「自動」から「人」へ戻った。
 機械の歯止めが無くなった分の代わりとして、項目11（CARGO_TARGET_DIR指定）を統括の
 追加指示により新設した。項目10（--skip 4件）は既存のまま流用する。
 
-【依頼文との食い違い】依頼で示された9項目の一覧には、§4「指示書に『成果は報告書
+【旧実装からの是正】依頼で示された9項目の一覧には、§4「指示書に『成果は報告書
 ファイルへ書く』と記す」に対応する項目が無かった。条文（01-役割と委譲.md:57）を
-正本として9番目に追加した。依頼の項目8「割り当てた作業ツリーの絶対パス」はモデル
-選択理由の記載を含まない。§2の「起動ごとに選んだモデルと理由を1行で記録する」
-（01-役割と委譲.md:31）はClaude自身の記録行為についての定めで、指示文の必須記載
-とは条文上読めないため、モデル選択理由は本検査の対象に含めていない。
+正本として9番目に追加した。旧実装は§2のモデル選択理由、投入時baseline、§3の
+実在確認証拠を検査対象外としていたが、2026-08-31の実違反を受けて項目12〜14にした。
 
 項目3の6件の内訳のうち、gitへの書き込み禁止／ブラウザ・desktop.exe・配信サーバー
 禁止／期待値・許容差を緩めない／Cargo.toml・Cargo.lock・vendor/を変更しない、の
@@ -49,17 +51,44 @@ docs/rules を正本とする観点では根拠不足だが、依頼で名指し
 .PARAMETER InstructionPath
 検査する指示文のテキストファイル。複数指定できます（スペースまたはカンマ区切り）。
 
+.PARAMETER ReadFromStdin
+指示文を標準入力からUTF-8テキストとして読みます。InstructionPathとは排他的です。
+
+.PARAMETER RepositoryRoot
+項目14の実ファイル照合に使うrepository root。既定は本scriptの親directoryです。
+
+.PARAMETER VerifyLiveBaseline
+項目13に記録されたworktreeのHEADと未コミット件数をgitでread-only再取得して照合します。
+
+.PARAMETER ExpectedModel
+hookのtool_input等から分かる実際のモデル。指定時は項目12の記録
+（opus/sonnet/gpt-5.6-sol）と照合します。
+
+.PARAMETER GitExecutable
+live baseline照合に使うgit実行物。既定はgit。自己試験ではgitを書かないread-only stubを指定します。
+
 .PARAMETER MinNumericCriteria
 数値の合格条件として認める最小該当件数です。既定は1件（1つも無ければ不合格）。
 
 .PARAMETER ProximityWindow
 名詞と動詞の組を認める前後の文字数（近接窓）です。既定は50文字。
 #>
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = "Path")]
 param(
-    [Parameter(Mandatory = $true, Position = 0, ValueFromRemainingArguments = $true)]
+    [Parameter(Mandatory = $true, Position = 0, ValueFromRemainingArguments = $true, ParameterSetName = "Path")]
     [ValidateNotNullOrEmpty()]
     [string[]]$InstructionPath,
+
+    [Parameter(Mandatory = $true, ParameterSetName = "Stdin")]
+    [switch]$ReadFromStdin,
+
+    [string]$RepositoryRoot = "",
+
+    [switch]$VerifyLiveBaseline,
+
+    [string]$ExpectedModel = "",
+
+    [string]$GitExecutable = "git",
 
     [ValidateRange(1, 20)]
     [int]$MinNumericCriteria = 1,
@@ -70,6 +99,31 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
+$script:Utf8Strict = New-Object Text.UTF8Encoding($false, $true)
+[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
+
+function Read-Utf8StandardInput {
+    $stream = [Console]::OpenStandardInput()
+    $reader = New-Object IO.StreamReader($stream, $script:Utf8Strict, $false)
+    try {
+        $text = $reader.ReadToEnd()
+    }
+    finally {
+        $reader.Dispose()
+    }
+    while ($text.Length -gt 0 -and $text[0] -eq [char]0xFEFF) {
+        $text = $text.Substring(1)
+    }
+    return $text
+}
+
+if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
+    $RepositoryRoot = Split-Path -Parent $PSScriptRoot
+}
+$script:RepositoryRoot = [IO.Path]::GetFullPath($RepositoryRoot).TrimEnd([char[]]"\/")
+$script:VerifyLiveBaseline = [bool]$VerifyLiveBaseline
+$script:ExpectedModel = $ExpectedModel.Trim().ToLowerInvariant()
+$script:GitExecutable = $GitExecutable
 
 # ---- パターン定義（すべて根拠つき。詳細はレポートを参照） ----
 
@@ -137,6 +191,23 @@ $script:ReportContinuityVerbPattern = '(?:へ|に)[^\r\n。、]{0,10}(?:書く|�
 # 発動しないよう絞り込んでいる（実測で見つけた誤検出を除外）。
 $script:CargoInvocationTriggerPattern = 'cargo\s+(?:test|build|check|clippy|run|bench|nextest|fmt|doc|install|add|remove|update)\b'
 $script:CargoTargetDirToken = "CARGO_TARGET_DIR"
+
+# 項目12: 1行にモデル選択と理由を併記する。曖昧な「高能力モデル」等は認めず、
+# §2の実名 opus / sonnet / gpt-5.6-sol のいずれかを必須にする。
+$script:ModelSelectionLinePattern = '(?im)^[ \t]*(?:[-*][ \t]*)?モデル選択[ \t]*[:：][ \t]*(?<model>opus|sonnet|gpt-5\.6-sol)[ \t]*(?:[|｜;；/／]|-|—|–|。)[ \t]*理由[ \t]*[:：][ \t]*(?<reason>[^\r\n]+?)[ \t]*$'
+
+# 項目13: baselineはラベルを固定し、別のHEADや別の数値を拾わない。
+$script:BaselineWorktreeLinePattern = '(?im)^[ \t]*(?:[-*][ \t]*)?(?:worktree|作業ツリー)[ \t]*[:：][ \t]*`?(?<value>(?:[A-Za-z]:[\\/]|%TEMP%[\\/])[^`\r\n]+?)`?[ \t]*$'
+$script:BaselineHeadLinePattern = '(?im)^[ \t]*(?:[-*][ \t]*)?HEAD[ \t]*[:：][ \t]*`?(?<value>(?:[0-9a-f]{40}|[0-9a-f]{64}))`?[ \t]*$'
+$script:BaselineDirtyLinePattern = '(?im)^[ \t]*(?:[-*][ \t]*)?未コミット(?:件数)?[ \t]*[:：][ \t]*`?(?<value>[0-9]+)(?:件)?`?[ \t]*$'
+$script:BaselineCommandLinePattern = '(?im)^[ \t]*(?:[-*][ \t]*)?対象検査(?:の)?[ \t]*(?:command|コマンド)[ \t]*[:：][ \t]*`(?<value>[^`\r\n]+)`[ \t]*$'
+$script:BaselineResultLinePattern = '(?im)^[ \t]*(?:[-*][ \t]*)?対象検査(?:の)?[ \t]*(?:baseline|ベースライン|実測)[ \t]*[:：][ \t]*(?<value>[^\r\n]+?)[ \t]*$'
+
+# 項目14: 対象と証拠をこの3行で1組にする。pathはrepository相対に限定し、
+# outputは rg/grep の path:line:body 形式をそのまま貼る。
+$script:EvidenceTargetLinePattern = '(?i)^[ \t]*(?:[-*][ \t]*)?対象実名[ \t]*[:：][ \t]*(?<value>.+?)[ \t]*$'
+$script:EvidenceCommandLinePattern = '(?i)^[ \t]*(?:[-*][ \t]*)?実在確認コマンド[ \t]*[:：][ \t]*(?<value>.+?)[ \t]*$'
+$script:EvidenceOutputLinePattern = '(?i)^[ \t]*(?:[-*][ \t]*)?実在確認出力[ \t]*[:：][ \t]*(?<value>.+?)[ \t]*$'
 
 # 項目10: 長時間検査の除外4件（正本 docs/rules/03-品質ゲート.md:61）。
 $script:LongTestSkipNames = @(
@@ -363,6 +434,295 @@ function Test-CargoTargetDirSpecified {
     return [pscustomobject]@{ Status = "NG"; Detail = "cargoの言及があるのにCARGO_TARGET_DIRの指定が見つかりません" }
 }
 
+function Test-ModelSelectionAndReason {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    $matches = [regex]::Matches($Text, $script:ModelSelectionLinePattern)
+    if ($matches.Count -ne 1) {
+        return [pscustomobject]@{
+            Status = "NG"
+            Detail = "『モデル選択: opus|sonnet|gpt-5.6-sol | 理由: 非空の理由』の1行がちょうど1件必要です（検出 $($matches.Count) 件）"
+        }
+    }
+
+    $model = $matches[0].Groups["model"].Value.ToLowerInvariant()
+    $reason = $matches[0].Groups["reason"].Value.Trim().Trim([char[]]"*`_ ")
+    if ([string]::IsNullOrWhiteSpace($reason)) {
+        return [pscustomobject]@{ Status = "NG"; Detail = "モデル選択と同じ行の理由が空です" }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($script:ExpectedModel)) {
+        if (@("opus", "sonnet", "gpt-5.6-sol") -notcontains $script:ExpectedModel) {
+            return [pscustomobject]@{ Status = "NG"; Detail = "ExpectedModelはopus/sonnet/gpt-5.6-solのいずれかでなければなりません: $($script:ExpectedModel)" }
+        }
+        if ($model -ne $script:ExpectedModel) {
+            return [pscustomobject]@{ Status = "NG"; Detail = "記録モデル $model と実際のモデル $($script:ExpectedModel) が一致しません" }
+        }
+    }
+    return [pscustomobject]@{ Status = "OK"; Detail = "モデル=$model、同一行の理由を検出" }
+}
+
+function Get-SingleBaselineCapture {
+    param(
+        [Parameter(Mandatory = $true)][string]$Text,
+        [Parameter(Mandatory = $true)][string]$Pattern,
+        [Parameter(Mandatory = $true)][string]$Label,
+        [Parameter(Mandatory = $true)]$Missing
+    )
+
+    $matches = [regex]::Matches($Text, $Pattern)
+    if ($matches.Count -ne 1) {
+        $Missing.Add("$Label（検出 $($matches.Count) 件）")
+        return $null
+    }
+    return $matches[0].Groups["value"].Value.Trim()
+}
+
+function Test-DelegationBaseline {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    $missing = New-Object System.Collections.Generic.List[string]
+    $worktree = Get-SingleBaselineCapture -Text $Text -Pattern $script:BaselineWorktreeLinePattern -Label "worktree" -Missing $missing
+    $head = Get-SingleBaselineCapture -Text $Text -Pattern $script:BaselineHeadLinePattern -Label "HEAD(40/64hex)" -Missing $missing
+    $dirtyText = Get-SingleBaselineCapture -Text $Text -Pattern $script:BaselineDirtyLinePattern -Label "未コミット件数" -Missing $missing
+    $command = Get-SingleBaselineCapture -Text $Text -Pattern $script:BaselineCommandLinePattern -Label "対象検査command" -Missing $missing
+    $baseline = Get-SingleBaselineCapture -Text $Text -Pattern $script:BaselineResultLinePattern -Label "対象検査baseline" -Missing $missing
+    if ($missing.Count -gt 0) {
+        return [pscustomobject]@{ Status = "NG"; Detail = "欠落または重複: $($missing -join '、')" }
+    }
+
+    $exitMatch = [regex]::Match($baseline, '(?i)(?:exit|終了コード)\s*(?:=|:|：)?\s*(?<code>-?[0-9]+)')
+    if (-not $exitMatch.Success) {
+        return [pscustomobject]@{ Status = "NG"; Detail = "対象検査baselineにexit/終了コードがありません" }
+    }
+    $withoutExit = $baseline.Remove($exitMatch.Index, $exitMatch.Length)
+    if (-not [regex]::IsMatch($withoutExit, '[0-9]+')) {
+        return [pscustomobject]@{ Status = "NG"; Detail = "対象検査baselineに終了コード以外の数値実測がありません" }
+    }
+    if ([string]::IsNullOrWhiteSpace($command)) {
+        return [pscustomobject]@{ Status = "NG"; Detail = "対象検査commandが空です" }
+    }
+
+    $dirtyCount = [int64]$dirtyText
+    if ($script:VerifyLiveBaseline) {
+        $expandedWorktree = [Environment]::ExpandEnvironmentVariables($worktree)
+        if (-not (Test-Path -LiteralPath $expandedWorktree -PathType Container)) {
+            return [pscustomobject]@{ Status = "NG"; Detail = "baselineのworktreeが存在しません: $expandedWorktree" }
+        }
+        try {
+            $global:LASTEXITCODE = 0
+            $actualHeadParts = @(& $script:GitExecutable -C $expandedWorktree rev-parse HEAD 2>&1)
+            $headExit = $LASTEXITCODE
+            $actualHead = ($actualHeadParts -join "`n").Trim()
+            if ($headExit -ne 0) {
+                return [pscustomobject]@{ Status = "NG"; Detail = "baseline worktreeのHEADを取得できません（exit=$headExit）: $actualHead" }
+            }
+            if (-not $actualHead.Equals($head, [StringComparison]::OrdinalIgnoreCase)) {
+                return [pscustomobject]@{ Status = "NG"; Detail = "記録HEAD $head と実測HEAD $actualHead が一致しません" }
+            }
+
+            $global:LASTEXITCODE = 0
+            $statusLines = @(& $script:GitExecutable -c core.excludesFile= -C $expandedWorktree status --porcelain --untracked-files=all 2>&1)
+            $statusExit = $LASTEXITCODE
+            if ($statusExit -ne 0) {
+                return [pscustomobject]@{ Status = "NG"; Detail = "baseline worktreeの未コミット件数を取得できません（exit=$statusExit）: $($statusLines -join ' ')" }
+            }
+            $actualDirtyCount = $statusLines.Count
+            if ($actualDirtyCount -ne $dirtyCount) {
+                return [pscustomobject]@{ Status = "NG"; Detail = "記録した未コミット件数 $dirtyCount と実測 $actualDirtyCount が一致しません" }
+            }
+        }
+        catch {
+            return [pscustomobject]@{ Status = "NG"; Detail = "live baseline照合に失敗しました: $($_.Exception.Message)" }
+        }
+        return [pscustomobject]@{ Status = "OK"; Detail = "HEAD=$head、未コミット=$dirtyCount、検査command/数値baselineを検出しlive照合一致" }
+    }
+
+    return [pscustomobject]@{ Status = "OK"; Detail = "HEAD=$head、未コミット=$dirtyCount、検査command/終了コード/数値baselineを検出" }
+}
+
+function Remove-OuterBackticks {
+    param([AllowEmptyString()][string]$Value)
+
+    $trimmed = $Value.Trim()
+    if ($trimmed.Length -ge 2 -and $trimmed[0] -eq [char]0x60 -and $trimmed[$trimmed.Length - 1] -eq [char]0x60) {
+        return $trimmed.Substring(1, $trimmed.Length - 2)
+    }
+    return $trimmed
+}
+
+function Get-ExistenceEvidenceGroups {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    $groups = New-Object System.Collections.Generic.List[object]
+    $errors = New-Object System.Collections.Generic.List[string]
+    $current = $null
+    $lines = $Text -split "`n", -1
+    foreach ($rawLine in $lines) {
+        $line = $rawLine.TrimEnd([char]0x0D)
+        $targetMatch = [regex]::Match($line, $script:EvidenceTargetLinePattern)
+        if ($targetMatch.Success) {
+            if ($null -ne $current) { $groups.Add($current) }
+            $current = [pscustomobject]@{
+                TargetRaw = $targetMatch.Groups["value"].Value
+                Commands = New-Object System.Collections.Generic.List[string]
+                Outputs = New-Object System.Collections.Generic.List[string]
+            }
+            continue
+        }
+
+        $commandMatch = [regex]::Match($line, $script:EvidenceCommandLinePattern)
+        if ($commandMatch.Success) {
+            if ($null -eq $current) { $errors.Add("対象実名より前に実在確認コマンドがあります") }
+            else { $current.Commands.Add($commandMatch.Groups["value"].Value) }
+            continue
+        }
+
+        $outputMatch = [regex]::Match($line, $script:EvidenceOutputLinePattern)
+        if ($outputMatch.Success) {
+            if ($null -eq $current) { $errors.Add("対象実名より前に実在確認出力があります") }
+            else { $current.Outputs.Add($outputMatch.Groups["value"].Value) }
+        }
+    }
+    if ($null -ne $current) { $groups.Add($current) }
+    return [pscustomobject]@{ Groups = $groups.ToArray(); Errors = $errors.ToArray() }
+}
+
+function Test-StructuredExistenceEvidence {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    $parsed = Get-ExistenceEvidenceGroups -Text $Text
+    $noCodeGroups = New-Object System.Collections.Generic.List[object]
+    foreach ($group in @($parsed.Groups)) {
+        $candidate = ([string]$group.TargetRaw).Replace([string][char]0x60, "").Trim()
+        $noCodeMatch = [regex]::Match($candidate, '^該当なし\s*::\s*(?<reason>.+?)\s*$')
+        if ($noCodeMatch.Success) {
+            $noCodeGroups.Add([pscustomobject]@{ Group = $group; Reason = $noCodeMatch.Groups["reason"].Value })
+        }
+    }
+    if ($noCodeGroups.Count -gt 0) {
+        if (@($parsed.Groups).Count -ne 1 -or $noCodeGroups.Count -ne 1) {
+            return [pscustomobject]@{ Status = "NG"; Detail = "『対象実名: 該当なし :: 理由』は他の対象実名と混在できません" }
+        }
+        if (@($parsed.Errors).Count -gt 0) {
+            return [pscustomobject]@{ Status = "NG"; Detail = "構造化した該当なし免除に属さないcommand/outputがあります: $(@($parsed.Errors) -join ' / ')" }
+        }
+        $exemptionGroup = $noCodeGroups[0].Group
+        if (@($exemptionGroup.Commands).Count -ne 0 -or @($exemptionGroup.Outputs).Count -ne 0) {
+            return [pscustomobject]@{ Status = "NG"; Detail = "『対象実名: 該当なし :: 理由』には実在確認command/outputを付けられません" }
+        }
+        $normalizedReason = [regex]::Replace([string]$noCodeGroups[0].Reason, '[\s、。：:・]', '')
+        if ($normalizedReason.Length -lt 4) {
+            return [pscustomobject]@{ Status = "NG"; Detail = "構造化した該当なし免除の理由は空白・句読点を除いて4文字以上必要です" }
+        }
+        return [pscustomobject]@{ Status = "OK"; Detail = "単独の構造化した該当なし免除と4文字以上の理由を検出" }
+    }
+
+    $problems = New-Object System.Collections.Generic.List[string]
+    foreach ($errorText in @($parsed.Errors)) { $problems.Add($errorText) }
+    if (@($parsed.Groups).Count -eq 0) {
+        return [pscustomobject]@{ Status = "NG"; Detail = "構造化した対象実名/実在確認コマンド/実在確認出力がありません" }
+    }
+    if (-not (Test-Path -LiteralPath $script:RepositoryRoot -PathType Container)) {
+        return [pscustomobject]@{ Status = "NG"; Detail = "RepositoryRootが存在しません: $($script:RepositoryRoot)" }
+    }
+
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($group in @($parsed.Groups)) {
+        $targetText = ([string]$group.TargetRaw).Replace([string][char]0x60, "").Trim()
+        $targetMatch = [regex]::Match(
+            $targetText,
+            '^(?<path>(?:crates|apps|scripts|docs|\.github)[\\/][^|<>:]+?\.[A-Za-z0-9]+)\s+(?:::|=>|→|\|)\s+(?<symbol>[A-Za-z_][A-Za-z0-9_-]*(?:::[A-Za-z_][A-Za-z0-9_-]*)*(?:\(\))?)$'
+        )
+        if (-not $targetMatch.Success) {
+            $problems.Add("対象実名の形式不正: ${targetText}（repo相対path :: symbol を使う）")
+            continue
+        }
+
+        $targetPath = $targetMatch.Groups["path"].Value.Replace("\", "/")
+        $symbol = $targetMatch.Groups["symbol"].Value
+        $bareSymbol = [regex]::Replace($symbol, '\(\)$', '')
+        $key = "${targetPath}::${symbol}"
+        if ($targetPath.Equals("docs/competitive-review-2026-08-20.md", [StringComparison]::OrdinalIgnoreCase)) {
+            $problems.Add("$key は禁止文書なので対象実名にできません")
+            continue
+        }
+        if (-not $seen.Add($key)) {
+            $problems.Add("対象実名が重複しています: $key")
+            continue
+        }
+        if (@($group.Commands).Count -ne 1 -or @($group.Outputs).Count -ne 1) {
+            $problems.Add("$key はcommand/outputが1:1ではありません（command=$(@($group.Commands).Count), output=$(@($group.Outputs).Count)）")
+            continue
+        }
+
+        $command = Remove-OuterBackticks ([string]$group.Commands[0])
+        $output = Remove-OuterBackticks ([string]$group.Outputs[0])
+        $toolMatch = [regex]::Match($command, '(?i)^\s*(?:&\s*)?(?<tool>rg(?:\.exe)?|grep(?:\.exe)?)(?:\s|$)')
+        if (-not $toolMatch.Success) {
+            $problems.Add("$key の実在確認コマンドはrg/grep直接実行ではありません")
+            continue
+        }
+        $tool = $toolMatch.Groups["tool"].Value.ToLowerInvariant()
+        if ($tool.StartsWith("rg") -and
+            -not [regex]::IsMatch($command, '(?i)--glob(?:=|\s+)[\x27\x22]?!docs/competitive-review-2026-08-20\.md[\x27\x22]?')) {
+            $problems.Add("$key のrgに --glob '!docs/competitive-review-2026-08-20.md' がありません")
+        }
+        $normalizedCommand = $command.Replace("\", "/")
+        if ($normalizedCommand.IndexOf($targetPath, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+            $problems.Add("$key のcommandに対象pathがありません")
+        }
+        if ($command.IndexOf($bareSymbol, [StringComparison]::Ordinal) -lt 0) {
+            $problems.Add("$key のcommandに対象symbolがありません")
+        }
+
+        $outputMatch = [regex]::Match($output, '^(?<path>.+?):(?<line>[1-9][0-9]*):(?<body>.*)$')
+        if (-not $outputMatch.Success) {
+            $problems.Add("$key の出力がpath:line:body形式ではありません")
+            continue
+        }
+        $outputPath = $outputMatch.Groups["path"].Value.Replace("\", "/")
+        $lineNumber = [int]$outputMatch.Groups["line"].Value
+        $outputBody = $outputMatch.Groups["body"].Value
+        if (-not $outputPath.Equals($targetPath, [StringComparison]::OrdinalIgnoreCase)) {
+            $problems.Add("$key の出力path $outputPath が対象pathと一致しません")
+            continue
+        }
+        if (($targetPath -split '/') -contains '..') {
+            $problems.Add("$key に親directory参照は使えません")
+            continue
+        }
+        $relativeOsPath = $targetPath.Replace('/', [IO.Path]::DirectorySeparatorChar)
+        $fullPath = [IO.Path]::GetFullPath((Join-Path $script:RepositoryRoot $relativeOsPath))
+        $rootPrefix = $script:RepositoryRoot + [IO.Path]::DirectorySeparatorChar
+        if (-not $fullPath.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            $problems.Add("$key はRepositoryRoot外を指しています")
+            continue
+        }
+        if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
+            $problems.Add("$key の対象ファイルが存在しません")
+            continue
+        }
+        $actualLines = [IO.File]::ReadAllLines($fullPath, [Text.Encoding]::UTF8)
+        if ($lineNumber -gt $actualLines.Length) {
+            $problems.Add("$key の出力行 $lineNumber は実ファイルの範囲外です（全$($actualLines.Length)行）")
+            continue
+        }
+        $actualBody = $actualLines[$lineNumber - 1]
+        if (-not $actualBody.Equals($outputBody, [StringComparison]::Ordinal)) {
+            $problems.Add("$key の出力本文が実ファイル${lineNumber}行目と一致しません")
+            continue
+        }
+        if ($actualBody.IndexOf($bareSymbol, [StringComparison]::Ordinal) -lt 0) {
+            $problems.Add("$key の実ファイル行に対象symbolがありません")
+        }
+    }
+
+    if ($problems.Count -gt 0) {
+        return [pscustomobject]@{ Status = "NG"; Detail = ($problems -join " / ") }
+    }
+    return [pscustomobject]@{ Status = "OK"; Detail = "$(@($parsed.Groups).Count)対象のcommand/output/path/line/body/symbolを実ファイルと照合" }
+}
+
 function Get-InstructionCheckResults {
     param(
         [Parameter(Mandatory = $true)][string]$Text,
@@ -405,6 +765,15 @@ function Get-InstructionCheckResults {
     $r11 = Test-CargoTargetDirSpecified -Text $Text
     $results.Add([pscustomobject]@{ Index = 11; Name = "専用のCARGO_TARGET_DIR指定"; Citation = "06-過去の失敗と対策.md:241-242"; Status = $r11.Status; Detail = $r11.Detail })
 
+    $r12 = Test-ModelSelectionAndReason -Text $Text
+    $results.Add([pscustomobject]@{ Index = 12; Name = "モデル選択と同一行の理由"; Citation = "01-役割と委譲.md:31"; Status = $r12.Status; Detail = $r12.Detail })
+
+    $r13 = Test-DelegationBaseline -Text $Text
+    $results.Add([pscustomobject]@{ Index = 13; Name = "投入時のHEAD・未コミット件数・対象検査baseline"; Citation = "01-役割と委譲.md:33"; Status = $r13.Status; Detail = $r13.Detail })
+
+    $r14 = Test-StructuredExistenceEvidence -Text $Text
+    $results.Add([pscustomobject]@{ Index = 14; Name = "対象実名ごとの実在確認証拠"; Citation = "01-役割と委譲.md:43"; Status = $r14.Status; Detail = $r14.Detail })
+
     return $results.ToArray()
 }
 
@@ -420,10 +789,30 @@ function Get-InstructionText {
     return [pscustomobject]@{ Path = $resolved; Text = $normalized }
 }
 
+function Get-InstructionTextFromStdin {
+    $raw = Read-Utf8StandardInput
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+        throw "標準入力の指示文が空です"
+    }
+    if ($raw.Length -ge 1 -and $raw[0] -eq [char]0xFEFF) {
+        $raw = $raw.Substring(1)
+    }
+    $normalized = $raw.Replace("`r`n", "`n").Replace("`r", "`n")
+    return [pscustomobject]@{ Path = "<stdin>"; Text = $normalized }
+}
+
 try {
     $fileResults = New-Object System.Collections.Generic.List[object]
-    foreach ($rawPath in $InstructionPath) {
-        $loaded = Get-InstructionText -Path $rawPath
+    $loadedInstructions = New-Object System.Collections.Generic.List[object]
+    if ($PSCmdlet.ParameterSetName -eq "Stdin") {
+        $loadedInstructions.Add((Get-InstructionTextFromStdin))
+    }
+    else {
+        foreach ($rawPath in $InstructionPath) {
+            $loadedInstructions.Add((Get-InstructionText -Path $rawPath))
+        }
+    }
+    foreach ($loaded in $loadedInstructions) {
         $checks = Get-InstructionCheckResults -Text $loaded.Text -MinNumericCriteria $MinNumericCriteria -Window $ProximityWindow
         $fileResults.Add([pscustomobject]@{ Path = $loaded.Path; Checks = $checks })
     }

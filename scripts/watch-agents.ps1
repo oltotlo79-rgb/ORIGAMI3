@@ -5,7 +5,8 @@
 .DESCRIPTION
 JSON定義にある報告書と許可ソースの最新更新時刻を監視します。既定は10分間隔の
 継続監視で、40分以上どの成果物にも更新が無ければ停滞と表示します。このスクリプトは
-表示だけを行い、processの停止やファイルの作成・変更・削除は行いません。
+processの停止や監視対象の変更を行いません。継続監視だけは生存確認のため、RepositoryRoot
+のscratchpadへ固定のUTF-8 latest output・runtime JSON・singleton lockを書きます。
 
 定義ファイルの例:
 {
@@ -44,6 +45,76 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
+$script:Utf8NoBom = New-Object Text.UTF8Encoding($false)
+$script:CapturedWatchLines = $null
+
+function Write-WatchLine {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    Write-Output $Text
+    if ($null -ne $script:CapturedWatchLines) {
+        $script:CapturedWatchLines.Add($Text)
+    }
+}
+
+function Get-Sha256HexFromBytes {
+    param([Parameter(Mandatory = $true)][byte[]]$Bytes)
+
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        return ([BitConverter]::ToString($sha.ComputeHash($Bytes))).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+        $sha.Dispose()
+    }
+}
+
+function Get-FileSha256Hex {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $stream = New-Object IO.FileStream(
+        $Path,
+        [IO.FileMode]::Open,
+        [IO.FileAccess]::Read,
+        ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+    )
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        return ([BitConverter]::ToString($sha.ComputeHash($stream))).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+        $sha.Dispose()
+        $stream.Dispose()
+    }
+}
+
+function Write-AtomicUtf8File {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Content
+    )
+
+    $operationId = [Guid]::NewGuid().ToString("N")
+    $temporaryPath = "{0}.{1}.tmp" -f $Path, $operationId
+    $backupPath = "{0}.{1}.bak" -f $Path, $operationId
+    try {
+        [IO.File]::WriteAllText($temporaryPath, $Content, $script:Utf8NoBom)
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            [IO.File]::Replace($temporaryPath, $Path, $backupPath)
+        }
+        else {
+            [IO.File]::Move($temporaryPath, $Path)
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $temporaryPath -PathType Leaf) {
+            Remove-Item -LiteralPath $temporaryPath -Force
+        }
+        if (Test-Path -LiteralPath $backupPath -PathType Leaf) {
+            Remove-Item -LiteralPath $backupPath -Force
+        }
+    }
+}
 
 if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
     $scriptDirectory = [string]$PSScriptRoot
@@ -167,7 +238,9 @@ function Get-ProcessKind {
         return "rustc"
     }
 
-    $locationText = (([string]$Process.ExecutablePath) + " " + ([string]$Process.CommandLine))
+    # CommandLineを含めると、target配下のtest exeを検索しているPowerShell自身まで
+    # 「テスト」に数える。分類はOSが返した実行ファイル実パスだけを根拠にする。
+    $locationText = [string]$Process.ExecutablePath
     if ([regex]::IsMatch(
             $locationText,
             '[\\/][^\\/]*target[^\\/]*[\\/](?:debug|release)[\\/]deps[\\/][^\\/\s"]+\.exe',
@@ -299,6 +372,162 @@ function Assert-AgentDefinition {
     }
 }
 
+function Read-WatchDefinition {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    try {
+        $stream = New-Object IO.FileStream(
+            $Path,
+            [IO.FileMode]::Open,
+            [IO.FileAccess]::Read,
+            ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+        )
+        try {
+            if ($stream.Length -gt [int]::MaxValue) {
+                throw "監視定義が大きすぎます: $Path"
+            }
+            $bytes = New-Object byte[] ([int]$stream.Length)
+            $offset = 0
+            while ($offset -lt $bytes.Length) {
+                $read = $stream.Read($bytes, $offset, $bytes.Length - $offset)
+                if ($read -le 0) {
+                    throw "監視定義を最後まで読めませんでした: $Path"
+                }
+                $offset += $read
+            }
+        }
+        finally {
+            $stream.Dispose()
+        }
+        $definition = $script:Utf8NoBom.GetString($bytes) | ConvertFrom-Json
+    }
+    catch {
+        throw "監視定義JSONを読めません: $Path ($($_.Exception.Message))"
+    }
+
+    if ($null -eq $definition -or @($definition.PSObject.Properties.Name) -notcontains "agents") {
+        throw "監視定義に agents 配列がありません: $Path"
+    }
+    $agents = @($definition.agents)
+    if ($agents.Count -eq 0) {
+        throw "監視定義の agents 配列が空です: $Path"
+    }
+
+    $knownNames = @{}
+    foreach ($agent in $agents) {
+        Assert-AgentDefinition -Agent $agent
+        $agentName = [string]$agent.name
+        if ($knownNames.ContainsKey($agentName)) {
+            throw "担当名が重複しています: $agentName"
+        }
+        $knownNames[$agentName] = $true
+    }
+
+    return [pscustomobject]@{
+        Agents = $agents
+        Sha256 = Get-Sha256HexFromBytes -Bytes $bytes
+    }
+}
+
+function Initialize-WatchRuntime {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$ScriptPath
+    )
+
+    $scratchpadPath = Join-Path $Root "scratchpad"
+    [void][IO.Directory]::CreateDirectory($scratchpadPath)
+    $runtimePath = [IO.Path]::GetFullPath((Join-Path $scratchpadPath "watch-agents.runtime.json"))
+    $outputPath = [IO.Path]::GetFullPath((Join-Path $scratchpadPath "watch-agents.latest.log"))
+    $lockPath = [IO.Path]::GetFullPath((Join-Path $scratchpadPath "watch-agents.lock"))
+
+    try {
+        $lockStream = New-Object IO.FileStream(
+            $lockPath,
+            [IO.FileMode]::OpenOrCreate,
+            [IO.FileAccess]::ReadWrite,
+            [IO.FileShare]::None
+        )
+    }
+    catch [IO.IOException] {
+        throw "継続監視は既に稼働しています。singleton lockを取得できません: $lockPath"
+    }
+
+    try {
+        [IO.File]::WriteAllText($outputPath, "", $script:Utf8NoBom)
+        $process = Get-Process -Id $PID -ErrorAction Stop
+        $processPath = [string]$process.Path
+        if ([string]::IsNullOrWhiteSpace($processPath)) {
+            throw "監視processの実行ファイル実パスを取得できません: PID=$PID"
+        }
+        return [pscustomobject]@{
+            RuntimePath = $runtimePath
+            OutputPath = $outputPath
+            LockPath = $lockPath
+            LockStream = $lockStream
+            InstanceId = [Guid]::NewGuid().ToString("D")
+            ProcessStartUtc = $process.StartTime.ToUniversalTime()
+            ProcessExecutablePath = [IO.Path]::GetFullPath($processPath)
+            ScriptPath = [IO.Path]::GetFullPath($ScriptPath)
+            ScriptSha256 = Get-FileSha256Hex -Path $ScriptPath
+            ScanSequence = 0
+        }
+    }
+    catch {
+        $lockStream.Dispose()
+        throw
+    }
+}
+
+function Publish-WatchRuntime {
+    param(
+        [Parameter(Mandatory = $true)]$Runtime,
+        [Parameter(Mandatory = $true)][string[]]$HeaderLines,
+        [Parameter(Mandatory = $true)][string[]]$CycleLines,
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$DefinitionPath,
+        [Parameter(Mandatory = $true)][string]$DefinitionSha256,
+        [Parameter(Mandatory = $true)][int]$AgentCount,
+        [Parameter(Mandatory = $true)][DateTime]$ScanCompletedUtc,
+        [Parameter(Mandatory = $true)][int]$Interval,
+        [Parameter(Mandatory = $true)][int]$StaleAfter
+    )
+
+    $allLines = @($HeaderLines) + @($CycleLines)
+    $text = ($allLines -join [Environment]::NewLine) + [Environment]::NewLine
+    $bytes = $script:Utf8NoBom.GetBytes($text)
+    Write-AtomicUtf8File -Path $Runtime.OutputPath -Content $text
+    $outputItem = Get-Item -LiteralPath $Runtime.OutputPath -Force
+
+    $Runtime.ScanSequence += 1
+    $state = [ordered]@{
+        schemaVersion = 1
+        instanceId = $Runtime.InstanceId
+        pid = $PID
+        processStartUtc = $Runtime.ProcessStartUtc.ToString("o")
+        processExecutablePath = $Runtime.ProcessExecutablePath
+        scriptPath = $Runtime.ScriptPath
+        scriptSha256 = $Runtime.ScriptSha256
+        repositoryRoot = $Root
+        definitionPath = $DefinitionPath
+        definitionSha256 = $DefinitionSha256
+        runtimePath = $Runtime.RuntimePath
+        outputPath = $Runtime.OutputPath
+        outputSha256 = Get-Sha256HexFromBytes -Bytes $bytes
+        outputLength = [Int64]$bytes.Length
+        outputLastWriteUtc = $outputItem.LastWriteTimeUtc.ToString("o")
+        lockPath = $Runtime.LockPath
+        mode = "continuous"
+        intervalMinutes = $Interval
+        staleAfterMinutes = $StaleAfter
+        agentCount = $AgentCount
+        scanSequence = $Runtime.ScanSequence
+        scanCompletedUtc = $ScanCompletedUtc.ToString("o")
+        stateWrittenUtc = [DateTime]::UtcNow.ToString("o")
+    }
+    Write-AtomicUtf8File -Path $Runtime.RuntimePath -Content ($state | ConvertTo-Json -Depth 6)
+}
+
 $RepositoryRoot = [IO.Path]::GetFullPath($RepositoryRoot)
 if (-not (Test-Path -LiteralPath $RepositoryRoot -PathType Container)) {
     throw "RepositoryRoot が存在しません: $RepositoryRoot"
@@ -307,101 +536,132 @@ $DefinitionPath = Resolve-WatchPath -Path $DefinitionPath -BasePath $RepositoryR
 if (-not (Test-Path -LiteralPath $DefinitionPath -PathType Leaf)) {
     throw "監視定義が存在しません: $DefinitionPath"
 }
-
-try {
-    $definition = [IO.File]::ReadAllText($DefinitionPath, [Text.Encoding]::UTF8) | ConvertFrom-Json
+$definitionSnapshot = Read-WatchDefinition -Path $DefinitionPath
+$scriptInvocationPath = [string]$MyInvocation.MyCommand.Path
+if ([string]::IsNullOrWhiteSpace($scriptInvocationPath)) {
+    throw "監視scriptの実パスを取得できません"
 }
-catch {
-    throw "監視定義JSONを読めません: $DefinitionPath ($($_.Exception.Message))"
-}
-if ($null -eq $definition -or @($definition.PSObject.Properties.Name) -notcontains "agents") {
-    throw "監視定義に agents 配列がありません: $DefinitionPath"
-}
-$agents = @($definition.agents)
-if ($agents.Count -eq 0) {
-    throw "監視定義の agents 配列が空です: $DefinitionPath"
-}
-
-$knownNames = @{}
-foreach ($agent in $agents) {
-    Assert-AgentDefinition -Agent $agent
-    $agentName = [string]$agent.name
-    if ($knownNames.ContainsKey($agentName)) {
-        throw "担当名が重複しています: $agentName"
-    }
-    $knownNames[$agentName] = $true
-}
+$scriptInvocationPath = [IO.Path]::GetFullPath($scriptInvocationPath)
 
 $mode = if ($Once) { "1回判定" } else { "継続監視" }
-Write-Output ("[停滞監視] モード={0} / 間隔={1}分 / 停滞閾値={2}分 / 動作=表示のみ（プロセス停止=0 / ファイル変更=0）" -f
-    $mode, $IntervalMinutes, $StaleAfterMinutes)
-Write-Output ("[停滞監視] 定義={0}" -f $DefinitionPath)
+$behavior = if ($Once) {
+    "表示のみ（プロセス停止=0 / ファイル変更=0）"
+}
+else {
+    "表示のみ（プロセス停止=0 / 監視対象変更=0 / runtimeファイル更新=3）"
+}
+$headerLines = @(
+    ("[停滞監視] モード={0} / 間隔={1}分 / 停滞閾値={2}分 / 動作={3}" -f
+        $mode, $IntervalMinutes, $StaleAfterMinutes, $behavior),
+    ("[停滞監視] 定義={0}" -f $DefinitionPath)
+)
+$headerLines | Write-Output
 
-do {
-    $nowUtc = [DateTime]::UtcNow
-    $staleBoundary = $nowUtc.AddMinutes(-$StaleAfterMinutes)
-    Write-Output ("[判定時刻] {0:yyyy-MM-dd HH:mm:ss}Z" -f $nowUtc)
+$runtime = $null
+if (-not $Once) {
+    $runtime = Initialize-WatchRuntime -Root $RepositoryRoot -ScriptPath $scriptInvocationPath
+}
 
-    foreach ($agent in $agents) {
-        $agentName = [string]$agent.name
-        $reportState = Get-WatchedPathState -ConfiguredPath ([string]$agent.reportPath) -BasePath $RepositoryRoot -MustBeFile $true
-        $sourceStates = @(
-            foreach ($sourcePath in @($agent.sourcePaths)) {
-                Get-WatchedPathState -ConfiguredPath ([string]$sourcePath) -BasePath $RepositoryRoot -MustBeFile $false
+try {
+    do {
+        $definitionSnapshot = Read-WatchDefinition -Path $DefinitionPath
+        $agents = @($definitionSnapshot.Agents)
+        $cycleLines = New-Object System.Collections.Generic.List[string]
+        $script:CapturedWatchLines = $cycleLines
+        try {
+            $nowUtc = [DateTime]::UtcNow
+            $staleBoundary = $nowUtc.AddMinutes(-$StaleAfterMinutes)
+            Write-WatchLine ("[判定時刻] {0:yyyy-MM-dd HH:mm:ss}Z" -f $nowUtc)
+
+            foreach ($agent in $agents) {
+                $agentName = [string]$agent.name
+                $reportState = Get-WatchedPathState -ConfiguredPath ([string]$agent.reportPath) -BasePath $RepositoryRoot -MustBeFile $true
+                $sourceStates = @(
+                    foreach ($sourcePath in @($agent.sourcePaths)) {
+                        Get-WatchedPathState -ConfiguredPath ([string]$sourcePath) -BasePath $RepositoryRoot -MustBeFile $false
+                    }
+                )
+                $allStates = @($reportState) + $sourceStates
+                $problems = @($allStates | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.Problem) })
+                $validStates = @($allStates | Where-Object { $null -ne $_.LastWriteTimeUtc })
+
+                if ($problems.Count -gt 0 -or $validStates.Count -eq 0) {
+                    $status = "監視不能"
+                }
+                else {
+                    $latestState = $validStates | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+                    $status = if ($latestState.LastWriteTimeUtc -gt $staleBoundary) { "稼働" } else { "停滞" }
+                }
+
+                if ($validStates.Count -gt 0) {
+                    $latestState = $validStates | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+                    $latestSummary = Format-WatchTime -TimeUtc $latestState.LastWriteTimeUtc -NowUtc $nowUtc
+                    Write-WatchLine ("[{0}] {1}: 最新={2} / {3}" -f $status, $agentName, $latestSummary, $latestState.LatestPath)
+                }
+                else {
+                    Write-WatchLine ("[{0}] {1}: 最新=<取得不可>" -f $status, $agentName)
+                }
+
+                $reportTime = Format-WatchTime -TimeUtc $reportState.LastWriteTimeUtc -NowUtc $nowUtc
+                Write-WatchLine ("  報告書: {0} / bytes={1} / {2}" -f
+                    $reportState.FullPath, $(if ($null -eq $reportState.Bytes) { "-" } else { $reportState.Bytes }), $reportTime)
+                foreach ($sourceState in $sourceStates) {
+                    $sourceTime = Format-WatchTime -TimeUtc $sourceState.LastWriteTimeUtc -NowUtc $nowUtc
+                    $sourceDetail = if ($null -eq $sourceState.LatestPath) { $sourceState.FullPath } else { $sourceState.LatestPath }
+                    Write-WatchLine ("  ソース: {0} / bytes={1} / {2}" -f
+                        $sourceDetail, $(if ($null -eq $sourceState.Bytes) { "-" } else { $sourceState.Bytes }), $sourceTime)
+                }
+                foreach ($problem in $problems) {
+                    Write-WatchLine ("  [要確認] {0}: {1}" -f $problem.FullPath, $problem.Problem)
+                }
             }
-        )
-        $allStates = @($reportState) + $sourceStates
-        $problems = @($allStates | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.Problem) })
-        $validStates = @($allStates | Where-Object { $null -ne $_.LastWriteTimeUtc })
 
-        if ($problems.Count -gt 0 -or $validStates.Count -eq 0) {
-            $status = "監視不能"
+            $processState = Get-SupplementalProcesses
+            if (-not [string]::IsNullOrWhiteSpace([string]$processState.Warning)) {
+                Write-WatchLine ("[補助process注意] {0}" -f $processState.Warning)
+            }
+            $processes = @($processState.Processes)
+            $cargoCount = @($processes | Where-Object Kind -eq "cargo").Count
+            $rustcCount = @($processes | Where-Object Kind -eq "rustc").Count
+            $testCount = @($processes | Where-Object Kind -eq "テスト").Count
+            Write-WatchLine ("[補助process] 合計={0} / cargo={1} / rustc={2} / テスト={3}" -f
+                $processes.Count, $cargoCount, $rustcCount, $testCount)
+            foreach ($process in $processes) {
+                $cpuText = if ($null -eq $process.CpuSeconds) { "<取得不可>" } else { [string]$process.CpuSeconds }
+                Write-WatchLine ("  種別={0} / PID={1} / CPU秒={2} / CommandLine={3}" -f
+                    $process.Kind, $process.ProcessId, $cpuText, $process.CommandLine)
+            }
+
+            $scanCompletedUtc = [DateTime]::UtcNow
+            Write-WatchLine ("[走査完了] {0:yyyy-MM-dd HH:mm:ss.fff}Z" -f $scanCompletedUtc)
+            if (-not $Once) {
+                Publish-WatchRuntime `
+                    -Runtime $runtime `
+                    -HeaderLines $headerLines `
+                    -CycleLines $cycleLines.ToArray() `
+                    -Root $RepositoryRoot `
+                    -DefinitionPath $DefinitionPath `
+                    -DefinitionSha256 $definitionSnapshot.Sha256 `
+                    -AgentCount $agents.Count `
+                    -ScanCompletedUtc $scanCompletedUtc `
+                    -Interval $IntervalMinutes `
+                    -StaleAfter $StaleAfterMinutes
+            }
         }
-        else {
-            $latestState = $validStates | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
-            $status = if ($latestState.LastWriteTimeUtc -gt $staleBoundary) { "稼働" } else { "停滞" }
+        finally {
+            $script:CapturedWatchLines = $null
         }
 
-        if ($validStates.Count -gt 0) {
-            $latestState = $validStates | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
-            $latestSummary = Format-WatchTime -TimeUtc $latestState.LastWriteTimeUtc -NowUtc $nowUtc
-            Write-Output ("[{0}] {1}: 最新={2} / {3}" -f $status, $agentName, $latestSummary, $latestState.LatestPath)
+        if (-not $Once) {
+            Start-Sleep -Seconds ($IntervalMinutes * 60)
         }
-        else {
-            Write-Output ("[{0}] {1}: 最新=<取得不可>" -f $status, $agentName)
-        }
-
-        $reportTime = Format-WatchTime -TimeUtc $reportState.LastWriteTimeUtc -NowUtc $nowUtc
-        Write-Output ("  報告書: {0} / bytes={1} / {2}" -f
-            $reportState.FullPath, $(if ($null -eq $reportState.Bytes) { "-" } else { $reportState.Bytes }), $reportTime)
-        foreach ($sourceState in $sourceStates) {
-            $sourceTime = Format-WatchTime -TimeUtc $sourceState.LastWriteTimeUtc -NowUtc $nowUtc
-            $sourceDetail = if ($null -eq $sourceState.LatestPath) { $sourceState.FullPath } else { $sourceState.LatestPath }
-            Write-Output ("  ソース: {0} / bytes={1} / {2}" -f
-                $sourceDetail, $(if ($null -eq $sourceState.Bytes) { "-" } else { $sourceState.Bytes }), $sourceTime)
-        }
-        foreach ($problem in $problems) {
-            Write-Output ("  [要確認] {0}: {1}" -f $problem.FullPath, $problem.Problem)
+    } while (-not $Once)
+}
+finally {
+    $script:CapturedWatchLines = $null
+    if ($null -ne $runtime) {
+        if ($null -ne $runtime.LockStream) {
+            $runtime.LockStream.Dispose()
         }
     }
-
-    $processState = Get-SupplementalProcesses
-    if (-not [string]::IsNullOrWhiteSpace([string]$processState.Warning)) {
-        Write-Output ("[補助process注意] {0}" -f $processState.Warning)
-    }
-    $processes = @($processState.Processes)
-    $cargoCount = @($processes | Where-Object Kind -eq "cargo").Count
-    $rustcCount = @($processes | Where-Object Kind -eq "rustc").Count
-    $testCount = @($processes | Where-Object Kind -eq "テスト").Count
-    Write-Output ("[補助process] 合計={0} / cargo={1} / rustc={2} / テスト={3}" -f
-        $processes.Count, $cargoCount, $rustcCount, $testCount)
-    foreach ($process in $processes) {
-        $cpuText = if ($null -eq $process.CpuSeconds) { "<取得不可>" } else { [string]$process.CpuSeconds }
-        Write-Output ("  種別={0} / PID={1} / CPU秒={2} / CommandLine={3}" -f
-            $process.Kind, $process.ProcessId, $cpuText, $process.CommandLine)
-    }
-
-    if (-not $Once) {
-        Start-Sleep -Seconds ($IntervalMinutes * 60)
-    }
-} while (-not $Once)
+}

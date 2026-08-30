@@ -315,6 +315,21 @@ try {
     Assert-Ori3SelfTest $normalCheckRequired "unreadable signing key must require the normal check path"
     Write-Ori3ReceiptMissMessage "synthetic unreadable-key fallback" $unreadableHit
     Write-Host "[OK] unreadable signing key => visible receipt miss and normal-check required"
+
+    $repairScript = Join-Path $PSScriptRoot "check-receipt.ps1"
+    $repairOutput = @(& powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $repairScript -RepairSigningKey -RepoRoot $ReceiptSandboxRoot 2>&1)
+    $repairExit = $LASTEXITCODE
+    Assert-Ori3SelfTest ($repairExit -eq 0) ("explicit key repair failed: exit=" + $repairExit + " output=" + ($repairOutput -join "`n"))
+    Assert-Ori3SelfTest (($repairOutput -join "`n").Contains("旧領収書は再利用できず")) "explicit key repair did not warn that old receipts cannot be reused"
+    $backups = @(Get-ChildItem -LiteralPath (Get-Ori3ReceiptStorePath $ReceiptSandboxRoot) -Filter "local-signing-key.dpapi.invalid-*.dpapi" -File)
+    Assert-Ori3SelfTest ($backups.Count -eq 1) "explicit key repair did not retain exactly one invalid-key backup"
+    Assert-Ori3SelfTest ($backups[0].Length -eq 8) "invalid signing key backup did not retain the original bytes"
+    $repairedKey = [byte[]](Get-Ori3SigningKey $ReceiptSandboxRoot)
+    Assert-Ori3SelfTest ($repairedKey.Length -eq 32) "explicit key repair did not create a usable 32-byte signing key"
+    $postRepairHit = Find-Ori3CheckReceipt $fallbackContext
+    Assert-Ori3SelfTest (-not $postRepairHit.IsHit) "receipt signed by the replaced key must not be reused"
+    Assert-Ori3SelfTest ($postRepairHit.Reason.Contains("署名")) "replaced-key receipt miss did not explain the signature mismatch"
+    Write-Host "[OK] explicit unreadable-key repair => retained backup, usable replacement, and old receipt miss"
 }
 finally {
     if ($null -ne $receiptPath -and (Test-Path -LiteralPath $receiptPath -PathType Leaf)) {
