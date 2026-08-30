@@ -1,6 +1,14 @@
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = "Hook")]
 param(
-    [string]$StateRoot = ""
+    [Parameter(ParameterSetName = "Hook")]
+    [string]$StateRoot = "",
+
+    [Parameter(Mandatory = $true, ParameterSetName = "StopWatcher")]
+    [switch]$StopRecordedWatcher,
+
+    [Parameter(Mandatory = $true, ParameterSetName = "StopWatcher")]
+    [ValidateNotNullOrEmpty()]
+    [string]$RepositoryRoot
 )
 
 Set-StrictMode -Version 2.0
@@ -12,6 +20,7 @@ $script:ForbiddenDocument = "docs/competitive-review-2026-08-20.md"
 $script:Utf8NoBom = New-Object Text.UTF8Encoding($false)
 $script:Mutex = $null
 $script:MutexHeld = $false
+$script:BoundaryScriptPath = [IO.Path]::GetFullPath([string]$MyInvocation.MyCommand.Path)
 
 function Get-ObjectPropertyValue {
     param(
@@ -264,7 +273,7 @@ function Get-DenialReason {
         "ALLOW-3: literal file reads; rg requires the prohibited-document exclusion glob",
         "ALLOW-4: read-only process and free-capacity inspection",
         "ALLOW-5: literal desktop.exe Start-Process and desktop CloseMainWindow()",
-        "ALLOW-6: exact hidden detached Start-Process launcher using the absolute current hook PowerShell host path for continuous 10-minute scripts/watch-agents.ps1 monitoring; -Once is denied"
+        "ALLOW-6: exact hidden detached Start-Process launcher for continuous 10-minute scripts/watch-agents.ps1 monitoring, plus the exact boundary-script StopRecordedWatcher mode that can stop only the process identified by the fixed runtime state; -Once and direct Stop-Process are denied"
     ) -join "; "
     $escape = ""
     if (-not [string]::IsNullOrWhiteSpace($AcknowledgementPath)) {
@@ -305,6 +314,233 @@ function Resolve-PolicyPath {
         return [IO.Path]::GetFullPath($Path).TrimEnd([char[]]"\/")
     }
     return [IO.Path]::GetFullPath((Join-Path $RepositoryRoot $Path)).TrimEnd([char[]]"\/")
+}
+
+function Get-RequiredWatcherStateValue {
+    param(
+        [Parameter(Mandatory = $true)]$State,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    if (@($State.PSObject.Properties.Name) -notcontains $Name) {
+        throw "watcher runtime state is missing required field '$Name'"
+    }
+    return $State.$Name
+}
+
+function Test-SameWatcherPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Actual,
+        [Parameter(Mandatory = $true)][string]$Expected
+    )
+
+    try {
+        $actualFull = [IO.Path]::GetFullPath($Actual).TrimEnd([char[]]"\/")
+        $expectedFull = [IO.Path]::GetFullPath($Expected).TrimEnd([char[]]"\/")
+    }
+    catch {
+        return $false
+    }
+    return [string]::Equals($actualFull, $expectedFull, [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Assert-WatcherPathIsNotReparsePoint {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "watcher stop path may not be a reparse point: $Path"
+    }
+}
+
+function Assert-WatcherLockHeld {
+    param([Parameter(Mandatory = $true)][string]$LockPath)
+
+    $probe = $null
+    try {
+        $probe = New-Object IO.FileStream(
+            $LockPath,
+            [IO.FileMode]::Open,
+            [IO.FileAccess]::ReadWrite,
+            [IO.FileShare]::None
+        )
+    }
+    catch [IO.IOException] {
+        $nativeCode = ($_.Exception.GetBaseException().HResult -band 0xFFFF)
+        if ($nativeCode -eq 32 -or $nativeCode -eq 33) {
+            return
+        }
+        throw "watcher singleton lock could not be verified (Win32=$nativeCode): $LockPath"
+    }
+    finally {
+        if ($null -ne $probe) {
+            $probe.Dispose()
+        }
+    }
+    throw "watcher singleton lock is not held: $LockPath"
+}
+
+function Wait-WatcherLockReleased {
+    param([Parameter(Mandatory = $true)][string]$LockPath)
+
+    for ($attempt = 0; $attempt -lt 100; $attempt++) {
+        $probe = $null
+        try {
+            $probe = New-Object IO.FileStream(
+                $LockPath,
+                [IO.FileMode]::Open,
+                [IO.FileAccess]::ReadWrite,
+                [IO.FileShare]::None
+            )
+            return
+        }
+        catch [IO.IOException] {
+            $nativeCode = ($_.Exception.GetBaseException().HResult -band 0xFFFF)
+            if ($nativeCode -ne 32 -and $nativeCode -ne 33) {
+                throw "watcher singleton lock release could not be verified (Win32=$nativeCode): $LockPath"
+            }
+        }
+        finally {
+            if ($null -ne $probe) {
+                $probe.Dispose()
+            }
+        }
+        [Threading.Thread]::Sleep(100)
+    }
+    throw "watcher singleton lock remained held after the recorded process exited: $LockPath"
+}
+
+function Invoke-StopRecordedWatcher {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    if (-not [IO.Path]::IsPathRooted($Root)) {
+        throw "RepositoryRoot must be an absolute path"
+    }
+    $resolvedRoot = [IO.Path]::GetFullPath($Root).TrimEnd([char[]]"\/")
+    if (-not (Test-Path -LiteralPath $resolvedRoot -PathType Container)) {
+        throw "RepositoryRoot does not exist: $resolvedRoot"
+    }
+
+    $expectedBoundaryPath = [IO.Path]::GetFullPath((Join-Path $resolvedRoot "scripts\hooks\enforce-coordinator-boundary.ps1"))
+    if ([string]::IsNullOrWhiteSpace($script:BoundaryScriptPath) -or
+        -not (Test-SameWatcherPath -Actual $script:BoundaryScriptPath -Expected $expectedBoundaryPath)) {
+        throw "StopRecordedWatcher must run from this repository's boundary script"
+    }
+
+    $watcherPath = [IO.Path]::GetFullPath((Join-Path $resolvedRoot "scripts\watch-agents.ps1"))
+    $runtimePath = [IO.Path]::GetFullPath((Join-Path $resolvedRoot "scratchpad\watch-agents.runtime.json"))
+    $outputPath = [IO.Path]::GetFullPath((Join-Path $resolvedRoot "scratchpad\watch-agents.latest.log"))
+    $lockPath = [IO.Path]::GetFullPath((Join-Path $resolvedRoot "scratchpad\watch-agents.lock"))
+    foreach ($requiredDirectory in @(
+        $resolvedRoot,
+        (Join-Path $resolvedRoot "scripts"),
+        (Join-Path $resolvedRoot "scripts\hooks"),
+        (Join-Path $resolvedRoot "scratchpad")
+    )) {
+        if (-not (Test-Path -LiteralPath $requiredDirectory -PathType Container)) {
+            throw "recorded watcher stop requires existing fixed directory: $requiredDirectory"
+        }
+        Assert-WatcherPathIsNotReparsePoint -Path $requiredDirectory
+    }
+    foreach ($requiredPath in @($expectedBoundaryPath, $watcherPath, $runtimePath, $lockPath)) {
+        if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
+            throw "recorded watcher stop requires existing fixed path: $requiredPath"
+        }
+        Assert-WatcherPathIsNotReparsePoint -Path $requiredPath
+    }
+
+    $strictUtf8 = New-Object Text.UTF8Encoding($false, $true)
+    try {
+        $stateText = $strictUtf8.GetString([IO.File]::ReadAllBytes($runtimePath))
+        $state = $stateText | ConvertFrom-Json
+    }
+    catch {
+        throw "watcher runtime state could not be parsed as strict UTF-8 JSON: $($_.Exception.Message)"
+    }
+
+    $schemaVersion = [int](Get-RequiredWatcherStateValue -State $state -Name "schemaVersion")
+    $instanceId = [string](Get-RequiredWatcherStateValue -State $state -Name "instanceId")
+    $watchPid = [int](Get-RequiredWatcherStateValue -State $state -Name "pid")
+    $processStartText = [string](Get-RequiredWatcherStateValue -State $state -Name "processStartUtc")
+    $processExecutablePath = [string](Get-RequiredWatcherStateValue -State $state -Name "processExecutablePath")
+    $stateScriptPath = [string](Get-RequiredWatcherStateValue -State $state -Name "scriptPath")
+    $stateScriptSha256 = [string](Get-RequiredWatcherStateValue -State $state -Name "scriptSha256")
+    $stateRepositoryRoot = [string](Get-RequiredWatcherStateValue -State $state -Name "repositoryRoot")
+    $stateRuntimePath = [string](Get-RequiredWatcherStateValue -State $state -Name "runtimePath")
+    $stateOutputPath = [string](Get-RequiredWatcherStateValue -State $state -Name "outputPath")
+    $stateLockPath = [string](Get-RequiredWatcherStateValue -State $state -Name "lockPath")
+    $mode = [string](Get-RequiredWatcherStateValue -State $state -Name "mode")
+
+    if ($schemaVersion -ne 1 -or $watchPid -le 0 -or $watchPid -eq $PID -or $mode -cne "continuous") {
+        throw "watcher runtime identity fields are invalid"
+    }
+    $parsedInstanceId = [Guid]::Empty
+    if (-not [Guid]::TryParse($instanceId, [ref]$parsedInstanceId) -or $parsedInstanceId -eq [Guid]::Empty) {
+        throw "watcher runtime instanceId is invalid"
+    }
+    if ($stateScriptSha256 -notmatch '^[0-9a-f]{64}$') {
+        throw "watcher runtime scriptSha256 is invalid"
+    }
+    try {
+        $processStartUtc = [DateTime]::ParseExact(
+            $processStartText,
+            "o",
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::RoundtripKind
+        ).ToUniversalTime()
+    }
+    catch {
+        throw "watcher runtime processStartUtc is invalid: $processStartText"
+    }
+
+    $pathChecks = @(
+        @("repositoryRoot", $stateRepositoryRoot, $resolvedRoot),
+        @("scriptPath", $stateScriptPath, $watcherPath),
+        @("runtimePath", $stateRuntimePath, $runtimePath),
+        @("outputPath", $stateOutputPath, $outputPath),
+        @("lockPath", $stateLockPath, $lockPath)
+    )
+    foreach ($pathCheck in $pathChecks) {
+        if (-not (Test-SameWatcherPath -Actual ([string]$pathCheck[1]) -Expected ([string]$pathCheck[2]))) {
+            throw "watcher runtime $($pathCheck[0]) does not match its fixed path"
+        }
+    }
+    if (-not [IO.Path]::IsPathRooted($processExecutablePath) -or
+        [IO.Path]::GetFileName($processExecutablePath).ToLowerInvariant() -notin @("powershell.exe", "pwsh.exe")) {
+        throw "watcher runtime processExecutablePath is not an absolute PowerShell host path"
+    }
+
+    Assert-WatcherLockHeld -LockPath $lockPath
+    $process = $null
+    try {
+        $process = Get-Process -Id $watchPid -ErrorAction Stop
+        $processHandle = $process.SafeHandle
+        if ($null -eq $processHandle -or $processHandle.IsInvalid -or $processHandle.IsClosed) {
+            throw "recorded watcher process handle is unavailable: PID=$watchPid"
+        }
+        $actualStartUtc = $process.StartTime.ToUniversalTime()
+        $actualProcessPath = [IO.Path]::GetFullPath([string]$process.Path)
+        if ($actualStartUtc.Ticks -ne $processStartUtc.Ticks) {
+            throw "recorded watcher PID start time does not match runtime state: PID=$watchPid"
+        }
+        if (-not (Test-SameWatcherPath -Actual $actualProcessPath -Expected $processExecutablePath)) {
+            throw "recorded watcher executable does not match runtime state: PID=$watchPid"
+        }
+
+        if (-not $process.HasExited) {
+            $process.Kill()
+        }
+        if (-not $process.WaitForExit(10000)) {
+            throw "recorded watcher did not exit within 10 seconds: PID=$watchPid"
+        }
+        Wait-WatcherLockReleased -LockPath $lockPath
+        Write-Host "RECORDED_WATCHER_STOPPED pid=$watchPid startUtc=$($processStartUtc.ToString('o'))"
+    }
+    finally {
+        if ($null -ne $process) {
+            $process.Dispose()
+        }
+    }
 }
 
 function Test-ForbiddenDocumentArgument {
@@ -785,6 +1021,28 @@ function Test-ScriptInvocation {
     }
     $resolvedKey = $resolvedScript.ToLowerInvariant()
     $receiptRepairPath = (Resolve-PolicyPath (Join-Path $scriptsRoot "check-receipt.ps1") $RepositoryRoot).ToLowerInvariant()
+    $boundaryStopPath = (Resolve-PolicyPath (Join-Path $scriptsRoot "hooks\enforce-coordinator-boundary.ps1") $RepositoryRoot).ToLowerInvariant()
+    if ($resolvedKey -eq $boundaryStopPath) {
+        if (-not [IO.Path]::IsPathRooted($ScriptPath) -or
+            $Arguments.Count -ne 3 -or
+            $Arguments[0].ToLowerInvariant() -ne "-stoprecordedwatcher" -or
+            $Arguments[1].ToLowerInvariant() -ne "-repositoryroot" -or
+            -not [IO.Path]::IsPathRooted($Arguments[2])) {
+            return New-PolicyDecision $false "watch-stop" "watcher stop requires the absolute boundary script and exact -StopRecordedWatcher -RepositoryRoot <this repository> arguments"
+        }
+        try {
+            $resolvedArgumentRoot = Resolve-PolicyPath $Arguments[2] $RepositoryRoot
+            $boundaryItem = Get-Item -LiteralPath $resolvedScript -Force -ErrorAction Stop
+        }
+        catch {
+            return New-PolicyDecision $false "watch-stop" "watcher stop script or RepositoryRoot could not be verified"
+        }
+        if (-not [string]::Equals($resolvedArgumentRoot, $RepositoryRoot, [StringComparison]::OrdinalIgnoreCase) -or
+            ($boundaryItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            return New-PolicyDecision $false "watch-stop" "watcher stop RepositoryRoot must be this repository and the boundary script may not be a reparse point"
+        }
+        return New-PolicyDecision $true "watch-stop" "allowed exact fixed-runtime watcher stop"
+    }
     if ($resolvedKey -eq $receiptRepairPath) {
         if ($Arguments.Count -ne 3 -or
             $Arguments[0].ToLowerInvariant() -ne "-repairsigningkey" -or
@@ -806,7 +1064,7 @@ function Test-ScriptInvocation {
         return New-PolicyDecision $true "signing-key-repair" "allowed exact coordinator-owned Windows DPAPI signing-key repair"
     }
     if (-not $gatePaths.ContainsKey($resolvedKey)) {
-        return New-PolicyDecision $false "script" "only the three quality gates and the exact coordinator-owned check-receipt signing-key repair are allowed as direct PowerShell script invocations; watch-agents must use the exact hidden detached Start-Process launcher"
+        return New-PolicyDecision $false "script" "only the three quality gates, exact signing-key repair, and exact fixed-runtime watcher stop are allowed as direct PowerShell script invocations; watch-agents start must use the exact hidden detached Start-Process launcher"
     }
     $kind = [string]$gatePaths[$resolvedKey]
     if ($kind -in @("check", "check-ci") -and $Arguments.Count -ne 0) {
@@ -1070,6 +1328,17 @@ function Invoke-PostEvent {
     Write-AcknowledgementReceipt -Paths $Paths -State $state
     Write-AuditEvent -Paths $Paths -Event "release-failure" -ToolName ([string]$state.toolName) -CommandHash ([string]$state.commandHash) -ToolUseId $toolUseId -Detail ([string]$state.lastFailure)
     Write-Warning "HOOK_HEALTH_DEGRADED check=coordinator-boundary status=blocked reason=PostToolUseFailure acknowledgement=$($Paths.Acknowledgement)"
+}
+
+if ($StopRecordedWatcher.IsPresent) {
+    try {
+        Invoke-StopRecordedWatcher -Root $RepositoryRoot
+        exit 0
+    }
+    catch {
+        Write-Error "RECORDED_WATCHER_STOP_FAILED: $($_.Exception.Message)"
+        exit 1
+    }
 }
 
 $rawInput = ""

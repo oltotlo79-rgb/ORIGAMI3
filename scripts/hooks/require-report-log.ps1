@@ -177,7 +177,7 @@ function Get-ExpectedModelName {
 
     $rawModel = (Get-ObjectStringProperty -Object $ToolInput -Name 'model').Trim().ToLowerInvariant()
     if ([string]::IsNullOrWhiteSpace($rawModel)) { return '' }
-    if (@('opus', 'sonnet', 'gpt-5.6-sol') -contains $rawModel) { return $rawModel }
+    if (@('opus', 'sonnet', 'gpt-5.6-sol', 'gpt-5.6-terra') -contains $rawModel) { return $rawModel }
     throw "投入toolのmodelが規約の許可値ではありません: $rawModel"
 }
 

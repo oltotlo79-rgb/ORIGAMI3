@@ -5,6 +5,7 @@ param(
     [string]$PackageLockPath,
     [string]$DependabotPath,
     [string]$SecurityWorkflowPath,
+    [string]$CargoAuditReceiptPath,
     [ValidateSet("FullReadiness", "PolicyAndLicenses", "ReadinessOnly")]
     [string]$Mode = "FullReadiness"
 )
@@ -27,12 +28,16 @@ if ([string]::IsNullOrWhiteSpace($DependabotPath)) {
 if ([string]::IsNullOrWhiteSpace($SecurityWorkflowPath)) {
     $SecurityWorkflowPath = Join-Path $PSScriptRoot "..\.github\workflows\security.yml"
 }
+if ([string]::IsNullOrWhiteSpace($CargoAuditReceiptPath) -and
+    -not [string]::IsNullOrWhiteSpace($env:CARGO_AUDIT_PIN_RECEIPT)) {
+    $CargoAuditReceiptPath = $env:CARGO_AUDIT_PIN_RECEIPT
+}
 
 # Validate the policy, exceptions, and current lockfile licenses. FullReadiness
 # also preserves the 10-A blockers for immutable tool pins and the known high
 # advisory assessment. CI runs PolicyAndLicenses before ecosystem-specific
 # audit tools and ReadinessOnly afterwards, without scanning licenses twice.
-$ScriptVersion = "1.3.0"
+$ScriptVersion = "1.4.0"
 $Failures = New-Object System.Collections.Generic.List[string]
 $ToolPinBlockers = New-Object System.Collections.Generic.List[string]
 $AdvisoryAssessmentBlockers = New-Object System.Collections.Generic.List[string]
@@ -652,22 +657,35 @@ function Test-SecurityWorkflowConfiguration {
     $supplyChainInvocationLines = @($text -split '\r?\n' | Where-Object { $_ -match 'scripts/check-supply-chain\.ps1' })
     $policyAndLicenseCallCount = @($supplyChainInvocationLines | Where-Object { $_ -match '-Mode[ \t]+PolicyAndLicenses(?:[ \t]|$)' }).Count
     $readinessOnlyCallCount = @($supplyChainInvocationLines | Where-Object { $_ -match '-Mode[ \t]+ReadinessOnly(?:[ \t]|$)' }).Count
-    $readinessStepPattern = '(?ms)^      - name:[ \t]*Report unresolved supply-chain readiness blockers[ \t]*\r?\n        if:[ \t]*\$\{\{ always\(\) \}\}[ \t]*\r?\n(?:        [^\r\n]*\r?\n)*?          [^\r\n]*scripts/check-supply-chain\.ps1 -Mode ReadinessOnly[ \t]*$'
+    $readinessStepPattern = '(?ms)^      - name:[ \t]*Report unresolved supply-chain readiness blockers[ \t]*\r?\n        if:[ \t]*\$\{\{ always\(\) \}\}[ \t]*\r?\n(?:        [^\r\n]*\r?\n)*?          [^\r\n]*scripts/check-supply-chain\.ps1 -Mode ReadinessOnly[ \t]*`[ \t]*\r?\n[ \t]*-CargoAuditReceiptPath[ \t]+\$receiptPath[ \t]*$'
     Assert-True ($supplyChainInvocationLines.Count -eq 2 -and $policyAndLicenseCallCount -eq 1 -and $readinessOnlyCallCount -eq 1 -and $text -match $readinessStepPattern) "security.yml must run PolicyAndLicenses once before Cargo advisory exceptions and ReadinessOnly once in the always() readiness step."
     Assert-True ($text -match 'security-policy\.json') "security.yml must read security-policy.json instead of duplicating policy decisions."
-    Assert-True ($text -match 'cargo audit --version') "security.yml must verify the installed Cargo advisory tool before use."
+    Assert-True ($text -match '&[ \t]+\$cargoAuditExe[ \t]+--version') "security.yml must verify the installed run-scoped Cargo advisory executable before use."
     Assert-True ($text -match 'npm audit') "security.yml must audit npm lockfiles."
     Assert-True ($text -match 'security_status:[\s\S]*if: \$\{\{ always\(\) \}\}') "security.yml must summarize failures even when a preceding job fails."
     Assert-True ($text -match 'One or more security jobs did not succeed') "security.yml must fail the summary job when an audit job is unsuccessful."
     Assert-True ($text -notmatch '(?im)^\s*uses:\s*[^\r\n@]+@(main|master|latest)\b') "security.yml may not use floating action references."
 
     $workflowNodeVersions = @(Get-YamlScalarValues -Text $text -Key "node-version")
-    Assert-True ($workflowNodeVersions.Count -eq 1 -and $workflowNodeVersions[0] -eq [string]$Policy.toolPins.npmAudit.nodeVersion) "security.yml exact Node version must occur once and match security-policy.json."
+    $matchingWorkflowNodeVersions = @($workflowNodeVersions | Where-Object { $_ -eq [string]$Policy.toolPins.npmAudit.nodeVersion })
+    Assert-True ($workflowNodeVersions.Count -eq 2 -and $matchingWorkflowNodeVersions.Count -eq 2) "security.yml must pin the policy Node version exactly once in each Node-dependent security job."
     $cargoRegistryProtocols = @(Get-YamlScalarValues -Text $text -Key "CARGO_REGISTRIES_CRATES_IO_PROTOCOL")
     Assert-True ($cargoRegistryProtocols.Count -eq 1 -and $cargoRegistryProtocols[0] -eq "sparse") "security.yml must fetch crates.io through the sparse protocol used by cargo-audit pin evidence."
     $cargoAuditInstallIndex = $text.IndexOf("      - name: Install and verify the pinned cargo-audit", [StringComparison]::Ordinal)
     $readinessIndex = $text.IndexOf("      - name: Report unresolved supply-chain readiness blockers", [StringComparison]::Ordinal)
     Assert-True ($cargoAuditInstallIndex -ge 0 -and $readinessIndex -gt $cargoAuditInstallIndex) "security.yml must run ReadinessOnly after the pinned cargo-audit fetch/install step."
+    $receiptNamePattern = 'cargo-audit-pin-evidence-\$env:GITHUB_RUN_ID-\$env:GITHUB_RUN_ATTEMPT\.json'
+    Assert-True ([regex]::Matches($text, $receiptNamePattern).Count -eq 2) "security.yml must generate and consume one cargo-audit receipt path bound to the current run and attempt."
+    Assert-True ($text -match 'CARGO_HOME=\$env:RUNNER_TEMP\\ori3-cargo-home-\$env:GITHUB_RUN_ID-\$env:GITHUB_RUN_ATTEMPT') "security.yml must isolate Cargo registry/cache state inside the current runner temp directory."
+    Assert-True ([regex]::Matches($text, 'cargo-audit-install-\$env:GITHUB_RUN_ID-\$env:GITHUB_RUN_ATTEMPT').Count -eq 1) "security.yml must install cargo-audit into one run-scoped runner-temp root."
+    Assert-True ($text -match '(?m)^[ \t]*--root[ \t]+\$cargoAuditInstallRoot[ \t]+--force[ \t]*$') "security.yml must force a same-run cargo-audit installation into the run-scoped root."
+    Assert-True ($text -match '(?m)^[ \t]*cargo install cargo-audit --version \$env:CARGO_AUDIT_VERSION --locked[ \t]*`[ \t]*$') "security.yml must allow the locked cargo-audit install to fetch its exact fresh-cache dependencies after archive verification."
+    Assert-True ($text -notmatch '(?m)^[ \t]*cargo install cargo-audit[^\r\n]*--offline') "security.yml must not assume bootstrap dependency resolution populated every cargo-audit lockfile dependency in a fresh cache."
+    Assert-True ([regex]::Matches($text, 'CARGO_AUDIT_EXE').Count -eq 5) "security.yml must publish and consume only the run-scoped cargo-audit executable path."
+    Assert-True ($text -match [regex]::Escape('https://index.crates.io/ca/rg/cargo-audit')) "security.yml must obtain same-run cargo-audit registry evidence from the crates.io sparse endpoint."
+    foreach ($receiptField in @("schemaVersion", "githubRunId", "githubRunAttempt", "githubSha", "reportedVersionOutput", "registryChecksum", "registryYanked", "archiveSha256", "executableSha256")) {
+        Assert-True ($text -match ("(?m)^            " + [regex]::Escape($receiptField) + "[ \t]*=")) "security.yml cargo-audit receipt must write '$receiptField'."
+    }
 
     $workflowCargoAuditVersions = @(Get-YamlScalarValues -Text $text -Key "CARGO_AUDIT_VERSION")
     Assert-True ($workflowCargoAuditVersions.Count -eq 1 -and $workflowCargoAuditVersions[0] -eq [string]$Policy.toolPins.cargoAudit.version) "security.yml Cargo advisory version must match security-policy.json."
@@ -879,9 +897,12 @@ function Test-KnownAdvisoryAssessment {
 }
 
 function Test-ToolPinReadiness {
-    param([object]$Policy)
+    param(
+        [object]$Policy,
+        [string]$CargoAuditReceiptPath
+    )
 
-    Test-CargoAuditPinEvidence $Policy
+    Test-CargoAuditPinEvidence -Policy $Policy -ReceiptPath $CargoAuditReceiptPath
 
     $nodeVersion = [string]$Policy.toolPins.npmAudit.nodeVersion
     $nodeVersionLine = [string]$Policy.toolPins.npmAudit.nodeVersionLine
@@ -977,15 +998,26 @@ function Initialize-LicensePolicy {
 }
 
 function Test-NpmLicenses {
-    param([string]$LockPath)
+    param(
+        [string]$LockPath,
+        [string]$ExpectedNodeVersion
+    )
 
     if (-not (Test-Path -LiteralPath $LockPath)) {
         Add-Failure "npm lockfile not found: $LockPath"
         return [pscustomobject]@{ Total = 0; Production = 0; DevelopmentBuild = 0 }
     }
-    $node = Get-Command node -ErrorAction SilentlyContinue
-    if ($null -eq $node) {
+    $nodeCommand = Get-Command node.exe -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($null -eq $nodeCommand) {
         Add-Failure "Node.js is required to read package-lock.json without PowerShell 5.1 empty-key loss."
+        return [pscustomobject]@{ Total = 0; Production = 0; DevelopmentBuild = 0 }
+    }
+    $nodeExe = [string]$nodeCommand.Source
+    $reportedNodeVersion = @(& $nodeExe --version 2>&1)
+    $nodeVersionExitCode = $LASTEXITCODE
+    if ($nodeVersionExitCode -ne 0 -or ($reportedNodeVersion -join "").Trim() -cne "v$ExpectedNodeVersion") {
+        Add-Failure "Node.js used for package-lock.json must be v$ExpectedNodeVersion; '$nodeExe' reported '$($reportedNodeVersion -join ' ')'."
         return [pscustomobject]@{ Total = 0; Production = 0; DevelopmentBuild = 0 }
     }
 
@@ -1006,7 +1038,7 @@ for (const [path, value] of Object.entries(lock.packages || {})) {
     $nodeWrapper = "eval(Buffer.from(process.argv[1],'base64').toString('utf8'))"
     $previousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
-    $output = @(& $node.Source --eval $nodeWrapper $encodedNodeScript $LockPath 2>&1)
+    $output = @(& $nodeExe --eval $nodeWrapper $encodedNodeScript $LockPath 2>&1)
     $nodeExitCode = $LASTEXITCODE
     $ErrorActionPreference = $previousErrorActionPreference
     if ($nodeExitCode -ne 0) {
@@ -1062,55 +1094,162 @@ function Get-CargoRegistryRoots {
 }
 
 function Test-CargoAuditPinEvidence {
-    param([object]$Policy)
+    param(
+        [object]$Policy,
+        [string]$ReceiptPath
+    )
 
-    $cargoHome = Get-CargoHomePath
-    $indexRoot = Join-Path $cargoHome "registry\index"
-    if (-not (Test-Path -LiteralPath $indexRoot)) {
-        Add-ToolPinBlocker "Local Cargo index is unavailable; cargo-audit pin evidence cannot be rechecked."
+    if ([string]::IsNullOrWhiteSpace($ReceiptPath)) {
+        Add-ToolPinBlocker "Same-run cargo-audit pin receipt path was not provided."
         return
     }
-    $pinFiles = @(
-        Get-ChildItem -LiteralPath $indexRoot -Directory -ErrorAction SilentlyContinue |
-            ForEach-Object { Join-Path $_.FullName ".cache\ca\rg\cargo-audit" } |
-            Where-Object { Test-Path -LiteralPath $_ }
+    if (-not (Test-Path -LiteralPath $ReceiptPath -PathType Leaf)) {
+        Add-ToolPinBlocker "Same-run cargo-audit pin receipt is absent: $ReceiptPath"
+        return
+    }
+
+    try {
+        $strictUtf8 = New-Object Text.UTF8Encoding($false, $true)
+        $receiptText = $strictUtf8.GetString([IO.File]::ReadAllBytes($ReceiptPath))
+        $receipt = $receiptText | ConvertFrom-Json
+    }
+    catch {
+        Add-ToolPinBlocker "Same-run cargo-audit pin receipt could not be parsed: $($_.Exception.Message)"
+        return
+    }
+
+    $requiredFields = @(
+        "schemaVersion",
+        "githubRunId",
+        "githubRunAttempt",
+        "githubSha",
+        "tool",
+        "requestedVersion",
+        "reportedVersion",
+        "reportedVersionOutput",
+        "registryUri",
+        "registryVersion",
+        "registryChecksum",
+        "registryYanked",
+        "archivePath",
+        "archiveSha256",
+        "executablePath",
+        "executableSha256"
     )
-    if ($pinFiles.Count -eq 0) {
-        Add-ToolPinBlocker "cargo-audit is absent from the local sparse index cache."
+    $receiptFields = @($receipt.PSObject.Properties.Name)
+    $missingFields = @($requiredFields | Where-Object { $receiptFields -notcontains $_ })
+    if ($missingFields.Count -gt 0) {
+        Add-ToolPinBlocker "Same-run cargo-audit pin receipt is missing required fields: $($missingFields -join ', ')."
+        return
+    }
+
+    $currentRunId = [string]$env:GITHUB_RUN_ID
+    $currentRunAttempt = [string]$env:GITHUB_RUN_ATTEMPT
+    $currentSha = [string]$env:GITHUB_SHA
+    $currentRunnerTemp = [string]$env:RUNNER_TEMP
+    $currentCargoHome = [string]$env:CARGO_HOME
+    if ($currentRunId -notmatch '^\d+$' -or
+        $currentRunAttempt -notmatch '^\d+$' -or
+        $currentSha -notmatch '^[0-9a-f]{40}$' -or
+        -not [IO.Path]::IsPathRooted($currentRunnerTemp) -or
+        -not [IO.Path]::IsPathRooted($currentCargoHome)) {
+        Add-ToolPinBlocker "Current GitHub run identity is unavailable; same-run cargo-audit evidence cannot be verified."
+        return
+    }
+    $expectedCargoHome = [IO.Path]::GetFullPath((Join-Path $currentRunnerTemp "ori3-cargo-home-$currentRunId-$currentRunAttempt"))
+    $expectedReceiptPath = [IO.Path]::GetFullPath((Join-Path $currentRunnerTemp "cargo-audit-pin-evidence-$currentRunId-$currentRunAttempt.json"))
+    if (-not [string]::Equals([IO.Path]::GetFullPath($currentCargoHome), $expectedCargoHome, [StringComparison]::OrdinalIgnoreCase) -or
+        -not [string]::Equals([IO.Path]::GetFullPath($ReceiptPath), $expectedReceiptPath, [StringComparison]::OrdinalIgnoreCase)) {
+        Add-ToolPinBlocker "cargo-audit pin receipt and Cargo cache must use the current run-scoped runner-temp paths."
         return
     }
 
     $expectedVersion = [string]$Policy.toolPins.cargoAudit.version
     $expectedChecksum = [string]$Policy.toolPins.cargoAudit.crateSha256
-    $record = $null
-    foreach ($pinFile in $pinFiles) {
-        $bytes = [IO.File]::ReadAllBytes($pinFile)
-        $parts = [Text.Encoding]::UTF8.GetString($bytes).Split([char]0)
-        foreach ($part in $parts) {
-            if (-not $part.StartsWith('{"name":"cargo-audit"', [StringComparison]::Ordinal)) {
-                continue
-            }
-            try {
-                $candidate = $part | ConvertFrom-Json
-                if ([string]$candidate.vers -eq $expectedVersion) {
-                    $record = $candidate
-                    break
-                }
-            }
-            catch {
-                continue
-            }
-        }
-        if ($null -ne $record) {
-            break
-        }
+    $registryUri = "https://index.crates.io/ca/rg/cargo-audit"
+    $blockerBaseline = $ToolPinBlockers.Count
+    if ([int]$receipt.schemaVersion -ne 1) {
+        Add-ToolPinBlocker "Same-run cargo-audit pin receipt schemaVersion must be 1."
     }
-    if ($null -eq $record) {
-        Add-ToolPinBlocker "cargo-audit $expectedVersion is absent from the local sparse index cache."
+    if ([string]$receipt.githubRunId -cne $currentRunId -or
+        [string]$receipt.githubRunAttempt -cne $currentRunAttempt -or
+        [string]$receipt.githubSha -cne $currentSha) {
+        Add-ToolPinBlocker "cargo-audit pin receipt does not belong to the current GitHub run, attempt, and revision."
+    }
+    if ([string]$receipt.tool -cne "cargo-audit") {
+        Add-ToolPinBlocker "cargo-audit pin receipt names an unexpected tool."
+    }
+    if ([string]$receipt.requestedVersion -cne $expectedVersion -or
+        [string]$receipt.reportedVersion -cne $expectedVersion -or
+        [string]$receipt.registryVersion -cne $expectedVersion) {
+        Add-ToolPinBlocker "cargo-audit requested, reported, and registry versions must all equal $expectedVersion."
+    }
+    if ([string]$receipt.registryUri -cne $registryUri) {
+        Add-ToolPinBlocker "cargo-audit registry evidence must come from $registryUri."
+    }
+    if ([string]$receipt.registryChecksum -cne $expectedChecksum -or
+        [string]$receipt.archiveSha256 -cne $expectedChecksum) {
+        Add-ToolPinBlocker "cargo-audit registry and archive checksums must both equal the pinned checksum."
+    }
+    if (-not ($receipt.registryYanked -is [bool]) -or $receipt.registryYanked -ne $false) {
+        Add-ToolPinBlocker "Pinned cargo-audit version is yanked in the same-run registry evidence."
+    }
+    if ([string]$receipt.executableSha256 -notmatch '^[0-9a-f]{64}$') {
+        Add-ToolPinBlocker "cargo-audit receipt executable SHA-256 is not a lowercase 64-character hash."
+    }
+    if ($ToolPinBlockers.Count -gt $blockerBaseline) {
         return
     }
-    Assert-True ([string]$record.cksum -eq $expectedChecksum) "cargo-audit checksum differs from the local sparse index record."
-    Assert-True ($record.yanked -eq $false) "Pinned cargo-audit version is yanked in the local sparse index record."
+
+    $archivePath = [string]$receipt.archivePath
+    $expectedArchiveRoot = [IO.Path]::GetFullPath((Join-Path $currentCargoHome "registry\cache")).TrimEnd([char[]]"\/") + [IO.Path]::DirectorySeparatorChar
+    if (-not [IO.Path]::IsPathRooted($archivePath) -or
+        -not (Test-Path -LiteralPath $archivePath -PathType Leaf) -or
+        [IO.Path]::GetFileName($archivePath) -cne "cargo-audit-$expectedVersion.crate") {
+        Add-ToolPinBlocker "Same-run cargo-audit crate archive is absent or has an unexpected path."
+        return
+    }
+    $archivePath = [IO.Path]::GetFullPath($archivePath)
+    if (-not $archivePath.StartsWith($expectedArchiveRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        Add-ToolPinBlocker "Same-run cargo-audit crate archive is outside the run-scoped Cargo cache."
+        return
+    }
+    $actualArchiveChecksum = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualArchiveChecksum -cne $expectedChecksum) {
+        Add-ToolPinBlocker "Same-run cargo-audit crate archive checksum differs from the pin receipt and policy."
+        return
+    }
+
+    $executablePath = [string]$receipt.executablePath
+    $expectedExecutablePath = [IO.Path]::GetFullPath((Join-Path (Join-Path $currentRunnerTemp "cargo-audit-install-$currentRunId-$currentRunAttempt") "bin\cargo-audit.exe"))
+    if (-not [IO.Path]::IsPathRooted($executablePath) -or
+        -not (Test-Path -LiteralPath $executablePath -PathType Leaf) -or
+        -not [string]::Equals([IO.Path]::GetFullPath($executablePath), $expectedExecutablePath, [StringComparison]::OrdinalIgnoreCase)) {
+        Add-ToolPinBlocker "Same-run cargo-audit executable is absent or has an unexpected path."
+        return
+    }
+    $actualExecutableChecksum = (Get-FileHash -LiteralPath $executablePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualExecutableChecksum -cne [string]$receipt.executableSha256) {
+        Add-ToolPinBlocker "Same-run cargo-audit executable checksum differs from the pin receipt."
+        return
+    }
+
+    try {
+        $reportedOutputLines = @(& $executablePath --version 2>&1)
+        $reportedExitCode = $LASTEXITCODE
+    }
+    catch {
+        Add-ToolPinBlocker "Same-run cargo-audit executable could not report its version: $($_.Exception.Message)"
+        return
+    }
+    $reportedOutput = ($reportedOutputLines | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
+    if ($reportedExitCode -ne 0 -or $reportedOutput.Trim() -cne "cargo-audit $expectedVersion") {
+        Add-ToolPinBlocker "Same-run cargo-audit executable reported an unexpected version: $reportedOutput"
+        return
+    }
+    if ([string]$receipt.reportedVersionOutput -cne $reportedOutput.Trim()) {
+        Add-ToolPinBlocker "Same-run cargo-audit executable output differs from the pin receipt."
+    }
 }
 
 function Test-WorkspaceLicenseEvidence {
@@ -1259,12 +1398,12 @@ if ($Mode -ne "ReadinessOnly") {
     $configurationFailureCount = $Failures.Count - $configurationFailureBaseline
     Test-Exceptions $policy
     Initialize-LicensePolicy $policy
-    $npmResult = Test-NpmLicenses $PackageLockPath
+    $npmResult = Test-NpmLicenses -LockPath $PackageLockPath -ExpectedNodeVersion ([string]$policy.toolPins.npmAudit.nodeVersion)
     $cargoResult = Test-CargoLicenses -LockPath $CargoLockPath -Policy $policy
 }
 if ($Mode -ne "PolicyAndLicenses") {
     try {
-        Test-ToolPinReadiness $policy
+        Test-ToolPinReadiness -Policy $policy -CargoAuditReceiptPath $CargoAuditReceiptPath
         Test-KnownAdvisoryAssessment $policy
     }
     catch {

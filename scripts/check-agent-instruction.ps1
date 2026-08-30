@@ -23,7 +23,7 @@ docs/rules/06-過去の失敗と対策.md §10.7.11 の条文から起こした1
  9. 報告書ファイルへの継続記録                  docs/rules/01-役割と委譲.md:57
 10. 長時間検査の --skip 4件（cargo test記載時のみ） docs/rules/03-品質ゲート.md:61
 11. 専用のCARGO_TARGET_DIR指定（cargo記載時のみ）    docs/rules/06-過去の失敗と対策.md:241-242
- 12. opus/sonnet/gpt-5.6-solのモデル選択と同一行の理由 docs/rules/01-役割と委譲.md:31
+ 12. opus/sonnet/gpt-5.6-sol/gpt-5.6-terraのモデル選択と同一行の理由 docs/rules/01-役割と委譲.md:32
  13. worktreeのHEAD・未コミット件数・検査baseline  docs/rules/01-役割と委譲.md:33
  14. 対象実名ごとのrg/grepコマンドと実在出力        docs/rules/01-役割と委譲.md:43
 
@@ -62,7 +62,7 @@ docs/rules を正本とする観点では根拠不足だが、依頼で名指し
 
 .PARAMETER ExpectedModel
 hookのtool_input等から分かる実際のモデル。指定時は項目12の記録
-（opus/sonnet/gpt-5.6-sol）と照合します。
+（opus/sonnet/gpt-5.6-sol/gpt-5.6-terra）と照合します。
 
 .PARAMETER GitExecutable
 live baseline照合に使うgit実行物。既定はgit。自己試験ではgitを書かないread-only stubを指定します。
@@ -193,8 +193,8 @@ $script:CargoInvocationTriggerPattern = 'cargo\s+(?:test|build|check|clippy|run|
 $script:CargoTargetDirToken = "CARGO_TARGET_DIR"
 
 # 項目12: 1行にモデル選択と理由を併記する。曖昧な「高能力モデル」等は認めず、
-# §2の実名 opus / sonnet / gpt-5.6-sol のいずれかを必須にする。
-$script:ModelSelectionLinePattern = '(?im)^[ \t]*(?:[-*][ \t]*)?モデル選択[ \t]*[:：][ \t]*(?<model>opus|sonnet|gpt-5\.6-sol)[ \t]*(?:[|｜;；/／]|-|—|–|。)[ \t]*理由[ \t]*[:：][ \t]*(?<reason>[^\r\n]+?)[ \t]*$'
+# §2の実名 opus / sonnet / gpt-5.6-sol / gpt-5.6-terra のいずれかを必須にする。
+$script:ModelSelectionLinePattern = '(?im)^[ \t]*(?:[-*][ \t]*)?モデル選択[ \t]*[:：][ \t]*(?<model>opus|sonnet|gpt-5\.6-sol|gpt-5\.6-terra)[ \t]*(?:[|｜;；/／]|-|—|–|。)[ \t]*理由[ \t]*[:：][ \t]*(?<reason>[^\r\n]+?)[ \t]*$'
 
 # 項目13: baselineはラベルを固定し、別のHEADや別の数値を拾わない。
 $script:BaselineWorktreeLinePattern = '(?im)^[ \t]*(?:[-*][ \t]*)?(?:worktree|作業ツリー)[ \t]*[:：][ \t]*`?(?<value>(?:[A-Za-z]:[\\/]|%TEMP%[\\/])[^`\r\n]+?)`?[ \t]*$'
@@ -441,7 +441,7 @@ function Test-ModelSelectionAndReason {
     if ($matches.Count -ne 1) {
         return [pscustomobject]@{
             Status = "NG"
-            Detail = "『モデル選択: opus|sonnet|gpt-5.6-sol | 理由: 非空の理由』の1行がちょうど1件必要です（検出 $($matches.Count) 件）"
+            Detail = "『モデル選択: opus|sonnet|gpt-5.6-sol|gpt-5.6-terra | 理由: 非空の理由』の1行がちょうど1件必要です（検出 $($matches.Count) 件）"
         }
     }
 
@@ -451,8 +451,8 @@ function Test-ModelSelectionAndReason {
         return [pscustomobject]@{ Status = "NG"; Detail = "モデル選択と同じ行の理由が空です" }
     }
     if (-not [string]::IsNullOrWhiteSpace($script:ExpectedModel)) {
-        if (@("opus", "sonnet", "gpt-5.6-sol") -notcontains $script:ExpectedModel) {
-            return [pscustomobject]@{ Status = "NG"; Detail = "ExpectedModelはopus/sonnet/gpt-5.6-solのいずれかでなければなりません: $($script:ExpectedModel)" }
+        if (@("opus", "sonnet", "gpt-5.6-sol", "gpt-5.6-terra") -notcontains $script:ExpectedModel) {
+            return [pscustomobject]@{ Status = "NG"; Detail = "ExpectedModelはopus/sonnet/gpt-5.6-sol/gpt-5.6-terraのいずれかでなければなりません: $($script:ExpectedModel)" }
         }
         if ($model -ne $script:ExpectedModel) {
             return [pscustomobject]@{ Status = "NG"; Detail = "記録モデル $model と実際のモデル $($script:ExpectedModel) が一致しません" }
@@ -766,7 +766,7 @@ function Get-InstructionCheckResults {
     $results.Add([pscustomobject]@{ Index = 11; Name = "専用のCARGO_TARGET_DIR指定"; Citation = "06-過去の失敗と対策.md:241-242"; Status = $r11.Status; Detail = $r11.Detail })
 
     $r12 = Test-ModelSelectionAndReason -Text $Text
-    $results.Add([pscustomobject]@{ Index = 12; Name = "モデル選択と同一行の理由"; Citation = "01-役割と委譲.md:31"; Status = $r12.Status; Detail = $r12.Detail })
+    $results.Add([pscustomobject]@{ Index = 12; Name = "モデル選択と同一行の理由"; Citation = "01-役割と委譲.md:32"; Status = $r12.Status; Detail = $r12.Detail })
 
     $r13 = Test-DelegationBaseline -Text $Text
     $results.Add([pscustomobject]@{ Index = 13; Name = "投入時のHEAD・未コミット件数・対象検査baseline"; Citation = "01-役割と委譲.md:33"; Status = $r13.Status; Detail = $r13.Detail })
