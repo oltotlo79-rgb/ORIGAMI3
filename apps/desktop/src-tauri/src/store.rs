@@ -14,7 +14,7 @@
 //! 導出(validate/extract_faces)は候補Documentに対して先に実行し、成功した場合のみ
 //! 状態を確定する。導出がpanicしてもstoreは直前の整合状態を保つ(guardがErr化する)。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,9 +25,9 @@ use std::cell::Cell;
 use ori3_cp::Face;
 use ori3_export::fold::{FoldConversionError, FoldImport, FoldIssue, FoldParseError};
 use ori3_model::{
-    CreasePattern, Document, Driver, EdgeId, EdgeKind, EditOp, FaceId, FoldStep, Frame3D,
-    MAX_GRID_DIVISIONS, MIN_GRID_DIVISIONS, Paper, SCHEMA_VERSION, SavedDocument, SeqOp,
-    StepCreases, StepId, TechniqueKind, VertexId,
+    CreasePattern, Document, Driver, EdgeId, EdgeKind, EditOp, FaceId, FoldStep, FoldTargetInfo,
+    FoldTargetStatus, FoldTargetTopAction, Frame3D, MAX_GRID_DIVISIONS, MIN_GRID_DIVISIONS, Paper,
+    SCHEMA_VERSION, SavedDocument, SeqOp, StepCreases, StepId, TechniqueKind, VertexId,
 };
 
 /// undo履歴の最大件数。超過時は最古をFIFOで破棄する。
@@ -163,6 +163,8 @@ pub struct DocumentView {
     /// 巻き込みで回避できる典型的な単一縁衝突の、非破壊プレビュー結果。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fold_through_proposal: Option<ori3_layers::FoldThroughProposal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fold_target_info: Option<FoldTargetInfo>,
 }
 
 /// FOLDの読込を確定する前に起きた失敗。
@@ -603,12 +605,34 @@ impl DocumentStore {
                 line,
                 keep_side_point,
                 target_layers,
+                target_pleat_count,
                 direction,
                 alignment,
                 accept_additional_crease,
                 pose_before,
             } => {
                 let mut insert_warnings = check_insert_point(&doc, up_to)?;
+                if target_layers.is_some() && target_pleat_count.is_some() {
+                    return Err("折るひだの枚数と個別の紙を同時には指定できません".to_string());
+                }
+                if target_pleat_count.is_some() && spatial.is_some() {
+                    return Err(
+                        "折るひだの枚数と3D上のつかみ位置を同時には指定できません".to_string()
+                    );
+                }
+                let target_layers = if let Some(count) = target_pleat_count {
+                    Some(fold_target_faces_at(
+                        &doc,
+                        &self.faces,
+                        up_to,
+                        line,
+                        keep_side_point,
+                        pose_before.as_ref(),
+                        count,
+                    )?)
+                } else {
+                    target_layers
+                };
                 if pose_before.is_some() && spatial.is_some() {
                     return Err(
                         "折った形の再現と3D上のつかみ位置を、同時には指定できません".to_string()
@@ -754,15 +778,121 @@ impl DocumentStore {
                     }
                 }
             }
+            SeqOp::CreaseOnlyTop {
+                up_to,
+                material_line,
+                material_keep_side_point,
+                direction,
+                pose_before,
+                alignment,
+            } => {
+                let mut insert_warnings = check_insert_point(&doc, up_to)?;
+                let pose = ori3_layers::replay::canonical_nonflat_pose_at(
+                    &doc,
+                    &self.faces,
+                    up_to,
+                    pose_before.as_ref(),
+                )?;
+                let mut provider = material_top_surface_provider(
+                    &doc.cp,
+                    &self.faces,
+                    &pose,
+                    material_keep_side_point,
+                )?;
+                let result = ori3_layers::crease_only_top_from_material_line(
+                    &doc.cp,
+                    &self.faces,
+                    &pose,
+                    &ori3_layers::SpatialCreaseOnlyInput {
+                        material_line,
+                        material_keep_side_point,
+                        direction,
+                    },
+                    &mut provider,
+                )
+                .map_err(material_crease_only_error_message)?;
+                verify_direct_crease_only_pose_is_unchanged(&pose, &result)?;
+
+                let mut insertion_index = up_to;
+                let mut inserted_step_ids = Vec::with_capacity(2);
+                if let Some(pose_input) = pose_before.as_ref() {
+                    let mut pose_step = nonflat_pose_step_from_input(&doc.cp, pose_input)?;
+                    pose_step.id = next_step_id(&doc, &step_creases);
+                    inserted_step_ids.push(pose_step.id);
+                    record_frontend_step(&mut step_creases, &pose_step);
+                    doc.sequence.insert(insertion_index, pose_step);
+                    insertion_index += 1;
+                }
+
+                let mut crease_step = result.step.clone();
+                crease_step.id = next_step_id(&doc, &step_creases);
+                crease_step.alignment = alignment;
+                inserted_step_ids.push(crease_step.id);
+                let lines = added_crease_lines(&doc.cp, &result.cp, &result.added_edges);
+                record_step_creases(&mut step_creases, crease_step.id, lines);
+                doc.cp = result.cp;
+                doc.sequence.insert(insertion_index, crease_step);
+                let replay_up_to_crease = insertion_index + 1;
+
+                warnings = pose.frame.warnings.clone();
+                warnings.append(&mut insert_warnings);
+                filter_penetration_warnings(
+                    &mut warnings,
+                    doc.display.penetration_prevention_enabled,
+                );
+                let mut view = build_view(&doc, &step_creases, warnings);
+                if replay_up_to_crease > view.doc.sequence.len() {
+                    return Err(
+                        "保存した折った形の位置を読み直せないため、変更しませんでした。"
+                            .to_string(),
+                    );
+                }
+                let cold = ori3_layers::replay::replay_endpoint_with_faces_uncached(
+                    &view.doc,
+                    &view.faces,
+                    replay_up_to_crease,
+                );
+                verify_cold_crease_only_replay(
+                    &pose,
+                    &result.material_vertices,
+                    &inserted_step_ids,
+                    &view.faces,
+                    &cold,
+                )?;
+                attach_replay(&mut view);
+                return Ok(self.commit_prebuilt(doc, step_creases, view));
+            }
             SeqOp::PreviewFoldThrough {
                 up_to,
                 line,
                 keep_side_point,
                 target_layers,
+                target_pleat_count,
                 direction,
                 pose_before,
             } => {
                 check_insert_point(&doc, up_to)?;
+                if target_layers.is_some() && target_pleat_count.is_some() {
+                    return Err("折るひだの枚数と個別の紙を同時には指定できません".to_string());
+                }
+                if target_pleat_count.is_some() && spatial.is_some() {
+                    return Err(
+                        "折るひだの枚数と3D上のつかみ位置を同時には指定できません".to_string()
+                    );
+                }
+                let target_layers = if let Some(count) = target_pleat_count {
+                    Some(fold_target_faces_at(
+                        &doc,
+                        &self.faces,
+                        up_to,
+                        line,
+                        keep_side_point,
+                        pose_before.as_ref(),
+                        count,
+                    )?)
+                } else {
+                    target_layers
+                };
                 if pose_before.is_some() && spatial.is_some() {
                     return Err(
                         "折った形の再現と3D上のつかみ位置を、同時には指定できません".to_string()
@@ -850,6 +980,51 @@ impl DocumentStore {
                         }
                     }
                 }
+                filter_penetration_warnings(
+                    &mut warnings,
+                    doc.display.penetration_prevention_enabled,
+                );
+                let mut view = build_view(&doc, &step_creases, warnings);
+                view.fold_through_proposal = fold_through_proposal;
+                return Ok(view);
+            }
+            SeqOp::PreviewFoldTargets {
+                up_to,
+                line,
+                keep_side_point,
+                pose_before,
+            } => {
+                check_insert_point(&doc, up_to)?;
+                let lookup = fold_target_info_at(
+                    &doc,
+                    &self.faces,
+                    up_to,
+                    line,
+                    keep_side_point,
+                    pose_before.as_ref(),
+                );
+                let mut view = build_view(&doc, &step_creases, lookup.warnings);
+                view.fold_target_info = Some(lookup.info);
+                return Ok(view);
+            }
+            SeqOp::PreviewFoldTargetsOnMaterial {
+                up_to,
+                material_line,
+                material_keep_side_point,
+                pose_before,
+            } => {
+                check_insert_point(&doc, up_to)?;
+                let lookup = material_fold_target_info_at(
+                    &doc,
+                    &self.faces,
+                    up_to,
+                    material_line,
+                    material_keep_side_point,
+                    pose_before.as_ref(),
+                );
+                let mut view = build_view(&doc, &step_creases, lookup.warnings);
+                view.fold_target_info = Some(lookup.info);
+                return Ok(view);
             }
             SeqOp::FlatMotion { up_to, parts, kind } => {
                 // FoldThrough/Techniqueと同じ挿入・警告規約。面IDはこの時点の
@@ -1168,7 +1343,603 @@ fn build_view(
         best_effort: false,
         converged: true,
         fold_through_proposal: None,
+        fold_target_info: None,
     }
+}
+
+struct FoldTargetLookup {
+    info: FoldTargetInfo,
+    analysis: Option<ori3_layers::FoldTargetAnalysis>,
+    warnings: Vec<String>,
+}
+
+fn unavailable_fold_target_info() -> FoldTargetInfo {
+    FoldTargetInfo {
+        status: FoldTargetStatus::Unavailable,
+        available_count: None,
+        reason: Some("この折り線で同時に折れるひだを確認できません。".to_string()),
+        top_action: None,
+    }
+}
+
+fn fold_target_info_at(
+    doc: &Document,
+    faces: &[Face],
+    up_to: usize,
+    line: [[f64; 2]; 2],
+    keep_side_point: [f64; 2],
+    pose_before: Option<&ori3_model::FoldPoseInput>,
+) -> FoldTargetLookup {
+    let Ok((analysis, warnings)) =
+        ori3_layers::fold_target_analysis_at(doc, faces, up_to, line, keep_side_point, pose_before)
+    else {
+        return FoldTargetLookup {
+            info: unavailable_fold_target_info(),
+            analysis: None,
+            warnings: Vec::new(),
+        };
+    };
+
+    let info = fold_target_info_from_analysis(&analysis);
+    let keep_analysis = info.status != FoldTargetStatus::Unavailable;
+    FoldTargetLookup {
+        info,
+        analysis: keep_analysis.then_some(analysis),
+        warnings,
+    }
+}
+
+fn fold_target_info_from_analysis(analysis: &ori3_layers::FoldTargetAnalysis) -> FoldTargetInfo {
+    let sections = &analysis.pleats.sections;
+    let Some(available_count) = analysis.pleats.scalar_count else {
+        return FoldTargetInfo {
+            status: FoldTargetStatus::Varies,
+            available_count: None,
+            reason: Some("折り線の場所によって、同時に折れるひだの枚数が異なります。".to_string()),
+            top_action: None,
+        };
+    };
+    if sections.is_empty() {
+        return unavailable_fold_target_info();
+    }
+
+    let all_crease_only = available_count == 0
+        && sections.iter().all(|section| {
+            section.pairs_top_to_bottom.is_empty()
+                && section.count_limit.is_none()
+                && matches!(
+                    section.top_action,
+                    Some(ori3_layers::TopAction::CreaseOnlyTop { .. })
+                )
+        });
+    if all_crease_only {
+        return FoldTargetInfo {
+            status: FoldTargetStatus::CreaseOnlyTop,
+            available_count: Some(0),
+            reason: Some("いちばん上の紙が最後まで折り重なっていないため、今回はひだをまとめて折りません。いちばん上の紙に折り目だけを付け、下の紙と3Dの形は動かしません。".to_string()),
+            top_action: Some(FoldTargetTopAction::CreaseOnlyTop),
+        };
+    }
+    if available_count == 0 {
+        return unavailable_fold_target_info();
+    }
+
+    let section_is_limited = |section: &ori3_layers::PleatSectionAnalysis| {
+        section.top_action.is_none()
+            && section.pairs_top_to_bottom.len() == available_count
+            && section.count_limit
+                == Some(ori3_layers::PleatCountLimit::IncompleteBoundaryAfter {
+                    count: available_count,
+                })
+    };
+    let section_is_ready = |section: &ori3_layers::PleatSectionAnalysis| {
+        section.top_action.is_none()
+            && section.count_limit.is_none()
+            && section.pairs_top_to_bottom.len() == available_count
+    };
+    let all_ready_or_limited = sections
+        .iter()
+        .all(|section| section_is_ready(section) || section_is_limited(section));
+    let any_limited = sections.iter().any(section_is_limited);
+    let targets_are_safe = (1..=available_count)
+        .all(|count| ori3_layers::target_faces_for_pleat_count(analysis, count).is_ok());
+    if !targets_are_safe || !all_ready_or_limited {
+        return unavailable_fold_target_info();
+    }
+
+    let (status, reason) = if any_limited {
+        (
+            FoldTargetStatus::Limited,
+            Some(format!(
+                "上から{available_count}枚まで選べます。{available_count}枚目の下は、まだ最後まで折り重なっていません。"
+            )),
+        )
+    } else {
+        (FoldTargetStatus::Ready, None)
+    };
+    FoldTargetInfo {
+        status,
+        available_count: Some(available_count),
+        reason,
+        top_action: None,
+    }
+}
+
+fn fold_target_faces_at(
+    doc: &Document,
+    faces: &[Face],
+    up_to: usize,
+    line: [[f64; 2]; 2],
+    keep_side_point: [f64; 2],
+    pose_before: Option<&ori3_model::FoldPoseInput>,
+    count: usize,
+) -> Result<Vec<FaceId>, String> {
+    let lookup = fold_target_info_at(doc, faces, up_to, line, keep_side_point, pose_before);
+    let reason = lookup
+        .info
+        .reason
+        .clone()
+        .unwrap_or_else(|| "この枚数のひだを折れません。".to_string());
+    let analysis = lookup.analysis.ok_or(reason.clone())?;
+    if !matches!(
+        lookup.info.status,
+        FoldTargetStatus::Ready | FoldTargetStatus::Limited
+    ) {
+        return Err(reason);
+    }
+    ori3_layers::target_faces_for_pleat_count(&analysis, count).map_err(|_| reason)
+}
+
+struct OneShotMaterialTopProvider {
+    observation: Option<ori3_layers::TopSurfaceObservation>,
+}
+
+impl ori3_layers::TopSurfaceProvider for OneShotMaterialTopProvider {
+    fn observe_from_top(
+        &mut self,
+        depth: usize,
+    ) -> Result<ori3_layers::TopSurfaceObservation, ori3_layers::SpatialCreaseOnlyError> {
+        // 利用者の決定: 最上紙が未完なら、その下に完全なひだがあっても探索しない。
+        if depth != 0 {
+            return Err(ori3_layers::SpatialCreaseOnlyError::AmbiguousTopSurface);
+        }
+        self.observation
+            .take()
+            .ok_or(ori3_layers::SpatialCreaseOnlyError::AmbiguousTopSurface)
+    }
+}
+
+fn material_top_surface_provider(
+    cp: &CreasePattern,
+    faces: &[Face],
+    pose: &ori3_layers::CanonicalNonflatPose,
+    material_point: [f64; 2],
+) -> Result<OneShotMaterialTopProvider, String> {
+    let observation = material_top_surface_observation(cp, faces, pose, material_point)
+        .map_err(material_crease_only_error_message)?;
+    Ok(OneShotMaterialTopProvider {
+        observation: Some(observation),
+    })
+}
+
+fn material_top_surface_observation(
+    cp: &CreasePattern,
+    faces: &[Face],
+    pose: &ori3_layers::CanonicalNonflatPose,
+    material_point: [f64; 2],
+) -> Result<ori3_layers::TopSurfaceObservation, ori3_layers::SpatialCreaseOnlyError> {
+    use ori3_layers::{SpatialCreaseOnlyError, SurfaceRelationFromTop, TopSurfaceObservation};
+
+    if material_point
+        .iter()
+        .any(|coordinate| !coordinate.is_finite())
+    {
+        return Err(SpatialCreaseOnlyError::NonFiniteInput);
+    }
+
+    let mut angle_by_edge = HashMap::new();
+    for &(edge, angle) in &pose.signed_hinge_angles {
+        if !angle.is_finite() {
+            return Err(SpatialCreaseOnlyError::InvalidTopRelation);
+        }
+        if let Some(previous) = angle_by_edge.insert(edge, angle)
+            && previous.to_bits() != angle.to_bits()
+        {
+            return Err(SpatialCreaseOnlyError::InvalidTopRelation);
+        }
+    }
+
+    let mut owners = HashMap::<EdgeId, Vec<FaceId>>::new();
+    for face in faces {
+        for &edge in &face.edges {
+            owners.entry(edge).or_default().push(face.id);
+        }
+    }
+    if owners.values().any(|edge_owners| edge_owners.len() > 2) {
+        return Err(SpatialCreaseOnlyError::AmbiguousTopSurface);
+    }
+
+    let candidates = faces
+        .iter()
+        .filter(|face| ori3_layers::point_in_face(cp, face, material_point))
+        .map(|face| face.id)
+        .collect::<Vec<_>>();
+    let Some(&seed) = candidates.first() else {
+        return Err(SpatialCreaseOnlyError::MaterialKeepSidePointOutsidePaper);
+    };
+
+    let mut zero_neighbors = HashMap::<FaceId, Vec<FaceId>>::new();
+    for (&edge, edge_owners) in &owners {
+        if edge_owners.len() != 2
+            || !angle_by_edge
+                .get(&edge)
+                .copied()
+                .is_some_and(|angle| angle == 0.0)
+        {
+            continue;
+        }
+        zero_neighbors
+            .entry(edge_owners[0])
+            .or_default()
+            .push(edge_owners[1]);
+        zero_neighbors
+            .entry(edge_owners[1])
+            .or_default()
+            .push(edge_owners[0]);
+    }
+
+    let mut selected = HashSet::from([seed]);
+    let mut queue = VecDeque::from([seed]);
+    while let Some(face) = queue.pop_front() {
+        for &neighbor in zero_neighbors.get(&face).into_iter().flatten() {
+            if selected.insert(neighbor) {
+                queue.push_back(neighbor);
+            }
+        }
+    }
+    if candidates.iter().any(|face| !selected.contains(face)) {
+        return Err(SpatialCreaseOnlyError::AmbiguousTopSurface);
+    }
+
+    let mut relation = None;
+    for (&edge, edge_owners) in &owners {
+        if edge_owners.len() != 2 {
+            continue;
+        }
+        let first_selected = selected.contains(&edge_owners[0]);
+        let second_selected = selected.contains(&edge_owners[1]);
+        if first_selected == second_selected {
+            continue;
+        }
+        let next = angle_by_edge
+            .get(&edge)
+            .copied()
+            .map(classify_material_top_relation)
+            .unwrap_or(SurfaceRelationFromTop::Missing);
+        if let Some(current) = relation {
+            if !same_material_top_relation(current, next) {
+                return Err(SpatialCreaseOnlyError::AmbiguousTopSurface);
+            }
+        } else {
+            relation = Some(next);
+        }
+    }
+
+    // facesの材料順を保つだけで、面IDの大小を最上面の選択には使わない。
+    let surface_faces = faces
+        .iter()
+        .filter(|face| selected.contains(&face.id))
+        .map(|face| face.id)
+        .collect();
+    Ok(TopSurfaceObservation {
+        surface_faces,
+        relation_to_next: relation.unwrap_or(SurfaceRelationFromTop::Missing),
+    })
+}
+
+fn classify_material_top_relation(angle: f64) -> ori3_layers::SurfaceRelationFromTop {
+    use ori3_layers::SurfaceRelationFromTop;
+
+    if angle == 0.0 {
+        return SurfaceRelationFromTop::Zero;
+    }
+    let positive_delta = angle - 180.0;
+    if (-ori3_layers::COMPLETE_FOLD_ENDPOINT_EPS_DEG..=ori3_layers::COMPLETE_FOLD_ENDPOINT_EPS_DEG)
+        .contains(&positive_delta)
+    {
+        return SurfaceRelationFromTop::CompletePositive180;
+    }
+    let negative_delta = angle + 180.0;
+    if (-ori3_layers::COMPLETE_FOLD_ENDPOINT_EPS_DEG..=ori3_layers::COMPLETE_FOLD_ENDPOINT_EPS_DEG)
+        .contains(&negative_delta)
+    {
+        return SurfaceRelationFromTop::CompleteNegative180;
+    }
+    SurfaceRelationFromTop::Incomplete {
+        signed_angle_deg: angle,
+    }
+}
+
+fn same_material_top_relation(
+    first: ori3_layers::SurfaceRelationFromTop,
+    second: ori3_layers::SurfaceRelationFromTop,
+) -> bool {
+    use ori3_layers::SurfaceRelationFromTop;
+
+    match (first, second) {
+        (
+            SurfaceRelationFromTop::Incomplete {
+                signed_angle_deg: first,
+            },
+            SurfaceRelationFromTop::Incomplete {
+                signed_angle_deg: second,
+            },
+        ) => {
+            let delta = first - second;
+            (-ori3_layers::COMPLETE_FOLD_ENDPOINT_EPS_DEG
+                ..=ori3_layers::COMPLETE_FOLD_ENDPOINT_EPS_DEG)
+                .contains(&delta)
+        }
+        _ => first == second,
+    }
+}
+
+fn nonflat_pose_step_from_input(
+    cp: &CreasePattern,
+    input: &ori3_model::FoldPoseInput,
+) -> Result<FoldStep, String> {
+    let vertices = cp
+        .vertices
+        .iter()
+        .map(|vertex| (vertex.id, vertex.pos))
+        .collect::<HashMap<_, _>>();
+    let edges = cp
+        .edges
+        .iter()
+        .map(|edge| (edge.id, edge))
+        .collect::<HashMap<_, _>>();
+    let mut drivers = Vec::with_capacity(input.drivers.len());
+    for requested in &input.drivers {
+        let edge = edges
+            .get(&requested.edge_id)
+            .ok_or_else(|| "折った形を再現する折り目が見つかりません".to_string())?;
+        let a = vertices
+            .get(&edge.v0)
+            .copied()
+            .ok_or_else(|| "折った形を再現する折り目の端が見つかりません".to_string())?;
+        let b = vertices
+            .get(&edge.v1)
+            .copied()
+            .ok_or_else(|| "折った形を再現する折り目の端が見つかりません".to_string())?;
+        drivers.push(ori3_model::DriverLine {
+            a,
+            b,
+            // 利用者の宣言を生のまま保存する。+180/-180や+90/-90を周期化しない。
+            target_angle_deg: requested.target_angle_deg,
+        });
+    }
+    Ok(FoldStep {
+        id: 0,
+        kind: TechniqueKind::Pose,
+        drivers,
+        layer_order: None,
+        alignment: None,
+        finish_soft: None,
+        note: "折った形を再現してから折り目を付ける".to_string(),
+    })
+}
+
+fn material_crease_only_error_message(error: ori3_layers::SpatialCreaseOnlyError) -> String {
+    use ori3_layers::SpatialCreaseOnlyError;
+
+    match error {
+        SpatialCreaseOnlyError::DegenerateMaterialLine => {
+            "折り線の2点が同じため、折り目を付けられません。".to_string()
+        }
+        SpatialCreaseOnlyError::NonFiniteInput => {
+            "折り線の位置を読み取れないため、折り目を付けられません。".to_string()
+        }
+        SpatialCreaseOnlyError::MaterialKeepSidePointOnBoundary => {
+            "残す側の点が紙のふちにあるため、どちら側か決められません。".to_string()
+        }
+        SpatialCreaseOnlyError::MaterialKeepSidePointOutsidePaper => {
+            "残す側の点が紙の外にあるため、折り目を付けられません。".to_string()
+        }
+        SpatialCreaseOnlyError::MaterialLineMismatchAcrossSurfaceFaces => {
+            "折り線がいちばん上の紙で1本につながらないため、折り目を付けられません。".to_string()
+        }
+        SpatialCreaseOnlyError::PartialInsertion => {
+            "いちばん上の紙の全体へ折り目を付けられないため、変更しませんでした。".to_string()
+        }
+        SpatialCreaseOnlyError::AmbiguousTopSurface
+        | SpatialCreaseOnlyError::MissingTopRelation
+        | SpatialCreaseOnlyError::ZeroTopRelation
+        | SpatialCreaseOnlyError::CompleteTopRelation
+        | SpatialCreaseOnlyError::InvalidTopRelation
+        | SpatialCreaseOnlyError::NotImplemented => {
+            "いちばん上の紙が折り途中だと確認できないため、折り目を付けられません。".to_string()
+        }
+    }
+}
+
+fn material_fold_target_info_at(
+    doc: &Document,
+    faces: &[Face],
+    up_to: usize,
+    material_line: [[f64; 2]; 2],
+    material_keep_side_point: [f64; 2],
+    pose_before: Option<&ori3_model::FoldPoseInput>,
+) -> FoldTargetLookup {
+    let Ok(pose) = ori3_layers::replay::canonical_nonflat_pose_at(doc, faces, up_to, pose_before)
+    else {
+        return FoldTargetLookup {
+            info: unavailable_fold_target_info(),
+            analysis: None,
+            warnings: Vec::new(),
+        };
+    };
+    let warnings = pose.frame.warnings.clone();
+    let Ok(mut provider) =
+        material_top_surface_provider(&doc.cp, faces, &pose, material_keep_side_point)
+    else {
+        return FoldTargetLookup {
+            info: unavailable_fold_target_info(),
+            analysis: None,
+            warnings,
+        };
+    };
+    let result = ori3_layers::crease_only_top_from_material_line(
+        &doc.cp,
+        faces,
+        &pose,
+        &ori3_layers::SpatialCreaseOnlyInput {
+            material_line,
+            material_keep_side_point,
+            direction: ori3_model::FoldDirection::Up,
+        },
+        &mut provider,
+    );
+    let info = if result.is_ok() {
+        FoldTargetInfo {
+            status: FoldTargetStatus::CreaseOnlyTop,
+            available_count: Some(0),
+            reason: Some("いちばん上の紙が最後まで折り重なっていないため、今回はひだをまとめて折りません。いちばん上の紙に折り目だけを付け、下の紙と3Dの形は動かしません。".to_string()),
+            top_action: Some(FoldTargetTopAction::CreaseOnlyTop),
+        }
+    } else {
+        unavailable_fold_target_info()
+    };
+    FoldTargetLookup {
+        info,
+        analysis: None,
+        warnings,
+    }
+}
+
+fn verify_direct_crease_only_pose_is_unchanged(
+    pose: &ori3_layers::CanonicalNonflatPose,
+    result: &ori3_layers::SpatialCreaseOnlyResult,
+) -> Result<(), String> {
+    let result_vertices = result
+        .material_vertices
+        .iter()
+        .map(|vertex| (vertex.vertex, vertex.position.map(f64::to_bits)))
+        .collect::<HashMap<_, _>>();
+    for vertex in &pose.material_vertices {
+        if result_vertices.get(&vertex.vertex) != Some(&vertex.position.map(f64::to_bits)) {
+            return Err("折り目を付ける前後で3Dの形が動いたため、変更しませんでした。".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn verify_cold_crease_only_replay(
+    pose: &ori3_layers::CanonicalNonflatPose,
+    direct_vertices: &[ori3_layers::MaterialVertex3D],
+    inserted_step_ids: &[StepId],
+    material_faces: &[Face],
+    cold: &ori3_layers::ReplayResult,
+) -> Result<(), String> {
+    // 2026-08-26実測: +90°/-90°、0°で連結した3面、保存prefix由来の非平坦姿勢、
+    // 後続手順を持つ途中挿入の5標本で、旧Vertexの最大ずれは
+    // 7.85046229341887583e-17。この実測が上限の約78.5%(およそ8割)になる
+    // 1.0e-16を境目とする。標本の最短材料線0.25に対して2.5e15分の1であり、
+    // 少なくとも実測した材料形状の位置差を吸収しない桁に留める。
+    const MAX_COLD_REPLAY_OLD_VERTEX_DRIFT: f64 = 1.0e-16;
+
+    if cold
+        .skipped
+        .iter()
+        .any(|step| inserted_step_ids.contains(step))
+    {
+        return Err("保存した折った形と折り目を読み直せないため、変更しませんでした。".to_string());
+    }
+    if !cold.converged || cold.best_effort {
+        return Err("保存した3Dの形を最後まで読み直せないため、変更しませんでした。".to_string());
+    }
+    let frame = &cold.frame;
+    let material_face_ids = material_faces
+        .iter()
+        .map(|face| face.id)
+        .collect::<HashSet<_>>();
+    if material_face_ids.len() != material_faces.len() || frame.faces.len() != material_faces.len()
+    {
+        return Err("保存した3Dの紙面が過不足なく揃わないため、変更しませんでした。".to_string());
+    }
+    let expected = pose
+        .material_vertices
+        .iter()
+        .map(|vertex| (vertex.vertex, vertex.position))
+        .collect::<HashMap<_, _>>();
+    let direct = direct_vertices
+        .iter()
+        .map(|vertex| (vertex.vertex, vertex.position))
+        .collect::<HashMap<_, _>>();
+    let mut seen_faces = HashSet::new();
+    let mut seen_vertices = HashSet::new();
+    let mut max_drift = 0.0_f64;
+    for spatial_face in &frame.faces {
+        if !seen_faces.insert(spatial_face.face) {
+            return Err("保存した3Dの紙面が重複しているため、変更しませんでした。".to_string());
+        }
+        let material_face = material_faces
+            .iter()
+            .find(|face| face.id == spatial_face.face)
+            .ok_or_else(|| {
+                "保存した3Dの紙面を読み直せないため、変更しませんでした。".to_string()
+            })?;
+        if material_face.vertices.len() != spatial_face.polygon.len() {
+            return Err("保存した3Dの紙面を読み直せないため、変更しませんでした。".to_string());
+        }
+        for (&vertex, &actual) in material_face.vertices.iter().zip(&spatial_face.polygon) {
+            let Some(expected_position) = expected.get(&vertex) else {
+                continue;
+            };
+            let Some(direct_position) = direct.get(&vertex) else {
+                return Err(
+                    "折り目を付けた直後の3Dの形を確認できないため、変更しませんでした。"
+                        .to_string(),
+                );
+            };
+            if direct_position.map(f64::to_bits) != expected_position.map(f64::to_bits) {
+                return Err(
+                    "折り目を付ける処理で3Dの形が動いたため、変更しませんでした。".to_string(),
+                );
+            }
+            let squared = actual
+                .into_iter()
+                .zip(*expected_position)
+                .map(|(left, right)| {
+                    let delta = left - right;
+                    delta * delta
+                })
+                .sum::<f64>();
+            if !squared.is_finite() {
+                return Err(
+                    "保存した3Dの形を有限な位置で読み直せないため、変更しませんでした。"
+                        .to_string(),
+                );
+            }
+            max_drift = max_drift.max(squared.sqrt());
+            seen_vertices.insert(vertex);
+        }
+    }
+    if seen_faces != material_face_ids {
+        return Err("保存した3Dの紙面が元の紙と一致しないため、変更しませんでした。".to_string());
+    }
+    if expected
+        .keys()
+        .any(|vertex| !seen_vertices.contains(vertex))
+    {
+        return Err("保存した3Dの形に元の紙の点が揃わないため、変更しませんでした。".to_string());
+    }
+
+    #[cfg(test)]
+    eprintln!("stage3 cold replay max old-vertex drift = {max_drift:.17e}");
+    if max_drift > MAX_COLD_REPLAY_OLD_VERTEX_DRIFT {
+        return Err("保存した3Dの形で元の紙の点が動いたため、変更しませんでした。".to_string());
+    }
+    Ok(())
 }
 
 /// MoveStep候補の完全な返却viewを、store確定より前に導出する。
@@ -1905,8 +2676,11 @@ mod tests {
     const CRANE_HEAD_MOVING_FACES: &[FaceId] = &[2, 3, 6, 7, 10, 11, 12, 13, 14, 15];
     const CRANE_HEAD_CAPTURED_LAYER_ORDER: &[FaceId] =
         &[4, 5, 2, 13, 12, 9, 8, 1, 3, 11, 10, 14, 15, 0, 7, 6];
-    const CRANE_HEAD_CANONICAL_LAYER_ORDER: &[FaceId] =
-        &[4, 9, 8, 1, 14, 3, 15, 0, 5, 7, 2, 13, 12, 11, 10, 6];
+    // 以前の `CRANE_HEAD_CANONICAL_LAYER_ORDER` は2026-08-26のcanonical solve 1回が
+    // 返した全順序だった。solve出力をgoldenにせず、下の検査で独立捕捉した物理順と
+    // 正面積で重なる面対だけを比較する。重ならない面対のtotal-order tieは検査しない。
+    // `pose_motion::overlap_witnesses` と同じ正面積閾値。
+    const CRANE_HEAD_OVERLAP_AREA_EPS: f64 = 1e-14;
 
     const MALFORMED_CATEGORY_COUNT: usize = 10;
     const MALFORMED_CASES_PER_CATEGORY: usize = 10;
@@ -1945,6 +2719,29 @@ mod tests {
             })
             .unwrap();
         store
+    }
+
+    fn one_pleat_square_store() -> (DocumentStore, ori3_model::FoldPoseInput) {
+        let mut store = square_store();
+        ori3_cp::insert_segment(&mut store.doc.cp, [0.5, 0.0], [0.5, 1.0], EdgeKind::Valley);
+        store.faces = ori3_cp::extract_faces(&store.doc.cp);
+        let hinge = store
+            .doc
+            .cp
+            .edges
+            .iter()
+            .find(|edge| edge.kind == EdgeKind::Valley)
+            .expect("inserted hinge")
+            .id;
+        (
+            store,
+            ori3_model::FoldPoseInput {
+                drivers: vec![ori3_model::FoldPoseDriver {
+                    edge_id: hinge,
+                    target_angle_deg: 180.0,
+                }],
+            },
+        )
     }
 
     fn crane_head_document() -> Document {
@@ -1987,6 +2784,17 @@ mod tests {
             json["accept_additional_crease"] = serde_json::Value::Bool(false);
         }
         serde_json::from_value(json).expect("FoldThrough要求を読める")
+    }
+
+    fn crane_head_target_query() -> SeqOp {
+        serde_json::from_value(serde_json::json!({
+            "type": "PreviewFoldTargets",
+            "up_to": 0,
+            "line": CRANE_HEAD_LINE,
+            "keep_side_point": CRANE_HEAD_KEEP_POINT,
+            "pose_before": crane_head_pose_json(),
+        }))
+        .expect("query uses the same persisted pose declaration as the fold")
     }
 
     fn crane_head_moving_faces(
@@ -2105,6 +2913,292 @@ mod tests {
             ori3_layers::flat_state_at(&oracle, faces, 1).expect("期待姿勢を再生できる");
         assert!(warnings.is_empty(), "期待姿勢の警告={warnings:?}");
         state
+    }
+
+    type CraneHeadPoint2 = [f64; 2];
+
+    fn crane_head_point_subtract(left: CraneHeadPoint2, right: CraneHeadPoint2) -> CraneHeadPoint2 {
+        [left[0] - right[0], left[1] - right[1]]
+    }
+
+    fn crane_head_point_add(left: CraneHeadPoint2, right: CraneHeadPoint2) -> CraneHeadPoint2 {
+        [left[0] + right[0], left[1] + right[1]]
+    }
+
+    fn crane_head_point_scale(point: CraneHeadPoint2, scale: f64) -> CraneHeadPoint2 {
+        [point[0] * scale, point[1] * scale]
+    }
+
+    fn crane_head_perp_dot(left: CraneHeadPoint2, right: CraneHeadPoint2) -> f64 {
+        left[0] * right[1] - left[1] * right[0]
+    }
+
+    fn crane_head_point_distance(left: CraneHeadPoint2, right: CraneHeadPoint2) -> f64 {
+        (left[0] - right[0]).hypot(left[1] - right[1])
+    }
+
+    fn crane_head_polygon_area(polygon: &[CraneHeadPoint2]) -> f64 {
+        if polygon.len() < 3 {
+            return 0.0;
+        }
+        0.5 * (0..polygon.len())
+            .map(|index| crane_head_perp_dot(polygon[index], polygon[(index + 1) % polygon.len()]))
+            .sum::<f64>()
+    }
+
+    fn crane_head_simple_polygon(boundary: &[CraneHeadPoint2]) -> Vec<CraneHeadPoint2> {
+        let mut polygon = Vec::with_capacity(boundary.len());
+        for &point in boundary {
+            if polygon
+                .last()
+                .is_none_or(|previous| crane_head_point_distance(*previous, point) > EPS)
+            {
+                polygon.push(point);
+            }
+        }
+        while polygon.len() > 1
+            && crane_head_point_distance(polygon[0], polygon[polygon.len() - 1]) <= EPS
+        {
+            polygon.pop();
+        }
+        polygon
+    }
+
+    fn crane_head_point_in_triangle(
+        point: CraneHeadPoint2,
+        a: CraneHeadPoint2,
+        b: CraneHeadPoint2,
+        c: CraneHeadPoint2,
+    ) -> bool {
+        crane_head_perp_dot(
+            crane_head_point_subtract(b, a),
+            crane_head_point_subtract(point, a),
+        ) >= -EPS
+            && crane_head_perp_dot(
+                crane_head_point_subtract(c, b),
+                crane_head_point_subtract(point, b),
+            ) >= -EPS
+            && crane_head_perp_dot(
+                crane_head_point_subtract(a, c),
+                crane_head_point_subtract(point, c),
+            ) >= -EPS
+    }
+
+    fn crane_head_triangulate_polygon(
+        boundary: &[CraneHeadPoint2],
+    ) -> Result<Vec<Vec<CraneHeadPoint2>>, String> {
+        let mut polygon = crane_head_simple_polygon(boundary);
+        if polygon.len() < 3
+            || crane_head_polygon_area(&polygon).abs() <= CRANE_HEAD_OVERLAP_AREA_EPS
+        {
+            return Err("crane-head投影多角形が退化しています".to_string());
+        }
+        if crane_head_polygon_area(&polygon) < 0.0 {
+            polygon.reverse();
+        }
+        let mut triangles = Vec::with_capacity(polygon.len().saturating_sub(2));
+        while polygon.len() > 3 {
+            let count = polygon.len();
+            let Some(ear) = (0..count).find(|&index| {
+                let a = polygon[(index + count - 1) % count];
+                let b = polygon[index];
+                let c = polygon[(index + 1) % count];
+                crane_head_perp_dot(
+                    crane_head_point_subtract(b, a),
+                    crane_head_point_subtract(c, b),
+                ) > EPS * EPS
+                    && !polygon.iter().enumerate().any(|(other, &point)| {
+                        other != index
+                            && other != (index + count - 1) % count
+                            && other != (index + 1) % count
+                            && crane_head_point_in_triangle(point, a, b, c)
+                    })
+            }) else {
+                return Err("crane-head投影多角形を三角形分割できません".to_string());
+            };
+            triangles.push(vec![
+                polygon[(ear + count - 1) % count],
+                polygon[ear],
+                polygon[(ear + 1) % count],
+            ]);
+            polygon.remove(ear);
+        }
+        triangles.push(polygon);
+        Ok(triangles)
+    }
+
+    fn crane_head_deduplicate_polygon(points: Vec<CraneHeadPoint2>) -> Vec<CraneHeadPoint2> {
+        let mut output = Vec::with_capacity(points.len());
+        for point in points {
+            if output
+                .last()
+                .is_none_or(|previous| crane_head_point_distance(*previous, point) > EPS)
+            {
+                output.push(point);
+            }
+        }
+        if output.len() > 1 && crane_head_point_distance(output[0], output[output.len() - 1]) <= EPS
+        {
+            output.pop();
+        }
+        output
+    }
+
+    fn crane_head_intersect_convex_polygons(
+        subject: &[CraneHeadPoint2],
+        clip: &[CraneHeadPoint2],
+    ) -> Vec<CraneHeadPoint2> {
+        let mut output = subject.to_vec();
+        for index in 0..clip.len() {
+            let clip_start = clip[index];
+            let clip_end = clip[(index + 1) % clip.len()];
+            let clip_direction = crane_head_point_subtract(clip_end, clip_start);
+            let input = std::mem::take(&mut output);
+            let Some(mut previous) = input.last().copied() else {
+                break;
+            };
+            let mut previous_side = crane_head_perp_dot(
+                clip_direction,
+                crane_head_point_subtract(previous, clip_start),
+            );
+            for current in input {
+                let current_side = crane_head_perp_dot(
+                    clip_direction,
+                    crane_head_point_subtract(current, clip_start),
+                );
+                let previous_inside = previous_side >= -EPS;
+                let current_inside = current_side >= -EPS;
+                if previous_inside != current_inside {
+                    let denominator = previous_side - current_side;
+                    if denominator.abs() > EPS * EPS {
+                        output.push(crane_head_point_add(
+                            previous,
+                            crane_head_point_scale(
+                                crane_head_point_subtract(current, previous),
+                                previous_side / denominator,
+                            ),
+                        ));
+                    }
+                }
+                if current_inside {
+                    output.push(current);
+                }
+                previous = current;
+                previous_side = current_side;
+            }
+        }
+        crane_head_deduplicate_polygon(output)
+    }
+
+    /// `pose_motion::overlap_witnesses` と同じear clipping・凸clip・面積閾値。
+    /// desktopは同helperのcrate外なので、製品可視性を広げずtest内で同じ計算を行う。
+    fn crane_head_overlap_witnesses(
+        left: &[CraneHeadPoint2],
+        right: &[CraneHeadPoint2],
+    ) -> Result<Vec<CraneHeadPoint2>, String> {
+        let left_triangles = crane_head_triangulate_polygon(left)?;
+        let right_triangles = crane_head_triangulate_polygon(right)?;
+        let mut witnesses = Vec::new();
+        for left_triangle in &left_triangles {
+            for right_triangle in &right_triangles {
+                let intersection =
+                    crane_head_intersect_convex_polygons(left_triangle, right_triangle);
+                if crane_head_polygon_area(&intersection).abs() <= CRANE_HEAD_OVERLAP_AREA_EPS {
+                    continue;
+                }
+                let sum = intersection
+                    .iter()
+                    .copied()
+                    .fold([0.0, 0.0], crane_head_point_add);
+                let center = crane_head_point_scale(sum, 1.0 / intersection.len() as f64);
+                witnesses.push(center);
+                witnesses.extend(
+                    intersection.iter().copied().map(|point| {
+                        crane_head_point_scale(crane_head_point_add(point, center), 0.5)
+                    }),
+                );
+            }
+        }
+        Ok(witnesses)
+    }
+
+    fn crane_head_overlap_order_mismatches(
+        document: &Document,
+        faces: &[Face],
+        state: &ori3_layers::FlatState,
+        oracle_order: &[FaceId],
+    ) -> Result<(usize, Vec<(FaceId, FaceId)>), String> {
+        let vertices = document
+            .cp
+            .vertices
+            .iter()
+            .map(|vertex| (vertex.id, vertex.pos))
+            .collect::<HashMap<_, _>>();
+        let polygons = faces
+            .iter()
+            .map(|face| {
+                let placement = state
+                    .placements
+                    .get(&face.id)
+                    .ok_or_else(|| format!("crane-head面{}の平坦配置がありません", face.id))?;
+                let polygon = face
+                    .vertices
+                    .iter()
+                    .map(|vertex| {
+                        let material = vertices.get(vertex).copied().ok_or_else(|| {
+                            format!("crane-head面{}の頂点{vertex}がありません", face.id)
+                        })?;
+                        let point = placement.apply(material.into());
+                        let point = [point.x, point.y];
+                        point
+                            .iter()
+                            .all(|coordinate| coordinate.is_finite())
+                            .then_some(point)
+                            .ok_or_else(|| {
+                                format!("crane-head面{}の座標が有限ではありません", face.id)
+                            })
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                Ok((face.id, polygon))
+            })
+            .collect::<Result<HashMap<_, _>, String>>()?;
+        let pose_rank = state
+            .order
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(rank, face)| (face, rank))
+            .collect::<HashMap<_, _>>();
+        let oracle_rank = oracle_order
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(rank, face)| (face, rank))
+            .collect::<HashMap<_, _>>();
+        let mut compared_pairs = 0;
+        let mut mismatches = Vec::new();
+        for left_index in 0..faces.len() {
+            for right_index in left_index + 1..faces.len() {
+                let left = faces[left_index].id;
+                let right = faces[right_index].id;
+                if crane_head_overlap_witnesses(&polygons[&left], &polygons[&right])?.is_empty() {
+                    continue;
+                }
+                compared_pairs += 1;
+                let pose_left_is_below = pose_rank
+                    .get(&left)
+                    .zip(pose_rank.get(&right))
+                    .is_some_and(|(left, right)| left < right);
+                let oracle_left_is_below = oracle_rank
+                    .get(&left)
+                    .zip(oracle_rank.get(&right))
+                    .is_some_and(|(left, right)| left < right);
+                if pose_left_is_below != oracle_left_is_below {
+                    mismatches.push((left, right));
+                }
+            }
+        }
+        Ok((compared_pairs, mismatches))
     }
 
     fn seeded_fold_import_store() -> DocumentStore {
@@ -4284,11 +5378,44 @@ mod tests {
                 "edge {edge}は+180/-180の符号まで保つ"
             );
         }
-        assert_eq!(pose.state.order, CRANE_HEAD_CANONICAL_LAYER_ORDER);
+        let material_faces = faces.iter().map(|face| face.id).collect::<BTreeSet<_>>();
+        let pose_faces = pose.state.order.iter().copied().collect::<BTreeSet<_>>();
+        assert_eq!(pose.state.order.len(), faces.len(), "全16面を1回ずつ並べる");
+        assert_eq!(pose_faces, material_faces, "層順は材料面の完全順列である");
+        let mut face_id_order = faces.iter().map(|face| face.id).collect::<Vec<_>>();
+        face_id_order.sort_unstable();
         assert_ne!(
-            pose.state.order,
-            (0..16).collect::<Vec<FaceId>>(),
+            pose.state.order, face_id_order,
             "層順をFaceId順で代用しない"
+        );
+        let (compared_pairs, mismatches) = crane_head_overlap_order_mismatches(
+            &document,
+            &faces,
+            &pose.state,
+            CRANE_HEAD_CAPTURED_LAYER_ORDER,
+        )
+        .expect("正面積で重なる全ての面対を比較できる");
+        eprintln!(
+            "crane_head_positive_overlap_pairs={compared_pairs} mismatches={}",
+            mismatches.len()
+        );
+        assert!(compared_pairs > 0, "物理的な上下を比較する重なり面対がある");
+        assert!(
+            mismatches.is_empty(),
+            "独立捕捉した層順と上下が異なる正面積重なり面対={mismatches:?}"
+        );
+        let validation = ori3_layers::precrease_collapse::validate_precrease_layer_order(
+            &document.cp,
+            &faces,
+            &pose.state.placements,
+            &pose.state.order,
+        )
+        .expect("canonical層順の一般制約を検査できる");
+        assert!(
+            validation.is_valid(),
+            "canonical層順が一般制約に違反する: violations={:?}, discarded_relations={:?}",
+            validation.violations,
+            validation.discarded_relations
         );
         assert_eq!(
             crane_head_moving_faces(&document, &faces, &pose.state),
@@ -4412,6 +5539,487 @@ mod tests {
             before,
             "PreviewはDocument・履歴・表示用warm値を変更しない"
         );
+    }
+
+    #[test]
+    fn crane_head_target_query_is_non_destructive_and_reports_varying_sections() {
+        let mut store = crane_head_store();
+        let before = store.atomicity_probe_for_test();
+        reset_commit_count_for_test();
+
+        let view = store
+            .apply_seq(crane_head_target_query())
+            .expect("fold-target query returns a normal response");
+
+        assert_eq!(store.atomicity_probe_for_test(), before);
+        assert_eq!(commit_count_for_test(), 0, "a query does not enter commit");
+        assert_eq!(
+            view.fold_target_info,
+            Some(FoldTargetInfo {
+                status: FoldTargetStatus::Varies,
+                available_count: None,
+                reason: Some(
+                    "折り線の場所によって、同時に折れるひだの枚数が異なります。".to_string(),
+                ),
+                top_action: None,
+            }),
+            "the captured line has two, two and one complete pleats in its three intervals",
+        );
+    }
+
+    #[test]
+    fn invalid_fold_target_query_is_unavailable_and_non_destructive() {
+        let mut store = square_store();
+        let before = store.atomicity_probe_for_test();
+        reset_commit_count_for_test();
+
+        let view = store
+            .apply_seq(SeqOp::PreviewFoldTargets {
+                up_to: 0,
+                line: [[0.5, 0.5], [0.5, 0.5]],
+                keep_side_point: [0.0, 0.0],
+                pose_before: None,
+            })
+            .expect("an unavailable query is a normal response");
+
+        assert_eq!(store.atomicity_probe_for_test(), before);
+        assert_eq!(commit_count_for_test(), 0);
+        assert_eq!(
+            view.fold_target_info,
+            Some(FoldTargetInfo {
+                status: FoldTargetStatus::Unavailable,
+                available_count: None,
+                reason: Some("この折り線で同時に折れるひだを確認できません。".to_string()),
+                top_action: None,
+            }),
+        );
+    }
+
+    #[test]
+    fn one_complete_pleat_query_reports_ready_without_mutation() {
+        let (mut store, pose_before) = one_pleat_square_store();
+        let before = store.atomicity_probe_for_test();
+        reset_commit_count_for_test();
+
+        let view = store
+            .apply_seq(SeqOp::PreviewFoldTargets {
+                up_to: 0,
+                line: [[0.0, 0.5], [0.5, 0.5]],
+                keep_side_point: [0.25, 0.75],
+                pose_before: Some(pose_before),
+            })
+            .expect("a document-derived complete pair is queryable");
+
+        assert_eq!(store.atomicity_probe_for_test(), before);
+        assert_eq!(commit_count_for_test(), 0);
+        assert_eq!(
+            view.fold_target_info,
+            Some(FoldTargetInfo {
+                status: FoldTargetStatus::Ready,
+                available_count: Some(1),
+                reason: None,
+                top_action: None,
+            }),
+        );
+    }
+
+    #[test]
+    fn a_single_surface_query_stays_unavailable_to_preserve_existing_fold_modes() {
+        let mut store = square_store();
+        let before = store.atomicity_probe_for_test();
+        reset_commit_count_for_test();
+
+        let view = store
+            .apply_seq(SeqOp::PreviewFoldTargets {
+                up_to: 0,
+                line: [[0.0, 0.5], [1.0, 0.5]],
+                keep_side_point: [0.5, 0.75],
+                pose_before: None,
+            })
+            .expect("a single-surface query returns a normal fallback response");
+
+        assert_eq!(store.atomicity_probe_for_test(), before);
+        assert_eq!(commit_count_for_test(), 0);
+        assert_eq!(
+            view.fold_target_info,
+            Some(FoldTargetInfo {
+                status: FoldTargetStatus::Unavailable,
+                available_count: None,
+                reason: Some("この折り線で同時に折れるひだを確認できません。".to_string()),
+                top_action: None,
+            }),
+        );
+    }
+
+    #[test]
+    fn incomplete_top_pair_maps_to_the_exact_crease_only_response() {
+        let analysis = ori3_layers::FoldTargetAnalysis {
+            pleats: ori3_layers::PleatAnalysis {
+                scalar_count: Some(0),
+                sections: vec![ori3_layers::PleatSectionAnalysis {
+                    top_action: Some(ori3_layers::TopAction::CreaseOnlyTop {
+                        surface_faces: vec![1],
+                    }),
+                    ..ori3_layers::PleatSectionAnalysis::default()
+                }],
+                reason: None,
+            },
+            section_surfaces_top_to_bottom: vec![vec![vec![1], vec![2]]],
+        };
+
+        assert_eq!(
+            fold_target_info_from_analysis(&analysis),
+            FoldTargetInfo {
+                status: FoldTargetStatus::CreaseOnlyTop,
+                available_count: Some(0),
+                reason: Some("いちばん上の紙が最後まで折り重なっていないため、今回はひだをまとめて折りません。いちばん上の紙に折り目だけを付け、下の紙と3Dの形は動かしません。".to_string()),
+                top_action: Some(FoldTargetTopAction::CreaseOnlyTop),
+            },
+        );
+    }
+
+    #[test]
+    fn ready_and_limited_sections_with_the_same_safe_count_report_limited() {
+        let pair = |upper, lower| ori3_layers::PleatPair {
+            hinge_faces: (upper, lower),
+            upper_surface_faces: vec![upper],
+            lower_surface_faces: vec![lower],
+            sign: ori3_layers::FullFoldSign::Positive180,
+        };
+        let analysis = ori3_layers::FoldTargetAnalysis {
+            pleats: ori3_layers::PleatAnalysis {
+                scalar_count: Some(1),
+                sections: vec![
+                    ori3_layers::PleatSectionAnalysis {
+                        pairs_top_to_bottom: vec![pair(1, 2)],
+                        ..ori3_layers::PleatSectionAnalysis::default()
+                    },
+                    ori3_layers::PleatSectionAnalysis {
+                        pairs_top_to_bottom: vec![pair(1, 2)],
+                        count_limit: Some(ori3_layers::PleatCountLimit::IncompleteBoundaryAfter {
+                            count: 1,
+                        }),
+                        ..ori3_layers::PleatSectionAnalysis::default()
+                    },
+                ],
+                reason: None,
+            },
+            section_surfaces_top_to_bottom: vec![vec![vec![1], vec![2]], vec![vec![1], vec![2]]],
+        };
+
+        assert_eq!(
+            fold_target_info_from_analysis(&analysis),
+            FoldTargetInfo {
+                status: FoldTargetStatus::Limited,
+                available_count: Some(1),
+                reason: Some(
+                    "上から1枚まで選べます。1枚目の下は、まだ最後まで折り重なっていません。"
+                        .to_string(),
+                ),
+                top_action: None,
+            },
+            "one incomplete interval limits the shared safe count even when another interval ends ready",
+        );
+    }
+
+    #[test]
+    fn equal_counts_with_different_surface_pair_identity_are_unavailable() {
+        let pair = |upper, lower| ori3_layers::PleatPair {
+            hinge_faces: (upper, lower),
+            upper_surface_faces: vec![upper],
+            lower_surface_faces: vec![lower],
+            sign: ori3_layers::FullFoldSign::Positive180,
+        };
+        let analysis = ori3_layers::FoldTargetAnalysis {
+            pleats: ori3_layers::PleatAnalysis {
+                scalar_count: Some(1),
+                sections: vec![
+                    ori3_layers::PleatSectionAnalysis {
+                        pairs_top_to_bottom: vec![pair(1, 2)],
+                        ..ori3_layers::PleatSectionAnalysis::default()
+                    },
+                    ori3_layers::PleatSectionAnalysis {
+                        pairs_top_to_bottom: vec![pair(3, 4)],
+                        ..ori3_layers::PleatSectionAnalysis::default()
+                    },
+                ],
+                reason: None,
+            },
+            section_surfaces_top_to_bottom: vec![vec![vec![1], vec![2]], vec![vec![3], vec![4]]],
+        };
+
+        assert_eq!(
+            fold_target_info_from_analysis(&analysis),
+            unavailable_fold_target_info(),
+            "equal counts are insufficient when the surface pair identity differs by interval",
+        );
+    }
+
+    #[test]
+    fn pleat_count_and_explicit_face_targets_are_mutually_exclusive_and_atomic() {
+        let mut store = crane_head_store();
+        let before = store.atomicity_probe_for_test();
+        let mut operation = crane_head_fold_op(false);
+        let SeqOp::FoldThrough {
+            target_layers,
+            target_pleat_count,
+            ..
+        } = &mut operation
+        else {
+            panic!("fixture is FoldThrough");
+        };
+        *target_layers = Some(vec![CRANE_HEAD_MOVING_FACES[0]]);
+        *target_pleat_count = Some(1);
+        reset_commit_count_for_test();
+
+        let error = store
+            .apply_seq(operation)
+            .expect_err("the two target models must not be mixed");
+
+        assert!(error.contains("同時には指定できません"), "{error}");
+        assert_eq!(store.atomicity_probe_for_test(), before);
+        assert_eq!(commit_count_for_test(), 0);
+
+        let mut preview = crane_head_fold_op(true);
+        let SeqOp::PreviewFoldThrough {
+            target_layers,
+            target_pleat_count,
+            ..
+        } = &mut preview
+        else {
+            panic!("fixture is PreviewFoldThrough");
+        };
+        *target_layers = Some(vec![CRANE_HEAD_MOVING_FACES[0]]);
+        *target_pleat_count = Some(1);
+        reset_commit_count_for_test();
+        let error = store
+            .apply_seq(preview)
+            .expect_err("preview must reject the two target models too");
+        assert!(error.contains("同時には指定できません"), "{error}");
+        assert_eq!(store.atomicity_probe_for_test(), before);
+        assert_eq!(commit_count_for_test(), 0);
+    }
+
+    #[test]
+    fn invalid_or_varying_pleat_count_leaves_fold_and_preview_unchanged() {
+        for preview in [false, true] {
+            let (mut store, pose_before) = one_pleat_square_store();
+            let operation = if preview {
+                SeqOp::PreviewFoldThrough {
+                    up_to: 0,
+                    line: [[0.0, 0.5], [0.5, 0.5]],
+                    keep_side_point: [0.25, 0.75],
+                    target_layers: None,
+                    target_pleat_count: Some(2),
+                    direction: ori3_model::FoldDirection::Up,
+                    pose_before: Some(pose_before),
+                }
+            } else {
+                SeqOp::FoldThrough {
+                    up_to: 0,
+                    line: [[0.0, 0.5], [0.5, 0.5]],
+                    keep_side_point: [0.25, 0.75],
+                    target_layers: None,
+                    target_pleat_count: Some(2),
+                    direction: ori3_model::FoldDirection::Up,
+                    alignment: None,
+                    accept_additional_crease: false,
+                    pose_before: Some(pose_before),
+                }
+            };
+            let before = store.atomicity_probe_for_test();
+            reset_commit_count_for_test();
+
+            let error = store
+                .apply_seq(operation)
+                .expect_err("only one pleat is available");
+
+            assert!(error.contains("この枚数のひだを折れません"), "{error}");
+            assert_eq!(store.atomicity_probe_for_test(), before);
+            assert_eq!(commit_count_for_test(), 0);
+        }
+
+        for preview in [false, true] {
+            let mut store = crane_head_store();
+            let mut operation = crane_head_fold_op(preview);
+            match &mut operation {
+                SeqOp::FoldThrough {
+                    target_pleat_count, ..
+                }
+                | SeqOp::PreviewFoldThrough {
+                    target_pleat_count, ..
+                } => *target_pleat_count = Some(1),
+                _ => panic!("fixture is a fold request"),
+            }
+            let before = store.atomicity_probe_for_test();
+            reset_commit_count_for_test();
+
+            let error = store
+                .apply_seq(operation)
+                .expect_err("a varying line has no single selectable count");
+
+            assert_eq!(
+                error,
+                "折り線の場所によって、同時に折れるひだの枚数が異なります。"
+            );
+            assert_eq!(store.atomicity_probe_for_test(), before);
+            assert_eq!(commit_count_for_test(), 0);
+        }
+    }
+
+    #[test]
+    fn pleat_count_and_spatial_grab_are_rejected_for_fold_and_preview() {
+        for preview in [false, true] {
+            let (mut store, pose_before) = one_pleat_square_store();
+            let operation = if preview {
+                SeqOp::PreviewFoldThrough {
+                    up_to: 0,
+                    line: [[0.0, 0.5], [0.5, 0.5]],
+                    keep_side_point: [0.25, 0.75],
+                    target_layers: None,
+                    target_pleat_count: Some(1),
+                    direction: ori3_model::FoldDirection::Up,
+                    pose_before: Some(pose_before),
+                }
+            } else {
+                SeqOp::FoldThrough {
+                    up_to: 0,
+                    line: [[0.0, 0.5], [0.5, 0.5]],
+                    keep_side_point: [0.25, 0.75],
+                    target_layers: None,
+                    target_pleat_count: Some(1),
+                    direction: ori3_model::FoldDirection::Up,
+                    alignment: None,
+                    accept_additional_crease: false,
+                    pose_before: Some(pose_before),
+                }
+            };
+            let before = store.atomicity_probe_for_test();
+            reset_commit_count_for_test();
+
+            let error = store
+                .apply_seq_with_spatial(
+                    operation,
+                    Some(SpatialFoldSpec {
+                        from: [0.0, 0.0, 0.0],
+                        to: [1.0, 0.0, 0.0],
+                        grab_face: 0,
+                    }),
+                )
+                .expect_err("K selection and a live 3D grab must not be mixed");
+
+            assert_eq!(
+                error,
+                "折るひだの枚数と3D上のつかみ位置を同時には指定できません"
+            );
+            assert_eq!(store.atomicity_probe_for_test(), before);
+            assert_eq!(commit_count_for_test(), 0);
+        }
+    }
+
+    #[test]
+    fn one_pleat_is_recomputed_and_committed_as_one_undo_operation() {
+        let (mut store, pose_before) = one_pleat_square_store();
+        let expected_doc = store.doc.clone();
+        let before = store.atomicity_probe_for_test();
+        let operation = SeqOp::FoldThrough {
+            up_to: 0,
+            line: [[0.0, 0.5], [0.5, 0.5]],
+            keep_side_point: [0.25, 0.75],
+            target_layers: None,
+            target_pleat_count: Some(1),
+            direction: ori3_model::FoldDirection::Up,
+            alignment: None,
+            accept_additional_crease: false,
+            pose_before: Some(pose_before),
+        };
+        reset_commit_count_for_test();
+
+        let view = store
+            .apply_seq(operation)
+            .expect("Rust recomputes the top pleat and applies it");
+
+        assert_eq!(commit_count_for_test(), 1);
+        assert_eq!(store.undo_stack.len(), 1);
+        assert_ne!(store.atomicity_probe_for_test(), before);
+        assert_eq!(view.doc.sequence.len(), 2, "pose plus fold are one commit");
+        let undone = store.undo().expect("one undo restores the document");
+        assert_eq!(undone.doc, expected_doc);
+    }
+
+    #[test]
+    fn one_pleat_preview_recomputes_k_without_committing() {
+        let (mut store, pose_before) = one_pleat_square_store();
+        let before = store.atomicity_probe_for_test();
+        reset_commit_count_for_test();
+
+        let view = store
+            .apply_seq(SeqOp::PreviewFoldThrough {
+                up_to: 0,
+                line: [[0.0, 0.5], [0.5, 0.5]],
+                keep_side_point: [0.25, 0.75],
+                target_layers: None,
+                target_pleat_count: Some(1),
+                direction: ori3_model::FoldDirection::Up,
+                pose_before: Some(pose_before),
+            })
+            .expect("preview recomputes the same top pleat as apply");
+
+        assert_eq!(store.atomicity_probe_for_test(), before);
+        assert_eq!(commit_count_for_test(), 0, "preview never enters commit");
+        assert!(view.doc.sequence.is_empty());
+    }
+
+    #[test]
+    fn explicit_top_face_path_still_works_without_a_pleat_count() {
+        let (mut store, pose_before) = one_pleat_square_store();
+        let pose =
+            ori3_layers::replay::canonical_flat_pose_at(&store.doc, &store.faces, 0, &pose_before)
+                .expect("derive the persisted top face");
+        let top = *pose.state.order.last().expect("one top face");
+        reset_commit_count_for_test();
+
+        let view = store
+            .apply_seq(SeqOp::FoldThrough {
+                up_to: 0,
+                line: [[0.0, 0.5], [0.5, 0.5]],
+                keep_side_point: [0.25, 0.75],
+                target_layers: Some(vec![top]),
+                target_pleat_count: None,
+                direction: ori3_model::FoldDirection::Up,
+                alignment: None,
+                accept_additional_crease: false,
+                pose_before: Some(pose_before),
+            })
+            .expect("the pre-existing explicit top-face path remains available");
+
+        assert_eq!(commit_count_for_test(), 1);
+        assert_eq!(store.undo_stack.len(), 1);
+        assert_eq!(view.doc.sequence.len(), 2);
+    }
+
+    #[test]
+    fn single_surface_all_layers_fold_still_works_without_a_pleat_count() {
+        let mut store = square_store();
+        reset_commit_count_for_test();
+
+        let view = store
+            .apply_seq(SeqOp::FoldThrough {
+                up_to: 0,
+                line: [[0.0, 0.5], [1.0, 0.5]],
+                keep_side_point: [0.5, 0.75],
+                target_layers: None,
+                target_pleat_count: None,
+                direction: ori3_model::FoldDirection::Up,
+                alignment: None,
+                accept_additional_crease: false,
+                pose_before: None,
+            })
+            .expect("the pre-existing all-layers fold handles one unfolded sheet");
+
+        assert_eq!(commit_count_for_test(), 1);
+        assert_eq!(store.undo_stack.len(), 1);
+        assert_eq!(view.doc.sequence.len(), 1);
     }
 
     /// Poseを候補Documentへ作れた後でFoldThroughが失敗しても、
@@ -4837,6 +6445,7 @@ mod tests {
                     line: [[0.0, 0.375], [1.0, 0.375]],
                     keep_side_point: [0.5, 0.75],
                     target_layers: None,
+                    target_pleat_count: None,
                     direction: ori3_model::FoldDirection::Up,
                     pose_before: None,
                 },
@@ -5130,6 +6739,7 @@ mod tests {
                 line: [[0.0, 0.0], [1.0, 1.0]],
                 keep_side_point: [0.0, 1.0],
                 target_layers: None,
+                target_pleat_count: None,
                 direction: ori3_model::FoldDirection::Up,
                 alignment: Some(alignment.clone()),
                 accept_additional_crease: false,
@@ -5149,6 +6759,7 @@ mod tests {
                 line: [[0.25, 0.0], [0.25, 1.0]],
                 keep_side_point: [0.5, 0.5],
                 target_layers: None,
+                target_pleat_count: None,
                 direction: ori3_model::FoldDirection::Up,
                 alignment: None,
                 accept_additional_crease: false,
@@ -5163,6 +6774,7 @@ mod tests {
                 line: [[0.7, 0.0], [0.7, 1.0]],
                 keep_side_point: [0.6, 0.5],
                 target_layers: None,
+                target_pleat_count: None,
                 direction: ori3_model::FoldDirection::Up,
                 pose_before: None,
             })
@@ -5183,6 +6795,7 @@ mod tests {
                 line: [[0.7, 0.0], [0.7, 1.0]],
                 keep_side_point: [0.6, 0.5],
                 target_layers: None,
+                target_pleat_count: None,
                 direction: ori3_model::FoldDirection::Up,
                 alignment: None,
                 accept_additional_crease: true,
@@ -5232,6 +6845,7 @@ mod tests {
                     line: [[0.25, 0.0], [0.25, 1.0]],
                     keep_side_point: [0.5, 0.5],
                     target_layers: None,
+                    target_pleat_count: None,
                     direction: ori3_model::FoldDirection::Up,
                     alignment: None,
                     accept_additional_crease: false,
@@ -5244,6 +6858,7 @@ mod tests {
                     line: [[0.7, 0.0], [0.7, 1.0]],
                     keep_side_point: [0.6, 0.5],
                     target_layers: None,
+                    target_pleat_count: None,
                     direction: ori3_model::FoldDirection::Up,
                     alignment: None,
                     accept_additional_crease: false,
@@ -6104,6 +7719,7 @@ mod tests {
             line,
             keep_side_point,
             target_layers: None,
+            target_pleat_count: None,
             direction: ori3_model::FoldDirection::Up,
             alignment: None,
             accept_additional_crease: false,
@@ -6172,5 +7788,333 @@ mod tests {
             })
             .unwrap();
         assert!(!view.warnings.is_empty());
+    }
+
+    fn stage3_nonflat_material_request(
+        operation_type: &str,
+        material_line: [[f64; 2]; 2],
+        material_keep_side_point: [f64; 2],
+    ) -> (DocumentStore, serde_json::Value) {
+        let (store, mut pose_before) = one_pleat_square_store();
+        pose_before.drivers[0].target_angle_deg = 90.0;
+        let request = stage3_material_request_for_store(
+            operation_type,
+            0,
+            material_line,
+            material_keep_side_point,
+            Some(pose_before),
+        );
+        (store, request)
+    }
+
+    fn stage3_material_request_for_store(
+        operation_type: &str,
+        up_to: usize,
+        material_line: [[f64; 2]; 2],
+        material_keep_side_point: [f64; 2],
+        pose_before: Option<ori3_model::FoldPoseInput>,
+    ) -> serde_json::Value {
+        let mut request = serde_json::json!({
+            "type": operation_type,
+            "up_to": up_to,
+            "material_line": material_line,
+            "material_keep_side_point": material_keep_side_point,
+        });
+        if let Some(pose_before) = pose_before {
+            request["pose_before"] = serde_json::json!(pose_before);
+        }
+        if operation_type == "CreaseOnlyTop" {
+            request["direction"] = serde_json::json!("Up");
+            request["alignment"] = serde_json::Value::Null;
+        }
+        assert!(
+            request.get("target_pleat_count").is_none() && request.get("target_layers").is_none(),
+            "折り目だけをK=0やFace列へ代用しない"
+        );
+        request
+    }
+
+    fn stage3_parallel_hinge_store(
+        boundary_angle_deg: f64,
+        use_saved_prefix: bool,
+    ) -> (DocumentStore, Option<ori3_model::FoldPoseInput>, usize) {
+        let mut store = square_store();
+        let mut drivers = Vec::new();
+        for (x, target_angle_deg) in [
+            (0.0625, 0.0),
+            (0.125, 0.0),
+            (0.25, boundary_angle_deg),
+            (0.5, -37.0),
+        ] {
+            let edges =
+                ori3_cp::insert_segment(&mut store.doc.cp, [x, 0.0], [x, 1.0], EdgeKind::Valley);
+            assert_eq!(edges.len(), 1, "parallel hinge x={x} is one material edge");
+            drivers.push(ori3_model::FoldPoseDriver {
+                edge_id: edges[0],
+                target_angle_deg,
+            });
+        }
+        store.faces = ori3_cp::extract_faces(&store.doc.cp);
+        let pose_before = ori3_model::FoldPoseInput { drivers };
+        if !use_saved_prefix {
+            return (store, Some(pose_before), 0);
+        }
+
+        let mut pose_step = nonflat_pose_step_from_input(&store.doc.cp, &pose_before)
+            .expect("prefix Pose is valid");
+        pose_step.id = next_step_id(&store.doc, &store.step_creases);
+        record_frontend_step(&mut store.step_creases, &pose_step);
+        store.doc.sequence.push(pose_step);
+        (store, None, 1)
+    }
+
+    fn stage3_apply_json(
+        store: &mut DocumentStore,
+        request: serde_json::Value,
+    ) -> Result<DocumentView, String> {
+        serde_json::from_value::<SeqOp>(request)
+            .map_err(|error| error.to_string())
+            .and_then(|operation| store.apply_seq(operation))
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct Stage3ApplyObservation {
+        ok: bool,
+        error: Option<String>,
+        commit_count: usize,
+        undo_depth: usize,
+        sequence_len: usize,
+        changed_after_apply: bool,
+        one_undo_restored: bool,
+    }
+
+    /// 非平坦Poseと折り目stepは利用者の1操作として1回だけ確定し、Undoも1回。
+    /// 製品variant実装前はunknown variantとなるが、compile errorではなく全観測値の差でREDにする。
+    #[test]
+    fn stage3_crease_only_top_commits_pose_and_crease_as_one_undo_operation() {
+        let (plus_store, mut plus_pose) = one_pleat_square_store();
+        plus_pose.drivers[0].target_angle_deg = 90.0;
+        let (minus_store, mut minus_pose) = one_pleat_square_store();
+        minus_pose.drivers[0].target_angle_deg = -90.0;
+        let (split_store, split_pose, split_up_to) = stage3_parallel_hinge_store(90.0, false);
+        let (prefix_store, prefix_pose, prefix_up_to) = stage3_parallel_hinge_store(-90.0, true);
+        let (mut middle_store, middle_pose, middle_up_to) = stage3_parallel_hinge_store(90.0, true);
+        let mut trailing_step = middle_store.doc.sequence[0].clone();
+        trailing_step.id = next_step_id(&middle_store.doc, &middle_store.step_creases);
+        trailing_step.drivers[2].target_angle_deg = 45.0;
+        trailing_step.drivers[3].target_angle_deg = 25.0;
+        trailing_step.note = "挿入位置より後で動く既存手順".to_string();
+        record_frontend_step(&mut middle_store.step_creases, &trailing_step);
+        middle_store.doc.sequence.push(trailing_step);
+
+        for (name, mut store, pose_before, up_to, material_line, keep_point, expected_len) in [
+            (
+                "explicit +90 degrees",
+                plus_store,
+                Some(plus_pose),
+                0,
+                [[0.0, 0.25], [0.5, 0.25]],
+                [0.25, 0.75],
+                2,
+            ),
+            (
+                "explicit -90 degrees",
+                minus_store,
+                Some(minus_pose),
+                0,
+                [[0.0, 0.25], [0.5, 0.25]],
+                [0.25, 0.75],
+                2,
+            ),
+            (
+                "two explicit zero-degree subdivisions",
+                split_store,
+                split_pose,
+                split_up_to,
+                [[0.0, 0.25], [0.25, 0.25]],
+                [0.125, 0.75],
+                2,
+            ),
+            (
+                "nonflat pose derived from saved prefix",
+                prefix_store,
+                prefix_pose,
+                prefix_up_to,
+                [[0.0, 0.25], [0.25, 0.25]],
+                [0.125, 0.75],
+                2,
+            ),
+            (
+                "saved prefix with a later moving step",
+                middle_store,
+                middle_pose,
+                middle_up_to,
+                [[0.0, 0.25], [0.25, 0.25]],
+                [0.125, 0.75],
+                3,
+            ),
+        ] {
+            eprintln!("stage3 cold replay sample: {name}");
+            let request = stage3_material_request_for_store(
+                "CreaseOnlyTop",
+                up_to,
+                material_line,
+                keep_point,
+                pose_before,
+            );
+            let original = store.doc.clone();
+            let before = store.atomicity_probe_for_test();
+            reset_commit_count_for_test();
+
+            let applied = stage3_apply_json(&mut store, request);
+            if name == "saved prefix with a later moving step" {
+                let view = applied
+                    .as_ref()
+                    .expect("途中挿入後も後続手順まで再生できる");
+                for expected in [45.0_f64, 25.0] {
+                    assert!(
+                        view.angles
+                            .values()
+                            .any(|actual| (*actual - expected).abs() <= 1.0e-9),
+                        "後続手順の{expected}°が返却された実角へ反映される: {:?}",
+                        view.angles
+                    );
+                }
+            }
+            let observation = Stage3ApplyObservation {
+                ok: applied.is_ok(),
+                error: applied.as_ref().err().cloned(),
+                commit_count: commit_count_for_test(),
+                undo_depth: store.undo_stack.len(),
+                sequence_len: applied
+                    .as_ref()
+                    .map_or(store.doc.sequence.len(), |view| view.doc.sequence.len()),
+                changed_after_apply: store.atomicity_probe_for_test() != before,
+                one_undo_restored: if applied.is_ok() {
+                    store
+                        .undo()
+                        .is_ok_and(|view| view.doc == original && store.undo_stack.is_empty())
+                } else {
+                    false
+                },
+            };
+
+            assert_eq!(
+                observation,
+                Stage3ApplyObservation {
+                    ok: true,
+                    error: None,
+                    commit_count: 1,
+                    undo_depth: 1,
+                    sequence_len: expected_len,
+                    changed_after_apply: true,
+                    one_undo_restored: true,
+                },
+                "{name}: signed Poseと0°折り目を1 commit・1 Undoにする"
+            );
+        }
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct Stage3FailureObservation {
+        recognized_variant: bool,
+        failed: bool,
+        state_unchanged: bool,
+        commit_count: usize,
+    }
+
+    /// 材料線が退化、または材料面の証人が紙外なら、推測せず全状態を保つ。
+    #[test]
+    fn stage3_invalid_material_requests_fail_atomically_without_falling_back_to_k_or_faces() {
+        for (name, line, keep) in [
+            (
+                "degenerate material line",
+                [[0.25, 0.25], [0.25, 0.25]],
+                [0.25, 0.75],
+            ),
+            (
+                "material keep point outside paper",
+                [[0.0, 0.25], [0.5, 0.25]],
+                [2.0, 2.0],
+            ),
+        ] {
+            let (mut store, request) = stage3_nonflat_material_request("CreaseOnlyTop", line, keep);
+            let before = store.atomicity_probe_for_test();
+            reset_commit_count_for_test();
+
+            let result = stage3_apply_json(&mut store, request);
+            let error = result.as_ref().err().cloned().unwrap_or_default();
+            let observation = Stage3FailureObservation {
+                recognized_variant: !error.contains("unknown variant"),
+                failed: result.is_err(),
+                state_unchanged: store.atomicity_probe_for_test() == before,
+                commit_count: commit_count_for_test(),
+            };
+            assert_eq!(
+                observation,
+                Stage3FailureObservation {
+                    recognized_variant: true,
+                    failed: true,
+                    state_unchanged: true,
+                    commit_count: 0,
+                },
+                "{name}"
+            );
+        }
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct Stage3QueryObservation {
+        both_ok: bool,
+        same_response: bool,
+        status: Option<FoldTargetStatus>,
+        state_unchanged: bool,
+        commit_count: usize,
+    }
+
+    /// 材料座標の照会は保存を伴わず、同じ入力を2回呼んでも同じ結果になる。
+    #[test]
+    fn stage3_material_target_query_is_repeatable_and_non_destructive() {
+        let (mut store, request) = stage3_nonflat_material_request(
+            "PreviewFoldTargetsOnMaterial",
+            [[0.0, 0.25], [0.5, 0.25]],
+            [0.25, 0.75],
+        );
+        let before = store.atomicity_probe_for_test();
+        reset_commit_count_for_test();
+
+        let first = stage3_apply_json(&mut store, request.clone());
+        let second = stage3_apply_json(&mut store, request);
+        let first_bytes = first
+            .as_ref()
+            .ok()
+            .and_then(|view| serde_json::to_vec(view).ok());
+        let second_bytes = second
+            .as_ref()
+            .ok()
+            .and_then(|view| serde_json::to_vec(view).ok());
+        let observation = Stage3QueryObservation {
+            both_ok: first.is_ok() && second.is_ok(),
+            same_response: first_bytes.is_some() && first_bytes == second_bytes,
+            status: first
+                .as_ref()
+                .ok()
+                .and_then(|view| view.fold_target_info.as_ref())
+                .map(|info| info.status),
+            state_unchanged: store.atomicity_probe_for_test() == before,
+            commit_count: commit_count_for_test(),
+        };
+
+        assert_eq!(
+            observation,
+            Stage3QueryObservation {
+                both_ok: true,
+                same_response: true,
+                status: Some(FoldTargetStatus::CreaseOnlyTop),
+                state_unchanged: true,
+                commit_count: 0,
+            },
+            "材料座標照会はDocument・履歴・dirty・warmを変えない"
+        );
     }
 }

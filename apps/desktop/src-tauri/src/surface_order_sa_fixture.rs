@@ -348,7 +348,11 @@ pub(super) fn live_frame_frame(cp: &CreasePattern, faces: &[Face]) -> Frame3D {
     zero_back_apply_overlap(cp, faces, to_frame3d(cp, faces, &folded))
 }
 
-pub(super) fn zero_back_apply_overlap(cp: &CreasePattern, faces: &[Face], mut frame: Frame3D) -> Frame3D {
+pub(super) fn zero_back_apply_overlap(
+    cp: &CreasePattern,
+    faces: &[Face],
+    mut frame: Frame3D,
+) -> Frame3D {
     let order = crate::store::frame_surface_rank_order(&frame)
         .expect("the zero-back frame has a complete unique surface order");
     ori3_soft::prevent_overlap_with_order_authority(
@@ -522,7 +526,12 @@ pub(super) fn fold_hinges(cp: &CreasePattern, faces: &[Face]) -> Vec<(EdgeId, Ed
         .collect()
 }
 
-pub(super) fn diagram(name: &'static str, cp: CreasePattern, paper_width: f64, paper_height: f64) -> Diagram {
+pub(super) fn diagram(
+    name: &'static str,
+    cp: CreasePattern,
+    paper_width: f64,
+    paper_height: f64,
+) -> Diagram {
     let faces = extract_faces(&cp);
     let hinges = fold_hinges(&cp, &faces);
     let triangles = triangulations(&cp, &faces);

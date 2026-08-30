@@ -1,6 +1,9 @@
 use super::*;
 
-pub(super) fn triangulations(cp: &CreasePattern, faces: &[Face]) -> BTreeMap<FaceId, Vec<[usize; 3]>> {
+pub(super) fn triangulations(
+    cp: &CreasePattern,
+    faces: &[Face],
+) -> BTreeMap<FaceId, Vec<[usize; 3]>> {
     let positions = cp
         .vertices
         .iter()
@@ -413,7 +416,10 @@ pub(super) fn render_faces(
     rendered
 }
 
-pub(super) fn raster_bounds(triangle: &[Projected; 3], viewport: usize) -> (usize, usize, usize, usize) {
+pub(super) fn raster_bounds(
+    triangle: &[Projected; 3],
+    viewport: usize,
+) -> (usize, usize, usize, usize) {
     let min_x = triangle
         .iter()
         .map(|point| point.x)
@@ -443,7 +449,11 @@ pub(super) fn raster_bounds(triangle: &[Projected; 3], viewport: usize) -> (usiz
     (min_x, max_x, min_y, max_y)
 }
 
-pub(super) fn rasterize(mut visit: impl FnMut(usize, f32), triangle: &RenderTriangle, viewport: usize) {
+pub(super) fn rasterize(
+    mut visit: impl FnMut(usize, f32),
+    triangle: &RenderTriangle,
+    viewport: usize,
+) {
     // Preserve the original vertex order for legacy coverage. Only strict
     // coplanar groups replace barycentric depth with their common NDC plane.
     let [a, b, c] = triangle.projected;
@@ -479,7 +489,12 @@ pub(super) fn rasterize(mut visit: impl FnMut(usize, f32), triangle: &RenderTria
     }
 }
 
-pub(super) fn visual_image(diagram: &Diagram, frame: &Frame3D, viewport: usize, view: Camera) -> VisualImage {
+pub(super) fn visual_image(
+    diagram: &Diagram,
+    frame: &Frame3D,
+    viewport: usize,
+    view: Camera,
+) -> VisualImage {
     let mut faces = render_faces(diagram, frame, viewport, view);
     let max_depth_code = (1_u64 << DEPTH_BITS) - 1;
     // 第1passの描画順もGPUと同じ所有者順にそろえる。同じ最前深度を書いた面のうち

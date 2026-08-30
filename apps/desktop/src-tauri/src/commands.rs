@@ -35,7 +35,7 @@ use ori3_model::{
 use ori3_propose::{
     CompletionTolerance, FinishTarget, FoldGoal, FoldSession, GapWeights, LeafSite, Packing,
     PoseScan, SearchAbort, SearchBudget, SearchCancellation, SearchControl, SearchWatchdog,
-    Skeleton, TipSite, VerifiedPlan, body_on_paper, generate, pack,
+    Skeleton, TipSite, VerifiedPlan, body_on_paper, generate, pack, search_to_completion,
     search_to_completion_with_control, verify_search_completion,
 };
 use ori3_soft::{SoftMesh, SoftSettings};
@@ -436,26 +436,27 @@ pub fn document_save(
         store.save(path.as_deref().map(Path::new))?;
         let document_path = store.current_path();
         drop(store);
-        // 保存できた内容は自動保存から復元する必要がない(SYS-003)
+        // 保存できた今回の作業枠は復元不要。復旧候補を開いていた場合だけ
+        // その復元元も消し、利用者がまだ選んでいない他の候補は残す(SYS-003)。
         if let Ok(dir) = autosave::app_data_dir(&app) {
-            autosave::discard(&dir, document_path.as_deref());
+            autosave::discard_after_save(&dir, document_path.as_deref());
         }
         Ok(())
     }))
 }
 
-/// 前回の異常終了で残った自動保存があるか調べる(SYS-003)。
-/// あればその情報を返し、フロントが復旧ダイアログで復元するか尋ねる。
+/// 前回の異常終了で残った自動保存をすべて調べる(SYS-003)。
+/// フロントは利用者が内容を区別して、復元・破棄・あとで確認することを選べる。
 #[tauri::command(async)]
-pub fn recovery_check(app: tauri::AppHandle) -> Result<Option<autosave::RecoveryInfo>, String> {
+pub fn recovery_check(app: tauri::AppHandle) -> Result<autosave::RecoveryChoices, String> {
     guard(AssertUnwindSafe(|| {
         let dir = autosave::app_data_dir(&app)?;
-        Ok(autosave::check(&dir))
+        autosave::check_all(&dir)
     }))
 }
 
-/// 復旧ダイアログの答えを実行する。`accept`なら自動保存の内容を現在の作品にし、
-/// そうでなければ自動保存ファイルを消す(以後は提案しない)。
+/// 復旧ダイアログで選んだ候補を復元または破棄する。
+/// `candidate_id` が無い旧クライアントは先頭候補だけを対象にする。
 ///
 /// 設計規約: 読み込みとJSON解釈はロックの外、状態の入れ替えだけロック下で行う。
 #[tauri::command(async)]
@@ -463,15 +464,15 @@ pub fn recovery_restore(
     app: tauri::AppHandle,
     state: State<'_, Mutex<DocumentStore>>,
     accept: bool,
+    candidate_id: Option<u64>,
 ) -> Result<Option<DocumentView>, String> {
     guard(AssertUnwindSafe(|| {
         let dir = autosave::app_data_dir(&app)?;
         if !accept {
-            let document_path = lock(&state).current_path();
-            autosave::discard(&dir, document_path.as_deref());
+            autosave::discard_candidate(&dir, candidate_id)?;
             return Ok(None);
         }
-        let Some(mut view) = autosave::restore(&state, &dir)? else {
+        let Some(mut view) = autosave::restore_candidate(&state, &dir, candidate_id)? else {
             return Ok(None);
         };
         attach_replay(&mut view); // 重い再生はロック解放後(view_commandと同じ規約)
@@ -557,6 +558,10 @@ pub(crate) fn apply_sequence_operation_transactionally(
     guard(AssertUnwindSafe(|| {
         let (mut operation, spatial) = parse_sequence_operation(op)?;
         let is_move_step = matches!(&operation, SeqOp::MoveStep { .. });
+        let is_fold_target_query = matches!(
+            &operation,
+            SeqOp::PreviewFoldTargets { .. } | SeqOp::PreviewFoldTargetsOnMaterial { .. }
+        );
         let (mut view, move_step_noop) = {
             let mut store = state
                 .lock()
@@ -572,7 +577,8 @@ pub(crate) fn apply_sequence_operation_transactionally(
         }
         // 同一位置MoveStepはDocumentだけでなくpose_anglesを含むstore全体がno-op。
         // replay済みviewを返すだけで、通常commandのwarm-start保存も行わない。
-        if !move_step_noop {
+        // ひだ枚数照会もDocumentViewを返すだけの読み取りで、既存warm値を上書きしない。
+        if !move_step_noop && !is_fold_target_query {
             store_view_pose_angles(state, &view);
         }
         Ok(view)
@@ -1230,7 +1236,8 @@ impl ProposalFoldPlan {
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct PlanBudget {
     deterministic: SearchBudget,
-    watchdog: SearchWatchdog,
+    /// `Some`は製品の安全弁、`None`は壁時計を主張に含めない検査専用。
+    watchdog: Option<SearchWatchdog>,
 }
 
 const PLAN_BUDGET: PlanBudget = PlanBudget {
@@ -1241,7 +1248,7 @@ const PLAN_BUDGET: PlanBudget = PlanBudget {
         rank_scan: SearchBudget::DEFAULT.rank_scan,
         scan: SearchBudget::DEFAULT.scan,
     },
-    watchdog: SearchWatchdog { max_millis: 30_000 },
+    watchdog: Some(SearchWatchdog { max_millis: 30_000 }),
 };
 
 /// 確かめ済みの手順から、展開図と手順を組み直すときに見る姿勢の数。
@@ -1623,16 +1630,28 @@ fn plan_folds(
                 material: s.vertex.map_or(s.circle.center, |v| v.pos),
             })
             .collect(),
+        layer_target: None,
     };
-    let control = SearchControl::new(budget.watchdog, cancellation);
-    let outcome = search_to_completion_with_control(
-        &session,
-        &goal,
-        GapWeights::DEFAULT,
-        budget.deterministic,
-        CompletionTolerance::DEFAULT,
-        &control,
-    )?;
+    let outcome = match budget.watchdog {
+        Some(watchdog) => {
+            let control = SearchControl::new(watchdog, cancellation);
+            search_to_completion_with_control(
+                &session,
+                &goal,
+                GapWeights::DEFAULT,
+                budget.deterministic,
+                CompletionTolerance::DEFAULT,
+                &control,
+            )?
+        }
+        None => search_to_completion(
+            &session,
+            &goal,
+            GapWeights::DEFAULT,
+            budget.deterministic,
+            CompletionTolerance::DEFAULT,
+        ),
+    };
     if cancellation.is_cancelled() {
         return Err(SearchAbort::Cancelled);
     }
@@ -2171,6 +2190,7 @@ mod tests {
     use std::panic::AssertUnwindSafe;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
+    #[cfg(not(debug_assertions))]
     use std::time::{Duration, Instant};
 
     /// 「同時に計算しても1件ずつでも同じ答えになる」ことだけを見る検査のための予算。
@@ -2188,11 +2208,24 @@ mod tests {
     /// CIの計算機が手元より約3.6倍遅い(§10.6)としても約172秒で、上限の **4.8%以下**。
     /// **打ち切りに当たりようがない。**
     const TIME_FREE_PLAN_BUDGET: PlanBudget = PlanBudget {
-        watchdog: SearchWatchdog {
+        watchdog: Some(SearchWatchdog {
             max_millis: 3_600_000,
-        },
+        }),
         ..PLAN_BUDGET
     };
+
+    /// 折り手順そのものを検査するときだけ、壁時計ではなく製品と同じ状態数・分岐数で止める。
+    const DETERMINISTIC_PLAN_BUDGET: PlanBudget = PlanBudget {
+        watchdog: None,
+        ..PLAN_BUDGET
+    };
+
+    /// 候補JSONの計算小数だけに使う許容差と、固定hashの量子化幅。
+    ///
+    /// CIのx86_64と手元のARM64でraw JSON hashの相違を実測した。計算小数の最下位桁を
+    /// 契約にせず、`ori3_model::EPS`および既存の決定性比較と同じ`1e-9`を使う。
+    /// ID・種類・個数・順序・構造はこの幅で緩めず、完全一致のまま比較する。
+    const CANDIDATE_FLOAT_TOLERANCE: f64 = ori3_model::EPS;
 
     /// 実行環境のrandom seedを持たない、検査報告用の固定FNV-1a 64bit hash。
     fn contract_hash(text: &str) -> u64 {
@@ -2201,6 +2234,101 @@ mod tests {
             .fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
                 (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
             })
+    }
+
+    /// JSONの構造と離散値を厳密に、小数だけ許容差つきで比べる。
+    fn assert_candidate_json_eq(left: &serde_json::Value, right: &serde_json::Value, path: &str) {
+        use serde_json::Value;
+
+        match (left, right) {
+            (Value::Number(left), Value::Number(right)) if left.is_f64() || right.is_f64() => {
+                assert!(
+                    left.is_f64() && right.is_f64(),
+                    "{path}: 整数と小数でJSON数値の種類が違う ({left} / {right})"
+                );
+                let left = left.as_f64().expect("左の小数をf64として読める");
+                let right = right.as_f64().expect("右の小数をf64として読める");
+                let delta = (left - right).abs();
+                assert!(
+                    delta <= CANDIDATE_FLOAT_TOLERANCE,
+                    "{path}: 小数差{delta:.17e}が許容差{CANDIDATE_FLOAT_TOLERANCE:.1e}を超えた ({left:.17e} / {right:.17e})"
+                );
+            }
+            (Value::Number(left), Value::Number(right)) => {
+                assert_eq!(left, right, "{path}: 整数が違う");
+            }
+            (Value::Array(left), Value::Array(right)) => {
+                assert_eq!(left.len(), right.len(), "{path}: 配列の個数が違う");
+                for (index, (left, right)) in left.iter().zip(right).enumerate() {
+                    assert_candidate_json_eq(left, right, &format!("{path}[{index}]"));
+                }
+            }
+            (Value::Object(left), Value::Object(right)) => {
+                assert_eq!(left.len(), right.len(), "{path}: 項目の個数が違う");
+                for (key, left) in left {
+                    let right = right
+                        .get(key)
+                        .unwrap_or_else(|| panic!("{path}: 項目`{key}`が右側に無い"));
+                    assert_candidate_json_eq(left, right, &format!("{path}.{key}"));
+                }
+            }
+            _ => assert_eq!(left, right, "{path}: JSONの種類または値が違う"),
+        }
+    }
+
+    /// 小数だけを`1e-9`単位へ丸め、その他と配列順・object構造を完全に残した正規形。
+    /// `crates/ori3-propose/tests/corpus.rs`の候補hashと同じ量子化規則を使う。
+    fn canonical_candidate_contract(value: &serde_json::Value, text: &mut String) {
+        use serde_json::Value;
+
+        match value {
+            Value::Null => text.push('n'),
+            Value::Bool(value) => text.push_str(if *value { "b1" } else { "b0" }),
+            Value::Number(number) if number.is_f64() => {
+                let value = number.as_f64().expect("候補JSONの小数をf64として読める");
+                let scaled = value / CANDIDATE_FLOAT_TOLERANCE;
+                assert!(
+                    value.is_finite() && scaled.is_finite(),
+                    "非有限の候補JSON小数: {value}"
+                );
+                let rounded = scaled.round();
+                let rounded = if rounded == 0.0 { 0.0 } else { rounded };
+                text.push('q');
+                text.push_str(&format!("{rounded:.0}"));
+            }
+            Value::Number(number) => {
+                text.push('i');
+                text.push_str(&number.to_string());
+            }
+            Value::String(value) => {
+                text.push('s');
+                text.push_str(
+                    &serde_json::to_string(value).expect("候補JSONの文字列をescapeできる"),
+                );
+            }
+            Value::Array(values) => {
+                text.push('[');
+                for value in values {
+                    canonical_candidate_contract(value, text);
+                    text.push(',');
+                }
+                text.push(']');
+            }
+            Value::Object(values) => {
+                text.push('{');
+                let mut keys: Vec<_> = values.keys().collect();
+                keys.sort_unstable();
+                for key in keys {
+                    text.push_str(
+                        &serde_json::to_string(key).expect("候補JSONのkeyをescapeできる"),
+                    );
+                    text.push(':');
+                    canonical_candidate_contract(&values[key], text);
+                    text.push(',');
+                }
+                text.push('}');
+            }
+        }
     }
 
     /// 候補を**1件ずつ順番に**計算する参照実装(`proposal_generate` の並列版と突き合わせる用)。
@@ -2238,8 +2366,12 @@ mod tests {
                             material: s.vertex.map_or(s.circle.center, |v| v.pos),
                         })
                         .collect(),
+                    layer_target: None,
                 };
-                let control = SearchControl::new(budget.watchdog, &not_cancelled);
+                let control = SearchControl::new(
+                    budget.watchdog.expect("比較検査にはwatchdogがある"),
+                    &not_cancelled,
+                );
                 stops.push(
                     search_to_completion_with_control(
                         &session,
@@ -2267,7 +2399,8 @@ mod tests {
         (out, stops)
     }
 
-    /// 同時に計算しても、1件ずつ計算したときと**まったく同じ結果**になること。
+    /// 同時に計算しても、1件ずつ計算したときと**同じ契約上の結果**になること。
+    /// ID・種類・個数・順序・構造は完全一致、計算小数だけは`1e-9`以内で比べる。
     ///
     /// # なぜこの検査が要るか
     ///
@@ -2282,7 +2415,7 @@ mod tests {
     ///
     /// # なぜ [`PLAN_BUDGET`] をそのまま使わず、この検査専用の予算にするか
     ///
-    /// `PLAN_BUDGET.watchdog.max_millis`(30,000ms)は**壁時計**の見張りである。
+    /// `PLAN_BUDGET.watchdog`内の30,000msは**壁時計**の見張りである。
     /// 現在は到達すると候補全体が専用Errになり、答えを痩せさせない。ただしこの検査は
     /// 並列・直列の正常結果を比べる目的なので、異常停止しない1時間watchdogを使う。
     /// 旧契約では当たった側だけ答えが痩せ、実際に次のflakeが起きた:
@@ -2315,31 +2448,30 @@ mod tests {
             together.len(),
             one_by_one.len()
         );
-        assert_eq!(
-            together, one_by_one,
-            "同時に計算した結果が、1件ずつ計算した結果と違う"
-        );
-        let together_json = serde_json::to_string(&together).expect("候補JSONを作れる");
-        let one_by_one_json = serde_json::to_string(&one_by_one).expect("候補JSONを作れる");
-        assert_eq!(together_json, one_by_one_json, "正規化前の候補JSONが違う");
+        let together_json = serde_json::to_value(&together).expect("同時候補JSONを作れる");
+        let one_by_one_json = serde_json::to_value(&one_by_one).expect("1件ずつの候補JSONを作れる");
+        assert_candidate_json_eq(&together_json, &one_by_one_json, "$candidate");
         let stop_contract = stops
             .iter()
             .map(|stop| stop.contract_tag())
             .collect::<Vec<_>>()
             .join("|");
-        let candidate_hash = contract_hash(&together_json);
+        let raw_candidate_json = serde_json::to_string(&together).expect("候補JSONを作れる");
+        let raw_candidate_hash = contract_hash(&raw_candidate_json);
+        let mut normalized_candidate_contract = String::new();
+        canonical_candidate_contract(&together_json, &mut normalized_candidate_contract);
+        let candidate_hash = contract_hash(&normalized_candidate_contract);
         let stop_hash = contract_hash(&stop_contract);
         assert_eq!(
-            candidate_hash, 0xb540_4e82_2ccd_3603,
-            "1-Aで固定した候補JSON契約が変わった"
+            candidate_hash, 0x5f0a_59d3_235f_3956,
+            "1-Aで固定した1e-9量子化候補JSON契約が変わった"
         );
         assert_eq!(
             stop_hash, 0xea05_a0f8_b887_39bb,
             "1-Aで固定した通常停止理由契約が変わった"
         );
         println!(
-            "candidate_json_fnv1a64={:016x} normal_stop_fnv1a64={:016x} stops={stop_contract}",
-            candidate_hash, stop_hash,
+            "candidate_json_fnv1a64={raw_candidate_hash:016x} candidate_json_1e9_fnv1a64={candidate_hash:016x} normal_stop_fnv1a64={stop_hash:016x} stops={stop_contract}",
         );
     }
 
@@ -2737,6 +2869,7 @@ mod tests {
         let (w, h) = (paper.width_mm / long, paper.height_mm / long);
         let packings = pack(skeleton, w, h, seed, PACK_STARTS);
         let not_cancelled = || false;
+        let watchdog = budget.watchdog.expect("watchdog検査には時間の安全弁がある");
         std::thread::scope(|scope| {
             let workers: Vec<_> = packings
                 .iter()
@@ -2759,8 +2892,9 @@ mod tests {
                                         .map_or(site.circle.center, |vertex| vertex.pos),
                                 })
                                 .collect(),
+                            layer_target: None,
                         };
-                        let control = SearchControl::new(budget.watchdog, &not_cancelled);
+                        let control = SearchControl::new(watchdog, &not_cancelled);
                         Some(
                             search_to_completion_with_control(
                                 &session,
@@ -2801,7 +2935,7 @@ mod tests {
     ///
     /// ## この主張は最適化ありでしか成り立たない(2026-08-24追記)
     ///
-    /// watchdog(`PLAN_BUDGET.watchdog.max_millis`)は壁時計であり、
+    /// watchdog(`PLAN_BUDGET.watchdog`内の30,000ms)は壁時計であり、
     /// 最適化なしは最適化ありより16.8〜20.5倍遅い(`store.rs` の
     /// `checked_head_tail_four_legs_proposal_is_consumed_and_one_undo_restores_the_work`
     /// で実測済み)。実際に測ると、最適化なし(`cargo test -p desktop --lib`)では
@@ -3220,10 +3354,23 @@ mod tests {
     /// (`CLAUDE.md` §10.7.9、詳しくは `scratchpad/undo-proposal-test-report.md`)。
     /// 折り方が付いた候補にかける条件は**全件そのまま**残し、
     /// 「折り方が付いた候補が1件以上ある」という下限だけをやめている。
+    ///
+    /// この検査だけは壁時計の安全弁を使わず、製品と同じ`max_states = 2`・`branch = 2`
+    /// などの[`SearchBudget`]だけで決定的に止める。主張は折り手順の中身であり、
+    /// 30,000ms以内に終わることではない。製品の[`PLAN_BUDGET`]のwatchdog値は変えない。
     #[test]
     fn proposal_candidates_carry_a_fold_plan_that_is_ready_to_use() {
         use std::collections::BTreeSet;
-        let out = proposal_generate(star(6), A4ISH, 1, true).expect("候補が返るはず");
+        let progress = ProposalProgressCell::new(ProposalJobId::from("ready-fold-plan"));
+        let out = generate_candidates(
+            &star(6),
+            &A4ISH,
+            1,
+            true,
+            DETERMINISTIC_PLAN_BUDGET,
+            &progress,
+        )
+        .expect("候補が返るはず");
         assert!(!out.is_empty(), "候補が0件");
         let mut with_plan = 0usize;
         for c in &out {
@@ -3389,12 +3536,15 @@ mod tests {
     /// **値をぴったり固定したままにしてある**ので、次に根拠なく変えれば落ちる。
     #[test]
     fn plan_budget_keeps_the_screen_time_limit_as_a_safety_valve() {
+        let watchdog = PLAN_BUDGET
+            .watchdog
+            .expect("画面用の時間安全弁が無くなった");
         assert_eq!(
-            PLAN_BUDGET.watchdog.max_millis, 30_000,
+            watchdog.max_millis, 30_000,
             "画面用の時間打切りを根拠なく変えた"
         );
         assert_ne!(
-            PLAN_BUDGET.watchdog.max_millis,
+            watchdog.max_millis,
             SearchWatchdog::MAX_MILLIS,
             "画面用の打切りが検査用の既定のままでは、待ち時間の見積もりが立たない"
         );
@@ -3412,7 +3562,7 @@ mod tests {
     #[test]
     fn a_watchdog_aborted_plan_search_returns_no_partial_candidate() {
         let zero_watchdog = PlanBudget {
-            watchdog: SearchWatchdog { max_millis: 0 },
+            watchdog: Some(SearchWatchdog { max_millis: 0 }),
             ..PLAN_BUDGET
         };
         let jobs = ProposalJobs::default();
@@ -3853,6 +4003,134 @@ mod tests {
         assert_eq!(spatial.grab_face, 1);
     }
 
+    /// ひだ枚数の照会はDocumentViewを返しても、次の計算用warm値を含むstoreを
+    /// 一切変更しない。同じ照会を続けても、同じ書類から同じ表示結果を返す。
+    #[test]
+    fn fold_target_query_transaction_keeps_warm_store_and_view_bit_deterministic() {
+        fn angle_bits(
+            angles: &std::collections::HashMap<ori3_model::EdgeId, f64>,
+        ) -> Vec<(ori3_model::EdgeId, u64)> {
+            let mut bits: Vec<_> = angles
+                .iter()
+                .map(|(&edge, &angle)| (edge, angle.to_bits()))
+                .collect();
+            bits.sort_unstable_by_key(|(edge, _)| *edge);
+            bits
+        }
+
+        fn warm_bits(state: &std::sync::Mutex<DocumentStore>) -> Vec<(ori3_model::EdgeId, u64)> {
+            let store = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let (_, _, warm, _, _) = store.pose_inputs();
+            warm.as_ref().map(angle_bits).unwrap_or_default()
+        }
+
+        fn assert_query_is_read_only(
+            state: &std::sync::Mutex<DocumentStore>,
+            query: serde_json::Value,
+            expect_frame: bool,
+            label: &str,
+        ) {
+            let before = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .atomicity_probe_for_test();
+            let warm_before = warm_bits(state);
+
+            let first = super::apply_sequence_operation_transactionally(state, query.clone())
+                .unwrap_or_else(|error| panic!("{label}: 1回目のひだ枚数照会を返せる: {error}"));
+            let second = super::apply_sequence_operation_transactionally(state, query)
+                .unwrap_or_else(|error| {
+                    panic!("{label}: 2回目の同じひだ枚数照会を返せる: {error}")
+                });
+
+            assert_eq!(
+                warm_bits(state),
+                warm_before,
+                "{label}: 照会のDocumentViewからwarm値を書き戻してはいけない"
+            );
+            assert_eq!(
+                state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .atomicity_probe_for_test(),
+                before,
+                "{label}: 照会前後でDocument・Undo/Redo・dirty・warm値を変えない"
+            );
+            assert!(first.fold_target_info.is_some(), "{label}: 照会結果が返る");
+            if expect_frame {
+                assert!(
+                    first.frame.is_some(),
+                    "{label}: 照会にも現在の3D表示を載せる"
+                );
+            }
+            assert_eq!(
+                serde_json::to_vec(&first).expect("1回目のDocumentViewを比較できる"),
+                serde_json::to_vec(&second).expect("2回目のDocumentViewを比較できる"),
+                "{label}: 同じ照会の応答bytesが一致する"
+            );
+        }
+
+        let mut store = DocumentStore::default();
+        store
+            .apply_seq(ori3_model::SeqOp::PushStep {
+                step: ori3_model::FoldStep {
+                    id: 1,
+                    kind: ori3_model::TechniqueKind::Pose,
+                    drivers: Vec::new(),
+                    layer_order: None,
+                    alignment: None,
+                    finish_soft: None,
+                    note: "照会前の現在姿勢".to_string(),
+                },
+            })
+            .expect("現在姿勢を再生する手順を用意できる");
+        store.store_pose_angles(std::collections::HashMap::from([(911, -0.0), (912, 37.25)]));
+        let state = std::sync::Mutex::new(store);
+        let query = serde_json::json!({
+            "type": "PreviewFoldTargets",
+            "up_to": 1,
+            "line": [[0.0, 0.5], [1.0, 0.5]],
+            "keep_side_point": [0.5, 0.75],
+            "pose_before": null
+        });
+        assert_query_is_read_only(&state, query, true, "表示座標照会");
+
+        let mut material_store = DocumentStore::default();
+        let material_view = material_store
+            .apply_edit(ori3_model::EditOp::AddSegment {
+                a: [0.5, 0.0],
+                b: [0.5, 1.0],
+                kind: EdgeKind::Valley,
+            })
+            .expect("材料座標照会用の1本ヒンジを作れる");
+        let hinge = material_view
+            .doc
+            .cp
+            .edges
+            .iter()
+            .find(|edge| edge.kind == EdgeKind::Valley)
+            .expect("追加したヒンジを得られる")
+            .id;
+        material_store.store_pose_angles(std::collections::HashMap::from([
+            (hinge, 90.0),
+            (913, -0.0),
+            (914, -37.25),
+        ]));
+        let material_state = std::sync::Mutex::new(material_store);
+        let material_query = serde_json::json!({
+            "type": "PreviewFoldTargetsOnMaterial",
+            "up_to": 0,
+            "material_line": [[0.0, 0.25], [0.5, 0.25]],
+            "material_keep_side_point": [0.25, 0.75],
+            "pose_before": {
+                "drivers": [{ "edge_id": hinge, "target_angle_deg": 90.0 }]
+            }
+        });
+        assert_query_is_read_only(&material_state, material_query, false, "材料座標照会");
+    }
+
     const FOLD_ALL_PERCENTAGES: [f64; 5] = [0.0, 25.0, 50.0, 75.0, 100.0];
     const FOLD_ALL_FIXTURES: [(&str, &str, usize); 3] = [
         (
@@ -4260,9 +4538,13 @@ mod tests {
 
     #[test]
     fn fold_all_at_once_three_samples_timing() {
+        #[cfg(not(debug_assertions))]
         let mut total = Duration::ZERO;
+        #[cfg(not(debug_assertions))]
         let mut maximum = Duration::ZERO;
+        #[cfg(not(debug_assertions))]
         let mut maximum_context = ("", 0.0_f64, 0_usize);
+        #[cfg(not(debug_assertions))]
         let mut calls = 0_u32;
 
         for (name, text, _) in FOLD_ALL_FIXTURES {
@@ -4270,30 +4552,38 @@ mod tests {
             let warmup = fold_all_preview_outcome(&document, &faces, 0.0, None)
                 .unwrap_or_else(|error| panic!("{name} warm-up: {error}"));
             let mut warm_seed = Some(warmup.next_warm_seed);
+            #[cfg(not(debug_assertions))]
             let mut sample_total = Duration::ZERO;
+            #[cfg(not(debug_assertions))]
             let mut sample_maximum = Duration::ZERO;
 
             for sweep in 1..=10 {
                 for percent in FOLD_ALL_PERCENTAGES {
+                    #[cfg(not(debug_assertions))]
                     let started = Instant::now();
                     let outcome =
                         fold_all_preview_outcome(&document, &faces, percent, warm_seed.take())
                             .unwrap_or_else(|error| {
                                 panic!("{name} {percent}% sweep{sweep}: {error}")
                             });
+                    #[cfg(not(debug_assertions))]
                     let elapsed = started.elapsed();
                     warm_seed = Some(outcome.next_warm_seed);
-                    sample_total += elapsed;
-                    sample_maximum = sample_maximum.max(elapsed);
-                    total += elapsed;
-                    calls += 1;
-                    if elapsed > maximum {
-                        maximum = elapsed;
-                        maximum_context = (name, percent, sweep);
+                    #[cfg(not(debug_assertions))]
+                    {
+                        sample_total += elapsed;
+                        sample_maximum = sample_maximum.max(elapsed);
+                        total += elapsed;
+                        calls += 1;
+                        if elapsed > maximum {
+                            maximum = elapsed;
+                            maximum_context = (name, percent, sweep);
+                        }
                     }
                 }
             }
 
+            #[cfg(not(debug_assertions))]
             println!(
                 "一斉折り性能 {name}: 50回 平均={:.3}ms 最大={:.3}ms",
                 sample_total.as_secs_f64() * 1000.0 / 50.0,
@@ -4301,14 +4591,15 @@ mod tests {
             );
         }
 
-        let average_ms = total.as_secs_f64() * 1000.0 / f64::from(calls);
-        let maximum_ms = maximum.as_secs_f64() * 1000.0;
-        println!(
-            "一斉折り性能 全150回: 平均={average_ms:.3}ms 最大={maximum_ms:.3}ms（{} {}% sweep{}）",
-            maximum_context.0, maximum_context.1, maximum_context.2
-        );
+        #[cfg(not(debug_assertions))]
+        {
+            let average_ms = total.as_secs_f64() * 1000.0 / f64::from(calls);
+            let maximum_ms = maximum.as_secs_f64() * 1000.0;
+            println!(
+                "一斉折り性能 全150回: 平均={average_ms:.3}ms 最大={maximum_ms:.3}ms（{} {}% sweep{}）",
+                maximum_context.0, maximum_context.1, maximum_context.2
+            );
 
-        if !cfg!(debug_assertions) {
             const FRAME_BUDGET: Duration = Duration::from_millis(33);
             assert!(
                 maximum <= FRAME_BUDGET,

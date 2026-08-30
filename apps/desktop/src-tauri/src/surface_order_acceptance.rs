@@ -11,8 +11,8 @@ use ori3_model::{
     CreasePattern, Document, Driver, Edge, EdgeId, EdgeKind, FaceId, Frame3D, Vertex,
 };
 use ori3_rigid::{
-    MotionContactOptions, SurfaceOrderSource, propagate, solve_motion,
-    solve_motion_with_contact_options, to_frame3d,
+    MotionContactOptions, MotionContinuationState, SurfaceOrderSource, propagate, solve_motion,
+    solve_motion_with_contact_continuation, solve_motion_with_contact_options, to_frame3d,
 };
 
 const CAMERA_FOV_DEG: f64 = 45.0;
@@ -234,6 +234,7 @@ struct VisualDifference {
 struct EndpointState {
     frame: Frame3D,
     angles: HashMap<EdgeId, f64>,
+    continuation: MotionContinuationState,
 }
 
 #[derive(Clone, Copy)]
@@ -287,9 +288,9 @@ use surface_order_sa_raster::*;
 /// 180°の手前の4点は面どうしが実際に離れているので、重なりの上下を
 /// **姿勢そのものから測れる**。`endpoint_frames` はここから両端点だけを取り出す。
 fn boundary_ladder(diagram: &Diagram, hinge: EdgeId, sign: f64) -> Vec<(f64, EndpointState)> {
-    let mut warm = None::<HashMap<EdgeId, f64>>;
+    let mut continuation = None::<MotionContinuationState>;
     for absolute in WARMUP_ABS {
-        let motion = solve_motion_with_contact_options(
+        let motion = solve_motion_with_contact_continuation(
             &diagram.cp,
             &diagram.faces,
             &[Driver {
@@ -297,18 +298,18 @@ fn boundary_ladder(diagram: &Diagram, hinge: EdgeId, sign: f64) -> Vec<(f64, End
                 target_angle_deg: sign * absolute,
             }],
             None,
-            warm.as_ref(),
+            continuation.as_ref(),
             MotionContactOptions {
                 detect: true,
                 prevent: true,
             },
         );
-        warm = Some(motion.result.angles);
+        continuation = Some(motion.continuation_state());
     }
 
     let mut ladder = Vec::with_capacity(BOUNDARY_ABS.len());
     for absolute in BOUNDARY_ABS {
-        let motion = solve_motion_with_contact_options(
+        let motion = solve_motion_with_contact_continuation(
             &diagram.cp,
             &diagram.faces,
             &[Driver {
@@ -316,7 +317,7 @@ fn boundary_ladder(diagram: &Diagram, hinge: EdgeId, sign: f64) -> Vec<(f64, End
                 target_angle_deg: sign * absolute,
             }],
             None,
-            warm.as_ref(),
+            continuation.as_ref(),
             MotionContactOptions {
                 detect: true,
                 prevent: true,
@@ -335,12 +336,14 @@ fn boundary_ladder(diagram: &Diagram, hinge: EdgeId, sign: f64) -> Vec<(f64, End
             diagram.name,
             sign * absolute
         );
-        warm = Some(motion.result.angles.clone());
+        let next_continuation = motion.continuation_state();
+        continuation = Some(next_continuation.clone());
         ladder.push((
             absolute,
             EndpointState {
                 frame: motion.result.frame,
                 angles: motion.result.angles,
+                continuation: next_continuation,
             },
         ));
     }
@@ -615,7 +618,7 @@ fn surface_order_exact_endpoint_is_rank_stable_for_previous_19() {
             let mut flipped =
                 stacks_that_flip_between_endpoints(&before.frame, &after.frame, &stacks);
 
-            let refreshed = solve_motion_with_contact_options(
+            let refreshed = solve_motion_with_contact_continuation(
                 &diagram.cp,
                 &diagram.faces,
                 &[Driver {
@@ -623,7 +626,7 @@ fn surface_order_exact_endpoint_is_rank_stable_for_previous_19() {
                     target_angle_deg: sign * 180.0,
                 }],
                 None,
-                Some(&after.angles),
+                Some(&after.continuation),
                 MotionContactOptions {
                     detect: true,
                     prevent: true,
@@ -772,9 +775,6 @@ fn strict_nearest_counts(diagram: &Diagram, frame: &Frame3D, view: Camera) -> (u
     }
     (front, back)
 }
-
-
-
 
 include!("surface_order_sa_determinism.rs");
 /// 決定的な擬似乱数(SplitMix64)。種を固定すれば毎回同じ姿勢の並びを作る。

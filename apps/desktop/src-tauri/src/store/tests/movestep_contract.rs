@@ -769,11 +769,14 @@ fn move_step_all_legal_head_middle_tail_cases_for_lengths_2_through_100() {
     assert_eq!(total_cases, 15_145);
     assert_eq!(changed_cases, 14_849);
     assert_eq!(noop_cases, 296);
-    replay_metrics.include(run_real_two_fold_oracle_cases());
-    assert_eq!(replay_metrics.cases, 15_147);
+    // 実折り2 caseは専用test
+    // `move_step_real_two_fold_crane_prefix_matches_direct_oracle_both_directions` が
+    // 同じ `run_real_two_fold_oracle_cases()` を呼び、2方向とcase数まで独立名で保証する。
+    // ここでは15,145 synthetic caseだけを集計し、同じoracleを二重実行しない。
+    assert_eq!(replay_metrics.cases, 15_145);
     eprintln!(
-        "[MoveStep §6.4-6実測] legal_cases={total_cases} real_two_fold_cases=2 \
-         replay_cases={} max_vertex_distance={:.17e} max_seam={:.17e} \
+        "[MoveStep §6.4-6実測] legal_cases={total_cases} synthetic_replay_cases={} \
+         max_vertex_distance={:.17e} max_seam={:.17e} \
          penetration_pairs={} non_finite_coordinates={}",
         replay_metrics.cases,
         replay_metrics.max_vertex_distance,
