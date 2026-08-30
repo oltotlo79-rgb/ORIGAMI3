@@ -67,18 +67,8 @@ jobs:
             throw "Checked-out revision '$actualRevision' does not match GITHUB_SHA '$env:GITHUB_SHA'."
           }
 
-      - name: Set up the exact Node.js version for license inspection
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4 (verified 2026-08-27)
-        with:
-          node-version: "22.23.2"
-
-      - name: Fetch locked Cargo dependency metadata
-        shell: pwsh
-        run: |
-          cargo fetch --locked
-          if ($LASTEXITCODE -ne 0) { throw "cargo fetch --locked failed" }
-
       - name: Install and verify the pinned cargo-audit
+        id: cargo_audit_pin_evidence
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -130,49 +120,55 @@ jobs:
               $registryRecord.yanked -ne $false) {
             throw "cargo-audit registry checksum or yanked status differs from the exact pin."
           }
-          $bootstrapRoot = Join-Path $env:RUNNER_TEMP "cargo-audit-download-only"
-          $bootstrapManifest = Join-Path $bootstrapRoot "Cargo.toml"
-          New-Item -ItemType Directory -Force -Path $bootstrapRoot | Out-Null
-          # PowerShell does not treat backslash as a string-escape character (double-quoted
-          # strings escape an embedded '"' with a doubled '""' or a backtick, never '\"'), so
-          # the previous '\"'-escaped lines here were a parse error, not valid Cargo.toml
-          # content: `"name = \"ori3-cargo-audit-download-only\""` closes the string at the
-          # first unescaped '\"' and leaves a bareword token behind. Lines with no variable
-          # interpolation are single-quoted (no escaping needed); the one line that
-          # interpolates $env:CARGO_AUDIT_VERSION keeps double quotes and doubles the
-          # embedded '"' characters instead.
-          @(
-            '[package]',
-            'name = "ori3-cargo-audit-download-only"',
-            'version = "0.0.0"',
-            'edition = "2021"',
-            '',
-            '[dependencies]',
-            "cargo-audit = ""=$env:CARGO_AUDIT_VERSION"""
-          ) | Set-Content -LiteralPath $bootstrapManifest -Encoding UTF8
-          cargo fetch --manifest-path $bootstrapManifest
-          if ($LASTEXITCODE -ne 0) { throw "cargo-audit download-only fetch failed" }
-          $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE ".cargo" }
-          $archives = @(
-            Get-ChildItem -LiteralPath (Join-Path $cargoHome "registry\cache") `
-              -Recurse -File -Filter "cargo-audit-$env:CARGO_AUDIT_VERSION.crate"
-          )
-          if ($archives.Count -eq 0) {
-            throw "The downloaded cargo-audit crate archive was not found for checksum verification."
+          $archiveDownloadUri = "https://static.crates.io/crates/cargo-audit/cargo-audit-$env:CARGO_AUDIT_VERSION.crate"
+          $sourceBundleRoot = Join-Path $env:RUNNER_TEMP `
+            "cargo-audit-source-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $archivePath = Join-Path $sourceBundleRoot "cargo-audit-$env:CARGO_AUDIT_VERSION.crate"
+          $extractRoot = Join-Path $sourceBundleRoot "extracted"
+          New-Item -ItemType Directory -Force -Path $sourceBundleRoot | Out-Null
+          Invoke-WebRequest -Uri $archiveDownloadUri -UseBasicParsing -OutFile $archivePath
+          if (-not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
+            throw "The pinned cargo-audit crate archive was not downloaded from $archiveDownloadUri."
           }
-          $matchingArchive = @(
-            $archives | Where-Object {
-              (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash -eq `
-                $env:CARGO_AUDIT_CRATE_SHA256
+          $downloadedArchiveSha256 = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($downloadedArchiveSha256 -cne $env:CARGO_AUDIT_CRATE_SHA256) {
+            throw "The cargo-audit archive downloaded from static.crates.io differs from the policy checksum."
+          }
+          $tarCommand = Get-Command tar.exe -CommandType Application -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if ($null -eq $tarCommand) {
+            throw "tar.exe is required to inspect the verified cargo-audit crate archive."
+          }
+          $archiveEntries = @(& $tarCommand.Source -tf $archivePath 2>&1)
+          if ($LASTEXITCODE -ne 0 -or $archiveEntries.Count -eq 0) {
+            throw "The verified cargo-audit crate archive could not be listed: $($archiveEntries -join ' ')"
+          }
+          $expectedArchivePrefix = "cargo-audit-$env:CARGO_AUDIT_VERSION/"
+          $unsafeArchiveEntries = @(
+            $archiveEntries | Where-Object {
+              $entry = ([string]$_).Replace("\", "/")
+              [string]::IsNullOrWhiteSpace($entry) -or
+                -not $entry.StartsWith($expectedArchivePrefix, [StringComparison]::Ordinal) -or
+                $entry -match '(^|/)\.\.(?:/|$)' -or
+                $entry -match '^[A-Za-z]:'
             }
           )
-          if ($matchingArchive.Count -eq 0) {
-            throw "The downloaded cargo-audit crate checksum does not match security-policy.json."
+          if ($unsafeArchiveEntries.Count -ne 0 -or
+              @($archiveEntries | Where-Object { [string]$_ -ceq "${expectedArchivePrefix}Cargo.toml" }).Count -ne 1 -or
+              @($archiveEntries | Where-Object { [string]$_ -ceq "${expectedArchivePrefix}Cargo.lock" }).Count -ne 1) {
+            throw "The verified cargo-audit crate archive has an unsafe or incomplete file layout."
           }
-          $verifiedArchive = $matchingArchive | Select-Object -First 1
+          New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
+          & $tarCommand.Source -xf $archivePath -C $extractRoot
+          if ($LASTEXITCODE -ne 0) { throw "The verified cargo-audit crate archive could not be extracted." }
+          $sourceRoot = Join-Path $extractRoot "cargo-audit-$env:CARGO_AUDIT_VERSION"
+          if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot "Cargo.toml") -PathType Leaf) -or
+              -not (Test-Path -LiteralPath (Join-Path $sourceRoot "Cargo.lock") -PathType Leaf)) {
+            throw "The extracted cargo-audit source is missing Cargo.toml or Cargo.lock."
+          }
           $cargoAuditInstallRoot = Join-Path $env:RUNNER_TEMP `
             "cargo-audit-install-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-          cargo install cargo-audit --version $env:CARGO_AUDIT_VERSION --locked `
+          cargo install --path $sourceRoot --locked `
             --root $cargoAuditInstallRoot --force
           if ($LASTEXITCODE -ne 0) { throw "cargo-audit locked installation failed after checksum verification" }
           $expectedVersionOutput = "cargo-audit $env:CARGO_AUDIT_VERSION"
@@ -184,7 +180,7 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $directReportedVersion.Trim() -cne $expectedVersionOutput) {
             throw "The installed cargo-audit executable reported an unexpected version: $directReportedVersion"
           }
-          $archiveSha256 = (Get-FileHash -LiteralPath $verifiedArchive.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $archiveSha256 = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
           $executableSha256 = (Get-FileHash -LiteralPath $cargoAuditExe -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($archiveSha256 -cne $env:CARGO_AUDIT_CRATE_SHA256) {
             throw "The cargo-audit archive changed during the locked installation."
@@ -202,7 +198,8 @@ jobs:
             registryVersion = [string]$registryRecord.vers
             registryChecksum = [string]$registryRecord.cksum
             registryYanked = [bool]$registryRecord.yanked
-            archivePath = [IO.Path]::GetFullPath($verifiedArchive.FullName)
+            archiveDownloadUri = $archiveDownloadUri
+            archivePath = [IO.Path]::GetFullPath($archivePath)
             archiveSha256 = $archiveSha256
             executablePath = [IO.Path]::GetFullPath($cargoAuditExe)
             executableSha256 = $executableSha256
@@ -218,6 +215,28 @@ jobs:
           "CARGO_AUDIT_EXE=$cargoAuditExe" |
             Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- cargo-audit same-run pin receipt: $receiptPath"
+
+      - name: Verify the same-run cargo-audit pin receipt
+        id: cargo_audit_pin_readiness
+        shell: pwsh
+        run: |
+          $receiptPath = Join-Path $env:RUNNER_TEMP `
+            "cargo-audit-pin-evidence-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT.json"
+          powershell -NoProfile -ExecutionPolicy Bypass `
+            -File scripts/check-supply-chain.ps1 -Mode ReadinessOnly `
+            -CargoAuditReceiptPath $receiptPath
+          if ($LASTEXITCODE -ne 0) { throw "Supply-chain readiness remains incomplete; see the blocker list above" }
+
+      - name: Set up the exact Node.js version for license inspection
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4 (verified 2026-08-27)
+        with:
+          node-version: "22.23.2"
+
+      - name: Fetch locked Cargo dependency metadata
+        shell: pwsh
+        run: |
+          cargo fetch --locked
+          if ($LASTEXITCODE -ne 0) { throw "cargo fetch --locked failed" }
 
       - name: Validate policy, exceptions, and Cargo/npm licenses
         shell: pwsh
@@ -243,18 +262,6 @@ jobs:
           }
           & $env:CARGO_AUDIT_EXE @arguments
           if ($LASTEXITCODE -ne 0) { throw "cargo audit found an advisory that is not covered by an active policy exception" }
-
-      # Always surface pin or assessment evidence even when an earlier Cargo step fails.
-      - name: Report unresolved supply-chain readiness blockers
-        if: ${{ always() }}
-        shell: pwsh
-        run: |
-          $receiptPath = Join-Path $env:RUNNER_TEMP `
-            "cargo-audit-pin-evidence-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT.json"
-          powershell -NoProfile -ExecutionPolicy Bypass `
-            -File scripts/check-supply-chain.ps1 -Mode ReadinessOnly `
-            -CargoAuditReceiptPath $receiptPath
-          if ($LASTEXITCODE -ne 0) { throw "Supply-chain readiness remains incomplete; see the blocker list above" }
 
   npm_advisories:
     name: npm production and complete lockfile advisories
