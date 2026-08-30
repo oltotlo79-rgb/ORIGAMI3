@@ -510,9 +510,7 @@ fn rigid_blocks(forest: &Forest, n_faces: usize, angles_rad: &[f64]) -> Vec<usiz
             parent[left_root] = right_root;
         }
     }
-    (0..n_faces)
-        .map(|index| find(&mut parent, index))
-        .collect()
+    (0..n_faces).map(|index| find(&mut parent, index)).collect()
 }
 
 /// 構築済みの森でヒンジ角(ラジアン、`Forest::hinges` と同順)を伝播し、
@@ -1094,8 +1092,7 @@ mod exact_stack_sign_tests {
     /// `±180°` が1本も無ければ拘束は空。塊を数える処理を足しても変わらない。
     #[test]
     fn a_pattern_without_any_fully_folded_crease_has_no_exact_constraints() {
-        let constraints =
-            two_segment_constraints(&[(10, 90.0), (11, 90.0), (12, 0.0), (13, 0.0)]);
+        let constraints = two_segment_constraints(&[(10, 90.0), (11, 90.0), (12, 0.0), (13, 0.0)]);
         assert!(constraints.is_empty());
     }
 }

@@ -669,7 +669,7 @@ fn approached_height_at_flat_point(
     Ok(approached_point.z)
 }
 
-fn overlap_witnesses(left: &[DVec2], right: &[DVec2]) -> Result<Vec<DVec2>, String> {
+pub(crate) fn overlap_witnesses(left: &[DVec2], right: &[DVec2]) -> Result<Vec<DVec2>, String> {
     let left_triangles = triangulate_polygon(left)?;
     let right_triangles = triangulate_polygon(right)?;
     let mut witnesses = Vec::new();

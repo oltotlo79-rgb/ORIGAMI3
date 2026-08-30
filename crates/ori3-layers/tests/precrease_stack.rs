@@ -25,7 +25,10 @@ use std::collections::HashMap;
 use ori3_cp::extract_faces;
 use ori3_layers::flat_state::{FlatState, representative_point};
 use ori3_layers::fold_through::{FoldDirection, FoldThroughInput, fold_through};
-use ori3_layers::precrease_collapse::{PrecreaseCollapseInput, collapse_precrease_network};
+use ori3_layers::precrease_collapse::{
+    PrecreaseCollapseInput, collapse_precrease_network,
+    collapse_precrease_network_with_layer_order_oracle,
+};
 use ori3_model::{CreasePattern, Document, EdgeKind, Face3D, Frame3D, Paper};
 
 /// 折る直線と「動かさない側」の点。1辺1の正方形の材質座標。
@@ -178,7 +181,7 @@ fn collapsing_a_finished_crease_pattern_stacks_the_paper_like_the_ordinary_fold(
         let lines = crease_lines(&cp);
         let faces = extract_faces(&cp);
         let state = FlatState::initial(&cp, &faces);
-        let result = collapse_precrease_network(
+        let result = collapse_precrease_network_with_layer_order_oracle(
             &mut cp,
             &faces,
             &state,
@@ -186,6 +189,7 @@ fn collapsing_a_finished_crease_pattern_stacks_the_paper_like_the_ordinary_fold(
                 lines,
                 target_layers: None,
             },
+            &ordinary_state.order,
         )
         .unwrap_or_else(|error| panic!("{count}手ぶんの畳みに失敗した: {error}"));
         assert!(
@@ -194,11 +198,70 @@ fn collapsing_a_finished_crease_pattern_stacks_the_paper_like_the_ordinary_fold(
             result.warnings
         );
         assert_eq!(
+            result.state.order, ordinary_state.order,
+            "{count}手: 検証済みoracleを結果の層順に採用する"
+        );
+        let collapsed_faces = extract_faces(&cp);
+        let expected_layer_points = result.state.to_layer_points(&cp, &collapsed_faces);
+        assert_eq!(
+            result.step.layer_order.as_deref(),
+            Some(expected_layer_points.as_slice()),
+            "{count}手: 検証済みoracleを保存用の層順にも採用する"
+        );
+        assert_eq!(
             material_stack(&cp, &result.state),
             expected,
             "{count}手: 2つの道で紙の重なり順が食い違った"
         );
     }
+}
+
+/// 明示oracleは完全かつ一般制約に適合する順だけを採用し、拒否時にCPを変更しない。
+#[test]
+fn collapse_layer_order_oracle_rejects_incomplete_and_invalid_orders_atomically() {
+    let (ordinary, ordinary_state) = fold_ordinary(FOLDS.len());
+    let lines = crease_lines(&ordinary.cp);
+    let faces = extract_faces(&ordinary.cp);
+    let initial = FlatState::initial(&ordinary.cp, &faces);
+
+    let incomplete = &ordinary_state.order[..ordinary_state.order.len() - 1];
+    let mut cp = ordinary.cp.clone();
+    let before = cp.clone();
+    let error = collapse_precrease_network_with_layer_order_oracle(
+        &mut cp,
+        &faces,
+        &initial,
+        &PrecreaseCollapseInput {
+            lines: lines.clone(),
+            target_layers: None,
+        },
+        incomplete,
+    )
+    .expect_err("不完全なoracleを拒否する");
+    assert!(
+        error.contains("invalid or incomplete"),
+        "不完全oracleの理由を返す: {error}"
+    );
+    assert_eq!(cp, before, "不完全oracleの拒否でCPを変更しない");
+
+    let mut invalid = ordinary_state.order.clone();
+    invalid.reverse();
+    let error = collapse_precrease_network_with_layer_order_oracle(
+        &mut cp,
+        &faces,
+        &initial,
+        &PrecreaseCollapseInput {
+            lines,
+            target_layers: None,
+        },
+        &invalid,
+    )
+    .expect_err("一般制約に反するoracleを拒否する");
+    assert!(
+        error.contains("invalid or incomplete"),
+        "不正oracleの理由を返す: {error}"
+    );
+    assert_eq!(cp, before, "不正oracleの拒否でCPを変更しない");
 }
 
 /// 畳んだ結果の重なり順は、展開図の山谷すべてと食い違わない。

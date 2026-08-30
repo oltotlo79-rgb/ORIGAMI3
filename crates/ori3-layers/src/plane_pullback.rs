@@ -152,6 +152,53 @@ pub fn pull_back_plane_to_faces(
     result
 }
 
+/// Clip one material-space infinite line to a source face.
+///
+/// The non-flat crease-only path already receives its stable CP line from the
+/// visible material surface, so it must not manufacture a live 3D plane merely
+/// to reuse the public pullback entry point. Keeping the clipping here makes it
+/// share the same concave-face and endpoint rules as 3D plane pullback.
+pub(crate) fn clip_material_line_to_face(
+    cp: &CreasePattern,
+    face: &Face,
+    line: [[f64; 2]; 2],
+) -> Result<Vec<[[f64; 2]; 2]>, String> {
+    let start = DVec2::from(line[0]);
+    let end = DVec2::from(line[1]);
+    if !finite2(start) || !finite2(end) {
+        return Err("material line is not finite".to_string());
+    }
+    let direction = end - start;
+    if direction.length() <= EPS {
+        return Err("material line is degenerate".to_string());
+    }
+    let normal = DVec2::new(-direction.y, direction.x).normalize();
+    let positions = cp
+        .vertices
+        .iter()
+        .map(|vertex| (vertex.id, DVec2::from(vertex.pos)))
+        .collect::<HashMap<_, _>>();
+    let mut points = Vec::with_capacity(face.vertices.len());
+    for vertex_id in &face.vertices {
+        let position = positions
+            .get(vertex_id)
+            .copied()
+            .ok_or_else(|| format!("material vertex {vertex_id} is missing"))?;
+        if !finite2(position) {
+            return Err(format!("material vertex {vertex_id} is not finite"));
+        }
+        points.push((position, DVec3::ZERO));
+    }
+    Ok(clip_line_to_face(
+        cp,
+        face,
+        &points,
+        normal.x,
+        normal.y,
+        -normal.dot(start),
+    ))
+}
+
 fn pull_back_face(
     cp: &CreasePattern,
     face: &Face,

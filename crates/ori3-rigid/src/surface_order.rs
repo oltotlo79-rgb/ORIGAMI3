@@ -64,6 +64,22 @@ pub struct SurfaceOrderProvenance {
     pub(crate) constraints: Vec<(FaceId, FaceId)>,
 }
 
+/// 1つの実Frameのpositive-area pairから直接測った上下だけを運ぶ。
+///
+/// exact・推移閉包・完成order/rankから構築する入口は持たない。motion側は中身を読まず、
+/// 同じendpointのsurface導出へopaqueなまま戻す。
+#[derive(Clone, Debug)]
+pub(crate) struct DirectSurfaceDepthEvidence {
+    constraints: BTreeSet<(FaceId, FaceId)>,
+    domain: DirectSurfaceDepthDomain,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum DirectSurfaceDepthDomain {
+    PositiveProjection,
+    EndpointProjection,
+}
+
 /// 重なり順の導出結果と、幾何からは決められなかった箇所の数。
 ///
 /// 呼出し元は `unresolved_overlaps` を見て「幾何が答えを持っていない」ことを
@@ -79,6 +95,13 @@ pub(crate) struct SurfaceOrder {
     pub(crate) exact_resolved_overlaps: usize,
     /// 経路または現在Frameで、許容値を越える実深度差を直接測れたoverlap対の数。
     pub(crate) sampled_depth_constraints: usize,
+    /// 主導出の正面積witnessで直接測れた深度制約の数。後置するtangent制約と、
+    /// 経路・exactでなお未比較だった対へのendpoint補完はauthorityに数えない。
+    pub(crate) positive_overlap_depth_constraints: usize,
+    /// 経路へ戻って採用した深度制約の数。終点で面積0または完全同深度の対だけを数える。
+    pub(crate) approach_depth_constraints: usize,
+    /// opaqueな実Frameのdirect depthを、このendpointへ実際に追加した制約の数。
+    pub(crate) imported_depth_constraints: usize,
     /// 実面積で重なっているのに上下を決められなかった面対の数。
     pub(crate) unresolved_overlaps: usize,
     /// 多角形が退化していて比較そのものができなかった面対の数。
@@ -91,6 +114,11 @@ pub(crate) struct SurfaceOrder {
     pub(crate) complete: bool,
     /// completeなときだけ、次の手順へ渡せる正面積overlap制約を含む。
     pub(crate) provenance: SurfaceOrderProvenance,
+    /// exact・実深度・直前provenanceから独立に採用できた上下制約。
+    /// total orderのtie-breakは含めない。
+    constraints: BTreeSet<(FaceId, FaceId)>,
+    /// 終点で正の面積を持って重なる全ての面対。
+    positive_overlap_pairs: BTreeSet<(FaceId, FaceId)>,
 }
 
 #[derive(Debug)]
@@ -229,8 +257,14 @@ pub(crate) fn derive_surface_order(
         DeriveSurfaceOptions {
             exact_constraints,
             previous,
+            direct_evidence: None,
+            approach_constraints: &[],
+            sampled_pairs: None,
+            exact_constraints_after_depth: false,
+            returned_depth_after_exact: false,
             require_coplanar: true,
             sample_count: path.len(),
+            returned_geometry_sample: None,
         },
         |sample, face, point, normal| approached_height(face, point, normal, &path[sample], exact),
     )
@@ -242,6 +276,88 @@ pub(crate) fn derive_surface_order_from_current_depths(
     faces: &[Face],
     frame: &Frame3D,
     exact_constraints: &[(FaceId, FaceId)],
+) -> Result<SurfaceOrder, String> {
+    derive_surface_order_from_current_depths_with_approach_constraints(
+        cp,
+        faces,
+        frame,
+        exact_constraints,
+        &[],
+        false,
+        None,
+    )
+}
+
+/// 返却Frameの直接depthを先に採り、未決定部分だけexact制約で補う。
+///
+/// 通常の導出は折り目由来のexact制約を優先する。この専用入口は、返却polygonに
+/// 有限の分離が残るのに別経路のexact制約と衝突するendpointだけで使う。同じFrameの
+/// depth制約を先にDAGへ入れ、逆cycleを作らないexact辺だけを後から追加するため、
+/// 別Frameのtotal orderやrankを返却Frameへ転記しない。
+pub(crate) fn derive_surface_order_from_current_depths_preferring_geometry(
+    cp: &CreasePattern,
+    faces: &[Face],
+    frame: &Frame3D,
+    exact_constraints: &[(FaceId, FaceId)],
+) -> Result<SurfaceOrder, String> {
+    derive_surface_order_from_current_depths_with_approach_constraints(
+        cp,
+        faces,
+        frame,
+        exact_constraints,
+        &[],
+        true,
+        None,
+    )
+}
+
+/// near-flatの現Frameで、正面積代表点から直接測れる楔状の対も同じDAGへ加える。
+pub(crate) fn derive_surface_order_from_projected_current_depths(
+    cp: &CreasePattern,
+    faces: &[Face],
+    frame: &Frame3D,
+) -> Result<SurfaceOrder, String> {
+    let evidence = direct_projected_depth_evidence(faces, frame);
+    derive_surface_order_from_current_depths_with_approach_constraints(
+        cp,
+        faces,
+        frame,
+        &[],
+        &[],
+        false,
+        Some(&evidence),
+    )
+}
+
+/// exact endpointで正面積または境界接触する対を、opaqueな直前Frameの
+/// 正面積代表点depthで補う。
+pub(crate) fn derive_surface_order_from_actual_approach(
+    cp: &CreasePattern,
+    faces: &[Face],
+    approach: &Frame3D,
+    endpoint: &Frame3D,
+    exact_constraints: &[(FaceId, FaceId)],
+) -> Result<SurfaceOrder, String> {
+    let evidence = direct_tangent_depth_evidence(faces, approach, endpoint)?;
+    derive_surface_order_from_current_depths_with_approach_constraints(
+        cp,
+        faces,
+        endpoint,
+        exact_constraints,
+        &[],
+        true,
+        Some(&evidence),
+    )
+}
+
+fn derive_surface_order_from_current_depths_with_approach_constraints(
+    cp: &CreasePattern,
+    faces: &[Face],
+    frame: &Frame3D,
+    exact_constraints: &[(FaceId, FaceId)],
+    approach_constraints: &[(FaceId, FaceId)],
+    exact_constraints_after_depth: bool,
+    direct_evidence: Option<&DirectSurfaceDepthEvidence>,
 ) -> Result<SurfaceOrder, String> {
     let seed_order = geometric_seed_order(cp, faces)?;
     validate_order(faces, frame, &seed_order)?;
@@ -257,8 +373,14 @@ pub(crate) fn derive_surface_order_from_current_depths(
         DeriveSurfaceOptions {
             exact_constraints,
             previous: None,
+            direct_evidence,
+            approach_constraints,
+            sampled_pairs: None,
+            exact_constraints_after_depth,
+            returned_depth_after_exact: false,
             require_coplanar: false,
             sample_count: 1,
+            returned_geometry_sample: None,
         },
         |_sample, face, point, normal| {
             approached_frame_height(face, point, normal, &frame_faces, &frame_faces)
@@ -283,6 +405,58 @@ pub(crate) fn derive_surface_order_from_frame_path(
         exact_constraints,
         None,
     )
+}
+
+/// 同じendpointへ向かうFrame列の直接depthを先に採り、残りを狭い順に補う。
+///
+/// endpointのpositive-overlap witnessを、path側でも同じ面対が正面積を持つ場合だけ
+/// 各checkpointへ写して直接比較する。次にexact closureを未比較のendpoint正面積対だけへ
+/// 足し、それでも未比較の対だけ返却Frame自身の直接depthで補う。別Frameのtotal orderや
+/// rankは使わず、既に経路またはexactで決まった対を端点の丸め残差で上書きしない。
+pub(crate) fn derive_surface_order_from_frame_path_preferring_approach_depth(
+    cp: &CreasePattern,
+    faces: &[Face],
+    path: &[Frame3D],
+    exact_frame: &Frame3D,
+    exact_constraints: &[(FaceId, FaceId)],
+) -> Result<SurfaceOrder, String> {
+    derive_surface_order_from_frame_path_with_priority(SurfaceOrderPathInput {
+        cp,
+        faces,
+        path,
+        exact_frame,
+        exact_constraints,
+        previous: None,
+        exact_constraints_after_depth: true,
+        require_coplanar: false,
+        sample_only_path_overlaps: true,
+        returned_depth_after_exact: false,
+    })
+}
+
+/// 直前pathでも正面積の対だけを測り、返却endpointの残差は使わない。
+///
+/// path Frameの完成order/rankは使わず、endpoint上の同じ材質点を各Frameへ戻して深度だけを
+/// 測る。exactはpathで未決定の正面積対だけへ足し、endpoint残差による再補完はしない。
+pub(crate) fn derive_surface_order_from_frame_path_without_returned_depth(
+    cp: &CreasePattern,
+    faces: &[Face],
+    path: &[Frame3D],
+    exact_frame: &Frame3D,
+    exact_constraints: &[(FaceId, FaceId)],
+) -> Result<SurfaceOrder, String> {
+    derive_surface_order_from_frame_path_with_priority(SurfaceOrderPathInput {
+        cp,
+        faces,
+        path,
+        exact_frame,
+        exact_constraints,
+        previous: None,
+        exact_constraints_after_depth: true,
+        require_coplanar: false,
+        sample_only_path_overlaps: true,
+        returned_depth_after_exact: false,
+    })
 }
 
 /// 2つの姿勢の、同じ面の同じ頂点どうしの最大の離れ。
@@ -351,6 +525,247 @@ fn path_approaches_endpoint(path: &[Frame3D], exact_frame: &Frame3D) -> bool {
     last == 0.0 || nearest < farthest
 }
 
+fn unordered_face_pair(left: FaceId, right: FaceId) -> (FaceId, FaceId) {
+    if left < right {
+        (left, right)
+    } else {
+        (right, left)
+    }
+}
+
+/// 経路上で正面積が重なり、実深度の向きを直接決められた面対を集める。
+///
+/// ここで得る順そのものは終点へ転記しない。終点で投影面積だけが0へ縮退した面対を
+/// 選ぶために使い、向きは後で終点polygonのsigned depthから測り直す。
+fn nearest_path_overlap_constraints(
+    cp: &CreasePattern,
+    faces: &[Face],
+    path: &[Frame3D],
+) -> Result<Vec<(FaceId, FaceId)>, String> {
+    let known_faces = faces.iter().map(|face| face.id).collect::<BTreeSet<_>>();
+    let mut observed = BTreeSet::new();
+    let mut constraints = Vec::new();
+    for frame in path.iter().rev() {
+        let derived = derive_surface_order_from_current_depths(cp, faces, frame, &[])?;
+        let closure = ConstraintClosure::new(&known_faces, &derived.constraints);
+        for &(left, right) in &derived.positive_overlap_pairs {
+            let pair = unordered_face_pair(left, right);
+            if observed.contains(&pair) {
+                continue;
+            }
+            let constraint = match (closure.reaches(left, right), closure.reaches(right, left)) {
+                (true, false) => Some((left, right)),
+                (false, true) => Some((right, left)),
+                _ => None,
+            };
+            if let Some(constraint) = constraint {
+                observed.insert(pair);
+                constraints.push(constraint);
+            }
+        }
+    }
+    Ok(constraints)
+}
+
+fn frame_geometries(faces: &[Face], frame: &Frame3D) -> Vec<FaceGeometry> {
+    let frame_faces = frame
+        .faces
+        .iter()
+        .map(|face| (face.face, face))
+        .collect::<HashMap<_, _>>();
+    faces
+        .iter()
+        .map(|face| {
+            let polygon = frame_faces[&face.id]
+                .polygon
+                .iter()
+                .copied()
+                .map(DVec3::from)
+                .collect::<Vec<_>>();
+            let plane = face_plane(&polygon);
+            let projected = plane.map(|plane| project_polygon(&polygon, plane));
+            FaceGeometry {
+                id: face.id,
+                plane,
+                projected,
+                normal: polygon_normal(&polygon),
+                polygon,
+            }
+        })
+        .collect()
+}
+
+/// endpointで比較対象になる対を、直前の実Frameの正面積witnessで直接測る。
+///
+/// actual Frame側では面が僅かに非平行でも、endpointで正面積または境界接触を確認した対だけを扱う。
+/// 左面法線方向のrayと右面平面の交点距離を、正面積領域の代表点で
+/// 既存`DEPTH_ORDER_EPS`と比較する。別Frameのorder/rankや推移閉包は読まない。
+fn direct_tangent_depth_evidence(
+    faces: &[Face],
+    approach: &Frame3D,
+    endpoint: &Frame3D,
+) -> Result<DirectSurfaceDepthEvidence, String> {
+    let endpoint_geometries = frame_geometries(faces, endpoint);
+    let approach_geometries = frame_geometries(faces, approach);
+    let mut constraints = BTreeSet::new();
+    for left_index in 0..faces.len() {
+        for right_index in left_index + 1..faces.len() {
+            let endpoint_left = &endpoint_geometries[left_index];
+            let endpoint_right = &endpoint_geometries[right_index];
+            let Some(endpoint_plane) = endpoint_left.plane else {
+                continue;
+            };
+            let endpoint_left_2d = endpoint_left
+                .projected
+                .as_deref()
+                .expect("a face plane always has a projection");
+            let endpoint_right_2d = project_polygon(&endpoint_right.polygon, endpoint_plane);
+            if !projected_bounds_overlap(endpoint_left_2d, &endpoint_right_2d) {
+                continue;
+            }
+            let positive = display_overlap_witness(endpoint_left_2d, &endpoint_right_2d).is_some();
+            let boundary = overlap_witnesses(endpoint_left_2d, &endpoint_right_2d)
+                .is_ok_and(|witnesses| witnesses.is_empty())
+                && boundary_overlap_witnesses(endpoint_left_2d, &endpoint_right_2d)
+                    .is_ok_and(|witnesses| !witnesses.is_empty());
+            if !positive && !boundary {
+                continue;
+            }
+
+            let approach_left = &approach_geometries[left_index];
+            let approach_right = &approach_geometries[right_index];
+            let (Some(left_plane), Some(right_plane)) = (approach_left.plane, approach_right.plane)
+            else {
+                continue;
+            };
+            let approach_left_2d = approach_left
+                .projected
+                .as_deref()
+                .expect("a face plane always has a projection");
+            let approach_right_2d = project_polygon(&approach_right.polygon, left_plane);
+            if !projected_bounds_overlap(approach_left_2d, &approach_right_2d) {
+                continue;
+            }
+            let Some(witness) = display_overlap_witness(approach_left_2d, &approach_right_2d)
+            else {
+                continue;
+            };
+            let denominator = right_plane.normal.dot(left_plane.normal);
+            if !denominator.is_finite() || denominator.abs() <= EPS {
+                continue;
+            }
+            let point = left_plane.origin + left_plane.u * witness.x + left_plane.v * witness.y;
+            let gap = right_plane.normal.dot(right_plane.origin - point) / denominator;
+            if !gap.is_finite() || gap.abs() <= DEPTH_ORDER_EPS {
+                continue;
+            }
+            let (Some(approach_winding), Some(endpoint_winding)) =
+                (approach_left.normal, endpoint_left.normal)
+            else {
+                continue;
+            };
+            let approach_winding_sign = if approach_winding.dot(left_plane.normal) >= 0.0 {
+                1.0
+            } else {
+                -1.0
+            };
+            let endpoint_winding_sign = if endpoint_winding.dot(endpoint_plane.normal) >= 0.0 {
+                1.0
+            } else {
+                -1.0
+            };
+            let endpoint_gap = gap * approach_winding_sign * endpoint_winding_sign;
+            constraints.insert(if endpoint_gap > 0.0 {
+                (endpoint_left.id, endpoint_right.id)
+            } else {
+                (endpoint_right.id, endpoint_left.id)
+            });
+        }
+    }
+    Ok(DirectSurfaceDepthEvidence {
+        constraints,
+        domain: DirectSurfaceDepthDomain::EndpointProjection,
+    })
+}
+
+/// 1つのnear-flat Frameで投影が正面積を持つ対を、同じFrameの代表点depthで測る。
+///
+/// 面全体がわずかに楔状でも、表示上実際に重なる領域の代表点から右面までのray距離は
+/// 一意に定まる。法線の平行度に新しい境目を作らず、既存の面積・depth判定だけを使う。
+fn direct_projected_depth_evidence(faces: &[Face], frame: &Frame3D) -> DirectSurfaceDepthEvidence {
+    let geometries = frame_geometries(faces, frame);
+    let mut constraints = BTreeSet::new();
+    for left_index in 0..faces.len() {
+        for right_index in left_index + 1..faces.len() {
+            let left = &geometries[left_index];
+            let right = &geometries[right_index];
+            let (Some(left_plane), Some(right_plane)) = (left.plane, right.plane) else {
+                continue;
+            };
+            let left_2d = left
+                .projected
+                .as_deref()
+                .expect("a face plane always has a projection");
+            let right_2d = project_polygon(&right.polygon, left_plane);
+            if !projected_bounds_overlap(left_2d, &right_2d) {
+                continue;
+            }
+            let Some(witness) = display_overlap_witness(left_2d, &right_2d) else {
+                continue;
+            };
+            let denominator = right_plane.normal.dot(left_plane.normal);
+            if !denominator.is_finite() || denominator.abs() <= EPS {
+                continue;
+            }
+            let point = left_plane.origin + left_plane.u * witness.x + left_plane.v * witness.y;
+            let gap = right_plane.normal.dot(right_plane.origin - point) / denominator;
+            if !gap.is_finite() || gap.abs() <= DEPTH_ORDER_EPS {
+                continue;
+            }
+            constraints.insert(if gap > 0.0 {
+                (left.id, right.id)
+            } else {
+                (right.id, left.id)
+            });
+        }
+    }
+    DirectSurfaceDepthEvidence {
+        constraints,
+        domain: DirectSurfaceDepthDomain::PositiveProjection,
+    }
+}
+
+/// 接近経路で正面積重なりを確認できた面対だけを選び、返却Frame自身から順を導く。
+/// 経路のtotal orderやrankは使わず、終点で投影面積が0へ縮退した対の選別にだけ使う。
+pub(crate) fn derive_surface_order_from_current_depths_along_frame_path(
+    cp: &CreasePattern,
+    faces: &[Face],
+    path: &[Frame3D],
+    frame: &Frame3D,
+    exact_constraints: &[(FaceId, FaceId)],
+) -> Result<SurfaceOrder, String> {
+    let seed_order = geometric_seed_order(cp, faces)?;
+    validate_order(faces, frame, &seed_order)?;
+    for approach in path {
+        validate_order(faces, approach, &seed_order)?;
+    }
+    let path = if path_approaches_endpoint(path, frame) {
+        path
+    } else {
+        &[]
+    };
+    let approach_constraints = nearest_path_overlap_constraints(cp, faces, path)?;
+    derive_surface_order_from_current_depths_with_approach_constraints(
+        cp,
+        faces,
+        frame,
+        exact_constraints,
+        &approach_constraints,
+        false,
+        None,
+    )
+}
+
 /// replayの実current-step経路を使い、前endpointの重なり制約で同深度対だけを補う。
 pub(crate) fn derive_surface_order_from_frame_path_with_previous(
     cp: &CreasePattern,
@@ -360,6 +775,48 @@ pub(crate) fn derive_surface_order_from_frame_path_with_previous(
     exact_constraints: &[(FaceId, FaceId)],
     previous: Option<&SurfaceOrderProvenance>,
 ) -> Result<SurfaceOrder, String> {
+    derive_surface_order_from_frame_path_with_priority(SurfaceOrderPathInput {
+        cp,
+        faces,
+        path,
+        exact_frame,
+        exact_constraints,
+        previous,
+        exact_constraints_after_depth: false,
+        require_coplanar: true,
+        sample_only_path_overlaps: false,
+        returned_depth_after_exact: false,
+    })
+}
+
+struct SurfaceOrderPathInput<'a> {
+    cp: &'a CreasePattern,
+    faces: &'a [Face],
+    path: &'a [Frame3D],
+    exact_frame: &'a Frame3D,
+    exact_constraints: &'a [(FaceId, FaceId)],
+    previous: Option<&'a SurfaceOrderProvenance>,
+    exact_constraints_after_depth: bool,
+    require_coplanar: bool,
+    sample_only_path_overlaps: bool,
+    returned_depth_after_exact: bool,
+}
+
+fn derive_surface_order_from_frame_path_with_priority(
+    input: SurfaceOrderPathInput<'_>,
+) -> Result<SurfaceOrder, String> {
+    let SurfaceOrderPathInput {
+        cp,
+        faces,
+        path,
+        exact_frame,
+        exact_constraints,
+        previous,
+        exact_constraints_after_depth,
+        require_coplanar,
+        sample_only_path_overlaps,
+        returned_depth_after_exact,
+    } = input;
     let seed_order = geometric_seed_order(cp, faces)?;
     validate_order(faces, exact_frame, &seed_order)?;
     for frame in path {
@@ -372,6 +829,17 @@ pub(crate) fn derive_surface_order_from_frame_path_with_previous(
     } else {
         &[]
     };
+    let approach_constraints = if exact_constraints_after_depth {
+        nearest_path_overlap_constraints(cp, faces, path)?
+    } else {
+        Vec::new()
+    };
+    let sampled_pairs = sample_only_path_overlaps.then(|| {
+        approach_constraints
+            .iter()
+            .map(|&(below, above)| unordered_face_pair(below, above))
+            .collect::<BTreeSet<_>>()
+    });
     let exact_faces = exact_frame
         .faces
         .iter()
@@ -394,8 +862,14 @@ pub(crate) fn derive_surface_order_from_frame_path_with_previous(
         DeriveSurfaceOptions {
             exact_constraints,
             previous,
-            require_coplanar: true,
+            direct_evidence: None,
+            approach_constraints: &approach_constraints,
+            sampled_pairs: sampled_pairs.as_ref(),
+            exact_constraints_after_depth,
+            returned_depth_after_exact,
+            require_coplanar,
             sample_count: path.len(),
+            returned_geometry_sample: None,
         },
         |sample, face, point, normal| {
             approached_frame_height(face, point, normal, &path_faces[sample], &exact_faces)
@@ -406,8 +880,18 @@ pub(crate) fn derive_surface_order_from_frame_path_with_previous(
 struct DeriveSurfaceOptions<'a> {
     exact_constraints: &'a [(FaceId, FaceId)],
     previous: Option<&'a SurfaceOrderProvenance>,
+    direct_evidence: Option<&'a DirectSurfaceDepthEvidence>,
+    approach_constraints: &'a [(FaceId, FaceId)],
+    /// 経路でも正面積を持ち、直接depthを測れた面対だけにsampleを限定する。
+    sampled_pairs: Option<&'a BTreeSet<(FaceId, FaceId)>>,
+    /// `true`なら返却Frameの直接depthを先にDAG化し、exactは未決定部分だけ補う。
+    exact_constraints_after_depth: bool,
+    /// pathとexactでも未比較の正面積対を、最後に返却Frame自身のdepthで補う。
+    returned_depth_after_exact: bool,
     require_coplanar: bool,
     sample_count: usize,
+    /// 返却polygon自身を測るsample。深度符号が混在したら別姿勢へ戻らない。
+    returned_geometry_sample: Option<usize>,
 }
 
 fn derive_surface_order_with(
@@ -420,39 +904,20 @@ fn derive_surface_order_with(
     let DeriveSurfaceOptions {
         exact_constraints,
         previous,
+        direct_evidence,
+        approach_constraints,
+        sampled_pairs,
+        exact_constraints_after_depth,
+        returned_depth_after_exact,
         require_coplanar,
         sample_count,
+        returned_geometry_sample,
     } = options;
-    let frame_faces = exact_frame
-        .faces
-        .iter()
-        .map(|face| (face.face, face))
-        .collect::<HashMap<_, _>>();
     // Each face participates in up to F-1 comparisons. Its normal, local plane,
     // and projection onto that plane do not depend on the other face.
-    let geometries = faces
-        .iter()
-        .map(|face| {
-            let polygon = frame_faces[&face.id]
-                .polygon
-                .iter()
-                .copied()
-                .map(DVec3::from)
-                .collect::<Vec<_>>();
-            let plane = face_plane(&polygon);
-            let projected = plane.map(|plane| project_polygon(&polygon, plane));
-            FaceGeometry {
-                id: face.id,
-                plane,
-                projected,
-                normal: polygon_normal(&polygon),
-                polygon,
-            }
-        })
-        .collect::<Vec<_>>();
-    // 折り目の向きが決める厳密な上下を先に入れる。深度の差は丸めで壊れ得るが、
-    // 折り目の向きは壊れない。あとから来る深度由来の制約がこれと食い違ったら、
-    // 深度側を捨てる(下の `dropped_depth_constraints`)。
+    let geometries = frame_geometries(faces, exact_frame);
+    // 通常経路は折り目の向きが決める厳密な上下を先に入れる。返却Frameの直接depthを
+    // 正本にする専用経路だけは空DAGから始め、exact辺を後で未決定部分へ補う。
     let known_faces = faces.iter().map(|face| face.id).collect::<BTreeSet<_>>();
     let exact_pairs = exact_constraints
         .iter()
@@ -461,14 +926,90 @@ fn derive_surface_order_with(
             below != above && known_faces.contains(below) && known_faces.contains(above)
         })
         .collect::<BTreeSet<(FaceId, FaceId)>>();
-    let mut constraints = exact_pairs.clone();
+    let mut constraints = if exact_constraints_after_depth {
+        BTreeSet::new()
+    } else {
+        exact_pairs.clone()
+    };
     // 大きな完全平坦stackでは全深度が同値なので、閉包は実際に有限な深度制約を
     // 1本でも得た場合だけ作る。400面のexact-only経路へ不要なO(F^3/word)を足さない。
     let mut accepted_constraints = None;
     let mut dropped_depth_constraints = 0_usize;
     let mut sampled_depth_constraints = 0_usize;
+    let mut positive_overlap_depth_constraints = 0_usize;
+    let mut imported_depth_constraints = 0_usize;
+    let mut accepted_approach_depth_constraints = 0_usize;
     let mut skipped_pairs = 0_usize;
     let mut overlap_pairs = BTreeSet::new();
+    let mut positive_overlap_witnesses = Vec::new();
+    let direct_evidence_pairs = direct_evidence
+        .into_iter()
+        .flat_map(|evidence| evidence.constraints.iter().copied())
+        .map(|(below, above)| unordered_face_pair(below, above))
+        .collect::<BTreeSet<_>>();
+    let direct_evidence_domain = direct_evidence.map(|evidence| evidence.domain);
+    let mut evidence_endpoint_pairs = BTreeSet::new();
+    let mut tangent_depth_constraints = BTreeSet::new();
+
+    // opaqueな実Frameのdirect evidenceは、完全平坦endpointの残差より先に置く。
+    // 現endpointでも同じ投影領域にある対だけを選び、bundleがDAGのときだけ全採用する。
+    for left_index in 0..faces.len() {
+        for right_index in left_index + 1..faces.len() {
+            let left_geometry = &geometries[left_index];
+            let right_geometry = &geometries[right_index];
+            let pair = unordered_face_pair(left_geometry.id, right_geometry.id);
+            if !direct_evidence_pairs.contains(&pair) {
+                continue;
+            }
+            let Some(endpoint_plane) = left_geometry.plane else {
+                continue;
+            };
+            let left_2d = left_geometry
+                .projected
+                .as_deref()
+                .expect("a face plane always has a projection");
+            let right_2d = project_polygon(&right_geometry.polygon, endpoint_plane);
+            let eligible = projected_bounds_overlap(left_2d, &right_2d)
+                && match direct_evidence_domain {
+                    Some(DirectSurfaceDepthDomain::PositiveProjection) => {
+                        display_overlap_witness(left_2d, &right_2d).is_some()
+                    }
+                    Some(DirectSurfaceDepthDomain::EndpointProjection) => {
+                        display_overlap_witness(left_2d, &right_2d).is_some()
+                            || (overlap_witnesses(left_2d, &right_2d)
+                                .is_ok_and(|witnesses| witnesses.is_empty())
+                                && boundary_overlap_witnesses(left_2d, &right_2d)
+                                    .is_ok_and(|witnesses| !witnesses.is_empty()))
+                    }
+                    None => false,
+                };
+            if eligible {
+                evidence_endpoint_pairs.insert(pair);
+            }
+        }
+    }
+    if let Some(evidence) = direct_evidence {
+        let imported = evidence
+            .constraints
+            .iter()
+            .copied()
+            .filter(|&(below, above)| {
+                below != above
+                    && known_faces.contains(&below)
+                    && known_faces.contains(&above)
+                    && evidence_endpoint_pairs.contains(&unordered_face_pair(below, above))
+            })
+            .collect::<BTreeSet<_>>();
+        if !imported.is_empty() {
+            let mut trial = constraints.clone();
+            trial.extend(imported.iter().copied());
+            let (_, broken) = stable_topological_order(previous_order, &trial);
+            if broken == 0 {
+                imported_depth_constraints = imported.len();
+                constraints = trial;
+            }
+        }
+    }
 
     for left_index in 0..faces.len() {
         for right_index in left_index + 1..faces.len() {
@@ -498,9 +1039,32 @@ fn derive_surface_order_with(
                 continue;
             };
             if witnesses.is_empty() {
+                // endpointで投影AABBは接する一方、正面積だけが0へ縮退した対は、同じ
+                // 返却polygonの全頂点signed depthから向きを決める。edge 297/-1では
+                // -5.960e-7..-1.017e-6、1 ULP入力でも -5.748e-8..-9.813e-8で、
+                // 既存DEPTH_ORDER_EPS=1e-12に対して最小5.7万倍以上の余裕がある。
+                let (minimum, maximum) = right_geometry.polygon.iter().fold(
+                    (f64::INFINITY, f64::NEG_INFINITY),
+                    |(minimum, maximum), &point| {
+                        let depth = plane.normal.dot(point - plane.origin);
+                        (minimum.min(depth), maximum.max(depth))
+                    },
+                );
+                if maximum < -DEPTH_ORDER_EPS {
+                    tangent_depth_constraints.insert((right, left));
+                } else if minimum > DEPTH_ORDER_EPS {
+                    tangent_depth_constraints.insert((left, right));
+                }
                 continue;
             }
             overlap_pairs.insert((left, right));
+            if returned_depth_after_exact {
+                positive_overlap_witnesses.push((left_index, right_index, witnesses.clone()));
+            }
+            if sampled_pairs.is_some_and(|pairs| !pairs.contains(&unordered_face_pair(left, right)))
+            {
+                continue;
+            }
             let mut sampling_failed = false;
             for sample in (0..sample_count).rev() {
                 let mut left_above = false;
@@ -521,9 +1085,17 @@ fn derive_surface_order_with(
                 if sampling_failed {
                     break;
                 }
-                // 同じ深度なら、経路上の1つ前の姿勢まで戻る。1つの面対が重なり領域内で
-                // 交差する点では面単位rankを決めず、さらに前の非交差姿勢を探す。
-                if left_above == right_above {
+                // 全witnessが同じ深度なら、経路上の1つ前の姿勢まで戻る。
+                if !left_above && !right_above {
+                    continue;
+                }
+                // 同じ面対の重なり領域内で上下が混在する返却polygonには、面単位rankが
+                // 存在しない。別姿勢の一方向depthで返却geometryを上書きせず、この対は
+                // 未解決のまま残す。途中姿勢の混在だけは従来どおりさらに前へ戻る。
+                if left_above && right_above {
+                    if returned_geometry_sample == Some(sample) {
+                        break;
+                    }
                     continue;
                 }
                 let depth_constraint = if left_above {
@@ -538,12 +1110,18 @@ fn derive_surface_order_with(
                     // 丸めでは壊れないが、経路上の深度差は丸めや、経路を作れなかった
                     // 中間形で壊れる。既に採用した幾何制約を残し、深度由来のこの1件だけを
                     // 捨てる。直接の逆辺だけを見ると長いexact chainへ循環を作ってしまう。
-                    dropped_depth_constraints += 1;
+                    if !evidence_endpoint_pairs.contains(&unordered_face_pair(left, right)) {
+                        dropped_depth_constraints += 1;
+                    }
                 } else {
                     // loop endpointのauthorityは、exactと両立して実際に採用できた
                     // 経路深度が少なくとも1本ある場合だけ発行する。捨てた逆向き
                     // sampleを「経路を測れた」証拠へ数えない。
                     sampled_depth_constraints += 1;
+                    positive_overlap_depth_constraints += 1;
+                    if returned_geometry_sample.is_some_and(|returned| sample != returned) {
+                        accepted_approach_depth_constraints += 1;
+                    }
                     if !accepted_constraints.reaches(depth_constraint.0, depth_constraint.1) {
                         constraints.insert(depth_constraint);
                         accepted_constraints.insert(depth_constraint.0, depth_constraint.1);
@@ -557,6 +1135,167 @@ fn derive_surface_order_with(
         }
     }
 
+    // tangent対はendpoint自身の直接depthを正本にする。完全同深度で向きが無い場合だけ、
+    // 経路上で正面積だった同じ対の直近向きへ戻る。経路のtotal order/rankは転記せず、
+    // tangent対をpositive-overlap/complete/provenanceの母集団にも加えない。
+    let geometry_by_face = geometries
+        .iter()
+        .map(|geometry| (geometry.id, geometry))
+        .collect::<HashMap<_, _>>();
+    let mut approach_depth_constraints = BTreeSet::new();
+    for &(approach_below, approach_above) in approach_constraints {
+        let (left, right) = unordered_face_pair(approach_below, approach_above);
+        if overlap_pairs.contains(&(left, right)) || overlap_pairs.contains(&(right, left)) {
+            continue;
+        }
+        let (Some(left_geometry), Some(right_geometry)) =
+            (geometry_by_face.get(&left), geometry_by_face.get(&right))
+        else {
+            continue;
+        };
+        let Some(plane) = common_plane(left_geometry, right_geometry, false) else {
+            continue;
+        };
+        let left_2d = project_polygon(&left_geometry.polygon, plane);
+        let right_2d = project_polygon(&right_geometry.polygon, plane);
+        if !projected_bounds_overlap(&left_2d, &right_2d) {
+            continue;
+        }
+        let Ok(witnesses) = overlap_witnesses(&left_2d, &right_2d) else {
+            continue;
+        };
+        if !witnesses.is_empty() {
+            continue;
+        }
+        let (minimum, maximum) = right_geometry.polygon.iter().fold(
+            (f64::INFINITY, f64::NEG_INFINITY),
+            |(minimum, maximum), &point| {
+                let depth = plane.normal.dot(point - plane.origin);
+                (minimum.min(depth), maximum.max(depth))
+            },
+        );
+        let constraint = if maximum < -DEPTH_ORDER_EPS {
+            Some((right, left))
+        } else if minimum > DEPTH_ORDER_EPS {
+            Some((left, right))
+        } else if minimum >= -DEPTH_ORDER_EPS && maximum <= DEPTH_ORDER_EPS {
+            Some((approach_below, approach_above))
+        } else {
+            None
+        };
+        if let Some(constraint) = constraint {
+            approach_depth_constraints.insert(constraint);
+        }
+    }
+    if !approach_depth_constraints.is_empty() {
+        let mut closure = ConstraintClosure::new(&known_faces, &constraints);
+        for (below, above) in approach_depth_constraints {
+            if closure.reaches(above, below) {
+                dropped_depth_constraints += 1;
+                continue;
+            }
+            sampled_depth_constraints += 1;
+            accepted_approach_depth_constraints += 1;
+            if !closure.reaches(below, above) {
+                constraints.insert((below, above));
+                closure.insert(below, above);
+            }
+        }
+    }
+    if exact_constraints_after_depth && !exact_pairs.is_empty() {
+        // 経路で直接測れた上下は先に残す。exact閉包は、正面積overlapのうち
+        // 実深度で未決定の対だけへ圧縮して追加する。
+        // 非overlap対のtotal-order tieへexact辺を足さず、面積0へ縮退した対を動かさない。
+        let mut closure = ConstraintClosure::new(&known_faces, &constraints);
+        let exact_closure = ConstraintClosure::new(&known_faces, &exact_pairs);
+        for &(left, right) in &overlap_pairs {
+            if closure.reaches(left, right) || closure.reaches(right, left) {
+                continue;
+            }
+            let constraint = match (
+                exact_closure.reaches(left, right),
+                exact_closure.reaches(right, left),
+            ) {
+                (true, false) => Some((left, right)),
+                (false, true) => Some((right, left)),
+                _ => None,
+            };
+            let Some((below, above)) = constraint else {
+                continue;
+            };
+            constraints.insert((below, above));
+            closure.insert(below, above);
+        }
+    }
+    // endpoint自身で向きが決まるtangent対は、positive-area depthとexact closureの
+    // どちらでも未比較のtieだけを埋める。既存制約と逆なら低優先のtangent側を静かに
+    // 捨て、dropped depthやprovenanceへは数えない。
+    if !tangent_depth_constraints.is_empty() {
+        let mut closure = ConstraintClosure::new(&known_faces, &constraints);
+        for (below, above) in tangent_depth_constraints {
+            if closure.reaches(below, above) || closure.reaches(above, below) {
+                continue;
+            }
+            constraints.insert((below, above));
+            closure.insert(below, above);
+        }
+    }
+    if returned_depth_after_exact {
+        // 経路とexact closureのどちらでも未比較のendpoint正面積対だけ、返却Frame自身の
+        // witness depthで補う。folded-sample edge169/-1では経路実測4対とexact closureを
+        // 合成した後に未解決なのは1対だけであり、既に決まった(4,6)へ端点solveの逆残差
+        // (-5.285e-5..-1.871e-5)を再挿入しない。許容値は既存DEPTH_ORDER_EPSだけを使う。
+        let exact_faces = exact_frame
+            .faces
+            .iter()
+            .map(|face| (face.face, face))
+            .collect::<HashMap<_, _>>();
+        let mut closure = ConstraintClosure::new(&known_faces, &constraints);
+        for (left_index, right_index, witnesses) in positive_overlap_witnesses {
+            let left_geometry = &geometries[left_index];
+            let right_geometry = &geometries[right_index];
+            let left = left_geometry.id;
+            let right = right_geometry.id;
+            if closure.reaches(left, right) || closure.reaches(right, left) {
+                continue;
+            }
+            let Some(plane) = common_plane(left_geometry, right_geometry, require_coplanar) else {
+                continue;
+            };
+            let mut left_above = false;
+            let mut right_above = false;
+            let mut sampling_failed = false;
+            for witness in witnesses {
+                let point = plane.origin + plane.u * witness.x + plane.v * witness.y;
+                let (Ok(left_height), Ok(right_height)) = (
+                    approached_frame_height(left, point, plane.normal, &exact_faces, &exact_faces),
+                    approached_frame_height(right, point, plane.normal, &exact_faces, &exact_faces),
+                ) else {
+                    sampling_failed = true;
+                    break;
+                };
+                let difference = left_height - right_height;
+                left_above |= difference > DEPTH_ORDER_EPS;
+                right_above |= difference < -DEPTH_ORDER_EPS;
+            }
+            if sampling_failed || left_above == right_above {
+                continue;
+            }
+            let depth_constraint = if left_above {
+                (right, left)
+            } else {
+                (left, right)
+            };
+            if closure.reaches(depth_constraint.1, depth_constraint.0) {
+                continue;
+            }
+            sampled_depth_constraints += 1;
+            if !closure.reaches(depth_constraint.0, depth_constraint.1) {
+                constraints.insert(depth_constraint);
+                closure.insert(depth_constraint.0, depth_constraint.1);
+            }
+        }
+    }
     if let Some(previous) = previous {
         merge_previous_overlap_constraints(&mut constraints, &overlap_pairs, previous);
     }
@@ -591,18 +1330,24 @@ fn derive_surface_order_with(
             constraints: Vec::new(),
         }
     };
-    Ok(SurfaceOrder {
+    let derived = SurfaceOrder {
         order,
         resolved_overlaps,
         exact_resolved_overlaps,
         sampled_depth_constraints,
+        positive_overlap_depth_constraints,
+        approach_depth_constraints: accepted_approach_depth_constraints,
+        imported_depth_constraints,
         unresolved_overlaps,
         skipped_pairs,
         broken_constraints,
         dropped_depth_constraints,
         complete,
         provenance,
-    })
+        constraints,
+        positive_overlap_pairs: overlap_pairs,
+    };
+    Ok(derived)
 }
 
 /// 全面を一度ずつ含む下→上順を `surface_rank` へ刻印する。
@@ -636,8 +1381,8 @@ pub fn stamp_surface_order(frame: &mut Frame3D, order: &[FaceId]) -> Result<(), 
     Ok(())
 }
 
-/// このmodule内で実行したgenuine `solve_motion` からだけ作れるsurface順の証明。
-/// private fieldなので、公開boolや任意rankからopaque provenanceを組み立てられない。
+/// このmodule内のfail-closedな認証入口からだけ作れるcompleteなsurface順の証明。
+/// private fieldなので、公開boolや任意rankからopaque provenanceを直接組み立てられない。
 pub struct AuthoritativeSurfaceOrder {
     frame: Frame3D,
     order: Vec<FaceId>,
@@ -654,6 +1399,258 @@ impl AuthoritativeSurfaceOrder {
     pub fn into_parts(self) -> (Frame3D, Vec<FaceId>, SurfaceOrderProvenance) {
         (self.frame, self.order, self.provenance)
     }
+}
+
+/// 独立に検証されたoperation順を、指定された終点形状のsurface順として認証する。
+///
+/// 成功時は終点形状を複製し、`verified_operation_order`（下から上）の順位だけを
+/// `surface_rank` へ刻印する。provenanceには、この終点で正面積を持って重なる
+/// 面対だけが含まれる。
+///
+/// # Caller contract
+///
+/// `verified_operation_order` は、crease pattern、直前のflat state、支持線から
+/// operationを独立再実行し、`mandatory_constraints`の全てを満たすと検証された明示的な
+/// operation oracleでなければならない。候補order自身の隣接列を物理制約へ変換しては
+/// ならない。呼び手が独立検証できないfallback順を直接渡してはならない。
+pub fn certify_verified_operation_surface_order(
+    cp: &CreasePattern,
+    faces: &[Face],
+    endpoint_frame: &Frame3D,
+    verified_operation_order: &[FaceId],
+    mandatory_constraints: &[(FaceId, FaceId)],
+) -> Result<AuthoritativeSurfaceOrder, String> {
+    validate_verified_operation_surface_order_inputs(
+        faces,
+        endpoint_frame,
+        verified_operation_order,
+    )?;
+
+    let known_faces = faces.iter().map(|face| face.id).collect::<BTreeSet<_>>();
+    if let Some(&(below, above)) = mandatory_constraints.iter().find(|&&(below, above)| {
+        below == above || !known_faces.contains(&below) || !known_faces.contains(&above)
+    }) {
+        return Err(format!(
+            "cannot certify verified operation surface order: mandatory constraint ({below}, {above}) does not name two distinct material faces"
+        ));
+    }
+    let derived =
+        derive_surface_order_from_current_depths(cp, faces, endpoint_frame, mandatory_constraints)
+            .map_err(|error| {
+                format!(
+                    "cannot certify verified operation surface order: derivation failed: {error}"
+                )
+            })?;
+
+    if derived.dropped_depth_constraints != 0 {
+        return Err(format!(
+            "cannot certify verified operation surface order: dropped_depth_constraints={} (the mandatory operation constraints disagree with measured endpoint depth)",
+            derived.dropped_depth_constraints
+        ));
+    }
+    if derived.complete && derived.order == verified_operation_order {
+        return finalize_verified_operation_surface_order(
+            endpoint_frame,
+            verified_operation_order,
+            derived,
+        );
+    }
+    finalize_explicit_operation_surface_order(endpoint_frame, verified_operation_order, derived)
+}
+
+/// 独立一般制約が決めないtieを、検証済みの明示operation oracleで埋める。
+///
+/// `SurfaceOrder::order`は一般制約の一linear extensionにすぎないので比較しない。
+/// 代わりに、明示oracleが独立に採用された全制約を満たすことを直接検査する。
+fn finalize_explicit_operation_surface_order(
+    endpoint_frame: &Frame3D,
+    verified_operation_order: &[FaceId],
+    derived: SurfaceOrder,
+) -> Result<AuthoritativeSurfaceOrder, String> {
+    if derived.skipped_pairs != 0 {
+        return Err(format!(
+            "cannot certify verified operation surface order: skipped_pairs={} (all overlap comparisons must be measurable before applying an explicit oracle)",
+            derived.skipped_pairs
+        ));
+    }
+    if derived.broken_constraints != 0 {
+        return Err(format!(
+            "cannot certify verified operation surface order: broken_constraints={} (the mandatory order constraints are cyclic or inconsistent)",
+            derived.broken_constraints
+        ));
+    }
+    let ranks = verified_operation_order
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(rank, face)| (face, rank))
+        .collect::<HashMap<_, _>>();
+    if let Some(&(below, above)) = derived
+        .constraints
+        .iter()
+        .find(|&&(below, above)| ranks[&below] >= ranks[&above])
+    {
+        return Err(format!(
+            "cannot certify verified operation surface order: explicit operation oracle violates mandatory constraint ({below}, {above})"
+        ));
+    }
+
+    let provenance =
+        provenance_from_overlap_order(&derived.positive_overlap_pairs, verified_operation_order);
+    let mut frame = endpoint_frame.clone();
+    stamp_surface_order(&mut frame, verified_operation_order).map_err(|error| {
+        format!("cannot certify verified operation surface order: rank stamping failed: {error}")
+    })?;
+    Ok(AuthoritativeSurfaceOrder {
+        frame,
+        order: verified_operation_order.to_vec(),
+        provenance,
+    })
+}
+
+fn duplicate_face_ids(ids: impl IntoIterator<Item = FaceId>) -> Vec<FaceId> {
+    let mut counts = BTreeMap::<FaceId, usize>::new();
+    for id in ids {
+        *counts.entry(id).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .filter_map(|(id, count)| (count > 1).then_some(id))
+        .collect()
+}
+
+fn validate_verified_operation_surface_order_inputs(
+    faces: &[Face],
+    endpoint_frame: &Frame3D,
+    verified_operation_order: &[FaceId],
+) -> Result<(), String> {
+    let material_duplicates = duplicate_face_ids(faces.iter().map(|face| face.id));
+    if !material_duplicates.is_empty() {
+        return Err(format!(
+            "cannot certify verified operation surface order: material faces contain duplicate ids {material_duplicates:?}"
+        ));
+    }
+
+    let endpoint_duplicates = duplicate_face_ids(endpoint_frame.faces.iter().map(|face| face.face));
+    if !endpoint_duplicates.is_empty() {
+        return Err(format!(
+            "cannot certify verified operation surface order: endpoint frame contains duplicate face ids {endpoint_duplicates:?}"
+        ));
+    }
+
+    let material_ids = faces.iter().map(|face| face.id).collect::<BTreeSet<_>>();
+    let endpoint_ids = endpoint_frame
+        .faces
+        .iter()
+        .map(|face| face.face)
+        .collect::<BTreeSet<_>>();
+    if material_ids != endpoint_ids {
+        let missing = material_ids
+            .difference(&endpoint_ids)
+            .copied()
+            .collect::<Vec<_>>();
+        let unexpected = endpoint_ids
+            .difference(&material_ids)
+            .copied()
+            .collect::<Vec<_>>();
+        return Err(format!(
+            "cannot certify verified operation surface order: endpoint face set differs from material faces (missing {missing:?}, unexpected {unexpected:?})"
+        ));
+    }
+
+    for face in &endpoint_frame.faces {
+        for (vertex_index, point) in face.polygon.iter().enumerate() {
+            if !point.iter().all(|coordinate| coordinate.is_finite()) {
+                return Err(format!(
+                    "cannot certify verified operation surface order: endpoint face {} polygon vertex {vertex_index} contains a non-finite coordinate",
+                    face.face
+                ));
+            }
+        }
+    }
+
+    let operation_ids = verified_operation_order
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let duplicates = duplicate_face_ids(verified_operation_order.iter().copied());
+    let missing = material_ids
+        .difference(&operation_ids)
+        .copied()
+        .collect::<Vec<_>>();
+    let unexpected = operation_ids
+        .difference(&material_ids)
+        .copied()
+        .collect::<Vec<_>>();
+    if verified_operation_order.len() != faces.len()
+        || !duplicates.is_empty()
+        || !missing.is_empty()
+        || !unexpected.is_empty()
+    {
+        return Err(format!(
+            "cannot certify verified operation surface order: verified operation order is not a complete face permutation (expected {} faces, got {}, duplicates {duplicates:?}, missing {missing:?}, unexpected {unexpected:?})",
+            faces.len(),
+            verified_operation_order.len()
+        ));
+    }
+
+    Ok(())
+}
+
+fn finalize_verified_operation_surface_order(
+    endpoint_frame: &Frame3D,
+    verified_operation_order: &[FaceId],
+    derived: SurfaceOrder,
+) -> Result<AuthoritativeSurfaceOrder, String> {
+    if derived.skipped_pairs != 0 {
+        return Err(format!(
+            "cannot certify verified operation surface order: skipped_pairs={} (all overlap comparisons must resolve)",
+            derived.skipped_pairs
+        ));
+    }
+    if derived.unresolved_overlaps != 0 {
+        return Err(format!(
+            "cannot certify verified operation surface order: unresolved_overlaps={} (all positive-area overlaps need an order)",
+            derived.unresolved_overlaps
+        ));
+    }
+    if derived.broken_constraints != 0 {
+        return Err(format!(
+            "cannot certify verified operation surface order: broken_constraints={} (the order constraints are cyclic or inconsistent)",
+            derived.broken_constraints
+        ));
+    }
+    if !derived.complete {
+        return Err(
+            "cannot certify verified operation surface order: derived surface order is not complete"
+                .to_string(),
+        );
+    }
+    if derived.order != verified_operation_order {
+        let mismatch_rank = derived
+            .order
+            .iter()
+            .zip(verified_operation_order)
+            .position(|(derived, verified)| derived != verified)
+            .unwrap_or_else(|| derived.order.len().min(verified_operation_order.len()));
+        return Err(format!(
+            "cannot certify verified operation surface order: derived order does not match the verified operation order at rank {mismatch_rank} (derived {:?}, verified {:?}; lengths {} and {})",
+            derived.order.get(mismatch_rank),
+            verified_operation_order.get(mismatch_rank),
+            derived.order.len(),
+            verified_operation_order.len()
+        ));
+    }
+
+    let mut frame = endpoint_frame.clone();
+    stamp_surface_order(&mut frame, verified_operation_order).map_err(|error| {
+        format!("cannot certify verified operation surface order: rank stamping failed: {error}")
+    })?;
+    Ok(AuthoritativeSurfaceOrder {
+        frame,
+        order: verified_operation_order.to_vec(),
+        provenance: derived.provenance,
+    })
 }
 
 /// 同じ終点角をwarmにした既存motion canonical pathがcompleteな場合だけ、次手順へ
@@ -971,6 +1968,131 @@ fn overlap_witnesses(left: &[DVec2], right: &[DVec2]) -> Result<Vec<DVec2>, Stri
                     .copied()
                     .map(|point| (point + center) * 0.5),
             );
+        }
+    }
+    Ok(witnesses)
+}
+
+/// 返却polygonを表示面へ分ける耳切りと同じ、slitを途中まで切れた場合のfan fallback。
+/// 面の巻きが反転した姿勢でも各triangleだけは反時計回りへそろえる。
+fn display_triangles(points: &[DVec2]) -> Vec<[DVec2; 3]> {
+    let oriented = |a: usize, b: usize, c: usize| {
+        if (points[b] - points[a]).perp_dot(points[c] - points[a]) < 0.0 {
+            [points[a], points[c], points[b]]
+        } else {
+            [points[a], points[b], points[c]]
+        }
+    };
+    let mut remaining = (0..points.len()).collect::<Vec<_>>();
+    let mut triangles = Vec::with_capacity(points.len().saturating_sub(2));
+    while remaining.len() > 3 {
+        let count = remaining.len();
+        let Some(ear) = (0..count).find(|&index| {
+            let a = remaining[(index + count - 1) % count];
+            let b = remaining[index];
+            let c = remaining[(index + 1) % count];
+            let ab = points[b] - points[a];
+            let bc = points[c] - points[b];
+            if ab.perp_dot(bc) <= 0.0 {
+                return false;
+            }
+            !remaining.iter().copied().any(|other| {
+                other != a
+                    && other != b
+                    && other != c
+                    && (points[b] - points[a]).perp_dot(points[other] - points[a]) >= 0.0
+                    && (points[c] - points[b]).perp_dot(points[other] - points[b]) >= 0.0
+                    && (points[a] - points[c]).perp_dot(points[other] - points[c]) >= 0.0
+            })
+        }) else {
+            break;
+        };
+        triangles.push(oriented(
+            remaining[(ear + count - 1) % count],
+            remaining[ear],
+            remaining[(ear + 1) % count],
+        ));
+        remaining.remove(ear);
+    }
+    for index in 1..remaining.len().saturating_sub(1) {
+        triangles.push(oriented(
+            remaining[0],
+            remaining[index],
+            remaining[index + 1],
+        ));
+    }
+    triangles
+}
+
+fn display_overlap_witness(left: &[DVec2], right: &[DVec2]) -> Option<DVec2> {
+    let mut best = None;
+    for left_triangle in display_triangles(left) {
+        for right_triangle in display_triangles(right) {
+            let intersection = clip_display_triangles(&left_triangle, &right_triangle);
+            let area = polygon_area(&intersection).abs();
+            if area <= OVERLAP_AREA_EPS {
+                continue;
+            }
+            let center = intersection.iter().copied().sum::<DVec2>() / intersection.len() as f64;
+            if best.is_none_or(|(best_area, _)| area > best_area) {
+                best = Some((area, center));
+            }
+        }
+    }
+    best.map(|(_, center)| center)
+}
+
+fn clip_display_triangles(subject: &[DVec2], clip: &[DVec2]) -> Vec<DVec2> {
+    let mut output = subject.to_vec();
+    let winding = if polygon_area(clip) < 0.0 { -1.0 } else { 1.0 };
+    for index in 0..clip.len() {
+        let clip_start = clip[index];
+        let clip_end = clip[(index + 1) % clip.len()];
+        let input = std::mem::take(&mut output);
+        let Some(mut previous) = input.last().copied() else {
+            break;
+        };
+        let mut previous_side = (clip_end - clip_start).perp_dot(previous - clip_start) * winding;
+        for current in input {
+            let current_side = (clip_end - clip_start).perp_dot(current - clip_start) * winding;
+            if (previous_side >= 0.0) != (current_side >= 0.0) {
+                let denominator = previous_side - current_side;
+                if denominator.abs() > EPS * EPS {
+                    output.push(previous + (current - previous) * (previous_side / denominator));
+                }
+            }
+            if current_side >= 0.0 {
+                output.push(current);
+            }
+            previous = current;
+            previous_side = current_side;
+        }
+    }
+    output
+}
+
+/// 正面積が0へ縮退した投影交差の、線分端点または接点。
+///
+/// clippingと重複除去には正面積判定と同じ既存`EPS`を使い、新しい境目は作らない。
+fn boundary_overlap_witnesses(left: &[DVec2], right: &[DVec2]) -> Result<Vec<DVec2>, String> {
+    let left_triangles = triangulate_polygon(left)?;
+    let right_triangles = triangulate_polygon(right)?;
+    let mut witnesses = Vec::new();
+    for left_triangle in &left_triangles {
+        for right_triangle in &right_triangles {
+            let intersection = intersect_convex_polygons(left_triangle, right_triangle);
+            if polygon_area(&intersection).abs() > OVERLAP_AREA_EPS {
+                continue;
+            }
+            for point in intersection {
+                if point.is_finite()
+                    && witnesses
+                        .iter()
+                        .all(|previous: &DVec2| (*previous - point).length() > EPS)
+                {
+                    witnesses.push(point);
+                }
+            }
         }
     }
     Ok(witnesses)
@@ -1355,6 +2477,105 @@ mod tests {
         }
     }
 
+    fn overlapping_pair_fixture() -> (CreasePattern, Vec<Face>) {
+        let cp = material_cp(&[
+            (0, [0.0, 0.0]),
+            (1, [1.0, 0.0]),
+            (2, [0.0, 1.0]),
+            (3, [2.0, 0.0]),
+            (4, [3.0, 0.0]),
+            (5, [2.0, 1.0]),
+        ]);
+        let faces = vec![face(10, &[0, 1, 2]), face(20, &[3, 4, 5])];
+        (cp, faces)
+    }
+
+    fn overlapping_pair_frame(right_depths: [f64; 3]) -> Frame3D {
+        Frame3D {
+            faces: vec![
+                Face3D {
+                    face: 10,
+                    polygon: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                    layer: 0,
+                    surface_rank: 0,
+                    mirrored: false,
+                },
+                Face3D {
+                    face: 20,
+                    polygon: vec![
+                        [0.0, 0.0, right_depths[0]],
+                        [1.0, 0.0, right_depths[1]],
+                        [0.0, 1.0, right_depths[2]],
+                    ],
+                    layer: 0,
+                    surface_rank: 0,
+                    mirrored: false,
+                },
+            ],
+            warnings: Vec::new(),
+        }
+    }
+
+    fn certification_fixture() -> (CreasePattern, Vec<Face>, Frame3D, Vec<FaceId>) {
+        let cp = material_cp(&[
+            (0, [0.0, 0.0]),
+            (1, [1.0, 0.0]),
+            (2, [0.0, 1.0]),
+            (3, [2.0, 0.0]),
+            (4, [3.0, 0.0]),
+            (5, [2.0, 1.0]),
+            (6, [4.0, 0.0]),
+            (7, [5.0, 0.0]),
+            (8, [4.0, 1.0]),
+        ]);
+        let faces = vec![
+            face(10, &[0, 1, 2]),
+            face(20, &[3, 4, 5]),
+            face(30, &[6, 7, 8]),
+        ];
+        let overlapping_polygon = vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let frame = Frame3D {
+            faces: vec![
+                Face3D {
+                    face: 30,
+                    polygon: vec![[3.0, 0.0, 0.0], [4.0, 0.0, 0.0], [3.0, 1.0, 0.0]],
+                    layer: 30,
+                    surface_rank: 91,
+                    mirrored: false,
+                },
+                Face3D {
+                    face: 10,
+                    polygon: overlapping_polygon.clone(),
+                    layer: 10,
+                    surface_rank: 92,
+                    mirrored: true,
+                },
+                Face3D {
+                    face: 20,
+                    polygon: overlapping_polygon,
+                    layer: 20,
+                    surface_rank: 93,
+                    mirrored: false,
+                },
+            ],
+            warnings: Vec::new(),
+        };
+        (cp, faces, frame, vec![10, 20, 30])
+    }
+
+    fn valid_certification_derivation() -> (Frame3D, Vec<FaceId>, SurfaceOrder) {
+        let (cp, faces, frame, order) = certification_fixture();
+        let chain = order
+            .windows(2)
+            .map(|pair| (pair[0], pair[1]))
+            .collect::<Vec<_>>();
+        let derived = derive_surface_order_from_current_depths(&cp, &faces, &frame, &chain)
+            .expect("certification fixture has a complete derived order");
+        assert!(derived.complete);
+        assert_eq!(derived.order, order);
+        (frame, order, derived)
+    }
+
     #[test]
     fn geometric_seed_uses_material_polygons_instead_of_face_ids() {
         let cp = material_cp(&[
@@ -1385,6 +2606,253 @@ mod tests {
         let faces = vec![face(2, &[0, 1, 2]), face(1, &[4, 5, 3])];
 
         assert!(geometric_seed_order(&cp, &faces).is_err());
+    }
+
+    #[test]
+    fn returned_geometry_depth_precedes_conflicting_exact_fallback() {
+        let (cp, faces) = overlapping_pair_fixture();
+        let endpoint = overlapping_pair_frame([-1e-5; 3]);
+
+        let exact_first =
+            derive_surface_order_from_current_depths(&cp, &faces, &endpoint, &[(10, 20)])
+                .expect("the ordinary exact-first derivation remains available");
+        assert_eq!(exact_first.order, vec![10, 20]);
+        assert_eq!(exact_first.dropped_depth_constraints, 1);
+
+        let geometry_first = derive_surface_order_from_current_depths_preferring_geometry(
+            &cp,
+            &faces,
+            &endpoint,
+            &[(10, 20)],
+        )
+        .expect("the returned polygon directly resolves the overlap");
+        assert!(geometry_first.complete);
+        assert_eq!(geometry_first.order, vec![20, 10]);
+        assert_eq!(geometry_first.sampled_depth_constraints, 1);
+        assert_eq!(geometry_first.dropped_depth_constraints, 0);
+        assert_eq!(geometry_first.provenance.constraints, vec![(20, 10)]);
+    }
+
+    #[test]
+    fn projected_current_direct_precedes_seed_when_faces_are_slightly_non_coplanar() {
+        let (cp, faces) = overlapping_pair_fixture();
+        let frame = overlapping_pair_frame([-1e-3, -2e-3, -3e-3]);
+
+        let ordinary = derive_surface_order_from_current_depths(&cp, &faces, &frame, &[])
+            .expect("the ordinary coplanar derivation remains available");
+        assert!(!ordinary.constraints.contains(&(20, 10)));
+
+        let projected = derive_surface_order_from_projected_current_depths(&cp, &faces, &frame)
+            .expect("the displayed overlap has a finite direct projected depth");
+        assert!(projected.complete);
+        assert!(projected.constraints.contains(&(20, 10)));
+        assert!(!projected.constraints.contains(&(10, 20)));
+        assert_eq!(projected.imported_depth_constraints, 1);
+        assert_eq!(projected.dropped_depth_constraints, 0);
+    }
+
+    #[test]
+    fn actual_approach_direct_precedes_conflicting_exact_and_exact_fills_unseen_pairs() {
+        let (cp, faces, mut endpoint, _) = certification_fixture();
+        let endpoint_polygon = vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        for face in &mut endpoint.faces {
+            face.polygon = endpoint_polygon.clone();
+            face.mirrored = false;
+        }
+        let mut approach = endpoint.clone();
+        approach
+            .faces
+            .iter_mut()
+            .find(|face| face.face == 20)
+            .expect("face 20 exists")
+            .polygon = vec![[0.0, 0.0, -1e-4], [1.0, 0.0, -1e-4], [0.0, 1.0, -1e-4]];
+        approach
+            .faces
+            .iter_mut()
+            .find(|face| face.face == 30)
+            .expect("face 30 exists")
+            .polygon = vec![[2.0, 0.0, 1e-4], [3.0, 0.0, 1e-4], [2.0, 1.0, 1e-4]];
+
+        let derived = derive_surface_order_from_actual_approach(
+            &cp,
+            &faces,
+            &approach,
+            &endpoint,
+            &[(10, 20), (30, 20)],
+        )
+        .expect("the opaque approach directly resolves the endpoint overlap");
+
+        assert!(derived.complete);
+        assert_eq!(derived.order, vec![30, 20, 10]);
+        assert!(derived.constraints.contains(&(20, 10)));
+        assert!(derived.constraints.contains(&(30, 20)));
+        assert!(!derived.constraints.contains(&(10, 20)));
+        assert_eq!(derived.imported_depth_constraints, 1);
+        assert_eq!(derived.dropped_depth_constraints, 0);
+    }
+
+    #[test]
+    fn path_depth_only_samples_pairs_that_overlap_in_both_frames() {
+        let cp = material_cp(&[
+            (0, [0.0, 0.0]),
+            (1, [1.0, 0.0]),
+            (2, [0.0, 1.0]),
+            (3, [2.0, 0.0]),
+            (4, [3.0, 0.0]),
+            (5, [2.0, 1.0]),
+            (6, [4.0, 0.0]),
+            (7, [5.0, 0.0]),
+            (8, [4.0, 1.0]),
+        ]);
+        let faces = vec![
+            face(10, &[0, 1, 2]),
+            face(20, &[3, 4, 5]),
+            face(30, &[6, 7, 8]),
+        ];
+        let endpoint_polygon = vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let endpoint = Frame3D {
+            faces: faces
+                .iter()
+                .map(|face| Face3D {
+                    face: face.id,
+                    polygon: endpoint_polygon.clone(),
+                    layer: 0,
+                    surface_rank: 0,
+                    mirrored: false,
+                })
+                .collect(),
+            warnings: Vec::new(),
+        };
+        let approach = Frame3D {
+            faces: vec![
+                Face3D {
+                    face: 10,
+                    polygon: endpoint_polygon,
+                    layer: 0,
+                    surface_rank: 0,
+                    mirrored: false,
+                },
+                Face3D {
+                    face: 20,
+                    polygon: vec![[0.0, 0.0, -1e-4], [1.0, 0.0, -1e-4], [0.0, 1.0, -1e-4]],
+                    layer: 0,
+                    surface_rank: 0,
+                    mirrored: false,
+                },
+                Face3D {
+                    face: 30,
+                    polygon: vec![[2.0, 0.0, 1e-4], [3.0, 0.0, 1e-4], [2.0, 1.0, 1e-4]],
+                    layer: 0,
+                    surface_rank: 0,
+                    mirrored: false,
+                },
+            ],
+            warnings: Vec::new(),
+        };
+
+        let derived = derive_surface_order_from_frame_path_preferring_approach_depth(
+            &cp,
+            &faces,
+            std::slice::from_ref(&approach),
+            &endpoint,
+            &[(30, 20)],
+        )
+        .expect("the non-overlapping approach pair is left for exact closure");
+
+        assert!(derived.complete);
+        assert_eq!(derived.order, vec![30, 20, 10]);
+        assert_eq!(derived.resolved_overlaps, 3);
+        assert_eq!(derived.sampled_depth_constraints, 1);
+        assert_eq!(derived.positive_overlap_depth_constraints, 1);
+        assert_eq!(derived.dropped_depth_constraints, 0);
+        assert_eq!(
+            derived.provenance.constraints,
+            vec![(30, 20), (20, 10), (30, 10)]
+        );
+    }
+
+    #[test]
+    fn endpoint_tangent_uses_current_signed_depth_without_overlap_provenance() {
+        let cp = material_cp(&[
+            (0, [0.0, 0.0]),
+            (1, [1.0, 0.0]),
+            (2, [0.0, 1.0]),
+            (3, [2.0, 0.0]),
+            (4, [3.0, 0.0]),
+            (5, [2.0, 1.0]),
+        ]);
+        let faces = vec![face(10, &[0, 1, 2]), face(20, &[3, 4, 5])];
+        assert_eq!(geometric_seed_order(&cp, &faces), Ok(vec![10, 20]));
+
+        let endpoint = Frame3D {
+            faces: vec![
+                Face3D {
+                    face: 10,
+                    polygon: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                    layer: 0,
+                    surface_rank: 0,
+                    mirrored: false,
+                },
+                Face3D {
+                    face: 20,
+                    polygon: vec![[0.0, 0.0, -1e-6], [1.0, 0.0, -1e-6], [1.0, -1.0, -1e-6]],
+                    layer: 0,
+                    surface_rank: 0,
+                    mirrored: false,
+                },
+            ],
+            warnings: Vec::new(),
+        };
+        let approach = Frame3D {
+            faces: vec![
+                Face3D {
+                    face: 10,
+                    polygon: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                    layer: 0,
+                    surface_rank: 0,
+                    mirrored: false,
+                },
+                Face3D {
+                    face: 20,
+                    polygon: vec![[0.1, 0.1, -1e-4], [0.9, 0.1, -1e-4], [0.1, 0.9, -1e-4]],
+                    layer: 0,
+                    surface_rank: 0,
+                    mirrored: false,
+                },
+            ],
+            warnings: Vec::new(),
+        };
+
+        let endpoint_only = derive_surface_order_from_current_depths(&cp, &faces, &endpoint, &[])
+            .expect("boundary-touching polygons are valid current geometry");
+        assert!(endpoint_only.complete);
+        assert_eq!(endpoint_only.order, vec![20, 10]);
+        assert_eq!(endpoint_only.resolved_overlaps, 0);
+        assert_eq!(endpoint_only.sampled_depth_constraints, 0);
+        assert_eq!(endpoint_only.positive_overlap_depth_constraints, 0);
+        assert!(endpoint_only.provenance.constraints.is_empty());
+        assert!(endpoint_only.positive_overlap_pairs.is_empty());
+
+        let derived = derive_surface_order_from_current_depths_along_frame_path(
+            &cp,
+            &faces,
+            std::slice::from_ref(&approach),
+            &endpoint,
+            &[],
+        )
+        .expect("the approach selects the pair whose endpoint overlap became tangent");
+        assert!(derived.complete);
+        assert_eq!(derived.order, vec![20, 10]);
+        assert_eq!(derived.resolved_overlaps, 0);
+        assert_eq!(derived.sampled_depth_constraints, 1);
+        assert!(derived.provenance.constraints.is_empty());
+        assert!(derived.positive_overlap_pairs.is_empty());
+
+        let exact = derive_surface_order_from_current_depths(&cp, &faces, &endpoint, &[(10, 20)])
+            .expect("exact geometry constraint remains authoritative");
+        assert_eq!(exact.order, vec![10, 20]);
+        assert_eq!(exact.dropped_depth_constraints, 0);
+        assert_eq!(exact.broken_constraints, 0);
     }
 
     #[test]
@@ -1592,6 +3060,207 @@ mod tests {
         assert_eq!(derived.broken_constraints, 0);
         assert_eq!(derived.dropped_depth_constraints, 3);
         assert_eq!(derived.sampled_depth_constraints, 0);
+    }
+
+    #[test]
+    fn verified_operation_order_is_certified() {
+        let (cp, faces, endpoint_frame, verified_order) = certification_fixture();
+        let original_frame = endpoint_frame.clone();
+
+        let certified = certify_verified_operation_surface_order(
+            &cp,
+            &faces,
+            &endpoint_frame,
+            &verified_order,
+            &[(10, 20)],
+        )
+        .expect("verified operation order is authoritative");
+
+        assert_eq!(endpoint_frame.faces.len(), original_frame.faces.len());
+        for (actual, original) in endpoint_frame.faces.iter().zip(&original_frame.faces) {
+            assert_eq!(actual.face, original.face);
+            assert_eq!(actual.polygon, original.polygon);
+            assert_eq!(actual.layer, original.layer);
+            assert_eq!(actual.surface_rank, original.surface_rank);
+            assert_eq!(actual.mirrored, original.mirrored);
+        }
+        assert_eq!(endpoint_frame.warnings, original_frame.warnings);
+        let (stamped, order, provenance) = certified.into_parts();
+        assert_eq!(order, verified_order);
+        assert_eq!(provenance.constraints, vec![(10, 20)]);
+        let expected_ranks = HashMap::from([(10, 0), (20, 1), (30, 2)]);
+        for stamped_face in &stamped.faces {
+            let original = original_frame
+                .faces
+                .iter()
+                .find(|face| face.face == stamped_face.face)
+                .expect("stamped face came from the endpoint");
+            assert_eq!(stamped_face.polygon, original.polygon);
+            assert_eq!(stamped_face.layer, original.layer);
+            assert_eq!(stamped_face.mirrored, original.mirrored);
+            assert_eq!(
+                stamped_face.surface_rank,
+                expected_ranks[&stamped_face.face]
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_operation_oracle_cannot_reverse_a_mandatory_constraint() {
+        let (cp, faces, endpoint_frame, _) = certification_fixture();
+
+        let error = certify_verified_operation_surface_order(
+            &cp,
+            &faces,
+            &endpoint_frame,
+            &[20, 10, 30],
+            &[(10, 20)],
+        )
+        .err()
+        .expect("the candidate order must not certify its own reversed overlap");
+
+        assert!(
+            error.contains("violates mandatory constraint (10, 20)"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn certification_rejects_face_set_mismatch() {
+        let (cp, faces, mut endpoint_frame, verified_order) = certification_fixture();
+        endpoint_frame.faces[2].face = 99;
+
+        let error = certify_verified_operation_surface_order(
+            &cp,
+            &faces,
+            &endpoint_frame,
+            &verified_order,
+            &[(10, 20)],
+        )
+        .err()
+        .expect("a mismatched endpoint face set must be rejected");
+
+        assert!(error.contains("face set"), "{error}");
+        assert!(error.contains("20"), "{error}");
+        assert!(error.contains("99"), "{error}");
+    }
+
+    #[test]
+    fn certification_rejects_non_finite_endpoint_polygon() {
+        let (cp, faces, mut endpoint_frame, verified_order) = certification_fixture();
+        endpoint_frame.faces[1].polygon[2][1] = f64::NAN;
+
+        let error = certify_verified_operation_surface_order(
+            &cp,
+            &faces,
+            &endpoint_frame,
+            &verified_order,
+            &[(10, 20)],
+        )
+        .err()
+        .expect("a non-finite endpoint polygon must be rejected");
+
+        assert!(error.contains("non-finite"), "{error}");
+        assert!(error.contains("face 10"), "{error}");
+    }
+
+    #[test]
+    fn certification_rejects_incomplete_operation_permutation() {
+        let (cp, faces, endpoint_frame, _) = certification_fixture();
+
+        let error = certify_verified_operation_surface_order(
+            &cp,
+            &faces,
+            &endpoint_frame,
+            &[10, 10, 30],
+            &[(10, 20)],
+        )
+        .err()
+        .expect("a repeated and missing face must be rejected");
+
+        assert!(error.contains("complete face permutation"), "{error}");
+        assert!(error.contains("duplicates [10]"), "{error}");
+        assert!(error.contains("missing [20]"), "{error}");
+    }
+
+    #[test]
+    fn certification_rejects_skipped_pairs() {
+        let (frame, order, mut derived) = valid_certification_derivation();
+        derived.skipped_pairs = 1;
+
+        let error = finalize_verified_operation_surface_order(&frame, &order, derived)
+            .err()
+            .expect("skipped overlap comparisons must be rejected");
+
+        assert!(error.contains("skipped_pairs=1"), "{error}");
+    }
+
+    #[test]
+    fn certification_rejects_unresolved_overlaps() {
+        let (frame, order, mut derived) = valid_certification_derivation();
+        derived.unresolved_overlaps = 1;
+
+        let error = finalize_verified_operation_surface_order(&frame, &order, derived)
+            .err()
+            .expect("unresolved overlaps must be rejected");
+
+        assert!(error.contains("unresolved_overlaps=1"), "{error}");
+    }
+
+    #[test]
+    fn certification_rejects_broken_constraints() {
+        let (frame, order, mut derived) = valid_certification_derivation();
+        derived.broken_constraints = 1;
+
+        let error = finalize_verified_operation_surface_order(&frame, &order, derived)
+            .err()
+            .expect("cyclic or broken constraints must be rejected");
+
+        assert!(error.contains("broken_constraints=1"), "{error}");
+    }
+
+    #[test]
+    fn certification_rejects_incomplete_derivation() {
+        let (frame, order, mut derived) = valid_certification_derivation();
+        derived.complete = false;
+
+        let error = finalize_verified_operation_surface_order(&frame, &order, derived)
+            .err()
+            .expect("an incomplete derivation must be rejected");
+
+        assert!(error.contains("not complete"), "{error}");
+    }
+
+    #[test]
+    fn certification_rejects_derived_order_mismatch() {
+        let (frame, order, mut derived) = valid_certification_derivation();
+        derived.order.swap(0, 1);
+
+        let error = finalize_verified_operation_surface_order(&frame, &order, derived)
+            .err()
+            .expect("a different derived order must be rejected");
+
+        assert!(error.contains("does not match"), "{error}");
+        assert!(error.contains("rank 0"), "{error}");
+    }
+
+    #[test]
+    fn certification_provenance_excludes_non_overlapping_pairs() {
+        let (cp, faces, endpoint_frame, verified_order) = certification_fixture();
+
+        let (_, _, provenance) = certify_verified_operation_surface_order(
+            &cp,
+            &faces,
+            &endpoint_frame,
+            &verified_order,
+            &[(10, 20)],
+        )
+        .expect("fixture has one positively overlapping pair")
+        .into_parts();
+
+        assert_eq!(provenance.constraints, vec![(10, 20)]);
+        assert!(!provenance.constraints.contains(&(20, 30)));
+        assert!(!provenance.constraints.contains(&(10, 30)));
     }
 
     #[test]

@@ -28,6 +28,7 @@ use ori3_cp::{Face, extract_faces};
 use ori3_layers::fold_through::{
     FoldDirection, FoldThroughInput, fold_through, resolve_driver_edges,
 };
+use ori3_layers::precrease_collapse::validate_precrease_layer_order;
 use ori3_layers::techniques::TechniqueInput;
 use ori3_layers::{FlatState, FoldThroughResult, flat_state_at, petal, replay, squash};
 use ori3_model::{
@@ -128,6 +129,80 @@ fn reference_folds_record_a_flat_state_the_solver_can_reach() {
             replayed.warnings
         );
     }
+}
+
+/// 追跡済みのやっこさん作品に保存された完成順が、現在の面へ欠落なく解決され、
+/// 作品固有情報を使わない重なり制約を全て満たすことを確かめる。
+#[test]
+fn yakko_saved_complete_layer_order_satisfies_general_constraints() {
+    let document = parse_fixture(include_str!(
+        "../../ori3-rigid/tests/fixtures/check-yakko.ori3"
+    ));
+    let faces = extract_faces(&document.cp);
+    let (state, replay_warnings) = flat_state_at(&document, &faces, document.sequence.len())
+        .expect("やっこさんを平坦に再生できる");
+    assert!(
+        replay_warnings.is_empty(),
+        "やっこさんの再生警告なし: {replay_warnings:?}"
+    );
+    let saved_points = document
+        .sequence
+        .last()
+        .and_then(|step| step.layer_order.as_deref())
+        .expect("やっこさんの最終手に層順序が保存されている");
+    assert_eq!(
+        saved_points.len(),
+        faces.len(),
+        "保存順は最終展開図の全面を1回ずつ表す"
+    );
+    let (saved_order, resolution_warnings) =
+        FlatState::resolve_order(&document.cp, &faces, saved_points);
+    assert!(
+        resolution_warnings.is_empty(),
+        "保存代表点は補完なしで全面へ解決できる: {resolution_warnings:?}"
+    );
+    assert_eq!(
+        saved_order, state.order,
+        "検証対象はfixtureの最終手が保存した完成順そのもの"
+    );
+
+    let validation =
+        validate_precrease_layer_order(&document.cp, &faces, &state.placements, &saved_order)
+            .expect("やっこさんの一般層制約を導ける");
+    let continuous_violations =
+        validation.violations.continuous_crossings.len() + validation.violations.continuous.len();
+    println!(
+        "yakko saved layer order: adjacent violations={}/{}, taco-tortilla={}/{}, taco-taco={}/{}, continuous={}/{}, unresolved={}",
+        validation.violations.adjacent_folds.len(),
+        validation.counts.adjacent_folds,
+        validation.violations.taco_tortilla.len(),
+        validation.counts.taco_tortilla,
+        validation.violations.taco_taco.len(),
+        validation.counts.taco_taco,
+        continuous_violations,
+        validation.counts.continuous,
+        validation.unresolved_overlap_pairs.len(),
+    );
+    assert!(
+        validation.violations.adjacent_folds.is_empty(),
+        "隣接M/V違反0: {:?}",
+        validation.violations.adjacent_folds
+    );
+    assert!(
+        validation.violations.taco_tortilla.is_empty(),
+        "taco-tortilla違反0: {:?}",
+        validation.violations.taco_tortilla
+    );
+    assert!(
+        validation.violations.taco_taco.is_empty(),
+        "taco-taco違反0: {:?}",
+        validation.violations.taco_taco
+    );
+    assert_eq!(continuous_violations, 0, "0°連続面の違反0");
+    assert!(
+        validation.is_valid(),
+        "やっこさんの保存順は一般制約を全て満たす: {validation:?}"
+    );
 }
 
 /// 平らに畳めない記録は、黙って別の形に置き換えず、求まらなかったと知らせる。

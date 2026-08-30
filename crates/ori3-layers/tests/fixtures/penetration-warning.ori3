@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "paper": { "width_mm": 100.0, "height_mm": 100.0 },
+  "cp": {
+    "vertices": [
+      { "id": 0, "pos": [0.0, 0.0] },
+      { "id": 1, "pos": [0.45, 0.0] },
+      { "id": 2, "pos": [0.65, 0.0] },
+      { "id": 3, "pos": [1.0, 0.0] },
+      { "id": 4, "pos": [1.0, 1.0] },
+      { "id": 5, "pos": [0.65, 1.0] },
+      { "id": 6, "pos": [0.45, 1.0] },
+      { "id": 7, "pos": [0.0, 1.0] }
+    ],
+    "edges": [
+      { "id": 0, "v0": 0, "v1": 1, "kind": "Border" },
+      { "id": 1, "v0": 1, "v1": 2, "kind": "Border" },
+      { "id": 2, "v0": 2, "v1": 3, "kind": "Border" },
+      { "id": 3, "v0": 3, "v1": 4, "kind": "Border" },
+      { "id": 4, "v0": 4, "v1": 5, "kind": "Border" },
+      { "id": 5, "v0": 5, "v1": 6, "kind": "Border" },
+      { "id": 6, "v0": 6, "v1": 7, "kind": "Border" },
+      { "id": 7, "v0": 7, "v1": 0, "kind": "Border" },
+      { "id": 8, "v0": 1, "v1": 6, "kind": "Valley" },
+      { "id": 9, "v0": 2, "v1": 5, "kind": "Valley" }
+    ],
+    "next_vertex_id": 8,
+    "next_edge_id": 10
+  },
+  "sequence": [
+    {
+      "id": 0,
+      "kind": "Pose",
+      "drivers": [
+        { "a": [0.45, 0.0], "b": [0.45, 1.0], "target_angle_deg": -179.0 },
+        { "a": [0.65, 0.0], "b": [0.65, 1.0], "target_angle_deg": -179.0 }
+      ],
+      "layer_order": null,
+      "note": "penetration warning acceptance"
+    }
+  ],
+  "display": {
+    "front_color": [237, 28, 36],
+    "back_color": [255, 255, 255],
+    "grid_divisions": 8,
+    "soft_enabled": false,
+    "soft_stiffness": 0.5,
+    "soft_pressure": 0.0,
+    "overlap_prevention_enabled": false,
+    "penetration_prevention_enabled": true
+  }
+}

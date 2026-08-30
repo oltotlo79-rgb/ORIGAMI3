@@ -34,19 +34,21 @@
 //! テスト冒頭にある)。折り上がり(t=1)の形と重なりは正しいので、これらの工程は
 //! 折り目の山谷と層順序の一致([`assert_fold_senses`])で確かめる。
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use glam::{DVec2, DVec3};
-use ori3_cp::{extract_faces, Face};
+use ori3_cp::{Face, extract_faces, insert_segment};
+use ori3_geometry::Isometry2;
 use ori3_layers::flat_state::representative_point;
-use ori3_layers::fold_through::{fold_through, FoldDirection, FoldThroughInput};
+use ori3_layers::fold_through::{FoldDirection, FoldThroughInput, fold_through};
 use ori3_layers::techniques::TechniqueInput;
 use ori3_layers::{
-    flat_state_at, inside_reverse, petal, replay, squash, FlatState, FoldThroughResult,
+    FlatState, FoldThroughResult, PrecreaseCollapseInput, collapse_precrease_network,
+    flat_state_at, inside_reverse, petal, replay, squash,
 };
 use ori3_model::{
-    CreasePattern, Document, Driver, DriverLine, EdgeKind, Face3D, FaceId, FinishSoftSettings,
-    FoldStep, Frame3D, Paper, TechniqueKind,
+    CreasePattern, Document, Driver, DriverLine, Edge, EdgeKind, Face3D, FaceId,
+    FinishSoftSettings, FoldStep, Frame3D, Paper, TechniqueKind, Vertex,
 };
 use ori3_rigid::{max_seam_gap, self_intersection_pairs};
 
@@ -718,6 +720,36 @@ fn bird_base_lifts_two_slender_points() {
 
     assert_fold_senses(&doc, "鶴の基本形");
     assert_flat(&doc, "鶴の基本形");
+}
+
+/// 鶴以外の既存作品にも同じ一般検証器を適用する回帰検査。
+/// 作品の最終手に永続化された順序を通常replayした結果だけを候補にし、
+/// Face ID順などで検査側から補完しない。
+#[test]
+#[ignore = "既知の欠陥: 花弁折り・つぶし折りが返す層順が一般制約（taco-tortilla/taco-taco）を満たさない。別単位で修正するまで。実測: 鳥 4/20・カエル 116/6664, 12/1826"]
+fn bird_base_saved_layer_order_satisfies_general_constraints() {
+    let document = bird_base();
+    assert!(
+        document
+            .sequence
+            .last()
+            .and_then(|step| step.layer_order.as_ref())
+            .is_some(),
+        "鳥の基本形の最終手には保存layer_orderがある"
+    );
+    let (faces, state) = state_of(&document);
+    let validation = ori3_layers::precrease_collapse::validate_precrease_layer_order(
+        &document.cp,
+        &faces,
+        &state.placements,
+        &state.order,
+    )
+    .expect("鳥の基本形の保存順を一般制約で検証できる");
+    assert!(
+        validation.is_valid(),
+        "鳥の基本形の保存順は一般制約違反0: {:?}",
+        validation.violations
+    );
 }
 
 /// M2受け入れ条件: 折り鶴が折り操作の列だけで完成し、首・尾・頭・羽が
@@ -1441,6 +1473,2105 @@ fn completed_crane_is_flat_and_symmetric() {
         "対角線について左右対称になっていない(鏡像が無い点が{mirrored_missing}/{}={:.1}%)",
         points.len(),
         ratio * 100.0
+    );
+}
+
+#[derive(Debug)]
+struct TraditionalCraneEdge {
+    id: String,
+    assignment: char,
+    p0: DVec2,
+    p1: DVec2,
+}
+
+/// 正本CSVを読む。JSONの `implicit.C` は端点との食い違いがあるため参照しない。
+fn traditional_crane_edges() -> Vec<TraditionalCraneEdge> {
+    const CSV: &str =
+        include_str!("fixtures/traditional-crane/traditional_crane_edges_equations.csv");
+
+    let mut lines = CSV.lines().filter(|line| !line.trim().is_empty());
+    let header = lines.next().expect("折り鶴正本CSVの見出し");
+    let columns: Vec<&str> = header
+        .trim_start_matches('\u{feff}')
+        .split(',')
+        .map(str::trim)
+        .collect();
+    let column = |name: &str| {
+        columns
+            .iter()
+            .position(|candidate| *candidate == name)
+            .unwrap_or_else(|| panic!("折り鶴正本CSVに列{name}が無い"))
+    };
+    let edge_id = column("edge_id");
+    let assignment = column("assignment");
+    let x1 = column("x1");
+    let y1 = column("y1");
+    let x2 = column("x2");
+    let y2 = column("y2");
+
+    lines
+        .enumerate()
+        .map(|(row, line)| {
+            let fields: Vec<&str> = line.split(',').map(str::trim).collect();
+            let field = |index: usize, name: &str| {
+                fields
+                    .get(index)
+                    .copied()
+                    .unwrap_or_else(|| panic!("折り鶴正本CSVの{}行目に列{name}が無い", row + 2))
+            };
+            let number = |index: usize, name: &str| {
+                field(index, name).parse::<f64>().unwrap_or_else(|error| {
+                    panic!(
+                        "折り鶴正本CSVの{}行目{name}を数値として読めない: {error}",
+                        row + 2
+                    )
+                })
+            };
+            let assignment_text = field(assignment, "assignment");
+            let mut assignment_chars = assignment_text.chars();
+            let assignment = assignment_chars
+                .next()
+                .unwrap_or_else(|| panic!("折り鶴正本CSVの{}行目assignmentが空", row + 2));
+            assert!(
+                matches!(assignment, 'M' | 'V' | 'B') && assignment_chars.next().is_none(),
+                "折り鶴正本CSVの{}行目assignmentが不正: {assignment_text}",
+                row + 2
+            );
+            TraditionalCraneEdge {
+                id: field(edge_id, "edge_id").to_owned(),
+                assignment,
+                p0: DVec2::new(number(x1, "x1"), number(y1, "y1")),
+                p1: DVec2::new(number(x2, "x2"), number(y2, "y2")),
+            }
+        })
+        .collect()
+}
+
+/// `wanted` が現行展開図の辺区間の和集合に隙間なく含まれるかを調べる。
+/// `allowed_kinds` に含まれる種類の現行辺だけを和集合へ入れる。
+fn crane_cp_covers_segment(
+    cp: &CreasePattern,
+    wanted: &TraditionalCraneEdge,
+    allowed_kinds: &[EdgeKind],
+    tolerance: f64,
+) -> bool {
+    let positions = vertex_pos(cp);
+    let delta = wanted.p1 - wanted.p0;
+    let length = delta.length();
+    assert!(length > tolerance, "正本の辺{}が退化している", wanted.id);
+    let direction = delta / length;
+    let distance_from_line = |point: DVec2| {
+        let from_start = point - wanted.p0;
+        (from_start.x * direction.y - from_start.y * direction.x).abs()
+    };
+
+    let mut intervals = Vec::<(f64, f64)>::new();
+    for edge in &cp.edges {
+        if !allowed_kinds.contains(&edge.kind) {
+            continue;
+        }
+        let (Some(&p0), Some(&p1)) = (positions.get(&edge.v0), positions.get(&edge.v1)) else {
+            continue;
+        };
+        if distance_from_line(p0) > tolerance || distance_from_line(p1) > tolerance {
+            continue;
+        }
+        let t0 = (p0 - wanted.p0).dot(direction);
+        let t1 = (p1 - wanted.p0).dot(direction);
+        let lo = t0.min(t1).max(0.0);
+        let hi = t0.max(t1).min(length);
+        if hi + tolerance >= lo {
+            intervals.push((lo, hi));
+        }
+    }
+    intervals.sort_by(|left, right| left.0.total_cmp(&right.0));
+
+    let mut covered_to = 0.0_f64;
+    for (lo, hi) in intervals {
+        if lo > covered_to + tolerance {
+            break;
+        }
+        covered_to = covered_to.max(hi);
+        if covered_to >= length - tolerance {
+            return true;
+        }
+    }
+    false
+}
+
+#[derive(Clone, Copy)]
+struct ActiveCraneSegment {
+    p0: DVec2,
+    p1: DVec2,
+    kind: EdgeKind,
+}
+
+/// 同じ山谷・同一直線上で接している線分を1本へ戻す。
+///
+/// 0°の前折りを消したあと、その交点だけを理由に残る分割頂点まで除くために使う。
+/// 別のactive線との交点は、下の`insert_segment`によるplanar graph再構成で復元される。
+fn merge_active_crane_segment(
+    left: ActiveCraneSegment,
+    right: ActiveCraneSegment,
+    tolerance: f64,
+) -> Option<ActiveCraneSegment> {
+    if left.kind != right.kind {
+        return None;
+    }
+    let delta = left.p1 - left.p0;
+    let length = delta.length();
+    if length <= tolerance {
+        return None;
+    }
+    let direction = delta / length;
+    let line_distance = |point: DVec2| {
+        let offset = point - left.p0;
+        (offset.x * direction.y - offset.y * direction.x).abs()
+    };
+    if line_distance(right.p0) > tolerance || line_distance(right.p1) > tolerance {
+        return None;
+    }
+
+    let project = |point: DVec2| (point - left.p0).dot(direction);
+    let right_lo = project(right.p0).min(project(right.p1));
+    let right_hi = project(right.p0).max(project(right.p1));
+    if right_lo > length + tolerance || right_hi < -tolerance {
+        return None;
+    }
+
+    let endpoints = [left.p0, left.p1, right.p0, right.p1];
+    let p0 = *endpoints
+        .iter()
+        .min_by(|a, b| project(**a).total_cmp(&project(**b)))
+        .expect("4端点がある");
+    let p1 = *endpoints
+        .iter()
+        .max_by(|a, b| project(**a).total_cmp(&project(**b)))
+        .expect("4端点がある");
+    Some(ActiveCraneSegment {
+        p0,
+        p1,
+        kind: left.kind,
+    })
+}
+
+/// 完成状態で二面角が非0のM/Vだけを、用紙境界へ挿入し直したplanar graph。
+fn active_final_crane_cp(
+    doc: &Document,
+    angle_tolerance_deg: f64,
+    coordinate_tolerance: f64,
+) -> (CreasePattern, Vec<ActiveCraneSegment>, usize) {
+    let replayed = replay(doc, doc.sequence.len(), 1.0);
+    assert!(
+        replayed.warnings.is_empty() && replayed.skipped.is_empty(),
+        "完成した折り鶴を最後まで再生できる: warnings={:?}, skipped={:?}",
+        replayed.warnings,
+        replayed.skipped
+    );
+    let positions = vertex_pos(&doc.cp);
+    let mut active = Vec::<ActiveCraneSegment>::new();
+    let mut zero_angle_edges = 0_usize;
+    for edge in &doc.cp.edges {
+        if !matches!(edge.kind, EdgeKind::Mountain | EdgeKind::Valley) {
+            continue;
+        }
+        let angle = replayed
+            .hinge_angles
+            .get(&edge.id)
+            .copied()
+            .unwrap_or_else(|| panic!("完成状態に内部辺{}の二面角が無い", edge.id));
+        if angle.abs() < angle_tolerance_deg {
+            zero_angle_edges += 1;
+            continue;
+        }
+        let p0 = positions
+            .get(&edge.v0)
+            .copied()
+            .unwrap_or_else(|| panic!("辺{}の始点{}が無い", edge.id, edge.v0));
+        let p1 = positions
+            .get(&edge.v1)
+            .copied()
+            .unwrap_or_else(|| panic!("辺{}の終点{}が無い", edge.id, edge.v1));
+        let mut pending = ActiveCraneSegment {
+            p0,
+            p1,
+            kind: edge.kind,
+        };
+        loop {
+            let Some(index) = active.iter().position(|existing| {
+                merge_active_crane_segment(*existing, pending, coordinate_tolerance).is_some()
+            }) else {
+                active.push(pending);
+                break;
+            };
+            let existing = active.swap_remove(index);
+            pending = merge_active_crane_segment(existing, pending, coordinate_tolerance)
+                .expect("直前に結合可能と判定した線分");
+        }
+    }
+
+    let mut rebuilt = square_doc().cp;
+    for segment in &active {
+        insert_segment(
+            &mut rebuilt,
+            segment.p0.to_array(),
+            segment.p1.to_array(),
+            segment.kind,
+        );
+    }
+    (rebuilt, active, zero_angle_edges)
+}
+
+/// 完成した折り鶴の展開図を、利用者提供の唯一の正本と照合する。
+///
+/// 正本の座標系もDocumentも `[0,1]²`・原点左下・y上なので、座標変換はしない。
+/// 正本の異なる頂点間の最小距離は0.0411961001458665、その1/10は
+/// 0.00411961001458665。3資料の共有点の最大差は4.5263792714e-13なので、
+/// 別頂点を混同せず資料間の差を十分に吸収する1e-9を採用する。
+#[test]
+#[ignore = "決定B（伝統手順の再構成）未実装。CR2。手10の oracle 待ち"]
+fn completed_crane_cp_matches_traditional_reference() {
+    const TOLERANCE: f64 = 1e-9;
+    const ACTIVE_ANGLE_TOLERANCE_DEG: f64 = 1e-9;
+    // 2026-08-26の赤い基準はno-flip 11/102・全体反転18/102。どちらも低いため、
+    // 表裏の約束が逆だとは判定せずfalseを維持する。線ごとの例外反転は認めない。
+    const INVERT_ORACLE_MOUNTAIN_VALLEY: bool = false;
+
+    let (doc, _) = crane();
+    let oracle = traditional_crane_edges();
+    let assigned_oracle: Vec<&TraditionalCraneEdge> = oracle
+        .iter()
+        .filter(|edge| matches!(edge.assignment, 'M' | 'V'))
+        .collect();
+    let border_oracle = oracle.iter().filter(|edge| edge.assignment == 'B').count();
+
+    // 正本は「完成した鶴を開いた展開図」なので、最後に二面角0°へ戻った前折りは
+    // 比較対象ではない。これは期待値の緩和ではなく、正本の定義に合わせた比較規則である。
+    // 0°線が作った分割頂点も残さず、active M/Vと用紙境界からplanar graphを再構成する。
+    let (active_cp, merged_active_segments, zero_angle_edges) =
+        active_final_crane_cp(&doc, ACTIVE_ANGLE_TOLERANCE_DEG, TOLERANCE);
+    let geometry_matches = assigned_oracle
+        .iter()
+        .filter(|edge| {
+            crane_cp_covers_segment(
+                &active_cp,
+                edge,
+                &[EdgeKind::Mountain, EdgeKind::Valley],
+                TOLERANCE,
+            )
+        })
+        .count();
+
+    let assignment_matches_for = |invert: bool| {
+        assigned_oracle
+            .iter()
+            .filter(|edge| {
+                let mountain = edge.assignment == 'M';
+                let kind = if mountain ^ invert {
+                    EdgeKind::Mountain
+                } else {
+                    EdgeKind::Valley
+                };
+                crane_cp_covers_segment(&active_cp, edge, &[kind], TOLERANCE)
+            })
+            .count()
+    };
+    let assignment_matches_no_flip = assignment_matches_for(false);
+    let assignment_matches_inverted = assignment_matches_for(true);
+    let assignment_matches = assignment_matches_for(INVERT_ORACLE_MOUNTAIN_VALLEY);
+
+    // 正本→activeだけでは、正本の端点を越えて延びたactive線分を見逃せる。
+    // そこで正本M/Vからもplanar graphを作り、結合後のactive線分を逆向きに全区間照合する。
+    let mut oracle_cp = square_doc().cp;
+    for edge in &assigned_oracle {
+        let kind = if edge.assignment == 'M' {
+            EdgeKind::Mountain
+        } else {
+            EdgeKind::Valley
+        };
+        insert_segment(&mut oracle_cp, edge.p0.to_array(), edge.p1.to_array(), kind);
+    }
+    let active_as_reference: Vec<TraditionalCraneEdge> = merged_active_segments
+        .iter()
+        .enumerate()
+        .map(|(index, segment)| TraditionalCraneEdge {
+            id: format!("active-{index}"),
+            assignment: if segment.kind == EdgeKind::Mountain {
+                'M'
+            } else {
+                'V'
+            },
+            p0: segment.p0,
+            p1: segment.p1,
+        })
+        .collect();
+    let active_to_oracle_geometry = active_as_reference
+        .iter()
+        .filter(|edge| {
+            crane_cp_covers_segment(
+                &oracle_cp,
+                edge,
+                &[EdgeKind::Mountain, EdgeKind::Valley],
+                TOLERANCE,
+            )
+        })
+        .count();
+    let active_assignment_matches_for = |invert: bool| {
+        active_as_reference
+            .iter()
+            .filter(|edge| {
+                let active_kind = if edge.assignment == 'M' {
+                    EdgeKind::Mountain
+                } else {
+                    EdgeKind::Valley
+                };
+                let oracle_kind = if invert {
+                    match active_kind {
+                        EdgeKind::Mountain => EdgeKind::Valley,
+                        EdgeKind::Valley => EdgeKind::Mountain,
+                        _ => unreachable!("active線分はM/Vだけ"),
+                    }
+                } else {
+                    active_kind
+                };
+                crane_cp_covers_segment(&oracle_cp, edge, &[oracle_kind], TOLERANCE)
+            })
+            .count()
+    };
+    let active_assignment_no_flip = active_assignment_matches_for(false);
+    let active_assignment_inverted = active_assignment_matches_for(true);
+    let active_assignment_matches = active_assignment_matches_for(INVERT_ORACLE_MOUNTAIN_VALLEY);
+    let extra_active_geometry = active_as_reference.len() - active_to_oracle_geometry;
+
+    let vertex_count = active_cp.vertices.len();
+    let face_count = extract_faces(&active_cp).len();
+    let active_internal_edges = active_cp
+        .edges
+        .iter()
+        .filter(|edge| matches!(edge.kind, EdgeKind::Mountain | EdgeKind::Valley))
+        .count();
+    if geometry_matches != 102
+        || oracle.len() != 114
+        || assignment_matches != 102
+        || active_to_oracle_geometry != active_as_reference.len()
+        || active_assignment_matches != active_as_reference.len()
+        || assigned_oracle.len() != 102
+        || border_oracle != 12
+        || active_internal_edges != 102
+        || vertex_count != 56
+        || face_count != 59
+    {
+        panic!(
+            "完成した折り鶴のactive展開図が正本と一致しない: coverage={geometry_matches}/{} (期待102/102; B除外), vertices={vertex_count}/56, faces={face_count}/59, mountain_valley={assignment_matches}/{} (期待102/102), no_flip={assignment_matches_no_flip}/{}, inverted={assignment_matches_inverted}/{}, active_to_oracle={active_to_oracle_geometry}/{}, extra_active_geometry={extra_active_geometry}, active_assignment={active_assignment_matches}/{}, active_assignment_no_flip={active_assignment_no_flip}/{}, active_assignment_inverted={active_assignment_inverted}/{}, active_internal_edges={active_internal_edges}/102, merged_active_segments={}, excluded_zero_angle_edges={zero_angle_edges}, angle_tolerance_deg={ACTIVE_ANGLE_TOLERANCE_DEG:e}, coordinate_tolerance={TOLERANCE:e}, invert_mountain_valley={INVERT_ORACLE_MOUNTAIN_VALLEY}",
+            assigned_oracle.len(),
+            assigned_oracle.len(),
+            assigned_oracle.len(),
+            assigned_oracle.len(),
+            active_as_reference.len(),
+            active_as_reference.len(),
+            active_as_reference.len(),
+            active_as_reference.len(),
+            active_as_reference.len()
+        );
+    }
+}
+
+struct TraditionalCraneCollapseWork {
+    document: Document,
+    raw_vertex_coordinates: Vec<[String; 2]>,
+    collapsed_cp: CreasePattern,
+    result: FoldThroughResult,
+    generated_order_before_oracle: Vec<FaceId>,
+}
+
+/// 正本CPのmaterial領域から導いた部位。Face IDは再抽出で変わり得るため、
+/// 部位oracleには使わない。
+struct TraditionalCraneMaterialParts {
+    back_wing: BTreeSet<FaceId>,
+    front_wing: BTreeSet<FaceId>,
+    tail: BTreeSet<FaceId>,
+    neck: BTreeSet<FaceId>,
+}
+
+/// 正本CPのmaterial境界ループ。座標そのものを複製せず、正本vertex IDから多角形を作る。
+/// 代表点が境界上にない面だけを分類するため、共有境界の所属は曖昧にならない。
+const TRADITIONAL_CRANE_BACK_WING_REGION: &[u32] = &[0, 46, 45, 44, 39, 40, 41, 42, 43];
+const TRADITIONAL_CRANE_FRONT_WING_REGION: &[u32] = &[2, 21, 23, 25, 5, 16, 10, 8, 36, 37, 38];
+const TRADITIONAL_CRANE_TAIL_REGION: &[u32] = &[1, 38, 37, 36, 35, 34, 33, 32, 24, 22];
+const TRADITIONAL_CRANE_NECK_AND_HEAD_REGION: &[u32] =
+    &[3, 55, 31, 30, 29, 28, 27, 26, 25, 23, 21, 47];
+const TRADITIONAL_CRANE_HEAD_REGION: &[u32] = &[3, 55, 54, 53, 52, 51, 50, 49, 48, 47];
+
+fn traditional_crane_material_region(cp: &CreasePattern, boundary: &[u32]) -> Vec<DVec2> {
+    let positions = vertex_pos(cp);
+    boundary
+        .iter()
+        .map(|vertex| {
+            *positions
+                .get(vertex)
+                .unwrap_or_else(|| panic!("正本material領域の頂点{vertex}が無い"))
+        })
+        .collect()
+}
+
+fn traditional_crane_material_parts(
+    cp: &CreasePattern,
+    faces: &[Face],
+) -> TraditionalCraneMaterialParts {
+    let back_wing_region =
+        traditional_crane_material_region(cp, TRADITIONAL_CRANE_BACK_WING_REGION);
+    let front_wing_region =
+        traditional_crane_material_region(cp, TRADITIONAL_CRANE_FRONT_WING_REGION);
+    let tail_region = traditional_crane_material_region(cp, TRADITIONAL_CRANE_TAIL_REGION);
+    let neck_and_head_region =
+        traditional_crane_material_region(cp, TRADITIONAL_CRANE_NECK_AND_HEAD_REGION);
+    let head_region = traditional_crane_material_region(cp, TRADITIONAL_CRANE_HEAD_REGION);
+
+    let in_region = |face: &Face, region: &[DVec2]| {
+        inside_polygon(region, DVec2::from(representative_point(cp, face)))
+    };
+    let back_wing = faces
+        .iter()
+        .filter(|face| in_region(face, &back_wing_region))
+        .map(|face| face.id)
+        .collect::<BTreeSet<_>>();
+    let front_wing = faces
+        .iter()
+        .filter(|face| in_region(face, &front_wing_region))
+        .map(|face| face.id)
+        .collect::<BTreeSet<_>>();
+    let tail = faces
+        .iter()
+        .filter(|face| in_region(face, &tail_region))
+        .map(|face| face.id)
+        .collect::<BTreeSet<_>>();
+    let neck_and_head = faces
+        .iter()
+        .filter(|face| in_region(face, &neck_and_head_region))
+        .map(|face| face.id)
+        .collect::<BTreeSet<_>>();
+    let head = faces
+        .iter()
+        .filter(|face| in_region(face, &head_region))
+        .map(|face| face.id)
+        .collect::<BTreeSet<_>>();
+    let neck = neck_and_head
+        .difference(&head)
+        .copied()
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(back_wing.len(), 7, "material領域から後翼7面を導く");
+    assert_eq!(front_wing.len(), 7, "material領域から前翼7面を導く");
+    assert_eq!(tail.len(), 8, "material領域から尾8面を導く");
+    assert_eq!(neck.len(), 8, "material領域から首8面を導く");
+    assert_eq!(head.len(), 8, "material領域から頭8面を導く");
+    TraditionalCraneMaterialParts {
+        back_wing,
+        front_wing,
+        tail,
+        neck,
+    }
+}
+
+/// 利用者が与えた「首・尾は後翼と前翼の間」という部分順を、正本material領域と
+/// 正の面積重なりから全数導出し、既存の`FoldStep.layer_order`へ保存する完全順を作る。
+/// Face IDや旧rank列はoracleにせず、未指定の比較では自動collapse順を優先するだけとする。
+fn traditional_crane_declared_layer_oracle(
+    cp: &CreasePattern,
+    faces: &[Face],
+    placements: &HashMap<FaceId, Isometry2>,
+    generated_order: &[FaceId],
+) -> Vec<FaceId> {
+    assert_eq!(generated_order.len(), faces.len());
+    assert_eq!(generated_order.len(), 59);
+    let general = ori3_layers::precrease_collapse::validate_precrease_layer_order(
+        cp,
+        faces,
+        placements,
+        generated_order,
+    )
+    .expect("自動collapse表示順とは独立に一般制約DAGを導ける");
+    assert!(
+        general.is_valid(),
+        "自動collapseの表示継続順も一般制約上は有効: {:?}",
+        general.violations
+    );
+    assert!(
+        !general.unresolved_overlap_pairs.is_empty(),
+        "展開図だけでは未決定の正面積重なりがある"
+    );
+
+    let parts = traditional_crane_material_parts(cp, faces);
+    let generated_state = FlatState {
+        placements: placements.clone(),
+        order: generated_order.to_vec(),
+    };
+    let plane = faces
+        .iter()
+        .map(|face| (face.id, plane_poly(cp, face, &generated_state)))
+        .collect::<HashMap<_, _>>();
+    let mut constraints = BTreeSet::new();
+    for middle_faces in [&parts.tail, &parts.neck] {
+        for &middle in middle_faces {
+            for &back in &parts.back_wing {
+                if traditional_crane_positive_overlap_area(&plane[&middle], &plane[&back])
+                    > TRADITIONAL_CRANE_OVERLAP_AREA_EPS
+                {
+                    constraints.insert((back, middle));
+                }
+            }
+            for &front in &parts.front_wing {
+                if traditional_crane_positive_overlap_area(&plane[&middle], &plane[&front])
+                    > TRADITIONAL_CRANE_OVERLAP_AREA_EPS
+                {
+                    constraints.insert((middle, front));
+                }
+            }
+        }
+    }
+    assert_eq!(
+        constraints.len(),
+        128,
+        "正の面積で重なる後翼<首尾<前翼の全128比較を層oracleにする"
+    );
+    let constraints = constraints.into_iter().collect::<Vec<_>>();
+    let declared = ori3_layers::precrease_collapse::resolve_precrease_layer_order_with_constraints(
+        cp,
+        faces,
+        placements,
+        generated_order,
+        &constraints,
+    )
+    .expect("翼間層oracleを一般制約に反しない完全順へ延長できる");
+    assert_eq!(declared.len(), generated_order.len());
+    assert_eq!(
+        declared.iter().copied().collect::<HashSet<_>>().len(),
+        faces.len(),
+        "保存層oracleは59面の完全permutation"
+    );
+    let declared_validation = ori3_layers::precrease_collapse::validate_precrease_layer_order(
+        cp, faces, placements, &declared,
+    )
+    .expect("利用者層oracleを加えたtotal extensionを検証できる");
+    assert!(
+        declared_validation.is_valid(),
+        "利用者層oracleを加えても一般制約違反0: {:?}",
+        declared_validation.violations
+    );
+    let rank = declared
+        .iter()
+        .enumerate()
+        .map(|(rank, &face)| (face, rank))
+        .collect::<HashMap<_, _>>();
+    assert!(
+        constraints
+            .iter()
+            .all(|&(lower, upper)| rank[&lower] < rank[&upper]),
+        "保存層oracleは正の面積で重なる翼間128比較をすべて満たす"
+    );
+    declared
+}
+
+const TRADITIONAL_CRANE_OVERLAP_AREA_EPS: f64 = 1e-12;
+const TRADITIONAL_CRANE_POLYGON_EPS: f64 = 1e-12;
+
+fn traditional_crane_polygon_area(polygon: &[DVec2]) -> f64 {
+    if polygon.len() < 3 {
+        return 0.0;
+    }
+    0.5 * (0..polygon.len())
+        .map(|index| polygon[index].perp_dot(polygon[(index + 1) % polygon.len()]))
+        .sum::<f64>()
+}
+
+fn traditional_crane_simple_polygon(boundary: &[DVec2]) -> Vec<DVec2> {
+    let mut polygon = Vec::with_capacity(boundary.len());
+    for &point in boundary {
+        if polygon
+            .last()
+            .is_none_or(|previous: &DVec2| previous.distance(point) > TRADITIONAL_CRANE_POLYGON_EPS)
+        {
+            polygon.push(point);
+        }
+    }
+    while polygon.len() > 1
+        && polygon[0].distance(polygon[polygon.len() - 1]) <= TRADITIONAL_CRANE_POLYGON_EPS
+    {
+        polygon.pop();
+    }
+    polygon
+}
+
+fn traditional_crane_point_in_triangle(point: DVec2, a: DVec2, b: DVec2, c: DVec2) -> bool {
+    (b - a).perp_dot(point - a) >= -TRADITIONAL_CRANE_POLYGON_EPS
+        && (c - b).perp_dot(point - b) >= -TRADITIONAL_CRANE_POLYGON_EPS
+        && (a - c).perp_dot(point - c) >= -TRADITIONAL_CRANE_POLYGON_EPS
+}
+
+fn traditional_crane_triangulate(boundary: &[DVec2]) -> Vec<Vec<DVec2>> {
+    let mut polygon = traditional_crane_simple_polygon(boundary);
+    assert!(
+        polygon.len() >= 3
+            && traditional_crane_polygon_area(&polygon).abs() > TRADITIONAL_CRANE_OVERLAP_AREA_EPS,
+        "正本面の投影多角形は正面積"
+    );
+    if traditional_crane_polygon_area(&polygon) < 0.0 {
+        polygon.reverse();
+    }
+    let mut triangles = Vec::with_capacity(polygon.len().saturating_sub(2));
+    while polygon.len() > 3 {
+        let count = polygon.len();
+        let ear = (0..count)
+            .find(|&index| {
+                let a = polygon[(index + count - 1) % count];
+                let b = polygon[index];
+                let c = polygon[(index + 1) % count];
+                (b - a).perp_dot(c - b) > TRADITIONAL_CRANE_POLYGON_EPS.powi(2)
+                    && !polygon.iter().enumerate().any(|(other, &point)| {
+                        other != index
+                            && other != (index + count - 1) % count
+                            && other != (index + 1) % count
+                            && traditional_crane_point_in_triangle(point, a, b, c)
+                    })
+            })
+            .expect("正本面の投影多角形を三角形分割できる");
+        triangles.push(vec![
+            polygon[(ear + count - 1) % count],
+            polygon[ear],
+            polygon[(ear + 1) % count],
+        ]);
+        polygon.remove(ear);
+    }
+    triangles.push(polygon);
+    triangles
+}
+
+fn traditional_crane_deduplicate_polygon(points: Vec<DVec2>) -> Vec<DVec2> {
+    let mut output = Vec::with_capacity(points.len());
+    for point in points {
+        if output
+            .last()
+            .is_none_or(|previous: &DVec2| previous.distance(point) > TRADITIONAL_CRANE_POLYGON_EPS)
+        {
+            output.push(point);
+        }
+    }
+    if output.len() > 1
+        && output[0].distance(output[output.len() - 1]) <= TRADITIONAL_CRANE_POLYGON_EPS
+    {
+        output.pop();
+    }
+    output
+}
+
+fn traditional_crane_intersect_convex(subject: &[DVec2], clip: &[DVec2]) -> Vec<DVec2> {
+    let mut output = subject.to_vec();
+    for index in 0..clip.len() {
+        let clip_start = clip[index];
+        let clip_end = clip[(index + 1) % clip.len()];
+        let input = std::mem::take(&mut output);
+        let Some(mut previous) = input.last().copied() else {
+            break;
+        };
+        let mut previous_side = (clip_end - clip_start).perp_dot(previous - clip_start);
+        for current in input {
+            let current_side = (clip_end - clip_start).perp_dot(current - clip_start);
+            let previous_inside = previous_side >= -TRADITIONAL_CRANE_POLYGON_EPS;
+            let current_inside = current_side >= -TRADITIONAL_CRANE_POLYGON_EPS;
+            if previous_inside != current_inside {
+                let denominator = previous_side - current_side;
+                if denominator.abs() > TRADITIONAL_CRANE_POLYGON_EPS.powi(2) {
+                    output.push(previous + (current - previous) * (previous_side / denominator));
+                }
+            }
+            if current_inside {
+                output.push(current);
+            }
+            previous = current;
+            previous_side = current_side;
+        }
+    }
+    traditional_crane_deduplicate_polygon(output)
+}
+
+fn traditional_crane_positive_overlap_area(left: &[DVec2], right: &[DVec2]) -> f64 {
+    let mut area = 0.0;
+    for left_triangle in traditional_crane_triangulate(left) {
+        for right_triangle in traditional_crane_triangulate(right) {
+            let intersection = traditional_crane_intersect_convex(&left_triangle, &right_triangle);
+            area += traditional_crane_polygon_area(&intersection).abs();
+        }
+    }
+    area
+}
+
+#[derive(Debug)]
+struct TraditionalCraneSandwichViolation {
+    middle_part: &'static str,
+    wing_part: &'static str,
+    middle_face: FaceId,
+    wing_face: FaceId,
+    middle_rank: usize,
+    wing_rank: usize,
+    overlap_area: f64,
+}
+
+#[derive(Debug)]
+struct TraditionalCraneSandwichAudit {
+    overlap_counts: BTreeMap<&'static str, usize>,
+    violations: Vec<TraditionalCraneSandwichViolation>,
+    minimum_positive_overlap_area: f64,
+}
+
+fn traditional_crane_sandwich_audit(
+    cp: &CreasePattern,
+    faces: &[Face],
+    state: &FlatState,
+) -> TraditionalCraneSandwichAudit {
+    let parts = traditional_crane_material_parts(cp, faces);
+    let plane = faces
+        .iter()
+        .map(|face| (face.id, plane_poly(cp, face, state)))
+        .collect::<HashMap<_, _>>();
+    let ranks = state
+        .order
+        .iter()
+        .enumerate()
+        .map(|(rank, face)| (*face, rank))
+        .collect::<HashMap<_, _>>();
+    let middle_parts = [("tail", &parts.tail), ("neck", &parts.neck)];
+    let wing_parts = [
+        ("back_wing", &parts.back_wing, true),
+        ("front_wing", &parts.front_wing, false),
+    ];
+    let mut overlap_counts = BTreeMap::new();
+    let mut violations = Vec::new();
+    let mut minimum_positive_overlap_area = f64::INFINITY;
+    for (middle_name, middle_faces) in middle_parts {
+        for &(wing_name, wing_faces, wing_must_be_below) in &wing_parts {
+            let label = match (middle_name, wing_name) {
+                ("tail", "back_wing") => "tail/back_wing",
+                ("tail", "front_wing") => "tail/front_wing",
+                ("neck", "back_wing") => "neck/back_wing",
+                ("neck", "front_wing") => "neck/front_wing",
+                _ => unreachable!(),
+            };
+            let mut overlaps = 0;
+            for &middle_face in middle_faces {
+                for &wing_face in wing_faces {
+                    let overlap_area = traditional_crane_positive_overlap_area(
+                        &plane[&middle_face],
+                        &plane[&wing_face],
+                    );
+                    if overlap_area <= TRADITIONAL_CRANE_OVERLAP_AREA_EPS {
+                        continue;
+                    }
+                    overlaps += 1;
+                    minimum_positive_overlap_area = minimum_positive_overlap_area.min(overlap_area);
+                    let middle_rank = ranks[&middle_face];
+                    let wing_rank = ranks[&wing_face];
+                    let valid = if wing_must_be_below {
+                        wing_rank < middle_rank
+                    } else {
+                        middle_rank < wing_rank
+                    };
+                    if !valid {
+                        violations.push(TraditionalCraneSandwichViolation {
+                            middle_part: middle_name,
+                            wing_part: wing_name,
+                            middle_face,
+                            wing_face,
+                            middle_rank,
+                            wing_rank,
+                            overlap_area,
+                        });
+                    }
+                }
+            }
+            overlap_counts.insert(label, overlaps);
+        }
+    }
+    TraditionalCraneSandwichAudit {
+        overlap_counts,
+        violations,
+        minimum_positive_overlap_area,
+    }
+}
+
+fn traditional_crane_order_change_counts(before: &[FaceId], after: &[FaceId]) -> (usize, usize) {
+    assert_eq!(before.len(), after.len());
+    let before_rank = before
+        .iter()
+        .enumerate()
+        .map(|(rank, face)| (*face, rank))
+        .collect::<HashMap<_, _>>();
+    let after_rank = after
+        .iter()
+        .enumerate()
+        .map(|(rank, face)| (*face, rank))
+        .collect::<HashMap<_, _>>();
+    let rank_changed = before
+        .iter()
+        .filter(|face| before_rank[face] != after_rank[face])
+        .count();
+    let mut pair_changed = 0;
+    for left in 0..before.len() {
+        for right in (left + 1)..before.len() {
+            let first = before[left];
+            let second = before[right];
+            if (before_rank[&first] < before_rank[&second])
+                != (after_rank[&first] < after_rank[&second])
+            {
+                pair_changed += 1;
+            }
+        }
+    }
+    (rank_changed, pair_changed)
+}
+
+/// 正本CSVから、頂点ID・辺ID・端点・M/V/Bを一切作り替えずにCPを作る。
+/// JSONの `implicit.C` は派生値の矛盾があるため、ここでも参照しない。
+fn traditional_crane_reference_cp() -> (CreasePattern, Vec<[String; 2]>) {
+    const VERTICES_CSV: &str =
+        include_str!("fixtures/traditional-crane/traditional_crane_vertices.csv");
+    const EDGES_CSV: &str =
+        include_str!("fixtures/traditional-crane/traditional_crane_edges_equations.csv");
+
+    let mut vertex_lines = VERTICES_CSV.lines().filter(|line| !line.trim().is_empty());
+    let vertex_header = vertex_lines.next().expect("正本頂点CSVの見出し");
+    assert_eq!(
+        vertex_header.trim_start_matches('\u{feff}'),
+        "vertex_id,x,y,scaled_x_for_side_L,scaled_y_for_side_L"
+    );
+    let mut vertices = Vec::new();
+    let mut raw_vertex_coordinates = Vec::new();
+    for (row, line) in vertex_lines.enumerate() {
+        let fields = line.split(',').map(str::trim).collect::<Vec<_>>();
+        assert!(fields.len() >= 3, "正本頂点CSVの{}行目", row + 2);
+        let id = fields[0]
+            .parse::<u32>()
+            .unwrap_or_else(|error| panic!("正本頂点IDを読めない: {error}"));
+        assert_eq!(id as usize, row, "正本頂点IDは0から連続する");
+        let x = fields[1]
+            .parse::<f64>()
+            .unwrap_or_else(|error| panic!("正本頂点xを読めない: {error}"));
+        let y = fields[2]
+            .parse::<f64>()
+            .unwrap_or_else(|error| panic!("正本頂点yを読めない: {error}"));
+        vertices.push(Vertex { id, pos: [x, y] });
+        // 0/1も含めて、利用者資料の字面を作品ファイルへそのまま保存する。
+        raw_vertex_coordinates.push([fields[1].to_owned(), fields[2].to_owned()]);
+    }
+
+    let mut edge_lines = EDGES_CSV.lines().filter(|line| !line.trim().is_empty());
+    let edge_header = edge_lines.next().expect("正本辺CSVの見出し");
+    let columns = edge_header
+        .trim_start_matches('\u{feff}')
+        .split(',')
+        .map(str::trim)
+        .collect::<Vec<_>>();
+    let column = |name: &str| {
+        columns
+            .iter()
+            .position(|candidate| *candidate == name)
+            .unwrap_or_else(|| panic!("正本辺CSVに列{name}が無い"))
+    };
+    let edge_id_column = column("edge_id");
+    let assignment_column = column("assignment");
+    let v_start_column = column("v_start");
+    let v_end_column = column("v_end");
+    let x1_column = column("x1");
+    let y1_column = column("y1");
+    let x2_column = column("x2");
+    let y2_column = column("y2");
+
+    let mut edges = Vec::new();
+    for (row, line) in edge_lines.enumerate() {
+        let fields = line.split(',').map(str::trim).collect::<Vec<_>>();
+        let field = |index: usize, name: &str| {
+            fields
+                .get(index)
+                .copied()
+                .unwrap_or_else(|| panic!("正本辺CSVの{}行目に列{name}が無い", row + 2))
+        };
+        let edge_id_text = field(edge_id_column, "edge_id").trim_start_matches('e');
+        let id = edge_id_text
+            .parse::<u32>()
+            .unwrap_or_else(|error| panic!("正本辺IDを読めない: {error}"));
+        assert_eq!(id as usize, row, "正本辺IDは0から連続する");
+        let v0 = field(v_start_column, "v_start")
+            .parse::<u32>()
+            .unwrap_or_else(|error| panic!("正本辺の始点IDを読めない: {error}"));
+        let v1 = field(v_end_column, "v_end")
+            .parse::<u32>()
+            .unwrap_or_else(|error| panic!("正本辺の終点IDを読めない: {error}"));
+        let assignment = field(assignment_column, "assignment");
+        let kind = match assignment {
+            "M" => EdgeKind::Mountain,
+            "V" => EdgeKind::Valley,
+            "B" => EdgeKind::Border,
+            other => panic!("正本辺{id}のassignmentが不正: {other}"),
+        };
+        let raw0 = raw_vertex_coordinates
+            .get(v0 as usize)
+            .unwrap_or_else(|| panic!("正本辺{id}の始点{v0}が無い"));
+        let raw1 = raw_vertex_coordinates
+            .get(v1 as usize)
+            .unwrap_or_else(|| panic!("正本辺{id}の終点{v1}が無い"));
+        assert_eq!(field(x1_column, "x1"), raw0[0], "正本辺{id}の始点x");
+        assert_eq!(field(y1_column, "y1"), raw0[1], "正本辺{id}の始点y");
+        assert_eq!(field(x2_column, "x2"), raw1[0], "正本辺{id}の終点x");
+        assert_eq!(field(y2_column, "y2"), raw1[1], "正本辺{id}の終点y");
+        edges.push(Edge { id, v0, v1, kind });
+    }
+
+    assert_eq!(vertices.len(), 56, "正本頂点56個");
+    assert_eq!(edges.len(), 114, "正本辺114本");
+    (
+        CreasePattern {
+            vertices,
+            edges,
+            next_vertex_id: 56,
+            next_edge_id: 114,
+        },
+        raw_vertex_coordinates,
+    )
+}
+
+/// `collapse_precrease_network` は入力を有限区間でなく支持直線として読む。
+/// 同じ支持直線を複数回渡すと後続のlineがhitされないため、正本M/Vの支持直線を一意化する。
+fn traditional_crane_unique_collapse_lines(cp: &CreasePattern) -> Vec<[[f64; 2]; 2]> {
+    const LINE_TOLERANCE: f64 = 1e-9;
+    let positions = vertex_pos(cp);
+    let mut lines = Vec::<[[f64; 2]; 2]>::new();
+    for edge in &cp.edges {
+        if !matches!(edge.kind, EdgeKind::Mountain | EdgeKind::Valley) {
+            continue;
+        }
+        let a = positions[&edge.v0];
+        let b = positions[&edge.v1];
+        let already_present = lines.iter().any(|line| {
+            let line_a = DVec2::from(line[0]);
+            let line_b = DVec2::from(line[1]);
+            let direction = line_b - line_a;
+            let length = direction.length();
+            let distance = |point: DVec2| {
+                let offset = point - line_a;
+                (offset.x * direction.y - offset.y * direction.x).abs() / length
+            };
+            distance(a) <= LINE_TOLERANCE && distance(b) <= LINE_TOLERANCE
+        });
+        if !already_present {
+            lines.push([a.to_array(), b.to_array()]);
+        }
+    }
+    lines
+}
+
+fn traditional_crane_collapse_work() -> TraditionalCraneCollapseWork {
+    let (oracle_cp, raw_vertex_coordinates) = traditional_crane_reference_cp();
+    let faces = extract_faces(&oracle_cp);
+    let initial = FlatState::initial(&oracle_cp, &faces);
+    let collapse_lines = traditional_crane_unique_collapse_lines(&oracle_cp);
+    let mut collapsed_cp = oracle_cp.clone();
+    let mut result = collapse_precrease_network(
+        &mut collapsed_cp,
+        &faces,
+        &initial,
+        &PrecreaseCollapseInput {
+            lines: collapse_lines,
+            target_layers: None,
+        },
+    )
+    .unwrap_or_else(|error| panic!("正本CPを一括collapseできない: {error}"));
+    result.step.id = 0;
+
+    // CP+M/Vだけでは決まらない枝は、利用者が与えた層oracleを既存の保存欄へ明示する。
+    // collapseが返すFace ID tie-breakを作品oracleとして保存しない。
+    let generated_order_before_oracle = result.state.order.clone();
+    let declared_order = traditional_crane_declared_layer_oracle(
+        &oracle_cp,
+        &faces,
+        &result.state.placements,
+        &generated_order_before_oracle,
+    );
+    result.state.order = declared_order.clone();
+    let material_faces = faces
+        .iter()
+        .map(|face| (face.id, face))
+        .collect::<HashMap<_, _>>();
+    result.step.layer_order = Some(
+        declared_order
+            .iter()
+            .map(|face| representative_point(&oracle_cp, material_faces[face]))
+            .collect(),
+    );
+
+    let mut document = Document::new(Paper {
+        width_mm: 100.0,
+        height_mm: 100.0,
+    });
+    // 作品の展開図はcollapse内部の作業値でなく、入力された正本そのものを保持する。
+    document.cp = oracle_cp;
+    document.sequence = vec![result.step.clone()];
+    TraditionalCraneCollapseWork {
+        document,
+        raw_vertex_coordinates,
+        collapsed_cp,
+        result,
+        generated_order_before_oracle,
+    }
+}
+
+/// serde_json依存を増やさず、正本の座標トークンをそのまま残すSCHEMA_VERSION=1 serializer。
+fn traditional_crane_work_json(work: &TraditionalCraneCollapseWork) -> String {
+    let document = &work.document;
+    assert_eq!(
+        document.cp.vertices.len(),
+        work.raw_vertex_coordinates.len()
+    );
+    let mut output = String::from("{\n");
+    output.push_str(&format!(
+        "  \"schema_version\": {},\n  \"paper\": {{\"width_mm\": {:?}, \"height_mm\": {:?}}},\n",
+        document.schema_version, document.paper.width_mm, document.paper.height_mm
+    ));
+    output.push_str("  \"cp\": {\n    \"vertices\": [\n");
+    for (index, (vertex, raw)) in document
+        .cp
+        .vertices
+        .iter()
+        .zip(&work.raw_vertex_coordinates)
+        .enumerate()
+    {
+        let comma = if index + 1 == document.cp.vertices.len() {
+            ""
+        } else {
+            ","
+        };
+        output.push_str(&format!(
+            "      {{\"id\": {}, \"pos\": [{}, {}]}}{comma}\n",
+            vertex.id, raw[0], raw[1]
+        ));
+    }
+    output.push_str("    ],\n    \"edges\": [\n");
+    for (index, edge) in document.cp.edges.iter().enumerate() {
+        let comma = if index + 1 == document.cp.edges.len() {
+            ""
+        } else {
+            ","
+        };
+        output.push_str(&format!(
+            "      {{\"id\": {}, \"v0\": {}, \"v1\": {}, \"kind\": \"{:?}\"}}{comma}\n",
+            edge.id, edge.v0, edge.v1, edge.kind
+        ));
+    }
+    output.push_str(&format!(
+        "    ],\n    \"next_vertex_id\": {},\n    \"next_edge_id\": {}\n  }},\n",
+        document.cp.next_vertex_id, document.cp.next_edge_id
+    ));
+    output.push_str("  \"sequence\": [\n");
+    for (step_index, step) in document.sequence.iter().enumerate() {
+        assert!(
+            step.alignment.is_none(),
+            "collapse stepにalignmentを合成しない"
+        );
+        assert!(
+            step.finish_soft.is_none(),
+            "collapse stepにfinish_softを合成しない"
+        );
+        assert!(step.note.is_empty(), "collapse stepのnoteは空");
+        let step_comma = if step_index + 1 == document.sequence.len() {
+            ""
+        } else {
+            ","
+        };
+        output.push_str(&format!(
+            "    {{\"id\": {}, \"kind\": \"{:?}\", \"drivers\": [\n",
+            step.id, step.kind
+        ));
+        for (driver_index, driver) in step.drivers.iter().enumerate() {
+            let comma = if driver_index + 1 == step.drivers.len() {
+                ""
+            } else {
+                ","
+            };
+            output.push_str(&format!(
+                "      {{\"a\": [{:?}, {:?}], \"b\": [{:?}, {:?}], \"target_angle_deg\": {:?}}}{comma}\n",
+                driver.a[0], driver.a[1], driver.b[0], driver.b[1], driver.target_angle_deg
+            ));
+        }
+        output.push_str("    ], \"layer_order\": [\n");
+        let layer_order = step
+            .layer_order
+            .as_ref()
+            .expect("collapse stepには永続化したlayer_orderがある");
+        for (point_index, point) in layer_order.iter().enumerate() {
+            let comma = if point_index + 1 == layer_order.len() {
+                ""
+            } else {
+                ","
+            };
+            output.push_str(&format!("      [{:?}, {:?}]{comma}\n", point[0], point[1]));
+        }
+        output.push_str(&format!("    ], \"note\": \"\"}}{step_comma}\n"));
+    }
+    let display = &document.display;
+    output.push_str(&format!(
+        "  ],\n  \"display\": {{\"front_color\": {:?}, \"back_color\": {:?}, \"grid_divisions\": {}, \"soft_enabled\": {}, \"soft_stiffness\": {:?}, \"soft_pressure\": {:?}, \"overlap_prevention_enabled\": {}, \"penetration_prevention_enabled\": {}}}\n}}\n",
+        display.front_color,
+        display.back_color,
+        display.grid_divisions,
+        display.soft_enabled,
+        display.soft_stiffness,
+        display.soft_pressure,
+        display.overlap_prevention_enabled,
+        display.penetration_prevention_enabled
+    ));
+    output
+}
+
+/// collapse結果を伝統手順の逆算に使えるよう、派生FaceIdでなく原紙の代表点と境界で保存する。
+/// 1行が1面の1境界頂点で、rank順・面境界順に並ぶ。
+fn traditional_crane_collapse_shape_csv(
+    document: &Document,
+    faces: &[Face],
+    state: &FlatState,
+) -> String {
+    let frame = explicit_flat_frame(document, faces, state);
+    let positions = vertex_pos(&document.cp);
+    let material_faces = faces
+        .iter()
+        .map(|face| (face.id, face))
+        .collect::<HashMap<_, _>>();
+    let mut folded_faces = frame.faces.iter().collect::<Vec<_>>();
+    folded_faces.sort_by_key(|face| face.surface_rank);
+
+    let mut output = String::from(
+        "# oracle_schema=traditional-crane-collapse-v1\n# coordinates=material:[0,1]^2-left-bottom-y-up;folded:[x,y,z]\nsurface_rank,material_rep_x,material_rep_y,mirrored,boundary_index,material_vertex_id,material_x,material_y,folded_x,folded_y,folded_z\n",
+    );
+    for folded in folded_faces {
+        let material = material_faces[&folded.face];
+        let representative = representative_point(&document.cp, material);
+        assert_eq!(material.vertices.len(), folded.polygon.len());
+        for (boundary_index, (&vertex_id, point)) in
+            material.vertices.iter().zip(&folded.polygon).enumerate()
+        {
+            let material_point = positions[&vertex_id];
+            output.push_str(&format!(
+                "{},{:?},{:?},{},{},{},{:?},{:?},{:?},{:?},{:?}\n",
+                folded.surface_rank,
+                representative[0],
+                representative[1],
+                folded.mirrored,
+                boundary_index,
+                vertex_id,
+                material_point.x,
+                material_point.y,
+                point[0],
+                point[1],
+                point[2]
+            ));
+        }
+    }
+    output
+}
+
+/// 1000x700の上面投影で、線を含まない紙面だけをface rankで所有者判定する。
+/// 実機§10.7.10(1)と同じ視野を使い、M/V全反転の診断を画面へ触れずに行う。
+fn traditional_crane_paper_pixels(
+    document: &Document,
+    faces: &[Face],
+    state: &FlatState,
+    view: &str,
+) -> (usize, usize, BTreeMap<FaceId, usize>) {
+    const WIDTH: usize = 1000;
+    const HEIGHT: usize = 700;
+    let frame = explicit_flat_frame(document, faces, state);
+    let all_points = frame
+        .faces
+        .iter()
+        .flat_map(|face| face.polygon.iter())
+        .collect::<Vec<_>>();
+    let minimum = [0, 1, 2].map(|axis| {
+        all_points
+            .iter()
+            .map(|point| point[axis])
+            .fold(f64::INFINITY, f64::min)
+    });
+    let maximum = [0, 1, 2].map(|axis| {
+        all_points
+            .iter()
+            .map(|point| point[axis])
+            .fold(f64::NEG_INFINITY, f64::max)
+    });
+    let center = [0, 1, 2].map(|axis| (minimum[axis] + maximum[axis]) * 0.5);
+    let extent = [0, 1, 2].map(|axis| maximum[axis] - minimum[axis]);
+    let aspect = WIDTH as f64 / HEIGHT as f64;
+    let framing_extent = extent[1].max(extent[0] / aspect).max(0.1);
+    let tangent = (45.0_f64.to_radians() * 0.5).tan();
+    let distance = (framing_extent * 0.5 / tangent) * 1.3;
+    let center3 = DVec3::from(center);
+    let (camera, nominal_up) = match view {
+        "top" => (center3 + DVec3::Z * distance, DVec3::Y),
+        "isometric" => (center3 + DVec3::new(0.55, -0.55, 0.9) * distance, DVec3::Z),
+        "side" => (center3 + DVec3::X * distance, DVec3::Z),
+        other => panic!("未知の折り鶴診断視点: {other}"),
+    };
+    let direction = (center3 - camera).normalize();
+    let right = direction.cross(nominal_up).normalize();
+    let screen_up = right.cross(direction).normalize();
+
+    let projected = frame
+        .faces
+        .iter()
+        .map(|face| {
+            let polygon = face
+                .polygon
+                .iter()
+                .map(|point| {
+                    let relative = DVec3::from(*point) - camera;
+                    let forward = relative.dot(direction);
+                    let ndc_x = relative.dot(right) / (forward * tangent * aspect);
+                    let ndc_y = relative.dot(screen_up) / (forward * tangent);
+                    [
+                        (ndc_x * 0.5 + 0.5) * WIDTH as f64,
+                        (ndc_y * 0.5 + 0.5) * HEIGHT as f64,
+                    ]
+                })
+                .collect::<Vec<_>>();
+            (face.face, face.surface_rank, face.mirrored, polygon)
+        })
+        .collect::<Vec<_>>();
+    let contains = |polygon: &[[f64; 2]], x: f64, y: f64| {
+        let mut inside = false;
+        let mut previous = polygon.len() - 1;
+        for current in 0..polygon.len() {
+            let a = polygon[current];
+            let b = polygon[previous];
+            if (a[1] > y) != (b[1] > y) && x < (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]) + a[0] {
+                inside = !inside;
+            }
+            previous = current;
+        }
+        inside
+    };
+
+    let mut paper = 0usize;
+    let mut back = 0usize;
+    let mut back_by_face = BTreeMap::new();
+    for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+            let sample = [x as f64 + 0.5, y as f64 + 0.5];
+            let top = projected
+                .iter()
+                .filter(|(_, _, _, polygon)| contains(polygon, sample[0], sample[1]))
+                .max_by_key(|(face, rank, _, _)| (*rank, std::cmp::Reverse(*face)));
+            let Some((face, _, mirrored, _)) = top else {
+                continue;
+            };
+            paper += 1;
+            if *mirrored {
+                back += 1;
+                *back_by_face.entry(*face).or_insert(0) += 1;
+            }
+        }
+    }
+    (paper, back, back_by_face)
+}
+
+/// 正本のM/V表裏契約だけを全体で反転した比較診断。通常実行では作品を変更しない。
+#[test]
+#[ignore]
+fn diagnose_traditional_crane_global_mountain_valley_swap() {
+    let original = traditional_crane_collapse_work();
+    let original_faces = extract_faces(&original.document.cp);
+    let original_pixels = traditional_crane_paper_pixels(
+        &original.document,
+        &original_faces,
+        &original.result.state,
+        "top",
+    );
+
+    let (mut swapped_cp, _) = traditional_crane_reference_cp();
+    for edge in &mut swapped_cp.edges {
+        edge.kind = match edge.kind {
+            EdgeKind::Mountain => EdgeKind::Valley,
+            EdgeKind::Valley => EdgeKind::Mountain,
+            other => other,
+        };
+    }
+    let swapped_faces = extract_faces(&swapped_cp);
+    let initial = FlatState::initial(&swapped_cp, &swapped_faces);
+    let collapse_lines = traditional_crane_unique_collapse_lines(&swapped_cp);
+    let mut collapsed_cp = swapped_cp.clone();
+    let swapped = collapse_precrease_network(
+        &mut collapsed_cp,
+        &swapped_faces,
+        &initial,
+        &PrecreaseCollapseInput {
+            lines: collapse_lines,
+            target_layers: None,
+        },
+    )
+    .expect("M/V全反転CPを一括collapseできる");
+    let mut swapped_document = Document::new(Paper {
+        width_mm: 100.0,
+        height_mm: 100.0,
+    });
+    swapped_document.cp = swapped_cp;
+    let swapped_pixels =
+        traditional_crane_paper_pixels(&swapped_document, &swapped_faces, &swapped.state, "top");
+    let changed_assignments = collapsed_cp
+        .edges
+        .iter()
+        .zip(&swapped_document.cp.edges)
+        .filter(|(actual, input)| actual.kind != input.kind)
+        .count();
+    let residual = traditional_crane_collapse_cycle_residual(
+        &swapped_document.cp,
+        &swapped_faces,
+        &swapped.state,
+    );
+    let frame = explicit_flat_frame(&swapped_document, &swapped_faces, &swapped.state);
+    println!(
+        "original paper={} back={} ratio={:.12}% back_by_face={:?}",
+        original_pixels.0,
+        original_pixels.1,
+        original_pixels.1 as f64 / original_pixels.0 as f64 * 100.0,
+        original_pixels.2
+    );
+    let replayed_original = replay(&original.document, 1, 1.0);
+    let replay_ranks = replayed_original
+        .frame
+        .faces
+        .iter()
+        .map(|face| (face.face, face.surface_rank))
+        .collect::<BTreeMap<_, _>>();
+    let mut replay_order = replayed_original
+        .frame
+        .faces
+        .iter()
+        .map(|face| (face.surface_rank, face.face))
+        .collect::<Vec<_>>();
+    replay_order.sort_unstable();
+    let replay_state = FlatState {
+        placements: original.result.state.placements.clone(),
+        order: replay_order.into_iter().map(|(_, face)| face).collect(),
+    };
+    let replay_pixels =
+        traditional_crane_paper_pixels(&original.document, &original_faces, &replay_state, "top");
+    println!(
+        "original order={:?} direct_ranks(face21,face57)=({:?},{:?}) replay_ranks(face21,face57)=({:?},{:?}) replay_visible paper={} back={} ratio={:.12}% back_by_face={:?}",
+        original.result.state.order,
+        original
+            .result
+            .state
+            .order
+            .iter()
+            .position(|face| *face == 21),
+        original
+            .result
+            .state
+            .order
+            .iter()
+            .position(|face| *face == 57),
+        replay_ranks.get(&21),
+        replay_ranks.get(&57),
+        replay_pixels.0,
+        replay_pixels.1,
+        replay_pixels.1 as f64 / replay_pixels.0 as f64 * 100.0,
+        replay_pixels.2
+    );
+    println!(
+        "swapped paper={} back={} ratio={:.12}% back_by_face={:?}",
+        swapped_pixels.0,
+        swapped_pixels.1,
+        swapped_pixels.1 as f64 / swapped_pixels.0 as f64 * 100.0,
+        swapped_pixels.2
+    );
+    println!(
+        "swapped order={:?} residual={:.17e} warnings={} changed_assignments={} self_intersection_pairs={:?}",
+        swapped.state.order,
+        residual,
+        swapped.warnings.len(),
+        changed_assignments,
+        self_intersection_pairs(&frame)
+    );
+}
+
+/// 正本CPの外から見える紙面は、表だけまたは裏だけでなければならない。
+///
+/// 1000x700の線なし紙面で直接collapseは少数側0/121,547画素だった。実測0を境界にせず、
+/// zero-eventの95%上限2.4646394863e-5を約4倍へ上方丸めした1e-4を採る(§10.7.9)。
+/// exact sideは平坦面が線へ退化して紙面0画素になるため、0/0を0%とは数えない。
+#[test]
+fn traditional_crane_replay_visible_surface_is_uniform() {
+    const VISIBLE_SURFACE_MINORITY_RATIO_LIMIT: f64 = 1e-4;
+    let work = traditional_crane_collapse_work();
+    let faces = extract_faces(&work.document.cp);
+    let direct_top =
+        traditional_crane_paper_pixels(&work.document, &faces, &work.result.state, "top");
+    let direct_isometric =
+        traditional_crane_paper_pixels(&work.document, &faces, &work.result.state, "isometric");
+    let direct_side =
+        traditional_crane_paper_pixels(&work.document, &faces, &work.result.state, "side");
+    let uniform = |pixels: &(usize, usize, BTreeMap<FaceId, usize>)| {
+        pixels.0 > 0
+            && pixels.1.min(pixels.0 - pixels.1) as f64 / pixels.0 as f64
+                <= VISIBLE_SURFACE_MINORITY_RATIO_LIMIT
+    };
+    assert!(
+        uniform(&direct_top)
+            && uniform(&direct_isometric)
+            && (direct_top.1 * 2 <= direct_top.0) == (direct_isometric.1 * 2 <= direct_isometric.0)
+            && direct_side.0 == 0,
+        "正本collapse自身の3方向表裏契約: top={direct_top:?} isometric={direct_isometric:?} side={direct_side:?}"
+    );
+
+    let replayed = replay(&work.document, 1, 1.0);
+    let mut replay_order = replayed
+        .frame
+        .faces
+        .iter()
+        .map(|face| (face.surface_rank, face.face))
+        .collect::<Vec<_>>();
+    replay_order.sort_unstable();
+    let replay_state = FlatState {
+        placements: work.result.state.placements.clone(),
+        order: replay_order.into_iter().map(|(_, face)| face).collect(),
+    };
+    let visible_top = traditional_crane_paper_pixels(&work.document, &faces, &replay_state, "top");
+    let visible_isometric =
+        traditional_crane_paper_pixels(&work.document, &faces, &replay_state, "isometric");
+    let visible_side =
+        traditional_crane_paper_pixels(&work.document, &faces, &replay_state, "side");
+    let top_minority = visible_top.1.min(visible_top.0 - visible_top.1);
+    let isometric_minority = visible_isometric
+        .1
+        .min(visible_isometric.0 - visible_isometric.1);
+    let rank_mismatches = replayed
+        .frame
+        .faces
+        .iter()
+        .filter(|actual| {
+            work.result
+                .state
+                .order
+                .iter()
+                .position(|face| *face == actual.face)
+                != Some(actual.surface_rank as usize)
+        })
+        .count();
+    assert_eq!(
+        rank_mismatches, 0,
+        "保存したlayer oracleとreplay frameのsurface_rankは59面すべて一致する"
+    );
+    assert!(
+        uniform(&visible_top)
+            && uniform(&visible_isometric)
+            && (visible_top.1 * 2 <= visible_top.0)
+                == (visible_isometric.1 * 2 <= visible_isometric.0)
+            && visible_side.0 == 0,
+        "保存collapseのreplayで見える表裏が混在: top paper={} front={} back={} minority_ratio={:.12}% back_by_face={:?}; isometric paper={} front={} back={} minority_ratio={:.12}% back_by_face={:?}; side paper={} back={}; limit={:.12}% surface_rank_mismatches={}/59",
+        visible_top.0,
+        visible_top.0 - visible_top.1,
+        visible_top.1,
+        top_minority as f64 / visible_top.0 as f64 * 100.0,
+        visible_top.2,
+        visible_isometric.0,
+        visible_isometric.0 - visible_isometric.1,
+        visible_isometric.1,
+        isometric_minority as f64 / visible_isometric.0 as f64 * 100.0,
+        visible_isometric.2,
+        visible_side.0,
+        visible_side.1,
+        VISIBLE_SURFACE_MINORITY_RATIO_LIMIT * 100.0,
+        rank_mismatches
+    );
+}
+
+/// 全内部辺を一周した反射配置と、collapseが保存した配置との差の最大値。
+/// 角度差(rad)と平行移動距離の大きい方を採る。これはAPI内部の`approx_eq`と同じ二量である。
+fn traditional_crane_collapse_cycle_residual(
+    cp: &CreasePattern,
+    faces: &[Face],
+    state: &FlatState,
+) -> f64 {
+    let positions = vertex_pos(cp);
+    let mut owners = BTreeMap::<u32, Vec<FaceId>>::new();
+    for face in faces {
+        for &edge_id in &face.edges {
+            owners.entry(edge_id).or_default().push(face.id);
+        }
+    }
+    let mut checked = 0_usize;
+    let mut worst = 0.0_f64;
+    for edge in &cp.edges {
+        if !matches!(edge.kind, EdgeKind::Mountain | EdgeKind::Valley) {
+            continue;
+        }
+        let incident = owners
+            .get(&edge.id)
+            .unwrap_or_else(|| panic!("正本辺{}に所属面が無い", edge.id));
+        assert_eq!(incident.len(), 2, "正本M/V辺{}は内部辺", edge.id);
+        let reflection = Isometry2::reflection(positions[&edge.v0], positions[&edge.v1]);
+        let candidate = state.placements[&incident[0]].compose(&reflection);
+        let existing = state.placements[&incident[1]];
+        assert_eq!(
+            candidate.mirrored, existing.mirrored,
+            "正本辺{}を越えた鏡映の表裏",
+            edge.id
+        );
+        let turn = std::f64::consts::TAU;
+        let angle = (candidate.rotation - existing.rotation).rem_euclid(turn);
+        let angle = angle.min(turn - angle);
+        let translation = (candidate.translation - existing.translation).length();
+        worst = worst.max(angle).max(translation);
+        checked += 1;
+    }
+    assert_eq!(checked, 102, "B12を除く正本M/V102辺でcycleを検査する");
+    worst
+}
+
+fn assert_traditional_crane_shape_snapshot(stored: &str, generated: &str) {
+    const COORDINATE_TOLERANCE: f64 = 1e-9;
+    const EXACT_COLUMNS: [usize; 4] = [0, 3, 4, 5];
+    const FLOAT_COLUMNS: [usize; 7] = [1, 2, 6, 7, 8, 9, 10];
+    let stored_lines = stored.lines().collect::<Vec<_>>();
+    let generated_lines = generated.lines().collect::<Vec<_>>();
+    assert_eq!(stored_lines.len(), 219, "shape oracleは見出し3行+境界216行");
+    assert_eq!(stored_lines.len(), generated_lines.len());
+    for (line_index, (stored_line, generated_line)) in
+        stored_lines.iter().zip(&generated_lines).enumerate()
+    {
+        if line_index < 3 {
+            assert_eq!(stored_line, generated_line, "shape oracle見出し");
+            continue;
+        }
+        let stored_fields = stored_line.split(',').collect::<Vec<_>>();
+        let generated_fields = generated_line.split(',').collect::<Vec<_>>();
+        assert_eq!(
+            stored_fields.len(),
+            11,
+            "shape oracle {}行目",
+            line_index + 1
+        );
+        assert_eq!(stored_fields.len(), generated_fields.len());
+        for column in EXACT_COLUMNS {
+            assert_eq!(
+                stored_fields[column],
+                generated_fields[column],
+                "shape oracle {}行目{}列目の識別値",
+                line_index + 1,
+                column + 1
+            );
+        }
+        for column in FLOAT_COLUMNS {
+            let stored_value = stored_fields[column]
+                .parse::<f64>()
+                .unwrap_or_else(|error| panic!("shape oracle数値を読めない: {error}"));
+            let generated_value = generated_fields[column]
+                .parse::<f64>()
+                .unwrap_or_else(|error| panic!("生成shape数値を読めない: {error}"));
+            assert!(
+                (stored_value - generated_value).abs() <= COORDINATE_TOLERANCE,
+                "shape oracle {}行目{}列目: 保存{stored_value:e} / 生成{generated_value:e}",
+                line_index + 1,
+                column + 1
+            );
+        }
+    }
+}
+
+fn traditional_crane_fixture_path(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/traditional-crane")
+        .join(name)
+}
+
+/// 正本CPをそのまま持ち、既存の一括collapse 1手を保存した作品の受け入れ検査。
+#[test]
+fn traditional_crane_cp_work_matches_reference() {
+    const GEOMETRY_TOLERANCE: f64 = 1e-9;
+    // 2026-08-26の反射cycle最大残差は4.518468932346309e-11。
+    // 実測値を境界にせず、約22倍の余裕を持つモデル共通EPS 1e-9を上限にする(§10.7.9)。
+    const COLLAPSE_RESIDUAL_LIMIT: f64 = 1e-9;
+    // 保存stepの通常replayはclosure_rms=7.218742174998615e-12を実測した。
+    // こちらも実測値を境界にせず、約139倍の1e-9を上限にする。
+    const REPLAY_CLOSURE_LIMIT: f64 = 1e-9;
+
+    let work = traditional_crane_collapse_work();
+    let document = &work.document;
+    let stored_work =
+        std::fs::read_to_string(traditional_crane_fixture_path("traditional-crane-cp.ori3"))
+            .expect("正本CP作品fixtureを読む");
+    let generated_work = traditional_crane_work_json(&work);
+    assert_eq!(
+        stored_work.replace("\r\n", "\n"),
+        generated_work,
+        "作品fixtureは正本CSV・既存collapse API・利用者layer oracleから生成したSCHEMA_VERSION=1と全文一致する"
+    );
+
+    assert_eq!(document.schema_version, ori3_model::SCHEMA_VERSION);
+    assert_eq!(document.cp.vertices.len(), 56);
+    assert_eq!(document.cp.edges.len(), 114);
+    assert_eq!(document.cp.next_vertex_id, 56);
+    assert_eq!(document.cp.next_edge_id, 114);
+    let mountain = document
+        .cp
+        .edges
+        .iter()
+        .filter(|edge| edge.kind == EdgeKind::Mountain)
+        .count();
+    let valley = document
+        .cp
+        .edges
+        .iter()
+        .filter(|edge| edge.kind == EdgeKind::Valley)
+        .count();
+    let border = document
+        .cp
+        .edges
+        .iter()
+        .filter(|edge| edge.kind == EdgeKind::Border)
+        .count();
+    assert_eq!((mountain, valley, border), (61, 41, 12));
+    let faces = extract_faces(&document.cp);
+    assert_eq!(faces.len(), 59);
+
+    let oracle_edges = traditional_crane_edges();
+    let positions = vertex_pos(&document.cp);
+    let exact_matches = oracle_edges
+        .iter()
+        .filter(|oracle| {
+            let id = oracle
+                .id
+                .trim_start_matches('e')
+                .parse::<u32>()
+                .expect("正本edge_id");
+            let edge = document
+                .cp
+                .edges
+                .iter()
+                .find(|edge| edge.id == id)
+                .expect("作品内の正本辺");
+            let kind_matches = matches!(
+                (oracle.assignment, edge.kind),
+                ('M', EdgeKind::Mountain) | ('V', EdgeKind::Valley) | ('B', EdgeKind::Border)
+            );
+            kind_matches && positions[&edge.v0] == oracle.p0 && positions[&edge.v1] == oracle.p1
+        })
+        .count();
+    assert_eq!(
+        exact_matches, 114,
+        "正本114辺を端点・向き・M/V/Bまで完全注入する"
+    );
+
+    assert_eq!(document.sequence.len(), 1, "一括collapse 1手だけを保存する");
+    assert_eq!(document.sequence[0].kind, TechniqueKind::Twist);
+    assert_eq!(document.sequence[0].drivers.len(), 102);
+    assert_eq!(
+        document.sequence[0]
+            .layer_order
+            .as_ref()
+            .expect("collapse層順")
+            .len(),
+        59
+    );
+    assert!(work.result.added_edges.is_empty(), "正本CPへ辺を追加しない");
+    assert_eq!(
+        work.result.warnings.len(),
+        1,
+        "展開図だけで決まらない重なりを1件の警告へ集約する"
+    );
+    assert!(
+        work.result.warnings[0].starts_with(
+            ori3_layers::precrease_collapse::PRECREASE_ORDER_UNDETERMINED_WARNING_PREFIX
+        ),
+        "内部用語を出さず、未決定の面組を既存warning経路へ出す: {:?}",
+        work.result.warnings
+    );
+    assert_eq!(
+        work.collapsed_cp, document.cp,
+        "collapseは正本CPを変更しない"
+    );
+    assert_eq!(work.result.state.order.len(), 59);
+    assert_eq!(work.result.state.placements.len(), 59);
+
+    let cycle_residual =
+        traditional_crane_collapse_cycle_residual(&document.cp, &faces, &work.result.state);
+    assert!(
+        cycle_residual <= COLLAPSE_RESIDUAL_LIMIT,
+        "collapse反射cycle残差{cycle_residual:e}が上限{COLLAPSE_RESIDUAL_LIMIT:e}を超えた"
+    );
+    let direct_frame = explicit_flat_frame(document, &faces, &work.result.state);
+    assert!(
+        !ori3_rigid::layer_order_conflicts(&document.cp, &faces, &direct_frame),
+        "collapseのsurface_rankが正本M/Vと矛盾しない"
+    );
+    assert_eq!(
+        self_intersection_pairs(&direct_frame),
+        Vec::<(FaceId, FaceId)>::new(),
+        "collapse直後のself_intersection_pairs=[]"
+    );
+
+    // 保存したDriverLine+layer_orderを平坦状態として読み戻す経路は、APIの直接結果と一致する。
+    // 3D solverのsurface_rankは、互いに重ならない面どうしを別の順に並べ得るため、
+    // 作品に保存した全順序との比較にはFace3D.layerを使う。
+    let (saved_flat_state, flat_warnings) =
+        flat_state_at(document, &faces, 1).expect("保存collapse stepの平坦状態");
+    assert!(flat_warnings.is_empty(), "平坦状態の読戻し警告なし");
+    assert_eq!(saved_flat_state.order, work.result.state.order);
+    for face in &faces {
+        assert!(
+            saved_flat_state.placements[&face.id]
+                .approx_eq(&work.result.state.placements[&face.id], GEOMETRY_TOLERANCE),
+            "面{}の保存collapse配置",
+            face.id
+        );
+    }
+
+    let replayed = replay(document, 1, 1.0);
+    assert!(replayed.skipped.is_empty(), "保存collapse stepを飛ばさない");
+    assert!(
+        replayed.warnings.iter().all(|warning| {
+            !warning.starts_with(
+                ori3_layers::precrease_collapse::PRECREASE_ORDER_UNDETERMINED_WARNING_PREFIX,
+            ) && !(warning.starts_with("保存された紙の重なり順")
+                && warning.contains("採用しません"))
+        }),
+        "一般制約を満たす保存oracleの通常replayには未決定・不採用警告を出さない: {:?}",
+        replayed.warnings
+    );
+    assert!(
+        replayed.converged || replayed.best_effort,
+        "有限な再生結果がある"
+    );
+    assert!(
+        replayed.closure_rms <= REPLAY_CLOSURE_LIMIT,
+        "保存作品の再生closure_rms={}が上限{}を超えた; warnings={:?}",
+        replayed.closure_rms,
+        REPLAY_CLOSURE_LIMIT,
+        replayed.warnings
+    );
+    let max_z = replayed
+        .frame
+        .faces
+        .iter()
+        .flat_map(|face| &face.polygon)
+        .map(|point| point[2].abs())
+        .fold(0.0_f64, f64::max);
+    assert!(max_z <= GEOMETRY_TOLERANCE, "collapse後のmax|z|={max_z:e}");
+    assert_eq!(
+        self_intersection_pairs(&replayed.frame),
+        Vec::<(FaceId, FaceId)>::new(),
+        "保存作品の再生後もself_intersection_pairs=[]"
+    );
+
+    let replay_faces = replayed
+        .frame
+        .faces
+        .iter()
+        .map(|face| (face.face, face))
+        .collect::<HashMap<_, _>>();
+    for expected in &direct_frame.faces {
+        let actual = replay_faces[&expected.face];
+        assert_eq!(actual.layer, expected.surface_rank);
+        assert_eq!(actual.mirrored, expected.mirrored);
+        assert_eq!(actual.polygon.len(), expected.polygon.len());
+        for (actual_point, expected_point) in actual.polygon.iter().zip(&expected.polygon) {
+            let delta = DVec3::from(*actual_point).distance(DVec3::from(*expected_point));
+            assert!(
+                delta <= GEOMETRY_TOLERANCE,
+                "面{}のcollapse保存形との差{delta:e}",
+                expected.face
+            );
+        }
+    }
+
+    let generated_shape =
+        traditional_crane_collapse_shape_csv(document, &faces, &work.result.state);
+    let stored_shape = std::fs::read_to_string(traditional_crane_fixture_path(
+        "traditional-crane-collapse-oracle.csv",
+    ))
+    .expect("collapse shape oracleを読む");
+    assert_traditional_crane_shape_snapshot(&stored_shape, &generated_shape);
+    println!(
+        "traditional crane oracle: edges=114/114 M/V/B={mountain}/{valley}/{border} faces={} cycle_residual={cycle_residual:.17e} replay_closure_rms={:.17e} replay_converged={} replay_best_effort={} replay_warnings={} max_z={max_z:.17e}",
+        faces.len(),
+        replayed.closure_rms,
+        replayed.converged,
+        replayed.best_effort,
+        replayed.warnings.len()
+    );
+}
+
+/// 保存した層oracleが、正の面積で重なる首・尾を後翼と前翼の間へ置く。
+///
+/// 部位はFace IDでなく正本material領域への代表点包含で導く。2026-08-27の全数実測は
+/// 4分類が各32組、最小正面積0.00232128742142812だった。面積境目1e-12はその約23億分の1で、
+/// 接触だけの0面積と十分に分離する(§10.7.9)。旧順は尾/前翼の12組が違反していた。
+#[test]
+fn traditional_crane_saved_layer_oracle_places_neck_and_tail_between_wings() {
+    let work = traditional_crane_collapse_work();
+    let faces = extract_faces(&work.document.cp);
+    let stored_work =
+        std::fs::read_to_string(traditional_crane_fixture_path("traditional-crane-cp.ori3"))
+            .expect("正本CP作品fixtureを読む");
+    assert_eq!(
+        stored_work.replace("\r\n", "\n"),
+        traditional_crane_work_json(&work),
+        "この検査でreplayするDocumentは保存fixtureと全字段一致する"
+    );
+    let previous_state = FlatState {
+        placements: work.result.state.placements.clone(),
+        order: work.generated_order_before_oracle.clone(),
+    };
+    let previous = traditional_crane_sandwich_audit(&work.document.cp, &faces, &previous_state);
+    let corrected = traditional_crane_sandwich_audit(&work.document.cp, &faces, &work.result.state);
+    for label in [
+        "tail/back_wing",
+        "tail/front_wing",
+        "neck/back_wing",
+        "neck/front_wing",
+    ] {
+        assert_eq!(
+            previous.overlap_counts.get(label),
+            Some(&32),
+            "旧順の{label}は正面積で重なる全32組"
+        );
+        assert_eq!(
+            corrected.overlap_counts.get(label),
+            Some(&32),
+            "訂正後の{label}も同じ正面積32組"
+        );
+    }
+    assert_eq!(
+        previous.violations.len(),
+        12,
+        "Face ID tie-breakだった旧順の翼間違反は実測12組"
+    );
+    assert!(
+        previous
+            .violations
+            .iter()
+            .all(|violation| violation.middle_part == "tail"
+                && violation.wing_part == "front_wing"),
+        "旧12違反は全て尾が前翼より上: {:?}",
+        previous
+            .violations
+            .iter()
+            .map(|violation| (
+                violation.middle_face,
+                violation.wing_face,
+                violation.middle_rank,
+                violation.wing_rank,
+                violation.overlap_area,
+            ))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        corrected.violations.is_empty(),
+        "訂正後はrank(後翼)<rank(尾/首)<rank(前翼): {:?}",
+        corrected
+            .violations
+            .iter()
+            .map(|violation| (
+                violation.middle_part,
+                violation.wing_part,
+                violation.middle_face,
+                violation.wing_face,
+                violation.middle_rank,
+                violation.wing_rank,
+                violation.overlap_area,
+            ))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        (corrected.minimum_positive_overlap_area - 0.00232128742142812).abs() <= 1e-12,
+        "正面積の最小実測値が変わった: {}",
+        corrected.minimum_positive_overlap_area
+    );
+
+    let (rank_changed, pair_changed) = traditional_crane_order_change_counts(
+        &work.generated_order_before_oracle,
+        &work.result.state.order,
+    );
+    assert_eq!(rank_changed, 20, "訂正でsurface_rankが変わる面は20/59");
+    assert_eq!(pair_changed, 49, "訂正で上下関係が反転する面対は49組");
+
+    // 直接collapseのstateだけでなく、保存fixtureを通常の1手replayへ通したframeに
+    // 刻印されたsurface_rankを監査する。上の全字段一致により、replay対象はfixtureと同一である。
+    let replayed = replay(&work.document, 1, 1.0);
+    let mut replay_ranks = replayed
+        .frame
+        .faces
+        .iter()
+        .map(|face| face.surface_rank)
+        .collect::<Vec<_>>();
+    replay_ranks.sort_unstable();
+    assert_eq!(
+        replay_ranks,
+        (0..faces.len() as u32).collect::<Vec<_>>(),
+        "fixture replayのsurface_rankは0..58の順列"
+    );
+    let replay_faces = replayed
+        .frame
+        .faces
+        .iter()
+        .map(|face| face.face)
+        .collect::<HashSet<_>>();
+    assert_eq!(
+        replay_faces,
+        faces.iter().map(|face| face.id).collect::<HashSet<_>>(),
+        "fixture replayは正本59面を重複・欠落なく持つ"
+    );
+    let mut replay_order = replayed
+        .frame
+        .faces
+        .iter()
+        .map(|face| (face.surface_rank, face.face))
+        .collect::<Vec<_>>();
+    replay_order.sort_unstable();
+    let replay_state = FlatState {
+        placements: work.result.state.placements.clone(),
+        order: replay_order.into_iter().map(|(_, face)| face).collect(),
+    };
+    let replay_audit = traditional_crane_sandwich_audit(&work.document.cp, &faces, &replay_state);
+    for label in [
+        "tail/back_wing",
+        "tail/front_wing",
+        "neck/back_wing",
+        "neck/front_wing",
+    ] {
+        assert_eq!(
+            replay_audit.overlap_counts.get(label),
+            Some(&32),
+            "fixture replayの{label}も正面積で重なる全32組"
+        );
+    }
+    assert_eq!(
+        replay_audit.overlap_counts.values().sum::<usize>(),
+        128,
+        "fixture replayでも尾/首と前後翼が正面積で重なる全128組を監査する"
+    );
+    assert!(
+        replay_audit.violations.is_empty(),
+        "fixture replayのsurface_rankもrank(後翼)<rank(尾/首)<rank(前翼): {:?}",
+        replay_audit.violations
+    );
+    assert_eq!(
+        self_intersection_pairs(&replayed.frame),
+        Vec::<(FaceId, FaceId)>::new(),
+        "fixture replayもself_intersection_pairs=[]"
+    );
+
+    let corrected_frame = explicit_flat_frame(&work.document, &faces, &work.result.state);
+    assert_eq!(
+        self_intersection_pairs(&corrected_frame),
+        Vec::<(FaceId, FaceId)>::new(),
+        "層oracle訂正後もself_intersection_pairs=[]"
+    );
+    println!(
+        "traditional crane layer oracle: previous_violations={:?} corrected_violations=0/128 rank_changed={rank_changed}/59 pair_changed={pair_changed} minimum_positive_overlap_area={:.17e}",
+        previous
+            .violations
+            .iter()
+            .map(|violation| format!(
+                "{} Face{} rank{} / {} Face{} rank{} area={:.17e}",
+                violation.middle_part,
+                violation.middle_face,
+                violation.middle_rank,
+                violation.wing_part,
+                violation.wing_face,
+                violation.wing_rank,
+                violation.overlap_area,
+            ))
+            .collect::<Vec<_>>(),
+        corrected.minimum_positive_overlap_area,
+    );
+}
+
+/// 保存oracleは、候補順自身を証拠にせず、CP・M/V・鏡映・紙の連続性から独立に検証する。
+#[test]
+fn traditional_crane_saved_layer_oracle_satisfies_all_general_constraints() {
+    let work = traditional_crane_collapse_work();
+    let faces = extract_faces(&work.document.cp);
+    let validation = ori3_layers::precrease_collapse::validate_precrease_layer_order(
+        &work.document.cp,
+        &faces,
+        &work.result.state.placements,
+        &work.result.state.order,
+    )
+    .expect("保存した正本鶴layer oracleの一般制約を検証できる");
+    assert!(
+        validation.is_valid(),
+        "保存oracleは一般制約違反0: {:?}",
+        validation.violations
+    );
+    assert_eq!(
+        validation.counts.adjacent_folds, 102,
+        "正本B12を除く隣接M/V 102辺を全数検証する"
+    );
+    assert_eq!(
+        validation.counts.taco_tortilla, 987,
+        "sampled taco-tortilla 987条件を全数検証する"
+    );
+    assert_eq!(
+        validation.counts.taco_taco, 196,
+        "same-side taco-taco 196条件を全数検証する"
+    );
+    assert_eq!(
+        validation.counts.continuous, 0,
+        "このCPには0°連続面どうしの平行対応候補が無い"
+    );
+    assert!(validation.violations.duplicate_faces.is_empty());
+    assert!(validation.violations.missing_faces.is_empty());
+    assert!(validation.violations.unexpected_faces.is_empty());
+    assert!(validation.violations.adjacent_folds.is_empty());
+    assert!(validation.violations.taco_tortilla.is_empty());
+    assert!(validation.violations.taco_taco.is_empty());
+    assert!(validation.violations.continuous_crossings.is_empty());
+    assert!(validation.violations.continuous.is_empty());
+    assert!(validation.discarded_relations.is_empty());
+    assert!(
+        !validation.unresolved_overlap_pairs.is_empty(),
+        "CPだけでは決まらない面対があるからこそ、明示layer oracleが必要"
+    );
+    println!(
+        "traditional crane general layer constraints: adjacent=0/{} taco_tortilla=0/{} taco_taco=0/{} continuous=0/{} mandatory={} unresolved={} discarded=0",
+        validation.counts.adjacent_folds,
+        validation.counts.taco_tortilla,
+        validation.counts.taco_taco,
+        validation.counts.continuous,
+        validation.mandatory_constraints.len(),
+        validation.unresolved_overlap_pairs.len(),
+    );
+}
+
+/// 明示的なfixture再生成専用。通常検査は作品とshape oracleを読むだけで上書きしない。
+#[test]
+#[ignore = "正本CP作品fixtureを明示的に再生成するときだけ実行する"]
+fn regenerate_traditional_crane_cp_work_fixture() {
+    let work = traditional_crane_collapse_work();
+    let faces = extract_faces(&work.document.cp);
+    let (rank_changed, pair_changed) = traditional_crane_order_change_counts(
+        &work.generated_order_before_oracle,
+        &work.result.state.order,
+    );
+    let work_path = traditional_crane_fixture_path("traditional-crane-cp.ori3");
+    let shape_path = traditional_crane_fixture_path("traditional-crane-collapse-oracle.csv");
+    std::fs::write(&work_path, traditional_crane_work_json(&work))
+        .expect("正本CP作品fixtureを書き出す");
+    std::fs::write(
+        &shape_path,
+        traditional_crane_collapse_shape_csv(&work.document, &faces, &work.result.state),
+    )
+    .expect("collapse shape oracleを書き出す");
+    println!("wrote {}", work_path.display());
+    println!("wrote {}", shape_path.display());
+    println!(
+        "layer oracle correction: changed_surface_ranks={rank_changed}/59 changed_face_pairs={pair_changed}/1711"
     );
 }
 

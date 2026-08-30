@@ -25,6 +25,13 @@ const CANONICAL_MAX_ERROR_TIE_EPS_DEG: f64 = 1e-9;
 const CANONICAL_SQUARED_ERROR_TIE_EPS: f64 = 1e-9;
 /// 紙が裂けたとみなす辺の離れ(紙の長辺を1とした値)。表示でも検査でも同じ値を使う。
 const SEAM_TEAR_TOLERANCE: f64 = 1e-6;
+/// 別solveの同じendpointを同一geometryとみなす最大頂点差。
+///
+/// 正常なpreferred exact-flatで実測した最大差2.48253415324727312e-16に対し、
+/// `2 * f64::EPSILON` = 4.44089209850062616e-16（約79%の余裕）を取る。
+/// 不具合だった別branch差0.02288500649 / 0.03452338729は、この境目の
+/// 5.15e13倍 / 7.77e13倍なので同一geometryとして通らない。
+const SURFACE_GEOMETRY_MATCH_EPS: f64 = f64::EPSILON * 2.0;
 const CONTACT_BEST_EFFORT_WARNING: &str =
     "紙の貫通を完全には避けられないため、貫通が最も少ない有限形で追従しています";
 /// 停止しない接触診断付き継続法の結果。
@@ -40,6 +47,34 @@ pub struct MotionSolveResult {
     /// completeな幾何導出を `result.frame` へ刻印できた場合だけtrue。
     /// material seedやnonfinite fallbackを物理補正のauthorityとして使わせない。
     pub surface_order_authoritative: bool,
+    continuation: MotionContinuationState,
+}
+
+/// 直前solveの角度と、重なり順を直接測れる実Frameを一体で次回へ渡すopaque state。
+///
+/// fieldsを公開せず、別の角度mapとFrameを誤って組み合わせられないようにする。
+/// 同じcrease patternの直前結果だけを次の追従solveへ渡す。完全折りendpointを
+/// 解き直す間もnear-flat近傍の実Frameを保持し、そのFrame自身の正面積overlapで
+/// direct depthを測る。保持Frameの完成order/rankは使わない。
+#[derive(Clone, Debug)]
+pub struct MotionContinuationState {
+    angles: HashMap<EdgeId, f64>,
+    surface_approach: Option<SurfaceApproachState>,
+}
+
+#[derive(Clone, Debug)]
+struct SurfaceApproachState {
+    angles: HashMap<EdgeId, f64>,
+    frame: Frame3D,
+}
+
+impl MotionSolveResult {
+    /// 同じcrease patternの次の追従solveへそのまま渡せるopaque stateを返す。
+    /// contact防止が別枝を選んだ場合も、この返却値が再発行したstateだけを使う。
+    #[must_use]
+    pub fn continuation_state(&self) -> MotionContinuationState {
+        self.continuation.clone()
+    }
 }
 
 /// 接触を利用者へ知らせる処理と、形を変えて接触を減らす任意補正を分ける。
@@ -59,6 +94,7 @@ pub struct MotionContactOptions {
 struct MotionSolveContext<'a> {
     topology: &'a PreparedTopology,
     stamp_surface_order: bool,
+    surface_approach: Option<&'a SurfaceApproachState>,
 }
 
 /// 前回角から要求角までを継続法で追い、接触や有限な不収束では停止しない。
@@ -90,6 +126,8 @@ pub fn solve_motion(
 }
 
 /// 接触の検出と、利用者が明示した場合だけ行う重なり防止を独立に選んで姿勢を解く。
+/// この角度map入口は直前の実Frameを引き継がない。exact endpointまで連続して追う場合は
+/// [`solve_motion_with_contact_continuation`] を使う。
 #[must_use]
 pub fn solve_motion_with_contact_options(
     cp: &CreasePattern,
@@ -110,6 +148,38 @@ pub fn solve_motion_with_contact_options(
         MotionSolveContext {
             topology: &topology,
             stamp_surface_order: true,
+            surface_approach: None,
+        },
+    )
+}
+
+/// 直前solveの実Frameを失わずに、接触条件付きの追従solveを行う。
+///
+/// `previous` には、同じcrease patternを直前の近傍姿勢まで解いた結果が発行した
+/// [`MotionContinuationState`] だけを渡す。solverへ渡す初期値は従来どおり角度mapで、
+/// 保持Frameは隣接するexact endpoint更新の重なり順にだけ使う。endpointで正面積または
+/// 境界接触する対を選び、保持Frame自身の正面積領域で測ったdirect depthだけを読む。
+#[must_use]
+pub fn solve_motion_with_contact_continuation(
+    cp: &CreasePattern,
+    faces: &[Face],
+    drivers: &[Driver],
+    targets: Option<&HashMap<EdgeId, f64>>,
+    previous: Option<&MotionContinuationState>,
+    contact: MotionContactOptions,
+) -> MotionSolveResult {
+    let topology = solver::prepare_topology(cp, faces);
+    solve_motion_prepared(
+        cp,
+        faces,
+        drivers,
+        targets,
+        previous.map(|state| &state.angles),
+        contact,
+        MotionSolveContext {
+            topology: &topology,
+            stamp_surface_order: true,
+            surface_approach: previous.and_then(|state| state.surface_approach.as_ref()),
         },
     )
 }
@@ -366,6 +436,7 @@ fn solve_canonical_motion_prepared(
     let no_stamp = MotionSolveContext {
         topology: &topology,
         stamp_surface_order: false,
+        surface_approach: None,
     };
     let invariant_hard = canonical_hard_drivers(cp, invariant_hard);
     let invariant_hard = invariant_hard.as_slice();
@@ -417,6 +488,7 @@ fn solve_canonical_motion_prepared(
         MotionSolveContext {
             topology: &topology,
             stamp_surface_order: true,
+            surface_approach: None,
         },
     );
     (stamped, selected.kind)
@@ -640,6 +712,7 @@ pub(crate) fn solve_motion_without_surface_order(
         MotionSolveContext {
             topology: &topology,
             stamp_surface_order: false,
+            surface_approach: None,
         },
     )
 }
@@ -660,7 +733,23 @@ pub fn solve_motion_once(
 ) -> SolveResult {
     let topology = solver::prepare_topology(cp, faces);
     let mut result = solve_requested_prepared(cp, faces, drivers, targets, warm_start, &topology);
-    stamp_motion_surface_order(cp, faces, drivers, targets, &topology, &[], &mut result);
+    stamp_motion_surface_order(
+        MotionSurfaceOrderInput {
+            cp,
+            faces,
+            drivers,
+            targets,
+            topology: &topology,
+            warm_start,
+            motion_path: &[],
+            contact: MotionContactOptions {
+                detect: false,
+                prevent: false,
+            },
+            surface_approach: None,
+        },
+        &mut result,
+    );
     result
 }
 
@@ -686,7 +775,18 @@ fn solve_motion_prepared(
     // 折る操作では、前の姿勢から追うと29組・食い込み1.053e-1になるのに対し、
     // 平らから追い直すと0組で解ける(指定からのずれも178.1°→102.2°と小さい)。
     // 追い直しは1回だけで、そこでも食い込むなら元の結果を返すので操作は止まらない。
-    let restarted = solve_motion_from(cp, faces, drivers, targets, None, contact, context);
+    let restarted = solve_motion_from(
+        cp,
+        faces,
+        drivers,
+        targets,
+        None,
+        contact,
+        MotionSolveContext {
+            surface_approach: None,
+            ..context
+        },
+    );
     let improved = is_finite_result(&restarted.result, faces.len())
         && !self_intersects(&restarted.result.frame)
         && max_seam_gap(cp, faces, &restarted.result.frame)
@@ -967,17 +1067,45 @@ fn solve_motion_from(
     }
     let (surface_order, surface_order_authoritative) = if context.stamp_surface_order {
         let (diagnostics, authoritative) = stamp_motion_surface_order(
-            cp,
-            faces,
-            drivers,
-            targets,
-            topology,
-            &surface_motion_path,
+            MotionSurfaceOrderInput {
+                cp,
+                faces,
+                drivers,
+                targets,
+                topology,
+                warm_start,
+                motion_path: &surface_motion_path,
+                contact,
+                surface_approach: context.surface_approach,
+            },
             &mut result,
         );
         (Some(diagnostics), authoritative)
     } else {
         (None, false)
+    };
+    let surface_approach = if requests_exact_endpoint(drivers, targets) {
+        context.surface_approach.cloned()
+    } else if is_finite_result(&result, faces.len())
+        && result.angles.values().any(|angle| {
+            angle.abs()
+                >= crate::surface_order::SURFACE_PATH_CHECKPOINT_DEG
+                    .last()
+                    .copied()
+                    .unwrap_or(180.0)
+                    - RELAXATION_EPS_DEG
+        })
+    {
+        Some(SurfaceApproachState {
+            angles: result.angles.clone(),
+            frame: result.frame.clone(),
+        })
+    } else {
+        None
+    };
+    let continuation = MotionContinuationState {
+        angles: result.angles.clone(),
+        surface_approach,
     };
     MotionSolveResult {
         result,
@@ -985,13 +1113,14 @@ fn solve_motion_from(
         contact_stopped: false,
         surface_order,
         surface_order_authoritative,
+        continuation,
     }
 }
 
 /// 重なり順をどの幾何から決めたか。どれも面の番号ではなく紙の位置から決める。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SurfaceOrderSource {
-    /// 呼出し元のwarm姿勢から最終姿勢まで、物理解が実際に通った経路で決めた。
+    /// solverが得たapproach geometry（保持した実Frameまたは検証済みcheckpoint）で決めた。
     SolvedMotionPath,
     /// 平らな状態から22点のcheckpointをsolveし直した経路の実深度で決めた。
     SolvedFlatPath,
@@ -1018,16 +1147,41 @@ pub struct SurfaceOrderDiagnostics {
     pub broken_constraints: usize,
 }
 
+struct MotionSurfaceOrderInput<'a> {
+    cp: &'a CreasePattern,
+    faces: &'a [Face],
+    drivers: &'a [Driver],
+    targets: Option<&'a HashMap<EdgeId, f64>>,
+    topology: &'a PreparedTopology,
+    warm_start: Option<&'a HashMap<EdgeId, f64>>,
+    motion_path: &'a [Frame3D],
+    contact: MotionContactOptions,
+    surface_approach: Option<&'a SurfaceApproachState>,
+}
+
+fn requests_exact_endpoint(drivers: &[Driver], targets: Option<&HashMap<EdgeId, f64>>) -> bool {
+    drivers
+        .iter()
+        .any(|driver| driver.target_angle_deg.abs() == 180.0)
+        || targets.is_some_and(|targets| targets.values().any(|angle| angle.abs() == 180.0))
+}
+
 /// `result.frame` へ重なり順を刻印し、どの幾何から決めたかを返す。
 fn stamp_motion_surface_order(
-    cp: &CreasePattern,
-    faces: &[Face],
-    drivers: &[Driver],
-    targets: Option<&HashMap<EdgeId, f64>>,
-    topology: &PreparedTopology,
-    motion_path: &[Frame3D],
+    input: MotionSurfaceOrderInput<'_>,
     result: &mut SolveResult,
 ) -> (SurfaceOrderDiagnostics, bool) {
+    let MotionSurfaceOrderInput {
+        cp,
+        faces,
+        drivers,
+        targets,
+        topology,
+        warm_start,
+        motion_path,
+        contact,
+        surface_approach,
+    } = input;
     if !is_finite_result(result, faces.len()) {
         return (
             SurfaceOrderDiagnostics {
@@ -1040,73 +1194,169 @@ fn stamp_motion_surface_order(
         );
     }
     let canonical_targets = canonical_surface_targets(&result.angles);
-    // 180°に折り切った折り目が決める厳密な上下。深度より先に効かせる。
-    //
-    // どの折り目を折り切ったとみなすかは、経路の終点と**同じ境目**でなければならない。
-    // 終点だけを平らにして折り目の向きを入れないと、同じ形を2つの別の規則で説明する
-    // ことになる。実測では、駆動した折り目1本だけが180°付近にある姿勢
-    // (`folded-sample.ori3` の辺310・361)で、179.999°側にだけ向きの制約が無く、
-    // その1組の上下が180°側と逆になっていた。
+    let needs_canonical_path = canonical_targets
+        .values()
+        .any(|angle| angle.abs() >= crate::surface_order::STACK_FLAT_THRESHOLD_DEG);
+    // 179.999°は返却Frameの有限depthを正本にし、要求そのものが±180°のときだけ
+    // 直前warmの連続性を先に見る。ここは許容差で境目を作らず、入力端点との完全一致を使う。
+    let requests_exact_endpoint = requests_exact_endpoint(drivers, targets);
     let stack_angles = canonical_targets
         .iter()
         .map(|(&hinge, &angle)| (hinge, crate::surface_order::snap_to_flat(angle)))
         .collect::<HashMap<_, _>>();
     let exact_constraints = exact_stack_constraints_of(faces, topology, &stack_angles);
-    let needs_canonical_path = canonical_targets
-        .values()
-        .any(|angle| angle.abs() >= crate::surface_order::STACK_FLAT_THRESHOLD_DEG);
-    let snapped_frame = (needs_canonical_path && !topology.forest().loops.is_empty())
-        .then(|| snapped_motion_surface_frame(cp, faces, topology, &stack_angles, &result.angles))
-        .flatten();
-    let surface_exact_frame = snapped_frame.unwrap_or_else(|| result.frame.clone());
     let report = |source, derived: &crate::surface_order::SurfaceOrder| SurfaceOrderDiagnostics {
         source,
         dropped_depth_constraints: derived.dropped_depth_constraints,
         unresolved_overlaps: derived.unresolved_overlaps,
         broken_constraints: derived.broken_constraints,
     };
-    // 明示driverが1本だけの179.999°/exact endpointは、閉路の特異点に複数の進入枝がある。
-    // 呼出し元のwarmが既にendpointにいるrefreshでも同じ答えにするため、この狭い条件だけは
-    // 平らな側からdriver自身を22点で追った経路を正本にする。preferred targetを伴う操作や
-    // 複数hardの操作は文脈を失うため、下の実motion pathを引き続き優先する。
+    // opaque continuationが運んだ直前の実Frameは、角度から再構成せずそのまま測る。
+    // exact endpointを同じ角度でrefreshしてもnear-flat Frameを保持するため、閉路の別枝へ
+    // 再構成されない。endpointで対象対を選び、実Frame自身の正面積代表点で測ったdirect
+    // depthを優先する。完成order/rankは読まず、未決定部分だけexact closureで補う。
     if needs_canonical_path
-        && let Some(derived) =
-            single_driver_flat_surface_order(cp, faces, drivers, targets, topology)
-        && crate::surface_order::stamp_surface_order(&mut result.frame, &derived.order).is_ok()
-    {
-        return (report(SurfaceOrderSource::SolvedFlatPath, &derived), true);
-    }
-    // 閉路の無い紙は同じ指定に分岐が無い。呼出し元warmの短い経路より、平らな状態から
-    // 全指定角を再生したcanonical pathを先に使い、179.999°と180°の境界を安定させる。
-    // 閉路を持つ紙は進入枝が物理文脈なので、この分岐へ入れず下の実motion pathを優先する。
-    if needs_canonical_path
-        && topology.forest().loops.is_empty()
-        && let Some(derived) = canonical_motion_surface_order(
+        && requests_exact_endpoint
+        && let Some(approach) = surface_approach
+        && surface_approaches_exact_request(approach, drivers, targets)
+        && let Some(candidate) = warm_approach_surface_order(WarmApproachSurfaceInput {
             cp,
             faces,
+            warm_start: None,
+            surface_approach: Some(approach),
             topology,
-            &canonical_targets,
-            &exact_constraints,
-        )
-        && derived.complete
-        && crate::surface_order::stamp_surface_order(&mut result.frame, &derived.order).is_ok()
-    {
-        return (report(SurfaceOrderSource::SolvedFlatPath, &derived), true);
-    }
-    if needs_canonical_path
-        && let Some(derived) = complete_motion_path_surface_order(
-            cp,
-            faces,
-            motion_path,
-            &surface_exact_frame,
-            &exact_constraints,
-        )
-        && crate::surface_order::stamp_surface_order(&mut result.frame, &derived.order).is_ok()
+            endpoint: SurfaceEndpoint {
+                frame: &result.frame,
+                constraints: &exact_constraints,
+            },
+        })
+        && let Some(derived) = stamp_surface_order_candidate(result, candidate)
     {
         return (report(SurfaceOrderSource::SolvedMotionPath, &derived), true);
     }
+    // 返却polygon自身に有限depthまたはtangentのsigned depthが残っているなら、それが
+    // 表示している枝の上下そのものである。別solveの候補より先に同じFrameだけを測る。
     if needs_canonical_path
-        && let Some(derived) = driver_approach_surface_order(
+        && !requests_exact_endpoint
+        && let Ok(derived) =
+            crate::surface_order::derive_surface_order_from_projected_current_depths(
+                cp,
+                faces,
+                &result.frame,
+            )
+        && derived.complete
+        && derived.imported_depth_constraints > 0
+        && derived.dropped_depth_constraints == 0
+        && crate::surface_order::stamp_surface_order(&mut result.frame, &derived.order).is_ok()
+    {
+        return (report(SurfaceOrderSource::CurrentDepths, &derived), true);
+    }
+    if needs_canonical_path
+        && let Ok(derived) = crate::surface_order::derive_surface_order_from_current_depths(
+            cp,
+            faces,
+            &result.frame,
+            &[],
+        )
+        && derived.complete
+        && (derived.resolved_overlaps == 0 || derived.sampled_depth_constraints > 0)
+        && crate::surface_order::stamp_surface_order(&mut result.frame, &derived.order).is_ok()
+    {
+        let source = if derived.resolved_overlaps > 0 {
+            SurfaceOrderSource::CurrentDepths
+        } else {
+            SurfaceOrderSource::NoOverlap
+        };
+        return (report(source, &derived), true);
+    }
+    // 同じFrameと実経路でなお決まらないpositive-overlapだけ、返却角の符号付きexact制約で
+    // 補う。endpoint tangentはexactと逆なら低優先側を捨て、droppedには数えない。
+    if needs_canonical_path
+        && let Ok(derived) = crate::surface_order::derive_surface_order_from_current_depths(
+            cp,
+            faces,
+            &result.frame,
+            &exact_constraints,
+        )
+        && derived.complete
+        && derived.dropped_depth_constraints == 0
+        && (derived.resolved_overlaps == 0 || derived.sampled_depth_constraints > 0)
+        && crate::surface_order::stamp_surface_order(&mut result.frame, &derived.order).is_ok()
+    {
+        let source = if derived.resolved_overlaps > 0 {
+            SurfaceOrderSource::CurrentDepths
+        } else {
+            SurfaceOrderSource::NoOverlap
+        };
+        return (report(source, &derived), true);
+    }
+    // warmが無いone-shotや同じendpointのrefreshでは、呼出し条件を保った接触付き
+    // continuationを作る。閉路の材質配置を直接Frame列で測り、完成orderは転記しない。
+    if needs_canonical_path
+        && requests_exact_endpoint
+        && !topology.forest().loops.is_empty()
+        && let Some(candidate) = requested_near_flat_surface_order(RequestedNearFlatSurfaceInput {
+            cp,
+            faces,
+            drivers,
+            targets,
+            warm_start,
+            topology,
+            endpoint: SurfaceEndpoint {
+                frame: &result.frame,
+                constraints: &exact_constraints,
+            },
+            contact,
+        })
+        && let Some(derived) = stamp_surface_order_candidate(result, candidate)
+    {
+        return (report(SurfaceOrderSource::SolvedMotionPath, &derived), true);
+    }
+    // 返却実深度だけでは決められないexact-flatを、実際に返却枝が通った経路で補う。
+    // contact差替えなどで古い経路が残った場合は、最終Frameとのgeometry一致で除外する。
+    if needs_canonical_path
+        && motion_path
+            .last()
+            .is_some_and(|endpoint| same_surface_geometry(endpoint, &result.frame))
+        && let Some(candidate) = complete_motion_path_surface_order(
+            cp,
+            faces,
+            motion_path,
+            &result.frame,
+            &exact_constraints,
+            SurfacePathEvidence::ActualMotion,
+        )
+        && let Some(derived) = stamp_surface_order_candidate(result, candidate)
+    {
+        return (report(SurfaceOrderSource::SolvedMotionPath, &derived), true);
+    }
+    // 実motion pathが無い、または同じendpointの繰り返しで証拠にならない場合は、
+    // 同じhard/preferred区分と同じseedで隣の179.999°を1点だけ解き、その返却polygonの
+    // 実深度を操作の途中姿勢として使う。
+    if needs_canonical_path
+        && !requests_exact_endpoint
+        && !topology.forest().loops.is_empty()
+        && let Some(candidate) = requested_near_flat_surface_order(RequestedNearFlatSurfaceInput {
+            cp,
+            faces,
+            drivers,
+            targets,
+            warm_start,
+            topology,
+            endpoint: SurfaceEndpoint {
+                frame: &result.frame,
+                constraints: &exact_constraints,
+            },
+            contact,
+        })
+        && let Some(derived) = stamp_surface_order_candidate(result, candidate)
+    {
+        return (report(SurfaceOrderSource::SolvedFlatPath, &derived), true);
+    }
+    // refreshやcontact差替えで保持pathが返却枝を説明できない場合は、返却角をwarmにして
+    // 符号付きcheckpointから同じendpointへ近付ける。
+    if needs_canonical_path
+        && let Some(candidate) = driver_approach_surface_order(
             cp,
             faces,
             drivers,
@@ -1114,13 +1364,74 @@ fn stamp_motion_surface_order(
             topology,
             result,
             SurfaceEndpoint {
-                frame: &surface_exact_frame,
+                frame: &result.frame,
                 constraints: &exact_constraints,
             },
         )
-        && crate::surface_order::stamp_surface_order(&mut result.frame, &derived.order).is_ok()
+        && let Some(derived) = stamp_surface_order_candidate(result, candidate)
     {
         return (report(SurfaceOrderSource::SolvedMotionPath, &derived), true);
+    }
+    // 呼出し元が直前姿勢の全角度を渡した場合は、その材質配置で返却endpointの
+    // positive-overlap witnessを直接測る。別Frameのtotal order/rankは使わず、
+    // 終点で未決定の正面積対だけを符号付きexact閉包で補う。
+    if needs_canonical_path
+        && !requests_exact_endpoint
+        && let Some(candidate) = warm_approach_surface_order(WarmApproachSurfaceInput {
+            cp,
+            faces,
+            warm_start,
+            surface_approach: None,
+            topology,
+            endpoint: SurfaceEndpoint {
+                frame: &result.frame,
+                constraints: &exact_constraints,
+            },
+        })
+        && let Some(derived) = stamp_surface_order_candidate(result, candidate)
+    {
+        return (report(SurfaceOrderSource::SolvedMotionPath, &derived), true);
+    }
+    // 単一driverの再構成pathはfallbackとして残すが、閉路の枝を一意には決めない。
+    // そのprobe endpointが返却polygonと同じgeometryの場合だけ共通guardで採用する。
+    if needs_canonical_path
+        && let Some(candidate) =
+            single_driver_flat_surface_order(cp, faces, drivers, targets, topology)
+        && let Some(derived) = stamp_surface_order_candidate(result, candidate)
+    {
+        return (report(SurfaceOrderSource::SolvedFlatPath, &derived), true);
+    }
+    // 上の経路を作れない場合だけ、返却polygonに残る直接depthを先にDAG化し、
+    // 同じFrameで未決定の部分をexactで補う。
+    if needs_canonical_path
+        && let Ok(derived) =
+            crate::surface_order::derive_surface_order_from_current_depths_preferring_geometry(
+                cp,
+                faces,
+                &result.frame,
+                &exact_constraints,
+            )
+        && derived.complete
+        && derived.sampled_depth_constraints > 0
+        && derived.dropped_depth_constraints == 0
+        && crate::surface_order::stamp_surface_order(&mut result.frame, &derived.order).is_ok()
+    {
+        return (report(SurfaceOrderSource::CurrentDepths, &derived), true);
+    }
+    // 閉路の無い紙は同じ指定に分岐が無い。平らな状態から全指定角を再生した
+    // canonical pathも、そのendpointが返却geometryと一致するときだけ使う。
+    if needs_canonical_path
+        && topology.forest().loops.is_empty()
+        && let Some(candidate) = canonical_motion_surface_order(
+            cp,
+            faces,
+            topology,
+            &canonical_targets,
+            &exact_constraints,
+        )
+        && let Some(derived) = stamp_surface_order_candidate(result, candidate)
+    {
+        return (report(SurfaceOrderSource::SolvedFlatPath, &derived), true);
     }
     // canonical probeが有限形を作れない場合も、完全折りではtree::fold_frameが
     // 全ヒンジのclamp経路から作った順位を保持する。
@@ -1191,6 +1502,77 @@ fn stamp_motion_surface_order(
     (report(source, &derived), authoritative)
 }
 
+/// 別経路で導いた順と、その順が説明するendpointを必ず一緒に運ぶ。
+struct SurfaceOrderCandidate {
+    derived: crate::surface_order::SurfaceOrder,
+    endpoint: Frame3D,
+}
+
+/// 層順の転記元と返却Frameが、同じ面集合・鏡映状態・polygonを持つか。
+///
+/// `layer`/`surface_rank`は刻印対象、warningは診断なのでgeometryへ含めない。
+/// 別solveの丸め差だけは `SURFACE_GEOMETRY_MATCH_EPS` まで許し、返却polygon自身
+/// またはreturned-warm pathで同じendpointを証明できた場合だけ採用する。
+fn same_surface_geometry(left: &Frame3D, right: &Frame3D) -> bool {
+    surface_geometry_delta(left, right)
+        .is_some_and(|distance| distance <= SURFACE_GEOMETRY_MATCH_EPS)
+}
+
+fn surface_geometry_delta(left: &Frame3D, right: &Frame3D) -> Option<f64> {
+    if left.faces.len() != right.faces.len() {
+        return None;
+    }
+    let left_faces = left
+        .faces
+        .iter()
+        .map(|face| (face.face, face))
+        .collect::<HashMap<_, _>>();
+    let right_faces = right
+        .faces
+        .iter()
+        .map(|face| (face.face, face))
+        .collect::<HashMap<_, _>>();
+    if left_faces.len() != left.faces.len() || right_faces.len() != right.faces.len() {
+        return None;
+    }
+    left_faces
+        .iter()
+        .try_fold(0.0_f64, |maximum, (face_id, left_face)| {
+            let right_face = right_faces.get(face_id)?;
+            if left_face.mirrored != right_face.mirrored
+                || left_face.polygon.len() != right_face.polygon.len()
+            {
+                return None;
+            }
+            Some(left_face.polygon.iter().zip(&right_face.polygon).fold(
+                maximum,
+                |maximum, (&left, &right)| {
+                    maximum.max(
+                        ((left[0] - right[0]).powi(2)
+                            + (left[1] - right[1]).powi(2)
+                            + (left[2] - right[2]).powi(2))
+                        .sqrt(),
+                    )
+                },
+            ))
+        })
+}
+
+/// candidateが返却polygonそのものを説明するときだけ、その順を刻印する。
+fn stamp_surface_order_candidate(
+    result: &mut SolveResult,
+    candidate: SurfaceOrderCandidate,
+) -> Option<crate::surface_order::SurfaceOrder> {
+    if !candidate.derived.complete
+        || !same_surface_geometry(&candidate.endpoint, &result.frame)
+        || crate::surface_order::stamp_surface_order(&mut result.frame, &candidate.derived.order)
+            .is_err()
+    {
+        return None;
+    }
+    Some(candidate.derived)
+}
+
 /// 閉路endpointではexact制約のDAGがcompleteでも、どちら側からその枝へ入ったかは
 /// 証明できない。実経路で少なくとも1対の深度差を測れた場合だけ、exact制約と組み
 /// 合わせたcomplete結果をauthorityとして返す。重なりが無い場合は測る対自体が無い。
@@ -1200,35 +1582,81 @@ fn complete_motion_path_surface_order(
     motion_path: &[Frame3D],
     exact_frame: &Frame3D,
     exact_constraints: &[(FaceId, FaceId)],
-) -> Option<crate::surface_order::SurfaceOrder> {
-    if motion_path.is_empty() {
+    evidence: SurfacePathEvidence,
+) -> Option<SurfaceOrderCandidate> {
+    // 同じendpointを丸め差の範囲で繰り返した列はapproachの証拠にならない。
+    // refresh失敗例の最大差2.779e-16は既存SURFACE_GEOMETRY_MATCH_EPS
+    // (4.441e-16)の62.6%、実際に動いた最小経路差3.467e-6はその7.8e9倍超だった。
+    // geometry同一性と同じ既存境目を使い、新しい許容差は設けない。
+    if motion_path.is_empty()
+        || !motion_path.iter().any(|frame| {
+            surface_geometry_delta(frame, exact_frame)
+                .is_some_and(|distance| distance > SURFACE_GEOMETRY_MATCH_EPS)
+        })
+    {
         return None;
     }
-    let derived = crate::surface_order::derive_surface_order_from_frame_path(
-        cp,
-        faces,
-        motion_path,
-        exact_frame,
-        exact_constraints,
-    )
-    .ok()?;
-    (derived.complete && (derived.resolved_overlaps == 0 || derived.sampled_depth_constraints > 0))
-        .then_some(derived)
+    let derive = |constraints| match evidence {
+        SurfacePathEvidence::ActualMotion => {
+            crate::surface_order::derive_surface_order_from_current_depths_along_frame_path(
+                cp,
+                faces,
+                motion_path,
+                exact_frame,
+                constraints,
+            )
+        }
+        SurfacePathEvidence::PairSelection => {
+            crate::surface_order::derive_surface_order_from_frame_path_preferring_approach_depth(
+                cp,
+                faces,
+                motion_path,
+                exact_frame,
+                constraints,
+            )
+        }
+    };
+    let mut derived = derive(exact_constraints).ok()?;
+    // 返却枝の実深度と符号付きexact制約が衝突した場合は、同じpath・同じ返却endpointを
+    // 空制約で測り直す。別枝のexact側を勝たせて返却polygonと逆のrankを刻まない。
+    if derived.dropped_depth_constraints > 0 && !exact_constraints.is_empty() {
+        derived = derive(&[]).ok()?;
+    }
+    let has_path_evidence = match evidence {
+        SurfacePathEvidence::ActualMotion => {
+            derived.approach_depth_constraints > 0
+                && (derived.resolved_overlaps == 0 || derived.sampled_depth_constraints > 0)
+        }
+        SurfacePathEvidence::PairSelection => derived.positive_overlap_depth_constraints > 0,
+    };
+    (derived.complete && derived.dropped_depth_constraints == 0 && has_path_evidence).then(|| {
+        SurfaceOrderCandidate {
+            derived,
+            endpoint: exact_frame.clone(),
+        }
+    })
+}
+
+#[derive(Clone, Copy)]
+enum SurfacePathEvidence {
+    /// 返却solveが実際に通ったpath。終点で面積0へ消えた対の選別にだけ使う。
+    ActualMotion,
+    /// 再構成したpath。終点で面積0へ消えた対の選別にだけ使う。
+    PairSelection,
 }
 
 /// preferred targetを持たない単一driverの179.999°/exact endpointを平らな側から再生する。
 ///
-/// 180°の閉路はJacobianが特異で、endpointのwarmから少し戻すだけでは別の閉包枝へ
-/// 着地し得る。単一driverなら進入側はdriverの符号で一意に指定できるため、呼出し元の
-/// warmを使わず全checkpointを順に解く。返却する角度やpolygonは変更せず、重なり順を
-/// 決めるためのFrame列だけを作る。
+/// 180°の閉路はJacobianが特異で、同じdriver符号でも複数の閉包枝へ着地し得る。
+/// 呼出し元のwarmを使わず全checkpointを順に解くが、この経路は枝の正本ではない。
+/// 最後のprobe endpointが返却polygonと同じgeometryの場合だけ使えるfallbackを作る。
 fn single_driver_flat_surface_order(
     cp: &CreasePattern,
     faces: &[Face],
     drivers: &[Driver],
     targets: Option<&HashMap<EdgeId, f64>>,
     topology: &PreparedTopology,
-) -> Option<crate::surface_order::SurfaceOrder> {
+) -> Option<SurfaceOrderCandidate> {
     if targets.is_some() || drivers.len() != 1 {
         return None;
     }
@@ -1267,7 +1695,8 @@ fn single_driver_flat_surface_order(
     }
     // 179.999°と180°の返却解では、従属ヒンジがflat判定の境目をまたぐ場合がある。
     // ここで返却解側のexact集合を混ぜると同じ進入経路に別の面集合を当ててしまうため、
-    // 最後のcheckpoint自身から終点Frameとexact集合を作り、その経路が示す上下を導く。
+    // 最後のcheckpoint自身から終点Frameとexact集合を作る。候補のendpointも一緒に返し、
+    // 呼出し元の共通geometry guardが別branchの完成順を転記させない。
     let probe_angles = warm.as_ref()?;
     let probe_stack_angles = canonical_surface_targets(probe_angles)
         .into_iter()
@@ -1284,12 +1713,252 @@ fn single_driver_flat_surface_order(
         &probe_exact_constraints,
     )
     .ok()?;
-    (derived.complete && derived.resolved_overlaps > 0).then_some(derived)
+    (derived.complete
+        && derived.resolved_overlaps > 0
+        && derived.sampled_depth_constraints > 0
+        && derived.dropped_depth_constraints == 0)
+        .then_some(SurfaceOrderCandidate {
+            derived,
+            endpoint: probe_exact_frame,
+        })
 }
 
 struct SurfaceEndpoint<'a> {
     frame: &'a Frame3D,
     constraints: &'a [(FaceId, FaceId)],
+}
+
+/// opaque stateがあれば直前の実Frameを使い、無ければlegacy warm角から材質配置を復元する。
+///
+/// 実Frame経路はendpointで正面積または境界接触する対だけを対象にし、実Frame自身の
+/// 正面積代表点でdirect depthを測る。legacy経路も完成order/rankは転記しない。
+struct WarmApproachSurfaceInput<'a> {
+    cp: &'a CreasePattern,
+    faces: &'a [Face],
+    warm_start: Option<&'a HashMap<EdgeId, f64>>,
+    surface_approach: Option<&'a SurfaceApproachState>,
+    topology: &'a PreparedTopology,
+    endpoint: SurfaceEndpoint<'a>,
+}
+
+fn surface_approaches_exact_request(
+    approach: &SurfaceApproachState,
+    drivers: &[Driver],
+    targets: Option<&HashMap<EdgeId, f64>>,
+) -> bool {
+    let final_checkpoint = crate::surface_order::SURFACE_PATH_CHECKPOINT_DEG
+        .last()
+        .copied()
+        .unwrap_or(180.0);
+    let mut found = false;
+    for (hinge, target) in drivers
+        .iter()
+        .map(|driver| (driver.hinge, driver.target_angle_deg))
+        .chain(
+            targets
+                .into_iter()
+                .flat_map(HashMap::iter)
+                .map(|(&hinge, &target)| (hinge, target)),
+        )
+    {
+        if target.abs() != 180.0 {
+            continue;
+        }
+        found = true;
+        let Some(&angle) = approach.angles.get(&hinge) else {
+            return false;
+        };
+        if !angle.is_finite()
+            || angle.signum() != target.signum()
+            || angle.abs() < final_checkpoint - RELAXATION_EPS_DEG
+            || angle.abs() >= 180.0
+        {
+            return false;
+        }
+    }
+    found
+}
+
+fn warm_approach_surface_order(
+    input: WarmApproachSurfaceInput<'_>,
+) -> Option<SurfaceOrderCandidate> {
+    let WarmApproachSurfaceInput {
+        cp,
+        faces,
+        warm_start,
+        surface_approach,
+        topology,
+        endpoint,
+    } = input;
+    let approach = if let Some(surface_approach) = surface_approach {
+        surface_approach.frame.clone()
+    } else {
+        let warm = warm_start?;
+        if warm.values().any(|angle| !angle.is_finite()) {
+            return None;
+        }
+        // legacy angle-only入口では、rank/orderを読まず材質点の座標だけを再構成する。
+        frame_from_angles(cp, faces, topology.forest(), warm, &[])
+    };
+    if approach.faces.len() != faces.len()
+        || approach.faces.iter().any(|face| {
+            face.polygon
+                .iter()
+                .flatten()
+                .any(|coordinate| !coordinate.is_finite())
+        })
+    {
+        return None;
+    }
+    if !surface_geometry_delta(&approach, endpoint.frame)
+        .is_some_and(|distance| distance > SURFACE_GEOMETRY_MATCH_EPS)
+    {
+        return None;
+    }
+    let derived = if surface_approach.is_some() {
+        crate::surface_order::derive_surface_order_from_actual_approach(
+            cp,
+            faces,
+            &approach,
+            endpoint.frame,
+            endpoint.constraints,
+        )
+    } else {
+        crate::surface_order::derive_surface_order_from_frame_path_without_returned_depth(
+            cp,
+            faces,
+            std::slice::from_ref(&approach),
+            endpoint.frame,
+            endpoint.constraints,
+        )
+    };
+    let derived = derived.ok()?;
+    // surface側でendpointの対象対を選び、実Frame自身の正面積代表点からdirect depthを
+    // 測れた候補だけをauthorityにする。exact・endpoint残差だけの完成候補は採らない。
+    (derived.complete
+        && derived.imported_depth_constraints > 0
+        && derived.dropped_depth_constraints == 0)
+        .then(|| SurfaceOrderCandidate {
+            derived,
+            endpoint: endpoint.frame.clone(),
+        })
+}
+
+/// motion履歴を持たないone-shot exact solveの、同じ指定・同じseedによる直前姿勢。
+struct RequestedNearFlatSurfaceInput<'a> {
+    cp: &'a CreasePattern,
+    faces: &'a [Face],
+    drivers: &'a [Driver],
+    targets: Option<&'a HashMap<EdgeId, f64>>,
+    warm_start: Option<&'a HashMap<EdgeId, f64>>,
+    topology: &'a PreparedTopology,
+    endpoint: SurfaceEndpoint<'a>,
+    contact: MotionContactOptions,
+}
+
+fn requested_near_flat_surface_order(
+    input: RequestedNearFlatSurfaceInput<'_>,
+) -> Option<SurfaceOrderCandidate> {
+    let RequestedNearFlatSurfaceInput {
+        cp,
+        faces,
+        drivers,
+        targets,
+        warm_start,
+        topology,
+        endpoint,
+        contact,
+    } = input;
+    let final_checkpoint = crate::surface_order::SURFACE_PATH_CHECKPOINT_DEG
+        .last()
+        .copied()
+        .unwrap_or(180.0);
+    let approaches_flat =
+        |angle: f64| angle.is_finite() && angle.abs() >= final_checkpoint - RELAXATION_EPS_DEG;
+    if !drivers
+        .iter()
+        .any(|driver| approaches_flat(driver.target_angle_deg))
+        && !targets
+            .into_iter()
+            .flat_map(HashMap::values)
+            .copied()
+            .any(approaches_flat)
+    {
+        return None;
+    }
+    let checkpoints = &crate::surface_order::SURFACE_PATH_CHECKPOINT_DEG
+        [crate::surface_order::SURFACE_PATH_CHECKPOINT_DEG.len() - 4..];
+    'seed: for (seed_index, seed) in [warm_start, None].into_iter().enumerate() {
+        if seed_index == 1 && warm_start.is_none() {
+            break;
+        }
+        let mut warm = seed.cloned();
+        let mut path_frames = Vec::with_capacity(checkpoints.len());
+        // exact endpointから接触条件を保ったまま4段だけ戻る。179.999°でまだ面積0の枝でも、
+        // 179.99°以前に正面積だった対を選べる。導出へは反転してendpointへ向かう順で渡す。
+        for &checkpoint in checkpoints.iter().rev() {
+            let approach = |angle: f64| {
+                if approaches_flat(angle) {
+                    angle.signum() * checkpoint
+                } else {
+                    angle
+                }
+            };
+            let checkpoint_drivers = drivers
+                .iter()
+                .map(|driver| Driver {
+                    hinge: driver.hinge,
+                    target_angle_deg: approach(driver.target_angle_deg),
+                })
+                .collect::<Vec<_>>();
+            let checkpoint_targets = targets.map(|targets| {
+                targets
+                    .iter()
+                    .map(|(&hinge, &angle)| (hinge, approach(angle)))
+                    .collect::<HashMap<_, _>>()
+            });
+            let anchor = solve_motion_prepared(
+                cp,
+                faces,
+                &checkpoint_drivers,
+                checkpoint_targets.as_ref(),
+                warm.as_ref(),
+                contact,
+                MotionSolveContext {
+                    topology,
+                    stamp_surface_order: false,
+                    surface_approach: None,
+                },
+            )
+            .result;
+            if !is_finite_result(&anchor, faces.len())
+                || checkpoint_drivers.iter().any(|driver| {
+                    anchor.angles.get(&driver.hinge).is_none_or(|&actual| {
+                        canonical_delta_deg(actual, driver.target_angle_deg).abs()
+                            > RELAXATION_EPS_DEG
+                    })
+                })
+            {
+                continue 'seed;
+            }
+            warm = Some(anchor.angles);
+            path_frames.push(anchor.frame);
+        }
+        path_frames.reverse();
+        // pathをexactへ解き戻したendpointやorderは使わず、正面積だった面対だけを選び、
+        // 上下は返却endpoint自身から測り直す。
+        if let Some(candidate) = complete_motion_path_surface_order(
+            cp,
+            faces,
+            &path_frames,
+            endpoint.frame,
+            endpoint.constraints,
+            SurfacePathEvidence::PairSelection,
+        ) {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 /// 既にexact endpointにいる同角度refreshでも、current driverを片側の実角度へ戻して
@@ -1303,7 +1972,7 @@ fn driver_approach_surface_order(
     topology: &PreparedTopology,
     result: &SolveResult,
     endpoint: SurfaceEndpoint<'_>,
-) -> Option<crate::surface_order::SurfaceOrder> {
+) -> Option<SurfaceOrderCandidate> {
     if topology.forest().loops.is_empty() || (drivers.is_empty() && targets.is_none()) {
         return None;
     }
@@ -1331,7 +2000,10 @@ fn driver_approach_surface_order(
     }
 
     let mut warm = result.angles.clone();
+    let mut endpoint_warm = None;
     let mut path_frames = Vec::with_capacity(checkpoints.len());
+    // exact特異点の直近から逆向きに解くと別の閉包枝へ乗り得る。179.5°の安定域へ
+    // いったん戻してから179.999°へ近付け、順序どおりの直接depthを測る。
     for &checkpoint in checkpoints {
         let approach = |angle: f64| {
             if approaches_flat(angle) {
@@ -1370,15 +2042,56 @@ fn driver_approach_surface_order(
                 return None;
             }
         }
+        if checkpoint == checkpoints[checkpoints.len() - 1] {
+            endpoint_warm = Some(solved.angles.clone());
+        }
         warm = solved.angles;
         path_frames.push(solved.frame);
+    }
+    // checkpoint列が別の閉包枝へ移っていないことを、返却された全角度を同じwarmから
+    // もう一度固定したendpointのpolygonで確かめる。`endpoint.frame`をそのままcandidateへ
+    // 入れるだけではresult.frame同士の自己比較になり、別枝を検出できない。
+    let mut endpoint_drivers = result
+        .angles
+        .iter()
+        .filter_map(|(&hinge, &target_angle_deg)| {
+            (target_angle_deg.is_finite() && (-180.0..=180.0).contains(&target_angle_deg))
+                .then_some(Driver {
+                    hinge,
+                    target_angle_deg,
+                })
+        })
+        .collect::<Vec<_>>();
+    if endpoint_drivers.len() != result.angles.len() {
+        return None;
+    }
+    endpoint_drivers.sort_unstable_by_key(|driver| driver.hinge);
+    let endpoint_warm = endpoint_warm?;
+    let verified_endpoint = solve_requested_prepared(
+        cp,
+        faces,
+        &endpoint_drivers,
+        None,
+        Some(&endpoint_warm),
+        topology,
+    );
+    if !is_finite_result(&verified_endpoint, faces.len())
+        || result.angles.iter().any(|(&hinge, &target)| {
+            verified_endpoint.angles.get(&hinge).is_none_or(|&actual| {
+                canonical_delta_deg(actual, target).abs() > RELAXATION_EPS_DEG
+            })
+        })
+        || !same_surface_geometry(&verified_endpoint.frame, endpoint.frame)
+    {
+        return None;
     }
     complete_motion_path_surface_order(
         cp,
         faces,
         &path_frames,
-        endpoint.frame,
+        &verified_endpoint.frame,
         endpoint.constraints,
+        SurfacePathEvidence::PairSelection,
     )
 }
 
@@ -1500,7 +2213,7 @@ fn canonical_motion_surface_order(
     topology: &PreparedTopology,
     final_targets: &BTreeMap<EdgeId, f64>,
     exact_constraints: &[(FaceId, FaceId)],
-) -> Option<crate::surface_order::SurfaceOrder> {
+) -> Option<SurfaceOrderCandidate> {
     if final_targets.is_empty() {
         return None;
     }
@@ -1555,14 +2268,18 @@ fn canonical_motion_surface_order(
             return None;
         }
     }
-    crate::surface_order::derive_surface_order_from_frame_path(
+    let derived = crate::surface_order::derive_surface_order_from_frame_path(
         cp,
         faces,
         &path_frames,
         &exact.frame,
         exact_constraints,
     )
-    .ok()
+    .ok()?;
+    Some(SurfaceOrderCandidate {
+        derived,
+        endpoint: exact.frame,
+    })
 }
 
 fn solve_warm_pose_prepared(
@@ -1935,8 +2652,12 @@ impl Reseed<'_> {
     /// 前の姿勢からの角度の隔たり。近い解ほど紙の見た目が飛ばない。
     fn distance_from_previous(&self, angles: &HashMap<EdgeId, f64>) -> f64 {
         let previous = self.warm.unwrap_or(self.start_angles);
-        angles
-            .iter()
+        // f64の加算順は交換可能ではない。HashMapのprocessごとの反復順でrescue候補の
+        // strict `<` 比較が変わらないよう、他のcandidate scoreと同じくEdgeId順で足す。
+        let mut ordered_angles = angles.iter().collect::<Vec<_>>();
+        ordered_angles.sort_unstable_by_key(|(hinge, _)| **hinge);
+        ordered_angles
+            .into_iter()
             .map(|(hinge, &angle)| {
                 canonical_delta_deg(angle, previous.get(hinge).copied().unwrap_or(0.0)).powi(2)
             })
@@ -2559,12 +3280,13 @@ fn previous_with_failure(
 #[cfg(test)]
 mod tests {
     use super::{
-        CanonicalCandidateKind, CanonicalCandidateScore, ContactCandidate, angle_priority_costs,
-        canonical_anchor_samples, canonical_candidate_specs, canonical_document_seed,
-        canonical_kind_seed, canonical_requested_errors, canonical_uniform_seed,
-        continuation_steps, interpolate_angle_maps, interpolated_drivers, interpolated_targets,
-        max_requested_delta, solve_canonical_motion_prepared, solve_motion,
-        solve_motion_with_contact_options, stamp_motion_surface_order,
+        CanonicalCandidateKind, CanonicalCandidateScore, ContactCandidate, MotionContactOptions,
+        MotionSurfaceOrderInput, angle_priority_costs, canonical_anchor_samples,
+        canonical_candidate_specs, canonical_document_seed, canonical_kind_seed,
+        canonical_requested_errors, canonical_uniform_seed, continuation_steps,
+        interpolate_angle_maps, interpolated_drivers, interpolated_targets, max_requested_delta,
+        solve_canonical_motion_prepared, solve_motion, solve_motion_with_contact_options,
+        stamp_motion_surface_order,
     };
     use crate::{ContactMetrics, SolveResult, solver};
     use ori3_cp::extract_faces;
@@ -2597,12 +3319,20 @@ mod tests {
         let mut nonfinite = solved.result;
         nonfinite.closure_rms = f64::NAN;
         let (_, authoritative) = stamp_motion_surface_order(
-            &document.cp,
-            &faces,
-            &[],
-            None,
-            &topology,
-            &[],
+            MotionSurfaceOrderInput {
+                cp: &document.cp,
+                faces: &faces,
+                drivers: &[],
+                targets: None,
+                topology: &topology,
+                warm_start: None,
+                motion_path: &[],
+                contact: MotionContactOptions {
+                    detect: false,
+                    prevent: false,
+                },
+                surface_approach: None,
+            },
             &mut nonfinite,
         );
 

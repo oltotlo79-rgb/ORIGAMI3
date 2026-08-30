@@ -59,17 +59,22 @@ use std::sync::{Arc, Mutex, OnceLock};
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use glam::DVec2;
+use glam::{DVec2, DVec3};
 use ori3_cp::{Face, extract_faces};
 use ori3_geometry::Isometry2;
 use ori3_model::{
-    AlignmentTarget, CreasePattern, DisplaySettings, Document, Driver, DriverLine, Edge, EdgeId,
-    FaceId, FinishSoftSettings, FoldAlignment, FoldPoseInput, FoldStep, Frame3D, Paper, StepId,
-    TechniqueKind, Vertex,
+    AlignmentTarget, CreasePattern, DisplaySettings, Document, Driver, DriverLine, EPS, Edge,
+    EdgeId, EdgeKind, FaceId, FinishSoftSettings, FoldAlignment, FoldPoseInput, FoldStep, Frame3D,
+    Paper, StepId, TechniqueKind, Vertex,
 };
 
 use crate::flat_state::FlatState;
-use crate::fold_through::resolve_driver_edges;
+use crate::fold_through::{angle_of, resolve_driver_edges};
+use crate::precrease_collapse::{
+    PRECREASE_ORDER_UNDETERMINED_WARNING_PREFIX, PrecreaseCollapseInput,
+    collapse_precrease_network, validate_precrease_layer_order,
+};
+use crate::spatial_crease_only::{CanonicalNonflatPose, FaceRigidTransform3, MaterialVertex3D};
 
 /// 平坦判定の許容誤差。ソルバーの表示精度(座標誤差 1e-6 程度)に合わせる。
 /// [`ori3_model::EPS`](1e-9)では厳しすぎて、正しく畳めた状態を弾いてしまう。
@@ -82,6 +87,8 @@ const FLAT_EPS: f64 = 1e-6;
 #[derive(Clone, Debug)]
 pub struct CanonicalFlatPose {
     pub state: FlatState,
+    /// Signed endpoint angles derived from the document and the requested pose.
+    pub declared_angles: HashMap<EdgeId, f64>,
     pub step: FoldStep,
     pub warnings: Vec<String>,
 }
@@ -585,6 +592,20 @@ pub fn replay_with_faces(doc: &Document, faces: &[Face], up_to: usize, t: f64) -
     replay_with_faces_impl(doc, faces, up_to, t, Some(replay_endpoint_cache()))
 }
 
+/// 保存候補を確定する直前の検証用に、endpoint cacheを読まず書かず完了形を再生する。
+///
+/// 通常表示は [`replay_with_faces`] の共有cacheを使う。この入口は、同じ候補をUndo後に
+/// 再度検査しても過去のendpointをcold replayの代用にせず、表示補正前のraw frameを
+/// 得る必要がある原子性gate専用。途中値を誤用しないよう、`t=1`だけを公開する。
+pub fn replay_endpoint_with_faces_uncached(
+    doc: &Document,
+    faces: &[Face],
+    up_to: usize,
+) -> ReplayResult {
+    let up_to = up_to.min(doc.sequence.len());
+    replay_with_faces_impl(doc, faces, up_to, 1.0, None)
+}
+
 fn replay_with_faces_impl(
     doc: &Document,
     faces: &[Face],
@@ -714,10 +735,6 @@ fn replay_with_faces_impl(
                         .and_then(|previous| previous.surface_order_provenance.as_ref()),
                     &mut result,
                 );
-                if surface_order_provenance.is_none() {
-                    surface_order_provenance =
-                        stamp_canonical_surface_order_from_flat_path(doc, faces, &mut result);
-                }
             }
         } else {
             surface_order_provenance = previous
@@ -728,10 +745,60 @@ fn replay_with_faces_impl(
                 });
         }
     }
-    if surface_order_provenance.is_none() && t >= 1.0 {
-        surface_order_provenance =
-            stamp_canonical_surface_order_from_motion(doc, faces, &mut result);
+    // A completed precrease collapse persists signed hinges but not the MotionPart path.  Rerun
+    // the operation from the document prefix and derive mandatory M/V, taco and continuity
+    // constraints without reading the candidate order.  A complete saved order may then serve as
+    // an explicit oracle for otherwise unresolved ties, but only after that independent validator
+    // accepts it.  Automatic FaceId/previous-order fallback is never promoted to authority.
+    if current_geometry_changes
+        && let Some(check) =
+            verified_complete_precrease_collapse_order(doc, faces, up_to, t, &result)
+    {
+        let CompletePrecreaseCollapseOrderCheck {
+            authority,
+            warnings: order_warnings,
+        } = check;
+        for warning in order_warnings {
+            if !warnings.contains(&warning) {
+                warnings.push(warning);
+            }
+        }
+        if let Some(verified) = authority {
+            match ori3_rigid::certify_verified_operation_surface_order(
+                &doc.cp,
+                faces,
+                &result.frame,
+                &verified.order,
+                &verified.mandatory_constraints,
+            ) {
+                Ok(certified) => {
+                    let (certified_frame, certified_order, certified_provenance) =
+                        certified.into_parts();
+                    if certified_order == verified.order
+                        && frame_geometry_matches(faces, &result.frame, &certified_frame)
+                        && (surface_order_provenance.is_none()
+                            || !surface_order_matches_verified_overlaps(
+                                &result.frame,
+                                &verified.order,
+                            ))
+                    {
+                        result.frame = certified_frame;
+                        surface_order_provenance = Some(certified_provenance);
+                    }
+                }
+                Err(_) => {
+                    let warning =
+                        "紙の重なり順を折り目から確認できなかったため推定した順で表示します"
+                            .to_string();
+                    if !warnings.contains(&warning) {
+                        warnings.push(warning);
+                    }
+                }
+            }
+        }
     }
+    // 実current-step経路でcompleteにならない順序は、別のflat/motion経路から
+    // 返却frameへ転記しない。provenance無しのまま返し、Face ID順も物理順にしない。
     let hinge_angles = result.angles;
     let relaxations = result.relaxations;
     let closure_rms = result.closure_rms;
@@ -961,12 +1028,16 @@ pub fn canonical_flat_pose_at(
         }
     }
 
-    let snapped_angles = snapped.iter().map(|(&id, &angle)| (id, angle)).collect();
+    let snapped_angles: HashMap<EdgeId, f64> =
+        snapped.iter().map(|(&id, &angle)| (id, angle)).collect();
     let folded = ori3_rigid::propagate(&doc.cp, faces, &snapped_angles);
     let placements = flat_placements(faces, &folded)?;
     let state = FlatState { placements, order };
 
     let mut frame = ori3_rigid::to_frame3d(&doc.cp, faces, &folded);
+    if !frame_geometry_matches(faces, &solved.result.frame, &frame) {
+        return Err("紙の重なり順を導いた形と、保存する平坦な形が一致しません".to_string());
+    }
     ori3_rigid::stamp_surface_order(&mut frame, &state.order)
         .map_err(|_| "紙の重なり順を3Dの形へ反映できません".to_string())?;
     let seam_gap = ori3_rigid::max_seam_gap(&doc.cp, faces, &frame);
@@ -1036,9 +1107,425 @@ pub fn canonical_flat_pose_at(
     }
     Ok(CanonicalFlatPose {
         state,
+        declared_angles: snapped_angles,
         step,
         warnings,
     })
+}
+
+/// Reconstruct a canonical rigid pose from a document prefix and optional signed hard angles.
+///
+/// No live frame, Follow/store warm start, or caller-supplied solved angle map is accepted.  When
+/// `pose_before` is absent, the signed angles replayed from the saved prefix become the hard
+/// declaration.  When it is present, only those explicitly declared angles are hard and the
+/// replayed prefix is used solely as the canonical solver's document-derived candidate seed.
+///
+/// The returned declaration covers every material hinge.  Explicit values retain their original
+/// bits (including opposite complete-fold signs), while undeclared values come from the canonical
+/// result.  A finite frame, complete material face set, unrelaxed hard values, matching relative
+/// face rotations, and closed material seams are all required.
+pub fn canonical_nonflat_pose_at(
+    doc: &Document,
+    faces: &[Face],
+    up_to: usize,
+    pose_before: Option<&FoldPoseInput>,
+) -> Result<CanonicalNonflatPose, String> {
+    const HARD_ANGLE_EPS_DEG: f64 = 1e-9;
+    const FRAME_ANGLE_EPS_DEG: f64 = 1e-7;
+    const FRAME_POINT_EPS: f64 = 1e-8;
+    const MAX_SEAM_GAP: f64 = 1e-6;
+
+    if up_to > doc.sequence.len() {
+        return Err(format!(
+            "折った形の挿入位置{up_to}が、保存済み{}手を超えています",
+            doc.sequence.len()
+        ));
+    }
+    if faces.is_empty() || extract_faces(&doc.cp) != faces {
+        return Err("展開図から導いた紙面が完全には揃っていません".to_string());
+    }
+    ensure_material_face_graph_connected(faces)?;
+
+    let hinges = hinge_edges(faces);
+    let hinge_set = hinges.iter().copied().collect::<BTreeSet<_>>();
+    let prefix = replay_with_faces(doc, faces, up_to, 1.0);
+    if !is_finite_replay_seed(&prefix, faces.len()) {
+        return Err("現在の手順までの形を、書類だけから再現できません".to_string());
+    }
+    let document_seed = hinges
+        .iter()
+        .map(|&hinge| {
+            (
+                hinge,
+                prefix.hinge_angles.get(&hinge).copied().unwrap_or(0.0),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+
+    let mut hard_by_hinge = BTreeMap::<EdgeId, f64>::new();
+    if let Some(pose) = pose_before {
+        if pose.drivers.is_empty() {
+            return Err("折った形を再現する角度が指定されていません".to_string());
+        }
+        for requested in &pose.drivers {
+            let angle = requested.target_angle_deg;
+            if !angle.is_finite() || !(-180.0..=180.0).contains(&angle) {
+                return Err(format!(
+                    "折り目{}の角度は有限な-180度以上180度以下ではありません",
+                    requested.edge_id
+                ));
+            }
+            if !hinge_set.contains(&requested.edge_id) {
+                return Err(format!(
+                    "折り目{}は、2つの紙面をつなぐ材料ヒンジではありません",
+                    requested.edge_id
+                ));
+            }
+            if hard_by_hinge.insert(requested.edge_id, angle).is_some() {
+                return Err(format!(
+                    "折り目{}の角度が2回指定されています",
+                    requested.edge_id
+                ));
+            }
+        }
+    } else {
+        hard_by_hinge.extend(document_seed.iter().map(|(&hinge, &angle)| (hinge, angle)));
+    }
+    let hard = hard_by_hinge
+        .iter()
+        .map(|(&hinge, &target_angle_deg)| Driver {
+            hinge,
+            target_angle_deg,
+        })
+        .collect::<Vec<_>>();
+
+    let solved = ori3_rigid::motion::solve_canonical_motion_with_contact_options(
+        &doc.cp,
+        faces,
+        &hard,
+        None,
+        Some(&document_seed),
+        ori3_rigid::MotionContactOptions {
+            detect: false,
+            prevent: false,
+        },
+    );
+    if !is_finite_result(&solved.result, faces.len()) {
+        return Err("指定した角度の有限な折った形を再現できません".to_string());
+    }
+    if !solved.result.relaxations.is_empty() {
+        return Err("指定したhard角度を変えずには、折った形を再現できません".to_string());
+    }
+    for (&hinge, &declared) in &hard_by_hinge {
+        let actual = solved
+            .result
+            .angles
+            .get(&hinge)
+            .copied()
+            .ok_or_else(|| format!("折り目{hinge}のhard角度を再現できません"))?;
+        if (actual - declared).abs() > HARD_ANGLE_EPS_DEG {
+            return Err(format!("折り目{hinge}のhard角度が変更されています"));
+        }
+    }
+    if solved.result.angles.len() != hinges.len()
+        || hinges
+            .iter()
+            .any(|hinge| !solved.result.angles.contains_key(hinge))
+    {
+        return Err("材料ヒンジすべての角度を再現できません".to_string());
+    }
+
+    let diagnostics = solved
+        .surface_order
+        .as_ref()
+        .ok_or_else(|| "紙面の重なり診断を得られません".to_string())?;
+    if diagnostics.unresolved_overlaps != 0 || diagnostics.broken_constraints != 0 {
+        return Err("折った形の紙面関係を一意に決められません".to_string());
+    }
+    // A non-overlapping non-flat pose has no physical above/below pair to prove.  Do not reject
+    // that legal case merely because there was no overlap path; all overlapping cases remain
+    // fail-closed unless the rigid solver supplied authoritative order.
+    if !solved.surface_order_authoritative
+        && diagnostics.source != ori3_rigid::SurfaceOrderSource::NoOverlap
+    {
+        return Err("重なった紙面の順序を折った形から証明できません".to_string());
+    }
+    complete_surface_order(&solved.result.frame, faces)?;
+    validate_nonflat_frame_faces(faces, &solved.result.frame)?;
+
+    let seam_gap = ori3_rigid::max_seam_gap(&doc.cp, faces, &solved.result.frame);
+    if !seam_gap.is_finite() || seam_gap >= MAX_SEAM_GAP {
+        return Err("折った形で材料のつながりを保てません".to_string());
+    }
+    for &hinge in &hinges {
+        let declared = solved.result.angles[&hinge];
+        let observed = signed_hinge_angle_in_frame(faces, &solved.result.frame, hinge)
+            .ok_or_else(|| format!("折り目{hinge}の相対姿勢を測れません"))?;
+        let matches = if (declared.abs() - 180.0).abs() <= FRAME_ANGLE_EPS_DEG {
+            (observed.abs() - 180.0).abs() <= FRAME_ANGLE_EPS_DEG
+        } else {
+            (observed - declared).abs() <= FRAME_ANGLE_EPS_DEG
+        };
+        if !matches {
+            return Err(format!(
+                "折り目{hinge}の宣言角度と紙面の相対姿勢が一致しません"
+            ));
+        }
+    }
+
+    let folded = ori3_rigid::propagate(&doc.cp, faces, &solved.result.angles);
+    let propagated_frame = ori3_rigid::to_frame3d(&doc.cp, faces, &folded);
+    validate_matching_frame_geometry(
+        faces,
+        &solved.result.frame,
+        &propagated_frame,
+        FRAME_POINT_EPS,
+    )?;
+    let (face_transforms, material_vertices) =
+        canonical_material_geometry(&doc.cp, faces, &folded)?;
+    let signed_hinge_angles = hinges
+        .iter()
+        .map(|&hinge| {
+            (
+                hinge,
+                hard_by_hinge
+                    .get(&hinge)
+                    .copied()
+                    .unwrap_or(solved.result.angles[&hinge]),
+            )
+        })
+        .collect();
+
+    Ok(CanonicalNonflatPose {
+        frame: solved.result.frame,
+        material_vertices,
+        face_transforms,
+        signed_hinge_angles,
+    })
+}
+
+fn ensure_material_face_graph_connected(faces: &[Face]) -> Result<(), String> {
+    if faces.len() <= 1 {
+        return Ok(());
+    }
+    let mut occurrences = BTreeMap::<EdgeId, Vec<usize>>::new();
+    for (face_index, face) in faces.iter().enumerate() {
+        if face.vertices.len() < 3 || face.vertices.len() != face.edges.len() {
+            return Err("材料紙面の境界が正しくありません".to_string());
+        }
+        for &edge in &face.edges {
+            occurrences.entry(edge).or_default().push(face_index);
+        }
+    }
+    let mut adjacency = vec![Vec::new(); faces.len()];
+    for owners in occurrences.values() {
+        if owners.len() == 2 && owners[0] != owners[1] {
+            adjacency[owners[0]].push(owners[1]);
+            adjacency[owners[1]].push(owners[0]);
+        }
+    }
+    let mut reached = vec![false; faces.len()];
+    reached[0] = true;
+    let mut pending = vec![0];
+    while let Some(face) = pending.pop() {
+        for &neighbor in &adjacency[face] {
+            if !reached[neighbor] {
+                reached[neighbor] = true;
+                pending.push(neighbor);
+            }
+        }
+    }
+    if reached.into_iter().all(|value| value) {
+        Ok(())
+    } else {
+        Err("材料紙面がひとつながりではありません".to_string())
+    }
+}
+
+fn validate_nonflat_frame_faces(faces: &[Face], frame: &Frame3D) -> Result<(), String> {
+    let mut seen = BTreeSet::new();
+    for face in faces {
+        let matches = frame
+            .faces
+            .iter()
+            .filter(|candidate| candidate.face == face.id)
+            .collect::<Vec<_>>();
+        if matches.len() != 1 || matches[0].polygon.len() != face.vertices.len() {
+            return Err("3D姿勢と材料紙面の集合が一致しません".to_string());
+        }
+        if !seen.insert(face.id)
+            || !matches[0]
+                .polygon
+                .iter()
+                .flatten()
+                .all(|coordinate| coordinate.is_finite())
+        {
+            return Err("3D姿勢の紙面が重複しているか有限ではありません".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn signed_hinge_angle_in_frame(faces: &[Face], frame: &Frame3D, hinge: EdgeId) -> Option<f64> {
+    let mut occurrences = Vec::with_capacity(2);
+    for (face_index, face) in faces.iter().enumerate() {
+        for (edge_index, &edge) in face.edges.iter().enumerate() {
+            if edge == hinge {
+                occurrences.push((face_index, edge_index));
+            }
+        }
+    }
+    if occurrences.len() != 2 || occurrences[0].0 == occurrences[1].0 {
+        return None;
+    }
+    let (left_index, edge_index) = occurrences[0];
+    let right_index = occurrences[1].0;
+    let left = unique_frame_face(frame, faces[left_index].id)?;
+    let right = unique_frame_face(frame, faces[right_index].id)?;
+    if left.polygon.len() != faces[left_index].vertices.len()
+        || right.polygon.len() != faces[right_index].vertices.len()
+        || left.polygon.is_empty()
+    {
+        return None;
+    }
+    let a = DVec3::from(left.polygon[edge_index]);
+    let b = DVec3::from(left.polygon[(edge_index + 1) % left.polygon.len()]);
+    let axis = normalized_finite3(b - a)?;
+    let left_normal = frame_polygon_normal(&left.polygon)?;
+    let right_normal = frame_polygon_normal(&right.polygon)?;
+    let sine = axis.dot(left_normal.cross(right_normal));
+    let cosine = left_normal.dot(right_normal).clamp(-1.0, 1.0);
+    let angle = sine.atan2(cosine).to_degrees();
+    angle.is_finite().then_some(angle)
+}
+
+fn unique_frame_face(frame: &Frame3D, face: FaceId) -> Option<&ori3_model::Face3D> {
+    let mut matches = frame
+        .faces
+        .iter()
+        .filter(|candidate| candidate.face == face);
+    let found = matches.next()?;
+    matches.next().is_none().then_some(found)
+}
+
+fn frame_polygon_normal(polygon: &[[f64; 3]]) -> Option<DVec3> {
+    if polygon.len() < 3 {
+        return None;
+    }
+    let normal = polygon
+        .iter()
+        .zip(polygon.iter().cycle().skip(1))
+        .take(polygon.len())
+        .map(|(left, right)| DVec3::from(*left).cross(DVec3::from(*right)))
+        .sum();
+    normalized_finite3(normal)
+}
+
+fn normalized_finite3(value: DVec3) -> Option<DVec3> {
+    if !value.is_finite() {
+        return None;
+    }
+    let scale = value.x.abs().max(value.y.abs()).max(value.z.abs());
+    if scale == 0.0 {
+        return None;
+    }
+    let scaled = value / scale;
+    let length = scaled.length();
+    (length.is_finite() && length > 0.0).then_some(scaled / length)
+}
+
+fn validate_matching_frame_geometry(
+    faces: &[Face],
+    actual: &Frame3D,
+    propagated: &Frame3D,
+    tolerance: f64,
+) -> Result<(), String> {
+    for face in faces {
+        let actual = unique_frame_face(actual, face.id)
+            .ok_or_else(|| "canonical姿勢の紙面が一意ではありません".to_string())?;
+        let propagated = unique_frame_face(propagated, face.id)
+            .ok_or_else(|| "材料角度から紙面を再伝播できません".to_string())?;
+        if actual.polygon.len() != propagated.polygon.len()
+            || actual.mirrored != propagated.mirrored
+            || actual
+                .polygon
+                .iter()
+                .zip(&propagated.polygon)
+                .any(|(left, right)| DVec3::from(*left).distance(DVec3::from(*right)) > tolerance)
+        {
+            return Err("canonical姿勢と材料角度の剛体伝播が一致しません".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn canonical_material_geometry(
+    cp: &CreasePattern,
+    faces: &[Face],
+    folded: &ori3_rigid::FoldedFrame,
+) -> Result<(Vec<FaceRigidTransform3>, Vec<MaterialVertex3D>), String> {
+    let material = cp
+        .vertices
+        .iter()
+        .map(|vertex| (vertex.id, vertex.pos))
+        .collect::<HashMap<_, _>>();
+    let mut face_transforms = Vec::with_capacity(faces.len());
+    for face in faces {
+        let material_origin = face
+            .vertices
+            .first()
+            .and_then(|vertex| material.get(vertex))
+            .copied()
+            .ok_or_else(|| format!("紙面{}の材料原点を得られません", face.id))?;
+        let &(rotation, translation) = folded
+            .transforms
+            .get(&face.id)
+            .ok_or_else(|| format!("紙面{}の剛体変換を得られません", face.id))?;
+        let world_origin =
+            rotation * DVec3::new(material_origin[0], material_origin[1], 0.0) + translation;
+        let world_x_axis = rotation * DVec3::X;
+        let world_y_axis = rotation * DVec3::Y;
+        if !world_origin.is_finite() || !world_x_axis.is_finite() || !world_y_axis.is_finite() {
+            return Err(format!("紙面{}の剛体変換が有限ではありません", face.id));
+        }
+        face_transforms.push(FaceRigidTransform3 {
+            face: face.id,
+            material_origin,
+            world_origin: world_origin.to_array(),
+            world_x_axis: world_x_axis.to_array(),
+            world_y_axis: world_y_axis.to_array(),
+        });
+    }
+
+    let by_face = face_transforms
+        .iter()
+        .map(|transform| (transform.face, transform))
+        .collect::<HashMap<_, _>>();
+    let mut material_vertices = Vec::with_capacity(cp.vertices.len());
+    for vertex in &cp.vertices {
+        let owner = faces
+            .iter()
+            .filter(|face| face.vertices.contains(&vertex.id))
+            .min_by_key(|face| face.id)
+            .ok_or_else(|| format!("材料頂点{}を含む紙面がありません", vertex.id))?;
+        let transform = by_face
+            .get(&owner.id)
+            .copied()
+            .ok_or_else(|| format!("材料頂点{}の剛体変換がありません", vertex.id))?;
+        let dx = vertex.pos[0] - transform.material_origin[0];
+        let dy = vertex.pos[1] - transform.material_origin[1];
+        let position = DVec3::from(transform.world_origin)
+            + DVec3::from(transform.world_x_axis) * dx
+            + DVec3::from(transform.world_y_axis) * dy;
+        if !position.is_finite() {
+            return Err(format!("材料頂点{}の3D位置が有限ではありません", vertex.id));
+        }
+        material_vertices.push(MaterialVertex3D {
+            vertex: vertex.id,
+            position: position.to_array(),
+        });
+    }
+    Ok((face_transforms, material_vertices))
 }
 
 fn is_finite_replay_seed(replayed: &ReplayResult, expected_faces: usize) -> bool {
@@ -1090,6 +1577,44 @@ pub fn flat_state_at(
     faces: &[Face],
     up_to: usize,
 ) -> Result<(FlatState, Vec<String>), String> {
+    let (state, _, warnings) = flat_state_with_declared_angles_at_inner(doc, faces, up_to, false)?;
+    Ok((state, warnings))
+}
+
+/// A document-derived flat state, its signed declared hinge angles, and replay warnings.
+pub type FlatStateWithDeclaredAngles = (FlatState, HashMap<EdgeId, f64>, Vec<String>);
+
+fn ensure_declared_flat_state_is_connected(
+    cp: &CreasePattern,
+    faces: &[Face],
+    folded: &ori3_rigid::FoldedFrame,
+) -> Result<(), String> {
+    const MAX_SEAM_GAP: f64 = 1e-6;
+
+    let frame = ori3_rigid::to_frame3d(cp, faces, folded);
+    let seam_gap = ori3_rigid::max_seam_gap(cp, faces, &frame);
+    if !seam_gap.is_finite() || seam_gap >= MAX_SEAM_GAP {
+        return Err("折った形で紙のつながりを保てません".to_string());
+    }
+    Ok(())
+}
+
+/// Replay a document-only flat state together with the signed declared angle
+/// of every current material hinge. Unspecified hinges remain explicit 0°.
+pub fn flat_state_with_declared_angles_at(
+    doc: &Document,
+    faces: &[Face],
+    up_to: usize,
+) -> Result<FlatStateWithDeclaredAngles, String> {
+    flat_state_with_declared_angles_at_inner(doc, faces, up_to, true)
+}
+
+fn flat_state_with_declared_angles_at_inner(
+    doc: &Document,
+    faces: &[Face],
+    up_to: usize,
+    require_authoritative_order: bool,
+) -> Result<FlatStateWithDeclaredAngles, String> {
     let up_to = up_to.min(doc.sequence.len());
     let plan = plan_steps(doc, faces, up_to, 1.0);
     // 後から積んだ指定が優先(HashMapへの順次挿入で後勝ちになる)
@@ -1098,15 +1623,73 @@ pub fn flat_state_at(
         .iter()
         .map(|d| (d.hinge, d.target_angle_deg))
         .collect();
+    let order = if require_authoritative_order && angles.values().any(|&angle| angle != 0.0) {
+        let replayed = replay_with_faces(doc, faces, up_to, 1.0);
+        if replayed.surface_order_provenance.is_none() {
+            return Err(
+                "折った紙の上からの順序を書類だけから決められないため、ひだの枚数を確認できません"
+                    .to_string(),
+            );
+        }
+        let endpoint_epsilon = crate::fold_target::COMPLETE_FOLD_ENDPOINT_EPS_DEG;
+        let replay_matches_declared = angles.iter().all(|(edge, declared)| {
+            replayed.hinge_angles.get(edge).is_some_and(|actual| {
+                let signed_delta = actual - declared;
+                signed_delta.is_finite()
+                    && signed_delta >= -endpoint_epsilon
+                    && signed_delta <= endpoint_epsilon
+            })
+        });
+        if !replay_matches_declared {
+            return Err(
+                "折った紙の角度を書類の指定どおりに再現できないため、ひだの枚数を確認できません"
+                    .to_string(),
+            );
+        }
+        complete_surface_order(&replayed.frame, faces)?
+    } else {
+        plan.order
+    };
     let folded = ori3_rigid::propagate(&doc.cp, faces, &angles);
+    if require_authoritative_order {
+        ensure_declared_flat_state_is_connected(&doc.cp, faces, &folded)?;
+    }
     let placements = flat_placements(faces, &folded)?;
-    Ok((
-        FlatState {
-            placements,
-            order: plan.order,
-        },
-        plan.warnings,
-    ))
+    Ok((FlatState { placements, order }, angles, plan.warnings))
+}
+
+/// Count/select pleats below a new fold line from persisted document state.
+/// Live frames, warm angles and previous solver results are not accepted.
+pub fn fold_target_analysis_at(
+    doc: &Document,
+    faces: &[Face],
+    up_to: usize,
+    line: [[f64; 2]; 2],
+    keep_side_point: [f64; 2],
+    pose_before: Option<&FoldPoseInput>,
+) -> Result<(crate::fold_target::FoldTargetAnalysis, Vec<String>), String> {
+    if up_to > doc.sequence.len() {
+        return Err(format!(
+            "fold-target insertion point {up_to} exceeds {} steps",
+            doc.sequence.len()
+        ));
+    }
+    let (state, angles, warnings) = if let Some(pose_input) = pose_before {
+        let pose = canonical_flat_pose_at(doc, faces, up_to, pose_input)?;
+        (pose.state, pose.declared_angles, pose.warnings)
+    } else {
+        flat_state_with_declared_angles_at(doc, faces, up_to)?
+    };
+    let analysis = crate::fold_target::analyze_fold_target_at_state(
+        &doc.cp,
+        faces,
+        &state,
+        &angles,
+        line,
+        keep_side_point,
+    )
+    .map_err(|error| format!("fold target analysis is unavailable: {error:?}"))?;
+    Ok((analysis, warnings))
 }
 
 /// 折り途中の姿勢を求める分割数。目標角を `SUBSTEPS` 等分して少しずつ動かし、
@@ -1288,49 +1871,516 @@ fn stamp_canonical_surface_order_from_angles(
         previous,
     );
     let (order, provenance) = derived.ok()?;
+    let rank_frame = ori3_rigid::to_frame3d(
+        &doc.cp,
+        faces,
+        &ori3_rigid::propagate(&doc.cp, faces, &result.angles),
+    );
+    if !frame_geometry_matches(faces, &rank_frame, &result.frame) {
+        return None;
+    }
     ori3_rigid::stamp_surface_order(&mut result.frame, &order).ok()?;
     Some(provenance)
 }
 
-/// 実current-step経路を固定12点まで追ってもcompleteにならない場合だけ、平坦な
-/// 展開図からのcanonical経路を最後の幾何fallbackとして刻印する。
-fn stamp_canonical_surface_order_from_flat_path(
-    doc: &Document,
-    faces: &[Face],
-    result: &mut ori3_rigid::SolveResult,
-) -> Option<ori3_rigid::SurfaceOrderProvenance> {
-    let (order, provenance) =
-        ori3_rigid::surface_order_from_angles_flat_path(&doc.cp, faces, &result.angles).ok()?;
-    ori3_rigid::stamp_surface_order(&mut result.frame, &order).ok()?;
-    Some(provenance)
+fn frame_geometry_matches(faces: &[Face], left: &Frame3D, right: &Frame3D) -> bool {
+    left.faces.len() == faces.len()
+        && right.faces.len() == faces.len()
+        && faces.iter().all(|face| {
+            let Some(left) = unique_frame_face(left, face.id) else {
+                return false;
+            };
+            let Some(right) = unique_frame_face(right, face.id) else {
+                return false;
+            };
+            left.mirrored == right.mirrored
+                && left.polygon.len() == right.polygon.len()
+                && left
+                    .polygon
+                    .iter()
+                    .zip(&right.polygon)
+                    .all(|(left, right)| {
+                        DVec3::from(*left).distance(DVec3::from(*right))
+                            <= COMPLETE_PRECREASE_GEOMETRY_EPS
+                    })
+        })
 }
 
-/// replay固有の経路だけでcompleteにならない複合手順では、同じ終点角をwarmにした
-/// `solve_motion` の既存canonical path authorityを再利用する。motionが証明を発行し、
-/// 同じ終点角へ着いた場合だけ、その全面順を現在の表示frameへ刻印する。
-fn stamp_canonical_surface_order_from_motion(
+#[derive(Clone, Debug)]
+struct CompletePrecreaseCollapseCandidate {
+    support_lines: Vec<[[f64; 2]; 2]>,
+    edge_angles: BTreeMap<EdgeId, f64>,
+    /// `Some` only when every saved representative point resolves to one complete permutation.
+    /// A missing or malformed value does not hide the operation itself: replay must still rerun
+    /// its general constraints and surface the unresolved-order warning.
+    saved_order: Option<Vec<FaceId>>,
+    saved_order_was_present: bool,
+}
+
+#[derive(Clone, Debug)]
+struct VerifiedCompletePrecreaseCollapseRerun {
+    candidate: CompletePrecreaseCollapseCandidate,
+    cp: CreasePattern,
+    state: FlatState,
+    warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct VerifiedCompletePrecreaseCollapseOrder {
+    order: Vec<FaceId>,
+    mandatory_constraints: Vec<(FaceId, FaceId)>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct CompletePrecreaseCollapseOrderCheck {
+    authority: Option<VerifiedCompletePrecreaseCollapseOrder>,
+    warnings: Vec<String>,
+}
+
+const COMPLETE_PRECREASE_ANGLE_EPS: f64 = 1e-9;
+// 2026-08-27実測: canonical flat poseの最大頂点差はcrane-headで
+// 3.63921138304618794e-15、one-pleatで0。実測値そのものを境目にせず、独立再実行の
+// 既存幾何契約1e-7を共用する（実測差の約2.75e7倍の余裕）。明示的な別形を作る既存検査の
+// 2e-7（complete precrease）と1e-6（current path）は、この境目の2倍/10倍なので拒否する。
+const COMPLETE_PRECREASE_GEOMETRY_EPS: f64 = 1e-7;
+
+fn signed_complete_precrease_angle(angle: f64) -> Option<f64> {
+    if !angle.is_finite() {
+        return None;
+    }
+    if (angle - 180.0).abs() <= COMPLETE_PRECREASE_ANGLE_EPS {
+        Some(180.0)
+    } else if (angle + 180.0).abs() <= COMPLETE_PRECREASE_ANGLE_EPS {
+        Some(-180.0)
+    } else {
+        None
+    }
+}
+
+fn valid_support_line(line: &DriverLine) -> bool {
+    let a = DVec2::from(line.a);
+    let b = DVec2::from(line.b);
+    a.is_finite() && b.is_finite() && (b - a).length() > EPS
+}
+
+fn point_on_support_line(line: [[f64; 2]; 2], point: [f64; 2]) -> bool {
+    let origin = DVec2::from(line[0]);
+    let direction = DVec2::from(line[1]) - origin;
+    if !origin.is_finite() || !direction.is_finite() || direction.length() <= EPS {
+        return false;
+    }
+    direction
+        .normalize()
+        .perp_dot(DVec2::from(point) - origin)
+        .abs()
+        <= COMPLETE_PRECREASE_GEOMETRY_EPS
+}
+
+fn unique_support_lines(drivers: &[DriverLine]) -> Vec<[[f64; 2]; 2]> {
+    let mut lines = Vec::<[[f64; 2]; 2]>::new();
+    for driver in drivers {
+        let candidate = [driver.a, driver.b];
+        if lines.iter().any(|&existing| {
+            point_on_support_line(existing, candidate[0])
+                && point_on_support_line(existing, candidate[1])
+        }) {
+            continue;
+        }
+        lines.push(candidate);
+    }
+    lines
+}
+
+fn resolved_signed_driver_map(
+    cp: &CreasePattern,
+    drivers: &[DriverLine],
+) -> Option<BTreeMap<EdgeId, f64>> {
+    if drivers.is_empty() {
+        return None;
+    }
+    let mut edge_angles = BTreeMap::<EdgeId, f64>::new();
+    for driver in drivers {
+        if !valid_support_line(driver) {
+            return None;
+        }
+        let angle = signed_complete_precrease_angle(driver.target_angle_deg)?;
+        let resolved = resolve_driver_edges(cp, driver);
+        if resolved.is_empty() {
+            return None;
+        }
+        for edge in resolved {
+            if let Some(previous) = edge_angles.insert(edge, angle)
+                && previous != angle
+            {
+                return None;
+            }
+        }
+    }
+    Some(edge_angles)
+}
+
+fn expected_complete_precrease_edge_angles(
+    cp: &CreasePattern,
+    faces: &[Face],
+) -> Option<BTreeMap<EdgeId, f64>> {
+    let mut kinds = BTreeMap::<EdgeId, EdgeKind>::new();
+    for edge in &cp.edges {
+        if kinds.insert(edge.id, edge.kind).is_some() {
+            return None;
+        }
+    }
+    let mut expected = BTreeMap::new();
+    for edge in hinge_edges(faces) {
+        let kind = *kinds.get(&edge)?;
+        if matches!(kind, EdgeKind::Mountain | EdgeKind::Valley) {
+            expected.insert(edge, angle_of(kind));
+        }
+    }
+    if expected.is_empty() {
+        return None;
+    }
+    Some(expected)
+}
+
+fn complete_precrease_collapse_candidate(
     doc: &Document,
     faces: &[Face],
-    result: &mut ori3_rigid::SolveResult,
-) -> Option<ori3_rigid::SurfaceOrderProvenance> {
-    let solved = ori3_rigid::solve_authoritative_surface_order(&doc.cp, faces, &result.angles)?;
-    if solved.frame().faces.len() != result.frame.faces.len()
-        || solved
-            .frame()
-            .faces
-            .iter()
-            .zip(&result.frame.faces)
-            .any(|(motion_face, replay_face)| {
-                motion_face.face != replay_face.face
-                    || motion_face.mirrored != replay_face.mirrored
-                    || motion_face.polygon != replay_face.polygon
-            })
+    up_to: usize,
+    t: f64,
+) -> Option<CompletePrecreaseCollapseCandidate> {
+    if t != 1.0 || up_to == 0 || up_to > doc.sequence.len() {
+        return None;
+    }
+    let step = &doc.sequence[up_to - 1];
+    if step.kind != TechniqueKind::Twist || step.alignment.is_some() || step.finish_soft.is_some() {
+        return None;
+    }
+
+    let face_ids = faces.iter().map(|face| face.id).collect::<BTreeSet<_>>();
+    if face_ids.len() != faces.len() {
+        return None;
+    }
+    let saved_order_was_present = step.layer_order.is_some();
+    let saved_order = step.layer_order.as_ref().and_then(|points| {
+        if points.len() != faces.len() {
+            return None;
+        }
+        let (resolved, warnings) = FlatState::resolve_order(&doc.cp, faces, points);
+        let resolved_ids = resolved.iter().copied().collect::<BTreeSet<_>>();
+        (warnings.is_empty() && resolved.len() == faces.len() && resolved_ids == face_ids)
+            .then_some(resolved)
+    });
+
+    let edge_angles = resolved_signed_driver_map(&doc.cp, &step.drivers)?;
+    if edge_angles != expected_complete_precrease_edge_angles(&doc.cp, faces)? {
+        return None;
+    }
+    let support_lines = unique_support_lines(&step.drivers);
+    if support_lines.is_empty() {
+        return None;
+    }
+    Some(CompletePrecreaseCollapseCandidate {
+        support_lines,
+        edge_angles,
+        saved_order,
+        saved_order_was_present,
+    })
+}
+
+fn complete_precrease_endpoint_matches(
+    cp: &CreasePattern,
+    faces: &[Face],
+    state: &FlatState,
+    edge_angles: &BTreeMap<EdgeId, f64>,
+    endpoint: &ori3_rigid::SolveResult,
+) -> bool {
+    if !is_finite_result(endpoint, faces.len())
+        || endpoint.angles.len() != edge_angles.len()
+        || edge_angles.iter().any(|(edge, expected)| {
+            endpoint
+                .angles
+                .get(edge)
+                .is_none_or(|actual| (actual - expected).abs() > COMPLETE_PRECREASE_ANGLE_EPS)
+        })
+    {
+        return false;
+    }
+    let face_ids = faces.iter().map(|face| face.id).collect::<BTreeSet<_>>();
+    if state.placements.keys().copied().collect::<BTreeSet<_>>() != face_ids {
+        return false;
+    }
+    let vertices = cp
+        .vertices
+        .iter()
+        .map(|vertex| (vertex.id, DVec2::from(vertex.pos)))
+        .collect::<HashMap<_, _>>();
+    for face in faces {
+        let Some(placement) = state.placements.get(&face.id) else {
+            return false;
+        };
+        let Some(output) = unique_frame_face(&endpoint.frame, face.id) else {
+            return false;
+        };
+        if output.mirrored != placement.mirrored || output.polygon.len() != face.vertices.len() {
+            return false;
+        }
+        for (&vertex, point) in face.vertices.iter().zip(&output.polygon) {
+            let Some(material) = vertices.get(&vertex).copied() else {
+                return false;
+            };
+            let folded = placement.apply(material);
+            let actual = DVec3::from(*point);
+            let expected = DVec3::new(folded.x, folded.y, 0.0);
+            if !folded.is_finite()
+                || !actual.is_finite()
+                || actual.distance(expected) > COMPLETE_PRECREASE_GEOMETRY_EPS
+            {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Broad driver-shape recognition is not enough to distinguish an authored Twist from the
+/// atomic complete-precrease operation: both may name every M/V hinge at an exact flat angle.
+/// Rerun the atomic operation from the document prefix and require its persisted operation
+/// structure to match bit-for-bit (apart from layer-order provenance, note and assigned id).
+/// Callers before and after the display solve share this gate, so only the exact operation gets
+/// the strict saved-oracle policy.
+fn verified_complete_precrease_collapse_rerun(
+    doc: &Document,
+    faces: &[Face],
+    up_to: usize,
+    t: f64,
+) -> Option<VerifiedCompletePrecreaseCollapseRerun> {
+    let candidate = complete_precrease_collapse_candidate(doc, faces, up_to, t)?;
+    let (previous, warnings) = flat_state_at(doc, faces, up_to - 1).ok()?;
+    if !warnings.is_empty() {
+        return None;
+    }
+
+    let mut rerun_cp = doc.cp.clone();
+    let rerun = collapse_precrease_network(
+        &mut rerun_cp,
+        faces,
+        &previous,
+        &PrecreaseCollapseInput {
+            lines: candidate.support_lines.clone(),
+            target_layers: None,
+        },
+    )
+    .ok()?;
+    let stored_step = &doc.sequence[up_to - 1];
+    let mut regenerated_step = rerun.step.clone();
+    regenerated_step.id = stored_step.id;
+    regenerated_step.note.clone_from(&stored_step.note);
+    // `layer_order` is provenance, not part of the operation geometry. Automatic collapse now
+    // deliberately omits it when general constraints leave ties, while an existing document may
+    // carry an independently supplied explicit oracle for those ties.
+    regenerated_step.layer_order = None;
+    let mut stored_operation_step = stored_step.clone();
+    stored_operation_step.layer_order = None;
+    if !rerun.added_edges.is_empty()
+        || !same_crease_pattern_bits(&rerun_cp, &doc.cp)
+        || !same_faces(&extract_faces(&rerun_cp), faces)
+        || !same_fold_step_bits(&regenerated_step, &stored_operation_step)
+        || resolved_signed_driver_map(&rerun_cp, &rerun.step.drivers)? != candidate.edge_angles
+        || rerun.state.order.len() != faces.len()
+        || rerun.state.order.iter().copied().collect::<BTreeSet<_>>()
+            != faces.iter().map(|face| face.id).collect::<BTreeSet<_>>()
     {
         return None;
     }
-    let (_, order, provenance) = solved.into_parts();
-    ori3_rigid::stamp_surface_order(&mut result.frame, &order).ok()?;
-    Some(provenance)
+
+    Some(VerifiedCompletePrecreaseCollapseRerun {
+        candidate,
+        cp: rerun_cp,
+        state: rerun.state,
+        warnings: rerun.warnings,
+    })
+}
+
+fn complete_precrease_blocking_warnings(warnings: &[String]) -> Vec<String> {
+    let mut blocking = Vec::new();
+    for warning in warnings
+        .iter()
+        .filter(|warning| !warning.starts_with(PRECREASE_ORDER_UNDETERMINED_WARNING_PREFIX))
+    {
+        if !blocking.contains(warning) {
+            blocking.push(warning.clone());
+        }
+    }
+    blocking
+}
+
+fn verified_complete_precrease_collapse_order(
+    doc: &Document,
+    faces: &[Face],
+    up_to: usize,
+    t: f64,
+    endpoint: &ori3_rigid::SolveResult,
+) -> Option<CompletePrecreaseCollapseOrderCheck> {
+    let rerun = verified_complete_precrease_collapse_rerun(doc, faces, up_to, t)?;
+    if !complete_precrease_endpoint_matches(
+        &rerun.cp,
+        faces,
+        &rerun.state,
+        &rerun.candidate.edge_angles,
+        endpoint,
+    ) {
+        return None;
+    }
+    let VerifiedCompletePrecreaseCollapseRerun {
+        candidate,
+        cp: rerun_cp,
+        state: rerun_state,
+        warnings: rerun_warnings,
+    } = rerun;
+
+    let mut check = CompletePrecreaseCollapseOrderCheck {
+        warnings: complete_precrease_blocking_warnings(&rerun_warnings),
+        ..CompletePrecreaseCollapseOrderCheck::default()
+    };
+    if !check.warnings.is_empty() {
+        return Some(check);
+    }
+
+    let automatic_validation = match validate_precrease_layer_order(
+        &rerun_cp,
+        faces,
+        &rerun_state.placements,
+        &rerun_state.order,
+    ) {
+        Ok(validation) => validation,
+        Err(_) => {
+            check.warnings.push(
+                "紙の重なり順を折り目から確認できなかったため推定した順で表示します".to_string(),
+            );
+            return Some(check);
+        }
+    };
+
+    if candidate.saved_order_was_present && candidate.saved_order.is_none() {
+        check.warnings.push(
+            "保存された紙の重なり順が全ての紙面を一度ずつ含まないため採用しません".to_string(),
+        );
+    } else if let Some(saved_order) = candidate.saved_order {
+        match validate_precrease_layer_order(
+            &rerun_cp,
+            faces,
+            &rerun_state.placements,
+            &saved_order,
+        ) {
+            Ok(validation) if validation.is_valid() => {
+                check.authority = Some(VerifiedCompletePrecreaseCollapseOrder {
+                    order: saved_order,
+                    mandatory_constraints: validation.mandatory_constraints,
+                });
+                return Some(check);
+            }
+            Ok(_) => check.warnings.push(
+                "保存された紙の重なり順が山谷と紙の連続性に合わないため採用しません".to_string(),
+            ),
+            Err(_) => check.warnings.push(
+                "紙の重なり順を折り目から確認できなかったため推定した順で表示します".to_string(),
+            ),
+        }
+    }
+
+    if !automatic_validation.unresolved_overlap_pairs.is_empty() {
+        let warning = format!(
+            "{PRECREASE_ORDER_UNDETERMINED_WARNING_PREFIX}{}組あります",
+            automatic_validation.unresolved_overlap_pairs.len()
+        );
+        if !check.warnings.contains(&warning) {
+            check.warnings.push(warning);
+        }
+    } else if !automatic_validation.is_valid() {
+        check
+            .warnings
+            .push("紙の重なり順を折り目から確認できなかったため推定した順で表示します".to_string());
+    } else if !candidate.saved_order_was_present {
+        check
+            .warnings
+            .push("保存された紙の重なり順がないため推定した順で表示します".to_string());
+    }
+    Some(check)
+}
+
+/// 完全平坦なoperation終点で、既存の全順序が検証済みoperation順と、実際に
+/// 正面積で重なる全ての面対について同じ向きを持つかを確かめる。
+///
+/// 完全precrease-collapseの呼び手ゲートは、このframeの全材質頂点が独立再実行した
+/// `FlatState` の `z=0` 配置と `COMPLETE_PRECREASE_GEOMETRY_EPS` 内で一致することを
+/// 先に検証している。そのため、flat pose motionと同じxy投影・同じ正面積閾値で比較する。
+/// 重ならない面の全順序には物理的な意味がないので、そこだけが異なる既存rankは保つ。
+fn surface_order_matches_verified_overlaps(frame: &Frame3D, verified_order: &[FaceId]) -> bool {
+    if frame.faces.len() != verified_order.len() {
+        return false;
+    }
+    let verified_rank = verified_order
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(rank, face)| (face, rank))
+        .collect::<HashMap<_, _>>();
+    let existing_rank = frame
+        .faces
+        .iter()
+        .map(|face| (face.face, face.surface_rank))
+        .collect::<HashMap<_, _>>();
+    if verified_rank.len() != verified_order.len()
+        || existing_rank.len() != frame.faces.len()
+        || verified_rank.keys().copied().collect::<BTreeSet<_>>()
+            != existing_rank.keys().copied().collect::<BTreeSet<_>>()
+        || existing_rank
+            .values()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .len()
+            != frame.faces.len()
+    {
+        return false;
+    }
+
+    for left_index in 0..frame.faces.len() {
+        for right_index in left_index + 1..frame.faces.len() {
+            let left = &frame.faces[left_index];
+            let right = &frame.faces[right_index];
+            let left_polygon = left
+                .polygon
+                .iter()
+                .map(|point| DVec2::new(point[0], point[1]))
+                .collect::<Vec<_>>();
+            let right_polygon = right
+                .polygon
+                .iter()
+                .map(|point| DVec2::new(point[0], point[1]))
+                .collect::<Vec<_>>();
+            if left_polygon
+                .iter()
+                .chain(&right_polygon)
+                .any(|point| !point.is_finite())
+            {
+                return false;
+            }
+            let Ok(witnesses) =
+                crate::pose_motion::overlap_witnesses(&left_polygon, &right_polygon)
+            else {
+                return false;
+            };
+            if witnesses.is_empty() {
+                continue;
+            }
+            let existing_left_is_below = existing_rank[&left.face] < existing_rank[&right.face];
+            let verified_left_is_below = verified_rank[&left.face] < verified_rank[&right.face];
+            if existing_left_is_below != verified_left_is_below {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// 角度が変わらない手順では、直前のcompleteなcanonical順とprovenanceをそのまま保つ。
@@ -1363,9 +2413,11 @@ fn preserve_complete_surface_order(
 
 /// 保存手順から現在の再生位置で有効な層順序(下→上)を導出する。
 ///
-/// 戻り値が`Some`なのは、現在位置までに非空の
-/// [`FoldStep::layer_order`](ori3_model::FoldStep::layer_order)が1点以上、
-/// 現在の面へ解決できた場合だけ。
+/// 戻り値が`Some`なのは、現在位置までに
+/// [`FoldStep::layer_order`](ori3_model::FoldStep::layer_order)を採用できた場合だけ。
+/// 平坦endpointでは、0°で連続する面packetの完全permutationと一般の山谷・紙の
+/// 連続性制約を満たすことを要求する。非平坦endpointは宣言角0°のpacketについて
+/// 完全permutationでも、一般制約を証明できないためauthorityにはしない。
 /// 平坦でないPoseなど`layer_order=None`の手順と、代表点が全て未解決の手順は
 /// 直前の保存順を保つ。現在手順の途中(`t < 1`)は開始前の順、完了時だけ終了順を返す。
 /// 初期の面ID順は表示用fallbackであって保存手順の権威ではないため`None`を返す。
@@ -1573,15 +2625,14 @@ struct StepPlan {
     path: Option<StepPath>,
     /// 層順序(下→上)
     order: Vec<FaceId>,
-    /// 保存済みlayer_orderを1点以上解決して得た、現在位置の権威ある順序。
+    /// 保存済みlayer_orderの採用gateを通して得た、現在位置の権威ある順序。
     /// 初期の面ID順しか無い場合はNone。
     saved_order: Option<Vec<FaceId>>,
     /// `up_to` 手順へ入る直前の層順序(接触補正用)。
     order_start: Vec<FaceId>,
     /// `up_to` 手順を完了したときの層順序(接触補正用)。
     order_end: Vec<FaceId>,
-    /// 現在transitionまでに解決済みの保存順を1つ以上含むか。
-    /// 現在手順の途中では表示authorityより先にendだけ解決される場合がある。
+    /// 開始・完了順の少なくとも一方が保存された順序を含むか。
     transition_order_is_authoritative: bool,
     skipped: Vec<StepId>,
     warnings: Vec<String>,
@@ -1679,21 +2730,60 @@ fn plan_steps(doc: &Document, faces: &[Face], up_to: usize, t: f64) -> StepPlan 
 
         // 表示の層順序はステップ完了時にだけ更新する。一方、接触補正は折っている
         // 最中にも完了順を使うため、最後の手順だけは先読みして別に保持する。
-        // 層順序を持たないPoseと、代表点が1点も解決できない手順は直前順を保つ。
+        // 完全precrease-collapseだけは、保存順を独立した一般制約で検証してから採用する。
+        // その他の操作は従来どおりFlatState::resolve_orderの採用・警告契約を保つ。
         let mut resolved_order = None;
-        if let Some(points) = &step.layer_order
+        let mut order_warnings = Vec::new();
+        if let Some(rerun) = verified_complete_precrease_collapse_rerun(doc, faces, number, 1.0) {
+            let mut blocking_warnings = complete_precrease_blocking_warnings(&rerun.warnings);
+            if blocking_warnings.is_empty() {
+                let candidate = rerun.candidate;
+                let saved_order_was_present = candidate.saved_order_was_present;
+                if let Some(candidate_order) = candidate.saved_order {
+                    match validate_precrease_layer_order(
+                        &rerun.cp,
+                        faces,
+                        &rerun.state.placements,
+                        &candidate_order,
+                    ) {
+                        Ok(validation) if validation.is_valid() => {
+                            resolved_order = Some(candidate_order);
+                        }
+                        Ok(_) => order_warnings.push(
+                            "保存された紙の重なり順が山谷と紙の連続性に合わないため採用しません"
+                                .to_string(),
+                        ),
+                        Err(_) => order_warnings.push(
+                            "紙の重なり順を折り目から確認できなかったため推定した順で表示します"
+                                .to_string(),
+                        ),
+                    }
+                } else if saved_order_was_present {
+                    order_warnings.push(
+                        "保存された紙の重なり順が全ての紙面を一度ずつ含まないため採用しません"
+                            .to_string(),
+                    );
+                } else {
+                    order_warnings
+                        .push("保存された紙の重なり順がないため推定した順で表示します".to_string());
+                }
+            } else {
+                order_warnings.append(&mut blocking_warnings);
+            }
+        } else if let Some(points) = &step.layer_order
             && !points.is_empty()
         {
-            let (resolved, mut w) = FlatState::resolve_order(&doc.cp, faces, points);
+            let (resolved, mut point_warnings) = FlatState::resolve_order(&doc.cp, faces, points);
             // resolve_orderは解決できなかった点ごとにちょうど1件の警告を返すので、
-            // 警告の数が点の数と同じなら1点も解決できていない
-            if w.len() < points.len() {
+            // 警告の数が点の数と同じなら1点も解決できていない。
+            if point_warnings.len() < points.len() {
                 resolved_order = Some(resolved);
             }
-            // 途中フレームの先読みだけで、従来より早く警告を見せない。
-            if !last || t >= 1.0 {
-                warnings.append(&mut w);
-            }
+            order_warnings.append(&mut point_warnings);
+        }
+        // 途中フレームの先読みだけで、従来より早く警告を見せない。
+        if !last || t >= 1.0 {
+            warnings.append(&mut order_warnings);
         }
         transition_order_is_authoritative |= resolved_order.is_some();
         if last {
@@ -1821,9 +2911,7 @@ fn plan_steps(doc: &Document, faces: &[Face], up_to: usize, t: f64) -> StepPlan 
             .cp
             .edges
             .iter()
-            .filter(|edge| {
-                active_vertices.contains(&edge.v0) || active_vertices.contains(&edge.v1)
-            })
+            .filter(|edge| active_vertices.contains(&edge.v0) || active_vertices.contains(&edge.v1))
             .map(|edge| edge.id)
             .collect();
         let held: Vec<(EdgeId, f64)> = hinges
@@ -1929,11 +3017,673 @@ fn hinge_edges(faces: &[Face]) -> Vec<EdgeId> {
 
 #[cfg(test)]
 mod tests {
+    use ori3_cp::insert_segment;
     use ori3_model::{
         CreasePattern, DriverLine, Edge, EdgeKind, FoldPoseDriver, FoldStep, Paper, Vertex,
     };
 
     use super::*;
+
+    fn complete_precrease_collapse_document() -> (Document, Vec<Face>, Vec<FaceId>) {
+        let mut document = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        insert_segment(&mut document.cp, [0.5, 0.0], [0.5, 1.0], EdgeKind::Aux);
+        insert_segment(&mut document.cp, [0.0, 0.5], [1.0, 0.5], EdgeKind::Aux);
+        let unfolded_faces = extract_faces(&document.cp);
+        let unfolded = FlatState::initial(&document.cp, &unfolded_faces);
+        let mut collapsed = crate::precrease_collapse::collapse_precrease_network(
+            &mut document.cp,
+            &unfolded_faces,
+            &unfolded,
+            &crate::precrease_collapse::PrecreaseCollapseInput {
+                lines: vec![[[0.5, 0.0], [0.5, 1.0]], [[0.0, 0.5], [1.0, 0.5]]],
+                target_layers: None,
+            },
+        )
+        .expect("the crossing precrease fixture collapses");
+        assert_eq!(collapsed.warnings.len(), 1);
+        assert!(collapsed.warnings[0].starts_with(PRECREASE_ORDER_UNDETERMINED_WARNING_PREFIX));
+        let expected_order = collapsed.state.order.clone();
+        // The automatic order above is display fallback only.  This synthetic saved document
+        // explicitly supplies that valid linear extension so replay can exercise its oracle gate.
+        let faces = extract_faces(&document.cp);
+        collapsed.step.layer_order = Some(collapsed.state.to_layer_points(&document.cp, &faces));
+        document.sequence = vec![FoldStep {
+            id: 0,
+            ..collapsed.step
+        }];
+        assert_eq!(expected_order.len(), faces.len());
+        (document, faces, expected_order)
+    }
+
+    fn complete_precrease_endpoint(document: &Document, faces: &[Face]) -> ori3_rigid::SolveResult {
+        let plan = plan_steps(document, faces, 1, 1.0);
+        let warm = plan
+            .flat_exact
+            .iter()
+            .map(|driver| (driver.hinge, driver.target_angle_deg))
+            .collect::<HashMap<_, _>>();
+        solve_display_near(
+            document,
+            faces,
+            &plan.display_hard,
+            &plan.display_preferred,
+            Some(&warm),
+        )
+    }
+
+    #[test]
+    fn complete_precrease_collapse_candidate_recognizes_the_operation_structure() {
+        let (document, faces, expected_order) = complete_precrease_collapse_document();
+        let candidate = complete_precrease_collapse_candidate(&document, &faces, 1, 1.0)
+            .expect("the complete crossing collapse is structurally recognizable");
+
+        assert_eq!(candidate.support_lines.len(), 2);
+        assert_eq!(candidate.edge_angles.len(), hinge_edges(&faces).len());
+        assert_eq!(candidate.saved_order, Some(expected_order));
+    }
+
+    #[test]
+    fn complete_precrease_rerun_only_ignores_an_undetermined_order_warning() {
+        let undetermined = format!("{PRECREASE_ORDER_UNDETERMINED_WARNING_PREFIX}4組あります");
+        assert!(complete_precrease_blocking_warnings(&[undetermined]).is_empty());
+
+        let blocking = "紙の重なり順を判定できないため推定した順で表示します".to_string();
+        assert_eq!(
+            complete_precrease_blocking_warnings(&[blocking.clone(), blocking.clone()]),
+            vec![blocking],
+            "同じ利用者向け警告を重複させず、未決定通知以外はplanとfull replayの両方で遮断する"
+        );
+    }
+
+    #[test]
+    fn complete_precrease_collapse_candidate_keeps_missing_order_but_rejects_other_operations() {
+        let (document, faces, _) = complete_precrease_collapse_document();
+        assert!(complete_precrease_collapse_candidate(&document, &faces, 1, 0.99).is_none());
+
+        let mut wrong_kind = document.clone();
+        wrong_kind.sequence[0].kind = TechniqueKind::Simple;
+        assert!(complete_precrease_collapse_candidate(&wrong_kind, &faces, 1, 1.0).is_none());
+
+        let mut wrong_angle = document.clone();
+        wrong_angle.sequence[0].drivers[0].target_angle_deg = 90.0;
+        assert!(complete_precrease_collapse_candidate(&wrong_angle, &faces, 1, 1.0).is_none());
+
+        let mut explicit_zero = document.clone();
+        explicit_zero.sequence[0].drivers[0].target_angle_deg = 0.0;
+        assert!(complete_precrease_collapse_candidate(&explicit_zero, &faces, 1, 1.0).is_none());
+
+        let mut wrong_sign = document.clone();
+        wrong_sign.sequence[0].drivers[0].target_angle_deg *= -1.0;
+        assert!(complete_precrease_collapse_candidate(&wrong_sign, &faces, 1, 1.0).is_none());
+
+        let mut inside_angle_tolerance = document.clone();
+        let target = &mut inside_angle_tolerance.sequence[0].drivers[0].target_angle_deg;
+        *target += target.signum() * 0.5e-9;
+        assert!(
+            complete_precrease_collapse_candidate(&inside_angle_tolerance, &faces, 1, 1.0)
+                .is_some()
+        );
+
+        let mut outside_angle_tolerance = document.clone();
+        let target = &mut outside_angle_tolerance.sequence[0].drivers[0].target_angle_deg;
+        *target += target.signum() * 2.0e-9;
+        assert!(
+            complete_precrease_collapse_candidate(&outside_angle_tolerance, &faces, 1, 1.0)
+                .is_none()
+        );
+
+        let mut degenerate_driver = document.clone();
+        degenerate_driver.sequence[0].drivers[0].b = degenerate_driver.sequence[0].drivers[0].a;
+        assert!(
+            complete_precrease_collapse_candidate(&degenerate_driver, &faces, 1, 1.0).is_none()
+        );
+
+        let mut finish_soft = document.clone();
+        finish_soft.sequence[0].finish_soft = Some(FinishSoftSettings::default());
+        assert!(complete_precrease_collapse_candidate(&finish_soft, &faces, 1, 1.0).is_none());
+
+        let mut missing_driver = document.clone();
+        missing_driver.sequence[0].drivers.pop();
+        assert!(complete_precrease_collapse_candidate(&missing_driver, &faces, 1, 1.0).is_none());
+
+        let mut partial_order = document;
+        partial_order.sequence[0]
+            .layer_order
+            .as_mut()
+            .expect("fixture saved order")
+            .pop();
+        let partial_candidate =
+            complete_precrease_collapse_candidate(&partial_order, &faces, 1, 1.0)
+                .expect("an invalid saved order does not hide the collapse operation");
+        assert!(partial_candidate.saved_order_was_present);
+        assert!(partial_candidate.saved_order.is_none());
+        let partial_endpoint = complete_precrease_endpoint(&partial_order, &faces);
+        let partial_check = verified_complete_precrease_collapse_order(
+            &partial_order,
+            &faces,
+            1,
+            1.0,
+            &partial_endpoint,
+        )
+        .expect("the operation rerun exposes its invalid saved oracle");
+        assert!(partial_check.authority.is_none());
+        assert!(partial_check.warnings.iter().any(|warning| {
+            warning == "保存された紙の重なり順が全ての紙面を一度ずつ含まないため採用しません"
+        }));
+
+        let mut missing_order = partial_order;
+        missing_order.sequence[0].layer_order = None;
+        let missing_candidate =
+            complete_precrease_collapse_candidate(&missing_order, &faces, 1, 1.0)
+                .expect("a missing saved order does not hide the collapse operation");
+        assert!(!missing_candidate.saved_order_was_present);
+        assert!(missing_candidate.saved_order.is_none());
+        let missing_endpoint = complete_precrease_endpoint(&missing_order, &faces);
+        let missing_check = verified_complete_precrease_collapse_order(
+            &missing_order,
+            &faces,
+            1,
+            1.0,
+            &missing_endpoint,
+        )
+        .expect("the operation rerun exposes its missing saved oracle");
+        assert!(missing_check.authority.is_none());
+        // The immediate collapse result above reports the exact six unresolved pairs while the
+        // activated Aux edges are still known.  SCHEMA_VERSION=1 does not persist that provenance:
+        // after saving, the final CP contains only the settled M/V kinds.  Do not invent the old
+        // count by ignoring genuine authored M/V; reload can still reject authority and report
+        // that the explicit saved order is missing.
+        assert!(missing_check.warnings.iter().any(|warning| {
+            warning == "保存された紙の重なり順がないため推定した順で表示します"
+        }));
+        let public_replay = replay(&missing_order, 1, 1.0);
+        assert!(
+            public_replay
+                .warnings
+                .iter()
+                .any(|warning| warning == "保存された紙の重なり順がないため推定した順で表示します"),
+            "公開replayも既存warning経路へ保存oracle欠落を出す: {:?}",
+            public_replay.warnings
+        );
+    }
+
+    #[test]
+    fn twist_shaped_noncollapse_step_keeps_the_generic_saved_order_contract() {
+        let (mut document, faces, mut generic_order) = complete_precrease_collapse_document();
+        // An authored Twist may span the same complete M/V support lines without being the exact
+        // operation emitted by collapse_precrease_network. Extending one persisted driver keeps
+        // its resolved hinge map, so the intentionally broad candidate recognizer still sees it,
+        // while the independent rerun's bit-exact operation structure does not match.
+        let driver = &mut document.sequence[0].drivers[0];
+        let direction = DVec2::from(driver.b) - DVec2::from(driver.a);
+        driver.a = (DVec2::from(driver.a) - direction * 0.25).into();
+        driver.b = (DVec2::from(driver.b) + direction * 0.25).into();
+        document.sequence[0]
+            .layer_order
+            .as_mut()
+            .expect("fixture saved order")
+            .reverse();
+        generic_order.reverse();
+
+        assert!(complete_precrease_collapse_candidate(&document, &faces, 1, 1.0).is_some());
+        assert!(
+            verified_complete_precrease_collapse_rerun(&document, &faces, 1, 1.0).is_none(),
+            "only an exact regenerated collapse operation may enter the strict oracle gate"
+        );
+
+        let plan = plan_steps(&document, &faces, 1, 1.0);
+        assert_eq!(plan.order, generic_order);
+        assert_eq!(plan.saved_order, Some(generic_order));
+        assert!(plan.transition_order_is_authoritative);
+        assert!(
+            plan.warnings.is_empty(),
+            "generic Twist warnings: {:?}",
+            plan.warnings
+        );
+    }
+
+    #[test]
+    fn complete_precrease_collapse_rerun_reproduces_the_saved_operation_order() {
+        let (document, faces, expected_order) = complete_precrease_collapse_document();
+        let endpoint = complete_precrease_endpoint(&document, &faces);
+
+        let check =
+            verified_complete_precrease_collapse_order(&document, &faces, 1, 1.0, &endpoint)
+                .expect("the saved operation is independently rerun");
+        assert!(check.warnings.is_empty());
+        assert_eq!(
+            check.authority.map(|authority| authority.order),
+            Some(expected_order)
+        );
+    }
+
+    #[test]
+    fn complete_precrease_collapse_rerun_rejects_a_tampered_saved_order() {
+        let (mut document, faces, _) = complete_precrease_collapse_document();
+        document.sequence[0]
+            .layer_order
+            .as_mut()
+            .expect("fixture saved order")
+            .reverse();
+        let endpoint = complete_precrease_endpoint(&document, &faces);
+
+        assert!(complete_precrease_collapse_candidate(&document, &faces, 1, 1.0).is_some());
+        let check =
+            verified_complete_precrease_collapse_order(&document, &faces, 1, 1.0, &endpoint)
+                .expect("the tampered order is checked against independently derived rules");
+        assert!(check.authority.is_none());
+        assert!(check.warnings.iter().any(|warning| {
+            warning == "保存された紙の重なり順が山谷と紙の連続性に合わないため採用しません"
+        }));
+    }
+
+    #[test]
+    fn complete_precrease_plan_authority_requires_a_valid_saved_order() {
+        fn frame_layer_order(frame: &Frame3D) -> Vec<FaceId> {
+            let mut ranked = frame
+                .faces
+                .iter()
+                .map(|face| (face.layer, face.face))
+                .collect::<Vec<_>>();
+            ranked.sort_unstable();
+            ranked.into_iter().map(|(_, face)| face).collect()
+        }
+
+        let (document, faces, expected_order) = complete_precrease_collapse_document();
+        let valid_plan = plan_steps(&document, &faces, 1, 1.0);
+        assert_eq!(valid_plan.saved_order, Some(expected_order.clone()));
+        assert!(valid_plan.transition_order_is_authoritative);
+        assert_eq!(valid_plan.order, expected_order);
+        let valid_replay = replay_with_faces_impl(&document, &faces, 1, 1.0, None);
+        assert!(valid_replay.layer_transition.order_is_authoritative);
+        assert_eq!(
+            saved_layer_order_at(&document, &faces, 1, 1.0),
+            Some(frame_layer_order(&valid_replay.frame))
+        );
+
+        let initial_order = FlatState::initial(&document.cp, &faces).order;
+        let mut tampered = document.clone();
+        tampered.sequence[0]
+            .layer_order
+            .as_mut()
+            .expect("fixture saved order")
+            .reverse();
+        let mut partial = document.clone();
+        partial.sequence[0]
+            .layer_order
+            .as_mut()
+            .expect("fixture saved order")
+            .pop();
+        let mut missing = document;
+        missing.sequence[0].layer_order = None;
+
+        let rejected = [
+            (
+                tampered,
+                "保存された紙の重なり順が山谷と紙の連続性に合わないため採用しません",
+            ),
+            (
+                partial,
+                "保存された紙の重なり順が全ての紙面を一度ずつ含まないため採用しません",
+            ),
+            (
+                missing,
+                "保存された紙の重なり順がないため推定した順で表示します",
+            ),
+        ];
+        for (rejected_document, expected_warning) in rejected {
+            let plan = plan_steps(&rejected_document, &faces, 1, 1.0);
+            assert_eq!(plan.order, initial_order);
+            assert_eq!(plan.order_end, initial_order);
+            assert!(plan.saved_order.is_none());
+            assert!(!plan.transition_order_is_authoritative);
+            assert!(
+                plan.warnings
+                    .iter()
+                    .any(|warning| warning == expected_warning),
+                "plan warning is public and stable: {:?}",
+                plan.warnings
+            );
+            assert!(saved_layer_order_at(&rejected_document, &faces, 1, 1.0).is_none());
+
+            let replayed = replay_with_faces_impl(&rejected_document, &faces, 1, 1.0, None);
+            assert!(!replayed.layer_transition.order_is_authoritative);
+            assert_eq!(frame_layer_order(&replayed.frame), initial_order);
+            assert!(
+                replayed
+                    .warnings
+                    .iter()
+                    .any(|warning| warning == expected_warning),
+                "public replay exposes the rejected saved-order warning: {:?}",
+                replayed.warnings
+            );
+        }
+    }
+
+    #[test]
+    fn complete_precrease_collapse_rerun_rejects_a_different_endpoint_geometry() {
+        let (document, faces, _) = complete_precrease_collapse_document();
+        let mut endpoint = complete_precrease_endpoint(&document, &faces);
+        endpoint.frame.faces[0].polygon[0][0] += 2.0 * COMPLETE_PRECREASE_GEOMETRY_EPS;
+
+        assert_eq!(
+            verified_complete_precrease_collapse_order(&document, &faces, 1, 1.0, &endpoint),
+            None,
+            "an operation order must not be stamped onto another endpoint geometry"
+        );
+    }
+
+    #[test]
+    fn complete_precrease_collapse_keeps_an_equivalent_existing_linear_extension() {
+        let square = |face, x, rank| ori3_model::Face3D {
+            face,
+            polygon: vec![
+                [x, 0.0, 0.0],
+                [x + 1.0, 0.0, 0.0],
+                [x + 1.0, 1.0, 0.0],
+                [x, 1.0, 0.0],
+            ],
+            layer: rank,
+            surface_rank: rank,
+            mirrored: false,
+        };
+        let frame = Frame3D {
+            faces: vec![square(0, 0.0, 0), square(1, 0.0, 1), square(2, 2.0, 2)],
+            warnings: Vec::new(),
+        };
+        let verified_order = [2, 0, 1];
+        assert!(
+            surface_order_matches_verified_overlaps(&frame, &verified_order),
+            "the separate face may occupy another slot in the total order"
+        );
+
+        let mut reversed_overlap = frame;
+        reversed_overlap.faces[0].surface_rank = 1;
+        reversed_overlap.faces[1].surface_rank = 0;
+        assert!(
+            !surface_order_matches_verified_overlaps(&reversed_overlap, &verified_order),
+            "a reversed positive-area overlap must select the certified operation order"
+        );
+    }
+
+    fn one_hinge_document() -> (Document, Vec<Face>, EdgeId) {
+        let mut document = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        ori3_cp::insert_segment(&mut document.cp, [0.5, 0.0], [0.5, 1.0], EdgeKind::Mountain);
+        let faces = extract_faces(&document.cp);
+        let hinge = hinge_edges(&faces)[0];
+        (document, faces, hinge)
+    }
+
+    fn frame_signed_hinge_angle(faces: &[Face], frame: &Frame3D, hinge: EdgeId) -> f64 {
+        let mut occurrences = Vec::new();
+        for (face_index, face) in faces.iter().enumerate() {
+            for (edge_index, &edge) in face.edges.iter().enumerate() {
+                if edge == hinge {
+                    occurrences.push((face_index, edge_index));
+                }
+            }
+        }
+        assert_eq!(occurrences.len(), 2);
+        let (left_index, edge_index) = occurrences[0];
+        let right_index = occurrences[1].0;
+        let left = frame
+            .faces
+            .iter()
+            .find(|candidate| candidate.face == faces[left_index].id)
+            .expect("left frame face");
+        let right = frame
+            .faces
+            .iter()
+            .find(|candidate| candidate.face == faces[right_index].id)
+            .expect("right frame face");
+        let axis = (glam::DVec3::from(left.polygon[(edge_index + 1) % left.polygon.len()])
+            - glam::DVec3::from(left.polygon[edge_index]))
+        .normalize();
+        let normal = |polygon: &[[f64; 3]]| {
+            let sum = polygon
+                .iter()
+                .zip(polygon.iter().cycle().skip(1))
+                .take(polygon.len())
+                .map(|(a, b)| glam::DVec3::from(*a).cross(glam::DVec3::from(*b)))
+                .sum::<glam::DVec3>();
+            sum.normalize()
+        };
+        let left_normal = normal(&left.polygon);
+        let right_normal = normal(&right.polygon);
+        axis.dot(left_normal.cross(right_normal))
+            .atan2(left_normal.dot(right_normal).clamp(-1.0, 1.0))
+            .to_degrees()
+    }
+
+    #[test]
+    fn canonical_nonflat_pose_preserves_signed_hard_angles_and_material_isometries() {
+        let (document, faces, hinge) = one_hinge_document();
+
+        for requested in [180.0, -180.0, 90.0, -90.0, 0.0] {
+            let pose = canonical_nonflat_pose_at(
+                &document,
+                &faces,
+                0,
+                Some(&FoldPoseInput {
+                    drivers: vec![FoldPoseDriver {
+                        edge_id: hinge,
+                        target_angle_deg: requested,
+                    }],
+                }),
+            )
+            .expect("a one-hinge hard angle has a connected canonical pose");
+
+            let declared = pose
+                .signed_hinge_angles
+                .iter()
+                .find_map(|&(edge, angle)| (edge == hinge).then_some(angle))
+                .expect("the material hinge declaration is complete");
+            assert_eq!(declared.to_bits(), requested.to_bits());
+            assert_eq!(pose.frame.faces.len(), faces.len());
+            assert_eq!(pose.face_transforms.len(), faces.len());
+            assert_eq!(pose.material_vertices.len(), document.cp.vertices.len());
+            assert!(
+                ori3_rigid::max_seam_gap(&document.cp, &faces, &pose.frame) < 1e-6,
+                "the returned material paper stays connected"
+            );
+            assert!(pose.frame.faces.iter().all(|face| {
+                face.polygon
+                    .iter()
+                    .flatten()
+                    .all(|coordinate| coordinate.is_finite())
+            }));
+            assert!(pose.material_vertices.iter().all(|vertex| {
+                vertex
+                    .position
+                    .iter()
+                    .all(|coordinate| coordinate.is_finite())
+            }));
+
+            if requested.abs() < 180.0 {
+                let observed = frame_signed_hinge_angle(&faces, &pose.frame, hinge);
+                assert!(
+                    (observed - requested).abs() < 1e-7,
+                    "the hard declaration must be the relative face rotation, not only metadata: requested={requested}, observed={observed}"
+                );
+            }
+
+            for (face, transform) in faces.iter().zip(&pose.face_transforms) {
+                assert_eq!(face.id, transform.face);
+                let frame_face = pose
+                    .frame
+                    .faces
+                    .iter()
+                    .find(|candidate| candidate.face == face.id)
+                    .expect("frame face");
+                for (&vertex_id, world) in face.vertices.iter().zip(&frame_face.polygon) {
+                    let material = document
+                        .cp
+                        .vertices
+                        .iter()
+                        .find(|vertex| vertex.id == vertex_id)
+                        .expect("material vertex")
+                        .pos;
+                    let dx = material[0] - transform.material_origin[0];
+                    let dy = material[1] - transform.material_origin[1];
+                    let rebuilt = [
+                        transform.world_origin[0]
+                            + transform.world_x_axis[0] * dx
+                            + transform.world_y_axis[0] * dy,
+                        transform.world_origin[1]
+                            + transform.world_x_axis[1] * dx
+                            + transform.world_y_axis[1] * dy,
+                        transform.world_origin[2]
+                            + transform.world_x_axis[2] * dx
+                            + transform.world_y_axis[2] * dy,
+                    ];
+                    assert!(
+                        rebuilt
+                            .iter()
+                            .zip(world)
+                            .all(|(left, right)| (left - right).abs() < 1e-9),
+                        "the exported face transform must reproduce its frame polygon"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn canonical_nonflat_pose_none_uses_only_the_saved_document_prefix() {
+        let (mut document, faces, hinge) = one_hinge_document();
+        document.sequence.push(FoldStep {
+            id: 0,
+            kind: TechniqueKind::Simple,
+            drivers: vec![DriverLine {
+                a: [0.5, 0.0],
+                b: [0.5, 1.0],
+                target_angle_deg: 90.0,
+            }],
+            layer_order: None,
+            alignment: None,
+            finish_soft: None,
+            note: String::new(),
+        });
+
+        let pose = canonical_nonflat_pose_at(&document, &faces, 1, None)
+            .expect("saved document steps alone define the canonical non-flat pose");
+        let declared = pose
+            .signed_hinge_angles
+            .iter()
+            .find_map(|&(edge, angle)| (edge == hinge).then_some(angle))
+            .expect("saved hinge declaration");
+        assert_eq!(declared.to_bits(), 90.0f64.to_bits());
+        assert!((frame_signed_hinge_angle(&faces, &pose.frame, hinge) - 90.0).abs() < 1e-7);
+        assert!(ori3_rigid::max_seam_gap(&document.cp, &faces, &pose.frame) < 1e-6);
+    }
+
+    #[test]
+    fn canonical_nonflat_pose_rejects_invalid_or_ambiguous_hard_declarations() {
+        let (document, faces, hinge) = one_hinge_document();
+        let invalid = [
+            FoldPoseInput { drivers: vec![] },
+            FoldPoseInput {
+                drivers: vec![FoldPoseDriver {
+                    edge_id: hinge,
+                    target_angle_deg: f64::NAN,
+                }],
+            },
+            FoldPoseInput {
+                drivers: vec![FoldPoseDriver {
+                    edge_id: hinge,
+                    target_angle_deg: 180.000_001,
+                }],
+            },
+            FoldPoseInput {
+                drivers: vec![FoldPoseDriver {
+                    edge_id: u32::MAX,
+                    target_angle_deg: 90.0,
+                }],
+            },
+            FoldPoseInput {
+                drivers: vec![
+                    FoldPoseDriver {
+                        edge_id: hinge,
+                        target_angle_deg: 90.0,
+                    },
+                    FoldPoseDriver {
+                        edge_id: hinge,
+                        target_angle_deg: -90.0,
+                    },
+                ],
+            },
+        ];
+
+        for pose in &invalid {
+            canonical_nonflat_pose_at(&document, &faces, 0, Some(pose))
+                .expect_err("invalid hard declarations must fail before becoming a pose");
+        }
+    }
+
+    #[test]
+    fn canonical_nonflat_pose_rejects_a_hard_angle_set_that_tears_a_loop() {
+        let document = degree_four_document(TechniqueKind::Simple);
+        let faces = extract_faces(&document.cp);
+        let hinges = hinge_edges(&faces);
+        let samples = [0.0, 90.0, -90.0, 180.0, -180.0];
+        let combinations = samples
+            .len()
+            .pow(u32::try_from(hinges.len()).expect("small fixture"));
+        let mut broken = None;
+        for mut code in 1..combinations {
+            let angles = hinges
+                .iter()
+                .map(|&hinge| {
+                    let angle = samples[code % samples.len()];
+                    code /= samples.len();
+                    (hinge, angle)
+                })
+                .collect::<HashMap<_, _>>();
+            let folded = ori3_rigid::propagate(&document.cp, &faces, &angles);
+            let frame = ori3_rigid::to_frame3d(&document.cp, &faces, &folded);
+            let gap = ori3_rigid::max_seam_gap(&document.cp, &faces, &frame);
+            if gap.is_finite() && gap >= 1e-6 {
+                broken = Some(angles);
+                break;
+            }
+        }
+        let broken = broken.expect("the closed-loop fixture has an inconsistent hard-angle set");
+        let input = FoldPoseInput {
+            drivers: hinges
+                .iter()
+                .map(|&edge_id| FoldPoseDriver {
+                    edge_id,
+                    target_angle_deg: broken[&edge_id],
+                })
+                .collect(),
+        };
+
+        canonical_nonflat_pose_at(&document, &faces, 0, Some(&input))
+            .expect_err("a finite hard-angle map that tears a material seam must be rejected");
+    }
+
+    #[test]
+    fn document_only_flat_state_rejects_an_exact_endpoint_with_a_broken_seam() {
+        let document = degree_four_document(TechniqueKind::Simple);
+        let faces = extract_faces(&document.cp);
+        let mut folded = ori3_rigid::propagate(&document.cp, &faces, &HashMap::new());
+        let displaced_face = faces[0].id;
+        folded
+            .transforms
+            .get_mut(&displaced_face)
+            .expect("fixture face transform")
+            .1
+            .x += 1e-3;
+
+        ensure_declared_flat_state_is_connected(&document.cp, &faces, &folded)
+            .expect_err("a disconnected exact endpoint must not supply pleat order");
+    }
 
     fn degree_four_document(current_kind: TechniqueKind) -> Document {
         let ray_50_x = 0.5 + 0.5 * 50f64.to_radians().cos() / 50f64.to_radians().sin();
@@ -2191,6 +3941,11 @@ mod tests {
             folded.step.drivers[0].target_angle_deg.to_bits(),
             180.0f64.to_bits()
         );
+        assert_eq!(
+            folded.declared_angles[&6].to_bits(),
+            180.0f64.to_bits(),
+            "fold-target bridge consumes the signed declared endpoint, not a solver result",
+        );
         assert_eq!(folded.step.layer_order.as_ref().map(Vec::len), Some(2));
     }
 
@@ -2285,8 +4040,7 @@ mod tests {
             .map(|driver| (driver.hinge, driver.target_angle_deg))
             .collect();
         assert_eq!(
-            held_now,
-            path.held,
+            held_now, path.held,
             "折り道のどこでも同じ角のまま(押さえる角は`t`で動かない)"
         );
         assert_eq!(
@@ -2689,12 +4443,8 @@ mod tests {
             let previous = replay(&document, 1, 1.0);
 
             let shown = replay(&document, 2, SURFACE_APPROACH_PROGRESS[2]);
-            let recovery = solve_surface_approach_full(
-                &document,
-                &faces,
-                &path,
-                Some(&previous.hinge_angles),
-            );
+            let recovery =
+                solve_surface_approach_full(&document, &faces, &path, Some(&previous.hinge_angles));
             assert_eq!(
                 recovery.len(),
                 SUBSTEPS as usize,
@@ -2902,6 +4652,66 @@ mod tests {
         assert!(
             observed_change,
             "検査fixtureの少なくとも一方向はFaceId fallbackとcanonicalを区別できる"
+        );
+    }
+
+    #[test]
+    fn current_path_surface_order_is_not_stamped_onto_different_endpoint_geometry() {
+        let mut document = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        ori3_cp::insert_segment(&mut document.cp, [0.5, 0.0], [0.5, 1.0], EdgeKind::Mountain);
+        let faces = extract_faces(&document.cp);
+        let hinge = hinge_edges(&faces)[0];
+        let drivers = [Driver {
+            hinge,
+            target_angle_deg: 180.0,
+        }];
+        let candidate = || {
+            ori3_rigid::solve_near_exact_without_surface_order(
+                &document.cp,
+                &faces,
+                &drivers,
+                &HashMap::new(),
+                None,
+            )
+        };
+
+        let mut result = candidate();
+        let rank_frame = ori3_rigid::to_frame3d(
+            &document.cp,
+            &faces,
+            &ori3_rigid::propagate(&document.cp, &faces, &result.angles),
+        );
+        assert_eq!(
+            max_vertex_distance(&rank_frame, &result.frame),
+            0.0,
+            "fixture starts on the same terminal geometry"
+        );
+        result.frame.faces[0].polygon[0][0] += 1.0e-6;
+        let measured = max_vertex_distance(&rank_frame, &result.frame);
+        let before = result
+            .frame
+            .faces
+            .iter()
+            .map(|face| face.surface_rank)
+            .collect::<Vec<_>>();
+
+        assert!(
+            stamp_canonical_surface_order_from_angles(&document, &faces, &[], None, &mut result,)
+                .is_none(),
+            "current pathから導いたrankも、最大頂点距離{measured:.17e}の別frameへ刻印しない"
+        );
+        assert_eq!(
+            result
+                .frame
+                .faces
+                .iter()
+                .map(|face| face.surface_rank)
+                .collect::<Vec<_>>(),
+            before,
+            "拒否時は返却候補のrankも変えない"
         );
     }
 

@@ -41,11 +41,12 @@
 use std::collections::HashMap;
 
 use glam::DVec2;
-use ori3_cp::{extract_faces, Face};
-use ori3_layers::fold_through::{fold_through, FoldDirection, FoldThroughInput};
+use ori3_cp::{Face, extract_faces};
+use ori3_layers::fold_through::{FoldDirection, FoldThroughInput, fold_through};
+use ori3_layers::precrease_collapse::validate_precrease_layer_order;
 use ori3_layers::techniques::TechniqueInput;
 use ori3_layers::{
-    flat_state_at, inside_reverse, petal, pleat, replay, squash, FlatState, FoldThroughResult,
+    FlatState, FoldThroughResult, flat_state_at, inside_reverse, petal, pleat, replay, squash,
 };
 use ori3_model::{
     CreasePattern, Document, EdgeKind, Face3D, FaceId, Frame3D, Paper, TechniqueKind,
@@ -996,6 +997,73 @@ fn the_frog_replays_from_the_crease_pattern() {
             );
         }
     }
+}
+
+/// 完成カエルの最終手に保存した代表点順が、現在の面へ欠落なく解決され、
+/// 作品固有情報を使わない重なり制約を全て満たすことを確かめる。
+#[test]
+#[ignore = "既知の欠陥: 花弁折り・つぶし折りが返す層順が一般制約（taco-tortilla/taco-taco）を満たさない。別単位で修正するまで。実測: 鳥 4/20・カエル 116/6664, 12/1826"]
+fn frog_saved_complete_layer_order_satisfies_general_constraints() {
+    let (doc, built) = frog();
+    let faces = extract_faces(&doc.cp);
+    let saved_points = doc
+        .sequence
+        .last()
+        .and_then(|step| step.layer_order.as_deref())
+        .expect("完成カエルの最終手に層順序が保存されている");
+    assert_eq!(
+        saved_points.len(),
+        faces.len(),
+        "保存順は最終展開図の全面を1回ずつ表す"
+    );
+    let (saved_order, resolution_warnings) =
+        FlatState::resolve_order(&doc.cp, &faces, saved_points);
+    assert!(
+        resolution_warnings.is_empty(),
+        "保存代表点は補完なしで全面へ解決できる: {resolution_warnings:?}"
+    );
+    assert_eq!(
+        saved_order, built.order,
+        "検証対象は最終操作が保存した完成順そのもの"
+    );
+
+    let validation =
+        validate_precrease_layer_order(&doc.cp, &faces, &built.placements, &saved_order)
+            .expect("完成カエルの一般層制約を導ける");
+    let continuous_violations =
+        validation.violations.continuous_crossings.len() + validation.violations.continuous.len();
+    println!(
+        "frog saved layer order: adjacent violations={}/{}, taco-tortilla={}/{}, taco-taco={}/{}, continuous={}/{}, unresolved={}",
+        validation.violations.adjacent_folds.len(),
+        validation.counts.adjacent_folds,
+        validation.violations.taco_tortilla.len(),
+        validation.counts.taco_tortilla,
+        validation.violations.taco_taco.len(),
+        validation.counts.taco_taco,
+        continuous_violations,
+        validation.counts.continuous,
+        validation.unresolved_overlap_pairs.len(),
+    );
+    assert!(
+        validation.violations.adjacent_folds.is_empty(),
+        "隣接M/V違反0: {:?}",
+        validation.violations.adjacent_folds
+    );
+    assert!(
+        validation.violations.taco_tortilla.is_empty(),
+        "taco-tortilla違反0: {:?}",
+        validation.violations.taco_tortilla
+    );
+    assert!(
+        validation.violations.taco_taco.is_empty(),
+        "taco-taco違反0: {:?}",
+        validation.violations.taco_taco
+    );
+    assert_eq!(continuous_violations, 0, "0°連続面の違反0");
+    assert!(
+        validation.is_valid(),
+        "完成カエルの保存順は一般制約を全て満たす: {validation:?}"
+    );
 }
 
 /// 完成形も何度実行しても同じ結果になる(決定性)。

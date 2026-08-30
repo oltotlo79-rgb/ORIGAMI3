@@ -20,8 +20,9 @@ pub use intersect::{
     self_intersects, suspect_hinges, suspect_hinges_for_intersections,
 };
 pub use motion::{
-    MotionContactOptions, MotionSolveResult, SurfaceOrderDiagnostics, SurfaceOrderSource,
-    solve_motion, solve_motion_once, solve_motion_with_contact_options,
+    MotionContactOptions, MotionContinuationState, MotionSolveResult, SurfaceOrderDiagnostics,
+    SurfaceOrderSource, solve_motion, solve_motion_once, solve_motion_with_contact_continuation,
+    solve_motion_with_contact_options,
 };
 pub use seam::max_seam_gap;
 pub use solver::{
@@ -33,8 +34,8 @@ pub use support::{
     three_point_support_with_tolerance,
 };
 pub use surface_order::{
-    AuthoritativeSurfaceOrder, SurfaceOrderProvenance, solve_authoritative_surface_order,
-    stamp_surface_order,
+    AuthoritativeSurfaceOrder, SurfaceOrderProvenance, certify_verified_operation_surface_order,
+    solve_authoritative_surface_order, stamp_surface_order,
 };
 pub use symmetry::{
     DEFAULT_REFLECTION_ANGLE_TOLERANCE_DEG, DEFAULT_REFLECTION_PROJECTIONS,

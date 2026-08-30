@@ -11,15 +11,15 @@
 use std::collections::BTreeSet;
 
 use glam::DVec2;
-use ori3_cp::{extract_faces, validate, Face};
-use ori3_geometry::{dist_point_segment, Isometry2};
-use ori3_layers::fold_through::{fold_through, FoldDirection, FoldThroughInput, FoldThroughResult};
+use ori3_cp::{Face, extract_faces, validate};
+use ori3_geometry::{Isometry2, dist_point_segment};
+use ori3_layers::fold_through::{FoldDirection, FoldThroughInput, FoldThroughResult, fold_through};
 use ori3_layers::techniques::TechniqueInput;
 use ori3_layers::{
-    flat_motion, flat_state_at, inside_reverse, layers_at_point, open_sink, outside_reverse, petal,
-    pleat, point_in_face, rabbit_ear, representative_point, squash, swivel, twist,
     CompoundTechnique, FlatMotionInput, FlatState, HalfPlane, LayerTurn, MotionPart,
-    MotionTransform, RabbitEarInput,
+    MotionTransform, RabbitEarInput, flat_motion, flat_state_at, inside_reverse, layers_at_point,
+    open_sink, outside_reverse, petal, pleat, point_in_face, rabbit_ear, representative_point,
+    squash, swivel, twist,
 };
 use ori3_model::{CreasePattern, Document, FaceId, Paper, TechniqueKind};
 

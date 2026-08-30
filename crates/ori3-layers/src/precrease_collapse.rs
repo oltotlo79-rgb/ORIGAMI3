@@ -19,6 +19,11 @@ use crate::fold_through::{FoldDirection, FoldThroughResult};
 
 const PLACEMENT_EPS: f64 = 1e-7;
 
+/// 自動collapseの表示用tie-breakに、展開図からは決まらない重なりが残った警告。
+/// replayはこのprefixの警告だけを、検証済みの明示layer oracleで置き換えられる。
+pub const PRECREASE_ORDER_UNDETERMINED_WARNING_PREFIX: &str =
+    "重なり順が展開図だけでは決まらない面の組が";
+
 /// Material-coordinate precrease lines to close in one simultaneous collapse.
 #[derive(Clone, Debug)]
 pub struct PrecreaseCollapseInput {
@@ -28,12 +33,116 @@ pub struct PrecreaseCollapseInput {
     pub target_layers: Option<Vec<FaceId>>,
 }
 
+/// 展開図と平坦配置から独立に数えた、紙の重なり順の一般制約。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PrecreaseConstraintCounts {
+    /// 山谷と、折り目の両側の鏡映状態から直接決まる上下。
+    pub adjacent_folds: usize,
+    /// 1枚の紙が折り目をまたぐとき、その折り目の両面と同じ側にいる条件。
+    pub taco_tortilla: usize,
+    /// 同じ側へ開く折り返し2組が交互に並ばない条件。
+    pub taco_taco: usize,
+    /// 0°でつながる面を1枚の連続した紙として扱う条件。
+    pub continuous: usize,
+}
+
+/// 候補の下→上順が破った一般制約。
+///
+/// tuple中の面IDは、それぞれの規則を構成する順であり、鶴など特定作品の部位を
+/// 表すものではない。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PrecreaseConstraintViolations {
+    pub duplicate_faces: Vec<FaceId>,
+    pub missing_faces: Vec<FaceId>,
+    pub unexpected_faces: Vec<FaceId>,
+    /// `(edge, expected_lower, expected_upper)`。
+    pub adjacent_folds: Vec<(EdgeId, FaceId, FaceId)>,
+    /// `(seam_face_a, seam_face_b, crossing_face)`。
+    pub taco_tortilla: Vec<(FaceId, FaceId, FaceId)>,
+    /// `(first_a, first_b, second_a, second_b)`。
+    pub taco_taco: Vec<(FaceId, FaceId, FaceId, FaceId)>,
+    /// 0°のseamをまたぐ面 `(seam_face_a, seam_face_b, crossing_face)`。
+    pub continuous_crossings: Vec<(FaceId, FaceId, FaceId)>,
+    /// 0°seamどうし `(first_a, first_b, corresponding_a, corresponding_b)`。
+    pub continuous: Vec<(FaceId, FaceId, FaceId, FaceId)>,
+}
+
+impl PrecreaseConstraintViolations {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.duplicate_faces.is_empty()
+            && self.missing_faces.is_empty()
+            && self.unexpected_faces.is_empty()
+            && self.adjacent_folds.is_empty()
+            && self.taco_tortilla.is_empty()
+            && self.taco_taco.is_empty()
+            && self.continuous_crossings.is_empty()
+            && self.continuous.is_empty()
+    }
+}
+
+/// 保存された層順を採用してよいかを、作品固有情報なしで調べた結果。
+///
+/// `mandatory_constraints` と `unresolved_overlap_pairs` は候補順を読む前に導く。
+/// 従って、Face ID順などのtie-breakを「物理的に証明された上下」へ混ぜない。
+/// `unresolved_overlap_pairs` が残っていても、外部から明示された完全順が全制約を
+/// 満たすなら、その順は展開図だけでは決まらないtieを解く有効な層oracleである。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PrecreaseOrderValidation {
+    pub counts: PrecreaseConstraintCounts,
+    pub violations: PrecreaseConstraintViolations,
+    /// 一般制約の推移閉包。各tupleは `(lower, upper)`。
+    pub mandatory_constraints: Vec<(FaceId, FaceId)>,
+    /// 正の面積で重なるが、展開図由来の制約だけでは上下が決まらない面対。
+    pub unresolved_overlap_pairs: Vec<(FaceId, FaceId)>,
+    /// 逆向きが既に必然だったため採れなかった制約 `(requested_lower, requested_upper)`。
+    pub discarded_relations: Vec<(FaceId, FaceId)>,
+}
+
+impl PrecreaseOrderValidation {
+    /// 完全面permutationであり、保存順が一般制約をすべて満たすか。
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        self.violations.is_empty() && self.discarded_relations.is_empty()
+    }
+}
+
 /// Close an intersecting network of existing auxiliary lines to 180 degrees in one flat step.
+///
+/// Close a network using only layer-order evidence from the input crease pattern.
+///
+/// This remains the strict default for proposal generation, replay, and independent audits. A
+/// candidate operation cannot replace the target-line M/V that decides whether it is admissible.
 pub fn collapse_precrease_network(
     cp: &mut CreasePattern,
     faces: &[Face],
     state: &FlatState,
     input: &PrecreaseCollapseInput,
+) -> Result<FoldThroughResult, String> {
+    collapse_precrease_network_impl(cp, faces, state, input, None)
+}
+
+/// Close a network as an explicitly requested physical operation.
+///
+/// A single mirror motion with a strict M/V majority (or an all-Aux line using the ordinary-fold
+/// default) may use that operation direction for target-line evidence. Every non-target adjacent
+/// rule and every taco/continuity rule remains strict. Proposal generation and replay must use
+/// [`collapse_precrease_network`] instead.
+pub fn collapse_precrease_network_for_operation(
+    cp: &mut CreasePattern,
+    faces: &[Face],
+    state: &FlatState,
+    input: &PrecreaseCollapseInput,
+) -> Result<FoldThroughResult, String> {
+    collapse_precrease_network_impl(cp, faces, state, input, Some(()))
+}
+
+fn collapse_precrease_network_impl(
+    cp: &mut CreasePattern,
+    faces: &[Face],
+    state: &FlatState,
+    input: &PrecreaseCollapseInput,
+    operation_authority: Option<()>,
 ) -> Result<FoldThroughResult, String> {
     validate_input(input)?;
     let positions = vertex_positions(cp);
@@ -106,14 +215,16 @@ pub fn collapse_precrease_network(
     let target_placements =
         reflected_placements(&work, &split_faces, &current, &parent_of, &network, state)?;
     let undetermined = activated.iter().copied().collect::<HashSet<_>>();
-    let target_order = solved_layer_order(
+    let solved_order = solved_layer_order(
         &work,
         &split_faces,
         &current,
         &target_placements,
         &undetermined,
-    );
-    settle_kinds_from_order(&mut work, &split_faces, &target_placements, &target_order)?;
+        operation_authority.map(|()| &network),
+    )?;
+    let target_order = &solved_order.order;
+    settle_kinds_from_order(&mut work, &split_faces, &target_placements, target_order)?;
 
     let parts = target_order
         .iter()
@@ -152,14 +263,84 @@ pub fn collapse_precrease_network(
             ));
         }
     }
-    if outcome.result.state.order != target_order {
+    if outcome.result.state.order.as_slice() != target_order.as_slice() {
         return Err("precrease collapse did not preserve its solved layer order".to_string());
     }
     let mut result = outcome.result;
+    if !solved_order.operation_resolved && !solved_order.unresolved_overlap_pairs.is_empty() {
+        // `state.order` は表示を続けるための暫定順として残す。一方、保存欄を空にして、
+        // 後のreplayがFace ID tie-breakを明示oracleと誤認する経路を断つ。
+        result.step.layer_order = None;
+        result.warnings.push(format!(
+            "{PRECREASE_ORDER_UNDETERMINED_WARNING_PREFIX}{}組あります",
+            solved_order.unresolved_overlap_pairs.len()
+        ));
+    }
+    if !solved_order.discarded_relations.is_empty() {
+        result.step.layer_order = None;
+        result.warnings.push(format!(
+            "紙の重なり順の条件が{}組で両立しません",
+            solved_order.discarded_relations.len()
+        ));
+    }
+    if solved_order.overlap_analysis_error.is_some() {
+        // 多角形の重なりを数えられない場合も、折りと表示は完了させる。ただし未知の
+        // 比較を0組と誤記せず、保存authorityを外して再生側へ判定不能を伝える。
+        result.step.layer_order = None;
+        result
+            .warnings
+            .push("紙の重なり順を判定できないため推定した順で表示します".to_string());
+    }
     result.added_edges = activated;
     result.added_edges.sort_unstable();
     result.added_edges.dedup();
     *cp = outcome.cp;
+    Ok(result)
+}
+
+/// 明示された完全な層順oracleを検証してから、precrease networkを一括で畳む。
+///
+/// `layer_order_oracle` はcollapse後の面IDによる下→上の完全順である。通常の
+/// [`collapse_precrease_network`] が表示継続のために作るFace ID tie-breakを権威には
+/// せず、[`validate_precrease_layer_order`] が展開図から独立に導く一般制約をすべて
+/// 満たす場合だけ採用する。不正・不完全なoracleなら、呼出し元の展開図を変更しない。
+pub fn collapse_precrease_network_with_layer_order_oracle(
+    cp: &mut CreasePattern,
+    faces: &[Face],
+    state: &FlatState,
+    input: &PrecreaseCollapseInput,
+    layer_order_oracle: &[FaceId],
+) -> Result<FoldThroughResult, String> {
+    let mut collapsed_cp = cp.clone();
+    let mut result = collapse_precrease_network(&mut collapsed_cp, faces, state, input)?;
+    let collapsed_faces = extract_faces(&collapsed_cp);
+    let validation = validate_precrease_layer_order(
+        &collapsed_cp,
+        &collapsed_faces,
+        &result.state.placements,
+        layer_order_oracle,
+    )?;
+    if !validation.is_valid() {
+        return Err(format!(
+            "precrease layer-order oracle is invalid or incomplete: violations={:?}, discarded_relations={:?}",
+            validation.violations, validation.discarded_relations
+        ));
+    }
+
+    result.state.order = layer_order_oracle.to_vec();
+    result.step.layer_order = Some(
+        result
+            .state
+            .to_layer_points(&collapsed_cp, &collapsed_faces),
+    );
+    if let Some(index) = result
+        .warnings
+        .iter()
+        .position(|warning| warning.starts_with(PRECREASE_ORDER_UNDETERMINED_WARNING_PREFIX))
+    {
+        result.warnings.remove(index);
+    }
+    *cp = collapsed_cp;
     Ok(result)
 }
 
@@ -322,36 +503,36 @@ fn reflected_placements(
 /// ここではそれを逆向きに読む。3D側の同じ規則は `ori3_rigid::derive_layer_order`。
 ///
 /// この動きで初めて折り目へ昇格した補助線(`undetermined`)は、山谷が設計として
-/// 与えられていないので上下を決めない。その分は `previous_order` の並びが残る。
+/// 与えられていないので上下を決めない。
 ///
 /// 1本の直線で紙を折り返すだけの畳みは、これより強く決まる。動いた紙はまとめて
 /// 重なりの外側へ回り、その中の並びはひっくり返る([`simple_fold_order`])。
 ///
-/// 決まらなかった面どうしの並びは `previous_order` から引き継ぐ。上下が輪に
-/// なっていても止まらず、押さえる制約がいちばん少ない面から順に出す
-/// (`ori3_rigid` の重なり順導出と同じ受け止め方)。
-fn solved_layer_order(
+/// 決まらなかった面どうしは、表示を止めないためだけに `previous_order` から暫定順を
+/// 引き継ぐ。その順は保存欄へ入れず、未決定の正面積重なり対の件数を警告する。
+/// したがって暫定順が、後の再生で物理的に証明済みの順へ昇格することはない。
+struct SolvedLayerOrder {
+    order: Vec<FaceId>,
+    unresolved_overlap_pairs: Vec<(FaceId, FaceId)>,
+    discarded_relations: Vec<(FaceId, FaceId)>,
+    overlap_analysis_error: Option<String>,
+    /// 単一book foldでは、動くpacketを外側へ返す操作自体がtieを一意に解く。
+    operation_resolved: bool,
+}
+
+fn adjacent_fold_rules(
     cp: &CreasePattern,
-    faces: &[Face],
-    current: &FlatState,
+    owners: &BTreeMap<EdgeId, Vec<FaceId>>,
     placements: &HashMap<FaceId, Isometry2>,
     undetermined: &HashSet<EdgeId>,
-) -> Vec<FaceId> {
-    let previous_order = &current.order;
+) -> Vec<AdjacentFoldRule> {
     let kinds = cp
         .edges
         .iter()
         .map(|edge| (edge.id, edge.kind))
         .collect::<HashMap<_, _>>();
-    let owners = edge_owners(faces)
-        .into_iter()
-        .filter(|(_, owners)| owners.len() == 2)
-        .collect::<BTreeMap<_, _>>();
-
-    let mut constraints = BTreeSet::<(FaceId, FaceId)>::new();
-    // 折り目の番号順に並べた同じ内容。1回の折り返しの向きを数えるときに使う。
-    let mut ordered = Vec::<(FaceId, FaceId)>::new();
-    for (&edge_id, incident) in &owners {
+    let mut rules = Vec::new();
+    for (&edge_id, incident) in owners {
         if undetermined.contains(&edge_id) {
             continue;
         }
@@ -361,7 +542,7 @@ fn solved_layer_order(
             continue;
         };
         if placement_a.mirrored == placement_b.mirrored {
-            continue; // この折り目は閉じていないので、上下を拘束しない
+            continue;
         }
         let Some(kind) = kinds.get(&edge_id) else {
             continue;
@@ -369,24 +550,412 @@ fn solved_layer_order(
         if !matches!(kind, EdgeKind::Mountain | EdgeKind::Valley) {
             continue;
         }
-        // 「b が a の上に来るとしたら山谷はこうなる」と読み比べる。
-        let pair = if want_kind(0, 1, placement_a.mirrored) == *kind {
+        let (lower, upper) = if want_kind(0, 1, placement_a.mirrored) == *kind {
             (a, b)
         } else {
             (b, a)
         };
-        constraints.insert(pair);
-        ordered.push(pair);
+        rules.push(AdjacentFoldRule {
+            edge: edge_id,
+            lower,
+            upper,
+        });
     }
+    rules
+}
 
-    if let Some(order) = simple_fold_order(faces, current, placements, &ordered) {
-        return order;
-    }
+fn simple_fold_order_for_operation(
+    faces: &[Face],
+    current: &FlatState,
+    placements: &HashMap<FaceId, Isometry2>,
+    adjacent: &[AdjacentFoldRule],
+    operation_edges: &HashSet<EdgeId>,
+) -> Option<SimpleFoldOrder> {
+    let operation_senses = adjacent
+        .iter()
+        .filter(|rule| operation_edges.contains(&rule.edge))
+        .map(|rule| (rule.lower, rule.upper))
+        .collect::<Vec<_>>();
+    simple_fold_order(faces, current, placements, &operation_senses)
+}
 
+fn solved_layer_order(
+    cp: &CreasePattern,
+    faces: &[Face],
+    current: &FlatState,
+    placements: &HashMap<FaceId, Isometry2>,
+    undetermined: &HashSet<EdgeId>,
+    operation_edges: Option<&HashSet<EdgeId>>,
+) -> Result<SolvedLayerOrder, String> {
+    let previous_order = &current.order;
+    let owners = edge_owners(faces)
+        .into_iter()
+        .filter(|(_, owners)| owners.len() == 2)
+        .collect::<BTreeMap<_, _>>();
+    let adjacent = adjacent_fold_rules(cp, &owners, placements, undetermined);
+    let simple = if let Some(operation_edges) = operation_edges {
+        simple_fold_order_for_operation(faces, current, placements, &adjacent, operation_edges)
+    } else {
+        let ordered = adjacent
+            .iter()
+            .map(|rule| (rule.lower, rule.upper))
+            .collect::<Vec<_>>();
+        simple_fold_order(faces, current, placements, &ordered)
+    };
     let shapes = face_shapes(cp, faces, placements);
     let seams = folded_seams(cp, &owners, &shapes);
-    let derived = solve_stack_relation(&shapes, previous_order, &constraints, &seams);
-    stable_topological_order(previous_order, &derived)
+    let solution = solve_stack_relation(
+        &shapes,
+        previous_order,
+        &adjacent,
+        &seams,
+        OverlapAnalysisFailure::ContinueWithWarning,
+    )?;
+
+    if let Some(simple) = simple {
+        if simple.direction_authoritative
+            && let Some(operation_edges) = operation_edges
+        {
+            // A strict M/V majority (or an all-Aux line with the ordinary-fold default) fixes
+            // which outside of the stack receives the moved packet. The operation therefore
+            // replaces the pre-operation M/V evidence only on the line being folded. Validate
+            // the resulting order against every other adjacent fold and every taco/continuity
+            // rule; unlike settle_kinds_from_order, this authority comes from the operation and
+            // is established before reading the candidate order.
+            let validation = validate_precrease_layer_order_impl(
+                cp,
+                faces,
+                placements,
+                &simple.order,
+                operation_edges,
+            )?;
+            if !validation.violations.is_empty() {
+                return Err(format!(
+                    "single book-fold order violates a non-target precrease constraint: {:?}",
+                    validation.violations
+                ));
+            }
+            let unresolved_overlap_pairs = simple_fold_internal_unresolved_pairs(
+                &validation.unresolved_overlap_pairs,
+                &simple.moved,
+                &shapes,
+                &seams,
+            );
+            let operation_resolved = unresolved_overlap_pairs.is_empty();
+            return Ok(SolvedLayerOrder {
+                order: simple.order,
+                unresolved_overlap_pairs,
+                discarded_relations: validation.discarded_relations,
+                overlap_analysis_error: None,
+                operation_resolved,
+            });
+        }
+        if operation_edges.is_none() {
+            // This is the proposal/replay/default path that predates operation authority. The
+            // input CP supplies every M/V sense, and any unresolved or discarded general relation
+            // remains a warning so callers reject the candidate. The operation does not get to
+            // replace its target-line evidence here.
+            let unresolved_overlap_pairs = simple_fold_internal_unresolved_pairs(
+                &solution.unresolved_overlap_pairs,
+                &simple.moved,
+                &shapes,
+                &seams,
+            );
+            let operation_resolved =
+                solution.overlap_analysis_error.is_none() && unresolved_overlap_pairs.is_empty();
+            return Ok(SolvedLayerOrder {
+                order: simple.order,
+                unresolved_overlap_pairs,
+                discarded_relations: solution.discarded_relations,
+                overlap_analysis_error: solution.overlap_analysis_error,
+                operation_resolved,
+            });
+        }
+        // A non-zero M/V tie has no operation-authoritative direction. In particular,
+        // `first_vote` may choose a deterministic display side, but that unvalidated choice must
+        // not replace the full input-CP constraints. Use the general solution exactly as the
+        // non-book-fold path does; any unresolved pair or discarded relation remains visible to
+        // the warning/saved-order guard in `collapse_precrease_network`.
+        return Ok(SolvedLayerOrder {
+            order: stable_topological_order(previous_order, &solution.display_constraints),
+            unresolved_overlap_pairs: solution.unresolved_overlap_pairs,
+            discarded_relations: solution.discarded_relations,
+            overlap_analysis_error: solution.overlap_analysis_error,
+            operation_resolved: false,
+        });
+    }
+    Ok(SolvedLayerOrder {
+        order: stable_topological_order(previous_order, &solution.display_constraints),
+        unresolved_overlap_pairs: solution.unresolved_overlap_pairs,
+        discarded_relations: solution.discarded_relations,
+        overlap_analysis_error: solution.overlap_analysis_error,
+        operation_resolved: false,
+    })
+}
+
+/// 保存された下→上順が、展開図と平坦配置から導く一般制約の有効な拡張か調べる。
+///
+/// 候補順そのものからmandatory constraintを作らない。まず山谷・鏡映・紙の連続性
+/// だけで制約と未決定の正面積重なり対を求め、その後で候補が全規則を満たすかを
+/// 読み合わせる。このため、保存されたFace ID tie-breakによる自己認証にはならない。
+pub fn validate_precrease_layer_order(
+    cp: &CreasePattern,
+    faces: &[Face],
+    placements: &HashMap<FaceId, Isometry2>,
+    candidate_order: &[FaceId],
+) -> Result<PrecreaseOrderValidation, String> {
+    validate_precrease_layer_order_impl(cp, faces, placements, candidate_order, &HashSet::new())
+}
+
+/// Product-internal operation-aware validation core.
+///
+/// `operation_edges` are not dropped from the physical model: the book-fold operation replaces
+/// their pre-operation M/V with its authoritative outside-packet direction. All other adjacent
+/// M/V constraints and every taco/continuity rule remain in the independent validation. Product
+/// collapse calls this with operation edges only after [`simple_fold_order_for_operation`] proves
+/// a strict-majority/all-Aux direction. [`validate_precrease_layer_order`] always passes an empty
+/// set, so the saved-order audit remains strict and cannot excuse an input-CP violation.
+fn validate_precrease_layer_order_impl(
+    cp: &CreasePattern,
+    faces: &[Face],
+    placements: &HashMap<FaceId, Isometry2>,
+    candidate_order: &[FaceId],
+    operation_edges: &HashSet<EdgeId>,
+) -> Result<PrecreaseOrderValidation, String> {
+    let owners = edge_owners(faces)
+        .into_iter()
+        .filter(|(_, owners)| owners.len() == 2)
+        .collect::<BTreeMap<_, _>>();
+    let adjacent = adjacent_fold_rules(cp, &owners, placements, operation_edges);
+    let shapes = face_shapes(cp, faces, placements);
+    if shapes.len() != faces.len() {
+        let present = shapes.iter().map(|shape| shape.id).collect::<BTreeSet<_>>();
+        let missing = faces
+            .iter()
+            .map(|face| face.id)
+            .filter(|face| !present.contains(face))
+            .collect::<Vec<_>>();
+        return Err(format!(
+            "precrease layer-order validation has no flat placement for faces {missing:?}"
+        ));
+    }
+    let seams = folded_seams(cp, &owners, &shapes);
+    let rules = stack_rules(&shapes, &seams);
+    let solution = solve_stack_relation(
+        &shapes,
+        candidate_order,
+        &adjacent,
+        &seams,
+        OverlapAnalysisFailure::Reject,
+    )?;
+
+    let expected = faces.iter().map(|face| face.id).collect::<BTreeSet<_>>();
+    let mut occurrences = BTreeMap::<FaceId, usize>::new();
+    for &face in candidate_order {
+        *occurrences.entry(face).or_default() += 1;
+    }
+    let actual = occurrences.keys().copied().collect::<BTreeSet<_>>();
+    let mut violations = PrecreaseConstraintViolations {
+        duplicate_faces: occurrences
+            .iter()
+            .filter_map(|(&face, &count)| (count > 1).then_some(face))
+            .collect(),
+        missing_faces: expected.difference(&actual).copied().collect(),
+        unexpected_faces: actual.difference(&expected).copied().collect(),
+        ..PrecreaseConstraintViolations::default()
+    };
+    let rank = candidate_order
+        .iter()
+        .enumerate()
+        .map(|(rank, &face)| (face, rank))
+        .collect::<HashMap<_, _>>();
+
+    for rule in &adjacent {
+        if let (Some(&lower), Some(&upper)) = (rank.get(&rule.lower), rank.get(&rule.upper))
+            && lower >= upper
+        {
+            violations
+                .adjacent_folds
+                .push((rule.edge, rule.lower, rule.upper));
+        }
+    }
+    for (rule_index, &(a, b, other)) in rules.crossings.iter().enumerate() {
+        let ids = (shapes[a].id, shapes[b].id, shapes[other].id);
+        if let (Some(&a), Some(&b), Some(&other)) =
+            (rank.get(&ids.0), rank.get(&ids.1), rank.get(&ids.2))
+        {
+            let outside = (other < a && other < b) || (other > a && other > b);
+            if !outside {
+                if rules.crossing_folded[rule_index] {
+                    violations.taco_tortilla.push(ids);
+                } else {
+                    violations.continuous_crossings.push(ids);
+                }
+            }
+        }
+    }
+    for &(a, b, c, d) in &rules.nests {
+        let ids = (shapes[a].id, shapes[b].id, shapes[c].id, shapes[d].id);
+        if let (Some(&a), Some(&b), Some(&c), Some(&d)) = (
+            rank.get(&ids.0),
+            rank.get(&ids.1),
+            rank.get(&ids.2),
+            rank.get(&ids.3),
+        ) {
+            let between = |middle: usize, first: usize, second: usize| {
+                (first < middle && middle < second) || (second < middle && middle < first)
+            };
+            if between(c, a, b) != between(d, a, b) || between(a, c, d) != between(b, c, d) {
+                violations.taco_taco.push(ids);
+            }
+        }
+    }
+    for &(first, second, near, far) in &rules.parallels {
+        let ids = (
+            shapes[first].id,
+            shapes[second].id,
+            shapes[near].id,
+            shapes[far].id,
+        );
+        if let (Some(&first), Some(&second), Some(&near), Some(&far)) = (
+            rank.get(&ids.0),
+            rank.get(&ids.1),
+            rank.get(&ids.2),
+            rank.get(&ids.3),
+        ) && (first < near) != (second < far)
+        {
+            violations.continuous.push(ids);
+        }
+    }
+
+    Ok(PrecreaseOrderValidation {
+        counts: solution.counts,
+        violations,
+        mandatory_constraints: solution.mandatory_constraints,
+        unresolved_overlap_pairs: solution.unresolved_overlap_pairs,
+        discarded_relations: solution.discarded_relations,
+    })
+}
+
+/// 明示された部分的な上下制約を、展開図から独立に導いた一般制約へ加えて完全順へ延長する。
+///
+/// `required_constraints` の各要素は `(lower, upper)`。候補順を物理制約へ混ぜず、まず
+/// 隣接M/V・taco-tortilla・taco-taco・0°連続面の関係を作る。その後で明示制約を加え、
+/// 条件付き規則を再伝播する。まだ分岐が残る場合だけ `preferred_order` の向きを先に試すが、
+/// 矛盾した枝はcloneごと捨てて逆向きを試す。最後に [`validate_precrease_layer_order`] で
+/// 全規則を独立に再検証するため、優先順自身による自己認証にはならない。
+pub fn resolve_precrease_layer_order_with_constraints(
+    cp: &CreasePattern,
+    faces: &[Face],
+    placements: &HashMap<FaceId, Isometry2>,
+    preferred_order: &[FaceId],
+    required_constraints: &[(FaceId, FaceId)],
+) -> Result<Vec<FaceId>, String> {
+    let expected = faces.iter().map(|face| face.id).collect::<BTreeSet<_>>();
+    let preferred = preferred_order.iter().copied().collect::<BTreeSet<_>>();
+    if preferred_order.len() != faces.len() || preferred != expected {
+        return Err("precrease preferred layer order is not a complete face permutation".into());
+    }
+
+    let owners = edge_owners(faces)
+        .into_iter()
+        .filter(|(_, owners)| owners.len() == 2)
+        .collect::<BTreeMap<_, _>>();
+    let adjacent = adjacent_fold_rules(cp, &owners, placements, &HashSet::new());
+    let shapes = face_shapes(cp, faces, placements);
+    if shapes.len() != faces.len() {
+        let present = shapes.iter().map(|shape| shape.id).collect::<BTreeSet<_>>();
+        let missing = faces
+            .iter()
+            .map(|face| face.id)
+            .filter(|face| !present.contains(face))
+            .collect::<Vec<_>>();
+        return Err(format!(
+            "precrease layer-order resolution has no flat placement for faces {missing:?}"
+        ));
+    }
+    let seams = folded_seams(cp, &owners, &shapes);
+    let rules = stack_rules(&shapes, &seams);
+    let index = shapes
+        .iter()
+        .enumerate()
+        .map(|(index, shape)| (shape.id, index))
+        .collect::<HashMap<_, _>>();
+    let mut relation = StackRelation::new(shapes.len());
+    for rule in &adjacent {
+        let (Some(&lower), Some(&upper)) = (index.get(&rule.lower), index.get(&rule.upper)) else {
+            continue;
+        };
+        relation.add(lower, upper);
+    }
+    relation.propagate(&rules.crossings, &rules.nests, &rules.parallels);
+    if !relation.discarded.is_empty() {
+        return Err("precrease general layer constraints contradict each other".into());
+    }
+
+    let mut involved = BTreeSet::new();
+    for &(first, second, other) in &rules.crossings {
+        involved.extend([first, second, other]);
+    }
+    for &(a, b, c, d) in rules.nests.iter().chain(&rules.parallels) {
+        involved.extend([a, b, c, d]);
+    }
+    for &(lower_id, upper_id) in required_constraints {
+        if lower_id == upper_id {
+            return Err(format!(
+                "precrease required layer constraint contains self pair {lower_id}"
+            ));
+        }
+        let Some(&lower) = index.get(&lower_id) else {
+            return Err(format!(
+                "precrease required layer constraint has unknown face {lower_id}"
+            ));
+        };
+        let Some(&upper) = index.get(&upper_id) else {
+            return Err(format!(
+                "precrease required layer constraint has unknown face {upper_id}"
+            ));
+        };
+        involved.extend([lower, upper]);
+        if relation.is_below(upper, lower) {
+            return Err(format!(
+                "precrease required layer constraint {lower_id} < {upper_id} contradicts the general constraints"
+            ));
+        }
+        let discarded_before = relation.discarded.len();
+        relation.add(lower, upper);
+        relation.propagate(&rules.crossings, &rules.nests, &rules.parallels);
+        if relation.discarded.len() != discarded_before {
+            return Err(format!(
+                "precrease required layer constraint {lower_id} < {upper_id} makes the general constraints inconsistent"
+            ));
+        }
+    }
+    if !relation_respects_resolved_stack_rules(&relation, &rules) {
+        return Err("precrease required layer constraints violate a stack rule".into());
+    }
+
+    let preferred_rank = preferred_order
+        .iter()
+        .enumerate()
+        .map(|(rank, face)| (*face, rank))
+        .collect::<HashMap<_, _>>();
+    let mut ordered = involved.into_iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|&face| (preferred_rank[&shapes[face].id], shapes[face].id));
+    PrecreaseOrderSearch {
+        cp,
+        faces,
+        placements,
+        shapes: &shapes,
+        rules: &rules,
+        preferred_order,
+        involved: &ordered,
+        required_constraints,
+    }
+    .search(relation)?
+    .ok_or_else(|| {
+        "precrease required layer constraints have no generally valid total order".into()
+    })
 }
 
 /// 1本の直線で紙を折り返すだけの畳みなら、重なり順は幾何から一意に組み立てられる。
@@ -413,20 +982,29 @@ fn solved_layer_order(
 /// 「下へ」の両方の言い分が出る。
 ///
 /// 平らな1枚の紙をその直線で折る動きは、上へ回すか下へ回すかのどちらかしかない。
-/// どちらにしても紙は紙をすり抜けない。多数決(同数なら折り目の番号が小さいほう)で
-/// 決め、少数側の山谷は折った結果に合わせて付け直す
-/// ([`settle_kinds_from_order`])。折れない手として断ることはしない
-/// (`CLAUDE.md` §5「止めずに警告する」)。
+/// 山谷の**厳密な多数**がある場合は、その向きを操作の根拠として採り、少数側の山谷を
+/// 折った結果に合わせて付け直す([`settle_kinds_from_order`])。全て補助線なら普通の折り
+/// 操作の既定で上へ回す。一方、非0票の同数は向きを決める根拠にならない。最小edgeの票は
+/// 表示用の決定性にだけ使い、入力CPの一般制約を除外せず警告・拒否を判断する。
 ///
 /// 実測(2026-08-17、出っぱり4/6/8/12本・標本45件): 食い違いを理由にここで
 /// 組み立てをやめ、一般の解き方へ渡していたときは、**7件**で折り返した紙が上と下に
-/// 散らばった(=紙が紙をすり抜けた)。多数決で決めるようにしたら **0件**になった。
+/// 散らばった(=紙が紙をすり抜けた)。厳密な多数を操作の向きとしてまとめたら **0件**に
+/// なった。同数を表示tie-breakだけで物理的に有効と扱わない点は2026-08-28に固定した。
+struct SimpleFoldOrder {
+    order: Vec<FaceId>,
+    moved: HashSet<FaceId>,
+    /// A strict M/V majority, or the ordinary-fold default when every target edge is Aux.
+    /// A non-zero tie may still choose a deterministic display side, but is not physical authority.
+    direction_authoritative: bool,
+}
+
 fn simple_fold_order(
     faces: &[Face],
     current: &FlatState,
     placements: &HashMap<FaceId, Isometry2>,
     senses: &[(FaceId, FaceId)],
-) -> Option<Vec<FaceId>> {
+) -> Option<SimpleFoldOrder> {
     let identity = Isometry2::identity();
     let mut moved = HashSet::<FaceId>::new();
     let mut motion: Option<Isometry2> = None;
@@ -467,10 +1045,13 @@ fn simple_fold_order(
     }
     // 山谷が1本も決まっていない(補助線だけを閉じる)ときは、普通の折り操作の
     // 既定と同じく手前(上)へ回す。
-    let moved_above = match votes_above.cmp(&votes_below) {
-        std::cmp::Ordering::Greater => true,
-        std::cmp::Ordering::Less => false,
-        std::cmp::Ordering::Equal => first_vote.unwrap_or(true),
+    let (moved_above, direction_authoritative) = match votes_above.cmp(&votes_below) {
+        std::cmp::Ordering::Greater => (true, true),
+        std::cmp::Ordering::Less => (false, true),
+        std::cmp::Ordering::Equal => (
+            first_vote.unwrap_or(true),
+            votes_above == 0 && votes_below == 0,
+        ),
     };
 
     let stayed = current
@@ -486,11 +1067,73 @@ fn simple_fold_order(
         .filter(|face| moved.contains(face))
         .collect::<Vec<_>>();
     block.reverse();
-    Some(if moved_above {
+    let order = if moved_above {
         [stayed, block].concat()
     } else {
         [block, stayed].concat()
+    };
+    Some(SimpleFoldOrder {
+        order,
+        moved,
+        direction_authoritative,
     })
+}
+
+fn simple_fold_internal_unresolved_pairs(
+    unresolved_overlap_pairs: &[(FaceId, FaceId)],
+    moved: &HashSet<FaceId>,
+    shapes: &[FaceShape],
+    seams: &[Seam],
+) -> Vec<(FaceId, FaceId)> {
+    let components = flat_seam_components(shapes, seams);
+    unresolved_overlap_pairs
+        .iter()
+        .copied()
+        .filter(|&(left, right)| {
+            moved.contains(&left) == moved.contains(&right)
+                && components.get(&left) != components.get(&right)
+        })
+        .collect()
+}
+
+/// 0° seamでつながる面は、層比較では分割面の集合でなく1枚の連続した紙として扱う。
+fn flat_seam_components(shapes: &[FaceShape], seams: &[Seam]) -> HashMap<FaceId, usize> {
+    let mut adjacency = shapes
+        .iter()
+        .map(|shape| (shape.id, Vec::<FaceId>::new()))
+        .collect::<HashMap<_, _>>();
+    for seam in seams.iter().filter(|seam| !seam.folded) {
+        if adjacency.contains_key(&seam.a) && adjacency.contains_key(&seam.b) {
+            adjacency
+                .get_mut(&seam.a)
+                .expect("known seam face")
+                .push(seam.b);
+            adjacency
+                .get_mut(&seam.b)
+                .expect("known seam face")
+                .push(seam.a);
+        }
+    }
+    let mut components = HashMap::new();
+    let mut next_component = 0usize;
+    for shape in shapes {
+        if components.contains_key(&shape.id) {
+            continue;
+        }
+        let mut pending = VecDeque::from([shape.id]);
+        components.insert(shape.id, next_component);
+        while let Some(face) = pending.pop_front() {
+            for &neighbor in &adjacency[&face] {
+                if let std::collections::hash_map::Entry::Vacant(entry) = components.entry(neighbor)
+                {
+                    entry.insert(next_component);
+                    pending.push_back(neighbor);
+                }
+            }
+        }
+        next_component += 1;
+    }
+    components
 }
 
 /// 畳んだ平面での面の形。上下の判定に要る量だけを面ごとに1度だけ作る。
@@ -658,31 +1301,46 @@ fn crosses_segment(shape: &FaceShape, start: DVec2, end: DVec2) -> bool {
 ///    切り分けられて重なっているとき、線の片側で上にある紙は反対側でも上にある。
 ///    線をまたいで上下が入れ替わるには、紙が紙をすり抜けるしかない。
 ///
-/// この2つで決まらない面対だけ、`previous_order` の並びを採る。採った並びも
-/// 制約として入れ直し、そこから決まる上下を最後まで引き出す。
-/// 逆向きの上下が同時に出てくる場合(紙がすり抜けている形)は、先に決まったほうを
-/// 残す。止めない(「止めずに警告する」)。
-fn solve_stack_relation(
-    shapes: &[FaceShape],
-    previous_order: &[FaceId],
-    constraints: &BTreeSet<(FaceId, FaceId)>,
-    seams: &[Seam],
-) -> BTreeSet<(FaceId, FaceId)> {
+/// 物理条件だけで決まる関係を先に確定し、その後で表示継続用のtie-breakを別に作る。
+/// 両者を分けることで、Face IDや以前の表示順を物理的な証明として保存しない。
+#[derive(Clone, Copy)]
+struct AdjacentFoldRule {
+    edge: EdgeId,
+    lower: FaceId,
+    upper: FaceId,
+}
+
+#[derive(Default)]
+struct StackRules {
+    crossings: Vec<(usize, usize, usize)>,
+    crossing_folded: Vec<bool>,
+    nests: Vec<(usize, usize, usize, usize)>,
+    parallels: Vec<(usize, usize, usize, usize)>,
+}
+
+struct StackSolution {
+    display_constraints: BTreeSet<(FaceId, FaceId)>,
+    mandatory_constraints: Vec<(FaceId, FaceId)>,
+    unresolved_overlap_pairs: Vec<(FaceId, FaceId)>,
+    discarded_relations: Vec<(FaceId, FaceId)>,
+    overlap_analysis_error: Option<String>,
+    counts: PrecreaseConstraintCounts,
+}
+
+#[derive(Clone, Copy)]
+enum OverlapAnalysisFailure {
+    Reject,
+    ContinueWithWarning,
+}
+
+fn stack_rules(shapes: &[FaceShape], seams: &[Seam]) -> StackRules {
     let index = shapes
         .iter()
         .enumerate()
         .map(|(index, shape)| (shape.id, index))
         .collect::<HashMap<_, _>>();
-    let mut relation = StackRelation::new(shapes.len());
+    let mut rules = StackRules::default();
 
-    for &(lower, upper) in constraints {
-        let (Some(&lower), Some(&upper)) = (index.get(&lower), index.get(&upper)) else {
-            continue;
-        };
-        relation.add(lower, upper);
-    }
-
-    let mut crossings = Vec::new();
     for seam in seams {
         let (Some(&a), Some(&b)) = (index.get(&seam.a), index.get(&seam.b)) else {
             continue;
@@ -700,13 +1358,12 @@ fn solve_stack_relation(
                 continue;
             }
             if crosses_segment(shape, seam.start, seam.end) {
-                crossings.push((a, b, other));
+                rules.crossings.push((a, b, other));
+                rules.crossing_folded.push(seam.folded);
             }
         }
     }
 
-    let mut nests = Vec::new();
-    let mut parallels = Vec::new();
     for (first, left) in seams.iter().enumerate() {
         let Some(left_side) = left.side else {
             continue;
@@ -743,30 +1400,114 @@ fn solve_stack_relation(
             };
             let same_side = left_side * right_side * turn > 0.0;
             match (left.folded, right.folded) {
-                // 折り返しどうし。同じ側へ開いているときだけ重なりを持つ。
-                (true, true) if same_side => nests.push((a, b, c, d)),
-                // 1枚の続きの紙どうしが、同じ線で切り分けられている。
-                // 線の両側で上下が入れ替わることはできない。
+                (true, true) if same_side => rules.nests.push((a, b, c, d)),
                 (false, false) => {
                     let (near, far) = if same_side { (c, d) } else { (d, c) };
-                    parallels.push((a, b, near, far));
+                    rules.parallels.push((a, b, near, far));
                 }
                 _ => {}
             }
         }
     }
+    rules
+}
 
-    relation.propagate(&crossings, &nests, &parallels);
+fn relation_pairs(shapes: &[FaceShape], relation: &StackRelation) -> Vec<(FaceId, FaceId)> {
+    let mut pairs = Vec::new();
+    for (lower, lower_shape) in shapes.iter().enumerate() {
+        for (upper, upper_shape) in shapes.iter().enumerate() {
+            if relation.is_below(lower, upper) {
+                pairs.push((lower_shape.id, upper_shape.id));
+            }
+        }
+    }
+    pairs
+}
 
-    // 幾何が決めきれなかった面対は、前の重なり順の並びをそのまま採る。採った分も
-    // 制約として入れ直し、そこから決まる上下を引き出す。対象は上の2つの条件に
-    // 出てくる面だけにする(出てこない面の並びは、この後の並べ替えが
-    // `previous_order` のまま残す)。
+/// 正面積の重なりだけを列挙する。
+///
+/// `pose_motion::overlap_witnesses` と同じ三角形分割・凸clipを共有するため、表示順の
+/// 認証経路と面積の意味がずれない。同関数の境目は `1e-14`。共有頂点・共有辺の
+/// 理論面積0を除き、既存の鶴検査が採る `1e-12` より100倍小さい余裕側にある。
+fn positive_overlap_pairs(shapes: &[FaceShape]) -> Result<Vec<(usize, usize)>, String> {
+    let folded = shapes
+        .iter()
+        .map(|shape| {
+            shape
+                .polygon
+                .iter()
+                .map(|&point| shape.placement.apply(point))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let mut pairs = Vec::new();
+    for left in 0..shapes.len() {
+        for right in left + 1..shapes.len() {
+            if shapes[left].maximum.x + EPS < shapes[right].minimum.x
+                || shapes[right].maximum.x + EPS < shapes[left].minimum.x
+                || shapes[left].maximum.y + EPS < shapes[right].minimum.y
+                || shapes[right].maximum.y + EPS < shapes[left].minimum.y
+            {
+                continue;
+            }
+            let witnesses = crate::pose_motion::overlap_witnesses(&folded[left], &folded[right])
+                .map_err(|error| {
+                    format!(
+                        "precrease overlap analysis failed for faces {} and {}: {error}",
+                        shapes[left].id, shapes[right].id
+                    )
+                })?;
+            if !witnesses.is_empty() {
+                pairs.push((left, right));
+            }
+        }
+    }
+    Ok(pairs)
+}
+
+fn solve_stack_relation(
+    shapes: &[FaceShape],
+    previous_order: &[FaceId],
+    adjacent: &[AdjacentFoldRule],
+    seams: &[Seam],
+    overlap_failure: OverlapAnalysisFailure,
+) -> Result<StackSolution, String> {
+    let index = shapes
+        .iter()
+        .enumerate()
+        .map(|(index, shape)| (shape.id, index))
+        .collect::<HashMap<_, _>>();
+    let mut relation = StackRelation::new(shapes.len());
+
+    for rule in adjacent {
+        let (Some(&lower), Some(&upper)) = (index.get(&rule.lower), index.get(&rule.upper)) else {
+            continue;
+        };
+        relation.add(lower, upper);
+    }
+
+    let rules = stack_rules(shapes, seams);
+    relation.propagate(&rules.crossings, &rules.nests, &rules.parallels);
+    let mandatory_constraints = relation_pairs(shapes, &relation);
+    let (positive_overlaps, overlap_analysis_error) = match positive_overlap_pairs(shapes) {
+        Ok(pairs) => (pairs, None),
+        Err(error) => match overlap_failure {
+            OverlapAnalysisFailure::Reject => return Err(error),
+            OverlapAnalysisFailure::ContinueWithWarning => (Vec::new(), Some(error)),
+        },
+    };
+    let unresolved_overlap_pairs = positive_overlaps
+        .into_iter()
+        .filter(|&(left, right)| !relation.is_below(left, right) && !relation.is_below(right, left))
+        .map(|(left, right)| (shapes[left].id, shapes[right].id))
+        .collect::<Vec<_>>();
+
+    // ここからは表示を止めないための暫定順であり、上のmandatory relationには混ぜない。
     let mut involved = BTreeSet::new();
-    for &(first, second, other) in &crossings {
+    for &(first, second, other) in &rules.crossings {
         involved.extend([first, second, other]);
     }
-    for &(a, b, c, d) in nests.iter().chain(&parallels) {
+    for &(a, b, c, d) in rules.nests.iter().chain(&rules.parallels) {
         involved.extend([a, b, c, d]);
     }
     let seed_rank = previous_order
@@ -784,32 +1525,54 @@ fn solve_stack_relation(
             shapes[face].id,
         )
     });
-    for (position, &lower) in ordered.iter().enumerate() {
-        for &upper in &ordered[position + 1..] {
-            if relation.is_below(lower, upper) || relation.is_below(upper, lower) {
-                continue;
-            }
-            relation.add(lower, upper);
-            relation.propagate(&crossings, &nests, &parallels);
+    let mandatory_relation = relation.clone();
+    let mut true_conflicts = relation.discarded.clone();
+    relation = match resolve_display_relation(relation, &ordered, &rules) {
+        Ok(resolved) => resolved,
+        Err((first, second)) => {
+            // Neither orientation survives the physical rules. Preserve only the candidate-
+            // independent relation for display and report one real conflict; never keep a failed
+            // preferred seed whose propagation discarded a physical constraint.
+            true_conflicts.insert((first, second));
+            mandatory_relation
         }
-    }
+    };
+    let discarded_relations = true_conflicts
+        .iter()
+        .map(|&(lower, upper)| (shapes[lower].id, shapes[upper].id))
+        .collect::<Vec<_>>();
 
-    let mut out = BTreeSet::new();
-    for (lower, lower_shape) in shapes.iter().enumerate() {
-        for (upper, upper_shape) in shapes.iter().enumerate() {
-            if relation.is_below(lower, upper) {
-                out.insert((lower_shape.id, upper_shape.id));
-            }
-        }
-    }
-    out
+    Ok(StackSolution {
+        display_constraints: relation_pairs(shapes, &relation).into_iter().collect(),
+        mandatory_constraints,
+        unresolved_overlap_pairs,
+        discarded_relations,
+        overlap_analysis_error,
+        counts: PrecreaseConstraintCounts {
+            adjacent_folds: adjacent.len(),
+            taco_tortilla: rules
+                .crossing_folded
+                .iter()
+                .filter(|&&folded| folded)
+                .count(),
+            taco_taco: rules.nests.len(),
+            continuous: rules
+                .crossing_folded
+                .iter()
+                .filter(|&&folded| !folded)
+                .count()
+                + rules.parallels.len(),
+        },
+    })
 }
 
 /// 「どちらが下か」を面の組ごとに持ち、推移(aがbの下でbがcの下ならaはcの下)を
 /// 常に保つ表。
+#[derive(Clone)]
 struct StackRelation {
     count: usize,
     below: Vec<bool>,
+    discarded: BTreeSet<(usize, usize)>,
 }
 
 impl StackRelation {
@@ -817,6 +1580,7 @@ impl StackRelation {
         StackRelation {
             count,
             below: vec![false; count * count],
+            discarded: BTreeSet::new(),
         }
     }
 
@@ -827,7 +1591,11 @@ impl StackRelation {
     /// `lower` が `upper` の下だと決める。新しく決まったら真を返す。
     /// 逆向きが既に決まっている場合は、先に決まったほうを残して何もしない。
     fn add(&mut self, lower: usize, upper: usize) -> bool {
-        if lower == upper || self.is_below(lower, upper) || self.is_below(upper, lower) {
+        if lower == upper || self.is_below(lower, upper) {
+            return false;
+        }
+        if self.is_below(upper, lower) {
+            self.discarded.insert((lower, upper));
             return false;
         }
         let lowers = (0..self.count)
@@ -925,6 +1693,197 @@ impl StackRelation {
                 return;
             }
         }
+    }
+}
+
+fn relation_direction(relation: &StackRelation, first: usize, second: usize) -> Option<bool> {
+    if relation.is_below(first, second) {
+        Some(true)
+    } else if relation.is_below(second, first) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+fn relation_between(
+    relation: &StackRelation,
+    middle: usize,
+    first: usize,
+    second: usize,
+) -> Option<bool> {
+    let first_to_middle = relation_direction(relation, first, middle)?;
+    let middle_to_second = relation_direction(relation, middle, second)?;
+    Some(first_to_middle == middle_to_second)
+}
+
+/// 既に向きが決まった比較だけを見る。未決定は分岐探索に残すが、決定済み部分だけで
+/// taco/連続面規則を破った枝は、それ以上total化しても直らないので早く捨てる。
+fn relation_respects_resolved_stack_rules(relation: &StackRelation, rules: &StackRules) -> bool {
+    for &(first, second, other) in &rules.crossings {
+        if (relation.is_below(first, other) && relation.is_below(other, second))
+            || (relation.is_below(second, other) && relation.is_below(other, first))
+        {
+            return false;
+        }
+    }
+    for &(a, b, c, d) in &rules.nests {
+        if let (Some(c_between), Some(d_between)) = (
+            relation_between(relation, c, a, b),
+            relation_between(relation, d, a, b),
+        ) && c_between != d_between
+        {
+            return false;
+        }
+        if let (Some(a_between), Some(b_between)) = (
+            relation_between(relation, a, c, d),
+            relation_between(relation, b, c, d),
+        ) && a_between != b_between
+        {
+            return false;
+        }
+    }
+    for &(first, second, near, far) in &rules.parallels {
+        if let (Some(first_to_near), Some(second_to_far)) = (
+            relation_direction(relation, first, near),
+            relation_direction(relation, second, far),
+        ) && first_to_near != second_to_far
+        {
+            return false;
+        }
+    }
+    true
+}
+
+/// 表示を続けるためのtotal化。優先向きはauthorityではなく探索順にだけ使う。
+/// propagationが既存の物理関係を捨てる枝はcloneごと破棄し、逆向きも失敗した対だけを
+/// 真の両立不能として呼び出し側へ返す。
+fn resolve_display_relation(
+    relation: StackRelation,
+    ordered: &[usize],
+    rules: &StackRules,
+) -> Result<StackRelation, (usize, usize)> {
+    let undecided = ordered.iter().enumerate().find_map(|(position, &first)| {
+        ordered[position + 1..]
+            .iter()
+            .copied()
+            .find(|&second| !relation.is_below(first, second) && !relation.is_below(second, first))
+            .map(|second| (first, second))
+    });
+    let Some((preferred_lower, preferred_upper)) = undecided else {
+        if relation_respects_resolved_stack_rules(&relation, rules) {
+            return Ok(relation);
+        }
+        let conflict = rules
+            .crossings
+            .first()
+            .map(|&(first, second, _)| (first, second))
+            .or_else(|| {
+                rules
+                    .nests
+                    .first()
+                    .map(|&(first, second, _, _)| (first, second))
+            })
+            .or_else(|| {
+                rules
+                    .parallels
+                    .first()
+                    .map(|&(first, second, _, _)| (first, second))
+            })
+            .expect("an invalid resolved stack relation has a rule");
+        return Err(conflict);
+    };
+
+    for (lower, upper) in [
+        (preferred_lower, preferred_upper),
+        (preferred_upper, preferred_lower),
+    ] {
+        let mut branch = relation.clone();
+        let discarded_before = branch.discarded.len();
+        branch.add(lower, upper);
+        branch.propagate(&rules.crossings, &rules.nests, &rules.parallels);
+        if branch.discarded.len() != discarded_before
+            || !relation_respects_resolved_stack_rules(&branch, rules)
+        {
+            continue;
+        }
+        if let Ok(resolved) = resolve_display_relation(branch, ordered, rules) {
+            return Ok(resolved);
+        }
+    }
+    Err((preferred_lower, preferred_upper))
+}
+
+struct PrecreaseOrderSearch<'a> {
+    cp: &'a CreasePattern,
+    faces: &'a [Face],
+    placements: &'a HashMap<FaceId, Isometry2>,
+    shapes: &'a [FaceShape],
+    rules: &'a StackRules,
+    preferred_order: &'a [FaceId],
+    involved: &'a [usize],
+    required_constraints: &'a [(FaceId, FaceId)],
+}
+
+impl PrecreaseOrderSearch<'_> {
+    fn search(&self, relation: StackRelation) -> Result<Option<Vec<FaceId>>, String> {
+        let undecided = self
+            .involved
+            .iter()
+            .enumerate()
+            .find_map(|(position, &first)| {
+                self.involved[position + 1..]
+                    .iter()
+                    .copied()
+                    .find(|&second| {
+                        !relation.is_below(first, second) && !relation.is_below(second, first)
+                    })
+                    .map(|second| (first, second))
+            });
+        let Some((preferred_lower, preferred_upper)) = undecided else {
+            let constraints = relation_pairs(self.shapes, &relation)
+                .into_iter()
+                .collect::<BTreeSet<_>>();
+            let candidate = stable_topological_order(self.preferred_order, &constraints);
+            let rank = candidate
+                .iter()
+                .enumerate()
+                .map(|(rank, &face)| (face, rank))
+                .collect::<HashMap<_, _>>();
+            if self
+                .required_constraints
+                .iter()
+                .any(|&(lower, upper)| rank.get(&lower) >= rank.get(&upper))
+            {
+                return Ok(None);
+            }
+            let validation =
+                validate_precrease_layer_order(self.cp, self.faces, self.placements, &candidate)?;
+            return Ok(validation.is_valid().then_some(candidate));
+        };
+
+        for (lower, upper) in [
+            (preferred_lower, preferred_upper),
+            (preferred_upper, preferred_lower),
+        ] {
+            let mut branch = relation.clone();
+            let discarded_before = branch.discarded.len();
+            branch.add(lower, upper);
+            branch.propagate(
+                &self.rules.crossings,
+                &self.rules.nests,
+                &self.rules.parallels,
+            );
+            if branch.discarded.len() != discarded_before
+                || !relation_respects_resolved_stack_rules(&branch, self.rules)
+            {
+                continue;
+            }
+            if let Some(order) = self.search(branch)? {
+                return Ok(Some(order));
+            }
+        }
+        Ok(None)
     }
 }
 
@@ -1052,7 +2011,124 @@ fn segment_on_line(a: DVec2, b: DVec2, line: [[f64; 2]; 2]) -> bool {
 mod tests {
     use super::*;
     use ori3_cp::insert_segment;
-    use ori3_model::{Document, Paper};
+    use ori3_model::{Document, Edge, Paper, Vertex};
+
+    fn flat_continuity_cp(vertices: Vec<Vertex>, shared_edges: Vec<Edge>) -> CreasePattern {
+        let next_vertex_id = vertices.iter().map(|vertex| vertex.id).max().unwrap_or(0) + 1;
+        let next_edge_id = shared_edges.iter().map(|edge| edge.id).max().unwrap_or(0) + 1;
+        CreasePattern {
+            vertices,
+            edges: shared_edges,
+            next_vertex_id,
+            next_edge_id,
+        }
+    }
+
+    fn translated(x: f64) -> Isometry2 {
+        Isometry2 {
+            rotation: 0.0,
+            translation: DVec2::new(x, 0.0),
+            mirrored: false,
+        }
+    }
+
+    fn test_face_shape(id: FaceId, polygon: Vec<DVec2>) -> FaceShape {
+        let (minimum, maximum) = polygon.iter().fold(
+            (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)),
+            |(minimum, maximum), &point| (minimum.min(point), maximum.max(point)),
+        );
+        FaceShape {
+            id,
+            polygon,
+            placement: Isometry2::identity(),
+            minimum,
+            maximum,
+        }
+    }
+
+    #[test]
+    fn display_tie_seed_rolls_back_a_branch_that_discards_a_physical_relation() {
+        // Existing physical relation 2<0 and the continuous crossing (0,1,2) require 2<1.
+        // The preferred 1<2 seed makes propagation discard that requirement; the reverse branch
+        // is valid. The rejected clone must not leak its relation or discarded marker.
+        let mut physical = StackRelation::new(3);
+        physical.add(2, 0);
+        let rules = StackRules {
+            crossings: vec![(0, 1, 2)],
+            crossing_folded: vec![false],
+            ..StackRules::default()
+        };
+        let resolved = resolve_display_relation(physical.clone(), &[1, 2, 0], &rules)
+            .expect("reverse display branch satisfies the physical crossing");
+        assert!(physical.discarded.is_empty());
+        assert!(resolved.discarded.is_empty());
+        assert!(resolved.is_below(2, 1));
+        assert!(!resolved.is_below(1, 2));
+    }
+
+    #[test]
+    fn simple_fold_only_carries_unresolved_pairs_between_distinct_flat_components() {
+        let triangle = vec![
+            DVec2::new(0.0, 0.0),
+            DVec2::new(1.0, 0.0),
+            DVec2::new(0.0, 1.0),
+        ];
+        let shapes = (0..5)
+            .map(|id| test_face_shape(id, triangle.clone()))
+            .collect::<Vec<_>>();
+        let seams = vec![Seam {
+            a: 0,
+            b: 1,
+            start: DVec2::ZERO,
+            end: DVec2::X,
+            folded: false,
+            side: Some(1.0),
+        }];
+        let moved = HashSet::from([2, 3]);
+        let unresolved = vec![(0, 1), (0, 4), (0, 2), (2, 3)];
+        assert_eq!(
+            simple_fold_internal_unresolved_pairs(&unresolved, &moved, &shapes, &seams),
+            vec![(0, 4), (2, 3)]
+        );
+    }
+
+    #[test]
+    fn overlap_analysis_failure_warns_for_collapse_but_rejects_validation() {
+        let shapes = vec![
+            test_face_shape(
+                0,
+                vec![
+                    DVec2::new(0.0, 0.0),
+                    DVec2::new(1.0, 0.0),
+                    DVec2::new(0.0, 1.0),
+                ],
+            ),
+            test_face_shape(
+                1,
+                vec![
+                    DVec2::new(0.0, 0.0),
+                    DVec2::new(0.5, 0.0),
+                    DVec2::new(1.0, 0.0),
+                ],
+            ),
+        ];
+        let continued = solve_stack_relation(
+            &shapes,
+            &[0, 1],
+            &[],
+            &[],
+            OverlapAnalysisFailure::ContinueWithWarning,
+        )
+        .expect("collapse keeps a display fallback when overlap analysis is unavailable");
+        assert!(continued.overlap_analysis_error.is_some());
+        assert!(continued.unresolved_overlap_pairs.is_empty());
+
+        let rejected =
+            solve_stack_relation(&shapes, &[0, 1], &[], &[], OverlapAnalysisFailure::Reject)
+                .err()
+                .expect("saved-order validation must reject an uncheckable overlap");
+        assert!(rejected.contains("degenerate face polygon"));
+    }
 
     #[test]
     fn collapses_crossing_precreases_without_sampling_an_angle() {
@@ -1074,9 +2150,23 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(result.warnings.is_empty());
+        assert_eq!(
+            result.warnings,
+            vec![format!(
+                "{PRECREASE_ORDER_UNDETERMINED_WARNING_PREFIX}6組あります"
+            )]
+        );
+        assert!(
+            result.step.layer_order.is_none(),
+            "M/V指定の無い2本の同時collapseのFace ID tie-breakをoracleとして保存しない"
+        );
         assert_eq!(extract_faces(&document.cp).len(), 4);
         assert_eq!(result.state.placements.len(), 4);
+        assert_eq!(
+            result.state.order.len(),
+            4,
+            "authorityでなくても表示用の完全順は維持する"
+        );
         assert!(
             document
                 .cp
@@ -1084,5 +2174,211 @@ mod tests {
                 .iter()
                 .all(|edge| edge.kind != EdgeKind::Aux)
         );
+    }
+
+    #[test]
+    fn flat_seam_crossing_rejects_an_interleaved_layer_order() {
+        // Faces 0 and 1 are one flat sheet joined at x=0. Face 2 is translated onto both
+        // sides of that seam. It must therefore be below both halves or above both halves.
+        // All distances are O(1), while CROSSING_OFFSET is 1e-6, so the sampled crossing is
+        // six orders of magnitude away from the boundary tolerance.
+        let cp = flat_continuity_cp(
+            vec![
+                Vertex {
+                    id: 0,
+                    pos: [-1.0, -1.0],
+                },
+                Vertex {
+                    id: 1,
+                    pos: [0.0, -1.0],
+                },
+                Vertex {
+                    id: 2,
+                    pos: [0.0, 1.0],
+                },
+                Vertex {
+                    id: 3,
+                    pos: [-1.0, 1.0],
+                },
+                Vertex {
+                    id: 4,
+                    pos: [1.0, -1.0],
+                },
+                Vertex {
+                    id: 5,
+                    pos: [1.0, 1.0],
+                },
+                Vertex {
+                    id: 6,
+                    pos: [2.0, -0.5],
+                },
+                Vertex {
+                    id: 7,
+                    pos: [3.0, -0.5],
+                },
+                Vertex {
+                    id: 8,
+                    pos: [3.0, 0.5],
+                },
+                Vertex {
+                    id: 9,
+                    pos: [2.0, 0.5],
+                },
+            ],
+            vec![Edge {
+                id: 0,
+                v0: 1,
+                v1: 2,
+                kind: EdgeKind::Aux,
+            }],
+        );
+        let faces = vec![
+            Face {
+                id: 0,
+                vertices: vec![0, 1, 2, 3],
+                edges: vec![1, 0, 2, 3],
+            },
+            Face {
+                id: 1,
+                vertices: vec![1, 4, 5, 2],
+                edges: vec![4, 5, 6, 0],
+            },
+            Face {
+                id: 2,
+                vertices: vec![6, 7, 8, 9],
+                edges: vec![7, 8, 9, 10],
+            },
+        ];
+        let placements = HashMap::from([
+            (0, Isometry2::identity()),
+            (1, Isometry2::identity()),
+            (2, translated(-2.5)),
+        ]);
+
+        let valid = validate_precrease_layer_order(&cp, &faces, &placements, &[2, 0, 1])
+            .expect("flat-seam crossing can be validated");
+        assert_eq!(valid.counts.continuous, 1);
+        assert!(valid.is_valid(), "outside order is physical: {valid:?}");
+
+        let interleaved = validate_precrease_layer_order(&cp, &faces, &placements, &[0, 2, 1])
+            .expect("interleaved flat-seam crossing can be diagnosed");
+        assert_eq!(interleaved.counts.continuous, 1);
+        assert_eq!(interleaved.violations.continuous_crossings, vec![(0, 1, 2)]);
+        assert!(!interleaved.is_valid());
+    }
+
+    #[test]
+    fn collinear_flat_seams_reject_a_one_sided_order_reversal() {
+        // Two separate flat sheets have coincident, equally oriented seams. Face 0 corresponds
+        // to face 2 on the left and face 1 to face 3 on the right. Their relative order cannot
+        // reverse across the seam without one continuous sheet passing through the other.
+        let cp = flat_continuity_cp(
+            vec![
+                Vertex {
+                    id: 0,
+                    pos: [-1.0, -1.0],
+                },
+                Vertex {
+                    id: 1,
+                    pos: [0.0, -1.0],
+                },
+                Vertex {
+                    id: 2,
+                    pos: [0.0, 1.0],
+                },
+                Vertex {
+                    id: 3,
+                    pos: [-1.0, 1.0],
+                },
+                Vertex {
+                    id: 4,
+                    pos: [1.0, -1.0],
+                },
+                Vertex {
+                    id: 5,
+                    pos: [1.0, 1.0],
+                },
+                Vertex {
+                    id: 6,
+                    pos: [2.0, -1.0],
+                },
+                Vertex {
+                    id: 7,
+                    pos: [3.0, -1.0],
+                },
+                Vertex {
+                    id: 8,
+                    pos: [3.0, 1.0],
+                },
+                Vertex {
+                    id: 9,
+                    pos: [2.0, 1.0],
+                },
+                Vertex {
+                    id: 10,
+                    pos: [4.0, -1.0],
+                },
+                Vertex {
+                    id: 11,
+                    pos: [4.0, 1.0],
+                },
+            ],
+            vec![
+                Edge {
+                    id: 0,
+                    v0: 1,
+                    v1: 2,
+                    kind: EdgeKind::Aux,
+                },
+                Edge {
+                    id: 10,
+                    v0: 7,
+                    v1: 8,
+                    kind: EdgeKind::Aux,
+                },
+            ],
+        );
+        let faces = vec![
+            Face {
+                id: 0,
+                vertices: vec![0, 1, 2, 3],
+                edges: vec![1, 0, 2, 3],
+            },
+            Face {
+                id: 1,
+                vertices: vec![1, 4, 5, 2],
+                edges: vec![4, 5, 6, 0],
+            },
+            Face {
+                id: 2,
+                vertices: vec![6, 7, 8, 9],
+                edges: vec![11, 10, 12, 13],
+            },
+            Face {
+                id: 3,
+                vertices: vec![7, 10, 11, 8],
+                edges: vec![14, 15, 16, 10],
+            },
+        ];
+        let placements = HashMap::from([
+            (0, Isometry2::identity()),
+            (1, Isometry2::identity()),
+            (2, translated(-3.0)),
+            (3, translated(-3.0)),
+        ]);
+
+        let valid = validate_precrease_layer_order(&cp, &faces, &placements, &[0, 1, 2, 3])
+            .expect("collinear flat seams can be validated");
+        assert_eq!(valid.counts.continuous, 1);
+        assert!(
+            valid.is_valid(),
+            "corresponding order is physical: {valid:?}"
+        );
+
+        let reversed = validate_precrease_layer_order(&cp, &faces, &placements, &[0, 2, 3, 1])
+            .expect("one-sided flat-seam reversal can be diagnosed");
+        assert_eq!(reversed.counts.continuous, 1);
+        assert_eq!(reversed.violations.continuous, vec![(0, 1, 2, 3)]);
+        assert!(!reversed.is_valid());
     }
 }

@@ -594,6 +594,238 @@ fn drawing_order_does_not_change_the_cp() {
     assert_eq!(validate(&cp2), Vec::<String>::new());
 }
 
+/// 単一hard折りを平坦側から追った経路と、利用者へ返すpolygonが別の閉包枝に
+/// 着地しても、表示用の重なり順位は返却polygon自身の上下と一致しなければならない。
+/// 終点だけでは `+180°` と `-180°` の途中の姿勢を区別できないため、179.99°の
+/// 実深度も固定し、179.999°では面法線から独立に期待上下を決める。
+#[test]
+fn yakko_single_hard_surface_rank_matches_returned_branch() {
+    const CHECKPOINTS: [f64; 22] = [
+        9.0, 19.0, 29.0, 39.0, 49.0, 59.0, 69.0, 79.0, 90.0, 101.0, 111.0, 121.0, 131.0, 141.0,
+        151.0, 161.0, 171.0, 179.0, 179.5, 179.9, 179.99, 179.999,
+    ];
+    // 179.99°の実測最小深度2.0568902387e-5に対して約8割の余裕付き境目。
+    const PATH_DEPTH_MIN: f64 = 1.6e-5;
+    // 179.999°の返却frame実測最小深度2.0568902491e-6に対して約8割の境目。
+    const RETURNED_DEPTH_MIN: f64 = 1.6e-6;
+
+    fn polygon(frame: &Frame3D, face_id: u32) -> &[[f64; 3]] {
+        &frame
+            .faces
+            .iter()
+            .find(|face| face.face == face_id)
+            .unwrap_or_else(|| panic!("面{face_id}が返却frameにない"))
+            .polygon
+    }
+
+    fn face_normal(points: &[[f64; 3]]) -> DVec3 {
+        let mut normal = DVec3::ZERO;
+        for index in 0..points.len() {
+            normal +=
+                DVec3::from(points[index]).cross(DVec3::from(points[(index + 1) % points.len()]));
+        }
+        normal.normalize()
+    }
+
+    fn canonical_up(normal: DVec3) -> DVec3 {
+        let absolute = normal.abs();
+        let component = if absolute.x >= absolute.y && absolute.x >= absolute.z {
+            normal.x
+        } else if absolute.y >= absolute.z {
+            normal.y
+        } else {
+            normal.z
+        };
+        if component < 0.0 { -normal } else { normal }
+    }
+
+    fn centroid(points: &[[f64; 3]]) -> DVec3 {
+        points
+            .iter()
+            .map(|point| DVec3::from(*point))
+            .sum::<DVec3>()
+            / points.len() as f64
+    }
+
+    fn pair_depth(frame: &Frame3D, reference: u32, other: u32) -> (f64, DVec3, DVec3) {
+        let reference_points = polygon(frame, reference);
+        let other_points = polygon(frame, other);
+        let normal = face_normal(reference_points);
+        let up = canonical_up(normal);
+        (
+            (centroid(other_points) - centroid(reference_points)).dot(up),
+            normal,
+            up,
+        )
+    }
+
+    fn max_vertex_delta(left: &Frame3D, right: &Frame3D) -> f64 {
+        left.faces.iter().fold(0.0_f64, |maximum, left_face| {
+            let right_points = polygon(right, left_face.face);
+            assert_eq!(left_face.polygon.len(), right_points.len());
+            left_face.polygon.iter().zip(right_points).fold(
+                maximum,
+                |maximum, (left_point, right_point)| {
+                    maximum.max((DVec3::from(*left_point) - DVec3::from(*right_point)).length())
+                },
+            )
+        })
+    }
+
+    let cp = yakko_cp();
+    let faces = extract_faces(&cp);
+    let mut rank_violations = Vec::new();
+
+    // (ヒンジ, BFS基準面, 相手面, 平坦側179.99°で相手が上か)
+    for (hinge, reference, other, path_other_is_above) in [(19, 1, 4, true), (51, 14, 16, false)] {
+        let owners = faces
+            .iter()
+            .filter(|face| face.edges.contains(&hinge))
+            .map(|face| face.id)
+            .collect::<Vec<_>>();
+        assert_eq!(owners, vec![reference, other], "ヒンジ{hinge}の所有面");
+
+        let mut warm = None;
+        let mut before_flat = None;
+        let mut flat_path_endpoint = None;
+        for checkpoint in CHECKPOINTS {
+            let solved = solve(
+                &cp,
+                &faces,
+                &[Driver {
+                    hinge,
+                    target_angle_deg: checkpoint,
+                }],
+                warm.as_ref(),
+            );
+            assert!(solved.converged, "ヒンジ{hinge} {checkpoint}°が未収束");
+            assert!(
+                (solved.angles[&hinge] - checkpoint).abs() < 1e-9,
+                "ヒンジ{hinge} {checkpoint}°のhard誤差={:e}",
+                solved.angles[&hinge] - checkpoint
+            );
+            assert!(
+                self_intersection_pairs(&solved.frame).is_empty(),
+                "ヒンジ{hinge} {checkpoint}°のflat-pathが自己交差"
+            );
+            if checkpoint == 179.99 {
+                before_flat = Some(solved.frame.clone());
+            }
+            if checkpoint == 179.999 {
+                flat_path_endpoint = Some(solved.frame.clone());
+            }
+            warm = Some(solved.angles);
+        }
+        let before_flat = before_flat.expect("179.99°の経路frame");
+        let flat_path_endpoint = flat_path_endpoint.expect("179.999°の経路frame");
+        let (path_depth, _, _) = pair_depth(&before_flat, reference, other);
+        assert!(
+            path_depth.abs() > PATH_DEPTH_MIN && (path_depth > 0.0) == path_other_is_above,
+            "ヒンジ{hinge} 179.99°の途中深度={path_depth:.17e}"
+        );
+
+        let motion = solve_motion_with_contact_options(
+            &cp,
+            &faces,
+            &[Driver {
+                hinge,
+                target_angle_deg: 179.999,
+            }],
+            None,
+            None,
+            MotionContactOptions {
+                detect: true,
+                prevent: false,
+            },
+        );
+        let returned = &motion.result;
+        assert!(
+            motion.surface_order_authoritative,
+            "ヒンジ{hinge}: {:#?}",
+            motion.surface_order
+        );
+        assert!(
+            self_intersection_pairs(&returned.frame).is_empty(),
+            "ヒンジ{hinge}: 返却frameが自己交差"
+        );
+
+        let actual = returned.angles[&hinge];
+        // 返却解をwarmに1段だけ戻し、返却枝そのものの途中姿勢でも上下を測る。
+        let returned_branch_before = solve(
+            &cp,
+            &faces,
+            &[Driver {
+                hinge,
+                target_angle_deg: 179.99,
+            }],
+            Some(&returned.angles),
+        );
+        assert!(
+            returned_branch_before.converged
+                && (returned_branch_before.angles[&hinge] - 179.99).abs() < 1e-9,
+            "ヒンジ{hinge}: 返却枝を179.99°へ戻せない"
+        );
+        assert!(
+            self_intersection_pairs(&returned_branch_before.frame).is_empty(),
+            "ヒンジ{hinge}: 返却枝179.99°が自己交差"
+        );
+        let (returned_branch_depth, returned_branch_normal, returned_branch_up) =
+            pair_depth(&returned_branch_before.frame, reference, other);
+        let returned_branch_other_is_above = returned_branch_normal.dot(returned_branch_up) < 0.0;
+
+        let (returned_depth, returned_normal, returned_up) =
+            pair_depth(&returned.frame, reference, other);
+        let oracle_other_is_above = (actual < 0.0) == (returned_normal.dot(returned_up) > 0.0);
+        assert!(
+            returned_depth.abs() > RETURNED_DEPTH_MIN
+                && (returned_depth > 0.0) == oracle_other_is_above,
+            "ヒンジ{hinge}: 独立法線oracle={oracle_other_is_above} 返却実深度={returned_depth:.17e}"
+        );
+        assert!(
+            returned_branch_depth.abs() > PATH_DEPTH_MIN
+                && (returned_branch_depth > 0.0) == returned_branch_other_is_above
+                && returned_branch_other_is_above == oracle_other_is_above,
+            "ヒンジ{hinge}: 返却枝179.99° depth={returned_branch_depth:.17e} \
+             other_above={returned_branch_other_is_above} final_oracle={oracle_other_is_above}"
+        );
+
+        let reference_rank = returned
+            .frame
+            .faces
+            .iter()
+            .find(|face| face.face == reference)
+            .expect("基準面")
+            .surface_rank;
+        let other_rank = returned
+            .frame
+            .faces
+            .iter()
+            .find(|face| face.face == other)
+            .expect("相手面")
+            .surface_rank;
+        let ranked_other_is_above = other_rank > reference_rank;
+        let branch_delta = max_vertex_delta(&flat_path_endpoint, &returned.frame);
+        // 修正前の枝差は0.022885/0.034523。正しい修正が枝自体を一致させる場合も
+        // あるため合格条件にはせず、rank不一致時の原因診断値としてだけ残す。
+        if ranked_other_is_above != oracle_other_is_above {
+            rank_violations.push(format!(
+                "hinge={hinge} owners=({reference},{other}) actual={actual:.17} \
+                 ranks=({reference_rank},{other_rank}) oracle_other_above={oracle_other_is_above} \
+                 returned_depth={returned_depth:.17e} path179.99_depth={path_depth:.17e} \
+                 returned_branch179.99_depth={returned_branch_depth:.17e} \
+                 flat_path_returned_delta={branch_delta:.17e} diagnostics={:#?}",
+                motion.surface_order
+            ));
+        }
+    }
+
+    assert!(
+        rank_violations.is_empty(),
+        "返却polygonと表示用surface_rankの上下が不一致:\n{}",
+        rank_violations.join("\n")
+    );
+}
+
 /// 負のテスト: 「折った状態の折り線(内側の正方形)だけ」を展開図に重ねた
 /// 素朴なCPは、1回目で裏返った隅の層を貫く延長区間が欠けるため、内部頂点Nの
 /// 扇形が90°/45°/180°/45°となり川崎の定理を満たさない=平坦折り不能。

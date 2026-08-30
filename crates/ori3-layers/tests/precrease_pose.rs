@@ -261,11 +261,11 @@ fn every_step_of_the_bird_base_folds_without_passing_paper_through_itself() {
                 "手{up_to} t={t:.2}: 面が欠けた"
             );
             assert!(
-                replayed
-                    .frame
-                    .faces
+                replayed.frame.faces.iter().all(|f| f
+                    .polygon
                     .iter()
-                    .all(|f| f.polygon.iter().flatten().all(|v| v.is_finite())),
+                    .flatten()
+                    .all(|v| v.is_finite())),
                 "手{up_to} t={t:.2}: 座標が有限でない"
             );
             let pairs = self_intersection_pairs(&replayed.frame);
@@ -372,8 +372,7 @@ fn zz_scan_single_squash_poses() {
     );
     let (_, state) = state_of(&doc);
     let bottom = vec![state.order[0]];
-    let before_kinds: Vec<(u32, EdgeKind)> =
-        doc.cp.edges.iter().map(|e| (e.id, e.kind)).collect();
+    let before_kinds: Vec<(u32, EdgeKind)> = doc.cp.edges.iter().map(|e| (e.id, e.kind)).collect();
     apply(
         &mut doc,
         squash,
