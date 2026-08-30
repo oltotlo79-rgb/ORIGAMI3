@@ -2,7 +2,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash|PowerShell",
+        "matcher": "mcp__codex__codex|mcp__codex__codex-reply|Agent|SendMessage",
         "hooks": [
           {
             "type": "command",
@@ -14,7 +14,7 @@
               "-ExecutionPolicy",
               "Bypass",
               "-File",
-              "${CLAUDE_PROJECT_DIR}/.claude/hooks/block-direct-cargo-npm.ps1"
+              "${CLAUDE_PROJECT_DIR}/scripts/hooks/require-report-log.ps1"
             ],
             "timeout": 5
           }
