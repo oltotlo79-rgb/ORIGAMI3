@@ -11,6 +11,11 @@
 
 use std::collections::BTreeSet;
 
+use ori3_layers::flat_state::FlatState;
+use ori3_layers::precrease_collapse::{
+    PRECREASE_ORDER_UNDETERMINED_WARNING_PREFIX, PrecreaseCollapseInput,
+    collapse_precrease_network_for_operation, validate_precrease_layer_order,
+};
 use ori3_model::{CreasePattern, Document, EdgeKind, Paper};
 use ori3_propose::enumerate::{FoldSession, MAX_SEAM_GAP, MoveReport, PoseScan, Unverified};
 use ori3_propose::{GenericPlanner, VerifiedMove, crease_lines};
@@ -84,45 +89,47 @@ fn creases_of(cp: &CreasePattern) -> usize {
 ///
 /// 実測(debugビルド、`PoseScan::DEFAULT` の21点):
 ///
-/// | 標本 | 折り目 | まとまり | 直線 | 確かめる前(まとまり) | 確かめる前(直線) | 確かめた後 | 確かめられなかった |
-/// |---|---:|---:|---:|---:|---:|---:|---:|
-/// | 折り鶴 | 43 | 34 | 27 | 18 | 17 | 1 | 16 |
-/// | やっこさん | 20 | 16 | 8 | 12 | 8 | 8 | 0 |
+/// | 標本 | 折り目 | まとまり | 直線 | 確かめる前(まとまり) | 確かめる前(直線) | 確かめた後(見積もり内) | 見積もり外で折れた | 確かめられなかった |
+/// |---|---:|---:|---:|---:|---:|---:|---:|---:|
+/// | 折り鶴 | 43 | 34 | 27 | 18 | 17 | 0 | 1 | 17 |
+/// | やっこさん | 20 | 16 | 8 | 12 | 8 | 8 | 0 | 0 |
 ///
 /// 「確かめる前(まとまり)」は作業18の [`GenericPlanner`] がそのまま数えた本数で、
 /// 「確かめる前(直線)」は同じ候補を、実際に折る単位(同じ直線に乗る折り目は
-/// 一緒に閉じる)へまとめ直した本数である。**確かめた後の数と同じ単位で
-/// 引き算できるのは後者**で、減った分が見積もりに含まれていた折れない手にあたる。
+/// 一緒に閉じる)へまとめ直した本数である。**見積もり内で確かめた後の数と同じ
+/// 集合で引き算できるのは後者**で、減った分が見積もりに含まれていた折れない手に
+/// あたる。見積もり外で物理検査を通った手は別の列に出し、この会計へ混ぜない。
 #[test]
 fn moves_before_and_after_checking_are_counted_for_crane_and_yakko() {
     println!(
-        "| 標本 | 折り目 | まとまり | 直線 | 確かめる前(まとまり) | 確かめる前(直線) | 確かめた後 | 確かめられなかった |"
+        "| 標本 | 折り目 | まとまり | 直線 | 確かめる前(まとまり) | 確かめる前(直線) | 確かめた後(見積もり内) | 見積もり外で折れた | 確かめられなかった |"
     );
-    println!("|---|---:|---:|---:|---:|---:|---:|---:|");
+    println!("|---|---:|---:|---:|---:|---:|---:|---:|---:|");
     for (name, doc) in samples() {
         let session = FoldSession::new(&doc).expect("折り始められない");
         let report = session.verified_moves(PoseScan::DEFAULT);
         println!(
-            "| {name} | {} | {} | {} | {} | {} | {} | {} |",
+            "| {name} | {} | {} | {} | {} | {} | {} | {} | {} |",
             creases_of(&doc.cp),
             session.crease_lines().len(),
             session.fold_lines().len(),
             report.proposed_crease_lines,
             report.proposed_fold_lines,
-            report.verified.len(),
+            report.verified_within_estimate.len(),
+            report.verified_outside_estimate.len(),
             report.unverified(),
         );
         assert_eq!(
             report.proposed_fold_lines,
-            report.verified.len() + report.unverified(),
+            report.verified_within_estimate.len() + report.unverified(),
             "{name}: 確かめる前の数が、確かめた後と確かめられなかった数の合計に一致しない"
         );
         assert!(
-            !report.verified.is_empty(),
+            report.all_verified().next().is_some(),
             "{name}: 確かめられた手が1つも無い"
         );
         assert!(
-            report.verified.len() <= report.proposed_fold_lines,
+            report.verified_within_estimate.len() <= report.proposed_fold_lines,
             "{name}: 確かめた後の手が、確かめる前より増えている"
         );
     }
@@ -140,7 +147,7 @@ fn moves_before_and_after_checking_are_counted_for_crane_and_yakko() {
         }
         println!(
             "   見積もりの外で折れた手: {}件",
-            report.verified_outside_estimate
+            report.verified_outside_estimate.len()
         );
     }
 }
@@ -155,7 +162,7 @@ fn every_verified_move_really_folds_without_tearing_or_passing_through() {
     for (name, doc) in samples() {
         let session = FoldSession::new(&doc).expect("折り始められない");
         let report = session.verified_moves(PoseScan::DEFAULT);
-        for mv in &report.verified {
+        for mv in report.all_verified() {
             // 列挙のときの値。
             assert!(
                 mv.max_seam_gap < MAX_SEAM_GAP,
@@ -233,7 +240,7 @@ fn moves_that_could_not_be_checked_are_never_returned_as_foldable() {
     for (name, doc) in samples() {
         let session = FoldSession::new(&doc).expect("折り始められない");
         let report = session.verified_moves(PoseScan::DEFAULT);
-        let verified: BTreeSet<usize> = report.verified.iter().map(|m| m.id).collect();
+        let verified: BTreeSet<usize> = report.all_verified().map(|m| m.id).collect();
         for r in &report.rejected {
             assert!(
                 !verified.contains(&r.id),
@@ -243,7 +250,7 @@ fn moves_that_could_not_be_checked_are_never_returned_as_foldable() {
         }
         assert_eq!(
             verified.len(),
-            report.verified.len(),
+            report.verified_within_estimate.len() + report.verified_outside_estimate.len(),
             "{name}: 同じ手が2回返っている"
         );
         total_rejected += report.unverified();
@@ -315,7 +322,7 @@ fn the_same_crease_pattern_gives_the_same_verified_moves_three_times() {
         }
         println!(
             "{name}: {RUNS}回とも同じ(確かめた後 {} 件 / 確かめられなかった {} 件)",
-            runs[0].verified.len(),
+            runs[0].verified_within_estimate.len(),
             runs[0].unverified()
         );
     }
@@ -384,7 +391,7 @@ fn verified_moves_can_be_folded_one_after_another() {
         let mut worst_gap: f64 = 0.0;
         while applied < 4 {
             let report = session.verified_moves(PoseScan::DEFAULT);
-            let Some(mv) = report.verified.first().cloned() else {
+            let Some(mv) = report.all_verified().next().cloned() else {
                 break;
             };
             worst_gap = worst_gap.max(mv.max_seam_gap);
@@ -449,7 +456,7 @@ fn the_two_mirror_image_lines_of_yakko_both_fold() {
     let line = [[0.0, 0.75], [1.0, 0.75]];
     for wanted in [[[0.0, 0.25], [1.0, 0.25]], line] {
         assert!(
-            report.verified.iter().any(|mv| {
+            report.all_verified().any(|mv| {
                 let on = |point: [f64; 2]| (point[1] - wanted[0][1]).abs() <= 1e-9;
                 on(mv.line[0]) && on(mv.line[1])
             }),
@@ -496,6 +503,172 @@ fn the_two_mirror_image_lines_of_yakko_both_fold() {
     assert_eq!(pairs, 0, "普通の折り操作でもめり込んだ: {pairs}件");
 }
 
+/// 2本を同時に閉じる操作を、all-Auxの「単一」book fold既定へ誤分類しない。
+///
+/// 縦横2本は互いに異なる鏡映を同時に要求するため、1つのmoved packetを外側へ回す
+/// single book foldではない。従ってoperation-aware置換の入口へ入れず、一般solverが
+/// 残した6組の未決定を警告し、表示用tie-breakを保存oracleへ昇格させない。
+#[test]
+fn crossing_multi_line_collapse_does_not_receive_single_book_fold_replacement() {
+    let mut document = square_document();
+    let lines = [[[0.5, 0.0], [0.5, 1.0]], [[0.0, 0.5], [1.0, 0.5]]];
+    for line in lines {
+        ori3_cp::insert_segment(&mut document.cp, line[0], line[1], EdgeKind::Aux);
+    }
+    let faces = ori3_cp::extract_faces(&document.cp);
+    let state = FlatState::initial(&document.cp, &faces);
+    let result = collapse_precrease_network_for_operation(
+        &mut document.cp,
+        &faces,
+        &state,
+        &PrecreaseCollapseInput {
+            lines: lines.to_vec(),
+            target_layers: None,
+        },
+    )
+    .expect("交差2線の同時collapseを診断できない");
+    let collapsed_faces = ori3_cp::extract_faces(&document.cp);
+
+    println!(
+        "STAGE6_NON_BOOK_MULTI_LINE requested_lines={} faces={} unresolved=6 warnings={} saved_order={}",
+        lines.len(),
+        collapsed_faces.len(),
+        result.warnings.len(),
+        result.step.layer_order.is_some(),
+    );
+    assert_eq!(lines.len(), 2);
+    assert_eq!(collapsed_faces.len(), 4);
+    assert_eq!(
+        result.warnings,
+        vec![format!(
+            "{PRECREASE_ORDER_UNDETERMINED_WARNING_PREFIX}6組あります"
+        )]
+    );
+    assert!(
+        result.step.layer_order.is_none(),
+        "非single book foldの表示順を保存oracleへ昇格させた"
+    );
+}
+
+/// 単一book foldの向きが非0同数なら、表示用tie-breakを物理的な権威へ昇格させない。
+///
+/// 旧候補16は `x = 0.5` 上で Mountain 2 / Valley 2。settle後CPを読むと候補順が
+/// 自己認証されるため、必ず操作**前**CPとcollapseが返した配置・順を読み合わせる。
+/// やっこさんのstrict majorityを操作制約へ置換しても、この2/37違反・破棄5組は残る。
+#[test]
+fn strict_proposal_gate_rejects_tied_crane_candidate_16_by_input_layer_constraints() {
+    let doc = crane();
+    let session = FoldSession::new(&doc).expect("折り鶴を折り始められない");
+    let candidate = session
+        .fold_lines()
+        .iter()
+        .find(|line| {
+            let on_axis = |point: [f64; 2]| (point[0] - 0.5).abs() <= 1e-12;
+            on_axis(line.a) && on_axis(line.b)
+        })
+        .expect("折り鶴の x = 0.5 候補が無い");
+    assert_eq!(candidate.id, 16, "旧候補16の入力fixtureが変わった");
+
+    let input_cp = doc.cp.clone();
+    let mountain_votes = candidate
+        .edges
+        .iter()
+        .filter(|edge_id| {
+            input_cp
+                .edges
+                .iter()
+                .find(|edge| edge.id == **edge_id)
+                .is_some_and(|edge| edge.kind == EdgeKind::Mountain)
+        })
+        .count();
+    let valley_votes = candidate
+        .edges
+        .iter()
+        .filter(|edge_id| {
+            input_cp
+                .edges
+                .iter()
+                .find(|edge| edge.id == **edge_id)
+                .is_some_and(|edge| edge.kind == EdgeKind::Valley)
+        })
+        .count();
+    assert_eq!((mountain_votes, valley_votes), (2, 2));
+    let input_faces = ori3_cp::extract_faces(&input_cp);
+    let input_state = FlatState::initial(&input_cp, &input_faces);
+    let mut collapsed_cp = input_cp.clone();
+    let collapsed = collapse_precrease_network_for_operation(
+        &mut collapsed_cp,
+        &input_faces,
+        &input_state,
+        &PrecreaseCollapseInput {
+            lines: vec![[candidate.a, candidate.b]],
+            target_layers: None,
+        },
+    )
+    .expect("旧候補16の診断用collapse自体が失敗した");
+    let collapsed_faces = ori3_cp::extract_faces(&collapsed_cp);
+    let validation = validate_precrease_layer_order(
+        &input_cp,
+        &collapsed_faces,
+        &collapsed.state.placements,
+        &collapsed.state.order,
+    )
+    .expect("旧候補16の入力CP一般制約を検査できない");
+    let expected_faces = collapsed_faces
+        .iter()
+        .map(|face| face.id)
+        .collect::<BTreeSet<_>>();
+    let ordered_faces = collapsed
+        .state
+        .order
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    assert_eq!(collapsed.state.order.len(), collapsed_faces.len());
+    assert_eq!(ordered_faces, expected_faces);
+
+    let checked = validation.counts.adjacent_folds
+        + validation.counts.taco_tortilla
+        + validation.counts.taco_taco
+        + validation.counts.continuous;
+    let violations = validation.violations.adjacent_folds.len()
+        + validation.violations.taco_tortilla.len()
+        + validation.violations.taco_taco.len()
+        + validation.violations.continuous_crossings.len()
+        + validation.violations.continuous.len();
+    println!(
+        "STAGE6_CRANE_TIED_BOOK_FOLD id={} mountain_votes={mountain_votes} valley_votes={valley_votes} violations={violations}/{checked} adjacent={}/{} taco_tortilla={} taco_taco={} continuous_crossings={} continuous={} discarded={} accepted={} warnings={} saved_order={}",
+        candidate.id,
+        validation.violations.adjacent_folds.len(),
+        validation.counts.adjacent_folds,
+        validation.violations.taco_tortilla.len(),
+        validation.violations.taco_taco.len(),
+        validation.violations.continuous_crossings.len(),
+        validation.violations.continuous.len(),
+        validation.discarded_relations.len(),
+        validation.is_valid(),
+        collapsed.warnings.len(),
+        collapsed.step.layer_order.is_some(),
+    );
+
+    assert_eq!(violations, 2, "旧候補16の一般制約違反数が変わった");
+    assert_eq!(checked, 37, "旧候補16の一般制約総数が変わった");
+    assert_eq!(
+        validation.discarded_relations.len(),
+        5,
+        "旧候補16の破棄関係数が変わった"
+    );
+    assert!(
+        !validation.is_valid(),
+        "提案関門と同じis_valid述語が旧候補16を採用した"
+    );
+    assert!(collapsed.step.layer_order.is_none());
+    assert!(matches!(
+        session.check_move(candidate.id, PoseScan::DEFAULT),
+        Some(Err(Unverified::CannotCollapse))
+    ));
+}
+
 /// 作業18の見積もりが、実際に折れる手を取りこぼしてもいることの記録。
 ///
 /// 見積もりは「上限側」とだけ言われてきたが、やっこさんでは規則が
@@ -512,11 +685,11 @@ fn the_estimate_from_task_18_is_neither_an_upper_nor_a_lower_bound() {
             proposed, report.proposed_crease_lines,
             "{name}: 作業18の数え方と食い違っている"
         );
-        outside_total += report.verified_outside_estimate;
+        outside_total += report.verified_outside_estimate.len();
         println!(
             "{name}: 見積もり {proposed} 本(まとまり) / 見積もりの中で折れた {} 手 / 見積もりの外で折れた {} 手",
-            report.verified.len(),
-            report.verified_outside_estimate
+            report.verified_within_estimate.len(),
+            report.verified_outside_estimate.len()
         );
     }
     assert!(

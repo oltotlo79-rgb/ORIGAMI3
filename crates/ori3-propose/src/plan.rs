@@ -25,8 +25,8 @@
 //! 実際に折れるかを確かめるには `ori3-layers` の折り操作が要る(作業21以降)。
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::Instant;
 
+use ori3_model::clock::Instant;
 use ori3_model::{CreasePattern, EdgeId, EdgeKind, VertexId};
 
 /// 同じ直線・同じ点とみなす許容誤差。展開図の座標は長辺=1.0に正規化されており、

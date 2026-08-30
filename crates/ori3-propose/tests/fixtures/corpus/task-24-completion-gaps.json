@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "measurement_basis": "search_to_finish + fresh FoldSession replay + verify_search_outcome at 21 poses per step + pre-step CP layer-order validation",
+  "samples": [
+    {
+      "sample_id": "crane",
+      "gaps": {
+        "count": 0.0,
+        "length": 1.1427326097215147,
+        "width": 1.3372056693553585,
+        "position": 0.46687177208734676
+      }
+    },
+    {
+      "sample_id": "yakko",
+      "gaps": {
+        "count": 0.0,
+        "length": 6.938893903907228e-16,
+        "width": 0.4142135623730946,
+        "position": 1.1043877604312377e-15
+      }
+    },
+    {
+      "sample_id": "bird-base",
+      "gaps": {
+        "count": 0.0,
+        "length": 0.7071067811865483,
+        "width": 1.7320508075688705,
+        "position": 0.48296291314453405
+      }
+    }
+  ]
+}

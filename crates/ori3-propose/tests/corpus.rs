@@ -14,10 +14,10 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use ori3_model::{AlignmentTarget, CreasePattern, Document, FoldStep, Paper};
 use ori3_propose::{
-    CompletionTolerance, FinishGaps, FinishTarget, FoldGoal, FoldSession, GapWeights, LeafSite,
-    Packing, PoseScan, SearchAbort, SearchBudget, SearchCancellation, SearchControl,
-    SearchWatchdog, Skeleton, TipSite, VerifiedPlan, body_on_paper, generate, pack,
-    search_to_completion, search_to_completion_with_control, verify_search_completion,
+    body_on_paper, generate, pack, search_to_completion, search_to_completion_with_control,
+    verify_search_completion, CompletionTolerance, FinishGaps, FinishTarget, FoldGoal, FoldSession,
+    GapWeights, LeafSite, Packing, PoseScan, SearchAbort, SearchBudget, SearchCancellation,
+    SearchControl, SearchWatchdog, Skeleton, TipSite, VerifiedPlan,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -911,6 +911,7 @@ fn calculate_candidate(
                 material: site.vertex.map_or(site.circle.center, |vertex| vertex.pos),
             })
             .collect(),
+        layer_target: None,
     };
     let budget = SearchBudget {
         max_states: runner.search_budget.max_states,
@@ -1488,6 +1489,13 @@ fn distance_relation(recorded: Option<f64>, observed: Option<f64>, tolerance: f6
 const MAX_DEBUG_CASE_MILLIS: u64 = 90_000;
 const MAX_RELEASE_CASE_MILLIS: u64 = 10_000;
 const MAX_RELEASE_CORPUS_MILLIS: u64 = 300_000;
+
+// 2026-08-26統括承認: five-run evidenceの最大case P95は39,687msで
+// 50,000ms上限の79.374%、corpus P95は474,817msで594,000ms上限の
+// 79.936%。どちらも実測の約8割に収まる余裕を取った境目である。
+const STAGE_3D_RELEASE_CASE_GATE_MILLIS: u64 = 50_000;
+const STAGE_3D_RELEASE_CORPUS_GATE_MILLIS: u64 = 594_000;
+const STAGE_3D_GATE_STATUS: &str = "approved";
 
 struct ObservedCase {
     fixture_checksum: String,
@@ -2356,12 +2364,18 @@ fn collect_stage_3c_release_measurements() {
 ///
 /// `ORI3_CORPUS_CASE`で明示した1件だけを壁時計なしの機能runnerへ通し、正本候補を
 /// JSONへ出す。機能測定の経過時間を製品性能値へ混ぜず、既存の`time_budget`は保つ。
-/// fixtureへは書かない。移行中は旧測定commandとの互換のため
-/// `ORI3_CORPUS_TIME_FREE=1`も受け付けるが、未設定時と同じ機能runnerになる。
+/// fixtureへは書かない。`ORI3_CORPUS_VALIDATE_REGENERATION_SOURCE=1`は、full再生成を
+/// 始めずにcanonical pairの再生成元revisionだけをread-onlyで検査する。
+/// 移行中は旧測定commandとの互換のため`ORI3_CORPUS_TIME_FREE=1`も受け付けるが、
+/// 未設定時と同じ機能runnerになる。
 #[test]
 #[ignore = "3-B baselineの明示的な再生成専用"]
 fn regenerate_one_corpus_baseline() {
     let _guard = corpus_run_guard();
+    if std::env::var("ORI3_CORPUS_VALIDATE_REGENERATION_SOURCE").as_deref() == Ok("1") {
+        assert_current_corpus_regeneration_source_revision();
+        return;
+    }
     if std::env::var("ORI3_REGENERATE_CORPUS_FROM_EVIDENCE").as_deref() == Ok("1") {
         if cfg!(debug_assertions) {
             panic!("corpus正本再生成はrelease evidenceでだけ実行する");
@@ -2964,31 +2978,23 @@ fn manifest_materializes_thirty_stratified_cases_without_changing_the_plan() {
         manifest.classification_contract.required_evidence_field,
         "classification_basis"
     );
-    assert!(
-        manifest
-            .classification_contract
-            .symmetry
-            .contains("rooted-tree")
-    );
+    assert!(manifest
+        .classification_contract
+        .symmetry
+        .contains("rooted-tree"));
     assert!(manifest.classification_contract.simple.contains("ordinary"));
-    assert!(
-        manifest
-            .classification_contract
-            .compound
-            .contains("compound")
-    );
-    assert!(
-        manifest
-            .case_aggregation
-            .completion
-            .contains("any-candidate")
-    );
-    assert!(
-        manifest
-            .case_aggregation
-            .partial
-            .contains("lowest-final-weighted-gap")
-    );
+    assert!(manifest
+        .classification_contract
+        .compound
+        .contains("compound"));
+    assert!(manifest
+        .case_aggregation
+        .completion
+        .contains("any-candidate"));
+    assert!(manifest
+        .case_aggregation
+        .partial
+        .contains("lowest-final-weighted-gap"));
     assert_eq!(manifest.case_aggregation.safety_scope, "all-returned-plans");
     assert_eq!(
         manifest.case_aggregation.no_plan,
@@ -3230,13 +3236,11 @@ fn manifest_materializes_thirty_stratified_cases_without_changing_the_plan() {
     );
     assert_eq!(global_count(&|slot| slot.anchor), 4);
     assert_eq!(global_count(&|slot| !slot.anchor), 26);
-    assert!(
-        manifest
-            .planned_slots
-            .iter()
-            .filter(|slot| !slot.anchor)
-            .all(|slot| slot.case_id.starts_with("leaves-"))
-    );
+    assert!(manifest
+        .planned_slots
+        .iter()
+        .filter(|slot| !slot.anchor)
+        .all(|slot| slot.case_id.starts_with("leaves-")));
     assert_eq!(manifest.cases.len(), 31);
     let mut materialized_slots = BTreeSet::new();
     let mut materialized_structures = BTreeSet::new();
@@ -4724,14 +4728,12 @@ fn stage_3c_performance_evidence(
         values: outliers,
     };
     let reference_p95 = performance.corpus_p95_millis;
-    let (raw_gate_millis, proposed_gate_seconds, proposed_gate_millis) =
-        stage_3c_gate_from_p95(reference_p95);
+    let (raw_gate_millis, _, _) = stage_3c_gate_from_p95(reference_p95);
     let case_reference_p95 = case_p95_values
         .into_iter()
         .max()
         .expect("30 case P95 values");
-    let (case_raw_gate_millis, proposed_case_gate_seconds, proposed_case_gate_millis) =
-        stage_3c_gate_from_p95(case_reference_p95);
+    let (case_raw_gate_millis, _, _) = stage_3c_gate_from_p95(case_reference_p95);
     let gate = Stage3cMetricsGateProposal {
         source: "sum_of_case_elapsed_millis_p95".to_owned(),
         performance_baseline_fraction: manifest
@@ -4739,15 +4741,15 @@ fn stage_3c_performance_evidence(
             .performance_baseline_fraction_of_gate,
         reference_p95_millis: reference_p95,
         raw_gate_millis,
-        proposed_gate_seconds,
-        proposed_gate_millis,
+        proposed_gate_seconds: STAGE_3D_RELEASE_CORPUS_GATE_MILLIS / 1_000,
+        proposed_gate_millis: STAGE_3D_RELEASE_CORPUS_GATE_MILLIS,
         case_source: "maximum_case_p95_millis".to_owned(),
         case_reference_p95_millis: case_reference_p95,
         case_raw_gate_millis,
-        proposed_case_gate_seconds,
-        proposed_case_gate_millis,
-        enforced: false,
-        status: "awaiting_coordinator".to_owned(),
+        proposed_case_gate_seconds: STAGE_3D_RELEASE_CASE_GATE_MILLIS / 1_000,
+        proposed_case_gate_millis: STAGE_3D_RELEASE_CASE_GATE_MILLIS,
+        enforced: true,
+        status: STAGE_3D_GATE_STATUS.to_owned(),
     };
     (cases, performance, outliers, gate)
 }
@@ -4774,16 +4776,12 @@ fn preflight_canonical_pair(
     let candidate_metrics: Stage3cMetricsFixture =
         serde_json::from_slice(metrics_bytes).expect("candidate metrics schema");
     let mut candidate_immutable = BTreeMap::new();
-    assert!(
-        candidate_immutable
-            .insert(manifest_file.to_path_buf(), manifest_bytes.to_vec())
-            .is_none()
-    );
-    assert!(
-        candidate_immutable
-            .insert(metrics_file.to_path_buf(), metrics_bytes.to_vec())
-            .is_none()
-    );
+    assert!(candidate_immutable
+        .insert(manifest_file.to_path_buf(), manifest_bytes.to_vec())
+        .is_none());
+    assert!(candidate_immutable
+        .insert(metrics_file.to_path_buf(), metrics_bytes.to_vec())
+        .is_none());
     for slot in &candidate_manifest.planned_slots {
         let case = candidate_manifest
             .cases
@@ -4939,6 +4937,39 @@ fn write_canonical_pair(
     }
 }
 
+// 旧条件は`old_failure_count == 9` / `old_target_met == 6`だったが、前者は
+// `Instant`による30,000ms打ち切りの結果なので計算機の負荷で変わり、後者もその
+// 打ち切り結果を含む。新条件は、再生成前manifestのUTF-8改行正規化FNV-1a checksum
+// が承認済みcanonical revision `fbd7eb537e31f68b`であり、旧metricsが同じchecksumを
+// mirrorすること。この置換は9/6を0/7へ緩和するものではなく、再生成元を特定する
+// preconditionを壁時計依存の件数から計算機に依らないcanonical pairへ変えるものである。
+const CORPUS_REGENERATION_SOURCE_MANIFEST_CHECKSUM: &str = "fbd7eb537e31f68b";
+
+fn assert_corpus_regeneration_source_revision(manifest_bytes: &[u8], metrics_bytes: &[u8]) {
+    let manifest_checksum = fixture_checksum(manifest_bytes).expect("再生成元manifest checksum");
+    assert_eq!(
+        manifest_checksum, CORPUS_REGENERATION_SOURCE_MANIFEST_CHECKSUM,
+        "corpus再生成元manifestが承認済みcanonical revisionと違う"
+    );
+    let metrics: Stage3cMetricsFixture =
+        serde_json::from_slice(metrics_bytes).expect("再生成元metrics schema");
+    assert_eq!(metrics.fixture_integrity.algorithm, "fnv1a64");
+    assert_eq!(
+        metrics.fixture_integrity.manifest_checksum, manifest_checksum,
+        "corpus再生成元manifestとmetrics mirrorが同じcanonical pairでない"
+    );
+}
+
+fn assert_current_corpus_regeneration_source_revision() {
+    let manifest_bytes = fs::read(manifest_path()).expect("再生成元manifestを読めない");
+    let metrics_bytes = fs::read(stage_3c_metrics_path()).expect("再生成元metricsを読めない");
+    assert_corpus_regeneration_source_revision(&manifest_bytes, &metrics_bytes);
+    println!(
+        "CORPUS_REGENERATION_SOURCE_REVISION manifest_checksum={} metrics_mirror=matched",
+        CORPUS_REGENERATION_SOURCE_MANIFEST_CHECKSUM
+    );
+}
+
 fn regenerate_corpus_from_evidence() {
     let functional_log = required_evidence_path("ORI3_CORPUS_FUNCTIONAL_LOG");
     let baseline_log = required_evidence_path("ORI3_CORPUS_BASELINE_LOG");
@@ -4947,7 +4978,9 @@ fn regenerate_corpus_from_evidence() {
     let metrics_file = stage_3c_metrics_path();
     let original_manifest = fs::read(&manifest_file).expect("旧manifestを読めない");
     let original_metrics = fs::read(&metrics_file).expect("旧metricsを読めない");
-    let (_, mut manifest) = load_manifest().expect("旧manifestを解釈できない");
+    assert_corpus_regeneration_source_revision(&original_manifest, &original_metrics);
+    let mut manifest: CorpusManifest =
+        serde_json::from_slice(&original_manifest).expect("旧manifestを解釈できない");
     let target_contract_before = predeclared_target_contract(&manifest);
     assert_eq!(
         manifest
@@ -4958,8 +4991,6 @@ fn regenerate_corpus_from_evidence() {
         30
     );
     let (old_failure_count, old_target_met) = corpus_status_counts(&manifest);
-    assert_eq!(old_failure_count, 9);
-    assert_eq!(old_target_met, 6);
     let functional_start = collection_start(&functional_log);
     assert_collection_start(
         &functional_start,
@@ -5134,8 +5165,10 @@ fn regenerate_corpus_from_evidence() {
             .time_budget
             .measured_release_elapsed_millis = Some(performance_records[case_index].elapsed_millis);
         case.recorded_current.time_budget.basis = format!(
-            "Stage 3-C product-path performance repetition 1 observed {}ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately.",
-            performance_records[case_index].elapsed_millis
+            "Stage 3-C product-path performance repetition 1 observed {}ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus values remain non-enforced metadata. The separately enforced Stage 3-D gates are {}ms per case and {}ms per corpus P95; the full five-run evidence is stored separately.",
+            performance_records[case_index].elapsed_millis,
+            STAGE_3D_RELEASE_CASE_GATE_MILLIS,
+            STAGE_3D_RELEASE_CORPUS_GATE_MILLIS
         );
     }
     assert_eq!(
@@ -5749,24 +5782,46 @@ fn stage_3c_assert_metrics_fixture(
         gate.reference_p95_millis,
         metrics.performance.corpus_p95_millis
     );
-    let (raw_gate_millis, gate_seconds, gate_millis) =
-        stage_3c_gate_from_p95(gate.reference_p95_millis);
+    let (raw_gate_millis, _, _) = stage_3c_gate_from_p95(gate.reference_p95_millis);
     assert_eq!(gate.raw_gate_millis, raw_gate_millis);
-    assert_eq!(gate.proposed_gate_seconds, gate_seconds);
-    assert_eq!(gate.proposed_gate_millis, gate_millis);
+    assert_eq!(
+        gate.proposed_gate_seconds,
+        STAGE_3D_RELEASE_CORPUS_GATE_MILLIS / 1_000
+    );
+    assert_eq!(
+        gate.proposed_gate_millis,
+        STAGE_3D_RELEASE_CORPUS_GATE_MILLIS
+    );
+    assert!(
+        gate.reference_p95_millis <= STAGE_3D_RELEASE_CORPUS_GATE_MILLIS,
+        "corpus P95 {}ms exceeded the approved {}ms gate",
+        gate.reference_p95_millis,
+        STAGE_3D_RELEASE_CORPUS_GATE_MILLIS
+    );
     assert_eq!(gate.case_source, "maximum_case_p95_millis");
     let case_p95 = case_p95_values
         .into_iter()
         .max()
         .expect("30 case P95 values");
     assert_eq!(gate.case_reference_p95_millis, case_p95);
-    let (case_raw_gate_millis, case_gate_seconds, case_gate_millis) =
-        stage_3c_gate_from_p95(case_p95);
+    let (case_raw_gate_millis, _, _) = stage_3c_gate_from_p95(case_p95);
     assert_eq!(gate.case_raw_gate_millis, case_raw_gate_millis);
-    assert_eq!(gate.proposed_case_gate_seconds, case_gate_seconds);
-    assert_eq!(gate.proposed_case_gate_millis, case_gate_millis);
-    assert!(!gate.enforced);
-    assert_eq!(gate.status, "awaiting_coordinator");
+    assert_eq!(
+        gate.proposed_case_gate_seconds,
+        STAGE_3D_RELEASE_CASE_GATE_MILLIS / 1_000
+    );
+    assert_eq!(
+        gate.proposed_case_gate_millis,
+        STAGE_3D_RELEASE_CASE_GATE_MILLIS
+    );
+    assert!(
+        gate.case_reference_p95_millis <= STAGE_3D_RELEASE_CASE_GATE_MILLIS,
+        "maximum case P95 {}ms exceeded the approved {}ms gate",
+        gate.case_reference_p95_millis,
+        STAGE_3D_RELEASE_CASE_GATE_MILLIS
+    );
+    assert!(gate.enforced);
+    assert_eq!(gate.status, STAGE_3D_GATE_STATUS);
     stage_3c_assert_target_summary(&metrics.target_summary, manifest);
     assert!(
         determinism_mismatch_cases.is_empty() && determinism_recorded_mismatch_cases.is_empty(),

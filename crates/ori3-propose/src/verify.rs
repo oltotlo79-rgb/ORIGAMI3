@@ -348,7 +348,7 @@ pub fn verify_fold_order(
     scan: PoseScan,
 ) -> VerifyReport {
     let start_gaps = finish_gaps(&goal.target, &goal.measure(session.document()));
-    let start_score = weights.score(&start_gaps);
+    let start_score = goal.score(session.document(), &start_gaps, weights);
 
     let mut walk = session.clone();
     let mut steps: Vec<StepCheck> = Vec::new();
@@ -363,7 +363,7 @@ pub fn verify_fold_order(
                 worst_gap = worst_gap.max(mv.max_seam_gap);
                 worst_pairs = worst_pairs.max(mv.penetrations);
                 poses_checked += mv.poses_checked;
-                match walk.apply(&mv) {
+                match walk.apply_strict(&mv) {
                     // 折った後の紙の重なり順を**測り直して**結果に載せる
                     // (作業23が返すことになっている「層矛盾」の項目)。
                     Ok(()) => match layer_warnings(&walk) {
@@ -403,7 +403,7 @@ pub fn verify_fold_order(
         start_gaps,
         start_score,
         final_gaps,
-        final_score: weights.score(&final_gaps),
+        final_score: goal.score(walk.document(), &final_gaps, weights),
     }
 }
 

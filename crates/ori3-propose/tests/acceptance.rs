@@ -3,6 +3,11 @@
 //! 標本は折り鶴・やっこさん・鳥の基本形の3件。完成目標は探索結果から作らず、
 //! 各作品の既存受け入れ手順を最後まで折った参照形から先に固定している。
 
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use ori3_model::{CreasePattern, Document, EdgeKind, Paper};
 use ori3_propose::enumerate::{FoldSession, MAX_SEAM_GAP, PoseScan, Unverified};
 use ori3_propose::finish::{FinishGaps, FinishTarget, TargetTip};
@@ -12,15 +17,18 @@ use ori3_propose::search::{
 };
 use ori3_propose::skeleton::TipPos2d;
 use ori3_propose::verify::{VerifiedPlan, verify_search_completion, verify_search_outcome};
+use serde::{Deserialize, Serialize};
 
 struct Sample {
+    id: &'static str,
     name: &'static str,
     document: Document,
     goal: FoldGoal,
-    measured_task_24: FinishGaps,
 }
 
 const RUNS: usize = 10;
+const TASK24_RECORD_SCHEMA_VERSION: u32 = 1;
+const TASK24_MEASUREMENT_BASIS: &str = "search_to_finish + fresh FoldSession replay + verify_search_outcome at 21 poses per step + pre-step CP layer-order validation";
 
 /// 部分集合候補を加えた実測から、改善量のおよそ80%を恒久に守る境目。
 ///
@@ -28,13 +36,131 @@ const RUNS: usize = 10;
 /// 変更前との差の約20%を回帰余裕として残す。
 const BIRD_WIDTH_REGRESSION_LIMIT: f64 = 0.34;
 
-/// 記録した作業24の小数との照合差。
+/// 記録した作業24のgapとの絶対照合差。
 ///
-/// 完成参照との数値残差は最大`1.77e-15`、完成/未完成を分ける
+/// JSON往復の実測差は`0.0`、完成参照との数値残差は最大`1.77e-15`。完成/未完成を分ける
 /// 最小差は、やっこさんの太さ `0.3106601718 - 0.2485281374 = 0.0621320344`。
 /// `1e-9` は揺れより5桁以上粗く、形の差より7桁以上細い。作業25の完成許容値
 /// ではなく、計算した小数を記録と厳密一致させないためだけの照合差である。
-const MEASUREMENT_TOL: f64 = 1e-9;
+const TASK24_GAP_ABS_TOLERANCE: f64 = 1e-9;
+
+/// 作業24で折り線・保存driverの座標を照合する絶対差。
+///
+/// CIで観測した座標ずれは最大`1.11e-16`であり、`1e-12`は約9,000倍の余裕を持つ。
+/// 一方、別頂点間の実測最短距離`1.29e-3`より9桁細く、別の点を同一視しない。
+const TASK24_COORDINATE_ABS_TOLERANCE: f64 = 1e-12;
+
+/// 作業24で保存driverの平坦終点角を照合する絶対差（度）。
+///
+/// 10回の反復で観測した角度差は`0°`。`PoseScan::DEFAULT`の隣接姿勢距離は
+/// `180° / 20 = 9°`なので、`1e-9°`は別姿勢を混同しない。
+const TASK24_ANGLE_ABS_TOLERANCE_DEGREES: f64 = 1e-9;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Task24CompletionRecord {
+    schema_version: u32,
+    measurement_basis: String,
+    samples: Vec<RecordedTask24Sample>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecordedTask24Sample {
+    sample_id: String,
+    gaps: RecordedFinishGaps,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecordedFinishGaps {
+    count: f64,
+    length: f64,
+    width: f64,
+    position: f64,
+}
+
+impl RecordedFinishGaps {
+    fn as_finish_gaps(self) -> FinishGaps {
+        FinishGaps {
+            count: self.count,
+            length: self.length,
+            width: self.width,
+            position: self.position,
+        }
+    }
+}
+
+impl From<FinishGaps> for RecordedFinishGaps {
+    fn from(gaps: FinishGaps) -> Self {
+        Self {
+            count: gaps.count,
+            length: gaps.length,
+            width: gaps.width,
+            position: gaps.position,
+        }
+    }
+}
+
+fn task_24_completion_record_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/corpus/task-24-completion-gaps.json")
+}
+
+fn assert_task_24_record_valid(record: &Task24CompletionRecord) {
+    assert_eq!(
+        record.schema_version, TASK24_RECORD_SCHEMA_VERSION,
+        "task 24記録のschema versionが違う"
+    );
+    assert_eq!(
+        record.measurement_basis, TASK24_MEASUREMENT_BASIS,
+        "task 24記録の測定根拠が違う"
+    );
+    let sample_ids = record
+        .samples
+        .iter()
+        .map(|sample| sample.sample_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sample_ids,
+        ["crane", "yakko", "bird-base"],
+        "task 24記録の標本IDまたは順序が違う"
+    );
+    for sample in &record.samples {
+        for (field, value) in [
+            ("count", sample.gaps.count),
+            ("length", sample.gaps.length),
+            ("width", sample.gaps.width),
+            ("position", sample.gaps.position),
+        ] {
+            assert!(
+                value.is_finite() && value >= 0.0,
+                "{}の{field}が有限な非負値でない: {value}",
+                sample.sample_id
+            );
+        }
+    }
+}
+
+fn read_task_24_completion_record() -> Task24CompletionRecord {
+    let path = task_24_completion_record_path();
+    let bytes = fs::read(&path)
+        .unwrap_or_else(|error| panic!("{}を読めない: {error}", path.display()));
+    let record: Task24CompletionRecord = serde_json::from_slice(&bytes)
+        .unwrap_or_else(|error| panic!("{}のschemaが不正: {error}", path.display()));
+    assert_task_24_record_valid(&record);
+    record
+}
+
+fn recorded_task_24_gaps(record: &Task24CompletionRecord, sample_id: &str) -> FinishGaps {
+    record
+        .samples
+        .iter()
+        .find(|sample| sample.sample_id == sample_id)
+        .unwrap_or_else(|| panic!("task 24記録に標本がない: {sample_id}"))
+        .gaps
+        .as_finish_gaps()
+}
 
 fn square_document() -> Document {
     Document::new(Paper {
@@ -105,18 +231,14 @@ fn crane_sample() -> Sample {
         ],
     };
     Sample {
+        id: "crane",
         name: "折り鶴",
         document: fixture_document("cp-crane.json"),
         goal: FoldGoal {
             target,
             body: [0.5, 0.5],
             sites: corner_sites(),
-        },
-        measured_task_24: FinishGaps {
-            count: 0.0,
-            length: 1.142_732_609_721_514_7,
-            width: 1.337_205_669_355_358_5,
-            position: 0.432_647_886_031_762_2,
+            layer_target: None,
         },
     }
 }
@@ -149,6 +271,7 @@ fn yakko_sample() -> Sample {
     let materials = [[0.75, 0.25], [0.75, 0.75], [0.25, 0.75], [0.25, 0.25]];
     let positions = [[1.0, -1.0], [-1.0, -1.0], [-1.0, 1.0], [1.0, 1.0]];
     Sample {
+        id: "yakko",
         name: "やっこさん",
         document: yakko_document(),
         goal: FoldGoal {
@@ -173,12 +296,7 @@ fn yakko_sample() -> Sample {
                     material,
                 })
                 .collect(),
-        },
-        measured_task_24: FinishGaps {
-            count: 0.0,
-            length: 0.000_000_000_000_000_666_133_814_775_093_9,
-            width: 0.310_660_171_779_821_36,
-            position: 0.000_000_000_000_001_076_023_672_781_104_9,
+            layer_target: None,
         },
     }
 }
@@ -215,18 +333,14 @@ fn bird_base_sample() -> Sample {
         ],
     };
     Sample {
+        id: "bird-base",
         name: "鳥の基本形",
         document: fixture_document("cp-bird-base.json"),
         goal: FoldGoal {
             target,
             body: [0.5, 0.5],
             sites: corner_sites(),
-        },
-        measured_task_24: FinishGaps {
-            count: 0.0,
-            length: 0.707_106_781_186_548_3,
-            width: 1.732_050_807_568_870_5,
-            position: 0.482_962_913_144_534_05,
+            layer_target: None,
         },
     }
 }
@@ -245,19 +359,29 @@ fn assert_gaps_near(name: &str, got: FinishGaps, want: FinishGaps) -> f64 {
     ] {
         let delta = (got - want).abs();
         assert!(
-            delta <= MEASUREMENT_TOL,
-            "{name}: {measure}の実測{got:.12}が記録{want:.12}から{MEASUREMENT_TOL:.1e}より大きく動いた"
+            delta <= TASK24_GAP_ABS_TOLERANCE,
+            "{name}: {measure}の実測{got:.12}が記録{want:.12}から{TASK24_GAP_ABS_TOLERANCE:.1e}より大きく動いた"
         );
         max_delta = max_delta.max(delta);
     }
     max_delta
 }
 
-fn assert_scalar_near(name: &str, field: &str, got: f64, want: f64) -> f64 {
+fn assert_task_24_record_near(name: &str, got: FinishGaps, want: FinishGaps) -> f64 {
+    assert_gaps_near(name, got, want)
+}
+
+fn assert_scalar_near(
+    name: &str,
+    field: &str,
+    got: f64,
+    want: f64,
+    tolerance: f64,
+) -> f64 {
     let delta = (got - want).abs();
     assert!(
-        delta <= MEASUREMENT_TOL,
-        "{name}: {field}の{RUNS}回比較差|{got} - {want}|が{MEASUREMENT_TOL:.1e}を超えた"
+        delta <= tolerance,
+        "{name}: {field}の{RUNS}回比較差|{got} - {want}|が{tolerance:.1e}を超えた"
     );
     delta
 }
@@ -293,12 +417,14 @@ fn assert_outcome_deterministic(name: &str, got: &SearchOutcome, want: &SearchOu
         "開始点数",
         got.start_score,
         want.start_score,
+        TASK24_GAP_ABS_TOLERANCE,
     ));
     max_delta = max_delta.max(assert_scalar_near(
         name,
         "終点点数",
         got.best_score,
         want.best_score,
+        TASK24_GAP_ABS_TOLERANCE,
     ));
     for (index, (got, want)) in got.steps.iter().zip(&want.steps).enumerate() {
         let step = format!("{}手目", index + 1);
@@ -326,6 +452,7 @@ fn assert_outcome_deterministic(name: &str, got: &SearchOutcome, want: &SearchOu
                     &format!("{step}の直線[{point}][{axis}]"),
                     got.mv.line[point][axis],
                     want.mv.line[point][axis],
+                    TASK24_COORDINATE_ABS_TOLERANCE,
                 ));
             }
         }
@@ -334,6 +461,7 @@ fn assert_outcome_deterministic(name: &str, got: &SearchOutcome, want: &SearchOu
             &format!("{step}の裂け"),
             got.mv.max_seam_gap,
             want.mv.max_seam_gap,
+            TASK24_GAP_ABS_TOLERANCE,
         ));
         max_delta = max_delta.max(assert_gaps_near(name, got.gaps, want.gaps));
         max_delta = max_delta.max(assert_scalar_near(
@@ -341,80 +469,548 @@ fn assert_outcome_deterministic(name: &str, got: &SearchOutcome, want: &SearchOu
             &format!("{step}の点数"),
             got.score,
             want.score,
+            TASK24_GAP_ABS_TOLERANCE,
         ));
     }
     max_delta
 }
 
-/// 作業24: 許容値による合否を一切使わず、探索終点の4値と全姿勢の健全性を測る。
-#[test]
-fn task_24_measures_actual_completion_gaps_before_setting_tolerances() {
-    for sample in samples() {
-        let session = FoldSession::new(&sample.document)
-            .unwrap_or_else(|error| panic!("{}: {error}", sample.name));
-        let started = std::time::Instant::now();
-        let outcome = search_to_finish(
-            &session,
-            &sample.goal,
-            GapWeights::DEFAULT,
-            SearchBudget::DEFAULT,
-        );
-        let report = verify_search_outcome(
-            &session,
-            &outcome,
-            &sample.goal,
-            GapWeights::DEFAULT,
-            PoseScan::DEFAULT,
-        );
-        let ids: Vec<_> = outcome.steps.iter().map(|step| step.mv.id).collect();
-        println!(
-            "TASK24 {} start={:?} final={:?} ids={ids:?} stop={:?} states={}/{} branch={} elapsed={:.3}s {}",
+#[derive(Debug)]
+struct Task24LayerOrderAudit {
+    audited_orders: usize,
+    checked: usize,
+    violations: usize,
+    discarded: usize,
+}
+
+#[derive(Debug)]
+struct Task24Measurement {
+    gaps: FinishGaps,
+    audit: Task24LayerOrderAudit,
+}
+
+/// 探索が採用した全手の保存順を、候補順から独立した物理制約で監査する。
+fn audit_task_24_adopted_layer_orders(
+    sample: &Sample,
+    outcome: &SearchOutcome,
+    run: usize,
+    total_runs: usize,
+) -> Task24LayerOrderAudit {
+    let mut folded = FoldSession::new(&sample.document)
+        .unwrap_or_else(|error| panic!("{}: {error}", sample.name));
+    let mut audit = Task24LayerOrderAudit {
+        audited_orders: 0,
+        checked: 0,
+        violations: 0,
+        discarded: 0,
+    };
+
+    for (index, ranked) in outcome.steps.iter().enumerate() {
+        // 必ずapply前の入力CPを保存する。apply後のCPを渡すと
+        // `settle_kinds_from_order`後のM/Vが候補順を自己認証し、旧候補16で実測した
+        // 一般制約2/37違反・`discarded_relations` 5組を見逃す。
+        let input_cp = folded.document().cp.clone();
+        folded.apply(&ranked.mv).unwrap_or_else(|error| {
+            panic!("{}: {}手目を再適用できない: {error}", sample.name, index + 1)
+        });
+
+        let document = folded.document();
+        let faces = ori3_cp::extract_faces(&document.cp);
+        let up_to = document.sequence.len();
+        let (state, warnings) = ori3_layers::flat_state_at(document, &faces, up_to)
+            .unwrap_or_else(|error| {
+                panic!("{}: {}手目の平坦状態を再生できない: {error}", sample.name, index + 1)
+            });
+        assert!(
+            warnings.is_empty(),
+            "{}: {}手目の平坦状態に警告がある: {warnings:?}",
             sample.name,
-            report.start_gaps,
-            report.final_gaps,
-            outcome.stop,
-            outcome.states_expanded,
-            outcome.states_generated,
-            outcome.max_branching,
-            started.elapsed().as_secs_f64(),
-            report.describe(),
+            index + 1
+        );
+        let saved_order = ori3_layers::saved_layer_order_at(document, &faces, up_to, 1.0)
+            .unwrap_or_else(|| {
+                panic!("{}: {}手目に有効な保存層順がない", sample.name, index + 1)
+            });
+        assert_eq!(
+            saved_order, state.order,
+            "{}: {}手目の保存順と平坦状態の順が違う",
+            sample.name, index + 1
+        );
+        let expected_faces = faces.iter().map(|face| face.id).collect::<BTreeSet<_>>();
+        let saved_faces = saved_order.iter().copied().collect::<BTreeSet<_>>();
+        assert_eq!(
+            saved_order.len(), faces.len(),
+            "{}: {}手目の保存順が完全permutationでない",
+            sample.name, index + 1
+        );
+        assert_eq!(
+            saved_faces, expected_faces,
+            "{}: {}手目の保存順に面の過不足がある",
+            sample.name, index + 1
+        );
+
+        let validation = ori3_layers::precrease_collapse::validate_precrease_layer_order(
+            &input_cp,
+            &faces,
+            &state.placements,
+            &saved_order,
+        )
+        .unwrap_or_else(|error| {
+            panic!("{}: {}手目の一般制約を導けない: {error}", sample.name, index + 1)
+        });
+        let checked = validation.counts.adjacent_folds
+            + validation.counts.taco_tortilla
+            + validation.counts.taco_taco
+            + validation.counts.continuous;
+        let violations = validation.violations.adjacent_folds.len()
+            + validation.violations.taco_tortilla.len()
+            + validation.violations.taco_taco.len()
+            + validation.violations.continuous_crossings.len()
+            + validation.violations.continuous.len();
+        assert!(
+            validation.violations.duplicate_faces.is_empty(),
+            "{}: {}手目の保存順に重複面がある: {:?}",
+            sample.name,
+            index + 1,
+            validation.violations.duplicate_faces
         );
         assert!(
-            report.passed(),
-            "{}: 探索手順を最後まで安全に折れない: {report:?}",
-            sample.name
+            validation.violations.missing_faces.is_empty(),
+            "{}: {}手目の保存順に欠落面がある: {:?}",
+            sample.name,
+            index + 1,
+            validation.violations.missing_faces
         );
-        assert_gaps_near(sample.name, report.final_gaps, sample.measured_task_24);
+        assert!(
+            validation.violations.unexpected_faces.is_empty(),
+            "{}: {}手目の保存順に未知面がある: {:?}",
+            sample.name,
+            index + 1,
+            validation.violations.unexpected_faces
+        );
+        assert_eq!(
+            violations, 0,
+            "{}: {}手目に一般制約違反がある: {:?}",
+            sample.name, index + 1, validation.violations
+        );
+        assert!(
+            validation.discarded_relations.is_empty(),
+            "{}: {}手目に破棄された関係がある: {:?}",
+            sample.name,
+            index + 1,
+            validation.discarded_relations
+        );
+        assert!(
+            validation.is_valid(),
+            "{}: {}手目の保存順が無効: {validation:?}",
+            sample.name,
+            index + 1
+        );
+
+        let stored_step = document.sequence.last().unwrap_or_else(|| {
+            panic!("{}: {}手目がDocumentへ保存されていない", sample.name, index + 1)
+        });
+        assert!(
+            !stored_step.drivers.is_empty(),
+            "{}: {}手目に保存driverがない",
+            sample.name,
+            index + 1
+        );
+        for driver in &stored_step.drivers {
+            let flat_delta = (driver.target_angle_deg.abs() - 180.0).abs();
+            assert!(
+                flat_delta <= TASK24_ANGLE_ABS_TOLERANCE_DEGREES,
+                "{}: {}手目の保存角{}°が平坦終点から{}°ずれた",
+                sample.name,
+                index + 1,
+                driver.target_angle_deg,
+                flat_delta
+            );
+        }
+
+        audit.audited_orders += 1;
+        audit.checked += checked;
+        audit.violations += violations;
+        audit.discarded += validation.discarded_relations.len();
+        println!(
+            "TASK24_LAYER sample={} run={run}/{total_runs} step={}/{} violations={violations}/{checked} discarded={}",
+            sample.name,
+            index + 1,
+            outcome.steps.len(),
+            validation.discarded_relations.len()
+        );
+    }
+
+    assert!(
+        audit.audited_orders >= 1,
+        "{}: 採用層順を1件も監査していない",
+        sample.name
+    );
+    audit
+}
+
+fn measure_task_24_sample(sample: &Sample, run: usize, total_runs: usize) -> Task24Measurement {
+    let session =
+        FoldSession::new(&sample.document).unwrap_or_else(|error| panic!("{}: {error}", sample.name));
+    let started = std::time::Instant::now();
+    let outcome = search_to_finish(
+        &session,
+        &sample.goal,
+        GapWeights::DEFAULT,
+        SearchBudget::DEFAULT,
+    );
+    let report = verify_search_outcome(
+        &session,
+        &outcome,
+        &sample.goal,
+        GapWeights::DEFAULT,
+        PoseScan::DEFAULT,
+    );
+    assert!(
+        report.passed(),
+        "{}: 探索手順を最後まで安全に折れない: {report:?}",
+        sample.name
+    );
+    let audit = audit_task_24_adopted_layer_orders(sample, &outcome, run, total_runs);
+    let ids = outcome
+        .steps
+        .iter()
+        .map(|step| step.mv.id)
+        .collect::<Vec<_>>();
+    println!(
+        "TASK24 {} run={run}/{total_runs} start={:?} final={:?} position_bits=0x{:016x} ids={ids:?} stop={:?} states={}/{} branch={} elapsed={:.3}s audit={}/{} discarded={} {}",
+        sample.name,
+        report.start_gaps,
+        report.final_gaps,
+        report.final_gaps.position.to_bits(),
+        outcome.stop,
+        outcome.states_expanded,
+        outcome.states_generated,
+        outcome.max_branching,
+        started.elapsed().as_secs_f64(),
+        audit.violations,
+        audit.checked,
+        audit.discarded,
+        report.describe(),
+    );
+    Task24Measurement {
+        gaps: report.final_gaps,
+        audit,
     }
 }
 
+/// 作業24: 固定記録をread-onlyで読み、許容値を使わない正規再測定と照合する。
 #[test]
-fn task_25_uses_eighty_percent_headroom_from_task_24_measurements() {
-    let tolerance = CompletionTolerance::DEFAULT;
-    for (measure, limit, actual) in [
-        ("角の数", tolerance.count, 1.0 / 12.0),
-        (
-            "長さ",
-            tolerance.length,
-            bird_base_sample().measured_task_24.length,
+fn task_24_measures_actual_completion_gaps_before_setting_tolerances() {
+    let record = read_task_24_completion_record();
+    for sample in samples() {
+        let measurement = measure_task_24_sample(&sample, 1, 1);
+        let recorded = recorded_task_24_gaps(&record, sample.id);
+        assert_task_24_record_near(sample.name, measurement.gaps, recorded);
+    }
+}
+
+fn median_task_24_component(sample: &str, field: &str, mut values: Vec<f64>) -> f64 {
+    assert_eq!(values.len(), RUNS, "{sample}: {field}の測定回数が違う");
+    values.sort_by(f64::total_cmp);
+    let spread = values[RUNS - 1] - values[0];
+    assert!(
+        spread <= TASK24_GAP_ABS_TOLERANCE,
+        "{sample}: {field}の{RUNS}回差{spread}が{TASK24_GAP_ABS_TOLERANCE}を超えた"
+    );
+    values[RUNS / 2]
+}
+
+fn median_task_24_gaps(sample: &str, measurements: &[Task24Measurement]) -> FinishGaps {
+    FinishGaps {
+        count: median_task_24_component(
+            sample,
+            "count",
+            measurements.iter().map(|run| run.gaps.count).collect(),
         ),
-        (
-            "太さ",
-            tolerance.width,
-            yakko_sample().measured_task_24.width,
+        length: median_task_24_component(
+            sample,
+            "length",
+            measurements.iter().map(|run| run.gaps.length).collect(),
         ),
-        (
-            "位置",
-            tolerance.position,
-            crane_sample().measured_task_24.position,
+        width: median_task_24_component(
+            sample,
+            "width",
+            measurements.iter().map(|run| run.gaps.width).collect(),
         ),
-    ] {
-        let ratio = limit / actual;
+        position: median_task_24_component(
+            sample,
+            "position",
+            measurements
+                .iter()
+                .map(|run| run.gaps.position)
+                .collect(),
+        ),
+    }
+}
+
+fn remove_task_24_temporary_file(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("{}を消せない: {error}", path.display())),
+    }
+}
+
+fn stage_task_24_completion_record(path: &Path, candidate_bytes: &[u8]) -> PathBuf {
+    let candidate: Task24CompletionRecord = serde_json::from_slice(candidate_bytes)
+        .unwrap_or_else(|error| panic!("task 24候補記録のschemaが不正: {error}"));
+    assert_task_24_record_valid(&candidate);
+
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock is before UNIX epoch")
+        .as_nanos();
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("task 24記録のfile name");
+    let staged_path = path.with_file_name(format!(
+        ".{file_name}.{}.{}.staged",
+        std::process::id(),
+        nonce
+    ));
+    let staged = (|| -> Result<(), String> {
+        fs::write(&staged_path, candidate_bytes)
+            .map_err(|error| format!("{}を書けない: {error}", staged_path.display()))?;
+        let readback = fs::read(&staged_path)
+            .map_err(|error| format!("{}を再読込できない: {error}", staged_path.display()))?;
+        if readback != candidate_bytes {
+            return Err(format!("{}のreadbackが不一致", staged_path.display()));
+        }
+        let staged_record: Task24CompletionRecord = serde_json::from_slice(&readback)
+            .map_err(|error| format!("staged task 24 record schema: {error}"))?;
+        assert_task_24_record_valid(&staged_record);
+        Ok(())
+    })();
+    if let Err(error) = staged {
+        let cleanup = remove_task_24_temporary_file(&staged_path);
+        panic!("task 24記録の同directory preflight失敗: {error}; cleanup={cleanup:?}");
+    }
+    staged_path
+}
+
+fn restore_task_24_original_record(
+    path: &Path,
+    staged_path: &Path,
+    backup_path: &Path,
+    original_bytes: &[u8],
+) -> Result<(), String> {
+    if backup_path.exists() {
+        remove_task_24_temporary_file(path)?;
+        fs::rename(backup_path, path).map_err(|error| {
+            format!(
+                "{}から{}へ元記録を戻せない: {error}",
+                backup_path.display(),
+                path.display()
+            )
+        })?;
+    }
+    remove_task_24_temporary_file(staged_path)?;
+    let restored = fs::read(path)
+        .map_err(|error| format!("{}をrollback後に読めない: {error}", path.display()))?;
+    if restored != original_bytes {
+        return Err("rollback後のtask 24記録が元bytesと違う".to_owned());
+    }
+    Ok(())
+}
+
+/// 正本を書けるのは、下の`#[ignore]`再生成testからこの関数を呼ぶ経路だけ。
+fn write_task_24_completion_record(
+    record: &Task24CompletionRecord,
+    original_bytes: &[u8],
+) -> usize {
+    assert_task_24_record_valid(record);
+    let mut candidate_bytes =
+        serde_json::to_vec_pretty(record).expect("task 24記録をJSONへ変換できない");
+    candidate_bytes.push(b'\n');
+    let path = task_24_completion_record_path();
+    let staged_path = stage_task_24_completion_record(&path, &candidate_bytes);
+    let backup_path = staged_path.with_extension("backup");
+    assert!(
+        !backup_path.exists(),
+        "task 24 backupが既にある: {}",
+        backup_path.display()
+    );
+
+    let replacement = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // 測定中に別担当が正本を変えていたら上書きしない。
+        assert_eq!(
+            fs::read(&path)
+                .unwrap_or_else(|error| panic!("{}をwrite直前に読めない: {error}", path.display()))
+                .as_slice(),
+            original_bytes,
+            "task 24記録が測定中に変わった"
+        );
+        fs::rename(&path, &backup_path).unwrap_or_else(|error| {
+            panic!(
+                "{}を{}へ退避できない: {error}",
+                path.display(),
+                backup_path.display()
+            )
+        });
+        fs::rename(&staged_path, &path).unwrap_or_else(|error| {
+            panic!(
+                "{}を{}へ置換できない: {error}",
+                staged_path.display(),
+                path.display()
+            )
+        });
+        let readback = fs::read(&path)
+            .unwrap_or_else(|error| panic!("{}を更新後に読めない: {error}", path.display()));
+        assert_eq!(readback, candidate_bytes, "task 24更新記録のreadback不一致");
+        let updated: Task24CompletionRecord = serde_json::from_slice(&readback)
+            .unwrap_or_else(|error| panic!("task 24更新記録のschemaが不正: {error}"));
+        assert_task_24_record_valid(&updated);
+        assert_task_24_records_near("task 24更新記録", &updated, record);
+        fs::remove_file(&backup_path).unwrap_or_else(|error| {
+            panic!("{}を更新後に消せない: {error}", backup_path.display())
+        });
+    }));
+    if let Err(payload) = replacement {
+        restore_task_24_original_record(
+            &path,
+            &staged_path,
+            &backup_path,
+            original_bytes,
+        )
+        .unwrap_or_else(|error| panic!("task 24記録のrollback失敗: {error}"));
+        std::panic::resume_unwind(payload);
+    }
+    candidate_bytes.len()
+}
+
+#[test]
+#[ignore = "task 24 completion-gap recordの明示的な再生成専用"]
+fn regenerate_task_24_completion_gap_record() {
+    assert_eq!(
+        std::env::var("ORI3_REGENERATE_TASK24_RECORD").as_deref(),
+        Ok("1"),
+        "ORI3_REGENERATE_TASK24_RECORD=1を明示した場合だけ再生成できる"
+    );
+
+    let path = task_24_completion_record_path();
+    let original_bytes = fs::read(&path)
+        .unwrap_or_else(|error| panic!("{}の元bytesを読めない: {error}", path.display()));
+    let mut recorded_samples = Vec::new();
+    for sample in samples() {
+        let measurements = (1..=RUNS)
+            .map(|run| measure_task_24_sample(&sample, run, RUNS))
+            .collect::<Vec<_>>();
+        let position_bits = measurements[0].gaps.position.to_bits();
+        let position_bit_matches = measurements
+            .iter()
+            .filter(|measurement| measurement.gaps.position.to_bits() == position_bits)
+            .count();
+        let gaps = median_task_24_gaps(sample.name, &measurements);
+        let audit_checked = measurements
+            .iter()
+            .map(|measurement| measurement.audit.checked)
+            .collect::<Vec<_>>();
         assert!(
-            (ratio - 0.8).abs() <= MEASUREMENT_TOL,
-            "{measure}: 許容{limit:.12} / 実測・離散根拠{actual:.12} = {ratio:.12} が80%でない"
+            measurements.iter().all(|measurement| {
+                measurement.audit.violations == 0 && measurement.audit.discarded == 0
+            }),
+            "{}: 10回監査に違反または破棄がある",
+            sample.name
+        );
+        println!(
+            "TASK24_REGENERATE sample={} position={} bits=0x{position_bits:016x} bit_matches={position_bit_matches}/{RUNS} audit_checked={audit_checked:?} violations=0 discarded=0",
+            sample.name,
+            gaps.position
+        );
+        recorded_samples.push(RecordedTask24Sample {
+            sample_id: sample.id.to_owned(),
+            gaps: gaps.into(),
+        });
+    }
+    let record = Task24CompletionRecord {
+        schema_version: TASK24_RECORD_SCHEMA_VERSION,
+        measurement_basis: TASK24_MEASUREMENT_BASIS.to_owned(),
+        samples: recorded_samples,
+    };
+    let bytes = write_task_24_completion_record(&record, &original_bytes);
+    let record_delta = assert_task_24_records_near(
+        "再生成したtask 24記録と通常reader",
+        &read_task_24_completion_record(),
+        &record,
+    );
+    println!("WROTE {} bytes={bytes} semantic_max_delta={record_delta:.3e} tolerance={TASK24_GAP_ABS_TOLERANCE:.1e}", path.display());
+}
+
+/// 作業25の4許容を従来値へ完全に凍結し、正規再測定の80%以下であることを守る。
+///
+/// 記録は2026-08-28の正規再測定値（一般制約違反0・破棄0・10回連続bit一致）。
+/// 許容は同日の利用者決定で従来値を据え置いた。従来の決め方（実測の8割）より
+/// 厳しくなっても、基準を緩めないための決定である。新記録に対する実測比率は
+/// length `80%`、width `60.000000000000085%`、position `74.13562556544%`。
+/// countの3記録は`0.0`なので除算せず、離散的な最小非0値`1/12`に対する`80%`を守る。
+#[test]
+fn task_25_freezes_every_tolerance_without_exceeding_eighty_percent_bases() {
+    let record = read_task_24_completion_record();
+    let tolerance = CompletionTolerance::DEFAULT;
+
+    const FROZEN_COUNT_TOLERANCE: f64 = 0.066_666_666_666_666_67;
+    const FROZEN_LENGTH_TOLERANCE: f64 = 0.565_685_424_949_238_7;
+    const FROZEN_WIDTH_TOLERANCE: f64 = 0.248_528_137_423_857_1;
+    const FROZEN_POSITION_TOLERANCE: f64 = 0.346_118_308_825_409_8;
+    assert_eq!(
+        tolerance.count, FROZEN_COUNT_TOLERANCE,
+        "count許容が凍結値から動いた"
+    );
+    assert_eq!(
+        tolerance.length, FROZEN_LENGTH_TOLERANCE,
+        "length許容が凍結値から動いた"
+    );
+    assert_eq!(
+        tolerance.width, FROZEN_WIDTH_TOLERANCE,
+        "width許容が凍結値から動いた"
+    );
+    assert_eq!(
+        tolerance.position, FROZEN_POSITION_TOLERANCE,
+        "position許容が凍結値から動いた"
+    );
+
+    let length_record = recorded_task_24_gaps(&record, "bird-base").length;
+    let width_record = recorded_task_24_gaps(&record, "yakko").width;
+    let position_record = recorded_task_24_gaps(&record, "crane").position;
+    for (measure, limit, actual) in [
+        ("長さ", tolerance.length, length_record),
+        ("太さ", tolerance.width, width_record),
+        ("位置", tolerance.position, position_record),
+    ] {
+        let eighty_percent = 0.8 * actual;
+        assert!(
+            limit <= eighty_percent,
+            "{measure}: 据え置き許容{limit}が正規記録{actual}の80%={eighty_percent}を超えた"
         );
     }
+
+    // countの記録は3作品とも0なので、記録値で割る比率は定義できない。
+    // 代わりに許容が非負で、最大12葉の1本欠けに相当する最小非0値1/12の80%以下かを守る。
+    const MIN_NONZERO_COUNT_GAP: f64 = 1.0 / 12.0;
+    assert!(tolerance.count >= 0.0, "count許容が負になった");
+    assert!(
+        tolerance.count <= 0.8 * MIN_NONZERO_COUNT_GAP,
+        "count許容{}が離散根拠1/12の80%を超えた",
+        tolerance.count
+    );
+
+    let length_ratio = tolerance.length / length_record;
+    let width_ratio = tolerance.width / width_record;
+    let position_ratio = tolerance.position / position_record;
+    println!(
+        "TASK25_RATIOS count_record=0 count_discrete_ratio={:.15}% length={:.15}% width={:.15}% position={:.15}%",
+        100.0 * tolerance.count / MIN_NONZERO_COUNT_GAP,
+        100.0 * length_ratio,
+        100.0 * width_ratio,
+        100.0 * position_ratio,
+    );
 
     assert!(!tolerance.contains(&FinishGaps {
         count: 1.0 / 12.0,
@@ -423,8 +1019,9 @@ fn task_25_uses_eighty_percent_headroom_from_task_24_measurements() {
         position: 0.0,
     }));
     for sample in samples() {
+        let measured = recorded_task_24_gaps(&record, sample.id);
         assert!(
-            !tolerance.contains(&sample.measured_task_24),
+            !tolerance.contains(&measured),
             "{}: 作業24の未完成終点を完成扱いした",
             sample.name
         );
@@ -446,6 +1043,7 @@ fn run_to_completion(sample: &Sample) -> SearchOutcome {
 /// 同じ3標本を完成許容値まで探し、部分集合候補・全手順・10回の決定性を確認する。
 #[test]
 fn completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten() {
+    let task_24_record = read_task_24_completion_record();
     let mut completed = 0usize;
     let mut typed_states = 0usize;
     let budget = SearchBudget::DEFAULT;
@@ -453,6 +1051,7 @@ fn completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten() {
     assert_eq!(budget.branch, 3, "保持する分岐数上限を緩めた");
     assert_eq!(budget.max_depth, 8, "深さ上限を緩めた");
     for sample in samples() {
+        let measured_task_24 = recorded_task_24_gaps(&task_24_record, sample.id);
         let sample_started = std::time::Instant::now();
         // 10回とも探索を最初から直列に計算する。他担当の性能検査とCPUを奪い合わず、
         // 同じ実行条件で10/10の決定性を確かめる。
@@ -479,7 +1078,7 @@ fn completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten() {
         for (index, run) in runs.iter().enumerate().skip(1) {
             let max_delta = assert_outcome_deterministic(sample.name, run, &runs[0]);
             println!(
-                "DETERMINISM {} run={} discrete=exact float_max_delta={max_delta:.3e} tolerance={MEASUREMENT_TOL:.1e}",
+                "DETERMINISM {} run={} discrete=exact float_max_delta={max_delta:.3e} tolerance={TASK24_GAP_ABS_TOLERANCE:.1e}",
                 sample.name,
                 index + 1
             );
@@ -694,7 +1293,7 @@ fn completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten() {
             runs[0].steps.len(),
             proper_subset_moves,
             report.final_gaps.width,
-            sample.measured_task_24.width,
+            measured_task_24.width,
             100.0 * report.final_gaps.width / CompletionTolerance::DEFAULT.width,
             sample_started.elapsed().as_secs_f64(),
             calculation_seconds / RUNS as f64,
@@ -737,6 +1336,7 @@ fn task_26_yakko_uses_a_verified_simultaneous_precrease_move() {
 /// proper subset が現れ、21姿勢を通る。全部分集合を列挙しない絞り込みを固定する。
 #[test]
 fn a_safe_coincident_partial_network_appears_after_the_first_fold() {
+    let task_24_record = read_task_24_completion_record();
     let tolerance = CompletionTolerance::DEFAULT;
     for (sample, first_id) in [(crane_sample(), 16), (bird_base_sample(), 2)] {
         let mut session = FoldSession::new(&sample.document)
@@ -786,7 +1386,7 @@ fn a_safe_coincident_partial_network_appears_after_the_first_fold() {
         assert_eq!(partial.penetrations, 0);
         assert!(partial.max_seam_gap < MAX_SEAM_GAP);
 
-        let gaps = sample.measured_task_24;
+        let gaps = recorded_task_24_gaps(&task_24_record, sample.id);
         println!(
             "TASK26-FAIL {} lines={} length={:.6}/{:.6} ({:.1}%) width={:.6}/{:.6} ({:.1}%) position={:.6}/{:.6} ({:.1}%)",
             sample.name,
@@ -869,4 +1469,31 @@ fn zz_write_check_documents() {
             outcome.best_gaps.position,
         );
     }
+}
+
+/// task 24記録の離散契約を完全一致で、小数だけを絶対差で照合する。
+///
+/// 2026-08-28の3標本×4値のJSON往復で観測した最大差は`0.0`、より広い完成参照との
+/// 計算残差は最大`1.77e-15`だった。別物を分ける実測最小差は`0.0621320344`なので、
+/// `TASK24_GAP_ABS_TOLERANCE = 1e-9`は丸め差に5桁超の余裕を持ち、形の差より7桁超細い。
+fn assert_task_24_records_near(
+    context: &str,
+    got: &Task24CompletionRecord,
+    want: &Task24CompletionRecord,
+) -> f64 {
+    // schema、測定根拠、標本数・ID・順序は既存validatorで完全一致のまま守る。
+    assert_task_24_record_valid(got);
+    assert_task_24_record_valid(want);
+
+    got.samples
+        .iter()
+        .zip(&want.samples)
+        .map(|(got, want)| {
+            assert_task_24_record_near(
+                &format!("{context}: {}", got.sample_id),
+                got.gaps.as_finish_gaps(),
+                want.gaps.as_finish_gaps(),
+            )
+        })
+        .fold(0.0_f64, f64::max)
 }

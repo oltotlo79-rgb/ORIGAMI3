@@ -29,10 +29,10 @@ pub use plan::{
 pub use plan_generic::GenericPlanner;
 pub use plan_history::HistoryPlanner;
 pub use search::{
-    CompletionTolerance, FLAP_RADIUS, FoldGoal, GapWeights, MIN_TIP_LENGTH, RankedMove,
-    SCORE_QUANTUM, SearchAbort, SearchBudget, SearchCancellation, SearchControl, SearchOutcome,
-    SearchStop, SearchWatchdog, TipSite, search_to_completion, search_to_completion_with_control,
-    search_to_finish, search_to_finish_with_control,
+    CompletionTolerance, FLAP_RADIUS, FoldGoal, GapWeights, LayerTarget, MIN_TIP_LENGTH,
+    RankedMove, SCORE_QUANTUM, SearchAbort, SearchBudget, SearchCancellation, SearchControl,
+    SearchOutcome, SearchStop, SearchWatchdog, TipSite, search_to_completion,
+    search_to_completion_with_control, search_to_finish, search_to_finish_with_control,
 };
 pub use skeleton::{MAX_LEAVES, Skeleton, SkeletonNode, TIP_POS_MAX, TIP_POS_MIN, TipPos2d};
 pub use trace::{

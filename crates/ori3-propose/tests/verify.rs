@@ -12,8 +12,20 @@ use ori3_propose::finish::{FinishTarget, TargetTip};
 use ori3_propose::search::{FoldGoal, GapWeights, SearchBudget, TipSite, search_to_finish};
 use ori3_propose::verify::{StepFailure, VerifyReport, verify_fold_order, verify_search_outcome};
 
+#[path = "support/fixed_order.rs"]
+mod fixed_order;
+
+use fixed_order::folded_along;
+
 /// 決定性を見るために同じ入力を回す回数(合格条件3)。
 const RUNS: usize = 3;
+
+const CRANE_STRICT_ORDER: [usize; 2] = [3, 16]; // 2026-08-28: `[16,3]`→`[3,16]`; 旧16は入力CPで一般制約2/37違反・破棄5、strict有効手は1/27。
+const YAKKO_STRICT_ORDER: [usize; 2] = [2, 1]; // 2026-08-28: `[0,7,3]`→`[2,1]`; 旧0は入力CPで一般制約1/9違反・破棄5、strict有効手は4/8。
+const YAKKO_EQUIVALENT_ORDER: [usize; 2] = [1, 2]; // 2026-08-28: `[0,3,7]`→`[1,2]`; 旧0は入力CPで一般制約1/9違反・破棄5、strict有効手は4/8。
+const YAKKO_SECOND_REORDER_PAIR: [[usize; 2]; 2] = [[2, 6], [6, 2]]; // 2026-08-28: 折り鶴の旧`[16,3]↔[3,16]`→やっこ`[2,6]↔[6,2]`; 旧16は2/37違反・破棄5、strict有効手は折り鶴1/27・やっこ4/8。
+const YAKKO_CUT_SHORT_ORDER: [usize; 2] = [1, 2]; // 2026-08-28: 打ち切り入力`[0,7,3]`→`[1,2]`; 旧0は1/9違反・破棄5、strict有効手は4/8。
+const YAKKO_BAD_AFTER_FIRST: usize = 0; // 2026-08-28: 旧bad 2→0（新prefix 2後）; 旧固定prefix 0は1/9違反・破棄5、strict有効手は4/8。
 
 /// 標本1: 折り鶴。作業18が写した展開図を、追跡対象の `tests/fixtures/` から読む。
 fn crane() -> Document {
@@ -72,20 +84,6 @@ fn corner_sites() -> Vec<TipSite> {
         .collect()
 }
 
-/// 手順を順に折ったところまで進めた作品。1手ずつ姿勢21点で確かめてから進める。
-fn folded_along(doc: &Document, ids: &[usize]) -> FoldSession {
-    let mut session = FoldSession::new(doc).expect("折り始められない");
-    for &id in ids {
-        let mv = session
-            .verify_move(id, PoseScan::DEFAULT)
-            .unwrap_or_else(|| panic!("手 {id} は姿勢21点では折れない"));
-        session
-            .apply(&mv)
-            .unwrap_or_else(|e| panic!("手 {id}: {e}"));
-    }
-    session
-}
-
 /// **その手順で実際に折り上がる形**を目標にする(`tests/search.rs` と同じ作り方)。
 ///
 /// 利用者の指定が紙で実現できるとは限らないので、検査では「この手順で折ると
@@ -105,6 +103,7 @@ fn goal_of_state(doc: &Document, ids: &[usize]) -> FoldGoal {
         },
         body: [0.5, 0.5],
         sites: corner_sites(),
+        layer_target: None,
     };
     let session = folded_along(doc, ids);
     let form = draft.measure(session.document());
@@ -135,6 +134,7 @@ fn goal_of_state(doc: &Document, ids: &[usize]) -> FoldGoal {
             .collect(),
         ..draft
     }
+    .with_layer_target_from(session.document())
 }
 
 /// 標本と、その標本で**最後まで通る手順**と、その手順で折り上がる形の目標。
@@ -143,12 +143,12 @@ fn goal_of_state(doc: &Document, ids: &[usize]) -> FoldGoal {
 ///
 /// | 標本 | 段階0で折れる手 | 選んだ手順 | 選んだ理由 |
 /// |---|---|---|---|
-/// | 折り鶴 | `[3, 16]` | `[16, 3]` | この2手で目標の形になり、逆順の `[3, 16]` も同じく最後まで折れる |
-/// | やっこさん | `[0, 1, 2, 3, 4, 5, 6, 7]` | `[0, 7, 3]` | 3手を通した形を目標にする。1手目だけの `[0]` では目標へ届かない |
+/// | 折り鶴 | `[3]` | `[3, 16]` | 唯一strict有効な初手3から2手を通した形を目標にする |
+/// | やっこさん | `[1, 2, 5, 6]` | `[2, 1]` | strict有効な2手を通した形を目標にする |
 fn samples() -> Vec<(&'static str, Document, Vec<usize>)> {
     vec![
-        ("折り鶴", crane(), vec![16, 3]),
-        ("やっこさん", yakko(), vec![0, 7, 3]),
+        ("折り鶴", crane(), CRANE_STRICT_ORDER.to_vec()),
+        ("やっこさん", yakko(), YAKKO_STRICT_ORDER.to_vec()),
     ]
 }
 
@@ -307,16 +307,26 @@ fn a_geometrically_valid_reordered_fold_order_is_not_rejected() {
     //
     // | 標本 | 基準の手順 | 入れ替えた手順 |
     // |---|---|---|
-    // | 折り鶴 | `[16, 3]` | `[3, 16]` |
-    // | やっこさん | `[0, 7, 3]` | `[0, 3, 7]` |
-    // 実測(releaseビルド): 最大裂けは折り鶴2.056e-13、やっこ1.602e-13、
-    // すり抜けは両方0、完成目標の4 gapも両方0.0だった。
+    // | やっこさんA | `[1, 2]` | `[2, 1]` |
+    // | やっこさんB | `[2, 6]` | `[6, 2]` |
+    // 2026-08-28のstrict実測では、どちらの組も両順が通り、完成目標の4 gapは0だった。
     let cases: Vec<(&str, Document, Vec<usize>, Vec<usize>)> = vec![
-        ("折り鶴", crane(), vec![16, 3], vec![3, 16]),
-        ("やっこさん", yakko(), vec![0, 7, 3], vec![0, 3, 7]),
+        (
+            "やっこさんA",
+            yakko(),
+            YAKKO_EQUIVALENT_ORDER.to_vec(),
+            YAKKO_STRICT_ORDER.to_vec(),
+        ),
+        (
+            "やっこさんB",
+            yakko(),
+            YAKKO_SECOND_REORDER_PAIR[0].to_vec(),
+            YAKKO_SECOND_REORDER_PAIR[1].to_vec(),
+        ),
     ];
     for (name, doc, good, swapped) in cases {
         let goal = goal_of_state(&doc, &good);
+        let _ = folded_along(&doc, &swapped);
         let good_report = check(&doc, &good, &goal);
         assert!(good_report.passed(), "{name}: 正しい手順のほうが通らない");
 
@@ -356,11 +366,16 @@ fn an_unfoldable_move_mixed_into_the_order_fails_at_that_move() {
     //
     // | 標本 | 正しい手順 | 混ぜた手順 | 落ちる場所 |
     // |---|---|---|---|
-    // | 折り鶴 | `[16, 3]` | `[16, 0, 3]` | 2手目・手0 が **平らに畳めない** |
-    // | やっこさん | `[0, 7, 3]` | `[0, 2, 7, 3]` | 2手目・手2 が **平らに畳めない**(手0を折ると手2は畳めなくなる) |
+    // | 折り鶴 | `[3, 16]` | `[3, 0, 16]` | 2手目・手0 が **平らに畳めない** |
+    // | やっこさん | `[2, 1]` | `[2, 0, 1]` | 2手目・手0 が **平らに畳めない**(手2を折ると手0は畳めなくなる) |
     let cases: Vec<(&str, Document, Vec<usize>, usize)> = vec![
-        ("折り鶴", crane(), vec![16, 3], 0),
-        ("やっこさん", yakko(), vec![0, 7, 3], 2),
+        ("折り鶴", crane(), CRANE_STRICT_ORDER.to_vec(), 0),
+        (
+            "やっこさん",
+            yakko(),
+            YAKKO_STRICT_ORDER.to_vec(),
+            YAKKO_BAD_AFTER_FIRST,
+        ),
     ];
     for (name, doc, good, bad) in cases {
         let goal = goal_of_state(&doc, &good);
@@ -399,14 +414,26 @@ fn an_unfoldable_move_mixed_into_the_order_fails_at_that_move() {
 #[test]
 fn a_fold_order_cut_short_is_detected_by_the_unfinished_shape() {
     // 重なり順を幾何から求めるようになり、以前「紙がすり抜ける」で落ちた
-    // `[3, 16]` と `[0, 3]` は本当に折れると分かった。そのため、手の成否ではなく、
+    // `[3, 16]` と `[1, 2]` は本当に折れると分かった。そのため、手の成否ではなく、
     // 健全な1手だけで打ち切った形が完成目標へ届かないことを4つの物差しで見る。
     //
-    // 実測(releaseビルド): 折り鶴は点0.603553→0.353553、
-    // やっこさんは点0.932271→0.352513。どちらも前進はするが完成の0には届かない。
+    // 2026-08-28のstrict実測: 折り鶴は点0.603553→0.353553で主張を満たす。
+    // やっこさんは深さ2の12列と深さ3の24列を全測定したが、「前進し、かつ未完成」は
+    // 0/36だった。`[1]→[1,2]` は0.5→0.5で未完成だが前進せず、下のassertを
+    // 緩めずに統括判断のため失敗を露出させている。
     let cases: Vec<(&str, Document, Vec<usize>, Vec<usize>)> = vec![
-        ("折り鶴", crane(), vec![16, 3], vec![16]),
-        ("やっこさん", yakko(), vec![0, 7, 3], vec![0]),
+        (
+            "折り鶴",
+            crane(),
+            CRANE_STRICT_ORDER.to_vec(),
+            vec![CRANE_STRICT_ORDER[0]],
+        ),
+        (
+            "やっこさん",
+            yakko(),
+            YAKKO_CUT_SHORT_ORDER.to_vec(),
+            vec![YAKKO_CUT_SHORT_ORDER[0]],
+        ),
     ];
     for (name, doc, good, incomplete) in cases {
         let goal = goal_of_state(&doc, &good);
@@ -454,6 +481,27 @@ fn a_fold_order_cut_short_is_detected_by_the_unfinished_shape() {
             report.start_score,
             report.final_score
         );
+        let start_session = FoldSession::new(&doc).expect("折り始められない");
+        let prefix_session = folded_along(&doc, &incomplete);
+        let completed_session = folded_along(&doc, &good);
+        let start_layer_gap = goal.layer_gap(start_session.document());
+        let prefix_layer_gap = goal.layer_gap(prefix_session.document());
+        let completed_layer_gap = goal.layer_gap(completed_session.document());
+        println!(
+            "{name} 材料層構造の隔たり: 開始{start_layer_gap:.6} / 打切り{prefix_layer_gap:.6} / 完成{completed_layer_gap:.6}"
+        );
+        assert_eq!(
+            start_layer_gap, 1.0,
+            "{name}: 折る前に目標の材料層順を共有している"
+        );
+        assert_eq!(
+            prefix_layer_gap, 0.5,
+            "{name}: 1段分の材料層順を進捗として測れていない"
+        );
+        assert_eq!(
+            completed_layer_gap, 0.0,
+            "{name}: 完成形の材料層順が目標と一致していない"
+        );
     }
 }
 
@@ -464,13 +512,14 @@ fn a_fold_order_cut_short_is_detected_by_the_unfinished_shape() {
 #[test]
 fn moves_that_cannot_be_chosen_are_reported_with_their_place_in_the_order() {
     let doc = yakko();
-    let goal = goal_of_state(&doc, &[0, 7, 3]);
+    let goal = goal_of_state(&doc, &YAKKO_STRICT_ORDER);
+    let prefix = YAKKO_STRICT_ORDER[0];
 
     // やっこさんの折り線は8本(番号0〜7)なので、9999番は存在しない。
     let session = FoldSession::new(&doc).expect("折り始められない");
     assert_eq!(session.fold_lines().len(), 8, "折り線の本数が変わっている");
     assert!(!session.has_fold_line(9999));
-    let report = check(&doc, &[0, 9999], &goal);
+    let report = check(&doc, &[prefix, 9999], &goal);
     let failure = report.failure.expect("無い番号なのに落ちなかった");
     println!("やっこさん 無い番号: {}", report.describe());
     assert_eq!(failure.index, 1);
@@ -480,13 +529,16 @@ fn moves_that_cannot_be_chosen_are_reported_with_their_place_in_the_order() {
     assert_eq!(report.cleared(), 1);
 
     // 同じ手を2回。1回目で折り終えているので、2回目は選べない。
-    let report = check(&doc, &[0, 0], &goal);
+    let report = check(&doc, &[prefix, prefix], &goal);
     let failure = report.failure.expect("同じ手を2回渡したのに落ちなかった");
     println!("やっこさん 同じ手を2回: {}", report.describe());
     assert_eq!(failure.index, 1);
-    assert_eq!(failure.id, 0);
+    assert_eq!(failure.id, prefix);
     assert_eq!(failure.cause, StepFailure::AlreadyFolded);
-    assert_eq!(failure.describe(), "2手目(折り線0): もう折り終えている");
+    assert_eq!(
+        failure.describe(),
+        format!("2手目(折り線{prefix}): もう折り終えている")
+    );
     assert_eq!(report.cleared(), 1);
 }
 
@@ -498,28 +550,43 @@ fn moves_that_cannot_be_chosen_are_reported_with_their_place_in_the_order() {
 #[test]
 fn the_same_order_gives_the_same_report_three_times() {
     let crane_doc = crane();
-    let crane_goal = goal_of_state(&crane_doc, &[16, 3]);
+    let crane_goal = goal_of_state(&crane_doc, &CRANE_STRICT_ORDER);
     let yakko_doc = yakko();
-    let yakko_goal = goal_of_state(&yakko_doc, &[0, 7, 3]);
+    let yakko_goal = goal_of_state(&yakko_doc, &YAKKO_STRICT_ORDER);
+    let _ = folded_along(&yakko_doc, &YAKKO_EQUIVALENT_ORDER);
     let cases: Vec<(&str, &Document, Vec<usize>, &FoldGoal)> = vec![
-        ("折り鶴 そのまま", &crane_doc, vec![16, 3], &crane_goal),
-        ("折り鶴 入れ替え", &crane_doc, vec![3, 16], &crane_goal),
+        (
+            "折り鶴 そのまま",
+            &crane_doc,
+            CRANE_STRICT_ORDER.to_vec(),
+            &crane_goal,
+        ),
+        (
+            "やっこさん 入れ替え",
+            &yakko_doc,
+            YAKKO_EQUIVALENT_ORDER.to_vec(),
+            &yakko_goal,
+        ),
         (
             "やっこさん そのまま",
             &yakko_doc,
-            vec![0, 7, 3],
+            YAKKO_STRICT_ORDER.to_vec(),
             &yakko_goal,
         ),
         (
             "やっこさん 折れない手混ぜ",
             &yakko_doc,
-            vec![0, 2, 7, 3],
+            vec![
+                YAKKO_STRICT_ORDER[0],
+                YAKKO_BAD_AFTER_FIRST,
+                YAKKO_STRICT_ORDER[1],
+            ],
             &yakko_goal,
         ),
         (
             "やっこさん 完成前打ち切り",
             &yakko_doc,
-            vec![0],
+            vec![YAKKO_STRICT_ORDER[0]],
             &yakko_goal,
         ),
     ];
@@ -578,7 +645,7 @@ fn the_fold_order_returned_by_the_search_passes_the_whole_check() {
 #[test]
 fn an_empty_order_is_checked_as_the_flat_paper() {
     let doc = yakko();
-    let goal = goal_of_state(&doc, &[0, 7, 3]);
+    let goal = goal_of_state(&doc, &YAKKO_STRICT_ORDER);
     let report = check(&doc, &[], &goal);
     println!("やっこさん 手順なし: {}", report.describe());
     assert!(

@@ -4,7 +4,8 @@
 //!
 //! 作業21の [`FoldSession`] は「その状態から**実際に折れる手**」を返す。
 //! ここではその手を1つずつ実際に折ってみて、折った後の形を作業20の
-//! **4つの物差し**([`finish_gaps`])で測り、**完成形へ近づく順**に試す。
+//! **4つの物差し**([`finish_gaps`])で測り、材料の層順が目標に指定されている場合は
+//! その構造差も合わせて、**完成形へ近づく順**に試す。
 //!
 //! | 元にしたもの | 何を引き継ぐか |
 //! |---|---|
@@ -48,10 +49,10 @@
 //!   (`CLAUDE.md` §10.7.7)。
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::{Duration, Instant};
 
 use ori3_cp::{Face, extract_faces};
 use ori3_layers::replay::replay;
+use ori3_model::clock::{Duration, Instant};
 use ori3_model::{CreasePattern, Document, FaceId, VertexId};
 
 use crate::enumerate::{FoldSession, PoseScan, PreparedMove, SessionStateKey, VerifiedMove};
@@ -145,9 +146,119 @@ pub struct FoldGoal {
     pub body: [f64; 2],
     /// 先端と紙の場所の対応。
     pub sites: Vec<TipSite>,
+    /// 指定された完成形の材料上の層構造。指定がない既存の目標では4指標だけで測る。
+    pub layer_target: Option<LayerTarget>,
+}
+
+/// 完成形に要求する、各平坦段階の材料上の下→上の層順。
+///
+/// 各点は面IDではなく、その面の原紙上の内部代表点で保存する。従って、CPの面IDや
+/// 探索中の候補番号ではなく、紙のどの部分がどの順で重なったかを表す。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LayerTarget {
+    stages: Vec<LayerStage>,
+}
+
+/// 量子化済みの材料点だけで表した1段階の層順。浮動小数点の丸め差をIDの差へ
+/// すり替えないよう、座標は材料座標の `1e-9` 格子へ量子化する。
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LayerStage(Vec<[i64; 2]>);
+
+const LAYER_TARGET_QUANTUM: f64 = 1e-9;
+
+impl LayerTarget {
+    /// 折り上がった文書が保存している各平坦段階の層順から、完成形の層目標を作る。
+    ///
+    /// 層順を保存していない手順だけの文書では `None` を返す。この場合に推測で
+    /// 「何層なら正しい」と決めず、従来どおり4指標だけを使う。
+    #[must_use]
+    pub fn from_document(document: &Document) -> Option<Self> {
+        let stages = document
+            .sequence
+            .iter()
+            .filter_map(|step| {
+                let order = step.layer_order.as_ref()?;
+                (!order.is_empty() && order.iter().flatten().all(|value| value.is_finite())).then(
+                    || {
+                        LayerStage(
+                            order
+                                .iter()
+                                .map(|point| {
+                                    [
+                                        quantize_layer_point(point[0]),
+                                        quantize_layer_point(point[1]),
+                                    ]
+                                })
+                                .collect(),
+                        )
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        (!stages.is_empty()).then_some(Self { stages })
+    }
+
+    fn distance_to(&self, document: &Document) -> f64 {
+        let actual = Self::from_document(document).map_or_else(Vec::new, |target| target.stages);
+        let shared = longest_common_stage_subsequence(&self.stages, &actual);
+        let missing = self.stages.len().saturating_sub(shared);
+        let extra = actual.len().saturating_sub(shared);
+        (missing + extra) as f64 / self.stages.len() as f64
+    }
+}
+
+fn quantize_layer_point(value: f64) -> i64 {
+    (value / LAYER_TARGET_QUANTUM).round() as i64
+}
+
+fn longest_common_stage_subsequence(left: &[LayerStage], right: &[LayerStage]) -> usize {
+    let mut lengths = vec![0usize; right.len() + 1];
+    for left_stage in left {
+        let mut previous = 0usize;
+        for (index, right_stage) in right.iter().enumerate() {
+            let saved = lengths[index + 1];
+            lengths[index + 1] = if left_stage == right_stage {
+                previous + 1
+            } else {
+                lengths[index + 1].max(lengths[index])
+            };
+            previous = saved;
+        }
+    }
+    lengths[right.len()]
 }
 
 impl FoldGoal {
+    /// `document` が持つ材料上の層順を、この目標の追加の構造条件として付ける。
+    ///
+    /// 数・長さ・太さ・位置の4指標は変えず、層順が実際に指定されている場合だけ、
+    /// その構造との差を総合点へ足す。
+    #[must_use]
+    pub fn with_layer_target_from(mut self, document: &Document) -> Self {
+        self.layer_target = LayerTarget::from_document(document);
+        self
+    }
+
+    /// 既存4指標とは別に、材料上の層構造が目標からどれだけ違うかを返す。
+    ///
+    /// 目標に層順が無い場合は、紙について根拠のない構造を仮定せず `0.0` とする。
+    #[must_use]
+    pub fn layer_gap(&self, document: &Document) -> f64 {
+        self.layer_target
+            .as_ref()
+            .map_or(0.0, |target| target.distance_to(document))
+    }
+
+    /// 4指標の重み付き点数へ、明示された材料層構造の隔たりを単位重みで足す。
+    ///
+    /// 構造差は目標の保存層順に対する挿入・削除の比で、目標を全く共有しなければ
+    /// `1.0`、途中段階を1つ共有すればその分だけ下がる。4指標の定義とその重みは
+    /// 変更しない。
+    #[must_use]
+    pub fn score(&self, document: &Document, gaps: &FinishGaps, weights: GapWeights) -> f64 {
+        weights.score(gaps) + self.layer_gap(document)
+    }
+
     /// 手順を最後まで再生した姿勢から、4つの物差しで測る値を取り出す。
     ///
     /// 姿勢が求まらない・面が取り出せないなど測りようがない場合でも止めず、
@@ -346,19 +457,22 @@ pub struct CompletionTolerance {
 }
 
 impl CompletionTolerance {
-    /// 作業24の終点実測を終えてから決めた既定値(作業25、debugビルド)。
+    /// 作業24の終点実測を終えてから決めた既定値（作業25）。
     ///
     /// 実作品の完成形を独立に固定し、折り鶴・やっこさん・鳥の基本形について、
-    /// まず従来探索の返した手順を21姿勢/手で最後まで折って4値を測った。許容値は
-    /// **その後**に、各項目で最も近い未完成値の80%へ置いた。実測値そのものを境目に
-    /// せず、未完成値との間に20%の分離余裕を残している。
+    /// 従来探索の返した手順を21姿勢/手で最後まで折って4値を測った。記録は
+    /// 2026-08-28の正規再測定値（完成時一般制約違反0/101・破棄0、10回連続bit一致）である。
     ///
-    /// | 物差し | 作業24の実測／離散根拠 | 許容上限 | 根拠値に対する割合 | 余裕 |
+    /// 4許容は正規再測定後も変更していない。従来の決め方（実測または離散根拠の
+    /// 約8割）より厳しい項目もあるが、基準を緩めないため、2026-08-28の利用者決定で
+    /// 全て現行値に据え置いた。
+    ///
+    /// | 物差し | 作業24の記録／離散根拠 | 許容上限 | 根拠値に対する割合 | 余裕 |
     /// |---|---:|---:|---:|---:|
     /// | 角の数 | 3終点は`0.0`。最大12葉で1本欠ける最小非0値`1/12 = 0.0833333333` | `0.0666666667` | **80%** | **20%** |
     /// | 長さ | 鳥の基本形 `0.7071067812` | `0.5656854249` | **80%** | **20%** |
-    /// | 太さ | やっこさん `0.3106601718` | `0.2485281374` | **80%** | **20%** |
-    /// | 位置 | 折り鶴 `0.4326478860` | `0.3461183088` | **80%** | **20%** |
+    /// | 太さ | やっこさん `0.4142135623730946` | `0.2485281374238571` | **60.000000000000085%** | **39.999999999999915%** |
+    /// | 位置 | 折り鶴 `0.46687177208734676` | `0.3461183088254098` | **74.13562556544%** | **25.86437443456%** |
     ///
     /// 角数は整数の欠損数を葉数で割る離散値なので、計算機差のある小数を厳密比較
     /// していない。この上限なら対象範囲1〜12葉で1本欠けた形を完成扱いしない。
@@ -635,7 +749,9 @@ pub struct RankedMove {
     pub mv: VerifiedMove,
     /// 折った後の4つの物差し。
     pub gaps: FinishGaps,
-    /// 折った後の点数([`GapWeights::score`])。
+    /// 折った後の総合点。
+    ///
+    /// 4指標の重み付き点数に、目標が指定するときだけ材料の層構造差を足す。
     pub score: f64,
 }
 
@@ -1017,15 +1133,19 @@ fn rank_key(node: &Node, completion: Option<CompletionTolerance>) -> RankKey {
 ///
 /// ## 何を返すか
 ///
-/// **たどった状態のうち、4つの物差しの点数がいちばん良かったところまでの手順**を返す。
+/// **たどった状態のうち、4つの物差しと、指定がある場合の材料層構造を合わせた
+/// 総合点がいちばん良かったところまでの手順**を返す。
 /// 目標は「完成形の形」であって「折り目を全部折ること」ではないので、
 /// 途中で目標にいちばん近くなるならそこで返す。打ち切りに達した場合も、
 /// **そこまでで見つけたいちばん良い手順**が同じ規則で返る。
 ///
-/// 見た範囲でどの手を折っても目標から遠ざかる展開図では、**手順0件**
-/// (折らないのが最良)が返る。これは探索失敗ではないが、完成を意味するとは限らない。
+/// 通常の単純本折りで改善する手が無い場合だけ、残す側と上/下を明示した
+/// fold-throughと方向付きflat poseを追加して同じ予算で再探索する。この再探索は
+/// 4項目の許容超過を先に比べるので、形をまだ変えない層準備手も次の候補へつなげられる。
+/// それでも改善が無い展開図では、**手順0件**(折らないのが最良)が返る。これは探索失敗では
+/// ないが、完成を意味するとは限らない。
 ///
-/// ## どこで4つの物差しが効くか
+/// ## どこで4つの物差しと層構造が効くか
 ///
 /// 1. 広げる状態を選ぶ順(点数の良い状態から先に広げる)。
 /// 2. 1つの状態から先へ残す手([`SearchBudget::branch`] 件だけ、点数の良い順)。
@@ -1040,13 +1160,28 @@ pub fn search_to_finish(
     weights: GapWeights,
     budget: SearchBudget,
 ) -> SearchOutcome {
-    search(
+    let execution = SearchExecution::Deterministic;
+    let ordinary = search(
         session,
         goal,
         weights,
         budget,
         None,
-        SearchExecution::Deterministic,
+        SearchCandidateSet::Ordinary,
+        &execution,
+    )
+    .expect("決定的探索にはwatchdogも取消しも無い");
+    if !ordinary.steps.is_empty() {
+        return ordinary;
+    }
+    search(
+        session,
+        goal,
+        weights,
+        budget,
+        Some(CompletionTolerance::DEFAULT),
+        SearchCandidateSet::DirectionalFallback,
+        &execution,
     )
     .expect("決定的探索にはwatchdogも取消しも無い")
 }
@@ -1062,13 +1197,27 @@ pub fn search_to_finish_with_control(
     budget: SearchBudget,
     control: &SearchControl<'_>,
 ) -> Result<SearchOutcome, SearchAbort> {
-    search(
+    let execution = SearchExecution::controlled(control);
+    let ordinary = search(
         session,
         goal,
         weights,
         budget,
         None,
-        SearchExecution::controlled(control),
+        SearchCandidateSet::Ordinary,
+        &execution,
+    )?;
+    if !ordinary.steps.is_empty() {
+        return Ok(ordinary);
+    }
+    search(
+        session,
+        goal,
+        weights,
+        budget,
+        Some(CompletionTolerance::DEFAULT),
+        SearchCandidateSet::DirectionalFallback,
+        &execution,
     )
 }
 
@@ -1091,7 +1240,8 @@ pub fn search_to_completion(
         weights,
         budget,
         Some(tolerance),
-        SearchExecution::Deterministic,
+        SearchCandidateSet::Completion,
+        &SearchExecution::Deterministic,
     )
     .expect("決定的探索にはwatchdogも取消しも無い")
 }
@@ -1114,7 +1264,8 @@ pub fn search_to_completion_with_control(
         weights,
         budget,
         Some(tolerance),
-        SearchExecution::controlled(control),
+        SearchCandidateSet::Completion,
+        &SearchExecution::controlled(control),
     )
 }
 
@@ -1126,6 +1277,13 @@ enum SearchExecution<'a> {
         cancellation: &'a dyn SearchCancellation,
         started: Instant,
     },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SearchCandidateSet {
+    Ordinary,
+    DirectionalFallback,
+    Completion,
 }
 
 impl<'a> SearchExecution<'a> {
@@ -1166,11 +1324,12 @@ fn search(
     weights: GapWeights,
     budget: SearchBudget,
     completion: Option<CompletionTolerance>,
-    execution: SearchExecution<'_>,
+    candidates: SearchCandidateSet,
+    execution: &SearchExecution<'_>,
 ) -> Result<SearchOutcome, SearchAbort> {
     let start_form = goal.measure(session.document());
     let start_gaps = finish_gaps(&goal.target, &start_form);
-    let start_score = weights.score(&start_gaps);
+    let start_score = goal.score(session.document(), &start_gaps, weights);
 
     let root = Node {
         session: session.clone(),
@@ -1220,8 +1379,9 @@ fn search(
         }
         outcome.states_expanded += 1;
 
-        let (children, candidates) =
-            expand(&node, goal, weights, budget, completion, &execution, &seen)?;
+        let (children, candidates) = expand(
+            &node, goal, weights, budget, completion, candidates, execution, &seen,
+        )?;
         outcome.max_branching = outcome.max_branching.max(candidates);
         let mut completed: Option<(RankKey, Node)> = None;
         for child in children {
@@ -1274,10 +1434,13 @@ fn search(
 ///
 /// # 候補は、いまの展開図の折り線を**すべて**試して集める
 ///
-/// 1で候補を集めるのに [`FoldSession::verified_moves`] は使わない。あれは
-/// **作業18の見積もり([`crate::plan_generic::GenericPlanner`])に入った手だけ**を
-/// 返し、見積もりの外で折れた手は数([`crate::enumerate::MoveReport::verified_outside_estimate`])
-/// にするだけで捨ててしまう。ところがこの見積もりは
+/// 1で候補を集めるのに [`FoldSession::verified_moves`] は使わない。あれの
+/// [`crate::enumerate::MoveReport::verified`] も見積もりの内外を問わず折れた手をすべて
+/// 返すが、手動操作が明示する単純本折りの方向を物理検査の根拠にする。
+/// 提案は入力CPのM/Vを根拠に [`FoldSession::verify_move`] で確かめる。
+///
+/// 作業18の見積もり([`crate::plan_generic::GenericPlanner`])は会計にだけ残す。
+/// 見積もり内だけに絞ってはならない。この見積もりは
 /// **上限とも下限とも言えない**ことが作業21で実測されている
 /// (検査 `the_estimate_from_task_18_is_neither_an_upper_nor_a_lower_bound`)。
 /// 見積もりで絞ると、**実際に折れる手を探索が見られなくなる**。
@@ -1293,12 +1456,19 @@ fn search(
 /// 結果を振り分けるのに使われているだけだからである。
 /// ここでは同じ確認を [`FoldSession::verify_move`] で1本ずつ行い、
 /// 見積もりによる振り分けをしない。
+///
+/// # 折れることと、提案の層順authorityは別に確かめる
+///
+/// operation-awareな単純本折りは、手が明示する山谷を根拠に途中姿勢まで物理検査できる。
+/// しかし、その終点の層順を提案へ採用してよいかは別の契約である。適用後CPで検査すると、
+/// 手自身が整えた山谷が候補順を自己認証するため、ここでは必ず適用前CPの一般制約へ照合する。
 fn expand(
     node: &Node,
     goal: &FoldGoal,
     weights: GapWeights,
     budget: SearchBudget,
     completion: Option<CompletionTolerance>,
+    candidates: SearchCandidateSet,
     execution: &SearchExecution<'_>,
     seen: &BTreeSet<SessionStateKey>,
 ) -> Result<(Vec<Node>, usize), SearchAbort> {
@@ -1311,16 +1481,33 @@ fn expand(
             continue; // もう折り終えている手か、粗く見ても折れない手。止めずに次の手へ。
         };
         let gaps = finish_gaps(&goal.target, &goal.measure(prepared.successor().document()));
+        let score = goal.score(prepared.successor().document(), &gaps, weights);
         safe_single_lines.insert(fold_line.id);
-        ranked.push((
-            Some(prepared),
-            gaps,
-            weights.score(&gaps),
-            CandidateClass::Regular,
-        ));
+        ranked.push((Some(prepared), gaps, score, CandidateClass::Regular));
         execution.check()?;
     }
-    if completion.is_some() {
+    if candidates == SearchCandidateSet::DirectionalFallback {
+        let mut callback_abort = None;
+        let (directional_moves, interrupted) =
+            node.session
+                .prepared_directional_moves_until(budget.rank_scan, || {
+                    if callback_abort.is_none() {
+                        callback_abort = execution.interruption();
+                    }
+                    callback_abort.is_some()
+                });
+        if let Some(abort) = callback_abort {
+            return Err(abort);
+        }
+        debug_assert!(!interrupted, "中断理由を保存せず方向付き候補を打ち切った");
+        for prepared in directional_moves {
+            execution.check()?;
+            let gaps = finish_gaps(&goal.target, &goal.measure(prepared.successor().document()));
+            let score = goal.score(prepared.successor().document(), &gaps, weights);
+            ranked.push((Some(prepared), gaps, score, CandidateClass::Directional));
+            execution.check()?;
+        }
+    } else if candidates == SearchCandidateSet::Completion {
         // 単一直線を順に閉じると行き止まる花弁折り等のため、完成探索だけは
         // 全網と、畳んだ平面で同一直線へ重なる局所部分集合も同じ物差しで順位付けする。
         // 通常の `search_to_finish` には足さず、作業22の既存結果を変えない。
@@ -1342,6 +1529,7 @@ fn expand(
         for prepared in network_moves {
             execution.check()?;
             let gaps = finish_gaps(&goal.target, &goal.measure(prepared.successor().document()));
+            let score = goal.score(prepared.successor().document(), &gaps, weights);
             let edge_changes = node.session.transition_edge_changes(prepared.successor());
             let id = prepared.verified().id;
             let class = if node.session.move_is_directional_fold(id) {
@@ -1355,7 +1543,7 @@ fn expand(
                     _ => CandidateClass::Regular,
                 }
             };
-            ranked.push((Some(prepared), gaps, weights.score(&gaps), class));
+            ranked.push((Some(prepared), gaps, score, class));
             execution.check()?;
         }
     }
@@ -1422,7 +1610,7 @@ fn expand(
         }
         // 結果へ載せる4値は、実際に子状態として保持する細かい確認後の文書から改めて測る。
         let gaps = finish_gaps(&goal.target, &goal.measure(next.document()));
-        let score = weights.score(&gaps);
+        let score = goal.score(next.document(), &gaps, weights);
         let mut steps = node.steps.clone();
         steps.push(RankedMove { mv, gaps, score });
         children.push(Node {
@@ -2008,6 +2196,7 @@ mod tests {
             target: FinishTarget::default(),
             body: [0.5, 0.5],
             sites: Vec::new(),
+            layer_target: None,
         };
         let watchdog = SearchWatchdog { max_millis: 0 };
         let mut watchdog_aborts = 0;
@@ -2046,6 +2235,7 @@ mod tests {
             target: FinishTarget::default(),
             body: [0.5, 0.5],
             sites: Vec::new(),
+            layer_target: None,
         };
         let mut cancelled = 0;
         let mut outcomes = 0;

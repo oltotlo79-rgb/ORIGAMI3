@@ -112,6 +112,7 @@ fn five_width_factors_match_the_same_artificial_wedge_measurement() {
                 leaf_id: 1,
                 material,
             }],
+            layer_target: None,
         };
         let measured = goal.measure(&document);
         let measured_width = measured.tip(1).expect("先端1を測れなかった").width;

@@ -250,6 +250,7 @@ fn calculate_plan(
                 material: site.vertex.map_or(site.circle.center, |vertex| vertex.pos),
             })
             .collect(),
+        layer_target: None,
     };
     let not_cancelled = || false;
     let control = SearchControl::new(TIME_FREE_WATCHDOG, &not_cancelled);

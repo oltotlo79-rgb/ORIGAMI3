@@ -67,6 +67,8 @@ function Write-JsonAtomic {
     $encoding = [System.Text.UTF8Encoding]::new($false)
     $stream = $null
     $writer = $null
+    $backup = $null
+    $validated = $false
     try {
         $stream = [System.IO.FileStream]::new(
             $temporary,
@@ -85,7 +87,10 @@ function Write-JsonAtomic {
         $stream = $null
 
         if (Test-Path -LiteralPath $Path -PathType Leaf) {
-            [System.IO.File]::Replace($temporary, $Path, $null, $true)
+            # WindowsのFile.Replaceはnullのbackup pathを受け付けない実装がある。
+            # 同じディレクトリの一意なbackupへ置換し、JSON readback後にだけ消す。
+            $backup = "$Path.$([Guid]::NewGuid().ToString('N')).bak"
+            [System.IO.File]::Replace($temporary, $Path, $backup, $true)
         }
         else {
             [System.IO.File]::Move($temporary, $Path)
@@ -93,6 +98,10 @@ function Write-JsonAtomic {
 
         # JSONが読めないcheckpointを成功扱いしない。
         $null = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+        $validated = $true
+        if ($null -ne $backup -and (Test-Path -LiteralPath $backup)) {
+            Remove-Item -LiteralPath $backup -Force
+        }
     }
     finally {
         if ($null -ne $writer) {
@@ -103,6 +112,9 @@ function Write-JsonAtomic {
         }
         if (Test-Path -LiteralPath $temporary) {
             Remove-Item -LiteralPath $temporary -Force
+        }
+        if ($validated -and $null -ne $backup -and (Test-Path -LiteralPath $backup)) {
+            Remove-Item -LiteralPath $backup -Force
         }
     }
 }
@@ -342,7 +354,7 @@ function Invoke-ProductHashContract {
     }
     $match = [regex]::Match(
         $cargo.output,
-        "candidate_json_fnv1a64=(?<candidate>[0-9a-f]{16}) normal_stop_fnv1a64=(?<stop>[0-9a-f]{16})"
+        "candidate_json_fnv1a64=(?<candidate>[0-9a-f]{16})(?: candidate_json_1e9_fnv1a64=[0-9a-f]{16})? normal_stop_fnv1a64=(?<stop>[0-9a-f]{16})"
     )
     if (-not $match.Success) {
         throw "製品hash契約の結果行を読めません"

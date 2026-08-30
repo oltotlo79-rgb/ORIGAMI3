@@ -7039,8 +7039,8 @@
     "case_raw_gate_millis": 49609,
     "proposed_case_gate_seconds": 50,
     "proposed_case_gate_millis": 50000,
-    "enforced": false,
-    "status": "awaiting_coordinator"
+    "enforced": true,
+    "status": "approved"
   },
   "target_summary": {
     "basis": "functional_recorded_current_acceptance",

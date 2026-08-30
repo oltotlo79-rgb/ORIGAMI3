@@ -15,8 +15,16 @@ use ori3_propose::search::{
 use ori3_propose::skeleton::TipPos2d;
 use ori3_rigid::{max_seam_gap, self_intersection_pairs};
 
+#[path = "support/fixed_order.rs"]
+mod fixed_order;
+
+use fixed_order::folded_along;
+
 /// 決定性を見るために同じ入力を回す回数(合格条件2)。
 const RUNS: usize = 3;
+
+const CRANE_STRICT_GOAL_ORDER: [usize; 2] = [3, 16]; // 2026-08-28: `[16,3]`→`[3,16]`; 旧16は入力CPで一般制約2/37違反・破棄5、strict有効手は1/27。
+const YAKKO_STRICT_GOAL_ORDER: [usize; 1] = [2]; // 2026-08-28: `[0,7]`→`[2]`; 旧0は入力CPで一般制約1/9違反・破棄5、strict有効手は4/8。
 
 /// 標本1: 折り鶴。作業18が写した展開図を、追跡対象の `tests/fixtures/` から読む。
 fn crane() -> Document {
@@ -94,6 +102,7 @@ fn corner_goal(lengths: [f64; 4], widths: [f64; 4], pos: [[f64; 2]; 4]) -> FoldG
         },
         body: [0.5, 0.5],
         sites: corner_sites(),
+        layer_target: None,
     }
 }
 
@@ -106,22 +115,6 @@ fn weights_goal() -> FoldGoal {
         [0.3, 0.3, 0.3, 0.3],
         [[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]],
     )
-}
-
-/// 手順を順に折ったところまで進めた作品。
-///
-/// 1手ずつ、姿勢21点([`PoseScan::DEFAULT`])で**折れることを確かめてから**進める。
-fn folded_along(doc: &Document, ids: &[usize]) -> FoldSession {
-    let mut session = FoldSession::new(doc).expect("折り始められない");
-    for &id in ids {
-        let mv = session
-            .verify_move(id, PoseScan::DEFAULT)
-            .unwrap_or_else(|| panic!("手 {id} は姿勢21点では折れない"));
-        session
-            .apply(&mv)
-            .unwrap_or_else(|e| panic!("手 {id}: {e}"));
-    }
-    session
 }
 
 /// **実際に折り上げられる形**を目標にする。
@@ -151,6 +144,7 @@ fn goal_of_state(doc: &Document, ids: &[usize]) -> FoldGoal {
         },
         body: [0.5, 0.5],
         sites: corner_sites(),
+        layer_target: None,
     };
     let session = folded_along(doc, ids);
     let form = draft.measure(session.document());
@@ -190,17 +184,40 @@ fn goal_of_state(doc: &Document, ids: &[usize]) -> FoldGoal {
     }
 }
 
+/// 固定入力が無効になったとき、21姿勢の一般的な失敗ではなく固定IDの破損と分かること。
+#[test]
+fn an_invalid_fixed_move_is_reported_as_a_broken_fixed_input() {
+    // 候補16は診断文を確かめるために意図的に渡す。目標fixtureには使わない。
+    let panic = match std::panic::catch_unwind(|| folded_along(&crane(), &[16])) {
+        Ok(_) => panic!("無効な固定手16を渡したのに共通入口が失敗しなかった"),
+        Err(panic) => panic,
+    };
+    let message = panic
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| panic.downcast_ref::<&str>().map(|text| (*text).to_owned()))
+        .unwrap_or_else(|| "文字列でないpanic".to_owned());
+    println!("STAGE8_FIXED_ORDER_DIAGNOSTIC {message}");
+    assert!(
+        message.contains("固定している手が無効になった"),
+        "固定入力の破損だと分からない診断だった: {message}"
+    );
+    assert!(
+        message.contains("strict 有効手の実測は"),
+        "失敗時の全数再測定が診断に入っていない: {message}"
+    );
+}
+
 /// 標本と、その標本で**実際に折り上げられる形**の目標。
 ///
-/// 目標に選んだ手順は、姿勢21点で到達できる深さ2までの状態を全部測って、
-/// **角がいちばん多く残るもの**から選んだ(折り鶴 `[16, 3]` は4本、
-/// やっこさん `[0, 7]` は3本)。実測では、やっこさんで2手折って4本とも
-/// 残る手順は**1つも無かった**(座布団折りはどれか1隅を胴の中心へ畳んでしまう)。
+/// 固定手順は入口で入力CPの一般制約を使って検証する。折り鶴は唯一strict有効な
+/// 初手3から完成する `[3, 16]`、やっこさんは初期のstrict有効4手のうち、平らな
+/// 状態から点数を改善できる到達形 `[2]` を使う。
 fn samples() -> Vec<(&'static str, Document, FoldGoal)> {
     let crane_doc = crane();
-    let crane_goal = goal_of_state(&crane_doc, &[16, 3]);
+    let crane_goal = goal_of_state(&crane_doc, &CRANE_STRICT_GOAL_ORDER);
     let yakko_doc = yakko();
-    let yakko_goal = goal_of_state(&yakko_doc, &[0, 7]);
+    let yakko_goal = goal_of_state(&yakko_doc, &YAKKO_STRICT_GOAL_ORDER);
     vec![
         ("折り鶴", crane_doc, crane_goal),
         ("やっこさん", yakko_doc, yakko_goal),
@@ -222,8 +239,8 @@ fn line(g: &FinishGaps, score: f64) -> String {
 #[test]
 fn a_goal_taken_from_a_folded_shape_scores_zero_on_that_shape() {
     for (name, doc, ids) in [
-        ("折り鶴", crane(), vec![16, 3]),
-        ("やっこさん", yakko(), vec![0, 7]),
+        ("折り鶴", crane(), CRANE_STRICT_GOAL_ORDER.to_vec()),
+        ("やっこさん", yakko(), YAKKO_STRICT_GOAL_ORDER.to_vec()),
     ] {
         let goal = goal_of_state(&doc, &ids);
         let session = folded_along(&doc, &ids);
@@ -521,11 +538,10 @@ fn the_search_returns_its_best_so_far_when_the_budget_runs_out() {
         // (`tests/enumerate.rs` の
         // `the_estimate_from_task_18_is_neither_an_upper_nor_a_lower_bound`)。
         //
-        // 実測(2026-08-17、debugビルド): 折り鶴の手3(`y = 0.5`)と手16は
-        // どちらも点 0.353553 で並ぶので、探索は折り線の番号が小さい手3を選ぶ。
-        // ところが手3は見積もりの外にあるため、見積もりで絞った数え直しは
-        // 手16しか見ておらず、`3 != 16` で落ちていた。**探索は正しく、
-        // 数え直す側だけが手を取りこぼしていた。**
+        // 正規再測定(2026-08-28、debugビルド): 折り鶴でstrictに折れる初手は
+        // 27件中、見積もり外の手3(`y = 0.5`)だけだった。旧手16は入力CPで
+        // 一般制約2/37違反・破棄5組のため拒否される。見積もり内だけで数え直すと
+        // 有効な手を0件として取りこぼすので、ここでは全FoldLineを同じstrict経路で見る。
         //
         // **主張は緩めていない。** 「打ち切りで返した1手目は、最初に折れる手の
         // 中でいちばん点数が良い」という条件はそのままで、比べる相手の集め方だけを
@@ -594,24 +610,20 @@ fn the_search_returns_its_best_so_far_when_the_budget_runs_out() {
 #[test]
 fn changing_the_specified_position_changes_the_chosen_fold_order() {
     let doc = yakko();
-    let a = goal_of_state(&doc, &[0, 7]);
+    let a = goal_of_state(&doc, &YAKKO_STRICT_GOAL_ORDER);
     // 長さも太さも紙の場所の対応もそのままで、**位置だけ**を上下ひっくり返す。
     //
-    // 実測では、位置の変え方によって手順が変わるものと変わらないものがある。
-    // 同じ目標Aに対して、位置だけを次のように変えて測った(やっこさん、既定の予算)。
+    // 2026-08-30の再測定では、通常の単線候補だけでは目標A `[2]` へは手順`[2]`、
+    // 上下反転後は空手順だった。反転側は、残す側と上/下を明示した方向付き候補を
+    // 使うと非空の手順を選べる。
     //
     // | 位置の変え方 | 返った手順 | 点 |
     // |---|---|---:|
-    // | そのまま | `[0, 7]` | 0.000000 |
-    // | 葉1と葉3の位置を入れ替え | `[0, 7]` | 0.333333 |
-    // | 90度まわす | `[0, 7]` | 0.569036 |
-    // | 左右反転 | `[0, 7]` | 0.471405 |
-    // | **上下反転** | **`[7]`** | 0.275449 |
+    // | そのまま | `[2]` | 0.000000 |
+    // | **上下反転** | **`[2, 62, 35, 48]`** | **0.666667** |
     //
-    // 上下反転だけが手順を変えた。他の3つは点数だけが変わり、
-    // その位置にいちばん近い折り方が同じだったということである
-    // (やっこさんで2手までに行ける形が少ないため)。
-    // ここでは手順が変わる上下反転を使う。
+    // 方向付き候補を通常候補へ無条件に混ぜると既存の非空探索を変えるため、実装は
+    // 通常候補で空手順になった場合だけ同じ上限で方向付き候補を再探索する。
     let b = FoldGoal {
         target: FinishTarget {
             tips: a

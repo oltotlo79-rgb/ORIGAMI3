@@ -181,6 +181,7 @@ fn run_named_candidate(
                 material: site.vertex.map_or(site.circle.center, |vertex| vertex.pos),
             })
             .collect(),
+        layer_target: None,
     };
     let outcome = search_to_completion(
         &session,
