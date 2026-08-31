@@ -125,7 +125,7 @@ foreach ($requiredPath in @($roadmapPath, $progressPath, $testNamesPath)) {
 $expectedCheckboxCounts = [ordered]@{
     M0 = 11
     M1 = 38
-    M2 = 68
+    M2 = 70
     M3 = 45
     M4 = 19
     M5 = 1
@@ -170,6 +170,86 @@ $taskTests = @{
     "M4|Task 4-6" = @("traditional_frog_has_required_techniques_and_replays_connected_twice")
 }
 
+# Task単位の既定割当だけでは細目の受入条件を十分に表せない項目は、link IDごとに
+# 網羅する検査を明示する。ここへ書く名前も検査名台帳に実在しなければならない。
+# link ID割当は手動受入の語句分類より優先し、UI文言を含んでも自動検査で立証済みの
+# 項目を手動証拠へ退行させない。
+$linkTests = @{
+    "M2.T2-8.C01" = @(
+        "autosave::tests::autosave_worker_waits_thirty_seconds_and_still_skips_clean_documents"
+        "autosave::tests::autosave_skips_clean_document_and_writes_untitled_to_app_data"
+        "autosave::tests::clean_exit_discards_but_dirty_exit_keeps_the_autosave"
+    )
+    "M2.T2-8.C02" = @(
+        "src/App.dom.test.tsx > startup recovery check > checks recovery exactly once after preparing the new document"
+        "autosave::tests::recovery_wire_uses_null_for_no_choices_and_requires_both_internal_fields"
+        "autosave::tests::recovery_choices_are_newest_first_and_keep_the_fourth_as_overflow"
+        "src/components/RecoveryDialog.dom.test.tsx > 復旧ダイアログ > 残っていれば理由と選択肢を日本語で出す"
+    )
+    "M2.T2-8.C04" = @(
+        "autosave::tests::clean_exit_never_discards_another_process_active_snapshot"
+        "autosave::tests::forced_process_kill_then_new_process_restores_exact_document"
+        "autosave::tests::restore_recovers_the_same_document"
+        "autosave::tests::two_real_processes_keep_both_documents_when_autosave_transactions_overlap"
+    )
+    "M2.T2-8.C05" = @(
+        "store::tests::saving_own_opened_document_twice_after_edits_does_not_conflict"
+        "store::tests::two_real_processes_reject_a_stale_explicit_save_and_keep_the_first_save"
+    )
+    "M3.T3-4.C28" = @("compare_two_ways_on_allowed_corpus_anchors")
+    "M4.T4-5.C03" = @("diagram_pdf_and_svg_create_nonempty_structured_files")
+}
+
+# 完了印を付けた自動証拠は、Task既定割当・本文語句分類に委ねず、link IDごとに
+# ここで検査名を明示する。未着手([ ])は対象外であり、新規作業を不要に止めない。
+# 同一検査が複数細目を立証する場合だけ、IDを同じ割当にまとめる。
+$completedAutomaticLinkTests = @(
+    [pscustomobject]@{ LinkIds = @("M1.T1-1.C01", "M1.T1-1.C02"); TestNames = @("test_document_json_roundtrip") }
+    [pscustomobject]@{ LinkIds = @("M1.T1-10.C01"); TestNames = @("yakko_double_blintz_folds_flat_to_half_square") }
+    [pscustomobject]@{ LinkIds = @("M1.T1-2.C01", "M1.T1-2.C02"); TestNames = @("test_seg_intersection_crossing") }
+    [pscustomobject]@{ LinkIds = @("M1.T1-3.C01", "M1.T1-3.C02"); TestNames = @("extraction_is_deterministic") }
+    [pscustomobject]@{ LinkIds = @("M1.T1-4.C01", "M1.T1-4.C02", "M1.T1-4.C03"); TestNames = @("store::tests::add_segment_undo_redo_roundtrip") }
+    [pscustomobject]@{ LinkIds = @("M1.T1-5.C01", "M1.T1-5.C02", "M1.T1-5.C03"); TestNames = @("src/store/ipcQueue.test.ts > createSerialQueue > 前の要求が完了するまで次の要求を開始しない(発行順に直列実行)") }
+    [pscustomobject]@{ LinkIds = @("M1.T1-6.C01"); TestNames = @("src/lib/alignPick.test.ts > 線分の交点 > 十字に交わる2本の交点を返す") }
+    [pscustomobject]@{ LinkIds = @("M1.T1-7.C01", "M1.T1-7.C02"); TestNames = @("loop_free_cp_converges_immediately") }
+    [pscustomobject]@{ LinkIds = @("M1.T1-8.C01", "M1.T1-8.C02", "M1.T1-8.C03"); TestNames = @("warm_start_converges_faster_to_same_solution") }
+    [pscustomobject]@{ LinkIds = @("M2.T2-0.C01", "M2.T2-0.C02", "M2.T2-0.C03", "M2.T2-0.C04"); TestNames = @("yakko_hinge_20_sweep_stays_within_frame_budget") }
+    [pscustomobject]@{ LinkIds = @("M2.T2-1.C01", "M2.T2-1.C02"); TestNames = @("half_folded_square_is_mirror_pair_with_right_face_on_top") }
+    [pscustomobject]@{ LinkIds = @("M2.T2-2.C01", "M2.T2-2.C02"); TestNames = @("folding_only_top_layer_keeps_lower_layers_in_place") }
+    [pscustomobject]@{ LinkIds = @("M2.T2-3.C01", "M2.T2-3.C02", "M2.T2-3.C04"); TestNames = @("replay_twice_is_bit_identical") }
+    [pscustomobject]@{ LinkIds = @("M2.T2-5.C02"); TestNames = @("store::tests::cushion_then_cupboard_fold_only_with_fold_through") }
+    [pscustomobject]@{ LinkIds = @("M2.T2-6.C01", "M2.T2-6.C02", "M2.T2-6.C03", "M2.T2-6.C05"); TestNames = @("inside_reverse_on_four_layer_flap") }
+    [pscustomobject]@{ LinkIds = @("M2.T2-6b.C01", "M2.T2-6b.C02", "M2.T2-6b.C03", "M2.T2-6b.C04"); TestNames = @("sim011_completeness_table_and_generic_routes_are_permanent") }
+    [pscustomobject]@{ LinkIds = @("M2.T2-6c.C06"); TestNames = @("src/lib/layerMotion.test.ts > 汎用層操作の入力 > 既存折り目のReflectをregionなし・Keepへ変換する") }
+    [pscustomobject]@{ LinkIds = @("M3.T3-2.C01", "M3.T3-2.C02"); TestNames = @("packing_quality_baseline_1005_runs") }
+    [pscustomobject]@{ LinkIds = @("M3.T3-3.C01", "M3.T3-3.C02", "M3.T3-3.C03"); TestNames = @("depth_three_branching_skeleton_packs_and_generates_valid_cp") }
+    [pscustomobject]@{ LinkIds = @("M3.T3-4.C05", "M3.T3-4.C06", "M3.T3-4.C07", "M3.T3-4.C08", "M3.T3-4.C09", "M3.T3-4.C10", "M3.T3-4.C11", "M3.T3-4.C12", "M3.T3-4.C13", "M3.T3-4.C14", "M3.T3-4.C15", "M3.T3-4.C16", "M3.T3-4.C17", "M3.T3-4.C18", "M3.T3-4.C19", "M3.T3-4.C20", "M3.T3-4.C21", "M3.T3-4.C24", "M3.T3-4.C25", "M3.T3-4.C26", "M3.T3-4.C27", "M3.T3-4.C29", "M3.T3-4.C30", "M3.T3-4.C31", "M3.T3-4.C32", "M3.T3-4.C33", "M3.T3-4.C34", "M3.T3-4.C35", "M3.T3-4.C36"); TestNames = @("proposal_matrix_contract") }
+    [pscustomobject]@{ LinkIds = @("M4.T4-1.C01", "M4.T4-1.C02"); TestNames = @("open_sink_turns_the_tip_of_the_preliminary_base_inside_out") }
+    [pscustomobject]@{ LinkIds = @("M4.T4-2.C01", "M4.T4-2.C02"); TestNames = @("twist_works_on_a_triangle_and_rejects_only_undefined_input") }
+    [pscustomobject]@{ LinkIds = @("M4.T4-3.C01"); TestNames = @("cp_svg::tests::each_edge_kind_has_its_own_style") }
+    [pscustomobject]@{ LinkIds = @("M4.T4-4.C01", "M4.T4-4.C02"); TestNames = @("manual::tests::representative_json_makes_four_page_pdf_and_two_toc_items") }
+    [pscustomobject]@{ LinkIds = @("M4.T4-5.C01", "M4.T4-5.C02"); TestNames = @("pdf::tests::seven_steps_make_a_cover_and_two_pages") }
+    [pscustomobject]@{ LinkIds = @("M4.T4-6.C01"); TestNames = @("traditional_frog_has_required_techniques_and_replays_connected_twice") }
+)
+foreach ($assignment in $completedAutomaticLinkTests) {
+    foreach ($linkId in @($assignment.LinkIds)) {
+        if ($linkTests.ContainsKey($linkId)) { throw "完了済み自動証拠のlink ID割当が重複しています: $linkId" }
+        $linkTests[$linkId] = @($assignment.TestNames)
+    }
+}
+
+# 承認済みのC04/C05は既存C02/C03の前へ追記されたが、IDは正本上の既存IDを保つ。
+# 順序を自由化せず、このTaskだけの5件の順序を固定してinline markerとの一致照合を維持する。
+$taskLinkIdOrder = @{
+    "M2|Task 2-8" = @(
+        "M2.T2-8.C01"
+        "M2.T2-8.C04"
+        "M2.T2-8.C05"
+        "M2.T2-8.C02"
+        "M2.T2-8.C03"
+    )
+}
+
 $scopeFallbackTests = @{
     M1 = "test_document_json_roundtrip"
     M2 = "full_replay_folds_flat_and_layers_are_a_permutation"
@@ -200,7 +280,6 @@ $b1ManualAcceptanceClassification = [ordered]@{
     "MANUAL.M2.T2-7.C01.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "4種類の作図補助" }
     "MANUAL.M2.T2-7.C02.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "局所平坦違反の橙表示" }
     "MANUAL.M2.T2-7.C03.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "めり込み警告バッジ" }
-    "MANUAL.M2.T2-8.C02.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "復旧ダイアログ" }
     "MANUAL.M3.T3-4.C01.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "提案ウィザード3画面" }
     "MANUAL.M3.T3-4.C02.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "提案ウィザードの起動位置" }
     "MANUAL.M4.T4-3.C02.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "展開図書き出しダイアログ" }
@@ -375,6 +454,10 @@ $ignoredExplicitTestCount = @($testInventoryEntries | Where-Object { $_.executio
 $inventoryDuplicates = @($testInventoryNames | Group-Object | Where-Object { $_.Count -ne 1 })
 if ($inventoryDuplicates.Count -ne 0) {
     throw "検査名台帳に重複があります: $($inventoryDuplicates.Name -join ', ')"
+}
+$testInventoryEntryByName = @{}
+foreach ($entry in $testInventoryEntries) {
+    $testInventoryEntryByName[[string]$entry.name] = $entry
 }
 $declaredInventoryCount = [int]$inventoryScopeMatch.Groups['names'].Value
 if ($declaredInventoryCount -ne $testInventoryNames.Count) {
@@ -552,11 +635,14 @@ $definitionManifestBytes = [Text.Encoding]::UTF8.GetBytes(($definitionManifestLi
 $testDefinitionTreeHash = Get-BytesSha256 $definitionManifestBytes
 $declaredDefinitionTreeHash = [string]$inventoryDefinitionHashMatch.Groups['sha'].Value
 if (-not [string]::Equals($declaredDefinitionTreeHash, $testDefinitionTreeHash, [StringComparison]::Ordinal)) {
-    throw "検査名台帳のtest definition hashが現在定義と不一致です: declared=$declaredDefinitionTreeHash actual=$testDefinitionTreeHash definitions=$($definitionManifestLines.Count) files=$($sourceRelativePaths.Count)"
+    throw "検査名台帳のtest definition hashが現在定義と不一致です:`ndeclared=$declaredDefinitionTreeHash`nactual=$testDefinitionTreeHash`ndefinitions=$($definitionManifestLines.Count) files=$($sourceRelativePaths.Count)"
 }
 $testInventory = ($testInventoryNames -join "`n") + "`n"
 $mappedTestNames = @(
     foreach ($value in $taskTests.Values) {
+        foreach ($name in @($value)) { [string]$name }
+    }
+    foreach ($value in $linkTests.Values) {
         foreach ($name in @($value)) { [string]$name }
     }
     foreach ($value in $scopeFallbackTests.Values) {
@@ -658,7 +744,14 @@ for ($index = 0; $index -lt $roadmapLines.Count; $index++) {
         if (-not $taskOrdinals.ContainsKey($taskKey)) { $taskOrdinals[$taskKey] = 0 }
         $taskOrdinals[$taskKey] = [int]$taskOrdinals[$taskKey] + 1
         $taskNumber = ([regex]::Match($linkTask, 'Task (?<number>[0-9]+-[0-9A-Za-z]+)')).Groups['number'].Value
-        $linkId = "$scope.T$taskNumber.C{0:D2}" -f $taskOrdinals[$taskKey]
+        if ($taskLinkIdOrder.ContainsKey($taskKey)) {
+            $orderedIds = @($taskLinkIdOrder[$taskKey])
+            if ($taskOrdinals[$taskKey] -gt $orderedIds.Count) { throw "Taskの固定link ID順序を超えました: $taskKey" }
+            $linkId = [string]$orderedIds[$taskOrdinals[$taskKey] - 1]
+        }
+        else {
+            $linkId = "$scope.T$taskNumber.C{0:D2}" -f $taskOrdinals[$taskKey]
+        }
         $manualKind = Get-ManualKind $checkboxText
         $testName = $null
         $testNames = @()
@@ -667,7 +760,17 @@ for ($index = 0; $index -lt $roadmapLines.Count; $index++) {
         $commitHash = $null
         $commitSubject = $null
         $commitMainAncestor = $null
-        if ($null -ne $manualKind) {
+        $testMappingOrigin = $null
+        if ($linkTests.ContainsKey($linkId)) {
+            $testNames = @($linkTests[$linkId])
+            $testNames = @($testNames | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            if ($testNames.Count -eq 0) { throw "検査名を割り当てられません: $linkId" }
+            $testName = $testNames[0]
+            $evidenceId = "TEST.$linkId"
+            $evidenceType = "test"
+            $testMappingOrigin = "link-id"
+        }
+        elseif ($null -ne $manualKind) {
             $manualId = "MANUAL.$linkId.$($manualKind.ToUpperInvariant())"
             $evidenceId = $manualId
             $evidenceType = "manual"
@@ -689,6 +792,7 @@ for ($index = 0; $index -lt $roadmapLines.Count; $index++) {
             $testName = $testNames[0]
             $evidenceId = "TEST.$linkId"
             $evidenceType = "test"
+            $testMappingOrigin = "task-default-or-scope-fallback"
         }
 
         # [ ]なのに同じTaskの完了見出しがあるものだけを要確認にする。
@@ -745,6 +849,7 @@ for ($index = 0; $index -lt $roadmapLines.Count; $index++) {
             evidence_type = $evidenceType
             test_name = $testName
             test_names = $testNames
+            test_mapping_origin = $testMappingOrigin
             manual_id = $manualId
             commit_hash = $commitHash
             commit_subject = $commitSubject
@@ -758,7 +863,7 @@ for ($index = 0; $index -lt $roadmapLines.Count; $index++) {
         if ($Update) {
             $line = [regex]::Replace(
                 $line,
-                '\s+— \[証拠:[^\]]+\]\(traceability/roadmap-links\.md#[^)]+\) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=[^\s]+ evidence=[^\s>]+ -->$',
+                '\s+— \[証拠:[^\]]+\]\(traceability/roadmap-links\.md#[^)]+\) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=[^\s]+ evidence=[^\s>]+ -->',
                 ''
             )
             $slug = ConvertTo-LinkSlug $linkId
@@ -784,6 +889,7 @@ $records.Add([pscustomobject][ordered]@{
     evidence_type = "manual"
     test_name = $null
     test_names = @()
+    test_mapping_origin = $null
     manual_id = "MANUAL.M6.ACCEPTANCE.C01.FULL-ACCEPTANCE"
     commit_hash = $null
     commit_subject = $null
@@ -825,6 +931,15 @@ $unverifiedCommitEvidence = @($checkboxRecords | Where-Object {
     $_.progress_state -in @("commit-evidence-mapping-required", "commit-evidence-not-on-origin-main")
 })
 $uncheckedWithTests = @($checkboxRecords | Where-Object { $_.progress_state -eq "unchecked-with-test-link" })
+$checkedAutomaticRecords = @($checkboxRecords | Where-Object {
+    $_.checkbox_state -eq "checked" -and $_.evidence_type -eq "test"
+})
+$checkedAutomaticWithoutExplicitLinkTests = @($checkedAutomaticRecords | Where-Object {
+    $_.test_mapping_origin -ne "link-id"
+})
+if ($checkedAutomaticWithoutExplicitLinkTests.Count -ne 0) {
+    throw "完了済み自動証拠にlink ID単位の明示検査割当がありません: $($checkedAutomaticWithoutExplicitLinkTests.id -join ', ')"
+}
 # 逆方向: ロードマップは完了だが、進捗の日時見出しに同じTaskの完了記録がない。
 # 作業見出しは進捗Taskと一対一に対応しないため、ここでは数えない。
 $reverseDisagreements = @($checkboxRecords | Where-Object {
@@ -835,6 +950,15 @@ foreach ($record in $testRecords) {
     foreach ($testName in @($record.test_names)) {
         if (-not (Test-ListedName $testInventory $testName)) {
             throw "保存済み一覧に無い検査名です: $($record.id) -> $testName"
+        }
+        # 完了済み自動証拠では、存在だけでなく実行形態も明示的に再確認する。
+        # active-default以外を許すのは、上でCI/check-ci/品質規約の3経路を照合した
+        # ignored-explicitだけである。未実行のskipや存在しない検査はここへ到達できない。
+        if ($record.checkbox_state -eq "checked") {
+            $entry = $testInventoryEntryByName[$testName]
+            if ($null -eq $entry -or $entry.execution_mode -notin @("active-default", "ignored-explicit")) {
+                throw "完了済み自動証拠の検査が実行可能な台帳entryではありません: $($record.id) -> $testName"
+            }
         }
     }
 }

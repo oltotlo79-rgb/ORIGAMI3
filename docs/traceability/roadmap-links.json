@@ -3,44 +3,44 @@
     "generated_by":  "scripts/doc-link-audit.ps1",
     "roadmap_snapshot":  {
                              "schema":  1,
-                             "sha256":  "2e60805ef7202669133666d5552d9e8b048fd50bdb112e9cd5c00f669dd2a0c5",
-                             "policy_sha256":  "c28bef89b682b2d8019845a437cd8b05bf987381da153f00d7f67e5433234c60",
-                             "total":  184,
-                             "audited":  184,
-                             "checked":  168,
-                             "unchecked":  16
+                             "sha256":  "77ddd527f223af20ca79429de9a77bbaa120ef7493e4e68a2f9eab8637cc1534",
+                             "policy_sha256":  "96efa8affbb7a0e4d80291b990575976157e5fa6230bc98ee6807311d805c643",
+                             "total":  186,
+                             "audited":  186,
+                             "checked":  172,
+                             "unchecked":  14
                          },
     "test_name_inventory":  {
                                 "path":  "docs/traceability/roadmap-evidence-test-names.txt",
                                 "schema":  2,
                                 "scope":  "roadmap-mapped",
-                                "audited":  38,
-                                "mapped":  38,
-                                "source_files":  29,
-                                "definition_tree_sha256":  "bf81b6e4f1c5041e2d6ea1ac2dcff055d80e49af7d9fa3ebbb1af0a3f34c1d8c",
+                                "audited":  52,
+                                "mapped":  52,
+                                "source_files":  33,
+                                "definition_tree_sha256":  "94b9a690e5f4e324468697d67b96f1a0f6c655669ee72f3f7747b3e7dda01e06",
                                 "execution_modes":  {
-                                                        "active_default":  37,
+                                                        "active_default":  51,
                                                         "ignored_explicit":  1
                                                     },
                                 "repository_test_total":  null,
-                                "sha256":  "c2baa171dd9a6b330afe12ecaea5f614a0085427b1badac7c624f69f3a0419be"
+                                "sha256":  "3b62afd3b299a603e4336f43a53cbf15128b5a1176c0d32c4fbd10848ec06be8"
                             },
     "traceability_accounting":  {
-                                    "linked_checkbox_count":  182,
+                                    "linked_checkbox_count":  184,
                                     "explicit_outside_count":  2,
                                     "unclassified_count":  0,
-                                    "accounted_total":  184
+                                    "accounted_total":  186
                                 },
     "explicit_outside":  [
                              {
                                  "id":  "ADDITIONAL.FOLD-ALL.C01",
-                                 "line_number":  968,
+                                 "line_number":  970,
                                  "state":  "unchecked",
                                  "text_sha256":  "9466326a292e711303b0abe1d78ed4f2a0b0d64c1a07456b3510ba35366987c3"
                              },
                              {
                                  "id":  "ADDITIONAL.FOLD-IO.C01",
-                                 "line_number":  964,
+                                 "line_number":  966,
                                  "state":  "checked",
                                  "text_sha256":  "e21cff4b5125e05fdbce5645a6b4ef4e2f0c0947f822b0de91d214e9f9d02f64"
                              }
@@ -280,6 +280,7 @@
                         "test_names":  [
                                            "test_document_json_roundtrip"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -303,6 +304,7 @@
                         "test_names":  [
                                            "test_document_json_roundtrip"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -326,6 +328,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M1.T1-1.C03.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -349,6 +352,7 @@
                         "test_names":  [
                                            "yakko_double_blintz_folds_flat_to_half_square"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -372,6 +376,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M1.T1-10.C02.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -395,6 +400,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M1.T1-10.C03.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -418,6 +424,7 @@
                         "test_names":  [
                                            "test_seg_intersection_crossing"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -441,6 +448,7 @@
                         "test_names":  [
                                            "test_seg_intersection_crossing"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -464,6 +472,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M1.T1-2.C03.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -487,6 +496,7 @@
                         "test_names":  [
                                            "extraction_is_deterministic"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -510,6 +520,7 @@
                         "test_names":  [
                                            "extraction_is_deterministic"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -533,6 +544,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M1.T1-3.C03.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -556,6 +568,7 @@
                         "test_names":  [
                                            "store::tests::add_segment_undo_redo_roundtrip"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -579,6 +592,7 @@
                         "test_names":  [
                                            "store::tests::add_segment_undo_redo_roundtrip"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -602,6 +616,7 @@
                         "test_names":  [
                                            "store::tests::add_segment_undo_redo_roundtrip"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -625,6 +640,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M1.T1-4.C04.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -648,6 +664,7 @@
                         "test_names":  [
                                            "src/store/ipcQueue.test.ts \u003e createSerialQueue \u003e 前の要求が完了するまで次の要求を開始しない(発行順に直列実行)"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -671,6 +688,7 @@
                         "test_names":  [
                                            "src/store/ipcQueue.test.ts \u003e createSerialQueue \u003e 前の要求が完了するまで次の要求を開始しない(発行順に直列実行)"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -694,6 +712,7 @@
                         "test_names":  [
                                            "src/store/ipcQueue.test.ts \u003e createSerialQueue \u003e 前の要求が完了するまで次の要求を開始しない(発行順に直列実行)"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -717,6 +736,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M1.T1-5.C04.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -740,6 +760,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M1.T1-5.C05.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -763,6 +784,7 @@
                         "test_names":  [
                                            "src/lib/alignPick.test.ts \u003e 線分の交点 \u003e 十字に交わる2本の交点を返す"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -786,6 +808,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M1.T1-6.C02.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -809,6 +832,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M1.T1-6.C03.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -832,6 +856,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M1.T1-6.C04.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -855,6 +880,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M1.T1-6.C05.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -878,6 +904,7 @@
                         "test_names":  [
                                            "loop_free_cp_converges_immediately"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -901,6 +928,7 @@
                         "test_names":  [
                                            "loop_free_cp_converges_immediately"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -924,6 +952,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M1.T1-7.C03.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -947,6 +976,7 @@
                         "test_names":  [
                                            "warm_start_converges_faster_to_same_solution"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -970,6 +1000,7 @@
                         "test_names":  [
                                            "warm_start_converges_faster_to_same_solution"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -993,6 +1024,7 @@
                         "test_names":  [
                                            "warm_start_converges_faster_to_same_solution"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1016,6 +1048,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M1.T1-8.C04.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1039,6 +1072,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M1.T1-9.C01.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1062,6 +1096,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M1.T1-9.C02.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1085,6 +1120,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M1.T1-9.C03.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1108,6 +1144,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M1.T1-9.C04.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1131,6 +1168,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M1.T1-9.C05.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1154,6 +1192,7 @@
                         "test_names":  [
                                            "yakko_hinge_20_sweep_stays_within_frame_budget"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1177,6 +1216,7 @@
                         "test_names":  [
                                            "yakko_hinge_20_sweep_stays_within_frame_budget"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1200,6 +1240,7 @@
                         "test_names":  [
                                            "yakko_hinge_20_sweep_stays_within_frame_budget"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1223,6 +1264,7 @@
                         "test_names":  [
                                            "yakko_hinge_20_sweep_stays_within_frame_budget"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1246,6 +1288,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-0.C05.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1269,6 +1312,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-0.C06.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1292,6 +1336,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-0.C07.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1315,6 +1360,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-0.C08.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1338,6 +1384,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-0.C09.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1361,6 +1408,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-0.C10.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1384,6 +1432,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-0.C11.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1407,6 +1456,7 @@
                         "test_names":  [
                                            "half_folded_square_is_mirror_pair_with_right_face_on_top"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1430,6 +1480,7 @@
                         "test_names":  [
                                            "half_folded_square_is_mirror_pair_with_right_face_on_top"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1453,6 +1504,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-1.C03.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1476,6 +1528,7 @@
                         "test_names":  [
                                            "folding_only_top_layer_keeps_lower_layers_in_place"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1499,6 +1552,7 @@
                         "test_names":  [
                                            "folding_only_top_layer_keeps_lower_layers_in_place"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1522,6 +1576,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-2.C03.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1545,6 +1600,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-2.C04.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1568,6 +1624,7 @@
                         "test_names":  [
                                            "replay_twice_is_bit_identical"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1591,6 +1648,7 @@
                         "test_names":  [
                                            "replay_twice_is_bit_identical"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1614,6 +1672,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-3.C03.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1637,6 +1696,7 @@
                         "test_names":  [
                                            "replay_twice_is_bit_identical"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1660,6 +1720,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-3.C05.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1683,6 +1744,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-3.C06.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1706,6 +1768,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-4.C01.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1729,6 +1792,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-4.C02.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1752,6 +1816,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-4.C03.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1775,6 +1840,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-4.C04.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1798,6 +1864,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-5.C01.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1821,6 +1888,7 @@
                         "test_names":  [
                                            "store::tests::cushion_then_cupboard_fold_only_with_fold_through"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1844,6 +1912,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-5.C03.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1867,6 +1936,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-5.C04.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1890,6 +1960,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-5.C05.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1913,6 +1984,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-5.C06.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1936,6 +2008,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-5.C07.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1959,6 +2032,7 @@
                         "test_names":  [
                                            "inside_reverse_on_four_layer_flap"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -1982,6 +2056,7 @@
                         "test_names":  [
                                            "inside_reverse_on_four_layer_flap"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2005,6 +2080,7 @@
                         "test_names":  [
                                            "inside_reverse_on_four_layer_flap"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2028,6 +2104,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-6.C04.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2051,6 +2128,7 @@
                         "test_names":  [
                                            "inside_reverse_on_four_layer_flap"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2074,6 +2152,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-6.C06.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2097,6 +2176,7 @@
                         "test_names":  [
                                            "sim011_completeness_table_and_generic_routes_are_permanent"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2120,6 +2200,7 @@
                         "test_names":  [
                                            "sim011_completeness_table_and_generic_routes_are_permanent"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2143,6 +2224,7 @@
                         "test_names":  [
                                            "sim011_completeness_table_and_generic_routes_are_permanent"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2166,6 +2248,7 @@
                         "test_names":  [
                                            "sim011_completeness_table_and_generic_routes_are_permanent"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2189,6 +2272,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-6b.C05.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2212,6 +2296,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-6b.C06.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2235,6 +2320,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-6b.C07.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2258,6 +2344,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-6b.C08.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2281,6 +2368,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-6c.C01.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2304,6 +2392,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-6c.C02.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2327,6 +2416,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-6c.C03.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2350,6 +2440,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-6c.C04.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2373,6 +2464,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-6c.C05.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2396,6 +2488,7 @@
                         "test_names":  [
                                            "src/lib/layerMotion.test.ts \u003e 汎用層操作の入力 \u003e 既存折り目のReflectをregionなし・Keepへ変換する"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2412,13 +2505,14 @@
                         "checkbox":  true,
                         "roadmap_line":  724,
                         "checkbox_state":  "checked",
-                        "checkbox_text":  "**DOM環境のテスト基盤を導入**(jsdom + @testing-library/react)。プレビュー・ヒント表示・ドラッグ操作の主要経路にテストを付ける(これまで目視確認のみだった領域) — [証拠:M2.T2-6c.C07](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6c-c07) \u003c!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6c.C07 evidence=MANUAL.M2.T2-6c.C07.SCREEN-ACCEPTANCE --\u003e \u003c!-- 独立レビュー 2026-08-26: Viewer3D.dom.test.tsx:402-431がjsdom上のpointer down/move/up・半透明preview・releaseを確認、ViewerOperationHint.dom.test.tsx:83-122とOperationSteps.dom.test.tsx:83-157が利用者向け案内を確認。npm.cmd run test -- --run（5 file）=93 passed、skip/todo=0。確認実行: Vitest 4.1.10。 --\u003e",
+                        "checkbox_text":  "**DOM環境のテスト基盤を導入**(jsdom + @testing-library/react)。プレビュー・ヒント表示・ドラッグ操作の主要経路にテストを付ける(これまで目視確認のみだった領域) \u003c!-- 独立レビュー 2026-08-26: Viewer3D.dom.test.tsx:402-431がjsdom上のpointer down/move/up・半透明preview・releaseを確認、ViewerOperationHint.dom.test.tsx:83-122とOperationSteps.dom.test.tsx:83-157が利用者向け案内を確認。npm.cmd run test -- --run（5 file）=93 passed、skip/todo=0。確認実行: Vitest 4.1.10。 --\u003e",
                         "evidence_id":  "MANUAL.M2.T2-6c.C07.SCREEN-ACCEPTANCE",
                         "evidence_type":  "manual",
                         "test_name":  null,
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-6c.C07.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2442,6 +2536,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-6c.C08.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2465,6 +2560,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-6c.C09.COMMIT-PUSH",
                         "commit_hash":  "85b8ca42b473f16312c4431b880bf569f48538f9",
                         "commit_subject":  "紙をつかんで動かす直感的な折り操作に変更",
@@ -2488,6 +2584,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-7.C01.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2511,6 +2608,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-7.C02.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2534,6 +2632,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-7.C03.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2557,6 +2656,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-7.C04.COMMIT-PUSH",
                         "commit_hash":  "dfd5ca03dce87fa2ae6cfff5cb05aba5b527d478",
                         "commit_subject":  "作図の補助線・折りたたみ可否の注意表示・紙のめり込み警告を追加",
@@ -2572,19 +2672,22 @@
                         "task":  "Task 2-8",
                         "checkbox":  true,
                         "roadmap_line":  741,
-                        "checkbox_state":  "unchecked",
-                        "checkbox_text":  "30秒間隔+dirty時のみ`\u003c保存先\u003e.ori3.autosave`へ保存。正常終了時に削除",
+                        "checkbox_state":  "checked",
+                        "checkbox_text":  "30秒間隔で、保存先のない未保存作品を含むdirtyな現在作品だけをアプリデータ配下の専用枠へ保存し、正常終了時にcleanな現在枠を削除",
                         "evidence_id":  "TEST.M2.T2-8.C01",
                         "evidence_type":  "test",
-                        "test_name":  "autosave::tests::restore_recovers_the_same_document",
+                        "test_name":  "autosave::tests::autosave_worker_waits_thirty_seconds_and_still_skips_clean_documents",
                         "test_names":  [
-                                           "autosave::tests::restore_recovers_the_same_document"
+                                           "autosave::tests::autosave_worker_waits_thirty_seconds_and_still_skips_clean_documents",
+                                           "autosave::tests::autosave_skips_clean_document_and_writes_untitled_to_app_data",
+                                           "autosave::tests::clean_exit_discards_but_dirty_exit_keeps_the_autosave"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
                         "commit_main_ancestor":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_state":  "consistent",
                         "progress_task_applicable":  true,
                         "progress_task_id":  "2-8",
                         "progress_task_recorded":  true
@@ -2594,20 +2697,24 @@
                         "scope":  "M2",
                         "task":  "Task 2-8",
                         "checkbox":  true,
-                        "roadmap_line":  742,
-                        "checkbox_state":  "unchecked",
+                        "roadmap_line":  744,
+                        "checkbox_state":  "checked",
                         "checkbox_text":  "起動時`recovery_check`でautosaveの有無を返し、あれば復旧ダイアログ(復元する/破棄する)",
-                        "evidence_id":  "MANUAL.M2.T2-8.C02.SCREEN-ACCEPTANCE",
-                        "evidence_type":  "manual",
-                        "test_name":  null,
+                        "evidence_id":  "TEST.M2.T2-8.C02",
+                        "evidence_type":  "test",
+                        "test_name":  "src/App.dom.test.tsx \u003e startup recovery check \u003e checks recovery exactly once after preparing the new document",
                         "test_names":  [
-
+                                           "src/App.dom.test.tsx \u003e startup recovery check \u003e checks recovery exactly once after preparing the new document",
+                                           "autosave::tests::recovery_wire_uses_null_for_no_choices_and_requires_both_internal_fields",
+                                           "autosave::tests::recovery_choices_are_newest_first_and_keep_the_fourth_as_overflow",
+                                           "src/components/RecoveryDialog.dom.test.tsx \u003e 復旧ダイアログ \u003e 残っていれば理由と選択肢を日本語で出す"
                                        ],
-                        "manual_id":  "MANUAL.M2.T2-8.C02.SCREEN-ACCEPTANCE",
+                        "test_mapping_origin":  "link-id",
+                        "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
                         "commit_main_ancestor":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_state":  "consistent",
                         "progress_task_applicable":  true,
                         "progress_task_id":  "2-8",
                         "progress_task_recorded":  true
@@ -2617,7 +2724,7 @@
                         "scope":  "M2",
                         "task":  "Task 2-8",
                         "checkbox":  true,
-                        "roadmap_line":  743,
+                        "roadmap_line":  745,
                         "checkbox_state":  "unchecked",
                         "checkbox_text":  "storeユニットテスト+手動確認(プロセスkill→再起動→復元) → コミット `30秒ごとの自動保存と、異常終了後の復元機能を追加` → プッシュ",
                         "evidence_id":  "MANUAL.M2.T2-8.C03.COMMIT-PUSH",
@@ -2626,6 +2733,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-8.C03.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2636,19 +2744,72 @@
                         "progress_task_recorded":  true
                     },
                     {
+                        "id":  "M2.T2-8.C04",
+                        "scope":  "M2",
+                        "task":  "Task 2-8",
+                        "checkbox":  true,
+                        "roadmap_line":  742,
+                        "checkbox_state":  "unchecked",
+                        "checkbox_text":  "同じapp-dataを共有する複数プロセスでも、OS排他とsession識別により各作品の自動保存候補を失わず、強制終了後に復旧できる",
+                        "evidence_id":  "TEST.M2.T2-8.C04",
+                        "evidence_type":  "test",
+                        "test_name":  "autosave::tests::clean_exit_never_discards_another_process_active_snapshot",
+                        "test_names":  [
+                                           "autosave::tests::clean_exit_never_discards_another_process_active_snapshot",
+                                           "autosave::tests::forced_process_kill_then_new_process_restores_exact_document",
+                                           "autosave::tests::restore_recovers_the_same_document",
+                                           "autosave::tests::two_real_processes_keep_both_documents_when_autosave_transactions_overlap"
+                                       ],
+                        "test_mapping_origin":  "link-id",
+                        "manual_id":  null,
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-8",
+                        "progress_task_recorded":  true
+                    },
+                    {
+                        "id":  "M2.T2-8.C05",
+                        "scope":  "M2",
+                        "task":  "Task 2-8",
+                        "checkbox":  true,
+                        "roadmap_line":  743,
+                        "checkbox_state":  "unchecked",
+                        "checkbox_text":  "同じ作品を2つのアプリで開いて別々に編集した場合、後から保存しても先の変更を黙って消さず、同じアプリで続けて保存する場合は競合として妨げない",
+                        "evidence_id":  "TEST.M2.T2-8.C05",
+                        "evidence_type":  "test",
+                        "test_name":  "store::tests::saving_own_opened_document_twice_after_edits_does_not_conflict",
+                        "test_names":  [
+                                           "store::tests::saving_own_opened_document_twice_after_edits_does_not_conflict",
+                                           "store::tests::two_real_processes_reject_a_stale_explicit_save_and_keep_the_first_save"
+                                       ],
+                        "test_mapping_origin":  "link-id",
+                        "manual_id":  null,
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_task_applicable":  true,
+                        "progress_task_id":  "2-8",
+                        "progress_task_recorded":  true
+                    },
+                    {
                         "id":  "M2.T2-9.C01",
                         "scope":  "M2",
                         "task":  "Task 2-9",
                         "checkbox":  true,
-                        "roadmap_line":  749,
+                        "roadmap_line":  751,
                         "checkbox_state":  "unchecked",
-                        "checkbox_text":  "折り鶴を「fold_through+技法マクロの列」でスクリプト構築し、最終状態の層数・外形寸法・決定性を検証する回帰テスト — [証拠:M2.T2-9.C01](traceability/roadmap-links.md#roadmap-evidence-m2-t2-9-c01) \u003c!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-9.C01 evidence=TEST.M2.T2-9.C01 --\u003e \u003c!-- 2026-08-26 未完了へ戻す: completed_crane_is_flat_and_symmetric は合格済みだが、首・尾が外周の尖りとして存在することを確認していない。実測は6手目0.719px、7手目32.779px、11手目15.811px・54.829px。原因は crates/ori3-layers/tests/acceptance_crane.rs:560-567 の7手目の到達指定。確認実行ファイルSHA-256=714EC7D24DA5A84F7438D3155203E144D12D4587D3B04F0EDC9B359B2CB98BE6。状態分割担当が正しい7手目を導出中。既存検査は残す。 --\u003e",
+                        "checkbox_text":  "折り鶴を「fold_through+技法マクロの列」でスクリプト構築し、最終状態の層数・外形寸法・決定性を検証する回帰テスト \u003c!-- 2026-08-26 未完了へ戻す: completed_crane_is_flat_and_symmetric は合格済みだが、首・尾が外周の尖りとして存在することを確認していない。実測は6手目0.719px、7手目32.779px、11手目15.811px・54.829px。原因は crates/ori3-layers/tests/acceptance_crane.rs:560-567 の7手目の到達指定。確認実行ファイルSHA-256=714EC7D24DA5A84F7438D3155203E144D12D4587D3B04F0EDC9B359B2CB98BE6。状態分割担当が正しい7手目を導出中。既存検査は残す。 --\u003e",
                         "evidence_id":  "TEST.M2.T2-9.C01",
                         "evidence_type":  "test",
                         "test_name":  "completed_crane_is_flat_and_symmetric",
                         "test_names":  [
                                            "completed_crane_is_flat_and_symmetric"
                                        ],
+                        "test_mapping_origin":  "task-default-or-scope-fallback",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2663,7 +2824,7 @@
                         "scope":  "M2",
                         "task":  "Task 2-9",
                         "checkbox":  true,
-                        "roadmap_line":  750,
+                        "roadmap_line":  752,
                         "checkbox_state":  "unchecked",
                         "checkbox_text":  "手動確認: アプリで鶴を1折りずつ折って完成→展開図の一部を修正→自動再生で形が追従",
                         "evidence_id":  "MANUAL.M2.T2-9.C02.SCREEN-ACCEPTANCE",
@@ -2672,6 +2833,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-9.C02.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2686,7 +2848,7 @@
                         "scope":  "M2",
                         "task":  "Task 2-9",
                         "checkbox":  true,
-                        "roadmap_line":  751,
+                        "roadmap_line":  753,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "コミット `折り鶴が折れることを確認する自動テストを追加` → プッシュ",
                         "evidence_id":  "MANUAL.M2.T2-9.C03.COMMIT-PUSH",
@@ -2695,6 +2857,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M2.T2-9.C03.COMMIT-PUSH",
                         "commit_hash":  "f00628a8d365a01a71421cfeb32467e77bb75ebd",
                         "commit_subject":  "折り鶴が折れることを確認する自動テストを追加",
@@ -2709,7 +2872,7 @@
                         "scope":  "M3",
                         "task":  "Task 3-1",
                         "checkbox":  true,
-                        "roadmap_line":  768,
+                        "roadmap_line":  770,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "テスト(validate正常系/異常系)→実装→コミット `頭・尾・足などの骨格を指定するためのデータ形式を追加` → プッシュ",
                         "evidence_id":  "MANUAL.M3.T3-1.C01.COMMIT-PUSH",
@@ -2718,6 +2881,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M3.T3-1.C01.COMMIT-PUSH",
                         "commit_hash":  "6ce06fb3ac7cb21bf694a12af2db7a1871710f67",
                         "commit_subject":  "頭・尾・足などの骨格を指定するためのデータ形式を追加",
@@ -2732,7 +2896,7 @@
                         "scope":  "M3",
                         "task":  "Task 3-2",
                         "checkbox":  true,
-                        "roadmap_line":  774,
+                        "roadmap_line":  776,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "テスト: (a)葉2(長さ1,1)を1×1紙に充填→縮尺≥0.5に到達 (b)葉5の充填で円非重複と中心包含の違反がEPS以内 (c)同一シード→同一結果(決定性)。既存検査は緩めない。紙内包含は「円の中心が紙内」(案A)を最終要件として確定した(判断4、2026-08-16)",
                         "evidence_id":  "TEST.M3.T3-2.C01",
@@ -2741,6 +2905,7 @@
                         "test_names":  [
                                            "packing_quality_baseline_1005_runs"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2755,7 +2920,7 @@
                         "scope":  "M3",
                         "task":  "Task 3-2",
                         "checkbox":  true,
-                        "roadmap_line":  775,
+                        "roadmap_line":  777,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "実装: 変数=各葉の円中心+縮尺s。目的=s最大化。制約=|ci−cj| ≥ s·(li+lj+川幅)。紙内包含は「円の中心が紙内」(案A)を確定要件とする。円そのものが紙からはみ出すことは制約としない。射影勾配法(制約違反を射影で戻す)×乱数シード別マルチスタート(既定8スタート、上位4候補を返す)。`rand::rngs::StdRng::seed_from_u64`で決定的に",
                         "evidence_id":  "TEST.M3.T3-2.C02",
@@ -2764,6 +2929,7 @@
                         "test_names":  [
                                            "packing_quality_baseline_1005_runs"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2778,7 +2944,7 @@
                         "scope":  "M3",
                         "task":  "Task 3-2",
                         "checkbox":  true,
-                        "roadmap_line":  776,
+                        "roadmap_line":  778,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "テスト成功確認 → コミット `骨格に合わせて紙の上に必要な領域を自動配置する計算を追加` → プッシュ",
                         "evidence_id":  "MANUAL.M3.T3-2.C03.COMMIT-PUSH",
@@ -2787,6 +2953,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M3.T3-2.C03.COMMIT-PUSH",
                         "commit_hash":  "8532fb2dc74fb8cf606569ca6a00ca212677c1c5",
                         "commit_subject":  "骨格に合わせて紙の上に必要な領域を自動配置する計算を追加",
@@ -2801,7 +2968,7 @@
                         "scope":  "M3",
                         "task":  "Task 3-3",
                         "checkbox":  true,
-                        "roadmap_line":  782,
+                        "roadmap_line":  784,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "テスト: 葉4+胴1の充填結果から生成したCPが (a)妥当な平面グラフ(extract_faces成功) (b)軸線・稜線が揃い、局所平坦判定の違反頂点数を結果として返す",
                         "evidence_id":  "TEST.M3.T3-3.C01",
@@ -2810,6 +2977,7 @@
                         "test_names":  [
                                            "depth_three_branching_skeleton_packs_and_generates_valid_cp"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2824,7 +2992,7 @@
                         "scope":  "M3",
                         "task":  "Task 3-3",
                         "checkbox":  true,
-                        "roadmap_line":  783,
+                        "roadmap_line":  785,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "実装手順: 円中心のドロネー三角形分割→各三角形をウサギ耳分子(3辺の二等分線+垂線)で充填→四角形以上は扇状分割→山谷割り当て(軸線=谷基調、稜線=山基調の既定則)→`ProposalResult { cp: CreasePattern, violations: usize }`",
                         "evidence_id":  "TEST.M3.T3-3.C02",
@@ -2833,6 +3001,7 @@
                         "test_names":  [
                                            "depth_three_branching_skeleton_packs_and_generates_valid_cp"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2847,7 +3016,7 @@
                         "scope":  "M3",
                         "task":  "Task 3-3",
                         "checkbox":  true,
-                        "roadmap_line":  784,
+                        "roadmap_line":  786,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "`proposal_generate`コマンド追加(Skeleton→候補最大4件のVec\u003cProposalResult\u003e)",
                         "evidence_id":  "TEST.M3.T3-3.C03",
@@ -2856,6 +3025,7 @@
                         "test_names":  [
                                            "depth_three_branching_skeleton_packs_and_generates_valid_cp"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2870,7 +3040,7 @@
                         "scope":  "M3",
                         "task":  "Task 3-3",
                         "checkbox":  true,
-                        "roadmap_line":  785,
+                        "roadmap_line":  787,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "テスト成功確認 → コミット `自動配置の結果から展開図を組み立てる機能を追加` → プッシュ",
                         "evidence_id":  "MANUAL.M3.T3-3.C04.COMMIT-PUSH",
@@ -2879,6 +3049,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M3.T3-3.C04.COMMIT-PUSH",
                         "commit_hash":  "e66e15152b347e7e0db1a77e7927fa7c83cc5d5d",
                         "commit_subject":  "自動配置の結果から展開図を組み立てる機能を追加",
@@ -2893,7 +3064,7 @@
                         "scope":  "M3",
                         "task":  "Task 3-4",
                         "checkbox":  true,
-                        "roadmap_line":  791,
+                        "roadmap_line":  793,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "3画面構成: ①骨格編集(角の追加/削除ボタン+各角の長さ・太さスライダー+2D骨格プレビュー) ②候補選択(生成4候補の展開図サムネイル+違反数表示) ③確認→`edit_apply ReplaceCreasePattern`で流し込み、ダイアログを閉じる",
                         "evidence_id":  "MANUAL.M3.T3-4.C01.SCREEN-ACCEPTANCE",
@@ -2902,6 +3073,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M3.T3-4.C01.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2916,7 +3088,7 @@
                         "scope":  "M3",
                         "task":  "Task 3-4",
                         "checkbox":  true,
-                        "roadmap_line":  792,
+                        "roadmap_line":  794,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "ツールバーの「提案ウィザード」ボタンから起動。メイン画面に常設UIを追加しない(PRO-004)",
                         "evidence_id":  "MANUAL.M3.T3-4.C02.SCREEN-ACCEPTANCE",
@@ -2925,6 +3097,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M3.T3-4.C02.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2939,7 +3112,7 @@
                         "scope":  "M3",
                         "task":  "Task 3-4",
                         "checkbox":  true,
-                        "roadmap_line":  793,
+                        "roadmap_line":  795,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "選んだ展開図を使う前に、今の作品の折り手順が1件以上なら全て消えることと件数を確認画面内で伝える。0件では注意を出さず、注意があっても「この展開図を使う」と「選び直す」の両方を操作できる。0件/1件/100件の3/3表示と、選び直した場合の作品差分0を画面検査で固定する",
                         "evidence_id":  "MANUAL.M3.T3-4.C03.SCREEN-ACCEPTANCE",
@@ -2948,6 +3121,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M3.T3-4.C03.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2962,7 +3136,7 @@
                         "scope":  "M3",
                         "task":  "Task 3-4",
                         "checkbox":  true,
-                        "roadmap_line":  794,
+                        "roadmap_line":  796,
                         "checkbox_state":  "unchecked",
                         "checkbox_text":  "手動確認: 頭1・尾1・足4で鶴系の基本形が得られ、そのまま編集・折りに進める(M3受け入れ) → コミット `骨格を指定して展開図を提案してもらう画面を追加` → プッシュ",
                         "evidence_id":  "MANUAL.M3.T3-4.C04.COMMIT-PUSH",
@@ -2971,6 +3145,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M3.T3-4.C04.COMMIT-PUSH",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -2985,7 +3160,7 @@
                         "scope":  "M3",
                         "task":  "Work 1",
                         "checkbox":  true,
-                        "roadmap_line":  800,
+                        "roadmap_line":  802,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "**判断1 / PRO-006**: 完成位置は2D投影上の相対位置とし、今回の入力に奥行きを含めない。奥行き操作は説明なしで扱いにくいためで、入力型は2Dだけを持たせ、将来の3D形式を別に追加できる境界にする",
                         "evidence_id":  "TEST.M3.T3-4.C05",
@@ -2994,6 +3169,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3008,7 +3184,7 @@
                         "scope":  "M3",
                         "task":  "Work 1",
                         "checkbox":  true,
-                        "roadmap_line":  801,
+                        "roadmap_line":  803,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "**判断2 / PRO-007**: 「位置」は完成した動物で頭・尾・足などの先端がどこにあるかを意味する。展開前の紙上の割当位置ではない。利用者が指定したいのは完成した動物で頭・尾・足がどこにあるかだからである",
                         "evidence_id":  "TEST.M3.T3-4.C06",
@@ -3017,6 +3193,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3031,7 +3208,7 @@
                         "scope":  "M3",
                         "task":  "Work 1",
                         "checkbox":  true,
-                        "roadmap_line":  802,
+                        "roadmap_line":  804,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "**判断3 / PRO-008**: 完成形の絵で先端を直接動かすことを主にし、必要なときだけ紙上位置も調整する案Cへ2026-08-21に拡張した。動物の形を伝える意図を保ちながら、紙の使い方も調整できるため。2種類の位置の使い分けは作業13の規則に従う",
                         "evidence_id":  "TEST.M3.T3-4.C07",
@@ -3040,6 +3217,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3054,7 +3232,7 @@
                         "scope":  "M3",
                         "task":  "Work 1",
                         "checkbox":  true,
-                        "roadmap_line":  803,
+                        "roadmap_line":  805,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "**判断5 / PRO-009**: 手順計画は配置案P1として`crates/ori3-propose`内に置き、新クレートは作らない。新クレートは`Cargo.toml`・`Cargo.lock`の変更と承認を要するため、まず既存クレート内で作り、分離の必要性が実測で示された場合だけ再検討する。P1で`ori3-layers`依存を追加する場合の承認は別途必要",
                         "evidence_id":  "TEST.M3.T3-4.C08",
@@ -3063,6 +3241,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3077,7 +3256,7 @@
                         "scope":  "M3",
                         "task":  "Work 1",
                         "checkbox":  true,
-                        "roadmap_line":  805,
+                        "roadmap_line":  807,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "**判断4**: 紙内包含は「円の中心が紙内にあればよい」(案A、現行実装のまま)に決定した(2026-08-16)。実際に折った鶴・カエルの基本形(計9本)で出っぱりの長さを測ると、円が紙をはみ出しても不足は9本すべて0(最大差6.8e-15)。案B(円全体包含)は鶴の基本形の配置を作れず、作れる場合も同じ紙でできる作品が17〜59%小さくなる。詳細は作業7と`scratchpad/containment-report.md`",
                         "evidence_id":  "TEST.M3.T3-4.C09",
@@ -3086,6 +3265,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3100,7 +3280,7 @@
                         "scope":  "M3",
                         "task":  "Work 1",
                         "checkbox":  true,
-                        "roadmap_line":  806,
+                        "roadmap_line":  808,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "**判断6**: 折り順は**任意の展開図の汎用探索を土台にし、提案が作った展開図で追跡情報があるときだけ枝を絞る**形に決定した(2026-08-16)。生成履歴だけに頼る方式は採らない",
                         "evidence_id":  "TEST.M3.T3-4.C10",
@@ -3109,6 +3289,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3123,7 +3304,7 @@
                         "scope":  "M3",
                         "task":  "Work 6",
                         "checkbox":  true,
-                        "roadmap_line":  826,
+                        "roadmap_line":  828,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "製品実装を変えず、seed 1でstarts=`1/8/16/32/64`の5実行と、starts 8でseed=`0..999`の1,000実行、合計1,005実行(重複を除く1,004組)を行う",
                         "evidence_id":  "TEST.M3.T3-4.C11",
@@ -3132,6 +3313,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3146,7 +3328,7 @@
                         "scope":  "M3",
                         "task":  "Work 6",
                         "checkbox":  true,
-                        "roadmap_line":  827,
+                        "roadmap_line":  829,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "全1,005実行の出力について、縮尺・違反量・全中心座標が有限で、葉IDと中心の欠損が0であることを検査する。各seedの最良縮尺のmin/p50/p95/max、実行時間、4候補の重複率を`docs/progress.md`へ記録する。重複は同じ葉IDの全中心のユークリッド距離が`\u003c=1e-7`と定義する",
                         "evidence_id":  "TEST.M3.T3-4.C12",
@@ -3155,6 +3337,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3169,7 +3352,7 @@
                         "scope":  "M3",
                         "task":  "Work 6",
                         "checkbox":  true,
-                        "roadmap_line":  828,
+                        "roadmap_line":  830,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "中心だけの包含での12葉下限`0.194277036`と、円全体の包含での4×3格子下限`0.124999999`を固定配置から各1件検算する。**訂正(2026-08-16)**: 円全体包含は本測定で実測`0.139958812`(格子下限の1.1197倍)まで届くことを確認した。案Bは不採用のため、`0.124999999`は「採らなかった案の実行可能性の記録」として残す",
                         "evidence_id":  "TEST.M3.T3-4.C13",
@@ -3178,6 +3361,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3192,7 +3376,7 @@
                         "scope":  "M3",
                         "task":  "Work 6",
                         "checkbox":  true,
-                        "roadmap_line":  829,
+                        "roadmap_line":  831,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "測定完了だけで包含方式を自動決定しない。判断4として中心包含/円全体包含のどちらを採るかを別途決め、要件・ロードマップ・検査・実装を同じ意味へそろえる → 作業7で決定した",
                         "evidence_id":  "TEST.M3.T3-4.C14",
@@ -3201,6 +3385,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3215,7 +3400,7 @@
                         "scope":  "M3",
                         "task":  "Work 7",
                         "checkbox":  true,
-                        "roadmap_line":  833,
+                        "roadmap_line":  835,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "`crates/ori3-layers`の折り操作だけで実際に折った鶴の基本形(8手)・カエルの基本形(9手)を使い、平らな折り上がりの上で「軸の根元から出っぱりの先端までの距離」を測った。9本すべてで要求した長さ(=円の半径)に対する不足が0(最大差6.8e-15)だった",
                         "evidence_id":  "TEST.M3.T3-4.C15",
@@ -3224,6 +3409,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3238,7 +3424,7 @@
                         "scope":  "M3",
                         "task":  "Work 7",
                         "checkbox":  true,
-                        "roadmap_line":  834,
+                        "roadmap_line":  836,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "はみ出し量だけを0%→75%、はみ出す面積を5.83倍に変えて測り直したが、不足は0のまま変わらなかった。「円が紙をはみ出す→出っぱりが短くなる」という因果は測定で否定された",
                         "evidence_id":  "TEST.M3.T3-4.C16",
@@ -3247,6 +3433,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3261,7 +3448,7 @@
                         "scope":  "M3",
                         "task":  "Work 7",
                         "checkbox":  true,
-                        "roadmap_line":  835,
+                        "roadmap_line":  837,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "同じ標本(骨格4種・合計1,600件、乱数シード列・探索手順は共通、紙内包含の判定だけを替えた)で案A/案Bの最良縮尺を比較した。案Bは鶴の基本形の配置自体を作れず(羽の円の半径0.7071が紙に収まる最大半径0.5を超える)、作れる場合も同じ紙でできる作品が17〜59%小さくなる(必要な紙の面積は1.47〜5.83倍)",
                         "evidence_id":  "TEST.M3.T3-4.C17",
@@ -3270,6 +3457,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3284,7 +3472,7 @@
                         "scope":  "M3",
                         "task":  "Work 7",
                         "checkbox":  true,
-                        "roadmap_line":  836,
+                        "roadmap_line":  838,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "**判断4を決定した**: 紙内包含は「円の中心が紙内にあればよい」(案A)とする。円そのものが紙からはみ出すことは制約としない。理由は上の3点(不足0の実測、案Bでは鶴の基本形が配置不能、案Bは作品を17〜59%小さくする)",
                         "evidence_id":  "TEST.M3.T3-4.C18",
@@ -3293,6 +3481,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3307,7 +3496,7 @@
                         "scope":  "M3",
                         "task":  "Work 7",
                         "checkbox":  true,
-                        "roadmap_line":  837,
+                        "roadmap_line":  839,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "案Aを正としたことに伴い、円が紙からはみ出すことだけを理由にした「◯◯が紙からはみ出しています」警告(`crates/ori3-propose/src/generate.rs`)は誤警告になるため、円の中心が紙内にある限り出さないよう修正した。中心そのものが紙の外に出る場合(案Aの制約が破れる異常な入力。通常`pack()`からは起きない)は、展開図が壊れうる本当の問題として引き続き警告する",
                         "evidence_id":  "TEST.M3.T3-4.C19",
@@ -3316,6 +3505,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3330,7 +3520,7 @@
                         "scope":  "M3",
                         "task":  "Work 7",
                         "checkbox":  true,
-                        "roadmap_line":  838,
+                        "roadmap_line":  840,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "測定記録は`scratchpad/containment-report.md`(製品コード変更0行の測定フェーズ)。判断の確定と警告修正は本ロードマップと`crates/ori3-propose/src/generate.rs`で行った(実装フェーズ)",
                         "evidence_id":  "TEST.M3.T3-4.C20",
@@ -3339,6 +3529,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3353,7 +3544,7 @@
                         "scope":  "M3",
                         "task":  "Work 13",
                         "checkbox":  true,
-                        "roadmap_line":  842,
+                        "roadmap_line":  844,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "完成形の位置と紙の上の位置は先端ごとに独立して判定する。完成形だけなら完成形の位置、紙の上だけなら紙の上の位置、両方が食い違わなければ紙の上の位置を使う。",
                         "evidence_id":  "TEST.M3.T3-4.C21",
@@ -3362,6 +3553,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3376,7 +3568,7 @@
                         "scope":  "M3",
                         "task":  "Work 13",
                         "checkbox":  true,
-                        "roadmap_line":  843,
+                        "roadmap_line":  845,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "両方が食い違う先端では、利用者が最後に動かしたほうを使う。食い違いの許容差は`0.0032`とし、紙の上の編集画面でつまみを1画素動かした実測値`0.004`の約8割を採った。根拠は`CLAUDE.md` §10.7.9に従って要件書にも記録する。",
                         "evidence_id":  "MANUAL.M3.T3-4.C22.SCREEN-ACCEPTANCE",
@@ -3385,6 +3577,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M3.T3-4.C22.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3399,7 +3592,7 @@
                         "scope":  "M3",
                         "task":  "Work 13",
                         "checkbox":  true,
-                        "roadmap_line":  844,
+                        "roadmap_line":  846,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "各先端で使っている位置を画面に示し、使われていないほうへ戻す操作を置く。片方を動かしても別の先端の指定を失わず、動かしたつまみが反応しない状態を作らない。",
                         "evidence_id":  "MANUAL.M3.T3-4.C23.SCREEN-ACCEPTANCE",
@@ -3408,6 +3601,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M3.T3-4.C23.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3422,7 +3616,7 @@
                         "scope":  "M3",
                         "task":  "Work 14・15",
                         "checkbox":  true,
-                        "roadmap_line":  848,
+                        "roadmap_line":  850,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "頭1・尾1・足4(長さ`1,1,0.7×4`、紙1×1、`starts=8`)の固定seed `2026` 1件とseed `0..99` 100件、計101件で、現方式と接触関係を使う試作方式の局所違反・3叉・川崎残差max/中央値・時間を比較した",
                         "evidence_id":  "TEST.M3.T3-4.C24",
@@ -3431,6 +3625,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3445,7 +3640,7 @@
                         "scope":  "M3",
                         "task":  "Work 14・15",
                         "checkbox":  true,
-                        "roadmap_line":  849,
+                        "roadmap_line":  851,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "試作方式は採用せず、現方式を維持する。局所違反と3叉は100/100件で同一、固定例の品質3指標も同一で、時間は82/100件で現方式が速く、測定で変更の利点が示されなかったためである",
                         "evidence_id":  "TEST.M3.T3-4.C25",
@@ -3454,6 +3649,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3468,7 +3664,7 @@
                         "scope":  "M3",
                         "task":  "Work 14・15",
                         "checkbox":  true,
-                        "roadmap_line":  850,
+                        "roadmap_line":  852,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "今後の案は、同じ100件・同じ入力・同じ計測範囲で次の4条件をすべて満たした場合だけ採用する",
                         "evidence_id":  "TEST.M3.T3-4.C26",
@@ -3477,6 +3673,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3491,7 +3688,7 @@
                         "scope":  "M3",
                         "task":  "Work 18",
                         "checkbox":  true,
-                        "roadmap_line":  863,
+                        "roadmap_line":  865,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "配置案P1の`crates/ori3-propose`内で、生成履歴方式と汎用探索方式の両方を同じ固定4展開図へ試す。新クレートは作らない",
                         "evidence_id":  "TEST.M3.T3-4.C27",
@@ -3500,6 +3697,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3514,20 +3712,21 @@
                         "scope":  "M3",
                         "task":  "Work 18",
                         "checkbox":  true,
-                        "roadmap_line":  864,
-                        "checkbox_state":  "unchecked",
+                        "roadmap_line":  866,
+                        "checkbox_state":  "checked",
                         "checkbox_text":  "両方式が固定4展開図の4/4で次手候補を1件以上列挙し、展開状態数・最大分岐数・時間を方式×4件の24/24値で記録する。この作業では方式を決定しない",
                         "evidence_id":  "TEST.M3.T3-4.C28",
                         "evidence_type":  "test",
-                        "test_name":  "proposal_matrix_contract",
+                        "test_name":  "compare_two_ways_on_allowed_corpus_anchors",
                         "test_names":  [
-                                           "proposal_matrix_contract"
+                                           "compare_two_ways_on_allowed_corpus_anchors"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
                         "commit_main_ancestor":  null,
-                        "progress_state":  "unchecked-with-test-link",
+                        "progress_state":  "consistent",
                         "progress_task_applicable":  false,
                         "progress_task_id":  null,
                         "progress_task_recorded":  false
@@ -3537,7 +3736,7 @@
                         "scope":  "M3",
                         "task":  "Work 18",
                         "checkbox":  true,
-                        "roadmap_line":  865,
+                        "roadmap_line":  867,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "`ori3-layers`への依存追加が必要な場合は、`crates/ori3-propose/Cargo.toml`と`Cargo.lock`を変更する前に承認を得る",
                         "evidence_id":  "TEST.M3.T3-4.C29",
@@ -3546,6 +3745,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3560,7 +3760,7 @@
                         "scope":  "M3",
                         "task":  "Work 19",
                         "checkbox":  true,
-                        "roadmap_line":  869,
+                        "roadmap_line":  871,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "作業18の測定を根拠に、**汎用探索を土台にし、追跡情報があるときだけ枝を絞る**方式へ決定した。根拠と注意点3つは上の判断6の欄に数値つきで記した",
                         "evidence_id":  "TEST.M3.T3-4.C30",
@@ -3569,6 +3769,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3583,7 +3784,7 @@
                         "scope":  "M3",
                         "task":  "Work 19",
                         "checkbox":  true,
-                        "roadmap_line":  870,
+                        "roadmap_line":  872,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "生成履歴だけの方式を採らない理由を、検査として残した(`crates/ori3-propose/tests/plan.rs`の`the_history_plan_only_works_on_crease_patterns_the_proposal_made`)。提案が作った展開図では役目なし0本で最後まで到達し、作品の展開図(折り鶴34本・やっこさん16本)では最初の手が0であることを固定する",
                         "evidence_id":  "TEST.M3.T3-4.C31",
@@ -3592,6 +3793,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3606,7 +3808,7 @@
                         "scope":  "M3",
                         "task":  "Work 19",
                         "checkbox":  true,
-                        "roadmap_line":  871,
+                        "roadmap_line":  873,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "標本4を「悪魔 手順24」から「やっこさん」へ差し替え、`tests/fixtures/cp-devil-024.json`を削除した(2026-08-16 利用者指示)。判断6の根拠に悪魔・ローズの数値は使わない",
                         "evidence_id":  "TEST.M3.T3-4.C32",
@@ -3615,6 +3817,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3629,7 +3832,7 @@
                         "scope":  "M3",
                         "task":  "Work 20",
                         "checkbox":  true,
-                        "roadmap_line":  877,
+                        "roadmap_line":  879,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "利用者が指定する**角の数・長さ・太さ・位置**の4つについて、「いまの形が完成形へどれだけ近づいたか」を測る物差しを1つずつ作る。`count_gap` / `length_gap` / `width_gap` / `position_gap` はどれも**0.0が最良**で、互いに独立して単独で使える。**4つを1つの順位へまとめる重み付けは作業22で決める**(`finish_gaps`は並べて返すだけで合成しない)",
                         "evidence_id":  "TEST.M3.T3-4.C33",
@@ -3638,6 +3841,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3652,7 +3856,7 @@
                         "scope":  "M3",
                         "task":  "Work 20",
                         "checkbox":  true,
-                        "roadmap_line":  878,
+                        "roadmap_line":  880,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "位置は作業5の`TipPos2d`(完成形での先端の位置)を使い、先端と紙の場所の対応は作業9の`LeafSite`をそのまま使う。座標を突き合わせて後から推測する経路は0件。紙の上の充填中心を利用者の完成位置として扱う経路も0件(PRO-007)",
                         "evidence_id":  "TEST.M3.T3-4.C34",
@@ -3661,6 +3865,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3675,7 +3880,7 @@
                         "scope":  "M3",
                         "task":  "Work 20",
                         "checkbox":  true,
-                        "roadmap_line":  879,
+                        "roadmap_line":  881,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "位置を指定していない先端は位置の物差しの母数から外し、指定があるのに測っていない先端はいちばん遠い(1.0)として数える。理由は`scratchpad/propose-20-report.md`と`finish.rs`のdocに記した",
                         "evidence_id":  "TEST.M3.T3-4.C35",
@@ -3684,6 +3889,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3698,7 +3904,7 @@
                         "scope":  "M3",
                         "task":  "Work 20",
                         "checkbox":  true,
-                        "roadmap_line":  880,
+                        "roadmap_line":  882,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "葉1〜12本の12通りで4つとも有限(NaN・無限大0件)、完成形そのものを入れると4つとも0.0(12/12)、角を1本減らす・長さを半分・太さを半分・位置を0.1ずらすの4通りで対応する物差しが悪化、同じ入力10回で同じ値(10/10)、既存の提案結果は`tests/fixtures/cp-baseline-1-12.json`と12/12で一致",
                         "evidence_id":  "TEST.M3.T3-4.C36",
@@ -3707,6 +3913,7 @@
                         "test_names":  [
                                            "proposal_matrix_contract"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3721,7 +3928,7 @@
                         "scope":  "M3",
                         "task":  "Work 20",
                         "checkbox":  true,
-                        "roadmap_line":  881,
+                        "roadmap_line":  883,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "折り順の探索そのものはここでは作らない(作業21・22)。UI・常設区画・設定項目の追加0件",
                         "evidence_id":  "MANUAL.M3.T3-4.C37.SCREEN-ACCEPTANCE",
@@ -3730,6 +3937,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M3.T3-4.C37.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3744,15 +3952,16 @@
                         "scope":  "M4",
                         "task":  "Task 4-1",
                         "checkbox":  true,
-                        "roadmap_line":  901,
+                        "roadmap_line":  903,
                         "checkbox_state":  "checked",
-                        "checkbox_text":  "テスト: 鶴の基本形の頂点を沈める→対象領域の全層で山谷が反転し、層順序が沈め込み後の入れ子順になる — [証拠:M4.T4-1.C01](traceability/roadmap-links.md#roadmap-evidence-m4-t4-1-c01) \u003c!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-1.C01 evidence=TEST.M4.T4-1.C01 --\u003e \u003c!-- 実行確認: open_sink_works_on_the_bird_base_apex (1 passed; 0 failed) --\u003e",
+                        "checkbox_text":  "テスト: 鶴の基本形の頂点を沈める→対象領域の全層で山谷が反転し、層順序が沈め込み後の入れ子順になる \u003c!-- 実行確認: open_sink_works_on_the_bird_base_apex (1 passed; 0 failed) --\u003e",
                         "evidence_id":  "TEST.M4.T4-1.C01",
                         "evidence_type":  "test",
                         "test_name":  "open_sink_turns_the_tip_of_the_preliminary_base_inside_out",
                         "test_names":  [
                                            "open_sink_turns_the_tip_of_the_preliminary_base_inside_out"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3767,15 +3976,16 @@
                         "scope":  "M4",
                         "task":  "Task 4-1",
                         "checkbox":  true,
-                        "roadmap_line":  902,
+                        "roadmap_line":  904,
                         "checkbox_state":  "checked",
-                        "checkbox_text":  "実装: `pub fn open_sink(cp, faces, state, region_line: [[f64;2];2]) -\u003e Result\u003cFoldThroughResult, String\u003e`。折り線より先端側の全層について、(a)折り線で各層を分割 (b)先端側の山谷を反転 (c)層順序を内外反転して再挿入 — [証拠:M4.T4-1.C02](traceability/roadmap-links.md#roadmap-evidence-m4-t4-1-c02) \u003c!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-1.C02 evidence=TEST.M4.T4-1.C02 --\u003e \u003c!-- 実行確認: open_sink_turns_the_tip_of_the_preliminary_base_inside_out (1 passed; 0 failed) --\u003e",
+                        "checkbox_text":  "実装: `pub fn open_sink(cp, faces, state, region_line: [[f64;2];2]) -\u003e Result\u003cFoldThroughResult, String\u003e`。折り線より先端側の全層について、(a)折り線で各層を分割 (b)先端側の山谷を反転 (c)層順序を内外反転して再挿入 \u003c!-- 実行確認: open_sink_turns_the_tip_of_the_preliminary_base_inside_out (1 passed; 0 failed) --\u003e",
                         "evidence_id":  "TEST.M4.T4-1.C02",
                         "evidence_type":  "test",
                         "test_name":  "open_sink_turns_the_tip_of_the_preliminary_base_inside_out",
                         "test_names":  [
                                            "open_sink_turns_the_tip_of_the_preliminary_base_inside_out"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3790,7 +4000,7 @@
                         "scope":  "M4",
                         "task":  "Task 4-1",
                         "checkbox":  true,
-                        "roadmap_line":  903,
+                        "roadmap_line":  905,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "テスト成功確認 → コミット `沈め折りを選ぶだけで折れる機能を追加` → プッシュ",
                         "evidence_id":  "MANUAL.M4.T4-1.C03.COMMIT-PUSH",
@@ -3799,6 +4009,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M4.T4-1.C03.COMMIT-PUSH",
                         "commit_hash":  "e2a4dff1ce092417e3ff722a082d010a738efabf",
                         "commit_subject":  "沈め折りを追加",
@@ -3813,15 +4024,16 @@
                         "scope":  "M4",
                         "task":  "Task 4-2",
                         "checkbox":  true,
-                        "roadmap_line":  909,
+                        "roadmap_line":  911,
                         "checkbox_state":  "checked",
-                        "checkbox_text":  "`pub fn swivel(...)`: 基準線+寄せ線の2線指定でひだを寄せる(fold_through2回+層併合) — [証拠:M4.T4-2.C01](traceability/roadmap-links.md#roadmap-evidence-m4-t4-2-c01) \u003c!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-2.C01 evidence=TEST.M4.T4-2.C01 --\u003e \u003c!-- 実行確認: swivel_works_on_stacked_layers_and_rejects_only_undefined_input (1 passed; 0 failed) --\u003e",
+                        "checkbox_text":  "`pub fn swivel(...)`: 基準線+寄せ線の2線指定でひだを寄せる(fold_through2回+層併合) \u003c!-- 実行確認: swivel_works_on_stacked_layers_and_rejects_only_undefined_input (1 passed; 0 failed) --\u003e",
                         "evidence_id":  "TEST.M4.T4-2.C01",
                         "evidence_type":  "test",
                         "test_name":  "twist_works_on_a_triangle_and_rejects_only_undefined_input",
                         "test_names":  [
                                            "twist_works_on_a_triangle_and_rejects_only_undefined_input"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3836,15 +4048,16 @@
                         "scope":  "M4",
                         "task":  "Task 4-2",
                         "checkbox":  true,
-                        "roadmap_line":  910,
+                        "roadmap_line":  912,
                         "checkbox_state":  "checked",
-                        "checkbox_text":  "`pub fn twist(...)`: 多角形領域+周辺ひだ線の指定でねじる(領域回転配置+周辺ひだのfold_through列) — [証拠:M4.T4-2.C02](traceability/roadmap-links.md#roadmap-evidence-m4-t4-2-c02) \u003c!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-2.C02 evidence=TEST.M4.T4-2.C02 --\u003e \u003c!-- 実行確認: twist_works_on_a_triangle_and_rejects_only_undefined_input (1 passed; 0 failed) --\u003e",
+                        "checkbox_text":  "`pub fn twist(...)`: 多角形領域+周辺ひだ線の指定でねじる(領域回転配置+周辺ひだのfold_through列) \u003c!-- 実行確認: twist_works_on_a_triangle_and_rejects_only_undefined_input (1 passed; 0 failed) --\u003e",
                         "evidence_id":  "TEST.M4.T4-2.C02",
                         "evidence_type":  "test",
                         "test_name":  "twist_works_on_a_triangle_and_rejects_only_undefined_input",
                         "test_names":  [
                                            "twist_works_on_a_triangle_and_rejects_only_undefined_input"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3859,7 +4072,7 @@
                         "scope":  "M4",
                         "task":  "Task 4-2",
                         "checkbox":  true,
-                        "roadmap_line":  911,
+                        "roadmap_line":  913,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "各テスト(層数・順序・CP追加線の検証)→実装→コミット `ひだ寄せとねじり折りを選ぶだけで折れる機能を追加` → プッシュ",
                         "evidence_id":  "MANUAL.M4.T4-2.C03.COMMIT-PUSH",
@@ -3868,6 +4081,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M4.T4-2.C03.COMMIT-PUSH",
                         "commit_hash":  "98e94ad293beb1b81c4c66acead9ff8d47248171",
                         "commit_subject":  "ひだ寄せとねじり折りを追加",
@@ -3882,7 +4096,7 @@
                         "scope":  "M4",
                         "task":  "Task 4-3",
                         "checkbox":  true,
-                        "roadmap_line":  917,
+                        "roadmap_line":  919,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "テスト: 生成SVGに線種別スタイル(山=一点鎖線/谷=破線/輪郭=実線)が含まれ、viewBoxが実寸mm。PNGが指定解像度で非空",
                         "evidence_id":  "TEST.M4.T4-3.C01",
@@ -3891,6 +4105,7 @@
                         "test_names":  [
                                            "cp_svg::tests::each_edge_kind_has_its_own_style"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3905,7 +4120,7 @@
                         "scope":  "M4",
                         "task":  "Task 4-3",
                         "checkbox":  true,
-                        "roadmap_line":  918,
+                        "roadmap_line":  920,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "実装: SVGは文字列組み立て(`svg`クレート可)。PNGはresvgでSVGをラスタライズ。`document_export`コマンド追加(種別enum: CpSvg/CpPng/DiagramPdf/DiagramSvg)+書き出しダイアログ(補助線含む/含まない、PNG解像度)",
                         "evidence_id":  "MANUAL.M4.T4-3.C02.SCREEN-ACCEPTANCE",
@@ -3914,6 +4129,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M4.T4-3.C02.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3928,7 +4144,7 @@
                         "scope":  "M4",
                         "task":  "Task 4-3",
                         "checkbox":  true,
-                        "roadmap_line":  919,
+                        "roadmap_line":  921,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "テスト成功確認 → コミット `展開図を画像ファイルとして保存する機能を追加` → プッシュ",
                         "evidence_id":  "MANUAL.M4.T4-3.C03.COMMIT-PUSH",
@@ -3937,6 +4153,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M4.T4-3.C03.COMMIT-PUSH",
                         "commit_hash":  "8ad7be3511f64dce20c8aaa8b4b1a897e4d5d656",
                         "commit_subject":  "展開図を画像ファイルとして保存する機能を追加",
@@ -3951,7 +4168,7 @@
                         "scope":  "M4",
                         "task":  "Task 4-4",
                         "checkbox":  true,
-                        "roadmap_line":  925,
+                        "roadmap_line":  927,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "テスト: 3ステップの手順から3コマのSVGが生成され、各コマに(a)折る前の平坦状態の正射影(可視輪郭+可視折線) (b)今回の折り線(山=一点鎖線/谷=破線) (c)技法別矢印(TechniqueKindごとに固定の記号パス)が含まれる",
                         "evidence_id":  "TEST.M4.T4-4.C01",
@@ -3960,6 +4177,7 @@
                         "test_names":  [
                                            "manual::tests::representative_json_makes_four_page_pdf_and_two_toc_items"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3974,7 +4192,7 @@
                         "scope":  "M4",
                         "task":  "Task 4-4",
                         "checkbox":  true,
-                        "roadmap_line":  926,
+                        "roadmap_line":  928,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "実装: `pub fn render_step(doc: \u0026Document, step_index: usize) -\u003e String /* SVG */`。投影は該当ステップ直前のFlatStateの最上層から可視面を層順に描画。矢印記号はTechniqueKind→固定SVGパスのテーブル(谷矢印/山矢印/中割り/かぶせ/花弁/つぶし/沈め/ひだ/ねじり/ポーズの10種)",
                         "evidence_id":  "TEST.M4.T4-4.C02",
@@ -3983,6 +4201,7 @@
                         "test_names":  [
                                            "manual::tests::representative_json_makes_four_page_pdf_and_two_toc_items"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -3997,7 +4216,7 @@
                         "scope":  "M4",
                         "task":  "Task 4-4",
                         "checkbox":  true,
-                        "roadmap_line":  927,
+                        "roadmap_line":  929,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "テスト成功確認 → コミット `折り手順を1コマずつ図にする機能を追加` → プッシュ",
                         "evidence_id":  "MANUAL.M4.T4-4.C03.COMMIT-PUSH",
@@ -4006,6 +4225,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M4.T4-4.C03.COMMIT-PUSH",
                         "commit_hash":  "1b1a0e650cd373fc0a877d7fb133452f767739ba",
                         "commit_subject":  "折り手順を1コマずつ図にする機能を追加",
@@ -4020,7 +4240,7 @@
                         "scope":  "M4",
                         "task":  "Task 4-5",
                         "checkbox":  true,
-                        "roadmap_line":  933,
+                        "roadmap_line":  935,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "テスト: 7ステップの手順→A4・2列×3コマで2ページのPDFが生成される(ページ数・非空を検証)。SVG版はページ単位のファイル群",
                         "evidence_id":  "TEST.M4.T4-5.C01",
@@ -4029,6 +4249,7 @@
                         "test_names":  [
                                            "pdf::tests::seven_steps_make_a_cover_and_two_pages"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -4043,7 +4264,7 @@
                         "scope":  "M4",
                         "task":  "Task 4-5",
                         "checkbox":  true,
-                        "roadmap_line":  934,
+                        "roadmap_line":  936,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "実装: render_stepのSVGをA4(210×297mm)グリッドに配置(コマ番号+注記付き)、svg2pdfでPDF化。表紙(タイトル+完成図)を1ページ目に付ける",
                         "evidence_id":  "TEST.M4.T4-5.C02",
@@ -4052,6 +4273,7 @@
                         "test_names":  [
                                            "pdf::tests::seven_steps_make_a_cover_and_two_pages"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -4066,20 +4288,21 @@
                         "scope":  "M4",
                         "task":  "Task 4-5",
                         "checkbox":  true,
-                        "roadmap_line":  935,
-                        "checkbox_state":  "unchecked",
+                        "roadmap_line":  937,
+                        "checkbox_state":  "checked",
                         "checkbox_text":  "書き出しダイアログにDiagramPdf/DiagramSvgを接続",
-                        "evidence_id":  "MANUAL.M4.T4-5.C03.SCREEN-ACCEPTANCE",
-                        "evidence_type":  "manual",
-                        "test_name":  null,
+                        "evidence_id":  "TEST.M4.T4-5.C03",
+                        "evidence_type":  "test",
+                        "test_name":  "diagram_pdf_and_svg_create_nonempty_structured_files",
                         "test_names":  [
-
+                                           "diagram_pdf_and_svg_create_nonempty_structured_files"
                                        ],
-                        "manual_id":  "MANUAL.M4.T4-5.C03.SCREEN-ACCEPTANCE",
+                        "test_mapping_origin":  "link-id",
+                        "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
                         "commit_main_ancestor":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_state":  "consistent",
                         "progress_task_applicable":  true,
                         "progress_task_id":  "4-5",
                         "progress_task_recorded":  true
@@ -4089,7 +4312,7 @@
                         "scope":  "M4",
                         "task":  "Task 4-5",
                         "checkbox":  true,
-                        "roadmap_line":  936,
+                        "roadmap_line":  938,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "テスト成功確認 → コミット `折り図をPDFとして保存する機能を追加` → プッシュ",
                         "evidence_id":  "MANUAL.M4.T4-5.C04.COMMIT-PUSH",
@@ -4098,6 +4321,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M4.T4-5.C04.COMMIT-PUSH",
                         "commit_hash":  "eb1c2c5904ebe67c15d2e2331c9533cddf91705c",
                         "commit_subject":  "折り図をPDFとして保存する機能を追加",
@@ -4112,7 +4336,7 @@
                         "scope":  "M4",
                         "task":  "Task 4-6",
                         "checkbox":  true,
-                        "roadmap_line":  942,
+                        "roadmap_line":  944,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "伝承のカエル(花弁折り・中割り折り・段折りを含む)をスクリプト構築する回帰テスト(最終層数・決定性)",
                         "evidence_id":  "TEST.M4.T4-6.C01",
@@ -4121,6 +4345,7 @@
                         "test_names":  [
                                            "traditional_frog_has_required_techniques_and_replays_connected_twice"
                                        ],
+                        "test_mapping_origin":  "link-id",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -4135,7 +4360,7 @@
                         "scope":  "M4",
                         "task":  "Task 4-6",
                         "checkbox":  true,
-                        "roadmap_line":  943,
+                        "roadmap_line":  945,
                         "checkbox_state":  "unchecked",
                         "checkbox_text":  "手動確認: アプリでカエルを折って完成→折り図PDFを書き出し、内容を目視確認",
                         "evidence_id":  "MANUAL.M4.T4-6.C02.SCREEN-ACCEPTANCE",
@@ -4144,6 +4369,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M4.T4-6.C02.SCREEN-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -4158,7 +4384,7 @@
                         "scope":  "M4",
                         "task":  "Task 4-6",
                         "checkbox":  true,
-                        "roadmap_line":  944,
+                        "roadmap_line":  946,
                         "checkbox_state":  "checked",
                         "checkbox_text":  "コミット `伝承のカエルが折れて折り図を出せることを確認する自動テストを追加` → プッシュ",
                         "evidence_id":  "MANUAL.M4.T4-6.C03.COMMIT-PUSH",
@@ -4167,6 +4393,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M4.T4-6.C03.COMMIT-PUSH",
                         "commit_hash":  "7c49536e8807074751cebd7852f801b5f24dd79b",
                         "commit_subject":  "伝承のカエルが完成形まで折れることを確認する自動テストを追加",
@@ -4181,9 +4408,9 @@
                         "scope":  "M5",
                         "task":  "Task 5-1",
                         "checkbox":  true,
-                        "roadmap_line":  952,
+                        "roadmap_line":  954,
                         "checkbox_state":  "unchecked",
-                        "checkbox_text":  "SIM-015を満たすよう、仕上げ手順ごとの有効・硬さ・膨らみの強さを記録して再生し、頂点座標を保存しないこと、風船と折り鶴の受け入れ条件を検査で固定する。現在の作品全体設定だけではこの条件を満たさない。 — [証拠:M5.T5-1.C01](traceability/roadmap-links.md#roadmap-evidence-m5-t5-1-c01) \u003c!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M5.T5-1.C01 evidence=TEST.M5.T5-1.C01 --\u003e \u003c!-- 2026-08-26 未完了へ戻す: crane_replays_with_finish_soft_on_and_off_three_times_without_penetration は合格済みだが、首・尾が外周の尖りとして存在することを確認していない。実測は6手目0.719px、7手目32.779px、11手目15.811px・54.829px。原因は crates/ori3-layers/tests/acceptance_crane.rs:560-567 の7手目の到達指定。確認実行ファイルSHA-256=714EC7D24DA5A84F7438D3155203E144D12D4587D3B04F0EDC9B359B2CB98BE6。状態分割担当が正しい7手目を導出中。既存検査は残す。 --\u003e",
+                        "checkbox_text":  "SIM-015を満たすよう、仕上げ手順ごとの有効・硬さ・膨らみの強さを記録して再生し、頂点座標を保存しないこと、風船と折り鶴の受け入れ条件を検査で固定する。現在の作品全体設定だけではこの条件を満たさない。 \u003c!-- 2026-08-26 未完了へ戻す: crane_replays_with_finish_soft_on_and_off_three_times_without_penetration は合格済みだが、首・尾が外周の尖りとして存在することを確認していない。実測は6手目0.719px、7手目32.779px、11手目15.811px・54.829px。原因は crates/ori3-layers/tests/acceptance_crane.rs:560-567 の7手目の到達指定。確認実行ファイルSHA-256=714EC7D24DA5A84F7438D3155203E144D12D4587D3B04F0EDC9B359B2CB98BE6。状態分割担当が正しい7手目を導出中。既存検査は残す。 --\u003e",
                         "evidence_id":  "TEST.M5.T5-1.C01",
                         "evidence_type":  "test",
                         "test_name":  "finish_soft_round_trips_three_values_only_with_measured_tolerance",
@@ -4193,6 +4420,7 @@
                                            "crane_replays_with_finish_soft_on_and_off_three_times_without_penetration",
                                            "balloon_replays_with_finish_soft_on_and_off_three_times_without_penetration"
                                        ],
+                        "test_mapping_origin":  "task-default-or-scope-fallback",
                         "manual_id":  null,
                         "commit_hash":  null,
                         "commit_subject":  null,
@@ -4216,6 +4444,7 @@
                         "test_names":  [
 
                                        ],
+                        "test_mapping_origin":  null,
                         "manual_id":  "MANUAL.M6.ACCEPTANCE.C01.FULL-ACCEPTANCE",
                         "commit_hash":  null,
                         "commit_subject":  null,

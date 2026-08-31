@@ -1,17 +1,27 @@
 # ORIGAMI3-ROADMAP-EVIDENCE-TEST-NAMES schema=2
-# scope=roadmap-mapped names=38 source-files=29 repository-test-total=not-claimed
-# definition-tree-sha256=bf81b6e4f1c5041e2d6ea1ac2dcff055d80e49af7d9fa3ebbb1af0a3f34c1d8c
+# scope=roadmap-mapped names=52 source-files=33 repository-test-total=not-claimed
+# definition-tree-sha256=94b9a690e5f4e324468697d67b96f1a0f6c655669ee72f3f7747b3e7dda01e06
 # この一覧はリポジトリ全検査の一覧ではない。scripts/doc-link-audit.ps1 が
 # ロードマップ証拠へ割り当てる検査名と実sourceを1対1で保存する。
-# definition hashは、下記38件の実sourceにあるtest属性・関数宣言又は
+# definition hashは、下記52件の実sourceにあるtest属性・関数宣言又は
 # Vitestのsuite/test宣言と、Rust/Vitest実source全体（LF正規化）を含むmanifestのhashである。
 # 割当又はtest宣言を変えたら、実在するtest定義を確認して同時更新する。
+autosave::tests::autosave_skips_clean_document_and_writes_untitled_to_app_data | apps/desktop/src-tauri/src/autosave.rs
+autosave::tests::autosave_worker_waits_thirty_seconds_and_still_skips_clean_documents | apps/desktop/src-tauri/src/autosave.rs
+autosave::tests::clean_exit_discards_but_dirty_exit_keeps_the_autosave | apps/desktop/src-tauri/src/autosave.rs
+autosave::tests::clean_exit_never_discards_another_process_active_snapshot | apps/desktop/src-tauri/src/autosave.rs
+autosave::tests::forced_process_kill_then_new_process_restores_exact_document | apps/desktop/src-tauri/src/autosave.rs
+autosave::tests::recovery_choices_are_newest_first_and_keep_the_fourth_as_overflow | apps/desktop/src-tauri/src/autosave.rs
+autosave::tests::recovery_wire_uses_null_for_no_choices_and_requires_both_internal_fields | apps/desktop/src-tauri/src/autosave.rs
 autosave::tests::restore_recovers_the_same_document | apps/desktop/src-tauri/src/autosave.rs
+autosave::tests::two_real_processes_keep_both_documents_when_autosave_transactions_overlap | apps/desktop/src-tauri/src/autosave.rs
 balloon_replays_with_finish_soft_on_and_off_three_times_without_penetration | crates/ori3-layers/tests/acceptance_balloon.rs
 completed_crane_is_flat_and_symmetric | crates/ori3-layers/tests/acceptance_crane.rs
+compare_two_ways_on_allowed_corpus_anchors | crates/ori3-propose/tests/corpus.rs
 cp_svg::tests::each_edge_kind_has_its_own_style | crates/ori3-export/src/cp_svg.rs
 crane_replays_with_finish_soft_on_and_off_three_times_without_penetration | crates/ori3-layers/tests/acceptance_crane.rs
 depth_three_branching_skeleton_packs_and_generates_valid_cp | crates/ori3-propose/tests/generate.rs
+diagram_pdf_and_svg_create_nonempty_structured_files | apps/desktop/src-tauri/tests/diagram_export_files.rs
 extraction_is_deterministic | crates/ori3-cp/tests/faces.rs
 finish_soft_replay_uses_the_latest_completed_pose_at_each_position | crates/ori3-model/tests/serde_roundtrip.rs
 finish_soft_round_trips_three_values_only_with_measured_tolerance | crates/ori3-model/tests/serde_roundtrip.rs
@@ -31,10 +41,14 @@ src/lib/alignPick.test.ts > 線分の交点 > 十字に交わる2本の交点を
 src/lib/construct.test.ts > 作図の計算 > 直角の二等分線は45°方向へ伸びる | apps/desktop/src/lib/construct.test.ts
 src/lib/layerMotion.test.ts > 汎用層操作の入力 > 既存折り目のReflectをregionなし・Keepへ変換する | apps/desktop/src/lib/layerMotion.test.ts
 src/lib/playback.test.ts > advancePlayback > 最終手順を折り終えたら止まる | apps/desktop/src/lib/playback.test.ts
+src/App.dom.test.tsx > startup recovery check > checks recovery exactly once after preparing the new document | apps/desktop/src/App.dom.test.tsx
+src/components/RecoveryDialog.dom.test.tsx > 復旧ダイアログ > 残っていれば理由と選択肢を日本語で出す | apps/desktop/src/components/RecoveryDialog.dom.test.tsx
 src/store/appStore.test.ts > appStore 折り角度の指定 > 連続操作は16msで間引かれ、最後の角度が必ず送られる | apps/desktop/src/store/appStore.test.ts
 src/store/ipcQueue.test.ts > createSerialQueue > 前の要求が完了するまで次の要求を開始しない(発行順に直列実行) | apps/desktop/src/store/ipcQueue.test.ts
 store::tests::add_segment_undo_redo_roundtrip | apps/desktop/src-tauri/src/store.rs
 store::tests::cushion_then_cupboard_fold_only_with_fold_through | apps/desktop/src-tauri/src/store.rs
+store::tests::saving_own_opened_document_twice_after_edits_does_not_conflict | apps/desktop/src-tauri/src/store.rs
+store::tests::two_real_processes_reject_a_stale_explicit_save_and_keep_the_first_save | apps/desktop/src-tauri/src/store.rs
 test_document_json_roundtrip | crates/ori3-model/tests/serde_roundtrip.rs
 test_seg_intersection_crossing | crates/ori3-geometry/tests/primitives.rs
 the_frog_is_deterministic | crates/ori3-layers/tests/acceptance_frog.rs

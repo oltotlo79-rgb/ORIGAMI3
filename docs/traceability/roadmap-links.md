@@ -2,15 +2,15 @@
 
 この台帳は `scripts/doc-link-audit.ps1` が生成する。各checkboxの本文にある証拠リンクと同じIDを持ち、検査名は `docs/traceability/roadmap-evidence-test-names.txt` の対象限定台帳で照合する。これはリポジトリ全検査の件数を主張しない。
 
-- ロードマップ全体: 184/184件 (checked=168, unchecked=16)
-- 証拠台帳対象: 182/184件
+- ロードマップ全体: 186/186件 (checked=172, unchecked=14)
+- 証拠台帳対象: 184/186件
 - 明示対象外: 2件
-- 検査名台帳対象: 38/38件（roadmap-mapped、リポジトリ全検査数は主張しない）
-- 検査定義対象: 38/38件、source 29/29ファイル、definition tree SHA-256: `bf81b6e4f1c5041e2d6ea1ac2dcff055d80e49af7d9fa3ebbb1af0a3f34c1d8c`
-- 実行モード: active-default=37件、ignored-explicit=1件（後者はCI・check-ci・品質規約の明示実行を照合）
-- 検査名台帳SHA-256: `c2baa171dd9a6b330afe12ecaea5f614a0085427b1badac7c624f69f3a0419be`
-- ロードマップSHA-256: `2e60805ef7202669133666d5552d9e8b048fd50bdb112e9cd5c00f669dd2a0c5`
-- 生成hash: `c0ca089bbeae467ea195d7c1d121f5ce827dd89f6b3042659cb1e835e82d8f72`
+- 検査名台帳対象: 52/52件（roadmap-mapped、リポジトリ全検査数は主張しない）
+- 検査定義対象: 52/52件、source 33/33ファイル、definition tree SHA-256: `94b9a690e5f4e324468697d67b96f1a0f6c655669ee72f3f7747b3e7dda01e06`
+- 実行モード: active-default=51件、ignored-explicit=1件（後者はCI・check-ci・品質規約の明示実行を照合）
+- 検査名台帳SHA-256: `3b62afd3b299a603e4336f43a53cbf15128b5a1176c0d32c4fbd10848ec06be8`
+- ロードマップSHA-256: `77ddd527f223af20ca79429de9a77bbaa120ef7493e4e68a2f9eab8637cc1534`
+- 生成hash: `f94411d7334b2bc1549cee646e8768e197e31b3622761a372d7630c2b621686a`
 - M6受入: checkbox外の手動受入1件
 
 | link ID | evidence | checkbox | progress |
@@ -126,11 +126,11 @@
 | <a id="roadmap-evidence-m2-t2-7-c02"></a>`M2.T2-7.C02` | 手動 `MANUAL.M2.T2-7.C02.SCREEN-ACCEPTANCE` | checked | consistent |
 | <a id="roadmap-evidence-m2-t2-7-c03"></a>`M2.T2-7.C03` | 手動 `MANUAL.M2.T2-7.C03.SCREEN-ACCEPTANCE` | unchecked | unchecked-but-progress-task-exists |
 | <a id="roadmap-evidence-m2-t2-7-c04"></a>`M2.T2-7.C04` | 手動 `MANUAL.M2.T2-7.C04.COMMIT-PUSH` | checked | consistent |
-| <a id="roadmap-evidence-m2-t2-8-c01"></a>`M2.T2-8.C01` | 自動 `autosave::tests::restore_recovers_the_same_document` | unchecked | unchecked-but-progress-task-exists |
-| <a id="roadmap-evidence-m2-t2-8-c04"></a>`M2.T2-8.C04` | 自動 `autosave::tests::two_real_processes_keep_both_documents_when_autosave_transactions_overlap` | unchecked | unchecked-but-progress-task-exists |
-| <a id="roadmap-evidence-m2-t2-8-c05"></a>`M2.T2-8.C05` | 自動 `store::tests::two_real_processes_reject_a_stale_explicit_save_and_keep_the_first_save` | unchecked | unchecked-but-progress-task-exists |
-| <a id="roadmap-evidence-m2-t2-8-c02"></a>`M2.T2-8.C02` | 手動 `MANUAL.M2.T2-8.C02.SCREEN-ACCEPTANCE` | unchecked | unchecked-but-progress-task-exists |
+| <a id="roadmap-evidence-m2-t2-8-c01"></a>`M2.T2-8.C01` | 自動 `autosave::tests::autosave_worker_waits_thirty_seconds_and_still_skips_clean_documents / autosave::tests::autosave_skips_clean_document_and_writes_untitled_to_app_data / autosave::tests::clean_exit_discards_but_dirty_exit_keeps_the_autosave` | checked | consistent |
+| <a id="roadmap-evidence-m2-t2-8-c02"></a>`M2.T2-8.C02` | 自動 `src/App.dom.test.tsx > startup recovery check > checks recovery exactly once after preparing the new document / autosave::tests::recovery_wire_uses_null_for_no_choices_and_requires_both_internal_fields / autosave::tests::recovery_choices_are_newest_first_and_keep_the_fourth_as_overflow / src/components/RecoveryDialog.dom.test.tsx > 復旧ダイアログ > 残っていれば理由と選択肢を日本語で出す` | checked | consistent |
 | <a id="roadmap-evidence-m2-t2-8-c03"></a>`M2.T2-8.C03` | 手動 `MANUAL.M2.T2-8.C03.COMMIT-PUSH` | unchecked | manual-acceptance-pending |
+| <a id="roadmap-evidence-m2-t2-8-c04"></a>`M2.T2-8.C04` | 自動 `autosave::tests::clean_exit_never_discards_another_process_active_snapshot / autosave::tests::forced_process_kill_then_new_process_restores_exact_document / autosave::tests::restore_recovers_the_same_document / autosave::tests::two_real_processes_keep_both_documents_when_autosave_transactions_overlap` | unchecked | unchecked-but-progress-task-exists |
+| <a id="roadmap-evidence-m2-t2-8-c05"></a>`M2.T2-8.C05` | 自動 `store::tests::saving_own_opened_document_twice_after_edits_does_not_conflict / store::tests::two_real_processes_reject_a_stale_explicit_save_and_keep_the_first_save` | unchecked | unchecked-but-progress-task-exists |
 | <a id="roadmap-evidence-m2-t2-9-c01"></a>`M2.T2-9.C01` | 自動 `completed_crane_is_flat_and_symmetric` | unchecked | unchecked-but-progress-task-exists |
 | <a id="roadmap-evidence-m2-t2-9-c02"></a>`M2.T2-9.C02` | 手動 `MANUAL.M2.T2-9.C02.SCREEN-ACCEPTANCE` | unchecked | manual-acceptance-pending |
 | <a id="roadmap-evidence-m2-t2-9-c03"></a>`M2.T2-9.C03` | 手動 `MANUAL.M2.T2-9.C03.COMMIT-PUSH` | checked | consistent |
@@ -169,7 +169,7 @@
 | <a id="roadmap-evidence-m3-t3-4-c25"></a>`M3.T3-4.C25` | 自動 `proposal_matrix_contract` | checked | consistent |
 | <a id="roadmap-evidence-m3-t3-4-c26"></a>`M3.T3-4.C26` | 自動 `proposal_matrix_contract` | checked | consistent |
 | <a id="roadmap-evidence-m3-t3-4-c27"></a>`M3.T3-4.C27` | 自動 `proposal_matrix_contract` | checked | consistent |
-| <a id="roadmap-evidence-m3-t3-4-c28"></a>`M3.T3-4.C28` | 自動 `proposal_matrix_contract` | unchecked | unchecked-with-test-link |
+| <a id="roadmap-evidence-m3-t3-4-c28"></a>`M3.T3-4.C28` | 自動 `compare_two_ways_on_allowed_corpus_anchors` | checked | consistent |
 | <a id="roadmap-evidence-m3-t3-4-c29"></a>`M3.T3-4.C29` | 自動 `proposal_matrix_contract` | checked | consistent |
 | <a id="roadmap-evidence-m3-t3-4-c30"></a>`M3.T3-4.C30` | 自動 `proposal_matrix_contract` | checked | consistent |
 | <a id="roadmap-evidence-m3-t3-4-c31"></a>`M3.T3-4.C31` | 自動 `proposal_matrix_contract` | checked | consistent |
@@ -193,7 +193,7 @@
 | <a id="roadmap-evidence-m4-t4-4-c03"></a>`M4.T4-4.C03` | 手動 `MANUAL.M4.T4-4.C03.COMMIT-PUSH` | checked | consistent |
 | <a id="roadmap-evidence-m4-t4-5-c01"></a>`M4.T4-5.C01` | 自動 `pdf::tests::seven_steps_make_a_cover_and_two_pages` | checked | consistent |
 | <a id="roadmap-evidence-m4-t4-5-c02"></a>`M4.T4-5.C02` | 自動 `pdf::tests::seven_steps_make_a_cover_and_two_pages` | checked | consistent |
-| <a id="roadmap-evidence-m4-t4-5-c03"></a>`M4.T4-5.C03` | 手動 `MANUAL.M4.T4-5.C03.SCREEN-ACCEPTANCE` | unchecked | unchecked-but-progress-task-exists |
+| <a id="roadmap-evidence-m4-t4-5-c03"></a>`M4.T4-5.C03` | 自動 `diagram_pdf_and_svg_create_nonempty_structured_files` | checked | consistent |
 | <a id="roadmap-evidence-m4-t4-5-c04"></a>`M4.T4-5.C04` | 手動 `MANUAL.M4.T4-5.C04.COMMIT-PUSH` | checked | consistent |
 | <a id="roadmap-evidence-m4-t4-6-c01"></a>`M4.T4-6.C01` | 自動 `traditional_frog_has_required_techniques_and_replays_connected_twice` | checked | consistent |
 | <a id="roadmap-evidence-m4-t4-6-c02"></a>`M4.T4-6.C02` | 手動 `MANUAL.M4.T4-6.C02.SCREEN-ACCEPTANCE` | unchecked | manual-acceptance-pending |

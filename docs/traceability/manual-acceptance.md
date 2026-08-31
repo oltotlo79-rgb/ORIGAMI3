@@ -2,8 +2,8 @@
 
 この文書のIDは `roadmap-links.json` の手動証拠と1対1で対応する。実施者はID、日付、結果、確認した画面又は履歴を記録する。担当者はアプリを起動せず、画面確認は統括が同梱版で行う。
 
-- ロードマップSHA-256: `2e60805ef7202669133666d5552d9e8b048fd50bdb112e9cd5c00f669dd2a0c5`
-- 検査名台帳SHA-256: `c2baa171dd9a6b330afe12ecaea5f614a0085427b1badac7c624f69f3a0419be`（roadmap-mapped 38/38件、source 29/29ファイル、definition tree `bf81b6e4f1c5041e2d6ea1ac2dcff055d80e49af7d9fa3ebbb1af0a3f34c1d8c`、リポジトリ全検査数は主張しない）
+- ロードマップSHA-256: `77ddd527f223af20ca79429de9a77bbaa120ef7493e4e68a2f9eab8637cc1534`
+- 検査名台帳SHA-256: `3b62afd3b299a603e4336f43a53cbf15128b5a1176c0d32c4fbd10848ec06be8`（roadmap-mapped 52/52件、source 33/33ファイル、definition tree `94b9a690e5f4e324468697d67b96f1a0f6c655669ee72f3f7747b3e7dda01e06`、リポジトリ全検査数は主張しない）
 
 ## B1未実施受入の自動化可否（2026-08-26）
 
@@ -22,7 +22,6 @@ XはCDPで画面操作、表示文字列、画素又は領域の有無を確認�
 | `MANUAL.M2.T2-7.C01.SCREEN-ACCEPTANCE` | X | 4種類の作図補助 |
 | `MANUAL.M2.T2-7.C02.SCREEN-ACCEPTANCE` | X | 局所平坦違反の橙表示 |
 | `MANUAL.M2.T2-7.C03.SCREEN-ACCEPTANCE` | X | めり込み警告バッジ |
-| `MANUAL.M2.T2-8.C02.SCREEN-ACCEPTANCE` | X | 復旧ダイアログ |
 | `MANUAL.M3.T3-4.C01.SCREEN-ACCEPTANCE` | X | 提案ウィザード3画面 |
 | `MANUAL.M3.T3-4.C02.SCREEN-ACCEPTANCE` | X | 提案ウィザードの起動位置 |
 | `MANUAL.M4.T4-3.C02.SCREEN-ACCEPTANCE` | X | 展開図書き出しダイアログ |
@@ -352,11 +351,6 @@ XはCDPで画面操作、表示文字列、画素又は領域の有無を確認�
 3. `git merge-base --is-ancestor dfd5ca03dce87fa2ae6cfff5cb05aba5b527d478 origin/main` の確認結果: `True`。
 4. この対応はTask番号だけで推測していない。題名・確認日・結果を記録し、祖先でなければ合格にしない。
 
-## MANUAL.M2.T2-8.C02.SCREEN-ACCEPTANCE
-1. 統括が画面を同梱した版を1つだけ起動し、checkbox本文の操作を行う。
-2. 本文にある表示、操作結果、日本語の案内を目視し、画面又は撮影記録への参照を残す。
-3. 操作不能、英語表示、表示崩れがあれば不合格として進捗を書き換えずに報告する。
-
 ## MANUAL.M2.T2-8.C03.COMMIT-PUSH
 1. `docs/implementation-roadmap.md` の `M2.T2-8.C03` と同じTaskを確認する。
 2. 統括が指定されたコミット題名と進捗記録を履歴で照合し、リモート本線の祖先であることを確認する。
@@ -457,13 +451,6 @@ XはCDPで画面操作、表示文字列、画素又は領域の有無を確認�
 2. 明示対応commit: `1b1a0e650cd373fc0a877d7fb133452f767739ba`（題名: 折り手順を1コマずつ図にする機能を追加）。
 3. `git merge-base --is-ancestor 1b1a0e650cd373fc0a877d7fb133452f767739ba origin/main` の確認結果: `True`。
 4. この対応はTask番号だけで推測していない。題名・確認日・結果を記録し、祖先でなければ合格にしない。
-
-## MANUAL.M4.T4-5.C03.SCREEN-ACCEPTANCE
-1. 担当: 受入担当者（必要なら利用者）。折り鶴ではない、保存済みで手順を2件以上含む作品を1つ開く。所要時間の目安は10分。
-2. 画面上部の「書き出し」を開き、「折り図(PDF)」を選ぶ。保存先は空の作業用フォルダーを選び、保存する。保存後、そのフォルダーに`.pdf`ファイルがちょうど1個あり、サイズが0より大きく、通常のPDF閲覧ソフトで開けることを確認する。
-3. 同じ作品で再び「書き出し」を開き、「折り図(ページごとのSVG)」を選ぶ。PDFとは別の空の作業用フォルダーを選び、保存する。`.svg`ファイルが手順数以上あり、すべてサイズが0より大きく、少なくとも最初と最後のファイルを開いて図と手順番号が表示されることを確認する。
-4. 合格: 2種類の選択肢をそれぞれ選べ、保存操作後に上記のファイル数・拡張子・サイズ・内容を満たす。確認日、作品の手順数、各フォルダーのファイル名とサイズ、確認者を記録する。
-5. 不合格: 選択肢が無い、保存画面へ進めない、保存が失敗する、ファイル数・拡張子・サイズ・表示のいずれかが条件を満たさない場合は、状態を変えずに統括へ報告する。
 
 ## MANUAL.M4.T4-5.C04.COMMIT-PUSH
 1. `docs/implementation-roadmap.md` の `M4.T4-5.C04` と同じTaskを確認する。
