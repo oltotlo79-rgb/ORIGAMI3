@@ -1,6 +1,6 @@
 # ORIGAMI3-ROADMAP-EVIDENCE-TEST-NAMES schema=2
 # scope=roadmap-mapped names=52 source-files=33 repository-test-total=not-claimed
-# definition-tree-sha256=94b9a690e5f4e324468697d67b96f1a0f6c655669ee72f3f7747b3e7dda01e06
+# definition-tree-sha256=454f919f4a8d94c9381cb1b2acbd0eb3d604aa6f4a346711c0530ca85b4e1a47
 # この一覧はリポジトリ全検査の一覧ではない。scripts/doc-link-audit.ps1 が
 # ロードマップ証拠へ割り当てる検査名と実sourceを1対1で保存する。
 # definition hashは、下記52件の実sourceにあるtest属性・関数宣言又は

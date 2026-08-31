@@ -1,5 +1,6 @@
 ﻿# 本番リリース関門を本repoで別process実行し、stage 6が実際に接続されたことを検査する。
 
+# stage 1のworkspace version readerは、production関数そのものを隔離fixtureでも検査する。
 $ErrorActionPreference = "Stop"
 $sut = Join-Path $PSScriptRoot "check-release-ready.ps1"
 $snapshotSut = Join-Path $PSScriptRoot "get-roadmap-status.ps1"
@@ -28,6 +29,74 @@ function Assert-True {
     param([bool]$Condition, [string]$Message)
     $script:assertions++
     if (-not $Condition) { throw "[TEST NG] $Message`n$output" }
+}
+
+# 本番と別の正規表現を検査しても回帰を捕まえられないため、PowerShell ASTから
+# productionの版数readerをそのまま取り出し、改行・一意性・書式を隔離fixtureで確認する。
+$tokens = $null
+$parseErrors = $null
+$sutAst = [System.Management.Automation.Language.Parser]::ParseFile(
+    $sut,
+    [ref]$tokens,
+    [ref]$parseErrors
+)
+if ($parseErrors.Count -ne 0) {
+    throw "production release gateを構文解析できません: $($parseErrors[0].Message)"
+}
+$functionDefinitions = @($sutAst.FindAll({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst]
+}, $true))
+foreach ($functionName in @("Read-Utf8Text", "Get-CargoWorkspaceVersion")) {
+    $definitions = @($functionDefinitions | Where-Object { $_.Name -ceq $functionName })
+    if ($definitions.Count -ne 1) {
+        throw "production functionを1つに特定できません: $functionName count=$($definitions.Count)"
+    }
+    . ([scriptblock]::Create($definitions[0].Extent.Text))
+}
+
+$tempParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([char[]]"\/")
+$tempRoot = [IO.Path]::GetFullPath((Join-Path $tempParent ("ori3-release-version-test-" + [Guid]::NewGuid().ToString("N"))))
+[void][IO.Directory]::CreateDirectory($tempRoot)
+try {
+    function Invoke-VersionFixture {
+        param([string]$Name, [string]$Content)
+
+        $fixturePath = Join-Path $tempRoot $Name
+        [IO.File]::WriteAllText($fixturePath, $Content, (New-Object Text.UTF8Encoding($false)))
+        try {
+            return [pscustomobject]@{
+                Success = $true
+                Value = Get-CargoWorkspaceVersion $fixturePath
+                Error = $null
+            }
+        }
+        catch {
+            return [pscustomobject]@{
+                Success = $false
+                Value = $null
+                Error = $_.Exception.Message
+            }
+        }
+    }
+
+    $lfVersion = Invoke-VersionFixture "lf.toml" "[workspace.package]`nversion = `"0.5.0`"`n[workspace.dependencies]`n"
+    $crlfVersion = Invoke-VersionFixture "crlf.toml" "[workspace.package]`r`nversion = `"0.5.0`"`r`n[workspace.dependencies]`r`n"
+    $duplicateVersion = Invoke-VersionFixture "duplicate.toml" "[workspace.package]`nversion = `"0.5.0`"`nversion = `"0.6.0`"`n[workspace.dependencies]`n"
+    $unquotedVersion = Invoke-VersionFixture "unquoted.toml" "[workspace.package]`nversion = 0.5.0`n[workspace.dependencies]`n"
+
+    Assert-True ($lfVersion.Success -and $lfVersion.Value -ceq "0.5.0") "LFのworkspace versionを読めません: value=$($lfVersion.Value) error=$($lfVersion.Error)"
+    Assert-True ($crlfVersion.Success -and $crlfVersion.Value -ceq "0.5.0") "CRLFのworkspace versionを読めません: value=$($crlfVersion.Value) error=$($crlfVersion.Error)"
+    Assert-True ((-not $duplicateVersion.Success) -and $duplicateVersion.Error -ceq "[workspace.package] の version を1つに特定できません") "重複workspace versionを拒否しませんでした: value=$($duplicateVersion.Value) error=$($duplicateVersion.Error)"
+    Assert-True ((-not $unquotedVersion.Success) -and $unquotedVersion.Error -ceq "[workspace.package] の version を1つに特定できません") "unquoted workspace versionを拒否しませんでした: value=$($unquotedVersion.Value) error=$($unquotedVersion.Error)"
+}
+finally {
+    $resolvedTempRoot = [IO.Path]::GetFullPath($tempRoot).TrimEnd([char[]]"\/")
+    if ([IO.Path]::GetDirectoryName($resolvedTempRoot) -cne $tempParent -or
+        [IO.Path]::GetFileName($resolvedTempRoot) -notmatch '^ori3-release-version-test-[0-9a-f]{32}$') {
+        throw "unsafe version fixture cleanup refused: $resolvedTempRoot"
+    }
+    [IO.Directory]::Delete($resolvedTempRoot, $true)
 }
 
 if ([int]$snapshot.unchecked -gt 0) {

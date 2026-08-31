@@ -387,7 +387,7 @@ function Get-CargoWorkspaceVersion {
     }
     $matches = [regex]::Matches(
         $section.Groups["body"].Value,
-        '(?m)^[ \t]*version[ \t]*=[ \t]*"(?<version>[^"]+)"[ \t]*(?:#.*)?$'
+        '(?m)^[ \t]*version[ \t]*=[ \t]*"(?<version>[^"]+)"[ \t]*(?:#.*)?\r?$'
     )
     if ($matches.Count -ne 1) {
         throw "[workspace.package] の version を1つに特定できません"
