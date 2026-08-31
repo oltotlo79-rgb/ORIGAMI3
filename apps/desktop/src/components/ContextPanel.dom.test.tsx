@@ -13,6 +13,7 @@ import {
   within,
 } from "@testing-library/react";
 import { ContextPanel } from "./ContextPanel";
+import { RecoveryDialog } from "./RecoveryDialog";
 import { resetPoseThrottle, useAppStore } from "../store/appStore";
 import type { Document, FoldIssue } from "../lib/types";
 import { DEFAULT_CURVE } from "../lib/curve";
@@ -1417,7 +1418,7 @@ describe("ほかの折り紙ソフトのファイルを読み込んだ際の注�
   });
 });
 
-describe("前回までの作業が4件以上ある知らせ", () => {
+describe("前回までの作業を再表示する入口", () => {
   const notice =
     "前回までの作業を4件以上控えています。今の作業は引き続き控えています。不要な内容は「前回の作業を確認」から破棄できます。";
 
@@ -1452,6 +1453,9 @@ describe("前回までの作業が4件以上ある知らせ", () => {
     expect(noticeRows()).toHaveLength(1);
     act(() => useAppStore.getState().dismissRecovery());
     expect(useAppStore.getState().recoveryDismissed).toBe(true);
+    expect(
+      screen.getAllByRole("button", { name: "前回の作業を確認" }),
+    ).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "前回の作業を確認" }));
     expect(useAppStore.getState().recoveryDismissed).toBe(false);
   });
@@ -1469,6 +1473,63 @@ describe("前回までの作業が4件以上ある知らせ", () => {
     });
 
     expect(noticeRows()).toHaveLength(0);
+    expect(
+      screen.queryByRole("button", { name: "前回の作業を確認" }),
+    ).toBeNull();
+  });
+
+  it.each([1, 2, 3])(
+    "持ち越しが%d件でも「あとで確認する」の後に下部通知欄から戻れる",
+    async (count) => {
+      seed(new Map());
+      vi.mocked(ipc.recoveryCheck).mockResolvedValue({
+        choices: choices(count),
+        overflow_count: 0,
+      });
+      render(
+        <>
+          <ContextPanel />
+          <RecoveryDialog />
+        </>,
+      );
+
+      await act(async () => {
+        await useAppStore.getState().checkRecovery();
+      });
+
+      expect(
+        screen.queryByRole("button", { name: "前回の作業を確認" }),
+      ).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "あとで確認する" }));
+
+      expect(
+        screen.getByText(`前回までの作業を${count}件控えています。`, {
+          exact: false,
+        }),
+      ).toBeTruthy();
+      fireEvent.click(
+        screen.getByRole("button", { name: "前回の作業を確認" }),
+      );
+      expect(useAppStore.getState().recoveryDismissed).toBe(false);
+      expect(
+        screen.getByRole("button", { name: "あとで確認する" }),
+      ).toBeTruthy();
+    },
+  );
+
+  it("候補が無ければ閉じた状態でも入口を出さない", async () => {
+    seed(new Map());
+    vi.mocked(ipc.recoveryCheck).mockResolvedValue({
+      choices: [],
+      overflow_count: 0,
+    });
+    render(<ContextPanel />);
+
+    await act(async () => {
+      await useAppStore.getState().checkRecovery();
+    });
+    act(() => useAppStore.getState().dismissRecovery());
+
     expect(
       screen.queryByRole("button", { name: "前回の作業を確認" }),
     ).toBeNull();

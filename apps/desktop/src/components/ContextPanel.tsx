@@ -42,6 +42,8 @@ export function ContextPanel() {
   const errorMessage = useAppStore((s) => s.errorMessage);
   const documentSavedPath = useAppStore((s) => s.documentSavedPath);
   const mirrorAxisNotice = useAppStore((s) => s.mirrorAxisNotice);
+  const recoveryChoices = useAppStore((s) => s.recoveryChoices);
+  const recoveryDismissed = useAppStore((s) => s.recoveryDismissed);
   const recoveryOverflowNotice = useAppStore((s) => s.recoveryOverflowNotice);
   const openRecovery = useAppStore((s) => s.openRecovery);
   const foldAllPreview = useAppStore((s) => s.foldAllPreview);
@@ -63,6 +65,11 @@ export function ContextPanel() {
     flatFoldWarning === null ? [] : [flatFoldWarning],
   );
   const hasRelaxations = relaxationNotices(relaxations).length > 0;
+  // 4件以上は既存の超過通知に入口があるため、保留した少数候補だけを補う。
+  const showRecoveryReminder =
+    recoveryDismissed &&
+    recoveryChoices.length > 0 &&
+    recoveryOverflowNotice === null;
   // 手順を選んでいる間はその手順の設定を出す(「折る前」「最新」は選択なし扱い)。
   // 同じ判断を3Dの紙の案内(ふくらます入口)も使うので、条件はストア側に1つだけ置く。
   const selectedStep = stepPanelSelected({ currentStep }) ? currentStep : null;
@@ -138,6 +145,7 @@ export function ContextPanel() {
         (errorMessage !== null ||
           documentSavedPath !== null ||
           mirrorAxisNotice !== null ||
+          showRecoveryReminder ||
           recoveryOverflowNotice !== null ||
           foldIssues.length > 0 ||
           allWarnings.length > 0 ||
@@ -155,6 +163,14 @@ export function ContextPanel() {
             {recoveryOverflowNotice !== null && (
               <p className="mirror-axis-notice" aria-live="polite">
                 {recoveryOverflowNotice}{" "}
+                <button type="button" onClick={openRecovery}>
+                  前回の作業を確認
+                </button>
+              </p>
+            )}
+            {showRecoveryReminder && (
+              <p className="mirror-axis-notice" aria-live="polite">
+                前回までの作業を{recoveryChoices.length}件控えています。{" "}
                 <button type="button" onClick={openRecovery}>
                   前回の作業を確認
                 </button>

@@ -390,20 +390,30 @@ fn view_command(
 
 #[tauri::command(async)]
 pub fn document_new(
+    app: tauri::AppHandle,
     state: State<'_, Mutex<DocumentStore>>,
     paper: Paper,
 ) -> Result<DocumentView, String> {
     guard(AssertUnwindSafe(|| {
+        if lock(&state).is_dirty() {
+            let dir = autosave::app_data_dir(&app)?;
+            autosave::preserve_before_document_change(state.inner(), &dir)?;
+        }
         view_command(&state, || lock(&state).new_document(paper))
     }))
 }
 
 #[tauri::command(async)]
 pub fn document_open(
+    app: tauri::AppHandle,
     state: State<'_, Mutex<DocumentStore>>,
     path: String,
 ) -> Result<DocumentView, String> {
     guard(AssertUnwindSafe(|| {
+        if lock(&state).is_dirty() {
+            let dir = autosave::app_data_dir(&app)?;
+            autosave::preserve_before_document_change(state.inner(), &dir)?;
+        }
         let path = Path::new(&path);
         if path
             .extension()

@@ -109,6 +109,25 @@ pub(crate) fn write_atomic(target: &Path, bytes: &[u8]) -> std::io::Result<()> {
         .unwrap_or("ori3");
     let id = ATOMIC_WRITE_ID.fetch_add(1, Ordering::Relaxed);
     let temp = dir.join(format!(".{name}.{}.{}.tmp", std::process::id(), id));
+    #[cfg(test)]
+    if std::env::var_os("ORI3_TEST_PAUSE_PARTIAL_ATOMIC_TARGET")
+        .is_some_and(|requested| Path::new(&requested) == target)
+    {
+        use std::io::Write;
+
+        let split = bytes.len().div_ceil(2);
+        let mut file = std::fs::File::create(&temp)?;
+        file.write_all(&bytes[..split])?;
+        file.sync_all()?;
+        if let Some(ready) = std::env::var_os("ORI3_TEST_PAUSE_PARTIAL_ATOMIC_READY") {
+            std::fs::write(PathBuf::from(ready), b"ready")?;
+        }
+        // 親testがこのprocessをChild::killする。returnやDropによる後始末を通さず、
+        // 実際の書込み途中と同じpartial tempを残すためのtest-build専用checkpoint。
+        loop {
+            std::thread::park_timeout(std::time::Duration::from_millis(10));
+        }
+    }
     std::fs::write(&temp, bytes)?;
     if let Err(err) = std::fs::rename(&temp, target) {
         let _ = std::fs::remove_file(&temp);
