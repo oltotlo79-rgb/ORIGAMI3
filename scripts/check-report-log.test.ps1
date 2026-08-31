@@ -27,6 +27,19 @@ function Assert-True {
     if (-not $Condition) { throw "ASSERTION FAILED: $Message" }
 }
 
+function Get-Utf8Sha256 {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    $bytes = [Text.UTF8Encoding]::new($false).GetBytes($Text)
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        return (($sha256.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') }) -join '')
+    }
+    finally {
+        $sha256.Dispose()
+    }
+}
+
 function ConvertTo-FullWidthNumber {
     param([Parameter(Mandatory = $true)][string]$Value)
     $builder = New-Object Text.StringBuilder
@@ -182,6 +195,13 @@ try {
 
     $validNonePath = Write-TestReport "valid-none" $headingTime "通常の作業報告" @("Roadmap-Claim: none", "通常の本文です。") $now
     Assert-Exit (Invoke-ReportCheck $validNonePath) 0 "valid none"
+    $validNoneText = [IO.File]::ReadAllText($validNonePath, (New-Object Text.UTF8Encoding($false, $true)))
+    $validNoneBoundaryOffset = $validNoneText.IndexOf($script:legacyBoundaryHeader, [StringComparison]::Ordinal)
+    Assert-True ($validNoneBoundaryOffset -ge 0) "先頭record追加後もimmutable境界を見つけること"
+    $validNoneSuffix = $validNoneText.Substring($validNoneBoundaryOffset)
+    Assert-True (
+        (Get-Utf8Sha256 $validNoneSuffix) -eq (Get-Utf8Sha256 $script:legacySuffixText)
+    ) "先頭record追加は境界以下のhashを変えないこと"
 
     $agentDeathMissingEvidencePath = Write-TestReport "agent-death-missing-evidence" $headingTime "担当が死んだという報告" @("Roadmap-Claim: none", "担当が死んだと判断した。") $now
     Assert-Exit (Invoke-ReportCheck $agentDeathMissingEvidencePath) 2 "agent death missing evidence" "Agent-Death-Evidence"
@@ -380,6 +400,10 @@ try {
     $insertedBelowBoundarySuffix = $script:legacySuffixText.Insert($firstSuffixLineBreak + 1, "境界下へ挿入した行`n")
     $insertedBelowBoundaryPath = Write-TestDocument "inserted-below-legacy-boundary" @($enforcementAnchorRecord) $now $insertedBelowBoundarySuffix
     Assert-Exit (Invoke-ReportCheck $insertedBelowBoundaryPath) 2 "inserted below legacy boundary" "旧履歴suffix hash"
+
+    $appendedBelowBoundarySuffix = $script:legacySuffixText + "`n境界下へ末尾追記した行"
+    $appendedBelowBoundaryPath = Write-TestDocument "appended-below-legacy-boundary" @($enforcementAnchorRecord) $now $appendedBelowBoundarySuffix
+    Assert-Exit (Invoke-ReportCheck $appendedBelowBoundaryPath) 2 "appended below legacy boundary" "旧履歴suffix hash"
 
     $changedLineEndingSuffix = $script:legacySuffixText.Replace("`n", "`r`n")
     $changedLineEndingPath = Write-TestDocument "changed-legacy-line-endings" @($enforcementAnchorRecord) $now $changedLineEndingSuffix
