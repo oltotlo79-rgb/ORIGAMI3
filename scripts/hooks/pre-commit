@@ -95,9 +95,12 @@ record_scope_health_success() {
 }
 
 if [ -n "$scope_powershell" ] && [ -f "$scope_warning_script" ]; then
-    "$scope_powershell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$scope_warning_script" -RepositoryRoot "$repo_root"
+    "$scope_powershell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$scope_warning_script" -RepositoryRoot "$repo_root" -FailOnVacuousRustTest
     scope_warning_status=$?
-    if [ "$scope_warning_status" -ne 0 ]; then
+    if [ "$scope_warning_status" -eq 2 ]; then
+        printf '%s\n' '[NG] A newly added Rust #[test] has no direct failure signal. Add a failure assertion to the named test before committing.' >&2
+        exit 2
+    elif [ "$scope_warning_status" -ne 0 ]; then
         record_scope_health_failure "$scope_warning_status" scanner-exit
         printf '%s\n' "[WARN] test-claim scope warning scan could not run (exit $scope_warning_status); commit remains nonblocking" >&2
     else
