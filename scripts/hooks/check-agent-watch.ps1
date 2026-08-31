@@ -28,6 +28,10 @@ $script:FreshnessMinutes = 12.0
 $script:FutureToleranceMinutes = 2.0
 $script:RetryCount = 4
 $script:RetryMilliseconds = 50
+$script:AgentReplyQuietMinutes = 15.0
+$script:AgentSendLedgerSchemaVersion = 1
+$script:AgentSendLedgerFileName = "watch-agents.sends.json"
+$script:AgentSendLedgerLockTimeoutMilliseconds = 500
 
 function New-AgentWatchResult {
     param(
@@ -447,6 +451,331 @@ function Get-DelegationText {
         throw "PreToolUse payloadの実text fieldが文字列ではありません: tool=$ToolName field=tool_input.$fieldName"
     }
     return [string]$textProperty.Value
+}
+
+function Get-DelegationTargetThreadId {
+    param(
+        [Parameter(Mandatory = $true)]$HookPayload,
+        [Parameter(Mandatory = $true)][string]$ToolName
+    )
+
+    $toolInput = $HookPayload.tool_input
+    $fieldName = switch ($ToolName) {
+        "Agent" { "resume" }
+        "SendMessage" { "recipient" }
+        "mcp__codex__codex" { "threadId" }
+        "mcp__codex__codex-reply" { "threadId" }
+        default { throw "送信先を検査する委譲toolではありません: $ToolName" }
+    }
+    $property = $toolInput.PSObject.Properties[$fieldName]
+    if ($null -eq $property) {
+        if ($ToolName -eq "SendMessage" -or $ToolName -eq "mcp__codex__codex-reply") {
+            throw "PreToolUse payloadに送信先fieldがありません: tool=$ToolName field=tool_input.$fieldName"
+        }
+        return ""
+    }
+    if (-not ($property.Value -is [string]) -or [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+        throw "PreToolUse payloadの送信先fieldが空または文字列ではありません: tool=$ToolName field=tool_input.$fieldName"
+    }
+    $threadId = ([string]$property.Value).Trim()
+    if (-not [regex]::IsMatch($threadId, '^[A-Za-z0-9][A-Za-z0-9._:-]{5,127}$', [Text.RegularExpressions.RegexOptions]::CultureInvariant)) {
+        throw "PreToolUse payloadの送信先IDが承認済み形式ではありません: tool=$ToolName field=tool_input.$fieldName"
+    }
+    return $threadId
+}
+
+function Get-AgentThreadIdFromName {
+    param([Parameter(Mandatory = $true)][string]$Name)
+
+    $match = [regex]::Match(
+        $Name,
+        '\((?<threadId>[A-Za-z0-9][A-Za-z0-9._:-]{5,127}),\s*[^()]+\)\s*$',
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant
+    )
+    if (-not $match.Success) {
+        return ""
+    }
+    return [string]$match.Groups["threadId"].Value
+}
+
+function Read-AgentSendLedger {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return @()
+    }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "送信履歴が通常fileではありません: $Path"
+    }
+    if (Test-ReparsePoint -Path $Path) {
+        throw "送信履歴にreparse pointは使えません: $Path"
+    }
+    $bytes = Read-SharedFileBytes -Path $Path
+    if ($bytes.Length -eq 0) {
+        throw "送信履歴が空です: $Path"
+    }
+    if ($bytes.Length -gt 1048576) {
+        throw "送信履歴が上限1MiBを超えています: $Path"
+    }
+    try {
+        $ledger = $script:Utf8NoBom.GetString($bytes) | ConvertFrom-Json
+    }
+    catch {
+        throw "送信履歴を厳密UTF-8 JSONとして読めません: $($_.Exception.Message)"
+    }
+    if ($null -eq $ledger) {
+        throw "送信履歴がnullです"
+    }
+    $topProperties = @($ledger.PSObject.Properties.Name)
+    $expectedTopProperties = @("schemaVersion", "records")
+    if (@($expectedTopProperties | Where-Object { $topProperties -notcontains $_ }).Count -gt 0 -or
+        @($topProperties | Where-Object { $expectedTopProperties -notcontains $_ }).Count -gt 0) {
+        throw "送信履歴のtop-level fieldがschema 1と一致しません"
+    }
+    $schemaVersion = Get-RequiredIntegerStateValue -State $ledger -Name "schemaVersion"
+    if ($schemaVersion -ne $script:AgentSendLedgerSchemaVersion) {
+        throw "送信履歴のschemaVersionが未対応です: $($ledger.schemaVersion)"
+    }
+    if ($null -eq $ledger.records -or $ledger.records.GetType().FullName -ne "System.Object[]") {
+        throw "送信履歴のrecordsがJSON配列ではありません"
+    }
+    $records = @($ledger.records)
+    $seenThreads = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    foreach ($record in $records) {
+        if ($null -eq $record) {
+            throw "送信履歴recordsにnullがあります"
+        }
+        $properties = @($record.PSObject.Properties.Name)
+        $expectedProperties = @("agentKey", "threadId", "lastCoordinatorSendUtc", "acknowledgedLatestWriteUtc")
+        if (@($expectedProperties | Where-Object { $properties -notcontains $_ }).Count -gt 0 -or
+            @($properties | Where-Object { $expectedProperties -notcontains $_ }).Count -gt 0) {
+            throw "送信履歴recordのfieldがschema 1と一致しません"
+        }
+        $threadId = [string]$record.threadId
+        if (-not [regex]::IsMatch($threadId, '^[A-Za-z0-9][A-Za-z0-9._:-]{5,127}$', [Text.RegularExpressions.RegexOptions]::CultureInvariant)) {
+            throw "送信履歴のthreadIdが不正です"
+        }
+        if (-not $seenThreads.Add($threadId)) {
+            throw "送信履歴のthreadIdが重複しています: $threadId"
+        }
+        if (-not [regex]::IsMatch([string]$record.agentKey, '^[0-9a-f]{64}$')) {
+            throw "送信履歴のagentKeyがlowercase SHA-256ではありません: thread=$threadId"
+        }
+        $lastSent = Parse-RoundtripUtc -Text ([string]$record.lastCoordinatorSendUtc) -FieldName "sendLedger[$threadId].lastCoordinatorSendUtc"
+        if (-not [string]::Equals([string]$record.lastCoordinatorSendUtc, $lastSent.ToString("o"), [StringComparison]::Ordinal)) {
+            throw "送信履歴のlastCoordinatorSendUtcがcanonical表現ではありません: thread=$threadId"
+        }
+        $acknowledged = [string]$record.acknowledgedLatestWriteUtc
+        if (-not [string]::IsNullOrEmpty($acknowledged)) {
+            $acknowledgedUtc = Parse-RoundtripUtc -Text $acknowledged -FieldName "sendLedger[$threadId].acknowledgedLatestWriteUtc"
+            if (-not [string]::Equals($acknowledged, $acknowledgedUtc.ToString("o"), [StringComparison]::Ordinal)) {
+                throw "送信履歴のacknowledgedLatestWriteUtcがcanonical表現ではありません: thread=$threadId"
+            }
+        }
+    }
+    return $records
+}
+
+function Write-AgentSendLedger {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Records
+    )
+
+    $orderedRecords = @(
+        $Records |
+            Sort-Object @{ Expression = { [string]$_.threadId }; Ascending = $true } |
+            ForEach-Object {
+                [ordered]@{
+                    agentKey = [string]$_.agentKey
+                    threadId = [string]$_.threadId
+                    lastCoordinatorSendUtc = [string]$_.lastCoordinatorSendUtc
+                    acknowledgedLatestWriteUtc = [string]$_.acknowledgedLatestWriteUtc
+                }
+            }
+    )
+    $payload = [ordered]@{
+        schemaVersion = $script:AgentSendLedgerSchemaVersion
+        records = $orderedRecords
+    }
+    $bytes = $script:Utf8NoBom.GetBytes(($payload | ConvertTo-Json -Depth 6) + "`n")
+    $temporaryPath = "{0}.{1}.tmp" -f $Path, [Guid]::NewGuid().ToString("N")
+    $backupPath = "{0}.{1}.bak" -f $Path, [Guid]::NewGuid().ToString("N")
+    $committed = $false
+    try {
+        $stream = New-Object IO.FileStream(
+            $temporaryPath,
+            [IO.FileMode]::CreateNew,
+            [IO.FileAccess]::Write,
+            [IO.FileShare]::None
+        )
+        try {
+            $stream.Write($bytes, 0, $bytes.Length)
+            $stream.Flush($true)
+        }
+        finally {
+            $stream.Dispose()
+        }
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            [IO.File]::Replace($temporaryPath, $Path, $backupPath, $true)
+        }
+        else {
+            [IO.File]::Move($temporaryPath, $Path)
+        }
+        $committed = $true
+    }
+    finally {
+        try {
+            if (Test-Path -LiteralPath $temporaryPath -PathType Leaf) {
+                Remove-Item -LiteralPath $temporaryPath -Force
+            }
+            if (Test-Path -LiteralPath $backupPath -PathType Leaf) {
+                Remove-Item -LiteralPath $backupPath -Force
+            }
+        }
+        catch {
+            if (-not $committed) {
+                throw
+            }
+        }
+    }
+}
+
+function Invoke-AgentReplyGate {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)]$HookPayload,
+        [Parameter(Mandatory = $true)][string]$ToolName,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$DelegationText,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$AgentStates,
+        [Parameter(Mandatory = $true)][DateTime]$NowUtc
+    )
+
+    if ([string]::IsNullOrWhiteSpace($DelegationText)) {
+        return New-PolicyResult -Code "AGENT_REPLY_TEXT_EMPTY" -Message "空の送信では返信待ちを解消できません。担当へ送る本文を書いてください。"
+    }
+    $targetThreadId = Get-DelegationTargetThreadId -HookPayload $HookPayload -ToolName $ToolName
+    $agentsByThread = New-Object 'Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
+    foreach ($agentState in $AgentStates) {
+        $threadId = Get-AgentThreadIdFromName -Name ([string]$agentState.name)
+        if ([string]::IsNullOrEmpty($threadId)) {
+            continue
+        }
+        if ($agentsByThread.ContainsKey($threadId)) {
+            return New-CheckErrorResult -Code "AGENT_THREAD_ID_DUPLICATE" -Message "監視定義のthread IDが重複しています: $threadId"
+        }
+        $agentsByThread.Add($threadId, $agentState)
+    }
+
+    $ledgerPath = Join-Path (Join-Path $Root "scratchpad") $script:AgentSendLedgerFileName
+    $mutexHash = Get-Sha256HexFromText -Text ([IO.Path]::GetFullPath($ledgerPath).ToLowerInvariant())
+    $mutex = New-Object Threading.Mutex($false, ("Local\Ori3AgentWatchSendLedger_{0}" -f $mutexHash))
+    $lockTaken = $false
+    try {
+        try {
+            $lockTaken = $mutex.WaitOne($script:AgentSendLedgerLockTimeoutMilliseconds)
+        }
+        catch [Threading.AbandonedMutexException] {
+            $lockTaken = $true
+        }
+        if (-not $lockTaken) {
+            return New-CheckErrorResult -Code "AGENT_SEND_LEDGER_LOCK_TIMEOUT" -Message "送信履歴の排他取得が時間切れになりました"
+        }
+
+        try {
+            $records = @(Read-AgentSendLedger -Path $ledgerPath)
+        }
+        catch {
+            return New-CheckErrorResult -Code "AGENT_SEND_LEDGER_INVALID" -Message $_.Exception.Message
+        }
+        $recordsByThread = New-Object 'Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
+        foreach ($record in $records) {
+            $recordsByThread.Add([string]$record.threadId, $record)
+        }
+
+        $futureBoundaryUtc = $NowUtc.AddMinutes($script:FutureToleranceMinutes)
+        $waitingAgents = New-Object System.Collections.Generic.List[object]
+        foreach ($entry in $agentsByThread.GetEnumerator()) {
+            $threadId = [string]$entry.Key
+            $agentState = $entry.Value
+            if (-not $recordsByThread.ContainsKey($threadId) -or
+                -not [string]::Equals([string]$recordsByThread[$threadId].agentKey, [string]$agentState.agentKey, [StringComparison]::Ordinal) -or
+                [string]::IsNullOrEmpty([string]$agentState.latestWriteUtc)) {
+                continue
+            }
+            $record = $recordsByThread[$threadId]
+            $latestWriteUtc = Parse-RoundtripUtc -Text ([string]$agentState.latestWriteUtc) -FieldName "agent[$threadId].latestWriteUtc"
+            $lastSentUtc = Parse-RoundtripUtc -Text ([string]$record.lastCoordinatorSendUtc) -FieldName "sendLedger[$threadId].lastCoordinatorSendUtc"
+            if ($lastSentUtc -gt $futureBoundaryUtc) {
+                return New-CheckErrorResult -Code "AGENT_SEND_LEDGER_FUTURE" -Message "送信履歴が許容範囲の2分を超えて未来です: thread=$threadId"
+            }
+            $acknowledgedUtc = [DateTime]::MinValue
+            if (-not [string]::IsNullOrEmpty([string]$record.acknowledgedLatestWriteUtc)) {
+                $acknowledgedUtc = Parse-RoundtripUtc -Text ([string]$record.acknowledgedLatestWriteUtc) -FieldName "sendLedger[$threadId].acknowledgedLatestWriteUtc"
+                if ($acknowledgedUtc -gt $futureBoundaryUtc) {
+                    return New-CheckErrorResult -Code "AGENT_SEND_LEDGER_FUTURE" -Message "送信時に確認した更新時刻が許容範囲の2分を超えて未来です: thread=$threadId"
+                }
+            }
+            if ($latestWriteUtc -gt $lastSentUtc -and
+                $latestWriteUtc -gt $acknowledgedUtc -and
+                $latestWriteUtc -le $NowUtc.AddMinutes(-1.0 * $script:AgentReplyQuietMinutes)) {
+                $waitingAgents.Add([pscustomobject]@{
+                    ThreadId = $threadId
+                    AgentState = $agentState
+                    LatestWriteUtc = $latestWriteUtc
+                })
+            }
+        }
+
+        $targetIsWaiting = $false
+        foreach ($waitingAgent in $waitingAgents) {
+            if ([string]::Equals($targetThreadId, [string]$waitingAgent.ThreadId, [StringComparison]::Ordinal)) {
+                $targetIsWaiting = $true
+                break
+            }
+        }
+        if ($waitingAgents.Count -gt 0 -and -not $targetIsWaiting) {
+            $waitingDescription = @(
+                $waitingAgents |
+                    Sort-Object @{ Expression = { [string]$_.ThreadId }; Ascending = $true } |
+                    ForEach-Object {
+                        "{0} (thread={1}, latestWriteUtc={2})" -f
+                            ([string]$_.AgentState.name), ([string]$_.ThreadId), $_.LatestWriteUtc.ToString("o")
+                    }
+            ) -join "; "
+            return New-PolicyResult -Code "AGENT_REPLY_REQUIRED" -Message "先に次の担当へ返事をしてください: $waitingDescription"
+        }
+
+        if (-not [string]::IsNullOrEmpty($targetThreadId) -and $agentsByThread.ContainsKey($targetThreadId)) {
+            $targetAgent = $agentsByThread[$targetThreadId]
+            $acknowledgedLatestWriteUtc = [string]$targetAgent.latestWriteUtc
+            $updatedRecord = [pscustomobject][ordered]@{
+                agentKey = [string]$targetAgent.agentKey
+                threadId = $targetThreadId
+                lastCoordinatorSendUtc = $NowUtc.ToUniversalTime().ToString("o")
+                acknowledgedLatestWriteUtc = $acknowledgedLatestWriteUtc
+            }
+            if ($recordsByThread.ContainsKey($targetThreadId)) {
+                $recordsByThread[$targetThreadId] = $updatedRecord
+            }
+            else {
+                $recordsByThread.Add($targetThreadId, $updatedRecord)
+            }
+            try {
+                Write-AgentSendLedger -Path $ledgerPath -Records @($recordsByThread.Values)
+            }
+            catch {
+                return New-CheckErrorResult -Code "AGENT_SEND_LEDGER_WRITE_ERROR" -Message "送信履歴を保存できません: $($_.Exception.Message)"
+            }
+        }
+        return New-AgentWatchResult -ExitCode 0 -Code "AGENT_REPLY_GATE_OK" -Message "返信待ち担当との送信順序は正常です。"
+    }
+    finally {
+        if ($lockTaken) {
+            $mutex.ReleaseMutex()
+        }
+        $mutex.Dispose()
+    }
 }
 
 function Test-AgentWatchResponses {
@@ -1280,6 +1609,12 @@ function Write-HookDeny {
     $guidance = if ([string]$Result.Code -like "STALL_*") {
         "latest outputの現在incidentを確認し、委譲text先頭へ承認済みAGENT_WATCH_RESPONSEを各incident 1件ずつ書いてください。action=continueではnext=progress-when:<観測条件>が必要です。"
     }
+    elseif ([string]$Result.Code -eq "AGENT_REPLY_REQUIRED") {
+        "待っている担当本人への送信は許可されます。表示された担当へ先に返事を送ってください。"
+    }
+    elseif ([string]$Result.Code -eq "AGENT_REPLY_TEXT_EMPTY") {
+        "空でない返事を待っている担当本人へ送ってください。"
+    }
     else {
         "担当へ委譲する前に scripts/watch-agents.ps1 を -Once なし・10分間隔で継続稼働させてください。"
     }
@@ -1338,6 +1673,17 @@ if ($Action -eq "Hook") {
         if ($responseResult.ExitCode -ne 0) {
             $responseResult.Message = "{0} current={1}" -f $responseResult.Message, (@($incidentIds | Sort-Object) -join ",")
             Write-HookDeny -Result $responseResult -Root $resolvedRoot
+            exit 0
+        }
+        $replyGateResult = Invoke-AgentReplyGate `
+            -Root $resolvedRoot `
+            -HookPayload $hookPayload `
+            -ToolName $toolName `
+            -DelegationText $delegationText `
+            -AgentStates @($hookResult.AgentStates) `
+            -NowUtc ([DateTime]::UtcNow)
+        if ($replyGateResult.ExitCode -ne 0) {
+            Write-HookDeny -Result $replyGateResult -Root $resolvedRoot
         }
         exit 0
     }
