@@ -235,6 +235,66 @@ describe("全部いっぺんに折ってみる画面", () => {
     );
   });
 
+  it("0・25・50・75・100%と計算待ちの間ずっと仮の形で手順ではないと示す", async () => {
+    let release75: ((value: FoldAllPreviewOutcome) => void) | undefined;
+    vi.mocked(ipc.foldAllPreview).mockImplementation(async (percent) => {
+      if (percent !== 75) return outcome(percent);
+      return new Promise<FoldAllPreviewOutcome>((resolve) => {
+        release75 = resolve;
+      });
+    });
+    render(<ContextPanel />);
+    await enter();
+    const slider = screen.getByRole("slider", {
+      name: "全部の折り目を動かす割合",
+    });
+    const expectPermanentPromise = () => {
+      expect(screen.getByText("これは仮の形です")).toBeTruthy();
+      expect(screen.getByText("手順には記録されません。")).toBeTruthy();
+    };
+
+    expectPermanentPromise();
+    for (const percent of [25, 50]) {
+      fireEvent.change(slider, { target: { value: String(percent) } });
+      fireEvent.pointerUp(slider);
+      await waitFor(() =>
+        expect(
+          document.querySelector("[data-fold-all-active]")?.getAttribute(
+            "data-applied-percent",
+          ),
+        ).toBe(String(percent)),
+      );
+      expectPermanentPromise();
+    }
+
+    fireEvent.change(slider, { target: { value: "75" } });
+    fireEvent.pointerUp(slider);
+    expect(slider).toHaveProperty("value", "75");
+    expectPermanentPromise();
+    await waitFor(() => expect(release75).toBeTypeOf("function"));
+    if (!release75) throw new Error("75%の製品計算が始まっていない");
+    release75(outcome(75));
+    await waitFor(() =>
+      expect(
+        document.querySelector("[data-fold-all-active]")?.getAttribute(
+          "data-applied-percent",
+        ),
+      ).toBe("75"),
+    );
+    expectPermanentPromise();
+
+    fireEvent.change(slider, { target: { value: "100" } });
+    fireEvent.pointerUp(slider);
+    await waitFor(() =>
+      expect(
+        document.querySelector("[data-fold-all-active]")?.getAttribute(
+          "data-applied-percent",
+        ),
+      ).toBe("100"),
+    );
+    expectPermanentPromise();
+  });
+
   it("native rangeの0〜100%・1%刻みとキーボード操作の完了経路を保つ", async () => {
     const originalFinish = useAppStore.getState().finishFoldAllPercent;
     const finish = vi.fn(originalFinish);

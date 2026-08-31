@@ -13,6 +13,7 @@ pub mod tree;
 pub use fold_all::{
     FOLD_ALL_LAYER_ORDER_WARNING, FOLD_ALL_RELAXATION_WARNING, FoldAllPreviewError,
     FoldAllPreviewResult, fold_all_targets, solve_fold_all_preview,
+    solve_fold_all_preview_with_contact_detection,
 };
 pub use intersect::{
     ContactMetrics, ContactWitness, MAX_CONTACT_WITNESSES, PENETRATION_WARNING, contact_metrics,

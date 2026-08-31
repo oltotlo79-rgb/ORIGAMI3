@@ -423,3 +423,29 @@ describe("3D右上の状態表示順(D8)", () => {
     });
   });
 });
+
+
+describe("startup recovery check", () => {
+  it("checks recovery exactly once after preparing the new document", async () => {
+    let resolveNewDocument!: () => void;
+    const newDocument = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveNewDocument = resolve;
+        }),
+    );
+    const checkRecovery = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ newDocument, checkRecovery });
+
+    render(<App />);
+
+    expect(newDocument).toHaveBeenCalledTimes(1);
+    expect(checkRecovery).toHaveBeenCalledTimes(0);
+
+    await act(async () => {
+      resolveNewDocument();
+    });
+
+    await waitFor(() => expect(checkRecovery).toHaveBeenCalledTimes(1));
+  });
+});

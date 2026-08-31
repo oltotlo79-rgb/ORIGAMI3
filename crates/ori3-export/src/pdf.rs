@@ -112,7 +112,7 @@ pub fn diagram_svg_pages(doc: &Document) -> Result<Vec<String>, String> {
     Ok(pages)
 }
 
-/// 折り図の文字に使える書体が機械に入っているか調べる。入っていなければ真。
+/// 折り図の文字に使える書体が読み込まれているか調べる。無ければ真。
 ///
 /// [`FONT`] に並べた書体名のどれかが見つかればよい(`sans-serif` は書体名ではなく
 /// 「見つからなければ適当なものに任せる」という指定なので数に入れない)。
@@ -134,9 +134,8 @@ fn japanese_font_missing(db: &svg2pdf::usvg::fontdb::Database) -> bool {
 /// ページごとのSVGをそれぞれPDFの図形に直し、A4のページへ貼り合わせる。
 /// 文字は形(線)に直してから埋めるので、読む人の機械に同じ書体が無くても崩れない。
 ///
-/// 注意: 文字を形に直すには、書き出す側の機械に日本語の出せる書体が必要になる。
-/// 1つも見つからないと手順番号や注記が黙って消えてしまうため、そのときは
-/// 標準エラー出力に日本語で注意を出す(絵そのものは問題なく書き出せる)。
+/// 日本語書体は配布条件を記録した同梱subsetを使い、生成する機械の書体一覧には
+/// 依存しない。これによりdesktop/Webのどちらでも同じ字形とPDF bytesになる。
 pub fn diagram_pdf(doc: &Document) -> Result<Vec<u8>, String> {
     let pages = diagram_svg_pages(doc)?;
     svg_pages_pdf(&pages, "折り図")
@@ -167,7 +166,7 @@ pub(crate) struct PdfPage<'a> {
 /// A4のページごとのSVGを、1つの複数ページPDFに束ねる。
 ///
 /// `context` は、SVGの解析やPDF変換に失敗したときの日本語エラーへ入れる対象名。
-/// 文字はパスへ変換するため、生成側の機械に日本語書体が必要になる。
+/// 文字は、desktop/Webで共通の同梱書体を使ってパスへ変換する。
 pub(crate) fn svg_pages_pdf(pages: &[String], context: &str) -> Result<Vec<u8>, String> {
     let pages: Vec<_> = pages
         .iter()
@@ -179,7 +178,12 @@ pub(crate) fn svg_pages_pdf(pages: &[String], context: &str) -> Result<Vec<u8>, 
 /// SVGとラスター画像からなるA4ページを、1つの複数ページPDFに束ねる。
 pub(crate) fn svg_pdf_pages(pages: &[PdfPage<'_>], context: &str) -> Result<Vec<u8>, String> {
     let mut options = svg2pdf::usvg::Options::default();
-    options.fontdb_mut().load_system_fonts();
+    // OSの書体一覧は機械ごとに違い、同じ折り図でもglyph pathとPDF bytesが変わる。
+    // desktop/Webの双方で配布条件を記録済みの同じsubset 1本だけを読み込み、
+    // 書体を持たない環境を含めて決定的なPDFにする。
+    options.fontdb_mut().load_font_data(
+        include_bytes!("../../../apps/web/public/fonts/NotoSansJP-ORIGAMI3-subset.ttf").to_vec(),
+    );
     if japanese_font_missing(&options.fontdb) {
         let text_context = if context == "折り図" {
             "折り図の手順番号や説明"
@@ -369,6 +373,17 @@ mod tests {
         assert!(text.contains("595.2756"), "A4の幅ではない");
     }
 
+    #[test]
+    fn bundled_font_pdf_is_byte_deterministic() {
+        let doc = strip_doc(7);
+        let first = diagram_pdf(&doc).expect("first PDF must be generated");
+        let second = diagram_pdf(&doc).expect("second PDF must be generated");
+        assert_eq!(
+            first, second,
+            "the same document must produce identical PDF bytes"
+        );
+    }
+
     /// 1ページに収まる手順数なら表紙+1ページ。
     #[test]
     fn six_steps_fit_on_one_page() {
@@ -376,15 +391,20 @@ mod tests {
         assert_eq!(diagram_svg_pages(&strip_doc(1)).unwrap().len(), 2);
     }
 
-    /// 書体が1つも無ければ「見つからない」と分かる(文字が黙って消えるのを防ぐ)。
+    /// 空のfontdbと、製品が同梱する書体を読み込んだfontdbを区別できる。
     #[test]
-    fn a_machine_without_fonts_is_detected() {
+    fn bundled_japanese_font_is_detected_without_system_fonts() {
         let empty = svg2pdf::usvg::fontdb::Database::new();
         assert!(japanese_font_missing(&empty), "空なら見つからないはず");
         let mut db = svg2pdf::usvg::fontdb::Database::new();
-        db.load_system_fonts();
-        // 見つかっても見つからなくても書き出し自体は通る(注意を出すだけ)
-        let _ = japanese_font_missing(&db);
+        db.load_font_data(
+            include_bytes!("../../../apps/web/public/fonts/NotoSansJP-ORIGAMI3-subset.ttf")
+                .to_vec(),
+        );
+        assert!(
+            !japanese_font_missing(&db),
+            "the bundled font must provide the Japanese family"
+        );
         assert!(diagram_pdf(&strip_doc(2)).is_ok());
     }
 

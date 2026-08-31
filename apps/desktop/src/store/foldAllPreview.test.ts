@@ -676,6 +676,11 @@ describe("全部の折り目をいっぺんに動かす一時表示", () => {
     const undoValues = angleHistoryValues(angleUndo);
     const redoValues = angleHistoryValues(angleRedo);
     await useAppStore.getState().enterFoldAllPreview();
+    useAppStore.getState().setFoldAllPercent(50);
+    useAppStore.getState().finishFoldAllPercent();
+    await vi.waitFor(() =>
+      expect(useAppStore.getState().foldAllPreview?.appliedPercent).toBe(50),
+    );
 
     await useAppStore.getState().undo();
 
@@ -705,6 +710,11 @@ describe("全部の折り目をいっぺんに動かす一時表示", () => {
     const undoValues = angleHistoryValues(angleUndo);
     const redoValues = angleHistoryValues(angleRedo);
     await useAppStore.getState().enterFoldAllPreview();
+    useAppStore.getState().setFoldAllPercent(50);
+    useAppStore.getState().finishFoldAllPercent();
+    await vi.waitFor(() =>
+      expect(useAppStore.getState().foldAllPreview?.appliedPercent).toBe(50),
+    );
 
     await useAppStore.getState().redo();
 
@@ -993,6 +1003,32 @@ describe("全部の折り目をいっぺんに動かす一時表示", () => {
     await useAppStore.getState().recordPoseStep();
 
     expect(useAppStore.getState().angleUndoStack).toBe(undo);
+    expect(ipc.sequenceApply).not.toHaveBeenCalled();
+  });
+
+  it("専用表示中に有効な角度を直接渡されても仕上げ手順を作らない", async () => {
+    const doc = seed();
+    const sequence = doc.sequence;
+    const sequenceJson = JSON.stringify(sequence);
+    const docUndoDepth = useAppStore.getState().docUndoDepth;
+    vi.mocked(ipc.sequenceApply).mockResolvedValue(currentView());
+    await useAppStore.getState().enterFoldAllPreview();
+    useAppStore.setState({
+      drivers: new Map([[5, 90]]),
+      poseAngles: new Map([
+        [5, 90],
+        [6, 0],
+      ]),
+    });
+
+    await useAppStore.getState().recordPoseStep();
+
+    const state = useAppStore.getState();
+    expect(state.foldAllPreview).not.toBeNull();
+    expect(state.doc).toBe(doc);
+    expect(state.doc?.sequence).toBe(sequence);
+    expect(JSON.stringify(state.doc?.sequence)).toBe(sequenceJson);
+    expect(state.docUndoDepth).toBe(docUndoDepth);
     expect(ipc.sequenceApply).not.toHaveBeenCalled();
   });
 });

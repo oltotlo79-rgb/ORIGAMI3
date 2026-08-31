@@ -54,6 +54,9 @@ pub struct PoseOutcome {
     pub result: ori3_rigid::SolveResult,
     pub soft: Option<SoftMesh>,
     pub suspect_hinges: Vec<EdgeId>,
+    /// 最終姿勢で実際に突き抜けた面IDの組。計算済みの決定順をそのまま画面へ運ぶ。
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub self_intersection_pairs: Vec<(FaceId, FaceId)>,
     /// 紙どうしの接触を検出したか。接触しても要求角まで計算を続ける。
     pub contact_detected: bool,
     /// 今回の±180°指定に関係し、指定角まで届かなかったか紙が食い込んだ通知対象の点。
@@ -119,6 +122,9 @@ pub struct FoldAllPreviewOutcome {
     pub next_warm_seed: Vec<Driver>,
     /// 最終姿勢で交差に関係した可能性のある折り目。
     pub suspect_hinges: Vec<EdgeId>,
+    /// 最終姿勢で実際に突き抜けた面IDの組。計算済みの決定順をそのまま画面へ運ぶ。
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub self_intersection_pairs: Vec<(FaceId, FaceId)>,
     /// 経路上または最終姿勢で紙どうしの接触を検出したか。
     pub contact_detected: bool,
     /// 100%要求で、角度未到達または最終交差に関係する通知対象の点。
@@ -139,6 +145,9 @@ pub struct ReplayOutcome {
     pub closure_rms: Option<f64>,
     pub best_effort: bool,
     pub converged: bool,
+    /// 最終姿勢で実際に突き抜けた面IDの組。計算済みの決定順をそのまま画面へ運ぶ。
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub self_intersection_pairs: Vec<(FaceId, FaceId)>,
     pub contact_detected: bool,
     pub flat_fold_violations: Vec<VertexId>,
 }
@@ -461,15 +470,18 @@ pub fn document_save(
 ) -> Result<(), String> {
     guard(AssertUnwindSafe(|| {
         let operation = autosave::lock_recovery_operation();
+        let dir = autosave::app_data_dir(&app).map_err(|error| {
+            format!("保存前に自動保存の作業場所を確認できませんでした: {error}")
+        })?;
+        // 自動保存と同じ順序で、基準読取り→比較→完成名への置換をprocess間でも直列化する。
+        // これをsave前に取ることで、別processが比較と書込みの間へ入り込めない。
+        let _process = autosave::lock_process_files(&dir)?;
         let mut store = lock(&state);
         store.save(path.as_deref().map(Path::new))?;
         let document_path = store.current_path();
         drop(store);
         // 保存できた今回の作業枠は復元不要。復旧候補を開いていた場合だけ
         // その復元元も消し、利用者がまだ選んでいない他の候補は残す(SYS-003)。
-        let dir = autosave::app_data_dir(&app).map_err(|error| {
-            format!("作品は保存しましたが、復旧候補の確認に失敗しました: {error}")
-        })?;
         autosave::discard_after_save_locked(&dir, document_path.as_deref(), &operation).map_err(
             |error| format!("作品は保存しましたが、復旧候補を片付けられませんでした: {error}"),
         )?;
@@ -881,6 +893,7 @@ pub(crate) fn pose_solve_core_with_mode(
             result,
             soft: mesh,
             suspect_hinges,
+            self_intersection_pairs: intersections,
             contact_detected,
             flat_fold_violations,
         })
@@ -902,8 +915,14 @@ fn fold_all_preview_outcome(
         requested_percent,
         requested_angles,
         motion,
-    } = ori3_rigid::solve_fold_all_preview(&doc.cp, faces, percent, warm.as_ref())
-        .map_err(|error| error.to_string())?;
+    } = ori3_rigid::solve_fold_all_preview_with_contact_detection(
+        &doc.cp,
+        faces,
+        percent,
+        warm.as_ref(),
+        doc.display.penetration_prevention_enabled,
+    )
+    .map_err(|error| error.to_string())?;
     let mut result = motion.result;
     let mut next_warm_seed: Vec<Driver> = result
         .angles
@@ -914,8 +933,13 @@ fn fold_all_preview_outcome(
         })
         .collect();
     next_warm_seed.sort_unstable_by_key(|driver| driver.hinge);
-    let intersections = ori3_rigid::self_intersection_pairs(&result.frame);
-    let contact_detected = motion.contact_detected || !intersections.is_empty();
+    let intersections = if doc.display.penetration_prevention_enabled {
+        ori3_rigid::self_intersection_pairs(&result.frame)
+    } else {
+        Vec::new()
+    };
+    let contact_detected = doc.display.penetration_prevention_enabled
+        && (motion.contact_detected || !intersections.is_empty());
     let requested_hinges: Vec<EdgeId> =
         requested_angles.iter().map(|driver| driver.hinge).collect();
     let suspect_hinges = ori3_rigid::suspect_hinges_for_intersections(
@@ -962,6 +986,7 @@ fn fold_all_preview_outcome(
         requested_angles,
         next_warm_seed,
         suspect_hinges,
+        self_intersection_pairs: intersections,
         contact_detected,
         flat_fold_violations,
         layer_order: FoldAllLayerOrder::UnavailableWithoutSequence,
@@ -1117,6 +1142,7 @@ pub(crate) fn sequence_replay_transactionally(
             closure_rms,
             best_effort,
             converged,
+            self_intersection_pairs: intersections,
             contact_detected,
             flat_fold_violations,
         })
@@ -4582,6 +4608,69 @@ mod tests {
         ),
     ];
 
+    fn fold_all_three_strips(left: EdgeKind, right: EdgeKind) -> Document {
+        let mut document = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        let vertex = |id, x, y| ori3_model::Vertex { id, pos: [x, y] };
+        let edge = |id, v0, v1, kind| ori3_model::Edge { id, v0, v1, kind };
+        document.cp = ori3_model::CreasePattern {
+            vertices: vec![
+                vertex(0, 0.0, 0.0),
+                vertex(1, 1.0 / 3.0, 0.0),
+                vertex(2, 2.0 / 3.0, 0.0),
+                vertex(3, 1.0, 0.0),
+                vertex(4, 1.0, 1.0),
+                vertex(5, 2.0 / 3.0, 1.0),
+                vertex(6, 1.0 / 3.0, 1.0),
+                vertex(7, 0.0, 1.0),
+            ],
+            edges: vec![
+                edge(0, 0, 1, EdgeKind::Border),
+                edge(1, 1, 2, EdgeKind::Border),
+                edge(2, 2, 3, EdgeKind::Border),
+                edge(3, 3, 4, EdgeKind::Border),
+                edge(4, 4, 5, EdgeKind::Border),
+                edge(5, 5, 6, EdgeKind::Border),
+                edge(6, 6, 7, EdgeKind::Border),
+                edge(7, 7, 0, EdgeKind::Border),
+                edge(8, 1, 6, left),
+                edge(9, 2, 5, right),
+            ],
+            next_vertex_id: 8,
+            next_edge_id: 10,
+        };
+        document
+    }
+
+    fn penetrating_fold_all_case() -> (Document, Vec<ori3_cp::Face>, f64) {
+        static CASE: std::sync::OnceLock<(EdgeKind, EdgeKind, u8)> = std::sync::OnceLock::new();
+        let &(left, right, percent) = CASE.get_or_init(|| {
+            for (left, right) in [
+                (EdgeKind::Mountain, EdgeKind::Mountain),
+                (EdgeKind::Mountain, EdgeKind::Valley),
+                (EdgeKind::Valley, EdgeKind::Mountain),
+                (EdgeKind::Valley, EdgeKind::Valley),
+            ] {
+                let document = fold_all_three_strips(left, right);
+                let faces = ori3_cp::extract_faces(&document.cp);
+                for percent in (5..=95).step_by(5) {
+                    let outcome =
+                        fold_all_preview_outcome(&document, &faces, f64::from(percent), None)
+                            .expect("3短冊の一斉折り姿勢を返す");
+                    if !outcome.self_intersection_pairs.is_empty() {
+                        return (left, right, percent);
+                    }
+                }
+            }
+            panic!("3短冊の山谷4通り×5〜95%に貫通姿勢がなく、検査標本になっていない")
+        });
+        let document = fold_all_three_strips(left, right);
+        let faces = ori3_cp::extract_faces(&document.cp);
+        (document, faces, f64::from(percent))
+    }
+
     #[derive(Debug, PartialEq, Eq)]
     struct FoldAllFaceSignature {
         face: FaceId,
@@ -4605,6 +4694,7 @@ mod tests {
         requested_angles: Vec<(EdgeId, u64)>,
         next_warm_seed: Vec<(EdgeId, u64)>,
         suspect_hinges: Vec<EdgeId>,
+        self_intersection_pairs: Vec<(FaceId, FaceId)>,
         contact_detected: bool,
         flat_fold_violations: Vec<VertexId>,
         layer_order: FoldAllLayerOrder,
@@ -4676,6 +4766,7 @@ mod tests {
             requested_angles: driver_bits(&outcome.requested_angles),
             next_warm_seed: driver_bits(&outcome.next_warm_seed),
             suspect_hinges: outcome.suspect_hinges.clone(),
+            self_intersection_pairs: outcome.self_intersection_pairs.clone(),
             contact_detected: outcome.contact_detected,
             flat_fold_violations: outcome.flat_fold_violations.clone(),
             layer_order: outcome.layer_order,
@@ -4928,10 +5019,69 @@ mod tests {
         assert_eq!(value["requested_percent"], 50.0);
         assert!(value["requested_angles"].is_array());
         assert!(value["next_warm_seed"].is_array());
+        assert!(outcome.self_intersection_pairs.is_empty());
+        assert!(object.get("self_intersection_pairs").is_none());
         assert!(object.get("document").is_none());
         assert!(object.get("sequence").is_none());
         assert!(object.get("undo").is_none());
         assert!(object.get("surface_order").is_none());
+    }
+
+    #[test]
+    fn fold_all_detection_on_transports_pairs_and_penetration_warning() {
+        let (mut document, faces, percent) = penetrating_fold_all_case();
+        document.display.penetration_prevention_enabled = true;
+
+        let outcome = fold_all_preview_outcome(&document, &faces, percent, None)
+            .expect("検出ONでも貫通姿勢を返す");
+
+        assert!(!outcome.self_intersection_pairs.is_empty());
+        assert_eq!(
+            outcome.self_intersection_pairs,
+            ori3_rigid::self_intersection_pairs(&outcome.result.frame),
+            "最終姿勢で計算済みの面ペアを順序ごと運ぶ"
+        );
+        assert!(outcome.contact_detected);
+        assert!(
+            outcome
+                .result
+                .frame
+                .warnings
+                .iter()
+                .any(|warning| warning == ori3_rigid::PENETRATION_WARNING)
+        );
+        let value = serde_json::to_value(&outcome).expect("一斉折り結果をJSONへ運べる");
+        assert_eq!(
+            value["self_intersection_pairs"],
+            serde_json::to_value(&outcome.self_intersection_pairs).unwrap()
+        );
+    }
+
+    #[test]
+    fn fold_all_detection_off_has_no_pairs_or_penetration_warning() {
+        let (mut document, faces, percent) = penetrating_fold_all_case();
+        document.display.penetration_prevention_enabled = false;
+
+        let outcome = fold_all_preview_outcome(&document, &faces, percent, None)
+            .expect("検出OFFでも同じ貫通姿勢を返す");
+
+        assert!(
+            !ori3_rigid::self_intersection_pairs(&outcome.result.frame).is_empty(),
+            "実際には貫通する標本でOFFを検査する"
+        );
+        assert!(outcome.self_intersection_pairs.is_empty());
+        assert!(!outcome.contact_detected);
+        assert!(outcome.suspect_hinges.is_empty());
+        assert!(
+            outcome
+                .result
+                .frame
+                .warnings
+                .iter()
+                .all(|warning| warning != ori3_rigid::PENETRATION_WARNING)
+        );
+        let value = serde_json::to_value(&outcome).expect("一斉折り結果をJSONへ運べる");
+        assert!(value.get("self_intersection_pairs").is_none());
     }
 
     #[test]

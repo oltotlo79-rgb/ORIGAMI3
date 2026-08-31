@@ -164,6 +164,9 @@ pub struct DocumentView {
     pub skipped: Vec<StepId>,
     /// 補正後にも残る食い込みの原因候補ヒンジ。
     pub suspect_hinges: Vec<EdgeId>,
+    /// 最終姿勢で実際に突き抜けた面IDの組。計算済みの決定順をそのまま画面へ運ぶ。
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub self_intersection_pairs: Vec<(FaceId, FaceId)>,
     /// 手順再生の最終姿勢で、紙の面どうしの食い込みを検出したか。
     /// 診断結果を知らせるだけで、再生結果を止める条件には使わない。
     pub contact_detected: bool,
@@ -252,7 +255,65 @@ pub(crate) struct AtomicityProbe {
     redo_stack: Vec<Snapshot>,
     dirty: bool,
     path: Option<PathBuf>,
+    persisted_file: Option<PersistedFile>,
     pose_angles: Option<HashMap<EdgeId, f64>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum PersistedFile {
+    Exact {
+        canonical_path: PathBuf,
+        bytes: Vec<u8>,
+    },
+    Unreadable {
+        path: PathBuf,
+    },
+}
+
+impl PersistedFile {
+    fn exact(path: &Path, bytes: Vec<u8>) -> Self {
+        Self::Exact {
+            canonical_path: std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()),
+            bytes,
+        }
+    }
+
+    fn capture(path: &Path) -> Self {
+        match std::fs::read(path) {
+            Ok(bytes) => Self::exact(path, bytes),
+            Err(_) => Self::Unreadable {
+                path: path.to_path_buf(),
+            },
+        }
+    }
+
+    fn belongs_to(&self, target: &Path, remembered_path: Option<&Path>) -> bool {
+        if remembered_path == Some(target) {
+            return true;
+        }
+        match self {
+            Self::Exact { canonical_path, .. } => {
+                std::fs::canonicalize(target).ok().as_ref() == Some(canonical_path)
+            }
+            Self::Unreadable { path } => path == target,
+        }
+    }
+
+    fn verify_current(&self, target: &Path) -> Result<(), String> {
+        const CHANGED: &str = "この作品は、開いた後に別の場所で変更または削除されています。あなたの変更は保存していません。別名で保存するか、開き直して内容を確認してください。";
+        const UNREADABLE: &str = "保存先の状態を確認できないため、あなたの変更を上書き保存していません。保存先を確認してからもう一度試すか、別名で保存してください。";
+        match self {
+            Self::Exact { bytes, .. } => match std::fs::read(target) {
+                Ok(current) if current == *bytes => Ok(()),
+                Ok(_) => Err(CHANGED.to_owned()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    Err(CHANGED.to_owned())
+                }
+                Err(_) => Err(UNREADABLE.to_owned()),
+            },
+            Self::Unreadable { .. } => Err(UNREADABLE.to_owned()),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -270,6 +331,9 @@ pub struct DocumentStore {
     redo_stack: Vec<Snapshot>,
     dirty: bool,
     path: Option<PathBuf>,
+    /// 開いた時点またはこのprocessが最後に保存した時点の完成原文。
+    /// 同じ保存先への保存前に完全一致で比較し、別processの変更を黙って上書きしない。
+    persisted_file: Option<PersistedFile>,
     /// pose_solveの前回解(次回のwarm start用)。ソルバーは知らない辺IDを
     /// 無視するため、CP編集後に古い解が残っていても安全
     pose_angles: Option<HashMap<EdgeId, f64>>,
@@ -300,6 +364,7 @@ impl Default for DocumentStore {
             redo_stack: Vec::new(),
             dirty: false,
             path: None,
+            persisted_file: None,
             pose_angles: None,
         }
     }
@@ -318,14 +383,16 @@ impl DocumentStore {
         self.redo_stack.clear();
         self.dirty = false;
         self.path = None;
+        self.persisted_file = None;
         self.pose_angles = None;
         Ok(view)
     }
 
     /// `.ori3`ファイル(pretty JSON)を読み込む。schema_version不一致はErr。
     pub fn open(&mut self, path: &Path) -> Result<DocumentView, String> {
-        let text = std::fs::read_to_string(path)
-            .map_err(|e| format!("ファイルを開けませんでした: {e}"))?;
+        let bytes = std::fs::read(path).map_err(|e| format!("ファイルを開けませんでした: {e}"))?;
+        let text =
+            std::str::from_utf8(&bytes).map_err(|e| format!("ファイルを開けませんでした: {e}"))?;
         let saved = parse_document(&text)?;
         // 導出を先に済ませ、成功した場合のみ状態を確定する
         let view = build_view(&saved.document, &saved.step_creases, Vec::new());
@@ -336,6 +403,7 @@ impl DocumentStore {
         self.redo_stack.clear();
         self.dirty = false;
         self.path = Some(path.to_path_buf());
+        self.persisted_file = Some(PersistedFile::exact(path, bytes));
         self.pose_angles = None;
         Ok(view)
     }
@@ -356,6 +424,7 @@ impl DocumentStore {
         let view = self.commit_prebuilt(document, step_creases, view);
         self.dirty = true;
         self.path = None;
+        self.persisted_file = None;
         self.pose_angles = None;
         view
     }
@@ -369,10 +438,24 @@ impl DocumentStore {
                 .clone()
                 .ok_or_else(|| "保存先が指定されていません".to_string())?,
         };
-        let json = serde_json::to_string_pretty(&self.saved_document())
+        if self
+            .persisted_file
+            .as_ref()
+            .is_some_and(|persisted| persisted.belongs_to(&target, self.path.as_deref()))
+        {
+            self.persisted_file
+                .as_ref()
+                .expect("persisted file was checked")
+                .verify_current(&target)?;
+        }
+        let bytes = serde_json::to_vec_pretty(&self.saved_document())
             .map_err(|e| format!("保存データの作成に失敗しました: {e}"))?;
-        write_atomic(&target, json.as_bytes()).map_err(|e| format!("保存に失敗しました: {e}"))?;
+        write_atomic(&target, &bytes).map_err(|e| format!("保存に失敗しました: {e}"))?;
         self.path = Some(target);
+        self.persisted_file = Some(PersistedFile::exact(
+            self.path.as_deref().expect("saved path was set"),
+            bytes,
+        ));
         self.dirty = false;
         Ok(())
     }
@@ -1201,6 +1284,7 @@ impl DocumentStore {
         self.undo_stack.clear();
         self.redo_stack.clear();
         self.dirty = true;
+        self.persisted_file = path.as_deref().map(PersistedFile::capture);
         self.path = path;
         self.pose_angles = None;
         view
@@ -1267,6 +1351,7 @@ impl DocumentStore {
             redo_stack: self.redo_stack.clone(),
             dirty: self.dirty,
             path: self.path.clone(),
+            persisted_file: self.persisted_file.clone(),
             pose_angles: self.pose_angles.clone(),
         }
     }
@@ -1355,6 +1440,7 @@ fn build_view(
         frame: None,
         skipped: Vec::new(),
         suspect_hinges: Vec::new(),
+        self_intersection_pairs: Vec::new(),
         contact_detected: false,
         sequence_targets: Vec::new(),
         angles: HashMap::new(),
@@ -2088,8 +2174,9 @@ pub(crate) fn replay_flat_fold_notice_violations(
 }
 
 /// 手順再生で既に得た最終交差組を、DocumentViewの診断値へ運ぶ。
-/// 自己交差判定は呼び出し側の1回だけとし、ここでは結果の有無だけを写す。
+/// 自己交差判定は呼び出し側の1回だけとし、ここでは結果本体と有無を写す。
 fn attach_replay_contact_diagnostic(view: &mut DocumentView, intersections: &[(FaceId, FaceId)]) {
+    view.self_intersection_pairs = intersections.to_vec();
     view.contact_detected = !intersections.is_empty();
 }
 
@@ -2739,6 +2826,86 @@ mod tests {
             })
             .unwrap();
         store
+    }
+
+    const SAVE_CONFLICT_ROLE_ENV: &str = "ORI3_TEST_SAVE_CONFLICT_ROLE";
+    const SAVE_CONFLICT_PATH_ENV: &str = "ORI3_TEST_SAVE_CONFLICT_PATH";
+    const SAVE_CONFLICT_OPENED_ENV: &str = "ORI3_TEST_SAVE_CONFLICT_OPENED";
+    const SAVE_CONFLICT_RELEASE_ENV: &str = "ORI3_TEST_SAVE_CONFLICT_RELEASE";
+    const SAVE_CONFLICT_EXPECTED_ENV: &str = "ORI3_TEST_SAVE_CONFLICT_EXPECTED";
+
+    fn wait_for_save_conflict_marker(path: &Path) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !path.is_file() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "process marker was not written: {}",
+                path.display()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    fn save_conflict_child_command(
+        role: &str,
+        target: &Path,
+        opened: &Path,
+        release: &Path,
+        expected: &Path,
+    ) -> std::process::Command {
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "store::tests::explicit_save_conflict_process_child",
+                "--nocapture",
+            ])
+            .env(SAVE_CONFLICT_ROLE_ENV, role)
+            .env(SAVE_CONFLICT_PATH_ENV, target)
+            .env(SAVE_CONFLICT_OPENED_ENV, opened)
+            .env(SAVE_CONFLICT_RELEASE_ENV, release)
+            .env(SAVE_CONFLICT_EXPECTED_ENV, expected)
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit());
+        command
+    }
+
+    #[test]
+    fn explicit_save_conflict_process_child() {
+        let Some(role) = std::env::var_os(SAVE_CONFLICT_ROLE_ENV) else {
+            return;
+        };
+        let target = PathBuf::from(std::env::var_os(SAVE_CONFLICT_PATH_ENV).unwrap());
+        let opened = PathBuf::from(std::env::var_os(SAVE_CONFLICT_OPENED_ENV).unwrap());
+        let release = PathBuf::from(std::env::var_os(SAVE_CONFLICT_RELEASE_ENV).unwrap());
+        let expected = PathBuf::from(std::env::var_os(SAVE_CONFLICT_EXPECTED_ENV).unwrap());
+        let mut store = DocumentStore::default();
+        store.open(&target).unwrap();
+        std::fs::write(opened, b"opened").unwrap();
+        wait_for_save_conflict_marker(&release);
+
+        let edit = if role == "a" {
+            EditOp::AddSegment {
+                a: [0.0, 0.0],
+                b: [1.0, 1.0],
+                kind: EdgeKind::Mountain,
+            }
+        } else {
+            EditOp::AddSegment {
+                a: [0.0, 1.0],
+                b: [1.0, 0.0],
+                kind: EdgeKind::Valley,
+            }
+        };
+        store.apply_edit(edit).unwrap();
+        if role == "a" {
+            store.save(None).unwrap();
+            std::fs::write(expected, std::fs::read(&target).unwrap()).unwrap();
+        } else {
+            store
+                .save(None)
+                .expect_err("Aが保存した後のB保存は競合として拒否する");
+        }
     }
 
     fn one_pleat_square_store() -> (DocumentStore, ori3_model::FoldPoseInput) {
@@ -4072,13 +4239,23 @@ mod tests {
 
         attach_replay_contact_diagnostic(&mut view, &[(3, 7)]);
         assert!(view.contact_detected, "明示した交差組を診断値へ運ぶ");
+        assert_eq!(view.self_intersection_pairs, vec![(3, 7)]);
         let detected = serde_json::to_value(&view).expect("DocumentViewをJSONへ運べる");
         assert_eq!(detected["contact_detected"], true);
+        assert_eq!(
+            detected["self_intersection_pairs"],
+            serde_json::json!([[3, 7]])
+        );
 
         attach_replay_contact_diagnostic(&mut view, &[]);
         assert!(!view.contact_detected, "交差0組なら診断値を戻す");
+        assert!(view.self_intersection_pairs.is_empty());
         let clear = serde_json::to_value(&view).expect("DocumentViewをJSONへ運べる");
         assert_eq!(clear["contact_detected"], false);
+        assert!(
+            clear.get("self_intersection_pairs").is_none(),
+            "交差0組は専用表示を作らず、既存wireとの互換も保つ"
+        );
     }
 
     #[test]
@@ -4997,11 +5174,156 @@ mod tests {
         assert_eq!(other.doc, saved_doc);
         assert!(!other.is_dirty());
 
-        // pathを覚えているのでNoneで上書き保存できる
+        // AがBを開いた後に保存すると、Bの基準は古くなる。
+        store.apply_edit(diagonal_reverse()).unwrap();
+        store.save(None).unwrap();
+
         other.apply_edit(diagonal_reverse()).unwrap();
-        other.save(None).unwrap();
+        let error = other
+            .save(None)
+            .expect_err("別DocumentStoreの古い保存は上書きしない");
+        assert!(error.contains("変更または削除"), "error={error}");
+        assert!(other.is_dirty(), "拒否後もBの作業は残す");
 
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn saving_own_opened_document_twice_after_edits_does_not_conflict() {
+        let mut store = square_store();
+        let path = std::env::temp_dir().join(format!(
+            "ori3_store_test_{}_own_second_save.ori3",
+            std::process::id()
+        ));
+        store.save(Some(&path)).unwrap();
+        store.apply_edit(diagonal()).unwrap();
+        store.save(None).unwrap();
+        let mut display = store.doc.display.clone();
+        display.grid_divisions = 9;
+        store.apply_edit(EditOp::SetDisplay { display }).unwrap();
+        store
+            .save(None)
+            .expect("自分が直前に保存した作品は続けて保存できる");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn two_real_processes_reject_a_stale_explicit_save_and_keep_the_first_save() {
+        let dir = std::env::temp_dir().join(format!(
+            "ori3_store_save_conflict_{}_{}",
+            std::process::id(),
+            ATOMIC_WRITE_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("shared.ori3");
+        DocumentStore::default().save(Some(&target)).unwrap();
+        let b_opened = dir.join("b.opened");
+        let b_release = dir.join("b.release");
+        let a_opened = dir.join("a.opened");
+        let a_release = dir.join("a.release");
+        let a_expected = dir.join("a.expected");
+
+        let mut b = save_conflict_child_command("b", &target, &b_opened, &b_release, &a_expected)
+            .spawn()
+            .unwrap();
+        wait_for_save_conflict_marker(&b_opened);
+        std::fs::write(&a_release, b"release").unwrap();
+        let mut a = save_conflict_child_command("a", &target, &a_opened, &a_release, &a_expected)
+            .spawn()
+            .unwrap();
+        wait_for_save_conflict_marker(&a_opened);
+        assert!(a.wait().unwrap().success(), "Aは最初の保存に成功する");
+        assert!(a_expected.is_file(), "Aの完成byte列を記録する");
+
+        std::fs::write(&b_release, b"release").unwrap();
+        assert!(
+            b.wait().unwrap().success(),
+            "Bの古い保存は競合として拒否される"
+        );
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            std::fs::read(&a_expected).unwrap(),
+            "BはAの保存済み作品を上書きしない"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn deleting_an_opened_save_target_is_a_conflict_and_keeps_dirty_work() {
+        let dir = std::env::temp_dir().join(format!(
+            "ori3_store_deleted_save_target_{}_{}",
+            std::process::id(),
+            ATOMIC_WRITE_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("deleted.ori3");
+        DocumentStore::default().save(Some(&target)).unwrap();
+        let mut store = DocumentStore::default();
+        store.open(&target).unwrap();
+        store.apply_edit(diagonal()).unwrap();
+        let before = store.atomicity_probe_for_test();
+        std::fs::remove_file(&target).unwrap();
+
+        let error = store.save(None).expect_err("削除済みの保存先は拒否する");
+
+        assert!(error.contains("変更または削除"), "error={error}");
+        assert_eq!(store.atomicity_probe_for_test(), before);
+        assert!(!target.exists(), "削除された保存先を勝手に作り直さない");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_unreadable_persisted_baseline_never_allows_an_overwrite() {
+        let dir = std::env::temp_dir().join(format!(
+            "ori3_store_unreadable_save_target_{}_{}",
+            std::process::id(),
+            ATOMIC_WRITE_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("unreadable.ori3");
+        DocumentStore::default().save(Some(&target)).unwrap();
+        let mut store = DocumentStore::default();
+        store.open(&target).unwrap();
+        store.apply_edit(diagonal()).unwrap();
+        // restore元など、比較基準を読み出せなかった状態を表す。読めないことを
+        // 「変更済み」とは言わず、安全確認できないので保存を拒否する。
+        store.persisted_file = Some(PersistedFile::Unreadable {
+            path: target.clone(),
+        });
+        let before = store.atomicity_probe_for_test();
+
+        let error = store
+            .save(None)
+            .expect_err("安全確認できない保存先は拒否する");
+
+        assert!(error.contains("状態を確認できない"), "error={error}");
+        assert_eq!(store.atomicity_probe_for_test(), before);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn first_save_as_to_a_different_destination_is_not_a_conflict() {
+        let dir = std::env::temp_dir().join(format!(
+            "ori3_store_first_save_as_{}_{}",
+            std::process::id(),
+            ATOMIC_WRITE_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let opened = dir.join("opened.ori3");
+        let chosen = dir.join("chosen.ori3");
+        DocumentStore::default().save(Some(&opened)).unwrap();
+        DocumentStore::default().save(Some(&chosen)).unwrap();
+        let mut store = DocumentStore::default();
+        store.open(&opened).unwrap();
+        store.apply_edit(diagonal()).unwrap();
+
+        store
+            .save(Some(&chosen))
+            .expect("別名で最初に選んだ保存先は競合扱いしない");
+
+        assert_eq!(store.current_path(), Some(chosen));
+        assert!(!store.is_dirty());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     fn diagonal_reverse() -> EditOp {

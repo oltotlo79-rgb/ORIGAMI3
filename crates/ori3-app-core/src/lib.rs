@@ -90,6 +90,8 @@ pub struct DocumentView {
     pub frame: Option<Frame3D>,
     pub skipped: Vec<StepId>,
     pub suspect_hinges: Vec<EdgeId>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub self_intersection_pairs: Vec<(FaceId, FaceId)>,
     pub contact_detected: bool,
     pub sequence_targets: Vec<Driver>,
     pub angles: HashMap<EdgeId, f64>,
@@ -131,6 +133,8 @@ pub struct PoseOutcome {
     pub result: ori3_rigid::SolveResult,
     pub soft: Option<SoftMesh>,
     pub suspect_hinges: Vec<EdgeId>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub self_intersection_pairs: Vec<(FaceId, FaceId)>,
     pub contact_detected: bool,
     pub flat_fold_violations: Vec<VertexId>,
 }
@@ -151,6 +155,8 @@ pub struct FoldAllPreviewOutcome {
     pub requested_angles: Vec<Driver>,
     pub next_warm_seed: Vec<Driver>,
     pub suspect_hinges: Vec<EdgeId>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub self_intersection_pairs: Vec<(FaceId, FaceId)>,
     pub contact_detected: bool,
     pub flat_fold_violations: Vec<VertexId>,
     pub layer_order: FoldAllLayerOrder,
@@ -168,6 +174,8 @@ pub struct ReplayOutcome {
     pub closure_rms: Option<f64>,
     pub best_effort: bool,
     pub converged: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub self_intersection_pairs: Vec<(FaceId, FaceId)>,
     pub contact_detected: bool,
     pub flat_fold_violations: Vec<VertexId>,
 }
@@ -866,6 +874,7 @@ impl Ori3AppCore {
             closure_rms,
             best_effort,
             converged,
+            self_intersection_pairs: intersections,
             contact_detected,
             flat_fold_violations,
         })
@@ -1448,6 +1457,7 @@ impl Ori3AppCore {
             result,
             soft: mesh,
             suspect_hinges,
+            self_intersection_pairs: intersections,
             contact_detected,
             flat_fold_violations,
         })
@@ -2259,8 +2269,14 @@ fn fold_all_preview_outcome(
         requested_percent,
         requested_angles,
         motion,
-    } = ori3_rigid::solve_fold_all_preview(&doc.cp, faces, percent, warm.as_ref())
-        .map_err(|error| error.to_string())?;
+    } = ori3_rigid::solve_fold_all_preview_with_contact_detection(
+        &doc.cp,
+        faces,
+        percent,
+        warm.as_ref(),
+        doc.display.penetration_prevention_enabled,
+    )
+    .map_err(|error| error.to_string())?;
     let mut result = motion.result;
     let mut next_warm_seed: Vec<Driver> = result
         .angles
@@ -2271,8 +2287,13 @@ fn fold_all_preview_outcome(
         })
         .collect();
     next_warm_seed.sort_unstable_by_key(|driver| driver.hinge);
-    let intersections = ori3_rigid::self_intersection_pairs(&result.frame);
-    let contact_detected = motion.contact_detected || !intersections.is_empty();
+    let intersections = if doc.display.penetration_prevention_enabled {
+        ori3_rigid::self_intersection_pairs(&result.frame)
+    } else {
+        Vec::new()
+    };
+    let contact_detected = doc.display.penetration_prevention_enabled
+        && (motion.contact_detected || !intersections.is_empty());
     let requested_hinges: Vec<EdgeId> =
         requested_angles.iter().map(|driver| driver.hinge).collect();
     let suspect_hinges = ori3_rigid::suspect_hinges_for_intersections(
@@ -2319,6 +2340,7 @@ fn fold_all_preview_outcome(
         requested_angles,
         next_warm_seed,
         suspect_hinges,
+        self_intersection_pairs: intersections,
         contact_detected,
         flat_fold_violations,
         layer_order: FoldAllLayerOrder::UnavailableWithoutSequence,
@@ -2740,6 +2762,7 @@ fn build_document_view(
         frame: None,
         skipped: Vec::new(),
         suspect_hinges: Vec::new(),
+        self_intersection_pairs: Vec::new(),
         contact_detected: false,
         sequence_targets: Vec::new(),
         angles: HashMap::new(),
@@ -2862,6 +2885,7 @@ fn replay_flat_fold_notice_violations(
 }
 
 fn attach_replay_contact_diagnostic(view: &mut DocumentView, intersections: &[(FaceId, FaceId)]) {
+    view.self_intersection_pairs = intersections.to_vec();
     view.contact_detected = !intersections.is_empty();
 }
 
@@ -3747,6 +3771,89 @@ mod tests {
         core.invoke_json(&add_diagonal_request())
             .expect("diagonal edit must succeed");
         core
+    }
+
+    fn fold_all_three_strips(left: EdgeKind, right: EdgeKind) -> Document {
+        let mut document = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        let vertex = |id, x, y| ori3_model::Vertex { id, pos: [x, y] };
+        let edge = |id, v0, v1, kind| ori3_model::Edge { id, v0, v1, kind };
+        document.cp = CreasePattern {
+            vertices: vec![
+                vertex(0, 0.0, 0.0),
+                vertex(1, 1.0 / 3.0, 0.0),
+                vertex(2, 2.0 / 3.0, 0.0),
+                vertex(3, 1.0, 0.0),
+                vertex(4, 1.0, 1.0),
+                vertex(5, 2.0 / 3.0, 1.0),
+                vertex(6, 1.0 / 3.0, 1.0),
+                vertex(7, 0.0, 1.0),
+            ],
+            edges: vec![
+                edge(0, 0, 1, EdgeKind::Border),
+                edge(1, 1, 2, EdgeKind::Border),
+                edge(2, 2, 3, EdgeKind::Border),
+                edge(3, 3, 4, EdgeKind::Border),
+                edge(4, 4, 5, EdgeKind::Border),
+                edge(5, 5, 6, EdgeKind::Border),
+                edge(6, 6, 7, EdgeKind::Border),
+                edge(7, 7, 0, EdgeKind::Border),
+                edge(8, 1, 6, left),
+                edge(9, 2, 5, right),
+            ],
+            next_vertex_id: 8,
+            next_edge_id: 10,
+        };
+        document
+    }
+
+    fn penetrating_fold_all_case() -> (Document, Vec<ori3_cp::Face>, f64) {
+        static CASE: std::sync::OnceLock<(EdgeKind, EdgeKind, u8)> = std::sync::OnceLock::new();
+        let &(left, right, percent) = CASE.get_or_init(|| {
+            for (left, right) in [
+                (EdgeKind::Mountain, EdgeKind::Mountain),
+                (EdgeKind::Mountain, EdgeKind::Valley),
+                (EdgeKind::Valley, EdgeKind::Mountain),
+                (EdgeKind::Valley, EdgeKind::Valley),
+            ] {
+                let document = fold_all_three_strips(left, right);
+                let faces = ori3_cp::extract_faces(&document.cp);
+                for percent in (5..=95).step_by(5) {
+                    let outcome = super::fold_all_preview_outcome(
+                        &document,
+                        &faces,
+                        f64::from(percent),
+                        None,
+                    )
+                    .expect("3短冊の一斉折り姿勢を返す");
+                    if !outcome.self_intersection_pairs.is_empty() {
+                        return (left, right, percent);
+                    }
+                }
+            }
+            panic!("3短冊の山谷4通り×5〜95%に貫通姿勢がなく、検査標本になっていない")
+        });
+        let document = fold_all_three_strips(left, right);
+        let faces = ori3_cp::extract_faces(&document.cp);
+        (document, faces, f64::from(percent))
+    }
+
+    fn fold_all_core_with_detection(enabled: bool) -> (Ori3AppCore, f64) {
+        let (mut document, _faces, percent) = penetrating_fold_all_case();
+        document.display.penetration_prevention_enabled = enabled;
+        let source = serde_json::to_string(&document).expect("3短冊作品をJSONへ保存できる");
+        let path = "browser-file://read/session/self-intersection-three-strips.ori3";
+        let mut core = Ori3AppCore::new();
+        core.invoke_json(&request(
+            "__web_document_open_source",
+            json!({ "path": path, "source": source }),
+        ))
+        .expect("ブラウザが3短冊作品の本文を渡せる");
+        core.invoke_json(&request("document_open", json!({ "path": path })))
+            .expect("ブラウザ経路で3短冊作品を開ける");
+        (core, percent)
     }
 
     fn bird_base_proposal_skeleton() -> Skeleton {
@@ -4637,8 +4744,14 @@ mod tests {
             json!({ "path": path, "source": legacy }),
         ))
         .expect("旧形式本文をstageできる");
-        core.invoke_json(&request("document_open", json!({ "path": path })))
+        let opened = core
+            .invoke_json(&request("document_open", json!({ "path": path })))
             .expect("step_creasesを持たない既存作品を開ける");
+        let opened: Value = serde_json::from_str(&opened).expect("旧形式のDocumentView JSON");
+        assert!(
+            opened.get("self_intersection_pairs").is_none(),
+            "空の面ペアは旧形式と同じwire形を保つ"
+        );
         assert!(core.step_creases.is_empty());
         assert_eq!(core.doc.paper.width_mm, 120.0);
         assert_eq!(core.doc.paper.height_mm, 80.0);
@@ -5292,6 +5405,117 @@ mod tests {
             fold_all,
             include_str!("../tests/fixtures/fold-all-preview-diagonal-50-150x100.json").trim_end()
         );
+    }
+
+    #[test]
+    fn fold_all_detection_on_transports_pairs_through_browser_wire() {
+        let (mut core, percent) = fold_all_core_with_detection(true);
+        let outcome = core
+            .fold_all_preview(percent, None)
+            .expect("検出ONでも貫通姿勢を返す");
+
+        assert!(!outcome.self_intersection_pairs.is_empty());
+        assert_eq!(
+            outcome.self_intersection_pairs,
+            ori3_rigid::self_intersection_pairs(&outcome.result.frame),
+            "最終姿勢の面ペアを決定順のまま運ぶ"
+        );
+        assert!(outcome.contact_detected);
+        assert!(
+            outcome
+                .result
+                .frame
+                .warnings
+                .iter()
+                .any(|warning| warning == ori3_rigid::PENETRATION_WARNING)
+        );
+
+        let response = core
+            .invoke_json(&request(
+                "fold_all_preview",
+                json!({ "percent": percent, "warmSeed": null }),
+            ))
+            .expect("ブラウザ用fold-all応答を返す");
+        let response: Value = serde_json::from_str(&response).expect("fold-all browser JSON");
+        assert_eq!(
+            response["self_intersection_pairs"],
+            serde_json::to_value(&outcome.self_intersection_pairs).unwrap()
+        );
+        assert_eq!(response["contact_detected"], true);
+        assert!(
+            response["frame"]["warnings"]
+                .as_array()
+                .expect("warningsは配列")
+                .iter()
+                .any(|warning| warning == ori3_rigid::PENETRATION_WARNING)
+        );
+    }
+
+    #[test]
+    fn fold_all_detection_off_omits_pairs_and_penetration_warning_from_browser_wire() {
+        let (mut core, percent) = fold_all_core_with_detection(false);
+        let outcome = core
+            .fold_all_preview(percent, None)
+            .expect("検出OFFでも同じ貫通姿勢を返す");
+
+        assert!(
+            !ori3_rigid::self_intersection_pairs(&outcome.result.frame).is_empty(),
+            "実際には貫通する標本でOFFを検査する"
+        );
+        assert!(outcome.self_intersection_pairs.is_empty());
+        assert!(!outcome.contact_detected);
+        assert!(outcome.suspect_hinges.is_empty());
+        assert!(
+            outcome
+                .result
+                .frame
+                .warnings
+                .iter()
+                .all(|warning| warning != ori3_rigid::PENETRATION_WARNING)
+        );
+
+        let response = core
+            .invoke_json(&request(
+                "fold_all_preview",
+                json!({ "percent": percent, "warmSeed": null }),
+            ))
+            .expect("検出OFFのブラウザ用fold-all応答を返す");
+        let response: Value = serde_json::from_str(&response).expect("fold-all browser JSON");
+        assert!(response.get("self_intersection_pairs").is_none());
+        assert_eq!(response["contact_detected"], false);
+        assert_eq!(response["suspect_hinges"], json!([]));
+        assert!(
+            response["frame"]["warnings"]
+                .as_array()
+                .expect("warningsは配列")
+                .iter()
+                .all(|warning| warning != ori3_rigid::PENETRATION_WARNING)
+        );
+    }
+
+    #[test]
+    fn document_view_replay_diagnostic_transports_pairs_and_clears_stale_pairs() {
+        let document = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        let mut view = super::build_initial_document_view(&document);
+        let pairs = [(3, 7), (11, 19)];
+
+        super::attach_replay_contact_diagnostic(&mut view, &pairs);
+        assert_eq!(view.self_intersection_pairs, pairs);
+        assert!(view.contact_detected);
+        let populated = serde_json::to_value(&view).expect("DocumentViewをJSONへ運べる");
+        assert_eq!(
+            populated["self_intersection_pairs"],
+            json!([[3, 7], [11, 19]])
+        );
+
+        super::attach_replay_contact_diagnostic(&mut view, &[]);
+        assert!(view.self_intersection_pairs.is_empty());
+        assert!(!view.contact_detected);
+        let cleared = serde_json::to_value(&view).expect("空のDocumentViewをJSONへ運べる");
+        assert!(cleared.get("self_intersection_pairs").is_none());
     }
 
     #[test]

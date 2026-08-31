@@ -172,6 +172,20 @@ pub fn solve_fold_all_preview(
     percent: f64,
     warm_start: Option<&HashMap<EdgeId, f64>>,
 ) -> Result<FoldAllPreviewResult, FoldAllPreviewError> {
+    solve_fold_all_preview_with_contact_detection(cp, faces, percent, warm_start, true)
+}
+
+/// 全折り目の一時姿勢を求め、指定された場合だけ途中姿勢の食い込みを検出する。
+///
+/// 検出を切った場合は接触走査そのものを行わない。設定を持たない既存呼び出しは
+/// [`solve_fold_all_preview`] を使い、従来どおり検出を有効にする。
+pub fn solve_fold_all_preview_with_contact_detection(
+    cp: &CreasePattern,
+    faces: &[Face],
+    percent: f64,
+    warm_start: Option<&HashMap<EdgeId, f64>>,
+    detect_contact: bool,
+) -> Result<FoldAllPreviewResult, FoldAllPreviewError> {
     validate_warm_start(warm_start)?;
     let requested_angles = fold_all_targets(cp, faces, percent)?;
     let targets: HashMap<EdgeId, f64> = requested_angles
@@ -185,7 +199,7 @@ pub fn solve_fold_all_preview(
         Some(&targets),
         warm_start,
         MotionContactOptions {
-            detect: true,
+            detect: detect_contact,
             prevent: false,
         },
     );
@@ -199,11 +213,12 @@ mod tests {
 
     use super::{
         FOLD_ALL_LAYER_ORDER_WARNING, FoldAllPreviewError, finalize_fold_all_preview,
-        fold_all_targets, solve_fold_all_preview,
+        fold_all_targets, solve_fold_all_preview, solve_fold_all_preview_with_contact_detection,
     };
     use ori3_cp::{extract_faces, insert_segment};
     use ori3_model::{CreasePattern, Document, Edge, EdgeKind, Paper, Vertex};
 
+    use crate::intersect::take_self_intersection_scan_calls_for_test;
     use crate::{PENETRATION_WARNING, self_intersection_pairs};
 
     fn vertex(id: u32, x: f64, y: f64) -> Vertex {
@@ -368,8 +383,19 @@ mod tests {
             let cp = three_strips(left, right);
             let faces = extract_faces(&cp);
             for percent in (5..=95).step_by(5) {
-                let preview = solve_fold_all_preview(&cp, &faces, f64::from(percent), None)
-                    .expect("貫通しても有限姿勢を返す");
+                let _ = take_self_intersection_scan_calls_for_test();
+                let preview = solve_fold_all_preview_with_contact_detection(
+                    &cp,
+                    &faces,
+                    f64::from(percent),
+                    None,
+                    true,
+                )
+                .expect("貫通しても有限姿勢を返す");
+                assert!(
+                    take_self_intersection_scan_calls_for_test() > 0,
+                    "検出ONなら途中姿勢の交差走査を実行する"
+                );
                 let intersections = self_intersection_pairs(&preview.motion.result.frame);
                 if intersections.is_empty() {
                     continue;
@@ -391,6 +417,36 @@ mod tests {
                         .flatten()
                         .all(|coordinate| coordinate.is_finite())
                 }));
+
+                let _ = take_self_intersection_scan_calls_for_test();
+                let silent = solve_fold_all_preview_with_contact_detection(
+                    &cp,
+                    &faces,
+                    f64::from(percent),
+                    None,
+                    false,
+                )
+                .expect("検出OFFでも同じ有限姿勢を返す");
+                assert_eq!(
+                    take_self_intersection_scan_calls_for_test(),
+                    0,
+                    "検出OFFでは警告だけでなく交差計算そのものを走らせない"
+                );
+                assert!(!silent.motion.contact_detected);
+                assert!(
+                    silent
+                        .motion
+                        .result
+                        .frame
+                        .warnings
+                        .iter()
+                        .all(|warning| warning != PENETRATION_WARNING),
+                    "検出OFFでは貫通警告を返さない"
+                );
+                assert!(
+                    !self_intersection_pairs(&silent.motion.result.frame).is_empty(),
+                    "OFF側も実際には貫通する標本で、単なる交差0件を検査しない"
+                );
                 found = Some((left, right, percent, intersections));
                 break;
             }

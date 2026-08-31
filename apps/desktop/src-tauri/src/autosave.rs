@@ -61,7 +61,7 @@ pub(crate) struct RecoveryOperationGuard {
     _guard: MutexGuard<'static, ()>,
 }
 
-struct ProcessFileGuard {
+pub(crate) struct ProcessFileGuard {
     _file: File,
 }
 
@@ -137,7 +137,7 @@ fn ensure_session(app_data: &Path) -> Result<(), String> {
         .map_err(|_| "自動保存sessionは二重に開始できません".to_owned())
 }
 
-fn lock_process_files(app_data: &Path) -> Result<ProcessFileGuard, String> {
+pub(crate) fn lock_process_files(app_data: &Path) -> Result<ProcessFileGuard, String> {
     ensure_session(app_data)?;
     std::fs::create_dir_all(app_data).map_err(|e| format!("自動保存に失敗しました: {e}"))?;
     #[cfg(test)]

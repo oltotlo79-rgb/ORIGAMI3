@@ -202,7 +202,7 @@ fn foot(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
 fn rabbit_ear(cp: &mut CreasePattern, tri: [[f64; 2]; 3], w: f64, h: f64) -> Option<MoleculeShape> {
     let opp = |i: usize| {
         let (a, b) = (tri[(i + 1) % 3], tri[(i + 2) % 3]);
-        (a[0] - b[0]).hypot(a[1] - b[1])
+        libm::hypot(a[0] - b[0], a[1] - b[1])
     };
     let len = [opp(0), opp(1), opp(2)];
     let sum = len[0] + len[1] + len[2];

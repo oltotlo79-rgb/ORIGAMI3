@@ -29,6 +29,17 @@ pub const PENETRATION_WARNING: &str = "紙が重なって食い込んでいま�
 /// 幾何の許容誤差(正規化座標。長辺=1.0)。接している程度は貫通としない。
 const TOL: f64 = 1e-6;
 
+#[cfg(test)]
+std::thread_local! {
+    static SELF_INTERSECTION_SCAN_CALLS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn take_self_intersection_scan_calls_for_test() -> usize {
+    SELF_INTERSECTION_SCAN_CALLS.with(|calls| calls.replace(0))
+}
+
 /// 追従計算へ渡す接触候補の上限。
 ///
 /// 全交差面ペアの数と侵入量は上限を掛けず集計し、線形補正に使う代表だけを
@@ -232,6 +243,9 @@ impl PairIntersection {
 }
 
 fn find_self_intersection_details(frame: &Frame3D, limit: Option<usize>) -> Vec<PairIntersection> {
+    #[cfg(test)]
+    SELF_INTERSECTION_SCAN_CALLS.with(|calls| calls.set(calls.get() + 1));
+
     let flat = frame
         .faces
         .iter()
