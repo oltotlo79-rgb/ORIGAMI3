@@ -128,6 +128,8 @@ const B1_PUBLIC_VALUES = [
 
 const B2_STATE = [
   "frame3d",
+  "selfIntersectionPairs",
+  "focusedSelfIntersectionPairIndex",
   "foldAllPreview",
   "suspectHinges",
   "sequenceTargets",
@@ -198,6 +200,7 @@ const B2_ACTIONS = [
   "setFoldAllPercent",
   "finishFoldAllPercent",
   "leaveFoldAllPreview",
+  "focusNextSelfIntersectionPair",
   "togglePinnedFold",
   "setPinnedFolds",
   "recordPoseStep",

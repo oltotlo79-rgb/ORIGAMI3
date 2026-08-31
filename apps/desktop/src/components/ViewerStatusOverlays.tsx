@@ -1,4 +1,5 @@
 import { flatFoldViolationIds, statusBadgeText, warningCount } from "../lib/flatFoldNotice";
+import { penetrationPreventionOf } from "../lib/displayPrefs";
 import type { AngleRelaxation } from "../lib/types";
 import { relaxationNotices, useAppStore } from "../store/appStore";
 
@@ -31,6 +32,16 @@ export function ViewerStatusOverlays() {
   const poseBestEffort = useAppStore((s) => s.poseBestEffort);
   const hasError = useAppStore((s) => s.errorMessage !== null);
   const suspectHinges = useAppStore((s) => s.suspectHinges);
+  const penetrationDetectionEnabled = useAppStore((s) =>
+    penetrationPreventionOf(s.display),
+  );
+  const selfIntersectionPairs = useAppStore((s) => s.selfIntersectionPairs);
+  const focusedSelfIntersectionPairIndex = useAppStore(
+    (s) => s.focusedSelfIntersectionPairIndex,
+  );
+  const focusNextSelfIntersectionPair = useAppStore(
+    (s) => s.focusNextSelfIntersectionPair,
+  );
   const setSelection = useAppStore((s) => s.setSelection);
   const followStatus = relaxationStatus(relaxations, poseBestEffort);
   const badgeText = statusBadgeText({
@@ -42,6 +53,18 @@ export function ViewerStatusOverlays() {
   });
   const showFollowStatus =
     !hasError && flatFoldViolationCount === 0 && followStatus !== null;
+  const normalizedSelfIntersectionPairIndex =
+    selfIntersectionPairs.length === 0
+      ? 0
+      : focusedSelfIntersectionPairIndex % selfIntersectionPairs.length;
+  const focusedPair =
+    !penetrationDetectionEnabled || selfIntersectionPairs.length === 0
+      ? undefined
+      : selfIntersectionPairs[normalizedSelfIntersectionPairIndex];
+  const selfIntersectionText =
+    focusedPair === undefined
+      ? null
+      : `紙のめり込み ${selfIntersectionPairs.length}組（${normalizedSelfIntersectionPairIndex + 1}/${selfIntersectionPairs.length}、Face ID ${focusedPair[0]} ↔ ${focusedPair[1]}）`;
 
   return (
     <>
@@ -79,6 +102,17 @@ export function ViewerStatusOverlays() {
           </svg>
           <span>{badgeText}</span>
         </div>
+      )}
+      {selfIntersectionText !== null && (
+        <button
+          type="button"
+          className="suspect-hinge-guide self-intersection-guide"
+          data-tooltip={`${selfIntersectionText}。押すと次の組を表示します`}
+          aria-label={`${selfIntersectionText}。押すと次の組を表示します`}
+          onClick={focusNextSelfIntersectionPair}
+        >
+          {selfIntersectionText}
+        </button>
       )}
       {suspectHinges.length > 0 && (
         <button

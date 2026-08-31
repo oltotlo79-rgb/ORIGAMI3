@@ -13,6 +13,7 @@ import type {
   Face,
   FoldIssue,
   Frame3D,
+  SelfIntersectionPair,
   SoftMesh,
   StepCreases,
 } from "../../lib/types";
@@ -99,6 +100,8 @@ interface CommandHostState {
   pullHinge: number | null;
   pullMirrorHinge: number | null;
   frame3d: Frame3D | null;
+  selfIntersectionPairs: readonly SelfIntersectionPair[];
+  focusedSelfIntersectionPairIndex: number;
   softMesh: SoftMesh | null;
   softWarnings: string[];
   playT: number;
@@ -276,6 +279,8 @@ export function createCommandService<State extends CommandHostState>(
           pullHinge: null,
           pullMirrorHinge: null,
           frame3d: result.value.frame,
+          selfIntersectionPairs: result.value.self_intersection_pairs ?? [],
+          focusedSelfIntersectionPairIndex: 0,
           softMesh: null,
           softWarnings: [],
           currentStep: null,

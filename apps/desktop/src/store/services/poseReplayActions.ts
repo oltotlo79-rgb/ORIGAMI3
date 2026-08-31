@@ -497,9 +497,21 @@ export function createPoseReplaySlice<State extends PoseReplayHostState>(
     if (succeeded && to !== from) get().selectStep(to + 1);
   };
 
+  const focusNextSelfIntersectionPair = (): void => {
+    set((state) => ({
+      focusedSelfIntersectionPairIndex:
+        state.selfIntersectionPairs.length === 0
+          ? 0
+          : (state.focusedSelfIntersectionPairIndex + 1) %
+            state.selfIntersectionPairs.length,
+    }));
+  };
+
   const slice: PoseReplaySlice = {
     hinges: new Set<number>(),
     frame3d: null,
+    selfIntersectionPairs: [],
+    focusedSelfIntersectionPairIndex: 0,
     foldAllPreview: null,
     suspectHinges: [],
     sequenceTargets: new Map(),
@@ -548,6 +560,7 @@ export function createPoseReplaySlice<State extends PoseReplayHostState>(
     setFoldAllPercent: foldAllRuntime.setFoldAllPercent,
     finishFoldAllPercent: foldAllRuntime.finishFoldAllPercent,
     leaveFoldAllPreview: foldAllRuntime.leaveFoldAllPreview,
+    focusNextSelfIntersectionPair,
     togglePinnedFold,
     setPinnedFolds,
     recordPoseStep,

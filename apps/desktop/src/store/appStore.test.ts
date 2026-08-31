@@ -268,6 +268,8 @@ beforeEach(() => {
     activeAngleIntent: null,
     angleIntentGeneration: 0,
     frame3d: null,
+    selfIntersectionPairs: [],
+    focusedSelfIntersectionPairIndex: 0,
     suspectHinges: [],
     currentStep: null,
     playT: 1,
@@ -639,6 +641,30 @@ describe("appStore 直列化と応答の反映", () => {
       [9, 30],
     ]);
     expect(useAppStore.getState().sequenceTargets.has(999)).toBe(false);
+  });
+
+  it("別作品では同じFace IDの面ペアがあっても巡回位置を先頭へ戻す", async () => {
+    useAppStore.setState({
+      selfIntersectionPairs: [
+        [1, 2],
+        [7, 8],
+      ],
+      focusedSelfIntersectionPairIndex: 1,
+    });
+    const view = makeView(302);
+    view.self_intersection_pairs = [
+      [3, 4],
+      [7, 8],
+    ];
+    vi.mocked(ipc.documentNew).mockResolvedValueOnce(view);
+
+    await useAppStore.getState().newDocument({ width_mm: 150, height_mm: 150 });
+
+    expect(useAppStore.getState().selfIntersectionPairs).toEqual([
+      [3, 4],
+      [7, 8],
+    ]);
+    expect(useAppStore.getState().focusedSelfIntersectionPairIndex).toBe(0);
   });
 
   it("最新でない失敗は報告しない(直後に新しい結果が必ず続くため)", async () => {
@@ -1238,6 +1264,7 @@ describe("appStore 折り角度の指定", () => {
       faces: view.faces,
       hinges: new Set([5]),
       frame3d: before,
+      selfIntersectionPairs: [[99, 100]],
       suspectHinges: [99],
       relaxations: [
         {
@@ -1250,6 +1277,25 @@ describe("appStore 折り角度の指定", () => {
       poseBestEffort: false,
     });
 
+    const displayTransitions: Array<{
+      frameChanged: boolean;
+      pairsChanged: boolean;
+      frame: unknown;
+      pairs: readonly (readonly [number, number])[];
+    }> = [];
+    const unsubscribe = useAppStore.subscribe((state, previous) => {
+      const frameChanged = state.frame3d !== previous.frame3d;
+      const pairsChanged =
+        state.selfIntersectionPairs !== previous.selfIntersectionPairs;
+      if (frameChanged || pairsChanged) {
+        displayTransitions.push({
+          frameChanged,
+          pairsChanged,
+          frame: state.frame3d,
+          pairs: state.selfIntersectionPairs,
+        });
+      }
+    });
     const store = useAppStore.getState();
     store.clearDrivers();
     await flush();
@@ -1258,6 +1304,7 @@ describe("appStore 折り角度の指定", () => {
     first.resolve({
       ...makeSolveResult(),
       frame: { faces: [], warnings: ["古い形"] },
+      self_intersection_pairs: [[5, 6]],
       suspect_hinges: [5],
       relaxations: [
         { hinge: 5, target_angle_deg: 90, actual_angle_deg: 70, delta_deg: -20 },
@@ -1266,6 +1313,7 @@ describe("appStore 折り角度の指定", () => {
     });
     await flush();
     expect(useAppStore.getState().frame3d).toEqual(before);
+    expect(useAppStore.getState().selfIntersectionPairs).toEqual([[99, 100]]);
     expect(useAppStore.getState().suspectHinges).toEqual([99]);
     expect(useAppStore.getState().relaxations[0].hinge).toBe(99);
     expect(useAppStore.getState().poseBestEffort).toBe(false);
@@ -1274,6 +1322,7 @@ describe("appStore 折り角度の指定", () => {
     second.resolve({
       ...makeSolveResult(),
       frame: latest,
+      self_intersection_pairs: [[7, 8]],
       suspect_hinges: [7],
       relaxations: [
         { hinge: 7, target_angle_deg: 90, actual_angle_deg: 72, delta_deg: -18 },
@@ -1281,7 +1330,17 @@ describe("appStore 折り角度の指定", () => {
       best_effort: true,
     });
     await flush();
+    unsubscribe();
     expect(useAppStore.getState().frame3d).toEqual(latest);
+    expect(useAppStore.getState().selfIntersectionPairs).toEqual([[7, 8]]);
+    expect(displayTransitions).toEqual([
+      {
+        frameChanged: true,
+        pairsChanged: true,
+        frame: latest,
+        pairs: [[7, 8]],
+      },
+    ]);
     expect(useAppStore.getState().suspectHinges).toEqual([7]);
     expect(useAppStore.getState().relaxations[0].hinge).toBe(7);
     expect(useAppStore.getState().poseBestEffort).toBe(true);
@@ -1815,6 +1874,7 @@ describe("appStore 手順の表示と再生", () => {
     seedSequence(1);
     useAppStore.setState({
       poseWarnings: ["固定した折り目2本を動かしました"],
+      selfIntersectionPairs: [[8, 9]],
       releasedPins: [
         { hinge: 5, pinned: -180, actual: -48, deviation: 132 },
       ],
@@ -1830,6 +1890,7 @@ describe("appStore 手順の表示と再生", () => {
     expect(vi.mocked(ipc.sequenceReplay)).not.toHaveBeenCalled();
     expect(vi.mocked(ipc.poseSolve)).not.toHaveBeenCalled();
     expect(state.frame3d).toEqual(nextView.frame);
+    expect(state.selfIntersectionPairs).toEqual([]);
     expect(state.poseWarnings).toEqual([]);
     expect(state.releasedPins).toEqual([]);
     expect(state.releasedPinHinges).toEqual([]);
@@ -1841,6 +1902,7 @@ describe("appStore 手順の表示と再生", () => {
     const frame = { faces: [], warnings: [warning] };
     const nextView = makeStepView(1122, 1);
     nextView.contact_detected = true;
+    nextView.self_intersection_pairs = [[0, 1]];
     nextView.warnings = [warning];
     nextView.frame = frame;
     vi.mocked(ipc.sequenceApply).mockResolvedValueOnce(nextView);
@@ -1851,6 +1913,7 @@ describe("appStore 手順の表示と再生", () => {
     expect(vi.mocked(ipc.sequenceReplay)).not.toHaveBeenCalled();
     expect(vi.mocked(ipc.poseSolve)).not.toHaveBeenCalled();
     expect(state.contactDetected).toBe(true);
+    expect(state.selfIntersectionPairs).toEqual([[0, 1]]);
     expect(state.warnings).toEqual([warning]);
     expect(state.poseWarnings).toEqual([warning]);
     expect(state.frame3d).toBe(frame);
@@ -2075,6 +2138,7 @@ describe("appStore 手順の表示と再生", () => {
     seedSequence(2);
     useAppStore.setState({
       frame3d: before,
+      selfIntersectionPairs: [[99, 100]],
       suspectHinges: [99],
       sequenceTargets: new Map([[99, 12]]),
       poseAngles: new Map([[99, 11]]),
@@ -2094,6 +2158,7 @@ describe("appStore 手順の表示と再生", () => {
       frame: { faces: [], warnings: ["古い形"] },
       skipped: [1],
       warnings: [],
+      self_intersection_pairs: [[5, 6]],
       suspect_hinges: [5],
       sequence_targets: [{ hinge: 5, target_angle_deg: 90 }],
       angles: { "5": 70 },
@@ -2106,6 +2171,7 @@ describe("appStore 手順の表示と再生", () => {
     });
     await flush();
     expect(useAppStore.getState().frame3d).toEqual(before);
+    expect(useAppStore.getState().selfIntersectionPairs).toEqual([[99, 100]]);
     expect(useAppStore.getState().suspectHinges).toEqual([99]);
     expect([...useAppStore.getState().sequenceTargets]).toEqual([[99, 12]]);
     expect([...useAppStore.getState().poseAngles]).toEqual([[99, 11]]);
@@ -2119,6 +2185,7 @@ describe("appStore 手順の表示と再生", () => {
       frame: latest,
       skipped: [2],
       warnings: [],
+      self_intersection_pairs: [[7, 8]],
       suspect_hinges: [7],
       sequence_targets: [{ hinge: 7, target_angle_deg: 45 }],
       angles: { "7": 40 },
@@ -2131,6 +2198,7 @@ describe("appStore 手順の表示と再生", () => {
     });
     await flush();
     expect(useAppStore.getState().frame3d).toEqual(latest);
+    expect(useAppStore.getState().selfIntersectionPairs).toEqual([[7, 8]]);
     expect(useAppStore.getState().suspectHinges).toEqual([7]);
     expect([...useAppStore.getState().sequenceTargets]).toEqual([[7, 45]]);
     expect([...useAppStore.getState().poseAngles]).toEqual([[7, 40]]);

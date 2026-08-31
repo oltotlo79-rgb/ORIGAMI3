@@ -6,6 +6,7 @@ import type {
   FoldAllLayerOrder,
   Frame3D,
   SeqOp,
+  SelfIntersectionPair,
   SoftMesh,
 } from "../../lib/types";
 import type { ReleasedPin } from "../../lib/settledFolds";
@@ -133,6 +134,37 @@ export interface FoldAllPreviewState {
    * Document・保存・Undo/Redoには入れない。古いテスト状態との互換だけ省略可。
    */
   entryFrame3d?: Frame3D | null;
+  /** 入口frameと同じ診断。手順0件から戻るときだけ一緒に復元する。 */
+  entrySelfIntersectionPairs?: readonly SelfIntersectionPair[];
+  /** 入口で利用者が見ていた面ペア。手順0件の復帰で同じ組へ戻す。 */
+  entryFocusedSelfIntersectionPairIndex?: number;
+}
+
+/** 新しいframeと面ペアを同じstore更新へ入れ、前の姿勢の赤枠を残さない。 */
+export function selfIntersectionDisplayState(
+  current: {
+    selfIntersectionPairs: readonly SelfIntersectionPair[];
+    focusedSelfIntersectionPairIndex: number;
+  },
+  pairs: readonly SelfIntersectionPair[] | undefined,
+): {
+  selfIntersectionPairs: readonly SelfIntersectionPair[];
+  focusedSelfIntersectionPairIndex: number;
+} {
+  const next = pairs ?? [];
+  const focused = current.selfIntersectionPairs[
+    current.focusedSelfIntersectionPairIndex
+  ];
+  const preservedIndex =
+    focused === undefined
+      ? -1
+      : next.findIndex(
+          ([left, right]) => left === focused[0] && right === focused[1],
+        );
+  return {
+    selfIntersectionPairs: next,
+    focusedSelfIntersectionPairIndex: preservedIndex < 0 ? 0 : preservedIndex,
+  };
 }
 
 /**
@@ -286,6 +318,8 @@ export function keepIfSameReleasedPins(
 /** 姿勢・再生・角度履歴が所有する状態。すべて同じZustandストアへ合成する。 */
 export interface PoseReplaySliceState {
   frame3d: Frame3D | null;
+  selfIntersectionPairs: readonly SelfIntersectionPair[];
+  focusedSelfIntersectionPairIndex: number;
   foldAllPreview: FoldAllPreviewState | null;
   suspectHinges: number[];
   sequenceTargets: Map<number, number>;
@@ -343,6 +377,7 @@ export interface PoseReplaySliceActions {
   setFoldAllPercent: (percent: number) => void;
   finishFoldAllPercent: () => void;
   leaveFoldAllPreview: () => Promise<void>;
+  focusNextSelfIntersectionPair: () => void;
   togglePinnedFold: (hinge: number) => void;
   setPinnedFolds: (hinges: readonly number[], pinned: boolean) => void;
   recordPoseStep: () => Promise<void>;

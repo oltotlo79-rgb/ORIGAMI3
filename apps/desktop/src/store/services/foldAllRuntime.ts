@@ -5,6 +5,7 @@ import { createSerialQueue } from "../ipcQueue";
 import { EMPTY_SELECTION } from "../slices/documentSlice";
 import {
   FOLD_ALL_THROTTLE_MS,
+  selfIntersectionDisplayState,
   type FoldAllReturnState,
   type PoseReplaySliceHostState,
 } from "../slices/poseReplaySlice";
@@ -156,6 +157,10 @@ export function createFoldAllRuntime<State extends FoldAllHostState>(
       request === foldAllRequestGeneration
         ? {
             frame3d: outcome.frame,
+            ...selfIntersectionDisplayState(
+              state,
+              outcome.self_intersection_pairs,
+            ),
             softMesh: null,
             softWarnings: [],
             foldAllPreview: {
@@ -290,7 +295,12 @@ export function createFoldAllRuntime<State extends FoldAllHostState>(
       currentStep: previous.currentStep,
       playT: previous.playT,
       ...(total === 0 && hasEntryFrame
-        ? { frame3d: cloneFoldAllReturnFrame(active.entryFrame3d ?? null) }
+        ? {
+            frame3d: cloneFoldAllReturnFrame(active.entryFrame3d ?? null),
+            selfIntersectionPairs: active.entrySelfIntersectionPairs ?? [],
+            focusedSelfIntersectionPairIndex:
+              active.entryFocusedSelfIntersectionPairIndex ?? 0,
+          }
         : {}),
       ...(restoreUi
         ? {
@@ -397,7 +407,11 @@ export function createFoldAllRuntime<State extends FoldAllHostState>(
           nextWarmSeed: [],
           returnState,
           entryFrame3d: cloneFoldAllReturnFrame(before.frame3d),
+          entrySelfIntersectionPairs: [...before.selfIntersectionPairs],
+          entryFocusedSelfIntersectionPairIndex:
+            before.focusedSelfIntersectionPairIndex,
         },
+        ...selfIntersectionDisplayState(before, undefined),
         activeTool: "select",
         selection: EMPTY_SELECTION,
         hoveredHinge: null,

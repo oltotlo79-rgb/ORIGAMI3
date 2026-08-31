@@ -10,6 +10,7 @@ import type {
   Face,
   FoldDirection,
   Frame3D,
+  SelfIntersectionPair,
   Vec2,
 } from "../../lib/types";
 import type { Viewer3DInteractionCapture } from "../../captureApi";
@@ -469,6 +470,9 @@ export interface ViewerHighlightRefresh {
   readonly selection: unknown;
   readonly hoveredHinge: unknown;
   readonly suspectHinges: unknown;
+  readonly penetrationDetectionEnabled: unknown;
+  readonly selfIntersectionPairs: unknown;
+  readonly focusedSelfIntersectionPairIndex: unknown;
   readonly pinnedFolds: unknown;
   readonly foldAllActive: unknown;
   readonly activeAngleIntent: unknown;
@@ -485,6 +489,30 @@ export interface ViewerHighlightRefresh {
   readonly pullHinge: unknown;
   readonly pullMirrorHinge: unknown;
   readonly softMesh: unknown;
+}
+
+/** backendが返した順序付き面ペアの両輪郭だけを、既存の赤いsuspect線へ変える。 */
+export function selfIntersectionFaceOutlines(
+  faces: readonly Face[],
+  physicalEdgeSegments: readonly HighlightSegment[],
+  pairs: readonly SelfIntersectionPair[],
+  focusedIndex: number,
+): HighlightSegment[] {
+  if (pairs.length === 0) return [];
+  const pair = pairs[focusedIndex % pairs.length];
+  const left = faces.find((face) => face.id === pair[0]);
+  const right = faces.find((face) => face.id === pair[1]);
+  if (left === undefined || right === undefined) return [];
+  const edgeIdsByFace = new Map<number, ReadonlySet<number>>([
+    [left.id, new Set(left.edges)],
+    [right.id, new Set(right.edges)],
+  ]);
+  return physicalEdgeSegments
+    .filter((segment) => {
+      if (segment.ownerFace === undefined) return false;
+      return edgeIdsByFace.get(segment.ownerFace)?.has(segment.edgeId) === true;
+    })
+    .map((segment) => ({ ...segment, role: "suspect" as const }));
 }
 
 export interface UseViewerHighlightArgs {
@@ -538,6 +566,9 @@ export function useViewerHighlight({
     selection,
     hoveredHinge,
     suspectHinges,
+    penetrationDetectionEnabled,
+    selfIntersectionPairs,
+    focusedSelfIntersectionPairIndex,
     pinnedFolds,
     foldAllActive,
     activeAngleIntent,
@@ -616,6 +647,14 @@ export function useViewerHighlight({
       softHighlightRef.current,
     ).filter((segment) => segment.ownerFace !== undefined);
     selectableEdgeSegmentsRef.current = displayedEdgeSegments;
+    const selfIntersectionSegments = penetrationDetectionEnabled
+      ? selfIntersectionFaceOutlines(
+          s.faces,
+          physicalEdgeSegments,
+          s.selfIntersectionPairs,
+          s.focusedSelfIntersectionPairIndex,
+        )
+      : [];
     const outlinedEdgeIds = new Set(s.faces.flatMap((face) => face.edges));
     const selectedIds = new Set(s.selection.edgeIds);
     scene.setSupplementalEdges(
@@ -692,6 +731,7 @@ export function useViewerHighlight({
     const setHighlight = (segments: HighlightSegment[]) => {
       const shownIds = new Set(segments.map((segment) => segment.edgeId));
       const physicalSegments = [
+        ...selfIntersectionSegments,
         ...suspectSegments,
         // 選択中の折り目は選択の色を優先する(同じ線を二重に描かない)。
         // 選んでいない固定の折り目だけを、固定の色で足す。
@@ -875,6 +915,7 @@ export function useViewerHighlight({
     foldClickRef,
     grabRef,
     pendingCpPointRef,
+    penetrationDetectionEnabled,
     sceneRef,
     selectableEdgeSegmentsRef,
     softHighlightRef,
@@ -888,6 +929,9 @@ export function useViewerHighlight({
     selection,
     hoveredHinge,
     suspectHinges,
+    penetrationDetectionEnabled,
+    selfIntersectionPairs,
+    focusedSelfIntersectionPairIndex,
     pinnedFolds,
     foldAllActive,
     activeAngleIntent,

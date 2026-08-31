@@ -240,6 +240,9 @@ export interface Face {
   edges: number[];
 }
 
+/** 紙を実際に突き抜けた2面。backendの決定順を画面でも維持する。 */
+export type SelfIntersectionPair = readonly [number, number];
+
 /** save以外の全コマンド成功時の戻り値(store.rs::DocumentView) */
 export interface DocumentView {
   doc: Document;
@@ -261,6 +264,8 @@ export interface DocumentView {
   contact_detected: boolean;
   /** 補正後にも残る食い込みの原因候補ヒンジ */
   suspect_hinges?: number[];
+  /** 最終姿勢で紙を実際に突き抜けた面IDの組。0件では旧backendとの互換上省略される。 */
+  self_intersection_pairs?: SelfIntersectionPair[];
   /** 手順から現在の辺IDへ解決した希望角。保存データではなく再生の導出結果 */
   sequence_targets?: Driver[];
   /** 自動再生で得た全ヒンジの実角。次の操作のwarm startにも使う */
@@ -486,6 +491,8 @@ export interface ReplayResult {
   flat_fold_violations?: number[];
   /** 補正後にも残る食い込みの原因候補ヒンジ */
   suspect_hinges?: number[];
+  /** 最終姿勢で紙を実際に突き抜けた面IDの組。 */
+  self_intersection_pairs?: SelfIntersectionPair[];
   /** 手順から現在の辺IDへ解決した希望角（保存しない導出結果） */
   sequence_targets?: Driver[];
   /** 再生で得た全ヒンジの実角（JSONでは辺IDが文字列キーになる） */
@@ -519,6 +526,8 @@ export interface SolveResult {
   relaxations?: AngleRelaxation[];
   /** 補正後にも残る食い込みの原因候補ヒンジ */
   suspect_hinges?: number[];
+  /** 最終姿勢で紙を実際に突き抜けた面IDの組。 */
+  self_intersection_pairs?: SelfIntersectionPair[];
   /** 紙どうしの接触を検出したか。接触しても要求角まで進む */
   contact_detected?: boolean;
   /** たわみを指定したときだけ入る三角形の網(SIM-012) */

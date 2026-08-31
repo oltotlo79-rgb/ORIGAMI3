@@ -392,4 +392,52 @@ describe("foldByDrag", () => {
     expect(after.warnings.join("\n")).not.toContain("折れる紙がありません");
     expect(after.warnings.join("\n")).not.toContain("折り途中の状態では折れません");
   });
+
+  it("非平坦な姿勢でflap・all・singleを下見と確定の両方へそのまま送る", async () => {
+    const from: [number, number, number] = [0.5, 0.45, 0.4];
+    const to: [number, number, number] = [0.5, 0.35, 0.2];
+
+    for (const mode of ["flap", "all", "single"] as const) {
+      vi.mocked(ipc.sequenceApply).mockReset();
+      vi.mocked(ipc.sequenceApply).mockImplementation(async (operation) =>
+        operation.type === "PreviewFoldThrough"
+          ? {
+              ...VIEW,
+              doc: NON_FLAT_DOC,
+              faces: NON_FLAT_FACES,
+              frame: NON_FLAT_FRAME,
+            }
+          : {
+              ...VIEW,
+              doc: AFTER_NON_FLAT_FOLD_DOC,
+              faces: AFTER_NON_FLAT_FOLD_FACES,
+              frame: AFTER_NON_FLAT_FOLD_FRAME,
+            },
+      );
+      useAppStore.setState({
+        doc: NON_FLAT_DOC,
+        faces: NON_FLAT_FACES,
+        frame3d: NON_FLAT_FRAME,
+        currentStep: null,
+        playT: 1,
+        playing: false,
+        drivers: new Map(),
+        errorMessage: null,
+        foldDraft: null,
+        pendingFoldThrough: null,
+        foldThroughBusy: false,
+      });
+
+      await useAppStore.getState().foldByDrag(from, to, mode, 1);
+
+      const calls = vi.mocked(ipc.sequenceApply).mock.calls;
+      expect(calls.map(([op]) => op.type)).toEqual([
+        "PreviewFoldThrough",
+        "FoldThrough",
+      ]);
+      for (const [operation] of calls) {
+        expect(spatialPayload(operation)?.mode).toBe(mode);
+      }
+    }
+  });
 });

@@ -7,6 +7,7 @@ import type { SerialQueue } from "../ipcQueue";
 import {
   FALLBACK_FRAME_MS,
   keepIfSameReleasedPins,
+  selfIntersectionDisplayState,
 } from "../slices/poseReplaySlice";
 import { keepIfSame } from "./commandService";
 import type { PoseRuntime, PoseRuntimeHostState } from "./poseRuntime";
@@ -125,6 +126,10 @@ export function createReplayRuntime<State extends PoseRuntimeHostState>(
       set({
         ...replayState,
         frame3d: result.value.frame,
+        ...selfIntersectionDisplayState(
+          get(),
+          result.value.self_intersection_pairs,
+        ),
         ...poseRuntime.softResult(result.value.soft),
         flatFoldViolations: keepIfSame(
           state.flatFoldViolations,
@@ -224,6 +229,10 @@ export function createReplayRuntime<State extends PoseRuntimeHostState>(
       );
       set((state) => ({
         frame3d: view.frame,
+        ...selfIntersectionDisplayState(
+          state,
+          view.self_intersection_pairs,
+        ),
         replaySkipped: [],
         replayWarnings: [],
         poseWarnings: keepIfSame(

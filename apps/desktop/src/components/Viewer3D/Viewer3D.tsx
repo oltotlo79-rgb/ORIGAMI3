@@ -11,6 +11,7 @@ import * as THREE from "three";
 import { registerViewer3DInteractionReader } from "../../captureApi";
 import { useAppStore } from "../../store/appStore";
 import { SELECTABLE_3D_EDGE_TARGETS } from "../../lib/viewerHint";
+import { penetrationPreventionOf } from "../../lib/displayPrefs";
 import { TOOL_KIND } from "../CpEditor/interaction";
 import {
   type SoftContent,
@@ -82,6 +83,13 @@ export function Viewer3D({ fitRef, statusOverlays }: Props) {
   const selection = useAppStore((s) => s.selection);
   const hoveredHinge = useAppStore((s) => s.hoveredHinge);
   const suspectHinges = useAppStore((s) => s.suspectHinges);
+  const penetrationDetectionEnabled = useAppStore((s) =>
+    penetrationPreventionOf(s.display),
+  );
+  const selfIntersectionPairs = useAppStore((s) => s.selfIntersectionPairs);
+  const focusedSelfIntersectionPairIndex = useAppStore(
+    (s) => s.focusedSelfIntersectionPairIndex,
+  );
   const pinnedFolds = useAppStore((s) => s.pinnedFolds);
   const activeAngleIntent = useAppStore((s) => s.activeAngleIntent);
   const docEpoch = useAppStore((s) => s.docEpoch);
@@ -152,6 +160,9 @@ export function Viewer3D({ fitRef, statusOverlays }: Props) {
       selection,
       hoveredHinge,
       suspectHinges,
+      penetrationDetectionEnabled,
+      selfIntersectionPairs,
+      focusedSelfIntersectionPairIndex,
       pinnedFolds,
       foldAllActive,
       activeAngleIntent,

@@ -4166,6 +4166,48 @@ mod tests {
         assert_eq!(spatial.from, [0.5, 0.25, -0.25]);
         assert_eq!(spatial.to, [0.5, 0.5, -0.25]);
         assert_eq!(spatial.grab_face, 1);
+        assert_eq!(spatial.mode, crate::store::SpatialFoldMode::Flap);
+    }
+
+    #[test]
+    fn sequence_operation_reads_all_spatial_modes_and_defaults_to_flap() {
+        let operation = |mode: Option<&str>| {
+            let mut spatial = serde_json::json!({
+                "from": [0.5, 0.25, -0.25],
+                "to": [0.5, 0.5, -0.25],
+                "grab_face": 1
+            });
+            if let Some(mode) = mode {
+                spatial["mode"] = serde_json::json!(mode);
+            }
+            serde_json::json!({
+                "type": "PreviewFoldThrough",
+                "up_to": 1,
+                "line": [[0.0, 0.0], [1.0, 0.0]],
+                "keep_side_point": [0.0, 1.0],
+                "target_layers": null,
+                "direction": "Up",
+                "spatial": spatial
+            })
+        };
+
+        for (wire, expected) in [
+            ("flap", crate::store::SpatialFoldMode::Flap),
+            ("all", crate::store::SpatialFoldMode::All),
+            ("single", crate::store::SpatialFoldMode::Single),
+        ] {
+            let (_, spatial) = super::parse_sequence_operation(operation(Some(wire)))
+                .unwrap_or_else(|error| panic!("{wire}を読み取れる: {error}"));
+            assert_eq!(spatial.expect("立体の当たり点").mode, expected);
+        }
+
+        let (_, spatial) =
+            super::parse_sequence_operation(operation(None)).expect("旧入力を読み取れる");
+        assert_eq!(
+            spatial.expect("立体の当たり点").mode,
+            crate::store::SpatialFoldMode::Flap,
+            "modeが無い旧入力はflap"
+        );
     }
 
     /// ひだ枚数の照会はDocumentViewを返しても、次の計算用warm値を含むstoreを

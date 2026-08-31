@@ -421,6 +421,26 @@ struct Snapshot {
     step_creases: Vec<StepCreases>,
 }
 
+/// 3D画面でつかんだ層の動かし方。frontendのlowercase wire値をそのまま受ける。
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SpatialFoldMode {
+    #[default]
+    Flap,
+    All,
+    Single,
+}
+
+impl SpatialFoldMode {
+    fn into_layers(self) -> ori3_layers::SpatialFoldMode {
+        match self {
+            Self::Flap => ori3_layers::SpatialFoldMode::Flap,
+            Self::All => ori3_layers::SpatialFoldMode::All,
+            Self::Single => ori3_layers::SpatialFoldMode::Single,
+        }
+    }
+}
+
 /// 3D画面で実際に当たった点から作る、作品へ保存しない一時wire入力。
 #[derive(Clone, Debug, Deserialize)]
 pub struct SpatialFoldSpec {
@@ -428,6 +448,8 @@ pub struct SpatialFoldSpec {
     pub to: [f64; 3],
     #[serde(alias = "grabFace")]
     pub grab_face: FaceId,
+    #[serde(default)]
+    pub mode: SpatialFoldMode,
 }
 
 /// document状態と18コマンドの処理を所有する、host-neutralなアプリケーションcore。
@@ -2413,6 +2435,7 @@ fn spatial_fold_input(
             grab_point: spatial.from,
             grab_face: spatial.grab_face,
             direction,
+            mode: spatial.mode.into_layers(),
         };
     }
 
@@ -2456,6 +2479,7 @@ fn spatial_fold_input(
         grab_point,
         grab_face: requested.or(geometric).unwrap_or(0),
         direction,
+        mode: SpatialFoldMode::Flap.into_layers(),
     }
 }
 
@@ -5919,7 +5943,7 @@ mod tests {
             }
         });
         let (operation, spatial) =
-            super::parse_sequence_operation(value).expect("frontend envelope must parse");
+            super::parse_sequence_operation(value.clone()).expect("frontend envelope must parse");
         assert!(matches!(
             operation,
             ori3_model::SeqOp::PreviewFoldThrough { up_to: 0, .. }
@@ -5928,6 +5952,17 @@ mod tests {
         assert_eq!(spatial.from, [0.5, 0.25, -0.25]);
         assert_eq!(spatial.to, [0.5, 0.5, -0.25]);
         assert_eq!(spatial.grab_face, 1);
+        for (wire, expected) in [
+            ("flap", super::SpatialFoldMode::Flap),
+            ("all", super::SpatialFoldMode::All),
+            ("single", super::SpatialFoldMode::Single),
+        ] {
+            let mut mode_value = value.clone();
+            mode_value["spatial"]["mode"] = json!(wire);
+            let (_, parsed) = super::parse_sequence_operation(mode_value)
+                .unwrap_or_else(|error| panic!("{wire} mode must parse: {error}"));
+            assert_eq!(parsed.expect("spatial hit must be retained").mode, expected);
+        }
 
         let (_, camel_case) = super::parse_sequence_operation(json!({
             "type": "PreviewFoldThrough",
@@ -5943,7 +5978,9 @@ mod tests {
             }
         }))
         .expect("legacy grabFace alias must parse");
-        assert_eq!(camel_case.unwrap().grab_face, 7);
+        let camel_case = camel_case.expect("legacy spatial hit must be retained");
+        assert_eq!(camel_case.grab_face, 7);
+        assert_eq!(camel_case.mode, super::SpatialFoldMode::Flap);
 
         let error = match super::parse_sequence_operation(json!({
             "type": "MoveStep",
@@ -5988,6 +6025,45 @@ mod tests {
                 .expect_err("desktop-unsupported variant must be explicit Err");
             assert_eq!(error, "折る操作を読み取れませんでした");
             assert_eq!(core, before);
+        }
+    }
+
+    #[test]
+    fn spatial_fold_input_transports_all_three_frontend_modes_to_the_layer_solver() {
+        let frame = ori3_model::Frame3D {
+            faces: Vec::new(),
+            warnings: Vec::new(),
+        };
+        for (mode, expected) in [
+            (
+                super::SpatialFoldMode::Flap,
+                ori3_layers::SpatialFoldMode::Flap,
+            ),
+            (
+                super::SpatialFoldMode::All,
+                ori3_layers::SpatialFoldMode::All,
+            ),
+            (
+                super::SpatialFoldMode::Single,
+                ori3_layers::SpatialFoldMode::Single,
+            ),
+        ] {
+            let spatial = super::SpatialFoldSpec {
+                from: [0.5, 0.25, -0.25],
+                to: [0.5, 0.5, -0.25],
+                grab_face: 1,
+                mode,
+            };
+            let input = super::spatial_fold_input(
+                Some(&spatial),
+                &frame,
+                &[],
+                [[0.0, 0.0], [1.0, 0.0]],
+                [0.0, 1.0],
+                None,
+                ori3_model::FoldDirection::Up,
+            );
+            assert_eq!(input.mode, expected);
         }
     }
 

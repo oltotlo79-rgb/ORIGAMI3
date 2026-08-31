@@ -89,6 +89,7 @@ vi.mock("../../ipc/client", () => ({
 import * as ipc from "../../ipc/client";
 import { captureViewer3DInteraction } from "../../captureApi";
 import { useAppStore } from "../../store/appStore";
+import { ViewerStatusOverlays } from "../ViewerStatusOverlays";
 import { Viewer3D } from "./Viewer3D";
 import {
   PICK_TOLERANCE_PX,
@@ -963,6 +964,102 @@ describe("Viewer3D(指している場所のカーソル)", () => {
         | undefined;
       expect(last?.some((segment) => segment.role === "suspect")).toBe(false);
     });
+  });
+
+  it("選んだめり込み面ペアの両輪郭だけを赤いsuspect線で示す", async () => {
+    useAppStore.setState((state) => ({
+      display: {
+        ...state.display,
+        penetration_prevention_enabled: true,
+      },
+      selfIntersectionPairs: [[0, 1]],
+      focusedSelfIntersectionPairIndex: 0,
+      suspectHinges: [],
+    }));
+    renderViewer();
+    await waitFor(() => expect(held.scene.content).not.toBeNull());
+
+    const pairOutlines = () => {
+      const setHighlight = held.scene.setHighlight as ReturnType<typeof vi.fn>;
+      const calls = setHighlight.mock.calls;
+      const last = calls[calls.length - 1]?.[0] as
+        | { edgeId: number; role?: string; ownerFace?: number }[]
+        | undefined;
+      return last?.filter((segment) => segment.role === "suspect") ?? [];
+    };
+
+    await waitFor(() => {
+      const outlines = pairOutlines();
+      expect(outlines).toHaveLength(6);
+      expect(new Set(outlines.map((segment) => segment.ownerFace))).toEqual(
+        new Set([0, 1]),
+      );
+      for (const segment of outlines) {
+        const face = EDGE_FACES.find(
+          (candidate) => candidate.id === segment.ownerFace,
+        );
+        expect(face?.edges).toContain(segment.edgeId);
+      }
+    });
+
+    act(() => useAppStore.setState({ selfIntersectionPairs: [] }));
+    await waitFor(() => expect(pairOutlines()).toEqual([]));
+  });
+
+  it("めり込みバッジを押すと、赤枠が次の面ペアへ切り替わる", async () => {
+    useAppStore.setState((state) => ({
+      doc: GRID_DOC,
+      faces: GRID_FACES,
+      hinges: new Set([8, 9, 10, 11]),
+      display: {
+        ...state.display,
+        penetration_prevention_enabled: true,
+      },
+      selfIntersectionPairs: [
+        [0, 1],
+        [2, 3],
+      ],
+      focusedSelfIntersectionPairIndex: 0,
+      suspectHinges: [],
+    }));
+    const fitRef = { current: null } as React.RefObject<(() => void) | null>;
+    render(
+      <Viewer3D
+        fitRef={fitRef}
+        statusOverlays={<ViewerStatusOverlays />}
+      />,
+    );
+    await waitFor(() => expect(held.scene.content).not.toBeNull());
+
+    const outlinedFaceIds = () => {
+      const setHighlight = held.scene.setHighlight as ReturnType<typeof vi.fn>;
+      const calls = setHighlight.mock.calls;
+      const last = calls[calls.length - 1]?.[0] as
+        | { role?: string; ownerFace?: number }[]
+        | undefined;
+      return new Set(
+        (last ?? [])
+          .filter((segment) => segment.role === "suspect")
+          .map((segment) => segment.ownerFace),
+      );
+    };
+
+    await waitFor(() => expect(outlinedFaceIds()).toEqual(new Set([0, 1])));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Face ID 0 ↔ 1/,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(useAppStore.getState().focusedSelfIntersectionPairIndex).toBe(1);
+      expect(outlinedFaceIds()).toEqual(new Set([2, 3]));
+    });
+    expect(
+      screen.getByRole("button", {
+        name: /2\/2、Face ID 2 ↔ 3/,
+      }),
+    ).toBeTruthy();
   });
 
   it("追従診断は色付けせず、操作中は水色、食い込みは赤だけで示す", async () => {

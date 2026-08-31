@@ -46,7 +46,7 @@ describe("実行環境の切り替え", () => {
   });
 
   it("Tauriでは従来のinvokeへ名前と引数をそのまま渡す", async () => {
-    const result = { ok: true };
+    const result = { self_intersection_pairs: [[0, 2] as [number, number]] };
     tauri.isTauri.mockReturnValue(true);
     tauri.invoke.mockResolvedValue(result);
     const webInvoke = vi.fn();
@@ -56,22 +56,26 @@ describe("実行環境の切り替え", () => {
 
     const { callBackend, detectRuntime } = await import("./runtime");
 
-    await expect(
-      callBackend("sequence_apply", { op: { type: "test" } }),
-    ).resolves.toBe(result);
+    const returned = await callBackend<typeof result>("fold_all_preview", {
+      percent: 0,
+      warmSeed: null,
+    });
+    expect(returned).toBe(result);
+    expect(returned.self_intersection_pairs).toEqual([[0, 2]]);
     await callBackend("recovery_check");
 
     expect(detectRuntime()).toBe("tauri");
     expect(tauri.isTauri).toHaveBeenCalledTimes(1);
-    expect(tauri.invoke).toHaveBeenNthCalledWith(1, "sequence_apply", {
-      op: { type: "test" },
+    expect(tauri.invoke).toHaveBeenNthCalledWith(1, "fold_all_preview", {
+      percent: 0,
+      warmSeed: null,
     });
     expect(tauri.invoke).toHaveBeenNthCalledWith(2, "recovery_check");
     expect(webInvoke).not.toHaveBeenCalled();
   });
 
   it("Webではモジュール初期化時に選んだ橋へ名前と引数を渡す", async () => {
-    const result = { ok: true };
+    const result = { self_intersection_pairs: [[0, 2] as [number, number]] };
     const webInvoke = vi.fn().mockResolvedValue(result);
     tauri.isTauri.mockReturnValue(false);
     window.__ori3Web = {
@@ -81,15 +85,19 @@ describe("実行環境の切り替え", () => {
     const { callBackend, detectRuntime } = await import("./runtime");
     tauri.isTauri.mockReturnValue(true);
 
-    await expect(
-      callBackend("document_export", { kind: "Svg" }),
-    ).resolves.toBe(result);
+    const returned = await callBackend<typeof result>("fold_all_preview", {
+      percent: 0,
+      warmSeed: null,
+    });
+    expect(returned).toBe(result);
+    expect(returned.self_intersection_pairs).toEqual([[0, 2]]);
     await callBackend("recovery_check");
 
     expect(detectRuntime()).toBe("web");
     expect(tauri.isTauri).toHaveBeenCalledTimes(1);
-    expect(webInvoke).toHaveBeenNthCalledWith(1, "document_export", {
-      kind: "Svg",
+    expect(webInvoke).toHaveBeenNthCalledWith(1, "fold_all_preview", {
+      percent: 0,
+      warmSeed: null,
     });
     expect(webInvoke).toHaveBeenNthCalledWith(
       2,

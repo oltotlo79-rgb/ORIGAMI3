@@ -341,12 +341,33 @@ pub struct DocumentStore {
 
 /// 3D画面で実際に当たった点から作る、立体折り専用の一時入力。
 /// 作品には保存せず、同じFoldThroughコマンドの処理中だけ使う。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SpatialFoldMode {
+    #[default]
+    Flap,
+    All,
+    Single,
+}
+
+impl From<SpatialFoldMode> for ori3_layers::SpatialFoldMode {
+    fn from(mode: SpatialFoldMode) -> Self {
+        match mode {
+            SpatialFoldMode::Flap => Self::Flap,
+            SpatialFoldMode::All => Self::All,
+            SpatialFoldMode::Single => Self::Single,
+        }
+    }
+}
+
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct SpatialFoldSpec {
     pub from: [f64; 3],
     pub to: [f64; 3],
     #[serde(alias = "grabFace")]
     pub grab_face: FaceId,
+    #[serde(default)]
+    pub mode: SpatialFoldMode,
 }
 
 impl Default for DocumentStore {
@@ -2563,6 +2584,7 @@ fn spatial_fold_input(
             grab_point: spatial.from,
             grab_face: spatial.grab_face,
             direction,
+            mode: spatial.mode.into(),
         };
     }
 
@@ -2608,6 +2630,7 @@ fn spatial_fold_input(
         grab_point,
         grab_face: requested.or(geometric).unwrap_or(0),
         direction,
+        mode: ori3_layers::SpatialFoldMode::Flap,
     }
 }
 
@@ -3817,6 +3840,39 @@ mod tests {
         assert!(!frame_is_nonflat(&frame_with_z(-NONFLAT_EPS)));
         assert!(frame_is_nonflat(&frame_with_z(NONFLAT_EPS + 1e-12)));
         assert!(frame_is_nonflat(&frame_with_z(-NONFLAT_EPS - 1e-12)));
+    }
+
+    #[test]
+    fn spatial_fold_input_keeps_all_three_modes_on_the_same_nonflat_frame() {
+        let frame = frame_with_z(NONFLAT_EPS + 1e-12);
+        assert!(frame_is_nonflat(&frame));
+
+        for (mode, expected) in [
+            (SpatialFoldMode::Flap, ori3_layers::SpatialFoldMode::Flap),
+            (SpatialFoldMode::All, ori3_layers::SpatialFoldMode::All),
+            (
+                SpatialFoldMode::Single,
+                ori3_layers::SpatialFoldMode::Single,
+            ),
+        ] {
+            let spatial = SpatialFoldSpec {
+                from: [0.0, 0.0, NONFLAT_EPS + 1e-12],
+                to: [1.0, 0.0, NONFLAT_EPS + 1e-12],
+                grab_face: 0,
+                mode,
+            };
+            let input = spatial_fold_input(
+                Some(&spatial),
+                &frame,
+                &[],
+                [[0.0, 0.0], [1.0, 0.0]],
+                [0.0, 1.0],
+                None,
+                ori3_model::FoldDirection::Up,
+            );
+
+            assert_eq!(input.mode, expected);
+        }
     }
 
     /// 利用者の画面から取り出した展開図(2026-08-13)。元の受け入れテストは
@@ -6377,6 +6433,7 @@ mod tests {
                         from: [0.0, 0.0, 0.0],
                         to: [1.0, 0.0, 0.0],
                         grab_face: 0,
+                        mode: SpatialFoldMode::Flap,
                     }),
                 )
                 .expect_err("K selection and a live 3D grab must not be mixed");
@@ -6870,6 +6927,7 @@ mod tests {
             from: [center_x, 0.25, center_z],
             to: [center_x, 0.5, center_z],
             grab_face: grabbed.face,
+            mode: SpatialFoldMode::Flap,
         };
         let grabbed_material = store
             .faces

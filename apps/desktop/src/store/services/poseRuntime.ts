@@ -28,6 +28,7 @@ import {
   finishComparisonFrame,
   keepIfSameReleasedPins,
   maximumFrameVertexMovement,
+  selfIntersectionDisplayState,
   type AngleSnapshot,
   type PoseReplaySliceHostState,
 } from "../slices/poseReplaySlice";
@@ -488,7 +489,15 @@ export function createPoseRuntime<State extends PoseRuntimeHostState>(
         ? deviationWarnings
         : [...deviationWarnings, pinNotice];
     set({
-      ...(applyFrame ? { frame3d: result.value.frame } : {}),
+      ...(applyFrame
+        ? {
+            frame3d: result.value.frame,
+            ...selfIntersectionDisplayState(
+              get(),
+              result.value.self_intersection_pairs,
+            ),
+          }
+        : {}),
       ...(applyFrame ? softResult(result.value.soft) : {}),
       ...(applyFrame
         ? {
