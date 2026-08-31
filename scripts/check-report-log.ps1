@@ -28,8 +28,8 @@ $script:formatProblems = New-Object System.Collections.Generic.List[string]
 $script:missingProblems = New-Object System.Collections.Generic.List[string]
 $script:snapshot = $null
 $script:reportGateTimestamp = [datetime]::MinValue
-$script:legacyBoundaryHeader = '## 2026-08-31 06:50 — 統括が利用者へ虚偽を伝えた。正本を見ずに「残作業のすべて」と断言した'
-$script:legacySuffixSha256 = '2ff9dfef97d6961a862ef2b432a0ed624dd8fd446221dd5debb3c14fa5c13b80'
+$script:legacyBoundaryHeader = '## 2026-08-31 10:46 — 未チェックが40件→16件になり、統括が時刻を読めるようになった'
+$script:legacySuffixSha256 = '609c514bea1e48bdbfa6945bb6c2ce357003f05655a9ac66b3a286b7be442223'
 $script:legacyBoundaryLineIndex = -1
 $script:historicalSnapshotEvidence = @{}
 $script:recordIntroductionCommits = @{}
@@ -76,6 +76,56 @@ function Get-BytesSha256 {
     }
     finally {
         $sha256.Dispose()
+    }
+}
+
+function Get-ImmutableSuffixInfo {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$BoundaryHeader
+    )
+
+    $allBytes = [System.IO.File]::ReadAllBytes($Path)
+    $bomLength = 0
+    if ($allBytes.Length -ge 3 -and
+        $allBytes[0] -eq 0xEF -and $allBytes[1] -eq 0xBB -and $allBytes[2] -eq 0xBF) {
+        $bomLength = 3
+    }
+    $textBytes = New-Object byte[] ($allBytes.Length - $bomLength)
+    if ($textBytes.Length -gt 0) {
+        [System.Array]::Copy($allBytes, $bomLength, $textBytes, 0, $textBytes.Length)
+    }
+    $utf8 = [System.Text.UTF8Encoding]::new($false, $true)
+    $text = $utf8.GetString($textBytes)
+
+    $characterMatches = New-Object System.Collections.Generic.List[int]
+    $searchFrom = 0
+    while ($searchFrom -le $text.Length - $BoundaryHeader.Length) {
+        $matchIndex = $text.IndexOf($BoundaryHeader, $searchFrom, [System.StringComparison]::Ordinal)
+        if ($matchIndex -lt 0) {
+            break
+        }
+        $afterIndex = $matchIndex + $BoundaryHeader.Length
+        $startsLine = $matchIndex -eq 0 -or $text[$matchIndex - 1] -eq "`n" -or $text[$matchIndex - 1] -eq "`r"
+        $endsLine = $afterIndex -eq $text.Length -or $text[$afterIndex] -eq "`n" -or $text[$afterIndex] -eq "`r"
+        if ($startsLine -and $endsLine) {
+            $characterMatches.Add($matchIndex)
+        }
+        $searchFrom = $matchIndex + 1
+    }
+    if ($characterMatches.Count -ne 1) {
+        throw "報告記録の旧履歴境界をraw UTF-8 bytes内で1行に特定できません (実際: $($characterMatches.Count)行)。"
+    }
+
+    $prefixByteCount = $utf8.GetByteCount($text.Substring(0, $characterMatches[0]))
+    $suffixOffset = $bomLength + $prefixByteCount
+    $suffixBytes = New-Object byte[] ($allBytes.Length - $suffixOffset)
+    [System.Array]::Copy($allBytes, $suffixOffset, $suffixBytes, 0, $suffixBytes.Length)
+    return [pscustomobject]@{
+        Offset = $suffixOffset
+        Length = $suffixBytes.Length
+        Sha256 = Get-BytesSha256 -Bytes $suffixBytes
+        Text = $text
     }
 }
 
@@ -586,7 +636,12 @@ else {
         )) {
             throw "roadmap policyのreport_gate_enforce_on_or_afterを読めません"
         }
-        $content = Read-Utf8Text $effectiveReportPath
+        # 本文解析とimmutable suffix hashは、同じ1回のraw byte snapshotを使う。
+        # 別々にreadして途中の置換・追記を片方だけ見落とす形にしない。
+        $legacySuffixInfo = Get-ImmutableSuffixInfo `
+            -Path $effectiveReportPath `
+            -BoundaryHeader $script:legacyBoundaryHeader
+        $content = [string]$legacySuffixInfo.Text
         $lines = [regex]::Split($content, "\r\n|\n|\r")
         $legacyBoundaryMatches = New-Object System.Collections.Generic.List[int]
         for ($boundaryIndex = 0; $boundaryIndex -lt $lines.Count; $boundaryIndex++) {
@@ -598,15 +653,20 @@ else {
             throw "報告記録の旧履歴境界を1行に特定できません (実際: $($legacyBoundaryMatches.Count)行)。削除・複製・改名では施行を無効化できません。"
         }
         $script:legacyBoundaryLineIndex = $legacyBoundaryMatches[0]
-        $legacySuffix = $lines[(($script:legacyBoundaryLineIndex)..($lines.Count - 1))] -join "`n"
-        $actualLegacySuffixSha256 = Get-Utf8Sha256 -Text $legacySuffix
+        # 承認されたimmutable suffixは、改行を含む境界先頭byteからEOFまでの
+        # raw UTF-8 bytesを固定する。text再構成でCRLF/LF差を消してはならない。
+        $actualLegacySuffixSha256 = $legacySuffixInfo.Sha256
         if (-not [string]::Equals($actualLegacySuffixSha256, $script:legacySuffixSha256, [StringComparison]::Ordinal)) {
             throw "報告記録の旧履歴suffix hashが固定値と一致しません。境界以下へbackdate記録を挿入したり、過去記録を改変したりできません: actual=$actualLegacySuffixSha256 expected=$($script:legacySuffixSha256)"
         }
         $records = New-Object System.Collections.Generic.List[object]
         $reportLastWriteTime = (Get-Item -LiteralPath $effectiveReportPath -Force).LastWriteTime
 
-        for ($lineIndex = 0; $lineIndex -lt $lines.Count; $lineIndex++) {
+        # boundaryからEOFまでは、raw UTF-8 bytesの固定hashが改行を含む
+        # 内容全体を保護する。施行前の概算時刻も理由を含む事実としてbyte単位で残し、
+        # 厳格な見出し・claim・時刻順の検査はboundaryより上の新recordだけへ適用する。
+        # boundary自身は新recordのbackdateを防ぐ時刻anchorとして1件だけ解析する。
+        for ($lineIndex = 0; $lineIndex -le $script:legacyBoundaryLineIndex; $lineIndex++) {
             $line = $lines[$lineIndex]
             if (-not $line.StartsWith("## ", [System.StringComparison]::Ordinal)) {
                 continue
@@ -689,6 +749,26 @@ else {
                     $seenNewRecordHashes[$recordHash] = $true
                 }
                 Test-RoadmapClaimRecord -Record $record -RequireCurrentSnapshot ($record.LineIndex -eq $latestNewRecordLineIndex)
+            }
+
+            # 旧履歴suffixの内部は固定hashで保護し、施行後recordだけを分単位の
+            # 厳密降順にする。境界recordをanchorへ含めることで、先頭へ同日内の
+            # 古い時刻や同一時刻を差し込んでも、正しいRoadmap-Claimだけでは通らない。
+            $chronologyRecords = New-Object System.Collections.Generic.List[object]
+            foreach ($record in $newRecords) {
+                $chronologyRecords.Add($record)
+            }
+            $legacyBoundaryRecord = @($records | Where-Object { $_.LineIndex -eq $script:legacyBoundaryLineIndex })
+            if ($legacyBoundaryRecord.Count -ne 1) {
+                throw "報告記録の旧履歴境界を時刻順のanchorとして1件に特定できません (実際: $($legacyBoundaryRecord.Count)件)。"
+            }
+            $chronologyRecords.Add($legacyBoundaryRecord[0])
+            for ($recordIndex = 1; $recordIndex -lt $chronologyRecords.Count; $recordIndex++) {
+                $newerRecord = $chronologyRecords[$recordIndex - 1]
+                $olderRecord = $chronologyRecords[$recordIndex]
+                if ($olderRecord.Timestamp -ge $newerRecord.Timestamp) {
+                    Add-FormatProblem "施行後記録の時刻が厳密降順ではありません: $($newerRecord.LineIndex + 1)行目 $($newerRecord.Timestamp.ToString('yyyy-MM-dd HH:mm')) の後に、$($olderRecord.LineIndex + 1)行目 $($olderRecord.Timestamp.ToString('yyyy-MM-dd HH:mm')) があります。同一時刻も使えません。"
+                }
             }
 
             for ($recordIndex = 1; $recordIndex -lt $records.Count; $recordIndex++) {

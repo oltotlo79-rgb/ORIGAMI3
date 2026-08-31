@@ -174,6 +174,158 @@ function Start-ContinuousWatcher {
     return $process
 }
 
+function Wait-ForWatcherRuntime {
+    param(
+        [Parameter(Mandatory = $true)]$Process,
+        [int]$TimeoutSeconds = 20
+    )
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if ($Process.HasExited) {
+            $stdout = $Process.StandardOutput.ReadToEnd()
+            $stderr = $Process.StandardError.ReadToEnd()
+            throw "継続監視がruntime発行前に終了しました: exit=$($Process.ExitCode)`nstdout:`n$stdout`nstderr:`n$stderr"
+        }
+        if (Test-Path -LiteralPath $runtimePath -PathType Leaf) {
+            try {
+                $runtimeStream = New-Object IO.FileStream(
+                    $runtimePath,
+                    [IO.FileMode]::Open,
+                    [IO.FileAccess]::Read,
+                    ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+                )
+                try {
+                    $runtimeReader = New-Object IO.StreamReader(
+                        $runtimeStream,
+                        [Text.UTF8Encoding]::new($false, $true),
+                        $false
+                    )
+                    try {
+                        $state = $runtimeReader.ReadToEnd() | ConvertFrom-Json
+                    }
+                    finally {
+                        $runtimeReader.Dispose()
+                    }
+                }
+                finally {
+                    $runtimeStream.Dispose()
+                }
+                if ([int]$state.pid -eq $Process.Id -and [int]$state.scanSequence -ge 1) {
+                    return $state
+                }
+            }
+            catch {
+                # atomic replaceの境界で旧stateを読んだ場合は、同じproduction出力を再読する。
+            }
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "継続監視のruntime発行を${TimeoutSeconds}秒以内に確認できません: PID=$($Process.Id)"
+}
+
+function Stop-OwnedWatcherProcess {
+    param([Parameter(Mandatory = $true)]$Process)
+
+    if (-not $Process.HasExited) {
+        # この試験がProcess objectを保持するwatcherだけを止める。production watcherには停止処理を足さない。
+        $Process.Kill()
+        if (-not $Process.WaitForExit(10000)) {
+            throw "試験所有watcherが10秒以内に終了しません: PID=$($Process.Id)"
+        }
+    }
+}
+
+function ConvertTo-TestCanonicalPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    return [IO.Path]::GetFullPath($Path).Replace(
+        [IO.Path]::AltDirectorySeparatorChar,
+        [IO.Path]::DirectorySeparatorChar
+    )
+}
+
+function ConvertTo-TestBase64Utf8 {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
+
+    return [Convert]::ToBase64String([Text.UTF8Encoding]::new($false).GetBytes($Text))
+}
+
+function Get-TestSha256HexFromText {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
+
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [Text.UTF8Encoding]::new($false).GetBytes($Text)
+        return ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+        $sha.Dispose()
+    }
+}
+
+function Get-TestAgentKey {
+    param(
+        [Parameter(Mandatory = $true)][string]$ReportPath,
+        [Parameter(Mandatory = $true)][string[]]$SourcePaths
+    )
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add("version=1")
+    $lines.Add("reportPath={0}" -f (ConvertTo-TestBase64Utf8 -Text (ConvertTo-TestCanonicalPath -Path $ReportPath)))
+    foreach ($sourcePath in $SourcePaths) {
+        $lines.Add("sourcePath={0}" -f (ConvertTo-TestBase64Utf8 -Text (ConvertTo-TestCanonicalPath -Path $sourcePath)))
+    }
+    return Get-TestSha256HexFromText -Text ($lines.ToArray() -join "`n")
+}
+
+function Get-TestProblemDigest {
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Problems)
+
+    $lines = foreach ($problem in $Problems) {
+        "path={0}`tproblem={1}" -f
+            (ConvertTo-TestBase64Utf8 -Text (ConvertTo-TestCanonicalPath -Path ([string]$problem.Path))),
+            (ConvertTo-TestBase64Utf8 -Text ([string]$problem.Problem))
+    }
+    return Get-TestSha256HexFromText -Text (@($lines) -join "`n")
+}
+
+function Get-TestIncidentId {
+    param(
+        [Parameter(Mandatory = $true)][string]$AgentKey,
+        [Parameter(Mandatory = $true)][string]$Status,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$LatestPath,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$LatestWriteUtc,
+        [Parameter(Mandatory = $true)][string]$ProblemDigest
+    )
+
+    return Get-TestSha256HexFromText -Text (@(
+            "version=1"
+            "agentKey=$AgentKey"
+            "status=$Status"
+            "latestPath=$(ConvertTo-TestBase64Utf8 -Text $LatestPath)"
+            "latestWriteUtc=$LatestWriteUtc"
+            "problemDigest=$ProblemDigest"
+        ) -join "`n")
+}
+
+function Get-TestAgentStatesCanonicalText {
+    param([Parameter(Mandatory = $true)][object[]]$AgentStates)
+
+    $lines = foreach ($state in $AgentStates) {
+        @(
+            "agentKey=$([string]$state.agentKey)"
+            "name=$(ConvertTo-TestBase64Utf8 -Text ([string]$state.name))"
+            "status=$([string]$state.status)"
+            "latestPath=$(ConvertTo-TestBase64Utf8 -Text ([string]$state.latestPath))"
+            "latestWriteUtc=$([string]$state.latestWriteUtc)"
+            "problemDigest=$([string]$state.problemDigest)"
+            "incidentId=$([string]$state.incidentId)"
+        ) -join "`t"
+    }
+    return @($lines) -join "`n"
+}
+
 function Stop-OwnedWatcherProcesses {
     foreach ($process in $script:OwnedWatcherProcesses) {
         try {
@@ -219,20 +371,27 @@ if ($null -eq $powerShellCommand) {
 try {
     $now = [DateTime]::UtcNow
     $fresh = $now.AddMinutes(-5)
-    $old = $now.AddMinutes(-55)
+    $old = $now.AddMinutes(-61)
 
     $freshReport = Join-Path $repositoryRoot "scratchpad\fresh-report.md"
     $freshReportSource = Join-Path $repositoryRoot "src\fresh-report\value.rs"
     $freshSourceReport = Join-Path $repositoryRoot "scratchpad\fresh-source.md"
     $freshSource = Join-Path $repositoryRoot "src\fresh-source\value.rs"
+    $freshSourceTieFirst = Join-Path $repositoryRoot "src\fresh-source\a.rs"
     $staleReport = Join-Path $repositoryRoot "scratchpad\stale.md"
     $staleSource = Join-Path $repositoryRoot "src\stale\value.rs"
+    $futureReport = Join-Path $repositoryRoot "scratchpad\future.md"
+    $futureSource = Join-Path $repositoryRoot "src\future\value.rs"
+    $futureWrite = $now.AddMinutes(10)
     New-TestFile $freshReport $fresh "fresh report"
     New-TestFile $freshReportSource $old "old source"
     New-TestFile $freshSourceReport $old "old report"
     New-TestFile $freshSource $fresh "fresh source"
+    New-TestFile $freshSourceTieFirst $fresh "same-time source selected by canonical path"
     New-TestFile $staleReport $old "old report"
     New-TestFile $staleSource $old "old source"
+    New-TestFile $futureReport $futureWrite "future report"
+    New-TestFile $futureSource $fresh "ordinary source"
 
     $definition = [ordered]@{
         agents = @(
@@ -261,7 +420,8 @@ try {
 
     $watchedPaths = @(
         $freshReport, $freshReportSource, $freshSourceReport,
-        $freshSource, $staleReport, $staleSource, $definitionPath
+        $freshSource, $freshSourceTieFirst, $staleReport, $staleSource,
+        $futureReport, $futureSource, $definitionPath
     )
     $before = @{}
     foreach ($path in $watchedPaths) {
@@ -275,7 +435,7 @@ try {
     Start-Sleep -Milliseconds 200
     Assert-True (-not $helperProcess.HasExited) "補助processのfixtureが監視中に実行されていること"
 
-    Write-Output "[1/4] 更新があれば稼働、40分更新が無ければ停滞と判定する"
+    Write-Output "[1/8] 更新があれば稼働、61分更新が無ければ停滞と判定する"
     $result = Invoke-Watcher $powerShellCommand.Source $definitionPath $stdoutPath $stderrPath
     if ($result.ExitCode -ne 0) {
         Write-Output $result.Output
@@ -284,12 +444,16 @@ try {
     Assert-Contains $result.Output "間隔=10分 / 停滞閾値=40分" "既定の間隔と閾値を表示すること"
     Assert-Contains $result.Output "[稼働] fresh-report" "報告書が新しければ稼働と判定すること"
     Assert-Contains $result.Output "[稼働] fresh-source" "許可ソースが新しければ稼働と判定すること"
+    Assert-Contains $result.Output $freshSourceTieFirst "directory内が同時刻ならcanonical path昇順のfileを選ぶこと"
+    Assert-True (-not $result.Output.Contains($freshSource)) "同時刻tieで列挙順依存の後方fileを選ばないこと"
     Assert-Contains $result.Output "[停滞] stale-agent" "全成果物が40分より古ければ停滞と判定すること"
+    Assert-Contains $result.Output "AGENT_WATCH_STATUS schema=2 total=3 active=2 stalled=1 unmonitorable=0 states_sha256=" "-Onceも対象件数とstatus件数を機械可読で表示すること"
+    Assert-Contains $result.Output "AGENT_WATCH_INCIDENT schema=2 status=stalled incident=" "-Onceも停滞incidentを機械可読で表示すること"
     Assert-True (-not (Test-Path -LiteralPath $runtimePath)) "-Onceはruntime stateを作らないこと"
     Assert-True (-not (Test-Path -LiteralPath $latestOutputPath)) "-Onceは固定latest outputを作らないこと"
     Assert-True (-not (Test-Path -LiteralPath $lockPath)) "-Onceはsingleton lockを作らないこと"
 
-    Write-Output "[2/4] 既定動作は表示だけで、ファイルもprocessも変更しない"
+    Write-Output "[2/8] 既定動作は表示だけで、ファイルもprocessも変更しない"
     Assert-Contains $result.Output "動作=表示のみ（プロセス停止=0 / ファイル変更=0）" "非破壊の既定動作を表示すること"
     Assert-Contains $result.Output ("PID={0}" -f $helperProcess.Id) "テスト実行ファイルのPIDを補助表示すること"
     Assert-Contains $result.Output "CommandLine=" "補助processのコマンド行を表示すること"
@@ -327,7 +491,7 @@ Get-ProcessKind -Process $probeProcess
         Assert-Equal $after.Hash $before[$path].Hash "監視対象の内容を変えないこと: $path"
     }
 
-    Write-Output "[3/4] 存在しない監視パスを日本語で監視不能と知らせる"
+    Write-Output "[3/8] 存在しない監視パスを日本語で監視不能と知らせる"
     $missingDefinition = [ordered]@{
         agents = @(
             [ordered]@{
@@ -346,37 +510,30 @@ Get-ProcessKind -Process $probeProcess
     Assert-Equal $result.ExitCode 0 "不存在パスも表示だけで知らせること"
     Assert-Contains $result.Output "[監視不能] missing-agent" "監視不能の担当名を表示すること"
     Assert-Contains $result.Output "存在しません" "不存在理由を日本語で表示すること"
+    Assert-Contains $result.Output "AGENT_WATCH_STATUS schema=2 total=1 active=0 stalled=0 unmonitorable=1 states_sha256=" "監視不能をsummary件数へ反映すること"
+    Assert-Contains $result.Output "AGENT_WATCH_INCIDENT schema=2 status=unmonitorable incident=" "監視不能incidentを表示すること"
 
-    Write-Output "[4/4] 継続監視は固定UTF-8 runtimeを発行し、二重起動を拒否する"
+    Write-Output "[4/8] production継続監視が61分無変化をschema 2の停滞incidentとして発行する"
     [IO.File]::WriteAllText(
         $definitionPath,
         (([ordered]@{
             agents = @(
                 [ordered]@{
-                    name = "continuous-agent"
-                    reportPath = "scratchpad/fresh-report.md"
-                    sourcePaths = @("src/fresh-report")
+                    name = "stale-agent"
+                    reportPath = "scratchpad/stale.md"
+                    sourcePaths = @("src/stale", "src/fresh-report")
                 }
             )
         }) | ConvertTo-Json -Depth 8),
         [Text.UTF8Encoding]::new($false)
     )
+    $continuousInputs = @($staleReport, $staleSource, $freshReportSource, $definitionPath)
+    $continuousBefore = @{}
+    foreach ($path in $continuousInputs) {
+        $continuousBefore[$path] = Get-FileFingerprint $path
+    }
     $continuous = Start-ContinuousWatcher -PowerShellPath $powerShellCommand.Source -ConfigPath $definitionPath
-    $deadline = (Get-Date).AddSeconds(20)
-    while ((Get-Date) -lt $deadline -and
-        (-not (Test-Path -LiteralPath $runtimePath -PathType Leaf) -or
-         -not (Test-Path -LiteralPath $latestOutputPath -PathType Leaf))) {
-        if ($continuous.HasExited) {
-            break
-        }
-        Start-Sleep -Milliseconds 100
-    }
-    if ($continuous.HasExited) {
-        $continuousStdout = $continuous.StandardOutput.ReadToEnd()
-        $continuousStderr = $continuous.StandardError.ReadToEnd()
-        Write-Output ("継続監視の早期終了: exit={0}`nstdout:`n{1}`nstderr:`n{2}" -f
-            $continuous.ExitCode, $continuousStdout, $continuousStderr)
-    }
+    $runtimeState = Wait-ForWatcherRuntime -Process $continuous
     Assert-True (-not $continuous.HasExited) "継続監視がruntime発行後も稼働していること"
     Assert-True (Test-Path -LiteralPath $runtimePath -PathType Leaf) "固定runtime stateを発行すること"
     Assert-True (Test-Path -LiteralPath $latestOutputPath -PathType Leaf) "固定latest outputを発行すること"
@@ -386,14 +543,55 @@ Get-ProcessKind -Process $probeProcess
     $latestText = $strictUtf8.GetString([IO.File]::ReadAllBytes($latestOutputPath))
     Assert-Contains $latestText "[停滞監視]" "latest outputがUTF-8で読めること"
     Assert-Contains $latestText "[走査完了]" "latest outputが完了scanだけを表すこと"
-    $runtimeState = [IO.File]::ReadAllText($runtimePath, [Text.Encoding]::UTF8) | ConvertFrom-Json
+    Assert-Equal ([int]$runtimeState.schemaVersion) 2 "runtime schema 2を発行すること"
     Assert-Equal ([int]$runtimeState.pid) $continuous.Id "runtime stateがwatcher PIDを記録すること"
     Assert-Equal ([string]$runtimeState.mode) "continuous" "runtime stateが継続modeを記録すること"
     Assert-Equal ([int]$runtimeState.intervalMinutes) 10 "runtime stateが10分間隔を記録すること"
     Assert-Equal ([int]$runtimeState.staleAfterMinutes) 40 "runtime stateが40分閾値を記録すること"
     Assert-Equal ([string]$runtimeState.outputPath) ([IO.Path]::GetFullPath($latestOutputPath)) "runtime stateが固定output実パスを記録すること"
-    Assert-True (-not [string]::IsNullOrWhiteSpace([string]$runtimeState.outputSha256)) "runtime stateがoutput hashを記録すること"
+    Assert-Equal ([string]$runtimeState.outputSha256) ((Get-FileFingerprint $latestOutputPath).Hash.ToLowerInvariant()) "runtime stateがlatest outputの実hashを記録すること"
     Assert-True (-not [string]::IsNullOrWhiteSpace([string]$runtimeState.definitionSha256)) "runtime stateがdefinition hashを記録すること"
+    Assert-Equal ([int]$runtimeState.agentCount) 1 "runtimeが監視対象総数を記録すること"
+    Assert-Equal ([int]$runtimeState.activeCount) 0 "61分古い入力をactiveに数えないこと"
+    Assert-Equal ([int]$runtimeState.stalledCount) 1 "61分古い入力をstalledに数えること"
+    Assert-Equal ([int]$runtimeState.unmonitorableCount) 0 "読める古い入力をunmonitorableに数えないこと"
+    $stalledStates = @($runtimeState.agentStates)
+    Assert-Equal $stalledStates.Count 1 "全担当のstructured stateを発行すること"
+    $stalledState = $stalledStates[0]
+    Assert-Equal ([string]$stalledState.status) "stalled" "61分古い担当のmachine statusがstalledであること"
+    $orderedSourcePaths = @(
+        (Join-Path $repositoryRoot "src\stale"),
+        (Join-Path $repositoryRoot "src\fresh-report")
+    )
+    $expectedAgentKey = Get-TestAgentKey -ReportPath $staleReport -SourcePaths $orderedSourcePaths
+    Assert-Equal ([string]$stalledState.agentKey) $expectedAgentKey "agentKeyをreportPathと定義順sourcePathsから再計算できること"
+    $reversedAgentKey = Get-TestAgentKey -ReportPath $staleReport -SourcePaths @(
+        $orderedSourcePaths[1],
+        $orderedSourcePaths[0]
+    )
+    Assert-True ($reversedAgentKey -cne $expectedAgentKey) "sourcePathsの定義順をagentKeyへ含めること"
+    Assert-Equal ([string]$stalledState.problemDigest) (Get-TestProblemDigest -Problems @()) "問題0件も固定digestで表すこと"
+    Assert-Equal ([string]$stalledState.latestPath) (ConvertTo-TestCanonicalPath -Path $staleReport) "同時刻ではcanonical path昇順でlatestを決定すること"
+    $expectedIncident = Get-TestIncidentId `
+        -AgentKey $expectedAgentKey `
+        -Status "stalled" `
+        -LatestPath ([string]$stalledState.latestPath) `
+        -LatestWriteUtc ([string]$stalledState.latestWriteUtc) `
+        -ProblemDigest ([string]$stalledState.problemDigest)
+    Assert-Equal ([string]$stalledState.incidentId) $expectedIncident "停滞incidentをscan時刻なしのcanonical入力から再計算できること"
+    Assert-True ([regex]::IsMatch([string]$stalledState.incidentId, '^[0-9a-f]{64}$')) "停滞incidentがlowercase SHA-256であること"
+    $stalledCanonical = Get-TestAgentStatesCanonicalText -AgentStates $stalledStates
+    $expectedStatesSha = Get-TestSha256HexFromText -Text $stalledCanonical
+    Assert-Equal ([string]$runtimeState.agentStatesSha256) $expectedStatesSha "agentStates hashを固定field順・UTF-8・LFから再計算できること"
+    $expectedSummary = "AGENT_WATCH_STATUS schema=2 total=1 active=0 stalled=1 unmonitorable=0 states_sha256=$expectedStatesSha"
+    Assert-Contains $latestText $expectedSummary "latest outputのsummaryをruntime件数とhashに一致させること"
+    Assert-Contains $latestText ("AGENT_WATCH_INCIDENT schema=2 status=stalled incident={0} agent_key={1}" -f $expectedIncident, $expectedAgentKey) "latest outputへ停滞incident IDを出すこと"
+    foreach ($path in $continuousInputs) {
+        $after = Get-FileFingerprint $path
+        Assert-Equal $after.Length $continuousBefore[$path].Length "継続監視が入力長を変えないこと: $path"
+        Assert-Equal $after.LastWriteTicks $continuousBefore[$path].LastWriteTicks "継続監視が入力時刻を変えないこと: $path"
+        Assert-Equal $after.Hash $continuousBefore[$path].Hash "継続監視が入力内容を変えないこと: $path"
+    }
 
     $lockHeld = $false
     try {
@@ -412,8 +610,148 @@ Get-ProcessKind -Process $probeProcess
     if ($duplicateExited) {
         Assert-True ($duplicate.ExitCode -ne 0) "二重起動が非0で拒否されること"
     }
+    Stop-OwnedWatcherProcess -Process $continuous
 
-    Write-Output ("watch-agents self-test passed: 4 cases, {0} assertions" -f $script:AssertionCount)
+    Write-Output "[5/8] 同じ停滞episodeはprocess・scanが変わっても同じincident IDになる"
+    $repeat = Start-ContinuousWatcher -PowerShellPath $powerShellCommand.Source -ConfigPath $definitionPath
+    $repeatRuntime = Wait-ForWatcherRuntime -Process $repeat
+    $repeatState = @($repeatRuntime.agentStates)[0]
+    Assert-True ([string]$repeatRuntime.instanceId -cne [string]$runtimeState.instanceId) "再起動したwatcherのinstanceIdが変わること"
+    Assert-Equal ([string]$repeatState.incidentId) $expectedIncident "同じ停滞episodeでincident IDを固定すること"
+    Assert-Equal ([string]$repeatRuntime.agentStatesSha256) $expectedStatesSha "scan時刻とsequenceをagentStates hashへ含めないこと"
+    Stop-OwnedWatcherProcess -Process $repeat
+
+    Write-Output "[6/8] 成果更新後はactiveとなり、旧停滞incidentをruntimeとlatest outputから失効させる"
+    $progressTime = [DateTime]::UtcNow
+    New-TestFile $staleReport $progressTime "progress after stalled episode"
+    $active = Start-ContinuousWatcher -PowerShellPath $powerShellCommand.Source -ConfigPath $definitionPath
+    $activeRuntime = Wait-ForWatcherRuntime -Process $active
+    $activeState = @($activeRuntime.agentStates)[0]
+    Assert-Equal ([int]$activeRuntime.activeCount) 1 "成果更新後をactiveに数えること"
+    Assert-Equal ([int]$activeRuntime.stalledCount) 0 "成果更新後をstalledに残さないこと"
+    Assert-Equal ([int]$activeRuntime.unmonitorableCount) 0 "成果更新後をunmonitorableにしないこと"
+    Assert-Equal ([string]$activeState.status) "active" "成果更新後のstatusがactiveであること"
+    Assert-Equal ([string]$activeState.agentKey) $expectedAgentKey "成果更新で担当identityを変えないこと"
+    Assert-Equal ([string]$activeState.incidentId) "" "activeにはincident IDを持たせないこと"
+    Assert-True ([string]$activeRuntime.agentStatesSha256 -cne $expectedStatesSha) "成果更新をagentStates hashへ反映すること"
+    $activeLatestText = $strictUtf8.GetString([IO.File]::ReadAllBytes($latestOutputPath))
+    Assert-Contains $activeLatestText "AGENT_WATCH_STATUS schema=2 total=1 active=1 stalled=0 unmonitorable=0 states_sha256=" "成果更新後のsummaryがactiveを示すこと"
+    Assert-True (-not $activeLatestText.Contains($expectedIncident)) "成果更新後のlatest outputに旧incidentを残さないこと"
+    Stop-OwnedWatcherProcess -Process $active
+
+    Write-Output "[7/8] 監視不能にも安定incidentを付け、件数・状態hashの改変を検出可能にする"
+    [IO.File]::WriteAllText(
+        $definitionPath,
+        (([ordered]@{
+            agents = @(
+                [ordered]@{
+                    name = "missing-agent"
+                    reportPath = "scratchpad/stale.md"
+                    sourcePaths = @("src/does-not-exist")
+                }
+            )
+        }) | ConvertTo-Json -Depth 8),
+        [Text.UTF8Encoding]::new($false)
+    )
+    $unmonitorable = Start-ContinuousWatcher -PowerShellPath $powerShellCommand.Source -ConfigPath $definitionPath
+    $unmonitorableRuntime = Wait-ForWatcherRuntime -Process $unmonitorable
+    $unmonitorableStates = @($unmonitorableRuntime.agentStates)
+    $unmonitorableState = $unmonitorableStates[0]
+    Assert-Equal ([int]$unmonitorableRuntime.activeCount) 0 "監視不能をactiveに数えないこと"
+    Assert-Equal ([int]$unmonitorableRuntime.stalledCount) 0 "監視不能をstalledに数えないこと"
+    Assert-Equal ([int]$unmonitorableRuntime.unmonitorableCount) 1 "監視不能件数を1と記録すること"
+    Assert-Equal ([string]$unmonitorableState.status) "unmonitorable" "不存在pathのmachine statusがunmonitorableであること"
+    $missingPath = Join-Path $repositoryRoot "src\does-not-exist"
+    $expectedMissingDigest = Get-TestProblemDigest -Problems @(
+        [pscustomobject]@{ Path = $missingPath; Problem = "存在しません" }
+    )
+    Assert-Equal ([string]$unmonitorableState.problemDigest) $expectedMissingDigest "監視不能理由のpathと本文をdigestへ含めること"
+    $expectedUnmonitorableIncident = Get-TestIncidentId `
+        -AgentKey ([string]$unmonitorableState.agentKey) `
+        -Status "unmonitorable" `
+        -LatestPath ([string]$unmonitorableState.latestPath) `
+        -LatestWriteUtc ([string]$unmonitorableState.latestWriteUtc) `
+        -ProblemDigest $expectedMissingDigest
+    Assert-Equal ([string]$unmonitorableState.incidentId) $expectedUnmonitorableIncident "監視不能incidentをcanonical入力から再計算できること"
+    $unmonitorableCanonical = Get-TestAgentStatesCanonicalText -AgentStates $unmonitorableStates
+    $unmonitorableStatesSha = Get-TestSha256HexFromText -Text $unmonitorableCanonical
+    Assert-Equal ([string]$unmonitorableRuntime.agentStatesSha256) $unmonitorableStatesSha "監視不能stateも全体hashへ含めること"
+    $tamperedCanonical = $unmonitorableCanonical.Replace("status=unmonitorable", "status=active")
+    Assert-True ((Get-TestSha256HexFromText -Text $tamperedCanonical) -cne [string]$unmonitorableRuntime.agentStatesSha256) "statusを書き換えるとstate hashが一致しないこと"
+    $unmonitorableLatestText = $strictUtf8.GetString([IO.File]::ReadAllBytes($latestOutputPath))
+    Assert-Contains $unmonitorableLatestText ("AGENT_WATCH_STATUS schema=2 total=1 active=0 stalled=0 unmonitorable=1 states_sha256={0}" -f $unmonitorableStatesSha) "監視不能summaryをruntimeと一致させること"
+    Assert-Contains $unmonitorableLatestText ("AGENT_WATCH_INCIDENT schema=2 status=unmonitorable incident={0}" -f $expectedUnmonitorableIncident) "監視不能incident IDをlatest outputへ出すこと"
+    Stop-OwnedWatcherProcess -Process $unmonitorable
+
+    Write-Output "[8/8] 判定時刻より2分を超えて未来のmtimeはactiveにせず、安定した監視不能incidentにする"
+    [IO.File]::WriteAllText(
+        $definitionPath,
+        (([ordered]@{
+            agents = @(
+                [ordered]@{
+                    name = "future-agent"
+                    reportPath = "scratchpad/future.md"
+                    sourcePaths = @("src/future")
+                }
+            )
+        }) | ConvertTo-Json -Depth 8),
+        [Text.UTF8Encoding]::new($false)
+    )
+    $futureInputs = @($futureReport, $futureSource, $definitionPath)
+    $futureBefore = @{}
+    foreach ($path in $futureInputs) {
+        $futureBefore[$path] = Get-FileFingerprint $path
+    }
+    $futureWatcher = Start-ContinuousWatcher -PowerShellPath $powerShellCommand.Source -ConfigPath $definitionPath
+    $futureRuntime = Wait-ForWatcherRuntime -Process $futureWatcher
+    $futureStates = @($futureRuntime.agentStates)
+    $futureState = $futureStates[0]
+    Assert-Equal ([int]$futureRuntime.activeCount) 0 "未来mtimeをactiveに数えないこと"
+    Assert-Equal ([int]$futureRuntime.stalledCount) 0 "未来mtimeをstalledに数えないこと"
+    Assert-Equal ([int]$futureRuntime.unmonitorableCount) 1 "未来mtimeをunmonitorableに数えること"
+    Assert-Equal ([string]$futureState.status) "unmonitorable" "未来mtimeのmachine statusをunmonitorableにすること"
+    Assert-Equal ([string]$futureState.latestPath) (ConvertTo-TestCanonicalPath -Path $futureReport) "未来mtimeの対象fileをlatestPathへ記録すること"
+    $recordedFutureWriteUtc = (Get-Item -LiteralPath $futureReport).LastWriteTimeUtc.ToString(
+        "o",
+        [Globalization.CultureInfo]::InvariantCulture
+    )
+    $futureProblemText = "更新時刻が許容範囲の2分を超えて未来です: lastWriteUtc=$recordedFutureWriteUtc"
+    $expectedFutureProblemDigest = Get-TestProblemDigest -Problems @(
+        [pscustomobject]@{ Path = $futureReport; Problem = $futureProblemText }
+    )
+    Assert-Equal ([string]$futureState.problemDigest) $expectedFutureProblemDigest "problemへ判定時刻を入れず、対象mtimeだけを固定すること"
+    $expectedFutureAgentKey = Get-TestAgentKey `
+        -ReportPath $futureReport `
+        -SourcePaths @((Join-Path $repositoryRoot "src\future"))
+    $expectedFutureIncident = Get-TestIncidentId `
+        -AgentKey $expectedFutureAgentKey `
+        -Status "unmonitorable" `
+        -LatestPath ([string]$futureState.latestPath) `
+        -LatestWriteUtc ([string]$futureState.latestWriteUtc) `
+        -ProblemDigest $expectedFutureProblemDigest
+    Assert-Equal ([string]$futureState.incidentId) $expectedFutureIncident "未来mtimeのincidentをcanonical入力から再計算できること"
+    $futureLatestText = $strictUtf8.GetString([IO.File]::ReadAllBytes($latestOutputPath))
+    Assert-Contains $futureLatestText "[監視不能] future-agent" "未来mtimeを人向け表示でも監視不能にすること"
+    Assert-True (-not $futureLatestText.Contains("[稼働] future-agent")) "未来mtimeを人向け表示で稼働にしないこと"
+    Assert-Contains $futureLatestText $futureProblemText "未来mtime問題を現在時刻なしの固定文で表示すること"
+    Assert-Contains $futureLatestText ("AGENT_WATCH_INCIDENT schema=2 status=unmonitorable incident={0}" -f $expectedFutureIncident) "未来mtimeのincident IDをlatest outputへ出すこと"
+    Stop-OwnedWatcherProcess -Process $futureWatcher
+
+    $futureRepeat = Start-ContinuousWatcher -PowerShellPath $powerShellCommand.Source -ConfigPath $definitionPath
+    $futureRepeatRuntime = Wait-ForWatcherRuntime -Process $futureRepeat
+    $futureRepeatState = @($futureRepeatRuntime.agentStates)[0]
+    Assert-True ([string]$futureRepeatRuntime.instanceId -cne [string]$futureRuntime.instanceId) "未来mtime再検査が別watcher instanceであること"
+    Assert-Equal ([string]$futureRepeatState.problemDigest) $expectedFutureProblemDigest "scan時刻が変わっても未来mtime problemDigestを固定すること"
+    Assert-Equal ([string]$futureRepeatState.incidentId) $expectedFutureIncident "scan時刻が変わっても未来mtime incidentを固定すること"
+    Stop-OwnedWatcherProcess -Process $futureRepeat
+    foreach ($path in $futureInputs) {
+        $after = Get-FileFingerprint $path
+        Assert-Equal $after.Length $futureBefore[$path].Length "未来mtime検査が入力長を変えないこと: $path"
+        Assert-Equal $after.LastWriteTicks $futureBefore[$path].LastWriteTicks "未来mtime検査が入力時刻を変えないこと: $path"
+        Assert-Equal $after.Hash $futureBefore[$path].Hash "未来mtime検査が入力内容を変えないこと: $path"
+    }
+
+    Write-Output ("watch-agents self-test passed: 8 cases, {0} assertions" -f $script:AssertionCount)
 }
 finally {
     Stop-OwnedWatcherProcesses

@@ -47,6 +47,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
 $script:Utf8NoBom = New-Object Text.UTF8Encoding($false)
 $script:CapturedWatchLines = $null
+$script:FutureWriteToleranceMinutes = 2
 
 function Write-WatchLine {
     param([Parameter(Mandatory = $true)][string]$Text)
@@ -58,7 +59,7 @@ function Write-WatchLine {
 }
 
 function Get-Sha256HexFromBytes {
-    param([Parameter(Mandatory = $true)][byte[]]$Bytes)
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][byte[]]$Bytes)
 
     $sha = [Security.Cryptography.SHA256]::Create()
     try {
@@ -67,6 +68,101 @@ function Get-Sha256HexFromBytes {
     finally {
         $sha.Dispose()
     }
+}
+
+function Get-Sha256HexFromText {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
+
+    return Get-Sha256HexFromBytes -Bytes $script:Utf8NoBom.GetBytes($Text)
+}
+
+function ConvertTo-CanonicalWatchPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    return $fullPath.Replace([IO.Path]::AltDirectorySeparatorChar, [IO.Path]::DirectorySeparatorChar)
+}
+
+function ConvertTo-Base64Utf8 {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
+
+    return [Convert]::ToBase64String($script:Utf8NoBom.GetBytes($Text))
+}
+
+# schema 2のhash契約はscripts/hooks/check-agent-watch.ps1も独立再計算する。
+# canonical textはUTF-8（BOMなし）・LF区切り・末尾LFなしで、可変文字列はBase64にする。
+function Get-AgentKey {
+    param(
+        [Parameter(Mandatory = $true)]$Agent,
+        [Parameter(Mandatory = $true)][string]$BasePath
+    )
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add("version=1")
+    $reportPath = Resolve-WatchPath -Path ([string]$Agent.reportPath) -BasePath $BasePath
+    $lines.Add("reportPath={0}" -f (ConvertTo-Base64Utf8 -Text (ConvertTo-CanonicalWatchPath -Path $reportPath)))
+    foreach ($sourcePath in @($Agent.sourcePaths)) {
+        $resolvedSourcePath = Resolve-WatchPath -Path ([string]$sourcePath) -BasePath $BasePath
+        $lines.Add("sourcePath={0}" -f (ConvertTo-Base64Utf8 -Text (ConvertTo-CanonicalWatchPath -Path $resolvedSourcePath)))
+    }
+    return Get-Sha256HexFromText -Text ($lines.ToArray() -join "`n")
+}
+
+function Get-ProblemDigest {
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Problems)
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    foreach ($problem in $Problems) {
+        $problemPath = ConvertTo-CanonicalWatchPath -Path ([string]$problem.FullPath)
+        $lines.Add(("path={0}`tproblem={1}" -f
+                (ConvertTo-Base64Utf8 -Text $problemPath),
+                (ConvertTo-Base64Utf8 -Text ([string]$problem.Problem))))
+    }
+    return Get-Sha256HexFromText -Text ($lines.ToArray() -join "`n")
+}
+
+function Get-IncidentId {
+    param(
+        [Parameter(Mandatory = $true)][string]$AgentKey,
+        [Parameter(Mandatory = $true)][ValidateSet("stalled", "unmonitorable")][string]$Status,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$LatestPath,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$LatestWriteUtc,
+        [Parameter(Mandatory = $true)][string]$ProblemDigest
+    )
+
+    $canonicalText = @(
+        "version=1"
+        "agentKey=$AgentKey"
+        "status=$Status"
+        "latestPath=$(ConvertTo-Base64Utf8 -Text $LatestPath)"
+        "latestWriteUtc=$LatestWriteUtc"
+        "problemDigest=$ProblemDigest"
+    ) -join "`n"
+    return Get-Sha256HexFromText -Text $canonicalText
+}
+
+function Get-AgentStatesCanonicalText {
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$AgentStates)
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    foreach ($agentState in $AgentStates) {
+        $lines.Add((@(
+                    "agentKey=$([string]$agentState.agentKey)"
+                    "name=$(ConvertTo-Base64Utf8 -Text ([string]$agentState.name))"
+                    "status=$([string]$agentState.status)"
+                    "latestPath=$(ConvertTo-Base64Utf8 -Text ([string]$agentState.latestPath))"
+                    "latestWriteUtc=$([string]$agentState.latestWriteUtc)"
+                    "problemDigest=$([string]$agentState.problemDigest)"
+                    "incidentId=$([string]$agentState.incidentId)"
+                ) -join "`t"))
+    }
+    return $lines.ToArray() -join "`n"
+}
+
+function Get-AgentStatesSha256 {
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$AgentStates)
+
+    return Get-Sha256HexFromText -Text (Get-AgentStatesCanonicalText -AgentStates $AgentStates)
 }
 
 function Get-FileSha256Hex {
@@ -189,7 +285,10 @@ function Get-WatchedPathState {
 
     try {
         $latest = Get-ChildItem -LiteralPath $fullPath -File -Recurse -Force -ErrorAction Stop |
-            Sort-Object LastWriteTimeUtc -Descending |
+            Sort-Object -Property @(
+                @{ Expression = { $_.LastWriteTimeUtc }; Descending = $true },
+                @{ Expression = { ConvertTo-CanonicalWatchPath -Path ([string]$_.FullName) }; Descending = $false }
+            ) |
             Select-Object -First 1
     }
     catch {
@@ -488,10 +587,26 @@ function Publish-WatchRuntime {
         [Parameter(Mandatory = $true)][string]$DefinitionPath,
         [Parameter(Mandatory = $true)][string]$DefinitionSha256,
         [Parameter(Mandatory = $true)][int]$AgentCount,
+        [Parameter(Mandatory = $true)][object[]]$AgentStates,
+        [Parameter(Mandatory = $true)][string]$AgentStatesSha256,
+        [Parameter(Mandatory = $true)][int]$ActiveCount,
+        [Parameter(Mandatory = $true)][int]$StalledCount,
+        [Parameter(Mandatory = $true)][int]$UnmonitorableCount,
         [Parameter(Mandatory = $true)][DateTime]$ScanCompletedUtc,
         [Parameter(Mandatory = $true)][int]$Interval,
         [Parameter(Mandatory = $true)][int]$StaleAfter
     )
+
+    if ($AgentStates.Count -ne $AgentCount) {
+        throw "agentStates件数が定義件数と一致しません: states=$($AgentStates.Count) agents=$AgentCount"
+    }
+    if (($ActiveCount + $StalledCount + $UnmonitorableCount) -ne $AgentCount) {
+        throw "status件数の合計が定義件数と一致しません"
+    }
+    $computedStatesSha256 = Get-AgentStatesSha256 -AgentStates $AgentStates
+    if ($computedStatesSha256 -cne $AgentStatesSha256) {
+        throw "agentStates hashが発行直前の状態と一致しません"
+    }
 
     $allLines = @($HeaderLines) + @($CycleLines)
     $text = ($allLines -join [Environment]::NewLine) + [Environment]::NewLine
@@ -501,7 +616,7 @@ function Publish-WatchRuntime {
 
     $Runtime.ScanSequence += 1
     $state = [ordered]@{
-        schemaVersion = 1
+        schemaVersion = 2
         instanceId = $Runtime.InstanceId
         pid = $PID
         processStartUtc = $Runtime.ProcessStartUtc.ToString("o")
@@ -521,11 +636,16 @@ function Publish-WatchRuntime {
         intervalMinutes = $Interval
         staleAfterMinutes = $StaleAfter
         agentCount = $AgentCount
+        activeCount = $ActiveCount
+        stalledCount = $StalledCount
+        unmonitorableCount = $UnmonitorableCount
+        agentStatesSha256 = $AgentStatesSha256
+        agentStates = @($AgentStates)
         scanSequence = $Runtime.ScanSequence
         scanCompletedUtc = $ScanCompletedUtc.ToString("o")
         stateWrittenUtc = [DateTime]::UtcNow.ToString("o")
     }
-    Write-AtomicUtf8File -Path $Runtime.RuntimePath -Content ($state | ConvertTo-Json -Depth 6)
+    Write-AtomicUtf8File -Path $Runtime.RuntimePath -Content ($state | ConvertTo-Json -Depth 8)
 }
 
 $RepositoryRoot = [IO.Path]::GetFullPath($RepositoryRoot)
@@ -571,10 +691,13 @@ try {
         try {
             $nowUtc = [DateTime]::UtcNow
             $staleBoundary = $nowUtc.AddMinutes(-$StaleAfterMinutes)
+            $futureBoundary = $nowUtc.AddMinutes($script:FutureWriteToleranceMinutes)
             Write-WatchLine ("[判定時刻] {0:yyyy-MM-dd HH:mm:ss}Z" -f $nowUtc)
 
+            $agentStates = New-Object System.Collections.Generic.List[object]
             foreach ($agent in $agents) {
                 $agentName = [string]$agent.name
+                $agentKey = Get-AgentKey -Agent $agent -BasePath $RepositoryRoot
                 $reportState = Get-WatchedPathState -ConfiguredPath ([string]$agent.reportPath) -BasePath $RepositoryRoot -MustBeFile $true
                 $sourceStates = @(
                     foreach ($sourcePath in @($agent.sourcePaths)) {
@@ -582,24 +705,91 @@ try {
                     }
                 )
                 $allStates = @($reportState) + $sourceStates
-                $problems = @($allStates | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.Problem) })
+                $existingProblems = @($allStates | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.Problem) })
+                $futureProblems = @(
+                    foreach ($watchedState in $allStates) {
+                        if ($null -eq $watchedState.LastWriteTimeUtc -or
+                            ([DateTime]$watchedState.LastWriteTimeUtc) -le $futureBoundary) {
+                            continue
+                        }
+                        $futurePath = if ([string]::IsNullOrWhiteSpace([string]$watchedState.LatestPath)) {
+                            [string]$watchedState.FullPath
+                        }
+                        else {
+                            [string]$watchedState.LatestPath
+                        }
+                        $futureWriteUtc = ([DateTime]$watchedState.LastWriteTimeUtc).ToUniversalTime().ToString(
+                            "o",
+                            [Globalization.CultureInfo]::InvariantCulture
+                        )
+                        [pscustomobject]@{
+                            FullPath = $futurePath
+                            Problem = ("更新時刻が許容範囲の{0}分を超えて未来です: lastWriteUtc={1}" -f
+                                $script:FutureWriteToleranceMinutes, $futureWriteUtc)
+                        }
+                    }
+                )
+                # 順序もproblemDigestの契約。通常問題をreport→source順、その後に未来mtimeを同じ順で並べる。
+                $problems = @($existingProblems) + @($futureProblems)
                 $validStates = @($allStates | Where-Object { $null -ne $_.LastWriteTimeUtc })
+                $latestState = $null
+                if ($validStates.Count -gt 0) {
+                    $latestState = $validStates |
+                        Sort-Object -Property @(
+                            @{ Expression = { $_.LastWriteTimeUtc }; Descending = $true },
+                            @{ Expression = { ConvertTo-CanonicalWatchPath -Path ([string]$_.LatestPath) }; Descending = $false }
+                        ) |
+                        Select-Object -First 1
+                }
 
                 if ($problems.Count -gt 0 -or $validStates.Count -eq 0) {
-                    $status = "監視不能"
+                    $machineStatus = "unmonitorable"
                 }
                 else {
-                    $latestState = $validStates | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
-                    $status = if ($latestState.LastWriteTimeUtc -gt $staleBoundary) { "稼働" } else { "停滞" }
+                    $machineStatus = if ($latestState.LastWriteTimeUtc -gt $staleBoundary) { "active" } else { "stalled" }
                 }
 
-                if ($validStates.Count -gt 0) {
-                    $latestState = $validStates | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+                $displayStatus = switch ($machineStatus) {
+                    "active" { "稼働" }
+                    "stalled" { "停滞" }
+                    "unmonitorable" { "監視不能" }
+                    default { throw "未知の監視statusです: $machineStatus" }
+                }
+                $latestPath = ""
+                $latestWriteUtc = ""
+                if ($null -ne $latestState) {
+                    $latestPath = ConvertTo-CanonicalWatchPath -Path ([string]$latestState.LatestPath)
+                    $latestWriteUtc = ([DateTime]$latestState.LastWriteTimeUtc).ToUniversalTime().ToString(
+                        "o",
+                        [Globalization.CultureInfo]::InvariantCulture
+                    )
+                }
+                $problemDigest = Get-ProblemDigest -Problems $problems
+                $incidentId = ""
+                if ($machineStatus -ne "active") {
+                    $incidentId = Get-IncidentId `
+                        -AgentKey $agentKey `
+                        -Status $machineStatus `
+                        -LatestPath $latestPath `
+                        -LatestWriteUtc $latestWriteUtc `
+                        -ProblemDigest $problemDigest
+                }
+                $agentStates.Add([pscustomobject][ordered]@{
+                    agentKey = $agentKey
+                    name = $agentName
+                    status = $machineStatus
+                    latestPath = $latestPath
+                    latestWriteUtc = $latestWriteUtc
+                    problemDigest = $problemDigest
+                    incidentId = $incidentId
+                })
+
+                if ($null -ne $latestState) {
                     $latestSummary = Format-WatchTime -TimeUtc $latestState.LastWriteTimeUtc -NowUtc $nowUtc
-                    Write-WatchLine ("[{0}] {1}: 最新={2} / {3}" -f $status, $agentName, $latestSummary, $latestState.LatestPath)
+                    Write-WatchLine ("[{0}] {1}: 最新={2} / {3}" -f $displayStatus, $agentName, $latestSummary, $latestState.LatestPath)
                 }
                 else {
-                    Write-WatchLine ("[{0}] {1}: 最新=<取得不可>" -f $status, $agentName)
+                    Write-WatchLine ("[{0}] {1}: 最新=<取得不可>" -f $displayStatus, $agentName)
                 }
 
                 $reportTime = Format-WatchTime -TimeUtc $reportState.LastWriteTimeUtc -NowUtc $nowUtc
@@ -614,6 +804,24 @@ try {
                 foreach ($problem in $problems) {
                     Write-WatchLine ("  [要確認] {0}: {1}" -f $problem.FullPath, $problem.Problem)
                 }
+            }
+
+            $agentStateArray = @($agentStates.ToArray())
+            $activeCount = @($agentStateArray | Where-Object status -eq "active").Count
+            $stalledCount = @($agentStateArray | Where-Object status -eq "stalled").Count
+            $unmonitorableCount = @($agentStateArray | Where-Object status -eq "unmonitorable").Count
+            $agentStatesSha256 = Get-AgentStatesSha256 -AgentStates $agentStateArray
+            Write-WatchLine ("AGENT_WATCH_STATUS schema=2 total={0} active={1} stalled={2} unmonitorable={3} states_sha256={4}" -f
+                $agentStateArray.Count, $activeCount, $stalledCount, $unmonitorableCount, $agentStatesSha256)
+            foreach ($agentState in $agentStateArray) {
+                if ([string]$agentState.status -eq "active") {
+                    continue
+                }
+                Write-WatchLine ("AGENT_WATCH_INCIDENT schema=2 status={0} incident={1} agent_key={2} name_b64={3}" -f
+                    $agentState.status,
+                    $agentState.incidentId,
+                    $agentState.agentKey,
+                    (ConvertTo-Base64Utf8 -Text ([string]$agentState.name)))
             }
 
             $processState = Get-SupplementalProcesses
@@ -643,6 +851,11 @@ try {
                     -DefinitionPath $DefinitionPath `
                     -DefinitionSha256 $definitionSnapshot.Sha256 `
                     -AgentCount $agents.Count `
+                    -AgentStates $agentStateArray `
+                    -AgentStatesSha256 $agentStatesSha256 `
+                    -ActiveCount $activeCount `
+                    -StalledCount $stalledCount `
+                    -UnmonitorableCount $unmonitorableCount `
                     -ScanCompletedUtc $scanCompletedUtc `
                     -Interval $IntervalMinutes `
                     -StaleAfter $StaleAfterMinutes

@@ -12,12 +12,13 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $productionReportPath = Join-Path $repoRoot "docs\報告記録.md"
 $roadmapPath = Join-Path $repoRoot "docs\implementation-roadmap.md"
 $policyPath = Join-Path $PSScriptRoot "roadmap-status-policy.json"
+$attributesPath = Join-Path $repoRoot ".gitattributes"
 $powerShellPath = (Get-Process -Id $PID).Path
 $tempParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([char[]]"\/")
 $sandboxName = "ori3-check-report-log-test-{0}" -f [Guid]::NewGuid().ToString("N")
 $sandboxRoot = [IO.Path]::GetFullPath((Join-Path $tempParent $sandboxName))
 $script:assertions = 0
-$script:legacyBoundaryHeader = '## 2026-08-31 06:50 — 統括が利用者へ虚偽を伝えた。正本を見ずに「残作業のすべて」と断言した'
+$script:legacyBoundaryHeader = '## 2026-08-31 10:46 — 未チェックが40件→16件になり、統括が時刻を読めるようになった'
 $script:legacySuffixText = ''
 
 function Assert-True {
@@ -140,6 +141,11 @@ try {
     Assert-True ($checkerSource.Contains('function Get-RecordIntroductionCommit')) "historical evidence must bind the exact record to its introduction commit"
     Assert-True ($checkerSource.Contains("'--reverse', '--follow', 'HEAD'")) "historical search must be limited to the followed HEAD ancestry"
     Assert-True (-not $checkerSource.Contains('--all')) "historical search must not trust snapshots from non-HEAD refs"
+    $attributeLines = [regex]::Split(
+        [IO.File]::ReadAllText($attributesPath, (New-Object Text.UTF8Encoding($false, $true))),
+        "\r\n|\n|\r"
+    )
+    Assert-True (@($attributeLines | Where-Object { $_ -ceq 'docs/報告記録.md text eol=lf' }).Count -eq 1) "immutable report bytes must remain LF in clean checkouts"
 
     $productionReportText = [IO.File]::ReadAllText($productionReportPath, (New-Object Text.UTF8Encoding($false, $true)))
     $productionReportLines = [regex]::Split($productionReportText, "\r\n|\n|\r")
@@ -168,7 +174,9 @@ try {
     $boundsLine = "Roadmap-Bounds: ids=$($checkedItem.id),$($uncheckedItem.id) total=2 checked=1 unchecked=1"
 
     $now = Get-Date
-    $headingTime = $now.AddMinutes(-2)
+    $headingTime = $now.AddMinutes(-1)
+    $legacyBoundaryTimestamp = [datetime]'2026-08-31 10:46'
+    Assert-True ($headingTime.AddMinutes(-1) -gt $legacyBoundaryTimestamp) "self-test records must be newer than the immutable boundary"
 
     $validNonePath = Write-TestReport "valid-none" $headingTime "通常の作業報告" @("Roadmap-Claim: none", "通常の本文です。") $now
     Assert-Exit (Invoke-ReportCheck $validNonePath) 0 "valid none"
@@ -292,6 +300,17 @@ try {
     $backdatedPath = Write-TestDocument "backdated-before-policy" @($backdatedRecord, $enforcementAnchorRecord) $now
     Assert-Exit (Invoke-ReportCheck $backdatedPath) 2 "backdated record" "Roadmap-Claim"
 
+    # production checkerとproduction旧履歴suffixをそのまま使い、正しいclaimを付けても
+    # 同日内で古い時刻を先頭へ差し込めないことを確かめる。
+    $laterSameDayRecord = Format-TestRecord $headingTime "先に記録済みの通常報告" @("Roadmap-Claim: none", "通常の本文です。")
+    $validClaimBackdatedRecord = Format-TestRecord ($headingTime.AddMinutes(-1)) "同日内でbackdateした通常報告" @("Roadmap-Claim: none", "通常の本文です。")
+    $validClaimBackdatedPath = Write-TestDocument "valid-claim-same-day-backdate" @($validClaimBackdatedRecord, $laterSameDayRecord) $now
+    Assert-Exit (Invoke-ReportCheck $validClaimBackdatedPath) 2 "valid-claim same-day backdate" "時刻が厳密降順ではありません"
+
+    $sameTimestampRecord = Format-TestRecord $headingTime "同一時刻の通常報告" @("Roadmap-Claim: none", "別の本文です。")
+    $sameTimestampPath = Write-TestDocument "duplicate-post-enforcement-timestamp" @($sameTimestampRecord, $laterSameDayRecord) $now
+    Assert-Exit (Invoke-ReportCheck $sameTimestampPath) 2 "duplicate post-enforcement timestamp" "同一時刻も使えません"
+
     # 同じcurrent snapshotを持つ2recordは通る。snapshotが異なる過去recordは、
     # そのrecord本文がHEAD履歴で初出したcommitのroadmap/policyからの再生が必要。
     $historicalRoadmapHash = if ($snapshot.roadmap_sha256.StartsWith('a')) { ('b' * 64) -join '' } else { ('a' * 64) -join '' }
@@ -335,12 +354,33 @@ try {
     $realOldInsertedPath = Write-TestDocument "production-generated-old-snapshot-inserted-today" @($newestGeneration, $realOldGeneration) $now
     Assert-Exit (Invoke-ReportCheck $realOldInsertedPath) 2 "production-generated old snapshot inserted today" "tracked roadmap/policy blob"
 
-    # 境界以下の既存記録は不変。backdate recordの挿入も1 byteの改変もhashで止める。
+    # production suffixを元にした負例。anchor以下は概算理由も含めて不変であり、
+    # 1 byte改変、境界下挿入、anchorの削除・複製・改名をすべて終了2で止める。
     $legacyMutationPath = Write-TestDocument "mutated-legacy" @($enforcementAnchorRecord) $now ($script:legacySuffixText + ' ')
     Assert-Exit (Invoke-ReportCheck $legacyMutationPath) 2 "mutated legacy suffix" "旧履歴suffix hash"
 
-    $missingBoundaryPath = Write-TestDocument "missing-legacy-boundary" @($enforcementAnchorRecord) $now "legacy marker missing"
+    $firstSuffixLineBreak = $script:legacySuffixText.IndexOf("`n", [StringComparison]::Ordinal)
+    Assert-True ($firstSuffixLineBreak -gt 0) "production legacy suffix must contain the boundary line and body"
+
+    $insertedBelowBoundarySuffix = $script:legacySuffixText.Insert($firstSuffixLineBreak + 1, "境界下へ挿入した行`n")
+    $insertedBelowBoundaryPath = Write-TestDocument "inserted-below-legacy-boundary" @($enforcementAnchorRecord) $now $insertedBelowBoundarySuffix
+    Assert-Exit (Invoke-ReportCheck $insertedBelowBoundaryPath) 2 "inserted below legacy boundary" "旧履歴suffix hash"
+
+    $changedLineEndingSuffix = $script:legacySuffixText.Replace("`n", "`r`n")
+    $changedLineEndingPath = Write-TestDocument "changed-legacy-line-endings" @($enforcementAnchorRecord) $now $changedLineEndingSuffix
+    Assert-Exit (Invoke-ReportCheck $changedLineEndingPath) 2 "changed legacy line endings" "旧履歴suffix hash"
+
+    $suffixWithoutBoundary = $script:legacySuffixText.Substring($firstSuffixLineBreak + 1)
+    $missingBoundaryPath = Write-TestDocument "missing-legacy-boundary" @($enforcementAnchorRecord) $now $suffixWithoutBoundary
     Assert-Exit (Invoke-ReportCheck $missingBoundaryPath) 2 "missing legacy boundary" "旧履歴境界"
+
+    $renamedBoundarySuffix = $script:legacySuffixText.Replace($script:legacyBoundaryHeader, ($script:legacyBoundaryHeader + '（改名）'))
+    $renamedBoundaryPath = Write-TestDocument "renamed-legacy-boundary" @($enforcementAnchorRecord) $now $renamedBoundarySuffix
+    Assert-Exit (Invoke-ReportCheck $renamedBoundaryPath) 2 "renamed legacy boundary" "旧履歴境界"
+
+    $duplicatedBoundarySuffix = $script:legacySuffixText + "`n" + $script:legacySuffixText
+    $duplicatedBoundaryPath = Write-TestDocument "duplicated-legacy-boundary" @($enforcementAnchorRecord) $now $duplicatedBoundarySuffix
+    Assert-Exit (Invoke-ReportCheck $duplicatedBoundaryPath) 2 "duplicated legacy boundary" "実際: 2行"
 
     $futurePath = Write-TestReport "future" $now.AddDays(1) "通常の作業報告" @("Roadmap-Claim: none", "通常の本文です。") $now
     Assert-Exit (Invoke-ReportCheck $futurePath) 2 "future heading" "later than the file update time"

@@ -271,7 +271,7 @@ function Get-DenialReason {
         "ALLOW-1: literal-path git add, commit/push/tag, origin fetch, read-only state/diff, and refs/wip snapshot plumbing",
         "ALLOW-2: exact scripts/check.ps1, check-ci.ps1, and check-release-ready.ps1 quality gates; plus scripts/check-receipt.ps1 -RepairSigningKey -RepoRoot <this repository> because the coordinator identity must create its own Windows DPAPI signing key",
         "ALLOW-3: literal file reads; rg requires the prohibited-document exclusion glob",
-        "ALLOW-4: read-only process and free-capacity inspection",
+        "ALLOW-4: read-only process and free-capacity inspection; exact local report-time read by Get-Date -Format 'yyyy-MM-dd HH:mm'",
         "ALLOW-5: literal desktop.exe Start-Process and desktop CloseMainWindow()",
         "ALLOW-6: exact hidden detached Start-Process launcher for continuous 10-minute scripts/watch-agents.ps1 monitoring, plus the exact boundary-script StopRecordedWatcher mode that can stop only the process identified by the fixed runtime state; -Once and direct Stop-Process are denied"
     ) -join "; "
@@ -853,6 +853,24 @@ function Test-FileReadInvocation {
     return New-PolicyDecision $true "file-read" "allowed literal file read" $true $false
 }
 
+function Test-CurrentTimeInvocation {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Parts,
+        [Parameter(Mandatory = $true)][string]$ToolName
+    )
+
+    if ($ToolName -ne "PowerShell") {
+        return New-PolicyDecision $false "current-time" "the local report-time command is allowed only through the PowerShell tool"
+    }
+    if ($Parts.Count -ne 3 -or
+        $Parts[0].ToLowerInvariant() -ne "get-date" -or
+        $Parts[1].ToLowerInvariant() -ne "-format" -or
+        $Parts[2] -cne "yyyy-MM-dd HH:mm") {
+        return New-PolicyDecision $false "current-time" "only exact Get-Date -Format 'yyyy-MM-dd HH:mm' is allowed for local report-time reads"
+    }
+    return New-PolicyDecision $true "current-time" "allowed exact read-only local report-time read"
+}
+
 function Test-WatchStartInvocation {
     param(
         [Parameter(Mandatory = $true)][string[]]$Parts,
@@ -1132,7 +1150,8 @@ function Test-PowerShellWrapper {
 function Test-StaticCommandInvocation {
     param(
         [Parameter(Mandatory = $true)][string[]]$Parts,
-        [Parameter(Mandatory = $true)][string]$RepositoryRoot
+        [Parameter(Mandatory = $true)][string]$RepositoryRoot,
+        [Parameter(Mandatory = $true)][string]$ToolName
     )
 
     if ($Parts.Count -eq 0 -or [string]::IsNullOrWhiteSpace($Parts[0])) {
@@ -1153,6 +1172,9 @@ function Test-StaticCommandInvocation {
     }
     if ($leaf -in @("get-process", "get-ciminstance", "get-nettcpconnection", "get-psdrive", "get-volume")) {
         return New-PolicyDecision $true "process-capacity" "allowed process/capacity read" $true $false
+    }
+    if ($leaf -eq "get-date") {
+        return Test-CurrentTimeInvocation -Parts $Parts -ToolName $ToolName
     }
     if ($leaf -in @("where-object", "select-object", "sort-object", "measure-object", "format-table", "format-list", "out-string")) {
         return New-PolicyDecision $true "transform" "allowed literal output transform" $false $true
@@ -1221,7 +1243,7 @@ function Test-PolicyCommand {
         if (-not $shape.Valid) {
             return New-PolicyDecision $false "parse" $shape.Error
         }
-        $decision = Test-StaticCommandInvocation -Parts $shape.Parts -RepositoryRoot $RepositoryRoot
+        $decision = Test-StaticCommandInvocation -Parts $shape.Parts -RepositoryRoot $RepositoryRoot -ToolName $ToolName
         if (-not $decision.Allowed) { return $decision }
         $decisions.Add($decision)
     }

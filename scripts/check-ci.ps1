@@ -1225,7 +1225,7 @@ $script:expectedCiRustCommand = "cargo $($script:expectedCiRustArguments -join '
 $script:proposalMatrixPerformanceCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File crates/ori3-propose/tests/run-proposal-matrix.ps1 -Mode Performance"
 $script:ciStaticContractCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-ci.ps1 -StaticContractOnly"
 $script:roadmapGovernanceCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-roadmap-governance.ps1"
-$script:roadmapGovernanceNormalizedSha256 = "41D95E31A027329B1BCED20301C532B7AA967604754604BFD5AD7E4439899531"
+$script:roadmapGovernanceNormalizedSha256 = "A8B6927DDE4A6F1268BBDD05583F15870F247D8FCEF1BE9D29517E663798A602"
 
 $expectedChecksSteps = @(
     [pscustomobject]@{ Command = $script:ciStaticContractCommand; WorkingDirectory = "."; Executable = "powershell"; Arguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/check-ci.ps1", "-StaticContractOnly") },

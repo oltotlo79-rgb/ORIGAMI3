@@ -3,6 +3,10 @@
 # コミットやpushが通ってしまう。
 scripts/hooks/* text eol=lf
 
+# 報告記録のimmutable suffixは境界からEOFまでのraw bytesを固定する。
+# core.autocrlf=trueのclean checkoutでもhashを変えないためLFへ固定する。
+docs/報告記録.md text eol=lf
+
 # ほかの折り紙ソフトから受け取った見本は、1バイトも変えずに取り出す。
 # manifest.json はこのファイルのbyte数とSHA-256を凍結値として持っており、
 # この設定が無いと `core.autocrlf=true` のWindowsで取り出したときだけ

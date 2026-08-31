@@ -17,6 +17,8 @@ $checks = @(
     [pscustomobject]@{ Name = "traceability drift negative tests"; Script = "doc-link-audit.test.ps1"; Arguments = @() },
     [pscustomobject]@{ Name = "report claim negative tests"; Script = "check-report-log.test.ps1"; Arguments = @() },
     [pscustomobject]@{ Name = "release gate production-path test"; Script = "check-release-ready.test.ps1"; Arguments = @() },
+    [pscustomobject]@{ Name = "agent watcher negative tests"; Script = "watch-agents.test.ps1"; Arguments = @() },
+    [pscustomobject]@{ Name = "agent watch delegation gate negative tests"; Script = "hooks/check-agent-watch.test.ps1"; Arguments = @() },
     [pscustomobject]@{ Name = "CI contract negative tests"; Script = "check-ci.test.ps1"; Arguments = @() }
 )
 $script:planned = $checks.Count

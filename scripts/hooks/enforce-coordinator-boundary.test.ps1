@@ -499,6 +499,7 @@ try {
         @{ Name = "rg with exclusion"; Command = "rg needle '$Repository' --glob '!docs/competitive-review-2026-08-20.md'" },
         @{ Name = "process pipeline"; Command = "Get-Process -Name cargo | Measure-Object" },
         @{ Name = "free capacity"; Command = "Get-PSDrive -Name C" },
+        @{ Name = "production payload exact local report time"; Command = "Get-Date -Format 'yyyy-MM-dd HH:mm'" },
         @{ Name = "desktop start"; Command = "Start-Process -FilePath '$desktop' -WorkingDirectory '$([IO.Path]::GetDirectoryName($desktop))' -PassThru" },
         @{ Name = "desktop close"; Command = "(Get-Process -Name desktop -ErrorAction Stop).CloseMainWindow()" },
         @{ Name = "exact host hidden detached continuous watcher"; Command = $detachedWatchCommand }
@@ -572,6 +573,21 @@ try {
         @{ Name = "rg prohibited reinclude"; Command = "rg needle . --glob '!docs/competitive-review-2026-08-20.md' --glob 'docs/competitive-review-2026-08-20.md'" },
         @{ Name = "prohibited document read"; Command = "Get-Content -LiteralPath docs/competitive-review-2026-08-20.md" },
         @{ Name = "non-filesystem provider read"; Command = "Get-ChildItem -LiteralPath Env:" },
+        @{ Name = "production payload bare Get-Date"; Command = "Get-Date" },
+        @{ Name = "production payload Get-Date with seconds"; Command = "Get-Date -Format 'yyyy-MM-dd HH:mm:ss'" },
+        @{ Name = "production payload Get-Date ISO format"; Command = "Get-Date -Format o" },
+        @{ Name = "production payload Get-Date UFormat"; Command = "Get-Date -UFormat '%Y-%m-%d %H:%M'" },
+        @{ Name = "production payload Get-Date extra AsUTC"; Command = "Get-Date -Format 'yyyy-MM-dd HH:mm' -AsUTC" },
+        @{ Name = "production payload date alias"; Command = "date -Format 'yyyy-MM-dd HH:mm'" },
+        @{ Name = "production payload module-qualified Get-Date"; Command = "Microsoft.PowerShell.Utility\Get-Date -Format 'yyyy-MM-dd HH:mm'" },
+        @{ Name = "production payload Set-Date"; Command = "Set-Date -Date '2026-08-31 12:00'" },
+        @{ Name = "production payload Get-Date pipeline"; Command = "Get-Date -Format 'yyyy-MM-dd HH:mm' | Out-String" },
+        @{ Name = "production payload Get-Date assignment"; Command = "`$now = Get-Date -Format 'yyyy-MM-dd HH:mm'" },
+        @{ Name = "production payload Get-Date wrapper"; Command = 'powershell.exe -NoProfile -Command "Get-Date -Format ''yyyy-MM-dd HH:mm''"' },
+        @{ Name = "production payload Get-Date redirection"; Command = "Get-Date -Format 'yyyy-MM-dd HH:mm' > now.txt" },
+        @{ Name = "production payload Get-Date reordered arguments"; Command = "Get-Date 'yyyy-MM-dd HH:mm' -Format" },
+        @{ Name = "production payload Get-Date dynamic format"; Command = "Get-Date -Format `$format" },
+        @{ Name = "production payload Get-Date chained command"; Command = "Get-Date -Format 'yyyy-MM-dd HH:mm'; git status" },
         @{ Name = "cmd wrapper"; Command = "cmd.exe /c git status" },
         @{ Name = "PowerShell command wrapper"; Command = "powershell.exe -Command 'git status'" },
         @{ Name = "bash wrapper"; Command = "bash -c 'git status'" },
@@ -580,6 +596,7 @@ try {
         @{ Name = "arbitrary Remove-Item"; Command = "Remove-Item -LiteralPath '$sample'" }
     )
     foreach ($case in $deniedCases) { Assert-PreDenied -Name $case.Name -Command $case.Command }
+    Assert-PreDenied -Name "production payload Get-Date through Bash" -Command "Get-Date -Format 'yyyy-MM-dd HH:mm'" -ToolName "Bash"
 
     Write-Host "[4/8] parse, dynamic, mixed, and member bypasses are denied"
     $parseDenied = @(

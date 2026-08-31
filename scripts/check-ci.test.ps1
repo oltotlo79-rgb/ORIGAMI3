@@ -122,6 +122,8 @@ function New-GovernanceProductionFixture {
         "doc-link-audit.test.ps1",
         "check-report-log.test.ps1",
         "check-release-ready.test.ps1",
+        "watch-agents.test.ps1",
+        "hooks/check-agent-watch.test.ps1",
         "check-ci.test.ps1"
     )
     $stubTemplate = @'
@@ -131,8 +133,10 @@ param(
     [switch]$CheckTraceability,
     [Parameter(ValueFromRemainingArguments = $true)][object[]]$RemainingArguments
 )
-$markerPath = Join-Path $PSScriptRoot "stage-events.txt"
-[IO.File]::AppendAllText($markerPath, "$($MyInvocation.MyCommand.Name)`n", (New-Object Text.UTF8Encoding($false)))
+$stageRoot = if ((Split-Path -Leaf $PSScriptRoot) -ceq "hooks") { Split-Path -Parent $PSScriptRoot } else { $PSScriptRoot }
+$markerPath = Join-Path $stageRoot "stage-events.txt"
+$stageName = if ((Split-Path -Leaf $PSScriptRoot) -ceq "hooks") { "hooks/$($MyInvocation.MyCommand.Name)" } else { $MyInvocation.MyCommand.Name }
+[IO.File]::AppendAllText($markerPath, "$stageName`n", (New-Object Text.UTF8Encoding($false)))
 exit __EXIT_CODE__
 '@
     foreach ($stageScript in $stageScripts) {
@@ -141,6 +145,7 @@ exit __EXIT_CODE__
         }
         $exitCode = if ($stageScript -ceq $FailingScript) { 17 } else { 0 }
         $stubPath = Join-Path $scriptsRoot $stageScript
+        [void][IO.Directory]::CreateDirectory((Split-Path -Parent $stubPath))
         [IO.File]::WriteAllText($stubPath, $stubTemplate.Replace("__EXIT_CODE__", [string]$exitCode), $script:Utf8NoBom)
     }
     return [pscustomobject]@{
@@ -181,7 +186,7 @@ function Assert-GovernanceStageOrder {
 
     Assert-True (Test-Path -LiteralPath $Fixture.MarkerPath -PathType Leaf) "$Message markerを残すこと"
     $actual = @(Get-Content -LiteralPath $Fixture.MarkerPath -Encoding UTF8)
-    Assert-True ($actual.Count -eq $Fixture.StageScripts.Count) "$Message 9 stageすべてを実invokeすること(actual=$($actual.Count))"
+    Assert-True ($actual.Count -eq $Fixture.StageScripts.Count) "$Message 11 stageすべてを実invokeすること(actual=$($actual.Count))"
     for ($index = 0; $index -lt $Fixture.StageScripts.Count; $index++) {
         Assert-True ($actual[$index] -ceq $Fixture.StageScripts[$index]) "$Message stage $($index + 1)を予定順にinvokeすること"
     }
@@ -308,22 +313,24 @@ try {
     $result = Invoke-IsolatedChecker $caseRoot $PowerShellPath
     Assert-Result $result $false "[NG][C08]" "governance本体の実invoke削除を検出すること"
 
-    Write-Host "[11/30] C08: governance本体が最後のstageをskipすると検出する"
-    $caseRoot = New-CaseFixture "c08-governance-stage-skip"
+    Write-Host "[11/30] C08: governance本体がwatch-agents stageをskipすると検出する"
+    $caseRoot = New-CaseFixture "c08-governance-watch-stage-skip"
     Set-ExactReplacement `
         (Join-Path $caseRoot "scripts/check-roadmap-governance.ps1") `
-        'for ($index = 0; $index -lt $script:planned; $index++)' `
-        'for ($index = 0; $index -lt ($script:planned - 1); $index++)'
+        '    $check = $checks[$index]' `
+        ('    $check = $checks[$index]' + [Environment]::NewLine + '    if ($check.Script -ceq "watch-agents.test.ps1") { continue }')
     $result = Invoke-IsolatedChecker $caseRoot $PowerShellPath
-    Assert-Result $result $false "[NG][C08]" "governance本体のstage skipを検出すること"
+    Assert-Result $result $false "[NG][C08]" "governance本体のwatch-agents stage skipを検出すること"
+    Assert-True ($result.Output.Contains("body_hash=False")) "watch-agents stage skipをnormalized body hashで拒否すること"
 
     Write-Host "[12/30] C08: script名コメント・偽receipt・exit 0だけの本体を拒否する"
     $caseRoot = New-CaseFixture "c08-governance-fake-receipt"
     $fakeGovernance = @'
 # get-roadmap-status.ps1 doc-link-audit.ps1 check-report-log.ps1
 # get-roadmap-status.test.ps1 generate-roadmap-links.test.ps1 doc-link-audit.test.ps1
-# check-report-log.test.ps1 check-release-ready.test.ps1 check-ci.test.ps1
-Write-Host "ROADMAP_GOVERNANCE_STAGES planned=9 begun=9 invoked=9 ended=9 failures=0"
+# check-report-log.test.ps1 check-release-ready.test.ps1 watch-agents.test.ps1
+# hooks/check-agent-watch.test.ps1 check-ci.test.ps1
+Write-Host "ROADMAP_GOVERNANCE_STAGES planned=11 begun=11 invoked=11 ended=11 failures=0"
 exit 0
 '@
     [IO.File]::WriteAllText((Join-Path $caseRoot "scripts/check-roadmap-governance.ps1"), $fakeGovernance, $script:Utf8NoBom)
@@ -416,19 +423,19 @@ exit 0
     Assert-Result $result $false "[NG][C08]" "release本体のplanned=6欠落を検出すること"
     Assert-True ($result.Output.Contains("release_planned6=False")) "planned=6の拒否理由を表示すること"
 
-    Write-Host "[22/30] production形: governance本体が9 stageを実invokeしてreceiptを集約する"
+    Write-Host "[22/30] production形: governance本体が11 stageを実invokeしてreceiptを集約する"
     $governanceFixture = New-GovernanceProductionFixture "all-pass"
     $result = Invoke-IsolatedGovernance $governanceFixture $PowerShellPath
-    Assert-Result $result $true "ROADMAP_GOVERNANCE_STAGES planned=9 begun=9 invoked=9 ended=9 failures=0" "9 stage成功時の集約receiptを確認すること"
-    Assert-True (@([regex]::Matches($result.Output, '(?m)^ROADMAP_GOVERNANCE_STAGE ')).Count -eq 9) "成功時にstage receiptを9件出すこと"
+    Assert-Result $result $true "ROADMAP_GOVERNANCE_STAGES planned=11 begun=11 invoked=11 ended=11 failures=0" "11 stage成功時の集約receiptを確認すること"
+    Assert-True (@([regex]::Matches($result.Output, '(?m)^ROADMAP_GOVERNANCE_STAGE ')).Count -eq 11) "成功時にstage receiptを11件出すこと"
     Assert-GovernanceStageOrder $governanceFixture "成功時"
 
     Write-Host "[23/30] production形: 1 stage exit 17でも残りを実invokeし最終exitを非0にする"
     $governanceFixture = New-GovernanceProductionFixture "one-failure" "check-report-log.ps1"
     $result = Invoke-IsolatedGovernance $governanceFixture $PowerShellPath
     Assert-Result $result $false "[NG] report claim evidence failed (exit=17)" "stage失敗の終了コードを集約すること"
-    Assert-True ($result.Output.Contains("ROADMAP_GOVERNANCE_STAGES planned=9 begun=9 invoked=9 ended=9 failures=1")) "失敗時も9 stage完走と失敗数1をreceiptへ出すこと"
-    Assert-True (@([regex]::Matches($result.Output, '(?m)^ROADMAP_GOVERNANCE_STAGE ')).Count -eq 9) "失敗時にもstage receiptを9件出すこと"
+    Assert-True ($result.Output.Contains("ROADMAP_GOVERNANCE_STAGES planned=11 begun=11 invoked=11 ended=11 failures=1")) "失敗時も11 stage完走と失敗数1をreceiptへ出すこと"
+    Assert-True (@([regex]::Matches($result.Output, '(?m)^ROADMAP_GOVERNANCE_STAGE ')).Count -eq 11) "失敗時にもstage receiptを11件出すこと"
     Assert-GovernanceStageOrder $governanceFixture "失敗時"
 
     Write-Host "[24/30] current_statusのstep内target差を厳密同期が検出する"
@@ -461,17 +468,17 @@ exit 0
     $result = Invoke-IsolatedChecker $caseRoot $PowerShellPath
     Assert-Result $result $false "[NG][C08]" "CI run一覧を解析できなければroadmap governanceを未確認で通さないこと"
 
-    Write-Host "[28/30] production形: governance第9段が独立static step削除を検出する"
+    Write-Host "[28/30] production形: governance第11段が独立static step削除を検出する"
     $governanceFixture = New-GovernanceProductionFixture "independent-static-removed" -UseActualCiContractTest
     Set-ExactReplacement `
         (Join-Path $governanceFixture.Root ".github/workflows/ci.yml") `
         'powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-ci.ps1 -StaticContractOnly' `
         'powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-ci-MISSING.ps1 -StaticContractOnly'
     $result = Invoke-IsolatedGovernance $governanceFixture $PowerShellPath
-    Assert-Result $result $false "[NG] CI contract negative tests failed (exit=1)" "governance第9段が独立static step削除を検出すること"
+    Assert-Result $result $false "[NG] CI contract negative tests failed (exit=1)" "governance第11段が独立static step削除を検出すること"
     Assert-True ($result.Output.Contains("static_call=False, governance_call=True")) "governanceが残った状態で独立static削除を拒否すること"
-    Assert-True ($result.Output.Contains("ROADMAP_GOVERNANCE_STAGE number=9 planned=9 script=check-ci.test.ps1 invoked=1 exit=1")) "第9段の実invokeと失敗終了コードを表示すること"
-    Assert-True ($result.Output.Contains("ROADMAP_GOVERNANCE_STAGES planned=9 begun=9 invoked=9 ended=9 failures=1")) "独立static削除でもgovernance 9段を完走すること"
+    Assert-True ($result.Output.Contains("ROADMAP_GOVERNANCE_STAGE number=11 planned=11 script=check-ci.test.ps1 invoked=1 exit=1")) "第11段の実invokeと失敗終了コードを表示すること"
+    Assert-True ($result.Output.Contains("ROADMAP_GOVERNANCE_STAGES planned=11 begun=11 invoked=11 ended=11 failures=1")) "独立static削除でもgovernance 11段を完走すること"
 
     Write-Host "[29/30] 静的契約内部のAST例外をC00 violationとしてfail-closedする"
     $caseRoot = New-CaseFixture "internal-exception-fail-closed"
