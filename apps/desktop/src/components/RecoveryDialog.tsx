@@ -54,7 +54,7 @@ export function RecoveryDialog() {
           const at = formatSavedAt(choice.saved_at_ms);
           const target = choice.document_path;
           return (
-            <li key={choice.candidate_id ?? `current-${index}`}>
+            <li key={choice.candidate_id}>
               <p>
                 {at ? `保存した日時: ${at}` : "保存した日時: 分かりません"}
               </p>
@@ -64,7 +64,7 @@ export function RecoveryDialog() {
                   : "元の作品: まだ保存していない作品"}
               </p>
               <p className="hint">
-                手順数: {choice.step_count === undefined ? "分かりません" : `${choice.step_count}件`}
+                手順数: {choice.step_count === null ? "分かりません" : `${choice.step_count}件`}
               </p>
               <div className="button-row">
                 <button

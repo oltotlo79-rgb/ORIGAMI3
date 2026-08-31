@@ -91,11 +91,11 @@ const tauriConfig = JSON.parse(
 const normalWindowMinimum = tauriConfig.app.windows[0];
 if (normalWindowMinimum === undefined) throw new Error("製品窓の設定がありません");
 const TIMELINE_CONTROL_LABELS = [
-  "⏮ 最初へ",
+  "最初へ",
   "◀ 前へ",
   "▶ 再生",
   "次へ ▶",
-  "⏸ 一時停止",
+  "一時停止",
 ] as const;
 const TIMELINE_LAYOUT_DOCUMENT: Document = {
   schema_version: 1,

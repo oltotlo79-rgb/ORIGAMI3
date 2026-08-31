@@ -486,6 +486,10 @@ describe("書き出しダイアログ", () => {
         png_long_side: 2048,
       }),
     );
+    expect(await screen.findByText(/保存しました/)).not.toBeNull();
+    expect(useAppStore.getState().exportSavedPath).toBe(
+      "C:/出力/鶴の折り図.pdf",
+    );
     // 折り図には補助線の指定は関係ないので出さない
     expect(screen.queryByLabelText(/補助線/)).toBeNull();
   });
@@ -503,6 +507,40 @@ describe("書き出しダイアログ", () => {
         png_long_side: 2048,
       }),
     );
+    expect(await screen.findByText(/保存しました/)).not.toBeNull();
+    expect(useAppStore.getState().exportSavedPath).toBe("C:/出力/鶴.svg");
+  });
+
+  it.each([
+    {
+      label: "折り図(PDF)",
+      path: "C:/出力/失敗する折り図.pdf",
+      reason: "折り図PDFを作れませんでした: PDFページを組み立てられません",
+    },
+    {
+      label: "折り図(ページごとのSVG)",
+      path: "C:/出力/失敗する折り図.svg",
+      reason: "折り図SVGを作れませんでした: 1ページ目の図形を描けません",
+    },
+  ])("$label の失敗理由を利用者へ知らせ、成功扱いにしない", async ({
+    label,
+    path,
+    reason,
+  }) => {
+    saveMock.mockResolvedValue(path);
+    exportMock.mockRejectedValue(reason);
+    render(<ExportDialog />);
+    fireEvent.click(screen.getByRole("radio", { name: label }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "保存先を選んで書き出す" }),
+    );
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("保存できませんでした");
+    expect(alert.textContent).toContain(reason);
+    expect(screen.queryByText(/保存しました/)).toBeNull();
+    expect(useAppStore.getState().exportSavedPath).toBeNull();
+    expect(useAppStore.getState().exportBusy).toBe(false);
   });
 
   it("手順が無いときは折り図を選べない理由を出す(選択肢もボタンも消さない)", () => {

@@ -66,6 +66,18 @@ describe("復旧ダイアログ", () => {
     expect(fileName("/home/作品/鶴.ori3")).toBe("鶴.ori3");
   });
 
+  it("旧候補で手順数が分からなくても内部値を補わず案内する", () => {
+    useAppStore.setState({
+      recovery: { ...INFO, step_count: null },
+      recoveryChoices: [{ ...INFO, step_count: null }],
+    });
+    render(<RecoveryDialog />);
+
+    expect(screen.getByRole("dialog").textContent).toContain(
+      "手順数: 分かりません",
+    );
+  });
+
   it("復元を最初に選び、3ボタンを循環し、Escapeでは判断しない", () => {
     const resolveRecovery = vi.fn().mockResolvedValue(undefined);
     useAppStore.setState({ recovery: INFO, resolveRecovery });
@@ -173,5 +185,26 @@ describe("復旧ダイアログ", () => {
     expect(screen.getByRole("dialog").textContent).toContain("手順数: 8件");
     fireEvent.click(screen.getByRole("button", { name: "あとで確認する" }));
     expect(dismissRecovery).toHaveBeenCalledTimes(1);
+  });
+
+  it("内部のcandidate IDを本文・aria・操作名へ表示しない", () => {
+    const sentinel = 9_007_199_254_740_000;
+    useAppStore.setState({
+      recovery: { ...INFO, candidate_id: sentinel },
+      recoveryChoices: [{ ...INFO, candidate_id: sentinel }],
+    });
+    render(<RecoveryDialog />);
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).not.toContain(String(sentinel));
+    for (const element of dialog.querySelectorAll("[aria-label], [aria-labelledby], [aria-describedby]")) {
+      expect(element.getAttribute("aria-label") ?? "").not.toContain(String(sentinel));
+      expect(element.getAttribute("aria-labelledby") ?? "").not.toContain(String(sentinel));
+      expect(element.getAttribute("aria-describedby") ?? "").not.toContain(String(sentinel));
+    }
+    for (const button of screen.getAllByRole("button")) {
+      expect(button.getAttribute("aria-label") ?? button.textContent ?? "")
+        .not.toContain(String(sentinel));
+    }
   });
 });

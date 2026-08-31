@@ -127,6 +127,8 @@
 | <a id="roadmap-evidence-m2-t2-7-c03"></a>`M2.T2-7.C03` | 手動 `MANUAL.M2.T2-7.C03.SCREEN-ACCEPTANCE` | unchecked | unchecked-but-progress-task-exists |
 | <a id="roadmap-evidence-m2-t2-7-c04"></a>`M2.T2-7.C04` | 手動 `MANUAL.M2.T2-7.C04.COMMIT-PUSH` | checked | consistent |
 | <a id="roadmap-evidence-m2-t2-8-c01"></a>`M2.T2-8.C01` | 自動 `autosave::tests::restore_recovers_the_same_document` | unchecked | unchecked-but-progress-task-exists |
+| <a id="roadmap-evidence-m2-t2-8-c04"></a>`M2.T2-8.C04` | 自動 `autosave::tests::two_real_processes_keep_both_documents_when_autosave_transactions_overlap` | unchecked | unchecked-but-progress-task-exists |
+| <a id="roadmap-evidence-m2-t2-8-c05"></a>`M2.T2-8.C05` | 自動 `store::tests::two_real_processes_reject_a_stale_explicit_save_and_keep_the_first_save` | unchecked | unchecked-but-progress-task-exists |
 | <a id="roadmap-evidence-m2-t2-8-c02"></a>`M2.T2-8.C02` | 手動 `MANUAL.M2.T2-8.C02.SCREEN-ACCEPTANCE` | unchecked | unchecked-but-progress-task-exists |
 | <a id="roadmap-evidence-m2-t2-8-c03"></a>`M2.T2-8.C03` | 手動 `MANUAL.M2.T2-8.C03.COMMIT-PUSH` | unchecked | manual-acceptance-pending |
 | <a id="roadmap-evidence-m2-t2-9-c01"></a>`M2.T2-9.C01` | 自動 `completed_crane_is_flat_and_symmetric` | unchecked | unchecked-but-progress-task-exists |

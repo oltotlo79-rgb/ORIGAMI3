@@ -19,7 +19,6 @@ import type {
   ProposalJobResult,
   ProposalProgressSnapshot,
   RecoveryChoices,
-  RecoveryInfo,
   ReplayResult,
   SeqOp,
   Skeleton,
@@ -118,18 +117,15 @@ export function foldAllPreview(
 }
 
 /** 前回の異常終了で残った、利用者が選べる作業をすべて調べる。 */
-export function recoveryCheck(): Promise<RecoveryChoices | RecoveryInfo | null> {
+export function recoveryCheck(): Promise<RecoveryChoices | null> {
   return invoke("recovery_check");
 }
 
 /** accept=trueなら選んだ内容を復元、falseなら選んだ内容だけを捨てる。 */
 export function recoveryRestore(
   accept: boolean,
-  candidateId?: number | null,
+  candidateId: number,
 ): Promise<DocumentView | null> {
-  if (candidateId === undefined || candidateId === null) {
-    return invoke("recovery_restore", { accept });
-  }
   return invoke("recovery_restore", { accept, candidateId });
 }
 

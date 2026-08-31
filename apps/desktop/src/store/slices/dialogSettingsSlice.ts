@@ -74,6 +74,8 @@ export interface DialogSettingsSliceState {
   exportError: string | null;
   /** 保存できたファイルの場所。まだならnull(「保存しました」の表示用) */
   exportSavedPath: string | null;
+  /** browserが実際に選んだ配送方法を、dialogを閉じた後も知らせる文言。 */
+  exportDeliveryNotice: string | null;
   /** 書き出しは続行できたが、利用者へ知らせる必要がある点。 */
   exportFoldIssues: FoldIssue[];
   /** 新規作成ダイアログを開いているか(常設UIは増やさない。PAP-001) */
@@ -138,7 +140,7 @@ export interface DialogSettingsSliceActions {
   expandPaperActionTip: () => void;
   hidePaperActionTip: () => void;
   checkRecovery: () => Promise<void>;
-  resolveRecovery: (accept: boolean, candidateId?: number | null) => Promise<void>;
+  resolveRecovery: (accept: boolean, candidateId: number) => Promise<void>;
   dismissRecovery: () => void;
   openRecovery: () => void;
   openExport: () => void;

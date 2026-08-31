@@ -1,4 +1,3 @@
-import { open, save } from "@tauri-apps/plugin-dialog";
 import { EXPORT_CHOICES } from "./dialogs/exportChoices";
 import { HistoryButtons } from "./HistoryButtons";
 import { ToolbarBrandMark } from "./ToolbarBrandMark";
@@ -8,6 +7,10 @@ import {
   OPEN_FILE_TOOLTIP,
   SAVE_FILE_FILTERS,
 } from "../lib/foldFileExchange";
+import {
+  getPlatformFileGateway,
+  platformFileErrorMessage,
+} from "../platform/fileGateway";
 import { useAppStore } from "../store/appStore";
 
 const EXPORT_GUIDANCE = `${EXPORT_CHOICES.map((choice) => choice.label).join("、")}を書き出します`;
@@ -29,18 +32,50 @@ export function AppToolbar({ onOpenHelp }: { onOpenHelp: () => void }) {
   const openProposal = useAppStore((s) => s.openProposal);
   const openExport = useAppStore((s) => s.openExport);
   const openNewDialog = useAppStore((s) => s.openNewDialog);
+  const fileGateway = getPlatformFileGateway();
+  const downloadsInsteadOfChoosing = fileGateway.saveMode === "download";
 
   const handleOpen = async () => {
-    const path = await open({ filters: OPEN_FILE_FILTERS, multiple: false });
-    if (typeof path === "string") {
-      await openDocument(path);
+    try {
+      const path = await fileGateway.chooseOpenFile({
+        filters: OPEN_FILE_FILTERS,
+      });
+      if (path !== null) {
+        try {
+          await openDocument(path);
+        } finally {
+          fileGateway.release(path);
+        }
+      }
+    } catch (reason) {
+      useAppStore.setState({
+        errorMessage: platformFileErrorMessage(reason, "open"),
+        documentSavedPath: null,
+      });
     }
   };
 
   const handleSave = async () => {
-    const path = await save({ filters: SAVE_FILE_FILTERS });
-    if (path !== null) {
-      await saveDocument(path);
+    try {
+      const path = await fileGateway.chooseSaveFile({
+        filters: SAVE_FILE_FILTERS,
+        suggestedName: "作品.ori3",
+      });
+      if (path !== null) {
+        try {
+          await saveDocument(path);
+        } finally {
+          fileGateway.release(path);
+        }
+      }
+    } catch (reason) {
+      useAppStore.setState({
+        errorMessage: platformFileErrorMessage(
+          reason,
+          downloadsInsteadOfChoosing ? "download" : "save",
+        ),
+        documentSavedPath: null,
+      });
     }
   };
 
@@ -74,11 +109,15 @@ export function AppToolbar({ onOpenHelp }: { onOpenHelp: () => void }) {
       </button>
       <button
         type="button"
-        data-tooltip="作品を.ori3ファイルへ保存します"
+        data-tooltip={
+          downloadsInsteadOfChoosing
+            ? "このブラウザでは保存先を選べないため、作品を.ori3ファイルとしてダウンロードします"
+            : "作品を.ori3ファイルへ保存します"
+        }
         onClick={() => void handleSave()}
       >
         <ToolbarIcon name="save" />
-        保存
+        {downloadsInsteadOfChoosing ? "ダウンロード" : "保存"}
       </button>
       <span className="toolbar-separator" />
       {/* 折り角度の変更と作品データの変更は別々の履歴なので、次の1回が

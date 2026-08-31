@@ -6,6 +6,7 @@ import { HELP_CHAPTERS, helpChapterSearchText } from "../../help/helpContent";
 import { HELP_DIAGRAMS } from "../../help/helpDiagrams";
 import type { HelpBlock } from "../../help/helpTypes";
 import { useAppStore } from "../../store/appStore";
+import { UiIcon } from "../UiIcon";
 import { ModalDialog } from "./ModalDialog";
 
 function normalizeSearch(value: string): string {
@@ -137,7 +138,9 @@ export function HelpCenter() {
         <div className="help-search">
           <label htmlFor="help-search-input">章題・本文を検索</label>
           <span className="help-search-control">
-            <span aria-hidden="true">⌕</span>
+            <span aria-hidden="true">
+              <UiIcon name="search" />
+            </span>
             <input
               id="help-search-input"
               ref={searchRef}

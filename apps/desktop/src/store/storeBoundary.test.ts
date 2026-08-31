@@ -288,6 +288,7 @@ const B4_STATE = [
   "exportBusy",
   "exportError",
   "exportSavedPath",
+  "exportDeliveryNotice",
   "exportFoldIssues",
   "newDialogOpen",
   "newPaperDraft",

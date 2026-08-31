@@ -160,7 +160,8 @@
   --brand-font-weight: 600;
   --brand-letter-spacing: 0.04em;
   --brand-subtitle-letter-spacing: 0.12em;
-  --font-body: "Yu Gothic UI", "Meiryo", sans-serif;
+  --font-body: "Yu Gothic UI", "Meiryo", "ORIGAMI3 JP", sans-serif;
+  --font-user-text: "Yu Gothic UI", "Meiryo", sans-serif;
   --font-heading: var(--font-body);
   --body-font-weight: 400;
   --fw-bold: 600;
@@ -339,7 +340,8 @@
   --brand-font-weight: 700;
   --brand-letter-spacing: 0.06em;
   --brand-subtitle-letter-spacing: 0.12em;
-  --font-body: "Yu Gothic UI", "Meiryo", sans-serif;
+  --font-body: "Yu Gothic UI", "Meiryo", "ORIGAMI3 JP", sans-serif;
+  --font-user-text: "Yu Gothic UI", "Meiryo", sans-serif;
   --font-heading: var(--font-body);
   --body-font-weight: 400;
   --fw-bold: 600;
@@ -523,7 +525,9 @@
   --brand-font: var(--font-body);
   --brand-font-weight: 700;
   --brand-letter-spacing: 0.02em;
-  --font-body: "Segoe UI Variable Text", "BIZ UDPGothic", "Yu Gothic UI", sans-serif;
+  --font-body: "Segoe UI Variable Text", "BIZ UDPGothic", "Yu Gothic UI", "ORIGAMI3 JP",
+    sans-serif;
+  --font-user-text: "Segoe UI Variable Text", "BIZ UDPGothic", "Yu Gothic UI", sans-serif;
   --font-heading: var(--font-body);
   --body-font-weight: 400;
   --body-letter-spacing: normal;
@@ -693,13 +697,14 @@
   --brand-digit-height: auto;
   --brand-digit-margin: 0;
   --brand-digit-transform: none;
-  --brand-subtitle-font: "Yu Mincho", serif;
-  --brand-font: Georgia, serif;
+  --brand-subtitle-font: "Yu Mincho", serif, "ORIGAMI3 JP";
+  --brand-font: Georgia, serif, "ORIGAMI3 JP";
   --brand-font-weight: 700;
   --brand-letter-spacing: 0.04em;
   --brand-subtitle-letter-spacing: 0.12em;
-  --font-body: "Yu Gothic UI", "Meiryo", sans-serif;
-  --font-heading: Georgia, "Yu Mincho", serif;
+  --font-body: "Yu Gothic UI", "Meiryo", "ORIGAMI3 JP", sans-serif;
+  --font-user-text: "Yu Gothic UI", "Meiryo", sans-serif;
+  --font-heading: Georgia, "Yu Mincho", serif, "ORIGAMI3 JP";
   --body-font-weight: 500;
   --fw-bold: 700;
   --fw-black: 700;

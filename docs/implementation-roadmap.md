@@ -738,7 +738,9 @@ pub fn outside_reverse(...) -> Result<FoldThroughResult, String>;
 
 **Files:** `apps/desktop/src-tauri/src/autosave.rs`, `dialogs/RecoveryDialog.tsx`
 
-- [ ] 30秒間隔+dirty時のみ`<保存先>.ori3.autosave`へ保存。正常終了時に削除 — [証拠:M2.T2-8.C01](traceability/roadmap-links.md#roadmap-evidence-m2-t2-8-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-8.C01 evidence=TEST.M2.T2-8.C01 -->
+- [ ] 30秒間隔で、保存先のない未保存作品を含むdirtyな現在作品だけをアプリデータ配下の専用枠へ保存し、正常終了時にcleanな現在枠を削除 — [証拠:M2.T2-8.C01](traceability/roadmap-links.md#roadmap-evidence-m2-t2-8-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-8.C01 evidence=TEST.M2.T2-8.C01 -->
+- [ ] 同じapp-dataを共有する複数プロセスでも、OS排他とsession識別により各作品の自動保存候補を失わず、強制終了後に復旧できる — [証拠:M2.T2-8.C04](traceability/roadmap-links.md#roadmap-evidence-m2-t2-8-c04) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-8.C04 evidence=TEST.M2.T2-8.C04 -->
+- [ ] 同じ作品を2つのアプリで開いて別々に編集した場合、後から保存しても先の変更を黙って消さず、同じアプリで続けて保存する場合は競合として妨げない — [証拠:M2.T2-8.C05](traceability/roadmap-links.md#roadmap-evidence-m2-t2-8-c05) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-8.C05 evidence=TEST.M2.T2-8.C05 -->
 - [ ] 起動時`recovery_check`でautosaveの有無を返し、あれば復旧ダイアログ(復元する/破棄する) — [証拠:M2.T2-8.C02](traceability/roadmap-links.md#roadmap-evidence-m2-t2-8-c02) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-8.C02 evidence=MANUAL.M2.T2-8.C02.SCREEN-ACCEPTANCE -->
 - [ ] storeユニットテスト+手動確認(プロセスkill→再起動→復元) → コミット `30秒ごとの自動保存と、異常終了後の復元機能を追加` → プッシュ — [証拠:M2.T2-8.C03](traceability/roadmap-links.md#roadmap-evidence-m2-t2-8-c03) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-8.C03 evidence=MANUAL.M2.T2-8.C03.COMMIT-PUSH -->
 

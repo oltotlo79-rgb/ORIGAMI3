@@ -91,6 +91,9 @@ function seed(drivers: Map<number, number>, poseAngles = new Map<number, number>
     flatFoldViolations: [],
     errorMessage: null,
     documentSavedPath: null,
+    exportError: null,
+    exportSavedPath: null,
+    exportDeliveryNotice: null,
     mirrorAxis: { kind: "paperVertical" },
     mirrorAxisNotice: null,
     recovery: null,
@@ -126,6 +129,9 @@ afterEach(() => {
     activeAngleIntent: null,
     hoveredHinge: null,
     documentSavedPath: null,
+    exportError: null,
+    exportSavedPath: null,
+    exportDeliveryNotice: null,
     mirrorAxis: { kind: "paperVertical" },
     mirrorAxisNotice: null,
     recovery: null,
@@ -136,6 +142,41 @@ afterEach(() => {
     pinnedFolds: new Map(),
     releasedPins: [],
     releasedPinHinges: [],
+  });
+});
+
+describe("ファイル配送の常設通知", () => {
+  it("フォルダーへ保存した全SVG名を、dialogを閉じても常設statusへ出す", () => {
+    seed(new Map());
+    useAppStore.setState({
+      exportOpen: false,
+      exportSavedPath: "browser-file://directory/test/作品.svg",
+      exportDeliveryNotice:
+        "折り図SVGを選んだ保存先へ保存しました: 作品-01.svg、作品-02.svg",
+    });
+
+    render(<ContextPanel />);
+
+    expect(screen.getByRole("status").textContent).toBe(
+      "折り図SVGを選んだ保存先へ保存しました: 作品-01.svg、作品-02.svg",
+    );
+  });
+
+  it("部分保存の実数・失敗コマ・未保存コマを、dialogを閉じてもalertへ残す", () => {
+    seed(new Map());
+    const detail =
+      "折り図SVGの保存を途中で中止しました。保存済み（ここまで）: 作品-01.svg（表紙）、作品-02.svg（1〜6番）。失敗: 作品-03.svg（7〜12番）。未保存: 作品-04.svg（13番）。";
+    useAppStore.setState({
+      exportOpen: false,
+      exportError: detail,
+      exportDeliveryNotice: null,
+    });
+
+    render(<ContextPanel />);
+
+    expect(screen.getByRole("alert").textContent).toBe(
+      `書き出しに失敗しました: ${detail}`,
+    );
   });
 });
 
@@ -1534,6 +1575,27 @@ describe("前回までの作業を再表示する入口", () => {
       screen.queryByRole("button", { name: "前回の作業を確認" }),
     ).toBeNull();
   });
+
+  it("起動時の候補確認失敗を候補なし扱いにせず常設errorへ出す", async () => {
+    seed(new Map());
+    vi.mocked(ipc.recoveryCheck).mockRejectedValue(
+      "ブラウザの復旧保存領域を読み取れませんでした。",
+    );
+    render(<ContextPanel />);
+
+    await act(async () => {
+      await useAppStore.getState().checkRecovery();
+    });
+
+    expect(useAppStore.getState().errorMessage).toBe(
+      "ブラウザの復旧保存領域を読み取れませんでした。",
+    );
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toBe(
+      "ブラウザの復旧保存領域を読み取れませんでした。",
+    );
+    expect(alert.closest("[role='dialog']")).toBeNull();
+  });
 });
 
 describe("D25: 作品保存の知らせ", () => {
@@ -1544,7 +1606,15 @@ describe("D25: 作品保存の知らせ", () => {
 
     await useAppStore.getState().saveDocument("C:\\作品\\鶴.ori3");
 
-    expect(screen.getByText("作品を「鶴.ori3」に保存しました")).toBeTruthy();
+    // ファイル名は利用者が付けた文字列なので、同梱フォント対象外の.user-textへ
+    // 個別の要素として入っていることを検査する(前は文全体の1文字列一致だけだった)。
+    const savedName = screen.getByText("鶴.ori3", { selector: ".user-text" });
+    // 文全体(案内文+ファイル名+案内文)が今までどおり1字も変わっていないことも検査する。
+    // 既定のgetByTextは要素直下のテキストノードしか見ないため、span分割後は
+    // textContentで文全体を比べる(§58.4の据え置きを解消する書き直し)。
+    expect(savedName.closest(".mirror-axis-notice")?.textContent).toBe(
+      "作品を「鶴.ori3」に保存しました",
+    );
     expect(screen.queryByText(/保存できません/)).toBeNull();
   });
 
@@ -1556,11 +1626,26 @@ describe("D25: 作品保存の知らせ", () => {
     render(<ContextPanel />);
 
     await useAppStore.getState().saveDocument("C:\\作品\\前の作品.ori3");
-    expect(screen.getByText("作品を「前の作品.ori3」に保存しました")).toBeTruthy();
+    const savedName = screen.getByText("前の作品.ori3", {
+      selector: ".user-text",
+    });
+    expect(savedName.closest(".mirror-axis-notice")?.textContent).toBe(
+      "作品を「前の作品.ori3」に保存しました",
+    );
 
     await useAppStore.getState().saveDocument("C:\\作品\\新しい作品.ori3");
 
-    expect(screen.queryByText(/作品を「.*」に保存しました/)).toBeNull();
+    // 前の保存名を持つ.user-textが消えたこと(旧: 全体一致の消滅だけを見ていた)
+    expect(
+      screen.queryByText("前の作品.ori3", { selector: ".user-text" }),
+    ).toBeNull();
+    // 旧検査と同じ「どの名前でも保存の知らせが残っていない」という一般性も保つ
+    const remainingNotices = Array.from(
+      document.querySelectorAll(".mirror-axis-notice"),
+    ).map((el) => el.textContent ?? "");
+    expect(
+      remainingNotices.some((text) => /作品を「.*」に保存しました/.test(text)),
+    ).toBe(false);
     expect(screen.getByText("保存先へ書き込めませんでした")).toBeTruthy();
   });
 });

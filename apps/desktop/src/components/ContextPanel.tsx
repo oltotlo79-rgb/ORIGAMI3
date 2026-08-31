@@ -10,6 +10,7 @@ import {
 import { flatFoldNotice } from "../lib/flatFoldNotice";
 import { foldIssueNotice } from "../lib/foldNotices";
 import { uniqueWarnings } from "../lib/techniques";
+import { isBrowserDownloadToken } from "../platform/fileGateway";
 import { fileName } from "./RecoveryDialog";
 import { MeasureControls } from "./MeasureControls";
 import { OperationSteps } from "./OperationSteps";
@@ -41,6 +42,9 @@ export function ContextPanel() {
   const flatFoldViolations = useAppStore((s) => s.flatFoldViolations);
   const errorMessage = useAppStore((s) => s.errorMessage);
   const documentSavedPath = useAppStore((s) => s.documentSavedPath);
+  const exportError = useAppStore((s) => s.exportError);
+  const exportSavedPath = useAppStore((s) => s.exportSavedPath);
+  const exportDeliveryNotice = useAppStore((s) => s.exportDeliveryNotice);
   const mirrorAxisNotice = useAppStore((s) => s.mirrorAxisNotice);
   const recoveryChoices = useAppStore((s) => s.recoveryChoices);
   const recoveryDismissed = useAppStore((s) => s.recoveryDismissed);
@@ -144,6 +148,9 @@ export function ContextPanel() {
       {foldAllPreview === null &&
         (errorMessage !== null ||
           documentSavedPath !== null ||
+          exportError !== null ||
+          exportSavedPath !== null ||
+          exportDeliveryNotice !== null ||
           mirrorAxisNotice !== null ||
           showRecoveryReminder ||
           recoveryOverflowNotice !== null ||
@@ -151,12 +158,39 @@ export function ContextPanel() {
           allWarnings.length > 0 ||
           hasRelaxations) && (
           <div className="context-messages">
-            {errorMessage !== null && <p className="error-text">{errorMessage}</p>}
-            {documentSavedPath !== null && errorMessage === null && (
-              <p className="mirror-axis-notice" aria-live="polite">
-                作品を「{fileName(documentSavedPath)}」に保存しました
+            {errorMessage !== null && (
+              <p className="error-text" role="alert">
+                {errorMessage}
               </p>
             )}
+            {documentSavedPath !== null && errorMessage === null && (
+              <p className="mirror-axis-notice" aria-live="polite">
+                作品を「<span className="user-text">{fileName(documentSavedPath)}</span>」
+                {isBrowserDownloadToken(documentSavedPath)
+                  ? "としてダウンロードを開始しました"
+                  : "に保存しました"}
+              </p>
+            )}
+            {exportError !== null && (
+              <p className="error-text" role="alert">
+                書き出しに失敗しました: {exportError}
+              </p>
+            )}
+            {exportDeliveryNotice !== null && exportError === null && (
+              <p className="mirror-axis-notice" role="status" aria-live="polite">
+                {exportDeliveryNotice}
+              </p>
+            )}
+            {exportSavedPath !== null &&
+              exportDeliveryNotice === null &&
+              exportError === null && (
+                <p className="mirror-axis-notice" role="status" aria-live="polite">
+                  「<span className="user-text">{fileName(exportSavedPath)}</span>」
+                  {isBrowserDownloadToken(exportSavedPath)
+                    ? "のダウンロードを開始しました"
+                    : "へ書き出しました"}
+                </p>
+              )}
             {mirrorAxisNotice !== null && (
               <p className="mirror-axis-notice">{mirrorAxisNotice}</p>
             )}

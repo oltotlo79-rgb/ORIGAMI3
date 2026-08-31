@@ -10,6 +10,7 @@ import {
   warningsForStep,
 } from "../lib/techniques";
 import type { FoldStep } from "../lib/types";
+import { UiIcon } from "./UiIcon";
 
 /** 飛ばされた手順の説明が再生の警告に無いときに出す文言(直し方まで書く) */
 const SKIPPED_FALLBACK =
@@ -112,7 +113,7 @@ export function Timeline() {
           }
           onClick={() => selectStep(0)}
         >
-          ⏮ 最初へ
+          <UiIcon name="skip-to-start" /> 最初へ
         </button>
         <button
           type="button"
@@ -137,7 +138,13 @@ export function Timeline() {
           }
           onClick={() => togglePlay()}
         >
-          {playing ? "⏸ 一時停止" : "▶ 再生"}
+          {playing ? (
+            <>
+              <UiIcon name="pause" /> 一時停止
+            </>
+          ) : (
+            "▶ 再生"
+          )}
         </button>
         <button
           type="button"

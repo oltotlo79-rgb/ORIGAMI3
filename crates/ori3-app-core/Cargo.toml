@@ -1,0 +1,15 @@
+[package]
+name = "ori3-app-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ori3-model.workspace = true
+ori3-cp.workspace = true
+ori3-rigid.workspace = true
+ori3-layers.workspace = true
+ori3-soft.workspace = true
+ori3-propose.workspace = true
+ori3-export.workspace = true
+serde.workspace = true
+serde_json.workspace = true

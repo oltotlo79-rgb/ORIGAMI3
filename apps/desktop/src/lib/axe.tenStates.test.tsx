@@ -351,13 +351,19 @@ const TEN_STATES: readonly TenState[] = [
     prepare: () => {
       useAppStore.setState({
         recovery: {
+          candidate_id: 8_001,
           autosave_path:
             "C:\\Users\\利用者\\AppData\\Local\\ORIGAMI3\\控え\\非常に長い控えの名前.ori3",
           document_path:
             "C:\\Users\\利用者\\Documents\\折り紙作品\\2026年の展示会\\利用者調査で確認する非常に長い作品名\\折り鶴の最終作品.ori3",
           saved_at_ms: Date.UTC(2026, 7, 24, 12, 34, 56),
+          step_count: null,
         },
       });
+      const candidate = useAppStore.getState().recovery;
+      if (candidate !== null) {
+        useAppStore.setState({ recoveryChoices: [candidate] });
+      }
     },
     view: () => <RecoveryDialog />,
   },

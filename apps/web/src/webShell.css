@@ -1,3 +1,18 @@
+/*
+ * ブラウザ版だけが読み込む日本語フォント。日本語フォントを持たない機械でも
+ * 画面の文字が四角い箱にならないようにする。出所・利用条件・照合値は
+ * apps/web/fonts/README.md に記し、ライセンス原文は /fonts/OFL.txt で一緒に配る。
+ * 別名で読み込むので、利用者の機械に入っている本物のNoto Sans JPを置き換えない。
+ * 画面が使う太さは400〜700だけなので、太さの軸もその範囲だけ残してある。
+ */
+@font-face {
+  font-family: "ORIGAMI3 JP";
+  src: url("/fonts/NotoSansJP-ORIGAMI3-subset.ttf") format("truetype");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 html,
 body.web-app {
   height: 100%;

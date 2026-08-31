@@ -3703,13 +3703,18 @@ describe("自動保存からの復旧(SYS-003)", () => {
     autosave_path: "C:/作品/鶴.ori3.autosave",
     document_path: "C:/作品/鶴.ori3",
     saved_at_ms: 1_700_000_000_000,
+    candidate_id: 100,
+    step_count: 3,
   };
 
   it("起動時に残っていればダイアログの材料を持つ。無ければ何も出さない", async () => {
     await useAppStore.getState().checkRecovery();
     expect(useAppStore.getState().recovery).toBeNull();
 
-    vi.mocked(ipc.recoveryCheck).mockResolvedValue(INFO);
+    vi.mocked(ipc.recoveryCheck).mockResolvedValue({
+      choices: [INFO],
+      overflow_count: 0,
+    });
     await useAppStore.getState().checkRecovery();
     expect(useAppStore.getState().recovery).toEqual(INFO);
   });
@@ -3717,11 +3722,14 @@ describe("自動保存からの復旧(SYS-003)", () => {
   it("復元すると作業中だった内容が画面に載り、提案は消える", async () => {
     const view = makeView(700);
     vi.mocked(ipc.recoveryRestore).mockResolvedValue(view);
-    useAppStore.setState({ recovery: INFO });
+    useAppStore.setState({ recovery: INFO, recoveryChoices: [INFO] });
 
-    await useAppStore.getState().resolveRecovery(true);
+    await useAppStore.getState().resolveRecovery(true, INFO.candidate_id);
 
-    expect(vi.mocked(ipc.recoveryRestore)).toHaveBeenCalledWith(true);
+    expect(vi.mocked(ipc.recoveryRestore)).toHaveBeenCalledWith(
+      true,
+      INFO.candidate_id,
+    );
     const s = useAppStore.getState();
     expect(s.doc).toEqual(view.doc);
     expect(s.recovery).toBeNull();
@@ -3731,11 +3739,18 @@ describe("自動保存からの復旧(SYS-003)", () => {
 
   it("破棄すると内容は読み込まず、提案だけ消える", async () => {
     vi.mocked(ipc.recoveryRestore).mockResolvedValue(null);
-    useAppStore.setState({ recovery: INFO, doc: makeView(701).doc });
+    useAppStore.setState({
+      recovery: INFO,
+      recoveryChoices: [INFO],
+      doc: makeView(701).doc,
+    });
 
-    await useAppStore.getState().resolveRecovery(false);
+    await useAppStore.getState().resolveRecovery(false, INFO.candidate_id);
 
-    expect(vi.mocked(ipc.recoveryRestore)).toHaveBeenCalledWith(false);
+    expect(vi.mocked(ipc.recoveryRestore)).toHaveBeenCalledWith(
+      false,
+      INFO.candidate_id,
+    );
     const s = useAppStore.getState();
     expect(s.recovery).toBeNull();
     expect(s.doc).toEqual(makeView(701).doc); // 今開いている作品はそのまま
@@ -3744,11 +3759,11 @@ describe("自動保存からの復旧(SYS-003)", () => {
 
   it("答えは1回きり(二度押しでも要求は1回)", async () => {
     vi.mocked(ipc.recoveryRestore).mockResolvedValue(null);
-    useAppStore.setState({ recovery: INFO });
+    useAppStore.setState({ recovery: INFO, recoveryChoices: [INFO] });
 
     await Promise.all([
-      useAppStore.getState().resolveRecovery(false),
-      useAppStore.getState().resolveRecovery(false),
+      useAppStore.getState().resolveRecovery(false, INFO.candidate_id),
+      useAppStore.getState().resolveRecovery(false, INFO.candidate_id),
     ]);
 
     expect(vi.mocked(ipc.recoveryRestore)).toHaveBeenCalledTimes(1);
@@ -3756,9 +3771,9 @@ describe("自動保存からの復旧(SYS-003)", () => {
 
   it("復元できなかったときは理由を出す", async () => {
     vi.mocked(ipc.recoveryRestore).mockResolvedValue(null);
-    useAppStore.setState({ recovery: INFO });
+    useAppStore.setState({ recovery: INFO, recoveryChoices: [INFO] });
 
-    await useAppStore.getState().resolveRecovery(true);
+    await useAppStore.getState().resolveRecovery(true, INFO.candidate_id);
 
     expect(useAppStore.getState().errorMessage).toContain("見つかりませんでした");
   });

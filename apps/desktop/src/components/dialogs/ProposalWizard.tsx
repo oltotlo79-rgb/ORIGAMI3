@@ -5,6 +5,7 @@
 
 import { useLayoutEffect, useRef, type RefObject } from "react";
 import { useAppStore } from "../../store/appStore";
+import { UiIcon } from "../UiIcon";
 import {
   LENGTH_RANGE,
   MAX_LIMBS,
@@ -480,7 +481,7 @@ function SkeletonStep({
                     style={{ maxWidth: "100%" }}
                     onClick={() => setSkeleton(removeLimb(skeleton, node.id))}
                   >
-                    ✕
+                    <UiIcon name="close" />
                   </button>
                 </div>
               </div>

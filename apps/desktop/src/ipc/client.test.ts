@@ -168,6 +168,23 @@ describe("ほかの折り紙ソフトのファイルのIPC", () => {
   });
 });
 
+describe("折り図書き出しのIPC", () => {
+  it.each([
+    ["DiagramPdf" as const, "C:\\作品\\折り図.pdf"],
+    ["DiagramSvg" as const, "C:\\作品\\折り図.svg"],
+  ])("%s と保存先をdocument_exportまで変えずに渡す", async (kind, path) => {
+    vi.mocked(invoke).mockResolvedValue([]);
+    const options = { include_aux: true, png_long_side: 2048 };
+
+    await expect(documentExport(kind, path, options)).resolves.toEqual([]);
+    expect(invoke).toHaveBeenCalledWith("document_export", {
+      kind,
+      path,
+      options,
+    });
+  });
+});
+
 describe("提案job IPC", () => {
   it("生成の外側引数をcamelCaseで送り、job_id付き結果をそのまま返す", async () => {
     const result: ProposalJobResult = { job_id: JOB_ID, candidates: [] };

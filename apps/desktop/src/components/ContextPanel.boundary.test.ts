@@ -74,9 +74,9 @@ const BASELINE_FUNCTION_BODY_HASHES = {
   PullContent: "e5b0550ea8703fed3086708cb457dc76344e6a156a310e1105f0e1235efabd4a",
   PaperActionEntrances:
     "08b734b6e09a152d15e4b43c2724c718bb4725115d6233c455602499408e75f2",
-  // 2026-08-26: 旧93de8f761787d19b7d30f91538edbc2e3d2e83f1c69053cce32c0517ffe3ad2c→新ed1971bfa8d33e6ffaf128fb782dfcf92ab80225babbcf1565fdc48f6604bb5d。承認済みの常時表示文言を`.fold-all-preview-heading`へ1件追加した意図した変更の照合値更新であり、期待値の緩和ではない。
+  // 2026-08-31: 旧ed1971bfa8d33e6ffaf128fb782dfcf92ab80225babbcf1565fdc48f6604bb5d→新2b801f58fc483dbcc45cbba062410fe7e725b2d9638df10c44ee9db0f0b1457d。承認済みの常設export通知を既存欄へ追加した意図した変更の照合値更新であり、期待値の緩和ではない。
   FoldAllPreviewContent:
-    "ed1971bfa8d33e6ffaf128fb782dfcf92ab80225babbcf1565fdc48f6604bb5d",
+    "2b801f58fc483dbcc45cbba062410fe7e725b2d9638df10c44ee9db0f0b1457d",
   CurveRow: "c936e1fbd83c3c0bc8fa6266373e792cac8aff01e437c694523f35bef2d11650",
   SelectionContent:
     "9088782fd340d87b8ffbdb2d4671755e7265b141179612d16058a6dba4379d6a",
@@ -84,15 +84,20 @@ const BASELINE_FUNCTION_BODY_HASHES = {
     "8e36c4dd33169cc2588555b6ea1ccb5b2e09449b6f57b3e4e0e8d391780ea822",
   // 2026-08-26: 前回までの作業が4件以上ある知らせを既存の下部通知欄へ追加した。
   // 旧f5e5…から実測449c…へ更新し、ほかの担当関数の基準値は変更していない。
-  ContextPanel: "edaccb63c8ba2d479302a5839651d5ec185e13e1b4d7ce6740614834ce1b65bb", // 2026-08-27: 旧449c98b70d2317d15cacff1d074cd4f905b464e2cc1ba2126c672fb35c5d7bdf→新edaccb63c8ba2d479302a5839651d5ec185e13e1b4d7ce6740614834ce1b65bb。読込注意を安全文だけで既存通知欄へ追加した意図した照合値更新であり、期待値の緩和ではない。
+  ContextPanel: "b13f374dad5c59b83f9965a15ffade4d2909c813d0170394e7cfeaf17341a40e", // 2026-08-31: 旧818d6e93b9ccf2185335a616a98fcf1fa78248c912d25f1d63b6091b47f5b3de→新b13f374dad5c59b83f9965a15ffade4d2909c813d0170394e7cfeaf17341a40e。ContextPanel.tsx:49-50,73-76,155,205-212の復旧候補を常設通知から再表示する入口を加えた製品変更の厳密照合値であり、期待値の緩和ではない。
 } as const;
 
-/** useAppStoreへ渡す105 selectorのSHA-256と重複数。 */
+/**
+ * useAppStoreへ渡す110 selectorのSHA-256と重複数。
+ * 2026-08-31: 既存108件をすべて保ち、復旧入口用のrecoveryChoicesとrecoveryDismissedを1件ずつ追加する。期待値の緩和ではない。
+ */
 const BASELINE_SELECTOR_HASH_COUNTS: Record<string, number> = {
   "01af24c4de215dcbb4fb63cc177077dfe2a0fe49c2023546db332a69e00e5177": 1,
   "02dfc81884f4822848acfdb23251d125239b9da0e44d3931dce62841a5787efb": 3,
   "095d250c617e0a2350485d2ae052b1f68da837649f664592ccbb3d23560133aa": 2,
+  "0de5f31be44ede2ebe79c6ce690f7d0378f102513a033433fe2427be86c96ab3": 1,
   "1761034848f4083c1104e05aa5e555fcb02cd9d54be9a2fc8cdb0618a7c9654b": 2,
+  "1dc3722e7f5c06da389bad35a2df1318db0f96361664fe745cf7f1bb965b837f": 1,
   "2a6f29047de1156e91cb9d9c73924a6658f5821d79a0ba32f7c153fba63e5ddc": 1,
   "2c47a196e68bb1357ffeb60f11f130b0c7edd680647c3ea25b49df7c65748883": 1,
   "2e9ca86a9c1a53dc16f043cadcd8f85a3df8c1c752609675af260c44b88ddd44": 1,
@@ -134,6 +139,7 @@ const BASELINE_SELECTOR_HASH_COUNTS: Record<string, number> = {
   "84a980e6255510ee400cddf2c889d6f6e9d451dded60b55878c29613dd41ee28": 1,
   "86f16dd3171074c3bca0c856a6e1321c036bed33b70d3791a3b1100400a62d51": 1,
   "879cd0f092d7e0e660faba9e96f806f938244d4c40cea09bfdce04b85da64272": 1,
+  "9081c090d02ff15be88b52efd00b702aca4b3370ebb69fe42997c35d1911e9fe": 1,
   "9171f462a61ec29bbc29b76c39f6515acaa9247a1201be06e64fd367e77521d3": 2,
   "931675f5cce1ff088f57d0bc23c6acdeb7021e63a38b4c7e09bb19d9a4af1543": 1,
   "941eeea81be3164e0d7d2a30a834ccbaa276722aae5cb22308950fa2a6fab3e3": 1,
@@ -141,6 +147,7 @@ const BASELINE_SELECTOR_HASH_COUNTS: Record<string, number> = {
   "99adbde326f8d14ef024f8a35c4ee0263f26886217d9182534aaf2b7c8981dfc": 1,
   "9bc60eea58b6674219f80f49bada5f7ef9841bef789e6e87d01957348b0f6dfa": 1,
   "9e4ad0fdf5da11e673346869acead82a7cf6bc7809a801fb79e381d190239ae2": 1,
+  "9f5f2b8e7f7d95238c292c35373f52609618ecb7ec410de7efe4ef7aa72e3afd": 1,
   "a29b7a7106df3d5134f58c9031593260109e109f1aad911e725334ecf939806f": 1,
   "a383f02a36a8496b076f957c5c01aaf1a179b384265bc6808e5c428bf58341a3": 1,
   "a3d7e77d44a5de05dce55d0784ee976263e2ddf607192869ace23764b2ce9c83": 1,
@@ -158,6 +165,7 @@ const BASELINE_SELECTOR_HASH_COUNTS: Record<string, number> = {
   "db882a60c31c239f59132fd0a46d9b126f6d7ded9e8b836cf0629cf218fe684e": 1,
   "e1b2550ea851867d8d60e56bcfb9c0ec9400e1c9e2b08097d8d09639f0f95e96": 1,
   "e3ca4b32c1537ca7b97208c4ff8b6122c64fb4924e88b2ccb9902b6587213e31": 1,
+  "e925b10ff6baf4bee69df25d43c7854ef4b6f1336deef3ccb37a4f41a3e7a8f7": 1,
   "eb403885c47466242546f9908b6f457672fc6407e333016504e044b04016f6ed": 3,
   "efae4b2224a39b7c9306d52c5dc510a949efc66ef24e027e738c8d4f7fe0c101": 3,
   "efd064ec03187bbe99c1c5c27369b1afa822948958f16b8f966621a7e7b8dcc7": 1,
@@ -348,7 +356,7 @@ describe("Context C10〜C13の分割境界", () => {
     expect(actual).toEqual(BASELINE_FUNCTION_BODY_HASHES);
   });
 
-  it("useAppStore selector callback 105/105のSHA-256が変わらない", async () => {
+  it("useAppStore selector callback 110/110のSHA-256が変わらない", async () => {
     if (!productsExist()) return;
     const counts: Record<string, number> = {};
     const selectorTexts: string[] = [];
@@ -369,7 +377,7 @@ describe("Context C10〜C13の分割境界", () => {
       const hash = await sha256(text);
       counts[hash] = (counts[hash] ?? 0) + 1;
     }
-    expect(selectorTexts).toHaveLength(105);
+    expect(selectorTexts).toHaveLength(110);
     expect(counts).toEqual(BASELINE_SELECTOR_HASH_COUNTS);
   });
 

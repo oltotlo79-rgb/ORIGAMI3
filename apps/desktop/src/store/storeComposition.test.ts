@@ -731,6 +731,7 @@ const EXPECTED_RUNTIME_STORE_KEY_ORDER = [
   "exportBusy",
   "exportError",
   "exportSavedPath",
+  "exportDeliveryNotice",
   "exportFoldIssues", // 旧: なし → 新: exportFoldIssues。書き出しは続行できても利用者へ伝える注意。意図した変更に対する照合値の更新であり、緩和ではない。
   "newDialogOpen",
   "newPaperDraft",

@@ -3,7 +3,6 @@
 // 常設4区画は増やさない。「ラスタライズ」「dpi」などの用語は出さず、
 // どちらを選ぶと何ができるかを日本語で書く(設計原則3b)。
 
-import { save } from "@tauri-apps/plugin-dialog";
 import { useRef } from "react";
 import {
   FOLD_UNSUPPORTED_CONTENT_ITEMS,
@@ -11,6 +10,10 @@ import {
   foldIssueNotice,
   type FoldIssueNoticeInput,
 } from "../../lib/foldNotices";
+import {
+  getPlatformFileGateway,
+  platformFileErrorMessage,
+} from "../../platform/fileGateway";
 import { useAppStore } from "../../store/appStore";
 import { fileName } from "../RecoveryDialog";
 import { NumberStepper } from "../NumberStepper";
@@ -68,16 +71,27 @@ export function ExportDialog() {
   const busy = useAppStore((s) => s.exportBusy);
   const error = useAppStore((s) => s.exportError);
   const savedPath = useAppStore((s) => s.exportSavedPath);
+  const deliveryNotice = useAppStore((s) => s.exportDeliveryNotice);
   const foldIssues = useAppStore((s) => s.exportFoldIssues);
   const setOption = useAppStore((s) => s.setExportOption);
   const runExport = useAppStore((s) => s.runExport);
   const close = useAppStore((s) => s.closeExport);
   const stepCount = useAppStore((s) => s.doc?.sequence.length ?? 0);
+  const fileGateway = getPlatformFileGateway();
+  const downloadsInsteadOfChoosing = fileGateway.saveMode === "download";
+  const downloadsThisChoice =
+    downloadsInsteadOfChoosing ||
+    (kind === "DiagramSvg" &&
+      fileGateway.multipleFileSaveMode === "download");
   if (!open) return null;
 
   const choice = EXPORT_CHOICES.find((c) => c.kind === kind) ?? EXPORT_CHOICES[0];
   // 失敗の原情報はstoreへ残し、ほかのソフト用だけは画面境界で内部語を隠す。
-  const visibleError = kind === "FoldJson" ? FOLD_EXPORT_FAILURE_NOTICE : error;
+  const safePlatformError = error?.endsWith("作品は変更されていません。") === true;
+  const visibleError =
+    kind === "FoldJson" && !safePlatformError
+      ? FOLD_EXPORT_FAILURE_NOTICE
+      : error;
   // 折り図は手順が要る。選べないときも選択肢は残し、理由を出す
   const blocked = (c: (typeof EXPORT_CHOICES)[number]) =>
     c.needsSteps === true && stepCount === 0;
@@ -87,16 +101,33 @@ export function ExportDialog() {
 
   const handleSave = async () => {
     try {
-      const path = await save({
+      const path = await fileGateway.chooseSaveFile({
         filters: [{ name: choice.label, extensions: [choice.ext] }],
+        suggestedName: `作品.${choice.ext}`,
+        multipleFiles: kind === "DiagramSvg",
       });
-      if (typeof path === "string") {
-        const exportTask = runExport(path);
-        // 保存先を選んだ後、処理中は無効になる保存ボタンではなく、
-        // いつでも使える既存の「閉じる」へ一時的に戻す。
-        queueMicrotask(() => closeButtonRef.current?.focus({ preventScroll: true }));
-        await exportTask;
+      if (path !== null) {
+        try {
+          const exportTask = runExport(path);
+          // 保存先を選んだ後、処理中は無効になる保存ボタンではなく、
+          // いつでも使える既存の「閉じる」へ一時的に戻す。
+          queueMicrotask(() =>
+            closeButtonRef.current?.focus({ preventScroll: true }),
+          );
+          await exportTask;
+        } finally {
+          fileGateway.release(path);
+        }
       }
+    } catch (reason) {
+      useAppStore.setState({
+        exportError: platformFileErrorMessage(
+          reason,
+          downloadsThisChoice ? "download" : "save",
+        ),
+        exportSavedPath: null,
+        exportFoldIssues: [],
+      });
     } finally {
       // 中止時または書き出し完了後は、次の保存を始められる同じ操作へ戻す。
       queueMicrotask(() => saveButtonRef.current?.focus({ preventScroll: true }));
@@ -128,6 +159,13 @@ export function ExportDialog() {
         ))}
       </fieldset>
       <p className="hint">{choice.hint}</p>
+      {downloadsThisChoice && (
+        <p className="hint">
+          {kind === "DiagramSvg"
+            ? "このブラウザでは複数ファイルの保存先を選べないため、折り図SVGをZIPでダウンロードします。"
+            : "このブラウザでは保存先を選べないため、ファイルをダウンロードします。"}
+        </p>
+      )}
       {kind === "FoldJson" && (
         <section
           className="hint"
@@ -169,9 +207,26 @@ export function ExportDialog() {
           />
         </label>
       )}
-      {savedPath && <p className="hint">保存しました:{fileName(savedPath)}</p>}
+      {deliveryNotice !== null && (
+        <p className="hint" aria-live="polite">
+          {deliveryNotice}
+        </p>
+      )}
+      {savedPath && deliveryNotice === null && (
+        <p className="hint">
+          {downloadsThisChoice ? "ダウンロードを開始しました" : "保存しました"}:
+          <span className="user-text">{fileName(savedPath)}</span>
+        </p>
+      )}
       <ExportFoldIssueNotices issues={foldIssues} />
-      {error && <p className="error-text">保存できませんでした:{visibleError}</p>}
+      {error && (
+        <p className="error-text" role="alert">
+          {downloadsThisChoice
+            ? "ダウンロードできませんでした"
+            : "保存できませんでした"}
+          :{visibleError}
+        </p>
+      )}
       <div className="button-row">
         <button
           ref={saveButtonRef}
@@ -180,7 +235,13 @@ export function ExportDialog() {
           disabled={busy || blocked(choice)}
           onClick={() => void handleSave()}
         >
-          {busy ? "書き出しています…" : "保存先を選んで書き出す"}
+          {busy
+            ? downloadsThisChoice
+              ? "ダウンロードの準備中…"
+              : "書き出しています…"
+            : downloadsThisChoice
+              ? "ダウンロード"
+              : "保存先を選んで書き出す"}
         </button>
         <button ref={closeButtonRef} type="button" onClick={close}>
           閉じる

@@ -819,7 +819,14 @@ const TEN_STATES: readonly TenStateCase[] = [
           name: "作品を書き出す", // 旧「展開図・折り図を書き出す」→新「作品を書き出す」。5番目追加に伴う意図した照合値更新であり、緩和ではない。
         }),
       ).toBeTruthy();
-      expect(screen.getByText(`保存しました:${LONG_NAME}`)).toBeTruthy();
+      // ファイル名(利用者が選ぶ)は.user-textへ、前後の案内文(製品側の固定文言)は
+      // 従来どおりで、文全体も1字も変わっていないことを両方検査する。
+      const savedName = screen.getByText(LONG_NAME, { selector: ".user-text" });
+      expect(savedName.closest(".hint")?.textContent).toBe(
+        `保存しました:${LONG_NAME}`,
+      );
+      // 失敗理由は製品が組み立てる固定文言で利用者入力ではないため、.user-textの対象外
+      // のまま文全体一致で検査する(据え置き、こちらは変更していない)。
       expect(screen.getByText(`保存できませんでした:${LONG_ERROR}`)).toBeTruthy();
       expect((screen.getByLabelText("展開図(PNG)") as HTMLInputElement).checked).toBe(true);
     },
@@ -1016,11 +1023,17 @@ const TEN_STATES: readonly TenStateCase[] = [
     arrange: () => {
       useAppStore.setState({
         recovery: {
+          candidate_id: 8_002,
           autosave_path: `C:\\自動保存\\${"深い場所\\".repeat(18)}控え.ori3`,
           document_path: `C:\\作品\\${"深い場所\\".repeat(18)}折り鶴.ori3`,
           saved_at_ms: Date.UTC(2026, 7, 26, 0, 0, 0),
+          step_count: null,
         },
       });
+      const candidate = useAppStore.getState().recovery;
+      if (candidate !== null) {
+        useAppStore.setState({ recoveryChoices: [candidate] });
+      }
     },
     node: () => <RecoveryDialog />,
     root: dialog,
@@ -1039,7 +1052,7 @@ const TEN_STATES: readonly TenStateCase[] = [
       pressEnter(target as HTMLButtonElement);
       await waitFor(() => expect(useAppStore.getState().recovery).toBeNull());
       expect(screen.queryByRole("dialog")).toBeNull();
-      expect(ipc.recoveryRestore).toHaveBeenCalledWith(true);
+      expect(ipc.recoveryRestore).toHaveBeenCalledWith(true, 8_002);
     },
   },
   {
@@ -1718,7 +1731,9 @@ async function expectRecoveryOperation(
     throw new Error(`復旧画面の結果が未定義です: ${ledgerId}`);
   }
   pressEnter(buttonTarget(target));
-  await waitFor(() => expect(ipc.recoveryRestore).toHaveBeenCalledWith(accept));
+  await waitFor(() =>
+    expect(ipc.recoveryRestore).toHaveBeenCalledWith(accept, 8_002),
+  );
   expect(useAppStore.getState().recovery).toBeNull();
 }
 

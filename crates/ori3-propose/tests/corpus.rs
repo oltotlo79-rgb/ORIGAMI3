@@ -14,15 +14,24 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use ori3_model::{AlignmentTarget, CreasePattern, Document, FoldStep, Paper};
 use ori3_propose::{
-    body_on_paper, generate, pack, search_to_completion, search_to_completion_with_control,
-    verify_search_completion, CompletionTolerance, FinishGaps, FinishTarget, FoldGoal, FoldSession,
-    GapWeights, LeafSite, Packing, PoseScan, SearchAbort, SearchBudget, SearchCancellation,
-    SearchControl, SearchWatchdog, Skeleton, TipSite, VerifiedPlan,
+    CompletionTolerance, FinishGaps, FinishTarget, FoldGoal, FoldSession, GapWeights,
+    GenericPlanner, HistoryPlanner, LeafSite, Packing, PoseScan, ProposalResult, SearchAbort,
+    SearchBudget, SearchCancellation, SearchControl, SearchLimits, SearchStats, SearchWatchdog,
+    Skeleton, StopReason, TipSite, VerifiedPlan, body_on_paper, generate, pack,
+    search_to_completion, search_to_completion_with_control, verify_search_completion,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const MANIFEST_NAME: &str = "manifest.json";
+
+const TWO_WAY_ANCHOR_IDS: [&str; 4] = ["crane", "yakko", "frog", "bird-base"];
+const TWO_WAY_LIMITS: SearchLimits = SearchLimits {
+    max_states: 200_000,
+    max_millis: 20_000,
+};
+const TWO_WAY_WARMUP_ROUNDS: usize = 2;
+const TWO_WAY_MEASUREMENT_ROUNDS: usize = 10;
 
 const FUNCTIONAL_SEARCH_CONTRACT: &str = "search_to_completion_no_wall_clock";
 const PERFORMANCE_SEARCH_CONTRACT: &str = "search_to_completion_with_control";
@@ -447,6 +456,19 @@ struct CorpusInput {
     with_fold_plan: bool,
 }
 
+struct TwoWayAnchorSample {
+    id: &'static str,
+    display_name: String,
+    selected_candidate_index: usize,
+    candidate_count: usize,
+    proposal: ProposalResult,
+}
+
+struct TwoWayMeasurement {
+    stats: SearchStats,
+    raw_millis: Vec<f64>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 struct CorpusFoldPlanDetails {
     steps: Vec<FoldStep>,
@@ -628,6 +650,181 @@ fn load_input(case: &CorpusCase) -> Result<(Vec<u8>, CorpusInput), String> {
     let input = serde_json::from_slice(&bytes)
         .map_err(|error| format!("{}: input schema不一致: {error}", path.display()))?;
     Ok((bytes, input))
+}
+
+fn two_way_anchor_samples(manifest: &CorpusManifest) -> Vec<TwoWayAnchorSample> {
+    assert!(manifest.runner_contract.with_fold_plan);
+    TWO_WAY_ANCHOR_IDS
+        .into_iter()
+        .map(|id| {
+            assert!(
+                manifest
+                    .planned_slots
+                    .iter()
+                    .any(|slot| slot.anchor && slot.case_id == id),
+                "{id}: anchor slotでない"
+            );
+            let case = manifest
+                .cases
+                .iter()
+                .find(|case| case.id == id)
+                .unwrap_or_else(|| panic!("{id}: manifest caseがない"));
+            assert_eq!(
+                case.recorded_current.outcome,
+                RecordedOutcomeKind::Candidates
+            );
+            let (input_bytes, input) =
+                load_input(case).unwrap_or_else(|error| panic!("{id}: {error}"));
+            assert_eq!(
+                fixture_checksum(&input_bytes).expect("fixture checksum失敗"),
+                case.input.fixture_checksum.digest,
+                "{id}: fixture checksum不一致"
+            );
+            assert_eq!(
+                structure_hash(&input.skeleton, manifest.hash_contract.float_quantum)
+                    .expect("structure hash失敗"),
+                case.input.structure_hash,
+                "{id}: structure hash不一致"
+            );
+            assert_eq!(
+                normalized_hash(
+                    &NormalizedInputContract::new(&input, &manifest.runner_contract),
+                    manifest.hash_contract.float_quantum,
+                )
+                .expect("normalized input hash失敗"),
+                case.input.normalized_input_hash,
+                "{id}: normalized input hash不一致"
+            );
+            assert_eq!(input.schema_version, 1, "{id}: input schema");
+            assert!(input.with_fold_plan, "{id}: fold plan無しfixture");
+            input
+                .skeleton
+                .validate()
+                .unwrap_or_else(|error| panic!("{id}: skeletonが不正: {error}"));
+
+            let long = input.paper.width_mm.max(input.paper.height_mm);
+            assert!(
+                long > 0.0 && long.is_finite(),
+                "{id}: 紙寸法が正の有限値でない"
+            );
+            let paper_w = input.paper.width_mm / long;
+            let paper_h = input.paper.height_mm / long;
+            let packings = pack(
+                &input.skeleton,
+                paper_w,
+                paper_h,
+                input.seed,
+                manifest.runner_contract.pack_starts,
+            );
+            assert!(!packings.is_empty(), "{id}: 配置が0件");
+            assert!(
+                packings.len() <= manifest.runner_contract.packing_max_candidates,
+                "{id}: 配置{}件が上限{}件を超えた",
+                packings.len(),
+                manifest.runner_contract.packing_max_candidates
+            );
+
+            // 製品相当runnerと同じく、generation errorの候補は除外し、
+            // packing順のままmanifestの選択indexを適用する。
+            let proposals: Vec<_> = packings
+                .iter()
+                .filter_map(|packing| generate(&input.skeleton, packing, paper_w, paper_h).ok())
+                .collect();
+            assert_eq!(
+                proposals.len(),
+                case.recorded_current.candidate_count,
+                "{id}: manifestと候補数が違う"
+            );
+            let selected_candidate_index = case.recorded_current.selected_candidate_index;
+            let candidate_count = proposals.len();
+            let proposal = proposals
+                .into_iter()
+                .nth(selected_candidate_index)
+                .unwrap_or_else(|| panic!("{id}: manifestの選択indexが範囲外"));
+
+            TwoWayAnchorSample {
+                id,
+                display_name: case
+                    .display_name
+                    .clone()
+                    .unwrap_or_else(|| panic!("{id}: display_nameがない")),
+                selected_candidate_index,
+                candidate_count,
+                proposal,
+            }
+        })
+        .collect()
+}
+
+fn summarize_two_way_measurements(
+    sample: &str,
+    method: &str,
+    warmups: &[SearchStats],
+    runs: Vec<SearchStats>,
+) -> TwoWayMeasurement {
+    assert_eq!(warmups.len(), TWO_WAY_WARMUP_ROUNDS);
+    assert_eq!(runs.len(), TWO_WAY_MEASUREMENT_ROUNDS);
+    let first = runs[0];
+    for (index, stats) in warmups.iter().chain(&runs).enumerate() {
+        assert!(
+            first.same_result(stats),
+            "{sample} / {method}: warm-upを含む{}回目の非時間結果が違う\n基準: {first:?}\n対象: {stats:?}",
+            index + 1
+        );
+        assert!(
+            stats.millis.is_finite() && stats.millis >= 0.0,
+            "{sample} / {method}: 時間が非負の有限値でない"
+        );
+        assert!(
+            !matches!(stats.stop, StopReason::StateCap | StopReason::TimeCap),
+            "{sample} / {method}: 打ち切りのため24値として測定できない: {:?}",
+            stats.stop
+        );
+    }
+
+    let raw_millis: Vec<_> = runs.iter().map(|stats| stats.millis).collect();
+    let mut sorted_millis = raw_millis.clone();
+    sorted_millis.sort_by(f64::total_cmp);
+    let middle = sorted_millis.len() / 2;
+    let mut stats = first;
+    stats.millis = (sorted_millis[middle - 1] + sorted_millis[middle]) / 2.0;
+    TwoWayMeasurement { stats, raw_millis }
+}
+
+fn measure_two_way_pair(
+    sample: &str,
+    history: &HistoryPlanner,
+    generic: &GenericPlanner,
+) -> (TwoWayMeasurement, TwoWayMeasurement) {
+    let mut history_warmups = Vec::with_capacity(TWO_WAY_WARMUP_ROUNDS);
+    let mut generic_warmups = Vec::with_capacity(TWO_WAY_WARMUP_ROUNDS);
+    let mut history_runs = Vec::with_capacity(TWO_WAY_MEASUREMENT_ROUNDS);
+    let mut generic_runs = Vec::with_capacity(TWO_WAY_MEASUREMENT_ROUNDS);
+
+    for round in 0..(TWO_WAY_WARMUP_ROUNDS + TWO_WAY_MEASUREMENT_ROUNDS) {
+        let is_warmup = round < TWO_WAY_WARMUP_ROUNDS;
+        let (history_stats, generic_stats) = if round % 2 == 0 {
+            let history_stats = history.measure(TWO_WAY_LIMITS);
+            let generic_stats = generic.measure(TWO_WAY_LIMITS);
+            (history_stats, generic_stats)
+        } else {
+            let generic_stats = generic.measure(TWO_WAY_LIMITS);
+            let history_stats = history.measure(TWO_WAY_LIMITS);
+            (history_stats, generic_stats)
+        };
+        if is_warmup {
+            history_warmups.push(history_stats);
+            generic_warmups.push(generic_stats);
+        } else {
+            history_runs.push(history_stats);
+            generic_runs.push(generic_stats);
+        }
+    }
+
+    (
+        summarize_two_way_measurements(sample, "生成履歴", &history_warmups, history_runs),
+        summarize_two_way_measurements(sample, "汎用探索", &generic_warmups, generic_runs),
+    )
 }
 
 fn fnv1a64(bytes: &[u8]) -> u64 {
@@ -2768,6 +2965,87 @@ fn functional_and_product_runners_keep_their_separate_time_contracts() {
         .filter(|case| case.counts_toward_target)
     {
         assert_product_time_metadata_contract(&case.id, &case.recorded_current, runner);
+    }
+}
+
+/// 許可済みのcorpus anchor 4件に対し、manifestが記録する選択候補の
+/// 同じCPへ生成履歴方式と汎用探索方式を掛け、24値を測る。
+/// 両方式を2回ずつwarm-upし、先行/後行を逆転させながら10回測定し、
+/// 非時間結果の完全一致と10回の時間の中央値を記録する。
+/// 両方式の各4標本で、初手候補が1件以上あることも固定する。
+#[test]
+fn compare_two_ways_on_allowed_corpus_anchors() {
+    let _guard = corpus_run_guard();
+    let (_, manifest) = load_manifest().expect("manifestを読めない");
+    let samples = two_way_anchor_samples(&manifest);
+    assert_eq!(samples.len(), TWO_WAY_ANCHOR_IDS.len());
+    assert_eq!(
+        samples.iter().map(|sample| sample.id).collect::<Vec<_>>(),
+        TWO_WAY_ANCHOR_IDS
+    );
+
+    println!("\n### corpus anchor 4件: 方式2×標本4×3項目 = 24値\n");
+    println!(
+        "| ID | 標本 | manifest候補 | 方式 | 展開状態数 | 最大分岐数 | 時間ms | 初手候補数 | 手数 | 終了理由 |"
+    );
+    println!("|---|---|---:|---|---:|---:|---:|---:|---:|---|");
+
+    let mut raw_rows = Vec::new();
+    for sample in samples {
+        let history = HistoryPlanner::new(&sample.proposal.cp, &sample.proposal.trace);
+        let generic = GenericPlanner::new(&sample.proposal.cp);
+        let (history_measurement, generic_measurement) =
+            measure_two_way_pair(&sample.display_name, &history, &generic);
+        assert_eq!(
+            history_measurement.stats.lines, generic_measurement.stats.lines,
+            "{}: 両方式が同じCPを数えていない",
+            sample.display_name
+        );
+
+        for (method, measurement) in [
+            ("生成履歴", history_measurement),
+            ("汎用探索", generic_measurement),
+        ] {
+            let stats = measurement.stats;
+            assert!(
+                stats.first_moves >= 1,
+                "{} / {method}: 初手候補が{}件で、4/4契約を満たさない",
+                sample.display_name,
+                stats.first_moves
+            );
+            println!(
+                "| {} | {} | {}/{} | {method} | {} | {} | {:.6} | {} | {} | {:?} |",
+                sample.id,
+                sample.display_name,
+                sample.selected_candidate_index,
+                sample.candidate_count,
+                stats.states,
+                stats.max_branching,
+                stats.millis,
+                stats.first_moves,
+                stats
+                    .plan_len
+                    .map_or_else(|| "-".to_owned(), |length| length.to_string()),
+                stats.stop,
+            );
+            raw_rows.push(format!(
+                "| {} | {} | {} |",
+                sample.id,
+                method,
+                measurement
+                    .raw_millis
+                    .iter()
+                    .map(|millis| format!("{millis:.6}"))
+                    .collect::<Vec<_>>()
+                    .join(" / ")
+            ));
+        }
+    }
+
+    println!("\n### 探索時間の生値(ms、実行順)\n");
+    println!("| ID | 方式 | 10回 |\n|---|---|---|");
+    for row in raw_rows {
+        println!("{row}");
     }
 }
 

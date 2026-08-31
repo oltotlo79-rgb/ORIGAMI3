@@ -18,6 +18,33 @@ beforeEach(() => {
 });
 
 describe("実行環境の切り替え", () => {
+  it("公開するバックエンドコマンドを18件に固定する", async () => {
+    tauri.isTauri.mockReturnValue(false);
+    const { BACKEND_COMMAND_NAMES } = await import("./runtime");
+
+    expect(BACKEND_COMMAND_NAMES).toEqual([
+      "document_new",
+      "document_open",
+      "document_save",
+      "edit_apply",
+      "edit_apply_batch",
+      "edit_undo",
+      "edit_redo",
+      "sequence_apply",
+      "sequence_replay",
+      "pose_solve",
+      "fold_all_preview",
+      "recovery_check",
+      "recovery_restore",
+      "proposal_generate",
+      "proposal_progress",
+      "proposal_control",
+      "proposal_apply",
+      "document_export",
+    ]);
+    expect(new Set(BACKEND_COMMAND_NAMES).size).toBe(18);
+  });
+
   it("Tauriでは従来のinvokeへ名前と引数をそのまま渡す", async () => {
     const result = { ok: true };
     tauri.isTauri.mockReturnValue(true);

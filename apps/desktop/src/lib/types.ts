@@ -718,9 +718,9 @@ export interface RecoveryInfo {
   /** 最後に自動保存した時刻(1970年からのミリ秒)。分からなければnull */
   saved_at_ms: number | null;
   /** 復旧する内容を選ぶための番号。画面には表示しない。 */
-  candidate_id?: number | null;
+  candidate_id: number;
   /** 控えた時点の折り手順数。 */
-  step_count?: number;
+  step_count: number | null;
 }
 
 /** recovery_check の戻り値。利用者が選べる前回までの作業と、超過件数。 */

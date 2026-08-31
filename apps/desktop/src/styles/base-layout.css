@@ -25,6 +25,34 @@ textarea {
   font-size: inherit;
 }
 
+/* 利用者が打ち込む文字は、機械に入っているフォントの並びだけを使う。
+   ブラウザ版が同梱するフォントは画面の枠組み(ボタン・見出し・案内文)のためのもので、
+   利用者の文字までは覆わない(apps/web/fonts/README.md)。並びを分けておけば、
+   1つの文字列の中で同梱フォントと機械のフォントが混ざることもない。
+   .user-text は、利用者由来の表示(保存したファイル名など)へ付ける受け口。
+   ContextPanel.tsx「作品を『名前』に保存しました」とExportDialog.tsx
+   「保存しました:名前」の名前部分に実際に付けてある。文中に埋め込むと、文を
+   ひとかたまりで探していた既存の検査5件(ContextPanel.dom 2件・
+   platformFileGateway.dom 1件・keyboardOnly.tenStates 2件)が素朴なgetByTextの
+   実装(要素直下のテキストノードだけを見る既定挙動)では引っかからなくなるため、
+   対象の.user-text要素をgetByTextで見つけたうえで、その祖先(.mirror-axis-notice /
+   .hint)のtextContentで文全体の一致も検査するよう5件とも書き直した(弱めていない。
+   書き直し先は ContextPanel.dom.test.tsx / platformFileGateway.dom.test.tsx /
+   apps/desktop/src/lib/keyboardOnly.tenStates.test.tsx、並び自体の検査は
+   apps/web/src/webFont.test.ts)。 */
+input[type="text"],
+input[type="search"],
+textarea,
+.user-text {
+  font-family: var(--font-user-text);
+}
+
+/* 字ではなく図で出す小さな印(components/UiIcon.tsx)。隣の文字と高さをそろえる。 */
+.ui-icon {
+  flex: 0 0 auto;
+  vertical-align: -0.125em;
+}
+
 /* 文字・数値・選択の入力欄はどこでも同じ見た目にする */
 input[type="text"],
 input[type="number"],

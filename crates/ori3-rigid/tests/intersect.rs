@@ -5,6 +5,8 @@ use ori3_model::{Document, EdgeKind, Face3D, Frame3D, Paper};
 use ori3_rigid::intersect::{MAX_CONTACT_WITNESSES, contact_metrics, contact_witnesses};
 use ori3_rigid::{layer_order_conflicts, self_intersection_pairs, self_intersects, suspect_hinges};
 
+const CONTACT_TOL: f64 = 1e-6;
+
 fn frame(faces: Vec<Face3D>) -> Frame3D {
     Frame3D {
         faces,
@@ -20,6 +22,22 @@ fn face(id: u32, polygon: &[[f64; 3]]) -> Face3D {
         surface_rank: 0,
         mirrored: false,
     }
+}
+
+fn shared_point_count(a: &Face3D, b: &Face3D) -> usize {
+    a.polygon
+        .iter()
+        .filter(|p| {
+            b.polygon.iter().any(|q| {
+                p.iter()
+                    .zip(q)
+                    .map(|(p, q)| (p - q) * (p - q))
+                    .sum::<f64>()
+                    .sqrt()
+                    <= CONTACT_TOL
+            })
+        })
+        .count()
 }
 
 /// x方向に十分離して複数並べられる、水平面と垂直面の交差ペア。
@@ -219,6 +237,11 @@ fn contact_witnesses_are_deep_first_and_deterministic() {
     faces.extend(isolated_crossing_pair(4, 6.0, 0.15));
     let crossed = frame(faces);
 
+    assert_eq!(
+        self_intersection_pairs(&crossed),
+        vec![(20, 21), (8, 9), (4, 5)],
+        "変更前の二重loopと同じフレーム内の面順で返す"
+    );
     let first = contact_witnesses(&crossed);
     let first_metrics = contact_metrics(&crossed);
     for _ in 0..10 {
@@ -411,6 +434,49 @@ fn hinged_faces_touching_along_their_fold_are_not_reported() {
         ],
     );
     assert!(!self_intersects(&frame(vec![a, b])));
+}
+
+/// 共有辺の除外そのものを守る負例。
+///
+/// 折り目を挟んで平らに重なる隣接2面という実際の折り紙の型を表す。反復計算後の
+/// 各点がTOL境界をわずかにまたいでも、同じ紙の隣接面をめり込みとして報告しない。
+#[test]
+fn shared_edge_tolerance_guard_excludes_adjacent_faces() {
+    let flat = face(0, &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]);
+    let warped = face(
+        1,
+        &[
+            [0.0, 0.0, 0.000_000_9],
+            [1.0, 0.0, 0.000_000_9],
+            [0.25, 0.25, -0.000_001_1],
+        ],
+    );
+    assert_eq!(shared_point_count(&flat, &warped), 2);
+    let adjacent = frame(vec![flat, warped]);
+
+    assert!(!self_intersects(&adjacent));
+    assert!(self_intersection_pairs(&adjacent).is_empty());
+}
+
+/// 複数の折り目が一点へ集まるとき、TOL内で頂点だけを共有する面は接触であって貫通ではない。
+#[test]
+fn single_shared_vertex_is_contact_not_penetration() {
+    let horizontal = face(0, &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]);
+    let diagonal = face(
+        1,
+        &[
+            [0.000_000_7, 0.000_000_7, 0.000_000_000_8],
+            [-0.7, 0.7, -0.001],
+            [0.7, 0.7, -0.001],
+        ],
+    );
+    assert_eq!(shared_point_count(&horizontal, &diagonal), 1);
+    let touching = frame(vec![horizontal, diagonal]);
+
+    assert!(!self_intersects(&touching));
+    assert!(self_intersection_pairs(&touching).is_empty());
+    assert!(contact_witnesses(&touching).is_empty());
+    assert_eq!(contact_metrics(&touching), Default::default());
 }
 
 /// 面400枚(NFR-002の想定規模)を折り途中のように重ねても、交差なしと正しく判定する。

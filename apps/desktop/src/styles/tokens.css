@@ -244,7 +244,12 @@
   --tooltip-font-weight: var(--fw-medium);
   --tooltip-border-width: var(--control-border-width);
 
-  --font-body: "Hiragino Maru Gothic ProN", "Yu Gothic UI", "Meiryo", sans-serif;
+  /* 総称名の直前の "ORIGAMI3 JP" は、ブラウザ版だけが同梱する日本語フォント。
+     機械側の日本語フォントを先に使い、1つも無いときだけ同梱分へ落ちる。
+     配布物を持たないデスクトップ版では、この名前は解決されないので何も変わらない。
+     出所は apps/web/fonts/README.md、読み込みは apps/web/src/webShell.css。 */
+  --font-body: "Hiragino Maru Gothic ProN", "Yu Gothic UI", "Meiryo", "ORIGAMI3 JP", sans-serif;
+  --font-user-text: "Hiragino Maru Gothic ProN", "Yu Gothic UI", "Meiryo", sans-serif;
   --font-heading: var(--font-body);
   --tooltip-font-family: var(--font-body);
   --body-font-weight: 500;

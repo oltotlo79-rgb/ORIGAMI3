@@ -9,6 +9,8 @@ members = [
     "crates/ori3-soft",
     "crates/ori3-propose",
     "crates/ori3-export",
+    "crates/ori3-app-core",
+    "crates/ori3-web",
     "apps/desktop/src-tauri",
 ]
 
@@ -32,3 +34,4 @@ ori3-layers = { path = "crates/ori3-layers" }
 ori3-soft = { path = "crates/ori3-soft" }
 ori3-propose = { path = "crates/ori3-propose" }
 ori3-export = { path = "crates/ori3-export" }
+ori3-app-core = { path = "crates/ori3-app-core" }

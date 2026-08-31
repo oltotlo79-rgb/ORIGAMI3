@@ -12,6 +12,7 @@ import type { EdgeKind } from "../lib/types";
 import { PaperAppearance } from "./PaperAppearance";
 import { MirrorAxisControls } from "./MirrorAxisControls";
 import { mirrorAxisLabel } from "../lib/mirror";
+import { isBrowserDownloadToken } from "../platform/fileGateway";
 import { NumberInput } from "./contextAngleSteps";
 
 const KIND_LABEL: Record<EdgeKind, string> = {
@@ -248,7 +249,10 @@ export function FoldAllPreviewContent() {
         )}
         {documentSavedPath !== null && otherOperationFailed === false && (
           <p className="hint">
-            作品を保存しました。いま見ている形は保存されません。
+            {isBrowserDownloadToken(documentSavedPath)
+              ? "作品のダウンロードを開始しました。"
+              : "作品を保存しました。"}
+            いま見ている形は保存されません。
           </p>
         )}
         {otherOperationFailed && (

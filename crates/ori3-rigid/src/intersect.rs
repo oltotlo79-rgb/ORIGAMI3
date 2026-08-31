@@ -15,12 +15,13 @@
 //! 凸でない面では扇分割の三角形が面の外へはみ出すため、まれに実際より広く
 //! 見積もる(警告を出しすぎる=安全側)。
 
+use ori3_model::clock::{Duration, Instant};
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
-use std::time::{Duration, Instant};
 
 use glam::{DVec2, DVec3};
 use ori3_cp::Face;
 use ori3_model::{CreasePattern, EdgeId, EdgeKind, FaceId, Frame3D, VertexId};
+use rayon::prelude::*;
 
 /// めり込みを見つけたときの警告文(3D表示のバッジに出る)
 pub const PENETRATION_WARNING: &str = "紙が重なって食い込んでいます";
@@ -239,25 +240,62 @@ fn find_self_intersection_details(frame: &Frame3D, limit: Option<usize>) -> Vec<
         return Vec::new();
     }
     let parts: Vec<Part> = frame.faces.iter().map(Part::new).collect();
-    let mut pairs = Vec::new();
-    for i in 0..parts.len() {
-        for j in (i + 1)..parts.len() {
-            let (a, b) = (&parts[i], &parts[j]);
-            if !a.aabb_overlaps(b) || a.shares_edge(b) {
-                continue;
-            }
-            if let Some(witness) = a.deepest_piercing(b) {
-                pairs.push(PairIntersection {
-                    frame_faces: (frame.faces[i].face, frame.faces[j].face),
-                    witness,
-                });
-                if limit.is_some_and(|max| pairs.len() >= max) {
-                    return pairs;
+
+    // 真偽だけを求める公開APIは、従来どおり最初の1組で打ち切る。
+    // 組そのものは外へ返さないため、worker間の順序待ちをせず最初に見つかった組を使う。
+    if limit == Some(1) {
+        return (0..parts.len())
+            .into_par_iter()
+            .filter_map(|i| {
+                ((i + 1)..parts.len()).find_map(|j| pair_intersection(frame, &parts, i, j))
+            })
+            .find_any(|_| true)
+            .into_iter()
+            .collect();
+    }
+
+    let mut pairs_by_left: Vec<(usize, Vec<PairIntersection>)> = (0..parts.len())
+        .into_par_iter()
+        .map(|i| {
+            let mut pairs = Vec::new();
+            for j in (i + 1)..parts.len() {
+                if let Some(intersection) = pair_intersection(frame, &parts, i, j) {
+                    pairs.push(intersection);
                 }
+            }
+            (i, pairs)
+        })
+        .collect();
+
+    // Rayonの実行順に依存せず、従来の二重loopと同じ(i, j)順で返す。
+    // 各iの中は上の逐次loopでj順を保っており、iだけをここで固定すればよい。
+    pairs_by_left.sort_unstable_by_key(|(i, _)| *i);
+    let mut pairs = Vec::new();
+    for (_, intersections) in pairs_by_left {
+        for intersection in intersections {
+            pairs.push(intersection);
+            if limit.is_some_and(|max| pairs.len() >= max) {
+                return pairs;
             }
         }
     }
     pairs
+}
+
+fn pair_intersection(
+    frame: &Frame3D,
+    parts: &[Part],
+    i: usize,
+    j: usize,
+) -> Option<PairIntersection> {
+    let (a, b) = (&parts[i], &parts[j]);
+    if !a.aabb_overlaps(b) || a.shares_edge(b) {
+        return None;
+    }
+    a.deepest_piercing(b).map(|witness| PairIntersection {
+        frame_faces: (frame.faces[i].face, frame.faces[j].face),
+        witness,
+    })
 }
 
 /// 食い込みの原因として利用者へ案内するヒンジを最大5本返す。

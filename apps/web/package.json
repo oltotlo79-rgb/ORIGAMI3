@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "npm --prefix ../desktop run build -- --config ../web/vite.web.config.ts",
-    "test": "npm --prefix ../desktop run test -- --config ../web/vite.web.config.ts src/webShell.test.ts --maxWorkers=1"
+    "typecheck": "npm --prefix ../desktop exec -- tsc -p ../web/tsconfig.json",
+    "build": "npm run typecheck && npm --prefix ../desktop run build -- --config ../web/vite.web.config.ts",
+    "lint": "npm --prefix ../desktop exec -- eslint --config ../desktop/eslint.config.js ../web/src --ignore-pattern src/backend/generated/ori3-web/**",
+    "test": "npm --prefix ../desktop run test -- --config ../web/vite.web.config.ts src --maxWorkers=1"
   }
 }

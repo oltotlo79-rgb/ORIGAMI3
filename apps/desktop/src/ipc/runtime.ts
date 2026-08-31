@@ -6,8 +6,32 @@ import {
 
 export type Runtime = "tauri" | "web";
 
+export const BACKEND_COMMAND_NAMES = [
+  "document_new",
+  "document_open",
+  "document_save",
+  "edit_apply",
+  "edit_apply_batch",
+  "edit_undo",
+  "edit_redo",
+  "sequence_apply",
+  "sequence_replay",
+  "pose_solve",
+  "fold_all_preview",
+  "recovery_check",
+  "recovery_restore",
+  "proposal_generate",
+  "proposal_progress",
+  "proposal_control",
+  "proposal_apply",
+  "document_export",
+] as const;
+
+export type BackendCommandName = (typeof BACKEND_COMMAND_NAMES)[number];
+export type BackendInvokeArgs = InvokeArgs;
+
 export interface Ori3WebBridge {
-  invoke<T>(name: string, args?: InvokeArgs): Promise<T>;
+  invoke<T>(name: BackendCommandName, args?: InvokeArgs): Promise<T>;
 }
 
 declare global {
@@ -28,7 +52,7 @@ const UNAVAILABLE_WEB_BRIDGE =
 
 /** 画面から計算機能を呼ぶ唯一の入口。 */
 export function callBackend<T>(
-  name: string,
+  name: BackendCommandName,
   args?: InvokeArgs,
 ): Promise<T> {
   if (ACTIVE_RUNTIME === "tauri") {

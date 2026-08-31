@@ -123,6 +123,7 @@ export function createDialogSettingsSlice<State extends DialogSettingsHostState>
     exportBusy: false,
     exportError: null,
     exportSavedPath: null,
+    exportDeliveryNotice: null,
     exportFoldIssues: [],
     newDialogOpen: false,
     newPaperDraft: DEFAULT_NEW_PAPER,
@@ -246,9 +247,11 @@ export function createDialogSettingsSlice<State extends DialogSettingsHostState>
       set({ paperActionTipVisible: false, paperActionTipExpanded: false }),
 
     checkRecovery: async () => {
-      // 見つからなくても普通の起動なので、失敗しても利用者へ何も出さない
       const result = await queue.run(() => ipc.recoveryCheck());
-      if (!result.ok) return;
+      if (!result.ok) {
+        fail(result.error);
+        return;
+      }
       if (result.value === null) {
         set({
           recovery: null,
@@ -258,11 +261,7 @@ export function createDialogSettingsSlice<State extends DialogSettingsHostState>
         });
         return;
       }
-      const response = result.value;
-      const { choices, overflow_count: overflowCount } =
-        "choices" in response
-          ? response
-          : { choices: [response], overflow_count: 0 };
+      const { choices, overflow_count: overflowCount } = result.value;
       set({
         recovery: choices[0] ?? null,
         recoveryChoices: choices,
@@ -280,13 +279,15 @@ export function createDialogSettingsSlice<State extends DialogSettingsHostState>
       const choice =
         state.recoveryChoices.find(
           (candidate) => candidate.candidate_id === candidateId,
-        ) ?? state.recovery;
+        ) ?? null;
+      if (choice === null) {
+        fail("選んだ復旧候補は一覧に見つかりません。");
+        return;
+      }
       set({ recoveryBusy: true });
       if (!accept) {
         const result = await queue.run(() =>
-          choice.candidate_id === undefined || choice.candidate_id === null
-            ? ipc.recoveryRestore(false)
-            : ipc.recoveryRestore(false, choice.candidate_id),
+          ipc.recoveryRestore(false, choice.candidate_id),
         );
         if (!result.ok) {
           set({ recoveryBusy: false });
@@ -301,9 +302,7 @@ export function createDialogSettingsSlice<State extends DialogSettingsHostState>
       try {
         await runViewCommand(async () => {
           const view =
-            choice.candidate_id === undefined || choice.candidate_id === null
-              ? await ipc.recoveryRestore(true)
-              : await ipc.recoveryRestore(true, choice.candidate_id);
+            await ipc.recoveryRestore(true, choice.candidate_id);
           if (!view) throw "作業中だった内容が見つかりませんでした";
           return view;
         }, true);
@@ -324,6 +323,7 @@ export function createDialogSettingsSlice<State extends DialogSettingsHostState>
         exportOpen: true,
         exportError: null,
         exportSavedPath: null,
+        exportDeliveryNotice: null,
         exportFoldIssues: [],
       }),
 
@@ -336,6 +336,7 @@ export function createDialogSettingsSlice<State extends DialogSettingsHostState>
         ...patch,
         exportError: null,
         exportSavedPath: null,
+        exportDeliveryNotice: null,
         exportFoldIssues: [],
       }),
 
@@ -349,6 +350,7 @@ export function createDialogSettingsSlice<State extends DialogSettingsHostState>
         set({
           exportError: "画像の大きさを数で入れてください",
           exportSavedPath: null,
+          exportDeliveryNotice: null,
           exportFoldIssues: [],
         });
         return;
@@ -363,6 +365,7 @@ export function createDialogSettingsSlice<State extends DialogSettingsHostState>
         exportBusy: true,
         exportError: null,
         exportSavedPath: null,
+        exportDeliveryNotice: null,
         exportFoldIssues: [],
       });
       await waitForFoldAllRestore();
@@ -384,7 +387,12 @@ export function createDialogSettingsSlice<State extends DialogSettingsHostState>
         const error = result.error;
         set({
           exportBusy: false,
-          exportError: typeof error === "string" ? error : String(error),
+          exportError:
+            typeof error === "string"
+              ? error
+              : error instanceof Error
+                ? error.message
+                : String(error),
           exportFoldIssues: [],
         });
       }

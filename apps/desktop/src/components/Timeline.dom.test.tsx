@@ -69,7 +69,7 @@ describe("手順タイムライン", () => {
     render(<Timeline />);
 
     const previous = screen.getByRole("button", { name: "◀ 前へ" }) as HTMLButtonElement;
-    const first = screen.getByRole("button", { name: "⏮ 最初へ" }) as HTMLButtonElement;
+    const first = screen.getByRole("button", { name: "最初へ" }) as HTMLButtonElement;
     expect(first.disabled).toBe(true);
     expect(previous.disabled).toBe(true);
     expect(previous.getAttribute("data-tooltip")).toBe(
