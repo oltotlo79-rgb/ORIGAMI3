@@ -3,7 +3,7 @@
 この文書のIDは `roadmap-links.json` の手動証拠と1対1で対応する。実施者はID、日付、結果、確認した画面又は履歴を記録する。担当者はアプリを起動せず、画面確認は統括が同梱版で行う。
 
 - ロードマップSHA-256: `2e60805ef7202669133666d5552d9e8b048fd50bdb112e9cd5c00f669dd2a0c5`
-- 検査名台帳SHA-256: `7a3f5cc98321b047842f13fab68618ada49eb48a3ac2ce78363dacfde3c09f58`（roadmap-mapped 38/38件、source 29/29ファイル、definition tree `82c1ba455ce41d2cf809cddf0dd4cde7821d05df1f2a438bc39ebf9623b1b2f0`、リポジトリ全検査数は主張しない）
+- 検査名台帳SHA-256: `38acd91d2fd2d11969c98be4a283c2b3db94d1d6436672f48bb5ca7a3a904fcb`（roadmap-mapped 38/38件、source 29/29ファイル、definition tree `76bb3b0e6f4bdb37de19c65992a2162b99e11bc249b1c25a1d41f4e171f31b86`、リポジトリ全検査数は主張しない）
 
 ## B1未実施受入の自動化可否（2026-08-26）
 

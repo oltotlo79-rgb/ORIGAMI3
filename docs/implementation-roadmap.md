@@ -720,10 +720,10 @@ pub fn outside_reverse(...) -> Result<FoldThroughResult, String>;
 - [x] **実行前プレビュー(UI-008)**: ドラッグ中に折った結果の形を半透明で重ねて表示。動く層を色分け、折り線を明示。プレビューは `flat_motion` を実際に呼んで得た結果を使う(見た目と実際が食い違わないようにする) <!-- 実機受入 2026-08-26: node apps/desktop/tests-live/doc-link-b1-grab-cdp.mjs; desktop.exe SHA-256=0224DE2893960E64EC4FF805D49B301F9697AFA5706A12845C087AC532261906; 通常=対象面13・多角形13・線分49、Shift=対象面17・多角形17・線分61、各手順+1 --> — [証拠:M2.T2-6c.C03](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6c-c03) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6c.C03 evidence=MANUAL.M2.T2-6c.C03.SCREEN-ACCEPTANCE -->
 - [x] **状態の可視化(UI-009)**: 3Dビュー上部に現在のモードと操作ヒントを1行で常時表示(例「紙をドラッグすると折れます / Shiftで1枚だけ」)。できない状態では理由を表示(例「折り途中では折れません。手順の最後に戻してください」)。ボタンは無効化しても消さず、理由をツールチップに出す — [証拠:M2.T2-6c.C04](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6c-c04) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6c.C04 evidence=MANUAL.M2.T2-6c.C04.SCREEN-ACCEPTANCE -->
 - [ ] **技法の選び方を簡素化**: 技法サブメニューを常時表示のパレットにせず、**つかんで動かした結果に応じて自動判定**した技法名を手順に記録する。手動で技法を指定したい場合のみサブメニューを使う — [証拠:M2.T2-6c.C05](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6c-c05) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6c.C05 evidence=MANUAL.M2.T2-6c.C05.SCREEN-ACCEPTANCE -->
-- [ ] 既存の「折り線を引いてパネルで確定」する操作は残す(細かい指定をしたいとき用)が、主操作ではなくする — [証拠:M2.T2-6c.C06](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6c-c06) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6c.C06 evidence=TEST.M2.T2-6c.C06 -->
+- [x] 既存の「折り線を引いてパネルで確定」する操作は残す(細かい指定をしたいとき用)が、主操作ではなくする — [証拠:M2.T2-6c.C06](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6c-c06) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6c.C06 evidence=TEST.M2.T2-6c.C06 -->
 - [x] **DOM環境のテスト基盤を導入**(jsdom + @testing-library/react)。プレビュー・ヒント表示・ドラッグ操作の主要経路にテストを付ける(これまで目視確認のみだった領域) — [証拠:M2.T2-6c.C07](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6c-c07) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6c.C07 evidence=MANUAL.M2.T2-6c.C07.SCREEN-ACCEPTANCE --> <!-- 独立レビュー 2026-08-26: Viewer3D.dom.test.tsx:402-431がjsdom上のpointer down/move/up・半透明preview・releaseを確認、ViewerOperationHint.dom.test.tsx:83-122とOperationSteps.dom.test.tsx:83-157が利用者向け案内を確認。npm.cmd run test -- --run（5 file）=93 passed、skip/todo=0。確認実行: Vitest 4.1.10。 -->
 - [ ] 実機確認: **説明なしで座布団折り→鶴の基本形まで折れるか**を操作しながら確認し、詰まった箇所をprogress.mdに記録 — [証拠:M2.T2-6c.C08](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6c-c08) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6c.C08 evidence=MANUAL.M2.T2-6c.C08.SCREEN-ACCEPTANCE -->
-- [ ] コミット `紙をつかんで動かす直感的な折り操作に変更` → プッシュ — [証拠:M2.T2-6c.C09](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6c-c09) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6c.C09 evidence=MANUAL.M2.T2-6c.C09.COMMIT-PUSH -->
+- [x] コミット `紙をつかんで動かす直感的な折り操作に変更` → プッシュ — [証拠:M2.T2-6c.C09](traceability/roadmap-links.md#roadmap-evidence-m2-t2-6c-c09) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-6c.C09 evidence=MANUAL.M2.T2-6c.C09.COMMIT-PUSH -->
 
 ### Task 2-7: 作図補助・局所平坦判定・めり込み警告
 
@@ -732,7 +732,7 @@ pub fn outside_reverse(...) -> Result<FoldThroughResult, String>;
 - [x] 作図補助(テスト先行): `bisector(角の3点)` / `perpendicular(点, 辺)` / `divide_points(辺, n)` / `direction_lines(点, 22.5°刻み)`。ツールレールのサブメニューから利用 — [証拠:M2.T2-7.C01](traceability/roadmap-links.md#roadmap-evidence-m2-t2-7-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-7.C01 evidence=MANUAL.M2.T2-7.C01.SCREEN-ACCEPTANCE -->
 - [x] 局所平坦判定: 内部頂点ごとに前川(山−谷=±2)・川崎(交互角和=180°)を検査し違反頂点を返す→2Dで橙色表示(CPE-009) — [証拠:M2.T2-7.C02](traceability/roadmap-links.md#roadmap-evidence-m2-t2-7-c02) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-7.C02 evidence=MANUAL.M2.T2-7.C02.SCREEN-ACCEPTANCE -->
 - [ ] めり込み簡易警告: Frame3Dの面ペアの三角形交差を総当たり検査(面数400まで想定、rayonで並列化)→交差ありなら3Dビューに警告バッジ(SIM-007) — [証拠:M2.T2-7.C03](traceability/roadmap-links.md#roadmap-evidence-m2-t2-7-c03) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-7.C03 evidence=MANUAL.M2.T2-7.C03.SCREEN-ACCEPTANCE -->
-- [ ] テスト成功確認 → コミット `作図の補助線・折りたたみ可否の注意表示・紙のめり込み警告を追加` → プッシュ — [証拠:M2.T2-7.C04](traceability/roadmap-links.md#roadmap-evidence-m2-t2-7-c04) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-7.C04 evidence=MANUAL.M2.T2-7.C04.COMMIT-PUSH -->
+- [x] テスト成功確認 → コミット `作図の補助線・折りたたみ可否の注意表示・紙のめり込み警告を追加` → プッシュ — [証拠:M2.T2-7.C04](traceability/roadmap-links.md#roadmap-evidence-m2-t2-7-c04) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-7.C04 evidence=MANUAL.M2.T2-7.C04.COMMIT-PUSH -->
 
 ### Task 2-8: 自動保存と復旧
 
@@ -748,7 +748,7 @@ pub fn outside_reverse(...) -> Result<FoldThroughResult, String>;
 
 - [ ] 折り鶴を「fold_through+技法マクロの列」でスクリプト構築し、最終状態の層数・外形寸法・決定性を検証する回帰テスト — [証拠:M2.T2-9.C01](traceability/roadmap-links.md#roadmap-evidence-m2-t2-9-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-9.C01 evidence=TEST.M2.T2-9.C01 --> <!-- 2026-08-26 未完了へ戻す: completed_crane_is_flat_and_symmetric は合格済みだが、首・尾が外周の尖りとして存在することを確認していない。実測は6手目0.719px、7手目32.779px、11手目15.811px・54.829px。原因は crates/ori3-layers/tests/acceptance_crane.rs:560-567 の7手目の到達指定。確認実行ファイルSHA-256=714EC7D24DA5A84F7438D3155203E144D12D4587D3B04F0EDC9B359B2CB98BE6。状態分割担当が正しい7手目を導出中。既存検査は残す。 -->
 - [ ] 手動確認: アプリで鶴を1折りずつ折って完成→展開図の一部を修正→自動再生で形が追従 — [証拠:M2.T2-9.C02](traceability/roadmap-links.md#roadmap-evidence-m2-t2-9-c02) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-9.C02 evidence=MANUAL.M2.T2-9.C02.SCREEN-ACCEPTANCE -->
-- [ ] コミット `折り鶴が折れることを確認する自動テストを追加` → プッシュ — [証拠:M2.T2-9.C03](traceability/roadmap-links.md#roadmap-evidence-m2-t2-9-c03) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-9.C03 evidence=MANUAL.M2.T2-9.C03.COMMIT-PUSH -->
+- [x] コミット `折り鶴が折れることを確認する自動テストを追加` → プッシュ — [証拠:M2.T2-9.C03](traceability/roadmap-links.md#roadmap-evidence-m2-t2-9-c03) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M2.T2-9.C03 evidence=MANUAL.M2.T2-9.C03.COMMIT-PUSH -->
 
 ## M3: 展開図自動提案(受け入れ: 頭1・尾1・足4の骨格)
 
@@ -765,7 +765,7 @@ impl Skeleton {
 }
 ```
 
-- [ ] テスト(validate正常系/異常系)→実装→コミット `頭・尾・足などの骨格を指定するためのデータ形式を追加` → プッシュ — [証拠:M3.T3-1.C01](traceability/roadmap-links.md#roadmap-evidence-m3-t3-1-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M3.T3-1.C01 evidence=MANUAL.M3.T3-1.C01.COMMIT-PUSH -->
+- [x] テスト(validate正常系/異常系)→実装→コミット `頭・尾・足などの骨格を指定するためのデータ形式を追加` → プッシュ — [証拠:M3.T3-1.C01](traceability/roadmap-links.md#roadmap-evidence-m3-t3-1-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M3.T3-1.C01 evidence=MANUAL.M3.T3-1.C01.COMMIT-PUSH -->
 
 ### Task 3-2: 円・川充填の数値最適化
 
@@ -773,16 +773,16 @@ impl Skeleton {
 
 - [x] テスト: (a)葉2(長さ1,1)を1×1紙に充填→縮尺≥0.5に到達 (b)葉5の充填で円非重複と中心包含の違反がEPS以内 (c)同一シード→同一結果(決定性)。既存検査は緩めない。紙内包含は「円の中心が紙内」(案A)を最終要件として確定した(判断4、2026-08-16) — [証拠:M3.T3-2.C01](traceability/roadmap-links.md#roadmap-evidence-m3-t3-2-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M3.T3-2.C01 evidence=TEST.M3.T3-2.C01 -->
 - [x] 実装: 変数=各葉の円中心+縮尺s。目的=s最大化。制約=|ci−cj| ≥ s·(li+lj+川幅)。紙内包含は「円の中心が紙内」(案A)を確定要件とする。円そのものが紙からはみ出すことは制約としない。射影勾配法(制約違反を射影で戻す)×乱数シード別マルチスタート(既定8スタート、上位4候補を返す)。`rand::rngs::StdRng::seed_from_u64`で決定的に — [証拠:M3.T3-2.C02](traceability/roadmap-links.md#roadmap-evidence-m3-t3-2-c02) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M3.T3-2.C02 evidence=TEST.M3.T3-2.C02 -->
-- [ ] テスト成功確認 → コミット `骨格に合わせて紙の上に必要な領域を自動配置する計算を追加` → プッシュ — [証拠:M3.T3-2.C03](traceability/roadmap-links.md#roadmap-evidence-m3-t3-2-c03) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M3.T3-2.C03 evidence=MANUAL.M3.T3-2.C03.COMMIT-PUSH -->
+- [x] テスト成功確認 → コミット `骨格に合わせて紙の上に必要な領域を自動配置する計算を追加` → プッシュ — [証拠:M3.T3-2.C03](traceability/roadmap-links.md#roadmap-evidence-m3-t3-2-c03) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M3.T3-2.C03 evidence=MANUAL.M3.T3-2.C03.COMMIT-PUSH -->
 
 ### Task 3-3: 展開図生成(充填→分子→折り線)
 
 **Files:** `crates/ori3-propose/src/generate.rs`, `tests/generate.rs`
 
-- [ ] テスト: 葉4+胴1の充填結果から生成したCPが (a)妥当な平面グラフ(extract_faces成功) (b)軸線・稜線が揃い、局所平坦判定の違反頂点数を結果として返す — [証拠:M3.T3-3.C01](traceability/roadmap-links.md#roadmap-evidence-m3-t3-3-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M3.T3-3.C01 evidence=TEST.M3.T3-3.C01 -->
-- [ ] 実装手順: 円中心のドロネー三角形分割→各三角形をウサギ耳分子(3辺の二等分線+垂線)で充填→四角形以上は扇状分割→山谷割り当て(軸線=谷基調、稜線=山基調の既定則)→`ProposalResult { cp: CreasePattern, violations: usize }` — [証拠:M3.T3-3.C02](traceability/roadmap-links.md#roadmap-evidence-m3-t3-3-c02) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M3.T3-3.C02 evidence=TEST.M3.T3-3.C02 -->
-- [ ] `proposal_generate`コマンド追加(Skeleton→候補最大4件のVec<ProposalResult>) — [証拠:M3.T3-3.C03](traceability/roadmap-links.md#roadmap-evidence-m3-t3-3-c03) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M3.T3-3.C03 evidence=TEST.M3.T3-3.C03 -->
-- [ ] テスト成功確認 → コミット `自動配置の結果から展開図を組み立てる機能を追加` → プッシュ — [証拠:M3.T3-3.C04](traceability/roadmap-links.md#roadmap-evidence-m3-t3-3-c04) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M3.T3-3.C04 evidence=MANUAL.M3.T3-3.C04.COMMIT-PUSH -->
+- [x] テスト: 葉4+胴1の充填結果から生成したCPが (a)妥当な平面グラフ(extract_faces成功) (b)軸線・稜線が揃い、局所平坦判定の違反頂点数を結果として返す — [証拠:M3.T3-3.C01](traceability/roadmap-links.md#roadmap-evidence-m3-t3-3-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M3.T3-3.C01 evidence=TEST.M3.T3-3.C01 -->
+- [x] 実装手順: 円中心のドロネー三角形分割→各三角形をウサギ耳分子(3辺の二等分線+垂線)で充填→四角形以上は扇状分割→山谷割り当て(軸線=谷基調、稜線=山基調の既定則)→`ProposalResult { cp: CreasePattern, violations: usize }` — [証拠:M3.T3-3.C02](traceability/roadmap-links.md#roadmap-evidence-m3-t3-3-c02) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M3.T3-3.C02 evidence=TEST.M3.T3-3.C02 -->
+- [x] `proposal_generate`コマンド追加(Skeleton→候補最大4件のVec<ProposalResult>) — [証拠:M3.T3-3.C03](traceability/roadmap-links.md#roadmap-evidence-m3-t3-3-c03) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M3.T3-3.C03 evidence=TEST.M3.T3-3.C03 -->
+- [x] テスト成功確認 → コミット `自動配置の結果から展開図を組み立てる機能を追加` → プッシュ — [証拠:M3.T3-3.C04](traceability/roadmap-links.md#roadmap-evidence-m3-t3-3-c04) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M3.T3-3.C04 evidence=MANUAL.M3.T3-3.C04.COMMIT-PUSH -->
 
 ### Task 3-4: 提案ウィザードUI
 
@@ -860,9 +860,9 @@ impl Skeleton {
 
 ### 作業18: 折り順の探し方を比較するスパイク(判断6の前提)
 
-- [ ] 配置案P1の`crates/ori3-propose`内で、生成履歴方式と汎用探索方式の両方を同じ固定4展開図へ試す。新クレートは作らない — [証拠:M3.T3-4.C27](traceability/roadmap-links.md#roadmap-evidence-m3-t3-4-c27) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M3.T3-4.C27 evidence=TEST.M3.T3-4.C27 -->
+- [x] 配置案P1の`crates/ori3-propose`内で、生成履歴方式と汎用探索方式の両方を同じ固定4展開図へ試す。新クレートは作らない — [証拠:M3.T3-4.C27](traceability/roadmap-links.md#roadmap-evidence-m3-t3-4-c27) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M3.T3-4.C27 evidence=TEST.M3.T3-4.C27 -->
 - [ ] 両方式が固定4展開図の4/4で次手候補を1件以上列挙し、展開状態数・最大分岐数・時間を方式×4件の24/24値で記録する。この作業では方式を決定しない — [証拠:M3.T3-4.C28](traceability/roadmap-links.md#roadmap-evidence-m3-t3-4-c28) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M3.T3-4.C28 evidence=TEST.M3.T3-4.C28 -->
-- [ ] `ori3-layers`への依存追加が必要な場合は、`crates/ori3-propose/Cargo.toml`と`Cargo.lock`を変更する前に承認を得る — [証拠:M3.T3-4.C29](traceability/roadmap-links.md#roadmap-evidence-m3-t3-4-c29) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M3.T3-4.C29 evidence=TEST.M3.T3-4.C29 -->
+- [x] `ori3-layers`への依存追加が必要な場合は、`crates/ori3-propose/Cargo.toml`と`Cargo.lock`を変更する前に承認を得る — [証拠:M3.T3-4.C29](traceability/roadmap-links.md#roadmap-evidence-m3-t3-4-c29) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M3.T3-4.C29 evidence=TEST.M3.T3-4.C29 -->
 
 ### 作業19: 折り順の方式決定(判断6・完了、2026-08-16)
 
@@ -900,7 +900,7 @@ impl Skeleton {
 
 - [x] テスト: 鶴の基本形の頂点を沈める→対象領域の全層で山谷が反転し、層順序が沈め込み後の入れ子順になる — [証拠:M4.T4-1.C01](traceability/roadmap-links.md#roadmap-evidence-m4-t4-1-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-1.C01 evidence=TEST.M4.T4-1.C01 --> <!-- 実行確認: open_sink_works_on_the_bird_base_apex (1 passed; 0 failed) -->
 - [x] 実装: `pub fn open_sink(cp, faces, state, region_line: [[f64;2];2]) -> Result<FoldThroughResult, String>`。折り線より先端側の全層について、(a)折り線で各層を分割 (b)先端側の山谷を反転 (c)層順序を内外反転して再挿入 — [証拠:M4.T4-1.C02](traceability/roadmap-links.md#roadmap-evidence-m4-t4-1-c02) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-1.C02 evidence=TEST.M4.T4-1.C02 --> <!-- 実行確認: open_sink_turns_the_tip_of_the_preliminary_base_inside_out (1 passed; 0 failed) -->
-- [ ] テスト成功確認 → コミット `沈め折りを選ぶだけで折れる機能を追加` → プッシュ — [証拠:M4.T4-1.C03](traceability/roadmap-links.md#roadmap-evidence-m4-t4-1-c03) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-1.C03 evidence=MANUAL.M4.T4-1.C03.COMMIT-PUSH -->
+- [x] テスト成功確認 → コミット `沈め折りを選ぶだけで折れる機能を追加` → プッシュ — [証拠:M4.T4-1.C03](traceability/roadmap-links.md#roadmap-evidence-m4-t4-1-c03) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-1.C03 evidence=MANUAL.M4.T4-1.C03.COMMIT-PUSH -->
 
 ### Task 4-2: ひだ寄せ・ねじり折り
 
@@ -908,32 +908,32 @@ impl Skeleton {
 
 - [x] `pub fn swivel(...)`: 基準線+寄せ線の2線指定でひだを寄せる(fold_through2回+層併合) — [証拠:M4.T4-2.C01](traceability/roadmap-links.md#roadmap-evidence-m4-t4-2-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-2.C01 evidence=TEST.M4.T4-2.C01 --> <!-- 実行確認: swivel_works_on_stacked_layers_and_rejects_only_undefined_input (1 passed; 0 failed) -->
 - [x] `pub fn twist(...)`: 多角形領域+周辺ひだ線の指定でねじる(領域回転配置+周辺ひだのfold_through列) — [証拠:M4.T4-2.C02](traceability/roadmap-links.md#roadmap-evidence-m4-t4-2-c02) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-2.C02 evidence=TEST.M4.T4-2.C02 --> <!-- 実行確認: twist_works_on_a_triangle_and_rejects_only_undefined_input (1 passed; 0 failed) -->
-- [ ] 各テスト(層数・順序・CP追加線の検証)→実装→コミット `ひだ寄せとねじり折りを選ぶだけで折れる機能を追加` → プッシュ — [証拠:M4.T4-2.C03](traceability/roadmap-links.md#roadmap-evidence-m4-t4-2-c03) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-2.C03 evidence=MANUAL.M4.T4-2.C03.COMMIT-PUSH -->
+- [x] 各テスト(層数・順序・CP追加線の検証)→実装→コミット `ひだ寄せとねじり折りを選ぶだけで折れる機能を追加` → プッシュ — [証拠:M4.T4-2.C03](traceability/roadmap-links.md#roadmap-evidence-m4-t4-2-c03) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-2.C03 evidence=MANUAL.M4.T4-2.C03.COMMIT-PUSH -->
 
 ### Task 4-3: 展開図SVG/PNG書き出し
 
 **Files:** `crates/ori3-export/src/{cp_svg,cp_png}.rs`, `tests/export_cp.rs`, `dialogs/ExportDialog.tsx`
 
-- [ ] テスト: 生成SVGに線種別スタイル(山=一点鎖線/谷=破線/輪郭=実線)が含まれ、viewBoxが実寸mm。PNGが指定解像度で非空 — [証拠:M4.T4-3.C01](traceability/roadmap-links.md#roadmap-evidence-m4-t4-3-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-3.C01 evidence=TEST.M4.T4-3.C01 -->
+- [x] テスト: 生成SVGに線種別スタイル(山=一点鎖線/谷=破線/輪郭=実線)が含まれ、viewBoxが実寸mm。PNGが指定解像度で非空 — [証拠:M4.T4-3.C01](traceability/roadmap-links.md#roadmap-evidence-m4-t4-3-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-3.C01 evidence=TEST.M4.T4-3.C01 -->
 - [x] 実装: SVGは文字列組み立て(`svg`クレート可)。PNGはresvgでSVGをラスタライズ。`document_export`コマンド追加(種別enum: CpSvg/CpPng/DiagramPdf/DiagramSvg)+書き出しダイアログ(補助線含む/含まない、PNG解像度) — [証拠:M4.T4-3.C02](traceability/roadmap-links.md#roadmap-evidence-m4-t4-3-c02) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-3.C02 evidence=MANUAL.M4.T4-3.C02.SCREEN-ACCEPTANCE -->
-- [ ] テスト成功確認 → コミット `展開図を画像ファイルとして保存する機能を追加` → プッシュ — [証拠:M4.T4-3.C03](traceability/roadmap-links.md#roadmap-evidence-m4-t4-3-c03) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-3.C03 evidence=MANUAL.M4.T4-3.C03.COMMIT-PUSH -->
+- [x] テスト成功確認 → コミット `展開図を画像ファイルとして保存する機能を追加` → プッシュ — [証拠:M4.T4-3.C03](traceability/roadmap-links.md#roadmap-evidence-m4-t4-3-c03) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-3.C03 evidence=MANUAL.M4.T4-3.C03.COMMIT-PUSH -->
 
 ### Task 4-4: 折り図レンダラ(ステップ図)
 
 **Files:** `crates/ori3-export/src/diagram.rs`, `tests/diagram.rs`
 
-- [ ] テスト: 3ステップの手順から3コマのSVGが生成され、各コマに(a)折る前の平坦状態の正射影(可視輪郭+可視折線) (b)今回の折り線(山=一点鎖線/谷=破線) (c)技法別矢印(TechniqueKindごとに固定の記号パス)が含まれる — [証拠:M4.T4-4.C01](traceability/roadmap-links.md#roadmap-evidence-m4-t4-4-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-4.C01 evidence=TEST.M4.T4-4.C01 -->
-- [ ] 実装: `pub fn render_step(doc: &Document, step_index: usize) -> String /* SVG */`。投影は該当ステップ直前のFlatStateの最上層から可視面を層順に描画。矢印記号はTechniqueKind→固定SVGパスのテーブル(谷矢印/山矢印/中割り/かぶせ/花弁/つぶし/沈め/ひだ/ねじり/ポーズの10種) — [証拠:M4.T4-4.C02](traceability/roadmap-links.md#roadmap-evidence-m4-t4-4-c02) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-4.C02 evidence=TEST.M4.T4-4.C02 -->
-- [ ] テスト成功確認 → コミット `折り手順を1コマずつ図にする機能を追加` → プッシュ — [証拠:M4.T4-4.C03](traceability/roadmap-links.md#roadmap-evidence-m4-t4-4-c03) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-4.C03 evidence=MANUAL.M4.T4-4.C03.COMMIT-PUSH -->
+- [x] テスト: 3ステップの手順から3コマのSVGが生成され、各コマに(a)折る前の平坦状態の正射影(可視輪郭+可視折線) (b)今回の折り線(山=一点鎖線/谷=破線) (c)技法別矢印(TechniqueKindごとに固定の記号パス)が含まれる — [証拠:M4.T4-4.C01](traceability/roadmap-links.md#roadmap-evidence-m4-t4-4-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-4.C01 evidence=TEST.M4.T4-4.C01 -->
+- [x] 実装: `pub fn render_step(doc: &Document, step_index: usize) -> String /* SVG */`。投影は該当ステップ直前のFlatStateの最上層から可視面を層順に描画。矢印記号はTechniqueKind→固定SVGパスのテーブル(谷矢印/山矢印/中割り/かぶせ/花弁/つぶし/沈め/ひだ/ねじり/ポーズの10種) — [証拠:M4.T4-4.C02](traceability/roadmap-links.md#roadmap-evidence-m4-t4-4-c02) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-4.C02 evidence=TEST.M4.T4-4.C02 -->
+- [x] テスト成功確認 → コミット `折り手順を1コマずつ図にする機能を追加` → プッシュ — [証拠:M4.T4-4.C03](traceability/roadmap-links.md#roadmap-evidence-m4-t4-4-c03) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-4.C03 evidence=MANUAL.M4.T4-4.C03.COMMIT-PUSH -->
 
 ### Task 4-5: 折り図PDF/SVG組版
 
 **Files:** `crates/ori3-export/src/pdf.rs`, `tests/pdf.rs`
 
-- [ ] テスト: 7ステップの手順→A4・2列×3コマで2ページのPDFが生成される(ページ数・非空を検証)。SVG版はページ単位のファイル群 — [証拠:M4.T4-5.C01](traceability/roadmap-links.md#roadmap-evidence-m4-t4-5-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-5.C01 evidence=TEST.M4.T4-5.C01 -->
-- [ ] 実装: render_stepのSVGをA4(210×297mm)グリッドに配置(コマ番号+注記付き)、svg2pdfでPDF化。表紙(タイトル+完成図)を1ページ目に付ける — [証拠:M4.T4-5.C02](traceability/roadmap-links.md#roadmap-evidence-m4-t4-5-c02) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-5.C02 evidence=TEST.M4.T4-5.C02 -->
+- [x] テスト: 7ステップの手順→A4・2列×3コマで2ページのPDFが生成される(ページ数・非空を検証)。SVG版はページ単位のファイル群 — [証拠:M4.T4-5.C01](traceability/roadmap-links.md#roadmap-evidence-m4-t4-5-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-5.C01 evidence=TEST.M4.T4-5.C01 -->
+- [x] 実装: render_stepのSVGをA4(210×297mm)グリッドに配置(コマ番号+注記付き)、svg2pdfでPDF化。表紙(タイトル+完成図)を1ページ目に付ける — [証拠:M4.T4-5.C02](traceability/roadmap-links.md#roadmap-evidence-m4-t4-5-c02) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-5.C02 evidence=TEST.M4.T4-5.C02 -->
 - [ ] 書き出しダイアログにDiagramPdf/DiagramSvgを接続 — [証拠:M4.T4-5.C03](traceability/roadmap-links.md#roadmap-evidence-m4-t4-5-c03) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-5.C03 evidence=MANUAL.M4.T4-5.C03.SCREEN-ACCEPTANCE -->
-- [ ] テスト成功確認 → コミット `折り図をPDFとして保存する機能を追加` → プッシュ — [証拠:M4.T4-5.C04](traceability/roadmap-links.md#roadmap-evidence-m4-t4-5-c04) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-5.C04 evidence=MANUAL.M4.T4-5.C04.COMMIT-PUSH -->
+- [x] テスト成功確認 → コミット `折り図をPDFとして保存する機能を追加` → プッシュ — [証拠:M4.T4-5.C04](traceability/roadmap-links.md#roadmap-evidence-m4-t4-5-c04) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-5.C04 evidence=MANUAL.M4.T4-5.C04.COMMIT-PUSH -->
 
 ### Task 4-6: M4受け入れ(伝承のカエル)
 
@@ -941,7 +941,7 @@ impl Skeleton {
 
 - [x] 伝承のカエル(花弁折り・中割り折り・段折りを含む)をスクリプト構築する回帰テスト(最終層数・決定性) — [証拠:M4.T4-6.C01](traceability/roadmap-links.md#roadmap-evidence-m4-t4-6-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-6.C01 evidence=TEST.M4.T4-6.C01 -->
 - [ ] 手動確認: アプリでカエルを折って完成→折り図PDFを書き出し、内容を目視確認 — [証拠:M4.T4-6.C02](traceability/roadmap-links.md#roadmap-evidence-m4-t4-6-c02) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-6.C02 evidence=MANUAL.M4.T4-6.C02.SCREEN-ACCEPTANCE -->
-- [ ] コミット `伝承のカエルが折れて折り図を出せることを確認する自動テストを追加` → プッシュ — [証拠:M4.T4-6.C03](traceability/roadmap-links.md#roadmap-evidence-m4-t4-6-c03) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-6.C03 evidence=MANUAL.M4.T4-6.C03.COMMIT-PUSH -->
+- [x] コミット `伝承のカエルが折れて折り図を出せることを確認する自動テストを追加` → プッシュ — [証拠:M4.T4-6.C03](traceability/roadmap-links.md#roadmap-evidence-m4-t4-6-c03) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=M4.T4-6.C03 evidence=MANUAL.M4.T4-6.C03.COMMIT-PUSH -->
 
 ## M5: 紙のたわみ表現(受け入れ: 風船・折り鶴)
 
@@ -961,7 +961,7 @@ UI-011〜013の実装経路と画面検査はある。M6の完成判定は、F1�
 
 ### FOLD 1.1と1.2の共通取込および1.2書出し
 
-- [ ] FOLD 1.1と1.2の共通限定profileから、対応する展開図・折り角・重なりの情報・線形の手順を読み込み、FOLD 1.2として書き出す。対応外の内容は利用者に示し、FOLD-001〜006およびM7の受け入れ基準を満たす。
+- [x] FOLD 1.1と1.2の共通限定profileから、対応する展開図・折り角・重なりの情報・線形の手順を読み込み、FOLD 1.2として書き出す。対応外の内容は利用者に示し、FOLD-001〜006およびM7の受け入れ基準を満たす。
 
 ### 全部の折り目を一斉に折る一時表示
 
