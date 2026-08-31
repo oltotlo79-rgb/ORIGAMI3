@@ -268,7 +268,7 @@ function Get-DenialReason {
     )
 
     $allowed = @(
-        "ALLOW-1: literal-path git add, commit/push/tag, origin fetch, read-only state/diff, and refs/wip snapshot plumbing",
+        "ALLOW-1: literal-path git add, commit/push/tag, origin fetch, read-only state/diff, and the exact snapshot-worktrees.ps1 normal/-Check refs/wip snapshot plumbing",
         "ALLOW-2: exact scripts/check.ps1, check-ci.ps1, and check-release-ready.ps1 quality gates; plus scripts/check-receipt.ps1 -RepairSigningKey -RepoRoot <this repository> because the coordinator identity must create its own Windows DPAPI signing key",
         "ALLOW-3: literal file reads; rg requires the prohibited-document exclusion glob",
         "ALLOW-4: read-only process and free-capacity inspection; exact local report-time read by Get-Date -Format 'yyyy-MM-dd HH:mm'",
@@ -471,7 +471,7 @@ function Invoke-StopRecordedWatcher {
     $stateLockPath = [string](Get-RequiredWatcherStateValue -State $state -Name "lockPath")
     $mode = [string](Get-RequiredWatcherStateValue -State $state -Name "mode")
 
-    if ($schemaVersion -ne 1 -or $watchPid -le 0 -or $watchPid -eq $PID -or $mode -cne "continuous") {
+    if ($schemaVersion -ne 2 -or $watchPid -le 0 -or $watchPid -eq $PID -or $mode -cne "continuous") {
         throw "watcher runtime identity fields are invalid"
     }
     $parsedInstanceId = [Guid]::Empty
@@ -514,12 +514,22 @@ function Invoke-StopRecordedWatcher {
     $process = $null
     try {
         $process = Get-Process -Id $watchPid -ErrorAction Stop
-        $processHandle = $process.SafeHandle
-        if ($null -eq $processHandle -or $processHandle.IsInvalid -or $processHandle.IsClosed) {
-            throw "recorded watcher process handle is unavailable: PID=$watchPid"
+        # Windows PowerShell can expose StartTime/Path for an existing process while
+        # leaving Process.SafeHandle null. PID、開始時刻、実行ファイル、singleton lockを
+        # 既に照合しているので、handle表示の有無で正当な記録済みwatcherを拒否しない。
+        # Kill()はその時点で終了権限を取得できなければ失敗し、成功後もlock解放を確認する。
+        $actualStartUtc = $null
+        $actualProcessPath = ""
+        try {
+            $actualStartUtc = $process.StartTime.ToUniversalTime()
+            $actualProcessPath = [IO.Path]::GetFullPath([string]$process.Path)
         }
-        $actualStartUtc = $process.StartTime.ToUniversalTime()
-        $actualProcessPath = [IO.Path]::GetFullPath([string]$process.Path)
+        catch {
+            throw "recorded watcher process identity could not be read: PID=$watchPid ($($_.Exception.Message))"
+        }
+        if ($null -eq $actualStartUtc -or [string]::IsNullOrWhiteSpace($actualProcessPath)) {
+            throw "recorded watcher process identity is unavailable: PID=$watchPid"
+        }
         if ($actualStartUtc.Ticks -ne $processStartUtc.Ticks) {
             throw "recorded watcher PID start time does not match runtime state: PID=$watchPid"
         }
@@ -1040,6 +1050,25 @@ function Test-ScriptInvocation {
     $resolvedKey = $resolvedScript.ToLowerInvariant()
     $receiptRepairPath = (Resolve-PolicyPath (Join-Path $scriptsRoot "check-receipt.ps1") $RepositoryRoot).ToLowerInvariant()
     $boundaryStopPath = (Resolve-PolicyPath (Join-Path $scriptsRoot "hooks\enforce-coordinator-boundary.ps1") $RepositoryRoot).ToLowerInvariant()
+    $snapshotWorktreesPath = (Resolve-PolicyPath (Join-Path $scriptsRoot "snapshot-worktrees.ps1") $RepositoryRoot).ToLowerInvariant()
+    if ($resolvedKey -eq $snapshotWorktreesPath) {
+        try {
+            $snapshotItem = Get-Item -LiteralPath $resolvedScript -Force -ErrorAction Stop
+        }
+        catch {
+            return New-PolicyDecision $false "snapshot" "snapshot-worktrees script could not be verified"
+        }
+        if (($snapshotItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            return New-PolicyDecision $false "snapshot" "snapshot-worktrees script may not be a reparse point"
+        }
+        if ($Arguments.Count -eq 0) {
+            return New-PolicyDecision $true "snapshot" "allowed exact refs/wip snapshot creation; branches and working indexes are not selected"
+        }
+        if ($Arguments.Count -eq 1 -and $Arguments[0].ToLowerInvariant() -eq "-check") {
+            return New-PolicyDecision $true "snapshot" "allowed exact refs/wip snapshot freshness check"
+        }
+        return New-PolicyDecision $false "snapshot" "snapshot-worktrees permits only normal execution or the sole literal -Check argument"
+    }
     if ($resolvedKey -eq $boundaryStopPath) {
         if (-not [IO.Path]::IsPathRooted($ScriptPath) -or
             $Arguments.Count -ne 3 -or

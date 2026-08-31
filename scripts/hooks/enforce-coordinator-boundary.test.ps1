@@ -345,15 +345,87 @@ function Initialize-TestRepository {
     foreach ($directory in @("scripts", "scripts\hooks", "scratchpad", "docs", "target\release")) {
         [void][IO.Directory]::CreateDirectory((Join-Path $Root $directory))
     }
-    foreach ($file in @("scripts\check.ps1", "scripts\check-ci.ps1", "scripts\check-release-ready.ps1", "scripts\check-receipt.ps1", "scripts\watch-agents.ps1")) {
+    foreach ($file in @("scripts\check.ps1", "scripts\check-ci.ps1", "scripts\check-release-ready.ps1", "scripts\check-receipt.ps1", "scripts\snapshot-worktrees.ps1", "scripts\watch-agents.ps1")) {
         [IO.File]::WriteAllText((Join-Path $Root $file), "# test placeholder`r`n", [Text.Encoding]::ASCII)
     }
+    Copy-Item -LiteralPath $HookPath -Destination (Join-Path $Root "scripts\hooks\enforce-coordinator-boundary.ps1") -Force
     [IO.File]::WriteAllText((Join-Path $Root "scratchpad\watch.json"), '{"agents":[]}', [Text.Encoding]::ASCII)
     [IO.File]::WriteAllText((Join-Path $Root "docs\sample.md"), "sample", [Text.Encoding]::ASCII)
     [IO.File]::WriteAllText((Join-Path $Root "docs\second.md"), "second", [Text.Encoding]::ASCII)
     [IO.File]::WriteAllText((Join-Path $Root "scratchpad\commit-message.txt"), "日本語のコミットメッセージ", (New-Object Text.UTF8Encoding($false)))
     [IO.File]::WriteAllBytes((Join-Path $Root "scripts\powershell.exe"), [byte[]]@(77, 90, 0, 0))
     [IO.File]::WriteAllBytes((Join-Path $Root "target\release\desktop.exe"), [byte[]]@(77, 90, 0, 0))
+}
+
+function Test-ActualRecordedWatcherStop {
+    $stopRepository = Join-Path $Sandbox "recorded-watcher-stop"
+    $stopScripts = Join-Path $stopRepository "scripts"
+    $stopHooks = Join-Path $stopScripts "hooks"
+    $stopScratchpad = Join-Path $stopRepository "scratchpad"
+    $stopDocs = Join-Path $stopRepository "docs"
+    foreach ($directory in @($stopHooks, $stopScratchpad, $stopDocs)) {
+        [void][IO.Directory]::CreateDirectory($directory)
+    }
+    $stopHookPath = Join-Path $stopHooks "enforce-coordinator-boundary.ps1"
+    $stopWatchPath = Join-Path $stopScripts "watch-agents.ps1"
+    $definitionPath = Join-Path $stopScratchpad "watch.json"
+    [IO.File]::WriteAllText((Join-Path $stopScratchpad "report.md"), "watcher stop fixture`r`n", $script:Utf8NoBom)
+    [IO.File]::WriteAllText((Join-Path $stopDocs "source.md"), "watcher stop source`r`n", $script:Utf8NoBom)
+    $definition = [ordered]@{
+        agents = @(
+            [ordered]@{
+                name = "recorded watcher stop fixture"
+                reportPath = "scratchpad/report.md"
+                sourcePaths = @("docs/source.md")
+            }
+        )
+    }
+    [IO.File]::WriteAllText($definitionPath, ($definition | ConvertTo-Json -Depth 6), $script:Utf8NoBom)
+    Copy-Item -LiteralPath $HookPath -Destination $stopHookPath -Force
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot "..\watch-agents.ps1") -Destination $stopWatchPath -Force
+
+    $watcherArguments = ConvertTo-ProcessArgumentString @(
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-File", $stopWatchPath,
+        "-DefinitionPath", $definitionPath,
+        "-RepositoryRoot", $stopRepository,
+        "-IntervalMinutes", "10",
+        "-StaleAfterMinutes", "40"
+    )
+    $watcher = Start-Process -FilePath $PowerShellPath -ArgumentList $watcherArguments -WorkingDirectory $stopRepository -WindowStyle Hidden -PassThru
+    try {
+        $runtimePath = Join-Path $stopScratchpad "watch-agents.runtime.json"
+        $deadline = [DateTime]::UtcNow.AddSeconds(10)
+        while ([DateTime]::UtcNow -lt $deadline -and -not (Test-Path -LiteralPath $runtimePath -PathType Leaf)) {
+            Start-Sleep -Milliseconds 50
+        }
+        Assert-True (Test-Path -LiteralPath $runtimePath -PathType Leaf) "recorded watcher stop fixture must publish runtime state"
+        $runtime = [IO.File]::ReadAllText($runtimePath, $script:Utf8NoBom) | ConvertFrom-Json
+        Assert-Equal ([int]$runtime.schemaVersion) 2 "recorded watcher stop accepts the watcher schema"
+        Assert-Equal ([int]$runtime.pid) $watcher.Id "runtime PID must identify the launched watcher"
+
+        $previous = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            $global:LASTEXITCODE = 0
+            $stopOutput = @(& $PowerShellPath -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $stopHookPath -StopRecordedWatcher -RepositoryRoot $stopRepository 2>&1)
+            $stopExit = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previous
+        }
+        $script:Cases++
+        Assert-Equal $stopExit 0 "actual recorded watcher stop must exit 0" ($stopOutput -join "`n")
+        Assert-Contains ($stopOutput -join "`n") ("RECORDED_WATCHER_STOPPED pid=" + $watcher.Id) "actual recorded watcher stop must identify the exact runtime PID"
+        Assert-True $watcher.WaitForExit(10000) "actual recorded watcher stop must terminate the recorded process"
+    }
+    finally {
+        if (-not $watcher.HasExited) {
+            $watcher.Kill()
+            [void]$watcher.WaitForExit(10000)
+        }
+        $watcher.Dispose()
+    }
 }
 
 function Test-ActualGitCoordinatorFlow {
@@ -463,6 +535,8 @@ try {
     $ciGate = Join-Path $Repository "scripts\check-ci.ps1"
     $releaseGate = Join-Path $Repository "scripts\check-release-ready.ps1"
     $receipt = Join-Path $Repository "scripts\check-receipt.ps1"
+    $snapshotWorktrees = Join-Path $Repository "scripts\snapshot-worktrees.ps1"
+    $boundaryScript = Join-Path $Repository "scripts\hooks\enforce-coordinator-boundary.ps1"
     $watch = Join-Path $Repository "scripts\watch-agents.ps1"
     $watchDefinition = Join-Path $Repository "scratchpad\watch.json"
     $desktop = Join-Path $Repository "target\release\desktop.exe"
@@ -492,9 +566,13 @@ try {
         @{ Name = "check gate"; Command = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$gate`"" },
         @{ Name = "CI gate"; Command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ciGate`"" },
         @{ Name = "release gate with tag"; Command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$releaseGate`" -Tag v1.2.3" },
+        @{ Name = "coordinator refs/wip snapshot normal"; Command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$snapshotWorktrees`"" },
+        @{ Name = "coordinator refs/wip snapshot freshness check"; Command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$snapshotWorktrees`" -Check" },
+        @{ Name = "coordinator refs/wip snapshot relative script"; Command = "scripts/snapshot-worktrees.ps1" },
         @{ Name = "coordinator signing key repair direct"; Command = "scripts/check-receipt.ps1 -RepairSigningKey -RepoRoot '$Repository'" },
         @{ Name = "coordinator signing key repair wrapped"; Command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$receipt`" -RepairSigningKey -RepoRoot `"$Repository`"" },
         @{ Name = "coordinator signing key repair current host wrapper"; Command = "$PowerShellPath -NoProfile -ExecutionPolicy Bypass -File `"$receipt`" -RepairSigningKey -RepoRoot `"$Repository`"" },
+        @{ Name = "coordinator recorded watcher stop"; Command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$boundaryScript`" -StopRecordedWatcher -RepositoryRoot `"$Repository`"" },
         @{ Name = "literal file read"; Command = "Get-Content -LiteralPath '$sample'" },
         @{ Name = "rg with exclusion"; Command = "rg needle '$Repository' --glob '!docs/competitive-review-2026-08-20.md'" },
         @{ Name = "process pipeline"; Command = "Get-Process -Name cargo | Measure-Object" },
@@ -515,6 +593,9 @@ try {
         @{ Name = "individual test script"; Command = "powershell.exe -NoProfile -File scripts/check-agent-instruction.test.ps1" },
         @{ Name = "roadmap generator"; Command = "powershell.exe -NoProfile -File scripts/generate-roadmap-links.ps1" },
         @{ Name = "rules split script"; Command = "powershell.exe -NoProfile -File scripts/check-rules-split.ps1" },
+        @{ Name = "snapshot named worktree narrowing"; Command = "powershell.exe -NoProfile -File `"$snapshotWorktrees`" -Name crane" },
+        @{ Name = "snapshot explicit repository override"; Command = "powershell.exe -NoProfile -File `"$snapshotWorktrees`" -RepositoryRoot `"$Repository`"" },
+        @{ Name = "snapshot check with extra argument"; Command = "powershell.exe -NoProfile -File `"$snapshotWorktrees`" -Check -Name crane" },
         @{ Name = "signing key repair missing repository"; Command = "scripts/check-receipt.ps1 -RepairSigningKey" },
         @{ Name = "signing key repair wrong repository"; Command = "scripts/check-receipt.ps1 -RepairSigningKey -RepoRoot '$Repository2'" },
         @{ Name = "signing key repair relative repository"; Command = "scripts/check-receipt.ps1 -RepairSigningKey -RepoRoot '.'" },
@@ -524,6 +605,9 @@ try {
         @{ Name = "receipt without mode remains delegated"; Command = "scripts/check-receipt.ps1 -RepoRoot '$Repository'" },
         @{ Name = "signing key repair alternate PowerShell wrapper path"; Command = "scripts/powershell.exe -NoProfile -File `"$receipt`" -RepairSigningKey -RepoRoot `"$Repository`"" },
         @{ Name = "signing key repair drive-relative PowerShell wrapper path"; Command = "C:powershell.exe -NoProfile -File `"$receipt`" -RepairSigningKey -RepoRoot `"$Repository`"" },
+        @{ Name = "recorded watcher stop missing repository"; Command = "powershell.exe -NoProfile -File `"$boundaryScript`" -StopRecordedWatcher" },
+        @{ Name = "recorded watcher stop wrong repository"; Command = "powershell.exe -NoProfile -File `"$boundaryScript`" -StopRecordedWatcher -RepositoryRoot `"$Repository2`"" },
+        @{ Name = "recorded watcher stop extra argument"; Command = "powershell.exe -NoProfile -File `"$boundaryScript`" -StopRecordedWatcher -RepositoryRoot `"$Repository`" -Force" },
         @{ Name = "CI narrowed static mode"; Command = "powershell.exe -NoProfile -File `"$ciGate`" -StaticContractOnly" },
         @{ Name = "direct blocking watcher"; Command = "powershell.exe -NoProfile -File `"$watch`" -DefinitionPath `"$watchDefinition`" -RepositoryRoot `"$Repository`" -IntervalMinutes 10 -StaleAfterMinutes 40" },
         @{ Name = "detached watch relative PowerShell host"; Command = $detachedWatchCommand.Replace("-FilePath '$PowerShellPath'", "-FilePath 'powershell.exe'") },
@@ -641,6 +725,9 @@ try {
 
     Write-Host "[6/8] actual throwaway git coordinator flow"
     Test-ActualGitCoordinatorFlow
+
+    Write-Host "[6.5/8] actual recorded watcher stop"
+    Test-ActualRecordedWatcherStop
 
     Write-Host "[7/8] exact one-time receipt and PostToolUse success"
     Reset-ActiveState

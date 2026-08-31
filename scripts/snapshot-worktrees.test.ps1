@@ -243,8 +243,14 @@ try {
     New-TestFile (Join-Path $freshFixture.Worktree "scratchpad\resume.patch") "included direct patch"
     New-TestFile (Join-Path $freshFixture.Worktree "scratchpad\resume.txt") "included direct text"
     New-TestFile (Join-Path $freshFixture.Worktree "scratchpad\nested\not-included.patch") "excluded nested patch"
+    $headBeforeSnapshot = (Invoke-TestGit $freshFixture.Repository @("rev-parse", "HEAD")).Trim()
+    $branchBeforeSnapshot = (Invoke-TestGit $freshFixture.Repository @("symbolic-ref", "-q", "HEAD")).Trim()
     $snapshotResult = Invoke-SnapshotProcess -Fixture $freshFixture
     Assert-Equal $snapshotResult.ExitCode 0 "snapshot process must exit 0" $snapshotResult.Output
+    $headAfterSnapshot = (Invoke-TestGit $freshFixture.Repository @("rev-parse", "HEAD")).Trim()
+    $branchAfterSnapshot = (Invoke-TestGit $freshFixture.Repository @("symbolic-ref", "-q", "HEAD")).Trim()
+    Assert-Equal $headAfterSnapshot $headBeforeSnapshot "snapshot must not move the checked-out branch HEAD" $snapshotResult.Output
+    Assert-Equal $branchAfterSnapshot $branchBeforeSnapshot "snapshot must not change the checked-out branch name" $snapshotResult.Output
     Assert-NotContains $snapshotResult.Output "fatal: pathspec" "an absent optional scratchpad class must not emit a git fatal"
     $freshCheck = Invoke-SnapshotProcess -Fixture $freshFixture -Check
     Assert-Equal $freshCheck.ExitCode 0 "fresh snapshot check must exit 0" $freshCheck.Output

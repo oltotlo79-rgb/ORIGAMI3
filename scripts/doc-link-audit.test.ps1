@@ -86,6 +86,9 @@ try {
     $ignoredExecutionCount = [int]$generatedLedger.test_name_inventory.execution_modes.ignored_explicit
     Assert-True ($write.Text -match "test_inventory_scope=roadmap-mapped test_inventory_audited=$inventoryCount/$mappedCount test_source_files=$sourceFileCount/$sourceFileCount test_definition_tree_sha256=[0-9a-f]{64} test_execution_active=$activeExecutionCount test_execution_ignored_explicit=$ignoredExecutionCount repository_test_total=not-claimed test_inventory_sha256=[0-9a-f]{64}") "対象限定の検査名台帳件数/source/実行モード/hash表示がありません"
     Assert-True ($inventoryCount -gt 0 -and $inventoryCount -eq $mappedCount -and $sourceFileCount -gt 0 -and $activeExecutionCount + $ignoredExecutionCount -eq $inventoryCount -and $ignoredExecutionCount -gt 0 -and [string]$generatedLedger.test_name_inventory.definition_tree_sha256 -match '^[0-9a-f]{64}$' -and [string]$generatedLedger.test_name_inventory.repository_test_total -eq '') "生成台帳が検査名全割当・execution mode・definition tree hash・全体非主張を保持していません"
+    $uncheckedWithCompletedTaskCount = @($generatedLedger.records | Where-Object { $_.progress_state -eq 'unchecked-but-progress-task-exists' }).Count
+    Assert-True ($write.Text -match "unchecked_with_completed_task=$uncheckedWithCompletedTaskCount") "完了進捗がある未チェック項目の件数表示がありません"
+    Assert-True (-not $write.Text.Contains('regressed_to_unstarted=')) "状態差を印の後退と誤認させる旧表示が残っています"
 
     $names = @("roadmap-links.json", "roadmap-links.md", "manual-acceptance.md")
     $baseline = @{}
