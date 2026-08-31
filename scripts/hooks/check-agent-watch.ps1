@@ -506,6 +506,17 @@ function Test-AgentWatchResponses {
         if (-not [string]::Equals($evidence, $evidence.Trim(), [StringComparison]::Ordinal) -or [string]::IsNullOrWhiteSpace($evidence)) {
             return New-PolicyResult -Code "STALL_RESPONSE_EVIDENCE" -Message "evidenceには空白だけでない実測または判断根拠を1行で書いてください。"
         }
+        if ($action -eq "reassign" -and -not [string]::Equals(
+            $evidence,
+            "agent-inquiry-timeout-v1 attempt1=timeout:7200s attempt2=timeout:7200s",
+            [StringComparison]::Ordinal
+        )) {
+            return New-PolicyResult -Code "STALL_REASSIGN_EVIDENCE" -Message (
+                "action=reassignには、同じincidentへの問い合わせ2件が各7200秒で時間切れになった実測が必要です。" +
+                "evidenceは 'agent-inquiry-timeout-v1 attempt1=timeout:7200s attempt2=timeout:7200s' の完全一致にしてください。" +
+                "更新時刻・process数・CPU・空応答だけではreassignできません。証拠がなければaction=investigateを使ってください。"
+            )
+        }
         if (-not [string]::Equals($next, $next.Trim(), [StringComparison]::Ordinal) -or [string]::IsNullOrWhiteSpace($next)) {
             return New-PolicyResult -Code "STALL_RESPONSE_NEXT" -Message "nextには空白だけでない次の行動または再確認条件を1行で書いてください。"
         }

@@ -766,8 +766,31 @@ try {
     $blankNextText = $validResponseText.Replace("next=担当へ現状確認を送り、次の走査で成果物更新を再測する", "next=   ")
     $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source -Action "Hook" -Payload (New-HookPayload -ToolName "Agent" -Text $blankNextText)
     Assert-Contains $result.Output "STALL_RESPONSE_NEXT" "空白だけのnextを拒否すること"
+
+    $reassignWithMtimeOnlyText = $validResponseText.Replace("action=investigate", "action=reassign").Replace("evidence=監視出力の停滞IDと対象を確認した", "evidence=最終更新時刻が40分を超えた")
+    $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source -Action "Hook" -Payload (New-HookPayload -ToolName "Agent" -Text $reassignWithMtimeOnlyText)
+    Assert-Contains $result.Output "STALL_REASSIGN_EVIDENCE" "更新時刻だけを根拠にしたreassignを拒否すること"
+    Assert-Contains $result.Output "action=investigate" "reassign拒否時にinvestigateの修復経路を示すこと"
+
+    $reassignWithProcessOnlyText = $validResponseText.Replace("action=investigate", "action=reassign").Replace("evidence=監視出力の停滞IDと対象を確認した", "evidence=cargo=0 rustc=0 test=0")
+    $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source -Action "Hook" -Payload (New-HookPayload -ToolName "Agent" -Text $reassignWithProcessOnlyText)
+    Assert-Contains $result.Output "STALL_REASSIGN_EVIDENCE" "process数だけを根拠にしたreassignを拒否すること"
+
+    $reassignWithEmptyResponseOnlyText = $validResponseText.Replace("action=investigate", "action=reassign").Replace("evidence=監視出力の停滞IDと対象を確認した", "evidence=応答が空だった")
+    $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source -Action "Hook" -Payload (New-HookPayload -ToolName "Agent" -Text $reassignWithEmptyResponseOnlyText)
+    Assert-Contains $result.Output "STALL_REASSIGN_EVIDENCE" "空応答だけを根拠にしたreassignを拒否すること"
+
+    $validReassignText = $validResponseText.Replace("action=investigate", "action=reassign").Replace("evidence=監視出力の停滞IDと対象を確認した", "evidence=agent-inquiry-timeout-v1 attempt1=timeout:7200s attempt2=timeout:7200s")
+    $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source -Action "Hook" -Payload (New-HookPayload -ToolName "Agent" -Text $validReassignText)
+    Assert-True (-not $result.Output.Contains('"permissionDecision":"deny"')) "2件各7200秒の時間切れ実測を含むreassignを通すこと"
+
+    $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source -Action "Hook" -Payload (New-HookPayload -ToolName "Agent" -Text $validResponseText)
+    Assert-True (-not $result.Output.Contains('"permissionDecision":"deny"')) "investigateは死亡証拠がなくても確認・修復のために通すこと"
     foreach ($repairAction in @("investigate", "reassign", "stop-request", "complete-check")) {
         $repairText = Get-ResponseTextForRuntime -FirstAction $repairAction
+        if ($repairAction -eq "reassign") {
+            $repairText = $repairText.Replace("evidence=監視出力の停滞IDと対象を確認した", "evidence=agent-inquiry-timeout-v1 attempt1=timeout:7200s attempt2=timeout:7200s")
+        }
         $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source -Action "Hook" -Payload (New-HookPayload -ToolName "SendMessage" -Text $repairText)
         Assert-True (-not $result.Output.Contains('"permissionDecision":"deny"')) "修復action=$repairAction を同じ宣言で締め出さないこと"
     }

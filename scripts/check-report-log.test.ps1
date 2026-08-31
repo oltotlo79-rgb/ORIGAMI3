@@ -18,7 +18,7 @@ $tempParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([char[]]"
 $sandboxName = "ori3-check-report-log-test-{0}" -f [Guid]::NewGuid().ToString("N")
 $sandboxRoot = [IO.Path]::GetFullPath((Join-Path $tempParent $sandboxName))
 $script:assertions = 0
-$script:legacyBoundaryHeader = '## 2026-08-31 10:46 — 未チェックが40件→16件になり、統括が時刻を読めるようになった'
+$script:legacyBoundaryHeader = '## 2026-08-31 19:45 — 検証の結論。Codex sol は死んでいなかった。統括の誤判定である'
 $script:legacySuffixText = ''
 
 function Assert-True {
@@ -157,6 +157,8 @@ try {
     }
     Assert-True ($boundaryIndices.Count -eq 1) "production legacy boundary must exist exactly once"
     $script:legacySuffixText = $productionReportLines[(($boundaryIndices[0])..($productionReportLines.Count - 1))] -join "`n"
+    Assert-True ($script:legacySuffixText.Contains('## 2026-08-31 12:16 — 折り鶴の担当が死んでいた。停滞対策は効いたが、統括が宣言だけして動かなかった')) "確定死亡の過去recordはimmutable suffixに保存すること"
+    Assert-True ($script:legacySuffixText.Contains('問い合わせ2件（kydnb03n3、ki17jjb07）→ いずれも 7,200秒で正式に時間切れ')) "確定死亡の過去recordは実測本文を改変せず保存すること"
 
     $snapshotResult = Invoke-ProcessCapture -Arguments @(
         "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
@@ -175,11 +177,24 @@ try {
 
     $now = Get-Date
     $headingTime = $now.AddMinutes(-1)
-    $legacyBoundaryTimestamp = [datetime]'2026-08-31 10:46'
+    $legacyBoundaryTimestamp = [datetime]'2026-08-31 19:45'
     Assert-True ($headingTime.AddMinutes(-1) -gt $legacyBoundaryTimestamp) "self-test records must be newer than the immutable boundary"
 
     $validNonePath = Write-TestReport "valid-none" $headingTime "通常の作業報告" @("Roadmap-Claim: none", "通常の本文です。") $now
     Assert-Exit (Invoke-ReportCheck $validNonePath) 0 "valid none"
+
+    $agentDeathMissingEvidencePath = Write-TestReport "agent-death-missing-evidence" $headingTime "担当が死んだという報告" @("Roadmap-Claim: none", "担当が死んだと判断した。") $now
+    Assert-Exit (Invoke-ReportCheck $agentDeathMissingEvidencePath) 2 "agent death missing evidence" "Agent-Death-Evidence"
+
+    $agentDeathMtimeOnlyPath = Write-TestReport "agent-death-mtime-only" $headingTime "担当が死んだという報告" @("Roadmap-Claim: none", "担当が死んだと判断した。", "Agent-Death-Evidence: 最終更新時刻が40分を超えた") $now
+    Assert-Exit (Invoke-ReportCheck $agentDeathMtimeOnlyPath) 2 "agent death mtime only" "Agent-Death-Evidence"
+
+    $agentDeathEvidenceLine = "Agent-Death-Evidence: agent-inquiry-timeout-v1 attempt1=timeout:7200s attempt2=timeout:7200s"
+    $validAgentDeathPath = Write-TestReport "valid-agent-death" $headingTime "担当が死んだという報告" @("Roadmap-Claim: none", "担当が死んだと判断した。", $agentDeathEvidenceLine) $now
+    Assert-Exit (Invoke-ReportCheck $validAgentDeathPath) 0 "valid agent death evidence"
+
+    $agentDeathEvidenceWithoutClaimPath = Write-TestReport "agent-death-evidence-without-claim" $headingTime "通常の作業報告" @("Roadmap-Claim: none", "通常の本文です。", $agentDeathEvidenceLine) $now
+    Assert-Exit (Invoke-ReportCheck $agentDeathEvidenceWithoutClaimPath) 2 "agent death evidence without claim" "混在させない"
 
     $missingClaimPath = Write-TestReport "missing-claim" $headingTime "残作業の報告" @("残りは2件だけです。") $now
     Assert-Exit (Invoke-ReportCheck $missingClaimPath) 2 "missing claim" "Roadmap-Claim"

@@ -28,8 +28,8 @@ $script:formatProblems = New-Object System.Collections.Generic.List[string]
 $script:missingProblems = New-Object System.Collections.Generic.List[string]
 $script:snapshot = $null
 $script:reportGateTimestamp = [datetime]::MinValue
-$script:legacyBoundaryHeader = '## 2026-08-31 10:46 — 未チェックが40件→16件になり、統括が時刻を読めるようになった'
-$script:legacySuffixSha256 = '609c514bea1e48bdbfa6945bb6c2ce357003f05655a9ac66b3a286b7be442223'
+$script:legacyBoundaryHeader = '## 2026-08-31 19:45 — 検証の結論。Codex sol は死んでいなかった。統括の誤判定である'
+$script:legacySuffixSha256 = '47cb9d9cc60935d688fd3209cac8effa68e84365684690e8092e194d03df5872'
 $script:legacyBoundaryLineIndex = -1
 $script:historicalSnapshotEvidence = @{}
 $script:recordIntroductionCommits = @{}
@@ -438,6 +438,20 @@ function Test-RoadmapClaimRecord {
     $normalizedHeader = ([string]$Record.Header).Normalize($normalizationForm)
     $normalizedBodyLines = @($bodyLines | ForEach-Object { ([string]$_).Normalize($normalizationForm) })
     $claimText = $normalizedHeader + "`n" + ($normalizedBodyLines -join "`n")
+    $agentDeathClaimPattern = '(?:担当|エージェント)\s*(?:は|が|の)?\s*(?:死んだ|死んで(?!いない|いません|はない)(?:いる|いた)?|死亡(?!していない|していません|ではない|でない)(?:した|している|と(?:断定|判断)した|を(?:断定|確認)した)?)|\bagent\s+(?:died|is\s+dead)\b'
+    $agentDeathEvidenceLine = 'Agent-Death-Evidence: agent-inquiry-timeout-v1 attempt1=timeout:7200s attempt2=timeout:7200s'
+    $agentDeathEvidenceLines = @($bodyLines | Where-Object { $_ -match '^Agent-Death-Evidence:' })
+    if ([regex]::IsMatch($claimText, $agentDeathClaimPattern, [Text.RegularExpressions.RegexOptions]::CultureInvariant)) {
+        if ($agentDeathEvidenceLines.Count -ne 1 -or -not [string]::Equals([string]$agentDeathEvidenceLines[0], $agentDeathEvidenceLine, [StringComparison]::Ordinal)) {
+            Add-FormatProblem (
+                "$($Record.LineIndex + 1)行目の担当の死亡を主張する記録には " +
+                "$agentDeathEvidenceLine を正確に1行併記してください。更新時刻・process数・CPU・空応答だけは死亡の証拠になりません。"
+            )
+        }
+    }
+    elseif ($agentDeathEvidenceLines.Count -ne 0) {
+        Add-FormatProblem "$($Record.LineIndex + 1)行目の担当死亡を主張しない記録に Agent-Death-Evidence を混在させないでください。"
+    }
     $existingRemainderSubjectPattern = '(?:残り|残件|残作業(?:の本当の数)?|解消対象として残(?:す件数|る))'
     $uncheckedRemainderSubjectPattern = '(?:(?:未チェック|未完了)(?:件数)?)'
     $existingNumericRemainderPattern = "$existingRemainderSubjectPattern(?:は|が|[:：])?\s*(?<count>[0-9]+)\s*件(?:だけ|のみ)?"
@@ -779,7 +793,7 @@ else {
                 }
             }
 
-            foreach ($record in $records) {
+            foreach ($record in $newRecords) {
                 if ($record.Timestamp -gt $reportLastWriteTime) {
                     Add-FormatProblem "Report heading at line $($record.LineIndex + 1) is later than the file update time: heading=$($record.Timestamp.ToString('yyyy-MM-dd HH:mm')), file=$($reportLastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))"
                 }
