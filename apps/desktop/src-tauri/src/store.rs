@@ -255,6 +255,7 @@ pub(crate) struct AtomicityProbe {
     pose_angles: Option<HashMap<EdgeId, f64>>,
 }
 
+#[derive(Clone)]
 pub struct DocumentStore {
     doc: Document,
     /// 手順ごとに展開図へ新しく足した折り線(手順IDで結び付ける)。
@@ -2761,6 +2762,137 @@ mod tests {
                 }],
             },
         )
+    }
+
+    #[test]
+    fn document_new_matches_the_cross_runtime_parity_fixture_and_resets_state() {
+        let mut store = DocumentStore::default();
+        let old_snapshot = Snapshot {
+            doc: store.doc.clone(),
+            step_creases: store.step_creases.clone(),
+        };
+        store.step_creases.push(StepCreases {
+            step: 99,
+            lines: Vec::new(),
+        });
+        store.faces.clear();
+        store.undo_stack.push(old_snapshot.clone());
+        store.redo_stack.push(old_snapshot);
+        store.dirty = true;
+        store.path = Some(PathBuf::from("old.ori3"));
+        store.pose_angles = Some(HashMap::from([(0, 42.0)]));
+
+        let view = store
+            .new_document(Paper {
+                width_mm: 150.0,
+                height_mm: 100.0,
+            })
+            .expect("desktopで正の紙から新規作品を作れる");
+        let json = serde_json::to_string(&view).expect("desktop viewをJSONにできる");
+        let expected = include_str!(
+            "../../../../crates/ori3-app-core/tests/fixtures/document-new-150x100.json"
+        )
+        .trim_end();
+
+        assert_eq!(json, expected);
+        assert_eq!(store.doc, view.doc);
+        assert!(store.step_creases.is_empty());
+        assert_eq!(store.faces, view.faces);
+        assert!(store.undo_stack.is_empty());
+        assert!(store.redo_stack.is_empty());
+        assert!(!store.dirty);
+        assert!(store.path.is_none());
+        assert!(store.pose_angles.is_none());
+        assert!(view.converged);
+
+        let before_invalid = store.atomicity_probe_for_test();
+        let error = store
+            .new_document(Paper {
+                width_mm: -1.0,
+                height_mm: 100.0,
+            })
+            .expect_err("desktopは負の紙寸法を受理しない");
+        assert_eq!(error, "紙のサイズは正の値で指定してください");
+        assert_eq!(store.atomicity_probe_for_test(), before_invalid);
+    }
+
+    #[test]
+    fn edit_commands_match_the_cross_runtime_fixtures_and_one_batch_history() {
+        let mut store = DocumentStore::default();
+        store
+            .new_document(Paper {
+                width_mm: 150.0,
+                height_mm: 100.0,
+            })
+            .expect("desktop accepts positive paper dimensions");
+        store.path = Some(PathBuf::from("kept.ori3"));
+        store.pose_angles = Some(HashMap::from([(99, 42.0)]));
+
+        let mut applied = store
+            .apply_edit(EditOp::AddSegment {
+                a: [0.0, 0.0],
+                b: [1.0, 2.0 / 3.0],
+                kind: EdgeKind::Mountain,
+            })
+            .expect("desktop edit_apply succeeds");
+        attach_replay(&mut applied);
+        let applied_json = serde_json::to_string(&applied).expect("serialize apply view");
+        assert_eq!(
+            applied_json,
+            include_str!(
+                "../../../../crates/ori3-app-core/tests/fixtures/edit-apply-diagonal-150x100.json"
+            )
+            .trim_end()
+        );
+        assert_eq!(store.undo_stack.len(), 1);
+        assert!(store.redo_stack.is_empty());
+        assert!(store.dirty);
+        assert_eq!(store.path, Some(PathBuf::from("kept.ori3")));
+        assert_eq!(store.pose_angles, Some(HashMap::from([(99, 42.0)])));
+        assert_eq!(store.faces, applied.faces);
+
+        let mut batched = store
+            .apply_edits(vec![
+                EditOp::SetEdgeKind {
+                    ids: vec![4],
+                    kind: EdgeKind::Valley,
+                },
+                EditOp::RemoveEdges { ids: vec![4] },
+            ])
+            .expect("desktop edit_apply_batch succeeds");
+        attach_replay(&mut batched);
+        let batched_json = serde_json::to_string(&batched).expect("serialize batch view");
+        assert_eq!(
+            batched_json,
+            include_str!(
+                "../../../../crates/ori3-app-core/tests/fixtures/edit-apply-batch-remove-diagonal-150x100.json"
+            )
+            .trim_end()
+        );
+        assert_eq!(
+            store.undo_stack.len(),
+            2,
+            "two operations form one batch history entry"
+        );
+        assert!(store.redo_stack.is_empty());
+        assert_eq!(store.faces, batched.faces);
+
+        let mut undone = store.undo().expect("desktop edit_undo succeeds");
+        attach_replay(&mut undone);
+        assert_eq!(serde_json::to_string(&undone).unwrap(), applied_json);
+        assert_eq!(store.undo_stack.len(), 1);
+        assert_eq!(store.redo_stack.len(), 1);
+        assert_eq!(store.faces, undone.faces);
+
+        let mut redone = store.redo().expect("desktop edit_redo succeeds");
+        attach_replay(&mut redone);
+        assert_eq!(serde_json::to_string(&redone).unwrap(), batched_json);
+        assert_eq!(store.undo_stack.len(), 2);
+        assert!(store.redo_stack.is_empty());
+        assert_eq!(store.faces, redone.faces);
+        assert!(store.dirty);
+        assert_eq!(store.path, Some(PathBuf::from("kept.ori3")));
+        assert_eq!(store.pose_angles, Some(HashMap::from([(99, 42.0)])));
     }
 
     fn crane_head_document() -> Document {

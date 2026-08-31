@@ -388,6 +388,30 @@ fn view_command(
     Ok(view)
 }
 
+/// 作品の入替えと直前作品の復旧候補化を、同じoperation/store境界で確定する。
+/// 新しい作品をclone上で最後まで組み立ててから復旧索引へ触るため、入力や読込みが
+/// 失敗した場合は現在作品と復旧payloadのどちらも変えない。
+fn replace_document_command(
+    state: &Mutex<DocumentStore>,
+    app_data: &Path,
+    f: impl FnOnce(&mut DocumentStore) -> Result<DocumentView, String>,
+) -> Result<DocumentView, String> {
+    let operation = autosave::lock_recovery_operation();
+    let mut store = lock_inner(state);
+    let mut replacement = store.clone();
+    let mut view = f(&mut replacement)?;
+    if store.is_dirty() {
+        autosave::preserve_before_document_change_locked(&store, app_data, &operation)?;
+    }
+    *store = replacement;
+    drop(store);
+    drop(operation);
+
+    attach_replay(&mut view);
+    store_view_pose_angles(state, &view);
+    Ok(view)
+}
+
 #[tauri::command(async)]
 pub fn document_new(
     app: tauri::AppHandle,
@@ -395,11 +419,8 @@ pub fn document_new(
     paper: Paper,
 ) -> Result<DocumentView, String> {
     guard(AssertUnwindSafe(|| {
-        if lock(&state).is_dirty() {
-            let dir = autosave::app_data_dir(&app)?;
-            autosave::preserve_before_document_change(state.inner(), &dir)?;
-        }
-        view_command(&state, || lock(&state).new_document(paper))
+        let dir = autosave::app_data_dir(&app)?;
+        replace_document_command(state.inner(), &dir, |store| store.new_document(paper))
     }))
 }
 
@@ -410,10 +431,7 @@ pub fn document_open(
     path: String,
 ) -> Result<DocumentView, String> {
     guard(AssertUnwindSafe(|| {
-        if lock(&state).is_dirty() {
-            let dir = autosave::app_data_dir(&app)?;
-            autosave::preserve_before_document_change(state.inner(), &dir)?;
-        }
+        let dir = autosave::app_data_dir(&app)?;
         let path = Path::new(&path);
         if path
             .extension()
@@ -428,9 +446,9 @@ pub fn document_open(
                 .map_err(|error| FoldImportError::Parse(error).to_string())?;
             let import = fold_to_document(&file)
                 .map_err(|error| FoldImportError::Conversion(error).to_string())?;
-            view_command(&state, || Ok(lock(&state).import_fold(import)))
+            replace_document_command(state.inner(), &dir, |store| Ok(store.import_fold(import)))
         } else {
-            view_command(&state, || lock(&state).open(path))
+            replace_document_command(state.inner(), &dir, |store| store.open(path))
         }
     }))
 }
@@ -442,15 +460,19 @@ pub fn document_save(
     path: Option<String>,
 ) -> Result<(), String> {
     guard(AssertUnwindSafe(|| {
+        let operation = autosave::lock_recovery_operation();
         let mut store = lock(&state);
         store.save(path.as_deref().map(Path::new))?;
         let document_path = store.current_path();
         drop(store);
         // 保存できた今回の作業枠は復元不要。復旧候補を開いていた場合だけ
         // その復元元も消し、利用者がまだ選んでいない他の候補は残す(SYS-003)。
-        if let Ok(dir) = autosave::app_data_dir(&app) {
-            autosave::discard_after_save(&dir, document_path.as_deref());
-        }
+        let dir = autosave::app_data_dir(&app).map_err(|error| {
+            format!("作品は保存しましたが、復旧候補の確認に失敗しました: {error}")
+        })?;
+        autosave::discard_after_save_locked(&dir, document_path.as_deref(), &operation).map_err(
+            |error| format!("作品は保存しましたが、復旧候補を片付けられませんでした: {error}"),
+        )?;
         Ok(())
     }))
 }
@@ -458,7 +480,7 @@ pub fn document_save(
 /// 前回の異常終了で残った自動保存をすべて調べる(SYS-003)。
 /// フロントは利用者が内容を区別して、復元・破棄・あとで確認することを選べる。
 #[tauri::command(async)]
-pub fn recovery_check(app: tauri::AppHandle) -> Result<autosave::RecoveryChoices, String> {
+pub fn recovery_check(app: tauri::AppHandle) -> Result<Option<autosave::RecoveryChoices>, String> {
     guard(AssertUnwindSafe(|| {
         let dir = autosave::app_data_dir(&app)?;
         autosave::check_all(&dir)
@@ -466,15 +488,13 @@ pub fn recovery_check(app: tauri::AppHandle) -> Result<autosave::RecoveryChoices
 }
 
 /// 復旧ダイアログで選んだ候補を復元または破棄する。
-/// `candidate_id` が無い旧クライアントは先頭候補だけを対象にする。
-///
 /// 設計規約: 読み込みとJSON解釈はロックの外、状態の入れ替えだけロック下で行う。
 #[tauri::command(async)]
 pub fn recovery_restore(
     app: tauri::AppHandle,
     state: State<'_, Mutex<DocumentStore>>,
     accept: bool,
-    candidate_id: Option<u64>,
+    candidate_id: u64,
 ) -> Result<Option<DocumentView>, String> {
     guard(AssertUnwindSafe(|| {
         let dir = autosave::app_data_dir(&app)?;
@@ -483,7 +503,7 @@ pub fn recovery_restore(
             return Ok(None);
         }
         let Some(mut view) = autosave::restore_candidate(&state, &dir, candidate_id)? else {
-            return Ok(None);
+            return Err("選んだ復旧候補が見つかりません。".to_owned());
         };
         attach_replay(&mut view); // 重い再生はロック解放後(view_commandと同じ規約)
         store_view_pose_angles(state.inner(), &view);
@@ -959,8 +979,17 @@ pub fn fold_all_preview(
     percent: f64,
     warm_seed: Option<Vec<Driver>>,
 ) -> Result<FoldAllPreviewOutcome, String> {
+    fold_all_preview_transactionally(state.inner(), percent, warm_seed)
+}
+
+/// Tauriの状態包装と一斉折り計算を分け、製品commandと共有fixture検査を同じ本体へ通す。
+pub(crate) fn fold_all_preview_transactionally(
+    state: &Mutex<DocumentStore>,
+    percent: f64,
+    warm_seed: Option<Vec<Driver>>,
+) -> Result<FoldAllPreviewOutcome, String> {
     guard(AssertUnwindSafe(|| {
-        let (doc, faces) = lock(&state).replay_inputs();
+        let (doc, faces) = lock_inner(state).replay_inputs();
         fold_all_preview_outcome(&doc, &faces, percent, warm_seed)
     }))
 }
@@ -978,8 +1007,18 @@ pub fn sequence_replay(
     t: f64,
     soft: Option<SoftSettings>,
 ) -> Result<ReplayOutcome, String> {
+    sequence_replay_transactionally(state.inner(), up_to, t, soft)
+}
+
+/// Tauriの状態包装を外し、製品commandとdesktop/Web共有fixture検査を同じ本体へ通す。
+pub(crate) fn sequence_replay_transactionally(
+    state: &Mutex<DocumentStore>,
+    up_to: usize,
+    t: f64,
+    soft: Option<SoftSettings>,
+) -> Result<ReplayOutcome, String> {
     guard(AssertUnwindSafe(|| {
-        let (doc, faces) = lock(&state).replay_inputs(); // 複製のみ、即ロック解放
+        let (doc, faces) = lock_inner(state).replay_inputs(); // 複製のみ、即ロック解放
         let soft = display_soft_settings(&doc, up_to, t, soft);
         let mut result = ori3_layers::replay_with_faces(&doc, &faces, up_to, t);
         let saved_order = ori3_layers::saved_layer_order_at(&doc, &faces, up_to, t);
@@ -1067,7 +1106,7 @@ pub fn sequence_replay(
         let converged = result.converged;
         if angles.values().all(|angle| angle.is_finite()) {
             // 再生後のライブ操作が同じ解枝から始まるよう、短いロックでwarmだけ更新する。
-            lock(&state).store_pose_angles(angles.clone());
+            lock_inner(state).store_pose_angles(angles.clone());
         }
         Ok(ReplayOutcome {
             result,
@@ -2155,9 +2194,95 @@ mod tests {
         attach_replay, display_soft_settings, fold_all_preview_outcome, frame_surface_rank_order,
         generate_candidates, guard, plan_folds, pose_motion_contact_options, pose_overlap_order,
         pose_result_is_finite, proposal_generate, proposal_generate_managed, record_finish_soft,
-        recorded_soft_settings, run_proposal_job, stamp_saved_layer_order,
-        usable_pose_surface_order,
+        recorded_soft_settings, replace_document_command, run_proposal_job,
+        stamp_saved_layer_order, usable_pose_surface_order,
     };
+
+    fn recovery_artifact_bytes(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        let mut artifacts = Vec::new();
+        for name in ["autosave-index.json", "autosave-current.ori3"] {
+            let path = dir.join(name);
+            if path.is_file() {
+                artifacts.push((PathBuf::from(name), std::fs::read(path).unwrap()));
+            }
+        }
+        let recovery = dir.join("autosave-recovery");
+        if let Ok(entries) = std::fs::read_dir(recovery) {
+            for entry in entries {
+                let path = entry.unwrap().path();
+                if path.is_file() {
+                    artifacts.push((
+                        PathBuf::from("autosave-recovery").join(path.file_name().unwrap()),
+                        std::fs::read(path).unwrap(),
+                    ));
+                }
+            }
+        }
+        artifacts.sort_by(|left, right| left.0.cmp(&right.0));
+        artifacts
+    }
+
+    #[test]
+    fn failed_new_open_and_recovery_index_write_leave_store_and_payloads_unchanged() {
+        let dir = std::env::temp_dir().join(format!(
+            "ori3_replace_recovery_boundary_{}",
+            std::process::id()
+        ));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let malformed = dir.join("malformed.ori3");
+        std::fs::write(&malformed, br#"{"schema_version":1"#).unwrap();
+        let state = Mutex::new(DocumentStore::default());
+        state
+            .lock()
+            .unwrap()
+            .apply_edit(ori3_model::EditOp::AddSegment {
+                a: [0.0, 0.0],
+                b: [1.0, 1.0],
+                kind: EdgeKind::Mountain,
+            })
+            .unwrap();
+        crate::autosave::run_once(&state, &dir).unwrap();
+        let before_store = state.lock().unwrap().atomicity_probe_for_test();
+        let before_artifacts = recovery_artifact_bytes(&dir);
+
+        let invalid_paper = replace_document_command(&state, &dir, |store| {
+            store.new_document(Paper {
+                width_mm: 0.0,
+                height_mm: 150.0,
+            })
+        })
+        .expect_err("invalid paper must fail before the recovery transition");
+        assert_eq!(invalid_paper, "紙のサイズは正の値で指定してください");
+        assert_eq!(
+            state.lock().unwrap().atomicity_probe_for_test(),
+            before_store
+        );
+        assert_eq!(recovery_artifact_bytes(&dir), before_artifacts);
+
+        replace_document_command(&state, &dir, |store| store.open(&malformed))
+            .expect_err("malformed ori3 must fail before the recovery transition");
+        assert_eq!(
+            state.lock().unwrap().atomicity_probe_for_test(),
+            before_store
+        );
+        assert_eq!(recovery_artifact_bytes(&dir), before_artifacts);
+
+        crate::autosave::fail_next_index_write_for_test();
+        let index_error = replace_document_command(&state, &dir, |store| {
+            store.new_document(Paper {
+                width_mm: 120.0,
+                height_mm: 120.0,
+            })
+        })
+        .expect_err("index write failure must prevent the document swap");
+        assert!(index_error.contains("復旧候補の索引を保存できませんでした"));
+        assert_eq!(
+            state.lock().unwrap().atomicity_probe_for_test(),
+            before_store
+        );
+        assert_eq!(recovery_artifact_bytes(&dir), before_artifacts);
+    }
 
     #[test]
     fn pose_solve_request_keeps_all_seven_ipc_values() {
@@ -2199,7 +2324,7 @@ mod tests {
     use std::collections::HashMap;
     use std::panic::AssertUnwindSafe;
     use std::path::{Path, PathBuf};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     #[cfg(not(debug_assertions))]
     use std::time::{Duration, Instant};
 
@@ -2472,6 +2597,10 @@ mod tests {
         canonical_candidate_contract(&together_json, &mut normalized_candidate_contract);
         let candidate_hash = contract_hash(&normalized_candidate_contract);
         let stop_hash = contract_hash(&stop_contract);
+        assert_eq!(
+            raw_candidate_hash, 0xa5ff_0122_b34b_5020,
+            "libmで固定した候補JSON契約が変わった"
+        );
         assert_eq!(
             candidate_hash, 0x5f0a_59d3_235f_3956,
             "1-Aで固定した1e-9量子化候補JSON契約が変わった"
@@ -4139,6 +4268,299 @@ mod tests {
             }
         });
         assert_query_is_read_only(&material_state, material_query, false, "材料座標照会");
+    }
+
+    #[test]
+    fn sequence_commands_match_the_cross_runtime_fold_through_fixtures() {
+        let state = Mutex::new(DocumentStore::default());
+        state
+            .lock()
+            .unwrap()
+            .new_document(Paper {
+                width_mm: 150.0,
+                height_mm: 100.0,
+            })
+            .expect("desktop accepts positive paper dimensions");
+        let before_preview = state.lock().unwrap().atomicity_probe_for_test();
+        let preview_operation = serde_json::json!({
+            "type": "PreviewFoldThrough",
+            "up_to": 0,
+            "line": [[0.0, 0.0], [1.0, 2.0 / 3.0]],
+            "keep_side_point": [0.0, 2.0 / 3.0],
+            "target_layers": null,
+            "direction": "Up"
+        });
+        let preview = super::apply_sequence_operation_transactionally(&state, preview_operation)
+            .expect("desktop preview succeeds");
+        assert_eq!(
+            serde_json::to_string(&preview).unwrap(),
+            include_str!(
+                "../../../../crates/ori3-app-core/tests/fixtures/sequence-preview-fold-through-150x100.json"
+            )
+            .trim_end()
+        );
+        assert_eq!(
+            state.lock().unwrap().atomicity_probe_for_test(),
+            before_preview,
+            "preview keeps every store field unchanged"
+        );
+
+        let apply_operation = serde_json::json!({
+            "type": "FoldThrough",
+            "up_to": 0,
+            "line": [[0.0, 0.0], [1.0, 2.0 / 3.0]],
+            "keep_side_point": [0.0, 2.0 / 3.0],
+            "target_layers": null,
+            "direction": "Up",
+            "accept_additional_crease": false
+        });
+        let applied = super::apply_sequence_operation_transactionally(&state, apply_operation)
+            .expect("desktop fold through succeeds");
+        assert_eq!(
+            serde_json::to_string(&applied).unwrap(),
+            include_str!(
+                "../../../../crates/ori3-app-core/tests/fixtures/sequence-apply-fold-through-150x100.json"
+            )
+            .trim_end()
+        );
+        {
+            let store = state.lock().unwrap();
+            assert!(store.is_dirty());
+            assert_eq!(store.current_path(), None);
+            let (_, _, warm, _, _) = store.pose_inputs();
+            assert_eq!(
+                warm.as_ref().and_then(|angles| angles.get(&4)),
+                Some(&-180.0)
+            );
+        }
+
+        let replay = super::sequence_replay_transactionally(&state, 1, 0.5, None)
+            .expect("desktop half replay succeeds");
+        assert_eq!(
+            serde_json::to_string(&replay).unwrap(),
+            include_str!(
+                "../../../../crates/ori3-app-core/tests/fixtures/sequence-replay-fold-through-half-150x100.json"
+            )
+            .trim_end()
+        );
+        {
+            let mut store = state.lock().unwrap();
+            let (_, _, warm, _, _) = store.pose_inputs();
+            assert_eq!(
+                warm.as_ref().and_then(|angles| angles.get(&4)),
+                Some(&-90.0)
+            );
+            let undone = store.undo().expect("fold through has one undo entry");
+            assert!(undone.doc.sequence.is_empty());
+            assert_eq!(store.undo().unwrap_err(), "これ以上元に戻せません");
+            let redone = store.redo().expect("fold through has one redo entry");
+            assert_eq!(redone.doc, applied.doc);
+            assert_eq!(redone.step_creases, applied.step_creases);
+        }
+    }
+
+    #[test]
+    fn document_io_matches_the_web_cross_runtime_artifacts() {
+        fn fnv1a64(bytes: &[u8]) -> u64 {
+            bytes.iter().fold(0xcbf29ce484222325_u64, |hash, byte| {
+                (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+            })
+        }
+
+        let state = Mutex::new(DocumentStore::default());
+        state
+            .lock()
+            .unwrap()
+            .new_document(Paper {
+                width_mm: 150.0,
+                height_mm: 100.0,
+            })
+            .expect("desktop accepts positive paper dimensions");
+        let apply_operation = serde_json::json!({
+            "type": "FoldThrough",
+            "up_to": 0,
+            "line": [[0.0, 0.0], [1.0, 2.0 / 3.0]],
+            "keep_side_point": [0.0, 2.0 / 3.0],
+            "target_layers": null,
+            "direction": "Up",
+            "accept_additional_crease": false
+        });
+        let applied = super::apply_sequence_operation_transactionally(&state, apply_operation)
+            .expect("desktop fold through succeeds");
+        let saved = state.lock().unwrap().saved_document();
+        let saved_source = serde_json::to_string_pretty(&saved).expect("saved document serializes");
+        let parsed = crate::store::parse_document(&saved_source).expect("saved document parses");
+        assert_eq!(parsed, saved);
+
+        let mut reopened = DocumentStore::default();
+        let mut reopened_view = reopened.restore(parsed.clone(), None);
+        attach_replay(&mut reopened_view);
+        assert_eq!(
+            serde_json::to_string(&reopened_view).unwrap(),
+            serde_json::to_string(&applied).unwrap(),
+            "desktop open reconstructs the same complete view as Web"
+        );
+        assert_eq!(
+            serde_json::to_string_pretty(&reopened.saved_document()).unwrap(),
+            saved_source,
+            "desktop open/save preserves the exact Rust pretty JSON"
+        );
+
+        let legacy_source = serde_json::to_string_pretty(&saved.document).unwrap();
+        let legacy = crate::store::parse_document(&legacy_source)
+            .expect("saved files from before step provenance remain readable");
+        assert_eq!(legacy.document, saved.document);
+        assert!(legacy.step_creases.is_empty());
+
+        let options = super::ExportOptions {
+            include_aux: true,
+            png_long_side: 2048,
+        };
+        let (svg_files, svg_issues) =
+            super::export_files(&parsed.document, super::ExportKind::DiagramSvg, options)
+                .expect("desktop builds the diagram SVG pages");
+        assert!(svg_issues.is_empty());
+        assert_eq!(
+            svg_files
+                .iter()
+                .map(|(suffix, _)| suffix.as_str())
+                .collect::<Vec<_>>(),
+            vec!["-01", "-02"]
+        );
+        assert!(
+            svg_files
+                .iter()
+                .all(|(_, bytes)| bytes.starts_with(b"<?xml"))
+        );
+
+        let (pdf_files, pdf_issues) =
+            super::export_files(&parsed.document, super::ExportKind::DiagramPdf, options)
+                .expect("desktop builds the diagram PDF");
+        assert!(pdf_issues.is_empty());
+        assert_eq!(pdf_files.len(), 1);
+        assert_eq!(pdf_files[0].0, "");
+        let pdf = &pdf_files[0].1;
+        assert_eq!(pdf.len(), 39_546);
+        assert_eq!(fnv1a64(pdf), 0x5aa3_8f19_9e36_0526);
+        let (repeated_pdf_files, repeated_pdf_issues) =
+            super::export_files(&parsed.document, super::ExportKind::DiagramPdf, options)
+                .expect("desktop repeats the diagram PDF build");
+        assert!(repeated_pdf_issues.is_empty());
+        assert_eq!(repeated_pdf_files, pdf_files);
+    }
+
+    #[test]
+    fn pose_commands_match_the_cross_runtime_diagonal_fixtures() {
+        let state = Mutex::new(DocumentStore::default());
+        state
+            .lock()
+            .unwrap()
+            .new_document(Paper {
+                width_mm: 150.0,
+                height_mm: 100.0,
+            })
+            .expect("desktop accepts positive paper dimensions");
+        let operation = serde_json::from_value(serde_json::json!({
+            "type": "AddSegment",
+            "a": [0.0, 0.0],
+            "b": [1.0, 2.0 / 3.0],
+            "kind": "Mountain"
+        }))
+        .expect("desktop accepts the diagonal edit operation");
+        let diagonal = state
+            .lock()
+            .unwrap()
+            .apply_edit(operation)
+            .expect("desktop adds the diagonal mountain crease");
+        assert_eq!(
+            serde_json::to_string(&diagonal).unwrap(),
+            include_str!(
+                "../../../../crates/ori3-app-core/tests/fixtures/edit-apply-diagonal-150x100.json"
+            )
+            .trim_end()
+        );
+
+        let pose = super::pose_solve_core(
+            &state,
+            vec![Driver {
+                hinge: 4,
+                target_angle_deg: 90.0,
+            }],
+            None,
+            None,
+            None,
+            0,
+            1.0,
+        )
+        .expect("desktop solves the diagonal pose");
+        assert_eq!(
+            serde_json::to_string(&pose).unwrap(),
+            include_str!(
+                "../../../../crates/ori3-app-core/tests/fixtures/pose-solve-diagonal-150x100.json"
+            )
+            .trim_end()
+        );
+        let canonical = super::pose_solve_core_with_mode(
+            &state,
+            super::PoseSolveInput {
+                hard: Vec::new(),
+                preferred: Some(vec![Driver {
+                    hinge: 4,
+                    target_angle_deg: 90.0,
+                }]),
+                soft: None,
+                warm_seed: Some(vec![Driver {
+                    hinge: 4,
+                    target_angle_deg: 90.0,
+                }]),
+                up_to: 0,
+                t: 1.0,
+                mode: super::PoseSolveMode::Canonical,
+            },
+        )
+        .expect("desktop derives the canonical diagonal pose");
+        assert_eq!(
+            serde_json::to_string(&canonical).unwrap(),
+            include_str!(
+                "../../../../crates/ori3-app-core/tests/fixtures/pose-solve-diagonal-150x100.json"
+            )
+            .trim_end(),
+            "Follow and the production Canonical finish have the same complete answer"
+        );
+        {
+            let store = state.lock().unwrap();
+            let (_, _, warm, _, _) = store.pose_inputs();
+            assert_eq!(warm.as_ref().and_then(|angles| angles.get(&4)), Some(&90.0));
+        }
+
+        let before_fold_all = state.lock().unwrap().atomicity_probe_for_test();
+        let fold_all_zero = super::fold_all_preview_transactionally(&state, 0.0, None)
+            .expect("desktop enters fold-all preview at zero percent");
+        assert_eq!(
+            serde_json::to_string(&fold_all_zero).unwrap(),
+            include_str!(
+                "../../../../crates/ori3-app-core/tests/fixtures/fold-all-preview-diagonal-0-150x100.json"
+            )
+            .trim_end()
+        );
+        let fold_all = super::fold_all_preview_transactionally(
+            &state,
+            50.0,
+            Some(fold_all_zero.next_warm_seed),
+        )
+        .expect("desktop previews every diagonal crease at fifty percent");
+        assert_eq!(
+            serde_json::to_string(&fold_all).unwrap(),
+            include_str!(
+                "../../../../crates/ori3-app-core/tests/fixtures/fold-all-preview-diagonal-50-150x100.json"
+            )
+            .trim_end()
+        );
+        assert_eq!(
+            state.lock().unwrap().atomicity_probe_for_test(),
+            before_fold_all,
+            "fold-all preview keeps every store field unchanged"
+        );
     }
 
     const FOLD_ALL_PERCENTAGES: [f64; 5] = [0.0, 25.0, 50.0, 75.0, 100.0];

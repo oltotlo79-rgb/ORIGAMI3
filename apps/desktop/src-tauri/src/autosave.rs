@@ -10,9 +10,13 @@
 //! `DocumentStore::save` は使わない(保存先パスと未保存フラグを書き換えるため)。
 
 use std::ffi::OsString;
+use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
 
 use ori3_model::SavedDocument;
 
@@ -34,9 +38,14 @@ const SUFFIX: &str = ".autosave";
 const INDEX_FILE: &str = "autosave-index.json";
 /// 今回起動中の作業だけが上書きする専用ファイル。
 const CURRENT_FILE: &str = "autosave-current.ori3";
+const TRANSACTION_LOCK_FILE: &str = "autosave-transaction.lock";
+const SESSION_LOCK_PREFIX: &str = "autosave-session-";
 /// 異常終了後に持ち越す候補の保存先。
 const CANDIDATES_DIR: &str = "autosave-recovery";
-const INDEX_VERSION: u8 = 1;
+const INDEX_VERSION: u8 = 2;
+const LEGACY_INDEX_VERSION: u8 = 1;
+/// JavaScriptの整数として往復しても値が変わらない候補番号の上限。
+const MAX_SAFE_CANDIDATE_ID: u64 = 9_007_199_254_740_991;
 /// indexのatomic確定前に止まっても、payload単体から表示情報を戻すための予約field。
 /// `SavedDocument`は未知fieldを無視するため、候補payloadはそのまま作品として読める。
 const PAYLOAD_METADATA_FIELD: &str = "_ori3_autosave";
@@ -44,26 +53,179 @@ const PAYLOAD_METADATA_FIELD: &str = "_ori3_autosave";
 /// background保存と画面commandが同じ索引をread-modify-writeする順序を直列化する。
 /// DocumentStoreのlockとは分け、JSON化・disk I/O中に作品本体を止めない。
 static AUTOSAVE_FILE_IO: Mutex<()> = Mutex::new(());
+static SESSION_ID: OnceLock<String> = OnceLock::new();
+static SESSION_FILE: OnceLock<File> = OnceLock::new();
 
-fn lock_autosave_files() -> std::sync::MutexGuard<'static, ()> {
-    AUTOSAVE_FILE_IO
+/// 復旧payload・索引とDocumentStoreをまたぐcommandを同じ順序で直列化する印。
+pub(crate) struct RecoveryOperationGuard {
+    _guard: MutexGuard<'static, ()>,
+}
+
+struct ProcessFileGuard {
+    _file: File,
+}
+
+struct AutosaveFileGuard {
+    _operation: RecoveryOperationGuard,
+    _process: ProcessFileGuard,
+}
+
+pub(crate) fn lock_recovery_operation() -> RecoveryOperationGuard {
+    let guard = AUTOSAVE_FILE_IO
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    RecoveryOperationGuard { _guard: guard }
+}
+
+fn lock_autosave_files(app_data: &Path) -> Result<AutosaveFileGuard, String> {
+    let operation = lock_recovery_operation();
+    let process = lock_process_files(app_data)?;
+    Ok(AutosaveFileGuard {
+        _operation: operation,
+        _process: process,
+    })
+}
+
+fn session_id() -> Result<&'static str, String> {
+    if let Some(id) = SESSION_ID.get() {
+        return Ok(id);
+    }
+    let id = format!("{}-{}", std::process::id(), now_ms()?);
+    let _ = SESSION_ID.set(id);
+    Ok(SESSION_ID.get().expect("session ID was set"))
+}
+
+fn session_lock_path(app_data: &Path, session: &str) -> PathBuf {
+    app_data.join(format!("{SESSION_LOCK_PREFIX}{session}.lock"))
+}
+
+#[cfg(windows)]
+fn open_exclusively(path: &Path) -> Result<File, String> {
+    loop {
+        match OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .share_mode(0)
+            .open(path)
+        {
+            Ok(file) => return Ok(file),
+            Err(error) if error.raw_os_error() == Some(32) => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => return Err(format!("自動保存の排他lockを開けませんでした: {error}")),
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn open_exclusively(_path: &Path) -> Result<File, String> {
+    Err(
+        "自動保存のプロセス間排他はWindows専用です。対応していないOSでは自動保存を実行しません"
+            .to_owned(),
+    )
+}
+
+fn ensure_session(app_data: &Path) -> Result<(), String> {
+    if SESSION_FILE.get().is_some() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(app_data).map_err(|e| format!("自動保存に失敗しました: {e}"))?;
+    let file = open_exclusively(&session_lock_path(app_data, session_id()?))?;
+    SESSION_FILE
+        .set(file)
+        .map_err(|_| "自動保存sessionは二重に開始できません".to_owned())
+}
+
+fn lock_process_files(app_data: &Path) -> Result<ProcessFileGuard, String> {
+    ensure_session(app_data)?;
+    std::fs::create_dir_all(app_data).map_err(|e| format!("自動保存に失敗しました: {e}"))?;
+    #[cfg(test)]
+    if std::env::var_os("ORI3_TEST_DISABLE_PROCESS_LOCK").is_some() {
+        return Ok(ProcessFileGuard {
+            _file: OpenOptions::new()
+                .create(true)
+                .read(true)
+                .write(true)
+                .open(app_data.join(TRANSACTION_LOCK_FILE))
+                .map_err(|e| format!("自動保存の検査用lockを開けませんでした: {e}"))?,
+        });
+    }
+    Ok(ProcessFileGuard {
+        _file: open_exclusively(&app_data.join(TRANSACTION_LOCK_FILE))?,
+    })
+}
+
+#[cfg(all(windows, not(test)))]
+fn is_live_session(app_data: &Path, session: &str) -> Result<bool, String> {
+    let path = session_lock_path(app_data, session);
+    match OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .share_mode(0)
+        .open(path)
+    {
+        Ok(_) => Ok(false),
+        Err(error) if error.raw_os_error() == Some(32) => Ok(true),
+        Err(error) => Err(format!("自動保存sessionの生存確認に失敗しました: {error}")),
+    }
+}
+
+#[cfg(all(not(windows), not(test)))]
+fn is_live_session(_app_data: &Path, _session: &str) -> Result<bool, String> {
+    Err(
+        "自動保存のプロセス間排他はWindows専用です。対応していないOSでは自動保存を実行しません"
+            .to_owned(),
+    )
+}
+
+#[cfg(test)]
+thread_local! {
+    static FAIL_NEXT_INDEX_WRITE_FOR_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn fail_next_index_write_for_test() {
+    FAIL_NEXT_INDEX_WRITE_FOR_TEST.with(|fail| fail.set(true));
+}
+
+#[cfg(test)]
+fn pause_after_index_read_if_requested() {
+    let Some(ready) = std::env::var_os("ORI3_TEST_AUTOSAVE_INDEX_READ_READY") else {
+        return;
+    };
+    let Some(release) = std::env::var_os("ORI3_TEST_AUTOSAVE_INDEX_READ_RELEASE") else {
+        return;
+    };
+    std::fs::write(&ready, std::process::id().to_string()).expect("index-read ready marker");
+    while !Path::new(&release).is_file() {
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// 復元の案内に必要な情報(フロントの復旧ダイアログが使う)
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct RecoveryInfo {
-    /// 持ち越し候補を選ぶための識別子。現在の作業枠は持ち越し候補ではないためNone。
-    pub candidate_id: Option<u64>,
     /// 自動保存ファイルの場所
     pub autosave_path: String,
     /// 元の保存先(無題だったならNone)
     pub document_path: Option<String>,
     /// 最後に自動保存した時刻(1970年からのミリ秒)。分からなければNone
     pub saved_at_ms: Option<u64>,
-    /// 保存した折り手順の数。
-    pub step_count: usize,
+    /// 持ち越し候補を選ぶための識別子。画面には表示しない。
+    pub candidate_id: u64,
+    /// 保存した折り手順の数。壊れた・未来形式のpayloadでは分からない。
+    #[serde(deserialize_with = "deserialize_required_option")]
+    pub step_count: Option<usize>,
+}
+
+fn deserialize_required_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    <Option<T> as serde::Deserialize>::deserialize(deserializer)
 }
 
 /// 起動時に復旧画面へ出す、持ち越し候補の一覧と超過件数。
@@ -76,6 +238,8 @@ pub struct RecoveryChoices {
 /// 現在起動中の作業を控える枠の索引情報。
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct ActiveSnapshot {
+    #[serde(default)]
+    session_id: Option<String>,
     document_path: Option<String>,
     saved_at_ms: u64,
     step_count: usize,
@@ -90,13 +254,27 @@ struct ActiveSnapshot {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct StoredCandidate {
     id: u64,
+    #[serde(default)]
+    session_id: Option<String>,
     document_path: Option<String>,
     saved_at_ms: u64,
+    step_count: Option<usize>,
+}
+
+/// 製品IPCには出さない、旧単一候補検査用の内部表現。
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LegacyRecoveryInfo {
+    candidate_id: Option<u64>,
+    autosave_path: String,
+    document_path: Option<String>,
+    saved_at_ms: Option<u64>,
     step_count: usize,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct EmbeddedAutosaveMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
     document_path: Option<String>,
     saved_at_ms: u64,
     step_count: usize,
@@ -165,6 +343,54 @@ fn now_ms() -> Result<u64, String> {
         })
 }
 
+fn validate_candidate_id(candidate_id: u64) -> Result<(), String> {
+    if candidate_id == 0 || candidate_id > MAX_SAFE_CANDIDATE_ID {
+        return Err("復旧候補の番号が安全な整数の範囲を超えています。".to_owned());
+    }
+    Ok(())
+}
+
+fn validate_index(index: &AutosaveIndex) -> Result<(), String> {
+    if index.version != INDEX_VERSION {
+        return Err("対応していない自動保存の索引です".to_owned());
+    }
+    if index.next_candidate_id == 0 || index.next_candidate_id > MAX_SAFE_CANDIDATE_ID {
+        return Err("復旧候補の次の番号が安全な整数の範囲を超えています。".to_owned());
+    }
+    let mut ids = std::collections::HashSet::with_capacity(index.carried.len());
+    for candidate in &index.carried {
+        validate_candidate_id(candidate.id)?;
+        if !ids.insert(candidate.id) {
+            return Err("復旧候補の番号が重複しています。".to_owned());
+        }
+        if candidate.id >= index.next_candidate_id {
+            return Err("復旧候補の索引に、次に使う番号以上の候補があります。".to_owned());
+        }
+    }
+    if let Some(source_id) = index
+        .active
+        .as_ref()
+        .and_then(|active| active.source_candidate_id)
+    {
+        validate_candidate_id(source_id)?;
+        if !ids.contains(&source_id) {
+            return Err("復元元の候補を索引で確認できません。".to_owned());
+        }
+    }
+    Ok(())
+}
+
+fn upgrade_v1_index(mut index: AutosaveIndex) -> Result<AutosaveIndex, String> {
+    match index.version {
+        INDEX_VERSION => Ok(index),
+        LEGACY_INDEX_VERSION => {
+            index.version = INDEX_VERSION;
+            Ok(index)
+        }
+        _ => Err("対応していない自動保存の索引です".to_owned()),
+    }
+}
+
 fn read_index(app_data: &Path) -> Result<Option<AutosaveIndex>, String> {
     let path = index_path(app_data);
     let text = match std::fs::read_to_string(&path) {
@@ -174,9 +400,8 @@ fn read_index(app_data: &Path) -> Result<Option<AutosaveIndex>, String> {
     };
     let index: AutosaveIndex = serde_json::from_str(&text)
         .map_err(|e| format!("自動保存の索引を読み込めませんでした: {e}"))?;
-    if index.version != INDEX_VERSION {
-        return Err("対応していない自動保存の索引です".to_owned());
-    }
+    let index = upgrade_v1_index(index)?;
+    validate_index(&index)?;
     Ok(Some(index))
 }
 
@@ -259,6 +484,7 @@ fn candidate_ids_on_disk(app_data: &Path) -> Result<Vec<u64>, String> {
         if name != format!("{id}.ori3") {
             continue;
         }
+        validate_candidate_id(id)?;
         ids.push(id);
     }
     ids.sort_unstable();
@@ -281,9 +507,9 @@ fn reconcile_payload_files(app_data: &Path, index: &mut AutosaveIndex) -> Result
             .find(|candidate| candidate.id == id)
         {
             if let Some(step_count) = step_count
-                && candidate.step_count != step_count
+                && candidate.step_count != Some(step_count)
             {
-                candidate.step_count = step_count;
+                candidate.step_count = Some(step_count);
                 changed = true;
             }
             if let Some(payload_metadata) = payload_metadata.as_ref() {
@@ -299,9 +525,12 @@ fn reconcile_payload_files(app_data: &Path, index: &mut AutosaveIndex) -> Result
         } else {
             index.carried.push(StoredCandidate {
                 id,
+                session_id: payload_metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.session_id.clone()),
                 document_path: payload_metadata.and_then(|metadata| metadata.document_path),
                 saved_at_ms,
-                step_count: step_count.unwrap_or(0),
+                step_count,
             });
             changed = true;
         }
@@ -325,6 +554,9 @@ fn reconcile_payload_files(app_data: &Path, index: &mut AutosaveIndex) -> Result
         // stale activeと既存候補が同じbytesでも自動統合しない。異なる無題作品が
         // 偶然同じ内容だった可能性を捨てず、余分な候補になり得る安全側を選ぶ。
         index.active = Some(ActiveSnapshot {
+            session_id: metadata
+                .as_ref()
+                .and_then(|metadata| metadata.session_id.clone()),
             document_path: metadata
                 .as_ref()
                 .and_then(|metadata| metadata.document_path.clone()),
@@ -354,6 +586,10 @@ fn reconcile_payload_files(app_data: &Path, index: &mut AutosaveIndex) -> Result
             active.document_path = payload_metadata.document_path;
             changed = true;
         }
+        if active.session_id != payload_metadata.session_id {
+            active.session_id = payload_metadata.session_id;
+            changed = true;
+        }
         if payload_metadata.source_candidate_id.is_some()
             && active.source_candidate_id != payload_metadata.source_candidate_id
         {
@@ -377,10 +613,16 @@ fn startup_index(app_data: &Path) -> Result<Option<AutosaveIndex>, String> {
     let mut valid_index = false;
     let mut index = if let Some(bytes) = bytes {
         match serde_json::from_slice::<AutosaveIndex>(&bytes) {
-            Ok(index) if index.version == INDEX_VERSION => {
-                valid_index = true;
-                index
-            }
+            Ok(index) => match upgrade_v1_index(index) {
+                Ok(index) if validate_index(&index).is_ok() => {
+                    valid_index = true;
+                    index
+                }
+                _ => {
+                    backup_corrupt_index(app_data, &bytes)?;
+                    AutosaveIndex::default()
+                }
+            },
             _ => {
                 backup_corrupt_index(app_data, &bytes)?;
                 AutosaveIndex::default()
@@ -403,27 +645,40 @@ fn startup_index(app_data: &Path) -> Result<Option<AutosaveIndex>, String> {
 }
 
 fn write_index(app_data: &Path, index: &AutosaveIndex) -> Result<(), String> {
+    validate_index(index)?;
     let text = serde_json::to_string_pretty(index)
         .map_err(|e| format!("自動保存の索引を作成できませんでした: {e}"))?;
+    #[cfg(test)]
+    if FAIL_NEXT_INDEX_WRITE_FOR_TEST.with(|fail| fail.replace(false)) {
+        return Err("復旧候補の索引を保存できませんでした: test failpoint".to_owned());
+    }
     write_atomic(index_path(app_data).as_path(), text.as_bytes())
         .map_err(|e| format!("自動保存の索引を書き込めませんでした: {e}"))
 }
 
-fn fresh_candidate_id(index: &mut AutosaveIndex, app_data: &Path) -> u64 {
+fn fresh_candidate_id(index: &mut AutosaveIndex, app_data: &Path) -> Result<u64, String> {
     let mut id = index.next_candidate_id.max(1);
-    loop {
+    while id <= MAX_SAFE_CANDIDATE_ID {
         if !index.carried.iter().any(|candidate| candidate.id == id)
             && !candidate_path(app_data, id).exists()
         {
-            index.next_candidate_id = id.checked_add(1).unwrap_or(1);
-            return id;
+            index.next_candidate_id = id
+                .checked_add(1)
+                .ok_or_else(|| "復旧候補の番号をこれ以上割り当てられません。".to_owned())?;
+            if index.next_candidate_id > MAX_SAFE_CANDIDATE_ID {
+                return Err("復旧候補の番号をこれ以上割り当てられません。".to_owned());
+            }
+            return Ok(id);
         }
-        id = id.checked_add(1).unwrap_or(1);
+        id = id
+            .checked_add(1)
+            .ok_or_else(|| "復旧候補の番号をこれ以上割り当てられません。".to_owned())?;
     }
+    Err("復旧候補の番号をこれ以上割り当てられません。".to_owned())
 }
 
-fn active_info(app_data: &Path, active: &ActiveSnapshot) -> RecoveryInfo {
-    RecoveryInfo {
+fn active_info(app_data: &Path, active: &ActiveSnapshot) -> LegacyRecoveryInfo {
+    LegacyRecoveryInfo {
         candidate_id: None,
         autosave_path: active_path(app_data).to_string_lossy().into_owned(),
         document_path: active.document_path.clone(),
@@ -434,7 +689,7 @@ fn active_info(app_data: &Path, active: &ActiveSnapshot) -> RecoveryInfo {
 
 fn candidate_info(app_data: &Path, candidate: &StoredCandidate) -> RecoveryInfo {
     RecoveryInfo {
-        candidate_id: Some(candidate.id),
+        candidate_id: candidate.id,
         autosave_path: candidate_path(app_data, candidate.id)
             .to_string_lossy()
             .into_owned(),
@@ -517,7 +772,7 @@ fn import_legacy_candidate(app_data: &Path, index: &mut AutosaveIndex) -> Result
     };
     let payload = std::fs::read(&legacy_path)
         .map_err(|e| format!("以前の自動保存を読み込めませんでした: {e}"))?;
-    let id = fresh_candidate_id(index, app_data);
+    let id = fresh_candidate_id(index, app_data)?;
     std::fs::create_dir_all(app_data.join(CANDIDATES_DIR))
         .map_err(|e| format!("自動保存に失敗しました: {e}"))?;
     write_atomic(candidate_path(app_data, id).as_path(), &payload)
@@ -530,13 +785,14 @@ fn import_legacy_candidate(app_data: &Path, index: &mut AutosaveIndex) -> Result
         .unwrap_or(now_ms()?);
     index.carried.push(StoredCandidate {
         id,
+        session_id: None,
         document_path: document_path_of(&legacy_path)
             .map(|path| path.to_string_lossy().into_owned()),
         saved_at_ms,
         step_count: std::str::from_utf8(&payload)
             .ok()
             .and_then(|text| parse_document(text).ok())
-            .map_or(0, |saved| saved.document.sequence.len()),
+            .map(|saved| saved.document.sequence.len()),
     });
     Ok(true)
 }
@@ -571,14 +827,14 @@ fn update_source_candidate(
     write_atomic(&path, payload).map_err(|e| format!("自動保存に失敗しました: {e}"))?;
     candidate.document_path = active.document_path.clone();
     candidate.saved_at_ms = active.saved_at_ms;
-    candidate.step_count = active_document.map_or(0, |saved| saved.document.sequence.len());
+    candidate.step_count = active_document.map(|saved| saved.document.sequence.len());
     Ok(true)
 }
 
 /// 起動ごとに、前回動いていた作業枠を利用者が選べる持ち越し候補へ移す。
 /// 持ち越し件数が3件を超えても削除しない。今の作業枠は常に空けておく。
 fn prepare_session(app_data: &Path) -> Result<(), String> {
-    let _file_io = lock_autosave_files();
+    let _file_io = lock_autosave_files(app_data)?;
     std::fs::create_dir_all(app_data).map_err(|e| format!("自動保存に失敗しました: {e}"))?;
     let Some(mut index) = startup_index(app_data)? else {
         return Ok(());
@@ -587,6 +843,14 @@ fn prepare_session(app_data: &Path) -> Result<(), String> {
         write_index(app_data, &index)?;
         return Ok(());
     };
+    #[cfg(not(test))]
+    if let Some(session) = active.session_id.as_deref() {
+        if is_live_session(app_data, session)? {
+            // 別processがまだ編集中なら、候補へ移して復旧画面へ誤表示しない。
+            index.active = Some(active);
+            return Ok(());
+        }
+    }
     let payload = std::fs::read(active_path(app_data))
         .map_err(|e| format!("前回の自動保存を読み込めませんでした: {e}"))?;
     if let Some(source_id) = active.source_candidate_id
@@ -600,16 +864,34 @@ fn prepare_session(app_data: &Path) -> Result<(), String> {
         std::fs::remove_file(active_path(app_data)).ok();
         return Ok(());
     }
-    let id = fresh_candidate_id(&mut index, app_data);
+    if let Some(session) = active.session_id.as_deref()
+        && index
+            .carried
+            .iter()
+            .filter(|candidate| candidate.session_id.as_deref() == Some(session))
+            .any(|candidate| {
+                std::fs::read(candidate_path(app_data, candidate.id))
+                    .ok()
+                    .as_deref()
+                    == Some(payload.as_slice())
+            })
+    {
+        // 別processがactiveを候補化した直後に止まった場合は、同一bytesを二重候補にしない。
+        write_index(app_data, &index)?;
+        std::fs::remove_file(active_path(app_data)).ok();
+        return Ok(());
+    }
+    let id = fresh_candidate_id(&mut index, app_data)?;
     std::fs::create_dir_all(app_data.join(CANDIDATES_DIR))
         .map_err(|e| format!("自動保存に失敗しました: {e}"))?;
     write_atomic(candidate_path(app_data, id).as_path(), &payload)
         .map_err(|e| format!("自動保存に失敗しました: {e}"))?;
     index.carried.push(StoredCandidate {
         id,
+        session_id: active.session_id.clone(),
         document_path: active.document_path,
         saved_at_ms: active.saved_at_ms,
-        step_count: parsed_payload(&payload).map_or(0, |saved| saved.document.sequence.len()),
+        step_count: parsed_payload(&payload).map(|saved| saved.document.sequence.len()),
     });
     write_index(app_data, &index)?;
     std::fs::remove_file(active_path(app_data)).ok();
@@ -633,16 +915,17 @@ fn preserve_active_as_candidate(app_data: &Path, index: &mut AutosaveIndex) -> R
     {
         return Ok(());
     }
-    let id = fresh_candidate_id(index, app_data);
+    let id = fresh_candidate_id(index, app_data)?;
     std::fs::create_dir_all(app_data.join(CANDIDATES_DIR))
         .map_err(|e| format!("自動保存に失敗しました: {e}"))?;
     write_atomic(candidate_path(app_data, id).as_path(), &payload)
         .map_err(|e| format!("自動保存に失敗しました: {e}"))?;
     index.carried.push(StoredCandidate {
         id,
+        session_id: active.session_id.clone(),
         document_path: active.document_path.clone(),
         saved_at_ms: active.saved_at_ms,
-        step_count: parsed_payload(&payload).map_or(0, |saved| saved.document.sequence.len()),
+        step_count: parsed_payload(&payload).map(|saved| saved.document.sequence.len()),
     });
     Ok(())
 }
@@ -657,9 +940,22 @@ pub fn preserve_before_document_change(
     store: &Mutex<DocumentStore>,
     app_data: &Path,
 ) -> Result<(), String> {
-    let _file_io = lock_autosave_files();
+    let operation = lock_recovery_operation();
+    let store = store
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    preserve_before_document_change_locked(&store, app_data, &operation)
+}
+
+/// 作品入替えcommandが復旧操作→storeの順で両方のlockを保持したまま使う境界。
+pub(crate) fn preserve_before_document_change_locked(
+    store: &DocumentStore,
+    app_data: &Path,
+    _operation: &RecoveryOperationGuard,
+) -> Result<(), String> {
+    let _process = lock_process_files(app_data)?;
     // 最後の30秒以降の編集も、作品を入れ替える直前に同じrun_once経路で確定する。
-    if !run_once_unlocked(store, app_data)? {
+    if !write_store_snapshot_locked(store, app_data)? {
         return Ok(());
     }
     let Some(mut index) = read_index(app_data)? else {
@@ -678,7 +974,7 @@ pub fn preserve_before_document_change(
 /// 自動保存を1回行う。未保存の変更が無ければ何もせずfalseを返す。
 /// ロックは複製を取る間だけ持ち、JSON化と書き出しはロックの外で行う。
 pub fn run_once(store: &Mutex<DocumentStore>, app_data: &Path) -> Result<bool, String> {
-    let _file_io = lock_autosave_files();
+    let _file_io = lock_autosave_files(app_data)?;
     run_once_unlocked(store, app_data)
 }
 
@@ -688,8 +984,19 @@ fn run_once_unlocked(store: &Mutex<DocumentStore>, app_data: &Path) -> Result<bo
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .autosave_snapshot();
+    write_snapshot_material(snapshot, app_data)
+}
+
+fn write_store_snapshot_locked(store: &DocumentStore, app_data: &Path) -> Result<bool, String> {
+    write_snapshot_material(store.autosave_snapshot(), app_data)
+}
+
+fn write_snapshot_material(
+    snapshot: Option<(Option<PathBuf>, SavedDocument)>,
+    app_data: &Path,
+) -> Result<bool, String> {
     let Some((doc_path, doc)) = snapshot else {
-        return Ok(false); // ここでロックは解放済み
+        return Ok(false);
     };
     write_snapshot(&doc, doc_path.as_deref(), app_data)?;
     Ok(true)
@@ -731,6 +1038,7 @@ fn write_snapshot(
     doc_path: Option<&Path>,
     app_data: &Path,
 ) -> Result<(), String> {
+    let session_id = session_id()?.to_owned();
     let document_path = doc_path.map(|path| path.to_string_lossy().into_owned());
     // 復元直後など、dirtyだが内容が直前のactiveと同一なら元payloadの日時を保つ。
     // 作品切替前の安全な再確認だけで、元候補のbytesを無意味に書き換えないため。
@@ -745,11 +1053,23 @@ fn write_snapshot(
         .map(|metadata| metadata.saved_at_ms)
         .map_or_else(now_ms, Ok)?;
     let mut index = read_index(app_data)?.unwrap_or_default();
+    #[cfg(test)]
+    pause_after_index_read_if_requested();
+    if index.active.is_some()
+        && index
+            .active
+            .as_ref()
+            .and_then(|active| active.session_id.as_deref())
+            != Some(session_id.as_str())
+    {
+        preserve_active_as_candidate(app_data, &mut index)?;
+    }
     let source_candidate_id = index
         .active
         .as_ref()
         .and_then(|active| active.source_candidate_id);
     let metadata = EmbeddedAutosaveMetadata {
+        session_id: Some(session_id.clone()),
         document_path,
         saved_at_ms,
         step_count: doc.document.sequence.len(),
@@ -760,6 +1080,7 @@ fn write_snapshot(
     write_atomic(active_path(app_data).as_path(), json.as_bytes())
         .map_err(|e| format!("自動保存に失敗しました: {e}"))?;
     index.active = Some(ActiveSnapshot {
+        session_id: Some(session_id),
         document_path: metadata.document_path,
         saved_at_ms,
         step_count: metadata.step_count,
@@ -772,36 +1093,60 @@ fn write_snapshot(
 
 /// 持ち越している候補をすべて返す。現在の作業枠は起動ごとにここへ移るため、
 /// 起動時の復旧画面が同じ作業を二重に提案することはない。
-pub fn check_all(app_data: &Path) -> Result<RecoveryChoices, String> {
+pub fn check_all(app_data: &Path) -> Result<Option<RecoveryChoices>, String> {
+    let _operation = lock_recovery_operation();
+    let _process = lock_process_files(app_data)?;
     let Some(index) = read_index(app_data)? else {
-        return Ok(RecoveryChoices {
-            choices: Vec::new(),
-            overflow_count: 0,
-        });
+        return Ok(None);
     };
     let active_source = index
         .active
         .as_ref()
         .and_then(|active| active.source_candidate_id);
-    let choices = index
-        .carried
-        .iter()
-        .filter(|candidate| Some(candidate.id) != active_source)
-        .filter(|candidate| candidate_path(app_data, candidate.id).is_file())
-        .map(|candidate| candidate_info(app_data, candidate))
-        .collect::<Vec<_>>();
-    Ok(RecoveryChoices {
+    let mut choices = Vec::new();
+    for candidate in &index.carried {
+        if Some(candidate.id) == active_source || !candidate_path(app_data, candidate.id).is_file()
+        {
+            continue;
+        }
+        #[cfg(not(test))]
+        if let Some(session) = candidate.session_id.as_deref()
+            && is_live_session(app_data, session)?
+        {
+            continue;
+        }
+        choices.push(candidate_info(app_data, candidate));
+    }
+    choices.sort_by(|left, right| {
+        (right.saved_at_ms, right.candidate_id).cmp(&(left.saved_at_ms, left.candidate_id))
+    });
+    if choices.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(RecoveryChoices {
         overflow_count: choices.len().saturating_sub(3),
         choices,
-    })
+    }))
 }
 
 /// 前回の自動保存が残っていれば、その情報を返す(起動時の復旧確認)。
 /// 正常終了・明示保存のたびに消しているので、残っていれば異常終了とみなせる。
-pub fn check(app_data: &Path) -> Option<RecoveryInfo> {
-    if let Some(candidate) = check_all(app_data).ok()?.choices.into_iter().next() {
-        return Some(candidate);
+fn check(app_data: &Path) -> Option<LegacyRecoveryInfo> {
+    if let Some(candidate) = check_all(app_data)
+        .ok()
+        .flatten()
+        .and_then(|choices| choices.choices.into_iter().next())
+    {
+        return Some(LegacyRecoveryInfo {
+            candidate_id: Some(candidate.candidate_id),
+            autosave_path: candidate.autosave_path,
+            document_path: candidate.document_path,
+            saved_at_ms: candidate.saved_at_ms,
+            step_count: candidate.step_count.unwrap_or(0),
+        });
     }
+    let _operation = lock_recovery_operation();
+    let _process = lock_process_files(app_data).ok()?;
     let index = read_index(app_data).ok().flatten()?;
     index
         .active
@@ -811,27 +1156,29 @@ pub fn check(app_data: &Path) -> Option<RecoveryInfo> {
 }
 
 /// 利用者が明示的に選んだ持ち越し候補だけを破棄する。
-/// `None`は旧単一候補APIとの互換用で、最初の候補だけを指す。
-pub fn discard_candidate(app_data: &Path, candidate_id: Option<u64>) -> Result<bool, String> {
-    let _file_io = lock_autosave_files();
+pub fn discard_candidate(
+    app_data: &Path,
+    candidate_id: impl Into<Option<u64>>,
+) -> Result<bool, String> {
+    let _file_io = lock_autosave_files(app_data)?;
+    let candidate_id = candidate_id
+        .into()
+        .ok_or_else(|| "復旧候補の番号が指定されていません。".to_owned())?;
+    validate_candidate_id(candidate_id)?;
     let Some(mut index) = read_index(app_data)? else {
-        return Ok(false);
-    };
-    let id = candidate_id.or_else(|| index.carried.first().map(|candidate| candidate.id));
-    let Some(id) = id else {
-        return Ok(false);
+        return Err("選んだ復旧候補が見つかりません。".to_owned());
     };
     let Some(position) = index
         .carried
         .iter()
-        .position(|candidate| candidate.id == id)
+        .position(|candidate| candidate.id == candidate_id)
     else {
-        return Ok(false);
+        return Err("選んだ復旧候補が見つかりません。".to_owned());
     };
     index.carried.remove(position);
     // 先に索引を確定する。失敗時はpayloadも候補もそのままなので、利用者が選び直せる。
     write_index(app_data, &index)?;
-    std::fs::remove_file(candidate_path(app_data, id)).ok();
+    std::fs::remove_file(candidate_path(app_data, candidate_id)).ok();
     Ok(true)
 }
 
@@ -864,34 +1211,30 @@ fn pause_after_restore_active_write_if_armed() -> Result<(), String> {
 pub fn restore_candidate(
     store: &Mutex<DocumentStore>,
     app_data: &Path,
-    candidate_id: Option<u64>,
+    candidate_id: impl Into<Option<u64>>,
 ) -> Result<Option<DocumentView>, String> {
-    let _file_io = lock_autosave_files();
+    let _file_io = lock_autosave_files(app_data)?;
+    let candidate_id = candidate_id
+        .into()
+        .ok_or_else(|| "復旧候補の番号が指定されていません。".to_owned())?;
+    validate_candidate_id(candidate_id)?;
     let Some(index) = read_index(app_data)? else {
-        return Ok(None);
+        return Err("選んだ復旧候補が見つかりません。".to_owned());
     };
     let active_source = index
         .active
         .as_ref()
         .and_then(|active| active.source_candidate_id);
-    let id = match candidate_id {
-        Some(id) if Some(id) == active_source => return Ok(None),
-        Some(id) => Some(id),
-        None => index
-            .carried
-            .iter()
-            .find(|candidate| Some(candidate.id) != active_source)
-            .map(|candidate| candidate.id),
-    };
-    let Some(id) = id else {
-        return Ok(None);
-    };
+    if Some(candidate_id) == active_source {
+        return Err("選んだ復旧候補は既に復元されています。".to_owned());
+    }
+    let id = candidate_id;
     let Some(position) = index
         .carried
         .iter()
         .position(|candidate| candidate.id == id)
     else {
-        return Ok(None);
+        return Err("選んだ復旧候補が見つかりません。".to_owned());
     };
     let candidate = index.carried[position].clone();
     let payload_path = candidate_path(app_data, id);
@@ -901,6 +1244,7 @@ pub fn restore_candidate(
     let saved_at_ms = now_ms()?;
     let step_count = doc.document.sequence.len();
     let metadata = EmbeddedAutosaveMetadata {
+        session_id: Some(session_id()?.to_owned()),
         document_path: candidate.document_path.clone(),
         saved_at_ms,
         step_count,
@@ -915,10 +1259,10 @@ pub fn restore_candidate(
         write_snapshot(&current, document_path.as_deref(), app_data)?;
     }
     let Some(mut index) = read_index(app_data)? else {
-        return Ok(None);
+        return Err("選んだ復旧候補が見つかりません。".to_owned());
     };
     if !index.carried.iter().any(|candidate| candidate.id == id) {
-        return Ok(None);
+        return Err("選んだ復旧候補が見つかりません。".to_owned());
     }
 
     // 現行作業を候補へ確定し、activeとの結び付きをいったんatomicに外す。
@@ -935,6 +1279,7 @@ pub fn restore_candidate(
     #[cfg(test)]
     pause_after_restore_active_write_if_armed()?;
     index.active = Some(ActiveSnapshot {
+        session_id: Some(session_id()?.to_owned()),
         document_path: metadata.document_path,
         saved_at_ms,
         step_count,
@@ -955,38 +1300,76 @@ fn discard_current_snapshot(
     app_data: &Path,
     current_document: Option<&Path>,
     discard_restored_source: bool,
-) {
-    let _file_io = lock_autosave_files();
-    if let Ok(Some(mut index)) = read_index(app_data) {
+) -> Result<(), String> {
+    let operation = lock_recovery_operation();
+    let _process = lock_process_files(app_data)?;
+    discard_current_snapshot_locked(
+        app_data,
+        current_document,
+        discard_restored_source,
+        &operation,
+    )
+}
+
+fn remove_recovery_file(path: &Path) -> Result<(), String> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("復旧候補のファイルを削除できませんでした: {error}")),
+    }
+}
+
+fn discard_current_snapshot_locked(
+    app_data: &Path,
+    current_document: Option<&Path>,
+    discard_restored_source: bool,
+    _operation: &RecoveryOperationGuard,
+) -> Result<(), String> {
+    let current_session = session_id()?;
+    if let Some(mut index) = read_index(app_data)? {
         let Some(active) = index.active.take() else {
             // 復旧画面で何も選んでいないときは持ち越し候補だけがある。
             // 正常終了でも別作品の明示保存でも、ここから候補を選んで消してはいけない。
-            return;
+            return Ok(());
         };
+        if active.session_id.as_deref() != Some(current_session) {
+            // 同じapp-dataを使う別processの作業枠は、こちらの正常終了や明示保存で
+            // 削除してはいけない。
+            return Ok(());
+        }
         let restored_source = discard_restored_source
             .then_some(active.source_candidate_id)
             .flatten();
         if let Some(id) = restored_source {
             index.carried.retain(|candidate| candidate.id != id);
         }
-        write_index(app_data, &index).ok();
-        std::fs::remove_file(active_path(app_data)).ok();
+        write_index(app_data, &index)?;
+        remove_recovery_file(&active_path(app_data))?;
         if let Some(id) = restored_source {
-            std::fs::remove_file(candidate_path(app_data, id)).ok();
+            remove_recovery_file(&candidate_path(app_data, id))?;
         }
-        return;
+        return Ok(());
     }
     if let Some(autosave) = recorded_autosave_path(app_data, current_document, false) {
-        std::fs::remove_file(autosave).ok();
+        remove_recovery_file(&autosave)?;
     }
-    std::fs::remove_file(marker_path(app_data)).ok();
+    remove_recovery_file(&marker_path(app_data))?;
+    Ok(())
 }
 
 /// 明示保存に成功した今回の作業枠を片付ける。復旧候補を開いていた場合だけ、
 /// その復元元も保存済みとして消す。他の持ち越し候補には触れない。
 /// 消せなくても保存成功自体は止めない。
-pub fn discard_after_save(app_data: &Path, current_document: Option<&Path>) {
-    discard_current_snapshot(app_data, current_document, true);
+pub fn discard_after_save(app_data: &Path, current_document: Option<&Path>) -> Result<(), String> {
+    discard_current_snapshot(app_data, current_document, true)
+}
+
+pub(crate) fn discard_after_save_locked(
+    app_data: &Path,
+    current_document: Option<&Path>,
+    operation: &RecoveryOperationGuard,
+) -> Result<(), String> {
+    discard_current_snapshot_locked(app_data, current_document, true, operation)
 }
 
 /// 正常終了時だけ自動保存を片付ける。未保存なら次回の復旧に残す。
@@ -999,7 +1382,7 @@ pub fn discard_if_clean(store: &Mutex<DocumentStore>, app_data: &Path) {
     drop(guard);
     // 正常終了は今回の作業枠だけを対象にする。復元元を含む持ち越し候補は
     // 利用者が破棄するか、その内容を明示保存するまで残す。
-    discard_current_snapshot(app_data, path.as_deref(), false);
+    discard_current_snapshot(app_data, path.as_deref(), false).ok();
 }
 
 /// 自動保存の内容を読み込んで現在の作品にする。残っていなければNone。
@@ -1011,9 +1394,11 @@ pub fn restore(
     let Some(info) = check(app_data) else {
         return Ok(None);
     };
-    if info.candidate_id.is_some() {
-        return restore_candidate(store, app_data, info.candidate_id);
+    if let Some(candidate_id) = info.candidate_id {
+        return restore_candidate(store, app_data, candidate_id);
     }
+    let _operation = lock_recovery_operation();
+    let _process = lock_process_files(app_data)?;
     let text = std::fs::read_to_string(&info.autosave_path)
         .map_err(|e| format!("作業中だった内容を読み込めませんでした: {e}"))?;
     let doc = parse_document(&text)?;
@@ -1032,6 +1417,7 @@ pub fn restore(
         std::fs::remove_file(candidate_path(app_data, id)).ok();
     }
     index.active = Some(ActiveSnapshot {
+        session_id: Some(session_id()?.to_owned()),
         document_path: info.document_path,
         saved_at_ms: now_ms()?,
         step_count,
@@ -1094,6 +1480,17 @@ mod tests {
         dir
     }
 
+    /// 本体側の既存検査は候補0件を空集合として扱う。製品の`check_all`は
+    /// `None`を返す契約へ広げたため、既存の喪失防止検査だけを同じ形で読みやすくする。
+    fn check_all(app_data: &Path) -> Result<RecoveryChoices, String> {
+        super::check_all(app_data).map(|choices| {
+            choices.unwrap_or(RecoveryChoices {
+                choices: Vec::new(),
+                overflow_count: 0,
+            })
+        })
+    }
+
     fn store_with_edit() -> Mutex<DocumentStore> {
         let mut store = DocumentStore::default();
         store
@@ -1104,6 +1501,117 @@ mod tests {
             })
             .unwrap();
         Mutex::new(store)
+    }
+
+    #[test]
+    fn recovery_wire_uses_null_for_no_choices_and_requires_both_internal_fields() {
+        let dir = temp_dir("wire_contract");
+        assert!(super::check_all(&dir).unwrap().is_none());
+
+        let value = serde_json::json!({
+            "candidate_id": 7,
+            "autosave_path": "candidate-7.ori3.autosave",
+            "document_path": null,
+            "saved_at_ms": null,
+            "step_count": null
+        });
+        let info: RecoveryInfo = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(info.candidate_id, 7);
+        assert_eq!(info.step_count, None);
+
+        let mut missing_candidate = value.clone();
+        missing_candidate
+            .as_object_mut()
+            .unwrap()
+            .remove("candidate_id");
+        assert!(serde_json::from_value::<RecoveryInfo>(missing_candidate).is_err());
+        let mut missing_step_count = value;
+        missing_step_count
+            .as_object_mut()
+            .unwrap()
+            .remove("step_count");
+        assert!(serde_json::from_value::<RecoveryInfo>(missing_step_count).is_err());
+
+        assert!(discard_candidate(&dir, 0).is_err());
+        assert!(discard_candidate(&dir, MAX_SAFE_CANDIDATE_ID + 1).is_err());
+    }
+
+    #[test]
+    fn recovery_choices_are_newest_first_and_keep_the_fourth_as_overflow() {
+        let dir = temp_dir("wire_choice_order");
+        std::fs::create_dir_all(dir.join(CANDIDATES_DIR)).unwrap();
+        let mut carried = Vec::new();
+        for (id, saved_at_ms) in [(1, 1), (2, 5), (3, 5), (4, 10)] {
+            std::fs::write(candidate_path(&dir, id), b"{}").unwrap();
+            carried.push(StoredCandidate {
+                id,
+                session_id: None,
+                document_path: Some(format!("candidate-{id}.ori3")),
+                saved_at_ms,
+                step_count: Some(id as usize),
+            });
+        }
+        write_index(
+            &dir,
+            &AutosaveIndex {
+                version: INDEX_VERSION,
+                next_candidate_id: 5,
+                active: None,
+                carried,
+            },
+        )
+        .unwrap();
+
+        let choices = super::check_all(&dir).unwrap().unwrap();
+        assert_eq!(choices.overflow_count, 1);
+        assert_eq!(
+            choices
+                .choices
+                .iter()
+                .map(|choice| (choice.candidate_id, choice.saved_at_ms, choice.step_count))
+                .collect::<Vec<_>>(),
+            vec![
+                (4, Some(10), Some(4)),
+                (3, Some(5), Some(3)),
+                (2, Some(5), Some(2)),
+                (1, Some(1), Some(1)),
+            ]
+        );
+    }
+
+    #[test]
+    fn explicit_save_waits_for_in_flight_autosave_and_removes_the_active_snapshot() {
+        let dir = temp_dir("save_autosave_barrier");
+        let document_path = dir.join("saved.ori3");
+        let store = std::sync::Arc::new(store_with_edit());
+        let operation = lock_recovery_operation();
+        let (source_path, snapshot) = store
+            .lock()
+            .unwrap()
+            .autosave_snapshot()
+            .expect("dirty document has an autosave snapshot");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let save_store = std::sync::Arc::clone(&store);
+        let save_dir = dir.clone();
+        let save_path = document_path.clone();
+        let save_barrier = std::sync::Arc::clone(&barrier);
+        let save = std::thread::spawn(move || {
+            save_barrier.wait();
+            let operation = lock_recovery_operation();
+            save_store.lock().unwrap().save(Some(&save_path)).unwrap();
+            discard_after_save_locked(&save_dir, Some(&save_path), &operation).unwrap();
+        });
+
+        barrier.wait();
+        write_snapshot(&snapshot, source_path.as_deref(), &dir).unwrap();
+        drop(operation);
+        save.join().unwrap();
+
+        assert!(document_path.is_file());
+        assert!(
+            super::check_all(&dir).unwrap().is_none(),
+            "明示保存は進行中の自動保存後に実行され、今回の作業枠だけを片付ける"
+        );
     }
 
     /// 自動保存は保存先パスと未保存フラグを変えない(saveの流用禁止の核心)。
@@ -1265,7 +1773,7 @@ mod tests {
         );
 
         restored.lock().unwrap().save(Some(&document_path)).unwrap();
-        discard_after_save(&dir, Some(&document_path));
+        discard_after_save(&dir, Some(&document_path)).unwrap();
         assert!(!candidate.exists(), "保存成功後にだけ候補を消す");
     }
 
@@ -1283,9 +1791,7 @@ mod tests {
             !active_path(&dir).exists(),
             "30秒未満の編集なので、まだ現行作業枠へ書かれていない"
         );
-        let id = check_all(&dir).unwrap().choices[0]
-            .candidate_id
-            .expect("前回の候補には番号がある");
+        let id = check_all(&dir).unwrap().choices[0].candidate_id;
 
         restore_candidate(&current, &dir, Some(id))
             .unwrap()
@@ -1313,7 +1819,7 @@ mod tests {
         run_once(&previous, &dir).unwrap();
         prepare_session(&dir).unwrap();
         let source = check_all(&dir).unwrap().choices[0].clone();
-        let source_id = source.candidate_id.expect("元候補IDがある");
+        let source_id = source.candidate_id;
         let store = Mutex::new(DocumentStore::default());
         restore_candidate(&store, &dir, Some(source_id))
             .unwrap()
@@ -1335,10 +1841,10 @@ mod tests {
         assert!(
             choices
                 .iter()
-                .any(|choice| choice.candidate_id == Some(source_id))
+                .any(|choice| choice.candidate_id == source_id)
         );
         assert!(choices.iter().any(|choice| {
-            choice.candidate_id != Some(source_id)
+            choice.candidate_id != source_id
                 && std::fs::read(&choice.autosave_path).ok().as_deref() == Some(broken_active)
         }));
     }
@@ -1362,13 +1868,13 @@ mod tests {
             .iter()
             .find(|choice| choice.document_path.as_deref() == Some(crane_path.as_str()))
             .expect("折り鶴の候補がある");
-        let crane_id = crane.candidate_id.expect("持ち越し候補には番号がある");
+        let crane_id = crane.candidate_id;
         let crane_payload = PathBuf::from(&crane.autosave_path);
         let balloon_id = before
             .choices
             .iter()
             .find(|choice| choice.document_path.as_deref() == Some(balloon_path.as_str()))
-            .and_then(|choice| choice.candidate_id)
+            .map(|choice| choice.candidate_id)
             .expect("水風船の候補に番号がある");
 
         let restored = Mutex::new(DocumentStore::default());
@@ -1379,7 +1885,7 @@ mod tests {
         let after = check_all(&dir).unwrap();
         assert_eq!(after.choices.len(), 1, "選ばなかった1件を表示し続ける");
         assert_eq!(after.overflow_count, 0);
-        assert_eq!(after.choices[0].candidate_id, Some(balloon_id));
+        assert_eq!(after.choices[0].candidate_id, balloon_id);
         assert_eq!(
             after.choices[0].document_path.as_deref(),
             Some(balloon_path.as_str()),
@@ -1409,13 +1915,13 @@ mod tests {
             .iter()
             .find(|choice| choice.document_path.as_deref() == Some(crane_path.as_str()))
             .expect("折り鶴の候補がある");
-        let crane_id = crane.candidate_id.expect("折り鶴の候補番号がある");
+        let crane_id = crane.candidate_id;
         let crane_payload = PathBuf::from(&crane.autosave_path);
         let balloon = before
             .iter()
             .find(|choice| choice.document_path.as_deref() == Some(balloon_path.as_str()))
             .expect("水風船の候補がある");
-        let balloon_id = balloon.candidate_id.expect("水風船の候補番号がある");
+        let balloon_id = balloon.candidate_id;
         let balloon_payload = PathBuf::from(&balloon.autosave_path);
 
         // 復旧候補とは無関係な今回の作品を明示保存しても、持ち越し候補は選んでいない。
@@ -1426,7 +1932,7 @@ mod tests {
             .save(Some(&dir.join("今回の作品.ori3")))
             .unwrap();
         let current_path = current.lock().unwrap().current_path();
-        discard_after_save(&dir, current_path.as_deref());
+        discard_after_save(&dir, current_path.as_deref()).unwrap();
         let after_unrelated_save = check_all(&dir).unwrap().choices;
         assert_eq!(
             after_unrelated_save.len(),
@@ -1444,11 +1950,11 @@ mod tests {
             .save(Some(&dir.join("折り鶴.ori3")))
             .unwrap();
         let restored_path = restored.lock().unwrap().current_path();
-        discard_after_save(&dir, restored_path.as_deref());
+        discard_after_save(&dir, restored_path.as_deref()).unwrap();
 
         let after_restored_save = check_all(&dir).unwrap().choices;
         assert_eq!(after_restored_save.len(), 1, "未選択の候補は1件残す");
-        assert_eq!(after_restored_save[0].candidate_id, Some(balloon_id));
+        assert_eq!(after_restored_save[0].candidate_id, balloon_id);
         assert!(!crane_payload.exists(), "保存した復元元だけを消す");
         assert!(balloon_payload.is_file(), "水風船の候補は消さない");
     }
@@ -1462,11 +1968,26 @@ mod tests {
         let autosave = PathBuf::from(check(&dir).unwrap().autosave_path);
         assert!(autosave.is_file());
 
-        discard_after_save(&dir, None);
+        discard_after_save(&dir, None).unwrap();
         assert!(!autosave.exists(), "自動保存ファイルが残っている");
         assert!(!marker_path(&dir).exists(), "目印が残っている");
         assert!(check(&dir).is_none());
         assert!(restore(&store, &dir).unwrap().is_none());
+    }
+
+    #[test]
+    fn clean_exit_never_discards_another_process_active_snapshot() {
+        let dir = temp_dir("discard_other_process_active");
+        let store = named_store_with_pending_edit(&dir, "other-process.ori3");
+        assert!(run_once(&store, &dir).unwrap());
+        let mut index = read_index(&dir).unwrap().expect("active index");
+        index.active.as_mut().expect("active").session_id = Some("other-process".to_owned());
+        write_index(&dir, &index).unwrap();
+
+        discard_current_snapshot(&dir, Some(&dir.join("other-process.ori3")), false).unwrap();
+
+        assert!(read_index(&dir).unwrap().expect("index").active.is_some());
+        assert!(active_path(&dir).is_file());
     }
 
     #[test]
@@ -1500,7 +2021,7 @@ mod tests {
         std::fs::write(&unrelated, "消してはいけない").unwrap();
         std::fs::write(marker_path(&dir), unrelated.to_string_lossy().as_bytes()).unwrap();
 
-        discard_after_save(&dir, None);
+        discard_after_save(&dir, None).unwrap();
 
         assert!(
             unrelated.is_file(),
@@ -1760,7 +2281,7 @@ mod tests {
         let before = check_all(&dir).unwrap().choices;
         assert_eq!(before.len(), 1);
         let source = before[0].clone();
-        let source_id = source.candidate_id.expect("持ち越し候補には番号がある");
+        let source_id = source.candidate_id;
         let source_payload = std::fs::read(&source.autosave_path).unwrap();
 
         let restored = Mutex::new(DocumentStore::default());
@@ -1780,11 +2301,11 @@ mod tests {
             .unwrap();
         let other_path = dir.join("水風船.ori3");
         restored.lock().unwrap().save(Some(&other_path)).unwrap();
-        discard_after_save(&dir, Some(&other_path));
+        discard_after_save(&dir, Some(&other_path)).unwrap();
 
         let after = check_all(&dir).unwrap().choices;
         assert_eq!(after.len(), 1, "別作品の保存で復元元を消してはいけない");
-        assert_eq!(after[0].candidate_id, Some(source_id));
+        assert_eq!(after[0].candidate_id, source_id);
         assert_eq!(
             std::fs::read(&source.autosave_path).unwrap(),
             source_payload,
@@ -1808,7 +2329,7 @@ mod tests {
         assert!(
             after_restart
                 .iter()
-                .any(|choice| choice.candidate_id == Some(source_id)),
+                .any(|choice| choice.candidate_id == source_id),
             "復元元の折り鶴を選べる"
         );
         assert_eq!(
@@ -1940,6 +2461,24 @@ mod tests {
         let app_data = process_env_path(PROCESS_APP_DATA_ENV);
 
         match role.as_ref() {
+            "write-overlap" => {
+                let name = std::env::var("ORI3_TEST_AUTOSAVE_DOCUMENT_NAME").unwrap();
+                let ordinal = std::env::var("ORI3_TEST_AUTOSAVE_DOCUMENT_ORDINAL")
+                    .unwrap()
+                    .parse::<usize>()
+                    .unwrap();
+                let store = process_store(&app_data, &name, ordinal);
+                assert!(run_once(&store, &app_data).unwrap());
+            }
+            "hold-transaction-lock" => {
+                let _lock = lock_process_files(&app_data).unwrap();
+                pause_process_until_killed();
+            }
+            "write-after-lock" => {
+                let store = process_store(&app_data, "錠の後.ori3", 7);
+                assert!(run_once(&store, &app_data).unwrap());
+                mark_process_result();
+            }
             "write-complete" => {
                 let _normal_exit = NormalExitMarker(process_env_path(PROCESS_NORMAL_EXIT_ENV));
                 let store = process_store(&app_data, "折り鶴.ori3", 1);
@@ -1973,7 +2512,7 @@ mod tests {
                         choice.document_path.as_deref()
                             == Some(water_path.to_string_lossy().as_ref())
                     })
-                    .and_then(|choice| choice.candidate_id)
+                    .map(|choice| choice.candidate_id)
                     .expect("水風船の候補がある");
                 let store = Mutex::new(DocumentStore::default());
                 restore_candidate(&store, &app_data, Some(water_id))
@@ -2012,7 +2551,7 @@ mod tests {
                         choice.document_path.as_deref()
                             == Some(water_path.to_string_lossy().as_ref())
                     })
-                    .and_then(|choice| choice.candidate_id)
+                    .map(|choice| choice.candidate_id)
                     .expect("水風船の候補がある");
                 let store = Mutex::new(DocumentStore::default());
                 restore_candidate(&store, &app_data, Some(water_id))
@@ -2042,7 +2581,7 @@ mod tests {
                         choice.document_path.as_deref()
                             == Some(crane_path.to_string_lossy().as_ref())
                     })
-                    .and_then(|choice| choice.candidate_id)
+                    .map(|choice| choice.candidate_id)
                     .expect("折り鶴の候補がある");
                 arm_pause_after_restore_active_write();
                 let _ = restore_candidate(&store, &app_data, Some(crane_id));
@@ -2053,7 +2592,7 @@ mod tests {
                 let choices = check_all(&app_data).unwrap().choices;
                 assert_eq!(choices.len(), 1, "強制終了した1作品を候補として返す");
                 let info = &choices[0];
-                let candidate_id = info.candidate_id.expect("持ち越し候補IDがある");
+                let candidate_id = info.candidate_id;
                 let expected_document_path = app_data.join("折り鶴.ori3");
                 assert_eq!(
                     info.document_path.as_deref(),
@@ -2063,7 +2602,7 @@ mod tests {
                 assert!(info.saved_at_ms.is_some());
                 assert_eq!(
                     info.step_count,
-                    payload_step_count(Path::new(&info.autosave_path)).unwrap()
+                    payload_step_count(Path::new(&info.autosave_path))
                 );
                 let store = Mutex::new(DocumentStore::default());
                 restore_candidate(&store, &app_data, Some(candidate_id))
@@ -2091,12 +2630,8 @@ mod tests {
                 let crane_expected = std::fs::read(process_env_path(PROCESS_EXPECTED_ENV)).unwrap();
                 let water_expected =
                     std::fs::read(app_data.join("expected-water-after-edit.json")).unwrap();
-                let crane_id = recovery_info_with_bytes(&choices, &crane_expected)
-                    .candidate_id
-                    .expect("折り鶴の候補IDがある");
-                let water_id = recovery_info_with_bytes(&choices, &water_expected)
-                    .candidate_id
-                    .expect("水風船の候補IDがある");
+                let crane_id = recovery_info_with_bytes(&choices, &crane_expected).candidate_id;
+                let water_id = recovery_info_with_bytes(&choices, &water_expected).candidate_id;
 
                 let store = Mutex::new(DocumentStore::default());
                 restore_candidate(&store, &app_data, Some(crane_id))
@@ -2120,7 +2655,7 @@ mod tests {
                         .unwrap()
                         .choices
                         .iter()
-                        .any(|choice| choice.candidate_id == Some(crane_id)),
+                        .any(|choice| choice.candidate_id == crane_id),
                     "最後に選ばなかった折り鶴も明示保存までは残す"
                 );
                 mark_process_result();
@@ -2141,8 +2676,8 @@ mod tests {
                             .is_none_or(|text| parse_document(&text).is_err())
                     })
                     .expect("壊れた候補も黙って削除せず返す");
-                assert_eq!(corrupt.step_count, 0);
-                let corrupt_id = corrupt.candidate_id.unwrap();
+                assert_eq!(corrupt.step_count, None);
+                let corrupt_id = corrupt.candidate_id;
                 let corrupt_path = PathBuf::from(&corrupt.autosave_path);
                 let store = Mutex::new(DocumentStore::default());
                 assert!(
@@ -2154,18 +2689,14 @@ mod tests {
                         .unwrap()
                         .choices
                         .iter()
-                        .any(|choice| choice.candidate_id == Some(corrupt_id)),
+                        .any(|choice| choice.candidate_id == corrupt_id),
                     "復元errorだけでは候補を消さない"
                 );
 
                 let crane_expected = std::fs::read(process_env_path(PROCESS_EXPECTED_ENV)).unwrap();
                 let water_expected = std::fs::read(app_data.join("expected-water.json")).unwrap();
-                let crane_id = recovery_info_with_bytes(&choices, &crane_expected)
-                    .candidate_id
-                    .unwrap();
-                let water_id = recovery_info_with_bytes(&choices, &water_expected)
-                    .candidate_id
-                    .unwrap();
+                let crane_id = recovery_info_with_bytes(&choices, &crane_expected).candidate_id;
+                let water_id = recovery_info_with_bytes(&choices, &water_expected).candidate_id;
                 restore_candidate(&store, &app_data, Some(crane_id))
                     .unwrap()
                     .expect("壊れた候補があっても折り鶴を復元できる");
@@ -2203,7 +2734,7 @@ mod tests {
                     water.document_path.as_deref(),
                     Some(app_data.join("水風船.ori3").to_string_lossy().as_ref())
                 );
-                let water_id = water.candidate_id.unwrap();
+                let water_id = water.candidate_id;
                 let store = Mutex::new(DocumentStore::default());
                 restore_candidate(&store, &app_data, Some(water_id))
                     .unwrap()
@@ -2338,6 +2869,150 @@ mod tests {
         assert_ne!(recovery_pid, killed_pid, "別PIDで再起動する");
         assert_eq!(status.code(), Some(0), "新processの実終了コードは0");
         assert!(result.is_file(), "reader本体が最後まで契約を検査した");
+    }
+
+    fn overlap_writer(
+        app_data: &Path,
+        name: &str,
+        ordinal: usize,
+        ready: &Path,
+        release: &Path,
+        disable_lock: bool,
+    ) -> KillOnDropChild {
+        let mut command = process_test_command("write-overlap", app_data);
+        command
+            .env("ORI3_TEST_AUTOSAVE_DOCUMENT_NAME", name)
+            .env("ORI3_TEST_AUTOSAVE_DOCUMENT_ORDINAL", ordinal.to_string())
+            .env("ORI3_TEST_AUTOSAVE_INDEX_READ_READY", ready)
+            .env("ORI3_TEST_AUTOSAVE_INDEX_READ_RELEASE", release)
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit());
+        if disable_lock {
+            command.env("ORI3_TEST_DISABLE_PROCESS_LOCK", "1");
+        }
+        KillOnDropChild(command.spawn().unwrap())
+    }
+
+    fn wait_success(child: &mut KillOnDropChild, label: &str) {
+        let status = child.0.wait().unwrap();
+        assert!(status.success(), "{label}: status={status}");
+    }
+
+    #[test]
+    fn two_real_processes_keep_both_documents_when_autosave_transactions_overlap() {
+        let dir = temp_dir("two_process_transaction_lock");
+        let expected_crane = saved_document_bytes(&process_store(&dir, "折り鶴.ori3", 1));
+        let expected_water = saved_document_bytes(&process_store(&dir, "水風船.ori3", 2));
+        let crane_ready = dir.join("crane.index-read");
+        let crane_release = dir.join("crane.release");
+        let water_ready = dir.join("water.index-read");
+        let water_release = dir.join("water.release");
+
+        let mut crane = overlap_writer(&dir, "折り鶴.ori3", 1, &crane_ready, &crane_release, false);
+        wait_until_ready(&mut crane, &crane_ready);
+        let mut water = overlap_writer(&dir, "水風船.ori3", 2, &water_ready, &water_release, false);
+        std::thread::sleep(Duration::from_millis(150));
+        assert!(
+            !water_ready.exists(),
+            "BはAのtransaction lock解放前にindex読取りへ進んではいけない"
+        );
+        std::fs::write(&crane_release, b"release").unwrap();
+        wait_success(&mut crane, "crane writer");
+        wait_until_ready(&mut water, &water_ready);
+        std::fs::write(&water_release, b"release").unwrap();
+        wait_success(&mut water, "water writer");
+
+        prepare_session(&dir).unwrap();
+        let choices = check_all(&dir).unwrap().choices;
+        assert_eq!(choices.len(), 2, "2 PIDの作品を候補から落とさない");
+        assert!(recovery_info_with_bytes(&choices, &expected_crane).candidate_id > 0);
+        assert!(recovery_info_with_bytes(&choices, &expected_water).candidate_id > 0);
+    }
+
+    #[test]
+    fn process_lock_bypass_reproduces_the_pre_fix_lost_update() {
+        let dir = temp_dir("two_process_without_transaction_lock");
+        let crane_ready = dir.join("crane.index-read");
+        let crane_release = dir.join("crane.release");
+        let water_ready = dir.join("water.index-read");
+        let water_release = dir.join("water.release");
+        let mut crane = overlap_writer(&dir, "折り鶴.ori3", 1, &crane_ready, &crane_release, true);
+        wait_until_ready(&mut crane, &crane_ready);
+        let mut water = overlap_writer(&dir, "水風船.ori3", 2, &water_ready, &water_release, true);
+        wait_until_ready(&mut water, &water_ready);
+        std::fs::write(&crane_release, b"release").unwrap();
+        std::fs::write(&water_release, b"release").unwrap();
+        wait_success(&mut crane, "unlocked crane writer");
+        wait_success(&mut water, "unlocked water writer");
+
+        prepare_session(&dir).unwrap();
+        assert_eq!(
+            check_all(&dir).unwrap().choices.len(),
+            1,
+            "錠を外すと両PIDが空indexを基に確定し、片方を失う"
+        );
+    }
+
+    #[test]
+    fn v1_index_with_an_active_payload_migrates_to_a_recovery_choice() {
+        let dir = temp_dir("v1_index_migration");
+        let store = named_store_with_pending_edit(&dir, "旧形式.ori3");
+        let expected = saved_document_bytes(&store);
+        assert!(run_once(&store, &dir).unwrap());
+        let active_len = std::fs::metadata(active_path(&dir)).unwrap().len();
+        let mut v1 = read_index(&dir).unwrap().expect("v2で保存済み");
+        v1.version = LEGACY_INDEX_VERSION;
+        v1.active.as_mut().expect("active").session_id = None;
+        let text = serde_json::to_string_pretty(&v1).unwrap();
+        write_atomic(index_path(&dir).as_path(), text.as_bytes()).unwrap();
+
+        prepare_session(&dir).unwrap();
+        let choices = check_all(&dir).unwrap().choices;
+        assert_eq!(choices.len(), 1, "v1 activeを候補へ移行する");
+        let choice = recovery_info_with_bytes(&choices, &expected);
+        assert!(choice.candidate_id > 0);
+        assert_eq!(
+            std::fs::metadata(&choice.autosave_path).unwrap().len(),
+            active_len,
+            "v1 payloadを候補へ移すだけで作品bytesを増やさない"
+        );
+        assert_eq!(
+            read_index(&dir).unwrap().expect("v2 index").version,
+            INDEX_VERSION,
+            "移行後はv2を確定する"
+        );
+    }
+
+    #[test]
+    fn killed_transaction_lock_holder_does_not_block_a_new_process() {
+        let dir = temp_dir("killed_transaction_lock_holder");
+        let ready = dir.join("holder.ready");
+        let normal_exit = dir.join("holder.normal-exit");
+        let mut holder_command = process_test_command("hold-transaction-lock", &dir);
+        holder_command
+            .env(PROCESS_READY_ENV, &ready)
+            .env(PROCESS_NORMAL_EXIT_ENV, &normal_exit)
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit());
+        let mut holder = KillOnDropChild(holder_command.spawn().unwrap());
+        let _pid = force_kill_and_wait(&mut holder, &ready, &normal_exit, "transaction-lock");
+        assert!(
+            dir.join(TRANSACTION_LOCK_FILE).is_file(),
+            "lock名は残り得る"
+        );
+
+        let result = dir.join("writer.result");
+        let mut writer_command = process_test_command("write-after-lock", &dir);
+        writer_command
+            .env(PROCESS_RESULT_ENV, &result)
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit());
+        let status = writer_command.status().unwrap();
+        assert!(
+            status.success(),
+            "強制終了後の別PIDはlockを取り直せる: {status}"
+        );
+        assert!(result.is_file());
     }
 
     fn partial_temp_files(app_data: &Path, target_name: &str) -> Vec<PathBuf> {

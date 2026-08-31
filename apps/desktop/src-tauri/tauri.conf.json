@@ -31,7 +31,8 @@
     ],
     "publisher": "oltot",
     "resources": {
-      "../../../docs/manual/ORIGAMI3取扱説明書.pdf": "取扱説明書.pdf"
+      "../../../docs/manual/ORIGAMI3取扱説明書.pdf": "取扱説明書.pdf",
+      "../../web/public/fonts/OFL.txt": "licenses/NotoSansJP-OFL.txt"
     },
     "icon": [
       "icons/32x32.png",
