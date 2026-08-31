@@ -1,0 +1,46 @@
+# ORIGAMI3-ROADMAP-EVIDENCE-TEST-NAMES schema=2
+# scope=roadmap-mapped names=38 source-files=29 repository-test-total=not-claimed
+# definition-tree-sha256=82c1ba455ce41d2cf809cddf0dd4cde7821d05df1f2a438bc39ebf9623b1b2f0
+# この一覧はリポジトリ全検査の一覧ではない。scripts/doc-link-audit.ps1 が
+# ロードマップ証拠へ割り当てる検査名と実sourceを1対1で保存する。
+# definition hashは、下記38件の実sourceにあるtest属性・関数宣言又は
+# Vitestのsuite/test宣言と、Rust/Vitest実source全体（LF正規化）を含むmanifestのhashである。
+# 割当又はtest宣言を変えたら、実在するtest定義を確認して同時更新する。
+autosave::tests::restore_recovers_the_same_document | apps/desktop/src-tauri/src/autosave.rs
+balloon_replays_with_finish_soft_on_and_off_three_times_without_penetration | crates/ori3-layers/tests/acceptance_balloon.rs
+completed_crane_is_flat_and_symmetric | crates/ori3-layers/tests/acceptance_crane.rs
+cp_svg::tests::each_edge_kind_has_its_own_style | crates/ori3-export/src/cp_svg.rs
+crane_replays_with_finish_soft_on_and_off_three_times_without_penetration | crates/ori3-layers/tests/acceptance_crane.rs
+depth_three_branching_skeleton_packs_and_generates_valid_cp | crates/ori3-propose/tests/generate.rs
+extraction_is_deterministic | crates/ori3-cp/tests/faces.rs
+finish_soft_replay_uses_the_latest_completed_pose_at_each_position | crates/ori3-model/tests/serde_roundtrip.rs
+finish_soft_round_trips_three_values_only_with_measured_tolerance | crates/ori3-model/tests/serde_roundtrip.rs
+folding_only_top_layer_keeps_lower_layers_in_place | crates/ori3-layers/tests/fold_through.rs
+full_replay_folds_flat_and_layers_are_a_permutation | crates/ori3-layers/tests/replay.rs
+half_folded_square_is_mirror_pair_with_right_face_on_top | crates/ori3-layers/tests/flat_state.rs
+inside_reverse_on_four_layer_flap | crates/ori3-layers/tests/techniques.rs
+loop_free_cp_converges_immediately | crates/ori3-rigid/tests/solver.rs
+manual::tests::representative_json_makes_four_page_pdf_and_two_toc_items | crates/ori3-export/src/manual.rs
+open_sink_turns_the_tip_of_the_preliminary_base_inside_out | crates/ori3-layers/tests/techniques.rs
+packing_quality_baseline_1005_runs | crates/ori3-propose/tests/perf_packing.rs | ignored-explicit
+pdf::tests::seven_steps_make_a_cover_and_two_pages | crates/ori3-export/src/pdf.rs
+proposal_matrix_contract | crates/ori3-propose/tests/proposal_matrix.rs
+replay_twice_is_bit_identical | crates/ori3-layers/tests/replay.rs
+sim011_completeness_table_and_generic_routes_are_permanent | crates/ori3-layers/tests/sim011_completeness.rs
+src/lib/alignPick.test.ts > 線分の交点 > 十字に交わる2本の交点を返す | apps/desktop/src/lib/alignPick.test.ts
+src/lib/construct.test.ts > 作図の計算 > 直角の二等分線は45°方向へ伸びる | apps/desktop/src/lib/construct.test.ts
+src/lib/layerMotion.test.ts > 汎用層操作の入力 > 既存折り目のReflectをregionなし・Keepへ変換する | apps/desktop/src/lib/layerMotion.test.ts
+src/lib/playback.test.ts > advancePlayback > 最終手順を折り終えたら止まる | apps/desktop/src/lib/playback.test.ts
+src/store/appStore.test.ts > appStore 折り角度の指定 > 連続操作は16msで間引かれ、最後の角度が必ず送られる | apps/desktop/src/store/appStore.test.ts
+src/store/ipcQueue.test.ts > createSerialQueue > 前の要求が完了するまで次の要求を開始しない(発行順に直列実行) | apps/desktop/src/store/ipcQueue.test.ts
+store::tests::add_segment_undo_redo_roundtrip | apps/desktop/src-tauri/src/store.rs
+store::tests::cushion_then_cupboard_fold_only_with_fold_through | apps/desktop/src-tauri/src/store.rs
+test_document_json_roundtrip | crates/ori3-model/tests/serde_roundtrip.rs
+test_seg_intersection_crossing | crates/ori3-geometry/tests/primitives.rs
+the_frog_is_deterministic | crates/ori3-layers/tests/acceptance_frog.rs
+traditional_frog_has_required_techniques_and_replays_connected_twice | crates/ori3-layers/tests/acceptance_frog.rs
+twist_works_on_a_triangle_and_rejects_only_undefined_input | crates/ori3-layers/tests/techniques.rs
+valid_skeleton_passes_and_lists_leaves | crates/ori3-propose/tests/skeleton.rs
+warm_start_converges_faster_to_same_solution | crates/ori3-rigid/tests/solver.rs
+yakko_double_blintz_folds_flat_to_half_square | crates/ori3-rigid/tests/acceptance_yakko.rs
+yakko_hinge_20_sweep_stays_within_frame_budget | crates/ori3-rigid/tests/perf_yakko.rs

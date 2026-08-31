@@ -524,6 +524,286 @@ function Test-StaticStringArrayEqual {
     return $true
 }
 
+function Get-StaticNormalizedSha256 {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    $normalized = $Text.Replace("`r`n", "`n").Replace("`r", "`n")
+    $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes($normalized)
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        return (($sha256.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') }) -join '').ToUpperInvariant()
+    }
+    finally {
+        $sha256.Dispose()
+    }
+}
+
+function Test-StaticChecksCheckoutFullHistory {
+    param([Parameter(Mandatory = $true)][string]$WorkflowText)
+
+    $checksJob = [regex]::Match(
+        $WorkflowText,
+        '(?ms)^  checks:\s*(?:#.*)?\r?\n(?<body>.*?)(?=^  [A-Za-z0-9_-]+:\s*(?:#.*)?$|\z)'
+    )
+    if (-not $checksJob.Success) {
+        return $false
+    }
+
+    $checkoutSteps = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($step in @([regex]::Matches($checksJob.Groups['body'].Value, '(?ms)^      -\s+(?<body>.*?)(?=^      -\s+|\z)'))) {
+        if ([regex]::IsMatch($step.Groups['body'].Value, '(?m)^        uses:\s*actions/checkout@[^\s#]+(?:\s+#.*)?$')) {
+            $checkoutSteps.Add($step.Groups['body'].Value)
+        }
+    }
+    if ($checkoutSteps.Count -ne 1) {
+        return $false
+    }
+
+    $checkoutBody = $checkoutSteps[0]
+    $withMappings = @([regex]::Matches($checkoutBody, '(?m)^        with:\s*(?:#.*)?$'))
+    $fetchDepths = @([regex]::Matches($checkoutBody, '(?m)^          fetch-depth:\s*(?<value>[^#\r\n]+?)(?:\s+#.*)?$'))
+    if ($withMappings.Count -ne 1 -or $fetchDepths.Count -ne 1) {
+        return $false
+    }
+    return (ConvertFrom-SimpleYamlValue $fetchDepths[0].Groups['value'].Value) -ceq '0'
+}
+
+function Get-StaticPowerShellParseResult {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    $tokens = $null
+    $parseErrors = $null
+    $ast = [Management.Automation.Language.Parser]::ParseInput($Text, [ref]$tokens, [ref]$parseErrors)
+    if (@($parseErrors).Count -ne 0) {
+        throw "PowerShell静的契約のAST解析に失敗しました: $($parseErrors[0].Message)"
+    }
+    return [pscustomobject]@{
+        Parsed = $true
+        Ast = $ast
+    }
+}
+
+function Test-StaticCommandSignature {
+    param(
+        [Parameter(Mandatory = $true)]$Command,
+        [Parameter(Mandatory = $true)][string]$InvocationOperator,
+        [Parameter(Mandatory = $true)][string[]]$Elements
+    )
+
+    if ([string]$Command.InvocationOperator -cne $InvocationOperator -or
+        $Command.CommandElements.Count -ne $Elements.Count) {
+        return $false
+    }
+    for ($index = 0; $index -lt $Elements.Count; $index++) {
+        if ($Command.CommandElements[$index].Extent.Text -cne $Elements[$index]) {
+            return $false
+        }
+    }
+    return $true
+}
+
+function Test-StaticJoinPathAssignment {
+    param(
+        [Parameter(Mandatory = $true)]$Ast,
+        [Parameter(Mandatory = $true)][string]$VariableText,
+        [Parameter(Mandatory = $true)][string]$RootVariableText,
+        [Parameter(Mandatory = $true)][string]$RelativePath
+    )
+
+    $assignments = @($Ast.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.AssignmentStatementAst] -and
+            $node.Left.Extent.Text -ceq $VariableText
+    }, $true))
+    if ($assignments.Count -ne 1) {
+        return $false
+    }
+    $commands = @($assignments[0].Right.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.CommandAst]
+    }, $true))
+    if ($commands.Count -ne 1 -or
+        $commands[0].GetCommandName() -cne 'Join-Path' -or
+        $commands[0].CommandElements.Count -ne 3 -or
+        $commands[0].CommandElements[1].Extent.Text -cne $RootVariableText -or
+        $commands[0].CommandElements[2] -isnot [Management.Automation.Language.StringConstantExpressionAst]) {
+        return $false
+    }
+    return $commands[0].CommandElements[2].Value -ceq $RelativePath
+}
+
+function Test-StaticDocLinkInventoryContract {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    $parse = Get-StaticPowerShellParseResult $Text
+    if (-not $parse.Parsed) {
+        return $false
+    }
+    $normalizedPathText = $Text.Replace('\', '/')
+    if ($normalizedPathText.IndexOf('scratchpad/doc-link-testnames.txt', [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        return $false
+    }
+    return Test-StaticJoinPathAssignment `
+        $parse.Ast `
+        '$testNamesPath' `
+        '$repoRoot' `
+        'docs/traceability/roadmap-evidence-test-names.txt'
+}
+
+function Test-StaticReleaseRulesContract {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    $numberedStages = @([regex]::Matches($Text, '(?m)^  (?<number>[1-6])\.\s+'))
+    if ($numberedStages.Count -ne 6) {
+        return $false
+    }
+    for ($index = 0; $index -lt 6; $index++) {
+        if ([int]$numberedStages[$index].Groups['number'].Value -ne ($index + 1)) {
+            return $false
+        }
+    }
+    $stageSixLines = @($Text -split "`r?`n" | Where-Object {
+        $_ -match '^  6\.\s+' -and
+            $_.Contains('`scripts/get-roadmap-status.ps1 -Format Report -RequireComplete`') -and
+            $_.Contains('`scripts/doc-link-audit.ps1 -CheckTraceability`')
+    })
+    $coverageLines = @($Text -split "`r?`n" | Where-Object {
+        $_.Contains('`RELEASE_STAGES planned=6 begun=6 ended=6`') -and $_.Contains('第6段')
+    })
+    return $stageSixLines.Count -eq 1 -and $coverageLines.Count -eq 1
+}
+
+function Test-StaticReleaseRoadmapContract {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    $result = [ordered]@{
+        Parsed = $false
+        PlannedSix = $false
+        StageCoverage = $false
+        RoadmapCompletion = $false
+        Traceability = $false
+    }
+    $parse = Get-StaticPowerShellParseResult $Text
+    if (-not $parse.Parsed) {
+        return [pscustomobject]$result
+    }
+    $result.Parsed = $true
+    $ast = $parse.Ast
+
+    $plannedAssignments = @($ast.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.AssignmentStatementAst] -and
+            $node.Left.Extent.Text -ceq '$script:plannedStages'
+    }, $true))
+    $plannedNames = @()
+    if ($plannedAssignments.Count -eq 1) {
+        $plannedNames = @($plannedAssignments[0].Right.FindAll({
+            param($node)
+            $node -is [Management.Automation.Language.StringConstantExpressionAst]
+        }, $true) | ForEach-Object { $_.Value })
+        $result.PlannedSix = $plannedNames.Count -eq 6
+    }
+
+    $writeStages = @($ast.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -ceq 'Write-Stage'
+    }, $true))
+    $completeStages = @($ast.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -ceq 'Complete-Stage'
+    }, $true))
+    $stageCommandsValid = $writeStages.Count -eq 6 -and $completeStages.Count -eq 6 -and $plannedNames.Count -eq 6
+    if ($stageCommandsValid) {
+        for ($index = 0; $index -lt 6; $index++) {
+            $write = $writeStages[$index]
+            $complete = $completeStages[$index]
+            if ($write.CommandElements.Count -ne 3 -or
+                $write.CommandElements[1].Extent.Text -cne [string]($index + 1) -or
+                $write.CommandElements[2] -isnot [Management.Automation.Language.StringConstantExpressionAst] -or
+                $write.CommandElements[2].Value -cne $plannedNames[$index] -or
+                $complete.CommandElements.Count -ne 2 -or
+                $complete.CommandElements[1].Extent.Text -cne [string]($index + 1)) {
+                $stageCommandsValid = $false
+                break
+            }
+        }
+    }
+    $result.StageCoverage = $stageCommandsValid
+
+    if (-not $stageCommandsValid) {
+        return [pscustomobject]$result
+    }
+    $stageSixStart = $writeStages[5].Extent.StartOffset
+    $stageSixEnd = $completeStages[5].Extent.StartOffset
+    if ($stageSixStart -ge $stageSixEnd) {
+        return [pscustomobject]$result
+    }
+
+    $completionFunctions = @($ast.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -ceq 'Invoke-RoadmapCompletionGate'
+    }, $true))
+    if ($completionFunctions.Count -eq 1) {
+        $completionFunction = $completionFunctions[0]
+        $pathConnected = Test-StaticJoinPathAssignment `
+            $completionFunction.Body `
+            '$snapshotScript' `
+            '$PSScriptRoot' `
+            'get-roadmap-status.ps1'
+        $completionInvokes = @($completionFunction.Body.FindAll({
+            param($node)
+            $node -is [Management.Automation.Language.CommandAst]
+        }, $true) | Where-Object {
+            Test-StaticCommandSignature `
+                $_ `
+                'Ampersand' `
+                @('$powershellExe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', '$snapshotScript', '-Format', 'Report', '-RequireComplete')
+        })
+        $stageSixCompletionCalls = @($ast.FindAll({
+            param($node)
+            $node -is [Management.Automation.Language.CommandAst] -and
+                $node.GetCommandName() -ceq 'Invoke-RoadmapCompletionGate' -and
+                $node.Extent.StartOffset -gt $stageSixStart -and
+                $node.Extent.StartOffset -lt $stageSixEnd
+        }, $true))
+        $result.RoadmapCompletion = $pathConnected -and
+            $completionInvokes.Count -eq 1 -and
+            $stageSixCompletionCalls.Count -eq 1
+    }
+
+    $stageSixAst = $ast.FindAll({
+        param($node)
+        $node.Extent.StartOffset -gt $stageSixStart -and $node.Extent.StartOffset -lt $stageSixEnd
+    }, $true)
+    $docLinkConnected = $false
+    $docLinkAssignments = @($stageSixAst | Where-Object {
+        $_ -is [Management.Automation.Language.AssignmentStatementAst] -and
+            $_.Left.Extent.Text -ceq '$docLinkAudit'
+    })
+    if ($docLinkAssignments.Count -eq 1) {
+        $docCommands = @($docLinkAssignments[0].Right.FindAll({
+            param($node)
+            $node -is [Management.Automation.Language.CommandAst]
+        }, $true))
+        $docLinkConnected = $docCommands.Count -eq 1 -and
+            $docCommands[0].GetCommandName() -ceq 'Join-Path' -and
+            $docCommands[0].CommandElements.Count -eq 3 -and
+            $docCommands[0].CommandElements[1].Extent.Text -ceq '$PSScriptRoot' -and
+            $docCommands[0].CommandElements[2] -is [Management.Automation.Language.StringConstantExpressionAst] -and
+            $docCommands[0].CommandElements[2].Value -ceq 'doc-link-audit.ps1'
+    }
+    $traceabilityInvokes = @($stageSixAst | Where-Object {
+        $_ -is [Management.Automation.Language.CommandAst] -and
+            (Test-StaticCommandSignature `
+                $_ `
+                'Ampersand' `
+                @('$powershellExe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', '$docLinkAudit', '-CheckTraceability'))
+    })
+    $result.Traceability = $docLinkConnected -and $traceabilityInvokes.Count -eq 1
+    return [pscustomobject]$result
+}
+
 function Get-StaticYamlRunCommands {
     param([Parameter(Mandatory = $true)][string]$Text)
 
@@ -550,6 +830,11 @@ function Invoke-StaticQualityGateContracts {
         $receiptScript = Get-StaticContractText $Root 'scripts/check-receipt.ps1' $warnings
         $preCommit = Get-StaticContractText $Root 'scripts/hooks/pre-commit' $warnings
         $workflow = Get-StaticContractText $Root '.github/workflows/ci.yml' $warnings
+        $roadmapGovernance = Get-StaticContractText $Root 'scripts/check-roadmap-governance.ps1' $warnings
+        $roadmapEvidenceTestNames = Get-StaticContractText $Root 'docs/traceability/roadmap-evidence-test-names.txt' $warnings
+        $docLinkAudit = Get-StaticContractText $Root 'scripts/doc-link-audit.ps1' $warnings
+        $releaseRules = Get-StaticContractText $Root 'docs/rules/05-リリース.md' $warnings
+        $releaseReady = Get-StaticContractText $Root 'scripts/check-release-ready.ps1' $warnings
         $endpointHeavy = Get-StaticContractText $Root 'apps/desktop/src-tauri/src/surface_order_sa_endpoint_heavy.rs' $warnings
         $endpointAcceptance = Get-StaticContractText $Root 'apps/desktop/src-tauri/src/surface_order_acceptance.rs' $warnings
 
@@ -655,9 +940,47 @@ function Invoke-StaticQualityGateContracts {
                 [void]$violations.Add("C07|proposal matrix Performanceコマンドが品質ゲート一覧とCIの両方に厳密に1件ありません")
             }
         }
+
+        $checked += 1
+        if ($null -eq $rules -or
+            $null -eq $workflowRuns -or
+            $null -eq $roadmapGovernance -or
+            $null -eq $roadmapEvidenceTestNames -or
+            $null -eq $docLinkAudit -or
+            $null -eq $releaseRules -or
+            $null -eq $releaseReady) {
+            [void]$violations.Add("C08|roadmap governanceの必須入力が欠落または読取不能です")
+        }
+        else {
+            $staticContractMatches = @($workflowRuns.Commands | Where-Object { $_ -ceq $script:ciStaticContractCommand })
+            $governanceMatches = @($workflowRuns.Commands | Where-Object { $_ -ceq $script:roadmapGovernanceCommand })
+            $governanceHash = Get-StaticNormalizedSha256 $roadmapGovernance
+            $governanceBodyComplete = $governanceHash -ceq $script:roadmapGovernanceNormalizedSha256
+            $checkoutHasFullHistory = Test-StaticChecksCheckoutFullHistory $workflow
+            $inventoryPresent = -not [string]::IsNullOrWhiteSpace($roadmapEvidenceTestNames)
+            $docLinkInventoryConnected = Test-StaticDocLinkInventoryContract $docLinkAudit
+            $releaseRulesComplete = Test-StaticReleaseRulesContract $releaseRules
+            $releaseContract = Test-StaticReleaseRoadmapContract $releaseReady
+            if ($staticContractMatches.Count -ne 1 -or
+                $governanceMatches.Count -ne 1 -or
+                -not $rules.Contains("``$script:ciStaticContractCommand``") -or
+                -not $rules.Contains("``$script:roadmapGovernanceCommand``") -or
+                -not $governanceBodyComplete -or
+                -not $checkoutHasFullHistory -or
+                -not $inventoryPresent -or
+                -not $docLinkInventoryConnected -or
+                -not $releaseRulesComplete -or
+                -not $releaseContract.Parsed -or
+                -not $releaseContract.PlannedSix -or
+                -not $releaseContract.StageCoverage -or
+                -not $releaseContract.RoadmapCompletion -or
+                -not $releaseContract.Traceability) {
+                [void]$violations.Add("C08|独立static・roadmap governance・追跡台帳・6段release関門が同期していません (static_call=$($staticContractMatches.Count -eq 1), governance_call=$($governanceMatches.Count -eq 1), body_hash=$governanceBodyComplete, checkout_full_history=$checkoutHasFullHistory, inventory_present=$inventoryPresent, doc_inventory=$docLinkInventoryConnected, release_rules=$releaseRulesComplete, release_parsed=$($releaseContract.Parsed), release_planned6=$($releaseContract.PlannedSix), release_stages=$($releaseContract.StageCoverage), release_roadmap=$($releaseContract.RoadmapCompletion), release_traceability=$($releaseContract.Traceability))")
+            }
+        }
     }
     catch {
-        [void]$warnings.Add("静的契約検査の内部エラー: $($_.Exception.Message)")
+        [void]$violations.Add("C00|静的契約検査の内部エラーをfail-closedで拒否しました: $($_.Exception.Message)")
     }
 
     foreach ($violation in $violations) {
@@ -667,11 +990,11 @@ function Invoke-StaticQualityGateContracts {
         Write-Host "[NG][$contractId] $message" -ForegroundColor Red
     }
     foreach ($warning in $warnings) {
-        Write-Host "[WARN] ORIGAMI3_CI_CONTRACT_FAIL_OPEN $warning" -ForegroundColor Yellow
+        Write-Host "[WARN] ORIGAMI3_CI_CONTRACT_WARNING $warning" -ForegroundColor Yellow
     }
     $summaryLevel = if ($violations.Count -eq 0 -and $warnings.Count -eq 0) { '[OK]' } elseif ($violations.Count -gt 0) { '[NG]' } else { '[WARN]' }
-    Write-Host "$summaryLevel CI static contracts: checked=$checked/7 violations=$($violations.Count) warnings=$($warnings.Count)"
-    Write-Host "GATE_DRIFT_DETECTED $checked / 7"
+    Write-Host "$summaryLevel CI static contracts: checked=$checked/8 violations=$($violations.Count) warnings=$($warnings.Count)"
+    Write-Host "GATE_DRIFT_DETECTED $checked / 8"
     return [pscustomobject]@{
         Checked = $checked
         Violations = $violations.Count
@@ -900,8 +1223,13 @@ $script:expectedCiRustArguments = @(
 )
 $script:expectedCiRustCommand = "cargo $($script:expectedCiRustArguments -join ' ')"
 $script:proposalMatrixPerformanceCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File crates/ori3-propose/tests/run-proposal-matrix.ps1 -Mode Performance"
+$script:ciStaticContractCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-ci.ps1 -StaticContractOnly"
+$script:roadmapGovernanceCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-roadmap-governance.ps1"
+$script:roadmapGovernanceNormalizedSha256 = "41D95E31A027329B1BCED20301C532B7AA967604754604BFD5AD7E4439899531"
 
 $expectedChecksSteps = @(
+    [pscustomobject]@{ Command = $script:ciStaticContractCommand; WorkingDirectory = "."; Executable = "powershell"; Arguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/check-ci.ps1", "-StaticContractOnly") },
+    [pscustomobject]@{ Command = $script:roadmapGovernanceCommand; WorkingDirectory = "."; Executable = "powershell"; Arguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/check-roadmap-governance.ps1") },
     [pscustomobject]@{ Command = "npm ci"; WorkingDirectory = "apps/desktop"; Executable = "npm"; Arguments = @("ci") },
     [pscustomobject]@{ Command = $script:expectedCiRustCommand; WorkingDirectory = "."; Executable = "cargo"; Arguments = @($script:expectedCiRustArguments) },
     [pscustomobject]@{ Command = "cargo clippy --workspace --all-targets -- -D warnings"; WorkingDirectory = "."; Executable = "cargo"; Arguments = @("clippy", "--workspace", "--all-targets", "--", "-D", "warnings") },
@@ -1012,16 +1340,11 @@ if ($StaticContractOnly) {
     }
     try {
         $contractResult = Invoke-StaticQualityGateContracts $contractRoot
-        if ($contractResult.Violations -ne 0) {
-            throw "7件の静的契約に $($contractResult.Violations) 件の不一致があります"
+        if ($contractResult.Violations -ne 0 -or $contractResult.Warnings -ne 0) {
+            throw "8件の静的契約をfail-closedで拒否しました: violations=$($contractResult.Violations) warnings=$($contractResult.Warnings)"
         }
-        if ($contractResult.Warnings -eq 0) {
-            [void](Assert-CiDefinitionContract $contractRoot)
-            Write-Host "[OK] 品質ゲート一覧とCI 3ジョブの実コマンドが一致しました" -ForegroundColor Green
-        }
-        else {
-            Write-Host "[WARN] ORIGAMI3_CI_CONTRACT_FAIL_OPEN 内部エラーがあるため7件以外の厳密照合は未確認です" -ForegroundColor Yellow
-        }
+        [void](Assert-CiDefinitionContract $contractRoot)
+        Write-Host "[OK] 品質ゲート一覧とCI 3ジョブの実コマンドが一致しました" -ForegroundColor Green
         $script:failureExitCode = 0
     }
     catch {
@@ -1125,8 +1448,8 @@ try {
     else {
         Write-Stage 2 $totalStages "ci.yml のpush 2ジョブとnightly文書ジョブの実行定義を同期確認"
         $staticContractResult = Invoke-StaticQualityGateContracts $sourceRoot
-        if ($staticContractResult.Violations -ne 0) {
-            throw "一覧・各入口・CI・ignore属性の静的契約に $($staticContractResult.Violations) 件の不一致があります"
+        if ($staticContractResult.Violations -ne 0 -or $staticContractResult.Warnings -ne 0) {
+            throw "一覧・各入口・CI・ignore属性の静的契約をfail-closedで拒否しました: violations=$($staticContractResult.Violations) warnings=$($staticContractResult.Warnings)"
         }
         $definition = Assert-CiDefinitionContract $sourceRoot
         $ciSteps = @($definition.Checks) + @($definition.Performance)

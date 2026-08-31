@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "roadmap_relative_path": "docs/implementation-roadmap.md",
+  "expected_evidence_linked": 182,
+  "expected_scope_counts": {
+    "M0": 11
+  },
+  "explicit_outside_items": [
+    {
+      "id": "ADDITIONAL.FOLD-IO.C01",
+      "reason": "2026-08-24承認の追加目標。M0〜M6の証拠リンク台帳の対象外として明示管理する。",
+      "text_sha256": "e21cff4b5125e05fdbce5645a6b4ef4e2f0c0947f822b0de91d214e9f9d02f64"
+    },
+    {
+      "id": "ADDITIONAL.FOLD-ALL.C01",
+      "reason": "2026-08-24承認の追加目標。M0〜M6の証拠リンク台帳の対象外として明示管理する。",
+      "text_sha256": "9466326a292e711303b0abe1d78ed4f2a0b0d64c1a07456b3510ba35366987c3"
+    }
+  ],
+  "report_gate_enforce_on_or_after": "2026-08-31 07:00"
+}

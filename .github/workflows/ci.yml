@@ -25,6 +25,16 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        # 証拠台帳は明示commitがorigin/mainの祖先かを検査する。shallow checkoutでは
+        # ローカルだけ緑・clean CIだけ起動不能になるため、履歴とremote refを取得する。
+        with:
+          fetch-depth: 0
+
+      - name: Verify CI static contracts independently
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-ci.ps1 -StaticContractOnly
+
+      - name: Verify roadmap governance and negative tests
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-roadmap-governance.ps1
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0

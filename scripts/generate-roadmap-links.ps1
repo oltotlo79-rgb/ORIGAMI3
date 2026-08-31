@@ -1,7 +1,9 @@
 ﻿[CmdletBinding()]
 param(
     [switch]$Check,
-    [switch]$Fixtures
+    [switch]$Fixtures,
+    [ValidateSet("M0")]
+    [string]$AllowPartialScope = ""
 )
 
 # ORIGAMI3 implementation-roadmap evidence link generator (PowerShell 5.1 compatible)
@@ -36,6 +38,30 @@ $script:PowerShellAstCache = New-Object 'System.Collections.Generic.Dictionary[s
 $script:TrackedPathCache = New-Object 'System.Collections.Generic.Dictionary[string,bool]' ([System.StringComparer]::Ordinal)
 $script:TrackedSelectorCache = New-Object 'System.Collections.Generic.Dictionary[string,bool]' ([System.StringComparer]::Ordinal)
 $script:GitSelectorCache = New-Object 'System.Collections.Generic.Dictionary[string,bool]' ([System.StringComparer]::Ordinal)
+
+function Get-WholeRoadmapSnapshot {
+    $snapshotScript = Join-Path $PSScriptRoot "get-roadmap-status.ps1"
+    if (-not (Test-Path -LiteralPath $snapshotScript -PathType Leaf)) {
+        throw "whole roadmap snapshot script is missing: $snapshotScript"
+    }
+    $powershellExe = (Get-Process -Id $PID).Path
+    $global:LASTEXITCODE = 0
+    $output = @(& $powershellExe -NoProfile -ExecutionPolicy Bypass -File $snapshotScript -Format Json)
+    $snapshotExitCode = $LASTEXITCODE
+    if ($snapshotExitCode -ne 0) {
+        throw "whole roadmap snapshot failed (exit=$snapshotExitCode)"
+    }
+    if ($output.Count -ne 1 -or [string]::IsNullOrWhiteSpace([string]$output[0])) {
+        throw "whole roadmap snapshot did not return exactly one JSON line (lines=$($output.Count))"
+    }
+    $snapshot = [string]$output[0] | ConvertFrom-Json
+    if ([int]$snapshot.schema -ne 1 -or [string]$snapshot.scope -ne "whole" -or [bool]$snapshot.partial -or
+        [int]$snapshot.audited -ne [int]$snapshot.total -or [int]$snapshot.unclassified -ne 0 -or
+        [int]$snapshot.checked + [int]$snapshot.unchecked -ne [int]$snapshot.total) {
+        throw "whole roadmap snapshot invariants are invalid"
+    }
+    return $snapshot
+}
 $script:D1EvidenceContract = [ordered]@{
     "M0.T0-1.C01" = [ordered]@{
         evidence = @("automated-check:CHECK.CURRENT-STATUS.WORKSPACE-MEMBERS")
@@ -1465,6 +1491,10 @@ function Invoke-RoadmapLinkFixtures {
 $exitCode = 2
 try {
     if ($Check -and $Fixtures) { throw "-Check and -Fixtures cannot be combined" }
+    if ($Fixtures -and -not [string]::IsNullOrWhiteSpace($AllowPartialScope)) {
+        throw "-AllowPartialScope is not used with -Fixtures"
+    }
+    $wholeSnapshot = Get-WholeRoadmapSnapshot
     $roadmap = Read-TrackedUtf8File $script:RoadmapRelativePath
     if ($Fixtures) {
         $fixture = Invoke-RoadmapLinkFixtures $roadmap.Text $roadmap.Bytes
@@ -1473,13 +1503,28 @@ try {
             throw "implementation roadmap changed during D1 fixtures"
         }
         Assert-TrackedSourceSnapshotUnchanged
-        Write-Host ("roadmap link fixtures: {0}/{1}; json_sha256={2}" -f $fixture.Passed, $fixture.Total, $fixture.JsonSha256)
+        Write-Host ("[FIXTURE] cases={0} passed={1}; json_sha256={2}" -f $fixture.Total, $fixture.Passed, $fixture.JsonSha256)
+        Write-Host ("[PARTIAL] scope=M0 audited=11/{0} partial=true full_coverage=false" -f $wholeSnapshot.total)
         Write-Host "generated output: bypassed in Fixtures"
         $exitCode = 0
     }
     else {
         $first = ConvertFrom-RoadmapText $roadmap.Text $roadmap.Bytes
         $second = ConvertFrom-RoadmapText $roadmap.Text $roadmap.Bytes
+        $wholeMetadata = [ordered]@{
+            schema = [int]$wholeSnapshot.schema
+            roadmap_sha256 = [string]$wholeSnapshot.roadmap_sha256
+            policy_sha256 = [string]$wholeSnapshot.policy_sha256
+            total = [int]$wholeSnapshot.total
+            audited = [int]$wholeSnapshot.audited
+            checked = [int]$wholeSnapshot.checked
+            unchecked = [int]$wholeSnapshot.unchecked
+            evidence_linked = [int]$wholeSnapshot.evidence_linked
+            explicit_outside = [int]$wholeSnapshot.explicit_outside
+            unclassified = [int]$wholeSnapshot.unclassified
+        }
+        $first.Status["whole_roadmap_snapshot"] = $wholeMetadata
+        $second.Status["whole_roadmap_snapshot"] = $wholeMetadata
         $firstJson = ConvertTo-CanonicalJson $first.Status
         $secondJson = ConvertTo-CanonicalJson $second.Status
         $jsonHash = Get-TextSha256 $firstJson
@@ -1491,6 +1536,11 @@ try {
             throw "implementation roadmap changed during D1 collection"
         }
         Assert-TrackedSourceSnapshotUnchanged
+        $m0Audited = [int]$first.Status.summary.checkbox_count
+        if ($m0Audited -ne [int]$wholeSnapshot.scopes.M0) {
+            throw "M0 scope count differs from whole snapshot: generator=$m0Audited snapshot=$($wholeSnapshot.scopes.M0)"
+        }
+        Write-Host ("[PARTIAL] scope=M0 audited={0}/{1} partial=true full_coverage=false" -f $m0Audited, $wholeSnapshot.total)
         foreach ($issue in @($first.Issues)) { Write-Warning $issue }
         if ($first.Issues.Count -gt 0) {
             Write-Host ("roadmap links: {0}/{1}; unlinked={2}; unresolved={3}; progress contradictions={4}" -f
@@ -1502,7 +1552,8 @@ try {
             $exitCode = 1
         }
         else {
-            if (-not $Check) { Write-GeneratedLinksAtomically $firstJson }
+            $partialScopeAccepted = [string]::Equals($AllowPartialScope, "M0", [StringComparison]::Ordinal)
+            if (-not $Check -and $partialScopeAccepted) { Write-GeneratedLinksAtomically $firstJson }
             Write-Host ("roadmap links: {0}/{1}; automated evidence={2}; manual acceptance={3}; unresolved={4}; progress contradictions={5}" -f
                 $first.Status.summary.linked_count,
                 $first.Status.summary.checkbox_count,
@@ -1514,7 +1565,14 @@ try {
                 $first.Status.summary.historical_evolution_count,
                 $jsonHash,
                 $(if ($Check) { "none (-Check)" } else { $script:GeneratedRelativePath }))
-            $exitCode = 0
+            if ($partialScopeAccepted) {
+                Write-Host "[OK] partial scope M0 was explicitly accepted with -AllowPartialScope M0"
+                $exitCode = 0
+            }
+            else {
+                Write-Warning "partial audit 11/$($wholeSnapshot.total) cannot be treated as whole-roadmap verification; rerun with -AllowPartialScope M0 only when M0-only evidence is intended"
+                $exitCode = 1
+            }
         }
     }
 }

@@ -24,12 +24,46 @@ $packageJsonPath = Join-Path $desktopPath "package.json"
 $manualAssetsPath = Join-Path $root "docs\manual\assets"
 $reportLogPath = Join-Path $root "docs\報告記録.md"
 $script:failureCount = 0
+$script:plannedStages = @(
+    "バージョン番号の一致",
+    "説明書が画面と生成元より新しいこと",
+    "説明書の版数とタグの一致",
+    "ヘルプが説明書より新しくないこと",
+    "利用者への報告記録がリリース日と同じこと",
+    "ロードマップ全件snapshotと証拠台帳"
+)
+$script:begunStages = New-Object System.Collections.Generic.List[int]
+$script:endedStages = New-Object System.Collections.Generic.List[int]
+$script:activeStage = 0
 
 function Write-Stage {
     param([int]$Number, [string]$Name)
 
+    $expectedNumber = $script:begunStages.Count + 1
+    if ($Number -ne $expectedNumber -or $Number -lt 1 -or $Number -gt $script:plannedStages.Count) {
+        throw "リリース検査stageの開始順が不正です: actual=$Number expected=$expectedNumber"
+    }
+    if ($script:activeStage -ne 0) {
+        throw "stage $($script:activeStage) がENDする前にstage ${Number}を開始しました"
+    }
+    if (-not [string]::Equals($Name, $script:plannedStages[$Number - 1], [StringComparison]::Ordinal)) {
+        throw "stage $Number の名前が計画と一致しません: $Name"
+    }
+    $script:begunStages.Add($Number)
+    $script:activeStage = $Number
     Write-Host ""
-    Write-Host "=== ($Number/5) $Name ===" -ForegroundColor Cyan
+    Write-Host "=== BEGIN ($Number/$($script:plannedStages.Count)) $Name ===" -ForegroundColor Cyan
+}
+
+function Complete-Stage {
+    param([int]$Number)
+
+    if ($script:activeStage -ne $Number -or $script:endedStages.Contains($Number)) {
+        throw "リリース検査stageのENDが不正です: actual=$Number active=$($script:activeStage)"
+    }
+    $script:endedStages.Add($Number)
+    $script:activeStage = 0
+    Write-Host "=== END ($Number/$($script:plannedStages.Count)) $($script:plannedStages[$Number - 1]) ===" -ForegroundColor Cyan
 }
 
 function Write-Ok {
@@ -53,6 +87,63 @@ function Read-Utf8Text {
     }
     $utf8 = [System.Text.UTF8Encoding]::new($false, $true)
     return [System.IO.File]::ReadAllText($Path, $utf8)
+}
+
+function Get-CurrentRoadmapSnapshot {
+    $snapshotScript = Join-Path $PSScriptRoot "get-roadmap-status.ps1"
+    if (-not (Test-Path -LiteralPath $snapshotScript -PathType Leaf)) {
+        throw "ロードマップsnapshot生成器がありません: $(Get-DisplayPath $snapshotScript)"
+    }
+    $powershellExe = (Get-Process -Id $PID).Path
+    $global:LASTEXITCODE = 0
+    $output = @(& $powershellExe -NoProfile -ExecutionPolicy Bypass -File $snapshotScript -Format Json)
+    $snapshotExitCode = $LASTEXITCODE
+    if ($snapshotExitCode -ne 0) {
+        throw "ロードマップsnapshot生成器が失敗しました (終了コード: $snapshotExitCode)"
+    }
+    if ($output.Count -ne 1 -or [string]::IsNullOrWhiteSpace([string]$output[0])) {
+        throw "ロードマップsnapshotがJSON 1行を返しませんでした (行数: $($output.Count))"
+    }
+    $snapshot = [string]$output[0] | ConvertFrom-Json
+    if ([int]$snapshot.schema -ne 1 -or [string]$snapshot.scope -ne "whole" -or [bool]$snapshot.partial -or
+        [int]$snapshot.audited -ne [int]$snapshot.total -or [int]$snapshot.unclassified -ne 0 -or
+        [int]$snapshot.checked + [int]$snapshot.unchecked -ne [int]$snapshot.total -or
+        [string]$snapshot.roadmap_sha256 -notmatch '^[0-9a-f]{64}$' -or
+        [string]$snapshot.policy_sha256 -notmatch '^[0-9a-f]{64}$') {
+        throw "ロードマップsnapshotのschemaまたは全件会計が不正です"
+    }
+    return $snapshot
+}
+
+function Invoke-RoadmapCompletionGate {
+    param([object]$ExpectedSnapshot)
+
+    $snapshotScript = Join-Path $PSScriptRoot "get-roadmap-status.ps1"
+    if (-not (Test-Path -LiteralPath $snapshotScript -PathType Leaf)) {
+        throw "ロードマップsnapshot生成器がありません: $(Get-DisplayPath $snapshotScript)"
+    }
+    $powershellExe = (Get-Process -Id $PID).Path
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $global:LASTEXITCODE = 0
+        $output = @(& $powershellExe -NoProfile -ExecutionPolicy Bypass -File $snapshotScript -Format Report -RequireComplete 2>&1)
+        $gateExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+    foreach ($line in $output) { Write-Host ([string]$line) }
+
+    if ($output.Count -lt 2 -or
+        -not [string]::Equals([string]$output[0], [string]$ExpectedSnapshot.report_snapshot_line, [StringComparison]::Ordinal) -or
+        -not [string]::Equals([string]$output[1], [string]$ExpectedSnapshot.report_progress_line, [StringComparison]::Ordinal)) {
+        throw "報告用snapshot 2行がJSON snapshotと一致しません (行数: $($output.Count))"
+    }
+    if ($gateExitCode -notin @(0, 1)) {
+        throw "ロードマップ完了関門を実行できませんでした (終了コード: $gateExitCode)"
+    }
+    return $gateExitCode
 }
 
 function Get-RelativePath {
@@ -456,6 +547,8 @@ else {
     Write-Host "  修正: 上の5か所を同じ版数にそろえてください。"
 }
 
+Complete-Stage 1
+
 # 検査2: PDFが画面ソース・共通ヘルプ・画面写真・版数源より厳密に新しいこと。
 Write-Stage 2 "説明書が画面と生成元より新しいこと"
 $stage2SourceFiles = $null
@@ -517,6 +610,8 @@ catch {
     Write-Host '  修正: 必要なファイルを確認し、`scripts/build-manual.ps1` で説明書を作り直してください。'
 }
 
+Complete-Stage 2
+
 # 検査3: PDF生成時に表紙へ渡される package.json の版数をタグと比較する。
 Write-Stage 3 "説明書の版数とタグの一致"
 try {
@@ -551,6 +646,8 @@ catch {
     Write-Ng "説明書の版数を検査できませんでした: $($_.Exception.Message)"
     Write-Host '  修正: 4ファイルの版数をそろえ、必要なら -Tag v0.4.0 を指定してから説明書を作り直してください。'
 }
+
+Complete-Stage 3
 
 # 検査4: ヘルプがPDFより新しければ、PDFの再生成漏れとして失敗する。
 Write-Stage 4 "ヘルプが説明書より新しくないこと"
@@ -611,6 +708,8 @@ catch {
     Write-Host '  修正: ヘルプと説明書PDFを確認し、`scripts/build-manual.ps1` で説明書を作り直してください。'
 }
 
+Complete-Stage 4
+
 # 検査5: リリース日に、利用者へ報告した記録が残っていること。
 Write-Stage 5 "利用者への報告記録がリリース日と同じこと"
 try {
@@ -631,11 +730,90 @@ catch {
     Write-Host '  修正: docs/報告記録.md を確認し、scripts/check-report-log.ps1 を通してください。'
 }
 
+try {
+    $reportChecker = Join-Path $PSScriptRoot "check-report-log.ps1"
+    if (-not (Test-Path -LiteralPath $reportChecker -PathType Leaf)) {
+        throw "報告記録検査がありません: $(Get-DisplayPath $reportChecker)"
+    }
+    $powershellExe = (Get-Process -Id $PID).Path
+    $global:LASTEXITCODE = 0
+    & $powershellExe -NoProfile -ExecutionPolicy Bypass -File $reportChecker
+    $reportCheckExit = $LASTEXITCODE
+    if ($reportCheckExit -ne 0) {
+        Write-Ng "報告記録の構造・実測根拠検査が失敗しました (終了コード: $reportCheckExit)"
+    }
+    else {
+        Write-Ok "報告記録の構造・実測根拠検査に合格しました。"
+    }
+}
+catch {
+    Write-Ng "報告記録の実測根拠検査を起動できませんでした: $($_.Exception.Message)"
+}
+
+Complete-Stage 5
+
+# 検査6: ロードマップ全件のsnapshotを必ず表示し、未チェックまたは不完全会計なら失敗する。
+Write-Stage 6 "ロードマップ全件snapshotと証拠台帳"
+try {
+    $roadmapSnapshot = Get-CurrentRoadmapSnapshot
+    Write-Host ("ROADMAP_STATUS schema=1 roadmap_sha256={0} policy_sha256={1} scope=whole audited={2}/{3} partial=false checked={4} unchecked={5} evidence_linked={6} explicit_outside={7} unclassified={8}" -f `
+        $roadmapSnapshot.roadmap_sha256,
+        $roadmapSnapshot.policy_sha256,
+        $roadmapSnapshot.audited,
+        $roadmapSnapshot.total,
+        $roadmapSnapshot.checked,
+        $roadmapSnapshot.unchecked,
+        $roadmapSnapshot.evidence_linked,
+        $roadmapSnapshot.explicit_outside,
+        $roadmapSnapshot.unclassified)
+    $roadmapGateExit = Invoke-RoadmapCompletionGate -ExpectedSnapshot $roadmapSnapshot
+    if ($roadmapGateExit -ne 0) {
+        Write-Ng "ロードマップ完了関門が終了コード${roadmapGateExit}を返したためリリース可ではありません: unchecked=$($roadmapSnapshot.unchecked)/$($roadmapSnapshot.total)"
+    }
+    else {
+        Write-Ok "ロードマップ全$($roadmapSnapshot.total)件に未チェックはありません。"
+    }
+}
+catch {
+    Write-Ng "ロードマップ全件snapshotを検査できませんでした: $($_.Exception.Message)"
+}
+
+try {
+    $docLinkAudit = Join-Path $PSScriptRoot "doc-link-audit.ps1"
+    if (-not (Test-Path -LiteralPath $docLinkAudit -PathType Leaf)) {
+        throw "証拠台帳検査がありません: $(Get-DisplayPath $docLinkAudit)"
+    }
+    $powershellExe = (Get-Process -Id $PID).Path
+    $global:LASTEXITCODE = 0
+    & $powershellExe -NoProfile -ExecutionPolicy Bypass -File $docLinkAudit -CheckTraceability
+    $traceabilityExit = $LASTEXITCODE
+    if ($traceabilityExit -ne 0) {
+        Write-Ng "証拠台帳が現在のロードマップsnapshotと一致しません (終了コード: $traceabilityExit)"
+    }
+    else {
+        Write-Ok "証拠台帳3成果物は現在のロードマップsnapshotとbyte単位で一致しています。"
+    }
+}
+catch {
+    Write-Ng "証拠台帳のfreshness検査を起動できませんでした: $($_.Exception.Message)"
+}
+
+Complete-Stage 6
+
+$stageCoverageOk = $script:activeStage -eq 0 -and
+    $script:begunStages.Count -eq $script:plannedStages.Count -and
+    $script:endedStages.Count -eq $script:plannedStages.Count
+Write-Host ""
+Write-Host ("RELEASE_STAGES planned={0} begun={1} ended={2}" -f $script:plannedStages.Count, $script:begunStages.Count, $script:endedStages.Count)
+if (-not $stageCoverageOk) {
+    Write-Ng "計画したリリース検査stageがすべてBEGIN/ENDしていません。"
+}
+
 Write-Host ""
 if ($script:failureCount -gt 0) {
     Write-Host "[NG] リリース準備の検査で $script:failureCount 件の問題が見つかりました。" -ForegroundColor Red
     exit 1
 }
 
-Write-Host "[OK] リリース準備の5検査に合格しました。" -ForegroundColor Green
+Write-Host "[OK] リリース準備の$($script:plannedStages.Count)検査に合格しました。" -ForegroundColor Green
 exit 0
