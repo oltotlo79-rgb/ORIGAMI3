@@ -613,6 +613,87 @@ function Test-GitInvocation {
     }
     $index = 1
     if ($Parts[$index].ToLowerInvariant() -eq "--no-pager") { $index++ }
+    if ($index -lt $Parts.Count -and $Parts[$index] -ceq "-C") {
+        if ($Parts.Count - $index -ne 4) {
+            return New-PolicyDecision $false "git-read" "git -C is limited to an absolute registered worktree path and one exact read-only command"
+        }
+
+        $worktreePath = $Parts[$index + 1]
+        $gitCSubcommand = $Parts[$index + 2]
+        $gitCArgument = $Parts[$index + 3]
+        $allowedGitCRead =
+            ($gitCSubcommand -ceq "status" -and $gitCArgument -ceq "--short") -or
+            ($gitCSubcommand -ceq "rev-parse" -and $gitCArgument -ceq "HEAD") -or
+            ($gitCSubcommand -ceq "diff" -and $gitCArgument -ceq "--numstat")
+        if (-not $allowedGitCRead) {
+            return New-PolicyDecision $false "git-read" "git -C permits only status --short, rev-parse HEAD, or diff --numstat"
+        }
+
+        $isAbsoluteWorktreePath = [IO.Path]::IsPathRooted($worktreePath)
+        if ($isAbsoluteWorktreePath -and [IO.Path]::DirectorySeparatorChar -eq [char]92) {
+            $isAbsoluteWorktreePath = $worktreePath -match '^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/]+[\\/][^\\/]+(?:[\\/]|$))'
+        }
+        if (-not $isAbsoluteWorktreePath) {
+            return New-PolicyDecision $false "git-read" "git -C requires an absolute worktree path"
+        }
+
+        try {
+            $normalizedWorktreePath = [IO.Path]::GetFullPath($worktreePath).TrimEnd([char[]]"\/")
+        }
+        catch {
+            return New-PolicyDecision $false "git-read" ("git -C worktree path could not be normalized: " + $_.Exception.Message)
+        }
+        if (-not (Test-Path -LiteralPath $normalizedWorktreePath -PathType Container)) {
+            return New-PolicyDecision $false "git-read" "git -C worktree path must be an existing directory"
+        }
+
+        try {
+            $worktreeListOutput = @(& git -C $RepositoryRoot worktree list --porcelain -z 2>$null)
+            $worktreeListExitCode = $LASTEXITCODE
+        }
+        catch {
+            return New-PolicyDecision $false "git-read" ("git worktree list could not be read: " + $_.Exception.Message)
+        }
+        if ($worktreeListExitCode -ne 0) {
+            return New-PolicyDecision $false "git-read" "git worktree list failed; git -C is denied"
+        }
+
+        $registeredWorktrees = @()
+        $worktreeListRaw = $worktreeListOutput -join "`n"
+        foreach ($field in [regex]::Split($worktreeListRaw, [string][char]0)) {
+            if (-not $field.StartsWith("worktree ", [StringComparison]::Ordinal)) { continue }
+            $listedPath = $field.Substring("worktree ".Length)
+            if ([string]::IsNullOrWhiteSpace($listedPath) -or -not [IO.Path]::IsPathRooted($listedPath)) {
+                return New-PolicyDecision $false "git-read" "git worktree list returned an invalid worktree path"
+            }
+            try {
+                $registeredWorktrees += [IO.Path]::GetFullPath($listedPath).TrimEnd([char[]]"\/")
+            }
+            catch {
+                return New-PolicyDecision $false "git-read" "git worktree list returned a worktree path that could not be normalized"
+            }
+        }
+        if ($registeredWorktrees.Count -eq 0) {
+            return New-PolicyDecision $false "git-read" "git worktree list returned no registered worktrees"
+        }
+
+        $pathComparison = [StringComparison]::Ordinal
+        if ([IO.Path]::DirectorySeparatorChar -eq [char]92) {
+            $pathComparison = [StringComparison]::OrdinalIgnoreCase
+        }
+        $isRegisteredWorktree = $false
+        foreach ($registeredWorktree in $registeredWorktrees) {
+            if ([string]::Equals($normalizedWorktreePath, $registeredWorktree, $pathComparison)) {
+                $isRegisteredWorktree = $true
+                break
+            }
+        }
+        if (-not $isRegisteredWorktree) {
+            return New-PolicyDecision $false "git-read" "git -C path is not present in git worktree list"
+        }
+
+        return New-PolicyDecision $true "git-read" "allowed exact read-only git -C for a registered worktree" $true $false
+    }
     if ($index -ge $Parts.Count -or $Parts[$index].StartsWith("-")) {
         return New-PolicyDecision $false "git" "git global options other than --no-pager are not allowed"
     }

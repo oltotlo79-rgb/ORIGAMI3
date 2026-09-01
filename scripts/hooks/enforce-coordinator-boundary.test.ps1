@@ -247,6 +247,9 @@ function Assert-DeniedResult {
 
     $script:Cases++
     Assert-Equal $Result.ExitCode 0 "$Name denial hook exit code" $Result.Combined
+    if ([string]::IsNullOrWhiteSpace($Result.Stdout)) {
+        throw "ASSERTION FAILED: $Name unexpectedly allowed the command`n$($Result.Combined)"
+    }
     $parsed = $null
     try { $parsed = $Result.Stdout | ConvertFrom-Json }
     catch { throw "ASSERTION FAILED: $Name did not emit valid denial JSON`n$($Result.Combined)" }
@@ -320,11 +323,12 @@ function Assert-PreDenied {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
         [Parameter(Mandatory = $true)][string]$Command,
-        [string]$ToolName = "PowerShell"
+        [string]$ToolName = "PowerShell",
+        [string]$RepositoryRoot = $Repository
     )
 
-    Reset-ActiveState
-    [void](Assert-DeniedResult (Invoke-Pre -Command $Command -ToolName $ToolName -ToolUseId ("deny-" + $script:Cases)) $Name)
+    Reset-ActiveState $RepositoryRoot
+    [void](Assert-DeniedResult (Invoke-Pre -Command $Command -ToolName $ToolName -ToolUseId ("deny-" + $script:Cases) -RepositoryRoot $RepositoryRoot) $Name)
 }
 
 function Assert-PreAllowed {
@@ -478,6 +482,13 @@ function Test-ActualGitCoordinatorFlow {
     Assert-PreAllowed -Name "actual worktree porcelain policy" -Command "git worktree list --porcelain" -RepositoryRoot $GitRepository
     $worktreeList = Invoke-GitFixture -Name "git worktree list --porcelain" -WorkingDirectory $GitRepository -Arguments @("worktree", "list", "--porcelain") -CountCase
     Assert-Contains $worktreeList.Stdout "worktree " "porcelain worktree output"
+
+    Assert-PreAllowed -Name "git -C registered worktree status short" -Command "git -C '$GitRepository' status --short" -RepositoryRoot $GitRepository
+    Assert-PreAllowed -Name "git -C registered worktree rev-parse HEAD" -Command "git -C '$GitRepository' rev-parse HEAD" -RepositoryRoot $GitRepository
+    Assert-PreAllowed -Name "git -C registered worktree diff numstat" -Command "git -C '$GitRepository' diff --numstat" -RepositoryRoot $GitRepository
+    Assert-PreDenied -Name "git -C arbitrary non-worktree status short" -Command "git -C '$Repository' status --short" -RepositoryRoot $GitRepository
+    Assert-PreDenied -Name "git -C registered worktree commit" -Command "git -C '$GitRepository' commit" -RepositoryRoot $GitRepository
+    Assert-PreDenied -Name "git git-dir remains denied" -Command "git '--git-dir=$(Join-Path $GitRepository '.git')' status" -RepositoryRoot $GitRepository
 
     Assert-PreAllowed -Name "actual write-tree policy" -Command "git write-tree" -RepositoryRoot $GitRepository
     $tree = Invoke-GitFixture -Name "git write-tree" -WorkingDirectory $GitRepository -Arguments @("write-tree") -CountCase
