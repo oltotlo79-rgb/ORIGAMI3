@@ -93,6 +93,7 @@ describe("planGrabFold", () => {
     expect(r.plan.line[0][0]).toBeCloseTo(0.5);
     expect(r.plan.targetLayers).toEqual([0]);
     expect(r.plan.selectedLayerCount).toBe(1);
+    expect(r.plan.preview).toHaveLength(r.plan.selectedLayerCount);
     // プレビューはつかんだ側を鏡映した形(右半分に着地する)
     expect(r.plan.preview).toHaveLength(1);
     for (const p of r.plan.preview[0]) expect(p[0]).toBeGreaterThan(0.49);
@@ -105,6 +106,7 @@ describe("planGrabFold", () => {
     expect(r.plan.targetLayers).toBeNull();
     // targetLayers=nullでも、実際に選ばれた2層を数える。これは「ひだ数」ではない。
     expect(r.plan.selectedLayerCount).toBe(2);
+    expect(r.plan.preview).toHaveLength(r.plan.selectedLayerCount);
   });
 
   it("Alt(1枚だけ)はいちばん上の層だけを折る", () => {
@@ -113,6 +115,7 @@ describe("planGrabFold", () => {
     if (!r.ok) return;
     expect(r.plan.targetLayers).toEqual([1]);
     expect(r.plan.selectedLayerCount).toBe(1);
+    expect(r.plan.preview).toHaveLength(r.plan.selectedLayerCount);
   });
 
   it("つかんだ面を渡すとその層から範囲を広げる", () => {

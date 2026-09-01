@@ -41,6 +41,8 @@ const baseLayoutSelectors = new Set([
   ".number-stepper-controls",
   ".tool-button.small",
   ".tool-submenu",
+  ".paper-move-tool-group",
+  ".paper-move-tool-group-label",
 ]);
 const viewerSelectors = new Set([
   ".row-label",
@@ -226,6 +228,16 @@ describe("道具レール", () => {
     const small = cssDeclarations(".tool-button.small");
     expect(small).toContain("flex-direction: column;");
     expect(cssDeclarations(".tool-submenu")).toContain("padding: var(--sp-2) 0;");
+  });
+
+  it("紙を直接動かす2道具は高さを増やさず同じ区画にまとめる", () => {
+    const group = cssDeclarations(".paper-move-tool-group");
+    expect(group).toContain("display: grid;");
+    expect(group).toContain("grid-template-columns: auto minmax(0, 1fr);");
+    expect(group).toContain("row-gap: inherit;");
+    expect(cssDeclarations(".paper-move-tool-group-label")).toContain(
+      "writing-mode: vertical-rl;",
+    );
   });
 });
 

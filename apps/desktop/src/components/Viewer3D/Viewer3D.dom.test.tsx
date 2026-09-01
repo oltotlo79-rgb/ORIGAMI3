@@ -485,6 +485,7 @@ describe("Viewer3D(画面)", () => {
       pointerId: 1,
       clientX: start.x + dx,
       clientY: start.y + dy,
+      shiftKey: true,
     });
 
     // z=0専用の半透明面へ潰さず、折り平面と反射後の動く輪郭を3Dで下見する。
@@ -500,7 +501,7 @@ describe("Viewer3D(画面)", () => {
         active: true,
         spatial: true,
         face: 1,
-        mode: "flap",
+        mode: "all",
       },
       preview: {
         visible: true,
@@ -545,7 +546,7 @@ describe("Viewer3D(画面)", () => {
     };
     expect(op.type).toBe("FoldThrough");
     expect(op.spatial?.grab_face).toBe(1);
-    expect(op.spatial?.mode).toBe("flap");
+    expect(op.spatial?.mode).toBe("all");
     for (let axis = 0; axis < 3; axis++) {
       expect(op.spatial?.from[axis]).toBeCloseTo(grabbed[axis], 7);
       expect(op.spatial?.to[axis]).toBeCloseTo(expectedTo.getComponent(axis), 7);

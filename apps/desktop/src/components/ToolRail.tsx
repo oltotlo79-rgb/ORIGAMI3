@@ -1,4 +1,4 @@
-// 左端ツールレール(64px)。道具は既存の同じ縦並びへ追加する。
+// 左端ツールレール(64px)。紙を直接動かす道具は同じ区画へまとめる。
 // 「技法」を選んだときだけ、どの技法かを選ぶサブメニューを下に出す
 // (常設のボタンは増やさない)。
 
@@ -16,41 +16,83 @@ const CONSTRUCT_TOOLTIP: Record<ConstructKind, string> = {
   angle: "点を選び、決まった角度の方向線を引きます",
 };
 
-const TOOLS: { id: ToolId; label: string; tooltip: string }[] = [
+type ToolTone = "default" | "accent" | "coral";
+
+interface ToolDefinition {
+  id: ToolId;
+  label: string;
+  tooltip: string;
+  tone: ToolTone;
+}
+
+const GENERAL_TOOLS: ToolDefinition[] = [
   {
     id: "select",
     label: "選択",
     tooltip: "線や点を選びます。Ctrlで複数選択できます",
+    tone: "default",
   },
   {
     id: "measure",
     label: "測る",
     tooltip: "角度や長さ、2つの点の距離を測ります",
+    tone: "accent",
   },
-  { id: "mountain", label: "山", tooltip: "2回クリックして山折り線を引きます" },
-  { id: "valley", label: "谷", tooltip: "2回クリックして谷折り線を引きます" },
-  { id: "aux", label: "補助", tooltip: "2回クリックして補助線を引きます" },
-  { id: "delete", label: "削除", tooltip: "クリックした線を削除します" },
+  {
+    id: "mountain",
+    label: "山",
+    tooltip: "2回クリックして山折り線を引きます",
+    tone: "coral",
+  },
+  {
+    id: "valley",
+    label: "谷",
+    tooltip: "2回クリックして谷折り線を引きます",
+    tone: "default",
+  },
+  {
+    id: "aux",
+    label: "補助",
+    tooltip: "2回クリックして補助線を引きます",
+    tone: "accent",
+  },
+  {
+    id: "delete",
+    label: "削除",
+    tooltip: "クリックした線を削除します",
+    tone: "coral",
+  },
+];
+
+const PAPER_MOVE_TOOLS: ToolDefinition[] = [
   {
     id: "fold",
     label: "折る",
     tooltip:
-      "3Dの紙をドラッグして折ります。点や線を合わせて折り目を決める8通りの方法も、選ぶと下のパネルに出ます",
+      "つまんで動かす: 3Dでつまんだ層を目標位置へドラッグし、新しい折り線と手順を作ります。Shiftで全層、Altで1枚だけを動かします。点や線を合わせて折り目を決める8通りの方法は、選ぶと下のパネルに出ます",
+    tone: "default",
   },
   {
     id: "pull",
     label: "引く",
-    tooltip: "3Dの紙をドラッグして、全体を連動させます",
+    tooltip:
+      "3Dの紙をドラッグして既存の折り目を動かし、全体を連動させます。新しい折り線は作りません",
+    tone: "accent",
   },
+];
+
+const ADVANCED_TOOLS: ToolDefinition[] = [
   {
     id: "construct",
     label: "作図",
     tooltip: "二等分線や垂線などの補助線を引きます",
+    tone: "coral",
   },
   {
     id: "technique",
     label: "技法",
     tooltip: "段折りなどの技法を選んで折ります",
+    tone: "default",
   },
 ];
 
@@ -67,21 +109,36 @@ export function ToolRail({ onFitView }: Props) {
   const construct = useAppStore((s) => s.construct);
   const setConstruct = useAppStore((s) => s.setConstruct);
 
+  const renderToolButton = (tool: ToolDefinition) => (
+    <button
+      key={tool.id}
+      type="button"
+      data-testid={`tool-${tool.id}`}
+      data-tooltip={tool.tooltip}
+      data-tool-tone={tool.tone}
+      className={activeTool === tool.id ? "tool-button active" : "tool-button"}
+      onClick={() => setTool(tool.id)}
+    >
+      <ToolIcon tool={tool.id} />
+      <span className="tool-label">{tool.label}</span>
+    </button>
+  );
+
   return (
     <nav className="tool-rail" data-testid="tool-rail">
-      {TOOLS.map((t) => (
-        <button
-          key={t.id}
-          type="button"
-          data-testid={`tool-${t.id}`}
-          data-tooltip={t.tooltip}
-          className={activeTool === t.id ? "tool-button active" : "tool-button"}
-          onClick={() => setTool(t.id)}
-        >
-          <ToolIcon tool={t.id} />
-          <span className="tool-label">{t.label}</span>
-        </button>
-      ))}
+      {GENERAL_TOOLS.map(renderToolButton)}
+      <div
+        className="paper-move-tool-group"
+        role="group"
+        aria-label="紙を動かす"
+        data-testid="paper-move-tool-group"
+      >
+        <span className="paper-move-tool-group-label" aria-hidden="true">
+          紙を動かす
+        </span>
+        {PAPER_MOVE_TOOLS.map(renderToolButton)}
+      </div>
+      {ADVANCED_TOOLS.map(renderToolButton)}
       {activeTool === "technique" && (
         <div className="tool-submenu" role="group" aria-label="技法を選ぶ" data-testid="technique-menu">
           {SUPPORTED_TECHNIQUES.map((t) => (
@@ -155,6 +212,7 @@ export function ToolRail({ onFitView }: Props) {
         type="button"
         data-testid="tool-fit"
         data-tooltip="展開図と3Dを紙全体が見える位置へ戻します"
+        data-tool-tone="accent"
         className="tool-button"
         onClick={onFitView}
       >

@@ -1140,7 +1140,7 @@ export function useViewerPointer({
           .foldByDrag(
             grab.a,
             grab.b,
-            grabMode(e),
+            grab.mode,
             grab.face,
             grab.spatial ? grab.direction : "Up",
           );

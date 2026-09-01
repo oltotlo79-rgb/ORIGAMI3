@@ -253,6 +253,10 @@ function spatialPreviewFaces(
           SPATIAL_PREVIEW_EPS,
       ) ?? false;
   if (!reachesSide(grab.face)) return new Set();
+  if (grab.mode === "single") return new Set([grab.face]);
+  if (grab.mode === "all") {
+    return new Set(faces.filter((face) => reachesSide(face.id)).map((face) => face.id));
+  }
   const selected = new Set([grab.face]);
   const queue = [grab.face];
   while (queue.length > 0) {
@@ -282,41 +286,66 @@ function spatialPreviewFaces(
 }
 
 /** 立体の折り平面と、反射後の動く紙の輪郭を3D線で下見する。 */
-function spatialFoldPreview(
+export interface SpatialFoldFacePreview {
+  readonly face: number;
+  readonly segments: readonly HighlightSegment[];
+}
+
+export interface SpatialFoldPreviewPlan {
+  readonly faces: readonly SpatialFoldFacePreview[];
+  readonly segments: readonly HighlightSegment[];
+}
+
+const emptySpatialFoldPreview = (): SpatialFoldPreviewPlan => ({
+  faces: [],
+  segments: [],
+});
+
+/**
+ * 画面で光らせる面と線を同じ計算結果として返す。
+ * selectedLayerCount はこの faces.length を使い、表示と枚数を別々に推測しない。
+ */
+export function spatialFoldPreviewPlan(
   frame: Frame3D | null,
   faces: readonly Face[],
   grab: Extract<GrabState, { spatial: true }>,
-): HighlightSegment[] {
-  if (!frame) return [];
+): SpatialFoldPreviewPlan {
+  if (!frame) return emptySpatialFoldPreview();
   const from = new THREE.Vector3(...grab.a);
   const to = new THREE.Vector3(...grab.b);
   const normal = to.clone().sub(from);
-  if (normal.lengthSq() <= SPATIAL_PREVIEW_EPS ** 2) return [];
+  if (normal.lengthSq() <= SPATIAL_PREVIEW_EPS ** 2) {
+    return emptySpatialFoldPreview();
+  }
   normal.normalize();
   const origin = from.clone().add(to).multiplyScalar(0.5);
   const signed = normal.dot(from.clone().sub(origin));
   const movingSign = Math.abs(signed) > SPATIAL_PREVIEW_EPS ? Math.sign(signed) : -1;
   const selected = spatialPreviewFaces(frame, faces, grab, origin, normal, movingSign);
+  const facePreviews: SpatialFoldFacePreview[] = [];
   const segments: HighlightSegment[] = [];
   for (const face of frame.faces) {
     if (!selected.has(face.face)) continue;
+    const faceSegments: HighlightSegment[] = [];
     const crease = spatialCrease(face.polygon, origin, normal);
     if (crease) {
-      segments.push({ edgeId: -1, a: crease[0], b: crease[1], role: "reference" });
+      faceSegments.push({ edgeId: -1, a: crease[0], b: crease[1], role: "reference" });
     }
     const moving = clipSpatialPolygon(face.polygon, origin, normal, movingSign).map(
       (point) => point.sub(normal.clone().multiplyScalar(2 * normal.dot(point.clone().sub(origin)))),
     );
     for (let i = 0; i < moving.length; i++) {
-      segments.push({
+      faceSegments.push({
         edgeId: -1,
         a: moving[i],
         b: moving[(i + 1) % moving.length],
         role: "active",
       });
     }
+    facePreviews.push({ face: face.face, segments: faceSegments });
+    segments.push(...faceSegments);
   }
-  return segments;
+  return { faces: facePreviews, segments };
 }
 
 /** 指定した中心の位置を示す小さな十字(ねじり折りの下見) */
@@ -376,23 +405,6 @@ const inactiveViewer3DInteraction = (): Viewer3DInteractionCapture => ({
   },
 });
 
-function spatialSelectedLayerCount(
-  frame: Frame3D | null,
-  faces: readonly Face[],
-  grab: Extract<GrabState, { spatial: true }>,
-): number {
-  if (!frame) return 0;
-  const from = new THREE.Vector3(...grab.a);
-  const to = new THREE.Vector3(...grab.b);
-  const normal = to.clone().sub(from);
-  if (normal.lengthSq() <= SPATIAL_PREVIEW_EPS ** 2) return 0;
-  normal.normalize();
-  const origin = from.clone().add(to).multiplyScalar(0.5);
-  const signed = normal.dot(from.clone().sub(origin));
-  const movingSign = Math.abs(signed) > SPATIAL_PREVIEW_EPS ? Math.sign(signed) : -1;
-  return spatialPreviewFaces(frame, faces, grab, origin, normal, movingSign).size;
-}
-
 /**
  * captureから要求された時だけ、現在の通常grabと実際に表示するpreviewを再計算する。
  * selectedLayerCountは選択層数であり、完全折りの表裏組を数える「ひだ数」ではない。
@@ -418,14 +430,13 @@ export function deriveViewer3DInteractionCapture({
   } as const;
 
   if (grab.spatial) {
-    const segments = spatialFoldPreview(frame, faces, grab);
-    const selectedLayerCount = spatialSelectedLayerCount(frame, faces, grab);
+    const plan = spatialFoldPreviewPlan(frame, faces, grab);
     return {
-      grab: { ...capturedGrab, selectedLayerCount },
+      grab: { ...capturedGrab, selectedLayerCount: plan.faces.length },
       preview: {
-        visible: segments.length > 0,
+        visible: plan.segments.length > 0,
         polygonCount: 0,
-        segmentCount: segments.length,
+        segmentCount: plan.segments.length,
       },
     };
   }
@@ -753,7 +764,7 @@ export function useViewerHighlight({
         // setPreviewはz=0専用なので消し、立体では折り平面と反射後の輪郭を
         // 3Dの強調線で示す。現在の紙と重ねることで動く側と結果形が分かる。
         scene.setPreview([], PREVIEW_FILL_LIFT);
-        setHighlight(spatialFoldPreview(s.frame3d, s.faces, grab));
+        setHighlight(spatialFoldPreviewPlan(s.frame3d, s.faces, grab).segments.slice());
         return;
       }
       const plan = planGrabFold(

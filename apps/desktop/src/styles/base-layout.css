@@ -1211,6 +1211,39 @@ input[type="radio"] {
   z-index: 2;
 }
 
+/* 紙を直接動かす2道具は、入口を増やさず1つの意味のまとまりにする。
+   見出しは横幅側へ置き、低い窓でも従来の10道具が収まる高さを変えない。 */
+.paper-move-tool-group {
+  flex: none;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  row-gap: inherit;
+  column-gap: var(--sp-1);
+}
+
+.paper-move-tool-group > .tool-button {
+  grid-column: 2;
+  min-width: 0;
+}
+
+.paper-move-tool-group-label {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-inline: var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: var(--color-secondary-soft);
+  color: var(--color-text-muted);
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+  letter-spacing: 0;
+  line-height: 1;
+}
+
 .tool-rail::-webkit-scrollbar,
 .timeline-steps::-webkit-scrollbar,
 .context-selection::-webkit-scrollbar,
@@ -1265,11 +1298,13 @@ input[type="radio"] {
   filter: var(--tool-icon-active-filter);
 }
 
-.tool-button:not(.active):nth-of-type(3n + 2) .tool-icon {
+.tool-button:not(.active)[data-tool-tone="accent"] .tool-icon,
+.tool-submenu > .tool-button:not(.active):nth-of-type(3n + 2) .tool-icon {
   color: var(--color-accent);
 }
 
-.tool-button:not(.active):nth-of-type(3n) .tool-icon {
+.tool-button:not(.active)[data-tool-tone="coral"] .tool-icon,
+.tool-submenu > .tool-button:not(.active):nth-of-type(3n) .tool-icon {
   color: var(--color-pop-coral);
 }
 
