@@ -1575,7 +1575,171 @@ try {
     Assert-True (-not $result.Output.Contains('"permissionDecision":"deny"')) "production相当3担当のcold Hookを通すこと"
     Assert-True ($performanceStopwatch.Elapsed.TotalSeconds -lt 5.0) "production相当3担当のcold Hookを実設定timeout 5秒未満で終えること"
 
-    Write-Output ("check-agent-watch self-test passed: 28 cases, {0} assertions" -f $script:AssertionCount)
+    Write-Output "[29/33] 本日の禁止文脈にあるcargo/npmを実行指示と誤認しない"
+    $todayProhibitionText = @(
+        '- `-p desktop` や `npm` を走らせないこと',
+        '- `cargo` を走らせないでください。提案の担当が長時間の検査中です',
+        '- PID 27272 を止めないこと'
+    ) -join "`n"
+    $runConfigurationStopwatch = [Diagnostics.Stopwatch]::StartNew()
+    $result = Invoke-Checker `
+        -PowerShellPath $powerShellCommand.Source `
+        -Action "Hook" `
+        -Payload (New-HookPayload -ToolName "Agent" -Text $todayProhibitionText)
+    $runConfigurationStopwatch.Stop()
+    Write-Output ("RUN_CONFIGURATION_COLD_HOOK_ELAPSED_MS={0}" -f $runConfigurationStopwatch.ElapsedMilliseconds)
+    Assert-Equal $result.ExitCode 0 "禁止文脈を検査したHook processが正常終了すること"
+    Assert-True (-not $result.Output.Contains('"permissionDecision":"deny"')) "本日の禁止3行を委譲拒否しないこと"
+    Assert-True (-not $result.Output.Contains("AGENT_RUN_CONFIGURATION_REQUIRED")) "禁止3行を構成不足扱いしないこと"
+    Assert-True ($runConfigurationStopwatch.Elapsed.TotalSeconds -lt 5.0) "禁止3行を含むcold Hookを実設定timeout 5秒未満で終えること"
+    $pairedControlMilliseconds = New-Object System.Collections.Generic.List[long]
+    $pairedRunConfigurationMilliseconds = New-Object System.Collections.Generic.List[long]
+    for ($pairIndex = 0; $pairIndex -lt 3; $pairIndex++) {
+        $pairKinds = if (($pairIndex % 2) -eq 0) {
+            @("control", "runConfiguration")
+        }
+        else {
+            @("runConfiguration", "control")
+        }
+        foreach ($pairKind in $pairKinds) {
+            $pairText = if ($pairKind -eq "control") {
+                "構成関門の性能対照となる通常委譲です。"
+            }
+            else {
+                $todayProhibitionText
+            }
+            $pairedStopwatch = [Diagnostics.Stopwatch]::StartNew()
+            $pairedResult = Invoke-Checker `
+                -PowerShellPath $powerShellCommand.Source `
+                -Action "Hook" `
+                -Payload (New-HookPayload -ToolName "Agent" -Text $pairText)
+            $pairedStopwatch.Stop()
+            if ($pairKind -eq "control") {
+                $pairedControlMilliseconds.Add($pairedStopwatch.ElapsedMilliseconds)
+            }
+            else {
+                $pairedRunConfigurationMilliseconds.Add($pairedStopwatch.ElapsedMilliseconds)
+            }
+            Assert-Equal $pairedResult.ExitCode 0 "構成関門の対照計測processが正常終了すること: $pairKind/$pairIndex"
+            Assert-True (-not $pairedResult.Output.Contains('"permissionDecision":"deny"')) "構成関門の対照計測を拒否しないこと: $pairKind/$pairIndex"
+            Assert-True ($pairedStopwatch.Elapsed.TotalSeconds -lt 5.0) "構成関門の対照計測を実設定timeout 5秒未満で終えること: $pairKind/$pairIndex"
+        }
+    }
+    $pairedControlMedian = @($pairedControlMilliseconds | Sort-Object)[1]
+    $pairedRunConfigurationMedian = @($pairedRunConfigurationMilliseconds | Sort-Object)[1]
+    Write-Output ("RUN_CONFIGURATION_PAIRED_CONTROL_MEDIAN_MS={0}" -f $pairedControlMedian)
+    Write-Output ("RUN_CONFIGURATION_PAIRED_GUARD_MEDIAN_MS={0}" -f $pairedRunConfigurationMedian)
+    Assert-True (
+        $pairedRunConfigurationMedian -le ($pairedControlMedian + 1000)
+    ) "同条件3回の中央値で構成分類の追加時間を1秒以内に保つこと"
+    foreach ($negativeInstruction in @(
+            "cargo test -p desktop を走らせないこと",
+            "npm test を実行しないでください"
+        )) {
+        $result = Invoke-Checker `
+            -PowerShellPath $powerShellCommand.Source `
+            -Action "Hook" `
+            -Payload (New-HookPayload -ToolName "Agent" -Text $negativeInstruction)
+        Assert-True (-not $result.Output.Contains('"permissionDecision":"deny"')) "command実名を含む禁止文を実行指示と誤認しないこと: $negativeInstruction"
+        Assert-True (-not $result.Output.Contains("AGENT_RUN_CONFIGURATION_REQUIRED")) "否定判定後に構成不足へ落とさないこと: $negativeInstruction"
+    }
+
+    Write-Output "[30/33] 構成の無いcargo test/buildとnpm testの実行指示を拒否する"
+    $unconfiguredRunInstructions = @(
+        "cargo test -p ori3-propose を走らせてください",
+        "cargo build してください",
+        "npm test してください",
+        "cargo buildしてください",
+        "npm testしてください"
+    )
+    foreach ($instruction in $unconfiguredRunInstructions) {
+        $result = Invoke-Checker `
+            -PowerShellPath $powerShellCommand.Source `
+            -Action "Hook" `
+            -Payload (New-HookPayload -ToolName "Agent" -Text $instruction)
+        Assert-Equal $result.ExitCode 0 "無構成実行指示のHook process自体は正常終了すること: $instruction"
+        Assert-Contains $result.Output '"permissionDecision":"deny"' "無構成実行指示を拒否すること: $instruction"
+        Assert-Contains $result.Output "AGENT_RUN_CONFIGURATION_REQUIRED" "無構成実行指示へ専用codeを返すこと: $instruction"
+        Assert-Contains $result.Output "--release" "拒否時にrelease構成の直し方を示すこと: $instruction"
+        Assert-Contains $result.Output "debug構成" "拒否時にdebug構成の直し方を示すこと: $instruction"
+    }
+
+    Write-Output "[31/33] 同じ命令文でreleaseまたはdebug構成が明示された実行指示を通す"
+    $configuredRunInstructions = @(
+        "cargo test -p ori3-propose --release --locked --offline を走らせてください",
+        "cargo test -p ori3-layers --locked --offline（debug構成。正しさの確認のみ）",
+        "cargo test -p ori3-layers（正しさの確認のみ。debug構成）を走らせてください",
+        "debug構成で cargo test -p ori3-layers を走らせてください",
+        "debug構成で、cargo test -p ori3-layers を走らせてください",
+        "cargo build してください（debug構成。正しさの確認のみ）",
+        "npm test してください（debug構成。正しさの確認のみ）",
+        "cargo test -p ori3-layersをdebug構成で実施してください",
+        "npm testをdebug構成で行ってください",
+        "cargo test -p ori3-layers は完了済みで npm test（debug構成）を走らせてください"
+    )
+    foreach ($instruction in $configuredRunInstructions) {
+        $result = Invoke-Checker `
+            -PowerShellPath $powerShellCommand.Source `
+            -Action "Hook" `
+            -Payload (New-HookPayload -ToolName "Agent" -Text $instruction)
+        Assert-Equal $result.ExitCode 0 "構成明示済み実行指示のHook processが正常終了すること: $instruction"
+        Assert-True (-not $result.Output.Contains('"permissionDecision":"deny"')) "構成明示済み実行指示を通すこと: $instruction"
+    }
+
+    Write-Output "[32/33] 別のcommandや段落の構成語を流用する逃げ道を拒否する"
+    $localityInstructions = @(
+        "cargo test -p ori3-propose を走らせてください`n`nori3-layersの既存検査はdebug構成です。",
+        "cargo test -p ori3-propose --release を走らせてください。npm test してください",
+        "cargo test -p ori3-propose --release と npm test を走らせてください",
+        "cargo test -p ori3-propose --releaseを付けないでdebug構成ではなく実行してください",
+        "cargo test -p ori3-proposeは実行しないでください。npm test してください",
+        "次を実測してください。`n- cargo test -p ori3-propose",
+        "cargo test -p ori3-propose（正しさの確認のみ。debug構成ではない）を走らせてください",
+        "cargo test -p ori3-propose（debug構成ですか。不明）を走らせてください",
+        "cargo test -p ori3-proposeを、走らせてください",
+        "次を実測してください。`n- **``cargo test -p ori3-propose``**",
+        "cargo test -p ori3-propose を実施してください",
+        "npm testを行ってください",
+        "cargo test -p ori3-propose をお願いします",
+        "cargo testを走らせてください、npmは実行しないこと",
+        "cargo testは普段は実行しないですが、今回は走らせてください"
+    )
+    foreach ($instruction in $localityInstructions) {
+        $result = Invoke-Checker `
+            -PowerShellPath $powerShellCommand.Source `
+            -Action "Hook" `
+            -Payload (New-HookPayload -ToolName "Agent" -Text $instruction)
+        Assert-Contains $result.Output '"permissionDecision":"deny"' "無関係な構成語で無構成commandを通さないこと: $instruction"
+        Assert-Contains $result.Output "AGENT_RUN_CONFIGURATION_REQUIRED" "局所性違反へ専用codeを返すこと: $instruction"
+        Assert-Contains $result.Output "--release" "局所性違反へ具体的な修復を示すこと: $instruction"
+    }
+
+    Write-Output "[33/33] baseline・完了報告・code fenceを構成gateの逃げ道にしない"
+    $nonDirectiveRunText = @(
+        "対象検査 command: npm.cmd --prefix apps/desktop test",
+        "対象検査 baseline: 終了コード 0、2,345 passed",
+        "cargo test -p ori3-rigid は終了コード0・148 passedでした",
+        "cargo test -p ori3-rigid の既存結果を報告してください",
+        "cargo test -p ori3-rigid は前から並列だと落ちることがある",
+        "cargo test -p ori3-rigid はreleaseで既に通っています",
+        "cargo test -p ori3-rigid が必要か調べてください",
+        "cargo testの結果を見て、報告書の更新を行ってください",
+        "cargo testの結果を確認して修正を実施してください"
+    ) -join "`n"
+    $result = Invoke-Checker `
+        -PowerShellPath $powerShellCommand.Source `
+        -Action "Hook" `
+        -Payload (New-HookPayload -ToolName "Agent" -Text $nonDirectiveRunText)
+    Assert-True (-not $result.Output.Contains('"permissionDecision":"deny"')) "baselineと過去結果のcommand表記を実行指示と誤認しないこと"
+    Assert-True (-not $result.Output.Contains("AGENT_RUN_CONFIGURATION_REQUIRED")) "非命令の記録へ構成を要求しないこと"
+    $codeFenceInstruction = "``````text`ncargo test -p ori3-propose を走らせてください`n``````"
+    $result = Invoke-Checker `
+        -PowerShellPath $powerShellCommand.Source `
+        -Action "Hook" `
+        -Payload (New-HookPayload -ToolName "Agent" -Text $codeFenceInstruction)
+    Assert-Contains $result.Output "AGENT_RUN_CONFIGURATION_REQUIRED" "code fenceで無構成実行指示を隠せないこと"
+
+    Write-Output ("check-agent-watch self-test passed: 33 cases, {0} assertions" -f $script:AssertionCount)
 }
 finally {
     Remove-TestSandbox

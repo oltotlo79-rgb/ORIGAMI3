@@ -454,6 +454,385 @@ function Get-DelegationText {
     return [string]$textProperty.Value
 }
 
+function Split-DelegationRunClauses {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
+
+    $clauses = New-Object System.Collections.Generic.List[string]
+    $builder = New-Object Text.StringBuilder
+    $depth = 0
+    for ($index = 0; $index -lt $Text.Length; $index++) {
+        $character = $Text[$index]
+        if ($character -eq "`r") {
+            continue
+        }
+        # 改行は括弧の閉じ忘れが後続command全体を飲み込まないよう、常に境界にする。
+        if ($character -eq "`n") {
+            if ($builder.Length -gt 0) {
+                $clauses.Add($builder.ToString())
+                [void]$builder.Clear()
+            }
+            $depth = 0
+            continue
+        }
+        if ($character -eq '(' -or $character -eq '[' -or $character -eq '{') {
+            $depth += 1
+            [void]$builder.Append($character)
+            continue
+        }
+        if ($character -eq ')' -or $character -eq ']' -or $character -eq '}') {
+            if ($depth -gt 0) {
+                $depth -= 1
+            }
+            [void]$builder.Append($character)
+            continue
+        }
+        $isShellBoundary = $false
+        if ($depth -eq 0 -and ($character -eq '&' -or $character -eq '|')) {
+            $isShellBoundary = $true
+            if ($index + 1 -lt $Text.Length -and $Text[$index + 1] -eq $character) {
+                $index += 1
+            }
+        }
+        # 読点・commaは `cargo testを、走らせて` のcommandと命令形を結ぶため
+        # 境界にしない。shellの複数commandは&&/||/|/semicolonで分ける。
+        $isSentenceBoundary = $depth -eq 0 -and
+            ('。！？!?；;'.IndexOf($character) -ge 0)
+        if ($isShellBoundary -or $isSentenceBoundary) {
+            if ($builder.Length -gt 0) {
+                $clauses.Add($builder.ToString())
+                [void]$builder.Clear()
+            }
+            continue
+        }
+        [void]$builder.Append($character)
+    }
+    if ($builder.Length -gt 0) {
+        $clauses.Add($builder.ToString())
+    }
+    return @($clauses)
+}
+
+function Test-BareDelegationRunCommand {
+    param(
+        [Parameter(Mandatory = $true)][string]$Clause,
+        [Parameter(Mandatory = $true)]$CommandMatch,
+        [Parameter(Mandatory = $true)][int]$ContextEnd
+    )
+
+    $prefix = $Clause.Substring(0, $CommandMatch.Index)
+    if (-not [regex]::IsMatch(
+            $prefix,
+            '^\s*(?:>\s*)*(?:(?:[-*+]|\d+[.)])\s*)?(?:\[[ xX]\]\s*)?[*_~`]*\s*$',
+            [Text.RegularExpressions.RegexOptions]::CultureInvariant
+        )) {
+        return $false
+    }
+
+    # bare commandの後ろにある括弧注記は除き、それ以外に非ASCIIの文字があれば
+    # 状態説明・調査文として扱う。固定の日本語record語彙を増やし続けないための境界。
+    $tail = $Clause.Substring(
+        $CommandMatch.Index + $CommandMatch.Length,
+        $ContextEnd - ($CommandMatch.Index + $CommandMatch.Length)
+    )
+    $outsideParentheses = New-Object Text.StringBuilder
+    $depth = 0
+    foreach ($character in $tail.ToCharArray()) {
+        if ($character -eq '(' -or $character -eq '[' -or $character -eq '{') {
+            $depth += 1
+            continue
+        }
+        if ($character -eq ')' -or $character -eq ']' -or $character -eq '}') {
+            if ($depth -gt 0) {
+                $depth -= 1
+                continue
+            }
+        }
+        if ($depth -eq 0) {
+            [void]$outsideParentheses.Append($character)
+        }
+    }
+    $nonAscii = [regex]::Replace($outsideParentheses.ToString(), '[\x00-\x7f]', '')
+    return -not [regex]::IsMatch(
+        $nonAscii,
+        '[\p{L}\p{N}]',
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant
+    )
+}
+
+function Test-RunDirectiveTargetsCommand {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$AfterCommand,
+        [Parameter(Mandatory = $true)][string]$DirectivePattern
+    )
+
+    # 同じ節の後半に別作業の命令があっても、直前のcargo/npmへ係る命令とは限らない。
+    # commandと動詞の間をshell引数・構成注記・助詞だけに限定し、
+    # 「cargo testの結果を見て、報告書の更新を行う」を実行指示にしない。
+    $directiveMatches = @([regex]::Matches(
+        $AfterCommand,
+        $DirectivePattern,
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant
+    ))
+    foreach ($directiveMatch in $directiveMatches) {
+        $prefix = $AfterCommand.Substring(0, $directiveMatch.Index)
+        $resumptionMatches = @([regex]::Matches(
+            $prefix,
+            '(?ix)(?:今回は|今回だけは|ただし|しかし|それでも|例外として)\s*[、,]?',
+            [Text.RegularExpressions.RegexOptions]::CultureInvariant
+        ))
+        if ($resumptionMatches.Count -gt 0) {
+            $lastResumption = $resumptionMatches[$resumptionMatches.Count - 1]
+            $prefix = $prefix.Substring($lastResumption.Index + $lastResumption.Length)
+        }
+        $prefix = [regex]::Replace(
+            $prefix,
+            '(?s)[\(（\[［\{][^\)）\]］\}]*[\)）\]］\}]',
+            ''
+        )
+        $prefix = [regex]::Replace(
+            $prefix,
+            '(?ix)--release\s*(?:を)?(?:付け|指定|使わ|用い)(?:ない(?:で)?|ず|ません)',
+            ''
+        )
+        $prefix = [regex]::Replace(
+            $prefix,
+            '(?ix)(?:debug|デバッグ)\s*構成\s*(?:ではない|ではなく|でなく|以外|を使わない|にしない)',
+            ''
+        )
+        $prefix = [regex]::Replace(
+            $prefix,
+            '(?ix)(?:debug|デバッグ)\s*構成\s*(?:で|として)?',
+            ''
+        )
+        $prefix = [regex]::Replace($prefix, '(?:として|を|は|で)', '')
+        $nonAscii = [regex]::Replace($prefix, '[\x00-\x7f]', '')
+        if (-not [regex]::IsMatch(
+                $nonAscii,
+                '[\p{L}\p{N}]',
+                [Text.RegularExpressions.RegexOptions]::CultureInvariant
+            )) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Test-DelegationRunConfiguration {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
+
+    # 構成を問うのは、build profileで実行時間や合否が変わる実行指示だけに限る。
+    # 単なるcommand欄、過去の結果、実行中という説明、禁止事項は対象にしない。
+    $commandPattern = @'
+(?ix)
+(?<![A-Z0-9_.-])
+(?:
+  cargo(?:\.exe)?(?:\s+\+[A-Z0-9_.-]+)?\s+(?:test|build)
+  (?=$|[\s`'"）)\]\],;。、！？!?をはがのでと]|してください)
+ |
+  npm(?:\.cmd|\.exe)?
+  (?:
+    \s+--(?:prefix|workspace)(?:=\S+|\s+\S+)
+   |\s+--[A-Z0-9][A-Z0-9-]*(?:=\S+)?
+  )*
+  \s+test(?=$|[\s`'"）)\]\],;。、！？!?をはがのでと]|してください)
+)
+'@
+    $negativeDirectivePattern = @'
+(?ix)
+(?:
+  走らせ(?:ない(?:で(?:ください)?|こと)?|ず|てはいけない|てはならない|るな)
+ |(?:実行|再実行|起動|検査|実測|テスト|ビルド)し
+   (?:ない(?:で(?:ください)?|こと)?|なくて(?:よい|構いません)|てはいけない|てはならない)
+ |回さ(?:ない(?:で(?:ください)?|こと)?|ず)
+ |(?:実行|起動|検査|テスト|ビルド)(?:は|を)?(?:禁止|不可|不要)
+ |(?:do\s+not|don't|must\s+not|never)\s+(?:run|execute|build|test)
+)
+'@
+    $affirmativeDirectivePattern = @'
+(?ix)
+(?:
+  走らせ(?:て(?:ください|構いません)?|ること)
+ |(?:実行|再実行|起動|ビルド|実施)し
+   (?:て(?:ください|構いません)?|なさい)
+ |(?:実行|再実行|起動|ビルド|実施)すること
+ |回して(?:ください)?
+ |行って(?:ください)?
+ |(?:please\s+)?(?:run|execute)\b
+)
+'@
+    $directPleasePattern = @'
+(?ix)
+(?:
+  ^\s*(?:して)?ください(?=\s*(?:\(|$))
+ |^(?:\s+(?:--?[A-Z0-9_.-]+|[A-Z0-9_./:\\-]+))*\s*をお願いします\s*$
+)
+'@
+    $recordPattern = @'
+(?ix)
+(?:
+  対象検査\s*command
+ |baseline
+ |終了(?:コード)?
+ |passed|failed|skipped
+ |完走|実行中|検査中|走り続け
+ |既存結果|結果を(?:報告|確認)|終了コードを(?:報告|確認)
+ |(?:でした|だった|済み|完了しました)
+)
+'@
+    $releasePattern = '(?i)(?<![A-Z0-9_-])--release(?=$|[\s`''"）\]\),;])'
+    $releaseNegatedPattern = '(?ix)--release.{0,32}(?:付け|指定|使わ|用い)(?:ない|ず|ません)|without\s+--release'
+    $debugPattern = @'
+(?ix)
+(?<![A-Z0-9_-])(?:debug|デバッグ)\s*構成\s*
+(?:
+  (?=[。.!！）)\]\],、]|$)
+ |で(?=\s*(?:走らせ|実行|再実行|起動|回し|ビルド|実施|行っ))
+ |として(?=\s*(?:走らせ|実行|再実行|起動|回し|ビルド|実施|行っ))
+ |です(?=[。.!！）)\]\],、]|$)
+ |である(?:こと(?:を明記)?)?(?=[。.!！）)\]\],、]|$)
+)
+'@
+    $debugNegatedPattern = '(?ix)(?:debug|デバッグ)\s*構成\s*(?:ではない|ではなく|でなく|以外|を使わない|にしない)'
+    $debugBeforeCommandPattern = '(?ix)(?:debug|デバッグ)\s*構成\s*で\s*[、,]?\s*$'
+
+    $normalized = $Text.Normalize([Text.NormalizationForm]::FormKC)
+    $clauses = @(Split-DelegationRunClauses -Text $normalized)
+    $missing = New-Object System.Collections.Generic.List[string]
+    foreach ($clauseValue in $clauses) {
+        $clause = [string]$clauseValue
+        if ([string]::IsNullOrWhiteSpace($clause)) {
+            continue
+        }
+        $commandMatches = @([regex]::Matches(
+            $clause,
+            $commandPattern,
+            [Text.RegularExpressions.RegexOptions]::CultureInvariant
+        ))
+        if ($commandMatches.Count -eq 0) {
+            continue
+        }
+        $clauseHasAffirmativeDirective = [regex]::IsMatch(
+            $clause,
+            $affirmativeDirectivePattern,
+            [Text.RegularExpressions.RegexOptions]::CultureInvariant
+        )
+        for ($index = 0; $index -lt $commandMatches.Count; $index++) {
+            $commandMatch = $commandMatches[$index]
+            $contextEnd = if ($index + 1 -lt $commandMatches.Count) {
+                $commandMatches[$index + 1].Index
+            }
+            else {
+                $clause.Length
+            }
+            $directiveContext = $clause.Substring(
+                $commandMatch.Index,
+                $contextEnd - $commandMatch.Index
+            )
+            $configurationContext = $clause.Substring(
+                $commandMatch.Index,
+                $contextEnd - $commandMatch.Index
+            )
+            $afterCommand = $configurationContext.Substring($commandMatch.Length)
+            $hasAffirmativeDirective = Test-RunDirectiveTargetsCommand `
+                -AfterCommand $afterCommand `
+                -DirectivePattern $affirmativeDirectivePattern
+            $hasNegativeDirective = Test-RunDirectiveTargetsCommand `
+                -AfterCommand $afterCommand `
+                -DirectivePattern $negativeDirectivePattern
+            $hasDirectPlease = [regex]::IsMatch(
+                $afterCommand,
+                $directPleasePattern,
+                [Text.RegularExpressions.RegexOptions]::CultureInvariant
+            )
+            if ($hasNegativeDirective -and
+                -not $hasAffirmativeDirective -and
+                -not $hasDirectPlease) {
+                continue
+            }
+            $isBareCommand = Test-BareDelegationRunCommand `
+                -Clause $clause `
+                -CommandMatch $commandMatch `
+                -ContextEnd $contextEnd
+            $isRecord = [regex]::IsMatch(
+                $directiveContext,
+                $recordPattern,
+                [Text.RegularExpressions.RegexOptions]::CultureInvariant
+            )
+            $isEnumeratedWithNext = $false
+            if ($index + 1 -lt $commandMatches.Count) {
+                $betweenCommands = $clause.Substring(
+                    $commandMatch.Index + $commandMatch.Length,
+                    $commandMatches[$index + 1].Index - ($commandMatch.Index + $commandMatch.Length)
+                )
+                $isEnumeratedWithNext = [regex]::IsMatch(
+                    $betweenCommands,
+                    '(?ix)^\s*(?:と|および|及び|ならびに|and)\s*$',
+                    [Text.RegularExpressions.RegexOptions]::CultureInvariant
+                )
+            }
+            if (-not $hasAffirmativeDirective -and
+                -not $hasDirectPlease -and
+                -not ($isEnumeratedWithNext -and $clauseHasAffirmativeDirective -and -not $isRecord) -and
+                -not ($isBareCommand -and -not $isRecord)) {
+                continue
+            }
+
+            # 1つの構成語を同じ節の複数commandへ流用できないよう、現在commandから
+            # 次のcommand直前までだけを構成の帰属範囲にする。
+            $releaseIsExplicit = [regex]::IsMatch(
+                $configurationContext,
+                $releasePattern,
+                [Text.RegularExpressions.RegexOptions]::CultureInvariant
+            ) -and -not [regex]::IsMatch(
+                $configurationContext,
+                $releaseNegatedPattern,
+                [Text.RegularExpressions.RegexOptions]::CultureInvariant
+            )
+            $debugIsExplicit = [regex]::IsMatch(
+                $configurationContext,
+                $debugPattern,
+                [Text.RegularExpressions.RegexOptions]::CultureInvariant
+            ) -and -not [regex]::IsMatch(
+                $configurationContext,
+                $debugNegatedPattern,
+                [Text.RegularExpressions.RegexOptions]::CultureInvariant
+            )
+            $preCommandStart = if ($index -eq 0) { 0 } else {
+                $commandMatches[$index - 1].Index + $commandMatches[$index - 1].Length
+            }
+            $preCommandContext = $clause.Substring(
+                $preCommandStart,
+                $commandMatch.Index - $preCommandStart
+            )
+            $debugBeforeCommandIsExplicit = [regex]::IsMatch(
+                $preCommandContext,
+                $debugBeforeCommandPattern,
+                [Text.RegularExpressions.RegexOptions]::CultureInvariant
+            ) -and -not [regex]::IsMatch(
+                $preCommandContext,
+                $debugNegatedPattern,
+                [Text.RegularExpressions.RegexOptions]::CultureInvariant
+            )
+            if (-not $releaseIsExplicit -and
+                -not $debugIsExplicit -and
+                -not $debugBeforeCommandIsExplicit) {
+                $missing.Add(([string]$commandMatch.Value).Trim())
+            }
+        }
+    }
+
+    if ($missing.Count -gt 0) {
+        $commands = @($missing | Select-Object -Unique | Select-Object -First 3) -join ', '
+        return New-PolicyResult `
+            -Code "AGENT_RUN_CONFIGURATION_REQUIRED" `
+            -Message "実行指示の構成が不明です: $commands。--release を付けるか、同じ命令文でdebug構成であることを明記してください。"
+    }
+    return New-AgentWatchResult `
+        -ExitCode 0 `
+        -Code "AGENT_RUN_CONFIGURATION_OK" `
+        -Message "実行指示のrelease/debug構成は明示されています。"
+}
+
 function Get-DelegationTargetThreadId {
     param(
         [Parameter(Mandatory = $true)]$HookPayload,
@@ -1395,6 +1774,13 @@ function Invoke-AgentReplyGate {
             return New-PolicyResult -Code "DEFINITION_REFRESH_REPLY_NOT_WAITING" -Message "定義更新中の例外は、15分以上返信待ちの本人への送信だけに使えます。"
         }
 
+        # scope回復中の返信待ち本人も含め、実行指示の構成だけは常に検査する。
+        # ここで拒否すればledgerは更新されず、構成を足した本文をそのまま再送できる。
+        $runConfigurationResult = Test-DelegationRunConfiguration -Text $DelegationText
+        if ($runConfigurationResult.ExitCode -ne 0) {
+            return $runConfigurationResult
+        }
+
         # 返信待ち本人には、誤ったscope定義から回復する道を必ず残す。別担当・新規委譲は
         # この例外へ入らず、下の不足/余分/重複を含むstrict検査を通る必要がある。
         if (-not $targetIsWaiting) {
@@ -2276,6 +2662,9 @@ function Write-HookDeny {
     }
     elseif ([string]$Result.Code -eq "AGENT_REPLY_TEXT_EMPTY") {
         "空でない返事を待っている担当本人へ送ってください。"
+    }
+    elseif ([string]$Result.Code -eq "AGENT_RUN_CONFIGURATION_REQUIRED") {
+        "cargo/npmの実行指示へ --release を付けるか、同じ命令文でdebug構成であることを明記してください。禁止・実行中・過去結果の記述には追記不要です。"
     }
     elseif ([string]$Result.Code -like "AGENT_WATCH_SCOPE_*") {
         "監視定義のthreadId/readOnly/reportPath/sourcePathsと委譲本文のAGENT_WATCH_SCOPEを不足・余分なく一致させてください。path重複時は所有を1担当へ絞ってください。"
