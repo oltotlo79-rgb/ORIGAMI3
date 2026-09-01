@@ -41,7 +41,8 @@ function New-AgentWatchResult {
         [Parameter(Mandatory = $true)][string]$Message,
         [object[]]$AgentStates = @(),
         [bool]$RuntimeMismatch = $false,
-        [string]$RuntimeMismatchMessage = ""
+        [string]$RuntimeMismatchMessage = "",
+        [string[]]$Warnings = @()
     )
 
     return [pscustomobject]@{
@@ -51,6 +52,7 @@ function New-AgentWatchResult {
         AgentStates = @($AgentStates)
         RuntimeMismatch = $RuntimeMismatch
         RuntimeMismatchMessage = $RuntimeMismatchMessage
+        Warnings = @($Warnings)
     }
 }
 
@@ -906,6 +908,741 @@ function Test-WatchPathOverlap {
     $secondPrefix = $SecondPath.TrimEnd([char[]]"\/") + $separator
     return $SecondPath.StartsWith($firstPrefix, [StringComparison]::OrdinalIgnoreCase) -or
         $FirstPath.StartsWith($secondPrefix, [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Get-StrongPublicTypeMutationSourceHints {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
+
+    # Cargo graphを読む前に、同じ文の中へsourceと強い公開型変更命令がそろっているかを
+    # 判定する。完了報告・調査・禁止を型変更の許可へ読み替えない。
+    $typeTargetPattern = @'
+(?ix)
+(?:
+  (?:公開\s*(?:型|API)|pub\s+(?:struct|enum|trait|type))
+ |
+  `?(?:(?:[a-z][a-z0-9_-]*::)?[A-Z][A-Za-z0-9_]*)`?
+  [^。！？!?；;\r\n]{0,80}
+  (?:field|フィールド|項目|variant|列挙子|型引数|引数|戻り値(?:型)?)
+)
+'@
+    $mutationDirectivePattern = @'
+(?ix)
+(?:
+  (?:追加|変更|削除|除去|改名|置換|拡張)\s*
+  (?:
+    して(?:ください|よい|構いません)
+   |すること
+   |を許可(?:してください|します|すること)?
+   |させ(?:てください|る)
+  )
+ |足\s*(?:してください|してよい|すこと|させてください|させる)
+ |変え\s*(?:てください|ること)
+)
+'@
+    $negativeMutationPattern = @'
+(?ix)
+(?:追加|変更|削除|除去|改名|置換|拡張)
+\s*(?:
+  し(?:ない|ません|てはいけない)
+ |するな
+ |を\s*許可\s*しない
+ |(?:は|を)\s*(?:禁止|不可)
+)
+'@
+    $pastMutationDirectivePattern = @'
+(?ix)
+(?:追加|変更|削除|除去|改名|置換|拡張)
+\s*(?:してください|すること)
+[^。！？!?；;\r\n]{0,32}
+(?:と\s*)?(?:以前|過去|既に|すでに)?\s*(?:指示|依頼)(?:済み|しました|した|だった)
+'@
+    $memberPathPattern = '(?i)(?<member>crates[\\/][A-Za-z0-9_-]+|apps[\\/]desktop[\\/]src-tauri)(?=$|[\\/\s`''"：:])'
+    $qualifiedTypePattern = '(?<crate>[a-z][a-z0-9_-]*)::[A-Z][A-Za-z0-9_]*'
+    $typeSymbolPattern = '(?<![A-Za-z0-9_])(?<symbol>[A-Z][A-Za-z0-9_]*)(?![A-Za-z0-9_])'
+
+    $hintsByKey = New-Object 'Collections.Generic.Dictionary[string,object]' ([StringComparer]::OrdinalIgnoreCase)
+    $normalized = $Text.Normalize([Text.NormalizationForm]::FormKC)
+    foreach ($clauseValue in @(Split-DelegationRunClauses -Text $normalized)) {
+        $clause = [string]$clauseValue
+        $mutationMatches = @([regex]::Matches(
+                $clause,
+                $mutationDirectivePattern,
+                [Text.RegularExpressions.RegexOptions]::CultureInvariant
+            ))
+        if (-not [regex]::IsMatch(
+                $clause,
+                $typeTargetPattern,
+                [Text.RegularExpressions.RegexOptions]::CultureInvariant
+            ) -or $mutationMatches.Count -eq 0) {
+            continue
+        }
+
+        # 否定・過去の表現が同じ文に1つあっても、別spanの現在の肯定命令を
+        # 捨てない。各mutation matchと除外spanが重なるものだけを落とす。
+        $excludedMutationSpans = @([regex]::Matches(
+                $clause,
+                $negativeMutationPattern,
+                [Text.RegularExpressions.RegexOptions]::CultureInvariant
+            )) + @([regex]::Matches(
+                $clause,
+                $pastMutationDirectivePattern,
+                [Text.RegularExpressions.RegexOptions]::CultureInvariant
+            ))
+        $currentPositiveMutations = New-Object 'Collections.Generic.List[object]'
+        foreach ($mutationMatch in $mutationMatches) {
+            $mutationStart = [int]$mutationMatch.Index
+            $mutationEnd = $mutationStart + [int]$mutationMatch.Length
+            $isExcluded = $false
+            foreach ($excludedSpan in $excludedMutationSpans) {
+                $excludedStart = [int]$excludedSpan.Index
+                $excludedEnd = $excludedStart + [int]$excludedSpan.Length
+                if ($mutationStart -lt $excludedEnd -and $excludedStart -lt $mutationEnd) {
+                    $isExcluded = $true
+                    break
+                }
+            }
+            if (-not $isExcluded) {
+                $currentPositiveMutations.Add($mutationMatch)
+            }
+        }
+        if ($currentPositiveMutations.Count -eq 0) {
+            continue
+        }
+
+        $collectSegmentHints = {
+            param(
+                [Parameter(Mandatory = $true)][string]$SegmentText,
+                [Parameter(Mandatory = $true)][int]$SegmentOffset
+            )
+            $segmentHints = New-Object 'Collections.Generic.Dictionary[string,object]' ([StringComparer]::OrdinalIgnoreCase)
+            foreach ($hintSpec in @(
+                    [pscustomobject]@{ Kind = "path"; Pattern = $memberPathPattern; Group = "member" },
+                    [pscustomobject]@{ Kind = "package"; Pattern = $qualifiedTypePattern; Group = "crate" },
+                    [pscustomobject]@{ Kind = "symbol"; Pattern = $typeSymbolPattern; Group = "symbol" }
+                )) {
+                foreach ($hintMatch in @([regex]::Matches(
+                            $SegmentText,
+                            [string]$hintSpec.Pattern,
+                            [Text.RegularExpressions.RegexOptions]::CultureInvariant
+                        ))) {
+                    $absoluteStart = $SegmentOffset + [int]$hintMatch.Index
+                    $absoluteEnd = $absoluteStart + [int]$hintMatch.Length
+                    $hintIsExcluded = $false
+                    foreach ($excludedSpan in $excludedMutationSpans) {
+                        $excludedStart = [int]$excludedSpan.Index
+                        $excludedEnd = $excludedStart + [int]$excludedSpan.Length
+                        if ($absoluteStart -lt $excludedEnd -and $excludedStart -lt $absoluteEnd) {
+                            $hintIsExcluded = $true
+                            break
+                        }
+                    }
+                    if ($hintIsExcluded) {
+                        continue
+                    }
+                    $value = [string]$hintMatch.Groups[[string]$hintSpec.Group].Value
+                    if ([string]$hintSpec.Kind -eq "package") {
+                        $value = $value.Replace("_", "-")
+                    }
+                    $key = "$([string]$hintSpec.Kind)|$value"
+                    if (-not $segmentHints.ContainsKey($key)) {
+                        $segmentHints.Add($key, [pscustomobject]@{
+                                Kind = [string]$hintSpec.Kind
+                                Value = $value
+                            })
+                    }
+                }
+            }
+            return @($segmentHints.Values)
+        }
+
+        foreach ($positiveMutation in $currentPositiveMutations) {
+            $mutationStart = [int]$positiveMutation.Index
+            $mutationEnd = $mutationStart + [int]$positiveMutation.Length
+            $segmentStart = 0
+            if ($mutationStart -gt 0) {
+                $prefix = $clause.Substring(0, $mutationStart)
+                $segmentBoundaries = @([regex]::Matches(
+                        $prefix,
+                        '(?:、|,|(?:ました|ます|です|だ|しない|ません)が|けれど(?:も)?|一方で?)',
+                        [Text.RegularExpressions.RegexOptions]::CultureInvariant
+                    ))
+                if ($segmentBoundaries.Count -gt 0) {
+                    $lastBoundary = $segmentBoundaries[$segmentBoundaries.Count - 1]
+                    $segmentStart = [int]$lastBoundary.Index + [int]$lastBoundary.Length
+                }
+            }
+            $segmentText = $clause.Substring($segmentStart, $mutationEnd - $segmentStart)
+            $selectedHints = @(& $collectSegmentHints -SegmentText $segmentText -SegmentOffset $segmentStart)
+            if ($selectedHints.Count -eq 0) {
+                $clauseHints = @(& $collectSegmentHints -SegmentText $clause -SegmentOffset 0)
+                $uniqueSymbols = @(
+                    $clauseHints |
+                        Where-Object { [string]$_.Kind -eq "symbol" } |
+                        ForEach-Object { [string]$_.Value } |
+                        Sort-Object -Unique
+                )
+                if ($uniqueSymbols.Count -eq 1) {
+                    $selectedHints = $clauseHints
+                }
+                elseif ($uniqueSymbols.Count -eq 0) {
+                    $uniqueExplicitHints = @(
+                        $clauseHints |
+                            Where-Object { [string]$_.Kind -in @("path", "package") } |
+                            ForEach-Object { "$([string]$_.Kind)|$([string]$_.Value)" } |
+                            Sort-Object -Unique
+                    )
+                    if ($uniqueExplicitHints.Count -eq 1) {
+                        $selectedHints = $clauseHints
+                    }
+                }
+            }
+            foreach ($selectedHint in $selectedHints) {
+                $key = "$([string]$selectedHint.Kind)|$([string]$selectedHint.Value)"
+                if (-not $hintsByKey.ContainsKey($key)) {
+                    $hintsByKey.Add($key, $selectedHint)
+                }
+            }
+        }
+    }
+    return @($hintsByKey.Values)
+}
+
+function Read-WorkspaceCargoDependencyGraph {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $workspaceManifestPath = Join-Path $Root "Cargo.toml"
+    if (-not (Test-Path -LiteralPath $workspaceManifestPath -PathType Leaf)) {
+        throw "workspace Cargo.tomlがありません: $workspaceManifestPath"
+    }
+    $workspaceText = $script:Utf8NoBom.GetString((Read-SharedFileBytes -Path $workspaceManifestPath))
+    $workspaceSection = [regex]::Match(
+        $workspaceText,
+        '(?ms)^\[workspace\]\s*(?<body>.*?)(?=^\[|\z)',
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant
+    )
+    if (-not $workspaceSection.Success) {
+        throw "Cargo.tomlに[workspace]がありません"
+    }
+    $membersMatch = [regex]::Match(
+        [string]$workspaceSection.Groups["body"].Value,
+        '(?ms)^\s*members\s*=\s*\[(?<body>.*?)\]',
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant
+    )
+    if (-not $membersMatch.Success) {
+        throw "Cargo.tomlの[workspace].membersを読めません"
+    }
+    $memberPaths = @(
+        [regex]::Matches(
+            [string]$membersMatch.Groups["body"].Value,
+            '"(?<path>[^"\r\n]+)"',
+            [Text.RegularExpressions.RegexOptions]::CultureInvariant
+        ) | ForEach-Object { [string]$_.Groups["path"].Value }
+    )
+    if ($memberPaths.Count -eq 0) {
+        throw "Cargo.tomlの[workspace].membersが空です"
+    }
+
+    $workspaceAliases = New-Object 'Collections.Generic.Dictionary[string,string]' ([StringComparer]::OrdinalIgnoreCase)
+    $workspaceDependencies = [regex]::Match(
+        $workspaceText,
+        '(?ms)^\[workspace\.dependencies\]\s*(?<body>.*?)(?=^\[|\z)',
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant
+    )
+    if ($workspaceDependencies.Success) {
+        foreach ($entry in @([regex]::Matches(
+                    [string]$workspaceDependencies.Groups["body"].Value,
+                    '(?m)^\s*(?<key>[A-Za-z0-9_-]+)\s*=\s*(?<rhs>.+)$',
+                    [Text.RegularExpressions.RegexOptions]::CultureInvariant
+                ))) {
+            $alias = [string]$entry.Groups["key"].Value
+            $packageName = $alias
+            $packageMatch = [regex]::Match(
+                [string]$entry.Groups["rhs"].Value,
+                '\bpackage\s*=\s*"(?<name>[^"\r\n]+)"',
+                [Text.RegularExpressions.RegexOptions]::CultureInvariant
+            )
+            if ($packageMatch.Success) {
+                $packageName = [string]$packageMatch.Groups["name"].Value
+            }
+            $workspaceAliases[$alias] = $packageName
+        }
+    }
+
+    $packagesByName = New-Object 'Collections.Generic.Dictionary[string,object]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($memberPath in $memberPaths) {
+        $memberRoot = ConvertTo-CanonicalWatchPath -Path $memberPath -BasePath $Root
+        $manifestPath = Join-Path $memberRoot "Cargo.toml"
+        if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+            throw "workspace memberのCargo.tomlがありません: $manifestPath"
+        }
+        $manifestText = $script:Utf8NoBom.GetString((Read-SharedFileBytes -Path $manifestPath))
+        $packageSection = [regex]::Match(
+            $manifestText,
+            '(?ms)^\[package\]\s*(?<body>.*?)(?=^\[|\z)',
+            [Text.RegularExpressions.RegexOptions]::CultureInvariant
+        )
+        $packageNameMatch = [regex]::Match(
+            [string]$packageSection.Groups["body"].Value,
+            '(?m)^\s*name\s*=\s*"(?<name>[^"\r\n]+)"',
+            [Text.RegularExpressions.RegexOptions]::CultureInvariant
+        )
+        if (-not $packageSection.Success -or -not $packageNameMatch.Success) {
+            throw "workspace memberの[package].nameを読めません: $manifestPath"
+        }
+        $packageName = [string]$packageNameMatch.Groups["name"].Value
+        if ($packagesByName.ContainsKey($packageName)) {
+            throw "workspace package nameが重複しています: $packageName"
+        }
+        $packagesByName.Add($packageName, [pscustomobject]@{
+                Name = $packageName
+                MemberRoot = $memberRoot
+                ManifestPath = $manifestPath
+                ManifestText = $manifestText
+                DirectDependencies = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+            })
+    }
+
+    foreach ($package in @($packagesByName.Values)) {
+        $dependencySections = @([regex]::Matches(
+                [string]$package.ManifestText,
+                '(?ms)^\[(?:dependencies|target\.[^\]\r\n]+\.dependencies)\]\s*(?<body>.*?)(?=^\[|\z)',
+                [Text.RegularExpressions.RegexOptions]::CultureInvariant
+            ))
+        foreach ($dependencySection in $dependencySections) {
+            foreach ($entry in @([regex]::Matches(
+                        [string]$dependencySection.Groups["body"].Value,
+                        '(?m)^\s*(?<key>[A-Za-z0-9_-]+)(?<workspace>\.workspace)?\s*=\s*(?<rhs>.+)$',
+                        [Text.RegularExpressions.RegexOptions]::CultureInvariant
+                    ))) {
+                $dependencyName = [string]$entry.Groups["key"].Value
+                $rhs = [string]$entry.Groups["rhs"].Value
+                $packageMatch = [regex]::Match(
+                    $rhs,
+                    '\bpackage\s*=\s*"(?<name>[^"\r\n]+)"',
+                    [Text.RegularExpressions.RegexOptions]::CultureInvariant
+                )
+                if ($packageMatch.Success) {
+                    $dependencyName = [string]$packageMatch.Groups["name"].Value
+                }
+                elseif ($entry.Groups["workspace"].Success -and $workspaceAliases.ContainsKey($dependencyName)) {
+                    $dependencyName = [string]$workspaceAliases[$dependencyName]
+                }
+                if ($packagesByName.ContainsKey($dependencyName)) {
+                    [void]$package.DirectDependencies.Add($dependencyName)
+                }
+            }
+        }
+    }
+    return [pscustomobject]@{
+        WorkspaceRoot = $Root
+        WorkspaceManifestPath = $workspaceManifestPath
+        PackagesByName = $packagesByName
+    }
+}
+
+function Find-CargoWorkspaceRootForScopePath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $canonicalPath = [IO.Path]::GetFullPath($Path)
+    $cursor = if (Test-Path -LiteralPath $canonicalPath -PathType Leaf) {
+        [IO.Path]::GetDirectoryName($canonicalPath)
+    }
+    elseif (Test-Path -LiteralPath $canonicalPath -PathType Container) {
+        $canonicalPath
+    }
+    elseif ([IO.Path]::HasExtension([IO.Path]::GetFileName($canonicalPath))) {
+        [IO.Path]::GetDirectoryName($canonicalPath)
+    }
+    else {
+        $canonicalPath
+    }
+    while (-not [string]::IsNullOrEmpty($cursor)) {
+        $manifestPath = Join-Path $cursor "Cargo.toml"
+        if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+            $manifestText = $script:Utf8NoBom.GetString((Read-SharedFileBytes -Path $manifestPath))
+            if ([regex]::IsMatch(
+                    $manifestText,
+                    '(?m)^\[workspace\]\s*$',
+                    [Text.RegularExpressions.RegexOptions]::CultureInvariant
+                )) {
+                return [IO.Path]::GetFullPath($cursor)
+            }
+        }
+        $parent = [IO.Directory]::GetParent($cursor)
+        if ($null -eq $parent -or
+            [string]::Equals([string]$parent.FullName, $cursor, [StringComparison]::OrdinalIgnoreCase)) {
+            break
+        }
+        $cursor = [string]$parent.FullName
+    }
+    return ""
+}
+
+function Get-CargoWorkspaceGraphsForScopePaths {
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$SourcePaths)
+
+    $rootsByKey = New-Object 'Collections.Generic.Dictionary[string,string]' ([StringComparer]::OrdinalIgnoreCase)
+    $discoveryErrors = New-Object 'Collections.Generic.List[string]'
+    foreach ($sourcePath in $SourcePaths) {
+        try {
+            $workspaceRoot = Find-CargoWorkspaceRootForScopePath -Path ([string]$sourcePath)
+            if (-not [string]::IsNullOrEmpty($workspaceRoot)) {
+                $key = $workspaceRoot.TrimEnd([char[]]"\/")
+                $rootsByKey[$key] = $workspaceRoot
+            }
+        }
+        catch {
+            $detail = [regex]::Replace([string]$_.Exception.Message, '\s+', ' ').Trim()
+            $discoveryErrors.Add("scopePath=$sourcePath detail=$detail")
+        }
+    }
+
+    $graphs = New-Object 'Collections.Generic.List[object]'
+    foreach ($workspaceRoot in @($rootsByKey.Values | Sort-Object)) {
+        try {
+            $graph = Read-WorkspaceCargoDependencyGraph -Root ([string]$workspaceRoot)
+            $belongsToWorkspace = $false
+            foreach ($sourcePath in $SourcePaths) {
+                foreach ($package in @($graph.PackagesByName.Values)) {
+                    if (Test-WatchPathOverlap `
+                            -FirstPath ([string]$sourcePath) `
+                            -SecondPath ([string]$package.MemberRoot)) {
+                        $belongsToWorkspace = $true
+                        break
+                    }
+                }
+                if ($belongsToWorkspace) { break }
+            }
+            if ($belongsToWorkspace) {
+                $graphs.Add($graph)
+            }
+        }
+        catch {
+            $detail = [regex]::Replace([string]$_.Exception.Message, '\s+', ' ').Trim()
+            $discoveryErrors.Add("workspaceRoot=$workspaceRoot detail=$detail")
+        }
+    }
+    return [pscustomobject]@{
+        Graphs = @($graphs.ToArray())
+        Errors = @($discoveryErrors.ToArray())
+    }
+}
+
+function Test-ScopeAllowsCargoPackage {
+    param(
+        [Parameter(Mandatory = $true)]$Package,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$SourcePaths
+    )
+
+    foreach ($sourcePath in $SourcePaths) {
+        if (Test-WatchPathOverlap -FirstPath ([string]$sourcePath) -SecondPath ([string]$Package.MemberRoot)) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Test-WatchScopePathContainsTarget {
+    param(
+        [Parameter(Mandatory = $true)][string]$ScopePath,
+        [Parameter(Mandatory = $true)][string]$TargetPath
+    )
+
+    $scopeKey = Get-WatchPathComparisonKey -Path $ScopePath -BasePath ([IO.Path]::GetPathRoot($ScopePath))
+    $targetKey = Get-WatchPathComparisonKey -Path $TargetPath -BasePath ([IO.Path]::GetPathRoot($TargetPath))
+    if ([string]::Equals($scopeKey, $targetKey, [StringComparison]::OrdinalIgnoreCase)) {
+        return $true
+    }
+    $scopePrefix = $scopeKey.TrimEnd([char[]]"\/") + [IO.Path]::DirectorySeparatorChar
+    return $targetKey.StartsWith($scopePrefix, [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Test-ScopeCoversCargoDependentPackage {
+    param(
+        [Parameter(Mandatory = $true)]$Package,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$SourcePaths
+    )
+
+    $packageRoot = [string]$Package.MemberRoot
+    $packageSourceRoot = Join-Path $packageRoot "src"
+    foreach ($sourcePath in $SourcePaths) {
+        # 公開型変更への追随を許可済みと見なすのは、crate全体または全srcを
+        # scopeが包含する場合だけ。単一の無関係fileを持つだけでは抑止しない。
+        if ((Test-WatchScopePathContainsTarget -ScopePath ([string]$sourcePath) -TargetPath $packageRoot) -or
+            (Test-WatchScopePathContainsTarget -ScopePath ([string]$sourcePath) -TargetPath $packageSourceRoot)) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Test-ScopeCoversWireContractPeer {
+    param(
+        [Parameter(Mandatory = $true)][string]$PeerName,
+        [Parameter(Mandatory = $true)]$Graph,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$SourcePaths
+    )
+
+    $peer = $Graph.PackagesByName[$PeerName]
+    if (Test-ScopeCoversCargoDependentPackage -Package $peer -SourcePaths $SourcePaths) {
+        return $true
+    }
+    $mirrorPaths = New-Object 'Collections.Generic.List[string]'
+    if ($PeerName -eq "desktop") {
+        $mirrorPaths.Add((Join-Path ([string]$peer.MemberRoot) "src/commands.rs"))
+        $mirrorPaths.Add((Join-Path ([string]$peer.MemberRoot) "src/store.rs"))
+    }
+    elseif ($PeerName -eq "ori3-app-core") {
+        $mirrorPaths.Add((Join-Path ([string]$peer.MemberRoot) "src/lib.rs"))
+    }
+    if ($mirrorPaths.Count -eq 0) {
+        return $false
+    }
+    foreach ($mirrorPath in $mirrorPaths) {
+        $covered = $false
+        foreach ($sourcePath in $SourcePaths) {
+            if (Test-WatchScopePathContainsTarget -ScopePath ([string]$sourcePath) -TargetPath $mirrorPath) {
+                $covered = $true
+                break
+            }
+        }
+        if (-not $covered) {
+            return $false
+        }
+    }
+    return $true
+}
+
+function Test-PackageDeclaresPublicTypeSymbol {
+    param(
+        [Parameter(Mandatory = $true)]$Package,
+        [Parameter(Mandatory = $true)][string]$Symbol,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$SourcePaths
+    )
+
+    $packageSourceRoot = Join-Path ([string]$Package.MemberRoot) "src"
+    if (-not (Test-Path -LiteralPath $packageSourceRoot)) {
+        return $false
+    }
+    $scanRootsByKey = New-Object 'Collections.Generic.Dictionary[string,string]' ([StringComparer]::OrdinalIgnoreCase)
+    $packageSourceKey = Get-WatchPathComparisonKey -Path $packageSourceRoot -BasePath ([string]$Package.MemberRoot)
+    foreach ($sourcePath in $SourcePaths) {
+        $sourceKey = Get-WatchPathComparisonKey -Path ([string]$sourcePath) -BasePath ([string]$Package.MemberRoot)
+        if (-not (Test-WatchPathOverlap -FirstPath $sourceKey -SecondPath $packageSourceKey)) {
+            continue
+        }
+        $scanRoot = if ($sourceKey.StartsWith(
+                $packageSourceKey.TrimEnd([char[]]"\/") + [IO.Path]::DirectorySeparatorChar,
+                [StringComparison]::OrdinalIgnoreCase
+            ) -or [string]::Equals($sourceKey, $packageSourceKey, [StringComparison]::OrdinalIgnoreCase)) {
+            [string]$sourcePath
+        }
+        else {
+            $packageSourceRoot
+        }
+        $scanRootKey = Get-WatchPathComparisonKey -Path $scanRoot -BasePath ([string]$Package.MemberRoot)
+        $scanRootsByKey[$scanRootKey] = $scanRoot
+    }
+    if ($scanRootsByKey.Count -eq 0) {
+        return $false
+    }
+
+    $escapedSymbol = [regex]::Escape($Symbol)
+    $declarationPattern = "(?m)^\s*pub\s+(?:struct|enum|type|trait)\s+$escapedSymbol\b"
+    foreach ($scanRoot in @($scanRootsByKey.Values)) {
+        $rustFiles = if (Test-Path -LiteralPath $scanRoot -PathType Leaf) {
+            if ([string]::Equals([IO.Path]::GetExtension($scanRoot), ".rs", [StringComparison]::OrdinalIgnoreCase)) {
+                @(Get-Item -LiteralPath $scanRoot)
+            }
+            else {
+                @()
+            }
+        }
+        elseif (Test-Path -LiteralPath $scanRoot -PathType Container) {
+            @(Get-ChildItem -LiteralPath $scanRoot -Recurse -File -Filter "*.rs")
+        }
+        else {
+            @()
+        }
+        foreach ($rustFile in $rustFiles) {
+            $rustText = $script:Utf8NoBom.GetString((Read-SharedFileBytes -Path ([string]$rustFile.FullName)))
+            if ([regex]::IsMatch(
+                    $rustText,
+                    $declarationPattern,
+                    [Text.RegularExpressions.RegexOptions]::CultureInvariant
+                )) {
+                return $true
+            }
+        }
+    }
+    return $false
+}
+
+function Resolve-PublicTypeMutationSourcePackages {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Hints,
+        [Parameter(Mandatory = $true)]$Graph,
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$SourcePaths
+    )
+
+    $resolved = New-Object 'Collections.Generic.Dictionary[string,object]' ([StringComparer]::OrdinalIgnoreCase)
+    $hasExplicitSourceHint = @($Hints | Where-Object { [string]$_.Kind -in @("path", "package") }).Count -gt 0
+    foreach ($hint in $Hints) {
+        $candidate = $null
+        if ([string]$hint.Kind -eq "package") {
+            $packageName = ([string]$hint.Value).Replace("_", "-")
+            if ($Graph.PackagesByName.ContainsKey($packageName)) {
+                $candidate = $Graph.PackagesByName[$packageName]
+            }
+        }
+        elseif ([string]$hint.Kind -eq "path") {
+            $hintPath = ConvertTo-CanonicalWatchPath -Path ([string]$hint.Value) -BasePath $Root
+            $candidate = @(
+                $Graph.PackagesByName.Values |
+                    Where-Object {
+                        Test-WatchPathOverlap -FirstPath $hintPath -SecondPath ([string]$_.MemberRoot)
+                    } |
+                    Sort-Object @{ Expression = { ([string]$_.MemberRoot).Length }; Descending = $true }
+            ) | Select-Object -First 1
+        }
+        elseif ([string]$hint.Kind -eq "symbol" -and -not $hasExplicitSourceHint) {
+            $symbolOwners = @(
+                $Graph.PackagesByName.Values |
+                    Where-Object {
+                        (Test-ScopeAllowsCargoPackage -Package $_ -SourcePaths $SourcePaths) -and
+                        (Test-PackageDeclaresPublicTypeSymbol `
+                            -Package $_ `
+                            -Symbol ([string]$hint.Value) `
+                            -SourcePaths $SourcePaths)
+                    }
+            )
+            if ($symbolOwners.Count -eq 1) {
+                $candidate = $symbolOwners[0]
+            }
+        }
+        if ($null -ne $candidate -and
+            (Test-ScopeAllowsCargoPackage -Package $candidate -SourcePaths $SourcePaths) -and
+            -not $resolved.ContainsKey([string]$candidate.Name)) {
+            $resolved.Add([string]$candidate.Name, $candidate)
+        }
+    }
+    return @($resolved.Values)
+}
+
+function Get-DesktopAppCoreWireContractPath {
+    param(
+        [Parameter(Mandatory = $true)]$Graph
+    )
+
+    if (-not $Graph.PackagesByName.ContainsKey("desktop") -or
+        -not $Graph.PackagesByName.ContainsKey("ori3-app-core")) {
+        return ""
+    }
+    $appCore = $Graph.PackagesByName["ori3-app-core"]
+    $buildPath = Join-Path ([string]$appCore.MemberRoot) "build.rs"
+    if (-not (Test-Path -LiteralPath $buildPath -PathType Leaf)) {
+        return ""
+    }
+    try {
+        $buildText = $script:Utf8NoBom.GetString((Read-SharedFileBytes -Path $buildPath))
+    }
+    catch {
+        return ""
+    }
+    foreach ($requiredFragment in @(
+            "const WIRE_TYPES",
+            '../../apps/desktop/src-tauri/src/commands.rs',
+            '../../apps/desktop/src-tauri/src/store.rs',
+            'item_fingerprint(desktop_source',
+            'item_fingerprint(&app_core'
+        )) {
+        if (-not $buildText.Contains($requiredFragment)) {
+            return ""
+        }
+    }
+    return $buildPath
+}
+
+function Get-PublicTypeDependencyWarnings {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text,
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)]$Scope,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Hints
+    )
+
+    if ($Hints.Count -eq 0 -or [bool]$Scope.ReadOnly) {
+        return @()
+    }
+    [string[]]$scopeSources = @($Scope.SourcePaths | ForEach-Object { [string]$_ })
+    $warningsByKey = New-Object 'Collections.Generic.Dictionary[string,string]' ([StringComparer]::OrdinalIgnoreCase)
+    $workspaceDiscovery = Get-CargoWorkspaceGraphsForScopePaths -SourcePaths $scopeSources
+    $errorIndex = 0
+    foreach ($discoveryError in @($workspaceDiscovery.Errors)) {
+        $warningsByKey["unavailable|$errorIndex"] = (
+            "AGENT_PUBLIC_TYPE_DEPENDENCY_CHECK_UNAVAILABLE: 強い公開型変更命令を検出しましたがscope所属Cargo workspaceを読めません。依存側の追随可否を確認してください。detail={0}" -f
+                ([string]$discoveryError)
+        )
+        $errorIndex += 1
+    }
+
+    foreach ($graph in @($workspaceDiscovery.Graphs)) {
+        try {
+            $sourcePackages = @(
+                Resolve-PublicTypeMutationSourcePackages `
+                    -Hints $Hints `
+                    -Graph $graph `
+                    -Root ([string]$graph.WorkspaceRoot) `
+                    -SourcePaths $scopeSources
+            )
+        }
+        catch {
+            $detail = [regex]::Replace([string]$_.Exception.Message, '\s+', ' ').Trim()
+            $key = "unavailable|$errorIndex"
+            $warningsByKey[$key] = (
+                "AGENT_PUBLIC_TYPE_DEPENDENCY_CHECK_UNAVAILABLE: 強い公開型変更命令を検出しましたが公開型ownerを読めません。依存側の追随可否を確認してください。workspace={0} detail={1}" -f
+                    ([string]$graph.WorkspaceRoot), $detail
+            )
+            $errorIndex += 1
+            continue
+        }
+        foreach ($sourcePackage in $sourcePackages) {
+            foreach ($dependentPackage in @($graph.PackagesByName.Values | Sort-Object Name)) {
+                if (-not $dependentPackage.DirectDependencies.Contains([string]$sourcePackage.Name) -or
+                    (Test-ScopeCoversCargoDependentPackage -Package $dependentPackage -SourcePaths $scopeSources)) {
+                    continue
+                }
+                $key = "cargo|$([string]$graph.WorkspaceRoot)|$([string]$sourcePackage.Name)|$([string]$dependentPackage.Name)"
+                $warningsByKey[$key] = (
+                    "AGENT_PUBLIC_TYPE_DEPENDENCY_WARNING: source={0} dependent={1} relation=cargo-direct manifest={2}。この禁止は、依存している側の追随を妨げる可能性があります。" -f
+                        ([string]$sourcePackage.Name), ([string]$dependentPackage.Name), ([string]$dependentPackage.ManifestPath)
+                )
+            }
+
+            $wireContractPath = Get-DesktopAppCoreWireContractPath -Graph $graph
+            if (-not [string]::IsNullOrEmpty($wireContractPath)) {
+                $peerName = if ([string]$sourcePackage.Name -eq "desktop") {
+                    "ori3-app-core"
+                }
+                elseif ([string]$sourcePackage.Name -eq "ori3-app-core") {
+                    "desktop"
+                }
+                else {
+                    ""
+                }
+                if (-not [string]::IsNullOrEmpty($peerName) -and
+                    -not (Test-ScopeCoversWireContractPeer -PeerName $peerName -Graph $graph -SourcePaths $scopeSources)) {
+                    $key = "wire|$([string]$graph.WorkspaceRoot)|$([string]$sourcePackage.Name)|$peerName"
+                    $warningsByKey[$key] = (
+                        "AGENT_PUBLIC_TYPE_DEPENDENCY_WARNING: source={0} dependent={1} relation=wire-contract-peer contract={2}。この禁止は、依存している側の追随を妨げる可能性があります。" -f
+                            ([string]$sourcePackage.Name), $peerName, $wireContractPath
+                    )
+                }
+            }
+        }
+    }
+    return @($warningsByKey.GetEnumerator() | Sort-Object Key | ForEach-Object { [string]$_.Value })
 }
 
 function Get-AgentWatchScopeSha256 {
@@ -1774,6 +2511,8 @@ function Invoke-AgentReplyGate {
             return New-PolicyResult -Code "DEFINITION_REFRESH_REPLY_NOT_WAITING" -Message "定義更新中の例外は、15分以上返信待ちの本人への送信だけに使えます。"
         }
 
+        $dependencyWarnings = New-Object 'Collections.Generic.List[string]'
+
         # scope回復中の返信待ち本人も含め、実行指示の構成だけは常に検査する。
         # ここで拒否すればledgerは更新されず、構成を足した本文をそのまま再送できる。
         $runConfigurationResult = Test-DelegationRunConfiguration -Text $DelegationText
@@ -1791,6 +2530,21 @@ function Invoke-AgentReplyGate {
                 -TargetThreadId $targetThreadId
             if ($scopeResult.ExitCode -ne 0) {
                 return $scopeResult
+            }
+
+            # strict scopeが確定してからだけCargo依存を読む。返信待ち本人への回復路は
+            # Cargo.tomlやscope定義が壊れていても塞がない。警告は送信自体を拒否せず、
+            # 後段でadditionalContextとして返す。
+            $strongPublicTypeHints = @(Get-StrongPublicTypeMutationSourceHints -Text $DelegationText)
+            if ([bool]$definitionContext.Strict -and $strongPublicTypeHints.Count -gt 0) {
+                $scopeBlock = Read-AgentWatchScopeBlock -Text $DelegationText -Root $Root
+                foreach ($dependencyWarning in @(Get-PublicTypeDependencyWarnings `
+                            -Text $DelegationText `
+                            -Root $Root `
+                            -Scope $scopeBlock.Scope `
+                            -Hints $strongPublicTypeHints)) {
+                    $dependencyWarnings.Add([string]$dependencyWarning)
+                }
             }
         }
 
@@ -1816,7 +2570,11 @@ function Invoke-AgentReplyGate {
                 return New-CheckErrorResult -Code "AGENT_SEND_LEDGER_WRITE_ERROR" -Message "送信履歴を保存できません: $($_.Exception.Message)"
             }
         }
-        return New-AgentWatchResult -ExitCode 0 -Code "AGENT_REPLY_GATE_OK" -Message "返信待ち担当との送信順序は正常です。"
+        return New-AgentWatchResult `
+            -ExitCode 0 `
+            -Code "AGENT_REPLY_GATE_OK" `
+            -Message "返信待ち担当との送信順序は正常です。" `
+            -Warnings @($dependencyWarnings.ToArray())
     }
     finally {
         if ($lockTaken) {
@@ -2690,6 +3448,23 @@ function Write-HookDeny {
     $payload | ConvertTo-Json -Depth 5 -Compress | Write-Output
 }
 
+function Write-HookAdditionalContext {
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Messages)
+
+    if (@($Messages).Count -eq 0) {
+        return
+    }
+    # warningは既存のdeny判定を上書きしない。明示allowも出さず、呼び出し側が
+    # 判断材料として読めるadditionalContextだけを返す。
+    $payload = [ordered]@{
+        hookSpecificOutput = [ordered]@{
+            hookEventName = "PreToolUse"
+            additionalContext = (@($Messages) -join "`n")
+        }
+    }
+    $payload | ConvertTo-Json -Depth 5 -Compress | Write-Output
+}
+
 if ($Action -eq "Hook") {
     try {
         $raw = Read-Utf8StandardInput
@@ -2770,6 +3545,9 @@ if ($Action -eq "Hook") {
             -NowUtc ([DateTime]::UtcNow)
         if ($replyGateResult.ExitCode -ne 0) {
             Write-HookDeny -Result $replyGateResult -Root $resolvedRoot
+        }
+        elseif (@($replyGateResult.Warnings).Count -gt 0) {
+            Write-HookAdditionalContext -Messages @($replyGateResult.Warnings)
         }
         exit 0
     }

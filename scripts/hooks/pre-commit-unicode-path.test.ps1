@@ -49,6 +49,30 @@ function New-IsolatedRepository {
     [System.IO.Directory]::CreateDirectory($hookDirectory) | Out-Null
     [System.IO.File]::Copy($HookPath, (Join-Path $hookDirectory "pre-commit"), $true)
 
+    # この検査はquoted pathの接続だけを対象にする。pre-commitが新しいreport
+    # contract checkerを本当に正しいmodeで呼んだことは、成功固定のstubではなく、
+    # 必須引数が欠ければ97で落ちるfixtureで固定する。
+    [string[]]$reportCheckerLines = @()
+    $reportCheckerLines += '[CmdletBinding()]'
+    $reportCheckerLines += 'param('
+    $reportCheckerLines += '    [string]$RepositoryRoot,'
+    $reportCheckerLines += '    [switch]$StagedNewRecordsOnly,'
+    $reportCheckerLines += '    [switch]$RequireNewRecord'
+    $reportCheckerLines += ')'
+    $reportCheckerLines += 'if ([string]::IsNullOrWhiteSpace($RepositoryRoot) -or'
+    $reportCheckerLines += '    -not $StagedNewRecordsOnly -or'
+    $reportCheckerLines += '    -not $RequireNewRecord) {'
+    $reportCheckerLines += '    Write-Error "staged report checker arguments are incomplete"'
+    $reportCheckerLines += '    exit 97'
+    $reportCheckerLines += '}'
+    $reportCheckerLines += 'Write-Output "[OK] PRE-COMMIT-UNICODE staged report contract fixture invoked"'
+    $reportCheckerFixture = [string]::Join("`n", $reportCheckerLines)
+    [System.IO.File]::WriteAllText(
+        (Join-Path $repository "scripts/check-report-log.ps1"),
+        $reportCheckerFixture,
+        [System.Text.UTF8Encoding]::new($false)
+    )
+
     $appFile = Join-Path $repository "apps/desktop/unicode-path-fixture.ts"
     [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($appFile)) | Out-Null
     [System.IO.File]::WriteAllText($appFile, "export const fixture = true;`n", [System.Text.UTF8Encoding]::new($false))
@@ -182,6 +206,11 @@ try {
     }
     else {
         Write-Output "[OK] PRE-COMMIT-UNICODE: staged report log was accepted under quoted paths."
+        if (-not $includedResult.Output.Contains("PRE-COMMIT-UNICODE staged report contract fixture invoked")) {
+            Write-Output "[NG] PRE-COMMIT-UNICODE: staged report contract checker was not invoked."
+            Write-Output $includedResult.Output
+            $failed = $true
+        }
     }
 
     if ($missingResult.ExitCode -eq 0) {

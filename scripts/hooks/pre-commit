@@ -123,6 +123,31 @@ if printf '%s\n' "$staged_for_report" | grep -qE '^(apps|crates)/'; then
     fi
 fi
 
+# Inspect the index, not the worktree: an unstaged correction must not make an
+# invalid staged report pass. Run before the Rust-only early exit so docs-only
+# report commits are checked too.
+report_log_script="$repo_root/scripts/check-report-log.ps1"
+if printf '%s\n' "$staged_for_report" | grep -Fxq 'docs/報告記録.md'; then
+    if [ -z "$scope_powershell" ]; then
+        printf '%s\n' '[NG] PowerShell is unavailable; staged report contract could not be checked.' >&2
+        exit 127
+    fi
+    if [ ! -f "$report_log_script" ]; then
+        printf '%s\n' '[NG] scripts/check-report-log.ps1 is unavailable; staged report contract could not be checked.' >&2
+        exit 127
+    fi
+    if printf '%s\n' "$staged_for_report" | grep -qE '^(apps|crates)/'; then
+        "$scope_powershell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$report_log_script" -RepositoryRoot "$repo_root" -StagedNewRecordsOnly -RequireNewRecord
+    else
+        "$scope_powershell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$report_log_script" -RepositoryRoot "$repo_root" -StagedNewRecordsOnly
+    fi
+    report_log_status=$?
+    if [ "$report_log_status" -ne 0 ]; then
+        printf '%s\n' "[NG] staged report contract failed (exit $report_log_status)." >&2
+        exit "$report_log_status"
+    fi
+fi
+
 if ! printf '%s\n' "$staged" | grep -qE '(\.rs$|(^|/)Cargo\.(toml|lock)$)'; then
     exit 0
 fi

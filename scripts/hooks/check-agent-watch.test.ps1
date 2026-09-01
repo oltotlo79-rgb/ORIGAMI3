@@ -1739,7 +1739,514 @@ try {
         -Payload (New-HookPayload -ToolName "Agent" -Text $codeFenceInstruction)
     Assert-Contains $result.Output "AGENT_RUN_CONFIGURATION_REQUIRED" "code fenceで無構成実行指示を隠せないこと"
 
-    Write-Output ("check-agent-watch self-test passed: 33 cases, {0} assertions" -f $script:AssertionCount)
+    Write-Output "[34/38] 公開型変更の強い命令だけをCargo逆依存とwire契約の非blocking警告へ変換する"
+    $legacyStrongTypeResult = Invoke-Checker `
+        -PowerShellPath $powerShellCommand.Source `
+        -Action "Hook" `
+        -Payload (New-HookPayload -ToolName "Agent" -Text "``crates/ori3-model/src/lib.rs::FoldStep``へfieldを追加してください。")
+    Assert-Equal $legacyStrongTypeResult.ExitCode 0 "legacy定義の公開型変更Hook processが正常終了すること"
+    Assert-True (-not $legacyStrongTypeResult.Output.Contains('"permissionDecision":"deny"')) "機械可読scopeのないlegacy定義を公開型変更warningで拒否しないこと"
+    Assert-True (-not $legacyStrongTypeResult.Output.Contains("HOOK_CHECK_ERROR")) "legacy定義へstrict scope blockを要求しないこと"
+    Assert-True (-not $legacyStrongTypeResult.Output.Contains("AGENT_PUBLIC_TYPE_DEPENDENCY_WARNING")) "write許可集合を実証できないlegacy定義では依存warningを出さないこと"
+    if (-not $performanceWatcher.HasExited) {
+        $performanceWatcher.Kill()
+        [void]$performanceWatcher.WaitForExit(10000)
+    }
+    foreach ($runtimeFile in @($runtimePath, $outputPath, $lockPath, $sendLedgerPath)) {
+        if (Test-Path -LiteralPath $runtimeFile -PathType Leaf) {
+            Remove-Item -LiteralPath $runtimeFile -Force
+        }
+    }
+
+    $dependencyFixtureFiles = [ordered]@{
+        "Cargo.toml" = @'
+[workspace]
+resolver = "2"
+members = [
+  "crates/ori3-model",
+  "crates/ori3-propose",
+  "crates/ori3-build-user",
+  "crates/ori3-app-core",
+  "crates/ori3-web",
+  "apps/desktop/src-tauri",
+]
+
+[workspace.dependencies]
+ori3-model = { path = "crates/ori3-model" }
+ori3-app-core = { path = "crates/ori3-app-core" }
+'@
+        "crates/ori3-model/Cargo.toml" = @'
+[package]
+name = "ori3-model"
+version = "0.0.0"
+'@
+        "crates/ori3-propose/Cargo.toml" = @'
+[package]
+name = "ori3-propose"
+version = "0.0.0"
+
+[dependencies]
+ori3-model.workspace = true
+'@
+        "crates/ori3-build-user/Cargo.toml" = @'
+[package]
+name = "ori3-build-user"
+version = "0.0.0"
+
+[build-dependencies]
+ori3-model.workspace = true
+'@
+        "crates/ori3-app-core/Cargo.toml" = @'
+[package]
+name = "ori3-app-core"
+version = "0.0.0"
+
+[dev-dependencies]
+ori3-model.workspace = true
+'@
+        "crates/ori3-web/Cargo.toml" = @'
+[package]
+name = "ori3-web"
+version = "0.0.0"
+
+[dependencies]
+ori3-app-core.workspace = true
+'@
+        "apps/desktop/src-tauri/Cargo.toml" = @'
+[package]
+name = "desktop"
+version = "0.0.0"
+
+[target.'cfg(any())'.dependencies]
+ori3-model.workspace = true
+'@
+        "crates/ori3-app-core/build.rs" = @'
+const WIRE_TYPES: &[&str] = &[];
+const DESKTOP_COMMANDS: &str = "../../apps/desktop/src-tauri/src/commands.rs";
+const DESKTOP_STORE: &str = "../../apps/desktop/src-tauri/src/store.rs";
+// item_fingerprint(desktop_source, item_name)
+// item_fingerprint(&app_core, item_name)
+'@
+        "crates/ori3-model/src/lib.rs" = "pub struct FoldStep;"
+        "crates/ori3-propose/src/lib.rs" = "pub fn use_fold_step() {}"
+        "crates/ori3-propose/src/unrelated.rs" = "pub fn unrelated() {}"
+        "crates/ori3-build-user/src/lib.rs" = "pub fn build_user() {}"
+        "crates/ori3-app-core/src/lib.rs" = "pub struct DocumentView;"
+        "crates/ori3-app-core/src/unrelated.rs" = "pub fn unrelated() {}"
+        "crates/ori3-web/src/lib.rs" = "pub struct WebOnlyOutcome;"
+        "apps/desktop/src-tauri/src/store.rs" = "pub struct DocumentView;"
+    }
+    foreach ($fixtureEntry in $dependencyFixtureFiles.GetEnumerator()) {
+        $fixturePath = Join-Path $repositoryRoot ([string]$fixtureEntry.Key)
+        [void][IO.Directory]::CreateDirectory((Split-Path -Parent $fixturePath))
+        [IO.File]::WriteAllText($fixturePath, [string]$fixtureEntry.Value, $script:Utf8NoBom)
+    }
+    $dependencyThirdReportPath = Join-Path $repositoryRoot "scratchpad/agent-report-3.md"
+    [IO.File]::WriteAllText($dependencyThirdReportPath, "report 3", $script:Utf8NoBom)
+    $dependencyScopePaths = @(
+        "crates/ori3-model/src",
+        "crates/ori3-propose/src/unrelated.rs",
+        "crates/ori3-app-core/src/lib.rs",
+        "crates/ori3-web/src"
+    )
+    $desktopDependencyScopePaths = @(
+        "apps/desktop/src-tauri",
+        "crates/ori3-app-core/src/unrelated.rs"
+    )
+    $dependencyDefinition = [ordered]@{
+        scopeSchemaVersion = 1
+        agents = @(
+            (New-StrictAgentDefinition `
+                -Name "dependency-warning-agent" `
+                -ThreadId "01a10001" `
+                -ReadOnly $false `
+                -ReportPath "scratchpad/agent-report.md" `
+                -SourcePaths $dependencyScopePaths),
+            (New-StrictAgentDefinition `
+                -Name "dependency-warning-read-only" `
+                -ThreadId "01a10002" `
+                -ReadOnly $true `
+                -ReportPath "scratchpad/agent-report-2.md"),
+            (New-StrictAgentDefinition `
+                -Name "dependency-warning-desktop-agent" `
+                -ThreadId "01a10003" `
+                -ReadOnly $false `
+                -ReportPath "scratchpad/agent-report-3.md" `
+                -SourcePaths $desktopDependencyScopePaths)
+        )
+    }
+    Write-TestDefinition -Definition $dependencyDefinition
+    $dependencyWatcher = Start-ContinuousWatcher -PowerShellPath $powerShellCommand.Source
+    $deadline = (Get-Date).AddSeconds(20)
+    while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $runtimePath -PathType Leaf)) {
+        if ($dependencyWatcher.HasExited) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    Assert-True (-not $dependencyWatcher.HasExited) "依存警告fixtureのwatcherが継続稼働すること"
+    Assert-True (Test-Path -LiteralPath $runtimePath -PathType Leaf) "依存警告fixtureがruntimeを発行すること"
+    $dependencyScopeBlock = New-AgentWatchScopeBlock `
+        -ThreadId "01a10001" `
+        -ReadOnly $false `
+        -ReportPath "scratchpad/agent-report.md" `
+        -SourcePaths $dependencyScopePaths
+    $desktopDependencyScopeBlock = New-AgentWatchScopeBlock `
+        -ThreadId "01a10003" `
+        -ReadOnly $false `
+        -ReportPath "scratchpad/agent-report-3.md" `
+        -SourcePaths $desktopDependencyScopePaths
+
+    $foldStepInstruction = $dependencyScopeBlock + "`nFoldStepへserde-defaultの項目を追加してください。"
+    $result = Invoke-Checker `
+        -PowerShellPath $powerShellCommand.Source `
+        -Action "Hook" `
+        -Payload (New-HookPayload -ToolName "Agent" -Text $foldStepInstruction -TargetThreadId "01a10001")
+    Assert-Equal $result.ExitCode 0 "FoldStep依存警告のHook processが正常終了すること"
+    Assert-Contains $result.Output '"additionalContext"' "依存警告をadditionalContextで返すこと"
+    Assert-Contains $result.Output "AGENT_PUBLIC_TYPE_DEPENDENCY_WARNING" "FoldStep公開型変更へ専用warningを返すこと"
+    Assert-Contains $result.Output "source=ori3-model dependent=ori3-propose relation=cargo-direct" "ori3-modelからori3-proposeへの実Cargo依存を警告すること"
+    Assert-Contains $result.Output "source=ori3-model dependent=desktop relation=cargo-direct" "target dependencyのdesktopからori3-modelへの実Cargo依存を警告すること"
+    Assert-True (-not $result.Output.Contains('"permissionDecision"')) "依存警告でdenyもallowも明示しないこと"
+    Assert-True (-not $result.Output.Contains("dependent=ori3-app-core relation=cargo-direct")) "dev-dependencyを製品の逆依存警告に含めないこと"
+    Assert-True (-not $result.Output.Contains("dependent=ori3-build-user relation=cargo-direct")) "build-dependencyを製品の逆依存警告に含めないこと"
+    $ledgerAfterFoldStep = [IO.File]::ReadAllText($sendLedgerPath, $script:Utf8NoBom) | ConvertFrom-Json
+    $foldStepLedgerRecord = @($ledgerAfterFoldStep.records | Where-Object { [string]$_.threadId -eq "01a10001" })[0]
+    $foldStepSentUtc = [DateTime]::Parse([string]$foldStepLedgerRecord.lastCoordinatorSendUtc).ToUniversalTime()
+
+    $mismatchedDependencyScopeBlock = New-AgentWatchScopeBlock `
+        -ThreadId "01a10001" `
+        -ReadOnly $false `
+        -ReportPath "scratchpad/agent-report.md" `
+        -SourcePaths @("crates/ori3-model/src")
+    $deniedStrongInstruction = $mismatchedDependencyScopeBlock + "`nFoldStepへ項目を追加してください。"
+    $result = Invoke-Checker `
+        -PowerShellPath $powerShellCommand.Source `
+        -Action "Hook" `
+        -Payload (New-HookPayload -ToolName "Agent" -Text $deniedStrongInstruction -TargetThreadId "01a10001")
+    Assert-Contains $result.Output '"permissionDecision":"deny"' "strong公開型命令でもscope mismatchを既存deny優先で拒否すること"
+    Assert-Contains $result.Output "AGENT_WATCH_SCOPE_MISSING_PATH" "scope mismatchの既存理由を維持すること"
+    Assert-True (-not $result.Output.Contains("AGENT_PUBLIC_TYPE_DEPENDENCY_WARNING")) "scope mismatchで依存warningを計算しないこと"
+    Assert-True (-not $result.Output.Contains('"additionalContext"')) "scope mismatchのdenyへwarning contextを混在させないこと"
+    $ledgerAfterDeniedStrong = [IO.File]::ReadAllText($sendLedgerPath, $script:Utf8NoBom) | ConvertFrom-Json
+    $deniedStrongLedgerRecord = @($ledgerAfterDeniedStrong.records | Where-Object { [string]$_.threadId -eq "01a10001" })[0]
+    Assert-Equal ([string]$deniedStrongLedgerRecord.lastCoordinatorSendUtc) ([string]$foldStepLedgerRecord.lastCoordinatorSendUtc) "scope mismatchのstrong公開型命令でledgerを更新しないこと"
+
+    Start-Sleep -Milliseconds 20
+    $desktopWireInstruction = $desktopDependencyScopeBlock + "`n``apps/desktop/src-tauri/src/store.rs::DocumentView``へself_intersection_pairs fieldを追加してください。"
+    $result = Invoke-Checker `
+        -PowerShellPath $powerShellCommand.Source `
+        -Action "Hook" `
+        -Payload (New-HookPayload -ToolName "Agent" -Text $desktopWireInstruction -TargetThreadId "01a10003")
+    Assert-Equal $result.ExitCode 0 "desktop/app-core wire警告のHook processが正常終了すること"
+    Assert-Contains $result.Output "source=desktop dependent=ori3-app-core relation=wire-contract-peer" "build.rsで実証されたdesktop/app-coreの対称wire契約を警告すること"
+    Assert-True (-not $result.Output.Contains('"permissionDecision"')) "wire契約警告もdeny/allowへ変えないこと"
+    $ledgerAfterWire = [IO.File]::ReadAllText($sendLedgerPath, $script:Utf8NoBom) | ConvertFrom-Json
+    $wireLedgerRecord = @($ledgerAfterWire.records | Where-Object { [string]$_.threadId -eq "01a10003" })[0]
+    $wireSentUtc = [DateTime]::Parse([string]$wireLedgerRecord.lastCoordinatorSendUtc).ToUniversalTime()
+    Assert-True ($wireSentUtc -gt $foldStepSentUtc) "非blocking警告の送信後もledgerを更新すること"
+
+    foreach ($mixedCurrentInstruction in @(
+            "FoldStepの既存fieldは削除しないで、新しいfieldを追加してください。",
+            "FoldStepでは以前はfield追加を指示しましたが、今回はvariantを追加してください。"
+        )) {
+        $mixedCurrentText = $dependencyScopeBlock + "`n" + $mixedCurrentInstruction
+        $result = Invoke-Checker `
+            -PowerShellPath $powerShellCommand.Source `
+            -Action "Hook" `
+            -Payload (New-HookPayload -ToolName "Agent" -Text $mixedCurrentText -TargetThreadId "01a10001")
+        Assert-Contains $result.Output "source=ori3-model dependent=ori3-propose relation=cargo-direct" "同一clauseの否定/過去だけを除外し、現在のFoldStep肯定命令を警告すること: $mixedCurrentInstruction"
+        Assert-True (-not $result.Output.Contains('"permissionDecision"')) "混在clauseの現在肯定warningを非blockingに保つこと: $mixedCurrentInstruction"
+    }
+
+    $mixedTargetsInstruction = (
+        $dependencyScopeBlock +
+        "`nori3_model::FoldStepの既存fieldは変更しないで、ori3_app_core::DocumentViewへ新しいfieldを追加してください。"
+    )
+    $result = Invoke-Checker `
+        -PowerShellPath $powerShellCommand.Source `
+        -Action "Hook" `
+        -Payload (New-HookPayload -ToolName "Agent" -Text $mixedTargetsInstruction -TargetThreadId "01a10001")
+    Assert-Contains $result.Output "source=ori3-app-core dependent=desktop relation=wire-contract-peer" "肯定mutation segmentのDocumentViewだけをwarning sourceへ束縛すること"
+    Assert-True (-not $result.Output.Contains("source=ori3-model")) "否定segmentのFoldStepをwarning sourceへ混入させないこと"
+    Assert-True (-not $result.Output.Contains("dependent=ori3-propose")) "否定segment由来のpropose警告を出さないこと"
+    Assert-True (-not $result.Output.Contains('"permissionDecision"')) "target束縛warningを非blockingに保つこと"
+
+    Write-Output "[35/38] 禁止・過去・調査・逆依存なしを公開型変更warningへ誤分類しない"
+    $dependencyNegativeInstructions = @(
+        "``crates/ori3-model/src/lib.rs::FoldStep``のfieldを追加しないでください。",
+        "``crates/ori3-model/src/lib.rs::FoldStep``へのfield追加を許可しないでください。",
+        "``crates/ori3-model/src/lib.rs::FoldStep``へfieldを追加した結果を報告済みです。",
+        "``crates/ori3-model/src/lib.rs::FoldStep``へfieldを追加してくださいと以前指示しました。",
+        "``crates/ori3-model/src/lib.rs::FoldStep``へのfield追加が必要か調べてください。",
+        "``crates/ori3-web/src/lib.rs::WebOnlyOutcome``へfieldを追加してください。",
+        "UnknownOutcomeへ項目を追加してください。"
+    )
+    foreach ($negativeInstruction in $dependencyNegativeInstructions) {
+        $negativeText = $dependencyScopeBlock + "`n" + $negativeInstruction
+        $result = Invoke-Checker `
+            -PowerShellPath $powerShellCommand.Source `
+            -Action "Hook" `
+            -Payload (New-HookPayload -ToolName "Agent" -Text $negativeText -TargetThreadId "01a10001")
+        Assert-Equal $result.ExitCode 0 "依存warning陰性fixtureのHook processが正常終了すること: $negativeInstruction"
+        Assert-True (-not $result.Output.Contains('"permissionDecision":"deny"')) "依存warning陰性fixtureを拒否しないこと: $negativeInstruction"
+        Assert-True (-not $result.Output.Contains("AGENT_PUBLIC_TYPE_DEPENDENCY_WARNING")) "禁止・過去・調査・逆依存なしを警告しないこと: $negativeInstruction"
+    }
+    $webFixturePath = Join-Path $repositoryRoot "crates/ori3-web/src/lib.rs"
+    $originalWebFixture = [IO.File]::ReadAllText($webFixturePath, $script:Utf8NoBom)
+    try {
+        [IO.File]::WriteAllText($webFixturePath, ($originalWebFixture + "`npub struct FoldStep;"), $script:Utf8NoBom)
+        $ambiguousFoldStepText = $dependencyScopeBlock + "`nFoldStepへ項目を追加してください。"
+        $result = Invoke-Checker `
+            -PowerShellPath $powerShellCommand.Source `
+            -Action "Hook" `
+            -Payload (New-HookPayload -ToolName "Agent" -Text $ambiguousFoldStepText -TargetThreadId "01a10001")
+        Assert-True (-not $result.Output.Contains("AGENT_PUBLIC_TYPE_DEPENDENCY_WARNING")) "同名pub型ownerが複数なら依存方向を断定しないこと"
+        Assert-True (-not $result.Output.Contains('"permissionDecision":"deny"')) "同名pub型ownerが複数でも委譲を拒否しないこと"
+    }
+    finally {
+        [IO.File]::WriteAllText($webFixturePath, $originalWebFixture, $script:Utf8NoBom)
+    }
+
+    Write-Output "[36/38] 依存側も同じwrite scopeなら公開型変更warningを出さない"
+    if (-not $dependencyWatcher.HasExited) {
+        $dependencyWatcher.Kill()
+        [void]$dependencyWatcher.WaitForExit(10000)
+    }
+    foreach ($runtimeFile in @($runtimePath, $outputPath, $lockPath)) {
+        if (Test-Path -LiteralPath $runtimeFile -PathType Leaf) {
+            Remove-Item -LiteralPath $runtimeFile -Force
+        }
+    }
+    $dependencyCoveredScopePaths = @(
+        "crates/ori3-model/src",
+        "crates/ori3-propose/src",
+        "apps/desktop/src-tauri",
+        "crates/ori3-web/src"
+    )
+    $dependencyCoveredDefinition = [ordered]@{
+        scopeSchemaVersion = 1
+        agents = @(
+            (New-StrictAgentDefinition `
+                -Name "dependency-covered-agent" `
+                -ThreadId "01a10001" `
+                -ReadOnly $false `
+                -ReportPath "scratchpad/agent-report.md" `
+                -SourcePaths $dependencyCoveredScopePaths),
+            (New-StrictAgentDefinition `
+                -Name "dependency-covered-read-only" `
+                -ThreadId "01a10002" `
+                -ReadOnly $true `
+                -ReportPath "scratchpad/agent-report-2.md")
+        )
+    }
+    Write-TestDefinition -Definition $dependencyCoveredDefinition
+    $dependencyCoveredWatcher = Start-ContinuousWatcher -PowerShellPath $powerShellCommand.Source
+    $deadline = (Get-Date).AddSeconds(20)
+    while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $runtimePath -PathType Leaf)) {
+        if ($dependencyCoveredWatcher.HasExited) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    Assert-True (-not $dependencyCoveredWatcher.HasExited) "依存側scope内fixtureのwatcherが継続稼働すること"
+    $dependencyCoveredScopeBlock = New-AgentWatchScopeBlock `
+        -ThreadId "01a10001" `
+        -ReadOnly $false `
+        -ReportPath "scratchpad/agent-report.md" `
+        -SourcePaths $dependencyCoveredScopePaths
+    $coveredFoldStepInstruction = $dependencyCoveredScopeBlock + "`nFoldStepへserde-defaultの項目を追加してください。"
+    $result = Invoke-Checker `
+        -PowerShellPath $powerShellCommand.Source `
+        -Action "Hook" `
+        -Payload (New-HookPayload -ToolName "Agent" -Text $coveredFoldStepInstruction -TargetThreadId "01a10001")
+    Assert-Equal $result.ExitCode 0 "依存側scope内fixtureのHook processが正常終了すること"
+    Assert-True (-not $result.Output.Contains("AGENT_PUBLIC_TYPE_DEPENDENCY_WARNING")) "direct依存側がwrite scope内なら警告しないこと"
+    Assert-True (-not $result.Output.Contains('"permissionDecision":"deny"')) "依存側scope内の公開型変更を拒否しないこと"
+
+    Write-Output "[37/38] 公開型変更intentなしではCargoを読まず、読取不能でもwarningだけにする"
+    $validWorkspaceManifest = [IO.File]::ReadAllText((Join-Path $repositoryRoot "Cargo.toml"), $script:Utf8NoBom)
+    try {
+        [IO.File]::WriteAllText((Join-Path $repositoryRoot "Cargo.toml"), "[workspace]`nresolver = `"2`"", $script:Utf8NoBom)
+        $ordinaryText = $dependencyCoveredScopeBlock + "`n通常の表示文言を整理してください。"
+        $result = Invoke-Checker `
+            -PowerShellPath $powerShellCommand.Source `
+            -Action "Hook" `
+            -Payload (New-HookPayload -ToolName "Agent" -Text $ordinaryText -TargetThreadId "01a10001")
+        Assert-Equal $result.ExitCode 0 "公開型変更intentなしのHook processが正常終了すること"
+        Assert-True (-not $result.Output.Contains("AGENT_PUBLIC_TYPE_DEPENDENCY_CHECK_UNAVAILABLE")) "公開型変更intentなしでは壊れたCargo.tomlを読まないこと"
+        Assert-True (-not $result.Output.Contains('"permissionDecision":"deny"')) "Cargoを読む必要のない通常指示を拒否しないこと"
+
+        $ledgerBeforeUnavailable = [IO.File]::ReadAllText($sendLedgerPath, $script:Utf8NoBom) | ConvertFrom-Json
+        $beforeUnavailableUtc = [DateTime]::Parse([string]@($ledgerBeforeUnavailable.records)[0].lastCoordinatorSendUtc).ToUniversalTime()
+        Start-Sleep -Milliseconds 20
+        $result = Invoke-Checker `
+            -PowerShellPath $powerShellCommand.Source `
+            -Action "Hook" `
+            -Payload (New-HookPayload -ToolName "Agent" -Text $coveredFoldStepInstruction -TargetThreadId "01a10001")
+        Assert-Equal $result.ExitCode 0 "Cargo依存読取不能のHook processも正常終了すること"
+        Assert-Contains $result.Output "AGENT_PUBLIC_TYPE_DEPENDENCY_CHECK_UNAVAILABLE" "強い公開型変更intentではCargo読取不能を見えるwarningにすること"
+        Assert-Contains $result.Output '"additionalContext"' "Cargo読取不能もadditionalContextだけで返すこと"
+        Assert-True (-not $result.Output.Contains('"permissionDecision"')) "Cargo読取不能warningでdeny/allowを出さないこと"
+        $ledgerAfterUnavailable = [IO.File]::ReadAllText($sendLedgerPath, $script:Utf8NoBom) | ConvertFrom-Json
+        $afterUnavailableUtc = [DateTime]::Parse([string]@($ledgerAfterUnavailable.records)[0].lastCoordinatorSendUtc).ToUniversalTime()
+        Assert-True ($afterUnavailableUtc -gt $beforeUnavailableUtc) "Cargo読取不能warningでもledgerを更新すること"
+    }
+    finally {
+        [IO.File]::WriteAllText((Join-Path $repositoryRoot "Cargo.toml"), $validWorkspaceManifest, $script:Utf8NoBom)
+    }
+
+    Write-Output "[38/38] Cargo依存warningを5秒未満かつ対照中央値+1秒以内に保つ"
+    if (-not $dependencyCoveredWatcher.HasExited) {
+        $dependencyCoveredWatcher.Kill()
+        [void]$dependencyCoveredWatcher.WaitForExit(10000)
+    }
+    foreach ($runtimeFile in @($runtimePath, $outputPath, $lockPath)) {
+        if (Test-Path -LiteralPath $runtimeFile -PathType Leaf) {
+            Remove-Item -LiteralPath $runtimeFile -Force
+        }
+    }
+    Write-TestDefinition -Definition $dependencyDefinition
+    $dependencyPerformanceWatcher = Start-ContinuousWatcher -PowerShellPath $powerShellCommand.Source
+    $deadline = (Get-Date).AddSeconds(20)
+    while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $runtimePath -PathType Leaf)) {
+        if ($dependencyPerformanceWatcher.HasExited) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    Assert-True (-not $dependencyPerformanceWatcher.HasExited) "依存warning性能fixtureのwatcherが継続稼働すること"
+    $dependencyControlMilliseconds = New-Object System.Collections.Generic.List[long]
+    $dependencyGuardMilliseconds = New-Object System.Collections.Generic.List[long]
+    for ($pairIndex = 0; $pairIndex -lt 3; $pairIndex++) {
+        $pairKinds = if (($pairIndex % 2) -eq 0) { @("control", "warning") } else { @("warning", "control") }
+        foreach ($pairKind in $pairKinds) {
+            $pairText = if ($pairKind -eq "control") {
+                $dependencyScopeBlock + "`n既存の表示文言を確認してください。"
+            }
+            else {
+                $foldStepInstruction
+            }
+            $dependencyStopwatch = [Diagnostics.Stopwatch]::StartNew()
+            $pairedResult = Invoke-Checker `
+                -PowerShellPath $powerShellCommand.Source `
+                -Action "Hook" `
+                -Payload (New-HookPayload -ToolName "Agent" -Text $pairText -TargetThreadId "01a10001")
+            $dependencyStopwatch.Stop()
+            if ($pairKind -eq "control") {
+                $dependencyControlMilliseconds.Add($dependencyStopwatch.ElapsedMilliseconds)
+                Assert-True (-not $pairedResult.Output.Contains("AGENT_PUBLIC_TYPE_DEPENDENCY_WARNING")) "性能対照へ依存warningを出さないこと: $pairIndex"
+            }
+            else {
+                $dependencyGuardMilliseconds.Add($dependencyStopwatch.ElapsedMilliseconds)
+                Assert-Contains $pairedResult.Output "AGENT_PUBLIC_TYPE_DEPENDENCY_WARNING" "性能計測でも依存warningを返すこと: $pairIndex"
+                Assert-True (-not $pairedResult.Output.Contains('"permissionDecision"')) "性能計測のwarningも非blockingに保つこと: $pairIndex"
+            }
+            Assert-Equal $pairedResult.ExitCode 0 "依存warning性能計測processが正常終了すること: $pairKind/$pairIndex"
+            Assert-True ($dependencyStopwatch.Elapsed.TotalSeconds -lt 5.0) "依存warning性能計測を実設定timeout 5秒未満で終えること: $pairKind/$pairIndex"
+        }
+    }
+    $dependencyControlMedian = @($dependencyControlMilliseconds | Sort-Object)[1]
+    $dependencyGuardMedian = @($dependencyGuardMilliseconds | Sort-Object)[1]
+    Write-Output ("DEPENDENCY_WARNING_PAIRED_CONTROL_MEDIAN_MS={0}" -f $dependencyControlMedian)
+    Write-Output ("DEPENDENCY_WARNING_PAIRED_GUARD_MEDIAN_MS={0}" -f $dependencyGuardMedian)
+    Assert-True ($dependencyGuardMedian -le ($dependencyControlMedian + 1000)) "同条件3回の中央値でCargo依存warningの追加時間を1秒以内に保つこと"
+
+    Write-Output "[39/39] strict sourcePathが外部worktreeでも所属Cargo workspaceのnormal/target逆依存を警告する"
+    if (-not $dependencyPerformanceWatcher.HasExited) {
+        $dependencyPerformanceWatcher.Kill()
+        [void]$dependencyPerformanceWatcher.WaitForExit(10000)
+    }
+    foreach ($runtimeFile in @($runtimePath, $outputPath, $lockPath)) {
+        if (Test-Path -LiteralPath $runtimeFile -PathType Leaf) {
+            Remove-Item -LiteralPath $runtimeFile -Force
+        }
+    }
+    $externalWorkspaceRoot = Join-Path $sandboxRoot "external-worktree"
+    $externalFixtureFiles = [ordered]@{
+        "Cargo.toml" = @'
+[workspace]
+resolver = "2"
+members = [
+  "crates/external-model",
+  "crates/external-normal",
+  "crates/external-target",
+]
+
+[workspace.dependencies]
+external-model = { path = "crates/external-model" }
+'@
+        "crates/external-model/Cargo.toml" = @'
+[package]
+name = "external-model"
+version = "0.0.0"
+'@
+        "crates/external-normal/Cargo.toml" = @'
+[package]
+name = "external-normal"
+version = "0.0.0"
+
+[dependencies]
+external-model.workspace = true
+'@
+        "crates/external-target/Cargo.toml" = @'
+[package]
+name = "external-target"
+version = "0.0.0"
+
+[target.'cfg(any())'.dependencies]
+external-model.workspace = true
+'@
+        "crates/external-model/src/lib.rs" = "pub struct ExternalFoldStep;"
+        "crates/external-normal/src/lib.rs" = "pub fn normal_user() {}"
+        "crates/external-target/src/lib.rs" = "pub fn target_user() {}"
+    }
+    foreach ($externalEntry in $externalFixtureFiles.GetEnumerator()) {
+        $externalPath = Join-Path $externalWorkspaceRoot ([string]$externalEntry.Key)
+        [void][IO.Directory]::CreateDirectory((Split-Path -Parent $externalPath))
+        [IO.File]::WriteAllText($externalPath, [string]$externalEntry.Value, $script:Utf8NoBom)
+    }
+    $externalSourcePath = Join-Path $externalWorkspaceRoot "crates/external-model/src"
+    $externalDefinition = [ordered]@{
+        scopeSchemaVersion = 1
+        agents = @(
+            (New-StrictAgentDefinition `
+                -Name "external-worktree-dependency-agent" `
+                -ThreadId "01a10004" `
+                -ReadOnly $false `
+                -ReportPath "scratchpad/agent-report.md" `
+                -SourcePaths @($externalSourcePath)),
+            (New-StrictAgentDefinition `
+                -Name "external-worktree-read-only" `
+                -ThreadId "01a10002" `
+                -ReadOnly $true `
+                -ReportPath "scratchpad/agent-report-2.md")
+        )
+    }
+    Write-TestDefinition -Definition $externalDefinition
+    $externalDependencyWatcher = Start-ContinuousWatcher -PowerShellPath $powerShellCommand.Source
+    $deadline = (Get-Date).AddSeconds(20)
+    while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $runtimePath -PathType Leaf)) {
+        if ($externalDependencyWatcher.HasExited) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    Assert-True (-not $externalDependencyWatcher.HasExited) "外部worktree依存fixtureのwatcherが継続稼働すること"
+    Assert-True (Test-Path -LiteralPath $runtimePath -PathType Leaf) "外部worktree依存fixtureがruntimeを発行すること"
+    $externalScopeBlock = New-AgentWatchScopeBlock `
+        -ThreadId "01a10004" `
+        -ReadOnly $false `
+        -ReportPath "scratchpad/agent-report.md" `
+        -SourcePaths @($externalSourcePath)
+    $externalInstruction = $externalScopeBlock + "`nExternalFoldStepへfieldを追加してください。"
+    $externalStopwatch = [Diagnostics.Stopwatch]::StartNew()
+    $result = Invoke-Checker `
+        -PowerShellPath $powerShellCommand.Source `
+        -Action "Hook" `
+        -Payload (New-HookPayload -ToolName "Agent" -Text $externalInstruction -TargetThreadId "01a10004")
+    $externalStopwatch.Stop()
+    Assert-Equal $result.ExitCode 0 "外部worktree依存warningのHook processが正常終了すること"
+    Assert-Contains $result.Output '"additionalContext"' "外部worktree依存warningをadditionalContextで返すこと"
+    Assert-Contains $result.Output "source=external-model dependent=external-normal relation=cargo-direct" "外部worktreeのnormal逆依存を警告すること"
+    Assert-Contains $result.Output "source=external-model dependent=external-target relation=cargo-direct" "外部worktreeのtarget逆依存を警告すること"
+    Assert-True (-not $result.Output.Contains('"permissionDecision"')) "外部worktree依存warningでdeny/allowを明示しないこと"
+    Assert-True (-not $result.Output.Contains("AGENT_PUBLIC_TYPE_DEPENDENCY_CHECK_UNAVAILABLE")) "外部worktreeをmain Root固定による読取不能へ落とさないこと"
+    Assert-True ($externalStopwatch.Elapsed.TotalSeconds -lt 5.0) "外部worktree依存warningを実設定timeout 5秒未満で終えること"
+
+    Write-Output ("check-agent-watch self-test passed: 39 cases, {0} assertions" -f $script:AssertionCount)
 }
 finally {
     Remove-TestSandbox
