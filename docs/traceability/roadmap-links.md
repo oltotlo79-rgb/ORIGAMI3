@@ -2,19 +2,20 @@
 
 この台帳は `scripts/doc-link-audit.ps1` が生成する。各checkboxの本文にある証拠リンクと同じIDを持ち、検査名は `docs/traceability/roadmap-evidence-test-names.txt` の対象限定台帳で照合する。これはリポジトリ全検査の件数を主張しない。
 
-- ロードマップ全体: 186/186件 (checked=174, unchecked=12)
-- 証拠台帳対象: 184/186件
-- 明示対象外: 2件
-- 検査名台帳対象: 52/52件（roadmap-mapped、リポジトリ全検査数は主張しない）
-- 検査定義対象: 52/52件、source 33/33ファイル、definition tree SHA-256: `454f919f4a8d94c9381cb1b2acbd0eb3d604aa6f4a346711c0530ca85b4e1a47`
-- 実行モード: active-default=51件、ignored-explicit=1件（後者はCI・check-ci・品質規約の明示実行を照合）
-- 検査名台帳SHA-256: `18bb2dc46e94a59329ff05064478ff256bf9dcb9873a526bf1b8f0828a280c6a`
-- ロードマップSHA-256: `9ad9aac7c0b9c9d030d58682db9ffda8913a9c5007f99b8065d3ae08f5f67609`
-- 生成hash: `30a0d26ae30cbf80f6617e9504c8bc3046919810013e941f52af380ddae2b263`
+- ロードマップ全体: 186/186件 (checked=175, unchecked=11)
+- 証拠台帳対象: 185/186件
+- 明示対象外: 1件
+- 検査名台帳対象: 61/61件（roadmap-mapped、リポジトリ全検査数は主張しない）
+- 検査定義対象: 61/61件、source 38/38ファイル、definition tree SHA-256: `207b758649c6db1bd30a55371fea160685f26c4694c7afe07a060deb39a47455`
+- 実行モード: active-default=60件、ignored-explicit=1件（後者はCI・check-ci・品質規約の明示実行を照合）
+- 検査名台帳SHA-256: `36a6dbbb0024bcb72b8bc278501d7ba13c8a00c77d3d11c08c2f2e3cb7e3eeb9`
+- ロードマップSHA-256: `9ebe6cac4959a71e13223ced0504534a0a1eb30403b5d6150178fd71be29b2ff`
+- 生成hash: `d529c79ea78195154f12a794f3208be8ba7afd72e90d309b39ccd4dd60f04271`
 - M6受入: checkbox外の手動受入1件
 
 | link ID | evidence | checkbox | progress |
 |---|---|---|---|
+| <a id="roadmap-evidence-additional-fold-all-c01"></a>`ADDITIONAL.FOLD-ALL.C01` | 自動 `fold_all::tests::targets_use_mountain_positive_valley_negative_and_skip_non_hinges / fold_all::tests::invalid_inputs_are_errors_but_a_calculated_pose_has_no_layer_order / src/components/FoldAllPreview.dom.test.tsx > 全部いっぺんに折ってみる画面 > 既存パネルの入口から0〜100%のつまみと記録でない約束を常時表示する / src/components/FoldAllPreview.dom.test.tsx > 全部いっぺんに折ってみる画面 > 0・25・50・75・100%と計算待ちの間ずっと仮の形で手順ではないと示す / src/store/foldAllPreview.test.ts > 全部の折り目をいっぺんに動かす一時表示 > 保存しても一斉形や手順を記録せず、専用表示を続ける / src/store/foldAllPreview.test.ts > 全部の折り目をいっぺんに動かす一時表示 > Undoは作品履歴を進めず、通常表示へ戻るだけ / src/store/foldAllPreview.test.ts > 全部の折り目をいっぺんに動かす一時表示 > Redoは作品履歴を進めず、通常表示へ戻るだけ / commands::tests::pose_commands_match_the_cross_runtime_diagonal_fixtures / src/store/foldAllPreview.savedFile.test.ts > 一斉表示中の73%を実ファイルへ保存せず、新しいbackendで開き直しても手順・履歴に現れない` | checked | consistent |
 | <a id="roadmap-evidence-m0-t0-1-c01"></a>`M0.T0-1.C01` | 既存 `CHECK.CURRENT-STATUS.WORKSPACE-MEMBERS` | checked | historical-link-in-M0-evidence-table |
 | <a id="roadmap-evidence-m0-t0-1-c02"></a>`M0.T0-1.C02` | 既存 `MANUAL.M0.T0-1.C02.CRATE-SCAFFOLD` | checked | historical-link-in-M0-evidence-table |
 | <a id="roadmap-evidence-m0-t0-1-c03"></a>`M0.T0-1.C03` | 既存 `MANUAL.M0.T0-1.C03.DEPENDENCY-BASELINE` | checked | historical-link-in-M0-evidence-table |

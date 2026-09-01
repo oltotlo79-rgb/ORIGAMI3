@@ -1,9 +1,9 @@
 # ORIGAMI3-ROADMAP-EVIDENCE-TEST-NAMES schema=2
-# scope=roadmap-mapped names=52 source-files=33 repository-test-total=not-claimed
-# definition-tree-sha256=454f919f4a8d94c9381cb1b2acbd0eb3d604aa6f4a346711c0530ca85b4e1a47
+# scope=roadmap-mapped names=61 source-files=38 repository-test-total=not-claimed
+# definition-tree-sha256=207b758649c6db1bd30a55371fea160685f26c4694c7afe07a060deb39a47455
 # この一覧はリポジトリ全検査の一覧ではない。scripts/doc-link-audit.ps1 が
 # ロードマップ証拠へ割り当てる検査名と実sourceを1対1で保存する。
-# definition hashは、下記52件の実sourceにあるtest属性・関数宣言又は
+# definition hashは、下記61件の実sourceにあるtest属性・関数宣言又は
 # Vitestのsuite/test宣言と、Rust/Vitest実source全体（LF正規化）を含むmanifestのhashである。
 # 割当又はtest宣言を変えたら、実在するtest定義を確認して同時更新する。
 autosave::tests::autosave_skips_clean_document_and_writes_untitled_to_app_data | apps/desktop/src-tauri/src/autosave.rs
@@ -17,6 +17,7 @@ autosave::tests::restore_recovers_the_same_document | apps/desktop/src-tauri/src
 autosave::tests::two_real_processes_keep_both_documents_when_autosave_transactions_overlap | apps/desktop/src-tauri/src/autosave.rs
 balloon_replays_with_finish_soft_on_and_off_three_times_without_penetration | crates/ori3-layers/tests/acceptance_balloon.rs
 completed_crane_is_flat_and_symmetric | crates/ori3-layers/tests/acceptance_crane.rs
+commands::tests::pose_commands_match_the_cross_runtime_diagonal_fixtures | apps/desktop/src-tauri/src/commands.rs
 compare_two_ways_on_allowed_corpus_anchors | crates/ori3-propose/tests/corpus.rs
 cp_svg::tests::each_edge_kind_has_its_own_style | crates/ori3-export/src/cp_svg.rs
 crane_replays_with_finish_soft_on_and_off_three_times_without_penetration | crates/ori3-layers/tests/acceptance_crane.rs
@@ -25,6 +26,8 @@ diagram_pdf_and_svg_create_nonempty_structured_files | apps/desktop/src-tauri/te
 extraction_is_deterministic | crates/ori3-cp/tests/faces.rs
 finish_soft_replay_uses_the_latest_completed_pose_at_each_position | crates/ori3-model/tests/serde_roundtrip.rs
 finish_soft_round_trips_three_values_only_with_measured_tolerance | crates/ori3-model/tests/serde_roundtrip.rs
+fold_all::tests::invalid_inputs_are_errors_but_a_calculated_pose_has_no_layer_order | crates/ori3-rigid/src/fold_all.rs
+fold_all::tests::targets_use_mountain_positive_valley_negative_and_skip_non_hinges | crates/ori3-rigid/src/fold_all.rs
 folding_only_top_layer_keeps_lower_layers_in_place | crates/ori3-layers/tests/fold_through.rs
 full_replay_folds_flat_and_layers_are_a_permutation | crates/ori3-layers/tests/replay.rs
 half_folded_square_is_mirror_pair_with_right_face_on_top | crates/ori3-layers/tests/flat_state.rs
@@ -42,8 +45,14 @@ src/lib/construct.test.ts > 作図の計算 > 直角の二等分線は45°方向
 src/lib/layerMotion.test.ts > 汎用層操作の入力 > 既存折り目のReflectをregionなし・Keepへ変換する | apps/desktop/src/lib/layerMotion.test.ts
 src/lib/playback.test.ts > advancePlayback > 最終手順を折り終えたら止まる | apps/desktop/src/lib/playback.test.ts
 src/App.dom.test.tsx > startup recovery check > checks recovery exactly once after preparing the new document | apps/desktop/src/App.dom.test.tsx
+src/components/FoldAllPreview.dom.test.tsx > 全部いっぺんに折ってみる画面 > 0・25・50・75・100%と計算待ちの間ずっと仮の形で手順ではないと示す | apps/desktop/src/components/FoldAllPreview.dom.test.tsx
+src/components/FoldAllPreview.dom.test.tsx > 全部いっぺんに折ってみる画面 > 既存パネルの入口から0〜100%のつまみと記録でない約束を常時表示する | apps/desktop/src/components/FoldAllPreview.dom.test.tsx
 src/components/RecoveryDialog.dom.test.tsx > 復旧ダイアログ > 残っていれば理由と選択肢を日本語で出す | apps/desktop/src/components/RecoveryDialog.dom.test.tsx
 src/store/appStore.test.ts > appStore 折り角度の指定 > 連続操作は16msで間引かれ、最後の角度が必ず送られる | apps/desktop/src/store/appStore.test.ts
+src/store/foldAllPreview.savedFile.test.ts > 一斉表示中の73%を実ファイルへ保存せず、新しいbackendで開き直しても手順・履歴に現れない | apps/desktop/src/store/foldAllPreview.savedFile.test.ts
+src/store/foldAllPreview.test.ts > 全部の折り目をいっぺんに動かす一時表示 > Redoは作品履歴を進めず、通常表示へ戻るだけ | apps/desktop/src/store/foldAllPreview.test.ts
+src/store/foldAllPreview.test.ts > 全部の折り目をいっぺんに動かす一時表示 > Undoは作品履歴を進めず、通常表示へ戻るだけ | apps/desktop/src/store/foldAllPreview.test.ts
+src/store/foldAllPreview.test.ts > 全部の折り目をいっぺんに動かす一時表示 > 保存しても一斉形や手順を記録せず、専用表示を続ける | apps/desktop/src/store/foldAllPreview.test.ts
 src/store/ipcQueue.test.ts > createSerialQueue > 前の要求が完了するまで次の要求を開始しない(発行順に直列実行) | apps/desktop/src/store/ipcQueue.test.ts
 store::tests::add_segment_undo_redo_roundtrip | apps/desktop/src-tauri/src/store.rs
 store::tests::cushion_then_cupboard_fold_only_with_fold_through | apps/desktop/src-tauri/src/store.rs

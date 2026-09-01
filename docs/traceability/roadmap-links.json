@@ -3,41 +3,35 @@
     "generated_by":  "scripts/doc-link-audit.ps1",
     "roadmap_snapshot":  {
                              "schema":  1,
-                             "sha256":  "77ddd527f223af20ca79429de9a77bbaa120ef7493e4e68a2f9eab8637cc1534",
-                             "policy_sha256":  "96efa8affbb7a0e4d80291b990575976157e5fa6230bc98ee6807311d805c643",
+                             "sha256":  "9ebe6cac4959a71e13223ced0504534a0a1eb30403b5d6150178fd71be29b2ff",
+                             "policy_sha256":  "8856bb4db5fd7b43343b0cc50448e9b5f39f99cd00ffa02bbc5d34011fd70cae",
                              "total":  186,
                              "audited":  186,
-                             "checked":  172,
-                             "unchecked":  14
+                             "checked":  175,
+                             "unchecked":  11
                          },
     "test_name_inventory":  {
                                 "path":  "docs/traceability/roadmap-evidence-test-names.txt",
                                 "schema":  2,
                                 "scope":  "roadmap-mapped",
-                                "audited":  52,
-                                "mapped":  52,
-                                "source_files":  33,
-                                "definition_tree_sha256":  "454f919f4a8d94c9381cb1b2acbd0eb3d604aa6f4a346711c0530ca85b4e1a47",
+                                "audited":  61,
+                                "mapped":  61,
+                                "source_files":  38,
+                                "definition_tree_sha256":  "207b758649c6db1bd30a55371fea160685f26c4694c7afe07a060deb39a47455",
                                 "execution_modes":  {
-                                                        "active_default":  51,
+                                                        "active_default":  60,
                                                         "ignored_explicit":  1
                                                     },
                                 "repository_test_total":  null,
-                                "sha256":  "18bb2dc46e94a59329ff05064478ff256bf9dcb9873a526bf1b8f0828a280c6a"
+                                "sha256":  "36a6dbbb0024bcb72b8bc278501d7ba13c8a00c77d3d11c08c2f2e3cb7e3eeb9"
                             },
     "traceability_accounting":  {
-                                    "linked_checkbox_count":  184,
-                                    "explicit_outside_count":  2,
+                                    "linked_checkbox_count":  185,
+                                    "explicit_outside_count":  1,
                                     "unclassified_count":  0,
                                     "accounted_total":  186
                                 },
     "explicit_outside":  [
-                             {
-                                 "id":  "ADDITIONAL.FOLD-ALL.C01",
-                                 "line_number":  970,
-                                 "state":  "unchecked",
-                                 "text_sha256":  "9466326a292e711303b0abe1d78ed4f2a0b0d64c1a07456b3510ba35366987c3"
-                             },
                              {
                                  "id":  "ADDITIONAL.FOLD-IO.C01",
                                  "line_number":  966,
@@ -46,6 +40,38 @@
                              }
                          ],
     "records":  [
+                    {
+                        "id":  "ADDITIONAL.FOLD-ALL.C01",
+                        "scope":  "ADDITIONAL",
+                        "task":  "Fold All",
+                        "checkbox":  true,
+                        "roadmap_line":  970,
+                        "checkbox_state":  "checked",
+                        "checkbox_text":  "山折り・谷折りの全折り目を共通の0〜100%で一時表示する。これは記録された手順ではないことを常に示し、手順、保存、Undo/Redoには残さない。",
+                        "evidence_id":  "TEST.ADDITIONAL.FOLD-ALL.C01",
+                        "evidence_type":  "test",
+                        "test_name":  "fold_all::tests::targets_use_mountain_positive_valley_negative_and_skip_non_hinges",
+                        "test_names":  [
+                                           "fold_all::tests::targets_use_mountain_positive_valley_negative_and_skip_non_hinges",
+                                           "fold_all::tests::invalid_inputs_are_errors_but_a_calculated_pose_has_no_layer_order",
+                                           "src/components/FoldAllPreview.dom.test.tsx \u003e 全部いっぺんに折ってみる画面 \u003e 既存パネルの入口から0〜100%のつまみと記録でない約束を常時表示する",
+                                           "src/components/FoldAllPreview.dom.test.tsx \u003e 全部いっぺんに折ってみる画面 \u003e 0・25・50・75・100%と計算待ちの間ずっと仮の形で手順ではないと示す",
+                                           "src/store/foldAllPreview.test.ts \u003e 全部の折り目をいっぺんに動かす一時表示 \u003e 保存しても一斉形や手順を記録せず、専用表示を続ける",
+                                           "src/store/foldAllPreview.test.ts \u003e 全部の折り目をいっぺんに動かす一時表示 \u003e Undoは作品履歴を進めず、通常表示へ戻るだけ",
+                                           "src/store/foldAllPreview.test.ts \u003e 全部の折り目をいっぺんに動かす一時表示 \u003e Redoは作品履歴を進めず、通常表示へ戻るだけ",
+                                           "commands::tests::pose_commands_match_the_cross_runtime_diagonal_fixtures",
+                                           "src/store/foldAllPreview.savedFile.test.ts \u003e 一斉表示中の73%を実ファイルへ保存せず、新しいbackendで開き直しても手順・履歴に現れない"
+                                       ],
+                        "test_mapping_origin":  "link-id",
+                        "manual_id":  null,
+                        "commit_hash":  null,
+                        "commit_subject":  null,
+                        "commit_main_ancestor":  null,
+                        "progress_state":  "consistent",
+                        "progress_task_applicable":  false,
+                        "progress_task_id":  null,
+                        "progress_task_recorded":  false
+                    },
                     {
                         "id":  "M0.T0-1.C01",
                         "scope":  "M0",
@@ -2749,8 +2775,8 @@
                         "task":  "Task 2-8",
                         "checkbox":  true,
                         "roadmap_line":  742,
-                        "checkbox_state":  "unchecked",
-                        "checkbox_text":  "同じapp-dataを共有する複数プロセスでも、OS排他とsession識別により各作品の自動保存候補を失わず、強制終了後に復旧できる",
+                        "checkbox_state":  "checked",
+                        "checkbox_text":  "同じapp-dataを共有する複数プロセスでも、OS排他とsession識別により各作品の自動保存候補を失わず、強制終了後に復旧できる \u003c!-- 実行確認: clean_exit_never_discards_another_process_active_snapshot / forced_process_kill_then_new_process_restores_exact_document / restore_recovers_the_same_document / two_real_processes_keep_both_documents_when_autosave_transactions_overlap（証拠4件を含む autosave::tests:: 36 passed; 0 failed; 終了コード0） --\u003e",
                         "evidence_id":  "TEST.M2.T2-8.C04",
                         "evidence_type":  "test",
                         "test_name":  "autosave::tests::clean_exit_never_discards_another_process_active_snapshot",
@@ -2765,7 +2791,7 @@
                         "commit_hash":  null,
                         "commit_subject":  null,
                         "commit_main_ancestor":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_state":  "consistent",
                         "progress_task_applicable":  true,
                         "progress_task_id":  "2-8",
                         "progress_task_recorded":  true
@@ -2776,8 +2802,8 @@
                         "task":  "Task 2-8",
                         "checkbox":  true,
                         "roadmap_line":  743,
-                        "checkbox_state":  "unchecked",
-                        "checkbox_text":  "同じ作品を2つのアプリで開いて別々に編集した場合、後から保存しても先の変更を黙って消さず、同じアプリで続けて保存する場合は競合として妨げない",
+                        "checkbox_state":  "checked",
+                        "checkbox_text":  "同じ作品を2つのアプリで開いて別々に編集した場合、後から保存しても先の変更を黙って消さず、同じアプリで続けて保存する場合は競合として妨げない \u003c!-- 実行確認: saving_own_opened_document_twice_after_edits_does_not_conflict / two_real_processes_reject_a_stale_explicit_save_and_keep_the_first_save（証拠2件を含む desktop 244 passed; 0 failed; 終了コード0） --\u003e",
                         "evidence_id":  "TEST.M2.T2-8.C05",
                         "evidence_type":  "test",
                         "test_name":  "store::tests::saving_own_opened_document_twice_after_edits_does_not_conflict",
@@ -2790,7 +2816,7 @@
                         "commit_hash":  null,
                         "commit_subject":  null,
                         "commit_main_ancestor":  null,
-                        "progress_state":  "unchecked-but-progress-task-exists",
+                        "progress_state":  "consistent",
                         "progress_task_applicable":  true,
                         "progress_task_id":  "2-8",
                         "progress_task_recorded":  true

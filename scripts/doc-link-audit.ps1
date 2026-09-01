@@ -129,6 +129,7 @@ $expectedCheckboxCounts = [ordered]@{
     M3 = 45
     M4 = 19
     M5 = 1
+    ADDITIONAL = 1
 }
 
 # ここに書く名前は追跡対象の検査名台帳に実在するものだけである。
@@ -175,6 +176,17 @@ $taskTests = @{
 # link ID割当は手動受入の語句分類より優先し、UI文言を含んでも自動検査で立証済みの
 # 項目を手動証拠へ退行させない。
 $linkTests = @{
+    "ADDITIONAL.FOLD-ALL.C01" = @(
+        "fold_all::tests::targets_use_mountain_positive_valley_negative_and_skip_non_hinges"
+        "fold_all::tests::invalid_inputs_are_errors_but_a_calculated_pose_has_no_layer_order"
+        "src/components/FoldAllPreview.dom.test.tsx > 全部いっぺんに折ってみる画面 > 既存パネルの入口から0〜100%のつまみと記録でない約束を常時表示する"
+        "src/components/FoldAllPreview.dom.test.tsx > 全部いっぺんに折ってみる画面 > 0・25・50・75・100%と計算待ちの間ずっと仮の形で手順ではないと示す"
+        "src/store/foldAllPreview.test.ts > 全部の折り目をいっぺんに動かす一時表示 > 保存しても一斉形や手順を記録せず、専用表示を続ける"
+        "src/store/foldAllPreview.test.ts > 全部の折り目をいっぺんに動かす一時表示 > Undoは作品履歴を進めず、通常表示へ戻るだけ"
+        "src/store/foldAllPreview.test.ts > 全部の折り目をいっぺんに動かす一時表示 > Redoは作品履歴を進めず、通常表示へ戻るだけ"
+        "commands::tests::pose_commands_match_the_cross_runtime_diagonal_fixtures"
+        "src/store/foldAllPreview.savedFile.test.ts > 一斉表示中の73%を実ファイルへ保存せず、新しいbackendで開き直しても手順・履歴に現れない"
+    )
     "M2.T2-8.C01" = @(
         "autosave::tests::autosave_worker_waits_thirty_seconds_and_still_skips_clean_documents"
         "autosave::tests::autosave_skips_clean_document_and_writes_untitled_to_app_data"
@@ -666,7 +678,8 @@ $progressCompletedTaskNumbers = Get-ProgressCompletionTaskNumbers $progressText
 
 for ($index = 0; $index -lt $roadmapLines.Count; $index++) {
     $line = $roadmapLines[$index]
-    if ($line -match '^## M[0-9](?:\s|:)') {
+    if ($line -match '^## M[0-9](?:\s|:)' -or
+        [string]::Equals($line, '## 3. マイルストーン完了時の共通チェック', [StringComparison]::Ordinal)) {
         $scope = $null
         $task = $null
         $linkTask = $null
@@ -676,7 +689,14 @@ for ($index = 0; $index -lt $roadmapLines.Count; $index++) {
         $task = $null
         $linkTask = $null
     }
-    if ($line -match '^### (Task [0-9]+-[0-9A-Za-z]+)') {
+    if ([string]::Equals($line, '### 全部の折り目を一斉に折る一時表示', [StringComparison]::Ordinal)) {
+        # 追加目標のうち、完了済みのfold-allだけを証拠台帳へ昇格する。
+        # 直前のFOLD-IOは引き続き明示対象外であり、汎用的に追加目標を取り込まない。
+        $scope = "ADDITIONAL"
+        $task = "Fold All"
+        $linkTask = $task
+    }
+    elseif ($line -match '^### (Task [0-9]+-[0-9A-Za-z]+)') {
         $task = $Matches[1]
         $linkTask = $task
     }
@@ -732,7 +752,7 @@ for ($index = 0; $index -lt $roadmapLines.Count; $index++) {
             continue
         }
 
-        if ($scope -notin @("M1", "M2", "M3", "M4", "M5")) {
+        if ($scope -notin @("M1", "M2", "M3", "M4", "M5", "ADDITIONAL")) {
             $updatedLines.Add($line)
             continue
         }
@@ -741,16 +761,22 @@ for ($index = 0; $index -lt $roadmapLines.Count; $index++) {
         # link IDと既存の証拠名は、ロードマップ本文に書かれた既存markerと一致させる。
         # 一方、進捗照合は下の$task（作業18ならWork 18）だけで行う。
         $taskKey = "$scope|$linkTask"
-        if (-not $taskOrdinals.ContainsKey($taskKey)) { $taskOrdinals[$taskKey] = 0 }
-        $taskOrdinals[$taskKey] = [int]$taskOrdinals[$taskKey] + 1
-        $taskNumber = ([regex]::Match($linkTask, 'Task (?<number>[0-9]+-[0-9A-Za-z]+)')).Groups['number'].Value
-        if ($taskLinkIdOrder.ContainsKey($taskKey)) {
-            $orderedIds = @($taskLinkIdOrder[$taskKey])
-            if ($taskOrdinals[$taskKey] -gt $orderedIds.Count) { throw "Taskの固定link ID順序を超えました: $taskKey" }
-            $linkId = [string]$orderedIds[$taskOrdinals[$taskKey] - 1]
+        if ($scope -eq "ADDITIONAL") {
+            if ($taskKey -ne "ADDITIONAL|Fold All") { throw "未承認の追加目標を証拠台帳へ取り込めません: $taskKey" }
+            $linkId = "ADDITIONAL.FOLD-ALL.C01"
         }
         else {
-            $linkId = "$scope.T$taskNumber.C{0:D2}" -f $taskOrdinals[$taskKey]
+            if (-not $taskOrdinals.ContainsKey($taskKey)) { $taskOrdinals[$taskKey] = 0 }
+            $taskOrdinals[$taskKey] = [int]$taskOrdinals[$taskKey] + 1
+            $taskNumber = ([regex]::Match($linkTask, 'Task (?<number>[0-9]+-[0-9A-Za-z]+)')).Groups['number'].Value
+            if ($taskLinkIdOrder.ContainsKey($taskKey)) {
+                $orderedIds = @($taskLinkIdOrder[$taskKey])
+                if ($taskOrdinals[$taskKey] -gt $orderedIds.Count) { throw "Taskの固定link ID順序を超えました: $taskKey" }
+                $linkId = [string]$orderedIds[$taskOrdinals[$taskKey] - 1]
+            }
+            else {
+                $linkId = "$scope.T$taskNumber.C{0:D2}" -f $taskOrdinals[$taskKey]
+            }
         }
         $manualKind = Get-ManualKind $checkboxText
         $testName = $null
@@ -876,7 +902,7 @@ for ($index = 0; $index -lt $roadmapLines.Count; $index++) {
     $updatedLines.Add($line)
 }
 
-# M6はcheckboxがない。D9で指定された受入基準を、182件のcheckbox監査から分離して登録する。
+# M6はcheckboxがない。D9で指定された受入基準を、証拠link checkbox監査から分離して登録する。
 $records.Add([pscustomobject][ordered]@{
     id = "M6.ACCEPTANCE.C01"
     scope = "M6"
@@ -1166,7 +1192,7 @@ $report.Add('- 7-D1はM0の11 checkboxをinline markerとM0証拠表へ結んで
 $report.Add("")
 $report.Add("| 指標 | 件数 |")
 $report.Add("|---|---:|")
-$report.Add("| checkbox総数 | $($checkboxRecords.Count) / 182 |")
+$report.Add("| checkbox総数 | $($checkboxRecords.Count) / $($roadmapSnapshot.evidence_linked) |")
 $report.Add("| 7-D1既存link（M0） | $($preexistingD1Records.Count) |")
 $report.Add("| 7-D2〜D9で実在test名に結べた | $($testRecords.Count) |")
 $report.Add("| 7-D2〜D9で手動受入に結べた | $($checkboxManualRecords.Count) |")

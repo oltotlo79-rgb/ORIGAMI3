@@ -79,6 +79,24 @@ try {
     Assert-True ($write.Text -match "roadmap_accounted=$($snapshot.audited)/$($snapshot.total) checked=$($snapshot.checked) unchecked=$($snapshot.unchecked)") "全件の会計表示がありません"
     Assert-True ($write.Text -match "traceability_linked=$($snapshot.evidence_linked)/$($snapshot.total) explicit_outside=$($snapshot.explicit_outside) unclassified=0") "link+対象外の会計表示がありません"
     $generatedLedger = [IO.File]::ReadAllText((Join-Path $tempRoot "roadmap-links.json"), [Text.Encoding]::UTF8) | ConvertFrom-Json
+    Assert-True ([int]$generatedLedger.traceability_accounting.linked_checkbox_count -eq 185 -and [int]$generatedLedger.traceability_accounting.explicit_outside_count -eq 1) "追加目標昇格後の185+1会計が生成台帳にありません"
+    $outsideIds = @($generatedLedger.explicit_outside | ForEach-Object { [string]$_.id })
+    Assert-True ($outsideIds.Count -eq 1 -and $outsideIds[0] -eq 'ADDITIONAL.FOLD-IO.C01') "FOLD-IO以外を明示対象外へ残しています: $($outsideIds -join ', ')"
+    $foldAllRecords = @($generatedLedger.records | Where-Object { $_.id -eq 'ADDITIONAL.FOLD-ALL.C01' })
+    Assert-True ($foldAllRecords.Count -eq 1 -and [string]$foldAllRecords[0].scope -eq 'ADDITIONAL' -and [string]$foldAllRecords[0].checkbox_state -eq 'checked' -and [string]$foldAllRecords[0].evidence_id -eq 'TEST.ADDITIONAL.FOLD-ALL.C01' -and [string]$foldAllRecords[0].test_mapping_origin -eq 'link-id') "fold-all追加目標が完了済みの明示link-ID自動証拠として生成されません"
+    $expectedFoldAllTests = @(
+        'fold_all::tests::targets_use_mountain_positive_valley_negative_and_skip_non_hinges'
+        'fold_all::tests::invalid_inputs_are_errors_but_a_calculated_pose_has_no_layer_order'
+        'src/components/FoldAllPreview.dom.test.tsx > 全部いっぺんに折ってみる画面 > 既存パネルの入口から0〜100%のつまみと記録でない約束を常時表示する'
+        'src/components/FoldAllPreview.dom.test.tsx > 全部いっぺんに折ってみる画面 > 0・25・50・75・100%と計算待ちの間ずっと仮の形で手順ではないと示す'
+        'src/store/foldAllPreview.test.ts > 全部の折り目をいっぺんに動かす一時表示 > 保存しても一斉形や手順を記録せず、専用表示を続ける'
+        'src/store/foldAllPreview.test.ts > 全部の折り目をいっぺんに動かす一時表示 > Undoは作品履歴を進めず、通常表示へ戻るだけ'
+        'src/store/foldAllPreview.test.ts > 全部の折り目をいっぺんに動かす一時表示 > Redoは作品履歴を進めず、通常表示へ戻るだけ'
+        'commands::tests::pose_commands_match_the_cross_runtime_diagonal_fixtures'
+        'src/store/foldAllPreview.savedFile.test.ts > 一斉表示中の73%を実ファイルへ保存せず、新しいbackendで開き直しても手順・履歴に現れない'
+    )
+    Assert-True ((@($foldAllRecords[0].test_names) -join "`n") -ceq ($expectedFoldAllTests -join "`n")) "fold-allの9検査割当又は順序が一致しません"
+    Assert-True (@($generatedLedger.records | Where-Object { $_.id -eq 'ADDITIONAL.FOLD-IO.C01' }).Count -eq 0) "FOLD-IOを証拠recordへ取り込んでいます"
     $inventoryCount = [int]$generatedLedger.test_name_inventory.audited
     $mappedCount = [int]$generatedLedger.test_name_inventory.mapped
     $sourceFileCount = [int]$generatedLedger.test_name_inventory.source_files
@@ -291,6 +309,16 @@ try {
     [IO.File]::WriteAllBytes($roadmapFixture, [IO.File]::ReadAllBytes($productionRoadmap))
     $fixtureBaseline = Invoke-Sut @("-WriteTraceability", "-PreserveReport", "-TraceabilityPath", $tempRoot, "-RoadmapInputPath", $roadmapFixture)
     Assert-Exit $fixtureBaseline 0 "roadmap source fixture baseline"
+    $roadmapFixtureText = [IO.File]::ReadAllText($roadmapFixture, [Text.Encoding]::UTF8)
+    $renamedFoldAllHeading = $roadmapFixtureText.Replace(
+        '### 全部の折り目を一斉に折る一時表示',
+        '### 全部の折り目を一斉に折る一時表示（未承認の別見出し）'
+    )
+    Assert-True (-not [string]::Equals($roadmapFixtureText, $renamedFoldAllHeading, [StringComparison]::Ordinal)) "fold-all専用見出しの負例を作れません"
+    [IO.File]::WriteAllText($roadmapFixture, $renamedFoldAllHeading, (New-Object Text.UTF8Encoding($false)))
+    $renamedFoldAll = Invoke-Sut @("-WriteTraceability", "-PreserveReport", "-TraceabilityPath", $tempRoot, "-RoadmapInputPath", $roadmapFixture)
+    Assert-Exit $renamedFoldAll 1 "renamed fold-all additional heading" "証拠link checkbox数がsnapshotと不一致です"
+    [IO.File]::WriteAllBytes($roadmapFixture, [IO.File]::ReadAllBytes($productionRoadmap))
     [IO.File]::AppendAllText($roadmapFixture, "`r`n<!-- roadmap-source-hash-negative-test -->`r`n", (New-Object Text.UTF8Encoding($false)))
     $sourceDrift = Invoke-Sut @("-CheckTraceability", "-TraceabilityPath", $tempRoot, "-RoadmapInputPath", $roadmapFixture)
     Assert-Exit $sourceDrift 2 "roadmap source changed with saved ledger" "roadmap snapshot hash不一致"

@@ -67,18 +67,22 @@ try {
     $actual = Invoke-Sut -Arguments @("-RoadmapPath", $roadmap, "-PolicyPath", $policy, "-Format", "Text")
     Assert-True ($actual.ExitCode -eq 0) "本番roadmapのsnapshotが終了0ではありません: $($actual.Text)"
     Assert-True ($actual.Lines.Count -eq 1) "正常時のsnapshotが1行ではありません"
-    Assert-True ($actual.Text -match 'audited=184/184') "全184件を監査した表示がありません"
+    Assert-True ($actual.Text -match 'audited=186/186') "全186件を監査した表示がありません"
     Assert-True ($actual.Text -match 'checked=\d+ unchecked=\d+') "完了・未完了の実測件数がありません"
-    Assert-True ($actual.Text -match 'evidence_linked=182 explicit_outside=2 unclassified=0') "182+2の会計がありません"
+    Assert-True ($actual.Text -match 'evidence_linked=185 explicit_outside=1 unclassified=0') "185+1の会計がありません"
 
     $jsonResult = Invoke-Sut -Arguments @("-RoadmapPath", $roadmap, "-PolicyPath", $policy, "-Format", "Json")
     Assert-True ($jsonResult.ExitCode -eq 0) "JSON snapshotが終了0ではありません"
     Assert-True ($jsonResult.Lines.Count -eq 1) "JSON snapshotが1行ではありません"
     $json = $jsonResult.Text | ConvertFrom-Json
-    Assert-True ([int]$json.total -eq 184 -and [int]$json.audited -eq 184) "JSONの全件会計が184ではありません"
+    Assert-True ([int]$json.total -eq 186 -and [int]$json.audited -eq 186) "JSONの全件会計が186ではありません"
     Assert-True ([int]$json.checked + [int]$json.unchecked -eq [int]$json.total) "checked+uncheckedがtotalと一致しません"
     Assert-True ([int]$json.scopes.M0 -eq 11) "M0の部分scope件数が11ではありません"
-    Assert-True (@($json.items).Count -eq 184) "items明細が184件ではありません"
+    Assert-True (@($json.items).Count -eq 186) "items明細が186件ではありません"
+    $foldAllItem = @($json.items | Where-Object { $_.id -eq 'ADDITIONAL.FOLD-ALL.C01' })
+    $foldIoItem = @($json.items | Where-Object { $_.id -eq 'ADDITIONAL.FOLD-IO.C01' })
+    Assert-True ($foldAllItem.Count -eq 1 -and [string]$foldAllItem[0].source_kind -eq 'evidence_linked') "fold-all追加目標が証拠linkへ昇格していません"
+    Assert-True ($foldIoItem.Count -eq 1 -and [string]$foldIoItem[0].source_kind -eq 'explicit_outside') "FOLD-IOの明示対象外会計が変わりました"
 
     $reportResult = Invoke-Sut -Arguments @("-RoadmapPath", $roadmap, "-PolicyPath", $policy, "-Format", "Report")
     Assert-True ($reportResult.ExitCode -eq 0 -and $reportResult.Lines.Count -eq 2) "報告へ貼る正本が2行で生成されません"
@@ -99,9 +103,9 @@ try {
     $extraPath = Join-Path $tempFullPath "extra-unclassified.md"
     Write-Utf8NoBom -Path $extraPath -Text ($productionText + "`r`n- [ ] 新しい未分類項目`r`n")
     $extra = Invoke-Sut -Arguments @("-RoadmapPath", $extraPath, "-PolicyPath", $policy)
-    Assert-True ($extra.ExitCode -eq 2) "全体が185件へ増えたのに未分類項目を通しました"
+    Assert-True ($extra.ExitCode -eq 2) "全体が187件へ増えたのに未分類項目を通しました"
     Assert-True ($extra.Text -match '証拠リンクも明示対象外policyもありません') "未分類項目の診断がありません: $($extra.Text)"
-    Assert-True ($extra.Text -match 'audited=184 total=185 unclassified=1') "184/185の部分会計を診断していません: $($extra.Text)"
+    Assert-True ($extra.Text -match 'audited=186 total=187 unclassified=1') "186/187の部分会計を診断していません: $($extra.Text)"
 
     $malformedPath = Join-Path $tempFullPath "malformed-checkbox.md"
     $checkboxRegex = New-Object Text.RegularExpressions.Regex('^- \[x\] ', [Text.RegularExpressions.RegexOptions]::Multiline)
