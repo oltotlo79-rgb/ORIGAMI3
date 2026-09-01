@@ -814,6 +814,34 @@ fn layers_inside_a_region_can_be_turned_inside_out_without_moving() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn flat_motion_provenance_maps_each_split_child_to_a_source_face() {
+    let mut doc = square_doc();
+    let (faces, state) = state_of(&doc);
+    let source_ids: HashSet<FaceId> = faces.iter().map(|face| face.id).collect();
+    let result = flat_motion(
+        &mut doc.cp,
+        &faces,
+        &state,
+        &FlatMotionInput {
+            parts: vec![MotionPart::fold(
+                faces.iter().map(|face| face.id).collect(),
+                [[0.5, 0.0], [0.5, 1.0]],
+                [0.75, 0.5],
+                FoldDirection::Up,
+            )],
+            kind: TechniqueKind::Simple,
+        },
+    )
+    .expect("split the source face by flat motion");
+    let after_faces = extract_faces(&doc.cp);
+    assert_eq!(result.source_face_of.len(), after_faces.len());
+    for face in after_faces {
+        let source = result.source_face_of.get(&face.id).expect("every flat-motion child has provenance");
+        assert!(source_ids.contains(source));
+    }
+}
+
+#[test]
 fn undefined_inputs_error_without_touching_the_crease_pattern() {
     let doc = square_doc();
     let faces = extract_faces(&doc.cp);

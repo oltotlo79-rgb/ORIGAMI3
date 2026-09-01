@@ -3,8 +3,9 @@ use std::collections::HashMap;
 use glam::DVec2;
 use ori3_cp::{Face, extract_faces};
 use ori3_layers::{
-    CreaseOnlyInput, FlatState, FoldDirection, FoldThroughInput, crease_only, flat_state_at,
-    fold_through, point_in_face, replay, representative_point,
+    CreaseOnlyInput, FlatState, FoldDirection, FoldThroughInput, ReverseOpenCreaseInput,
+    crease_only, flat_state_at, fold_through, point_in_face, replay, representative_point,
+    reverse_open_crease_sense,
 };
 use ori3_model::{CreasePattern, Document, EdgeKind, FoldStep, Paper};
 use ori3_rigid::max_seam_gap;
@@ -131,6 +132,12 @@ fn selected_flap_can_be_creased_and_unfolded_without_moving_or_tearing() {
             .find(|candidate| point_in_face(&before_cp, candidate, point))
             .expect("every resulting face retains an original parent");
         *children_per_parent.entry(parent.id).or_default() += 1;
+        assert_eq!(
+            result.source_face_of.get(&face.id),
+            Some(&parent.id),
+            "crease-only provenance must retain the material parent for face {}",
+            face.id
+        );
         assert!(
             result.state.placements[&face.id].approx_eq(&before_state.placements[&parent.id], 1e-9),
             "face {} moved during a crease-only operation",
@@ -171,4 +178,38 @@ fn selected_flap_can_be_creased_and_unfolded_without_moving_or_tearing() {
         gap < 1e-6,
         "crease-only operation tore the paper: {gap:.3e}"
     );
+}
+
+#[test]
+fn reverse_open_crease_sense_keeps_identity_provenance() {
+    let mut document = Document::new(Paper { width_mm: 100.0, height_mm: 100.0 });
+    let initial_faces = extract_faces(&document.cp);
+    let initial_state = FlatState::initial(&document.cp, &initial_faces);
+    let created = crease_only(
+        &mut document.cp,
+        &initial_faces,
+        &initial_state,
+        &CreaseOnlyInput {
+            line: [[0.5, 0.0], [0.5, 1.0]],
+            movable_side_point: [0.75, 0.5],
+            target_layers: None,
+            direction: FoldDirection::Up,
+        },
+    )
+    .expect("create an open crease");
+    let faces = extract_faces(&document.cp);
+    let result = reverse_open_crease_sense(
+        &mut document.cp,
+        &faces,
+        &created.state,
+        &ReverseOpenCreaseInput {
+            line: [[0.5, 0.0], [0.5, 1.0]],
+            target_layers: None,
+        },
+    )
+    .expect("reverse the open crease");
+    assert_eq!(result.source_face_of.len(), faces.len());
+    for face in faces {
+        assert_eq!(result.source_face_of.get(&face.id), Some(&face.id));
+    }
 }

@@ -2,15 +2,15 @@
 
 この台帳は `scripts/doc-link-audit.ps1` が生成する。各checkboxの本文にある証拠リンクと同じIDを持ち、検査名は `docs/traceability/roadmap-evidence-test-names.txt` の対象限定台帳で照合する。これはリポジトリ全検査の件数を主張しない。
 
-- ロードマップ全体: 186/186件 (checked=172, unchecked=14)
+- ロードマップ全体: 186/186件 (checked=174, unchecked=12)
 - 証拠台帳対象: 184/186件
 - 明示対象外: 2件
 - 検査名台帳対象: 52/52件（roadmap-mapped、リポジトリ全検査数は主張しない）
 - 検査定義対象: 52/52件、source 33/33ファイル、definition tree SHA-256: `454f919f4a8d94c9381cb1b2acbd0eb3d604aa6f4a346711c0530ca85b4e1a47`
 - 実行モード: active-default=51件、ignored-explicit=1件（後者はCI・check-ci・品質規約の明示実行を照合）
 - 検査名台帳SHA-256: `18bb2dc46e94a59329ff05064478ff256bf9dcb9873a526bf1b8f0828a280c6a`
-- ロードマップSHA-256: `77ddd527f223af20ca79429de9a77bbaa120ef7493e4e68a2f9eab8637cc1534`
-- 生成hash: `e05cabc3d07d0b8a2eb759eb7fda6d0fff2ff2661dbd3f77eadb5151abb58a94`
+- ロードマップSHA-256: `9ad9aac7c0b9c9d030d58682db9ffda8913a9c5007f99b8065d3ae08f5f67609`
+- 生成hash: `30a0d26ae30cbf80f6617e9504c8bc3046919810013e941f52af380ddae2b263`
 - M6受入: checkbox外の手動受入1件
 
 | link ID | evidence | checkbox | progress |
@@ -129,8 +129,8 @@
 | <a id="roadmap-evidence-m2-t2-8-c01"></a>`M2.T2-8.C01` | 自動 `autosave::tests::autosave_worker_waits_thirty_seconds_and_still_skips_clean_documents / autosave::tests::autosave_skips_clean_document_and_writes_untitled_to_app_data / autosave::tests::clean_exit_discards_but_dirty_exit_keeps_the_autosave` | checked | consistent |
 | <a id="roadmap-evidence-m2-t2-8-c02"></a>`M2.T2-8.C02` | 自動 `src/App.dom.test.tsx > startup recovery check > checks recovery exactly once after preparing the new document / autosave::tests::recovery_wire_uses_null_for_no_choices_and_requires_both_internal_fields / autosave::tests::recovery_choices_are_newest_first_and_keep_the_fourth_as_overflow / src/components/RecoveryDialog.dom.test.tsx > 復旧ダイアログ > 残っていれば理由と選択肢を日本語で出す` | checked | consistent |
 | <a id="roadmap-evidence-m2-t2-8-c03"></a>`M2.T2-8.C03` | 手動 `MANUAL.M2.T2-8.C03.COMMIT-PUSH` | unchecked | manual-acceptance-pending |
-| <a id="roadmap-evidence-m2-t2-8-c04"></a>`M2.T2-8.C04` | 自動 `autosave::tests::clean_exit_never_discards_another_process_active_snapshot / autosave::tests::forced_process_kill_then_new_process_restores_exact_document / autosave::tests::restore_recovers_the_same_document / autosave::tests::two_real_processes_keep_both_documents_when_autosave_transactions_overlap` | unchecked | unchecked-but-progress-task-exists |
-| <a id="roadmap-evidence-m2-t2-8-c05"></a>`M2.T2-8.C05` | 自動 `store::tests::saving_own_opened_document_twice_after_edits_does_not_conflict / store::tests::two_real_processes_reject_a_stale_explicit_save_and_keep_the_first_save` | unchecked | unchecked-but-progress-task-exists |
+| <a id="roadmap-evidence-m2-t2-8-c04"></a>`M2.T2-8.C04` | 自動 `autosave::tests::clean_exit_never_discards_another_process_active_snapshot / autosave::tests::forced_process_kill_then_new_process_restores_exact_document / autosave::tests::restore_recovers_the_same_document / autosave::tests::two_real_processes_keep_both_documents_when_autosave_transactions_overlap` | checked | consistent |
+| <a id="roadmap-evidence-m2-t2-8-c05"></a>`M2.T2-8.C05` | 自動 `store::tests::saving_own_opened_document_twice_after_edits_does_not_conflict / store::tests::two_real_processes_reject_a_stale_explicit_save_and_keep_the_first_save` | checked | consistent |
 | <a id="roadmap-evidence-m2-t2-9-c01"></a>`M2.T2-9.C01` | 自動 `completed_crane_is_flat_and_symmetric` | unchecked | unchecked-but-progress-task-exists |
 | <a id="roadmap-evidence-m2-t2-9-c02"></a>`M2.T2-9.C02` | 手動 `MANUAL.M2.T2-9.C02.SCREEN-ACCEPTANCE` | unchecked | manual-acceptance-pending |
 | <a id="roadmap-evidence-m2-t2-9-c03"></a>`M2.T2-9.C03` | 手動 `MANUAL.M2.T2-9.C03.COMMIT-PUSH` | checked | consistent |

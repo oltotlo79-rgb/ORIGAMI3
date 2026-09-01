@@ -66,6 +66,11 @@ pub struct FoldThroughResult {
     /// 記録用のステップ(drivers+layer_order設定済み。idは呼び出し側で振り直す前提の0)。
     pub step: FoldStep,
     pub warnings: Vec<String>,
+    /// 新しく抽出された面IDから、この操作直前の親面IDへの対応。
+    ///
+    /// 面IDは面を抽出するたびに再採番されるため、自動計画の検証ではこの対応を
+    /// 用いて、選択外の材料が動いていないことを確かめる。
+    pub source_face_of: HashMap<FaceId, FaceId>,
 }
 
 /// 紙の縁を回り込むために追加する誘導折り目のプレビュー。

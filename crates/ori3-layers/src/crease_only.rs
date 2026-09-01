@@ -209,5 +209,6 @@ pub fn reverse_open_crease_sense(
         added_edges: changed,
         step,
         warnings: Vec::new(),
+        source_face_of: faces.iter().map(|face| (face.id, face.id)).collect(),
     })
 }

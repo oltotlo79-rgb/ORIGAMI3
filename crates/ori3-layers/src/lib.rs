@@ -17,6 +17,8 @@ pub mod rabbit_ear;
 pub mod replay;
 pub mod spatial_crease_only;
 pub mod spatial_fold;
+pub mod single_reflection_plan;
+pub mod composite_motion_plan;
 pub mod step_oracle;
 pub mod techniques;
 
@@ -67,7 +69,7 @@ pub use spatial_crease_only::{
     SurfaceRelationFromTop, TopSurfaceObservation, TopSurfaceProvider,
     crease_only_top_from_material_line,
 };
-pub use spatial_fold::{SpatialFoldInput, SpatialFoldResult, fold_from_plane_3d};
+pub use spatial_fold::{SpatialFoldInput, SpatialFoldMode, SpatialFoldResult, fold_from_plane_3d};
 pub use techniques::{
     TechniqueInput, inside_reverse, open_sink, outside_reverse, petal, pleat, squash, swivel, twist,
 };

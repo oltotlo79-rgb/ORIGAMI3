@@ -19,6 +19,17 @@ use crate::{
     FoldPlane3D, point_in_face, pull_back_plane_to_faces, replay_with_faces, representative_point,
 };
 
+/// 立体姿勢で折り平面の動く側にある面を選ぶ方法。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpatialFoldMode {
+    /// つかんだ面から、動く側の共有辺だけをたどれる一まとまりを動かす。
+    Flap,
+    /// 折り平面の動く側へ掛かる全ての面を動かす。
+    All,
+    /// つかんだ元の面に属する、動く側の部分だけを動かす。
+    Single,
+}
+
 /// 立体姿勢からの折り入力。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SpatialFoldInput {
@@ -26,6 +37,7 @@ pub struct SpatialFoldInput {
     pub grab_point: [f64; 3],
     pub grab_face: FaceId,
     pub direction: FoldDirection,
+    pub mode: SpatialFoldMode,
 }
 
 /// 立体姿勢から展開図へ戻した折りの結果。
@@ -127,17 +139,12 @@ pub fn fold_from_plane_3d(
         farthest.signum()
     };
 
-    let selected = connected_old_faces(
-        &doc.cp,
-        faces,
-        &current.frame,
-        grabbed,
-        SideOfPlane {
-            origin,
-            normal,
-            sign: moving_sign,
-        },
-    );
+    let side = SideOfPlane {
+        origin,
+        normal,
+        sign: moving_sign,
+    };
+    let selected = old_faces_for_mode(&doc.cp, faces, &current.frame, grabbed, side, input.mode);
     if selected.is_empty() {
         output
             .warnings
@@ -197,7 +204,7 @@ pub fn fold_from_plane_3d(
             .warnings
             .push("現在の形を求める計算が安定しなかったため、最も近い形で続けました".to_string());
     }
-    let moving = connected_new_faces(
+    let moving = new_faces_for_mode(
         &work,
         &new_faces,
         &expanded_current.frame,
@@ -207,12 +214,9 @@ pub fn fold_from_plane_3d(
             grabbed_parent: input.grab_face,
             grab_point: DVec3::from(input.grab_point),
             grab_material,
-            side: SideOfPlane {
-                origin,
-                normal,
-                sign: moving_sign,
-            },
+            side,
         },
+        input.mode,
     );
     if moving.is_empty() {
         output
@@ -346,6 +350,27 @@ fn push_warning_once(warnings: &mut Vec<String>, warning: &str) {
     }
 }
 
+fn old_faces_for_mode(
+    cp: &CreasePattern,
+    faces: &[Face],
+    frame: &Frame3D,
+    grabbed: &Face,
+    side: SideOfPlane,
+    mode: SpatialFoldMode,
+) -> HashSet<FaceId> {
+    match mode {
+        SpatialFoldMode::Flap => connected_old_faces(cp, faces, frame, grabbed, side),
+        SpatialFoldMode::All => faces
+            .iter()
+            .filter(|face| face_reaches_side(frame_face(frame, face.id), side))
+            .map(|face| face.id)
+            .collect(),
+        SpatialFoldMode::Single => face_reaches_side(frame_face(frame, grabbed.id), side)
+            .then(|| HashSet::from([grabbed.id]))
+            .unwrap_or_default(),
+    }
+}
+
 fn connected_old_faces(
     cp: &CreasePattern,
     faces: &[Face],
@@ -388,17 +413,7 @@ fn connected_new_faces(
     frame: &Frame3D,
     selection: NewFaceSelection<'_>,
 ) -> HashSet<FaceId> {
-    let candidates: HashSet<_> = faces
-        .iter()
-        .filter(|face| {
-            selection
-                .parent_of
-                .get(&face.id)
-                .is_some_and(|id| selection.selected_parents.contains(id))
-        })
-        .filter(|face| face_reaches_side(frame_face(frame, face.id), selection.side))
-        .map(|face| face.id)
-        .collect();
+    let candidates = candidate_new_faces(faces, frame, &selection);
     let mut starts: Vec<_> = candidates
         .iter()
         .filter(|face_id| selection.parent_of.get(face_id) == Some(&selection.grabbed_parent))
@@ -456,6 +471,41 @@ fn connected_new_faces(
         }
     }
     moving
+}
+
+fn candidate_new_faces(
+    faces: &[Face],
+    frame: &Frame3D,
+    selection: &NewFaceSelection<'_>,
+) -> HashSet<FaceId> {
+    faces
+        .iter()
+        .filter(|face| {
+            selection
+                .parent_of
+                .get(&face.id)
+                .is_some_and(|id| selection.selected_parents.contains(id))
+        })
+        .filter(|face| face_reaches_side(frame_face(frame, face.id), selection.side))
+        .map(|face| face.id)
+        .collect()
+}
+
+fn new_faces_for_mode(
+    cp: &CreasePattern,
+    faces: &[Face],
+    frame: &Frame3D,
+    selection: NewFaceSelection<'_>,
+    mode: SpatialFoldMode,
+) -> HashSet<FaceId> {
+    match mode {
+        SpatialFoldMode::Flap => connected_new_faces(cp, faces, frame, selection),
+        SpatialFoldMode::All => candidate_new_faces(faces, frame, &selection),
+        SpatialFoldMode::Single => candidate_new_faces(faces, frame, &selection)
+            .into_iter()
+            .filter(|face_id| selection.parent_of.get(face_id) == Some(&selection.grabbed_parent))
+            .collect(),
+    }
 }
 
 fn target_hinge_angles(
@@ -917,6 +967,7 @@ mod tests {
                 grab_point: [center_x, 0.25, center_z],
                 grab_face: grabbed.face,
                 direction: FoldDirection::Up,
+                mode: SpatialFoldMode::Flap,
             },
         );
 
@@ -955,6 +1006,185 @@ mod tests {
         );
         let seam = ori3_rigid::max_seam_gap(&document.cp, &final_faces, &after.frame);
         assert!(seam < 1e-9, "共有辺の隙間={seam:.17e}");
+    }
+
+    #[test]
+    fn fold_modes_select_flap_all_or_single_in_the_same_ninety_degree_pose() {
+        let (document, faces, input, flap_parents) = disconnected_ninety_degree_fixture();
+        let all_parents: HashSet<_> = faces.iter().map(|face| face.id).collect();
+        let cases = [
+            (SpatialFoldMode::Flap, flap_parents),
+            (SpatialFoldMode::All, all_parents),
+            (SpatialFoldMode::Single, HashSet::from([input.grab_face])),
+        ];
+
+        for (mode, expected_parents) in cases {
+            let result =
+                fold_from_plane_3d(&document, &faces, 1, &SpatialFoldInput { mode, ..input });
+            assert!(
+                result.step.is_some(),
+                "mode={mode:?}, warnings={:?}",
+                result.warnings
+            );
+            let parent_of = parent_faces(&document.cp, &faces, &result.cp, &result.faces);
+            let moving_parents: HashSet<_> = result
+                .moving_faces
+                .iter()
+                .map(|face_id| {
+                    *parent_of
+                        .get(face_id)
+                        .unwrap_or_else(|| panic!("mode={mode:?}: moving face {face_id} の元面"))
+                })
+                .collect();
+            assert_eq!(
+                moving_parents, expected_parents,
+                "mode={mode:?} は指定した元面だけを動かす"
+            );
+            assert_eq!(
+                result.moving_faces.len(),
+                expected_parents.len(),
+                "mode={mode:?} はこのfixtureで元面ごとに動く側の1片だけを選ぶ"
+            );
+        }
+    }
+
+    fn disconnected_ninety_degree_fixture()
+    -> (Document, Vec<Face>, SpatialFoldInput, HashSet<FaceId>) {
+        let mut document = Document::new(Paper {
+            width_mm: 150.0,
+            height_mm: 150.0,
+        });
+        insert_segment(
+            &mut document.cp,
+            [0.25, 0.0],
+            [0.25, 1.0],
+            EdgeKind::Mountain,
+        );
+        insert_segment(&mut document.cp, [0.5, 0.0], [0.5, 1.0], EdgeKind::Mountain);
+        insert_segment(
+            &mut document.cp,
+            [0.75, 0.0],
+            [0.75, 1.0],
+            EdgeKind::Mountain,
+        );
+        document.sequence.push(FoldStep {
+            id: 0,
+            kind: TechniqueKind::Pose,
+            drivers: vec![DriverLine {
+                a: [0.5, 0.0],
+                b: [0.5, 1.0],
+                target_angle_deg: 90.0,
+            }],
+            layer_order: None,
+            alignment: None,
+            finish_soft: None,
+            note: String::new(),
+        });
+
+        let faces = extract_faces(&document.cp);
+        assert_eq!(faces.len(), 4, "四つの縦stripを作る");
+        let current = replay_with_faces(&document, &faces, 1, 1.0);
+        assert!(current.converged, "90度fixtureを再生できる");
+        let flap_parents: HashSet<_> = current
+            .frame
+            .faces
+            .iter()
+            .filter(|face| {
+                let (low, high) = face
+                    .polygon
+                    .iter()
+                    .map(|point| point[2])
+                    .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), z| {
+                        (low.min(z), high.max(z))
+                    });
+                high - low > 0.1
+            })
+            .map(|face| face.face)
+            .collect();
+        assert_eq!(flap_parents.len(), 2, "90度で立った側は二つのstrip");
+
+        let grabbed = faces
+            .iter()
+            .filter(|face| flap_parents.contains(&face.id))
+            .min_by(|left, right| {
+                (representative_point(&document.cp, left)[0] - 0.5)
+                    .abs()
+                    .total_cmp(&(representative_point(&document.cp, right)[0] - 0.5).abs())
+            })
+            .expect("立った側で中央ヒンジに接する元面");
+        let other_near_hinge = faces
+            .iter()
+            .filter(|face| !flap_parents.contains(&face.id))
+            .min_by(|left, right| {
+                (representative_point(&document.cp, left)[0] - 0.5)
+                    .abs()
+                    .total_cmp(&(representative_point(&document.cp, right)[0] - 0.5).abs())
+            })
+            .expect("平面側で中央ヒンジに接する元面");
+
+        let hinge_points: Vec<_> = document
+            .cp
+            .vertices
+            .iter()
+            .filter(|vertex| (vertex.pos[0] - 0.5).abs() <= EPS)
+            .filter_map(|vertex| frame_vertex_position(&faces, &current.frame, vertex.id))
+            .collect();
+        assert_eq!(hinge_points.len(), 2, "中央ヒンジの両端");
+        let hinge_center = hinge_points.iter().copied().sum::<DVec3>() / 2.0;
+        let grabbed_center = face_centroid(frame_face(&current.frame, grabbed.id));
+        let other_center = face_centroid(frame_face(&current.frame, other_near_hinge.id));
+        let grabbed_axis = normalized(grabbed_center - hinge_center).expect("立った側の面内方向");
+        let other_axis = normalized(other_center - hinge_center).expect("平面側の面内方向");
+        assert!(
+            grabbed_axis.dot(other_axis).abs() < 1e-9,
+            "既存Poseの二面角は90度"
+        );
+
+        let plane_normal = normalized(grabbed_axis + other_axis).expect("V字の内側を向く法線");
+        let grabbed_distance = plane_normal.dot(grabbed_center - hinge_center);
+        let other_distance = plane_normal.dot(other_center - hinge_center);
+        assert!(grabbed_distance > EPS && other_distance > EPS);
+        let plane_origin =
+            hinge_center + plane_normal * (grabbed_distance.min(other_distance) * 0.5);
+        let side = SideOfPlane {
+            origin: plane_origin,
+            normal: plane_normal,
+            sign: 1.0,
+        };
+        assert!(
+            hinge_points
+                .iter()
+                .all(|point| plane_normal.dot(*point - plane_origin) < -EPS),
+            "二つの可動componentを隔てる中央ヒンジは固定側"
+        );
+        assert!(
+            faces
+                .iter()
+                .all(|face| face_reaches_side(frame_face(&current.frame, face.id), side)),
+            "全stripは動く半空間へ掛かる"
+        );
+        assert_eq!(
+            connected_old_faces(&document.cp, &faces, &current.frame, grabbed, side,),
+            flap_parents,
+            "grab側だけが動く半空間内でつながる"
+        );
+        let grab_face = grabbed.id;
+
+        (
+            document,
+            faces,
+            SpatialFoldInput {
+                plane: FoldPlane3D {
+                    origin: plane_origin.to_array(),
+                    normal: plane_normal.to_array(),
+                },
+                grab_point: grabbed_center.to_array(),
+                grab_face,
+                direction: FoldDirection::Up,
+                mode: SpatialFoldMode::Flap,
+            },
+            flap_parents,
+        )
     }
 
     fn frame_face_mut(frame: &mut Frame3D, face: FaceId) -> Option<&mut Face3D> {

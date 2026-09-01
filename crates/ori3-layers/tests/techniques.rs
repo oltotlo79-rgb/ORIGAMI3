@@ -506,6 +506,34 @@ fn pleat_makes_two_alternating_creases_and_three_layers() {
     assert_fold_senses(&doc, "平らな紙の段折り");
 }
 
+#[test]
+fn pleat_provenance_maps_each_child_to_a_source_face() {
+    let doc = square_doc();
+    let before_faces = extract_faces(&doc.cp);
+    let state = ori3_layers::FlatState::initial(&doc.cp, &before_faces);
+    let mut cp = doc.cp.clone();
+    let result = pleat(
+        &mut cp,
+        &before_faces,
+        &state,
+        &TechniqueInput {
+            flap: Vec::new(),
+            line: [[0.4, 0.0], [0.4, 1.0]],
+            reference_point: [0.5, 0.5],
+            open_to_back: None,
+            polygon: None,
+            center: None,
+        },
+    )
+    .expect("pleat succeeds");
+    let after_faces = extract_faces(&cp);
+    assert_eq!(result.source_face_of.len(), after_faces.len());
+    for face in after_faces {
+        let source = result.source_face_of.get(&face.id).expect("every pleat child has provenance");
+        assert!(before_faces.iter().any(|candidate| candidate.id == *source));
+    }
+}
+
 /// 2層のフラップへの段折り: 両方の層に折り線が入り、段の中の折り目はそのまま残る。
 #[test]
 fn pleat_on_two_layer_flap_folds_both_layers() {

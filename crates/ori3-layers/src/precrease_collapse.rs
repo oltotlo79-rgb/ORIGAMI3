@@ -95,8 +95,14 @@ pub struct PrecreaseOrderValidation {
     pub mandatory_constraints: Vec<(FaceId, FaceId)>,
     /// 正の面積で重なるが、展開図由来の制約だけでは上下が決まらない面対。
     pub unresolved_overlap_pairs: Vec<(FaceId, FaceId)>,
-    /// 逆向きが既に必然だったため採れなかった制約 `(requested_lower, requested_upper)`。
+    /// 物理規則の逆向きが既に必然だったため採れなかった制約。
+    /// 各tupleは `(requested_lower, requested_upper)`。
     pub discarded_relations: Vec<(FaceId, FaceId)>,
+    /// 表示用の完全順を作る探索が失敗した際に返した診断用の面対。
+    ///
+    /// 探索順やseedで変わり得る値であり、物理規則そのものではない。このため
+    /// [`Self::is_valid`] の判定や `discarded_relations` の件数には含めない。
+    pub display_resolution_failure: Option<(FaceId, FaceId)>,
 }
 
 impl PrecreaseOrderValidation {
@@ -275,6 +281,11 @@ fn collapse_precrease_network_impl(
             "{PRECREASE_ORDER_UNDETERMINED_WARNING_PREFIX}{}組あります",
             solved_order.unresolved_overlap_pairs.len()
         ));
+    }
+    if solved_order.display_resolution_failure.is_some() {
+        // 表示用の全順序化に失敗したseed対は物理的な両立不能へ数えない。一方、
+        // fallback表示順を保存oracleへ昇格させないことで、診断情報を握りつぶさない。
+        result.step.layer_order = None;
     }
     if !solved_order.discarded_relations.is_empty() {
         result.step.layer_order = None;
@@ -515,6 +526,7 @@ struct SolvedLayerOrder {
     order: Vec<FaceId>,
     unresolved_overlap_pairs: Vec<(FaceId, FaceId)>,
     discarded_relations: Vec<(FaceId, FaceId)>,
+    display_resolution_failure: Option<(FaceId, FaceId)>,
     overlap_analysis_error: Option<String>,
     /// 単一book foldでは、動くpacketを外側へ返す操作自体がtieを一意に解く。
     operation_resolved: bool,
@@ -646,6 +658,7 @@ fn solved_layer_order(
                 order: simple.order,
                 unresolved_overlap_pairs,
                 discarded_relations: validation.discarded_relations,
+                display_resolution_failure: validation.display_resolution_failure,
                 overlap_analysis_error: None,
                 operation_resolved,
             });
@@ -667,6 +680,7 @@ fn solved_layer_order(
                 order: simple.order,
                 unresolved_overlap_pairs,
                 discarded_relations: solution.discarded_relations,
+                display_resolution_failure: solution.display_resolution_failure,
                 overlap_analysis_error: solution.overlap_analysis_error,
                 operation_resolved,
             });
@@ -680,6 +694,7 @@ fn solved_layer_order(
             order: stable_topological_order(previous_order, &solution.display_constraints),
             unresolved_overlap_pairs: solution.unresolved_overlap_pairs,
             discarded_relations: solution.discarded_relations,
+            display_resolution_failure: solution.display_resolution_failure,
             overlap_analysis_error: solution.overlap_analysis_error,
             operation_resolved: false,
         });
@@ -688,6 +703,7 @@ fn solved_layer_order(
         order: stable_topological_order(previous_order, &solution.display_constraints),
         unresolved_overlap_pairs: solution.unresolved_overlap_pairs,
         discarded_relations: solution.discarded_relations,
+        display_resolution_failure: solution.display_resolution_failure,
         overlap_analysis_error: solution.overlap_analysis_error,
         operation_resolved: false,
     })
@@ -834,6 +850,7 @@ fn validate_precrease_layer_order_impl(
         mandatory_constraints: solution.mandatory_constraints,
         unresolved_overlap_pairs: solution.unresolved_overlap_pairs,
         discarded_relations: solution.discarded_relations,
+        display_resolution_failure: solution.display_resolution_failure,
     })
 }
 
@@ -1323,6 +1340,7 @@ struct StackSolution {
     mandatory_constraints: Vec<(FaceId, FaceId)>,
     unresolved_overlap_pairs: Vec<(FaceId, FaceId)>,
     discarded_relations: Vec<(FaceId, FaceId)>,
+    display_resolution_failure: Option<(FaceId, FaceId)>,
     overlap_analysis_error: Option<String>,
     counts: PrecreaseConstraintCounts,
 }
@@ -1526,18 +1544,21 @@ fn solve_stack_relation(
         )
     });
     let mandatory_relation = relation.clone();
-    let mut true_conflicts = relation.discarded.clone();
-    relation = match resolve_display_relation(relation, &ordered, &rules) {
-        Ok(resolved) => resolved,
-        Err((first, second)) => {
-            // Neither orientation survives the physical rules. Preserve only the candidate-
-            // independent relation for display and report one real conflict; never keep a failed
-            // preferred seed whose propagation discarded a physical constraint.
-            true_conflicts.insert((first, second));
-            mandatory_relation
-        }
-    };
-    let discarded_relations = true_conflicts
+    let physical_conflicts = relation.discarded.clone();
+    let (relation, display_resolution_failure) =
+        match resolve_display_relation(relation, &ordered, &rules) {
+            Ok(resolved) => (resolved, None),
+            Err((first, second)) => {
+                // Display totalization failed. Preserve only the candidate-independent relation.
+                // The returned pair identifies the search location for diagnostics; it is not
+                // itself another physical constraint.
+                (
+                    mandatory_relation,
+                    Some((shapes[first].id, shapes[second].id)),
+                )
+            }
+        };
+    let discarded_relations = physical_conflicts
         .iter()
         .map(|&(lower, upper)| (shapes[lower].id, shapes[upper].id))
         .collect::<Vec<_>>();
@@ -1547,6 +1568,7 @@ fn solve_stack_relation(
         mandatory_constraints,
         unresolved_overlap_pairs,
         discarded_relations,
+        display_resolution_failure,
         overlap_analysis_error,
         counts: PrecreaseConstraintCounts {
             adjacent_folds: adjacent.len(),
@@ -1756,8 +1778,8 @@ fn relation_respects_resolved_stack_rules(relation: &StackRelation, rules: &Stac
 }
 
 /// 表示を続けるためのtotal化。優先向きはauthorityではなく探索順にだけ使う。
-/// propagationが既存の物理関係を捨てる枝はcloneごと破棄し、逆向きも失敗した対だけを
-/// 真の両立不能として呼び出し側へ返す。
+/// propagationが既存の物理関係を捨てる枝はcloneごと破棄する。total化できなかった場合に
+/// 返す面対は表示探索の診断位置であり、物理的に破棄された関係そのものではない。
 fn resolve_display_relation(
     relation: StackRelation,
     ordered: &[usize],
@@ -2064,6 +2086,17 @@ mod tests {
         assert!(resolved.discarded.is_empty());
         assert!(resolved.is_below(2, 1));
         assert!(!resolved.is_below(1, 2));
+    }
+
+    #[test]
+    fn display_resolution_failure_is_not_a_physical_order_violation() {
+        let validation = PrecreaseOrderValidation {
+            display_resolution_failure: Some((0, 1)),
+            ..PrecreaseOrderValidation::default()
+        };
+
+        assert!(validation.discarded_relations.is_empty());
+        assert!(validation.is_valid());
     }
 
     #[test]

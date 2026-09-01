@@ -517,6 +517,7 @@ pub(crate) fn run_motion(
             added_edges: added,
             step,
             warnings,
+            source_face_of: parent_of,
         },
         crossed_any,
         promoted_aux_edges,

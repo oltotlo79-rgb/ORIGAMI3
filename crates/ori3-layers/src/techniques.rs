@@ -1526,6 +1526,7 @@ impl Session {
             added_edges: added,
             step,
             warnings: self.warnings,
+            source_face_of: self.origin,
         })
     }
 }
