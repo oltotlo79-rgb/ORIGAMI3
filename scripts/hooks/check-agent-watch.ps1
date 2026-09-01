@@ -29,6 +29,7 @@ $script:FutureToleranceMinutes = 2.0
 $script:RetryCount = 4
 $script:RetryMilliseconds = 50
 $script:AgentReplyQuietMinutes = 15.0
+$script:AgentWatchScopeSchemaVersion = 1
 $script:AgentSendLedgerSchemaVersion = 1
 $script:AgentSendLedgerFileName = "watch-agents.sends.json"
 $script:AgentSendLedgerLockTimeoutMilliseconds = 500
@@ -498,6 +499,625 @@ function Get-AgentThreadIdFromName {
     return [string]$match.Groups["threadId"].Value
 }
 
+function Get-WatchPathComparisonKey {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$BasePath
+    )
+
+    $canonical = ConvertTo-CanonicalWatchPath -Path $Path -BasePath $BasePath
+    $root = [IO.Path]::GetPathRoot($canonical)
+    if ($canonical.Length -gt $root.Length) {
+        $canonical = $canonical.TrimEnd([char[]]"\/")
+    }
+    return $canonical.ToLowerInvariant()
+}
+
+function Test-WatchPathOverlap {
+    param(
+        [Parameter(Mandatory = $true)][string]$FirstPath,
+        [Parameter(Mandatory = $true)][string]$SecondPath
+    )
+
+    if ([string]::Equals($FirstPath, $SecondPath, [StringComparison]::OrdinalIgnoreCase)) {
+        return $true
+    }
+    $separator = [IO.Path]::DirectorySeparatorChar
+    $firstPrefix = $FirstPath.TrimEnd([char[]]"\/") + $separator
+    $secondPrefix = $SecondPath.TrimEnd([char[]]"\/") + $separator
+    return $SecondPath.StartsWith($firstPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+        $FirstPath.StartsWith($secondPrefix, [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Get-AgentWatchScopeSha256 {
+    param(
+        [Parameter(Mandatory = $true)][string]$ThreadId,
+        [Parameter(Mandatory = $true)][bool]$ReadOnly,
+        [Parameter(Mandatory = $true)][string]$ReportPath,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$SourcePaths,
+        [Parameter(Mandatory = $true)][string]$Root
+    )
+
+    $reportKey = Get-WatchPathComparisonKey -Path $ReportPath -BasePath $Root
+    [string[]]$sourceKeys = @(
+        $SourcePaths | ForEach-Object { Get-WatchPathComparisonKey -Path $_ -BasePath $Root }
+    )
+    [Array]::Sort($sourceKeys, [StringComparer]::Ordinal)
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add("version=$($script:AgentWatchScopeSchemaVersion)")
+    $lines.Add("threadId=$ThreadId")
+    $lines.Add("readOnly=$($ReadOnly.ToString().ToLowerInvariant())")
+    $lines.Add("reportPath=$(ConvertTo-WatchBase64 -Text $reportKey)")
+    foreach ($sourceKey in $sourceKeys) {
+        $lines.Add("sourcePath=$(ConvertTo-WatchBase64 -Text $sourceKey)")
+    }
+    return Get-Sha256HexFromText -Text ($lines -join "`n")
+}
+
+function Read-AgentWatchRecoveryContext {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $runtimePath = Join-Path (Join-Path $Root "scratchpad") "watch-agents.runtime.json"
+    $runtimeBytes = Read-SharedFileBytes -Path $runtimePath
+    try {
+        $runtime = $script:Utf8NoBom.GetString($runtimeBytes) | ConvertFrom-Json
+    }
+    catch {
+        throw "scope検査用runtime stateをJSONとして読めません: $($_.Exception.Message)"
+    }
+    $definitionPath = [string](Get-RequiredStateValue -State $runtime -Name "definitionPath")
+    $runtimeDefinitionSha256 = [string](Get-RequiredStateValue -State $runtime -Name "definitionSha256")
+    return [pscustomobject]@{
+        DefinitionPath = $definitionPath
+        RuntimeDefinitionSha256 = $runtimeDefinitionSha256.ToLowerInvariant()
+        RuntimeAgentStates = @((Get-RequiredStateValue -State $runtime -Name "agentStates"))
+        Runtime = $runtime
+    }
+}
+
+function Read-AgentWatchDefinitionContext {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $recoveryContext = Read-AgentWatchRecoveryContext -Root $Root
+    $definitionPath = [string]$recoveryContext.DefinitionPath
+    $definitionBytes = Read-SharedFileBytes -Path $definitionPath
+    try {
+        $definition = $script:Utf8NoBom.GetString($definitionBytes) | ConvertFrom-Json
+    }
+    catch {
+        throw "監視定義をscope JSONとして読めません: $($_.Exception.Message)"
+    }
+    if ($null -eq $definition -or @($definition.PSObject.Properties.Name) -notcontains "agents") {
+        throw "監視定義にagents配列がありません"
+    }
+    $scopeSchemaProperty = $definition.PSObject.Properties["scopeSchemaVersion"]
+    return [pscustomobject]@{
+        Strict = ($null -ne $scopeSchemaProperty)
+        Definition = $definition
+        DefinitionPath = $definitionPath
+        DefinitionSha256 = Get-Sha256HexFromBytes -Bytes $definitionBytes
+        RuntimeDefinitionSha256 = [string]$recoveryContext.RuntimeDefinitionSha256
+        RuntimeAgentStates = @($recoveryContext.RuntimeAgentStates)
+        Runtime = $recoveryContext.Runtime
+    }
+}
+
+function Test-DefinitionRefreshRecoverySnapshot {
+    param(
+        [Parameter(Mandatory = $true)]$DefinitionContext,
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][DateTime]$NowUtc
+    )
+
+    try {
+        $runtime = $DefinitionContext.Runtime
+        $runtimePath = [string](Get-RequiredStateValue -State $runtime -Name "runtimePath")
+        $outputPath = [string](Get-RequiredStateValue -State $runtime -Name "outputPath")
+        $outputSha256 = [string](Get-RequiredStateValue -State $runtime -Name "outputSha256")
+        $outputLength = [Int64](Get-RequiredIntegerStateValue -State $runtime -Name "outputLength")
+        $outputLastWriteUtc = Parse-RoundtripUtc -Text ([string](Get-RequiredStateValue -State $runtime -Name "outputLastWriteUtc")) -FieldName "outputLastWriteUtc"
+        $scanCompletedUtc = Parse-RoundtripUtc -Text ([string](Get-RequiredStateValue -State $runtime -Name "scanCompletedUtc")) -FieldName "scanCompletedUtc"
+        $stateWrittenUtc = Parse-RoundtripUtc -Text ([string](Get-RequiredStateValue -State $runtime -Name "stateWrittenUtc")) -FieldName "stateWrittenUtc"
+        $watchPid = [int](Get-RequiredIntegerStateValue -State $runtime -Name "pid")
+        $processExecutablePath = [string](Get-RequiredStateValue -State $runtime -Name "processExecutablePath")
+        $watcherPath = [string](Get-RequiredStateValue -State $runtime -Name "scriptPath")
+        $storedAgentStatesSha256 = [string](Get-RequiredStateValue -State $runtime -Name "agentStatesSha256")
+        $outputBytes = Read-SharedFileBytes -Path $outputPath
+        $runtimeItem = Get-Item -LiteralPath $runtimePath -Force -ErrorAction Stop
+        $outputItem = Get-Item -LiteralPath $outputPath -Force -ErrorAction Stop
+    }
+    catch {
+        return New-CheckErrorResult -Code "DEFINITION_REFRESH_RECOVERY_INVALID" -Message "定義更新中の返信回復に必要なruntimeを検査できません: $($_.Exception.Message)"
+    }
+    if ($outputBytes.Length -ne $outputLength -or
+        -not [string]::Equals((Get-Sha256HexFromBytes -Bytes $outputBytes), $outputSha256.ToLowerInvariant(), [StringComparison]::Ordinal) -or
+        $outputItem.LastWriteTimeUtc.Ticks -ne $outputLastWriteUtc.Ticks) {
+        return New-PolicyResult -Code "DEFINITION_REFRESH_RECOVERY_STALE" -Message "定義更新中の返信回復でlatest outputの長さ/hash/時刻が一致しません。"
+    }
+    if (-not [string]::Equals(
+        (Get-AgentStatesSha256 -AgentStates @($DefinitionContext.RuntimeAgentStates)),
+        $storedAgentStatesSha256,
+        [StringComparison]::Ordinal
+    )) {
+        return New-PolicyResult -Code "DEFINITION_REFRESH_RECOVERY_STALE" -Message "定義更新中の返信回復でagentStates hashが一致しません。"
+    }
+    foreach ($freshnessCheck in @(
+        @($scanCompletedUtc, "runtime stateのscanCompletedUtc"),
+        @($stateWrittenUtc, "runtime stateのstateWrittenUtc"),
+        @($runtimeItem.LastWriteTimeUtc, "runtime state file"),
+        @($outputItem.LastWriteTimeUtc, "latest output file")
+    )) {
+        $freshnessResult = Test-FreshTimestamp -TimestampUtc ([DateTime]$freshnessCheck[0]) -NowUtc $NowUtc -Label ([string]$freshnessCheck[1])
+        if ($null -ne $freshnessResult) {
+            return $freshnessResult
+        }
+    }
+    $processCommandResult = Test-WatcherProcessArguments `
+        -ProcessId $watchPid `
+        -ProcessExecutablePath $processExecutablePath `
+        -WatcherPath $watcherPath `
+        -DefinitionPath ([string]$DefinitionContext.DefinitionPath) `
+        -Root $Root
+    if ($processCommandResult.ExitCode -ne 0) {
+        return $processCommandResult
+    }
+    return New-AgentWatchResult -ExitCode 0 -Code "DEFINITION_REFRESH_RECOVERY_OK" -Message "定義更新中もruntime/output/processはfreshで自己整合しています。"
+}
+
+function Get-AgentIdentityMap {
+    param(
+        [Parameter(Mandatory = $true)]$DefinitionContext,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$AgentStates
+    )
+
+    $definitionAgents = @($DefinitionContext.Definition.agents)
+    $agentsByThread = New-Object 'Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
+    for ($index = 0; $index -lt $AgentStates.Count; $index++) {
+        $agentState = $AgentStates[$index]
+        $threadId = ""
+        if ($index -lt $definitionAgents.Count) {
+            $threadProperty = $definitionAgents[$index].PSObject.Properties["threadId"]
+            if ($null -ne $threadProperty -and $threadProperty.Value -is [string]) {
+                $candidate = ([string]$threadProperty.Value).Trim()
+                if ([regex]::IsMatch($candidate, '^[A-Za-z0-9][A-Za-z0-9._:-]{5,127}$', [Text.RegularExpressions.RegexOptions]::CultureInvariant)) {
+                    $threadId = $candidate
+                }
+            }
+        }
+        if ([string]::IsNullOrEmpty($threadId)) {
+            $threadId = Get-AgentThreadIdFromName -Name ([string]$agentState.name)
+        }
+        if ([string]::IsNullOrEmpty($threadId)) {
+            continue
+        }
+        if ($agentsByThread.ContainsKey($threadId)) {
+            throw "監視定義のthread IDが重複しています: $threadId"
+        }
+        $agentsByThread.Add($threadId, $agentState)
+    }
+    return ,$agentsByThread
+}
+
+function Test-AgentWatchScopeDefinition {
+    param(
+        [Parameter(Mandatory = $true)]$DefinitionContext,
+        [Parameter(Mandatory = $true)][string]$Root
+    )
+
+    if (-not [bool]$DefinitionContext.Strict) {
+        return [pscustomobject]@{
+            Result = New-AgentWatchResult -ExitCode 0 -Code "AGENT_WATCH_SCOPE_LEGACY" -Message "旧監視定義ではscope検査を追加しません。"
+            AgentsByThread = (New-Object 'Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal))
+        }
+    }
+    if (-not [string]::Equals(
+        [string]$DefinitionContext.DefinitionSha256,
+        [string]$DefinitionContext.RuntimeDefinitionSha256,
+        [StringComparison]::Ordinal
+    )) {
+        return [pscustomobject]@{
+            Result = New-PolicyResult -Code "DEFINITION_HASH_MISMATCH" -Message "監視定義が最後のscan後に変わっています。次のscan完了まで委譲できません。"
+            AgentsByThread = $null
+        }
+    }
+
+    $definition = $DefinitionContext.Definition
+    $topProperties = @($definition.PSObject.Properties.Name)
+    $expectedTopProperties = @("scopeSchemaVersion", "agents")
+    if (@($expectedTopProperties | Where-Object { $topProperties -notcontains $_ }).Count -gt 0 -or
+        @($topProperties | Where-Object { $expectedTopProperties -notcontains $_ }).Count -gt 0) {
+        return [pscustomobject]@{
+            Result = New-CheckErrorResult -Code "AGENT_WATCH_SCOPE_DEFINITION_INVALID" -Message "strict監視定義のtop-level fieldがscope schema 1と一致しません。"
+            AgentsByThread = $null
+        }
+    }
+    try {
+        $scopeSchemaVersion = Get-RequiredIntegerStateValue -State $definition -Name "scopeSchemaVersion"
+    }
+    catch {
+        return [pscustomobject]@{
+            Result = New-CheckErrorResult -Code "AGENT_WATCH_SCOPE_DEFINITION_INVALID" -Message $_.Exception.Message
+            AgentsByThread = $null
+        }
+    }
+    if ($scopeSchemaVersion -ne $script:AgentWatchScopeSchemaVersion) {
+        return [pscustomobject]@{
+            Result = New-PolicyResult -Code "AGENT_WATCH_SCOPE_SCHEMA_MISMATCH" -Message "監視定義のscopeSchemaVersionが未対応です: $scopeSchemaVersion"
+            AgentsByThread = $null
+        }
+    }
+
+    $definitionAgents = @($definition.agents)
+    $agentsByThread = New-Object 'Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
+    $reports = New-Object 'Collections.Generic.Dictionary[string,string]' ([StringComparer]::OrdinalIgnoreCase)
+    $writeOwners = New-Object System.Collections.Generic.List[object]
+    $expectedAgentProperties = @("name", "threadId", "readOnly", "reportPath", "sourcePaths", "scopeSha256")
+    for ($index = 0; $index -lt $definitionAgents.Count; $index++) {
+        $agent = $definitionAgents[$index]
+        if ($null -eq $agent) {
+            return [pscustomobject]@{
+                Result = New-CheckErrorResult -Code "AGENT_WATCH_SCOPE_DEFINITION_INVALID" -Message "監視定義agents[$index]がnullです。"
+                AgentsByThread = $null
+            }
+        }
+        $properties = @($agent.PSObject.Properties.Name)
+        if (@($expectedAgentProperties | Where-Object { $properties -notcontains $_ }).Count -gt 0 -or
+            @($properties | Where-Object { $expectedAgentProperties -notcontains $_ }).Count -gt 0) {
+            return [pscustomobject]@{
+                Result = New-CheckErrorResult -Code "AGENT_WATCH_SCOPE_DEFINITION_INVALID" -Message "監視定義agents[$index]のfieldがscope schema 1と一致しません。"
+                AgentsByThread = $null
+            }
+        }
+        foreach ($stringField in @("name", "threadId", "reportPath", "scopeSha256")) {
+            if (-not ($agent.PSObject.Properties[$stringField].Value -is [string])) {
+                return [pscustomobject]@{
+                    Result = New-CheckErrorResult -Code "AGENT_WATCH_SCOPE_DEFINITION_INVALID" -Message "監視定義agents[$index].$stringField がJSON文字列ではありません。"
+                    AgentsByThread = $null
+                }
+            }
+        }
+        $name = [string]$agent.name
+        $threadId = [string]$agent.threadId
+        $reportPath = [string]$agent.reportPath
+        $scopeSha256 = [string]$agent.scopeSha256
+        if ([string]::IsNullOrWhiteSpace($name) -or
+            -not [regex]::IsMatch($threadId, '^[A-Za-z0-9][A-Za-z0-9._:-]{5,127}$', [Text.RegularExpressions.RegexOptions]::CultureInvariant) -or
+            [string]::IsNullOrWhiteSpace($reportPath) -or
+            -not [regex]::IsMatch($scopeSha256, '^[0-9a-f]{64}$')) {
+            return [pscustomobject]@{
+                Result = New-CheckErrorResult -Code "AGENT_WATCH_SCOPE_DEFINITION_INVALID" -Message "監視定義agents[$index]のname/threadId/reportPath/scopeSha256が不正です。"
+                AgentsByThread = $null
+            }
+        }
+        $readOnlyProperty = $agent.PSObject.Properties["readOnly"]
+        if ($null -eq $readOnlyProperty -or -not ($readOnlyProperty.Value -is [bool])) {
+            return [pscustomobject]@{
+                Result = New-CheckErrorResult -Code "AGENT_WATCH_SCOPE_DEFINITION_INVALID" -Message "監視定義agents[$index].readOnlyがJSON booleanではありません。"
+                AgentsByThread = $null
+            }
+        }
+        $readOnly = [bool]$readOnlyProperty.Value
+        if ($null -eq $agent.sourcePaths -or -not ($agent.sourcePaths -is [Array])) {
+            return [pscustomobject]@{
+                Result = New-CheckErrorResult -Code "AGENT_WATCH_SCOPE_DEFINITION_INVALID" -Message "監視定義agents[$index].sourcePathsがJSON配列ではありません。"
+                AgentsByThread = $null
+            }
+        }
+        foreach ($configuredSource in @($agent.sourcePaths)) {
+            if (-not ($configuredSource -is [string])) {
+                return [pscustomobject]@{
+                    Result = New-CheckErrorResult -Code "AGENT_WATCH_SCOPE_DEFINITION_INVALID" -Message "監視定義agents[$index].sourcePathsにJSON文字列以外があります。"
+                    AgentsByThread = $null
+                }
+            }
+        }
+        [string[]]$configuredSources = @($agent.sourcePaths | ForEach-Object { [string]$_ })
+        $reportKey = Get-WatchPathComparisonKey -Path $reportPath -BasePath $Root
+        [string[]]$logicalSources = @()
+        if ($readOnly) {
+            if ($configuredSources.Count -ne 1 -or
+                -not [string]::Equals(
+                    (Get-WatchPathComparisonKey -Path $configuredSources[0] -BasePath $Root),
+                    $reportKey,
+                    [StringComparison]::OrdinalIgnoreCase
+                )) {
+                return [pscustomobject]@{
+                    Result = New-PolicyResult -Code "AGENT_WATCH_SCOPE_READ_ONLY_SENTINEL_INVALID" -Message "readOnly担当のsourcePathsはwatcher互換用のreportPath 1件だけにしてください: agent=$name"
+                    AgentsByThread = $null
+                }
+            }
+        }
+        else {
+            if ($configuredSources.Count -eq 0) {
+                return [pscustomobject]@{
+                    Result = New-PolicyResult -Code "AGENT_WATCH_SCOPE_DEFINITION_INVALID" -Message "write担当のsourcePathsが空です: agent=$name"
+                    AgentsByThread = $null
+                }
+            }
+            $logicalSources = $configuredSources
+        }
+        $sourceSet = New-Object 'Collections.Generic.Dictionary[string,string]' ([StringComparer]::OrdinalIgnoreCase)
+        foreach ($sourcePath in $logicalSources) {
+            if ([string]::IsNullOrWhiteSpace($sourcePath)) {
+                return [pscustomobject]@{
+                    Result = New-CheckErrorResult -Code "AGENT_WATCH_SCOPE_DEFINITION_INVALID" -Message "監視定義agents[$index].sourcePathsに空のpathがあります。"
+                    AgentsByThread = $null
+                }
+            }
+            $sourceKey = Get-WatchPathComparisonKey -Path $sourcePath -BasePath $Root
+            if ($sourceSet.ContainsKey($sourceKey)) {
+                return [pscustomobject]@{
+                    Result = New-PolicyResult -Code "AGENT_WATCH_SCOPE_PATH_DUPLICATE" -Message "同じ担当のsourcePathsが重複しています: agent=$name path=$sourceKey"
+                    AgentsByThread = $null
+                }
+            }
+            $sourceSet.Add($sourceKey, $sourcePath)
+        }
+        $expectedScopeSha256 = Get-AgentWatchScopeSha256 `
+            -ThreadId $threadId `
+            -ReadOnly $readOnly `
+            -ReportPath $reportPath `
+            -SourcePaths $logicalSources `
+            -Root $Root
+        if (-not [string]::Equals($scopeSha256, $expectedScopeSha256, [StringComparison]::Ordinal)) {
+            return [pscustomobject]@{
+                Result = New-PolicyResult -Code "AGENT_WATCH_SCOPE_HASH_MISMATCH" -Message "監視定義agents[$index].scopeSha256がpath集合から再計算した値と一致しません: agent=$name"
+                AgentsByThread = $null
+            }
+        }
+        if ($agentsByThread.ContainsKey($threadId)) {
+            return [pscustomobject]@{
+                Result = New-PolicyResult -Code "AGENT_THREAD_ID_DUPLICATE" -Message "監視定義のthreadIdが重複しています: $threadId"
+                AgentsByThread = $null
+            }
+        }
+        if ($reports.ContainsKey($reportKey)) {
+            return [pscustomobject]@{
+                Result = New-PolicyResult -Code "AGENT_WATCH_SCOPE_REPORT_DUPLICATE" -Message "監視定義のreportPathが担当間で重複しています: $reportKey"
+                AgentsByThread = $null
+            }
+        }
+        $reports.Add($reportKey, $threadId)
+        # 報告書も担当が実際に書くpathである。別担当のsource tree配下へ置くと
+        # その更新を別担当の進捗として数えるため、所有writeとして重複検査する。
+        $writeOwners.Add([pscustomobject]@{
+            Name = $name
+            ThreadId = $threadId
+            Path = $reportKey
+        })
+        $entry = [pscustomobject]@{
+            Name = $name
+            ThreadId = $threadId
+            ReadOnly = $readOnly
+            ReportPath = $reportKey
+            SourcePaths = @($sourceSet.Keys)
+            ScopeSha256 = $scopeSha256
+        }
+        $agentsByThread.Add($threadId, $entry)
+        if (-not $readOnly) {
+            foreach ($sourceKey in @($sourceSet.Keys)) {
+                $writeOwners.Add([pscustomobject]@{
+                    Name = $name
+                    ThreadId = $threadId
+                    Path = [string]$sourceKey
+                })
+            }
+        }
+    }
+
+    for ($firstIndex = 0; $firstIndex -lt $writeOwners.Count; $firstIndex++) {
+        for ($secondIndex = $firstIndex + 1; $secondIndex -lt $writeOwners.Count; $secondIndex++) {
+            $first = $writeOwners[$firstIndex]
+            $second = $writeOwners[$secondIndex]
+            if ([string]::Equals([string]$first.ThreadId, [string]$second.ThreadId, [StringComparison]::Ordinal)) {
+                continue
+            }
+            if (Test-WatchPathOverlap -FirstPath ([string]$first.Path) -SecondPath ([string]$second.Path)) {
+                return [pscustomobject]@{
+                    Result = New-PolicyResult -Code "AGENT_WATCH_SCOPE_OVERLAP" -Message (
+                        "同時write担当のpathが同一または親子で重複しています: {0} ({1}) <-> {2} ({3})" -f
+                            $first.Name, $first.Path, $second.Name, $second.Path
+                    )
+                    AgentsByThread = $null
+                }
+            }
+        }
+    }
+    return [pscustomobject]@{
+        Result = New-AgentWatchResult -ExitCode 0 -Code "AGENT_WATCH_SCOPE_DEFINITION_OK" -Message "監視定義のthreadId/readOnly/path所有は一意です。"
+        AgentsByThread = $agentsByThread
+    }
+}
+
+function Read-AgentWatchScopeBlock {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text,
+        [Parameter(Mandatory = $true)][string]$Root
+    )
+
+    $openingMarker = "[AGENT_WATCH_SCOPE schema=1]"
+    $closingMarker = "[/AGENT_WATCH_SCOPE]"
+    $openingMatches = [regex]::Matches($Text, '(?m)^\[AGENT_WATCH_SCOPE schema=1\]\r?$')
+    $closingMatches = [regex]::Matches($Text, '(?m)^\[/AGENT_WATCH_SCOPE\]\r?$')
+    if ($openingMatches.Count -eq 0 -or $closingMatches.Count -eq 0) {
+        return [pscustomobject]@{
+            Result = New-PolicyResult -Code "AGENT_WATCH_SCOPE_MISSING" -Message "strict監視定義では委譲本文にAGENT_WATCH_SCOPEを1件書いてください。"
+            Scope = $null
+        }
+    }
+    if ($openingMatches.Count -ne 1 -or $closingMatches.Count -ne 1 -or
+        $closingMatches[0].Index -le $openingMatches[0].Index) {
+        return [pscustomobject]@{
+            Result = New-PolicyResult -Code "AGENT_WATCH_SCOPE_INVALID" -Message "AGENT_WATCH_SCOPE markerは引用やcode fenceでなく1組だけ書いてください。"
+            Scope = $null
+        }
+    }
+    $prefix = $Text.Substring(0, $openingMatches[0].Index)
+    if (([regex]::Matches($prefix, '(?m)^```').Count % 2) -ne 0) {
+        return [pscustomobject]@{
+            Result = New-PolicyResult -Code "AGENT_WATCH_SCOPE_INVALID" -Message "code fence内のAGENT_WATCH_SCOPEは宣言として扱いません。"
+            Scope = $null
+        }
+    }
+    $bodyStart = $openingMatches[0].Index + $openingMatches[0].Length
+    $body = $Text.Substring($bodyStart, $closingMatches[0].Index - $bodyStart).Trim([char[]]"`r`n")
+    $fields = @{}
+    $sources = New-Object System.Collections.Generic.List[string]
+    foreach ($line in @($body -split "`r?`n")) {
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            return [pscustomobject]@{
+                Result = New-PolicyResult -Code "AGENT_WATCH_SCOPE_INVALID" -Message "AGENT_WATCH_SCOPE内に空行は置けません。"
+                Scope = $null
+            }
+        }
+        $separatorIndex = $line.IndexOf('=')
+        if ($separatorIndex -le 0) {
+            return [pscustomobject]@{
+                Result = New-PolicyResult -Code "AGENT_WATCH_SCOPE_INVALID" -Message "AGENT_WATCH_SCOPEの各行はkey=valueで書いてください。"
+                Scope = $null
+            }
+        }
+        $key = $line.Substring(0, $separatorIndex)
+        $value = $line.Substring($separatorIndex + 1)
+        if ([string]::IsNullOrWhiteSpace($value) -or -not [string]::Equals($value, $value.Trim(), [StringComparison]::Ordinal)) {
+            return [pscustomobject]@{
+                Result = New-PolicyResult -Code "AGENT_WATCH_SCOPE_INVALID" -Message "AGENT_WATCH_SCOPEの値は空や前後空白を含められません: key=$key"
+                Scope = $null
+            }
+        }
+        if ($key -eq "sourcePath") {
+            $sources.Add($value)
+            continue
+        }
+        if (@("threadId", "readOnly", "reportPath") -notcontains $key -or $fields.ContainsKey($key)) {
+            return [pscustomobject]@{
+                Result = New-PolicyResult -Code "AGENT_WATCH_SCOPE_INVALID" -Message "AGENT_WATCH_SCOPEに未知または重複fieldがあります: $key"
+                Scope = $null
+            }
+        }
+        $fields[$key] = $value
+    }
+    foreach ($requiredField in @("threadId", "readOnly", "reportPath")) {
+        if (-not $fields.ContainsKey($requiredField)) {
+            return [pscustomobject]@{
+                Result = New-PolicyResult -Code "AGENT_WATCH_SCOPE_INVALID" -Message "AGENT_WATCH_SCOPEの必須fieldがありません: $requiredField"
+                Scope = $null
+            }
+        }
+    }
+    $threadId = [string]$fields["threadId"]
+    if (-not [regex]::IsMatch($threadId, '^[A-Za-z0-9][A-Za-z0-9._:-]{5,127}$', [Text.RegularExpressions.RegexOptions]::CultureInvariant)) {
+        return [pscustomobject]@{
+            Result = New-PolicyResult -Code "AGENT_WATCH_SCOPE_INVALID" -Message "AGENT_WATCH_SCOPEのthreadIdが不正です。"
+            Scope = $null
+        }
+    }
+    $readOnlyText = [string]$fields["readOnly"]
+    if ($readOnlyText -ne "true" -and $readOnlyText -ne "false") {
+        return [pscustomobject]@{
+            Result = New-PolicyResult -Code "AGENT_WATCH_SCOPE_INVALID" -Message "AGENT_WATCH_SCOPEのreadOnlyはtrue/falseの小文字で書いてください。"
+            Scope = $null
+        }
+    }
+    $readOnly = ($readOnlyText -eq "true")
+    if ($readOnly -and $sources.Count -ne 0) {
+        return [pscustomobject]@{
+            Result = New-PolicyResult -Code "AGENT_WATCH_SCOPE_INVALID" -Message "readOnly=trueの指示scopeにはsourcePathを置けません。"
+            Scope = $null
+        }
+    }
+    $reportKey = Get-WatchPathComparisonKey -Path ([string]$fields["reportPath"]) -BasePath $Root
+    $sourceSet = New-Object 'Collections.Generic.Dictionary[string,string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($sourcePath in $sources) {
+        $sourceKey = Get-WatchPathComparisonKey -Path $sourcePath -BasePath $Root
+        if ($sourceSet.ContainsKey($sourceKey)) {
+            return [pscustomobject]@{
+                Result = New-PolicyResult -Code "AGENT_WATCH_SCOPE_PATH_DUPLICATE" -Message "AGENT_WATCH_SCOPEのsourcePathが重複しています: $sourceKey"
+                Scope = $null
+            }
+        }
+        $sourceSet.Add($sourceKey, $sourcePath)
+    }
+    $scope = [pscustomobject]@{
+        ThreadId = $threadId
+        ReadOnly = $readOnly
+        ReportPath = $reportKey
+        SourcePaths = @($sourceSet.Keys)
+        ScopeSha256 = Get-AgentWatchScopeSha256 `
+            -ThreadId $threadId `
+            -ReadOnly $readOnly `
+            -ReportPath ([string]$fields["reportPath"]) `
+            -SourcePaths @($sources) `
+            -Root $Root
+    }
+    return [pscustomobject]@{
+        Result = New-AgentWatchResult -ExitCode 0 -Code "AGENT_WATCH_SCOPE_BLOCK_OK" -Message "AGENT_WATCH_SCOPEを構文解析しました。"
+        Scope = $scope
+    }
+}
+
+function Test-AgentWatchDelegationScope {
+    param(
+        [Parameter(Mandatory = $true)]$DefinitionContext,
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$DelegationText,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$TargetThreadId
+    )
+
+    if (-not [string]::Equals(
+        [string]$DefinitionContext.DefinitionSha256,
+        [string]$DefinitionContext.RuntimeDefinitionSha256,
+        [StringComparison]::Ordinal
+    )) {
+        return New-PolicyResult -Code "DEFINITION_HASH_MISMATCH" -Message "監視定義が最後のscan後に変わっています。次のscan完了まで委譲できません。"
+    }
+    if (-not [bool]$DefinitionContext.Strict) {
+        return New-AgentWatchResult -ExitCode 0 -Code "AGENT_WATCH_SCOPE_LEGACY" -Message "旧監視定義では委譲scope blockを要求しません。"
+    }
+    if ([string]::IsNullOrEmpty($TargetThreadId)) {
+        return New-PolicyResult -Code "AGENT_WATCH_SCOPE_TARGET_REQUIRED" -Message "strict監視中の新規targetless委譲は実threadIdを事前に確定できません。既存5担当へのtarget付き送信だけを行ってください。"
+    }
+    $definitionResult = Test-AgentWatchScopeDefinition -DefinitionContext $DefinitionContext -Root $Root
+    if ($definitionResult.Result.ExitCode -ne 0) {
+        return $definitionResult.Result
+    }
+    $blockResult = Read-AgentWatchScopeBlock -Text $DelegationText -Root $Root
+    if ($blockResult.Result.ExitCode -ne 0) {
+        return $blockResult.Result
+    }
+    $scope = $blockResult.Scope
+    if (-not [string]::IsNullOrEmpty($TargetThreadId) -and
+        -not [string]::Equals($TargetThreadId, [string]$scope.ThreadId, [StringComparison]::Ordinal)) {
+        return New-PolicyResult -Code "AGENT_WATCH_SCOPE_THREAD_MISMATCH" -Message "payloadの送信先とAGENT_WATCH_SCOPE.threadIdが一致しません。"
+    }
+    if (-not $definitionResult.AgentsByThread.ContainsKey([string]$scope.ThreadId)) {
+        return New-PolicyResult -Code "AGENT_WATCH_SCOPE_THREAD_UNKNOWN" -Message "AGENT_WATCH_SCOPE.threadIdに対応する監視担当がありません: $($scope.ThreadId)"
+    }
+    $expected = $definitionResult.AgentsByThread[[string]$scope.ThreadId]
+    if ([bool]$scope.ReadOnly -ne [bool]$expected.ReadOnly) {
+        return New-PolicyResult -Code "AGENT_WATCH_SCOPE_MODE_MISMATCH" -Message "指示のreadOnlyと監視定義が一致しません: thread=$($scope.ThreadId)"
+    }
+    if (-not [string]::Equals([string]$scope.ReportPath, [string]$expected.ReportPath, [StringComparison]::OrdinalIgnoreCase)) {
+        return New-PolicyResult -Code "AGENT_WATCH_SCOPE_REPORT_MISMATCH" -Message "指示のreportPathと監視定義が一致しません: expected=$($expected.ReportPath) actual=$($scope.ReportPath)"
+    }
+    $actualSources = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($sourcePath in @($scope.SourcePaths)) { [void]$actualSources.Add([string]$sourcePath) }
+    $expectedSources = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($sourcePath in @($expected.SourcePaths)) { [void]$expectedSources.Add([string]$sourcePath) }
+    $missing = @($expectedSources | Where-Object { -not $actualSources.Contains([string]$_) } | Sort-Object)
+    if ($missing.Count -gt 0) {
+        return New-PolicyResult -Code "AGENT_WATCH_SCOPE_MISSING_PATH" -Message "指示scopeに監視定義のwrite pathが不足しています: $($missing -join ', ')"
+    }
+    $extra = @($actualSources | Where-Object { -not $expectedSources.Contains([string]$_) } | Sort-Object)
+    if ($extra.Count -gt 0) {
+        return New-PolicyResult -Code "AGENT_WATCH_SCOPE_EXTRA_PATH" -Message "指示scopeに監視定義にないwrite pathがあります: $($extra -join ', ')"
+    }
+    if (-not [string]::Equals([string]$scope.ScopeSha256, [string]$expected.ScopeSha256, [StringComparison]::Ordinal)) {
+        return New-PolicyResult -Code "AGENT_WATCH_SCOPE_HASH_MISMATCH" -Message "指示scopeのhashが監視定義と一致しません: thread=$($scope.ThreadId)"
+    }
+    return New-AgentWatchResult -ExitCode 0 -Code "AGENT_WATCH_SCOPE_OK" -Message "指示scopeと監視定義が不足・余分なく一致しています。"
+}
+
 function Read-AgentSendLedger {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -648,23 +1268,26 @@ function Invoke-AgentReplyGate {
         [Parameter(Mandatory = $true)][string]$ToolName,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$DelegationText,
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$AgentStates,
-        [Parameter(Mandatory = $true)][DateTime]$NowUtc
+        [Parameter(Mandatory = $true)][DateTime]$NowUtc,
+        [switch]$DefinitionRefreshRecoveryOnly
     )
 
     if ([string]::IsNullOrWhiteSpace($DelegationText)) {
         return New-PolicyResult -Code "AGENT_REPLY_TEXT_EMPTY" -Message "空の送信では返信待ちを解消できません。担当へ送る本文を書いてください。"
     }
     $targetThreadId = Get-DelegationTargetThreadId -HookPayload $HookPayload -ToolName $ToolName
-    $agentsByThread = New-Object 'Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
-    foreach ($agentState in $AgentStates) {
-        $threadId = Get-AgentThreadIdFromName -Name ([string]$agentState.name)
-        if ([string]::IsNullOrEmpty($threadId)) {
-            continue
+    try {
+        if ($DefinitionRefreshRecoveryOnly) {
+            $definitionContext = $null
+            $agentsByThread = New-Object 'Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
         }
-        if ($agentsByThread.ContainsKey($threadId)) {
-            return New-CheckErrorResult -Code "AGENT_THREAD_ID_DUPLICATE" -Message "監視定義のthread IDが重複しています: $threadId"
+        else {
+            $definitionContext = Read-AgentWatchDefinitionContext -Root $Root
+            $agentsByThread = Get-AgentIdentityMap -DefinitionContext $definitionContext -AgentStates $AgentStates
         }
-        $agentsByThread.Add($threadId, $agentState)
+    }
+    catch {
+        return New-CheckErrorResult -Code "AGENT_WATCH_SCOPE_DEFINITION_INVALID" -Message $_.Exception.Message
     }
 
     $ledgerPath = Join-Path (Join-Path $Root "scratchpad") $script:AgentSendLedgerFileName
@@ -693,13 +1316,35 @@ function Invoke-AgentReplyGate {
             $recordsByThread.Add([string]$record.threadId, $record)
         }
 
+        if ($DefinitionRefreshRecoveryOnly) {
+            # strict定義が編集中でも、既存ledgerのagentKeyと旧runtime stateが双方向に
+            # 1対1ならthreadIdを復元できる。通常経路では旧threadを復活させない。
+            foreach ($record in $records) {
+                $recordThreadId = [string]$record.threadId
+                $sameKeyRecords = @(
+                    $records | Where-Object {
+                        [string]::Equals([string]$_.agentKey, [string]$record.agentKey, [StringComparison]::Ordinal)
+                    }
+                )
+                $matchingStates = @(
+                    $AgentStates | Where-Object {
+                        [string]::Equals([string]$_.agentKey, [string]$record.agentKey, [StringComparison]::Ordinal)
+                    }
+                )
+                if ($sameKeyRecords.Count -eq 1 -and $matchingStates.Count -eq 1) {
+                    $agentsByThread.Add($recordThreadId, $matchingStates[0])
+                }
+            }
+        }
+
         $futureBoundaryUtc = $NowUtc.AddMinutes($script:FutureToleranceMinutes)
         $waitingAgents = New-Object System.Collections.Generic.List[object]
         foreach ($entry in $agentsByThread.GetEnumerator()) {
             $threadId = [string]$entry.Key
             $agentState = $entry.Value
             if (-not $recordsByThread.ContainsKey($threadId) -or
-                -not [string]::Equals([string]$recordsByThread[$threadId].agentKey, [string]$agentState.agentKey, [StringComparison]::Ordinal) -or
+                ($DefinitionRefreshRecoveryOnly -and
+                    -not [string]::Equals([string]$recordsByThread[$threadId].agentKey, [string]$agentState.agentKey, [StringComparison]::Ordinal)) -or
                 [string]::IsNullOrEmpty([string]$agentState.latestWriteUtc)) {
                 continue
             }
@@ -744,6 +1389,23 @@ function Invoke-AgentReplyGate {
                     }
             ) -join "; "
             return New-PolicyResult -Code "AGENT_REPLY_REQUIRED" -Message "先に次の担当へ返事をしてください: $waitingDescription"
+        }
+
+        if ($DefinitionRefreshRecoveryOnly -and -not $targetIsWaiting) {
+            return New-PolicyResult -Code "DEFINITION_REFRESH_REPLY_NOT_WAITING" -Message "定義更新中の例外は、15分以上返信待ちの本人への送信だけに使えます。"
+        }
+
+        # 返信待ち本人には、誤ったscope定義から回復する道を必ず残す。別担当・新規委譲は
+        # この例外へ入らず、下の不足/余分/重複を含むstrict検査を通る必要がある。
+        if (-not $targetIsWaiting) {
+            $scopeResult = Test-AgentWatchDelegationScope `
+                -DefinitionContext $definitionContext `
+                -Root $Root `
+                -DelegationText $DelegationText `
+                -TargetThreadId $targetThreadId
+            if ($scopeResult.ExitCode -ne 0) {
+                return $scopeResult
+            }
         }
 
         if (-not [string]::IsNullOrEmpty($targetThreadId) -and $agentsByThread.ContainsKey($targetThreadId)) {
@@ -1615,6 +2277,12 @@ function Write-HookDeny {
     elseif ([string]$Result.Code -eq "AGENT_REPLY_TEXT_EMPTY") {
         "空でない返事を待っている担当本人へ送ってください。"
     }
+    elseif ([string]$Result.Code -like "AGENT_WATCH_SCOPE_*") {
+        "監視定義のthreadId/readOnly/reportPath/sourcePathsと委譲本文のAGENT_WATCH_SCOPEを不足・余分なく一致させてください。path重複時は所有を1担当へ絞ってください。"
+    }
+    elseif ([string]$Result.Code -eq "DEFINITION_HASH_MISMATCH") {
+        "監視定義を変更した直後です。次のscan完了を待ってください。15分以上返信待ちの本人への非空返信だけは回復路で通ります。"
+    }
     else {
         "担当へ委譲する前に scripts/watch-agents.ps1 を -Once なし・10分間隔で継続稼働させてください。"
     }
@@ -1660,6 +2328,35 @@ if ($Action -eq "Hook") {
         $resolvedRoot = Resolve-RepositoryRoot -SuppliedRoot $RepositoryRoot
         $hookResult = Invoke-AgentWatchCheck -Root $resolvedRoot
         if ($hookResult.ExitCode -ne 0) {
+            # 定義更新後のscan待ちであっても、旧runtimeと送信履歴から「15分以上
+            # 返信待ちの本人」と実証できる相手への非空返信だけは回復路として通す。
+            # 別担当・新規委譲は従来どおりDEFINITION_HASH_MISMATCHで停止する。
+            if ([string]$hookResult.Code -eq "DEFINITION_HASH_MISMATCH") {
+                $recoveryText = Get-DelegationText -HookPayload $hookPayload -ToolName $toolName
+                try {
+                    $recoveryContext = Read-AgentWatchRecoveryContext -Root $resolvedRoot
+                    $recoverySnapshot = Test-DefinitionRefreshRecoverySnapshot `
+                        -DefinitionContext $recoveryContext `
+                        -Root $resolvedRoot `
+                        -NowUtc ([DateTime]::UtcNow)
+                    if ($recoverySnapshot.ExitCode -eq 0) {
+                        $recoveryGate = Invoke-AgentReplyGate `
+                            -Root $resolvedRoot `
+                            -HookPayload $hookPayload `
+                            -ToolName $toolName `
+                            -DelegationText $recoveryText `
+                            -AgentStates @($recoveryContext.RuntimeAgentStates) `
+                            -NowUtc ([DateTime]::UtcNow) `
+                            -DefinitionRefreshRecoveryOnly
+                        if ($recoveryGate.ExitCode -eq 0) {
+                            exit 0
+                        }
+                    }
+                }
+                catch {
+                    # 回復路の検査不能を通常の許可へ倒さない。元のhash不一致を返す。
+                }
+            }
             Write-HookDeny -Result $hookResult -Root $resolvedRoot
             exit 0
         }
