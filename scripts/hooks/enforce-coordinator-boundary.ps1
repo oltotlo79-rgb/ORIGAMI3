@@ -6,7 +6,23 @@ param(
     [Parameter(Mandatory = $true, ParameterSetName = "StopWatcher")]
     [switch]$StopRecordedWatcher,
 
+    [Parameter(Mandatory = $true, ParameterSetName = "WaitReport")]
+    [switch]$WaitForReportUpdate,
+
+    [Parameter(Mandatory = $true, ParameterSetName = "WaitReport")]
+    [ValidateNotNullOrEmpty()]
+    [string]$DefinitionPath,
+
+    [Parameter(Mandatory = $true, ParameterSetName = "WaitReport")]
+    [ValidateNotNullOrEmpty()]
+    [string]$ReportPath,
+
+    [Parameter(Mandatory = $true, ParameterSetName = "WaitReport")]
+    [ValidateRange(1, 3600)]
+    [int]$TimeoutSeconds,
+
     [Parameter(Mandatory = $true, ParameterSetName = "StopWatcher")]
+    [Parameter(Mandatory = $true, ParameterSetName = "WaitReport")]
     [ValidateNotNullOrEmpty()]
     [string]$RepositoryRoot
 )
@@ -342,6 +358,133 @@ function Test-SameWatcherPath {
         return $false
     }
     return [string]::Equals($actualFull, $expectedFull, [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Resolve-RegisteredWatchReportPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Definition,
+        [Parameter(Mandatory = $true)][string]$Report,
+        [Parameter(Mandatory = $true)][string]$Root
+    )
+
+    if (-not [IO.Path]::IsPathRooted($Definition) -or
+        -not [IO.Path]::IsPathRooted($Report) -or
+        -not [IO.Path]::IsPathRooted($Root)) {
+        throw "DefinitionPath, ReportPath, and RepositoryRoot must be absolute literal paths"
+    }
+    $resolvedRoot = [IO.Path]::GetFullPath($Root).TrimEnd([char[]]"\/")
+    if (-not (Test-Path -LiteralPath $resolvedRoot -PathType Container)) {
+        throw "RepositoryRoot does not exist: $resolvedRoot"
+    }
+    $resolvedDefinition = Resolve-PolicyPath $Definition $resolvedRoot
+    $definitionPrefix = $resolvedRoot + [IO.Path]::DirectorySeparatorChar
+    if (-not $resolvedDefinition.StartsWith($definitionPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+        [IO.Path]::GetFileName($resolvedDefinition) -notlike "watch-agents-*.json" -or
+        -not (Test-Path -LiteralPath $resolvedDefinition -PathType Leaf)) {
+        throw "DefinitionPath must be an existing watch-agents-*.json file below this repository"
+    }
+    $definitionItem = Get-Item -LiteralPath $resolvedDefinition -Force -ErrorAction Stop
+    if (($definitionItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "watch definition reparse points are not allowed"
+    }
+
+    try {
+        $strictUtf8 = New-Object Text.UTF8Encoding($false, $true)
+        $definitionValue = [IO.File]::ReadAllText($resolvedDefinition, $strictUtf8) | ConvertFrom-Json
+    }
+    catch {
+        throw "watch definition could not be read: $($_.Exception.Message)"
+    }
+    if ($null -eq $definitionValue -or @($definitionValue.PSObject.Properties.Name) -notcontains "agents") {
+        throw "watch definition is missing agents"
+    }
+    $agents = @($definitionValue.agents)
+    if ($agents.Count -eq 0) {
+        throw "watch definition agents must not be empty"
+    }
+
+    $resolvedRequestedReport = Resolve-PolicyPath $Report $resolvedRoot
+    $matchedReport = $null
+    $knownNames = @{}
+    foreach ($agent in $agents) {
+        if ($null -eq $agent) {
+            throw "watch definition contains a null agent"
+        }
+        $propertyNames = @($agent.PSObject.Properties.Name)
+        if ($propertyNames -notcontains "name" -or
+            [string]::IsNullOrWhiteSpace([string]$agent.name) -or
+            $propertyNames -notcontains "reportPath" -or
+            [string]::IsNullOrWhiteSpace([string]$agent.reportPath) -or
+            $propertyNames -notcontains "sourcePaths" -or
+            @($agent.sourcePaths).Count -eq 0) {
+            throw "watch definition contains an invalid name/reportPath/sourcePaths entry"
+        }
+        $agentName = [string]$agent.name
+        if ($knownNames.ContainsKey($agentName)) {
+            throw "watch definition contains a duplicate agent name: $agentName"
+        }
+        $knownNames[$agentName] = $true
+        foreach ($sourcePath in @($agent.sourcePaths)) {
+            if ([string]::IsNullOrWhiteSpace([string]$sourcePath)) {
+                throw "watch definition contains an empty sourcePath"
+            }
+        }
+
+        $resolvedConfiguredReport = Resolve-PolicyPath ([string]$agent.reportPath) $resolvedRoot
+        if (Test-SameWatcherPath -Actual $resolvedConfiguredReport -Expected $resolvedRequestedReport) {
+            $matchedReport = $resolvedConfiguredReport
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$matchedReport)) {
+        throw "ReportPath is not registered as a reportPath in the watch definition"
+    }
+    if (-not (Test-Path -LiteralPath $matchedReport -PathType Leaf)) {
+        throw "registered ReportPath does not identify an existing file"
+    }
+    $reportItem = Get-Item -LiteralPath $matchedReport -Force -ErrorAction Stop
+    if (($reportItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "registered ReportPath reparse points are not allowed"
+    }
+    return $matchedReport
+}
+
+function Invoke-WaitForReportUpdate {
+    param(
+        [Parameter(Mandatory = $true)][string]$Definition,
+        [Parameter(Mandatory = $true)][string]$Report,
+        [Parameter(Mandatory = $true)][int]$Timeout,
+        [Parameter(Mandatory = $true)][string]$Root
+    )
+
+    if ($Timeout -lt 1 -or $Timeout -gt 3600) {
+        throw "TimeoutSeconds must be between 1 and 3600"
+    }
+    $resolvedReport = Resolve-RegisteredWatchReportPath -Definition $Definition -Report $Report -Root $Root
+    $initialItem = Get-Item -LiteralPath $resolvedReport -Force -ErrorAction Stop
+    $initialTicks = $initialItem.LastWriteTimeUtc.Ticks
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        while ($timer.Elapsed.TotalSeconds -lt $Timeout) {
+            [Threading.Thread]::Sleep(100)
+            $currentItem = Get-Item -LiteralPath $resolvedReport -Force -ErrorAction Stop
+            if ($currentItem.LastWriteTimeUtc.Ticks -ne $initialTicks) {
+                Write-Host ("REPORT_UPDATE_DETECTED path={0} initialTicks={1} currentTicks={2} elapsedMilliseconds={3}" -f
+                    $resolvedReport, $initialTicks, $currentItem.LastWriteTimeUtc.Ticks, $timer.ElapsedMilliseconds)
+                return
+            }
+        }
+        $finalItem = Get-Item -LiteralPath $resolvedReport -Force -ErrorAction Stop
+        if ($finalItem.LastWriteTimeUtc.Ticks -ne $initialTicks) {
+            Write-Host ("REPORT_UPDATE_DETECTED path={0} initialTicks={1} currentTicks={2} elapsedMilliseconds={3}" -f
+                $resolvedReport, $initialTicks, $finalItem.LastWriteTimeUtc.Ticks, $timer.ElapsedMilliseconds)
+            return
+        }
+        Write-Host ("REPORT_UPDATE_TIMEOUT path={0} ticks={1} timeoutSeconds={2} elapsedMilliseconds={3}" -f
+            $resolvedReport, $initialTicks, $Timeout, $timer.ElapsedMilliseconds)
+    }
+    finally {
+        $timer.Stop()
+    }
 }
 
 function Assert-WatcherPathIsNotReparsePoint {
@@ -1109,6 +1252,45 @@ function Test-DesktopStartInvocation {
     }
 }
 
+function Test-ReportUpdateWaitInvocation {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$RepositoryRoot
+    )
+
+    if ($Arguments.Count -ne 9 -or
+        $Arguments[0].ToLowerInvariant() -ne "-waitforreportupdate" -or
+        $Arguments[1].ToLowerInvariant() -ne "-definitionpath" -or
+        $Arguments[3].ToLowerInvariant() -ne "-reportpath" -or
+        $Arguments[5].ToLowerInvariant() -ne "-timeoutseconds" -or
+        $Arguments[7].ToLowerInvariant() -ne "-repositoryroot") {
+        return New-PolicyDecision $false "report-wait" "report update wait requires exact ordered -WaitForReportUpdate -DefinitionPath <absolute watch-agents-*.json> -ReportPath <absolute registered report> -TimeoutSeconds <1..3600> -RepositoryRoot <this repository> arguments"
+    }
+    foreach ($pathArgument in @($Arguments[2], $Arguments[4], $Arguments[8])) {
+        if (-not [IO.Path]::IsPathRooted($pathArgument)) {
+            return New-PolicyDecision $false "report-wait" "DefinitionPath, ReportPath, and RepositoryRoot must be absolute literal paths"
+        }
+    }
+    if ($Arguments[6] -notmatch '^[1-9][0-9]{0,3}$') {
+        return New-PolicyDecision $false "report-wait" "TimeoutSeconds must be a literal integer between 1 and 3600"
+    }
+    $timeout = [int]$Arguments[6]
+    if ($timeout -lt 1 -or $timeout -gt 3600) {
+        return New-PolicyDecision $false "report-wait" "TimeoutSeconds must be a literal integer between 1 and 3600"
+    }
+    try {
+        $resolvedArgumentRoot = Resolve-PolicyPath $Arguments[8] $RepositoryRoot
+        if (-not [string]::Equals($resolvedArgumentRoot, $RepositoryRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            return New-PolicyDecision $false "report-wait" "RepositoryRoot must be this repository"
+        }
+        [void](Resolve-RegisteredWatchReportPath -Definition $Arguments[2] -Report $Arguments[4] -Root $RepositoryRoot)
+    }
+    catch {
+        return New-PolicyDecision $false "report-wait" ("report update wait could not verify its read-only scope: " + $_.Exception.Message)
+    }
+    return New-PolicyDecision $true "report-wait" "allowed bounded read-only wait for one registered reportPath update"
+}
+
 function Test-ScriptInvocation {
     param(
         [Parameter(Mandatory = $true)][string]$ScriptPath,
@@ -1151,6 +1333,21 @@ function Test-ScriptInvocation {
         return New-PolicyDecision $false "snapshot" "snapshot-worktrees permits only normal execution or the sole literal -Check argument"
     }
     if ($resolvedKey -eq $boundaryStopPath) {
+        try {
+            $boundaryItem = Get-Item -LiteralPath $resolvedScript -Force -ErrorAction Stop
+        }
+        catch {
+            return New-PolicyDecision $false "boundary-control" "boundary script could not be verified"
+        }
+        if (($boundaryItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            return New-PolicyDecision $false "boundary-control" "boundary script may not be a reparse point"
+        }
+        if ($Arguments.Count -gt 0 -and $Arguments[0].ToLowerInvariant() -eq "-waitforreportupdate") {
+            if (-not [IO.Path]::IsPathRooted($ScriptPath)) {
+                return New-PolicyDecision $false "report-wait" "report update wait requires the absolute boundary script path"
+            }
+            return Test-ReportUpdateWaitInvocation -Arguments $Arguments -RepositoryRoot $RepositoryRoot
+        }
         if (-not [IO.Path]::IsPathRooted($ScriptPath) -or
             $Arguments.Count -ne 3 -or
             $Arguments[0].ToLowerInvariant() -ne "-stoprecordedwatcher" -or
@@ -1158,10 +1355,7 @@ function Test-ScriptInvocation {
             -not [IO.Path]::IsPathRooted($Arguments[2])) {
             return New-PolicyDecision $false "watch-stop" "watcher stop requires the absolute boundary script and exact -StopRecordedWatcher -RepositoryRoot <this repository> arguments"
         }
-        try {
-            $resolvedArgumentRoot = Resolve-PolicyPath $Arguments[2] $RepositoryRoot
-            $boundaryItem = Get-Item -LiteralPath $resolvedScript -Force -ErrorAction Stop
-        }
+        try { $resolvedArgumentRoot = Resolve-PolicyPath $Arguments[2] $RepositoryRoot }
         catch {
             return New-PolicyDecision $false "watch-stop" "watcher stop script or RepositoryRoot could not be verified"
         }
@@ -1460,6 +1654,21 @@ function Invoke-PostEvent {
     Write-AcknowledgementReceipt -Paths $Paths -State $state
     Write-AuditEvent -Paths $Paths -Event "release-failure" -ToolName ([string]$state.toolName) -CommandHash ([string]$state.commandHash) -ToolUseId $toolUseId -Detail ([string]$state.lastFailure)
     Write-Warning "HOOK_HEALTH_DEGRADED check=coordinator-boundary status=blocked reason=PostToolUseFailure acknowledgement=$($Paths.Acknowledgement)"
+}
+
+if ($WaitForReportUpdate.IsPresent) {
+    try {
+        Invoke-WaitForReportUpdate `
+            -Definition $DefinitionPath `
+            -Report $ReportPath `
+            -Timeout $TimeoutSeconds `
+            -Root $RepositoryRoot
+        exit 0
+    }
+    catch {
+        Write-Error "REPORT_UPDATE_WAIT_FAILED: $($_.Exception.Message)"
+        exit 1
+    }
 }
 
 if ($StopRecordedWatcher.IsPresent) {

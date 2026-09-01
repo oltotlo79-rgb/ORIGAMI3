@@ -390,9 +390,13 @@ function New-StallResponseBlock {
     param(
         [Parameter(Mandatory = $true)][string]$Incident,
         [string]$Action = "investigate",
-        [string]$Evidence = "監視出力の停滞IDと対象を確認した",
+        [string]$ThreadId = "01a00001",
+        [AllowEmptyString()][string]$Evidence = "",
         [string]$Next = "担当へ現状確認を送り、次の走査で成果物更新を再測する"
     )
+    if ([string]::IsNullOrEmpty($Evidence)) {
+        $Evidence = "監視出力の停滞IDと対象を確認した thread=$ThreadId"
+    }
     return @(
         "[AGENT_WATCH_RESPONSE schema=1]",
         "incident=$Incident",
@@ -438,6 +442,7 @@ function New-HookPayload {
 function Get-ResponseTextForRuntime {
     param(
         [string]$FirstAction = "investigate",
+        [AllowEmptyString()][string]$FirstEvidence = "",
         [string]$FirstNext = "担当へ現状確認を送り、次の走査で成果物更新を再測する"
     )
     $runtimeState = [IO.File]::ReadAllText($runtimePath, $script:Utf8NoBom) | ConvertFrom-Json
@@ -445,20 +450,36 @@ function Get-ResponseTextForRuntime {
     $first = $true
     foreach ($agentState in @($runtimeState.agentStates)) {
         if ([string]$agentState.status -eq "active") { continue }
+        $threadMatch = [regex]::Match([string]$agentState.name, '\((?<threadId>[A-Za-z0-9][A-Za-z0-9._:-]{5,127}),\s*[^()]+\)\s*$')
+        if (-not $threadMatch.Success) { throw "test fixture agent name has no thread id: $([string]$agentState.name)" }
+        $threadId = [string]$threadMatch.Groups["threadId"].Value
         if ($first) {
-            $blocks.Add((New-StallResponseBlock -Incident ([string]$agentState.incidentId) -Action $FirstAction -Next $FirstNext))
+            $blocks.Add((New-StallResponseBlock -Incident ([string]$agentState.incidentId) -Action $FirstAction -ThreadId $threadId -Evidence $FirstEvidence -Next $FirstNext))
             $first = $false
         }
         else {
-            $blocks.Add((New-StallResponseBlock -Incident ([string]$agentState.incidentId)))
+            $blocks.Add((New-StallResponseBlock -Incident ([string]$agentState.incidentId) -ThreadId $threadId))
         }
     }
     return (($blocks.ToArray() -join "`n") + "`n委譲本文")
 }
 
 function New-ResponseTextForIncidents {
-    param([Parameter(Mandatory = $true)][string[]]$IncidentIds)
-    $blocks = @($IncidentIds | ForEach-Object { New-StallResponseBlock -Incident $_ })
+    param(
+        [Parameter(Mandatory = $true)][string[]]$IncidentIds,
+        [string[]]$ThreadIds = @("01a00001", "01a00002")
+    )
+    # deny理由のcurrentはincident IDでsort済みであり、definitionの担当順ではない。
+    # runtime lag検査では各evidenceへ既知の全thread IDを明示し、この補助関数が
+    # incidentの並び順から誤った対応を捏造しないようにする。1対1の対応ずれは
+    # case 22の専用負例で、各evidenceを単独thread IDにして直接検査する。
+    $sharedEvidence = "監視出力の停滞IDと対象を確認した threads=$($ThreadIds -join ',')"
+    $blocks = @(
+        for ($index = 0; $index -lt $IncidentIds.Count; $index++) {
+            $threadId = if ($index -lt $ThreadIds.Count) { $ThreadIds[$index] } else { $ThreadIds[0] }
+            New-StallResponseBlock -Incident $IncidentIds[$index] -ThreadId $threadId -Evidence $sharedEvidence
+        }
+    )
     return (($blocks -join "`n") + "`n委譲本文")
 }
 
@@ -668,12 +689,12 @@ if ($null -eq $powerShellCommand) {
     (([ordered]@{
         agents = @(
             [ordered]@{
-                name = "test-agent"
+                name = "test-agent (01a00001, sol)"
                 reportPath = "scratchpad/agent-report.md"
                 sourcePaths = @("src/value.rs")
             },
             [ordered]@{
-                name = "test-agent-2"
+                name = "test-agent-2 (01a00002, sol)"
                 reportPath = "scratchpad/agent-report-2.md"
                 sourcePaths = @("src/value-2.rs")
             }
@@ -1279,6 +1300,17 @@ try {
         Assert-Equal $result.ExitCode 0 "$toolName のHook protocolを0で返すこと"
         Assert-True (-not $result.Output.Contains('"permissionDecision":"deny"')) "$toolName の実text fieldに全宣言があれば修復委譲を通すこと"
     }
+    $missingThreadText = $validResponseText.Replace(" thread=01a00001", "")
+    $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source -Action "Hook" -Payload (New-HookPayload -ToolName "Agent" -Text $missingThreadText)
+    Assert-Contains $result.Output "STALL_RESPONSE_THREAD_ID_MISSING" "incident担当のthread idがevidenceに無ければ拒否すること"
+    Assert-Contains $result.Output "requiredThreadId=01a00001" "差し戻し文へ必要なthread idを表示すること"
+    $embeddedThreadText = $validResponseText.Replace("thread=01a00001", "thread=01a000010")
+    $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source -Action "Hook" -Payload (New-HookPayload -ToolName "Agent" -Text $embeddedThreadText)
+    Assert-Contains $result.Output "STALL_RESPONSE_THREAD_ID_MISSING" "別thread idの一部に埋まった必要IDを完全なthread idとして扱わないこと"
+    $swappedThreadText = $validResponseText.Replace("thread=01a00001", "thread=__swap__").Replace("thread=01a00002", "thread=01a00001").Replace("thread=__swap__", "thread=01a00002")
+    $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source -Action "Hook" -Payload (New-HookPayload -ToolName "Agent" -Text $swappedThreadText)
+    Assert-Contains $result.Output "STALL_RESPONSE_THREAD_ID_MISSING" "incidentと担当thread idを1件ずつずらした宣言を拒否すること"
+    Assert-Contains $result.Output "requiredThreadId=01a00001" "対応ずれでも最初のincidentに必要なthread idを示すこと"
     $invalidContinueText = Get-ResponseTextForRuntime -FirstAction "continue" -FirstNext "次の走査まで待つ"
     $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source -Action "Hook" -Payload (New-HookPayload -ToolName "Agent" -Text $invalidContinueText)
     Assert-Contains $result.Output "STALL_CONTINUE_CONDITION" "continueの一般的nextを拒否すること"
@@ -1288,37 +1320,35 @@ try {
     $emptyContinueText = Get-ResponseTextForRuntime -FirstAction "continue" -FirstNext "progress-when:"
     $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source -Action "Hook" -Payload (New-HookPayload -ToolName "Agent" -Text $emptyContinueText)
     Assert-Contains $result.Output "STALL_CONTINUE_CONDITION" "continueの空progress-when条件を拒否すること"
-    $blankEvidenceText = $validResponseText.Replace("evidence=監視出力の停滞IDと対象を確認した", "evidence=   ")
+    $blankEvidenceText = Get-ResponseTextForRuntime -FirstEvidence "   "
     $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source -Action "Hook" -Payload (New-HookPayload -ToolName "Agent" -Text $blankEvidenceText)
     Assert-Contains $result.Output "STALL_RESPONSE_EVIDENCE" "空白だけのevidenceを拒否すること"
     $blankNextText = $validResponseText.Replace("next=担当へ現状確認を送り、次の走査で成果物更新を再測する", "next=   ")
     $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source -Action "Hook" -Payload (New-HookPayload -ToolName "Agent" -Text $blankNextText)
     Assert-Contains $result.Output "STALL_RESPONSE_NEXT" "空白だけのnextを拒否すること"
 
-    $reassignWithMtimeOnlyText = $validResponseText.Replace("action=investigate", "action=reassign").Replace("evidence=監視出力の停滞IDと対象を確認した", "evidence=最終更新時刻が40分を超えた")
+    $reassignWithMtimeOnlyText = Get-ResponseTextForRuntime -FirstAction "reassign" -FirstEvidence "最終更新時刻が40分を超えた thread=01a00001"
     $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source -Action "Hook" -Payload (New-HookPayload -ToolName "Agent" -Text $reassignWithMtimeOnlyText)
     Assert-Contains $result.Output "STALL_REASSIGN_EVIDENCE" "更新時刻だけを根拠にしたreassignを拒否すること"
     Assert-Contains $result.Output "action=investigate" "reassign拒否時にinvestigateの修復経路を示すこと"
 
-    $reassignWithProcessOnlyText = $validResponseText.Replace("action=investigate", "action=reassign").Replace("evidence=監視出力の停滞IDと対象を確認した", "evidence=cargo=0 rustc=0 test=0")
+    $reassignWithProcessOnlyText = Get-ResponseTextForRuntime -FirstAction "reassign" -FirstEvidence "cargo=0 rustc=0 test=0 thread=01a00001"
     $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source -Action "Hook" -Payload (New-HookPayload -ToolName "Agent" -Text $reassignWithProcessOnlyText)
     Assert-Contains $result.Output "STALL_REASSIGN_EVIDENCE" "process数だけを根拠にしたreassignを拒否すること"
 
-    $reassignWithEmptyResponseOnlyText = $validResponseText.Replace("action=investigate", "action=reassign").Replace("evidence=監視出力の停滞IDと対象を確認した", "evidence=応答が空だった")
+    $reassignWithEmptyResponseOnlyText = Get-ResponseTextForRuntime -FirstAction "reassign" -FirstEvidence "応答が空だった thread=01a00001"
     $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source -Action "Hook" -Payload (New-HookPayload -ToolName "Agent" -Text $reassignWithEmptyResponseOnlyText)
     Assert-Contains $result.Output "STALL_REASSIGN_EVIDENCE" "空応答だけを根拠にしたreassignを拒否すること"
 
-    $validReassignText = $validResponseText.Replace("action=investigate", "action=reassign").Replace("evidence=監視出力の停滞IDと対象を確認した", "evidence=agent-inquiry-timeout-v1 attempt1=timeout:7200s attempt2=timeout:7200s")
+    $validReassignText = Get-ResponseTextForRuntime -FirstAction "reassign" -FirstEvidence "agent-inquiry-timeout-v1 thread=01a00001 attempt1=timeout:7200s attempt2=timeout:7200s"
     $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source -Action "Hook" -Payload (New-HookPayload -ToolName "Agent" -Text $validReassignText)
     Assert-True (-not $result.Output.Contains('"permissionDecision":"deny"')) "2件各7200秒の時間切れ実測を含むreassignを通すこと"
 
     $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source -Action "Hook" -Payload (New-HookPayload -ToolName "Agent" -Text $validResponseText)
     Assert-True (-not $result.Output.Contains('"permissionDecision":"deny"')) "investigateは死亡証拠がなくても確認・修復のために通すこと"
     foreach ($repairAction in @("investigate", "reassign", "stop-request", "complete-check")) {
-        $repairText = Get-ResponseTextForRuntime -FirstAction $repairAction
-        if ($repairAction -eq "reassign") {
-            $repairText = $repairText.Replace("evidence=監視出力の停滞IDと対象を確認した", "evidence=agent-inquiry-timeout-v1 attempt1=timeout:7200s attempt2=timeout:7200s")
-        }
+        $repairEvidence = if ($repairAction -eq "reassign") { "agent-inquiry-timeout-v1 thread=01a00001 attempt1=timeout:7200s attempt2=timeout:7200s" } else { "" }
+        $repairText = Get-ResponseTextForRuntime -FirstAction $repairAction -FirstEvidence $repairEvidence
         $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source -Action "Hook" -Payload (New-HookPayload -ToolName "SendMessage" -Text $repairText)
         Assert-True (-not $result.Output.Contains('"permissionDecision":"deny"')) "修復action=$repairAction を同じ宣言で締め出さないこと"
     }
@@ -1328,13 +1358,13 @@ try {
     $incident1 = [string]$runtimeState.agentStates[0].incidentId
     $incident2 = [string]$runtimeState.agentStates[1].incidentId
     $unknown = "0" * 64
-    $unknownText = (New-StallResponseBlock -Incident $unknown) + "`n" + (New-StallResponseBlock -Incident $incident2) + "`n委譲本文"
+    $unknownText = (New-StallResponseBlock -Incident $unknown -ThreadId "01a00001") + "`n" + (New-StallResponseBlock -Incident $incident2 -ThreadId "01a00002") + "`n委譲本文"
     $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source -Action "Hook" -Payload (New-HookPayload -ToolName "Agent" -Text $unknownText)
     Assert-Contains $result.Output "STALL_RESPONSE_UNKNOWN" "未知または古いincidentを拒否すること"
-    $duplicateText = (New-StallResponseBlock -Incident $incident1) + "`n" + (New-StallResponseBlock -Incident $incident1) + "`n" + (New-StallResponseBlock -Incident $incident2)
+    $duplicateText = (New-StallResponseBlock -Incident $incident1 -ThreadId "01a00001") + "`n" + (New-StallResponseBlock -Incident $incident1 -ThreadId "01a00001") + "`n" + (New-StallResponseBlock -Incident $incident2 -ThreadId "01a00002")
     $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source -Action "Hook" -Payload (New-HookPayload -ToolName "Agent" -Text $duplicateText)
     Assert-Contains $result.Output "STALL_RESPONSE_DUPLICATE" "同じincidentの重複宣言を拒否すること"
-    $partialText = (New-StallResponseBlock -Incident $incident1) + "`n委譲本文"
+    $partialText = (New-StallResponseBlock -Incident $incident1 -ThreadId "01a00001") + "`n委譲本文"
     $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source -Action "Hook" -Payload (New-HookPayload -ToolName "Agent" -Text $partialText)
     Assert-Contains $result.Output "STALL_RESPONSE_INCOMPLETE" "複数停滞の一部だけの宣言を拒否すること"
 

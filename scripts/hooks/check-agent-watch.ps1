@@ -880,6 +880,36 @@ function Get-AgentThreadIdFromName {
     return [string]$match.Groups["threadId"].Value
 }
 
+function Get-AgentIncidentRequirements {
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$AgentStates)
+
+    $requirements = New-Object System.Collections.Generic.List[object]
+    foreach ($agentState in $AgentStates) {
+        $status = [string]$agentState.status
+        if ($status -ne "stalled" -and $status -ne "unmonitorable") { continue }
+
+        # Test-AgentStateContractがlatest outputのname_b64をruntime/live nameから
+        # 再構成した行とexact照合済みである。ここで同じname_b64をstrict UTF-8へ
+        # 復号し、incidentと担当thread idの対応をresponse検査へ渡す。
+        try {
+            $nameBase64 = ConvertTo-WatchBase64 -Text ([string]$agentState.name)
+            $decodedName = $script:Utf8NoBom.GetString([Convert]::FromBase64String($nameBase64))
+        }
+        catch {
+            throw "AGENT_WATCH_INCIDENT name_b64を復号できません: incident=$([string]$agentState.incidentId) ($($_.Exception.Message))"
+        }
+        $threadId = Get-AgentThreadIdFromName -Name $decodedName
+        if ([string]::IsNullOrWhiteSpace($threadId)) {
+            throw "AGENT_WATCH_INCIDENT name_b64の担当名からthread idを取得できません: incident=$([string]$agentState.incidentId) name=$decodedName"
+        }
+        $requirements.Add([pscustomobject][ordered]@{
+                IncidentId = [string]$agentState.incidentId
+                ThreadId = $threadId
+            })
+    }
+    return @($requirements.ToArray())
+}
+
 function Get-WatchPathComparisonKey {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -2587,20 +2617,25 @@ function Invoke-AgentReplyGate {
 function Test-AgentWatchResponses {
     param(
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text,
-        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$IncidentIds
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Incidents
     )
 
     $openingMarker = "[AGENT_WATCH_RESPONSE schema=1]"
     $closingMarker = "[/AGENT_WATCH_RESPONSE]"
     $current = @{}
-    foreach ($incidentId in $IncidentIds) {
+    foreach ($incident in $Incidents) {
+        $incidentId = [string]$incident.IncidentId
+        $threadId = [string]$incident.ThreadId
         if (-not [regex]::IsMatch($incidentId, '^[0-9a-f]{64}$')) {
             return New-CheckErrorResult -Code "INCIDENT_ID_INVALID" -Message "runtime stateのincidentIdが不正です: $incidentId"
+        }
+        if (-not [regex]::IsMatch($threadId, '^[A-Za-z0-9][A-Za-z0-9._:-]{5,127}$')) {
+            return New-CheckErrorResult -Code "INCIDENT_THREAD_ID_INVALID" -Message "AGENT_WATCH_INCIDENT name_b64から得たthread idが不正です: incident=$incidentId threadId=$threadId"
         }
         if ($current.ContainsKey($incidentId)) {
             return New-CheckErrorResult -Code "INCIDENT_ID_DUPLICATE" -Message "runtime stateのincidentIdが重複しています: $incidentId"
         }
-        $current[$incidentId] = $true
+        $current[$incidentId] = $threadId
     }
 
     if ($current.Count -eq 0) {
@@ -2641,17 +2676,6 @@ function Test-AgentWatchResponses {
         if (-not [string]::Equals($evidence, $evidence.Trim(), [StringComparison]::Ordinal) -or [string]::IsNullOrWhiteSpace($evidence)) {
             return New-PolicyResult -Code "STALL_RESPONSE_EVIDENCE" -Message "evidenceには空白だけでない実測または判断根拠を1行で書いてください。"
         }
-        if ($action -eq "reassign" -and -not [string]::Equals(
-            $evidence,
-            "agent-inquiry-timeout-v1 attempt1=timeout:7200s attempt2=timeout:7200s",
-            [StringComparison]::Ordinal
-        )) {
-            return New-PolicyResult -Code "STALL_REASSIGN_EVIDENCE" -Message (
-                "action=reassignには、同じincidentへの問い合わせ2件が各7200秒で時間切れになった実測が必要です。" +
-                "evidenceは 'agent-inquiry-timeout-v1 attempt1=timeout:7200s attempt2=timeout:7200s' の完全一致にしてください。" +
-                "更新時刻・process数・CPU・空応答だけではreassignできません。証拠がなければaction=investigateを使ってください。"
-            )
-        }
         if (-not [string]::Equals($next, $next.Trim(), [StringComparison]::Ordinal) -or [string]::IsNullOrWhiteSpace($next)) {
             return New-PolicyResult -Code "STALL_RESPONSE_NEXT" -Message "nextには空白だけでない次の行動または再確認条件を1行で書いてください。"
         }
@@ -2661,6 +2685,26 @@ function Test-AgentWatchResponses {
         }
         if (-not $current.ContainsKey($incident)) {
             return New-PolicyResult -Code "STALL_RESPONSE_UNKNOWN" -Message "現在の停滞に無い、古いまたは未知のincidentです: $incident"
+        }
+        $requiredThreadId = [string]$current[$incident]
+        $threadIdPattern = '(?<![A-Za-z0-9._:-]){0}(?![A-Za-z0-9._:-])' -f [regex]::Escape($requiredThreadId)
+        if (-not [regex]::IsMatch(
+                $evidence,
+                $threadIdPattern,
+                [Text.RegularExpressions.RegexOptions]::CultureInvariant)) {
+            return New-PolicyResult -Code "STALL_RESPONSE_THREAD_ID_MISSING" -Message (
+                "evidenceにincidentが属する担当のthread idを含めてください: incident=$incident requiredThreadId=$requiredThreadId"
+            )
+        }
+        if ($action -eq "reassign") {
+            $requiredReassignEvidence = "agent-inquiry-timeout-v1 thread=$requiredThreadId attempt1=timeout:7200s attempt2=timeout:7200s"
+            if (-not [string]::Equals($evidence, $requiredReassignEvidence, [StringComparison]::Ordinal)) {
+                return New-PolicyResult -Code "STALL_REASSIGN_EVIDENCE" -Message (
+                    "action=reassignには、同じincidentへの問い合わせ2件が各7200秒で時間切れになった実測が必要です。" +
+                    "evidenceは '$requiredReassignEvidence' の完全一致にしてください。" +
+                    "更新時刻・process数・CPU・空応答だけではreassignできません。証拠がなければaction=investigateを使ってください。"
+                )
+            }
         }
         if ($seen.ContainsKey($incident)) {
             return New-PolicyResult -Code "STALL_RESPONSE_DUPLICATE" -Message "同じincidentへの宣言が重複しています: $incident"
@@ -3525,12 +3569,16 @@ if ($Action -eq "Hook") {
             exit 0
         }
         $delegationText = Get-DelegationText -HookPayload $hookPayload -ToolName $toolName
-        $incidentIds = @(
-            $hookResult.AgentStates |
-                Where-Object { [string]$_.status -eq "stalled" -or [string]$_.status -eq "unmonitorable" } |
-                ForEach-Object { [string]$_.incidentId }
-        )
-        $responseResult = Test-AgentWatchResponses -Text $delegationText -IncidentIds $incidentIds
+        try {
+            $incidents = @(Get-AgentIncidentRequirements -AgentStates @($hookResult.AgentStates))
+        }
+        catch {
+            $incidentRequirementError = New-CheckErrorResult -Code "INCIDENT_THREAD_ID_UNAVAILABLE" -Message $_.Exception.Message
+            Write-HookDeny -Result $incidentRequirementError -Root $resolvedRoot
+            exit 0
+        }
+        $incidentIds = @($incidents | ForEach-Object { [string]$_.IncidentId })
+        $responseResult = Test-AgentWatchResponses -Text $delegationText -Incidents $incidents
         if ($responseResult.ExitCode -ne 0) {
             $responseResult.Message = "{0} current={1}" -f $responseResult.Message, (@($incidentIds | Sort-Object) -join ",")
             Write-HookDeny -Result $responseResult -Root $resolvedRoot

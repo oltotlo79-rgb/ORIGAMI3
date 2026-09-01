@@ -432,6 +432,65 @@ function Test-ActualRecordedWatcherStop {
     }
 }
 
+function Test-ActualReportUpdateWait {
+    param(
+        [Parameter(Mandatory = $true)][string]$BoundaryScript,
+        [Parameter(Mandatory = $true)][string]$Definition,
+        [Parameter(Mandatory = $true)][string]$Report
+    )
+
+    $updaterPath = Join-Path $Sandbox "update-report-after-delay.ps1"
+    $updaterSource = @'
+param([Parameter(Mandatory = $true)][string]$Path)
+Start-Sleep -Milliseconds 1500
+[IO.File]::AppendAllText($Path, "updated`r`n", (New-Object Text.UTF8Encoding($false)))
+'@
+    [IO.File]::WriteAllText($updaterPath, $updaterSource, $script:Utf8NoBom)
+    $updaterArguments = ConvertTo-ProcessArgumentString @(
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-File", $updaterPath, "-Path", $Report
+    )
+    $updater = Start-Process -FilePath $PowerShellPath -ArgumentList $updaterArguments -WindowStyle Hidden -PassThru
+    try {
+        $timer = [Diagnostics.Stopwatch]::StartNew()
+        $global:LASTEXITCODE = 0
+        $changedOutput = @(& $PowerShellPath -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $BoundaryScript `
+                -WaitForReportUpdate -DefinitionPath $Definition -ReportPath $Report -TimeoutSeconds 5 -RepositoryRoot $Repository 2>&1)
+        $changedExit = $LASTEXITCODE
+        $timer.Stop()
+        $script:Cases++
+        Assert-True $updater.WaitForExit(10000) "report update fixture process must finish"
+        Assert-Equal $updater.ExitCode 0 "report update fixture process must exit 0"
+        Assert-Equal $changedExit 0 "actual report update wait must exit 0 after a change" ($changedOutput -join "`n")
+        Assert-Contains ($changedOutput -join "`n") "REPORT_UPDATE_DETECTED" "actual report update wait must report the detected update"
+        Assert-True ($timer.Elapsed.TotalSeconds -ge 1.0) "actual report update wait must not claim an update before the fixture changes the file" ($changedOutput -join "`n")
+        Assert-True ($timer.Elapsed.TotalSeconds -lt 5.0) "actual report update wait must finish before its upper bound" ($changedOutput -join "`n")
+        Assert-True ([IO.File]::ReadAllText($Report, $script:Utf8NoBom).Contains("updated")) "the fixture updater must really change the watched report"
+    }
+    finally {
+        if (-not $updater.HasExited) {
+            [void]$updater.WaitForExit(10000)
+        }
+        $updater.Dispose()
+    }
+
+    $beforeBytes = [IO.File]::ReadAllBytes($Report)
+    $beforeTicks = (Get-Item -LiteralPath $Report -Force).LastWriteTimeUtc.Ticks
+    $timeoutTimer = [Diagnostics.Stopwatch]::StartNew()
+    $global:LASTEXITCODE = 0
+    $timeoutOutput = @(& $PowerShellPath -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $BoundaryScript `
+            -WaitForReportUpdate -DefinitionPath $Definition -ReportPath $Report -TimeoutSeconds 1 -RepositoryRoot $Repository 2>&1)
+    $timeoutExit = $LASTEXITCODE
+    $timeoutTimer.Stop()
+    $script:Cases++
+    Assert-Equal $timeoutExit 0 "actual report update timeout must be a successful bounded read" ($timeoutOutput -join "`n")
+    Assert-Contains ($timeoutOutput -join "`n") "REPORT_UPDATE_TIMEOUT" "actual unchanged report wait must stop at the upper bound"
+    Assert-True ($timeoutTimer.Elapsed.TotalSeconds -ge 0.8) "actual timeout wait must not return immediately" ($timeoutOutput -join "`n")
+    Assert-True ($timeoutTimer.Elapsed.TotalSeconds -lt 3.0) "actual timeout wait must stop without an unbounded hang" ($timeoutOutput -join "`n")
+    Assert-True ([Linq.Enumerable]::SequenceEqual([byte[]]$beforeBytes, [byte[]][IO.File]::ReadAllBytes($Report))) "report update wait must not write the watched file"
+    Assert-Equal (Get-Item -LiteralPath $Report -Force).LastWriteTimeUtc.Ticks $beforeTicks "report update wait must not alter the watched timestamp"
+}
+
 function Test-ActualGitCoordinatorFlow {
     [void][IO.Directory]::CreateDirectory($GitRepository)
     [void][IO.Directory]::CreateDirectory((Join-Path $GitRepository "docs"))
@@ -550,12 +609,34 @@ try {
     $boundaryScript = Join-Path $Repository "scripts\hooks\enforce-coordinator-boundary.ps1"
     $watch = Join-Path $Repository "scripts\watch-agents.ps1"
     $watchDefinition = Join-Path $Repository "scratchpad\watch.json"
+    $reportWaitDefinition = Join-Path $Repository "scratchpad\watch-agents-test.json"
+    $brokenReportWaitDefinition = Join-Path $Repository "scratchpad\watch-agents-broken.json"
+    $wrongNameReportWaitDefinition = Join-Path $Repository "scratchpad\reports.json"
+    $missingReportWaitDefinition = Join-Path $Repository "scratchpad\watch-agents-missing.json"
+    $reportWaitPath = Join-Path $Repository "scratchpad\agent-report.md"
+    $unlistedReportWaitPath = Join-Path $Repository "scratchpad\unlisted-report.md"
     $desktop = Join-Path $Repository "target\release\desktop.exe"
     $otherPowerShell = Join-Path $Repository "scripts\powershell.exe"
     $sample = Join-Path $Repository "docs\sample.md"
     $commitMessage = Join-Path $Repository "scratchpad\commit-message.txt"
     $watchArgumentList = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$watch`" -DefinitionPath `"$watchDefinition`" -RepositoryRoot `"$Repository`" -IntervalMinutes 10 -StaleAfterMinutes 40"
     $detachedWatchCommand = "Start-Process -FilePath '$PowerShellPath' -ArgumentList '$watchArgumentList' -WindowStyle Hidden"
+    [IO.File]::WriteAllText($reportWaitPath, "report wait fixture`r`n", $script:Utf8NoBom)
+    [IO.File]::WriteAllText($unlistedReportWaitPath, "unlisted fixture`r`n", $script:Utf8NoBom)
+    $reportWaitDefinitionValue = [ordered]@{
+        agents = @(
+            [ordered]@{
+                name = "report wait fixture"
+                reportPath = "scratchpad/agent-report.md"
+                sourcePaths = @("docs/sample.md")
+            }
+        )
+    }
+    $reportWaitDefinitionText = $reportWaitDefinitionValue | ConvertTo-Json -Depth 6
+    [IO.File]::WriteAllText($reportWaitDefinition, $reportWaitDefinitionText, $script:Utf8NoBom)
+    [IO.File]::WriteAllText($wrongNameReportWaitDefinition, $reportWaitDefinitionText, $script:Utf8NoBom)
+    [IO.File]::WriteAllText($brokenReportWaitDefinition, "{broken", $script:Utf8NoBom)
+    $reportWaitCommand = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$boundaryScript`" -WaitForReportUpdate -DefinitionPath `"$reportWaitDefinition`" -ReportPath `"$reportWaitPath`" -TimeoutSeconds 2 -RepositoryRoot `"$Repository`""
     $allowedCases = @(
         @{ Name = "git status"; Command = "git status --porcelain" },
         @{ Name = "git diff"; Command = "git diff --cached" },
@@ -584,6 +665,7 @@ try {
         @{ Name = "coordinator signing key repair wrapped"; Command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$receipt`" -RepairSigningKey -RepoRoot `"$Repository`"" },
         @{ Name = "coordinator signing key repair current host wrapper"; Command = "$PowerShellPath -NoProfile -ExecutionPolicy Bypass -File `"$receipt`" -RepairSigningKey -RepoRoot `"$Repository`"" },
         @{ Name = "coordinator recorded watcher stop"; Command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$boundaryScript`" -StopRecordedWatcher -RepositoryRoot `"$Repository`"" },
+        @{ Name = "bounded registered report update wait"; Command = $reportWaitCommand },
         @{ Name = "literal file read"; Command = "Get-Content -LiteralPath '$sample'" },
         @{ Name = "rg with exclusion"; Command = "rg needle '$Repository' --glob '!docs/competitive-review-2026-08-20.md'" },
         @{ Name = "process pipeline"; Command = "Get-Process -Name cargo | Measure-Object" },
@@ -619,6 +701,16 @@ try {
         @{ Name = "recorded watcher stop missing repository"; Command = "powershell.exe -NoProfile -File `"$boundaryScript`" -StopRecordedWatcher" },
         @{ Name = "recorded watcher stop wrong repository"; Command = "powershell.exe -NoProfile -File `"$boundaryScript`" -StopRecordedWatcher -RepositoryRoot `"$Repository2`"" },
         @{ Name = "recorded watcher stop extra argument"; Command = "powershell.exe -NoProfile -File `"$boundaryScript`" -StopRecordedWatcher -RepositoryRoot `"$Repository`" -Force" },
+        @{ Name = "report wait missing timeout"; Command = $reportWaitCommand.Replace(" -TimeoutSeconds 2", "") },
+        @{ Name = "report wait zero timeout"; Command = $reportWaitCommand.Replace("-TimeoutSeconds 2", "-TimeoutSeconds 0") },
+        @{ Name = "report wait excessive timeout"; Command = $reportWaitCommand.Replace("-TimeoutSeconds 2", "-TimeoutSeconds 3601") },
+        @{ Name = "report wait unlisted report"; Command = $reportWaitCommand.Replace($reportWaitPath, $unlistedReportWaitPath) },
+        @{ Name = "report wait unreadable definition"; Command = $reportWaitCommand.Replace($reportWaitDefinition, $brokenReportWaitDefinition) },
+        @{ Name = "report wait missing definition"; Command = $reportWaitCommand.Replace($reportWaitDefinition, $missingReportWaitDefinition) },
+        @{ Name = "report wait wrong definition name"; Command = $reportWaitCommand.Replace($reportWaitDefinition, $wrongNameReportWaitDefinition) },
+        @{ Name = "report wait relative report"; Command = $reportWaitCommand.Replace($reportWaitPath, "scratchpad/agent-report.md") },
+        @{ Name = "report wait wrong repository"; Command = $reportWaitCommand.Replace("-RepositoryRoot `"$Repository`"", "-RepositoryRoot `"$Repository2`"") },
+        @{ Name = "report wait write option"; Command = $reportWaitCommand + " -OutFile wait.txt" },
         @{ Name = "CI narrowed static mode"; Command = "powershell.exe -NoProfile -File `"$ciGate`" -StaticContractOnly" },
         @{ Name = "direct blocking watcher"; Command = "powershell.exe -NoProfile -File `"$watch`" -DefinitionPath `"$watchDefinition`" -RepositoryRoot `"$Repository`" -IntervalMinutes 10 -StaleAfterMinutes 40" },
         @{ Name = "detached watch relative PowerShell host"; Command = $detachedWatchCommand.Replace("-FilePath '$PowerShellPath'", "-FilePath 'powershell.exe'") },
@@ -688,7 +780,8 @@ try {
         @{ Name = "bash wrapper"; Command = "bash -c 'git status'" },
         @{ Name = "wsl wrapper"; Command = "wsl git status" },
         @{ Name = "desktop wrong executable"; Command = "Start-Process -FilePath cargo.exe" },
-        @{ Name = "arbitrary Remove-Item"; Command = "Remove-Item -LiteralPath '$sample'" }
+        @{ Name = "arbitrary Remove-Item"; Command = "Remove-Item -LiteralPath '$sample'" },
+        @{ Name = "direct Stop-Process remains denied"; Command = "Stop-Process -Id 1" }
     )
     foreach ($case in $deniedCases) { Assert-PreDenied -Name $case.Name -Command $case.Command }
     Assert-PreDenied -Name "production payload Get-Date through Bash" -Command "Get-Date -Format 'yyyy-MM-dd HH:mm'" -ToolName "Bash"
@@ -739,6 +832,9 @@ try {
 
     Write-Host "[6.5/8] actual recorded watcher stop"
     Test-ActualRecordedWatcherStop
+
+    Write-Host "[6.6/8] actual bounded registered report update wait"
+    Test-ActualReportUpdateWait -BoundaryScript $boundaryScript -Definition $reportWaitDefinition -Report $reportWaitPath
 
     Write-Host "[7/8] exact one-time receipt and PostToolUse success"
     Reset-ActiveState

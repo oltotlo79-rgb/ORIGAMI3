@@ -36,6 +36,10 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+#[path = "../../ori3-export/tests/support/fold_sha256.rs"]
+mod fold_sha256;
+
+use fold_sha256::sha256_hex;
 use glam::{DVec2, DVec3};
 use ori3_cp::{Face, extract_faces, insert_segment};
 use ori3_geometry::Isometry2;
@@ -1265,6 +1269,55 @@ fn front_fixture_json(doc: &Document, faces: &[Face]) -> String {
 fn crane_front_fixture_path() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../apps/desktop/src/lib/__fixtures__/crane.json")
+}
+
+fn traditional_crane_source_bundle_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../traditional_crane_math_bundle")
+}
+
+fn traditional_crane_fixture_root() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/traditional-crane")
+}
+
+/// リポジトリ直下の正本から「変更せずにコピーした」とREADMEに記した6資料を、
+/// 生byteのSHA-256で照合する。通常検査は正本・複製のどちらにも書き込まない。
+#[test]
+fn traditional_crane_math_bundle_fixture_matches_sha256_read_only() {
+    const COPIED_FILES: [&str; 6] = [
+        "traditional_crane_coordinates_and_equations.json",
+        "traditional_crane_edges_equations.csv",
+        "traditional_crane_vertices.csv",
+        "traditional_crane_complete.fold",
+        "traditional_crane_complete_cp.png",
+        "README_JA.md",
+    ];
+
+    let source_root = traditional_crane_source_bundle_path();
+    let fixture_root = traditional_crane_fixture_root();
+    for file_name in COPIED_FILES {
+        let source_path = source_root.join(file_name);
+        let fixture_path = fixture_root.join(file_name);
+        let source = std::fs::read(&source_path).unwrap_or_else(|error| {
+            panic!(
+                "伝承折り鶴の正本を読めない: {} ({error})",
+                source_path.display()
+            )
+        });
+        let fixture = std::fs::read(&fixture_path).unwrap_or_else(|error| {
+            panic!(
+                "伝承折り鶴の複製fixtureを読めない: {} ({error})",
+                fixture_path.display()
+            )
+        });
+
+        assert_eq!(
+            sha256_hex(&fixture),
+            sha256_hex(&source),
+            "伝承折り鶴の複製fixtureが正本とSHA-256不一致: source={} fixture={}",
+            source_path.display(),
+            fixture_path.display()
+        );
+    }
 }
 
 /// 明示的な再生成専用: `cargo test -p ori3-layers --test acceptance_crane regenerate_crane_front_fixture -- --ignored --exact`
