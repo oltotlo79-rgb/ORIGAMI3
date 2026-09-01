@@ -11,6 +11,7 @@
 
 use std::collections::BTreeSet;
 
+use ori3_cp::insert_segment;
 use ori3_layers::flat_state::FlatState;
 use ori3_layers::precrease_collapse::{
     PRECREASE_ORDER_UNDETERMINED_WARNING_PREFIX, PrecreaseCollapseInput,
@@ -18,7 +19,7 @@ use ori3_layers::precrease_collapse::{
 };
 use ori3_model::{CreasePattern, Document, EdgeKind, Paper};
 use ori3_propose::enumerate::{FoldSession, MAX_SEAM_GAP, MoveReport, PoseScan, Unverified};
-use ori3_propose::{GenericPlanner, VerifiedMove, crease_lines};
+use ori3_propose::{FoldedMask, GenericPlanner, crease_lines};
 use ori3_rigid::{max_seam_gap, self_intersection_pairs};
 
 /// 測る回数。同じ結果になることを確かめるため3回まわす(合格条件4)。
@@ -162,7 +163,8 @@ fn every_verified_move_really_folds_without_tearing_or_passing_through() {
     for (name, doc) in samples() {
         let session = FoldSession::new(&doc).expect("折り始められない");
         let report = session.verified_moves(PoseScan::DEFAULT);
-        for mv in report.all_verified() {
+        for operation in report.operation_moves() {
+            let mv = operation.movement();
             // 列挙のときの値。
             assert!(
                 mv.max_seam_gap < MAX_SEAM_GAP,
@@ -180,7 +182,7 @@ fn every_verified_move_really_folds_without_tearing_or_passing_through() {
             // 実際に進めて、もう一度測り直す。
             let mut advanced = session.clone();
             advanced
-                .apply(mv)
+                .apply_operation(operation)
                 .unwrap_or_else(|e| panic!("{name} 手{}: 確かめた手を進められない: {e}", mv.id));
             assert_eq!(advanced.applied_moves(), 1, "{name}: 手順が1件にならない");
 
@@ -240,11 +242,33 @@ fn moves_that_could_not_be_checked_are_never_returned_as_foldable() {
     for (name, doc) in samples() {
         let session = FoldSession::new(&doc).expect("折り始められない");
         let report = session.verified_moves(PoseScan::DEFAULT);
+        let displayed = report.all_verified().collect::<Vec<_>>();
+        let operation_metadata = report
+            .operation_moves()
+            .map(|operation| operation.movement())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            operation_metadata, displayed,
+            "{name}: 表示した検証済み手と手動tokenの順序・metadataが対応しない"
+        );
         let verified: BTreeSet<usize> = report.all_verified().map(|m| m.id).collect();
+        let applicable: BTreeSet<usize> = report
+            .operation_moves()
+            .map(|operation| operation.movement().id)
+            .collect();
+        assert_eq!(
+            applicable, verified,
+            "{name}: 表示した検証済み手と、適用可能な手動tokenが対応しない"
+        );
         for r in &report.rejected {
             assert!(
                 !verified.contains(&r.id),
                 "{name}: 確かめられなかった手 {} が折れる手としても返っている",
+                r.id
+            );
+            assert!(
+                !applicable.contains(&r.id),
+                "{name}: 確かめられなかった手 {} に適用可能なtokenを発行している",
                 r.id
             );
         }
@@ -260,40 +284,8 @@ fn moves_that_could_not_be_checked_are_never_returned_as_foldable() {
             report.reasons()
         );
 
-        // 落とした手が、本当にその場では折れないことを1件ずつ確かめ直す。
-        for r in &report.rejected {
-            let mut trial = session.clone();
-            let pretend = VerifiedMove {
-                id: r.id,
-                line: r.line,
-                closes: r.closes.clone(),
-                mask: 0,
-                max_seam_gap: 0.0,
-                penetrations: 0,
-                poses_checked: 0,
-            };
-            let applied = trial.apply(&pretend);
-            if let Ok(()) = applied {
-                // 平らには畳めるが、途中の姿勢で落ちた手。折れると誤って返していないことが要点。
-                assert!(
-                    matches!(
-                        r.reason,
-                        Unverified::Torn { .. }
-                            | Unverified::PaperPassesThrough { .. }
-                            | Unverified::PoseFailed(_)
-                    ),
-                    "{name}: 手 {} は畳めるのに「平らに畳めない」として落ちている",
-                    r.id
-                );
-            } else {
-                assert_eq!(
-                    r.reason,
-                    Unverified::CannotCollapse,
-                    "{name}: 手 {} は畳めないのに、別の理由で落ちている",
-                    r.id
-                );
-            }
-        }
+        // 表示用metadataから未検証の手動操作tokenを偽造する入口は公開しない。
+        // 折れない手にはtokenを発行しない、という外側の契約を上の集合一致で固定する。
     }
     assert!(
         total_rejected > 0,
@@ -391,9 +383,10 @@ fn verified_moves_can_be_folded_one_after_another() {
         let mut worst_gap: f64 = 0.0;
         while applied < 4 {
             let report = session.verified_moves(PoseScan::DEFAULT);
-            let Some(mv) = report.all_verified().next().cloned() else {
+            let Some(operation) = report.operation_moves().next().cloned() else {
                 break;
             };
+            let mv = operation.movement();
             worst_gap = worst_gap.max(mv.max_seam_gap);
             assert_eq!(
                 mv.penetrations,
@@ -403,7 +396,7 @@ fn verified_moves_can_be_folded_one_after_another() {
             );
             let before = session.folded_mask();
             session
-                .apply(&mv)
+                .apply_operation(&operation)
                 .unwrap_or_else(|e| panic!("{name}: {}手目を進められない: {e}", applied + 1));
             assert_ne!(
                 session.folded_mask(),
@@ -554,7 +547,8 @@ fn crossing_multi_line_collapse_does_not_receive_single_book_fold_replacement() 
 ///
 /// 旧候補16は `x = 0.5` 上で Mountain 2 / Valley 2。settle後CPを読むと候補順が
 /// 自己認証されるため、必ず操作**前**CPとcollapseが返した配置・順を読み合わせる。
-/// やっこさんのstrict majorityを操作制約へ置換しても、この2/37違反・破棄5組は残る。
+/// やっこさんのstrict majorityを操作制約へ置換しても、この2/37違反・物理破棄4組は残る。
+/// 表示用total化の失敗1組は別fieldへ残し、物理破棄数へ混ぜない。
 #[test]
 fn strict_proposal_gate_rejects_tied_crane_candidate_16_by_input_layer_constraints() {
     let doc = crane();
@@ -614,6 +608,13 @@ fn strict_proposal_gate_rejects_tied_crane_candidate_16_by_input_layer_constrain
         &collapsed.state.order,
     )
     .expect("旧候補16の入力CP一般制約を検査できない");
+    let initial_seed_validation = validate_precrease_layer_order(
+        &input_cp,
+        &collapsed_faces,
+        &collapsed.state.placements,
+        &input_state.order,
+    )
+    .expect("旧候補16の初期表示seedを検査できない");
     let expected_faces = collapsed_faces
         .iter()
         .map(|face| face.id)
@@ -637,7 +638,7 @@ fn strict_proposal_gate_rejects_tied_crane_candidate_16_by_input_layer_constrain
         + validation.violations.continuous_crossings.len()
         + validation.violations.continuous.len();
     println!(
-        "STAGE6_CRANE_TIED_BOOK_FOLD id={} mountain_votes={mountain_votes} valley_votes={valley_votes} violations={violations}/{checked} adjacent={}/{} taco_tortilla={} taco_taco={} continuous_crossings={} continuous={} discarded={} accepted={} warnings={} saved_order={}",
+        "STAGE7_CRANE_TIED_BOOK_FOLD id={} mountain_votes={mountain_votes} valley_votes={valley_votes} violations={violations}/{checked} adjacent={}/{} taco_tortilla={} taco_taco={} continuous_crossings={} continuous={} physical_discarded={} display_resolution_failure={:?} initial_seed_display_resolution_failure={:?} accepted={} warnings={} saved_order={}",
         candidate.id,
         validation.violations.adjacent_folds.len(),
         validation.counts.adjacent_folds,
@@ -646,6 +647,8 @@ fn strict_proposal_gate_rejects_tied_crane_candidate_16_by_input_layer_constrain
         validation.violations.continuous_crossings.len(),
         validation.violations.continuous.len(),
         validation.discarded_relations.len(),
+        validation.display_resolution_failure,
+        initial_seed_validation.display_resolution_failure,
         validation.is_valid(),
         collapsed.warnings.len(),
         collapsed.step.layer_order.is_some(),
@@ -654,13 +657,37 @@ fn strict_proposal_gate_rejects_tied_crane_candidate_16_by_input_layer_constrain
     assert_eq!(violations, 2, "旧候補16の一般制約違反数が変わった");
     assert_eq!(checked, 37, "旧候補16の一般制約総数が変わった");
     assert_eq!(
-        validation.discarded_relations.len(),
-        5,
-        "旧候補16の破棄関係数が変わった"
+        validation.violations.continuous,
+        vec![(0, 1, 6, 10), (2, 3, 8, 9)],
+        "旧候補16を拒否する0度縫い目の上下反転が変わった"
+    );
+    let physical_conflicts = vec![(1, 10), (3, 9), (6, 0), (8, 2)];
+    assert_eq!(
+        validation.discarded_relations, physical_conflicts,
+        "旧候補16の物理的な破棄関係4組が変わった"
+    );
+    assert_eq!(
+        initial_seed_validation.discarded_relations, physical_conflicts,
+        "表示seedを変えると物理的な破棄関係が変わった"
+    );
+    assert_eq!(
+        validation.display_resolution_failure,
+        Some((0, 2)),
+        "collapse表示seedの全順序化失敗markerが消えた"
+    );
+    assert_eq!(
+        initial_seed_validation.display_resolution_failure,
+        Some((0, 1)),
+        "初期表示seedの全順序化失敗markerが消えた"
     );
     assert!(
         !validation.is_valid(),
         "提案関門と同じis_valid述語が旧候補16を採用した"
+    );
+    assert_eq!(
+        collapsed.warnings,
+        vec!["紙の重なり順の条件が4組で両立しません"],
+        "表示用markerを物理警告へ混ぜた"
     );
     assert!(collapsed.step.layer_order.is_none());
     assert!(matches!(
@@ -695,5 +722,138 @@ fn the_estimate_from_task_18_is_neither_an_upper_nor_a_lower_bound() {
     assert!(
         outside_total > 0,
         "見積もりの外で折れた手が0件だった。この検査が守っている性質が変わっている"
+    );
+}
+
+/// `check_move` が通した手は、その検証で作った終点をそのまま適用する。
+///
+/// 十字を同じ山谷で2回畳むと、2手目の入力CP制約と単純操作の層順が異なる。
+/// 検証後に別authorityで解き直す実装では、21姿勢を通った2手目が適用時に失敗する。
+#[derive(Debug)]
+struct CheckedCrossOutcome {
+    verified_mask: FoldedMask,
+    actual_mask: FoldedMask,
+    applied_moves: usize,
+    sequence_len: usize,
+}
+
+fn checked_cross_move_applies_verified_successor(kind: EdgeKind) -> CheckedCrossOutcome {
+    let mut document = square_document();
+    insert_segment(&mut document.cp, [0.0, 0.5], [1.0, 0.5], kind);
+    insert_segment(&mut document.cp, [0.5, 0.0], [0.5, 1.0], kind);
+
+    let mut session = FoldSession::new(&document).expect("十字の紙から折り始められない");
+    let horizontal = session
+        .fold_lines()
+        .iter()
+        .find(|line| (line.a[1] - 0.5).abs() < 1e-12 && (line.b[1] - 0.5).abs() < 1e-12)
+        .expect("中央の横線がない")
+        .id;
+    let Some(Ok(first)) = session.check_move(horizontal, PoseScan::DEFAULT) else {
+        panic!("{kind:?}: 横線の初手が21姿勢を通らない");
+    };
+    session
+        .apply(&first)
+        .unwrap_or_else(|error| panic!("{kind:?}: 検証済みの横線を適用できない: {error}"));
+
+    let vertical = session
+        .fold_lines()
+        .iter()
+        .find(|line| (line.a[0] - 0.5).abs() < 1e-12 && (line.b[0] - 0.5).abs() < 1e-12)
+        .expect("中央の縦線がない")
+        .id;
+    let Some(Ok(second)) = session.check_move(vertical, PoseScan::DEFAULT) else {
+        panic!("{kind:?}: 縦線の2手目が21姿勢を通らない");
+    };
+    let movement = second.movement();
+    assert_eq!(movement.poses_checked, PoseScan::DEFAULT.points());
+    assert_eq!(movement.penetrations, 0);
+    assert!(movement.max_seam_gap < MAX_SEAM_GAP);
+    let verified_mask = movement.mask;
+    session.apply(&second).unwrap_or_else(|error| {
+        panic!("{kind:?}: 21姿勢を通った縦線の2手目を適用できない: {error}")
+    });
+    CheckedCrossOutcome {
+        verified_mask,
+        actual_mask: session.folded_mask(),
+        applied_moves: session.applied_moves(),
+        sequence_len: session.document().sequence.len(),
+    }
+}
+
+#[test]
+fn checked_mountain_cross_move_applies_the_verified_successor() {
+    let outcome = checked_cross_move_applies_verified_successor(EdgeKind::Mountain);
+    assert_eq!(
+        outcome.actual_mask, outcome.verified_mask,
+        "Mountain: 適用後maskが検証済み後続と一致しない"
+    );
+    assert_eq!(outcome.applied_moves, 2, "Mountain: 2手進んでいない");
+    assert_eq!(
+        outcome.sequence_len, 2,
+        "Mountain: 検証済み2手が手順へ保存されていない"
+    );
+}
+
+#[test]
+fn checked_valley_cross_move_applies_the_verified_successor() {
+    let outcome = checked_cross_move_applies_verified_successor(EdgeKind::Valley);
+    assert_eq!(
+        outcome.actual_mask, outcome.verified_mask,
+        "Valley: 適用後maskが検証済み後続と一致しない"
+    );
+    assert_eq!(outcome.applied_moves, 2, "Valley: 2手進んでいない");
+    assert_eq!(
+        outcome.sequence_len, 2,
+        "Valley: 検証済み2手が手順へ保存されていない"
+    );
+}
+
+/// 手動列挙は、入力CP全体ではなく利用者が明示した単純操作の向きを根拠にする。
+///
+/// やっこさんの下側の横線はstrict提案では拒否される一方、手動操作としては
+/// 21姿勢を安全に通る。この差を残し、全手をInputCpへ寄せる誤修正を防ぐ。
+#[test]
+fn explicit_manual_move_keeps_operation_authority() {
+    let document = yakko();
+    let mut session = FoldSession::new(&document).expect("やっこさんから折り始められない");
+    let id = session
+        .fold_lines()
+        .iter()
+        .find(|line| (line.a[1] - 0.25).abs() < 1e-12 && (line.b[1] - 0.25).abs() < 1e-12)
+        .expect("下側の横線がない")
+        .id;
+    assert!(matches!(
+        session.check_move(id, PoseScan::DEFAULT),
+        Some(Err(Unverified::CannotCollapse))
+    ));
+
+    let report = session.verified_moves(PoseScan::DEFAULT);
+    let operation = report
+        .operation_moves()
+        .find(|operation| operation.movement().id == id)
+        .expect("手動操作として折れる下側の横線が列挙されない");
+    let movement = operation.movement();
+    assert_eq!(movement.poses_checked, PoseScan::DEFAULT.points());
+    assert_eq!(movement.penetrations, 0);
+    assert!(movement.max_seam_gap < MAX_SEAM_GAP);
+    let stale = operation.clone();
+    let mut same_state_clone = session.clone();
+    same_state_clone
+        .apply_operation(&stale)
+        .expect("検証元と同じ状態のcloneへ手動tokenを適用できない");
+    session
+        .apply_operation(operation)
+        .expect("手動操作として検証した下側の横線を適用できない");
+    assert_eq!(session.applied_moves(), 1);
+    assert!(
+        session.apply_operation(&stale).is_err(),
+        "1手進んだ後にも古い手動tokenを再適用できた"
+    );
+    let mut independently_built =
+        FoldSession::new(&document).expect("同じやっこさんを再読込できない");
+    assert!(
+        independently_built.apply_operation(&stale).is_err(),
+        "同じ文書から作った別sessionへ手動tokenを移せた"
     );
 }

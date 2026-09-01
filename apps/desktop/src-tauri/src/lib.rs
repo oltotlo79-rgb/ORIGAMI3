@@ -89,6 +89,7 @@ pub fn run() {
             commands::edit_apply_batch,
             commands::edit_undo,
             commands::edit_redo,
+            commands::sim011_move,
             commands::sequence_apply,
             commands::sequence_replay,
             commands::pose_solve,

@@ -5,7 +5,7 @@
 //! 実測値としてだけpanicへ載せる。
 
 use ori3_model::Document;
-use ori3_propose::enumerate::{FoldSession, PoseScan, VerifiedMove};
+use ori3_propose::enumerate::{CheckedMove, FoldSession, PoseScan};
 
 /// `ids`を順にstrict検証してから適用した状態を返す。
 ///
@@ -23,7 +23,7 @@ pub(crate) fn folded_along(doc: &Document, ids: &[usize]) -> FoldSession {
     session
 }
 
-fn verify_fixed_move(session: &FoldSession, id: usize) -> VerifiedMove {
+fn verify_fixed_move(session: &FoldSession, id: usize) -> CheckedMove {
     if let Some(mv) = session.verify_move(id, PoseScan::DEFAULT) {
         return mv;
     }

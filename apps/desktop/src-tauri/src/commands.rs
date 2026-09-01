@@ -30,7 +30,8 @@ use ori3_export::fold::{
 use ori3_export::{CpSvgOptions, cp_png, cp_svg, diagram_pdf, diagram_svg_pages};
 use ori3_model::{
     CreasePattern, DisplaySettings, Document, Driver, EdgeId, EdgeKind, EditOp, FaceId,
-    FinishSoftSettings, FoldStep, Frame3D, Paper, SeqOp, TechniqueKind, VertexId,
+    FinishSoftSettings, FoldStep, Frame3D, Paper, SeqOp, Sim011LayerSelection,
+    Sim011MoveRequest, Sim011MoveResult, TechniqueKind, VertexId,
 };
 use ori3_propose::{
     CompletionTolerance, FinishTarget, FoldGoal, FoldSession, GapWeights, LeafSite, Packing,
@@ -1005,6 +1006,222 @@ pub fn fold_all_preview(
     warm_seed: Option<Vec<Driver>>,
 ) -> Result<FoldAllPreviewOutcome, String> {
     fold_all_preview_transactionally(state.inner(), percent, warm_seed)
+}
+
+/// SIM-011 の command が返す、求めた折り線と適用後の表示状態。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Sim011MoveOutcome {
+    #[serde(flatten)]
+    pub result: Sim011MoveResult,
+    pub view: DocumentView,
+}
+
+/// 畳んだ平面でつかんだ位置から、指定した層の束を一回の反射で目標位置へ動かす。
+///
+/// まず計画と wire/model 型への変換を完了し、成功した計画だけを `apply_seq` へ
+/// 渡す。したがって「一回の反射では解けない」入力は作品を変更しない。
+#[tauri::command(async)]
+pub fn sim011_move(
+    state: State<'_, Mutex<DocumentStore>>,
+    request: Sim011MoveRequest,
+) -> Result<Sim011MoveOutcome, String> {
+    guard(AssertUnwindSafe(|| {
+        let mut outcome = {
+            let mut store = lock(&state);
+            sim011_move_inner(&mut store, request)?
+        };
+        if outcome.view.frame.is_none() {
+            attach_replay(&mut outcome.view);
+        }
+        store_view_pose_angles(state.inner(), &outcome.view);
+        Ok(outcome)
+    }))
+}
+
+fn sim011_move_inner(
+    store: &mut DocumentStore,
+    request: Sim011MoveRequest,
+) -> Result<Sim011MoveOutcome, String> {
+    let (document, faces) = store.replay_inputs();
+    let up_to = document.sequence.len();
+    let (flat_state, _) = ori3_layers::flat_state_at(&document, &faces, up_to).map_err(|error| {
+        format!("現在の折り状態を読み取れないため、つまんで動かせません: {error}")
+    })?;
+    let selected_layers = sim011_selected_layers(&document.cp, &faces, &flat_state, &request)?;
+    let source_direction = sim011_source_direction(&flat_state, request.grab_face)?;
+    let target_direction = sim011_target_direction(request.grab, request.target, source_direction)?;
+    let plan = ori3_layers::single_reflection_plan::plan_single_reflection_motion(
+        &document.cp,
+        &faces,
+        &flat_state,
+        &ori3_layers::single_reflection_plan::SingleReflectionRequest {
+            layers: selected_layers.clone(),
+            source: ori3_layers::single_reflection_plan::DirectedPoint {
+                point: request.grab,
+                direction: source_direction,
+            },
+            target: ori3_layers::single_reflection_plan::DirectedPoint {
+                point: request.target,
+                direction: target_direction,
+            },
+            direction: request.direction,
+        },
+    )
+    .map_err(sim011_plan_error)?;
+    apply_sim011_motion_plan(store, up_to, selected_layers, plan)
+}
+
+/// Applies a fully validated SIM-011 plan as one `FlatMotion` step.  This is
+/// also the single command-layer boundary used by future composite planners.
+fn apply_sim011_motion_plan(
+    store: &mut DocumentStore,
+    up_to: usize,
+    selected_layers: Vec<FaceId>,
+    plan: ori3_layers::FlatMotionInput,
+) -> Result<Sim011MoveOutcome, String> {
+    let crease_lines = sim011_crease_lines(&plan);
+    let parts = plan
+        .parts
+        .into_iter()
+        .map(sim011_model_motion_part)
+        .collect::<Result<Vec<_>, _>>()?;
+    let view = store.apply_seq(SeqOp::FlatMotion {
+        up_to,
+        parts,
+        kind: plan.kind,
+    })?;
+    Ok(Sim011MoveOutcome {
+        result: Sim011MoveResult {
+            crease_lines,
+            selected_layers,
+        },
+        view,
+    })
+}
+
+fn sim011_selected_layers(
+    cp: &CreasePattern,
+    faces: &[ori3_cp::Face],
+    state: &ori3_layers::FlatState,
+    request: &Sim011MoveRequest,
+) -> Result<Vec<FaceId>, String> {
+    if !request.grab.iter().all(|value| value.is_finite()) {
+        return Err("つかむ位置に数値として使えない値が含まれています。位置を指定し直してください。".to_owned());
+    }
+    let layers = ori3_layers::layers_at_point(cp, faces, state, request.grab);
+    let Some(grabbed_index) = layers.iter().position(|&face| face == request.grab_face) else {
+        return Err("つかんだ層が指定した位置にありません。紙の上の見えている層を選び直してください。".to_owned());
+    };
+    let selected = match request.selection {
+        Sim011LayerSelection::Single => vec![request.grab_face],
+        Sim011LayerSelection::Flap => layers[grabbed_index..].to_vec(),
+        Sim011LayerSelection::All => layers,
+    };
+    (!selected.is_empty())
+        .then_some(selected)
+        .ok_or_else(|| "つかむ位置で動かせる層を見つけられません。紙の上の層を選び直してください。".to_owned())
+}
+
+fn sim011_source_direction(
+    state: &ori3_layers::FlatState,
+    face: FaceId,
+) -> Result<[f64; 2], String> {
+    let placement = state.placements.get(&face).ok_or_else(|| {
+        "つかんだ層の現在位置を読み取れません。紙の上の層を選び直してください。".to_owned()
+    })?;
+    Ok([placement.rotation.cos(), placement.rotation.sin()])
+}
+
+fn sim011_target_direction(
+    grab: [f64; 2],
+    target: [f64; 2],
+    source_direction: [f64; 2],
+) -> Result<[f64; 2], String> {
+    if !target.iter().all(|value| value.is_finite()) {
+        return Err("移動先に数値として使えない値が含まれています。位置を指定し直してください。".to_owned());
+    }
+    let dx = target[0] - grab[0];
+    let dy = target[1] - grab[1];
+    let length = dx.hypot(dy);
+    if length <= ori3_model::EPS {
+        return Err("移動先がつかんだ位置と同じです。別の位置へ動かしてください。".to_owned());
+    }
+    let axis = [-dy / length, dx / length];
+    let projection = source_direction[0] * axis[0] + source_direction[1] * axis[1];
+    Ok([
+        2.0 * projection * axis[0] - source_direction[0],
+        2.0 * projection * axis[1] - source_direction[1],
+    ])
+}
+
+fn sim011_plan_error(
+    error: ori3_layers::single_reflection_plan::SingleReflectionPlanError,
+) -> String {
+    use ori3_layers::single_reflection_plan::SingleReflectionPlanError as Error;
+    match error {
+        Error::EmptySelection => "動かす層が選ばれていません。紙の上の層を選んでください。".to_owned(),
+        Error::DuplicateLayer(_) => "動かす層の指定が重複しています。層を選び直してください。".to_owned(),
+        Error::UnknownLayer(_) | Error::MissingPlacement(_) => {
+            "つかんだ層を現在の折り状態で見つけられません。紙の上の層を選び直してください。".to_owned()
+        }
+        Error::SourceOutsideSelection => {
+            "つかむ位置が選んだ層の外です。紙の上の見えている場所をつかんでください。".to_owned()
+        }
+        Error::NonFiniteInput => "位置に数値として使えない値が含まれています。位置を指定し直してください。".to_owned(),
+        Error::ZeroDirection => "つかんだ層の向きを読み取れません。紙の上の層を選び直してください。".to_owned(),
+        Error::StationaryTarget => "移動先がつかんだ位置と同じです。別の位置へ動かしてください。".to_owned(),
+        Error::NotSingleReflection => {
+            "この移動は一本の折り線では決められません。別の位置を指定するか、複数の折り線が使える操作を選んでください。".to_owned()
+        }
+    }
+}
+
+fn sim011_crease_lines(plan: &ori3_layers::FlatMotionInput) -> Vec<[[f64; 2]; 2]> {
+    plan.parts
+        .iter()
+        .flat_map(|part| match &part.transform {
+            ori3_layers::MotionTransform::Reflect(lines) => lines.clone(),
+            ori3_layers::MotionTransform::Stay | ori3_layers::MotionTransform::Isometry(_) => Vec::new(),
+        })
+        .collect()
+}
+
+fn sim011_model_motion_part(
+    part: ori3_layers::MotionPart,
+) -> Result<ori3_model::MotionPart, String> {
+    let transform = match part.transform {
+        ori3_layers::MotionTransform::Stay => ori3_model::MotionTransform::Stay,
+        ori3_layers::MotionTransform::Reflect(lines) => ori3_model::MotionTransform::Reflect(lines),
+        ori3_layers::MotionTransform::Isometry(_) => {
+            return Err("この移動にはまだ保存できない平面変換が含まれています。別の操作を選んでください。".to_owned());
+        }
+    };
+    let turn = match part.turn {
+        ori3_layers::LayerTurn::Keep => ori3_model::LayerTurn::Keep,
+        ori3_layers::LayerTurn::Outside(direction) => ori3_model::LayerTurn::Outside(direction),
+        ori3_layers::LayerTurn::Inside(direction) => ori3_model::LayerTurn::Inside(direction),
+        ori3_layers::LayerTurn::Beside { anchor, direction } => {
+            ori3_model::LayerTurn::Beside { anchor, direction }
+        }
+        ori3_layers::LayerTurn::CreaseOnly(_) => {
+            return Err("この移動にはまだ保存できない折り線だけの操作が含まれています。別の操作を選んでください。".to_owned());
+        }
+    };
+    Ok(ori3_model::MotionPart {
+        layers: part.layers,
+        region: part
+            .region
+            .into_iter()
+            .map(|half| ori3_model::HalfPlane {
+                line: half.line,
+                inside_point: half.inside_point,
+            })
+            .collect(),
+        transform,
+        turn,
+        reverse_layers: part.reverse_layers,
+    })
 }
 
 /// Tauriの状態包装と一斉折り計算を分け、製品commandと共有fixture検査を同じ本体へ通す。
@@ -5230,5 +5447,87 @@ mod tests {
                 "release最大{maximum_ms:.3}msが33msを超えた。精度を下げず停止して報告する"
             );
         }
+    }
+
+    fn sim011_request(
+        grab: [f64; 2],
+        target: [f64; 2],
+        selection: ori3_model::Sim011LayerSelection,
+    ) -> ori3_model::Sim011MoveRequest {
+        ori3_model::Sim011MoveRequest {
+            grab,
+            target,
+            grab_face: 0,
+            selection,
+            direction: ori3_model::FoldDirection::Up,
+        }
+    }
+
+    #[test]
+    fn sim011_command_returns_the_single_reflection_crease_and_folded_state() {
+        let mut store = DocumentStore::default();
+        let outcome = super::sim011_move_inner(
+            &mut store,
+            sim011_request([0.25, 0.5], [0.75, 0.5], ori3_model::Sim011LayerSelection::Single),
+        )
+        .expect("one reflection must be applied as a command");
+        assert_eq!(outcome.result.selected_layers, vec![0]);
+        assert!(outcome.result.crease_lines.iter().any(|line| {
+            (line[0][0] - 0.5).abs() <= 1e-9 && (line[1][0] - 0.5).abs() <= 1e-9
+        }));
+        assert_eq!(outcome.view.doc.sequence.len(), 1);
+        assert_eq!(outcome.view.doc.sequence[0].kind, TechniqueKind::Simple);
+    }
+
+    #[test]
+    fn sim011_command_boundary_applies_a_connected_multi_part_plan_as_one_step() {
+        use ori3_layers::{HalfPlane, LayerTurn, MotionPart, MotionTransform};
+        use ori3_layers::composite_motion_plan::{CompositeMotionPlan, PlanRegion, PlanSeam, PlanVertex, PlanVertexKind};
+        let mut store = DocumentStore::default();
+        let support = [[0.5, 0.0], [0.5, 1.0]];
+        let plan = CompositeMotionPlan {
+            regions: vec![
+                PlanRegion { id: 0, part: MotionPart { layers: vec![0], region: vec![HalfPlane { line: support, inside_point: [0.25, 0.5] }], transform: MotionTransform::Stay, turn: LayerTurn::Keep, reverse_layers: None } },
+                PlanRegion { id: 1, part: MotionPart { layers: vec![0], region: vec![HalfPlane { line: support, inside_point: [0.75, 0.5] }], transform: MotionTransform::Reflect(vec![support]), turn: LayerTurn::Outside(ori3_model::FoldDirection::Up), reverse_layers: None } },
+            ],
+            seams: vec![PlanSeam { id: 0, endpoints: [0, 1], support, left_region: 0, right_region: 1, direction: ori3_model::FoldDirection::Up }],
+            vertices: vec![
+                PlanVertex { id: 0, point: support[0], kind: PlanVertexKind::End, incident_seams: vec![0] },
+                PlanVertex { id: 1, point: support[1], kind: PlanVertexKind::End, incident_seams: vec![0] },
+            ],
+        }
+        .lower(&[0])
+        .expect("two regions joined by one reflection must lower");
+        let outcome = super::apply_sim011_motion_plan(&mut store, 0, vec![0], plan)
+            .expect("command boundary must apply a composite plan");
+        assert_eq!(outcome.view.doc.sequence.len(), 1);
+        assert_eq!(outcome.view.doc.sequence[0].kind, TechniqueKind::Simple);
+        assert_eq!(outcome.result.crease_lines, vec![support]);
+    }
+
+    #[test]
+    fn sim011_command_refuses_an_unsolvable_move_with_a_reason() {
+        let mut store = DocumentStore::default();
+        let error = super::sim011_move_inner(
+            &mut store,
+            sim011_request([0.25, 0.5], [0.25, 0.5], ori3_model::Sim011LayerSelection::Single),
+        )
+        .err()
+        .expect("stationary drag must not manufacture a crease");
+        assert!(error.contains("同じ"), "error={error}");
+    }
+
+    #[test]
+    fn sim011_command_rejection_is_atomic() {
+        let mut store = DocumentStore::default();
+        let before = store.atomicity_probe_for_test();
+        let error = super::sim011_move_inner(
+            &mut store,
+            sim011_request([0.25, 0.5], [0.25, 0.5], ori3_model::Sim011LayerSelection::Single),
+        )
+        .err()
+        .expect("stationary drag must be rejected before apply_seq");
+        assert!(error.contains("同じ"), "error={error}");
+        assert_eq!(store.atomicity_probe_for_test(), before);
     }
 }

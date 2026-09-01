@@ -21,6 +21,7 @@ pub mod single_reflection_plan;
 pub mod composite_motion_plan;
 pub mod step_oracle;
 pub mod techniques;
+pub mod technique_classification;
 
 pub use compound::{CompoundMotionSession, CompoundTechnique, compose_flat_motion_step};
 pub use crease_only::{
@@ -73,3 +74,4 @@ pub use spatial_fold::{SpatialFoldInput, SpatialFoldMode, SpatialFoldResult, fol
 pub use techniques::{
     TechniqueInput, inside_reverse, open_sink, outside_reverse, petal, pleat, squash, swivel, twist,
 };
+pub use technique_classification::{TechniqueWitness, classify_aligned_motion};

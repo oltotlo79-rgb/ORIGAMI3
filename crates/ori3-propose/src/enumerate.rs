@@ -43,7 +43,7 @@
 //! [`FoldSession::verified_moves`] と作業22の単線探索は変えない。同時折りも上の
 //! 4条件をすべて通す。
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::{Arc, OnceLock};
 
 use ori3_cp::{Face, extract_faces};
@@ -180,7 +180,10 @@ pub struct FoldLine {
 /// 折れると確かめられた手1つぶん。
 #[derive(Clone, Debug, PartialEq)]
 pub struct VerifiedMove {
-    /// [`FoldLine::id`]。複数線の同時折りだけは、その状態の通常IDの直後。
+    /// [`FoldLine::id`]、または通常IDより後ろに割り当てたnetwork候補ID。
+    ///
+    /// network候補には同時Collapseだけでなく、方向付き折り・layer packet・技法も含む。
+    /// 閉じないCollapseを生成時に除外したIDは欠番として残り、別候補へ再利用しない。
     pub id: usize,
     /// 閉じる直線の端から端(材料座標)。複数線の同時折りでは決定的な代表1本。
     pub line: [[f64; 2]; 2],
@@ -203,9 +206,11 @@ pub struct VerifiedMove {
 pub(crate) struct PreparedMove {
     verified: VerifiedMove,
     successor: FoldSession,
+    authority: PrecreaseCollapseAuthority,
+    source_identity: Arc<()>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PrecreaseCollapseAuthority {
     InputCp,
     Operation,
@@ -225,6 +230,126 @@ impl PreparedMove {
     #[must_use]
     pub(crate) fn into_parts(self) -> (VerifiedMove, FoldSession) {
         (self.verified, self.successor)
+    }
+}
+
+/// 提案・手順検証が確かめた手と、その検証で作った終点を結び付けたもの。
+///
+/// fieldは公開せず、検証済みの手・authority・終点を外から組み替えられないようにする。
+/// [`FoldSession::apply`] はこの終点をそのまま使い、solverを別authorityで実行し直さない。
+/// 表示用の値は[`Self::movement`]から明示的に参照する。
+///
+/// `PartialEq`は検証結果の決定性を比べるため、発行元sessionのidentityを比較しない。
+/// 等しいtokenでも相互に適用できるとは限らず、適用可否は[`FoldSession::apply`]が
+/// 発行元sessionまたはそのcloneと同じlineageかを別に確かめる。
+#[must_use]
+pub struct CheckedMove {
+    movement: VerifiedMove,
+    successor: FoldSession,
+    authority: PrecreaseCollapseAuthority,
+    source_identity: Arc<()>,
+}
+
+impl CheckedMove {
+    fn from_prepared(prepared: PreparedMove) -> Self {
+        let PreparedMove {
+            verified: movement,
+            successor,
+            authority,
+            source_identity,
+        } = prepared;
+        Self {
+            movement,
+            successor,
+            authority,
+            source_identity,
+        }
+    }
+
+    /// 検証済みの手の表示・会計用情報。
+    #[must_use]
+    pub fn movement(&self) -> &VerifiedMove {
+        &self.movement
+    }
+}
+
+impl std::fmt::Debug for CheckedMove {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CheckedMove")
+            .field("movement", &self.movement)
+            .field("authority", &self.authority)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for CheckedMove {
+    fn eq(&self, other: &Self) -> bool {
+        self.movement == other.movement
+            && self.authority == other.authority
+            && self.successor.document == other.successor.document
+            && self.successor.state_key() == other.successor.state_key()
+    }
+}
+
+/// 明示的な手動操作として確かめた手と、その検証で作った終点を結び付けたもの。
+///
+/// [`CheckedMove`]とは別の不透明な型にし、提案・計画の手を手動操作のauthorityへ
+/// 渡せないようにする。fieldとconstructorは公開しない。
+///
+/// `PartialEq`は検証結果の決定性を比べるため、発行元sessionのidentityを比較しない。
+/// 等しいtokenでも相互に適用できるとは限らず、適用可否は
+/// [`FoldSession::apply_operation`]が発行元sessionまたはそのcloneと同じlineageかを
+/// 別に確かめる。
+#[must_use]
+#[derive(Clone)]
+pub struct OperationMove {
+    movement: VerifiedMove,
+    successor: FoldSession,
+    source_identity: Arc<()>,
+}
+
+impl OperationMove {
+    fn from_prepared(prepared: PreparedMove) -> Self {
+        let PreparedMove {
+            verified: movement,
+            successor,
+            authority,
+            source_identity,
+        } = prepared;
+        assert_eq!(
+            authority,
+            PrecreaseCollapseAuthority::Operation,
+            "手動操作tokenをOperation以外のauthorityから作ろうとした"
+        );
+        Self {
+            movement,
+            successor,
+            source_identity,
+        }
+    }
+
+    /// 検証済みの手の表示・会計用情報。
+    #[must_use]
+    pub fn movement(&self) -> &VerifiedMove {
+        &self.movement
+    }
+}
+
+impl std::fmt::Debug for OperationMove {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OperationMove")
+            .field("movement", &self.movement)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for OperationMove {
+    fn eq(&self, other: &Self) -> bool {
+        self.movement == other.movement
+            && self.successor.document == other.successor.document
+            && self.successor.state_key() == other.successor.state_key()
     }
 }
 
@@ -306,6 +431,8 @@ pub struct MoveReport {
     /// 作業18の規則が**取りこぼしている**ぶんで、
     /// 「見積もりが必ず上限側になる」とは限らないことを、実際に使える手とともに残す。
     pub verified_outside_estimate: Vec<VerifiedMove>,
+    /// [`Self::verified`]と同じ順序で対応する、手動操作専用の不透明token。
+    operation_moves: Vec<OperationMove>,
 }
 
 impl MoveReport {
@@ -315,6 +442,14 @@ impl MoveReport {
     /// それぞれ折り線の決定順で返す。
     pub fn all_verified(&self) -> impl Iterator<Item = &VerifiedMove> {
         self.verified.iter()
+    }
+
+    /// 見積もりの内外を問わず、確かめた手動操作を適用できる不透明token。
+    ///
+    /// 表示情報は[`OperationMove::movement`]で参照し、適用は
+    /// [`FoldSession::apply_operation`]へtoken自体を渡す。
+    pub fn operation_moves(&self) -> impl Iterator<Item = &OperationMove> {
+        self.operation_moves.iter()
     }
 
     /// 確かめられなかった手の数。
@@ -337,9 +472,12 @@ impl MoveReport {
 /// 折りかけの作品1つぶん。次に折れる手を確かめながら進める。
 ///
 /// 展開図・面・重なり順・ここまでの手順をまとめて持ち、
-/// [`Self::verified_moves`] で次の手を確かめ、[`Self::apply`] で1手進める。
+/// 提案・計画は[`Self::check_move`]から[`Self::apply`]へ進め、明示的な手動操作だけは
+/// [`Self::verified_moves`]から[`Self::apply_operation`]へ進める。
 #[derive(Clone, Debug)]
 pub struct FoldSession {
+    /// 同じ論理状態のcloneだけが共有する識別子。1手進んだ終点には新しい値を振る。
+    identity: Arc<()>,
     document: Document,
     faces: Vec<Face>,
     state: FlatState,
@@ -400,6 +538,7 @@ impl FoldSession {
         }
         let state = FlatState::initial(&document.cp, &faces);
         let mut session = Self {
+            identity: Arc::new(()),
             document: document.clone(),
             faces,
             state,
@@ -533,8 +672,10 @@ impl FoldSession {
 
         let mut proposed_fold_lines = 0usize;
         let mut verified_within_estimate = Vec::new();
+        let mut operations_within_estimate = Vec::new();
         let mut rejected = Vec::new();
         let mut verified_outside_estimate = Vec::new();
+        let mut operations_outside_estimate = Vec::new();
         for fold_line in &self.fold_lines {
             if fold_line.mask & !self.folded == 0 {
                 continue; // すべて折り終えている
@@ -544,11 +685,14 @@ impl FoldSession {
                 proposed_fold_lines += 1;
             }
             match self.try_fold(fold_line, scan) {
-                Ok(mv) => {
+                Ok(operation) => {
+                    let mv = operation.movement().clone();
                     if in_estimate {
                         verified_within_estimate.push(mv);
+                        operations_within_estimate.push(operation);
                     } else {
                         verified_outside_estimate.push(mv);
+                        operations_outside_estimate.push(operation);
                     }
                 }
                 Err(reason) => {
@@ -568,6 +712,10 @@ impl FoldSession {
             .chain(&verified_outside_estimate)
             .cloned()
             .collect();
+        let operation_moves = operations_within_estimate
+            .into_iter()
+            .chain(operations_outside_estimate)
+            .collect();
         MoveReport {
             proposed_crease_lines,
             proposed_fold_lines,
@@ -575,6 +723,7 @@ impl FoldSession {
             verified_within_estimate,
             rejected,
             verified_outside_estimate,
+            operation_moves,
         }
     }
 
@@ -586,16 +735,17 @@ impl FoldSession {
     ///
     /// 提案・手順検証と同じく、入力CPのM/Vを一般制約の根拠にする。手動列挙の
     /// [`Self::verified_moves`] だけが、明示した単純な本折りの操作方向を使う。
+    /// 検証で作った終点を結び付けた不透明な[`CheckedMove`]を返す。
     /// 確かめられなければ [`None`] を返す。
     #[must_use]
-    pub fn verify_move(&self, id: usize, scan: PoseScan) -> Option<VerifiedMove> {
+    pub fn verify_move(&self, id: usize, scan: PoseScan) -> Option<CheckedMove> {
         self.prepare_move(id, scan)
-            .map(|prepared| prepared.into_parts().0)
+            .map(|prepared| CheckedMove::from_prepared(prepared))
     }
 
     /// 探索内部向け。指定走査を通した手と、その検証で既に作った終点を一緒に返す。
-    /// 同じsolverを直後の採点・子状態作成で再実行しないためのもので、公開手順は従来どおり
-    /// [`VerifiedMove`] だけを持ち、最終検証では独立に再適用する。
+    /// 同じsolverを直後の採点・子状態作成で再実行しないためのもので、公開の提案・計画経路も
+    /// [`CheckedMove`]へ包み、同じ終点を再計算せず適用する。
     pub(crate) fn prepare_move(&self, id: usize, scan: PoseScan) -> Option<PreparedMove> {
         if id >= self.fold_lines.len() {
             return self
@@ -618,11 +768,16 @@ impl FoldSession {
         prepared: PreparedMove,
         scan: PoseScan,
     ) -> Result<PreparedMove, Unverified> {
+        if !Arc::ptr_eq(&self.identity, &prepared.source_identity) {
+            return Err(Unverified::CannotCollapse);
+        }
         let (max_seam_gap, penetrations) =
             self.verify_successor_poses(&prepared.successor, scan)?;
         let PreparedMove {
             mut verified,
             successor,
+            authority,
+            source_identity,
         } = prepared;
         verified.max_seam_gap = max_seam_gap;
         verified.penetrations = penetrations;
@@ -630,6 +785,8 @@ impl FoldSession {
         Ok(PreparedMove {
             verified,
             successor,
+            authority,
+            source_identity,
         })
     }
 
@@ -639,22 +796,24 @@ impl FoldSession {
     /// [`collapse_precrease_network`] 本来の複数線入力で扱う。単一直線の候補が1本以下なら
     /// 同じ手を重複して返さない。返すIDは通常の直線IDの直後で、同じ状態なら決定的である。
     #[must_use]
-    pub fn verify_network_move(&self, scan: PoseScan) -> Option<VerifiedMove> {
+    pub fn verify_network_move(&self, scan: PoseScan) -> Option<CheckedMove> {
         self.remaining_network()
-            .map(|network| self.try_network(&network, scan))
+            .map(|network| self.try_network_prepared(&network, scan))
             .and_then(Result::ok)
+            .map(|prepared| CheckedMove::from_prepared(prepared))
     }
 
     /// 完成探索で使う、複数直線の候補をすべて確かめる。
     ///
-    /// 先頭は従来どおり「未閉鎖線の全体」で、その後ろに、現在の畳み平面で
-    /// 同一直線へ重なる折り線群を並べる。全網を先頭に保ち、通った候補をすべて返す。
+    /// 「未閉鎖線の全体」が閉路filterを通るときは従来どおり先頭に置き、その後ろに、
+    /// 現在の畳み平面で同一直線へ重なる折り線群を並べる。閉じないと証明できた候補は
+    /// 返さず、そのIDも別候補へ再利用しない。
     #[must_use]
-    pub fn verified_network_moves(&self, scan: PoseScan) -> Vec<VerifiedMove> {
+    pub fn verified_network_moves(&self, scan: PoseScan) -> Vec<CheckedMove> {
         self.prepared_network_moves_until(scan, || false)
             .0
             .into_iter()
-            .map(|prepared| prepared.into_parts().0)
+            .map(|prepared| CheckedMove::from_prepared(prepared))
             .collect()
     }
 
@@ -801,7 +960,10 @@ impl FoldSession {
         (verified, timed_out)
     }
 
-    /// 現在の状態で作る複数直線候補の数（全網1件を含む）。
+    /// 閉路filter後に、現在の状態で作る複数直線候補の数。
+    ///
+    /// 全網も閉じないなら含めない。除外した候補のIDは欠番として保持するので、この件数は
+    /// ID上限ではない。IDは返された候補または検索結果から受け取る。
     #[must_use]
     pub fn network_move_count(&self) -> usize {
         self.network_candidates().len()
@@ -820,15 +982,11 @@ impl FoldSession {
     /// 入力CPのM/Vを一般制約の根拠にする。手動列挙の[`Self::verified_moves`]だけが、
     /// 明示した単純な本折りの操作方向を使う。
     #[must_use]
-    pub fn check_move(
-        &self,
-        id: usize,
-        scan: PoseScan,
-    ) -> Option<Result<VerifiedMove, Unverified>> {
+    pub fn check_move(&self, id: usize, scan: PoseScan) -> Option<Result<CheckedMove, Unverified>> {
         if id >= self.fold_lines.len() {
             return self.network_candidate_by_id(id).map(|network| {
                 self.try_network_prepared(network, scan)
-                    .map(|prepared| prepared.into_parts().0)
+                    .map(|prepared| CheckedMove::from_prepared(prepared))
             });
         }
         let fold_line = self.fold_lines.iter().find(|l| l.id == id)?;
@@ -837,7 +995,7 @@ impl FoldSession {
         }
         Some(
             self.try_fold_prepared(fold_line, scan)
-                .map(|prepared| prepared.into_parts().0),
+                .map(|prepared| CheckedMove::from_prepared(prepared)),
         )
     }
 
@@ -944,60 +1102,45 @@ impl FoldSession {
         })
     }
 
-    /// 確かめた手を1つ進める。
+    /// 提案・手順検証で確かめた手を、その検証で作った終点へ1つ進める。
+    ///
+    /// solverは実行し直さない。検証に使ったsession、または同じidentityを共有するそのclone
+    /// だけが、[`CheckedMove`]が非公開で保持する終点をそのまま採用できる。同じ文書と物理状態
+    /// から独立に作り直したsessionには適用できない。
     ///
     /// # Errors
     ///
-    /// その手がいまの状態で折れない場合(確かめた直後の状態から動いている場合など)。
-    pub fn apply(&mut self, mv: &VerifiedMove) -> Result<(), String> {
-        self.apply_with_authority(mv, PrecreaseCollapseAuthority::Operation)
-    }
-
-    /// 提案された手を、入力CPのM/Vを根拠にして再適用する。
-    pub(crate) fn apply_strict(&mut self, mv: &VerifiedMove) -> Result<(), String> {
-        self.apply_with_authority(mv, PrecreaseCollapseAuthority::InputCp)
-    }
-
-    fn apply_with_authority(
-        &mut self,
-        mv: &VerifiedMove,
-        authority: PrecreaseCollapseAuthority,
-    ) -> Result<(), String> {
-        let (collapsed, line, affected) = if mv.id >= self.fold_lines.len() {
-            let network = self
-                .network_candidate_by_id(mv.id)
-                .ok_or_else(|| "同時に閉じる折り線網が現在の状態にない".to_string())?;
-            let line = network.representative;
-            let affected = network.affected_closes.clone();
-            let collapsed = match authority {
-                PrecreaseCollapseAuthority::InputCp => self.execute_network(network),
-                PrecreaseCollapseAuthority::Operation => {
-                    self.execute_network_for_operation(network)
-                }
-            }?;
-            (collapsed, line, affected)
-        } else {
-            let fold_line = self
-                .fold_lines
-                .iter()
-                .find(|line| line.id == mv.id)
-                .ok_or_else(|| "確認した折り線が現在の状態にない".to_string())?;
-            let collapsed = match authority {
-                PrecreaseCollapseAuthority::InputCp => self.collapse(mv.line),
-                PrecreaseCollapseAuthority::Operation => self.collapse_for_operation(mv.line),
-            }?;
-            (
-                collapsed,
-                [fold_line.a, fold_line.b],
-                fold_line.closes.clone(),
-            )
-        };
-        let next = self.successor(collapsed)?;
-        let closes = closed_effect(&self.lines, &affected, self.folded, &next.closed);
-        if mv.line != line || mv.closes != closes || mv.mask != next.folded {
-            return Err("確認後に折り操作の効果が変わっている".to_string());
+    /// 発行元sessionのlineageでない場合、または確かめた直後の状態から動いている場合。
+    pub fn apply(&mut self, mv: &CheckedMove) -> Result<(), String> {
+        if !Arc::ptr_eq(&self.identity, &mv.source_identity) {
+            return Err("発行元sessionでないか、確認した手の元の状態から作品が変わっている".to_string());
         }
-        *self = next;
+        if mv.authority != PrecreaseCollapseAuthority::InputCp {
+            return Err("提案・手順検証ではないauthorityの手を適用しようとした".to_string());
+        }
+        *self = mv.successor.clone();
+        Ok(())
+    }
+
+    /// 明示的な手動操作を、その検証で作った終点へ1つ進める。
+    ///
+    /// `Operation` authorityでsolverを実行した[`Self::verified_moves`]だけがtokenを発行する。
+    /// solverは適用時に実行し直さない。検証に使ったsession、または同じidentityを共有する
+    /// そのcloneだけが適用でき、同じ文書と物理状態から独立に作り直したsessionには適用できない。
+    ///
+    /// `CheckedMove`や表示用`VerifiedMove`を渡すauthority越境は型検査で拒否される。
+    ///
+    /// ```compile_fail,E0308
+    /// use ori3_propose::{CheckedMove, FoldSession};
+    /// fn cannot_cross_authorities(session: &mut FoldSession, checked: &CheckedMove) {
+    ///     session.apply_operation(checked.movement()).unwrap();
+    /// }
+    /// ```
+    pub fn apply_operation(&mut self, mv: &OperationMove) -> Result<(), String> {
+        if !Arc::ptr_eq(&self.identity, &mv.source_identity) {
+            return Err("発行元sessionでないか、確認した手の元の状態から作品が変わっている".to_string());
+        }
+        *self = mv.successor.clone();
         Ok(())
     }
 
@@ -1149,13 +1292,6 @@ impl FoldSession {
         self.execute_network_with_authority(network, PrecreaseCollapseAuthority::InputCp)
     }
 
-    fn execute_network_for_operation(
-        &self,
-        network: &NetworkCandidate,
-    ) -> Result<(CreasePattern, ori3_model::FoldStep), String> {
-        self.execute_network_with_authority(network, PrecreaseCollapseAuthority::Operation)
-    }
-
     fn execute_network_with_authority(
         &self,
         network: &NetworkCandidate,
@@ -1207,6 +1343,7 @@ impl FoldSession {
             return Err(format!("折った後の重なり順に警告が出た: {warnings:?}"));
         }
         let mut next = Self {
+            identity: Arc::new(()),
             document,
             faces,
             state,
@@ -1222,13 +1359,13 @@ impl FoldSession {
     }
 
     /// 1つの候補を実際に折って、4つの条件をすべて見る。
-    fn try_fold(&self, fold_line: &FoldLine, scan: PoseScan) -> Result<VerifiedMove, Unverified> {
+    fn try_fold(&self, fold_line: &FoldLine, scan: PoseScan) -> Result<OperationMove, Unverified> {
         self.try_fold_prepared_with_authority(
             fold_line,
             scan,
             PrecreaseCollapseAuthority::Operation,
         )
-        .map(|prepared| prepared.into_parts().0)
+        .map(OperationMove::from_prepared)
     }
 
     fn try_fold_prepared(
@@ -1264,17 +1401,8 @@ impl FoldSession {
             fold_line.closes.clone(),
             successor,
             scan,
+            authority,
         )
-    }
-
-    /// 複数直線を同時に閉じる候補を、単一直線と同じ4条件で確かめる。
-    fn try_network(
-        &self,
-        network: &NetworkCandidate,
-        scan: PoseScan,
-    ) -> Result<VerifiedMove, Unverified> {
-        self.try_network_prepared(network, scan)
-            .map(|prepared| prepared.into_parts().0)
     }
 
     fn try_network_prepared(
@@ -1297,6 +1425,7 @@ impl FoldSession {
             network.affected_closes.clone(),
             successor,
             scan,
+            PrecreaseCollapseAuthority::InputCp,
         )
     }
 
@@ -1326,6 +1455,7 @@ impl FoldSession {
         affected: Vec<usize>,
         successor: FoldSession,
         scan: PoseScan,
+        authority: PrecreaseCollapseAuthority,
     ) -> Result<PreparedMove, Unverified> {
         let (worst_gap, worst_pairs) = self.verify_successor_poses(&successor, scan)?;
         let closes = closed_effect(&self.lines, &affected, self.folded, &successor.closed);
@@ -1341,6 +1471,8 @@ impl FoldSession {
         Ok(PreparedMove {
             verified,
             successor,
+            authority,
+            source_identity: Arc::clone(&self.identity),
         })
     }
 
@@ -1401,6 +1533,20 @@ impl FoldSession {
 
     /// 現在まだ閉じていない直線を、決定的な順番の1つの網にまとめる。
     fn remaining_network(&self) -> Option<NetworkCandidate> {
+        let candidate = self.remaining_network_unfiltered()?;
+        let mut never_stop = || false;
+        match self.collapse_closure_assessment_until(&candidate, &mut never_stop)? {
+            CollapseClosureAssessment::OddReflectionCycle
+            | CollapseClosureAssessment::EvenNonIdentityCycle => None,
+            CollapseClosureAssessment::Consistent | CollapseClosureAssessment::Indeterminate => {
+                Some(candidate)
+            }
+        }
+    }
+
+    /// 閉路整合性を適用する前の全網候補。生成会計と、全候補を一度作ってからの
+    /// 決定的なfilterにだけ使う。
+    fn remaining_network_unfiltered(&self) -> Option<NetworkCandidate> {
         let ids: Vec<usize> = self
             .fold_lines
             .iter()
@@ -1475,7 +1621,10 @@ impl FoldSession {
         };
         groups.extend(legacy_components);
 
-        let mut out = self.remaining_network().into_iter().collect::<Vec<_>>();
+        let mut out = self
+            .remaining_network_unfiltered()
+            .into_iter()
+            .collect::<Vec<_>>();
         for ids in groups
             .into_iter()
             .filter(|ids| ids.len() >= 2 && ids.len() < remaining.len())
@@ -1498,6 +1647,10 @@ impl FoldSession {
         for (ordinal, candidate) in out.iter_mut().enumerate() {
             candidate.id = self.fold_lines.len() + ordinal;
         }
+        if !self.retain_closure_consistent_candidates_until(&mut out, should_stop) {
+            return (Vec::new(), true);
+        }
+        // 全候補側と同じfilter前IDを保つ。除外後も、共通候補は同じIDを指す。
         if should_stop() {
             (Vec::new(), true)
         } else {
@@ -1537,6 +1690,25 @@ impl FoldSession {
     }
 
     fn build_network_candidates_until(
+        &self,
+        should_stop: &mut impl FnMut() -> bool,
+    ) -> (Vec<NetworkCandidate>, bool) {
+        let (mut candidates, timed_out) =
+            self.build_network_candidates_unfiltered_until(should_stop);
+        if timed_out {
+            return (Vec::new(), true);
+        }
+        if !self.retain_closure_consistent_candidates_until(&mut candidates, should_stop) {
+            return (Vec::new(), true);
+        }
+        // IDはfilter前の意味へ結び付いている。除外位置を後続候補へ詰め直すと、
+        // たとえば全網のIDが別の部分網を指すため、欠番のまま保持する。
+        (candidates, false)
+    }
+
+    /// 閉路filter直前まで、従来と同じ候補集合・順序を作る。
+    /// filterの会計を同じ入力集合で採るために分けている。
+    fn build_network_candidates_unfiltered_until(
         &self,
         should_stop: &mut impl FnMut() -> bool,
     ) -> (Vec<NetworkCandidate>, bool) {
@@ -1591,7 +1763,10 @@ impl FoldSession {
         };
         groups.extend(legacy_components);
 
-        let mut out = self.remaining_network().into_iter().collect::<Vec<_>>();
+        let mut out = self
+            .remaining_network_unfiltered()
+            .into_iter()
+            .collect::<Vec<_>>();
         for ids in groups
             .into_iter()
             .filter(|ids| ids.len() >= 2 && ids.len() < remaining.len())
@@ -1988,6 +2163,261 @@ impl FoldSession {
                 target_layers,
             },
             affected_closes,
+        })
+    }
+
+    /// 証明できた閉路不整合だけを候補から除く。入力を解決できなかった場合は、従来どおり
+    /// 本体solverへ残す。事前判定の取りこぼしを、候補の誤削除へ変えないためである。
+    fn retain_closure_consistent_candidates_until(
+        &self,
+        candidates: &mut Vec<NetworkCandidate>,
+        should_stop: &mut impl FnMut() -> bool,
+    ) -> bool {
+        let mut retained = Vec::with_capacity(candidates.len());
+        for candidate in candidates.drain(..) {
+            if should_stop() {
+                return false;
+            }
+            let Some(assessment) = self.collapse_closure_assessment_until(&candidate, should_stop)
+            else {
+                return false;
+            };
+            if matches!(
+                assessment,
+                CollapseClosureAssessment::OddReflectionCycle
+                    | CollapseClosureAssessment::EvenNonIdentityCycle
+            ) {
+                continue;
+            }
+            retained.push(candidate);
+        }
+        *candidates = retained;
+        !should_stop()
+    }
+
+    /// `collapse_precrease_network` の `reflected_placements` と同じ材料面グラフを作り、
+    /// 各独立閉路の鏡映合成が恒等になるかを事前に調べる。
+    fn collapse_closure_assessment_until(
+        &self,
+        candidate: &NetworkCandidate,
+        should_stop: &mut impl FnMut() -> bool,
+    ) -> Option<CollapseClosureAssessment> {
+        let NetworkAction::Collapse {
+            lines,
+            target_layers,
+        } = &candidate.action
+        else {
+            return Some(CollapseClosureAssessment::Consistent);
+        };
+        if lines.is_empty() {
+            return Some(CollapseClosureAssessment::Indeterminate);
+        }
+
+        let positions = self
+            .document
+            .cp
+            .vertices
+            .iter()
+            .map(|vertex| (vertex.id, vertex.pos))
+            .collect::<BTreeMap<_, _>>();
+        let selected = target_layers
+            .as_ref()
+            .map(|layers| layers.iter().copied().collect::<BTreeSet<_>>());
+        if selected.as_ref().is_some_and(BTreeSet::is_empty)
+            || selected.as_ref().is_some_and(|layers| {
+                layers
+                    .iter()
+                    .any(|id| !self.faces.iter().any(|face| face.id == *id))
+            })
+        {
+            return Some(CollapseClosureAssessment::Indeterminate);
+        }
+
+        let old_owners = face_owners(&self.faces);
+        let mut work = self.document.cp.clone();
+        let mut network = BTreeSet::<EdgeId>::new();
+        let mut hit = vec![false; lines.len()];
+        for edge in &mut work.edges {
+            if should_stop() {
+                return None;
+            }
+            if edge.kind == EdgeKind::Border {
+                continue;
+            }
+            let (Some(&a), Some(&b)) = (positions.get(&edge.v0), positions.get(&edge.v1)) else {
+                continue;
+            };
+            let selected_here = selected.as_ref().is_none_or(|selected| {
+                if edge.kind == EdgeKind::Aux {
+                    let midpoint = [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5];
+                    self.faces.iter().any(|face| {
+                        selected.contains(&face.id)
+                            && point_in_face(&self.document.cp, face, midpoint)
+                    })
+                } else {
+                    old_owners.get(&edge.id).is_some_and(|owners| {
+                        owners.len() == 2 && owners.iter().all(|owner| selected.contains(owner))
+                    })
+                }
+            });
+            if !selected_here {
+                continue;
+            }
+            for (index, line) in lines.iter().enumerate() {
+                if collapse_segment_on_line(a, b, *line) {
+                    network.insert(edge.id);
+                    if edge.kind == EdgeKind::Aux {
+                        edge.kind = EdgeKind::Valley;
+                    }
+                    hit[index] = true;
+                    break;
+                }
+            }
+        }
+        if network.is_empty() || hit.iter().any(|matched| !matched) {
+            return Some(CollapseClosureAssessment::Indeterminate);
+        }
+
+        let split_faces = extract_faces(&work);
+        if split_faces.is_empty() {
+            return Some(CollapseClosureAssessment::Indeterminate);
+        }
+        let mut parent_of = BTreeMap::<FaceId, FaceId>::new();
+        for face in &split_faces {
+            if should_stop() {
+                return None;
+            }
+            let point = representative_point(&work, face);
+            let Some(parent) = self
+                .faces
+                .iter()
+                .find(|candidate| point_in_face(&self.document.cp, candidate, point))
+            else {
+                return Some(CollapseClosureAssessment::Indeterminate);
+            };
+            if !self.state.placements.contains_key(&parent.id) {
+                return Some(CollapseClosureAssessment::Indeterminate);
+            }
+            parent_of.insert(face.id, parent.id);
+        }
+
+        let mut work_edges = BTreeMap::new();
+        for edge in &work.edges {
+            if should_stop() {
+                return None;
+            }
+            if work_edges.insert(edge.id, edge).is_some() {
+                // 本体solverは重複IDなら先頭辺を読む。ここだけ別の辺を採用して
+                // 誤って除外しないよう、壊れた直接入力は本体判定へ残す。
+                return Some(CollapseClosureAssessment::Indeterminate);
+            }
+        }
+        let mut adjacency = BTreeMap::<FaceId, Vec<(FaceId, EdgeId)>>::new();
+        for (edge_id, owners) in face_owners(&split_faces) {
+            if should_stop() {
+                return None;
+            }
+            if owners.len() != 2 {
+                continue;
+            }
+            let Some(edge) = work_edges.get(&edge_id) else {
+                return Some(CollapseClosureAssessment::Indeterminate);
+            };
+            if !matches!(edge.kind, EdgeKind::Mountain | EdgeKind::Valley) {
+                continue;
+            }
+            adjacency
+                .entry(owners[0])
+                .or_default()
+                .push((owners[1], edge_id));
+            adjacency
+                .entry(owners[1])
+                .or_default()
+                .push((owners[0], edge_id));
+        }
+        for neighbors in adjacency.values_mut() {
+            neighbors.sort_unstable_by_key(|(face, edge)| (*edge, *face));
+        }
+
+        let mut predicted = BTreeMap::<FaceId, CollapseClosureIsometry>::new();
+        let mut odd_cycle = false;
+        let mut even_non_identity = false;
+        for root in split_faces.iter().map(|face| face.id) {
+            if predicted.contains_key(&root) {
+                continue;
+            }
+            let Some(parent) = parent_of.get(&root) else {
+                return Some(CollapseClosureAssessment::Indeterminate);
+            };
+            let Some(root_placement) = self.state.placements.get(parent) else {
+                return Some(CollapseClosureAssessment::Indeterminate);
+            };
+            predicted.insert(
+                root,
+                CollapseClosureIsometry {
+                    rotation: root_placement.rotation,
+                    translation: [root_placement.translation.x, root_placement.translation.y],
+                    mirrored: root_placement.mirrored,
+                },
+            );
+            let mut queue = VecDeque::from([root]);
+            while let Some(face) = queue.pop_front() {
+                if should_stop() {
+                    return None;
+                }
+                let placement = predicted[&face];
+                for &(neighbor, edge_id) in adjacency.get(&face).map(Vec::as_slice).unwrap_or(&[]) {
+                    let Some(edge) = work_edges.get(&edge_id) else {
+                        return Some(CollapseClosureAssessment::Indeterminate);
+                    };
+                    let (Some(&a), Some(&b)) = (positions.get(&edge.v0), positions.get(&edge.v1))
+                    else {
+                        return Some(CollapseClosureAssessment::Indeterminate);
+                    };
+                    let (Some(&old_a), Some(&old_b)) =
+                        (parent_of.get(&face), parent_of.get(&neighbor))
+                    else {
+                        return Some(CollapseClosureAssessment::Indeterminate);
+                    };
+                    let (Some(parent_a), Some(parent_b)) = (
+                        self.state.placements.get(&old_a),
+                        self.state.placements.get(&old_b),
+                    ) else {
+                        return Some(CollapseClosureAssessment::Indeterminate);
+                    };
+                    let closes =
+                        network.contains(&edge_id) || parent_a.mirrored != parent_b.mirrored;
+                    let next = if closes {
+                        let Some(reflection) = CollapseClosureIsometry::reflection(a, b) else {
+                            return Some(CollapseClosureAssessment::Indeterminate);
+                        };
+                        placement.compose(reflection)
+                    } else {
+                        placement
+                    };
+                    if let Some(&existing) = predicted.get(&neighbor) {
+                        match closure_difference(existing, next) {
+                            CollapseClosureAssessment::OddReflectionCycle => odd_cycle = true,
+                            CollapseClosureAssessment::EvenNonIdentityCycle => {
+                                even_non_identity = true;
+                            }
+                            CollapseClosureAssessment::Consistent
+                            | CollapseClosureAssessment::Indeterminate => {}
+                        }
+                    } else {
+                        predicted.insert(neighbor, next);
+                        queue.push_back(neighbor);
+                    }
+                }
+            }
+        }
+
+        Some(if odd_cycle {
+            CollapseClosureAssessment::OddReflectionCycle
+        } else if even_non_identity {
+            CollapseClosureAssessment::EvenNonIdentityCycle
+        } else {
+            CollapseClosureAssessment::Consistent
         })
     }
 
@@ -2906,6 +3336,130 @@ struct NetworkCandidate {
     affected_closes: Vec<usize>,
 }
 
+/// 同時collapse候補の閉路を、層solverへ渡す前に材料幾何だけで調べた結果。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CollapseClosureAssessment {
+    /// すべての閉路で鏡映合成が恒等になった。
+    Consistent,
+    /// 奇数回の鏡映を含む閉路があり、表裏が元へ戻らない。
+    OddReflectionCycle,
+    /// 鏡映回数は偶数だが、回転または並進が元へ戻らない。
+    EvenNonIdentityCycle,
+    /// 候補をsolverと同じ面グラフへ解決できず、事前には採否を決められない。
+    Indeterminate,
+}
+
+/// `ori3-layers` の平面等長変換と同じ表現を、候補生成の閉路検査だけに使う。
+///
+/// `ori3-geometry` はこのcrateの直接依存ではないため、ここでは公開済みの3成分だけを
+/// 小さく再現する。比較には新しい許容差を作らず、既存の [`LINE_TOL`] を使う。
+#[derive(Clone, Copy, Debug)]
+struct CollapseClosureIsometry {
+    rotation: f64,
+    translation: [f64; 2],
+    mirrored: bool,
+}
+
+impl CollapseClosureIsometry {
+    #[cfg(test)]
+    fn identity() -> Self {
+        Self {
+            rotation: 0.0,
+            translation: [0.0, 0.0],
+            mirrored: false,
+        }
+    }
+
+    fn reflection(a: [f64; 2], b: [f64; 2]) -> Option<Self> {
+        let direction = [b[0] - a[0], b[1] - a[1]];
+        if direction[0].hypot(direction[1]) <= LINE_TOL {
+            return None;
+        }
+        let angle = direction[1].atan2(direction[0]);
+        let mut reflection = Self {
+            rotation: (2.0 * angle).rem_euclid(std::f64::consts::TAU),
+            translation: [0.0, 0.0],
+            mirrored: true,
+        };
+        let moved = reflection.apply_linear(a);
+        reflection.translation = [a[0] - moved[0], a[1] - moved[1]];
+        Some(reflection)
+    }
+
+    fn apply_linear(self, point: [f64; 2]) -> [f64; 2] {
+        let point = if self.mirrored {
+            [point[0], -point[1]]
+        } else {
+            point
+        };
+        let (sin, cos) = self.rotation.sin_cos();
+        [
+            cos * point[0] - sin * point[1],
+            sin * point[0] + cos * point[1],
+        ]
+    }
+
+    fn apply(self, point: [f64; 2]) -> [f64; 2] {
+        let linear = self.apply_linear(point);
+        [
+            linear[0] + self.translation[0],
+            linear[1] + self.translation[1],
+        ]
+    }
+
+    /// `self ∘ other`。材料辺を横切る順に右から合成する。
+    fn compose(self, other: Self) -> Self {
+        let rotation = if self.mirrored {
+            self.rotation - other.rotation
+        } else {
+            self.rotation + other.rotation
+        };
+        Self {
+            rotation: rotation.rem_euclid(std::f64::consts::TAU),
+            translation: self.apply(other.translation),
+            mirrored: self.mirrored != other.mirrored,
+        }
+    }
+
+    fn approx_eq(self, other: Self) -> bool {
+        if self.mirrored != other.mirrored {
+            return false;
+        }
+        let difference = (self.rotation - other.rotation).rem_euclid(std::f64::consts::TAU);
+        let angle = difference.min(std::f64::consts::TAU - difference);
+        let translation = [
+            self.translation[0] - other.translation[0],
+            self.translation[1] - other.translation[1],
+        ];
+        let translation_length =
+            (translation[0] * translation[0] + translation[1] * translation[1]).sqrt();
+        angle <= LINE_TOL && translation_length <= LINE_TOL
+    }
+}
+
+fn closure_difference(
+    existing: CollapseClosureIsometry,
+    candidate: CollapseClosureIsometry,
+) -> CollapseClosureAssessment {
+    if existing.mirrored != candidate.mirrored {
+        CollapseClosureAssessment::OddReflectionCycle
+    } else if existing.approx_eq(candidate) {
+        CollapseClosureAssessment::Consistent
+    } else {
+        CollapseClosureAssessment::EvenNonIdentityCycle
+    }
+}
+
+/// `precrease_collapse::segment_on_line` と同じ演算順で対象辺を解決する。
+/// 閉路filterだけ別の丸めでnetwork集合を変えないための局所複製である。
+fn collapse_segment_on_line(a: [f64; 2], b: [f64; 2], line: [[f64; 2]; 2]) -> bool {
+    let a = glam::DVec2::from(a);
+    let b = glam::DVec2::from(b);
+    let l0 = glam::DVec2::from(line[0]);
+    let direction = (glam::DVec2::from(line[1]) - l0).normalize();
+    direction.perp_dot(a - l0).abs() <= LINE_TOL && direction.perp_dot(b - l0).abs() <= LINE_TOL
+}
+
 /// 花弁折りの中心軸1本。`(中心線, 持ち上げる先端)` の組である。
 type PetalAxis = ([[f64; 2]; 2], [f64; 2]);
 
@@ -3611,18 +4165,22 @@ fn closed_edges(faces: &[Face], state: &FlatState) -> BTreeSet<EdgeId> {
 #[cfg(test)]
 mod tests {
     use ori3_cp::insert_segment;
-    use ori3_model::{Document, DriverLine, EdgeKind, FaceId, FoldStep, Paper, TechniqueKind};
+    use ori3_model::{
+        Document, DriverLine, Edge, EdgeKind, FaceId, FoldStep, Paper, TechniqueKind,
+    };
 
     use super::{
-        CandidateKey, FoldSession, MAX_LINES, PART_LAYER_SKIP_MARK, PacketEdgeRelation,
-        PacketTechnique, PoseProblem, PoseScan, PreparedMove, activated_edges, closed_effect,
-        coincident_line_components, coincident_line_sets, exposed_packets, exposed_packets_until,
-        face_count_problem, folded_bit, folded_bit_is_set, packet_technique_warning_is_blocking,
+        CandidateKey, CheckedMove, CollapseClosureAssessment, CollapseClosureIsometry, FoldSession,
+        MAX_LINES, MAX_SEAM_GAP, NetworkAction, NetworkCandidate, PART_LAYER_SKIP_MARK,
+        PacketEdgeRelation, PacketTechnique, PoseProblem, PoseScan, PreparedMove, activated_edges,
+        closed_effect, closure_difference, coincident_line_components, coincident_line_sets,
+        exposed_packets, exposed_packets_until, face_count_problem, folded_bit, folded_bit_is_set,
+        packet_technique_warning_is_blocking, quantized_point, quantized_segment,
         resolve_driver_edges, saved_angle_targets, torn_creases,
     };
 
-    use std::collections::BTreeSet;
-    use std::sync::OnceLock;
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::{Arc, OnceLock};
 
     use ori3_cp::{Face, extract_faces};
     use ori3_layers::flat_state::FlatState;
@@ -3782,6 +4340,570 @@ mod tests {
         assert_same_fine_result(&reverified, &fresh);
     }
 
+    #[test]
+    fn collapse_closure_difference_checks_parity_then_the_full_isometry() {
+        let identity = CollapseClosureIsometry::identity();
+        let on_axis = CollapseClosureIsometry::reflection([0.0, 0.0], [1.0, 0.0])
+            .expect("水平軸の鏡映を作れない");
+        assert_eq!(
+            closure_difference(identity, on_axis),
+            CollapseClosureAssessment::OddReflectionCycle,
+            "奇数鏡映を回転・並進比較へ流した"
+        );
+
+        let parallel = CollapseClosureIsometry::reflection([0.0, 1.0], [1.0, 1.0])
+            .expect("平行軸の鏡映を作れない");
+        let even_but_translated = on_axis.compose(parallel);
+        assert!(!even_but_translated.mirrored);
+        assert_eq!(
+            closure_difference(identity, even_but_translated),
+            CollapseClosureAssessment::EvenNonIdentityCycle,
+            "偶数鏡映に残った並進を恒等と誤認した"
+        );
+
+        assert_eq!(
+            closure_difference(identity, on_axis.compose(on_axis)),
+            CollapseClosureAssessment::Consistent,
+            "同じ鏡映を2回通る恒等閉路を拒否した"
+        );
+    }
+
+    #[test]
+    fn collapse_candidate_filter_rejects_an_even_non_identity_face_cycle() {
+        let mut document = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        let center = [0.5, 0.5];
+        for endpoint in [[1.0, 0.5], [0.5, 1.0], [0.0, 0.25], [0.25, 0.0]] {
+            insert_segment(&mut document.cp, center, endpoint, EdgeKind::Mountain);
+        }
+        let session = FoldSession::new(&document).expect("4本スポークのsessionを作れない");
+        let candidate = NetworkCandidate {
+            id: usize::MAX,
+            representative: [center, [1.0, 0.5]],
+            key: CandidateKey::Collapse {
+                line_ids: vec![0, 1],
+                packet_edges: None,
+            },
+            action: NetworkAction::Collapse {
+                lines: vec![[center, [1.0, 0.5]], [center, [0.5, 1.0]]],
+                target_layers: None,
+            },
+            affected_closes: Vec::new(),
+        };
+        let mut never_stop = || false;
+        assert_eq!(
+            session
+                .collapse_closure_assessment_until(&candidate, &mut never_stop)
+                .expect("閉路検査が打ち切られた"),
+            CollapseClosureAssessment::EvenNonIdentityCycle
+        );
+        let error = session
+            .execute_network(&candidate)
+            .expect_err("偶数だが非恒等の閉路をsolverが受理した");
+        assert!(
+            error.contains("precrease network is inconsistent around edge"),
+            "閉路不整合より前後の別理由で落ちた: {error}"
+        );
+        let mut candidates = vec![candidate];
+        assert!(
+            session.retain_closure_consistent_candidates_until(&mut candidates, &mut never_stop)
+        );
+        assert!(
+            candidates.is_empty(),
+            "偶数鏡映に残る回転・並進を候補生成が通した"
+        );
+    }
+
+    #[test]
+    fn indeterminate_collapse_closure_is_left_for_the_product_solver() {
+        let document = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        let session = FoldSession::new(&document).expect("白紙のsessionを作れない");
+        let candidate = NetworkCandidate {
+            id: 123,
+            representative: [[0.5, 0.0], [0.5, 1.0]],
+            key: CandidateKey::Collapse {
+                line_ids: vec![0],
+                packet_edges: None,
+            },
+            action: NetworkAction::Collapse {
+                lines: vec![[[0.5, 0.0], [0.5, 1.0]]],
+                target_layers: Some(vec![u32::MAX]),
+            },
+            affected_closes: vec![0],
+        };
+        let mut never_stop = || false;
+        assert_eq!(
+            session
+                .collapse_closure_assessment_until(&candidate, &mut never_stop)
+                .expect("分類不能の判定自体が打ち切られた"),
+            CollapseClosureAssessment::Indeterminate
+        );
+
+        let mut candidates = vec![candidate.clone()];
+        assert!(
+            session.retain_closure_consistent_candidates_until(&mut candidates, &mut never_stop)
+        );
+        assert_eq!(candidates.len(), 1, "分類不能を物理的不成立として削除した");
+        assert_eq!(candidates[0].id, candidate.id);
+        assert_eq!(candidates[0].key, candidate.key);
+    }
+
+    #[test]
+    fn duplicate_edge_ids_leave_collapse_closure_to_the_product_solver() {
+        let mut document = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        insert_segment(&mut document.cp, [0.5, 0.0], [0.5, 1.0], EdgeKind::Mountain);
+        let mut session = FoldSession::new(&document).expect("中央折りのsessionを作れない");
+        let line = session.fold_lines[0].clone();
+        let candidate = NetworkCandidate {
+            id: 123,
+            representative: [line.a, line.b],
+            key: CandidateKey::Collapse {
+                line_ids: vec![line.id],
+                packet_edges: None,
+            },
+            action: NetworkAction::Collapse {
+                lines: vec![[line.a, line.b]],
+                target_layers: None,
+            },
+            affected_closes: line.closes.clone(),
+        };
+        let mut never_stop = || false;
+        assert_eq!(
+            session
+                .collapse_closure_assessment_until(&candidate, &mut never_stop)
+                .expect("正常な中央折りの判定が打ち切られた"),
+            CollapseClosureAssessment::Consistent,
+            "重複IDを入れる前から分類不能だった"
+        );
+
+        let duplicate_id = session.document.cp.edges[0].id;
+        let v0 = session.document.cp.vertices[0].id;
+        let v1 = session.document.cp.vertices[1].id;
+        session.document.cp.edges.push(Edge {
+            id: duplicate_id,
+            v0,
+            v1,
+            kind: EdgeKind::Aux,
+        });
+        assert_eq!(
+            session
+                .collapse_closure_assessment_until(&candidate, &mut never_stop)
+                .expect("重複IDの判定自体が打ち切られた"),
+            CollapseClosureAssessment::Indeterminate
+        );
+
+        let mut candidates = vec![candidate.clone()];
+        assert!(
+            session.retain_closure_consistent_candidates_until(&mut candidates, &mut never_stop)
+        );
+        assert_eq!(
+            candidates.len(),
+            1,
+            "重複EdgeIdを本体solverへ残さず生成filterだけで拒否した"
+        );
+        assert_eq!(candidates[0].id, candidate.id);
+        assert_eq!(candidates[0].key, candidate.key);
+    }
+
+    fn crane_after_reference_foldthrough() -> FoldSession {
+        let mut document = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        document.cp = serde_json::from_str(include_str!("../tests/fixtures/cp-crane.json"))
+            .expect("折り鶴fixtureを読めない");
+        let session = FoldSession::new(&document).expect("折り鶴から始められない");
+        let line = [[0.0, 0.5], [1.0, 0.5]];
+        let keep_side_point = [0.5, 0.25];
+        // 独立11手の折り鶴手順の第1手。完成CPの線だけでなく、保持側と回す向きを
+        // 明示した逐次操作として作る。現generatorへtraceを配線する作業とは分ける。
+        let reference = NetworkCandidate {
+            id: usize::MAX,
+            representative: line,
+            key: CandidateKey::FoldThrough {
+                line_id: 3,
+                line: quantized_segment(line),
+                keep_side: quantized_point(keep_side_point),
+                down: false,
+                packet: None,
+            },
+            action: NetworkAction::FoldThrough {
+                line,
+                keep_side_point,
+                direction: FoldDirection::Up,
+                target_layers: None,
+            },
+            affected_closes: vec![3],
+        };
+        let prepared = session
+            .try_network_prepared(&reference, PoseScan::DEFAULT)
+            .expect("参照11手の初手が21姿勢を通らない");
+        assert_eq!(prepared.verified().closes, vec![3]);
+        assert_eq!(
+            prepared.verified().poses_checked,
+            PoseScan::DEFAULT.points()
+        );
+        assert_eq!(prepared.verified().penetrations, 0);
+        assert!(prepared.verified().max_seam_gap < MAX_SEAM_GAP);
+        let successor = prepared.successor();
+        assert_eq!(successor.document.sequence.len(), 1);
+        assert_eq!(successor.folded, folded_bit(3));
+        assert_eq!(successor.fold_lines.len(), 27);
+        assert_eq!(successor.lines.len(), 34);
+        successor.clone()
+    }
+
+    #[test]
+    fn post_foldthrough_crane_filters_non_closing_collapse_cycles() {
+        let session = crane_after_reference_foldthrough();
+        let mut never_stop = || false;
+        let (raw, raw_timed_out) =
+            session.build_network_candidates_unfiltered_until(&mut never_stop);
+        assert!(!raw_timed_out);
+        let (filtered, filtered_timed_out) =
+            session.build_network_candidates_until(&mut never_stop);
+        assert!(!filtered_timed_out);
+
+        let full = raw.first().expect("全網候補がない");
+        let full_assessment = session
+            .collapse_closure_assessment_until(full, &mut never_stop)
+            .expect("全網の閉路会計が打ち切られた");
+        assert_eq!(full.id, session.fold_lines.len());
+        assert_eq!(
+            full_assessment,
+            CollapseClosureAssessment::OddReflectionCycle,
+            "閉じない全網をID保持の対照に使えない"
+        );
+        let mut odd = 0usize;
+        let mut even_non_identity = 0usize;
+        let mut indeterminate = 0usize;
+        let mut one_line_packet_count = 0usize;
+        let mut consistent_one_line_packets = Vec::new();
+        let mut plain = BTreeMap::new();
+        let mut expected_filtered = Vec::new();
+        for candidate in &raw {
+            let assessment = session
+                .collapse_closure_assessment_until(candidate, &mut never_stop)
+                .expect("閉路会計が打ち切られた");
+            if let CandidateKey::Collapse {
+                line_ids,
+                packet_edges,
+            } = &candidate.key
+            {
+                match assessment {
+                    CollapseClosureAssessment::OddReflectionCycle => odd += 1,
+                    CollapseClosureAssessment::EvenNonIdentityCycle => {
+                        even_non_identity += 1;
+                    }
+                    CollapseClosureAssessment::Consistent => {}
+                    CollapseClosureAssessment::Indeterminate => indeterminate += 1,
+                }
+                if packet_edges.is_none() && line_ids.len() == 2 {
+                    plain.insert(line_ids.clone(), assessment);
+                }
+                if packet_edges.is_some() && line_ids.len() == 1 {
+                    one_line_packet_count += 1;
+                    if assessment == CollapseClosureAssessment::Consistent {
+                        consistent_one_line_packets.push(candidate);
+                    }
+                }
+            }
+            if matches!(
+                assessment,
+                CollapseClosureAssessment::OddReflectionCycle
+                    | CollapseClosureAssessment::EvenNonIdentityCycle
+            ) {
+                let error = session
+                    .execute_network(candidate)
+                    .expect_err("閉じないと判定した候補を製品solverが受理した");
+                assert!(
+                    error.contains("precrease network is inconsistent around edge"),
+                    "閉路filterと製品solverの拒否段階が一致しない: id={} key={:?} error={error}",
+                    candidate.id,
+                    candidate.key
+                );
+            } else {
+                expected_filtered.push((candidate.id, candidate.key.clone()));
+            }
+        }
+        assert!(
+            one_line_packet_count > 0,
+            "1線layer packetのpositive control候補が生成されていない"
+        );
+        let one_line_packet = consistent_one_line_packets
+            .first()
+            .copied()
+            .expect("閉路が恒等な1線layer packetのpositive controlがない");
+        session
+            .execute_network(one_line_packet)
+            .expect("閉路が恒等な1線layer packetを製品solverが拒否した");
+
+        assert_eq!(
+            plain.get(&vec![5, 7]),
+            Some(&CollapseClosureAssessment::OddReflectionCycle)
+        );
+        assert_eq!(
+            plain.get(&vec![15, 17]),
+            Some(&CollapseClosureAssessment::OddReflectionCycle)
+        );
+        assert_eq!(
+            plain.get(&vec![0, 6]),
+            Some(&CollapseClosureAssessment::Consistent)
+        );
+        assert_eq!(
+            plain.get(&vec![23, 24]),
+            Some(&CollapseClosureAssessment::Consistent)
+        );
+        assert_eq!(indeterminate, 0, "閉路filter前に分類不能なCollapseがある");
+        assert_eq!(
+            filtered.len(),
+            raw.len() - odd - even_non_identity,
+            "閉路不整合以外の候補まで生成から消えた"
+        );
+        let actual_filtered = filtered
+            .iter()
+            .map(|candidate| (candidate.id, candidate.key.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual_filtered, expected_filtered,
+            "filterが候補順・IDを詰め直したか、証明した閉路不整合以外を消した"
+        );
+        assert!(
+            filtered.iter().all(|candidate| candidate.id != full.id),
+            "除外した全網IDを別候補へ再利用した"
+        );
+        assert!(filtered.iter().all(|candidate| {
+            !matches!(
+                &candidate.key,
+                CandidateKey::Collapse { line_ids, .. }
+                    if line_ids == &[5, 7] || line_ids == &[15, 17]
+            )
+        }));
+    }
+
+    fn apply_checked_and_match_bound_successor(session: &mut FoldSession, checked: &CheckedMove) {
+        let expected_document = checked.successor.document.clone();
+        let expected_state = checked.successor.state_key();
+        let expected_mask = checked.successor.folded_mask();
+        session
+            .apply(checked)
+            .expect("検証済み終点をそのまま適用できない");
+        assert_eq!(session.document(), &expected_document);
+        assert_eq!(session.state_key(), expected_state);
+        assert_eq!(session.folded_mask(), expected_mask);
+    }
+
+    /// 公開applyがsolverを解き直さず、CheckedMoveが束縛した終点そのものへ進む。
+    #[test]
+    fn checked_cross_moves_commit_the_bound_successor() {
+        for kind in [EdgeKind::Mountain, EdgeKind::Valley] {
+            let mut document = Document::new(Paper {
+                width_mm: 100.0,
+                height_mm: 100.0,
+            });
+            insert_segment(&mut document.cp, [0.0, 0.5], [1.0, 0.5], kind);
+            insert_segment(&mut document.cp, [0.5, 0.0], [0.5, 1.0], kind);
+            let mut session = FoldSession::new(&document).expect("十字のsessionを作れない");
+
+            for vertical in [false, true] {
+                let id = session
+                    .fold_lines()
+                    .iter()
+                    .find(|line| {
+                        if vertical {
+                            (line.a[0] - 0.5).abs() < 1e-12 && (line.b[0] - 0.5).abs() < 1e-12
+                        } else {
+                            (line.a[1] - 0.5).abs() < 1e-12 && (line.b[1] - 0.5).abs() < 1e-12
+                        }
+                    })
+                    .expect("十字の対象線がない")
+                    .id;
+                let checked = session
+                    .check_move(id, PoseScan::DEFAULT)
+                    .expect("十字の対象線がない")
+                    .expect("十字の対象線が21姿勢を通らない");
+                assert_eq!(checked.movement().poses_checked, PoseScan::DEFAULT.points());
+                assert_eq!(checked.movement().penetrations, 0);
+                assert!(checked.movement().max_seam_gap < MAX_SEAM_GAP);
+                apply_checked_and_match_bound_successor(&mut session, &checked);
+            }
+            assert_eq!(session.applied_moves(), 2);
+        }
+    }
+
+    /// 1手進んだ後には、同じ元状態で検証した別tokenを使えない。
+    #[test]
+    fn checked_move_is_bound_to_the_source_session_state() {
+        let mut document = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        insert_segment(&mut document.cp, [0.0, 0.5], [1.0, 0.5], EdgeKind::Mountain);
+        let mut session = FoldSession::new(&document).expect("中央折りのsessionを作れない");
+        let id = session.fold_lines()[0].id;
+        let first = session
+            .check_move(id, PoseScan::DEFAULT)
+            .expect("中央折りがない")
+            .expect("中央折りを検証できない");
+        let stale = session
+            .check_move(id, PoseScan::DEFAULT)
+            .expect("中央折りがない")
+            .expect("中央折りを再検証できない");
+        let mut same_state_clone = session.clone();
+        same_state_clone
+            .apply(&first)
+            .expect("検証元と同じ状態のcloneへtokenを適用できない");
+        session.apply(&first).expect("最初のtokenを適用できない");
+        assert!(
+            session.apply(&stale).is_err(),
+            "元状態が変わった後にも古いtokenを適用できた"
+        );
+        let mut independently_built =
+            FoldSession::new(&document).expect("同じ文書を再読込できない");
+        assert!(
+            independently_built.apply(&stale).is_err(),
+            "同じ文書から作った別sessionへtokenを移せた"
+        );
+    }
+
+    /// CheckedMove内の表示情報ではなく、検証時に束縛した終点だけをcommitする。
+    #[test]
+    fn checked_move_does_not_resolve_edited_display_metadata() {
+        let mut document = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        insert_segment(&mut document.cp, [0.0, 0.5], [1.0, 0.5], EdgeKind::Mountain);
+        let mut session = FoldSession::new(&document).expect("中央折りのsessionを作れない");
+        let id = session.fold_lines()[0].id;
+        let mut checked = session
+            .check_move(id, PoseScan::DEFAULT)
+            .expect("中央折りがない")
+            .expect("中央折りを検証できない");
+        let expected_document = checked.successor.document.clone();
+        let expected_state = checked.successor.state_key();
+
+        // private fieldへ触れられる同一moduleの検査だけで、表示用metadataを故意に壊す。
+        // 公開利用者はCheckedMoveのfieldを変更できない。
+        checked.movement.id = usize::MAX;
+        checked.movement.line = [[-1.0, -1.0], [-2.0, -2.0]];
+        session
+            .apply(&checked)
+            .expect("表示metadataをsolver入力として解き直した");
+        assert_eq!(session.document(), &expected_document);
+        assert_eq!(session.state_key(), expected_state);
+    }
+
+    /// OperationMoveも表示情報ではなく、検証時に束縛した終点だけをcommitする。
+    #[test]
+    fn operation_move_does_not_resolve_edited_display_metadata() {
+        let mut document = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        insert_segment(&mut document.cp, [0.0, 0.5], [1.0, 0.5], EdgeKind::Mountain);
+        let mut session = FoldSession::new(&document).expect("中央折りのsessionを作れない");
+        let report = session.verified_moves(PoseScan::DEFAULT);
+        let mut operation = report
+            .operation_moves()
+            .next()
+            .cloned()
+            .expect("中央折りの手動tokenがない");
+        let expected_document = operation.successor.document.clone();
+        let expected_state = operation.successor.state_key();
+
+        // private fieldへ触れられる同一moduleの検査だけで、表示用metadataを故意に壊す。
+        operation.movement.id = usize::MAX;
+        operation.movement.line = [[-1.0, -1.0], [-2.0, -2.0]];
+        session
+            .apply_operation(&operation)
+            .expect("手動操作の表示metadataをsolver入力として解き直した");
+        assert_eq!(session.document(), &expected_document);
+        assert_eq!(session.state_key(), expected_state);
+    }
+
+    /// 未検証metadataの偽造を公開せず、拒否理由と手動Operation終点の成否を独立に照合する。
+    #[test]
+    fn rejected_move_reason_matches_the_manual_operation_endpoint() {
+        let mut crane = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        crane.cp = serde_json::from_str(include_str!("../tests/fixtures/cp-crane.json"))
+            .expect("折り鶴fixtureを読めない");
+
+        let mut yakko = Document::new(Paper {
+            width_mm: 150.0,
+            height_mm: 150.0,
+        });
+        let (m1, m2, m3, m4) = ([0.5, 0.0], [1.0, 0.5], [0.5, 1.0], [0.0, 0.5]);
+        for (a, b) in [(m1, m2), (m2, m3), (m3, m4), (m4, m1)] {
+            insert_segment(&mut yakko.cp, a, b, EdgeKind::Valley);
+        }
+        for t in [0.25, 0.75] {
+            for (a, b, kind) in [
+                ([t, 0.0], [t, 0.25], EdgeKind::Mountain),
+                ([t, 0.25], [t, 0.75], EdgeKind::Valley),
+                ([t, 0.75], [t, 1.0], EdgeKind::Mountain),
+                ([0.0, t], [0.25, t], EdgeKind::Mountain),
+                ([0.25, t], [0.75, t], EdgeKind::Valley),
+                ([0.75, t], [1.0, t], EdgeKind::Mountain),
+            ] {
+                insert_segment(&mut yakko.cp, a, b, kind);
+            }
+        }
+
+        let mut total_rejected = 0usize;
+        let mut samples_checked = 0usize;
+        for (name, document) in [("折り鶴", crane), ("やっこさん", yakko)] {
+            let session = FoldSession::new(&document)
+                .unwrap_or_else(|error| panic!("{name}から始められない: {error}"));
+            let report = session.verified_moves(PoseScan::DEFAULT);
+            total_rejected += report.rejected.len();
+            samples_checked += 1;
+
+            for rejected in &report.rejected {
+                let line = session
+                    .fold_lines()
+                    .iter()
+                    .find(|line| line.id == rejected.id)
+                    .unwrap_or_else(|| panic!("{name}: 拒否された通常折り線が現在の状態にない"));
+                let endpoint = session
+                    .collapse_for_operation([line.a, line.b])
+                    .and_then(|collapsed| session.successor(collapsed));
+                if endpoint.is_ok() {
+                    assert!(
+                        matches!(
+                            rejected.reason,
+                            super::Unverified::Torn { .. }
+                                | super::Unverified::PaperPassesThrough { .. }
+                                | super::Unverified::PoseFailed(_)
+                        ),
+                        "{name}: 手{}は手動Operation終点へ進めるのに、姿勢以外の理由で拒否された",
+                        rejected.id
+                    );
+                } else {
+                    assert_eq!(
+                        rejected.reason,
+                        super::Unverified::CannotCollapse,
+                        "{name}: 手{}は手動Operation終点へ進めないのに、別の理由で拒否された",
+                        rejected.id
+                    );
+                }
+            }
+        }
+        assert_eq!(samples_checked, 2, "拒否理由oracleの標本範囲が狭まった");
+        assert!(total_rejected > 0, "拒否理由を照合する手がない");
+    }
+
     /// 実際に折れる花弁折りは紙を裂かず、開く袋の口を `0°` として記録する。
     ///
     /// 裂けを理由に候補を落とす仕組み([`torn_creases`])が、
@@ -3875,6 +4997,7 @@ mod tests {
 
         // 探索は、姿勢を1つも見ないうちにこの手を落とす。
         let mut session = FoldSession {
+            identity: Arc::new(()),
             document,
             faces,
             state,

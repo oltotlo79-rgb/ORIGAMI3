@@ -508,10 +508,18 @@ fn audit_task_24_adopted_layer_orders(
     for (index, ranked) in outcome.steps.iter().enumerate() {
         // 必ずapply前の入力CPを保存する。apply後のCPを渡すと
         // `settle_kinds_from_order`後のM/Vが候補順を自己認証し、旧候補16で実測した
-        // 一般制約2/37違反・`discarded_relations` 5組を見逃す。
+        // 一般制約2/37違反・物理的な`discarded_relations` 4組を見逃す。
+        // 表示用total化の失敗1組は`display_resolution_failure`へ別記録される。
         let input_cp = folded.document().cp.clone();
-        folded.apply(&ranked.mv).unwrap_or_else(|error| {
-            panic!("{}: {}手目を再適用できない: {error}", sample.name, index + 1)
+        let Some(Ok(checked)) = folded.check_move(ranked.mv.id, PoseScan::DEFAULT) else {
+            panic!("{}: {}手目を再検証できない", sample.name, index + 1);
+        };
+        folded.apply(&checked).unwrap_or_else(|error| {
+            panic!(
+                "{}: {}手目を再適用できない: {error}",
+                sample.name,
+                index + 1
+            )
         });
 
         let document = folded.document();
@@ -1193,8 +1201,11 @@ fn completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten() {
             {
                 proper_subset_moves += 1;
             }
+            let Some(Ok(checked)) = replay.check_move(step.mv.id, PoseScan::DEFAULT) else {
+                panic!("{}: 探索手順を再検証できない", sample.name);
+            };
             replay
-                .apply(&step.mv)
+                .apply(&checked)
                 .unwrap_or_else(|error| panic!("{}: 探索手順の再適用: {error}", sample.name));
         }
 
@@ -1318,11 +1329,12 @@ fn task_26_yakko_uses_a_verified_simultaneous_precrease_move() {
         .check_move(network_id, PoseScan::DEFAULT)
         .expect("同時折り候補がない")
         .expect("同時折り候補を21姿勢で折れない");
-    assert_eq!(mv.id, 8);
-    assert_eq!(mv.closes.len(), 16);
-    assert_eq!(mv.poses_checked, 21);
-    assert_eq!(mv.penetrations, 0);
-    assert!(mv.max_seam_gap < MAX_SEAM_GAP);
+    let movement = mv.movement();
+    assert_eq!(movement.id, 8);
+    assert_eq!(movement.closes.len(), 16);
+    assert_eq!(movement.poses_checked, 21);
+    assert_eq!(movement.penetrations, 0);
+    assert!(movement.max_seam_gap < MAX_SEAM_GAP);
     session.apply(&mv).expect("確認した同時折りを進められない");
     let gaps = ori3_propose::finish_gaps(
         &sample.goal.target,
@@ -1350,11 +1362,12 @@ fn a_safe_coincident_partial_network_appears_after_the_first_fold() {
                 .verified_network_moves(PoseScan::DEFAULT)
                 .into_iter()
                 .filter(|mv| {
-                    mv.id != network_id
-                        && mv.closes.len() >= 2
-                        && !session.move_is_directional_fold(mv.id)
-                        && !session.move_uses_layer_packet(mv.id)
-                        && !session.move_opens_and_closes(mv.id)
+                    let movement = mv.movement();
+                    movement.id != network_id
+                        && movement.closes.len() >= 2
+                        && !session.move_is_directional_fold(movement.id)
+                        && !session.move_uses_layer_packet(movement.id)
+                        && !session.move_opens_and_closes(movement.id)
                 })
                 .collect()
         };
@@ -1377,14 +1390,15 @@ fn a_safe_coincident_partial_network_appears_after_the_first_fold() {
             .into_iter()
             .next()
             .unwrap_or_else(|| panic!("{}: 21姿勢を通るproper subsetがない", sample.name));
+        let movement = partial.movement();
         assert!(
-            partial.closes.len() < session.crease_lines().len(),
+            movement.closes.len() < session.crease_lines().len(),
             "{}: 全網を部分集合として数えた",
             sample.name
         );
-        assert_eq!(partial.poses_checked, 21);
-        assert_eq!(partial.penetrations, 0);
-        assert!(partial.max_seam_gap < MAX_SEAM_GAP);
+        assert_eq!(movement.poses_checked, 21);
+        assert_eq!(movement.penetrations, 0);
+        assert!(movement.max_seam_gap < MAX_SEAM_GAP);
 
         let gaps = recorded_task_24_gaps(&task_24_record, sample.id);
         println!(
@@ -1427,8 +1441,11 @@ fn zz_write_check_documents() {
         let mut session = FoldSession::new(&sample.document)
             .unwrap_or_else(|error| panic!("{}: {error}", sample.name));
         for step in &outcome.steps {
+            let Some(Ok(checked)) = session.check_move(step.mv.id, PoseScan::DEFAULT) else {
+                panic!("{}: 手順を再検証できない", sample.name);
+            };
             session
-                .apply(&step.mv)
+                .apply(&checked)
                 .unwrap_or_else(|error| panic!("{}: 手順の再適用: {error}", sample.name));
         }
         let ids: Vec<_> = outcome.steps.iter().map(|step| step.mv.id).collect();

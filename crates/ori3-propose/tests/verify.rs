@@ -20,10 +20,10 @@ use fixed_order::folded_along;
 /// 決定性を見るために同じ入力を回す回数(合格条件3)。
 const RUNS: usize = 3;
 
-const CRANE_STRICT_ORDER: [usize; 2] = [3, 16]; // 2026-08-28: `[16,3]`→`[3,16]`; 旧16は入力CPで一般制約2/37違反・破棄5、strict有効手は1/27。
+const CRANE_STRICT_ORDER: [usize; 2] = [3, 16]; // 2026-08-28: `[16,3]`→`[3,16]`; 旧16は入力CPで一般制約2/37違反・物理破棄4＋表示marker 1、strict有効手は1/27。
 const YAKKO_STRICT_ORDER: [usize; 2] = [2, 1]; // 2026-08-28: `[0,7,3]`→`[2,1]`; 旧0は入力CPで一般制約1/9違反・破棄5、strict有効手は4/8。
 const YAKKO_EQUIVALENT_ORDER: [usize; 2] = [1, 2]; // 2026-08-28: `[0,3,7]`→`[1,2]`; 旧0は入力CPで一般制約1/9違反・破棄5、strict有効手は4/8。
-const YAKKO_SECOND_REORDER_PAIR: [[usize; 2]; 2] = [[2, 6], [6, 2]]; // 2026-08-28: 折り鶴の旧`[16,3]↔[3,16]`→やっこ`[2,6]↔[6,2]`; 旧16は2/37違反・破棄5、strict有効手は折り鶴1/27・やっこ4/8。
+const YAKKO_SECOND_REORDER_PAIR: [[usize; 2]; 2] = [[2, 6], [6, 2]]; // 2026-08-28: 折り鶴の旧`[16,3]↔[3,16]`→やっこ`[2,6]↔[6,2]`; 旧16は2/37違反・物理破棄4＋表示marker 1、strict有効手は折り鶴1/27・やっこ4/8。
 const YAKKO_CUT_SHORT_ORDER: [usize; 2] = [1, 2]; // 2026-08-28: 打ち切り入力`[0,7,3]`→`[1,2]`; 旧0は1/9違反・破棄5、strict有効手は4/8。
 const YAKKO_BAD_AFTER_FIRST: usize = 0; // 2026-08-28: 旧bad 2→0（新prefix 2後）; 旧固定prefix 0は1/9違反・破棄5、strict有効手は4/8。
 

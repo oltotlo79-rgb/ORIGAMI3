@@ -360,15 +360,16 @@ pub fn verify_fold_order(
     for (index, &id) in order.iter().enumerate() {
         let cause = match walk.check_move(id, scan) {
             Some(Ok(mv)) => {
-                worst_gap = worst_gap.max(mv.max_seam_gap);
-                worst_pairs = worst_pairs.max(mv.penetrations);
-                poses_checked += mv.poses_checked;
-                match walk.apply_strict(&mv) {
+                let movement = mv.movement();
+                worst_gap = worst_gap.max(movement.max_seam_gap);
+                worst_pairs = worst_pairs.max(movement.penetrations);
+                poses_checked += movement.poses_checked;
+                match walk.apply(&mv) {
                     // 折った後の紙の重なり順を**測り直して**結果に載せる
                     // (作業23が返すことになっている「層矛盾」の項目)。
                     Ok(()) => match layer_warnings(&walk) {
                         Some(0) => {
-                            steps.push(StepCheck::from_move(index, &mv, 0));
+                            steps.push(StepCheck::from_move(index, movement, 0));
                             continue;
                         }
                         _ => StepFailure::LayerOrderBroken,

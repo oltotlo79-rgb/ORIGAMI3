@@ -23,7 +23,7 @@ use fixed_order::folded_along;
 /// 決定性を見るために同じ入力を回す回数(合格条件2)。
 const RUNS: usize = 3;
 
-const CRANE_STRICT_GOAL_ORDER: [usize; 2] = [3, 16]; // 2026-08-28: `[16,3]`→`[3,16]`; 旧16は入力CPで一般制約2/37違反・破棄5、strict有効手は1/27。
+const CRANE_STRICT_GOAL_ORDER: [usize; 2] = [3, 16]; // 2026-08-28: `[16,3]`→`[3,16]`; 旧16は入力CPで一般制約2/37違反・物理破棄4＋表示marker 1、strict有効手は1/27。
 const YAKKO_STRICT_GOAL_ORDER: [usize; 1] = [2]; // 2026-08-28: `[0,7]`→`[2]`; 旧0は入力CPで一般制約1/9違反・破棄5、strict有効手は4/8。
 
 /// 標本1: 折り鶴。作業18が写した展開図を、追跡対象の `tests/fixtures/` から読む。
@@ -281,9 +281,10 @@ fn measure_the_four_gaps_of_every_first_move() {
         );
         let report = session.verified_moves(SearchBudget::DEFAULT.scan);
         let mut rows: Vec<(usize, FinishGaps, f64)> = Vec::new();
-        for mv in &report.verified {
+        for operation in report.operation_moves() {
+            let mv = operation.movement();
             let mut next = session.clone();
-            if next.apply(mv).is_err() {
+            if next.apply_operation(operation).is_err() {
                 continue;
             }
             let g = finish_gaps(&goal.target, &goal.measure(next.document()));
@@ -431,19 +432,20 @@ fn every_move_in_the_returned_order_really_folds() {
                         step.mv.id
                     )
                 });
+            let movement = found.movement();
             assert!(
-                found.max_seam_gap < MAX_SEAM_GAP,
+                movement.max_seam_gap < MAX_SEAM_GAP,
                 "{name}: {}手目の裂け {} が上限 {MAX_SEAM_GAP} 以上",
                 i + 1,
-                found.max_seam_gap
+                movement.max_seam_gap
             );
             assert_eq!(
-                found.penetrations,
+                movement.penetrations,
                 0,
                 "{name}: {}手目のめり込みが0件でない",
                 i + 1
             );
-            assert_eq!(found.poses_checked, scan.points());
+            assert_eq!(movement.poses_checked, scan.points());
             replayed_session
                 .apply(&found)
                 .unwrap_or_else(|e| panic!("{name}: {}手目を進められない: {e}", i + 1));
@@ -540,7 +542,7 @@ fn the_search_returns_its_best_so_far_when_the_budget_runs_out() {
         //
         // 正規再測定(2026-08-28、debugビルド): 折り鶴でstrictに折れる初手は
         // 27件中、見積もり外の手3(`y = 0.5`)だけだった。旧手16は入力CPで
-        // 一般制約2/37違反・破棄5組のため拒否される。見積もり内だけで数え直すと
+        // 一般制約2/37違反・物理破棄4組（ほかに表示marker 1）のため拒否される。見積もり内だけで数え直すと
         // 有効な手を0件として取りこぼすので、ここでは全FoldLineを同じstrict経路で見る。
         //
         // **主張は緩めていない。** 「打ち切りで返した1手目は、最初に折れる手の
@@ -561,7 +563,7 @@ fn the_search_returns_its_best_so_far_when_the_budget_runs_out() {
             let g = finish_gaps(&goal.target, &goal.measure(next.document()));
             let s = GapWeights::DEFAULT.score(&g);
             if best.is_none_or(|(b, _)| s < b) {
-                best = Some((s, mv.id));
+                best = Some((s, mv.movement().id));
             }
         }
         println!("   {name}: 最初に折れる手を {counted} 通り数え直した");

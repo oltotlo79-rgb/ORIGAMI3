@@ -164,6 +164,45 @@ pub enum FoldDirection {
     Down,
 }
 
+/// SIM-011 の「つまんで動かす」操作で、つかんだ面からどの層の束を動かすか。
+///
+/// デスクトップとブラウザが同じ wire 値を使うため、host 固有の crate ではなく
+/// 共有モデルに置く。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Sim011LayerSelection {
+    /// つかんだ面から連続する見えている束を動かす。
+    #[default]
+    Flap,
+    /// つかみ点に重なる全層を動かす。
+    All,
+    /// 指定した一枚だけを動かす。
+    Single,
+}
+
+/// SIM-011 の「つまんで動かす」操作の共有 wire 入力。
+///
+/// `grab` と `target` は畳んだ平面座標であり、`grab_face` は UI がつかんだ
+/// 層を明示する。通信層だけがこの型を定義し、各 host が別々の入力形を持たない。
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Sim011MoveRequest {
+    pub grab: [f64; 2],
+    pub target: [f64; 2],
+    pub grab_face: FaceId,
+    #[serde(default)]
+    pub selection: Sim011LayerSelection,
+    pub direction: FoldDirection,
+}
+
+/// SIM-011 が求め、適用した折り線の共有 wire 出力。
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Sim011MoveResult {
+    pub crease_lines: Vec<[[f64; 2]; 2]>,
+    pub selected_layers: Vec<FaceId>,
+}
+
 /// 畳んだ形の上へ続けて折る直前に、利用者が指定した折り目の角度。
 ///
 /// 画面上の計算結果ではなく、書類の折り目IDと利用者が指定した符号付き角度だけを

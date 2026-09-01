@@ -39,6 +39,28 @@ fn bird_base_product_json_contract() {
         )
         .expect("鳥の基本形の候補と折り方を生成できる");
     assert_eq!(result.candidates.len(), 4);
+    assert!(
+        corpus.with_fold_plan,
+        "この契約は折り方を求める製品経路を対象にする"
+    );
+    for (index, candidate) in result.candidates.iter().enumerate() {
+        assert!(
+            candidate.fold_plan.is_some(),
+            "候補 {index} に折り方がありません"
+        );
+        let candidate_json =
+            serde_json::to_value(candidate).expect("候補をJSON値へ直列化できる");
+        let steps = candidate_json
+            .get("fold_plan")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|plan| plan.get("steps"))
+            .and_then(serde_json::Value::as_array)
+            .expect("候補の折り方に手順配列がありません");
+        assert!(
+            !steps.is_empty(),
+            "候補 {index} の折り方に手順がありません"
+        );
+    }
     let json = serde_json::to_string(&result).expect("候補をJSONへ直列化できる");
     assert_eq!(json.len(), 32_344);
     assert_eq!(fnv1a64(json.as_bytes()), 0x5036_9e78_f6bd_bfa4);

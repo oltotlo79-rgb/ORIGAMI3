@@ -21,7 +21,7 @@ struct WireType {
     source: WireSource,
 }
 
-const CONTRACTS: [Contract; 18] = [
+const CONTRACTS: [Contract; 19] = [
     Contract {
         rust_name: "document_new",
         signature: "pub fn document_new(app: tauri::AppHandle, state: State<'_, Mutex<DocumentStore>>, paper: Paper) -> Result<DocumentView, String>",
@@ -55,6 +55,11 @@ const CONTRACTS: [Contract; 18] = [
     Contract {
         rust_name: "edit_redo",
         signature: "pub fn edit_redo(state: State<'_, Mutex<DocumentStore>>) -> Result<DocumentView, String>",
+        attribute: "#[tauri::command(async)]",
+    },
+    Contract {
+        rust_name: "sim011_move",
+        signature: "pub fn sim011_move(state: State<'_, Mutex<DocumentStore>>, request: Sim011MoveRequest) -> Result<Sim011MoveOutcome, String>",
         attribute: "#[tauri::command(async)]",
     },
     Contract {
@@ -114,7 +119,7 @@ const CONTRACTS: [Contract; 18] = [
     },
 ];
 
-const REGISTERED_FUNCTIONS: [&str; 18] = [
+const REGISTERED_FUNCTIONS: [&str; 19] = [
     "document_new",
     "document_open",
     "document_save",
@@ -122,6 +127,7 @@ const REGISTERED_FUNCTIONS: [&str; 18] = [
     "edit_apply_batch",
     "edit_undo",
     "edit_redo",
+    "sim011_move",
     "sequence_apply",
     "sequence_replay",
     "pose_solve",
@@ -471,10 +477,10 @@ fn read(path: &Path, label: &str, errors: &mut Vec<String>) -> String {
 fn write_result(out_dir: &Path, errors: &[String]) {
     let output = out_dir.join("desktop_contract_check.rs");
     let contents = if errors.is_empty() {
-        "// desktop command contract: 18件一致\n".to_owned()
+        "// desktop command contract: 19件一致\n".to_owned()
     } else {
         let message = format!(
-            "デスクトップ版18コマンドとori3-app-coreの契約が一致しません:\n{}",
+            "デスクトップ版19コマンドとori3-app-coreの契約が一致しません:\n{}",
             errors.join("\n")
         );
         format!("compile_error!({message:?});\n")
@@ -540,7 +546,7 @@ fn main() {
                         .map(ToString::to_string)
                         .collect::<Vec<_>>() => {}
             Ok(actual) => errors.push(format!(
-                "generate_handler! の18件が変わりました: {}",
+                "generate_handler! の19件が変わりました: {}",
                 actual.join(", ")
             )),
             Err(error) => errors.push(error),

@@ -14,8 +14,8 @@ pub mod triangulate;
 pub mod verify;
 
 pub use enumerate::{
-    FoldLine, FoldSession, MAX_SEAM_GAP, MoveReport, PoseProblem, PoseScan, RejectedMove,
-    Unverified, VerifiedMove,
+    CheckedMove, FoldLine, FoldSession, MAX_SEAM_GAP, MoveReport, OperationMove, PoseProblem,
+    PoseScan, RejectedMove, Unverified, VerifiedMove,
 };
 pub use finish::{
     FinishGaps, FinishTarget, FinishedForm, MeasuredTip, POSITION_GAP_MAX, TargetTip, count_gap,

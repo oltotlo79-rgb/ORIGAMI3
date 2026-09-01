@@ -29,6 +29,10 @@ use ori3_soft::{SoftMesh, SoftSettings};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
+/// SIM-011 の browser/desktop 共通 wire 型は、両 host が既に共有している
+/// `ori3-model` を正本にし、browser 側からは core 経由でも参照できるよう再公開する。
+pub use ori3_model::{Sim011LayerSelection, Sim011MoveRequest, Sim011MoveResult};
+
 include!(concat!(env!("OUT_DIR"), "/desktop_contract_check.rs"));
 
 /// desktopのDocumentStoreと同じundo履歴上限。
