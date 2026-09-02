@@ -447,6 +447,17 @@ function Format-WatchTime {
     return "{0:yyyy-MM-dd HH:mm:ss}Z（{1}分前）" -f $time, $ageMinutes
 }
 
+function Format-JapanTime {
+    param([AllowNull()]$TimeUtc)
+
+    if ($null -eq $TimeUtc) {
+        return "<取得不可>"
+    }
+    $utc = ([DateTime]$TimeUtc).ToUniversalTime()
+    $japan = [DateTimeOffset]::new($utc).ToOffset([TimeSpan]::FromHours(9))
+    return $japan.ToString("yyyy-MM-dd HH:mm:ss zzz", [Globalization.CultureInfo]::InvariantCulture)
+}
+
 function Assert-AgentDefinition {
     param([Parameter(Mandatory = $true)]$Agent)
 
@@ -683,6 +694,7 @@ if (-not $Once) {
 }
 
 try {
+    $previousScanStartedUtc = $null
     do {
         $definitionSnapshot = Read-WatchDefinition -Path $DefinitionPath
         $agents = @($definitionSnapshot.Agents)
@@ -693,6 +705,21 @@ try {
             $staleBoundary = $nowUtc.AddMinutes(-$StaleAfterMinutes)
             $futureBoundary = $nowUtc.AddMinutes($script:FutureWriteToleranceMinutes)
             Write-WatchLine ("[判定時刻] {0:yyyy-MM-dd HH:mm:ss}Z" -f $nowUtc)
+            $previousScanElapsed = if ($null -eq $previousScanStartedUtc) {
+                "<初回>"
+            }
+            else {
+                [string]([Math]::Max(0.0, [Math]::Round(($nowUtc - $previousScanStartedUtc).TotalMinutes, 1)))
+            }
+            $nextScanJapan = if ($Once) {
+                "<なし（1回判定）>"
+            }
+            else {
+                Format-JapanTime -TimeUtc $nowUtc.AddMinutes($IntervalMinutes)
+            }
+            Write-WatchLine ("[判定時刻-日本] {0} / 次回走査予定時刻（日本時）={1} / 前回走査からの経過分数={2}" -f
+                (Format-JapanTime -TimeUtc $nowUtc), $nextScanJapan, $previousScanElapsed)
+            $previousScanStartedUtc = $nowUtc
 
             $agentStates = New-Object System.Collections.Generic.List[object]
             foreach ($agent in $agents) {
@@ -786,7 +813,9 @@ try {
 
                 if ($null -ne $latestState) {
                     $latestSummary = Format-WatchTime -TimeUtc $latestState.LastWriteTimeUtc -NowUtc $nowUtc
-                    Write-WatchLine ("[{0}] {1}: 最新={2} / {3}" -f $displayStatus, $agentName, $latestSummary, $latestState.LatestPath)
+                    $latestJapan = Format-JapanTime -TimeUtc $latestState.LastWriteTimeUtc
+                    Write-WatchLine ("[{0}] {1}: 最新={2} / 日本時={3} / {4}" -f
+                        $displayStatus, $agentName, $latestSummary, $latestJapan, $latestState.LatestPath)
                 }
                 else {
                     Write-WatchLine ("[{0}] {1}: 最新=<取得不可>" -f $displayStatus, $agentName)

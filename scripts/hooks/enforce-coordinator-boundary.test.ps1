@@ -446,7 +446,7 @@ function Test-ActualReportUpdateWait {
         $ErrorActionPreference = "Continue"
         $global:LASTEXITCODE = 0
         $staleOutput = @(& $PowerShellPath -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $BoundaryScript `
-                -WaitForReportUpdate -DefinitionPath $Definition -ReportPath $Report -TimeoutSeconds 1 -RepositoryRoot $Repository 2>&1)
+                -WaitForReportUpdate -DefinitionPath $Definition -ReportPath $Report -SilenceSeconds 1 -TimeoutSeconds 2 -RepositoryRoot $Repository 2>&1)
         $staleExit = $LASTEXITCODE
     }
     finally {
@@ -464,7 +464,7 @@ function Test-ActualReportUpdateWait {
         $ErrorActionPreference = "Continue"
         $global:LASTEXITCODE = 0
         $unreadableOutput = @(& $PowerShellPath -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $BoundaryScript `
-                -WaitForReportUpdate -DefinitionPath $Definition -ReportPath $Report -TimeoutSeconds 1 -RepositoryRoot $Repository 2>&1)
+                -WaitForReportUpdate -DefinitionPath $Definition -ReportPath $Report -SilenceSeconds 1 -TimeoutSeconds 2 -RepositoryRoot $Repository 2>&1)
         $unreadableExit = $LASTEXITCODE
     }
     finally {
@@ -477,30 +477,37 @@ function Test-ActualReportUpdateWait {
 
     $updaterPath = Join-Path $Sandbox "update-report-after-delay.ps1"
     $updaterSource = @'
-param([Parameter(Mandatory = $true)][string]$Path)
-Start-Sleep -Milliseconds 1500
-[IO.File]::AppendAllText($Path, "updated`r`n", (New-Object Text.UTF8Encoding($false)))
+param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][int]$DelayMilliseconds,
+    [Parameter(Mandatory = $true)][int]$RepeatCount
+)
+for ($index = 0; $index -lt $RepeatCount; $index++) {
+    Start-Sleep -Milliseconds $DelayMilliseconds
+    [IO.File]::AppendAllText($Path, "updated-$index`r`n", (New-Object Text.UTF8Encoding($false)))
+}
 '@
     [IO.File]::WriteAllText($updaterPath, $updaterSource, $script:Utf8NoBom)
+    [IO.File]::SetLastWriteTimeUtc($Report, [DateTime]::UtcNow)
     $updaterArguments = ConvertTo-ProcessArgumentString @(
         "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-        "-File", $updaterPath, "-Path", $Report
+        "-File", $updaterPath, "-Path", $Report, "-DelayMilliseconds", "500", "-RepeatCount", "1"
     )
     $updater = Start-Process -FilePath $PowerShellPath -ArgumentList $updaterArguments -WindowStyle Hidden -PassThru
     try {
         $timer = [Diagnostics.Stopwatch]::StartNew()
         $global:LASTEXITCODE = 0
         $changedOutput = @(& $PowerShellPath -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $BoundaryScript `
-                -WaitForReportUpdate -DefinitionPath $Definition -ReportPath $Report -TimeoutSeconds 5 -RepositoryRoot $Repository 2>&1)
+                -WaitForReportUpdate -DefinitionPath $Definition -ReportPath $Report -SilenceSeconds 1 -TimeoutSeconds 4 -RepositoryRoot $Repository 2>&1)
         $changedExit = $LASTEXITCODE
         $timer.Stop()
         $script:Cases++
         Assert-True $updater.WaitForExit(10000) "report update fixture process must finish"
         Assert-Equal $updater.ExitCode 0 "report update fixture process must exit 0"
-        Assert-Equal $changedExit 0 "actual report update wait must exit 0 after a change" ($changedOutput -join "`n")
-        Assert-Contains ($changedOutput -join "`n") "REPORT_UPDATE_DETECTED" "actual report update wait must report the detected update"
-        Assert-True ($timer.Elapsed.TotalSeconds -ge 1.0) "actual report update wait must not claim an update before the fixture changes the file" ($changedOutput -join "`n")
-        Assert-True ($timer.Elapsed.TotalSeconds -lt 5.0) "actual report update wait must finish before its upper bound" ($changedOutput -join "`n")
+        Assert-Equal $changedExit 0 "actual report silence wait must exit 0 after silence follows an update" ($changedOutput -join "`n")
+        Assert-Contains ($changedOutput -join "`n") "REPORT_SILENCE_DETECTED" "actual report wait must return only after the post-update silence interval"
+        Assert-True ($timer.Elapsed.TotalSeconds -ge 1.2) "an update must restart the silence interval instead of returning immediately" ($changedOutput -join "`n")
+        Assert-True ($timer.Elapsed.TotalSeconds -lt 4.0) "post-update silence wait must finish before its upper bound" ($changedOutput -join "`n")
         Assert-True ([IO.File]::ReadAllText($Report, $script:Utf8NoBom).Contains("updated")) "the fixture updater must really change the watched report"
     }
     finally {
@@ -510,21 +517,49 @@ Start-Sleep -Milliseconds 1500
         $updater.Dispose()
     }
 
+    [IO.File]::SetLastWriteTimeUtc($Report, [DateTime]::UtcNow)
     $beforeBytes = [IO.File]::ReadAllBytes($Report)
     $beforeTicks = (Get-Item -LiteralPath $Report -Force).LastWriteTimeUtc.Ticks
-    $timeoutTimer = [Diagnostics.Stopwatch]::StartNew()
+    $silenceTimer = [Diagnostics.Stopwatch]::StartNew()
     $global:LASTEXITCODE = 0
-    $timeoutOutput = @(& $PowerShellPath -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $BoundaryScript `
-            -WaitForReportUpdate -DefinitionPath $Definition -ReportPath $Report -TimeoutSeconds 1 -RepositoryRoot $Repository 2>&1)
-    $timeoutExit = $LASTEXITCODE
-    $timeoutTimer.Stop()
+    $silenceOutput = @(& $PowerShellPath -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $BoundaryScript `
+            -WaitForReportUpdate -DefinitionPath $Definition -ReportPath $Report -SilenceSeconds 1 -TimeoutSeconds 3 -RepositoryRoot $Repository 2>&1)
+    $silenceExit = $LASTEXITCODE
+    $silenceTimer.Stop()
     $script:Cases++
-    Assert-Equal $timeoutExit 0 "actual report update timeout must be a successful bounded read" ($timeoutOutput -join "`n")
-    Assert-Contains ($timeoutOutput -join "`n") "REPORT_UPDATE_TIMEOUT" "actual unchanged report wait must stop at the upper bound"
-    Assert-True ($timeoutTimer.Elapsed.TotalSeconds -ge 0.8) "actual timeout wait must not return immediately" ($timeoutOutput -join "`n")
-    Assert-True ($timeoutTimer.Elapsed.TotalSeconds -lt 3.0) "actual timeout wait must stop without an unbounded hang" ($timeoutOutput -join "`n")
-    Assert-True ([Linq.Enumerable]::SequenceEqual([byte[]]$beforeBytes, [byte[]][IO.File]::ReadAllBytes($Report))) "report update wait must not write the watched file"
-    Assert-Equal (Get-Item -LiteralPath $Report -Force).LastWriteTimeUtc.Ticks $beforeTicks "report update wait must not alter the watched timestamp"
+    Assert-Equal $silenceExit 0 "actual unchanged report silence must be a successful bounded read" ($silenceOutput -join "`n")
+    Assert-Contains ($silenceOutput -join "`n") "REPORT_SILENCE_DETECTED" "actual unchanged report wait must return at the silence boundary"
+    Assert-True ($silenceTimer.Elapsed.TotalSeconds -ge 0.8) "actual silence wait must not return immediately" ($silenceOutput -join "`n")
+    Assert-True ($silenceTimer.Elapsed.TotalSeconds -lt 3.0) "actual silence wait must finish before the upper bound" ($silenceOutput -join "`n")
+    Assert-True ([Linq.Enumerable]::SequenceEqual([byte[]]$beforeBytes, [byte[]][IO.File]::ReadAllBytes($Report))) "report silence wait must not write the watched file"
+    Assert-Equal (Get-Item -LiteralPath $Report -Force).LastWriteTimeUtc.Ticks $beforeTicks "report silence wait must not alter the watched timestamp"
+
+    [IO.File]::SetLastWriteTimeUtc($Report, [DateTime]::UtcNow)
+    $repeatingUpdaterArguments = ConvertTo-ProcessArgumentString @(
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-File", $updaterPath, "-Path", $Report, "-DelayMilliseconds", "300", "-RepeatCount", "8"
+    )
+    $repeatingUpdater = Start-Process -FilePath $PowerShellPath -ArgumentList $repeatingUpdaterArguments -WindowStyle Hidden -PassThru
+    try {
+        $upperTimer = [Diagnostics.Stopwatch]::StartNew()
+        $global:LASTEXITCODE = 0
+        $upperOutput = @(& $PowerShellPath -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $BoundaryScript `
+                -WaitForReportUpdate -DefinitionPath $Definition -ReportPath $Report -SilenceSeconds 1 -TimeoutSeconds 2 -RepositoryRoot $Repository 2>&1)
+        $upperExit = $LASTEXITCODE
+        $upperTimer.Stop()
+        $script:Cases++
+        Assert-Equal $upperExit 0 "continuous updates until the upper bound must remain a successful bounded read" ($upperOutput -join "`n")
+        Assert-Contains ($upperOutput -join "`n") "REPORT_SILENCE_TIMEOUT" "updates inside the silence interval must defer return until the upper bound"
+        Assert-True ($upperTimer.Elapsed.TotalSeconds -ge 1.8) "upper-bound wait must not return on an intermediate update" ($upperOutput -join "`n")
+        Assert-True ($upperTimer.Elapsed.TotalSeconds -lt 4.0) "upper-bound wait must not hang"
+        Assert-True ([IO.File]::ReadAllText($Report, $script:Utf8NoBom).Contains("updated-0")) "repeating updater must really change the report during the wait"
+    }
+    finally {
+        if (-not $repeatingUpdater.HasExited) {
+            [void]$repeatingUpdater.WaitForExit(10000)
+        }
+        $repeatingUpdater.Dispose()
+    }
 }
 
 function Test-ActualGitCoordinatorFlow {
@@ -674,7 +709,7 @@ try {
     [IO.File]::WriteAllText($reportWaitDefinition, $reportWaitDefinitionText, $script:Utf8NoBom)
     [IO.File]::WriteAllText($wrongNameReportWaitDefinition, $reportWaitDefinitionText, $script:Utf8NoBom)
     [IO.File]::WriteAllText($brokenReportWaitDefinition, "{broken", $script:Utf8NoBom)
-    $reportWaitCommand = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$boundaryScript`" -WaitForReportUpdate -DefinitionPath `"$reportWaitDefinition`" -ReportPath `"$reportWaitPath`" -TimeoutSeconds 2 -RepositoryRoot `"$Repository`""
+    $reportWaitCommand = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$boundaryScript`" -WaitForReportUpdate -DefinitionPath `"$reportWaitDefinition`" -ReportPath `"$reportWaitPath`" -SilenceSeconds 1 -TimeoutSeconds 2 -RepositoryRoot `"$Repository`""
     $allowedCases = @(
         @{ Name = "git status"; Command = "git status --porcelain" },
         @{ Name = "git diff"; Command = "git diff --cached" },
@@ -739,6 +774,8 @@ try {
         @{ Name = "recorded watcher stop missing repository"; Command = "powershell.exe -NoProfile -File `"$boundaryScript`" -StopRecordedWatcher" },
         @{ Name = "recorded watcher stop wrong repository"; Command = "powershell.exe -NoProfile -File `"$boundaryScript`" -StopRecordedWatcher -RepositoryRoot `"$Repository2`"" },
         @{ Name = "recorded watcher stop extra argument"; Command = "powershell.exe -NoProfile -File `"$boundaryScript`" -StopRecordedWatcher -RepositoryRoot `"$Repository`" -Force" },
+        @{ Name = "report wait missing silence"; Command = $reportWaitCommand.Replace(" -SilenceSeconds 1", "") },
+        @{ Name = "report wait silence equals timeout"; Command = $reportWaitCommand.Replace("-SilenceSeconds 1", "-SilenceSeconds 2") },
         @{ Name = "report wait missing timeout"; Command = $reportWaitCommand.Replace(" -TimeoutSeconds 2", "") },
         @{ Name = "report wait zero timeout"; Command = $reportWaitCommand.Replace("-TimeoutSeconds 2", "-TimeoutSeconds 0") },
         @{ Name = "report wait excessive timeout"; Command = $reportWaitCommand.Replace("-TimeoutSeconds 2", "-TimeoutSeconds 3601") },

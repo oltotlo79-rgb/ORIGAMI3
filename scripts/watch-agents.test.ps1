@@ -147,7 +147,8 @@ function ConvertTo-ProcessArgumentString {
 function Start-ContinuousWatcher {
     param(
         [Parameter(Mandatory = $true)][string]$PowerShellPath,
-        [Parameter(Mandatory = $true)][string]$ConfigPath
+        [Parameter(Mandatory = $true)][string]$ConfigPath,
+        [int]$IntervalMinutes = 10
     )
 
     $startInfo = New-Object Diagnostics.ProcessStartInfo
@@ -157,7 +158,7 @@ function Start-ContinuousWatcher {
         "-File", $scriptPath,
         "-DefinitionPath", $ConfigPath,
         "-RepositoryRoot", $repositoryRoot,
-        "-IntervalMinutes", "10",
+        "-IntervalMinutes", ([string]$IntervalMinutes),
         "-StaleAfterMinutes", "40"
     )
     $startInfo.UseShellExecute = $false
@@ -177,7 +178,8 @@ function Start-ContinuousWatcher {
 function Wait-ForWatcherRuntime {
     param(
         [Parameter(Mandatory = $true)]$Process,
-        [int]$TimeoutSeconds = 20
+        [int]$TimeoutSeconds = 20,
+        [int]$MinimumScanSequence = 1
     )
 
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
@@ -211,7 +213,7 @@ function Wait-ForWatcherRuntime {
                 finally {
                     $runtimeStream.Dispose()
                 }
-                if ([int]$state.pid -eq $Process.Id -and [int]$state.scanSequence -ge 1) {
+                if ([int]$state.pid -eq $Process.Id -and [int]$state.scanSequence -ge $MinimumScanSequence) {
                     return $state
                 }
             }
@@ -435,7 +437,7 @@ try {
     Start-Sleep -Milliseconds 200
     Assert-True (-not $helperProcess.HasExited) "補助processのfixtureが監視中に実行されていること"
 
-    Write-Output "[1/8] 更新があれば稼働、61分更新が無ければ停滞と判定する"
+    Write-Output "[1/9] 更新があれば稼働、61分更新が無ければ停滞と判定する"
     $result = Invoke-Watcher $powerShellCommand.Source $definitionPath $stdoutPath $stderrPath
     if ($result.ExitCode -ne 0) {
         Write-Output $result.Output
@@ -447,13 +449,31 @@ try {
     Assert-Contains $result.Output $freshSourceTieFirst "directory内が同時刻ならcanonical path昇順のfileを選ぶこと"
     Assert-True (-not $result.Output.Contains($freshSource)) "同時刻tieで列挙順依存の後方fileを選ばないこと"
     Assert-Contains $result.Output "[停滞] stale-agent" "全成果物が40分より古ければ停滞と判定すること"
+    $onceLines = @($result.Output -split '\r?\n')
+    $utcHeadingLines = @($onceLines | Where-Object { $_ -match '^\[判定時刻\] \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}Z$' })
+    Assert-Equal $utcHeadingLines.Count 1 "世界時の判定見出しを従来形のまま1行表示すること"
+    $japanHeadingLines = @($onceLines | Where-Object { $_ -match '^\[判定時刻-日本\] \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \+09:00 / 次回走査予定時刻（日本時）=<なし（1回判定）> / 前回走査からの経過分数=<初回>$' })
+    Assert-Equal $japanHeadingLines.Count 1 "1回判定の日本時・次回なし・初回表示を1行で示すこと"
+    $onceLatestLines = @($onceLines | Where-Object { $_ -match '^\[(?:稼働|停滞|監視不能)\] .+: 最新=\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}Z（[0-9.]+分前） / 日本時=\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \+09:00 / ' })
+    Assert-Equal $onceLatestLines.Count 3 "全3担当の最新行へUTC・経過分数を残したまま日本時を併記すること"
     Assert-Contains $result.Output "AGENT_WATCH_STATUS schema=2 total=3 active=2 stalled=1 unmonitorable=0 states_sha256=" "-Onceも対象件数とstatus件数を機械可読で表示すること"
     Assert-Contains $result.Output "AGENT_WATCH_INCIDENT schema=2 status=stalled incident=" "-Onceも停滞incidentを機械可読で表示すること"
+    $onceStatusLines = @($onceLines | Where-Object { $_.StartsWith("AGENT_WATCH_STATUS", [StringComparison]::Ordinal) })
+    Assert-Equal $onceStatusLines.Count 1 "AGENT_WATCH_STATUS行を1行だけ出すこと"
+    Assert-True ([regex]::IsMatch($onceStatusLines[0], '^AGENT_WATCH_STATUS schema=2 total=3 active=2 stalled=1 unmonitorable=0 states_sha256=[0-9a-f]{64}$')) "AGENT_WATCH_STATUS行へ人向け時刻を1文字も混ぜないこと"
+    $onceIncidentLines = @($onceLines | Where-Object { $_.StartsWith("AGENT_WATCH_INCIDENT", [StringComparison]::Ordinal) })
+    Assert-Equal $onceIncidentLines.Count 1 "AGENT_WATCH_INCIDENT行を停滞1件について1行だけ出すこと"
+    Assert-True ([regex]::IsMatch($onceIncidentLines[0], '^AGENT_WATCH_INCIDENT schema=2 status=stalled incident=[0-9a-f]{64} agent_key=[0-9a-f]{64} name_b64=[A-Za-z0-9+/]+={0,2}$')) "AGENT_WATCH_INCIDENT行へ人向け時刻を1文字も混ぜないこと"
+    Write-Output ("[実出力] " + $utcHeadingLines[0])
+    Write-Output ("[実出力] " + $japanHeadingLines[0])
+    Write-Output ("[実出力] " + $onceLatestLines[0])
+    Write-Output ("[実出力] " + $onceStatusLines[0])
+    Write-Output ("[実出力] " + $onceIncidentLines[0])
     Assert-True (-not (Test-Path -LiteralPath $runtimePath)) "-Onceはruntime stateを作らないこと"
     Assert-True (-not (Test-Path -LiteralPath $latestOutputPath)) "-Onceは固定latest outputを作らないこと"
     Assert-True (-not (Test-Path -LiteralPath $lockPath)) "-Onceはsingleton lockを作らないこと"
 
-    Write-Output "[2/8] 既定動作は表示だけで、ファイルもprocessも変更しない"
+    Write-Output "[2/9] 既定動作は表示だけで、ファイルもprocessも変更しない"
     Assert-Contains $result.Output "動作=表示のみ（プロセス停止=0 / ファイル変更=0）" "非破壊の既定動作を表示すること"
     Assert-Contains $result.Output ("PID={0}" -f $helperProcess.Id) "テスト実行ファイルのPIDを補助表示すること"
     Assert-Contains $result.Output "CommandLine=" "補助processのコマンド行を表示すること"
@@ -491,7 +511,7 @@ Get-ProcessKind -Process $probeProcess
         Assert-Equal $after.Hash $before[$path].Hash "監視対象の内容を変えないこと: $path"
     }
 
-    Write-Output "[3/8] 存在しない監視パスを日本語で監視不能と知らせる"
+    Write-Output "[3/9] 存在しない監視パスを日本語で監視不能と知らせる"
     $missingDefinition = [ordered]@{
         agents = @(
             [ordered]@{
@@ -513,7 +533,7 @@ Get-ProcessKind -Process $probeProcess
     Assert-Contains $result.Output "AGENT_WATCH_STATUS schema=2 total=1 active=0 stalled=0 unmonitorable=1 states_sha256=" "監視不能をsummary件数へ反映すること"
     Assert-Contains $result.Output "AGENT_WATCH_INCIDENT schema=2 status=unmonitorable incident=" "監視不能incidentを表示すること"
 
-    Write-Output "[4/8] production継続監視が61分無変化をschema 2の停滞incidentとして発行する"
+    Write-Output "[4/9] production継続監視が61分無変化をschema 2の停滞incidentとして発行する"
     [IO.File]::WriteAllText(
         $definitionPath,
         (([ordered]@{
@@ -612,7 +632,7 @@ Get-ProcessKind -Process $probeProcess
     }
     Stop-OwnedWatcherProcess -Process $continuous
 
-    Write-Output "[5/8] 同じ停滞episodeはprocess・scanが変わっても同じincident IDになる"
+    Write-Output "[5/9] 同じ停滞episodeはprocess・scanが変わっても同じincident IDになる"
     $repeat = Start-ContinuousWatcher -PowerShellPath $powerShellCommand.Source -ConfigPath $definitionPath
     $repeatRuntime = Wait-ForWatcherRuntime -Process $repeat
     $repeatState = @($repeatRuntime.agentStates)[0]
@@ -621,7 +641,7 @@ Get-ProcessKind -Process $probeProcess
     Assert-Equal ([string]$repeatRuntime.agentStatesSha256) $expectedStatesSha "scan時刻とsequenceをagentStates hashへ含めないこと"
     Stop-OwnedWatcherProcess -Process $repeat
 
-    Write-Output "[6/8] 成果更新後はactiveとなり、旧停滞incidentをruntimeとlatest outputから失効させる"
+    Write-Output "[6/9] 成果更新後はactiveとなり、旧停滞incidentをruntimeとlatest outputから失効させる"
     $progressTime = [DateTime]::UtcNow
     New-TestFile $staleReport $progressTime "progress after stalled episode"
     $active = Start-ContinuousWatcher -PowerShellPath $powerShellCommand.Source -ConfigPath $definitionPath
@@ -639,7 +659,7 @@ Get-ProcessKind -Process $probeProcess
     Assert-True (-not $activeLatestText.Contains($expectedIncident)) "成果更新後のlatest outputに旧incidentを残さないこと"
     Stop-OwnedWatcherProcess -Process $active
 
-    Write-Output "[7/8] 監視不能にも安定incidentを付け、件数・状態hashの改変を検出可能にする"
+    Write-Output "[7/9] 監視不能にも安定incidentを付け、件数・状態hashの改変を検出可能にする"
     [IO.File]::WriteAllText(
         $definitionPath,
         (([ordered]@{
@@ -683,7 +703,7 @@ Get-ProcessKind -Process $probeProcess
     Assert-Contains $unmonitorableLatestText ("AGENT_WATCH_INCIDENT schema=2 status=unmonitorable incident={0}" -f $expectedUnmonitorableIncident) "監視不能incident IDをlatest outputへ出すこと"
     Stop-OwnedWatcherProcess -Process $unmonitorable
 
-    Write-Output "[8/8] 判定時刻より2分を超えて未来のmtimeはactiveにせず、安定した監視不能incidentにする"
+    Write-Output "[8/9] 判定時刻より2分を超えて未来のmtimeはactiveにせず、安定した監視不能incidentにする"
     [IO.File]::WriteAllText(
         $definitionPath,
         (([ordered]@{
@@ -751,7 +771,44 @@ Get-ProcessKind -Process $probeProcess
         Assert-Equal $after.Hash $futureBefore[$path].Hash "未来mtime検査が入力内容を変えないこと: $path"
     }
 
-    Write-Output ("watch-agents self-test passed: 8 cases, {0} assertions" -f $script:AssertionCount)
+    Write-Output "[9/9] 継続監視の2回目走査で日本時の次回予定と前回走査からの実経過分数を表示する"
+    [IO.File]::WriteAllText(
+        $definitionPath,
+        (([ordered]@{
+            agents = @(
+                [ordered]@{
+                    name = "interval-agent"
+                    reportPath = "scratchpad/fresh-report.md"
+                    sourcePaths = @("src/fresh-report")
+                }
+            )
+        }) | ConvertTo-Json -Depth 8),
+        [Text.UTF8Encoding]::new($false)
+    )
+    $intervalWatcher = Start-ContinuousWatcher -PowerShellPath $powerShellCommand.Source -ConfigPath $definitionPath -IntervalMinutes 1
+    try {
+        [void](Wait-ForWatcherRuntime -Process $intervalWatcher -TimeoutSeconds 20 -MinimumScanSequence 1)
+        $secondRuntime = Wait-ForWatcherRuntime -Process $intervalWatcher -TimeoutSeconds 75 -MinimumScanSequence 2
+        Assert-True ([int]$secondRuntime.scanSequence -ge 2) "1分間隔の継続監視が2回目の走査を発行すること"
+        $secondLatestText = $strictUtf8.GetString([IO.File]::ReadAllBytes($latestOutputPath))
+        $secondLines = @($secondLatestText -split '\r?\n')
+        $continuousJapanLines = @($secondLines | Where-Object { $_ -match '^\[判定時刻-日本\] \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \+09:00 / 次回走査予定時刻（日本時）=\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \+09:00 / 前回走査からの経過分数=[0-9.]+$' })
+        Assert-Equal $continuousJapanLines.Count 1 "継続監視の2回目は次回日本時と数値の実経過分数を表示すること"
+        $elapsedMatch = [regex]::Match($continuousJapanLines[0], '前回走査からの経過分数=([0-9.]+)$')
+        Assert-True $elapsedMatch.Success "前回走査からの経過分数を機械的に読めること"
+        $elapsedMinutes = [double]::Parse($elapsedMatch.Groups[1].Value, [Globalization.CultureInfo]::InvariantCulture)
+        Assert-True ($elapsedMinutes -ge 1.0 -and $elapsedMinutes -lt 1.2) "1分間隔の2回目走査が実経過1.0分以上1.2分未満を示すこと"
+        $continuousStatusLines = @($secondLines | Where-Object { $_.StartsWith("AGENT_WATCH_STATUS", [StringComparison]::Ordinal) })
+        Assert-Equal $continuousStatusLines.Count 1 "2回目出力にもAGENT_WATCH_STATUSを1行だけ保つこと"
+        Assert-True ([regex]::IsMatch($continuousStatusLines[0], '^AGENT_WATCH_STATUS schema=2 total=1 active=1 stalled=0 unmonitorable=0 states_sha256=[0-9a-f]{64}$')) "2回目のAGENT_WATCH_STATUSも完全形を変えないこと"
+        Write-Output ("[実出力] " + $continuousJapanLines[0])
+        Write-Output ("[実出力] " + $continuousStatusLines[0])
+    }
+    finally {
+        Stop-OwnedWatcherProcess -Process $intervalWatcher
+    }
+
+    Write-Output ("watch-agents self-test passed: 9 cases, {0} assertions" -f $script:AssertionCount)
 }
 finally {
     Stop-OwnedWatcherProcesses

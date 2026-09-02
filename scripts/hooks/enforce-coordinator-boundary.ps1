@@ -18,6 +18,10 @@ param(
     [string]$ReportPath,
 
     [Parameter(Mandatory = $true, ParameterSetName = "WaitReport")]
+    [ValidateRange(1, 3599)]
+    [int]$SilenceSeconds,
+
+    [Parameter(Mandatory = $true, ParameterSetName = "WaitReport")]
     [ValidateRange(1, 3600)]
     [int]$TimeoutSeconds,
 
@@ -514,6 +518,7 @@ function Invoke-WaitForReportUpdate {
     param(
         [Parameter(Mandatory = $true)][string]$Definition,
         [Parameter(Mandatory = $true)][string]$Report,
+        [Parameter(Mandatory = $true)][int]$Silence,
         [Parameter(Mandatory = $true)][int]$Timeout,
         [Parameter(Mandatory = $true)][string]$Root
     )
@@ -521,29 +526,38 @@ function Invoke-WaitForReportUpdate {
     if ($Timeout -lt 1 -or $Timeout -gt 3600) {
         throw "TimeoutSeconds must be between 1 and 3600"
     }
+    if ($Silence -lt 1 -or $Silence -ge $Timeout) {
+        throw "SilenceSeconds must be at least 1 and less than TimeoutSeconds"
+    }
     $resolvedReport = Resolve-RegisteredWatchReportPath -Definition $Definition -Report $Report -Root $Root
     [void](Assert-ReportLogFreshForWait -Root $Root)
     $initialItem = Get-Item -LiteralPath $resolvedReport -Force -ErrorAction Stop
-    $initialTicks = $initialItem.LastWriteTimeUtc.Ticks
+    $currentTicks = $initialItem.LastWriteTimeUtc.Ticks
+    $nowUtc = [DateTime]::UtcNow
+    $silenceStartedUtc = if ($initialItem.LastWriteTimeUtc -lt $nowUtc) {
+        $initialItem.LastWriteTimeUtc
+    }
+    else {
+        $nowUtc
+    }
     $timer = [Diagnostics.Stopwatch]::StartNew()
     try {
         while ($timer.Elapsed.TotalSeconds -lt $Timeout) {
-            [Threading.Thread]::Sleep(100)
             $currentItem = Get-Item -LiteralPath $resolvedReport -Force -ErrorAction Stop
-            if ($currentItem.LastWriteTimeUtc.Ticks -ne $initialTicks) {
-                Write-Host ("REPORT_UPDATE_DETECTED path={0} initialTicks={1} currentTicks={2} elapsedMilliseconds={3}" -f
-                    $resolvedReport, $initialTicks, $currentItem.LastWriteTimeUtc.Ticks, $timer.ElapsedMilliseconds)
+            if ($currentItem.LastWriteTimeUtc.Ticks -ne $currentTicks) {
+                $currentTicks = $currentItem.LastWriteTimeUtc.Ticks
+                $silenceStartedUtc = [DateTime]::UtcNow
+            }
+            $silenceElapsed = [DateTime]::UtcNow - $silenceStartedUtc
+            if ($silenceElapsed.TotalSeconds -ge $Silence) {
+                Write-Host ("REPORT_SILENCE_DETECTED path={0} ticks={1} silenceSeconds={2} elapsedMilliseconds={3}" -f
+                    $resolvedReport, $currentTicks, $Silence, $timer.ElapsedMilliseconds)
                 return
             }
+            [Threading.Thread]::Sleep(100)
         }
-        $finalItem = Get-Item -LiteralPath $resolvedReport -Force -ErrorAction Stop
-        if ($finalItem.LastWriteTimeUtc.Ticks -ne $initialTicks) {
-            Write-Host ("REPORT_UPDATE_DETECTED path={0} initialTicks={1} currentTicks={2} elapsedMilliseconds={3}" -f
-                $resolvedReport, $initialTicks, $finalItem.LastWriteTimeUtc.Ticks, $timer.ElapsedMilliseconds)
-            return
-        }
-        Write-Host ("REPORT_UPDATE_TIMEOUT path={0} ticks={1} timeoutSeconds={2} elapsedMilliseconds={3}" -f
-            $resolvedReport, $initialTicks, $Timeout, $timer.ElapsedMilliseconds)
+        Write-Host ("REPORT_SILENCE_TIMEOUT path={0} ticks={1} silenceSeconds={2} timeoutSeconds={3} elapsedMilliseconds={4}" -f
+            $resolvedReport, $currentTicks, $Silence, $Timeout, $timer.ElapsedMilliseconds)
     }
     finally {
         $timer.Stop()
@@ -1321,28 +1335,39 @@ function Test-ReportUpdateWaitInvocation {
         [Parameter(Mandatory = $true)][string]$RepositoryRoot
     )
 
-    if ($Arguments.Count -ne 9 -or
+    if ($Arguments.Count -ne 11 -or
         $Arguments[0].ToLowerInvariant() -ne "-waitforreportupdate" -or
         $Arguments[1].ToLowerInvariant() -ne "-definitionpath" -or
         $Arguments[3].ToLowerInvariant() -ne "-reportpath" -or
-        $Arguments[5].ToLowerInvariant() -ne "-timeoutseconds" -or
-        $Arguments[7].ToLowerInvariant() -ne "-repositoryroot") {
-        return New-PolicyDecision $false "report-wait" "report update wait requires exact ordered -WaitForReportUpdate -DefinitionPath <absolute watch-agents-*.json> -ReportPath <absolute registered report> -TimeoutSeconds <1..3600> -RepositoryRoot <this repository> arguments"
+        $Arguments[5].ToLowerInvariant() -ne "-silenceseconds" -or
+        $Arguments[7].ToLowerInvariant() -ne "-timeoutseconds" -or
+        $Arguments[9].ToLowerInvariant() -ne "-repositoryroot") {
+        return New-PolicyDecision $false "report-wait" "report silence wait requires exact ordered -WaitForReportUpdate -DefinitionPath <absolute watch-agents-*.json> -ReportPath <absolute registered report> -SilenceSeconds <1..3599> -TimeoutSeconds <2..3600> -RepositoryRoot <this repository> arguments"
     }
-    foreach ($pathArgument in @($Arguments[2], $Arguments[4], $Arguments[8])) {
+    foreach ($pathArgument in @($Arguments[2], $Arguments[4], $Arguments[10])) {
         if (-not [IO.Path]::IsPathRooted($pathArgument)) {
             return New-PolicyDecision $false "report-wait" "DefinitionPath, ReportPath, and RepositoryRoot must be absolute literal paths"
         }
     }
     if ($Arguments[6] -notmatch '^[1-9][0-9]{0,3}$') {
+        return New-PolicyDecision $false "report-wait" "SilenceSeconds must be a literal integer between 1 and 3599"
+    }
+    $silence = [int]$Arguments[6]
+    if ($silence -lt 1 -or $silence -gt 3599) {
+        return New-PolicyDecision $false "report-wait" "SilenceSeconds must be a literal integer between 1 and 3599"
+    }
+    if ($Arguments[8] -notmatch '^[1-9][0-9]{0,3}$') {
         return New-PolicyDecision $false "report-wait" "TimeoutSeconds must be a literal integer between 1 and 3600"
     }
-    $timeout = [int]$Arguments[6]
+    $timeout = [int]$Arguments[8]
     if ($timeout -lt 1 -or $timeout -gt 3600) {
         return New-PolicyDecision $false "report-wait" "TimeoutSeconds must be a literal integer between 1 and 3600"
     }
+    if ($silence -ge $timeout) {
+        return New-PolicyDecision $false "report-wait" "SilenceSeconds must be less than TimeoutSeconds"
+    }
     try {
-        $resolvedArgumentRoot = Resolve-PolicyPath $Arguments[8] $RepositoryRoot
+        $resolvedArgumentRoot = Resolve-PolicyPath $Arguments[10] $RepositoryRoot
         if (-not [string]::Equals($resolvedArgumentRoot, $RepositoryRoot, [StringComparison]::OrdinalIgnoreCase)) {
             return New-PolicyDecision $false "report-wait" "RepositoryRoot must be this repository"
         }
@@ -1352,7 +1377,7 @@ function Test-ReportUpdateWaitInvocation {
     catch {
         return New-PolicyDecision $false "report-wait" ("report update wait could not verify its read-only scope: " + $_.Exception.Message)
     }
-    return New-PolicyDecision $true "report-wait" "allowed bounded read-only wait for one registered reportPath update"
+    return New-PolicyDecision $true "report-wait" "allowed bounded read-only wait for one registered reportPath silence interval"
 }
 
 function Test-ScriptInvocation {
@@ -1725,6 +1750,7 @@ if ($WaitForReportUpdate.IsPresent) {
         Invoke-WaitForReportUpdate `
             -Definition $DefinitionPath `
             -Report $ReportPath `
+            -Silence $SilenceSeconds `
             -Timeout $TimeoutSeconds `
             -Root $RepositoryRoot
         exit 0
