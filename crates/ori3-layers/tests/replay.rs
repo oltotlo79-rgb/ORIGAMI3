@@ -423,6 +423,7 @@ fn steps_without_drivers_are_not_skipped() {
         drivers: Vec::new(),
         layer_order: None,
         alignment: None,
+        curved_inside_reverse: None,
         finish_soft: None,
         note: String::new(),
     });
@@ -550,6 +551,7 @@ fn accordion_document() -> Document {
                 .collect(),
             layer_order: Some(layer_order.clone()),
             alignment: None,
+            curved_inside_reverse: None,
             finish_soft: None,
             note: String::new(),
         })
@@ -706,6 +708,7 @@ fn saved_layer_order_authority_follows_the_replay_position() {
         drivers: Vec::new(),
         layer_order: None,
         alignment: None,
+        curved_inside_reverse: None,
         finish_soft: None,
         note: String::new(),
     });
@@ -728,6 +731,7 @@ fn missing_or_fully_unresolved_layer_order_does_not_create_authority() {
         drivers: Vec::new(),
         layer_order: None,
         alignment: None,
+        curved_inside_reverse: None,
         finish_soft: None,
         note: String::new(),
     });
@@ -783,6 +787,7 @@ fn pose_without_saved_order_keeps_the_rigid_canonical_surface_rank() {
             drivers: vec![line],
             layer_order: None,
             alignment: None,
+            curved_inside_reverse: None,
             finish_soft: None,
             note: String::new(),
         });
@@ -928,6 +933,7 @@ fn pose_step_reproduces_folded_shape_after_cp_edit() {
         }],
         layer_order: None,
         alignment: None,
+        curved_inside_reverse: None,
         finish_soft: None,
         note: String::new(),
     });
@@ -977,6 +983,7 @@ fn pose_step_after_flat_folds_keeps_the_solid_shape() {
         }],
         layer_order: None,
         alignment: None,
+        curved_inside_reverse: None,
         finish_soft: None,
         note: String::new(),
     });
@@ -1084,6 +1091,7 @@ fn pose_step_angles_must_not_be_rounded() {
                 .collect(),
             layer_order: None,
             alignment: None,
+            curved_inside_reverse: None,
             finish_soft: None,
             note: String::new(),
         });

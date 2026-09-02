@@ -200,6 +200,7 @@ pub fn reverse_open_crease_sense(
         drivers,
         layer_order: Some(state.to_layer_points(&work, faces)),
         alignment: None,
+        curved_inside_reverse: None,
         finish_soft: None,
         note: String::new(),
     };

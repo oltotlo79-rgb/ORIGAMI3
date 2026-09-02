@@ -596,6 +596,7 @@ fn convert_step(
         drivers,
         layer_order,
         alignment: None,
+        curved_inside_reverse: None,
         finish_soft: None,
         note: String::new(),
     })

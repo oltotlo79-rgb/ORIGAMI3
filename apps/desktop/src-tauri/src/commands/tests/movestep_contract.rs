@@ -110,6 +110,7 @@ fn step(id: u32) -> FoldStep {
         drivers: Vec::new(),
         layer_order: None,
         alignment: None,
+        curved_inside_reverse: None,
         finish_soft: None,
         note: format!("手順{id}"),
     }

@@ -62,6 +62,7 @@ pub fn apply_pose_step(
         drivers: input.driver_updates,
         layer_order: None,
         alignment: None,
+        curved_inside_reverse: None,
         finish_soft: None,
         note: input.note,
     });

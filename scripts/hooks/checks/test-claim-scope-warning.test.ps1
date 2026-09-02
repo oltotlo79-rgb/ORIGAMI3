@@ -272,7 +272,7 @@ function Remove-TestSandbox {
 [void][IO.Directory]::CreateDirectory($SandboxRoot)
 
 try {
-    Write-Host "[1/7] dynamic iteration changed to a literal emits a warning"
+    Write-Host "[1/9] dynamic iteration changed to a literal emits a warning"
     $dynamicRepository = New-TestRepository -Name "dynamic" -InitialContent @'
 #[test]
 fn covers_all_values() {
@@ -292,7 +292,7 @@ fn covers_all_values() {
     Assert-Equal $dynamicResult.ExitCode 0 "warning scan must remain nonblocking" $dynamicResult.Output
     Assert-Contains $dynamicResult.Output "dynamic iteration may have become a fixed literal" "dynamic-to-literal signal must be reported"
 
-    Write-Host "[2/7] removed assertion calls emit a warning"
+    Write-Host "[2/9] removed assertion calls emit a warning"
     $assertionRepository = New-TestRepository -Name "assertion" -InitialContent @'
 #[test]
 fn verifies_result() {
@@ -309,7 +309,7 @@ fn verifies_result() {
     Assert-Equal $assertionResult.ExitCode 0 "assertion warning scan must remain nonblocking" $assertionResult.Output
     Assert-Contains $assertionResult.Output "assertion calls decreased" "removed assertion signal must be reported"
 
-    Write-Host "[3/7] unchanged assertion count has no warning"
+    Write-Host "[3/9] unchanged assertion count has no warning"
     $cleanRepository = New-TestRepository -Name "clean" -InitialContent @'
 #[test]
 fn verifies_result() {
@@ -325,7 +325,7 @@ fn verifies_result() {
     Assert-Equal $cleanResult.ExitCode 0 "clean warning scan must exit 0" $cleanResult.Output
     Assert-Contains $cleanResult.Output "test-claim-scope scan completed: targets=1, findings=0" "no-signal completion must state target and finding counts"
 
-    Write-Host "[4/7] a newly added Rust test without a failure signal emits a warning, then removing it clears the warning"
+    Write-Host "[4/9] a newly added Rust test without a failure signal emits a warning, then removing it clears the warning"
     $vacuousRepository = New-TestRepository -Name "vacuous" -InitialContent @'
 // Baseline intentionally has no tests.
 '@ -ChangedContent @'
@@ -348,7 +348,7 @@ fn does_not_verify_anything() {
     Assert-Equal $removedVacuousResult.ExitCode 0 "removing the vacuous test must keep the scanner healthy" $removedVacuousResult.Output
     Assert-Contains $removedVacuousResult.Output "findings=0" "removing the vacuous test must clear the finding"
 
-    Write-Host "[5/7] a newly added Rust test with an assertion has no false warning"
+    Write-Host "[5/9] a newly added Rust test with an assertion has no false warning"
     $verifiedRepository = New-TestRepository -Name "verified" -InitialContent @'
 // Baseline intentionally has no tests.
 '@ -ChangedContent @'
@@ -377,7 +377,36 @@ fn reports_an_expected_panic() {
     Assert-Equal $shouldPanicResult.ExitCode 0 "a #[should_panic] test must not make the blocking scanner fail" $shouldPanicResult.Output
     Assert-Contains $shouldPanicResult.Output "findings=0" "a #[should_panic] test must not emit a vacuous-test finding"
 
-    Write-Host "[6/7] Git Bash -File fallback and pre-commit invocation both run the scanner"
+    Write-Host "[6/9] adding a verified Rust test does not make shifted existing test names new"
+    $lineShiftRepository = New-TestRepository -Name "line-shift" -InitialContent @'
+fn helper() {
+    prepare_roundtrip();
+}
+
+#[test]
+fn existing_roundtrip_record() {
+    record_roundtrip();
+}
+'@ -ChangedContent @'
+#[test]
+fn newly_verified_roundtrip() {
+    assert_eq!(2 + 2, 4);
+}
+
+#[test]
+fn existing_roundtrip_record() {
+    record_roundtrip();
+}
+
+fn helper() {
+    prepare_roundtrip();
+}
+'@
+    $lineShiftResult = Invoke-ScopeWarning $lineShiftRepository -FailOnVacuousRustTest
+    Assert-Equal $lineShiftResult.ExitCode 0 "adding a verified test must not make a shifted existing test block the scanner" $lineShiftResult.Output
+    Assert-Contains $lineShiftResult.Output "test-claim-scope scan completed: targets=1, findings=0" "a shifted existing Rust test name must not be treated as new"
+
+    Write-Host "[7/9] Git Bash -File fallback and pre-commit invocation both run the scanner"
     $hookRepository = New-HookTestRepository
     $gitBashPath = Get-GitBashPath
     $emptyRootCommand = @'
@@ -406,7 +435,7 @@ $source = [IO.File]::ReadAllText($env:ORI3_SCOPE_WARNING_SCRIPT)
     Assert-Contains $hookResult.Output "assertion calls decreased" "pre-commit must actually emit the scanner result"
     Assert-NotContains $hookResult.Output "scope warning scan could not run" "pre-commit must not hide a scanner startup failure"
 
-    Write-Host "[7/8] actual commits retain existing warnings, block a vacuous Rust test, then recover after its removal"
+    Write-Host "[8/9] actual commits retain existing warnings, block a vacuous Rust test, then recover after its removal"
     $existingWarningCommit = Invoke-Process -FileName "git" -Arguments @("commit", "--quiet", "-m", "existing warning remains nonblocking") -WorkingDirectory $hookRepository
     Assert-Equal $existingWarningCommit.ExitCode 0 "an existing assertion-decrease warning must not block an actual commit" $existingWarningCommit.Output
 
@@ -431,7 +460,7 @@ fn does_not_verify_anything() {
     $recoveredCommit = Invoke-Process -FileName "git" -Arguments @("commit", "--quiet", "-m", "removing the vacuous test restores commits") -WorkingDirectory $hookRepository
     Assert-Equal $recoveredCommit.ExitCode 0 "removing the vacuous test must allow an actual commit" $recoveredCommit.Output
 
-    Write-Host "[8/8] two unavailable PowerShell starts persist degraded health, then one success restores it"
+    Write-Host "[9/9] two unavailable PowerShell starts persist degraded health, then one success restores it"
     $gitCommandDirectory = [IO.Path]::GetDirectoryName((Get-Command git -ErrorAction Stop).Source)
     $gitBashCommandDirectory = [regex]::Replace($gitCommandDirectory, '^([A-Za-z]):\\', '/$1/').Replace("\\", "/")
     $withoutPowerShellCommand = "PATH='${gitBashCommandDirectory}:/usr/bin'; export PATH; sh scripts/hooks/pre-commit"
@@ -452,7 +481,7 @@ fn does_not_verify_anything() {
     $restoredHealth = Invoke-HookHealthCheck -Repository $hookRepository -ExpectedExitCode 0
     Assert-Contains $restoredHealth.Output "failures=0" "one successful scanner run must reset health"
 
-    Write-Host "[EVIDENCE] dynamic exit=$($dynamicResult.ExitCode); assertion exit=$($assertionResult.ExitCode); clean exit=$($cleanResult.ExitCode); vacuous exit=$($vacuousResult.ExitCode); vacuous-blocking exit=$($blockingVacuousResult.ExitCode); vacuous-removed exit=$($removedVacuousResult.ExitCode); verified exit=$($verifiedResult.ExitCode); verified-blocking exit=$($blockingVerifiedResult.ExitCode); should-panic exit=$($shouldPanicResult.ExitCode); empty-root fixture exit=$($emptyRootResult.ExitCode); bash fallback exit=$($directBashResult.ExitCode); pre-commit exit=$($hookResult.ExitCode); existing-warning-commit=$($existingWarningCommit.ExitCode); blocked-commit=$($blockedCommit.ExitCode); recovered-commit=$($recoveredCommit.ExitCode); unavailable-first=$($unavailableFirst.ExitCode); unavailable-second=$($unavailableSecond.ExitCode); restored=$($recoveredHook.ExitCode)"
+    Write-Host "[EVIDENCE] dynamic exit=$($dynamicResult.ExitCode); assertion exit=$($assertionResult.ExitCode); clean exit=$($cleanResult.ExitCode); vacuous exit=$($vacuousResult.ExitCode); vacuous-blocking exit=$($blockingVacuousResult.ExitCode); vacuous-removed exit=$($removedVacuousResult.ExitCode); verified exit=$($verifiedResult.ExitCode); verified-blocking exit=$($blockingVerifiedResult.ExitCode); should-panic exit=$($shouldPanicResult.ExitCode); line-shift exit=$($lineShiftResult.ExitCode); empty-root fixture exit=$($emptyRootResult.ExitCode); bash fallback exit=$($directBashResult.ExitCode); pre-commit exit=$($hookResult.ExitCode); existing-warning-commit=$($existingWarningCommit.ExitCode); blocked-commit=$($blockedCommit.ExitCode); recovered-commit=$($recoveredCommit.ExitCode); unavailable-first=$($unavailableFirst.ExitCode); unavailable-second=$($unavailableSecond.ExitCode); restored=$($recoveredHook.ExitCode)"
     Write-Host "test-claim-scope-warning self-test passed: $script:AssertionCount assertions"
 }
 finally {

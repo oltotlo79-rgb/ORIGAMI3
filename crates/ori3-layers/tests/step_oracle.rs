@@ -493,6 +493,7 @@ impl<'a> FixtureParser<'a> {
                 drivers,
                 layer_order,
                 alignment: None,
+                curved_inside_reverse: None,
                 finish_soft: None,
                 note,
             });

@@ -68,6 +68,7 @@ fn successive_pose_steps_update_only_named_hinges_and_keep_prior_angles() {
         drivers: vec![driver(SECOND, 180.0)],
         layer_order: None,
         alignment: None,
+        curved_inside_reverse: None,
         finish_soft: None,
         note: "pre-existing flat fold".to_string(),
     });

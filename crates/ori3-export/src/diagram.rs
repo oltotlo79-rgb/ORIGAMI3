@@ -775,6 +775,7 @@ pub(crate) fn strip_doc(creases: usize) -> Document {
             layer_order: None,
             note: format!("{}本目の折り目を折ります", k + 1),
             alignment: None,
+            curved_inside_reverse: None,
             finish_soft: None,
         });
     }

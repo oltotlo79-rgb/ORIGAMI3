@@ -65,6 +65,7 @@ fn sample_document() -> Document {
                         AlignmentTarget::Point { p: [0.0, 1.0] },
                     ],
                 }),
+                curved_inside_reverse: None,
                 finish_soft: None,
                 note: "半分に折る".to_string(),
             },
@@ -78,6 +79,7 @@ fn sample_document() -> Document {
                 }],
                 layer_order: None,
                 alignment: None,
+                curved_inside_reverse: None,
                 finish_soft: None,
                 note: String::new(),
             },
@@ -157,6 +159,7 @@ fn saved_document_coordinates_survive_json_roundtrip_bit_for_bit() {
             }],
             layer_order: Some(vec![[next_unit(&mut state), next_unit(&mut state)]]),
             alignment: None,
+            curved_inside_reverse: None,
             finish_soft: None,
             note: String::new(),
         });
@@ -296,6 +299,33 @@ fn old_fold_step_without_finish_soft_loads_as_unrecorded() {
 }
 
 #[test]
+fn curved_inside_reverse_marker_is_backward_compatible_and_optional() {
+    assert_eq!(
+        SCHEMA_VERSION, 1,
+        "任意欄の追加ではschema versionを上げない"
+    );
+
+    let old = r#"{"id":8,"kind":"InsideReverse","drivers":[],"layer_order":null,"note":""}"#;
+    let mut step: FoldStep = serde_json::from_str(old).expect("印がない保存済み作品を読む");
+    assert_eq!(step.curved_inside_reverse, None);
+
+    let unmarked = serde_json::to_string(&step).expect("印がない手順を書き出す");
+    assert!(
+        !unmarked.contains("curved_inside_reverse"),
+        "Noneの任意欄は保存作品へ書き足さない"
+    );
+
+    step.curved_inside_reverse = Some(true);
+    let marked = serde_json::to_string(&step).expect("曲がる中割りの印を書き出す");
+    assert!(
+        marked.contains(r#""curved_inside_reverse":true"#),
+        "Some(true)だけを曲がる中割りの印として保存する: {marked}"
+    );
+    let back: FoldStep = serde_json::from_str(&marked).expect("曲がる中割りの印を読み直す");
+    assert_eq!(back, step, "曲がる中割りの印を含む手順が往復一致する");
+}
+
+#[test]
 fn finish_soft_round_trips_three_values_only_with_measured_tolerance() {
     let values = [
         FinishSoftSettings {
@@ -327,6 +357,7 @@ fn finish_soft_round_trips_three_values_only_with_measured_tolerance() {
             drivers: Vec::new(),
             layer_order: None,
             alignment: None,
+            curved_inside_reverse: None,
             finish_soft: Some(finish_soft),
             note: String::new(),
         })
@@ -420,6 +451,7 @@ fn finish_soft_replay_uses_the_latest_completed_pose_at_each_position() {
         drivers: Vec::new(),
         layer_order: None,
         alignment: None,
+        curved_inside_reverse: None,
         finish_soft,
         note: String::new(),
     };

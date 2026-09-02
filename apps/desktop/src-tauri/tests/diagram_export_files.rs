@@ -136,6 +136,7 @@ fn one_fold_document() -> Document {
         layer_order: None,
         note: "中央の谷折り".to_owned(),
         alignment: None,
+        curved_inside_reverse: None,
         finish_soft: None,
     });
     document

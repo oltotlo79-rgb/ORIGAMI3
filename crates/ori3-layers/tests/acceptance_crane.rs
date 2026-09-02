@@ -1111,6 +1111,7 @@ fn finished_replay_coordinates(
         drivers: Vec::new(),
         layer_order: None,
         alignment: None,
+        curved_inside_reverse: None,
         finish_soft: Some(settings),
         note: "SIM-015仕上げ確定".to_string(),
     });
@@ -3820,6 +3821,7 @@ fn saved_order_never_overrides_geometric_rank_across_angle_buckets() {
                 drivers: vec![driver],
                 layer_order: None,
                 alignment: None,
+                curved_inside_reverse: None,
                 finish_soft: None,
                 note: String::new(),
             });

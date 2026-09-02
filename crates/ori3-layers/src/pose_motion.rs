@@ -476,6 +476,7 @@ pub fn solve_and_apply_flat_pose_step(
         drivers: driver_updates,
         layer_order: Some(layer_points),
         alignment: None,
+        curved_inside_reverse: None,
         finish_soft: None,
         note: input.note,
     });

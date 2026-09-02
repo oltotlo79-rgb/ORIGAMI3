@@ -3,6 +3,9 @@
 //! 水風船は対角線から畳む4層の袋で、`ori3-soft/tests/soft_crane.rs` の
 //! `waterbomb_base` と同じ、追跡済みの折り順をここで読み書きなしに構築する。
 
+#[path = "support/replay_marker.rs"]
+mod replay_marker;
+
 use std::collections::HashMap;
 
 use glam::DVec2;
@@ -112,6 +115,16 @@ fn waterbomb_base() -> Document {
         apply(&mut document, squash, vec![state.order[0]], line, reference);
     }
     document
+}
+
+#[test]
+fn curved_inside_reverse_marker_preserves_balloon_replay_bits() {
+    let document = waterbomb_base();
+    let (endpoints, curved_steps) =
+        replay_marker::assert_marker_preserves_all_step_endpoint_bits(&document, "風船");
+    assert_eq!(document.sequence.len(), 4, "風船は既存の4手");
+    assert_eq!(endpoints, 5, "0手位置を含む5 endpointをbit比較する");
+    assert_eq!(curved_steps, 0, "風船には中割り手順がない");
 }
 
 /// 水風船基本形の最終手に保存した代表点順が、現在の面へ欠落なく解決され、
@@ -236,6 +249,7 @@ fn finished_replay_coordinates(
         drivers: Vec::new(),
         layer_order: None,
         alignment: None,
+        curved_inside_reverse: None,
         finish_soft: Some(settings),
         note: "SIM-015仕上げ確定".to_string(),
     });

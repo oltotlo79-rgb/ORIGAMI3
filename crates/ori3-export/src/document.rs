@@ -63,6 +63,7 @@ mod tests {
             }],
             layer_order: Some(vec![[0.25, 0.25]]),
             alignment: None,
+            curved_inside_reverse: None,
             finish_soft: None,
             note: "座布団花のチェックポイント".to_string(),
         });

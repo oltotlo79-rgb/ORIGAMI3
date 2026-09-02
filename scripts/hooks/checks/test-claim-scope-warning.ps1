@@ -43,35 +43,12 @@ $rustTestAttributePattern = [regex]::new('^\s*#\s*\[\s*test\s*\]\s*$')
 $rustFunctionPattern = [regex]::new('^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\b')
 $rustFailureSignalPattern = [regex]::new('(?:\b(?:debug_)?assert(?:_[A-Za-z0-9_]+)?!\s*\(|\b(?:panic|unreachable|todo|bail|ensure)!\s*\(|\.(?:expect|unwrap(?:_err)?)\s*\(|\?|\bErr\s*\()')
 
-function Get-AddedRustTestNamesWithoutDirectFailureSignal {
-    param(
-        [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][string[]]$DiffLines
-    )
+function Get-RustTestDefinitions {
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][AllowEmptyString()][string[]]$Lines)
 
-    if (-not $Path.EndsWith('.rs', [StringComparison]::OrdinalIgnoreCase)) {
-        return @()
-    }
-
-    $addedTestAttributeLines = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
-    foreach ($line in $DiffLines) {
-        if ($line.StartsWith('+', [StringComparison]::Ordinal) -and
-            -not $line.StartsWith('+++', [StringComparison]::Ordinal)) {
-            $candidate = $line.Substring(1)
-            if ($rustTestAttributePattern.IsMatch($candidate)) {
-                [void]$addedTestAttributeLines.Add($candidate)
-            }
-        }
-    }
-    if ($addedTestAttributeLines.Count -eq 0) {
-        return @()
-    }
-
-    $stagedContent = Invoke-GitText -Arguments @('show', ":$Path")
-    $lines = @($stagedContent)
-    $findings = New-Object System.Collections.Generic.List[string]
+    $definitions = @()
     for ($index = 0; $index -lt $lines.Count; $index += 1) {
-        if (-not $addedTestAttributeLines.Contains($lines[$index])) { continue }
+        if (-not $rustTestAttributePattern.IsMatch($lines[$index])) { continue }
 
         $cursor = $index + 1
         $hasShouldPanic = $false
@@ -101,10 +78,43 @@ function Get-AddedRustTestNamesWithoutDirectFailureSignal {
             $braceDepth += ([regex]::Matches($bodyLine, '\{').Count - [regex]::Matches($bodyLine, '\}').Count)
             if ($braceDepth -le 0) { break }
         }
-        if (-not $bodyStarted -or $hasShouldPanic) { continue }
-        $body = $bodyLines -join "`n"
-        if (-not $rustFailureSignalPattern.IsMatch($body)) {
-            $findings.Add($functionName)
+        if (-not $bodyStarted) { continue }
+        $definitions += [PSCustomObject]@{
+            Name = $functionName
+            Body = $bodyLines -join "`n"
+            HasShouldPanic = $hasShouldPanic
+        }
+    }
+    return @($definitions)
+}
+
+function Get-AddedRustTestNamesWithoutDirectFailureSignal {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not $Path.EndsWith('.rs', [StringComparison]::OrdinalIgnoreCase)) {
+        return @()
+    }
+
+    $normalizedPath = $Path.Replace('\', '/')
+    $headTestNames = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    $headPaths = @(Invoke-GitText -Arguments @('ls-tree', '--name-only', 'HEAD', '--', $normalizedPath))
+    if ($headPaths -contains $normalizedPath) {
+        $headContent = @(Invoke-GitText -Arguments @('show', "HEAD:$normalizedPath"))
+        foreach ($definition in Get-RustTestDefinitions -Lines $headContent) {
+            [void]$headTestNames.Add([string]$definition.Name)
+        }
+    }
+
+    # The index is the exact changed snapshot that pre-commit will commit. Using
+    # the unstaged file here would let an unstaged assertion hide a vacuous test
+    # that remains in the index.
+    $stagedContent = @(Invoke-GitText -Arguments @('show', ":$normalizedPath"))
+    $findings = New-Object System.Collections.Generic.List[string]
+    foreach ($definition in Get-RustTestDefinitions -Lines $stagedContent) {
+        if ($headTestNames.Contains([string]$definition.Name)) { continue }
+        if ([bool]$definition.HasShouldPanic) { continue }
+        if (-not $rustFailureSignalPattern.IsMatch([string]$definition.Body)) {
+            $findings.Add([string]$definition.Name)
         }
     }
     return @($findings)
@@ -182,7 +192,7 @@ foreach ($path in $stagedTestPaths) {
             Detail = "removed dynamic loop signal and added literal collection signal"
         })
     }
-    foreach ($functionName in Get-AddedRustTestNamesWithoutDirectFailureSignal -Path $path -DiffLines $diffLines) {
+    foreach ($functionName in Get-AddedRustTestNamesWithoutDirectFailureSignal -Path $path) {
         $finding = [PSCustomObject]@{
             Path = $path
             Signal = 'new Rust test has no direct failure signal'

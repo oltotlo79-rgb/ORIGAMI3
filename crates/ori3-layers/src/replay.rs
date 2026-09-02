@@ -465,6 +465,7 @@ fn same_fold_step_bits(left: &FoldStep, right: &FoldStep) -> bool {
         drivers: left_drivers,
         layer_order: left_order,
         alignment: left_alignment,
+        curved_inside_reverse: _,
         finish_soft: left_finish_soft,
         note: left_note,
     } = left;
@@ -474,6 +475,7 @@ fn same_fold_step_bits(left: &FoldStep, right: &FoldStep) -> bool {
         drivers: right_drivers,
         layer_order: right_order,
         alignment: right_alignment,
+        curved_inside_reverse: _,
         finish_soft: right_finish_soft,
         note: right_note,
     } = right;
@@ -1082,6 +1084,7 @@ pub fn canonical_flat_pose_at(
         drivers,
         layer_order: Some(state.to_layer_points(&doc.cp, faces)),
         alignment: None,
+        curved_inside_reverse: None,
         finish_soft: None,
         note: "折った形を再現してから折る".to_string(),
     };
@@ -3567,6 +3570,7 @@ mod tests {
             }],
             layer_order: None,
             alignment: None,
+            curved_inside_reverse: None,
             finish_soft: None,
             note: String::new(),
         });
@@ -3820,6 +3824,7 @@ mod tests {
                 }],
                 layer_order: None,
                 alignment: None,
+                curved_inside_reverse: None,
                 finish_soft: None,
                 note: String::new(),
             },
@@ -3833,6 +3838,7 @@ mod tests {
                 }],
                 layer_order: None,
                 alignment: None,
+                curved_inside_reverse: None,
                 finish_soft: None,
                 note: String::new(),
             },
@@ -4245,6 +4251,7 @@ mod tests {
                 ],
                 layer_order: None,
                 alignment: None,
+                curved_inside_reverse: None,
                 finish_soft: None,
                 note: String::new(),
             },
@@ -4265,6 +4272,7 @@ mod tests {
                 ],
                 layer_order: None,
                 alignment: None,
+                curved_inside_reverse: None,
                 finish_soft: None,
                 note: String::new(),
             },
@@ -4504,6 +4512,7 @@ mod tests {
             }],
             layer_order: None,
             alignment: None,
+            curved_inside_reverse: None,
             finish_soft: None,
             note: String::new(),
         };

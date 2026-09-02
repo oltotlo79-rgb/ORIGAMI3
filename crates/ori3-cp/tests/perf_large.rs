@@ -166,6 +166,7 @@ fn doc_with_steps(cp: CreasePattern, nc: usize) -> Document {
                 }],
                 layer_order: None,
                 alignment: None,
+                curved_inside_reverse: None,
                 finish_soft: None,
                 note: String::new(),
             }

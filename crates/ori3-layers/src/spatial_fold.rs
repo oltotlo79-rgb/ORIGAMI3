@@ -297,6 +297,7 @@ pub fn fold_from_plane_3d(
         drivers,
         layer_order: None,
         alignment: None,
+        curved_inside_reverse: None,
         finish_soft: None,
         note: String::new(),
     };
@@ -904,6 +905,7 @@ mod tests {
             }],
             layer_order: None,
             alignment: None,
+            curved_inside_reverse: None,
             finish_soft: None,
             note: String::new(),
         });
@@ -1077,6 +1079,7 @@ mod tests {
             }],
             layer_order: None,
             alignment: None,
+            curved_inside_reverse: None,
             finish_soft: None,
             note: String::new(),
         });
