@@ -436,8 +436,44 @@ function Test-ActualReportUpdateWait {
     param(
         [Parameter(Mandatory = $true)][string]$BoundaryScript,
         [Parameter(Mandatory = $true)][string]$Definition,
-        [Parameter(Mandatory = $true)][string]$Report
+        [Parameter(Mandatory = $true)][string]$Report,
+        [Parameter(Mandatory = $true)][string]$ReportLog
     )
+
+    [IO.File]::SetLastWriteTimeUtc($ReportLog, [DateTime]::UtcNow.AddMinutes(-91))
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $global:LASTEXITCODE = 0
+        $staleOutput = @(& $PowerShellPath -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $BoundaryScript `
+                -WaitForReportUpdate -DefinitionPath $Definition -ReportPath $Report -TimeoutSeconds 1 -RepositoryRoot $Repository 2>&1)
+        $staleExit = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    $script:Cases++
+    Assert-Equal $staleExit 1 "actual report update wait must reject a report log at least 90 minutes old" ($staleOutput -join "`n")
+    Assert-Contains ($staleOutput -join "`n") "REPORT_UPDATE_WAIT_FAILED" "stale report log rejection must use the stable wait failure prefix"
+    Assert-True ([regex]::IsMatch(($staleOutput -join "`n"), 'currently\s+[0-9]+\s+minutes\s+ol\s*d')) "stale report log rejection must report the measured whole-minute age" ($staleOutput -join "`n")
+    Assert-Contains ($staleOutput -join "`n") "maximum is 90 minutes" "stale report log rejection must report the 90 minute boundary"
+    Assert-True (-not (($staleOutput -join "`n").Contains("REPORT_UPDATE_TIMEOUT"))) "stale report log must be rejected before entering the wait loop" ($staleOutput -join "`n")
+
+    [IO.File]::Delete($ReportLog)
+    try {
+        $ErrorActionPreference = "Continue"
+        $global:LASTEXITCODE = 0
+        $unreadableOutput = @(& $PowerShellPath -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $BoundaryScript `
+                -WaitForReportUpdate -DefinitionPath $Definition -ReportPath $Report -TimeoutSeconds 1 -RepositoryRoot $Repository 2>&1)
+        $unreadableExit = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    $script:Cases++
+    Assert-Equal $unreadableExit 1 "actual report update wait must reject an unreadable report log" ($unreadableOutput -join "`n")
+    Assert-Contains ($unreadableOutput -join "`n") "required report log docs/報告記録.md is unreadable" "unreadable report log rejection must identify the required file"
+    [IO.File]::WriteAllText($ReportLog, "# fresh report log fixture`r`n", $script:Utf8NoBom)
 
     $updaterPath = Join-Path $Sandbox "update-report-after-delay.ps1"
     $updaterSource = @'
@@ -614,6 +650,7 @@ try {
     $wrongNameReportWaitDefinition = Join-Path $Repository "scratchpad\reports.json"
     $missingReportWaitDefinition = Join-Path $Repository "scratchpad\watch-agents-missing.json"
     $reportWaitPath = Join-Path $Repository "scratchpad\agent-report.md"
+    $reportLogPath = Join-Path $Repository "docs\報告記録.md"
     $unlistedReportWaitPath = Join-Path $Repository "scratchpad\unlisted-report.md"
     $desktop = Join-Path $Repository "target\release\desktop.exe"
     $otherPowerShell = Join-Path $Repository "scripts\powershell.exe"
@@ -622,6 +659,7 @@ try {
     $watchArgumentList = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$watch`" -DefinitionPath `"$watchDefinition`" -RepositoryRoot `"$Repository`" -IntervalMinutes 10 -StaleAfterMinutes 40"
     $detachedWatchCommand = "Start-Process -FilePath '$PowerShellPath' -ArgumentList '$watchArgumentList' -WindowStyle Hidden"
     [IO.File]::WriteAllText($reportWaitPath, "report wait fixture`r`n", $script:Utf8NoBom)
+    [IO.File]::WriteAllText($reportLogPath, "# report log fixture`r`n", $script:Utf8NoBom)
     [IO.File]::WriteAllText($unlistedReportWaitPath, "unlisted fixture`r`n", $script:Utf8NoBom)
     $reportWaitDefinitionValue = [ordered]@{
         agents = @(
@@ -784,6 +822,12 @@ try {
         @{ Name = "direct Stop-Process remains denied"; Command = "Stop-Process -Id 1" }
     )
     foreach ($case in $deniedCases) { Assert-PreDenied -Name $case.Name -Command $case.Command }
+    [IO.File]::SetLastWriteTimeUtc($reportLogPath, [DateTime]::UtcNow.AddMinutes(-91))
+    Reset-ActiveState
+    $stalePolicyReason = Assert-DeniedResult (Invoke-Pre -Command $reportWaitCommand -ToolUseId "deny-stale-report-log") "report wait stale report log"
+    Assert-True ([regex]::IsMatch($stalePolicyReason, 'currently [0-9]+ minutes old')) "policy rejection must report the measured whole-minute report gap" $stalePolicyReason
+    Assert-Contains $stalePolicyReason "maximum is 90 minutes" "policy rejection must report the 90 minute report freshness boundary"
+    [IO.File]::SetLastWriteTimeUtc($reportLogPath, [DateTime]::UtcNow)
     Assert-PreDenied -Name "production payload Get-Date through Bash" -Command "Get-Date -Format 'yyyy-MM-dd HH:mm'" -ToolName "Bash"
 
     Write-Host "[4/8] parse, dynamic, mixed, and member bypasses are denied"
@@ -834,7 +878,7 @@ try {
     Test-ActualRecordedWatcherStop
 
     Write-Host "[6.6/8] actual bounded registered report update wait"
-    Test-ActualReportUpdateWait -BoundaryScript $boundaryScript -Definition $reportWaitDefinition -Report $reportWaitPath
+    Test-ActualReportUpdateWait -BoundaryScript $boundaryScript -Definition $reportWaitDefinition -Report $reportWaitPath -ReportLog $reportLogPath
 
     Write-Host "[7/8] exact one-time receipt and PostToolUse success"
     Reset-ActiveState

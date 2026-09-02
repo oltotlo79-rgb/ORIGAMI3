@@ -192,6 +192,7 @@ function New-InstructionText {
         [string]$EvidenceSymbol = "Invoke-SampleTarget()",
         [string]$EvidenceCommand = "rg -n --fixed-strings --glob '!docs/competitive-review-2026-08-20.md' 'Invoke-SampleTarget' scripts/sample-target.ps1",
         [string]$EvidenceOutput = "scripts/sample-target.ps1:2:function Invoke-SampleTarget {",
+        [string[]]$RequestedDeliverables = @("対象関数の修正と検査結果を報告する"),
         [string[]]$SkipNamesToInclude = @(
             "completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten",
             "named_sample_completes_end_to_end_and_is_deterministic_ten_out_of_ten",
@@ -201,6 +202,12 @@ function New-InstructionText {
     )
 
     $lines = New-Object System.Collections.Generic.List[string]
+
+    $lines.Add('依頼項目:')
+    foreach ($deliverable in $RequestedDeliverables) {
+        $lines.Add('- ' + $deliverable)
+    }
+    $lines.Add('')
 
     if ($UseNoCodeExemption) {
         $lines.Add('対象: 該当なし。文書のみを整える作業のため対象ファイルはありません。')
@@ -360,16 +367,16 @@ $evidenceTargetFullPath = Join-Path $fixtureRepository ($evidenceTargetRelativeP
     [Text.UTF8Encoding]::new($false)
 )
 try {
-    Write-Output "[1/20] 完全合格ひな型(cargo test込み)は14項目すべてOKでexit 0"
+    Write-Output "[1/21] 完全合格ひな型(cargo test込み)は15項目すべてOKでexit 0"
     $fullPassPath = New-InstructionFixtureFile "full-pass.md" (New-InstructionText)
     $result = Invoke-Check @($fullPassPath)
     Assert-Equal $result.ExitCode 0 "完全合格ひな型はexit 0であること" $result.Output
-    for ($i = 1; $i -le 14; $i++) {
+    for ($i = 1; $i -le 15; $i++) {
         Assert-Contains $result.Output ("[OK] {0}." -f $i) ("項目{0}がOKであること" -f $i)
     }
     Assert-Contains $result.Output "全項目合格" "全項目合格の表示があること"
 
-    Write-Output "[2/20] cargoに触れないひな型は項目10・11がN/Aでも全体合格"
+    Write-Output "[2/21] cargoに触れないひな型は項目10・11がN/Aでも全体合格"
     $noCargoPath = New-InstructionFixtureFile "full-pass-no-cargo.md" (New-InstructionText -IncludeCargoTest $false)
     $result = Invoke-Check @($noCargoPath)
     Assert-Equal $result.ExitCode 0 "cargo未記載でも他項目が揃えば合格であること" $result.Output
@@ -377,20 +384,20 @@ try {
     Assert-Contains $result.Output "[--] 11. 専用のCARGO_TARGET_DIR指定 (06-過去の失敗と対策.md:241-242) - cargo実行の言及なし（該当なし）" "項目11がN/A表示になること"
     Assert-Contains $result.Output "全項目合格" "N/Aは不合格に数えないこと"
 
-    Write-Output "[3/20] 「該当なし」＋理由は項目1・14を実パス無しでも合格させる"
+    Write-Output "[3/21] 「該当なし」＋理由は項目1・14を実パス無しでも合格させる"
     $exemptionPath = New-InstructionFixtureFile "exemption.md" (New-InstructionText -UseNoCodeExemption $true)
     $result = Invoke-Check @($exemptionPath)
     Assert-Contains $result.Output "[OK] 1. 実ファイルパスと関数名の実名記載" "非コード作業の「該当なし」免除が効くこと"
     Assert-Contains $result.Output "[OK] 14. 対象実名ごとの実在確認証拠" "非コード作業は実在証拠も該当なしになること"
     Assert-Contains $result.Output "該当なし" "免除理由の検出詳細を表示すること"
 
-    Write-Output "[4/20] 項目1: 実パスも関数名も無いと不合格"
+    Write-Output "[4/21] 項目1: 実パスも関数名も無いと不合格"
     $result = Invoke-Check @((New-InstructionFixtureFile "fail-item1.md" (New-InstructionText -IncludeTarget $false -IncludeEvidence $false)))
     Assert-Equal $result.ExitCode 1 "項目1欠落はexit 1であること" $result.Output
     Assert-Contains $result.Output "[NG] 1. 実ファイルパスと関数名の実名記載" "項目1がNGになること"
     Assert-Contains $result.Output "欠落: 実ファイルパス・関数名" "欠落した2要素とも列挙されること"
 
-    Write-Output "[5/20] 項目2: 数値条件の誤検出・見逃しを実測する"
+    Write-Output "[5/21] 項目2: 数値条件の誤検出・見逃しを実測する"
     $numericCases = @(
         @{ Text = "半径は3mm以下であること。"; Expect = "OK"; Label = "単位+比較語(mm以下)は合格" },
         @{ Text = 'gapが `<= 200` であること。'; Expect = "OK"; Label = "記号比較(<=)は合格" },
@@ -406,7 +413,7 @@ try {
         Assert-Contains $result.Output $marker $case.Label
     }
 
-    Write-Output "[6/20] 項目3: 6件の禁止事項それぞれについて、1件欠落させると不合格になる"
+    Write-Output "[6/21] 項目3: 6件の禁止事項それぞれについて、1件欠落させると不合格になる"
     $prohibitionCases = @(
         @{ Flag = "IncludeGitBan"; Label = "gitへの書き込み禁止" },
         @{ Flag = "IncludeLaunchBan"; Label = "ブラウザ・desktop.exe・配信サーバーを起動しない" },
@@ -426,7 +433,7 @@ try {
         Assert-Contains $result.Output $case.Label ("欠落項目名として『{0}』が名指しされること" -f $case.Label)
     }
 
-    Write-Output "[7/20] 項目4・5・6・7・8・9: それぞれ単独で欠落させると、その項目だけが不合格になる"
+    Write-Output "[7/21] 項目4・5・6・7・8・9: それぞれ単独で欠落させると、その項目だけが不合格になる"
     # 項目7(保存先パス)と項目9(報告書への継続記録)は、どちらも「パス+書く系の動詞」を
     # 見るため、報告書の行が保存先パスの記載を兼ねられる（実測で確認した意図した重なり。
     # 「報告書をXへ書く」という一文は保存先の明記でもあるため、これは誤検出ではない）。
@@ -460,7 +467,7 @@ try {
         }
     }
 
-    Write-Output "[8/20] 項目10: skip対象0/4件・一部欠落(2/4件)を検出する"
+    Write-Output "[8/21] 項目10: skip対象0/4件・一部欠落(2/4件)を検出する"
     $result = Invoke-Check @((New-InstructionFixtureFile "fail-item10-none.md" (New-InstructionText -SkipNamesToInclude @())))
     Assert-Equal $result.ExitCode 1 "skip対象が0件ならexit 1であること" $result.Output
     Assert-Contains $result.Output "[NG] 10. 長時間検査の--skip 4件 (03-品質ゲート.md:61) - 0/4 件のみ検出" "0/4件の検出数を表示すること"
@@ -475,19 +482,19 @@ try {
     Assert-Contains $result.Output "a_safe_coincident_partial_network_appears_after_the_first_fold" "欠落したskip名を実名で列挙すること"
     Assert-Contains $result.Output "the_heaviest_proposal_never_hits_the_time_limit" "欠落したもう1件のskip名も実名で列挙すること"
 
-    Write-Output "[9/20] 項目11: CARGO_TARGET_DIR未指定を検出し、項目10には影響しない"
+    Write-Output "[9/21] 項目11: CARGO_TARGET_DIR未指定を検出し、項目10には影響しない"
     $result = Invoke-Check @((New-InstructionFixtureFile "fail-item11.md" (New-InstructionText -IncludeCargoTargetDir $false)))
     Assert-Equal $result.ExitCode 1 "CARGO_TARGET_DIR欠落はexit 1であること" $result.Output
     Assert-Contains $result.Output "[NG] 11. 専用のCARGO_TARGET_DIR指定 (06-過去の失敗と対策.md:241-242) - cargoの言及があるのにCARGO_TARGET_DIRの指定が見つかりません" "項目11がNGになること"
     Assert-Contains $result.Output "[OK] 10." "CARGO_TARGET_DIR欠落はskip4件判定を巻き込まないこと"
 
-    Write-Output "[10/20] cargo build等cargo testを含まない言及でも、項目11だけは発動する"
+    Write-Output "[10/21] cargo build等cargo testを含まない言及でも、項目11だけは発動する"
     $cargoBuildOnly = '道具: `$env:CARGO_TARGET_DIR = "%TEMP%\ori3-target-x"` を設定してから `cargo build -p ori3-rigid` を実行してください。'
     $result = Invoke-Check @((New-InstructionFixtureFile "cargo-build-only.md" $cargoBuildOnly))
     Assert-Contains $result.Output "[--] 10. 長時間検査の--skip 4件 (03-品質ゲート.md:61) - cargo testの言及なし（該当なし）" "cargo buildはcargo test向けskip判定を発動しないこと"
     Assert-Contains $result.Output "[OK] 11. 専用のCARGO_TARGET_DIR指定 (06-過去の失敗と対策.md:241-242) - CARGO_TARGET_DIRの指定を検出" "cargo buildでもCARGO_TARGET_DIR判定は発動すること"
 
-    Write-Output "[11/20] 複数ファイルを1回の呼び出しで検査できる"
+    Write-Output "[11/21] 複数ファイルを1回の呼び出しで検査できる"
     $secondFailPath = New-InstructionFixtureFile "multi-fail-item5.md" (New-InstructionText -IncludeFailureCause $false)
     $result = Invoke-Check @($fullPassPath, $secondFailPath)
     Assert-Equal $result.ExitCode 1 "1件でも不合格ならexit 1であること" $result.Output
@@ -496,19 +503,19 @@ try {
     Assert-Contains $result.Output ("[OK] {0}: 全項目合格" -f $fullPassPath) "1件目は合格として表示されること"
     Assert-Contains $result.Output "対象 2件 / 不合格 1件 / 不合格項目合計 1件" "複数ファイルの集計行が出ること"
 
-    Write-Output "[12/20] 存在しない指示文はexit 2で日本語エラーになる"
+    Write-Output "[12/21] 存在しない指示文はexit 2で日本語エラーになる"
     $missingPath = Join-Path $sandboxRoot "does-not-exist.md"
     $result = Invoke-Check @($missingPath)
     Assert-Equal $result.ExitCode 2 "存在しないファイルはexit 2であること" $result.Output
     Assert-Contains $result.Output "指示文ファイルが見つかりません" "日本語のエラー理由を表示すること"
 
-    Write-Output "[13/20] 完全合格ひな型はexit 0、単独不合格はexit 1、存在しないファイルはexit 2の境界を再確認する"
+    Write-Output "[13/21] 完全合格ひな型はexit 0、単独不合格はexit 1、存在しないファイルはexit 2の境界を再確認する"
     $result = Invoke-Check @($fullPassPath)
     Assert-Equal $result.ExitCode 0 "合格は0であること(再確認)" $result.Output
     $result = Invoke-Check @((New-InstructionFixtureFile "fail-boundary.md" (New-InstructionText -IncludeWorktree $false -IncludeBaselineWorktree $false)))
     Assert-Equal $result.ExitCode 1 "不合格は1であること(再確認)" $result.Output
 
-    Write-Output "[14/20] 項目12: モデルと理由を同一行で必須化し、実モデル不一致を検出する"
+    Write-Output "[14/21] 項目12: モデルと理由を同一行で必須化し、実モデル不一致を検出する"
     $result = Invoke-Check @((New-InstructionFixtureFile "fail-item12-missing.md" (New-InstructionText -IncludeModelSelection $false)))
     Assert-Equal $result.ExitCode 1 "モデル選択行の欠落はexit 1であること" $result.Output
     Assert-Contains $result.Output "[NG] 12. モデル選択と同一行の理由" "項目12がNGになること"
@@ -541,7 +548,7 @@ try {
     Assert-Equal $result.ExitCode 1 "記録gpt-5.6-sol/実opusの不一致はexit 1であること" $result.Output
     Assert-Contains $result.Output "記録モデル gpt-5.6-sol と実際のモデル opus が一致しません" "gpt-5.6-solのモデル不一致を表示すること"
 
-    Write-Output "[15/20] 項目13: baselineの5要素、終了コード、数値実測、40/64hexを検査する"
+    Write-Output "[15/21] 項目13: baselineの5要素、終了コード、数値実測、40/64hexを検査する"
     $baselineMissingCases = @(
         @{ Flag = "IncludeBaselineWorktree"; Label = "worktree" },
         @{ Flag = "IncludeBaselineHead"; Label = "HEAD(40/64hex)" },
@@ -570,7 +577,7 @@ try {
     Assert-Equal $result.ExitCode 0 "64hex HEADと日本語終了コードはexit 0であること" $result.Output
     Assert-Contains $result.Output "[OK] 13." "64hex HEADを合格にすること"
 
-    Write-Output "[16/20] 項目14: target/command/output欠落、rg除外漏れ、古い行、本文不一致を拒否する"
+    Write-Output "[16/21] 項目14: target/command/output欠落、rg除外漏れ、古い行、本文不一致を拒否する"
     $evidenceCases = @(
         @{ Name = "missing-target"; Params = @{ IncludeEvidenceTarget = $false }; Expected = "構造化した対象実名/実在確認コマンド/実在確認出力がありません" },
         @{ Name = "missing-command"; Params = @{ IncludeEvidenceCommand = $false }; Expected = "command/outputが1:1ではありません" },
@@ -613,7 +620,7 @@ try {
     Assert-Equal $result.ExitCode 0 "grepの構造化証拠はexit 0であること" $result.Output
     Assert-Contains $result.Output "[OK] 14." "grepを許可すること"
 
-    Write-Output "[16b/20] 項目14: 該当なし免除は単独の構造化1組・4文字以上の理由だけ許可する"
+    Write-Output "[16b/21] 項目14: 該当なし免除は単独の構造化1組・4文字以上の理由だけ許可する"
     $plainNoCodeText = (New-InstructionText -IncludeEvidence $false) + "`n補足: 実在確認は該当なしです。"
     $plainNoCodePath = New-InstructionFixtureFile "fail-item14-plain-no-code.md" $plainNoCodeText
     $result = Invoke-Check @($plainNoCodePath)
@@ -651,7 +658,7 @@ try {
     Assert-Equal $result.ExitCode 1 "構造化免除と実名対象の混在はexit 1であること" $result.Output
     Assert-Contains $result.Output "他の対象実名と混在できません" "免除と対象実名の混在を拒否すること"
 
-    Write-Output "[17/20] 項目14: 複数対象を全件1:1照合し、2件目だけの欠落も拒否する"
+    Write-Output "[17/21] 項目14: 複数対象を全件1:1照合し、2件目だけの欠落も拒否する"
     $secondTargetPath = Join-Path $fixtureRepository "scripts/second-target.rs"
     [IO.File]::WriteAllText($secondTargetPath, "fn second_target() {}`n", [Text.UTF8Encoding]::new($false))
     $secondEvidence = @'
@@ -673,16 +680,16 @@ try {
     Assert-Equal $result.ExitCode 1 "2件目だけoutput欠落でもexit 1であること" $result.Output
     Assert-Contains $result.Output "scripts/second-target.rs::second_target() はcommand/outputが1:1ではありません" "欠落した2件目を実名表示すること"
 
-    Write-Output "[18/20] 標準入力modeを新processで実行し、空stdinはexit 2にする"
+    Write-Output "[18/21] 標準入力modeを新processで実行し、空stdinはexit 2にする"
     $result = Invoke-Check -StandardInput (New-InstructionText)
     Assert-Equal $result.ExitCode 0 "stdinの完全指示書はexit 0であること" $result.Output
     Assert-Contains $result.Output "[指示書] <stdin>" "stdin入力であることを表示すること"
-    Assert-Contains $result.Output "[OK] <stdin>: 全項目合格" "stdinでも14項目すべて合格すること"
+    Assert-Contains $result.Output "[OK] <stdin>: 全項目合格" "stdinでも15項目すべて合格すること"
     $result = Invoke-Check -StandardInput ""
     Assert-Equal $result.ExitCode 2 "空stdinはexit 2であること" $result.Output
     Assert-Contains $result.Output "標準入力の指示文が空です" "空stdinの理由を日本語表示すること"
 
-    Write-Output "[19/20] -VerifyLiveBaselineがgitを書かないstubのHEADと未コミット件数を照合する"
+    Write-Output "[19/21] -VerifyLiveBaselineがgitを書かないstubのHEADと未コミット件数を照合する"
     $liveBaseline = Initialize-LiveBaselineStub
     $liveText = New-InstructionText -BaselineWorktree $liveBaseline.Path -BaselineHead $liveBaseline.Head -BaselineDirty $liveBaseline.DirtyCount
     $livePath = New-InstructionFixtureFile "pass-item13-live.md" $liveText
@@ -702,10 +709,29 @@ try {
     Assert-Equal $result.ExitCode 1 "live未コミット件数不一致はexit 1であること" $result.Output
     Assert-Contains $result.Output "記録した未コミット件数 3 と実測 2 が一致しません" "live dirty不一致の両値を表示すること"
 
-    Write-Output "[20/20] 新規3項目と既存11項目を同じ集計・exit境界で扱う"
+    Write-Output "[20/21] 既存14項目と新しい成果物上限を同じ集計・exit境界で扱う"
     $finalPass = Invoke-Check @($fullPassPath)
     Assert-Equal $finalPass.ExitCode 0 "最終完全合格はexit 0であること" $finalPass.Output
     Assert-Contains $finalPass.Output "対象 1件 / 全件合格" "最終集計が全件合格であること"
+
+    Write-Output "[21/21] 項目15: 4成果物は拒否し、3成果物は許可し、件数×観点の直積も数える"
+    $fourDeliverables = @("結果1", "結果2", "結果3", "結果4")
+    $result = Invoke-Check @((New-InstructionFixtureFile "fail-item15-four.md" (New-InstructionText -RequestedDeliverables $fourDeliverables)))
+    Assert-Equal $result.ExitCode 1 "4成果物の委譲はexit 1であること" $result.Output
+    Assert-Contains $result.Output "[NG] 15. 1委譲の独立成果物上限" "4成果物で項目15がNGになること"
+    Assert-Contains $result.Output "現在 4件、上限 3件" "拒否文に現在4件と上限3件を表示すること"
+
+    $threeDeliverables = @("結果1", "結果2", "結果3")
+    $result = Invoke-Check @((New-InstructionFixtureFile "pass-item15-three.md" (New-InstructionText -RequestedDeliverables $threeDeliverables)))
+    Assert-Equal $result.ExitCode 0 "3成果物の委譲はexit 0であること" $result.Output
+    Assert-Contains $result.Output "[OK] 15. 1委譲の独立成果物上限" "3成果物で項目15がOKになること"
+    Assert-Contains $result.Output "現在 3件、上限 3件" "許可文に現在3件と上限3件を表示すること"
+
+    $productText = (New-InstructionText) + "`n`n設計案2件 × 4観点をそれぞれ独立に報告してください。"
+    $result = Invoke-Check @((New-InstructionFixtureFile "fail-item15-product.md" $productText))
+    Assert-Equal $result.ExitCode 1 "設計案2件×4観点は8成果物としてexit 1であること" $result.Output
+    Assert-Contains $result.Output "現在 8件、上限 3件" "直積8件と上限3件を表示すること"
+    Assert-Contains $result.Output "判定根拠: 件数と観点の直積" "直積を判定根拠として表示すること"
 
     Write-Output ("check-agent-instruction self-test passed: {0} cases, {1} assertions" -f $script:CaseCount, $script:AssertionCount)
 }

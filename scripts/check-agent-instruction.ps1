@@ -4,14 +4,15 @@
 
 .DESCRIPTION
 docs/rules/01-役割と委譲.md の §2〜§4、docs/rules/03-品質ゲート.md §10.6、
-docs/rules/06-過去の失敗と対策.md §10.7.11 の条文から起こした14項目を、
+docs/rules/06-過去の失敗と対策.md §10.7.11 の条文から起こした既存14項目と、
+1委譲の成果物上限1項目（計15項目）を、
 指示文のテキストから検出します。検出は「該当する記述らしきものが
 あるか」を確かめるヒューリスティックを基本とします。ただし項目14は、構造化された
 実在確認証拠のpath・line・body・symbolをRepositoryRootの実ファイルと照合します。
 項目13も -VerifyLiveBaseline 指定時はHEADと未コミット件数をread-onlyで再取得します。
 対象検査の実測結果そのものは再実行しないため、本検査単独では「半自動」です。
 
-検査する14項目と根拠（行番号は2026-08-31時点）:
+検査する15項目と根拠（行番号は2026-09-02時点）:
   1. 実ファイルパスと関数名の実名記載            docs/rules/01-役割と委譲.md:43
   2. 合格条件の数値記載                          docs/rules/01-役割と委譲.md:44
   3. やってはいけないことの列挙（6件）           docs/rules/01-役割と委譲.md:45 ほか
@@ -26,6 +27,7 @@ docs/rules/06-過去の失敗と対策.md §10.7.11 の条文から起こした1
  12. opus/sonnet/gpt-5.6-sol/gpt-5.6-terraのモデル選択と同一行の理由 docs/rules/01-役割と委譲.md:32
  13. worktreeのHEAD・未コミット件数・検査baseline  docs/rules/01-役割と委譲.md:33
  14. 対象実名ごとのrg/grepコマンドと実在出力        docs/rules/01-役割と委譲.md:43
+ 15. 1委譲で求める独立成果物が3件以内              docs/rules/01-役割と委譲.md:53
 
 【2026-08-29 追加指示】`.claude/settings.json` のPreToolUse hookが利用者の決定で
 外され、`cargo`/`npm`直接実行の自動阻止（§10.7.13）は「自動」から「人」へ戻った。
@@ -175,6 +177,17 @@ $script:CommandWordPattern = 'cargo|npm|(?<![A-Za-z0-9_])rg(?![A-Za-z0-9_])|grep
 # 項目7: 成果物の保存先パス。
 $script:SaveVerbPattern = '保存|書き込|出力先|出力する|(?:に|へ)[^\r\n。、]{0,8}書く'
 $script:SavePathPattern = '(?:crates|apps|scripts|docs|scratchpad|verification|\.github)/[A-Za-z0-9_./+-]*\.[A-Za-z0-9]+|[A-Za-z]:[\\/][^\s`"]+'
+
+# 項目15: 1委譲で求める独立成果物の上限。
+# 同じ仕事が「段階」「成果物件数」「N件×M観点」の複数形で重複記載され得るため、
+# 候補を合算せず最大値を採る。明示構造が無い指示は単一依頼1件として扱う。
+$script:MaxDeliverablesPerDelegation = 3
+$script:DeliverableSectionHeadingPattern = '^[ \t]{0,3}(?:#{1,6}[ \t]*)?(?:依頼(?:内容|項目)?|成果物|求める成果物|設問)[ \t]*[:：]?[ \t]*$'
+$script:TopLevelListItemPattern = '^[ \t]{0,3}(?:[-*+][ \t]+|[0-9]+[.)、][ \t]+)\S'
+$script:DeliverableLabelPattern = '(?im)^[ \t]{0,3}(?:#{1,6}[ \t]*)?(?:成果物|設問|依頼項目)[ \t]*(?<index>[0-9]+)[ \t]*[:：.)、-]'
+$script:StageHeadingPattern = '(?im)^[ \t]{0,3}(?:#{1,6}[ \t]*)?(?:第[ \t]*)?(?:段階|ステップ|Step)[ \t]*(?<index>[0-9]+)[ \t]*(?:[:：.)、-].*)?$'
+$script:ExplicitDeliverableCountPattern = '(?i)(?:成果物|設問|依頼項目|設計案)[^0-9\r\n]{0,8}(?<count>[0-9]{1,4})[ \t]*(?:件|個|問|案|項目)|(?<count>[0-9]{1,4})[ \t]*(?:件|個|問|案|項目)(?:の)?(?:成果物|設問|依頼項目|設計案)'
+$script:DeliverableProductPattern = '(?i)(?<left>[0-9]{1,4})[ \t]*(?:件|案|個|項目|問)[ \t]*[×xX*＊][ \t]*(?<right>[0-9]{1,4})[ \t]*(?:観点|項目|件|案|問|個)'
 
 # 項目8: 割り当てた作業ツリーの絶対パス。
 $script:WorktreeNounPattern = 'worktree|work\s*tree|作業ツリー|作業木|ワークツリー'
@@ -377,6 +390,89 @@ function Test-DeliverableSavePath {
         return [pscustomobject]@{ Status = "OK"; Detail = "保存先パスの記載を検出" }
     }
     return [pscustomobject]@{ Status = "NG"; Detail = "成果物の保存先パスの記載が見つかりません" }
+}
+
+function Get-DelegationDeliverableCount {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    $candidates = New-Object System.Collections.Generic.List[object]
+    $candidates.Add([pscustomobject]@{ Count = [int64]1; Source = "構造化記載なしを含む単一依頼" })
+
+    $lines = $Text -split "`n"
+    $listedCount = 0
+    for ($lineIndex = 0; $lineIndex -lt $lines.Length; $lineIndex++) {
+        if ($lines[$lineIndex] -notmatch $script:DeliverableSectionHeadingPattern) {
+            continue
+        }
+        $started = $false
+        for ($itemIndex = $lineIndex + 1; $itemIndex -lt $lines.Length; $itemIndex++) {
+            $line = $lines[$itemIndex]
+            if ($line -match $script:TopLevelListItemPattern) {
+                $listedCount += 1
+                $started = $true
+                continue
+            }
+            if ([string]::IsNullOrWhiteSpace($line)) {
+                if ($started) { break }
+                continue
+            }
+            if ($started -and $line -match '^[ \t]{4,}\S') {
+                continue
+            }
+            break
+        }
+    }
+    if ($listedCount -gt 0) {
+        $candidates.Add([pscustomobject]@{ Count = [int64]$listedCount; Source = "依頼・成果物・設問の最上位リスト" })
+    }
+
+    $labelKeys = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($match in [regex]::Matches($Text, $script:DeliverableLabelPattern)) {
+        [void]$labelKeys.Add($match.Value.Trim())
+    }
+    if ($labelKeys.Count -gt 0) {
+        $candidates.Add([pscustomobject]@{ Count = [int64]$labelKeys.Count; Source = "番号付き成果物・設問" })
+    }
+
+    $stageKeys = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($match in [regex]::Matches($Text, $script:StageHeadingPattern)) {
+        [void]$stageKeys.Add($match.Groups['index'].Value)
+    }
+    if ($stageKeys.Count -gt 0) {
+        $candidates.Add([pscustomobject]@{ Count = [int64]$stageKeys.Count; Source = "段階・ステップ見出し" })
+    }
+
+    foreach ($match in [regex]::Matches($Text, $script:ExplicitDeliverableCountPattern)) {
+        $candidates.Add([pscustomobject]@{ Count = [int64]$match.Groups['count'].Value; Source = "明示した成果物・設問・設計案件数" })
+    }
+    foreach ($match in [regex]::Matches($Text, $script:DeliverableProductPattern)) {
+        $product = ([int64]$match.Groups['left'].Value) * ([int64]$match.Groups['right'].Value)
+        $candidates.Add([pscustomobject]@{ Count = $product; Source = "件数と観点の直積" })
+    }
+
+    $maximum = $candidates[0]
+    foreach ($candidate in $candidates) {
+        if ($candidate.Count -gt $maximum.Count) {
+            $maximum = $candidate
+        }
+    }
+    return $maximum
+}
+
+function Test-DeliverableLimit {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    $measurement = Get-DelegationDeliverableCount -Text $Text
+    if ($measurement.Count -gt $script:MaxDeliverablesPerDelegation) {
+        return [pscustomobject]@{
+            Status = "NG"
+            Detail = "求める成果物は現在 $($measurement.Count)件、上限 $($script:MaxDeliverablesPerDelegation)件です（判定根拠: $($measurement.Source)）。委譲を3件以下へ分割してください"
+        }
+    }
+    return [pscustomobject]@{
+        Status = "OK"
+        Detail = "求める成果物は現在 $($measurement.Count)件、上限 $($script:MaxDeliverablesPerDelegation)件（判定根拠: $($measurement.Source)）"
+    }
 }
 
 function Test-WorktreeAbsolutePath {
@@ -773,6 +869,9 @@ function Get-InstructionCheckResults {
 
     $r14 = Test-StructuredExistenceEvidence -Text $Text
     $results.Add([pscustomobject]@{ Index = 14; Name = "対象実名ごとの実在確認証拠"; Citation = "01-役割と委譲.md:43"; Status = $r14.Status; Detail = $r14.Detail })
+
+    $r15 = Test-DeliverableLimit -Text $Text
+    $results.Add([pscustomobject]@{ Index = 15; Name = "1委譲の独立成果物上限"; Citation = "01-役割と委譲.md:53"; Status = $r15.Status; Detail = $r15.Detail })
 
     return $results.ToArray()
 }

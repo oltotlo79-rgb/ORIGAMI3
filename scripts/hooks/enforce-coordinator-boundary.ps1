@@ -34,6 +34,7 @@ $ErrorActionPreference = "Stop"
 $script:SchemaVersion = 1
 $script:ForbiddenDocument = "docs/competitive-review-2026-08-20.md"
 $script:Utf8NoBom = New-Object Text.UTF8Encoding($false)
+$script:MaxReportLogAgeMinutesForWait = 90
 $script:Mutex = $null
 $script:MutexHeld = $false
 $script:BoundaryScriptPath = [IO.Path]::GetFullPath([string]$MyInvocation.MyCommand.Path)
@@ -448,6 +449,67 @@ function Resolve-RegisteredWatchReportPath {
     return $matchedReport
 }
 
+function Assert-ReportLogFreshForWait {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    if (-not [IO.Path]::IsPathRooted($Root)) {
+        throw "RepositoryRoot must be an absolute path"
+    }
+    $resolvedRoot = [IO.Path]::GetFullPath($Root).TrimEnd([char[]]"\/")
+    if (-not (Test-Path -LiteralPath $resolvedRoot -PathType Container)) {
+        throw "RepositoryRoot does not exist: $resolvedRoot"
+    }
+    $reportLogFileName = ([string][char]0x5831) + ([char]0x544A) + ([char]0x8A18) + ([char]0x9332) + ".md"
+    $reportLogPath = Join-Path $resolvedRoot ("docs\" + $reportLogFileName)
+    if (-not (Test-Path -LiteralPath $reportLogPath -PathType Leaf)) {
+        throw "required report log docs/$reportLogFileName is unreadable; report update wait is denied (file missing)"
+    }
+
+    $reportLogItem = Get-Item -LiteralPath $reportLogPath -Force -ErrorAction Stop
+    if (($reportLogItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "required report log docs/$reportLogFileName is unreadable; report update wait is denied (reparse point)"
+    }
+
+    $stream = $null
+    $reader = $null
+    try {
+        $strictUtf8 = New-Object Text.UTF8Encoding($false, $true)
+        $stream = [IO.FileStream]::new(
+            $reportLogPath,
+            [IO.FileMode]::Open,
+            [IO.FileAccess]::Read,
+            [IO.FileShare]::ReadWrite
+        )
+        $reader = [IO.StreamReader]::new($stream, $strictUtf8, $false, 4096, $false)
+        [void]$reader.ReadToEnd()
+    }
+    catch {
+        throw "required report log docs/$reportLogFileName is unreadable; report update wait is denied: $($_.Exception.Message)"
+    }
+    finally {
+        if ($null -ne $reader) {
+            $reader.Dispose()
+            $stream = $null
+        }
+        if ($null -ne $stream) {
+            $stream.Dispose()
+        }
+    }
+
+    $reportLogItem = Get-Item -LiteralPath $reportLogPath -Force -ErrorAction Stop
+    $age = [DateTime]::UtcNow - $reportLogItem.LastWriteTimeUtc
+    $ageMinutes = [int64][Math]::Floor([Math]::Max(0.0, $age.TotalMinutes))
+    if ($age.TotalMinutes -ge $script:MaxReportLogAgeMinutesForWait) {
+        throw "required report log docs/$reportLogFileName is currently ${ageMinutes} minutes old; maximum is $($script:MaxReportLogAgeMinutesForWait) minutes, so report update wait is denied"
+    }
+
+    return [pscustomobject]@{
+        Path = $reportLogPath
+        AgeMinutes = $ageMinutes
+        LastWriteTimeUtc = $reportLogItem.LastWriteTimeUtc
+    }
+}
+
 function Invoke-WaitForReportUpdate {
     param(
         [Parameter(Mandatory = $true)][string]$Definition,
@@ -460,6 +522,7 @@ function Invoke-WaitForReportUpdate {
         throw "TimeoutSeconds must be between 1 and 3600"
     }
     $resolvedReport = Resolve-RegisteredWatchReportPath -Definition $Definition -Report $Report -Root $Root
+    [void](Assert-ReportLogFreshForWait -Root $Root)
     $initialItem = Get-Item -LiteralPath $resolvedReport -Force -ErrorAction Stop
     $initialTicks = $initialItem.LastWriteTimeUtc.Ticks
     $timer = [Diagnostics.Stopwatch]::StartNew()
@@ -1284,6 +1347,7 @@ function Test-ReportUpdateWaitInvocation {
             return New-PolicyDecision $false "report-wait" "RepositoryRoot must be this repository"
         }
         [void](Resolve-RegisteredWatchReportPath -Definition $Arguments[2] -Report $Arguments[4] -Root $RepositoryRoot)
+        [void](Assert-ReportLogFreshForWait -Root $RepositoryRoot)
     }
     catch {
         return New-PolicyDecision $false "report-wait" ("report update wait could not verify its read-only scope: " + $_.Exception.Message)
