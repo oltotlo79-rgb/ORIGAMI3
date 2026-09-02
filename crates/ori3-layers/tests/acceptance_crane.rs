@@ -44,7 +44,9 @@ use glam::{DVec2, DVec3};
 use ori3_cp::{Face, extract_faces, insert_segment};
 use ori3_geometry::Isometry2;
 use ori3_layers::flat_state::representative_point;
-use ori3_layers::fold_through::{FoldDirection, FoldThroughInput, fold_through};
+use ori3_layers::fold_through::{
+    FoldDirection, FoldThroughInput, fold_through, resolve_driver_edges,
+};
 use ori3_layers::techniques::TechniqueInput;
 use ori3_layers::{
     FlatState, FoldThroughResult, PrecreaseCollapseInput, collapse_precrease_network,
@@ -1956,6 +1958,57 @@ const TRADITIONAL_CRANE_NECK_AND_HEAD_REGION: &[u32] =
     &[3, 55, 31, 30, 29, 28, 27, 26, 25, 23, 21, 47];
 const TRADITIONAL_CRANE_HEAD_REGION: &[u32] = &[3, 55, 54, 53, 52, 51, 50, 49, 48, 47];
 
+const TRADITIONAL_CRANE_NECK_CURVE: &[[[f64; 2]; 2]] = &[
+    [
+        [0.50540489694001678, 0.0],
+        [0.52422930217113994, 0.094636675835343839],
+    ],
+    [
+        [0.52422930217113994, 0.094636675835343839],
+        [0.5430537074022086, 0.18927335167041387],
+    ],
+    [
+        [0.5430537074022086, 0.18927335167041387],
+        [0.59666107804356694, 0.26950245149320218],
+    ],
+    [
+        [0.59666107804356694, 0.26950245149320218],
+        [0.65026844868489742, 0.3497315513151027],
+    ],
+    [
+        [0.65026844868489742, 0.3497315513151027],
+        [0.73049754850679782, 0.403338921956433],
+    ],
+    [
+        [0.73049754850679782, 0.403338921956433],
+        [0.81072664832958607, 0.4569462925977914],
+    ],
+    [
+        [0.81072664832958607, 0.4569462925977914],
+        [0.90536332416465615, 0.47577069782886006],
+    ],
+    [
+        [0.90536332416465615, 0.47577069782886006],
+        [1.0, 0.49459510305998322],
+    ],
+];
+
+fn traditional_crane_curved_inside_reverse_drivers(tail: bool) -> Vec<DriverLine> {
+    let mountain = [true, true, false, false, true, true, false, false];
+    TRADITIONAL_CRANE_NECK_CURVE
+        .iter()
+        .zip(mountain)
+        .map(|(&[a, b], mountain)| {
+            let swap = |point: [f64; 2]| if tail { [point[1], point[0]] } else { point };
+            DriverLine {
+                a: swap(a),
+                b: swap(b),
+                target_angle_deg: if mountain { 180.0 } else { -180.0 },
+            }
+        })
+        .collect()
+}
+
 fn traditional_crane_material_region(cp: &CreasePattern, boundary: &[u32]) -> Vec<DVec2> {
     let positions = vertex_pos(cp);
     boundary
@@ -3358,6 +3411,110 @@ fn traditional_crane_cp_work_matches_reference() {
         replayed.best_effort,
         replayed.warnings.len()
     );
+}
+
+#[test]
+fn curved_inside_reverse_closes_traditional_crane_neck_and_tail() {
+    const RESIDUAL_LIMIT: f64 = 1e-9;
+
+    for (label, tail) in [("首", false), ("尾", true)] {
+        let work = traditional_crane_collapse_work();
+        let mut document = work.document;
+        let original_edges = document.cp.edges.clone();
+        let original_steps = document.sequence.len();
+        let step = document.sequence.first_mut().expect("正本collapse 1手");
+        step.kind = TechniqueKind::InsideReverse;
+        step.curved_inside_reverse = Some(true);
+        step.drivers
+            .extend(traditional_crane_curved_inside_reverse_drivers(tail));
+
+        let mut replay_cp = document.cp.clone();
+        for driver in step.drivers.iter().skip(102) {
+            insert_segment(
+                &mut replay_cp,
+                driver.a,
+                driver.b,
+                if driver.target_angle_deg > 0.0 {
+                    EdgeKind::Mountain
+                } else {
+                    EdgeKind::Valley
+                },
+            );
+        }
+        let unresolved = step
+            .drivers
+            .iter()
+            .enumerate()
+            .filter(|(_, driver)| resolve_driver_edges(&replay_cp, driver).is_empty())
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        assert!(
+            unresolved.is_empty(),
+            "{label}: 一時CPで解決できないDriverLineがある: {unresolved:?}"
+        );
+
+        let mut ordinary_document = document.clone();
+        let ordinary_step = ordinary_document
+            .sequence
+            .first_mut()
+            .expect("正本collapse 1手");
+        ordinary_step.drivers.truncate(102);
+        ordinary_step.curved_inside_reverse = Some(false);
+
+        let faces = extract_faces(&document.cp);
+        let ordinary = replay(&ordinary_document, ordinary_document.sequence.len(), 1.0);
+        let replayed = replay(&document, document.sequence.len(), 1.0);
+        let ordinary_faces = ordinary
+            .frame
+            .faces
+            .iter()
+            .map(|face| (face.face, face))
+            .collect::<HashMap<_, _>>();
+        let max_curve_displacement = replayed
+            .frame
+            .faces
+            .iter()
+            .flat_map(|face| face.polygon.iter().zip(&ordinary_faces[&face.face].polygon))
+            .map(|(curved, ordinary)| DVec3::from(*curved).distance(DVec3::from(*ordinary)))
+            .fold(0.0_f64, f64::max);
+        let residual =
+            replayed
+                .closure_rms
+                .max(max_seam_gap(&document.cp, &faces, &replayed.frame));
+        println!(
+            "traditional crane curved {label}: residual={residual:.17e} closure={:.17e} max_displacement={max_curve_displacement:.17e} converged={} warnings={:?}",
+            replayed.closure_rms, replayed.converged, replayed.warnings
+        );
+
+        assert!(
+            max_curve_displacement > RESIDUAL_LIMIT,
+            "{label}: 曲がり印を立てても公式頂点が動いていない"
+        );
+        assert!(
+            residual <= RESIDUAL_LIMIT,
+            "{label}の残差{residual:e}が上限{RESIDUAL_LIMIT:e}を超えた"
+        );
+        assert_eq!(
+            document.cp.edges, original_edges,
+            "{label}: 公式CPを変更しない"
+        );
+        assert_eq!(document.cp.edges.len(), 114, "{label}: 公式辺114本");
+        assert_eq!(
+            document
+                .cp
+                .edges
+                .iter()
+                .filter(|edge| matches!(edge.kind, EdgeKind::Mountain | EdgeKind::Valley))
+                .count(),
+            102,
+            "{label}: 展開図出力のM/Vは102本"
+        );
+        assert_eq!(
+            document.sequence.len(),
+            original_steps,
+            "{label}: 工程数を変えない"
+        );
+    }
 }
 
 /// 保存した層oracleが、正の面積で重なる首・尾を後翼と前翼の間へ置く。

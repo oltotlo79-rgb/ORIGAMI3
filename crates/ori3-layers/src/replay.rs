@@ -60,12 +60,12 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use glam::{DVec2, DVec3};
-use ori3_cp::{Face, extract_faces};
+use ori3_cp::{Face, extract_faces, insert_segment};
 use ori3_geometry::Isometry2;
 use ori3_model::{
     AlignmentTarget, CreasePattern, DisplaySettings, Document, Driver, DriverLine, EPS, Edge,
     EdgeId, EdgeKind, FaceId, FinishSoftSettings, FoldAlignment, FoldPoseInput, FoldStep, Frame3D,
-    Paper, StepId, TechniqueKind, Vertex,
+    Paper, StepId, TechniqueKind, Vertex, VertexId,
 };
 
 use crate::flat_state::FlatState;
@@ -465,7 +465,7 @@ fn same_fold_step_bits(left: &FoldStep, right: &FoldStep) -> bool {
         drivers: left_drivers,
         layer_order: left_order,
         alignment: left_alignment,
-        curved_inside_reverse: _,
+        curved_inside_reverse: left_curved_inside_reverse,
         finish_soft: left_finish_soft,
         note: left_note,
     } = left;
@@ -475,7 +475,7 @@ fn same_fold_step_bits(left: &FoldStep, right: &FoldStep) -> bool {
         drivers: right_drivers,
         layer_order: right_order,
         alignment: right_alignment,
-        curved_inside_reverse: _,
+        curved_inside_reverse: right_curved_inside_reverse,
         finish_soft: right_finish_soft,
         note: right_note,
     } = right;
@@ -502,6 +502,7 @@ fn same_fold_step_bits(left: &FoldStep, right: &FoldStep) -> bool {
             (None, None) => true,
             _ => false,
         }
+        && left_curved_inside_reverse == right_curved_inside_reverse
         && match (left_finish_soft, right_finish_soft) {
             (Some(left), Some(right)) => same_finish_soft_bits(left, right),
             (None, None) => true,
@@ -628,6 +629,14 @@ fn replay_with_faces_impl(
     // 現在手順の解決警告や分類を先取りしないため、frame・角度・警告がビット一致する。
     if up_to > 0 && t <= 0.0 {
         return replay_with_faces_impl(doc, faces, up_to - 1, 1.0, cache);
+    }
+    if let Some(curved) = replay_curved_inside_reverse(doc, faces, up_to, t) {
+        if t == 1.0
+            && let Some(cache) = cache
+        {
+            cache.store(doc, faces, up_to, &curved);
+        }
+        return curved;
     }
     let plan = plan_steps(doc, faces, up_to, t);
     let layer_transition = LayerTransition {
@@ -838,6 +847,192 @@ fn replay_with_faces_impl(
         cache.store(doc, faces, up_to, &replayed);
     }
     replayed
+}
+
+/// `curved_inside_reverse = Some(true)` の中割り手順だけ、公式CPに無いDriverLineを
+/// 再生中の仮想ヒンジとして使う。
+///
+/// 仮想線は複製したCPへだけ挿入する。剛体再生後は公式CPの頂点位置を元の面集合へ
+/// 戻すため、保存文書・展開図出力・工程数には内部分割を露出しない。公式CPですでに
+/// 解決できるDriverLineだけの中割りは、印があっても通常再生と同じ演算列になる。
+fn replay_curved_inside_reverse(
+    doc: &Document,
+    faces: &[Face],
+    up_to: usize,
+    t: f64,
+) -> Option<ReplayResult> {
+    let has_curved_step = doc.sequence.iter().take(up_to).any(|step| {
+        step.kind == TechniqueKind::InsideReverse && step.curved_inside_reverse == Some(true)
+    });
+    if !has_curved_step {
+        return None;
+    }
+
+    // 印だけを外した同じ文書が通常経路の基準になる。再帰先へcacheを渡さず、
+    // Some(true)の入力cacheと通常入力cacheを混ぜない。
+    let mut ordinary_document = doc.clone();
+    let original_cp = ordinary_document.cp.clone();
+    for step in &mut ordinary_document.sequence {
+        if step.kind == TechniqueKind::InsideReverse && step.curved_inside_reverse == Some(true) {
+            // 公式CPでは未解決の線は3D内部分割専用。通常Frameの層順位・警告・公開角へ
+            // 混ぜず、仮想CPを解く側だけへ渡す。
+            step.drivers
+                .retain(|line| !resolve_driver_edges(&original_cp, line).is_empty());
+        }
+        step.curved_inside_reverse = Some(false);
+    }
+    let ordinary = replay_with_faces_impl(&ordinary_document, faces, up_to, t, None);
+
+    let mut work_document = doc.clone();
+    for step in &mut work_document.sequence {
+        step.curved_inside_reverse = Some(false);
+    }
+    let mut inserted_lines = 0usize;
+    for (source_step, work_step) in doc
+        .sequence
+        .iter()
+        .zip(&mut work_document.sequence)
+        .take(up_to)
+    {
+        if source_step.kind != TechniqueKind::InsideReverse
+            || source_step.curved_inside_reverse != Some(true)
+        {
+            continue;
+        }
+        for line in &source_step.drivers {
+            if !resolve_driver_edges(&work_document.cp, line).is_empty() {
+                continue;
+            }
+            let kind = if line.target_angle_deg.is_sign_positive() {
+                EdgeKind::Mountain
+            } else {
+                EdgeKind::Valley
+            };
+            insert_segment(&mut work_document.cp, line.a, line.b, kind);
+            if resolve_driver_edges(&work_document.cp, line).is_empty() {
+                return Some(curved_inside_reverse_failure(
+                    ordinary,
+                    "曲がる中割りの内部線を材料面へ挿入できませんでした",
+                ));
+            }
+            inserted_lines += 1;
+        }
+        // 再帰先は一時CPを通常の剛体CPとして解く。
+        work_step.curved_inside_reverse = Some(false);
+    }
+    if inserted_lines == 0 {
+        return Some(ordinary);
+    }
+
+    let work_faces = extract_faces(&work_document.cp);
+    let solved = replay_with_faces_impl(&work_document, &work_faces, up_to, t, None);
+    let projected = project_curved_vertices_to_original_faces(
+        &work_document.cp,
+        &work_faces,
+        &solved.frame,
+        &doc.cp,
+        faces,
+        ordinary,
+    );
+    Some(match projected {
+        Ok(mut result) => {
+            result.closure_rms = solved.closure_rms;
+            result.best_effort = solved.best_effort;
+            result.converged = solved.converged;
+            result
+        }
+        Err((ordinary, message)) => curved_inside_reverse_failure(ordinary, &message),
+    })
+}
+
+fn curved_inside_reverse_failure(mut ordinary: ReplayResult, message: &str) -> ReplayResult {
+    ordinary.converged = false;
+    ordinary.best_effort = true;
+    ordinary.warnings.push(message.to_string());
+    ordinary
+}
+
+/// 一時分割の各子面に現れる公式material頂点は、紙がつながっていれば同じ3D位置を
+/// 持つ。その位置だけを取り出し、公式Face ID・頂点数・層順位を保ったFrameへ戻す。
+fn project_curved_vertices_to_original_faces(
+    work_cp: &CreasePattern,
+    work_faces: &[Face],
+    work_frame: &Frame3D,
+    original_cp: &CreasePattern,
+    original_faces: &[Face],
+    mut ordinary: ReplayResult,
+) -> Result<ReplayResult, (ReplayResult, String)> {
+    let original_vertices = original_cp
+        .vertices
+        .iter()
+        .map(|vertex| vertex.id)
+        .collect::<BTreeSet<_>>();
+    let work_frame_by_face = work_frame
+        .faces
+        .iter()
+        .map(|face| (face.face, face))
+        .collect::<HashMap<_, _>>();
+    let mut world_by_vertex = BTreeMap::<VertexId, [f64; 3]>::new();
+    for face in work_faces {
+        let Some(frame_face) = work_frame_by_face.get(&face.id).copied() else {
+            return Err((
+                ordinary,
+                format!("曲がる中割りの一時面{}に3D姿勢がありません", face.id),
+            ));
+        };
+        if face.vertices.len() != frame_face.polygon.len() {
+            return Err((
+                ordinary,
+                format!("曲がる中割りの一時面{}で頂点数が一致しません", face.id),
+            ));
+        }
+        for (&vertex, &position) in face.vertices.iter().zip(&frame_face.polygon) {
+            if !original_vertices.contains(&vertex) {
+                continue;
+            }
+            if let Some(previous) = world_by_vertex.get(&vertex) {
+                let gap = DVec3::from(*previous).distance(DVec3::from(position));
+                if !gap.is_finite() || gap > EPS {
+                    return Err((
+                        ordinary,
+                        format!("曲がる中割りの材料頂点{vertex}が{gap:e}離れています"),
+                    ));
+                }
+            } else {
+                world_by_vertex.insert(vertex, position);
+            }
+        }
+    }
+
+    let ordinary_index_by_face = ordinary
+        .frame
+        .faces
+        .iter()
+        .enumerate()
+        .map(|(index, face)| (face.face, index))
+        .collect::<HashMap<_, _>>();
+    for face in original_faces {
+        let Some(&frame_index) = ordinary_index_by_face.get(&face.id) else {
+            return Err((
+                ordinary,
+                format!("曲がる中割りの公式面{}に3D姿勢がありません", face.id),
+            ));
+        };
+        let mut polygon = Vec::with_capacity(face.vertices.len());
+        for vertex in &face.vertices {
+            let Some(position) = world_by_vertex.get(vertex).copied() else {
+                return Err((
+                    ordinary,
+                    format!("曲がる中割りの公式頂点{vertex}に3D位置がありません"),
+                ));
+            };
+            polygon.push(position);
+        }
+        ordinary.frame.faces[frame_index].polygon = polygon;
+    }
+    // work_cpを引数に残しておくことで、射影元が一時CPであることを型上も明示する。
+    debug_assert!(work_cp.vertices.len() >= original_cp.vertices.len());
+    Ok(ordinary)
 }
 
 /// 手順を `up_to` まで再生した結果が平坦(全ての面がz≈0の平面に乗る)なら、
@@ -4976,6 +5171,19 @@ mod tests {
         let mut changed_faces = faces.clone();
         changed_faces.reverse();
         assert!(!snapshot.matches(&document, &changed_faces));
+
+        let mut curved_marker = document.clone();
+        curved_marker.sequence[0].curved_inside_reverse = Some(true);
+        assert!(
+            !snapshot.matches(&curved_marker, &faces),
+            "曲がる中割りの印はendpoint cache keyの一部である"
+        );
+        let mut ordinary_marker = document.clone();
+        ordinary_marker.sequence[0].curved_inside_reverse = Some(false);
+        assert!(
+            !snapshot.matches(&ordinary_marker, &faces),
+            "NoneとSome(false)は再生結果が同じでも文書bitは異なる"
+        );
     }
 
     #[test]
