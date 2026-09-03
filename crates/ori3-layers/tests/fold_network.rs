@@ -37,7 +37,6 @@ fn accordion() -> Document {
         drivers,
         layer_order: Some(points),
         alignment: None,
-        curved_inside_reverse: None,
         finish_soft: None,
         note: String::new(),
     });

@@ -38,9 +38,6 @@
 //! 重なり全体の外側へまとめて回すと4つの袋の紙が入り混じり、足1本をつまんで
 //! 中割り折りできなくなる([`each_leg_is_a_bundle_of_neighbouring_layers`])。
 
-#[path = "support/replay_marker.rs"]
-mod replay_marker;
-
 use std::collections::HashMap;
 
 use glam::DVec2;
@@ -1327,14 +1324,4 @@ fn frog_front_fixture_matches_read_only() {
             path.display()
         );
     }
-}
-
-#[test]
-fn curved_inside_reverse_marker_preserves_frog_replay_bits() {
-    let (document, _) = frog();
-    let (endpoints, curved_steps) =
-        replay_marker::assert_marker_preserves_all_step_endpoint_bits(&document, "カエル");
-    assert_eq!(document.sequence.len(), 14, "カエルは既存の14手");
-    assert_eq!(endpoints, 15, "0手位置を含む15 endpointをbit比較する");
-    assert_eq!(curved_steps, 4, "4本の足の中割りだけに印を立てる");
 }

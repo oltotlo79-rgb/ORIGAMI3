@@ -1517,7 +1517,6 @@ impl Session {
             drivers: self.drivers,
             layer_order: Some(layer_points),
             alignment: None,
-            curved_inside_reverse: None,
             finish_soft: None,
             note: String::new(),
         };

@@ -3393,7 +3393,6 @@ mod tests {
             drivers: Vec::new(),
             layer_order: None,
             alignment: None,
-            curved_inside_reverse: None,
             finish_soft,
             note: String::new(),
         }
@@ -4506,7 +4505,6 @@ mod tests {
                     drivers: Vec::new(),
                     layer_order: None,
                     alignment: None,
-                    curved_inside_reverse: None,
                     finish_soft: None,
                     note: "照会前の現在姿勢".to_string(),
                 },

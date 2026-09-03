@@ -257,7 +257,6 @@ pub fn crease_only_top_from_material_line(
         drivers,
         layer_order: None,
         alignment: None,
-        curved_inside_reverse: None,
         finish_soft: None,
         note: String::new(),
     };

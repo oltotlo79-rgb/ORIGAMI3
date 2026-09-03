@@ -2169,7 +2169,6 @@ mod tests {
             }],
             layer_order: None,
             alignment: None,
-            curved_inside_reverse: None,
             finish_soft: None,
             note: String::new(),
         });

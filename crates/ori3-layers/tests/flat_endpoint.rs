@@ -21,9 +21,6 @@
 //! 一方、参照どおりの折り方(この検査が作る鳥の基本形の6手)は、
 //! どの手でも食い違い **0本**で、`t = 1.00` でも収束する。
 
-#[path = "support/replay_marker.rs"]
-mod replay_marker;
-
 use std::collections::{BTreeMap, HashMap};
 
 use glam::DVec2;
@@ -208,18 +205,6 @@ fn yakko_saved_complete_layer_order_satisfies_general_constraints() {
     );
 }
 
-#[test]
-fn curved_inside_reverse_marker_preserves_yakko_replay_bits() {
-    let document = parse_fixture(include_str!(
-        "../../ori3-rigid/tests/fixtures/check-yakko.ori3"
-    ));
-    let (endpoints, curved_steps) =
-        replay_marker::assert_marker_preserves_all_step_endpoint_bits(&document, "やっこさん");
-    assert_eq!(document.sequence.len(), 1, "やっこさんは既存の1手");
-    assert_eq!(endpoints, 2, "0手位置を含む2 endpointをbit比較する");
-    assert_eq!(curved_steps, 0, "やっこさんには中割り手順がない");
-}
-
 /// 平らに畳めない記録は、黙って別の形に置き換えず、求まらなかったと知らせる。
 ///
 /// 標本 `fixtures/petal-not-flat-foldable.ori3` は、提案の探索が実際に作った
@@ -356,7 +341,6 @@ fn parse_fixture(source: &str) -> Document {
                     .collect(),
             ),
             alignment: None,
-            curved_inside_reverse: None,
             finish_soft: None,
             note: String::new(),
         })

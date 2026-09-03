@@ -1851,7 +1851,6 @@ fn nonflat_pose_step_from_input(
         drivers,
         layer_order: None,
         alignment: None,
-        curved_inside_reverse: None,
         finish_soft: None,
         note: "折った形を再現してから折り目を付ける".to_string(),
     })
@@ -3248,7 +3247,6 @@ mod tests {
             drivers,
             layer_order: Some(layer_order),
             alignment: None,
-            curved_inside_reverse: None,
             finish_soft: None,
             note: "固定標本の期待平坦姿勢".to_string(),
         });
@@ -3802,7 +3800,6 @@ mod tests {
             drivers: Vec::new(),
             layer_order: None,
             alignment: None,
-            curved_inside_reverse: None,
             finish_soft: None,
             note: String::new(),
         }
@@ -5060,7 +5057,6 @@ mod tests {
             drivers,
             layer_order,
             alignment,
-            curved_inside_reverse: _,
             finish_soft,
             note,
         } = fold_step;

@@ -154,7 +154,6 @@ fn skipped_recorded_step_is_rejected_atomically() {
         }],
         layer_order: None,
         alignment: None,
-        curved_inside_reverse: None,
         finish_soft: None,
         note: String::new(),
     };

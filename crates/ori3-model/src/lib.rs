@@ -146,9 +146,6 @@ pub struct FoldStep {
     /// 合わせ折りで選んだ点・線。旧形式の作品では存在しないため任意。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alignment: Option<FoldAlignment>,
-    /// 曲がる中割りとして記録した手順か。旧形式の作品では存在しないため任意。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub curved_inside_reverse: Option<bool>,
     /// この仕上げ位置で確定したたわみの3値。旧作品・通常の折り手順では任意。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finish_soft: Option<FinishSoftSettings>,
