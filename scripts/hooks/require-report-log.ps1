@@ -271,6 +271,17 @@ try {
             Write-ToolDeny 'AGENT_INSTRUCTION_CHECKER_MISSING: scripts/check-agent-instruction.ps1 が見つかりません。'
         }
         $expectedModel = Get-ExpectedModelName -ToolInput $payload.tool_input
+        if ($tool -eq 'Agent') {
+            # Agent投入（Claudeサブエージェント）だけを対象にする。mcp__codex__codex等の
+            # Codex側toolはmodel省略時の既存の挙動（項目12照合を飛ばす）を変えない。
+            $subagentType = (Get-ObjectStringProperty -Object $payload.tool_input -Name 'subagent_type').Trim().ToLowerInvariant()
+            if ($subagentType -eq 'fork') {
+                Write-ToolDeny 'DELEGATION_MODEL_REQUIRED: Agent投入のsubagent_type=forkはmodelを指定しても常に親(統括)のmodelを引き継ぐため許可しません。opus または sonnet を明示したmodelと、forkではないsubagent_typeで投入してください。'
+            }
+            if ([string]::IsNullOrWhiteSpace($expectedModel)) {
+                Write-ToolDeny 'DELEGATION_MODEL_REQUIRED: Agent投入にmodelがありません。opus または sonnet を明示してください。'
+            }
+        }
         $instructionCheck = Invoke-AgentInstructionCheck -ScriptPath $checkerPath -RepositoryRoot $root -InstructionText $instruction -ExpectedModel $expectedModel
         if ($instructionCheck.ExitCode -ne 0) {
             $detail = [regex]::Replace($instructionCheck.Output, '\s+', ' ').Trim()

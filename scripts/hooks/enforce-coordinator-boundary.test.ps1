@@ -691,6 +691,12 @@ try {
     $otherPowerShell = Join-Path $Repository "scripts\powershell.exe"
     $sample = Join-Path $Repository "docs\sample.md"
     $commitMessage = Join-Path $Repository "scratchpad\commit-message.txt"
+    $worktreeAddPath = Join-Path $TempBase "ori3-wt-boundary-test-add"
+    $worktreeDetachPath = Join-Path $TempBase "ori3-wt-boundary-test-detach"
+    $worktreeRemovePath = Join-Path $TempBase "ori3-wt-boundary-test-remove"
+    $worktreeWrongPrefixPath = Join-Path $TempBase "not-ori3-wt-boundary-test"
+    $worktreeNestedPath = Join-Path $worktreeAddPath "nested"
+    $worktreeRelativePath = "ori3-wt-boundary-test-relative"
     $watchArgumentList = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$watch`" -DefinitionPath `"$watchDefinition`" -RepositoryRoot `"$Repository`" -IntervalMinutes 10 -StaleAfterMinutes 40"
     $detachedWatchCommand = "Start-Process -FilePath '$PowerShellPath' -ArgumentList '$watchArgumentList' -WindowStyle Hidden"
     [IO.File]::WriteAllText($reportWaitPath, "report wait fixture`r`n", $script:Utf8NoBom)
@@ -722,6 +728,10 @@ try {
         @{ Name = "git ahead log"; Command = "git log --oneline origin/main..HEAD" },
         @{ Name = "git ahead count"; Command = "git rev-list --count origin/main..HEAD" },
         @{ Name = "git worktree porcelain"; Command = "git worktree list --porcelain" },
+        @{ Name = "git worktree add exact temp path at HEAD"; Command = "git worktree add '$worktreeAddPath' HEAD" },
+        @{ Name = "git worktree add detached temp path at HEAD"; Command = "git worktree add --detach '$worktreeDetachPath' HEAD" },
+        @{ Name = "git worktree remove exact temp path"; Command = "git worktree remove '$worktreeRemovePath'" },
+        @{ Name = "git worktree prune"; Command = "git worktree prune" },
         @{ Name = "git refs/wip inventory"; Command = "git for-each-ref refs/wip" },
         @{ Name = "git write-tree"; Command = "git write-tree" },
         @{ Name = "git commit-tree snapshot"; Command = "git commit-tree a111111111111111111111111111111111111111 -p HEAD -m 'WIP snapshot'" },
@@ -823,6 +833,18 @@ try {
         @{ Name = "git commit message outside repo"; Command = "git commit -F '..\message.txt'" },
         @{ Name = "git for-each-ref arbitrary refs"; Command = "git for-each-ref refs/heads" },
         @{ Name = "git worktree list unsafe option"; Command = "git worktree list --expire now" },
+        @{ Name = "git worktree add non-HEAD commit-ish"; Command = "git worktree add '$worktreeAddPath' main" },
+        @{ Name = "git worktree add relative path"; Command = "git worktree add '$worktreeRelativePath' HEAD" },
+        @{ Name = "git worktree add wrong leaf prefix"; Command = "git worktree add '$worktreeWrongPrefixPath' HEAD" },
+        @{ Name = "git worktree add nested under a ori3-wt- directory"; Command = "git worktree add '$worktreeNestedPath' HEAD" },
+        @{ Name = "git worktree add unlisted option"; Command = "git worktree add --no-checkout '$worktreeAddPath' HEAD" },
+        @{ Name = "git worktree add -b creates a branch and is denied"; Command = "git worktree add -b coordinator-branch '$worktreeAddPath' HEAD" },
+        @{ Name = "git worktree add --force is denied"; Command = "git worktree add --force '$worktreeAddPath' HEAD" },
+        @{ Name = "git worktree remove with force"; Command = "git worktree remove '$worktreeRemovePath' --force" },
+        @{ Name = "git worktree remove wrong leaf prefix"; Command = "git worktree remove '$worktreeWrongPrefixPath'" },
+        @{ Name = "git worktree remove relative path"; Command = "git worktree remove '$worktreeRelativePath'" },
+        @{ Name = "git worktree prune with argument"; Command = "git worktree prune '$worktreeAddPath'" },
+        @{ Name = "git worktree bare subcommand"; Command = "git worktree" },
         @{ Name = "git write-tree option"; Command = "git write-tree --missing-ok" },
         @{ Name = "git commit-tree signing"; Command = "git commit-tree a111111111111111111111111111111111111111 -S -m snapshot" },
         @{ Name = "git commit-tree no message"; Command = "git commit-tree a111111111111111111111111111111111111111 -p HEAD" },

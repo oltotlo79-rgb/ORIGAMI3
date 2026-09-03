@@ -228,7 +228,8 @@ try { $text = $reader.ReadToEnd() } finally { $reader.Dispose() }
 $observedOne = "統括です、E*接続しました"
 $observedTwo = "統括です、E*接続しました。墁E��の判定�E正しく動いてぁE��す"
 $utf8Exact = "統括です。**接続しました。境界の判定は正しく動いています。回帰標本: $observedOne / $observedTwo"
-if ($ReadFromStdin -and $VerifyLiveBaseline -and $ExpectedModel -eq "opus" -and ($text.Contains("HOOK_TEST_PASS") -or $text -eq $utf8Exact)) {
+$modelAcceptable = [string]::IsNullOrWhiteSpace($ExpectedModel) -or (@("opus", "sonnet") -contains $ExpectedModel)
+if ($ReadFromStdin -and $VerifyLiveBaseline -and $modelAcceptable -and ($text.Contains("HOOK_TEST_PASS") -or $text -eq $utf8Exact)) {
     Write-Output "[OK] STUB_INSTRUCTION"
     exit 0
 }
@@ -294,6 +295,56 @@ exit 1
     else {
         Write-Warning "actual settings connection check skipped only for the coordinator's recorded UTF-8 repair disconnect"
     }
+
+    Write-Host "[12] Agent investment with model=opus and a non-fork subagent_type still reaches the checker (positive)"
+    $opusModelPayload = @{ tool_name = "Agent"; tool_input = @{ prompt = "HOOK_TEST_PASS"; model = "opus"; subagent_type = "general-purpose" } } | ConvertTo-Json -Compress -Depth 5
+    $opusModelResult = Invoke-RequireReport -Payload $opusModelPayload
+    Assert-Equal $opusModelResult.ExitCode 0 "model=opus hook invocation must complete" $opusModelResult.Output
+    Assert-Equal $opusModelResult.Output.Trim() "" "model=opus with a non-fork subagent_type must be permitted" $opusModelResult.Output
+
+    Write-Host "[13] Agent investment with model=sonnet and a non-fork subagent_type still reaches the checker (positive)"
+    $sonnetModelPayload = @{ tool_name = "Agent"; tool_input = @{ prompt = "HOOK_TEST_PASS"; model = "sonnet"; subagent_type = "general-purpose" } } | ConvertTo-Json -Compress -Depth 5
+    $sonnetModelResult = Invoke-RequireReport -Payload $sonnetModelPayload
+    Assert-Equal $sonnetModelResult.ExitCode 0 "model=sonnet hook invocation must complete" $sonnetModelResult.Output
+    Assert-Equal $sonnetModelResult.Output.Trim() "" "model=sonnet with a non-fork subagent_type must be permitted" $sonnetModelResult.Output
+
+    Write-Host "[14] Agent investment with no model field at all is denied before the checker runs (negative)"
+    $noModelPayload = @{ tool_name = "Agent"; tool_input = @{ prompt = "HOOK_TEST_PASS"; subagent_type = "general-purpose" } } | ConvertTo-Json -Compress -Depth 5
+    $noModelResult = Invoke-RequireReport -Payload $noModelPayload
+    Assert-Equal $noModelResult.ExitCode 0 "missing-model denial must use the hook protocol" $noModelResult.Output
+    $noModelJson = $noModelResult.Output | ConvertFrom-Json
+    Assert-Equal $noModelJson.hookSpecificOutput.permissionDecision "deny" "Agent投入でmodelが無ければ拒否すること" $noModelResult.Output
+    Assert-Contains $noModelJson.hookSpecificOutput.permissionDecisionReason "DELEGATION_MODEL_REQUIRED" "missing-model denial must name DELEGATION_MODEL_REQUIRED"
+    Assert-Contains $noModelJson.hookSpecificOutput.permissionDecisionReason "opus または sonnet を明示" "missing-model denial must instruct opus/sonnet"
+
+    Write-Host "[15] Agent investment with an empty-string model is denied the same as a missing model (negative)"
+    $blankModelPayload = @{ tool_name = "Agent"; tool_input = @{ prompt = "HOOK_TEST_PASS"; model = ""; subagent_type = "general-purpose" } } | ConvertTo-Json -Compress -Depth 5
+    $blankModelResult = Invoke-RequireReport -Payload $blankModelPayload
+    $blankModelJson = $blankModelResult.Output | ConvertFrom-Json
+    Assert-Equal $blankModelJson.hookSpecificOutput.permissionDecision "deny" "空文字のmodelも拒否すること" $blankModelResult.Output
+    Assert-Contains $blankModelJson.hookSpecificOutput.permissionDecisionReason "DELEGATION_MODEL_REQUIRED" "empty-string model denial must name DELEGATION_MODEL_REQUIRED"
+
+    Write-Host "[16] Agent investment with subagent_type=fork is denied even when model is set (negative)"
+    $forkPayload = @{ tool_name = "Agent"; tool_input = @{ prompt = "HOOK_TEST_PASS"; model = "opus"; subagent_type = "fork" } } | ConvertTo-Json -Compress -Depth 5
+    $forkResult = Invoke-RequireReport -Payload $forkPayload
+    $forkJson = $forkResult.Output | ConvertFrom-Json
+    Assert-Equal $forkJson.hookSpecificOutput.permissionDecision "deny" "subagent_type=forkはmodel指定があっても拒否すること" $forkResult.Output
+    Assert-Contains $forkJson.hookSpecificOutput.permissionDecisionReason "DELEGATION_MODEL_REQUIRED" "fork denial must name DELEGATION_MODEL_REQUIRED"
+    Assert-Contains $forkJson.hookSpecificOutput.permissionDecisionReason "opus または sonnet を明示" "fork denial must instruct opus/sonnet"
+
+    Write-Host "[17] Agent investment with an out-of-policy model value fails closed via the existing throw (negative)"
+    $badModelPayload = @{ tool_name = "Agent"; tool_input = @{ prompt = "HOOK_TEST_PASS"; model = "fable"; subagent_type = "general-purpose" } } | ConvertTo-Json -Compress -Depth 5
+    $badModelResult = Invoke-RequireReport -Payload $badModelPayload
+    Assert-Equal $badModelResult.ExitCode 0 "許可値以外のmodelでもhookはexit 0でdenyを返すこと（例外で通過させない）" $badModelResult.Output
+    $badModelJson = $badModelResult.Output | ConvertFrom-Json
+    Assert-Equal $badModelJson.hookSpecificOutput.permissionDecision "deny" "許可値以外のmodel(fable)は拒否すること" $badModelResult.Output
+    Assert-Contains $badModelJson.hookSpecificOutput.permissionDecisionReason "fable" "許可値以外のmodel denialは実際に渡された値を含むこと"
+
+    Write-Host "[18] mcp__codex__codex without a model is unaffected by the Agent-only model requirement (negative-adjacent regression guard)"
+    $codexNoModelPayload = @{ tool_name = "mcp__codex__codex"; tool_input = @{ prompt = "HOOK_TEST_PASS" } } | ConvertTo-Json -Compress -Depth 5
+    $codexNoModelResult = Invoke-RequireReport -Payload $codexNoModelPayload
+    Assert-Equal $codexNoModelResult.ExitCode 0 "codex hook invocation must complete" $codexNoModelResult.Output
+    Assert-Equal $codexNoModelResult.Output.Trim() "" "mcp__codex__codexはmodel省略でも従来通り許可されること（Codex側の扱いは変えない）" $codexNoModelResult.Output
 
     Write-Host "[EVIDENCE] missing=$($missing.ExitCode); denied=$($denied.ExitCode); released=$($released.ExitCode); reblocked=$($deniedAgain.ExitCode); restored=$($restored.ExitCode)"
     Write-Host "require-report-log self-test passed: $script:AssertionCount assertions"

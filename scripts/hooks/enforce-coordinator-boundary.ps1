@@ -289,7 +289,7 @@ function Get-DenialReason {
     )
 
     $allowed = @(
-        "ALLOW-1: literal-path git add, commit/push/tag, origin fetch, read-only state/diff, and the exact snapshot-worktrees.ps1 normal/-Check refs/wip snapshot plumbing",
+        "ALLOW-1: literal-path git add, commit/push/tag, origin fetch, read-only state/diff, the exact git worktree add/prune/remove forms for temp ori3-wt- paths at HEAD (worktree list already allowed as a read), and the exact snapshot-worktrees.ps1 normal/-Check refs/wip snapshot plumbing",
         "ALLOW-2: exact scripts/check.ps1, check-ci.ps1, and check-release-ready.ps1 quality gates; plus scripts/check-receipt.ps1 -RepairSigningKey -RepoRoot <this repository> because the coordinator identity must create its own Windows DPAPI signing key",
         "ALLOW-3: literal file reads; rg requires the prohibited-document exclusion glob",
         "ALLOW-4: read-only process and free-capacity inspection; exact local report-time read by Get-Date -Format 'yyyy-MM-dd HH:mm'",
@@ -1040,10 +1040,28 @@ function Test-GitInvocation {
             return New-PolicyDecision $true "git-read" "allowed git branch read" $true $false
         }
     }
-    if ($subcommand -eq "worktree" -and
-        (($arguments.Count -eq 1 -and $arguments[0].ToLowerInvariant() -eq "list") -or
-         ($arguments.Count -eq 2 -and $arguments[0].ToLowerInvariant() -eq "list" -and $arguments[1].ToLowerInvariant() -eq "--porcelain"))) {
-        return New-PolicyDecision $true "git-read" "allowed exact git worktree list" $true $false
+    if ($subcommand -eq "worktree") {
+        if (($arguments.Count -eq 1 -and $arguments[0].ToLowerInvariant() -eq "list") -or
+            ($arguments.Count -eq 2 -and $arguments[0].ToLowerInvariant() -eq "list" -and $arguments[1].ToLowerInvariant() -eq "--porcelain")) {
+            return New-PolicyDecision $true "git-read" "allowed exact git worktree list" $true $false
+        }
+        if ($arguments.Count -ge 1 -and $arguments[0].ToLowerInvariant() -eq "prune") {
+            if ($arguments.Count -eq 1) {
+                return New-PolicyDecision $true "git-write" "allowed exact git worktree prune"
+            }
+            return New-PolicyDecision $false "git-write" "git worktree prune takes no arguments in the coordinator allowlist"
+        }
+        if ($arguments.Count -ge 1 -and $arguments[0].ToLowerInvariant() -eq "add") {
+            $addArguments = @()
+            if ($arguments.Count -gt 1) { $addArguments = @($arguments[1..($arguments.Count - 1)]) }
+            return Test-WorktreeAddInvocation -Arguments $addArguments
+        }
+        if ($arguments.Count -ge 1 -and $arguments[0].ToLowerInvariant() -eq "remove") {
+            $removeArguments = @()
+            if ($arguments.Count -gt 1) { $removeArguments = @($arguments[1..($arguments.Count - 1)]) }
+            return Test-WorktreeRemoveInvocation -Arguments $removeArguments
+        }
+        return New-PolicyDecision $false "git-write" "git worktree is limited to the exact list/add/prune/remove forms in the coordinator allowlist"
     }
     if ($subcommand -eq "for-each-ref") {
         if ($arguments.Count -eq 1 -and $arguments[0] -ceq "refs/wip") {
@@ -1113,6 +1131,96 @@ function Test-GitInvocation {
         }
     }
     return New-PolicyDecision $false "git" "git subcommand is outside commit/push/tag and state/diff reads"
+}
+
+function Test-CoordinatorWorktreePath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not [IO.Path]::IsPathRooted($Path)) { return $null }
+    try {
+        $normalized = [IO.Path]::GetFullPath($Path).TrimEnd([char[]]"\/")
+    }
+    catch {
+        return $null
+    }
+    $tempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([char[]]"\/")
+    $parent = [IO.Path]::GetDirectoryName($normalized)
+    $leaf = [IO.Path]::GetFileName($normalized)
+    if ([string]::IsNullOrWhiteSpace($parent) -or [string]::IsNullOrWhiteSpace($leaf)) {
+        return $null
+    }
+    $pathComparison = [StringComparison]::Ordinal
+    if ([IO.Path]::DirectorySeparatorChar -eq [char]92) {
+        $pathComparison = [StringComparison]::OrdinalIgnoreCase
+    }
+    if (-not [string]::Equals($parent, $tempBase, $pathComparison)) {
+        return $null
+    }
+    if (-not $leaf.StartsWith("ori3-wt-", $pathComparison)) {
+        return $null
+    }
+    return $normalized
+}
+
+function Test-WorktreeAddInvocation {
+    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+
+    # Only the exact form that creates a detached-HEAD worktree is allowed here.
+    # -b creates a new branch (a git write) and --force allows overwriting an
+    # already-registered path, so neither is recognized; an unrecognized token
+    # is pushed onto $positional, which then fails the exact-2-argument check below.
+    $detachSeen = $false
+    $positional = New-Object "Collections.Generic.List[string]"
+    $index = 0
+    while ($index -lt $Arguments.Count) {
+        $token = $Arguments[$index]
+        if ($token -ceq "--detach") {
+            if ($detachSeen) {
+                return New-PolicyDecision $false "git-write" "git worktree add --detach may appear at most once"
+            }
+            $detachSeen = $true
+            $index++
+            continue
+        }
+        $positional.Add($token)
+        $index++
+    }
+    if ($positional.Count -ne 2) {
+        return New-PolicyDecision $false "git-write" "git worktree add requires exactly one literal absolute path and the literal commit-ish HEAD; only --detach is a recognized option"
+    }
+    $pathArgument = $positional[0]
+    $commitish = $positional[1]
+    if ($commitish -cne "HEAD") {
+        return New-PolicyDecision $false "git-write" "git worktree add is limited to the literal commit-ish HEAD"
+    }
+    if (-not [IO.Path]::IsPathRooted($pathArgument)) {
+        return New-PolicyDecision $false "git-write" "git worktree add requires an absolute path"
+    }
+    $allowedPath = Test-CoordinatorWorktreePath -Path $pathArgument
+    if ($null -eq $allowedPath) {
+        return New-PolicyDecision $false "git-write" "git worktree add path must be directly under the temp directory with a leaf folder name starting with ori3-wt-"
+    }
+    return New-PolicyDecision $true "git-write" "allowed exact git worktree add for a temp ori3-wt- path at HEAD"
+}
+
+function Test-WorktreeRemoveInvocation {
+    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+
+    if ($Arguments.Count -ne 1) {
+        return New-PolicyDecision $false "git-write" "git worktree remove requires exactly one literal absolute path and no options"
+    }
+    $pathArgument = $Arguments[0]
+    if ($pathArgument.StartsWith("-")) {
+        return New-PolicyDecision $false "git-write" "git worktree remove does not accept options such as --force"
+    }
+    if (-not [IO.Path]::IsPathRooted($pathArgument)) {
+        return New-PolicyDecision $false "git-write" "git worktree remove requires an absolute path"
+    }
+    $allowedPath = Test-CoordinatorWorktreePath -Path $pathArgument
+    if ($null -eq $allowedPath) {
+        return New-PolicyDecision $false "git-write" "git worktree remove path must be directly under the temp directory with a leaf folder name starting with ori3-wt-"
+    }
+    return New-PolicyDecision $true "git-write" "allowed exact git worktree remove for a temp ori3-wt- path"
 }
 
 function Test-RgInvocation {
