@@ -51,6 +51,20 @@ function Get-Sha256HexFromText {
     return Get-Sha256HexFromBytes -Bytes $utf8NoBom.GetBytes($Text)
 }
 
+function Get-Sha256HexFromNormalizedText {
+    # gitはテキストファイルをLFで保存する。作業ツリーは core.autocrlf や
+    # checkout filterの都合でCRLFへ変換されていたり、CRLFとLFが混在して
+    # いたりする(実測: docs/implementation-roadmap.mdが991 CRLF+3 LF混在)。
+    # roadmap_sha256 / policy_sha256は「gitが保存するbytes(LF)」を一意に
+    # hashするため、CRLF/CRをすべてLFへ正規化してからhashする。これにより
+    # 通常経路(作業ツリーの生bytes)・staged経路(git cat-file --filtersの
+    # index bytes)・履歴復元経路(過去commitのblobにcheckout filterを適用
+    # したbytes)のどれから来たbytesでも、同じ正規化hashへ収束する。
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
+    $normalizedText = $Text.Replace("`r`n", "`n").Replace("`r", "`n")
+    return Get-Sha256HexFromText -Text $normalizedText
+}
+
 try {
     $policyText = Read-Utf8Text -Path $PolicyPath
     $policy = $policyText | ConvertFrom-Json
@@ -72,8 +86,8 @@ try {
     }
     $utf8Strict = New-Object Text.UTF8Encoding($false, $true)
     $roadmapText = $utf8Strict.GetString($roadmapBytes)
-    $roadmapSha256 = Get-Sha256HexFromBytes -Bytes $roadmapBytes
-    $policySha256 = Get-Sha256HexFromText -Text $policyText
+    $roadmapSha256 = Get-Sha256HexFromNormalizedText -Text $roadmapText
+    $policySha256 = Get-Sha256HexFromNormalizedText -Text $policyText
 
     $outsideByHash = @{}
     $outsideIds = @{}

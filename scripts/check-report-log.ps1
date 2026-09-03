@@ -336,12 +336,17 @@ function Test-HistoricalSnapshotEvidence {
     $utf8Strict = New-Object System.Text.UTF8Encoding($false, $true)
     $roadmapBytes = Get-TrackedFileBytesAtCommit -Commit $introductionCommit -RelativePath 'docs/implementation-roadmap.md'
     $policyBytes = Get-TrackedFileBytesAtCommit -Commit $introductionCommit -RelativePath 'scripts/roadmap-status-policy.json'
-    if ($null -eq $roadmapBytes -or $null -eq $policyBytes -or
-        (Get-BytesSha256 -Bytes $roadmapBytes) -ne $Accounting.RoadmapSha256 -or
-        (Get-BytesSha256 -Bytes $policyBytes) -ne $Accounting.PolicySha256) {
+    if ($null -eq $roadmapBytes -or $null -eq $policyBytes) {
         $script:historicalSnapshotEvidence[$cacheKey] = $false
         return $false
     }
+    # roadmap_sha256 / policy_sha256はget-roadmap-status.ps1の内部でだけ計算する
+    # (CRLF/CRをLFへ正規化してからhashする)。ここで独自にGet-BytesSha256を
+    # bytesへ直接かけて$Accountingと比べると、正規化前のbytesに対する判定に
+    # なり、通常/staged/履歴復元の3経路が別々の関数でhashを判定してしまう
+    # (past bug: 同じ判定を2箇所に別々に書いて誤拒否した)。判定は必ず下の
+    # subprocess呼び出し(get-roadmap-status.ps1)が返すreport_snapshot_line
+    # の完全一致だけで行う。
 
     $tempParent = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd([char[]]'\/')
     $tempName = 'ori3-report-history-{0}' -f [Guid]::NewGuid().ToString('N')

@@ -11,7 +11,7 @@ if ([string]::IsNullOrWhiteSpace($ScopeScriptPath)) {
 }
 $script:Assertions = 0
 $script:FixtureAssertions = 0
-$script:AllowedScopes = @('whole', 'bounded', 'local', 'denied-mention', 'ambiguous')
+$script:AllowedScopes = @('whole', 'bounded', 'local', 'quoted-instruction', 'denied-mention', 'ambiguous')
 $script:AllowedKinds = @('universal', 'remainder', 'progress')
 $script:AllowedTemporal = @('current', 'past', 'future', 'denied')
 $script:RoadmapTotal = 186
@@ -350,6 +350,80 @@ function Invoke-ContractAssertions {
     Assert-NoneCompatible -Text '朝は 168/16/184 だった。項目を2つ増やしたうえで、残りが減っている。' -Expected $true -Label 'past whole does not claim current snapshot'
     Assert-NoneCompatible -Text 'これが終われば734行が完成し、残りが12件になる。' -Expected $true -Label 'future whole does not claim current snapshot'
 
+    # 保留10件（前担当Eの報告書「E. 保留（10件、理由つき）」）。原文から1文字も
+    # 変えずに複製し、いずれも Roadmap-Claim: none と両立する(local又は
+    # quoted-instruction)ことを固定する。
+    $holdbackFixtures = @(
+        [pscustomobject]@{
+            Name = '2026-09-03 21:48 crane CP subject exclusion'
+            Lines = @('**「solver が収束していない」のではなく「solver は1回も反復していない」。**正本の一括collapse は102本の折り目を全て hard で ±180° に固定するため自由変数が0本になり（`solver.rs` 817-824行の `vars` が空）、`iterations=0`。')
+        },
+        [pscustomobject]@{
+            Name = '2026-09-03 07:18 crane CP subject exclusion (への復帰)'
+            Lines = @('**solver内部の `1e-13` 基準では正本と同じ既知の `converged=false / best_effort=true` だが、EPS判定・角度一致・継ぎ目・正本への復帰はすべて合格。**')
+        },
+        [pscustomobject]@{
+            Name = '2026-09-03 19:58 quoted-instruction via heading blockquote'
+            Lines = @('### 利用者の指示', '', '> **Claudeで全ての作業を再開し続けて。メインエージェントのFable5.1は作業は絶対にせず監視、詳細な指示、判断、Github操作、アプリ立ち上げのみ実施を許可する。サブエージェントで作業をしてサブエージェントではFableは使用せずopus5とsonnet5を使い分け質を落とさない範囲でトークンを節約し作業すること。**')
+        },
+        [pscustomobject]@{
+            Name = '2026-09-02 17:52 folded-crane dictionary noun after heading blockquote'
+            Lines = @('### 利用者の要求との対応', '', '> **全ての折り鶴はこれを折れるようにすること。私へ提出する動画もです。**')
+        },
+        [pscustomobject]@{
+            Name = '2026-09-02 04:18 folded-crane dictionary noun inside inline quote'
+            Lines = @('利用者の指示「全ての折り鶴はこれを折れるようにすること。動画もです」に直結する。')
+        },
+        [pscustomobject]@{
+            Name = '2026-09-02 02:58 folded-crane dictionary noun inside unattributed quote'
+            Lines = @('「アプリが出すすべての折り鶴と、利用者へ提出する動画は、この展開図を折れること」を、以後の前提として指示に入れた。')
+        },
+        [pscustomobject]@{
+            Name = '2026-09-02 02:52 folded-crane dictionary noun after heading blockquote'
+            Lines = @('### 利用者の指示との対応', '', '> **全ての折り鶴はこれを折れるようにすることと指示しています。私へ提出する動画もです。**')
+        },
+        [pscustomobject]@{
+            Name = '2026-09-02 10:33 heading itself, 箇所 dictionary noun'
+            Lines = @('## 2026-09-02 10:33 — 途中の動きも貫通0。危ない箇所は全て通過。残るは設計。待機の仕組みが実際に働いた')
+        },
+        [pscustomobject]@{
+            Name = '2026-09-03 17:22 対策 dictionary noun'
+            Lines = @('物的対策      8件（すべて既存の改定）。実地で働いた')
+        },
+        [pscustomobject]@{
+            Name = '2026-09-02 12:53 手順 dictionary noun inside rules-doc quotation'
+            Lines = @('> **達成単位は小さく区切り、「144手順すべて」のような大目標を1回で依頼しない。**')
+        }
+    )
+    foreach ($fixture in $holdbackFixtures) {
+        $fixtureFindings = @(Get-CheckedFindings -Text $fixture.Lines)
+        Assert-True ($fixtureFindings.Count -gt 0) "holdback fixture has findings: $($fixture.Name)"
+        Assert-True (Test-NoneCompatible -Findings $fixtureFindings) "holdback fixture is none-compatible: $($fixture.Name)"
+        Assert-True (@($fixtureFindings | Where-Object { $_.Scope -eq 'ambiguous' -or $_.Scope -eq 'whole' -or $_.Scope -eq 'bounded' }).Count -eq 0) "holdback fixture has no residual whole/bounded/ambiguous finding: $($fixture.Name)"
+    }
+    Assert-Equal 10 $holdbackFixtures.Count 'all ten held-back diagnostics are fixed as fixtures'
+
+    # 負例: roadmapの会計語彙は、除外語(正本CP・正本の展開図等・正本への復帰)に
+    # 含まれないかぎり引き続きwholeのまま。緩和していないことを固定する。
+    [void](Assert-SingleFinding -Text '正本の未完了は11件で、今朝と同じ。' -Scope whole -Kind remainder -Temporal current -Count 11 -Label 'negative: roadmap 正本の未完了 stays whole')
+    [void](Assert-SingleFinding -Text '正本の残りは11件から8件になる。' -Scope whole -Kind remainder -Temporal current -Count 11 -Label 'negative: roadmap 正本の残り stays whole')
+    [void](Assert-SingleFinding -Text '正本186項目すべて完了と判定した。' -Scope whole -Kind universal -Temporal current -Count 186 -Label 'negative: 正本+bare number subject stays whole (not excluded)')
+    [void](Assert-SingleFinding -Text '正本175/186まで進んだ。' -Scope whole -Kind progress -Temporal current -Count 175 -Label 'negative: 正本 N/186 stays whole')
+
+    # 負例: blockquoteの外側の断言、利用者引用でないblockquoteは、見出し2形の
+    # 条件が無ければ従来どおりwhole。quoted-instructionへ広げていないことを固定。
+    Assert-NoneCompatible -Text @('### 利用者の要求との対応2', '', '> **正本はすべて完了**') -Expected $false -Label 'negative: blockquote without one of the four required headings stays whole'
+    Assert-NoneCompatible -Text @('利用者の指示は明確で、正本はすべて完了と判定できる。') -Expected $false -Label 'negative: mention of 利用者の指示 without an immediate quote stays whole'
+    Assert-NoneCompatible -Text @('### 利用者の要求', '', '> **正本はすべて完了した。**') -Expected $false -Label 'negative: heading not among the four required headings stays whole'
+    Assert-NoneCompatible -Text @('利用者の指示「進めること」の後、正本の残り11件は変わらない。') -Expected $false -Label 'negative: trigger outside the quoted span stays whole'
+    Assert-NoneCompatible -Text @('### 利用者の指示', '', 'メモ: 正本はすべて完了した。') -Expected $false -Label 'negative: non-blockquote line after the heading stays whole'
+
+    # 正例: quoted-instruction は辞書に無い語でも、指定した2形だけで none と両立する。
+    [void](Assert-SingleFinding -Text @('### 利用者の指示', '', '> **すべてやり直して、最初から確認すること。**') -Scope quoted-instruction -Kind universal -Temporal current -ExpectedLine 3 -Label 'quoted-instruction: heading blockquote form, no dictionary noun')
+    [void](Assert-SingleFinding -Text @('利用者の判断「すべてやり直すこと」を優先する。') -Scope quoted-instruction -Kind universal -Temporal current -Label 'quoted-instruction: inline quote form, no dictionary noun')
+    Assert-NoneCompatible -Text @('### 利用者の指示', '', '> **すべてやり直して、最初から確認すること。**') -Expected $true -Label 'quoted-instruction heading form stays none-compatible'
+    Assert-NoneCompatible -Text @('利用者の判断「すべてやり直すこと」を優先する。') -Expected $true -Label 'quoted-instruction inline form stays none-compatible'
+
     # CLI mode is a supported public entry point in addition to dot-sourcing.
     $powershellExe = (Get-Process -Id $PID).Path
     $cliOutput = @(& $powershellExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $resolvedScopeScript -Text '正本は175/186' -RoadmapTotal $script:RoadmapTotal -AsJson 2>&1)
@@ -421,6 +495,22 @@ function Invoke-MutationChecks {
                 Name = 'nfkc-normalization-removed'
                 Find = '$normalizedLine = $line.Normalize($normalizationForm)'
                 Replace = '$normalizedLine = $line # MUTANT: NFKC removed'
+            },
+            [pscustomobject]@{
+                # 保留10件の精度追加(2026-09-04)で新設した quoted-instruction を
+                # 常に付ける故障注入。負例(見出し無しblockquote・引用外側の断言)が
+                # whole から quoted-instruction へ誤って倒れ、赤になることを確かめる。
+                Name = 'quoted-instruction-always-attached'
+                Find = '$quotedInstructionSource = $null'
+                Replace = "`$quotedInstructionSource = 'MUTANT: always-quoted-instruction'"
+            },
+            [pscustomobject]@{
+                # 同じ委譲で追加した正本CP等の除外語を無効化する故障注入。除外語が
+                # 主語として扱われなくなり(常にwholeへ戻り)、保留10件のうち
+                # 21:48・07:18のfixtureがlocalにならず赤になることを確かめる。
+                Name = 'crane-blueprint-exclusion-disabled'
+                Find = "`$roadmapSubject = '(?:正本(?!' + `$craneBlueprintReferentExclusion + ')|実装ロードマップ|ロードマップ)'"
+                Replace = "`$roadmapSubject = '(?:正本|実装ロードマップ|ロードマップ)' # MUTANT: exclusion disabled"
             }
         )
 
@@ -443,7 +533,7 @@ function Invoke-MutationChecks {
             })
             Write-Host "[MUTATION OK] $($mutation.Name): child exit=$childExit"
         }
-        Assert-Equal 8 $mutationResults.Count 'eight isolated mutations were exercised'
+        Assert-Equal 10 $mutationResults.Count 'ten isolated mutations were exercised'
         return $mutationResults.ToArray()
     }
     finally {

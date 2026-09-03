@@ -236,7 +236,14 @@ function Get-RoadmapScopeAnchor {
     }
 
     $escapedTrigger = [regex]::Escape($Trigger)
-    $roadmapSubject = '(?:正本|実装ロードマップ|ロードマップ)'
+    # `正本CP`・`正本の折り目`・`正本への復帰`のように、`正本`が折り鶴の展開図
+    # (traditional_crane正本CP)という有限な局所対象を指しているときは、
+    # roadmap全体を指す主語ではない。実測(保留10件): `正本の一括collapseは
+    # 102本の折り目を全て` (2026-09-03 21:48) と `正本への復帰はすべて合格`
+    # (2026-09-03 07:18)。roadmapの会計(`正本の未完了`・`正本の残り`・
+    # `正本 N/186`・`正本のN件`)はこの除外語に含まれないため、引き続きwhole。
+    $craneBlueprintReferentExclusion = 'CP|CSV|\s*bundle|の(?:展開図|鶴|折り鶴|一括collapse|辺|頂点|折り目|102本|114辺|座標|CSV|fixture|bundle|資料)|への復帰|[^\p{L}\p{N}]{0,3}traditional_crane'
+    $roadmapSubject = '(?:正本(?!' + $craneBlueprintReferentExclusion + ')|実装ロードマップ|ロードマップ)'
     # `正本が求めた4/4` cites the source of a local criterion; it does not use
     # the roadmap as the asserted mother set.  Require the subject to lead
     # directly to the sensitive expression/state instead of accepting a bare
@@ -275,7 +282,11 @@ function Get-RoadmapScopeAnchor {
 }
 
 function Get-RoadmapScopeLocalNounPattern {
-    return '(?:担当|エージェント|検査|テスト|契約|標本|候補|方式|変異|ファイル|生成物|画像|参照|経路|プロセス|コマンド|故障注入|監視定義|版数|撮影|説明書|スレッド|thread\s*ID|計算|結果|出力|build|typecheck|lint|worker|フラップ|折り線|姿勢|三角形|面|層|辺|頂点|頂角|(?i:[A-Z0-9_.-]*(?:test|acceptance)[A-Z0-9_.-]*|passed|failed))'
+    # 追加は列挙した語句だけ(未知の表現をlocalと推測しない)。対策|改定|手順|作業|
+    # 段階|引数|表明|項目|箇所|動画|折り鶴|展開図|折り目|通知|警告|規約|条項|record|
+    # 見出しは、roadmap正本ではない有限な局所母集合を指す語として個別の保留record
+    # から実測して追加した(保留10件の精度改善)。候補・画像・辺・頂点は既存語彙。
+    return '(?:担当|エージェント|検査|テスト|契約|標本|候補|方式|変異|ファイル|生成物|画像|参照|経路|プロセス|コマンド|故障注入|監視定義|版数|撮影|説明書|スレッド|thread\s*ID|計算|結果|出力|build|typecheck|lint|worker|フラップ|折り線|姿勢|三角形|面|層|辺|頂点|頂角|対策|改定|手順|作業|段階|引数|表明|項目|箇所|動画|折り鶴|展開図|折り目|通知|警告|規約|条項|record|見出し|(?i:[A-Z0-9_.-]*(?:test|acceptance)[A-Z0-9_.-]*|passed|failed))'
 }
 
 function Get-ExplicitFiniteLocalContext {
@@ -471,6 +482,77 @@ function Get-CountedExecutionResultBinder {
     return "same-line-execution-result:$($context.Value):$($executionCount.Value)"
 }
 
+function Get-QuotedInstructionHeadingLineFlags {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [AllowEmptyString()]
+        [AllowNull()]
+        [string[]]$Lines
+    )
+
+    # 利用者の指示・問い・指摘・やり取りの見出し直後に続くblockquoteは、統括や
+    # 担当の言い換えではなく利用者本人の逐語であることが多い。この直後の
+    # blockquoteだけを、行内のtrigger位置に関わらずquoted-instructionの候補と
+    # する(引用の外側の断言には効かせない。規則: 見出し→(空行可)→`> `かつ`**`
+    # を含む行が続く間だけ有効。空行を挟んだ後にblockquote以外が来たら外れる)。
+    $flags = New-Object bool[] ($Lines.Count)
+    $headingPattern = '^###\s*(?:利用者の指示|利用者の問い|利用者の指摘|利用者とのやり取り)\s*$'
+    $pendingHeading = $false
+    $inRun = $false
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        $rawLine = [string]$Lines[$i]
+        if ($rawLine -match $headingPattern) {
+            $pendingHeading = $true
+            $inRun = $false
+            continue
+        }
+        if (-not $pendingHeading -and -not $inRun) {
+            continue
+        }
+        if ([string]::IsNullOrWhiteSpace($rawLine)) {
+            if ($inRun) {
+                $pendingHeading = $false
+                $inRun = $false
+            }
+            continue
+        }
+        if ($rawLine -match '^>\s' -and $rawLine -match '\*\*') {
+            $flags[$i] = $true
+            $pendingHeading = $false
+            $inRun = $true
+            continue
+        }
+        $pendingHeading = $false
+        $inRun = $false
+    }
+    # 単一要素・0要素のbool[]はPowerShellのreturnでスカラーへ展開されてしまう
+    # (=呼び出し側で.Countが無くなる)。カンマ演算子で配列のまま返す。
+    return ,$flags
+}
+
+function Get-UserInstructionQuotationBinder {
+    param(
+        [Parameter(Mandatory = $true)][string]$Segment,
+        [Parameter(Mandatory = $true)][int]$TriggerIndex
+    )
+
+    # `利用者の指示「…」`/`利用者の言葉『…』`のように、利用者本人の逐語を
+    # 「」/『』で囲った直後の内側にtriggerがあるときだけ拾う。引用の外側
+    # (同じ行の`」`の後ろにある断言)には一切効かせない。
+    foreach ($quoteMatch in [regex]::Matches(
+        $Segment,
+        '利用者の(?:指示|言葉|指摘|問い|判断)\s*[「『](?<inner>[^」』]*)[」』]',
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant
+    )) {
+        $innerGroup = $quoteMatch.Groups['inner']
+        if ($TriggerIndex -ge $innerGroup.Index -and $TriggerIndex -lt ($innerGroup.Index + $innerGroup.Length)) {
+            return $quoteMatch.Value
+        }
+    }
+    return $null
+}
+
 function New-RoadmapScopeAssertion {
     param(
         [Parameter(Mandatory = $true)][string]$Scope,
@@ -484,7 +566,7 @@ function New-RoadmapScopeAssertion {
         [Parameter(Mandatory = $true)][string]$Temporal
     )
 
-    $allowedScopes = @('whole', 'bounded', 'local', 'denied-mention', 'ambiguous')
+    $allowedScopes = @('whole', 'bounded', 'local', 'quoted-instruction', 'denied-mention', 'ambiguous')
     $allowedKinds = @('universal', 'remainder', 'progress')
     if ($allowedScopes -notcontains $Scope) {
         throw "invalid roadmap scope: $Scope"
@@ -531,6 +613,7 @@ function Get-RoadmapScopeAssertions {
     }
     end {
         $lines = @(ConvertTo-RoadmapScopeLines -Values $inputValues.ToArray())
+        $quotedInstructionHeadingFlags = Get-QuotedInstructionHeadingLineFlags -Lines $lines
         $findings = New-Object System.Collections.Generic.List[object]
         $normalizationForm = [Text.NormalizationForm]::FormKC
         $universalPattern = 'すべて|全て|全件|全部完了|これで全部|これが全部'
@@ -627,6 +710,28 @@ function Get-RoadmapScopeAssertions {
                             $findings.Add((New-RoadmapScopeAssertion `
                                 -Scope 'local' -Kind $definition.Kind -Segment $segment -Text $segmentInfo.Original `
                                 -Reason "explicit-finite-local-binder:$localBinder" -Line ($StartLine + $lineIndex) `
+                                -Trigger $trigger -Count $count -Temporal $temporal))
+                            continue
+                        }
+
+                        # 利用者本人の逐語引用の2形だけをquoted-instructionとする
+                        # (Roadmap-Claim: noneと両立。理由に引用元を残す)。この2形
+                        # 以外へは広げない: unknownをlocalと推測しないのと同じく、
+                        # unknownをquoted-instructionとも推測しない。
+                        $quotedInstructionSource = $null
+                        if ($lineIndex -lt $quotedInstructionHeadingFlags.Count -and $quotedInstructionHeadingFlags[$lineIndex]) {
+                            $quotedInstructionSource = "heading-blockquote:$($segmentInfo.Original.Trim())"
+                        }
+                        if ($null -eq $quotedInstructionSource) {
+                            $inlineQuote = Get-UserInstructionQuotationBinder -Segment $segment -TriggerIndex $triggerMatch.Index
+                            if ($null -ne $inlineQuote) {
+                                $quotedInstructionSource = "inline-quote:$inlineQuote"
+                            }
+                        }
+                        if ($null -ne $quotedInstructionSource) {
+                            $findings.Add((New-RoadmapScopeAssertion `
+                                -Scope 'quoted-instruction' -Kind $definition.Kind -Segment $segment -Text $segmentInfo.Original `
+                                -Reason "verbatim-user-quote:$quotedInstructionSource" -Line ($StartLine + $lineIndex) `
                                 -Trigger $trigger -Count $count -Temporal $temporal))
                             continue
                         }

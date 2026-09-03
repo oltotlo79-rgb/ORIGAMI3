@@ -42,6 +42,31 @@ function Get-Utf8Sha256 {
     }
 }
 
+function ConvertTo-LfNormalizedBytesForTest {
+    param([Parameter(Mandatory = $true)][byte[]]$Bytes)
+    $normalized = New-Object System.Collections.Generic.List[byte]
+    for ($index = 0; $index -lt $Bytes.Length; $index++) {
+        $byteValue = $Bytes[$index]
+        if ($byteValue -eq 13) {
+            $normalized.Add(10)
+            if ($index + 1 -lt $Bytes.Length -and $Bytes[$index + 1] -eq 10) { $index++ }
+            continue
+        }
+        $normalized.Add($byteValue)
+    }
+    return ,$normalized.ToArray()
+}
+
+function ConvertTo-CrlfBytesForTest {
+    param([Parameter(Mandatory = $true)][byte[]]$LfBytes)
+    $crlf = New-Object System.Collections.Generic.List[byte]
+    foreach ($byteValue in $LfBytes) {
+        if ($byteValue -eq 10) { $crlf.Add(13) }
+        $crlf.Add($byteValue)
+    }
+    return ,$crlf.ToArray()
+}
+
 function ConvertTo-FullWidthNumber {
     param([Parameter(Mandatory = $true)][string]$Value)
     $builder = New-Object Text.StringBuilder
@@ -272,6 +297,42 @@ try {
     Assert-True ($snapshotResult.ExitCode -eq 0) "production snapshot failed: $($snapshotResult.Output)"
     $snapshot = $snapshotResult.Output.Trim() | ConvertFrom-Json
     Assert-True ([int]$snapshot.total -gt 0 -and [int]$snapshot.audited -eq [int]$snapshot.total -and [int]$snapshot.checked + [int]$snapshot.unchecked -eq [int]$snapshot.total) "production snapshot accounting is invalid"
+
+    # snapshot hashの2経路一致(2026-09-04委譲): 作業ツリーがCRLFでもindexが
+    # 保存するLFでも、get-roadmap-status.ps1へ渡すbytesの改行が違うだけで
+    # roadmap_sha256/policy_sha256が変わらないことを実測する。本番の
+    # roadmap/policyをLF正規化した版と、そこから作ったCRLF版の両方を
+    # 別々の一時fileへ書き、同じ生成器へ通して比較する。
+    $productionRoadmapBytes = [IO.File]::ReadAllBytes($roadmapPath)
+    $productionPolicyBytes = [IO.File]::ReadAllBytes($policyPath)
+    $lfRoadmapBytes = ConvertTo-LfNormalizedBytesForTest -Bytes $productionRoadmapBytes
+    $crlfRoadmapBytes = ConvertTo-CrlfBytesForTest -LfBytes $lfRoadmapBytes
+    $lfPolicyBytes = ConvertTo-LfNormalizedBytesForTest -Bytes $productionPolicyBytes
+    $crlfPolicyBytes = ConvertTo-CrlfBytesForTest -LfBytes $lfPolicyBytes
+    $lfRoadmapPath = Join-Path $sandboxRoot 'lf-eol-roadmap.md'
+    $crlfRoadmapPath = Join-Path $sandboxRoot 'crlf-eol-roadmap.md'
+    $lfPolicyPath = Join-Path $sandboxRoot 'lf-eol-policy.json'
+    $crlfPolicyPath = Join-Path $sandboxRoot 'crlf-eol-policy.json'
+    [IO.File]::WriteAllBytes($lfRoadmapPath, $lfRoadmapBytes)
+    [IO.File]::WriteAllBytes($crlfRoadmapPath, $crlfRoadmapBytes)
+    [IO.File]::WriteAllBytes($lfPolicyPath, $lfPolicyBytes)
+    [IO.File]::WriteAllBytes($crlfPolicyPath, $crlfPolicyBytes)
+    $lfEolSnapshotResult = Invoke-ProcessCapture -Arguments @(
+        "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-File", $snapshotPath, "-RoadmapPath", $lfRoadmapPath, "-PolicyPath", $lfPolicyPath, "-Format", "Json"
+    )
+    $crlfEolSnapshotResult = Invoke-ProcessCapture -Arguments @(
+        "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-File", $snapshotPath, "-RoadmapPath", $crlfRoadmapPath, "-PolicyPath", $crlfPolicyPath, "-Format", "Json"
+    )
+    Assert-True ($lfEolSnapshotResult.ExitCode -eq 0) "LF-eol snapshot failed: $($lfEolSnapshotResult.Output)"
+    Assert-True ($crlfEolSnapshotResult.ExitCode -eq 0) "CRLF-eol snapshot failed: $($crlfEolSnapshotResult.Output)"
+    $lfEolSnapshot = $lfEolSnapshotResult.Output.Trim() | ConvertFrom-Json
+    $crlfEolSnapshot = $crlfEolSnapshotResult.Output.Trim() | ConvertFrom-Json
+    Assert-True ([string]::Equals([string]$lfEolSnapshot.roadmap_sha256, [string]$crlfEolSnapshot.roadmap_sha256, [StringComparison]::Ordinal)) "roadmap_sha256 must be identical whether the working tree is LF or CRLF"
+    Assert-True ([string]::Equals([string]$lfEolSnapshot.policy_sha256, [string]$crlfEolSnapshot.policy_sha256, [StringComparison]::Ordinal)) "policy_sha256 must be identical whether the working tree is LF or CRLF"
+    Assert-True ([string]::Equals([string]$lfEolSnapshot.roadmap_sha256, [string]$snapshot.roadmap_sha256, [StringComparison]::Ordinal)) "LF/CRLF-normalized snapshot must match the production working-tree snapshot for the same underlying content"
+    Assert-True ([string]::Equals([string]$lfEolSnapshot.policy_sha256, [string]$snapshot.policy_sha256, [StringComparison]::Ordinal)) "LF/CRLF-normalized policy snapshot must match the production working-tree snapshot for the same underlying content"
 
     $snapshotLine = [string]$snapshot.report_snapshot_line
     $progressLine = [string]$snapshot.report_progress_line
