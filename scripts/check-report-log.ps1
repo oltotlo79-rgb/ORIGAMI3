@@ -5,7 +5,16 @@ param(
     [int]$AllowedDelayDays = 0,
 
     # 検査用の複製で使う場合だけ指定する。通常は docs/報告記録.md を検査する。
-    [string]$ReportPath
+    [string]$ReportPath,
+
+    # pre-commitから使う。HEADとindexの報告記録を比べ、indexで新しく増えたrecordだけを検査する。
+    [switch]$StagedNewRecordsOnly,
+
+    # apps/ / crates/ と同じcommitの報告で使い、pathを変更しただけの空振りを拒否する。
+    [switch]$RequireNewRecord,
+
+    # staged modeの使い捨てrepo自己検査用。省略時は従来どおり本repo。
+    [string]$RepositoryRoot
 )
 
 # ORIGAMI3 利用者への報告記録検査 (Windows PowerShell 5.1 / PowerShell 7 対応)
@@ -16,7 +25,11 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
 
-$root = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot)).TrimEnd([char[]]"\/")
+$defaultRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot)).TrimEnd([char[]]"\/")
+$root = $defaultRoot
+if ($PSBoundParameters.ContainsKey("RepositoryRoot")) {
+    $root = [System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd([char[]]"\/")
+}
 $effectiveReportPath = Join-Path $root "docs\報告記録.md"
 if ($PSBoundParameters.ContainsKey("ReportPath")) {
     $effectiveReportPath = [System.IO.Path]::GetFullPath($ReportPath)
@@ -34,6 +47,18 @@ $script:legacyBoundaryLineIndex = -1
 $script:historicalSnapshotEvidence = @{}
 $script:recordIntroductionCommits = @{}
 $script:gitExecutable = $null
+
+# 自然文の母集合・時制・否定は、通常経路とrelease経路が同じ判定器を1つだけ呼ぶ。
+# 裸の「すべて|全て|全件」を2箇所へ別々に書くと、staged経路の逆契約と食い違って
+# 局所全数を誤拒否する。読み込めない場合は緑にせず、ここで止める。
+$script:roadmapScopeScriptPath = Join-Path $PSScriptRoot 'roadmap-claim-scope.ps1'
+if (-not (Test-Path -LiteralPath $script:roadmapScopeScriptPath -PathType Leaf)) {
+    throw "roadmap claim scope判定器がありません: $($script:roadmapScopeScriptPath)"
+}
+. $script:roadmapScopeScriptPath
+if ($null -eq (Get-Command Get-RoadmapScopeAssertions -CommandType Function -ErrorAction SilentlyContinue)) {
+    throw "roadmap claim scope判定器が Get-RoadmapScopeAssertions を公開していません: $($script:roadmapScopeScriptPath)"
+}
 
 function Add-FormatProblem {
     param([string]$Message)
@@ -419,6 +444,121 @@ function Get-CurrentRoadmapSnapshot {
     return $snapshot
 }
 
+function Get-RecordScopeAssertionsByLine {
+    param([Parameter(Mandatory = $true)]$Record)
+
+    $recordLines = @([string]$Record.Header)
+    foreach ($bodyLine in @($Record.BodyLines)) {
+        $recordLines += [string]$bodyLine
+    }
+    $roadmapTotal = 0
+    if ($null -ne $script:snapshot) {
+        $roadmapTotal = [int]$script:snapshot.total
+    }
+    $assertions = @(Get-RoadmapScopeAssertions `
+        -Text $recordLines `
+        -StartLine ([int]$Record.LineIndex + 1) `
+        -RoadmapTotal $roadmapTotal)
+    $byLine = @{}
+    foreach ($assertion in $assertions) {
+        $key = [int]$assertion.Line
+        if (-not $byLine.ContainsKey($key)) {
+            $byLine[$key] = New-Object System.Collections.Generic.List[object]
+        }
+        $byLine[$key].Add($assertion)
+    }
+    return $byLine
+}
+
+function Get-BlockingScopeClaim {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$LineText,
+        [Parameter(Mandatory = $true)][string]$Pattern,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][AllowNull()][object[]]$Assertions
+    )
+
+    # 判定器は「分かったものだけを免除する」。敏感語のraw matchに対応する判定が
+    # 1件も無ければ、未知の表現としてambiguous扱いで止める。unknownをlocalと
+    # 推測しない。したがってこの関数は、従来の裸の語による拒否を減らすことしか
+    # できず、新しい見逃しを作らない。
+    foreach ($rawMatch in [regex]::Matches($LineText, $Pattern)) {
+        $rawText = [string]$rawMatch.Value
+        if ($rawText.Length -eq 0) {
+            continue
+        }
+        $covering = @(@($Assertions) | Where-Object {
+            $trigger = [string]$_.Trigger
+            $trigger.Length -gt 0 -and ($rawText.Contains($trigger) -or $trigger.Contains($rawText))
+        })
+        if ($covering.Count -eq 0) {
+            return [PSCustomObject]@{
+                Text     = $rawText
+                Scope    = 'ambiguous'
+                Temporal = 'current'
+                Reason   = 'no-explicit-scope-anchor:unclassified-expression'
+            }
+        }
+        foreach ($assertion in $covering) {
+            $scope = [string]$assertion.Scope
+            $temporal = [string]$assertion.Temporal
+            if ($scope -eq 'ambiguous' -or
+                (($scope -eq 'whole' -or $scope -eq 'bounded') -and $temporal -eq 'current')) {
+                return [PSCustomObject]@{
+                    Text     = $rawText
+                    Scope    = $scope
+                    Temporal = $temporal
+                    Reason   = [string]$assertion.Reason
+                }
+            }
+        }
+    }
+    return $null
+}
+
+function Get-ScopeAssertionsForLine {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$AssertionsByLine,
+        [Parameter(Mandatory = $true)][int]$LineNumber
+    )
+
+    if (-not $AssertionsByLine.ContainsKey($LineNumber)) {
+        return @()
+    }
+    $bucket = $AssertionsByLine[$LineNumber]
+    $result = New-Object System.Collections.Generic.List[object]
+    foreach ($assertion in $bucket) {
+        $result.Add($assertion)
+    }
+    return $result.ToArray()
+}
+
+function Get-FirstBlockingScopeClaim {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][AllowEmptyString()][string[]]$RecordLines,
+        [Parameter(Mandatory = $true)][int]$FirstLineNumber,
+        [Parameter(Mandatory = $true)][hashtable]$AssertionsByLine,
+        [Parameter(Mandatory = $true)][string]$Pattern
+    )
+
+    for ($offset = 0; $offset -lt $RecordLines.Count; $offset++) {
+        $lineNumber = $FirstLineNumber + $offset
+        $blocking = Get-BlockingScopeClaim `
+            -LineText ([string]$RecordLines[$offset]) `
+            -Pattern $Pattern `
+            -Assertions (Get-ScopeAssertionsForLine -AssertionsByLine $AssertionsByLine -LineNumber $lineNumber)
+        if ($null -ne $blocking) {
+            return [PSCustomObject]@{
+                Line     = $lineNumber
+                Text     = [string]$blocking.Text
+                Scope    = [string]$blocking.Scope
+                Temporal = [string]$blocking.Temporal
+                Reason   = [string]$blocking.Reason
+            }
+        }
+    }
+    return $null
+}
+
 function Test-RoadmapClaimRecord {
     param(
         [Parameter(Mandatory = $true)]$Record,
@@ -462,7 +602,15 @@ function Test-RoadmapClaimRecord {
     $completenessPattern = "すべて|全て|全件|全部完了|これで全部|これが全部|$remainderPattern|リリース(?:まで)?の(?:範囲|残作業)|進捗率"
     $universalPattern = 'すべて|全て|全件|全部完了|これで全部|これが全部'
     $zeroRemainderPattern = '全部完了|これで全部|これが全部|(?:すべて|全て|全件)(?:の)?(?:作業|項目|残作業)?(?:は|が)?\s*(?:完了|終了|済み)'
-    $hasCompletenessClaim = $claimText -match $completenessPattern
+
+    # 敏感語はそのまま残し、母集合・時制・否定だけを判定器で足す。行ごとに
+    # 見るのは、record全体を1つのboolへ潰すと局所全数と全体断言が混ざるためである。
+    $recordLines = @(@($normalizedHeader) + $normalizedBodyLines)
+    $firstRecordLineNumber = [int]$Record.LineIndex + 1
+    $scopeAssertionsByLine = Get-RecordScopeAssertionsByLine -Record $Record
+    $blockingCompleteness = Get-FirstBlockingScopeClaim `
+        -RecordLines $recordLines -FirstLineNumber $firstRecordLineNumber `
+        -AssertionsByLine $scopeAssertionsByLine -Pattern $completenessPattern
 
     $expectedSnapshotLine = [string]$script:snapshot.report_snapshot_line
     $snapshotLines = @($bodyLines | Where-Object { $_ -match '^Roadmap-Snapshot:' })
@@ -470,8 +618,12 @@ function Test-RoadmapClaimRecord {
     $progressLines = @($bodyLines | Where-Object { $_ -match '^Roadmap-Progress:' })
 
     if ($claimKind -eq "none") {
-        if ($hasCompletenessClaim) {
-            Add-FormatProblem "$($Record.LineIndex + 1)行目の記録は完全性表現を含むため Roadmap-Claim: none にはできません。"
+        if ($null -ne $blockingCompleteness) {
+            Add-FormatProblem (
+                "$($Record.LineIndex + 1)行目の記録は完全性表現を含むため Roadmap-Claim: none にはできません。" +
+                " 発火した原文: $($blockingCompleteness.Line)行目「$($blockingCompleteness.Text)」" +
+                " (scope=$($blockingCompleteness.Scope) 時制=$($blockingCompleteness.Temporal) 理由=$($blockingCompleteness.Reason))"
+            )
         }
         if ($snapshotLines.Count -ne 0 -or $boundLines.Count -ne 0 -or $progressLines.Count -ne 0) {
             Add-FormatProblem "$($Record.LineIndex + 1)行目の Roadmap-Claim: none にroadmap根拠行を混在させないでください。"
@@ -508,8 +660,15 @@ function Test-RoadmapClaimRecord {
         }
     }
     else {
-        if ($claimText -match $universalPattern) {
-            Add-FormatProblem "$($Record.LineIndex + 1)行目の bounded claim で全体を表す語は使えません。"
+        $blockingUniversal = Get-FirstBlockingScopeClaim `
+            -RecordLines $recordLines -FirstLineNumber $firstRecordLineNumber `
+            -AssertionsByLine $scopeAssertionsByLine -Pattern $universalPattern
+        if ($null -ne $blockingUniversal) {
+            Add-FormatProblem (
+                "$($Record.LineIndex + 1)行目の bounded claim で全体を表す語は使えません。" +
+                " 発火した原文: $($blockingUniversal.Line)行目「$($blockingUniversal.Text)」" +
+                " (scope=$($blockingUniversal.Scope) 時制=$($blockingUniversal.Temporal) 理由=$($blockingUniversal.Reason))"
+            )
         }
         $boundsMatch = if ($boundLines.Count -eq 1) {
             [regex]::Match(
@@ -549,7 +708,26 @@ function Test-RoadmapClaimRecord {
         }
     }
 
-    $remainderLines = @(@($normalizedHeader) + $normalizedBodyLines | Where-Object { $_ -match $remainderPattern })
+    # whole/bounded claimでは、同じrecordの局所全数・過去値・将来条件をsnapshotへ
+    # 混ぜない。roadmap全体を今の値として述べている行だけを照合対象にする。
+    $remainderLines = New-Object System.Collections.Generic.List[string]
+    for ($recordLineOffset = 0; $recordLineOffset -lt $recordLines.Count; $recordLineOffset++) {
+        $recordLineText = [string]$recordLines[$recordLineOffset]
+        if ($recordLineText -notmatch $remainderPattern) {
+            continue
+        }
+        $blockingRemainder = Get-BlockingScopeClaim `
+            -LineText $recordLineText -Pattern $remainderPattern `
+            -Assertions (Get-ScopeAssertionsForLine `
+                -AssertionsByLine $scopeAssertionsByLine `
+                -LineNumber ($firstRecordLineNumber + $recordLineOffset))
+        if ($null -ne $blockingRemainder) {
+            $remainderLines.Add($recordLineText)
+        }
+    }
+    $blockingZeroRemainder = Get-FirstBlockingScopeClaim `
+        -RecordLines $recordLines -FirstLineNumber $firstRecordLineNumber `
+        -AssertionsByLine $scopeAssertionsByLine -Pattern $zeroRemainderPattern
     if ($claimKind -eq 'whole') {
         foreach ($remainderLine in $remainderLines) {
             $remainderMatch = [regex]::Match([string]$remainderLine, $numericRemainderPattern)
@@ -560,8 +738,11 @@ function Test-RoadmapClaimRecord {
                 Add-FormatProblem "$($Record.LineIndex + 1)行目の残件断言 $($remainderMatch.Groups['count'].Value)件がsnapshotのunchecked=$($recordSnapshot.Unchecked)と一致しません。"
             }
         }
-        if ($claimText -match $zeroRemainderPattern -and $null -ne $recordSnapshot -and $recordSnapshot.Unchecked -ne 0) {
-            Add-FormatProblem "$($Record.LineIndex + 1)行目の全部完了・これで全部という断言はunchecked=0のときだけ書けます (実測: $($recordSnapshot.Unchecked))。"
+        if ($null -ne $blockingZeroRemainder -and $null -ne $recordSnapshot -and $recordSnapshot.Unchecked -ne 0) {
+            Add-FormatProblem (
+                "$($Record.LineIndex + 1)行目の全部完了・これで全部という断言はunchecked=0のときだけ書けます (実測: $($recordSnapshot.Unchecked))。" +
+                " 発火した原文: $($blockingZeroRemainder.Line)行目「$($blockingZeroRemainder.Text)」"
+            )
         }
     }
     else {
@@ -612,6 +793,364 @@ function Test-RoadmapClaimRecord {
     }
 }
 
+function ConvertFrom-StrictUtf8Bytes {
+    param(
+        [Parameter(Mandatory = $true)][byte[]]$Bytes,
+        [Parameter(Mandatory = $true)][string]$SourceName
+    )
+
+    if ($Bytes.Length -ge 3 -and $Bytes[0] -eq 0xEF -and $Bytes[1] -eq 0xBB -and $Bytes[2] -eq 0xBF) {
+        throw "UTF-8 BOMは禁止です: $SourceName"
+    }
+    $utf8Strict = New-Object System.Text.UTF8Encoding($false, $true)
+    return $utf8Strict.GetString($Bytes)
+}
+
+function Get-GitBlobBytes {
+    param(
+        [Parameter(Mandatory = $true)][string]$ObjectSpec,
+        [Parameter(Mandatory = $true)][string]$DisplayName,
+        [switch]$AllowMissing,
+        [string]$FilterPath = ''
+    )
+
+    $arguments = @('-C', $root, 'cat-file')
+    if ([string]::IsNullOrWhiteSpace($FilterPath)) {
+        $arguments += @('blob', $ObjectSpec)
+    }
+    else {
+        # get-roadmap-status.ps1はcheckout後のbytesをhashする。index blobにも
+        # 同じcheckout filterを適用し、commit後の実測と違うhashを要求しない。
+        $arguments += @('--filters', "--path=$FilterPath", $ObjectSpec)
+    }
+    $result = Invoke-NativeBytes -FilePath (Get-GitExecutable) -Arguments $arguments
+    if ($result.ExitCode -ne 0) {
+        if ($AllowMissing) {
+            return $null
+        }
+        throw "$DisplayName をgit indexから読めません: $($result.Error.Trim())"
+    }
+    return ,([byte[]]$result.Bytes)
+}
+
+function ConvertTo-StagedReportRecords {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
+
+    $lines = [regex]::Split($Text, "\r\n|\n|\r")
+    $records = New-Object System.Collections.Generic.List[object]
+    $fenceCharacter = ''
+    $fenceLength = 0
+    for ($lineIndex = 0; $lineIndex -lt $lines.Count; $lineIndex++) {
+        $line = [string]$lines[$lineIndex]
+        if ($fenceLength -ne 0) {
+            $closingPattern = '^\s*' + [regex]::Escape($fenceCharacter) + '{' + $fenceLength + ',}\s*$'
+            if ($line -match $closingPattern) {
+                $fenceCharacter = ''
+                $fenceLength = 0
+            }
+            continue
+        }
+        $opening = [regex]::Match($line, '^\s*(?<mark>`{3,}|~{3,})')
+        if ($opening.Success) {
+            $fenceCharacter = $opening.Groups['mark'].Value.Substring(0, 1)
+            $fenceLength = $opening.Groups['mark'].Value.Length
+            continue
+        }
+        # 正規見出しだけを境界にすると「## 2026-09-01頃」のような新しい
+        # 壊れたrecordを本文として見逃す。Markdown fenceの外にある ## で
+        # 始まる全行を先に境界とし、本文中の引用コードはrecordへ数えない。
+        if (-not $line.StartsWith('## ', [StringComparison]::Ordinal)) {
+            continue
+        }
+        $records.Add([pscustomobject]@{
+            Header = $line
+            LineIndex = $lineIndex
+            EndLineIndex = $lines.Count
+            BodyLines = @()
+        })
+    }
+    for ($recordIndex = 0; $recordIndex -lt $records.Count; $recordIndex++) {
+        $endLineIndex = $lines.Count
+        if ($recordIndex + 1 -lt $records.Count) {
+            $endLineIndex = [int]$records[$recordIndex + 1].LineIndex
+        }
+        $records[$recordIndex].EndLineIndex = $endLineIndex
+        if ($endLineIndex -gt [int]$records[$recordIndex].LineIndex + 1) {
+            $records[$recordIndex].BodyLines = @($lines[([int]$records[$recordIndex].LineIndex + 1)..($endLineIndex - 1)])
+        }
+    }
+    return $records.ToArray()
+}
+
+function Get-NewStagedReportRecords {
+    param(
+        [Parameter(Mandatory = $true)][object[]]$HeadRecords,
+        [Parameter(Mandatory = $true)][object[]]$IndexRecords
+    )
+
+    # 本文の修復は過去違反を再検査しない。HEADに存在した「見出しの個数」を
+    # indexから1件ずつ差し引き、同じ見出しを追加した場合も余分な1件を新規扱いする。
+    $headHeaderCounts = @{}
+    foreach ($record in $HeadRecords) {
+        $header = [string]$record.Header
+        if (-not $headHeaderCounts.ContainsKey($header)) { $headHeaderCounts[$header] = 0 }
+        $headHeaderCounts[$header] = [int]$headHeaderCounts[$header] + 1
+    }
+    $indexHeaderCounts = @{}
+    foreach ($record in $IndexRecords) {
+        $header = [string]$record.Header
+        if (-not $indexHeaderCounts.ContainsKey($header)) { $indexHeaderCounts[$header] = 0 }
+        $indexHeaderCounts[$header] = [int]$indexHeaderCounts[$header] + 1
+    }
+    foreach ($header in @($indexHeaderCounts.Keys)) {
+        $headCount = if ($headHeaderCounts.ContainsKey($header)) { [int]$headHeaderCounts[$header] } else { 0 }
+        $indexCount = [int]$indexHeaderCounts[$header]
+        if ($indexCount -gt $headCount -and $indexCount -gt 1) {
+            # 先頭からHEAD件数を消費するだけでは「新しいinvalid→古いvalid」の順で
+            # invalidを旧扱いにできる。同一見出しのどのoccurrenceが新規か判別不能な
+            # 場合は順序を推測せず、見出しを一意に直すまでcommitを止める。
+            Add-FormatProblem "staged docs/報告記録.md で追加された見出しが既存又は同じcommitの見出しと重複しています。新規recordの見出し日時と概要を一意にしてください: $header (HEAD=$headCount, index=$indexCount)"
+        }
+    }
+    $newRecords = New-Object System.Collections.Generic.List[object]
+    foreach ($record in $IndexRecords) {
+        $header = [string]$record.Header
+        if ($headHeaderCounts.ContainsKey($header) -and [int]$headHeaderCounts[$header] -gt 0) {
+            $headHeaderCounts[$header] = [int]$headHeaderCounts[$header] - 1
+        }
+        else {
+            $newRecords.Add($record)
+        }
+    }
+    return $newRecords.ToArray()
+}
+
+function Get-UnfencedRecordLines {
+    param([Parameter(Mandatory = $true)]$Record)
+
+    $result = New-Object System.Collections.Generic.List[string]
+    $fenceCharacter = ''
+    $fenceLength = 0
+    foreach ($lineValue in @($Record.BodyLines)) {
+        $line = [string]$lineValue
+        if ($fenceLength -eq 0) {
+            $opening = [regex]::Match($line, '^\s*(?<mark>`{3,}|~{3,})')
+            if ($opening.Success) {
+                $fenceCharacter = $opening.Groups['mark'].Value.Substring(0, 1)
+                $fenceLength = $opening.Groups['mark'].Value.Length
+                continue
+            }
+            $result.Add($line)
+            continue
+        }
+
+        $closingPattern = '^\s*' + [regex]::Escape($fenceCharacter) + '{' + $fenceLength + ',}\s*$'
+        if ($line -match $closingPattern) {
+            $fenceCharacter = ''
+            $fenceLength = 0
+        }
+    }
+    return [pscustomobject]@{
+        Lines = $result.ToArray()
+        HasUnclosedFence = ($fenceLength -ne 0)
+    }
+}
+
+function Get-StagedRoadmapSnapshot {
+    $roadmapRelativePath = 'docs/implementation-roadmap.md'
+    $policyRelativePath = 'scripts/roadmap-status-policy.json'
+    $roadmapBytes = Get-GitBlobBytes -ObjectSpec ":$roadmapRelativePath" -DisplayName $roadmapRelativePath -FilterPath $roadmapRelativePath
+    $policyBytes = Get-GitBlobBytes -ObjectSpec ":$policyRelativePath" -DisplayName $policyRelativePath -FilterPath $policyRelativePath
+
+    $tempParent = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd([char[]]'\/')
+    $tempName = 'ori3-report-staged-{0}' -f [Guid]::NewGuid().ToString('N')
+    $tempRoot = [System.IO.Path]::GetFullPath((Join-Path $tempParent $tempName))
+    [void][System.IO.Directory]::CreateDirectory($tempRoot)
+    try {
+        $roadmapPath = Join-Path $tempRoot 'implementation-roadmap.md'
+        $policyPath = Join-Path $tempRoot 'roadmap-status-policy.json'
+        [System.IO.File]::WriteAllBytes($roadmapPath, $roadmapBytes)
+        [System.IO.File]::WriteAllBytes($policyPath, $policyBytes)
+        $statusResult = Invoke-NativeBytes -FilePath ((Get-Process -Id $PID).Path) -Arguments @(
+            '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+            '-File', (Join-Path $PSScriptRoot 'get-roadmap-status.ps1'),
+            '-RoadmapPath', $roadmapPath, '-PolicyPath', $policyPath, '-Format', 'Json'
+        )
+        if ($statusResult.ExitCode -ne 0) {
+            throw "staged roadmap snapshotが失敗しました (終了コード: $($statusResult.ExitCode)): $($statusResult.Error.Trim())"
+        }
+        $statusText = ConvertFrom-StrictUtf8Bytes -Bytes ([byte[]]$statusResult.Bytes) -SourceName 'staged roadmap snapshot output'
+        $statusLines = @($statusText -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($statusLines.Count -ne 1) {
+            throw "staged roadmap snapshotがJSON 1行を返しませんでした (行数: $($statusLines.Count))"
+        }
+        $snapshot = $statusLines[0] | ConvertFrom-Json
+        if ([int]$snapshot.schema -ne 1 -or [string]$snapshot.scope -ne 'whole' -or [bool]$snapshot.partial -or
+            [int]$snapshot.audited -ne [int]$snapshot.total -or [int]$snapshot.unclassified -ne 0 -or
+            [int]$snapshot.checked + [int]$snapshot.unchecked -ne [int]$snapshot.total -or
+            [string]$snapshot.report_snapshot_line -notmatch '^Roadmap-Snapshot: schema=1 ' -or
+            [string]$snapshot.report_progress_line -notmatch '^Roadmap-Progress: checked=') {
+            throw 'staged roadmap snapshotの全件会計が不正です'
+        }
+        return $snapshot
+    }
+    finally {
+        $resolvedTemp = [System.IO.Path]::GetFullPath($tempRoot).TrimEnd([char[]]'\/')
+        if ([System.IO.Path]::GetDirectoryName($resolvedTemp) -ne $tempParent -or
+            [System.IO.Path]::GetFileName($resolvedTemp) -notmatch '^ori3-report-staged-[0-9a-f]{32}$') {
+            throw "unsafe staged snapshot cleanup path: $resolvedTemp"
+        }
+        Remove-Item -LiteralPath $resolvedTemp -Recurse -Force
+    }
+}
+
+function Test-StagedNewRecordContract {
+    param(
+        [Parameter(Mandatory = $true)]$Record,
+        [Parameter(Mandatory = $true)]$Snapshot
+    )
+
+    $lineNumber = [int]$Record.LineIndex + 1
+    $headerMatch = $headerPattern.Match([string]$Record.Header)
+    if (-not $headerMatch.Success) {
+        Add-FormatProblem "$lineNumber 行目の新規見出しが書式に合いません: $($Record.Header)"
+    }
+    else {
+        $recordTimestamp = [datetime]::MinValue
+        $timestampText = $headerMatch.Groups['date'].Value + ' ' + $headerMatch.Groups['time'].Value
+        if (-not [datetime]::TryParseExact(
+            $timestampText, 'yyyy-MM-dd HH:mm', [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::None, [ref]$recordTimestamp
+        )) {
+            Add-FormatProblem "$lineNumber 行目の新規見出しの日時が実在しません: $timestampText"
+        }
+    }
+    $allIndexLines = [regex]::Split((([string]$Record.Header) + "`n" + (@($Record.BodyLines) -join "`n")), "\r\n|\n|\r")
+    if (-not (Test-RecordHasBody -Lines $allIndexLines -StartIndex 0 -EndIndex $allIndexLines.Count)) {
+        Add-FormatProblem "$lineNumber 行目の新規recordは見出しだけで、本文がありません。"
+    }
+
+    $unfenced = Get-UnfencedRecordLines -Record $Record
+    if ($unfenced.HasUnclosedFence) {
+        Add-FormatProblem "$lineNumber 行目の新規recordに閉じていないMarkdown code fenceがあります。"
+    }
+    $bodyLines = @($unfenced.Lines)
+    $claimLines = @($bodyLines | Where-Object { ([string]$_).StartsWith('Roadmap-Claim:', [StringComparison]::Ordinal) })
+    $claimKind = ''
+    if ($claimLines.Count -ne 1) {
+        Add-FormatProblem "$lineNumber 行目の新規recordには Roadmap-Claim: none|whole|bounded を正確に1行書いてください (実際: $($claimLines.Count)行)。"
+    }
+    else {
+        $claimMatch = [regex]::Match([string]$claimLines[0], '^Roadmap-Claim: (?<kind>none|whole|bounded)$')
+        if (-not $claimMatch.Success) {
+            Add-FormatProblem "$lineNumber 行目のRoadmap-Claimは none|whole|bounded のexact行ではありません: $($claimLines[0])"
+        }
+        else {
+            $claimKind = $claimMatch.Groups['kind'].Value
+        }
+    }
+
+    $snapshotLines = @($bodyLines | Where-Object { ([string]$_).StartsWith('Roadmap-Snapshot:', [StringComparison]::Ordinal) })
+    $boundsLines = @($bodyLines | Where-Object { ([string]$_).StartsWith('Roadmap-Bounds:', [StringComparison]::Ordinal) })
+    $progressLines = @($bodyLines | Where-Object { ([string]$_).StartsWith('Roadmap-Progress:', [StringComparison]::Ordinal) })
+    if ($progressLines.Count -gt 1) {
+        Add-FormatProblem "$lineNumber 行目の新規recordには Roadmap-Progress を2行以上書けません。"
+    }
+    elseif ($progressLines.Count -eq 1 -and
+        -not [string]::Equals([string]$progressLines[0], [string]$Snapshot.report_progress_line, [StringComparison]::Ordinal)) {
+        Add-FormatProblem "$lineNumber 行目の Roadmap-Progress がstaged roadmap/policyの実測値と一致しません。期待値: $($Snapshot.report_progress_line)"
+    }
+
+    if ($claimKind -eq 'none') {
+        # 自然文の「5検査すべて」のような局所全数を誤拒否しない。noneで禁止するのは
+        # roadmap全体の会計に使う機械可読行だけに限定する。
+        if ($snapshotLines.Count -ne 0 -or $boundsLines.Count -ne 0 -or $progressLines.Count -ne 0) {
+            Add-FormatProblem "$lineNumber 行目の Roadmap-Claim: none に Roadmap-Snapshot/Bounds/Progress を混在させないでください。"
+        }
+        return
+    }
+    if ($claimKind.Length -eq 0) { return }
+
+    if ($snapshotLines.Count -ne 1) {
+        Add-FormatProblem "$lineNumber 行目の $claimKind claimには Roadmap-Snapshot を正確に1行書いてください (実際: $($snapshotLines.Count)行)。"
+    }
+    elseif ($null -eq (Read-ReportSnapshotAccounting -Line ([string]$snapshotLines[0]))) {
+        Add-FormatProblem "$lineNumber 行目の Roadmap-Snapshot はschema=1の全件会計になっていません。"
+    }
+    elseif (-not [string]::Equals([string]$snapshotLines[0], [string]$Snapshot.report_snapshot_line, [StringComparison]::Ordinal)) {
+        Add-FormatProblem "$lineNumber 行目の Roadmap-Snapshot がstaged roadmap/policyの実測値と一致しません。期待値: $($Snapshot.report_snapshot_line)"
+    }
+
+    if ($claimKind -eq 'whole') {
+        if ($boundsLines.Count -ne 0) {
+            Add-FormatProblem "$lineNumber 行目の whole claim に Roadmap-Bounds を書かないでください。"
+        }
+        return
+    }
+
+    $boundsMatch = if ($boundsLines.Count -eq 1) {
+        [regex]::Match(
+            [string]$boundsLines[0],
+            '^Roadmap-Bounds: ids=(?<ids>[A-Za-z0-9][A-Za-z0-9._-]*(?:,[A-Za-z0-9][A-Za-z0-9._-]*)*) total=(?<total>\d+) checked=(?<checked>\d+) unchecked=(?<unchecked>\d+)$'
+        )
+    }
+    else { $null }
+    if ($null -eq $boundsMatch -or -not $boundsMatch.Success) {
+        Add-FormatProblem "$lineNumber 行目の bounded claimには Roadmap-Bounds: ids=... total=N checked=N unchecked=N を正確に1行書いてください。"
+        return
+    }
+    $ids = @($boundsMatch.Groups['ids'].Value -split ',')
+    $uniqueIds = @($ids | Select-Object -Unique)
+    $declaredTotal = [int]$boundsMatch.Groups['total'].Value
+    $declaredChecked = [int]$boundsMatch.Groups['checked'].Value
+    $declaredUnchecked = [int]$boundsMatch.Groups['unchecked'].Value
+    if ($uniqueIds.Count -ne $ids.Count -or $declaredTotal -ne $uniqueIds.Count -or
+        $declaredChecked + $declaredUnchecked -ne $declaredTotal) {
+        Add-FormatProblem "$lineNumber 行目の Roadmap-Bounds はID件数とchecked/uncheckedの内部会計が一致しません。"
+        return
+    }
+    $itemMap = @{}
+    foreach ($item in @($Snapshot.items)) { $itemMap[[string]$item.id] = $item }
+    $unknownIds = @($uniqueIds | Where-Object { -not $itemMap.ContainsKey($_) })
+    if ($unknownIds.Count -gt 0) {
+        Add-FormatProblem "$lineNumber 行目の Roadmap-Bounds にstaged正本に無いIDがあります: $($unknownIds -join ',')"
+        return
+    }
+    $actualChecked = @($uniqueIds | Where-Object { $itemMap[$_].state -eq 'checked' }).Count
+    $actualUnchecked = @($uniqueIds | Where-Object { $itemMap[$_].state -eq 'unchecked' }).Count
+    if ($declaredChecked -ne $actualChecked -or $declaredUnchecked -ne $actualUnchecked) {
+        Add-FormatProblem "$lineNumber 行目の Roadmap-Bounds 件数がstaged正本と一致しません: total=$($uniqueIds.Count) checked=$actualChecked unchecked=$actualUnchecked"
+    }
+}
+
+function Invoke-StagedNewRecordCheck {
+    $indexReportBytes = Get-GitBlobBytes -ObjectSpec ':docs/報告記録.md' -DisplayName 'staged docs/報告記録.md'
+    $headReportBytes = Get-GitBlobBytes -ObjectSpec 'HEAD:docs/報告記録.md' -DisplayName 'HEAD docs/報告記録.md' -AllowMissing
+    $indexReportText = ConvertFrom-StrictUtf8Bytes -Bytes $indexReportBytes -SourceName 'staged docs/報告記録.md'
+    $headReportText = ''
+    if ($null -ne $headReportBytes) {
+        $headReportText = ConvertFrom-StrictUtf8Bytes -Bytes $headReportBytes -SourceName 'HEAD docs/報告記録.md'
+    }
+    $headRecords = @(ConvertTo-StagedReportRecords -Text $headReportText)
+    $indexRecords = @(ConvertTo-StagedReportRecords -Text $indexReportText)
+    $newRecords = @(Get-NewStagedReportRecords -HeadRecords $headRecords -IndexRecords $indexRecords)
+    if ($RequireNewRecord -and $newRecords.Count -eq 0) {
+        Add-MissingProblem 'apps/ または crates/ と同じcommitの staged docs/報告記録.md に、新しい ## recordがありません。既存recordの本文修復だけでは利用者への新しい報告になりません。'
+        return
+    }
+    if ($newRecords.Count -eq 0) {
+        Write-Host '[OK] staged docs/報告記録.md に新規recordはありません。既存recordの修復はincremental契約の対象外です。'
+        return
+    }
+    $snapshot = Get-StagedRoadmapSnapshot
+    foreach ($record in $newRecords) {
+        Test-StagedNewRecordContract -Record $record -Snapshot $snapshot
+    }
+    if ($script:formatProblems.Count -eq 0 -and $script:missingProblems.Count -eq 0) {
+        Write-Host "[OK] staged docs/報告記録.md の新規record $($newRecords.Count)件は契約行を満たしています。"
+    }
+}
+
 function Test-RecordHasBody {
     param(
         [string[]]$Lines,
@@ -631,6 +1170,30 @@ function Test-RecordHasBody {
         return $true
     }
     return $false
+}
+
+if ($StagedNewRecordsOnly) {
+    try {
+        Invoke-StagedNewRecordCheck
+    }
+    catch {
+        Add-FormatProblem "staged docs/報告記録.md の新規recordを検査できませんでした: $($_.Exception.Message)"
+    }
+
+    foreach ($problem in $script:formatProblems) {
+        Write-Host "[NG] $problem" -ForegroundColor Red
+    }
+    foreach ($problem in $script:missingProblems) {
+        Write-Host "[NG] $problem" -ForegroundColor Red
+    }
+    if ($script:formatProblems.Count -gt 0 -or $script:missingProblems.Count -gt 0) {
+        Write-Host '[HELP] Roadmap-Claim: none = roadmap全体の残件・進捗・完了を主張しない局所報告です。「5検査すべて」のような局所全数はnoneのままです。' -ForegroundColor Yellow
+        Write-Host '[HELP] Roadmap-Claim: whole = roadmap/release全体の残件・進捗・全件を述べる報告です。staged正本から生成したschema=1 Roadmap-Snapshotを付け、進捗行を書く場合はexactなRoadmap-Progressを付けます。' -ForegroundColor Yellow
+        Write-Host '[HELP] Roadmap-Claim: bounded = 対象IDを限定する報告です。schema=1 Roadmap-Snapshotと、ID・total・checked・uncheckedが一致するRoadmap-Boundsを付けます。' -ForegroundColor Yellow
+    }
+    if ($script:formatProblems.Count -gt 0) { exit 2 }
+    if ($script:missingProblems.Count -gt 0) { exit 1 }
+    exit 0
 }
 
 if (-not (Test-Path -LiteralPath $effectiveReportPath -PathType Leaf)) {

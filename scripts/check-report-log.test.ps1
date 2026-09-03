@@ -13,10 +13,12 @@ $productionReportPath = Join-Path $repoRoot "docs\報告記録.md"
 $roadmapPath = Join-Path $repoRoot "docs\implementation-roadmap.md"
 $policyPath = Join-Path $PSScriptRoot "roadmap-status-policy.json"
 $attributesPath = Join-Path $repoRoot ".gitattributes"
+$preCommitPath = Join-Path $repoRoot "scripts\hooks\pre-commit"
 $powerShellPath = (Get-Process -Id $PID).Path
 $tempParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([char[]]"\/")
 $sandboxName = "ori3-check-report-log-test-{0}" -f [Guid]::NewGuid().ToString("N")
 $sandboxRoot = [IO.Path]::GetFullPath((Join-Path $tempParent $sandboxName))
+$stagedRepoRoot = Join-Path $sandboxRoot "staged-repo"
 $script:assertions = 0
 $script:legacyBoundaryHeader = '## 2026-08-31 19:45 — 検証の結論。Codex sol は死んでいなかった。統括の誤判定である'
 $script:legacySuffixText = ''
@@ -92,6 +94,96 @@ function Invoke-ReportCheck {
         "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
         "-File", $scriptPath, "-ReportPath", $ReportPath
     )
+}
+
+function Invoke-StagedReportCheck {
+    param([switch]$RequireNewRecord)
+
+    $arguments = @(
+        "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-File", $scriptPath, "-RepositoryRoot", $stagedRepoRoot, "-StagedNewRecordsOnly"
+    )
+    if ($RequireNewRecord) { $arguments += "-RequireNewRecord" }
+    return Invoke-ProcessCapture -Arguments $arguments
+}
+
+function Invoke-StagedFixtureGit {
+    param([Parameter(Mandatory = $true)][string[]]$GitArguments)
+
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $global:LASTEXITCODE = 0
+        $output = @(& git -C $stagedRepoRoot @GitArguments 2>&1)
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0) {
+            throw "fixture git failed ($exitCode): git $($GitArguments -join ' ')`n$($output -join "`n")"
+        }
+        return ($output -join "`n")
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+}
+
+function Set-StagedFixtureReport {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text,
+        [switch]$DoNotStage
+    )
+
+    $reportPath = Join-Path $stagedRepoRoot "docs\報告記録.md"
+    [IO.File]::WriteAllText($reportPath, $Text, (New-Object Text.UTF8Encoding($false)))
+    if (-not $DoNotStage) {
+        [void](Invoke-StagedFixtureGit -GitArguments @('add', '--', 'docs/報告記録.md'))
+    }
+}
+
+function Get-ProductionRecordFixture {
+    param(
+        [Parameter(Mandatory = $true)][string]$ReportText,
+        [Parameter(Mandatory = $true)][string]$Header
+    )
+
+    $lines = [regex]::Split($ReportText, "\r\n|\n|\r")
+    $matchingIndices = @()
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        if ([string]::Equals($lines[$index], $Header, [StringComparison]::Ordinal)) { $matchingIndices += $index }
+    }
+    Assert-True ($matchingIndices.Count -eq 1) "production fixture header must exist exactly once: $Header"
+    $startIndex = $matchingIndices[0]
+    $endIndex = $lines.Count
+    for ($index = $startIndex + 1; $index -lt $lines.Count; $index++) {
+        if ($lines[$index].StartsWith('## ', [StringComparison]::Ordinal)) {
+            $endIndex = $index
+            break
+        }
+    }
+    $bodyLines = New-Object System.Collections.Generic.List[string]
+    for ($index = $startIndex + 1; $index -lt $endIndex; $index++) {
+        if ($lines[$index] -match '^Roadmap-(?:Claim|Snapshot|Bounds|Progress):') { continue }
+        $bodyLines.Add([string]$lines[$index])
+    }
+    return [pscustomobject]@{
+        Header = $Header
+        BodyLines = $bodyLines.ToArray()
+    }
+}
+
+function Format-StagedFixtureDocument {
+    param(
+        [Parameter(Mandatory = $true)][object[]]$Records
+    )
+
+    $texts = New-Object System.Collections.Generic.List[string]
+    foreach ($record in $Records) {
+        $lines = New-Object System.Collections.Generic.List[string]
+        $lines.Add([string]$record.Header)
+        $lines.Add('')
+        foreach ($bodyLine in @($record.BodyLines)) { $lines.Add([string]$bodyLine) }
+        $texts.Add($lines -join "`n")
+    }
+    return ($texts -join "`n`n---`n`n") + "`n"
 }
 
 function Format-TestRecord {
@@ -187,6 +279,208 @@ try {
     $checkedItem = @($snapshot.items | Where-Object { $_.state -eq 'checked' })[0]
     $uncheckedItem = @($snapshot.items | Where-Object { $_.state -eq 'unchecked' })[0]
     $boundsLine = "Roadmap-Bounds: ids=$($checkedItem.id),$($uncheckedItem.id) total=2 checked=1 unchecked=1"
+
+    # pre-commitはRust有無のearly exitより前にindex専用gateを呼び、製品変更時は
+    # 本文修復だけでなく新規recordを必須にする。
+    $preCommitSource = [IO.File]::ReadAllText($preCommitPath, (New-Object Text.UTF8Encoding($false, $true)))
+    $stagedGatePosition = $preCommitSource.IndexOf('-StagedNewRecordsOnly', [StringComparison]::Ordinal)
+    $rustReceiptPosition = $preCommitSource.IndexOf('receipt_script="$repo_root/scripts/check-receipt.ps1"', [StringComparison]::Ordinal)
+    Assert-True ($stagedGatePosition -ge 0) "pre-commit must invoke staged report mode"
+    Assert-True ($preCommitSource.Contains('-RequireNewRecord')) "pre-commit must require a new report record for apps/crates"
+    Assert-True ($rustReceiptPosition -gt $stagedGatePosition) "staged report gate must run before the Rust-only path"
+    Assert-True ($preCommitSource.Contains('staged_for_report')) "staged report gate must include deletions and inspect the index path"
+
+    # 使い捨てgit repoでHEADとindexを分離する。HEADには意図的に古い契約違反を
+    # 残し、incremental gateが過去違反ではなく新しい見出しだけを見ることを固定する。
+    [void][IO.Directory]::CreateDirectory((Join-Path $stagedRepoRoot 'docs'))
+    [void][IO.Directory]::CreateDirectory((Join-Path $stagedRepoRoot 'scripts'))
+    [IO.File]::WriteAllBytes((Join-Path $stagedRepoRoot 'docs\implementation-roadmap.md'), [IO.File]::ReadAllBytes($roadmapPath))
+    [IO.File]::WriteAllBytes((Join-Path $stagedRepoRoot 'scripts\roadmap-status-policy.json'), [IO.File]::ReadAllBytes($policyPath))
+    $baseHeader = '## 2026-08-30 10:00 — 既存の契約行抜け（incremental gate施行前）'
+    $baseRecord = [pscustomobject]@{
+        Header = $baseHeader
+        BodyLines = @('この古いrecordには意図的にRoadmap-Claimがありません。')
+    }
+    $baseValidRecord = [pscustomobject]@{
+        Header = '## 2026-08-30 09:59 — 既存の有効な局所record'
+        BodyLines = @('Roadmap-Claim: none', '既存の局所報告です。')
+    }
+    $baseReportText = Format-StagedFixtureDocument -Records @($baseRecord, $baseValidRecord)
+    [IO.File]::WriteAllText((Join-Path $stagedRepoRoot 'docs\報告記録.md'), $baseReportText, (New-Object Text.UTF8Encoding($false)))
+    [void](Invoke-StagedFixtureGit -GitArguments @('init', '--quiet'))
+    [void](Invoke-StagedFixtureGit -GitArguments @('config', 'user.name', 'ORIGAMI3 report gate test'))
+    [void](Invoke-StagedFixtureGit -GitArguments @('config', 'user.email', 'report-gate-test@example.invalid'))
+    [void](Invoke-StagedFixtureGit -GitArguments @('config', 'core.autocrlf', 'false'))
+    [void](Invoke-StagedFixtureGit -GitArguments @('add', '--', 'docs/報告記録.md', 'docs/implementation-roadmap.md', 'scripts/roadmap-status-policy.json'))
+    [void](Invoke-StagedFixtureGit -GitArguments @('commit', '--quiet', '-m', 'base fixture'))
+
+    $oldBodyChanged = [pscustomobject]@{
+        Header = $baseHeader
+        BodyLines = @('古いrecordの本文だけを修復したが、契約行はまだありません。')
+    }
+    Set-StagedFixtureReport -Text (Format-StagedFixtureDocument -Records @($oldBodyChanged))
+    Assert-Exit (Invoke-StagedReportCheck) 0 "old invalid record body-only repair is ignored"
+    Assert-Exit (Invoke-StagedReportCheck -RequireNewRecord) 1 "RequireNewRecord rejects body-only repair" "新しい ## recordがありません"
+
+    # 本日、統括が書いた4件を実データfixtureにする。修復の進行で本番recordへ
+    # 契約行が足されても、fixtureから機械可読行を除去して負例を維持する。
+    $realFixtureDefinitions = @(
+        [pscustomobject]@{
+            Header = '## 2026-09-01 13:26 — リリースまでの見通し（利用者の求めに応じて）'
+            Claim = 'whole'
+            IncludeProgress = $true
+        },
+        [pscustomobject]@{
+            Header = '## 2026-09-01 13:15 — 正本970は既に満たされていた。残り11件'
+            Claim = 'whole'
+            IncludeProgress = $false
+        },
+        [pscustomobject]@{
+            Header = '## 2026-09-01 13:05 — 提案の4候補は「本当に閉じない」と確定。折り鶴は数字の出る解を捨てた'
+            Claim = 'none'
+            IncludeProgress = $false
+        },
+        [pscustomobject]@{
+            Header = '## 2026-09-01 12:07 — 残りが14件から12件へ。つまんで動かす土台が入り、型で塞げる穴を1つ塞いだ'
+            Claim = 'whole'
+            IncludeProgress = $false
+        }
+    )
+    foreach ($definition in $realFixtureDefinitions) {
+        $fixture = Get-ProductionRecordFixture -ReportText $productionReportText -Header $definition.Header
+        $missingContractRecord = [pscustomobject]@{
+            Header = $fixture.Header
+            BodyLines = @($fixture.BodyLines)
+        }
+        Set-StagedFixtureReport -Text (Format-StagedFixtureDocument -Records @($baseRecord, $missingContractRecord))
+        Assert-Exit (Invoke-StagedReportCheck) 2 "real record missing contract: $($definition.Header)" "Roadmap-Claim"
+
+        $correctedBody = New-Object System.Collections.Generic.List[string]
+        foreach ($bodyLine in @($fixture.BodyLines)) { $correctedBody.Add([string]$bodyLine) }
+        $correctedBody.Add("Roadmap-Claim: $($definition.Claim)")
+        if ($definition.Claim -eq 'whole') {
+            $correctedBody.Add($snapshotLine)
+            if ($definition.IncludeProgress) { $correctedBody.Add($progressLine) }
+        }
+        else {
+            Assert-True ((@($fixture.BodyLines) -join "`n") -match 'すべて') "local-all real fixture must exercise the none false-positive control"
+        }
+        $correctedRecord = [pscustomobject]@{
+            Header = $fixture.Header
+            BodyLines = $correctedBody.ToArray()
+        }
+        Set-StagedFixtureReport -Text (Format-StagedFixtureDocument -Records @($baseRecord, $correctedRecord))
+        Assert-Exit (Invoke-StagedReportCheck) 0 "real record corrected contract: $($definition.Header)"
+    }
+
+    $malformedHistoricalHeader = '## 2026-08-31 08:00頃 — 残作業の本当の数が出た。40件ではなく16件。並行4本で進行中'
+    Assert-True ($productionReportText.Contains($malformedHistoricalHeader)) "malformed historical header fixture must come from production data"
+    $malformedNewRecord = [pscustomobject]@{
+        Header = $malformedHistoricalHeader
+        BodyLines = @('Roadmap-Claim: none', '新規recordとして複製した場合は見出し書式で止める。')
+    }
+    Set-StagedFixtureReport -Text (Format-StagedFixtureDocument -Records @($baseRecord, $malformedNewRecord))
+    Assert-Exit (Invoke-StagedReportCheck) 2 "new malformed real header" "新規見出しが書式に合いません"
+
+    $incompleteSnapshot = 'Roadmap-Snapshot: docs/implementation-roadmap.md checked=172 unchecked=14 total=186'
+    Assert-True ($productionReportText.Contains($incompleteSnapshot)) "incomplete schema fixture must come from production data"
+    $incompleteSnapshotRecord = [pscustomobject]@{
+        Header = '## 2026-09-01 23:50 — 不完全なsnapshotの新規record'
+        BodyLines = @('Roadmap-Claim: whole', $incompleteSnapshot, '全体の残件を報告した。')
+    }
+    Set-StagedFixtureReport -Text (Format-StagedFixtureDocument -Records @($baseRecord, $incompleteSnapshotRecord))
+    Assert-Exit (Invoke-StagedReportCheck) 2 "incomplete historical snapshot copied into new record" "schema=1"
+
+    $validNoneRecord = [pscustomobject]@{
+        Header = '## 2026-09-01 23:49 — 局所検査の新規record'
+        BodyLines = @('Roadmap-Claim: none', '局所検査5件すべてが通った。')
+    }
+    $secondMissingRecord = [pscustomobject]@{
+        Header = '## 2026-09-01 23:48 — 契約行の無い2件目'
+        BodyLines = @('本文だけがある。')
+    }
+    Set-StagedFixtureReport -Text (Format-StagedFixtureDocument -Records @($baseRecord, $validNoneRecord, $secondMissingRecord))
+    Assert-Exit (Invoke-StagedReportCheck) 2 "one of two new records missing claim" "Roadmap-Claim"
+
+    $fencedClaimRecord = [pscustomobject]@{
+        Header = '## 2026-09-01 23:47 — code fence内だけにclaimがあるrecord'
+        BodyLines = @('```text', 'Roadmap-Claim: none', '```', '本文です。')
+    }
+    Set-StagedFixtureReport -Text (Format-StagedFixtureDocument -Records @($baseRecord, $fencedClaimRecord))
+    Assert-Exit (Invoke-StagedReportCheck) 2 "claim hidden in code fence" "実際: 0行"
+
+    $fencedHeadingRecord = [pscustomobject]@{
+        Header = '## 2026-09-01 23:46 — code fence内の見出し引用'
+        BodyLines = @(
+            'Roadmap-Claim: none',
+            '本文中で過去の壊れた見出しを引用する。',
+            '```markdown',
+            '## 2026-08-31 08:00頃 — backtick fence内の引用見出し',
+            'Roadmap-Claim: whole',
+            '```',
+            '~~~~text',
+            '## 2026-09-01頃 — tilde fence内の引用見出し',
+            'Roadmap-Claim: bounded',
+            '~~~~'
+        )
+    }
+    Set-StagedFixtureReport -Text (Format-StagedFixtureDocument -Records @($baseRecord, $fencedHeadingRecord))
+    Assert-Exit (Invoke-StagedReportCheck) 0 "Markdown fenced headings are not report boundaries"
+
+    $duplicateHeaderRecord = [pscustomobject]@{
+        Header = $baseHeader
+        BodyLines = @('同じ見出しをもう1件足し、契約行を省いた。')
+    }
+    Set-StagedFixtureReport -Text (Format-StagedFixtureDocument -Records @($baseRecord, $duplicateHeaderRecord))
+    Assert-Exit (Invoke-StagedReportCheck) 2 "extra duplicate header is rejected as ambiguous" "見出しと重複"
+
+    # 順方向と逆方向の両方を固定する。特に「新invalid→旧valid」の逆順は、
+    # 先頭からHEAD件数を消費するだけだとinvalidを旧扱いにできた回避形である。
+    $invalidDuplicateOfValid = [pscustomobject]@{
+        Header = $baseValidRecord.Header
+        BodyLines = @('新しく足した側には契約行が無い。')
+    }
+    Set-StagedFixtureReport -Text (Format-StagedFixtureDocument -Records @($baseRecord, $baseValidRecord, $invalidDuplicateOfValid))
+    Assert-Exit (Invoke-StagedReportCheck) 2 "old valid then new invalid duplicate header" "見出しと重複"
+    Set-StagedFixtureReport -Text (Format-StagedFixtureDocument -Records @($invalidDuplicateOfValid, $baseRecord, $baseValidRecord))
+    Assert-Exit (Invoke-StagedReportCheck) 2 "new invalid then old valid duplicate header" "見出しと重複"
+
+    $boundedRecord = [pscustomobject]@{
+        Header = '## 2026-09-01 23:46 — IDを限定した進捗'
+        BodyLines = @('Roadmap-Claim: bounded', $snapshotLine, $boundsLine, '指定した2項目だけを照合した。')
+    }
+    Set-StagedFixtureReport -Text (Format-StagedFixtureDocument -Records @($baseRecord, $boundedRecord))
+    Assert-Exit (Invoke-StagedReportCheck) 0 "valid bounded staged contract"
+    $boundedWithoutBoundsRecord = [pscustomobject]@{
+        Header = $boundedRecord.Header
+        BodyLines = @('Roadmap-Claim: bounded', $snapshotLine, 'Boundsを省いた。')
+    }
+    Set-StagedFixtureReport -Text (Format-StagedFixtureDocument -Records @($baseRecord, $boundedWithoutBoundsRecord))
+    Assert-Exit (Invoke-StagedReportCheck) 2 "bounded staged contract needs bounds" "Roadmap-Bounds"
+
+    $noneWithSnapshotRecord = [pscustomobject]@{
+        Header = '## 2026-09-01 23:45 — noneへsnapshotを混在したrecord'
+        BodyLines = @('Roadmap-Claim: none', $snapshotLine, '局所報告です。')
+    }
+    Set-StagedFixtureReport -Text (Format-StagedFixtureDocument -Records @($baseRecord, $noneWithSnapshotRecord))
+    Assert-Exit (Invoke-StagedReportCheck) 2 "none rejects machine-wide evidence" "混在させない"
+
+    $wrongProgressRecord = [pscustomobject]@{
+        Header = '## 2026-09-01 23:44 — 壊れたprogressのrecord'
+        BodyLines = @('Roadmap-Claim: whole', $snapshotLine, 'Roadmap-Progress: checked=1 total=2 percent=50.0')
+    }
+    Set-StagedFixtureReport -Text (Format-StagedFixtureDocument -Records @($baseRecord, $wrongProgressRecord))
+    Assert-Exit (Invoke-StagedReportCheck) 2 "wrong staged progress" "実測値と一致しません"
+
+    # checkerは常にindexを読む。stage後のworktree修正で負例を隠せず、逆向きの
+    # unstaged破壊でも正しいindexを誤って落とさない。
+    Set-StagedFixtureReport -Text (Format-StagedFixtureDocument -Records @($baseRecord, $secondMissingRecord))
+    Set-StagedFixtureReport -Text (Format-StagedFixtureDocument -Records @($baseRecord, $validNoneRecord)) -DoNotStage
+    Assert-Exit (Invoke-StagedReportCheck) 2 "invalid index cannot be hidden by valid worktree" "Roadmap-Claim"
+
+    Set-StagedFixtureReport -Text (Format-StagedFixtureDocument -Records @($baseRecord, $validNoneRecord))
+    Set-StagedFixtureReport -Text (Format-StagedFixtureDocument -Records @($baseRecord, $secondMissingRecord)) -DoNotStage
+    Assert-Exit (Invoke-StagedReportCheck) 0 "valid index is independent from invalid worktree"
 
     $now = Get-Date
     $headingTime = $now.AddMinutes(-1)
