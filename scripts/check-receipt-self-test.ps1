@@ -340,6 +340,49 @@ finally {
 
 Write-Host "[OK] synthetic receipt removed; no rust-w4/check-all pass receipt created"
 
+# --- Negative examples for the changed-.rs selector used by the W4 gate's
+# timestamp alignment. `git status --porcelain -z` entries are
+# `XY <space><path>NUL`, except renames/copies which append the OLD path as a
+# second NUL-terminated field with no status letters. The old side must be
+# skipped (it no longer exists under that name), deletions must be skipped
+# (nothing to touch), and non-.rs paths must never be touched.
+$nul = ([char]0).ToString()
+$porcelainEntries = @(
+    "A  crates/ori3-rigid/src/staged.rs",
+    " M apps/desktop/src-tauri/src/store.rs",
+    "?? crates/ori3-layers/src/replay.rs",
+    "D  crates/ori3-rigid/src/removed_from_index.rs",
+    " D crates/ori3-rigid/src/removed_in_worktree.rs",
+    "R  crates/ori3-rigid/src/new_name.rs",
+    "crates/ori3-rigid/src/old_name.rs",
+    "MM crates/ori3-cp/src/curve.rs",
+    "?? crates/ori3-rigid/src/notes.md",
+    "?? crates/ori3-rigid/build.ps1"
+)
+$porcelainText = ($porcelainEntries -join $nul) + $nul
+$selectedRustPaths = @(Get-Ori3ChangedRustPathsFromPorcelainZ $porcelainText)
+$expectedRustPaths = @(
+    "crates/ori3-rigid/src/staged.rs",
+    "apps/desktop/src-tauri/src/store.rs",
+    "crates/ori3-layers/src/replay.rs",
+    "crates/ori3-rigid/src/new_name.rs",
+    "crates/ori3-cp/src/curve.rs"
+)
+Assert-Ori3SelfTest (($selectedRustPaths -join $nul) -eq ($expectedRustPaths -join $nul)) ("changed-.rs selection mismatch: got " + ($selectedRustPaths -join ", "))
+Assert-Ori3SelfTest (-not ($selectedRustPaths -contains "crates/ori3-rigid/src/old_name.rs")) "rename old side was treated as its own entry"
+Assert-Ori3SelfTest (-not ($selectedRustPaths -contains "crates/ori3-rigid/src/removed_from_index.rs")) "index-deleted path was selected"
+Assert-Ori3SelfTest (-not ($selectedRustPaths -contains "crates/ori3-rigid/src/removed_in_worktree.rs")) "worktree-deleted path was selected"
+Assert-Ori3SelfTest ((@(Get-Ori3ChangedRustPathsFromPorcelainZ "")).Count -eq 0) "empty git status did not select zero paths"
+$malformedRejected = $false
+try {
+    [void](Get-Ori3ChangedRustPathsFromPorcelainZ ("A" + $nul))
+}
+catch {
+    $malformedRejected = $true
+}
+Assert-Ori3SelfTest $malformedRejected "malformed git status entry was accepted"
+Write-Host "[OK] changed-.rs selection: staged/modified/untracked/rename-new only; deletions, rename-old, .md and .ps1 excluded"
+
 # --- Negative-example regression: the -RunRustW4 helper's own process exit
 # code must equal cargo's real exit code, never an array whose last element
 # happens to be that code.
@@ -437,6 +480,9 @@ try {
     Assert-Ori3SelfTest ((([IO.File]::ReadAllText($failGateStatusPath)).Trim()) -eq "cargo-started") "gate status was not left at cargo-started for the failing stub"
     Assert-Ori3SelfTest ($failResult.Output.Contains("running 3 tests")) "stub cargo stdout (running 3 tests) did not reach the helper's own output"
     Assert-Ori3SelfTest ($failResult.Output.Contains("test result: FAILED")) "stub cargo stdout (test result: FAILED) did not reach the helper's own output"
+    # This sandbox has no crates/ or apps/, so the timestamp alignment must
+    # report zero and the gate must behave exactly as before.
+    Assert-Ori3SelfTest ($failResult.Output.Contains("更新時刻の揃えは 0 件")) "zero changed .rs did not report a zero alignment line"
     Write-Host "[OK] stub cargo exit 101 => helper process exit code 101, gate status cargo-started, stub stdout visible"
 
     $stubOkDirectory = New-Ori3StubCargoDirectory -ExitCode 0 -ResultLine "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
@@ -444,6 +490,7 @@ try {
     $okResult = Invoke-Ori3RustW4GateChildProcess -RepoRoot $ExitCodeRepo -GateStatusPath $okGateStatusPath -StubCargoDirectory $stubOkDirectory
     Assert-Ori3SelfTest ($okResult.ExitCode -eq 0) ("stub cargo exit 0 did not produce helper process exit code 0: got " + $okResult.ExitCode + " output=" + $okResult.Output)
     Assert-Ori3SelfTest ($okResult.Output.Contains("[OK]")) "stub cargo exit 0 did not produce an [OK] line from the helper"
+    Assert-Ori3SelfTest ($okResult.Output.Contains("更新時刻の揃えは 0 件")) "zero changed .rs did not report a zero alignment line on the passing path"
     Write-Host "[OK] stub cargo exit 0 => helper process exit code 0 with [OK]"
 }
 finally {
@@ -453,3 +500,98 @@ finally {
 }
 
 Write-Host "[OK] Rust W4 gate child-process exit code matches stub cargo exit code (no real cargo invoked)"
+
+# --- Negative-example regression: cargo decides "unchanged" from file
+# modification times, not from content hashes.
+#
+# Real incident (2026-09-04 22:37): four .rs files were copied into the
+# repository from a separate work copy with Copy-Item. Their content was
+# correct and `git diff --cached` matched, but their LastWriteTime stayed at
+# the time they had been edited in the copy (19:06-19:26), while the root
+# target/ already held ori3-rigid artifacts built at 20:3x-21:4x. cargo judged
+# ori3-rigid "unchanged", relinked the stale rlib, and the commit stopped with
+# `error[E0425]: cannot find function to_frame3d_geometry_only in crate
+# ori3_rigid`. Setting the four files' LastWriteTime to now made the same
+# content pass.
+#
+# Like the exit-code test above, this never invokes the real cargo: it drives
+# the real `scripts/check-receipt.ps1 -RunRustW4` as a child process with a
+# stub cargo on PATH, and checks the files on disk before and after.
+
+$MtimeSandbox = Join-Path $ReceiptTempBase ("ori3-mtime-self-test-" + [Guid]::NewGuid().ToString("N"))
+$MtimeRepo = Join-Path $MtimeSandbox "repo"
+
+function Remove-Ori3MtimeSelfTestSandbox {
+    if (-not (Test-Path -LiteralPath $MtimeSandbox)) { return }
+    $fullSandbox = [IO.Path]::GetFullPath($MtimeSandbox).TrimEnd([char[]]"\\/")
+    if ([IO.Path]::GetDirectoryName($fullSandbox) -ne $ReceiptTempBase -or
+        [IO.Path]::GetFileName($fullSandbox) -notmatch '^ori3-mtime-self-test-[0-9a-f]{32}$') {
+        throw "Refusing unsafe mtime self-test cleanup: $fullSandbox"
+    }
+    Remove-Item -LiteralPath $fullSandbox -Recurse -Force
+}
+
+$stubMtimeDirectory = $null
+try {
+    [void][IO.Directory]::CreateDirectory((Join-Path $MtimeRepo "crates\ori3-stub\src"))
+    $global:LASTEXITCODE = 0
+    & git init --quiet $MtimeRepo
+    if ($LASTEXITCODE -ne 0) { throw "mtime self-test temporary repository initialization failed: exit=$LASTEXITCODE" }
+
+    $stagedRustPath = Join-Path $MtimeRepo "crates\ori3-stub\src\staged.rs"
+    $untrackedRustPath = Join-Path $MtimeRepo "crates\ori3-stub\src\untracked.rs"
+    $keptMarkdownPath = Join-Path $MtimeRepo "crates\ori3-stub\src\notes.md"
+    $keptScriptPath = Join-Path $MtimeRepo "crates\ori3-stub\build.ps1"
+    # Negative control: a .rs outside the crates/apps pathspec. Nothing else in
+    # the gate touches files, so if this one also moved, the assertions below
+    # would be proving something other than the alignment step.
+    [void][IO.Directory]::CreateDirectory((Join-Path $MtimeRepo "docs"))
+    $outOfScopeRustPath = Join-Path $MtimeRepo "docs\outside.rs"
+    $utf8NoBom = [Text.UTF8Encoding]::new($false)
+    [IO.File]::WriteAllText($stagedRustPath, "pub fn to_frame3d_geometry_only() {}`n", $utf8NoBom)
+    [IO.File]::WriteAllText($untrackedRustPath, "pub fn replay() {}`n", $utf8NoBom)
+    [IO.File]::WriteAllText($keptMarkdownPath, "notes`n", $utf8NoBom)
+    [IO.File]::WriteAllText($keptScriptPath, "Write-Host 'stub'`n", $utf8NoBom)
+    [IO.File]::WriteAllText($outOfScopeRustPath, "pub fn outside() {}`n", $utf8NoBom)
+
+    # Sandbox index only. The real repository's .git is never touched.
+    $global:LASTEXITCODE = 0
+    & git -C $MtimeRepo add -- "crates/ori3-stub/src/staged.rs"
+    if ($LASTEXITCODE -ne 0) { throw "mtime self-test staging failed: exit=$LASTEXITCODE" }
+
+    $staleStamp = (Get-Date).AddHours(-2)
+    foreach ($stalePath in @($stagedRustPath, $untrackedRustPath, $keptMarkdownPath, $keptScriptPath, $outOfScopeRustPath)) {
+        [IO.File]::SetLastWriteTime($stalePath, $staleStamp)
+    }
+    $outOfScopeStampBefore = [IO.File]::GetLastWriteTime($outOfScopeRustPath)
+    $stagedHashBefore = (Get-FileHash -LiteralPath $stagedRustPath -Algorithm SHA256).Hash
+    $untrackedHashBefore = (Get-FileHash -LiteralPath $untrackedRustPath -Algorithm SHA256).Hash
+    $markdownStampBefore = [IO.File]::GetLastWriteTime($keptMarkdownPath)
+    $scriptStampBefore = [IO.File]::GetLastWriteTime($keptScriptPath)
+
+    $mtimeReceiptStore = Join-Path $MtimeRepo ".origami3\check-receipts"
+    [void][IO.Directory]::CreateDirectory($mtimeReceiptStore)
+    $mtimeGateStatusPath = Join-Path $mtimeReceiptStore ("gate-mtime-" + [Guid]::NewGuid().ToString("N") + ".status")
+
+    $stubMtimeDirectory = New-Ori3StubCargoDirectory -ExitCode 0 -ResultLine "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+    $gateStartedAt = Get-Date
+    $mtimeResult = Invoke-Ori3RustW4GateChildProcess -RepoRoot $MtimeRepo -GateStatusPath $mtimeGateStatusPath -StubCargoDirectory $stubMtimeDirectory
+
+    Assert-Ori3SelfTest ($mtimeResult.ExitCode -eq 0) ("stub cargo exit 0 with stale .rs did not produce helper process exit code 0: got " + $mtimeResult.ExitCode + " output=" + $mtimeResult.Output)
+    $stagedStampAfter = [IO.File]::GetLastWriteTime($stagedRustPath)
+    $untrackedStampAfter = [IO.File]::GetLastWriteTime($untrackedRustPath)
+    Assert-Ori3SelfTest ($stagedStampAfter -ge $gateStartedAt) ("staged .rs kept its stale timestamp: " + $stagedStampAfter.ToString("o"))
+    Assert-Ori3SelfTest ($untrackedStampAfter -ge $gateStartedAt) ("untracked .rs kept its stale timestamp: " + $untrackedStampAfter.ToString("o"))
+    Assert-Ori3SelfTest ((Get-FileHash -LiteralPath $stagedRustPath -Algorithm SHA256).Hash -eq $stagedHashBefore) "staged .rs content changed while aligning its timestamp"
+    Assert-Ori3SelfTest ((Get-FileHash -LiteralPath $untrackedRustPath -Algorithm SHA256).Hash -eq $untrackedHashBefore) "untracked .rs content changed while aligning its timestamp"
+    Assert-Ori3SelfTest ([IO.File]::GetLastWriteTime($keptMarkdownPath) -eq $markdownStampBefore) "a .md file's timestamp was changed"
+    Assert-Ori3SelfTest ([IO.File]::GetLastWriteTime($keptScriptPath) -eq $scriptStampBefore) "a .ps1 file's timestamp was changed"
+    Assert-Ori3SelfTest ([IO.File]::GetLastWriteTime($outOfScopeRustPath) -eq $outOfScopeStampBefore) "a .rs outside crates/apps was touched, so the two aligned files prove nothing about the alignment step"
+    Assert-Ori3SelfTest ($mtimeResult.Output.Contains("2件")) ("timestamp alignment did not report two files: output=" + $mtimeResult.Output)
+    Assert-Ori3SelfTest ($mtimeResult.Output.Contains("running 3 tests")) "stub cargo did not run after the timestamp alignment"
+    Write-Host "[OK] stale changed .rs => timestamps moved to now with identical SHA-256; .md and .ps1 untouched; stub cargo still ran"
+}
+finally {
+    Remove-Ori3StubCargoDirectory $stubMtimeDirectory
+    Remove-Ori3MtimeSelfTestSandbox
+}

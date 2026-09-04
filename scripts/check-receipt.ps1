@@ -1142,6 +1142,143 @@ function Get-Ori3TrackedStatus {
     return Invoke-Ori3CapturedCommand $gitPath @("status", "--porcelain", "--untracked-files=no") $Root
 }
 
+function Get-Ori3ChangedRustPathsFromPorcelainZ {
+    param([string]$StatusText)
+
+    # `git status --porcelain -z` の1項目は `XY <半角空白> <path>` で、path中の
+    # 引用・改行が起きないNUL区切りである。rename/copyだけは
+    # `XY <新path>NUL<旧path>NUL` の2フィールドになるので、新しい側を採り、
+    # 旧側のフィールドは状態文字を持たないため必ず読み飛ばす。
+    $paths = New-Object System.Collections.Generic.List[string]
+    if ([string]::IsNullOrEmpty($StatusText)) {
+        return $paths.ToArray()
+    }
+    $seen = New-Object "System.Collections.Generic.HashSet[string]" ([System.StringComparer]::Ordinal)
+    $fields = $StatusText.Split([char]0)
+    $fieldIndex = 0
+    while ($fieldIndex -lt $fields.Length) {
+        $entry = [string]$fields[$fieldIndex]
+        $fieldIndex++
+        if ($entry.Length -eq 0) {
+            continue
+        }
+        if ($entry.Length -lt 4 -or $entry[2] -ne ' ') {
+            throw "git statusの項目を解釈できません（長さ $($entry.Length)）"
+        }
+        $indexState = $entry[0]
+        $worktreeState = $entry[1]
+        $path = $entry.Substring(3)
+        if ($indexState -eq 'R' -or $indexState -eq 'C' -or
+            $worktreeState -eq 'R' -or $worktreeState -eq 'C') {
+            $fieldIndex++
+        }
+        # 削除された側は実体が無いので触れない。
+        if ($indexState -eq 'D' -or $worktreeState -eq 'D') {
+            continue
+        }
+        if (-not $path.EndsWith(".rs", [System.StringComparison]::Ordinal)) {
+            continue
+        }
+        if ($seen.Add($path)) {
+            $paths.Add($path)
+        }
+    }
+    return $paths.ToArray()
+}
+
+function Get-Ori3ChangedRustSourceStatusText {
+    param([string]$Root)
+
+    # 標準出力だけを読む。`Invoke-Ori3CapturedCommand` は標準エラーを連結して
+    # 返すため、`warning: in the working copy of ...` のようなgitの警告行が
+    # pathとして混ざってしまう。`--no-optional-locks` で状態の読み取りが
+    # indexを書かないようにする（gitへの書き込みは一切行わない）。
+    $gitPath = Get-Ori3ResolvedCommand "git"
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $gitPath
+    $startInfo.Arguments = "--no-optional-locks -c core.quotepath=false status --porcelain --untracked-files=all -z -- crates apps"
+    $startInfo.WorkingDirectory = $Root
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.StandardOutputEncoding = $script:Ori3Utf8NoBom
+    $startInfo.StandardErrorEncoding = $script:Ori3Utf8NoBom
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) {
+            throw "git statusを起動できません"
+        }
+        $stdout = $process.StandardOutput.ReadToEnd()
+        $stderr = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        if ($process.ExitCode -ne 0) {
+            throw "git statusが失敗しました ($($process.ExitCode)): $stderr"
+        }
+    }
+    finally {
+        $process.Dispose()
+    }
+    return $stdout
+}
+
+function Update-Ori3ChangedRustSourceTimestamps {
+    param([string]$Root)
+
+    # cargoの変更検出は内容のhashではなくファイルの更新時刻である。複製から
+    # `Copy-Item` で写したsourceは編集時刻を保つため、rootの `target/` に
+    # もっと新しい成果物があると、cargoは「変更なし」と判定して古いrlibを
+    # 使い回す（2026-09-04 22:37の不具合。内容は正しいのに
+    # `error[E0425]: cannot find function to_frame3d_geometry_only` でcommitが
+    # 止まった）。cargoを呼ぶ直前に、作業ツリーで変更のある `.rs` の更新時刻
+    # だけを現在時刻へ揃える。内容は1 byteも変えない。
+    #
+    # この関数は出力ストリームへ1つも値を漏らしてはならない。漏らすと
+    # `Invoke-Ori3RustW4Gate` の戻り値が配列になり、2026-09-04 15:13の
+    # 「失敗なのにcommitが通る」不具合と同じ壊れ方をする。表示はWrite-Hostだけで行う。
+    $relativePaths = @()
+    try {
+        $statusText = Get-Ori3ChangedRustSourceStatusText $Root
+        $relativePaths = @(Get-Ori3ChangedRustPathsFromPorcelainZ $statusText)
+    }
+    catch {
+        Write-Host "[WARN] 変更のある.rsを列挙できないため、更新時刻の揃えを飛ばします: $($_.Exception.Message)" -ForegroundColor Yellow
+        return
+    }
+
+    $now = Get-Date
+    $alignedCount = 0
+    $oldestBefore = $null
+    foreach ($relativePath in $relativePaths) {
+        $platformPath = $relativePath.Replace('/', [System.IO.Path]::DirectorySeparatorChar)
+        $fullPath = [System.IO.Path]::GetFullPath((Join-Path $Root $platformPath))
+        if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
+            continue
+        }
+        try {
+            $item = Get-Item -LiteralPath $fullPath -Force
+            $before = $item.LastWriteTime
+            if ($null -eq $oldestBefore -or $before -lt $oldestBefore) {
+                $oldestBefore = $before
+            }
+            $item.LastWriteTime = $now
+            $alignedCount++
+        }
+        catch {
+            Write-Host "[WARN] 更新時刻を揃えられません: $relativePath ($($_.Exception.Message))" -ForegroundColor Yellow
+        }
+    }
+
+    if ($alignedCount -eq 0) {
+        Write-Host "[..] 更新時刻の揃えは 0 件"
+        return
+    }
+    Write-Host ("[..] 変更のある.rsの更新時刻を今へ揃えました: {0}件 (最も古い元の更新時刻: {1})" -f
+        $alignedCount, $oldestBefore.ToString("yyyy-MM-dd HH:mm:ss"))
+}
+
 function Invoke-Ori3RustW4Gate {
     param([string]$Root, [string]$StatusPath)
 
@@ -1194,6 +1331,11 @@ function Invoke-Ori3RustW4Gate {
         return 127
     }
     Write-Host "[..] Rustの変更を含むため、作業ツリー全体のテストを実行します (W4 exact 4 --skip)"
+    # cargoを呼ぶ経路だけで実行する。receiptを再利用する経路は上で `return 0`
+    # 済みなので、この行に到達した時点で必ずcargoを起動する。`| Out-Null` は、
+    # 万一この関数が値を出力しても`Invoke-Ori3RustW4Gate`の戻り値へ混ざらない
+    # ようにするための二重の防護である。
+    Update-Ori3ChangedRustSourceTimestamps $resolvedRoot | Out-Null
     Set-Ori3GateStatus $resolvedRoot $StatusPath "cargo-started"
     $global:LASTEXITCODE = 0
     $pushedLocation = $false
