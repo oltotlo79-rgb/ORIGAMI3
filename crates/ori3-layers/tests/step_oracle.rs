@@ -495,6 +495,7 @@ impl<'a> FixtureParser<'a> {
                 alignment: None,
                 finish_soft: None,
                 note,
+                technique_classification: None,
             });
         }
         steps

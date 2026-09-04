@@ -237,6 +237,7 @@ fn traditional_crane_document() -> Document {
             alignment: None,
             finish_soft: None,
             note: step.get("note").text().to_owned(),
+            technique_classification: None,
         })
         .collect::<Vec<_>>();
     let display_json = root.get("display");

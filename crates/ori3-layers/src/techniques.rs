@@ -1519,6 +1519,7 @@ impl Session {
             alignment: None,
             finish_soft: None,
             note: String::new(),
+            technique_classification: None,
         };
         *cp = self.cp;
         Ok(FoldThroughResult {
@@ -3012,7 +3013,7 @@ fn regular_polygon(
 ///
 /// `v` は中央多角形の頂点(順に並べたもの)、`alpha` はねじる角。
 /// 辺の長さも辺の数も仮定しない(頂点ごとの外角から折り線の向きを決める)。
-fn twist_parts(
+pub(crate) fn twist_parts(
     flap: &[FaceId],
     given: &[FaceId],
     center: DVec2,

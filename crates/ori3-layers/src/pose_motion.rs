@@ -478,6 +478,7 @@ pub fn solve_and_apply_flat_pose_step(
         alignment: None,
         finish_soft: None,
         note: input.note,
+        technique_classification: None,
     });
 
     let completed = replay(&candidate, candidate.sequence.len(), 1.0);

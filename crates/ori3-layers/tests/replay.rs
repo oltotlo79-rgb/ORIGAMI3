@@ -425,6 +425,7 @@ fn steps_without_drivers_are_not_skipped() {
         alignment: None,
         finish_soft: None,
         note: String::new(),
+        technique_classification: None,
     });
     let res = replay(&doc, 4, 1.0);
     assert!(
@@ -552,6 +553,7 @@ fn accordion_document() -> Document {
             alignment: None,
             finish_soft: None,
             note: String::new(),
+            technique_classification: None,
         })
         .collect();
 
@@ -708,6 +710,7 @@ fn saved_layer_order_authority_follows_the_replay_position() {
         alignment: None,
         finish_soft: None,
         note: String::new(),
+        technique_classification: None,
     });
     assert_eq!(
         saved_layer_order_at(&doc, &faces, 3, 1.0),
@@ -730,6 +733,7 @@ fn missing_or_fully_unresolved_layer_order_does_not_create_authority() {
         alignment: None,
         finish_soft: None,
         note: String::new(),
+        technique_classification: None,
     });
     let pose_faces = extract_faces(&pose_only.cp);
     assert_eq!(saved_layer_order_at(&pose_only, &pose_faces, 1, 1.0), None);
@@ -785,6 +789,7 @@ fn pose_without_saved_order_keeps_the_rigid_canonical_surface_rank() {
             alignment: None,
             finish_soft: None,
             note: String::new(),
+            technique_classification: None,
         });
 
         let faces = extract_faces(&doc.cp);
@@ -930,6 +935,7 @@ fn pose_step_reproduces_folded_shape_after_cp_edit() {
         alignment: None,
         finish_soft: None,
         note: String::new(),
+        technique_classification: None,
     });
 
     let before = replay(&doc, 1, 1.0);
@@ -979,6 +985,7 @@ fn pose_step_after_flat_folds_keeps_the_solid_shape() {
         alignment: None,
         finish_soft: None,
         note: String::new(),
+        technique_classification: None,
     });
     let posed = replay(&doc, 2, 1.0);
     assert!(posed.skipped.is_empty(), "警告={:?}", posed.warnings);
@@ -1086,6 +1093,7 @@ fn pose_step_angles_must_not_be_rounded() {
             alignment: None,
             finish_soft: None,
             note: String::new(),
+            technique_classification: None,
         });
         replay(&doc, 1, 1.0)
     };

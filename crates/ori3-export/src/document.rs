@@ -65,6 +65,7 @@ mod tests {
             alignment: None,
             finish_soft: None,
             note: "座布団花のチェックポイント".to_string(),
+            technique_classification: None,
         });
         document.display.soft_enabled = true;
         document.display.soft_stiffness = 0.25;

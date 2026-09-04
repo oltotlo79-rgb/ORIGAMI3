@@ -601,6 +601,7 @@ fn crane() -> (Document, FlatState) {
         alignment: None,
         finish_soft: None,
         note: "正本G1の下折り線を付けて開く".to_string(),
+        technique_classification: None,
     });
 
     // 手A: G1〜G3の34辺を一度に畳む花弁折り相当で、鳥の基本形にする。
@@ -617,6 +618,7 @@ fn crane() -> (Document, FlatState) {
         alignment: None,
         finish_soft: None,
         note: "正本G1〜G3の鳥の基本形".to_string(),
+        technique_classification: None,
     });
 
     // 手B: 残るG4〜G9の68辺を一度に畳む。首・尾・頭の中割りが中心なので
@@ -634,6 +636,7 @@ fn crane() -> (Document, FlatState) {
         alignment: None,
         finish_soft: None,
         note: "正本G4〜G9の完成".to_string(),
+        technique_classification: None,
     });
 
     let faces = extract_faces(&doc.cp);
@@ -1163,6 +1166,7 @@ fn finished_replay_coordinates(
         alignment: None,
         finish_soft: Some(settings),
         note: "SIM-015仕上げ確定".to_string(),
+        technique_classification: None,
     });
     let up_to = document.sequence.len();
     assert_eq!(
@@ -4693,6 +4697,7 @@ fn saved_order_never_overrides_geometric_rank_across_angle_buckets() {
                 alignment: None,
                 finish_soft: None,
                 note: String::new(),
+                technique_classification: None,
             });
             let mut geometric_doc = saved_doc.clone();
             for step in &mut geometric_doc.sequence {

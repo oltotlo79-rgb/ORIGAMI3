@@ -467,6 +467,7 @@ fn same_fold_step_bits(left: &FoldStep, right: &FoldStep) -> bool {
         alignment: left_alignment,
         finish_soft: left_finish_soft,
         note: left_note,
+        technique_classification: left_classification,
     } = left;
     let FoldStep {
         id: right_id,
@@ -476,6 +477,7 @@ fn same_fold_step_bits(left: &FoldStep, right: &FoldStep) -> bool {
         alignment: right_alignment,
         finish_soft: right_finish_soft,
         note: right_note,
+        technique_classification: right_classification,
     } = right;
     left_id == right_id
         && left_kind == right_kind
@@ -506,6 +508,8 @@ fn same_fold_step_bits(left: &FoldStep, right: &FoldStep) -> bool {
             _ => false,
         }
         && left_note == right_note
+        // 表示名は浮動小数を含まないので、そのまま値として比べる。
+        && left_classification == right_classification
 }
 
 fn same_display_settings_bits(left: &DisplaySettings, right: &DisplaySettings) -> bool {
@@ -1084,6 +1088,7 @@ pub fn canonical_flat_pose_at(
         alignment: None,
         finish_soft: None,
         note: "折った形を再現してから折る".to_string(),
+        technique_classification: None,
     };
 
     // 保存値だけを読み直しても同じ平坦状態になることを、返却前に確かめる。
@@ -2175,6 +2180,10 @@ fn verified_complete_precrease_collapse_rerun(
     let mut regenerated_step = rerun.step.clone();
     regenerated_step.id = stored_step.id;
     regenerated_step.note.clone_from(&stored_step.note);
+    // The display classification is metadata like `note`: it never changes which geometry the
+    // atomic operation produces.  Copy it across so a correct document is not rejected merely
+    // because the rerun has not been through the classification helper.
+    regenerated_step.technique_classification = stored_step.technique_classification;
     // `layer_order` is provenance, not part of the operation geometry. Automatic collapse now
     // deliberately omits it when general constraints leave ties, while an existing document may
     // carry an independently supplied explicit oracle for those ties.
@@ -3569,6 +3578,7 @@ mod tests {
             alignment: None,
             finish_soft: None,
             note: String::new(),
+            technique_classification: None,
         });
 
         let pose = canonical_nonflat_pose_at(&document, &faces, 1, None)
@@ -3822,6 +3832,7 @@ mod tests {
                 alignment: None,
                 finish_soft: None,
                 note: String::new(),
+                technique_classification: None,
             },
             FoldStep {
                 id: 1,
@@ -3835,6 +3846,7 @@ mod tests {
                 alignment: None,
                 finish_soft: None,
                 note: String::new(),
+                technique_classification: None,
             },
         ];
         document
@@ -4247,6 +4259,7 @@ mod tests {
                 alignment: None,
                 finish_soft: None,
                 note: String::new(),
+                technique_classification: None,
             },
             FoldStep {
                 id: 1,
@@ -4267,6 +4280,7 @@ mod tests {
                 alignment: None,
                 finish_soft: None,
                 note: String::new(),
+                technique_classification: None,
             },
         ];
         document
@@ -4506,6 +4520,7 @@ mod tests {
             alignment: None,
             finish_soft: None,
             note: String::new(),
+            technique_classification: None,
         };
         document.sequence = vec![step(0, 180.0), step(1, -180.0)];
         let faces = extract_faces(&document.cp);
@@ -4988,5 +5003,62 @@ mod tests {
         );
         let uncached_endpoint = replay_with_faces_impl(&document, &faces, 2, 1.0, None);
         assert_replay_result_bits_eq(&endpoint, &uncached_endpoint);
+    }
+
+    /// 表示名を足しても、再生した紙の数値がbit1つ分も変わらない。
+    ///
+    /// 再生はこの項目を読まない。`PartialEq`だけでは`-0.0`と`+0.0`を区別しないため、
+    /// [`assert_replay_result_bits_eq`]で全f64を`to_bits()`比較する。
+    #[test]
+    fn adding_a_display_name_changes_no_replayed_bit() {
+        use ori3_model::{
+            DisplayTechniqueKind, TechniqueClassification, TechniqueClassificationOrigin,
+        };
+
+        let plain = degree_four_document(TechniqueKind::Simple);
+        let mut named = plain.clone();
+        for step in &mut named.sequence {
+            step.technique_classification = Some(TechniqueClassification {
+                kind: DisplayTechniqueKind::GrabMove,
+                origin: TechniqueClassificationOrigin::Automatic,
+            });
+        }
+        assert!(!plain.sequence.is_empty(), "比較する手順があるfixture");
+        for (plain_step, named_step) in plain.sequence.iter().zip(&named.sequence) {
+            assert_eq!(
+                plain_step.technique_classification, None,
+                "片方だけが表示名を持つ"
+            );
+            assert!(named_step.technique_classification.is_some());
+            let mut stripped = named_step.clone();
+            stripped.technique_classification = None;
+            assert!(
+                same_fold_step_bits(plain_step, &stripped),
+                "kind・drivers・layer_order・alignment・finish_soft・noteは一切変えていない"
+            );
+        }
+
+        let faces = extract_faces(&plain.cp);
+        for up_to in 1..=plain.sequence.len() {
+            for t in [0.0, 0.5, 1.0] {
+                // cacheを使わずに解き直した2本
+                assert_replay_result_bits_eq(
+                    &replay_with_faces_impl(&plain, &faces, up_to, t, None),
+                    &replay_with_faces_impl(&named, &faces, up_to, t, None),
+                );
+                // それぞれ独立のcacheから再生した2本
+                let plain_cache = ReplayEndpointCache::new();
+                let named_cache = ReplayEndpointCache::new();
+                assert_replay_result_bits_eq(
+                    &replay_with_faces_impl(&plain, &faces, up_to, t, Some(&plain_cache)),
+                    &replay_with_faces_impl(&named, &faces, up_to, t, Some(&named_cache)),
+                );
+                // 同じ作品のcache有無どうしも一致する
+                assert_replay_result_bits_eq(
+                    &replay_with_faces_impl(&named, &faces, up_to, t, Some(&named_cache)),
+                    &replay_with_faces_impl(&named, &faces, up_to, t, None),
+                );
+            }
+        }
     }
 }

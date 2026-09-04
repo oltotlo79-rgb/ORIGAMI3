@@ -112,6 +112,7 @@ fn step(id: u32) -> FoldStep {
         alignment: None,
         finish_soft: None,
         note: format!("手順{id}"),
+        technique_classification: None,
     }
 }
 

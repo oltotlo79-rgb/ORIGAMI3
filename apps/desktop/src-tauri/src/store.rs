@@ -370,6 +370,41 @@ pub struct SpatialFoldSpec {
     pub mode: SpatialFoldMode,
 }
 
+/// 汎用層操作([`SeqOp::FlatMotion`])をどの入口から適用したか。
+///
+/// 画面から届くJSONには入れない。「自動で名前を付けた」と言えるのは backend の
+/// command だけで、画面が `Automatic` を名乗れないようにするための内部指定である。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum FlatMotionOrigin {
+    /// 手動の折り操作メニュー。利用者が選んだ「層操作」として記録する。
+    #[default]
+    ManualLayerOperation,
+    /// SIM-011「つかんで動かす」。折った結果から自動で名前を判定する。
+    GrabMove,
+}
+
+impl FlatMotionOrigin {
+    /// この入口に応じた分類の指定を作る。
+    ///
+    /// 自動判定を要求できるのは「つかんで動かす」だけである。判定には動きの指定と、
+    /// その動きが残した離散的な由来([`ori3_layers::TechniqueEvidence`])の両方を
+    /// 渡す。証拠が足りない動きは名前を持たず「つかんで動かした折り」になる。
+    fn classification_request(
+        self,
+        motion: &ori3_layers::FlatMotionInput,
+        evidence: &ori3_layers::TechniqueEvidence,
+    ) -> ori3_layers::TechniqueClassificationRequest {
+        match self {
+            Self::ManualLayerOperation => ori3_layers::TechniqueClassificationRequest::Explicit(
+                ori3_model::DisplayTechniqueKind::LayerOperation,
+            ),
+            Self::GrabMove => ori3_layers::TechniqueClassificationRequest::Automatic(
+                ori3_layers::classify_motion_plan(motion, evidence),
+            ),
+        }
+    }
+}
+
 impl Default for DocumentStore {
     /// 起動直後の初期状態(150mm正方形の新規作品)。
     fn default() -> Self {
@@ -662,6 +697,20 @@ impl DocumentStore {
         op: SeqOp,
         spatial: Option<SpatialFoldSpec>,
     ) -> Result<DocumentView, String> {
+        // 画面から届くJSONの経路は、いつでも手動の層操作である。
+        self.apply_seq_with_spatial_from(op, spatial, FlatMotionOrigin::ManualLayerOperation)
+    }
+
+    /// 汎用層操作の入口を明示した [`Self::apply_seq_with_spatial`]。
+    ///
+    /// 「つかんで動かす」だけが自動判定を要求できる。`Automatic` を付ける権限を
+    /// backend の command に閉じるため、この入口は crate の外へ出さない。
+    pub(crate) fn apply_seq_with_spatial_from(
+        &mut self,
+        op: SeqOp,
+        spatial: Option<SpatialFoldSpec>,
+        flat_motion_origin: FlatMotionOrigin,
+    ) -> Result<DocumentView, String> {
         let mut doc = self.doc.clone();
         let mut step_creases = self.step_creases.clone();
         let mut warnings: Vec<String> = Vec::new();
@@ -718,10 +767,11 @@ impl DocumentStore {
                 }
                 return Ok(self.commit_prebuilt(doc, step_creases, view));
             }
-            SeqOp::UpdateStep { step } => {
+            SeqOp::UpdateStep { mut step } => {
                 let Some(slot) = doc.sequence.iter_mut().find(|s| s.id == step.id) else {
                     return Err(format!("手順ID {} が見つかりません", step.id));
                 };
+                ori3_layers::carry_over_technique_classification(slot, &mut step);
                 *slot = step;
             }
             SeqOp::FoldThrough {
@@ -1156,17 +1206,21 @@ impl DocumentStore {
                 let mut insert_warnings = check_insert_point(&doc, up_to)?;
                 let (state, state_warnings) = ori3_layers::flat_state_at(&doc, &self.faces, up_to)?;
                 let mut cp = doc.cp.clone();
-                let result = ori3_layers::flat_motion(
-                    &mut cp,
-                    &self.faces,
-                    &state,
-                    &ori3_layers::FlatMotionInput {
-                        parts: parts.into_iter().map(to_layer_motion_part).collect(),
-                        kind,
-                    },
-                )?;
+                let motion = ori3_layers::FlatMotionInput {
+                    parts: parts.into_iter().map(to_layer_motion_part).collect(),
+                    kind,
+                };
+                // 分類に使う離散的な由来は、展開図へ書き戻す前の同じ処理から受け取る。
+                let (result, evidence) =
+                    ori3_layers::flat_motion_with_evidence(&mut cp, &self.faces, &state, &motion)?;
                 let mut step = result.step;
                 step.id = next_step_id(&doc, &step_creases);
+                // 成功した同じ処理の中で表示名を載せてから書類へ挿入する。
+                // 画面から追加のUpdateStepを投げる二段構えにはしない。
+                ori3_layers::assign_technique_classification(
+                    &mut step,
+                    &flat_motion_origin.classification_request(&motion, &evidence),
+                );
                 let lines = added_crease_lines(&doc.cp, &cp, &result.added_edges);
                 record_step_creases(&mut step_creases, step.id, lines);
                 doc.cp = cp;
@@ -1220,6 +1274,14 @@ impl DocumentStore {
                 )?;
                 let mut step = result.step;
                 step.id = next_step_id(&doc, &step_creases);
+                // 利用者が折り方を選んだ操作なので、成功した折り方をそのまま
+                // 「利用者が選んだ」由来として書類へ入れる前に載せる。
+                if let Some(display) = ori3_layers::display_kind_for_technique(kind) {
+                    ori3_layers::assign_technique_classification(
+                        &mut step,
+                        &ori3_layers::TechniqueClassificationRequest::Explicit(display),
+                    );
+                }
                 let lines = added_crease_lines(&doc.cp, &cp, &result.added_edges);
                 record_step_creases(&mut step_creases, step.id, lines);
                 doc.cp = cp;
@@ -1853,6 +1915,7 @@ fn nonflat_pose_step_from_input(
         alignment: None,
         finish_soft: None,
         note: "折った形を再現してから折り目を付ける".to_string(),
+        technique_classification: None,
     })
 }
 
@@ -3249,6 +3312,7 @@ mod tests {
             alignment: None,
             finish_soft: None,
             note: "固定標本の期待平坦姿勢".to_string(),
+            technique_classification: None,
         });
         let (state, warnings) =
             ori3_layers::flat_state_at(&oracle, faces, 1).expect("期待姿勢を再生できる");
@@ -3802,6 +3866,7 @@ mod tests {
             alignment: None,
             finish_soft: None,
             note: String::new(),
+            technique_classification: None,
         }
     }
 
@@ -5076,6 +5141,8 @@ mod tests {
             alignment,
             finish_soft,
             note,
+            // 表示名は値を持たない列挙2つの組(ヒープ無し)
+            technique_classification: _,
         } = fold_step;
         let mut total = drivers.capacity() * size_of::<DriverLine>()
             + drivers.iter().map(driver_line_heap_bytes).sum::<usize>()
@@ -8664,5 +8731,194 @@ mod tests {
             },
             "材料座標照会はDocument・履歴・dirty・warmを変えない"
         );
+    }
+
+    /// 既存折り目を開く汎用層操作。分類の検査で共通に使う。
+    fn open_existing_crease_motion(store: &DocumentStore) -> SeqOp {
+        let before = current_flat_state(store);
+        let folded = store
+            .faces
+            .iter()
+            .find(|face| before.placements[&face.id].mirrored)
+            .expect("折り返された層")
+            .id;
+        let ([x0, y0], [_, y1]) = outline_bbox(store);
+        SeqOp::FlatMotion {
+            up_to: 1,
+            parts: vec![ori3_model::MotionPart {
+                layers: vec![folded],
+                region: Vec::new(),
+                transform: ori3_model::MotionTransform::Reflect(vec![[[x0, y0], [x0, y1]]]),
+                turn: ori3_model::LayerTurn::Keep,
+                reverse_layers: None,
+            }],
+            kind: TechniqueKind::Simple,
+        }
+    }
+
+    fn classification(
+        kind: ori3_model::DisplayTechniqueKind,
+        origin: ori3_model::TechniqueClassificationOrigin,
+    ) -> Option<ori3_model::TechniqueClassification> {
+        Some(ori3_model::TechniqueClassification { kind, origin })
+    }
+
+    /// 手動の汎用層操作は「利用者が選んだ・層操作」として、折れた同じ処理の中で載る。
+    #[test]
+    fn a_manual_layer_operation_is_stored_as_chosen_by_the_user() {
+        let mut store = square_store();
+        store
+            .apply_seq(fold_op(0, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5]))
+            .expect("半分に折る");
+        assert_eq!(
+            store.doc.sequence[0].technique_classification, None,
+            "普通に折った手順には表示名を付けない"
+        );
+
+        let motion = open_existing_crease_motion(&store);
+        let view = store.apply_seq(motion).expect("既存折り目を開く");
+
+        assert_eq!(view.doc.sequence.len(), 2);
+        assert_eq!(
+            view.doc.sequence[1].technique_classification,
+            classification(
+                ori3_model::DisplayTechniqueKind::LayerOperation,
+                ori3_model::TechniqueClassificationOrigin::Explicit,
+            ),
+            "手動の層操作は『単純折り』ではなく『層操作』として記録する"
+        );
+        assert_eq!(
+            store.doc.sequence[1].technique_classification,
+            view.doc.sequence[1].technique_classification,
+            "表示だけの飾りではなく作品へ入っている"
+        );
+        assert_eq!(
+            view.doc.sequence[1].kind,
+            TechniqueKind::Simple,
+            "再生に使う折り方は変えない"
+        );
+
+        // 元に戻す・やり直すでも落とさない。
+        let undone = store.undo().expect("元に戻せる");
+        assert_eq!(undone.doc.sequence.len(), 1);
+        let redone = store.redo().expect("やり直せる");
+        assert_eq!(
+            redone.doc.sequence[1].technique_classification,
+            classification(
+                ori3_model::DisplayTechniqueKind::LayerOperation,
+                ori3_model::TechniqueClassificationOrigin::Explicit,
+            )
+        );
+    }
+
+    /// 利用者が選んだ折り方は、その折り方の表示名を「利用者が選んだ」由来で載せる。
+    #[test]
+    fn a_chosen_technique_is_stored_with_its_own_display_name() {
+        let mut store = square_store();
+        let view = store
+            .apply_seq(SeqOp::Technique {
+                up_to: 0,
+                kind: TechniqueKind::Pleat,
+                flap: Vec::new(),
+                line: [[0.4, 0.0], [0.4, 1.0]],
+                reference_point: [0.5, 0.5],
+                open_to_back: None,
+                polygon: None,
+                center: None,
+            })
+            .expect("段折りできる");
+
+        assert_eq!(view.doc.sequence.len(), 1);
+        assert_eq!(view.doc.sequence[0].kind, TechniqueKind::Pleat);
+        assert_eq!(
+            view.doc.sequence[0].technique_classification,
+            classification(
+                ori3_model::DisplayTechniqueKind::Pleat,
+                ori3_model::TechniqueClassificationOrigin::Explicit,
+            )
+        );
+    }
+
+    /// 手順の差し替え・保存・開き直しで表示名を落とさない。
+    #[test]
+    fn the_display_name_survives_updates_saving_and_opening() {
+        let mut store = square_store();
+        store
+            .apply_seq(fold_op(0, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5]))
+            .expect("半分に折る");
+        let motion = open_existing_crease_motion(&store);
+        store.apply_seq(motion).expect("既存折り目を開く");
+        let expected = classification(
+            ori3_model::DisplayTechniqueKind::LayerOperation,
+            ori3_model::TechniqueClassificationOrigin::Explicit,
+        );
+        assert_eq!(store.doc.sequence[1].technique_classification, expected);
+
+        // 説明文だけ直す差し替え(表示名を知らない画面からの差し替えも含む)。
+        let mut edited = store.doc.sequence[1].clone();
+        edited.note = "開いた".to_owned();
+        edited.technique_classification = None;
+        let view = store
+            .apply_seq(SeqOp::UpdateStep { step: edited })
+            .expect("説明文を直せる");
+        assert_eq!(view.doc.sequence[1].note, "開いた");
+        assert_eq!(
+            view.doc.sequence[1].technique_classification, expected,
+            "説明文を直しただけで表示名を落とさない"
+        );
+
+        // 保存して開き直す。
+        let path = std::env::temp_dir().join(format!(
+            "ori3_store_test_{}_technique_classification.ori3",
+            std::process::id()
+        ));
+        store.save(Some(&path)).expect("保存できる");
+        let text = std::fs::read_to_string(&path).expect("保存した原文を読める");
+        assert!(
+            text.contains("technique_classification"),
+            "表示名は保存に出る"
+        );
+        let reopened = store.open(&path).expect("開き直せる");
+        assert_eq!(
+            reopened.doc.sequence[1].technique_classification, expected,
+            "開き直しても表示名は同じ"
+        );
+        assert_eq!(
+            reopened.doc.sequence[0].technique_classification, None,
+            "表示名を持たない手順は持たないまま"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// 表示名を持たない旧作品は、そのまま持たない状態で開ける。
+    #[test]
+    fn an_old_document_without_display_names_opens_unchanged() {
+        let mut store = square_store();
+        store
+            .apply_seq(fold_op(0, [[0.5, 0.0], [0.5, 1.0]], [0.25, 0.5]))
+            .expect("半分に折る");
+        let text = serde_json::to_string_pretty(&store.doc).expect("書き出せる");
+        assert!(
+            !text.contains("technique_classification"),
+            "表示名の無い作品には項目が出ない: {text}"
+        );
+        let path = std::env::temp_dir().join(format!(
+            "ori3_store_test_{}_old_without_classification.ori3",
+            std::process::id()
+        ));
+        std::fs::write(&path, &text).expect("書き込める");
+        let expected = store.doc.clone();
+
+        let view = store.open(&path).expect("旧作品を開ける");
+
+        assert_eq!(view.doc, expected, "作品の内容は変わらない");
+        assert!(
+            view.doc
+                .sequence
+                .iter()
+                .all(|step| step.technique_classification.is_none()),
+            "開いただけで表示名を推測しない"
+        );
+        std::fs::remove_file(&path).ok();
     }
 }

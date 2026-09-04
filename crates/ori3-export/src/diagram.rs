@@ -776,6 +776,7 @@ pub(crate) fn strip_doc(creases: usize) -> Document {
             note: format!("{}本目の折り目を折ります", k + 1),
             alignment: None,
             finish_soft: None,
+            technique_classification: None,
         });
     }
     doc.cp.vertices = vertices;

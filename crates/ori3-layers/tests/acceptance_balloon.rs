@@ -238,6 +238,7 @@ fn finished_replay_coordinates(
         alignment: None,
         finish_soft: Some(settings),
         note: "SIM-015仕上げ確定".to_string(),
+        technique_classification: None,
     });
     let up_to = document.sequence.len();
     assert_eq!(

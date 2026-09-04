@@ -29,6 +29,7 @@ pub use crease_only::{
 };
 pub use flat_motion::{
     FlatMotionInput, HalfPlane, LayerTurn, MotionPart, MotionTransform, flat_motion,
+    flat_motion_with_evidence,
 };
 pub use flat_state::{
     FlatState, layers_at_point, layers_from_top_at_point, point_in_face, representative_point,
@@ -71,7 +72,13 @@ pub use spatial_crease_only::{
     crease_only_top_from_material_line,
 };
 pub use spatial_fold::{SpatialFoldInput, SpatialFoldMode, SpatialFoldResult, fold_from_plane_3d};
+pub use technique_classification::{
+    AutomaticTechniqueMatch, CanonicalAdjacency, CanonicalDriver, CanonicalFaceKey,
+    CanonicalSupport, TechniqueClassificationRequest, TechniqueEvidence, TechniqueWitness,
+    assign_technique_classification, automatic_match_from_witnesses,
+    carry_over_technique_classification, classify_aligned_motion, classify_motion_plan,
+    classify_sim011_motion, display_kind_for_technique,
+};
 pub use techniques::{
     TechniqueInput, inside_reverse, open_sink, outside_reverse, petal, pleat, squash, swivel, twist,
 };
-pub use technique_classification::{TechniqueWitness, classify_aligned_motion};

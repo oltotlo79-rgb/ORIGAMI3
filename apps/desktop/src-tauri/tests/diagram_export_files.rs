@@ -137,6 +137,7 @@ fn one_fold_document() -> Document {
         note: "中央の谷折り".to_owned(),
         alignment: None,
         finish_soft: None,
+        technique_classification: None,
     });
     document
 }

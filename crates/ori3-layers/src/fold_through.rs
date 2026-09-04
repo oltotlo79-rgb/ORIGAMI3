@@ -30,7 +30,7 @@ use ori3_model::{
 };
 
 use crate::flat_motion::{
-    FlatMotionInput, HalfPlane, LayerTurn, MotionPart, MotionTransform, run_motion,
+    EvidenceWanted, FlatMotionInput, HalfPlane, LayerTurn, MotionPart, MotionTransform, run_motion,
 };
 use crate::flat_state::FlatState;
 
@@ -132,7 +132,13 @@ pub fn fold_through(
     // 衝突ヒューリスティックを掛けないよう、従来経路は幾何操作だけに保つ。画面の
     // SeqOp::FoldThrough は下の拡張関数を使い、提案・警告まで行う。
     let resolved = resolve_fold(cp, faces, state, input)?;
-    let out = run_motion(cp, faces, state, &simple_motion(&resolved))?;
+    let out = run_motion(
+        cp,
+        faces,
+        state,
+        &simple_motion(&resolved),
+        EvidenceWanted::No,
+    )?;
     if !out.crossed_any {
         return Err("折り線がどの層の面も横切らず、既存の折り筋にも重なっていません".to_string());
     }
@@ -167,7 +173,13 @@ pub fn propose_fold_through(
     };
     // 表示した提案が確定時に紙を裂くことがないよう、CP複製相当の非破壊試行まで
     // 成功した候補だけを返す。run_motionは入力CPを書き換えない。
-    let trial = run_motion(cp, faces, state, &guided_motion(&resolved, &proposal));
+    let trial = run_motion(
+        cp,
+        faces,
+        state,
+        &guided_motion(&resolved, &proposal),
+        EvidenceWanted::No,
+    );
     match trial {
         Ok(out)
             if out.crossed_any
@@ -200,7 +212,7 @@ pub fn fold_through_with_additional_crease(
     // まず従来の単純折りで、主折り線が実際に面を横切るか既存の折り筋に重なることを検査する。
     // 誘導折り目だけが横切る入力を誤って成功させないため、承諾時もこの検査を行う。
     let simple = simple_motion(&resolved);
-    let simple_out = run_motion(cp, faces, state, &simple)?;
+    let simple_out = run_motion(cp, faces, state, &simple, EvidenceWanted::No)?;
     if !simple_out.crossed_any {
         return Err("折り線がどの層の面も横切らず、既存の折り筋にも重なっていません".to_string());
     }
@@ -209,7 +221,7 @@ pub fn fold_through_with_additional_crease(
     let out = match analysis.proposal {
         Some(proposal) if accept_additional_crease => {
             let guided = guided_motion(&resolved, &proposal);
-            match run_motion(cp, faces, state, &guided) {
+            match run_motion(cp, faces, state, &guided, EvidenceWanted::No) {
                 Ok(guided_out)
                     if guided_out.crossed_any
                         && !guided_out

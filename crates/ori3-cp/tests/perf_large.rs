@@ -168,6 +168,7 @@ fn doc_with_steps(cp: CreasePattern, nc: usize) -> Document {
                 alignment: None,
                 finish_soft: None,
                 note: String::new(),
+                technique_classification: None,
             }
         })
         .collect();

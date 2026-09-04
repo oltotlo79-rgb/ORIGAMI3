@@ -52,7 +52,7 @@
 //! - 重なり順は各部分の `turn` から構成的に決める。物理的に成り立たない
 //!   入れ方を指定しても断らない(山谷と重なり順の食い違いは警告になる)
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use glam::DVec2;
 use ori3_cp::{Face, extract_faces, insert_segment};
@@ -65,6 +65,9 @@ use crate::flat_state::{FlatState, point_in_face, representative_point};
 use crate::fold_through::{
     FoldDirection, FoldThroughResult, TEAR_MARK, angle_of, faces_by_edge, flat_fold_kind,
     flip_kind, normalize_to_root, opposite_crease_warning, push_driver_line, vertex_positions,
+};
+use crate::technique_classification::{
+    CanonicalAdjacency, CanonicalDriver, CanonicalFaceKey, CanonicalSupport, TechniqueEvidence,
 };
 
 /// 面のつながり(同じ点に写るか)を見る許容誤差。等長変換の積み重ねと
@@ -223,9 +226,38 @@ pub fn flat_motion(
     state: &FlatState,
     input: &FlatMotionInput,
 ) -> Result<FoldThroughResult, String> {
-    let out = run_motion(cp, faces, state, input)?;
+    let out = run_motion(cp, faces, state, input, EvidenceWanted::No)?;
     *cp = out.cp;
     Ok(out.result)
+}
+
+/// [`run_motion`] が技法の自動判定用の由来を集めるかどうか。
+///
+/// 由来を集めるのは、その場で自動判定を行う入口([`flat_motion_with_evidence`])だけにする。
+/// ほかの折り(`fold_through`・`crease_only`・`rabbit_ear`・`precrease_collapse`・`fold_network`)は
+/// 集めた由来を誰も読まないので、集める手間を丸ごと省く。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EvidenceWanted {
+    /// 集めない。`MotionOutcome::evidence` は `TechniqueEvidence::default()` になる。
+    No,
+    /// 集める。
+    Yes,
+}
+
+/// [`flat_motion`] と同じ動きを適用し、技法の自動判定に使う**離散的な由来**も返す。
+///
+/// 証拠は展開図へ書き戻す前の時点(親面・属する部分・重なり・記録した角度が
+/// すべてそろっている場所)で集める。できあがりの座標から意味を推測し直さないため、
+/// 分類はこの値と動きの指定だけを見る。証拠は保存しない。
+pub fn flat_motion_with_evidence(
+    cp: &mut CreasePattern,
+    faces: &[Face],
+    state: &FlatState,
+    input: &FlatMotionInput,
+) -> Result<(FoldThroughResult, TechniqueEvidence), String> {
+    let out = run_motion(cp, faces, state, input, EvidenceWanted::Yes)?;
+    *cp = out.cp;
+    Ok((out.result, out.evidence))
 }
 
 /// [`flat_motion`] の内部結果。展開図を書き戻す前の状態を返すので、呼び出し側で
@@ -238,6 +270,8 @@ pub(crate) struct MotionOutcome {
     pub crossed_any: bool,
     /// この動きで折り線へ昇格した既存の補助線断片の数。
     pub promoted_aux_edges: usize,
+    /// 技法の自動判定へ渡す離散的な由来。
+    pub evidence: TechniqueEvidence,
 }
 
 /// 半平面(内側が正になる符号付き距離を持つ)。
@@ -276,6 +310,7 @@ pub(crate) fn run_motion(
     faces: &[Face],
     state: &FlatState,
     input: &FlatMotionInput,
+    evidence_wanted: EvidenceWanted,
 ) -> Result<MotionOutcome, String> {
     let mut warnings: Vec<String> = Vec::new();
 
@@ -415,6 +450,8 @@ pub(crate) fn run_motion(
     let mut parent_of: HashMap<FaceId, FaceId> = HashMap::with_capacity(new_faces.len());
     let mut part_of: HashMap<FaceId, usize> = HashMap::new();
     let mut placements: HashMap<FaceId, Isometry2> = HashMap::with_capacity(new_faces.len());
+    // 配置が動き始めから変わった面。表示座標へそろえ直す前に、許容差0で見る。
+    let mut moved_faces: BTreeSet<FaceId> = BTreeSet::new();
     for nf in &new_faces {
         let r = representative_point(&work, nf);
         let Some(pf) = faces.iter().find(|f| point_in_face(cp, f, r)) else {
@@ -454,7 +491,13 @@ pub(crate) fn run_motion(
         match hit {
             Some(i) => {
                 part_of.insert(nf.id, i);
-                placements.insert(nf.id, parts[i].iso.compose(&ppl));
+                let moved_placement = parts[i].iso.compose(&ppl);
+                if evidence_wanted == EvidenceWanted::Yes
+                    && !moved_placement.approx_eq(&ppl, 0.0)
+                {
+                    moved_faces.insert(nf.id);
+                }
+                placements.insert(nf.id, moved_placement);
             }
             None => {
                 placements.insert(nf.id, ppl);
@@ -509,6 +552,27 @@ pub(crate) fn run_motion(
         alignment: None,
         finish_soft: None,
         note: String::new(),
+        technique_classification: None,
+    };
+    // 由来は、その場で自動判定を行う入口から呼ばれたときだけ集める。ほかの折りでは
+    // 誰も読まないので、集める手間(辺と面の走査)を丸ごと省く。
+    let evidence = match evidence_wanted {
+        EvidenceWanted::No => TechniqueEvidence::default(),
+        EvidenceWanted::Yes => motion_evidence(MotionEvidenceContext {
+            parts: &parts,
+            before_cp: cp,
+            before_faces: faces,
+            before_state: state,
+            new_faces: &new_faces,
+            parent_of: &parent_of,
+            part_of: &part_of,
+            order: &new_state.order,
+            angles: &angles,
+            positions: &wpos,
+            work: &work,
+            moved_faces,
+            drivers: &step.drivers,
+        }),
     };
     Ok(MotionOutcome {
         cp: work,
@@ -521,7 +585,212 @@ pub(crate) fn run_motion(
         },
         crossed_any,
         promoted_aux_edges,
+        evidence,
     })
+}
+
+// ---------------------------------------------------------------------------
+// 技法の自動判定へ渡す離散的な由来(設計§2・§3)
+// ---------------------------------------------------------------------------
+
+/// [`motion_evidence`] が読む、書き戻す前の動きの内訳。
+struct MotionEvidenceContext<'a> {
+    parts: &'a [ResolvedPart],
+    before_cp: &'a CreasePattern,
+    before_faces: &'a [Face],
+    before_state: &'a FlatState,
+    new_faces: &'a [Face],
+    parent_of: &'a HashMap<FaceId, FaceId>,
+    part_of: &'a HashMap<FaceId, usize>,
+    order: &'a [FaceId],
+    angles: &'a HashMap<EdgeId, f64>,
+    positions: &'a HashMap<VertexId, DVec2>,
+    work: &'a CreasePattern,
+    moved_faces: BTreeSet<FaceId>,
+    drivers: &'a [DriverLine],
+}
+
+/// この動きが残した離散的な由来を集める。
+///
+/// 集めるのは「どの面がどの面から分かれたか」「どの部分が動かしたか」
+/// 「どの折り目が0°まで開いたか」「どの角度を記録したか」「できあがりの重なり」
+/// のような**数え上げられる事実**だけで、できあがりの座標から意味を読み取らない。
+fn motion_evidence(context: MotionEvidenceContext<'_>) -> TechniqueEvidence {
+    let MotionEvidenceContext {
+        parts,
+        before_cp,
+        before_faces,
+        before_state,
+        new_faces,
+        parent_of,
+        part_of,
+        order,
+        angles,
+        positions,
+        work,
+        moved_faces,
+        drivers,
+    } = context;
+
+    let parent_face_of: BTreeMap<FaceId, FaceId> =
+        parent_of.iter().map(|(&id, &parent)| (id, parent)).collect();
+
+    // 静止 region: 紙を1mmも動かさない部分。
+    let stationary_regions: BTreeSet<usize> = parts
+        .iter()
+        .enumerate()
+        .filter(|(_, part)| part.iso.approx_eq(&Isometry2::identity(), 0.0))
+        .map(|(index, _)| index)
+        .collect();
+
+    // tip 由来と袋の組: 重なりの中へ置き直す指定を持つ部分から読む。
+    // 重なりを変えない指定(`Keep`・`CreaseOnly`)は紙を置き直さないので先端ではない。
+    let mut tip_faces: BTreeSet<FaceId> = BTreeSet::new();
+    let mut anchors: Vec<FaceId> = Vec::new();
+    for part in parts {
+        match part.turn {
+            LayerTurn::Inside(_) | LayerTurn::Outside(_) => {
+                tip_faces.extend(part.layers.iter().copied());
+            }
+            LayerTurn::Beside { anchor, .. } => {
+                tip_faces.extend(part.layers.iter().copied());
+                if !anchors.contains(&anchor) {
+                    anchors.push(anchor);
+                }
+            }
+            LayerTurn::Keep | LayerTurn::CreaseOnly(_) => {}
+        }
+    }
+    anchors.sort_unstable();
+    let mut pocket_of: BTreeMap<FaceId, usize> = BTreeMap::new();
+    for part in parts {
+        if let LayerTurn::Beside { anchor, .. } = part.turn
+            && let Some(pocket) = anchors.iter().position(|id| *id == anchor)
+        {
+            pocket_of.insert(anchor, pocket);
+            for &face in &part.layers {
+                pocket_of.insert(face, pocket);
+            }
+        }
+    }
+
+    // 開いた背: もとから折られていて、この動きの後に角度0°になった既存の折り目。
+    let edge_of: HashMap<EdgeId, &ori3_model::Edge> =
+        work.edges.iter().map(|edge| (edge.id, edge)).collect();
+    let mut opened_spines: Vec<CanonicalSupport> = Vec::new();
+    for (eid, fs) in faces_by_edge(new_faces) {
+        if fs.len() != 2 || angles.get(&eid).copied() != Some(0.0) {
+            continue;
+        }
+        let (Some(&pa), Some(&pb)) = (parent_of.get(&fs[0]), parent_of.get(&fs[1])) else {
+            continue;
+        };
+        if pa == pb {
+            continue; // この動きで引いた折り線は「開いた背」ではない
+        }
+        let (Some(&opa), Some(&opb)) = (
+            before_state.placements.get(&pa),
+            before_state.placements.get(&pb),
+        ) else {
+            continue;
+        };
+        if opa.mirrored == opb.mirrored {
+            continue; // もとから折られていない
+        }
+        let Some(edge) = edge_of.get(&eid) else {
+            continue;
+        };
+        let (Some(&v0), Some(&v1)) = (positions.get(&edge.v0), positions.get(&edge.v1)) else {
+            continue;
+        };
+        let Some(support) =
+            CanonicalSupport::from_segment(opa.apply(v0).to_array(), opa.apply(v1).to_array())
+        else {
+            continue;
+        };
+        if !opened_spines
+            .iter()
+            .any(|known| known.approx_eq(&support))
+        {
+            opened_spines.push(support);
+        }
+    }
+
+    let target_drivers: Vec<CanonicalDriver> = drivers
+        .iter()
+        .filter_map(|line| {
+            CanonicalSupport::from_segment(line.a, line.b).map(|support| CanonicalDriver {
+                support,
+                target_degrees: line.target_angle_deg,
+            })
+        })
+        .collect();
+
+    let key_of = |id: FaceId| CanonicalFaceKey {
+        source: parent_of.get(&id).copied().unwrap_or(id),
+        part: part_of.get(&id).copied(),
+    };
+    let final_adjacency: Vec<CanonicalAdjacency> = order
+        .windows(2)
+        .map(|pair| CanonicalAdjacency {
+            lower: key_of(pair[0]),
+            upper: key_of(pair[1]),
+        })
+        .collect();
+
+    // 動きの折り線が横切っている、既存の折り目でつながった面の組。
+    let before_positions = vertex_positions(before_cp);
+    let before_edge_of: HashMap<EdgeId, &ori3_model::Edge> =
+        before_cp.edges.iter().map(|edge| (edge.id, edge)).collect();
+    let mut spine_pairs: Vec<[FaceId; 2]> = Vec::new();
+    for (eid, fs) in faces_by_edge(before_faces) {
+        if fs.len() != 2 {
+            continue;
+        }
+        let Some(edge) = before_edge_of.get(&eid) else {
+            continue;
+        };
+        if !matches!(edge.kind, EdgeKind::Mountain | EdgeKind::Valley) {
+            continue;
+        }
+        let (Some(&v0), Some(&v1)) = (
+            before_positions.get(&edge.v0),
+            before_positions.get(&edge.v1),
+        ) else {
+            continue;
+        };
+        let Some(&placement) = before_state.placements.get(&fs[0]) else {
+            continue;
+        };
+        let (a, b) = (placement.apply(v0), placement.apply(v1));
+        let crossed = parts.iter().any(|part| {
+            part.region.iter().any(|plane| {
+                let (da, db) = (plane.signed(a), plane.signed(b));
+                (da > EPS && db < -EPS) || (da < -EPS && db > EPS)
+            })
+        });
+        if !crossed {
+            continue;
+        }
+        let mut pair = [fs[0], fs[1]];
+        pair.sort_unstable();
+        if !spine_pairs.contains(&pair) {
+            spine_pairs.push(pair);
+        }
+    }
+    spine_pairs.sort_unstable();
+
+    TechniqueEvidence {
+        parent_face_of,
+        tip_faces,
+        pocket_of,
+        opened_spines,
+        stationary_regions,
+        target_drivers,
+        final_adjacency,
+        moved_faces,
+        spine_pairs,
+    }
 }
 
 // ---------------------------------------------------------------------------

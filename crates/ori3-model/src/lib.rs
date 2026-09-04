@@ -134,6 +134,48 @@ impl Default for FinishSoftSettings {
     }
 }
 
+/// タイムラインへ出す「折り方の名前」。
+///
+/// [`TechniqueKind`] は再生の権限を持つ折り操作の種別であり、こちらは表示専用の
+/// 呼び名である。両者を分けているのは、同じ再生結果でも利用者へ見せる名前だけを
+/// 後から足せるようにするためである。
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+pub enum DisplayTechniqueKind {
+    /// 層操作。手動の汎用操作を選んだときだけ付く。
+    LayerOperation,
+    Pleat,
+    InsideReverse,
+    OutsideReverse,
+    Squash,
+    Petal,
+    OpenSink,
+    Swivel,
+    Twist,
+    /// つかんで動かした折り。名前の付いた技法だと言い切れない動き。
+    GrabMove,
+}
+
+/// [`TechniqueClassification`] の由来。
+///
+/// あとから自動で名前を付け直すとき、利用者が選んだ [`Self::Explicit`] を
+/// 上書きしないために残す。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum TechniqueClassificationOrigin {
+    /// 折った結果の形から自動で判定した。
+    Automatic,
+    /// 利用者が折り方を選んだ。
+    Explicit,
+}
+
+/// 手順1つに載せる、表示用の折り方の名前とその由来。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TechniqueClassification {
+    pub kind: DisplayTechniqueKind,
+    pub origin: TechniqueClassificationOrigin,
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FoldStep {
     pub id: StepId,
@@ -150,6 +192,13 @@ pub struct FoldStep {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finish_soft: Option<FinishSoftSettings>,
     pub note: String,
+    /// タイムラインへ出す折り方の名前と、その由来。
+    ///
+    /// この項目を持たない旧作品は`None`として読め、`None`は保存でも書き出さない。
+    /// 表示は`Some`を優先し、`None`のときだけ従来の[`FoldStep::kind`]へ戻る。
+    /// 再生はこの値を一切参照しない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub technique_classification: Option<TechniqueClassification>,
 }
 
 /// 折る向き(畳んだ状態の上に折り線を引いてまとめて折るときの向き)。
@@ -949,4 +998,82 @@ pub struct Face3D {
 pub struct Frame3D {
     pub faces: Vec<Face3D>,
     pub warnings: Vec<String>,
+}
+
+#[cfg(test)]
+mod technique_classification_tests {
+    use super::{
+        DisplayTechniqueKind, FoldStep, TechniqueClassification, TechniqueClassificationOrigin,
+        TechniqueKind,
+    };
+
+    const ALL_DISPLAY_KINDS: [DisplayTechniqueKind; 10] = [
+        DisplayTechniqueKind::LayerOperation,
+        DisplayTechniqueKind::Pleat,
+        DisplayTechniqueKind::InsideReverse,
+        DisplayTechniqueKind::OutsideReverse,
+        DisplayTechniqueKind::Squash,
+        DisplayTechniqueKind::Petal,
+        DisplayTechniqueKind::OpenSink,
+        DisplayTechniqueKind::Swivel,
+        DisplayTechniqueKind::Twist,
+        DisplayTechniqueKind::GrabMove,
+    ];
+
+    fn step_without_a_display_name() -> FoldStep {
+        FoldStep {
+            id: 3,
+            kind: TechniqueKind::Simple,
+            drivers: Vec::new(),
+            layer_order: None,
+            alignment: None,
+            finish_soft: None,
+            note: "説明".to_owned(),
+            technique_classification: None,
+        }
+    }
+
+    /// 表示名の項目を持たない旧作品は`None`として読め、書き出しにも項目が出ない。
+    #[test]
+    fn an_old_step_without_the_field_reads_as_none_and_is_not_written_back() {
+        let text = r#"{"id":3,"kind":"Simple","drivers":[],"layer_order":null,"note":"説明"}"#;
+        let step: FoldStep = serde_json::from_str(text).expect("旧形式の手順を読める");
+        assert_eq!(step.technique_classification, None);
+        assert_eq!(step.kind, TechniqueKind::Simple, "既存の折り方は変えない");
+        assert_eq!(step.note, "説明", "利用者の説明文は変えない");
+
+        let written = serde_json::to_string(&step).expect("手順を書き出せる");
+        assert!(
+            !written.contains("technique_classification"),
+            "`None`は保存に出さない: {written}"
+        );
+        let reread: FoldStep = serde_json::from_str(&written).expect("書き出した手順を読み直せる");
+        assert_eq!(reread.technique_classification, None);
+    }
+
+    /// 付けた表示名と由来は、保存して読み直しても同じ値のまま残る。
+    #[test]
+    fn every_display_name_and_origin_survives_a_save_and_open_round_trip() {
+        for kind in ALL_DISPLAY_KINDS {
+            for origin in [
+                TechniqueClassificationOrigin::Automatic,
+                TechniqueClassificationOrigin::Explicit,
+            ] {
+                let expected = TechniqueClassification { kind, origin };
+                let mut step = step_without_a_display_name();
+                step.technique_classification = Some(expected);
+
+                let written = serde_json::to_string(&step).expect("手順を書き出せる");
+                assert!(
+                    written.contains("technique_classification"),
+                    "`Some`は保存に出す: {written}"
+                );
+                let reread: FoldStep =
+                    serde_json::from_str(&written).expect("書き出した手順を読み直せる");
+                assert_eq!(reread.technique_classification, Some(expected));
+                assert_eq!(reread.kind, step.kind, "表示名は折り方を書き換えない");
+                assert_eq!(reread.note, step.note, "表示名は説明文を書き換えない");
+            }
+        }
+    }
 }

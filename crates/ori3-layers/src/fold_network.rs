@@ -6,7 +6,9 @@ use glam::DVec2;
 use ori3_cp::Face;
 use ori3_model::{CreasePattern, DriverLine, EPS, EdgeId, EdgeKind, FaceId, TechniqueKind};
 
-use crate::flat_motion::{FlatMotionInput, LayerTurn, MotionPart, MotionTransform, run_motion};
+use crate::flat_motion::{
+    EvidenceWanted, FlatMotionInput, LayerTurn, MotionPart, MotionTransform, run_motion,
+};
 use crate::flat_state::FlatState;
 use crate::fold_through::{FoldThroughResult, angle_of, push_driver_line};
 
@@ -62,6 +64,7 @@ pub fn reverse_fold_network(
             }],
             kind: TechniqueKind::Simple,
         },
+        EvidenceWanted::No,
     )?;
     if !out.result.warnings.is_empty() {
         return Err(format!(

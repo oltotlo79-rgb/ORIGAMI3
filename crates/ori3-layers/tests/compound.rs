@@ -156,6 +156,7 @@ fn skipped_recorded_step_is_rejected_atomically() {
         alignment: None,
         finish_soft: None,
         note: String::new(),
+        technique_classification: None,
     };
 
     let error = compose_flat_motion_step(&mut document, |session| {

@@ -1086,11 +1086,21 @@ fn apply_sim011_motion_plan(
         .into_iter()
         .map(sim011_model_motion_part)
         .collect::<Result<Vec<_>, _>>()?;
-    let view = store.apply_seq(SeqOp::FlatMotion {
-        up_to,
-        parts,
-        kind: plan.kind,
-    })?;
+    // 自動判定を要求できるのはこの入口だけ。公開の`SeqOp::FlatMotion`は
+    // 従来どおり手動の層操作として扱い、画面から`Automatic`を名乗らせない。
+    // 判定に使う離散的な由来は、`SeqOp::FlatMotion`を適用する同じ処理の中で
+    // `ori3_layers::flat_motion_with_evidence`から受け取る(展開図へ書き戻す前)。
+    // いまの単一反射の計画は8技法のどれとも構造が一致しないので、この経路の
+    // 手順は「つかんで動かした折り」として保存される。
+    let view = store.apply_seq_with_spatial_from(
+        SeqOp::FlatMotion {
+            up_to,
+            parts,
+            kind: plan.kind,
+        },
+        None,
+        crate::store::FlatMotionOrigin::GrabMove,
+    )?;
     Ok(Sim011MoveOutcome {
         result: Sim011MoveResult {
             crease_lines,
@@ -3395,6 +3405,7 @@ mod tests {
             alignment: None,
             finish_soft,
             note: String::new(),
+            technique_classification: None,
         }
     }
 
@@ -4507,6 +4518,7 @@ mod tests {
                     alignment: None,
                     finish_soft: None,
                     note: "照会前の現在姿勢".to_string(),
+                    technique_classification: None,
                 },
             })
             .expect("現在姿勢を再生する手順を用意できる");
@@ -5477,6 +5489,91 @@ mod tests {
         }));
         assert_eq!(outcome.view.doc.sequence.len(), 1);
         assert_eq!(outcome.view.doc.sequence[0].kind, TechniqueKind::Simple);
+    }
+
+    /// つかんで動かした手順は、折れた同じ処理の中で
+    /// 「自動判定・つかんで動かした折り」として記録される。
+    #[test]
+    fn sim011_records_the_move_as_an_automatically_named_grabbed_move() {
+        let mut store = DocumentStore::default();
+        let outcome = super::sim011_move_inner(
+            &mut store,
+            sim011_request(
+                [0.25, 0.5],
+                [0.75, 0.5],
+                ori3_model::Sim011LayerSelection::Single,
+            ),
+        )
+        .expect("one reflection must be applied as a command");
+
+        let expected = Some(ori3_model::TechniqueClassification {
+            kind: ori3_model::DisplayTechniqueKind::GrabMove,
+            origin: ori3_model::TechniqueClassificationOrigin::Automatic,
+        });
+        assert_eq!(outcome.view.doc.sequence.len(), 1);
+        assert_eq!(
+            outcome.view.doc.sequence[0].technique_classification, expected,
+            "画面から後続の手順更新を投げずに、同じ処理の中で載せる"
+        );
+        assert_eq!(
+            outcome.view.doc.sequence[0].kind,
+            TechniqueKind::Simple,
+            "再生に使う折り方は変えない"
+        );
+        let (document, _) = store.replay_inputs();
+        assert_eq!(
+            document.sequence[0].technique_classification, expected,
+            "表示だけの飾りではなく作品へ入っている"
+        );
+    }
+
+    /// 画面から届く公開の汎用層操作は`Automatic`を名乗れない。
+    #[test]
+    fn a_layer_operation_sent_from_the_screen_is_never_automatic() {
+        let mut store = DocumentStore::default();
+        let grabbed = super::sim011_move_inner(
+            &mut store,
+            sim011_request(
+                [0.25, 0.5],
+                [0.75, 0.5],
+                ori3_model::Sim011LayerSelection::Single,
+            ),
+        )
+        .expect("one reflection must be applied as a command")
+        .view
+        .doc
+        .sequence[0]
+            .clone();
+
+        // 同じ形の動きを、公開の`SeqOp::FlatMotion`として送り直す。
+        let mut manual_store = DocumentStore::default();
+        let manual = manual_store
+            .apply_seq(ori3_model::SeqOp::FlatMotion {
+                up_to: 0,
+                parts: vec![ori3_model::MotionPart {
+                    layers: vec![0],
+                    region: Vec::new(),
+                    transform: ori3_model::MotionTransform::Reflect(vec![[[0.5, 0.0], [0.5, 1.0]]]),
+                    turn: ori3_model::LayerTurn::Outside(ori3_model::FoldDirection::Up),
+                    reverse_layers: None,
+                }],
+                kind: TechniqueKind::Simple,
+            })
+            .expect("manual layer operation must succeed");
+
+        assert_eq!(
+            manual.doc.sequence[0].technique_classification,
+            Some(ori3_model::TechniqueClassification {
+                kind: ori3_model::DisplayTechniqueKind::LayerOperation,
+                origin: ori3_model::TechniqueClassificationOrigin::Explicit,
+            }),
+            "公開の入口は手動の層操作として扱う"
+        );
+        assert_ne!(
+            manual.doc.sequence[0].technique_classification,
+            grabbed.technique_classification,
+            "つかんで動かした折りと手動の層操作は別の名前で残る"
+        );
     }
 
     #[test]

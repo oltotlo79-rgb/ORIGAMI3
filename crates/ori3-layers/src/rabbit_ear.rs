@@ -8,7 +8,7 @@ use ori3_geometry::reflect_across_line;
 use ori3_model::{CreasePattern, EPS, FaceId, TechniqueKind};
 
 use crate::flat_motion::{
-    FlatMotionInput, HalfPlane, LayerTurn, MotionPart, MotionTransform, run_motion,
+    EvidenceWanted, FlatMotionInput, HalfPlane, LayerTurn, MotionPart, MotionTransform, run_motion,
 };
 use crate::flat_state::{FlatState, point_in_face, representative_point};
 use crate::fold_through::{FoldDirection, FoldThroughResult};
@@ -83,6 +83,7 @@ pub fn rabbit_ear(
             parts,
             kind: TechniqueKind::Pleat,
         },
+        EvidenceWanted::No,
     )?;
     if !out.crossed_any {
         return Err("rabbit-ear creases do not cross the selected local layers".to_string());

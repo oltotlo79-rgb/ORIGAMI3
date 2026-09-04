@@ -299,6 +299,7 @@ pub fn fold_from_plane_3d(
         alignment: None,
         finish_soft: None,
         note: String::new(),
+        technique_classification: None,
     };
     if up_to <= doc.sequence.len() {
         let mut candidate = doc.clone();
@@ -910,6 +911,7 @@ mod tests {
             alignment: None,
             finish_soft: None,
             note: String::new(),
+            technique_classification: None,
         });
         let faces = extract_faces(&document.cp);
         let before = replay_with_faces(&document, &faces, 1, 1.0);
@@ -1083,6 +1085,7 @@ mod tests {
             alignment: None,
             finish_soft: None,
             note: String::new(),
+            technique_classification: None,
         });
 
         let faces = extract_faces(&document.cp);

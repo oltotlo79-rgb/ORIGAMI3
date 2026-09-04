@@ -70,6 +70,7 @@ fn successive_pose_steps_update_only_named_hinges_and_keep_prior_angles() {
         alignment: None,
         finish_soft: None,
         note: "pre-existing flat fold".to_string(),
+        technique_classification: None,
     });
 
     let first = apply_pose_step(

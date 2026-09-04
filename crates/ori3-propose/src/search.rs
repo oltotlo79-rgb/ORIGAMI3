@@ -2191,6 +2191,7 @@ mod tests {
             alignment: None,
             finish_soft: None,
             note: String::new(),
+            technique_classification: None,
         });
         document
     }

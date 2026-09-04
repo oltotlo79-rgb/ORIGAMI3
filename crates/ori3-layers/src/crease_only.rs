@@ -12,7 +12,7 @@ use ori3_model::{
     CreasePattern, DriverLine, EPS, EdgeId, EdgeKind, FaceId, FoldStep, TechniqueKind,
 };
 
-use crate::flat_motion::{FlatMotionInput, MotionPart, run_motion};
+use crate::flat_motion::{EvidenceWanted, FlatMotionInput, MotionPart, run_motion};
 use crate::flat_state::FlatState;
 use crate::fold_through::{FoldDirection, FoldThroughResult};
 
@@ -63,7 +63,7 @@ pub fn crease_only(
         )],
         kind: TechniqueKind::Simple,
     };
-    let out = run_motion(cp, faces, state, &motion)?;
+    let out = run_motion(cp, faces, state, &motion, EvidenceWanted::No)?;
     if !out.crossed_any {
         return Err("crease line does not cross any selected layer".to_string());
     }
@@ -202,6 +202,7 @@ pub fn reverse_open_crease_sense(
         alignment: None,
         finish_soft: None,
         note: String::new(),
+        technique_classification: None,
     };
     *cp = work;
     Ok(FoldThroughResult {

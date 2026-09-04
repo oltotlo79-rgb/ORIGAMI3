@@ -341,6 +341,7 @@ fn parse_folded_fixture(source: &str) -> Document {
             alignment: None,
             finish_soft: None,
             note: json_text(json_field(step, "note")).to_owned(),
+            technique_classification: None,
         })
         .collect();
 

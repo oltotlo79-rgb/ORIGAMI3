@@ -64,6 +64,7 @@ pub fn apply_pose_step(
         alignment: None,
         finish_soft: None,
         note: input.note,
+        technique_classification: None,
     });
 
     let replayed = replay(&candidate, candidate.sequence.len(), 1.0);

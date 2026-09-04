@@ -5085,6 +5085,7 @@ mod tests {
             alignment: None,
             finish_soft: None,
             note: String::new(),
+            technique_classification: None,
         };
         document.sequence.push(step(0, vec![horizontal.clone()]));
         let mut opened = horizontal;

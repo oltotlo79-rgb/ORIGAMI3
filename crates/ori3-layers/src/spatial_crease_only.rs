@@ -259,6 +259,7 @@ pub fn crease_only_top_from_material_line(
         alignment: None,
         finish_soft: None,
         note: String::new(),
+        technique_classification: None,
     };
 
     Ok(SpatialCreaseOnlyResult {

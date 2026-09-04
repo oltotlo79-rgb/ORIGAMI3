@@ -955,7 +955,7 @@ impl Ori3AppCore {
                 }
                 return Ok(self.commit_prebuilt(doc, step_creases, view));
             }
-            SeqOp::UpdateStep { step } => {
+            SeqOp::UpdateStep { mut step } => {
                 let Some(slot) = doc
                     .sequence
                     .iter_mut()
@@ -963,6 +963,7 @@ impl Ori3AppCore {
                 else {
                     return Err(format!("手順ID {} が見つかりません", step.id));
                 };
+                ori3_layers::carry_over_technique_classification(slot, &mut step);
                 *slot = step;
             }
             SeqOp::FoldThrough {
@@ -1275,6 +1276,14 @@ impl Ori3AppCore {
                 )?;
                 let mut step = result.step;
                 step.id = next_step_id(&doc, &step_creases);
+                // 画面から届く汎用層操作はいつでも手動の指定である。成功した同じ
+                // 処理の中で「利用者が選んだ層操作」として載せてから書類へ入れる。
+                ori3_layers::assign_technique_classification(
+                    &mut step,
+                    &ori3_layers::TechniqueClassificationRequest::Explicit(
+                        ori3_model::DisplayTechniqueKind::LayerOperation,
+                    ),
+                );
                 let lines = added_crease_lines(&doc.cp, &cp, &result.added_edges);
                 record_step_creases(&mut step_creases, step.id, lines);
                 doc.cp = cp;
@@ -1327,6 +1336,14 @@ impl Ori3AppCore {
                 )?;
                 let mut step = result.step;
                 step.id = next_step_id(&doc, &step_creases);
+                // 利用者が折り方を選んだ操作なので、成功した折り方をそのまま
+                // 「利用者が選んだ」由来として書類へ入れる前に載せる。
+                if let Some(display) = ori3_layers::display_kind_for_technique(kind) {
+                    ori3_layers::assign_technique_classification(
+                        &mut step,
+                        &ori3_layers::TechniqueClassificationRequest::Explicit(display),
+                    );
+                }
                 let lines = added_crease_lines(&doc.cp, &cp, &result.added_edges);
                 record_step_creases(&mut step_creases, step.id, lines);
                 doc.cp = cp;
@@ -3905,6 +3922,7 @@ mod tests {
             alignment: None,
             finish_soft: None,
             note: String::new(),
+            technique_classification: None,
         }
     }
 
@@ -4134,6 +4152,7 @@ mod tests {
             alignment: None,
             finish_soft: None,
             note: String::new(),
+            technique_classification: None,
         });
         core.step_creases.push(StepCreases {
             step: 7,
@@ -4529,6 +4548,7 @@ mod tests {
             alignment: None,
             finish_soft: None,
             note: "current saved document".to_owned(),
+            technique_classification: None,
         });
         source_core.step_creases.push(StepCreases {
             step: 7,
@@ -6308,6 +6328,117 @@ mod tests {
             replay,
             include_str!("../tests/fixtures/sequence-replay-fold-through-half-150x100.json")
                 .trim_end()
+        );
+    }
+
+    fn folded_in_half_core() -> Ori3AppCore {
+        let mut core = Ori3AppCore::new();
+        core.document_new(Paper {
+            width_mm: 150.0,
+            height_mm: 150.0,
+        })
+        .expect("new document must succeed");
+        core.sequence_apply(json!({
+            "type": "FoldThrough",
+            "up_to": 0,
+            "line": [[0.5, 0.0], [0.5, 1.0]],
+            "keep_side_point": [0.25, 0.5],
+            "target_layers": null,
+            "direction": "Up",
+            "accept_additional_crease": false
+        }))
+        .expect("setup fold must succeed");
+        core
+    }
+
+    /// ブラウザ側の経路でも、手動の汎用層操作は「利用者が選んだ・層操作」になる。
+    #[test]
+    fn a_manual_layer_operation_is_stored_as_chosen_by_the_user() {
+        let mut core = folded_in_half_core();
+        assert_eq!(
+            core.doc.sequence[0].technique_classification, None,
+            "普通に折った手順には表示名を付けない"
+        );
+        let (before, _) =
+            ori3_layers::flat_state_at(&core.doc, &core.faces, core.doc.sequence.len())
+                .expect("setup must be flat");
+        let bottom = before.order[0];
+
+        let motion = ori3_model::SeqOp::FlatMotion {
+            up_to: 1,
+            parts: vec![ori3_model::MotionPart {
+                layers: vec![bottom],
+                region: Vec::new(),
+                transform: ori3_model::MotionTransform::Stay,
+                turn: ori3_model::LayerTurn::Outside(ori3_model::FoldDirection::Up),
+                reverse_layers: None,
+            }],
+            kind: TechniqueKind::Pose,
+        };
+        let moved = core
+            .sequence_apply(serde_json::to_value(motion).expect("FlatMotion JSON"))
+            .expect("FlatMotion must succeed");
+
+        let expected = Some(ori3_model::TechniqueClassification {
+            kind: ori3_model::DisplayTechniqueKind::LayerOperation,
+            origin: ori3_model::TechniqueClassificationOrigin::Explicit,
+        });
+        assert_eq!(moved.doc.sequence[1].technique_classification, expected);
+        assert_eq!(
+            core.doc.sequence[1].technique_classification, expected,
+            "表示だけの飾りではなく作品へ入っている"
+        );
+        assert_eq!(
+            moved.doc.sequence[1].kind,
+            TechniqueKind::Pose,
+            "再生に使う折り方は変えない"
+        );
+
+        // 説明文だけ直す差し替えでも落とさない。
+        let mut edited = core.doc.sequence[1].clone();
+        edited.note = "開いた".to_owned();
+        edited.technique_classification = None;
+        let updated = core
+            .sequence_apply(
+                serde_json::to_value(ori3_model::SeqOp::UpdateStep { step: edited })
+                    .expect("UpdateStep JSON"),
+            )
+            .expect("UpdateStep must succeed");
+        assert_eq!(updated.doc.sequence[1].note, "開いた");
+        assert_eq!(updated.doc.sequence[1].technique_classification, expected);
+
+        // 元に戻す・やり直すでも落とさない。
+        core.edit_undo().expect("undo must succeed");
+        let redone = core.edit_redo().expect("redo must succeed");
+        assert_eq!(redone.doc.sequence[1].technique_classification, expected);
+    }
+
+    /// ブラウザ側の経路でも、選んだ折り方はその表示名で載る。
+    #[test]
+    fn a_chosen_technique_is_stored_with_its_own_display_name() {
+        let mut core = Ori3AppCore::new();
+        core.document_new(Paper {
+            width_mm: 150.0,
+            height_mm: 150.0,
+        })
+        .expect("new document must succeed");
+        let view = core
+            .sequence_apply(json!({
+                "type": "Technique",
+                "up_to": 0,
+                "kind": "Pleat",
+                "flap": [],
+                "line": [[0.4, 0.0], [0.4, 1.0]],
+                "reference_point": [0.5, 0.5]
+            }))
+            .expect("pleat must succeed");
+        assert_eq!(view.doc.sequence[0].kind, TechniqueKind::Pleat);
+        assert_eq!(
+            view.doc.sequence[0].technique_classification,
+            Some(ori3_model::TechniqueClassification {
+                kind: ori3_model::DisplayTechniqueKind::Pleat,
+                origin: ori3_model::TechniqueClassificationOrigin::Explicit,
+            })
         );
     }
 }

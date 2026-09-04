@@ -67,6 +67,7 @@ fn sample_document() -> Document {
                 }),
                 finish_soft: None,
                 note: "半分に折る".to_string(),
+                technique_classification: None,
             },
             FoldStep {
                 id: 1,
@@ -80,6 +81,7 @@ fn sample_document() -> Document {
                 alignment: None,
                 finish_soft: None,
                 note: String::new(),
+                technique_classification: None,
             },
         ],
         display: DisplaySettings::default(),
@@ -159,6 +161,7 @@ fn saved_document_coordinates_survive_json_roundtrip_bit_for_bit() {
             alignment: None,
             finish_soft: None,
             note: String::new(),
+            technique_classification: None,
         });
         step_creases.push(StepCreases {
             step,
@@ -329,6 +332,7 @@ fn finish_soft_round_trips_three_values_only_with_measured_tolerance() {
             alignment: None,
             finish_soft: Some(finish_soft),
             note: String::new(),
+            technique_classification: None,
         })
         .collect();
     let saved = SavedDocument::new(document);
@@ -422,6 +426,7 @@ fn finish_soft_replay_uses_the_latest_completed_pose_at_each_position() {
         alignment: None,
         finish_soft,
         note: String::new(),
+        technique_classification: None,
     };
     let mut document = Document::new(Paper {
         width_mm: 150.0,

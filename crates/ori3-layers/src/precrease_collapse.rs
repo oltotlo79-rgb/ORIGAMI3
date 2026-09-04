@@ -12,7 +12,7 @@ use ori3_geometry::{Isometry2, collinear_overlap};
 use ori3_model::{CreasePattern, EPS, EdgeId, EdgeKind, FaceId, TechniqueKind, VertexId};
 
 use crate::flat_motion::{
-    FlatMotionInput, LayerTurn, MotionPart, MotionTransform, run_motion, want_kind,
+    EvidenceWanted, FlatMotionInput, LayerTurn, MotionPart, MotionTransform, run_motion, want_kind,
 };
 use crate::flat_state::{FlatState, point_in_face, representative_point};
 use crate::fold_through::{FoldDirection, FoldThroughResult};
@@ -252,6 +252,7 @@ fn collapse_precrease_network_impl(
             parts,
             kind: TechniqueKind::Twist,
         },
+        EvidenceWanted::No,
     )?;
     if !outcome.result.warnings.is_empty() {
         return Err(format!(
