@@ -339,3 +339,117 @@ finally {
 }
 
 Write-Host "[OK] synthetic receipt removed; no rust-w4/check-all pass receipt created"
+
+# --- Negative-example regression: the -RunRustW4 helper's own process exit
+# code must equal cargo's real exit code, never an array whose last element
+# happens to be that code.
+#
+# Real incident (2026-09-04 13:35-15:1x): `git commit` (touching .rs files)
+# ran the helper, cargo failed inside `-p desktop --lib` (exit 101), the
+# helper printed "[NG] ... 終了コード: 101", and the commit was created
+# anyway. Cause: inside Invoke-Ori3RustW4Gate, `& $cargoPath @rustW4Arguments`
+# let cargo's stdout flow into the function's own output stream. When the
+# caller does `$exitCode = Invoke-Ori3RustW4Gate ...`, every leaked line
+# becomes part of the function's return value, so `return $status` became the
+# last element of an array. `exit $exitCode` on that array produced process
+# exit code 0, and `scripts/hooks/pre-commit` treated 0 as success.
+#
+# This never invokes the real cargo (never runs cargo test/npm): it puts a
+# stub `cargo.cmd` at the front of PATH and drives the real, unmodified
+# `scripts/check-receipt.ps1 -RunRustW4` as a genuine child process, then
+# asserts the CHILD PROCESS'S OWN exit code (not any value captured inside
+# this PowerShell session) equals the stub's exit code.
+
+function New-Ori3StubCargoDirectory {
+    param([int]$ExitCode, [string]$ResultLine)
+    $directory = Join-Path $ReceiptTempBase ("ori3-stub-cargo-" + [Guid]::NewGuid().ToString("N"))
+    [void][IO.Directory]::CreateDirectory($directory)
+    $stubPath = Join-Path $directory "cargo.cmd"
+    $stubLines = @(
+        "@echo off",
+        "echo running 3 tests",
+        "echo $ResultLine",
+        "exit /b $ExitCode"
+    )
+    [IO.File]::WriteAllText($stubPath, (($stubLines -join "`r`n") + "`r`n"), [Text.ASCIIEncoding]::new())
+    return $directory
+}
+
+function Remove-Ori3StubCargoDirectory {
+    param([string]$Directory)
+    if ([string]::IsNullOrWhiteSpace($Directory)) { return }
+    if (-not (Test-Path -LiteralPath $Directory)) { return }
+    $fullDirectory = [IO.Path]::GetFullPath($Directory).TrimEnd([char[]]"\\/")
+    if ([IO.Path]::GetDirectoryName($fullDirectory) -ne $ReceiptTempBase -or
+        [IO.Path]::GetFileName($fullDirectory) -notmatch '^ori3-stub-cargo-[0-9a-f]{32}$') {
+        throw "Refusing unsafe stub cargo cleanup: $fullDirectory"
+    }
+    Remove-Item -LiteralPath $fullDirectory -Recurse -Force
+}
+
+function Invoke-Ori3RustW4GateChildProcess {
+    param([string]$RepoRoot, [string]$GateStatusPath, [string]$StubCargoDirectory)
+
+    $checkReceiptScript = Join-Path $PSScriptRoot "check-receipt.ps1"
+    $originalPath = $env:Path
+    try {
+        $env:Path = $StubCargoDirectory + [IO.Path]::PathSeparator + $originalPath
+        $global:LASTEXITCODE = 0
+        $childOutput = @(& powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $checkReceiptScript -RunRustW4 -RepoRoot $RepoRoot -GateStatusPath $GateStatusPath 2>&1)
+        $childExitCode = $LASTEXITCODE
+    }
+    finally {
+        $env:Path = $originalPath
+    }
+    return [pscustomobject]@{ ExitCode = $childExitCode; Output = ($childOutput -join "`n") }
+}
+
+$ExitCodeSandbox = Join-Path $ReceiptTempBase ("ori3-exit-code-self-test-" + [Guid]::NewGuid().ToString("N"))
+$ExitCodeRepo = Join-Path $ExitCodeSandbox "repo"
+
+function Remove-Ori3ExitCodeSelfTestSandbox {
+    if (-not (Test-Path -LiteralPath $ExitCodeSandbox)) { return }
+    $fullSandbox = [IO.Path]::GetFullPath($ExitCodeSandbox).TrimEnd([char[]]"\\/")
+    if ([IO.Path]::GetDirectoryName($fullSandbox) -ne $ReceiptTempBase -or
+        [IO.Path]::GetFileName($fullSandbox) -notmatch '^ori3-exit-code-self-test-[0-9a-f]{32}$') {
+        throw "Refusing unsafe exit-code self-test cleanup: $fullSandbox"
+    }
+    Remove-Item -LiteralPath $fullSandbox -Recurse -Force
+}
+
+$stubFailDirectory = $null
+$stubOkDirectory = $null
+try {
+    [void][IO.Directory]::CreateDirectory($ExitCodeRepo)
+    $global:LASTEXITCODE = 0
+    & git init --quiet $ExitCodeRepo
+    if ($LASTEXITCODE -ne 0) { throw "exit-code self-test temporary repository initialization failed: exit=$LASTEXITCODE" }
+    [IO.File]::WriteAllText((Join-Path $ExitCodeRepo "fixture.txt"), "exit-code self-test fixture`n", [Text.UTF8Encoding]::new($false))
+
+    $exitCodeReceiptStore = Join-Path $ExitCodeRepo ".origami3\check-receipts"
+    [void][IO.Directory]::CreateDirectory($exitCodeReceiptStore)
+
+    $stubFailDirectory = New-Ori3StubCargoDirectory -ExitCode 101 -ResultLine "test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out"
+    $failGateStatusPath = Join-Path $exitCodeReceiptStore ("gate-exit-fail-" + [Guid]::NewGuid().ToString("N") + ".status")
+    $failResult = Invoke-Ori3RustW4GateChildProcess -RepoRoot $ExitCodeRepo -GateStatusPath $failGateStatusPath -StubCargoDirectory $stubFailDirectory
+    Assert-Ori3SelfTest ($failResult.ExitCode -eq 101) ("stub cargo exit 101 did not propagate to the helper's own process exit code: got " + $failResult.ExitCode + " output=" + $failResult.Output)
+    Assert-Ori3SelfTest (Test-Path -LiteralPath $failGateStatusPath -PathType Leaf) "gate status file was not written for the failing stub"
+    Assert-Ori3SelfTest ((([IO.File]::ReadAllText($failGateStatusPath)).Trim()) -eq "cargo-started") "gate status was not left at cargo-started for the failing stub"
+    Assert-Ori3SelfTest ($failResult.Output.Contains("running 3 tests")) "stub cargo stdout (running 3 tests) did not reach the helper's own output"
+    Assert-Ori3SelfTest ($failResult.Output.Contains("test result: FAILED")) "stub cargo stdout (test result: FAILED) did not reach the helper's own output"
+    Write-Host "[OK] stub cargo exit 101 => helper process exit code 101, gate status cargo-started, stub stdout visible"
+
+    $stubOkDirectory = New-Ori3StubCargoDirectory -ExitCode 0 -ResultLine "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+    $okGateStatusPath = Join-Path $exitCodeReceiptStore ("gate-exit-ok-" + [Guid]::NewGuid().ToString("N") + ".status")
+    $okResult = Invoke-Ori3RustW4GateChildProcess -RepoRoot $ExitCodeRepo -GateStatusPath $okGateStatusPath -StubCargoDirectory $stubOkDirectory
+    Assert-Ori3SelfTest ($okResult.ExitCode -eq 0) ("stub cargo exit 0 did not produce helper process exit code 0: got " + $okResult.ExitCode + " output=" + $okResult.Output)
+    Assert-Ori3SelfTest ($okResult.Output.Contains("[OK]")) "stub cargo exit 0 did not produce an [OK] line from the helper"
+    Write-Host "[OK] stub cargo exit 0 => helper process exit code 0 with [OK]"
+}
+finally {
+    Remove-Ori3StubCargoDirectory $stubFailDirectory
+    Remove-Ori3StubCargoDirectory $stubOkDirectory
+    Remove-Ori3ExitCodeSelfTestSandbox
+}
+
+Write-Host "[OK] Rust W4 gate child-process exit code matches stub cargo exit code (no real cargo invoked)"

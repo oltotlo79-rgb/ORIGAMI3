@@ -1201,8 +1201,17 @@ function Invoke-Ori3RustW4Gate {
         Push-Location $resolvedRoot
         $pushedLocation = $true
         $rustW4Arguments = Get-Ori3RustW4Arguments
-        & $cargoPath @rustW4Arguments
-        $status = $LASTEXITCODE
+        # cargoの標準出力をそのままステートメントの出力ストリームへ流すと、この
+        # 関数がexpression contextで呼ばれたとき（呼び出し側の
+        # `$exitCode = Invoke-Ori3RustW4Gate ...`）に、その全行がこの関数の
+        # 戻り値へ混入し、末尾のreturn整数が配列の最後の要素になってしまう
+        # （実際に2026-09-04に起きた不具合: helperは[NG]と終了コード101を表示
+        # したのにcommitが成立した。原因は`exit $exitCode`へ配列が渡り、
+        # process終了コードが0になったこと）。`Out-Host`で明示的にhostへ書き出し、
+        # 関数の出力ストリームには何も残さない。標準エラー（Compiling/Running等）は
+        # 元々ネイティブプロセスからhostへ直接届いており、この変更の影響を受けない。
+        & $cargoPath @rustW4Arguments | Out-Host
+        $status = [int]$LASTEXITCODE
     }
     catch {
         Write-Host "[NG] cargo test --workspaceを起動できません: $($_.Exception.Message)" -ForegroundColor Red
@@ -1272,6 +1281,16 @@ if ($MyInvocation.InvocationName -ne ".") {
         $resolvedCliRoot = Resolve-Ori3RepoRoot $RepoRoot
         Set-Ori3GateStatus $resolvedCliRoot $GateStatusPath "helper-ready"
         $exitCode = Invoke-Ori3RustW4Gate $resolvedCliRoot $GateStatusPath
+        # Invoke-Ori3RustW4Gateの戻り値は必ず単一のintでなければならない。もし
+        # 関数内のどこかが出力ストリームへ何かを漏らせば、戻り値は配列になり、
+        # `exit`に非整数を渡した際にprocess終了コードが意図しない値（0を含む）に
+        # なり得る。2026-09-04の実際の不具合と同じ壊れ方を、ここで即座に検出する。
+        if ($exitCode -isnot [int]) {
+            $exitCodeTypeName = "(null)"
+            if ($null -ne $exitCode) { $exitCodeTypeName = $exitCode.GetType().FullName }
+            Write-Host "[NG] Rust W4 gateの戻り値が単一のintではありません (型: $exitCodeTypeName)。関数内で出力ストリームへ漏れた値がある可能性があります。" -ForegroundColor Red
+            exit 125
+        }
         exit $exitCode
     }
     catch {
