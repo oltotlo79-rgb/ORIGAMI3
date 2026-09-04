@@ -414,7 +414,7 @@ impl DocumentStore {
         let bytes = std::fs::read(path).map_err(|e| format!("ファイルを開けませんでした: {e}"))?;
         let text =
             std::str::from_utf8(&bytes).map_err(|e| format!("ファイルを開けませんでした: {e}"))?;
-        let saved = parse_document(&text)?;
+        let saved = parse_document(text)?;
         // 導出を先に済ませ、成功した場合のみ状態を確定する
         let view = build_view(&saved.document, &saved.step_creases, Vec::new());
         self.doc = saved.document;
@@ -4418,9 +4418,19 @@ mod tests {
         );
     }
 
+    /// 閉包救済(closure rescue)が、紙の食い込み検出の有無に依らずに効くことの回帰検査。
+    ///
+    /// 入力は `closure-rescue-regression.json`。これは2026-09-03に退役した台本の展開図で、
+    /// **折り鶴の標本ではない**。この検査が守る不具合は「単発solveでは閉じられない入力を
+    /// 救えること」なので、閉じられないその入力そのものを1バイトも変えずに残す必要がある
+    /// (正本CPの鶴では、単独で折れる折り目を選ぶと単発solveでも閉じてしまい、
+    /// 救済が効いたかどうかを確かめられなくなる)。
+    /// 折り鶴の正本は `crates/ori3-layers/tests/fixtures/traditional-crane/traditional-crane-cp.ori3`。
     #[test]
     fn crane_closure_rescue_is_independent_of_contact_detection() {
-        let cp = front_fixture_cp(include_str!("../../src/lib/__fixtures__/crane.json"));
+        let cp = front_fixture_cp(include_str!(
+            "../../src/lib/__fixtures__/closure-rescue-regression.json"
+        ));
         let faces = ori3_cp::extract_faces(&cp);
         let creases = cp
             .edges
@@ -4585,7 +4595,13 @@ mod tests {
         // (生の局所違反, ±180°候補, 通知点)。通知規則を姿勢解から切り離し、
         // 指定角到達済み・食い込みなしを入力として明示する。
         assert_eq!(folded_sample_counts, (6, 2, 0), "折り上がりの標本");
-        assert_eq!(crane_counts, (3, 3, 0), "鶴");
+        // 鶴は2026-09-04に、旧11手の台本から正本CP(56頂点・114辺・59面)の粗い3手へ差し替えた。
+        // 正本CPは内部頂点44個すべてで平坦折り条件を満たす(前川: 山−谷=±2が44/44、
+        // 川崎: 1つおきの角の和とπの差が最大4.44e-15 rad。上限ANGLE_TOL 1e-6 radの約2億分の1)。
+        // よって局所違反0が正しい。旧11手の鶴は内部頂点15個のうち4個(v9,v10,v11,v12)が
+        // 折り目5本の奇数次数で、山−谷を±2にできず角も1つおきに分けられなかった
+        // (`local_violations`が曲線の連なりを1つへまとめたあとの数が3)。
+        assert_eq!(crane_counts, (0, 0, 0), "鶴");
         assert_eq!(frog_counts, (3, 3, 0), "カエル");
         assert_eq!(yakko_counts, (0, 0, 0), "やっこさん");
         assert_eq!(cushion_flower_counts, (1, 1, 0), "八枚花弁の座布団花");
@@ -4601,7 +4617,8 @@ mod tests {
         .fold((0, 0, 0), |sum, counts| {
             (sum.0 + counts.0, sum.1 + counts.1, sum.2 + counts.2)
         });
-        assert_eq!(total, (13, 9, 0));
+        // 合計は鶴の(3,3,0)→(0,0,0)に合わせて(13,9,0)から改めた(2026-09-04)。
+        assert_eq!(total, (10, 6, 0));
     }
 
     fn current_flat_state(store: &DocumentStore) -> ori3_layers::FlatState {

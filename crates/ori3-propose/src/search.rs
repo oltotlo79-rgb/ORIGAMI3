@@ -1380,7 +1380,16 @@ fn search(
         outcome.states_expanded += 1;
 
         let (children, candidates) = expand(
-            &node, goal, weights, budget, completion, candidates, execution, &seen,
+            &node,
+            ExpandContext {
+                goal,
+                weights,
+                budget,
+                completion,
+                candidates,
+                execution,
+            },
+            &seen,
         )?;
         outcome.max_branching = outcome.max_branching.max(candidates);
         let mut completed: Option<(RankKey, Node)> = None;
@@ -1462,37 +1471,47 @@ fn search(
 /// operation-awareな単純本折りは、手が明示する山谷を根拠に途中姿勢まで物理検査できる。
 /// しかし、その終点の層順を提案へ採用してよいかは別の契約である。適用後CPで検査すると、
 /// 手自身が整えた山谷が候補順を自己認証するため、ここでは必ず適用前CPの一般制約へ照合する。
-fn expand(
-    node: &Node,
-    goal: &FoldGoal,
+/// [`expand`] へ渡す、[`search`]のループ1回では変わらない値をまとめた文脈。
+///
+/// [`search`]の`while`ループは`node`(いま展開する状態)と`seen`(既訪問状態、
+/// 子を見つけるたびに増える)だけを毎回変えて[`expand`]を呼ぶ。残り6引数は
+/// ループの外側で決まったまま変わらないので、ここへまとめて引数の数を減らす
+/// (`clippy::too_many_arguments`)。探索の順序・分岐・数値は変えない。
+struct ExpandContext<'a> {
+    goal: &'a FoldGoal,
     weights: GapWeights,
     budget: SearchBudget,
     completion: Option<CompletionTolerance>,
     candidates: SearchCandidateSet,
-    execution: &SearchExecution<'_>,
+    execution: &'a SearchExecution<'a>,
+}
+
+fn expand(
+    node: &Node,
+    ctx: ExpandContext<'_>,
     seen: &BTreeSet<SessionStateKey>,
 ) -> Result<(Vec<Node>, usize), SearchAbort> {
     let mut ranked: Vec<(Option<PreparedMove>, FinishGaps, f64, CandidateClass)> = Vec::new();
     let mut safe_single_lines = BTreeSet::new();
     for fold_line in node.session.fold_lines() {
-        execution.check()?;
-        let Some(prepared) = node.session.prepare_move(fold_line.id, budget.rank_scan) else {
-            execution.check()?;
+        ctx.execution.check()?;
+        let Some(prepared) = node.session.prepare_move(fold_line.id, ctx.budget.rank_scan) else {
+            ctx.execution.check()?;
             continue; // もう折り終えている手か、粗く見ても折れない手。止めずに次の手へ。
         };
-        let gaps = finish_gaps(&goal.target, &goal.measure(prepared.successor().document()));
-        let score = goal.score(prepared.successor().document(), &gaps, weights);
+        let gaps = finish_gaps(&ctx.goal.target, &ctx.goal.measure(prepared.successor().document()));
+        let score = ctx.goal.score(prepared.successor().document(), &gaps, ctx.weights);
         safe_single_lines.insert(fold_line.id);
         ranked.push((Some(prepared), gaps, score, CandidateClass::Regular));
-        execution.check()?;
+        ctx.execution.check()?;
     }
-    if candidates == SearchCandidateSet::DirectionalFallback {
+    if ctx.candidates == SearchCandidateSet::DirectionalFallback {
         let mut callback_abort = None;
         let (directional_moves, interrupted) =
             node.session
-                .prepared_directional_moves_until(budget.rank_scan, || {
+                .prepared_directional_moves_until(ctx.budget.rank_scan, || {
                     if callback_abort.is_none() {
-                        callback_abort = execution.interruption();
+                        callback_abort = ctx.execution.interruption();
                     }
                     callback_abort.is_some()
                 });
@@ -1501,23 +1520,23 @@ fn expand(
         }
         debug_assert!(!interrupted, "中断理由を保存せず方向付き候補を打ち切った");
         for prepared in directional_moves {
-            execution.check()?;
-            let gaps = finish_gaps(&goal.target, &goal.measure(prepared.successor().document()));
-            let score = goal.score(prepared.successor().document(), &gaps, weights);
+            ctx.execution.check()?;
+            let gaps = finish_gaps(&ctx.goal.target, &ctx.goal.measure(prepared.successor().document()));
+            let score = ctx.goal.score(prepared.successor().document(), &gaps, ctx.weights);
             ranked.push((Some(prepared), gaps, score, CandidateClass::Directional));
-            execution.check()?;
+            ctx.execution.check()?;
         }
-    } else if candidates == SearchCandidateSet::Completion {
+    } else if ctx.candidates == SearchCandidateSet::Completion {
         // 単一直線を順に閉じると行き止まる花弁折り等のため、完成探索だけは
         // 全網と、畳んだ平面で同一直線へ重なる局所部分集合も同じ物差しで順位付けする。
         // 通常の `search_to_finish` には足さず、作業22の既存結果を変えない。
         let mut callback_abort = None;
         let (network_moves, interrupted) = node.session.prepared_completion_moves_until(
-            budget.rank_scan,
+            ctx.budget.rank_scan,
             &safe_single_lines,
             || {
                 if callback_abort.is_none() {
-                    callback_abort = execution.interruption();
+                    callback_abort = ctx.execution.interruption();
                 }
                 callback_abort.is_some()
             },
@@ -1527,9 +1546,9 @@ fn expand(
         }
         debug_assert!(!interrupted, "中断理由を保存せず網候補を打ち切った");
         for prepared in network_moves {
-            execution.check()?;
-            let gaps = finish_gaps(&goal.target, &goal.measure(prepared.successor().document()));
-            let score = goal.score(prepared.successor().document(), &gaps, weights);
+            ctx.execution.check()?;
+            let gaps = finish_gaps(&ctx.goal.target, &ctx.goal.measure(prepared.successor().document()));
+            let score = ctx.goal.score(prepared.successor().document(), &gaps, ctx.weights);
             let edge_changes = node.session.transition_edge_changes(prepared.successor());
             let id = prepared.verified().id;
             let class = if node.session.move_is_directional_fold(id) {
@@ -1544,12 +1563,13 @@ fn expand(
                 }
             };
             ranked.push((Some(prepared), gaps, score, class));
-            execution.check()?;
+            ctx.execution.check()?;
         }
     }
     ranked.sort_by(|a, b| {
         let completion_key = |gaps: &FinishGaps| {
-            completion.map_or(0, |tolerance| quantize(completion_excess(gaps, tolerance)))
+            ctx.completion
+                .map_or(0, |tolerance| quantize(completion_excess(gaps, tolerance)))
         };
         completion_key(&a.1)
             .cmp(&completion_key(&b.1))
@@ -1568,7 +1588,7 @@ fn expand(
             })
     });
     let candidates = ranked.len();
-    execution.check()?;
+    ctx.execution.check()?;
 
     // 幾何点数だけのbeamでは、形をまだ変えない「層を持ち替える準備手」が常に
     // 単線候補の後ろへ落ち、次の花弁折りへ到達できない。分岐上限は増やさず、
@@ -1576,7 +1596,7 @@ fn expand(
     // (内訳と、規則を変えた理由は candidate_class_quotas を見ること)。
     // 粗検査だけ通って21点検査で落ちた候補や既訪問状態は枠へ数えず、次候補で補充する。
     // 返す最善の順位は変えず、状態上限の配分だけを公平にする。
-    let quotas = candidate_class_quotas(budget.branch);
+    let quotas = candidate_class_quotas(ctx.budget.branch);
     let mut children: Vec<Node> = Vec::new();
     let mut attempted = BTreeSet::new();
     let mut child_states = BTreeSet::new();
@@ -1585,7 +1605,7 @@ fn expand(
         .iter()
         .map(|(_, _, _, class)| *class)
         .collect::<Vec<_>>();
-    while attempted.len() < ranked.len() && children.len() < budget.branch {
+    while attempted.len() < ranked.len() && children.len() < ctx.budget.branch {
         let Some(index) = next_candidate_index(&classes, &attempted, kept, quotas) else {
             break;
         };
@@ -1594,11 +1614,11 @@ fn expand(
             .0
             .take()
             .expect("順位付け済み候補は1回だけ細走査する");
-        execution.check()?;
-        let fine = match node.session.reverify_prepared_move(prepared, budget.scan) {
+        ctx.execution.check()?;
+        let fine = match node.session.reverify_prepared_move(prepared, ctx.budget.scan) {
             Ok(fine) => fine,
             Err(_) => {
-                execution.check()?;
+                ctx.execution.check()?;
                 continue; // 粗く見たときは折れたが、細かく見ると折れない手。捨てる。
             }
         };
@@ -1609,8 +1629,8 @@ fn expand(
             continue;
         }
         // 結果へ載せる4値は、実際に子状態として保持する細かい確認後の文書から改めて測る。
-        let gaps = finish_gaps(&goal.target, &goal.measure(next.document()));
-        let score = goal.score(next.document(), &gaps, weights);
+        let gaps = finish_gaps(&ctx.goal.target, &ctx.goal.measure(next.document()));
+        let score = ctx.goal.score(next.document(), &gaps, ctx.weights);
         let mut steps = node.steps.clone();
         steps.push(RankedMove { mv, gaps, score });
         children.push(Node {
@@ -1625,7 +1645,7 @@ fn expand(
             },
         });
         kept[ranked[index].3.index()] += 1;
-        execution.check()?;
+        ctx.execution.check()?;
     }
     Ok((children, candidates))
 }

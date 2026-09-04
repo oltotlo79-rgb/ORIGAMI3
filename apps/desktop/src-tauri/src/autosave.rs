@@ -104,6 +104,7 @@ fn open_exclusively(path: &Path) -> Result<File, String> {
     loop {
         match OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .share_mode(0)
@@ -145,6 +146,7 @@ pub(crate) fn lock_process_files(app_data: &Path) -> Result<ProcessFileGuard, St
         return Ok(ProcessFileGuard {
             _file: OpenOptions::new()
                 .create(true)
+                .truncate(false)
                 .read(true)
                 .write(true)
                 .open(app_data.join(TRANSACTION_LOCK_FILE))
@@ -161,6 +163,7 @@ fn is_live_session(app_data: &Path, session: &str) -> Result<bool, String> {
     let path = session_lock_path(app_data, session);
     match OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .share_mode(0)
@@ -844,12 +847,12 @@ fn prepare_session(app_data: &Path) -> Result<(), String> {
         return Ok(());
     };
     #[cfg(not(test))]
-    if let Some(session) = active.session_id.as_deref() {
-        if is_live_session(app_data, session)? {
-            // 別processがまだ編集中なら、候補へ移して復旧画面へ誤表示しない。
-            index.active = Some(active);
-            return Ok(());
-        }
+    if let Some(session) = active.session_id.as_deref()
+        && is_live_session(app_data, session)?
+    {
+        // 別processがまだ編集中なら、候補へ移して復旧画面へ誤表示しない。
+        index.active = Some(active);
+        return Ok(());
     }
     let payload = std::fs::read(active_path(app_data))
         .map_err(|e| format!("前回の自動保存を読み込めませんでした: {e}"))?;

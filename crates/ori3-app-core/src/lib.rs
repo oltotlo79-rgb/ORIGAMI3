@@ -3194,7 +3194,7 @@ fn validate_recovery_choices(choices: &RecoveryChoices) -> Result<(), String> {
 }
 
 fn is_fold_path(path: &str) -> bool {
-    path.rsplit(|character| character == '/' || character == '\\')
+    path.rsplit(['/', '\\'])
         .next()
         .and_then(|name| name.rsplit_once('.').map(|(_, extension)| extension))
         .is_some_and(|extension| extension.eq_ignore_ascii_case("fold"))
@@ -3249,7 +3249,7 @@ fn export_file(suffix: String, content_type: &str, bytes: Vec<u8>) -> DocumentEx
 fn encode_base64(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut encoded =
-        String::with_capacity((bytes.len() / 3 + usize::from(bytes.len() % 3 > 0)) * 4);
+        String::with_capacity((bytes.len() / 3 + usize::from(!bytes.len().is_multiple_of(3))) * 4);
     let mut chunks = bytes.chunks_exact(3);
     for chunk in &mut chunks {
         let bits = (u32::from(chunk[0]) << 16) | (u32::from(chunk[1]) << 8) | u32::from(chunk[2]);

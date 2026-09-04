@@ -365,9 +365,13 @@ fn old_faces_for_mode(
             .filter(|face| face_reaches_side(frame_face(frame, face.id), side))
             .map(|face| face.id)
             .collect(),
-        SpatialFoldMode::Single => face_reaches_side(frame_face(frame, grabbed.id), side)
-            .then(|| HashSet::from([grabbed.id]))
-            .unwrap_or_default(),
+        SpatialFoldMode::Single => {
+            if face_reaches_side(frame_face(frame, grabbed.id), side) {
+                HashSet::from([grabbed.id])
+            } else {
+                HashSet::new()
+            }
+        }
     }
 }
 

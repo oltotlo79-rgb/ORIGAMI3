@@ -740,7 +740,7 @@ impl FoldSession {
     #[must_use]
     pub fn verify_move(&self, id: usize, scan: PoseScan) -> Option<CheckedMove> {
         self.prepare_move(id, scan)
-            .map(|prepared| CheckedMove::from_prepared(prepared))
+            .map(CheckedMove::from_prepared)
     }
 
     /// 探索内部向け。指定走査を通した手と、その検証で既に作った終点を一緒に返す。
@@ -800,7 +800,7 @@ impl FoldSession {
         self.remaining_network()
             .map(|network| self.try_network_prepared(&network, scan))
             .and_then(Result::ok)
-            .map(|prepared| CheckedMove::from_prepared(prepared))
+            .map(CheckedMove::from_prepared)
     }
 
     /// 完成探索で使う、複数直線の候補をすべて確かめる。
@@ -813,7 +813,7 @@ impl FoldSession {
         self.prepared_network_moves_until(scan, || false)
             .0
             .into_iter()
-            .map(|prepared| CheckedMove::from_prepared(prepared))
+            .map(CheckedMove::from_prepared)
             .collect()
     }
 
@@ -986,7 +986,7 @@ impl FoldSession {
         if id >= self.fold_lines.len() {
             return self.network_candidate_by_id(id).map(|network| {
                 self.try_network_prepared(network, scan)
-                    .map(|prepared| CheckedMove::from_prepared(prepared))
+                    .map(CheckedMove::from_prepared)
             });
         }
         let fold_line = self.fold_lines.iter().find(|l| l.id == id)?;
@@ -995,7 +995,7 @@ impl FoldSession {
         }
         Some(
             self.try_fold_prepared(fold_line, scan)
-                .map(|prepared| CheckedMove::from_prepared(prepared)),
+                .map(CheckedMove::from_prepared),
         )
     }
 

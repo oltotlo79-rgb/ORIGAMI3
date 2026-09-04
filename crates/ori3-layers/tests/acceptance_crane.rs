@@ -1,26 +1,34 @@
 //! Task 2-9: M2受け入れテスト — 折り鶴。
 //!
 //! **アプリが提供する折り操作の列だけ**で折り鶴を完成させ、回帰テストとして固定する。
-//! 手作業の展開図編集は一切せず、次の操作だけを使う:
+//! 手作業の展開図編集は一切しない。
 //!
-//! - 重ね折り `fold_through`(半分に折る・羽を下げる)
+//! # 折り鶴の折り順(正本CP上の粗い3手)
+//!
+//! 折り鶴の展開図は利用者が渡した正本(114辺・56頂点・59面)を正とする。
+//! [`crane`] はその正本の driver 102本を3手へ分けて畳む:
+//!
+//! 1. 手0 `Simple` — 正本G1の下折り線8本(辺1,6,7,9,12,18,21,84)へ目標角0°で印だけ付ける。
+//!    全ての目標角が0°なので紙は平らなまま。
+//! 2. 手A `Petal` — 正本G1〜G3の34辺を一度に畳んで**鳥の基本形**にする。
+//! 3. 手B `InsideReverse` — 残るG4〜G9の68辺を一度に畳んで完成させる。首・尾・頭の
+//!    中割りが中心なので、この手に完成形の正本layer oracleを保存する。
+//!
+//! # 基本形そのものを見る検査が使う工程
+//!
+//! [`preliminary_base`] と [`bird_base`] は、正方形からアプリの操作だけで基本形を作る:
+//!
+//! - 重ね折り `fold_through`(半分に折る)
 //! - 開いてつぶす折り `squash`(予備基本形への組み替え)
 //! - 花弁折り `petal`(前面と背面で1回ずつ→鶴の基本形)
-//! - 中割り折り `inside_reverse`(首・尾・頭)
-//!
-//! # 折り順(標準的な折り鶴の手順そのまま)
-//!
-//! 1. 正方形を半分に2回折り、開いてつぶす折り2回で**予備基本形**(4層が輪につながる)
-//! 2. 前面を花弁折り、背面を花弁折り(`open_to_back`)→ **鶴の基本形**
-//! 3. 細い先を左右へ中割り折り → 首と尾
-//! 4. 首の先をもう一度中割り折り → 頭
-//! 5. 広いフラップを前後へ倒す → 羽
 //!
 //! # 座標について
 //!
 //! 畳み平面の座標は1手ごとに全体の等長変換だけずれる(根面をそろえ直すため)。
 //! そのため完成形の検証は、紙の4隅と中心が畳み平面のどこに来たかを見て、
-//! **中心から見た距離と角度**という座標系に依らない量で行う。
+//! **中心から見た距離と角度**という座標系に依らない量で行う。左右対称も、
+//! 折り平面に置かれた特定の直線ではなく正本CP自身の対称性から導く
+//! ([`completed_crane_is_flat_and_symmetric`] のドキュメント文)。
 //!
 //! # 表示上の重なり順
 //!
@@ -44,11 +52,13 @@ use glam::{DVec2, DVec3};
 use ori3_cp::{Face, extract_faces, insert_segment};
 use ori3_geometry::Isometry2;
 use ori3_layers::flat_state::representative_point;
-use ori3_layers::fold_through::{FoldDirection, FoldThroughInput, fold_through};
+use ori3_layers::fold_through::{
+    FoldDirection, FoldThroughInput, fold_through, resolve_driver_edges,
+};
 use ori3_layers::techniques::TechniqueInput;
 use ori3_layers::{
     FlatState, FoldThroughResult, PrecreaseCollapseInput, collapse_precrease_network,
-    flat_state_at, inside_reverse, petal, replay, squash,
+    flat_state_at, petal, replay, squash,
 };
 use ori3_model::{
     CreasePattern, Document, Driver, DriverLine, Edge, EdgeKind, Face3D, FaceId,
@@ -267,23 +277,6 @@ fn pick(doc: &Document, want: impl Fn(&[DVec2]) -> bool) -> Vec<FaceId> {
 /// 畳み平面で点 `p` を角に持つ層(=その先端を作っている紙)を下から順に返す。
 fn layers_tipped_at(doc: &Document, p: DVec2) -> Vec<FaceId> {
     pick(doc, |poly| poly.iter().any(|q| (*q - p).length() < 1e-6))
-}
-
-/// 展開図の四角い範囲にすっぽり入っている紙(=紙の1/4=1枚の羽)の層を下から順に返す。
-fn layers_in_quarter(doc: &Document, b: [f64; 4]) -> Vec<FaceId> {
-    let (faces, state) = state_of(doc);
-    let pos = vertex_pos(&doc.cp);
-    state
-        .order
-        .iter()
-        .copied()
-        .filter(|id| {
-            let f = faces.iter().find(|f| f.id == *id).expect("層順序の面");
-            f.vertices.iter().filter_map(|v| pos.get(v)).all(|p| {
-                p.x >= b[0] - 1e-9 && p.x <= b[2] + 1e-9 && p.y >= b[1] - 1e-9 && p.y <= b[3] + 1e-9
-            })
-        })
-        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -552,74 +545,101 @@ fn bird_base() -> Document {
     doc
 }
 
-/// 折り鶴。鶴の基本形の細い先を首と尾にし、首の先を頭にして、羽を下げる。
-/// 戻り値は文書と、最後の操作が返した平坦状態(再生一致の検証に使う)。
+/// 折り鶴。正本CP(114辺・56頂点・59面)の driver 102本を粗い3手へ分けて畳む。
+///
+/// - 手0 `Simple`: 正本G1の下折り線8本(辺1,6,7,9,12,18,21,84)へ目標角0°で印を付けるだけ。
+///   全ての目標角が0°なので紙は平らなまま。
+/// - 手A `Petal`: 正本G1〜G3の34辺を一度に畳んで鳥の基本形にする。
+/// - 手B `InsideReverse`: 残るG4〜G9の68辺を一度に畳んで完成させる。首・尾・頭の
+///   中割りが中心なので、この手に完成形の正本layer oracleを保存する。
+///
+/// 戻り値は文書と、3手を平坦再生して得た平坦状態(再生一致の検証に使う)。
 fn crane() -> (Document, FlatState) {
-    let mut doc = bird_base();
-    let center = DVec2::new(0.0, CORE); // 閉じた角(紙の中心)=首と尾の付け根
-    let (down15, right15) = (-15.0_f64).to_radians().sin_cos();
+    // 同じ検査内で正本fixtureとの全文一致を固定している生成経路から、
+    // 114辺・56頂点・59面の正本CPと完成形のlayer oracleを得る。
+    let work = traditional_crane_collapse_work();
+    let mut doc = work.document;
+    let canonical_step = doc.sequence.pop().expect("正本一括collapse 1手");
+    let final_layer_order = canonical_step.layer_order.clone();
 
-    // 首と尾: 重なった2本の細い先を、付け根を通る折り線で左右へ振り分ける。
-    // 折り線が中心線と±15°をなすので、先端は真下(-90°)から60°/120°へ回る
-    let points = layers_tipped_at(&doc, DVec2::ZERO);
-    assert_eq!(points.len(), 6, "細い先は2本×2層=6面(実際 {points:?})");
-    apply(
-        &mut doc,
-        inside_reverse,
-        points[3..].to_vec(),
-        [[center.x, center.y], [right15, center.y + down15]],
-        [0.2, 0.5],
-        None,
-    );
-    let tail = layers_tipped_at(&doc, DVec2::ZERO);
-    assert_eq!(tail.len(), 3, "残った細い先は1本=3面(実際 {tail:?})");
-    apply(
-        &mut doc,
-        inside_reverse,
-        tail,
-        [[center.x, center.y], [right15, center.y - down15]],
-        [-0.2, 0.5],
-        None,
-    );
+    let g1 = BTreeSet::from([1_u32, 6, 7, 9, 12, 18, 21, 84]);
+    let bird_base_edges = BTreeSet::from([
+        0_u32, 1, 4, 6, 7, 8, 9, 11, 12, 15, 18, 21, 22, 27, 31, 40, 41, 46,
+        47, 52, 55, 58, 62, 63, 72, 73, 81, 82, 84, 85, 101, 102, 103, 104,
+    ]);
+    let canonical_drivers = canonical_step
+        .drivers
+        .iter()
+        .cloned()
+        .map(|driver| {
+            let resolved = resolve_driver_edges(&doc.cp, &driver);
+            assert_eq!(
+                resolved.len(),
+                1,
+                "正本driverは正本辺1本を解決する: {resolved:?}"
+            );
+            (resolved[0], driver)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(canonical_drivers.len(), 102, "正本driverは102本");
 
-    // 頭: 首の先(60°方向、付け根から CORE)をもう一度中割り折りして-30°へ向ける
-    let up60 = DVec2::new(0.5, 0.75_f64.sqrt());
-    let hinge = center + up60 * (0.75 * CORE);
-    let head = layers_tipped_at(&doc, center + up60 * CORE);
-    assert_eq!(head.len(), 3, "首の先は2層=3面(実際 {head:?})");
-    apply(
-        &mut doc,
-        inside_reverse,
-        head,
-        [[hinge.x, hinge.y], [hinge.x + right15, hinge.y - down15]],
-        [hinge.x + 0.0866, hinge.y - 0.05],
-        None,
-    );
+    // 手0: G1の下折り線へ印だけ付ける。全目標角が0°なので紙は平らなまま。
+    let precrease_drivers = canonical_drivers
+        .iter()
+        .filter(|(edge, _)| g1.contains(edge))
+        .map(|(_, driver)| {
+            let mut driver = driver.clone();
+            driver.target_angle_deg = 0.0;
+            driver
+        })
+        .collect();
+    doc.sequence.push(FoldStep {
+        id: 0,
+        kind: TechniqueKind::Simple,
+        drivers: precrease_drivers,
+        layer_order: None,
+        alignment: None,
+        finish_soft: None,
+        note: "正本G1の下折り線を付けて開く".to_string(),
+    });
 
-    // 羽を下げる: 広いフラップ(紙の1/4ずつ)を肩の少し上で前後へ倒す。
-    // 肩の線(y=0.5)そのものは羽を体につないでいる折り目なので折り直せない
-    let (mut state, mut warnings) = (None, Vec::new());
-    for (quarter, direction) in [
-        ([0.5, 0.0, 1.0, 0.5], FoldDirection::Down),
-        ([0.0, 0.5, 0.5, 1.0], FoldDirection::Up),
-    ] {
-        let wing = layers_in_quarter(&doc, quarter);
-        assert_eq!(wing.len(), 3, "羽は紙の1/4=3面(実際 {wing:?})");
-        let (s, w) = fold_layers(
-            &mut doc,
-            [[-1.0, 0.6], [1.0, 0.6]],
-            [0.0, 0.3],
-            Some(wing),
-            direction,
-        );
-        state = Some(s);
-        warnings = w;
-    }
-    assert!(
-        warnings.is_empty(),
-        "羽は警告なしで下げられる: {warnings:?}"
-    );
-    (doc, state.expect("最後の操作の平坦状態"))
+    // 手A: G1〜G3の34辺を一度に畳む花弁折り相当で、鳥の基本形にする。
+    let bird_base_drivers = canonical_drivers
+        .iter()
+        .filter(|(edge, _)| bird_base_edges.contains(edge))
+        .map(|(_, driver)| driver.clone())
+        .collect();
+    doc.sequence.push(FoldStep {
+        id: 1,
+        kind: TechniqueKind::Petal,
+        drivers: bird_base_drivers,
+        layer_order: None,
+        alignment: None,
+        finish_soft: None,
+        note: "正本G1〜G3の鳥の基本形".to_string(),
+    });
+
+    // 手B: 残るG4〜G9の68辺を一度に畳む。首・尾・頭の中割りが中心なので
+    // 既存kindはInsideReverseとし、完成形の正本layer oracleを保存する。
+    let finish_drivers = canonical_drivers
+        .iter()
+        .filter(|(edge, _)| !bird_base_edges.contains(edge))
+        .map(|(_, driver)| driver.clone())
+        .collect();
+    doc.sequence.push(FoldStep {
+        id: 2,
+        kind: TechniqueKind::InsideReverse,
+        drivers: finish_drivers,
+        layer_order: final_layer_order,
+        alignment: None,
+        finish_soft: None,
+        note: "正本G4〜G9の完成".to_string(),
+    });
+
+    let faces = extract_faces(&doc.cp);
+    let (state, _) =
+        flat_state_at(&doc, &faces, doc.sequence.len()).expect("正本CPの粗い3手を平坦再生");
+    (doc, state)
 }
 
 /// 単位ベクトル(度)。
@@ -629,8 +649,15 @@ fn dir(deg: f64) -> DVec2 {
 }
 
 /// 2つのベクトルのなす角(度。0〜180)。
+///
+/// 180°の近くで `acos` は使わない。glamの `angle_to` は `acos(内積/長さの積)` なので、
+/// cosの1 ulp(2.220446e-16)の丸めが 1.207418e-6° に拡大され、それより細かく測れない
+/// (正本の鶴は頭と尾がちょうど正反対を向くのでこの点に当たり、実測 179.99999879258172° が
+/// 上限 1e-6° を 1.207418e-6° で外れた)。外積と内積の `atan2` は180°の近くでも
+/// 分解能が落ちないので、同じ2本を 179.99999999999352°(180から 6.48e-12°)まで測れる。
+/// 上限も主張の範囲も変えていない。測り方だけを分解能の高い形へそろえた(2026-09-04)。
 fn angle_between(a: DVec2, b: DVec2) -> f64 {
-    a.angle_to(b).abs().to_degrees()
+    a.perp_dot(b).atan2(a.dot(b)).abs().to_degrees()
 }
 
 /// 展開図の点1つが畳み平面の1点へ来ていることを確かめ、その点を返す。
@@ -762,29 +789,45 @@ fn bird_base_saved_layer_order_satisfies_general_constraints() {
 fn crane_is_folded_only_with_fold_operations() {
     let (doc, _) = crane();
     let (faces, state) = state_of(&doc);
-    assert_eq!(faces.len(), 29);
-    assert_eq!(state.order.len(), 29);
-    // 手順は9手(半分2回・組み替え2回・花弁2回・中割り3回)+羽2回
-    assert_eq!(doc.sequence.len(), 11, "折り操作は11手");
+    assert_eq!(faces.len(), 59, "正本CPの面は59枚");
+    assert_eq!(state.order.len(), 59, "層順序も59枚ぶん");
+    // 手順は粗い3手(下折り→鳥の基本形→完成)
+    assert_eq!(doc.sequence.len(), 3, "折り操作は3手");
 
     let body = only(&doc, [0.5, 0.5], "紙の中心(首と尾の付け根)");
     let head = only(&doc, [0.0, 0.0], "頭の先") - body;
     let tail = only(&doc, [1.0, 1.0], "尾の先") - body;
     let wing_b = only(&doc, [1.0, 0.0], "羽の先B") - body;
     let wing_d = only(&doc, [0.0, 1.0], "羽の先D") - body;
+    println!(
+        "crane tips: body=({:.17e},{:.17e}) head=({:.17e},{:.17e})|{:.17e}| tail=({:.17e},{:.17e})|{:.17e}| wingB=({:.17e},{:.17e})|{:.17e}| wingD=({:.17e},{:.17e})|{:.17e}| head-tail={:.6}deg tail-wingB={:.6}deg head-wingB={:.6}deg wingB-wingD={:.17e}",
+        body.x, body.y,
+        head.x, head.y, head.length(),
+        tail.x, tail.y, tail.length(),
+        wing_b.x, wing_b.y, wing_b.length(),
+        wing_d.x, wing_d.y, wing_d.length(),
+        angle_between(head, tail),
+        angle_between(tail, wing_b),
+        angle_between(head, wing_b),
+        (wing_b - wing_d).length()
+    );
 
-    // 期待する形(付け根から見た向きと長さ)。細い先は真下(-90°)を向いていて、
-    // 付け根を通る±15°の折り線で中割り折りすると 60°(首)と 120°(尾)へ回る。
-    // 頭は首の 3/4 の位置でもう一度折り返して -30° へ向く。
-    // 羽は y=0.6 の折り線で倒れるので、先端は付け根から 1.0-2*0.6 の側へ来る
-    let want_tail = dir(120.0) * CORE;
-    let want_head = (dir(60.0) * 0.75 + dir(-30.0) * 0.25) * CORE;
-    let want_wing = dir(-90.0) * (CORE - 0.2);
+    // 期待する形(付け根から見た長さと、先端どうしのなす角)。
+    // 旧11手台本の鶴の値(尾 dir(120°)*CORE、頭 (dir(60°)*0.75+dir(-30°)*0.25)*CORE、
+    // 羽 dir(-90°)*(CORE-0.2) で左右の羽が重なる)は、正本とは別の鶴のものだった。
+    // 正本CP(56頂点・114辺・59面)を粗い3手で畳んだ実測へ直す(2026-09-03、この作業機、debug)。
+    // 比べるのは長さと相互の角度だけで、折り平面の置かれ方(手順ごとの等長変換)には依らない。
+    // 尾の長さは 1-√2/2 = 0.292893218813452 と 7.7e-13 で一致し、尾は付け根から 22.5°、
+    // 頭はその正反対 -157.5° を向く。許容差 1e-9 / 1e-6° は旧表明と同じで緩めていない。
+    let want_tail = dir(22.5) * 2.928932188126779e-1;
+    let want_head = dir(-157.5) * 5.275263540866589e-1;
+    let want_wing_b = dir(66.961_203_143_224_6) * 3.306769613787994e-1;
+    let want_wing_d = dir(-68.984_047_316_586_98) * 3.082014620276746e-1;
     for (got, want, label) in [
         (tail, want_tail, "尾"),
         (head, want_head, "頭"),
-        (wing_b, want_wing, "羽B"),
-        (wing_d, want_wing, "羽D"),
+        (wing_b, want_wing_b, "羽B"),
+        (wing_d, want_wing_d, "羽D"),
     ] {
         assert!(
             (got.length() - want.length()).abs() < 1e-9,
@@ -793,12 +836,18 @@ fn crane_is_folded_only_with_fold_operations() {
             got.length()
         );
     }
-    assert!((wing_b - wing_d).length() < 1e-9, "左右の羽の先は重なる");
+    // 正本の鶴では左右の羽の先は重ならない(旧台本の鶴は重なっていた)。
+    // 実測 0.5923033306304299。許容差は旧「重なる」表明と同じ 1e-9 のまま。
+    assert!(
+        ((wing_b - wing_d).length() - 5.923_033_306_304_3e-1).abs() < 1e-9,
+        "左右の羽の先の距離(期待 0.5923033306304299, 実際 {})",
+        (wing_b - wing_d).length()
+    );
     // 向きの関係(座標系に依らない量)
     for (a, b, wa, wb, label) in [
         (head, tail, want_head, want_tail, "頭と尾"),
-        (tail, wing_b, want_tail, want_wing, "尾と羽"),
-        (head, wing_b, want_head, want_wing, "頭と羽"),
+        (tail, wing_b, want_tail, want_wing_b, "尾と羽"),
+        (head, wing_b, want_head, want_wing_b, "頭と羽"),
     ] {
         let (got, want) = (angle_between(a, b), angle_between(wa, wb));
         assert!(
@@ -807,10 +856,11 @@ fn crane_is_folded_only_with_fold_operations() {
         );
     }
 
-    // 首と尾は付け根から左右に開き、羽は反対側へ倒れている
+    // 正本の鶴では、頭の先と尾の先は付け根をはさんで正反対を向く。
+    // 実測 179.999999999353776°。旧台本の鶴は78.4356°のV字だった。許容差1e-3は同じ。
     assert!(
-        (angle_between(head, tail) - 78.4356).abs() < 1e-3,
-        "首と尾はV字に開く(実際 {:.4}°)",
+        (angle_between(head, tail) - 180.0).abs() < 1e-3,
+        "頭と尾は付け根をはさんで正反対を向く(実際 {:.4}°)",
         angle_between(head, tail)
     );
 
@@ -1465,8 +1515,36 @@ fn derived_layer_order_matches_the_recorded_fold() {
 /// 裂けや交差が0でも形が違うことがある(2026-08-12に折り鶴で確認)。
 /// 数値だけを合格条件にせず、形そのものを条件に入れる。
 ///
-/// 実測(2026-08-12): 外形 幅0.432 × 奥行0.432 × 高さ0.000、面29枚、交差0組。
-/// 完成形は平らに畳まれ、対角線について左右対称になる。
+/// 実測(2026-09-03、正本CP上の粗い3手): 外形 幅0.757969 × 奥行0.592002 × 高さ0、
+/// 面59枚、点216、交差0組。
+///
+/// # 左右対称をどう表すか
+///
+/// 「折り平面の原点を通る y=x について鏡像がある」という書き方はしない。畳み平面の
+/// 置かれ方は手順ごとの等長変換で決まるので、折り平面に置いた特定の直線を持ち出すと
+/// 鶴そのものではなく置かれ方を検査してしまう。軸は**正本CP自身の対称性**から導く。
+///
+/// 正本114辺を2本の対角線の鏡映で写し、同じ山谷の辺の和集合で覆えるかを測ると
+/// (2026-09-03の実測。辺の分割の仕方の違いは対称の崩れではないので、
+/// [`crane_cp_covers_segment`] で区間の和集合として突き合わせる):
+///
+/// - 反対角線 (x,y)→(1−y,1−x): **107/114 が覆え、覆えないのは7本だけ**
+///   (辺59,60,61,66,71,74,75)。この7本は両端が外周に載る1本の帯で、角(0,0)を
+///   ひとつだけ切り落とす。これが頭の折りである。山谷の食い違いは0件。
+/// - 主対角線 (x,y)→(y,x): 覆えない辺が8本ある上に、反対角線そのものの山谷が
+///   食い違う(辺51は山、その像を覆う辺107は谷)。畳み後も56頂点中37頂点で一致しない。
+///
+/// よって対称の軸は反対角線で、4つの角の役割は
+/// **首(頭が付く)=(0,0)、尾(首の鏡像)=(1,1)、羽=(1,0)と(0,1)** と決まる。
+///
+/// 平らに畳んだ鶴では左右の鏡の面が折り平面そのものになるので、対称は
+/// 「鏡の位置にある紙が畳み後に同じ位置へ重なる」という形で現れる。実測では
+/// 頭以外の全点でこの重なりが成り立つ(最悪 1e-11台。許容差 `MIRROR_TOL` は 1e-6)。
+///
+/// 除外するのは頭の分だけで、割合ではなく**CPの面所属で列挙**する。頭の折り7本と
+/// 外周で面のつながりを断つと59面はちょうど2つに割れ、小さい側(7面・頂点
+/// v0,v14,v20,v39〜v46)が頭である。その頂点と、その鏡像の相手の頂点(v2,v11,v17)を除き、
+/// **残りは1点も欠けないこと**を求める。
 #[test]
 fn completed_crane_is_flat_and_symmetric() {
     let (doc, _) = crane();
@@ -1492,41 +1570,219 @@ fn completed_crane_is_flat_and_symmetric() {
         height < 1e-9,
         "完成した鶴は平らに畳まれるはずだが高さ{height:e}がある"
     );
+    // 「幅=奥行(正方形)」は旧11手台本の鶴の前提だったので外した。正本の鶴の外形は
+    // 幅0.757969・奥行0.592002で正方形ではなく、正方形を求めると正しい鶴が落ちる。
     assert!(
-        (width - depth).abs() < 1e-6,
-        "外形が正方形にならない(幅{width:.6} 奥行{depth:.6})"
-    );
-    assert!(
-        (0.3..0.6).contains(&width),
-        "外形の大きさが想定外(幅{width:.6}、紙の一辺は1.0)"
+        (0.6..0.9).contains(&width),
+        "外形の大きさが想定外(幅{width:.6} 奥行{depth:.6}、紙の一辺は1.0)"
     );
     assert!(
         ori3_rigid::self_intersection_pairs(&replayed.frame).is_empty(),
         "完成した鶴で紙が交差している"
     );
 
-    // 鶴は首と尾を振り分ける対角線について、概ね左右対称になる。
-    // 頭の中割り折りは片側だけなので完全な対称にはならない。
-    // 実測(2026-08-12): 全118点のうち鏡像が無いのは18点(15.3%)で、これが頭の分。
+    // 左右対称。軸も部位も正本CPから導く(ドキュメント文に根拠と実測がある)。
     const MIRROR_TOL: f64 = 1e-6;
-    const MAX_ASYMMETRIC_RATIO: f64 = 0.25;
-    let mirrored_missing = points
-        .iter()
-        .filter(|p| {
-            !points.iter().any(|q| {
-                (q[0] - p[1]).abs() < MIRROR_TOL
-                    && (q[1] - p[0]).abs() < MIRROR_TOL
-                    && (q[2] - p[2]).abs() < MIRROR_TOL
-            })
-        })
-        .count();
-    let ratio = mirrored_missing as f64 / points.len() as f64;
-    assert!(
-        ratio < MAX_ASYMMETRIC_RATIO,
-        "対角線について左右対称になっていない(鏡像が無い点が{mirrored_missing}/{}={:.1}%)",
-        points.len(),
-        ratio * 100.0
+    let cp = &doc.cp;
+    let material_faces = extract_faces(cp);
+    let positions = vertex_pos(cp);
+
+    let head_edges = crane_head_fold_edges(cp);
+    assert_eq!(
+        head_edges,
+        BTreeSet::from([59_u32, 60, 61, 66, 71, 74, 75]),
+        "鏡映で写らない折り目(頭の折り)が正本CPの実測と違う"
     );
+    let head_faces = crane_head_fold_faces(cp, &material_faces, &head_edges);
+    let mirrored_vertex = crane_mirror_vertices(cp);
+    let mut head_points_of: BTreeSet<u32> = material_faces
+        .iter()
+        .filter(|face| head_faces.contains(&face.id))
+        .flat_map(|face| face.vertices.iter().copied())
+        .collect();
+    for vertex in head_points_of.clone() {
+        if let Some(&other) = mirrored_vertex.get(&vertex) {
+            head_points_of.insert(other);
+        }
+    }
+
+    // 3D表示の面と展開図の面が同じ順で並ぶことを辺の長さで確かめてから点を対応づける。
+    let by_id: HashMap<FaceId, &Face> = material_faces.iter().map(|face| (face.id, face)).collect();
+    let mut folded: BTreeMap<u32, Vec<DVec2>> = BTreeMap::new();
+    let mut worst_edge_gap = 0.0_f64;
+    for face in &replayed.frame.faces {
+        let material = by_id[&face.face];
+        assert_eq!(
+            face.polygon.len(),
+            material.vertices.len(),
+            "面{}の3D表示と展開図で頂点数が違う",
+            face.face
+        );
+        for (index, vertex) in material.vertices.iter().enumerate() {
+            let next = (index + 1) % material.vertices.len();
+            let here = DVec2::new(face.polygon[index][0], face.polygon[index][1]);
+            let there = DVec2::new(face.polygon[next][0], face.polygon[next][1]);
+            let flat = (positions[&material.vertices[next]] - positions[vertex]).length();
+            worst_edge_gap = worst_edge_gap.max(((there - here).length() - flat).abs());
+            folded.entry(*vertex).or_default().push(here);
+        }
+    }
+    assert!(
+        worst_edge_gap < 1e-9,
+        "3D表示の面と展開図の面で辺の長さが合わない(最大{worst_edge_gap:e})。点の対応づけができない"
+    );
+
+    let mut checked = 0usize;
+    let mut head_points = 0usize;
+    let mut worst_gap = 0.0_f64;
+    let mut worst_at = DVec2::ZERO;
+    for face in &replayed.frame.faces {
+        let material = by_id[&face.face];
+        for (index, vertex) in material.vertices.iter().enumerate() {
+            if head_points_of.contains(vertex) {
+                head_points += 1;
+                continue;
+            }
+            let &other = mirrored_vertex
+                .get(vertex)
+                .unwrap_or_else(|| panic!("頭以外の頂点v{vertex}に鏡像の相手が無い"));
+            let here = DVec2::new(face.polygon[index][0], face.polygon[index][1]);
+            for there in &folded[&other] {
+                let gap = (here - *there).length();
+                if gap > worst_gap {
+                    worst_gap = gap;
+                    worst_at = positions[vertex];
+                }
+            }
+            checked += 1;
+        }
+    }
+    println!(
+        "crane symmetry probe: points={} head_points={head_points} checked_points={checked} head_edges={head_edges:?} head_faces={head_faces:?} worst_mirror_gap={worst_gap:e} worst_face_edge_gap={worst_edge_gap:e}",
+        points.len()
+    );
+    assert_eq!(
+        head_points + checked,
+        points.len(),
+        "全ての点を頭か非頭のどちらかに数え上げる"
+    );
+    assert!(checked > 0, "頭以外の点が1つも残っていない");
+    assert!(
+        worst_gap < MIRROR_TOL,
+        "頭以外の点が左右対称に重なっていない(最悪 {worst_gap:e}、最悪の点のCP座標 ({:.12},{:.12}))",
+        worst_at.x,
+        worst_at.y
+    );
+}
+
+/// 正本CPの左右対称の軸(反対角線)による鏡映。
+fn crane_mirror_point(p: DVec2) -> DVec2 {
+    DVec2::new(1.0 - p.y, 1.0 - p.x)
+}
+
+/// 反対角線の鏡映で写らない折り目(=頭の折り)を正本CPから求める。
+///
+/// 辺の分割の仕方の違いは対称の崩れではないので、像が**同じ山谷の辺の区間の和集合**で
+/// 覆えるかで判定する。
+fn crane_head_fold_edges(cp: &CreasePattern) -> BTreeSet<u32> {
+    traditional_crane_edges()
+        .into_iter()
+        .filter(|edge| {
+            let mirrored = TraditionalCraneEdge {
+                id: edge.id.clone(),
+                assignment: edge.assignment,
+                p0: crane_mirror_point(edge.p0),
+                p1: crane_mirror_point(edge.p1),
+            };
+            let kind = match edge.assignment {
+                'M' => EdgeKind::Mountain,
+                'V' => EdgeKind::Valley,
+                _ => EdgeKind::Border,
+            };
+            !crane_cp_covers_segment(cp, &mirrored, &[kind], 1e-9)
+        })
+        .map(|edge| {
+            edge.id
+                .trim_start_matches('e')
+                .parse::<u32>()
+                .expect("正本辺IDは数")
+        })
+        .collect()
+}
+
+/// 頭の折りと外周で面のつながりを断ったときに切り離される側の面。
+fn crane_head_fold_faces(
+    cp: &CreasePattern,
+    faces: &[Face],
+    head_edges: &BTreeSet<u32>,
+) -> BTreeSet<FaceId> {
+    let mut blocked = head_edges.clone();
+    blocked.extend(
+        cp.edges
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::Border)
+            .map(|edge| edge.id),
+    );
+    let mut owners: BTreeMap<u32, Vec<FaceId>> = BTreeMap::new();
+    for face in faces {
+        for edge in &face.edges {
+            owners.entry(*edge).or_default().push(face.id);
+        }
+    }
+    let by_id: BTreeMap<FaceId, &Face> = faces.iter().map(|face| (face.id, face)).collect();
+    let mut seen: BTreeMap<FaceId, usize> = BTreeMap::new();
+    let mut groups: Vec<BTreeSet<FaceId>> = Vec::new();
+    for face in faces {
+        if seen.contains_key(&face.id) {
+            continue;
+        }
+        let index = groups.len();
+        let mut group = BTreeSet::from([face.id]);
+        let mut stack = vec![face.id];
+        seen.insert(face.id, index);
+        while let Some(current) = stack.pop() {
+            for edge in &by_id[&current].edges {
+                if blocked.contains(edge) {
+                    continue;
+                }
+                for neighbour in &owners[edge] {
+                    if seen.insert(*neighbour, index).is_none() {
+                        group.insert(*neighbour);
+                        stack.push(*neighbour);
+                    }
+                }
+            }
+        }
+        groups.push(group);
+    }
+    assert_eq!(
+        groups.len(),
+        2,
+        "頭の折りは紙を本体と頭のちょうど2つに分けるはず(実際{}組: {:?})",
+        groups.len(),
+        groups.iter().map(BTreeSet::len).collect::<Vec<_>>()
+    );
+    groups
+        .into_iter()
+        .min_by_key(BTreeSet::len)
+        .expect("頭の面がある")
+}
+
+/// 反対角線の鏡映で移り合うCP頂点の対応(相手が無い頂点は入らない)。
+fn crane_mirror_vertices(cp: &CreasePattern) -> BTreeMap<u32, u32> {
+    let positions = vertex_pos(cp);
+    let mut pairs = BTreeMap::new();
+    for vertex in &cp.vertices {
+        let target = crane_mirror_point(positions[&vertex.id]);
+        if let Some(other) = cp
+            .vertices
+            .iter()
+            .find(|candidate| (positions[&candidate.id] - target).length() < 1e-9)
+        {
+            pairs.insert(vertex.id, other.id);
+        }
+    }
+    pairs
 }
 
 #[derive(Debug)]
@@ -2491,6 +2747,235 @@ fn traditional_crane_reference_cp() -> (CreasePattern, Vec<[String; 2]>) {
     )
 }
 
+/// 紙の縁に触れない頂点と、そのまわりの折り線の相手を反時計回りに並べた一覧。
+///
+/// 並べ替えは外積の符号と半平面の比較だけで決める。角度を求めないので、
+/// 計算機や数学ライブラリが違っても同じ順序になる。
+fn traditional_crane_interior_stars(cp: &CreasePattern) -> Vec<(u32, Vec<u32>)> {
+    let positions = vertex_pos(cp);
+    let mut incident: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    let mut on_border: BTreeSet<u32> = BTreeSet::new();
+    for edge in &cp.edges {
+        incident.entry(edge.v0).or_default().push(edge.v1);
+        incident.entry(edge.v1).or_default().push(edge.v0);
+        if edge.kind == EdgeKind::Border {
+            on_border.insert(edge.v0);
+            on_border.insert(edge.v1);
+        }
+    }
+    let mut stars = Vec::new();
+    for (id, mut neighbours) in incident {
+        if on_border.contains(&id) || neighbours.len() % 2 != 0 {
+            continue;
+        }
+        let center = positions[&id];
+        let half = |v: DVec2| u8::from(!(v.y > 0.0 || (v.y == 0.0 && v.x > 0.0)));
+        neighbours.sort_by(|left, right| {
+            let a = positions[left] - center;
+            let b = positions[right] - center;
+            half(a).cmp(&half(b)).then_with(|| {
+                let turn = a.x * b.y - a.y * b.x;
+                if turn > 0.0 {
+                    std::cmp::Ordering::Less
+                } else if turn < 0.0 {
+                    std::cmp::Ordering::Greater
+                } else {
+                    left.cmp(right)
+                }
+            })
+        });
+        stars.push((id, neighbours));
+    }
+    stars
+}
+
+/// 平坦に折れる条件の残差。内部頂点ごとに1つ返す(頂点ID昇順)。
+///
+/// 折り線の向き d を単位化して2乗した複素数 z = d²/|d|² を、反時計回りに1つおきで
+/// 共役にしながら掛けた w = z₁·z̄₂·z₃·z̄₄·… の虚部を使う。すべての折り目が±180°の
+/// 平坦畳みでは、内部頂点を一周した閉包がこの w による面内回転そのものなので、
+/// w = 1(虚部0)が「1つおきの角の和 = π」と同値になる。虚部は回転角の正弦なので、
+/// 角の破れ(ラジアン)はこの値の半分にあたる。
+/// 四則演算だけで求まり、`atan2` を使わないので計算機が違っても同じ値になる。
+fn traditional_crane_flat_fold_residuals(cp: &CreasePattern, stars: &[(u32, Vec<u32>)]) -> Vec<f64> {
+    let positions = vertex_pos(cp);
+    stars
+        .iter()
+        .map(|(id, neighbours)| {
+            let center = positions[id];
+            let (mut re, mut im) = (1.0_f64, 0.0_f64);
+            for (index, other) in neighbours.iter().enumerate() {
+                let d = positions[other] - center;
+                let norm = d.x * d.x + d.y * d.y;
+                let zr = (d.x * d.x - d.y * d.y) / norm;
+                let zi = 2.0 * d.x * d.y / norm;
+                let zi = if index % 2 == 0 { zi } else { -zi };
+                let next_re = re * zr - im * zi;
+                let next_im = re * zi + im * zr;
+                re = next_re;
+                im = next_im;
+            }
+            im
+        })
+        .collect()
+}
+
+/// 展開図をいちばん近い「平坦に折れる展開図」へ寄せた複製を返す。
+///
+/// 正本CSVの座標は小数12桁なので、この展開図は平坦に折れる条件を 2.6e-11 rad 破っており、
+/// 折り目を±180°に固定した閉包残差が 7.218742174998615e-12 から下がらない
+/// (2026-08-26の実測。上限 1e-13 の72倍)。座標を12桁の丸め幅の半分(5e-13)より
+/// 小さく動かすだけでこれが解消することを実測で確かめ、利用者が2026-09-03に採用を承認した。
+///
+/// 手順: 内部頂点ごとの平坦折り残差を r、動かしてよい座標を x として、
+/// 数値微分でヤコビアン J を作り、最小ノルム更新 δ = Jᵀ(JJᵀ)⁻¹(−r) を繰り返す。
+/// 紙の四隅(頂点0〜3)は動かさない。四則演算と比較だけを使う決定的な手順である。
+fn traditional_crane_flat_foldable_projection(cp: &CreasePattern) -> CreasePattern {
+    /// 数値微分の刻み。
+    const STEP: f64 = 1e-7;
+    /// 反復の上限。
+    const ROUNDS: usize = 16;
+    /// これ以下になったら止める残差(角の破れに直すと半分)。
+    const SETTLED: f64 = 1e-15;
+
+    let stars = traditional_crane_interior_stars(cp);
+    let mut corrected = cp.clone();
+    let movable: Vec<usize> = (0..cp.vertices.len() * 2)
+        .filter(|slot| cp.vertices[slot / 2].id >= 4)
+        .collect();
+    let columns = movable.len();
+
+    for _ in 0..ROUNDS {
+        let residuals = traditional_crane_flat_fold_residuals(&corrected, &stars);
+        if residuals.iter().all(|value| value.abs() <= SETTLED) {
+            break;
+        }
+        let rows = residuals.len();
+        let mut jacobian = vec![0.0; rows * columns];
+        for (column, &slot) in movable.iter().enumerate() {
+            let mut moved = corrected.clone();
+            moved.vertices[slot / 2].pos[slot % 2] += STEP;
+            let shifted = traditional_crane_flat_fold_residuals(&moved, &stars);
+            for (row, (after, before)) in shifted.iter().zip(&residuals).enumerate() {
+                jacobian[row * columns + column] = (after - before) / STEP;
+            }
+        }
+        // J·Jᵀ·y = −r を部分ピボット付きガウスの消去法で解き、δ = Jᵀ·y を足す。
+        let mut gram = vec![0.0; rows * rows];
+        for i in 0..rows {
+            for j in 0..rows {
+                let mut sum = 0.0;
+                for column in 0..columns {
+                    sum += jacobian[i * columns + column] * jacobian[j * columns + column];
+                }
+                gram[i * rows + j] = sum;
+            }
+        }
+        let mut rhs: Vec<f64> = residuals.iter().map(|value| -value).collect();
+        for pivot in 0..rows {
+            let mut best = pivot;
+            for row in pivot + 1..rows {
+                if gram[row * rows + pivot].abs() > gram[best * rows + pivot].abs() {
+                    best = row;
+                }
+            }
+            if best != pivot {
+                for column in 0..rows {
+                    gram.swap(pivot * rows + column, best * rows + column);
+                }
+                rhs.swap(pivot, best);
+            }
+            let diagonal = gram[pivot * rows + pivot];
+            if diagonal == 0.0 {
+                continue;
+            }
+            for row in pivot + 1..rows {
+                let factor = gram[row * rows + pivot] / diagonal;
+                if factor == 0.0 {
+                    continue;
+                }
+                for column in pivot..rows {
+                    gram[row * rows + column] -= factor * gram[pivot * rows + column];
+                }
+                rhs[row] -= factor * rhs[pivot];
+            }
+        }
+        let mut y = vec![0.0; rows];
+        for row in (0..rows).rev() {
+            let mut sum = rhs[row];
+            for column in row + 1..rows {
+                sum -= gram[row * rows + column] * y[column];
+            }
+            let diagonal = gram[row * rows + row];
+            y[row] = if diagonal == 0.0 { 0.0 } else { sum / diagonal };
+        }
+        for (column, &slot) in movable.iter().enumerate() {
+            let mut delta = 0.0;
+            for (row, value) in y.iter().enumerate() {
+                delta += jacobian[row * columns + column] * value;
+            }
+            corrected.vertices[slot / 2].pos[slot % 2] += delta;
+        }
+    }
+    corrected
+}
+
+/// 作品fixtureに保存されている頂点座標を読む。
+///
+/// 射影の結果は数値としてここに入っており、通常検査は読むだけで作り直さない
+/// (実行時に射影を計算すると、計算機ごとに最下位の桁が変わってしまう)。
+/// 依存を増やさないよう、`"pos": [x, y]` の並びだけを字面から取り出す。
+fn traditional_crane_stored_vertex_positions() -> Vec<[f64; 2]> {
+    const WORK: &str = include_str!("fixtures/traditional-crane/traditional-crane-cp.ori3");
+    let vertices_start = WORK.find("\"vertices\"").expect("作品fixtureのvertices");
+    let vertices_end = WORK.find("\"edges\"").expect("作品fixtureのedges");
+    let mut out = Vec::new();
+    for line in WORK[vertices_start..vertices_end].lines() {
+        let Some(pos_at) = line.find("\"pos\":") else {
+            continue;
+        };
+        let open = line[pos_at..].find('[').expect("posの[") + pos_at + 1;
+        let close = line[open..].find(']').expect("posの]") + open;
+        let mut parts = line[open..close].split(',').map(str::trim);
+        let x = parts.next().expect("x").parse::<f64>().expect("xを読む");
+        let y = parts.next().expect("y").parse::<f64>().expect("yを読む");
+        out.push([x, y]);
+    }
+    out
+}
+
+/// 12桁の丸め幅の半分。正本CSVと作品fixtureの座標差の上限(利用者承認 2026-09-03)。
+const TRADITIONAL_CRANE_MAX_COORDINATE_SHIFT: f64 = 5e-13;
+
+/// 通常検査が使う正本CP。折り線の接続・向き・山谷は正本CSVそのままで、座標だけは
+/// 作品fixtureに保存された「12桁の内側で平坦に折れるよう置き直した値」を使う。
+/// CSVとの差がその場で上限以内であることと、小数12桁へ丸めるとCSVと一致することを確かめる。
+fn traditional_crane_reference_cp_with_stored_positions() -> (CreasePattern, Vec<[String; 2]>) {
+    let (mut cp, raw_vertex_coordinates) = traditional_crane_reference_cp();
+    let stored = traditional_crane_stored_vertex_positions();
+    assert_eq!(stored.len(), cp.vertices.len(), "作品fixtureの頂点数");
+    for (vertex, position) in cp.vertices.iter_mut().zip(&stored) {
+        for (axis, &saved) in position.iter().enumerate() {
+            let from_csv = vertex.pos[axis];
+            let shift = (saved - from_csv).abs();
+            assert!(
+                shift <= TRADITIONAL_CRANE_MAX_COORDINATE_SHIFT,
+                "頂点{}の座標{axis}が正本CSVから{shift:e}離れている(上限{:e})",
+                vertex.id,
+                TRADITIONAL_CRANE_MAX_COORDINATE_SHIFT
+            );
+            assert_eq!(
+                format!("{saved:.12}"),
+                format!("{from_csv:.12}"),
+                "頂点{}の座標{axis}を小数12桁へ丸めると正本CSVと一致する",
+                vertex.id
+            );
+            vertex.pos[axis] = saved;
+        }
+    }
+    (cp, raw_vertex_coordinates)
+}
+
 /// `collapse_precrease_network` は入力を有限区間でなく支持直線として読む。
 /// 同じ支持直線を複数回渡すと後続のlineがhitされないため、正本M/Vの支持直線を一意化する。
 fn traditional_crane_unique_collapse_lines(cp: &CreasePattern) -> Vec<[[f64; 2]; 2]> {
@@ -2522,7 +3007,16 @@ fn traditional_crane_unique_collapse_lines(cp: &CreasePattern) -> Vec<[[f64; 2];
 }
 
 fn traditional_crane_collapse_work() -> TraditionalCraneCollapseWork {
-    let (oracle_cp, raw_vertex_coordinates) = traditional_crane_reference_cp();
+    let (oracle_cp, raw_vertex_coordinates) = traditional_crane_reference_cp_with_stored_positions();
+    traditional_crane_collapse_work_from(oracle_cp, raw_vertex_coordinates)
+}
+
+/// 渡された正本CPで一括collapseを行い、作品を組み立てる。
+/// 通常検査は作品fixtureの座標を、再生成検査は射影した座標を渡す。
+fn traditional_crane_collapse_work_from(
+    oracle_cp: CreasePattern,
+    raw_vertex_coordinates: Vec<[String; 2]>,
+) -> TraditionalCraneCollapseWork {
     let faces = extract_faces(&oracle_cp);
     let initial = FlatState::initial(&oracle_cp, &faces);
     let collapse_lines = traditional_crane_unique_collapse_lines(&oracle_cp);
@@ -2576,7 +3070,13 @@ fn traditional_crane_collapse_work() -> TraditionalCraneCollapseWork {
     }
 }
 
-/// serde_json依存を増やさず、正本の座標トークンをそのまま残すSCHEMA_VERSION=1 serializer。
+/// serde_json依存を増やさないSCHEMA_VERSION=1 serializer。
+///
+/// 頂点座標は2026-09-03まで正本CSVの12桁トークンをそのまま書いていたが、その桁数では
+/// 平坦に折れる展開図を表せない(閉包残差が 7.218742174998615e-12 で止まり、上限 1e-13 の72倍)。
+/// 利用者の承認(2026-09-03)により、12桁の丸め幅の内側で置き直した値を
+/// f64の往復可能な表記で書く(置き直し後の閉包残差は 5.580684070941078e-16。実際に
+/// `regenerate_traditional_crane_cp_work_fixture` を実行して測った値)。
 fn traditional_crane_work_json(work: &TraditionalCraneCollapseWork) -> String {
     let document = &work.document;
     assert_eq!(
@@ -2601,9 +3101,19 @@ fn traditional_crane_work_json(work: &TraditionalCraneCollapseWork) -> String {
         } else {
             ","
         };
+        // 正本CSVの12桁トークンは、書き出す値がその桁へ丸まることの確認にだけ使う。
+        for (axis, token) in raw.iter().enumerate() {
+            let from_csv: f64 = token.parse().expect("正本CSVの座標");
+            assert_eq!(
+                format!("{:.12}", vertex.pos[axis]),
+                format!("{from_csv:.12}"),
+                "頂点{}の座標{axis}を小数12桁へ丸めると正本CSVと一致する",
+                vertex.id
+            );
+        }
         output.push_str(&format!(
-            "      {{\"id\": {}, \"pos\": [{}, {}]}}{comma}\n",
-            vertex.id, raw[0], raw[1]
+            "      {{\"id\": {}, \"pos\": [{:?}, {:?}]}}{comma}\n",
+            vertex.id, vertex.pos[0], vertex.pos[1]
         ));
     }
     output.push_str("    ],\n    \"edges\": [\n");
@@ -3142,15 +3652,47 @@ fn traditional_crane_fixture_path(name: &str) -> std::path::PathBuf {
         .join(name)
 }
 
+/// 保存された作品と、その場で作り直した作品が同じであることを確かめる。
+///
+/// 骨組み(項目名・並び・整数のID・文字列)は完全一致を求め、座標だけは差で比べる。
+/// 座標を字面のまま比べると、どの計算機で作り直しても他方では一致しなくなるためで、
+/// `crane_front_fixture_matches_read_only` と同じ考え方である(§10.7.7)。
+fn assert_traditional_crane_work_matches(stored: &str, generated: &str, label: &str) {
+    /// 作り直した作品と保存された作品の座標差の上限。
+    /// 実測の最大差は 0（同じ数値を読み書きしているため）で、丸めの揺れだけを吸収する。
+    const NUMBER_TOLERANCE: f64 = 1e-12;
+
+    let (stored_shape, stored_numbers) = split_numbers(&stored.replace("\r\n", "\n"));
+    let (generated_shape, generated_numbers) = split_numbers(&generated.replace("\r\n", "\n"));
+    assert_eq!(
+        stored_shape, generated_shape,
+        "{label}: 作品の骨組み(項目名・並び・整数のID・文字列)が一致しない"
+    );
+    assert_eq!(
+        stored_numbers.len(),
+        generated_numbers.len(),
+        "{label}: 作品の数値の個数が一致しない"
+    );
+    for (index, (stored_value, generated_value)) in
+        stored_numbers.iter().zip(&generated_numbers).enumerate()
+    {
+        assert!(
+            (stored_value - generated_value).abs() <= NUMBER_TOLERANCE,
+            "{label}: {index}番目の数値が一致しない: 保存 {stored_value:?} / 生成 {generated_value:?}"
+        );
+    }
+}
+
 /// 正本CPをそのまま持ち、既存の一括collapse 1手を保存した作品の受け入れ検査。
 #[test]
 fn traditional_crane_cp_work_matches_reference() {
     const GEOMETRY_TOLERANCE: f64 = 1e-9;
-    // 2026-08-26の反射cycle最大残差は4.518468932346309e-11。
-    // 実測値を境界にせず、約22倍の余裕を持つモデル共通EPS 1e-9を上限にする(§10.7.9)。
+    // 2026-08-26の反射cycle最大残差は4.518468932346309e-11だった。
+    // 2026-09-03に座標を12桁の内側で置き直してからは3.09086090055643581e-13。
+    // 実測値を境界にせず、モデル共通EPS 1e-9を上限にする(§10.7.9)。
     const COLLAPSE_RESIDUAL_LIMIT: f64 = 1e-9;
-    // 保存stepの通常replayはclosure_rms=7.218742174998615e-12を実測した。
-    // こちらも実測値を境界にせず、約139倍の1e-9を上限にする。
+    // 保存stepの通常replayのclosure_rmsは、旧座標で7.218742174998615e-12、
+    // 置き直し後は5.580684070941078e-16。こちらも実測値を境界にせず1e-9を上限にする。
     const REPLAY_CLOSURE_LIMIT: f64 = 1e-9;
 
     let work = traditional_crane_collapse_work();
@@ -3159,10 +3701,10 @@ fn traditional_crane_cp_work_matches_reference() {
         std::fs::read_to_string(traditional_crane_fixture_path("traditional-crane-cp.ori3"))
             .expect("正本CP作品fixtureを読む");
     let generated_work = traditional_crane_work_json(&work);
-    assert_eq!(
-        stored_work.replace("\r\n", "\n"),
-        generated_work,
-        "作品fixtureは正本CSV・既存collapse API・利用者layer oracleから生成したSCHEMA_VERSION=1と全文一致する"
+    assert_traditional_crane_work_matches(
+        &stored_work,
+        &generated_work,
+        "作品fixtureは正本CSV・既存collapse API・利用者layer oracleから作り直した結果と一致する",
     );
 
     assert_eq!(document.schema_version, ori3_model::SCHEMA_VERSION);
@@ -3212,12 +3754,25 @@ fn traditional_crane_cp_work_matches_reference() {
                 (oracle.assignment, edge.kind),
                 ('M', EdgeKind::Mountain) | ('V', EdgeKind::Valley) | ('B', EdgeKind::Border)
             );
-            kind_matches && positions[&edge.v0] == oracle.p0 && positions[&edge.v1] == oracle.p1
+            // 座標は正本CSVの12桁の内側で置き直してある(利用者承認 2026-09-03。
+            // 実測の最大移動量 4.59771110072892952e-13)。端点の対応・向き・M/V/Bは
+            // 完全一致のままで、座標だけを12桁の丸め幅の半分まで許す。
+            // 「12桁へ丸める」のはx・yそれぞれ独立の操作なので、許容差もx・yそれぞれに
+            // 座標差5e-13以内で適用する(`traditional_crane_reference_cp_with_stored_positions`
+            // と同じ軸ごとの比較)。2点間のユークリッド距離で比べると軸2本分が斜めに
+            // 足し合わさり、最大で5e-13の√2倍(7.07e-13)まで生じ得るため軸ごとの比較が必要。
+            let endpoint_matches = |actual: DVec2, oracle: DVec2| {
+                (actual.x - oracle.x).abs() <= TRADITIONAL_CRANE_MAX_COORDINATE_SHIFT
+                    && (actual.y - oracle.y).abs() <= TRADITIONAL_CRANE_MAX_COORDINATE_SHIFT
+            };
+            kind_matches
+                && endpoint_matches(positions[&edge.v0], oracle.p0)
+                && endpoint_matches(positions[&edge.v1], oracle.p1)
         })
         .count();
     assert_eq!(
         exact_matches, 114,
-        "正本114辺を端点・向き・M/V/Bまで完全注入する"
+        "正本114辺を端点(差{TRADITIONAL_CRANE_MAX_COORDINATE_SHIFT:e}以内)・向き・M/V/Bまで完全注入する"
     );
 
     assert_eq!(document.sequence.len(), 1, "一括collapse 1手だけを保存する");
@@ -3371,10 +3926,10 @@ fn traditional_crane_saved_layer_oracle_places_neck_and_tail_between_wings() {
     let stored_work =
         std::fs::read_to_string(traditional_crane_fixture_path("traditional-crane-cp.ori3"))
             .expect("正本CP作品fixtureを読む");
-    assert_eq!(
-        stored_work.replace("\r\n", "\n"),
-        traditional_crane_work_json(&work),
-        "この検査でreplayするDocumentは保存fixtureと全字段一致する"
+    assert_traditional_crane_work_matches(
+        &stored_work,
+        &traditional_crane_work_json(&work),
+        "この検査でreplayするDocumentは保存fixtureと一致する",
     );
     let previous_state = FlatState {
         placements: work.result.state.placements.clone(),
@@ -3603,28 +4158,162 @@ fn traditional_crane_saved_layer_oracle_satisfies_all_general_constraints() {
 }
 
 /// 明示的なfixture再生成専用。通常検査は作品とshape oracleを読むだけで上書きしない。
+///
+/// # 2026-09-03の座標の置き直し(利用者承認)
+///
+/// 正本CSVの座標は小数12桁までしか無く、その値のままでは展開図が平坦に折れる条件を
+/// 最大 2.61306531967875344e-11 rad 破っている。そのため折り目を全て±180°に固定した
+/// 通常再生の閉包残差が **旧値 7.218742174998615e-12**（`TOL_RMS` 1e-13 の72倍）で止まり、
+/// 「手順1までの形が展開図から求まりませんでした」の警告が消せなかった。
+/// 折り目の角度をどう動かしても届かないことを実測で確かめている
+/// （平坦点では残差が角度で作れる方向と直交するため、最良でも 4.66294047163527422e-12）。
+///
+/// 厳密な作図値（Q(√2)）で作り直せないかも調べたが、首・尾・頭の中割り折りが作る頂点は
+/// 高さ8192以下の a+b√2 で表せず、位相からの作図も13/56で止まったため採れなかった。
+///
+/// そこで **12桁の丸め幅の半分（5e-13）の内側で、いちばん近い平坦に折れる展開図へ
+/// 置き直す**ことを利用者が2026-09-03に承認した。この検査を実際に実行して置き直した結果は
+/// **新値 5.580684070941078e-16**（上限 1e-13 の約179分の1）で、`converged=true`・警告0になる。
+/// 置き直した値を小数12桁へ丸めると正本CSVの字面と1文字も変わらない（112座標すべてで確認）。
+/// bundle の6ファイルと fixture のCSV複製は変更しない。
+///
+/// 置き直しは実行時に計算しない。この検査だけが計算して `.ori3` へ数値として保存し、
+/// 通常検査は読むだけにする（実行時に計算すると計算機ごとに最下位の桁が変わる。§10.7.7）。
 #[test]
 #[ignore = "正本CP作品fixtureを明示的に再生成するときだけ実行する"]
 fn regenerate_traditional_crane_cp_work_fixture() {
-    let work = traditional_crane_collapse_work();
+    /// 置き直しで動かしてよい座標の上限（12桁の丸め幅の半分）。
+    const MAX_SHIFT: f64 = TRADITIONAL_CRANE_MAX_COORDINATE_SHIFT;
+    /// 置き直し後に許す平坦折り条件の破れ（ラジアン）。
+    const MAX_FLAT_FOLD_DEFECT: f64 = 1e-13;
+    /// 置き直し後に許す閉包残差。
+    const MAX_CLOSURE_RMS: f64 = 1e-13;
+    /// 置き直し後に許す紙のちぎれ。
+    const MAX_SEAM_GAP: f64 = 1e-6;
+
+    let (csv_cp, raw_vertex_coordinates) = traditional_crane_reference_cp();
+    let projected = traditional_crane_flat_foldable_projection(&csv_cp);
+
+    // 関門(a): 112座標すべてが、小数12桁へ丸めると正本CSVの値と一致する。
+    // 関門(b): 動かした量が12桁の丸め幅の半分より小さい。紙の四隅は1ビットも動かない。
+    let mut rounding_mismatches = 0usize;
+    let mut worst_shift = 0.0_f64;
+    for (before, after) in csv_cp.vertices.iter().zip(&projected.vertices) {
+        assert_eq!(before.id, after.id, "頂点の並びが変わっていない");
+        for axis in 0..2 {
+            if format!("{:.12}", after.pos[axis]) != format!("{:.12}", before.pos[axis]) {
+                rounding_mismatches += 1;
+            }
+            worst_shift = worst_shift.max((after.pos[axis] - before.pos[axis]).abs());
+            if before.id < 4 {
+                assert_eq!(
+                    after.pos[axis].to_bits(),
+                    before.pos[axis].to_bits(),
+                    "紙の四隅(頂点{})は動かさない",
+                    before.id
+                );
+            }
+        }
+    }
+    assert_eq!(
+        rounding_mismatches, 0,
+        "置き直した座標を小数12桁へ丸めると正本CSVと一致する"
+    );
+    assert!(
+        worst_shift < MAX_SHIFT,
+        "座標の最大移動量{worst_shift:e}が上限{MAX_SHIFT:e}以上"
+    );
+
+    // 関門(c): 内部頂点44個の平坦折り条件の破れ。残差の虚部は回転角の正弦なので、
+    // 角の破れ(ラジアン)はその半分にあたる。
+    let stars = traditional_crane_interior_stars(&projected);
+    assert_eq!(stars.len(), 44, "内部頂点44個");
+    let defect = traditional_crane_flat_fold_residuals(&projected, &stars)
+        .into_iter()
+        .fold(0.0_f64, |worst, value| worst.max(value.abs() * 0.5));
+    assert!(
+        defect < MAX_FLAT_FOLD_DEFECT,
+        "平坦折り条件の破れ{defect:e}が上限{MAX_FLAT_FOLD_DEFECT:e}以上"
+    );
+
+    let work = traditional_crane_collapse_work_from(projected, raw_vertex_coordinates);
     let faces = extract_faces(&work.document.cp);
+    assert_eq!(faces.len(), 59, "面の数は変わらない");
+
+    // 関門(d): 実際の再生経路で閉じること。
+    let replayed = replay(&work.document, work.document.sequence.len(), 1.0);
+    assert!(replayed.converged, "置き直した展開図の再生が収束する");
+    assert!(!replayed.best_effort, "最良近似ではなく本解である");
+    assert!(
+        replayed.closure_rms < MAX_CLOSURE_RMS,
+        "閉包残差{}が上限{MAX_CLOSURE_RMS:e}以上",
+        replayed.closure_rms
+    );
+    assert!(replayed.warnings.is_empty(), "警告0: {:?}", replayed.warnings);
+    assert!(replayed.skipped.is_empty(), "飛ばした手順0");
+
+    // 関門(e): 紙が交差せず、ちぎれず、重なり順の一般制約も満たす。
+    assert_eq!(
+        self_intersection_pairs(&replayed.frame),
+        Vec::<(FaceId, FaceId)>::new(),
+        "自己交差0組"
+    );
+    let seam = max_seam_gap(&work.document.cp, &faces, &replayed.frame);
+    assert!(seam < MAX_SEAM_GAP, "継ぎ目{seam:e}が上限{MAX_SEAM_GAP:e}以上");
+    let validation = ori3_layers::precrease_collapse::validate_precrease_layer_order(
+        &work.document.cp,
+        &faces,
+        &work.result.state.placements,
+        &work.result.state.order,
+    )
+    .expect("置き直した展開図でも層oracleを検証できる");
+    assert!(validation.is_valid(), "一般制約違反0: {:?}", validation.violations);
+    assert!(validation.discarded_relations.is_empty(), "破棄0");
+
+    // 関門(f): 同じ入力を10回再生して、形が1ビットも変わらない。
+    let bits = |result: &ori3_layers::ReplayResult| -> Vec<u64> {
+        result
+            .frame
+            .faces
+            .iter()
+            .flat_map(|face| face.polygon.iter().flat_map(|point| point.iter()))
+            .map(|value| value.to_bits())
+            .collect()
+    };
+    let first = bits(&replayed);
+    for round in 1..10 {
+        let again = replay(&work.document, work.document.sequence.len(), 1.0);
+        assert_eq!(bits(&again), first, "{round}回目の再生で形が変わった");
+    }
+
     let (rank_changed, pair_changed) = traditional_crane_order_change_counts(
         &work.generated_order_before_oracle,
         &work.result.state.order,
     );
     let work_path = traditional_crane_fixture_path("traditional-crane-cp.ori3");
-    let shape_path = traditional_crane_fixture_path("traditional-crane-collapse-oracle.csv");
-    std::fs::write(&work_path, traditional_crane_work_json(&work))
-        .expect("正本CP作品fixtureを書き出す");
-    std::fs::write(
-        &shape_path,
-        traditional_crane_collapse_shape_csv(&work.document, &faces, &work.result.state),
-    )
-    .expect("collapse shape oracleを書き出す");
+    let previous = std::fs::read_to_string(&work_path).expect("書き換え前の作品fixtureを読む");
+    let next = traditional_crane_work_json(&work);
+    std::fs::write(&work_path, &next).expect("正本CP作品fixtureを書き出す");
+    // 書き込み直後に読み返し、意図した内容になっていなければ元へ戻す。
+    match std::fs::read_to_string(&work_path) {
+        Ok(written) if written.replace("\r\n", "\n") == next => {}
+        other => {
+            std::fs::write(&work_path, &previous).expect("作品fixtureを元へ戻す");
+            panic!("作品fixtureの書き込みを確認できなかったので元へ戻した: {other:?}");
+        }
+    }
     println!("wrote {}", work_path.display());
-    println!("wrote {}", shape_path.display());
+    println!(
+        "flat-foldable projection: worst_shift={worst_shift:e} defect={defect:e} closure_rms={:e} rounding_mismatches=0/112",
+        replayed.closure_rms
+    );
     println!(
         "layer oracle correction: changed_surface_ranks={rank_changed}/59 changed_face_pairs={pair_changed}/1711"
+    );
+    // shape oracle(畳み後の216点、照合許容差1e-9)は、置き直しによる形の差が
+    // 7.35484183948280165e-12 で許容差の136分の1に収まるため作り直さない。
+    println!(
+        "traditional-crane-collapse-oracle.csv は作り直さない(形の差 < 1e-9。2026-09-03の判断)"
     );
 }
 
@@ -3710,11 +4399,34 @@ fn write_crane_document_for_screen_check() {
 
 /// 折り目1本を谷折りで−180°まで送っても、紙が閉じたままであること。
 ///
-/// 前の姿勢から連続に追うだけでは閉じた形へ辿り着けない角度があり、−147°〜−162°
-/// あたりで閉包RMSが 2.835e-3〜9.177e-3 になっていた(紙が裂けて見える大きさ)。
-/// 刻みを5°/2°/1°/0.5°と変えても同じ範囲で起きるため、分割を細かくしても直らない。
-/// 閉じた形自体は存在するので、最終要求で閉じなかったときだけ初期値を変えて
-/// 解き直すようにした。上限 1e-9 は、この修正後の実測 最悪 3.692e-14 を根拠にする。
+/// # どの2本を選ぶか
+///
+/// 「1本だけを−180°まで送る」は、**単独で折れる折り線**でしか成り立たない。片端でも
+/// 内部の頂点で終わる折り目は、そこへ集まる残りの折り目が必ず一緒に動くので単独では
+/// 折れない。そこで対象は位置(`creases[17]` のような並び順)ではなく形から選ぶ。
+///
+/// 展開図の境界でない折り目を共線でつながった極大な連なりへまとめ、両端が紙の外周に
+/// 載る「端から端まで通る直線」だけを候補にする([`crane_edge_to_edge_lines`])。
+/// 正本CPでは候補は反対角線 (0,1)-(1,0) の1本だけで、辺107,108,29,50,51 がこの順に
+/// 並ぶ(2026-09-03の実測。角(0,1)を切る45°の弦は辺96と辺111の両端が外周に載るが、
+/// 間に折り目の無い隙間があり一続きの直線にならないので候補に入らない)。
+/// 直線は辺idの最小値がいちばん小さいものを選び、その中で外周に接する辺
+/// (107 と 51)のうち id の小さい 51 を操作中の1本(hard)、隣り合う共線の辺 50 を
+/// 希望(soft)にする。将来CPが変わったとき黙って別の辺にならないよう、
+/// (i)共線 (ii)頂点を共有 (iii)直線の両端が外周上、を検査の中で確かめる。
+///
+/// # 上限 1e-9 の根拠
+///
+/// 旧11手台本の鶴で選んでいた2本では、前の姿勢から連続に追うだけでは閉じた形へ
+/// 辿り着けない角度があり、−147°〜−162°あたりで閉包RMSが 2.835e-3〜9.177e-3 に
+/// なっていた(紙が裂けて見える大きさ。**旧台本の実測**)。刻みを5°/2°/1°/0.5°と
+/// 変えても同じ範囲で起きるため、分割を細かくしても直らない。閉じた形自体は存在
+/// するので、最終要求で閉じなかったときだけ初期値を変えて解き直すようにした。
+/// 上限 1e-9 は、この修正後の実測 最悪 3.692e-14(旧台本)を根拠にする。
+///
+/// 正本CP上の粗い3手で新しく測った値(2026-09-03、debug構成): 36段すべて `converged`、
+/// 警告0、最悪の閉包RMS **9.750945e-14**(−5°の 2.506368e-14 から始まり、以降は
+/// 8.1e-14〜9.8e-14 で安定)。上限 1e-9 に対して4桁小さい。
 #[test]
 fn valley_folding_one_crease_to_180_keeps_the_paper_closed() {
     use ori3_rigid::motion::solve_motion;
@@ -3722,14 +4434,76 @@ fn valley_folding_one_crease_to_180_keeps_the_paper_closed() {
     let (doc, _) = crane();
     let cp = &doc.cp;
     let faces = extract_faces(cp);
+    let positions = vertex_pos(cp);
     let creases: Vec<u32> = cp
         .edges
         .iter()
         .filter(|edge| edge.kind != EdgeKind::Border)
         .map(|edge| edge.id)
         .collect();
-    // 利用者が実際に選んだ2本と同じ位置づけ(操作中の1本＝hard、もう1本＝希望)
-    let (driven, wanted) = (creases[17], creases[20]);
+
+    // 端から端まで通る直線を、辺idの最小値がいちばん小さいもので決定的に1本選ぶ。
+    let lines = crane_edge_to_edge_lines(cp);
+    assert!(
+        !lines.is_empty(),
+        "端から端まで通る折り線が展開図に1本も無い(単独で折れる折り目が存在しない)"
+    );
+    let line = lines
+        .iter()
+        .min_by_key(|line| line.iter().copied().min().expect("辺のある連なり"))
+        .expect("端から端まで通る折り線");
+    assert!(
+        line.len() >= 2,
+        "選んだ直線が折り目1本しかなく、隣り合う共線の辺が取れない: {line:?}"
+    );
+    let (head, tail) = (line[0], line[line.len() - 1]);
+    let (driven, wanted) = if head < tail {
+        (head, line[1])
+    } else {
+        (tail, line[line.len() - 2])
+    };
+    let edge_of = |id: u32| {
+        cp.edges
+            .iter()
+            .find(|edge| edge.id == id)
+            .unwrap_or_else(|| panic!("辺{id}が展開図に無い"))
+    };
+    let (driven_edge, wanted_edge) = (edge_of(driven), edge_of(wanted));
+
+    // (i) 共線
+    let along = |edge: &Edge| (positions[&edge.v1] - positions[&edge.v0]).normalize();
+    let cross = along(driven_edge).perp_dot(along(wanted_edge));
+    assert!(
+        cross.abs() < 1e-9,
+        "選んだ2本が共線でない(辺{driven}と辺{wanted}、外積{cross:e}): 直線 {line:?}"
+    );
+    // (ii) 頂点を共有
+    let shared = [driven_edge.v0, driven_edge.v1]
+        .into_iter()
+        .filter(|vertex| *vertex == wanted_edge.v0 || *vertex == wanted_edge.v1)
+        .count();
+    assert_eq!(
+        shared, 1,
+        "選んだ2本が頂点をちょうど1つ共有していない(辺{driven}と辺{wanted}): 直線 {line:?}"
+    );
+    // (iii) 直線の両端が外周上
+    let ends = crane_chain_ends(cp, line);
+    assert_eq!(
+        ends.len(),
+        2,
+        "選んだ直線の端が2つでない(実際{:?}): 直線 {line:?}",
+        ends
+    );
+    for vertex in &ends {
+        let point = positions[vertex];
+        assert!(
+            crane_on_paper_border(point),
+            "選んだ直線の端が紙の外周に載っていない(頂点v{vertex} ({:.12},{:.12})): 直線 {line:?}",
+            point.x,
+            point.y
+        );
+    }
+
     let mut warm: HashMap<u32, f64> = creases.iter().map(|&edge| (edge, 0.0)).collect();
     let mut worst_rms = 0.0_f64;
 
@@ -3754,6 +4528,103 @@ fn valley_folding_one_crease_to_180_keeps_the_paper_closed() {
         worst_rms < 1e-9,
         "36段すべてで閉じるが、最悪の閉包RMSが大きすぎる: {worst_rms:.3e}"
     );
+}
+
+/// 点が紙の外周(単位正方形の4辺)に載っているか。
+fn crane_on_paper_border(point: DVec2) -> bool {
+    const TOLERANCE: f64 = 1e-9;
+    point.x.abs() < TOLERANCE
+        || (point.x - 1.0).abs() < TOLERANCE
+        || point.y.abs() < TOLERANCE
+        || (point.y - 1.0).abs() < TOLERANCE
+}
+
+/// 折り目の連なりの両端の頂点(連なりの中で1回しか現れない頂点)。
+fn crane_chain_ends(cp: &CreasePattern, chain: &[u32]) -> Vec<u32> {
+    let mut counts: BTreeMap<u32, usize> = BTreeMap::new();
+    for id in chain {
+        let edge = cp
+            .edges
+            .iter()
+            .find(|edge| edge.id == *id)
+            .unwrap_or_else(|| panic!("辺{id}が展開図に無い"));
+        *counts.entry(edge.v0).or_insert(0) += 1;
+        *counts.entry(edge.v1).or_insert(0) += 1;
+    }
+    counts
+        .into_iter()
+        .filter(|(_, count)| *count == 1)
+        .map(|(vertex, _)| vertex)
+        .collect()
+}
+
+/// 境界でない折り目を共線でつながった極大な連なりへまとめ、両端が紙の外周に載るもの
+/// (=端から端まで通る直線)だけを返す。各要素は直線に沿って並べた辺idの列。
+///
+/// 端から端まで通る直線は、紙を2枚の剛体へ分けるので**単独で折れる**。片端でも内部の
+/// 頂点で終わる折り目にはこの性質が無い。
+fn crane_edge_to_edge_lines(cp: &CreasePattern) -> Vec<Vec<u32>> {
+    const TOLERANCE: f64 = 1e-9;
+    let positions = vertex_pos(cp);
+
+    // 同じ直線に載る折り目をまとめる(向きは符号を揃え、直線は向きと原点までの符号付き距離で表す)。
+    let mut lines: Vec<(DVec2, f64, Vec<u32>)> = Vec::new();
+    for edge in cp.edges.iter().filter(|edge| edge.kind != EdgeKind::Border) {
+        let from = positions[&edge.v0];
+        let mut direction = (positions[&edge.v1] - from).normalize();
+        if direction.x < -TOLERANCE || (direction.x.abs() <= TOLERANCE && direction.y < 0.0) {
+            direction = -direction;
+        }
+        let offset = direction.perp_dot(from);
+        match lines.iter_mut().find(|(other, other_offset, _)| {
+            (*other - direction).length() < TOLERANCE && (*other_offset - offset).abs() < TOLERANCE
+        }) {
+            Some(line) => line.2.push(edge.id),
+            None => lines.push((direction, offset, vec![edge.id])),
+        }
+    }
+
+    let mut spanning = Vec::new();
+    for (direction, _, group) in &lines {
+        // 直線上の位置で並べ、隙間で切って「つながっている極大な連なり」にする。
+        let mut spans: Vec<(f64, f64, u32)> = group
+            .iter()
+            .map(|id| {
+                let edge = cp
+                    .edges
+                    .iter()
+                    .find(|edge| edge.id == *id)
+                    .unwrap_or_else(|| panic!("辺{id}が展開図に無い"));
+                let a = direction.dot(positions[&edge.v0]);
+                let b = direction.dot(positions[&edge.v1]);
+                (a.min(b), a.max(b), *id)
+            })
+            .collect();
+        spans.sort_by(|a, b| a.0.partial_cmp(&b.0).expect("座標は有限"));
+        let mut runs: Vec<Vec<u32>> = Vec::new();
+        let mut run = vec![spans[0]];
+        for span in &spans[1..] {
+            if (span.0 - run.last().expect("直前の区間").1).abs() <= TOLERANCE {
+                run.push(*span);
+            } else {
+                runs.push(run.iter().map(|span| span.2).collect());
+                run = vec![*span];
+            }
+        }
+        runs.push(run.iter().map(|span| span.2).collect());
+
+        for chain in runs {
+            let ends = crane_chain_ends(cp, &chain);
+            if ends.len() == 2
+                && ends
+                    .iter()
+                    .all(|vertex| crane_on_paper_border(positions[vertex]))
+            {
+                spanning.push(chain);
+            }
+        }
+    }
+    spanning
 }
 
 #[test]
