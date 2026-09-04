@@ -51,10 +51,14 @@ const EXPECTED_ENTRIES = Object.freeze([
   { name: "screen-proposal-progress.png", scenario: "proposalProgress" },
   { name: "screen-viewer3d-loading.png", scenario: "viewer3dLoading" },
   { name: "screen-viewer3d-load-error.png", scenario: "viewer3dLoadError" },
+  { name: "screen-fold-pleat-target.png", scenario: "foldPleatTarget" },
+  { name: "screen-self-intersection-pairs.png", scenario: "selfIntersectionPairs" },
+  { name: "screen-recovery-choices.png", scenario: "recoveryChoices" },
+  { name: "screen-export-fold-file.png", scenario: "exportFoldFile" },
 ]);
 const EXPECTED_NAMES = Object.freeze(EXPECTED_ENTRIES.map((entry) => entry.name));
 
-const EXPECTED_SHA256 = "214d8fa36633d0e79d553a8a5c50993e01d67e9dfd01c2bce549d1c7179b29e8";
+const EXPECTED_SHA256 = "e29d49703b79df5f4d2f514685ff79f3122c2b96ce6fcf88ed5d0cd4837e0c37";
 const EXISTING_HELP_NAMES = Object.freeze(EXPECTED_NAMES.slice(0, 38));
 const assertions = [];
 
@@ -78,7 +82,7 @@ async function existingHelpScreenNames() {
 
 const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
 assert(Array.isArray(manifest), "manifest root must be an array");
-assert(manifest.length === 42, `manifest must contain exactly 42 rows: ${manifest.length}`);
+assert(manifest.length === 46, `manifest must contain exactly 46 rows: ${manifest.length}`);
 
 const names = manifest.map((entry, index) => {
   assert(entry !== null && typeof entry === "object", `row ${index + 1} must be an object`);
@@ -97,8 +101,8 @@ const names = manifest.map((entry, index) => {
   return entry.name;
 });
 
-assert(new Set(names.map((name) => name.toLowerCase())).size === 42, "manifest names must be unique ignoring case");
-assert(new Set(manifest.map((entry) => entry.scenario)).size === 42, "scenario ids must be unique");
+assert(new Set(names.map((name) => name.toLowerCase())).size === 46, "manifest names must be unique ignoring case");
+assert(new Set(manifest.map((entry) => entry.scenario)).size === 46, "scenario ids must be unique");
 const digest = crypto.createHash("sha256").update(`${names.join("\n")}\n`, "utf8").digest("hex");
 assert(digest === EXPECTED_SHA256, `ordered name digest changed: ${digest}`);
 
@@ -112,7 +116,7 @@ const matchingHelpNameSet = allowedHelpNameSets.find(
 );
 assert(
   matchingHelpNameSet !== undefined,
-  `help must reference either the exact current 38-name set or the exact future 42-name set: ${helpNames.size}`,
+  `help must reference either the exact current 38-name set or the exact future 46-name set: ${helpNames.size}`,
 );
 
 process.stdout.write(

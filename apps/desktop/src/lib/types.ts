@@ -98,6 +98,33 @@ export interface FoldAlignment {
   picks: AlignTarget[];
 }
 
+/**
+ * 手順の表示に使う技法名の種類(ori3-layers::technique_classification)。
+ * `TechniqueKind`とは別の集合で、`Simple`は`LayerOperation`(層操作)、
+ * `Pose`は分類対象外(このkindがclassificationを持つことはない)に対応し、
+ * 一意な技法として名前が付かなかった動きは`GrabMove`(つかんで動かした折り)になる。
+ */
+export type DisplayTechniqueKind =
+  | "LayerOperation"
+  | "Pleat"
+  | "InsideReverse"
+  | "OutsideReverse"
+  | "Squash"
+  | "Petal"
+  | "OpenSink"
+  | "Swivel"
+  | "Twist"
+  | "GrabMove";
+
+/** classificationの由来。自動判定か、利用者が明示的に付けたか。 */
+export type TechniqueClassificationOrigin = "Automatic" | "Explicit";
+
+/** 手順に記録された技法名。RustのTechniqueClassificationと同じJSON形。 */
+export interface TechniqueClassification {
+  kind: DisplayTechniqueKind;
+  origin: TechniqueClassificationOrigin;
+}
+
 export interface FoldStep {
   id: number;
   kind: TechniqueKind;
@@ -106,6 +133,12 @@ export interface FoldStep {
   layer_order: Vec2[] | null;
   /** 合わせ折りで選んだ点・線。旧形式の作品では省略される */
   alignment?: FoldAlignment | null;
+  /**
+   * 手順に記録された技法名。旧作品・Pose・分類対象外の手順では項目そのものが無い
+   * (undefined)。利用者が「折り方」selectでkindを明示的に選び直したときだけ、
+   * 送るUpdateStepの手順からこの項目を落とす(この場合はnullまたは項目なしになる)。
+   */
+  technique_classification?: TechniqueClassification | null;
   note: string;
 }
 

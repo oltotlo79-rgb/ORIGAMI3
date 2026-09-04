@@ -158,5 +158,16 @@ export const creasePatternChapter = {
         { title: "表示を動かす", description: "Space+左ドラッグ、右ドラッグ、中ドラッグのどれかで展開図を移動し、Ctrl+ホイールでポインターの場所を中心に拡大・縮小します。" },
       ],
     },
+    {
+      type: "steps",
+      title: "キーボードだけで折り線や点を選ぶ",
+      items: [
+        { title: "「選択」にする", description: "Tabキーで左端の「選択」へ枠を移し、EnterまたはSpaceで選びます。" },
+        { title: "展開図へ移る", description: "Tabキーで2D展開図へ枠を移します。読み上げ機能では「展開図。矢印キーで選ぶ位置を動かし、Enterで折り線または点を選べます」と案内されます。" },
+        { title: "選ぶ位置を動かす", description: "矢印キーで紙の上の現在位置を動かします。Shiftを押しながら矢印キーを使うと大きく動きます。" },
+        { title: "選ぶ", description: "Enterを押すと、現在位置の近くにある点または折り線が選ばれます。点と折り線の両方が近いときは点が選ばれます。" },
+        { title: "選択を足す・外す", description: "Ctrlを押しながらEnterを押すと、今の選択を残したまま足したり外したりできます。マウスのCtrl+クリックと同じ働きです。" },
+      ],
+    },
   ],
 } satisfies HelpChapter;

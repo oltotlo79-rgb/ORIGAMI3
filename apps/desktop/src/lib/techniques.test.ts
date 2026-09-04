@@ -2,14 +2,16 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  DISPLAY_TECHNIQUE_LABEL,
   SUPPORTED_TECHNIQUES,
+  stepDisplayLabel,
   TECHNIQUE_KINDS,
   TECHNIQUE_LABEL,
   uniqueWarnings,
   warningsForStep,
   withFixHint,
 } from "./techniques";
-import type { TechniqueKind } from "./types";
+import type { DisplayTechniqueKind, FoldStep, TechniqueKind } from "./types";
 
 describe("技法の表示名", () => {
   it("10種類すべてに日本語名がある", () => {
@@ -49,6 +51,74 @@ describe("サブメニューに出す技法", () => {
       expect(t.short).toMatch(/^[^A-Za-z]+$/);
       expect(t.title.length).toBeGreaterThan(10);
     }
+  });
+});
+
+// 手順に記録された技法名(technique_classification)の表示。正本(scratchpad/
+// self-intersection-report.md §6)どおり、無ければkindのTECHNIQUE_LABELへ戻す。
+describe("stepDisplayLabel", () => {
+  function baseStep(overrides: Partial<FoldStep> = {}): FoldStep {
+    return {
+      id: 1,
+      kind: "Simple",
+      drivers: [],
+      layer_order: null,
+      note: "",
+      ...overrides,
+    };
+  }
+
+  const DISPLAY_KINDS: DisplayTechniqueKind[] = [
+    "LayerOperation",
+    "Pleat",
+    "InsideReverse",
+    "OutsideReverse",
+    "Squash",
+    "Petal",
+    "OpenSink",
+    "Swivel",
+    "Twist",
+    "GrabMove",
+  ];
+
+  it("10種のtechnique_classification.kindそれぞれの表示名を返す", () => {
+    expect(DISPLAY_KINDS.length).toBe(10);
+    for (const kind of DISPLAY_KINDS) {
+      const step = baseStep({
+        technique_classification: { kind, origin: "Automatic" },
+      });
+      expect(stepDisplayLabel(step)).toBe(DISPLAY_TECHNIQUE_LABEL[kind]);
+    }
+  });
+
+  it("LayerOperation・GrabMove以外の8つはTECHNIQUE_LABELと同じ文字列を使う(同じ折り方が場所で違う名前にならない)", () => {
+    const shared = [
+      "Pleat",
+      "InsideReverse",
+      "OutsideReverse",
+      "Squash",
+      "Petal",
+      "OpenSink",
+      "Swivel",
+      "Twist",
+    ] as const;
+    for (const kind of shared) {
+      expect(DISPLAY_TECHNIQUE_LABEL[kind]).toBe(TECHNIQUE_LABEL[kind]);
+    }
+  });
+
+  it("項目が無い手順ではkindのTECHNIQUE_LABELへ戻す(旧作品・Pose・分類対象外)", () => {
+    const step = baseStep({ kind: "Pleat" });
+    expect("technique_classification" in step).toBe(false);
+    expect(stepDisplayLabel(step)).toBe(TECHNIQUE_LABEL.Pleat);
+
+    const pose = baseStep({ kind: "Pose" });
+    expect(stepDisplayLabel(pose)).toBe(TECHNIQUE_LABEL.Pose);
+  });
+
+  it("technique_classificationがnullでもkindのTECHNIQUE_LABELへ戻す(推測で名前を付けない)", () => {
+    const step = baseStep({ kind: "Squash", technique_classification: null });
+    expect(stepDisplayLabel(step)).toBe(TECHNIQUE_LABEL.Squash);
   });
 });
 

@@ -136,6 +136,11 @@ export const anglesChapter = {
       ],
     },
     {
+      type: "screenshot",
+      image: "screen-foldall-slider.png",
+      caption: "「全部いっぺんに折ってみる」で「折る割合」を50%まで動かした画面。つまみの左端に「元に戻る 0%」、右端に「できるところまで 100%」が出て、上には「これは仮の形です」「手順には記録されません。」が並びます。",
+    },
+    {
       type: "callout",
       tone: "warning",
       title: "紙の上下は完成手順と同じとは限りません",

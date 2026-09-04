@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 
 const STANDARD_VIEW = { width: 1280, height: 860, deviceScaleFactor: 2 };
@@ -1039,6 +1040,332 @@ async function viewer3dLoadError(context) {
   );
 }
 
+async function alignDraftProgress(client) {
+  return await client.evaluate(`(() => {
+    const el = document.querySelector('.align-draft-progress');
+    if (!el) return null;
+    const match = (el.textContent || '').match(/選択\\s*(\\d+)\\s*\\/\\s*(\\d+)/);
+    return match ? { picked: Number(match[1]), need: Number(match[2]) } : null;
+  })()`);
+}
+
+async function alignFailureReason(client) {
+  return await client.evaluate(`(() => document.querySelector('.warning-text')?.textContent ?? null)()`);
+}
+
+async function undoLastAlignPick(client) {
+  await clickExact(client, ".button-row button", "1つ戻す");
+}
+
+async function resetAlignDraftToZero(client) {
+  for (let guard = 0; guard < 4; guard += 1) {
+    const progress = await alignDraftProgress(client);
+    if (!progress || progress.picked === 0) return;
+    await undoLastAlignPick(client);
+  }
+  fail("could not reset the align draft back to zero picks between attempts");
+}
+
+/**
+ * 「線と線を合わせる」で拾える線を3Dペイン全体から1回だけ走査し、当たった画面座標を集める。
+ * 当たるたびに直ちに「1つ戻す」で選択0へ戻し、本番の組み合わせ試行を汚さない。
+ */
+async function collectAlignLineCandidates(client, pane) {
+  const xMin = Math.round(pane.x + 24);
+  const xMax = Math.round(pane.x + pane.w - 24);
+  const yMin = Math.round(pane.y + 70);
+  const yMax = Math.round(pane.y + pane.h - 24);
+  const candidates = [];
+  for (let y = yMin; y <= yMax; y += 16) {
+    for (let x = xMin; x <= xMax; x += 16) {
+      await client.click(x, y);
+      const progress = await alignDraftProgress(client);
+      if (progress?.picked === 1) {
+        candidates.push({ x, y });
+        await undoLastAlignPick(client);
+        const back = await alignDraftProgress(client);
+        if (back?.picked !== 0) {
+          fail(`could not undo the trial align pick at ${x},${y}: ${JSON.stringify(back)}`);
+        }
+      } else if (progress && progress.picked !== 0) {
+        fail(`unexpected align pick count while scanning for lines: ${JSON.stringify(progress)}`);
+      }
+    }
+  }
+  if (candidates.length < 2) {
+    fail(`found only ${candidates.length} pickable line(s) on the folded crane; "線と線を合わせる" needs at least 2`);
+  }
+  return candidates;
+}
+
+/** 「重なりのある折り目と辺」を想定し、画面上で近い組から試す。 */
+function alignPairsByProximity(candidates) {
+  const pairs = [];
+  for (let firstIndex = 0; firstIndex < candidates.length; firstIndex += 1) {
+    for (let secondIndex = 0; secondIndex < candidates.length; secondIndex += 1) {
+      if (firstIndex === secondIndex) continue;
+      const first = candidates[firstIndex];
+      const second = candidates[secondIndex];
+      const distance = Math.hypot(first.x - second.x, first.y - second.y);
+      pairs.push({ first, second, distance });
+    }
+  }
+  pairs.sort((left, right) => left.distance - right.distance);
+  return pairs;
+}
+
+async function foldPleatTarget(context) {
+  const { client } = context;
+  await resetBaseline(context, FIXTURES.crane, { step: "latest" });
+  await clickExact(client, "[data-testid='tool-fold']", "折る");
+  await requirePage(client, `document.querySelector('.align-mode-buttons') !== null`, "align-fold mode buttons");
+  await clickExact(client, ".align-mode-buttons button", "線と線を合わせる");
+  await requirePage(client, `document.querySelector('.align-draft-progress') !== null`, "line-to-line align draft started");
+  const start = await alignDraftProgress(client);
+  if (!start || start.picked !== 0 || start.need !== 2) {
+    fail(`unexpected initial align progress: ${JSON.stringify(start)}`);
+  }
+
+  const pane = await viewerPane(client);
+  const candidates = await collectAlignLineCandidates(client, pane);
+  const pairs = alignPairsByProximity(candidates).slice(0, 80);
+
+  let solved = false;
+  for (const pair of pairs) {
+    await client.click(pair.first.x, pair.first.y);
+    const afterFirst = await alignDraftProgress(client);
+    if (afterFirst?.picked !== 1) {
+      await resetAlignDraftToZero(client);
+      continue;
+    }
+    await client.click(pair.second.x, pair.second.y);
+    const afterSecond = await alignDraftProgress(client);
+    if (afterSecond?.picked === 2) {
+      const reason = await alignFailureReason(client);
+      const hasFoldTarget = await client.evaluate(
+        `document.querySelector('[role="group"][aria-label="折る紙"]') !== null`,
+      );
+      if (reason === null && hasFoldTarget) {
+        solved = true;
+        break;
+      }
+    }
+    await resetAlignDraftToZero(client);
+  }
+  if (!solved) {
+    fail(`no pair among ${pairs.length} candidate line combinations produced a valid fold line with 折る紙 controls`);
+  }
+
+  await requirePage(
+    client,
+    `(() => {
+      const input = Array.from(document.querySelectorAll('input[type="radio"][name="fold-target"]')).find((node) => (node.getAttribute('aria-label') || '').startsWith('上から'));
+      return input instanceof HTMLInputElement && !input.disabled;
+    })()`,
+    "pleat-target radio ready (fold-target info resolved)",
+    15_000,
+  );
+  const selectedTop = await client.evaluate(`(() => {
+    const input = Array.from(document.querySelectorAll('input[type="radio"][name="fold-target"]')).find((node) => (node.getAttribute('aria-label') || '').startsWith('上から'));
+    if (!(input instanceof HTMLInputElement)) return "not-found";
+    input.click();
+    return input.checked ? "ok" : "not-checked";
+  })()`);
+  if (selectedTop !== "ok") fail(`could not select the "上から" pleat-target radio: ${selectedTop}`);
+  await client.stable();
+  const incremented = await client.evaluate(`(() => {
+    const button = document.querySelector('button[aria-label="同時に折るひだの枚数を増やす"]');
+    if (!(button instanceof HTMLButtonElement) || button.disabled) return "not-found-or-disabled";
+    button.click();
+    return "ok";
+  })()`);
+  if (incremented !== "ok") fail(`could not increase the pleat count to 2: ${incremented}`);
+  await client.stable();
+  await requirePage(
+    client,
+    `(() => {
+      const input = document.querySelector('input[type="number"][aria-label="同時に折るひだの枚数"]');
+      const text = document.querySelector('.context-panel')?.textContent || '';
+      return input instanceof HTMLInputElement && input.value === "2" && text.includes("上から2枚のひだを同時に折ります。");
+    })()`,
+    "pleat count set to 2 with the matching hint",
+    15_000,
+  );
+}
+
+async function selfIntersectionPairs(context) {
+  const { client } = context;
+  await resetBaseline(context, FIXTURES.penetration, { step: "latest" });
+  await setCheckbox(client, "食い込み検出", true);
+  await requirePage(
+    client,
+    `(() => /紙のめり込み\\s*\\d+組（1\\/\\d+、Face ID/.test(document.querySelector('.self-intersection-guide')?.textContent || ''))()`,
+    "self-intersection guide badge with the first pair",
+    30_000,
+  );
+  const total = await client.evaluate(`(() => {
+    const match = (document.querySelector('.self-intersection-guide')?.textContent || '').match(/紙のめり込み\\s*(\\d+)組/);
+    return match ? Number(match[1]) : 0;
+  })()`);
+  if (!Number.isInteger(total) || total < 1) {
+    fail(`self-intersection guide badge has no readable pair count: ${total}`);
+  }
+  // 「札を1回押して1組目を表示」の指示どおり札を押しつつ、押した回数ぶんだけ
+  // 循環させて最終的に1組目(index 0)へ戻す。組数は実測するまで分からないため
+  // 固定値を仮定しない。
+  for (let step = 1; step <= total; step += 1) {
+    const badge = await client.center(".self-intersection-guide");
+    if (!badge) fail("self-intersection guide badge disappeared mid-cycle");
+    await client.click(badge.x, badge.y);
+    await client.stable();
+  }
+  const backToFirst = `（1/${total}、Face ID`;
+  await requirePage(
+    client,
+    `(() => (document.querySelector('.self-intersection-guide')?.textContent || '').includes(${JSON.stringify(backToFirst)}))()`,
+    `self-intersection guide back on the first of ${total} pairs`,
+    10_000,
+  );
+}
+
+async function exportFoldFile(context) {
+  const { client } = context;
+  await resetBaseline(context, FIXTURES.crane, { step: "latest" });
+  await clickContains(client, ".toolbar button", "書き出し");
+  await requirePage(client, `document.querySelector('[data-floating-ui="export-dialog"]') !== null`, "export dialog open");
+  await clickExact(client, '[data-floating-ui="export-dialog"] label', "ほかの折り紙ソフトのファイル");
+  await requirePage(
+    client,
+    `(() => {
+      const dialog = document.querySelector('[data-floating-ui="export-dialog"]');
+      const text = dialog?.textContent || '';
+      return dialog !== null && text.includes('でそのまま扱えない内容（7項目）');
+    })()`,
+    "fold-file export choice with the seven-item unsupported-content list",
+  );
+}
+
+/** SYS-003自動保存索引が使うTauriアプリデータの識別子(tauri.conf.json:5と同じ)。 */
+const APP_DATA_IDENTIFIER = "com.oltot.origami3";
+
+function resolveAppDataDir() {
+  if (process.platform !== "win32") {
+    fail(`recovery-choices fixture setup only supports win32 app-data resolution; platform=${process.platform}`);
+  }
+  const roaming = process.env.APPDATA;
+  if (!roaming) fail("the APPDATA environment variable is not set; cannot locate the Tauri app-data directory");
+  return path.join(roaming, APP_DATA_IDENTIFIER);
+}
+
+async function readFileIfExists(filePath) {
+  try {
+    return await fs.readFile(filePath);
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+async function readdirIfExists(directoryPath) {
+  try {
+    return await fs.readdir(directoryPath);
+  } catch (error) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+/**
+ * 復旧ダイアログの複数候補を、実際のTauriアプリデータへ持ち越し候補として置き、
+ * ページ再読み込みでApp起動時のcheckRecovery()に自然に拾わせる。
+ * `apps/desktop/tests-live/doc-link-b1-recovery-cdp.mjs` の控え作成手順を参考にし、
+ * 復旧候補の索引(`autosave-index.json`、version 2)と候補payload
+ * (`autosave-recovery/<id>.ori3`)を直接書く。desktop.exeの再起動は行わない
+ * (`prepare_session`はTauri起動ごとに1回だけ走るため、レガシー単一候補の目印
+ * 形式では複数候補を再現できない)。既存の索引・候補は書く前に控え、
+ * deferCleanupで元へ戻す。
+ */
+async function recoveryChoices(context) {
+  const { client, repositoryRoot, deferCleanup } = context;
+  const appData = resolveAppDataDir();
+  const indexPath = path.join(appData, "autosave-index.json");
+  const candidatesDir = path.join(appData, "autosave-recovery");
+
+  await fs.mkdir(candidatesDir, { recursive: true });
+  const originalIndexBytes = await readFileIfExists(indexPath);
+  const existingCandidateIds = (await readdirIfExists(candidatesDir))
+    .filter((name) => /^[1-9]\d*\.ori3$/.test(name))
+    .map((name) => Number(name.slice(0, -".ori3".length)));
+  const baseId = existingCandidateIds.length > 0 ? Math.max(...existingCandidateIds) + 1 : 1;
+  const candidateIds = [baseId, baseId + 1];
+
+  const sources = [
+    { fixture: FIXTURES.crane, id: candidateIds[0], agoMs: 30 * 60 * 1000 },
+    { fixture: FIXTURES.yakko, id: candidateIds[1], agoMs: 3 * 60 * 60 * 1000 },
+  ];
+  const addedFiles = [];
+  const now = Date.now();
+  const carried = [];
+  for (const source of sources) {
+    const fixturePath = path.resolve(repositoryRoot, source.fixture);
+    const bytes = await fs.readFile(fixturePath);
+    let stepCount = 0;
+    try {
+      const parsed = JSON.parse(bytes.toString("utf8"));
+      stepCount = Array.isArray(parsed?.sequence) ? parsed.sequence.length : 0;
+    } catch (error) {
+      fail(`recovery payload fixture is not valid JSON: ${fixturePath}: ${error?.message ?? error}`);
+    }
+    const destination = path.join(candidatesDir, `${source.id}.ori3`);
+    await fs.writeFile(destination, bytes);
+    addedFiles.push(destination);
+    carried.push({
+      id: source.id,
+      session_id: null,
+      document_path: null,
+      saved_at_ms: now - source.agoMs,
+      step_count: stepCount,
+    });
+  }
+  const index = {
+    version: 2,
+    next_candidate_id: candidateIds[1] + 1,
+    active: null,
+    carried,
+  };
+  await fs.writeFile(indexPath, `${JSON.stringify(index, null, 2)}\n`, "utf8");
+
+  deferCleanup(async () => {
+    await bestEffortCleanup("recovery-choices fixture cleanup failed", [
+      async () => {
+        for (const file of addedFiles) await fs.rm(file, { force: true });
+      },
+      async () => {
+        if (originalIndexBytes === null) await fs.rm(indexPath, { force: true });
+        else await fs.writeFile(indexPath, originalIndexBytes);
+      },
+      () => client.reload(),
+      () => rebind(client),
+    ]);
+  });
+
+  await client.reload();
+  await rebind(client);
+  await requirePage(
+    client,
+    `(() => {
+      const dialog = document.querySelector('[data-floating-ui="recovery-dialog"]');
+      if (!dialog) return false;
+      const text = dialog.textContent || '';
+      return text.includes('前回の終了が正常に行われませんでした') &&
+        text.includes('作業中だった内容が2件残っています。内容ごとに選べます。') &&
+        Array.from(dialog.querySelectorAll('button')).some((b) => (b.textContent || '').trim() === 'あとで確認する');
+    })()`,
+    "recovery dialog with two carried candidates",
+    20_000,
+  );
+}
+
 export function createScenarioRegistry() {
   return [
     ["overviewGuide", captured(overviewGuide)],
@@ -1083,5 +1410,9 @@ export function createScenarioRegistry() {
     ["proposalProgress", captured(proposalProgress, { neutralMouse: false })],
     ["viewer3dLoading", captured(viewer3dLoading)],
     ["viewer3dLoadError", captured(viewer3dLoadError)],
+    ["foldPleatTarget", captured(foldPleatTarget)],
+    ["selfIntersectionPairs", captured(selfIntersectionPairs)],
+    ["recoveryChoices", captured(recoveryChoices)],
+    ["exportFoldFile", captured(exportFoldFile)],
   ].map(([id, run]) => Object.freeze({ id, run }));
 }

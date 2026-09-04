@@ -2,7 +2,7 @@
 // (タイムラインのチップ・コンテキストパネル・警告バッジで使う)。
 // 画面に出る文言は日本語で統一する(要件§2)。
 
-import type { TechniqueKind } from "./types";
+import type { DisplayTechniqueKind, FoldStep, TechniqueKind } from "./types";
 
 export const TECHNIQUE_LABEL: Record<TechniqueKind, string> = {
   Simple: "単純折り",
@@ -19,6 +19,39 @@ export const TECHNIQUE_LABEL: Record<TechniqueKind, string> = {
 
 /** セレクトに並べる順(TECHNIQUE_LABELの定義順) */
 export const TECHNIQUE_KINDS = Object.keys(TECHNIQUE_LABEL) as TechniqueKind[];
+
+/**
+ * 手順に記録された技法名(technique_classification.kind)の表示名。
+ * LayerOperation・GrabMoveの2つだけ新しい文言を持ち、残り8つは同じ折り方が
+ * 場所で違う名前にならないよう`TECHNIQUE_LABEL`と同じ文字列を使う。
+ */
+export const DISPLAY_TECHNIQUE_LABEL: Record<DisplayTechniqueKind, string> = {
+  LayerOperation: "層操作",
+  Pleat: TECHNIQUE_LABEL.Pleat,
+  InsideReverse: TECHNIQUE_LABEL.InsideReverse,
+  OutsideReverse: TECHNIQUE_LABEL.OutsideReverse,
+  Squash: TECHNIQUE_LABEL.Squash,
+  Petal: TECHNIQUE_LABEL.Petal,
+  OpenSink: TECHNIQUE_LABEL.OpenSink,
+  Swivel: TECHNIQUE_LABEL.Swivel,
+  Twist: TECHNIQUE_LABEL.Twist,
+  GrabMove: "つかんで動かした折り",
+};
+
+/**
+ * 手順の表示名。`technique_classification`が付いていればその表示名を返し、
+ * 無ければ従来どおり`kind`の`TECHNIQUE_LABEL`へ戻す。
+ * 旧作品・Pose・分類対象外の手順には推測で名前を付けない(項目が無いだけ)。
+ * タイムラインの札・tooltip、StepContentの見出し、capture APIの手順名は
+ * すべてこの1つの関数を使う(表示名を各所で別々に定義しない)。
+ */
+export function stepDisplayLabel(step: FoldStep): string {
+  const classification = step.technique_classification;
+  if (classification) {
+    return DISPLAY_TECHNIQUE_LABEL[classification.kind];
+  }
+  return TECHNIQUE_LABEL[step.kind];
+}
 
 /**
  * 「技法」ツールのサブメニューに出す、選ぶだけで折れる技法。

@@ -84,10 +84,10 @@ if (
   exported.chapters.length !== 13 ||
   Object.keys(exported.diagrams).length !== 6 ||
   figureCount !== 6 ||
-  screenshotCount !== 39 ||
+  screenshotCount !== 47 || // 2026-09-04 画面例8枚追加に伴う更新
   derivedImageCount !== 7 ||
-  screenImageCount !== 38 ||
-  referencedImages.length !== 45
+  screenImageCount !== 46 || // 2026-09-04 画面例8枚追加に伴う更新
+  referencedImages.length !== 53 // 2026-09-04 画面例8枚追加に伴う更新
 ) {
   throw new Error(
     `PDF用内容の件数が不正です: ${exported.chapters.length}章 / ${Object.keys(exported.diagrams).length} SVG図 / ${figureCount} figure / ${screenshotCount} screenshot / ${derivedImageCount}派生PNG / ${screenImageCount}既存PNG`,

@@ -40,5 +40,9 @@
   { "ordinal": 39, "name": "screen-foldall-slider.png", "scenario": "foldAllSlider" },
   { "ordinal": 40, "name": "screen-proposal-progress.png", "scenario": "proposalProgress" },
   { "ordinal": 41, "name": "screen-viewer3d-loading.png", "scenario": "viewer3dLoading" },
-  { "ordinal": 42, "name": "screen-viewer3d-load-error.png", "scenario": "viewer3dLoadError" }
+  { "ordinal": 42, "name": "screen-viewer3d-load-error.png", "scenario": "viewer3dLoadError" },
+  { "ordinal": 43, "name": "screen-fold-pleat-target.png", "scenario": "foldPleatTarget" },
+  { "ordinal": 44, "name": "screen-self-intersection-pairs.png", "scenario": "selfIntersectionPairs" },
+  { "ordinal": 45, "name": "screen-recovery-choices.png", "scenario": "recoveryChoices" },
+  { "ordinal": 46, "name": "screen-export-fold-file.png", "scenario": "exportFoldFile" }
 ]

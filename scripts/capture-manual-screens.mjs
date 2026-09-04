@@ -9,7 +9,7 @@ import { connectManualCapture } from "./manual-capture/cdp-client.mjs";
 import { createScenarioRegistry } from "./manual-capture/scenarios.mjs";
 
 const RUN_STATE_SCHEMA = 2;
-const MANUAL_SCREEN_COUNT = 42;
+const MANUAL_SCREEN_COUNT = 46;
 const SCREEN_WIDTH = 2560;
 const SCREEN_HEIGHT = 1720;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);

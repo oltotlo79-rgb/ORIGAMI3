@@ -3,7 +3,7 @@ import {
   captureViewer3DReadback,
   type Viewer3DReadback,
 } from "./captureReadbackBridge";
-import { TECHNIQUE_LABEL } from "./lib/techniques";
+import { stepDisplayLabel } from "./lib/techniques";
 import { useAppStore, type ToolId } from "./store/appStore";
 
 export type CaptureView = "3d" | "cp" | "both" | "normal";
@@ -227,7 +227,7 @@ function documentInfo(): CaptureDocumentInfo {
     { number: 0, name: "折る前" },
     ...doc.sequence.map((step, index) => ({
       number: index + 1,
-      name: `${index + 1} ${TECHNIQUE_LABEL[step.kind]}`,
+      name: `${index + 1} ${stepDisplayLabel(step)}`,
     })),
   ];
   return { version: 1, stepCount: doc.sequence.length, steps };

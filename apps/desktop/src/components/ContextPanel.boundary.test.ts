@@ -49,7 +49,12 @@ const BASELINE_FUNCTION_BODY_HASHES = {
   PoseRecordButton: "34af610326329f90b6ac091faf612012f3f41c095be2235ae6b9c62adcfd7385",
   FoldControls: "54c6bc3cc68098c26873e51fba36e4182b386bb82a8e5f81ff6f37d233cf19d9",
   NoteInput: "8a02a4acde38a272c4c131a33904cc0de48cd043b9b0539570473069fca11e5b",
-  StepContent: "8d44729207be32e996f6fdd067e5305ee8853d0799bf399d89103973745ddf05",
+  // 2026-09-04: 旧8d44729207be32e996f6fdd067e5305ee8853d0799bf399d89103973745ddf05→
+  // 新0dd6a0501578eecb6c1f91b8f08319abdfd3e163eda908ee4ec1f0deb6a28364。
+  // 手順に記録された技法名(technique_classification)を見出しへstepDisplayLabel(step)で
+  // 表示し、「折り方」selectでkindを明示的に選び直したときだけそれを落とすsetKindへ
+  // 変えた意図した変更の照合値更新であり、期待値の緩和ではない。
+  StepContent: "0dd6a0501578eecb6c1f91b8f08319abdfd3e163eda908ee4ec1f0deb6a28364",
   AlignStartRow: "6fc665317013b3edb22e9115a119ad5f8e5aa3938e75a1831ddf35f116345a47",
   // 2026-08-26: 8つの合わせ方だけが共有の上からKひだUIを使う印を追加した。
   AlignDraftContent: "25b5125b17d43c56e6a83b7adb6d275fce9d844508aeecb02435e8d0fb31f7b3",

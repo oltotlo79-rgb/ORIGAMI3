@@ -127,13 +127,17 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
     for (const chapter of HELP_CHAPTERS) {
       expect(chapter.blocks.some(manualImage), `第${chapter.number}章`).toBe(true);
     }
-    expect(screenshots).toHaveLength(25);
+    // 旧25→新33、旧38→新46。2026-09-04に、3D表示の読み込み中・読み込み失敗、
+    // 一斉折りのつまみ、提案の計算中、折る紙の枚数、紙のめり込み、復旧候補、
+    // ほかの折り紙ソフトのファイルの書き出しの8画面を本文へ加えたぶんの増加であり、
+    // 「1章1画面以上」「名前の形」「説明文が空でない」の条件は緩めていない。
+    expect(screenshots).toHaveLength(33);
     for (const screenshot of screenshots) {
       expect(screenshot.image).toMatch(/^screen-[a-z0-9-]+\.png$/);
       expect(screenshot.caption.trim().length).toBeGreaterThan(0);
     }
-    expect(images).toHaveLength(38);
-    expect(new Set(images).size).toBe(38);
+    expect(images).toHaveLength(46);
+    expect(new Set(images).size).toBe(46);
   });
 
   it("本文は表示部品を含まない直列化可能なデータで、題と本文を検索できる", () => {

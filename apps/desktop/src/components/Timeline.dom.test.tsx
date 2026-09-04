@@ -77,6 +77,31 @@ describe("手順タイムライン", () => {
     );
   });
 
+  // 手順に記録された技法名(technique_classification)のmirror(正本§6)。
+  it("technique_classificationがあれば分類の表示名をチップとtooltipに出す", () => {
+    const classified: FoldStep = {
+      ...step(1),
+      kind: "Simple",
+      technique_classification: { kind: "Squash", origin: "Automatic" },
+    };
+    useAppStore.setState({
+      doc: { ...doc(0), sequence: [classified] },
+      currentStep: null,
+    });
+    render(<Timeline />);
+    const chip = screen.getByRole("button", { name: /^1 開いてつぶす/ });
+    expect(chip.textContent).toContain("開いてつぶす");
+    expect(chip.getAttribute("data-tooltip")).toContain("開いてつぶす");
+  });
+
+  it("項目が無ければ従来どおりkindのTECHNIQUE_LABELを出す", () => {
+    useAppStore.setState({ doc: doc(1), currentStep: null });
+    render(<Timeline />);
+    const chip = screen.getByRole("button", { name: /^1 単純折り/ });
+    expect(chip.textContent).toContain("単純折り");
+    expect(chip.textContent).not.toContain("開いてつぶす");
+  });
+
   it("D28: 最後の手順では「次へ」を押せない見た目にする", () => {
     useAppStore.setState({ doc: doc(3), currentStep: 3 });
     render(<Timeline />);

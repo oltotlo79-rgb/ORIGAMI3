@@ -5,7 +5,7 @@
 
 import { isStepSkipped, useAppStore } from "../store/appStore";
 import {
-  TECHNIQUE_LABEL,
+  stepDisplayLabel,
   uniqueWarnings,
   warningsForStep,
 } from "../lib/techniques";
@@ -46,7 +46,7 @@ function StepChip({ step, number }: { step: FoldStep; number: number }) {
   const detail = reasons.length > 0 ? reasons.join(" / ") : "";
   const tooltip = isSkipped
     ? detail || SKIPPED_FALLBACK
-    : [TECHNIQUE_LABEL[step.kind], step.note, detail]
+    : [stepDisplayLabel(step), step.note, detail]
         .filter((text) => text !== "")
         .join(" / ");
 
@@ -70,7 +70,7 @@ function StepChip({ step, number }: { step: FoldStep; number: number }) {
         data-tooltip={tooltip}
         onClick={() => selectStep(number)}
       >
-        {number} {TECHNIQUE_LABEL[step.kind]}
+        {number} {stepDisplayLabel(step)}
         {warned ? " ⚠" : ""}
       </button>
     </span>

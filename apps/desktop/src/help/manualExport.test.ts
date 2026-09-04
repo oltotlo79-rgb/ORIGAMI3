@@ -57,12 +57,14 @@ describe("取扱説明書向けの実画面図", () => {
     expect(exported.chapters).toHaveLength(13);
     expect(Object.keys(exported.diagrams)).toHaveLength(6);
     expect(figures).toHaveLength(6);
-    expect(screenshots).toHaveLength(39);
-    expect(images).toHaveLength(45);
+    // 旧39/45/38→新47/53/46。2026-09-04に本文へ加えた8画面ぶんの増加で、
+    // 手描きで残す6図・派生PNG 7図の区別と重複0件の条件は変えていない。
+    expect(screenshots).toHaveLength(47);
+    expect(images).toHaveLength(53);
     expect(derivedImages).toHaveLength(7);
     expect(new Set(derivedImages).size).toBe(7);
-    expect(screenImages).toHaveLength(38);
-    expect(new Set(screenImages).size).toBe(38);
+    expect(screenImages).toHaveLength(46);
+    expect(new Set(screenImages).size).toBe(46);
 
     for (const id of MANUAL_IMAGE_DIAGRAM_IDS) {
       expect(figures.some((block) => block.diagramId === id)).toBe(false);

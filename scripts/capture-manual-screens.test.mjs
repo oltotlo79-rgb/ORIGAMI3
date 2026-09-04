@@ -50,7 +50,8 @@ function parseArguments(argv) {
 }
 
 // This list is intentionally independent from the capture manifest.  It is the
-// audited order in scratchpad/self-intersection-report.md, rows 1 through 42.
+// audited order in scratchpad/self-intersection-report.md, rows 1 through 42,
+// plus the 4 rows added in scratchpad/manual-screenshot-plan-2026-09-04.md §1-3.
 const EXPECTED_ENTRIES = Object.freeze([
   { name: "screen-overview-guide.png", scenario: "overviewGuide" },
   { name: "screen-workspace.png", scenario: "workspace" },
@@ -94,6 +95,10 @@ const EXPECTED_ENTRIES = Object.freeze([
   { name: "screen-proposal-progress.png", scenario: "proposalProgress" },
   { name: "screen-viewer3d-loading.png", scenario: "viewer3dLoading" },
   { name: "screen-viewer3d-load-error.png", scenario: "viewer3dLoadError" },
+  { name: "screen-fold-pleat-target.png", scenario: "foldPleatTarget" },
+  { name: "screen-self-intersection-pairs.png", scenario: "selfIntersectionPairs" },
+  { name: "screen-recovery-choices.png", scenario: "recoveryChoices" },
+  { name: "screen-export-fold-file.png", scenario: "exportFoldFile" },
 ]);
 const EXPECTED_NAMES = Object.freeze(EXPECTED_ENTRIES.map((entry) => entry.name));
 
@@ -241,29 +246,29 @@ for (const required of [
 }
 
 check(Array.isArray(manifest), "manifest must be an array");
-equal(manifest.length, 42, "manifest must have exactly 42 entries");
+equal(manifest.length, 46, "manifest must have exactly 46 entries");
 equal(
   manifest.map((entry) => entry.name),
   EXPECTED_NAMES,
-  "manifest names and order must match all 42 audited rows one-for-one",
+  "manifest names and order must match all 46 audited rows one-for-one",
 );
 equal(
   manifest.map(({ name, scenario }) => ({ name, scenario })),
   EXPECTED_ENTRIES,
-  "manifest names and scenario assignments must match all 42 independently audited rows one-for-one",
+  "manifest names and scenario assignments must match all 46 independently audited rows one-for-one",
 );
 equal(
   manifest.map((entry) => entry.ordinal),
-  Array.from({ length: 42 }, (_, index) => index + 1),
-  "manifest ordinals must be exactly 1 through 42",
+  Array.from({ length: 46 }, (_, index) => index + 1),
+  "manifest ordinals must be exactly 1 through 46",
 );
 
 check(Array.isArray(registry), "scenario registry must be an array");
-equal(registry.length, 42, "scenario registry must have exactly 42 implementations");
+equal(registry.length, 46, "scenario registry must have exactly 46 implementations");
 const registryIds = registry.map((scenario) => scenario.id);
 equal(
   new Set(registryIds).size,
-  42,
+  46,
   "scenario registry ids must be unique",
 );
 for (const entry of manifest) {
@@ -279,7 +284,7 @@ for (const scenario of registry) {
 }
 equal(
   new Set(manifest.map((entry) => entry.scenario)).size,
-  42,
+  46,
   "each manifest entry must use a distinct scenario",
 );
 const entries = await validateManifest(manifest, registry);
@@ -287,7 +292,7 @@ assertions += 1;
 equal(
   entries.map((entry) => entry.name),
   EXPECTED_NAMES,
-  "validated capture entries must preserve all 42 manifest rows and their order",
+  "validated capture entries must preserve all 46 manifest rows and their order",
 );
 
 const defaultArguments = parseArguments([]);
@@ -665,7 +670,7 @@ const freshSelection = selectEntries(entries, defaultArguments);
 equal(
   freshSelection.map((entry) => entry.name),
   EXPECTED_NAMES,
-  "a fresh run must select all 42 entries in audited order",
+  "a fresh run must select all 46 entries in audited order",
 );
 
 const seventhName = EXPECTED_NAMES[6];
@@ -757,7 +762,7 @@ throws(
   "--only ordinal zero must fail",
 );
 throws(
-  () => selectEntries(entries, parseArguments(["--only", "43"])),
+  () => selectEntries(entries, parseArguments(["--only", "47"])),
   "--only ordinal above the manifest must fail",
 );
 throws(

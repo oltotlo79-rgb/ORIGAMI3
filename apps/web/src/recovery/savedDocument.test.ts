@@ -5,6 +5,7 @@ import {
   projectSavedDocument,
   serializeSavedDocument,
   type SavedDocumentSource,
+  type SavedFoldStep,
 } from "./savedDocument";
 
 function source(): SavedDocumentSource {
@@ -107,5 +108,52 @@ describe("SavedDocumentのWeb永続化境界", () => {
       .toThrow("復旧データのJSONが壊れているため、作品を復元できません。");
     expect(() => parseSavedDocument(JSON.stringify({ schema_version: 1 })))
       .toThrow("復旧データに作品として必要な項目がありません。");
+  });
+});
+
+// 手順に記録された技法名(technique_classification)の往復(設計§6)。
+// 項目が無ければ出さない・nullはnullのまま・値があればkind/originごと写す。
+describe("technique_classificationの往復", () => {
+  function withClassification(
+    value: SavedFoldStep["technique_classification"],
+  ): SavedDocumentSource {
+    const base = source();
+    const step: SavedFoldStep = { ...base.doc.sequence[0] };
+    if (value === undefined) {
+      delete step.technique_classification;
+    } else {
+      step.technique_classification = value;
+    }
+    return { ...base, doc: { ...base.doc, sequence: [step] } };
+  }
+
+  it("値がある手順はkind/originごと往復する", () => {
+    const input = withClassification({ kind: "Squash", origin: "Automatic" });
+    const projected = projectSavedDocument(input);
+    expect(projected.sequence[0].technique_classification).toEqual({
+      kind: "Squash",
+      origin: "Automatic",
+    });
+    const payload = serializeSavedDocument(input);
+    expect(payload).toContain('"technique_classification":{"kind":"Squash","origin":"Automatic"}');
+    expect(parseSavedDocument(payload)).toEqual(projected);
+  });
+
+  it("項目が無い手順は往復後も項目そのものが出ない", () => {
+    const input = withClassification(undefined);
+    const projected = projectSavedDocument(input);
+    expect(projected.sequence[0]).not.toHaveProperty("technique_classification");
+    const payload = serializeSavedDocument(input);
+    expect(payload).not.toContain("technique_classification");
+    expect(parseSavedDocument(payload)).toEqual(projected);
+  });
+
+  it("nullの手順はnullのまま往復する(旧作品・分類対象外に推測で名前を付けない)", () => {
+    const input = withClassification(null);
+    const projected = projectSavedDocument(input);
+    expect(projected.sequence[0].technique_classification).toBeNull();
+    const payload = serializeSavedDocument(input);
+    expect(payload).toContain('"technique_classification":null');
+    expect(parseSavedDocument(payload)).toEqual(projected);
   });
 });

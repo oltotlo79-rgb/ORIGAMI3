@@ -7,7 +7,11 @@ import {
   relaxationNotices,
   useAppStore,
 } from "../store/appStore";
-import { TECHNIQUE_KINDS, TECHNIQUE_LABEL } from "../lib/techniques";
+import {
+  stepDisplayLabel,
+  TECHNIQUE_KINDS,
+  TECHNIQUE_LABEL,
+} from "../lib/techniques";
 import type { FoldStep, TechniqueKind } from "../lib/types";
 import { NumberStepper } from "./NumberStepper";
 
@@ -498,13 +502,20 @@ export function StepContent({ number }: { number: number }) {
   const step = doc?.sequence[number - 1];
   if (!step) return <p className="hint">この手順はもうありません</p>;
 
-  const setKind = (kind: TechniqueKind) =>
-    void applySequenceOp({ type: "UpdateStep", step: { ...step, kind } });
+  // 利用者が「折り方」を明示的に選び直したときは、記録済みの技法名を引き継がない
+  // (設計§6)。手順に技法名の項目が無ければそのまま(項目を新設しない)。
+  const setKind = (kind: TechniqueKind) => {
+    const next: FoldStep = { ...step, kind };
+    if (next.technique_classification !== undefined) {
+      delete next.technique_classification;
+    }
+    void applySequenceOp({ type: "UpdateStep", step: next });
+  };
 
   return (
     <div>
       <p>
-        手順{number}: {TECHNIQUE_LABEL[step.kind]}(折り線
+        手順{number}: {stepDisplayLabel(step)}(折り線
         {step.drivers.length}本)
         {isStepSkipped({ skipped, replaySkipped }, step.id) && (
           <span className="error-text">

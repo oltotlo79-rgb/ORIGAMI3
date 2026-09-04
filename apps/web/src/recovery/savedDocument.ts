@@ -65,6 +65,17 @@ function copyFoldStep(step: SavedFoldStep): SavedFoldStep {
       picks: step.alignment.picks.map(copyAlignTarget),
     };
   }
+  // 項目が無い手順(旧作品・Pose・分類対象外)ではfieldそのものを出さない。
+  // nullはnullのまま写す(推測で技法名を付けない)。
+  if (step.technique_classification !== undefined) {
+    copied.technique_classification =
+      step.technique_classification === null
+        ? null
+        : {
+            kind: step.technique_classification.kind,
+            origin: step.technique_classification.origin,
+          };
+  }
   if (step.finish_soft !== undefined && step.finish_soft !== null) {
     copied.finish_soft = {
       enabled: step.finish_soft.enabled,

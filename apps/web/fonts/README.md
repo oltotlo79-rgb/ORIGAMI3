@@ -10,9 +10,12 @@
 
 | 配置 | 大きさ | SHA-256 | 役割 |
 |---|---:|---|---|
-| `apps/web/public/fonts/NotoSansJP-ORIGAMI3-subset.ttf` | 470,716 B | `2FD9D3E23D647236DA46D5F2EA11C00838F798B44FD1F4F030D0A2B37CA511C5` | ブラウザ画面と両版の折り図PDFに使う縮小版 |
+| `apps/web/public/fonts/NotoSansJP-ORIGAMI3-subset.ttf` | 475,640 B | `3F9B664FABBFA1BA4032A169A1B9736F8D9E5B8C0E4058ACC037E6A286C5E514` | ブラウザ画面と両版の折り図PDFに使う縮小版 |
 | `apps/web/public/fonts/OFL.txt` | 4,388 B | `1C05C68C34F9708415AADA51F17E1B0092D2CEA709BF4A94CD38114F9E73D7D9` | 配布条件の原文。同梱が条件なので必ず一緒に配る |
-| `apps/web/fonts/charset.txt` | 2,720 B | `E5EF9778147497180A0DE475CE7191F5EC27EF4BE7291B79B7CE5B66796B0CB3` | 縮小版へ残した970文字。作り直しの入力 |
+| `apps/web/fonts/charset.txt` | 2,740 B | `19BC79E9C35BAFCBA836BF00C70B1D0FBD5BFEA70AFE4440B82293704B5A989F` | 縮小版へ残した977文字。作り直しの入力 |
+
+TTFとcharset.txtは2026-09-04に作り直した。2026-08-29版（`470,716 B` / `2FD9D3E2…`、970文字）から、
+ヘルプ本文とRustの文言へ増えた7字（`α ぬ 恒 競 義 翼 飾`）を足したものである。
 
 `public/` の2つはブラウザ版の組み立て後の `dist/fonts/` へそのまま入り、
 `/fonts/…` で配られる。デスクトップ版はTTFを実行ファイルへ埋め込み、
@@ -77,9 +80,15 @@ SIL Open Font License 1.1（`OFL.txt` が原文）。要点は次の3つ。
 | 画面へ返るRust | `apps/desktop/src-tauri/src/**`（17ファイル）と `crates/*/src/**`（81ファイル）。`tests` `fixtures` は除く |
 | 説明書の組版 | `crates/ori3-export/src/**`（16ファイル） |
 
-集まったのは970字（うち日本語の字形847字）。追跡中の説明書PDF（82ページ）から取り出した699字も
-全て含む。集め直しは `node apps/web/fonts/collect-charset.mjs`、照合だけなら `--check` を付ける。
+集まったのは977字（うち日本語の字形853字）。追跡中の説明書PDF（82ページ）から取り出した699字も
+全て含む（977字は2026-08-29の970字を1字も減らさずに含む）。
+集め直しは `node apps/web/fonts/collect-charset.mjs`、照合だけなら `--check` を付ける。
 Python版とNode版の独立2実装が同じ集合を出すことを確認済みである。
+
+`#[cfg(test)]` の中の文言も `crates/*/src/**` や `apps/desktop/src-tauri/src/**` に
+書かれていれば集まる。2026-09-04に増えた7字のうち6字（`α` `恒` `競` `義` `翼` `飾`）は
+この経路で、残る1字（`ぬ`）はヘルプ本文から入った。画面へ出ない字が少し混じるが、
+足りないより安全なので、この走査規則は変えていない。
 
 **利用者が打ち込んだ文字は、はじめからこの集合の対象外である。** 覚え書きの入力欄と
 ヘルプの検索欄には、同梱フォントを含まない別の並び `--font-user-text` を当ててある
@@ -120,13 +129,31 @@ Python版とNode版の独立2実装が同じ集合を出すことを確認済み
 道具はInkscape同梱のHarfBuzz 10.4.0（`C:\Program Files\Inkscape\bin\libharfbuzz-subset-0.dll`）。
 `hb_subset_or_fail` に次を渡す。
 
-- 残す文字: `apps/web/fonts/charset.txt` の970字
+- 残す文字: `apps/web/fonts/charset.txt` の977字
 - 太さの軸: `hb_subset_input_set_axis_range(wght, 400, 700, 既定400)`
   （画面が使う太さは400・500・600・700の4つだけなので、100〜900は要らない）
 - 残す名前: 既定の0〜6番に加えて7・8・9・11・13・14・16・17・25番
 
-結果は970/970が入り、**欠落は0**である。FreeTypeで1字ずつ32pxへ実描画して、
+結果は977/977が入り、**欠落は0**である。FreeTypeで1字ずつ32pxへ実描画して、
 空白字U+3000を除く黒画素0の字0件・送り幅0の字0件も確かめてある。
+`name` 表には0・1・2・3・4・5・6・7・8・9・11・13・14・16・17・25番が残る。
+
+上の3点をそのまま実行する道具を置いてある。元のフォントの実パスだけを渡す
+（この作業機では `C:\Users\oltot\Documents\git-projects\ORIGAMI2\crates\ori-formats\assets\fonts\NotoSansJP-Variable.ttf`
+が上の表と同じ9,589,900 B / `C2F3B4D4…` である。無ければ上の取得元から取り、SHA-256を確かめる）。
+
+```powershell
+node apps/web/fonts/collect-charset.mjs                                  # charset.txt を集め直す
+python apps/web/fonts/make-subset.py --source <元のフォント>              # 縮小版を作り直す
+python apps/web/fonts/verify-subset.py --source <元のフォント>            # 欠落0・実描画・名前を確かめる
+```
+
+`make-subset.py --check` は書き出さずに、いまの同梱物と一致するかだけを調べる。
+2026-08-29の970字を渡すと `470,716 B` / `2FD9D3E2…` をbyteまで再現できることを確認済みで、
+この手順が記録どおりであることの裏付けにしている。
+`verify-subset.py` は描画に `freetype-py` を使う（無ければ `pip install --user freetype-py`）。
+Inkscape同梱の `libfreetype-6.dll` を `ctypes` で直に叩くと `FT_FaceRec` の並びを手で写すことになり、
+ずれても静かに違う結果が出るため使わない。
 
 以前は `⌕`（U+2315）`⏮`（U+23EE）`⏸`（U+23F8）`✕`（U+2715）の4字を画面で使っていたが、
 この4字は**元の9,589,900 Bのフォントにも入っていない**ため、機械のフォント次第で形が変わり、
