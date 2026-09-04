@@ -561,7 +561,12 @@ function Test-StaticChecksCheckoutFullHistory {
 
     $checkoutBody = $checkoutSteps[0]
     $withMappings = @([regex]::Matches($checkoutBody, '(?m)^        with:\s*(?:#.*)?$'))
-    $fetchDepths = @([regex]::Matches($checkoutBody, '(?m)^          fetch-depth:\s*(?<value>[^#\r\n]+?)(?:\s+#.*)?$'))
+    # 値を捉える文字クラスは行末のCRを取り込めない。コメントが無い行では
+    # (?:\s+#.*)?がCRを消費せず、複製経由のCRLFで$の直前にCRが残って
+    # 不一致になっていた(git clone --no-hardlinksがcore.autocrlf=trueで
+    # CRLFへ変換するため、手元の複製実行でだけ再現する)。LF・CRLFどちらでも
+    # 一致するよう\r?を明示する。
+    $fetchDepths = @([regex]::Matches($checkoutBody, '(?m)^          fetch-depth:\s*(?<value>[^#\r\n]+?)(?:\s+#.*)?\r?$'))
     if ($withMappings.Count -ne 1 -or $fetchDepths.Count -ne 1) {
         return $false
     }
