@@ -195,6 +195,30 @@ function Get-ProductionRecordFixture {
     }
 }
 
+function Get-ProductionRecordRawText {
+    param(
+        [Parameter(Mandatory = $true)][string]$ReportText,
+        [Parameter(Mandatory = $true)][string]$Header
+    )
+
+    # Get-ProductionRecordFixtureと違い、Roadmap-Claim/Snapshot/Remediation/
+    # Correction行を一切除かず、行の再結合もしない(bodyLinesを`-join`で
+    # 組み立て直すと、末尾の空行の数が元のbyte列とずれてidentity hashが
+    # 変わってしまうことを実測して発見した)。次の"## "見出し直前までの
+    # 生テキストをそのままsubstringで切り出し、byte単位で複製する。
+    $matches = [regex]::Matches($ReportText, [regex]::Escape($Header) + '(?=\r?\n|\z)')
+    Assert-True ($matches.Count -eq 1) "production raw fixture header must exist exactly once: $Header"
+    $startIndex = $matches[0].Index
+    $nextHeaderMatch = [regex]::Match($ReportText.Substring($startIndex + $Header.Length), '(?:\r\n|\n|\r)## ')
+    $rawText = if ($nextHeaderMatch.Success) {
+        $ReportText.Substring($startIndex, $Header.Length + $nextHeaderMatch.Index + 1)
+    }
+    else {
+        $ReportText.Substring($startIndex)
+    }
+    return $rawText.TrimEnd("`r", "`n") + "`r`n"
+}
+
 function Format-StagedFixtureDocument {
     param(
         [Parameter(Mandatory = $true)][object[]]$Records
@@ -778,6 +802,130 @@ try {
 
     $futurePath = Write-TestReport "future" $now.AddDays(1) "通常の作業報告" @("Roadmap-Claim: none", "通常の本文です。") $now
     Assert-Exit (Invoke-ReportCheck $futurePath) 2 "future heading" "later than the file update time"
+
+    # Roadmap-Remediation / Roadmap-Correction (2026-09-04続きの委譲):
+    # 本物のHEAD履歴を根拠にするため、production report(04:44・13:50)から
+    # 現在の作業ツリー内容(machine行を含む)を生byte単位でそのまま複製する
+    # (行を再結合すると末尾の空行の数がずれてidentity hashが変わることを
+    # 実測して発見したため、Get-ProductionRecordRawTextはsubstringで切り出す)。
+    $currentProductionReportText = [IO.File]::ReadAllText($productionReportPath, (New-Object Text.UTF8Encoding($false, $true)))
+    $t0444 = Get-ProductionRecordRawText -ReportText $currentProductionReportText -Header '## 2026-09-01 04:44 — 契約の検査がコミットを止めた。統括の指示が原因。残り13件の内訳が証拠で裏付けられた'
+    $t1350 = Get-ProductionRecordRawText -ReportText $currentProductionReportText -Header '## 2026-09-01 13:50 — 04:44の「173/13」報告を訂正する'
+    Assert-True ($t0444 -match '(?m)^Roadmap-Remediation: schema=1 ') "04:44 production fixture carries a Roadmap-Remediation line"
+    Assert-True ($t1350 -match '(?m)^Roadmap-Correction: schema=1 ') "13:50 production fixture carries a Roadmap-Correction line"
+    $remediationAnchor = Format-TestRecord $headingTime "Remediation検査用の施行後報告" @("Roadmap-Claim: none", "通常の本文です。")
+
+    # 正例: 04:44(Remediation)・13:50(04:44をtargetとするCorrection)をそのまま
+    # 複製すると緑になる。
+    $remediationOkText = $t1350 + "`r`n---`r`n" + $t0444
+    $remediationOkPath = Write-TestDocument "remediation-correction-ok" @($remediationAnchor, $remediationOkText) $now
+    Assert-Exit (Invoke-ReportCheck $remediationOkPath) 0 "valid Roadmap-Remediation + Roadmap-Correction reproduced verbatim from production"
+
+    # 負例(c): Remediationのuncheckedを1つ壊すと、初出commitからの再現が
+    # 一致しなくなり拒否される。
+    $badRemediationText = $t1350 + "`r`n---`r`n" + ($t0444 -replace 'unchecked=14', 'unchecked=15')
+    $badRemediationPath = Write-TestDocument "remediation-wrong-unchecked" @($remediationAnchor, $badRemediationText) $now
+    Assert-Exit (Invoke-ReportCheck $badRemediationPath) 2 "Remediation with tampered unchecked count" "Roadmap-Remediation"
+
+    # 負例(統括の要求, 2026-09-04): 機械行(Roadmap-Snapshot)の末尾へ1文字
+    # 足すと正規表現に完全一致しなくなり、内容identityから除外されない。
+    # identityが変わるため初出commitが見つからず拒否される
+    # (malformed行は除外しない、を固定する)。
+    $brokenMachineLineText = $t1350 + "`r`n---`r`n" + ($t0444 -replace '(?m)^(Roadmap-Snapshot: docs/implementation-roadmap\.md checked=173 unchecked=13 total=186)$', '$1 ')
+    $brokenMachineLinePath = Write-TestDocument "remediation-broken-machine-line-not-stripped" @($remediationAnchor, $brokenMachineLineText) $now
+    Assert-Exit (Invoke-ReportCheck $brokenMachineLinePath) 2 "a machine line with 1 trailing extra character is not stripped from content identity" "Roadmap-Remediation"
+
+    # 負例(b): Correctionのtarget_commitを壊すと、独立に求めた初出commitと
+    # 一致せず拒否される。
+    $badCommitText = ($t1350 -replace 'target_commit=418dc36fc532dc25ec154660717dda13dec3a213', 'target_commit=0000000000000000000000000000000000000d') + "`r`n---`r`n" + $t0444
+    $badCommitPath = Write-TestDocument "correction-wrong-target-commit" @($remediationAnchor, $badCommitText) $now
+    Assert-Exit (Invoke-ReportCheck $badCommitPath) 2 "Correction with tampered target_commit" "Roadmap-Correction"
+
+    # 負例(c): Correctionのcorrected_uncheckedを壊すと拒否される。
+    $badCorrectedText = ($t1350 -replace 'corrected_unchecked=14', 'corrected_unchecked=13') + "`r`n---`r`n" + $t0444
+    $badCorrectedPath = Write-TestDocument "correction-wrong-corrected-unchecked" @($remediationAnchor, $badCorrectedText) $now
+    Assert-Exit (Invoke-ReportCheck $badCorrectedPath) 2 "Correction with tampered corrected_unchecked" "Roadmap-Correction"
+
+    # 負例(a): target_sha256を壊す(対象recordが一意に見つからない)と拒否される。
+    $badTargetShaText = ($t1350 -replace 'target_sha256=030e7dad6a8b93bb686c338004f924cec06b1691164d5d991380db5f0097ea71', ('target_sha256=' + ('0' * 64))) + "`r`n---`r`n" + $t0444
+    $badTargetShaPath = Write-TestDocument "correction-unknown-target-sha256" @($remediationAnchor, $badTargetShaText) $now
+    Assert-Exit (Invoke-ReportCheck $badTargetShaPath) 2 "Correction with target_sha256 matching no record" "Roadmap-Correction"
+
+    # 負例(e): 同じtargetを持つCorrectionを2件にすると、両方とも無効になる。
+    $secondCorrectionRecord = Format-TestRecord ($headingTime.AddMinutes(-1)) "重複Correctionのテスト" @(
+        "Roadmap-Claim: none",
+        "Roadmap-Correction: schema=1 target_sha256=030e7dad6a8b93bb686c338004f924cec06b1691164d5d991380db5f0097ea71 target_commit=418dc36fc532dc25ec154660717dda13dec3a213 corrected_unchecked=14 kind=quoted-misreport"
+    )
+    $duplicateTargetText = $t1350 + "`r`n---`r`n" + $secondCorrectionRecord + "`r`n---`r`n" + $t0444
+    $duplicateTargetPath = Write-TestDocument "correction-duplicate-target" @($remediationAnchor, $duplicateTargetText) $now
+    Assert-Exit (Invoke-ReportCheck $duplicateTargetPath) 2 "two Roadmap-Correction records targeting the same record are both rejected" "同じ target_sha256"
+
+    # 統括の判断（段階6項目2、2026-09-04）: 07:30の「リリース関門が、残作業
+    # そのものだけになった」という数字を伴わない残件断言(kind=remainder・
+    # Count=null)を、検証済みRoadmap-Correction(kind=other-subject)がtarget
+    # として指すときだけ免除する拡張(Get-BlockingScopeClaimの
+    # ExemptForValidatedCorrection)を検査する。target_sha256は07:30自身の
+    # 内容identity、target_commitは`git log -S`で独立に求めた初出commit
+    # (e1ceafb2c9f1ea714f6291a093b566b1138323ad)、corrected_uncheckedは
+    # その時点のtracked roadmap/policyを本番生成器へ通した実測値(14)を、
+    # 担当が実測して埋めた(統括が本物のCorrectionを貼る前の検証)。
+    $t0730 = Get-ProductionRecordRawText -ReportText $currentProductionReportText -Header '## 2026-09-01 07:30 — 統括が壊した固定領域を修復。統括のミスを機械で止める改定を5件目まで入れた'
+    Assert-True ($t0730 -match '(?m)^Roadmap-Claim: none$') "07:30 production fixture carries Roadmap-Claim: none"
+    Assert-True ($t0730.Contains('### リリース関門が、残作業そのものだけになった')) "07:30 production fixture carries the vague non-numeric remainder heading"
+    # $remediationAnchorと同一時刻(headingTime)を使うと「同一時刻は使えない」
+    # 形式違反で正例が誤って赤になるため、1分ずらす(実測で判明した不具合)。
+    $correction0730Text = Format-TestRecord ($headingTime.AddMinutes(-1)) "07:30の無限定な残件断言を訂正するテスト" @(
+        "Roadmap-Claim: none",
+        "Roadmap-Correction: schema=1 target_sha256=7a2b8d1e2e5c5656677ef7ae83932aeb84463e37d027b00763ced62052bec7bf target_commit=e1ceafb2c9f1ea714f6291a093b566b1138323ad corrected_unchecked=14 kind=other-subject"
+    )
+
+    # 正例: 検証済みCorrection(kind=other-subject)が07:30をtargetとして
+    # 指すと、数字を伴わない残件断言も免除されて緑になる。
+    $vagueRemainderOkPath = Write-TestDocument "vague-remainder-correction-ok" @($remediationAnchor, $correction0730Text, $t0730) $now
+    Assert-Exit (Invoke-ReportCheck $vagueRemainderOkPath) 0 "validated Correction (kind=other-subject) exempts 07:30's vague non-numeric remainder assertion"
+
+    # 負例: Correctionが無ければ、07:30単体は従来どおり赤のまま(免除は
+    # 検証済みCorrectionがあるときだけ、という設計を固定する)。
+    $vagueRemainderNoCorrectionPath = Write-TestDocument "vague-remainder-no-correction" @($remediationAnchor, $t0730) $now
+    Assert-Exit (Invoke-ReportCheck $vagueRemainderNoCorrectionPath) 2 "07:30 alone (no Correction) still blocks on the vague remainder assertion" "完全性表現を含むため"
+
+    # 負例(b): target_commitを壊すと、独立に求めた初出commitと一致せず、
+    # 免除されないまま赤になる。
+    $vagueRemainderBadCommitText = $correction0730Text -replace 'target_commit=e1ceafb2c9f1ea714f6291a093b566b1138323ad', 'target_commit=000000000000000000000000000000000000ff'
+    $vagueRemainderBadCommitPath = Write-TestDocument "vague-remainder-wrong-target-commit" @($remediationAnchor, $vagueRemainderBadCommitText, $t0730) $now
+    Assert-Exit (Invoke-ReportCheck $vagueRemainderBadCommitPath) 2 "Correction with tampered target_commit does not exempt the vague remainder assertion" "Roadmap-Correction"
+
+    # 負例(c): corrected_uncheckedを壊すと、初出commit時点の実測値と一致
+    # せず、免除されないまま赤になる。
+    $vagueRemainderBadCorrectedText = $correction0730Text -replace 'corrected_unchecked=14', 'corrected_unchecked=15'
+    $vagueRemainderBadCorrectedPath = Write-TestDocument "vague-remainder-wrong-corrected-unchecked" @($remediationAnchor, $vagueRemainderBadCorrectedText, $t0730) $now
+    Assert-Exit (Invoke-ReportCheck $vagueRemainderBadCorrectedPath) 2 "Correction with tampered corrected_unchecked does not exempt the vague remainder assertion" "Roadmap-Correction"
+
+    # 故障注入1本(統括の要求): Get-BlockingScopeClaimの拡張条件
+    # (`-or [string]$assertion.Kind -eq 'remainder'`)だけを無効化した
+    # check-report-log.ps1を、実行に要る同居ファイル(roadmap-claim-scope.ps1・
+    # get-roadmap-status.ps1・roadmap-status-policy.json、いずれも無改変の
+    # 複製)ごと隔離した場所へ置き、上の正例文書をそのまま複製へ通すと赤に
+    # なることを確かめる(この拡張が無ければ07:30は救えないことの証明。
+    # 免除ロジックそのものを壊すのではなく、新設分のOR条件だけを狙う。
+    # -RepositoryRootは本物のrepoを指し、git操作は実際のe1ceafb2に対して
+    # 行われる)。
+    $exemptionMutationFind = '($null -ne $assertion.Count -or [string]$assertion.Kind -eq ' + "'remainder')"
+    $exemptionMutationOccurrences = [regex]::Matches($checkerSource, [regex]::Escape($exemptionMutationFind)).Count
+    Assert-True ($exemptionMutationOccurrences -eq 1) "exemption mutation anchor is unique in check-report-log.ps1"
+    $exemptionMutatedSource = $checkerSource.Replace($exemptionMutationFind, '($null -ne $assertion.Count)')
+    $exemptionMutantDir = Join-Path $sandboxRoot "mutant-remainder-exemption"
+    [void][IO.Directory]::CreateDirectory($exemptionMutantDir)
+    $exemptionMutantScriptPath = Join-Path $exemptionMutantDir "check-report-log.ps1"
+    [IO.File]::WriteAllText($exemptionMutantScriptPath, $exemptionMutatedSource, (New-Object Text.UTF8Encoding($false)))
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'roadmap-claim-scope.ps1') -Destination (Join-Path $exemptionMutantDir 'roadmap-claim-scope.ps1') -Force
+    Copy-Item -LiteralPath $snapshotPath -Destination (Join-Path $exemptionMutantDir 'get-roadmap-status.ps1') -Force
+    Copy-Item -LiteralPath $policyPath -Destination (Join-Path $exemptionMutantDir 'roadmap-status-policy.json') -Force
+    $mutantResult = Invoke-ProcessCapture -Arguments @(
+        "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-File", $exemptionMutantScriptPath, "-RepositoryRoot", $repoRoot, "-ReportPath", $vagueRemainderOkPath
+    )
+    Assert-True ($mutantResult.ExitCode -ne 0) "disabling the kind=remainder exemption must turn the same positive document red"
 
     Write-Host "[TEST OK] check-report-log: $script:assertions assertions"
     exit 0

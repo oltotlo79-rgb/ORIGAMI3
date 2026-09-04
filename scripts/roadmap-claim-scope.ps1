@@ -192,8 +192,13 @@ function Test-RoadmapScopeDeniedMention {
     )
 
     $escapedTrigger = [regex]::Escape($Trigger)
-    $strictDisposition = '(?:誤り(?:だった|である|です)?|間違い(?:だった|である|です)?|事実ではない|成立しない|正しくない|取り下げ(?:る|た|ます)|訂正(?:する|した|します))'
-    $quotedDenial = '[「『][^」』]*' + $escapedTrigger + '[^」』]*[」』]\s*(?:は|が|を)?\s*' + $strictDisposition
+    # 2026-09-04: 「〜誤って報告した」というて形の自己申告も、既存の
+    # 「誤りだった」と同じ「引用+厳密な訂正語」の系統として認める
+    # (実測: 13:26の記録「朝に『残り12件』と誤って報告した前例があるので」)。
+    # 引用の直後の助詞に「と」を加え、disposition に「誤って(報告|記載|記録)
+    # した」を加えるだけで、他の語彙は増やさない。
+    $strictDisposition = '(?:誤り(?:だった|である|です)?|誤って(?:報告|記載|記録)した|間違い(?:だった|である|です)?|事実ではない|成立しない|正しくない|取り下げ(?:る|た|ます)|訂正(?:する|した|します))'
+    $quotedDenial = '[「『][^」』]*' + $escapedTrigger + '[^」』]*[」』]\s*(?:は|が|を|と)?\s*' + $strictDisposition
     foreach ($denialMatch in [regex]::Matches($Segment, $quotedDenial, [Text.RegularExpressions.RegexOptions]::CultureInvariant)) {
         if ($TriggerIndex -ge $denialMatch.Index -and $TriggerIndex -lt $denialMatch.Index + $denialMatch.Length) {
             return $true
@@ -204,6 +209,26 @@ function Test-RoadmapScopeDeniedMention {
     # exact refusal/correction must occur in the same segment.
     $directDenial = '^' + $escapedTrigger + '.{0,48}?(?:(?:とは|とはまだ|と(?:は)?)(?:報告|断定|主張|記載|記録)?(?:しない|していない|しません|しなかった|していません|できない)|と書かなかった|は未確認|かは不明)'
     return [regex]::IsMatch($Segment.Substring($TriggerIndex), $directDenial, [Text.RegularExpressions.RegexOptions]::CultureInvariant)
+}
+
+function Test-RoadmapScopeWordMention {
+    param(
+        [Parameter(Mandatory = $true)][string]$Segment,
+        [Parameter(Mandatory = $true)][string]$Trigger,
+        [Parameter(Mandatory = $true)][int]$TriggerIndex
+    )
+
+    # 2026-09-04(統括の判断): 括弧の内側がtriggerの語そのものだけ(前後の
+    # 文字が丁度開き括弧・閉じ括弧で、語の前後に他の文字が無い)なら、語の
+    # 言及(mention)であって主張ではない。`「全ての折り鶴は…」`のように
+    # 括弧の内側に語以外の文が続く場合は対象外(従来どおり判定する)。
+    if ($TriggerIndex -lt 1) { return $false }
+    $openChar = $Segment[$TriggerIndex - 1]
+    $expectedClose = if ($openChar -eq '「') { '」' } elseif ($openChar -eq '『') { '』' } else { $null }
+    if ($null -eq $expectedClose) { return $false }
+    $closeIndex = $TriggerIndex + $Trigger.Length
+    if ($closeIndex -ge $Segment.Length) { return $false }
+    return $Segment[$closeIndex] -eq $expectedClose
 }
 
 function Get-RoadmapScopeAnchor {
@@ -242,7 +267,17 @@ function Get-RoadmapScopeAnchor {
     # 102本の折り目を全て` (2026-09-03 21:48) と `正本への復帰はすべて合格`
     # (2026-09-03 07:18)。roadmapの会計(`正本の未完了`・`正本の残り`・
     # `正本 N/186`・`正本のN件`)はこの除外語に含まれないため、引き続きwhole。
-    $craneBlueprintReferentExclusion = 'CP|CSV|\s*bundle|の(?:展開図|鶴|折り鶴|一括collapse|辺|頂点|折り目|102本|114辺|座標|CSV|fixture|bundle|資料)|への復帰|[^\p{L}\p{N}]{0,3}traditional_crane'
+    #
+    # 実測(2026-09-04、統括の追加指示): `正本722`・`正本 751・954`・
+    # `正本の 722 行`のように、正本の直後に3桁の数字(roadmapファイルの行番号で
+    # 1項目を指す識別子。・/、で複数列挙も可)が続く形も除外する。ただし直後に
+    # `/`(比率)・`件`・`人`・`名`・`項目`・`つ`(roadmapの会計)が続くとき、
+    # および数字が3桁でないとき(`正本175/186`・`正本の11件`)は除外しない。
+    # `正本であること`(この一式が正本だという断定。折り鶴CPの話でroadmapでは
+    # ない)も除外する。`正本と違うなら`(2026-09-04追加、統括の指示。模型のCPが
+    # 正本と一致するかという局所比較の話で、roadmapの完了状態の話ではない)も
+    # 除外する。
+    $craneBlueprintReferentExclusion = 'CP|CSV|\s*bundle|の(?:展開図|鶴|折り鶴|一括collapse|辺|頂点|折り目|102本|114辺|座標|CSV|fixture|bundle|資料)|への復帰|[^\p{L}\p{N}]{0,3}traditional_crane|であること|と違う|(?:の\s*|\s+)?[0-9]{3}(?:\s*[・、]\s*[0-9]{3})*(?:\s*行)?(?![0-9]|[/／]|件|人|名|項目|つ)'
     $roadmapSubject = '(?:正本(?!' + $craneBlueprintReferentExclusion + ')|実装ロードマップ|ロードマップ)'
     # `正本が求めた4/4` cites the source of a local criterion; it does not use
     # the roadmap as the asserted mother set.  Require the subject to lead
@@ -286,7 +321,11 @@ function Get-RoadmapScopeLocalNounPattern {
     # 段階|引数|表明|項目|箇所|動画|折り鶴|展開図|折り目|通知|警告|規約|条項|record|
     # 見出しは、roadmap正本ではない有限な局所母集合を指す語として個別の保留record
     # から実測して追加した(保留10件の精度改善)。候補・画像・辺・頂点は既存語彙。
-    return '(?:担当|エージェント|検査|テスト|契約|標本|候補|方式|変異|ファイル|生成物|画像|参照|経路|プロセス|コマンド|故障注入|監視定義|版数|撮影|説明書|スレッド|thread\s*ID|計算|結果|出力|build|typecheck|lint|worker|フラップ|折り線|姿勢|三角形|面|層|辺|頂点|頂角|対策|改定|手順|作業|段階|引数|表明|項目|箇所|動画|折り鶴|展開図|折り目|通知|警告|規約|条項|record|見出し|(?i:[A-Z0-9_.-]*(?:test|acceptance)[A-Z0-9_.-]*|passed|failed))'
+    # 点は2026-09-04の追加指示(`20点すべてで貫通0`)で足した。
+    # ところは2026-09-04の追加指示(`危ないところは全て通った`)で足した。
+    # CPは同じ実測の続きで担当が自律判断して追加した(`模型のCPが正本と違うなら`。
+    # 折り鶴の展開図(crease pattern)を指す局所語で、正本の除外語と同じ性質)。
+    return '(?:担当|エージェント|検査|テスト|契約|標本|候補|方式|変異|ファイル|生成物|画像|参照|経路|プロセス|コマンド|故障注入|監視定義|版数|撮影|説明書|スレッド|thread\s*ID|計算|結果|出力|build|typecheck|lint|worker|フラップ|折り線|姿勢|三角形|面|層|辺|頂点|頂角|対策|改定|手順|作業|段階|引数|表明|項目|箇所|動画|折り鶴|展開図|折り目|通知|警告|規約|条項|record|見出し|点|ところ|(?<![A-Za-z])CP(?![A-Za-z])|(?i:[A-Z0-9_.-]*(?:test|acceptance)[A-Z0-9_.-]*|passed|failed))'
 }
 
 function Get-ExplicitFiniteLocalContext {
@@ -566,7 +605,7 @@ function New-RoadmapScopeAssertion {
         [Parameter(Mandatory = $true)][string]$Temporal
     )
 
-    $allowedScopes = @('whole', 'bounded', 'local', 'quoted-instruction', 'denied-mention', 'ambiguous')
+    $allowedScopes = @('whole', 'bounded', 'local', 'quoted-instruction', 'denied-mention', 'word-mention', 'ambiguous')
     $allowedKinds = @('universal', 'remainder', 'progress')
     if ($allowedScopes -notcontains $Scope) {
         throw "invalid roadmap scope: $Scope"
@@ -585,6 +624,30 @@ function New-RoadmapScopeAssertion {
         Count    = $Count
         Temporal = $Temporal
     }
+}
+
+function Get-CodeSpanMaskedText {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
+
+    # Markdownの行内code span(バッククォートで囲んだ区間)は文字列そのものを
+    # 示す記法で、主張ではない。バグのパターンや過去の値を`...`で引用した
+    # 断片が、その内側だけでtriggerに再び一致するのを防ぐだけでなく、その
+    # 内側にある`正本`等がindexの離れた別のtrigger(同じ行の、code spanの
+    # 外側にある別の出現)へ誤ってwhole anchorとして「漏れて」しまうのも防ぐ
+    # ため、trigger探索・anchor探索・local binder探索の対象segmentからは
+    # code span区間を丸ごと(バッククォート込みで)同じ長さの空白へ置き換えて
+    # 見えなくする。index・長さは変えないのでLine番号や他の位置は影響を
+    # 受けない。finding表示用の元テキストは`$segmentInfo.Original`のまま。
+    # (PowerShell 5.1互換のためMatchEvaluator delegateは使わず手で組み立てる)
+    $builder = New-Object System.Text.StringBuilder
+    $lastIndex = 0
+    foreach ($spanMatch in [regex]::Matches($Text, '`[^`]*`')) {
+        [void]$builder.Append($Text.Substring($lastIndex, $spanMatch.Index - $lastIndex))
+        [void]$builder.Append([char]' ', $spanMatch.Length)
+        $lastIndex = $spanMatch.Index + $spanMatch.Length
+    }
+    [void]$builder.Append($Text.Substring($lastIndex))
+    return $builder.ToString()
 }
 
 function Get-RoadmapScopeAssertions {
@@ -642,9 +705,13 @@ function Get-RoadmapScopeAssertions {
             $previousLocalContext = $null
             foreach ($segmentInfo in @(Get-RoadmapScopeSegments -Line $line -NormalizedLine $normalizedLine)) {
                 $segment = [string]$segmentInfo.Normalized
-                $segmentLocalContext = Get-ExplicitFiniteLocalContext -Segment $segment
+                # code span(バッククォートで囲んだ区間)は文字列そのもので主張
+                # ではないので、trigger探索・anchor探索・local binder探索は
+                # すべてこのmasked版へ対して行う(index・長さは$segmentと同じ)。
+                $maskedSegment = Get-CodeSpanMaskedText -Text $segment
+                $segmentLocalContext = Get-ExplicitFiniteLocalContext -Segment $maskedSegment
                 $segmentTestContext = [regex]::Match(
-                    $segment,
+                    $maskedSegment,
                     '(?i:[A-Z0-9_.-]*(?:test|acceptance)[A-Z0-9_.-]*|passed|failed)|終了コード'
                 )
                 $triggerDefinitions = @(
@@ -654,24 +721,31 @@ function Get-RoadmapScopeAssertions {
                 )
 
                 foreach ($definition in $triggerDefinitions) {
-                    foreach ($triggerMatch in [regex]::Matches($segment, [string]$definition.Pattern)) {
+                    foreach ($triggerMatch in [regex]::Matches($maskedSegment, [string]$definition.Pattern)) {
                         $trigger = [string]$triggerMatch.Value
-                        $count = Get-RoadmapScopeCount -Segment $segment -Kind $definition.Kind -Trigger $trigger -TriggerIndex $triggerMatch.Index
-                        if (Test-RoadmapScopeDeniedMention -Segment $segment -Trigger $trigger -TriggerIndex $triggerMatch.Index) {
+                        $count = Get-RoadmapScopeCount -Segment $maskedSegment -Kind $definition.Kind -Trigger $trigger -TriggerIndex $triggerMatch.Index
+                        if (Test-RoadmapScopeDeniedMention -Segment $maskedSegment -Trigger $trigger -TriggerIndex $triggerMatch.Index) {
                             $findings.Add((New-RoadmapScopeAssertion `
                                 -Scope 'denied-mention' -Kind $definition.Kind -Segment $segment -Text $segmentInfo.Original `
                                 -Reason "strict-denial-or-correction:$trigger" -Line ($StartLine + $lineIndex) `
                                 -Trigger $trigger -Count $count -Temporal 'denied'))
                             continue
                         }
+                        if (Test-RoadmapScopeWordMention -Segment $maskedSegment -Trigger $trigger -TriggerIndex $triggerMatch.Index) {
+                            $findings.Add((New-RoadmapScopeAssertion `
+                                -Scope 'word-mention' -Kind $definition.Kind -Segment $segment -Text $segmentInfo.Original `
+                                -Reason "bracketed-word-mention:$trigger" -Line ($StartLine + $lineIndex) `
+                                -Trigger $trigger -Count $count -Temporal 'current'))
+                            continue
+                        }
 
-                        $temporal = Get-RoadmapScopeTemporal -Segment $segment -TriggerIndex $triggerMatch.Index -Trigger $trigger
-                        $isPastTransitionSegment = $segment -match '(?:増やした|減らした|進んだ|後退した)(?:うえで|後).{0,40}残り(?:は|が)(?:減|増)'
+                        $temporal = Get-RoadmapScopeTemporal -Segment $maskedSegment -TriggerIndex $triggerMatch.Index -Trigger $trigger
+                        $isPastTransitionSegment = $maskedSegment -match '(?:増やした|減らした|進んだ|後退した)(?:うえで|後).{0,40}残り(?:は|が)(?:減|増)'
                         if ($temporal -eq 'current' -and $pastRoadmapAccountingContext -and $isPastTransitionSegment -and $definition.Kind -eq 'remainder') {
                             $temporal = 'past'
                         }
                         $roadmapAnchor = Get-RoadmapScopeAnchor `
-                            -Segment $segment -Kind $definition.Kind -Trigger $trigger `
+                            -Segment $maskedSegment -Kind $definition.Kind -Trigger $trigger `
                             -TriggerIndex $triggerMatch.Index -Count $count
                         if ($null -eq $roadmapAnchor -and $pastRoadmapAccountingContext -and $isPastTransitionSegment -and $definition.Kind -eq 'remainder') {
                             $roadmapAnchor = [pscustomobject]@{
@@ -688,7 +762,7 @@ function Get-RoadmapScopeAssertions {
                         }
 
                         $localBinder = Get-ExplicitLocalBinderForTrigger `
-                            -Segment $segment -Kind $definition.Kind -Trigger $trigger `
+                            -Segment $maskedSegment -Kind $definition.Kind -Trigger $trigger `
                             -TriggerIndex $triggerMatch.Index -Count $count
                         if ($null -eq $localBinder -and $definition.Kind -eq 'remainder' -and
                             $null -ne $count -and $null -ne $previousLocalContext -and
@@ -698,12 +772,12 @@ function Get-RoadmapScopeAssertions {
                         }
                         if ($null -eq $localBinder -and $definition.Kind -eq 'universal' -and
                             $segmentTestContext.Success -and $null -ne $count -and
-                            $segment -match ('(?<![0-9])' + [regex]::Escape([string]$count) + '\s*(?:件|passed|failed)')) {
+                            $maskedSegment -match ('(?<![0-9])' + [regex]::Escape([string]$count) + '\s*(?:件|passed|failed)')) {
                             $localBinder = "same-segment-counted-test-context:$($segmentTestContext.Value):$count"
                         }
                         if ($null -eq $localBinder) {
                             $localBinder = Get-CountedExecutionResultBinder `
-                                -NormalizedLine $normalizedLine -Segment $segment `
+                                -NormalizedLine $normalizedLine -Segment $maskedSegment `
                                 -Kind $definition.Kind -Count $count
                         }
                         if ($null -ne $localBinder) {
@@ -723,7 +797,7 @@ function Get-RoadmapScopeAssertions {
                             $quotedInstructionSource = "heading-blockquote:$($segmentInfo.Original.Trim())"
                         }
                         if ($null -eq $quotedInstructionSource) {
-                            $inlineQuote = Get-UserInstructionQuotationBinder -Segment $segment -TriggerIndex $triggerMatch.Index
+                            $inlineQuote = Get-UserInstructionQuotationBinder -Segment $maskedSegment -TriggerIndex $triggerMatch.Index
                             if ($null -ne $inlineQuote) {
                                 $quotedInstructionSource = "inline-quote:$inlineQuote"
                             }

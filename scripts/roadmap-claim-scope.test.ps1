@@ -11,7 +11,7 @@ if ([string]::IsNullOrWhiteSpace($ScopeScriptPath)) {
 }
 $script:Assertions = 0
 $script:FixtureAssertions = 0
-$script:AllowedScopes = @('whole', 'bounded', 'local', 'quoted-instruction', 'denied-mention', 'ambiguous')
+$script:AllowedScopes = @('whole', 'bounded', 'local', 'quoted-instruction', 'denied-mention', 'word-mention', 'ambiguous')
 $script:AllowedKinds = @('universal', 'remainder', 'progress')
 $script:AllowedTemporal = @('current', 'past', 'future', 'denied')
 $script:RoadmapTotal = 186
@@ -130,7 +130,7 @@ function Assert-NoFindings {
 }
 
 function Test-NoneCompatible {
-    param([Parameter(Mandatory = $true)][object[]]$Findings)
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Findings)
 
     foreach ($finding in @($Findings)) {
         if ($finding.Scope -eq 'ambiguous') {
@@ -403,6 +403,49 @@ function Invoke-ContractAssertions {
     }
     Assert-Equal 10 $holdbackFixtures.Count 'all ten held-back diagnostics are fixed as fixtures'
 
+    # 2026-09-04の続きの委譲で新たに表へ出た4件(統括の指示どおり、辞書拡張と
+    # 除外語追加とcode span skipのどれかで解決する)。原文から複製したfixture。
+    $stage4Fixtures = @(
+        [pscustomobject]@{
+            Name = '2026-09-04 04:35 正本+3桁数字(行番号識別子)の除外、担当 local'
+            Lines = @('22:28〜00:08  opus の API 529 が続き、担当A（道A）・担当F（正本722）は再開を計8回試みて全て落ちた')
+        },
+        [pscustomobject]@{
+            # 実recordの当該文には「全て」が2回現れる: 1つ目は`「全て」がある
+            # 5件`(括弧の内側がtriggerの語そのものだけ→word-mention)、2つ目は
+            # code spanの内側(→masking)。両方の機構が揃って初めてこのrecordは
+            # 完全に解決する(2026-09-04の続きの委譲)。
+            Name = '2026-09-03 23:23 code span + word-mentionの両方で完全に解決'
+            Lines = @('**保留 10 件の内訳:** 利用者の指示の逐語引用の中に「全て」がある 5 件、record 自身の見出しにある 1 件、判定器が`「正本」から 32 文字以内の「全て」`を無条件に whole と見る 2 件。')
+        },
+        [pscustomobject]@{
+            Name = '2026-09-02 10:33 body 点 dictionary noun'
+            Lines = @('### 事実 — 20点すべてで貫通0')
+        },
+        [pscustomobject]@{
+            Name = '2026-09-02 02:52 正本であること除外、折り鶴 local'
+            Lines = @('| 記憶へ保存 | `traditional-crane-cp-source.md` を作成。**正本であること、全ての折り鶴と動画がこれを折れることを、次回以降の作業開始時に読み込む** |')
+        }
+    )
+    foreach ($fixture in $stage4Fixtures) {
+        $fixtureFindings = @(Get-CheckedFindings -Text $fixture.Lines)
+        Assert-True ($fixtureFindings.Count -gt 0) "stage4 fixture has findings: $($fixture.Name)"
+        Assert-True (Test-NoneCompatible -Findings $fixtureFindings) "stage4 fixture is none-compatible: $($fixture.Name)"
+        Assert-True (@($fixtureFindings | Where-Object { $_.Scope -eq 'ambiguous' -or $_.Scope -eq 'whole' -or $_.Scope -eq 'bounded' }).Count -eq 0) "stage4 fixture has no residual whole/bounded/ambiguous finding: $($fixture.Name)"
+    }
+    Assert-Equal 4 $stage4Fixtures.Count 'all four newly-surfaced diagnostics are fixed as fixtures'
+    # code spanの内側は一切finding化しない(ambiguousにも倒さない)ことを明示で固定する。
+    Assert-NoFindings -Text '判定器が`「正本」から 32 文字以内の「全て」`を無条件に whole と見る。' -Label 'code span content produces no finding at all'
+
+    # 負例: 除外語の拡張(正本+3桁数字・正本であること)は列挙した形だけに閉じる。
+    [void](Assert-SingleFinding -Text '正本の未完了は175件で、今朝と同じ。' -Scope whole -Kind remainder -Temporal current -Count 175 -Label 'negative: 正本の+3桁+件(roadmap会計) stays whole, not excluded')
+    [void](Assert-SingleFinding -Text '正本175/186まで進んだ。' -Scope whole -Kind progress -Temporal current -Count 175 -Label 'negative: 正本+3桁+比率 stays whole, not excluded')
+    [void](Assert-SingleFinding -Text '正本 751・954 が閉じ、担当はこれをすべて確認した。' -Scope local -Kind universal -Temporal current -Label 'positive: 正本 N・N (line identifiers) is excluded from the whole subject')
+    # 負例: code spanの外側にあるtriggerは引き続き拾う(緩めていない)。同じ行の
+    # 無関係なcode spanが、外側のtriggerの判定(ここではlocal binder)を邪魔
+    # しないことも確認する。
+    [void](Assert-SingleFinding -Text '検査は全て通った。`ログの場所はこちら`。' -Scope local -Kind universal -Temporal current -Label 'negative: trigger outside a code span is still caught, unaffected by an unrelated later code span')
+
     # 負例: roadmapの会計語彙は、除外語(正本CP・正本の展開図等・正本への復帰)に
     # 含まれないかぎり引き続きwholeのまま。緩和していないことを固定する。
     [void](Assert-SingleFinding -Text '正本の未完了は11件で、今朝と同じ。' -Scope whole -Kind remainder -Temporal current -Count 11 -Label 'negative: roadmap 正本の未完了 stays whole')
@@ -423,6 +466,39 @@ function Invoke-ContractAssertions {
     [void](Assert-SingleFinding -Text @('利用者の判断「すべてやり直すこと」を優先する。') -Scope quoted-instruction -Kind universal -Temporal current -Label 'quoted-instruction: inline quote form, no dictionary noun')
     Assert-NoneCompatible -Text @('### 利用者の指示', '', '> **すべてやり直して、最初から確認すること。**') -Expected $true -Label 'quoted-instruction heading form stays none-compatible'
     Assert-NoneCompatible -Text @('利用者の判断「すべてやり直すこと」を優先する。') -Expected $true -Label 'quoted-instruction inline form stays none-compatible'
+
+    # 2026-09-04(統括の判断): 括弧の内側がtriggerの語そのものだけなら
+    # word-mention(語の言及であって主張ではない)にする。
+    [void](Assert-SingleFinding -Text '利用者の指示の逐語引用の中に「全て」がある 5 件、record 自身の見出しにある 1 件。' -Scope word-mention -Kind universal -Temporal current -TriggerPattern '^全て$' -Label 'word-mention: 「」 bare word')
+    [void](Assert-SingleFinding -Text 'これは『すべて』という語の例である。' -Scope word-mention -Kind universal -Temporal current -TriggerPattern '^すべて$' -Label 'word-mention: 『』 bare word')
+    Assert-NoneCompatible -Text '利用者の指示の逐語引用の中に「全て」がある 5 件、record 自身の見出しにある 1 件。' -Expected $true -Label 'word-mention stays none-compatible'
+    # 負例: 括弧の内側にtrigger以外の文が続く場合は従来どおり判定する(word-mentionへ広げない)。
+    Assert-NoneCompatible -Text '「正本はすべて完了」という状態です。' -Expected $false -Label 'negative: bracket with more text than the trigger stays judged normally (whole, not word-mention)'
+    # 2026-09-04: 引用+て形の自己申告(`「…」と誤って報告した`)も、既存の
+    # denied-mentionの系統として認める(13:26の実recordから複製)。
+    [void](Assert-SingleFinding -Text '朝に「残り12件」と誤って報告した前例があるので、今回は分けて書く。' -Scope denied-mention -Kind remainder -Temporal denied -Label 'positive: te-form self-reported error (13:26 production wording)')
+    Assert-NoneCompatible -Text '朝に「残り12件」と誤って報告した前例があるので、今回は分けて書く。' -Expected $true -Label 'te-form self-reported error stays none-compatible'
+    # 負例: 既存の「誤りだった」形は引き続き通る。
+    [void](Assert-SingleFinding -Text '「9件すべて塞いだ」は誤りだった' -Scope denied-mention -Kind universal -Temporal denied -Count 9 -Label 'negative: existing だった-form denial still works')
+    # 負例: 引用+報告しただけ(訂正語が無い)は従来どおりwholeのまま。
+    [void](Assert-SingleFinding -Text '「正本はすべて完了」と報告した' -Scope whole -Kind universal -Temporal past -Label 'negative: quotation plus report without denial stays judged normally')
+
+    # 2026-09-04(統括の判断・段階6): 10:33の`ところ`を辞書へ、02:52の
+    # `正本と違う`を除外語へ追加する。
+    [void](Assert-SingleFinding -Text '危ないところは全て通った。残るのは設計と実装である。' -Scope local -Kind universal -Temporal current -Label 'positive: ところ dictionary noun (10:33 production wording)')
+    Assert-NoneCompatible -Text '危ないところは全て通った。残るのは設計と実装である。' -Expected $true -Label 'ところ local binder stays none-compatible'
+    # 負例: 除外語の拡張(正本と違う)を追加しても、roadmapの会計(正本の未完了等)は引き続きwhole。
+    [void](Assert-SingleFinding -Text '正本の未完了は11件で、今朝と同じ。' -Scope whole -Kind remainder -Temporal current -Count 11 -Label 'negative: 正本の未完了 stays whole even after 正本と違う exclusion')
+
+    # `正本と違う`除外だけでは、実recordの本文(02:52)はscope=ambiguousへ
+    # 変わるだけでまだ現在値照合をblockする(実測して確認)。同じ実測の続きで
+    # `CP`(折り鶴の展開図を指す局所語。正本の除外語と同じ性質)を辞書へ足し、
+    # local binderとして解決するところまで担当が自律判断で対応した。
+    [void](Assert-SingleFinding -Text '模型のCPが正本と違うなら、これまでの首の解析はすべて違う形の上で行われていたことになる。' -Scope local -Kind universal -Temporal current -Label 'positive: 正本と違う exclusion + CP dictionary noun (02:52 production wording)')
+    Assert-NoneCompatible -Text '模型のCPが正本と違うなら、これまでの首の解析はすべて違う形の上で行われていたことになる。' -Expected $true -Label '02:52 fixture stays none-compatible'
+    # 負例: CPが他の英字識別子の一部(TCP・CPU)として現れても、局所名詞として拾わない。
+    Assert-NoneCompatible -Text 'TCP接続がすべて切れた。原因は未確認。' -Expected $false -Label 'negative: TCP substring is not the CP local noun'
+    Assert-NoneCompatible -Text 'CPUの負荷はすべて正常範囲だった。原因は未確認。' -Expected $false -Label 'negative: CPU substring is not the CP local noun'
 
     # CLI mode is a supported public entry point in addition to dot-sourcing.
     $powershellExe = (Get-Process -Id $PID).Path
@@ -468,7 +544,7 @@ function Invoke-MutationChecks {
             },
             [pscustomobject]@{
                 Name = 'strict-denial-correction'
-                Find = 'if (Test-RoadmapScopeDeniedMention -Segment $segment -Trigger $trigger -TriggerIndex $triggerMatch.Index) {'
+                Find = 'if (Test-RoadmapScopeDeniedMention -Segment $maskedSegment -Trigger $trigger -TriggerIndex $triggerMatch.Index) {'
                 Replace = 'if ($false) { # MUTANT: denial disabled'
             },
             [pscustomobject]@{
@@ -511,6 +587,58 @@ function Invoke-MutationChecks {
                 Name = 'crane-blueprint-exclusion-disabled'
                 Find = "`$roadmapSubject = '(?:正本(?!' + `$craneBlueprintReferentExclusion + ')|実装ロードマップ|ロードマップ)'"
                 Replace = "`$roadmapSubject = '(?:正本|実装ロードマップ|ロードマップ)' # MUTANT: exclusion disabled"
+            },
+            [pscustomobject]@{
+                # 2026-09-04の続きの委譲で追加した`正本+3桁数字(行番号識別子)`・
+                # `正本であること`の除外だけを無効化する故障注入(既存の
+                # crane-blueprint-exclusion-disabledは除外機構全体を壊すため、
+                # 新設分だけを狙う別mutationを立てる)。04:35・02:52のfixtureが
+                # localにならず赤になることを確かめる。
+                Name = 'positional-line-identifier-exclusion-disabled'
+                Find = 'traditional_crane|であること|と違う|(?:の\s*|\s+)?[0-9]{3}(?:\s*[・、]\s*[0-9]{3})*(?:\s*行)?(?![0-9]|[/／]|件|人|名|項目|つ)'
+                Replace = 'traditional_crane|と違う' # MUTANT: 2026-09-04 additions removed
+            },
+            [pscustomobject]@{
+                # code spanのmaskingを無効化する故障注入。23:23のfixtureが
+                # (no findings)から whole へ戻り、赤になることを確かめる。
+                Name = 'code-span-masking-disabled'
+                Find = '    $builder = New-Object System.Text.StringBuilder'
+                Replace = "    return `$Text # MUTANT: code span masking disabled`n    `$builder = New-Object System.Text.StringBuilder"
+            },
+            [pscustomobject]@{
+                # word-mention機構(2026-09-04、統括の判断)を無効化する故障注入。
+                # 23:23のfixtureがword-mentionからambiguousへ戻り、赤になることを確かめる。
+                Name = 'word-mention-disabled'
+                Find = 'if (Test-RoadmapScopeWordMention -Segment $maskedSegment -Trigger $trigger -TriggerIndex $triggerMatch.Index) {'
+                Replace = 'if ($false -and (Test-RoadmapScopeWordMention -Segment $maskedSegment -Trigger $trigger -TriggerIndex $triggerMatch.Index)) { # MUTANT: word-mention disabled'
+            },
+            [pscustomobject]@{
+                # 2026-09-04に追加した「誤って報告した」て形の自己申告を無効化
+                # する故障注入。13:26のfixtureがdenied-mentionからwholeへ戻り、
+                # 赤になることを確かめる。
+                Name = 'te-form-self-report-denial-disabled'
+                Find = "`$strictDisposition = '(?:誤り(?:だった|である|です)?|誤って(?:報告|記載|記録)した|間違い"
+                Replace = "`$strictDisposition = '(?:誤り(?:だった|である|です)?|間違い"
+            },
+            [pscustomobject]@{
+                # 2026-09-04(統括の判断・段階6)で追加した`ところ`辞書語を無効化
+                # する故障注入。10:33のfixtureがwholeへ戻り、赤になることを確かめる。
+                Name = 'tokoro-dictionary-word-disabled'
+                Find = '見出し|点|ところ|(?<![A-Za-z])CP(?![A-Za-z])|(?i:'
+                Replace = '見出し|点|(?<![A-Za-z])CP(?![A-Za-z])|(?i:'
+            },
+            [pscustomobject]@{
+                # 同じ委譲で追加した`と違う`除外語を無効化する故障注入。
+                Name = 'to-chigau-exclusion-disabled'
+                Find = 'であること|と違う|(?:の\s*|\s+)?[0-9]{3}'
+                Replace = 'であること|(?:の\s*|\s+)?[0-9]{3}'
+            },
+            [pscustomobject]@{
+                # 同じ実測の続きで担当が自律判断で足した`CP`辞書語を無効化する
+                # 故障注入。02:52のfixtureがambiguousへ戻り、赤になることを確かめる。
+                Name = 'cp-dictionary-word-disabled'
+                Find = 'ところ|(?<![A-Za-z])CP(?![A-Za-z])|(?i:'
+                Replace = 'ところ|(?i:'
             }
         )
 
@@ -533,7 +661,7 @@ function Invoke-MutationChecks {
             })
             Write-Host "[MUTATION OK] $($mutation.Name): child exit=$childExit"
         }
-        Assert-Equal 10 $mutationResults.Count 'ten isolated mutations were exercised'
+        Assert-Equal 17 $mutationResults.Count 'seventeen isolated mutations were exercised'
         return $mutationResults.ToArray()
     }
     finally {

@@ -46,6 +46,10 @@ $script:legacySuffixSha256 = '47cb9d9cc60935d688fd3209cac8effa68e84365684690e809
 $script:legacyBoundaryLineIndex = -1
 $script:historicalSnapshotEvidence = @{}
 $script:recordIntroductionCommits = @{}
+$script:recordContentIdentityIntroductionCommits = @{}
+$script:regeneratedSnapshotsAtCommit = @{}
+$script:validRemediationsByRecordLine = $null
+$script:validCorrectionsByTargetLine = $null
 $script:gitExecutable = $null
 
 # 自然文の母集合・時制・否定は、通常経路とrelease経路が同じ判定器を1つだけ呼ぶ。
@@ -309,6 +313,346 @@ function Get-RecordIntroductionCommit {
     return $null
 }
 
+function Get-StrictMachineLinePatterns {
+    # Roadmap-Correction/Roadmap-Remediationの検証(2026-09-04)専用。対象record
+    # へ機械可読行を後から足すこと自体が正準hash(Get-CanonicalRecordSha256)を
+    # 変え、git履歴からその内容を見失う循環を生む(実測して確認した:
+    # scratchpad/claude-claim-precision-report.md 段階5)。厳密な書式に一致する
+    # 機械可読行(Claim/Snapshot/Bounds/Progress/Remediation/Correctionの6種)
+    # だけを除いた「内容identity」で検索することで、後から契約行を足しても
+    # 導入commitを見失わない。壊れた行・自由文・日付・本文はここでは一切
+    # 除かない(unknownを除外しない=fail-closedを保つ)。
+    return @(
+        '^Roadmap-Claim: (?:none|whole|bounded)$',
+        '^Roadmap-Snapshot: schema=1 roadmap_sha256=[0-9a-f]{64} policy_sha256=[0-9a-f]{64} scope=whole audited=\d+/\d+ partial=(?:true|false) checked=\d+ unchecked=\d+ evidence_linked=\d+ explicit_outside=\d+ unclassified=\d+$',
+        '^Roadmap-Bounds: ids=[A-Za-z0-9][A-Za-z0-9._-]*(?:,[A-Za-z0-9][A-Za-z0-9._-]*)* total=\d+ checked=\d+ unchecked=\d+$',
+        '^Roadmap-Progress: checked=\d+ total=\d+ percent=\d+(?:\.\d+)?$',
+        '^Roadmap-Remediation: schema=1 roadmap_sha256=[0-9a-f]{64} policy_sha256=[0-9a-f]{64} scope=whole audited=\d+/\d+ partial=(?:true|false) checked=\d+ unchecked=\d+ evidence_linked=\d+ explicit_outside=\d+ unclassified=\d+$',
+        '^Roadmap-Correction: schema=1 target_sha256=[0-9a-f]{64} target_commit=[0-9a-f]{40} corrected_unchecked=\d+ kind=(?:quoted-misreport|before-after|other-subject)$'
+    )
+}
+
+function Get-RecordContentIdentitySha256 {
+    param([Parameter(Mandatory = $true)]$Record)
+
+    $strictPatterns = Get-StrictMachineLinePatterns
+    $identityLines = New-Object System.Collections.Generic.List[string]
+    $identityLines.Add([string]$Record.Header)
+    foreach ($line in @($Record.BodyLines)) {
+        $lineText = [string]$line
+        $isStrictMachineLine = $false
+        foreach ($pattern in $strictPatterns) {
+            if ($lineText -match $pattern) {
+                $isStrictMachineLine = $true
+                break
+            }
+        }
+        if ($isStrictMachineLine) {
+            continue
+        }
+        $identityLines.Add($lineText)
+    }
+    while ($identityLines.Count -gt 1) {
+        $last = $identityLines[$identityLines.Count - 1].Trim()
+        if ($last.Length -ne 0 -and $last -notmatch '^(?:---|\*\*\*|___)$') {
+            break
+        }
+        $identityLines.RemoveAt($identityLines.Count - 1)
+    }
+    return Get-Utf8Sha256 -Text ($identityLines -join "`n")
+}
+
+function Test-ReportBlobContainsContentIdentityHash {
+    param(
+        [Parameter(Mandatory = $true)][byte[]]$Bytes,
+        [Parameter(Mandatory = $true)][string]$ExpectedHash
+    )
+
+    $utf8Strict = New-Object System.Text.UTF8Encoding($false, $true)
+    $blobLines = [regex]::Split($utf8Strict.GetString($Bytes), "\r\n|\n|\r")
+    for ($lineIndex = 0; $lineIndex -lt $blobLines.Count; $lineIndex++) {
+        $headerMatch = $headerPattern.Match($blobLines[$lineIndex])
+        if (-not $headerMatch.Success) {
+            continue
+        }
+        $endLineIndex = $blobLines.Count
+        for ($nextIndex = $lineIndex + 1; $nextIndex -lt $blobLines.Count; $nextIndex++) {
+            if ($blobLines[$nextIndex].StartsWith('## ', [StringComparison]::Ordinal)) {
+                $endLineIndex = $nextIndex
+                break
+            }
+        }
+        $bodyLines = if ($endLineIndex -gt $lineIndex + 1) {
+            @($blobLines[($lineIndex + 1)..($endLineIndex - 1)])
+        }
+        else { @() }
+        $candidate = [PSCustomObject]@{
+            Header = $blobLines[$lineIndex]
+            BodyLines = $bodyLines
+        }
+        if ([string]::Equals((Get-RecordContentIdentitySha256 -Record $candidate), $ExpectedHash, [StringComparison]::Ordinal)) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Get-RecordContentIdentityIntroductionCommit {
+    param([Parameter(Mandatory = $true)]$Record)
+
+    $identityHash = Get-RecordContentIdentitySha256 -Record $Record
+    if ($script:recordContentIdentityIntroductionCommits.ContainsKey($identityHash)) {
+        $cached = [string]$script:recordContentIdentityIntroductionCommits[$identityHash]
+        if ($cached.Length -eq 0) { return $null }
+        return $cached
+    }
+
+    # HEAD祖先だけを正本とする。Get-RecordIntroductionCommitと同じ骨格。
+    $historyResult = Invoke-NativeBytes -FilePath (Get-GitExecutable) -Arguments @(
+        '-C', $root, 'log', '--format=%H', '--reverse', '--follow', 'HEAD', '--', 'docs/報告記録.md'
+    )
+    if ($historyResult.ExitCode -ne 0) {
+        throw "報告記録のHEAD履歴を列挙できません: $($historyResult.Error.Trim())"
+    }
+    $utf8Strict = New-Object System.Text.UTF8Encoding($false, $true)
+    $commits = @($utf8Strict.GetString([byte[]]$historyResult.Bytes) -split '\r?\n' | Where-Object { $_ -match '^[0-9a-f]{40,64}$' })
+    foreach ($commit in $commits) {
+        $reportBytes = Get-TrackedFileBytesAtCommit -Commit $commit -RelativePath 'docs/報告記録.md'
+        if ($null -ne $reportBytes -and (Test-ReportBlobContainsContentIdentityHash -Bytes $reportBytes -ExpectedHash $identityHash)) {
+            $script:recordContentIdentityIntroductionCommits[$identityHash] = $commit
+            return $commit
+        }
+    }
+    $script:recordContentIdentityIntroductionCommits[$identityHash] = ''
+    return $null
+}
+
+function Get-RegeneratedRoadmapSnapshotAtCommit {
+    param([Parameter(Mandatory = $true)][string]$Commit)
+
+    if ($script:regeneratedSnapshotsAtCommit.ContainsKey($Commit)) {
+        return $script:regeneratedSnapshotsAtCommit[$Commit]
+    }
+    $roadmapBytes = Get-TrackedFileBytesAtCommit -Commit $Commit -RelativePath 'docs/implementation-roadmap.md'
+    $policyBytes = Get-TrackedFileBytesAtCommit -Commit $Commit -RelativePath 'scripts/roadmap-status-policy.json'
+    if ($null -eq $roadmapBytes -or $null -eq $policyBytes) {
+        $script:regeneratedSnapshotsAtCommit[$Commit] = $null
+        return $null
+    }
+    $tempParent = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd([char[]]'\/')
+    $tempName = 'ori3-report-remediation-{0}' -f [Guid]::NewGuid().ToString('N')
+    $tempRoot = [System.IO.Path]::GetFullPath((Join-Path $tempParent $tempName))
+    [void][System.IO.Directory]::CreateDirectory($tempRoot)
+    try {
+        $roadmapPath = Join-Path $tempRoot 'implementation-roadmap.md'
+        $policyPath = Join-Path $tempRoot 'roadmap-status-policy.json'
+        [System.IO.File]::WriteAllBytes($roadmapPath, $roadmapBytes)
+        [System.IO.File]::WriteAllBytes($policyPath, $policyBytes)
+        $statusResult = Invoke-NativeBytes -FilePath ((Get-Process -Id $PID).Path) -Arguments @(
+            '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+            '-File', (Join-Path $PSScriptRoot 'get-roadmap-status.ps1'),
+            '-RoadmapPath', $roadmapPath, '-PolicyPath', $policyPath, '-Format', 'Json'
+        )
+        if ($statusResult.ExitCode -ne 0) {
+            $script:regeneratedSnapshotsAtCommit[$Commit] = $null
+            return $null
+        }
+        $utf8Strict = New-Object System.Text.UTF8Encoding($false, $true)
+        $statusLines = @($utf8Strict.GetString([byte[]]$statusResult.Bytes) -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($statusLines.Count -ne 1) {
+            $script:regeneratedSnapshotsAtCommit[$Commit] = $null
+            return $null
+        }
+        $snapshot = $statusLines[0] | ConvertFrom-Json
+        if ([int]$snapshot.schema -ne 1 -or [string]$snapshot.scope -ne 'whole' -or [bool]$snapshot.partial -or
+            [int]$snapshot.audited -ne [int]$snapshot.total -or [int]$snapshot.unclassified -ne 0 -or
+            [int]$snapshot.checked + [int]$snapshot.unchecked -ne [int]$snapshot.total) {
+            $script:regeneratedSnapshotsAtCommit[$Commit] = $null
+            return $null
+        }
+        $script:regeneratedSnapshotsAtCommit[$Commit] = $snapshot
+        return $snapshot
+    }
+    finally {
+        $resolvedTemp = [System.IO.Path]::GetFullPath($tempRoot).TrimEnd([char[]]'\/')
+        if ([System.IO.Path]::GetDirectoryName($resolvedTemp) -ne $tempParent -or
+            [System.IO.Path]::GetFileName($resolvedTemp) -notmatch '^ori3-report-remediation-[0-9a-f]{32}$') {
+            throw "unsafe remediation snapshot cleanup path: $resolvedTemp"
+        }
+        Remove-Item -LiteralPath $resolvedTemp -Recurse -Force
+    }
+}
+
+function Read-ReportRemediationAccounting {
+    param([Parameter(Mandatory = $true)][string]$Line)
+
+    $match = [regex]::Match(
+        $Line,
+        '^Roadmap-Remediation: schema=1 roadmap_sha256=(?<roadmap>[0-9a-f]{64}) policy_sha256=(?<policy>[0-9a-f]{64}) scope=whole audited=(?<audited>\d+)/(?<total>\d+) partial=(?<partial>true|false) checked=(?<checked>\d+) unchecked=(?<unchecked>\d+) evidence_linked=(?<linked>\d+) explicit_outside=(?<outside>\d+) unclassified=(?<unclassified>\d+)$'
+    )
+    if (-not $match.Success) { return $null }
+    $accounting = [PSCustomObject]@{
+        RoadmapSha256   = $match.Groups['roadmap'].Value
+        PolicySha256    = $match.Groups['policy'].Value
+        Audited         = [int]$match.Groups['audited'].Value
+        Total           = [int]$match.Groups['total'].Value
+        Partial         = $match.Groups['partial'].Value
+        Checked         = [int]$match.Groups['checked'].Value
+        Unchecked       = [int]$match.Groups['unchecked'].Value
+        EvidenceLinked  = [int]$match.Groups['linked'].Value
+        ExplicitOutside = [int]$match.Groups['outside'].Value
+        Unclassified    = [int]$match.Groups['unclassified'].Value
+    }
+    if ($accounting.Partial -ne 'false' -or $accounting.Total -le 0 -or $accounting.Audited -ne $accounting.Total -or
+        $accounting.Checked + $accounting.Unchecked -ne $accounting.Total -or
+        $accounting.EvidenceLinked + $accounting.ExplicitOutside -ne $accounting.Total -or
+        $accounting.Unclassified -ne 0) {
+        return $null
+    }
+    return $accounting
+}
+
+function Build-RemediationCorrectionRegistry {
+    param([Parameter(Mandatory = $true)][object[]]$Records)
+
+    # 2026-09-04の続きの委譲: ハ4(旧形式snapshotのhash循環)とロ3
+    # (誤報の引用・before/afterの同居)を、原文を1byteも変えず閉じるための
+    # 証明付き仕組み。設計正本: scratchpad/claude-report-claims-report.md
+    # 166-201行(担当D)。内容identity(機械可読行だけを除いたhash)で
+    # 対象recordの初出commitを見つけ、本番生成器で再生成した値が宣言値と
+    # exact一致したときだけ登録する。1つでも欠ければ登録しない(fail-closed)。
+    $remediationsByLine = @{}
+    foreach ($record in $Records) {
+        $remediationLines = @($record.BodyLines | Where-Object { ([string]$_).StartsWith('Roadmap-Remediation:', [StringComparison]::Ordinal) })
+        if ($remediationLines.Count -eq 0) { continue }
+        if ($remediationLines.Count -ne 1) {
+            Add-FormatProblem "$($record.LineIndex + 1)行目に Roadmap-Remediation が複数あります。正確に1行にしてください。"
+            continue
+        }
+        $declared = Read-ReportRemediationAccounting -Line ([string]$remediationLines[0])
+        if ($null -eq $declared) {
+            Add-FormatProblem "$($record.LineIndex + 1)行目の Roadmap-Remediation はschema=1の全件会計になっていません。"
+            continue
+        }
+        $introCommit = Get-RecordContentIdentityIntroductionCommit -Record $record
+        if ([string]::IsNullOrWhiteSpace([string]$introCommit)) {
+            Add-FormatProblem "$($record.LineIndex + 1)行目の Roadmap-Remediation を、そのrecordの内容identity(機械可読行を除いた本文)からHEAD初出commitを特定できません。"
+            continue
+        }
+        $regenerated = Get-RegeneratedRoadmapSnapshotAtCommit -Commit $introCommit
+        if ($null -eq $regenerated -or
+            -not [string]::Equals([string]$regenerated.roadmap_sha256, $declared.RoadmapSha256, [StringComparison]::Ordinal) -or
+            -not [string]::Equals([string]$regenerated.policy_sha256, $declared.PolicySha256, [StringComparison]::Ordinal) -or
+            [int]$regenerated.checked -ne $declared.Checked -or [int]$regenerated.unchecked -ne $declared.Unchecked -or
+            [int]$regenerated.total -ne $declared.Total -or [int]$regenerated.evidence_linked -ne $declared.EvidenceLinked -or
+            [int]$regenerated.explicit_outside -ne $declared.ExplicitOutside) {
+            Add-FormatProblem "$($record.LineIndex + 1)行目の Roadmap-Remediation を、初出commit $introCommit の tracked roadmap/policy blobから本番生成器で再現できません。"
+            continue
+        }
+        $remediationsByLine[[int]$record.LineIndex] = $declared
+    }
+
+    # Roadmap-Correctionは(a)〜(e)全部が揃った候補だけを先に集め、同じtargetを
+    # 二重に持つ候補があれば両方とも無効にしてから登録する。
+    $candidateCorrections = New-Object System.Collections.Generic.List[object]
+    foreach ($record in $Records) {
+        $correctionLines = @($record.BodyLines | Where-Object { ([string]$_).StartsWith('Roadmap-Correction:', [StringComparison]::Ordinal) })
+        if ($correctionLines.Count -eq 0) { continue }
+        if ($correctionLines.Count -ne 1) {
+            Add-FormatProblem "$($record.LineIndex + 1)行目に Roadmap-Correction が複数あります。正確に1行にしてください。"
+            continue
+        }
+        $line = [string]$correctionLines[0]
+        $match = [regex]::Match(
+            $line,
+            '^Roadmap-Correction: schema=1 target_sha256=(?<target>[0-9a-f]{64}) target_commit=(?<commit>[0-9a-f]{40}) corrected_unchecked=(?<corrected>\d+) kind=(?<kind>quoted-misreport|before-after|other-subject)$'
+        )
+        if (-not $match.Success) {
+            Add-FormatProblem "$($record.LineIndex + 1)行目の Roadmap-Correction が正確な書式ではありません: $line"
+            continue
+        }
+        $targetSha256 = [string]$match.Groups['target'].Value
+        $targetCommit = [string]$match.Groups['commit'].Value
+        $correctedUnchecked = [int]$match.Groups['corrected'].Value
+
+        # (a) target_sha256が現在のdocs/報告記録.md中で一意なrecordを指すこと。
+        $targetRecords = @($Records | Where-Object { (Get-RecordContentIdentitySha256 -Record $_) -eq $targetSha256 })
+        if ($targetRecords.Count -ne 1) {
+            Add-FormatProblem "$($record.LineIndex + 1)行目の Roadmap-Correction の target_sha256 が、現在のdocs/報告記録.md中の record 1件と一意に一致しません (実際: $($targetRecords.Count)件)。"
+            continue
+        }
+        $targetRecord = $targetRecords[0]
+
+        # (d) 訂正recordの日時が対象recordより後。
+        if ($record.Timestamp -le $targetRecord.Timestamp) {
+            Add-FormatProblem "$($record.LineIndex + 1)行目の Roadmap-Correction は、対象record($($targetRecord.LineIndex + 1)行目)より後の日時である必要があります。"
+            continue
+        }
+
+        # (b) target_commitが、targetRecordの内容identityから独立に求めた
+        # 初出commitと一致すること。
+        $trueIntroCommit = Get-RecordContentIdentityIntroductionCommit -Record $targetRecord
+        if ([string]::IsNullOrWhiteSpace([string]$trueIntroCommit) -or
+            -not [string]::Equals($trueIntroCommit, $targetCommit, [StringComparison]::OrdinalIgnoreCase)) {
+            Add-FormatProblem "$($record.LineIndex + 1)行目の Roadmap-Correction の target_commit が、対象record($($targetRecord.LineIndex + 1)行目)から独立に求めた初出commitと一致しません (期待: $trueIntroCommit)。"
+            continue
+        }
+
+        # (c) そのcommit時点のtracked roadmap/policyを本番生成器へ通した
+        # uncheckedがcorrected_uncheckedとexact一致すること。
+        $regenerated = Get-RegeneratedRoadmapSnapshotAtCommit -Commit $targetCommit
+        if ($null -eq $regenerated -or [int]$regenerated.unchecked -ne $correctedUnchecked) {
+            Add-FormatProblem "$($record.LineIndex + 1)行目の Roadmap-Correction の corrected_unchecked が、初出commit $targetCommit の tracked roadmap/policy blobから本番生成器で再現した値と一致しません。"
+            continue
+        }
+
+        $candidateCorrections.Add([PSCustomObject]@{
+            SourceLineIndex    = [int]$record.LineIndex
+            TargetSha256       = $targetSha256
+            TargetLineIndex    = [int]$targetRecord.LineIndex
+            CorrectedUnchecked = $correctedUnchecked
+        })
+    }
+
+    # (e) 元と訂正が互いに1件だけ。重複するtargetは両方とも無効にする。
+    $countByTarget = @{}
+    foreach ($candidate in $candidateCorrections) {
+        $key = [string]$candidate.TargetSha256
+        if (-not $countByTarget.ContainsKey($key)) { $countByTarget[$key] = 0 }
+        $countByTarget[$key] = [int]$countByTarget[$key] + 1
+    }
+    $correctionsByTargetLine = @{}
+    foreach ($candidate in $candidateCorrections) {
+        $key = [string]$candidate.TargetSha256
+        if ([int]$countByTarget[$key] -ne 1) {
+            Add-FormatProblem "$($candidate.SourceLineIndex + 1)行目の Roadmap-Correction は、同じ target_sha256 を持つ訂正が複数あるため、どれも無効です。"
+            continue
+        }
+        if (-not $correctionsByTargetLine.ContainsKey([int]$candidate.TargetLineIndex)) {
+            $correctionsByTargetLine[[int]$candidate.TargetLineIndex] = New-Object System.Collections.Generic.List[int]
+        }
+        $correctionsByTargetLine[[int]$candidate.TargetLineIndex].Add([int]$candidate.CorrectedUnchecked)
+    }
+
+    $script:validRemediationsByRecordLine = $remediationsByLine
+    $script:validCorrectionsByTargetLine = $correctionsByTargetLine
+}
+
+function Test-RecordHasValidatedCorrection {
+    param([Parameter(Mandatory = $true)]$Record)
+
+    # 実測(2026-09-04)で判明: blockingになる数字は「訂正された正しい値」
+    # (corrected_unchecked)ではなく、本文が誤って述べた値(例: 04:44は本文が
+    # 「13件」、correctedは14。12:07は本文の「before」側「14件」、correctedは
+    # 12)である。特定の数字だけを免除するとbefore/after・誤報のどちらの形も
+    # 救えないため、検証済みRoadmap-Correctionがこのrecordをtargetとして
+    # 指しているときは、そのrecord内の数値つきの断言すべてを現在値照合から
+    # 免除する(scope分類・vagueな断言の要求は変えない。免除するのは
+    # 「現在値と一致するか」の照合だけ)。
+    return ($null -ne $script:validCorrectionsByTargetLine -and
+        $script:validCorrectionsByTargetLine.ContainsKey([int]$Record.LineIndex))
+}
+
 function Test-HistoricalSnapshotEvidence {
     param(
         [Parameter(Mandatory = $true)][string]$SnapshotLine,
@@ -479,13 +823,26 @@ function Get-BlockingScopeClaim {
     param(
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$LineText,
         [Parameter(Mandatory = $true)][string]$Pattern,
-        [Parameter(Mandatory = $true)][AllowEmptyCollection()][AllowNull()][object[]]$Assertions
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][AllowNull()][object[]]$Assertions,
+        [bool]$ExemptForValidatedCorrection = $false
     )
 
     # 判定器は「分かったものだけを免除する」。敏感語のraw matchに対応する判定が
     # 1件も無ければ、未知の表現としてambiguous扱いで止める。unknownをlocalと
     # 推測しない。したがってこの関数は、従来の裸の語による拒否を減らすことしか
     # できず、新しい見逃しを作らない。
+    #
+    # $ExemptForValidatedCorrectionは2026-09-04の続きの委譲で追加した、検証済み
+    # Roadmap-Correctionがこのrecordをtargetとして指すときだけ$trueになる
+    # (scope分類そのものは変えない。whole/ambiguous判定はそのまま。免除する
+    # のは「現在値と一致するか」の照合だけ)。実測で判明: blockingになる数字は
+    # 訂正後の正しい値ではなく、本文が誤って述べた値(quoted-misreport)や
+    # before/afterの「before」側の値なので、特定のCountだけを免除しても
+    # 救えない。Countを持つ(=数値つきの)候補はすべて免除する。
+    # 2026-09-04の統括の追加判断: 07:30のような数字を伴わない残件断言
+    # (`残作業そのものだけ`。kind=remainder・Count=null)も、検証済み
+    # Correctionが「corrected_uncheckedを主張している」と読んで免除する
+    # (kind=universalの無限定な断言は対象外のまま。remainderだけ)。
     foreach ($rawMatch in [regex]::Matches($LineText, $Pattern)) {
         $rawText = [string]$rawMatch.Value
         if ($rawText.Length -eq 0) {
@@ -508,6 +865,10 @@ function Get-BlockingScopeClaim {
             $temporal = [string]$assertion.Temporal
             if ($scope -eq 'ambiguous' -or
                 (($scope -eq 'whole' -or $scope -eq 'bounded') -and $temporal -eq 'current')) {
+                if ($ExemptForValidatedCorrection -and
+                    ($null -ne $assertion.Count -or [string]$assertion.Kind -eq 'remainder')) {
+                    continue
+                }
                 return [PSCustomObject]@{
                     Text     = $rawText
                     Scope    = $scope
@@ -542,7 +903,8 @@ function Get-FirstBlockingScopeClaim {
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][AllowEmptyString()][string[]]$RecordLines,
         [Parameter(Mandatory = $true)][int]$FirstLineNumber,
         [Parameter(Mandatory = $true)][hashtable]$AssertionsByLine,
-        [Parameter(Mandatory = $true)][string]$Pattern
+        [Parameter(Mandatory = $true)][string]$Pattern,
+        [bool]$ExemptForValidatedCorrection = $false
     )
 
     for ($offset = 0; $offset -lt $RecordLines.Count; $offset++) {
@@ -550,7 +912,8 @@ function Get-FirstBlockingScopeClaim {
         $blocking = Get-BlockingScopeClaim `
             -LineText ([string]$RecordLines[$offset]) `
             -Pattern $Pattern `
-            -Assertions (Get-ScopeAssertionsForLine -AssertionsByLine $AssertionsByLine -LineNumber $lineNumber)
+            -Assertions (Get-ScopeAssertionsForLine -AssertionsByLine $AssertionsByLine -LineNumber $lineNumber) `
+            -ExemptForValidatedCorrection $ExemptForValidatedCorrection
         if ($null -ne $blocking) {
             return [PSCustomObject]@{
                 Line     = $lineNumber
@@ -613,9 +976,13 @@ function Test-RoadmapClaimRecord {
     $recordLines = @(@($normalizedHeader) + $normalizedBodyLines)
     $firstRecordLineNumber = [int]$Record.LineIndex + 1
     $scopeAssertionsByLine = Get-RecordScopeAssertionsByLine -Record $Record
+    # 2026-09-04の続きの委譲: 検証済みRoadmap-Correctionが、このrecordを
+    # targetとして指すときだけ、数値つきの断言を現在値照合から免除する。
+    $hasValidatedCorrection = Test-RecordHasValidatedCorrection -Record $Record
     $blockingCompleteness = Get-FirstBlockingScopeClaim `
         -RecordLines $recordLines -FirstLineNumber $firstRecordLineNumber `
-        -AssertionsByLine $scopeAssertionsByLine -Pattern $completenessPattern
+        -AssertionsByLine $scopeAssertionsByLine -Pattern $completenessPattern `
+        -ExemptForValidatedCorrection $hasValidatedCorrection
 
     $expectedSnapshotLine = [string]$script:snapshot.report_snapshot_line
     $snapshotLines = @($bodyLines | Where-Object { $_ -match '^Roadmap-Snapshot:' })
@@ -643,7 +1010,34 @@ function Test-RoadmapClaimRecord {
     else {
         $recordSnapshot = Read-ReportSnapshotAccounting -Line ([string]$snapshotLines[0])
         if ($null -eq $recordSnapshot) {
-            Add-FormatProblem "$($Record.LineIndex + 1)行目の Roadmap-Snapshot はschema=1の全件会計になっていません。"
+            # 2026-09-04の続きの委譲: 旧形式(schema=1でない)Roadmap-Snapshotは
+            # 原文を1byteも変えず、検証済みRoadmap-Remediationがあるときだけ
+            # その値を会計の正本として使う(ハ4件、旧短縮形snapshotのhash循環)。
+            $remediation = $null
+            if ($null -ne $script:validRemediationsByRecordLine -and
+                $script:validRemediationsByRecordLine.ContainsKey([int]$Record.LineIndex)) {
+                $remediation = $script:validRemediationsByRecordLine[[int]$Record.LineIndex]
+            }
+            if ($null -ne $remediation) {
+                $recordSnapshot = [PSCustomObject]@{
+                    Schema          = 1
+                    RoadmapSha256   = [string]$remediation.RoadmapSha256
+                    PolicySha256    = [string]$remediation.PolicySha256
+                    Scope           = 'whole'
+                    Audited         = [int]$remediation.Audited
+                    Total           = [int]$remediation.Total
+                    Partial         = 'false'
+                    Checked         = [int]$remediation.Checked
+                    Unchecked       = [int]$remediation.Unchecked
+                    EvidenceLinked  = [int]$remediation.EvidenceLinked
+                    ExplicitOutside = [int]$remediation.ExplicitOutside
+                    Unclassified    = 0
+                }
+                Write-Host "[OK] $($Record.LineIndex + 1)行目の旧形式 Roadmap-Snapshot は、検証済み Roadmap-Remediation により、そのrecordの内容identityのHEAD初出commitにあるtracked roadmap/policy blobから本番生成器で再現できました。"
+            }
+            else {
+                Add-FormatProblem "$($Record.LineIndex + 1)行目の Roadmap-Snapshot はschema=1の全件会計になっていません。"
+            }
         }
         elseif ($RequireCurrentSnapshot -and -not [string]::Equals([string]$snapshotLines[0], $expectedSnapshotLine, [StringComparison]::Ordinal)) {
             Add-FormatProblem "$($Record.LineIndex + 1)行目の最新 Roadmap-Snapshot が現在の実測値と一致しません。期待値: $expectedSnapshotLine"
@@ -725,7 +1119,8 @@ function Test-RoadmapClaimRecord {
             -LineText $recordLineText -Pattern $remainderPattern `
             -Assertions (Get-ScopeAssertionsForLine `
                 -AssertionsByLine $scopeAssertionsByLine `
-                -LineNumber ($firstRecordLineNumber + $recordLineOffset))
+                -LineNumber ($firstRecordLineNumber + $recordLineOffset)) `
+            -ExemptForValidatedCorrection $hasValidatedCorrection
         if ($null -ne $blockingRemainder) {
             $remainderLines.Add($recordLineText)
         }
@@ -1320,6 +1715,9 @@ else {
             }
 
             $newRecords = @($records | Where-Object { $_.LineIndex -lt $script:legacyBoundaryLineIndex })
+            # Roadmap-Correction/Roadmap-Remediationはrecordを跨いで参照するため、
+            # 個々のrecordを検査する前に全件へ通し、登録を1回だけ済ませる。
+            Build-RemediationCorrectionRegistry -Records $newRecords
             $latestNewRecordLineIndex = if ($newRecords.Count -gt 0) { $newRecords[0].LineIndex } else { -1 }
             $seenNewRecordHashes = @{}
             foreach ($record in $newRecords) {
