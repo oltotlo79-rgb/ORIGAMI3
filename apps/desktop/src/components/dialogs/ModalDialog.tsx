@@ -92,55 +92,185 @@ function hasDisabledState(element: Element): boolean {
   return false;
 }
 
-function isHidden(element: Element, ignoreInert = false): boolean {
-  const hiddenSelector = ignoreInert
-    ? "[hidden], [aria-hidden='true']"
-    : "[hidden], [aria-hidden='true'], [inert]";
-  if (element.closest(hiddenSelector)) return true;
-  let current: Element | null = element;
-  while (current) {
-    const style = window.getComputedStyle(current);
-    if (style.display === "none" || style.visibility === "hidden") return true;
-    if (current instanceof HTMLDetailsElement && !current.open) {
-      const firstSummary = [...current.children].find(
-        (child) => child instanceof HTMLElement && child.tagName === "SUMMARY",
-      );
-      if (!firstSummary?.contains(element)) return true;
-    }
-    current = current.parentElement;
+/**
+ * 1回の列挙のあいだだけ、祖先の「見えないか」を覚えておく手控え。
+ *
+ * 同じ画面の要素は祖先をほとんど共有するため、覚えておかないと同じ祖先の
+ * 表示状態を要素の数だけ調べ直すことになる。判定の内容は変えず、同じ答えを
+ * 二度計算しないだけである。DOMは列挙のあいだに変わらないので、手控えは
+ * 列挙ごとに作って捨てる。
+ */
+type VisibilityMemo = Map<Element, boolean>;
+
+/** 閉じた `<details>` の中（最初の `<summary>` の外）にあるか。 */
+function isInsideClosedDetails(element: Element): boolean {
+  let closed = element.closest("details:not([open])");
+  while (closed instanceof HTMLDetailsElement) {
+    const firstSummary = [...closed.children].find(
+      (child) => child instanceof HTMLElement && child.tagName === "SUMMARY",
+    );
+    if (!firstSummary?.contains(element)) return true;
+    closed = closed.parentElement?.closest("details:not([open])") ?? null;
   }
   return false;
 }
 
-function isRadioTabStop(element: FocusTarget, root: ParentNode): boolean {
+/** 自分か祖先が `display:none` / `visibility:hidden` か。 */
+function hasHiddenStyleChain(element: Element, memo?: VisibilityMemo): boolean {
+  const walked: Element[] = [];
+  let current: Element | null = element;
+  let hidden = false;
+  while (current) {
+    const remembered = memo?.get(current);
+    if (remembered !== undefined) {
+      hidden = remembered;
+      break;
+    }
+    const style = window.getComputedStyle(current);
+    walked.push(current);
+    if (style.display === "none" || style.visibility === "hidden") {
+      hidden = true;
+      break;
+    }
+    current = current.parentElement;
+  }
+  if (memo) for (const node of walked) memo.set(node, hidden);
+  return hidden;
+}
+
+function isHidden(
+  element: Element,
+  ignoreInert = false,
+  memo?: VisibilityMemo,
+): boolean {
+  const hiddenSelector = ignoreInert
+    ? "[hidden], [aria-hidden='true']"
+    : "[hidden], [aria-hidden='true'], [inert]";
+  if (element.closest(hiddenSelector)) return true;
+  if (isInsideClosedDetails(element)) return true;
+  return hasHiddenStyleChain(element, memo);
+}
+
+function isRadioTabStop(
+  element: FocusTarget,
+  root: ParentNode,
+  memo?: VisibilityMemo,
+  radios?: HTMLInputElement[],
+): boolean {
   if (!(element instanceof HTMLInputElement) || element.type !== "radio" || !element.name) {
     return true;
   }
-  const group = [...root.querySelectorAll<HTMLInputElement>("input[type='radio']")].filter(
+  const all =
+    radios ?? [...root.querySelectorAll<HTMLInputElement>("input[type='radio']")];
+  const group = all.filter(
     (radio) =>
       radio.name === element.name &&
       radio.form === element.form &&
       !hasDisabledState(radio) &&
-      !isHidden(radio),
+      !isHidden(radio, false, memo),
   );
   const checked = group.find((radio) => radio.checked);
   return checked ? checked === element : group[0] === element;
 }
 
-/** 現在のTab順に入る、有効で見えている要素だけを返す。 */
-export function focusableElements(root: ParentNode): FocusTarget[] {
-  const candidates = [...root.querySelectorAll(FOCUSABLE_SELECTOR)]
+/**
+ * 1回の走査のあいだ使い回す道具。表示状態の手控えと、radioの一覧を持つ。
+ *
+ * radioの一覧は、走査の中で最初にradioを見たときだけ作る。
+ */
+interface TabStopScan {
+  root: ParentNode;
+  memo: VisibilityMemo;
+  radios?: HTMLInputElement[];
+}
+
+function newScan(root: ParentNode): TabStopScan {
+  return { root, memo: new Map() };
+}
+
+/**
+ * 表示状態を見ない、軽い側の条件だけを見る。
+ *
+ * `getComputedStyle` は1要素あたりの費用が大きいので、まずここで落とせるものを落とす。
+ */
+function isCheapTabStopCandidate(element: FocusTarget): boolean {
+  return (
+    element.isConnected &&
+    element.tabIndex >= 0 &&
+    !hasDisabledState(element) &&
+    !(element instanceof HTMLInputElement && element.type === "hidden")
+  );
+}
+
+/** 表示状態とradio groupまで見て、本当にTab順へ入るか決める。 */
+function isVisibleTabStop(element: FocusTarget, scan: TabStopScan): boolean {
+  if (isHidden(element, false, scan.memo)) return false;
+  if (element instanceof HTMLInputElement && element.type === "radio") {
+    scan.radios ??= [
+      ...scan.root.querySelectorAll<HTMLInputElement>("input[type='radio']"),
+    ];
+  }
+  return isRadioTabStop(element, scan.root, scan.memo, scan.radios);
+}
+
+/** Tab順に入り得る要素を、表示状態を見ずに書かれた順で集める。 */
+function cheapTabStopCandidates(root: ParentNode): FocusTarget[] {
+  return [...root.querySelectorAll(FOCUSABLE_SELECTOR)]
     .map(asFocusTarget)
     .filter((element): element is FocusTarget => element !== null)
-    .filter(
-      (element) =>
-        element.isConnected &&
-        element.tabIndex >= 0 &&
-        !hasDisabledState(element) &&
-        !(element instanceof HTMLInputElement && element.type === "hidden") &&
-        !isHidden(element) &&
-        isRadioTabStop(element, root),
-    );
+    .filter(isCheapTabStopCandidate);
+}
+
+/**
+ * Tab順の両端と、いま焦点のある要素がTab順に入っているかだけを求める。
+ *
+ * 折り返しの判定に要るのはこの3つだけなので、Tabのたびに全要素の表示状態を
+ * 調べ直さず、前後の端が見つかった時点で止める。`tabindex` に正の値を持つ要素が
+ * ある画面だけは並びが書かれた順と変わるため、そのときは今までどおり
+ * 全体を並べてから両端を取る。判定の内容はどちらの経路でも同じである。
+ */
+function tabOrderEdges(
+  root: ParentNode,
+  active: FocusTarget | null,
+): { first: FocusTarget | null; last: FocusTarget | null; activeInOrder: boolean } {
+  const candidates = cheapTabStopCandidates(root);
+  if (candidates.some((element) => element.tabIndex > 0)) {
+    const ordered = focusableElements(root);
+    return {
+      first: ordered[0] ?? null,
+      last: ordered[ordered.length - 1] ?? null,
+      activeInOrder: active !== null && ordered.includes(active),
+    };
+  }
+
+  const scan = newScan(root);
+  let first: FocusTarget | null = null;
+  for (const element of candidates) {
+    if (isVisibleTabStop(element, scan)) {
+      first = element;
+      break;
+    }
+  }
+  let last: FocusTarget | null = null;
+  for (let index = candidates.length - 1; index >= 0; index -= 1) {
+    if (isVisibleTabStop(candidates[index], scan)) {
+      last = candidates[index];
+      break;
+    }
+  }
+  const activeInOrder =
+    active !== null &&
+    candidates.includes(active) &&
+    isVisibleTabStop(active, scan);
+  return { first, last, activeInOrder };
+}
+
+/** 現在のTab順に入る、有効で見えている要素だけを返す。 */
+export function focusableElements(root: ParentNode): FocusTarget[] {
+  const scan = newScan(root);
+  const candidates = cheapTabStopCandidates(root).filter((element) =>
+    isVisibleTabStop(element, scan),
+  );
 
   return candidates
     .map((element, order) => ({ element, order }))
@@ -268,17 +398,15 @@ export function handleDialogKeyDown(event: KeyboardEvent, entry: StackEntry): vo
   }
   if (event.key !== "Tab") return;
 
-  const elements = focusableElements(entry.dialog);
   const active = asFocusTarget(document.activeElement);
-  if (elements.length === 0) {
+  const { first, last, activeInOrder } = tabOrderEdges(entry.dialog, active);
+  if (first === null || last === null) {
     event.preventDefault();
     focusWithoutScroll(entry.dialog as FocusTarget);
     return;
   }
 
-  const first = elements[0];
-  const last = elements[elements.length - 1];
-  const outsideTabOrder = active === null || !elements.includes(active);
+  const outsideTabOrder = !activeInOrder;
   if (
     outsideTabOrder ||
     (event.shiftKey && active === first) ||

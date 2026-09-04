@@ -421,6 +421,7 @@ describe("上からKひだを選ぶ境界", () => {
       "alignment",
       "finish_soft",
       "note",
+      "technique_classification",
     ]);
     expect(rustPublicFields(stepCreases)).toEqual(["step", "lines"]);
     expect(rustPublicFields(savedDocument)).toEqual(["document", "step_creases"]);
