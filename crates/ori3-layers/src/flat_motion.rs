@@ -1433,3 +1433,115 @@ fn tear_warnings(
     }
     out
 }
+
+#[cfg(test)]
+mod evidence_wanted_tests {
+    use super::*;
+    use crate::fold_through::{FoldThroughInput, fold_through};
+    use ori3_model::{Document, Paper};
+
+    /// 標本の折り線。正方形の紙を左右に二つ折りにする。
+    const LINE: [[f64; 2]; 2] = [[0.5, 0.0], [0.5, 1.0]];
+
+    /// 正方形1枚を `LINE` で折る、いちばん小さい標本。
+    /// 紙と折り線は `crates/ori3-layers/tests/flat_motion.rs` の
+    /// `simple_fold_gives_the_same_result_as_fold_through` と同じものを使う。
+    fn square_and_simple_fold() -> (CreasePattern, Vec<Face>, FlatState, FlatMotionInput) {
+        let doc = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        let faces = extract_faces(&doc.cp);
+        let state = FlatState::initial(&doc.cp, &faces);
+        let input = FlatMotionInput {
+            parts: vec![MotionPart::fold(
+                Vec::new(),
+                LINE,
+                [0.75, 0.5],
+                FoldDirection::Up,
+            )],
+            kind: TechniqueKind::Simple,
+        };
+        (doc.cp, faces, state, input)
+    }
+
+    /// 由来を集めるのは、それを求めた入口だけである。
+    ///
+    /// 同じ紙・同じ動きを両方の旗で走らせ、`EvidenceWanted::No` では
+    /// `TechniqueEvidence::default()` のままであること、`EvidenceWanted::Yes` では
+    /// **既定値と違う**由来が返ることを1つの検査で確かめる。片側だけを見ると
+    /// 「どちらの旗でも常に既定値」という壊れ方を見逃すため、両側を必ず見る。
+    #[test]
+    fn evidence_is_collected_only_when_the_entry_asks_for_it() {
+        let (cp, faces, state, input) = square_and_simple_fold();
+
+        let without = run_motion(&cp, &faces, &state, &input, EvidenceWanted::No)
+            .expect("正方形の二つ折りは動かせる指定");
+        assert_eq!(
+            without.evidence,
+            TechniqueEvidence::default(),
+            "EvidenceWanted::No の入口は由来を集めない"
+        );
+
+        let with = run_motion(&cp, &faces, &state, &input, EvidenceWanted::Yes)
+            .expect("正方形の二つ折りは動かせる指定");
+        assert_ne!(
+            with.evidence,
+            TechniqueEvidence::default(),
+            "EvidenceWanted::Yes は既定値と違う由来を返す(上の表明が空振りしないこと)"
+        );
+
+        // 旗が変えるのは由来だけで、紙の動きは1つも変えない。
+        assert_eq!(without.cp, with.cp, "展開図は旗で変わらない");
+        assert_eq!(
+            without.result.state.order, with.result.state.order,
+            "重なり順は旗で変わらない"
+        );
+        assert_eq!(
+            without.result.step.drivers, with.result.step.drivers,
+            "記録する折り線は旗で変わらない"
+        );
+        assert_eq!(without.crossed_any, with.crossed_any);
+        assert_eq!(without.promoted_aux_edges, with.promoted_aux_edges);
+    }
+
+    /// [`fold_through`] は同じ動きを `EvidenceWanted::No` で走らせる入口である。
+    ///
+    /// `fold_through` 自身は由来を返さないので、同じ紙・同じ折り線で
+    /// 展開図と重なり順が一致することを先に確かめ、「`fold_through` が内部で回すのと
+    /// 同じ動き」を測っていることを示したうえで、その動きの由来が既定値のままだと表明する。
+    #[test]
+    fn fold_through_runs_the_same_motion_without_collecting_evidence() {
+        let (cp, faces, state, input) = square_and_simple_fold();
+
+        let mut folded_cp = cp.clone();
+        let through = fold_through(
+            &mut folded_cp,
+            &faces,
+            &state,
+            &FoldThroughInput {
+                line: LINE,
+                keep_side_point: [0.25, 0.5],
+                target_layers: None,
+                direction: FoldDirection::Up,
+            },
+        )
+        .expect("従来の折りでも折れる指定");
+
+        let out = run_motion(&cp, &faces, &state, &input, EvidenceWanted::No)
+            .expect("正方形の二つ折りは動かせる指定");
+        assert_eq!(
+            folded_cp, out.cp,
+            "fold_through が内部で回すのと同じ動きを測っている(展開図が一致)"
+        );
+        assert_eq!(
+            through.state.order, out.result.state.order,
+            "fold_through が内部で回すのと同じ動きを測っている(重なり順が一致)"
+        );
+        assert_eq!(
+            out.evidence,
+            TechniqueEvidence::default(),
+            "fold_through が渡す EvidenceWanted::No では由来を集めない"
+        );
+    }
+}

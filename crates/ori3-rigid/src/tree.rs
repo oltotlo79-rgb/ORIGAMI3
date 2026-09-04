@@ -595,6 +595,21 @@ pub fn to_frame3d(cp: &CreasePattern, faces: &[Face], frame: &FoldedFrame) -> Fr
     to_frame3d_with_surface_order(cp, faces, frame, true)
 }
 
+/// 多角形・裏表・警告だけを使う呼び出し向けの [`to_frame3d`]。
+///
+/// 面の座標・`mirrored`・`warnings` は [`to_frame3d`] と同じ値になる。違うのは
+/// `surface_rank` だけで、こちらは展開図の材質多角形から決まるseed順のままにする。
+/// 重なり順を読まない用途(2つの姿勢の幾何が一致するかを確かめるだけ、など)で
+/// 高価な重なり順の導出を走らせないための入口であり、
+/// 重なり順が要る呼び出しは [`to_frame3d`] を使うこと。
+pub fn to_frame3d_geometry_only(
+    cp: &CreasePattern,
+    faces: &[Face],
+    frame: &FoldedFrame,
+) -> Frame3D {
+    to_frame3d_with_surface_order(cp, faces, frame, false)
+}
+
 /// 全ヒンジ角からcompleteなcanonical surface順と、次手順へ渡す幾何provenanceを返す。
 ///
 /// 前姿勢のprovenanceは、前姿勢でも現在姿勢でも正面積を共有する面対にだけ使われる。

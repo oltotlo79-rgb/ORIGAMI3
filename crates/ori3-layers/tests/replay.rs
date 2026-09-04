@@ -491,6 +491,8 @@ fn replay_of_ten_steps_on_400_faces_is_under_three_seconds() {
 /// 移動後のrelease 20回連続実測(2026-08-20、Windows 11開発機、失敗0件)の
 /// 最良3回値は、最大37.3821ms・中央33.3509ms・最小30.3384ms。3秒上限に対する
 /// 最大÷上限は0.0125で、手元の最大値は1/3以下である。
+/// 2026-09-04の再測定(同じ開発機、他のcargo 0件)は中央269.7658ms、
+/// 中央÷上限0.0899。cfbb847で束の重なり順を幾何から求めるようになった費用。
 #[test]
 fn replay_mid_fold_of_ten_steps_on_400_faces_is_under_three_seconds() {
     let doc = accordion_document();

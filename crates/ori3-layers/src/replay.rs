@@ -1876,7 +1876,10 @@ fn stamp_canonical_surface_order_from_angles(
         previous,
     );
     let (order, provenance) = derived.ok()?;
-    let rank_frame = ori3_rigid::to_frame3d(
+    // 比べるのは面の座標と裏表だけなので、重なり順を求めない入口を使う。
+    // `to_frame3d` はここで使わない重なり順を毎回導出し直しており、
+    // 400面の折り途中の再生ではそれだけで実測 0.48 秒かかっていた。
+    let rank_frame = ori3_rigid::to_frame3d_geometry_only(
         &doc.cp,
         faces,
         &ori3_rigid::propagate(&doc.cp, faces, &result.angles),

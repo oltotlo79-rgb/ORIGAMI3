@@ -266,7 +266,9 @@ pub(crate) fn derive_surface_order(
             sample_count: path.len(),
             returned_geometry_sample: None,
         },
-        |sample, face, point, normal| approached_height(face, point, normal, &path[sample], exact),
+        |sample, index, point, normal| {
+            approached_height(faces[index].id, point, normal, &path[sample], exact)
+        },
     )
 }
 
@@ -366,6 +368,12 @@ fn derive_surface_order_from_current_depths_with_approach_constraints(
         .iter()
         .map(|face| (face.face, face))
         .collect::<HashMap<_, _>>();
+    // 姿勢が1つだけの導出でも、面ごとの材質基底は代表点に依らない。
+    // 面対ごとに作り直さず、面数ぶんだけ先に作る(`FaceSampleBasis` の説明を参照)。
+    let frame_bases = faces
+        .iter()
+        .map(|face| face_sample_basis(face.id, &frame_faces, &frame_faces))
+        .collect::<Vec<_>>();
     derive_surface_order_with(
         faces,
         frame,
@@ -382,8 +390,9 @@ fn derive_surface_order_from_current_depths_with_approach_constraints(
             sample_count: 1,
             returned_geometry_sample: None,
         },
-        |_sample, face, point, normal| {
-            approached_frame_height(face, point, normal, &frame_faces, &frame_faces)
+        |_sample, index, point, normal| match &frame_bases[index] {
+            Ok(basis) => basis.height(faces[index].id, point, normal),
+            Err(message) => Err(message.clone()),
         },
     )
 }
@@ -845,14 +854,20 @@ fn derive_surface_order_from_frame_path_with_priority(
         .iter()
         .map(|face| (face.face, face))
         .collect::<HashMap<_, _>>();
-    let path_faces = path
+    // 面と経路姿勢の組ごとに1度だけ材質基底を作る(`FaceSampleBasis` の説明を参照)。
+    // 代表点ごとに作り直していたときと同じ式・同じ順序・同じエラー文言を使う。
+    let sample_bases = path
         .iter()
         .map(|frame| {
-            frame
+            let approached_faces = frame
                 .faces
                 .iter()
                 .map(|face| (face.face, face))
-                .collect::<HashMap<_, _>>()
+                .collect::<HashMap<_, _>>();
+            faces
+                .iter()
+                .map(|face| face_sample_basis(face.id, &approached_faces, &exact_faces))
+                .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
     derive_surface_order_with(
@@ -871,8 +886,9 @@ fn derive_surface_order_from_frame_path_with_priority(
             sample_count: path.len(),
             returned_geometry_sample: None,
         },
-        |sample, face, point, normal| {
-            approached_frame_height(face, point, normal, &path_faces[sample], &exact_faces)
+        |sample, index, point, normal| match &sample_bases[sample][index] {
+            Ok(basis) => basis.height(faces[index].id, point, normal),
+            Err(message) => Err(message.clone()),
         },
     )
 }
@@ -899,7 +915,7 @@ fn derive_surface_order_with(
     exact_frame: &Frame3D,
     previous_order: &[FaceId],
     options: DeriveSurfaceOptions<'_>,
-    mut height: impl FnMut(usize, FaceId, DVec3, DVec3) -> Result<f64, String>,
+    mut height: impl FnMut(usize, usize, DVec3, DVec3) -> Result<f64, String>,
 ) -> Result<SurfaceOrder, String> {
     let DeriveSurfaceOptions {
         exact_constraints,
@@ -1072,8 +1088,8 @@ fn derive_surface_order_with(
                 for &witness in &witnesses {
                     let point = plane.origin + plane.u * witness.x + plane.v * witness.y;
                     let (Ok(left_height), Ok(right_height)) = (
-                        height(sample, left, point, plane.normal),
-                        height(sample, right, point, plane.normal),
+                        height(sample, left_index, point, plane.normal),
+                        height(sample, right_index, point, plane.normal),
                     ) else {
                         sampling_failed = true;
                         break;
@@ -1306,9 +1322,7 @@ fn derive_surface_order_with(
     let reachable = constraint_reachability(&overlap_pairs, &constraints);
     let resolved_overlaps = overlap_pairs
         .iter()
-        .filter(|&&(left, right)| {
-            reachable.contains(&(left, right)) || reachable.contains(&(right, left))
-        })
+        .filter(|&&(left, right)| reachable.reaches(left, right) || reachable.reaches(right, left))
         .count();
     let exact_resolved_overlaps = if constraints == exact_pairs {
         resolved_overlaps
@@ -1317,7 +1331,7 @@ fn derive_surface_order_with(
         overlap_pairs
             .iter()
             .filter(|&&(left, right)| {
-                exact_reachable.contains(&(left, right)) || exact_reachable.contains(&(right, left))
+                exact_reachable.reaches(left, right) || exact_reachable.reaches(right, left)
             })
             .count()
     };
@@ -1882,13 +1896,56 @@ fn approached_height(
     Ok(approached_point.dot(normal))
 }
 
-fn approached_frame_height(
+/// 1つの面と1つの経路姿勢だけで決まる、材質座標→その姿勢の高さの写し。
+///
+/// 同じ面・同じ姿勢の組では、代表点が何点あってもここまでの値は全て同じである。
+/// 面対ごと・代表点ごとに求め直すと、400面の完全な束(重なる面対 64,620組)で
+/// 同じ値を約2,480万回作り直すことになり、そのたびに多角形を2つVecへ複製していた。
+/// 面と姿勢の組は 面数×姿勢数(400×12=4,800)しかないので、先に1度だけ求める。
+/// 式・演算の順序・許容値・エラー文言は [`face_sample_basis`] と
+/// [`FaceSampleBasis::height`] へそのまま移してあり、結果はビット単位で同じである。
+#[derive(Clone, Copy)]
+struct FaceSampleBasis {
+    exact_origin: DVec3,
+    exact_first: DVec3,
+    exact_second: DVec3,
+    first_squared: f64,
+    cross: f64,
+    second_squared: f64,
+    determinant: f64,
+    approached_origin: DVec3,
+    approached_first: DVec3,
+    approached_second: DVec3,
+}
+
+impl FaceSampleBasis {
+    fn height(&self, face: FaceId, point: DVec3, normal: DVec3) -> Result<f64, String> {
+        let relative = point - self.exact_origin;
+        let relative_first = relative.dot(self.exact_first);
+        let relative_second = relative.dot(self.exact_second);
+        let first_weight = (relative_first * self.second_squared - relative_second * self.cross)
+            / self.determinant;
+        let second_weight =
+            (relative_second * self.first_squared - relative_first * self.cross) / self.determinant;
+
+        let approached_point = self.approached_origin
+            + self.approached_first * first_weight
+            + self.approached_second * second_weight;
+        if !approached_point.is_finite() {
+            return Err(format!(
+                "face {face} produced a non-finite frame depth sample"
+            ));
+        }
+        Ok(approached_point.dot(normal))
+    }
+}
+
+/// 面と経路姿勢の組から [`FaceSampleBasis`] を作る。代表点には依存しない。
+fn face_sample_basis(
     face: FaceId,
-    point: DVec3,
-    normal: DVec3,
     approached_faces: &HashMap<FaceId, &ori3_model::Face3D>,
     exact_faces: &HashMap<FaceId, &ori3_model::Face3D>,
-) -> Result<f64, String> {
+) -> Result<FaceSampleBasis, String> {
     let approached = approached_faces
         .get(&face)
         .ok_or_else(|| format!("approach frame lost face {face}"))?;
@@ -1927,7 +1984,6 @@ fn approached_frame_height(
 
     let exact_first = exact_points[first] - exact_origin;
     let exact_second = exact_points[second] - exact_origin;
-    let relative = point - exact_origin;
     let first_squared = exact_first.length_squared();
     let cross = exact_first.dot(exact_second);
     let second_squared = exact_second.length_squared();
@@ -1935,21 +1991,30 @@ fn approached_frame_height(
     if determinant.abs() <= EPS * EPS {
         return Err(format!("face {face} has a singular material basis"));
     }
-    let relative_first = relative.dot(exact_first);
-    let relative_second = relative.dot(exact_second);
-    let first_weight = (relative_first * second_squared - relative_second * cross) / determinant;
-    let second_weight = (relative_second * first_squared - relative_first * cross) / determinant;
 
     let approached_origin = approached_points[0];
-    let approached_point = approached_origin
-        + (approached_points[first] - approached_origin) * first_weight
-        + (approached_points[second] - approached_origin) * second_weight;
-    if !approached_point.is_finite() {
-        return Err(format!(
-            "face {face} produced a non-finite frame depth sample"
-        ));
-    }
-    Ok(approached_point.dot(normal))
+    Ok(FaceSampleBasis {
+        exact_origin,
+        exact_first,
+        exact_second,
+        first_squared,
+        cross,
+        second_squared,
+        determinant,
+        approached_origin,
+        approached_first: approached_points[first] - approached_origin,
+        approached_second: approached_points[second] - approached_origin,
+    })
+}
+
+fn approached_frame_height(
+    face: FaceId,
+    point: DVec3,
+    normal: DVec3,
+    approached_faces: &HashMap<FaceId, &ori3_model::Face3D>,
+    exact_faces: &HashMap<FaceId, &ori3_model::Face3D>,
+) -> Result<f64, String> {
+    face_sample_basis(face, approached_faces, exact_faces)?.height(face, point, normal)
 }
 
 fn overlap_witnesses(left: &[DVec2], right: &[DVec2]) -> Result<Vec<DVec2>, String> {
@@ -2349,35 +2414,25 @@ fn provenance_from_overlap_order(
 }
 
 /// 実面積で重なる面だけを始点に、上下制約の推移閉包を作る。
+///
+/// 以前は始点ごとに深さ優先で辿り、到達した対を1組ずつ `BTreeSet` へ積んでいた。
+/// 400面の束では到達する対が最大16万組になり、集合を作るだけで実測0.15〜0.36秒
+/// かかっていた。同じ推移閉包を面ごとのbit行で持つ [`ConstraintClosure`] を使う。
+///
+/// 答えは変わらない。`reaches` は自分自身への到達も真にするが、問い合わせるのは
+/// 必ず別の面どうしの対(`overlap_pairs` の左右は常に違う面)なので、その差は出ない。
+/// 始点は `overlap_pairs` の面だが、途中で通る面は `constraints` 側にしか無いことが
+/// あるため、bit行の面集合には両方の面を入れる。
 fn constraint_reachability(
     overlap_pairs: &BTreeSet<(FaceId, FaceId)>,
     constraints: &BTreeSet<(FaceId, FaceId)>,
-) -> BTreeSet<(FaceId, FaceId)> {
-    let sources = overlap_pairs
+) -> ConstraintClosure {
+    let known_faces = overlap_pairs
         .iter()
+        .chain(constraints)
         .flat_map(|&(left, right)| [left, right])
         .collect::<BTreeSet<_>>();
-    let mut outgoing = BTreeMap::<FaceId, Vec<FaceId>>::new();
-    for &(below, above) in constraints {
-        outgoing.entry(below).or_default().push(above);
-    }
-    let mut reachable = BTreeSet::new();
-    for source in sources {
-        let mut visited = BTreeSet::new();
-        let mut pending = vec![source];
-        while let Some(face) = pending.pop() {
-            let Some(above) = outgoing.get(&face) else {
-                continue;
-            };
-            for &next in above {
-                if visited.insert(next) {
-                    reachable.insert((source, next));
-                    pending.push(next);
-                }
-            }
-        }
-    }
-    reachable
+    ConstraintClosure::new(&known_faces, constraints)
 }
 
 /// 下→上の制約を満たす順を返す。制約が輪になっていても止まらず、落とした制約の

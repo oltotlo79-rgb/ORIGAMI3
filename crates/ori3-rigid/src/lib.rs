@@ -44,5 +44,5 @@ pub use symmetry::{
 };
 pub use tree::{
     FoldedFrame, propagate, surface_order_from_angles, surface_order_from_angles_flat_path,
-    to_frame3d,
+    to_frame3d, to_frame3d_geometry_only,
 };
