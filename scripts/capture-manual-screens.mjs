@@ -22,8 +22,9 @@ const cdpClientPath = path.join(repositoryRoot, "scripts", "manual-capture", "cd
 const defaultOutputDirectory = path.join(repositoryRoot, "docs", "manual", "assets");
 const defaultStagingRoot = path.join(repositoryRoot, "verification", "manual-capture");
 const defaultCaptureOwnerLockPath = path.join(defaultStagingRoot, ".capture-owner-lock");
+// `crane` は正本由来の3手の作品。`scripts/manual-capture/scenarios.mjs` の `FIXTURES` と同じ実体を指す。
 export const captureFixturePaths = Object.freeze({
-  crane: path.join(repositoryRoot, "crates", "ori3-rigid", "tests", "fixtures", "check-crane.ori3"),
+  crane: path.join(repositoryRoot, "apps", "desktop", "tests-live", "fixtures", "traditional-crane-full.ori3"),
   yakko: path.join(repositoryRoot, "crates", "ori3-rigid", "tests", "fixtures", "check-yakko.ori3"),
   bird: path.join(repositoryRoot, "crates", "ori3-rigid", "tests", "fixtures", "check-bird-base.ori3"),
   penetration: path.join(repositoryRoot, "crates", "ori3-layers", "tests", "fixtures", "penetration-warning.ori3"),

@@ -409,6 +409,12 @@ export type SeqOp =
       pose_before?: FoldPoseInput | null;
       /** 合わせ折りの説明文に使う点・線。折り計算には影響しない。 */
       alignment?: FoldAlignment | null;
+      /**
+       * 3D表示で紙をつかんでドラッグした操作から送ったならtrue。
+       * 伝えるのは操作の種類だけで、表示名(技法名)は画面から選ばない。
+       * 折り計算には影響せず、Rustが手順へ載せる表示名の決め方だけが変わる。
+       */
+      grab_move?: boolean;
       /** trueなら事前提案された追加折り目を入れて、巻き込みながら折る。 */
       accept_additional_crease: boolean;
     }

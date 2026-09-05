@@ -50,6 +50,10 @@ $script:recordContentIdentityIntroductionCommits = @{}
 $script:regeneratedSnapshotsAtCommit = @{}
 $script:validRemediationsByRecordLine = $null
 $script:validCorrectionsByTargetLine = $null
+# 検証済みRoadmap-Correctionのsource record行 -> 対象recordの本文(NFKC正規化済み)。
+# 訂正recordが対象recordの文言を逐語引用したときだけ、その引用を新しい断言と
+# 読まないための照合材料にする(2026-09-05)。
+$script:validCorrectionTargetTextBySourceLine = $null
 $script:gitExecutable = $null
 
 # 自然文の母集合・時制・否定は、通常経路とrelease経路が同じ判定器を1つだけ呼ぶ。
@@ -610,6 +614,7 @@ function Build-RemediationCorrectionRegistry {
             SourceLineIndex    = [int]$record.LineIndex
             TargetSha256       = $targetSha256
             TargetLineIndex    = [int]$targetRecord.LineIndex
+            TargetRecord       = $targetRecord
             CorrectedUnchecked = $correctedUnchecked
         })
     }
@@ -622,6 +627,7 @@ function Build-RemediationCorrectionRegistry {
         $countByTarget[$key] = [int]$countByTarget[$key] + 1
     }
     $correctionsByTargetLine = @{}
+    $correctionTargetTextBySourceLine = @{}
     foreach ($candidate in $candidateCorrections) {
         $key = [string]$candidate.TargetSha256
         if ([int]$countByTarget[$key] -ne 1) {
@@ -632,10 +638,68 @@ function Build-RemediationCorrectionRegistry {
             $correctionsByTargetLine[[int]$candidate.TargetLineIndex] = New-Object System.Collections.Generic.List[int]
         }
         $correctionsByTargetLine[[int]$candidate.TargetLineIndex].Add([int]$candidate.CorrectedUnchecked)
+        $correctionTargetTextBySourceLine[[int]$candidate.SourceLineIndex] =
+            Get-NormalizedRecordText -Record $candidate.TargetRecord
     }
 
     $script:validRemediationsByRecordLine = $remediationsByLine
     $script:validCorrectionsByTargetLine = $correctionsByTargetLine
+    $script:validCorrectionTargetTextBySourceLine = $correctionTargetTextBySourceLine
+}
+
+function Get-NormalizedRecordText {
+    param([Parameter(Mandatory = $true)]$Record)
+
+    $normalizationForm = [Text.NormalizationForm]::FormKC
+    $parts = @(([string]$Record.Header).Normalize($normalizationForm))
+    foreach ($bodyLine in @($Record.BodyLines)) {
+        $parts += ([string]$bodyLine).Normalize($normalizationForm)
+    }
+    return ($parts -join "`n")
+}
+
+function Get-RecordCorrectionTargetText {
+    param([Parameter(Mandatory = $true)]$Record)
+
+    # このrecord自身が、検証済みRoadmap-Correctionのsourceであるときだけ、
+    # 対象recordの本文を返す。(a)〜(e)のどれか1つでも欠けた候補は登録されて
+    # いないため、ここも自動的にfail-closedになる。
+    if ($null -eq $script:validCorrectionTargetTextBySourceLine) { return "" }
+    $key = [int]$Record.LineIndex
+    if (-not $script:validCorrectionTargetTextBySourceLine.ContainsKey($key)) { return "" }
+    return [string]$script:validCorrectionTargetTextBySourceLine[$key]
+}
+
+function Test-SpanIsVerbatimQuotationOfText {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$LineText,
+        [Parameter(Mandatory = $true)][int]$Index,
+        [Parameter(Mandatory = $true)][int]$Length,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ReferenceText
+    )
+
+    # 訂正recordは、訂正の対象になった文言をそのまま引用しなければ「何を
+    # 訂正したのか」を示せない。そこで次の3つを同時に満たすときだけ、その
+    # 敏感語を新しい断言でなく引用として扱う。
+    #   1. 敏感語が 「」 / 『』 / `code span` の内側に完全に収まっている
+    #   2. その括弧の中身が空でない
+    #   3. その中身が、対象recordの本文へ逐語(Ordinal)で現れる
+    # 語彙を増やす免除ではないので、訂正の言い回しには依存しない。対象record
+    # に無い文を括弧へ入れても通らないため、引用で新しい主張を持ち込めない。
+    if ([string]::IsNullOrEmpty($ReferenceText)) { return $false }
+    if ($Length -le 0 -or $Index -lt 0 -or ($Index + $Length) -gt $LineText.Length) { return $false }
+    $spanEnd = $Index + $Length
+    $delimiterPatterns = @('「(?<inner>[^「」]*)」', '『(?<inner>[^『』]*)』', '`(?<inner>[^`]*)`')
+    foreach ($delimiterPattern in $delimiterPatterns) {
+        foreach ($delimiterMatch in [regex]::Matches($LineText, $delimiterPattern)) {
+            $innerGroup = $delimiterMatch.Groups['inner']
+            $innerText = [string]$innerGroup.Value
+            if ($innerText.Length -eq 0) { continue }
+            if ($Index -lt $innerGroup.Index -or $spanEnd -gt ($innerGroup.Index + $innerGroup.Length)) { continue }
+            if ($ReferenceText.IndexOf($innerText, [StringComparison]::Ordinal) -ge 0) { return $true }
+        }
+    }
+    return $false
 }
 
 function Test-RecordHasValidatedCorrection {
@@ -824,7 +888,8 @@ function Get-BlockingScopeClaim {
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$LineText,
         [Parameter(Mandatory = $true)][string]$Pattern,
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][AllowNull()][object[]]$Assertions,
-        [bool]$ExemptForValidatedCorrection = $false
+        [bool]$ExemptForValidatedCorrection = $false,
+        [AllowEmptyString()][string]$CorrectionTargetText = ""
     )
 
     # 判定器は「分かったものだけを免除する」。敏感語のraw matchに対応する判定が
@@ -846,6 +911,13 @@ function Get-BlockingScopeClaim {
     foreach ($rawMatch in [regex]::Matches($LineText, $Pattern)) {
         $rawText = [string]$rawMatch.Value
         if ($rawText.Length -eq 0) {
+            continue
+        }
+        # 訂正recordが対象recordの文言をそのまま引用した箇所は、引用として
+        # 読む(証明: 括弧の中身が対象recordへ逐語で現れること)。
+        if (Test-SpanIsVerbatimQuotationOfText `
+                -LineText $LineText -Index $rawMatch.Index -Length $rawMatch.Length `
+                -ReferenceText $CorrectionTargetText) {
             continue
         }
         $covering = @(@($Assertions) | Where-Object {
@@ -904,7 +976,8 @@ function Get-FirstBlockingScopeClaim {
         [Parameter(Mandatory = $true)][int]$FirstLineNumber,
         [Parameter(Mandatory = $true)][hashtable]$AssertionsByLine,
         [Parameter(Mandatory = $true)][string]$Pattern,
-        [bool]$ExemptForValidatedCorrection = $false
+        [bool]$ExemptForValidatedCorrection = $false,
+        [AllowEmptyString()][string]$CorrectionTargetText = ""
     )
 
     for ($offset = 0; $offset -lt $RecordLines.Count; $offset++) {
@@ -913,7 +986,8 @@ function Get-FirstBlockingScopeClaim {
             -LineText ([string]$RecordLines[$offset]) `
             -Pattern $Pattern `
             -Assertions (Get-ScopeAssertionsForLine -AssertionsByLine $AssertionsByLine -LineNumber $lineNumber) `
-            -ExemptForValidatedCorrection $ExemptForValidatedCorrection
+            -ExemptForValidatedCorrection $ExemptForValidatedCorrection `
+            -CorrectionTargetText $CorrectionTargetText
         if ($null -ne $blocking) {
             return [PSCustomObject]@{
                 Line     = $lineNumber
@@ -979,10 +1053,14 @@ function Test-RoadmapClaimRecord {
     # 2026-09-04の続きの委譲: 検証済みRoadmap-Correctionが、このrecordを
     # targetとして指すときだけ、数値つきの断言を現在値照合から免除する。
     $hasValidatedCorrection = Test-RecordHasValidatedCorrection -Record $Record
+    # このrecord自身が検証済みRoadmap-Correctionのsourceなら、対象recordの本文を
+    # 引用照合の材料にする(sourceでなければ空文字なので従来どおり)。
+    $correctionTargetText = Get-RecordCorrectionTargetText -Record $Record
     $blockingCompleteness = Get-FirstBlockingScopeClaim `
         -RecordLines $recordLines -FirstLineNumber $firstRecordLineNumber `
         -AssertionsByLine $scopeAssertionsByLine -Pattern $completenessPattern `
-        -ExemptForValidatedCorrection $hasValidatedCorrection
+        -ExemptForValidatedCorrection $hasValidatedCorrection `
+        -CorrectionTargetText $correctionTargetText
 
     $expectedSnapshotLine = [string]$script:snapshot.report_snapshot_line
     $snapshotLines = @($bodyLines | Where-Object { $_ -match '^Roadmap-Snapshot:' })
@@ -1061,7 +1139,8 @@ function Test-RoadmapClaimRecord {
     else {
         $blockingUniversal = Get-FirstBlockingScopeClaim `
             -RecordLines $recordLines -FirstLineNumber $firstRecordLineNumber `
-            -AssertionsByLine $scopeAssertionsByLine -Pattern $universalPattern
+            -AssertionsByLine $scopeAssertionsByLine -Pattern $universalPattern `
+            -CorrectionTargetText $correctionTargetText
         if ($null -ne $blockingUniversal) {
             Add-FormatProblem (
                 "$($Record.LineIndex + 1)行目の bounded claim で全体を表す語は使えません。" +
@@ -1120,14 +1199,16 @@ function Test-RoadmapClaimRecord {
             -Assertions (Get-ScopeAssertionsForLine `
                 -AssertionsByLine $scopeAssertionsByLine `
                 -LineNumber ($firstRecordLineNumber + $recordLineOffset)) `
-            -ExemptForValidatedCorrection $hasValidatedCorrection
+            -ExemptForValidatedCorrection $hasValidatedCorrection `
+            -CorrectionTargetText $correctionTargetText
         if ($null -ne $blockingRemainder) {
             $remainderLines.Add($recordLineText)
         }
     }
     $blockingZeroRemainder = Get-FirstBlockingScopeClaim `
         -RecordLines $recordLines -FirstLineNumber $firstRecordLineNumber `
-        -AssertionsByLine $scopeAssertionsByLine -Pattern $zeroRemainderPattern
+        -AssertionsByLine $scopeAssertionsByLine -Pattern $zeroRemainderPattern `
+        -CorrectionTargetText $correctionTargetText
     if ($claimKind -eq 'whole') {
         foreach ($remainderLine in $remainderLines) {
             $remainderMatch = [regex]::Match([string]$remainderLine, $numericRemainderPattern)

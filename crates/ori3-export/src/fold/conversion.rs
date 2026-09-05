@@ -3,11 +3,13 @@ use std::error::Error;
 use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use ori3_cp::extract_faces;
-use ori3_layers::{replay, representative_point};
+use glam::DVec2;
+use ori3_cp::{Face, extract_faces};
+use ori3_geometry::Isometry2;
+use ori3_layers::{FlatState, flat_state_at, replay, representative_point};
 use ori3_model::{
-    CreasePattern, DisplaySettings, Document, DriverLine, Edge, EdgeKind, FoldStep, Paper,
-    SCHEMA_VERSION, TechniqueKind, Vertex,
+    CreasePattern, DisplaySettings, Document, DriverLine, Edge, EdgeKind, Face3D, FaceId, FoldStep,
+    Frame3D, Paper, SCHEMA_VERSION, TechniqueKind, Vertex,
 };
 use ori3_rigid::{layer_order_conflicts, max_seam_gap, self_intersection_pairs};
 use serde_json::{Value, json};
@@ -131,7 +133,7 @@ pub fn fold_to_document(file: &FoldFile) -> Result<FoldImport, FoldConversionErr
                 continue;
             }
         };
-        if let Some(step) = convert_step(
+        if let Some(converted) = convert_step(
             &effective_frame.frame,
             &effective_frame.sources,
             &path,
@@ -139,8 +141,12 @@ pub fn fold_to_document(file: &FoldFile) -> Result<FoldImport, FoldConversionErr
             &document.cp,
             &mut errors,
         ) {
-            document.sequence.push(step);
-            endpoint_sources.push((path, effective_frame.sources.face_orders.clone()));
+            document.sequence.push(converted.step);
+            endpoint_sources.push(EndpointSource {
+                frame_path: path,
+                face_orders_path: effective_frame.sources.face_orders.clone(),
+                flat_endpoint: converted.flat_endpoint,
+            });
         }
     }
 
@@ -157,87 +163,252 @@ pub fn fold_to_document(file: &FoldFile) -> Result<FoldImport, FoldConversionErr
     }
 }
 
+/// One recorded step endpoint, the JSON paths that produced it, and whether the
+/// endpoint is a flat-folded state.
+#[derive(Clone, Debug)]
+struct EndpointSource {
+    frame_path: String,
+    face_orders_path: String,
+    /// Every mountain/valley edge of this endpoint rests at exactly 0 or ±180°.
+    flat_endpoint: bool,
+}
+
 fn validate_replay_endpoints(
     document: &Document,
-    endpoint_sources: &[(String, String)],
+    endpoint_sources: &[EndpointSource],
     errors: &mut Vec<FoldIssue>,
 ) {
     let faces = extract_faces(&document.cp);
-    for (step_index, (frame_path, face_orders_path)) in endpoint_sources.iter().enumerate() {
-        let replayed = catch_unwind(AssertUnwindSafe(|| replay(document, step_index + 1, 1.0)));
-        let Ok(replayed) = replayed else {
-            errors.push(issue(
-                FoldIssueSeverity::Error,
-                FoldIssueCode::UnsupportedGeometry,
-                frame_path,
-                "step endpointの再生に失敗したため限定profileとして取込めません",
-                None,
-            ));
-            continue;
-        };
-        if !replayed.skipped.is_empty() || !replayed.converged || replayed.best_effort {
-            errors.push(issue(
-                FoldIssueSeverity::Error,
-                FoldIssueCode::UnsupportedGeometry,
-                frame_path,
-                "step endpointを指定どおりの収束解として再生できません",
-                Some(json!({
-                    "skipped": replayed.skipped,
-                    "converged": replayed.converged,
-                    "best_effort": replayed.best_effort,
-                })),
-            ));
+    for (step_index, source) in endpoint_sources.iter().enumerate() {
+        if source.flat_endpoint {
+            validate_flat_endpoint(document, &faces, step_index, source, errors);
+        } else {
+            validate_rigid_endpoint(document, &faces, step_index, source, errors);
         }
-        if replayed
-            .frame
-            .faces
-            .iter()
-            .flat_map(|face| &face.polygon)
-            .flatten()
-            .any(|coordinate| !coordinate.is_finite())
-        {
-            errors.push(issue(
-                FoldIssueSeverity::Error,
-                FoldIssueCode::UnsupportedGeometry,
-                frame_path,
-                "step endpointに非有限の3D座標があります",
-                None,
-            ));
-        }
-        let seam = max_seam_gap(&document.cp, &faces, &replayed.frame);
-        if !seam.is_finite() || seam > ENDPOINT_EPS {
-            errors.push(issue(
-                FoldIssueSeverity::Error,
-                FoldIssueCode::UnsupportedGeometry,
-                frame_path,
-                format!("step endpointのseam {seam:e}が許容差{ENDPOINT_EPS:e}を超えます"),
-                Some(numeric_value(seam)),
-            ));
-        }
-        let intersections = self_intersection_pairs(&replayed.frame);
-        if !intersections.is_empty() {
+    }
+}
+
+/// A flat endpoint is fully determined by the declared hinge angles plus the
+/// recorded layer order, so it is verified by exact flat replay instead of the
+/// rigid solver.
+///
+/// FOLD 1.2 records only the endpoint of every step; the motion that reaches it
+/// has no FOLD representation, so requiring the endpoint to also be reachable
+/// without bending the paper rejects work the format can carry perfectly. The
+/// traditional crane is the standing example: `docs/rules/03-品質ゲート.md` §7.1
+/// records that it provably cannot be folded rigidly, while
+/// `crates/ori3-layers/tests/acceptance_crane.rs` verifies it through the same
+/// flat replay used here.
+///
+/// No tolerance is relaxed. The endpoint still has to be finite, keep the paper
+/// connected within [`ENDPOINT_EPS`], carry zero penetration, and hold a layer
+/// order that never contradicts the mountain/valley assignment. What changes is
+/// only which state those unchanged limits are measured on.
+fn validate_flat_endpoint(
+    document: &Document,
+    faces: &[Face],
+    step_index: usize,
+    source: &EndpointSource,
+    errors: &mut Vec<FoldIssue>,
+) {
+    let frame_path = source.frame_path.as_str();
+    let replayed = catch_unwind(AssertUnwindSafe(|| {
+        flat_state_at(document, faces, step_index + 1)
+    }));
+    let state = match replayed {
+        Ok(Ok((state, warnings))) if warnings.is_empty() => state,
+        Ok(Ok((_, warnings))) => {
             errors.push(issue(
                 FoldIssueSeverity::Error,
                 FoldIssueCode::UnsupportedGeometry,
                 frame_path,
                 format!(
-                    "step endpointに{}件のpenetrationがあり、対応対象にできません",
-                    intersections.len()
+                    "step endpointを平らに畳んだ形として再生すると警告が残ります: {}",
+                    warnings.join(" / ")
                 ),
-                Some(json!(intersections)),
+                Some(json!(warnings)),
             ));
+            return;
         }
-        if document.sequence[step_index].layer_order.is_some()
-            && layer_order_conflicts(&document.cp, &faces, &replayed.frame)
-        {
+        Ok(Err(message)) => {
             errors.push(issue(
                 FoldIssueSeverity::Error,
-                FoldIssueCode::UnrepresentableFaceOrders,
-                face_orders_path,
-                "faceOrdersの上下制約が平坦endpointの山谷と矛盾します",
+                FoldIssueCode::UnsupportedGeometry,
+                frame_path,
+                format!("step endpointを平らに畳んだ形として再生できません: {message}"),
+                Some(Value::String(message)),
+            ));
+            return;
+        }
+        Err(_) => {
+            errors.push(issue(
+                FoldIssueSeverity::Error,
+                FoldIssueCode::UnsupportedGeometry,
+                frame_path,
+                "step endpointの平坦な再生に失敗したため限定profileとして取込めません",
                 None,
             ));
+            return;
         }
+    };
+
+    let Some(frame) = flat_endpoint_frame(document, faces, &state) else {
+        errors.push(issue(
+            FoldIssueSeverity::Error,
+            FoldIssueCode::UnrepresentableFaceOrders,
+            frame_path,
+            "平坦endpointの重なり順が全faceを1回ずつ含まないため3D姿勢を組み立てられません",
+            None,
+        ));
+        return;
+    };
+    validate_endpoint_frame(document, faces, step_index, source, &frame, errors);
+}
+
+/// Assemble the 3D frame of a flat endpoint straight from the declared placements.
+///
+/// A flat state puts every face in the same plane, so its stacking is carried by
+/// the document's layer order rather than by geometry; the replayed order becomes
+/// both `layer` and `surface_rank`. Returns `None` when the order does not cover
+/// every face exactly once, so the caller reports a path instead of panicking.
+fn flat_endpoint_frame(document: &Document, faces: &[Face], state: &FlatState) -> Option<Frame3D> {
+    if state.order.len() != faces.len() {
+        return None;
+    }
+    let positions = document
+        .cp
+        .vertices
+        .iter()
+        .map(|vertex| (vertex.id, DVec2::from(vertex.pos)))
+        .collect::<BTreeMap<_, _>>();
+    let mut ranks = BTreeMap::<FaceId, usize>::new();
+    for (rank, face_id) in state.order.iter().enumerate() {
+        if ranks.insert(*face_id, rank).is_some() {
+            return None;
+        }
+    }
+    let mut converted = Vec::with_capacity(faces.len());
+    for face in faces {
+        let placement: &Isometry2 = state.placements.get(&face.id)?;
+        let rank = u32::try_from(*ranks.get(&face.id)?).ok()?;
+        let polygon = face
+            .vertices
+            .iter()
+            .map(|vertex| {
+                let moved = placement.apply(*positions.get(vertex)?);
+                Some([moved.x, moved.y, 0.0])
+            })
+            .collect::<Option<Vec<_>>>()?;
+        converted.push(Face3D {
+            face: face.id,
+            polygon,
+            layer: rank,
+            surface_rank: rank,
+            mirrored: placement.mirrored,
+        });
+    }
+    Some(Frame3D {
+        faces: converted,
+        warnings: Vec::new(),
+    })
+}
+
+/// A non-flat endpoint has no definition outside the rigid solve that produces
+/// it, so it is still required to be a converged solution of the declared angles.
+fn validate_rigid_endpoint(
+    document: &Document,
+    faces: &[Face],
+    step_index: usize,
+    source: &EndpointSource,
+    errors: &mut Vec<FoldIssue>,
+) {
+    let frame_path = source.frame_path.as_str();
+    let replayed = catch_unwind(AssertUnwindSafe(|| replay(document, step_index + 1, 1.0)));
+    let Ok(replayed) = replayed else {
+        errors.push(issue(
+            FoldIssueSeverity::Error,
+            FoldIssueCode::UnsupportedGeometry,
+            frame_path,
+            "step endpointの再生に失敗したため限定profileとして取込めません",
+            None,
+        ));
+        return;
+    };
+    if !replayed.skipped.is_empty() || !replayed.converged || replayed.best_effort {
+        errors.push(issue(
+            FoldIssueSeverity::Error,
+            FoldIssueCode::UnsupportedGeometry,
+            frame_path,
+            "step endpointを指定どおりの収束解として再生できません",
+            Some(json!({
+                "skipped": replayed.skipped,
+                "converged": replayed.converged,
+                "best_effort": replayed.best_effort,
+            })),
+        ));
+    }
+    validate_endpoint_frame(document, faces, step_index, source, &replayed.frame, errors);
+}
+
+/// The endpoint limits that both paths share, measured on whichever 3D frame the
+/// caller established. Every bound here is the one the profile already used.
+fn validate_endpoint_frame(
+    document: &Document,
+    faces: &[Face],
+    step_index: usize,
+    source: &EndpointSource,
+    frame: &Frame3D,
+    errors: &mut Vec<FoldIssue>,
+) {
+    let frame_path = source.frame_path.as_str();
+    if frame
+        .faces
+        .iter()
+        .flat_map(|face| &face.polygon)
+        .flatten()
+        .any(|coordinate| !coordinate.is_finite())
+    {
+        errors.push(issue(
+            FoldIssueSeverity::Error,
+            FoldIssueCode::UnsupportedGeometry,
+            frame_path,
+            "step endpointに非有限の3D座標があります",
+            None,
+        ));
+    }
+    let seam = max_seam_gap(&document.cp, faces, frame);
+    if !seam.is_finite() || seam > ENDPOINT_EPS {
+        errors.push(issue(
+            FoldIssueSeverity::Error,
+            FoldIssueCode::UnsupportedGeometry,
+            frame_path,
+            format!("step endpointのseam {seam:e}が許容差{ENDPOINT_EPS:e}を超えます"),
+            Some(numeric_value(seam)),
+        ));
+    }
+    let intersections = self_intersection_pairs(frame);
+    if !intersections.is_empty() {
+        errors.push(issue(
+            FoldIssueSeverity::Error,
+            FoldIssueCode::UnsupportedGeometry,
+            frame_path,
+            format!(
+                "step endpointに{}件のpenetrationがあり、対応対象にできません",
+                intersections.len()
+            ),
+            Some(json!(intersections)),
+        ));
+    }
+    if document.sequence[step_index].layer_order.is_some()
+        && layer_order_conflicts(&document.cp, faces, frame)
+    {
+        errors.push(issue(
+            FoldIssueSeverity::Error,
+            FoldIssueCode::UnrepresentableFaceOrders,
+            source.face_orders_path.as_str(),
+            "faceOrdersの上下制約が平坦endpointの山谷と矛盾します",
+            None,
+        ));
     }
 }
 
@@ -462,6 +633,14 @@ fn convert_crease_pattern(
     })
 }
 
+/// A converted step frame together with the endpoint shape its verification needs.
+#[derive(Clone, Debug)]
+struct ConvertedStep {
+    step: FoldStep,
+    /// Every mountain/valley edge of this endpoint rests at exactly 0 or ±180°.
+    flat_endpoint: bool,
+}
+
 fn convert_step(
     frame: &FoldFrame,
     sources: &FrameSources,
@@ -469,7 +648,7 @@ fn convert_step(
     id: u32,
     cp: &CreasePattern,
     errors: &mut Vec<FoldIssue>,
-) -> Option<FoldStep> {
+) -> Option<ConvertedStep> {
     let error_count_before = errors.len();
     let mut drivers = Vec::new();
     let (Some(edges), Some(assignments)) = (
@@ -586,19 +765,22 @@ fn convert_step(
     if errors.len() != error_count_before {
         return None;
     }
-    Some(FoldStep {
-        id,
-        kind: if flat_endpoint {
-            TechniqueKind::Simple
-        } else {
-            TechniqueKind::Pose
+    Some(ConvertedStep {
+        step: FoldStep {
+            id,
+            kind: if flat_endpoint {
+                TechniqueKind::Simple
+            } else {
+                TechniqueKind::Pose
+            },
+            drivers,
+            layer_order,
+            alignment: None,
+            finish_soft: None,
+            note: String::new(),
+            technique_classification: None,
         },
-        drivers,
-        layer_order,
-        alignment: None,
-        finish_soft: None,
-        note: String::new(),
-        technique_classification: None,
+        flat_endpoint,
     })
 }
 

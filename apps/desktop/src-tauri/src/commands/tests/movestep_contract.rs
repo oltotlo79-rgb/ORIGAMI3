@@ -63,7 +63,7 @@ fn move_step_negative_overflow_unknown_type_and_unknown_field_are_rejected() {
 #[test]
 fn move_step_usize_max_reaches_store_semantic_range_validation() {
     let value = json!({ "type": "MoveStep", "id": 7, "to_index": usize::MAX });
-    let (operation, spatial) = parse_sequence_operation(value).expect("型の範囲内なら読める");
+    let (operation, spatial, _) = parse_sequence_operation(value).expect("型の範囲内なら読める");
     assert!(spatial.is_none());
     assert!(matches!(
         operation,
@@ -92,7 +92,7 @@ fn move_step_strict_fields_do_not_break_existing_spatial_envelope() {
             "mode": "flap"
         }
     });
-    let (operation, spatial) = parse_sequence_operation(value).expect("既存payloadを読める");
+    let (operation, spatial, _) = parse_sequence_operation(value).expect("既存payloadを読める");
     assert!(matches!(
         operation,
         SeqOp::PreviewFoldThrough { up_to: 1, .. }

@@ -1632,6 +1632,9 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
           target_layers: null,
           direction,
           ...(pose.poseBefore ? { pose_before: pose.poseBefore } : {}),
+          // 紙をつかんでドラッグした操作であることをRustへ伝える。
+          // 表示名そのものは送らず、名前の決定はRust側に閉じている。
+          grab_move: true,
           spatial,
         });
         return;
@@ -1660,6 +1663,8 @@ export function createDocumentSlice<State extends DocumentSliceHostState>(
         target_layers: result.plan.targetLayers,
         direction: "Up",
         ...(pose.poseBefore ? { pose_before: pose.poseBefore } : {}),
+        // 平坦な姿勢でつかんだ場合も同じ「つかんで動かす」操作である。
+        grab_move: true,
       });
     },
 

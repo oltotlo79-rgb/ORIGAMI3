@@ -567,17 +567,27 @@ pub fn edit_redo(state: State<'_, Mutex<DocumentStore>>) -> Result<DocumentView,
 struct SpatialEnvelope {
     #[serde(default)]
     spatial: Option<SpatialFoldSpec>,
+    /// 直接折りを「紙をつかんでドラッグした」操作から送ったかどうか。
+    ///
+    /// 画面が伝えるのは操作の種類だけで、表示名は選ばせない。省略した旧入力は
+    /// 折り線を引いた折りとして扱う。
+    #[serde(default, alias = "grabMove")]
+    grab_move: bool,
 }
 
 fn parse_sequence_operation(
     value: serde_json::Value,
-) -> Result<(SeqOp, Option<SpatialFoldSpec>), String> {
-    let spatial = serde_json::from_value::<SpatialEnvelope>(value.clone())
-        .map_err(|_| "折る位置を読み取れませんでした".to_string())?
-        .spatial;
+) -> Result<(SeqOp, Option<SpatialFoldSpec>, ori3_layers::FoldThroughOrigin), String> {
+    let envelope = serde_json::from_value::<SpatialEnvelope>(value.clone())
+        .map_err(|_| "折る位置を読み取れませんでした".to_string())?;
     let operation = serde_json::from_value::<SeqOp>(value)
         .map_err(|_| "折る操作を読み取れませんでした".to_string())?;
-    Ok((operation, spatial))
+    let origin = if envelope.grab_move {
+        ori3_layers::FoldThroughOrigin::GrabMove
+    } else {
+        ori3_layers::FoldThroughOrigin::DrawnFoldLine
+    };
+    Ok((operation, envelope.spatial, origin))
 }
 
 #[tauri::command(async)]
@@ -599,7 +609,7 @@ pub(crate) fn apply_sequence_operation_transactionally(
     op: serde_json::Value,
 ) -> Result<DocumentView, String> {
     guard(AssertUnwindSafe(|| {
-        let (mut operation, spatial) = parse_sequence_operation(op)?;
+        let (mut operation, spatial, fold_through_origin) = parse_sequence_operation(op)?;
         let is_move_step = matches!(&operation, SeqOp::MoveStep { .. });
         let is_fold_target_query = matches!(
             &operation,
@@ -611,7 +621,14 @@ pub(crate) fn apply_sequence_operation_transactionally(
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             let document = store.export_inputs();
             record_finish_soft(&mut operation, &document.display);
-            let view = store.apply_seq_with_spatial(operation, spatial)?;
+            // 汎用層操作は画面から届く限りいつでも手動である。直接折りだけ、
+            // 画面が伝えた操作の種類(折り線を引いた／つかんで動かした)を渡す。
+            let view = store.apply_seq_with_spatial_from(
+                operation,
+                spatial,
+                crate::store::FlatMotionOrigin::ManualLayerOperation,
+                fold_through_origin,
+            )?;
             let move_step_noop = is_move_step && view.doc == document;
             (view, move_step_noop)
         };
@@ -1100,6 +1117,8 @@ fn apply_sim011_motion_plan(
         },
         None,
         crate::store::FlatMotionOrigin::GrabMove,
+        // 直接折りではないので、直接折りの操作の種類は既定のままでよい。
+        ori3_layers::FoldThroughOrigin::DrawnFoldLine,
     )?;
     Ok(Sim011MoveOutcome {
         result: Sim011MoveResult {
@@ -1536,7 +1555,7 @@ impl ProposalFoldPlan {
 /// watchdogに到達した場合は途中の最善を返さず、候補全体を専用の内部エラー経路へ
 /// 送る。`ProposalFoldPlanState::Partial` は状態数・深さなど決定的な通常停止専用である。
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct PlanBudget {
+pub(crate) struct PlanBudget {
     deterministic: SearchBudget,
     /// `Some`は製品の安全弁、`None`は壁時計を主張に含めない検査専用。
     watchdog: Option<SearchWatchdog>,
@@ -1551,6 +1570,28 @@ const PLAN_BUDGET: PlanBudget = PlanBudget {
         scan: SearchBudget::DEFAULT.scan,
     },
     watchdog: Some(SearchWatchdog { max_millis: 30_000 }),
+};
+
+/// 「探索の当たり外れに主張をぶら下げない」検査のための予算。
+///
+/// [`PLAN_BUDGET`] との違いは `max_millis` **だけ**で、
+/// 探索する計算量(`max_states = 2` / `branch = 2`)も、深さも、走査の細かさも同じ。
+/// 壁時計の打ち切りに当たると答えが機械の速さで変わってしまうため
+/// (`CLAUDE.md` §10.7.7)、**どんな機械でも当たらない** 3,600,000ms(1時間)にする。
+///
+/// 根拠(実測 2026-08-24、最適化なし、単独実行3回): この予算を使う検査
+/// (`proposal_candidates_are_the_same_computed_together_or_one_by_one`、先端6本)は
+/// **47.64 / 47.49 / 47.48秒**で終わる。上限は探索1回ごとに効くので、
+/// この検査は探索を8回(同時4件 + 1件ずつ4件)するから、
+/// **探索1回はどんなに長くても47.7秒を超えない**。上限 3,600,000ms の **1.3%以下**である。
+/// CIの計算機が手元より約3.6倍遅い(§10.6)としても約172秒で、上限の **4.8%以下**。
+/// **打ち切りに当たりようがない。**
+#[cfg(test)]
+pub(crate) const TIME_FREE_PLAN_BUDGET: PlanBudget = PlanBudget {
+    watchdog: Some(SearchWatchdog {
+        max_millis: 3_600_000,
+    }),
+    ..PLAN_BUDGET
 };
 
 /// 確かめ済みの手順から、展開図と手順を組み直すときに見る姿勢の数。
@@ -2018,6 +2059,25 @@ pub fn proposal_generate(
     seed: u64,
     with_fold_plan: bool,
 ) -> Result<Vec<ProposalCandidate>, String> {
+    proposal_generate_with_budget(skeleton, paper, seed, with_fold_plan, PLAN_BUDGET)
+}
+
+/// [`proposal_generate`] の本体。**予算だけ**を呼び出し側から受け取る。
+///
+/// 製品の経路は [`proposal_generate`] が [`PLAN_BUDGET`] を渡して呼ぶ形のままなので、
+/// 画面から見た振る舞いは切り出す前とまったく同じである。
+///
+/// 引数にしてあるのは、**壁時計の打ち切りに当たると答えが機械の速さで変わる**ため
+/// (`CLAUDE.md` §10.7.7)、「探索の当たり外れに主張をぶら下げない」検査だけが
+/// 打ち切りの起きない [`TIME_FREE_PLAN_BUDGET`] を渡せるようにするためである。
+/// これは `plan_folds` が既に `budget` を引数で受け取っているのと同じ理由による。
+pub(crate) fn proposal_generate_with_budget(
+    skeleton: Skeleton,
+    paper: Paper,
+    seed: u64,
+    with_fold_plan: bool,
+    budget: PlanBudget,
+) -> Result<Vec<ProposalCandidate>, String> {
     let jobs = ProposalJobs::default();
     proposal_generate_managed(
         &jobs,
@@ -2026,6 +2086,7 @@ pub fn proposal_generate(
         paper,
         seed,
         with_fold_plan,
+        budget,
     )
     .map(|result| result.candidates)
 }
@@ -2045,17 +2106,11 @@ fn proposal_generate_managed(
     paper: Paper,
     seed: u64,
     with_fold_plan: bool,
+    budget: PlanBudget,
 ) -> Result<ProposalJobResult, String> {
     let result_job_id = job_id.clone();
     let candidates = run_proposal_job(jobs, job_id, |progress| {
-        generate_candidates(
-            &skeleton,
-            &paper,
-            seed,
-            with_fold_plan,
-            PLAN_BUDGET,
-            progress,
-        )
+        generate_candidates(&skeleton, &paper, seed, with_fold_plan, budget, progress)
     })?;
     Ok(ProposalJobResult {
         job_id: result_job_id,
@@ -2119,7 +2174,15 @@ pub fn proposal_generate_job(
     seed: u64,
     with_fold_plan: bool,
 ) -> Result<ProposalJobResult, String> {
-    proposal_generate_managed(&jobs, job_id, skeleton, paper, seed, with_fold_plan)
+    proposal_generate_managed(
+        &jobs,
+        job_id,
+        skeleton,
+        paper,
+        seed,
+        with_fold_plan,
+        PLAN_BUDGET,
+    )
 }
 
 /// 候補を作る本体。**進み具合を書き込む先を引数で受け取る**。
@@ -2444,11 +2507,12 @@ mod tests {
         CandidateTicket, DocumentStore, FoldAllLayerOrder, PACK_STARTS, PLAN_BUDGET, PlanBudget,
         ProposalCandidate, ProposalFoldPlan, ProposalFoldPlanDetails, ProposalFoldPlanState,
         ProposalGenerationError, ProposalJobId, ProposalJobs, ProposalPhase, ProposalProgressCell,
-        attach_replay, display_soft_settings, fold_all_preview_outcome, frame_surface_rank_order,
-        generate_candidates, guard, plan_folds, pose_motion_contact_options, pose_overlap_order,
-        pose_result_is_finite, proposal_generate, proposal_generate_managed, record_finish_soft,
-        recorded_soft_settings, replace_document_command, run_proposal_job,
-        stamp_saved_layer_order, usable_pose_surface_order,
+        TIME_FREE_PLAN_BUDGET, attach_replay, display_soft_settings, fold_all_preview_outcome,
+        frame_surface_rank_order, generate_candidates, guard, plan_folds,
+        pose_motion_contact_options, pose_overlap_order, pose_result_is_finite, proposal_generate,
+        proposal_generate_managed, record_finish_soft, recorded_soft_settings,
+        replace_document_command, run_proposal_job, stamp_saved_layer_order,
+        usable_pose_surface_order,
     };
 
     fn recovery_artifact_bytes(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
@@ -2580,27 +2644,6 @@ mod tests {
     use std::sync::{Arc, Mutex};
     #[cfg(not(debug_assertions))]
     use std::time::{Duration, Instant};
-
-    /// 「同時に計算しても1件ずつでも同じ答えになる」ことだけを見る検査のための予算。
-    ///
-    /// [`PLAN_BUDGET`] との違いは `max_millis` **だけ**で、
-    /// 探索する計算量(`max_states = 2` / `branch = 2`)も、深さも、走査の細かさも同じ。
-    /// 壁時計の打ち切りに当たると答えが機械の速さで変わってしまうため
-    /// (`CLAUDE.md` §10.7.7)、**どんな機械でも当たらない** 3,600,000ms(1時間)にする。
-    ///
-    /// 根拠(実測 2026-08-24、最適化なし、単独実行3回): この予算を使う検査
-    /// (`proposal_candidates_are_the_same_computed_together_or_one_by_one`、先端6本)は
-    /// **47.64 / 47.49 / 47.48秒**で終わる。上限は探索1回ごとに効くので、
-    /// この検査は探索を8回(同時4件 + 1件ずつ4件)するから、
-    /// **探索1回はどんなに長くても47.7秒を超えない**。上限 3,600,000ms の **1.3%以下**である。
-    /// CIの計算機が手元より約3.6倍遅い(§10.6)としても約172秒で、上限の **4.8%以下**。
-    /// **打ち切りに当たりようがない。**
-    const TIME_FREE_PLAN_BUDGET: PlanBudget = PlanBudget {
-        watchdog: Some(SearchWatchdog {
-            max_millis: 3_600_000,
-        }),
-        ..PLAN_BUDGET
-    };
 
     /// 折り手順そのものを検査するときだけ、壁時計ではなく製品と同じ状態数・分岐数で止める。
     const DETERMINISTIC_PLAN_BUDGET: PlanBudget = PlanBudget {
@@ -3220,8 +3263,9 @@ mod tests {
         lease.complete(ProposalPhase::Failed);
         assert_eq!(jobs.registered_count(), 0);
 
-        let result = proposal_generate_managed(&jobs, job_id.clone(), star(2), A4ISH, 7, false)
-            .expect("managed入口が候補を返す");
+        let result =
+            proposal_generate_managed(&jobs, job_id.clone(), star(2), A4ISH, 7, false, PLAN_BUDGET)
+                .expect("managed入口が候補を返す");
         assert_eq!(result.job_id, job_id);
         assert!(!result.candidates.is_empty());
         let result_json = serde_json::to_value(&result).expect("job結果をJSONへ運べる");
@@ -3241,6 +3285,7 @@ mod tests {
                 A4ISH,
                 1,
                 false,
+                PLAN_BUDGET,
             )
             .is_err()
         );
@@ -4385,7 +4430,13 @@ mod tests {
                 "mode": "flap"
             }
         });
-        let (operation, spatial) = super::parse_sequence_operation(value).expect("読み取れる");
+        let (operation, spatial, origin) =
+            super::parse_sequence_operation(value).expect("読み取れる");
+        assert_eq!(
+            origin,
+            ori3_layers::FoldThroughOrigin::DrawnFoldLine,
+            "つかんだ印の無い旧入力は折り線を引いた折りとして読む"
+        );
         assert!(matches!(
             operation,
             ori3_model::SeqOp::PreviewFoldThrough { up_to: 1, .. }
@@ -4424,12 +4475,12 @@ mod tests {
             ("all", crate::store::SpatialFoldMode::All),
             ("single", crate::store::SpatialFoldMode::Single),
         ] {
-            let (_, spatial) = super::parse_sequence_operation(operation(Some(wire)))
+            let (_, spatial, _) = super::parse_sequence_operation(operation(Some(wire)))
                 .unwrap_or_else(|error| panic!("{wire}を読み取れる: {error}"));
             assert_eq!(spatial.expect("立体の当たり点").mode, expected);
         }
 
-        let (_, spatial) =
+        let (_, spatial, _) =
             super::parse_sequence_operation(operation(None)).expect("旧入力を読み取れる");
         assert_eq!(
             spatial.expect("立体の当たり点").mode,
@@ -4565,6 +4616,71 @@ mod tests {
             }
         });
         assert_query_is_read_only(&material_state, material_query, false, "材料座標照会");
+    }
+
+    /// 画面から届くJSONに「つかんで動かした」印があれば、その直接折りは
+    /// 折れた同じ処理の中で「自動判定・つかんで動かした折り」として記録される。
+    ///
+    /// 印の無いJSON(折り線を引いて折った操作、および旧入力)は分類を持たず、
+    /// 従来どおり折り方(`kind`)の表示名のままになる。
+    #[test]
+    fn a_grabbed_fold_through_from_the_screen_records_the_automatically_named_grabbed_move() {
+        let expected = Some(ori3_model::TechniqueClassification {
+            kind: ori3_model::DisplayTechniqueKind::GrabMove,
+            origin: ori3_model::TechniqueClassificationOrigin::Automatic,
+        });
+        let operation = |grabbed: bool| {
+            let mut value = serde_json::json!({
+                "type": "FoldThrough",
+                "up_to": 0,
+                "line": [[0.5, 0.0], [0.5, 1.0]],
+                "keep_side_point": [0.25, 0.5],
+                "target_layers": null,
+                "direction": "Up",
+                "accept_additional_crease": false
+            });
+            if grabbed {
+                value["grab_move"] = serde_json::json!(true);
+            }
+            value
+        };
+
+        let grabbed_state = Mutex::new(DocumentStore::default());
+        let grabbed =
+            super::apply_sequence_operation_transactionally(&grabbed_state, operation(true))
+                .expect("つかんで動かした折りを適用できる");
+        assert_eq!(grabbed.doc.sequence.len(), 1, "手順がちょうど1件増える");
+        assert_eq!(
+            grabbed.doc.sequence[0].technique_classification, expected,
+            "画面から後続の手順更新を投げずに、同じ処理の中で載せる"
+        );
+        assert_eq!(
+            grabbed.doc.sequence[0].kind,
+            TechniqueKind::Simple,
+            "再生に使う折り方は変えない"
+        );
+        let stored = grabbed_state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .replay_inputs()
+            .0;
+        assert_eq!(
+            stored.sequence[0].technique_classification, expected,
+            "表示だけの飾りではなく作品へ入っている"
+        );
+
+        let drawn_state = Mutex::new(DocumentStore::default());
+        let drawn = super::apply_sequence_operation_transactionally(&drawn_state, operation(false))
+            .expect("折り線を引いた折りを適用できる");
+        assert_eq!(drawn.doc.sequence.len(), 1, "手順がちょうど1件増える");
+        assert_eq!(
+            drawn.doc.sequence[0].technique_classification, None,
+            "折り線を引いた折りと旧入力は折り方の表示名のままにする"
+        );
+        assert_eq!(
+            drawn.doc.sequence[0].drivers, grabbed.doc.sequence[0].drivers,
+            "表示名の決め方を変えても折り計算の結果は同じ"
+        );
     }
 
     #[test]
@@ -4862,10 +4978,16 @@ mod tests {
 
     const FOLD_ALL_PERCENTAGES: [f64; 5] = [0.0, 25.0, 50.0, 75.0, 100.0];
     const FOLD_ALL_FIXTURES: [(&str, &str, usize); 3] = [
+        // 折り鶴は正本 `crates/ori3-layers/tests/fixtures/traditional-crane/traditional-crane-cp.ori3`
+        // から作った3手の作品を使う。以前の `check-crane.ori3`(現 `check-proposal-6step.ori3`)は
+        // 提案探索が返した6手の出力で、完成形が凧形であり鶴ではなかった。
+        // 希望角の本数102は、この作品の山61本+谷41本の実測(外周12本・補助0本は
+        // 下の `EdgeKind::Border | EdgeKind::Aux` の panic が除く)。旧値43も同じ数え方で
+        // 山21+谷22だったので、数え方は変えていない。
         (
             "折り鶴",
-            include_str!("../../../../crates/ori3-rigid/tests/fixtures/check-crane.ori3"),
-            43,
+            include_str!("../../tests-live/fixtures/traditional-crane-full.ori3"),
+            102,
         ),
         (
             "鳥の基本形",

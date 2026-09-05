@@ -1222,6 +1222,48 @@ pub enum TechniqueClassificationRequest {
     Automatic(AutomaticTechniqueMatch),
 }
 
+/// 直接折り([`ori3_model::SeqOp::FoldThrough`])を、利用者のどの操作から適用したか。
+///
+/// 画面が伝えるのは「どの操作をしたか」だけで、表示名を選ばせない。どの操作が
+/// どの分類になるかは[`Self::classification_request`]だけが決める。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FoldThroughOrigin {
+    /// 折り線を引いてから折った。利用者が折り線を決めた折りなので、
+    /// 表示名は手順の折り方(`kind`)のままにする。
+    #[default]
+    DrawnFoldLine,
+    /// 3D表示で紙をつかんでドラッグした(道具「折る」の掴み移動)。
+    GrabMove,
+}
+
+impl FoldThroughOrigin {
+    /// この操作に応じた分類の指定を作る。`None`は「分類を載せない」を表す。
+    ///
+    /// 掴み移動が作るのは折り線1本の直接折りであり、8技法の判定器が読む
+    /// [`FlatMotionInput`]の形を持たない。したがって判定器に掛けられる候補は
+    /// 0件で、[`AutomaticTechniqueMatch::NoMatch`]から
+    /// [`DisplayTechniqueKind::GrabMove`]へ落ちる。名前を推測で付けない。
+    #[must_use]
+    pub fn classification_request(self) -> Option<TechniqueClassificationRequest> {
+        match self {
+            Self::DrawnFoldLine => None,
+            Self::GrabMove => Some(TechniqueClassificationRequest::Automatic(
+                AutomaticTechniqueMatch::NoMatch,
+            )),
+        }
+    }
+}
+
+/// 直接折りで増えた手順へ、その操作に応じた分類を載せる。
+///
+/// 折り線を引いた折りには何も載せず、`kind`の表示名のままにする。載せる場合も
+/// 唯一の入口[`assign_technique_classification`]を通る。
+pub fn classify_fold_through_step(step: &mut FoldStep, origin: FoldThroughOrigin) {
+    if let Some(request) = origin.classification_request() {
+        assign_technique_classification(step, &request);
+    }
+}
+
 /// 手順へ最終的な分類を載せる唯一の入口。
 ///
 /// 自動・手動のどちらもここを通る。自動判定で名前が決まらなかった動きは、
@@ -1270,10 +1312,10 @@ mod tests {
 
     use super::{
         AutomaticTechniqueMatch, CanonicalAdjacency, CanonicalDriver, CanonicalFaceKey,
-        CanonicalSupport, TechniqueClassificationRequest, TechniqueEvidence, TechniqueWitness,
-        assign_technique_classification, automatic_match_from_witnesses,
-        carry_over_technique_classification, classify_aligned_motion, classify_motion_plan,
-        classify_sim011_motion, display_kind_for_technique, sim011_witnesses,
+        CanonicalSupport, FoldThroughOrigin, TechniqueClassificationRequest, TechniqueEvidence,
+        TechniqueWitness, assign_technique_classification, automatic_match_from_witnesses,
+        carry_over_technique_classification, classify_aligned_motion, classify_fold_through_step,
+        classify_motion_plan, classify_sim011_motion, display_kind_for_technique, sim011_witnesses,
     };
     use crate::flat_motion::{
         FlatMotionInput, HalfPlane, LayerTurn, MotionPart, MotionTransform,
@@ -1471,6 +1513,46 @@ mod tests {
                 })
             );
         }
+    }
+
+    /// 直接折りは、紙をつかんでドラッグした操作のときだけ表示名が載る。
+    ///
+    /// 折り線を引いた折りには何も載せず、`kind`の表示名のままにする。
+    #[test]
+    fn only_a_grabbed_fold_through_takes_an_automatic_name() {
+        let mut grabbed = step_without_a_display_name();
+        classify_fold_through_step(&mut grabbed, FoldThroughOrigin::GrabMove);
+        assert_eq!(
+            grabbed.technique_classification,
+            Some(TechniqueClassification {
+                kind: DisplayTechniqueKind::GrabMove,
+                origin: TechniqueClassificationOrigin::Automatic,
+            }),
+            "つかんで動かした折りは、判定器が名前を決められない自動判定として載る"
+        );
+        assert_eq!(grabbed.kind, TechniqueKind::Simple, "折り方は変えない");
+        assert_eq!(grabbed.note, "説明", "説明文は変えない");
+
+        let mut drawn = step_without_a_display_name();
+        classify_fold_through_step(&mut drawn, FoldThroughOrigin::DrawnFoldLine);
+        assert_eq!(
+            drawn.technique_classification, None,
+            "折り線を引いた折りは表示名を載せない"
+        );
+
+        assert_eq!(
+            FoldThroughOrigin::default(),
+            FoldThroughOrigin::DrawnFoldLine,
+            "印の無い旧入力は折り線を引いた折りとして扱う"
+        );
+        assert_eq!(FoldThroughOrigin::DrawnFoldLine.classification_request(), None);
+        assert_eq!(
+            FoldThroughOrigin::GrabMove.classification_request(),
+            Some(TechniqueClassificationRequest::Automatic(
+                AutomaticTechniqueMatch::NoMatch
+            )),
+            "掴み移動は8技法の判定器に掛けられる形を持たないので候補0件になる"
+        );
     }
 
     /// 候補は固定順で全件評価する。0件・1件・2件以上を別々に固定する。

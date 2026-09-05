@@ -1,6 +1,6 @@
 # B1手動受入のCDP自動化仕様
 
-対象はB1のX分類15件である。この文書は実装仕様であり、CDP接続、アプリ起動、ブラウザ起動は行っていない。
+対象はB1のX分類16件である。この文書は実装仕様であり、CDP接続、アプリ起動、ブラウザ起動は行っていない。
 
 ## 共通前提
 
@@ -11,7 +11,7 @@
 - 画素数を合格条件に使うケースは、同一の追跡済みfixtureで3回測定して得る `n1`、`n2`、`n3` に対し、しきい値を `floor(0.8 × min(n1,n2,n3))` とする。実測値そのものを境目にせず、約20%の余裕を取る。現在はアプリを起動しない制約のため、この3値は未測定であり、数値を推測で固定しない。
 - DOMに専用のtest IDがない箇所は、下表の現存selectorを最初に使う。テキスト又は装飾classに頼る箇所は、実装時に併記したsourceへ `data-testid` を追加してから恒久化する。
 
-## 15件の仕様
+## 16件の仕様
 
 | ID | CDP操作（現存DOMの目印と入力） | 測定値 | 数値の合格条件 | 実装先 / 参考 |
 |---|---|---|---|---|
@@ -30,6 +30,7 @@
 | `M3.T3-4.C02` | toolbarの`提案`を押してから閉じる。閉じた前後で`.tool-rail`、`.cp-editor`、`canvas.viewer3d-canvas`、`#context-panel`を数える。 | proposal dialog数と4区画の要素数。 | 開く前0、開いた時1、閉じた後0。4区画は各ちょうど1で、開閉前後とも合計4。 | 新規CDP script。selector追加先`apps/desktop/src/components/AppToolbar.tsx`、参照`apps/desktop/src/components/dialogs/ProposalWizard.dom.test.tsx`。 |
 | `M4.T4-3.C02` | toolbarの`書き出し`を押す。`[data-floating-ui="export-dialog"]`で`展開図(PNG)` radioを選び、`[aria-label="画像の大きさ（長辺の点数）"]`へ1024、`補助線(下書きの線)も含める`を切替える。 | radio数、数値input値、checkbox値。 | radio=4、input値=1024、checkboxのtrue/false切替が各1回反映。 | 新規CDP script。参照`apps/desktop/src/components/dialogs/ExportDialog.dom.test.tsx`。 |
 | `M4.T4-5.C03` | toolbarの`書き出し`→`折り図(PDF)`と`折り図(ページごとのSVG)` radioを各1回選び、手順ありfixtureで保存操作へ進む。 | radioの選択値、保存成功文、出力ファイル数・サイズ。 | radio=4、対象2種の選択各1回、保存成功文各1、PDF=1ファイル・SVG=1ページ以上、各size>0。 | 新規CDP script。参照`apps/desktop/src/components/dialogs/ExportDialog.dom.test.tsx`、`apps/desktop/src/components/dialogs/exportChoices.ts`。 |
+| `ADDITIONAL.FOLD-ALL.C02` | 起動済み同梱版へCDPで接続し、「全部いっぺんに折ってみる」のつまみへ10・20・…・100%の10入力を順に送る。続けて1秒間つまみを連続で動かす。 | 測定のあいだだけ包んだ`window.fetch`から採る`fold_all_preview`要求の往復時間10件と、1秒間に`data-applied-percent`が変わった回数。 | ソルバー1回の最大が33ms以内、更新が30回/秒以上。いずれもNFR-002(`docs/requirements-definition.md:387`)の数値そのままで、緩めない。端から端の時間は要件ではないため参考値として出すだけにする。 | `apps/desktop/tests-live/doc-link-b1-fold-all-latency-cdp.mjs`。参照`apps/desktop/src/store/slices/poseReplaySlice.ts`(間引き`FOLD_ALL_THROTTLE_MS = 16`)、`apps/desktop/src/ipc/client.ts`。 |
 
 ## 実装前に解消する点
 
@@ -53,3 +54,16 @@
 残る10件は、同スクリプトが`blocked`として終了コード2へ出す。現在のAPI/fixtureだけでは、層選択数、プレビュー別readback、安定pick座標、違反/面交差/recovery fixture、又はnative保存先の結果を正しく測れないためである。これらを成功扱いにしない。詳しい実パスと不足理由はスクリプトの`blockedCases`に固定した。
 
 回復画面を作る検査では、起動時に出ている既存の回復画面があれば`復元する`だけを押す。`破棄する`のイベント送信は検査コードに含めない。折り鶴・やっこさん・鳥の基本形の既存fixtureを使う。カエルは追跡済みのJSON fixtureは存在するが、capture APIで直接開ける`.ori3`作品ファイルは無く、残る10件の代用には使わない。
+
+## 追加（2026-09-05）: `ADDITIONAL.FOLD-ALL.C02`
+
+一斉折りの節の既存 checkbox `ADDITIONAL.FOLD-ALL.C01` は「記録された手順に残さない」という主張だけを持ち、速さについては何も言っていない。NFR-002 を一斉折りの仮表示で確かめる checkbox が正本に無かったため、統括の判断で `ADDITIONAL.FOLD-ALL.C02` を新設し、本表へ 16 件目として加えた。
+
+実行本体 `apps/desktop/tests-live/doc-link-b1-fold-all-latency-cdp.mjs` は、`prepare` は非接続、`verify` は既に起動している専用の同梱版へ CDP だけで接続する。`__TAURI_INTERNALS__.invoke` は `writable:false` で包めないため、`window.fetch` を測定のあいだだけ包み、終了時に必ず元へ戻す。包めたことは代入直後に読み戻して確かめる。
+
+2026-09-05 06:5x に、他の測定を止めた静かな状態（`cargo`・`rustc`・test 実行ファイルが 0 件）で 3 回実行し、3 回とも合格した。
+
+- ソルバー1回の最大: 17.6 / 5.1 / 17.7 ms（いずれも上限 33 ms 以内）
+- 3D更新: 43.838 / 38.872 / 45.899 回/秒（いずれも下限 30 回/秒以上）
+- 実行ファイル SHA-256: `4BF0DC2268CB7001AED90F852EC5AF228A2EF365FAD82DB4347271EB20DE2FD6`
+- 記録: `scratchpad/acceptance-2026-09-05/M2.T2-6b.FOLD-ALL-LATENCY-quiet-{1,2,3}.log`（ID 新設前の名前のまま）

@@ -18,15 +18,19 @@ function Assert-True([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw "[TEST NG] $Message" }
 }
 
-function Invoke-Sut([string[]]$Arguments) {
+function Invoke-Ps1([string]$ScriptPath, [string[]]$Arguments) {
     $previous = $ErrorActionPreference
     try {
         $ErrorActionPreference = "Continue"
         $global:LASTEXITCODE = 0
-        $output = @(& $powershellExe -NoProfile -ExecutionPolicy Bypass -File $sut @Arguments 2>&1)
+        $output = @(& $powershellExe -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @Arguments 2>&1)
         return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Text = ($output -join "`n") }
     }
     finally { $ErrorActionPreference = $previous }
+}
+
+function Invoke-Sut([string[]]$Arguments) {
+    return Invoke-Ps1 $sut $Arguments
 }
 
 function Assert-Exit($Result, [int]$Expected, [string]$Name, [string]$Diagnostic = "") {
@@ -49,6 +53,49 @@ function Restore-Artifacts([hashtable]$Baseline) {
     }
 }
 
+function Test-IsReparsePoint([IO.FileSystemInfo]$Item) {
+    return (($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq [IO.FileAttributes]::ReparsePoint)
+}
+
+# junction(reparse point)自身だけを外す。中身は辿らない。
+# Windows PowerShell 5.1 の `Remove-Item` は、中身のあるjunctionに対して
+# -Recurse 無しだと NullReferenceException を投げる(この作業機で実測:
+# 5.1.26100.9168、FullyQualifiedErrorId=System.NullReferenceException,
+# Microsoft.PowerShell.Commands.RemoveItemCommand)。
+# `[IO.Directory]::Delete` は1引数版が非再帰で、reparse pointを辿らないため、
+# junction先(本体のdocs/.git/apps/crates/.github)には触れずに外せる。
+function Remove-JunctionLink([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path)) { return }
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if ($null -eq $item) { return }
+    if (-not (Test-IsReparsePoint $item)) {
+        throw "expected a junction, found a real directory: $Path"
+    }
+    [IO.Directory]::Delete($Path)
+}
+
+# reparse pointを一切辿らずに木を消す。`Remove-Item -Recurse` を使わないのは、
+# junctionを辿って本体を消す版が報告されているためで、この関数は再解析点に
+# 出会ったら中身へ入らずreparse point自身だけを外す。
+function Remove-TreeWithoutFollowingLinks([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path)) { return }
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if ($null -eq $item) { return }
+    if (Test-IsReparsePoint $item) {
+        [IO.Directory]::Delete($Path)
+        return
+    }
+    if (($item.Attributes -band [IO.FileAttributes]::Directory) -ne [IO.FileAttributes]::Directory) {
+        [IO.File]::SetAttributes($Path, [IO.FileAttributes]::Normal)
+        [IO.File]::Delete($Path)
+        return
+    }
+    foreach ($childPath in [IO.Directory]::GetFileSystemEntries($Path)) {
+        Remove-TreeWithoutFollowingLinks $childPath
+    }
+    [IO.Directory]::Delete($Path)
+}
+
 function Remove-TestRoot {
     if (-not (Test-Path -LiteralPath $tempRoot)) { return }
     $resolved = [IO.Path]::GetFullPath($tempRoot).TrimEnd([char[]]"\/")
@@ -56,7 +103,7 @@ function Remove-TestRoot {
         [IO.Path]::GetFileName($resolved) -notmatch '^ori3-doc-link-audit-test-[0-9a-f]{32}$') {
         throw "unsafe self-test cleanup refused: $resolved"
     }
-    Remove-Item -LiteralPath $resolved -Recurse -Force
+    Remove-TreeWithoutFollowingLinks $resolved
 }
 
 [void][IO.Directory]::CreateDirectory($tempRoot)
@@ -79,7 +126,7 @@ try {
     Assert-True ($write.Text -match "roadmap_accounted=$($snapshot.audited)/$($snapshot.total) checked=$($snapshot.checked) unchecked=$($snapshot.unchecked)") "全件の会計表示がありません"
     Assert-True ($write.Text -match "traceability_linked=$($snapshot.evidence_linked)/$($snapshot.total) explicit_outside=$($snapshot.explicit_outside) unclassified=0") "link+対象外の会計表示がありません"
     $generatedLedger = [IO.File]::ReadAllText((Join-Path $tempRoot "roadmap-links.json"), [Text.Encoding]::UTF8) | ConvertFrom-Json
-    Assert-True ([int]$generatedLedger.traceability_accounting.linked_checkbox_count -eq 185 -and [int]$generatedLedger.traceability_accounting.explicit_outside_count -eq 1) "追加目標昇格後の185+1会計が生成台帳にありません"
+    Assert-True ([int]$generatedLedger.traceability_accounting.linked_checkbox_count -eq 186 -and [int]$generatedLedger.traceability_accounting.explicit_outside_count -eq 1) "追加目標昇格後の186+1会計が生成台帳にありません"
     $outsideIds = @($generatedLedger.explicit_outside | ForEach-Object { [string]$_.id })
     Assert-True ($outsideIds.Count -eq 1 -and $outsideIds[0] -eq 'ADDITIONAL.FOLD-IO.C01') "FOLD-IO以外を明示対象外へ残しています: $($outsideIds -join ', ')"
     $foldAllRecords = @($generatedLedger.records | Where-Object { $_.id -eq 'ADDITIONAL.FOLD-ALL.C01' })
@@ -323,6 +370,175 @@ try {
     $sourceDrift = Invoke-Sut @("-CheckTraceability", "-TraceabilityPath", $tempRoot, "-RoadmapInputPath", $roadmapFixture)
     Assert-Exit $sourceDrift 2 "roadmap source changed with saved ledger" "roadmap snapshot hash不一致"
     Assert-True (([regex]::Matches($sourceDrift.Text, '\[STALE\] (?:roadmap-links\.json|roadmap-links\.md|manual-acceptance\.md) bytes不一致')).Count -eq 3) "roadmap sourceだけの変更で3成果物すべてを古いと判定していません`n$($sourceDrift.Text)"
+
+    # 2026-09-05: 検査名台帳の見出し `# definition-tree-sha256=` を書き直す
+    # 唯一の入口 -WriteTestNamesHash。値は -CheckTraceability が照合するのと
+    # 同じ計算経路から出るので、人がhashを手で書かない。書込先は必ず
+    # -TestNamesInputPath で渡した複製にし、追跡対象の台帳へは触らない。
+    Restore-Artifacts $baseline
+    $hashWriteInventory = Join-Path $tempRoot "write-hash-inventory.txt"
+    $productionInventoryBytes = [IO.File]::ReadAllBytes($productionInventory)
+    [IO.File]::WriteAllBytes($hashWriteInventory, $productionInventoryBytes)
+    $staleHash = '0123456789abcdef' * 4
+    $hashWriteText = [IO.File]::ReadAllText($hashWriteInventory, [Text.Encoding]::UTF8)
+    $staleInventoryText = [regex]::Replace($hashWriteText, '(?m)^# definition-tree-sha256=[0-9a-f]{64}$', '# definition-tree-sha256=' + $staleHash, 1)
+    Assert-True (-not [string]::Equals($hashWriteText, $staleInventoryText, [StringComparison]::Ordinal)) "台帳hashの古い値を作れません"
+    [IO.File]::WriteAllText($hashWriteInventory, $staleInventoryText, (New-Object Text.UTF8Encoding($false)))
+    $staleInventoryBytes = [IO.File]::ReadAllBytes($hashWriteInventory)
+
+    # 負例: 古い見出しのままでは -CheckTraceability が止める(この入口が
+    # 検査を弱めていないことの確認)。
+    $staleInventoryCheck = Invoke-Sut @("-CheckTraceability", "-TraceabilityPath", $tempRoot, "-TestNamesInputPath", $hashWriteInventory)
+    Assert-Exit $staleInventoryCheck 1 "stale definition hash still blocks -CheckTraceability" "test definition hashが現在定義と不一致"
+    $expectedHashMatch = [regex]::Match($staleInventoryCheck.Text, 'actual=(?<sha>[0-9a-f]{64})')
+    Assert-True $expectedHashMatch.Success "現在定義のdefinition hashを取得できません`n$($staleInventoryCheck.Text)"
+
+    # 正例: 書き直すと exit=0 になり、見出しの64桁だけが現在の値へ変わる。
+    $hashWrite = Invoke-Sut @("-WriteTestNamesHash", "-TestNamesInputPath", $hashWriteInventory)
+    Assert-Exit $hashWrite 0 "definition hash write" "[WRITE]"
+    $writtenInventoryBytes = [IO.File]::ReadAllBytes($hashWriteInventory)
+    Assert-True ($writtenInventoryBytes.Length -eq $staleInventoryBytes.Length) "台帳のbyte長が変わりました"
+    $changedByteCount = 0
+    for ($byteIndex = 0; $byteIndex -lt $writtenInventoryBytes.Length; $byteIndex++) {
+        if ($writtenInventoryBytes[$byteIndex] -ne $staleInventoryBytes[$byteIndex]) { $changedByteCount++ }
+    }
+    Assert-True ($changedByteCount -le 64) "見出しの64桁以外のbyteも変わりました (変化=$changedByteCount)"
+    $writtenInventoryText = [IO.File]::ReadAllText($hashWriteInventory, [Text.Encoding]::UTF8)
+    Assert-True ($writtenInventoryText -match ('(?m)^# definition-tree-sha256=' + $expectedHashMatch.Groups['sha'].Value + '$')) "現在定義のdefinition hashを書けていません"
+    $freshInventoryCheck = Invoke-Sut @("-CheckTraceability", "-TraceabilityPath", $tempRoot, "-TestNamesInputPath", $hashWriteInventory)
+    Assert-Exit $freshInventoryCheck 0 "definition hash after write passes -CheckTraceability"
+
+    # 冪等: 一致しているときは書かずに [FRESH] を出して exit=0。
+    $hashWriteAgain = Invoke-Sut @("-WriteTestNamesHash", "-TestNamesInputPath", $hashWriteInventory)
+    Assert-Exit $hashWriteAgain 0 "definition hash write is idempotent" "[FRESH]"
+    $unchangedInventoryBytes = [IO.File]::ReadAllBytes($hashWriteInventory)
+    Assert-True ([Convert]::ToBase64String($unchangedInventoryBytes) -ceq [Convert]::ToBase64String($writtenInventoryBytes)) "一致しているのに台帳を書き換えました"
+
+    # 負例: 他のmodeとの同時指定は拒否する(通常の検査・生成経路から台帳を
+    # 書けないようにする。§10.7.6)。
+    foreach ($conflictingMode in @("-CheckTraceability", "-WriteTraceability", "-Check", "-Update")) {
+        $conflict = Invoke-Sut @("-WriteTestNamesHash", $conflictingMode, "-TestNamesInputPath", $hashWriteInventory, "-TraceabilityPath", $tempRoot)
+        Assert-Exit $conflict 1 "definition hash write refuses $conflictingMode" "-WriteTestNamesHash は単独で実行してください"
+    }
+    # 通常の検査経路(governance・CI・check-ci)がこの書込みmodeを呼ばないことを
+    # 実ファイルで固定する。
+    foreach ($callerRelativePath in @('scripts/check-roadmap-governance.ps1', 'scripts/check-ci.ps1', '.github/workflows/ci.yml')) {
+        $callerText = [IO.File]::ReadAllText((Join-Path $repoRoot $callerRelativePath), [Text.Encoding]::UTF8)
+        Assert-True (-not $callerText.Contains('WriteTestNamesHash')) "$callerRelativePath が台帳書込みmodeを呼んでいます"
+    }
+
+    # 2026-09-05 負例: 片付けの部品がjunctionを辿らず、片付けが失敗しても
+    # 本来の判定を隠さないこと。起きた失敗:
+    # `Remove-Item -LiteralPath <junction> -Force` がWindows PowerShell 5.1で
+    # NullReferenceExceptionを投げ、$ErrorActionPreference="Stop"のためfinallyが
+    # 中断し、直後のmanual table負例(Assert-Exit以降)へ一度も到達しないままexit=1になった。
+    $linkProbeRoot = Join-Path $tempRoot "junction-cleanup-probe"
+    $linkProbeTarget = Join-Path $linkProbeRoot "target"
+    $linkProbeTree = Join-Path $linkProbeRoot "tree"
+    [void][IO.Directory]::CreateDirectory((Join-Path $linkProbeTarget "nested"))
+    [IO.File]::WriteAllText((Join-Path $linkProbeTarget "canary.txt"), "ALIVE")
+    [IO.File]::WriteAllText((Join-Path $linkProbeTarget "nested\canary.txt"), "ALIVE")
+    [void][IO.Directory]::CreateDirectory($linkProbeTree)
+    [IO.File]::WriteAllText((Join-Path $linkProbeTree "own.txt"), "own")
+    [void](New-Item -ItemType Junction -Path (Join-Path $linkProbeTree "linked") -Target $linkProbeTarget)
+
+    # Remove-JunctionLinkはjunctionだけを外し、junction先の中身を1つも消さない。
+    Remove-JunctionLink (Join-Path $linkProbeTree "linked")
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $linkProbeTree "linked"))) "Remove-JunctionLinkがjunctionを外せません"
+    Assert-True (Test-Path -LiteralPath (Join-Path $linkProbeTarget "canary.txt")) "Remove-JunctionLinkがjunction先の中身を消しました"
+    Assert-True (Test-Path -LiteralPath (Join-Path $linkProbeTarget "nested\canary.txt")) "Remove-JunctionLinkがjunction先の入れ子まで消しました"
+
+    # junctionを張ったまま木を消しても、junction先(本体に相当)へは入らない。
+    [void](New-Item -ItemType Junction -Path (Join-Path $linkProbeTree "linked") -Target $linkProbeTarget)
+    Remove-TreeWithoutFollowingLinks $linkProbeTree
+    Assert-True (-not (Test-Path -LiteralPath $linkProbeTree)) "Remove-TreeWithoutFollowingLinksが木を消せません"
+    Assert-True (Test-Path -LiteralPath (Join-Path $linkProbeTarget "canary.txt")) "木の削除がjunctionを辿って本体側を消しました"
+    Assert-True (Test-Path -LiteralPath (Join-Path $linkProbeTarget "nested\canary.txt")) "木の削除がjunction先の入れ子まで消しました"
+
+    # 実ディレクトリを渡したら消さずに拒否し、その失敗が後続の判定を止めないこと。
+    $cleanupRefused = $false
+    try { $null = $null }
+    finally {
+        try { Remove-JunctionLink $linkProbeTarget }
+        catch { $cleanupRefused = $true }
+    }
+    $cleanupReachedAfterFailure = $true
+    Assert-True $cleanupRefused "Remove-JunctionLinkが実ディレクトリを拒否しません"
+    Assert-True (Test-Path -LiteralPath (Join-Path $linkProbeTarget "canary.txt")) "拒否したのに実ディレクトリを消しました"
+    Assert-True $cleanupReachedAfterFailure "片付けが失敗すると後続の判定へ到達できません"
+
+    # 片付けのfinally節が、投げる形(Remove-Item・catchなし)へ戻っていないことを実ファイルで固定する。
+    $selfText = [IO.File]::ReadAllText($PSCommandPath, [Text.Encoding]::UTF8)
+    $cleanupFinally = [regex]::Match($selfText, '(?ms)^    finally \{\r?\n        # junctionは対象の中身を持たない.*?^    \}')
+    Assert-True $cleanupFinally.Success "manual table片付けのfinally節を自分の中から取り出せません"
+    # コメント行は判定から除く。節の中の説明文が `Remove-Item` という語を含むため
+    # (この不具合の経緯そのものを書いてある)、実行される行だけを見る。
+    $cleanupFinallyCode = (@($cleanupFinally.Value -split "`r?`n" | Where-Object { -not $_.TrimStart().StartsWith('#') })) -join "`n"
+    Assert-True ($cleanupFinallyCode.Contains('Remove-JunctionLink')) "片付けの実行行からRemove-JunctionLinkが消えています"
+    Assert-True (-not $cleanupFinallyCode.Contains('Remove-Item')) "片付けのfinally節がRemove-Itemへ戻っています(junctionでNullReferenceException)"
+    Assert-True (([regex]::Matches($cleanupFinallyCode, 'try \{ Remove-')).Count -eq 2) "片付けの2手順がtry/catchで包まれていません"
+    Remove-TreeWithoutFollowingLinks $linkProbeRoot
+
+    # 2026-09-05: 受入担当2名が手で書いた7件の手動受入記録が
+    # $manuallyRecordedAcceptance の表へ取り込まれていることの負例。
+    # 1件を表から外した複製で生成すると、その1件だけ定型文へ戻り、
+    # 他の6件は手書き本文のまま変わらないことを確かめる
+    # (§10.7.6再発防止: 記録が表に無いと再生成のたびに定型文へ戻る)。
+    Restore-Artifacts $baseline
+    $sutText = [IO.File]::ReadAllText($sut, [Text.Encoding]::UTF8)
+    $removedManualId = "MANUAL.M2.T2-6b.C05.SCREEN-ACCEPTANCE"
+    $manualTableEntryPattern = '(?ms)^    "' + [regex]::Escape($removedManualId) + '" = @\(.*?\r?\n    \)\r?\n'
+    $mutatedSutText = [regex]::Replace($sutText, $manualTableEntryPattern, '', 1)
+    Assert-True (-not [string]::Equals($sutText, $mutatedSutText, [StringComparison]::Ordinal)) "手動受入表から $removedManualId を複製で取り除けません"
+    Assert-True (-not $mutatedSutText.Contains("`"$removedManualId`" = @(")) "複製に $removedManualId の表項目がまだ残っています"
+    Assert-True ($mutatedSutText.Contains('"MANUAL.M2.T2-7.C03.SCREEN-ACCEPTANCE" = @(')) "他のIDの表項目まで複製で消えています"
+    # 複製は repoRoot構造ごと必要とする(get-roadmap-status.ps1・
+    # roadmap-status-policy.json・docs/progress.md・COMMIT-PUSH証拠のgit操作が
+    # $PSScriptRootの兄弟と$repoRootでのgit -C解決へ依存するため)。scripts/だけを
+    # 変異させた実体コピーにし、他は本体を指すjunctionにして安全に隔離する。
+    # .ps1として実行するため、production同様にBOM付きUTF-8で書く(PowerShell 5.1は
+    # BOMが無いソースをsystem codepageで読み、日本語文字列を壊すため)。
+    $manualTableFakeRepoRoot = Join-Path $tempRoot "manual-table-mutant-repo"
+    if (Test-Path -LiteralPath $manualTableFakeRepoRoot) { Remove-Item -LiteralPath $manualTableFakeRepoRoot -Recurse -Force }
+    [void][IO.Directory]::CreateDirectory($manualTableFakeRepoRoot)
+    $manualTableLinkedDirs = @("docs", ".git", "apps", "crates", ".github")
+    try {
+        foreach ($linkedDir in $manualTableLinkedDirs) {
+            [void](New-Item -ItemType Junction -Path (Join-Path $manualTableFakeRepoRoot $linkedDir) -Target (Join-Path $repoRoot $linkedDir))
+        }
+        Copy-Item -LiteralPath (Join-Path $repoRoot "scripts") -Destination (Join-Path $manualTableFakeRepoRoot "scripts") -Recurse -Force
+        $manualTableMutantScript = Join-Path $manualTableFakeRepoRoot "scripts\doc-link-audit.ps1"
+        [IO.File]::WriteAllText($manualTableMutantScript, $mutatedSutText, (New-Object Text.UTF8Encoding($true)))
+        $manualTableMutantOut = Join-Path $tempRoot "manual-table-mutant-out"
+        [void][IO.Directory]::CreateDirectory($manualTableMutantOut)
+        $manualTableMutantResult = Invoke-Ps1 $manualTableMutantScript @("-WriteTraceability", "-PreserveReport", "-TraceabilityPath", $manualTableMutantOut, "-RoadmapInputPath", $roadmapFixture, "-TestNamesInputPath", $hashWriteInventory)
+    }
+    finally {
+        # junctionは対象の中身を持たないので、個別に(非再帰で)先に外してから
+        # 複製したscripts/だけを削除する。親を先に再帰削除すると、古い
+        # PowerShellではjunction先(本体のdocs/apps/crates/.git)まで辿って
+        # 消しかねないため、この順序を守る。
+        # 片付けの失敗で本来の判定(:Assert-Exit以降)を隠さない。2026-09-05に
+        # `Remove-Item -LiteralPath <junction> -Force` がNullReferenceExceptionを投げ、
+        # $ErrorActionPreference="Stop" のため finally が中断し、manual table負例の
+        # 判定へ一度も到達しないまま exit=1 になった。片付けの例外は警告にする。
+        if ($manualTableLinkedDirs -and -not [string]::IsNullOrWhiteSpace($manualTableFakeRepoRoot)) {
+            foreach ($linkedDir in $manualTableLinkedDirs) {
+                $linkedPath = Join-Path $manualTableFakeRepoRoot $linkedDir
+                try { Remove-JunctionLink $linkedPath }
+                catch { Write-Warning "[CLEANUP] junctionを外せません: $linkedPath : $($_.Exception.Message)" }
+            }
+            try { Remove-TreeWithoutFollowingLinks $manualTableFakeRepoRoot }
+            catch { Write-Warning "[CLEANUP] 偽repoを消せません: $manualTableFakeRepoRoot : $($_.Exception.Message)" }
+        }
+    }
+    Assert-Exit $manualTableMutantResult 0 "manual table mutant generation"
+    $mutantManualText = [IO.File]::ReadAllText((Join-Path $manualTableMutantOut "manual-acceptance.md"), [Text.Encoding]::UTF8)
+    Assert-True ($mutantManualText.Contains("## $removedManualId`r`n1. 統括が画面を同梱した版を1つだけ起動し、checkbox本文の操作を行う。")) "$removedManualId が表から外れても定型文へ戻っていません`n$mutantManualText"
+    Assert-True (-not $mutantManualText.Contains('実行本体: ``apps/desktop/tests-live/doc-link-b1-pull-cdp.mjs``')) "$removedManualId の手書き本文が複製にまだ残っています"
+    Assert-True ($mutantManualText.Contains('実行本体: ``apps/desktop/tests-live/doc-link-b1-penetration-cdp.mjs``')) "他のID(M2.T2-7.C03)の手書き本文が巻き添えで消えています"
+    Assert-True ($mutantManualText.Contains('骨格を指定して展開図を提案してもらう画面を追加')) "他のID(M3.T3-4.C04)の手書き本文が巻き添えで消えています"
+    Assert-True ($mutantManualText.Contains('頂点141・辺280、手順14')) "他のID(M4.T4-6.C02)の手書き本文が巻き添えで消えています"
 
     Write-Host "[TEST OK] doc-link-audit: $script:assertions assertions"
     exit 0

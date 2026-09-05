@@ -688,6 +688,19 @@ try {
     $reportLogPath = Join-Path $Repository "docs\報告記録.md"
     $unlistedReportWaitPath = Join-Path $Repository "scratchpad\unlisted-report.md"
     $desktop = Join-Path $Repository "target\release\desktop.exe"
+    $desktopDirectory = [IO.Path]::GetDirectoryName($desktop)
+    $webViewArguments = "--remote-debugging-port=9222 --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"
+    $webViewAssignment = "`$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = `"$webViewArguments`""
+    $desktopStart = "Start-Process -FilePath '$desktop' -WorkingDirectory '$desktopDirectory' -PassThru"
+    $preserveDirectory = Join-Path $TempBase "ori3-boundary-test-preserve"
+    $preserveDirectoryOther = Join-Path $TempBase "ori3-boundary-test-preserve-two"
+    $preserveAssignment = "`$env:ORI3_TEST_APP_DATA_DIR = `"$preserveDirectory`""
+    $outsideTempDirectory = Join-Path ([IO.Path]::GetPathRoot($TempBase)) "ori3-boundary-test-outside-temp"
+    $escapedTempDirectory = (Join-Path $TempBase "..") + "\ori3-boundary-test-escaped"
+    $hookSource = [IO.File]::ReadAllText($HookPath, [Text.Encoding]::UTF8)
+    Assert-Contains $hookSource ("`$script:DesktopBrowserArguments = `"$webViewArguments`"") "hook must keep the WebView2 remote-debugging string as a single constant"
+    $captureSource = [IO.File]::ReadAllText((Join-Path $PSScriptRoot "..\capture-steps.ps1"), [Text.Encoding]::UTF8)
+    Assert-Contains $captureSource "`"$webViewArguments`"" "scripts/capture-steps.ps1 must use the same WebView2 remote-debugging string as the hook constant"
     $otherPowerShell = Join-Path $Repository "scripts\powershell.exe"
     $sample = Join-Path $Repository "docs\sample.md"
     $commitMessage = Join-Path $Repository "scratchpad\commit-message.txt"
@@ -756,6 +769,9 @@ try {
         @{ Name = "production payload exact local report time"; Command = "Get-Date -Format 'yyyy-MM-dd HH:mm'" },
         @{ Name = "desktop start"; Command = "Start-Process -FilePath '$desktop' -WorkingDirectory '$([IO.Path]::GetDirectoryName($desktop))' -PassThru" },
         @{ Name = "desktop close"; Command = "(Get-Process -Name desktop -ErrorAction Stop).CloseMainWindow()" },
+        @{ Name = "desktop start with the required WebView2 debugging prelude"; Command = "$webViewAssignment; $desktopStart" },
+        @{ Name = "desktop start with the WebView2 prelude and a preserved app data folder"; Command = "$webViewAssignment; $preserveAssignment; $desktopStart" },
+        @{ Name = "desktop start with another system temp app data folder"; Command = "$webViewAssignment; `$env:ORI3_TEST_APP_DATA_DIR = '$preserveDirectoryOther'; $desktopStart" },
         @{ Name = "exact host hidden detached continuous watcher"; Command = $detachedWatchCommand }
     )
     foreach ($case in $allowedCases) { Assert-PreAllowed -Name $case.Name -Command $case.Command }
@@ -877,6 +893,22 @@ try {
         @{ Name = "bash wrapper"; Command = "bash -c 'git status'" },
         @{ Name = "wsl wrapper"; Command = "wsl git status" },
         @{ Name = "desktop wrong executable"; Command = "Start-Process -FilePath cargo.exe" },
+        @{ Name = "launch prelude with a different environment variable"; Command = "`$env:WEBVIEW2_USER_DATA_FOLDER = `"$webViewArguments`"; $desktopStart" },
+        @{ Name = "launch prelude with a one character different WebView2 string"; Command = "`$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = `"--remote-debugging-port=9223 --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection`"; $desktopStart" },
+        @{ Name = "launch prelude with an app data folder outside system temp"; Command = "$webViewAssignment; `$env:ORI3_TEST_APP_DATA_DIR = '$outsideTempDirectory'; $desktopStart" },
+        @{ Name = "launch prelude with an app data folder that climbs out of system temp"; Command = "$webViewAssignment; `$env:ORI3_TEST_APP_DATA_DIR = '$escapedTempDirectory'; $desktopStart" },
+        @{ Name = "launch prelude with a relative app data folder"; Command = "$webViewAssignment; `$env:ORI3_TEST_APP_DATA_DIR = 'ori3-boundary-test-preserve'; $desktopStart" },
+        @{ Name = "launch prelude with an expanded app data folder"; Command = "$webViewAssignment; `$env:ORI3_TEST_APP_DATA_DIR = `"`$env:TEMP\ori3-boundary-test-preserve`"; $desktopStart" },
+        @{ Name = "launch prelude with a third environment assignment"; Command = "$webViewAssignment; $preserveAssignment; `$env:ORI3_EXTRA = 'x'; $desktopStart" },
+        @{ Name = "launch prelude without any Start-Process"; Command = "$webViewAssignment; $preserveAssignment" },
+        @{ Name = "launch prelude after the Start-Process"; Command = "$desktopStart; $webViewAssignment" },
+        @{ Name = "launch prelude with a fourth trailing statement"; Command = "$webViewAssignment; $preserveAssignment; $desktopStart; git status" },
+        @{ Name = "launch prelude with a mismatched WorkingDirectory"; Command = "$webViewAssignment; Start-Process -FilePath '$desktop' -WorkingDirectory '$Repository' -PassThru" },
+        @{ Name = "launch prelude before a non desktop command"; Command = "$webViewAssignment; cargo test --workspace" },
+        @{ Name = "launch prelude before desktop CloseMainWindow"; Command = "$webViewAssignment; (Get-Process -Name desktop -ErrorAction Stop).CloseMainWindow()" },
+        @{ Name = "launch prelude appending instead of assigning"; Command = "`$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS += `"$webViewArguments`"; $desktopStart" },
+        @{ Name = "launch prelude assigning a local variable"; Command = "`$WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = `"$webViewArguments`"; $desktopStart" },
+        @{ Name = "launch prelude with an added ArgumentList"; Command = "$webViewAssignment; Start-Process -FilePath '$desktop' -WorkingDirectory '$desktopDirectory' -PassThru -ArgumentList '--x'" },
         @{ Name = "arbitrary Remove-Item"; Command = "Remove-Item -LiteralPath '$sample'" },
         @{ Name = "direct Stop-Process remains denied"; Command = "Stop-Process -Id 1" }
     )
@@ -888,6 +920,7 @@ try {
     Assert-Contains $stalePolicyReason "maximum is 90 minutes" "policy rejection must report the 90 minute report freshness boundary"
     [IO.File]::SetLastWriteTimeUtc($reportLogPath, [DateTime]::UtcNow)
     Assert-PreDenied -Name "production payload Get-Date through Bash" -Command "Get-Date -Format 'yyyy-MM-dd HH:mm'" -ToolName "Bash"
+    Assert-PreDenied -Name "desktop launch prelude through Bash" -Command "$webViewAssignment; $desktopStart" -ToolName "Bash"
 
     Write-Host "[4/8] parse, dynamic, mixed, and member bypasses are denied"
     $parseDenied = @(

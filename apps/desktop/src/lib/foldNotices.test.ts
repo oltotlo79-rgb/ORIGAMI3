@@ -36,7 +36,7 @@ const NOTICE_CASES = [
 ] as const;
 
 describe("ほかの折り紙ソフトのファイルに関する注意文", () => {
-  it("対応外7項目を平易な固定文で順序どおり保持し、内部用語を含めない", () => {
+  it("対応外8項目を平易な固定文で順序どおり保持し、内部用語を含めない", () => {
     expect(FOLD_UNSUPPORTED_CONTENT_ITEMS).toEqual([
       "立体になったときの点の位置",
       "途中から複数の流れに分かれる折る手順",
@@ -45,9 +45,11 @@ describe("ほかの折り紙ソフトのファイルに関する注意文", () =
       "作品につけたメモや説明",
       "仕上げにつけた丸み",
       "元のファイルで「平らな折り目」と「種類が指定されていない折り目」を区別すること",
+      // 2026-09-05追加。平らな形で終わる手順は書き出せるようになったので、残る範囲だけを示す。
+      "まだ平らになっていない途中の形で終わる手順のうち、紙を曲げないと作れないもの",
     ]);
-    expect(FOLD_UNSUPPORTED_CONTENT_ITEMS).toHaveLength(7);
-    expect(new Set(FOLD_UNSUPPORTED_CONTENT_ITEMS).size).toBe(7);
+    expect(FOLD_UNSUPPORTED_CONTENT_ITEMS).toHaveLength(8);
+    expect(new Set(FOLD_UNSUPPORTED_CONTENT_ITEMS).size).toBe(8);
 
     const displayed = [
       FOLD_FILE_DISPLAY_NAME,

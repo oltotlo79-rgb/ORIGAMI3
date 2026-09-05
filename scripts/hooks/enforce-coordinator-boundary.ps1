@@ -39,6 +39,12 @@ $script:SchemaVersion = 1
 $script:ForbiddenDocument = "docs/competitive-review-2026-08-20.md"
 $script:Utf8NoBom = New-Object Text.UTF8Encoding($false)
 $script:MaxReportLogAgeMinutesForWait = 90
+# The fifth bullet chain of docs/rules/02 (line 4) requires the coordinator to set this exact
+# WebView2 argument string before starting desktop.exe; scripts/capture-steps.ps1:661 uses the
+# same literal. This file is UTF-8 without a BOM, so emitted strings stay ASCII on purpose.
+$script:DesktopBrowserArgumentsVariable = "env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"
+$script:DesktopBrowserArguments = "--remote-debugging-port=9222 --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"
+$script:DesktopAppDataVariable = "env:ORI3_TEST_APP_DATA_DIR"
 $script:Mutex = $null
 $script:MutexHeld = $false
 $script:BoundaryScriptPath = [IO.Path]::GetFullPath([string]$MyInvocation.MyCommand.Path)
@@ -293,7 +299,9 @@ function Get-DenialReason {
         "ALLOW-2: exact scripts/check.ps1, check-ci.ps1, and check-release-ready.ps1 quality gates; plus scripts/check-receipt.ps1 -RepairSigningKey -RepoRoot <this repository> because the coordinator identity must create its own Windows DPAPI signing key",
         "ALLOW-3: literal file reads; rg requires the prohibited-document exclusion glob",
         "ALLOW-4: read-only process and free-capacity inspection; exact local report-time read by Get-Date -Format 'yyyy-MM-dd HH:mm'",
-        "ALLOW-5: literal desktop.exe Start-Process and desktop CloseMainWindow()",
+        ("ALLOW-5: literal desktop.exe Start-Process and desktop CloseMainWindow(); the Start-Process may be preceded by the exact " +
+            "`$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS remote-debugging assignment that docs/rules/02 line 4 requires, " +
+            "optionally followed by one literal `$env:ORI3_TEST_APP_DATA_DIR path under the system temp directory; no other assignment, order, or statement is accepted"),
         "ALLOW-6: exact hidden detached Start-Process launcher for continuous 10-minute scripts/watch-agents.ps1 monitoring, plus the exact boundary-script StopRecordedWatcher mode that can stop only the process identified by the fixed runtime state; -Once and direct Stop-Process are denied"
     ) -join "; "
     $escape = ""
@@ -1437,6 +1445,103 @@ function Test-DesktopStartInvocation {
     }
 }
 
+function Test-SystemTempDescendantPath {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    if (-not [IO.Path]::IsPathRooted($Path)) { return $false }
+    if ($Path.IndexOfAny([char[]]@("*", "?")) -ge 0) { return $false }
+    try {
+        $full = [IO.Path]::GetFullPath($Path).TrimEnd([char[]]"\/")
+        $temp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([char[]]"\/")
+    }
+    catch { return $false }
+    if ([string]::IsNullOrWhiteSpace($full) -or [string]::IsNullOrWhiteSpace($temp)) { return $false }
+    return $full.StartsWith(($temp + [string][IO.Path]::DirectorySeparatorChar), [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Get-DesktopLaunchAssignment {
+    param([Parameter(Mandatory = $true)]$Statement)
+
+    $invalid = [PSCustomObject]@{ Valid = $false; Name = ""; Value = ""; Text = "" }
+    if (-not ($Statement -is [Management.Automation.Language.AssignmentStatementAst])) { return $invalid }
+    if ($Statement.Operator -ne [Management.Automation.Language.TokenKind]::Equals) { return $invalid }
+    $left = $Statement.Left
+    if (-not ($left -is [Management.Automation.Language.VariableExpressionAst])) { return $invalid }
+    if ($left.Splatted) { return $invalid }
+    $name = [string]$left.VariablePath.UserPath
+    if ([string]$left.Extent.Text -ne ('$' + $name)) { return $invalid }
+    $right = $Statement.Right
+    if (-not ($right -is [Management.Automation.Language.CommandExpressionAst])) { return $invalid }
+    if (@($right.Redirections).Count -ne 0) { return $invalid }
+    $expression = $right.Expression
+    if (-not ($expression -is [Management.Automation.Language.StringConstantExpressionAst])) { return $invalid }
+    return [PSCustomObject]@{
+        Valid = $true
+        Name = $name
+        Value = [string]$expression.Value
+        Text = [string]$expression.Extent.Text
+    }
+}
+
+function Test-DesktopLaunchSequence {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Statements,
+        [Parameter(Mandatory = $true)][string]$ToolName,
+        [Parameter(Mandatory = $true)][string]$RepositoryRoot
+    )
+
+    # Returns $null when the input is not "literal assignments then one pipeline" so that the
+    # caller keeps its generic denial. Once the shape matches, this function always decides.
+    if ($ToolName -ne "PowerShell") { return $null }
+    if ($Statements.Count -lt 2 -or $Statements.Count -gt 3) { return $null }
+    if (-not ($Statements[$Statements.Count - 1] -is [Management.Automation.Language.PipelineAst])) { return $null }
+    $assignments = New-Object "Collections.Generic.List[object]"
+    for ($index = 0; $index -lt $Statements.Count - 1; $index++) {
+        $assignment = Get-DesktopLaunchAssignment $Statements[$index]
+        if (-not $assignment.Valid) { return $null }
+        $assignments.Add($assignment)
+    }
+
+    if (-not [string]::Equals($assignments[0].Name, $script:DesktopBrowserArgumentsVariable, [StringComparison]::OrdinalIgnoreCase)) {
+        return New-PolicyDecision $false "desktop" "the desktop launch prelude must assign WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS first"
+    }
+    if (-not [string]::Equals($assignments[0].Value, $script:DesktopBrowserArguments, [StringComparison]::Ordinal)) {
+        return New-PolicyDecision $false "desktop" "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS must be the exact remote-debugging string required by docs/rules/02 line 4"
+    }
+    if ($assignments.Count -eq 2) {
+        $appData = $assignments[1]
+        if (-not [string]::Equals($appData.Name, $script:DesktopAppDataVariable, [StringComparison]::OrdinalIgnoreCase)) {
+            return New-PolicyDecision $false "desktop" "only ORI3_TEST_APP_DATA_DIR may follow the WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS assignment"
+        }
+        if ($appData.Text.Contains('$') -or $appData.Text.Contains('`')) {
+            return New-PolicyDecision $false "desktop" "ORI3_TEST_APP_DATA_DIR must be a literal path without expansion or escapes"
+        }
+        if (-not (Test-SystemTempDescendantPath $appData.Value)) {
+            return New-PolicyDecision $false "desktop" "ORI3_TEST_APP_DATA_DIR must be an absolute literal path below the system temp directory"
+        }
+    }
+
+    $pipeline = $Statements[$Statements.Count - 1]
+    $backgroundProperty = $pipeline.PSObject.Properties["Background"]
+    if ($null -ne $backgroundProperty -and [bool]$backgroundProperty.Value) {
+        return New-PolicyDecision $false "desktop" "shell background operators are denied"
+    }
+    $elements = @($pipeline.PipelineElements)
+    if ($elements.Count -ne 1 -or -not ($elements[0] -is [Management.Automation.Language.CommandAst])) {
+        return New-PolicyDecision $false "desktop" "the desktop launch prelude may only precede one desktop.exe Start-Process command"
+    }
+    $shape = Get-StaticCommandParts $elements[0]
+    if (-not $shape.Valid) { return New-PolicyDecision $false "desktop" $shape.Error }
+    if ($shape.Parts.Count -eq 0 -or [string]::IsNullOrWhiteSpace($shape.Parts[0])) {
+        return New-PolicyDecision $false "desktop" "command name is not static"
+    }
+    if ([IO.Path]::GetFileName($shape.Parts[0].Replace("/", "\")).ToLowerInvariant() -ne "start-process") {
+        return New-PolicyDecision $false "desktop" "the desktop launch prelude may only precede one desktop.exe Start-Process command"
+    }
+    return Test-DesktopStartInvocation -Parts $shape.Parts -RepositoryRoot $RepositoryRoot
+}
+
 function Test-ReportUpdateWaitInvocation {
     param(
         [Parameter(Mandatory = $true)][string[]]$Arguments,
@@ -1717,7 +1822,10 @@ function Test-PolicyCommand {
     }
     $statements = @($ast.EndBlock.Statements)
     if ($statements.Count -ne 1 -or -not ($statements[0] -is [Management.Automation.Language.PipelineAst])) {
-        return New-PolicyDecision $false "parse" "exactly one top-level pipeline is required; assignments/control flow are denied"
+        $launch = Test-DesktopLaunchSequence -Statements $statements -ToolName $ToolName -RepositoryRoot $RepositoryRoot
+        if ($null -ne $launch) { return $launch }
+        return New-PolicyDecision $false "parse" ("exactly one top-level pipeline is required; assignments/control flow are denied " +
+            "except the fixed WebView2 remote-debugging prelude before a desktop.exe Start-Process")
     }
     $pipeline = $statements[0]
     $backgroundProperty = $pipeline.PSObject.Properties["Background"]

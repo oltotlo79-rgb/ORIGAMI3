@@ -16,7 +16,8 @@
 //    node apps/desktop/tests-live/doc-link-b1-recovery-cdp.mjs verify
 //
 // The preparation phase refuses a nonempty directory and never deletes anything.
-// The verification phase only chooses "復元する"; it never sends "破棄する".
+// The verification phase only chooses "復元する"; it never sends "破棄する" and
+// never sends "あとで確認する".
 
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
@@ -43,15 +44,26 @@ const executable = process.env.ORI3_DESKTOP_EXE ? path.resolve(process.env.ORI3_
 const expectedExecutableHash = (process.env.ORI3_DESKTOP_SHA256 ?? "").toUpperCase();
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const isolationValue = process.env.ORI3_TEST_APP_DATA_DIR;
+// 復元後に利用者の画面へ出る作品なので、折り鶴の正本
+// `crates/ori3-layers/tests/fixtures/traditional-crane/traditional-crane-cp.ori3`
+// （利用者から受け取った traditional_crane_math_bundle）から作った3手の作品を使う。
+// 以前は `crates/ori3-rigid/tests/fixtures/check-crane.ori3`（提案探索が返した6手の出力、
+// 頂点33・辺61）を写しており、復元すると鶴ではなく凧形の展開図が表示されていた。
+// 頂点56・辺114は正本の展開図と一致する。
 const fixture = {
-  path: path.resolve(repositoryRoot, "crates/ori3-rigid/tests/fixtures/check-crane.ori3"),
-  sha256: "D44565B8CF3FF46AAD03905709CF891DA6627D235BD1CCE02F1F8EF8E67CF818",
-  vertices: 33,
-  edges: 61,
-  steps: 6,
+  path: path.resolve(repositoryRoot, "apps/desktop/tests-live/fixtures/traditional-crane-full.ori3"),
+  sha256: "D2C6DC4A691824C42CC983118B22A9397B2641164DF1A0C7FECD40F2D41C214D",
+  vertices: 56,
+  edges: 114,
+  steps: 3,
 };
 const autosaveName = "無題.ori3.autosave";
 const markerName = "autosave-location.txt";
+// 起動時の `prepare_session` は旧形式の1件を複数候補の索引へ移し、payload を
+// `<app-data>/autosave-recovery/<番号>.ori3` へ置く。名前は
+// `apps/desktop/src-tauri/src/autosave.rs:44` の `CANDIDATES_DIR` と
+// 同 `:336` の `candidate_path` に一致する。
+const candidatesDirName = "autosave-recovery";
 
 function sha256(file) {
   return createHash("sha256").update(readFileSync(file)).digest("hex").toUpperCase();
@@ -72,6 +84,16 @@ function recoveryPaths(directory) {
     autosave: path.join(directory, autosaveName),
     marker: path.join(directory, markerName),
   };
+}
+
+/** 持ち越し候補の payload を絶対パスで並べる(名前順)。 */
+function candidatePayloads(directory) {
+  const candidates = path.join(directory, candidatesDirName);
+  if (!existsSync(candidates)) return [];
+  return readdirSync(candidates)
+    .filter((name) => name.endsWith(".ori3"))
+    .map((name) => path.join(candidates, name))
+    .sort();
 }
 
 function verifyFixture() {
@@ -225,6 +247,9 @@ async function verify() {
   verifyFixture();
   assert.ok(existsSync(paths.autosave) && existsSync(paths.marker), "run --prepare before starting desktop.exe");
   verifyExecutionContract();
+  // 復元を押す前の持ち越し候補。押した後に同じ payload が残ることを確かめるため、
+  // 画面を触る前にここで読む。
+  const candidatesBeforeRestore = candidatePayloads(directory);
   const endpoint = `http://127.0.0.1:${cdpPort}`;
   const targets = await fetch(`${endpoint}/json/list`).then((response) => {
     if (!response.ok) throw new Error(`CDP /json/list: HTTP ${response.status}`);
@@ -245,6 +270,11 @@ async function verify() {
         if (!dialog) throw new Error("recovery dialog did not appear at startup");
         const buttons = [...dialog.querySelectorAll("button")];
         const labels = buttons.map((button) => compact(button.textContent));
+        // 候補ごとの選択(復元する/破棄する)は一覧の各項目の中にあり、
+        // 「あとで確認する」は候補の外にある画面全体の先送りである。
+        const candidateLabels = [...dialog.querySelectorAll('ul[aria-label="前回の作業"] > li')].map(
+          (item) => [...item.querySelectorAll("button")].map((button) => compact(button.textContent)),
+        );
         const restore = buttons.find((button) => compact(button.textContent) === "復元する");
         if (!restore) throw new Error("recovery dialog has no Restore button");
         const before = api.getInteractionState();
@@ -263,6 +293,7 @@ async function verify() {
         if (document.querySelector('[data-floating-ui="recovery-dialog"]')) throw new Error("recovery dialog did not close after Restore");
         return {
           labels,
+          candidateLabels,
           before,
           viewer3dBeforeRecovery,
           after: api.getInteractionState(),
@@ -270,17 +301,64 @@ async function verify() {
         };
       }})()`,
     );
-    assert.deepEqual(result.labels, ["復元する", "破棄する"], "recovery choices changed");
+    // 「あとで確認する」は製品が意図して置いた3つ目のbuttonで、画面の検査
+    // `apps/desktop/src/components/RecoveryDialog.dom.test.tsx:88` とヘルプ
+    // `apps/desktop/src/help/chapters/saveExport.ts:44,50,55` が実名で固定している
+    // (緩和ではなく、意図した変更に対する照合値の更新)。
+    assert.deepEqual(
+      result.labels,
+      ["復元する", "破棄する", "あとで確認する"],
+      "recovery choices changed",
+    );
+    // `docs/traceability/b1-cdp-automation-plan.md:28` の「選択肢はちょうど2」は
+    // 候補ごとの選択を指す。`apps/desktop/src/components/RecoveryDialog.tsx:69-91` の
+    // 候補内 `.button-row` がその2つで、画面全体の先送りは別に数える。
+    assert.deepEqual(
+      result.candidateLabels,
+      [["復元する", "破棄する"]],
+      "per-candidate recovery choices changed",
+    );
     assertViewer3dInteractionCapture(result.viewer3dBeforeRecovery, "before recovery");
     assertViewer3dInteractionCapture(result.after.viewer3d, "after recovery");
     assert.equal(result.after.diagnosis.recoveryVisible, false, "recovery remains visible after Restore");
     assert.equal(result.after.document.vertexCount, fixture.vertices, "restored vertex count differs from fixture");
     assert.equal(result.after.document.edgeCount, fixture.edges, "restored edge count differs from fixture");
     assert.equal(result.info.stepCount, fixture.steps, "restored step count differs from fixture");
-    assert.ok(!existsSync(paths.autosave), "autosave remains after real recovery_restore");
-    assert.ok(!existsSync(paths.marker), "autosave marker remains after real recovery_restore");
+    // 復元しただけでは控えを消さない、が製品の契約である。
+    // `apps/desktop/src-tauri/src/autosave.rs:1762`
+    // `restored_candidate_is_deleted_only_after_a_successful_save` が、復元直後は
+    // `assert!(candidate.is_file(), "復元だけで候補を消してはいけない")`、明示保存の成功後に
+    // `discard_after_save` で初めて消えることを固定する。画面が呼ぶ `recovery_restore`
+    // (`apps/desktop/src-tauri/src/commands.rs:506`) は同 `:1214` の `restore_candidate` へ入り、
+    // そこで消すのは現行作業枠 `autosave-current.ori3` (同 `:1276`) だけである。
+    // 旧形式の payload と目印は同 `:2055`
+    // `legacy_single_candidate_is_migrated_without_deleting_its_source` が移行後も残すことを
+    // 固定している。以前ここは復元直後に両方が消えていることを求めており、契約と逆だった。
+    // 保存を経て消える側は上記Rust検査が受け持つ。capture API に保存の入口が無く、
+    // この script は実機の保存ダイアログを開かないため、ここでは検査しない。
+    assert.equal(candidatesBeforeRestore.length, 1, "prepare should leave exactly one carried candidate");
+    for (const payload of candidatesBeforeRestore) {
+      assert.ok(existsSync(payload), `carried candidate disappeared after Restore alone: ${payload}`);
+    }
+    assert.ok(existsSync(paths.autosave), "legacy autosave payload disappeared after Restore alone");
+    assert.ok(existsSync(paths.marker), "legacy autosave marker disappeared after Restore alone");
     process.stdout.write("M2.T2-8.C02 VERIFY PASSED\n");
-    process.stdout.write(`${JSON.stringify({ passed: true, id: "M2.T2-8.C02", result }, null, 2)}\n`);
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          passed: true,
+          id: "M2.T2-8.C02",
+          keptAfterRestore: {
+            candidates: candidatesBeforeRestore,
+            legacyAutosave: paths.autosave,
+            legacyMarker: paths.marker,
+          },
+          result,
+        },
+        null,
+        2,
+      )}\n`,
+    );
   } finally {
     connection.close();
   }

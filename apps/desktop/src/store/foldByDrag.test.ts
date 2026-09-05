@@ -18,6 +18,7 @@ vi.mock("../ipc/client", () => ({
 }));
 
 import * as ipc from "../ipc/client";
+import { stepDisplayLabel } from "../lib/techniques";
 import { isSpatialFoldFrame, useAppStore } from "./appStore";
 
 /** 正方形1枚(折り線なし) */
@@ -439,5 +440,87 @@ describe("foldByDrag", () => {
         expect(spatialPayload(operation)?.mode).toBe(mode);
       }
     }
+  });
+
+  // 正本722。画面が伝えるのは「紙をつかんで動かした操作かどうか」だけで、
+  // 技法名(表示名)そのものは送らない。名前を決めるのはRust側である。
+  it("つかんで動かした操作であることを、平坦・立体のどちらの経路でも確定の折りへ載せる", async () => {
+    await useAppStore.getState().foldByDrag([0.25, 0.5], [0.75, 0.5], "flap");
+    const flat = lastFoldOp();
+    expect(spatialPayload(flat)).toBeUndefined();
+    expect(flat.grab_move).toBe(true);
+    expect(Object.keys(flat)).not.toContain("technique_classification");
+
+    vi.mocked(ipc.sequenceApply).mockReset();
+    vi.mocked(ipc.sequenceApply).mockImplementation(async (operation) =>
+      operation.type === "PreviewFoldThrough"
+        ? {
+            ...VIEW,
+            doc: NON_FLAT_DOC,
+            faces: NON_FLAT_FACES,
+            frame: NON_FLAT_FRAME,
+          }
+        : {
+            ...VIEW,
+            doc: AFTER_NON_FLAT_FOLD_DOC,
+            faces: AFTER_NON_FLAT_FOLD_FACES,
+            frame: AFTER_NON_FLAT_FOLD_FRAME,
+          },
+    );
+    useAppStore.setState({
+      doc: NON_FLAT_DOC,
+      faces: NON_FLAT_FACES,
+      frame3d: NON_FLAT_FRAME,
+      currentStep: null,
+      playT: 1,
+      playing: false,
+      drivers: new Map(),
+      errorMessage: null,
+      foldDraft: null,
+      pendingFoldThrough: null,
+      foldThroughBusy: false,
+    });
+
+    await useAppStore
+      .getState()
+      .foldByDrag([0.5, 0.45, 0.4], [0.5, 0.35, 0.2], "flap", 1);
+    const spatial = lastFoldOp();
+    expect(spatialPayload(spatial)).toBeDefined();
+    expect(spatial.grab_move).toBe(true);
+    expect(Object.keys(spatial)).not.toContain("technique_classification");
+  });
+
+  // Rustが載せた表示名は、IPCのviewから手順へそのまま残り、札の文言になる。
+  // 手順を作り直す写しが間に無いことを、実物と同じ形のviewで固定する。
+  it("Rustが載せた「つかんで動かした折り」が、手順に残り札の文言になる", async () => {
+    const classification = {
+      kind: "GrabMove",
+      origin: "Automatic",
+    } as const;
+    const classified: DocumentView = {
+      ...VIEW,
+      doc: {
+        ...DOC,
+        sequence: [
+          {
+            id: 0,
+            kind: "Simple",
+            drivers: [],
+            layer_order: null,
+            note: "",
+            technique_classification: classification,
+          },
+        ],
+      },
+    };
+    vi.mocked(ipc.sequenceApply).mockReset();
+    vi.mocked(ipc.sequenceApply).mockResolvedValue(classified);
+
+    await useAppStore.getState().foldByDrag([0.25, 0.5], [0.75, 0.5], "flap");
+
+    const step = useAppStore.getState().doc?.sequence[0];
+    expect(step?.technique_classification).toEqual(classification);
+    if (!step) throw new Error("折りで手順が増えていない");
+    expect(stepDisplayLabel(step)).toBe("つかんで動かした折り");
   });
 });

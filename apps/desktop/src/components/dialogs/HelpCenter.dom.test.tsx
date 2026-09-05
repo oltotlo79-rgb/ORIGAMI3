@@ -359,7 +359,7 @@ describe("ヘルプセンター", () => {
     expect(screen.getByText("途中へ新しい折りを挿入する")).toBeTruthy();
   });
 
-  it("保存と書き出し章はほかのソフト用の説明と対応外7項目を安全に表示する", () => {
+  it("保存と書き出し章はほかのソフト用の説明と対応外8項目を安全に表示する", () => {
     showHelp();
     render(<HelpCenter />);
 
@@ -374,7 +374,7 @@ describe("ヘルプセンター", () => {
       }),
     ).toBeTruthy();
     const scopeHeading = within(article).getByRole("heading", {
-      name: "ほかの折り紙ソフトのファイルでそのまま扱えない内容（7項目）",
+      name: "ほかの折り紙ソフトのファイルでそのまま扱えない内容（8項目）",
     });
     const scope = scopeHeading.closest("section");
     expect(scope).not.toBeNull();
@@ -390,6 +390,8 @@ describe("ヘルプセンター", () => {
       "作品につけたメモや説明",
       "仕上げにつけた丸み",
       "元のファイルで「平らな折り目」と「種類が指定されていない折り目」を区別すること",
+      // 2026-09-05追加。平らな形で終わる手順は書き出せるようになったので、残る範囲だけを示す。
+      "まだ平らになっていない途中の形で終わる手順のうち、紙を曲げないと作れないもの",
     ]);
 
     const displayed = article.innerHTML;

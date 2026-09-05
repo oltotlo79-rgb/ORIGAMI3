@@ -25,7 +25,7 @@ export const FOLD_EXPORT_CHOICE_HINT =
   "書き出せない内容があるときは、理由をお知らせします。";
 
 export const FOLD_UNSUPPORTED_CONTENT_TITLE =
-  `${FOLD_FILE_DISPLAY_NAME}でそのまま扱えない内容（7項目）`;
+  `${FOLD_FILE_DISPLAY_NAME}でそのまま扱えない内容（8項目）`;
 
 export const FOLD_UNSUPPORTED_CONTENT_ITEMS = [
   "立体になったときの点の位置",
@@ -35,6 +35,7 @@ export const FOLD_UNSUPPORTED_CONTENT_ITEMS = [
   "作品につけたメモや説明",
   "仕上げにつけた丸み",
   "元のファイルで「平らな折り目」と「種類が指定されていない折り目」を区別すること",
+  "まだ平らになっていない途中の形で終わる手順のうち、紙を曲げないと作れないもの",
 ] as const;
 
 export type FoldIssueNoticeInput = {

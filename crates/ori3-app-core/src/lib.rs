@@ -782,11 +782,11 @@ impl Ori3AppCore {
     }
 
     pub fn sequence_apply(&mut self, op: Value) -> Result<DocumentView, String> {
-        let (mut operation, spatial) = parse_sequence_operation(op)?;
+        let (mut operation, spatial, fold_through_origin) = parse_sequence_operation(op)?;
         let is_move_step = matches!(&operation, SeqOp::MoveStep { .. });
         let document = self.doc.clone();
         record_finish_soft(&mut operation, &document.display);
-        let mut view = self.apply_seq_with_spatial(operation, spatial)?;
+        let mut view = self.apply_seq_with_spatial(operation, spatial, fold_through_origin)?;
         let move_step_noop = is_move_step && view.doc == document;
         if view.frame.is_none() {
             attach_replay(&mut view);
@@ -813,6 +813,18 @@ impl Ori3AppCore {
         let saved_order = ori3_layers::saved_layer_order_at(&doc, &faces, up_to, t);
         let canonical_order = replay_surface_rank_order(&result);
         let completed = !t.is_finite() || t >= 1.0;
+        // 幾何から刻まれた重なり順が展開図の一般制約を破っているときだけ、書類が保存した
+        // 順を表示へ採る。replay自身は幾何だけの権威に保ち、保存順はここでしか混ぜない
+        // (折り鶴の首と尾が紙の裏を向いていた不具合。2026-09-05)。
+        if completed && let Some(order) = saved_order.as_deref() {
+            let _ = ori3_layers::prefer_saved_order_when_rank_conflicts(
+                &doc,
+                &faces,
+                up_to,
+                &mut result.frame,
+                order,
+            );
+        }
         let mut penetration_warnings: Vec<&'static str> = Vec::new();
         if completed && saved_order.is_none() {
             let warning = apply_layer_order_display_settings(
@@ -906,10 +918,13 @@ impl Ori3AppCore {
         })
     }
 
+    /// `fold_through_origin`は画面が伝える直接折りの操作の種類
+    /// (折り線を引いた／紙をつかんで動かした)であり、表示名そのものではない。
     fn apply_seq_with_spatial(
         &mut self,
         op: SeqOp,
         spatial: Option<SpatialFoldSpec>,
+        fold_through_origin: ori3_layers::FoldThroughOrigin,
     ) -> Result<DocumentView, String> {
         let mut doc = self.doc.clone();
         let mut step_creases = self.step_creases.clone();
@@ -1032,6 +1047,9 @@ impl Ori3AppCore {
                     let mut step = result.step;
                     step.id = next_step_id(&doc, &step_creases);
                     step.alignment = alignment;
+                    // 折れた同じ処理の中で表示名を載せてから書類へ挿入する。直前に
+                    // 入れた姿勢の手順(kind=Pose)には分類を載せない。
+                    ori3_layers::classify_fold_through_step(&mut step, fold_through_origin);
                     let lines = added_crease_lines(&doc.cp, &cp, &result.added_edges);
                     record_step_creases(&mut step_creases, step.id, lines);
                     doc.cp = cp;
@@ -1061,6 +1079,7 @@ impl Ori3AppCore {
                         if let Some(mut step) = result.step.take() {
                             step.id = next_step_id(&doc, &step_creases);
                             step.alignment = alignment;
+                            ori3_layers::classify_fold_through_step(&mut step, fold_through_origin);
                             let lines =
                                 added_crease_lines(&doc.cp, &result.cp, &result.added_edges);
                             record_step_creases(&mut step_creases, step.id, lines);
@@ -1088,6 +1107,10 @@ impl Ori3AppCore {
                                 let mut step = result.step;
                                 step.id = next_step_id(&doc, &step_creases);
                                 step.alignment = alignment;
+                                ori3_layers::classify_fold_through_step(
+                                    &mut step,
+                                    fold_through_origin,
+                                );
                                 let lines = added_crease_lines(&doc.cp, &cp, &result.added_edges);
                                 record_step_creases(&mut step_creases, step.id, lines);
                                 doc.cp = cp;
@@ -1121,6 +1144,10 @@ impl Ori3AppCore {
                                 if let Some(mut step) = result.step.take() {
                                     step.id = next_step_id(&doc, &step_creases);
                                     step.alignment = alignment;
+                                    ori3_layers::classify_fold_through_step(
+                                        &mut step,
+                                        fold_through_origin,
+                                    );
                                     let lines = added_crease_lines(
                                         &doc.cp,
                                         &result.cp,
@@ -2068,15 +2095,27 @@ const _: DocumentExportFn = Ori3AppCore::document_export;
 struct SpatialEnvelope {
     #[serde(default)]
     spatial: Option<SpatialFoldSpec>,
+    /// 直接折りを「紙をつかんでドラッグした」操作から送ったかどうか。
+    ///
+    /// 画面が伝えるのは操作の種類だけで、表示名は選ばせない。省略した旧入力は
+    /// 折り線を引いた折りとして扱う。
+    #[serde(default, alias = "grabMove")]
+    grab_move: bool,
 }
 
-fn parse_sequence_operation(value: Value) -> Result<(SeqOp, Option<SpatialFoldSpec>), String> {
-    let spatial = serde_json::from_value::<SpatialEnvelope>(value.clone())
-        .map_err(|_| "折る位置を読み取れませんでした".to_owned())?
-        .spatial;
+fn parse_sequence_operation(
+    value: Value,
+) -> Result<(SeqOp, Option<SpatialFoldSpec>, ori3_layers::FoldThroughOrigin), String> {
+    let envelope = serde_json::from_value::<SpatialEnvelope>(value.clone())
+        .map_err(|_| "折る位置を読み取れませんでした".to_owned())?;
     let operation = serde_json::from_value::<SeqOp>(value)
         .map_err(|_| "折る操作を読み取れませんでした".to_owned())?;
-    Ok((operation, spatial))
+    let origin = if envelope.grab_move {
+        ori3_layers::FoldThroughOrigin::GrabMove
+    } else {
+        ori3_layers::FoldThroughOrigin::DrawnFoldLine
+    };
+    Ok((operation, envelope.spatial, origin))
 }
 
 fn record_finish_soft(operation: &mut SeqOp, display: &DisplaySettings) {
@@ -3061,6 +3100,17 @@ fn add_layer_order_warning_only(
     Some(ori3_layers::FOLD_PENETRATION_WARNING)
 }
 
+/// 画面の既存2設定を層順序へ適用する。
+///
+/// `canonical_order`は呼び出し側の`replay_surface_rank_order`の戻り値で、`None`は
+/// 「この形には幾何から証明された重なり順がまだ無い」を意味する。その場合の`layer`は
+/// [`ori3_layers`]が置いた面ID昇順の仮置きであって、折った形から導いた順ではない。
+/// 仮置きのままでは表示も食い違い判定も根拠が無いため、**重なり順を初めて決めること**は
+/// 利用者の設定に依らず必ず行う。これは補正ではなく、表示の前提を求める計算である。
+///
+/// 既に権威ある順があるframeでは従来どおり、`prevent`だけがlayer/surface_rankを
+/// **上書き**し、`detect`は警告を追加するだけである。証明できていない順を`surface_rank`
+/// (権威)へ刻むことはしないので、検証済みcanonical順の刻印は`prevent`の中に残す。
 fn apply_layer_order_display_settings(
     cp: &CreasePattern,
     faces: &[Face],
@@ -3069,12 +3119,12 @@ fn apply_layer_order_display_settings(
     prevent: bool,
     detect: bool,
 ) -> Option<&'static str> {
-    if prevent {
+    if prevent || canonical_order.is_none() {
         correct_layer_order(cp, faces, frame);
-        if let Some(order) = canonical_order {
-            ori3_rigid::stamp_surface_order(frame, order)
-                .expect("検証済みcanonical順は同じframeへ刻印できる");
-        }
+    }
+    if prevent && let Some(order) = canonical_order {
+        ori3_rigid::stamp_surface_order(frame, order)
+            .expect("検証済みcanonical順は同じframeへ刻印できる");
     }
     detect
         .then(|| add_layer_order_warning_only(cp, faces, frame))
@@ -3090,6 +3140,17 @@ fn attach_replay(view: &mut DocumentView) {
     let up_to = view.doc.sequence.len();
     let mut replayed = ori3_layers::replay_with_faces(&view.doc, &view.faces, up_to, 1.0);
     let saved_order = ori3_layers::saved_layer_order_at(&view.doc, &view.faces, up_to, 1.0);
+    // 幾何から刻まれた重なり順が展開図の一般制約を破っているときだけ、書類が保存した
+    // 順を表示へ採る(折り鶴の首と尾が紙の裏を向いていた不具合。2026-09-05)。
+    if let Some(order) = saved_order.as_deref() {
+        let _ = ori3_layers::prefer_saved_order_when_rank_conflicts(
+            &view.doc,
+            &view.faces,
+            up_to,
+            &mut replayed.frame,
+            order,
+        );
+    }
     let canonical_order = replay_surface_rank_order(&replayed);
     view.sequence_targets = replayed.sequence_targets.clone();
     view.angles = replayed.hinge_angles.clone();
@@ -5966,8 +6027,13 @@ mod tests {
                 "mode": "flap"
             }
         });
-        let (operation, spatial) =
+        let (operation, spatial, origin) =
             super::parse_sequence_operation(value.clone()).expect("frontend envelope must parse");
+        assert_eq!(
+            origin,
+            ori3_layers::FoldThroughOrigin::DrawnFoldLine,
+            "つかんだ印の無い旧入力は折り線を引いた折りとして読む"
+        );
         assert!(matches!(
             operation,
             ori3_model::SeqOp::PreviewFoldThrough { up_to: 0, .. }
@@ -5983,12 +6049,12 @@ mod tests {
         ] {
             let mut mode_value = value.clone();
             mode_value["spatial"]["mode"] = json!(wire);
-            let (_, parsed) = super::parse_sequence_operation(mode_value)
+            let (_, parsed, _) = super::parse_sequence_operation(mode_value)
                 .unwrap_or_else(|error| panic!("{wire} mode must parse: {error}"));
             assert_eq!(parsed.expect("spatial hit must be retained").mode, expected);
         }
 
-        let (_, camel_case) = super::parse_sequence_operation(json!({
+        let (_, camel_case, _) = super::parse_sequence_operation(json!({
             "type": "PreviewFoldThrough",
             "up_to": 0,
             "line": [[0.0, 0.0], [1.0, 2.0 / 3.0]],
@@ -6439,6 +6505,124 @@ mod tests {
                 kind: ori3_model::DisplayTechniqueKind::Pleat,
                 origin: ori3_model::TechniqueClassificationOrigin::Explicit,
             })
+        );
+    }
+
+    /// desktop の `bird_base_without_an_authoritative_order_is_derived_before_warning`
+    /// と同じ主張を app-core 側でも固定する(§10.7.5「変えたcrateだけで合格としない」)。
+    ///
+    /// 正本CPの折り鶴を鳥の基本形まで折った手順は、保存済み層順も幾何から証明された
+    /// 順も持たない。その `layer` は面ID昇順の仮置きで、山谷と半分ほど食い違うため、
+    /// 紙が突き抜けていないのに貫通の警告が出ていた(2026-09-05)。
+    #[test]
+    fn bird_base_without_an_authoritative_order_is_derived_before_warning() {
+        use std::collections::BTreeSet;
+
+        use ori3_model::{EdgeId, Frame3D};
+
+        use super::{apply_layer_order_display_settings, replay_surface_rank_order};
+
+        const CANONICAL_CRANE: &str = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../ori3-layers/tests/fixtures/traditional-crane/traditional-crane-cp.ori3"
+        ));
+        // 正本CPのG1〜G3。この34本を畳むと鳥の基本形になる(acceptance_crane.rsと同じ表)。
+        const BIRD_BASE_EDGES: [EdgeId; 34] = [
+            0, 1, 4, 6, 7, 8, 9, 11, 12, 15, 18, 21, 22, 27, 31, 40, 41, 46, 47, 52, 55, 58, 62,
+            63, 72, 73, 81, 82, 84, 85, 101, 102, 103, 104,
+        ];
+
+        let canonical: Document = serde_json::from_str(CANONICAL_CRANE).expect("正本CPを読む");
+        let wanted: BTreeSet<EdgeId> = BIRD_BASE_EDGES.into_iter().collect();
+        let bird_base_drivers = canonical
+            .sequence
+            .first()
+            .expect("正本は一括collapse 1手")
+            .drivers
+            .iter()
+            .filter(|driver| {
+                let edges = ori3_layers::resolve_driver_edges(&canonical.cp, driver);
+                edges.len() == 1 && wanted.contains(&edges[0])
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(bird_base_drivers.len(), 34, "鳥の基本形の折り目は34本");
+
+        let mut doc = canonical.clone();
+        doc.sequence = vec![FoldStep {
+            id: 0,
+            kind: TechniqueKind::Petal,
+            drivers: bird_base_drivers,
+            // 実機の作品ファイルと同じく、この手順は重なり順を保存していない。
+            layer_order: None,
+            alignment: None,
+            finish_soft: None,
+            note: "鳥の基本形".to_string(),
+            technique_classification: None,
+        }];
+
+        let faces = ori3_cp::extract_faces(&doc.cp);
+        let replayed = ori3_layers::replay_with_faces(&doc, &faces, 1, 1.0);
+        assert!(
+            ori3_layers::saved_layer_order_at(&doc, &faces, 1, 1.0).is_none(),
+            "保存済み層順を持たない手順を標本にする"
+        );
+        assert!(
+            replay_surface_rank_order(&replayed).is_none(),
+            "幾何から証明された重なり順がまだ無い手順を標本にする"
+        );
+        assert!(
+            ori3_rigid::self_intersection_pairs(&replayed.frame).is_empty(),
+            "鳥の基本形で面は交差しない"
+        );
+        assert!(
+            ori3_rigid::layer_order_conflicts(&doc.cp, &faces, &replayed.frame),
+            "仮置きの層順が山谷と食い違う、直せる標本"
+        );
+
+        let polygons = |frame: &Frame3D| {
+            frame
+                .faces
+                .iter()
+                .map(|face| (face.face, face.polygon.clone(), face.mirrored))
+                .collect::<Vec<_>>()
+        };
+        let shape_before = polygons(&replayed.frame);
+        let ranks_before = replayed
+            .frame
+            .faces
+            .iter()
+            .map(|face| (face.face, face.surface_rank))
+            .collect::<Vec<_>>();
+
+        let mut detected = replayed.frame.clone();
+        let warning =
+            apply_layer_order_display_settings(&doc.cp, &faces, &mut detected, None, false, true);
+        assert_eq!(
+            warning, None,
+            "突き抜けていない折り方に貫通の警告を出さない"
+        );
+        assert!(
+            !detected
+                .warnings
+                .iter()
+                .any(|warning| warning == ori3_layers::FOLD_PENETRATION_WARNING),
+            "貫通の警告が残っている: {:?}",
+            detected.warnings
+        );
+        assert!(
+            !ori3_rigid::layer_order_conflicts(&doc.cp, &faces, &detected),
+            "重なり順が紙の形と食い違ったまま残った"
+        );
+        assert_eq!(polygons(&detected), shape_before, "紙の形は動かさない");
+        assert_eq!(
+            detected
+                .faces
+                .iter()
+                .map(|face| (face.face, face.surface_rank))
+                .collect::<Vec<_>>(),
+            ranks_before,
+            "証明できていない順をsurface_rank(権威)へ刻まない"
         );
     }
 }

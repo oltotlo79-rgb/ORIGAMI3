@@ -1425,15 +1425,21 @@ fn a_safe_coincident_partial_network_appears_after_the_first_fold() {
 
 /// 画像確認用の作品ファイルを書き出す(一時的。確認が終わったら削除する)。
 ///
-/// `verification/check-crane.ori3` / `check-bird-base.ori3` / `check-yakko.ori3` を、
+/// `verification/check-proposal-6step.ori3` / `check-bird-base.ori3` / `check-yakko.ori3` を、
 /// **探索が実際に返した手順をそのまま `FoldSession::apply` で進めた結果**から作る。
 /// 手で組み立て直してはいない。`Document` をまるごと書き出すので
 /// `display` も入る(製品の読み取り機 `store.rs::parse_document` が要求する項目)。
+///
+/// 折り鶴の標本の名前について: この書き出し口が作るのは**探索の出力**であって伝承の折り鶴ではない。
+/// 旧名 `check-crane` は完成形が凧形の6手を「鶴」と名乗っていて紛らわしかったため、
+/// 実体に合わせて `check-proposal-6step` へ改名した。伝承の折り鶴の正本は
+/// `crates/ori3-layers/tests/fixtures/traditional-crane/traditional-crane-cp.ori3` で、
+/// 画面と説明書で使う作品は `apps/desktop/tests-live/fixtures/traditional-crane-full.ori3` である。
 #[test]
 #[ignore]
 fn zz_write_check_documents() {
     for (sample, name) in [
-        (crane_sample(), "check-crane"),
+        (crane_sample(), "check-proposal-6step"),
         (bird_base_sample(), "check-bird-base"),
         (yakko_sample(), "check-yakko"),
     ] {

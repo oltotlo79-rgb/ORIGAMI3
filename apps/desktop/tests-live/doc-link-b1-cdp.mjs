@@ -39,9 +39,11 @@ const restoreStep = Number.parseInt(process.env.ORI3_B1_RESTORE_STEP ?? "0", 10)
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 
 const fixtures = {
+  // 折り鶴の正本から作った3手の作品。旧 `crates/ori3-rigid/tests/fixtures/check-crane.ori3` は
+  // 提案探索が返した6手の出力で完成形が凧形のため、画面に出す「鶴」には使わない。
   crane: {
-    path: path.resolve(repositoryRoot, "crates/ori3-rigid/tests/fixtures/check-crane.ori3"),
-    sha256: "D44565B8CF3FF46AAD03905709CF891DA6627D235BD1CCE02F1F8EF8E67CF818",
+    path: path.resolve(repositoryRoot, "apps/desktop/tests-live/fixtures/traditional-crane-full.ori3"),
+    sha256: "D2C6DC4A691824C42CC983118B22A9397B2641164DF1A0C7FECD40F2D41C214D",
   },
   yakko: {
     path: path.resolve(repositoryRoot, "crates/ori3-rigid/tests/fixtures/check-yakko.ori3"),

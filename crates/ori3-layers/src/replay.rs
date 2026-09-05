@@ -1577,6 +1577,65 @@ fn complete_surface_order(frame: &Frame3D, faces: &[Face]) -> Result<Vec<FaceId>
         .ok_or_else(|| "紙の重なり順が途中で欠けています".to_string())
 }
 
+/// 幾何から刻まれた重なり順が展開図の一般制約を破っているときだけ、
+/// 書類が保存した順を表示用の `surface_rank` へ刻み直す。**表示直前の入口専用**。
+///
+/// [`replay`] が刻む `surface_rank` は幾何だけから決まる権威であり、保存順に影響されない。
+/// この不変条件は `saved_order_never_overrides_geometric_rank_across_angle_buckets` が
+/// 20姿勢×8束で固定しているので、[`replay`] の中では絶対に保存順を混ぜない。
+///
+/// 一方で、花弁折り・中割り折りを終えた姿勢では、手順再生の補間が本当の紙の動きと違い、
+/// 終点直前の高さから読んだ上下が実際の重なりと食い違うことがある(`acceptance_crane.rs`
+/// 冒頭の「表示上の重なり順」を参照)。導出はそれでも complete を主張するため、
+/// 物理的に成り立たない順がそのまま表示に使われていた。正本CPの折り鶴を粗い3手で
+/// 畳んだ作品では、taco/tortilla 53件・taco/taco 18件を破る順が刻まれ、首と尾の重なりが
+/// 逆になって、見えている面の12.045546%が紙の裏になっていた(保存順では0%)。
+///
+/// そこで表示の直前に一度だけ、刻まれた順を**候補order自身から物理制約を作らない**
+/// [`validate_precrease_layer_order`] にかける。同関数は山谷・鏡映・紙の連続性だけから
+/// 必然の上下を求めてから候補を読み合わせるので、保存順が自分自身を根拠に通ることはない。
+///
+/// 刻み直すのは、刻まれた順が一般制約を**破っており**、かつ保存順が同じ検査を**通る**
+/// 場合だけである。次のいずれかなら何もせず `false` を返す(従来どおりの表示に戻る)。
+/// 刻まれた順が保存順と同じ / 平坦な姿勢でない / 検査が解析できない /
+/// 刻まれた順が一般制約を満たす / 保存順が一般制約を破る。
+#[must_use]
+pub fn prefer_saved_order_when_rank_conflicts(
+    doc: &Document,
+    faces: &[Face],
+    up_to: usize,
+    frame: &mut Frame3D,
+    saved_order: &[FaceId],
+) -> bool {
+    let Ok(stamped_order) = complete_surface_order(frame, faces) else {
+        return false;
+    };
+    if stamped_order == saved_order {
+        return false;
+    }
+    // 平坦でない姿勢では平坦配置を取り出せない。その場合はこの検査自体を行わない。
+    let Ok((state, _)) = flat_state_at(doc, faces, up_to) else {
+        return false;
+    };
+    let Ok(stamped_validation) =
+        validate_precrease_layer_order(&doc.cp, faces, &state.placements, &stamped_order)
+    else {
+        return false;
+    };
+    if stamped_validation.is_valid() {
+        return false;
+    }
+    let Ok(saved_validation) =
+        validate_precrease_layer_order(&doc.cp, faces, &state.placements, saved_order)
+    else {
+        return false;
+    };
+    if !saved_validation.is_valid() {
+        return false;
+    }
+    ori3_rigid::stamp_surface_order(frame, saved_order).is_ok()
+}
+
 pub fn flat_state_at(
     doc: &Document,
     faces: &[Face],

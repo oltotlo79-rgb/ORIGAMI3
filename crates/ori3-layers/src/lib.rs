@@ -63,7 +63,8 @@ pub use precrease_collapse::{PrecreaseCollapseInput, collapse_precrease_network}
 pub use rabbit_ear::{RabbitEarInput, rabbit_ear};
 pub use replay::{
     LayerTransition, ReplayResult, flat_state_at, flat_state_with_declared_angles_at,
-    fold_target_analysis_at, replay, replay_with_faces, saved_layer_order_at,
+    fold_target_analysis_at, prefer_saved_order_when_rank_conflicts, replay, replay_with_faces,
+    saved_layer_order_at,
 };
 pub use spatial_crease_only::{
     CanonicalNonflatPose, FaceRigidTransform3, MaterialVertex3D, NewMaterialVertex,
@@ -74,10 +75,10 @@ pub use spatial_crease_only::{
 pub use spatial_fold::{SpatialFoldInput, SpatialFoldMode, SpatialFoldResult, fold_from_plane_3d};
 pub use technique_classification::{
     AutomaticTechniqueMatch, CanonicalAdjacency, CanonicalDriver, CanonicalFaceKey,
-    CanonicalSupport, TechniqueClassificationRequest, TechniqueEvidence, TechniqueWitness,
-    assign_technique_classification, automatic_match_from_witnesses,
-    carry_over_technique_classification, classify_aligned_motion, classify_motion_plan,
-    classify_sim011_motion, display_kind_for_technique,
+    CanonicalSupport, FoldThroughOrigin, TechniqueClassificationRequest, TechniqueEvidence,
+    TechniqueWitness, assign_technique_classification, automatic_match_from_witnesses,
+    carry_over_technique_classification, classify_aligned_motion, classify_fold_through_step,
+    classify_motion_plan, classify_sim011_motion, display_kind_for_technique,
 };
 pub use techniques::{
     TechniqueInput, inside_reverse, open_sink, outside_reverse, petal, pleat, squash, swivel, twist,

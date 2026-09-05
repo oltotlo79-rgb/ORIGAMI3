@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "roadmap_relative_path": "docs/implementation-roadmap.md",
-  "expected_evidence_linked": 185,
+  "expected_evidence_linked": 186,
   "expected_scope_counts": {
     "M0": 11
   },

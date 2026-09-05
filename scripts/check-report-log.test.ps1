@@ -901,6 +901,52 @@ try {
     $vagueRemainderBadCorrectedPath = Write-TestDocument "vague-remainder-wrong-corrected-unchecked" @($remediationAnchor, $vagueRemainderBadCorrectedText, $t0730) $now
     Assert-Exit (Invoke-ReportCheck $vagueRemainderBadCorrectedPath) 2 "Correction with tampered corrected_unchecked does not exempt the vague remainder assertion" "Roadmap-Correction"
 
+    # 2026-09-05: 訂正recordは「何を訂正したのか」を示すために、対象recordの
+    # 文言をそのまま引用する。その引用を新しい断言と読むと、正しい訂正record
+    # ほど赤になる(実測: 09-04 12:36の訂正recordが、見出しの
+    # 「残作業そのものだけになった」で止まった)。検証済みCorrectionのsource
+    # recordに限り、括弧(「」『』`)の中身が対象recordへ逐語で現れるときだけ
+    # 引用として扱う。語彙の免除ではないので訂正の言い回しには依存せず、
+    # 対象recordに無い文を括弧へ入れても通らない。
+    $quotedFromTarget = '残作業そのものだけになった'
+    $quotedTableCell = 'ロードマップ未完了 14/186'
+    Assert-True ($t0730.Contains($quotedFromTarget)) "07:30 fixture carries the quoted heading phrase"
+    Assert-True ($t0730.Contains($quotedTableCell)) "07:30 fixture carries the quoted table cell"
+    $quotingCorrectionBody = @(
+        "Roadmap-Claim: none",
+        "Roadmap-Correction: schema=1 target_sha256=7a2b8d1e2e5c5656677ef7ae83932aeb84463e37d027b00763ced62052bec7bf target_commit=e1ceafb2c9f1ea714f6291a093b566b1138323ad corrected_unchecked=14 kind=other-subject",
+        "対象recordは見出しで「$quotedFromTarget」と述べ、本文の表（``$quotedTableCell``）が同じ内容を数字で示している。"
+    )
+    $quotingCorrectionText = Format-TestRecord ($headingTime.AddMinutes(-1)) "2026-09-01 07:30の「$quotedFromTarget」を訂正記録として固定する" $quotingCorrectionBody
+
+    # 正例: 見出しの「」引用も、本文の`code span`引用も、対象recordへ逐語で
+    # 現れるので緑になる。
+    $quotingOkPath = Write-TestDocument "correction-quotes-target-ok" @($remediationAnchor, $quotingCorrectionText, $t0730) $now
+    Assert-Exit (Invoke-ReportCheck $quotingOkPath) 0 "a validated Correction may quote the corrected wording verbatim"
+
+    # 負例: 括弧を外して地の文で同じことを述べると、引用ではなくこのrecord
+    # 自身の断言になるので従来どおり赤。
+    $unquotedCorrectionText = $quotingCorrectionText.Replace(('「' + $quotedFromTarget + '」'), $quotedFromTarget)
+    Assert-True (-not [string]::Equals($quotingCorrectionText, $unquotedCorrectionText, [StringComparison]::Ordinal)) "引用を外す負例を作れません"
+    $unquotedPath = Write-TestDocument "correction-unquoted-claim" @($remediationAnchor, $unquotedCorrectionText, $t0730) $now
+    Assert-Exit (Invoke-ReportCheck $unquotedPath) 2 "the same wording outside quotes is still the record's own claim" "完全性表現を含むため"
+
+    # 負例: 対象recordに無い文を括弧へ入れても免除されない(引用で新しい主張を
+    # 持ち込めないことの固定)。
+    $fabricatedQuoteText = $quotingCorrectionText.Replace(
+        ('「' + $quotedFromTarget + '」'),
+        ('「' + $quotedFromTarget + 'ので全部完了」')
+    )
+    Assert-True (-not [string]::Equals($quotingCorrectionText, $fabricatedQuoteText, [StringComparison]::Ordinal)) "対象に無い引用の負例を作れません"
+    $fabricatedQuotePath = Write-TestDocument "correction-fabricated-quote" @($remediationAnchor, $fabricatedQuoteText, $t0730) $now
+    Assert-Exit (Invoke-ReportCheck $fabricatedQuotePath) 2 "a quotation absent from the target record is not exempt" "完全性表現を含むため"
+
+    # 負例: Correction自体が検証を通らなければ(target_commitを壊す)、引用でも
+    # 免除されない。
+    $quotingBadCommitText = $quotingCorrectionText -replace 'target_commit=e1ceafb2c9f1ea714f6291a093b566b1138323ad', 'target_commit=000000000000000000000000000000000000ff'
+    $quotingBadCommitPath = Write-TestDocument "correction-quote-wrong-target-commit" @($remediationAnchor, $quotingBadCommitText, $t0730) $now
+    Assert-Exit (Invoke-ReportCheck $quotingBadCommitPath) 2 "an unvalidated Correction does not exempt its quotations" "Roadmap-Correction"
+
     # 故障注入1本(統括の要求): Get-BlockingScopeClaimの拡張条件
     # (`-or [string]$assertion.Kind -eq 'remainder'`)だけを無効化した
     # check-report-log.ps1を、実行に要る同居ファイル(roadmap-claim-scope.ps1・
@@ -926,6 +972,26 @@ try {
         "-File", $exemptionMutantScriptPath, "-RepositoryRoot", $repoRoot, "-ReportPath", $vagueRemainderOkPath
     )
     Assert-True ($mutantResult.ExitCode -ne 0) "disabling the kind=remainder exemption must turn the same positive document red"
+
+    # 故障注入2本目: 引用照合(Test-SpanIsVerbatimQuotationOfText)へ渡す対象
+    # recordの本文を空にすると、上の正例(訂正recordが対象の文言を引用する形)が
+    # 赤になる。この照合が無ければ12:36型の訂正recordは救えないことの証明。
+    $quotationMutationFind = '-ReferenceText $CorrectionTargetText) {'
+    $quotationMutationOccurrences = [regex]::Matches($checkerSource, [regex]::Escape($quotationMutationFind)).Count
+    Assert-True ($quotationMutationOccurrences -eq 1) "quotation mutation anchor is unique in check-report-log.ps1"
+    $quotationMutatedSource = $checkerSource.Replace($quotationMutationFind, '-ReferenceText "") {')
+    $quotationMutantDir = Join-Path $sandboxRoot "mutant-correction-quotation"
+    [void][IO.Directory]::CreateDirectory($quotationMutantDir)
+    $quotationMutantScriptPath = Join-Path $quotationMutantDir "check-report-log.ps1"
+    [IO.File]::WriteAllText($quotationMutantScriptPath, $quotationMutatedSource, (New-Object Text.UTF8Encoding($false)))
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'roadmap-claim-scope.ps1') -Destination (Join-Path $quotationMutantDir 'roadmap-claim-scope.ps1') -Force
+    Copy-Item -LiteralPath $snapshotPath -Destination (Join-Path $quotationMutantDir 'get-roadmap-status.ps1') -Force
+    Copy-Item -LiteralPath $policyPath -Destination (Join-Path $quotationMutantDir 'roadmap-status-policy.json') -Force
+    $quotationMutantResult = Invoke-ProcessCapture -Arguments @(
+        "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-File", $quotationMutantScriptPath, "-RepositoryRoot", $repoRoot, "-ReportPath", $quotingOkPath
+    )
+    Assert-True ($quotationMutantResult.ExitCode -ne 0) "disabling the verbatim quotation match must turn the quoting Correction document red"
 
     Write-Host "[TEST OK] check-report-log: $script:assertions assertions"
     exit 0

@@ -430,9 +430,25 @@ function Test-DictionaryKey {
 function Invoke-GitReadOnlyCapture {
     param([string[]]$Arguments)
 
+    # gitはcommit messageをUTF-8で出す。PowerShellは外部commandの出力を
+    # [Console]::OutputEncoding で復号するため、この値がUTF-8でない作業機
+    # (実測: cp932/shift_jis)では日本語のsubjectが壊れ、Ordinal比較の
+    # `subject:` selectorが本当は一致しているのに解決できなくなる。
+    # 判定が作業機のコードページに依存しないよう、呼出しの間だけUTF-8へ
+    # 固定して必ず戻す(C08のCRLF誤検知と同じ「環境設定に依存する判定」の形)。
     $previousPreference = $ErrorActionPreference
+    $previousOutputEncoding = $null
     $exitCode = [int]::MinValue
     try {
+        try {
+            $previousOutputEncoding = [Console]::OutputEncoding
+            [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+        }
+        catch {
+            # consoleを持たない実行(redirect済みhost等)では設定できないことがある。
+            # その場合は既定の復号のまま続ける。
+            $previousOutputEncoding = $null
+        }
         $ErrorActionPreference = "Continue"
         $global:LASTEXITCODE = [int]::MinValue
         $output = @(& git -C $script:Root @Arguments 2>$null)
@@ -440,6 +456,9 @@ function Invoke-GitReadOnlyCapture {
     }
     finally {
         $ErrorActionPreference = $previousPreference
+        if ($null -ne $previousOutputEncoding) {
+            try { [Console]::OutputEncoding = $previousOutputEncoding } catch { }
+        }
     }
     return [PSCustomObject][ordered]@{ ExitCode = $exitCode; Output = @($output) }
 }

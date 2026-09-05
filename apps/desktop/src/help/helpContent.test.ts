@@ -654,7 +654,7 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
           "扱えない内容があるときは、理由をお知らせします",
           "元に戻す」を1回押します",
           "作品を書き出す",
-          "そのまま扱えない内容（7項目）",
+          "そのまま扱えない内容（8項目）",
         ],
       },
     ] as const;
@@ -675,7 +675,7 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
     expect(allHelpText).toContain("ほかの折り紙ソフトのファイル");
   });
 
-  it("保存と書き出し章は5形式と対応外7項目を順序どおり説明する", () => {
+  it("保存と書き出し章は5形式と対応外8項目を順序どおり説明する", () => {
     const chapter = HELP_CHAPTERS.find((entry) => entry.id === "save-export");
     expect(chapter).toBeDefined();
 
@@ -692,7 +692,7 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
       (block) =>
         block.type === "bulletList" &&
         block.title ===
-          "ほかの折り紙ソフトのファイルでそのまま扱えない内容（7項目）",
+          "ほかの折り紙ソフトのファイルでそのまま扱えない内容（8項目）",
     );
     expect(scope).toBeDefined();
     expect(scope?.type).toBe("bulletList");
@@ -705,9 +705,11 @@ describe("ヘルプと取扱説明書PDFの共通内容源", () => {
       "作品につけたメモや説明",
       "仕上げにつけた丸み",
       "元のファイルで「平らな折り目」と「種類が指定されていない折り目」を区別すること",
+      // 2026-09-05追加。平らな形で終わる手順は書き出せるようになったので、残る範囲だけを示す。
+      "まだ平らになっていない途中の形で終わる手順のうち、紙を曲げないと作れないもの",
     ]);
-    expect(scope.items).toHaveLength(7);
-    expect(new Set(scope.items).size).toBe(7);
+    expect(scope.items).toHaveLength(8);
+    expect(new Set(scope.items).size).toBe(8);
   });
 
   it("重なり防止と食い込み検出を現行画面と同じ言葉・既定値で説明する", () => {

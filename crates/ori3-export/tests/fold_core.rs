@@ -8,7 +8,7 @@ const FU_ASSIGNMENTS: &str = include_str!("fixtures/fold/fu-assignments.fold");
 const UNSUPPORTED_3D_BRANCH: &str = include_str!("fixtures/fold/unsupported-3d-branch.fold");
 
 #[test]
-fn public_contract_uses_the_approved_profile_name_and_all_seven_limitations() {
+fn public_contract_uses_the_approved_profile_name_and_all_eight_limitations() {
     assert_eq!(FOLD_1_2_PROFILE_NAME, "FOLD 1.2 限定");
     assert_eq!(
         FOLD_1_2_UNSUPPORTED_FEATURES,
@@ -20,6 +20,9 @@ fn public_contract_uses_the_approved_profile_name_and_all_seven_limitations() {
             "注記",
             "仕上げの丸み",
             "FOLDの「平ら(F)」「未指定(U)」の区別",
+            // 2026-09-05追加。終点が平坦な手順は宣言角の平坦再生で確かめるよう直したので、
+            // 「紙を曲げずに到達できること」の要求はここに書いた範囲だけに残る。
+            "平らでない途中の形で終わる手順のうち、紙を曲げずには作れないもの",
         ]
     );
 }

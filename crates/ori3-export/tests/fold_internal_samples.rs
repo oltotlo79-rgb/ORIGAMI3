@@ -1,6 +1,6 @@
 //! `docs/improvement-roadmap-2026-08-24.md` §12.6-8 の受け入れ検査。
 //!
-//! 折り鶴・やっこさん・カエル・鳥の基本形の内部4標本で **100回連続の
+//! 提案の探索が書き出した6手の文書・やっこさん・カエル・鳥の基本形・伝承の折り鶴の内部5標本で **100回連続の
 //! import→export→import** を行い、§12.6 の2〜7の数値を100/100で満たすことを固定する。
 //! 連鎖は `import#0 → export#1 → import#1 → export#2 → import#2 → …` で、
 //! 隣り合う3つ組がそれぞれ1回の import→export→import になる。
@@ -11,12 +11,36 @@
 //! 照合するだけにする」に従い、**新しい標本ファイルを作らず**、既に追跡済みの正本を
 //! `include_str!` で読む。複製を置くと正本と分岐して§10.7.6の再発になるためである。
 //!
-//! - 折り鶴 / やっこさん / 鳥の基本形: `crates/ori3-rigid/tests/fixtures/check-*.ori3`。
-//!   同じ相対参照は `crates/ori3-layers/tests/flat_endpoint.rs:139` と
-//!   `apps/desktop/src-tauri/src/commands.rs:4135` が既に使っている。
+//! - 提案の探索が書き出した6手の文書 / やっこさん / 鳥の基本形:
+//!   `crates/ori3-rigid/tests/fixtures/check-*.ori3`。
+//!   同じ相対参照は `crates/ori3-layers/tests/flat_endpoint.rs` が既に使っている。
 //! - カエル: `apps/desktop/src/lib/__fixtures__/frog.json`。
 //!   `apps/desktop/src-tauri/tests/fold_all_frog.rs:20` と同じ入口で、
 //!   `crates/ori3-layers/tests/acceptance_frog.rs` が正本から read-only 照合している。
+//!
+//! # 1つ目の標本が折り鶴ではない点（2026-09-05 実測）
+//!
+//! `check-proposal-6step.ori3`（旧名 `check-crane.ori3`）は、**提案の探索が返した6手を
+//! そのまま適用して書き出した文書**であって、伝承の折り鶴ではない。完成形は凧形で終わる。
+//! 旧名が「鶴」を名乗っていたため、この検査でも標本を折り鶴と取り違えていた。実体に合わせて
+//! ファイル名・定数名・検査名から「鶴」を外した。伝承の折り鶴の正本は
+//! `crates/ori3-layers/tests/fixtures/traditional-crane/traditional-crane-cp.ori3`、
+//! そこから作った作品は `apps/desktop/tests-live/fixtures/traditional-crane-full.ori3` である。
+//!
+//! **正本由来の鶴は、5つ目の標本として別に足した**（2026-09-05）。
+//! かつてはこの検査へ入れられなかった。`document_to_fold` が2手目（`Petal`）について
+//! `UnsupportedGeometry`「step endpointを指定どおりの収束解として再生できません」
+//! （`converged: false` / `best_effort: true`）を返し、往復に入る前に失敗したためである。
+//! 伝承の折り鶴は紙を曲げずには折れないことが数値的に確定しており
+//! （`docs/rules/03-品質ゲート.md` §7.1）、正本の受け入れ検査
+//! `crates/ori3-layers/tests/acceptance_crane.rs` も剛体の収束解ではなく `flat_state_at` の
+//! 平坦再生で確かめている。そこで製品側を直し、**終点が平坦な手順は剛体の収束ではなく
+//! 宣言角の平坦再生で確かめる**ようにした（`crates/ori3-export/src/fold/conversion.rs` の
+//! `validate_flat_endpoint`）。許容差は1つも緩めていない。裂け `1e-6`、すり抜け0、
+//! 重なり順の矛盾なし、という終点の条件はそのままで、測る姿勢だけが変わっている。
+//!
+//! 鶴の終点比較も同じ理由で [`EndpointCheck::Flat`] を使う。既存4標本は
+//! [`EndpointCheck::Rigid`] のままで、比較の中身は1つも変えていない。
 //!
 //! # カエルだけ数え方が違う点
 //!
@@ -32,15 +56,17 @@
 //! **件数・つながり・種類・ID・faceOrdersの整数三つ組は完全一致**で比べる。
 //! JSON文字列そのものの完全一致は使わない（座標の最下位1桁で落ちた過去の失敗と同型のため）。
 
-use glam::DVec3;
-use ori3_cp::extract_faces;
+use glam::{DVec2, DVec3};
+use ori3_cp::{Face, extract_faces};
 use ori3_export::fold::{
     FoldAssignment, FoldFile, FoldIssue, FoldIssueCode, FoldIssueSeverity, document_to_fold,
     fold_to_document, parse_fold_1_2, unsupported_fields, write_fold_1_2,
 };
-use ori3_layers::replay;
+use ori3_geometry::Isometry2;
+use ori3_layers::{FlatState, flat_state_at, replay};
 use ori3_model::{
-    CreasePattern, DisplaySettings, Document, Edge, EdgeKind, Paper, SCHEMA_VERSION, Vertex,
+    CreasePattern, DisplaySettings, Document, Edge, EdgeKind, Face3D, FaceId, Frame3D, Paper,
+    SCHEMA_VERSION, Vertex,
 };
 use ori3_rigid::{max_seam_gap, self_intersection_pairs};
 
@@ -52,17 +78,40 @@ const ANGLE_EPS_DEG: f64 = 1e-9;
 /// §12.6-4 の終点距離・seam の境目。
 const ENDPOINT_EPS: f64 = 1e-6;
 
-const CRANE: &str = include_str!("../../ori3-rigid/tests/fixtures/check-crane.ori3");
+const PROPOSAL_SIX_STEP: &str =
+    include_str!("../../ori3-rigid/tests/fixtures/check-proposal-6step.ori3");
 const YAKKO: &str = include_str!("../../ori3-rigid/tests/fixtures/check-yakko.ori3");
 const BIRD_BASE: &str = include_str!("../../ori3-rigid/tests/fixtures/check-bird-base.ori3");
 const FROG: &str = include_str!("../../../apps/desktop/src/lib/__fixtures__/frog.json");
+/// 伝承の折り鶴の正本 `crates/ori3-layers/tests/fixtures/traditional-crane/traditional-crane-cp.ori3`
+/// から作った、追跡済みの作品。単純折り・花弁折り・中割り折りの3手を持つ。
+const TRADITIONAL_CRANE: &str =
+    include_str!("../../../apps/desktop/tests-live/fixtures/traditional-crane-full.ori3");
+
+/// 各手順の終点をどの姿勢として比べるか。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EndpointCheck {
+    /// 剛体solverが再生した姿勢どうしを比べる。
+    Rigid,
+    /// 宣言した折り角の平坦再生で決まる姿勢どうしを比べる。
+    ///
+    /// 終点が平坦（全ての山谷が0か±180度）な作品では、その姿勢は宣言角と
+    /// 記録された重なり順だけで一意に決まり、剛体solverの収束に依存しない。
+    Flat,
+}
 
 #[test]
-fn crane_survives_one_hundred_consecutive_import_export_imports() {
-    let summary = assert_hundred_round_trips("折り鶴", document_fixture(CRANE));
-    assert_eq!(summary.steps, 6, "折り鶴の手順数");
-    assert!(summary.endpoint_comparisons > 0, "折り鶴は終点比較を行う");
-    assert!(summary.face_order_triples > 0, "折り鶴はfaceOrdersを持つ");
+fn proposal_six_step_document_survives_one_hundred_consecutive_import_export_imports() {
+    let summary = assert_hundred_round_trips("提案の6手", document_fixture(PROPOSAL_SIX_STEP));
+    assert_eq!(summary.steps, 6, "提案の6手の手順数");
+    assert!(
+        summary.endpoint_comparisons > 0,
+        "提案の6手は終点比較を行う"
+    );
+    assert!(
+        summary.face_order_triples > 0,
+        "提案の6手はfaceOrdersを持つ"
+    );
 }
 
 #[test]
@@ -88,6 +137,29 @@ fn frog_survives_one_hundred_consecutive_import_export_imports() {
     assert_eq!(summary.steps, 0, "カエルの正本は折る手順を持たない");
     assert_eq!(summary.vertices, 141, "カエルの頂点数");
     assert_eq!(summary.edges, 280, "カエルの折り目数");
+}
+
+/// 正本由来の伝承折り鶴。剛体では収束しない（`docs/rules/03-品質ゲート.md` §7.1）が、
+/// 3手とも終点は平坦なので、平坦再生で終点を確かめれば100回の往復を通せる。
+#[test]
+fn traditional_crane_survives_one_hundred_consecutive_import_export_imports() {
+    let seed = document_fixture(TRADITIONAL_CRANE);
+    // 正本の実測値。取込・書出しのどこかで頂点や折り目が落ちれば、ここで落ちる。
+    assert_eq!(seed.cp.vertices.len(), 56, "正本由来の鶴の頂点数");
+    assert_eq!(seed.cp.edges.len(), 114, "正本由来の鶴の折り目数");
+    assert_eq!(seed.sequence.len(), 3, "正本由来の鶴の手順数");
+    let summary = assert_hundred_round_trips_with("伝承の折り鶴", seed, EndpointCheck::Flat);
+    assert_eq!(summary.vertices, 56, "往復後も鶴の頂点数");
+    assert_eq!(summary.edges, 114, "往復後も鶴の折り目数");
+    assert_eq!(summary.steps, 3, "往復後も鶴の手順数");
+    assert!(
+        summary.endpoint_comparisons > 0,
+        "伝承の折り鶴は終点比較を行う"
+    );
+    assert!(
+        summary.face_order_triples > 0,
+        "伝承の折り鶴はfaceOrdersを持つ"
+    );
 }
 
 #[derive(Debug, Default)]
@@ -119,6 +191,14 @@ struct RoundTripSummary {
 }
 
 fn assert_hundred_round_trips(label: &str, seed: Document) -> RoundTripSummary {
+    assert_hundred_round_trips_with(label, seed, EndpointCheck::Rigid)
+}
+
+fn assert_hundred_round_trips_with(
+    label: &str,
+    seed: Document,
+    endpoint_check: EndpointCheck,
+) -> RoundTripSummary {
     let mut summary = RoundTripSummary {
         vertices: seed.cp.vertices.len(),
         edges: seed.cp.edges.len(),
@@ -142,7 +222,7 @@ fn assert_hundred_round_trips(label: &str, seed: Document) -> RoundTripSummary {
 
     let mut document = first.document;
     assert_document_matches_file(label, 0, &document, &parsed);
-    let origin_endpoints = endpoint_frames(&document);
+    let origin_endpoints = endpoint_frames(&document, endpoint_check);
     // 基準は「取込んだ作品からの1回目の書出し」にする。正本と取込後では頂点IDの
     // 並べ替えが1回入るため、面の並び方まで同一と決めつけないためである。
     let mut baseline_file: Option<FoldFile> = None;
@@ -193,7 +273,14 @@ fn assert_hundred_round_trips(label: &str, seed: Document) -> RoundTripSummary {
             drift.angle_max
         );
 
-        assert_endpoints_match(label, round, &origin_endpoints, &next, &mut summary);
+        assert_endpoints_match(
+            label,
+            round,
+            &origin_endpoints,
+            &next,
+            endpoint_check,
+            &mut summary,
+        );
         document = next;
     }
 
@@ -794,11 +881,10 @@ fn measure(before: &mut f64, after: &mut f64, maximum: &mut f64, comparisons: &m
 }
 
 /// 各手順の終点を1度だけ再生して保存する（比較の基準）。
-fn endpoint_frames(document: &Document) -> Vec<Vec<Vec<[f64; 3]>>> {
+fn endpoint_frames(document: &Document, check: EndpointCheck) -> Vec<Vec<Vec<[f64; 3]>>> {
     (1..=document.sequence.len())
         .map(|up_to| {
-            replay(document, up_to, 1.0)
-                .frame
+            endpoint_frame(document, up_to, check)
                 .faces
                 .into_iter()
                 .map(|face| face.polygon)
@@ -807,28 +893,97 @@ fn endpoint_frames(document: &Document) -> Vec<Vec<Vec<[f64; 3]>>> {
         .collect()
 }
 
+/// 指定した手順までの終点姿勢を1つ求める。
+fn endpoint_frame(document: &Document, up_to: usize, check: EndpointCheck) -> Frame3D {
+    match check {
+        EndpointCheck::Rigid => replay(document, up_to, 1.0).frame,
+        EndpointCheck::Flat => {
+            let faces = extract_faces(&document.cp);
+            let (state, warnings) = flat_state_at(document, &faces, up_to)
+                .unwrap_or_else(|error| panic!("手順{up_to}を宣言角のまま平坦に再生できる: {error}"));
+            assert!(
+                warnings.is_empty(),
+                "手順{up_to}の平坦再生に警告がある: {warnings:?}"
+            );
+            flat_endpoint_frame(document, &faces, &state)
+        }
+    }
+}
+
+/// 平坦な終点の3D姿勢を、宣言角から決まる面の配置と記録された重なり順で組み立てる。
+///
+/// 平坦な状態は全ての面が同じ平面に乗るので、上下は幾何ではなく作品が持つ重なり順が
+/// 決める。`crates/ori3-layers/tests/acceptance_crane.rs` の `explicit_flat_frame` と
+/// 同じ組み立て方である。
+fn flat_endpoint_frame(document: &Document, faces: &[Face], state: &FlatState) -> Frame3D {
+    let positions = document
+        .cp
+        .vertices
+        .iter()
+        .map(|vertex| (vertex.id, DVec2::from(vertex.pos)))
+        .collect::<std::collections::HashMap<_, _>>();
+    let ranks = state
+        .order
+        .iter()
+        .enumerate()
+        .map(|(rank, id)| (*id, rank))
+        .collect::<std::collections::HashMap<FaceId, usize>>();
+    assert_eq!(
+        ranks.len(),
+        faces.len(),
+        "平坦な終点の重なり順は全ての面をちょうど1回ずつ含む"
+    );
+    Frame3D {
+        faces: faces
+            .iter()
+            .map(|face| {
+                let placement: Isometry2 = state.placements[&face.id];
+                let rank = u32::try_from(ranks[&face.id]).expect("重なり順はu32に収まる");
+                Face3D {
+                    face: face.id,
+                    polygon: face
+                        .vertices
+                        .iter()
+                        .map(|vertex| {
+                            let moved = placement.apply(positions[vertex]);
+                            [moved.x, moved.y, 0.0]
+                        })
+                        .collect(),
+                    layer: rank,
+                    surface_rank: rank,
+                    mirrored: placement.mirrored,
+                }
+            })
+            .collect(),
+        warnings: Vec::new(),
+    }
+}
+
 /// §12.6-4: 各終点で全頂点finite、対応終点距離 `<=1e-6`、seam `<=1e-6`、penetration 0。
 fn assert_endpoints_match(
     label: &str,
     round: usize,
     origin: &[Vec<Vec<[f64; 3]>>],
     document: &Document,
+    check: EndpointCheck,
     summary: &mut RoundTripSummary,
 ) {
     let faces = extract_faces(&document.cp);
     for (step_index, expected) in origin.iter().enumerate() {
-        let replayed = replay(document, step_index + 1, 1.0);
-        assert!(
-            replayed.skipped.is_empty(),
-            "{label}: {round}回目 手順{step_index}で飛ばした折りがある: {:?}",
-            replayed.skipped
-        );
+        if check == EndpointCheck::Rigid {
+            let skipped = replay(document, step_index + 1, 1.0).skipped;
+            assert!(
+                skipped.is_empty(),
+                "{label}: {round}回目 手順{step_index}で飛ばした折りがある: {skipped:?}"
+            );
+        }
+        let frame = endpoint_frame(document, step_index + 1, check);
         assert_eq!(
-            replayed.frame.faces.len(),
+            frame.faces.len(),
             expected.len(),
             "{label}: {round}回目 手順{step_index}の面数"
         );
-        for (face_index, (face, expected)) in replayed.frame.faces.iter().zip(expected).enumerate() {
+        for (face_index, (face, expected)) in frame.faces.iter().zip(expected).enumerate() {
             assert_eq!(
                 face.polygon.len(),
                 expected.len(),
@@ -848,13 +1003,13 @@ fn assert_endpoints_match(
                 );
             }
         }
-        let seam = max_seam_gap(&document.cp, &faces, &replayed.frame);
+        let seam = max_seam_gap(&document.cp, &faces, &frame);
         assert!(
             seam.is_finite() && seam <= ENDPOINT_EPS,
             "{label}: {round}回目 手順{step_index} のseam {seam:e}"
         );
         summary.seam_max = summary.seam_max.max(seam);
-        let intersections = self_intersection_pairs(&replayed.frame);
+        let intersections = self_intersection_pairs(&frame);
         summary.penetration_pairs += intersections.len();
         assert!(
             intersections.is_empty(),

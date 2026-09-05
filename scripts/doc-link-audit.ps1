@@ -8,6 +8,12 @@
     [switch]$PreserveReport,
     # 現在入力からの再生成bytesと保存済み3成果物を比較する。状態差とは独立に使う。
     [switch]$CheckTraceability,
+    # 検査名台帳の見出し `# definition-tree-sha256=` だけを、いま計算した値で
+    # 書き直す唯一の入口。値は -CheckTraceability が照合するのと同じ計算経路
+    # (同じ関数・同じ正規化)から出すので、人が hash を手で書かない。
+    # 通常の検査・生成経路からは呼ばない(§10.7.6: 通常検査が追跡対象を
+    # 書き換えない)。他のmodeとは同時指定できない。
+    [switch]$WriteTestNamesHash,
     # 自己試験用。通常は docs/traceability を使う。
     [string]$TraceabilityPath = "",
     # 自己試験用。通常は正本と追跡対象の検査名台帳を使う。
@@ -61,6 +67,9 @@ $reportPath = Join-Path $repoRoot "scratchpad/doc-link-7d-report.md"
 
 if ($Check -and $CheckTraceability) { throw "-Check と -CheckTraceability は同時指定できません" }
 if (($Update -or $WriteTraceability) -and ($Check -or $CheckTraceability)) { throw "書込と検査は同時指定できません" }
+if ($WriteTestNamesHash -and ($Update -or $WriteTraceability -or $Check -or $CheckTraceability)) {
+    throw "-WriteTestNamesHash は単独で実行してください"
+}
 
 function Get-CurrentRoadmapSnapshot {
     $snapshotScript = Join-Path $PSScriptRoot "get-roadmap-status.ps1"
@@ -129,7 +138,7 @@ $expectedCheckboxCounts = [ordered]@{
     M3 = 45
     M4 = 19
     M5 = 1
-    ADDITIONAL = 1
+    ADDITIONAL = 2
 }
 
 # ここに書く名前は追跡対象の検査名台帳に実在するものだけである。
@@ -260,6 +269,14 @@ $taskLinkIdOrder = @{
         "M2.T2-8.C02"
         "M2.T2-8.C03"
     )
+    # 2026-09-05: 一斉折りの節へNFR-002の実機確認(C02)を新設した。ADDITIONALは
+    # 以前ID採番を1つに固定しており、2件目のcheckboxを足すと必ず
+    # 「inline linkが台帳と一致しません」で止まった。他のTaskと同じ固定順序表へ
+    # 移し、正本の並び順どおりにC01・C02を割り当てる。既存C01のIDは動かない。
+    "ADDITIONAL|Fold All" = @(
+        "ADDITIONAL.FOLD-ALL.C01"
+        "ADDITIONAL.FOLD-ALL.C02"
+    )
 }
 
 $scopeFallbackTests = @{
@@ -296,6 +313,7 @@ $b1ManualAcceptanceClassification = [ordered]@{
     "MANUAL.M3.T3-4.C02.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "提案ウィザードの起動位置" }
     "MANUAL.M4.T4-3.C02.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "展開図書き出しダイアログ" }
     "MANUAL.M4.T4-5.C03.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "手順図書き出しダイアログ" }
+    "MANUAL.ADDITIONAL.FOLD-ALL.C02.SCREEN-ACCEPTANCE" = [pscustomobject]@{ Class = "X"; Subject = "一斉折りの仮表示の速さ(NFR-002)" }
 }
 
 # 専用CDP枠で実行済みのX受入。通常のnpm検査名一覧には含めず、実機・fixture・
@@ -337,6 +355,60 @@ $commitPushEvidence = [ordered]@{
     "MANUAL.M4.T4-4.C03.COMMIT-PUSH" = "1b1a0e650cd373fc0a877d7fb133452f767739ba"
     "MANUAL.M4.T4-5.C04.COMMIT-PUSH" = "eb1c2c5904ebe67c15d2e2331c9533cddf91705c"
     "MANUAL.M4.T4-6.C03.COMMIT-PUSH" = "7c49536e8807074751cebd7852f801b5f24dd79b"
+}
+
+# 2026-09-05: 受入担当2名が専用CDP枠で実測し手で書いた7件。生成器の表へ
+# 取り込み、再生成しても同じ本文が出るようにする(§10.7.6)。文言は
+# docs/traceability/manual-acceptance.md から1字も変えていない。
+$manuallyRecordedAcceptance = [ordered]@{
+    "MANUAL.M1.T1-10.C02.SCREEN-ACCEPTANCE" = @(
+        '1. 2026-09-05に専用CDP枠で実行済み。実行本体: `scratchpad/acceptance-2026-09-05/driver-481-redo.mjs`（`apps/desktop/tests-live/doc-link-b1-cdp-support.mjs`の`connectDesktop`/`evaluate`/`restoreBlank`を使う。exit=0）。'
+        '2. 実測結果: 白紙へ**描いて**やっこさんを折った。正本`crates/ori3-rigid/tests/fixtures/check-yakko.ori3`と同じ折り目を谷8ストローク・山8ストロークで引き、頂点4→**20**・辺4→**36**（正本と一致）、平らにたためない点**0**・平坦条件の違反**0**・警告**0**。「全部いっぺんに折ってみる」100%で面17・外形0.5×0.5・**厚み0**（平らに畳めた）。表示はすべて日本語で、常設4区画（ツールレール1・展開図1・3D1・コンテキストパネル1）は不変。'
+        '3. PID・実行ファイルSHA-256・fixture SHA-256を照合し、終了時に手順0・道具「選択」・開いているdialog 0の白紙へ復元した。記録と実測値は`scratchpad/acceptance-2026-09-05/MANUAL.M1.T1-10.C02-redo.stdout.log`、画像は同フォルダの`MANUAL.M1.T1-10.C02-redo-1-blank.png`〜`-4-folded.png`にある。'
+        '4. 同じ条件で再実行するときも、1つでも操作不能・表示欠落・期待外の画素差があれば不合格にする。'
+    )
+    "MANUAL.M2.T2-6b.C05.SCREEN-ACCEPTANCE" = @(
+        '1. 2026-09-05に専用CDP枠で実行済み。実行本体: `apps/desktop/tests-live/doc-link-b1-pull-cdp.mjs`（exit=0、`M2.T2-6b.C05 VERIFY PASSED`）。'
+        '2. 実測結果: つかんで動かす操作で手順がちょうど1件増え（1→2）、折り目の辺が36→51へ増え、道具は「折る」のまま、離した後の掴みは解除（`grab.active=false`）、増えた手順「2 単純折り」がタイムラインにある。fixtureは`crates/ori3-rigid/tests/fixtures/check-yakko.ori3`、正規化座標(0.50,0.50)→(0.65,0.50)。'
+        '3. PID・実行ファイルSHA-256・fixture SHA-256を照合し、終了時に手順0・道具「選択」・開いているdialog 0の白紙へ復元した。記録と実測値は`scratchpad/acceptance-2026-09-05/MANUAL.M2.T2-6b.C05.SCREEN-ACCEPTANCE.stdout.log`にある。'
+        '4. 同じ条件で再実行するときも、1つでも操作不能・表示欠落・期待外の画素差があれば不合格にする。'
+    )
+    "MANUAL.M2.T2-6c.C08.SCREEN-ACCEPTANCE" = @(
+        '1. 2026-09-05に専用CDP枠で実行済み。このcheckboxの成果物は「詰まった箇所を`docs/progress.md`に記録」であり、**所見は`docs/progress.md`の「2026-09-05 - 説明なしで座布団折りから鶴の基本形まで折れるかを実機で確かめ、詰まった箇所を記録した」の節**にある。'
+        '2. 実測結果の要約: 座布団折りは説明なしで折れた（頂点8・辺12、平らにたためない点0・警告0、100%で面5・厚み0）。詰まりは2件で、①次に折る技法を画面が案内しない（技法一覧は9種の名前とヒント「左の一覧から技法を選んでください」だけ）②平らに畳めないときに、山谷を変えるべき折り目を画面が名指ししない（案内は「平らにたためない場所があります」だけ）。鶴の基本形には到達しなかった。操作不能・英語表示・表示崩れは0件。'
+        '3. PID・実行ファイルSHA-256・fixture SHA-256を照合し、終了時に手順0・道具「選択」・開いているdialog 0の白紙へ復元した。記録と実測値は`scratchpad/acceptance-2026-09-05/MANUAL.M2.T2-6c.C08.stdout.log`、画像は同フォルダの`MANUAL.M2.T2-6c.C08-A1-zabuton-cp.png`〜`-C1-technique-menu.png`にある。'
+        '4. 同じ条件で再実行するときも、1つでも操作不能・表示欠落・期待外の画素差があれば不合格にする。'
+    )
+    "MANUAL.M2.T2-7.C03.SCREEN-ACCEPTANCE" = @(
+        '1. 2026-09-05に専用CDP枠で実行済み。実行本体: `apps/desktop/tests-live/doc-link-b1-penetration-cdp.mjs`（exit=0、`M2.T2-7.C03 VERIFY PASSED`）。'
+        '2. 実測結果: 面が交差するfixture（`crates/ori3-layers/tests/fixtures/penetration-warning.ori3`）で、警告バッジがちょうど1個、疑わしい折り目の案内がちょうど1個、capture APIの警告数1、バッジのclassは`status-badge`だけで`error`を含まず、バッジの文言は日本語の「警告 1」。'
+        '3. PID・実行ファイルSHA-256・fixture SHA-256を照合し、終了時に手順0・道具「選択」・開いているdialog 0の白紙へ復元した。記録と実測値は`scratchpad/acceptance-2026-09-05/MANUAL.M2.T2-7.C03.SCREEN-ACCEPTANCE.stdout.log`にある。'
+        '4. 同じ条件で再実行するときも、1つでも操作不能・表示欠落・期待外の画素差があれば不合格にする。'
+    )
+    "MANUAL.M2.T2-9.C02.SCREEN-ACCEPTANCE" = @(
+        '1. 2026-09-05に専用CDP枠で実行済み。実行本体: `scratchpad/acceptance-2026-09-05/driver-752-redo.mjs`（exit=0）。作品は`apps/desktop/tests-live/fixtures/traditional-crane-full.ori3`（正本CP 頂点56・辺114、手順3。`crates/ori3-layers/tests/acceptance_crane.rs`の`crane()`と同じ辺ID群で正本の一括collapse 1手を3手へ分けたもの）。'
+        '2. 実測結果: 手順0〜3を1つずつ進めて**鶴が完成した**（札は「折る前」「1 単純折り」「2 花弁折り」「3 中割り折り」で全て日本語。面59、3D画像に翼・首・頭・尾が見える）。展開図の内側の頂点id=10を(0.5,0.6659)→(0.56,0.7059)へドラッグして修正すると、「再生」の後に完成形が変わり（面座標のチェックサム96091.5→91406.8、外接箱も変化）、画面上部に日本語で「指定を優先し、いちばん近い形で追従中」と出て**追従した**。操作不能・英語表示・表示崩れは0件で、常設4区画は不変。'
+        '3. PID・実行ファイルSHA-256・fixture SHA-256を照合し、終了時に手順0・道具「選択」・開いているdialog 0の白紙へ復元した。記録と実測値は`scratchpad/acceptance-2026-09-05/MANUAL.M2.T2-9.C02-redo.stdout.log`、画像は同フォルダの`MANUAL.M2.T2-9.C02-redo-1-opened.png`〜`-4-after-replay.png`にある。手順2（鳥の基本形）では日本語で「この折り方だと紙が突き抜けています」「指定した角度に近い形を表示しています（閉包RMS 1.655e-12）」と出て操作は止まらない（`-redo-chip-step-2.png`）。'
+        '4. 同じ条件で再実行するときも、1つでも操作不能・表示欠落・期待外の画素差があれば不合格にする。'
+    )
+    "MANUAL.M3.T3-4.C04.COMMIT-PUSH" = @(
+        '1. 2026-09-05に実行済み。`docs/implementation-roadmap.md` の `M3.T3-4.C04` と同じTaskを確認した。'
+        '2. 明示対応commit: `dbb2a6b`（題名: 骨格を指定して展開図を提案してもらう画面を追加）。統括が`git log --grep`で実測し、リモート本線`origin/main`（当時のHEAD `dfd3c59`）の祖先であることを確認した。'
+        '3. 画面部分も確認済み: 出っぱりを既定4本から6本へ増やして頭1・尾1・足4を指定でき、提案の3画面（骨格→候補→確認）を通り、候補4件の説明は日本語、「この展開図を使う」で適用してdialog 0・展開図（頂点29・辺64・手順1）が入り、そのまま「谷」「折る」道具へ進めた。常設4区画は提案中も適用後も不変。記録は`scratchpad/claude-acceptance-report.md`の796の節と`scratchpad/acceptance-2026-09-05/MANUAL.M3.T3-4.C04.stdout.log`、画像は同フォルダの`MANUAL.M3.T3-4.C04-1-skeleton.png`〜`-5-editable.png`にある。'
+        '4. この対応はTask番号だけで推測していない。題名・確認日・結果を記録し、祖先でなければ合格にしない。'
+    )
+    "MANUAL.M4.T4-6.C02.SCREEN-ACCEPTANCE" = @(
+        '1. 2026-09-05に専用CDP枠で実行済み。実行本体: `scratchpad/acceptance-2026-09-05/driver-945-redo.mjs`（exit=0）。作品は`apps/desktop/tests-live/fixtures/frog.ori3`（頂点141・辺280、手順14。`crates/ori3-layers/tests/acceptance_frog.rs`の`frog()`が折る伝承のカエル）。'
+        '2. 実測結果: 手順0〜14を1つずつ進めて**カエルが完成した**（札は「1 単純折り」「2 単純折り」「3〜8 開いてつぶす」「9 花弁折り」「10〜13 中割り折り」「14 段折り」で全て日本語、面140、警告0）。「書き出し」→「折り図(PDF)」→「保存先を選んで書き出す」でPDFを書き出し、画面に日本語で「保存しました:frog-diagram.pdf」と出た。書き出したPDFを開いて目視した: **4ページ・A4（595.28×841.89pt＝210×297mm）・427,473バイト**、1ページ目は表紙「折り図／できあがりの形(全14手順)／紙の大きさ 100×100mm」でカエルの完成形（足4本）の絵、2〜4ページは1ページ6コマ・番号1〜14の日本語の手順（山は赤・谷は青・矢印つき、ページ番号「2ページ」〜「4ページ」）。操作不能・英語表示・表示崩れは0件。'
+        '3. PID・実行ファイルSHA-256・fixture SHA-256を照合し、終了時に手順0・道具「選択」・開いているdialog 0の白紙へ復元した。記録と実測値は`scratchpad/acceptance-2026-09-05/MANUAL.M4.T4-6.C02-redo.stdout.log`、書き出したPDFは`%TEMP%\ori3-acceptance-2026-09-05\frog-diagram.pdf`（SHA-256 `AD4CCBD41DD0E219D1B68053C8A18C9759E7BA289A4DD263B4C91AC638D22536`）、画像は同フォルダの`MANUAL.M4.T4-6.C02-redo-1-opened.png`〜`-4-export-saved.png`と`-pdf-page1.png`〜`-pdf-page4.png`にある。'
+        '4. 同じ条件で再実行するときも、1つでも操作不能・表示欠落・期待外の画素差があれば不合格にする。'
+    )
+    "MANUAL.ADDITIONAL.FOLD-ALL.C02.SCREEN-ACCEPTANCE" = @(
+        '1. 2026-09-05に専用CDP枠で実行済み。実行本体: `apps/desktop/tests-live/doc-link-b1-fold-all-latency-cdp.mjs`（exit=0、`ADDITIONAL.FOLD-ALL.C02 VERIFY PASSED`）。ほかの測定を全て止めた静かな状態で3回実行した（同時に走る`cargo`・`rustc`・test実行ファイルはいずれも0件）。'
+        '2. 実測結果: NFR-002の2点を3回とも満たした。**ソルバー1回の最大は17.6 / 5.1 / 17.7 ms**（上限33 ms以内）、**3D更新は43.838 / 38.872 / 45.899 回/秒**（下限30回/秒以上）。「全部いっぺんに折ってみる」のつまみへ10・20…100%の10入力を送って往復時間を採り、続けて1秒間つまみを動かして`data-applied-percent`の変化回数を数えた。要件でない「入力から画面反映まで」の時間は合否に使わず参考値として出すだけにしている。'
+        '3. PID・実行ファイルSHA-256を照合した（実行ファイルSHA-256 `4BF0DC2268CB7001AED90F852EC5AF228A2EF365FAD82DB4347271EB20DE2FD6`、HEAD `dfd3c59`の同梱版）。測定のあいだだけ`window.fetch`を包み、終了時に必ず元へ戻す。記録と実測値は`scratchpad/acceptance-2026-09-05/M2.T2-6b.FOLD-ALL-LATENCY-quiet-1.log`〜`-quiet-3.log`にある（ID新設前の仮IDのままのファイル名）。'
+        '4. 同じ条件で再実行するときも、ソルバー1回が33 msを超えるか、更新が30回/秒を下回れば不合格にする。上限・下限はNFR-002の数値そのままで、緩めない。'
+    )
 }
 
 function ConvertTo-LinkSlug([string]$Id) {
@@ -646,6 +718,51 @@ foreach ($entry in $testInventoryEntries) {
 $definitionManifestBytes = [Text.Encoding]::UTF8.GetBytes(($definitionManifestLines.ToArray() -join "`n") + "`n")
 $testDefinitionTreeHash = Get-BytesSha256 $definitionManifestBytes
 $declaredDefinitionTreeHash = [string]$inventoryDefinitionHashMatch.Groups['sha'].Value
+if ($WriteTestNamesHash) {
+    # 見出しの64桁だけを、いま計算した値のASCII bytesへ置き換える。
+    # 他のbyteは1つも触らないので、改行の種類・並び・件数表示は保存される。
+    $inventoryMarkerBytes = [Text.Encoding]::ASCII.GetBytes('# definition-tree-sha256=')
+    $inventoryMarkerOffsets = New-Object System.Collections.Generic.List[int]
+    for ($scanIndex = 0; $scanIndex -le $testInventoryBytes.Length - ($inventoryMarkerBytes.Length + 64); $scanIndex++) {
+        $matched = $true
+        for ($markerIndex = 0; $markerIndex -lt $inventoryMarkerBytes.Length; $markerIndex++) {
+            if ($testInventoryBytes[$scanIndex + $markerIndex] -ne $inventoryMarkerBytes[$markerIndex]) { $matched = $false; break }
+        }
+        if ($matched) { $inventoryMarkerOffsets.Add($scanIndex) }
+    }
+    if ($inventoryMarkerOffsets.Count -ne 1) {
+        throw "検査名台帳のtest definition hash見出しをbytes内で1箇所に特定できません (実際: $($inventoryMarkerOffsets.Count)箇所)"
+    }
+    if ([string]::Equals($declaredDefinitionTreeHash, $testDefinitionTreeHash, [StringComparison]::Ordinal)) {
+        Write-Host "[FRESH] 検査名台帳のtest definition hashは既に現在定義と一致しています: $testDefinitionTreeHash"
+        exit 0
+    }
+    # hashは作業ツリーの現在の中身から出る。未コミットの検査sourceがあると、
+    # commit済みだけを見るCIの値と食い違う(§10.1)。黙って焼き付けないよう、
+    # 対象の未コミット分を実名で表示してから書く。commitの直前にもう一度
+    # このmodeを回すこと。
+    $dirtySourcePaths = @()
+    try {
+        $global:LASTEXITCODE = 0
+        $statusOutput = @(& git -C $repoRoot --no-optional-locks status --porcelain --untracked-files=no -- @($sourceRelativePaths) 2>$null)
+        if ($LASTEXITCODE -eq 0) {
+            $dirtySourcePaths = @($statusOutput | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        }
+    }
+    catch { $dirtySourcePaths = @() }
+    if ($dirtySourcePaths.Count -ne 0) {
+        Write-Host "[DIRTY] 未コミットの検査sourceを含む値です ($($dirtySourcePaths.Count)件)。commit直前に再実行してください:"
+        foreach ($dirtySourcePath in $dirtySourcePaths) { Write-Host "  $dirtySourcePath" }
+    }
+    $newHashBytes = [Text.Encoding]::ASCII.GetBytes($testDefinitionTreeHash)
+    if ($newHashBytes.Length -ne 64) { throw "計算したtest definition hashが64桁ではありません: $testDefinitionTreeHash" }
+    $updatedInventoryBytes = New-Object byte[] ($testInventoryBytes.Length)
+    [Array]::Copy($testInventoryBytes, $updatedInventoryBytes, $testInventoryBytes.Length)
+    [Array]::Copy($newHashBytes, 0, $updatedInventoryBytes, $inventoryMarkerOffsets[0] + $inventoryMarkerBytes.Length, 64)
+    [IO.File]::WriteAllBytes($testNamesPath, $updatedInventoryBytes)
+    Write-Host "[WRITE] 検査名台帳のtest definition hashを更新しました:`nold=$declaredDefinitionTreeHash`nnew=$testDefinitionTreeHash`ndefinitions=$($definitionManifestLines.Count) files=$($sourceRelativePaths.Count)"
+    exit 0
+}
 if (-not [string]::Equals($declaredDefinitionTreeHash, $testDefinitionTreeHash, [StringComparison]::Ordinal)) {
     throw "検査名台帳のtest definition hashが現在定義と不一致です:`ndeclared=$declaredDefinitionTreeHash`nactual=$testDefinitionTreeHash`ndefinitions=$($definitionManifestLines.Count) files=$($sourceRelativePaths.Count)"
 }
@@ -761,22 +878,24 @@ for ($index = 0; $index -lt $roadmapLines.Count; $index++) {
         # link IDと既存の証拠名は、ロードマップ本文に書かれた既存markerと一致させる。
         # 一方、進捗照合は下の$task（作業18ならWork 18）だけで行う。
         $taskKey = "$scope|$linkTask"
-        if ($scope -eq "ADDITIONAL") {
-            if ($taskKey -ne "ADDITIONAL|Fold All") { throw "未承認の追加目標を証拠台帳へ取り込めません: $taskKey" }
-            $linkId = "ADDITIONAL.FOLD-ALL.C01"
+        # ADDITIONALは承認済みの節だけを受け入れる。採番そのものは他のscopeと同じ
+        # 共通経路($taskOrdinals + $taskLinkIdOrder)で行う。以前はここでIDを
+        # "ADDITIONAL.FOLD-ALL.C01"へ固定していたため、同じ節へ2件目のcheckboxを
+        # 足すと導出IDがC01のまま重なり、必ず「inline linkが台帳と一致しません」で
+        # 止まった(2026-09-05に実測)。
+        if ($scope -eq "ADDITIONAL" -and $taskKey -ne "ADDITIONAL|Fold All") {
+            throw "未承認の追加目標を証拠台帳へ取り込めません: $taskKey"
+        }
+        if (-not $taskOrdinals.ContainsKey($taskKey)) { $taskOrdinals[$taskKey] = 0 }
+        $taskOrdinals[$taskKey] = [int]$taskOrdinals[$taskKey] + 1
+        $taskNumber = ([regex]::Match($linkTask, 'Task (?<number>[0-9]+-[0-9A-Za-z]+)')).Groups['number'].Value
+        if ($taskLinkIdOrder.ContainsKey($taskKey)) {
+            $orderedIds = @($taskLinkIdOrder[$taskKey])
+            if ($taskOrdinals[$taskKey] -gt $orderedIds.Count) { throw "Taskの固定link ID順序を超えました: $taskKey" }
+            $linkId = [string]$orderedIds[$taskOrdinals[$taskKey] - 1]
         }
         else {
-            if (-not $taskOrdinals.ContainsKey($taskKey)) { $taskOrdinals[$taskKey] = 0 }
-            $taskOrdinals[$taskKey] = [int]$taskOrdinals[$taskKey] + 1
-            $taskNumber = ([regex]::Match($linkTask, 'Task (?<number>[0-9]+-[0-9A-Za-z]+)')).Groups['number'].Value
-            if ($taskLinkIdOrder.ContainsKey($taskKey)) {
-                $orderedIds = @($taskLinkIdOrder[$taskKey])
-                if ($taskOrdinals[$taskKey] -gt $orderedIds.Count) { throw "Taskの固定link ID順序を超えました: $taskKey" }
-                $linkId = [string]$orderedIds[$taskOrdinals[$taskKey] - 1]
-            }
-            else {
-                $linkId = "$scope.T$taskNumber.C{0:D2}" -f $taskOrdinals[$taskKey]
-            }
+            $linkId = "$scope.T$taskNumber.C{0:D2}" -f $taskOrdinals[$taskKey]
         }
         $manualKind = Get-ManualKind $checkboxText
         $testName = $null
@@ -1120,7 +1239,12 @@ $manualMarkdown.Add('3. 担当者が指定する検査名一覧の取得又は�
 foreach ($record in ($manualRecords | Sort-Object manual_id)) {
     $manualMarkdown.Add("")
     $manualMarkdown.Add("## $($record.manual_id)")
-    if ($record.manual_id -match "COMMIT-PUSH$") {
+    if ($manuallyRecordedAcceptance.Contains($record.manual_id)) {
+        foreach ($recordedLine in $manuallyRecordedAcceptance[$record.manual_id]) {
+            $manualMarkdown.Add($recordedLine)
+        }
+    }
+    elseif ($record.manual_id -match "COMMIT-PUSH$") {
         $manualMarkdown.Add("1. ``docs/implementation-roadmap.md`` の ``$($record.id)`` と同じTaskを確認する。")
         if ($null -ne $record.commit_hash) {
             $manualMarkdown.Add("2. 明示対応commit: ``$($record.commit_hash)``（題名: $($record.commit_subject)）。")

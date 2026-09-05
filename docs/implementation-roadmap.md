@@ -968,6 +968,7 @@ UI-011〜013の実装経路と画面検査はある。M6の完成判定は、F1�
 ### 全部の折り目を一斉に折る一時表示
 
 - [x] 山折り・谷折りの全折り目を共通の0〜100%で一時表示する。これは記録された手順ではないことを常に示し、手順、保存、Undo/Redoには残さない。 — [証拠:ADDITIONAL.FOLD-ALL.C01](traceability/roadmap-links.md#roadmap-evidence-additional-fold-all-c01) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=ADDITIONAL.FOLD-ALL.C01 evidence=TEST.ADDITIONAL.FOLD-ALL.C01 -->
+- [ ] 実機確認: 一斉折りの仮表示が NFR-002(ソルバー1回33ms以内・3D更新30fps以上)を満たすことを、実機の CDP 検査で確かめる — [証拠:ADDITIONAL.FOLD-ALL.C02](traceability/roadmap-links.md#roadmap-evidence-additional-fold-all-c02) <!-- ORIGAMI3-ROADMAP-LINK schema=1 id=ADDITIONAL.FOLD-ALL.C02 evidence=MANUAL.ADDITIONAL.FOLD-ALL.C02.SCREEN-ACCEPTANCE -->
 
 ## 3. マイルストーン完了時の共通チェック
 

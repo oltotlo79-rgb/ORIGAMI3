@@ -3557,6 +3557,122 @@ fn traditional_crane_replay_visible_surface_is_uniform() {
     );
 }
 
+/// アプリが表示する粗い3手の折り鶴でも、外から見える紙面は表だけまたは裏だけになる。
+///
+/// 兄弟検査 [`traditional_crane_replay_visible_surface_is_uniform`] は一括collapseの作品
+/// だけを見ており、アプリが実際に開く3手の作品([`crane`])は対象外だった。3手の作品は
+/// `verified_complete_precrease_collapse_order` の「再実行が保存手順とbit一致する」gateを
+/// 通らない(手Bの`kind`が`InsideReverse`で自動再生成と一致しない)ため、保存済みの正本
+/// layer oracleが`surface_rank`へ届かず、幾何導出だけが刻まれていた。その導出順は
+/// 一般制約を破っており、首と尾の重なりが逆になって、見えている面の12.045546%が紙の裏に
+/// なっていた(保存順では0%)。
+///
+/// 主張の中心は画素ではなく幾何である。まず候補order自身から物理制約を作らない独立
+/// validatorが`surface_rank`順を受理すること、次に首・尾を前後の翼で挟む契約に違反が
+/// 0であることを見る。画素の一様性は、兄弟検査と同じ形で利用者に見える症状も併せて
+/// 押さえるために続けて確かめる。上限1e-4は兄弟検査と同じ値で、変更していない。
+///
+/// 対象は表示経路である。[`replay`] が刻む`surface_rank`は幾何だけの権威に保ち
+/// (`saved_order_never_overrides_geometric_rank_across_angle_buckets`)、保存順は
+/// 表示直前の [`ori3_layers::prefer_saved_order_when_rank_conflicts`] だけが、
+/// 刻まれた順が一般制約を破っている場合に限って混ぜる。
+#[test]
+fn three_step_traditional_crane_replay_visible_surface_is_uniform() {
+    const VISIBLE_SURFACE_MINORITY_RATIO_LIMIT: f64 = 1e-4;
+    let (document, state) = crane();
+    let faces = extract_faces(&document.cp);
+    let up_to = document.sequence.len();
+    let mut replayed = replay(&document, up_to, 1.0);
+
+    // 表示経路(app-core / desktop store の attach_replay)と同じ後処理を通す。
+    // replay自身は幾何だけで刻むので、保存順はここでしか混ざらない。
+    let saved_order = ori3_layers::saved_layer_order_at(&document, &faces, up_to, 1.0)
+        .expect("完成手順は正本の重なり順を保存している");
+    let _ = ori3_layers::prefer_saved_order_when_rank_conflicts(
+        &document,
+        &faces,
+        up_to,
+        &mut replayed.frame,
+        &saved_order,
+    );
+
+    let mut replay_order = replayed
+        .frame
+        .faces
+        .iter()
+        .map(|face| (face.surface_rank, face.face))
+        .collect::<Vec<_>>();
+    replay_order.sort_unstable();
+    let replay_state = FlatState {
+        placements: state.placements.clone(),
+        order: replay_order
+            .into_iter()
+            .map(|(_, face)| face)
+            .collect::<Vec<_>>(),
+    };
+
+    // 幾何の契約1: 表示に使う重なり順が、山谷・鏡映・紙の連続性だけから決まる
+    // 一般制約の有効な拡張であること。候補order自身は制約の材料にならない。
+    let validation = ori3_layers::precrease_collapse::validate_precrease_layer_order(
+        &document.cp,
+        &faces,
+        &state.placements,
+        &replay_state.order,
+    )
+    .expect("3手作品の平坦配置から一般制約を求められる");
+    assert!(
+        validation.is_valid(),
+        "表示する重なり順が展開図の一般制約を破っている: violations={:?} discarded={:?}",
+        validation.violations,
+        validation.discarded_relations
+    );
+
+    // 幾何の契約2: 首と尾が後翼と前翼の間に入る(正本の中割り折りの結果)。
+    let sandwich = traditional_crane_sandwich_audit(&document.cp, &faces, &replay_state);
+    assert!(
+        sandwich.violations.is_empty(),
+        "首・尾が前後の翼の間に入っていない: {:?}",
+        sandwich
+            .violations
+            .iter()
+            .map(|violation| (
+                violation.middle_part,
+                violation.wing_part,
+                violation.middle_face,
+                violation.wing_face,
+                violation.middle_rank,
+                violation.wing_rank,
+            ))
+            .collect::<Vec<_>>()
+    );
+
+    // 利用者に見える症状: 上・斜めから見た紙面の表裏が混ざらないこと。
+    let uniform = |pixels: &(usize, usize, BTreeMap<FaceId, usize>)| {
+        pixels.0 > 0
+            && pixels.1.min(pixels.0 - pixels.1) as f64 / pixels.0 as f64
+                <= VISIBLE_SURFACE_MINORITY_RATIO_LIMIT
+    };
+    let visible_top = traditional_crane_paper_pixels(&document, &faces, &replay_state, "top");
+    let visible_isometric =
+        traditional_crane_paper_pixels(&document, &faces, &replay_state, "isometric");
+    assert!(
+        uniform(&visible_top)
+            && uniform(&visible_isometric)
+            && (visible_top.1 * 2 <= visible_top.0)
+                == (visible_isometric.1 * 2 <= visible_isometric.0),
+        "3手作品のreplayで見える表裏が混在: top paper={} front={} back={} back_by_face={:?}; isometric paper={} front={} back={} back_by_face={:?}; limit={:.12}%",
+        visible_top.0,
+        visible_top.0 - visible_top.1,
+        visible_top.1,
+        visible_top.2,
+        visible_isometric.0,
+        visible_isometric.0 - visible_isometric.1,
+        visible_isometric.1,
+        visible_isometric.2,
+        VISIBLE_SURFACE_MINORITY_RATIO_LIMIT * 100.0
+    );
+}
+
 /// 全内部辺を一周した反射配置と、collapseが保存した配置との差の最大値。
 /// 角度差(rad)と平行移動距離の大きい方を採る。これはAPI内部の`approx_eq`と同じ二量である。
 fn traditional_crane_collapse_cycle_residual(
@@ -4797,4 +4913,84 @@ fn saved_order_never_overrides_geometric_rank_across_angle_buckets() {
             "rank authority must not change geometry"
         );
     }
+}
+
+/// 鳥の基本形(手順2)の紙は突き抜けておらず、山谷と矛盾しない重なり順が存在する。
+///
+/// 実機でこの手順に「この折り方だと紙が突き抜けています」が出ていた(2026-09-05)。
+/// 交差は0組・めり込み深さ0で、紙は突き抜けていない。警告の実体は、保存済み層順を
+/// 持たない手順の重なり順が面ID昇順の仮置きのまま表示・判定されていたことだった。
+/// ここでは表示経路の前提となる幾何の事実——(1)保存済み層順が無いこと、
+/// (2)面が交差しないこと、(3)仮置きは山谷と食い違うこと、(4)形から導いた順なら
+/// 食い違いが0になること——を固定する。表示経路そのものの検査は
+/// `apps/desktop/src-tauri/src/store.rs` と `crates/ori3-app-core/src/lib.rs` の
+/// `bird_base_without_an_authoritative_order_is_derived_before_warning` にある。
+#[test]
+fn bird_base_has_no_penetration_and_a_consistent_layer_order() {
+    let (doc, _flat) = crane();
+    let faces = extract_faces(&doc.cp);
+    let replayed = ori3_layers::replay_with_faces(&doc, &faces, 2, 1.0);
+
+    assert!(
+        ori3_layers::saved_layer_order_at(&doc, &faces, 2, 1.0).is_none(),
+        "鳥の基本形の手順は重なり順を保存していない"
+    );
+    assert!(
+        self_intersection_pairs(&replayed.frame).is_empty(),
+        "鳥の基本形で面は交差しない"
+    );
+    assert!(
+        ori3_rigid::layer_order_conflicts(&doc.cp, &faces, &replayed.frame),
+        "仮置きの重なり順は山谷と食い違う(この食い違いが警告の実体だった)"
+    );
+
+    let order = ori3_rigid::derive_layer_order(&doc.cp, &faces, &replayed.frame)
+        .expect("鳥の基本形の形から重なり順を導ける");
+    assert_eq!(order.len(), faces.len(), "59面すべてに順位が付く");
+    let rank: HashMap<FaceId, u32> = order
+        .iter()
+        .enumerate()
+        .map(|(index, &id)| (id, u32::try_from(index).expect("面数はu32に収まる")))
+        .collect();
+    let mut derived = replayed.frame.clone();
+    for face in &mut derived.faces {
+        face.layer = *rank.get(&face.face).expect("全ての面に順位がある");
+    }
+    assert!(
+        !ori3_rigid::layer_order_conflicts(&doc.cp, &faces, &derived),
+        "形から導いた重なり順なら山谷と食い違わない"
+    );
+    assert_eq!(
+        self_intersection_pairs(&derived).len(),
+        0,
+        "重なり順を直しても面は交差しない"
+    );
+}
+
+/// 完成形(手順3)は保存済みの重なり順を持ち、その順は山谷と矛盾しない。
+///
+/// 鳥の基本形の直しが、保存済み層順を持つ手順の結果を変えていないことを固定する。
+#[test]
+fn the_completed_crane_keeps_its_saved_layer_order() {
+    let (doc, _flat) = crane();
+    let faces = extract_faces(&doc.cp);
+    let up_to = doc.sequence.len();
+    let replayed = ori3_layers::replay_with_faces(&doc, &faces, up_to, 1.0);
+
+    let saved = ori3_layers::saved_layer_order_at(&doc, &faces, up_to, 1.0)
+        .expect("完成形の手順は重なり順を保存している");
+    assert_eq!(saved.len(), faces.len(), "59面すべての順を保存している");
+    assert!(
+        !ori3_rigid::layer_order_conflicts(&doc.cp, &faces, &replayed.frame),
+        "保存済みの重なり順は山谷と食い違わない"
+    );
+    assert!(
+        !replayed
+            .frame
+            .warnings
+            .iter()
+            .any(|warning| warning == ori3_layers::FOLD_PENETRATION_WARNING),
+        "完成形に貫通の警告は出ない: {:?}",
+        replayed.frame.warnings
+    );
 }

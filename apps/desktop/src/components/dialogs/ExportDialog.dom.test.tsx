@@ -122,7 +122,7 @@ describe("書き出しダイアログ", () => {
     expect(screen.queryByLabelText(/画像の大きさ/)).toBeNull();
   });
 
-  it("接続完了後は既存画面の5番目で安全な説明と対応外7項目を選べる", () => {
+  it("接続完了後は既存画面の5番目で安全な説明と対応外8項目を選べる", () => {
     const prepared = exportChoicesForReadiness(true);
     expect(EXPORT_CHOICES).toEqual(prepared);
     // 旧「折り目や折る手順」→新「紙の形・角度・重なりまで」。8-Dの対応範囲を明示する照合で、緩和ではない。
@@ -145,7 +145,7 @@ describe("書き出しダイアログ", () => {
     expect(useAppStore.getState().exportKind).toBe("FoldJson");
     expect(screen.getByText(prepared[4].hint)).not.toBeNull();
     const scope = screen.getByRole("region", {
-      name: "ほかの折り紙ソフトのファイルでそのまま扱えない内容（7項目）",
+      name: "ほかの折り紙ソフトのファイルでそのまま扱えない内容（8項目）",
     });
     expect(
       within(scope)
@@ -159,6 +159,8 @@ describe("書き出しダイアログ", () => {
       "作品につけたメモや説明",
       "仕上げにつけた丸み",
       "元のファイルで「平らな折り目」と「種類が指定されていない折り目」を区別すること",
+      // 2026-09-05追加。平らな形で終わる手順は書き出せるようになったので、残る範囲だけを示す。
+      "まだ平らになっていない途中の形で終わる手順のうち、紙を曲げないと作れないもの",
     ]);
     for (const forbidden of [
       "FOLD 1.1",

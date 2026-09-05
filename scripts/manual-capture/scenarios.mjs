@@ -113,8 +113,12 @@ async function openFixture(context, fixtureName, { step = "latest", setView = tr
   return info;
 }
 
+// 「鶴」は正本 `crates/ori3-layers/tests/fixtures/traditional-crane/traditional-crane-cp.ori3`
+// （利用者から受け取った traditional_crane_math_bundle）から作った3手の作品を使う。
+// 以前使っていた `crates/ori3-rigid/tests/fixtures/check-crane.ori3` は提案探索が返した6手の
+// 出力（頂点33・辺61）で、完成形は凧形であり鶴にならないため、説明書の撮影には使わない。
 const FIXTURES = Object.freeze({
-  crane: "crates/ori3-rigid/tests/fixtures/check-crane.ori3",
+  crane: "apps/desktop/tests-live/fixtures/traditional-crane-full.ori3",
   yakko: "crates/ori3-rigid/tests/fixtures/check-yakko.ori3",
   bird: "crates/ori3-rigid/tests/fixtures/check-bird-base.ori3",
   penetration: "crates/ori3-layers/tests/fixtures/penetration-warning.ori3",

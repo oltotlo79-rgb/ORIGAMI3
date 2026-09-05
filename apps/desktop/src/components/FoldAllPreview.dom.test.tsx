@@ -21,6 +21,7 @@ import {
   resetPoseThrottle,
   useAppStore,
 } from "../store/appStore";
+import { FOLD_ALL_THROTTLE_MS } from "../store/slices/poseReplaySlice";
 import { ContextPanel } from "./ContextPanel";
 
 function frameAt(percent: number): Frame3D {
@@ -585,24 +586,29 @@ describe("全部いっぺんに折ってみる画面", () => {
     expect(screen.getByText("これは仮の形です")).toBeTruthy();
   });
 
+  // 「入力からReact反映まで」は、つまみを動かしたときに製品が同期に確定させる表示までを指す。
+  // 製品は store の更新と同じcommitで読み上げ用の aria-valuetext を書き換えるので、そこを測る。
+  // 形の計算結果(data-applied-percent)は、間引きの窓とバックエンド往復のあとに届く別の量であり、
+  // 待ち時間の大半は製品の描画ではなく間引きの setTimeout である。この検査に混ぜると
+  // 描画費用を測れなくなるため、間引きの窓は次の検査で、端から端の応答は
+  // apps/desktop/tests-live/doc-link-b1-fold-all-latency-cdp.mjs で実機のまま測る。
   it("入力からReact反映まで10回の平均・最大が33ms以内", async () => {
     render(<ContextPanel />);
     await enter();
     const slider = screen.getByRole("slider", {
       name: "全部の折り目を動かす割合",
     });
-    const active = document.querySelector("[data-fold-all-active]") as HTMLElement;
     const durations: number[] = [];
 
     for (const percent of [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]) {
       const changed = new Promise<void>((resolve) => {
         const observer = new MutationObserver(() => {
-          if (active.getAttribute("data-applied-percent") === String(percent)) {
+          if (slider.getAttribute("aria-valuetext") === `${percent}%`) {
             observer.disconnect();
             resolve();
           }
         });
-        observer.observe(active, { attributes: true });
+        observer.observe(slider, { attributes: true });
       });
       const started = performance.now();
       fireEvent.change(slider, { target: { value: String(percent) } });
@@ -617,5 +623,51 @@ describe("全部いっぺんに折ってみる画面", () => {
     );
     expect(average).toBeLessThanOrEqual(33);
     expect(maximum).toBeLessThanOrEqual(33);
+  });
+
+  /**
+   * 間引きの窓の上限を押さえる検査。
+   *
+   * store/foldAllPreview.test.ts の「1秒120入力を16msごとに間引き、IPCを65回以下にして
+   * 最後の割合を採用する」は、要求を出し過ぎない側（下限）の契約である。
+   * こちらは反対側で、遅れ過ぎない側（上限）を見る。つまり「入力から形の計算要求が出るまでの
+   * 待ちは、間引きの窓ちょうど1つ分で、窓を過ぎたら必ず1回出る」ことを確かめる。
+   * 窓の長さは製品の FOLD_ALL_THROTTLE_MS をそのまま使い、この検査に数値を書かない。
+   */
+  it("形の計算要求は間引きの窓のあいだ待ち、窓を過ぎたら1回だけ出る", async () => {
+    render(<ContextPanel />);
+    await enter();
+    const slider = screen.getByRole("slider", {
+      name: "全部の折り目を動かす割合",
+    });
+    const requestCount = () => vi.mocked(ipc.foldAllPreview).mock.calls.length;
+    // 偽の時計では、要求を積んだ後の待ち行列の進みを明示的に流す。
+    const settle = async () => {
+      for (let i = 0; i < 4; i++) await Promise.resolve();
+    };
+
+    vi.useFakeTimers();
+    try {
+      // 窓の起点をそろえる。まず窓を使い切らせると、次の入力は待ち0で要求が出るので、
+      // その要求が出た時刻がそのまま次の窓の起点になる。
+      await vi.advanceTimersByTimeAsync(FOLD_ALL_THROTTLE_MS * 4);
+      fireEvent.change(slider, { target: { value: "40" } });
+      await vi.advanceTimersByTimeAsync(0);
+      await settle();
+      const before = requestCount();
+
+      // ここは窓の起点ちょうどなので、この入力は窓まるごと待つ。
+      fireEvent.change(slider, { target: { value: "50" } });
+      await vi.advanceTimersByTimeAsync(FOLD_ALL_THROTTLE_MS - 1);
+      await settle();
+      expect(requestCount()).toBe(before);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await settle();
+      expect(requestCount()).toBe(before + 1);
+      expect(vi.mocked(ipc.foldAllPreview).mock.calls[before]?.[0]).toBe(50);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
