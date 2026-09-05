@@ -109,15 +109,19 @@ function Get-AddedRustTestNamesWithoutDirectFailureSignal {
     # the unstaged file here would let an unstaged assertion hide a vacuous test
     # that remains in the index.
     $stagedContent = @(Invoke-GitText -Arguments @('show', ":$normalizedPath"))
-    $findings = New-Object System.Collections.Generic.List[string]
+    # Deliberately not named $findings: that name belongs to the outer warning
+    # list. Reusing it here made the known-defect-shapes ratchet, which counts
+    # "$findings.Add(" as the number of warning signals, count this inner
+    # accumulator as a fourth signal that does not exist.
+    $vacuousTestNames = New-Object System.Collections.Generic.List[string]
     foreach ($definition in Get-RustTestDefinitions -Lines $stagedContent) {
         if ($headTestNames.Contains([string]$definition.Name)) { continue }
         if ([bool]$definition.HasShouldPanic) { continue }
         if (-not $rustFailureSignalPattern.IsMatch([string]$definition.Body)) {
-            $findings.Add([string]$definition.Name)
+            $vacuousTestNames.Add([string]$definition.Name)
         }
     }
-    return @($findings)
+    return @($vacuousTestNames)
 }
 
 function Invoke-GitText {
