@@ -558,13 +558,37 @@ function Assert-YamlScalarEquals {
     }
 }
 
+# Reads a configuration file and reports its text with LF-only line endings.
+#
+# The line-ending form of .github/dependabot.yml and .github/workflows/security.yml is not
+# part of any rule this checker enforces, but many of the patterns below anchor with (?m)$
+# after [ \t]*. In .NET, (?m)$ matches immediately before a "`n", so on a CRLF checkout the
+# "`r" sits between the last [ \t] and that position and every such pattern misses. The
+# GitHub Actions Windows runner checks out CRLF (core.autocrlf=true), so on 2026-09-05 the
+# security workflow reported 42 offline configuration violations against files that fully
+# satisfied every rule; the same files checked out with LF locally reported 0.
+#
+# Normalising here, once per file, keeps each individual assertion (and therefore the number
+# and the meaning of the violations) exactly as written: nothing is loosened, and a genuinely
+# missing "version: 2" still fails. Patterns that already spell "\r?\n" or "\r?$" keep
+# working unchanged against LF-only text.
+function Get-ConfigurationText {
+    param([string]$Path)
+
+    $text = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+    if ($null -eq $text) {
+        return ""
+    }
+    return ([string]$text) -replace "`r`n", "`n" -replace "`r", "`n"
+}
+
 function Test-DependabotConfiguration {
     param(
         [object]$Policy,
         [string]$Path
     )
 
-    $text = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+    $text = Get-ConfigurationText -Path $Path
     Assert-True ($text -match '(?m)^version:[ \t]*2[ \t]*$') "dependabot.yml must declare version 2."
     Assert-True ($text -notmatch '(?m)^\t') "dependabot.yml may not use tab indentation."
     Assert-True ($text -notmatch '(?im)^\s*(auto-merge|auto_merge|automatic-merge)\s*:') "dependabot.yml may not enable automatic merging."
@@ -629,7 +653,7 @@ function Test-SecurityWorkflowConfiguration {
         [string]$Path
     )
 
-    $text = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+    $text = Get-ConfigurationText -Path $Path
     Assert-True ($text -match '(?m)^name:[ \t]*Security[ \t]*$') "security.yml must be named Security."
     Assert-True ($text -match '(?m)^on:[ \t]*$') "security.yml must declare workflow triggers."
     Assert-True ($text -match '(?m)^  pull_request:[ \t]*$') "security.yml must run for pull requests."
@@ -1061,7 +1085,13 @@ function Initialize-LicensePolicy {
     Assert-True ($Policy.licensePolicy.unknownDecision -eq "deny") "UNKNOWN licenses must be denied."
     Assert-True ($Policy.licensePolicy.missingDecision -eq "deny") "Missing licenses must be denied."
     Assert-True ($Policy.licensePolicy.licenseExceptionsAllowed -eq $false) "License exceptions must be disabled."
-    Assert-True (@($Policy.licensePolicy.workspaceOwnedMitOverrides).Count -eq 9) "Exactly nine workspace-owned MIT overrides are required."
+    # The fixed count stays a hard claim so a new path package can never be waved through by
+    # simply appending a name here. It moved 9 -> 11 on 2026-09-06 because commit 7075bd4
+    # (2026-08-31) added crates/ori3-app-core and crates/ori3-web to [workspace].members in the
+    # root Cargo.toml. Like the other nine members, neither declares its own license key, so
+    # both take MIT from [workspace.package].license in that same root Cargo.toml, backed by the
+    # root LICENSE - exactly the two facts licensePolicy.workspaceOverrideEvidence records.
+    Assert-True (@($Policy.licensePolicy.workspaceOwnedMitOverrides).Count -eq 11) "Exactly eleven workspace-owned MIT overrides are required."
     Test-DuplicateValues @($Policy.licensePolicy.workspaceOwnedMitOverrides) "workspaceOwnedMitOverrides"
 }
 

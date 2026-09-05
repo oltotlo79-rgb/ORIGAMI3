@@ -401,6 +401,8 @@
       "ori3-soft",
       "ori3-propose",
       "ori3-export",
+      "ori3-app-core",
+      "ori3-web",
       "desktop"
     ],
     "workspaceOverrideEvidence": [
