@@ -541,13 +541,16 @@ function Invoke-WaitForReportUpdate {
     [void](Assert-ReportLogFreshForWait -Root $Root)
     $initialItem = Get-Item -LiteralPath $resolvedReport -Force -ErrorAction Stop
     $currentTicks = $initialItem.LastWriteTimeUtc.Ticks
-    $nowUtc = [DateTime]::UtcNow
-    $silenceStartedUtc = if ($initialItem.LastWriteTimeUtc -lt $nowUtc) {
-        $initialItem.LastWriteTimeUtc
-    }
-    else {
-        $nowUtc
-    }
+    # The silence interval must be measured only over time this wait actually observed the
+    # watched report. Seeding it with the report's pre-existing LastWriteTimeUtc counted the
+    # silence that elapsed before the wait was invoked - including this process's own
+    # PowerShell startup, Resolve-RegisteredWatchReportPath and Assert-ReportLogFreshForWait -
+    # so a report that was already SilenceSeconds old returned REPORT_SILENCE_DETECTED on the
+    # first iteration (measured: preSilenceSeconds=1.015 with SilenceSeconds=1, returning at
+    # elapsedMilliseconds=4). The wait then never looked at the file, and updates that were
+    # still arriving could not defer the return. Anchoring the interval to the wait itself
+    # guarantees at least SilenceSeconds of observation before silence is declared.
+    $silenceStartedUtc = [DateTime]::UtcNow
     $timer = [Diagnostics.Stopwatch]::StartNew()
     try {
         while ($timer.Elapsed.TotalSeconds -lt $Timeout) {

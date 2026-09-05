@@ -1,9 +1,9 @@
 # ORIGAMI3-ROADMAP-EVIDENCE-TEST-NAMES schema=2
-# scope=roadmap-mapped names=61 source-files=38 repository-test-total=not-claimed
-# definition-tree-sha256=32a80feacd71df87b47127d2604788d553ecc2985b3eae1887c58aba71022191
+# scope=roadmap-mapped names=62 source-files=38 repository-test-total=not-claimed
+# definition-tree-sha256=da6b0af537cb56c233c08f4ea3325be7a997b46165f0c0730b59d9acc2b9b4fc
 # この一覧はリポジトリ全検査の一覧ではない。scripts/doc-link-audit.ps1 が
 # ロードマップ証拠へ割り当てる検査名と実sourceを1対1で保存する。
-# definition hashは、下記61件の実sourceにあるtest属性・関数宣言又は
+# definition hashは、下記62件の実sourceにあるtest属性・関数宣言又は
 # Vitestのsuite/test宣言と、Rust/Vitest実source全体（LF正規化）を含むmanifestのhashである。
 # 割当又はtest宣言を変えたら、実在するtest定義を確認して同時更新する。
 autosave::tests::autosave_skips_clean_document_and_writes_untitled_to_app_data | apps/desktop/src-tauri/src/autosave.rs
@@ -61,6 +61,7 @@ store::tests::two_real_processes_reject_a_stale_explicit_save_and_keep_the_first
 test_document_json_roundtrip | crates/ori3-model/tests/serde_roundtrip.rs
 test_seg_intersection_crossing | crates/ori3-geometry/tests/primitives.rs
 the_frog_is_deterministic | crates/ori3-layers/tests/acceptance_frog.rs
+three_step_traditional_crane_replay_visible_surface_is_uniform | crates/ori3-layers/tests/acceptance_crane.rs
 traditional_frog_has_required_techniques_and_replays_connected_twice | crates/ori3-layers/tests/acceptance_frog.rs
 twist_works_on_a_triangle_and_rejects_only_undefined_input | crates/ori3-layers/tests/techniques.rs
 valid_skeleton_passes_and_lists_leaves | crates/ori3-propose/tests/skeleton.rs

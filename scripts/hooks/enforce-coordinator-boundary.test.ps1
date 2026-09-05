@@ -534,13 +534,41 @@ for ($index = 0; $index -lt $RepeatCount; $index++) {
     Assert-True ([Linq.Enumerable]::SequenceEqual([byte[]]$beforeBytes, [byte[]][IO.File]::ReadAllBytes($Report))) "report silence wait must not write the watched file"
     Assert-Equal (Get-Item -LiteralPath $Report -Force).LastWriteTimeUtc.Ticks $beforeTicks "report silence wait must not alter the watched timestamp"
 
+    # 負例: 待機を呼ぶ前から止まっていた時間を「観測した静寂」として数えてはならない。
+    # 旧実装は監視対象の既存 LastWriteTimeUtc を静寂の起点にしていたため、呼び出し時点で
+    # 既に SilenceSeconds 以上古い報告書に対しては1回目の反復で REPORT_SILENCE_DETECTED を
+    # 返し（実測 preSilenceSeconds=1.015・elapsedMilliseconds=4）、待機中に届く更新を1件も
+    # 見なかった。この段は待機自身の stopwatch が出す elapsedMilliseconds を読むので、
+    # process の起動時間や機械の混雑に依存せずに旧挙動を落とせる。
+    [IO.File]::SetLastWriteTimeUtc($Report, [DateTime]::UtcNow.AddMinutes(-10))
+    $global:LASTEXITCODE = 0
+    $preexistingOutput = @(& $PowerShellPath -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $BoundaryScript `
+            -WaitForReportUpdate -DefinitionPath $Definition -ReportPath $Report -SilenceSeconds 2 -TimeoutSeconds 5 -RepositoryRoot $Repository 2>&1)
+    $preexistingExit = $LASTEXITCODE
+    $preexistingText = ($preexistingOutput -join "`n")
+    $script:Cases++
+    Assert-Equal $preexistingExit 0 "a report that was already silent before the wait must still be a successful bounded read" $preexistingText
+    Assert-Contains $preexistingText "REPORT_SILENCE_DETECTED" "a report that was already silent must still reach the silence boundary"
+    $preexistingMatch = [regex]::Match($preexistingText, 'REPORT_SILENCE_DETECTED[^\r\n]*elapsedMilliseconds=([0-9]+)')
+    Assert-True $preexistingMatch.Success "the silence result must report the wait's own measured elapsedMilliseconds" $preexistingText
+    Assert-True ([int]$preexistingMatch.Groups[1].Value -ge 1900) "silence that elapsed before the wait began must not be counted toward SilenceSeconds" $preexistingText
+
     [IO.File]::SetLastWriteTimeUtc($Report, [DateTime]::UtcNow)
     $repeatingUpdaterArguments = ConvertTo-ProcessArgumentString @(
         "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-        "-File", $updaterPath, "-Path", $Report, "-DelayMilliseconds", "300", "-RepeatCount", "8"
+        "-File", $updaterPath, "-Path", $Report, "-DelayMilliseconds", "300", "-RepeatCount", "40"
     )
     $repeatingUpdater = Start-Process -FilePath $PowerShellPath -ArgumentList $repeatingUpdaterArguments -WindowStyle Hidden -PassThru
     try {
+        # fixture の process 起動が遅れたまま待機を始めると、最初の SilenceSeconds に更新が
+        # 1件も届かず、正しい実装でも静寂で返ってしまう。最初の更新を観測してから待機を
+        # 起動して、この段が「更新が続いている間」だけを測るようにする。表明は変えていない。
+        $firstUpdateDeadline = [DateTime]::UtcNow.AddSeconds(20)
+        while ([DateTime]::UtcNow -lt $firstUpdateDeadline -and
+            -not ([IO.File]::ReadAllText($Report, $script:Utf8NoBom).Contains("updated-0"))) {
+            Start-Sleep -Milliseconds 25
+        }
+        Assert-True ([IO.File]::ReadAllText($Report, $script:Utf8NoBom).Contains("updated-0")) "the repeating updater must already be updating before the upper-bound wait starts"
         $upperTimer = [Diagnostics.Stopwatch]::StartNew()
         $global:LASTEXITCODE = 0
         $upperOutput = @(& $PowerShellPath -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $BoundaryScript `
@@ -555,7 +583,9 @@ for ($index = 0; $index -lt $RepeatCount; $index++) {
         Assert-True ([IO.File]::ReadAllText($Report, $script:Utf8NoBom).Contains("updated-0")) "repeating updater must really change the report during the wait"
     }
     finally {
+        # 更新は待機の起動時間より長く続ける必要がある一方、この段が終わったら残さない。
         if (-not $repeatingUpdater.HasExited) {
+            $repeatingUpdater.Kill()
             [void]$repeatingUpdater.WaitForExit(10000)
         }
         $repeatingUpdater.Dispose()

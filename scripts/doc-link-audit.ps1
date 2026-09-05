@@ -167,7 +167,13 @@ $taskTests = @{
     "M2|Task 2-6c" = "src/lib/layerMotion.test.ts > 汎用層操作の入力 > 既存折り目のReflectをregionなし・Keepへ変換する"
     "M2|Task 2-7" = "src/lib/construct.test.ts > 作図の計算 > 直角の二等分線は45°方向へ伸びる"
     "M2|Task 2-8" = "autosave::tests::restore_recovers_the_same_document"
-    "M2|Task 2-9" = "completed_crane_is_flat_and_symmetric"
+    # 2026-09-05: 3手の正本の鶴を再生し、見える面の側が揃うことを幾何から主張する
+    # 検査をM2受け入れ(折り鶴)の自動証拠集合へ加えた。対象sourceはTask 2-9の
+    # **Files:**に挙がる crates/ori3-layers/tests/acceptance_crane.rs である。
+    "M2|Task 2-9" = @(
+        "completed_crane_is_flat_and_symmetric"
+        "three_step_traditional_crane_replay_visible_surface_is_uniform"
+    )
     "M3|Task 3-1" = "valid_skeleton_passes_and_lists_leaves"
     "M3|Task 3-2" = "packing_quality_baseline_1005_runs"
     "M3|Task 3-3" = "depth_three_branching_skeleton_packs_and_generates_valid_cp"

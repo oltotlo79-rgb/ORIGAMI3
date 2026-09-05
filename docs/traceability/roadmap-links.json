@@ -14,16 +14,16 @@
                                 "path":  "docs/traceability/roadmap-evidence-test-names.txt",
                                 "schema":  2,
                                 "scope":  "roadmap-mapped",
-                                "audited":  61,
-                                "mapped":  61,
+                                "audited":  62,
+                                "mapped":  62,
                                 "source_files":  38,
-                                "definition_tree_sha256":  "32a80feacd71df87b47127d2604788d553ecc2985b3eae1887c58aba71022191",
+                                "definition_tree_sha256":  "da6b0af537cb56c233c08f4ea3325be7a997b46165f0c0730b59d9acc2b9b4fc",
                                 "execution_modes":  {
-                                                        "active_default":  60,
+                                                        "active_default":  61,
                                                         "ignored_explicit":  1
                                                     },
                                 "repository_test_total":  null,
-                                "sha256":  "0dc1c0edf7347695a1d56211c59c56bd72fdb4dd9273f6a073f5ff9dc29251d9"
+                                "sha256":  "a81e7af43729075ced9174c43b913dcee7a0cd475af0e060bd9d35c5ad31909e"
                             },
     "traceability_accounting":  {
                                     "linked_checkbox_count":  186,
@@ -2857,7 +2857,8 @@
                         "evidence_type":  "test",
                         "test_name":  "completed_crane_is_flat_and_symmetric",
                         "test_names":  [
-                                           "completed_crane_is_flat_and_symmetric"
+                                           "completed_crane_is_flat_and_symmetric",
+                                           "three_step_traditional_crane_replay_visible_surface_is_uniform"
                                        ],
                         "test_mapping_origin":  "task-default-or-scope-fallback",
                         "manual_id":  null,

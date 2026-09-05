@@ -535,8 +535,12 @@ try {
     Assert-Exit $manualTableMutantResult 0 "manual table mutant generation"
     $mutantManualText = [IO.File]::ReadAllText((Join-Path $manualTableMutantOut "manual-acceptance.md"), [Text.Encoding]::UTF8)
     Assert-True ($mutantManualText.Contains("## $removedManualId`r`n1. 統括が画面を同梱した版を1つだけ起動し、checkbox本文の操作を行う。")) "$removedManualId が表から外れても定型文へ戻っていません`n$mutantManualText"
-    Assert-True (-not $mutantManualText.Contains('実行本体: ``apps/desktop/tests-live/doc-link-b1-pull-cdp.mjs``')) "$removedManualId の手書き本文が複製にまだ残っています"
-    Assert-True ($mutantManualText.Contains('実行本体: ``apps/desktop/tests-live/doc-link-b1-penetration-cdp.mjs``')) "他のID(M2.T2-7.C03)の手書き本文が巻き添えで消えています"
+    # 2026-09-05: 生成物の実体は backtick 1個（`apps/...`）である。ここを2個で書くと
+    # 否定の表明が常に真になり、手書き本文が残っていても気づけない（空振り）。
+    # 実体と同じ1個に直して、実際に検出できる表明にした。
+    Assert-True (-not $mutantManualText.Contains('実行本体: `apps/desktop/tests-live/doc-link-b1-pull-cdp.mjs`')) "$removedManualId の手書き本文が複製にまだ残っています"
+    # 同上。backtick 2個では生成物と一致せず、この肯定の表明は決して通らなかった。
+    Assert-True ($mutantManualText.Contains('実行本体: `apps/desktop/tests-live/doc-link-b1-penetration-cdp.mjs`')) "他のID(M2.T2-7.C03)の手書き本文が巻き添えで消えています"
     Assert-True ($mutantManualText.Contains('骨格を指定して展開図を提案してもらう画面を追加')) "他のID(M3.T3-4.C04)の手書き本文が巻き添えで消えています"
     Assert-True ($mutantManualText.Contains('頂点141・辺280、手順14')) "他のID(M4.T4-6.C02)の手書き本文が巻き添えで消えています"
 

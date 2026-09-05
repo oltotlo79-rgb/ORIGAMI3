@@ -5,12 +5,12 @@
 - ロードマップ全体: 187/187件 (checked=175, unchecked=12)
 - 証拠台帳対象: 186/187件
 - 明示対象外: 1件
-- 検査名台帳対象: 61/61件（roadmap-mapped、リポジトリ全検査数は主張しない）
-- 検査定義対象: 61/61件、source 38/38ファイル、definition tree SHA-256: `32a80feacd71df87b47127d2604788d553ecc2985b3eae1887c58aba71022191`
-- 実行モード: active-default=60件、ignored-explicit=1件（後者はCI・check-ci・品質規約の明示実行を照合）
-- 検査名台帳SHA-256: `0dc1c0edf7347695a1d56211c59c56bd72fdb4dd9273f6a073f5ff9dc29251d9`
+- 検査名台帳対象: 62/62件（roadmap-mapped、リポジトリ全検査数は主張しない）
+- 検査定義対象: 62/62件、source 38/38ファイル、definition tree SHA-256: `da6b0af537cb56c233c08f4ea3325be7a997b46165f0c0730b59d9acc2b9b4fc`
+- 実行モード: active-default=61件、ignored-explicit=1件（後者はCI・check-ci・品質規約の明示実行を照合）
+- 検査名台帳SHA-256: `a81e7af43729075ced9174c43b913dcee7a0cd475af0e060bd9d35c5ad31909e`
 - ロードマップSHA-256: `fec483aee8b989489d3e25af7606a2b6c493465009cc59c73ce543b9ecc384f5`
-- 生成hash: `2fcd308f6c4e8fc2df7d8d76512d962cb55763043807925ac78d12eab7f0c306`
+- 生成hash: `0863314fdcca983c49eb41b72584dce2b4b54ce69034abbed34571e89d38da1b`
 - M6受入: checkbox外の手動受入1件
 
 | link ID | evidence | checkbox | progress |
@@ -133,7 +133,7 @@
 | <a id="roadmap-evidence-m2-t2-8-c03"></a>`M2.T2-8.C03` | 手動 `MANUAL.M2.T2-8.C03.COMMIT-PUSH` | unchecked | manual-acceptance-pending |
 | <a id="roadmap-evidence-m2-t2-8-c04"></a>`M2.T2-8.C04` | 自動 `autosave::tests::clean_exit_never_discards_another_process_active_snapshot / autosave::tests::forced_process_kill_then_new_process_restores_exact_document / autosave::tests::restore_recovers_the_same_document / autosave::tests::two_real_processes_keep_both_documents_when_autosave_transactions_overlap` | checked | consistent |
 | <a id="roadmap-evidence-m2-t2-8-c05"></a>`M2.T2-8.C05` | 自動 `store::tests::saving_own_opened_document_twice_after_edits_does_not_conflict / store::tests::two_real_processes_reject_a_stale_explicit_save_and_keep_the_first_save` | checked | consistent |
-| <a id="roadmap-evidence-m2-t2-9-c01"></a>`M2.T2-9.C01` | 自動 `completed_crane_is_flat_and_symmetric` | unchecked | unchecked-but-progress-task-exists |
+| <a id="roadmap-evidence-m2-t2-9-c01"></a>`M2.T2-9.C01` | 自動 `completed_crane_is_flat_and_symmetric / three_step_traditional_crane_replay_visible_surface_is_uniform` | unchecked | unchecked-but-progress-task-exists |
 | <a id="roadmap-evidence-m2-t2-9-c02"></a>`M2.T2-9.C02` | 手動 `MANUAL.M2.T2-9.C02.SCREEN-ACCEPTANCE` | unchecked | manual-acceptance-pending |
 | <a id="roadmap-evidence-m2-t2-9-c03"></a>`M2.T2-9.C03` | 手動 `MANUAL.M2.T2-9.C03.COMMIT-PUSH` | checked | consistent |
 | <a id="roadmap-evidence-m3-t3-1-c01"></a>`M3.T3-1.C01` | 手動 `MANUAL.M3.T3-1.C01.COMMIT-PUSH` | checked | consistent |
