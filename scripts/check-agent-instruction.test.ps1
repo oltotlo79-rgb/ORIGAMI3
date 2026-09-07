@@ -548,6 +548,20 @@ try {
     Assert-Equal $result.ExitCode 1 "記録gpt-5.6-sol/実opusの不一致はexit 1であること" $result.Output
     Assert-Contains $result.Output "記録モデル gpt-5.6-sol と実際のモデル opus が一致しません" "gpt-5.6-solのモデル不一致を表示すること"
 
+    $terraPath = New-InstructionFixtureFile "pass-item12-gpt-5.6-terra.md" (New-InstructionText -ModelSelectionLine "モデル選択: gpt-5.6-terra | 理由: 機械的な許可値の置換だけを行うため。")
+    $result = Invoke-Check -Paths @($terraPath) -ExpectedModel "gpt-5.6-terra"
+    Assert-Equal $result.ExitCode 0 "gpt-5.6-terraと同一行の理由はexit 0であること" $result.Output
+    Assert-Contains $result.Output "[OK] 12." "gpt-5.6-terraの正当な選択と実モデル一致を合格にすること"
+
+    $astraPath = New-InstructionFixtureFile "pass-item12-gpt-6-astra.md" (New-InstructionText -ModelSelectionLine "モデル選択: gpt-6-astra | 理由: 3D幾何の欠陥の診断が必要なため。")
+    $result = Invoke-Check -Paths @($astraPath) -ExpectedModel "gpt-6-astra"
+    Assert-Equal $result.ExitCode 0 "gpt-6-astraと同一行の理由はexit 0であること" $result.Output
+    Assert-Contains $result.Output "[OK] 12." "gpt-6-astraの正当な選択と実モデル一致を合格にすること"
+
+    $result = Invoke-Check -Paths @($astraPath) -ExpectedModel "opus"
+    Assert-Equal $result.ExitCode 1 "記録gpt-6-astra/実opusの不一致はexit 1であること" $result.Output
+    Assert-Contains $result.Output "記録モデル gpt-6-astra と実際のモデル opus が一致しません" "gpt-6-astraのモデル不一致を表示すること"
+
     Write-Output "[15/21] 項目13: baselineの5要素、終了コード、数値実測、40/64hexを検査する"
     $baselineMissingCases = @(
         @{ Flag = "IncludeBaselineWorktree"; Label = "worktree" },
