@@ -16,6 +16,7 @@ $BareOrigin = Join-Path $Sandbox "origin.git"
 $StateRoot = Join-Path $Sandbox "state"
 $script:Assertions = 0
 $script:Cases = 0
+$script:AskGuardInputs = 0
 $script:OriginalInputEncoding = [Console]::InputEncoding
 $script:Utf8NoBom = New-Object Text.UTF8Encoding($false)
 
@@ -284,6 +285,114 @@ function Assert-AllowedResult {
         Assert-True ([string]::IsNullOrWhiteSpace($Result.Stderr)) "$Name allowed stderr must be empty" $Result.Combined
     }
     Write-Host ("ALLOW {0}: exit={1} releaseWarning={2}" -f $Name, $Result.ExitCode, [bool]$ExpectReleaseWarning)
+}
+
+function New-AskUserQuestionPayload {
+    param(
+        [Parameter(Mandatory = $true)][string]$Question,
+        [Parameter(Mandatory = $true)][string[]]$OptionLabels,
+        [string[]]$OptionDescriptions,
+        [string]$AgentId,
+        [string]$RepositoryRoot = $Repository
+    )
+
+    $options = @()
+    for ($i = 0; $i -lt $OptionLabels.Count; $i++) {
+        $description = ""
+        if ($null -ne $OptionDescriptions -and $i -lt $OptionDescriptions.Count) {
+            $description = $OptionDescriptions[$i]
+        }
+        $options += [ordered]@{ label = $OptionLabels[$i]; description = $description }
+    }
+    $payload = [ordered]@{
+        session_id = "session-test"
+        transcript_path = (Join-Path $Sandbox "transcript.jsonl")
+        cwd = $RepositoryRoot
+        permission_mode = "default"
+        hook_event_name = "PreToolUse"
+        tool_name = "AskUserQuestion"
+        tool_input = [ordered]@{
+            questions = @(
+                [ordered]@{
+                    question = $Question
+                    header = "Question"
+                    multiSelect = $false
+                    options = $options
+                }
+            )
+        }
+        tool_use_id = ("ask-test-" + [Guid]::NewGuid().ToString("N"))
+    }
+    if ($PSBoundParameters.ContainsKey("AgentId")) { $payload.agent_id = $AgentId }
+    return $payload
+}
+
+function New-AskUserQuestionFieldPayload {
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet("question", "label", "description")][string]$Field,
+        [Parameter(Mandatory = $true)][string]$Text
+    )
+
+    if ($Field -eq "question") {
+        return New-AskUserQuestionPayload -Question $Text -OptionLabels @("この版で直す", "別の実装を選ぶ")
+    }
+    if ($Field -eq "label") {
+        return New-AskUserQuestionPayload -Question "対応方法を選んでください" -OptionLabels @("この版で直す", $Text)
+    }
+    return New-AskUserQuestionPayload -Question "対応方法を選んでください" `
+        -OptionLabels @("案A", "案B") `
+        -OptionDescriptions @("この版で直す", $Text)
+}
+
+function Assert-AskUserQuestionDenied {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)]$Payload,
+        [Parameter(Mandatory = $true)][string]$ExpectedField,
+        [string]$ExpectedPhrase = "",
+        [string]$RepositoryRoot = $Repository
+    )
+
+    $script:Cases++
+    $script:AskGuardInputs++
+    $result = Invoke-HookProcess -RawInput ($Payload | ConvertTo-Json -Depth 8 -Compress) -RepositoryRoot $RepositoryRoot
+    Assert-Equal $result.ExitCode 0 "$Name denial hook exit code" $result.Combined
+    if ([string]::IsNullOrWhiteSpace($result.Stdout)) {
+        throw "ASSERTION FAILED: $Name unexpectedly allowed the AskUserQuestion call`n$($result.Combined)"
+    }
+    $parsed = $null
+    try { $parsed = $result.Stdout | ConvertFrom-Json }
+    catch { throw "ASSERTION FAILED: $Name did not emit valid denial JSON`n$($result.Combined)" }
+    Assert-Equal ([string]$parsed.hookSpecificOutput.permissionDecision) "deny" "$Name must be denied" $result.Combined
+    $reason = [string]$parsed.hookSpecificOutput.permissionDecisionReason
+    Assert-Contains $reason "ORIGAMI3_COORDINATOR_BOUNDARY_DENY" "$Name denial needs the stable identifier"
+    Assert-Contains $reason "不具合は全部直してからリリース" "$Name denial must cite the settled 2026-08-21 release decision"
+    if ($ExpectedField -eq "payload") {
+        Assert-Contains $reason "payload の形式" "$Name denial must identify the payload format"
+    }
+    else {
+        Assert-Contains $reason ("field='{0}'" -f $ExpectedField) "$Name denial must identify the matched field"
+        Assert-Contains $reason ("phrase='{0}'" -f $ExpectedPhrase) "$Name denial must identify the matched phrase"
+    }
+    Write-Host ("DENY {0}: exit={1} field={2} phrase={3}" -f $Name, $result.ExitCode, $ExpectedField, $ExpectedPhrase)
+    return $reason
+}
+
+function Assert-AskUserQuestionAllowed {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)]$Payload,
+        [string]$RepositoryRoot = $Repository
+    )
+
+    $script:Cases++
+    $script:AskGuardInputs++
+    $result = Invoke-HookProcess -RawInput ($Payload | ConvertTo-Json -Depth 8 -Compress) -RepositoryRoot $RepositoryRoot
+    Assert-Equal $result.ExitCode 0 "$Name allow hook exit code" $result.Combined
+    Assert-True (-not $result.Stdout.Contains('"permissionDecision":"deny"')) "$Name unexpectedly emitted a denial" $result.Combined
+    Assert-True ([string]::IsNullOrWhiteSpace($result.Stdout)) "$Name allowed stdout must be empty" $result.Combined
+    Assert-True ([string]::IsNullOrWhiteSpace($result.Stderr)) "$Name allowed stderr must be empty" $result.Combined
+    Write-Host ("ALLOW {0}: exit={1}" -f $Name, $result.ExitCode)
 }
 
 function Get-RepositoryKey {
@@ -1084,6 +1193,115 @@ try {
     Assert-True ($repoOnePaths.Key -ne $repoTwoPaths.Key) "repository keys must differ"
     Assert-True (Test-Path -LiteralPath $repoOnePaths.Acknowledgement -PathType Leaf) "repository one acknowledgement must exist"
     Assert-True (Test-Path -LiteralPath $repoTwoPaths.Acknowledgement -PathType Leaf) "repository two acknowledgement must exist"
+
+    Write-Host "[9/9] main-only AskUserQuestion settled-decision guard"
+
+    # The guard is intentionally coordinator-only. A nonempty agent_id exits before this branch,
+    # matching the pre-existing Bash/PowerShell worker bypass.
+    $forbiddenCases = @(
+        [PSCustomObject]@{ Field = "label"; Text = "リリース後に直す"; Phrase = "リリース後" }
+        [PSCustomObject]@{ Field = "description"; Text = "次の版へ回す案"; Phrase = "次の版へ回" }
+        [PSCustomObject]@{ Field = "question"; Text = "次版へ回してよいですか"; Phrase = "次版" }
+        [PSCustomObject]@{ Field = "label"; Text = "後の版で直す"; Phrase = "後の版" }
+        [PSCustomObject]@{ Field = "description"; Text = "別の版で直す案"; Phrase = "別の版" }
+        [PSCustomObject]@{ Field = "question"; Text = "別版へ回してよいですか"; Phrase = "別版" }
+        [PSCustomObject]@{ Field = "label"; Text = "修正を繰り越す"; Phrase = "繰り越" }
+        [PSCustomObject]@{ Field = "description"; Text = "修正を先送りする案"; Phrase = "先送り" }
+        [PSCustomObject]@{ Field = "question"; Text = "この不具合を後回しにしますか"; Phrase = "後回し" }
+        [PSCustomObject]@{ Field = "label"; Text = "この版に含めない"; Phrase = "含めない" }
+        [PSCustomObject]@{ Field = "description"; Text = "この不具合を対象外にする案"; Phrase = "対象外に" }
+        [PSCustomObject]@{ Field = "question"; Text = "今回は見送りますか"; Phrase = "今回は見送" }
+        [PSCustomObject]@{ Field = "label"; Text = "修正を見送る"; Phrase = "見送" }
+        [PSCustomObject]@{ Field = "description"; Text = "修正を対象から外す案"; Phrase = "対象から外" }
+        [PSCustomObject]@{ Field = "question"; Text = "修正を範囲から外しますか"; Phrase = "範囲から外" }
+        [PSCustomObject]@{ Field = "label"; Text = "後日に直す"; Phrase = "後日" }
+        [PSCustomObject]@{ Field = "description"; Text = "次の版で直す案"; Phrase = "次の版" }
+    )
+    foreach ($case in $forbiddenCases) {
+        $payload = New-AskUserQuestionFieldPayload -Field $case.Field -Text $case.Text
+        [void](Assert-AskUserQuestionDenied ("forbidden {0} phrase {1}" -f $case.Field, $case.Phrase) `
+                $payload $case.Field $case.Phrase)
+    }
+
+    $allowedIntentCases = @(
+        [PSCustomObject]@{ Field = "question"; Text = "実装順はどれがよいですか" }
+        [PSCustomObject]@{ Field = "question"; Text = "どの設計で進めますか" }
+        [PSCustomObject]@{ Field = "question"; Text = "全不具合をリリースに含めて直す方針でよいですか" }
+        [PSCustomObject]@{ Field = "label"; Text = "設計を先に固める" }
+        [PSCustomObject]@{ Field = "description"; Text = "この版ですべて直す実装案" }
+        [PSCustomObject]@{ Field = "question"; Text = "未決定の表示色はどちらにしますか" }
+    )
+    foreach ($case in $allowedIntentCases) {
+        Assert-AskUserQuestionAllowed ("allowed intent in {0}" -f $case.Field) `
+            (New-AskUserQuestionFieldPayload -Field $case.Field -Text $case.Text)
+    }
+
+    # For question and description text only, the six exact suffixes exempt a negative statement.
+    $negativeAllowedCases = @(
+        [PSCustomObject]@{ Field = "question"; Text = "先送りせずに全部直す方針を確認しますか" }
+        [PSCustomObject]@{ Field = "description"; Text = "先送りしないでこの版で直す案" }
+        [PSCustomObject]@{ Field = "question"; Text = "後回しない方針を確認しますか" }
+        [PSCustomObject]@{ Field = "description"; Text = "先送りませんと明記する案" }
+        [PSCustomObject]@{ Field = "question"; Text = "先送り禁止を維持しますか" }
+        [PSCustomObject]@{ Field = "description"; Text = "先送り不可を明記する案" }
+    )
+    foreach ($case in $negativeAllowedCases) {
+        Assert-AskUserQuestionAllowed ("negative wording allowed in {0}" -f $case.Field) `
+            (New-AskUserQuestionFieldPayload -Field $case.Field -Text $case.Text)
+    }
+    $negativeLabel = New-AskUserQuestionFieldPayload -Field "label" -Text "先送りせずに全部直す"
+    [void](Assert-AskUserQuestionDenied "negative wording in label is still a selectable action" `
+            $negativeLabel "label" "先送り")
+
+    $quotedAllowedCases = @(
+        [PSCustomObject]@{ Field = "question"; Text = "利用者決定「次の版で」は無効ですか" }
+        [PSCustomObject]@{ Field = "description"; Text = "利用者指示「リリース後に直す」は撤回済み" }
+        [PSCustomObject]@{ Field = "question"; Text = "規約「後日対応」は採用しない認識でよいですか" }
+    )
+    foreach ($case in $quotedAllowedCases) {
+        Assert-AskUserQuestionAllowed ("authoritative quotation allowed in {0}" -f $case.Field) `
+            (New-AskUserQuestionFieldPayload -Field $case.Field -Text $case.Text)
+    }
+    $quotedLabel = New-AskUserQuestionFieldPayload -Field "label" -Text "決定「次の版で」は無効"
+    [void](Assert-AskUserQuestionDenied "quotation in label is still denied" $quotedLabel "label" "次の版")
+    $unattributedQuote = New-AskUserQuestionFieldPayload -Field "description" -Text "候補「次版へ回す」を選ぶ"
+    [void](Assert-AskUserQuestionDenied "quotation without decision authority is denied" `
+            $unattributedQuote "description" "次版")
+
+    $missingQuestions = New-AskUserQuestionPayload -Question "仮" -OptionLabels @("案A")
+    $missingQuestions.tool_input = [ordered]@{}
+    [void](Assert-AskUserQuestionDenied "payload without questions" $missingQuestions "payload")
+
+    $nonArrayQuestions = New-AskUserQuestionPayload -Question "仮" -OptionLabels @("案A")
+    $nonArrayQuestions.tool_input.questions = [ordered]@{ question = "実装順を選ぶ"; options = @() }
+    [void](Assert-AskUserQuestionDenied "payload with non-array questions" $nonArrayQuestions "payload")
+
+    $missingQuestionText = New-AskUserQuestionPayload -Question "仮" -OptionLabels @("案A")
+    $missingQuestionText.tool_input.questions = @([ordered]@{ options = @() })
+    [void](Assert-AskUserQuestionDenied "payload without question string" $missingQuestionText "payload")
+
+    $workerBypass = New-AskUserQuestionPayload -Question "どうしますか" `
+        -OptionLabels @("この版で直す", "リリース後に直す") `
+        -AgentId "agent-aa86b4da765f1d2d8"
+    Assert-AskUserQuestionAllowed "worker agent_id bypasses the coordinator-only guard" $workerBypass
+
+    $askPostPayload = New-AskUserQuestionPayload -Question "実装順を選びますか" -OptionLabels @("案A", "案B")
+    $askPostPayload.hook_event_name = "PostToolUse"
+    $askPostPayload.tool_response = [ordered]@{ ok = $true }
+    $askPostResult = Invoke-HookProcess -RawInput ($askPostPayload | ConvertTo-Json -Depth 8 -Compress)
+    $script:Cases++
+    $script:AskGuardInputs++
+    Assert-Equal $askPostResult.ExitCode 0 "AskUserQuestion PostToolUse hook exit code" $askPostResult.Combined
+    Assert-True ([string]::IsNullOrWhiteSpace($askPostResult.Stdout)) "AskUserQuestion PostToolUse must be quiet" $askPostResult.Combined
+
+    Assert-Equal $script:AskGuardInputs 40 "AskUserQuestion input matrix count"
+    Write-Host "ASK_GUARD_INPUTS=40 forbidden=17 allowed-intent=6 negative=7 quotation=5 malformed=3 worker=1 post=1"
+
+    # The existing shell policy must neither narrow nor widen after adding the non-shell branch.
+    Reset-ActiveState
+    [void](Assert-DeniedResult (Invoke-Pre -Command "cargo test --workspace" -ToolUseId "askguard-regression-main") "unaffected shell denial after ask guard")
+    Reset-ActiveState
+    Assert-AllowedResult (Invoke-Pre -Command "git status --porcelain" -ToolUseId "askguard-regression-status") "unaffected shell allow after ask guard"
 
     Write-Output ("test result: {0} cases, {1} assertions, 0 failures" -f $script:Cases, $script:Assertions)
     exit 0

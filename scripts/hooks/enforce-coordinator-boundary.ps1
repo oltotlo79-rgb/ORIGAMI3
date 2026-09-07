@@ -45,6 +45,49 @@ $script:MaxReportLogAgeMinutesForWait = 90
 $script:DesktopBrowserArgumentsVariable = "env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"
 $script:DesktopBrowserArguments = "--remote-debugging-port=9222 --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"
 $script:DesktopAppDataVariable = "env:ORI3_TEST_APP_DATA_DIR"
+# AskUserQuestion on the coordinator must not offer changing the settled 2026-08-21 decision to
+# fix every defect before release. This is a narrow intent guard, not a claim that regular
+# expressions or phrase matching can completely understand natural language. Implementation
+# order, design, and genuinely undecided scope remain valid questions.
+#
+# This source has no BOM and Windows PowerShell 5.1 can decode raw UTF-8 string tokens through the
+# system codepage. Keep every non-ASCII token used by this guard as Unicode code points.
+# Longer phrases precede their substrings so the denial identifies the most specific match.
+$script:AskUserQuestionForbiddenPhrases = @(
+    (-join [char[]]@(0x6B21, 0x306E, 0x7248, 0x3078, 0x56DE))                          # next-version-return
+    (-join [char[]]@(0x4ECA, 0x56DE, 0x306F, 0x898B, 0x9001))                          # this-time-shelve
+    (-join [char[]]@(0x5BFE, 0x8C61, 0x304B, 0x3089, 0x5916))                          # remove-from-target
+    (-join [char[]]@(0x7BC4, 0x56F2, 0x304B, 0x3089, 0x5916))                          # remove-from-scope
+    (-join [char[]]@(0x30EA, 0x30EA, 0x30FC, 0x30B9, 0x5F8C))                          # release-after
+    (-join [char[]]@(0x6B21, 0x306E, 0x7248))                                          # next-version
+    (-join [char[]]@(0x6B21, 0x7248))                                                  # nextversion
+    (-join [char[]]@(0x5F8C, 0x306E, 0x7248))                                          # later-version
+    (-join [char[]]@(0x5225, 0x306E, 0x7248))                                          # different-version
+    (-join [char[]]@(0x5225, 0x7248))                                                  # differentversion
+    (-join [char[]]@(0x7E70, 0x308A, 0x8D8A))                                          # carry-over
+    (-join [char[]]@(0x5148, 0x9001, 0x308A))                                          # postpone
+    (-join [char[]]@(0x5F8C, 0x56DE, 0x3057))                                          # put-off
+    (-join [char[]]@(0x542B, 0x3081, 0x306A, 0x3044))                                  # not-include
+    (-join [char[]]@(0x5BFE, 0x8C61, 0x5916, 0x306B))                                  # out-of-scope
+    (-join [char[]]@(0x898B, 0x9001))                                                  # shelve
+    (-join [char[]]@(0x5F8C, 0x65E5))                                                  # later-date
+)
+$script:AskUserQuestionNegationSuffixes = @(
+    (-join [char[]]@(0x305B, 0x305A))                                                  # without-doing
+    (-join [char[]]@(0x3057, 0x306A, 0x3044))                                          # do-not
+    (-join [char[]]@(0x306A, 0x3044))                                                  # not
+    (-join [char[]]@(0x307E, 0x305B, 0x3093))                                          # polite-not
+    (-join [char[]]@(0x7981, 0x6B62))                                                  # prohibited
+    (-join [char[]]@(0x4E0D, 0x53EF))                                                  # not-permitted
+)
+$script:AskUserQuestionQuoteAuthorities = @(
+    (-join [char[]]@(0x6C7A, 0x5B9A))                                                  # decision
+    (-join [char[]]@(0x6307, 0x793A))                                                  # instruction
+    (-join [char[]]@(0x898F, 0x7D04))                                                  # rule
+)
+$script:AskUserQuestionOpenQuote = [char]0x300C
+$script:AskUserQuestionCloseQuote = [char]0x300D
+$script:AskUserQuestionPayloadFormatLabel = "payload " + (-join [char[]]@(0x306E, 0x5F62, 0x5F0F))
 $script:Mutex = $null
 $script:MutexHeld = $false
 $script:BoundaryScriptPath = [IO.Path]::GetFullPath([string]$MyInvocation.MyCommand.Path)
@@ -312,6 +355,130 @@ function Get-DenialReason {
     return (
         "ORIGAMI3_COORDINATOR_BOUNDARY_DENY: $Detail commandHash=$CommandHash. " +
         "$allowed. Delegate implementation, builds, individual checks, diagnosis, and inventory work to a worker agent.$escape"
+    )
+}
+
+function Test-AskUserQuestionMatchExempt {
+    param(
+        [Parameter(Mandatory = $true)][string]$Text,
+        [Parameter(Mandatory = $true)][int]$MatchIndex,
+        [Parameter(Mandatory = $true)][string]$Phrase
+    )
+
+    $afterIndex = $MatchIndex + $Phrase.Length
+    $after = $Text.Substring($afterIndex)
+    foreach ($suffix in $script:AskUserQuestionNegationSuffixes) {
+        if ($after.StartsWith($suffix, [StringComparison]::Ordinal)) {
+            return $true
+        }
+    }
+
+    $openIndex = $Text.LastIndexOf($script:AskUserQuestionOpenQuote, $MatchIndex)
+    if ($openIndex -ge 0) {
+        $closeIndex = $Text.IndexOf($script:AskUserQuestionCloseQuote, $afterIndex)
+        if ($closeIndex -ge $afterIndex) {
+            $beforeQuote = $Text.Substring(0, $openIndex).TrimEnd()
+            foreach ($authority in $script:AskUserQuestionQuoteAuthorities) {
+                if ($beforeQuote.EndsWith($authority, [StringComparison]::Ordinal)) {
+                    return $true
+                }
+            }
+        }
+    }
+
+    return $false
+}
+
+function Find-AskUserQuestionForbiddenMatch {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text,
+        [Parameter(Mandatory = $true)][ValidateSet("question", "label", "description")][string]$Field,
+        [switch]$Label
+    )
+
+    foreach ($phrase in $script:AskUserQuestionForbiddenPhrases) {
+        $searchIndex = 0
+        while ($searchIndex -le ($Text.Length - $phrase.Length)) {
+            $matchIndex = $Text.IndexOf($phrase, $searchIndex, [StringComparison]::Ordinal)
+            if ($matchIndex -lt 0) { break }
+            # A label names the action selected by the user, so label matches are denied even when
+            # their local wording is negative or quoted. Question/description matches apply the
+            # two narrow exemptions above; this is deliberately not complete semantic analysis.
+            if ($Label.IsPresent -or -not (Test-AskUserQuestionMatchExempt -Text $Text -MatchIndex $matchIndex -Phrase $phrase)) {
+                return [PSCustomObject]@{
+                    Kind = "phrase"
+                    Field = $Field
+                    Phrase = $phrase
+                    Detail = ""
+                }
+            }
+            $searchIndex = $matchIndex + $phrase.Length
+        }
+    }
+    return $null
+}
+
+function Test-AskUserQuestionForbiddenText {
+    param([AllowNull()]$ToolInput)
+
+    if ($null -eq $ToolInput) {
+        return [PSCustomObject]@{ Kind = "payload"; Field = "payload"; Phrase = ""; Detail = "tool_input is missing" }
+    }
+    $questionsProperty = $ToolInput.PSObject.Properties["questions"]
+    if ($null -eq $questionsProperty) {
+        return [PSCustomObject]@{ Kind = "payload"; Field = "payload"; Phrase = ""; Detail = "questions is missing" }
+    }
+    $questions = $questionsProperty.Value
+    if ($questions -isnot [Array]) {
+        return [PSCustomObject]@{ Kind = "payload"; Field = "payload"; Phrase = ""; Detail = "questions must be an array" }
+    }
+
+    foreach ($question in $questions) {
+        $questionText = Get-ObjectPropertyValue $question "question"
+        if ($questionText -isnot [string]) {
+            return [PSCustomObject]@{ Kind = "payload"; Field = "payload"; Phrase = ""; Detail = "question must be a string" }
+        }
+        $match = Find-AskUserQuestionForbiddenMatch -Text $questionText -Field "question"
+        if ($null -ne $match) { return $match }
+
+        $options = Get-ObjectPropertyValue $question "options"
+        foreach ($option in @($options)) {
+            $label = Get-ObjectPropertyValue $option "label"
+            if ($label -is [string]) {
+                $match = Find-AskUserQuestionForbiddenMatch -Text $label -Field "label" -Label
+                if ($null -ne $match) { return $match }
+            }
+            $description = Get-ObjectPropertyValue $option "description"
+            if ($description -is [string]) {
+                $match = Find-AskUserQuestionForbiddenMatch -Text $description -Field "description"
+                if ($null -ne $match) { return $match }
+            }
+        }
+    }
+    return $null
+}
+
+function Get-AskUserQuestionDenialReason {
+    param([Parameter(Mandatory = $true)]$Match)
+
+    $settledDecisionSentence = -join [char[]]@(
+        0x5229, 0x7528, 0x8005, 0x6C7A, 0x5B9A, 0x003A, 0x0020, 0x4E0D, 0x5177, 0x5408,
+        0x306F, 0x5168, 0x90E8, 0x76F4, 0x3057, 0x3066, 0x304B, 0x3089, 0x30EA, 0x30EA,
+        0x30FC, 0x30B9, 0xFF08, 0x0032, 0x0030, 0x0032, 0x0036, 0x002D, 0x0030, 0x0038,
+        0x002D, 0x0032, 0x0031, 0xFF09, 0x3002, 0x76F4, 0x3059, 0x304B, 0x5426, 0x304B,
+        0x30FB, 0x3044, 0x3064, 0x76F4, 0x3059, 0x304B, 0x306F, 0x9078, 0x629E, 0x80A2,
+        0x306B, 0x3057, 0x306A, 0x3044, 0x3002
+    )
+    $detail = if ([string]$Match.Kind -eq "payload") {
+        "AskUserQuestion $($script:AskUserQuestionPayloadFormatLabel) is invalid: $([string]$Match.Detail)."
+    }
+    else {
+        "AskUserQuestion field='$([string]$Match.Field)' contains prohibited postponement phrase='$([string]$Match.Phrase)'."
+    }
+    return (
+        "ORIGAMI3_COORDINATOR_BOUNDARY_DENY: $detail " +
+        "$settledDecisionSentence " +
+        "Questions about implementation order, design, or an undecided scope remain allowed; do not offer changing the settled decision by deferring a fix to a later release."
     )
 }
 
@@ -2009,11 +2176,26 @@ try {
         exit 0
     }
 
+    # The worker bypass above is intentional: this guard applies only to the main coordinator.
+    # It must run before the existing non-shell-tool denial so AskUserQuestion can be inspected.
+
     $eventName = [string](Get-ObjectPropertyValue $payload "hook_event_name")
     if ($eventName -notin @("PreToolUse", "PostToolUse", "PostToolUseFailure")) {
         Write-PreToolDeny (Get-DenialReason -Detail "unsupported or missing hook event")
     }
     $toolName = [string](Get-ObjectPropertyValue $payload "tool_name")
+
+    if ($toolName -eq "AskUserQuestion") {
+        if ($eventName -eq "PreToolUse") {
+            $toolInput = Get-ObjectPropertyValue $payload "tool_input"
+            $match = Test-AskUserQuestionForbiddenText -ToolInput $toolInput
+            if ($null -ne $match) {
+                Write-PreToolDeny (Get-AskUserQuestionDenialReason -Match $match)
+            }
+        }
+        exit 0
+    }
+
     if ($toolName -notin @("PowerShell", "Bash")) {
         if ($eventName -eq "PreToolUse") {
             Write-PreToolDeny (Get-DenialReason -Detail "main-thread tool is outside the shell allowlist")
