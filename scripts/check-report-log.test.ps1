@@ -801,7 +801,117 @@ try {
     Assert-Exit (Invoke-ReportCheck $duplicatedBoundaryPath) 2 "duplicated legacy boundary" "実際: 2行"
 
     $futurePath = Write-TestReport "future" $now.AddDays(1) "通常の作業報告" @("Roadmap-Claim: none", "通常の本文です。") $now
-    Assert-Exit (Invoke-ReportCheck $futurePath) 2 "future heading" "later than the file update time"
+    Assert-Exit (Invoke-ReportCheck $futurePath) 2 "future heading" "later than the report write time (basis=file)"
+
+    # --- 見出しをJST絶対時刻とし、recordごとの初出commitへ結ぶ ---
+    $timeTokens = $null
+    $timeParseErrors = $null
+    $timeAst = [System.Management.Automation.Language.Parser]::ParseFile(
+        $scriptPath, [ref]$timeTokens, [ref]$timeParseErrors)
+    Assert-True ($timeParseErrors.Count -eq 0) "production check-report-log.ps1を構文解析できません"
+    $timeFunctions = @($timeAst.FindAll({
+        param($node)
+        $node -is [System.Management.Automation.Language.FunctionDefinitionAst]
+    }, $true))
+    foreach ($timeFunctionName in @(
+        'ConvertTo-NativeArgumentString',
+        'Invoke-NativeBytes',
+        'Get-GitExecutable',
+        'Get-ReportHeadingInstant',
+        'Get-RecordIntroductionCommitInstant',
+        'Get-TrackedFileBytesAtCommit',
+        'Get-CanonicalRecordSha256',
+        'Test-ReportBlobContainsRecordHash',
+        'Get-RecordIntroductionCommit',
+        'Get-StrictMachineLinePatterns',
+        'Get-RecordContentIdentitySha256',
+        'Test-ReportBlobContainsContentIdentityHash',
+        'Get-RecordContentIdentityIntroductionCommit',
+        'Get-ReportRecordWriteTime'
+    )) {
+        $timeDefinitions = @($timeFunctions | Where-Object { $_.Name -ceq $timeFunctionName })
+        Assert-True ($timeDefinitions.Count -eq 1) "production functionを1つに特定できません: $timeFunctionName count=$($timeDefinitions.Count)"
+        . ([scriptblock]::Create($timeDefinitions[0].Extent.Text))
+    }
+
+    $timeRepoRoot = Join-Path $sandboxRoot "time-repo"
+    [void][IO.Directory]::CreateDirectory((Join-Path $timeRepoRoot "docs"))
+    function Invoke-TimeFixtureGit {
+        param(
+            [Parameter(Mandatory = $true)][string[]]$GitArguments,
+            [string]$CommitDate
+        )
+        $previousErrorAction = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            if (-not [string]::IsNullOrWhiteSpace($CommitDate)) {
+                $env:GIT_AUTHOR_DATE = $CommitDate
+                $env:GIT_COMMITTER_DATE = $CommitDate
+            }
+            $global:LASTEXITCODE = 0
+            $output = @(& git -C $timeRepoRoot @GitArguments 2>&1)
+            if ($LASTEXITCODE -ne 0) {
+                throw "time fixture git failed ($LASTEXITCODE): git $($GitArguments -join ' ')`n$($output -join "`n")"
+            }
+        }
+        finally {
+            Remove-Item -LiteralPath Env:GIT_AUTHOR_DATE -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath Env:GIT_COMMITTER_DATE -ErrorAction SilentlyContinue
+            $ErrorActionPreference = $previousErrorAction
+        }
+    }
+
+    $timeReportPath = Join-Path $timeRepoRoot "docs\報告記録.md"
+    $firstHeader = "## 2026-09-05 22:30 — 初出commitより未来の見出し"
+    [IO.File]::WriteAllText($timeReportPath, "$firstHeader`n", (New-Object Text.UTF8Encoding($false)))
+    Invoke-TimeFixtureGit -GitArguments @('init', '--quiet')
+    Invoke-TimeFixtureGit -GitArguments @('config', 'user.email', 'ori3-test@example.invalid')
+    Invoke-TimeFixtureGit -GitArguments @('config', 'user.name', 'ori3 self test')
+    Invoke-TimeFixtureGit -GitArguments @('add', '--', 'docs/報告記録.md')
+    Invoke-TimeFixtureGit -GitArguments @('commit', '--quiet', '-m', 'first record') -CommitDate '2026-09-05T21:00:00+09:00'
+
+    $root = $timeRepoRoot
+    $headerPattern = [regex]::new('^## (?<date>\d{4}-\d{2}-\d{2}) (?<time>(?:[01]\d|2[0-3]):[0-5]\d) — (?<title>\S(?:.*\S)?)$')
+    $script:gitExecutable = $null
+    $script:reportLogTimeZoneOffset = [TimeSpan]::FromHours(9)
+    $script:recordIntroductionCommits = @{}
+    $script:recordContentIdentityIntroductionCommits = @{}
+    $script:recordIntroductionCommitInstants = @{}
+    $firstRecord = [pscustomobject]@{ Header = $firstHeader; BodyLines = @() }
+
+    # checkoutのmtimeがcommitより前/後へ変わってもcleanなrecordは初出commitを使う。
+    [IO.File]::SetLastWriteTimeUtc($timeReportPath, [datetime]::new(2026, 9, 5, 4, 27, 39, [DateTimeKind]::Utc))
+    $firstWrite = Get-ReportRecordWriteTime -Root $timeRepoRoot -Path $timeReportPath -Record $firstRecord
+    Assert-True ($firstWrite.Basis -ceq 'commit') "追跡済みclean recordをcommit基準にしていません: $($firstWrite.Basis)"
+    Assert-True ($firstWrite.Instant -eq [DateTimeOffset]::new(2026, 9, 5, 21, 0, 0, [TimeSpan]::FromHours(9))) "record初出commitの時刻が違います: $($firstWrite.Instant)"
+    $lateHeading = Get-ReportHeadingInstant -Heading ([datetime]::new(2026, 9, 5, 22, 30, 0))
+    Assert-True ($lateHeading -gt $firstWrite.Instant) "初出commitより後の見出しを未来と判定していません"
+
+    # UTC/JSTのhostでDateTime.Kindが違っても、同じ壁時計文字列は同じJST instantになる。
+    $fromUtcHost = Get-ReportHeadingInstant -Heading ([datetime]::SpecifyKind([datetime]'2026-09-05 20:10', [DateTimeKind]::Utc))
+    $fromJstHost = Get-ReportHeadingInstant -Heading ([datetime]::SpecifyKind([datetime]'2026-09-05 20:10', [DateTimeKind]::Local))
+    Assert-True ($fromUtcHost -eq $fromJstHost) "UTC/JST hostで同じ見出しのabsolute instantが変わりました"
+    Assert-True ($fromUtcHost.Offset -eq [TimeSpan]::FromHours(9)) "見出しがJST固定ではありません: $fromUtcHost"
+
+    # 後日の無関係なrecordを追記しても、古い未来見出しの許容時刻を後へ動かさない。
+    [IO.File]::AppendAllText($timeReportPath, "`n## 2026-09-05 22:45 — 後日の無関係な追記`n", (New-Object Text.UTF8Encoding($false)))
+    Invoke-TimeFixtureGit -GitArguments @('add', '--', 'docs/報告記録.md')
+    Invoke-TimeFixtureGit -GitArguments @('commit', '--quiet', '-m', 'unrelated later record') -CommitDate '2026-09-05T23:00:00+09:00'
+    # 新しいprocessと同じ条件で履歴から引き直し、事前cacheが答えを固定していないことも確認する。
+    $script:recordIntroductionCommits = @{}
+    $script:recordContentIdentityIntroductionCommits = @{}
+    $script:recordIntroductionCommitInstants = @{}
+    $afterLaterAppend = Get-ReportRecordWriteTime -Root $timeRepoRoot -Path $timeReportPath -Record $firstRecord
+    Assert-True ($afterLaterAppend.Basis -ceq 'commit') "後日の追記後にcommit基準から外れました"
+    Assert-True ($afterLaterAppend.Instant -eq $firstWrite.Instant) "後日の追記が古いrecordの初出時刻を動かしました: before=$($firstWrite.Instant) after=$($afterLaterAppend.Instant)"
+    Assert-True ($lateHeading -gt $afterLaterAppend.Instant) "後日の追記で古い未来見出しが正当化されました"
+
+    # dirtyとrepo外は現在内容のcommitが無いためfile基準を使う。
+    [IO.File]::AppendAllText($timeReportPath, "dirty`n", (New-Object Text.UTF8Encoding($false)))
+    $dirtyWrite = Get-ReportRecordWriteTime -Root $timeRepoRoot -Path $timeReportPath -Record $firstRecord
+    Assert-True ($dirtyWrite.Basis -ceq 'file') "dirty reportをfile基準にしていません: $($dirtyWrite.Basis)"
+    $outsideWrite = Get-ReportRecordWriteTime -Root $timeRepoRoot -Path $futurePath -Record $firstRecord
+    Assert-True ($outsideWrite.Basis -ceq 'file') "repo外reportをfile基準にしていません: $($outsideWrite.Basis)"
 
     # Roadmap-Remediation / Roadmap-Correction (2026-09-04続きの委譲):
     # 本物のHEAD履歴を根拠にするため、production report(04:44・13:50)から

@@ -40,13 +40,14 @@ $headerPattern = [regex]::new(
 $script:formatProblems = New-Object System.Collections.Generic.List[string]
 $script:missingProblems = New-Object System.Collections.Generic.List[string]
 $script:snapshot = $null
-$script:reportGateTimestamp = [datetime]::MinValue
+$script:reportGateTimestamp = [System.DateTimeOffset]::MinValue
 $script:legacyBoundaryHeader = '## 2026-08-31 19:45 — 検証の結論。Codex sol は死んでいなかった。統括の誤判定である'
 $script:legacySuffixSha256 = '47cb9d9cc60935d688fd3209cac8effa68e84365684690e8092e194d03df5872'
 $script:legacyBoundaryLineIndex = -1
 $script:historicalSnapshotEvidence = @{}
 $script:recordIntroductionCommits = @{}
 $script:recordContentIdentityIntroductionCommits = @{}
+$script:recordIntroductionCommitInstants = @{}
 $script:regeneratedSnapshotsAtCommit = @{}
 $script:validRemediationsByRecordLine = $null
 $script:validCorrectionsByTargetLine = $null
@@ -215,6 +216,101 @@ function Get-GitExecutable {
         }
     }
     return $script:gitExecutable
+}
+
+# 見出しとpolicyの日時文字列は、実行機のlocal timezoneではなく常にJSTである。
+$script:reportLogTimeZoneOffset = [TimeSpan]::FromHours(9)
+
+function Get-ReportHeadingInstant {
+    param([Parameter(Mandatory = $true)][datetime]$Heading)
+
+    return [System.DateTimeOffset]::new(
+        $Heading.Year, $Heading.Month, $Heading.Day,
+        $Heading.Hour, $Heading.Minute, 0, $script:reportLogTimeZoneOffset)
+}
+
+function Get-RecordIntroductionCommitInstant {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$Commit
+    )
+
+    if ($script:recordIntroductionCommitInstants.ContainsKey($Commit)) {
+        return $script:recordIntroductionCommitInstants[$Commit]
+    }
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $global:LASTEXITCODE = 0
+        $output = @(& (Get-GitExecutable) -C $Root show -s --format=%cI $Commit 2>&1)
+        if ($LASTEXITCODE -ne 0 -or $output.Count -eq 0) {
+            return $null
+        }
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+    $instant = [System.DateTimeOffset]::MinValue
+    if (-not [System.DateTimeOffset]::TryParse(
+        ([string]$output[0]).Trim(),
+        [System.Globalization.CultureInfo]::InvariantCulture,
+        [System.Globalization.DateTimeStyles]::RoundtripKind,
+        [ref]$instant
+    )) {
+        return $null
+    }
+    $script:recordIntroductionCommitInstants[$Commit] = $instant
+    return $instant
+}
+
+function Get-ReportRecordWriteTime {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)]$Record
+    )
+
+    $fileInstant = [System.DateTimeOffset]((Get-Item -LiteralPath $Path -Force).LastWriteTimeUtc)
+    $fallback = [pscustomobject]@{ Instant = $fileInstant; Basis = 'file'; Commit = $null }
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $fullRoot = [System.IO.Path]::GetFullPath($Root).TrimEnd([char[]]'\/')
+    $rootPrefix = $fullRoot + [string][System.IO.Path]::DirectorySeparatorChar
+    if (-not $fullPath.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        return $fallback
+    }
+    $relativePath = $fullPath.Substring($rootPrefix.Length).Replace('\', '/')
+
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $global:LASTEXITCODE = 0
+        $tracked = @(& (Get-GitExecutable) -C $Root ls-files --error-unmatch -- $relativePath 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $tracked.Count -eq 0) { return $fallback }
+        $global:LASTEXITCODE = 0
+        # stderrの環境警告をporcelain変更行として数えない。非0終了は直後にfail-closedで扱う。
+        $status = @(& (Get-GitExecutable) -C $Root --no-optional-locks status --porcelain -- $relativePath 2>$null)
+        if ($LASTEXITCODE -ne 0 -or @($status | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }).Count -ne 0) {
+            return $fallback
+        }
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+
+    # machine-readable契約行が後から加わっても、record本文の初出時刻を動かさない。
+    # exact hashと、契約行を除いたcontent identityの両方を解決し、identityの初出を優先する。
+    $exactCommit = Get-RecordIntroductionCommit -Record $Record
+    $identityCommit = Get-RecordContentIdentityIntroductionCommit -Record $Record
+    $commit = if (-not [string]::IsNullOrWhiteSpace([string]$identityCommit)) {
+        [string]$identityCommit
+    }
+    else {
+        [string]$exactCommit
+    }
+    if ([string]::IsNullOrWhiteSpace($commit)) { return $fallback }
+    $commitInstant = Get-RecordIntroductionCommitInstant -Root $Root -Commit $commit
+    if ($null -eq $commitInstant) { return $fallback }
+    return [pscustomobject]@{ Instant = $commitInstant; Basis = 'commit'; Commit = $commit }
 }
 
 function Get-TrackedFileBytesAtCommit {
@@ -1685,15 +1781,17 @@ else {
         $script:snapshot = Get-CurrentRoadmapSnapshot
         $policyPath = Join-Path $PSScriptRoot "roadmap-status-policy.json"
         $policy = (Read-Utf8Text $policyPath) | ConvertFrom-Json
+        $reportGateLocal = [datetime]::MinValue
         if (-not [datetime]::TryParseExact(
             [string]$policy.report_gate_enforce_on_or_after,
             "yyyy-MM-dd HH:mm",
             [Globalization.CultureInfo]::InvariantCulture,
-            [Globalization.DateTimeStyles]::AssumeLocal,
-            [ref]$script:reportGateTimestamp
+            [Globalization.DateTimeStyles]::None,
+            [ref]$reportGateLocal
         )) {
             throw "roadmap policyのreport_gate_enforce_on_or_afterを読めません"
         }
+        $script:reportGateTimestamp = Get-ReportHeadingInstant -Heading $reportGateLocal
         # 本文解析とimmutable suffix hashは、同じ1回のraw byte snapshotを使う。
         # 別々にreadして途中の置換・追記を片方だけ見落とす形にしない。
         $legacySuffixInfo = Get-ImmutableSuffixInfo `
@@ -1718,7 +1816,6 @@ else {
             throw "報告記録の旧履歴suffix hashが固定値と一致しません。境界以下へbackdate記録を挿入したり、過去記録を改変したりできません: actual=$actualLegacySuffixSha256 expected=$($script:legacySuffixSha256)"
         }
         $records = New-Object System.Collections.Generic.List[object]
-        $reportLastWriteTime = (Get-Item -LiteralPath $effectiveReportPath -Force).LastWriteTime
 
         # boundaryからEOFまでは、raw UTF-8 bytesの固定hashが改行を含む
         # 内容全体を保護する。施行前の概算時刻も理由を含む事実としてbyte単位で残し、
@@ -1749,18 +1846,19 @@ else {
                 continue
             }
 
-            $recordTimestamp = [datetime]::MinValue
+            $recordTimestampLocal = [datetime]::MinValue
             $timestampText = "{0} {1}" -f $dateText, $match.Groups["time"].Value
             if (-not [datetime]::TryParseExact(
                 $timestampText,
                 "yyyy-MM-dd HH:mm",
                 [System.Globalization.CultureInfo]::InvariantCulture,
-                [System.Globalization.DateTimeStyles]::AssumeLocal,
-                [ref]$recordTimestamp
+                [System.Globalization.DateTimeStyles]::None,
+                [ref]$recordTimestampLocal
             )) {
                 Add-FormatProblem "Report heading timestamp cannot be read at line $($lineIndex + 1): $timestampText"
                 continue
             }
+            $recordTimestamp = Get-ReportHeadingInstant -Heading $recordTimestampLocal
 
             $records.Add([PSCustomObject]@{
                 LineIndex = $lineIndex
@@ -1841,8 +1939,13 @@ else {
             }
 
             foreach ($record in $newRecords) {
-                if ($record.Timestamp -gt $reportLastWriteTime) {
-                    Add-FormatProblem "Report heading at line $($record.LineIndex + 1) is later than the file update time: heading=$($record.Timestamp.ToString('yyyy-MM-dd HH:mm')), file=$($reportLastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))"
+                $recordWriteTime = Get-ReportRecordWriteTime -Root $root -Path $effectiveReportPath -Record $record
+                if ($record.Timestamp -gt $recordWriteTime.Instant) {
+                    $commitDetail = if ($recordWriteTime.Basis -ceq 'commit') {
+                        " commit=$($recordWriteTime.Commit.Substring(0, 12))"
+                    }
+                    else { '' }
+                    Add-FormatProblem "Report heading at line $($record.LineIndex + 1) is later than the report write time (basis=$($recordWriteTime.Basis)$commitDetail): heading=$($record.Timestamp.ToString('yyyy-MM-dd HH:mm:ssK')), report=$($recordWriteTime.Instant.ToString('yyyy-MM-dd HH:mm:ssK'))"
                 }
             }
 

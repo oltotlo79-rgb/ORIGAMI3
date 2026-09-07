@@ -22,6 +22,7 @@ $srcPath = Join-Path $desktopPath "src"
 $helpPath = Join-Path $srcPath "help"
 $packageJsonPath = Join-Path $desktopPath "package.json"
 $manualAssetsPath = Join-Path $root "docs\manual\assets"
+$manualReceiptPath = Join-Path $root "docs\manual\manual-build-receipt.json"
 $reportLogPath = Join-Path $root "docs\報告記録.md"
 $script:failureCount = 0
 $script:plannedStages = @(
@@ -159,6 +160,11 @@ function Get-RelativePath {
         return $null
     }
     return $pathFull.Substring($prefix.Length).Replace("\", "/")
+}
+
+function Get-JstDate {
+    param([DateTimeOffset]$Instant = [DateTimeOffset]::UtcNow)
+    return $Instant.ToUniversalTime().ToOffset([TimeSpan]::FromHours(9)).Date
 }
 
 function Get-DisplayPath {
@@ -345,6 +351,170 @@ function Get-IncludedFiles {
         return @()
     }
     return @($item)
+}
+
+function Get-FileSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        return (($sha.ComputeHash($stream) | ForEach-Object { $_.ToString('x2') }) -join '')
+    }
+    finally {
+        $sha.Dispose()
+        $stream.Dispose()
+    }
+}
+
+function Get-Utf8TextSha256 {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [Text.UTF8Encoding]::new($false).GetBytes($Text)
+        return (($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') }) -join '')
+    }
+    finally {
+        $sha.Dispose()
+    }
+}
+
+function Get-ManualReceiptFileEntries {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$Directory
+    )
+
+    if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
+        throw "receipt入力directoryがありません: $Directory"
+    }
+    $items = @(Get-ChildItem -LiteralPath $Directory -Recurse -Force)
+    $reparse = @($items | Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 })
+    if ($reparse.Count -ne 0) {
+        throw "receipt入力にreparse pointは使えません: $($reparse[0].FullName)"
+    }
+    $entries = foreach ($file in @($items | Where-Object { -not $_.PSIsContainer })) {
+        $relative = Get-RelativePath $Root $file.FullName
+        if ($null -eq $relative) {
+            throw "receipt入力がrepository外です: $($file.FullName)"
+        }
+        [pscustomobject]@{
+            path = $relative
+            sha256 = Get-FileSha256 -Path $file.FullName
+        }
+    }
+    return @($entries | Sort-Object path)
+}
+
+function Compare-ManualReceiptFileGroup {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][object[]]$Expected,
+        [Parameter(Mandatory = $true)][object[]]$Current,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$Reasons
+    )
+
+    $expectedByPath = @{}
+    foreach ($entry in @($Expected)) {
+        $path = [string]$entry.path
+        $hash = [string]$entry.sha256
+        if ([string]::IsNullOrWhiteSpace($path) -or $hash -notmatch '^[0-9a-f]{64}$') {
+            $Reasons.Add("${Name}: receipt entry invalid")
+            continue
+        }
+        if ($expectedByPath.ContainsKey($path)) {
+            $Reasons.Add("${Name}: duplicate receipt path: $path")
+            continue
+        }
+        $expectedByPath[$path] = $hash
+    }
+    $currentByPath = @{}
+    foreach ($entry in @($Current)) {
+        $currentByPath[[string]$entry.path] = [string]$entry.sha256
+    }
+    foreach ($path in @($expectedByPath.Keys | Sort-Object)) {
+        if (-not $currentByPath.ContainsKey($path)) {
+            $Reasons.Add("${Name}: input missing: $path")
+        }
+        elseif (-not [string]::Equals($expectedByPath[$path], $currentByPath[$path], [StringComparison]::Ordinal)) {
+            $Reasons.Add("${Name}: hash mismatch: $path")
+        }
+    }
+    foreach ($path in @($currentByPath.Keys | Sort-Object)) {
+        if (-not $expectedByPath.ContainsKey($path)) {
+            $Reasons.Add("${Name}: unexpected input: $path")
+        }
+    }
+}
+
+function Get-ManualBuildReceiptStatus {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$ReceiptPath,
+        [Parameter(Mandatory = $true)][string]$PdfPath,
+        [Parameter(Mandatory = $true)][string]$HelpPath,
+        [Parameter(Mandatory = $true)][string]$AssetsPath,
+        [Parameter(Mandatory = $true)][string]$PackageJsonPath
+    )
+
+    $reasons = New-Object System.Collections.Generic.List[string]
+    if (-not (Test-Path -LiteralPath $ReceiptPath -PathType Leaf)) {
+        $relativeReceipt = Get-RelativePath $Root $ReceiptPath
+        $reasons.Add("receipt missing: $relativeReceipt")
+        return [pscustomobject]@{ IsFresh = $false; Reasons = @($reasons); Receipt = $null }
+    }
+    try {
+        $receipt = (Read-Utf8Text $ReceiptPath) | ConvertFrom-Json
+        if ([int]$receipt.schema -ne 1) { $reasons.Add("schema mismatch: $($receipt.schema)") }
+
+        $generatedAt = [DateTimeOffset]::MinValue
+        if (-not [DateTimeOffset]::TryParse(
+            [string]$receipt.generated_at_jst,
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::RoundtripKind,
+            [ref]$generatedAt
+        ) -or $generatedAt.Offset -ne [TimeSpan]::FromHours(9)) {
+            $reasons.Add('generated_at_jst invalid')
+        }
+
+        $helpEntries = @(Get-ManualReceiptFileEntries -Root $Root -Directory $HelpPath)
+        $assetEntries = @(Get-ManualReceiptFileEntries -Root $Root -Directory $AssetsPath)
+        Compare-ManualReceiptFileGroup -Name 'help' -Expected @($receipt.inputs.help) -Current $helpEntries -Reasons $reasons
+        Compare-ManualReceiptFileGroup -Name 'assets' -Expected @($receipt.inputs.assets) -Current $assetEntries -Reasons $reasons
+
+        $packageVersion = [string]((Read-Utf8Text $PackageJsonPath) | ConvertFrom-Json).version
+        $packageVersionHash = Get-Utf8TextSha256 -Text $packageVersion
+        if (-not [string]::Equals([string]$receipt.inputs.package_version.value, $packageVersion, [StringComparison]::Ordinal)) {
+            $reasons.Add('package_version: value mismatch')
+        }
+        if (-not [string]::Equals([string]$receipt.inputs.package_version.sha256, $packageVersionHash, [StringComparison]::Ordinal)) {
+            $reasons.Add('package_version: hash mismatch')
+        }
+
+        $pdfRelative = Get-RelativePath $Root $PdfPath
+        if (-not [string]::Equals([string]$receipt.output.path, $pdfRelative, [StringComparison]::Ordinal)) {
+            $reasons.Add("pdf: path mismatch: $($receipt.output.path)")
+        }
+        if (-not (Test-Path -LiteralPath $PdfPath -PathType Leaf)) {
+            $reasons.Add("pdf: output missing: $pdfRelative")
+        }
+        else {
+            $pdfHash = Get-FileSha256 -Path $PdfPath
+            if (-not [string]::Equals([string]$receipt.output.sha256, $pdfHash, [StringComparison]::Ordinal)) {
+                $reasons.Add("pdf: hash mismatch: $pdfRelative")
+            }
+        }
+    }
+    catch {
+        $reasons.Add("receipt invalid: $($_.Exception.Message)")
+        $receipt = $null
+    }
+    return [pscustomobject]@{
+        IsFresh = ($reasons.Count -eq 0)
+        Reasons = @($reasons)
+        Receipt = $receipt
+    }
 }
 
 function Test-IncludedTreeSnapshotUnchanged {
@@ -554,6 +724,7 @@ Write-Stage 2 "説明書が画面と生成元より新しいこと"
 $stage2SourceFiles = $null
 $stage2SourceDirectoryStates = $null
 $stage2HelpFileStates = $null
+$manualReceiptStatus = $null
 try {
     if (-not (Test-Path -LiteralPath $pdfPath -PathType Leaf)) {
         throw "説明書PDFがありません: $(Get-DisplayPath $pdfPath)"
@@ -594,16 +765,23 @@ try {
 
     $pdf = Get-Item -LiteralPath $pdfPath
     $latestInput = $deduplicatedFiles | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
-    if ($pdf.LastWriteTimeUtc -le $latestInput.LastWriteTimeUtc) {
-        Write-Ng '説明書が古い。`scripts/build-manual.ps1` で作り直すこと。'
-        Write-Host "  原因: $(Get-DisplayPath $latestInput.FullName) ($(Format-Time $latestInput.LastWriteTimeUtc))"
-        Write-Host "  説明書: $(Get-DisplayPath $pdf.FullName) ($(Format-Time $pdf.LastWriteTimeUtc))"
+    $manualReceiptStatus = Get-ManualBuildReceiptStatus `
+        -Root $root `
+        -ReceiptPath $manualReceiptPath `
+        -PdfPath $pdfPath `
+        -HelpPath $helpPath `
+        -AssetsPath $manualAssetsPath `
+        -PackageJsonPath $packageJsonPath
+    Write-Host "  MANUAL_FRESHNESS stage=2 basis=receipt fresh=$($manualReceiptStatus.IsFresh) reasons=$($manualReceiptStatus.Reasons.Count)"
+    if (-not $manualReceiptStatus.IsFresh) {
+        Write-Ng '説明書の生成 receipt が現在の入力/PDFと一致しません。`scripts/build-manual.ps1` で作り直すこと。'
+        foreach ($reason in $manualReceiptStatus.Reasons) { Write-Host "  不一致: $reason" }
     }
     else {
-        Write-Ok "説明書は画面と生成元の最新ファイルより新しいです。"
-        Write-Host "  最新の生成元: $(Get-DisplayPath $latestInput.FullName) ($(Format-Time $latestInput.LastWriteTimeUtc))"
-        Write-Host "  説明書: $(Get-DisplayPath $pdf.FullName) ($(Format-Time $pdf.LastWriteTimeUtc))"
+        Write-Ok "説明書の生成 receipt は現在の入力とPDFのhashに一致しています。"
     }
+    Write-Host "  参考・最新の従来入力mtime: $(Get-DisplayPath $latestInput.FullName) ($(Format-Time $latestInput.LastWriteTimeUtc))"
+    Write-Host "  参考・説明書mtime: $(Get-DisplayPath $pdf.FullName) ($(Format-Time $pdf.LastWriteTimeUtc))"
 }
 catch {
     Write-Ng "説明書の新しさを検査できませんでした: $($_.Exception.Message)"
@@ -691,17 +869,25 @@ try {
 
     $pdf = Get-Item -LiteralPath $pdfPath
     $latestHelp = $helpFiles | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
-    if ($latestHelp.LastWriteTimeUtc -gt $pdf.LastWriteTimeUtc) {
-        Write-Ng "ヘルプを更新したのに説明書を作り直していません。"
-        Write-Host "  原因: $(Get-DisplayPath $latestHelp.FullName) ($(Format-Time $latestHelp.LastWriteTimeUtc))"
-        Write-Host "  説明書: $(Get-DisplayPath $pdf.FullName) ($(Format-Time $pdf.LastWriteTimeUtc))"
-        Write-Host '  修正: `scripts/build-manual.ps1` で説明書を作り直してください。'
+    if ($null -eq $manualReceiptStatus) {
+        $manualReceiptStatus = Get-ManualBuildReceiptStatus `
+            -Root $root `
+            -ReceiptPath $manualReceiptPath `
+            -PdfPath $pdfPath `
+            -HelpPath $helpPath `
+            -AssetsPath $manualAssetsPath `
+            -PackageJsonPath $packageJsonPath
+    }
+    Write-Host "  MANUAL_FRESHNESS stage=4 basis=receipt fresh=$($manualReceiptStatus.IsFresh) reasons=$($manualReceiptStatus.Reasons.Count)"
+    if (-not $manualReceiptStatus.IsFresh) {
+        Write-Ng "ヘルプを含む生成 receipt が現在の入力/PDFと一致しません。"
+        foreach ($reason in $manualReceiptStatus.Reasons) { Write-Host "  不一致: $reason" }
     }
     else {
-        Write-Ok "ヘルプは説明書より新しくありません。"
-        Write-Host "  最新のヘルプ: $(Get-DisplayPath $latestHelp.FullName) ($(Format-Time $latestHelp.LastWriteTimeUtc))"
-        Write-Host "  説明書: $(Get-DisplayPath $pdf.FullName) ($(Format-Time $pdf.LastWriteTimeUtc))"
+        Write-Ok "ヘルプを含む生成 receipt は現在の入力とPDFのhashに一致しています。"
     }
+    Write-Host "  参考・最新のヘルプmtime: $(Get-DisplayPath $latestHelp.FullName) ($(Format-Time $latestHelp.LastWriteTimeUtc))"
+    Write-Host "  参考・説明書mtime: $(Get-DisplayPath $pdf.FullName) ($(Format-Time $pdf.LastWriteTimeUtc))"
 }
 catch {
     Write-Ng "ヘルプと説明書の更新順を検査できませんでした: $($_.Exception.Message)"
@@ -714,7 +900,7 @@ Complete-Stage 4
 Write-Stage 5 "利用者への報告記録がリリース日と同じこと"
 try {
     $latestReportDate = Get-LatestReportLogDate $reportLogPath
-    $releaseDate = (Get-Date).Date
+    $releaseDate = Get-JstDate
     if ($latestReportDate -ne $releaseDate) {
         Write-Ng "利用者への報告記録の最新の日付がリリース日と同じではありません。"
         Write-Host "  最新の報告: $($latestReportDate.ToString('yyyy-MM-dd'))"

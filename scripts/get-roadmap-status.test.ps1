@@ -19,20 +19,49 @@ function Assert-True {
     }
 }
 
+function ConvertTo-SutLiteral {
+    param([string]$Value)
+    return "'" + $Value.Replace("'", "''") + "'"
+}
+
 function Invoke-Sut {
-    param([string[]]$Arguments)
-    $allArguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $sut) + @($Arguments)
-    $quotedArguments = @($allArguments | ForEach-Object { '"' + ([string]$_).Replace('"', '\"') + '"' })
+    param(
+        [string[]]$Arguments,
+        [int]$ForceChildCodePage = 0
+    )
+    # 子processの日本語をUTF-8で書かせ、親も同じUTF-8で復号する。
+    # ForceChildCodePageは英語runnerのCP437を再現し、固定が優先されることを検査する。
+    $utf8NoBom = New-Object Text.UTF8Encoding($false)
+    $childCommand = '$ProgressPreference = ''SilentlyContinue''; '
+    if ($ForceChildCodePage -ne 0) {
+        $childCommand += '[Console]::OutputEncoding = [Text.Encoding]::GetEncoding(' +
+            [string]$ForceChildCodePage + '); '
+    }
+    $childCommand += '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); ' +
+        '$OutputEncoding = [Console]::OutputEncoding; & ' + (ConvertTo-SutLiteral $sut)
+    foreach ($argument in @($Arguments)) {
+        $argumentText = [string]$argument
+        if ($argumentText.StartsWith("-", [StringComparison]::Ordinal)) {
+            if ($argumentText -notmatch '^-[A-Za-z][A-Za-z0-9]*$') {
+                throw "子processへ渡せないparameter形です: $argumentText"
+            }
+            $childCommand += ' ' + $argumentText
+        }
+        else {
+            $childCommand += ' ' + (ConvertTo-SutLiteral $argumentText)
+        }
+    }
+    $childCommand += '; exit $LASTEXITCODE'
+    $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childCommand))
     $startInfo = New-Object Diagnostics.ProcessStartInfo
     $startInfo.FileName = $powershellExe
-    $startInfo.Arguments = $quotedArguments -join " "
+    $startInfo.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -OutputFormat Text -EncodedCommand $encodedCommand"
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
-    $windowsJapanese = [Text.Encoding]::GetEncoding(932)
-    $startInfo.StandardOutputEncoding = $windowsJapanese
-    $startInfo.StandardErrorEncoding = $windowsJapanese
+    $startInfo.StandardOutputEncoding = $utf8NoBom
+    $startInfo.StandardErrorEncoding = $utf8NoBom
     $process = New-Object Diagnostics.Process
     $process.StartInfo = $startInfo
     [void]$process.Start()
@@ -106,6 +135,11 @@ try {
     Assert-True ($extra.ExitCode -eq 2) "全体が188件へ増えたのに未分類項目を通しました"
     Assert-True ($extra.Text -match '証拠リンクも明示対象外policyもありません') "未分類項目の診断がありません: $($extra.Text)"
     Assert-True ($extra.Text -match 'audited=187 total=188 unclassified=1') "187/188の部分会計を診断していません: $($extra.Text)"
+
+    $extraOnNonJapaneseConsole = Invoke-Sut -Arguments @("-RoadmapPath", $extraPath, "-PolicyPath", $policy) -ForceChildCodePage 437
+    Assert-True ($extraOnNonJapaneseConsole.ExitCode -eq 2) "code page 437の子processで未分類項目を通しました"
+    Assert-True ($extraOnNonJapaneseConsole.Text -match '証拠リンクも明示対象外policyもありません') "code page 437の子processで日本語の診断が壊れました: $($extraOnNonJapaneseConsole.Text)"
+    Assert-True ($extraOnNonJapaneseConsole.Text -match 'audited=187 total=188 unclassified=1') "code page 437の子processで部分会計の診断が壊れました: $($extraOnNonJapaneseConsole.Text)"
 
     $malformedPath = Join-Path $tempFullPath "malformed-checkbox.md"
     $checkboxRegex = New-Object Text.RegularExpressions.Regex('^- \[x\] ', [Text.RegularExpressions.RegexOptions]::Multiline)

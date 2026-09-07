@@ -67,9 +67,17 @@ function Set-ExactReplacement {
     )
 
     $text = [IO.File]::ReadAllText($Path, $script:Utf8NoBom)
-    $count = [regex]::Matches($text, [regex]::Escape($Before)).Count
+    # clean checkout(core.autocrlf=true)では追跡テキストがCRLFで取り出されるため、
+    # LFを含むBeforeは1件も当たらない。Before/Afterの改行を、そのファイル自身が
+    # 使っている改行へそろえてから、従来どおり厳密な文字列一致で数える。
+    # 「厳密に1件であること」の表明も、注入する故障の中身も変えていない。
+    $fileNewline = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $newlinePattern = [regex]"\r\n|\n|\r"
+    $normalizedBefore = $newlinePattern.Replace($Before, $fileNewline)
+    $normalizedAfter = $newlinePattern.Replace($After, $fileNewline)
+    $count = [regex]::Matches($text, [regex]::Escape($normalizedBefore)).Count
     Assert-True ($count -eq 1) "故障注入前の文字列は厳密に1件であること: $Path (count=$count)"
-    [IO.File]::WriteAllText($Path, $text.Replace($Before, $After), $script:Utf8NoBom)
+    [IO.File]::WriteAllText($Path, $text.Replace($normalizedBefore, $normalizedAfter), $script:Utf8NoBom)
 }
 
 function Invoke-IsolatedChecker {
@@ -354,7 +362,10 @@ exit 0
     Write-Host "[15/32] C08: 本体のci.yml(LF・checkout1件・fetch-depth: 0・コメント無し行)をそのままcheckout_full_historyが真と判定すること"
     $caseRoot = New-CaseFixture "c08-checkout-fetch-depth-lf-positive"
     $ciPath = Join-Path $caseRoot ".github/workflows/ci.yml"
-    Assert-True ((([IO.File]::ReadAllText($ciPath, $script:Utf8NoBom)) -notmatch "`r`n")) "複製直後のci.ymlがLFのままであること(byte copyの前提確認)"
+    # [15]はLFの入力、[16]はCRLFの入力を明示的に検査する。checkout設定へ依存させない。
+    $lfCiText = ([IO.File]::ReadAllText($ciPath, $script:Utf8NoBom)).Replace("`r`n", "`n").Replace("`r", "`n")
+    [IO.File]::WriteAllText($ciPath, $lfCiText, $script:Utf8NoBom)
+    Assert-True (($lfCiText -notmatch "`r`n")) "検査へ渡すci.ymlがLFであること(fixtureの前提確認)"
     $result = Invoke-IsolatedChecker $caseRoot $PowerShellPath
     Assert-Result $result $true "checked=8/8 violations=0 warnings=0" "本体のci.yml(LF)をcheckout_full_historyが正しく真と判定すること"
     Assert-True (-not $result.Output.Contains("checkout_full_history=False")) "LFのci.ymlでcheckout_full_historyを偽にしないこと"

@@ -47,7 +47,17 @@ $functionDefinitions = @($sutAst.FindAll({
     param($node)
     $node -is [System.Management.Automation.Language.FunctionDefinitionAst]
 }, $true))
-foreach ($functionName in @("Read-Utf8Text", "Get-CargoWorkspaceVersion")) {
+foreach ($functionName in @(
+    "Read-Utf8Text",
+    "Get-RelativePath",
+    "Get-JstDate",
+    "Get-CargoWorkspaceVersion",
+    "Get-FileSha256",
+    "Get-Utf8TextSha256",
+    "Get-ManualReceiptFileEntries",
+    "Compare-ManualReceiptFileGroup",
+    "Get-ManualBuildReceiptStatus"
+)) {
     $definitions = @($functionDefinitions | Where-Object { $_.Name -ceq $functionName })
     if ($definitions.Count -ne 1) {
         throw "production functionを1つに特定できません: $functionName count=$($definitions.Count)"
@@ -99,6 +109,88 @@ finally {
     [IO.Directory]::Delete($resolvedTempRoot, $true)
 }
 
+# receiptは入力内容とPDFをhashで結ぶ。JSONのLF/CRLFやhost timezoneに依存せず、
+# 欠落・入力変更・PDF変更をそれぞれfail-closedで拒否する。
+$receiptRoot = [IO.Path]::GetFullPath((Join-Path $tempParent ("ori3-release-receipt-test-" + [Guid]::NewGuid().ToString("N"))))
+$receiptHelp = Join-Path $receiptRoot "apps\desktop\src\help"
+$receiptAssets = Join-Path $receiptRoot "docs\manual\assets"
+$receiptPdf = Join-Path $receiptRoot "docs\manual\manual.pdf"
+$receiptJsonPath = Join-Path $receiptRoot "docs\manual\manual-build-receipt.json"
+$receiptPackage = Join-Path $receiptRoot "apps\desktop\package.json"
+[void][IO.Directory]::CreateDirectory($receiptHelp)
+[void][IO.Directory]::CreateDirectory($receiptAssets)
+$utf8NoBom = New-Object Text.UTF8Encoding($false)
+try {
+    [IO.File]::WriteAllText((Join-Path $receiptHelp "index.ts"), "export const help = 1;`n", $utf8NoBom)
+    [IO.File]::WriteAllText((Join-Path $receiptAssets "screen.txt"), "screen`n", $utf8NoBom)
+    [IO.File]::WriteAllText($receiptPdf, "%PDF-1.4 fixture`n", $utf8NoBom)
+    [IO.File]::WriteAllText($receiptPackage, '{"version":"0.5.0"}', $utf8NoBom)
+    $root = $receiptRoot
+
+    function New-ReceiptFixtureJson {
+        $version = "0.5.0"
+        $fixtureReceipt = [ordered]@{
+            schema = 1
+            generated_at_jst = "2026-09-07T12:00:00.0000000+09:00"
+            inputs = [ordered]@{
+                help = @(Get-ManualReceiptFileEntries -Root $receiptRoot -Directory $receiptHelp)
+                assets = @(Get-ManualReceiptFileEntries -Root $receiptRoot -Directory $receiptAssets)
+                package_version = [ordered]@{ value = $version; sha256 = Get-Utf8TextSha256 -Text $version }
+            }
+            output = [ordered]@{
+                path = "docs/manual/manual.pdf"
+                sha256 = Get-FileSha256 -Path $receiptPdf
+            }
+        }
+        return ($fixtureReceipt | ConvertTo-Json -Depth 8)
+    }
+
+    function Get-ReceiptFixtureStatus {
+        return Get-ManualBuildReceiptStatus -Root $receiptRoot -ReceiptPath $receiptJsonPath `
+            -PdfPath $receiptPdf -HelpPath $receiptHelp -AssetsPath $receiptAssets -PackageJsonPath $receiptPackage
+    }
+
+    $receiptJson = New-ReceiptFixtureJson
+    [IO.File]::WriteAllText($receiptJsonPath, $receiptJson.Replace("`r`n", "`n") + "`n", $utf8NoBom)
+    $lfReceipt = Get-ReceiptFixtureStatus
+    Assert-True ($lfReceipt.IsFresh) "LF receiptの正しい入力/PDFを拒否しました: $($lfReceipt.Reasons -join '; ')"
+
+    [IO.File]::WriteAllText($receiptJsonPath, $receiptJson.Replace("`r`n", "`n").Replace("`n", "`r`n") + "`r`n", $utf8NoBom)
+    $crlfReceipt = Get-ReceiptFixtureStatus
+    Assert-True ($crlfReceipt.IsFresh) "CRLF receiptの正しい入力/PDFを拒否しました: $($crlfReceipt.Reasons -join '; ')"
+
+    [IO.File]::WriteAllText((Join-Path $receiptHelp "index.ts"), "export const help = 2;`n", $utf8NoBom)
+    $changedHelp = Get-ReceiptFixtureStatus
+    Assert-True ((-not $changedHelp.IsFresh) -and ($changedHelp.Reasons -match '^help: hash mismatch: apps/desktop/src/help/index\.ts$')) "help hash不一致を項目名つきで拒否しませんでした: $($changedHelp.Reasons -join '; ')"
+    [IO.File]::WriteAllText((Join-Path $receiptHelp "index.ts"), "export const help = 1;`n", $utf8NoBom)
+
+    [IO.File]::WriteAllText((Join-Path $receiptAssets "new-screen.txt"), "new`n", $utf8NoBom)
+    $extraAsset = Get-ReceiptFixtureStatus
+    Assert-True ((-not $extraAsset.IsFresh) -and ($extraAsset.Reasons -match '^assets: unexpected input: docs/manual/assets/new-screen\.txt$')) "assets追加を項目名つきで拒否しませんでした: $($extraAsset.Reasons -join '; ')"
+    Remove-Item -LiteralPath (Join-Path $receiptAssets "new-screen.txt") -Force
+
+    [IO.File]::AppendAllText($receiptPdf, "changed`n", $utf8NoBom)
+    $changedPdf = Get-ReceiptFixtureStatus
+    Assert-True ((-not $changedPdf.IsFresh) -and ($changedPdf.Reasons -match '^pdf: hash mismatch: docs/manual/manual\.pdf$')) "PDF hash不一致を項目名つきで拒否しませんでした: $($changedPdf.Reasons -join '; ')"
+
+    Remove-Item -LiteralPath $receiptJsonPath -Force
+    $missingReceipt = Get-ReceiptFixtureStatus
+    Assert-True ((-not $missingReceipt.IsFresh) -and ($missingReceipt.Reasons -match '^receipt missing: docs/manual/manual-build-receipt\.json$')) "receipt欠落を拒否しませんでした: $($missingReceipt.Reasons -join '; ')"
+
+    $sameInstantUtc = [DateTimeOffset]::Parse("2026-09-06T15:30:00+00:00")
+    $sameInstantJst = [DateTimeOffset]::Parse("2026-09-07T00:30:00+09:00")
+    Assert-True ((Get-JstDate -Instant $sameInstantUtc) -eq (Get-JstDate -Instant $sameInstantJst)) "UTC/JST表現でrelease日が変わりました"
+    Assert-True ((Get-JstDate -Instant $sameInstantUtc).ToString('yyyy-MM-dd') -ceq '2026-09-07') "JST日付への変換が違います"
+}
+finally {
+    $resolvedReceiptRoot = [IO.Path]::GetFullPath($receiptRoot).TrimEnd([char[]]"\/")
+    if ([IO.Path]::GetDirectoryName($resolvedReceiptRoot) -cne $tempParent -or
+        [IO.Path]::GetFileName($resolvedReceiptRoot) -notmatch '^ori3-release-receipt-test-[0-9a-f]{32}$') {
+        throw "unsafe receipt fixture cleanup refused: $resolvedReceiptRoot"
+    }
+    Remove-Item -LiteralPath $resolvedReceiptRoot -Recurse -Force
+}
+
 if ([int]$snapshot.unchecked -gt 0) {
     Assert-True ($gateExitCode -eq 1) "production snapshot完了関門が未チェック$($snapshot.unchecked)件を拒否しませんでした (exit=$gateExitCode)"
     Assert-True ($exitCode -eq 1) "未チェック$($snapshot.unchecked)件がある本番入力をリリース可にしました (exit=$exitCode)"
@@ -117,6 +209,9 @@ if ([int]$snapshot.unchecked -gt 0) {
     Assert-True ($output -match "ロードマップ完了関門が終了コード1を返したためリリース可ではありません: unchecked=$($snapshot.unchecked)/$($snapshot.total)") "第6段が完了関門の非0を集約した診断がありません"
 }
 Assert-True (([regex]::Matches($output, '\[FRESH\] roadmap-links\.json|\[FRESH\] roadmap-links\.md|\[FRESH\] manual-acceptance\.md')).Count -eq 3) "証拠台帳3成果物のfreshness表示がありません"
+Assert-True ($output -match 'MANUAL_FRESHNESS stage=2 basis=receipt fresh=False') "検査2のreceipt判定表示がありません"
+Assert-True ($output -match 'MANUAL_FRESHNESS stage=4 basis=receipt fresh=False') "検査4のreceipt判定表示がありません"
+Assert-True ($output -match 'receipt missing: docs/manual/manual-build-receipt\.json') "本体のreceipt欠落理由がありません"
 Assert-True ($output -match 'RELEASE_STAGES planned=6 begun=6 ended=6') "全stage実行receiptがありません"
 
 Write-Host "[TEST OK] check-release-ready: $script:assertions assertions; production_exit=$exitCode"
