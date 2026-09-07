@@ -46,6 +46,117 @@ pub struct PrecreaseConstraintCounts {
     pub continuous: usize,
 }
 
+/// A generated physical rule, with material edge IDs retained for a contradiction report.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PrecreaseStackRule {
+    AdjacentFold {
+        edge: EdgeId,
+        lower: FaceId,
+        upper: FaceId,
+    },
+    Crossing {
+        edges: Vec<EdgeId>,
+        folded: bool,
+        faces: [FaceId; 3],
+    },
+    Nest {
+        edges: [EdgeId; 2],
+        faces: [FaceId; 4],
+    },
+    Parallel {
+        edges: [EdgeId; 2],
+        faces: [FaceId; 4],
+    },
+}
+
+/// Why a requested relation was rejected. The opposite relation was already established.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrecreaseRejectedConstraint {
+    pub rule: PrecreaseStackRule,
+    pub requested: (FaceId, FaceId),
+    pub established_opposite: (FaceId, FaceId),
+}
+
+/// One reason for rejecting a speculative display branch; repeated occurrences are counted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrecreaseRejectedBranch {
+    pub decision: (FaceId, FaceId),
+    pub conflicts: Vec<PrecreaseRejectedConstraint>,
+    pub violated_rule: Option<PrecreaseStackRule>,
+    pub occurrences: usize,
+}
+
+/// Endpoint distances of the two images of a material seam, in normalized paper coordinates.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PrecreaseSeamResidual {
+    pub edge: EdgeId,
+    pub faces: [FaceId; 2],
+    pub endpoint_gaps: [f64; 2],
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PrecreaseStackDiagnostics {
+    /// Distinct (source rule, requested pair) rejections; repeated propagation passes coalesce.
+    pub rejected_constraints: Vec<PrecreaseRejectedConstraint>,
+    pub rejected_branches: Vec<PrecreaseRejectedBranch>,
+    pub seam_residuals: Vec<PrecreaseSeamResidual>,
+}
+
+impl PrecreaseStackDiagnostics {
+    #[must_use]
+    pub fn rejected_constraint_count(&self) -> usize {
+        self.rejected_constraints.len()
+    }
+
+    #[must_use]
+    pub fn rejected_branch_count(&self) -> usize {
+        self.rejected_branches
+            .iter()
+            .map(|branch| branch.occurrences)
+            .sum()
+    }
+}
+
+/// Invalid geometry is distinct from an unsatisfiable order on valid, joined geometry.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PrecreaseGeometryFailure {
+    pub message: String,
+    pub seam_residuals: Vec<PrecreaseSeamResidual>,
+}
+
+impl std::fmt::Display for PrecreaseGeometryFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{}; seam residuals: {:?}",
+            self.message, self.seam_residuals
+        )
+    }
+}
+
+impl std::error::Error for PrecreaseGeometryFailure {}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PrecreaseStackSatisfiability {
+    Sat {
+        order: Vec<FaceId>,
+    },
+    /// Inclusion-minimal: this set is UNSAT and removing any one rule makes it SAT.
+    /// This is a MUS, not a claim of minimum cardinality among all possible MUSes.
+    Unsat {
+        minimal_rules: Vec<PrecreaseStackRule>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PrecreaseStackDiagnosis {
+    pub counts: PrecreaseConstraintCounts,
+    pub rules: Vec<PrecreaseStackRule>,
+    pub mandatory_constraints: Vec<(FaceId, FaceId)>,
+    pub diagnostics: PrecreaseStackDiagnostics,
+    pub satisfiability: PrecreaseStackSatisfiability,
+}
+
 /// 候補の下→上順が破った一般制約。
 ///
 /// tuple中の面IDは、それぞれの規則を構成する順であり、鶴など特定作品の部位を
@@ -87,7 +198,7 @@ impl PrecreaseConstraintViolations {
 /// 従って、Face ID順などのtie-breakを「物理的に証明された上下」へ混ぜない。
 /// `unresolved_overlap_pairs` が残っていても、外部から明示された完全順が全制約を
 /// 満たすなら、その順は展開図だけでは決まらないtieを解く有効な層oracleである。
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct PrecreaseOrderValidation {
     pub counts: PrecreaseConstraintCounts,
     pub violations: PrecreaseConstraintViolations,
@@ -103,6 +214,7 @@ pub struct PrecreaseOrderValidation {
     /// 探索順やseedで変わり得る値であり、物理規則そのものではない。このため
     /// [`Self::is_valid`] の判定や `discarded_relations` の件数には含めない。
     pub display_resolution_failure: Option<(FaceId, FaceId)>,
+    pub diagnostics: PrecreaseStackDiagnostics,
 }
 
 impl PrecreaseOrderValidation {
@@ -615,14 +727,17 @@ fn solved_layer_order(
             .collect::<Vec<_>>();
         simple_fold_order(faces, current, placements, &ordered)
     };
-    let shapes = face_shapes(cp, faces, placements);
-    let seams = folded_seams(cp, &owners, &shapes);
+    let shapes = face_shapes(cp, faces, placements).map_err(|error| error.to_string())?;
+    let (seams, seam_residuals) =
+        folded_seams(cp, &owners, &shapes).map_err(|error| error.to_string())?;
+    let rules = stack_rules(&shapes, &seams);
     let solution = solve_stack_relation(
         &shapes,
         previous_order,
         &adjacent,
-        &seams,
+        &rules,
         OverlapAnalysisFailure::ContinueWithWarning,
+        &seam_residuals,
     )?;
 
     if let Some(simple) = simple {
@@ -744,7 +859,7 @@ fn validate_precrease_layer_order_impl(
         .filter(|(_, owners)| owners.len() == 2)
         .collect::<BTreeMap<_, _>>();
     let adjacent = adjacent_fold_rules(cp, &owners, placements, operation_edges);
-    let shapes = face_shapes(cp, faces, placements);
+    let shapes = face_shapes(cp, faces, placements).map_err(|error| error.to_string())?;
     if shapes.len() != faces.len() {
         let present = shapes.iter().map(|shape| shape.id).collect::<BTreeSet<_>>();
         let missing = faces
@@ -756,14 +871,16 @@ fn validate_precrease_layer_order_impl(
             "precrease layer-order validation has no flat placement for faces {missing:?}"
         ));
     }
-    let seams = folded_seams(cp, &owners, &shapes);
+    let (seams, seam_residuals) =
+        folded_seams(cp, &owners, &shapes).map_err(|error| error.to_string())?;
     let rules = stack_rules(&shapes, &seams);
     let solution = solve_stack_relation(
         &shapes,
         candidate_order,
         &adjacent,
-        &seams,
+        &rules,
         OverlapAnalysisFailure::Reject,
+        &seam_residuals,
     )?;
 
     let expected = faces.iter().map(|face| face.id).collect::<BTreeSet<_>>();
@@ -852,6 +969,7 @@ fn validate_precrease_layer_order_impl(
         unresolved_overlap_pairs: solution.unresolved_overlap_pairs,
         discarded_relations: solution.discarded_relations,
         display_resolution_failure: solution.display_resolution_failure,
+        diagnostics: solution.diagnostics,
     })
 }
 
@@ -880,7 +998,7 @@ pub fn resolve_precrease_layer_order_with_constraints(
         .filter(|(_, owners)| owners.len() == 2)
         .collect::<BTreeMap<_, _>>();
     let adjacent = adjacent_fold_rules(cp, &owners, placements, &HashSet::new());
-    let shapes = face_shapes(cp, faces, placements);
+    let shapes = face_shapes(cp, faces, placements).map_err(|error| error.to_string())?;
     if shapes.len() != faces.len() {
         let present = shapes.iter().map(|shape| shape.id).collect::<BTreeSet<_>>();
         let missing = faces
@@ -892,7 +1010,7 @@ pub fn resolve_precrease_layer_order_with_constraints(
             "precrease layer-order resolution has no flat placement for faces {missing:?}"
         ));
     }
-    let seams = folded_seams(cp, &owners, &shapes);
+    let (seams, _) = folded_seams(cp, &owners, &shapes).map_err(|error| error.to_string())?;
     let rules = stack_rules(&shapes, &seams);
     let index = shapes
         .iter()
@@ -1165,37 +1283,67 @@ struct FaceShape {
     maximum: DVec2,
 }
 
-/// 面が線分をまたいでいるとみなすとき、線分の両側へ取る距離。
-///
-/// 紙は長辺1に正規化してある。展開図の組み立てが「同じ点」とみなす距離
-/// (`ori3_model::EPS` = 1e-9)より**3桁大きく**、提案の展開図で実測した
-/// いちばん近い頂点どうしの間隔(`crates/ori3-propose/tests/support/mod.rs` の
-/// 実測 1.29e-3)より**3桁小さい**。境界に沿っているだけの面をまたぎと
-/// 数えず、本当にまたいでいる面を取りこぼさない幅として、この間に取った。
-const CROSSING_OFFSET: f64 = 1.0e-6;
-
-/// 線分の上で両側を確かめる点の数。端は面の角に当たりやすいので内側だけを見る。
-const CROSSING_SAMPLES: usize = 9;
-
 fn face_shapes(
     cp: &CreasePattern,
     faces: &[Face],
     placements: &HashMap<FaceId, Isometry2>,
-) -> Vec<FaceShape> {
+) -> Result<Vec<FaceShape>, PrecreaseGeometryFailure> {
     let positions = crate::flat_state::vertex_positions(cp);
+    let invalid = |message| PrecreaseGeometryFailure {
+        message,
+        seam_residuals: Vec::new(),
+    };
+    if let Some(vertex) = cp
+        .vertices
+        .iter()
+        .find(|vertex| !DVec2::from(vertex.pos).is_finite())
+    {
+        return Err(invalid(format!(
+            "precrease non-finite vertex {}",
+            vertex.id
+        )));
+    }
     faces
         .iter()
-        .filter_map(|face| {
-            let placement = *placements.get(&face.id)?;
+        .map(|face| {
+            let placement = *placements.get(&face.id).ok_or_else(|| {
+                invalid(format!(
+                    "precrease missing flat placement for face {}",
+                    face.id
+                ))
+            })?;
+            if !placement.rotation.is_finite() || !placement.translation.is_finite() {
+                return Err(invalid(format!(
+                    "precrease non-finite placement for face {}",
+                    face.id
+                )));
+            }
+            if face.vertices.len() < 3
+                || face
+                    .vertices
+                    .iter()
+                    .any(|vertex| !positions.contains_key(vertex))
+            {
+                return Err(invalid(format!(
+                    "precrease invalid polygon for face {}",
+                    face.id
+                )));
+            }
             let polygon = crate::flat_state::face_polygon(&positions, face);
-            let (minimum, maximum) = polygon.iter().fold(
+            let (minimum, maximum) = polygon.iter().try_fold(
                 (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)),
                 |(minimum, maximum), &point| {
                     let folded = placement.apply(point);
-                    (minimum.min(folded), maximum.max(folded))
+                    if !folded.is_finite() {
+                        return Err(invalid(format!(
+                            "precrease non-finite transformed face {}",
+                            face.id
+                        )));
+                    }
+                    Ok((minimum.min(folded), maximum.max(folded)))
                 },
-            );
-            Some(FaceShape {
+            )?;
+            Ok(FaceShape {
                 id: face.id,
                 polygon,
                 placement,
@@ -1208,6 +1356,7 @@ fn face_shapes(
 
 /// 畳んだ平面での、2面が縁でつながっている線分(折り目の像)。
 struct Seam {
+    edge: EdgeId,
     a: FaceId,
     b: FaceId,
     start: DVec2,
@@ -1221,37 +1370,58 @@ struct Seam {
 
 /// 2面が縁でつながっている折り目を、畳んだ平面の線分として集める。
 ///
-/// 裂けている(2面が同じ場所へ写らない)辺は、この後の判定に使えないので外す。
+/// 全ての共有辺の残差を保持し、裂けた辺・零長辺は明示的な失敗にする。
 fn folded_seams(
     cp: &CreasePattern,
     owners: &BTreeMap<EdgeId, Vec<FaceId>>,
     shapes: &[FaceShape],
-) -> Vec<Seam> {
+) -> Result<(Vec<Seam>, Vec<PrecreaseSeamResidual>), PrecreaseGeometryFailure> {
     let positions = crate::flat_state::vertex_positions(cp);
     let by_id = shapes
         .iter()
         .map(|shape| (shape.id, shape))
         .collect::<HashMap<_, _>>();
     let mut out = Vec::new();
+    let mut residuals = Vec::new();
+    let mut failures = Vec::new();
     for (&edge_id, incident) in owners {
         let Some(edge) = cp.edges.iter().find(|candidate| candidate.id == edge_id) else {
+            failures.push(format!("missing seam edge {edge_id}"));
             continue;
         };
         let (Some(&v0), Some(&v1)) = (positions.get(&edge.v0), positions.get(&edge.v1)) else {
+            failures.push(format!("missing seam vertex for edge {edge_id}"));
             continue;
         };
         let (a, b) = (incident[0], incident[1]);
         let (Some(shape_a), Some(shape_b)) = (by_id.get(&a), by_id.get(&b)) else {
+            failures.push(format!("missing seam face for edge {edge_id}"));
             continue;
         };
         let (start, end) = (shape_a.placement.apply(v0), shape_a.placement.apply(v1));
-        if (shape_b.placement.apply(v0) - start).length() > EPS
-            || (shape_b.placement.apply(v1) - end).length() > EPS
+        let endpoint_gaps = [
+            (shape_b.placement.apply(v0) - start).length(),
+            (shape_b.placement.apply(v1) - end).length(),
+        ];
+        residuals.push(PrecreaseSeamResidual {
+            edge: edge_id,
+            faces: [a, b],
+            endpoint_gaps,
+        });
+        if endpoint_gaps
+            .iter()
+            .any(|gap| !gap.is_finite() || *gap > EPS)
+            || !start.is_finite()
+            || !end.is_finite()
             || (end - start).length() <= EPS
         {
+            failures.push(format!(
+                "invalid seam edge {edge_id}: gaps={endpoint_gaps:?}"
+            ));
             continue;
         }
         out.push(Seam {
+            edge: edge_id,
             a,
             b,
             start,
@@ -1260,12 +1430,20 @@ fn folded_seams(
             side: seam_side(shape_a, start, end),
         });
     }
-    out
+    if failures.is_empty() {
+        Ok((out, residuals))
+    } else {
+        Err(PrecreaseGeometryFailure {
+            message: failures.join("; "),
+            seam_residuals: residuals,
+        })
+    }
 }
 
 /// 折り目から見て、その面が伸びている側。
 ///
-/// 折り目の真ん中から法線の向きへわずかに寄った点が面の中にあるかで決める。
+/// 境界と継ぎ目の正長な重なり区間で内側を決める。単純多角形の境界は、
+/// 反時計回りなら常に左側が内部になるため、凹面でも固定offsetを必要としない。
 fn seam_side(shape: &FaceShape, start: DVec2, end: DVec2) -> Option<f64> {
     let inverse = shape.placement.inverse();
     let (local_start, local_end) = (inverse.apply(start), inverse.apply(end));
@@ -1273,35 +1451,43 @@ fn seam_side(shape: &FaceShape, start: DVec2, end: DVec2) -> Option<f64> {
     if direction.length() <= EPS {
         return None;
     }
-    let middle = (local_start + local_end) * 0.5;
-    let normal = direction.normalize().perp() * CROSSING_OFFSET;
-    for offset in [normal, -normal] {
-        if crate::flat_state::point_in_polygon(&shape.polygon, middle + offset) {
-            let folded = shape.placement.apply(middle + offset) - shape.placement.apply(middle);
-            return Some((end - start).perp_dot(folded).signum());
+    let area2 = shape
+        .polygon
+        .iter()
+        .enumerate()
+        .map(|(i, &a)| a.perp_dot(shape.polygon[(i + 1) % shape.polygon.len()]))
+        .sum::<f64>();
+    if !area2.is_finite() || area2 == 0.0 {
+        return None;
+    }
+    let parity = if shape.placement.mirrored { -1.0 } else { 1.0 };
+    let mut side = None;
+    for (i, &a) in shape.polygon.iter().enumerate() {
+        let b = shape.polygon[(i + 1) % shape.polygon.len()];
+        if let Some((first, last)) = collinear_overlap(local_start, local_end, a, b)
+            && (last - first).length() > EPS
+        {
+            let inward = area2.signum() * direction.dot(b - a).signum() * parity;
+            if side.is_some_and(|known| known != inward) {
+                // A seam spanning oppositely facing boundary intervals has no single side.
+                return None;
+            }
+            side = Some(inward);
         }
     }
-    None
+    side
 }
 
 /// 畳んだ平面の線分を、面が**またいでいる**か。
 ///
-/// 線分の上の点をいくつか取り、その両側にずらした点が2つとも面の中にあれば
-/// またいでいる。面の縁が線分に沿っているだけの場合は、片側が外に出るので
-/// またぎにならない。
+/// 多角形の全境界交点で区切った内部区間が正長なら、線分をまたぐ。
+/// 境界に沿うだけ・端点で接するだけの区間は厳密内部に含めない。
 fn crosses_segment(shape: &FaceShape, start: DVec2, end: DVec2) -> bool {
     let inverse = shape.placement.inverse();
     let (local_start, local_end) = (inverse.apply(start), inverse.apply(end));
-    let direction = local_end - local_start;
-    if direction.length() <= EPS {
-        return false;
-    }
-    let normal = direction.normalize().perp() * CROSSING_OFFSET;
-    (1..=CROSSING_SAMPLES).any(|step| {
-        let point = local_start + direction * (step as f64 / (CROSSING_SAMPLES + 1) as f64);
-        crate::flat_state::point_in_polygon(&shape.polygon, point + normal)
-            && crate::flat_state::point_in_polygon(&shape.polygon, point - normal)
-    })
+    crate::fold_through::segment_inside_polygon([local_start, local_end], &shape.polygon)
+        .iter()
+        .any(|interval| (interval[1] - interval[0]).length() > EPS)
 }
 
 /// 折り目が決める上下と、紙に厚みが無いことから決まる上下を、まとめて解く。
@@ -1334,6 +1520,9 @@ struct StackRules {
     crossing_folded: Vec<bool>,
     nests: Vec<(usize, usize, usize, usize)>,
     parallels: Vec<(usize, usize, usize, usize)>,
+    crossing_edges: Vec<Vec<EdgeId>>,
+    nest_edges: Vec<[EdgeId; 2]>,
+    parallel_edges: Vec<[EdgeId; 2]>,
 }
 
 struct StackSolution {
@@ -1344,6 +1533,7 @@ struct StackSolution {
     display_resolution_failure: Option<(FaceId, FaceId)>,
     overlap_analysis_error: Option<String>,
     counts: PrecreaseConstraintCounts,
+    diagnostics: PrecreaseStackDiagnostics,
 }
 
 #[derive(Clone, Copy)]
@@ -1379,6 +1569,7 @@ fn stack_rules(shapes: &[FaceShape], seams: &[Seam]) -> StackRules {
             if crosses_segment(shape, seam.start, seam.end) {
                 rules.crossings.push((a, b, other));
                 rules.crossing_folded.push(seam.folded);
+                rules.crossing_edges.push(vec![seam.edge]);
             }
         }
     }
@@ -1419,16 +1610,298 @@ fn stack_rules(shapes: &[FaceShape], seams: &[Seam]) -> StackRules {
             };
             let same_side = left_side * right_side * turn > 0.0;
             match (left.folded, right.folded) {
-                (true, true) if same_side => rules.nests.push((a, b, c, d)),
+                (true, true) if same_side => {
+                    rules.nests.push((a, b, c, d));
+                    rules.nest_edges.push([left.edge, right.edge]);
+                }
                 (false, false) => {
                     let (near, far) = if same_side { (c, d) } else { (d, c) };
                     rules.parallels.push((a, b, near, far));
+                    rules.parallel_edges.push([left.edge, right.edge]);
+                }
+                (true, false) => {
+                    rules.crossings.push((a, b, if same_side { c } else { d }));
+                    rules.crossing_folded.push(true);
+                    rules.crossing_edges.push(vec![left.edge, right.edge]);
+                }
+                (false, true) => {
+                    rules.crossings.push((c, d, if same_side { a } else { b }));
+                    rules.crossing_folded.push(true);
+                    rules.crossing_edges.push(vec![right.edge, left.edge]);
                 }
                 _ => {}
             }
         }
     }
     rules
+}
+
+fn describe_stack_rule(
+    shapes: &[FaceShape],
+    adjacent: &[AdjacentFoldRule],
+    rules: &StackRules,
+    rule: StackRuleRef,
+) -> PrecreaseStackRule {
+    match rule {
+        StackRuleRef::Adjacent(index) => {
+            let rule = adjacent[index];
+            PrecreaseStackRule::AdjacentFold {
+                edge: rule.edge,
+                lower: rule.lower,
+                upper: rule.upper,
+            }
+        }
+        StackRuleRef::Crossing(index) => {
+            let (a, b, other) = rules.crossings[index];
+            PrecreaseStackRule::Crossing {
+                edges: rules.crossing_edges[index].clone(),
+                folded: rules.crossing_folded[index],
+                faces: [shapes[a].id, shapes[b].id, shapes[other].id],
+            }
+        }
+        StackRuleRef::Nest(index) => {
+            let (a, b, c, d) = rules.nests[index];
+            PrecreaseStackRule::Nest {
+                edges: rules.nest_edges[index],
+                faces: [shapes[a].id, shapes[b].id, shapes[c].id, shapes[d].id],
+            }
+        }
+        StackRuleRef::Parallel(index) => {
+            let (a, b, c, d) = rules.parallels[index];
+            PrecreaseStackRule::Parallel {
+                edges: rules.parallel_edges[index],
+                faces: [shapes[a].id, shapes[b].id, shapes[c].id, shapes[d].id],
+            }
+        }
+        StackRuleRef::Decision => {
+            unreachable!("an undecided display pair cannot contradict the current relation")
+        }
+    }
+}
+
+fn stack_diagnostics(
+    shapes: &[FaceShape],
+    adjacent: &[AdjacentFoldRule],
+    rules: &StackRules,
+    physical: &BTreeSet<StackRejection>,
+    branches: &BTreeMap<StackBranchRejection, usize>,
+    seam_residuals: &[PrecreaseSeamResidual],
+) -> PrecreaseStackDiagnostics {
+    let describe_rejection = |rejection: &StackRejection| {
+        let (lower, upper) = rejection.requested;
+        PrecreaseRejectedConstraint {
+            rule: describe_stack_rule(shapes, adjacent, rules, rejection.rule),
+            requested: (shapes[lower].id, shapes[upper].id),
+            established_opposite: (shapes[upper].id, shapes[lower].id),
+        }
+    };
+    PrecreaseStackDiagnostics {
+        rejected_constraints: physical.iter().map(describe_rejection).collect(),
+        rejected_branches: branches
+            .iter()
+            .map(|(reason, &occurrences)| PrecreaseRejectedBranch {
+                decision: (shapes[reason.decision.0].id, shapes[reason.decision.1].id),
+                conflicts: reason.conflicts.iter().map(describe_rejection).collect(),
+                violated_rule: reason
+                    .violated_rule
+                    .map(|rule| describe_stack_rule(shapes, adjacent, rules, rule)),
+                occurrences,
+            })
+            .collect(),
+        seam_residuals: seam_residuals.to_vec(),
+    }
+}
+
+/// Diagnose the generated rules without reading a saved/display layer order.
+///
+/// `cp` must contain the M/V of this pose, obtained from its actual signed endpoint angles
+/// (the convention of `fold_through::angle_of`), not the M/V of a later completed work.
+/// Geometry and rules are built once. Only an UNSAT result runs deletion minimization;
+/// ordinary validation/display never pays for that search. Invalid/non-finite or split seams
+/// return a geometry failure with the measured residuals instead of silently losing rules.
+pub fn diagnose_precrease_layer_order(
+    cp: &CreasePattern,
+    faces: &[Face],
+    placements: &HashMap<FaceId, Isometry2>,
+) -> Result<PrecreaseStackDiagnosis, PrecreaseGeometryFailure> {
+    let owners = edge_owners(faces)
+        .into_iter()
+        .filter(|(_, owners)| owners.len() == 2)
+        .collect();
+    let shapes = face_shapes(cp, faces, placements)?;
+    let (seams, residuals) = folded_seams(cp, &owners, &shapes)?;
+    let rules = stack_rules(&shapes, &seams);
+    let adjacent = adjacent_fold_rules(cp, &owners, placements, &HashSet::new());
+    let mut previous_order = faces.iter().map(|face| face.id).collect::<Vec<_>>();
+    previous_order.sort_unstable();
+    let solution = solve_stack_relation(
+        &shapes,
+        &previous_order,
+        &adjacent,
+        &rules,
+        OverlapAnalysisFailure::Reject,
+        &residuals,
+    )
+    .map_err(|message| PrecreaseGeometryFailure {
+        message,
+        seam_residuals: residuals,
+    })?;
+    let satisfiability = if solution.discarded_relations.is_empty()
+        && solution.display_resolution_failure.is_none()
+    {
+        PrecreaseStackSatisfiability::Sat {
+            order: stable_topological_order(&previous_order, &solution.display_constraints),
+        }
+    } else {
+        let minimal = minimal_unsatisfiable_rules(&shapes, &adjacent, &rules);
+        PrecreaseStackSatisfiability::Unsat {
+            minimal_rules: minimal
+                .into_iter()
+                .map(|rule| describe_stack_rule(&shapes, &adjacent, &rules, rule))
+                .collect(),
+        }
+    };
+    Ok(PrecreaseStackDiagnosis {
+        counts: solution.counts,
+        rules: stack_rule_refs(&adjacent, &rules)
+            .into_iter()
+            .map(|rule| describe_stack_rule(&shapes, &adjacent, &rules, rule))
+            .collect(),
+        mandatory_constraints: solution.mandatory_constraints,
+        diagnostics: solution.diagnostics,
+        satisfiability,
+    })
+}
+
+fn stack_rule_refs(adjacent: &[AdjacentFoldRule], rules: &StackRules) -> Vec<StackRuleRef> {
+    (0..adjacent.len())
+        .map(StackRuleRef::Adjacent)
+        .chain((0..rules.crossings.len()).map(StackRuleRef::Crossing))
+        .chain((0..rules.nests.len()).map(StackRuleRef::Nest))
+        .chain((0..rules.parallels.len()).map(StackRuleRef::Parallel))
+        .collect()
+}
+
+/// Re-solve a subset from an empty relation: retaining the full model's closure here would
+/// falsely prove UNSAT after the rules that justified that closure have been removed.
+fn stack_subset_is_satisfiable(
+    shapes: &[FaceShape],
+    adjacent: &[AdjacentFoldRule],
+    rules: &StackRules,
+    selected: &[StackRuleRef],
+) -> bool {
+    let index = shapes
+        .iter()
+        .enumerate()
+        .map(|(index, shape)| (shape.id, index))
+        .collect::<HashMap<_, _>>();
+    let mut relation = StackRelation::new(shapes.len());
+    let mut subset = StackRules::default();
+    for &rule in selected {
+        match rule {
+            StackRuleRef::Adjacent(position) => {
+                let rule = adjacent[position];
+                relation.add_with_reason(
+                    index[&rule.lower],
+                    index[&rule.upper],
+                    StackRuleRef::Adjacent(position),
+                );
+            }
+            StackRuleRef::Crossing(position) => {
+                let (a, b, c) = rules.crossings[position];
+                subset.crossings.push((a, b, c));
+            }
+            StackRuleRef::Nest(position) => {
+                let (a, b, c, d) = rules.nests[position];
+                subset.nests.push((a, b, c, d));
+            }
+            StackRuleRef::Parallel(position) => {
+                let (a, b, c, d) = rules.parallels[position];
+                subset.parallels.push((a, b, c, d));
+            }
+            StackRuleRef::Decision => unreachable!("display decisions are never physical rules"),
+        }
+    }
+    if !relation.discarded.is_empty() {
+        return false;
+    }
+    relation.propagate(&subset.crossings, &subset.nests, &subset.parallels);
+    subset_rules_have_extension(relation, &subset)
+}
+
+/// A subset oracle needs only comparisons that occur in its rules. Completing unrelated
+/// pairs first enumerates factorially many orders with exactly the same local contradiction.
+/// Once every rule's comparisons are decided, any topological extension of the DAG is a
+/// witness. Both directions are still exhausted; there is no heuristic acceptance or cap.
+fn subset_rules_have_extension(relation: StackRelation, rules: &StackRules) -> bool {
+    if !relation.discarded.is_empty() || !relation_respects_resolved_stack_rules(&relation, rules) {
+        return false;
+    }
+    let mut best = None;
+    let mut fewest = usize::MAX;
+    let mut consider = |pairs: &[(usize, usize)]| {
+        let mut first = None;
+        let mut unknown = 0;
+        for &(a, b) in pairs {
+            if relation_direction(&relation, a, b).is_none() {
+                first.get_or_insert((a, b));
+                unknown += 1;
+            }
+        }
+        if unknown > 0 && unknown < fewest {
+            fewest = unknown;
+            best = first;
+        }
+    };
+    for &(a, b, c) in &rules.crossings {
+        consider(&[(a, c), (b, c)]);
+    }
+    for &(a, b, c, d) in &rules.nests {
+        consider(&[(a, c), (a, d), (b, c), (b, d)]);
+    }
+    for &(a, b, c, d) in &rules.parallels {
+        consider(&[(a, c), (b, d)]);
+    }
+    let Some((a, b)) = best else {
+        return true;
+    };
+    for (lower, upper) in [(a, b), (b, a)] {
+        let mut branch = relation.clone();
+        branch.add(lower, upper);
+        branch.propagate(&rules.crossings, &rules.nests, &rules.parallels);
+        if subset_rules_have_extension(branch, rules) {
+            return true;
+        }
+    }
+    false
+}
+
+fn minimal_unsatisfiable_rules(
+    shapes: &[FaceShape],
+    adjacent: &[AdjacentFoldRule],
+    rules: &StackRules,
+) -> Vec<StackRuleRef> {
+    let mut core = stack_rule_refs(adjacent, rules);
+    // First remove whole blocks of irrelevant rules. The final singleton pass proves
+    // inclusion minimality, with no state/time cap and without weakening the SAT oracle.
+    let mut chunk = core.len().div_ceil(2);
+    while chunk > 0 {
+        let mut end = core.len();
+        while end > 0 {
+            let start = end.saturating_sub(chunk);
+            let mut trial = core.clone();
+            trial.drain(start..end);
+            if !stack_subset_is_satisfiable(shapes, adjacent, rules, &trial) {
+                core = trial;
+            }
+            end = start;
+        }
+        if chunk == 1 {
+            break;
+        }
+        chunk = chunk.div_ceil(2);
+    }
+    core
 }
 
 fn relation_pairs(shapes: &[FaceShape], relation: &StackRelation) -> Vec<(FaceId, FaceId)> {
@@ -1488,8 +1961,9 @@ fn solve_stack_relation(
     shapes: &[FaceShape],
     previous_order: &[FaceId],
     adjacent: &[AdjacentFoldRule],
-    seams: &[Seam],
+    rules: &StackRules,
     overlap_failure: OverlapAnalysisFailure,
+    seam_residuals: &[PrecreaseSeamResidual],
 ) -> Result<StackSolution, String> {
     let index = shapes
         .iter()
@@ -1498,14 +1972,13 @@ fn solve_stack_relation(
         .collect::<HashMap<_, _>>();
     let mut relation = StackRelation::new(shapes.len());
 
-    for rule in adjacent {
+    for (rule_index, rule) in adjacent.iter().enumerate() {
         let (Some(&lower), Some(&upper)) = (index.get(&rule.lower), index.get(&rule.upper)) else {
             continue;
         };
-        relation.add(lower, upper);
+        relation.add_with_reason(lower, upper, StackRuleRef::Adjacent(rule_index));
     }
 
-    let rules = stack_rules(shapes, seams);
     relation.propagate(&rules.crossings, &rules.nests, &rules.parallels);
     let mandatory_constraints = relation_pairs(shapes, &relation);
     let (positive_overlaps, overlap_analysis_error) = match positive_overlap_pairs(shapes) {
@@ -1546,8 +2019,10 @@ fn solve_stack_relation(
     });
     let mandatory_relation = relation.clone();
     let physical_conflicts = relation.discarded.clone();
+    let physical_rejections = relation.rejections.clone();
+    let mut search_rejections = BTreeMap::new();
     let (relation, display_resolution_failure) =
-        match resolve_display_relation(relation, &ordered, &rules) {
+        match resolve_display_relation(relation, &ordered, rules, &mut search_rejections) {
             Ok(resolved) => (resolved, None),
             Err((first, second)) => {
                 // Display totalization failed. Preserve only the candidate-independent relation.
@@ -1571,6 +2046,14 @@ fn solve_stack_relation(
         discarded_relations,
         display_resolution_failure,
         overlap_analysis_error,
+        diagnostics: stack_diagnostics(
+            shapes,
+            adjacent,
+            rules,
+            &physical_rejections,
+            &search_rejections,
+            seam_residuals,
+        ),
         counts: PrecreaseConstraintCounts {
             adjacent_folds: adjacent.len(),
             taco_tortilla: rules
@@ -1589,6 +2072,28 @@ fn solve_stack_relation(
     })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum StackRuleRef {
+    Adjacent(usize),
+    Crossing(usize),
+    Nest(usize),
+    Parallel(usize),
+    Decision,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct StackRejection {
+    requested: (usize, usize),
+    rule: StackRuleRef,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct StackBranchRejection {
+    decision: (usize, usize),
+    conflicts: Vec<StackRejection>,
+    violated_rule: Option<StackRuleRef>,
+}
+
 /// 「どちらが下か」を面の組ごとに持ち、推移(aがbの下でbがcの下ならaはcの下)を
 /// 常に保つ表。
 #[derive(Clone)]
@@ -1596,6 +2101,7 @@ struct StackRelation {
     count: usize,
     below: Vec<bool>,
     discarded: BTreeSet<(usize, usize)>,
+    rejections: BTreeSet<StackRejection>,
 }
 
 impl StackRelation {
@@ -1604,6 +2110,7 @@ impl StackRelation {
             count,
             below: vec![false; count * count],
             discarded: BTreeSet::new(),
+            rejections: BTreeSet::new(),
         }
     }
 
@@ -1614,11 +2121,19 @@ impl StackRelation {
     /// `lower` が `upper` の下だと決める。新しく決まったら真を返す。
     /// 逆向きが既に決まっている場合は、先に決まったほうを残して何もしない。
     fn add(&mut self, lower: usize, upper: usize) -> bool {
+        self.add_with_reason(lower, upper, StackRuleRef::Decision)
+    }
+
+    fn add_with_reason(&mut self, lower: usize, upper: usize, rule: StackRuleRef) -> bool {
         if lower == upper || self.is_below(lower, upper) {
             return false;
         }
         if self.is_below(upper, lower) {
             self.discarded.insert((lower, upper));
+            self.rejections.insert(StackRejection {
+                requested: (lower, upper),
+                rule,
+            });
             return false;
         }
         let lowers = (0..self.count)
@@ -1638,34 +2153,47 @@ impl StackRelation {
     }
 
     /// `other` が `first` と `second` の**同じ側**にいることを使って上下を広げる。
-    fn keep_same_side(&mut self, first: usize, second: usize, other: usize) -> bool {
+    fn keep_same_side(
+        &mut self,
+        first: usize,
+        second: usize,
+        other: usize,
+        rule: StackRuleRef,
+    ) -> bool {
         let mut changed = false;
         if self.is_below(other, first) {
-            changed |= self.add(other, second);
+            changed |= self.add_with_reason(other, second, rule);
         }
         if self.is_below(first, other) {
-            changed |= self.add(second, other);
+            changed |= self.add_with_reason(second, other, rule);
         }
         if self.is_below(other, second) {
-            changed |= self.add(other, first);
+            changed |= self.add_with_reason(other, first, rule);
         }
         if self.is_below(second, other) {
-            changed |= self.add(first, other);
+            changed |= self.add_with_reason(first, other, rule);
         }
         changed
     }
 
     /// `inner` が `low` と `high` の間に入るなら、その相方 `mate` も同じ向きで
     /// 間に入れる(2組が交互に並ぶことを禁じる)。
-    fn keep_nested(&mut self, low: usize, high: usize, inner: usize, mate: usize) -> bool {
+    fn keep_nested(
+        &mut self,
+        low: usize,
+        high: usize,
+        inner: usize,
+        mate: usize,
+        rule: StackRuleRef,
+    ) -> bool {
         let mut changed = false;
         if self.is_below(low, inner) && self.is_below(inner, high) {
-            changed |= self.add(low, mate);
-            changed |= self.add(mate, high);
+            changed |= self.add_with_reason(low, mate, rule);
+            changed |= self.add_with_reason(mate, high, rule);
         }
         if self.is_below(high, inner) && self.is_below(inner, low) {
-            changed |= self.add(high, mate);
-            changed |= self.add(mate, low);
+            changed |= self.add_with_reason(high, mate, rule);
+            changed |= self.add_with_reason(mate, low, rule);
         }
         changed
     }
@@ -1673,19 +2201,26 @@ impl StackRelation {
     /// 決まる上下が増えなくなるまで、2つの条件を当て続ける。
     /// `near` は `first` と同じ側、`far` は `second` と同じ側にある。
     /// 線の片側で上なら、反対側でも上でなければならない。
-    fn keep_parallel(&mut self, first: usize, second: usize, near: usize, far: usize) -> bool {
+    fn keep_parallel(
+        &mut self,
+        first: usize,
+        second: usize,
+        near: usize,
+        far: usize,
+        rule: StackRuleRef,
+    ) -> bool {
         let mut changed = false;
         if self.is_below(first, near) {
-            changed |= self.add(second, far);
+            changed |= self.add_with_reason(second, far, rule);
         }
         if self.is_below(near, first) {
-            changed |= self.add(far, second);
+            changed |= self.add_with_reason(far, second, rule);
         }
         if self.is_below(second, far) {
-            changed |= self.add(first, near);
+            changed |= self.add_with_reason(first, near, rule);
         }
         if self.is_below(far, second) {
-            changed |= self.add(near, first);
+            changed |= self.add_with_reason(near, first, rule);
         }
         changed
     }
@@ -1700,17 +2235,19 @@ impl StackRelation {
         let rounds = self.count * self.count + 1;
         for _ in 0..rounds {
             let mut changed = false;
-            for &(first, second, other) in crossings {
-                changed |= self.keep_same_side(first, second, other);
+            for (index, &(first, second, other)) in crossings.iter().enumerate() {
+                changed |= self.keep_same_side(first, second, other, StackRuleRef::Crossing(index));
             }
-            for &(a, b, c, d) in nests {
-                changed |= self.keep_nested(a, b, c, d);
-                changed |= self.keep_nested(a, b, d, c);
-                changed |= self.keep_nested(c, d, a, b);
-                changed |= self.keep_nested(c, d, b, a);
+            for (index, &(a, b, c, d)) in nests.iter().enumerate() {
+                let rule = StackRuleRef::Nest(index);
+                changed |= self.keep_nested(a, b, c, d, rule);
+                changed |= self.keep_nested(a, b, d, c, rule);
+                changed |= self.keep_nested(c, d, a, b, rule);
+                changed |= self.keep_nested(c, d, b, a, rule);
             }
-            for &(first, second, near, far) in parallels {
-                changed |= self.keep_parallel(first, second, near, far);
+            for (index, &(first, second, near, far)) in parallels.iter().enumerate() {
+                changed |=
+                    self.keep_parallel(first, second, near, far, StackRuleRef::Parallel(index));
             }
             if !changed {
                 return;
@@ -1743,39 +2280,43 @@ fn relation_between(
 /// 既に向きが決まった比較だけを見る。未決定は分岐探索に残すが、決定済み部分だけで
 /// taco/連続面規則を破った枝は、それ以上total化しても直らないので早く捨てる。
 fn relation_respects_resolved_stack_rules(relation: &StackRelation, rules: &StackRules) -> bool {
-    for &(first, second, other) in &rules.crossings {
+    first_violated_stack_rule(relation, rules).is_none()
+}
+
+fn first_violated_stack_rule(relation: &StackRelation, rules: &StackRules) -> Option<StackRuleRef> {
+    for (index, &(first, second, other)) in rules.crossings.iter().enumerate() {
         if (relation.is_below(first, other) && relation.is_below(other, second))
             || (relation.is_below(second, other) && relation.is_below(other, first))
         {
-            return false;
+            return Some(StackRuleRef::Crossing(index));
         }
     }
-    for &(a, b, c, d) in &rules.nests {
+    for (index, &(a, b, c, d)) in rules.nests.iter().enumerate() {
         if let (Some(c_between), Some(d_between)) = (
             relation_between(relation, c, a, b),
             relation_between(relation, d, a, b),
         ) && c_between != d_between
         {
-            return false;
+            return Some(StackRuleRef::Nest(index));
         }
         if let (Some(a_between), Some(b_between)) = (
             relation_between(relation, a, c, d),
             relation_between(relation, b, c, d),
         ) && a_between != b_between
         {
-            return false;
+            return Some(StackRuleRef::Nest(index));
         }
     }
-    for &(first, second, near, far) in &rules.parallels {
+    for (index, &(first, second, near, far)) in rules.parallels.iter().enumerate() {
         if let (Some(first_to_near), Some(second_to_far)) = (
             relation_direction(relation, first, near),
             relation_direction(relation, second, far),
         ) && first_to_near != second_to_far
         {
-            return false;
+            return Some(StackRuleRef::Parallel(index));
         }
     }
-    true
+    None
 }
 
 /// 表示を続けるためのtotal化。優先向きはauthorityではなく探索順にだけ使う。
@@ -1785,6 +2326,40 @@ fn resolve_display_relation(
     relation: StackRelation,
     ordered: &[usize],
     rules: &StackRules,
+    rejected: &mut BTreeMap<StackBranchRejection, usize>,
+) -> Result<StackRelation, (usize, usize)> {
+    if let Some(&conflict) = relation.discarded.first() {
+        return Err(conflict);
+    }
+    if let Some(rule) = first_violated_stack_rule(&relation, rules) {
+        let pair = match rule {
+            StackRuleRef::Crossing(index) => {
+                let (a, b, _) = rules.crossings[index];
+                (a, b)
+            }
+            StackRuleRef::Nest(index) => {
+                let (a, b, _, _) = rules.nests[index];
+                (a, b)
+            }
+            StackRuleRef::Parallel(index) => {
+                let (a, b, _, _) = rules.parallels[index];
+                (a, b)
+            }
+            StackRuleRef::Adjacent(_) | StackRuleRef::Decision => {
+                unreachable!("only conditional rules are inspected")
+            }
+        };
+        return Err(pair);
+    }
+    search_display_relation(relation, ordered, rules, rejected)
+}
+
+/// The root and every accepted branch have already passed the resolved-rule check.
+fn search_display_relation(
+    relation: StackRelation,
+    ordered: &[usize],
+    rules: &StackRules,
+    rejected: &mut BTreeMap<StackBranchRejection, usize>,
 ) -> Result<StackRelation, (usize, usize)> {
     let undecided = ordered.iter().enumerate().find_map(|(position, &first)| {
         ordered[position + 1..]
@@ -1794,27 +2369,7 @@ fn resolve_display_relation(
             .map(|second| (first, second))
     });
     let Some((preferred_lower, preferred_upper)) = undecided else {
-        if relation_respects_resolved_stack_rules(&relation, rules) {
-            return Ok(relation);
-        }
-        let conflict = rules
-            .crossings
-            .first()
-            .map(|&(first, second, _)| (first, second))
-            .or_else(|| {
-                rules
-                    .nests
-                    .first()
-                    .map(|&(first, second, _, _)| (first, second))
-            })
-            .or_else(|| {
-                rules
-                    .parallels
-                    .first()
-                    .map(|&(first, second, _, _)| (first, second))
-            })
-            .expect("an invalid resolved stack relation has a rule");
-        return Err(conflict);
+        return Ok(relation);
     };
 
     for (lower, upper) in [
@@ -1825,12 +2380,21 @@ fn resolve_display_relation(
         let discarded_before = branch.discarded.len();
         branch.add(lower, upper);
         branch.propagate(&rules.crossings, &rules.nests, &rules.parallels);
-        if branch.discarded.len() != discarded_before
-            || !relation_respects_resolved_stack_rules(&branch, rules)
-        {
+        let violated_rule = first_violated_stack_rule(&branch, rules);
+        if branch.discarded.len() != discarded_before || violated_rule.is_some() {
+            let reason = StackBranchRejection {
+                decision: (lower, upper),
+                conflicts: branch
+                    .rejections
+                    .difference(&relation.rejections)
+                    .cloned()
+                    .collect(),
+                violated_rule,
+            };
+            *rejected.entry(reason).or_default() += 1;
             continue;
         }
-        if let Ok(resolved) = resolve_display_relation(branch, ordered, rules) {
+        if let Ok(resolved) = search_display_relation(branch, ordered, rules, rejected) {
             return Ok(resolved);
         }
     }
@@ -2070,6 +2634,478 @@ mod tests {
     }
 
     #[test]
+    fn analytic_crossing_finds_the_rectangle_between_the_old_nine_samples() {
+        let shape = test_face_shape(
+            0,
+            vec![
+                DVec2::new(0.045, -0.01),
+                DVec2::new(0.055, -0.01),
+                DVec2::new(0.055, 0.01),
+                DVec2::new(0.045, 0.01),
+            ],
+        );
+        assert!(crosses_segment(&shape, DVec2::ZERO, DVec2::X));
+    }
+
+    fn rectangle_shape(id: FaceId, x0: f64, x1: f64, y0: f64, y1: f64) -> FaceShape {
+        test_face_shape(
+            id,
+            vec![
+                DVec2::new(x0, y0),
+                DVec2::new(x1, y0),
+                DVec2::new(x1, y1),
+                DVec2::new(x0, y1),
+            ],
+        )
+    }
+
+    #[test]
+    fn analytic_crossing_respects_eps_for_a_one_e_minus_seven_sliver() {
+        // Normalized-paper distances: width 1e-7 > EPS=1e-9, old offset 1e-6.
+        for shape in [
+            rectangle_shape(0, 0.05, 0.05 + 1e-7, -0.01, 0.01),
+            rectangle_shape(0, 0.045, 0.055, -0.5e-7, 0.5e-7),
+        ] {
+            assert!(crosses_segment(&shape, DVec2::ZERO, DVec2::X));
+        }
+        let within_boundary_tolerance = rectangle_shape(0, 0.045, 0.055, -0.5 * EPS, 0.5 * EPS);
+        assert!(!crosses_segment(
+            &within_boundary_tolerance,
+            DVec2::ZERO,
+            DVec2::X
+        ));
+    }
+
+    fn concave_shape() -> FaceShape {
+        test_face_shape(
+            0,
+            vec![
+                DVec2::new(0.045, -0.01),
+                DVec2::new(0.055, -0.01),
+                DVec2::new(0.055, 0.02),
+                DVec2::new(0.945, 0.02),
+                DVec2::new(0.945, -0.01),
+                DVec2::new(0.955, -0.01),
+                DVec2::new(0.955, 0.03),
+                DVec2::new(0.045, 0.03),
+            ],
+        )
+    }
+
+    #[test]
+    fn analytic_crossing_keeps_disconnected_concave_intervals() {
+        let shape = concave_shape();
+        assert!(crosses_segment(&shape, DVec2::ZERO, DVec2::X));
+        assert!(!crosses_segment(
+            &shape,
+            DVec2::new(0.1, 0.0),
+            DVec2::new(0.9, 0.0)
+        ));
+        let intervals =
+            crate::fold_through::segment_inside_polygon([DVec2::ZERO, DVec2::X], &shape.polygon);
+        assert_eq!(intervals.len(), 2);
+        for interval in intervals {
+            assert!(((interval[1] - interval[0]).length() - 0.01).abs() <= EPS);
+        }
+    }
+
+    #[test]
+    fn analytic_crossing_is_invariant_under_reversal_and_isometry() {
+        for mirrored in [false, true] {
+            let mut shape = concave_shape();
+            shape.placement = Isometry2 {
+                rotation: 0.37,
+                translation: DVec2::new(0.2, -0.3),
+                mirrored,
+            };
+            let start = shape.placement.apply(DVec2::ZERO);
+            let end = shape.placement.apply(DVec2::X);
+            assert!(crosses_segment(&shape, start, end));
+            assert!(crosses_segment(&shape, end, start));
+            shape.polygon.reverse();
+            assert!(crosses_segment(&shape, end, start));
+        }
+    }
+
+    #[test]
+    fn analytic_crossing_excludes_endpoint_and_boundary_contact() {
+        let shape = test_face_shape(
+            0,
+            vec![DVec2::ZERO, DVec2::new(0.1, -0.1), DVec2::new(0.1, 0.1)],
+        );
+        assert!(!crosses_segment(&shape, -DVec2::X, DVec2::ZERO));
+        assert!(!crosses_segment(&shape, DVec2::ZERO, -DVec2::X));
+        let square = rectangle_shape(0, 0.0, 1.0, 0.0, 1.0);
+        assert!(!crosses_segment(&square, DVec2::ZERO, DVec2::X));
+        assert!(!crosses_segment(
+            &square,
+            DVec2::splat(0.5),
+            DVec2::splat(0.5)
+        ));
+        // A collinear polygon vertex outside the finite query must not extend that query.
+        let outside = test_face_shape(
+            0,
+            vec![
+                DVec2::new(2.0, 0.0),
+                DVec2::new(3.0, 0.0),
+                DVec2::new(3.0, 1.0),
+                DVec2::new(1.2, 1.0),
+                DVec2::new(1.2, -1.0),
+                DVec2::new(2.0, -1.0),
+            ],
+        );
+        assert!(!crosses_segment(&outside, DVec2::ZERO, DVec2::X));
+    }
+
+    #[test]
+    fn analytic_seam_side_handles_thin_and_concave_boundary_intervals() {
+        for mut shape in [rectangle_shape(0, 0.045, 0.055, 0.0, 1e-7), concave_shape()] {
+            let y = if shape.polygon.len() == 4 { 0.0 } else { -0.01 };
+            let start = DVec2::new(0.0, y);
+            let end = DVec2::new(1.0, y);
+            assert_eq!(seam_side(&shape, start, end), Some(1.0));
+            assert_eq!(seam_side(&shape, end, start), Some(-1.0));
+            shape.polygon.reverse();
+            assert_eq!(seam_side(&shape, start, end), Some(1.0));
+            shape.placement = Isometry2 {
+                rotation: 0.37,
+                translation: DVec2::new(0.2, -0.3),
+                mirrored: true,
+            };
+            assert_eq!(
+                seam_side(
+                    &shape,
+                    shape.placement.apply(start),
+                    shape.placement.apply(end)
+                ),
+                Some(-1.0)
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_seams_match_all_twenty_four_cross_section_orders() {
+        // In a perpendicular cross-section, a/b form a hairpin on y>0. The c/d sheet
+        // continues across y=0. It intersects the hairpin exactly when c is between a/b.
+        // d is on the other side, so no relation involving its rank is physically needed.
+        let shapes = vec![
+            rectangle_shape(10, 0.0, 1.0, 0.0, 1.0),
+            rectangle_shape(20, 0.0, 1.0, 0.0, 1.0),
+            rectangle_shape(30, 0.0, 1.0, 0.0, 1.0),
+            rectangle_shape(40, 0.0, 1.0, -1.0, 0.0),
+        ];
+        for reverse in [false, true] {
+            for exchange in [false, true] {
+                let mut seams = vec![
+                    Seam {
+                        edge: 7,
+                        a: 10,
+                        b: 20,
+                        start: DVec2::ZERO,
+                        end: DVec2::X,
+                        folded: true,
+                        side: Some(1.0),
+                    },
+                    Seam {
+                        edge: 21,
+                        a: 30,
+                        b: 40,
+                        start: DVec2::ZERO,
+                        end: DVec2::X,
+                        folded: false,
+                        side: Some(1.0),
+                    },
+                ];
+                if reverse {
+                    seams[1].start = DVec2::X;
+                    seams[1].end = DVec2::ZERO;
+                    seams[1].side = Some(-1.0);
+                }
+                if exchange {
+                    seams.reverse();
+                }
+                let rules = stack_rules(&shapes, &seams);
+                assert_eq!(rules.crossings, vec![(0, 1, 2)]);
+                assert!(rules.nests.is_empty() && rules.parallels.is_empty());
+                let mut checked = 0;
+                let mut accepted = 0;
+                for a in 0..4 {
+                    for b in 0..4 {
+                        for c in 0..4 {
+                            for d in 0..4 {
+                                let order = [a, b, c, d];
+                                if order.iter().copied().collect::<BTreeSet<_>>().len() != 4 {
+                                    continue;
+                                }
+                                let mut relation = StackRelation::new(4);
+                                let mut rank = [0; 4];
+                                for (position, &face) in order.iter().enumerate() {
+                                    rank[face] = position;
+                                }
+                                for pair in order.windows(2) {
+                                    relation.add(pair[0], pair[1]);
+                                }
+                                let outside = rank[2] < rank[0].min(rank[1])
+                                    || rank[2] > rank[0].max(rank[1]);
+                                assert_eq!(
+                                    relation_respects_resolved_stack_rules(&relation, &rules),
+                                    outside,
+                                    "order={order:?}"
+                                );
+                                checked += 1;
+                                accepted += usize::from(outside);
+                            }
+                        }
+                    }
+                }
+                assert_eq!((checked, accepted), (24, 16));
+            }
+        }
+    }
+
+    #[test]
+    fn minimal_unsat_core_discards_irrelevant_rules_and_restarts_the_closure() {
+        let shapes = (0..4)
+            .map(|id| rectangle_shape(id, 0.0, 1.0, 0.0, 1.0))
+            .collect::<Vec<_>>();
+        let adjacent = [
+            AdjacentFoldRule {
+                edge: 7,
+                lower: 0,
+                upper: 1,
+            },
+            AdjacentFoldRule {
+                edge: 21,
+                lower: 1,
+                upper: 2,
+            },
+            AdjacentFoldRule {
+                edge: 9,
+                lower: 2,
+                upper: 0,
+            },
+            AdjacentFoldRule {
+                edge: 18,
+                lower: 2,
+                upper: 3,
+            },
+        ];
+        let rules = StackRules::default();
+        let core = minimal_unsatisfiable_rules(&shapes, &adjacent, &rules);
+        assert_eq!(
+            core,
+            vec![
+                StackRuleRef::Adjacent(0),
+                StackRuleRef::Adjacent(1),
+                StackRuleRef::Adjacent(2)
+            ]
+        );
+        assert!(!stack_subset_is_satisfiable(
+            &shapes, &adjacent, &rules, &core
+        ));
+        for index in 0..core.len() {
+            let mut reduced = core.clone();
+            reduced.remove(index);
+            assert!(stack_subset_is_satisfiable(
+                &shapes, &adjacent, &rules, &reduced
+            ));
+        }
+        let solution = solve_stack_relation(
+            &shapes,
+            &[0, 1, 2, 3],
+            &adjacent,
+            &rules,
+            OverlapAnalysisFailure::Reject,
+            &[],
+        )
+        .unwrap();
+        assert!(solution.display_resolution_failure.is_some());
+        assert_eq!(solution.discarded_relations, vec![(2, 0)]);
+        assert_eq!(
+            solution.diagnostics.rejected_constraints,
+            vec![PrecreaseRejectedConstraint {
+                rule: PrecreaseStackRule::AdjacentFold {
+                    edge: 9,
+                    lower: 2,
+                    upper: 0
+                },
+                requested: (2, 0),
+                established_opposite: (0, 2),
+            }]
+        );
+    }
+
+    #[test]
+    fn diagnostics_retain_every_distinct_propagation_rejection_reason() {
+        let shapes = (0..3)
+            .map(|id| rectangle_shape(id, 0.0, 1.0, 0.0, 1.0))
+            .collect::<Vec<_>>();
+        let adjacent = [
+            AdjacentFoldRule {
+                edge: 7,
+                lower: 0,
+                upper: 2,
+            },
+            AdjacentFoldRule {
+                edge: 21,
+                lower: 2,
+                upper: 1,
+            },
+        ];
+        let rules = StackRules {
+            crossings: vec![(0, 1, 2), (0, 1, 2)],
+            crossing_folded: vec![true, true],
+            crossing_edges: vec![vec![9], vec![18]],
+            ..StackRules::default()
+        };
+        let solution = solve_stack_relation(
+            &shapes,
+            &[0, 1, 2],
+            &adjacent,
+            &rules,
+            OverlapAnalysisFailure::Reject,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(solution.discarded_relations.len(), 2);
+        assert_eq!(solution.diagnostics.rejected_constraints.len(), 4);
+        for pair in &solution.discarded_relations {
+            assert_eq!(
+                solution
+                    .diagnostics
+                    .rejected_constraints
+                    .iter()
+                    .filter(|reason| &reason.requested == pair)
+                    .count(),
+                2
+            );
+        }
+    }
+
+    #[test]
+    fn subset_oracle_matches_permutations_for_all_128_small_rule_subsets() {
+        let shapes = (0..4)
+            .map(|id| rectangle_shape(id, 0.0, 1.0, 0.0, 1.0))
+            .collect::<Vec<_>>();
+        let adjacent = [
+            AdjacentFoldRule {
+                edge: 7,
+                lower: 0,
+                upper: 1,
+            },
+            AdjacentFoldRule {
+                edge: 9,
+                lower: 1,
+                upper: 2,
+            },
+            AdjacentFoldRule {
+                edge: 18,
+                lower: 2,
+                upper: 3,
+            },
+            AdjacentFoldRule {
+                edge: 21,
+                lower: 3,
+                upper: 0,
+            },
+        ];
+        let rules = StackRules {
+            crossings: vec![(0, 1, 2)],
+            nests: vec![(0, 1, 2, 3)],
+            parallels: vec![(0, 1, 2, 3)],
+            ..StackRules::default()
+        };
+        let mut ranks = Vec::new();
+        for a in 0..4 {
+            for b in 0..4 {
+                for c in 0..4 {
+                    for d in 0..4 {
+                        let rank = [a, b, c, d];
+                        if rank.iter().copied().collect::<BTreeSet<_>>().len() == 4 {
+                            ranks.push(rank);
+                        }
+                    }
+                }
+            }
+        }
+        let all = stack_rule_refs(&adjacent, &rules);
+        assert_eq!(all.len(), 7);
+        for mask in 0..128 {
+            let selected = all
+                .iter()
+                .enumerate()
+                .filter_map(|(bit, &rule)| (mask & (1 << bit) != 0).then_some(rule))
+                .collect::<Vec<_>>();
+            let expected = ranks.iter().any(|rank| {
+                selected.iter().all(|rule| {
+                    let between = |x: usize, a: usize, b: usize| {
+                        rank[a].min(rank[b]) < rank[x] && rank[x] < rank[a].max(rank[b])
+                    };
+                    match rule {
+                        StackRuleRef::Adjacent(index) => {
+                            let rule = adjacent[*index];
+                            rank[rule.lower as usize] < rank[rule.upper as usize]
+                        }
+                        StackRuleRef::Crossing(_) => !between(2, 0, 1),
+                        StackRuleRef::Nest(_) => {
+                            between(2, 0, 1) == between(3, 0, 1)
+                                && between(0, 2, 3) == between(1, 2, 3)
+                        }
+                        StackRuleRef::Parallel(_) => (rank[0] < rank[2]) == (rank[1] < rank[3]),
+                        StackRuleRef::Decision => unreachable!(),
+                    }
+                })
+            });
+            assert_eq!(
+                stack_subset_is_satisfiable(&shapes, &adjacent, &rules, &selected),
+                expected,
+                "rule mask={mask}"
+            );
+        }
+    }
+
+    #[test]
+    fn diagnostic_geometry_failures_report_nonfinite_values_and_split_seams() {
+        let mut document = Document::new(Paper {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        });
+        insert_segment(&mut document.cp, [0.5, 0.0], [0.5, 1.0], EdgeKind::Valley);
+        let faces = extract_faces(&document.cp);
+        let state = FlatState::initial(&document.cp, &faces);
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut placements = state.placements.clone();
+            placements.get_mut(&faces[0].id).unwrap().rotation = value;
+            let error =
+                diagnose_precrease_layer_order(&document.cp, &faces, &placements).unwrap_err();
+            assert!(error.message.contains("non-finite"));
+            let mut invalid_cp = document.cp.clone();
+            invalid_cp.vertices[0].pos[0] = value;
+            assert!(
+                diagnose_precrease_layer_order(&invalid_cp, &faces, &state.placements)
+                    .unwrap_err()
+                    .message
+                    .contains("non-finite")
+            );
+        }
+        let mut placements = state.placements.clone();
+        placements.get_mut(&faces[0].id).unwrap().translation.x += 1e-5;
+        let error = diagnose_precrease_layer_order(&document.cp, &faces, &placements).unwrap_err();
+        assert_eq!(error.seam_residuals.len(), 1);
+        assert!(
+            error.seam_residuals[0]
+                .endpoint_gaps
+                .iter()
+                .all(|&gap| gap > EPS)
+        );
+        assert!(error.message.contains("invalid seam edge"));
+        assert!(
+            validate_precrease_layer_order(&document.cp, &faces, &placements, &state.order)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn display_tie_seed_rolls_back_a_branch_that_discards_a_physical_relation() {
         // Existing physical relation 2<0 and the continuous crossing (0,1,2) require 2<1.
         // The preferred 1<2 seed makes propagation discard that requirement; the reverse branch
@@ -2081,12 +3117,20 @@ mod tests {
             crossing_folded: vec![false],
             ..StackRules::default()
         };
-        let resolved = resolve_display_relation(physical.clone(), &[1, 2, 0], &rules)
-            .expect("reverse display branch satisfies the physical crossing");
+        let mut rejected = BTreeMap::new();
+        let resolved =
+            resolve_display_relation(physical.clone(), &[1, 2, 0], &rules, &mut rejected)
+                .expect("reverse display branch satisfies the physical crossing");
         assert!(physical.discarded.is_empty());
         assert!(resolved.discarded.is_empty());
         assert!(resolved.is_below(2, 1));
         assert!(!resolved.is_below(1, 2));
+        assert!(!rejected.is_empty());
+        assert!(
+            rejected
+                .keys()
+                .all(|reason| !reason.conflicts.is_empty() || reason.violated_rule.is_some())
+        );
     }
 
     #[test]
@@ -2111,6 +3155,7 @@ mod tests {
             .map(|id| test_face_shape(id, triangle.clone()))
             .collect::<Vec<_>>();
         let seams = vec![Seam {
+            edge: 0,
             a: 0,
             b: 1,
             start: DVec2::ZERO,
@@ -2150,17 +3195,24 @@ mod tests {
             &shapes,
             &[0, 1],
             &[],
-            &[],
+            &StackRules::default(),
             OverlapAnalysisFailure::ContinueWithWarning,
+            &[],
         )
         .expect("collapse keeps a display fallback when overlap analysis is unavailable");
         assert!(continued.overlap_analysis_error.is_some());
         assert!(continued.unresolved_overlap_pairs.is_empty());
 
-        let rejected =
-            solve_stack_relation(&shapes, &[0, 1], &[], &[], OverlapAnalysisFailure::Reject)
-                .err()
-                .expect("saved-order validation must reject an uncheckable overlap");
+        let rejected = solve_stack_relation(
+            &shapes,
+            &[0, 1],
+            &[],
+            &StackRules::default(),
+            OverlapAnalysisFailure::Reject,
+            &[],
+        )
+        .err()
+        .expect("saved-order validation must reject an uncheckable overlap");
         assert!(rejected.contains("degenerate face polygon"));
     }
 
@@ -2214,8 +3266,7 @@ mod tests {
     fn flat_seam_crossing_rejects_an_interleaved_layer_order() {
         // Faces 0 and 1 are one flat sheet joined at x=0. Face 2 is translated onto both
         // sides of that seam. It must therefore be below both halves or above both halves.
-        // All distances are O(1), while CROSSING_OFFSET is 1e-6, so the sampled crossing is
-        // six orders of magnitude away from the boundary tolerance.
+        // All distances are O(1), nine orders of magnitude above the boundary EPS=1e-9.
         let cp = flat_continuity_cp(
             vec![
                 Vertex {

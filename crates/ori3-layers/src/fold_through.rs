@@ -770,7 +770,7 @@ fn folded_flap_crosses_edge(poly: &[DVec2], edge: [DVec2; 2]) -> bool {
 }
 
 /// 線分のうち多角形の厳密な内部にある区間。複数区間なら凹面を横切っている。
-fn segment_inside_polygon(segment: [DVec2; 2], poly: &[DVec2]) -> Vec<[DVec2; 2]> {
+pub(crate) fn segment_inside_polygon(segment: [DVec2; 2], poly: &[DVec2]) -> Vec<[DVec2; 2]> {
     let (a, b) = (segment[0], segment[1]);
     let direction = b - a;
     let length2 = direction.length_squared();
@@ -784,8 +784,8 @@ fn segment_inside_polygon(segment: [DVec2; 2], poly: &[DVec2]) -> Vec<[DVec2; 2]
         let denominator = direction.perp_dot(edge);
         if denominator.abs() <= EPS {
             if direction.perp_dot(c - a).abs() <= EPS * direction.length() {
-                parameters.push((c - a).dot(direction) / length2);
-                parameters.push((d - a).dot(direction) / length2);
+                parameters.push(((c - a).dot(direction) / length2).clamp(0.0, 1.0));
+                parameters.push(((d - a).dot(direction) / length2).clamp(0.0, 1.0));
             }
             continue;
         }

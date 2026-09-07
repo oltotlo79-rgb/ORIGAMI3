@@ -670,16 +670,26 @@ fn strict_proposal_gate_rejects_tied_crane_candidate_16_by_input_layer_constrain
         initial_seed_validation.discarded_relations, physical_conflicts,
         "表示seedを変えると物理的な破棄関係が変わった"
     );
+    // 2026-09-07: 旧 `(0,2)`／`(0,1)`（9点標本時代の探索順の産物）→ 新 `(1,10)`
+    // （G0: 根で最初に棄却された物理関係の対）。物理的な表明は不変。
     assert_eq!(
         validation.display_resolution_failure,
-        Some((0, 2)),
+        Some((1, 10)),
         "collapse表示seedの全順序化失敗markerが消えた"
     );
+    let marker = validation
+        .display_resolution_failure
+        .expect("collapse表示seedの全順序化失敗markerが消えた");
+    assert!(physical_conflicts.contains(&marker));
     assert_eq!(
         initial_seed_validation.display_resolution_failure,
-        Some((0, 1)),
+        Some((1, 10)),
         "初期表示seedの全順序化失敗markerが消えた"
     );
+    let initial_marker = initial_seed_validation
+        .display_resolution_failure
+        .expect("初期表示seedの全順序化失敗markerが消えた");
+    assert!(physical_conflicts.contains(&initial_marker));
     assert!(
         !validation.is_valid(),
         "提案関門と同じis_valid述語が旧候補16を採用した"

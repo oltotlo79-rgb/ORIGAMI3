@@ -4241,9 +4241,13 @@ fn traditional_crane_saved_layer_oracle_satisfies_all_general_constraints() {
         validation.counts.adjacent_folds, 102,
         "正本B12を除く隣接M/V 102辺を全数検証する"
     );
+    // 2026-09-07: 旧値987（9点標本）→新値1049（解析的な交差区間）。
+    // 幅0.01以下の16件を含む、標本間の交差の取りこぼし62件を拾った。
+    // 実測幅は0.0049228428〜0.0413804591（紙座標）。保存oracleは1049規則とも適合し、
+    // 必然1388対とSATは不変。旧987規則⊆新1049規則はg0_geometry_diagnosticsで検証。
     assert_eq!(
-        validation.counts.taco_tortilla, 987,
-        "sampled taco-tortilla 987条件を全数検証する"
+        validation.counts.taco_tortilla, 1049,
+        "解析的交差判定で得たtaco-tortilla 1049条件を全数検証する"
     );
     assert_eq!(
         validation.counts.taco_taco, 196,

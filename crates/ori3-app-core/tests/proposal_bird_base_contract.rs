@@ -1,4 +1,4 @@
-use ori3_app_core::{Ori3AppCore, ProposalJobId};
+use ori3_app_core::{Ori3AppCore, ProposalJobId, TIME_FREE_PROPOSAL_PLAN_BUDGET};
 use ori3_model::Paper;
 use ori3_propose::Skeleton;
 
@@ -29,13 +29,18 @@ fn bird_base_product_json_contract() {
     let job_id: ProposalJobId =
         serde_json::from_value(serde_json::Value::String("bird-base-product".to_owned()))
             .expect("不透明なjob IDを同じwire形から作れる");
+    // 壁時計の打ち切り(製品30,000ms)は、debug構成では探索が16.8〜20.5倍遅いため
+    // 機械の混み具合だけで当たる(規約03 §10.6)。この契約が見たいのは候補とJSONの形で
+    // あって探索の速さではないので、検査からだけ打ち切りなしの予算を渡す。
+    // 探索の中身も期待値も製品と同じである。
     let result = Ori3AppCore::new()
-        .proposal_generate(
+        .proposal_generate_with_budget(
             job_id,
             corpus.skeleton,
             corpus.paper,
             corpus.seed,
             corpus.with_fold_plan,
+            TIME_FREE_PROPOSAL_PLAN_BUDGET,
         )
         .expect("鳥の基本形の候補と折り方を生成できる");
     assert_eq!(result.candidates.len(), 4);
@@ -62,6 +67,12 @@ fn bird_base_product_json_contract() {
         );
     }
     let json = serde_json::to_string(&result).expect("候補をJSONへ直列化できる");
-    assert_eq!(json.len(), 32_344);
-    assert_eq!(fnv1a64(json.as_bytes()), 0x5036_9e78_f6bd_bfa4);
+    // 2026-09-07: 旧 length=32_344 / FNV=5036_9e78_f6bd_bfa4 →
+    // 新 length=31_748 / FNV=60e6_f600_438f_d2c4。
+    // 解析交差が旧9点標本の見落としを補い、候補0/1の新2手目で
+    // 辺17・面(8,9,18)の連続条件（交差幅約0.012616）が上下(8,18)を確定した。
+    // 旧手の不正による更新ではなく、警告なしで検証可能になった手の採用による更新。
+    // 旧/新の4候補全8手はcheck_moveの21姿勢検査を通り、終点はSAT・違反0。
+    assert_eq!(json.len(), 31_748);
+    assert_eq!(fnv1a64(json.as_bytes()), 0x60e6_f600_438f_d2c4);
 }

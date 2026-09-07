@@ -316,11 +316,30 @@ pub struct ProposalJobResult {
 /// desktopの候補数・探索予算と同じ値。WASMでは候補を専用Worker内で順番に処理する。
 const PROPOSAL_PACK_STARTS: usize = 8;
 
+/// 提案の折り方探索の予算。`watchdog` だけを検査から差し替えられるよう公開する。
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct ProposalPlanBudget {
+pub struct ProposalPlanBudget {
     deterministic: SearchBudget,
     watchdog: SearchWatchdog,
 }
+
+/// 検査専用の、打ち切りの起きない探索予算。
+///
+/// 製品の [`PROPOSAL_PLAN_BUDGET`] は壁時計 30,000ms で打ち切る。debug 構成では
+/// 探索が最適化ありより 16.8〜20.5 倍遅いので（規約03 §10.6）、機械が混んでいると
+/// この 30 秒に当たって `Err` になり、**重なり順や折り方の主張とは無関係に**検査が落ちる。
+/// 実測: 同じ `bird_base_product_json_contract` が、負荷下 30.70s で不合格、
+/// 静かな状態 112.89s で合格、HEAD でも 103.74s で合格だった。
+///
+/// そこで `desktop` 側の `TIME_FREE_PLAN_BUDGET` と同じ考えで、**検査からだけ**選べる
+/// 打ち切りなしの予算を用意する。**探索の中身（`deterministic`）は製品と同じ値のままで、
+/// 変えるのは壁時計の上限だけである。**期待値も製品の予算も変えていない。
+pub const TIME_FREE_PROPOSAL_PLAN_BUDGET: ProposalPlanBudget = ProposalPlanBudget {
+    watchdog: SearchWatchdog {
+        max_millis: 3_600_000,
+    },
+    ..PROPOSAL_PLAN_BUDGET
+};
 
 const PROPOSAL_PLAN_BUDGET: ProposalPlanBudget = ProposalPlanBudget {
     deterministic: SearchBudget {
@@ -1603,8 +1622,37 @@ impl Ori3AppCore {
         seed: u64,
         with_fold_plan: bool,
     ) -> Result<ProposalJobResult, String> {
-        let candidates =
-            generate_proposal_candidates_sequential(&skeleton, &paper, seed, with_fold_plan)?;
+        self.proposal_generate_with_budget(
+            job_id,
+            skeleton,
+            paper,
+            seed,
+            with_fold_plan,
+            PROPOSAL_PLAN_BUDGET,
+        )
+    }
+
+    /// 探索予算を明示して [`Self::proposal_generate`] と同じ経路を実行する。
+    ///
+    /// 製品は常に [`PROPOSAL_PLAN_BUDGET`] を使う。この入口は、debug 構成の検査が
+    /// 壁時計の打ち切りに当たって主張と無関係に落ちるのを避けるため、
+    /// [`TIME_FREE_PROPOSAL_PLAN_BUDGET`] を渡せるようにするためにある。
+    pub fn proposal_generate_with_budget(
+        &self,
+        job_id: ProposalJobId,
+        skeleton: Skeleton,
+        paper: Paper,
+        seed: u64,
+        with_fold_plan: bool,
+        budget: ProposalPlanBudget,
+    ) -> Result<ProposalJobResult, String> {
+        let candidates = generate_proposal_candidates_sequential(
+            &skeleton,
+            &paper,
+            seed,
+            with_fold_plan,
+            budget,
+        )?;
         Ok(ProposalJobResult { job_id, candidates })
     }
 
@@ -1752,6 +1800,7 @@ impl Ori3AppCore {
                         &args.paper,
                         &args.packing,
                         args.candidate,
+                        PROPOSAL_PLAN_BUDGET,
                     )?,
                 )
             }
@@ -1909,6 +1958,7 @@ fn verify_web_proposal_candidate(
     paper: &Paper,
     packing: &Packing,
     mut candidate: ProposalCandidate,
+    budget: ProposalPlanBudget,
 ) -> Result<ProposalCandidate, String> {
     if candidate.fold_plan.is_some() {
         return Err("折り方を確認する前の提案候補を指定してください".to_owned());
@@ -1919,7 +1969,7 @@ fn verify_web_proposal_candidate(
         &candidate.cp,
         &candidate.sites,
         paper,
-        PROPOSAL_PLAN_BUDGET,
+        budget,
         &ProposalNeverCancelled,
     )
     .map_err(proposal_search_abort_message)?;
@@ -1931,6 +1981,7 @@ fn generate_proposal_candidates_sequential(
     paper: &Paper,
     seed: u64,
     with_fold_plan: bool,
+    budget: ProposalPlanBudget,
 ) -> Result<Vec<ProposalCandidate>, String> {
     let prepared = prepare_web_proposal(skeleton, paper, seed)?;
     let mut candidates = Vec::new();
@@ -1941,7 +1992,7 @@ fn generate_proposal_candidates_sequential(
         match generated.candidate {
             Some(candidate) => {
                 candidates.push(if with_fold_plan {
-                    verify_web_proposal_candidate(skeleton, paper, packing, candidate)?
+                    verify_web_proposal_candidate(skeleton, paper, packing, candidate, budget)?
                 } else {
                     candidate
                 });
