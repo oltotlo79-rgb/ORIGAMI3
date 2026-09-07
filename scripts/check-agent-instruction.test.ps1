@@ -380,8 +380,8 @@ try {
     $noCargoPath = New-InstructionFixtureFile "full-pass-no-cargo.md" (New-InstructionText -IncludeCargoTest $false)
     $result = Invoke-Check @($noCargoPath)
     Assert-Equal $result.ExitCode 0 "cargo未記載でも他項目が揃えば合格であること" $result.Output
-    Assert-Contains $result.Output "[--] 10. 長時間検査の--skip 4件 (03-品質ゲート.md:61) - cargo testの言及なし（該当なし）" "項目10がN/A表示になること"
-    Assert-Contains $result.Output "[--] 11. 専用のCARGO_TARGET_DIR指定 (06-過去の失敗と対策.md:241-242) - cargo実行の言及なし（該当なし）" "項目11がN/A表示になること"
+    Assert-Contains $result.Output "[--] 10. 長時間検査の--skip 4件 (03-品質ゲート.md:70) - cargo testの言及なし（該当なし）" "項目10がN/A表示になること"
+    Assert-Contains $result.Output "[--] 11. 専用のCARGO_TARGET_DIR指定 (06-過去の失敗と対策.md:134) - cargo実行の言及なし（該当なし）" "項目11がN/A表示になること"
     Assert-Contains $result.Output "全項目合格" "N/Aは不合格に数えないこと"
 
     Write-Output "[3/21] 「該当なし」＋理由は項目1・14を実パス無しでも合格させる"
@@ -470,7 +470,7 @@ try {
     Write-Output "[8/21] 項目10: skip対象0/4件・一部欠落(2/4件)を検出する"
     $result = Invoke-Check @((New-InstructionFixtureFile "fail-item10-none.md" (New-InstructionText -SkipNamesToInclude @())))
     Assert-Equal $result.ExitCode 1 "skip対象が0件ならexit 1であること" $result.Output
-    Assert-Contains $result.Output "[NG] 10. 長時間検査の--skip 4件 (03-品質ゲート.md:61) - 0/4 件のみ検出" "0/4件の検出数を表示すること"
+    Assert-Contains $result.Output "[NG] 10. 長時間検査の--skip 4件 (03-品質ゲート.md:70) - 0/4 件のみ検出" "0/4件の検出数を表示すること"
     Assert-Contains $result.Output "[OK] 11." "skip不足はCARGO_TARGET_DIR判定を巻き込まないこと"
 
     $partialSkips = @(
@@ -485,14 +485,14 @@ try {
     Write-Output "[9/21] 項目11: CARGO_TARGET_DIR未指定を検出し、項目10には影響しない"
     $result = Invoke-Check @((New-InstructionFixtureFile "fail-item11.md" (New-InstructionText -IncludeCargoTargetDir $false)))
     Assert-Equal $result.ExitCode 1 "CARGO_TARGET_DIR欠落はexit 1であること" $result.Output
-    Assert-Contains $result.Output "[NG] 11. 専用のCARGO_TARGET_DIR指定 (06-過去の失敗と対策.md:241-242) - cargoの言及があるのにCARGO_TARGET_DIRの指定が見つかりません" "項目11がNGになること"
+    Assert-Contains $result.Output "[NG] 11. 専用のCARGO_TARGET_DIR指定 (06-過去の失敗と対策.md:134) - cargoの言及があるのにCARGO_TARGET_DIRの指定が見つかりません" "項目11がNGになること"
     Assert-Contains $result.Output "[OK] 10." "CARGO_TARGET_DIR欠落はskip4件判定を巻き込まないこと"
 
     Write-Output "[10/21] cargo build等cargo testを含まない言及でも、項目11だけは発動する"
     $cargoBuildOnly = '道具: `$env:CARGO_TARGET_DIR = "%TEMP%\ori3-target-x"` を設定してから `cargo build -p ori3-rigid` を実行してください。'
     $result = Invoke-Check @((New-InstructionFixtureFile "cargo-build-only.md" $cargoBuildOnly))
-    Assert-Contains $result.Output "[--] 10. 長時間検査の--skip 4件 (03-品質ゲート.md:61) - cargo testの言及なし（該当なし）" "cargo buildはcargo test向けskip判定を発動しないこと"
-    Assert-Contains $result.Output "[OK] 11. 専用のCARGO_TARGET_DIR指定 (06-過去の失敗と対策.md:241-242) - CARGO_TARGET_DIRの指定を検出" "cargo buildでもCARGO_TARGET_DIR判定は発動すること"
+    Assert-Contains $result.Output "[--] 10. 長時間検査の--skip 4件 (03-品質ゲート.md:70) - cargo testの言及なし（該当なし）" "cargo buildはcargo test向けskip判定を発動しないこと"
+    Assert-Contains $result.Output "[OK] 11. 専用のCARGO_TARGET_DIR指定 (06-過去の失敗と対策.md:134) - CARGO_TARGET_DIRの指定を検出" "cargo buildでもCARGO_TARGET_DIR判定は発動すること"
 
     Write-Output "[11/21] 複数ファイルを1回の呼び出しで検査できる"
     $secondFailPath = New-InstructionFixtureFile "multi-fail-item5.md" (New-InstructionText -IncludeFailureCause $false)
@@ -746,6 +746,23 @@ try {
     Assert-Equal $result.ExitCode 1 "設計案2件×4観点は8成果物としてexit 1であること" $result.Output
     Assert-Contains $result.Output "現在 8件、上限 3件" "直積8件と上限3件を表示すること"
     Assert-Contains $result.Output "判定根拠: 件数と観点の直積" "直積を判定根拠として表示すること"
+
+    Write-Output "[22/22] 15件のCitationが現行規約の目印語を指す"
+    $script:CaseCount += 1
+    $citationMarkers = @("実名", "数値", "してはいけない", "中間報告", "過去の失敗", "道具", "保存先", "worktree", "報告書ファイル", "--skip", "CARGO_TARGET_DIR", "モデル", "未コミット", "rg", "3件")
+    $repositoryRoot = Split-Path -Parent $PSScriptRoot
+    $citationMatches = [regex]::Matches([IO.File]::ReadAllText($scriptPath, [Text.UTF8Encoding]::new($true)), 'Citation = "(?<citation>[^"]+)"')
+    Assert-Equal $citationMatches.Count 15 "Citationが15件であること"
+    for ($citationIndex = 0; $citationIndex -lt $citationMatches.Count; $citationIndex += 1) {
+        $citation = $citationMatches[$citationIndex].Groups["citation"].Value
+        $citationParts = $citation -split ":", 2
+        Assert-Equal $citationParts.Count 2 "Citation $($citationIndex + 1) がファイル名:行番号形式であること"
+        $lineNumbers = $citationParts[1] -split "-" | ForEach-Object { [int]$_ }
+        $rulePath = Join-Path $repositoryRoot (Join-Path "docs/rules" $citationParts[0])
+        $ruleLines = [IO.File]::ReadAllLines($rulePath, [Text.UTF8Encoding]::new($false))
+        $citedText = ($lineNumbers | ForEach-Object { $ruleLines[$_ - 1] }) -join "`n"
+        Assert-Contains $citedText $citationMarkers[$citationIndex] "Citation $($citationIndex + 1) が目印語を含むこと"
+    }
 
     Write-Output ("check-agent-instruction self-test passed: {0} cases, {1} assertions" -f $script:CaseCount, $script:AssertionCount)
 }

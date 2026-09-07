@@ -13,20 +13,20 @@ docs/rules/06-過去の失敗と対策.md §10.7.11 の条文から起こした�
 対象検査の実測結果そのものは再実行しないため、本検査単独では「半自動」です。
 
 検査する15項目と根拠（行番号は2026-09-02時点）:
-  1. 実ファイルパスと関数名の実名記載            docs/rules/01-役割と委譲.md:43
-  2. 合格条件の数値記載                          docs/rules/01-役割と委譲.md:44
-  3. やってはいけないことの列挙（6件）           docs/rules/01-役割と委譲.md:45 ほか
-  4. 段階分割と中間報告の義務                    docs/rules/01-役割と委譲.md:46
-  5. 過去の失敗と原因                            docs/rules/01-役割と委譲.md:47
-  6. 道具の具体的な使い方                        docs/rules/01-役割と委譲.md:48
-  7. 成果物の保存先パス                          docs/rules/01-役割と委譲.md:49
-  8. 割り当てた作業ツリーの絶対パス              docs/rules/01-役割と委譲.md:30
- 9. 報告書ファイルへの継続記録                  docs/rules/01-役割と委譲.md:57
-10. 長時間検査の --skip 4件（cargo test記載時のみ） docs/rules/03-品質ゲート.md:61
-11. 専用のCARGO_TARGET_DIR指定（cargo記載時のみ）    docs/rules/06-過去の失敗と対策.md:241-242
- 12. opus/sonnet/gpt-5.6-sol/gpt-5.6-terra/gpt-6-astraのモデル選択と同一行の理由 docs/rules/01-役割と委譲.md:32
- 13. worktreeのHEAD・未コミット件数・検査baseline  docs/rules/01-役割と委譲.md:33
- 14. 対象実名ごとのrg/grepコマンドと実在出力        docs/rules/01-役割と委譲.md:43
+  1. 実ファイルパスと関数名の実名記載            docs/rules/01-役割と委譲.md:46
+  2. 合格条件の数値記載                          docs/rules/01-役割と委譲.md:47
+  3. やってはいけないことの列挙（6件）           docs/rules/01-役割と委譲.md:48 ほか
+  4. 段階分割と中間報告の義務                    docs/rules/01-役割と委譲.md:49
+  5. 過去の失敗と原因                            docs/rules/01-役割と委譲.md:50
+  6. 道具の具体的な使い方                        docs/rules/01-役割と委譲.md:51
+  7. 成果物の保存先パス                          docs/rules/01-役割と委譲.md:52
+  8. 割り当てた作業ツリーの絶対パス              docs/rules/01-役割と委譲.md:33
+ 9. 報告書ファイルへの継続記録                  docs/rules/01-役割と委譲.md:60
+10. 長時間検査の --skip 4件（cargo test記載時のみ） docs/rules/03-品質ゲート.md:70
+11. 専用のCARGO_TARGET_DIR指定（cargo記載時のみ）    docs/rules/06-過去の失敗と対策.md:134
+ 12. opus/sonnet/gpt-5.6-sol/gpt-5.6-terra/gpt-6-astraのモデル選択と同一行の理由 docs/rules/01-役割と委譲.md:34
+ 13. worktreeのHEAD・未コミット件数・検査baseline  docs/rules/01-役割と委譲.md:36
+ 14. 対象実名ごとのrg/grepコマンドと実在出力        docs/rules/01-役割と委譲.md:46
  15. 1委譲で求める独立成果物が3件以内              docs/rules/01-役割と委譲.md:53
 
 【2026-08-29 追加指示】`.claude/settings.json` のPreToolUse hookが利用者の決定で
@@ -35,7 +35,7 @@ docs/rules/06-過去の失敗と対策.md §10.7.11 の条文から起こした�
 追加指示により新設した。項目10（--skip 4件）は既存のまま流用する。
 
 【旧実装からの是正】依頼で示された9項目の一覧には、§4「指示書に『成果は報告書
-ファイルへ書く』と記す」に対応する項目が無かった。条文（01-役割と委譲.md:57）を
+ファイルへ書く』と記す」に対応する項目が無かった。条文（01-役割と委譲.md:60）を
 正本として9番目に追加した。旧実装は§2のモデル選択理由、投入時baseline、§3の
 実在確認証拠を検査対象外としていたが、2026-08-31の実違反を受けて項目12〜14にした。
 
@@ -197,7 +197,7 @@ $script:AbsolutePathPattern = '[A-Za-z]:[\\/]|%TEMP%[\\/]'
 $script:ReportContinuityVerbPattern = '(?:へ|に)[^\r\n。、]{0,10}(?:書く|書き込|記録)|(?:を|が)[^\r\n。、]{0,10}更新|更新し続け'
 
 # 項目11: 専用のCARGO_TARGET_DIR指定（cargo実行の記載時のみ）。
-# 根拠: docs/rules/06-過去の失敗と対策.md:241-242「複製内のcargoにもCARGO_TARGET_DIRを
+# 根拠: docs/rules/06-過去の失敗と対策.md:134「複製内のcargoにもCARGO_TARGET_DIRを
 # 設定し、verification/に出力させない」。2026-08-29、統括からの追加指示で新設。
 # 発動条件は「cargo <サブコマンド>」の実行記載であり、単なる`Cargo.toml`/`Cargo.lock`
 # というファイル名の言及（項目3のCargo.toml/Cargo.lock/vendor禁止の列挙など）では
@@ -222,7 +222,7 @@ $script:EvidenceTargetLinePattern = '(?i)^[ \t]*(?:[-*][ \t]*)?対象実名[ \t]
 $script:EvidenceCommandLinePattern = '(?i)^[ \t]*(?:[-*][ \t]*)?実在確認コマンド[ \t]*[:：][ \t]*(?<value>.+?)[ \t]*$'
 $script:EvidenceOutputLinePattern = '(?i)^[ \t]*(?:[-*][ \t]*)?実在確認出力[ \t]*[:：][ \t]*(?<value>.+?)[ \t]*$'
 
-# 項目10: 長時間検査の除外4件（正本 docs/rules/03-品質ゲート.md:61）。
+# 項目10: 長時間検査の除外4件（正本 docs/rules/03-品質ゲート.md:70）。
 $script:LongTestSkipNames = @(
     "completion_search_uses_safe_subsets_and_is_deterministic_ten_out_of_ten",
     "named_sample_completes_end_to_end_and_is_deterministic_ten_out_of_ten",
@@ -829,46 +829,46 @@ function Get-InstructionCheckResults {
     $results = New-Object System.Collections.Generic.List[object]
 
     $r1 = Test-RealPathAndFunctionName -Text $Text
-    $results.Add([pscustomobject]@{ Index = 1; Name = "実ファイルパスと関数名の実名記載"; Citation = "01-役割と委譲.md:43"; Status = $r1.Status; Detail = $r1.Detail })
+    $results.Add([pscustomobject]@{ Index = 1; Name = "実ファイルパスと関数名の実名記載"; Citation = "01-役割と委譲.md:46"; Status = $r1.Status; Detail = $r1.Detail })
 
     $r2 = Test-NumericCriteria -Text $Text -MinCount $MinNumericCriteria
-    $results.Add([pscustomobject]@{ Index = 2; Name = "合格条件の数値記載"; Citation = "01-役割と委譲.md:44"; Status = $r2.Status; Detail = $r2.Detail })
+    $results.Add([pscustomobject]@{ Index = 2; Name = "合格条件の数値記載"; Citation = "01-役割と委譲.md:47"; Status = $r2.Status; Detail = $r2.Detail })
 
     $r3 = Test-ProhibitedActionsEnumerated -Text $Text -Window $Window
-    $results.Add([pscustomobject]@{ Index = 3; Name = "やってはいけないことの列挙"; Citation = "01-役割と委譲.md:45"; Status = $r3.Status; Detail = $r3.Detail })
+    $results.Add([pscustomobject]@{ Index = 3; Name = "やってはいけないことの列挙"; Citation = "01-役割と委譲.md:48"; Status = $r3.Status; Detail = $r3.Detail })
 
     $r4 = Test-StagedWorkAndInterimReport -Text $Text
-    $results.Add([pscustomobject]@{ Index = 4; Name = "段階分割と中間報告の義務"; Citation = "01-役割と委譲.md:46"; Status = $r4.Status; Detail = $r4.Detail })
+    $results.Add([pscustomobject]@{ Index = 4; Name = "段階分割と中間報告の義務"; Citation = "01-役割と委譲.md:49"; Status = $r4.Status; Detail = $r4.Detail })
 
     $r5 = Test-PastFailureAndCause -Text $Text
-    $results.Add([pscustomobject]@{ Index = 5; Name = "過去の失敗と原因"; Citation = "01-役割と委譲.md:47"; Status = $r5.Status; Detail = $r5.Detail })
+    $results.Add([pscustomobject]@{ Index = 5; Name = "過去の失敗と原因"; Citation = "01-役割と委譲.md:50"; Status = $r5.Status; Detail = $r5.Detail })
 
     $r6 = Test-ToolUsageSpecifics -Text $Text
-    $results.Add([pscustomobject]@{ Index = 6; Name = "道具の具体的な使い方"; Citation = "01-役割と委譲.md:48"; Status = $r6.Status; Detail = $r6.Detail })
+    $results.Add([pscustomobject]@{ Index = 6; Name = "道具の具体的な使い方"; Citation = "01-役割と委譲.md:51"; Status = $r6.Status; Detail = $r6.Detail })
 
     $r7 = Test-DeliverableSavePath -Text $Text -Window $Window
-    $results.Add([pscustomobject]@{ Index = 7; Name = "成果物の保存先パス"; Citation = "01-役割と委譲.md:49"; Status = $r7.Status; Detail = $r7.Detail })
+    $results.Add([pscustomobject]@{ Index = 7; Name = "成果物の保存先パス"; Citation = "01-役割と委譲.md:52"; Status = $r7.Status; Detail = $r7.Detail })
 
     $r8 = Test-WorktreeAbsolutePath -Text $Text -Window $Window
-    $results.Add([pscustomobject]@{ Index = 8; Name = "割り当てた作業ツリーの絶対パス"; Citation = "01-役割と委譲.md:30"; Status = $r8.Status; Detail = $r8.Detail })
+    $results.Add([pscustomobject]@{ Index = 8; Name = "割り当てた作業ツリーの絶対パス"; Citation = "01-役割と委譲.md:33"; Status = $r8.Status; Detail = $r8.Detail })
 
     $r9 = Test-ReportFileContinuity -Text $Text -Window $Window
-    $results.Add([pscustomobject]@{ Index = 9; Name = "報告書ファイルへの継続記録"; Citation = "01-役割と委譲.md:57"; Status = $r9.Status; Detail = $r9.Detail })
+    $results.Add([pscustomobject]@{ Index = 9; Name = "報告書ファイルへの継続記録"; Citation = "01-役割と委譲.md:60"; Status = $r9.Status; Detail = $r9.Detail })
 
     $r10 = Test-LongTestSkipList -Text $Text
-    $results.Add([pscustomobject]@{ Index = 10; Name = "長時間検査の--skip 4件"; Citation = "03-品質ゲート.md:61"; Status = $r10.Status; Detail = $r10.Detail })
+    $results.Add([pscustomobject]@{ Index = 10; Name = "長時間検査の--skip 4件"; Citation = "03-品質ゲート.md:70"; Status = $r10.Status; Detail = $r10.Detail })
 
     $r11 = Test-CargoTargetDirSpecified -Text $Text
-    $results.Add([pscustomobject]@{ Index = 11; Name = "専用のCARGO_TARGET_DIR指定"; Citation = "06-過去の失敗と対策.md:241-242"; Status = $r11.Status; Detail = $r11.Detail })
+    $results.Add([pscustomobject]@{ Index = 11; Name = "専用のCARGO_TARGET_DIR指定"; Citation = "06-過去の失敗と対策.md:134"; Status = $r11.Status; Detail = $r11.Detail })
 
     $r12 = Test-ModelSelectionAndReason -Text $Text
-    $results.Add([pscustomobject]@{ Index = 12; Name = "モデル選択と同一行の理由"; Citation = "01-役割と委譲.md:32"; Status = $r12.Status; Detail = $r12.Detail })
+    $results.Add([pscustomobject]@{ Index = 12; Name = "モデル選択と同一行の理由"; Citation = "01-役割と委譲.md:34"; Status = $r12.Status; Detail = $r12.Detail })
 
     $r13 = Test-DelegationBaseline -Text $Text
-    $results.Add([pscustomobject]@{ Index = 13; Name = "投入時のHEAD・未コミット件数・対象検査baseline"; Citation = "01-役割と委譲.md:33"; Status = $r13.Status; Detail = $r13.Detail })
+    $results.Add([pscustomobject]@{ Index = 13; Name = "投入時のHEAD・未コミット件数・対象検査baseline"; Citation = "01-役割と委譲.md:36"; Status = $r13.Status; Detail = $r13.Detail })
 
     $r14 = Test-StructuredExistenceEvidence -Text $Text
-    $results.Add([pscustomobject]@{ Index = 14; Name = "対象実名ごとの実在確認証拠"; Citation = "01-役割と委譲.md:43"; Status = $r14.Status; Detail = $r14.Detail })
+    $results.Add([pscustomobject]@{ Index = 14; Name = "対象実名ごとの実在確認証拠"; Citation = "01-役割と委譲.md:46"; Status = $r14.Status; Detail = $r14.Detail })
 
     $r15 = Test-DeliverableLimit -Text $Text
     $results.Add([pscustomobject]@{ Index = 15; Name = "1委譲の独立成果物上限"; Citation = "01-役割と委譲.md:53"; Status = $r15.Status; Detail = $r15.Detail })
